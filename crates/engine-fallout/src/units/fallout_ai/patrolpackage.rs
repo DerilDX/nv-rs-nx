@@ -587,9 +587,159 @@ pub fn patrol_actor_package_data_save_game(
     }
 }
 
+/// `BGSLoadGameBuffer` raw load (`00864980`, `thiscall`, `RET 8`: data, size).
+const LOAD_BYTES: u32 = 0x0086_4980;
+/// `BGSLoadGameBuffer::LoadFormID` (engine map, `008648a0`; `thiscall`, no stack words): a
+/// form id.
+const LOAD_FORM_ID: u32 = 0x0086_48a0;
+/// `BGSLoadGameBuffer::LoadFormID_ov2` (engine map, `008648e0`; `thiscall`, `RET 4`: the
+/// address the id goes to).
+const LOAD_FORM_ID_INTO: u32 = 0x0086_48e0;
+/// `BGSLoadGameBuffer::LoadVariableSizedValue` (engine map, `00864a60`; `thiscall`, no stack
+/// words).
+const LOAD_VARIABLE_SIZE: u32 = 0x0086_4a60;
+/// `004839c0` (unnamed, engine map unit `tesform.cpp`, `cdecl`, one word): the form of an id.
+const LOOKUP_FORM_BY_ID: u32 = 0x0048_39c0;
+/// `__RTDynamicCast` (`00ec43fb`, `cdecl`, five words) and the type descriptors of `TESForm`
+/// (`01183028`), `TESPackage` (`011846a0`) and `TESObjectREFR` (`011841cc`) (decorated names
+/// read at descriptor + 8).
+const DYNAMIC_CAST: u32 = 0x00ec_43fb;
+const FORM_TYPE: u32 = 0x0118_3028;
+const PACKAGE_TYPE: u32 = 0x0118_46a0;
+const REFERENCE_TYPE: u32 = 0x0118_41cc;
+/// `006a7ad0` (unnamed, `thiscall` on the array, `RET 4`): the address of element `index`
+/// (the one `SaveGame` uses).
+const ARRAY_ELEMENT: u32 = 0x006a_7ad0;
+/// `009a4320` (`thiscall` on the array, `RET 8`: index, count; the engine map's name
+/// `BSSimpleArray<BGSBodyPart *,1024>::_MoveItems` is folded code): removes the element.
+const ARRAY_REMOVE_009A4320: u32 = 0x009a_4320;
+/// `TESObjectREFR::SetTargeted` (engine map, `00564db0`; `thiscall`, `RET 4`).
+const REFERENCE_SET_TARGETED: u32 = 0x0056_4db0;
+/// `TESPackage::GetPatrolPackageData` (engine map, `00675920`; `thiscall`, no stack words).
+const PACKAGE_GET_PATROL_DATA: u32 = 0x0067_5920;
+
+// Translated from 009f34e0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `PatrolActorPackageData::LoadGame` (Xbox PDB; `thiscall`, one stack word: the buffer,
+/// `RET 4`): reads `eState` (4 bytes; a value outside 0..=2 becomes 0),
+/// `fCurrentTimeAtReference` and `iCurrentReference` (4 bytes each), `bPatrolDirection` and
+/// `bCircularArray` (1 byte each) and `iLoopAroundIndex` (4); `pPackage` is the form of the
+/// read form id cast to `TESPackage`; then the array's size (`LoadVariableSizedValue`) sets
+/// the size of `References` (`SetSize(size, 1)`) and each element's form id is read into it.
+pub fn patrol_actor_package_data_load_game(
+    e: &mut Engine,
+    this: Ptr<PatrolActorPackageData>,
+    buffer: u32,
+) {
+    let base = this.addr();
+    e.call(LOAD_BYTES, &args![buffer, base.wrapping_add(4), 4u32]);
+    let state = e.get(this, PatrolActorPackageData::eState) as i32;
+    let state = if (0..=2).contains(&state) { state } else { 0 };
+    e.set(this, PatrolActorPackageData::eState, state as u32);
+    for (offset, size) in [(8u32, 4u32), (0x34, 4), (0xc, 1), (0x2c, 1), (0x30, 4)] {
+        e.call(LOAD_BYTES, &args![buffer, base.wrapping_add(offset), size]);
+    }
+    let id = e.call(LOAD_FORM_ID, &args![buffer]).u32();
+    let form = e.call(LOOKUP_FORM_BY_ID, &args![id]).u32();
+    let package = e
+        .call(
+            DYNAMIC_CAST,
+            &args![form, 0u32, FORM_TYPE, PACKAGE_TYPE, 0u32],
+        )
+        .u32();
+    e.set(this, PatrolActorPackageData::pPackage, package);
+    let count = e.call(LOAD_VARIABLE_SIZE, &args![buffer]).u32();
+    e.call(ARRAY_SET_SIZE, &args![references(this), count, 1u32]);
+    for index in 0..count {
+        let slot = e.call(ARRAY_ELEMENT, &args![references(this), index]).u32();
+        e.call(LOAD_FORM_ID_INTO, &args![buffer, slot]);
+    }
+}
+
+// Translated from 009f3610 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `PatrolActorPackageData::InitLoadGame` (Xbox PDB; `thiscall`, one stack word: an object
+/// whose slot `+0xc` answers the actor, `RET 4`). Each element of `References` (a form id
+/// after `LoadGame`) becomes its form cast to `TESObjectREFR` (0 for a zero id); a reference
+/// is marked targeted (`SetTargeted(1)`), an element without one is removed (`009a4320(index,
+/// 1)`; the walk steps back over it) and `iCurrentReference` drops by one (not below 0). Then
+/// `pActor` is the object's slot `+0xc`. With a package: `pPackageData` is fetched when null
+/// (`GetPatrolPackageData`); when `SetCurrentReference(iCurrentReference)` fails the patrol
+/// resumes from the actor's position (`ResumeRepeatablePatrol`, slot `+0x1f4`); and for a
+/// non-empty circular array the current reference's `ExtraDataList` (when there is one) gets
+/// the actor as its patrol user (`0042f300`).
+pub fn patrol_actor_package_data_init_load_game(
+    e: &mut Engine,
+    this: Ptr<PatrolActorPackageData>,
+    source: u32,
+) {
+    let mut size = array_size(e, this);
+    let mut index = 0u32;
+    while index < size {
+        let slot = e.call(ARRAY_ELEMENT, &args![references(this), index]).u32();
+        let id = e.mem.u32(slot);
+        let reference = if id != 0 {
+            let form = e.call(LOOKUP_FORM_BY_ID, &args![id]).u32();
+            e.call(
+                DYNAMIC_CAST,
+                &args![form, 0u32, FORM_TYPE, REFERENCE_TYPE, 0u32],
+            )
+            .u32()
+        } else {
+            0
+        };
+        e.mem.set_u32(slot, reference);
+        let reference = e.mem.u32(slot);
+        if reference != 0 {
+            e.call(REFERENCE_SET_TARGETED, &args![reference, 1u32]);
+        } else {
+            let current = e.get(this, PatrolActorPackageData::iCurrentReference);
+            let current = if current != 0 { current - 1 } else { 0 };
+            e.set(this, PatrolActorPackageData::iCurrentReference, current);
+            e.call(ARRAY_REMOVE_009A4320, &args![references(this), index, 1u32]);
+            index = index.wrapping_sub(1);
+            size = size.wrapping_sub(1);
+        }
+        index = index.wrapping_add(1);
+    }
+    let actor = e.vcall(source, 0xc, &args![]).u32();
+    e.set(this, PatrolActorPackageData::pActor, actor);
+    let package = e.get(this, PatrolActorPackageData::pPackage);
+    if package == 0 {
+        return;
+    }
+    if e.get(this, PatrolActorPackageData::pPackageData) == 0 {
+        let package = e.get(this, PatrolActorPackageData::pPackage);
+        let data = e.call(PACKAGE_GET_PATROL_DATA, &args![package]).u32();
+        e.set(this, PatrolActorPackageData::pPackageData, data);
+    }
+    let current = e.get(this, PatrolActorPackageData::iCurrentReference);
+    if patrol_actor_package_data_set_current_reference(e, this, current) == 0 {
+        let actor = e.get(this, PatrolActorPackageData::pActor);
+        let position = e.vcall(actor, GET_POSITION_SLOT, &args![]).u32();
+        patrol_actor_package_data_resume_repeatable_patrol(e, this, position);
+    }
+    if array_is_empty(e, this) || e.get(this, PatrolActorPackageData::bCircularArray) == 0 {
+        return;
+    }
+    let current = e.get(this, PatrolActorPackageData::iCurrentReference);
+    let reference = reference_at(e, this, current);
+    let extra = extra_data(e, reference);
+    if extra != 0 {
+        let actor = e.get(this, PatrolActorPackageData::pActor);
+        e.call(SET_PATROL_REF_USER, &args![extra, actor]);
+    }
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(
+            0x009f_34e0,
+            patrol_actor_package_data_load_game(Ptr<PatrolActorPackageData>, u32)
+        ),
+        entry!(
+            0x009f_3610,
+            patrol_actor_package_data_init_load_game(Ptr<PatrolActorPackageData>, u32)
+        ),
         entry!(
             0x009f_2a40,
             patrol_actor_package_data_scalar_deleting_destructor(
@@ -1144,6 +1294,244 @@ mod b035_tests {
                 vec![0x900, 0x100, 0],
                 vec![0x900, 0x200, 0]
             ]
+        );
+    }
+}
+
+#[cfg(test)]
+mod n027_tests {
+    use super::*;
+
+    fn calls(e: &Engine, address: u32) -> Vec<Vec<u32>> {
+        e.call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|(a, _)| *a == address)
+            .map(|(_, w)| w.clone())
+            .collect()
+    }
+
+    fn nothing(_: &mut Engine, _: &[u32]) -> Ret {
+        Ret::default()
+    }
+
+    /// `BSSimpleArray` doubles over the real words (`pBuffer` +4, size +8): size, empty,
+    /// element address, set size, remove.
+    fn array_doubles(e: &mut Engine) {
+        e.register(ARRAY_SIZE, |e, a| e.mem.u32(a[0] + 8).into_ret());
+        e.register(ARRAY_IS_EMPTY, |e, a| (e.mem.u32(a[0] + 8) == 0).into_ret());
+        e.register(ARRAY_ELEMENT, |e, a| {
+            (e.mem.u32(a[0] + 4) + 4 * a[1]).into_ret()
+        });
+        e.register(ARRAY_AT, |e, a| (e.mem.u32(a[0] + 4) + 4 * a[1]).into_ret());
+        e.register(ARRAY_SET_SIZE, |e, a| {
+            e.mem.set_u32(a[0] + 8, a[1]);
+            Ret::default()
+        });
+        e.register(ARRAY_REMOVE_009A4320, |e, a| {
+            let size = e.mem.u32(a[0] + 8);
+            let buffer = e.mem.u32(a[0] + 4);
+            for index in a[1]..size - 1 {
+                let next = e.mem.u32(buffer + 4 * (index + 1));
+                e.mem.set_u32(buffer + 4 * index, next);
+            }
+            e.mem.set_u32(a[0] + 8, size - a[2]);
+            Ret::default()
+        });
+    }
+
+    /// A patrol object whose `References` holds `words`.
+    fn patrol(e: &mut Engine, words: &[u32]) -> Ptr<PatrolActorPackageData> {
+        let this = e.mem.alloc(0x38);
+        let buffer = e.mem.alloc(0x40);
+        for (index, word) in words.iter().enumerate() {
+            e.mem.set_u32(buffer + 4 * index as u32, *word);
+        }
+        e.mem.set_u32(this + REFERENCES + 4, buffer);
+        e.mem.set_u32(this + REFERENCES + 8, words.len() as u32);
+        Ptr::new(this)
+    }
+
+    fn words(e: &Engine, this: Ptr<PatrolActorPackageData>) -> Vec<u32> {
+        let buffer = e.mem.u32(this.addr() + REFERENCES + 4);
+        let size = e.mem.u32(this.addr() + REFERENCES + 8);
+        (0..size).map(|i| e.mem.u32(buffer + 4 * i)).collect()
+    }
+
+    #[test]
+    fn load_game_reads_the_fields_the_package_and_the_ids() {
+        for (state, kept) in [(2u32, 2u32), (3, 0), (0xffff_ffff, 0), (1, 1)] {
+            let mut e = Engine::new();
+            array_doubles(&mut e);
+            let this = patrol(&mut e, &[0, 0, 0]);
+            e.mem.set_u32(this.addr() + REFERENCES + 8, 0);
+            // The load writes, by call order: state, time, current, direction, circular,
+            // loop index.
+            let values = [state, 0x4120_0000, 2, 1, 1, 7];
+            let mut next = 0usize;
+            e.register_double(LOAD_BYTES, move |e, a| {
+                let value = values[next];
+                next += 1;
+                if a[2] == 1 {
+                    e.mem.set_u8(a[1], value as u8);
+                } else {
+                    e.mem.set_u32(a[1], value);
+                }
+                Ret::default()
+            });
+            e.register(LOAD_FORM_ID, |_, _| 0x77u32.into_ret());
+            e.register(LOOKUP_FORM_BY_ID, |_, a| (a[0] + 0x1000).into_ret());
+            e.register(DYNAMIC_CAST, |_, a| (a[0] + 1).into_ret());
+            e.register(LOAD_VARIABLE_SIZE, |_, _| 3u32.into_ret());
+            e.register(LOAD_FORM_ID_INTO, |e, a| {
+                e.mem.set_u32(a[1], 0x500 + a[1] % 0x10);
+                Ret::default()
+            });
+            e.call_log = Some(vec![]);
+            e.call(0x009f_34e0, &args![this, 0x9000u32]);
+            let base = this.addr();
+            let loads: Vec<(u32, u32)> = calls(&e, LOAD_BYTES)
+                .iter()
+                .map(|w| (w[1] - base, w[2]))
+                .collect();
+            assert_eq!(
+                loads,
+                vec![(4, 4), (8, 4), (0x34, 4), (0xc, 1), (0x2c, 1), (0x30, 4)]
+            );
+            assert_eq!(e.get(this, PatrolActorPackageData::eState), kept);
+            assert_eq!(e.get(this, PatrolActorPackageData::iCurrentReference), 2);
+            assert_eq!(e.get(this, PatrolActorPackageData::bCircularArray), 1);
+            assert_eq!(e.get(this, PatrolActorPackageData::iLoopAroundIndex), 7);
+            assert_eq!(
+                calls(&e, DYNAMIC_CAST),
+                vec![vec![0x1077, 0, FORM_TYPE, PACKAGE_TYPE, 0]]
+            );
+            assert_eq!(e.get(this, PatrolActorPackageData::pPackage), 0x1078);
+            assert_eq!(
+                calls(&e, ARRAY_SET_SIZE),
+                vec![vec![base + REFERENCES, 3, 1]]
+            );
+            let buffer = e.mem.u32(base + REFERENCES + 4);
+            assert_eq!(
+                calls(&e, LOAD_FORM_ID_INTO),
+                vec![
+                    vec![0x9000, buffer],
+                    vec![0x9000, buffer + 4],
+                    vec![0x9000, buffer + 8]
+                ]
+            );
+        }
+    }
+
+    /// The doubles `InitLoadGame` reaches: forms by id (`id << 4`), casts keeping the form,
+    /// the source object (slot `+0xc` answering the actor `0x7000`), lists `r + 1`.
+    fn init_engine(words_in: &[u32]) -> (Engine, Ptr<PatrolActorPackageData>, u32) {
+        let mut e = Engine::new();
+        array_doubles(&mut e);
+        let this = patrol(&mut e, words_in);
+        e.register(LOOKUP_FORM_BY_ID, |_, a| (a[0] << 4).into_ret());
+        e.register(DYNAMIC_CAST, |_, a| a[0].into_ret());
+        e.register(REFERENCE_SET_TARGETED, nothing);
+        let source = e.mem.alloc(4);
+        e.put_vtable(0x0070_0000, &[0, 0, 0, 0x0070_1000]);
+        e.mem.set_u32(source, 0x0070_0000);
+        e.register(0x0070_1000, |_, _| 0x7000u32.into_ret());
+        e.register(PACKAGE_GET_PATROL_DATA, |_, a| (a[0] + 0x10).into_ret());
+        e.register(REFERENCE_EXTRA_DATA, |_, a| (a[0] + 1).into_ret());
+        e.register(SET_PATROL_REF_USER, nothing);
+        e.register(0x0064_7ba0, nothing);
+        e.call_log = Some(vec![]);
+        (e, this, source)
+    }
+
+    #[test]
+    fn init_load_game_resolves_and_drops_references() {
+        let (mut e, this, source) = init_engine(&[0x10, 0, 0x30, 0]);
+        e.set(this, PatrolActorPackageData::iCurrentReference, 3);
+        e.call(0x009f_3610, &args![this, source]);
+        assert_eq!(words(&e, this), vec![0x100, 0x300]);
+        assert_eq!(e.get(this, PatrolActorPackageData::iCurrentReference), 1);
+        assert_eq!(
+            calls(&e, REFERENCE_SET_TARGETED),
+            vec![vec![0x100, 1], vec![0x300, 1]]
+        );
+        assert_eq!(
+            calls(&e, DYNAMIC_CAST),
+            vec![
+                vec![0x100, 0, FORM_TYPE, REFERENCE_TYPE, 0],
+                vec![0x300, 0, FORM_TYPE, REFERENCE_TYPE, 0]
+            ]
+        );
+        assert_eq!(e.get(this, PatrolActorPackageData::pActor), 0x7000);
+        // No package: nothing more.
+        assert!(calls(&e, PACKAGE_GET_PATROL_DATA).is_empty());
+        // The current index does not drop below 0.
+        let (mut e, this, source) = init_engine(&[0, 0]);
+        e.call(0x009f_3610, &args![this, source]);
+        assert!(words(&e, this).is_empty());
+        assert_eq!(e.get(this, PatrolActorPackageData::iCurrentReference), 0);
+    }
+
+    #[test]
+    fn init_load_game_with_a_package_sets_the_current_reference() {
+        // Not circular: the index is taken as it is and no user is set.
+        let (mut e, this, source) = init_engine(&[0x10, 0x20]);
+        e.set(this, PatrolActorPackageData::pPackage, 0x4000);
+        e.set(this, PatrolActorPackageData::iCurrentReference, 1);
+        e.call(0x009f_3610, &args![this, source]);
+        assert_eq!(e.get(this, PatrolActorPackageData::pPackageData), 0x4010);
+        assert!(calls(&e, SET_PATROL_REF_USER).is_empty());
+        // Circular with data already there: the reference accepts the actor, which becomes
+        // its user (once in SetCurrentReference, once at the end).
+        let (mut e, this, source) = init_engine(&[0x10, 0x20]);
+        e.set(this, PatrolActorPackageData::pPackage, 0x4000);
+        e.set(this, PatrolActorPackageData::pPackageData, 0x4444);
+        e.set(this, PatrolActorPackageData::bCircularArray, 1);
+        e.set(this, PatrolActorPackageData::iCurrentReference, 1);
+        e.register(PATROL_REF_CAN_BE_USED_BY, |_, _| true.into_ret());
+        e.call(0x009f_3610, &args![this, source]);
+        assert!(calls(&e, PACKAGE_GET_PATROL_DATA).is_empty());
+        assert_eq!(e.get(this, PatrolActorPackageData::pPackageData), 0x4444);
+        assert_eq!(calls(&e, SET_PATROL_REF_USER).len(), 3);
+        assert_eq!(
+            *calls(&e, SET_PATROL_REF_USER).last().unwrap(),
+            vec![0x201, 0x7000]
+        );
+    }
+
+    #[test]
+    fn init_load_game_resumes_when_the_reference_refuses() {
+        let (mut e, this, source) = init_engine(&[0x10, 0x20]);
+        e.set(this, PatrolActorPackageData::pPackage, 0x4000);
+        e.set(this, PatrolActorPackageData::bCircularArray, 1);
+        e.set(this, PatrolActorPackageData::iCurrentReference, 1);
+        e.register(PATROL_REF_CAN_BE_USED_BY, |_, _| false.into_ret());
+        // The actor: its position slot +0x1f4.
+        let actor_vtable = 0x0071_0000;
+        e.put_vtable(actor_vtable, &[0; 0x80]);
+        e.mem.set_u32(actor_vtable + 0x1f4, 0x0071_1000);
+        e.map(0x7000, 0x10);
+        e.mem.set_u32(0x7000, actor_vtable);
+        e.register(0x0071_1000, |_, _| 0x7100u32.into_ret());
+        // The third element lookup (the resume walk) finds no reference, which ends it.
+        let zero = e.mem.alloc(4);
+        let mut count = 0;
+        e.register_double(ARRAY_AT, move |e, a| {
+            count += 1;
+            if count == 3 {
+                zero.into_ret()
+            } else {
+                (e.mem.u32(a[0] + 4) + 4 * a[1]).into_ret()
+            }
+        });
+        e.call(0x009f_3610, &args![this, source]);
+        assert_eq!(calls(&e, 0x0071_1000), vec![vec![0x7000]]);
+        assert_eq!(e.get(this, PatrolActorPackageData::bPatrolDirection), 1);
+        assert_eq!(calls(&e, ARRAY_AT).len(), 4);
+        assert_eq!(
+            *calls(&e, SET_PATROL_REF_USER).last().unwrap(),
+            vec![0x201, 0x7000]
         );
     }
 }

@@ -169,9 +169,57 @@ pub fn fn_00906570(
     found
 }
 
+/// `0044cbf0` (`thiscall`): the destructor of the `NiPointer` passed by value
+/// (it releases what the pointer holds).
+const POINTER_RELEASE: u32 = 0x0044_cbf0;
+
+// Translated from 00906320 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 00906320 - the compiler's exception frame (FS:[0]) that releases the by-value pointer when a step throws is not translated
+/// A `LockFreeMap` method (`thiscall`, two words, `RET 8`): with the lock at
+/// +0x20 held, `009066d0(key, &value)` on the inner object (`00449f80`);
+/// `value` is an `NiPointer` passed by value, released (`0044cbf0`) on the
+/// way out. Answers `009066d0`'s byte.
+pub fn fn_00906320(e: &mut Engine, this: u32, key: u32, value: u32) -> u8 {
+    e.with_stack(4, |e, slot| {
+        e.mem.set_u32(slot.addr(), value);
+        e.call(LOCK, &args![this + LOCK_OFFSET, 0u32]);
+        let inner = e.call(INNER, &args![this]).u32();
+        let answer = e.call(0x0090_66d0, &args![inner, key, slot]).u8();
+        e.call(UNLOCK, &args![this + LOCK_OFFSET]);
+        e.call(POINTER_RELEASE, &args![slot]);
+        answer
+    })
+}
+
+// Translated from 009063b0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// A `LockFreeMap` method (`thiscall`, four words, `RET 0x10`): with the
+/// lock at +0x20 held, answers `0044d070(first, second, third, flag)` of the
+/// inner object (`00449f80`), `flag` passed as its low byte.
+pub fn fn_009063b0(
+    e: &mut Engine,
+    this: u32,
+    first: u32,
+    second: u32,
+    third: u32,
+    flag: u32,
+) -> u8 {
+    e.call(LOCK, &args![this + LOCK_OFFSET, 0u32]);
+    let inner = e.call(INNER, &args![this]).u32();
+    let answer = e
+        .call(
+            0x0044_d070,
+            &args![inner, first, second, third, flag & 0xff],
+        )
+        .u8();
+    e.call(UNLOCK, &args![this + LOCK_OFFSET]);
+    answer
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x0090_6320, fn_00906320(u32, u32, u32) -> u8),
+        entry!(0x0090_63b0, fn_009063b0(u32, u32, u32, u32, u32) -> u8),
         entry!(0x0090_62e0, fn_009062e0(u32, u32) -> bool),
         entry!(0x0090_6400, fn_00906400(u32, u32) -> u32),
         entry!(0x0090_64e0, fn_009064e0(u32)),
@@ -322,5 +370,69 @@ mod tests {
         e.mem.set_u32(iterator + 4, 2);
         assert!(e.call(0x0090_6570, &[0x4000, iterator, out, 9, 0]).bool());
         assert_eq!(e.mem.u32(out), 0xabcd);
+    }
+}
+
+#[cfg(test)]
+mod n028_tests {
+    use super::*;
+
+    fn calls_to(e: &Engine, callee: u32) -> Vec<Vec<u32>> {
+        e.call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|(address, _)| *address == callee)
+            .map(|(_, words)| words.clone())
+            .collect()
+    }
+
+    #[test]
+    fn fn_00906320_removes_under_the_lock_and_releases_the_pointer() {
+        let mut e = Engine::new();
+        for callee in [LOCK, UNLOCK, POINTER_RELEASE] {
+            e.register(callee, |_, _| Ret::default());
+        }
+        e.register(INNER, |_, _| Ret {
+            eax: 0x1200,
+            ..Ret::default()
+        });
+        let seen = e.mem.alloc(4);
+        e.register_double(0x0090_66d0, move |e, a| {
+            let value = e.mem.u32(a[2]);
+            e.mem.set_u32(seen, value);
+            Ret {
+                eax: 0x0101,
+                ..Ret::default()
+            }
+        });
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x0090_6320, &[0x9000, 7, 0x5e5e]).u8(), 1);
+        assert_eq!(e.mem.u32(seen), 0x5e5e);
+        assert_eq!(calls_to(&e, LOCK), vec![vec![0x9020, 0]]);
+        let call = calls_to(&e, 0x0090_66d0)[0].clone();
+        assert_eq!(call[..2], [0x1200, 7]);
+        assert_eq!(calls_to(&e, UNLOCK), vec![vec![0x9020]]);
+        assert_eq!(calls_to(&e, POINTER_RELEASE), vec![vec![call[2]]]);
+    }
+
+    #[test]
+    fn fn_009063b0_forwards_under_the_lock() {
+        let mut e = Engine::new();
+        for callee in [LOCK, UNLOCK] {
+            e.register(callee, |_, _| Ret::default());
+        }
+        e.register(INNER, |_, _| Ret {
+            eax: 0x1200,
+            ..Ret::default()
+        });
+        e.register(0x0044_d070, |_, a| Ret {
+            eax: a[4],
+            ..Ret::default()
+        });
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x0090_63b0, &[0x9000, 1, 2, 3, 0x0103]).u8(), 3);
+        assert_eq!(calls_to(&e, 0x0044_d070), vec![vec![0x1200, 1, 2, 3, 3]]);
+        assert_eq!(calls_to(&e, UNLOCK), vec![vec![0x9020]]);
     }
 }

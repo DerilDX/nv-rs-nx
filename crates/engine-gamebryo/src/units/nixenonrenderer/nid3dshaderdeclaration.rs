@@ -134,6 +134,32 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
             0x00e7_a5e0,
             ni_t_primitive_array_packer_entry_scalar_deleting_destructor(Ptr, u32) -> Ptr
         ),
+        entry!(0x00e7_66f0, ni_shader_declaration_get_rtti(Ptr) -> u32),
+        entry!(
+            0x00e7_8870,
+            ni_d3d_shader_declaration_set_constant_data(Ptr, u32, u32, u32) -> bool
+        ),
+        entry!(
+            0x00e7_a1e0,
+            ni_d3d_shader_declaration_scalar_deleting_destructor(Ptr, u32) -> Ptr
+        ),
+        entry!(
+            0x00e7_a610,
+            ni_t_array_packer_entry_scalar_deleting_destructor(Ptr, u32) -> Ptr
+        ),
+        entry!(0x00e7_8880, fn_00e78880(u32) -> u32),
+        entry!(0x00e7_8910, fn_00e78910(u32) -> u32),
+        entry!(0x00e7_8a70, fn_00e78a70(u32) -> u32),
+        entry!(0x00e7_8d50, fn_00e78d50(u32) -> u32),
+        entry!(0x00e7_8e30, fn_00e78e30(u32) -> u32),
+        entry!(0x00e7_9160, fn_00e79160(u32) -> u32),
+        entry!(0x00e7_9370, fn_00e79370(u32) -> u32),
+        entry!(0x00e7_9540, fn_00e79540(u32) -> u32),
+        entry!(0x00e7_9760, fn_00e79760(u32) -> u32),
+        entry!(0x00e7_9920, fn_00e79920(u32) -> u32),
+        entry!(0x00e7_9b40, fn_00e79b40(u32) -> u32),
+        entry!(0x00e7_9f40, fn_00e79f40(u32) -> u32),
+        entry!(0x00e7_a0a0, fn_00e7a0a0(u32) -> u32),
     ]
 }
 
@@ -621,6 +647,521 @@ pub fn ni_t_primitive_array_packer_entry_scalar_deleting_destructor(
     this
 }
 
+/// The RTTI record `00e766f0` answers (`01270900`).
+const DECLARATION_RTTI_01270900: u32 = 0x0127_0900;
+
+// Translated from 00e766f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiShaderDeclaration::GetRTTI` (engine map; the slot +8 of the `NiD3DShaderDeclaration`
+/// vtable `010ee7cc` among others), `thiscall`, `this` not read: the RTTI record at `01270900`.
+pub fn ni_shader_declaration_get_rtti(_e: &mut Engine, _this: Ptr) -> u32 {
+    DECLARATION_RTTI_01270900
+}
+
+// Translated from 00e78870 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiD3DShaderDeclaration::SetConstantData` (engine map), `thiscall` with three words it does
+/// not read: answers true.
+pub fn ni_d3d_shader_declaration_set_constant_data(
+    _e: &mut Engine,
+    _this: Ptr,
+    _unused_1: u32,
+    _unused_2: u32,
+    _unused_3: u32,
+) -> bool {
+    true
+}
+
+/// The sized free `00aa1460` (`cdecl`: block, size).
+const FREE_SIZED_00AA1460: u32 = 0x00aa_1460;
+
+// Translated from 00e7a1e0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiD3DShaderDeclaration::scalar deleting destructor` (engine map), `thiscall` with the
+/// flags: the destructor ([`fn_00e78be0`]), then with bit 0 the 0x2c bytes freed (`00aa1460`).
+/// Answers `this`.
+pub fn ni_d3d_shader_declaration_scalar_deleting_destructor(
+    e: &mut Engine,
+    this: Ptr,
+    flags: u32,
+) -> Ptr {
+    fn_00e78be0(e, this);
+    if flags & 1 != 0 {
+        e.call(FREE_SIZED_00AA1460, &args![this, 0x2cu32]);
+    }
+    this
+}
+
+/// The `NiTArray` base table `00e7a610` stores (`010ee890`).
+const PACKER_ARRAY_BASE_VTABLE_010EE890: u32 = 0x010e_e890;
+
+// Translated from 00e7a610 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiTArray<NiD3DShaderDeclaration::NiPackerEntry *,NiTMallocInterface<..> >::scalar deleting
+/// destructor` (engine map), `thiscall` with the flags: the table `010ee890` stored, the data
+/// (+4, read first) freed (`00aa10f0`), then with bit 0 the array given back to the memory
+/// manager (`00aa4060`). Answers `this`.
+pub fn ni_t_array_packer_entry_scalar_deleting_destructor(
+    e: &mut Engine,
+    this: Ptr,
+    flags: u32,
+) -> Ptr {
+    let base = this.addr();
+    let data = e.mem.u32(base.wrapping_add(4));
+    e.mem.set_u32(base, PACKER_ARRAY_BASE_VTABLE_010EE890);
+    e.call(FREE_00AA10F0, &args![data]);
+    if flags & 1 != 0 {
+        e.call(MEMORY_MANAGER_FREE, &args![MEMORY_MANAGER_OBJECT, base]);
+    }
+    this
+}
+
+/// The source element of vertex `vertex` through the 16-bit index array: the index times the
+/// source stride (+0x18) on from the source.
+fn indexed_element(e: &Engine, entry: u32, index: u32, source: u32, vertex: u16) -> u32 {
+    let at = u32::from(e.mem.u16(index.wrapping_add(u32::from(vertex) * 2)));
+    at.wrapping_mul(e.mem.u32(entry.wrapping_add(0x18)))
+        .wrapping_add(source)
+}
+
+/// The pack handlers' loop without a source: each vertex's slot filled with `byte`
+/// (`memset` of the size per vertex, the size read before the first call and after each), the
+/// destination stepping by its stride. Answers the bytes written.
+fn fill_vertices(e: &mut Engine, entry: u32, byte: u32) -> u32 {
+    let mut destination = e.mem.u32(entry.wrapping_add(0x2c));
+    if vertex_count(e, entry) == 0 {
+        return 0;
+    }
+    let mut total = 0u32;
+    let mut size = e.mem.u32(entry.wrapping_add(0x1c));
+    let mut vertex = 0u16;
+    loop {
+        e.call(MEMSET, &args![destination, byte, size]);
+        size = e.mem.u32(entry.wrapping_add(0x1c));
+        let step = e.mem.u32(entry.wrapping_add(0x20));
+        destination = destination.wrapping_add(step);
+        total = total.wrapping_add(size);
+        vertex = vertex.wrapping_add(1);
+        if vertex >= vertex_count(e, entry) {
+            return total;
+        }
+    }
+}
+
+/// How a word pack handler fills the vertices when there is no source.
+#[derive(Clone, Copy)]
+enum WordFill {
+    /// The word 0xffffffff stored.
+    AllOnes,
+    /// `memset` with 0xff of the size per vertex ([`fill_vertices`]).
+    Bytes,
+}
+
+/// The loop of the pack handlers that write one word per vertex: without a source the
+/// vertices are filled (`fill`); else each vertex's source element (indexed through the 16-bit
+/// index array when there is one, else stepping by the source stride) gives the word `word`
+/// computes. The destination steps by its stride; answers the bytes written (the size per
+/// vertex for each vertex).
+fn pack_words(
+    e: &mut Engine,
+    entry: u32,
+    fill: WordFill,
+    word: impl Fn(&Engine, u32) -> u32,
+) -> u32 {
+    let source = e.mem.u32(entry.wrapping_add(0x10));
+    let index = e.mem.u32(entry.wrapping_add(0xc));
+    if source == 0 {
+        if let WordFill::Bytes = fill {
+            return fill_vertices(e, entry, 0xff);
+        }
+    }
+    let mut destination = e.mem.u32(entry.wrapping_add(0x2c));
+    let mut total = 0u32;
+    let mut current = source;
+    let mut vertex = 0u16;
+    while vertex < vertex_count(e, entry) {
+        let value = if source == 0 {
+            0xffff_ffff
+        } else if index != 0 {
+            word(e, indexed_element(e, entry, index, source, vertex))
+        } else {
+            word(e, current)
+        };
+        e.mem.set_u32(destination, value);
+        if source != 0 && index == 0 {
+            current = current.wrapping_add(e.mem.u32(entry.wrapping_add(0x18)));
+        }
+        destination = destination.wrapping_add(e.mem.u32(entry.wrapping_add(0x20)));
+        total = total.wrapping_add(e.mem.u32(entry.wrapping_add(0x1c)));
+        vertex = vertex.wrapping_add(1);
+    }
+    total
+}
+
+/// The format of an entry (+4, 16 bits) less `base`, as the handlers compare it: 3 means a
+/// source without alpha (the alpha is then opaque).
+fn opaque_format(e: &Engine, entry: u32, base: u16) -> bool {
+    e.mem.u16(entry.wrapping_add(4)).wrapping_sub(base) == 3
+}
+
+// Translated from 00e78880 (PC disassembly, FalloutNV.exe 1.4.0.525)
+/// The word copy pack handler (code Ghidra made no function of; the handler `00e78560` stores
+/// for the first number 4 and the numbers 5 and 9), `cdecl` with the packer entry: each vertex
+/// gets the source element's first word; without a source the word 0xffffffff
+/// ([`pack_words`]).
+pub fn fn_00e78880(e: &mut Engine, entry: u32) -> u32 {
+    pack_words(e, entry, WordFill::AllOnes, |e, element| e.mem.u32(element))
+}
+
+/// The colour word of four 16-bit channels as `00e78910` packs it: the high bytes of the
+/// sign-extended alpha (+6; 0xffff when opaque), red (+0) and green (+2), and the byte +5.
+fn signed_short_colour(e: &Engine, element: u32, opaque: bool) -> u32 {
+    let alpha_word = if opaque {
+        0xffff
+    } else {
+        e.mem.u16(element.wrapping_add(6))
+    };
+    let widen = |word: u16| word as i16 as i32 as u32;
+    let alpha = widen(alpha_word) & 0xffff_ff00;
+    let red = widen(e.mem.u16(element)) & 0xff00;
+    let green = widen(e.mem.u16(element.wrapping_add(2))) & 0xff00;
+    let blue = u32::from(e.mem.u8(element.wrapping_add(5)));
+    ((((alpha << 8) | red) << 8) | green) | blue
+}
+
+// Translated from 00e78910 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (unit `nid3dshaderdeclaration.cpp`; the handler `00e78560`
+/// stores for the first number 4 and the number 16): the colour pack handler of signed 16-bit
+/// channels, `cdecl` with the packer entry. The format (+4) less 0xc being 3 makes the alpha
+/// opaque. Each vertex gets [`signed_short_colour`] of its element; without a source the word
+/// 0xffffffff ([`pack_words`]).
+pub fn fn_00e78910(e: &mut Engine, entry: u32) -> u32 {
+    let source = e.mem.u32(entry.wrapping_add(0x10));
+    let opaque = source != 0 && opaque_format(e, entry, 0xc);
+    pack_words(e, entry, WordFill::AllOnes, |e, element| {
+        signed_short_colour(e, element, opaque)
+    })
+}
+
+/// The colour word of four unsigned 16-bit channels as `00e78a70` packs it: the high bytes of
+/// alpha (+6; 0xffff when opaque), red (+0) and green (+2), and the byte +5.
+fn unsigned_short_colour(e: &Engine, element: u32, opaque: bool) -> u32 {
+    let alpha_word = if opaque {
+        0xffff
+    } else {
+        e.mem.u16(element.wrapping_add(6))
+    };
+    let alpha = u32::from(alpha_word) & 0xffff_ff00;
+    let red = u32::from(e.mem.u16(element)) & 0xff00;
+    let green = u32::from(e.mem.u16(element.wrapping_add(2))) & 0xff00;
+    let blue = u32::from(e.mem.u8(element.wrapping_add(5)));
+    ((((alpha << 8) | red) << 8) | green) | blue
+}
+
+// Translated from 00e78a70 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (unit `nid3dshaderdeclaration.cpp`; the handler `00e78560`
+/// stores for the first number 4 and the number 20): as [`fn_00e78910`] for unsigned 16-bit
+/// channels ([`unsigned_short_colour`]), opaque when the format less 0x10 is 3.
+pub fn fn_00e78a70(e: &mut Engine, entry: u32) -> u32 {
+    let source = e.mem.u32(entry.wrapping_add(0x10));
+    let opaque = source != 0 && opaque_format(e, entry, 0x10);
+    pack_words(e, entry, WordFill::AllOnes, |e, element| {
+        unsigned_short_colour(e, element, opaque)
+    })
+}
+
+// Translated from 00e78d50 (PC disassembly, FalloutNV.exe 1.4.0.525)
+/// The narrowing copy pack handler (code Ghidra made no function of; the handler `00e78560`
+/// stores for the first numbers 0 to 3 when the number is above the first), `cdecl` with the
+/// packer entry: each vertex copies the size per vertex (+0x1c, read before the first copy and
+/// after each) from its source element (`memcpy`; indexed through the 16-bit index array when
+/// there is one, else stepping by the source stride); without a source each slot is zeroed
+/// ([`fill_vertices`]). The destination steps by its stride; answers the bytes written.
+pub fn fn_00e78d50(e: &mut Engine, entry: u32) -> u32 {
+    let source = e.mem.u32(entry.wrapping_add(0x10));
+    let index = e.mem.u32(entry.wrapping_add(0xc));
+    if source == 0 {
+        return fill_vertices(e, entry, 0);
+    }
+    let mut destination = e.mem.u32(entry.wrapping_add(0x2c));
+    if vertex_count(e, entry) == 0 {
+        return 0;
+    }
+    let mut total = 0u32;
+    let mut current = source;
+    let mut size = e.mem.u32(entry.wrapping_add(0x1c));
+    let mut vertex = 0u16;
+    loop {
+        let element = if index != 0 {
+            indexed_element(e, entry, index, source, vertex)
+        } else {
+            current
+        };
+        e.call(MEMCPY, &args![destination, element, size]);
+        size = e.mem.u32(entry.wrapping_add(0x1c));
+        if index == 0 {
+            current = current.wrapping_add(e.mem.u32(entry.wrapping_add(0x18)));
+        }
+        destination = destination.wrapping_add(e.mem.u32(entry.wrapping_add(0x20)));
+        total = total.wrapping_add(size);
+        vertex = vertex.wrapping_add(1);
+        if vertex >= vertex_count(e, entry) {
+            return total;
+        }
+    }
+}
+
+/// Clears `count` words from `at` on (`REP STOSD`).
+fn zero_words(e: &mut Engine, at: u32, count: u16) {
+    for word in 0..u32::from(count) {
+        e.mem.set_u32(at.wrapping_add(4 * word), 0);
+    }
+}
+
+// Translated from 00e78e30 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (unit `nid3dshaderdeclaration.cpp`; the handler `00e78560`
+/// stores for the first numbers 0 to 3 when the number is below the first, and for the numbers
+/// 0x1d to 0x20): the widening copy pack handler, `cdecl` with the packer entry. Each vertex
+/// copies its source element (`memcpy` of the element size +0x14; indexed through the 16-bit
+/// index array when there is one, else stepping by the source stride) and clears the
+/// following words: the type (+0, 16 bits) less the format (+4) plus one, as 16 bits. Without
+/// a source each slot is zeroed ([`fill_vertices`]). The destination steps by its stride;
+/// answers the bytes written.
+pub fn fn_00e78e30(e: &mut Engine, entry: u32) -> u32 {
+    let pad = e
+        .mem
+        .u16(entry)
+        .wrapping_sub(e.mem.u16(entry.wrapping_add(4)))
+        .wrapping_add(1);
+    let source = e.mem.u32(entry.wrapping_add(0x10));
+    let index = e.mem.u32(entry.wrapping_add(0xc));
+    if source == 0 {
+        return fill_vertices(e, entry, 0);
+    }
+    let mut destination = e.mem.u32(entry.wrapping_add(0x2c));
+    let mut total = 0u32;
+    let mut current = source;
+    let mut vertex = 0u16;
+    while vertex < vertex_count(e, entry) {
+        let element = if index != 0 {
+            indexed_element(e, entry, index, source, vertex)
+        } else {
+            current
+        };
+        let size = e.mem.u32(entry.wrapping_add(0x14));
+        e.call(MEMCPY, &args![destination, element, size]);
+        let end = e
+            .mem
+            .u32(entry.wrapping_add(0x14))
+            .wrapping_add(destination);
+        zero_words(e, end, pad);
+        total = total.wrapping_add(e.mem.u32(entry.wrapping_add(0x1c)));
+        if index == 0 {
+            current = current.wrapping_add(e.mem.u32(entry.wrapping_add(0x18)));
+        }
+        destination = destination.wrapping_add(e.mem.u32(entry.wrapping_add(0x20)));
+        vertex = vertex.wrapping_add(1);
+    }
+    total
+}
+
+/// The loop of the pack handlers that turn integer components into floats: without a source
+/// each slot is zeroed ([`fill_vertices`]). Else the source has the format (+4, 16 bits) less
+/// `base` components of `width` bytes and the destination the type (+0) plus one floats; each
+/// vertex's element (indexed through the 16-bit index array when there is one, else stepping by
+/// the source stride) gives the lesser number of floats through `convert` (the address of the
+/// component; answers the float's bits), and the destination's remaining floats are cleared.
+/// The destination steps by its stride; answers the bytes written.
+fn pack_floats(
+    e: &mut Engine,
+    entry: u32,
+    base: u16,
+    width: u32,
+    convert: impl Fn(&Engine, u32) -> u32,
+) -> u32 {
+    let source = e.mem.u32(entry.wrapping_add(0x10));
+    let index = e.mem.u32(entry.wrapping_add(0xc));
+    if source == 0 {
+        return fill_vertices(e, entry, 0);
+    }
+    let components = e.mem.u16(entry.wrapping_add(4)).wrapping_sub(base);
+    let floats = e.mem.u16(entry).wrapping_add(1);
+    let converted = components.min(floats);
+    let mut destination = e.mem.u32(entry.wrapping_add(0x2c));
+    let mut total = 0u32;
+    let mut current = source;
+    let mut vertex = 0u16;
+    while vertex < vertex_count(e, entry) {
+        let element = if index != 0 {
+            indexed_element(e, entry, index, source, vertex)
+        } else {
+            current
+        };
+        for component in 0..u32::from(converted) {
+            let value = convert(e, element.wrapping_add(width * component));
+            e.mem
+                .set_u32(destination.wrapping_add(4 * component), value);
+        }
+        if converted < floats {
+            let end = destination.wrapping_add(4 * u32::from(converted));
+            zero_words(e, end, floats - converted);
+        }
+        total = total.wrapping_add(e.mem.u32(entry.wrapping_add(0x1c)));
+        if index == 0 {
+            current = current.wrapping_add(e.mem.u32(entry.wrapping_add(0x18)));
+        }
+        destination = destination.wrapping_add(e.mem.u32(entry.wrapping_add(0x20)));
+        vertex = vertex.wrapping_add(1);
+    }
+    total
+}
+
+/// The constants of the integer-to-float handlers: the lower bound `-1.0` (`float`,
+/// `01012054`), 2^32 (`float`, `01099378`) and the scales (`double`): 2^-31 (`010229b8`), 2^-32
+/// (`010229c0`), 32767 (`01029790`), 65535 (`010217d0`), 127 (`0102dfe0`) and 255
+/// (`0101e568`); the values are read from the exe.
+const LOWER_BOUND_01012054: u32 = 0x0101_2054;
+const TWO_TO_32_01099378: u32 = 0x0109_9378;
+const SCALE_I32_010229B8: u32 = 0x0102_29b8;
+const SCALE_U32_010229C0: u32 = 0x0102_29c0;
+const SCALE_I16_01029790: u32 = 0x0102_9790;
+const SCALE_U16_010217D0: u32 = 0x0102_17d0;
+const SCALE_I8_0102DFE0: u32 = 0x0102_dfe0;
+const SCALE_U8_0101E568: u32 = CHANNEL_SCALE_0101E568;
+
+/// A `double` constant as `FLD qword` loads it.
+fn scale(e: &Engine, at: u32) -> f64 {
+    x87_load64(e.mem.u64(at))
+}
+
+/// The clamp of the signed handlers: the value stored as a float (`FSTP`) and loaded again,
+/// compared with the lower bound (`FCOM`; `TEST AH,5`, `JP`): below it (ordered) the bound,
+/// else the value; the result goes through a float local (`FST`/`FSTP`, `FLD`, `FSTP`).
+fn clamped(e: &Engine, value: f64) -> u32 {
+    let stored = x87_store32(value);
+    let bound_bits = e.mem.u32(LOWER_BOUND_01012054);
+    let bound = x87_load32(bound_bits);
+    if x87_load32(stored) < bound {
+        x87_quiet_bits(x87_store32(bound))
+    } else {
+        x87_quiet_bits(stored)
+    }
+}
+
+// Translated from 00e79160 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (unit `nid3dshaderdeclaration.cpp`; the handler `00e78560`
+/// stores for the first numbers 0 to 3 and the numbers 5 to 8): signed 32-bit components
+/// (format less 4) to floats ([`pack_floats`]): each `FILD` times the scale at `010229b8`
+/// (`FMUL`) and clamped below at the bound ([`clamped`]).
+pub fn fn_00e79160(e: &mut Engine, entry: u32) -> u32 {
+    pack_floats(e, entry, 4, 4, |e, at| {
+        let value = f64::from(e.mem.u32(at) as i32);
+        clamped(e, x87_mul(value, scale(e, SCALE_I32_010229B8)))
+    })
+}
+
+// Translated from 00e79370 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (unit `nid3dshaderdeclaration.cpp`; the handler `00e78560`
+/// stores for the first numbers 0 to 3 and the numbers 9 to 12): unsigned 32-bit components
+/// (format less 8) to floats ([`pack_floats`]): each `FILD` (2^32 added, `FADD` of the float at
+/// `01099378`, when the word is negative as signed) times the scale at `010229c0` (`FMUL`),
+/// stored.
+pub fn fn_00e79370(e: &mut Engine, entry: u32) -> u32 {
+    pack_floats(e, entry, 8, 4, |e, at| {
+        let word = e.mem.u32(at) as i32;
+        let mut value = f64::from(word);
+        if word < 0 {
+            value = x87_add(value, x87_m32(e.mem.u32(TWO_TO_32_01099378)));
+        }
+        x87_store32(x87_mul(value, scale(e, SCALE_U32_010229C0)))
+    })
+}
+
+// Translated from 00e79540 (PC disassembly, FalloutNV.exe 1.4.0.525)
+/// Code Ghidra made no function of (the handler `00e78560` stores for the first numbers 0 to 3
+/// and the numbers 13 to 16): signed 16-bit components (format less 0xc) to floats
+/// ([`pack_floats`]): each divided by the scale at `01029790` (`FDIV`) and clamped below at the
+/// bound ([`clamped`]).
+pub fn fn_00e79540(e: &mut Engine, entry: u32) -> u32 {
+    pack_floats(e, entry, 0xc, 2, |e, at| {
+        let value = f64::from(e.mem.u16(at) as i16);
+        clamped(e, x87_div(value, scale(e, SCALE_I16_01029790)))
+    })
+}
+
+// Translated from 00e79760 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (unit `nid3dshaderdeclaration.cpp`; the handler `00e78560`
+/// stores for the first numbers 0 to 3 and the numbers 17 to 20): unsigned 16-bit components
+/// (format less 0x10) to floats ([`pack_floats`]): each divided by the scale at `010217d0`
+/// (`FDIV`), stored.
+pub fn fn_00e79760(e: &mut Engine, entry: u32) -> u32 {
+    pack_floats(e, entry, 0x10, 2, |e, at| {
+        let value = f64::from(e.mem.u16(at));
+        x87_store32(x87_div(value, scale(e, SCALE_U16_010217D0)))
+    })
+}
+
+// Translated from 00e79920 (PC disassembly, FalloutNV.exe 1.4.0.525)
+/// Code Ghidra made no function of (the handler `00e78560` stores for the first numbers 0 to 3
+/// and the numbers 21 to 24): signed bytes (format less 0x14) to floats ([`pack_floats`]): each
+/// divided by the scale at `0102dfe0` (`FDIV`) and clamped below at the bound ([`clamped`]).
+pub fn fn_00e79920(e: &mut Engine, entry: u32) -> u32 {
+    pack_floats(e, entry, 0x14, 1, |e, at| {
+        let value = f64::from(e.mem.u8(at) as i8);
+        clamped(e, x87_div(value, scale(e, SCALE_I8_0102DFE0)))
+    })
+}
+
+// Translated from 00e79b40 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (unit `nid3dshaderdeclaration.cpp`; the handler `00e78560`
+/// stores for the first numbers 0 to 3 and the numbers 25 to 28): unsigned bytes (format less
+/// 0x18) to floats ([`pack_floats`]): each divided by the scale at `0101e568` (`FDIV`), stored.
+pub fn fn_00e79b40(e: &mut Engine, entry: u32) -> u32 {
+    pack_floats(e, entry, 0x18, 1, |e, at| {
+        let value = f64::from(e.mem.u8(at));
+        x87_store32(x87_div(value, scale(e, SCALE_U8_0101E568)))
+    })
+}
+
+// Translated from 00e79f40 (PC disassembly, FalloutNV.exe 1.4.0.525)
+/// Code Ghidra made no function of (the handler `00e78560` stores for the first number 4 and
+/// the numbers 21 to 24): the colour pack handler of signed bytes, `cdecl` with the packer
+/// entry: each vertex gets the bytes alpha (+3; 0xff when the format less 0x14 is 3), +0, +1
+/// and +2 from the high byte down (the alpha sign-extended before its shifts); without a source
+/// each slot gets 0xff bytes (`memset`, [`fill_vertices`]).
+pub fn fn_00e79f40(e: &mut Engine, entry: u32) -> u32 {
+    let source = e.mem.u32(entry.wrapping_add(0x10));
+    let opaque = source != 0 && opaque_format(e, entry, 0x14);
+    pack_words(e, entry, WordFill::Bytes, |e, element| {
+        let alpha = if opaque {
+            0xff
+        } else {
+            e.mem.u8(element.wrapping_add(3))
+        };
+        let widened_alpha = alpha as i8 as i32 as u32;
+        let first = u32::from(e.mem.u8(element));
+        let second = u32::from(e.mem.u8(element.wrapping_add(1)));
+        let third = u32::from(e.mem.u8(element.wrapping_add(2)));
+        ((((first | (widened_alpha << 8)) << 8) | second) << 8) | third
+    })
+}
+
+// Translated from 00e7a0a0 (PC disassembly, FalloutNV.exe 1.4.0.525)
+/// Code Ghidra made no function of (the handler `00e78560` stores for the first number 4 and
+/// the numbers 25 to 28): as [`fn_00e79f40`] for unsigned bytes (the alpha zero-extended),
+/// opaque when the format less 0x18 is 3.
+pub fn fn_00e7a0a0(e: &mut Engine, entry: u32) -> u32 {
+    let source = e.mem.u32(entry.wrapping_add(0x10));
+    let opaque = source != 0 && opaque_format(e, entry, 0x18);
+    pack_words(e, entry, WordFill::Bytes, |e, element| {
+        let alpha = if opaque {
+            0xff
+        } else {
+            u32::from(e.mem.u8(element.wrapping_add(3)))
+        };
+        let first = u32::from(e.mem.u8(element));
+        let second = u32::from(e.mem.u8(element.wrapping_add(1)));
+        let third = u32::from(e.mem.u8(element.wrapping_add(2)));
+        ((((alpha << 8) | first) << 8) | second) << 8 | third
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1095,5 +1636,366 @@ mod b052_tests {
         e.call_log = Some(vec![]);
         e.call(0x00e7_a5e0, &args![this, 0u32]);
         assert!(calls(&e, MEMORY_MANAGER_FREE).is_empty());
+    }
+}
+
+#[cfg(test)]
+mod n008_tests {
+    use super::*;
+
+    fn calls(e: &Engine, addr: u32) -> Vec<Vec<u32>> {
+        e.call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|c| c.0 == addr)
+            .map(|c| c.1.clone())
+            .collect()
+    }
+
+    /// An engine with the handlers' constants in place and `memset`/`memcpy` doubles that do
+    /// the work.
+    fn engine() -> Engine {
+        let mut e = Engine::new();
+        e.map(0x0101_0000, 0x2_0000);
+        e.map(0x0109_9000, 0x1000);
+        e.mem.set_u32(LOWER_BOUND_01012054, (-1.0f32).to_bits());
+        e.mem
+            .set_u32(TWO_TO_32_01099378, 4_294_967_296.0f32.to_bits());
+        for (at, value) in [
+            (SCALE_I32_010229B8, 2f64.powi(-31)),
+            (SCALE_U32_010229C0, 2f64.powi(-32)),
+            (SCALE_I16_01029790, 32767.0),
+            (SCALE_U16_010217D0, 65535.0),
+            (SCALE_I8_0102DFE0, 127.0),
+            (SCALE_U8_0101E568, 255.0),
+        ] {
+            e.mem.set_u64(at, value.to_bits());
+        }
+        e.register(MEMSET, |e, a| {
+            for i in 0..a[2] {
+                e.mem.set_u8(a[0] + i, a[1] as u8);
+            }
+            Ret::default()
+        });
+        e.register(MEMCPY, |e, a| {
+            for i in 0..a[2] {
+                let byte = e.mem.u8(a[1] + i);
+                e.mem.set_u8(a[0] + i, byte);
+            }
+            Ret::default()
+        });
+        e.call_log = Some(vec![]);
+        e
+    }
+
+    /// A packer entry: type, format, vertex count, index array, source, element size, source
+    /// stride, size per vertex, destination stride and destination.
+    #[allow(clippy::too_many_arguments)]
+    fn packer(
+        e: &mut Engine,
+        kind: u16,
+        format: u16,
+        count: u16,
+        index: u32,
+        source: u32,
+        size: u32,
+        stride: u32,
+        per_vertex: u32,
+        destination_stride: u32,
+        destination: u32,
+    ) -> u32 {
+        let entry = e.mem.alloc(0x30);
+        e.mem.set_u16(entry, kind);
+        e.mem.set_u16(entry + 4, format);
+        e.mem.set_u16(entry + 8, count);
+        e.mem.set_u32(entry + 0xc, index);
+        e.mem.set_u32(entry + 0x10, source);
+        e.mem.set_u32(entry + 0x14, size);
+        e.mem.set_u32(entry + 0x18, stride);
+        e.mem.set_u32(entry + 0x1c, per_vertex);
+        e.mem.set_u32(entry + 0x20, destination_stride);
+        e.mem.set_u32(entry + 0x2c, destination);
+        entry
+    }
+
+    fn words(e: &Engine, at: u32, count: u32) -> Vec<u32> {
+        (0..count).map(|i| e.mem.u32(at + 4 * i)).collect()
+    }
+
+    fn floats(e: &Engine, at: u32, count: u32) -> Vec<f32> {
+        (0..count)
+            .map(|i| f32::from_bits(e.mem.u32(at + 4 * i)))
+            .collect()
+    }
+
+    /// Two indices: 1 then 0.
+    fn indices(e: &mut Engine) -> u32 {
+        let index = e.mem.alloc(4);
+        e.mem.set_u16(index, 1);
+        e.mem.set_u16(index + 2, 0);
+        index
+    }
+
+    #[test]
+    fn get_rtti_answers_the_record() {
+        let mut e = engine();
+        assert_eq!(e.call(0x00e7_66f0, &args![0u32]).u32(), 0x0127_0900);
+    }
+
+    #[test]
+    fn set_constant_data_answers_true() {
+        let mut e = engine();
+        assert!(e.call(0x00e7_8870, &args![0u32, 1u32, 2u32, 3u32]).bool());
+    }
+
+    #[test]
+    fn declaration_scalar_deleting_destructor_frees_with_bit_zero() {
+        for (flags, frees) in [(1u32, true), (0, false)] {
+            let mut e = engine();
+            e.put_vtable(0x0e00_0000, &[0, 0, 0x0e01_0008]);
+            for callee in [0x0e01_0008, BASE_DESTRUCT_00EE88D0, FREE_SIZED_00AA1460] {
+                e.register(callee, |_, _| Ret::default());
+            }
+            let device = e.mem.alloc(4);
+            e.mem.set_u32(device, 0x0e00_0000);
+            let this = e.mem.alloc(0x2c);
+            e.mem.set_u32(this + 0x10, device);
+            assert_eq!(e.call(0x00e7_a1e0, &args![this, flags]).u32(), this);
+            assert_eq!(e.mem.u32(this), D3D_DECLARATION_VTABLE_010EE7CC);
+            assert_eq!(calls(&e, BASE_DESTRUCT_00EE88D0), vec![vec![this]]);
+            let freed = if frees {
+                vec![vec![this, 0x2c]]
+            } else {
+                vec![]
+            };
+            assert_eq!(calls(&e, FREE_SIZED_00AA1460), freed);
+        }
+    }
+
+    #[test]
+    fn packer_array_scalar_deleting_destructor_frees_the_data() {
+        for (flags, frees) in [(1u32, true), (0, false)] {
+            let mut e = engine();
+            e.register(FREE_00AA10F0, |_, _| Ret::default());
+            e.register(MEMORY_MANAGER_FREE, |_, _| Ret::default());
+            let this = e.mem.alloc(0x10);
+            e.mem.set_u32(this + 4, 0x0e40_0000);
+            assert_eq!(e.call(0x00e7_a610, &args![this, flags]).u32(), this);
+            assert_eq!(e.mem.u32(this), PACKER_ARRAY_BASE_VTABLE_010EE890);
+            assert_eq!(calls(&e, FREE_00AA10F0), vec![vec![0x0e40_0000]]);
+            let freed = if frees {
+                vec![vec![MEMORY_MANAGER_OBJECT, this]]
+            } else {
+                vec![]
+            };
+            assert_eq!(calls(&e, MEMORY_MANAGER_FREE), freed);
+        }
+    }
+
+    #[test]
+    fn word_copy_handler_copies_first_words() {
+        let mut e = engine();
+        let source = e.mem.alloc(0x10);
+        e.mem.set_u32(source, 0x1111_1111);
+        e.mem.set_u32(source + 8, 0x2222_2222);
+        let out = e.mem.alloc(0x10);
+        let entry = packer(&mut e, 0, 5, 2, 0, source, 4, 8, 4, 8, out);
+        assert_eq!(e.call(0x00e7_8880, &args![entry]).u32(), 8);
+        assert_eq!(e.mem.u32(out), 0x1111_1111);
+        assert_eq!(e.mem.u32(out + 8), 0x2222_2222);
+        let index = indices(&mut e);
+        e.mem.set_u32(entry + 0xc, index);
+        e.call(0x00e7_8880, &args![entry]);
+        assert_eq!(e.mem.u32(out), 0x2222_2222);
+        assert_eq!(e.mem.u32(out + 8), 0x1111_1111);
+        e.mem.set_u32(entry + 0x10, 0);
+        assert_eq!(e.call(0x00e7_8880, &args![entry]).u32(), 8);
+        assert_eq!(e.mem.u32(out), 0xffff_ffff);
+        assert_eq!(e.mem.u32(out + 8), 0xffff_ffff);
+    }
+
+    #[test]
+    fn signed_short_colour_handler_takes_the_high_bytes() {
+        let mut e = engine();
+        let source = e.mem.alloc(8);
+        for (i, word) in [0x8123u16, 0x7f45, 0x0006, 0x40ff].iter().enumerate() {
+            e.mem.set_u16(source + 2 * i as u32, *word);
+        }
+        let out = e.mem.alloc(4);
+        let entry = packer(&mut e, 3, 16, 1, 0, source, 8, 8, 4, 4, out);
+        assert_eq!(e.call(0x00e7_8910, &args![entry]).u32(), 4);
+        // Alpha 0x40, red 0x81, green 0x7f; the byte +5 (the third word's high byte) 0x00.
+        assert_eq!(e.mem.u32(out), 0x4081_7f00);
+        // Format 15: opaque. The sign extension of 0xffff fills the top byte.
+        e.mem.set_u16(entry + 4, 15);
+        e.call(0x00e7_8910, &args![entry]);
+        assert_eq!(e.mem.u32(out), 0xff81_7f00);
+        let index = indices(&mut e);
+        e.mem.set_u32(entry + 0xc, index);
+        e.mem.set_u16(entry + 8, 1);
+        e.mem.set_u32(entry + 0x18, 0);
+        e.call(0x00e7_8910, &args![entry]);
+        assert_eq!(e.mem.u32(out), 0xff81_7f00);
+        e.mem.set_u32(entry + 0x10, 0);
+        e.call(0x00e7_8910, &args![entry]);
+        assert_eq!(e.mem.u32(out), 0xffff_ffff);
+    }
+
+    #[test]
+    fn unsigned_short_colour_handler_takes_the_high_bytes() {
+        let mut e = engine();
+        let source = e.mem.alloc(8);
+        for (i, word) in [0x8123u16, 0x7f45, 0x9906, 0x40ff].iter().enumerate() {
+            e.mem.set_u16(source + 2 * i as u32, *word);
+        }
+        let out = e.mem.alloc(4);
+        let entry = packer(&mut e, 3, 20, 1, 0, source, 8, 8, 4, 4, out);
+        e.call(0x00e7_8a70, &args![entry]);
+        assert_eq!(e.mem.u32(out), 0x4081_7f99);
+        e.mem.set_u16(entry + 4, 19);
+        e.call(0x00e7_8a70, &args![entry]);
+        assert_eq!(e.mem.u32(out), 0xff81_7f99);
+    }
+
+    #[test]
+    fn narrowing_copy_handler_copies_the_size_per_vertex() {
+        let mut e = engine();
+        let source = e.mem.alloc(0x20);
+        for i in 0..8u32 {
+            e.mem.set_u32(source + 4 * i, i + 1);
+        }
+        let out = e.mem.alloc(0x20);
+        let entry = packer(&mut e, 1, 3, 2, 0, source, 12, 16, 8, 8, out);
+        assert_eq!(e.call(0x00e7_8d50, &args![entry]).u32(), 16);
+        assert_eq!(words(&e, out, 4), vec![1, 2, 5, 6]);
+        let index = indices(&mut e);
+        e.mem.set_u32(entry + 0xc, index);
+        e.call(0x00e7_8d50, &args![entry]);
+        assert_eq!(words(&e, out, 4), vec![5, 6, 1, 2]);
+        e.mem.set_u32(entry + 0x10, 0);
+        e.call(0x00e7_8d50, &args![entry]);
+        assert_eq!(words(&e, out, 4), vec![0; 4]);
+    }
+
+    #[test]
+    fn widening_copy_handler_pads_with_zeros() {
+        let mut e = engine();
+        let source = e.mem.alloc(0x10);
+        for i in 0..4u32 {
+            e.mem.set_u32(source + 4 * i, i + 1);
+        }
+        let out = e.mem.alloc(0x20);
+        for i in 0..8u32 {
+            e.mem.set_u32(out + 4 * i, 0xaaaa_aaaa);
+        }
+        // Type 3 (four floats) from format 2: 8 bytes copied, 3 - 2 + 1 = 2 words cleared.
+        let entry = packer(&mut e, 3, 2, 2, 0, source, 8, 8, 16, 16, out);
+        assert_eq!(e.call(0x00e7_8e30, &args![entry]).u32(), 32);
+        assert_eq!(words(&e, out, 8), vec![1, 2, 0, 0, 3, 4, 0, 0]);
+        let index = indices(&mut e);
+        e.mem.set_u32(entry + 0xc, index);
+        e.call(0x00e7_8e30, &args![entry]);
+        assert_eq!(words(&e, out, 8), vec![3, 4, 0, 0, 1, 2, 0, 0]);
+    }
+
+    #[test]
+    fn signed_int_handler_scales_and_clamps() {
+        let mut e = engine();
+        let source = e.mem.alloc(0x10);
+        for (i, word) in [0x4000_0000u32, 0x8000_0000, 0x8000_0001, 7]
+            .iter()
+            .enumerate()
+        {
+            e.mem.set_u32(source + 4 * i as u32, *word);
+        }
+        let out = e.mem.alloc(0x10);
+        // Format 7: three components; type 3: four floats, the last cleared.
+        let entry = packer(&mut e, 3, 7, 1, 0, source, 12, 12, 16, 16, out);
+        assert_eq!(e.call(0x00e7_9160, &args![entry]).u32(), 16);
+        let below = -(0x7fff_ffff as f64) * 2f64.powi(-31);
+        assert_eq!(
+            floats(&e, out, 4),
+            vec![0.5, -1.0, (below as f32).max(-1.0), 0.0]
+        );
+        // The source wider than the destination: only two floats.
+        e.mem.set_u16(entry, 1);
+        e.mem.set_u32(out + 8, 0x1234);
+        e.call(0x00e7_9160, &args![entry]);
+        assert_eq!(e.mem.u32(out + 8), 0x1234);
+        e.mem.set_u32(entry + 0x10, 0);
+        e.call(0x00e7_9160, &args![entry]);
+        assert_eq!(words(&e, out, 4), vec![0, 0, 0, 0]);
+    }
+
+    #[test]
+    fn unsigned_int_handler_adds_two_to_the_32_for_high_words() {
+        let mut e = engine();
+        let source = e.mem.alloc(8);
+        e.mem.set_u32(source, 0x8000_0000);
+        e.mem.set_u32(source + 4, 0x4000_0000);
+        let out = e.mem.alloc(8);
+        let entry = packer(&mut e, 1, 10, 1, 0, source, 8, 8, 8, 8, out);
+        e.call(0x00e7_9370, &args![entry]);
+        assert_eq!(floats(&e, out, 2), vec![0.5, 0.25]);
+    }
+
+    #[test]
+    fn short_handlers_divide_by_their_scales() {
+        let mut e = engine();
+        let source = e.mem.alloc(8);
+        e.mem.set_u16(source, 0x8000);
+        e.mem.set_u16(source + 2, 32767);
+        let out = e.mem.alloc(8);
+        let entry = packer(&mut e, 1, 14, 1, 0, source, 4, 4, 8, 8, out);
+        e.call(0x00e7_9540, &args![entry]);
+        // -32768 / 32767 is below -1: clamped.
+        assert_eq!(floats(&e, out, 2), vec![-1.0, 1.0]);
+        e.mem.set_u16(entry + 4, 18);
+        e.mem.set_u16(source, 65535);
+        e.call(0x00e7_9760, &args![entry]);
+        assert_eq!(floats(&e, out, 2), vec![1.0, (32767.0f64 / 65535.0) as f32]);
+    }
+
+    #[test]
+    fn byte_handlers_divide_by_their_scales() {
+        let mut e = engine();
+        let source = e.mem.alloc(4);
+        e.mem.write(source, &[0x80, 0x7f, 0, 0]);
+        let out = e.mem.alloc(8);
+        let index = indices(&mut e);
+        let entry = packer(&mut e, 1, 22, 2, index, source, 2, 2, 8, 0, out);
+        e.call(0x00e7_9920, &args![entry]);
+        // The last vertex is element 0 (the index list is 1, 0): -128 / 127 clamped.
+        assert_eq!(floats(&e, out, 2), vec![-1.0, 1.0]);
+        e.mem.set_u16(entry + 4, 26);
+        e.call(0x00e7_9b40, &args![entry]);
+        assert_eq!(floats(&e, out, 2), vec![128.0 / 255.0, 127.0 / 255.0]);
+    }
+
+    #[test]
+    fn byte_colour_handlers_pack_alpha_first() {
+        let mut e = engine();
+        let source = e.mem.alloc(4);
+        e.mem.write(source, &[0x81, 0x02, 0x83, 0x44]);
+        let out = e.mem.alloc(8);
+        let entry = packer(&mut e, 3, 24, 1, 0, source, 4, 4, 4, 4, out);
+        e.call(0x00e7_9f40, &args![entry]);
+        assert_eq!(e.mem.u32(out), 0x4481_0283);
+        e.mem.set_u16(entry + 4, 23);
+        e.call(0x00e7_9f40, &args![entry]);
+        assert_eq!(e.mem.u32(out), 0xff81_0283);
+        e.mem.set_u16(entry + 4, 28);
+        e.call(0x00e7_a0a0, &args![entry]);
+        assert_eq!(e.mem.u32(out), 0x4481_0283);
+        e.mem.set_u16(entry + 4, 27);
+        e.call(0x00e7_a0a0, &args![entry]);
+        assert_eq!(e.mem.u32(out), 0xff81_0283);
+        // Without a source: 0xff bytes through memset.
+        e.mem.set_u32(entry + 0x10, 0);
+        e.mem.set_u32(out, 0);
+        assert_eq!(e.call(0x00e7_9f40, &args![entry]).u32(), 4);
+        assert_eq!(e.mem.u32(out), 0xffff_ffff);
+        assert_eq!(calls(&e, MEMSET), vec![vec![out, 0xff, 4]]);
     }
 }

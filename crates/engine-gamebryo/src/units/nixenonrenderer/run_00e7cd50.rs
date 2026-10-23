@@ -922,9 +922,488 @@ pub fn fn_00e7de90(e: &mut Engine, this: Ptr, index: u32) {
     );
 }
 
+/// What the buffer data `Recreate` slots and makers below use besides the shared ones: the
+/// render target group's resize `00a8f080` (unnamed; `thiscall` on the group: width,
+/// height), the depth group maker `00a9ff60` (unnamed; `cdecl`: width, height, buffer),
+/// `IDirect3DDevice9::GetDepthStencilSurface` (slot 0xa0) and
+/// `IDirect3DCubeTexture9::GetCubeMapSurface` (slot 0x48; slot names by the interfaces'
+/// order, the arguments match), the messages `"NiDX9AdditionalDepthStencilBufferData::
+/// Recreate> FAILED %s"` (`010eef40`) and `"NiDX9Renderer::Recreate> Using %s backbuffer
+/// format\n"` (`010eef7c`), and the `NiDX9ImplicitDepthStencilBufferData` table (`010ef114`,
+/// RTTI).
+const GROUP_RESIZE_00A8F080: u32 = 0x00a8_f080;
+const MAKE_DEPTH_GROUP_00A9FF60: u32 = 0x00a9_ff60;
+const GET_DEPTH_STENCIL_SURFACE: u32 = 0xa0;
+const GET_CUBE_MAP_SURFACE: u32 = 0x48;
+const RECREATE_FAILED_010EEF40: u32 = 0x010e_ef40;
+const RECREATE_USING_FORMAT_010EEF7C: u32 = 0x010e_ef7c;
+const NI_DX9_IMPLICIT_DEPTH_STENCIL_BUFFER_DATA_VTABLE: u32 = 0x010e_f114;
+
+/// After a surface (+0x14) was got: its description (`GetDesc` into `desc`); a failure
+/// releases and clears the surface and answers `false`.
+fn describe_surface(e: &mut Engine, base: u32, desc: u32) -> bool {
+    let surface = e.mem.u32(base.wrapping_add(0x14));
+    if e.vcall(surface, GET_DESC, &args![desc]).i32() < 0 {
+        release_and_clear(e, base.wrapping_add(0x14));
+        return false;
+    }
+    true
+}
+
+// Translated from 00e7ce30 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`NiDX9ImplicitDepthStencilBufferData`'s slot +0x58, `thiscall`
+/// with the device): releases the old surface first (its own slot +0x54, when +0x14 is set),
+/// gets the device's depth stencil surface into +0x14 (`false` on failure) and its
+/// description (`false`, the surface released, on failure); then +0xc gets the converted
+/// format (`00e7c500`), the group (+8) is resized to the surface's width and height
+/// (`00a8f080`) and the answer is `true`.
+pub fn fn_00e7ce30(e: &mut Engine, this: Ptr, device: u32) -> bool {
+    let base = this.addr();
+    if e.mem.u32(base.wrapping_add(0x14)) != 0 {
+        e.vcall(base, 0x54, &args![]);
+    }
+    let result = e
+        .vcall(
+            device,
+            GET_DEPTH_STENCIL_SURFACE,
+            &args![base.wrapping_add(0x14)],
+        )
+        .i32();
+    if result < 0 {
+        return false;
+    }
+    e.with_stack(0x20, |e, desc| {
+        let desc = desc.addr();
+        if !describe_surface(e, base, desc) {
+            return false;
+        }
+        let format = e.mem.u32(desc);
+        let converted = e.call(CONVERT_FORMAT_00E7C500, &args![format]).u32();
+        let (width, height) = (e.mem.u32(desc + 0x18), e.mem.u32(desc + 0x1c));
+        let group = e.mem.u32(base.wrapping_add(8));
+        e.mem.set_u32(base.wrapping_add(0xc), converted);
+        e.call(GROUP_RESIZE_00A8F080, &args![group, width, height]);
+        true
+    })
+}
+
+// Translated from 00e7cf00 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`cdecl`, the device; called by the renderer's reset code):
+/// under the list's lock (`0126f600`), gives the device to virtual slot 0x58 (`Recreate`) of
+/// every element of the additional depth buffer list (`0126f5cc`), the next item read before
+/// each call.
+pub fn fn_00e7cf00(e: &mut Engine, device: u32) {
+    e.call(
+        IMPORT_ENTER_CRITICAL_SECTION,
+        &args![BUFFER_LIST_LOCK_0126F600],
+    );
+    let mut item = e.mem.u32(BUFFER_LIST_0126F5CC);
+    while item != 0 {
+        let element = e.mem.u32(item.wrapping_add(8));
+        item = e.mem.u32(item);
+        e.vcall(element, 0x58, &args![device]);
+    }
+    e.call(
+        IMPORT_LEAVE_CRITICAL_SECTION,
+        &args![BUFFER_LIST_LOCK_0126F600],
+    );
+}
+
+// Translated from 00e7cf50 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`NiDX9AdditionalDepthStencilBufferData`'s slot +0x58, the
+/// `Recreate` its message names; `thiscall` with the device): releases the old surface first
+/// (its own slot +0x54, when +0x14 is set); `false` without a format (+0x20); otherwise the
+/// rest is [`fn_00e7cf72`] (the jump target the exe continues at).
+pub fn fn_00e7cf50(e: &mut Engine, this: Ptr, device: u32) -> bool {
+    let base = this.addr();
+    if e.mem.u32(base.wrapping_add(0x14)) != 0 {
+        e.vcall(base, 0x54, &args![]);
+    }
+    if e.mem.u32(base.wrapping_add(0x20)) == 0 {
+        return false;
+    }
+    fn_00e7cf72(e, this, device)
+}
+
+// Translated from 00e7cf72 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Not a function of its own: the rest of `fn_00e7cf50` (its jump target, reached with
+/// `this` in EDI and `fn_00e7cf50`'s frame), registered with the words that function has
+/// (`this`, the device). The renderer (`011f4748`) gets its slot 0xc8; Direct3D
+/// (`0126f0d8`) is asked whether the format (+0x20) works as a depth stencil surface
+/// (`CheckDeviceFormat` with the renderer's adapter, device type and adapter format, usage 2,
+/// resource type 1); then the device creates the surface (+0x14) with the group's (+8) width
+/// and height (+8, +0xc), the format, the kind's (+0x10) multisample type, quality 0 and
+/// +0x24. Either failure is reported (`00a29680` with `"...Recreate> FAILED %s"` and
+/// `NiXenonErrorString`) and answers `false`; a failed surface description releases and
+/// clears the surface and answers `false`. Otherwise +0xc gets the converted format
+/// (`00e7c500`) and the answer is `true`.
+pub fn fn_00e7cf72(e: &mut Engine, this: Ptr, device: u32) -> bool {
+    let base = this.addr();
+    let renderer = e.mem.u32(SOURCE_011F4748);
+    e.vcall(renderer, 0xc8, &args![]);
+    let format = e.mem.u32(base.wrapping_add(0x20));
+    let adapter_format = e.mem.u32(renderer.wrapping_add(0x5d0));
+    let device_type = e.mem.u32(renderer.wrapping_add(0x5c8));
+    let direct3d = e.mem.u32(DIRECT3D_0126F0D8);
+    let adapter = e.mem.u32(renderer.wrapping_add(0x5c4));
+    let mut result = e
+        .vcall(
+            direct3d,
+            CHECK_DEVICE_FORMAT,
+            &args![adapter, device_type, adapter_format, 2u32, 1u32, format],
+        )
+        .i32();
+    if result >= 0 {
+        let samples = multisample_type(e.mem.u32(base.wrapping_add(0x10)));
+        let discard = e.mem.u32(base.wrapping_add(0x24));
+        let group = e.mem.u32(base.wrapping_add(8));
+        let height = e.mem.u32(group.wrapping_add(0xc));
+        let width = e.mem.u32(group.wrapping_add(8));
+        let format = e.mem.u32(base.wrapping_add(0x20));
+        result = e
+            .vcall(
+                device,
+                CREATE_DEPTH_STENCIL_SURFACE,
+                &args![
+                    width,
+                    height,
+                    format,
+                    samples,
+                    0u32,
+                    discard,
+                    base.wrapping_add(0x14),
+                    0u32
+                ],
+            )
+            .i32();
+        if result >= 0 {
+            return e.with_stack(0x20, |e, desc| {
+                let desc = desc.addr();
+                if !describe_surface(e, base, desc) {
+                    return false;
+                }
+                let format = e.mem.u32(desc);
+                let converted = e.call(CONVERT_FORMAT_00E7C500, &args![format]).u32();
+                e.mem.set_u32(base.wrapping_add(0xc), converted);
+                true
+            });
+        }
+    }
+    let name = e.call(ERROR_STRING_00E89D50, &args![result]).u32();
+    e.call(REPORT_00A29680, &args![RECREATE_FAILED_010EEF40, name]);
+    false
+}
+
+// Translated from 00e7d0a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`NiDX9ImplicitBufferData`'s slot +0x58, `thiscall` with the
+/// device): releases the old surface first (its own slot +0x54, when +0x14 is set), clears
+/// the globals `0126f580` and `0126f590`, releases the held device (+0x58, its slot 8) and
+/// keeps the new one there (counted: its slot 4). The device's render target 0 goes to +0x14
+/// (`false` on failure); a failed surface description releases and clears it and answers
+/// `false`. Otherwise the group (+8) is resized to the surface's width and height
+/// (`00a8f080`), +0xc gets the converted format (`00e7c500`), the format's name is reported
+/// (`"NiDX9Renderer::Recreate> Using %s backbuffer format\n"`) and the answer is `true`.
+pub fn fn_00e7d0a0(e: &mut Engine, this: Ptr, device: u32) -> bool {
+    let base = this.addr();
+    if e.mem.u32(base.wrapping_add(0x14)) != 0 {
+        e.vcall(base, 0x54, &args![]);
+    }
+    e.mem.set_u32(RENDER_TARGETS_0126F580, 0);
+    e.mem.set_u32(DEPTH_SURFACE_0126F590, 0);
+    release_and_clear(e, base.wrapping_add(0x58));
+    e.mem.set_u32(base.wrapping_add(0x58), device);
+    e.vcall(device, 4, &args![]);
+    let held = e.mem.u32(base.wrapping_add(0x58));
+    let result = e
+        .vcall(
+            held,
+            GET_RENDER_TARGET,
+            &args![0u32, base.wrapping_add(0x14)],
+        )
+        .i32();
+    if result < 0 {
+        return false;
+    }
+    e.with_stack(0x20, |e, desc| {
+        let desc = desc.addr();
+        if !describe_surface(e, base, desc) {
+            return false;
+        }
+        let (width, height) = (e.mem.u32(desc + 0x18), e.mem.u32(desc + 0x1c));
+        let group = e.mem.u32(base.wrapping_add(8));
+        e.call(GROUP_RESIZE_00A8F080, &args![group, width, height]);
+        let format = e.mem.u32(desc);
+        let converted = e.call(CONVERT_FORMAT_00E7C500, &args![format]).u32();
+        e.mem.set_u32(base.wrapping_add(0xc), converted);
+        let format = e.mem.u32(desc);
+        let name = e.call(FORMAT_NAME_00E7A9A0, &args![format]).u32();
+        e.call(
+            REPORT_00A29680,
+            &args![RECREATE_USING_FORMAT_010EEF7C, name],
+        );
+        true
+    })
+}
+
+/// A new `NiDX9TextureBufferData`-style object of `size` bytes as the makers below build it:
+/// the `NiRefObject` start (count 0, the global count up), +8, +0xc and +0x14 cleared and
+/// `vtable`; null when the allocation fails.
+fn new_buffer_data(e: &mut Engine, size: u32, vtable: u32) -> u32 {
+    let block = e.call(NEW_BUFFER_OBJECT, &args![size]).u32();
+    if block == 0 {
+        return 0;
+    }
+    e.mem.set_u32(block, NI_REF_OBJECT_VTABLE);
+    e.mem.set_u32(block + 4, 0);
+    e.call(IMPORT_INTERLOCKED_INCREMENT, &args![OBJECT_COUNT_011F4400]);
+    e.mem.set_u32(block + 8, 0);
+    e.mem.set_u32(block + 0xc, 0);
+    e.mem.set_u32(block + 0x14, 0);
+    e.mem.set_u32(block, vtable);
+    block
+}
+
+// Translated from 00e7d390 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`cdecl`, five words; called by `00e901a0` for each of the six
+/// faces of a cube map, the third and fourth words never read): makes an
+/// `NiDX9TextureBufferData` (0x24 bytes, the table `010eefbc`; null when the allocation
+/// fails, the stores still go to it) for one face of `texture`: the texture kept at +0x20
+/// (counted: its slot 4) and the face's level 0 surface got into +0x14 (`GetCubeMapSurface`
+/// with the face and 0). A failure is reported (`"NiDX9TextureBufferData::Create> FAILED-
+/// GetSurfaceLevel - %s"`), +0x14 cleared, the object deleted (its slot 0 with 1) and null
+/// answered; a failed surface description deletes it too, without a report. Otherwise +0xc
+/// gets the converted format (`00e7c500`) and the group word a new group (`00a8f2c0` with the
+/// surface's width and height and the buffer) or, when it holds one, the buffer attached to
+/// it (`00a8f140`); the group goes to +8. Answers the object.
+pub fn fn_00e7d390(
+    e: &mut Engine,
+    texture: u32,
+    face: u32,
+    _unused_3: u32,
+    _unused_4: u32,
+    group_out: Ptr,
+) -> u32 {
+    let data = new_buffer_data(e, 0x24, NI_DX9_TEXTURE_BUFFER_DATA_VTABLE);
+    if data != 0 {
+        e.mem.set_u32(data + 0x20, 0);
+    }
+    e.mem.set_u32(data.wrapping_add(0x20), texture);
+    e.vcall(texture, 4, &args![]);
+    let held = e.mem.u32(data.wrapping_add(0x20));
+    let result = e
+        .vcall(
+            held,
+            GET_CUBE_MAP_SURFACE,
+            &args![face, 0u32, data.wrapping_add(0x14)],
+        )
+        .i32();
+    if result < 0 {
+        let name = e.call(ERROR_STRING_00E89D50, &args![result]).u32();
+        e.call(
+            REPORT_00A29680,
+            &args![TEXTURE_BUFFER_FAILED_010EF028, name],
+        );
+        e.mem.set_u32(data.wrapping_add(0x14), 0);
+        e.vcall(data, 0, &args![1u32]);
+        return 0;
+    }
+    e.with_stack(0x20, |e, desc| {
+        let desc = desc.addr();
+        let surface = e.mem.u32(data.wrapping_add(0x14));
+        if e.vcall(surface, GET_DESC, &args![desc]).i32() < 0 {
+            e.vcall(data, 0, &args![1u32]);
+            return 0;
+        }
+        let format = e.mem.u32(desc);
+        let converted = e.call(CONVERT_FORMAT_00E7C500, &args![format]).u32();
+        e.mem.set_u32(data.wrapping_add(0xc), converted);
+        let held = e.mem.u32(group_out.addr());
+        if held == 0 {
+            let (width, height) = (e.mem.u32(desc + 0x18), e.mem.u32(desc + 0x1c));
+            let group = e
+                .call(MAKE_GROUP_00A8F2C0, &args![width, height, data])
+                .u32();
+            e.mem.set_u32(group_out.addr(), group);
+            e.mem.set_u32(data.wrapping_add(8), group);
+        } else {
+            e.call(ATTACH_00A8F140, &args![held, data]);
+            let group = e.mem.u32(group_out.addr());
+            e.mem.set_u32(data.wrapping_add(8), group);
+        }
+        data
+    })
+}
+
+// Translated from 00e7d490 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`NiDX9TextureBufferData`'s slot +0x68, `thiscall`): releases
+/// and clears the surface (+0x14), gives the block at +0xc back to the memory manager and
+/// clears it, then releases and clears the texture (+0x20).
+pub fn fn_00e7d490(e: &mut Engine, this: Ptr) {
+    let base = this.addr();
+    release_and_clear(e, base.wrapping_add(0x14));
+    let block = e.mem.u32(base.wrapping_add(0xc));
+    e.call(MEMORY_MANAGER_FREE, &args![MEMORY_MANAGER_OBJECT, block]);
+    e.mem.set_u32(base.wrapping_add(0xc), 0);
+    release_and_clear(e, base.wrapping_add(0x20));
+}
+
+// Translated from 00e7d560 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`NiDX9ImplicitBufferData`'s slot +0x68, `thiscall`): as
+/// `fn_00e7d490` with the device (+0x58) in place of the texture.
+pub fn fn_00e7d560(e: &mut Engine, this: Ptr) {
+    let base = this.addr();
+    release_and_clear(e, base.wrapping_add(0x14));
+    let block = e.mem.u32(base.wrapping_add(0xc));
+    e.call(MEMORY_MANAGER_FREE, &args![MEMORY_MANAGER_OBJECT, block]);
+    e.mem.set_u32(base.wrapping_add(0xc), 0);
+    release_and_clear(e, base.wrapping_add(0x58));
+}
+
+// Translated from 00e7d620 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map: the `NiDX92DBufferData` deleting destructor (the table it
+/// stores; also slot 0 of `NiDX9ImplicitDepthStencilBufferData`), `thiscall` with the flags:
+/// the `NiDX92DBufferData` part (the surface at +0x14 released and cleared, the block at +0xc
+/// freed and cleared, the `NiRefObject` table and the global object count down), then with
+/// bit 0 the 0x20 bytes freed (`00aa1460`). Answers `this`.
+pub fn fn_00e7d620(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    buffer_data_down(e, this.addr());
+    if flags & 1 != 0 {
+        e.call(FREE_00AA1460, &args![this, 0x20u32]);
+    }
+    this
+}
+
+// Translated from 00e7d680 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`NiDX9ImplicitDepthStencilBufferData`'s slot +0xc): answers
+/// the address `0126f5b4`.
+pub fn fn_00e7d680(_e: &mut Engine, _this: Ptr) -> u32 {
+    0x0126_f5b4
+}
+
+// Translated from 00e7d850 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`cdecl`: the device and the render target group word; called
+/// by the renderer's start-up): makes the implicit depth stencil buffer data (an
+/// `NiDX9ImplicitDepthStencilBufferData`, 0x20 bytes, the table `010ef114`; null when the
+/// allocation fails, the stores still go to it). The device's depth stencil surface goes to
+/// +0x14; on failure the object (when made) is deleted (its slot 0 with 1) and null answered;
+/// a failed surface description deletes it and answers null. Otherwise +0xc gets the
+/// converted format (`00e7c500`), the group word a new group (`00a9ff60` with the surface's
+/// width and height and the buffer) or, when it holds one, the buffer attached to it
+/// (`00a8f140`); the group goes to +8 and the surface to `0126f590`. Answers the object.
+pub fn fn_00e7d850(e: &mut Engine, device: u32, group_out: Ptr) -> u32 {
+    let data = new_buffer_data(e, 0x20, NI_DX9_IMPLICIT_DEPTH_STENCIL_BUFFER_DATA_VTABLE);
+    let surface_at = data.wrapping_add(0x14);
+    let result = e
+        .vcall(device, GET_DEPTH_STENCIL_SURFACE, &args![surface_at])
+        .i32();
+    if result < 0 {
+        if data != 0 {
+            e.vcall(data, 0, &args![1u32]);
+        }
+        return 0;
+    }
+    e.with_stack(0x20, |e, desc| {
+        let desc = desc.addr();
+        let surface = e.mem.u32(surface_at);
+        if e.vcall(surface, GET_DESC, &args![desc]).i32() < 0 {
+            e.vcall(data, 0, &args![1u32]);
+            return 0;
+        }
+        let format = e.mem.u32(desc);
+        let converted = e.call(CONVERT_FORMAT_00E7C500, &args![format]).u32();
+        e.mem.set_u32(data.wrapping_add(0xc), converted);
+        let held = e.mem.u32(group_out.addr());
+        if held == 0 {
+            let (width, height) = (e.mem.u32(desc + 0x18), e.mem.u32(desc + 0x1c));
+            let group = e
+                .call(MAKE_DEPTH_GROUP_00A9FF60, &args![width, height, data])
+                .u32();
+            e.mem.set_u32(group_out.addr(), group);
+        } else {
+            e.call(ATTACH_00A8F140, &args![held, data]);
+        }
+        let group = e.mem.u32(group_out.addr());
+        let surface = e.mem.u32(surface_at);
+        e.mem.set_u32(data.wrapping_add(8), group);
+        e.mem.set_u32(DEPTH_SURFACE_0126F590, surface);
+        data
+    })
+}
+
+/// The two stage limits `fn_00e7dd50` runs to (`011bf558`, `011bf560`).
+const STAGE_LIMIT_011BF558: u32 = 0x011b_f558;
+const STAGE_LIMIT_011BF560: u32 = 0x011b_f560;
+
+// Translated from 00e7dd50 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`cdecl`, the first stage; called by `SetupRenderingPass`): for
+/// each stage from `first` below the limit at `011bf558`, the object at `0126f6c8` gets its
+/// slot 0xdc with (stage, 0) and its slot 0xc0 with (stage, 1, 1, 0), (stage, 4, 1, 0) and
+/// (stage, 0x18, 0, 0); then for each further stage below the limit at `011bf560` only slot
+/// 0xdc with (stage, 0). The object is read again for each call.
+pub fn fn_00e7dd50(e: &mut Engine, first: u32) {
+    let mut stage = first;
+    while stage < e.mem.u32(STAGE_LIMIT_011BF558) {
+        let target = e.mem.u32(STATE_TARGET_0126F6C8);
+        e.vcall(target, 0xdc, &args![stage, 0u32]);
+        for (state, value) in [(1u32, 1u32), (4, 1), (0x18, 0)] {
+            let target = e.mem.u32(STATE_TARGET_0126F6C8);
+            e.vcall(target, 0xc0, &args![stage, state, value, 0u32]);
+        }
+        stage = stage.wrapping_add(1);
+    }
+    while stage < e.mem.u32(STAGE_LIMIT_011BF560) {
+        let target = e.mem.u32(STATE_TARGET_0126F6C8);
+        e.vcall(target, 0xdc, &args![stage, 0u32]);
+        stage = stage.wrapping_add(1);
+    }
+}
+
+/// `00e89060` (`thiscall`, three words: a state number, the address of the value, the
+/// address of a flag byte; `bool`).
+const STATE_LOOKUP_00E89060: u32 = 0x00e8_9060;
+
+// Translated from 00e7ddf0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`thiscall` on a texture stage, no stack words; called by
+/// `00e8d890`): asks the object at the stage's +0x10 for state 0xb (`00e89060`, with the
+/// addresses of a value and of a flag byte, both zeroed first) and answers the value when it
+/// answers `true`, else the stage's word +4.
+pub fn fn_00e7ddf0(e: &mut Engine, this: Ptr) -> u32 {
+    let base = this.addr();
+    let object = e.mem.u32(base.wrapping_add(0x10));
+    e.with_stack(8, |e, frame| {
+        let frame = frame.addr();
+        e.mem.set_u32(frame + 4, 0);
+        e.mem.set_u8(frame + 3, 0);
+        let found = e
+            .call(
+                STATE_LOOKUP_00E89060,
+                &args![object, 0xbu32, frame + 4, frame + 3],
+            )
+            .u8();
+        if found != 0 {
+            e.mem.u32(frame + 4)
+        } else {
+            e.mem.u32(base.wrapping_add(4))
+        }
+    })
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x00e7_ce30, fn_00e7ce30(Ptr, u32) -> bool),
+        entry!(0x00e7_cf00, fn_00e7cf00(u32)),
+        entry!(0x00e7_cf50, fn_00e7cf50(Ptr, u32) -> bool),
+        entry!(0x00e7_cf72, fn_00e7cf72(Ptr, u32) -> bool),
+        entry!(0x00e7_d0a0, fn_00e7d0a0(Ptr, u32) -> bool),
+        entry!(0x00e7_d390, fn_00e7d390(u32, u32, u32, u32, Ptr) -> u32),
+        entry!(0x00e7_d490, fn_00e7d490(Ptr)),
+        entry!(0x00e7_d560, fn_00e7d560(Ptr)),
+        entry!(0x00e7_d620, fn_00e7d620(Ptr, u32) -> Ptr),
+        entry!(0x00e7_d680, fn_00e7d680(Ptr) -> u32),
+        entry!(0x00e7_d850, fn_00e7d850(u32, Ptr) -> u32),
+        entry!(0x00e7_dd50, fn_00e7dd50(u32)),
+        entry!(0x00e7_ddf0, fn_00e7ddf0(Ptr) -> u32),
         entry!(0x00e7_d7f0, fn_00e7d7f0(Ptr<NiTPointerList>, Ptr) -> u32),
         entry!(0x00e7_ec90, fn_00e7ec90()),
         entry!(0x00e7_d5b0, fn_00e7d5b0(Ptr<NiTPointerList>) -> u32),
@@ -1806,5 +2285,482 @@ mod b051_tests {
             calls(&e, SET_SAMPLER_STATE_00E890C0),
             vec![vec![0x99, 1, 5, 0, 0], vec![0x99, 2, 6, 0, 0]]
         );
+    }
+}
+
+#[cfg(test)]
+mod n010_tests {
+    use super::*;
+
+    /// Slot doubles of the test objects: each object kind has its own range.
+    const THIS_SLOTS: u32 = 0x0e51_0000;
+    const DEVICE_SLOTS: u32 = 0x0e52_0000;
+    const SURFACE_SLOTS: u32 = 0x0e53_0000;
+    const RENDERER_SLOTS: u32 = 0x0e54_0000;
+    const DIRECT3D_SLOTS: u32 = 0x0e55_0000;
+    const TEXTURE_SLOTS: u32 = 0x0e56_0000;
+    const OLD_SLOTS: u32 = 0x0e57_0000;
+
+    fn calls(e: &Engine, callee: u32) -> Vec<Vec<u32>> {
+        e.call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|(address, _)| *address == callee)
+            .map(|(_, words)| words.clone())
+            .collect()
+    }
+
+    /// An object of `size` bytes whose vtable slots point at `slots + slot`, every slot
+    /// answering 0 unless a test registers it again.
+    fn object(e: &mut Engine, slots: u32, size: u32) -> u32 {
+        let vtable = e.mem.alloc(0x100);
+        for slot in (0..0x100).step_by(4) {
+            e.mem.set_u32(vtable + slot, slots + slot);
+            e.register(slots + slot, |_, _| Ret::default());
+        }
+        let object = e.mem.alloc(size);
+        e.mem.set_u32(object, vtable);
+        object
+    }
+
+    /// The surface the device and textures hand out, and its description: format 0x15,
+    /// width 0x280, height 0x1e0.
+    fn surface(e: &mut Engine) -> u32 {
+        let surface = object(e, SURFACE_SLOTS, 8);
+        e.register(SURFACE_SLOTS + GET_DESC, |e, a| {
+            e.mem.set_u32(a[1], 0x15);
+            e.mem.set_u32(a[1] + 0x18, 0x280);
+            e.mem.set_u32(a[1] + 0x1c, 0x1e0);
+            Ret::default()
+        });
+        surface
+    }
+
+    /// A slot double that stores `value` through its argument `index`.
+    fn store_through(e: &mut Engine, address: u32, index: usize, value: u32) {
+        e.register_double(address, move |e, a| {
+            e.mem.set_u32(a[index], value);
+            Ret::default()
+        });
+    }
+
+    fn engine() -> Engine {
+        let mut e = Engine::new();
+        for page in [0x0126_f000, 0x011f_4000, 0x011b_f000] {
+            e.map(page, 0x1000);
+        }
+        for callee in [
+            CONVERT_FORMAT_00E7C500,
+            GROUP_RESIZE_00A8F080,
+            REPORT_00A29680,
+            IMPORT_ENTER_CRITICAL_SECTION,
+            IMPORT_LEAVE_CRITICAL_SECTION,
+            IMPORT_INTERLOCKED_INCREMENT,
+            IMPORT_INTERLOCKED_DECREMENT,
+            MEMORY_MANAGER_FREE,
+            FREE_00AA1460,
+            ATTACH_00A8F140,
+        ] {
+            e.register(callee, |_, a| {
+                (a.first().copied().unwrap_or(0) + 1).into_ret()
+            });
+        }
+        e.register(ERROR_STRING_00E89D50, |_, _| 0x0e77_0000u32.into_ret());
+        e.register(FORMAT_NAME_00E7A9A0, |_, _| 0x0e78_0000u32.into_ret());
+        e.register(MAKE_GROUP_00A8F2C0, |_, _| 0x0e79_0000u32.into_ret());
+        e.register(MAKE_DEPTH_GROUP_00A9FF60, |_, _| 0x0e7a_0000u32.into_ret());
+        e.call_log = Some(vec![]);
+        e
+    }
+
+    /// A buffer data object (0x60 bytes) with a group at +8 (width 0x40, height 0x30).
+    fn buffer(e: &mut Engine) -> u32 {
+        let this = object(e, THIS_SLOTS, 0x60);
+        let group = e.mem.alloc(0x10);
+        e.mem.set_u32(group + 8, 0x40);
+        e.mem.set_u32(group + 0xc, 0x30);
+        e.mem.set_u32(this + 8, group);
+        this
+    }
+
+    #[test]
+    fn fn_00e7ce30_gets_the_depth_surface() {
+        let mut e = engine();
+        let this = buffer(&mut e);
+        let device = object(&mut e, DEVICE_SLOTS, 8);
+        let surface = surface(&mut e);
+        store_through(&mut e, DEVICE_SLOTS + GET_DEPTH_STENCIL_SURFACE, 1, surface);
+        e.mem.set_u32(this + 0x14, 0x5555);
+        assert!(e.call(0x00e7_ce30, &args![this, device]).bool());
+        // The old surface goes through the object's own slot +0x54 first.
+        assert_eq!(calls(&e, THIS_SLOTS + 0x54), vec![vec![this]]);
+        assert_eq!(e.mem.u32(this + 0x14), surface);
+        assert_eq!(e.mem.u32(this + 0xc), 0x16);
+        let group = e.mem.u32(this + 8);
+        assert_eq!(
+            calls(&e, GROUP_RESIZE_00A8F080),
+            vec![vec![group, 0x280, 0x1e0]]
+        );
+    }
+
+    #[test]
+    fn fn_00e7ce30_fails_without_a_surface_or_description() {
+        let mut e = engine();
+        let this = buffer(&mut e);
+        let device = object(&mut e, DEVICE_SLOTS, 8);
+        e.register(DEVICE_SLOTS + GET_DEPTH_STENCIL_SURFACE, |_, _| {
+            0x8000_0000u32.into_ret()
+        });
+        assert!(!e.call(0x00e7_ce30, &args![this, device]).bool());
+        assert!(calls(&e, THIS_SLOTS + 0x54).is_empty());
+        // A surface whose description fails is released and cleared.
+        let surface = object(&mut e, SURFACE_SLOTS, 8);
+        e.register(SURFACE_SLOTS + GET_DESC, |_, _| 0x8000_0000u32.into_ret());
+        store_through(&mut e, DEVICE_SLOTS + GET_DEPTH_STENCIL_SURFACE, 1, surface);
+        assert!(!e.call(0x00e7_ce30, &args![this, device]).bool());
+        assert_eq!(calls(&e, SURFACE_SLOTS + 8), vec![vec![surface]]);
+        assert_eq!(e.mem.u32(this + 0x14), 0);
+    }
+
+    #[test]
+    fn fn_00e7cf00_recreates_every_listed_buffer() {
+        let mut e = engine();
+        let first = object(&mut e, THIS_SLOTS, 8);
+        let second = object(&mut e, OLD_SLOTS, 8);
+        let items = e.mem.alloc(0x18);
+        e.mem.set_u32(items, items + 0xc);
+        e.mem.set_u32(items + 8, first);
+        e.mem.set_u32(items + 0xc, 0);
+        e.mem.set_u32(items + 0x14, second);
+        e.mem.set_u32(BUFFER_LIST_0126F5CC, items);
+        e.call(0x00e7_cf00, &args![0x0e60_0000u32]);
+        assert_eq!(calls(&e, THIS_SLOTS + 0x58), vec![vec![first, 0x0e60_0000]]);
+        assert_eq!(calls(&e, OLD_SLOTS + 0x58), vec![vec![second, 0x0e60_0000]]);
+        let log = e.call_log.take().unwrap();
+        assert_eq!(log[1].0, IMPORT_ENTER_CRITICAL_SECTION);
+        assert_eq!(log.last().unwrap().0, IMPORT_LEAVE_CRITICAL_SECTION);
+    }
+
+    /// The renderer at `011f4748` (adapter 1, device type 2, adapter format 0x16) and the
+    /// Direct3D object at `0126f0d8`, whose format check answers `check`.
+    fn depth_rig(e: &mut Engine, check: u32) -> (u32, u32) {
+        let renderer = object(e, RENDERER_SLOTS, 0x5d4);
+        e.mem.set_u32(renderer + 0x5c4, 1);
+        e.mem.set_u32(renderer + 0x5c8, 2);
+        e.mem.set_u32(renderer + 0x5d0, 0x16);
+        e.mem.set_u32(SOURCE_011F4748, renderer);
+        let direct3d = object(e, DIRECT3D_SLOTS, 8);
+        e.register_double(DIRECT3D_SLOTS + CHECK_DEVICE_FORMAT, move |_, _| {
+            check.into_ret()
+        });
+        e.mem.set_u32(DIRECT3D_0126F0D8, direct3d);
+        (renderer, direct3d)
+    }
+
+    #[test]
+    fn fn_00e7cf50_needs_a_format() {
+        let mut e = engine();
+        let this = buffer(&mut e);
+        e.mem.set_u32(this + 0x14, 0x5555);
+        assert!(!e.call(0x00e7_cf50, &args![this, 0x0e60_0000u32]).bool());
+        assert_eq!(calls(&e, THIS_SLOTS + 0x54), vec![vec![this]]);
+        assert!(calls(&e, REPORT_00A29680).is_empty());
+    }
+
+    #[test]
+    fn fn_00e7cf50_recreates_the_depth_surface() {
+        let mut e = engine();
+        let (renderer, direct3d) = depth_rig(&mut e, 0);
+        let this = buffer(&mut e);
+        e.mem.set_u32(this + 0x10, 2);
+        e.mem.set_u32(this + 0x20, 0x4b);
+        e.mem.set_u32(this + 0x24, 1);
+        let device = object(&mut e, DEVICE_SLOTS, 8);
+        let surface = surface(&mut e);
+        store_through(
+            &mut e,
+            DEVICE_SLOTS + CREATE_DEPTH_STENCIL_SURFACE,
+            7,
+            surface,
+        );
+        assert!(e.call(0x00e7_cf50, &args![this, device]).bool());
+        assert_eq!(calls(&e, RENDERER_SLOTS + 0xc8), vec![vec![renderer]]);
+        assert_eq!(
+            calls(&e, DIRECT3D_SLOTS + CHECK_DEVICE_FORMAT),
+            vec![vec![direct3d, 1, 2, 0x16, 2, 1, 0x4b]]
+        );
+        assert_eq!(
+            calls(&e, DEVICE_SLOTS + CREATE_DEPTH_STENCIL_SURFACE),
+            vec![vec![device, 0x40, 0x30, 0x4b, 4, 0, 1, this + 0x14, 0]]
+        );
+        assert_eq!(e.mem.u32(this + 0xc), 0x16);
+    }
+
+    #[test]
+    fn fn_00e7cf72_reports_failures() {
+        let mut e = engine();
+        depth_rig(&mut e, 0x8000_0001);
+        let this = buffer(&mut e);
+        e.mem.set_u32(this + 0x20, 0x4b);
+        let device = object(&mut e, DEVICE_SLOTS, 8);
+        assert!(!e.call(0x00e7_cf72, &args![this, device]).bool());
+        assert_eq!(calls(&e, ERROR_STRING_00E89D50), vec![vec![0x8000_0001]]);
+        assert_eq!(
+            calls(&e, REPORT_00A29680),
+            vec![vec![RECREATE_FAILED_010EEF40, 0x0e77_0000]]
+        );
+        assert!(calls(&e, DEVICE_SLOTS + CREATE_DEPTH_STENCIL_SURFACE).is_empty());
+        // The surface creation failing is reported too.
+        let mut e = engine();
+        depth_rig(&mut e, 0);
+        let this = buffer(&mut e);
+        e.mem.set_u32(this + 0x20, 0x4b);
+        let device = object(&mut e, DEVICE_SLOTS, 8);
+        e.register(DEVICE_SLOTS + CREATE_DEPTH_STENCIL_SURFACE, |_, _| {
+            0x8000_0002u32.into_ret()
+        });
+        assert!(!e.call(0x00e7_cf72, &args![this, device]).bool());
+        assert_eq!(calls(&e, ERROR_STRING_00E89D50), vec![vec![0x8000_0002]]);
+    }
+
+    #[test]
+    fn fn_00e7d0a0_takes_the_new_device_and_its_render_target() {
+        let mut e = engine();
+        let this = buffer(&mut e);
+        let old = object(&mut e, OLD_SLOTS, 8);
+        e.mem.set_u32(this + 0x58, old);
+        e.mem.set_u32(RENDER_TARGETS_0126F580, 9);
+        e.mem.set_u32(DEPTH_SURFACE_0126F590, 9);
+        let device = object(&mut e, DEVICE_SLOTS, 8);
+        let surface = surface(&mut e);
+        store_through(&mut e, DEVICE_SLOTS + GET_RENDER_TARGET, 2, surface);
+        assert!(e.call(0x00e7_d0a0, &args![this, device]).bool());
+        assert_eq!(e.mem.u32(RENDER_TARGETS_0126F580), 0);
+        assert_eq!(e.mem.u32(DEPTH_SURFACE_0126F590), 0);
+        assert_eq!(calls(&e, OLD_SLOTS + 8), vec![vec![old]]);
+        assert_eq!(e.mem.u32(this + 0x58), device);
+        assert_eq!(calls(&e, DEVICE_SLOTS + 4), vec![vec![device]]);
+        assert_eq!(
+            calls(&e, DEVICE_SLOTS + GET_RENDER_TARGET),
+            vec![vec![device, 0, this + 0x14]]
+        );
+        let group = e.mem.u32(this + 8);
+        assert_eq!(
+            calls(&e, GROUP_RESIZE_00A8F080),
+            vec![vec![group, 0x280, 0x1e0]]
+        );
+        assert_eq!(e.mem.u32(this + 0xc), 0x16);
+        assert_eq!(
+            calls(&e, REPORT_00A29680),
+            vec![vec![RECREATE_USING_FORMAT_010EEF7C, 0x0e78_0000]]
+        );
+        // A failing render target: false, nothing reported.
+        e.register(DEVICE_SLOTS + GET_RENDER_TARGET, |_, _| {
+            0x8000_0000u32.into_ret()
+        });
+        e.call_log = Some(vec![]);
+        assert!(!e.call(0x00e7_d0a0, &args![this, device]).bool());
+        assert!(calls(&e, REPORT_00A29680).is_empty());
+    }
+
+    #[test]
+    fn fn_00e7d390_makes_a_cube_face_buffer() {
+        let mut e = engine();
+        let block = e.mem.alloc(0x24);
+        e.register_double(NEW_BUFFER_OBJECT, move |_, _| block.into_ret());
+        let texture = object(&mut e, TEXTURE_SLOTS, 8);
+        let surface = surface(&mut e);
+        store_through(&mut e, TEXTURE_SLOTS + GET_CUBE_MAP_SURFACE, 3, surface);
+        let group_out = e.mem.alloc(4);
+        let made = e
+            .call(0x00e7_d390, &args![texture, 3u32, 7u32, 8u32, group_out])
+            .u32();
+        assert_eq!(made, block);
+        assert_eq!(e.mem.u32(block), NI_DX9_TEXTURE_BUFFER_DATA_VTABLE);
+        assert_eq!(e.mem.u32(block + 0x20), texture);
+        assert_eq!(calls(&e, TEXTURE_SLOTS + 4), vec![vec![texture]]);
+        assert_eq!(
+            calls(&e, TEXTURE_SLOTS + GET_CUBE_MAP_SURFACE),
+            vec![vec![texture, 3, 0, block + 0x14]]
+        );
+        assert_eq!(e.mem.u32(block + 0xc), 0x16);
+        assert_eq!(
+            calls(&e, MAKE_GROUP_00A8F2C0),
+            vec![vec![0x280, 0x1e0, block]]
+        );
+        assert_eq!(e.mem.u32(group_out), 0x0e79_0000);
+        assert_eq!(e.mem.u32(block + 8), 0x0e79_0000);
+        // With a group already: attached to it.
+        e.call_log = Some(vec![]);
+        e.mem.set_u32(group_out, 0x0e7b_0000);
+        e.call(0x00e7_d390, &args![texture, 0u32, 0u32, 0u32, group_out]);
+        assert_eq!(calls(&e, ATTACH_00A8F140), vec![vec![0x0e7b_0000, block]]);
+        assert_eq!(e.mem.u32(block + 8), 0x0e7b_0000);
+    }
+
+    #[test]
+    fn fn_00e7d390_reports_a_failed_face() {
+        let mut e = engine();
+        let block = object(&mut e, THIS_SLOTS, 0x24);
+        e.register_double(NEW_BUFFER_OBJECT, move |_, _| block.into_ret());
+        let texture = object(&mut e, TEXTURE_SLOTS, 8);
+        e.register(TEXTURE_SLOTS + GET_CUBE_MAP_SURFACE, |_, _| {
+            0x8000_0000u32.into_ret()
+        });
+        let group_out = e.mem.alloc(4);
+        // The made object holds the class's table by then: the delete goes through its slot 0.
+        e.map(0x010e_e000, 0x1000);
+        e.mem.set_u32(NI_DX9_TEXTURE_BUFFER_DATA_VTABLE, THIS_SLOTS);
+        let made = e
+            .call(0x00e7_d390, &args![texture, 1u32, 0u32, 0u32, group_out])
+            .u32();
+        assert_eq!(made, 0);
+        assert_eq!(
+            calls(&e, REPORT_00A29680),
+            vec![vec![TEXTURE_BUFFER_FAILED_010EF028, 0x0e77_0000]]
+        );
+        assert_eq!(calls(&e, THIS_SLOTS), vec![vec![block, 1]]);
+        assert_eq!(e.mem.u32(block + 0x14), 0);
+    }
+
+    #[test]
+    fn fn_00e7d490_releases_surface_block_and_texture() {
+        let mut e = engine();
+        let this = e.mem.alloc(0x24);
+        let surface = object(&mut e, SURFACE_SLOTS, 8);
+        let texture = object(&mut e, TEXTURE_SLOTS, 8);
+        e.mem.set_u32(this + 0x14, surface);
+        e.mem.set_u32(this + 0xc, 0x0e10_0000);
+        e.mem.set_u32(this + 0x20, texture);
+        e.call(0x00e7_d490, &args![this]);
+        assert_eq!(calls(&e, SURFACE_SLOTS + 8), vec![vec![surface]]);
+        assert_eq!(
+            calls(&e, MEMORY_MANAGER_FREE),
+            vec![vec![MEMORY_MANAGER_OBJECT, 0x0e10_0000]]
+        );
+        assert_eq!(calls(&e, TEXTURE_SLOTS + 8), vec![vec![texture]]);
+        for offset in [0xcu32, 0x14, 0x20] {
+            assert_eq!(e.mem.u32(this + offset), 0);
+        }
+    }
+
+    #[test]
+    fn fn_00e7d560_releases_surface_block_and_device() {
+        let mut e = engine();
+        let this = e.mem.alloc(0x5c);
+        let device = object(&mut e, DEVICE_SLOTS, 8);
+        e.mem.set_u32(this + 0xc, 0x0e10_0000);
+        e.mem.set_u32(this + 0x58, device);
+        e.call(0x00e7_d560, &args![this]);
+        assert_eq!(
+            calls(&e, MEMORY_MANAGER_FREE),
+            vec![vec![MEMORY_MANAGER_OBJECT, 0x0e10_0000]]
+        );
+        assert_eq!(calls(&e, DEVICE_SLOTS + 8), vec![vec![device]]);
+        assert_eq!(e.mem.u32(this + 0x58), 0);
+    }
+
+    #[test]
+    fn fn_00e7d620_destroys_and_frees_with_bit_zero() {
+        let mut e = engine();
+        let this = e.mem.alloc(0x20);
+        let surface = object(&mut e, SURFACE_SLOTS, 8);
+        e.mem.set_u32(this + 0x14, surface);
+        assert_eq!(e.call(0x00e7_d620, &args![this, 1u32]).u32(), this);
+        assert_eq!(e.mem.u32(this), NI_REF_OBJECT_VTABLE);
+        assert_eq!(calls(&e, SURFACE_SLOTS + 8), vec![vec![surface]]);
+        assert_eq!(
+            calls(&e, IMPORT_INTERLOCKED_DECREMENT),
+            vec![vec![OBJECT_COUNT_011F4400]]
+        );
+        assert_eq!(calls(&e, FREE_00AA1460), vec![vec![this, 0x20]]);
+        e.call_log = Some(vec![]);
+        e.call(0x00e7_d620, &args![this, 0u32]);
+        assert!(calls(&e, FREE_00AA1460).is_empty());
+    }
+
+    #[test]
+    fn fn_00e7d680_answers_its_record() {
+        let mut e = engine();
+        assert_eq!(e.call(0x00e7_d680, &args![0u32]).u32(), 0x0126_f5b4);
+    }
+
+    #[test]
+    fn fn_00e7d850_makes_the_implicit_depth_buffer() {
+        let mut e = engine();
+        let block = e.mem.alloc(0x20);
+        e.register_double(NEW_BUFFER_OBJECT, move |_, _| block.into_ret());
+        let device = object(&mut e, DEVICE_SLOTS, 8);
+        let surface = surface(&mut e);
+        store_through(&mut e, DEVICE_SLOTS + GET_DEPTH_STENCIL_SURFACE, 1, surface);
+        let group_out = e.mem.alloc(4);
+        assert_eq!(e.call(0x00e7_d850, &args![device, group_out]).u32(), block);
+        assert_eq!(
+            e.mem.u32(block),
+            NI_DX9_IMPLICIT_DEPTH_STENCIL_BUFFER_DATA_VTABLE
+        );
+        assert_eq!(e.mem.u32(block + 0xc), 0x16);
+        assert_eq!(
+            calls(&e, MAKE_DEPTH_GROUP_00A9FF60),
+            vec![vec![0x280, 0x1e0, block]]
+        );
+        assert_eq!(e.mem.u32(group_out), 0x0e7a_0000);
+        assert_eq!(e.mem.u32(block + 8), 0x0e7a_0000);
+        assert_eq!(e.mem.u32(DEPTH_SURFACE_0126F590), surface);
+        // A failed surface with a failed allocation: nothing to delete, null.
+        let mut e = engine();
+        e.register(NEW_BUFFER_OBJECT, |_, _| Ret::default());
+        let device = object(&mut e, DEVICE_SLOTS, 8);
+        e.register(DEVICE_SLOTS + GET_DEPTH_STENCIL_SURFACE, |_, _| {
+            0x8000_0000u32.into_ret()
+        });
+        assert_eq!(e.call(0x00e7_d850, &args![device, group_out]).u32(), 0);
+        assert_eq!(
+            calls(&e, DEVICE_SLOTS + GET_DEPTH_STENCIL_SURFACE),
+            vec![vec![device, 0x14]]
+        );
+    }
+
+    #[test]
+    fn fn_00e7dd50_resets_the_stages_up_to_both_limits() {
+        let mut e = engine();
+        let target = object(&mut e, DEVICE_SLOTS, 8);
+        e.mem.set_u32(STATE_TARGET_0126F6C8, target);
+        e.mem.set_u32(STAGE_LIMIT_011BF558, 3);
+        e.mem.set_u32(STAGE_LIMIT_011BF560, 5);
+        e.call(0x00e7_dd50, &args![2u32]);
+        assert_eq!(
+            calls(&e, DEVICE_SLOTS + 0xdc),
+            vec![vec![target, 2, 0], vec![target, 3, 0], vec![target, 4, 0]]
+        );
+        assert_eq!(
+            calls(&e, DEVICE_SLOTS + 0xc0),
+            vec![
+                vec![target, 2, 1, 1, 0],
+                vec![target, 2, 4, 1, 0],
+                vec![target, 2, 0x18, 0, 0]
+            ]
+        );
+    }
+
+    #[test]
+    fn fn_00e7ddf0_answers_the_state_or_the_stage_word() {
+        let mut e = engine();
+        e.register(STATE_LOOKUP_00E89060, |e, a| {
+            assert_eq!(e.mem.u32(a[2]), 0);
+            assert_eq!(e.mem.u8(a[3]), 0);
+            e.mem.set_u32(a[2], 0x77);
+            e.mem.u32(a[0]).into_ret()
+        });
+        let state = e.mem.alloc(4);
+        e.mem.set_u32(state, 1);
+        let stage = e.mem.alloc(0x14);
+        e.mem.set_u32(stage + 4, 0x44);
+        e.mem.set_u32(stage + 0x10, state);
+        assert_eq!(e.call(0x00e7_ddf0, &args![stage]).u32(), 0x77);
+        assert_eq!(calls(&e, STATE_LOOKUP_00E89060)[0][..2], [state, 0xb]);
+        e.mem.set_u32(state, 0x100);
+        assert_eq!(e.call(0x00e7_ddf0, &args![stage]).u32(), 0x44);
     }
 }

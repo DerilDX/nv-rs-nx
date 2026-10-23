@@ -135,6 +135,113 @@ pub fn ni_culling_process_do_culling(e: &mut Engine, this: Ptr, object: Ptr) {
     e.mem.set_u32(t + 0x8c, saved);
 }
 
+/// The memory manager (`011f6238`) and its `Deallocate` (`00aa4060`, `thiscall`, the block).
+const MEMORY_MANAGER: u32 = 0x011f_6238;
+const MEMORY_MANAGER_DEALLOCATE: u32 = 0x00aa_4060;
+
+// Translated from 00a69470 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiCullingProcess::_scalar_deleting_destructor_` (Xbox PDB): sets `NiCullingProcess`'s
+/// vtable and, when bit 0 of the flags byte is set, gives the block back to the memory
+/// manager (`00aa4060` on `011f6238`). Answers `this`.
+pub fn ni_culling_process_scalar_deleting_destructor(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    e.mem.set_u32(this.addr(), NI_CULLING_PROCESS_VTABLE);
+    if flags as u8 & 1 != 0 {
+        e.call(MEMORY_MANAGER_DEALLOCATE, &args![MEMORY_MANAGER, this]);
+    }
+    this
+}
+
+/// The global object (`011f4748`) whose word +8 `Process` takes as the visible set when it
+/// has none; `004e9bb0` (`thiscall` on that object, the camera) runs between the two calls
+/// on it.
+const RENDERER_OBJECT: u32 = 0x011f_4748;
+const RENDERER_UPDATE_FOR_CAMERA: u32 = 0x004e_9bb0;
+/// `0066b0d0` (`thiscall` on a `NiPointer`, the new object): the counted pointer assignment.
+const POINTER_ASSIGN: u32 = 0x0066_b0d0;
+/// `NiAVObject::Cull` (`00a59e00`, `thiscall` on the scene, the culling process).
+const AV_OBJECT_CULL: u32 = 0x00a5_9e00;
+/// The import slot of `InterlockedDecrement`.
+const INTERLOCKED_DECREMENT: u32 = 0x00fd_f1c4;
+
+// Translated from 00a69570 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiCullingProcess::Process` (Xbox PDB): with a camera and a scene, makes the camera
+/// current (`m_pkCamera` +0xc) and sets the frustum from the camera's at +0xdc
+/// ([`fn_00a694a0`]); a given visible set replaces the one at +8 for the call. When there is
+/// still none, the object at word +8 of `011f4748` is taken into a counted local pointer
+/// (`0066b0d0`) and, when it is not null, its slot +0x8c runs with the camera. The scene
+/// culls itself with this process (`NiAVObject::Cull`); then, with that object, `004e9bb0`
+/// runs on `011f4748` with the camera and the object's slot +0x90. The previous visible set
+/// comes back, the camera is cleared, and the local pointer is released (its slot +4 when
+/// the count reaches 0). Nothing without a camera or a scene.
+///
+/// Ghidra drops the paths through the local pointer as unreachable: it does not see
+/// `0066b0d0` write it.
+pub fn ni_culling_process_process(
+    e: &mut Engine,
+    this: Ptr,
+    camera: Ptr,
+    scene: Ptr,
+    visible_set: u32,
+) {
+    let t = this.addr();
+    if camera.addr() == 0 || scene.addr() == 0 {
+        return;
+    }
+    e.mem.set_u32(t + 0xc, camera.addr());
+    fn_00a694a0(e, this, Ptr::new(camera.addr() + 0xdc));
+    let mut saved = 0;
+    if visible_set != 0 {
+        saved = e.mem.u32(t + 8);
+        e.mem.set_u32(t + 8, visible_set);
+    }
+    // The camera argument's stack word becomes the counted local pointer, set to null.
+    let object = e.with_stack(4, |e, local| {
+        if e.mem.u32(t + 8) == 0 {
+            let renderer = e.global::<u32>(RENDERER_OBJECT);
+            let candidate = e.mem.u32(renderer + 8);
+            e.call(POINTER_ASSIGN, &args![local, candidate]);
+            let object = e.mem.u32(local.addr());
+            if object != 0 {
+                e.vcall(object, 0x8c, &args![camera]);
+            }
+            object
+        } else {
+            0
+        }
+    });
+    e.call(AV_OBJECT_CULL, &args![scene, this]);
+    if object != 0 {
+        let renderer = e.global::<u32>(RENDERER_OBJECT);
+        e.call(RENDERER_UPDATE_FOR_CAMERA, &args![renderer, camera]);
+        e.vcall(object, 0x90, &args![]);
+    }
+    if visible_set != 0 {
+        e.mem.set_u32(t + 8, saved);
+    }
+    e.mem.set_u32(t + 0xc, 0);
+    if object != 0 && e.call(INTERLOCKED_DECREMENT, &args![object + 4]).u32() == 0 {
+        e.vcall(object, 4, &args![]);
+    }
+}
+
+// Translated from 00a69640 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiCullingProcess::Process_ov2` (Xbox PDB): one object by its flags (+0x30). With bit 12
+/// set it is skipped when bit 20 is also set and otherwise appended (its slot +0xd4 with this
+/// process); with bit 12 clear it is appended when bit 11 is set or no plane is active
+/// (`m_uiActivePlanes` +0x8c is 0), and culled ([`ni_culling_process_do_culling`]) otherwise.
+pub fn ni_culling_process_process_ov2(e: &mut Engine, this: Ptr, object: Ptr) {
+    let flags = e.mem.u32(object.addr() + 0x30);
+    if (flags >> 0xc) & 1 != 0 {
+        if (flags >> 0x14) & 1 != 0 {
+            return;
+        }
+    } else if (flags >> 0xb) & 1 == 0 && e.mem.u32(this.addr() + 0x8c) != 0 {
+        ni_culling_process_do_culling(e, this, object);
+        return;
+    }
+    e.vcall(object.addr(), 0xd4, &args![this]);
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -142,6 +249,9 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00a6_9400, ni_culling_process_ni_culling_process(Ptr, u32) -> Ptr),
         entry!(0x00a6_94a0, fn_00a694a0(Ptr, Ptr)),
         entry!(0x00a6_94e0, ni_culling_process_do_culling(Ptr, Ptr)),
+        entry!(0x00a6_9470, ni_culling_process_scalar_deleting_destructor(Ptr, u32) -> Ptr),
+        entry!(0x00a6_9570, ni_culling_process_process(Ptr, Ptr, Ptr, u32)),
+        entry!(0x00a6_9640, ni_culling_process_process_ov2(Ptr, Ptr)),
     ]
 }
 
@@ -286,5 +396,164 @@ mod tests_b008 {
         let (planes, seen, _) = cull(f32::NAN, 0, vec![]);
         assert!(planes.is_empty());
         assert_eq!(seen, Some(0));
+    }
+}
+
+#[cfg(test)]
+mod n015_tests {
+    use super::*;
+    use crate::units::nimain::nimainsdm::test_support::calls_to;
+
+    #[test]
+    fn scalar_deleting_destructor_frees_only_with_bit_0() {
+        let mut e = Engine::new();
+        e.register(MEMORY_MANAGER_DEALLOCATE, |_, _| Ret::default());
+        let this = e.mem.alloc(0x90);
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x00a6_9470, &args![this, 0x100u32]).u32(), this);
+        assert_eq!(e.mem.u32(this), NI_CULLING_PROCESS_VTABLE);
+        assert!(calls_to(&e, MEMORY_MANAGER_DEALLOCATE).is_empty());
+        assert_eq!(e.call(0x00a6_9470, &args![this, 3u32]).u32(), this);
+        assert_eq!(
+            calls_to(&e, MEMORY_MANAGER_DEALLOCATE),
+            vec![vec![MEMORY_MANAGER, this]]
+        );
+    }
+
+    const SLOT_8C: u32 = 0x0123_1000;
+    const SLOT_90: u32 = 0x0123_1004;
+    const SLOT_DELETE: u32 = 0x0123_1008;
+
+    /// An engine for `Process`: doubles for every callee, the renderer object at `011f4748`
+    /// holding `held` at +8 (a counted object with count 1 when not 0).
+    fn process_engine(held: bool) -> (Engine, u32, u32) {
+        let mut e = Engine::new();
+        e.map(0x011f_4000, 0x1000);
+        e.register(FRUSTUM_PLANES_SET, |_, _| Ret::default());
+        e.register(AV_OBJECT_CULL, |e, a| {
+            // The visible set and camera seen while the scene culls.
+            let seen = e.mem.u32(a[1] + 8);
+            e.mem.set_u32(0x011f_4f00, seen);
+            let camera = e.mem.u32(a[1] + 0xc);
+            e.mem.set_u32(0x011f_4f04, camera);
+            Ret::default()
+        });
+        e.register(POINTER_ASSIGN, |e, a| {
+            e.mem.set_u32(a[0], a[1]);
+            if a[1] != 0 {
+                let count = e.mem.u32(a[1] + 4) + 1;
+                e.mem.set_u32(a[1] + 4, count);
+            }
+            a[0].into_ret()
+        });
+        e.register(RENDERER_UPDATE_FOR_CAMERA, |_, _| Ret::default());
+        e.register(INTERLOCKED_DECREMENT, |e, a| {
+            let count = e.mem.u32(a[0]) - 1;
+            e.mem.set_u32(a[0], count);
+            count.into_ret()
+        });
+        for slot in [SLOT_8C, SLOT_90, SLOT_DELETE] {
+            e.register(slot, |_, _| Ret::default());
+        }
+        let renderer = e.mem.alloc(0x10);
+        e.mem.set_u32(RENDERER_OBJECT, renderer);
+        let mut object = 0;
+        if held {
+            let vtable = e.mem.alloc(0x100);
+            e.mem.set_u32(vtable + 4, SLOT_DELETE);
+            e.mem.set_u32(vtable + 0x8c, SLOT_8C);
+            e.mem.set_u32(vtable + 0x90, SLOT_90);
+            object = e.mem.alloc(0x10);
+            e.mem.set_u32(object, vtable);
+            e.mem.set_u32(object + 4, 1);
+            e.mem.set_u32(renderer + 8, object);
+        }
+        e.call_log = Some(vec![]);
+        (e, renderer, object)
+    }
+
+    #[test]
+    fn process_with_a_given_visible_set_restores_the_old_one() {
+        let (mut e, _, _) = process_engine(false);
+        let this = e.mem.alloc(0x90);
+        e.mem.set_u32(this + 8, 0x7777);
+        let camera = e.mem.alloc(0x100);
+        e.call(0x00a6_9570, &args![this, camera, 0x5000u32, 0x6000u32]);
+        assert_eq!(calls_to(&e, AV_OBJECT_CULL), vec![vec![0x5000, this]]);
+        assert_eq!(e.mem.u32(0x011f_4f00), 0x6000);
+        assert_eq!(e.mem.u32(0x011f_4f04), camera);
+        assert!(calls_to(&e, POINTER_ASSIGN).is_empty());
+        assert_eq!(
+            calls_to(&e, FRUSTUM_PLANES_SET),
+            vec![vec![this + 0x2c, this + 0x10, camera + 0x68]]
+        );
+        assert_eq!(e.mem.u32(this + 8), 0x7777);
+        assert_eq!(e.mem.u32(this + 0xc), 0);
+    }
+
+    #[test]
+    fn process_without_a_visible_set_takes_the_renderer_object() {
+        let (mut e, renderer, object) = process_engine(true);
+        let this = e.mem.alloc(0x90);
+        let camera = e.mem.alloc(0x100);
+        e.call(0x00a6_9570, &args![this, camera, 0x5000u32, 0u32]);
+        assert_eq!(calls_to(&e, POINTER_ASSIGN)[0][1], object);
+        assert_eq!(calls_to(&e, SLOT_8C), vec![vec![object, camera]]);
+        assert_eq!(
+            calls_to(&e, RENDERER_UPDATE_FOR_CAMERA),
+            vec![vec![renderer, camera]]
+        );
+        assert_eq!(calls_to(&e, SLOT_90), vec![vec![object]]);
+        // Taken and released: the count is back to 1, nothing deleted.
+        assert_eq!(e.mem.u32(object + 4), 1);
+        assert!(calls_to(&e, SLOT_DELETE).is_empty());
+        assert_eq!(e.mem.u32(this + 8), 0);
+        assert_eq!(e.mem.u32(this + 0xc), 0);
+        // The last reference deletes it.
+        e.mem.set_u32(object + 4, 0);
+        e.call(0x00a6_9570, &args![this, camera, 0x5000u32, 0u32]);
+        assert_eq!(calls_to(&e, SLOT_DELETE), vec![vec![object]]);
+    }
+
+    #[test]
+    fn process_with_no_object_and_no_camera() {
+        let (mut e, _, _) = process_engine(false);
+        let this = e.mem.alloc(0x90);
+        let camera = e.mem.alloc(0x100);
+        e.call(0x00a6_9570, &args![this, camera, 0x5000u32, 0u32]);
+        assert_eq!(calls_to(&e, POINTER_ASSIGN)[0][1], 0);
+        assert!(calls_to(&e, RENDERER_UPDATE_FOR_CAMERA).is_empty());
+        assert_eq!(calls_to(&e, AV_OBJECT_CULL).len(), 1);
+        e.call_log = Some(vec![]);
+        e.call(0x00a6_9570, &args![this, 0u32, 0x5000u32, 0u32]);
+        e.call(0x00a6_9570, &args![this, camera, 0u32, 0u32]);
+        assert_eq!(e.call_log.take().unwrap().len(), 2);
+    }
+
+    #[test]
+    fn process_ov2_chooses_by_the_object_flags() {
+        let mut e = Engine::new();
+        e.register(SLOT_90, |_, _| Ret::default());
+        e.register(AV_OBJECT_GET_WORLD_BOUND, |_, _| Ret::default());
+        let vtable = e.mem.alloc(0x100);
+        e.mem.set_u32(vtable + 0xd4, SLOT_90);
+        let object = e.mem.alloc(0x40);
+        e.mem.set_u32(object, vtable);
+        let this = e.mem.alloc(0x90);
+        e.mem.set_u32(this + 0x8c, 0x3f);
+        let run = |e: &mut Engine, flags: u32| {
+            e.mem.set_u32(object + 0x30, flags);
+            e.call_log = Some(vec![]);
+            e.call(0x00a6_9640, &args![this, object]);
+            calls_to(e, SLOT_90).len()
+        };
+        assert_eq!(run(&mut e, 1 << 12), 1);
+        assert_eq!(run(&mut e, (1 << 12) | (1 << 20)), 0);
+        assert_eq!(run(&mut e, 1 << 11), 1);
+        // Culled: the object has no bound, so nothing is appended.
+        assert_eq!(run(&mut e, 0), 0);
+        assert!(calls_to(&e, AV_OBJECT_GET_WORLD_BOUND).is_empty());
+        e.mem.set_u32(this + 0x8c, 0);
+        assert_eq!(run(&mut e, 0), 1);
     }
 }

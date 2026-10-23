@@ -78,9 +78,53 @@ pub fn ni_particles_render_immediate(e: &mut Engine, this: Ptr, renderer: Ptr) {
     }
 }
 
+/// `NiGeometryData::SetConsistency` (Xbox PDB, `thiscall`, `RET 4`: the consistency).
+const SET_CONSISTENCY: u32 = 0x00a6_7050;
+/// `00aa13e0` (`cdecl`, one word): allocates a block of that size.
+const ALLOCATE: u32 = 0x00aa_13e0;
+/// `00a80540` (`thiscall`, no stack word; unit `nigeometry.cpp`): the geometry base
+/// constructor.
+const GEOMETRY_CONSTRUCTOR: u32 = 0x00a8_0540;
+/// `NiLines::CopyMembers` (engine map, `00a80400`; `thiscall`, (clone, cloning process)).
+const LINES_COPY_MEMBERS: u32 = 0x00a8_0400;
+/// `NiParticles`'s vtable (its RTTI names `NiParticles`).
+const NI_PARTICLES_VTABLE: u32 = 0x010a_11d4;
+
+// Translated from 00a9b230 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiParticles::CalculateConsistency` (Xbox PDB; `thiscall`, one stack word, which the
+/// exe overwrites with 0 rather than reads): a tail jump to
+/// `NiGeometryData::SetConsistency(0)` on the model data (+0xb8), whose answer is passed
+/// on.
+pub fn ni_particles_calculate_consistency(e: &mut Engine, this: Ptr, _unused_0: u32) -> u32 {
+    let data = e.mem.u32(this.addr() + 0xb8);
+    e.call(SET_CONSISTENCY, &args![data, 0u32]).u32()
+}
+
+// Translated from 00a9b250 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiParticles::CreateClone` (Xbox PDB): a new particles object (0xc4 bytes from
+/// `00aa13e0`, the geometry base constructor `00a80540`, the vtable `010a11d4`) given this
+/// one's members (`NiLines::CopyMembers`, `00a80400`). When the allocation fails the
+/// member copy still runs on null and the answer is null.
+pub fn ni_particles_create_clone(e: &mut Engine, this: Ptr, cloning_process: Ptr) -> Ptr {
+    let clone = e.call(ALLOCATE, &args![0xc4u32]).u32();
+    if clone != 0 {
+        e.call(GEOMETRY_CONSTRUCTOR, &args![clone]);
+        e.mem.set_u32(clone, NI_PARTICLES_VTABLE);
+        e.call(LINES_COPY_MEMBERS, &args![this, clone, cloning_process]);
+        return Ptr::new(clone);
+    }
+    e.call(LINES_COPY_MEMBERS, &args![this, 0u32, cloning_process]);
+    Ptr::new(0)
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(
+            0x00a9_b230,
+            ni_particles_calculate_consistency(Ptr, u32) -> u32
+        ),
+        entry!(0x00a9_b250, ni_particles_create_clone(Ptr, Ptr) -> Ptr),
         entry!(0x00a9b1b0, ni_particles_get_rtti() -> Ptr),
         entry!(0x00a9b2e0, ni_particles_get_viewer_strings(Ptr, Ptr)),
         entry!(0x00a9_b2a0, ni_particles_on_visible(Ptr, Ptr)),
@@ -214,5 +258,55 @@ mod tests_b043 {
             }
             assert_eq!(log[1..], expected[..]);
         }
+    }
+}
+
+#[cfg(test)]
+mod n018_tests {
+    use super::*;
+
+    fn calls_to(e: &Engine, addr: u32) -> Vec<Vec<u32>> {
+        e.call_log
+            .clone()
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|(a, _)| *a == addr)
+            .map(|(_, words)| words)
+            .collect()
+    }
+
+    #[test]
+    fn calculate_consistency_sets_zero_on_the_data() {
+        let mut e = Engine::new();
+        e.register(SET_CONSISTENCY, |_, _| 5u32.into_ret());
+        e.call_log = Some(vec![]);
+        let this = e.mem.alloc(0xc4);
+        e.mem.set_u32(this + 0xb8, 0x7000);
+        assert_eq!(e.call(0x00a9_b230, &args![this, 0x1234u32]).u32(), 5);
+        assert_eq!(calls_to(&e, SET_CONSISTENCY), vec![vec![0x7000, 0]]);
+    }
+
+    #[test]
+    fn create_clone_builds_and_copies() {
+        let mut e = Engine::new();
+        e.register(ALLOCATE, |e, a| e.mem.alloc(a[0]).into_ret());
+        e.register(GEOMETRY_CONSTRUCTOR, |_, _| Ret::default());
+        e.register(LINES_COPY_MEMBERS, |e, a| {
+            if a[1] != 0 {
+                assert_eq!(e.mem.u32(a[1]), NI_PARTICLES_VTABLE);
+            }
+            Ret::default()
+        });
+        e.call_log = Some(vec![]);
+        let clone = e.call(0x00a9_b250, &args![0x7000u32, 0x4444u32]).u32();
+        assert_eq!(calls_to(&e, ALLOCATE), vec![vec![0xc4]]);
+        assert_eq!(calls_to(&e, GEOMETRY_CONSTRUCTOR), vec![vec![clone]]);
+        assert_eq!(
+            calls_to(&e, LINES_COPY_MEMBERS),
+            vec![vec![0x7000, clone, 0x4444]]
+        );
+        e.register(ALLOCATE, |_, _| 0u32.into_ret());
+        assert_eq!(e.call(0x00a9_b250, &args![0x7000u32, 0x4444u32]).u32(), 0);
+        assert_eq!(calls_to(&e, LINES_COPY_MEMBERS)[1], vec![0x7000, 0, 0x4444]);
     }
 }

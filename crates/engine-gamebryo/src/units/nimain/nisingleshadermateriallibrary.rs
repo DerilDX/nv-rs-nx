@@ -120,6 +120,170 @@ pub fn fn_00a8fcc0(e: &mut Engine) {
 /// `011f5e40`: where `00a8fd80` keeps the library it constructs.
 const LIBRARY_SLOT: u32 = 0x011f_5e40;
 
+/// `NiShaderFactory::GetInstance` (`00a9fff0`, no words), the factory's virtuals +0x38 (the
+/// first shader library) and +0x3c (the next one), and the library's +0x14 (its
+/// `NiShaderLibraryDesc`); `NiShaderLibraryDesc::GetShaderCount` (`00a9ffd0`) and
+/// `GetShaderDesc` (`00a9ffe0`, one word: the index), `__thiscall`; the shader description's
+/// virtual +0x8 (its name); `NiSingleShaderMaterial::Create` (`00aa08d0`, cdecl: name handle,
+/// a flag).
+const SHADER_FACTORY_GET_INSTANCE: u32 = 0x00a9_fff0;
+const FACTORY_FIRST_LIBRARY_SLOT: u32 = 0x38;
+const FACTORY_NEXT_LIBRARY_SLOT: u32 = 0x3c;
+const LIBRARY_DESC_SLOT: u32 = 0x14;
+const LIBRARY_DESC_GET_SHADER_COUNT: u32 = 0x00a9_ffd0;
+const LIBRARY_DESC_GET_SHADER_DESC: u32 = 0x00a9_ffe0;
+const SHADER_DESC_NAME_SLOT: u32 = 0x8;
+const SINGLE_SHADER_MATERIAL_CREATE: u32 = 0x00aa_08d0;
+/// The library's current shader library (+0xc) and the index into it (+0x10).
+const CURRENT_LIBRARY: u32 = 0xc;
+const CURRENT_INDEX: u32 = 0x10;
+
+fn shader_count(e: &mut Engine, desc: u32) -> u32 {
+    e.call(LIBRARY_DESC_GET_SHADER_COUNT, &args![desc]).u32()
+}
+
+fn library_desc(e: &mut Engine, library: u32) -> u32 {
+    e.vcall(library, LIBRARY_DESC_SLOT, &args![]).u32()
+}
+
+// Translated from 00a8fac0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiSingleShaderMaterialLibrary::GetFirstMaterialDesc` (Xbox PDB): the current library
+/// (+0xc) becomes the factory's first one (index +0x10 cleared); none answers null. Libraries
+/// without shaders are skipped (each next one's description read without a null test); the
+/// answer is the first shader description of the library found, or null when it has no
+/// description or no shaders.
+pub fn ni_single_shader_material_library_get_first_material_desc(e: &mut Engine, this: Ptr) -> Ptr {
+    let base = this.addr();
+    let factory = e.call(SHADER_FACTORY_GET_INSTANCE, &args![]).u32();
+    let library = e.vcall(factory, FACTORY_FIRST_LIBRARY_SLOT, &args![]).u32();
+    e.mem.set_u32(base + CURRENT_LIBRARY, library);
+    e.mem.set_u32(base + CURRENT_INDEX, 0);
+    if library == 0 {
+        return Ptr::NULL;
+    }
+    let mut desc = library_desc(e, library);
+    while shader_count(e, desc) == 0 {
+        let library = e.vcall(factory, FACTORY_NEXT_LIBRARY_SLOT, &args![]).u32();
+        e.mem.set_u32(base + CURRENT_LIBRARY, library);
+        e.mem.set_u32(base + CURRENT_INDEX, 0);
+        desc = library_desc(e, library);
+    }
+    if desc == 0 || shader_count(e, desc) == 0 {
+        return Ptr::NULL;
+    }
+    let index = e.mem.u32(base + CURRENT_INDEX);
+    e.call(LIBRARY_DESC_GET_SHADER_DESC, &args![desc, index])
+        .ptr()
+}
+
+// Translated from 00a8fb50 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiSingleShaderMaterialLibrary::GetNextMaterialDesc` (Xbox PDB): the factory's libraries
+/// are walked up to the current one (+0xc) and the index (+0x10) goes up; when the current
+/// library's description lacks that index (or is null), the next libraries are tried from
+/// index 0 until one has shaders or none is left. The answer is the description at the index,
+/// or null.
+pub fn ni_single_shader_material_library_get_next_material_desc(e: &mut Engine, this: Ptr) -> Ptr {
+    let base = this.addr();
+    let factory = e.call(SHADER_FACTORY_GET_INSTANCE, &args![]).u32();
+    let mut library = e.vcall(factory, FACTORY_FIRST_LIBRARY_SLOT, &args![]).u32();
+    while library != e.mem.u32(base + CURRENT_LIBRARY) {
+        library = e.vcall(factory, FACTORY_NEXT_LIBRARY_SLOT, &args![]).u32();
+    }
+    let index = e.mem.u32(base + CURRENT_INDEX).wrapping_add(1);
+    e.mem.set_u32(base + CURRENT_INDEX, index);
+    if library == 0 {
+        return Ptr::NULL;
+    }
+    let mut desc;
+    loop {
+        desc = library_desc(e, library);
+        if desc != 0 && shader_count(e, desc) > e.mem.u32(base + CURRENT_INDEX) {
+            break;
+        }
+        library = e.vcall(factory, FACTORY_NEXT_LIBRARY_SLOT, &args![]).u32();
+        e.mem.set_u32(base + CURRENT_LIBRARY, library);
+        e.mem.set_u32(base + CURRENT_INDEX, 0);
+        if library == 0 {
+            break;
+        }
+    }
+    if e.mem.u32(base + CURRENT_LIBRARY) == 0 || desc == 0 {
+        return Ptr::NULL;
+    }
+    let index = e.mem.u32(base + CURRENT_INDEX);
+    if shader_count(e, desc) <= index {
+        return Ptr::NULL;
+    }
+    e.call(LIBRARY_DESC_GET_SHADER_DESC, &args![desc, index])
+        .ptr()
+}
+
+// Translated from 00a8fbf0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiSingleShaderMaterialLibrary::GetMaterialName` (Xbox PDB; `__thiscall`, `this` unread,
+/// one word: the index over all libraries): walks the factory's libraries counting their
+/// shaders; the library holding the index answers its description's name (the description's
+/// virtual +0x8); null when the index is past them all.
+pub fn ni_single_shader_material_library_get_material_name(
+    e: &mut Engine,
+    _unused_0: Ptr,
+    index: u32,
+) -> Ptr {
+    let mut total = 0u32;
+    let factory = e.call(SHADER_FACTORY_GET_INSTANCE, &args![]).u32();
+    let mut library = e.vcall(factory, FACTORY_FIRST_LIBRARY_SLOT, &args![]).u32();
+    while library != 0 {
+        let desc = library_desc(e, library);
+        if desc != 0 {
+            if shader_count(e, desc).wrapping_add(total) > index {
+                let shader = e
+                    .call(
+                        LIBRARY_DESC_GET_SHADER_DESC,
+                        &args![desc, index.wrapping_sub(total)],
+                    )
+                    .u32();
+                return e.vcall(shader, SHADER_DESC_NAME_SLOT, &args![]).ptr();
+            }
+            total = total.wrapping_add(shader_count(e, desc));
+        }
+        library = e.vcall(factory, FACTORY_NEXT_LIBRARY_SLOT, &args![]).u32();
+    }
+    Ptr::NULL
+}
+
+// Translated from 00a8fc70 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiSingleShaderMaterialLibrary::GetMaterialCount` (Xbox PDB; `this` unread): the shaders of
+/// all the factory's libraries (those with a description); 0 without a factory.
+pub fn ni_single_shader_material_library_get_material_count(e: &mut Engine, _unused_0: Ptr) -> u32 {
+    let factory = e.call(SHADER_FACTORY_GET_INSTANCE, &args![]).u32();
+    if factory == 0 {
+        return factory;
+    }
+    let mut total = 0u32;
+    let mut library = e.vcall(factory, FACTORY_FIRST_LIBRARY_SLOT, &args![]).u32();
+    while library != 0 {
+        let desc = library_desc(e, library);
+        if desc != 0 {
+            total = total.wrapping_add(shader_count(e, desc));
+        }
+        library = e.vcall(factory, FACTORY_NEXT_LIBRARY_SLOT, &args![]).u32();
+    }
+    total
+}
+
+// Translated from 00a8fd60 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiSingleShaderMaterialLibrary::GetMaterial` (Xbox PDB; `__thiscall`, `this` unread, one
+/// word: the address of the name): `NiSingleShaderMaterial::Create` (`00aa08d0`) with the name
+/// handle and 1.
+pub fn ni_single_shader_material_library_get_material(
+    e: &mut Engine,
+    _unused_0: Ptr,
+    name: Ptr,
+) -> Ptr {
+    let handle = e.mem.u32(name.addr());
+    e.call(SINGLE_SHADER_MATERIAL_CREATE, &args![handle, 1u32])
+        .ptr()
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -130,6 +294,26 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
             ni_single_shader_material_library_scalar_deleting_destructor(Ptr, u32) -> Ptr
         ),
         entry!(0x00a8_fcc0, fn_00a8fcc0()),
+        entry!(
+            0x00a8_fac0,
+            ni_single_shader_material_library_get_first_material_desc(Ptr) -> Ptr
+        ),
+        entry!(
+            0x00a8_fb50,
+            ni_single_shader_material_library_get_next_material_desc(Ptr) -> Ptr
+        ),
+        entry!(
+            0x00a8_fbf0,
+            ni_single_shader_material_library_get_material_name(Ptr, u32) -> Ptr
+        ),
+        entry!(
+            0x00a8_fc70,
+            ni_single_shader_material_library_get_material_count(Ptr) -> u32
+        ),
+        entry!(
+            0x00a8_fd60,
+            ni_single_shader_material_library_get_material(Ptr, Ptr) -> Ptr
+        ),
     ]
 }
 
@@ -275,5 +459,132 @@ mod tests_b043 {
         e.call_log = Some(vec![]);
         e.call(0x00a8_fcc0, &args![]);
         assert_eq!(e.call_log.take().unwrap().len(), 1);
+    }
+}
+
+#[cfg(test)]
+mod n019_tests {
+    use super::*;
+
+    use std::cell::Cell;
+    use std::rc::Rc;
+
+    fn word(eax: u32) -> Ret {
+        Ret {
+            eax,
+            ..Ret::default()
+        }
+    }
+
+    const FIRST_DOUBLE: u32 = 0x0070_f000;
+    const NEXT_DOUBLE: u32 = 0x0070_f010;
+    const DESC_DOUBLE: u32 = 0x0070_f020;
+    const NAME_DOUBLE: u32 = 0x0070_f030;
+
+    /// A factory whose libraries hold `counts` shaders each (`None`: no description); each
+    /// shader description is a word whose name double answers it plus 0x100.
+    fn factory(e: &mut Engine, counts: &[Option<u16>]) -> (u32, Vec<u32>) {
+        let factory = e.mem.alloc(8);
+        let vtable = e.mem.alloc(0x40);
+        e.mem.set_u32(factory, vtable);
+        e.mem
+            .set_u32(vtable + FACTORY_FIRST_LIBRARY_SLOT, FIRST_DOUBLE);
+        e.mem
+            .set_u32(vtable + FACTORY_NEXT_LIBRARY_SLOT, NEXT_DOUBLE);
+        let library_table = e.mem.alloc(0x20);
+        e.mem
+            .set_u32(library_table + LIBRARY_DESC_SLOT, DESC_DOUBLE);
+        let shader_table = e.mem.alloc(0x10);
+        e.mem
+            .set_u32(shader_table + SHADER_DESC_NAME_SLOT, NAME_DOUBLE);
+        let mut libraries = vec![];
+        for count in counts {
+            let library = e.mem.alloc(8);
+            e.mem.set_u32(library, library_table);
+            if let Some(count) = count {
+                let desc = e.mem.alloc(0x48);
+                let array = e.mem.alloc(4 * u32::from(*count) + 4);
+                for i in 0..u32::from(*count) {
+                    let shader = e.mem.alloc(4);
+                    e.mem.set_u32(shader, shader_table);
+                    e.mem.set_u32(array + 4 * i, shader);
+                }
+                e.mem.set_u32(desc + 0x3c, array);
+                e.mem.set_u16(desc + 0x44, *count);
+                e.mem.set_u32(library + 4, desc);
+            }
+            libraries.push(library);
+        }
+        e.register_double(SHADER_FACTORY_GET_INSTANCE, move |_, _| word(factory));
+        let at = Rc::new(Cell::new(0usize));
+        let (first_at, next_at) = (at.clone(), at);
+        let first = libraries.clone();
+        e.register_double(FIRST_DOUBLE, move |_, _| {
+            first_at.set(0);
+            word(first.first().copied().unwrap_or(0))
+        });
+        let next = libraries.clone();
+        e.register_double(NEXT_DOUBLE, move |_, _| {
+            next_at.set(next_at.get() + 1);
+            word(next.get(next_at.get()).copied().unwrap_or(0))
+        });
+        e.register(DESC_DOUBLE, |e, a| word(e.mem.u32(a[0] + 4)));
+        e.register(NAME_DOUBLE, |_, a| word(a[0] + 0x100));
+        (factory, libraries)
+    }
+
+    fn shader(e: &Engine, library: u32, index: u32) -> u32 {
+        let desc = e.mem.u32(library + 4);
+        e.mem.u32(e.mem.u32(desc + 0x3c) + 4 * index)
+    }
+
+    #[test]
+    fn first_and_next_walk_the_libraries() {
+        let mut e = Engine::new();
+        let (_, libraries) = factory(&mut e, &[Some(0), Some(2), None, Some(1)]);
+        let this = e.mem.alloc(0x14);
+        let first = e.call(0x00a8_fac0, &args![this]).u32();
+        assert_eq!(first, shader(&e, libraries[1], 0));
+        assert_eq!(e.mem.u32(this + CURRENT_LIBRARY), libraries[1]);
+        let second = e.call(0x00a8_fb50, &args![this]).u32();
+        assert_eq!(second, shader(&e, libraries[1], 1));
+        // Past library 1: the one without a description is skipped.
+        let third = e.call(0x00a8_fb50, &args![this]).u32();
+        assert_eq!(third, shader(&e, libraries[3], 0));
+        assert_eq!(e.mem.u32(this + CURRENT_INDEX), 0);
+        assert_eq!(e.call(0x00a8_fb50, &args![this]).u32(), 0);
+        assert_eq!(e.mem.u32(this + CURRENT_LIBRARY), 0);
+    }
+
+    #[test]
+    fn first_without_libraries_is_null() {
+        let mut e = Engine::new();
+        factory(&mut e, &[]);
+        let this = e.mem.alloc(0x14);
+        assert_eq!(e.call(0x00a8_fac0, &args![this]).u32(), 0);
+        assert_eq!(e.mem.u32(this + CURRENT_LIBRARY), 0);
+    }
+
+    #[test]
+    fn names_and_counts_over_all_libraries() {
+        let mut e = Engine::new();
+        let (_, libraries) = factory(&mut e, &[Some(2), None, Some(3)]);
+        assert_eq!(e.call(0x00a8_fc70, &args![0u32]).u32(), 5);
+        let name = e.call(0x00a8_fbf0, &args![0u32, 3u32]).u32();
+        assert_eq!(name, shader(&e, libraries[2], 1) + 0x100);
+        let name = e.call(0x00a8_fbf0, &args![0u32, 1u32]).u32();
+        assert_eq!(name, shader(&e, libraries[0], 1) + 0x100);
+        assert_eq!(e.call(0x00a8_fbf0, &args![0u32, 5u32]).u32(), 0);
+        e.register(SHADER_FACTORY_GET_INSTANCE, |_, _| word(0));
+        assert_eq!(e.call(0x00a8_fc70, &args![0u32]).u32(), 0);
+    }
+
+    #[test]
+    fn get_material_creates_from_the_name() {
+        let mut e = Engine::new();
+        e.register(SINGLE_SHADER_MATERIAL_CREATE, |_, a| word(a[0] + a[1]));
+        let name = e.mem.alloc(4);
+        e.mem.set_u32(name, 0x4000);
+        assert_eq!(e.call(0x00a8_fd60, &args![0u32, name]).u32(), 0x4001);
     }
 }

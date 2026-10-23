@@ -59,11 +59,36 @@ pub fn fn_00b66810(e: &mut Engine, this: Ptr, flag: u8) -> Ptr {
     this
 }
 
+/// The base `RegisterStreamables` (`00bc3770`, a jump chain; `thiscall`, one word: the
+/// stream; `bool` in `AL`).
+const BASE_REGISTER_STREAMABLES: u32 = 0x00bc_3770;
+
+// Translated from 00b667e0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map: slot +0x54 of `BSShaderPPLightingProperty`'s vtable `010ae0d0`
+/// and two others (`RegisterStreamables` in the Xbox PDB's slot list; `thiscall`, one word:
+/// the stream). False when the base (`00bc3770`) answers false; otherwise the object at
+/// `+0xa4`, when there is one, registers itself too (its slot +0x54 with the stream, the
+/// result not used), and the answer is true.
+pub fn fn_00b667e0(e: &mut Engine, this: Ptr, stream: u32) -> bool {
+    if !e
+        .call(BASE_REGISTER_STREAMABLES, &args![this, stream])
+        .bool()
+    {
+        return false;
+    }
+    let object = e.mem.u32(this.addr().wrapping_add(0xa4));
+    if object != 0 {
+        e.vcall(object, 0x54, &args![stream]);
+    }
+    true
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
         entry!(0x00b6_6780, fn_00b66780(Ptr, Ptr)),
         entry!(0x00b6_6810, fn_00b66810(Ptr, u8) -> Ptr),
+        entry!(0x00b6_67e0, fn_00b667e0(Ptr, u32) -> bool),
     ]
 }
 
@@ -131,5 +156,35 @@ mod tests {
         assert_eq!(e.mem.u8(this + 8), 1);
         assert_eq!(e.mem.u32(this + 0xc), 0);
         assert_eq!(e.global::<u32>(OBJECT_COUNT), 1);
+    }
+}
+
+#[cfg(test)]
+mod n013_tests {
+    use super::*;
+
+    #[test]
+    fn fn_00b667e0_registers_the_object_at_0xa4() {
+        let mut e = Engine::new();
+        e.register(BASE_REGISTER_STREAMABLES, |_, a| (a[1] != 0).into_ret());
+        e.put_vtable(0x0f00_1000, &[0; 0x16]);
+        e.mem.set_u32(0x0f00_1054, 0x0f00_0054);
+        e.register(0x0f00_0054, |_, _| Ret::default());
+        let object = e.mem.alloc(8);
+        e.mem.set_u32(object, 0x0f00_1000);
+        let this = e.mem.alloc(0xa8);
+        e.mem.set_u32(this + 0xa4, object);
+        e.call_log = Some(vec![]);
+        // The base refuses: nothing else runs.
+        assert!(!e.call(0x00b6_67e0, &args![this, 0u32]).bool());
+        let log = e.call_log.take().unwrap();
+        assert!(!log.iter().any(|(a, _)| *a == 0x0f00_0054));
+        e.call_log = Some(vec![]);
+        assert!(e.call(0x00b6_67e0, &args![this, 0x700u32]).bool());
+        let log = e.call_log.take().unwrap();
+        assert!(log.contains(&(0x0f00_0054, vec![object, 0x700])));
+        // Without an object the answer is still true.
+        e.mem.set_u32(this + 0xa4, 0);
+        assert!(e.call(0x00b6_67e0, &args![this, 0x700u32]).bool());
     }
 }

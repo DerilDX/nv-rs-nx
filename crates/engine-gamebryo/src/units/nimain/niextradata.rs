@@ -171,6 +171,120 @@ pub fn ni_extra_data_load_binary(e: &mut Engine, this: Ptr, stream: Ptr) {
     }
 }
 
+/// `NiObject::RegisterStreamables` (`00a5d2f0`, the stream) and `NiObject::IsEqual`
+/// (`00a5d470`, the other object), both `thiscall`.
+const OBJECT_REGISTER_STREAMABLES: u32 = 0x00a5_d2f0;
+const OBJECT_IS_EQUAL: u32 = 0x00a5_d470;
+/// `00a89af0` (unnamed and unplaced in the engine map; `thiscall`, the stream): the base
+/// save `NiExtraData::SaveBinary` starts with.
+const OBJECT_SAVE_BINARY_00A89AF0: u32 = 0x00a8_9af0;
+/// `NiStream::SaveFixedString` (`00a641f0`, `thiscall` on the stream, the address of the
+/// handle).
+const SAVE_FIXED_STRING: u32 = 0x00a6_41f0;
+/// The sized delete (`00aa1460`, `cdecl`: block, size).
+const SIZED_DELETE: u32 = 0x00aa_1460;
+/// `NiGetViewerString` (`00a7d330`, the class name) and `NiGetViewerString_ov11`
+/// (`00a7d5e0`, a name and a fixed-string handle), both `cdecl`, answering a new string.
+const VIEWER_STRING_CLASS: u32 = 0x00a7_d330;
+const VIEWER_STRING_FIXED_STRING: u32 = 0x00a7_d5e0;
+/// The string array's grow (`0096ad30`, `thiscall`, the new size) and set-at (`0096ae90`,
+/// `thiscall`, (index, address of the string)), both unnamed in the engine map.
+const STRINGS_GROW: u32 = 0x0096_ad30;
+const STRINGS_SET_AT: u32 = 0x0096_ae90;
+/// The literal `"m_pcName"`.
+const TEXT_M_PC_NAME: u32 = 0x0109_7790;
+
+/// Appends `text` to a viewer-string array as the exe's inlined `Add` does: when the 16-bit
+/// size (+0xa) has reached the capacity (+0x8) the array grows to its step (+0xe) plus the
+/// size, then the string is stored at the old size (through a stack word holding it).
+fn push_viewer_string(e: &mut Engine, strings: Ptr, text: u32) {
+    let size = u32::from(e.mem.u16(strings.addr() + 0xa));
+    if size >= u32::from(e.mem.u16(strings.addr() + 8)) {
+        let step = u32::from(e.mem.u16(strings.addr() + 0xe));
+        e.call(STRINGS_GROW, &args![strings, step + size]);
+    }
+    e.with_stack(4, |e, slot| {
+        e.mem.set_u32(slot.addr(), text);
+        e.call(STRINGS_SET_AT, &args![strings, size, slot]);
+    });
+}
+
+// Translated from 00a7b290 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiExtraData::RegisterStreamables` (Xbox PDB): false when
+/// `NiObject::RegisterStreamables` is false; otherwise whether the stream's virtual slot
+/// +0x20 (with the address of the name, +0x8) answers nonzero.
+pub fn ni_extra_data_register_streamables(e: &mut Engine, this: Ptr, stream: Ptr) -> bool {
+    if !e
+        .call(OBJECT_REGISTER_STREAMABLES, &args![this, stream])
+        .bool()
+    {
+        return false;
+    }
+    e.vcall(stream.addr(), 0x20, &args![this.addr() + 8]).bool()
+}
+
+// Translated from 00a7b2c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiExtraData::SaveBinary` (Xbox PDB): the base save (`00a89af0`), then the name
+/// (`NiStream::SaveFixedString` with its address, +0x8).
+pub fn ni_extra_data_save_binary(e: &mut Engine, this: Ptr, stream: Ptr) {
+    e.call(OBJECT_SAVE_BINARY_00A89AF0, &args![this, stream]);
+    e.call(SAVE_FIXED_STRING, &args![stream, this.addr() + 8]);
+}
+
+// Translated from 00a7b380 (PC disassembly, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (a function Ghidra did not create; by its body the creation
+/// function of `NiExtraData`): 0xc bytes (`00aa13e0`) with the default constructor's body
+/// inlined (the `NiObject` constructor, the vtable `0109da1c`, the empty name, not
+/// counted), or null.
+pub fn fn_00a7b380(e: &mut Engine) -> Ptr {
+    let block = e.call(ALLOCATE, &args![0xcu32]).u32();
+    if block == 0 {
+        return Ptr::new(0);
+    }
+    e.call(OBJECT_CONSTRUCTOR, &args![block]);
+    e.mem.set_u32(block, EXTRA_DATA_VTABLE);
+    let empty = e.mem.u32(EMPTY_FIXED_STRING);
+    e.mem.set_u32(block + 8, empty);
+    Ptr::new(block)
+}
+
+// Translated from 00a7b3d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiExtraData::IsEqual` (Xbox PDB): `NiObject::IsEqual`, then whether the two name
+/// handles (+0x8) are the same.
+pub fn ni_extra_data_is_equal(e: &mut Engine, this: Ptr, other: Ptr) -> bool {
+    if !e.call(OBJECT_IS_EQUAL, &args![this, other]).bool() {
+        return false;
+    }
+    e.mem.u32(this.addr() + 8) == e.mem.u32(other.addr().wrapping_add(8))
+}
+
+// Translated from 00a7b400 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiExtraData::_scalar_deleting_destructor_` (Xbox PDB): the destructor body (`00a7b300`:
+/// vtable, the name released, the `NiObject` destructor) inlined, then the sized delete of
+/// 0xc bytes when bit 0 of `flags` is set. Answers `this`.
+pub fn ni_extra_data_scalar_deleting_destructor(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    fn_00a7b300(e, this);
+    if flags & 1 != 0 {
+        e.call(SIZED_DELETE, &args![this, 0xcu32]);
+    }
+    this
+}
+
+// Translated from 00a7b580 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiExtraData::GetViewerStrings` (Xbox PDB): the class name (`NiGetViewerString` of
+/// `ms_RTTI`'s name word, `011f4a80`) and `"m_pcName"` with the name handle
+/// (`NiGetViewerString_ov11`), appended to the array. No base class strings.
+pub fn ni_extra_data_get_viewer_strings(e: &mut Engine, this: Ptr, strings: Ptr) {
+    let name = e.mem.u32(EXTRA_DATA_RTTI);
+    let text = e.call(VIEWER_STRING_CLASS, &args![name]).u32();
+    push_viewer_string(e, strings, text);
+    let handle = e.mem.u32(this.addr() + 8);
+    let text = e
+        .call(VIEWER_STRING_FIXED_STRING, &args![TEXT_M_PC_NAME, handle])
+        .u32();
+    push_viewer_string(e, strings, text);
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -180,6 +294,18 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00a7_b3b0, ni_extra_data_link_object(Ptr, Ptr)),
         entry!(0x00a7_b440, fn_00a7b440(Ptr, Ptr) -> Ptr),
         entry!(0x00a7_b4a0, ni_extra_data_load_binary(Ptr, Ptr)),
+        entry!(
+            0x00a7_b290,
+            ni_extra_data_register_streamables(Ptr, Ptr) -> bool
+        ),
+        entry!(0x00a7_b2c0, ni_extra_data_save_binary(Ptr, Ptr)),
+        entry!(0x00a7_b380, fn_00a7b380() -> Ptr),
+        entry!(0x00a7_b3d0, ni_extra_data_is_equal(Ptr, Ptr) -> bool),
+        entry!(
+            0x00a7_b400,
+            ni_extra_data_scalar_deleting_destructor(Ptr, u32) -> Ptr
+        ),
+        entry!(0x00a7_b580, ni_extra_data_get_viewer_strings(Ptr, Ptr)),
     ]
 }
 
@@ -377,5 +503,128 @@ mod tests {
             calls_to(&e, OBJECT_LOAD_BINARY),
             vec![vec![this, stream]; 2]
         );
+    }
+}
+
+#[cfg(test)]
+mod n016_tests {
+    use super::*;
+    use crate::units::nimain::nimainsdm::test_support::*;
+
+    fn engine() -> Engine {
+        let mut e = engine_with_counting();
+        for double in [
+            OBJECT_CONSTRUCTOR,
+            OBJECT_DESTRUCTOR,
+            OBJECT_SAVE_BINARY_00A89AF0,
+            SAVE_FIXED_STRING,
+            SIZED_DELETE,
+            STRINGS_GROW,
+            STRINGS_SET_AT,
+        ] {
+            e.register(double, |_, _| Ret::default());
+        }
+        e.call_log = Some(vec![]);
+        e
+    }
+
+    #[test]
+    fn register_streamables_asks_the_stream_about_the_name() {
+        let mut e = engine();
+        e.register(OBJECT_REGISTER_STREAMABLES, |_, _| 1u32.into_ret());
+        let mut slots = vec![0u32; 0x10];
+        slots[0x20 / 4] = 0x0e00_0020;
+        e.put_vtable(0x0e10_0000, &slots);
+        e.register(0x0e00_0020, |_, _| 1u32.into_ret());
+        let stream = e.mem.alloc(4);
+        e.mem.set_u32(stream, 0x0e10_0000);
+        let this = e.mem.alloc(0xc);
+        assert!(e.call(0x00a7_b290, &args![this, stream]).bool());
+        assert_eq!(calls_to(&e, 0x0e00_0020), vec![vec![stream, this + 8]]);
+        // Only the low byte of the answer counts.
+        e.register(0x0e00_0020, |_, _| 0x100u32.into_ret());
+        assert!(!e.call(0x00a7_b290, &args![this, stream]).bool());
+        e.register(OBJECT_REGISTER_STREAMABLES, |_, _| 0u32.into_ret());
+        assert!(!e.call(0x00a7_b290, &args![this, stream]).bool());
+        assert_eq!(calls_to(&e, 0x0e00_0020).len(), 2);
+    }
+
+    #[test]
+    fn save_binary_saves_the_base_then_the_name() {
+        let mut e = engine();
+        let this = e.mem.alloc(0xc);
+        e.call(0x00a7_b2c0, &args![this, 0x0e20_0000u32]);
+        assert_eq!(
+            calls_to(&e, OBJECT_SAVE_BINARY_00A89AF0),
+            vec![vec![this, 0x0e20_0000]]
+        );
+        assert_eq!(
+            calls_to(&e, SAVE_FIXED_STRING),
+            vec![vec![0x0e20_0000, this + 8]]
+        );
+    }
+
+    #[test]
+    fn create_object_builds_an_empty_named_extra_data() {
+        let mut e = engine();
+        let object = e.call(0x00a7_b380, &args![]).u32();
+        assert_eq!(calls_to(&e, ALLOCATE), vec![vec![0xc]]);
+        assert_eq!(calls_to(&e, OBJECT_CONSTRUCTOR), vec![vec![object]]);
+        assert_eq!(e.mem.u32(object), EXTRA_DATA_VTABLE);
+        assert_eq!(e.mem.u32(object + 8), 0x0109_b228);
+        assert_eq!(e.mem.u32(0x0109_b220), 0x0109_b228);
+        e.register(ALLOCATE, |_, _| 0u32.into_ret());
+        assert_eq!(e.call(0x00a7_b380, &args![]).u32(), 0);
+    }
+
+    #[test]
+    fn is_equal_compares_the_names_after_the_base() {
+        let mut e = engine();
+        e.register(OBJECT_IS_EQUAL, |_, _| 1u32.into_ret());
+        let this = e.mem.alloc(0xc);
+        let other = e.mem.alloc(0xc);
+        e.mem.set_u32(this + 8, 0x0e00_0010);
+        e.mem.set_u32(other + 8, 0x0e00_0010);
+        assert!(e.call(0x00a7_b3d0, &args![this, other]).bool());
+        e.mem.set_u32(other + 8, 0x0e00_0020);
+        assert!(!e.call(0x00a7_b3d0, &args![this, other]).bool());
+        e.register(OBJECT_IS_EQUAL, |_, _| 0u32.into_ret());
+        assert!(!e.call(0x00a7_b3d0, &args![this, this]).bool());
+    }
+
+    #[test]
+    fn scalar_deleting_destructor_releases_the_name_and_deletes_on_bit_0() {
+        let mut e = engine();
+        let handle = e.mem.alloc(0x10) + 8;
+        e.mem.set_u32(handle - 8, 2);
+        let this = e.mem.alloc(0xc);
+        e.mem.set_u32(this + 8, handle);
+        assert_eq!(e.call(0x00a7_b400, &args![this, 1u32]).u32(), this);
+        assert_eq!(e.mem.u32(this), EXTRA_DATA_VTABLE);
+        assert_eq!(e.mem.u32(handle - 8), 1);
+        assert_eq!(calls_to(&e, OBJECT_DESTRUCTOR), vec![vec![this]]);
+        assert_eq!(calls_to(&e, SIZED_DELETE), vec![vec![this, 0xc]]);
+        e.call(0x00a7_b400, &args![this, 0u32]);
+        assert_eq!(calls_to(&e, SIZED_DELETE).len(), 1);
+    }
+
+    #[test]
+    fn get_viewer_strings_adds_the_class_and_the_name() {
+        let mut e = engine();
+        e.mem.set_u32(EXTRA_DATA_RTTI, 0x0123_0000);
+        e.register(VIEWER_STRING_CLASS, |_, _| 0x0e00_0001u32.into_ret());
+        e.register(VIEWER_STRING_FIXED_STRING, |_, _| 0x0e00_0002u32.into_ret());
+        let this = e.mem.alloc(0xc);
+        e.mem.set_u32(this + 8, 0x0e00_0040);
+        let strings = e.mem.alloc(0x10);
+        e.call(0x00a7_b580, &args![this, strings]);
+        assert_eq!(calls_to(&e, VIEWER_STRING_CLASS), vec![vec![0x0123_0000]]);
+        assert_eq!(
+            calls_to(&e, VIEWER_STRING_FIXED_STRING),
+            vec![vec![TEXT_M_PC_NAME, 0x0e00_0040]]
+        );
+        // Capacity 0: both appends grow (step 0 plus the size 0).
+        assert_eq!(calls_to(&e, STRINGS_GROW), vec![vec![strings, 0]; 2]);
+        assert_eq!(calls_to(&e, STRINGS_SET_AT).len(), 2);
     }
 }

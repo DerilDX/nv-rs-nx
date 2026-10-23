@@ -296,9 +296,41 @@ pub fn fn_009b7e40(e: &mut Engine, this: Ptr) {
     }
 }
 
+/// `Projectile::Projectile` (`009bbc70`, Xbox PDB): `thiscall`, one word (`RET 4`).
+const PROJECTILE_CONSTRUCT: u32 = 0x009b_bc70;
+/// The word `fn_009b7cb0` returns (`0x011c6278`).
+const GLOBAL_KEY: u32 = 0x011c_6278;
+
+// Translated from 009b7a50 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 009b7a50 - the C++ exception-unwinding frame (FS:[0]) is not translated.
+/// Unnamed in the engine map (`thiscall`, `RET 4`): the other constructor of this class.
+/// `Projectile::Projectile` (`009bbc70`) with the byte `flag`, the vtables `0108fa44`
+/// (+0) and `0108fa38` (+0x18), `004f15a0(0x3d)`, the word at +0x150 and the byte at
+/// +0x154 cleared and the floats at +0x158 and +0x15c set to 0.0. Returns `this`.
+pub fn fn_009b7a50(e: &mut Engine, this: Ptr, flag: u8) -> Ptr {
+    let p = this.addr();
+    e.call(PROJECTILE_CONSTRUCT, &args![this, u32::from(flag)]);
+    e.mem.set_u32(p, VTABLE);
+    e.mem.set_u32(p + 0x18, SECOND_VTABLE);
+    e.call(SET_KIND, &args![this, 0x3du32]);
+    e.mem.set_u32(p + 0x150, 0);
+    e.mem.set_u8(p + 0x154, 0);
+    e.mem.set_u32(p + 0x158, 0.0f32.to_bits());
+    e.mem.set_u32(p + 0x15c, 0.0f32.to_bits());
+    this
+}
+
+// Translated from 009b7cb0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (no words): the word at `0x011c6278`.
+pub fn fn_009b7cb0(e: &mut Engine) -> u32 {
+    e.mem.u32(GLOBAL_KEY)
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x009b_7a50, fn_009b7a50(Ptr, u8) -> Ptr),
+        entry!(0x009b_7cb0, fn_009b7cb0() -> u32),
         entry!(0x009b_7a20, fn_009b7a20(Ptr, u32) -> Ptr),
         entry!(
             0x009b_7af0,
@@ -612,5 +644,44 @@ mod tests {
         let log = run_update(Update { flag: 1, ..base() });
         assert_eq!(calls_to(&log, NODE_SET), vec![vec![0x0150_2000, 0]]);
         assert_eq!(calls_to(&log, SET_SCALED_POINT).len(), 1);
+    }
+}
+
+#[cfg(test)]
+mod n029_tests {
+    use super::*;
+
+    #[test]
+    fn fn_009b7a50_constructs_with_a_flag() {
+        let mut e = Engine::new();
+        e.register(PROJECTILE_CONSTRUCT, |_, _| Ret::default());
+        e.register(SET_KIND, |_, _| Ret::default());
+        let this = e.mem.alloc(0x160);
+        e.mem.write(this + 0x150, &[0xcd; 0x10]);
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x009b_7a50, &args![this, 0x301u32]).u32(), this);
+        let log = e.call_log.take().unwrap();
+        let order: Vec<_> = log.into_iter().skip(1).collect();
+        assert_eq!(
+            order,
+            vec![
+                (PROJECTILE_CONSTRUCT, vec![this, 1]),
+                (SET_KIND, vec![this, 0x3d])
+            ]
+        );
+        assert_eq!(e.mem.u32(this), VTABLE);
+        assert_eq!(e.mem.u32(this + 0x18), SECOND_VTABLE);
+        assert_eq!(e.mem.u32(this + 0x150), 0);
+        assert_eq!(e.mem.u8(this + 0x154), 0);
+        assert_eq!(e.mem.u8(this + 0x155), 0xcd);
+        assert_eq!(e.mem.u64(this + 0x158), 0);
+    }
+
+    #[test]
+    fn fn_009b7cb0_reads_the_global() {
+        let mut e = Engine::new();
+        e.map(GLOBAL_KEY & !0xfff, 0x1000);
+        e.mem.set_u32(GLOBAL_KEY, 0x4321);
+        assert_eq!(e.call(0x009b_7cb0, &[]).u32(), 0x4321);
     }
 }

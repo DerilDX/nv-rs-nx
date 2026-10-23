@@ -292,6 +292,245 @@ pub fn bs_shader_util_accumulate_scene_list(e: &mut Engine, object: u32, list: P
     }
 }
 
+/// `NiPixelData` fields `00b6b940` and `00b6bbd0` use: the pixels (`+0x50`), the per-level
+/// widths (`+0x54`), heights (`+0x58`) and offsets (`+0x5c`), the level count (`+0x60`) and
+/// the revision (`+0x68`).
+const PIXELS: u32 = 0x50;
+const WIDTHS: u32 = 0x54;
+const HEIGHTS: u32 = 0x58;
+const OFFSETS: u32 = 0x5c;
+const LEVELS: u32 = 0x60;
+const REVISION: u32 = 0x68;
+
+/// The bytes of a 4-byte pixel `00b6b940` sets to 0xff for mipmap level `level` (1 to 6;
+/// the arms of its switch's jump table at `00b6ba04`, read in Ghidra), none for later levels.
+fn level_bytes(level: u32) -> &'static [u32] {
+    match level.wrapping_sub(1) {
+        0 => &[0],
+        1 => &[1],
+        2 => &[2],
+        3 => &[1, 0],
+        4 => &[1, 2],
+        5 => &[2, 0],
+        _ => &[],
+    }
+}
+
+// Translated from 00b6b940 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map, `cdecl` with one word (an `NiPixelData`; a debug colouring of
+/// the mipmaps): for a non-null pixel data, every 4-byte pixel of mipmap levels 1 to 6 gets
+/// 0xff in the bytes of its level's colour (level 1: byte 0; 2: byte 1; 3: byte 2; 4: bytes
+/// 1 and 0; 5: bytes 1 and 2; 6: bytes 2 and 0), level 7 and later are walked unchanged, and
+/// the revision is raised by one.
+pub fn fn_00b6b940(e: &mut Engine, pixel_data: u32) {
+    if pixel_data == 0 {
+        return;
+    }
+    let levels = e.mem.u32(pixel_data + LEVELS);
+    let mut level = 1u32;
+    while level < levels {
+        let width = e
+            .mem
+            .u32(e.mem.u32(pixel_data + WIDTHS).wrapping_add(level * 4));
+        let height = e
+            .mem
+            .u32(e.mem.u32(pixel_data + HEIGHTS).wrapping_add(level * 4));
+        let start = e
+            .mem
+            .u32(e.mem.u32(pixel_data + OFFSETS).wrapping_add(level * 4))
+            .wrapping_add(e.mem.u32(pixel_data + PIXELS));
+        let mut row = 0u32;
+        for _ in 0..height {
+            let mut pixel = row;
+            for _ in 0..width {
+                for byte in level_bytes(level) {
+                    e.mem
+                        .set_u8(pixel.wrapping_add(start).wrapping_add(*byte), 0xff);
+                }
+                pixel = pixel.wrapping_add(4);
+            }
+            row = row.wrapping_add(width.wrapping_mul(4));
+        }
+        level += 1;
+    }
+    let revision = e.mem.u32(pixel_data + REVISION);
+    e.mem
+        .set_u32(pixel_data + REVISION, revision.wrapping_add(1));
+}
+
+/// The calls `00b6bbd0` makes: the format conversion (`00e7bd20`, `cdecl`, the address of a
+/// pixel format: a `D3DFORMAT`), the `NiPixelData` constructor (`00a7c190`, `thiscall`: width,
+/// height, the address of the format, levels, 1), `D3DXLoadSurfaceFromSurface` (`00ee6de6`,
+/// eight words), `memcpy` (`00ec44d0`), `NiSourceTexture::Create` (`00a5ff10`, `cdecl`: the
+/// pixel data, a name handle, the format preferences at `011a9598`), the two bytes it sets
+/// around it (`011f4448`, kept and cleared, and `011a9595`, "more than one level") and the
+/// `D3DFORMAT` codes it handles (`D3DFMT_A8R8G8B8` 0x15, 0x20 handled as 0x15, `DXT1`,
+/// `DXT3`, `DXT5`).
+const PIXEL_FORMAT_TO_D3D_00E7BD20: u32 = 0x00e7_bd20;
+const PIXEL_DATA_CONSTRUCT_00A7C190: u32 = 0x00a7_c190;
+const D3DX_LOAD_SURFACE_FROM_SURFACE: u32 = 0x00ee_6de6;
+const MEMCPY: u32 = 0x00ec_44d0;
+const SOURCE_TEXTURE_CREATE: u32 = 0x00a5_ff10;
+const FORMAT_PREFS_011A9598: u32 = 0x011a_9598;
+const SWITCH_011F4448: u32 = 0x011f_4448;
+const MIPMAPPED_011A9595: u32 = 0x011a_9595;
+const NI_ALLOCATE: u32 = 0x00aa_13e0;
+const D3DFMT_A8R8G8B8: u32 = 0x15;
+const D3DFMT_A8B8G8R8: u32 = 0x20;
+const D3DFMT_DXT1: u32 = 0x3154_5844;
+const D3DFMT_DXT3: u32 = 0x3354_5844;
+const D3DFMT_DXT5: u32 = 0x3554_5844;
+
+// Translated from 00b6bbd0 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 00b6bbd0 - the FS:[0] exception frame (unwinding on a throw) is not translated
+/// Unnamed in the engine map, `cdecl` with two words (a texture, the address of an
+/// `NiPixelFormat`, copied into a 0x44-byte local first): reads a texture back into a new
+/// source texture. Null without a texture or renderer (`011f4748`), or when the format's
+/// `D3DFORMAT` (`00e7bd20`) is none of 0x15, 0x20 (taken as 0x15), DXT1, DXT3 and DXT5. The
+/// width and height (texture slots +0x94, +0x98), the level count (`+0x60` of the texture's
+/// pixel data at `+0x3c`, 1 without one) and the renderer data's D3D texture (slot +0x9c of
+/// `+0x24`) are read; a system-memory texture of that size and format is made (the device
+/// `+0x288` of the renderer, slot +0x5c; null when that fails). A new `NiPixelData` (0x74
+/// bytes, `00a7c190`; null when the allocation fails) gets each level: both surfaces (slot
+/// +0x48), the copy (`D3DXLoadSurfaceFromSurface`), the lock (slot +0x34) and the bytes:
+/// for 0x15 `height * pitch` bytes with bytes 0 and 2 of each pixel swapped, for the DXT
+/// formats `max(height, 4) * pitch / 4` bytes; then unlock (+0x38) and both surfaces released
+/// (+8). After the loop the system texture is released, and the answer is
+/// `NiSourceTexture::Create` of the pixel data with the converted-texture name
+/// (`pConvertedTextureName`), the byte at `011f4448` cleared around it and the byte at
+/// `011a9595` set to whether there is more than one level.
+pub fn fn_00b6bbd0(e: &mut Engine, texture: u32, format: u32) -> u32 {
+    let renderer = e.mem.u32(SCENE_GLOBAL_011F4748);
+    e.with_stack(0x5c, |e, frame| {
+        // frame + 0: the format code, + 4: the system texture, + 8: the source surface,
+        // + 0xc: the D3D texture, + 0x10: the pitch and + 0x14 the bits of the locked
+        // rectangle, + 0x18: the copied pixel format (0x44 bytes).
+        let f = frame.addr();
+        let code_at = f;
+        let system_at = f + 4;
+        let source_at = f + 8;
+        let rect = f + 0x10;
+        let copy = f + 0x18;
+        for k in 0..0x11u32 {
+            let v = e.mem.u32(format.wrapping_add(4 * k));
+            e.mem.set_u32(copy + 4 * k, v);
+        }
+        if texture == 0 || renderer == 0 {
+            return 0;
+        }
+        let code = e.call(PIXEL_FORMAT_TO_D3D_00E7BD20, &args![copy]).u32();
+        e.mem.set_u32(code_at, code);
+        if (code as i32) > (D3DFMT_DXT1 as i32) {
+            if code != D3DFMT_DXT3 && code != D3DFMT_DXT5 {
+                return 0;
+            }
+        } else if code != D3DFMT_DXT1 && code != D3DFMT_A8R8G8B8 {
+            if code != D3DFMT_A8B8G8R8 {
+                return 0;
+            }
+            e.mem.set_u32(code_at, D3DFMT_A8R8G8B8);
+        }
+        let device = e.mem.u32(renderer + 0x288);
+        let width = e.vcall(texture, 0x94, &args![]).u32();
+        let height = e.vcall(texture, 0x98, &args![]).u32();
+        let source_pixels = e.mem.u32(texture + 0x3c);
+        let levels = if source_pixels != 0 {
+            e.mem.u32(source_pixels + LEVELS)
+        } else {
+            1
+        };
+        let renderer_data = e.mem.u32(texture + 0x24);
+        let d3d_texture = e.vcall(renderer_data, 0x9c, &args![]).u32();
+        let code = e.mem.u32(code_at);
+        let failed = e
+            .vcall(
+                device,
+                0x5c,
+                &args![width, height, levels, 0u32, code, 2u32, system_at, 0u32],
+            )
+            .u32();
+        if failed != 0 || e.mem.u32(system_at) == 0 {
+            return 0;
+        }
+        let block = e.call(NI_ALLOCATE, &args![0x74u32]).u32();
+        let pixel_data = if block != 0 {
+            e.call(
+                PIXEL_DATA_CONSTRUCT_00A7C190,
+                &args![block, width, height, copy, levels, 1u32],
+            )
+            .u32()
+        } else {
+            0
+        };
+        e.with_stack(4, |e, target_at| {
+            let mut level = 0u32;
+            while level < levels {
+                e.vcall(d3d_texture, 0x48, &args![level, source_at]);
+                let system = e.mem.u32(system_at);
+                e.vcall(system, 0x48, &args![level, target_at]);
+                let source = e.mem.u32(source_at);
+                let target = e.mem.u32(target_at.addr());
+                e.call(
+                    D3DX_LOAD_SURFACE_FROM_SURFACE,
+                    &args![target, 0u32, 0u32, source, 0u32, 0u32, 0xffff_ffffu32, 0u32],
+                );
+                let target = e.mem.u32(target_at.addr());
+                e.vcall(target, 0x34, &args![rect, 0u32, 0u32]);
+                let code = e.mem.u32(code_at);
+                let pitch = e.mem.u32(rect);
+                let bits = e.mem.u32(rect + 4);
+                let at = |e: &Engine, field: u32| {
+                    e.mem
+                        .u32(e.mem.u32(pixel_data + field).wrapping_add(level * 4))
+                };
+                if code == D3DFMT_A8R8G8B8 {
+                    let size = at(e, HEIGHTS).wrapping_mul(pitch);
+                    let dest = at(e, OFFSETS).wrapping_add(e.mem.u32(pixel_data + PIXELS));
+                    e.call(MEMCPY, &args![dest, bits, size]);
+                    let bytes = at(e, WIDTHS).wrapping_mul(at(e, HEIGHTS)).wrapping_mul(4);
+                    let mut pixel = at(e, OFFSETS).wrapping_add(e.mem.u32(pixel_data + PIXELS));
+                    if bytes != 0 {
+                        let count = (bytes.wrapping_sub(1) >> 2).wrapping_add(1);
+                        for _ in 0..count {
+                            let low = e.mem.u8(pixel);
+                            let high = e.mem.u8(pixel.wrapping_add(2));
+                            e.mem.set_u8(pixel, high);
+                            e.mem.set_u8(pixel.wrapping_add(2), low);
+                            pixel = pixel.wrapping_add(4);
+                        }
+                    }
+                } else if code == D3DFMT_DXT1 || code == D3DFMT_DXT3 || code == D3DFMT_DXT5 {
+                    let dest = at(e, OFFSETS).wrapping_add(e.mem.u32(pixel_data + PIXELS));
+                    let rows = at(e, HEIGHTS).max(4);
+                    let size = rows.wrapping_mul(pitch) >> 2;
+                    e.call(MEMCPY, &args![dest, bits, size]);
+                }
+                let target = e.mem.u32(target_at.addr());
+                e.vcall(target, 0x38, &args![]);
+                let target = e.mem.u32(target_at.addr());
+                e.vcall(target, 8, &args![]);
+                let source = e.mem.u32(source_at);
+                e.vcall(source, 8, &args![]);
+                level += 1;
+            }
+        });
+        let system = e.mem.u32(system_at);
+        e.vcall(system, 8, &args![]);
+        let kept = e.mem.u8(SWITCH_011F4448);
+        let name = e.mem.u32(e.mem.u32(CONVERTED_TEXTURE_NAME));
+        e.mem.set_u8(SWITCH_011F4448, 0);
+        let created = e
+            .call(
+                SOURCE_TEXTURE_CREATE,
+                &args![pixel_data, name, FORMAT_PREFS_011A9598],
+            )
+            .u32();
+        e.mem.set_u8(MIPMAPPED_011A9595, u8::from(levels > 1));
+        e.mem.set_u8(SWITCH_011F4448, kept);
+        created
+    })
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -312,6 +551,8 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
             0x00b6_bfc0,
             bs_shader_util_accumulate_scene_list(u32, Ptr, Ptr)
         ),
+        entry!(0x00b6_b940, fn_00b6b940(u32)),
+        entry!(0x00b6_bbd0, fn_00b6bbd0(u32, u32) -> u32),
     ]
 }
 
@@ -635,5 +876,185 @@ mod b048_tests {
         e.call(0x00b6_bfc0, &args![7u32, list, process]);
         assert_eq!(calls(&e, 0x6100_0048).len(), 1);
         assert_eq!(calls(&e, SHADER_MANAGER_SET_ACCUMULATOR).len(), 2);
+    }
+}
+
+#[cfg(test)]
+mod n012_tests {
+    use super::*;
+
+    fn calls(e: &Engine, addr: u32) -> Vec<Vec<u32>> {
+        e.call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|(a, _)| *a == addr)
+            .map(|(_, w)| w.clone())
+            .collect()
+    }
+
+    /// A pixel data with `levels` levels of the given sizes, packed one after the other.
+    fn pixel_data(e: &mut Engine, sizes: &[(u32, u32)]) -> u32 {
+        let this = e.mem.alloc(0x74);
+        let n = sizes.len() as u32;
+        let widths = e.mem.alloc(4 * n);
+        let heights = e.mem.alloc(4 * n);
+        let offsets = e.mem.alloc(4 * n);
+        let mut total = 0u32;
+        for (i, (w, h)) in sizes.iter().enumerate() {
+            e.mem.set_u32(widths + 4 * i as u32, *w);
+            e.mem.set_u32(heights + 4 * i as u32, *h);
+            e.mem.set_u32(offsets + 4 * i as u32, total);
+            total += w * h * 4;
+        }
+        let pixels = e.mem.alloc(total.max(4));
+        e.mem.set_u32(this + PIXELS, pixels);
+        e.mem.set_u32(this + WIDTHS, widths);
+        e.mem.set_u32(this + HEIGHTS, heights);
+        e.mem.set_u32(this + OFFSETS, offsets);
+        e.mem.set_u32(this + LEVELS, n);
+        this
+    }
+
+    #[test]
+    fn fn_00b6b940_colours_the_mipmaps() {
+        let mut e = Engine::new();
+        let sizes = [
+            (2, 2),
+            (2, 1),
+            (1, 2),
+            (1, 1),
+            (1, 1),
+            (1, 1),
+            (1, 1),
+            (1, 1),
+        ];
+        let data = pixel_data(&mut e, &sizes);
+        e.call(0x00b6_b940, &args![data]);
+        let pixels = e.mem.u32(data + PIXELS);
+        let pixel = |e: &Engine, level: u32, k: u32| {
+            let offset = e.mem.u32(e.mem.u32(data + OFFSETS) + 4 * level);
+            e.mem.u32(pixels + offset + 4 * k)
+        };
+        assert_eq!(pixel(&e, 0, 0), 0);
+        assert_eq!((pixel(&e, 1, 0), pixel(&e, 1, 1)), (0xff, 0xff));
+        assert_eq!((pixel(&e, 2, 0), pixel(&e, 2, 1)), (0xff00, 0xff00));
+        assert_eq!(pixel(&e, 3, 0), 0x00ff_0000);
+        assert_eq!(pixel(&e, 4, 0), 0xffff);
+        assert_eq!(pixel(&e, 5, 0), 0x00ff_ff00);
+        assert_eq!(pixel(&e, 6, 0), 0x00ff_00ff);
+        assert_eq!(pixel(&e, 7, 0), 0);
+        assert_eq!(e.mem.u32(data + REVISION), 1);
+        e.call(0x00b6_b940, &args![0u32]);
+    }
+
+    /// A COM-style object: a vtable of `count` doubles at `base + 4 * slot` (each answering
+    /// 0 unless registered otherwise).
+    fn com(e: &mut Engine, base: u32, count: u32) -> u32 {
+        let slots: Vec<u32> = (0..count).map(|k| base + 4 * k).collect();
+        let table = e.mem.alloc(4 * count);
+        for (i, s) in slots.iter().enumerate() {
+            e.mem.set_u32(table + 4 * i as u32, *s);
+            e.register(*s, |_, _| Ret::default());
+        }
+        let object = e.mem.alloc(0x300);
+        e.mem.set_u32(object, table);
+        object
+    }
+
+    #[test]
+    fn fn_00b6bbd0_reads_each_level_back() {
+        let mut e = Engine::new();
+        e.map(0x011f_4000, 0x1000);
+        e.map(0x011f_a000, 0x1000);
+        e.map(0x011a_9000, 0x1000);
+        let format = e.mem.alloc(0x44);
+        e.mem.set_u32(format, 0xf0f0);
+        // No renderer: null.
+        assert_eq!(e.call(0x00b6_bbd0, &args![0x10u32, format]).u32(), 0);
+        let device = com(&mut e, 0x0f10_0000, 0x30);
+        let renderer = e.mem.alloc(0x290);
+        e.mem.set_u32(renderer + 0x288, device);
+        e.mem.set_u32(SCENE_GLOBAL_011F4748, renderer);
+        let texture = com(&mut e, 0x0f20_0000, 0x30);
+        e.register(0x0f20_0000 + 0x94, |_, _| 2u32.into_ret());
+        e.register(0x0f20_0000 + 0x98, |_, _| 1u32.into_ret());
+        let renderer_data = com(&mut e, 0x0f30_0000, 0x30);
+        e.mem.set_u32(texture + 0x24, renderer_data);
+        let d3d_texture = com(&mut e, 0x0f40_0000, 0x30);
+        e.register_double(0x0f30_0000 + 0x9c, move |_, _| d3d_texture.into_ret());
+        let system = com(&mut e, 0x0f50_0000, 0x30);
+        e.register_double(0x0f10_0000 + 0x5c, move |e, a| {
+            e.mem.set_u32(a[7], system);
+            Ret::default()
+        });
+        let surface = com(&mut e, 0x0f60_0000, 0x30);
+        let source = com(&mut e, 0x0f70_0000, 0x30);
+        e.register_double(0x0f40_0000 + 0x48, move |e, a| {
+            e.mem.set_u32(a[2], source);
+            Ret::default()
+        });
+        e.register_double(0x0f50_0000 + 0x48, move |e, a| {
+            e.mem.set_u32(a[2], surface);
+            Ret::default()
+        });
+        let bits = e.mem.alloc(8);
+        e.mem.set_u32(bits, 0x4433_2211);
+        e.mem.set_u32(bits + 4, 0x8877_6655);
+        e.register_double(0x0f60_0000 + 0x34, move |e, a| {
+            e.mem.set_u32(a[1], 8);
+            e.mem.set_u32(a[1] + 4, bits);
+            Ret::default()
+        });
+        e.register(D3DX_LOAD_SURFACE_FROM_SURFACE, |_, _| Ret::default());
+        e.register(NI_ALLOCATE, |e, a| e.mem.alloc(a[0]).into_ret());
+        let made = pixel_data(&mut e, &[(2, 1)]);
+        e.register_double(PIXEL_DATA_CONSTRUCT_00A7C190, move |_, _| made.into_ret());
+        e.register(MEMCPY, |e, a| {
+            let bytes = e.mem.bytes(a[1], a[2]);
+            e.mem.write(a[0], &bytes);
+            Ret::default()
+        });
+        e.register(SOURCE_TEXTURE_CREATE, |e, _| {
+            assert_eq!(e.mem.u8(SWITCH_011F4448), 0);
+            0x5050u32.into_ret()
+        });
+        let name = e.mem.alloc(4);
+        e.mem.set_u32(name, 0xaaaa);
+        e.mem.set_u32(CONVERTED_TEXTURE_NAME, name);
+        e.mem.set_u8(SWITCH_011F4448, 7);
+        // An unsupported format: null.
+        e.register(PIXEL_FORMAT_TO_D3D_00E7BD20, |_, _| 0x16u32.into_ret());
+        assert_eq!(e.call(0x00b6_bbd0, &args![texture, format]).u32(), 0);
+        // 0x20 is read as A8R8G8B8: the bytes copied and swapped.
+        e.register(PIXEL_FORMAT_TO_D3D_00E7BD20, |e, a| {
+            assert_eq!(e.mem.u32(a[0]), 0xf0f0);
+            0x20u32.into_ret()
+        });
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x00b6_bbd0, &args![texture, format]).u32(), 0x5050);
+        let created = calls(&e, 0x0f10_0000 + 0x5c);
+        assert_eq!(created[0][1..7], [2, 1, 1, 0, 0x15, 2]);
+        let pixels = e.mem.u32(made + PIXELS);
+        assert_eq!(e.mem.u32(pixels), 0x4411_2233);
+        assert_eq!(e.mem.u32(pixels + 4), 0x8855_6677);
+        assert_eq!(
+            calls(&e, D3DX_LOAD_SURFACE_FROM_SURFACE),
+            vec![vec![surface, 0, 0, source, 0, 0, 0xffff_ffff, 0]]
+        );
+        assert_eq!(
+            calls(&e, SOURCE_TEXTURE_CREATE),
+            vec![vec![made, 0xaaaa, FORMAT_PREFS_011A9598]]
+        );
+        assert_eq!(e.mem.u8(SWITCH_011F4448), 7);
+        assert_eq!(e.mem.u8(MIPMAPPED_011A9595), 0);
+        assert_eq!(calls(&e, 0x0f50_0000 + 8), vec![vec![system]]);
+        assert_eq!(calls(&e, 0x0f60_0000 + 0x38), vec![vec![surface]]);
+        assert_eq!(calls(&e, 0x0f70_0000 + 8), vec![vec![source]]);
+        // DXT1: max(height, 4) * pitch / 4 bytes, no swap.
+        e.register(PIXEL_FORMAT_TO_D3D_00E7BD20, |_, _| D3DFMT_DXT1.into_ret());
+        e.call(0x00b6_bbd0, &args![texture, format]);
+        assert_eq!(calls(&e, MEMCPY).last().unwrap()[2], 8);
+        assert_eq!(e.mem.u32(pixels), 0x4433_2211);
     }
 }

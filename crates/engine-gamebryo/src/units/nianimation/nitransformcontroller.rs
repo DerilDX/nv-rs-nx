@@ -3,6 +3,7 @@
 
 #[allow(unused_imports)]
 use crate::prelude::*;
+use crate::units::nianimation::nitransforminterpolator::NiTransformInterpolator;
 
 /// `NiBlendAccumTransformInterpolator::ms_RTTI` (the class's `NiRTTI` record).
 const NI_BLEND_ACCUM_TRANSFORM_INTERPOLATOR_RTTI: u32 = 0x011f_371c;
@@ -387,6 +388,192 @@ pub fn fn_00a36810(e: &mut Engine) -> u32 {
     block
 }
 
+/// `NiSingleInterpController::IsEqual` (`00a39030`, `thiscall`, the other object) and
+/// `GetViewerStrings` (`00a390a0`, `thiscall`, the strings).
+const SINGLE_IS_EQUAL: u32 = 0x00a3_9030;
+const SINGLE_GET_VIEWER_STRINGS: u32 = 0x00a3_90a0;
+/// The key replacements of `NiTransformData` (`thiscall`, (keys, count, type); null keys
+/// leave the list empty): rotation `00a4e2e0`, position `00a4e350`, scale `00a4e3b0`.
+const DATA_SET_ROTATION_KEYS: u32 = 0x00a4_e2e0;
+const DATA_SET_POSITION_KEYS: u32 = 0x00a4_e350;
+const DATA_SET_SCALE_KEYS: u32 = 0x00a4_e3b0;
+/// `00653290` (`thiscall` on an object, an `NiRTTI` record): the object when it is of that
+/// class (or derives from it), else null.
+const DYNAMIC_CAST: u32 = 0x0065_3290;
+/// `NiTransformInterpolator::ms_RTTI` (`011f3e50`).
+const NI_TRANSFORM_INTERPOLATOR_RTTI: u32 = 0x011f_3e50;
+/// `NiAVObject::ms_RTTI` (`011f4280`; the record `NiAVObject::GetRTTI`, `00a5a420`, answers).
+const NI_AV_OBJECT_RTTI: u32 = 0x011f_4280;
+/// `NiGetViewerString` (`00a7d330`, `cdecl`, the text) and the viewer-string array's grow
+/// (`0096ad30`, `thiscall`, the new size) and set (`0096ae90`, `thiscall`, (index, &text)).
+const NI_GET_VIEWER_STRING: u32 = 0x00a7_d330;
+const STRINGS_GROW: u32 = 0x0096_ad30;
+const STRINGS_SET_AT: u32 = 0x0096_ae90;
+
+// Translated from 00a360b0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiTransformController::IsEqual` (Xbox PDB; `thiscall`, the other object): what
+/// `NiSingleInterpController::IsEqual` (`00a39030`) answers.
+pub fn ni_transform_controller_is_equal(e: &mut Engine, this: u32, other: u32) -> bool {
+    e.call(SINGLE_IS_EQUAL, &args![this, other]).bool()
+}
+
+// Translated from 00a364b0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiTransformInterpolator::SetPoseValue` (Xbox PDB; `thiscall`, an `NiQuatTransform` by
+/// value: translation, rotation `w x y z`, scale): each part that is not the unset double
+/// `-FLT_MAX` (`010241b0`; a NaN counts as set) is stored in the transform value, and the
+/// data's keys of that part, when there is data, are replaced by none (`00a4e2e0`,
+/// `00a4e3b0`, `00a4e350` with null keys). The rotation is tested by its `x` word (the second)
+/// and copied as words; the scale goes through the x87 stack (a signalling NaN quieted);
+/// the translation is tested by its first word and copied as words. In that order.
+pub fn ni_transform_interpolator_set_pose_value(
+    e: &mut Engine,
+    this: Ptr<NiTransformInterpolator>,
+    translate_x: u32,
+    translate_y: u32,
+    translate_z: u32,
+    rotate_w: u32,
+    rotate_x: u32,
+    rotate_y: u32,
+    rotate_z: u32,
+    scale: u32,
+) {
+    let unset = f64::from_bits(e.mem.u64(INVALID_DOUBLE));
+    let at = this.addr();
+    if x87_load32(rotate_x) != unset {
+        for (i, word) in [rotate_w, rotate_x, rotate_y, rotate_z].iter().enumerate() {
+            e.mem.set_u32(at + 0x18 + 4 * i as u32, *word);
+        }
+        let data = e.get(this, NiTransformInterpolator::m_spData);
+        if data != 0 {
+            e.call(DATA_SET_ROTATION_KEYS, &args![data, 0u32, 0u32, 0u32]);
+        }
+    }
+    if x87_load32(scale) != unset {
+        let data = e.get(this, NiTransformInterpolator::m_spData);
+        e.set(
+            this,
+            NiTransformInterpolator::m_fScale,
+            x87_quiet_bits(scale),
+        );
+        if data != 0 {
+            e.call(DATA_SET_SCALE_KEYS, &args![data, 0u32, 0u32, 0u32]);
+        }
+    }
+    if x87_load32(translate_x) != unset {
+        for (i, word) in [translate_x, translate_y, translate_z].iter().enumerate() {
+            e.mem.set_u32(at + 0xc + 4 * i as u32, *word);
+        }
+        let data = e.get(this, NiTransformInterpolator::m_spData);
+        if data != 0 {
+            e.call(DATA_SET_POSITION_KEYS, &args![data, 0u32, 0u32, 0u32]);
+        }
+    }
+}
+
+// Translated from 00a36560 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`thiscall`, no stack words; by its body the
+/// `NiTransformController` constructor): the base constructor `00a38e00`, then the
+/// `NiTransformController` vtable (`0109687c`). Answers `this`.
+pub fn fn_00a36560(e: &mut Engine, this: u32) -> u32 {
+    e.call(SINGLE_INTERP_CONSTRUCT, &args![this]);
+    e.mem.set_u32(this, TRANSFORM_CONTROLLER_VTABLE);
+    this
+}
+
+// Translated from 00a36590 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiTransformController::SynchronizePoseInterpolator` (Xbox PDB; `thiscall`, two words,
+/// `RET 8`, the second not read): the interpolator as an `NiTransformInterpolator` (`00653290`
+/// with its `NiRTTI` record; null stays null) is given the target's local transform as its
+/// pose (`SetPoseValue`, `00a364b0`): the translation (+0x58), the rotation (+0x34) as a
+/// quaternion (`NiQuaternion::FromRotation` into a stack quaternion) and the scale (+0x64,
+/// through the x87 stack).
+pub fn ni_transform_controller_synchronize_pose_interpolator(
+    e: &mut Engine,
+    this: u32,
+    interpolator: u32,
+    _unused_2: u32,
+) {
+    let pose = if interpolator == 0 {
+        0
+    } else {
+        e.call(
+            DYNAMIC_CAST,
+            &args![interpolator, NI_TRANSFORM_INTERPOLATOR_RTTI],
+        )
+        .u32()
+    };
+    let target = e.mem.u32(this + TARGET);
+    e.with_stack(0x10, |e, quaternion| {
+        let q = quaternion.addr();
+        e.call(
+            QUATERNION_FROM_ROTATION,
+            &args![q, target.wrapping_add(0x34)],
+        );
+        let scale = x87_quiet_bits(e.mem.u32(target.wrapping_add(0x64)));
+        let translate: Vec<u32> = (0..3)
+            .map(|i| e.mem.u32(target.wrapping_add(0x58 + 4 * i)))
+            .collect();
+        let rotate: Vec<u32> = (0..4).map(|i| e.mem.u32(q + 4 * i)).collect();
+        ni_transform_interpolator_set_pose_value(
+            e,
+            Ptr::new(pose),
+            translate[0],
+            translate[1],
+            translate[2],
+            rotate[0],
+            rotate[1],
+            rotate[2],
+            rotate[3],
+            scale,
+        );
+    });
+}
+
+// Translated from 00a36840 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiTransformController::GetViewerStrings` (Xbox PDB; `thiscall`, the strings): the
+/// parent's strings (`NiSingleInterpController::GetViewerStrings`, `00a390a0`), then the
+/// class name (the first word of the `NiRTTI` record at `011f36ec`, through
+/// `NiGetViewerString`) appended: when the 16-bit size (+0xA) has reached the capacity (+0x8)
+/// the array grows to the step (+0xE) plus the size first; the text goes in through the
+/// strings argument's stack word.
+pub fn ni_transform_controller_get_viewer_strings(e: &mut Engine, this: u32, strings: u32) {
+    e.call(SINGLE_GET_VIEWER_STRINGS, &args![this, strings]);
+    let class_name = e.mem.u32(NI_TRANSFORM_CONTROLLER_RTTI);
+    let text = e.call(NI_GET_VIEWER_STRING, &args![class_name]).u32();
+    let size = u32::from(e.mem.u16(strings + 0xa));
+    if size >= u32::from(e.mem.u16(strings + 8)) {
+        let step = u32::from(e.mem.u16(strings + 0xe));
+        e.call(STRINGS_GROW, &args![strings, step + size]);
+    }
+    e.with_stack(4, |e, slot| {
+        e.mem.set_u32(slot.addr(), text);
+        e.call(STRINGS_SET_AT, &args![strings, size, slot]);
+    });
+}
+
+// Translated from 00a44de0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiTransformController::InterpTargetIsCorrectType` (Xbox PDB; `thiscall`, the target,
+/// `RET 4`; `this` is not read): whether the target is an `NiAVObject`: its `NiRTTI` (vtable
+/// +8) or a base of it (each record's +4) is `NiAVObject::ms_RTTI` (`011f4280`). A null target
+/// is not.
+pub fn ni_transform_controller_interp_target_is_correct_type(
+    e: &mut Engine,
+    _unused_0: u32,
+    target: u32,
+) -> bool {
+    if target == 0 {
+        return false;
+    }
+    let mut rtti = e.vcall(target, 8, &[]).u32();
+    while rtti != 0 {
+        if rtti == NI_AV_OBJECT_RTTI {
+            return true;
+        }
+        rtti = e.mem.u32(rtti + 4);
+    }
+    false
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -411,6 +598,34 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
             ni_transform_controller_create_clone(u32, u32) -> u32
         ),
         entry!(0x00a3_6810, fn_00a36810() -> u32),
+        entry!(0x00a3_60b0, ni_transform_controller_is_equal(u32, u32) -> bool),
+        entry!(
+            0x00a3_64b0,
+            ni_transform_interpolator_set_pose_value(
+                Ptr<NiTransformInterpolator>,
+                u32,
+                u32,
+                u32,
+                u32,
+                u32,
+                u32,
+                u32,
+                u32,
+            )
+        ),
+        entry!(0x00a3_6560, fn_00a36560(u32) -> u32),
+        entry!(
+            0x00a3_6590,
+            ni_transform_controller_synchronize_pose_interpolator(u32, u32, u32)
+        ),
+        entry!(
+            0x00a3_6840,
+            ni_transform_controller_get_viewer_strings(u32, u32)
+        ),
+        entry!(
+            0x00a4_4de0,
+            ni_transform_controller_interp_target_is_correct_type(u32, u32) -> bool
+        ),
     ]
 }
 
@@ -721,5 +936,174 @@ mod b018_tests {
         assert_eq!(e.call(0x00a3_67c0, &[0x4000, 0x4100]).u32(), 0);
         assert_eq!(calls_to(&e, COPY_MEMBERS), vec![vec![0x4000, 0, 0x4100]]);
         assert_eq!(e.call(0x00a3_6810, &[]).u32(), 0);
+    }
+}
+
+#[cfg(test)]
+mod n006_tests {
+    use super::*;
+
+    fn calls_to(e: &Engine, addr: u32) -> Vec<Vec<u32>> {
+        e.call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|c| c.0 == addr)
+            .map(|c| c.1.clone())
+            .collect()
+    }
+
+    const UNSET: f64 = f32::MIN as f64;
+
+    fn pose_engine() -> Engine {
+        let mut e = Engine::new();
+        e.map(INVALID_DOUBLE, 8);
+        e.mem.set_u64(INVALID_DOUBLE, UNSET.to_bits());
+        e.register(DATA_SET_ROTATION_KEYS, |_, _| Ret::default());
+        e.register(DATA_SET_POSITION_KEYS, |_, _| Ret::default());
+        e.register(DATA_SET_SCALE_KEYS, |_, _| Ret::default());
+        e
+    }
+
+    #[test]
+    fn ni_transform_controller_is_equal_answers_the_parent() {
+        let mut e = Engine::new();
+        e.register(SINGLE_IS_EQUAL, |_, a| (a[1] == 0x20).into_ret());
+        assert!(e.call(0x00a3_60b0, &args![0x10u32, 0x20u32]).bool());
+        assert!(!e.call(0x00a3_60b0, &args![0x10u32, 0x30u32]).bool());
+    }
+
+    #[test]
+    fn ni_transform_interpolator_set_pose_value_stores_the_set_parts() {
+        let mut e = pose_engine();
+        let this = e.new_object::<NiTransformInterpolator>();
+        e.set(this, NiTransformInterpolator::m_spData, 0x7000);
+        let unset = f32::MIN.to_bits();
+        let words = |t: f32, r: f32, s: u32| args![t, 2.0f32, 3.0f32, 4.0f32, r, 6.0f32, 7.0f32, s];
+        e.call_log = Some(vec![]);
+        let mut call = words(1.0, 5.0, 0x7f80_0001);
+        call.insert(0, this.addr());
+        e.call(0x00a3_64b0, &call);
+        let at = this.addr();
+        let stored: Vec<f32> = (0..7).map(|i| e.mem.f32(at + 0xc + 4 * i)).collect();
+        assert_eq!(stored, vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0]);
+        // The scale is a (signalling) NaN: set, quieted on the way.
+        assert_eq!(e.mem.u32(at + 0x28), 0x7fc0_0001);
+        for f in [
+            DATA_SET_ROTATION_KEYS,
+            DATA_SET_SCALE_KEYS,
+            DATA_SET_POSITION_KEYS,
+        ] {
+            assert_eq!(calls_to(&e, f), vec![vec![0x7000, 0, 0, 0]]);
+        }
+        // All unset (and no data): nothing changes.
+        let other = e.new_object::<NiTransformInterpolator>();
+        e.call_log = Some(vec![]);
+        let mut call = words(f32::from_bits(unset), f32::from_bits(unset), unset);
+        call.insert(0, other.addr());
+        e.call(0x00a3_64b0, &call);
+        assert!((0..8).all(|i| e.mem.u32(other.addr() + 0xc + 4 * i) == 0));
+        assert!(calls_to(&e, DATA_SET_ROTATION_KEYS).is_empty());
+    }
+
+    #[test]
+    fn fn_00a36560_constructs_a_transform_controller() {
+        let mut e = Engine::new();
+        e.register(SINGLE_INTERP_CONSTRUCT, |_, _| Ret::default());
+        let this = e.mem.alloc(0x38);
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x00a3_6560, &args![this]).u32(), this);
+        assert_eq!(e.mem.u32(this), TRANSFORM_CONTROLLER_VTABLE);
+        assert_eq!(calls_to(&e, SINGLE_INTERP_CONSTRUCT), vec![vec![this]]);
+    }
+
+    #[test]
+    fn synchronize_pose_interpolator_gives_the_target_transform() {
+        let mut e = pose_engine();
+        let pose = e.new_object::<NiTransformInterpolator>();
+        let pose_addr = pose.addr();
+        e.register_double(DYNAMIC_CAST, move |_, a| {
+            assert_eq!(a[1], NI_TRANSFORM_INTERPOLATOR_RTTI);
+            pose_addr.into_ret()
+        });
+        e.register(QUATERNION_FROM_ROTATION, |e, a| {
+            for (i, v) in [0.5f32, 0.25, 0.125, 1.0].iter().enumerate() {
+                e.mem.set_f32(a[0] + 4 * i as u32, *v);
+            }
+            a[0].into_ret()
+        });
+        let target = e.mem.alloc(0x68);
+        for (i, v) in [10.0f32, 20.0, 30.0].iter().enumerate() {
+            e.mem.set_f32(target + 0x58 + 4 * i as u32, *v);
+        }
+        e.mem.set_f32(target + 0x64, 2.0);
+        let this = e.mem.alloc(0x38);
+        e.mem.set_u32(this + TARGET, target);
+        e.call_log = Some(vec![]);
+        e.call(0x00a3_6590, &args![this, 0x9000u32, 0u32]);
+        let stored: Vec<f32> = (0..8).map(|i| e.mem.f32(pose_addr + 0xc + 4 * i)).collect();
+        assert_eq!(stored, vec![10.0, 20.0, 30.0, 0.5, 0.25, 0.125, 1.0, 2.0]);
+        assert_eq!(calls_to(&e, QUATERNION_FROM_ROTATION)[0][1], target + 0x34);
+        assert_eq!(calls_to(&e, DYNAMIC_CAST)[0][0], 0x9000);
+        // A null interpolator is not cast; with every part unset the null pose is not touched.
+        e.register(QUATERNION_FROM_ROTATION, |e, a| {
+            e.mem.set_f32(a[0] + 4, f32::MIN);
+            a[0].into_ret()
+        });
+        e.mem.set_f32(target + 0x58, f32::MIN);
+        e.mem.set_f32(target + 0x64, f32::MIN);
+        e.call_log = Some(vec![]);
+        e.call(0x00a3_6590, &args![this, 0u32, 0u32]);
+        assert!(calls_to(&e, DYNAMIC_CAST).is_empty());
+    }
+
+    #[test]
+    fn ni_transform_controller_get_viewer_strings_appends_the_class_name() {
+        let mut e = Engine::new();
+        e.map(NI_TRANSFORM_CONTROLLER_RTTI, 4);
+        e.mem.set_u32(NI_TRANSFORM_CONTROLLER_RTTI, 0x0108_0000);
+        e.register(SINGLE_GET_VIEWER_STRINGS, |_, _| Ret::default());
+        e.register(NI_GET_VIEWER_STRING, |_, a| (a[0] + 1).into_ret());
+        e.register(STRINGS_GROW, |_, _| Ret::default());
+        e.register(STRINGS_SET_AT, |e, a| {
+            assert_eq!(e.mem.u32(a[2]), 0x0108_0001);
+            Ret::default()
+        });
+        let strings = e.mem.alloc(0x10);
+        e.mem.set_u16(strings + 8, 4);
+        e.mem.set_u16(strings + 0xa, 4);
+        e.mem.set_u16(strings + 0xe, 2);
+        e.call_log = Some(vec![]);
+        e.call(0x00a3_6840, &args![0x5000u32, strings]);
+        assert_eq!(
+            calls_to(&e, SINGLE_GET_VIEWER_STRINGS),
+            vec![vec![0x5000, strings]]
+        );
+        assert_eq!(calls_to(&e, STRINGS_GROW), vec![vec![strings, 6]]);
+        assert_eq!(calls_to(&e, STRINGS_SET_AT)[0][..2], [strings, 4]);
+        // Room left: no growth.
+        e.mem.set_u16(strings + 8, 8);
+        e.call_log = Some(vec![]);
+        e.call(0x00a3_6840, &args![0x5000u32, strings]);
+        assert!(calls_to(&e, STRINGS_GROW).is_empty());
+    }
+
+    #[test]
+    fn interp_target_is_correct_type_walks_the_rtti_chain() {
+        let mut e = Engine::new();
+        const GET_RTTI: u32 = 0x0300_0200;
+        let derived = e.mem.alloc(8);
+        let base = e.mem.alloc(8);
+        e.mem.set_u32(derived + 4, base);
+        e.mem.set_u32(base + 4, NI_AV_OBJECT_RTTI);
+        let vtable = e.mem.alloc(0x10);
+        e.mem.set_u32(vtable + 8, GET_RTTI);
+        let target = e.mem.alloc(8);
+        e.mem.set_u32(target, vtable);
+        e.register_double(GET_RTTI, move |_, _| derived.into_ret());
+        assert!(e.call(0x00a4_4de0, &args![0u32, target]).bool());
+        e.mem.set_u32(base + 4, 0);
+        assert!(!e.call(0x00a4_4de0, &args![0u32, target]).bool());
+        assert!(!e.call(0x00a4_4de0, &args![0u32, 0u32]).bool());
     }
 }

@@ -743,9 +743,192 @@ pub fn ni_dynamic_geometry_group_scalar_deleting_destructor(
     this
 }
 
+/// The memory manager's free (`00aa4060`, `thiscall` on `011f6238`, the block).
+const MEMORY_MANAGER_FREE_00AA4060: u32 = 0x00aa_4060;
+
+// Translated from 00a93c50 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiTArray<NiVBDynamicSet*,NiTMallocInterface<NiVBDynamicSet*>>::RemoveAt` (Xbox PDB, engine
+/// map; other arrays share the body), `thiscall`, one word (the index): for an index below
+/// the 16-bit size (+0x0A), takes the element out of the data (+0x04), counts one element
+/// less in the 16-bit +0x0C when it was not null, and shrinks the size by one when the index
+/// was the last slot. Answers the element (0 for an index past the size).
+pub fn ni_t_array_ni_vb_dynamic_set_remove_at(e: &mut Engine, this: Ptr, index: u32) -> u32 {
+    let array = this.addr();
+    if index >= u32::from(e.mem.u16(array + 0xa)) {
+        return 0;
+    }
+    let slot = e.mem.u32(array + 4).wrapping_add(index.wrapping_mul(4));
+    let element = e.mem.u32(slot);
+    e.mem.set_u32(slot, 0);
+    if element != 0 {
+        let count = e.mem.u16(array + 0xc).wrapping_add(0xffff);
+        e.mem.set_u16(array + 0xc, count);
+    }
+    let last = e.mem.u16(array + 0xa).wrapping_sub(1);
+    if index == u32::from(last) {
+        e.mem.set_u16(array + 0xa, last);
+    }
+    element
+}
+
+/// The removal of the two `RemoveObject` overloads below, inlined there on the object's word
+/// `slot`: a held buffer data is taken out of the group (`NiGeometryGroup::RemoveObject`,
+/// `00e98750`), its chip array (+0x28, count +0x20) zeroed when set, the data deleted (its
+/// slot 0 with 1) and the word cleared.
+fn remove_buffer_data_at(e: &mut Engine, this: Ptr, object: u32, slot: u32) {
+    let buffer_data = e.mem.u32(object.wrapping_add(slot));
+    if buffer_data == 0 {
+        return;
+    }
+    e.call(GROUP_REMOVE_OBJECT_00E98750, &args![this, buffer_data]);
+    let chips = e.mem.u32(buffer_data.wrapping_add(0x28));
+    if chips != 0 {
+        let count = e.mem.u32(buffer_data.wrapping_add(0x20));
+        e.call(MEMSET, &args![chips, 0u32, count.wrapping_mul(4)]);
+    }
+    e.vcall(buffer_data, 0, &args![1u32]);
+    e.mem.set_u32(object.wrapping_add(slot), 0);
+}
+
+// Translated from 00e95140 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiDynamicGeometryGroup::RemoveObject` (Xbox PDB, the engine map's `_ov2`), `thiscall`, one
+/// word: as `00e950f0` for the buffer data at +0x28 of its argument.
+pub fn ni_dynamic_geometry_group_remove_object_ov2(e: &mut Engine, this: Ptr, object: u32) {
+    remove_buffer_data_at(e, this, object, 0x28);
+}
+
+// Translated from 00e95190 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiDynamicGeometryGroup::RemoveObject` (Xbox PDB, the engine map's `_ov3`), `thiscall`, one
+/// word: as `00e950f0` for the buffer data at +0x1C of its argument.
+pub fn ni_dynamic_geometry_group_remove_object_ov3(e: &mut Engine, this: Ptr, object: u32) {
+    remove_buffer_data_at(e, this, object, 0x1c);
+}
+
+/// The map scalar deleting destructors below: each vtable in `tables` installed in turn with
+/// the map emptied under it (`00b601a0`), then the bucket table (+0x08) freed (`00aa10f0`)
+/// and, with bit 0 of `flags`, the map freed through the memory manager. Answers `this`.
+fn delete_map(e: &mut Engine, this: Ptr, flags: u32, tables: &[u32]) -> Ptr {
+    let map = this.addr();
+    for table in tables {
+        e.mem.set_u32(map, *table);
+        e.call(MAP_CLEAN_UP_00B601A0, &args![map]);
+    }
+    let buckets = e.mem.u32(map + 8);
+    e.call(FREE_00AA10F0, &args![buckets]);
+    if flags & 1 != 0 {
+        e.call(
+            MEMORY_MANAGER_FREE_00AA4060,
+            &args![MEMORY_MANAGER_OBJECT, map],
+        );
+    }
+    this
+}
+
+// Translated from 00e952c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The `NiTMapBase<NiTPointerAllocator<unsigned int>,unsigned int,NiVBDynamicSet*>` scalar
+/// deleting destructor (its vtable `010f103c`'s; unnamed in the engine map), `thiscall` with
+/// one stack word (the flags): empties the map under its vtable, frees the buckets and, with
+/// bit 0, the map.
+pub fn fn_00e952c0(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    delete_map(e, this, flags, &[BUFFER_MAP_BASE_VTABLE_010F103C])
+}
+
+// Translated from 00e95300 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The `NiTPointerMap<unsigned int,NiVBDynamicSet*>` scalar deleting destructor (vtable
+/// `010f107c`; unnamed in the engine map), `thiscall` with one stack word (the flags): empties
+/// the map under its own vtable and again under its base's (`010f103c`), frees the buckets
+/// and, with bit 0, the map.
+pub fn fn_00e95300(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    delete_map(
+        e,
+        this,
+        flags,
+        &[BUFFER_MAP_VTABLE_010F107C, BUFFER_MAP_BASE_VTABLE_010F103C],
+    )
+}
+
+// Translated from 00e95340 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The `NiTMapBase<NiTPointerAllocator<unsigned int>,unsigned int,NiVBChip*>` scalar deleting
+/// destructor (vtable `010f105c`; unnamed in the engine map): as `00e952c0`.
+pub fn fn_00e95340(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    delete_map(e, this, flags, &[CHIP_MAP_BASE_VTABLE_010F105C])
+}
+
+// Translated from 00e95380 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The `NiTPointerMap<unsigned int,NiVBChip*>` scalar deleting destructor (vtable `010f109c`;
+/// unnamed in the engine map): as `00e95300` with the chip map's vtables (`010f109c`, then
+/// `010f105c`).
+pub fn fn_00e95380(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    delete_map(
+        e,
+        this,
+        flags,
+        &[CHIP_MAP_VTABLE_010F109C, CHIP_MAP_BASE_VTABLE_010F105C],
+    )
+}
+
+// Translated from 00e95500 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiDynamicGeometryGroup::AddObject` (Xbox PDB, the engine map's `_ov2`), `thiscall`, one
+/// word: when the object's +0x1C is 0, makes a buffer data (0x54 bytes from the memory
+/// manager, constructed), sets its +0x3C to 4, stores it at the object's +0x1C, sets its
+/// `m_uiFlags` (+0x04) to `0x01400000`, adds it to the group (`00e98730`) and sets the
+/// object's 16-bit +0x18 to 0xffff. A failed allocation leaves the data null and the exe
+/// writes through it anyway.
+pub fn ni_dynamic_geometry_group_add_object_ov2(e: &mut Engine, this: Ptr, object: u32) {
+    if e.mem.u32(object.wrapping_add(0x1c)) != 0 {
+        return;
+    }
+    let data = new_buffer_data(e);
+    e.mem.set_u32(data.wrapping_add(0x3c), 4);
+    e.mem.set_u32(object.wrapping_add(0x1c), data);
+    e.mem.set_u32(data.wrapping_add(4), 0x0140_0000);
+    e.call(GROUP_ADD_OBJECT_00E98730, &args![this, data]);
+    e.mem.set_u16(object.wrapping_add(0x18), 0xffff);
+}
+
+// Translated from 00e95780 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The `NiTArray<NiVBDynamicSet*,NiTMallocInterface<NiVBDynamicSet*>>` scalar deleting
+/// destructor (vtable `010f1034`; unnamed in the engine map), `thiscall` with one stack word
+/// (the flags): installs the vtable, frees the element block (+0x04, `00aa10f0`) and, with
+/// bit 0 of the flags, the array through the memory manager. Answers `this`.
+pub fn fn_00e95780(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    let array = this.addr();
+    let elements = e.mem.u32(array + 4);
+    e.mem.set_u32(array, RECORD_ARRAY_BASE_VTABLE_010F1034);
+    e.call(FREE_00AA10F0, &args![elements]);
+    if flags & 1 != 0 {
+        e.call(
+            MEMORY_MANAGER_FREE_00AA4060,
+            &args![MEMORY_MANAGER_OBJECT, array],
+        );
+    }
+    this
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(
+            0x00a9_3c50,
+            ni_t_array_ni_vb_dynamic_set_remove_at(Ptr, u32) -> u32
+        ),
+        entry!(
+            0x00e9_5140,
+            ni_dynamic_geometry_group_remove_object_ov2(Ptr, u32)
+        ),
+        entry!(
+            0x00e9_5190,
+            ni_dynamic_geometry_group_remove_object_ov3(Ptr, u32)
+        ),
+        entry!(0x00e9_52c0, fn_00e952c0(Ptr, u32) -> Ptr),
+        entry!(0x00e9_5300, fn_00e95300(Ptr, u32) -> Ptr),
+        entry!(0x00e9_5340, fn_00e95340(Ptr, u32) -> Ptr),
+        entry!(0x00e9_5380, fn_00e95380(Ptr, u32) -> Ptr),
+        entry!(
+            0x00e9_5500,
+            ni_dynamic_geometry_group_add_object_ov2(Ptr, u32)
+        ),
+        entry!(0x00e9_5780, fn_00e95780(Ptr, u32) -> Ptr),
         entry!(0x00e9_47c0, ni_geometry_buffer_data_construct(Ptr) -> Ptr),
         entry!(0x00e9_4f30, ni_dynamic_geometry_group_purge(Ptr)),
         entry!(
@@ -1196,5 +1379,192 @@ mod b052_tests {
         assert_eq!(calls(&e, MAP_CLEAN_UP_00B601A0).len(), 4);
         assert_eq!(calls(&e, FREE_00AA10F0).len(), 4);
         assert_eq!(calls(&e, BASE_DESTRUCT_00E98710), vec![vec![this]]);
+    }
+}
+
+#[cfg(test)]
+mod n009_tests {
+    use super::*;
+
+    const DELETE: u32 = 0x0e63_0000;
+
+    fn calls(e: &Engine, addr: u32) -> Vec<Vec<u32>> {
+        e.call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|(a, _)| *a == addr)
+            .map(|(_, w)| w.clone())
+            .collect()
+    }
+
+    fn engine() -> Engine {
+        let mut e = Engine::new();
+        for no_op in [
+            DELETE,
+            MEMSET,
+            GROUP_REMOVE_OBJECT_00E98750,
+            GROUP_ADD_OBJECT_00E98730,
+            MAP_CLEAN_UP_00B601A0,
+            FREE_00AA10F0,
+            MEMORY_MANAGER_FREE_00AA4060,
+        ] {
+            e.register(no_op, |_, _| Ret::default());
+        }
+        e.register(MEMORY_MANAGER_ALLOCATE, |e, a| e.mem.alloc(a[1]).into_ret());
+        e.call_log = Some(vec![]);
+        e
+    }
+
+    #[test]
+    fn remove_at_takes_the_element_out() {
+        let mut e = Engine::new();
+        let array = e.mem.alloc(0x10);
+        let data = e.mem.alloc(12);
+        e.mem.set_u32(array + 4, data);
+        e.mem.set_u32(data, 0x111);
+        e.mem.set_u32(data + 8, 0x333);
+        e.mem.set_u16(array + 0xa, 3);
+        e.mem.set_u16(array + 0xc, 2);
+        // A middle slot: the size stays.
+        assert_eq!(e.call(0x00a9_3c50, &[array, 0]).u32(), 0x111);
+        assert_eq!(e.mem.u32(data), 0);
+        assert_eq!(e.mem.u16(array + 0xc), 1);
+        assert_eq!(e.mem.u16(array + 0xa), 3);
+        // An empty slot: no count change.
+        assert_eq!(e.call(0x00a9_3c50, &[array, 1]).u32(), 0);
+        assert_eq!(e.mem.u16(array + 0xc), 1);
+        // The last slot shrinks the size by one.
+        assert_eq!(e.call(0x00a9_3c50, &[array, 2]).u32(), 0x333);
+        assert_eq!(e.mem.u16(array + 0xa), 2);
+        assert_eq!(e.mem.u16(array + 0xc), 0);
+        // Past the size: 0.
+        assert_eq!(e.call(0x00a9_3c50, &[array, 2]).u32(), 0);
+    }
+
+    /// A buffer data with a deleting slot 0 and two chips.
+    fn buffer_data(e: &mut Engine) -> u32 {
+        let vtable = e.mem.alloc(4);
+        e.mem.set_u32(vtable, DELETE);
+        let data = e.mem.alloc(0x54);
+        e.mem.set_u32(data, vtable);
+        e.mem.set_u32(data + 0x20, 2);
+        e.mem.set_u32(data + 0x28, 0x7000);
+        data
+    }
+
+    fn removes_at(address: u32, slot: u32) {
+        let mut e = engine();
+        let data = buffer_data(&mut e);
+        let object = e.mem.alloc(0x40);
+        e.mem.set_u32(object + slot, data);
+        e.call(address, &[0x9000, object]);
+        assert_eq!(
+            calls(&e, GROUP_REMOVE_OBJECT_00E98750),
+            vec![vec![0x9000, data]]
+        );
+        assert_eq!(calls(&e, MEMSET), vec![vec![0x7000, 0, 8]]);
+        assert_eq!(calls(&e, DELETE), vec![vec![data, 1]]);
+        assert_eq!(e.mem.u32(object + slot), 0);
+        // Without chips nothing is zeroed; without data nothing happens.
+        e.mem.set_u32(data + 0x28, 0);
+        e.mem.set_u32(object + slot, data);
+        e.call(address, &[0x9000, object]);
+        assert_eq!(calls(&e, MEMSET).len(), 1);
+        e.call(address, &[0x9000, object]);
+        assert_eq!(calls(&e, DELETE).len(), 2);
+    }
+
+    #[test]
+    fn remove_object_ov2_deletes_the_data_at_28() {
+        removes_at(0x00e9_5140, 0x28);
+    }
+
+    #[test]
+    fn remove_object_ov3_deletes_the_data_at_1c() {
+        removes_at(0x00e9_5190, 0x1c);
+    }
+
+    fn deletes_map(address: u32, tables: &[u32]) {
+        let mut e = engine();
+        let map = e.mem.alloc(0x10);
+        e.mem.set_u32(map + 8, 0x7700);
+        let log_tables = std::rc::Rc::new(std::cell::RefCell::new(vec![]));
+        let tables_seen = log_tables.clone();
+        e.register_double(MAP_CLEAN_UP_00B601A0, move |e, a| {
+            tables_seen.borrow_mut().push(e.mem.u32(a[0]));
+            Ret::default()
+        });
+        assert_eq!(e.call(address, &[map, 1]).u32(), map);
+        assert_eq!(*log_tables.borrow(), tables);
+        assert_eq!(calls(&e, FREE_00AA10F0), vec![vec![0x7700]]);
+        assert_eq!(
+            calls(&e, MEMORY_MANAGER_FREE_00AA4060),
+            vec![vec![MEMORY_MANAGER_OBJECT, map]]
+        );
+        e.call(address, &[map, 0]);
+        assert_eq!(calls(&e, MEMORY_MANAGER_FREE_00AA4060).len(), 1);
+    }
+
+    #[test]
+    fn set_map_base_deleting_destructor() {
+        deletes_map(0x00e9_52c0, &[BUFFER_MAP_BASE_VTABLE_010F103C]);
+    }
+
+    #[test]
+    fn set_map_deleting_destructor() {
+        deletes_map(
+            0x00e9_5300,
+            &[BUFFER_MAP_VTABLE_010F107C, BUFFER_MAP_BASE_VTABLE_010F103C],
+        );
+    }
+
+    #[test]
+    fn chip_map_base_deleting_destructor() {
+        deletes_map(0x00e9_5340, &[CHIP_MAP_BASE_VTABLE_010F105C]);
+    }
+
+    #[test]
+    fn chip_map_deleting_destructor() {
+        deletes_map(
+            0x00e9_5380,
+            &[CHIP_MAP_VTABLE_010F109C, CHIP_MAP_BASE_VTABLE_010F105C],
+        );
+    }
+
+    #[test]
+    fn add_object_ov2_makes_and_stores_a_data() {
+        let mut e = engine();
+        let object = e.mem.alloc(0x20);
+        e.call(0x00e9_5500, &[0x9000, object]);
+        let data = e.mem.u32(object + 0x1c);
+        assert_eq!(e.mem.u32(data), GEOMETRY_BUFFER_DATA_VTABLE);
+        assert_eq!(e.mem.u32(data + 0x3c), 4);
+        assert_eq!(e.mem.u32(data + 4), 0x0140_0000);
+        assert_eq!(e.mem.u16(object + 0x18), 0xffff);
+        assert_eq!(
+            calls(&e, GROUP_ADD_OBJECT_00E98730),
+            vec![vec![0x9000, data]]
+        );
+        e.mem.set_u16(object + 0x18, 0);
+        e.call(0x00e9_5500, &[0x9000, object]);
+        assert_eq!(calls(&e, GROUP_ADD_OBJECT_00E98730).len(), 1);
+        assert_eq!(e.mem.u16(object + 0x18), 0);
+    }
+
+    #[test]
+    fn set_array_deleting_destructor_frees_its_elements() {
+        let mut e = engine();
+        let array = e.mem.alloc(0x10);
+        e.mem.set_u32(array + 4, 0x6600);
+        assert_eq!(e.call(0x00e9_5780, &[array, 1]).u32(), array);
+        assert_eq!(e.mem.u32(array), RECORD_ARRAY_BASE_VTABLE_010F1034);
+        assert_eq!(calls(&e, FREE_00AA10F0), vec![vec![0x6600]]);
+        assert_eq!(
+            calls(&e, MEMORY_MANAGER_FREE_00AA4060),
+            vec![vec![MEMORY_MANAGER_OBJECT, array]]
+        );
+        e.call(0x00e9_5780, &[array, 0]);
+        assert_eq!(calls(&e, MEMORY_MANAGER_FREE_00AA4060).len(), 1);
     }
 }

@@ -224,9 +224,149 @@ pub fn fn_00a75a40(e: &mut Engine) {
     e.mem.set_u32(MATERIAL_PROPERTY_SLOT, 0);
 }
 
+/// `00a5d7b0` and `00a62140` (`thiscall`, the stream / the other object): the base's
+/// `SaveBinary` and `IsEqual` (the engine map names the shared bodies after
+/// `NiSequenceStreamHelper`, identical-code folding).
+const BASE_SAVE_BINARY: u32 = 0x00a5_d7b0;
+const BASE_IS_EQUAL: u32 = 0x00a6_2140;
+/// `NiColor::SaveBinary` (`00a69780`, `thiscall` on the color, the stream) and
+/// `NiColor::GetViewerString` (`00a696c0`, `thiscall` on the color, the label).
+const COLOR_SAVE_BINARY: u32 = 0x00a6_9780;
+const COLOR_VIEWER_STRING: u32 = 0x00a6_96c0;
+/// `00439090` (`thiscall` on a color, the other): true when the two colors differ.
+const COLOR_DIFFERS: u32 = 0x0043_9090;
+/// `NiProperty::GetViewerStrings` (`00a5d850`, `thiscall`, the strings).
+const PROPERTY_GET_VIEWER_STRINGS: u32 = 0x00a5_d850;
+/// Viewer string builders (`cdecl`): `NiGetViewerString` (`00a7d330`, the class name) and
+/// `NiGetViewerString_ov9` (`00a7d550`, a label and a float).
+const VIEWER_STRING_NAME: u32 = 0x00a7_d330;
+const VIEWER_STRING_FLOAT: u32 = 0x00a7_d550;
+/// `NiTArray<char *>` resize (`0096ad30`) and `SetAt` (`0096ae90`).
+const STRING_ARRAY_SET_SIZE: u32 = 0x0096_ad30;
+const STRING_ARRAY_SET_AT: u32 = 0x0096_ae90;
+/// The labels `"m_spec"` (`0109d794`), `"m_external_emit"` (`0109d784`), `"m_emit"`
+/// (`0109d77c`), `"m_fShine"` (`0109d770`), `"m_fAlpha"` (`0109d764`) and
+/// `"m_fEmitMult"` (`0109d758`).
+const TEXT_SPECULAR: u32 = 0x0109_d794;
+const TEXT_EXTERNAL_EMIT: u32 = 0x0109_d784;
+const TEXT_EMIT: u32 = 0x0109_d77c;
+const TEXT_SHINE: u32 = 0x0109_d770;
+const TEXT_ALPHA: u32 = 0x0109_d764;
+const TEXT_EMIT_MULTIPLIER: u32 = 0x0109_d758;
+
+/// One 4-byte write to the stream's output (`NiStream` +0x250, its write function +0xc and
+/// position +4), the byte-count word at `count` set to 4 first.
+fn write_word(e: &mut Engine, stream: Ptr, source: u32, count: u32) {
+    let output = e.mem.u32(stream.addr() + 0x250);
+    let function = e.mem.u32(output + 0xc);
+    e.mem.set_u32(count, 4);
+    let done = e
+        .call(function, &args![output, source, 4u32, count, 1u32])
+        .u32();
+    let position = e.mem.u32(output + 4).wrapping_add(done);
+    e.mem.set_u32(output + 4, position);
+}
+
+// Translated from 00a758c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiMaterialProperty::SaveBinary` (Xbox PDB): the base's `SaveBinary` (`00a5d7b0`), the
+/// colors at +0x1c and +0x28 (`NiColor::SaveBinary`) and the three 4-byte floats at +0x38,
+/// +0x3c and +0x40. The stream argument's stack word is the byte-count word.
+pub fn ni_material_property_save_binary(e: &mut Engine, this: Ptr, stream: Ptr) {
+    e.call(BASE_SAVE_BINARY, &args![this, stream]);
+    e.call(COLOR_SAVE_BINARY, &args![this.addr() + 0x1c, stream]);
+    e.call(COLOR_SAVE_BINARY, &args![this.addr() + 0x28, stream]);
+    e.with_stack(4, |e, count| {
+        for offset in [0x38u32, 0x3c, 0x40] {
+            write_word(e, stream, this.addr() + offset, count.addr());
+        }
+    });
+}
+
+// Translated from 00a75960 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiMaterialProperty::IsEqual` (Xbox PDB): the base's `IsEqual` (`00a62140`), the colors
+/// at +0x1c and +0x28 not differing (`00439090`), the same word at +0x34 and the same floats
+/// at +0x38, +0x3c and +0x40 (x87 compares: a NaN is never equal).
+pub fn ni_material_property_is_equal(e: &mut Engine, this: Ptr, other: Ptr) -> bool {
+    let (a, b) = (this.addr(), other.addr());
+    if !e.call(BASE_IS_EQUAL, &args![this, other]).bool() {
+        return false;
+    }
+    for offset in [0x1cu32, 0x28] {
+        if e.call(COLOR_DIFFERS, &args![a + offset, b + offset]).bool() {
+            return false;
+        }
+    }
+    if e.mem.u32(a + 0x34) != e.mem.u32(b + 0x34) {
+        return false;
+    }
+    [0x38u32, 0x3c, 0x40]
+        .iter()
+        .all(|offset| x87_load32(e.mem.u32(b + offset)) == x87_load32(e.mem.u32(a + offset)))
+}
+
+/// Adds the string in the word at `slot` to the viewer strings: the array grown by its
+/// grow-by count when full (`0096ad30`), then `SetAt` (`0096ae90`) at the old size.
+fn add_viewer_string(e: &mut Engine, strings: Ptr, slot: u32) {
+    let array = strings.addr();
+    let index = u32::from(e.mem.u16(array + 0xa));
+    if index >= u32::from(e.mem.u16(array + 8)) {
+        let grow = u32::from(e.mem.u16(array + 0xe));
+        e.call(STRING_ARRAY_SET_SIZE, &args![strings, grow + index]);
+    }
+    e.call(STRING_ARRAY_SET_AT, &args![strings, index, slot]);
+}
+
+// Translated from 00a75a70 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiMaterialProperty::GetViewerStrings` (Xbox PDB): after `NiProperty::GetViewerStrings`
+/// (`00a5d850`), adds the class name, `"m_spec"` (the color at +0x1c), the emittance and
+/// `"m_fShine"`, `"m_fAlpha"`, `"m_fEmitMult"` (the floats at +0x38, +0x3c, +0x40). The
+/// emittance is `"m_emit"` with the color at +0x28 when the word at +0x34 is 0; otherwise it
+/// is `"m_external_emit"` with that word itself as the color (the code passes the word, not
+/// an address in the object).
+pub fn ni_material_property_get_viewer_strings(e: &mut Engine, this: Ptr, strings: Ptr) {
+    let base = this.addr();
+    e.call(PROPERTY_GET_VIEWER_STRINGS, &args![this, strings]);
+    e.with_stack(4, |e, slot| {
+        let add = |e: &mut Engine, text: u32| {
+            e.mem.set_u32(slot.addr(), text);
+            add_viewer_string(e, strings, slot.addr());
+        };
+        let name = e.mem.u32(NI_MATERIAL_PROPERTY_RTTI);
+        let text = e.call(VIEWER_STRING_NAME, &args![name]).u32();
+        add(e, text);
+        let text = e
+            .call(COLOR_VIEWER_STRING, &args![base + 0x1c, TEXT_SPECULAR])
+            .u32();
+        add(e, text);
+        let external = e.mem.u32(base + 0x34);
+        let (color, label) = if external != 0 {
+            (external, TEXT_EXTERNAL_EMIT)
+        } else {
+            (base + 0x28, TEXT_EMIT)
+        };
+        let text = e.call(COLOR_VIEWER_STRING, &args![color, label]).u32();
+        add(e, text);
+        for (offset, label) in [
+            (0x38u32, TEXT_SHINE),
+            (0x3c, TEXT_ALPHA),
+            (0x40, TEXT_EMIT_MULTIPLIER),
+        ] {
+            let value = x87_quiet_bits(e.mem.u32(base + offset));
+            let text = e.call(VIEWER_STRING_FLOAT, &args![label, value]).u32();
+            add(e, text);
+        }
+    });
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x00a7_58c0, ni_material_property_save_binary(Ptr, Ptr)),
+        entry!(0x00a7_5960, ni_material_property_is_equal(Ptr, Ptr) -> bool),
+        entry!(
+            0x00a7_5a70,
+            ni_material_property_get_viewer_strings(Ptr, Ptr)
+        ),
         entry!(0x00a7_55f0, fn_00a755f0(Ptr, Ptr, Ptr)),
         entry!(0x00a7_56d0, fn_00a756d0() -> Ptr),
         entry!(
@@ -473,5 +613,152 @@ mod material_tests {
         assert_eq!(calls_to(&e, 0x0300_1004), vec![vec![held]]);
         e.call(0x00a7_5a40, &args![]);
         assert_eq!(calls_to(&e, 0x0300_1004).len(), 1);
+    }
+}
+
+#[cfg(test)]
+mod a06_tests {
+    use super::*;
+
+    fn calls(e: &Engine, addr: u32) -> Vec<Vec<u32>> {
+        e.call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|c| c.0 == addr)
+            .map(|c| c.1.clone())
+            .collect()
+    }
+
+    #[test]
+    fn save_binary_writes_the_base_two_colors_and_three_floats() {
+        let mut e = Engine::new();
+        let this = e.mem.alloc(0x4c);
+        for (offset, value) in [(0x38u32, 1.5f32), (0x3c, 0.25), (0x40, 2.0)] {
+            e.mem.set_f32(this + offset, value);
+        }
+        let stream = e.mem.alloc(0x260);
+        let output = e.mem.alloc(0x10);
+        e.mem.set_u32(stream + 0x250, output);
+        e.mem.set_u32(output + 0xc, 0x0340_0000);
+        let written = std::rc::Rc::new(std::cell::RefCell::new(vec![]));
+        let w = written.clone();
+        e.register_double(0x0340_0000, move |e, a| {
+            assert_eq!((a[2], e.mem.u32(a[3]), a[4]), (4, 4, 1));
+            w.borrow_mut().push(e.mem.f32(a[1]));
+            4u32.into_ret()
+        });
+        e.register(BASE_SAVE_BINARY, |_, _| Ret::default());
+        e.register(COLOR_SAVE_BINARY, |_, _| Ret::default());
+        e.call_log = Some(vec![]);
+        e.call(0x00a7_58c0, &args![this, stream]);
+        assert_eq!(calls(&e, BASE_SAVE_BINARY), vec![vec![this, stream]]);
+        assert_eq!(
+            calls(&e, COLOR_SAVE_BINARY),
+            vec![vec![this + 0x1c, stream], vec![this + 0x28, stream]]
+        );
+        assert_eq!(*written.borrow(), vec![1.5, 0.25, 2.0]);
+        assert_eq!(e.mem.u32(output + 4), 12);
+    }
+
+    #[test]
+    fn is_equal_checks_the_base_colors_word_and_floats() {
+        let mut e = Engine::new();
+        let a = e.mem.alloc(0x4c);
+        let b = e.mem.alloc(0x4c);
+        e.register(BASE_IS_EQUAL, |e, a| {
+            u32::from(e.mem.u32(a[0] + 0x48) == 0).into_ret()
+        });
+        e.register(COLOR_DIFFERS, |e, a| {
+            u32::from(e.mem.u32(a[0]) != e.mem.u32(a[1])).into_ret()
+        });
+        let check = |e: &mut Engine| e.call(0x00a7_5960, &args![a, b]).bool();
+        assert!(check(&mut e));
+        e.mem.set_u32(a + 0x48, 1);
+        assert!(!check(&mut e));
+        e.mem.set_u32(a + 0x48, 0);
+        e.mem.set_u32(b + 0x28, 7);
+        assert!(!check(&mut e));
+        e.mem.set_u32(b + 0x28, 0);
+        e.mem.set_u32(b + 0x34, 9);
+        assert!(!check(&mut e));
+        e.mem.set_u32(b + 0x34, 0);
+        // -0 equals 0; a NaN equals nothing.
+        e.mem.set_f32(a + 0x40, -0.0);
+        assert!(check(&mut e));
+        e.mem.set_f32(a + 0x3c, f32::NAN);
+        e.mem.set_f32(b + 0x3c, f32::NAN);
+        assert!(!check(&mut e));
+    }
+
+    #[test]
+    fn viewer_strings_pick_the_emittance_by_the_external_word() {
+        let mut e = Engine::new();
+        e.map(NI_MATERIAL_PROPERTY_RTTI & !0xfff, 0x1000);
+        e.mem.set_u32(NI_MATERIAL_PROPERTY_RTTI, 0x0abc_0000);
+        let this = e.mem.alloc(0x4c);
+        e.mem.set_f32(this + 0x38, 10.0);
+        e.mem.set_f32(this + 0x3c, 0.5);
+        e.mem.set_u32(this + 0x40, 0x7f80_0001);
+        let strings = e.mem.alloc(0x10);
+        e.mem.set_u16(strings + 8, 1);
+        e.mem.set_u16(strings + 0xe, 3);
+        for addr in [
+            PROPERTY_GET_VIEWER_STRINGS,
+            VIEWER_STRING_NAME,
+            COLOR_VIEWER_STRING,
+            VIEWER_STRING_FLOAT,
+        ] {
+            e.register(addr, |_, a| (0x0500_0000 + a[0] % 0x1000).into_ret());
+        }
+        e.register(STRING_ARRAY_SET_SIZE, |e, a| {
+            e.mem.set_u16(a[0] + 8, a[1] as u16);
+            Ret::default()
+        });
+        e.register(STRING_ARRAY_SET_AT, |e, a| {
+            let size = e.mem.u16(a[0] + 0xa);
+            e.mem.set_u16(a[0] + 0xa, size + 1);
+            Ret::default()
+        });
+        e.call_log = Some(vec![]);
+        e.call(0x00a7_5a70, &args![this, strings]);
+        assert_eq!(
+            calls(&e, PROPERTY_GET_VIEWER_STRINGS),
+            vec![vec![this, strings]]
+        );
+        assert_eq!(calls(&e, VIEWER_STRING_NAME), vec![vec![0x0abc_0000]]);
+        assert_eq!(
+            calls(&e, COLOR_VIEWER_STRING),
+            vec![
+                vec![this + 0x1c, TEXT_SPECULAR],
+                vec![this + 0x28, TEXT_EMIT]
+            ]
+        );
+        assert_eq!(
+            calls(&e, VIEWER_STRING_FLOAT),
+            vec![
+                vec![TEXT_SHINE, 10.0f32.to_bits()],
+                vec![TEXT_ALPHA, 0.5f32.to_bits()],
+                // The float goes through the x87 stack: a signalling NaN is quieted.
+                vec![TEXT_EMIT_MULTIPLIER, 0x7fc0_0001],
+            ]
+        );
+        let indices: Vec<u32> = calls(&e, STRING_ARRAY_SET_AT)
+            .iter()
+            .map(|c| c[1])
+            .collect();
+        assert_eq!(indices, vec![0, 1, 2, 3, 4, 5]);
+        assert_eq!(
+            calls(&e, STRING_ARRAY_SET_SIZE),
+            vec![vec![strings, 4], vec![strings, 7]]
+        );
+        // An external emittance word is passed as the color itself.
+        e.mem.set_u32(this + 0x34, 0x0600_0000);
+        e.call_log = Some(vec![]);
+        e.call(0x00a7_5a70, &args![this, strings]);
+        assert_eq!(
+            calls(&e, COLOR_VIEWER_STRING)[1],
+            vec![0x0600_0000, TEXT_EXTERNAL_EMIT]
+        );
     }
 }

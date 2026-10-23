@@ -583,6 +583,178 @@ pub fn bs_shader_lighting_property_fence_all_lights(e: &mut Engine, this: Ptr<Li
     e.set(this, Lit::fence, node);
 }
 
+use crate::units::bsshader::bsshaderproperty::{
+    viewer_strings_add, VIEWER_STRING, VIEWER_STRING_UINT,
+};
+
+/// The once-only guard of `00b704c0`'s four `float`s (bit 0 of `011fa578`), the floats
+/// (`011fa568` to `011fa574`) and the `float` the first starts from (`01017d00`).
+const GUARD_011FA578: u32 = 0x011f_a578;
+const DEFAULTS_011FA568: u32 = 0x011f_a568;
+const SOURCE_01017D00: u32 = 0x0101_7d00;
+/// The word table `00b704c0` clears from an index up (eight words at `011fa070`), the
+/// 16-byte records it fills (`011fa0d0` up to `011fa150`, with a second set of four words
+/// `0x120` after each) and the four words the records take (`011a9bd0` to `011a9bdc`).
+const WORDS_011FA070: u32 = 0x011f_a070;
+const RECORDS_011FA0D0: u32 = 0x011f_a0d0;
+const RECORDS_END_011FA150: u32 = 0x011f_a150;
+const VALUES_011A9BD0: u32 = 0x011a_9bd0;
+/// `BSShaderProperty::GetViewerStrings` (`00ba9890`, `thiscall`, one word), the class-name
+/// record (`011fa560`), the 16-bit viewer-string maker (`00a7d490`) and the labels
+/// (`"number of lights"`, `"active lights"`, `"Reference ID"`).
+const SHADER_PROPERTY_GET_VIEWER_STRINGS: u32 = 0x00ba_9890;
+const CLASS_RTTI_011FA560: u32 = 0x011f_a560;
+const VIEWER_STRING_SHORT: u32 = 0x00a7_d490;
+const LABEL_LIGHT_COUNT: u32 = 0x010a_e89c;
+const LABEL_ACTIVE_LIGHTS: u32 = 0x010a_e88c;
+const LABEL_REFERENCE_ID: u32 = 0x010a_e87c;
+/// The base destructor (`00baa0e0`, `thiscall`), the sized delete (`00aa1460`, `cdecl`:
+/// block, size), the allocation (`00aa13e0`, `cdecl`, size) and the copy (`00ba8b10`,
+/// `thiscall`: destination, clone process).
+const BASE_DESTRUCT_00BAA0E0: u32 = 0x00ba_a0e0;
+const NI_FREE_SIZED: u32 = 0x00aa_1460;
+const NI_ALLOCATE: u32 = 0x00aa_13e0;
+const BASE_COPY_MEMBERS_00BA8B10: u32 = 0x00ba_8b10;
+
+// Translated from 00b704b0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map, `thiscall` without words: answers the low 16 bits of the light
+/// list's count (`+0x68`).
+pub fn fn_00b704b0(e: &mut Engine, this: Ptr<Lit>) -> u16 {
+    e.get(this, Lit::lLightList_count) as u16
+}
+
+// Translated from 00b704c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map, `cdecl` with one word (an index). On the first call the four
+/// `float`s at `011fa568` become the `float` at `01017d00` (through `FLD`/`FSTP`) and three
+/// zeros. For an index below 8 (signed): the words of the table at `011fa070` from that index
+/// up to the eighth are cleared, and each 16-byte record at `011fa0d0` from that index on
+/// (up to `011fa150`) gets the four words at `011a9bd0`, the words `0x120` after it the four
+/// `float`s.
+pub fn fn_00b704c0(e: &mut Engine, index: i32) {
+    if e.mem.u8(GUARD_011FA578) & 1 == 0 {
+        let guard = e.mem.u32(GUARD_011FA578);
+        e.mem.set_u32(GUARD_011FA578, guard | 1);
+        let first = x87_quiet_bits(e.mem.u32(SOURCE_01017D00));
+        e.mem.set_u32(DEFAULTS_011FA568, first);
+        for k in 1..4u32 {
+            e.mem.set_u32(DEFAULTS_011FA568 + 4 * k, 0);
+        }
+    }
+    if index >= 8 {
+        return;
+    }
+    let fourth_value = e.mem.u32(VALUES_011A9BD0 + 0xc);
+    let second_default = e.mem.u32(DEFAULTS_011FA568 + 4);
+    let start = index as u32;
+    // `REP STOSD`: 8 - index words from the index on.
+    let mut word = WORDS_011FA070.wrapping_add(start.wrapping_mul(4));
+    for _ in 0..8u32.wrapping_sub(start) {
+        e.mem.set_u32(word, 0);
+        word = word.wrapping_add(4);
+    }
+    let fourth_default = e.mem.u32(DEFAULTS_011FA568 + 0xc);
+    let third_default = e.mem.u32(DEFAULTS_011FA568 + 8);
+    let first_default = e.mem.u32(DEFAULTS_011FA568);
+    let mut record = RECORDS_011FA0D0.wrapping_add(start.wrapping_mul(16));
+    loop {
+        let v = e.mem.u32(VALUES_011A9BD0);
+        e.mem.set_u32(record, v);
+        let v = e.mem.u32(VALUES_011A9BD0 + 4);
+        e.mem.set_u32(record + 4, v);
+        let v = e.mem.u32(VALUES_011A9BD0 + 8);
+        e.mem.set_u32(record + 0x120, first_default);
+        e.mem.set_u32(record + 0x124, second_default);
+        e.mem.set_u32(record + 0x128, third_default);
+        e.mem.set_u32(record + 8, v);
+        e.mem.set_u32(record + 0x12c, fourth_default);
+        e.mem.set_u32(record + 0xc, fourth_value);
+        record = record.wrapping_add(0x10);
+        if (record as i32) >= (RECORDS_END_011FA150 as i32) {
+            break;
+        }
+    }
+}
+
+// Translated from 00b71450 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSShaderLightingProperty::GetViewerStrings` (engine map; the body matches): `thiscall`,
+/// one word (the strings). The `BSShaderProperty` strings (`00ba9890`), the class name, the
+/// light count (`+0x68`, as a 16-bit value), the number of active lights
+/// ([`bs_shader_lighting_property_get_numberof_active_lights`], its low 16 bits) and the
+/// reference ID (`+0x70`), each added inline.
+pub fn bs_shader_lighting_property_get_viewer_strings(
+    e: &mut Engine,
+    this: Ptr<Lit>,
+    strings: u32,
+) {
+    e.call(SHADER_PROPERTY_GET_VIEWER_STRINGS, &args![this, strings]);
+    let class_name = e.mem.u32(CLASS_RTTI_011FA560);
+    let text = e.call(VIEWER_STRING, &args![class_name]).u32();
+    viewer_strings_add(e, strings, text);
+    let count = e.get(this, Lit::lLightList_count);
+    let text = e
+        .call(VIEWER_STRING_SHORT, &args![LABEL_LIGHT_COUNT, count])
+        .u32();
+    viewer_strings_add(e, strings, text);
+    let active = u32::from(bs_shader_lighting_property_get_numberof_active_lights(e, this) as u16);
+    let text = e
+        .call(VIEWER_STRING_SHORT, &args![LABEL_ACTIVE_LIGHTS, active])
+        .u32();
+    viewer_strings_add(e, strings, text);
+    let reference = e.get(this, Lit::uiReferenceID);
+    let text = e
+        .call(VIEWER_STRING_UINT, &args![LABEL_REFERENCE_ID, reference])
+        .u32();
+    viewer_strings_add(e, strings, text);
+}
+
+// Translated from 00b71760 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map: the deleting destructor of `BSShaderLightingProperty`: the
+/// vtable `010ae7b0`, the light list emptied twice (`00b71300`, the list's own destructor
+/// inlined after the class's), the base destructor (`00baa0e0`), then the sized delete
+/// (`00aa1460` with 0x7c) when bit 0 of the flags is set. Answers `this`.
+pub fn fn_00b71760(e: &mut Engine, this: Ptr<Lit>, flags: u32) -> Ptr<Lit> {
+    let list = this.addr() + 0x60;
+    e.mem.set_u32(this.addr(), LIGHTING_PROPERTY_VTABLE);
+    e.call(LIST_REMOVE_ALL, &args![list]);
+    e.call(LIST_REMOVE_ALL, &args![list]);
+    e.call(BASE_DESTRUCT_00BAA0E0, &args![this]);
+    if flags & 1 != 0 {
+        e.call(NI_FREE_SIZED, &args![this, 0x7cu32]);
+    }
+    this
+}
+
+// Translated from 00b71800 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 00b71800 - the FS:[0] exception frame (unwinding on a throw) is not translated
+/// Unnamed in the engine map, `thiscall` with one word (a clone process): a new 0x7c-byte
+/// `BSShaderLightingProperty` (`00aa13e0`; null when the allocation fails), constructed
+/// inline as [`fn_00b71720`] does it (the shader property part `00ba8e50`, the vtable, an
+/// emptied light list, forced darkness 1.0, reference ID 0, not changed, type 1, no fence);
+/// then the copy `00ba8b10` into it and this property's slot +0xc8 with it. Answers it.
+pub fn fn_00b71800(e: &mut Engine, this: Ptr<Lit>, process: u32) -> u32 {
+    let block = e.call(NI_ALLOCATE, &args![0x7cu32]).u32();
+    let copy = if block != 0 {
+        let lit = Ptr::<Lit>::new(block);
+        e.call(SHADER_PROPERTY_CONSTRUCT, &args![lit]);
+        e.mem.set_u32(block, LIGHTING_PROPERTY_VTABLE);
+        e.set(lit, Lit::lLightList_count, 0);
+        e.set(lit, Lit::lLightList, 0);
+        e.set(lit, Lit::lLightList_tail, 0);
+        e.call(LIST_REMOVE_ALL, &args![block + 0x60]);
+        e.set(lit, Lit::fForcedDarkness, x87_store32(1.0));
+        e.set(lit, Lit::uiReferenceID, 0);
+        e.set(lit, Lit::bLightListChanged, 0);
+        e.set(lit, Lit::iShaderPropertyType, 1);
+        e.set(lit, Lit::fence, 0);
+        block
+    } else {
+        0
+    };
+    e.call(BASE_COPY_MEMBERS_00BA8B10, &args![this, copy, process]);
+    e.vcall(this.addr(), 0xc8, &args![copy]);
+    copy
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -634,6 +806,14 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
             0x00b7_18b0,
             bs_shader_lighting_property_fence_all_lights(Ptr<Lit>)
         ),
+        entry!(0x00b7_04b0, fn_00b704b0(Ptr<Lit>) -> u16),
+        entry!(0x00b7_04c0, fn_00b704c0(i32)),
+        entry!(
+            0x00b7_1450,
+            bs_shader_lighting_property_get_viewer_strings(Ptr<Lit>, u32)
+        ),
+        entry!(0x00b7_1760, fn_00b71760(Ptr<Lit>, u32) -> Ptr<Lit>),
+        entry!(0x00b7_1800, fn_00b71800(Ptr<Lit>, u32) -> u32),
     ]
 }
 
@@ -957,5 +1137,147 @@ mod tests {
         assert_eq!(order(&e, this), vec![FENCE_MARKER, a]);
         assert_eq!(e.mem.u32(nodes[0] + 4), e.get(this, Lit::fence));
         assert_eq!(e.get(this, Lit::lLightList_count), 2);
+    }
+}
+
+#[cfg(test)]
+mod n012_tests {
+    use super::*;
+    use crate::units::bsshader::bsshaderproperty::{STRINGS_SET_AT, STRINGS_SET_SIZE};
+
+    fn calls(e: &Engine, addr: u32) -> Vec<Vec<u32>> {
+        e.call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|(a, _)| *a == addr)
+            .map(|(_, w)| w.clone())
+            .collect()
+    }
+
+    #[test]
+    fn fn_00b704b0_answers_the_low_count() {
+        let mut e = Engine::new();
+        let this = e.mem.alloc(0x7c);
+        e.mem.set_u32(this + 0x68, 0x0003_0002);
+        assert_eq!(e.call(0x00b7_04b0, &args![this]).u32(), 2);
+    }
+
+    #[test]
+    fn fn_00b704c0_resets_the_tables_from_the_index() {
+        let mut e = Engine::new();
+        e.map(0x011f_a000, 0x1000);
+        e.map(0x011a_9000, 0x1000);
+        e.map(0x0101_7000, 0x1000);
+        e.mem.set_u32(SOURCE_01017D00, 0x7f80_0001);
+        for k in 0..4u32 {
+            e.mem.set_u32(VALUES_011A9BD0 + 4 * k, 0x10 + k);
+        }
+        for k in 0..8u32 {
+            e.mem.set_u32(WORDS_011FA070 + 4 * k, 0xee);
+        }
+        e.call(0x00b7_04c0, &args![6u32]);
+        assert_eq!(e.mem.u32(DEFAULTS_011FA568), 0x7fc0_0001);
+        assert_eq!(e.mem.u8(GUARD_011FA578) & 1, 1);
+        assert_eq!(e.mem.u32(WORDS_011FA070 + 4 * 5), 0xee);
+        assert_eq!(e.mem.u32(WORDS_011FA070 + 4 * 6), 0);
+        assert_eq!(e.mem.u32(WORDS_011FA070 + 4 * 7), 0);
+        assert_eq!(e.mem.u32(RECORDS_011FA0D0 + 0x50), 0);
+        for record in [RECORDS_011FA0D0 + 0x60, RECORDS_011FA0D0 + 0x70] {
+            assert_eq!(e.mem.u32(record), 0x10);
+            assert_eq!(e.mem.u32(record + 0xc), 0x13);
+            assert_eq!(e.mem.u32(record + 0x120), 0x7fc0_0001);
+            assert_eq!(e.mem.u32(record + 0x12c), 0);
+        }
+        // The guard is set: the defaults are kept; an index of 8 changes nothing.
+        e.mem.set_u32(DEFAULTS_011FA568 + 4, 0x3f80_0000);
+        e.call(0x00b7_04c0, &args![7u32]);
+        assert_eq!(e.mem.u32(RECORDS_011FA0D0 + 0x70 + 0x124), 0x3f80_0000);
+        assert_eq!(e.mem.u32(RECORDS_011FA0D0 + 0x60 + 0x124), 0);
+        e.mem.set_u32(WORDS_011FA070, 0xee);
+        e.call(0x00b7_04c0, &args![8u32]);
+        assert_eq!(e.mem.u32(WORDS_011FA070), 0xee);
+    }
+
+    #[test]
+    fn get_viewer_strings_adds_light_counts_and_reference() {
+        let mut e = Engine::new();
+        e.map(0x011f_a000, 0x1000);
+        e.mem.set_u32(CLASS_RTTI_011FA560, 0x0011_0000);
+        e.register(SHADER_PROPERTY_GET_VIEWER_STRINGS, |_, _| Ret::default());
+        e.register(VIEWER_STRING, |_, a| a[0].into_ret());
+        e.register(VIEWER_STRING_SHORT, |_, a| (a[0] << 8 | a[1]).into_ret());
+        e.register(VIEWER_STRING_UINT, |_, a| (a[1] + 0x900).into_ret());
+        e.register(STRINGS_SET_SIZE, |_, _| Ret::default());
+        e.register(STRINGS_SET_AT, |e, a| {
+            let base = e.mem.u32(a[0] + 4);
+            let v = e.mem.u32(a[2]);
+            e.mem.set_u32(base + 4 * a[1], v);
+            e.mem.set_u16(a[0] + 0xa, a[1] as u16 + 1);
+            Ret::default()
+        });
+        let this = e.mem.alloc(0x7c);
+        e.mem.set_u32(this + 0x68, 0);
+        e.mem.set_u32(this + 0x70, 0x42);
+        let strings = e.mem.alloc(0x10);
+        let base = e.mem.alloc(0x20);
+        e.mem.set_u32(strings + 4, base);
+        e.mem.set_u16(strings + 8, 8);
+        e.call_log = Some(vec![]);
+        e.call(0x00b7_1450, &args![this, strings]);
+        assert_eq!(
+            calls(&e, SHADER_PROPERTY_GET_VIEWER_STRINGS),
+            vec![vec![this, strings]]
+        );
+        assert_eq!(
+            calls(&e, VIEWER_STRING_SHORT),
+            vec![vec![LABEL_LIGHT_COUNT, 0], vec![LABEL_ACTIVE_LIGHTS, 0]]
+        );
+        assert_eq!(e.mem.u32(base), 0x0011_0000);
+        assert_eq!(e.mem.u32(base + 0xc), 0x942);
+        assert_eq!(e.mem.u16(strings + 0xa), 4);
+    }
+
+    #[test]
+    fn deleting_destructor_empties_the_list_and_frees_with_bit_0() {
+        let mut e = Engine::new();
+        e.register(LIST_REMOVE_ALL, |_, _| Ret::default());
+        e.register(BASE_DESTRUCT_00BAA0E0, |_, _| Ret::default());
+        e.register(NI_FREE_SIZED, |_, _| Ret::default());
+        let this = e.mem.alloc(0x7c);
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x00b7_1760, &args![this, 1u32]).u32(), this);
+        assert_eq!(e.mem.u32(this), LIGHTING_PROPERTY_VTABLE);
+        assert_eq!(calls(&e, LIST_REMOVE_ALL), vec![vec![this + 0x60]; 2]);
+        assert_eq!(calls(&e, BASE_DESTRUCT_00BAA0E0), vec![vec![this]]);
+        assert_eq!(calls(&e, NI_FREE_SIZED), vec![vec![this, 0x7c]]);
+        e.call(0x00b7_1760, &args![this, 0u32]);
+        assert_eq!(calls(&e, NI_FREE_SIZED).len(), 1);
+    }
+
+    #[test]
+    fn fn_00b71800_clones_into_a_new_property() {
+        let mut e = Engine::new();
+        e.register(NI_ALLOCATE, |e, a| e.mem.alloc(a[0]).into_ret());
+        e.register(SHADER_PROPERTY_CONSTRUCT, |_, _| Ret::default());
+        e.register(LIST_REMOVE_ALL, |_, _| Ret::default());
+        e.register(BASE_COPY_MEMBERS_00BA8B10, |_, _| Ret::default());
+        e.register(0x0f00_00c8, |_, _| Ret::default());
+        let mut slots = [0u32; 0x33];
+        slots[0xc8 / 4] = 0x0f00_00c8;
+        e.put_vtable(0x0f00_5000, &slots);
+        let this = e.mem.alloc(0x7c);
+        e.mem.set_u32(this, 0x0f00_5000);
+        e.call_log = Some(vec![]);
+        let copy = e.call(0x00b7_1800, &args![this, 3u32]).u32();
+        assert_eq!(calls(&e, NI_ALLOCATE), vec![vec![0x7c]]);
+        assert_eq!(e.mem.u32(copy), LIGHTING_PROPERTY_VTABLE);
+        assert_eq!(e.mem.f32(copy + 0x6c), 1.0);
+        assert_eq!(e.mem.u32(copy + 0x1c), 1);
+        assert_eq!(
+            calls(&e, BASE_COPY_MEMBERS_00BA8B10),
+            vec![vec![this, copy, 3]]
+        );
+        assert_eq!(calls(&e, 0x0f00_00c8), vec![vec![this, copy]]);
     }
 }

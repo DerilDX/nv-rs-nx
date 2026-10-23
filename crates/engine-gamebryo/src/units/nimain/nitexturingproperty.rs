@@ -291,8 +291,8 @@ fn count_one_more_map(e: &mut Engine, this: u32) {
 // Translated from 00a69dd0 (decompiled, FalloutNV.exe 1.4.0.525)
 /// Unnamed in the engine map; by its vtable (`0109c4c4`) the `NiTexturingProperty::Map`
 /// default constructor (`ECX` only): flags cleared then set to `(flags & 0xf100) | 0x3100`,
-/// no texture and no transform.
-pub fn fn_00a69dd0(e: &mut Engine, this: Ptr) {
+/// no texture and no transform. Answers `this` (`MOV EAX,ECX` first, 00a69dd0).
+pub fn fn_00a69dd0(e: &mut Engine, this: Ptr) -> Ptr {
     let map = this.addr();
     e.mem.set_u16(map + 4, 0);
     e.mem.set_u32(map, MAP_VTABLE);
@@ -300,6 +300,7 @@ pub fn fn_00a69dd0(e: &mut Engine, this: Ptr) {
     let flags = e.mem.u16(map + 4);
     e.mem.set_u32(map + 0xc, 0);
     e.mem.set_u16(map + 4, (flags & 0xf100) | 0x3100);
+    this
 }
 
 // Translated from 00a69e00 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -1046,13 +1047,834 @@ pub fn ni_texturing_property_load_binary(e: &mut Engine, this: Ptr, stream: Ptr)
     e.mem.set_u16(flags_at, flags);
 }
 
+/// `NiTexturingProperty::Map` fields (Xbox PDB, PC offsets): the flag word `m_usFlags`
+/// (+0x04: UV set in bits 0-7, filter in bits 8-11, clamp in bits 12-13), `m_spTexture`
+/// (+0x08) and `m_pkTextureTransform` (+0x0C); the word or float a derived map adds at
+/// +0x10; the bump map's six floats at +0x10..+0x24.
+const MAP_FLAGS: u32 = 0x04;
+const MAP_TEXTURE: u32 = 0x08;
+const MAP_TRANSFORM: u32 = 0x0c;
+const MAP_EXTRA: u32 = 0x10;
+/// The property's map array (`m_kMaps`, an `NiTArray` at +0x1C): `m_pBase` +0x20,
+/// `m_usMaxSize` +0x24, `m_usSize` +0x26.
+const MAP_ELEMENTS: u32 = 0x20;
+const MAP_CAPACITY: u32 = 0x24;
+const MAP_COUNT: u32 = 0x26;
+/// `NiNew`'s companions: `NiStricmp` (`00aa1360`, cdecl: two strings; 0 when equal) and
+/// `NiSprintf` (`00a305b0`, cdecl: buffer, size, format, then the format words).
+const NI_STRICMP: u32 = 0x00aa_1360;
+const NI_SPRINTF: u32 = 0x00a3_05b0;
+/// The base `RegisterStreamables` (`00a62130`), `IsEqual` (`00a62140`) and `SaveBinary`
+/// (`00a5d7b0`): five-byte bodies the engine map names after `NiSequenceStreamHelper`
+/// (folded); `NiProperty::GetViewerStrings` (`00a5d850`). All thiscall, one word.
+const BASE_REGISTER_STREAMABLES_00A62130: u32 = 0x00a6_2130;
+const BASE_IS_EQUAL_00A62140: u32 = 0x00a6_2140;
+const BASE_SAVE_BINARY_00A5D7B0: u32 = 0x00a5_d7b0;
+const PROPERTY_GET_VIEWER_STRINGS: u32 = 0x00a5_d850;
+/// The transform helpers: the difference test `00a88c60` (unnamed; thiscall on the
+/// transform, the other; nonzero when they differ) and `SaveBinary` `00a88f80` (unnamed;
+/// thiscall on the transform, the stream).
+const TRANSFORM_NOT_EQUAL_00A88C60: u32 = 0x00a8_8c60;
+const TRANSFORM_SAVE_BINARY_00A88F80: u32 = 0x00a8_8f80;
+/// The stream slot +0x30 (`SaveLinkID` in the Xbox PDB order) and the texture slots
+/// `RegisterStreamables` +0x54 and `IsEqual` +0x5C; the map slot +0x08 (`SaveBinary`).
+const STREAM_SAVE_LINK_ID_SLOT: u32 = 0x30;
+const TEXTURE_REGISTER_STREAMABLES_SLOT: u32 = 0x54;
+const TEXTURE_IS_EQUAL_SLOT: u32 = 0x5c;
+const MAP_SAVE_BINARY_SLOT: u32 = 0x08;
+/// The viewer-string helpers: `NiGetViewerString` (cdecl, the class name),
+/// `NiGetViewerString_ov7` (a name and an `int`), `_ov8` (a name and an unsigned value),
+/// `_ov9` (a name and a `float`) and `_ov10` (a name and a pointer); the strings array
+/// `SetSize` (`0096ad30`) and its add `0096a610` (unnamed; thiscall on the array, the
+/// address of the element).
+const VIEWER_STRING_NAME: u32 = 0x00a7_d330;
+const VIEWER_STRING_SIGNED: u32 = 0x00a7_d4d0;
+const VIEWER_STRING_UNSIGNED: u32 = 0x00a7_d510;
+const VIEWER_STRING_FLOAT: u32 = 0x00a7_d550;
+const VIEWER_STRING_POINTER: u32 = 0x00a7_d5a0;
+const STRING_ARRAY_SET_SIZE: u32 = 0x0096_ad30;
+const STRING_ARRAY_ADD_0096A610: u32 = 0x0096_a610;
+/// The clamp-mode formats (`"%s = CLAMP_S_CLAMP_T"`, `"%s = CLAMP_S_WRAP_T"`,
+/// `"%s = WRAP_S_CLAMP_T"`, `"%s = WRAP_S_WRAP_T"`), the filter-mode formats
+/// (`"%s = FILTER_NEAREST"` ... `"%s = FILTER_MAGLERP_MINANISO"`) and `"%s = UNKNOWN!!!"`.
+const CLAMP_FORMATS: [u32; 4] = [0x0109_c3dc, 0x0109_c3c8, 0x0109_c3b4, 0x0109_c3a0];
+const FILTER_FORMATS: [u32; 8] = [
+    0x0109_c4ac,
+    0x0109_c498,
+    0x0109_c484,
+    0x0109_c464,
+    0x0109_c448,
+    0x0109_c428,
+    0x0109_c414,
+    0x0109_c3f4,
+];
+const FORMAT_UNKNOWN: u32 = 0x0109_b2ec;
+/// The viewer-string texts: `"ApplyMode "`, the map names of slots 0 to 7
+/// (`"MultiTexture Base Map"` ... `"MultiTexture Parallax Map"`), the bump map floats
+/// (`"m_fLumaScale"`, `"m_fLumaOffset"`, `"m_fBumpMat00"`, `"m_fBumpMat01"`,
+/// `"m_fBumpMat10"`, `"m_fBumpMat11"`), `"m_fParallaxOffset"`,
+/// `"MultiTexture Decal Map %d"`, `"m_spTexture "`, `"Clamp Mode "`, `"Filter Mode"`,
+/// `"Texture Coord Index "`, `"Shader Map"` and `"m_uiID"`.
+const TEXT_APPLY_MODE: u32 = 0x0109_c794;
+const TEXT_MAP_NAMES: [u32; 8] = [
+    0x0109_c77c,
+    0x0109_c764,
+    0x0109_c74c,
+    0x0109_c734,
+    0x0109_c71c,
+    0x0109_c704,
+    0x0109_c68c,
+    0x0109_c670,
+];
+const TEXT_BUMP_FLOATS: [u32; 6] = [
+    0x0109_c6f4,
+    0x0109_c6e4,
+    0x0109_c6d4,
+    0x0109_c6c4,
+    0x0109_c6b4,
+    0x0109_c6a4,
+];
+const TEXT_PARALLAX_OFFSET: u32 = 0x0109_c65c;
+const TEXT_DECAL_MAP: u32 = 0x0109_c640;
+const TEXT_TEXTURE: u32 = 0x0109_c630;
+const TEXT_CLAMP_MODE: u32 = 0x0109_c624;
+const TEXT_FILTER_MODE: u32 = 0x0109_c618;
+const TEXT_COORD_INDEX: u32 = 0x0109_c600;
+const TEXT_SHADER_MAP: u32 = 0x0109_c5f4;
+const TEXT_ID: u32 = 0x0109_c5ec;
+
+/// The length of the zero-terminated string at `text` (the code inline `strlen`).
+fn string_length(e: &Engine, text: u32) -> u32 {
+    let mut length = 0u32;
+    while e.mem.u8(text.wrapping_add(length)) != 0 {
+        length = length.wrapping_add(1);
+    }
+    length
+}
+
+/// One write through the stream's writer (`stream + 0x250`): its function pointer at +0xC,
+/// `cdecl (writer, buffer, size, count, 1)` with the word at `count` set to `size` first;
+/// the answer is added to the writer's word at +4.
+fn stream_write(e: &mut Engine, stream: u32, buffer: u32, size: u32, count: u32) {
+    let writer = e.mem.u32(stream + 0x250);
+    let write_function = e.mem.u32(writer + 0xc);
+    e.mem.set_u32(count, size);
+    let written = e
+        .call(write_function, &args![writer, buffer, size, count, 1u32])
+        .u32();
+    let total = e.mem.u32(writer + 4).wrapping_add(written);
+    e.mem.set_u32(writer + 4, total);
+}
+
+/// Whether two `float` words compare equal as `FLD`/`FLD`/`FUCOMPP` with `TEST AH,0x44`
+/// finds them (a NaN is never equal; +0 equals -0).
+fn floats_equal(a: u32, b: u32) -> bool {
+    f32::from_bits(a) == f32::from_bits(b)
+}
+
+/// Adds the string word at `slot` at the end of the strings array (`SetSize` to the size
+/// plus the grow-by step when the array is full, then `SetAt`).
+fn add_viewer_string(e: &mut Engine, strings: Ptr<NiTArray>, slot: u32) {
+    let index = u32::from(e.get(strings, NiTArray::m_usSize));
+    if index >= u32::from(e.get(strings, NiTArray::m_usMaxSize)) {
+        let grow = u32::from(e.get(strings, NiTArray::m_usGrowBy));
+        e.call(STRING_ARRAY_SET_SIZE, &args![strings, grow + index]);
+    }
+    e.call(SET_ELEMENT, &args![strings, index, slot]);
+}
+
+/// Adds `text` at the end of the strings array with its `SetAt` inlined (`SetSize` when
+/// full, then [`array_set_counted`] at the old size).
+fn add_viewer_string_inline(e: &mut Engine, strings: Ptr<NiTArray>, text: u32) {
+    let index = u32::from(e.get(strings, NiTArray::m_usSize));
+    if index >= u32::from(e.get(strings, NiTArray::m_usMaxSize)) {
+        let grow = u32::from(e.get(strings, NiTArray::m_usGrowBy));
+        e.call(STRING_ARRAY_SET_SIZE, &args![strings, grow + index]);
+    }
+    array_set_counted(e, strings, index, text);
+}
+
+// Translated from 00a69b40 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (thiscall, `RET 4`: a map word): sets flag bit 0 of the
+/// property when the word is nonzero or any map after index 0 is set (`m_usSize` read once),
+/// clears it otherwise.
+pub fn fn_00a69b40(e: &mut Engine, this: Ptr, map: u32) {
+    let at = this.addr();
+    let mut any = map != 0;
+    if !any {
+        let count = u32::from(e.mem.u16(at + MAP_COUNT));
+        let elements = e.mem.u32(at + MAP_ELEMENTS);
+        any = (1..count).any(|i| e.mem.u32(elements + 4 * i) != 0);
+    }
+    let flags = e.mem.u16(at + FLAGS);
+    e.mem
+        .set_u16(at + FLAGS, if any { flags | 1 } else { flags & 0xfffe });
+}
+
+// Translated from 00a69b90 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiTexturingProperty::GetViewerString` (Xbox PDB; cdecl: a name and the clamp mode): a
+/// new `NiAlloc` buffer of the name length plus 0x14, filled by `NiSprintf` with the mode
+/// name for modes 0 to 3 (the code jump table at `00a69c38`) or `"%s = UNKNOWN!!!"`.
+/// Returns the buffer.
+pub fn ni_texturing_property_get_viewer_string(e: &mut Engine, name: u32, mode: u32) -> u32 {
+    let size = string_length(e, name).wrapping_add(0x14);
+    let buffer = e.call(ALLOCATE_BLOCK, &args![size]).u32();
+    let format = CLAMP_FORMATS
+        .get(mode as usize)
+        .copied()
+        .unwrap_or(FORMAT_UNKNOWN);
+    e.call(NI_SPRINTF, &args![buffer, size, format, name]);
+    buffer
+}
+
+// Translated from 00a69c50 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiTexturingProperty::GetViewerString_ov2` (Xbox PDB; cdecl: a name and the filter
+/// mode): a new `NiAlloc` buffer of the name length plus 0x1E, filled by `NiSprintf` with
+/// the mode name for modes 0 to 7 (the code jump table at `00a69d54`) or
+/// `"%s = UNKNOWN!!!"`. Returns the buffer.
+pub fn ni_texturing_property_get_viewer_string_ov2(e: &mut Engine, name: u32, mode: u32) -> u32 {
+    let size = string_length(e, name).wrapping_add(0x1e);
+    let buffer = e.call(ALLOCATE_BLOCK, &args![size]).u32();
+    let format = FILTER_FORMATS
+        .get(mode as usize)
+        .copied()
+        .unwrap_or(FORMAT_UNKNOWN);
+    e.call(NI_SPRINTF, &args![buffer, size, format, name]);
+    buffer
+}
+
+// Translated from 00a69d80 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (cdecl: the address of a string pointer, an out index): finds
+/// the string among the ten static fixed strings `_SDMInit` sets (`011f49b0` onwards, the
+/// map slot names): the same pointer, or both non-null and equal ignoring case
+/// (`NiStricmp`). Stores the index and answers true when found; false otherwise.
+pub fn fn_00a69d80(e: &mut Engine, text: u32, index: u32) -> bool {
+    for (i, (slot, _)) in TEXTURE_SLOT_NAMES.iter().enumerate() {
+        let wanted = e.mem.u32(text);
+        let known = e.mem.u32(*slot);
+        let found = known == wanted
+            || (wanted != 0 && known != 0 && e.call(NI_STRICMP, &args![known, wanted]).u32() == 0);
+        if found {
+            e.mem.set_u32(index, i as u32);
+            return true;
+        }
+    }
+    false
+}
+
+// Translated from 00a69e60 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map; the body compares two `NiTexturingProperty::Map`s (thiscall,
+/// `RET 4`: the other map): the textures both null or equal (the texture's slot +0x5C),
+/// the same flag word, and the transforms both null or not different (`00a88c60`).
+pub fn fn_00a69e60(e: &mut Engine, this: Ptr, other: Ptr) -> bool {
+    let (map, theirs) = (this.addr(), other.addr());
+    let texture = e.mem.u32(map + MAP_TEXTURE);
+    if texture == 0 {
+        if e.mem.u32(theirs + MAP_TEXTURE) != 0 {
+            return false;
+        }
+    } else {
+        let other_texture = e.mem.u32(theirs + MAP_TEXTURE);
+        if e.vcall(texture, TEXTURE_IS_EQUAL_SLOT, &args![other_texture])
+            .u32() as u8
+            == 0
+        {
+            return false;
+        }
+    }
+    if e.mem.u16(map + MAP_FLAGS) != e.mem.u16(theirs + MAP_FLAGS) {
+        return false;
+    }
+    let transform = e.mem.u32(map + MAP_TRANSFORM);
+    let other_transform = e.mem.u32(theirs + MAP_TRANSFORM);
+    if transform == 0 || other_transform == 0 {
+        return transform == 0 && other_transform == 0;
+    }
+    e.call(
+        TRANSFORM_NOT_EQUAL_00A88C60,
+        &args![transform, other_transform],
+    )
+    .u32() as u8
+        == 0
+}
+
+// Translated from 00a69ed0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map; the body compares two bump maps (the slot-5 maps of vtable
+/// `0109c4d8`; thiscall, `RET 4`): [`fn_00a69e60`] and the six floats at +0x10..+0x24
+/// (`FUCOMPP`: a NaN differs).
+pub fn fn_00a69ed0(e: &mut Engine, this: Ptr, other: Ptr) -> bool {
+    if !fn_00a69e60(e, this, other) {
+        return false;
+    }
+    (0..6).all(|i| {
+        let offset = MAP_EXTRA + 4 * i;
+        floats_equal(
+            e.mem.u32(this.addr() + offset),
+            e.mem.u32(other.addr() + offset),
+        )
+    })
+}
+
+// Translated from 00a69f50 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map; the body compares two shader maps (vtable `0109c4ec`;
+/// thiscall, `RET 4`): [`fn_00a69e60`] and the same word at +0x10.
+pub fn fn_00a69f50(e: &mut Engine, this: Ptr, other: Ptr) -> bool {
+    if !fn_00a69e60(e, this, other) {
+        return false;
+    }
+    e.mem.u32(this.addr() + MAP_EXTRA) == e.mem.u32(other.addr() + MAP_EXTRA)
+}
+
+// Translated from 00a69f80 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map; the body compares two slot-7 maps (vtable `0109c500`;
+/// thiscall, `RET 4`): [`fn_00a69e60`] and the float at +0x10 (`FUCOMPP`: a NaN differs).
+pub fn fn_00a69f80(e: &mut Engine, this: Ptr, other: Ptr) -> bool {
+    fn_00a69e60(e, this, other)
+        && floats_equal(
+            e.mem.u32(this.addr() + MAP_EXTRA),
+            e.mem.u32(other.addr() + MAP_EXTRA),
+        )
+}
+
+// Translated from 00a69fb0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map; by its vtable (`0109c4d8`) the slot-5 (bump) map default
+/// constructor (`ECX` only): flags cleared then `(flags & 0xf100) | 0x3100`, no texture and
+/// no transform, and the floats 1 (+0x10), 0 (+0x14), the float at `01016248` (+0x18), 0
+/// (+0x1C), 0 (+0x20) and the float at `01016248` (+0x24), each through the x87 stack.
+/// Returns `this`.
+pub fn fn_00a69fb0(e: &mut Engine, this: Ptr) -> Ptr {
+    let map = this.addr();
+    e.mem.set_u16(map + MAP_FLAGS, 0);
+    e.mem.set_u32(map + MAP_TEXTURE, 0);
+    e.mem.set_u32(map + 0x10, x87_store32(1.0));
+    let zero = x87_store32(0.0);
+    let flags = e.mem.u16(map + MAP_FLAGS);
+    e.mem.set_u32(map + 0x14, zero);
+    e.mem.set_u32(map + MAP_TRANSFORM, 0);
+    let half = x87_quiet_bits(e.mem.u32(TRANSFORM_CENTRE));
+    e.mem.set_u32(map + 0x18, half);
+    e.mem.set_u32(map + 0x24, half);
+    e.mem.set_u16(map + MAP_FLAGS, (flags & 0xf100) | 0x3100);
+    e.mem.set_u32(map + 0x1c, zero);
+    e.mem.set_u32(map, SLOT_5_MAP_VTABLE);
+    e.mem.set_u32(map + 0x20, zero);
+    this
+}
+
+// Translated from 00a6a010 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map; by its vtable (`0109c500`) the slot-7 map default
+/// constructor (`ECX` only): flags cleared then `(flags & 0xf100) | 0x3100`, no texture and
+/// no transform, and the float at `01016248` (through the x87 stack) at +0x10. Returns
+/// `this`.
+pub fn fn_00a6a010(e: &mut Engine, this: Ptr) -> Ptr {
+    let map = this.addr();
+    let half = x87_quiet_bits(e.mem.u32(TRANSFORM_CENTRE));
+    e.mem.set_u16(map + MAP_FLAGS, 0);
+    e.mem.set_u32(map + MAP_TEXTURE, 0);
+    e.mem.set_u32(map + 0x10, half);
+    let flags = e.mem.u16(map + MAP_FLAGS);
+    e.mem.set_u32(map + MAP_TRANSFORM, 0);
+    e.mem.set_u16(map + MAP_FLAGS, (flags & 0xf100) | 0x3100);
+    e.mem.set_u32(map, SLOT_7_MAP_VTABLE);
+    this
+}
+
+/// The two map arrays' deleting destructors: the vtable given, the element block freed
+/// (`00aa10f0`), the array itself given back to the memory manager (`00aa4060`) when bit 0
+/// of `flags` is set.
+fn delete_map_array(e: &mut Engine, this: Ptr, flags: u32, vtable: u32) -> Ptr {
+    let elements = e.mem.u32(this.addr() + 4);
+    e.mem.set_u32(this.addr(), vtable);
+    e.call(FREE_BLOCK, &args![elements]);
+    if flags & 1 != 0 {
+        e.call(MEMORY_FREE, &args![MEMORY_MANAGER, this]);
+    }
+    this
+}
+
+// Translated from 00a6a050 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (referenced from the map-array vtables `0109c394` and
+/// `0109c5ac`): the map array scalar deleting destructor (thiscall, `RET 4`) with the base
+/// vtable `0109c394`. Returns `this`.
+pub fn fn_00a6a050(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    delete_map_array(e, this, flags, MAP_ARRAY_BASE_VTABLE)
+}
+
+// Translated from 00a6a080 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (referenced from the vtables `0109c39c` and `0109c5b4`): the
+/// shader-map array scalar deleting destructor (thiscall, `RET 4`) with the base vtable
+/// `0109c39c`. Returns `this`.
+pub fn fn_00a6a080(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    delete_map_array(e, this, flags, SHADER_MAP_ARRAY_BASE_VTABLE)
+}
+
+/// The shader-map array base vtable (`0109c39c`).
+const SHADER_MAP_ARRAY_BASE_VTABLE: u32 = 0x0109_c39c;
+
+/// The map count (flag bits 4-11) less one, kept to 16 bits as the code stores it.
+fn count_one_less_map(e: &mut Engine, this: u32) {
+    let flags = u32::from(e.mem.u16(this + FLAGS));
+    let count = ((flags >> 4) & 0xff).wrapping_sub(1);
+    e.mem
+        .set_u16(this + FLAGS, ((count << 4) | (flags & 0xf00f)) as u16);
+}
+
+// Translated from 00a6a150 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map; the body sets the map at slot `index + 8` (thiscall, `RET 8`:
+/// the index and the map; the decal slots follow the eight fixed ones). Inside the array the
+/// map count (flag bits 4-11) follows a null/non-null change, the map is set (`0096ae90`
+/// with the map argument's stack word) and an old map is deleted (its slot 0 with 1). Past
+/// the size the array grows when the slot is not below its capacity (`00a90180`), the map
+/// is set and a non-null one counted. Either way [`fn_00a69b40`] then updates flag bit 0.
+pub fn fn_00a6a150(e: &mut Engine, this: Ptr, index: u32, map: u32) {
+    let at = this.addr();
+    let slot_index = index.wrapping_add(8);
+    e.with_stack(4, |e, argument| {
+        e.mem.set_u32(argument.addr(), map);
+        let maps = Ptr::<NiTArray>::new(at + MAPS);
+        if slot_index < u32::from(e.mem.u16(at + MAP_COUNT)) {
+            let old = e.mem.u32(e.mem.u32(at + MAP_ELEMENTS) + 4 * slot_index);
+            if map != 0 {
+                if old == 0 {
+                    count_one_more_map(e, at);
+                }
+            } else if old != 0 {
+                count_one_less_map(e, at);
+            }
+            e.call(SET_ELEMENT, &args![maps, slot_index, argument]);
+            if old != 0 {
+                e.vcall(old, 0, &args![1u32]);
+            }
+            fn_00a69b40(e, this, map);
+            return;
+        }
+        if slot_index >= u32::from(e.mem.u16(at + MAP_CAPACITY)) {
+            let grow = u32::from(e.get(maps, NiTArray::m_usGrowBy));
+            e.call(ARRAY_SET_SIZE, &args![maps, grow.wrapping_add(slot_index)]);
+        }
+        e.call(SET_ELEMENT, &args![maps, slot_index, argument]);
+        let map = e.mem.u32(argument.addr());
+        if map != 0 {
+            count_one_more_map(e, at);
+        }
+        fn_00a69b40(e, this, map);
+    });
+}
+
+// Translated from 00a6a560 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiTexturingProperty::RegisterStreamables` (Xbox PDB; thiscall, `RET 4`): false when the
+/// base `RegisterStreamables` (`00a62130`) is; otherwise the texture of every map, then of
+/// every shader map, registers (its slot +0x54; counts read again each time) and the answer
+/// is true.
+pub fn ni_texturing_property_register_streamables(e: &mut Engine, this: Ptr, stream: Ptr) -> bool {
+    if e.call(BASE_REGISTER_STREAMABLES_00A62130, &args![this, stream])
+        .u32() as u8
+        == 0
+    {
+        return false;
+    }
+    let at = this.addr();
+    let register = |e: &mut Engine, map: u32| {
+        if map != 0 {
+            let texture = e.mem.u32(map + MAP_TEXTURE);
+            if texture != 0 {
+                e.vcall(texture, TEXTURE_REGISTER_STREAMABLES_SLOT, &args![stream]);
+            }
+        }
+    };
+    let mut i = 0u32;
+    while i < u32::from(e.mem.u16(at + MAP_COUNT)) {
+        let map = e.mem.u32(e.mem.u32(at + MAP_ELEMENTS) + 4 * i);
+        register(e, map);
+        i += 1;
+    }
+    if e.mem.u32(at + SHADER_MAPS) != 0 {
+        let mut i = 0u32;
+        while i < u32::from(e.mem.u16(e.mem.u32(at + SHADER_MAPS) + 0xa)) {
+            let map = e
+                .mem
+                .u32(e.mem.u32(e.mem.u32(at + SHADER_MAPS) + 4) + 4 * i);
+            register(e, map);
+            i += 1;
+        }
+    }
+    true
+}
+
+// Translated from 00a6a5f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiTexturingProperty::IsEqual` (Xbox PDB; thiscall, `RET 4`): the base `IsEqual`
+/// (`00a62140`), the same flag word and map count, each map pair both null or equal (slot 5
+/// by [`fn_00a69ed0`], slot 7 by [`fn_00a69f80`], the others by [`fn_00a69e60`], each run on
+/// this property's map), and the shader-map arrays both absent or of one size with each pair
+/// both null or equal ([`fn_00a69f50`]).
+pub fn ni_texturing_property_is_equal(e: &mut Engine, this: Ptr, other: Ptr) -> bool {
+    if e.call(BASE_IS_EQUAL_00A62140, &args![this, other]).u32() as u8 == 0 {
+        return false;
+    }
+    let (mine, theirs) = (this.addr(), other.addr());
+    if e.mem.u16(mine + FLAGS) != e.mem.u16(theirs + FLAGS) {
+        return false;
+    }
+    let count = u32::from(e.mem.u16(mine + MAP_COUNT));
+    if count != u32::from(e.mem.u16(theirs + MAP_COUNT)) {
+        return false;
+    }
+    for i in 0..count {
+        let a = e.mem.u32(e.mem.u32(mine + MAP_ELEMENTS) + 4 * i);
+        let b = e.mem.u32(e.mem.u32(theirs + MAP_ELEMENTS) + 4 * i);
+        if a == 0 {
+            if b != 0 {
+                return false;
+            }
+            continue;
+        }
+        if b == 0 {
+            return false;
+        }
+        let equal = match i {
+            5 => fn_00a69ed0(e, Ptr::new(a), Ptr::new(b)),
+            7 => fn_00a69f80(e, Ptr::new(a), Ptr::new(b)),
+            _ => fn_00a69e60(e, Ptr::new(a), Ptr::new(b)),
+        };
+        if !equal {
+            return false;
+        }
+    }
+    let shader = e.mem.u32(mine + SHADER_MAPS);
+    if shader == 0 {
+        return e.mem.u32(theirs + SHADER_MAPS) == 0;
+    }
+    let other_shader = e.mem.u32(theirs + SHADER_MAPS);
+    if other_shader == 0 {
+        return false;
+    }
+    let count = u32::from(e.mem.u16(shader + 0xa));
+    if count != u32::from(e.mem.u16(other_shader + 0xa)) {
+        return false;
+    }
+    for i in 0..count {
+        let a = e
+            .mem
+            .u32(e.mem.u32(e.mem.u32(mine + SHADER_MAPS) + 4) + 4 * i);
+        let b = e
+            .mem
+            .u32(e.mem.u32(e.mem.u32(theirs + SHADER_MAPS) + 4) + 4 * i);
+        if a == 0 {
+            if b != 0 {
+                return false;
+            }
+            continue;
+        }
+        if b == 0 || !fn_00a69f50(e, Ptr::new(a), Ptr::new(b)) {
+            return false;
+        }
+    }
+    true
+}
+
+// Translated from 00a6a990 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map; the shader-map array constructor (thiscall, `RET 8`: the
+/// capacity and the grow step, 16 bits each): the grow step, the base vtable `0109c39c`,
+/// the capacity, size and count 0, an element block of four bytes per element (`NiAlloc`;
+/// none for capacity 0), then the vtable `0109c5b4`. Returns `this`.
+pub fn fn_00a6a990(e: &mut Engine, this: Ptr<NiTArray>, capacity: u32, grow: u32) -> Ptr<NiTArray> {
+    e.set(this, NiTArray::m_usGrowBy, grow as u16);
+    e.mem.set_u32(this.addr(), SHADER_MAP_ARRAY_BASE_VTABLE);
+    let capacity = capacity as u16;
+    e.set(this, NiTArray::m_usMaxSize, capacity);
+    e.set(this, NiTArray::m_usSize, 0);
+    e.set(this, NiTArray::m_usESize, 0);
+    let elements = if capacity != 0 {
+        e.call(ALLOCATE_BLOCK, &args![u32::from(capacity) * 4])
+            .u32()
+    } else {
+        0
+    };
+    e.set(this, NiTArray::m_pBase, elements);
+    e.mem.set_u32(this.addr(), SHADER_MAP_ARRAY_VTABLE);
+    this
+}
+
+// Translated from 00a6b250 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiTexturingProperty::SaveBinary` (Xbox PDB; thiscall, `RET 4`): the base `SaveBinary`
+/// (`00a5d7b0`), the flag word (2 bytes), the map count (4 bytes), for each map a byte
+/// saying whether it is there followed by the map own `SaveBinary` (its slot +8), then the
+/// shader-map count (0 without an array) and the same for each shader map. The stream
+/// argument stack word holds the component size or the presence byte, as in the code.
+pub fn ni_texturing_property_save_binary(e: &mut Engine, this: Ptr, stream: Ptr) {
+    let (at, out) = (this.addr(), stream.addr());
+    e.call(BASE_SAVE_BINARY_00A5D7B0, &args![this, stream]);
+    // The three locals and the stream argument stack word.
+    e.with_stack(0x10, |e, frame| {
+        let (count, sizes, argument) = (frame.addr(), frame.addr() + 8, frame.addr() + 0xc);
+        e.mem.set_u32(argument, out);
+        stream_write(e, out, at + FLAGS, 2, argument);
+        let maps = u32::from(e.mem.u16(at + MAP_COUNT));
+        e.mem.set_u32(count, maps);
+        stream_write(e, out, count, 4, argument);
+        let save_each = |e: &mut Engine, map: u32| {
+            e.mem.set_u8(argument, u8::from(map != 0));
+            stream_write(e, out, argument, 1, sizes);
+            if e.mem.u8(argument) != 0 {
+                e.vcall(map, MAP_SAVE_BINARY_SLOT, &args![stream]);
+            }
+        };
+        for i in 0..e.mem.u32(count) {
+            let map = e.mem.u32(e.mem.u32(at + MAP_ELEMENTS) + 4 * i);
+            save_each(e, map);
+        }
+        e.mem.set_u32(argument, 4);
+        let shader = e.mem.u32(at + SHADER_MAPS);
+        if shader == 0 {
+            e.mem.set_u32(count, 0);
+            stream_write(e, out, count, 4, argument);
+            return;
+        }
+        e.mem.set_u32(count, u32::from(e.mem.u16(shader + 0xa)));
+        stream_write(e, out, count, 4, argument);
+        for i in 0..e.mem.u32(count) {
+            let map = e
+                .mem
+                .u32(e.mem.u32(e.mem.u32(at + SHADER_MAPS) + 4) + 4 * i);
+            save_each(e, map);
+        }
+    });
+}
+
+// Translated from 00a6b830 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiTexturingProperty::Map::SaveBinary` (Xbox PDB; thiscall, `RET 4`): the link to the
+/// texture (stream slot +0x30), the flag word (2 bytes), a byte saying whether there is a
+/// transform (written over the low byte of the stream argument stack word, then from
+/// there), then the transform own `SaveBinary` (`00a88f80`) when there is one.
+pub fn ni_texturing_property_map_save_binary(e: &mut Engine, this: Ptr, stream: Ptr) {
+    let (map, out) = (this.addr(), stream.addr());
+    let texture = e.mem.u32(map + MAP_TEXTURE);
+    e.vcall(out, STREAM_SAVE_LINK_ID_SLOT, &args![texture]);
+    // The local (`PUSH ECX`) and the stream argument stack word.
+    e.with_stack(8, |e, frame| {
+        let (local, argument) = (frame.addr(), frame.addr() + 4);
+        e.mem.set_u32(argument, out);
+        stream_write(e, out, map + MAP_FLAGS, 2, local);
+        let has_transform = e.mem.u32(map + MAP_TRANSFORM) != 0;
+        e.mem.set_u8(argument, u8::from(has_transform));
+        stream_write(e, out, argument, 1, local);
+    });
+    let transform = e.mem.u32(map + MAP_TRANSFORM);
+    if transform != 0 {
+        e.call(TRANSFORM_SAVE_BINARY_00A88F80, &args![transform, stream]);
+    }
+}
+
+// Translated from 00a6b8c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiTexturingProperty::BumpMap::LoadBinary` (Xbox PDB; thiscall, `RET 4`):
+/// [`ni_texturing_property_map_load_binary`], then the six floats at +0x10..+0x24, four
+/// bytes each (the component size in the stream argument stack word).
+pub fn ni_texturing_property_bump_map_load_binary(e: &mut Engine, this: Ptr, stream: Ptr) {
+    ni_texturing_property_map_load_binary(e, this, stream);
+    e.with_stack(4, |e, argument| {
+        for i in 0..6 {
+            let field = this.addr() + MAP_EXTRA + 4 * i;
+            stream_read(e, stream.addr(), field, 4, argument.addr());
+        }
+    });
+}
+
+// Translated from 00a6b9a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiTexturingProperty::BumpMap::SaveBinary` (Xbox PDB; thiscall, `RET 4`):
+/// [`ni_texturing_property_map_save_binary`], then the six floats at +0x10..+0x24, four
+/// bytes each (the component size in the stream argument stack word).
+pub fn ni_texturing_property_bump_map_save_binary(e: &mut Engine, this: Ptr, stream: Ptr) {
+    ni_texturing_property_map_save_binary(e, this, stream);
+    e.with_stack(4, |e, argument| {
+        for i in 0..6 {
+            let field = this.addr() + MAP_EXTRA + 4 * i;
+            stream_write(e, stream.addr(), field, 4, argument.addr());
+        }
+    });
+}
+
+// Translated from 00a6ba80 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (the `LoadBinary` slot of the slot-7 and shader-map vtables
+/// `0109c500`, `0109c4ec`; thiscall, `RET 4`): [`ni_texturing_property_map_load_binary`],
+/// then the word at +0x10 (4 bytes; the component size in the stream argument stack word).
+pub fn fn_00a6ba80(e: &mut Engine, this: Ptr, stream: Ptr) {
+    ni_texturing_property_map_load_binary(e, this, stream);
+    e.with_stack(4, |e, argument| {
+        stream_read(
+            e,
+            stream.addr(),
+            this.addr() + MAP_EXTRA,
+            4,
+            argument.addr(),
+        );
+    });
+}
+
+// Translated from 00a6bac0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (the `SaveBinary` slot of the slot-7 and shader-map vtables;
+/// thiscall, `RET 4`): [`ni_texturing_property_map_save_binary`], then the word at +0x10
+/// (4 bytes; the component size in the stream argument stack word).
+pub fn fn_00a6bac0(e: &mut Engine, this: Ptr, stream: Ptr) {
+    ni_texturing_property_map_save_binary(e, this, stream);
+    e.with_stack(4, |e, argument| {
+        stream_write(
+            e,
+            stream.addr(),
+            this.addr() + MAP_EXTRA,
+            4,
+            argument.addr(),
+        );
+    });
+}
+
+/// The shared tail of each map's viewer strings in [`ni_texturing_property_get_viewer_strings`]:
+/// `"m_spTexture "`, `"Clamp Mode "`, `"Filter Mode"` and `"Texture Coord Index "`, each
+/// formatted into the 64-byte buffer `buffer` first, then the string made from it and the
+/// map's field added (`add` stores it).
+fn map_strings(e: &mut Engine, map: u32, buffer: u32, add: &mut dyn FnMut(&mut Engine, u32)) {
+    e.call(NI_SPRINTF, &args![buffer, 0x40u32, TEXT_TEXTURE]);
+    let texture = e.mem.u32(map + MAP_TEXTURE);
+    let text = e.call(VIEWER_STRING_POINTER, &args![buffer, texture]).u32();
+    add(e, text);
+    e.call(NI_SPRINTF, &args![buffer, 0x40u32, TEXT_CLAMP_MODE]);
+    let clamp = (u32::from(e.mem.u16(map + MAP_FLAGS)) >> 12) & 3;
+    let text = ni_texturing_property_get_viewer_string(e, buffer, clamp);
+    add(e, text);
+    e.call(NI_SPRINTF, &args![buffer, 0x40u32, TEXT_FILTER_MODE]);
+    let filter = u32::from(e.mem.u8(map + MAP_FLAGS + 1)) & 0xf;
+    let text = ni_texturing_property_get_viewer_string_ov2(e, buffer, filter);
+    add(e, text);
+    e.call(NI_SPRINTF, &args![buffer, 0x40u32, TEXT_COORD_INDEX]);
+    let coordinates = u32::from(e.mem.u16(map + MAP_FLAGS)) & 0xff;
+    let text = e
+        .call(VIEWER_STRING_UNSIGNED, &args![buffer, coordinates])
+        .u32();
+    add(e, text);
+}
+
+// Translated from 00a6bdd0 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 00a6bdd0 - the /GS stack cookie (011c16bc, __security_check_cookie 00ec408c) is not translated
+/// `NiTexturingProperty::GetViewerStrings` (Xbox PDB; thiscall, `RET 4`):
+/// `NiProperty::GetViewerStrings`, the class name, `"ApplyMode "` (formatted into a local
+/// buffer) with flag bits 1-3; then for each map present its name (slots 0 to 7 by the code
+/// jump table at `00a6c5f0`, added through `0096a610`; the bump map also its six floats and
+/// the slot-7 map its float, pushed through `FLD`/`FSTP`; past slot 7
+/// `"MultiTexture Decal Map %d"` formatted with the slot less 8 and added through
+/// `SetSize`/`SetAt`) and the map strings (texture, clamp, filter, coordinate index); then
+/// for each shader map present `"Shader Map"` with its index, `"m_uiID"` with its word at
+/// +0x10 and the map strings, all added with the array `SetAt` inlined. The locals are
+/// kept as in the code: the class-name and count words, the result word, three 64-byte
+/// buffers.
+pub fn ni_texturing_property_get_viewer_strings(e: &mut Engine, this: Ptr, strings: Ptr<NiTArray>) {
+    let at = this.addr();
+    e.call(PROPERTY_GET_VIEWER_STRINGS, &args![this, strings]);
+    // Locals: the result word, the count word, the saved `this`, then the three buffers.
+    e.with_stack(0xcc, |e, frame| {
+        let result = frame.addr();
+        let count_word = frame.addr() + 4;
+        let texture_buffer = frame.addr() + 0xc;
+        let apply_buffer = frame.addr() + 0x4c;
+        let decal_buffer = frame.addr() + 0x8c;
+        let class_name = e.global::<u32>(TEXTURING_PROPERTY_RTTI);
+        let text = e.call(VIEWER_STRING_NAME, &args![class_name]).u32();
+        e.mem.set_u32(count_word, text);
+        add_viewer_string(e, strings, count_word);
+        let count = u32::from(e.mem.u16(at + MAP_COUNT));
+        e.call(NI_SPRINTF, &args![apply_buffer, 0x40u32, TEXT_APPLY_MODE]);
+        e.mem.set_u32(count_word, count);
+        let apply = (u32::from(e.mem.u16(at + FLAGS)) >> 1) & 7;
+        let text = e
+            .call(VIEWER_STRING_SIGNED, &args![apply_buffer, apply])
+            .u32();
+        e.mem.set_u32(result, text);
+        add_viewer_string(e, strings, result);
+        let mut add_through_set_at = |e: &mut Engine, text: u32| {
+            e.mem.set_u32(result, text);
+            add_viewer_string(e, strings, result);
+        };
+        let mut i = 0u32;
+        while i < e.mem.u32(count_word) {
+            let map = e.mem.u32(e.mem.u32(at + MAP_ELEMENTS) + 4 * i);
+            if map != 0 {
+                if i <= 7 {
+                    let text = e
+                        .call(
+                            VIEWER_STRING_UNSIGNED,
+                            &args![TEXT_MAP_NAMES[i as usize], i],
+                        )
+                        .u32();
+                    e.mem.set_u32(result, text);
+                    e.call(STRING_ARRAY_ADD_0096A610, &args![strings, result]);
+                    let floats: &[(u32, u32)] = match i {
+                        5 => &[
+                            (TEXT_BUMP_FLOATS[0], 0x10),
+                            (TEXT_BUMP_FLOATS[1], 0x14),
+                            (TEXT_BUMP_FLOATS[2], 0x18),
+                            (TEXT_BUMP_FLOATS[3], 0x1c),
+                            (TEXT_BUMP_FLOATS[4], 0x20),
+                            (TEXT_BUMP_FLOATS[5], 0x24),
+                        ],
+                        7 => &[(TEXT_PARALLAX_OFFSET, 0x10)],
+                        _ => &[],
+                    };
+                    for (name, offset) in floats {
+                        // `FLD`/`FSTP` into the result word, then again onto the stack.
+                        let value = x87_quiet_bits(e.mem.u32(map + offset));
+                        e.mem.set_u32(result, value);
+                        let pushed = x87_quiet_bits(e.mem.u32(result));
+                        let text = e.call(VIEWER_STRING_FLOAT, &args![*name, pushed]).u32();
+                        e.mem.set_u32(result, text);
+                        e.call(STRING_ARRAY_ADD_0096A610, &args![strings, result]);
+                    }
+                } else {
+                    e.call(
+                        NI_SPRINTF,
+                        &args![decal_buffer, 0x40u32, TEXT_DECAL_MAP, i.wrapping_sub(8)],
+                    );
+                    let text = e
+                        .call(VIEWER_STRING_UNSIGNED, &args![decal_buffer, i])
+                        .u32();
+                    add_through_set_at(e, text);
+                }
+                map_strings(e, map, texture_buffer, &mut add_through_set_at);
+            }
+            i += 1;
+        }
+        let shader = e.mem.u32(at + SHADER_MAPS);
+        if shader == 0 {
+            return;
+        }
+        let shader_count = u32::from(e.mem.u16(shader + 0xa));
+        e.mem.set_u32(count_word, shader_count);
+        e.mem.set_u32(result, 0);
+        let mut add_inline = |e: &mut Engine, text: u32| add_viewer_string_inline(e, strings, text);
+        while e.mem.u32(result) < e.mem.u32(count_word) {
+            let index = e.mem.u32(result);
+            let map = e
+                .mem
+                .u32(e.mem.u32(e.mem.u32(at + SHADER_MAPS) + 4) + 4 * index);
+            if map != 0 {
+                let text = e
+                    .call(VIEWER_STRING_UNSIGNED, &args![TEXT_SHADER_MAP, index])
+                    .u32();
+                add_inline(e, text);
+                let id = e.mem.u32(map + MAP_EXTRA);
+                let text = e.call(VIEWER_STRING_UNSIGNED, &args![TEXT_ID, id]).u32();
+                add_inline(e, text);
+                map_strings(e, map, texture_buffer, &mut add_inline);
+            }
+            e.mem.set_u32(result, index.wrapping_add(1));
+        }
+    });
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
         entry!(0x00a6ab90, ni_texturing_property_scalar_deleting_destructor(Ptr, u32) -> Ptr),
         entry!(0x00a6_b410, ni_texturing_property_sdm_init()),
         entry!(0x00a6_aa40, fn_00a6aa40(Ptr) -> Ptr),
-        entry!(0x00a6_9dd0, fn_00a69dd0(Ptr)),
+        entry!(0x00a6_9dd0, fn_00a69dd0(Ptr) -> Ptr),
         entry!(0x00a6_9e00, fn_00a69e00(Ptr, u32, u32, u32, u32, u32) -> Ptr),
         entry!(0x00a6_9b00, fn_00a69b00(Ptr) -> Ptr),
         entry!(0x00a6_a000, fn_00a6a000(Ptr) -> u32),
@@ -1068,6 +1890,50 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00a6_b640, ni_texturing_property_map_load_binary(Ptr, Ptr)),
         entry!(0x00a6_a240, ni_texturing_property_link_object(Ptr, Ptr)),
         entry!(0x00a6_ad60, ni_texturing_property_load_binary(Ptr, Ptr)),
+        entry!(0x00a6_9b40, fn_00a69b40(Ptr, u32)),
+        entry!(
+            0x00a6_9b90,
+            ni_texturing_property_get_viewer_string(u32, u32) -> u32
+        ),
+        entry!(
+            0x00a6_9c50,
+            ni_texturing_property_get_viewer_string_ov2(u32, u32) -> u32
+        ),
+        entry!(0x00a6_9d80, fn_00a69d80(u32, u32) -> bool),
+        entry!(0x00a6_9e60, fn_00a69e60(Ptr, Ptr) -> bool),
+        entry!(0x00a6_9ed0, fn_00a69ed0(Ptr, Ptr) -> bool),
+        entry!(0x00a6_9f50, fn_00a69f50(Ptr, Ptr) -> bool),
+        entry!(0x00a6_9f80, fn_00a69f80(Ptr, Ptr) -> bool),
+        entry!(0x00a6_9fb0, fn_00a69fb0(Ptr) -> Ptr),
+        entry!(0x00a6_a010, fn_00a6a010(Ptr) -> Ptr),
+        entry!(0x00a6_a050, fn_00a6a050(Ptr, u32) -> Ptr),
+        entry!(0x00a6_a080, fn_00a6a080(Ptr, u32) -> Ptr),
+        entry!(0x00a6_a150, fn_00a6a150(Ptr, u32, u32)),
+        entry!(
+            0x00a6_a560,
+            ni_texturing_property_register_streamables(Ptr, Ptr) -> bool
+        ),
+        entry!(0x00a6_a5f0, ni_texturing_property_is_equal(Ptr, Ptr) -> bool),
+        entry!(
+            0x00a6_a990,
+            fn_00a6a990(Ptr<NiTArray>, u32, u32) -> Ptr<NiTArray>
+        ),
+        entry!(0x00a6_b250, ni_texturing_property_save_binary(Ptr, Ptr)),
+        entry!(0x00a6_b830, ni_texturing_property_map_save_binary(Ptr, Ptr)),
+        entry!(
+            0x00a6_b8c0,
+            ni_texturing_property_bump_map_load_binary(Ptr, Ptr)
+        ),
+        entry!(
+            0x00a6_b9a0,
+            ni_texturing_property_bump_map_save_binary(Ptr, Ptr)
+        ),
+        entry!(0x00a6_ba80, fn_00a6ba80(Ptr, Ptr)),
+        entry!(0x00a6_bac0, fn_00a6bac0(Ptr, Ptr)),
+        entry!(
+            0x00a6_bdd0,
+            ni_texturing_property_get_viewer_strings(Ptr, Ptr<NiTArray>)
+        ),
     ]
 }
 
@@ -1697,5 +2563,541 @@ mod batch_tests {
         assert_eq!(links, vec![2, 0]);
         assert_eq!(e.mem.u16(this + FLAGS), 0xfffa);
         assert_eq!(e.mem.u16(this + 0x26), 1);
+    }
+}
+
+#[cfg(test)]
+mod n020_tests {
+    use super::*;
+    use crate::units::nimain::nimainsdm::test_support::{calls_to, engine_with_counting};
+
+    const VTABLE: u32 = 0x0710_0000;
+    const DELETE_DOUBLE: u32 = 0x0720_0000;
+    const SAVE_DOUBLE: u32 = 0x0720_0010;
+    const REGISTER_DOUBLE: u32 = 0x0720_0020;
+    const TEXTURE_EQUAL_DOUBLE: u32 = 0x0720_0030;
+    const SAVE_LINK_DOUBLE: u32 = 0x0720_0040;
+    const TRANSFER: u32 = 0x0720_0050;
+    const READ: u32 = 0x0720_0060;
+
+    /// The counting engine with one vtable for maps, textures and streams (slot 0 deletes,
+    /// +8 saves, +0x30 saves a link, +0x54 registers, +0x5C compares the first words).
+    fn engine() -> Engine {
+        let mut e = engine_with_counting();
+        let mut slots = vec![0u32; 0x60 / 4];
+        slots[0] = DELETE_DOUBLE;
+        slots[MAP_SAVE_BINARY_SLOT as usize / 4] = SAVE_DOUBLE;
+        slots[STREAM_SAVE_LINK_ID_SLOT as usize / 4] = SAVE_LINK_DOUBLE;
+        slots[TEXTURE_REGISTER_STREAMABLES_SLOT as usize / 4] = REGISTER_DOUBLE;
+        slots[TEXTURE_IS_EQUAL_SLOT as usize / 4] = TEXTURE_EQUAL_DOUBLE;
+        e.put_vtable(VTABLE, &slots);
+        for addr in [
+            DELETE_DOUBLE,
+            SAVE_DOUBLE,
+            REGISTER_DOUBLE,
+            SAVE_LINK_DOUBLE,
+        ] {
+            e.register(addr, |_, _| Ret::default());
+        }
+        e.register(TEXTURE_EQUAL_DOUBLE, |e, a| {
+            u32::from(a[1] != 0 && e.mem.u32(a[0] + 0x10) == e.mem.u32(a[1] + 0x10)).into_ret()
+        });
+        e.register(TRANSFER, |e, a| {
+            assert_eq!(e.mem.u32(a[3]), a[2]);
+            a[2].into_ret()
+        });
+        e.register(READ, |e, a| {
+            assert_eq!(e.mem.u32(a[3]), a[2]);
+            for i in 0..a[2] {
+                e.mem.set_u8(a[1] + i, 0);
+            }
+            a[2].into_ret()
+        });
+        e.map(0x0101_6000, 0x1000);
+        e.mem.set_u32(TRANSFORM_CENTRE, 0x3f00_0000);
+        e
+    }
+
+    fn object(e: &mut Engine, size: u32) -> u32 {
+        let block = e.mem.alloc(size);
+        e.mem.set_u32(block, VTABLE);
+        block
+    }
+
+    /// A property with `count` map slots holding `maps`.
+    fn property(e: &mut Engine, maps: &[u32]) -> u32 {
+        let this = object(e, 0x30);
+        let elements = e.mem.alloc(4 * maps.len() as u32 + 4);
+        for (i, m) in maps.iter().enumerate() {
+            e.mem.set_u32(elements + 4 * i as u32, *m);
+        }
+        e.mem.set_u32(this + MAP_ELEMENTS, elements);
+        e.mem.set_u16(this + MAP_CAPACITY, maps.len() as u16);
+        e.mem.set_u16(this + MAP_COUNT, maps.len() as u16);
+        e.mem.set_u16(this + MAPS + 0xe, 2);
+        this
+    }
+
+    fn stream(e: &mut Engine) -> u32 {
+        let stream = object(e, 0x5c4);
+        let binary = e.mem.alloc(0x10);
+        e.mem.set_u32(binary + 8, READ);
+        e.mem.set_u32(binary + 0xc, TRANSFER);
+        e.mem.set_u32(stream + 0x24c, binary);
+        e.mem.set_u32(stream + 0x250, binary);
+        stream
+    }
+
+    #[test]
+    fn flag_bit_0_follows_the_word_and_the_later_maps() {
+        let mut e = engine();
+        let this = property(&mut e, &[1, 0, 0]);
+        e.mem.set_u16(this + FLAGS, 0x10);
+        e.call(0x00a6_9b40, &args![this, 0u32]);
+        assert_eq!(e.mem.u16(this + FLAGS), 0x10);
+        e.call(0x00a6_9b40, &args![this, 7u32]);
+        assert_eq!(e.mem.u16(this + FLAGS), 0x11);
+        e.call(0x00a6_9b40, &args![this, 0u32]);
+        assert_eq!(e.mem.u16(this + FLAGS), 0x10);
+        e.mem.set_u32(e.mem.u32(this + MAP_ELEMENTS) + 8, 5);
+        e.call(0x00a6_9b40, &args![this, 0u32]);
+        assert_eq!(e.mem.u16(this + FLAGS), 0x11);
+    }
+
+    #[test]
+    fn mode_strings_pick_their_formats() {
+        let mut e = engine();
+        e.register(ALLOCATE_BLOCK, |_, a| (0x0c00_0000 + a[0]).into_ret());
+        e.register(NI_SPRINTF, |_, _| Ret::default());
+        let name = e.mem.alloc(4);
+        e.mem.write(name, b"abc");
+        e.call_log = Some(vec![]);
+        for mode in 0..5u32 {
+            e.call(0x00a6_9b90, &args![name, mode]);
+        }
+        for mode in [0u32, 7, 8] {
+            e.call(0x00a6_9c50, &args![name, mode]);
+        }
+        let formats: Vec<u32> = calls_to(&e, NI_SPRINTF).iter().map(|w| w[2]).collect();
+        let mut expected = CLAMP_FORMATS.to_vec();
+        expected.extend([
+            FORMAT_UNKNOWN,
+            FILTER_FORMATS[0],
+            FILTER_FORMATS[7],
+            FORMAT_UNKNOWN,
+        ]);
+        assert_eq!(formats, expected);
+        let sizes: Vec<u32> = calls_to(&e, ALLOCATE_BLOCK).iter().map(|w| w[0]).collect();
+        assert_eq!(sizes, vec![0x17, 0x17, 0x17, 0x17, 0x17, 0x21, 0x21, 0x21]);
+    }
+
+    #[test]
+    fn slot_name_lookup_matches_pointers_or_names() {
+        let mut e = engine();
+        e.register(NI_STRICMP, |e, a| {
+            u32::from(e.mem.u32(a[0]) != e.mem.u32(a[1])).into_ret()
+        });
+        for (i, (slot, _)) in TEXTURE_SLOT_NAMES.iter().enumerate() {
+            let s = e.mem.alloc(4);
+            e.mem.set_u32(s, 0x41 + i as u32);
+            e.mem.set_u32(*slot, s);
+        }
+        let holder = e.mem.alloc(8);
+        let copy = e.mem.alloc(4);
+        e.mem.set_u32(copy, 0x41 + 9);
+        e.mem.set_u32(holder, copy);
+        assert_eq!(
+            e.call(0x00a6_9d80, &args![holder, holder + 4]).u32() & 0xff,
+            1
+        );
+        assert_eq!(e.mem.u32(holder + 4), 9);
+        e.mem.set_u32(holder, e.mem.u32(TEXTURE_SLOT_NAMES[4].0));
+        assert_eq!(
+            e.call(0x00a6_9d80, &args![holder, holder + 4]).u32() & 0xff,
+            1
+        );
+        assert_eq!(e.mem.u32(holder + 4), 4);
+        e.mem.set_u32(copy, 0x20);
+        e.mem.set_u32(holder, copy);
+        assert_eq!(
+            e.call(0x00a6_9d80, &args![holder, holder + 4]).u32() & 0xff,
+            0
+        );
+    }
+
+    #[test]
+    fn map_equality_checks_texture_flags_and_transform() {
+        let mut e = engine();
+        e.register(TRANSFORM_NOT_EQUAL_00A88C60, |e, a| {
+            u32::from(e.mem.u32(a[0]) != e.mem.u32(a[1])).into_ret()
+        });
+        let a = object(&mut e, 0x28);
+        let b = object(&mut e, 0x28);
+        assert_eq!(e.call(0x00a6_9e60, &args![a, b]).u32() & 0xff, 1);
+        let ta = object(&mut e, 0x14);
+        let tb = object(&mut e, 0x14);
+        e.mem.set_u32(a + MAP_TEXTURE, ta);
+        assert_eq!(e.call(0x00a6_9e60, &args![a, b]).u32() & 0xff, 0);
+        e.mem.set_u32(b + MAP_TEXTURE, tb);
+        assert_eq!(e.call(0x00a6_9e60, &args![a, b]).u32() & 0xff, 1);
+        e.mem.set_u32(tb + 0x10, 1);
+        assert_eq!(e.call(0x00a6_9e60, &args![a, b]).u32() & 0xff, 0);
+        e.mem.set_u32(tb + 0x10, 0);
+        e.mem.set_u16(b + MAP_FLAGS, 3);
+        assert_eq!(e.call(0x00a6_9e60, &args![a, b]).u32() & 0xff, 0);
+        e.mem.set_u16(b + MAP_FLAGS, 0);
+        let xa = e.mem.alloc(4);
+        let xb = e.mem.alloc(4);
+        e.mem.set_u32(a + MAP_TRANSFORM, xa);
+        assert_eq!(e.call(0x00a6_9e60, &args![a, b]).u32() & 0xff, 0);
+        e.mem.set_u32(b + MAP_TRANSFORM, xb);
+        assert_eq!(e.call(0x00a6_9e60, &args![a, b]).u32() & 0xff, 1);
+        e.mem.set_u32(xb, 9);
+        assert_eq!(e.call(0x00a6_9e60, &args![a, b]).u32() & 0xff, 0);
+        // The derived maps add their own fields.
+        e.mem.set_u32(xb, 0);
+        e.mem.set_u32(a + 0x24, 0x7fc0_0000);
+        e.mem.set_u32(b + 0x24, 0x7fc0_0000);
+        assert_eq!(e.call(0x00a6_9ed0, &args![a, b]).u32() & 0xff, 0);
+        e.mem.set_u32(a + 0x24, 0x8000_0000);
+        e.mem.set_u32(b + 0x24, 0);
+        assert_eq!(e.call(0x00a6_9ed0, &args![a, b]).u32() & 0xff, 1);
+        assert_eq!(e.call(0x00a6_9f80, &args![a, b]).u32() & 0xff, 1);
+        e.mem.set_u32(a + 0x10, 0x3f80_0000);
+        assert_eq!(e.call(0x00a6_9f80, &args![a, b]).u32() & 0xff, 0);
+        assert_eq!(e.call(0x00a6_9f50, &args![a, b]).u32() & 0xff, 0);
+        e.mem.set_u32(b + 0x10, 0x3f80_0000);
+        assert_eq!(e.call(0x00a6_9f50, &args![a, b]).u32() & 0xff, 1);
+    }
+
+    #[test]
+    fn map_constructors_set_their_defaults() {
+        let mut e = engine();
+        let bump = e.mem.alloc(0x28);
+        e.mem.set_u16(bump + MAP_FLAGS, 0xffff);
+        assert_eq!(e.call(0x00a6_9fb0, &args![bump]).u32(), bump);
+        assert_eq!(e.mem.u32(bump), SLOT_5_MAP_VTABLE);
+        assert_eq!(e.mem.u16(bump + MAP_FLAGS), 0x3100);
+        let floats: Vec<u32> = (0..6).map(|i| e.mem.u32(bump + 0x10 + 4 * i)).collect();
+        assert_eq!(floats, vec![0x3f80_0000, 0, 0x3f00_0000, 0, 0, 0x3f00_0000]);
+        let seven = e.mem.alloc(0x14);
+        assert_eq!(e.call(0x00a6_a010, &args![seven]).u32(), seven);
+        assert_eq!(e.mem.u32(seven), SLOT_7_MAP_VTABLE);
+        assert_eq!(e.mem.u32(seven + 0x10), 0x3f00_0000);
+        assert_eq!(e.mem.u16(seven + MAP_FLAGS), 0x3100);
+    }
+
+    #[test]
+    fn map_array_destructors_free_the_elements() {
+        let mut e = engine();
+        e.register(FREE_BLOCK, |_, _| Ret::default());
+        e.register(MEMORY_FREE, |_, _| Ret::default());
+        let array = e.mem.alloc(0x10);
+        e.mem.set_u32(array + 4, 0x0abc_0000);
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x00a6_a050, &args![array, 1u32]).u32(), array);
+        assert_eq!(e.mem.u32(array), MAP_ARRAY_BASE_VTABLE);
+        e.call(0x00a6_a080, &args![array, 0u32]);
+        assert_eq!(e.mem.u32(array), SHADER_MAP_ARRAY_BASE_VTABLE);
+        assert_eq!(calls_to(&e, FREE_BLOCK), vec![vec![0x0abc_0000]; 2]);
+        assert_eq!(calls_to(&e, MEMORY_FREE), vec![vec![MEMORY_MANAGER, array]]);
+    }
+
+    #[test]
+    fn decal_maps_count_replace_and_grow() {
+        let mut e = engine();
+        e.register(SET_ELEMENT, |e, a| {
+            let base = e.mem.u32(a[0] + 4);
+            let value = e.mem.u32(a[2]);
+            e.mem.set_u32(base + 4 * a[1], value);
+            if a[1] >= u32::from(e.mem.u16(a[0] + 0xa)) {
+                e.mem.set_u16(a[0] + 0xa, a[1] as u16 + 1);
+            }
+            Ret::default()
+        });
+        e.register(ARRAY_SET_SIZE, |e, a| {
+            let base = e.mem.alloc(4 * a[1]);
+            let old = e.mem.u32(a[0] + 4);
+            for i in 0..u32::from(e.mem.u16(a[0] + 0xa)) {
+                let v = e.mem.u32(old + 4 * i);
+                e.mem.set_u32(base + 4 * i, v);
+            }
+            e.mem.set_u32(a[0] + 4, base);
+            e.mem.set_u16(a[0] + 8, a[1] as u16);
+            Ret::default()
+        });
+        let old = object(&mut e, 0x10);
+        let this = property(&mut e, &[0, 0, 0, 0, 0, 0, 0, 0, old]);
+        e.mem.set_u16(this + FLAGS, 0x0010);
+        e.call_log = Some(vec![]);
+        // Replace decal 0 with nothing: the count drops, the old map is deleted.
+        e.call(0x00a6_a150, &args![this, 0u32, 0u32]);
+        assert_eq!(e.mem.u16(this + FLAGS), 0x0000);
+        assert_eq!(calls_to(&e, DELETE_DOUBLE), vec![vec![old, 1]]);
+        // A new decal 1 past the size: the array grows, the count goes up, bit 0 is set.
+        let new = object(&mut e, 0x10);
+        e.call(0x00a6_a150, &args![this, 1u32, new]);
+        assert_eq!(e.mem.u16(this + FLAGS), 0x0011);
+        assert_eq!(e.mem.u32(e.mem.u32(this + MAP_ELEMENTS) + 4 * 9), new);
+        assert_eq!(calls_to(&e, ARRAY_SET_SIZE), vec![vec![this + MAPS, 2 + 9]]);
+        // A null decal 0 over a null keeps the count.
+        e.call(0x00a6_a150, &args![this, 0u32, 0u32]);
+        assert_eq!(e.mem.u16(this + FLAGS), 0x0011);
+    }
+
+    #[test]
+    fn register_streamables_walks_maps_and_shader_maps() {
+        let mut e = engine();
+        e.register(BASE_REGISTER_STREAMABLES_00A62130, |_, _| 1u32.into_ret());
+        let texture = object(&mut e, 0x14);
+        let map = object(&mut e, 0x10);
+        e.mem.set_u32(map + MAP_TEXTURE, texture);
+        let bare = object(&mut e, 0x10);
+        let this = property(&mut e, &[map, 0, bare]);
+        let shader_texture = object(&mut e, 0x14);
+        let shader_map = object(&mut e, 0x14);
+        e.mem.set_u32(shader_map + MAP_TEXTURE, shader_texture);
+        let shaders = e.mem.alloc(0x10);
+        let shader_elements = e.mem.alloc(4);
+        e.mem.set_u32(shader_elements, shader_map);
+        e.mem.set_u32(shaders + 4, shader_elements);
+        e.mem.set_u16(shaders + 0xa, 1);
+        e.mem.set_u32(this + SHADER_MAPS, shaders);
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x00a6_a560, &args![this, 0x50u32]).u32() & 0xff, 1);
+        assert_eq!(
+            calls_to(&e, REGISTER_DOUBLE),
+            vec![vec![texture, 0x50], vec![shader_texture, 0x50]]
+        );
+        e.register(BASE_REGISTER_STREAMABLES_00A62130, |_, _| 0u32.into_ret());
+        assert_eq!(e.call(0x00a6_a560, &args![this, 0x50u32]).u32() & 0xff, 0);
+    }
+
+    #[test]
+    fn property_equality_uses_the_slot_comparisons() {
+        let mut e = engine();
+        e.register(BASE_IS_EQUAL_00A62140, |_, _| 1u32.into_ret());
+        let make = |e: &mut Engine, extra: u32| {
+            let m = object(e, 0x28);
+            e.mem.set_u32(m + 0x10, extra);
+            m
+        };
+        let a_maps: Vec<u32> = (0..8)
+            .map(|i| if i == 1 { 0 } else { make(&mut e, 0) })
+            .collect();
+        let b_maps: Vec<u32> = (0..8)
+            .map(|i| if i == 1 { 0 } else { make(&mut e, 0) })
+            .collect();
+        let a = property(&mut e, &a_maps);
+        let b = property(&mut e, &b_maps);
+        assert_eq!(e.call(0x00a6_a5f0, &args![a, b]).u32() & 0xff, 1);
+        // Slot 7 compares its float.
+        e.mem.set_u32(b_maps[7] + 0x10, 0x3f80_0000);
+        assert_eq!(e.call(0x00a6_a5f0, &args![a, b]).u32() & 0xff, 0);
+        e.mem.set_u32(b_maps[7] + 0x10, 0);
+        // Slot 5 compares its six floats.
+        e.mem.set_u32(b_maps[5] + 0x20, 0x3f80_0000);
+        assert_eq!(e.call(0x00a6_a5f0, &args![a, b]).u32() & 0xff, 0);
+        e.mem.set_u32(b_maps[5] + 0x20, 0);
+        // Only one side has shader maps.
+        let shaders = e.mem.alloc(0x10);
+        e.mem.set_u32(a + SHADER_MAPS, shaders);
+        assert_eq!(e.call(0x00a6_a5f0, &args![a, b]).u32() & 0xff, 0);
+        let other_shaders = e.mem.alloc(0x10);
+        e.mem.set_u32(b + SHADER_MAPS, other_shaders);
+        assert_eq!(e.call(0x00a6_a5f0, &args![a, b]).u32() & 0xff, 1);
+        e.mem.set_u16(b + FLAGS, 1);
+        assert_eq!(e.call(0x00a6_a5f0, &args![a, b]).u32() & 0xff, 0);
+    }
+
+    #[test]
+    fn shader_map_array_constructor_allocates_its_elements() {
+        let mut e = engine();
+        e.register(ALLOCATE_BLOCK, |_, a| (0x0d00_0000 + a[0]).into_ret());
+        let array = e.mem.alloc(0x10);
+        e.mem.set_u16(array + 0xa, 9);
+        assert_eq!(
+            e.call(0x00a6_a990, &args![array, 0x1_0003u32, 2u32]).u32(),
+            array
+        );
+        assert_eq!(e.mem.u32(array), SHADER_MAP_ARRAY_VTABLE);
+        assert_eq!(e.mem.u32(array + 4), 0x0d00_000c);
+        assert_eq!(
+            (
+                e.mem.u16(array + 8),
+                e.mem.u16(array + 0xa),
+                e.mem.u16(array + 0xe)
+            ),
+            (3, 0, 2)
+        );
+        e.call(0x00a6_a990, &args![array, 0x1_0000u32, 2u32]);
+        assert_eq!(e.mem.u32(array + 4), 0);
+    }
+
+    #[test]
+    fn save_binary_writes_flags_counts_and_present_maps() {
+        let mut e = engine();
+        e.register(BASE_SAVE_BINARY_00A5D7B0, |_, _| Ret::default());
+        let map = object(&mut e, 0x10);
+        let this = property(&mut e, &[map, 0]);
+        let s = stream(&mut e);
+        e.call_log = Some(vec![]);
+        e.call(0x00a6_b250, &args![this, s]);
+        let sizes: Vec<u32> = calls_to(&e, TRANSFER).iter().map(|w| w[2]).collect();
+        // Flags, map count, two presence bytes, shader count (no array).
+        assert_eq!(sizes, vec![2, 4, 1, 1, 4]);
+        assert_eq!(calls_to(&e, SAVE_DOUBLE), vec![vec![map, s]]);
+    }
+
+    #[test]
+    fn map_save_binary_writes_link_flags_and_transform_byte() {
+        let mut e = engine();
+        e.register(TRANSFORM_SAVE_BINARY_00A88F80, |_, _| Ret::default());
+        let map = object(&mut e, 0x10);
+        e.mem.set_u32(map + MAP_TEXTURE, 0x0abc_0000);
+        let s = stream(&mut e);
+        e.call_log = Some(vec![]);
+        e.call(0x00a6_b830, &args![map, s]);
+        assert_eq!(calls_to(&e, SAVE_LINK_DOUBLE), vec![vec![s, 0x0abc_0000]]);
+        assert!(calls_to(&e, TRANSFORM_SAVE_BINARY_00A88F80).is_empty());
+        e.mem.set_u32(map + MAP_TRANSFORM, 0x0def_0000);
+        e.call(0x00a6_b830, &args![map, s]);
+        assert_eq!(
+            calls_to(&e, TRANSFORM_SAVE_BINARY_00A88F80),
+            vec![vec![0x0def_0000, s]]
+        );
+        let sizes: Vec<u32> = calls_to(&e, TRANSFER).iter().map(|w| w[2]).collect();
+        assert_eq!(sizes, vec![2, 1, 2, 1]);
+    }
+
+    #[test]
+    fn derived_maps_load_and_save_their_extra_fields() {
+        let mut e = engine();
+        e.register(STREAM_00A645B0, |_, _| Ret::default());
+        e.register(TRANSFORM_SAVE_BINARY_00A88F80, |_, _| Ret::default());
+        let s = stream(&mut e);
+        // A current version: the flag word, then no transform.
+        e.mem.set_u32(s + 0xd8, 0x1402_0007);
+        let map = object(&mut e, 0x28);
+        e.call_log = Some(vec![]);
+        e.call(0x00a6_b8c0, &args![map, s]);
+        e.call(0x00a6_b9a0, &args![map, s]);
+        e.call(0x00a6_ba80, &args![map, s]);
+        e.call(0x00a6_bac0, &args![map, s]);
+        let fields: Vec<(u32, u32)> = e
+            .call_log
+            .iter()
+            .flatten()
+            .filter(|(a, _)| *a == READ || *a == TRANSFER)
+            .map(|(_, w)| w)
+            .filter(|w| (map + 0x10..map + 0x28).contains(&w[1]))
+            .map(|w| (w[1] - map, w[2]))
+            .collect();
+        let six: Vec<(u32, u32)> = (0..6).map(|i| (0x10 + 4 * i, 4)).collect();
+        let mut expected = six.clone();
+        expected.extend(six);
+        expected.extend([(0x10, 4), (0x10, 4)]);
+        assert_eq!(fields, expected);
+    }
+
+    #[test]
+    fn viewer_strings_list_the_maps_and_shader_maps() {
+        let mut e = engine();
+        e.mem.set_u32(TEXTURING_PROPERTY_RTTI, 0x0104_0000);
+        e.map(0x0109_c000, 0x1000);
+        e.register(PROPERTY_GET_VIEWER_STRINGS, |_, _| Ret::default());
+        e.register(NI_SPRINTF, |_, _| Ret::default());
+        e.register(VIEWER_STRING_NAME, |_, a| (a[0] + 1).into_ret());
+        e.register(VIEWER_STRING_SIGNED, |_, a| (0x0100_0000 + a[1]).into_ret());
+        e.register(VIEWER_STRING_UNSIGNED, |_, a| {
+            (0x0200_0000 + (a[1] & 0xffff)).into_ret()
+        });
+        e.register(VIEWER_STRING_FLOAT, |_, a| {
+            (0x0300_0000 + (a[1] & 0xffff)).into_ret()
+        });
+        e.register(VIEWER_STRING_POINTER, |_, a| {
+            (0x0400_0000 + (a[1] & 0xffff)).into_ret()
+        });
+        e.register(ALLOCATE_BLOCK, |_, a| (0x0500_0000 + a[0]).into_ret());
+        e.register(STRING_ARRAY_SET_SIZE, |e, a| {
+            let base = e.mem.alloc(4 * a[1]);
+            let old = e.mem.u32(a[0] + 4);
+            for i in 0..u32::from(e.mem.u16(a[0] + 0xa)) {
+                let v = e.mem.u32(old + 4 * i);
+                e.mem.set_u32(base + 4 * i, v);
+            }
+            e.mem.set_u32(a[0] + 4, base);
+            e.mem.set_u16(a[0] + 8, a[1] as u16);
+            Ret::default()
+        });
+        let add = |e: &mut Engine, a: &[u32], index: u32| {
+            let base = e.mem.u32(a[0] + 4);
+            let value = e.mem.u32(a[a.len() - 1]);
+            e.mem.set_u32(base + 4 * index, value);
+            e.mem.set_u16(a[0] + 0xa, index as u16 + 1);
+        };
+        e.register_double(SET_ELEMENT, move |e, a| {
+            add(e, a, a[1]);
+            Ret::default()
+        });
+        e.register_double(STRING_ARRAY_ADD_0096A610, move |e, a| {
+            let index = u32::from(e.mem.u16(a[0] + 0xa));
+            if index >= u32::from(e.mem.u16(a[0] + 8)) {
+                let base = e.mem.alloc(4 * (index + 8));
+                let old = e.mem.u32(a[0] + 4);
+                for i in 0..index {
+                    let v = e.mem.u32(old + 4 * i);
+                    e.mem.set_u32(base + 4 * i, v);
+                }
+                e.mem.set_u32(a[0] + 4, base);
+                e.mem.set_u16(a[0] + 8, index as u16 + 8);
+            }
+            add(e, a, index);
+            Ret::default()
+        });
+        let strings = e.mem.alloc(0x10);
+        let first_block = e.mem.alloc(4);
+        e.mem.set_u32(strings + 4, first_block);
+        e.mem.set_u16(strings + 8, 1);
+        e.mem.set_u16(strings + 0xe, 4);
+        // Slot 7 (one float) and slot 9 (a decal), then one shader map.
+        let seven = object(&mut e, 0x14);
+        e.mem.set_u32(seven + 0x10, 0x3f80_0007);
+        e.mem.set_u16(seven + MAP_FLAGS, 0x2301);
+        let decal = object(&mut e, 0x10);
+        let mut maps = vec![0u32; 10];
+        maps[7] = seven;
+        maps[9] = decal;
+        let this = property(&mut e, &maps);
+        e.mem.set_u16(this + FLAGS, 0b1010);
+        let shader = object(&mut e, 0x14);
+        e.mem.set_u32(shader + 0x10, 0x55);
+        let shaders = e.mem.alloc(0x10);
+        let elements = e.mem.alloc(4);
+        e.mem.set_u32(elements, shader);
+        e.mem.set_u32(shaders + 4, elements);
+        e.mem.set_u16(shaders + 0xa, 1);
+        e.mem.set_u32(this + SHADER_MAPS, shaders);
+        e.call(0x00a6_bdd0, &args![this, strings]);
+        let count = u32::from(e.mem.u16(strings + 0xa));
+        let base = e.mem.u32(strings + 4);
+        let words: Vec<u32> = (0..count).map(|i| e.mem.u32(base + 4 * i)).collect();
+        // The clamp and filter strings are buffers of the (empty) name length plus 0x14
+        // and 0x1e.
+        let tail = |coordinates: u32| {
+            vec![
+                0x0400_0000,
+                0x0500_0014,
+                0x0500_001e,
+                0x0200_0000 + coordinates,
+            ]
+        };
+        let mut expected = vec![0x0104_0001, 0x0100_0005, 0x0200_0007, 0x0300_0007];
+        expected.extend(tail(1));
+        expected.push(0x0200_0009);
+        expected.extend(tail(0));
+        expected.extend([0x0200_0000, 0x0200_0055]);
+        expected.extend(tail(0));
+        assert_eq!(words, expected);
     }
 }

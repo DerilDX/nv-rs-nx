@@ -44,9 +44,43 @@ pub fn fn_00ba8aa0(e: &mut Engine, this: Ptr, dest: u32) {
     e.vcall(this.addr(), 0x98, &args![dest]);
 }
 
+/// Where `fn_00ba8a80` jumps (`00a99e40`).
+const REGISTER_STREAMABLES_00A99E40: u32 = 0x00a9_9e40;
+
+// Translated from 00ba8a80 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map: a jump to `00a99e40` (vtable slot +0x54 of five shader-property
+/// vtables, `RegisterStreamables` in the Xbox PDB's slot list, and the target of `00bc3770`):
+/// `thiscall`, one word (the stream), passed on unchanged; answers the target's `EAX`.
+pub fn fn_00ba8a80(e: &mut Engine, this: Ptr, stream: u32) -> u32 {
+    e.call(REGISTER_STREAMABLES_00A99E40, &args![this, stream])
+        .u32()
+}
+
+// Translated from 00ba8a90 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map: a vtable slot (+0xa0 of `DistantLODShaderProperty`'s vtable
+/// `010adad0` and six others, `GetRenderPasses` in the Xbox PDB's slot list; `thiscall`, six
+/// words it does not read): answers 0 (`XOR EAX,EAX; RET 0x18`).
+pub fn fn_00ba8a90(
+    _e: &mut Engine,
+    _this: Ptr,
+    _unused_1: u32,
+    _unused_2: u32,
+    _unused_3: u32,
+    _unused_4: u32,
+    _unused_5: u32,
+    _unused_6: u32,
+) -> u32 {
+    0
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x00ba_8a80, fn_00ba8a80(Ptr, u32) -> u32),
+        entry!(
+            0x00ba_8a90,
+            fn_00ba8a90(Ptr, u32, u32, u32, u32, u32, u32) -> u32
+        ),
         entry!(0x00ba_8a00, bs_shader_texture_set_create_object() -> u32),
         entry!(0x00ba_8a70, fn_00ba8a70(Ptr, u32)),
         entry!(0x00ba_8aa0, fn_00ba8aa0(Ptr, u32)),
@@ -111,5 +145,30 @@ mod tests {
         e.call_log = Some(vec![]);
         e.call(0x00ba_8aa0, &args![this, 0x6000u32]);
         assert_eq!(calls(&e, 0x0f00_0098), vec![vec![this, 0x6000]]);
+    }
+}
+
+#[cfg(test)]
+mod n013_tests {
+    use super::*;
+
+    #[test]
+    fn fn_00ba8a80_jumps_on() {
+        let mut e = Engine::new();
+        e.register(REGISTER_STREAMABLES_00A99E40, |_, a| (a[1] + 1).into_ret());
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x00ba_8a80, &args![0x10u32, 0x20u32]).u32(), 0x21);
+        let log = e.call_log.take().unwrap();
+        assert!(log.contains(&(REGISTER_STREAMABLES_00A99E40, vec![0x10, 0x20])));
+    }
+
+    #[test]
+    fn fn_00ba8a90_answers_zero() {
+        let mut e = Engine::new();
+        let r = e.call(
+            0x00ba_8a90,
+            &args![1u32, 2u32, 3u32, 4u32, 5u32, 6u32, 7u32],
+        );
+        assert_eq!(r.u32(), 0);
     }
 }

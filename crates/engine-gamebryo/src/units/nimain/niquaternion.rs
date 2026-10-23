@@ -358,9 +358,202 @@ pub fn fn_00a6e430(
     });
 }
 
+/// `NiQuaternion::operator*` (`00a2bcf0`, unit `nitcbrotkey.cpp`; `thiscall` (result,
+/// other), answers `result`): the quaternion product.
+const QUATERNION_PRODUCT: u32 = 0x00a2_bcf0;
+/// `00a88970` (unnamed, `cdecl` (result, quaternion)): the quaternion exponential the
+/// intermediate point applies.
+const QUATERNION_EXP: u32 = 0x00a8_8970;
+/// `double` -0.25.
+const MINUS_QUARTER_DOUBLE: u32 = 0x0109_c9e0;
+/// `float` 1e-8 (`0x322bcc77`): components at most this small snap to zero.
+const SNAP_EPSILON: u32 = 0x0109_afc4;
+/// `00aa1070` (unnamed, `cdecl`, one word): allocates the text of a viewer string.
+const ALLOCATE_TEXT: u32 = 0x00aa_1070;
+/// `NiSprintf` (`00a305b0`, `cdecl`: buffer, size, format, then the format's arguments).
+const NI_SPRINTF: u32 = 0x00a3_05b0;
+/// `"%s: (w=%g,x=%g,y=%g,z=%g)"`.
+const FORMAT_QUATERNION: u32 = 0x0109_c9e8;
+
+// Translated from 00a6dd50 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`cdecl`, hidden `result` first): by its body the squad
+/// intermediate point of `middle` between `first` and `last`:
+/// `middle * exp(-0.25 * (log(conj(middle) * last) + log(conj(middle) * first)))`, with the
+/// products from `00a2bcf0`, the logarithm [`fn_00a6dc90`] and the exponential `00a88970`.
+/// The locals live in one stack block laid out as the exe's frame (the conjugate, later
+/// the sum, at +0, the scaled sum at +0x10, the exponential at +0x20, the two products at
+/// +0x30 and +0x50, their logarithms at +0x40 and +0x60). Answers `result`.
+pub fn fn_00a6dd50(
+    e: &mut Engine,
+    result: Ptr<NiQuaternion>,
+    first: Ptr<NiQuaternion>,
+    middle: Ptr<NiQuaternion>,
+    last: Ptr<NiQuaternion>,
+) -> Ptr<NiQuaternion> {
+    e.with_stack(0x70, |e, block| {
+        let sum = block.addr();
+        let scaled = sum + 0x10;
+        let exponential = sum + 0x20;
+        let m = middle.addr();
+        let w = ld(e, m);
+        fst(e, sum, w);
+        for i in 1..4 {
+            let v = ld(e, m + 4 * i);
+            fst(e, sum + 4 * i, -v);
+        }
+        let product = e
+            .call(QUATERNION_PRODUCT, &args![sum, sum + 0x30, last])
+            .u32();
+        let log_last = fn_00a6dc90(e, Ptr::new(sum + 0x40), Ptr::new(product)).addr();
+        let product = e
+            .call(QUATERNION_PRODUCT, &args![sum, sum + 0x50, first])
+            .u32();
+        let log_first = fn_00a6dc90(e, Ptr::new(sum + 0x60), Ptr::new(product)).addr();
+        for i in 0..4 {
+            let v = x87_add(ld(e, log_last + 4 * i), m32(e, log_first + 4 * i));
+            fst(e, sum + 4 * i, v);
+        }
+        // FLD qword -0.25 stays in ST0: `FMUL ST(1),ST(0)` for W (DC C9), `FMUL
+        // ST(0),ST(1)` for X and Y, and a float memory operand for Z.
+        let quarter = x87_load64(e.mem.u64(MINUS_QUARTER_DOUBLE));
+        let v = x87_mul(ld(e, sum), quarter);
+        fst(e, scaled, v);
+        for i in 1..3 {
+            let v = x87_mul(ld(e, sum + 4 * i), quarter);
+            fst(e, scaled + 4 * i, v);
+        }
+        let v = x87_mul(quarter, m32(e, sum + 0xc));
+        fst(e, scaled + 0xc, v);
+        e.call(QUATERNION_EXP, &args![exponential, scaled]);
+        e.call(QUATERNION_PRODUCT, &args![middle, result, exponential]);
+    });
+    result
+}
+
+// Translated from 00a6de50 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiQuaternion::ToAngleAxis` (Xbox PDB): the vector part's length `sqrt(y*y + x*x + z*z)`
+/// (CRT `sqrt`, stored as a float); when 0.001 is above it (ordered) the angle and the axis
+/// are zero. Otherwise the angle is twice `acos(W)` (pi for `W <= -1` or NaN, 0 for
+/// `W >= 1`, each stored as a float first) and the axis the vector part times
+/// `1 / length` (stored as a float).
+pub fn niquaternion_to_angle_axis(e: &mut Engine, this: Ptr<NiQuaternion>, angle: Ptr, axis: Ptr) {
+    let q = this.addr();
+    let y = ld(e, q + 8);
+    let x = ld(e, q + 4);
+    let z = ld(e, q + 0xc);
+    let sum = x87_add(x87_mul(y, y), x87_mul(x, x));
+    let length_squared = spill(x87_add(sum, x87_mul(z, z)));
+    let length = x87_store32(spill(e.call(CRT_SQRT, &args![length_squared]).f64()));
+    // FLD 0.001; FCOMP dword length; TEST AH,0x41: below, equal or unordered go on.
+    if ld(e, SINE_EPSILON) > x87_m32(length) {
+        fst(e, angle.addr(), 0.0);
+        for i in 0..3 {
+            fst(e, axis.addr() + 4 * i, 0.0);
+        }
+        return;
+    }
+    let w = spill(ld(e, q));
+    // FCOM qword -1.0; TEST AH,0x41: below, equal or unordered take pi; then FLD1;
+    // FCOMP: 1 below or equal (or unordered) takes 0.
+    let half_angle = if !(w > double(e, MINUS_ONE_DOUBLE)) {
+        ld(e, PI_FLOAT)
+    } else if !(1.0 > w) {
+        0.0
+    } else {
+        spill(e.call(CRT_ACOS, &args![w]).f64())
+    };
+    let a = spill(half_angle);
+    fst(e, angle.addr(), x87_add(a, a));
+    let inverse = spill(x87_div(1.0, x87_load32(length)));
+    let v = x87_mul(ld(e, q + 4), inverse);
+    fst(e, axis.addr(), v);
+    let v = x87_mul(inverse, m32(e, q + 8));
+    fst(e, axis.addr() + 4, v);
+    let v = x87_mul(inverse, m32(e, q + 0xc));
+    fst(e, axis.addr() + 8, v);
+}
+
+// Translated from 00a6e0f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`thiscall`, no stack word): snaps tiny components to zero.
+/// For `X`, `Y`, `Z`, then `W`: when `|c|` (stored as a float) is not above 1e-8
+/// (`0109afc4`; NaN is above) and `c` is not equal to 0, `c` becomes +0.0.
+pub fn fn_00a6e0f0(e: &mut Engine, this: Ptr<NiQuaternion>) {
+    let epsilon = ld(e, SNAP_EPSILON);
+    for offset in [4u32, 8, 0xc, 0] {
+        let a = this.addr() + offset;
+        let magnitude = spill(ld(e, a).abs());
+        // FCOM: at most 1e-8 (ordered) goes on; then FCOM 0 against the component: only
+        // equal (ordered) leaves it.
+        if magnitude <= epsilon && 0.0 != m32(e, a) {
+            fst(e, a, 0.0);
+        }
+    }
+}
+
+// Translated from 00a6e190 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiQuaternion::GetViewerString` (Xbox PDB): `"<name>: (w=..,x=..,y=..,z=..)"` (format
+/// `0109c9e8`, each `%g`) in a text of `strlen(name) + 0x80` bytes from `00aa1070`, written
+/// by `NiSprintf` with each float widened to a `double`. Answers the text.
+pub fn niquaternion_get_viewer_string(e: &mut Engine, this: Ptr<NiQuaternion>, name: Ptr) -> Ptr {
+    let size = (e.mem.cstr(name.addr()).len() as u32).wrapping_add(0x80);
+    let text = e.call(ALLOCATE_TEXT, &args![size]).u32();
+    let q = this.addr();
+    let (w, x, y, z) = (ld(e, q), ld(e, q + 4), ld(e, q + 8), ld(e, q + 0xc));
+    e.call(
+        NI_SPRINTF,
+        &args![text, size, FORMAT_QUATERNION, name, w, x, y, z],
+    );
+    Ptr::new(text)
+}
+
+// Translated from 00a6e4a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiQuaternion::SaveBinary` (Xbox PDB): snaps tiny components to zero
+/// ([`fn_00a6e0f0`]), then writes the four 4-byte components `W X Y Z` through the stream
+/// output's write function (`m_pkOstr` +0x250, function at +0xc; cdecl: file, source, 4,
+/// byte-count word, 1), each adding the answer to the output's position (+4). The stream
+/// argument's stack word is the byte-count word.
+pub fn niquaternion_save_binary(e: &mut Engine, this: Ptr<NiQuaternion>, stream: Ptr) {
+    fn_00a6e0f0(e, this);
+    e.with_stack(4, |e, count| {
+        for i in 0..4 {
+            let output = e.mem.u32(stream.addr().wrapping_add(0x250));
+            let write = e.mem.u32(output.wrapping_add(0xc));
+            e.mem.set_u32(count.addr(), 4);
+            let source = this.addr() + 4 * i;
+            let done = e
+                .call(write, &args![output, source, 4u32, count, 1u32])
+                .u32();
+            let position = e.mem.u32(output.wrapping_add(4)).wrapping_add(done);
+            e.mem.set_u32(output.wrapping_add(4), position);
+        }
+    });
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(
+            0x00a6_dd50,
+            fn_00a6dd50(
+                Ptr<NiQuaternion>,
+                Ptr<NiQuaternion>,
+                Ptr<NiQuaternion>,
+                Ptr<NiQuaternion>,
+            ) -> Ptr<NiQuaternion>
+        ),
+        entry!(
+            0x00a6_de50,
+            niquaternion_to_angle_axis(Ptr<NiQuaternion>, Ptr, Ptr)
+        ),
+        entry!(0x00a6_e0f0, fn_00a6e0f0(Ptr<NiQuaternion>)),
+        entry!(
+            0x00a6_e190,
+            niquaternion_get_viewer_string(Ptr<NiQuaternion>, Ptr) -> Ptr
+        ),
+        entry!(
+            0x00a6_e4a0,
+            niquaternion_save_binary(Ptr<NiQuaternion>, Ptr)
+        ),
         entry!(
             0x00a6dbd0,
             niquaternion_negate(Ptr<NiQuaternion>, Ptr<NiQuaternion>) -> Ptr<NiQuaternion>
@@ -640,5 +833,220 @@ mod tests {
         assert_eq!(normalized[2], out.addr());
         assert_eq!(normalized[1] + 0x10, normalized[0]);
         assert_eq!(floats(&e, out), [1.0, 0.0, 0.0, 0.0]);
+    }
+}
+
+#[cfg(test)]
+mod n018_tests {
+    use super::*;
+
+    fn calls_to(e: &Engine, addr: u32) -> Vec<Vec<u32>> {
+        e.call_log
+            .clone()
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|(a, _)| *a == addr)
+            .map(|(_, words)| words)
+            .collect()
+    }
+
+    fn quat(e: &mut Engine, v: [f32; 4]) -> Ptr<NiQuaternion> {
+        let q: Ptr<NiQuaternion> = e.new_object();
+        for (i, value) in v.iter().enumerate() {
+            e.mem.set_f32(q.addr() + 4 * i as u32, *value);
+        }
+        q
+    }
+
+    fn floats(e: &Engine, a: u32) -> [f32; 4] {
+        [0, 4, 8, 12].map(|o| e.mem.f32(a + o))
+    }
+
+    fn engine() -> Engine {
+        let mut e = Engine::new();
+        for page in [0x0101_a000, 0x0109_a000, 0x0109_c000] {
+            e.map(page, 0x1000);
+        }
+        e.set_global(MINUS_ONE_DOUBLE, -1.0f64);
+        e.set_global(PI_FLOAT, 0x4049_0fdbu32);
+        e.set_global(SINE_EPSILON, 0x3a83_126fu32);
+        e.set_global(MINUS_QUARTER_DOUBLE, -0.25f64);
+        e.set_global(SNAP_EPSILON, 0x322b_cc77u32);
+        e.register(CRT_SQRT, |_, a| f64::take(a, &mut 0).sqrt().into_ret());
+        e.register(CRT_SIN, |_, a| f64::take(a, &mut 0).sin().into_ret());
+        e.register(CRT_ACOS, |_, a| f64::take(a, &mut 0).acos().into_ret());
+        e.call_log = Some(vec![]);
+        e
+    }
+
+    #[test]
+    fn intermediate_combines_the_two_logarithms() {
+        let mut e = engine();
+        // The product answers (1, the other vector): its logarithm is (0, that vector).
+        e.register(QUATERNION_PRODUCT, |e, a| {
+            e.mem.set_f32(a[1], 1.0);
+            for i in 1..4 {
+                let v = e.mem.u32(a[2] + 4 * i);
+                e.mem.set_u32(a[1] + 4 * i, v);
+            }
+            a[1].into_ret()
+        });
+        let seen = std::rc::Rc::new(std::cell::RefCell::new(vec![]));
+        let log = seen.clone();
+        e.register_double(QUATERNION_EXP, move |e, a| {
+            log.borrow_mut().push(floats(e, a[1]));
+            Ret::default()
+        });
+        let first = quat(&mut e, [0.0, 1.0, 2.0, 3.0]);
+        let middle = quat(&mut e, [0.5, 0.25, -0.5, 0.0]);
+        let last = quat(&mut e, [0.0, 4.0, 8.0, -4.0]);
+        let result: Ptr<NiQuaternion> = e.new_object();
+        let back = e
+            .call(0x00a6_dd50, &args![result, first, middle, last])
+            .u32();
+        assert_eq!(back, result.addr());
+        let products = calls_to(&e, QUATERNION_PRODUCT);
+        assert_eq!(products.len(), 3);
+        assert_eq!(products[0][2], last.addr());
+        assert_eq!(products[1][2], first.addr());
+        assert_eq!(products[0][0], products[1][0]);
+        assert_eq!(products[2][..2], [middle.addr(), result.addr()]);
+        let exponential = calls_to(&e, QUATERNION_EXP);
+        assert_eq!(products[2][2], exponential[0][0]);
+        // -0.25 * ((0, 4, 8, -4) + (0, 1, 2, 3)).
+        assert_eq!(seen.borrow()[0], [-0.0, -1.25, -2.5, 0.25]);
+    }
+
+    #[test]
+    fn intermediate_multiplies_by_the_conjugate() {
+        let mut e = engine();
+        let seen = std::rc::Rc::new(std::cell::RefCell::new(vec![]));
+        let log = seen.clone();
+        e.register_double(QUATERNION_PRODUCT, move |e, a| {
+            log.borrow_mut().push(floats(e, a[0]));
+            e.mem.set_f32(a[1], 1.0);
+            a[1].into_ret()
+        });
+        e.register(QUATERNION_EXP, |_, _| Ret::default());
+        let first: Ptr<NiQuaternion> = e.new_object();
+        let middle = quat(&mut e, [0.5, 0.25, -0.5, 0.0]);
+        let result: Ptr<NiQuaternion> = e.new_object();
+        e.call(0x00a6_dd50, &args![result, first, middle, first]);
+        assert_eq!(seen.borrow()[0], [0.5, -0.25, 0.5, -0.0]);
+        assert_eq!(seen.borrow()[1], [0.5, -0.25, 0.5, -0.0]);
+    }
+
+    #[test]
+    fn to_angle_axis_of_a_rotation() {
+        let mut e = engine();
+        let q = quat(&mut e, [0.5, 0.0, 0.866_025_4, 0.0]);
+        let angle = e.mem.alloc(4);
+        let axis = e.mem.alloc(12);
+        e.call(0x00a6_de50, &args![q, angle, axis]);
+        let length = (0.866_025_4f64 * 0.866_025_4f64) as f32;
+        let length = (length as f64).sqrt() as f32;
+        let half = 0.5f64.acos() as f32;
+        assert_eq!(e.mem.f32(angle), half + half);
+        let inverse = (1.0 / length as f64) as f32;
+        assert_eq!(e.mem.f32(axis), 0.0);
+        assert_eq!(e.mem.f32(axis + 4), inverse * 0.866_025_4);
+        assert_eq!(e.mem.f32(axis + 8), 0.0);
+    }
+
+    #[test]
+    fn to_angle_axis_limits_and_the_short_vector() {
+        let mut e = engine();
+        let angle = e.mem.alloc(4);
+        let axis = e.mem.alloc(12);
+        // W of 1 or more: angle 0.
+        let q = quat(&mut e, [1.5, 1.0, 0.0, 0.0]);
+        e.call(0x00a6_de50, &args![q, angle, axis]);
+        assert_eq!(e.mem.f32(angle), 0.0);
+        assert_eq!(e.mem.f32(axis), 1.0);
+        // W NaN: twice pi.
+        let q = quat(&mut e, [f32::NAN, 1.0, 0.0, 0.0]);
+        e.call(0x00a6_de50, &args![q, angle, axis]);
+        let pi = f32::from_bits(0x4049_0fdb);
+        assert_eq!(e.mem.f32(angle), pi + pi);
+        // A vector part shorter than 0.001: everything zero, acos not called.
+        e.mem.set_f32(angle, 7.0);
+        let q = quat(&mut e, [0.5, 0.0005, 0.0, 0.0]);
+        e.call_log = Some(vec![]);
+        e.call(0x00a6_de50, &args![q, angle, axis]);
+        assert_eq!(e.mem.f32(angle), 0.0);
+        assert_eq!([0, 4, 8].map(|o| e.mem.f32(axis + o)), [0.0; 3]);
+        assert!(calls_to(&e, CRT_ACOS).is_empty());
+    }
+
+    #[test]
+    fn snap_zeroes_tiny_components_only() {
+        let mut e = engine();
+        let epsilon = f32::from_bits(0x322b_cc77);
+        let q = quat(&mut e, [epsilon, 1e-9, -1e-9, 0.5]);
+        e.call(0x00a6_e0f0, &args![q]);
+        assert_eq!(
+            [0, 4, 8, 12].map(|o| e.mem.u32(q.addr() + o)),
+            [0, 0, 0, 0.5f32.to_bits()]
+        );
+        // A NaN, a negative zero and a value just above stay.
+        let above = f32::from_bits(0x322b_cc78);
+        let q = quat(&mut e, [-0.0, f32::NAN, above, -above]);
+        let before = [0, 4, 8, 12].map(|o| e.mem.u32(q.addr() + o));
+        e.call(0x00a6_e0f0, &args![q]);
+        assert_eq!([0, 4, 8, 12].map(|o| e.mem.u32(q.addr() + o)), before);
+    }
+
+    #[test]
+    fn viewer_string_formats_the_four_components() {
+        let mut e = engine();
+        e.register(ALLOCATE_TEXT, |e, a| e.mem.alloc(a[0]).into_ret());
+        e.register(NI_SPRINTF, |_, _| Ret::default());
+        let name = e.mem.alloc(8);
+        e.mem.write(name, b"m_kRot\0");
+        let q = quat(&mut e, [1.0, -2.0, 0.5, 4.0]);
+        let text = e.call(0x00a6_e190, &args![q, name]).u32();
+        assert_eq!(calls_to(&e, ALLOCATE_TEXT), vec![vec![6 + 0x80]]);
+        assert_eq!(
+            calls_to(&e, NI_SPRINTF),
+            vec![args![
+                text,
+                0x86u32,
+                FORMAT_QUATERNION,
+                name,
+                1.0f64,
+                -2.0f64,
+                0.5f64,
+                4.0f64
+            ]]
+        );
+    }
+
+    #[test]
+    fn save_binary_snaps_then_writes_four_words() {
+        let mut e = engine();
+        let seen = std::rc::Rc::new(std::cell::RefCell::new(vec![]));
+        let log = seen.clone();
+        e.register_double(0x7000_000c, move |e, a| {
+            assert_eq!(e.mem.u32(a[3]), 4);
+            log.borrow_mut().push((a[1], e.mem.u32(a[1])));
+            a[2].into_ret()
+        });
+        let output = e.mem.alloc(0x10);
+        e.mem.set_u32(output + 0xc, 0x7000_000c);
+        let stream = e.mem.alloc(0x254);
+        e.mem.set_u32(stream + 0x250, output);
+        let q = quat(&mut e, [1.0, 1e-9, 2.0, 3.0]);
+        e.call(0x00a6_e4a0, &args![q, stream]);
+        let a = q.addr();
+        assert_eq!(
+            *seen.borrow(),
+            vec![
+                (a, 1.0f32.to_bits()),
+                (a + 4, 0),
+                (a + 8, 2.0f32.to_bits()),
+                (a + 12, 3.0f32.to_bits())
+            ]
+        );
+        assert_eq!(e.mem.u32(output + 4), 16);
     }
 }

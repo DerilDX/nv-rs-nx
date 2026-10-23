@@ -288,9 +288,72 @@ pub fn fn_00985390(e: &mut Engine, this: Ptr, kind: u32) -> Ptr {
     this
 }
 
+// ---- Batch n023 ----------------------------------------------------------------------------
+
+/// `00717e50` (`thiscall` on a goal): the first node of its condition list; `006815c0`
+/// (`thiscall` on a node): the address of the node's item; `0062d990` (`thiscall` on a node):
+/// the next node.
+const LIST_FIRST: u32 = 0x0071_7e50;
+const NODE_ITEM: u32 = 0x0068_15c0;
+const NODE_NEXT: u32 = 0x0062_d990;
+/// `00559450` and `00726070` (`thiscall` on an item): its kind and its value.
+const ITEM_KIND: u32 = 0x0055_9450;
+const ITEM_VALUE: u32 = 0x0072_6070;
+/// `CombatWorldStateArray::IsTrue` (engine-map name of `009aadc0`; `thiscall`, `RET 8`).
+const WORLD_STATE_IS_TRUE: u32 = 0x009a_adc0;
+
+// Translated from 00984470 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`thiscall`, `RET 4`): the word at `this + 0x3fff8 + 4 * index`
+/// (address arithmetic wraps as the exe's does).
+pub fn fn_00984470(e: &mut Engine, this: Ptr, index: u32) -> u32 {
+    let address = this
+        .addr()
+        .wrapping_add(index.wrapping_mul(4))
+        .wrapping_add(0x3fff8);
+    e.mem.u32(address)
+}
+
+// Translated from 009843b0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `CombatGoal::IsActive` (Xbox PDB; `thiscall`, `RET 4`): walks the goal's conditions
+/// (`00717e50`, `006815c0`, `0062d990`) until a node without an item; each item's kind
+/// (`00559450`) and value (`00726070`) are tested on `state`: kind 0x15 fails when
+/// `00984470(value)` is non-zero, kind 0x16 when it is zero, any other kind when
+/// `CombatWorldStateArray::IsTrue(kind, value)` answers false. True when nothing failed.
+pub fn combat_goal_is_active(e: &mut Engine, this: Ptr, state: Ptr) -> bool {
+    let mut node = e.call(LIST_FIRST, &args![this]).u32();
+    while node != 0 {
+        let slot = e.call(NODE_ITEM, &args![node]).u32();
+        if e.mem.u32(slot) == 0 {
+            break;
+        }
+        let slot = e.call(NODE_ITEM, &args![node]).u32();
+        let item = e.mem.u32(slot);
+        let kind = e.call(ITEM_KIND, &args![item]).u32();
+        let value = e.call(ITEM_VALUE, &args![item]).u32();
+        if kind == 0x15 {
+            if fn_00984470(e, state, value) != 0 {
+                return false;
+            }
+        } else if kind == 0x16 {
+            if fn_00984470(e, state, value) == 0 {
+                return false;
+            }
+        } else if !e
+            .call(WORLD_STATE_IS_TRUE, &args![state, kind, value])
+            .bool()
+        {
+            return false;
+        }
+        node = e.call(NODE_NEXT, &args![node]).u32();
+    }
+    true
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x0098_4470, fn_00984470(Ptr, u32) -> u32),
+        entry!(0x0098_43b0, combat_goal_is_active(Ptr, Ptr) -> bool),
         entry!(0x0098_4490, combat_goal_create_combat_goal(u32) -> Ptr),
         entry!(0x0098_4b20, fn_00984b20(Ptr, u32) -> Ptr),
         entry!(0x0098_4c20, fn_00984c20(Ptr, u32) -> Ptr),
@@ -523,5 +586,68 @@ mod tests {
                 .collect();
             assert_eq!(log, expected, "{address:08x}");
         }
+    }
+}
+
+#[cfg(test)]
+mod n023_tests {
+    use super::*;
+
+    #[test]
+    fn the_indexed_word_sits_past_0x3fff8() {
+        let mut e = Engine::new();
+        let state = e.mem.alloc(0x40010);
+        e.mem.set_u32(state + 0x3fff8 + 8, 0xabcd);
+        assert_eq!(e.call(0x0098_4470, &args![state, 2u32]).u32(), 0xabcd);
+        e.mem.set_u32(state + 0x3fff8 - 4, 0x77);
+        assert_eq!(e.call(0x0098_4470, &args![state, u32::MAX]).u32(), 0x77);
+    }
+
+    /// A goal with a condition list: each node holds its next (+4) and its item (+8); the
+    /// last node holds no item and ends the walk. Items are (kind, value) blocks.
+    fn goal_with(e: &mut Engine, items: &[(u32, u32)]) -> u32 {
+        let mut node = e.mem.alloc(12);
+        for (kind, value) in items.iter().rev() {
+            let item = e.mem.alloc(8);
+            e.mem.set_u32(item, *kind);
+            e.mem.set_u32(item + 4, *value);
+            let before = e.mem.alloc(12);
+            e.mem.set_u32(before + 4, node);
+            e.mem.set_u32(before + 8, item);
+            node = before;
+        }
+        let goal = e.mem.alloc(4);
+        e.mem.set_u32(goal, node);
+        e.register(LIST_FIRST, |e, a| e.mem.u32(a[0]).into_ret());
+        e.register(NODE_ITEM, |_, a| (a[0] + 8).into_ret());
+        e.register(NODE_NEXT, |e, a| e.mem.u32(a[0] + 4).into_ret());
+        e.register(ITEM_KIND, |e, a| e.mem.u32(a[0]).into_ret());
+        e.register(ITEM_VALUE, |e, a| e.mem.u32(a[0] + 4).into_ret());
+        goal
+    }
+
+    #[test]
+    fn a_goal_is_active_while_every_condition_holds() {
+        let mut e = Engine::new();
+        // World-state conditions hold when the value is even.
+        e.register(WORLD_STATE_IS_TRUE, |_, a| {
+            u32::from(a[2] & 1 == 0).into_ret()
+        });
+        let state = e.mem.alloc(0x40010);
+        e.mem.set_u32(state + 0x3fff8 + 4, 1);
+        // Kind 0x16 needs a non-zero word, kind 0x15 a zero word, others the world state.
+        let goal = goal_with(&mut e, &[(0x16, 1), (0x15, 0), (3, 4)]);
+        e.call_log = Some(vec![]);
+        assert!(e.call(0x0098_43b0, &args![goal, state]).bool());
+        let log = e.call_log.take().unwrap();
+        let world: Vec<_> = log.iter().filter(|c| c.0 == WORLD_STATE_IS_TRUE).collect();
+        assert_eq!(world.len(), 1);
+        assert_eq!(world[0].1, vec![state, 3, 4]);
+        for items in [[(0x15, 1)], [(0x16, 0)], [(3, 5)]] {
+            let goal = goal_with(&mut e, &items);
+            assert!(!e.call(0x0098_43b0, &args![goal, state]).bool());
+        }
+        let goal = goal_with(&mut e, &[]);
+        assert!(e.call(0x0098_43b0, &args![goal, state]).bool());
     }
 }

@@ -878,9 +878,191 @@ pub fn fn_00b4ed40(e: &mut Engine, this: Ptr<BSFadeNode>, flags: u32) -> Ptr<BSF
     this
 }
 
+/// `NiNode::RegisterStreamables` (`00a5e5b0`), `NiNode::SaveBinary` (`00a5e880`) and
+/// `NiNode::IsEqual` (`00a5e600`) (engine map; thiscall, one word each).
+const NODE_REGISTER_STREAMABLES: u32 = 0x00a5_e5b0;
+const NODE_SAVE_BINARY: u32 = 0x00a5_e880;
+const NODE_IS_EQUAL: u32 = 0x00a5_e600;
+
+// Translated from 00b4def0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSFadeNode::RegisterStreamables` (Xbox PDB): thiscall, one word (the stream). Answers
+/// whether `NiNode::RegisterStreamables` (`00a5e5b0`) answered a non-zero byte.
+pub fn bs_fade_node_register_streamables(e: &mut Engine, this: Ptr, stream: u32) -> bool {
+    e.call(NODE_REGISTER_STREAMABLES, &args![this, stream]).u8() != 0
+}
+
+// Translated from 00b4df10 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSFadeNode::SaveBinary` (Xbox PDB): a jump to `NiNode::SaveBinary` (`00a5e880`) with the
+/// stream.
+pub fn bs_fade_node_save_binary(e: &mut Engine, this: Ptr, stream: u32) {
+    e.call(NODE_SAVE_BINARY, &args![this, stream]);
+}
+
+// Translated from 00b4df20 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSFadeNode::IsEqual` (Xbox PDB): a jump to `NiNode::IsEqual` (`00a5e600`) with the other
+/// object; answers the callee's `EAX` unchanged (its `bool` is the low byte).
+pub fn bs_fade_node_is_equal(e: &mut Engine, this: Ptr, other: u32) -> u32 {
+    e.call(NODE_IS_EQUAL, &args![this, other]).u32()
+}
+
+/// `NiNode::GetViewerStrings` (engine map, `00a5ea70`; thiscall, the string array).
+const NODE_GET_VIEWER_STRINGS: u32 = 0x00a5_ea70;
+/// `NiGetViewerString` overloads (engine map; cdecl): the class name (`00a7d330`, one word),
+/// a name with a `float` (`00a7d550`), an integer (`00a7d4d0`) and a `bool` word
+/// (`00a7d370`).
+const VIEWER_STRING_NAME: u32 = 0x00a7_d330;
+const VIEWER_STRING_FLOAT: u32 = 0x00a7_d550;
+const VIEWER_STRING_INT: u32 = 0x00a7_d4d0;
+const VIEWER_STRING_BOOL: u32 = 0x00a7_d370;
+/// The viewer-string array's grow (`0096ad30`; thiscall, the new size) and set-at
+/// (`0096ae90`; thiscall: the index, the address of the string word).
+const STRINGS_GROW: u32 = 0x0096_ad30;
+const STRINGS_SET_AT: u32 = 0x0096_ae90;
+/// The bounded print `00406d00` (cdecl: buffer, size, format, values).
+const PRINT_00406D00: u32 = 0x0040_6d00;
+/// The `double` the two distances are compared with (`010231b0`: `FLT_MAX`).
+const DISABLED_DISTANCE: u32 = 0x0102_31b0;
+/// The texts (`.rdata`).
+const NEAR_DISABLED_TEXT: u32 = 0x010a_917c;
+const NEAR_FORMAT: u32 = 0x010a_9168;
+const FAR_DISABLED_TEXT: u32 = 0x010a_9150;
+const FAR_FORMAT: u32 = 0x010a_913c;
+const MULT_TYPE_FORMAT: u32 = 0x010a_912c;
+const LAST_FADE_NAME: u32 = 0x010a_9120;
+const CURRENT_FADE_NAME: u32 = 0x010a_9110;
+const TIME_SINCE_UPDATE_NAME: u32 = 0x010a_90fc;
+const FRAME_COUNTER_NAME: u32 = 0x010a_90ec;
+const FADED_IN_NAME: u32 = 0x010a_90e0;
+const IGNORE_FADE_NAME: u32 = 0x010a_90d4;
+const LOD_FADING_OUT_NAME: u32 = 0x010a_90c4;
+const HAS_MOVING_SOUND_NAME: u32 = 0x010a_90b4;
+const HIGH_DETAIL_NAME: u32 = 0x010a_90a8;
+/// `NiObjectNET::GetExtraData` (engine map, `00a5bdd0`; thiscall, the name) and the global
+/// holding the `BSXFlags` extra data's name (`01202ddc`).
+const GET_EXTRA_DATA: u32 = 0x00a5_bdd0;
+const BSX_FLAGS_NAME: u32 = 0x0120_2ddc;
+
+/// Appends the string word in `slot` to the viewer-string array: grown first (by its step
+/// `+0xE` plus the size) when its 16-bit size (`+0xA`) has reached the capacity (`+0x8`).
+fn append_viewer_string(e: &mut Engine, strings: u32, slot: u32) {
+    let size = u32::from(e.mem.u16(strings + 0xa));
+    if size >= u32::from(e.mem.u16(strings + 8)) {
+        let step = u32::from(e.mem.u16(strings + 0xe));
+        e.call(STRINGS_GROW, &[strings, step + size]);
+    }
+    e.call(STRINGS_SET_AT, &[strings, size, slot]);
+}
+
+/// A 0x40-byte buffer from the memory manager, kept in `slot`, printed with either the
+/// disabled text (when `value` equals the `double` at `010231b0`) or `format` and the value
+/// as a `double`.
+fn print_distance(e: &mut Engine, slot: u32, value: f64, disabled: u32, format: u32) {
+    let buffer = e.call(MEMORY_ALLOCATE, &[MEMORY_MANAGER, 0x40]).u32();
+    e.mem.set_u32(slot, buffer);
+    // FCOM double; TEST AH,0x44; JP: the disabled text only when equal (not unordered).
+    if value == e.global::<f64>(DISABLED_DISTANCE) {
+        e.call(PRINT_00406D00, &[buffer, 0x40, disabled]);
+    } else {
+        let mut words = vec![buffer, 0x40, format];
+        value.put(&mut words);
+        e.call(PRINT_00406D00, &words);
+    }
+}
+
+// Translated from 00b4ed70 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSFadeNode::GetViewerStrings` (Xbox PDB): thiscall, one word (the viewer-string array).
+/// Runs `NiNode::GetViewerStrings`, then appends the class name, `fNearDistSqr` and
+/// `fFarDistSqr` (printed into 0x40-byte buffers, `DISABLED` at `FLT_MAX`), `eMultType`,
+/// `fLastFade`, `fCurrentFade`, `fTimeSinceUpdate`, `iFrameCounter`, and the flags
+/// `bFadedIn` (bit 14 of `m_uFlags`), `bIgnoreFade` (bit 15), `bLODFadingOut` (bit 16),
+/// `bHasMovingSound` (bit 17) and `bHighDetail` (bit 24); then, when the node has
+/// `BSXFlags` extra data (`GetExtraData` with the name at `01202ddc`), that object's
+/// virtual slot +0x60 with the array.
+///
+/// The string words live in the argument's own stack word (the array's pointer is kept in a
+/// register): each `bool` is stored into that word's low byte and the whole word pushed, so
+/// its upper bytes are those of the previous string pointer.
+pub fn bs_fade_node_get_viewer_strings(e: &mut Engine, this: Ptr<BSFadeNode>, strings: Ptr) {
+    let node = this.addr();
+    let strings = strings.addr();
+    e.call(NODE_GET_VIEWER_STRINGS, &[node, strings]);
+    e.with_stack(4, |e, slot| {
+        let slot = slot.addr();
+        e.mem.set_u32(slot, strings);
+        let class_name = e.global::<u32>(FADE_NODE_RTTI);
+        let text = e.call(VIEWER_STRING_NAME, &[class_name]).u32();
+        e.mem.set_u32(slot, text);
+        append_viewer_string(e, strings, slot);
+
+        // FLD/FSTP into locals before the first allocation.
+        let near = x87_load32(e.get(this, BSFadeNode::fNearDistSqr));
+        let far = x87_load32(e.get(this, BSFadeNode::fFarDistSqr));
+        print_distance(e, slot, near, NEAR_DISABLED_TEXT, NEAR_FORMAT);
+        append_viewer_string(e, strings, slot);
+        print_distance(e, slot, far, FAR_DISABLED_TEXT, FAR_FORMAT);
+        append_viewer_string(e, strings, slot);
+
+        let buffer = e.call(MEMORY_ALLOCATE, &[MEMORY_MANAGER, 0x40]).u32();
+        let mult_type = e.get(this, BSFadeNode::eMultType);
+        e.mem.set_u32(slot, buffer);
+        e.call(PRINT_00406D00, &[buffer, 0x40, MULT_TYPE_FORMAT, mult_type]);
+        append_viewer_string(e, strings, slot);
+
+        // `fLastFade`, `fCurrentFade`, `fTimeSinceUpdate`, each loaded just before its call
+        // and pushed through FLD/FSTP.
+        for (name, field) in [
+            (LAST_FADE_NAME, BSFadeNode::fLastFade),
+            (CURRENT_FADE_NAME, BSFadeNode::fCurrentFade),
+            (TIME_SINCE_UPDATE_NAME, BSFadeNode::fTimeSinceUpdate),
+        ] {
+            let bits = x87_quiet_bits(e.get(this, field));
+            let text = e.call(VIEWER_STRING_FLOAT, &[name, bits]).u32();
+            e.mem.set_u32(slot, text);
+            append_viewer_string(e, strings, slot);
+        }
+
+        let counter = e.get(this, BSFadeNode::iFrameCounter);
+        let text = e
+            .call(VIEWER_STRING_INT, &[FRAME_COUNTER_NAME, counter])
+            .u32();
+        e.mem.set_u32(slot, text);
+        append_viewer_string(e, strings, slot);
+
+        for (name, bit) in [
+            (FADED_IN_NAME, 14),
+            (IGNORE_FADE_NAME, 15),
+            (LOD_FADING_OUT_NAME, 16),
+            (HAS_MOVING_SOUND_NAME, 17),
+            (HIGH_DETAIL_NAME, 24),
+        ] {
+            let flag = (e.get(this, BSFadeNode::m_uFlags) >> bit) & 1;
+            e.mem.set_u8(slot, flag as u8);
+            let word = e.mem.u32(slot);
+            let text = e.call(VIEWER_STRING_BOOL, &[name, word]).u32();
+            e.mem.set_u32(slot, text);
+            append_viewer_string(e, strings, slot);
+        }
+    });
+    let name = e.global::<u32>(BSX_FLAGS_NAME);
+    let extra = e.call(GET_EXTRA_DATA, &[node, name]).u32();
+    if extra != 0 {
+        e.vcall(extra, 0x60, &[strings]);
+    }
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(
+            0x00b4_def0,
+            bs_fade_node_register_streamables(Ptr, u32) -> bool
+        ),
+        entry!(0x00b4_df10, bs_fade_node_save_binary(Ptr, u32)),
+        entry!(0x00b4_df20, bs_fade_node_is_equal(Ptr, u32) -> u32),
+        entry!(
+            0x00b4_ed70,
+            bs_fade_node_get_viewer_strings(Ptr<BSFadeNode>, Ptr)
+        ),
         entry!(
             0x00b4_dec0,
             bs_fade_node_set_lod_mult_type(Ptr<BSFadeNode>, u32)
@@ -1505,5 +1687,239 @@ mod b048_tests {
         e.set(node, BSFadeNode::m_uFlags, 0);
         assert!(e.call(0x00b4_eb10, &args![node, camera, 0u32]).bool());
         assert_eq!(e.get(node, BSFadeNode::m_uFlags), 0x4000);
+    }
+}
+
+#[cfg(test)]
+mod n011_tests {
+    use super::*;
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    fn calls(e: &Engine, addr: u32) -> Vec<Vec<u32>> {
+        e.call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|c| c.0 == addr)
+            .map(|c| c.1.clone())
+            .collect()
+    }
+
+    fn word(eax: u32) -> Ret {
+        Ret {
+            eax,
+            ..Ret::default()
+        }
+    }
+
+    #[test]
+    fn register_streamables_answers_the_node_result_as_a_bool() {
+        for (result, expected) in [(0x0000_0100u32, false), (0x0000_0001, true)] {
+            let mut e = Engine::new();
+            e.register_double(NODE_REGISTER_STREAMABLES, move |_, _| word(result));
+            e.call_log = Some(vec![]);
+            let answer = e.call(0x00b4_def0, &args![0x0e00_1000u32, 0x0e00_2000u32]);
+            assert_eq!(answer.u32(), u32::from(expected));
+            assert_eq!(
+                calls(&e, NODE_REGISTER_STREAMABLES),
+                vec![vec![0x0e00_1000, 0x0e00_2000]]
+            );
+        }
+    }
+
+    #[test]
+    fn save_binary_and_is_equal_jump_to_the_node() {
+        let mut e = Engine::new();
+        e.register(NODE_SAVE_BINARY, |_, _| Ret::default());
+        e.register(NODE_IS_EQUAL, |_, _| word(0x1234_5601));
+        e.call_log = Some(vec![]);
+        e.call(0x00b4_df10, &args![0x0e00_1000u32, 0x0e00_2000u32]);
+        assert_eq!(
+            calls(&e, NODE_SAVE_BINARY),
+            vec![vec![0x0e00_1000, 0x0e00_2000]]
+        );
+        let answer = e.call(0x00b4_df20, &args![0x0e00_1000u32, 0x0e00_3000u32]);
+        assert_eq!(answer.u32(), 0x1234_5601);
+        assert_eq!(
+            calls(&e, NODE_IS_EQUAL),
+            vec![vec![0x0e00_1000, 0x0e00_3000]]
+        );
+    }
+
+    type Log = Rc<RefCell<Vec<u32>>>;
+
+    /// An engine whose viewer-string array (capacity `capacity`, size 0, step 4) grows by
+    /// setting its capacity, and whose set-at records the stored word and bumps the size.
+    fn viewer_engine(capacity: u16) -> (Engine, u32, Log) {
+        let mut e = Engine::new();
+        for page in [0x0102_3000, 0x011f_9000, 0x0120_2000] {
+            e.map(page, 0x1000);
+        }
+        e.set_global(DISABLED_DISTANCE, f64::from(f32::MAX));
+        e.set_global(FADE_NODE_RTTI, 0x010a_9000u32);
+        e.set_global(BSX_FLAGS_NAME, 0x0e0b_0000u32);
+        let strings = e.mem.alloc(0x10);
+        e.mem.set_u16(strings + 8, capacity);
+        e.mem.set_u16(strings + 0xe, 4);
+        e.register(NODE_GET_VIEWER_STRINGS, |_, _| Ret::default());
+        e.register(STRINGS_GROW, |e, a| {
+            e.mem.set_u16(a[0] + 8, a[1] as u16);
+            Ret::default()
+        });
+        let stored: Log = Rc::new(RefCell::new(vec![]));
+        let seen = stored.clone();
+        e.register_double(STRINGS_SET_AT, move |e, a| {
+            seen.borrow_mut().push(e.mem.u32(a[2]));
+            e.mem.set_u16(a[0] + 0xa, a[1] as u16 + 1);
+            Ret::default()
+        });
+        e.register(VIEWER_STRING_NAME, |_, _| word(0x0f00_0001));
+        e.register(VIEWER_STRING_FLOAT, |_, a| {
+            word(0x0f10_0000 | (a[0] & 0xfff))
+        });
+        e.register(VIEWER_STRING_INT, |_, _| word(0x0f20_0000));
+        e.register(VIEWER_STRING_BOOL, |_, a| {
+            word(0x0f30_0000 | (a[0] & 0xfff))
+        });
+        let next = Rc::new(RefCell::new(0x0e40_0000u32));
+        e.register_double(MEMORY_ALLOCATE, move |_, _| {
+            let block = *next.borrow();
+            *next.borrow_mut() += 0x100;
+            word(block)
+        });
+        e.register(PRINT_00406D00, |_, _| Ret::default());
+        (e, strings, stored)
+    }
+
+    #[test]
+    fn get_viewer_strings_lists_the_fields_and_flags() {
+        let (mut e, strings, stored) = viewer_engine(2);
+        e.register(GET_EXTRA_DATA, |_, _| word(0));
+        let node: Ptr<BSFadeNode> = e.new_object();
+        e.set(node, BSFadeNode::fNearDistSqr, f32::MAX.to_bits());
+        e.set(node, BSFadeNode::fFarDistSqr, 1234.5f32.to_bits());
+        e.set(node, BSFadeNode::eMultType, 3);
+        // A signalling NaN is pushed quieted.
+        e.set(node, BSFadeNode::fLastFade, 0x7f80_0001);
+        e.set(node, BSFadeNode::fCurrentFade, 0.5f32.to_bits());
+        e.set(node, BSFadeNode::fTimeSinceUpdate, 2.0f32.to_bits());
+        e.set(node, BSFadeNode::iFrameCounter, 77);
+        // Bits 14 (faded in), 16 (LOD fading out) and 24 (high detail).
+        e.set(node, BSFadeNode::m_uFlags, 0x0101_4000);
+        e.call_log = Some(vec![]);
+        e.call(0x00b4_ed70, &args![node, strings]);
+
+        assert_eq!(
+            calls(&e, NODE_GET_VIEWER_STRINGS),
+            vec![vec![node.addr(), strings]]
+        );
+        assert_eq!(calls(&e, VIEWER_STRING_NAME), vec![vec![0x010a_9000]]);
+        let far = f64::from(1234.5f32).to_bits();
+        assert_eq!(
+            calls(&e, PRINT_00406D00),
+            vec![
+                vec![0x0e40_0000, 0x40, NEAR_DISABLED_TEXT],
+                vec![
+                    0x0e40_0100,
+                    0x40,
+                    FAR_FORMAT,
+                    far as u32,
+                    (far >> 32) as u32
+                ],
+                vec![0x0e40_0200, 0x40, MULT_TYPE_FORMAT, 3],
+            ]
+        );
+        assert_eq!(
+            calls(&e, VIEWER_STRING_FLOAT),
+            vec![
+                vec![LAST_FADE_NAME, 0x7fc0_0001],
+                vec![CURRENT_FADE_NAME, 0.5f32.to_bits()],
+                vec![TIME_SINCE_UPDATE_NAME, 2.0f32.to_bits()],
+            ]
+        );
+        assert_eq!(
+            calls(&e, VIEWER_STRING_INT),
+            vec![vec![FRAME_COUNTER_NAME, 77]]
+        );
+        // Each bool word keeps the upper bytes of the previous string pointer.
+        assert_eq!(
+            calls(&e, VIEWER_STRING_BOOL),
+            vec![
+                vec![FADED_IN_NAME, 0x0f20_0001],
+                vec![
+                    IGNORE_FADE_NAME,
+                    (0x0f30_0000 | (FADED_IN_NAME & 0xfff)) & !0xff
+                ],
+                vec![
+                    LOD_FADING_OUT_NAME,
+                    ((0x0f30_0000 | (IGNORE_FADE_NAME & 0xfff)) & !0xff) | 1
+                ],
+                vec![
+                    HAS_MOVING_SOUND_NAME,
+                    (0x0f30_0000 | (LOD_FADING_OUT_NAME & 0xfff)) & !0xff
+                ],
+                vec![
+                    HIGH_DETAIL_NAME,
+                    ((0x0f30_0000 | (HAS_MOVING_SOUND_NAME & 0xfff)) & !0xff) | 1
+                ],
+            ]
+        );
+        assert_eq!(
+            *stored.borrow(),
+            vec![
+                0x0f00_0001,
+                0x0e40_0000,
+                0x0e40_0100,
+                0x0e40_0200,
+                0x0f10_0000 | (LAST_FADE_NAME & 0xfff),
+                0x0f10_0000 | (CURRENT_FADE_NAME & 0xfff),
+                0x0f10_0000 | (TIME_SINCE_UPDATE_NAME & 0xfff),
+                0x0f20_0000,
+                0x0f30_0000 | (FADED_IN_NAME & 0xfff),
+                0x0f30_0000 | (IGNORE_FADE_NAME & 0xfff),
+                0x0f30_0000 | (LOD_FADING_OUT_NAME & 0xfff),
+                0x0f30_0000 | (HAS_MOVING_SOUND_NAME & 0xfff),
+                0x0f30_0000 | (HIGH_DETAIL_NAME & 0xfff),
+            ]
+        );
+        // Full at 2: grown by step + size.
+        assert_eq!(calls(&e, STRINGS_GROW)[0], vec![strings, 6]);
+        assert_eq!(
+            calls(&e, GET_EXTRA_DATA),
+            vec![vec![node.addr(), 0x0e0b_0000]]
+        );
+    }
+
+    #[test]
+    fn get_viewer_strings_prints_both_distances_and_asks_the_extra_data() {
+        let (mut e, strings, _) = viewer_engine(32);
+        let extra = e.mem.alloc(8);
+        let vtable = e.mem.alloc(0x80);
+        e.mem.set_u32(extra, vtable);
+        e.mem.set_u32(vtable + 0x60, 0x00ee_0060);
+        e.register(0x00ee_0060, |_, _| Ret::default());
+        e.register_double(GET_EXTRA_DATA, move |_, _| word(extra));
+        let node: Ptr<BSFadeNode> = e.new_object();
+        e.set(node, BSFadeNode::fNearDistSqr, 10.0f32.to_bits());
+        // NaN is unordered: printed, not disabled.
+        e.set(node, BSFadeNode::fFarDistSqr, 0xffc0_0000);
+        e.call_log = Some(vec![]);
+        e.call(0x00b4_ed70, &args![node, strings]);
+        let prints = calls(&e, PRINT_00406D00);
+        let near = 10.0f64.to_bits();
+        assert_eq!(
+            prints[0],
+            vec![
+                0x0e40_0000,
+                0x40,
+                NEAR_FORMAT,
+                near as u32,
+                (near >> 32) as u32
+            ]
+        );
+        assert_eq!(&prints[1][..3], &[0x0e40_0100, 0x40, FAR_FORMAT]);
+        assert!(calls(&e, STRINGS_GROW).is_empty());
+        assert_eq!(calls(&e, 0x00ee_0060), vec![vec![extra, strings]]);
     }
 }

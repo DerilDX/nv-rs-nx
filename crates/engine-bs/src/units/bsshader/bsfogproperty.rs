@@ -101,6 +101,15 @@ pub fn ni_fog_property_scalar_deleting_destructor(e: &mut Engine, this: Ptr, fla
     this
 }
 
+/// `NiFogProperty::ms_RTTI` (`011f5f34`).
+const NI_FOG_PROPERTY_RTTI: u32 = 0x011f_5f34;
+
+// Translated from 00a99f20 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiFogProperty::GetRTTI` (Xbox PDB): answers `&ms_RTTI` (`011f5f34`).
+pub fn ni_fog_property_get_rtti(_e: &mut Engine, _this: Ptr) -> u32 {
+    NI_FOG_PROPERTY_RTTI
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -112,6 +121,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
             0x00a9_9f40,
             ni_fog_property_scalar_deleting_destructor(Ptr, u32) -> Ptr
         ),
+        entry!(0x00a9_9f20, ni_fog_property_get_rtti(Ptr) -> u32),
     ]
 }
 
@@ -186,5 +196,19 @@ mod destructor_tests {
             }
             assert_eq!(log[1..].to_vec(), expected);
         }
+    }
+}
+
+#[cfg(test)]
+mod n011_tests {
+    use super::*;
+
+    #[test]
+    fn ni_fog_property_get_rtti_answers_the_class_record() {
+        let mut e = Engine::new();
+        assert_eq!(
+            e.call(0x00a9_9f20, &args![0x0e00_1000u32]).u32(),
+            0x011f_5f34
+        );
     }
 }

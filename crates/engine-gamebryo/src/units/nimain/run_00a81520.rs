@@ -50,11 +50,30 @@ pub fn fn_00a81590(e: &mut Engine) {
     }
 }
 
+// Translated from 00a814e0 (PC disassembly, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (a function Ghidra did not create; its address is in the
+/// stream loader table `00a89cc0` builds, and by its body the creation function of
+/// `NiShadeProperty`, the class its vtable `0109e274` names): a new 0x20-byte object
+/// (allocation `00aa13e0`, base constructor `00a5c200`, the 16-bit flags at +0x18 set to 1,
+/// the vtable, the word at +0x1c set to -1), or null when the allocation fails.
+pub fn fn_00a814e0(e: &mut Engine) -> Ptr {
+    let block = e.call(ALLOCATE, &args![0x20u32]).u32();
+    if block == 0 {
+        return Ptr::new(0);
+    }
+    e.call(OBJECT_BASE_CONSTRUCTOR, &args![block]);
+    e.mem.set_u16(block + 0x18, 1);
+    e.mem.set_u32(block, 0x0109_e274);
+    e.mem.set_u32(block + 0x1c, 0xffff_ffff);
+    Ptr::new(block)
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
         entry!(0x00a8_1520, fn_00a81520()),
         entry!(0x00a8_1590, fn_00a81590()),
+        entry!(0x00a8_14e0, fn_00a814e0() -> Ptr),
     ]
 }
 
@@ -121,5 +140,25 @@ mod tests_b043 {
         e.call_log = Some(vec![]);
         e.call(0x00a8_1590, &args![]);
         assert_eq!(e.call_log.take().unwrap().len(), 1);
+    }
+}
+
+#[cfg(test)]
+mod create_tests {
+    use super::*;
+    use crate::units::nimain::nimainsdm::test_support::{calls_to, engine_with_counting};
+
+    #[test]
+    fn creates_the_shade_property_or_null() {
+        let mut e = engine_with_counting();
+        e.call_log = Some(vec![]);
+        let object = e.call(0x00a8_14e0, &args![]).u32();
+        assert_eq!(calls_to(&e, ALLOCATE), vec![vec![0x20]]);
+        assert_eq!(calls_to(&e, OBJECT_BASE_CONSTRUCTOR), vec![vec![object]]);
+        assert_eq!(e.mem.u32(object), 0x0109_e274);
+        assert_eq!(e.mem.u16(object + 0x18), 1);
+        assert_eq!(e.mem.u32(object + 0x1c), 0xffff_ffff);
+        e.register(ALLOCATE, |_, _| 0u32.into_ret());
+        assert_eq!(e.call(0x00a8_14e0, &args![]).u32(), 0);
     }
 }

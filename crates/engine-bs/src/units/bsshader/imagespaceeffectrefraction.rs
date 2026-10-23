@@ -124,6 +124,88 @@ pub fn image_space_effect_refraction_get_normals_texture(
     e.call(TEXTURE_GET_RENDERED_TEXTURE, &args![texture]).u32()
 }
 
+/// The image-space manager (`011f91ac`), the first parameter's set call (`00b8a790`,
+/// `thiscall`: 0 and four `float`s) and `ImageSpaceEffect::SetTexture` (`00ba3cb0`,
+/// `thiscall`: index, texture, a third word).
+const IMAGE_SPACE_MANAGER_011F91AC: u32 = 0x011f_91ac;
+const PARAM_SET_00B8A790: u32 = 0x00b8_a790;
+const EFFECT_SET_TEXTURE: u32 = 0x00ba_3cb0;
+
+// Translated from 00bd9240 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed (Ghidra made no function here; slot 7 of the vtable at `010bc560`), `thiscall`
+/// with one word (not read): copies the image-space manager's four words `+0x2f8` to
+/// `+0x304` into a local and hands them as `float`s (each through `FLD`/`FSTP`) to the first
+/// effect parameter (`00b8a790` with 0 first). Answers true.
+pub fn fn_00bd9240(e: &mut Engine, this: Ptr<ImageSpaceEffectRefraction>, _unused_1: u32) -> bool {
+    let manager = e.mem.u32(IMAGE_SPACE_MANAGER_011F91AC);
+    let mut values = [0u32; 4];
+    for (k, v) in values.iter_mut().enumerate() {
+        *v = e.mem.u32(manager.wrapping_add(0x2f8 + 4 * k as u32));
+    }
+    let params = e.mem.u32(this.addr() + 0x1c);
+    let first = e.mem.u32(params);
+    e.call(
+        PARAM_SET_00B8A790,
+        &args![
+            first,
+            0u32,
+            x87_quiet_bits(values[0]),
+            x87_quiet_bits(values[1]),
+            x87_quiet_bits(values[2]),
+            x87_quiet_bits(values[3])
+        ],
+    );
+    true
+}
+
+// Translated from 00bd92b0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (the effect's render), `thiscall` with four words (the fourth not
+/// read). When the parameters changed (`+5`) the byte becomes what slot +0x1c answers for the
+/// third word. Then the first effect (`+0xc`'s first element, less 0x6c when not null, plus
+/// 0x6c again) gets its textures 0 and 1 (`pTextures`' first two) and 2 (the normals
+/// texture, `+0x58`) through `00ba3cb0`, is rendered (its slot +4 with the first two words,
+/// the first parameter and 1) and gets the three textures cleared; finally the normals
+/// texture's rendered texture goes back to the texture manager (`00b6da10`) and it is cleared
+/// (`00ba38b0`).
+pub fn fn_00bd92b0(
+    e: &mut Engine,
+    this: Ptr<ImageSpaceEffectRefraction>,
+    first: u32,
+    second: u32,
+    third: u32,
+    _unused_4: u32,
+) {
+    let base = this.addr();
+    if e.mem.u8(base + 5) != 0 {
+        let changed = e.vcall(base, 0x1c, &args![third]).u8();
+        e.mem.set_u8(base + 5, changed);
+    }
+    let effect = e.mem.u32(e.mem.u32(base + 0xc));
+    let shifted = if effect != 0 {
+        effect.wrapping_sub(0x6c)
+    } else {
+        0
+    };
+    let shader = shifted.wrapping_add(0x6c);
+    let textures = e.mem.u32(base + 0x2c);
+    let params = e.mem.u32(base + 0x1c);
+    let texture = e.mem.u32(textures);
+    let param = e.mem.u32(params);
+    e.call(EFFECT_SET_TEXTURE, &args![shader, 0u32, texture, 0u32]);
+    let texture = e.mem.u32(e.mem.u32(base + 0x2c) + 4);
+    e.call(EFFECT_SET_TEXTURE, &args![shader, 1u32, texture, 0u32]);
+    let normals = normals(this);
+    e.call(EFFECT_SET_TEXTURE, &args![shader, 2u32, normals, 0u32]);
+    e.vcall(shader, 4, &args![first, second, param, 1u32]);
+    for index in 0..3u32 {
+        e.call(EFFECT_SET_TEXTURE, &args![shader, index, 0u32, 0u32]);
+    }
+    let manager = e.mem.u32(TEXTURE_MANAGER);
+    let rendered = e.call(TEXTURE_GET_RENDERED_TEXTURE, &args![normals]).u32();
+    e.call(RETURN_RENDERED_TEXTURE, &args![manager, rendered]);
+    e.call(TEXTURE_CLEAR_TEXTURE, &args![normals]);
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -141,6 +223,14 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
                 Ptr<ImageSpaceEffectRefraction>,
                 bool,
             ) -> u32
+        ),
+        entry!(
+            0x00bd_9240,
+            fn_00bd9240(Ptr<ImageSpaceEffectRefraction>, u32) -> bool
+        ),
+        entry!(
+            0x00bd_92b0,
+            fn_00bd92b0(Ptr<ImageSpaceEffectRefraction>, u32, u32, u32, u32)
         ),
     ]
 }
@@ -272,5 +362,113 @@ mod tests {
                 .iter()
                 .any(|(a, _)| *a == BORROW_RENDERED_TEXTURE_00B6E110));
         }
+    }
+}
+
+#[cfg(test)]
+mod n012_tests {
+    use super::*;
+
+    fn calls(e: &Engine, addr: u32) -> Vec<Vec<u32>> {
+        e.call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|(a, _)| *a == addr)
+            .map(|(_, w)| w.clone())
+            .collect()
+    }
+
+    #[test]
+    fn fn_00bd9240_hands_the_manager_floats_to_the_first_parameter() {
+        let mut e = Engine::new();
+        e.map(0x011f_9000, 0x1000);
+        e.register(PARAM_SET_00B8A790, |_, _| Ret::default());
+        let manager = e.mem.alloc(0x310);
+        for k in 0..4u32 {
+            e.mem.set_f32(manager + 0x2f8 + 4 * k, k as f32 + 0.5);
+        }
+        e.mem.set_u32(manager + 0x304, 0x7f80_0001);
+        e.mem.set_u32(IMAGE_SPACE_MANAGER_011F91AC, manager);
+        let this = e.mem.alloc(0x68);
+        let params = e.mem.alloc(4);
+        e.mem.set_u32(params, 0x4a4a);
+        e.mem.set_u32(this + 0x1c, params);
+        e.call_log = Some(vec![]);
+        assert!(e.call(0x00bd_9240, &args![this, 9u32]).bool());
+        assert_eq!(
+            calls(&e, PARAM_SET_00B8A790),
+            vec![vec![
+                0x4a4a,
+                0,
+                0.5f32.to_bits(),
+                1.5f32.to_bits(),
+                2.5f32.to_bits(),
+                0x7fc0_0001
+            ]]
+        );
+    }
+
+    #[test]
+    fn fn_00bd92b0_renders_with_the_three_textures() {
+        let mut e = Engine::new();
+        e.map(0x011f_9000, 0x1000);
+        e.mem.set_u32(TEXTURE_MANAGER, 0x91a8);
+        for addr in [
+            EFFECT_SET_TEXTURE,
+            RETURN_RENDERED_TEXTURE,
+            TEXTURE_CLEAR_TEXTURE,
+        ] {
+            e.register(addr, |_, _| Ret::default());
+        }
+        e.register(TEXTURE_GET_RENDERED_TEXTURE, |_, _| 0x7e7eu32.into_ret());
+        let mut slots = [0u32; 8];
+        slots[1] = 0x0f00_0004;
+        slots[7] = 0x0f00_001c;
+        e.put_vtable(0x0f00_7000, &slots);
+        e.register(0x0f00_0004, |_, _| Ret::default());
+        e.register(0x0f00_001c, |_, _| 0x100u32.into_ret());
+        let shader = e.mem.alloc(0x80);
+        e.mem.set_u32(shader, 0x0f00_7000);
+        let this = e.mem.alloc(0x68);
+        e.mem.set_u32(this, 0x0f00_7000);
+        let effects = e.mem.alloc(4);
+        e.mem.set_u32(effects, shader);
+        e.mem.set_u32(this + 0xc, effects);
+        let textures = e.mem.alloc(8);
+        e.mem.set_u32(textures, 0x7701);
+        e.mem.set_u32(textures + 4, 0x7702);
+        e.mem.set_u32(this + 0x2c, textures);
+        let params = e.mem.alloc(4);
+        e.mem.set_u32(params, 0x9a9a);
+        e.mem.set_u32(this + 0x1c, params);
+        e.mem.set_u8(this + 5, 1);
+        e.call_log = Some(vec![]);
+        e.call(
+            0x00bd_92b0,
+            &args![this, 0x11u32, 0x22u32, 0x33u32, 0x44u32],
+        );
+        assert_eq!(calls(&e, 0x0f00_001c), vec![vec![this, 0x33]]);
+        assert_eq!(e.mem.u8(this + 5), 0);
+        assert_eq!(
+            calls(&e, EFFECT_SET_TEXTURE),
+            vec![
+                vec![shader, 0, 0x7701, 0],
+                vec![shader, 1, 0x7702, 0],
+                vec![shader, 2, this + 0x58, 0],
+                vec![shader, 0, 0, 0],
+                vec![shader, 1, 0, 0],
+                vec![shader, 2, 0, 0]
+            ]
+        );
+        assert_eq!(
+            calls(&e, 0x0f00_0004),
+            vec![vec![shader, 0x11, 0x22, 0x9a9a, 1]]
+        );
+        assert_eq!(
+            calls(&e, RETURN_RENDERED_TEXTURE),
+            vec![vec![0x91a8, 0x7e7e]]
+        );
+        assert_eq!(calls(&e, TEXTURE_CLEAR_TEXTURE), vec![vec![this + 0x58]]);
     }
 }

@@ -171,9 +171,51 @@ pub fn ni_unshared_geometry_group_release_chip(
     e.call(FREE_SIZED, &args![chip, 0x20u32]);
 }
 
+/// The memory manager (`011f6238`) and its allocation (`00aa3e40`, `thiscall`, the size).
+const MEMORY_MANAGER: u32 = 0x011f_6238;
+const MEMORY_ALLOCATE: u32 = 0x00aa_3e40;
+/// `NiGeometryBufferData::NiGeometryBufferData` (`00e947c0`, engine map; `thiscall`, no stack
+/// words; answers the object).
+const BUFFER_DATA_CONSTRUCTOR: u32 = 0x00e9_47c0;
+/// `NiGeometryGroup::AddObject` (`00e98730`, `nigeometrygroup.cpp`; `thiscall`, the data).
+const GEOMETRY_GROUP_ADD_OBJECT: u32 = 0x00e9_8730;
+
+// Translated from 00e94de0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiUnsharedGeometryGroup::AddObject` (Xbox PDB, engine map), `thiscall`, one word: when the
+/// object's +0x1C is 0, makes a buffer data (0x54 bytes from the memory manager,
+/// constructed), sets its +0x3C to 4, stores it at the object's +0x1C, sets its `m_uiFlags`
+/// (+0x04) to `0x01400000` and adds it to the group (`NiGeometryGroup::AddObject`). A failed
+/// allocation leaves the data null and the exe writes through it anyway.
+pub fn ni_unshared_geometry_group_add_object(
+    e: &mut Engine,
+    this: Ptr<NiUnsharedGeometryGroup>,
+    object: Ptr,
+) {
+    let object = object.addr();
+    if e.mem.u32(object + 0x1c) != 0 {
+        return;
+    }
+    let block = e
+        .call(MEMORY_ALLOCATE, &args![MEMORY_MANAGER, 0x54u32])
+        .u32();
+    let data = if block != 0 {
+        e.call(BUFFER_DATA_CONSTRUCTOR, &args![block]).u32()
+    } else {
+        0
+    };
+    e.mem.set_u32(data.wrapping_add(0x3c), 4);
+    e.mem.set_u32(object + 0x1c, data);
+    e.mem.set_u32(data.wrapping_add(4), 0x0140_0000);
+    e.call(GEOMETRY_GROUP_ADD_OBJECT, &args![this, data]);
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(
+            0x00e9_4de0,
+            ni_unshared_geometry_group_add_object(Ptr<NiUnsharedGeometryGroup>, Ptr)
+        ),
         entry!(
             0x00e9_4d30,
             ni_unshared_geometry_group_scalar_deleting_destructor(
@@ -352,5 +394,33 @@ mod tests {
         let log = e.call_log.take().unwrap();
         assert!(calls_to(&log, RELEASE_FN).is_empty());
         assert_eq!(calls_to(&log, FREE_SIZED), vec![vec![bare.addr(), 0x20]]);
+    }
+
+    #[test]
+    fn add_object_makes_and_stores_a_data() {
+        let mut e = engine();
+        e.register(MEMORY_ALLOCATE, |e, a| e.mem.alloc(a[1]).into_ret());
+        e.register(BUFFER_DATA_CONSTRUCTOR, |_, a| a[0].into_ret());
+        e.register(GEOMETRY_GROUP_ADD_OBJECT, |_, _| Ret::default());
+        let group = e.mem.alloc(0xc);
+        let object = e.mem.alloc(0x20);
+        e.call_log = Some(vec![]);
+        e.call(0x00e9_4de0, &args![group, object]);
+        let data = e.mem.u32(object + 0x1c);
+        assert_eq!(e.mem.u32(data + 0x3c), 4);
+        assert_eq!(e.mem.u32(data + 4), 0x0140_0000);
+        let log = e.call_log.take().unwrap();
+        assert_eq!(
+            calls_to(&log, MEMORY_ALLOCATE),
+            vec![vec![MEMORY_MANAGER, 0x54]]
+        );
+        assert_eq!(
+            calls_to(&log, GEOMETRY_GROUP_ADD_OBJECT),
+            vec![vec![group, data]]
+        );
+        // An object that has one is left alone.
+        e.call_log = Some(vec![]);
+        e.call(0x00e9_4de0, &args![group, object]);
+        assert_eq!(e.call_log.take().unwrap().len(), 1);
     }
 }

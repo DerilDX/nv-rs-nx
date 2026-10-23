@@ -647,9 +647,291 @@ pub fn ni_screen_elements_data_set_textures(
     true
 }
 
+/// `00aa13e0` (`cdecl`, one word): allocates a block of that size.
+const ALLOCATE_OBJECT: u32 = 0x00aa_13e0;
+/// `NiTriShapeData::IsEqual`, `LoadBinary`, `SaveBinary` and `GetViewerStrings` (Xbox PDB,
+/// `thiscall`, one stack word each).
+const NI_TRI_SHAPE_DATA_IS_EQUAL: u32 = 0x00a7_b7e0;
+const NI_TRI_SHAPE_DATA_LOAD_BINARY: u32 = 0x00a7_b940;
+const NI_TRI_SHAPE_DATA_SAVE_BINARY: u32 = 0x00a7_bbe0;
+const NI_TRI_SHAPE_DATA_GET_VIEWER_STRINGS: u32 = 0x00a7_bd60;
+/// `NiStream`'s input (+0x24c, read function at +8) and output (+0x250, write function at
+/// +0xc); a file's position is at +4.
+const STREAM_INPUT: u32 = 0x24c;
+const STREAM_OUTPUT: u32 = 0x250;
+/// `NiGetViewerString` (Xbox PDB, `cdecl`, one word), its pointer overload
+/// `NiGetViewerString_ov10` and its `unsigned short` overload `NiGetViewerString_ov6`
+/// (`cdecl`, name and value word).
+const GET_VIEWER_STRING: u32 = 0x00a7_d330;
+const GET_VIEWER_STRING_POINTER: u32 = 0x00a7_d5a0;
+const GET_VIEWER_STRING_USHORT: u32 = 0x00a7_d490;
+/// `0096ad30` (`thiscall`, new capacity) and `0096ae90` (`thiscall`, index, pointer to the
+/// element): the viewer-string array's set-size and set-at.
+const ARRAY_SET_SIZE: u32 = 0x0096_ad30;
+const ARRAY_SET_AT: u32 = 0x0096_ae90;
+/// `"m_akPolygon"`, `"m_ausPIndexer"`, then the names of the seven 16-bit counts in the
+/// order they are listed (`m_usMaxPQuantity` .. `m_usIGrowBy`, +0x60 .. +0x6c).
+const NAME_POLYGONS: u32 = 0x0109_ebc8;
+const NAME_INDEXER: u32 = 0x0109_ebb8;
+const NAMES_COUNTS: [u32; 7] = [
+    0x0109_eba4,
+    0x0109_eb98,
+    0x0109_eb88,
+    0x0109_eb74,
+    0x0109_eb68,
+    0x0109_eb54,
+    0x0109_eb48,
+];
+
+// Translated from 00a87920 (PC disassembly, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (a function Ghidra did not create; the creation function the
+/// stream registers for `NiScreenElementsData`, `0109ebd4`): a new screen elements data
+/// (0x70 bytes from `00aa13e0`; `NiTriShapeData`'s constructor, every count +0x60 .. +0x6c
+/// and `m_bBoundNeedsUpdate` cleared, the vtable, no polygon array or indexer), or null when
+/// the allocation fails.
+pub fn fn_00a87920(e: &mut Engine) -> Ptr<NiScreenElementsData> {
+    type D = NiScreenElementsData;
+    let block = e.call(ALLOCATE_OBJECT, &args![0x70u32]).u32();
+    if block == 0 {
+        return Ptr::new(0);
+    }
+    let this: Ptr<D> = Ptr::new(block);
+    e.call(NI_TRI_SHAPE_DATA_CONSTRUCT, &args![this]);
+    e.set(this, D::m_usMaxPQuantity, 0);
+    e.set(this, D::m_usMaxVQuantity, 0);
+    e.set(this, D::m_usIGrowBy, 0);
+    e.set(this, D::m_bBoundNeedsUpdate, 0);
+    e.mem.set_u32(block, NI_SCREEN_ELEMENTS_DATA_VTABLE);
+    e.set(this, D::m_akPolygon, 0);
+    e.set(this, D::m_ausPIndexer, 0);
+    e.set(this, D::m_usPGrowBy, 0);
+    e.set(this, D::m_usPQuantity, 0);
+    e.set(this, D::m_usVGrowBy, 0);
+    e.set(this, D::m_usMaxIQuantity, 0);
+    this
+}
+
+/// The compiler's inlined `memcmp`-style comparison: words while four or more bytes remain
+/// (`left` against `right`), then up to three bytes (`right` against `left`).
+fn same_bytes(e: &Engine, mut left: u32, mut right: u32, mut size: u32) -> bool {
+    while size >= 4 {
+        if e.mem.u32(left) != e.mem.u32(right) {
+            return false;
+        }
+        size -= 4;
+        right = right.wrapping_add(4);
+        left = left.wrapping_add(4);
+    }
+    if size == 0 {
+        return true;
+    }
+    if e.mem.u8(right) != e.mem.u8(left) {
+        return false;
+    }
+    if size <= 1 {
+        return true;
+    }
+    if e.mem.u8(right.wrapping_add(1)) != e.mem.u8(left.wrapping_add(1)) {
+        return false;
+    }
+    if size <= 2 {
+        return true;
+    }
+    e.mem.u8(right.wrapping_add(2)) == e.mem.u8(left.wrapping_add(2))
+}
+
+// Translated from 00a87980 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiScreenElementsData::IsEqual` (Xbox PDB): `NiTriShapeData::IsEqual`, the seven
+/// 16-bit counts (+0x60 .. +0x6c), then the polygon arrays (`m_usMaxPQuantity * 8` bytes)
+/// and the indexers (`m_usMaxPQuantity * 2` bytes) must all match.
+pub fn ni_screen_elements_data_is_equal(
+    e: &mut Engine,
+    this: Ptr<NiScreenElementsData>,
+    other: Ptr,
+) -> bool {
+    type D = NiScreenElementsData;
+    if !e
+        .call(NI_TRI_SHAPE_DATA_IS_EQUAL, &args![this, other])
+        .bool()
+    {
+        return false;
+    }
+    for offset in (0x60u32..=0x6c).step_by(2) {
+        if e.mem.u16(this.addr() + offset) != e.mem.u16(other.addr() + offset) {
+            return false;
+        }
+    }
+    let maximum = u32::from(e.get(this, D::m_usMaxPQuantity));
+    let theirs = e.mem.u32(other.addr() + 0x58);
+    let mine = e.get(this, D::m_akPolygon);
+    if !same_bytes(e, mine, theirs, maximum * 8) {
+        return false;
+    }
+    let theirs = e.mem.u32(other.addr() + 0x5c);
+    let mine = e.get(this, D::m_ausPIndexer);
+    same_bytes(e, mine, theirs, maximum * 2)
+}
+
+/// One read or write through the stream's input (read function at +8) or output (write
+/// function at +0xc): `function(file, at, size, count, 1)` with the word at `count` set to
+/// `count_value` first, the answer added to the file's position.
+fn stream_transfer(
+    e: &mut Engine,
+    stream: Ptr,
+    write: bool,
+    at: u32,
+    size: u32,
+    count: u32,
+    count_value: u32,
+) {
+    let (file_slot, function_slot) = if write {
+        (STREAM_OUTPUT, 0xc)
+    } else {
+        (STREAM_INPUT, 8)
+    };
+    let file = e.mem.u32(stream.addr().wrapping_add(file_slot));
+    let function = e.mem.u32(file.wrapping_add(function_slot));
+    e.mem.set_u32(count, count_value);
+    let done = e.call(function, &args![file, at, size, count, 1u32]).u32();
+    let position = e.mem.u32(file.wrapping_add(4)).wrapping_add(done);
+    e.mem.set_u32(file.wrapping_add(4), position);
+}
+
+// Translated from 00a88410 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiScreenElementsData::LoadBinary` (Xbox PDB): `NiTriShapeData::LoadBinary`, then from
+/// the stream's input `m_usMaxPQuantity` (2 bytes), a polygon array (`max * 8` bytes) and
+/// an indexer (`max * 2` bytes) from `00aa1070`, both read in (byte counts 8 and 2; the
+/// indexer's size uses the maximum as read before the polygons), then the other six 16-bit
+/// counts (+0x62 .. +0x6c). The byte-count word is the stream argument's stack word.
+pub fn ni_screen_elements_data_load_binary(
+    e: &mut Engine,
+    this: Ptr<NiScreenElementsData>,
+    stream: Ptr,
+) {
+    type D = NiScreenElementsData;
+    e.call(NI_TRI_SHAPE_DATA_LOAD_BINARY, &args![this, stream]);
+    let base = this.addr();
+    e.with_stack(4, |e, count| {
+        let count = count.addr();
+        stream_transfer(e, stream, false, base + 0x60, 2, count, 2);
+        let size = u32::from(e.get(this, D::m_usMaxPQuantity)) * 8;
+        let polygons = e.call(NEW_BLOCK, &args![size]).u32();
+        e.set(this, D::m_akPolygon, polygons);
+        let size = u32::from(e.get(this, D::m_usMaxPQuantity)) * 2;
+        let indexer = e.call(NEW_BLOCK, &args![size]).u32();
+        e.set(this, D::m_ausPIndexer, indexer);
+        let polygons = e.get(this, D::m_akPolygon);
+        let maximum = u32::from(e.get(this, D::m_usMaxPQuantity));
+        stream_transfer(e, stream, false, polygons, maximum * 8, count, 8);
+        let indexer = e.get(this, D::m_ausPIndexer);
+        stream_transfer(e, stream, false, indexer, maximum * 2, count, 2);
+        for offset in (0x62u32..=0x6c).step_by(2) {
+            stream_transfer(e, stream, false, base + offset, 2, count, 2);
+        }
+    });
+}
+
+// Translated from 00a88590 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiScreenElementsData::SaveBinary` (Xbox PDB): `NiTriShapeData::SaveBinary`, then to
+/// the stream's output `m_usMaxPQuantity` (2 bytes), the polygon array (`max * 8` bytes,
+/// byte count 8), the indexer (`max * 2` bytes) and the other six 16-bit counts (+0x62 ..
+/// +0x6c). The byte-count word is the stream argument's stack word.
+pub fn ni_screen_elements_data_save_binary(
+    e: &mut Engine,
+    this: Ptr<NiScreenElementsData>,
+    stream: Ptr,
+) {
+    type D = NiScreenElementsData;
+    e.call(NI_TRI_SHAPE_DATA_SAVE_BINARY, &args![this, stream]);
+    let base = this.addr();
+    e.with_stack(4, |e, count| {
+        let count = count.addr();
+        stream_transfer(e, stream, true, base + 0x60, 2, count, 2);
+        let maximum = u32::from(e.get(this, D::m_usMaxPQuantity));
+        let polygons = e.get(this, D::m_akPolygon);
+        stream_transfer(e, stream, true, polygons, maximum * 8, count, 8);
+        let indexer = e.get(this, D::m_ausPIndexer);
+        stream_transfer(e, stream, true, indexer, maximum * 2, count, 2);
+        for offset in (0x62u32..=0x6c).step_by(2) {
+            stream_transfer(e, stream, true, base + offset, 2, count, 2);
+        }
+    });
+}
+
+/// Appends the string pointer held in the word at `slot` to the viewer-string array: when
+/// the count (`m_usSize`, +0xa) is not below the capacity (`m_usMaxSize`, +8) the array first
+/// grows to count + `m_usGrowBy` (+0xe, `0096ad30`); then `0096ae90` stores it at the old
+/// count.
+fn append_viewer_string(e: &mut Engine, strings: Ptr, slot: u32) {
+    let count = e.mem.u16(strings.addr() + 0xa) as u32;
+    let capacity = e.mem.u16(strings.addr() + 8) as u32;
+    if count >= capacity {
+        let grow_by = e.mem.u16(strings.addr() + 0xe) as u32;
+        e.call(ARRAY_SET_SIZE, &args![strings, grow_by + count]);
+    }
+    e.call(ARRAY_SET_AT, &args![strings, count, slot]);
+}
+
+// Translated from 00a886f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiScreenElementsData::GetViewerStrings` (Xbox PDB): `NiTriShapeData::GetViewerStrings`,
+/// then ten strings appended to `strings`: the class name (the first word of
+/// `NiScreenElementsData::ms_RTTI`, `011f5b50`), the polygon array and indexer pointers
+/// (`NiGetViewerString_ov10`) and the seven 16-bit counts (`NiGetViewerString_ov6`, each
+/// zero-extended). Each string pointer is kept in the `strings` argument's stack word, whose
+/// address the array's set-at receives.
+pub fn ni_screen_elements_data_get_viewer_strings(
+    e: &mut Engine,
+    this: Ptr<NiScreenElementsData>,
+    strings: Ptr,
+) {
+    type D = NiScreenElementsData;
+    e.call(NI_TRI_SHAPE_DATA_GET_VIEWER_STRINGS, &args![this, strings]);
+    e.with_stack(4, |e, slot| {
+        let slot = slot.addr();
+        let class_name = e.global::<u32>(NI_SCREEN_ELEMENTS_DATA_RTTI);
+        let text = e.call(GET_VIEWER_STRING, &args![class_name]).u32();
+        e.mem.set_u32(slot, text);
+        append_viewer_string(e, strings, slot);
+        for (name, field) in [
+            (NAME_POLYGONS, D::m_akPolygon),
+            (NAME_INDEXER, D::m_ausPIndexer),
+        ] {
+            let pointer = e.get(this, field);
+            let text = e
+                .call(GET_VIEWER_STRING_POINTER, &args![name, pointer])
+                .u32();
+            e.mem.set_u32(slot, text);
+            append_viewer_string(e, strings, slot);
+        }
+        for (i, name) in NAMES_COUNTS.iter().enumerate() {
+            let value = u32::from(e.mem.u16(this.addr() + 0x60 + 2 * i as u32));
+            let text = e.call(GET_VIEWER_STRING_USHORT, &args![*name, value]).u32();
+            e.mem.set_u32(slot, text);
+            append_viewer_string(e, strings, slot);
+        }
+    });
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x00a8_7920, fn_00a87920() -> Ptr<NiScreenElementsData>),
+        entry!(
+            0x00a8_7980,
+            ni_screen_elements_data_is_equal(Ptr<NiScreenElementsData>, Ptr) -> bool
+        ),
+        entry!(
+            0x00a8_8410,
+            ni_screen_elements_data_load_binary(Ptr<NiScreenElementsData>, Ptr)
+        ),
+        entry!(
+            0x00a8_8590,
+            ni_screen_elements_data_save_binary(Ptr<NiScreenElementsData>, Ptr)
+        ),
+        entry!(
+            0x00a8_86f0,
+            ni_screen_elements_data_get_viewer_strings(Ptr<NiScreenElementsData>, Ptr)
+        ),
         entry!(
             0x00a8_7900,
             ni_screen_elements_data_update_bound(Ptr<NiScreenElementsData>)
@@ -1132,5 +1414,249 @@ mod batch_b011_tests {
                 &args![this, 0i32, 0u32, 0.25f32, 0.5f32, 0.75f32, 1.0f32]
             )
             .bool());
+    }
+}
+
+#[cfg(test)]
+mod n018_tests {
+    use super::*;
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    fn calls_to(e: &Engine, addr: u32) -> Vec<Vec<u32>> {
+        e.call_log
+            .clone()
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|(a, _)| *a == addr)
+            .map(|(_, words)| words)
+            .collect()
+    }
+
+    #[test]
+    fn create_object_builds_an_empty_data() {
+        let mut e = Engine::new();
+        e.register(ALLOCATE_OBJECT, |e, a| {
+            let block = e.mem.alloc(a[0]);
+            // Garbage the constructor and the clears must overwrite.
+            for i in 0..a[0] {
+                e.mem.set_u8(block + i, 0xcd);
+            }
+            block.into_ret()
+        });
+        e.register(NI_TRI_SHAPE_DATA_CONSTRUCT, |_, a| a[0].into_ret());
+        e.call_log = Some(vec![]);
+        let data = e.call(0x00a8_7920, &args![]).u32();
+        assert_eq!(calls_to(&e, ALLOCATE_OBJECT), vec![vec![0x70]]);
+        assert_eq!(calls_to(&e, NI_TRI_SHAPE_DATA_CONSTRUCT), vec![vec![data]]);
+        assert_eq!(e.mem.u32(data), NI_SCREEN_ELEMENTS_DATA_VTABLE);
+        assert_eq!(e.mem.bytes(data + 0x58, 0x17), vec![0; 0x17]);
+        // The byte after the flag is not touched.
+        assert_eq!(e.mem.u8(data + 0x6f), 0xcd);
+        e.register(ALLOCATE_OBJECT, |_, _| 0u32.into_ret());
+        assert_eq!(e.call(0x00a8_7920, &args![]).u32(), 0);
+    }
+
+    /// A data with two polygons of capacity: polygon records `0..16` and indexer bytes
+    /// `0..4`, the counts 2, 3, 4, 5, 6, 7, 8.
+    fn data(e: &mut Engine) -> u32 {
+        let data = e.mem.alloc(0x70);
+        for i in 0..7u32 {
+            e.mem.set_u16(data + 0x60 + 2 * i, 2 + i as u16);
+        }
+        let polygons = e.mem.alloc(16);
+        for i in 0..16 {
+            e.mem.set_u8(polygons + i, i as u8);
+        }
+        let indexer = e.mem.alloc(4);
+        for i in 0..4 {
+            e.mem.set_u8(indexer + i, 0x40 + i as u8);
+        }
+        e.mem.set_u32(data + 0x58, polygons);
+        e.mem.set_u32(data + 0x5c, indexer);
+        data
+    }
+
+    #[test]
+    fn is_equal_compares_counts_and_arrays() {
+        let mut e = Engine::new();
+        e.register(NI_TRI_SHAPE_DATA_IS_EQUAL, |_, _| 1u32.into_ret());
+        let a = data(&mut e);
+        let b = data(&mut e);
+        assert!(e.call(0x00a8_7980, &args![a, b]).bool());
+        for i in 0..7u32 {
+            let b = data(&mut e);
+            e.mem.set_u16(b + 0x60 + 2 * i, 0x99);
+            assert!(!e.call(0x00a8_7980, &args![a, b]).bool(), "count {i}");
+        }
+        for (table, at) in [(0x58u32, 15u32), (0x58, 0), (0x5c, 3), (0x5c, 0)] {
+            let b = data(&mut e);
+            let array = e.mem.u32(b + table);
+            e.mem.set_u8(array + at, 0xee);
+            assert!(!e.call(0x00a8_7980, &args![a, b]).bool(), "{table:x} {at}");
+        }
+        // With one polygon only the first 8 record bytes and 2 indexer bytes count.
+        let b = data(&mut e);
+        e.mem.set_u16(a + 0x60, 1);
+        e.mem.set_u16(b + 0x60, 1);
+        let array = e.mem.u32(b + 0x58);
+        e.mem.set_u8(array + 8, 0xee);
+        let array = e.mem.u32(b + 0x5c);
+        e.mem.set_u8(array + 2, 0xee);
+        assert!(e.call(0x00a8_7980, &args![a, b]).bool());
+        e.register(NI_TRI_SHAPE_DATA_IS_EQUAL, |_, _| 0u32.into_ret());
+        assert!(!e.call(0x00a8_7980, &args![a, b]).bool());
+    }
+
+    type Transfers = Rc<RefCell<Vec<(u32, u32, u32, u32)>>>;
+
+    /// A stream whose input fills each read with the next of `values` (a 16-bit value for
+    /// 2-byte reads, the byte 0xab otherwise) and whose output records each write.
+    fn stream(e: &mut Engine, values: Vec<u16>) -> (u32, Transfers) {
+        let log: Transfers = Rc::default();
+        let reads = log.clone();
+        let mut queue = values.into_iter();
+        e.register_double(0x0700_0008, move |e, a| {
+            reads.borrow_mut().push((a[1], a[2], a[3], e.mem.u32(a[3])));
+            if a[2] == 2 {
+                let value = queue.next().unwrap();
+                e.mem.set_u16(a[1], value);
+            } else {
+                for i in 0..a[2] {
+                    e.mem.set_u8(a[1] + i, 0xab);
+                }
+            }
+            a[2].into_ret()
+        });
+        let writes = log.clone();
+        e.register_double(0x0700_000c, move |e, a| {
+            writes
+                .borrow_mut()
+                .push((a[1], a[2], a[3], e.mem.u32(a[3])));
+            a[2].into_ret()
+        });
+        let file = e.mem.alloc(0x10);
+        e.mem.set_u32(file + 8, 0x0700_0008);
+        e.mem.set_u32(file + 0xc, 0x0700_000c);
+        let stream = e.mem.alloc(0x254);
+        e.mem.set_u32(stream + STREAM_INPUT, file);
+        e.mem.set_u32(stream + STREAM_OUTPUT, file);
+        (stream, log)
+    }
+
+    #[test]
+    fn load_binary_reads_the_polygons_and_counts() {
+        let mut e = Engine::new();
+        e.register(NI_TRI_SHAPE_DATA_LOAD_BINARY, |_, _| Ret::default());
+        e.register(NEW_BLOCK, |e, a| e.mem.alloc(a[0].max(1)).into_ret());
+        e.call_log = Some(vec![]);
+        let (stream, log) = stream(&mut e, vec![3, 1, 2, 3, 4, 5, 6]);
+        let this = e.mem.alloc(0x70);
+        e.call(0x00a8_8410, &args![this, stream]);
+        assert_eq!(
+            calls_to(&e, NI_TRI_SHAPE_DATA_LOAD_BINARY),
+            vec![vec![this, stream]]
+        );
+        assert_eq!(calls_to(&e, NEW_BLOCK), vec![vec![24], vec![6]]);
+        let polygons = e.mem.u32(this + 0x58);
+        let indexer = e.mem.u32(this + 0x5c);
+        let log = log.borrow();
+        let reads: Vec<(u32, u32, u32)> = log.iter().map(|r| (r.0, r.1, r.3)).collect();
+        assert_eq!(
+            reads,
+            vec![
+                (this + 0x60, 2, 2),
+                (polygons, 24, 8),
+                (indexer, 6, 2),
+                (this + 0x62, 2, 2),
+                (this + 0x64, 2, 2),
+                (this + 0x66, 2, 2),
+                (this + 0x68, 2, 2),
+                (this + 0x6a, 2, 2),
+                (this + 0x6c, 2, 2),
+            ]
+        );
+        assert!(log.iter().all(|r| r.2 == log[0].2));
+        let counts: Vec<u16> = (0..7).map(|i| e.mem.u16(this + 0x60 + 2 * i)).collect();
+        assert_eq!(counts, vec![3, 1, 2, 3, 4, 5, 6]);
+        assert_eq!(e.mem.u8(polygons + 23), 0xab);
+    }
+
+    #[test]
+    fn save_binary_writes_the_polygons_and_counts() {
+        let mut e = Engine::new();
+        e.register(NI_TRI_SHAPE_DATA_SAVE_BINARY, |_, _| Ret::default());
+        e.call_log = Some(vec![]);
+        let (stream, log) = stream(&mut e, vec![]);
+        let this = data(&mut e);
+        e.call(0x00a8_8590, &args![this, stream]);
+        assert_eq!(
+            calls_to(&e, NI_TRI_SHAPE_DATA_SAVE_BINARY),
+            vec![vec![this, stream]]
+        );
+        let polygons = e.mem.u32(this + 0x58);
+        let indexer = e.mem.u32(this + 0x5c);
+        let log = log.borrow();
+        let writes: Vec<(u32, u32, u32)> = log.iter().map(|w| (w.0, w.1, w.3)).collect();
+        assert_eq!(
+            writes,
+            vec![
+                (this + 0x60, 2, 2),
+                (polygons, 16, 8),
+                (indexer, 4, 2),
+                (this + 0x62, 2, 2),
+                (this + 0x64, 2, 2),
+                (this + 0x66, 2, 2),
+                (this + 0x68, 2, 2),
+                (this + 0x6a, 2, 2),
+                (this + 0x6c, 2, 2),
+            ]
+        );
+        assert!(log.iter().all(|w| w.2 == log[0].2));
+    }
+
+    #[test]
+    fn viewer_strings_list_the_arrays_and_counts() {
+        let mut e = Engine::new();
+        e.map(0x011f_5000, 0x1000);
+        e.mem.set_u32(NI_SCREEN_ELEMENTS_DATA_RTTI, 0x0109_e000);
+        e.register(NI_TRI_SHAPE_DATA_GET_VIEWER_STRINGS, |_, _| Ret::default());
+        e.register(GET_VIEWER_STRING, |_, _| 0x5000u32.into_ret());
+        e.register(GET_VIEWER_STRING_POINTER, |_, _| 0x6000u32.into_ret());
+        e.register(GET_VIEWER_STRING_USHORT, |_, a| (0x7000 + a[1]).into_ret());
+        e.register(ARRAY_SET_SIZE, |e, a| {
+            e.mem.set_u16(a[0] + 8, a[1] as u16);
+            Ret::default()
+        });
+        e.register(ARRAY_SET_AT, |e, a| {
+            let base = e.mem.u32(a[0] + 4);
+            let value = e.mem.u32(a[2]);
+            e.mem.set_u32(base + 4 * a[1], value);
+            e.mem.set_u16(a[0] + 0xa, a[1] as u16 + 1);
+            Ret::default()
+        });
+        e.call_log = Some(vec![]);
+        let strings = e.mem.alloc(0x10);
+        let base = e.mem.alloc(0x40);
+        e.mem.set_u32(strings + 4, base);
+        e.mem.set_u16(strings + 0xe, 16);
+        let this = data(&mut e);
+        e.call(0x00a8_86f0, &args![this, strings]);
+        assert_eq!(calls_to(&e, GET_VIEWER_STRING), vec![vec![0x0109_e000]]);
+        assert_eq!(
+            calls_to(&e, GET_VIEWER_STRING_POINTER),
+            vec![
+                vec![NAME_POLYGONS, e.mem.u32(this + 0x58)],
+                vec![NAME_INDEXER, e.mem.u32(this + 0x5c)]
+            ]
+        );
+        let counts: Vec<Vec<u32>> = NAMES_COUNTS
+            .iter()
+            .enumerate()
+            .map(|(i, name)| vec![*name, 2 + i as u32])
+            .collect();
+        assert_eq!(calls_to(&e, GET_VIEWER_STRING_USHORT), counts);
+        assert_eq!(e.mem.u16(strings + 0xa), 10);
+        assert_eq!(e.mem.u32(base + 4 * 9), 0x7008);
     }
 }

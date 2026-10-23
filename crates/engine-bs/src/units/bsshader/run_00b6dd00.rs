@@ -932,9 +932,19 @@ pub fn fn_00b6f470(_e: &mut Engine, _this: Ptr) -> u32 {
     1
 }
 
+// Translated from 00b6f480 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Ghidra made no function here: slot +0xc8 of `BSShaderNoLightingProperty`'s vtable
+/// `010ae670` (`SetClampD3D` in the Xbox PDB's slot list; `thiscall`, one word). Stores 0 in
+/// `TextureClampMode` (`+0x6c` on PC, Xbox PDB +0x74) when the word is 3, otherwise 3.
+pub fn fn_00b6f480(e: &mut Engine, this: Ptr, mode: u32) {
+    let value: u32 = if mode.wrapping_sub(3) != 0 { 3 } else { 0 };
+    e.mem.set_u32(this.addr().wrapping_add(0x6c), value);
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x00b6_f480, fn_00b6f480(Ptr, u32)),
         entry!(0x00b6_e110, fn_00b6e110(Ptr, u32, u32, u32, u32, u32) -> u32),
         entry!(0x00b6_dd80, fn_00b6dd80(Ptr) -> Ptr),
         entry!(0x00b6_e450, fn_00b6e450(Ptr, u32)),
@@ -1686,5 +1696,20 @@ mod rendered_texture_tests {
         let (mut e, this) = engine();
         assert_eq!(get(&mut e, this, 3, 1), 0);
         assert!(calls(&e, TEXTURE_QUERY_00B6C2C0).is_empty());
+    }
+}
+
+#[cfg(test)]
+mod n013_tests {
+    use super::*;
+
+    #[test]
+    fn fn_00b6f480_maps_3_to_0_and_the_rest_to_3() {
+        let mut e = Engine::new();
+        let this = e.mem.alloc(0x88);
+        e.call(0x00b6_f480, &args![this, 3u32]);
+        assert_eq!(e.mem.u32(this + 0x6c), 0);
+        e.call(0x00b6_f480, &args![this, 2u32]);
+        assert_eq!(e.mem.u32(this + 0x6c), 3);
     }
 }

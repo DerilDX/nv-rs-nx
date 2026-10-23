@@ -74,11 +74,38 @@ pub fn fn_00a8fdb0(e: &mut Engine, this: Ptr) {
     e.call(INTERLOCKED_DECREMENT, &args![LIBRARY_COUNT]);
 }
 
+/// `011f5e34`: the map of materials by name (bucket count at +4, buckets at +8; each node
+/// the next node, the name handle and the material).
+const MATERIAL_MAP: u32 = 0x011f_5e34;
+
+// Translated from 00a8fe20 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`cdecl`, the address of a name handle): the material of that
+/// name in the map at `011f5e34`, or 0: an empty handle (the empty string, or a word of 0 at
+/// `handle - 4`) answers 0; otherwise the bucket `handle % bucket count` is walked for the
+/// node whose key is the handle.
+pub fn fn_00a8fe20(e: &mut Engine, name: Ptr) -> u32 {
+    let handle = e.mem.u32(name.addr());
+    if handle == e.global::<u32>(EMPTY_FIXED_STRING) || e.mem.u32(handle.wrapping_sub(4)) == 0 {
+        return 0;
+    }
+    let map = e.global::<u32>(MATERIAL_MAP);
+    let bucket = handle % e.mem.u32(map + 4);
+    let mut node = e.mem.u32(e.mem.u32(map + 8).wrapping_add(4 * bucket));
+    while node != 0 {
+        if handle == e.mem.u32(node + 4) {
+            return e.mem.u32(node + 8);
+        }
+        node = e.mem.u32(node);
+    }
+    0
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
         entry!(0x00a8_fd80, fn_00a8fd80()),
         entry!(0x00a8_fdb0, fn_00a8fdb0(Ptr)),
+        entry!(0x00a8_fe20, fn_00a8fe20(Ptr) -> u32),
     ]
 }
 
@@ -154,5 +181,44 @@ mod tests_b043 {
         let log = e.call_log.take().unwrap();
         assert_eq!(log[1..], [(INTERLOCKED_DECREMENT, vec![LIBRARY_COUNT])]);
         assert_eq!(e.mem.u32(LIBRARY_LIST + 8), 3);
+    }
+}
+
+#[cfg(test)]
+mod lookup_tests {
+    use super::*;
+
+    #[test]
+    fn finds_the_material_of_a_name() {
+        let mut e = Engine::new();
+        e.map(0x011f_5000, 0x1000);
+        e.map(0x0109_b000, 0x1000);
+        e.mem.set_u32(EMPTY_FIXED_STRING, 0x0109_b228);
+        let map = e.mem.alloc(0xc);
+        let buckets = e.mem.alloc(0xc);
+        e.mem.set_u32(map + 4, 3);
+        e.mem.set_u32(map + 8, buckets);
+        e.mem.set_u32(MATERIAL_MAP, map);
+        let text = e.mem.alloc(0x20);
+        let handle = text + 0x10;
+        e.mem.set_u32(handle - 4, 5);
+        let other = e.mem.alloc(0xc);
+        let node = e.mem.alloc(0xc);
+        e.mem.set_u32(other, node);
+        e.mem.set_u32(other + 4, handle + 3);
+        e.mem.set_u32(node + 4, handle);
+        e.mem.set_u32(node + 8, 0x7777);
+        e.mem.set_u32(buckets + 4 * (handle % 3), other);
+        let name = e.mem.alloc(4);
+        e.mem.set_u32(name, handle);
+        assert_eq!(e.call(0x00a8_fe20, &args![name]).u32(), 0x7777);
+        e.mem.set_u32(node + 4, handle + 6);
+        assert_eq!(e.call(0x00a8_fe20, &args![name]).u32(), 0);
+        e.mem.set_u32(buckets + 4 * (handle % 3), 0);
+        assert_eq!(e.call(0x00a8_fe20, &args![name]).u32(), 0);
+        e.mem.set_u32(handle - 4, 0);
+        assert_eq!(e.call(0x00a8_fe20, &args![name]).u32(), 0);
+        e.mem.set_u32(name, 0x0109_b228);
+        assert_eq!(e.call(0x00a8_fe20, &args![name]).u32(), 0);
     }
 }

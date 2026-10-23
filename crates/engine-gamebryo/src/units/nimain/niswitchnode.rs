@@ -716,6 +716,19 @@ pub fn ni_switch_node_get_viewer_strings(
     push_viewer_string(e, strings, text);
 }
 
+// Translated from 00a94550 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The class stream loader (Gamebryo `CreateObject`; Ghidra made no function of it):
+/// registered with `NiStream::RegisterLoader` under `"NiSwitchNode"` at `00a8a0c4`. A new
+/// 0xCC-byte object (`00aa13e0`) handed to the constructor ([`fn_00a94360`], a tail jump),
+/// whose result it returns; null when the allocation fails.
+pub fn ni_switch_node_create_object(e: &mut Engine) -> Ptr<NiSwitchNode> {
+    let memory = e.call(OPERATOR_NEW, &args![0xccu32]).ptr::<NiSwitchNode>();
+    if memory.is_null() {
+        return Ptr::NULL;
+    }
+    fn_00a94360(e, memory)
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -788,6 +801,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
             0x00a94680,
             ni_switch_node_get_viewer_strings(Ptr<NiSwitchNode>, Ptr<NiTArray>)
         ),
+        entry!(0x00a9_4550, ni_switch_node_create_object() -> Ptr<NiSwitchNode>),
     ]
 }
 
@@ -1664,6 +1678,36 @@ mod tests {
         assert_eq!(
             calls(&f.take_log(), VIEWER_STRING_BOOL),
             vec![vec![0x010a_011c, 0]]
+        );
+    }
+}
+
+#[cfg(test)]
+mod n020_tests {
+    use super::*;
+
+    #[test]
+    fn create_object_constructs_a_new_switch_node_or_gives_null() {
+        let mut e = Engine::new();
+        e.register(OPERATOR_NEW, |_, _| 0u32.into_ret());
+        assert_eq!(e.call(0x00a9_4550, &args![]).u32(), 0);
+        e.register(OPERATOR_NEW, |e, a| e.mem.alloc(a[0]).into_ret());
+        e.register(NI_NODE_CONSTRUCT, |_, _| Ret::default());
+        e.register(ALLOCATE_BYTES, |e, a| e.mem.alloc(a[0]).into_ret());
+        e.call_log = Some(vec![]);
+        let node = e.call(0x00a9_4550, &args![]).u32();
+        assert_eq!(e.mem.u32(node), SWITCH_NODE_VTABLE);
+        let news: Vec<_> = e
+            .call_log
+            .iter()
+            .flatten()
+            .filter(|(a, _)| *a == OPERATOR_NEW)
+            .map(|(_, w)| w.clone())
+            .collect();
+        assert_eq!(news, vec![vec![0xcc]]);
+        assert_eq!(
+            e.get(Ptr::<NiSwitchNode>::new(node), NiSwitchNode::m_iIndex),
+            -1
         );
     }
 }

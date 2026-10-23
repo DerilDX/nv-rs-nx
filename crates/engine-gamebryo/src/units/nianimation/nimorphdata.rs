@@ -442,6 +442,357 @@ pub fn ni_morph_data_load_binary(e: &mut Engine, this: Ptr, stream: Ptr) {
     });
 }
 
+// Translated from 00a41610 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiMorphData::MorphTarget::~MorphTarget` (unnamed in the engine map; the address
+/// `00a41660` calls for one element): the vertex array goes back to the memory manager, the
+/// interpolator is released and the name's handle uncounted unless it is the empty string's.
+pub fn ni_morph_data_morph_target_destruct(e: &mut Engine, this: Ptr) {
+    let target = this.addr();
+    let vertices = e.mem.u32(target.wrapping_add(TARGET_VERTICES));
+    e.call(MEMORY_MANAGER_DEALLOCATE, &args![MEMORY_MANAGER, vertices]);
+    let interpolator = e.mem.u32(target.wrapping_add(TARGET_INTERPOLATOR));
+    if interpolator != 0 {
+        release(e, interpolator);
+    }
+    let name = e.mem.u32(target.wrapping_add(TARGET_NAME));
+    if name != e.mem.u32(EMPTY_FIXED_STRING) {
+        e.call(INTERLOCKED_DECREMENT, &args![name.wrapping_sub(8)]);
+    }
+}
+
+/// `NiObject::RegisterStreamables` (`00a5d2f0`), `NiObject::IsEqual` (`00a5d470`),
+/// `NiObject::GetViewerStrings` (`00a5d6e0`) and the base `SaveBinary` (`00a89af0`), all
+/// thiscall with one word.
+const NI_OBJECT_REGISTER_STREAMABLES: u32 = 0x00a5_d2f0;
+const NI_OBJECT_IS_EQUAL: u32 = 0x00a5_d470;
+const NI_OBJECT_GET_VIEWER_STRINGS: u32 = 0x00a5_d6e0;
+const NI_OBJECT_SAVE_BINARY: u32 = 0x00a8_9af0;
+/// The stream's `RegisterFixedString` (virtual slot `0x20`, the string's address) and
+/// `NiStream::SaveFixedString` (`00a641f0`, thiscall, the string's address).
+const SLOT_REGISTER_FIXED_STRING: u32 = 0x20;
+const SAVE_FIXED_STRING: u32 = 0x00a6_41f0;
+/// `NiStream::m_pkOstr` (Xbox PDB name, PC offset +0x250) and the output stream's write
+/// function (+0xc, `cdecl` like the read function).
+const STREAM_OUTPUT: u32 = 0x250;
+const BINARY_STREAM_WRITE: u32 = 0xc;
+/// Viewer strings: `NiGetViewerString` (`00a7d330`), its unsigned form (`00a7d510`) and its
+/// fixed-string form (`00a7d5e0`), all cdecl; the array's resize (`0096ad30`) and `SetAt`
+/// (`0096ae90`), thiscall.
+const NI_GET_VIEWER_STRING: u32 = 0x00a7_d330;
+const NI_GET_VIEWER_STRING_UNSIGNED: u32 = 0x00a7_d510;
+const NI_GET_VIEWER_STRING_FIXED: u32 = 0x00a7_d5e0;
+const VIEWER_STRINGS_GROW: u32 = 0x0096_ad30;
+const VIEWER_STRINGS_SET_AT: u32 = 0x0096_ae90;
+/// The labels `"m_uiNumTargets"`, `"m_uiNumVertsPerTarget"`, `"MorphTargets"` and
+/// `"m_pcName"`.
+const TEXT_NUM_TARGETS: u32 = 0x0109_77c4;
+const TEXT_NUM_VERTS_PER_TARGET: u32 = 0x0109_77ac;
+const TEXT_MORPH_TARGETS: u32 = 0x0109_779c;
+const TEXT_NAME: u32 = 0x0109_7790;
+
+/// One write through the stream's output stream's write function from `buffer`: the word at
+/// `slot` is set to `component` and passed as the component size; the position advances by
+/// the bytes written.
+fn stream_write(e: &mut Engine, stream: u32, buffer: u32, size: u32, component: u32, slot: u32) {
+    let output = e.mem.u32(stream.wrapping_add(STREAM_OUTPUT));
+    let write = e.mem.u32(output.wrapping_add(BINARY_STREAM_WRITE));
+    e.mem.set_u32(slot, component);
+    let bytes = e
+        .call(write, &args![output, buffer, size, slot, 1u32])
+        .u32();
+    let position = e.mem.u32(output.wrapping_add(BINARY_STREAM_POSITION));
+    e.mem.set_u32(
+        output.wrapping_add(BINARY_STREAM_POSITION),
+        position.wrapping_add(bytes),
+    );
+}
+
+/// The morph target at `index`, or 0 when `index` is not below the target count.
+fn target_at(e: &Engine, data: u32, index: u32, offset: u32) -> u32 {
+    if index < e.mem.u32(data.wrapping_add(NUM_TARGETS)) {
+        e.mem
+            .u32(data.wrapping_add(MORPH_TARGETS))
+            .wrapping_add(offset)
+    } else {
+        0
+    }
+}
+
+// Translated from 00a41710 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiMorphData::RegisterStreamables` (Xbox PDB): false when `NiObject::RegisterStreamables`
+/// is; otherwise each morph target's name registers with the stream (its slot `0x20`, the
+/// name's address; the count re-read after each). True.
+pub fn ni_morph_data_register_streamables(e: &mut Engine, this: Ptr, stream: Ptr) -> bool {
+    if !e
+        .call(NI_OBJECT_REGISTER_STREAMABLES, &args![this, stream])
+        .bool()
+    {
+        return false;
+    }
+    let data = this.addr();
+    let mut index = 0u32;
+    let mut offset = 0u32;
+    while index < e.mem.u32(data.wrapping_add(NUM_TARGETS)) {
+        let target = target_at(e, data, index, offset);
+        e.vcall(
+            stream.addr(),
+            SLOT_REGISTER_FIXED_STRING,
+            &args![target.wrapping_add(TARGET_NAME)],
+        );
+        index += 1;
+        offset = offset.wrapping_add(MORPH_TARGET_SIZE);
+    }
+    true
+}
+
+// Translated from 00a417b0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (unit `nimorphdata.cpp`; `cdecl`): writes `count` floats from
+/// `floats` in one write of `count * 4` bytes, component size 4 (in the first argument's own
+/// stack word).
+pub fn fn_00a417b0(e: &mut Engine, stream: Ptr, floats: u32, count: u32) {
+    let stream = stream.addr();
+    e.with_stack(4, |e, slot| {
+        e.mem.set_u32(slot.addr(), stream);
+        let size = count.wrapping_mul(4);
+        stream_write(e, stream, floats, size, 4, slot.addr());
+    });
+}
+
+// Translated from 00a417f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiMorphData::MorphTarget::IsEqual` (Xbox PDB): every one of `vertex_count` vertices of
+/// `other` equals this target's (x, y and z, unordered is unequal), and the name handles are
+/// the same.
+pub fn ni_morph_data_morph_target_is_equal(
+    e: &mut Engine,
+    this: Ptr,
+    other: Ptr,
+    vertex_count: u32,
+) -> bool {
+    // The vertex arrays are read only when there are vertices to compare.
+    let (ours, theirs) = if vertex_count != 0 {
+        (
+            e.mem.u32(this.addr().wrapping_add(TARGET_VERTICES)),
+            e.mem.u32(other.addr().wrapping_add(TARGET_VERTICES)),
+        )
+    } else {
+        (0, 0)
+    };
+    for vertex in 0..vertex_count {
+        let offset = vertex.wrapping_mul(12);
+        for lane in [0u32, 4, 8] {
+            let mine = x87_load32(e.mem.u32(ours.wrapping_add(offset + lane)));
+            let other = x87_load32(e.mem.u32(theirs.wrapping_add(offset + lane)));
+            if other != mine {
+                return false;
+            }
+        }
+    }
+    let name = e.mem.u32(this.addr().wrapping_add(TARGET_NAME));
+    name == e.mem.u32(other.addr().wrapping_add(TARGET_NAME))
+}
+
+// Translated from 00a418a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiMorphData::IsEqual` (Xbox PDB): `NiObject::IsEqual`, the same target count, vertex
+/// count and relative-targets byte, then each target `IsEqual` the other's (`00a417f0` on
+/// this data's target with the other's and this data's vertex count; a target index past a
+/// count gives a null target).
+pub fn ni_morph_data_is_equal(e: &mut Engine, this: Ptr, other: Ptr) -> bool {
+    if !e.call(NI_OBJECT_IS_EQUAL, &args![this, other]).bool() {
+        return false;
+    }
+    let data = this.addr();
+    let other = other.addr();
+    let other_count = e.mem.u32(other.wrapping_add(NUM_TARGETS));
+    let count = e.mem.u32(data.wrapping_add(NUM_TARGETS));
+    if count != other_count
+        || e.mem.u32(data.wrapping_add(NUM_VERTS_PER_TARGET))
+            != e.mem.u32(other.wrapping_add(NUM_VERTS_PER_TARGET))
+        || e.mem.u8(data.wrapping_add(RELATIVE_TARGETS))
+            != e.mem.u8(other.wrapping_add(RELATIVE_TARGETS))
+    {
+        return false;
+    }
+    let mut offset = 0u32;
+    for index in 0..count {
+        let theirs = if index < other_count {
+            e.mem
+                .u32(other.wrapping_add(MORPH_TARGETS))
+                .wrapping_add(offset)
+        } else {
+            0
+        };
+        let ours = if index < count {
+            e.mem
+                .u32(data.wrapping_add(MORPH_TARGETS))
+                .wrapping_add(offset)
+        } else {
+            0
+        };
+        let vertex_count = e.mem.u32(data.wrapping_add(NUM_VERTS_PER_TARGET));
+        if !ni_morph_data_morph_target_is_equal(e, Ptr::new(ours), Ptr::new(theirs), vertex_count) {
+            return false;
+        }
+        offset = offset.wrapping_add(MORPH_TARGET_SIZE);
+    }
+    true
+}
+
+// Translated from 00a41d90 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiMorphData::SaveBinary` (Xbox PDB): the base's `SaveBinary` (`00a89af0`), the target
+/// count and vertex count (4 bytes each), the relative-targets byte (from the argument's own
+/// stack word), then per target its name (`NiStream::SaveFixedString`) and, with vertices
+/// per target, its vertices (12 bytes each, component size 4).
+pub fn ni_morph_data_save_binary(e: &mut Engine, this: Ptr, stream: Ptr) {
+    e.call(NI_OBJECT_SAVE_BINARY, &args![this, stream]);
+    let data = this.addr();
+    let stream = stream.addr();
+    // Frame: the component size words +0 and +4, the argument word +8.
+    e.with_stack(12, |e, frame| {
+        let component = frame.addr();
+        let vertex_component = component + 4;
+        let argument = component + 8;
+        e.mem.set_u32(argument, stream);
+        stream_write(e, stream, data.wrapping_add(NUM_TARGETS), 4, 4, component);
+        let verts = data.wrapping_add(NUM_VERTS_PER_TARGET);
+        stream_write(e, stream, verts, 4, 4, component);
+        let relative = e.mem.u8(data.wrapping_add(RELATIVE_TARGETS));
+        e.mem.set_u8(argument, relative);
+        stream_write(e, stream, argument, 1, 1, component);
+        let mut index = 0u32;
+        let mut offset = 0u32;
+        while index < e.mem.u32(data.wrapping_add(NUM_TARGETS)) {
+            let target = e
+                .mem
+                .u32(data.wrapping_add(MORPH_TARGETS))
+                .wrapping_add(offset);
+            let vertex_count = e.mem.u32(data.wrapping_add(NUM_VERTS_PER_TARGET));
+            e.call(
+                SAVE_FIXED_STRING,
+                &args![stream, target.wrapping_add(TARGET_NAME)],
+            );
+            if vertex_count != 0 {
+                let vertices = e.mem.u32(target.wrapping_add(TARGET_VERTICES));
+                let size = vertex_count.wrapping_mul(12);
+                stream_write(e, stream, vertices, size, 4, vertex_component);
+            }
+            offset = offset.wrapping_add(MORPH_TARGET_SIZE);
+            index += 1;
+        }
+    });
+}
+
+/// The viewer-string array append the compiler inlined with the string in the stack word
+/// `slot`: grows the array (16-bit size +0xA, capacity +8, grow-by +0xE) when full, then
+/// `SetAt` at the old size with the slot's address.
+fn add_viewer_string(e: &mut Engine, strings: u32, slot: u32) {
+    let size = u32::from(e.mem.u16(strings.wrapping_add(0xa)));
+    if size >= u32::from(e.mem.u16(strings.wrapping_add(8))) {
+        let step = u32::from(e.mem.u16(strings.wrapping_add(0xe)));
+        e.call(VIEWER_STRINGS_GROW, &args![strings, step + size]);
+    }
+    e.call(VIEWER_STRINGS_SET_AT, &args![strings, size, slot]);
+}
+
+/// The inline `NiTPrimitiveArray::SetAtGrow` of `string` at the array's size (data +4, 16-bit
+/// size +0xA, capacity +8, used count +0xC, grow-by +0xE): grows when full; a slot at or past
+/// the (new) size makes the size one more, the used count counting a non-null string; inside
+/// it the used count follows the change between null and non-null; then the slot is set.
+fn set_at_grow(e: &mut Engine, strings: u32, string: u32) {
+    let index = u32::from(e.mem.u16(strings.wrapping_add(0xa)));
+    if index >= u32::from(e.mem.u16(strings.wrapping_add(8))) {
+        let step = u32::from(e.mem.u16(strings.wrapping_add(0xe)));
+        e.call(VIEWER_STRINGS_GROW, &args![strings, step + index]);
+    }
+    let used = strings.wrapping_add(0xc);
+    if index >= u32::from(e.mem.u16(strings.wrapping_add(0xa))) {
+        e.mem.set_u16(strings.wrapping_add(0xa), (index + 1) as u16);
+        if string != 0 {
+            e.mem.set_u16(used, e.mem.u16(used).wrapping_add(1));
+        }
+    } else if string != 0 {
+        let data = e.mem.u32(strings.wrapping_add(4));
+        if e.mem.u32(data.wrapping_add(index * 4)) == 0 {
+            e.mem.set_u16(used, e.mem.u16(used).wrapping_add(1));
+        }
+    } else {
+        let data = e.mem.u32(strings.wrapping_add(4));
+        if e.mem.u32(data.wrapping_add(index * 4)) != 0 {
+            e.mem.set_u16(used, e.mem.u16(used).wrapping_add(0xffff));
+        }
+    }
+    let data = e.mem.u32(strings.wrapping_add(4));
+    e.mem.set_u32(data.wrapping_add(index * 4), string);
+}
+
+// Translated from 00a41ea0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiMorphData::GetViewerStrings` (Xbox PDB): `NiObject::GetViewerStrings`, the class name
+/// (`011f3e74`), `"m_uiNumTargets"`, `"m_uiNumVertsPerTarget"` and `"MorphTargets"` (held in
+/// the argument's own stack word), then per target `"m_pcName"` with its name handle
+/// (`00a7d5e0`) stored with the inline `SetAtGrow` (a target index past the count reads
+/// through a null target, as the exe does).
+pub fn ni_morph_data_get_viewer_strings(e: &mut Engine, this: Ptr, strings: Ptr) {
+    e.call(NI_OBJECT_GET_VIEWER_STRINGS, &args![this, strings]);
+    let data = this.addr();
+    let strings = strings.addr();
+    e.with_stack(4, |e, slot| {
+        let slot = slot.addr();
+        e.mem.set_u32(slot, strings);
+        let class_name = e.mem.u32(NI_MORPH_DATA_RTTI);
+        let text = e.call(NI_GET_VIEWER_STRING, &args![class_name]).u32();
+        e.mem.set_u32(slot, text);
+        add_viewer_string(e, strings, slot);
+        let count = e.mem.u32(data.wrapping_add(NUM_TARGETS));
+        let text = e
+            .call(
+                NI_GET_VIEWER_STRING_UNSIGNED,
+                &args![TEXT_NUM_TARGETS, count],
+            )
+            .u32();
+        e.mem.set_u32(slot, text);
+        add_viewer_string(e, strings, slot);
+        let verts = e.mem.u32(data.wrapping_add(NUM_VERTS_PER_TARGET));
+        let text = e
+            .call(
+                NI_GET_VIEWER_STRING_UNSIGNED,
+                &args![TEXT_NUM_VERTS_PER_TARGET, verts],
+            )
+            .u32();
+        e.mem.set_u32(slot, text);
+        add_viewer_string(e, strings, slot);
+        let text = e
+            .call(NI_GET_VIEWER_STRING, &args![TEXT_MORPH_TARGETS])
+            .u32();
+        e.mem.set_u32(slot, text);
+        add_viewer_string(e, strings, slot);
+        let mut index = 0u32;
+        let mut offset = 0u32;
+        while index < e.mem.u32(data.wrapping_add(NUM_TARGETS)) {
+            let target = target_at(e, data, index, offset);
+            let name = e.mem.u32(target.wrapping_add(TARGET_NAME));
+            let text = e
+                .call(NI_GET_VIEWER_STRING_FIXED, &args![TEXT_NAME, name])
+                .u32();
+            set_at_grow(e, strings, text);
+            offset = offset.wrapping_add(MORPH_TARGET_SIZE);
+            index += 1;
+        }
+    });
+}
+
+// Translated from 00a57850 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiMorphData::MorphTarget::RegisterStreamables` (Xbox PDB): a jump to the stream's
+/// `RegisterFixedString` (its slot `0x20`) with the name's address (`this + 4`, written into
+/// the argument's stack word); its answer is returned.
+pub fn ni_morph_data_morph_target_register_streamables(
+    e: &mut Engine,
+    this: Ptr,
+    stream: Ptr,
+) -> bool {
+    let name = this.addr().wrapping_add(TARGET_NAME);
+    e.vcall(stream.addr(), SLOT_REGISTER_FIXED_STRING, &args![name])
+        .bool()
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -455,6 +806,23 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         ),
         entry!(0x00a4_1a00, ni_morph_data_scalar_deleting_destructor(Ptr, u32) -> Ptr),
         entry!(0x00a4_1a40, ni_morph_data_load_binary(Ptr, Ptr)),
+        entry!(0x00a4_1610, ni_morph_data_morph_target_destruct(Ptr)),
+        entry!(
+            0x00a4_1710,
+            ni_morph_data_register_streamables(Ptr, Ptr) -> bool
+        ),
+        entry!(0x00a4_17b0, fn_00a417b0(Ptr, u32, u32)),
+        entry!(
+            0x00a4_17f0,
+            ni_morph_data_morph_target_is_equal(Ptr, Ptr, u32) -> bool
+        ),
+        entry!(0x00a4_18a0, ni_morph_data_is_equal(Ptr, Ptr) -> bool),
+        entry!(0x00a4_1d90, ni_morph_data_save_binary(Ptr, Ptr)),
+        entry!(0x00a4_1ea0, ni_morph_data_get_viewer_strings(Ptr, Ptr)),
+        entry!(
+            0x00a5_7850,
+            ni_morph_data_morph_target_register_streamables(Ptr, Ptr) -> bool
+        ),
     ]
 }
 
@@ -786,5 +1154,296 @@ mod tests {
         assert_eq!(calls(&log, COLOR_LOAD_BINARY).len(), 6);
         assert_eq!(calls(&log, MEMORY_MANAGER_DEALLOCATE).len(), 2);
         assert_ne!(e.mem.u32(array + TARGET_VERTICES), 0);
+    }
+}
+
+#[cfg(test)]
+mod n004_tests {
+    use super::*;
+    use std::cell::{Cell, RefCell};
+    use std::rc::Rc;
+
+    type Log = Rc<RefCell<Vec<(u32, Vec<u32>)>>>;
+    type Writes = Rc<RefCell<Vec<(Vec<u8>, u32, u32)>>>;
+
+    fn ret(eax: u32) -> Ret {
+        Ret {
+            eax,
+            ..Ret::default()
+        }
+    }
+
+    fn logged(e: &mut Engine, log: &Log, address: u32, eax: u32) {
+        let log = log.clone();
+        e.register_double(address, move |_, a| {
+            log.borrow_mut().push((address, a.to_vec()));
+            ret(eax)
+        });
+    }
+
+    fn calls(log: &Log, address: u32) -> Vec<Vec<u32>> {
+        log.borrow()
+            .iter()
+            .filter(|c| c.0 == address)
+            .map(|c| c.1.clone())
+            .collect()
+    }
+
+    /// Morph data with `count` targets (names 0x100 + index, 12-byte vertices).
+    fn data(e: &mut Engine, count: u32, verts: u32) -> u32 {
+        let data = e.mem.alloc(0x18);
+        let targets = e.mem.alloc(0x10 * count.max(1));
+        for i in 0..count {
+            let vertices = e.mem.alloc(12 * verts.max(1));
+            for k in 0..3 * verts {
+                e.mem.set_f32(vertices + 4 * k, k as f32);
+            }
+            e.mem.set_u32(targets + 0x10 * i, vertices);
+            e.mem.set_u32(targets + 0x10 * i + TARGET_NAME, 0x100 + i);
+        }
+        e.mem.set_u32(data + NUM_TARGETS, count);
+        e.mem.set_u32(data + NUM_VERTS_PER_TARGET, verts);
+        e.mem.set_u32(data + MORPH_TARGETS, targets);
+        data
+    }
+
+    #[test]
+    fn morph_target_destructor_frees_releases_and_uncounts() {
+        let mut e = Engine::new();
+        let log = Log::default();
+        e.map(EMPTY_FIXED_STRING, 4);
+        e.mem.set_u32(EMPTY_FIXED_STRING, 0x0900_0008);
+        logged(&mut e, &log, MEMORY_MANAGER_DEALLOCATE, 0);
+        logged(&mut e, &log, INTERLOCKED_DECREMENT, 0);
+        logged(&mut e, &log, 0x00ee_3000, 0);
+        let vtable = e.mem.alloc(8);
+        e.mem.set_u32(vtable + SLOT_DELETE_THIS, 0x00ee_3000);
+        let interpolator = e.mem.alloc(8);
+        e.mem.set_u32(interpolator, vtable);
+        let target = e.mem.alloc(0x10);
+        e.mem.set_u32(target, 0x4000);
+        e.mem.set_u32(target + TARGET_NAME, 0x0800_0008);
+        e.mem.set_u32(target + TARGET_INTERPOLATOR, interpolator);
+        e.call(0x00a4_1610, &args![target]);
+        assert_eq!(
+            calls(&log, MEMORY_MANAGER_DEALLOCATE),
+            [vec![MEMORY_MANAGER, 0x4000]]
+        );
+        assert_eq!(
+            calls(&log, INTERLOCKED_DECREMENT),
+            [vec![interpolator + 4], vec![0x0800_0000]]
+        );
+        assert_eq!(calls(&log, 0x00ee_3000), [vec![interpolator]]);
+        // The empty string's handle and a missing interpolator are left alone.
+        e.mem.set_u32(target + TARGET_NAME, 0x0900_0008);
+        e.mem.set_u32(target + TARGET_INTERPOLATOR, 0);
+        e.call(0x00a4_1610, &args![target]);
+        assert_eq!(calls(&log, INTERLOCKED_DECREMENT).len(), 2);
+    }
+
+    #[test]
+    fn register_streamables_registers_every_target_name() {
+        let mut e = Engine::new();
+        let log = Log::default();
+        let base = Rc::new(Cell::new(0u32));
+        let answer = base.clone();
+        e.register_double(
+            NI_OBJECT_REGISTER_STREAMABLES,
+            move |_, _| ret(answer.get()),
+        );
+        logged(&mut e, &log, 0x00ee_3100, 1);
+        let vtable = e.mem.alloc(0x40);
+        e.mem
+            .set_u32(vtable + SLOT_REGISTER_FIXED_STRING, 0x00ee_3100);
+        let stream = e.mem.alloc(8);
+        e.mem.set_u32(stream, vtable);
+        let this = data(&mut e, 2, 1);
+        assert!(!e.call(0x00a4_1710, &args![this, stream]).bool());
+        base.set(1);
+        assert!(e.call(0x00a4_1710, &args![this, stream]).bool());
+        let targets = e.mem.u32(this + MORPH_TARGETS);
+        assert_eq!(
+            calls(&log, 0x00ee_3100),
+            [vec![stream, targets + 4], vec![stream, targets + 0x14]]
+        );
+    }
+
+    /// A stream whose output stream records each write.
+    fn output_stream(e: &mut Engine, writes: &Writes) -> u32 {
+        let record = writes.clone();
+        e.register_double(0x00ee_3200, move |e, a| {
+            let bytes = e.mem.bytes(a[1], a[2]);
+            record.borrow_mut().push((bytes, e.mem.u32(a[3]), a[4]));
+            ret(a[2])
+        });
+        let output = e.mem.alloc(0x10);
+        e.mem.set_u32(output + BINARY_STREAM_WRITE, 0x00ee_3200);
+        let stream = e.mem.alloc(0x260);
+        e.mem.set_u32(stream + STREAM_OUTPUT, output);
+        stream
+    }
+
+    #[test]
+    fn fn_00a417b0_writes_the_floats_in_one_write() {
+        let mut e = Engine::new();
+        let writes = Writes::default();
+        let stream = output_stream(&mut e, &writes);
+        let floats = e.mem.alloc(8);
+        e.mem.set_f32(floats, 1.0);
+        e.mem.set_f32(floats + 4, 2.0);
+        e.call(0x00a4_17b0, &args![stream, floats, 2u32]);
+        let mut bytes = 1.0f32.to_le_bytes().to_vec();
+        bytes.extend(2.0f32.to_le_bytes());
+        assert_eq!(*writes.borrow(), [(bytes, 4, 1)]);
+        let output = e.mem.u32(stream + STREAM_OUTPUT);
+        assert_eq!(e.mem.u32(output + BINARY_STREAM_POSITION), 8);
+    }
+
+    #[test]
+    fn morph_target_is_equal_compares_vertices_and_names() {
+        let mut e = Engine::new();
+        let a = data(&mut e, 1, 2);
+        let b = data(&mut e, 1, 2);
+        let ta = e.mem.u32(a + MORPH_TARGETS);
+        let tb = e.mem.u32(b + MORPH_TARGETS);
+        assert!(e.call(0x00a4_17f0, &args![ta, tb, 2u32]).bool());
+        let vb = e.mem.u32(tb);
+        e.mem.set_f32(vb + 0x14, 9.0);
+        assert!(!e.call(0x00a4_17f0, &args![ta, tb, 2u32]).bool());
+        // Only the first vertex compared.
+        assert!(e.call(0x00a4_17f0, &args![ta, tb, 1u32]).bool());
+        e.mem.set_u32(tb + TARGET_NAME, 0x999);
+        assert!(!e.call(0x00a4_17f0, &args![ta, tb, 0u32]).bool());
+        // A NaN never equals itself.
+        e.mem.set_u32(tb + TARGET_NAME, 0x100);
+        let va = e.mem.u32(ta);
+        e.mem.set_f32(va, f32::NAN);
+        e.mem.set_f32(vb, f32::NAN);
+        assert!(!e.call(0x00a4_17f0, &args![ta, tb, 1u32]).bool());
+    }
+
+    #[test]
+    fn is_equal_checks_counts_flags_and_targets() {
+        let mut e = Engine::new();
+        let base = Rc::new(Cell::new(1u32));
+        let answer = base.clone();
+        e.register_double(NI_OBJECT_IS_EQUAL, move |_, _| ret(answer.get()));
+        let a = data(&mut e, 2, 1);
+        let b = data(&mut e, 2, 1);
+        assert!(e.call(0x00a4_18a0, &args![a, b]).bool());
+        e.mem.set_u8(b + RELATIVE_TARGETS, 1);
+        assert!(!e.call(0x00a4_18a0, &args![a, b]).bool());
+        e.mem.set_u8(b + RELATIVE_TARGETS, 0);
+        let tb = e.mem.u32(b + MORPH_TARGETS);
+        e.mem.set_u32(tb + 0x10 + TARGET_NAME, 0x555);
+        assert!(!e.call(0x00a4_18a0, &args![a, b]).bool());
+        e.mem.set_u32(b + NUM_VERTS_PER_TARGET, 2);
+        assert!(!e.call(0x00a4_18a0, &args![a, b]).bool());
+        e.mem.set_u32(b + NUM_TARGETS, 1);
+        assert!(!e.call(0x00a4_18a0, &args![a, b]).bool());
+        base.set(0);
+        assert!(!e.call(0x00a4_18a0, &args![a, a]).bool());
+    }
+
+    #[test]
+    fn save_binary_writes_counts_flag_names_and_vertices() {
+        let mut e = Engine::new();
+        let log = Log::default();
+        logged(&mut e, &log, NI_OBJECT_SAVE_BINARY, 0);
+        logged(&mut e, &log, SAVE_FIXED_STRING, 0);
+        let writes = Writes::default();
+        let stream = output_stream(&mut e, &writes);
+        let this = data(&mut e, 2, 1);
+        e.mem.set_u8(this + RELATIVE_TARGETS, 1);
+        e.call(0x00a4_1d90, &args![this, stream]);
+        let targets = e.mem.u32(this + MORPH_TARGETS);
+        assert_eq!(calls(&log, NI_OBJECT_SAVE_BINARY), [vec![this, stream]]);
+        assert_eq!(
+            calls(&log, SAVE_FIXED_STRING),
+            [vec![stream, targets + 4], vec![stream, targets + 0x14]]
+        );
+        let vertex: Vec<u8> = [0.0f32, 1.0, 2.0]
+            .iter()
+            .flat_map(|v| v.to_le_bytes())
+            .collect();
+        assert_eq!(
+            *writes.borrow(),
+            [
+                (vec![2, 0, 0, 0], 4, 1),
+                (vec![1, 0, 0, 0], 4, 1),
+                (vec![1], 1, 1),
+                (vertex.clone(), 4, 1),
+                (vertex, 4, 1),
+            ]
+        );
+        // Without vertices only the names are written.
+        e.mem.set_u32(this + NUM_VERTS_PER_TARGET, 0);
+        e.call(0x00a4_1d90, &args![this, stream]);
+        assert_eq!(writes.borrow().len(), 8);
+    }
+
+    #[test]
+    fn get_viewer_strings_lists_counts_and_names() {
+        let mut e = Engine::new();
+        let log = Log::default();
+        e.map(NI_MORPH_DATA_RTTI, 4);
+        e.mem.set_u32(NI_MORPH_DATA_RTTI, 0x0155_0000);
+        logged(&mut e, &log, NI_OBJECT_GET_VIEWER_STRINGS, 0);
+        logged(&mut e, &log, NI_GET_VIEWER_STRING, 0x0166_0000);
+        logged(&mut e, &log, NI_GET_VIEWER_STRING_UNSIGNED, 0x0177_0000);
+        e.register(NI_GET_VIEWER_STRING_FIXED, |_, a| ret(a[1] << 4));
+        logged(&mut e, &log, VIEWER_STRINGS_SET_AT, 0);
+        let grows = log.clone();
+        e.register_double(VIEWER_STRINGS_GROW, move |e, a| {
+            grows.borrow_mut().push((VIEWER_STRINGS_GROW, a.to_vec()));
+            // The grown array holds three entries already.
+            e.mem.set_u16(a[0] + 8, 8);
+            e.mem.set_u16(a[0] + 0xa, 3);
+            Ret::default()
+        });
+        let this = data(&mut e, 2, 1);
+        let strings = e.mem.alloc(0x10);
+        let slots = e.mem.alloc(0x10);
+        e.mem.set_u32(strings + 4, slots);
+        e.mem.set_u16(strings + 8, 1);
+        e.mem.set_u16(strings + 0xe, 2);
+        // Slot 1 is already used, so filling it keeps the used count.
+        e.mem.set_u32(slots + 4, 0x77);
+        e.call(0x00a4_1ea0, &args![this, strings]);
+        assert_eq!(
+            calls(&log, NI_OBJECT_GET_VIEWER_STRINGS),
+            [vec![this, strings]]
+        );
+        assert_eq!(
+            calls(&log, NI_GET_VIEWER_STRING),
+            [vec![0x0155_0000], vec![TEXT_MORPH_TARGETS]]
+        );
+        assert_eq!(
+            calls(&log, NI_GET_VIEWER_STRING_UNSIGNED),
+            [
+                vec![TEXT_NUM_TARGETS, 2],
+                vec![TEXT_NUM_VERTS_PER_TARGET, 1]
+            ]
+        );
+        assert_eq!(calls(&log, VIEWER_STRINGS_SET_AT).len(), 4);
+        assert_eq!(calls(&log, VIEWER_STRINGS_GROW), [vec![strings, 3]]);
+        assert_eq!(e.mem.u32(slots), 0x1000);
+        assert_eq!(e.mem.u32(slots + 4), 0x1010);
+        assert_eq!(e.mem.u16(strings + 0xa), 3);
+        assert_eq!(e.mem.u16(strings + 0xc), 1);
+    }
+
+    #[test]
+    fn morph_target_register_streamables_registers_the_name() {
+        let mut e = Engine::new();
+        let log = Log::default();
+        logged(&mut e, &log, 0x00ee_3300, 1);
+        let vtable = e.mem.alloc(0x40);
+        e.mem
+            .set_u32(vtable + SLOT_REGISTER_FIXED_STRING, 0x00ee_3300);
+        let stream = e.mem.alloc(8);
+        e.mem.set_u32(stream, vtable);
+        assert!(e.call(0x00a5_7850, &args![0x7000u32, stream]).bool());
+        assert_eq!(calls(&log, 0x00ee_3300), [vec![stream, 0x7004]]);
     }
 }

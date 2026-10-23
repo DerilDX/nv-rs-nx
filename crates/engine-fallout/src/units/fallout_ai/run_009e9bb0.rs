@@ -103,9 +103,38 @@ pub fn ni_t_array_actor_destructor(e: &mut Engine, this: Ptr) {
     e.call(FREE_ELEMENTS, &args![data]);
 }
 
+/// `operator delete` (`00401030`, `cdecl`, one word).
+const OPERATOR_DELETE: u32 = 0x0040_1030;
+
+// Translated from 009e9be0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`thiscall`, `RET 4`): the scalar deleting destructor of the
+/// `NiTPrimitiveArray<Actor*>` (vtable `01092928`): [`fn_009e9c10`], then `operator delete`
+/// on `this` for bit 0 of `flags`. Returns `this`.
+pub fn fn_009e9be0(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    fn_009e9c10(e, this);
+    if flags & 1 != 0 {
+        e.call(OPERATOR_DELETE, &args![this]);
+    }
+    this
+}
+
+// Translated from 009e9c60 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`thiscall`, `RET 4`): the scalar deleting destructor of the
+/// `NiTArray<Actor*>`: [`ni_t_array_actor_destructor`], then `operator delete` on `this`
+/// for bit 0 of `flags`. Returns `this`.
+pub fn fn_009e9c60(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    ni_t_array_actor_destructor(e, this);
+    if flags & 1 != 0 {
+        e.call(OPERATOR_DELETE, &args![this]);
+    }
+    this
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x009e_9be0, fn_009e9be0(Ptr, u32) -> Ptr),
+        entry!(0x009e_9c60, fn_009e9c60(Ptr, u32) -> Ptr),
         entry!(0x009e_9c90, ni_t_array_actor_constructor(Ptr, u16, u16) -> Ptr),
         entry!(0x009e_9c30, ni_t_array_actor_destructor(Ptr)),
         entry!(0x009e_9d00, fn_009e9d00(Ptr, u32) -> Ptr),
@@ -268,6 +297,40 @@ mod b004_tests {
         e.call_log = Some(vec![]);
         e.call(0x009e_9c30, &args![this]);
         assert_eq!(calls_to(&e, FREE_ELEMENTS), vec![vec![0x7070]]);
+        assert_eq!(e.mem.u32(this), VTABLE_TARRAY_ACTOR);
+    }
+}
+
+#[cfg(test)]
+mod n029_tests {
+    use super::*;
+
+    fn frees(e: &mut Engine, addr: u32, this: u32, flags: u32) -> usize {
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(addr, &args![this, flags]).u32(), this);
+        let log = e.call_log.take().unwrap();
+        log.iter().filter(|c| c.0 == OPERATOR_DELETE).count()
+    }
+
+    #[test]
+    fn fn_009e9be0_destroys_and_frees_for_bit_0() {
+        let mut e = Engine::new();
+        e.register(0x009e_9c30, |_, _| Ret::default());
+        e.register(OPERATOR_DELETE, |_, _| Ret::default());
+        let this = e.mem.alloc(0x10);
+        assert_eq!(frees(&mut e, 0x009e_9be0, this, 0), 0);
+        assert_eq!(frees(&mut e, 0x009e_9be0, this, 3), 1);
+    }
+
+    #[test]
+    fn fn_009e9c60_destroys_and_frees_for_bit_0() {
+        let mut e = Engine::new();
+        e.register(FREE_ELEMENTS, |_, _| Ret::default());
+        e.register(OPERATOR_DELETE, |_, _| Ret::default());
+        let this = e.mem.alloc(0x10);
+        e.mem.set_u32(this + 4, 0x7070);
+        assert_eq!(frees(&mut e, 0x009e_9c60, this, 2), 0);
+        assert_eq!(frees(&mut e, 0x009e_9c60, this, 1), 1);
         assert_eq!(e.mem.u32(this), VTABLE_TARRAY_ACTOR);
     }
 }

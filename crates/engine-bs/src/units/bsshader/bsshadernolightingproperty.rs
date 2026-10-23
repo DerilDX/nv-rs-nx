@@ -376,6 +376,196 @@ pub fn bs_shader_no_lighting_property_setup_geometry(
     true
 }
 
+use crate::units::bsshader::bsshaderproperty::{
+    viewer_strings_add, VIEWER_STRING, VIEWER_STRING_FLOAT, VIEWER_STRING_TEXT,
+};
+
+/// `-1.0` (`01012054`): the falloff value that means "unset".
+const UNSET_01012054: u32 = 0x0101_2054;
+/// The virtual slots (byte offsets) `SetFalloffRecurse` calls: `IsTriBasedGeom` (+0x1c) and
+/// `IsNode` (+0xc).
+const SLOT_IS_TRI_BASED_GEOM: u32 = 0x1c;
+const SLOT_IS_NODE: u32 = 0x0c;
+/// The renderer (`011f4748`) whose slot +0xe0 `00b6f520` calls.
+const RENDERER_011F4748: u32 = 0x011f_4748;
+/// `BSShaderProperty`'s `SaveBinary` (`00ba9380`, `thiscall`, the stream) and the stream's
+/// link save (`00a64160`, `thiscall` on the stream, the object).
+const BASE_SAVE_BINARY_00BA9380: u32 = 0x00ba_9380;
+const STREAM_SAVE_STRING_00A64160: u32 = 0x00a6_4160;
+/// `BSShaderProperty::GetViewerStrings` (`00ba9890`), `BSUtilities::GetTextureName`
+/// (`00c4bb40`), the viewer-string maker of a name and an object (`00a7d5a0`) and the labels
+/// (`"base texture"`, `"falloff start angle"`, `"falloff stop angle"`,
+/// `"falloff start opacity"`, `"falloff stop opacity"`).
+const SHADER_PROPERTY_GET_VIEWER_STRINGS: u32 = 0x00ba_9890;
+const GET_TEXTURE_NAME: u32 = 0x00c4_bb40;
+const VIEWER_STRING_OBJECT: u32 = 0x00a7_d5a0;
+const LABEL_BASE_TEXTURE: u32 = 0x010a_e79c;
+const FALLOFF_LABELS: [u32; 4] = [0x010a_e788, 0x010a_e774, 0x010a_e75c, 0x010a_e744];
+
+/// Whether the `float` at `field` compares unequal (or unordered) with the `float` at
+/// `01012054` (the `FCOM`/`TEST AH,0x44`/`JNP` of the falloff code).
+fn differs_from_unset(e: &Engine, field: u32) -> bool {
+    let unset = x87_m32(e.mem.u32(UNSET_01012054));
+    let value = x87_m32(e.mem.u32(field));
+    unset != value
+}
+
+// Translated from 00b6f4a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map, `thiscall` with one word (the address of four `float`s): each
+/// of the four falloff `float`s (`+0x70` to `+0x7c`) that is not -1.0 (the `float` at
+/// `01012054`; a NaN counts as not equal) takes the matching `float` of the argument
+/// (`FLD`/`FSTP`).
+pub fn fn_00b6f4a0(e: &mut Engine, this: Ptr, values: u32) {
+    for k in 0..4u32 {
+        let field = this.addr() + 0x70 + 4 * k;
+        if differs_from_unset(e, field) {
+            let v = x87_quiet_bits(e.mem.u32(values.wrapping_add(4 * k)));
+            e.mem.set_u32(field, v);
+        }
+    }
+}
+
+// Translated from 00b6f520 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed (Ghidra made no function here; slot 48 of the vtable at `010ae670`), `thiscall`
+/// without words: with a base map (`+0x60`), calls the renderer's slot +0xe0 (renderer at
+/// `011f4748`) with it, 0 and 0.
+pub fn fn_00b6f520(e: &mut Engine, this: Ptr) {
+    let texture = e.mem.u32(this.addr() + 0x60);
+    if texture == 0 {
+        return;
+    }
+    let renderer = e.mem.u32(RENDERER_011F4748);
+    e.vcall(renderer, 0xe0, &args![texture, 0u32, 0u32]);
+}
+
+// Translated from 00b6fa40 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSShaderNoLightingProperty::SetFalloffRecurse` (engine map; the body matches): `cdecl`,
+/// an object and the address of four `float`s. For a non-null object: a tri-based geometry
+/// (slot +0x1c non-zero) whose shader property (`GetProperty(3)`) is of type 0x15 gets the
+/// falloff: when the first `float` is not -1.0 (NaN counts as not equal) bit 6 of the first
+/// flag word is set (clearing `iLastRenderPassState` when it was clear) and the four values
+/// taken ([`fn_00b6f4a0`]); otherwise the bit is cleared (clearing the state when it was
+/// set). Then the property's render-pass list, when there is one, is emptied (`iSize` 0).
+/// Any other object that is a node (slot +0xc) passes the call on to each non-null child
+/// (the count at `+0xa6` read once).
+pub fn bs_shader_no_lighting_property_set_falloff_recurse(
+    e: &mut Engine,
+    object: u32,
+    values: u32,
+) {
+    if object == 0 {
+        return;
+    }
+    if e.vcall(object, SLOT_IS_TRI_BASED_GEOM, &args![]).u32() != 0 {
+        let property = e.call(GET_PROPERTY, &args![object, 3u32]).u32();
+        if property == 0 || e.mem.u32(property + 0x1c) != 0x15 {
+            return;
+        }
+        if differs_from_unset(e, values) {
+            if e.mem.u8(property + 0x20) & 0x40 == 0 {
+                e.mem.set_u32(property + 0x38, 0);
+            }
+            let flags = e.mem.u32(property + 0x20);
+            e.mem.set_u32(property + 0x20, flags | 0x40);
+            fn_00b6f4a0(e, Ptr::new(property), values);
+        } else {
+            if e.mem.u8(property + 0x20) & 0x40 != 0 {
+                e.mem.set_u32(property + 0x38, 0);
+            }
+            let flags = e.mem.u32(property + 0x20);
+            e.mem.set_u32(property + 0x20, flags & 0xffff_ffbf);
+        }
+        let list = e.mem.u32(property + 0x3c);
+        if list != 0 {
+            e.mem.set_u32(list + 0x10, 0);
+        }
+        return;
+    }
+    let node = e.vcall(object, SLOT_IS_NODE, &args![]).u32();
+    if node == 0 {
+        return;
+    }
+    let count = u32::from(e.mem.u16(node + 0xa6));
+    let mut index = 0u32;
+    while index < count {
+        let buffer = e.mem.u32(node + 0xa0);
+        let child = e.mem.u32(buffer.wrapping_add(index.wrapping_mul(4)));
+        if child != 0 {
+            bs_shader_no_lighting_property_set_falloff_recurse(e, child, values);
+        }
+        index += 1;
+    }
+}
+
+/// One write of `size` bytes through the stream's file (`[stream + 0x250]`): its write
+/// function at file `+0xc` (`cdecl`: file, buffer, size, the address of a word holding the
+/// size, 1); the answer is added to the file's word at `+4`.
+fn stream_write(e: &mut Engine, stream: u32, buffer: u32, size: u32) {
+    let file = e.mem.u32(stream.wrapping_add(0x250));
+    let write = e.mem.u32(file.wrapping_add(0xc));
+    let n = e.with_stack(4, |e, count| {
+        e.mem.set_u32(count.addr(), size);
+        e.call(write, &args![file, buffer, size, count, 1u32]).u32()
+    });
+    let position = e.mem.u32(file.wrapping_add(4));
+    e.mem
+        .set_u32(file.wrapping_add(4), position.wrapping_add(n));
+}
+
+// Translated from 00b6fc20 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map, `thiscall` with one word (a stream; the `SaveBinary` that pairs
+/// with [`bs_shader_no_lighting_property_load_binary`]): the `BSShaderProperty` save
+/// (`00ba9380`), the clamp mode (`+0x6c`, 4 bytes), the texture file name (the text of the `BSStringT` at `+0x64`, `00a64160`)
+/// and the four falloff `float`s (`+0x70`, 16 bytes in one write).
+pub fn fn_00b6fc20(e: &mut Engine, this: Ptr, stream: u32) {
+    e.call(BASE_SAVE_BINARY_00BA9380, &args![this, stream]);
+    stream_write(e, stream, this.addr() + 0x6c, 4);
+    // `TextureFilename` (`BSStringT`, `+0x64`): its text pointer.
+    let name = e.mem.u32(this.addr() + 0x64);
+    e.call(STREAM_SAVE_STRING_00A64160, &args![stream, name]);
+    stream_write(e, stream, this.addr() + 0x70, 0x10);
+}
+
+// Translated from 00b6fd10 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed (Ghidra made no function here; slot 52 of the vtable at `010ae670`), `thiscall`
+/// with one word: stores it in the texture clamp mode `+0x6c`.
+pub fn fn_00b6fd10(e: &mut Engine, this: Ptr, mode: u32) {
+    e.mem.set_u32(this.addr() + 0x6c, mode);
+}
+
+// Translated from 00b6ff20 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed (Ghidra made no function here; slot 24 of the vtable at `010ae670`): the
+/// `GetViewerStrings` of `BSShaderNoLightingProperty`, `thiscall` with one word (the
+/// strings). The `BSShaderProperty` strings (`00ba9890`), the class name (`011fa05c`), the
+/// base texture (by name through `00c4bb40` when it has one, else as the object), and with
+/// bit 6 of the first flag word the four falloff `float`s (`FLD`/`FSTP`), each added inline.
+pub fn fn_00b6ff20(e: &mut Engine, this: Ptr, strings: u32) {
+    let base = this.addr();
+    e.call(SHADER_PROPERTY_GET_VIEWER_STRINGS, &args![this, strings]);
+    let class_name = e.mem.u32(RTTI);
+    let text = e.call(VIEWER_STRING, &args![class_name]).u32();
+    viewer_strings_add(e, strings, text);
+    let texture = e.mem.u32(base + 0x60);
+    let name = e.call(GET_TEXTURE_NAME, &args![texture]).u32();
+    let text = if name != 0 {
+        e.call(VIEWER_STRING_TEXT, &args![LABEL_BASE_TEXTURE, name])
+            .u32()
+    } else {
+        let texture = e.mem.u32(base + 0x60);
+        e.call(VIEWER_STRING_OBJECT, &args![LABEL_BASE_TEXTURE, texture])
+            .u32()
+    };
+    viewer_strings_add(e, strings, text);
+    if e.mem.u8(base + 0x20) & 0x40 == 0 {
+        return;
+    }
+    for (k, label) in FALLOFF_LABELS.iter().enumerate() {
+        let value = x87_quiet_bits(e.mem.u32(base + 0x70 + 4 * k as u32));
+        let text = e.call(VIEWER_STRING_FLOAT, &args![*label, value]).u32();
+        viewer_strings_add(e, strings, text);
+    }
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -399,6 +589,15 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00b6_fe80, fn_00b6fe80() -> u32),
         entry!(0x00b6_fef0, fn_00b6fef0(Ptr, u32) -> Ptr),
         entry!(0x00b7_00d0, bs_shader_no_lighting_property_setup_geometry(Ptr, u32) -> bool),
+        entry!(0x00b6_f4a0, fn_00b6f4a0(Ptr, u32)),
+        entry!(0x00b6_f520, fn_00b6f520(Ptr)),
+        entry!(
+            0x00b6_fa40,
+            bs_shader_no_lighting_property_set_falloff_recurse(u32, u32)
+        ),
+        entry!(0x00b6_fc20, fn_00b6fc20(Ptr, u32)),
+        entry!(0x00b6_fd10, fn_00b6fd10(Ptr, u32)),
+        entry!(0x00b6_ff20, fn_00b6ff20(Ptr, u32)),
     ]
 }
 
@@ -768,5 +967,199 @@ mod tests {
         g.e.call_log = Some(vec![]);
         g.e.call(0x00b7_00d0, &args![g.this, g.geometry]);
         assert!(calls(&g.e, GET_PROPERTY).is_empty());
+    }
+}
+
+#[cfg(test)]
+mod n012_tests {
+    use super::*;
+    use crate::units::bsshader::bsshaderproperty::{STRINGS_SET_AT, STRINGS_SET_SIZE};
+
+    fn calls(e: &Engine, addr: u32) -> Vec<Vec<u32>> {
+        e.call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|(a, _)| *a == addr)
+            .map(|(_, w)| w.clone())
+            .collect()
+    }
+
+    fn rig() -> Engine {
+        let mut e = Engine::new();
+        e.map(0x0101_2000, 0x1000);
+        e.mem.set_f32(UNSET_01012054, -1.0);
+        e.map(0x011f_4000, 0x1000);
+        e.map(0x011f_a000, 0x1000);
+        e.call_log = Some(vec![]);
+        e
+    }
+
+    fn values(e: &mut Engine, v: [f32; 4]) -> u32 {
+        let at = e.mem.alloc(0x10);
+        for (k, x) in v.iter().enumerate() {
+            e.mem.set_f32(at + 4 * k as u32, *x);
+        }
+        at
+    }
+
+    #[test]
+    fn fn_00b6f4a0_takes_values_where_the_field_is_set() {
+        let mut e = rig();
+        let this = e.mem.alloc(0x80);
+        for (k, x) in [-1.0f32, 0.5, f32::NAN, 2.0].iter().enumerate() {
+            e.mem.set_f32(this + 0x70 + 4 * k as u32, *x);
+        }
+        let given = values(&mut e, [10.0, 20.0, 30.0, 40.0]);
+        e.mem.set_u32(given + 0xc, 0x7f80_0001);
+        e.call(0x00b6_f4a0, &args![this, given]);
+        assert_eq!(e.mem.f32(this + 0x70), -1.0);
+        assert_eq!(e.mem.f32(this + 0x74), 20.0);
+        assert_eq!(e.mem.f32(this + 0x78), 30.0);
+        assert_eq!(e.mem.u32(this + 0x7c), 0x7fc0_0001);
+    }
+
+    #[test]
+    fn fn_00b6f520_hands_the_base_map_to_the_renderer() {
+        let mut e = rig();
+        let mut slots = [0u32; 0x39];
+        slots[0xe0 / 4] = 0x0f00_00e0;
+        e.put_vtable(0x0f00_6000, &slots);
+        e.register(0x0f00_00e0, |_, _| Ret::default());
+        let renderer = e.mem.alloc(8);
+        e.mem.set_u32(renderer, 0x0f00_6000);
+        e.mem.set_u32(RENDERER_011F4748, renderer);
+        let this = e.mem.alloc(0x80);
+        e.call(0x00b6_f520, &args![this]);
+        assert!(calls(&e, 0x0f00_00e0).is_empty());
+        e.mem.set_u32(this + 0x60, 0x7777);
+        e.call(0x00b6_f520, &args![this]);
+        assert_eq!(calls(&e, 0x0f00_00e0), vec![vec![renderer, 0x7777, 0, 0]]);
+    }
+
+    #[test]
+    fn set_falloff_recurse_sets_or_clears_the_falloff_bit() {
+        let mut e = rig();
+        let mut slots = [0u32; 8];
+        slots[SLOT_IS_NODE as usize / 4] = 0x0f00_e000;
+        slots[SLOT_IS_TRI_BASED_GEOM as usize / 4] = 0x0f00_e010;
+        e.put_vtable(0x0f00_e100, &slots);
+        e.register(0x0f00_e000, |e, a| e.mem.u32(a[0] + 0x14).into_ret());
+        e.register(0x0f00_e010, |e, a| e.mem.u32(a[0] + 0x10).into_ret());
+        e.register(GET_PROPERTY, |e, a| e.mem.u32(a[0] + 0x18).into_ret());
+        let property = e.mem.alloc(0x80);
+        e.mem.set_u32(property + 0x1c, 0x15);
+        e.mem.set_u32(property + 0x38, 9);
+        let list = e.mem.alloc(0x14);
+        e.mem.set_u32(list + 0x10, 3);
+        e.mem.set_u32(property + 0x3c, list);
+        let geometry = e.mem.alloc(0x20);
+        e.mem.set_u32(geometry, 0x0f00_e100);
+        e.mem.set_u32(geometry + 0x10, 1);
+        e.mem.set_u32(geometry + 0x18, property);
+        let node = e.mem.alloc(0xb0);
+        e.mem.set_u32(node, 0x0f00_e100);
+        e.mem.set_u32(node + 0x14, node);
+        let buffer = e.mem.alloc(8);
+        e.mem.set_u32(buffer + 4, geometry);
+        e.mem.set_u32(node + 0xa0, buffer);
+        e.mem.set_u16(node + 0xa6, 2);
+        let on = values(&mut e, [0.25, 0.5, 0.75, 1.0]);
+        e.call(0x00b6_fa40, &args![node, on]);
+        assert_eq!(e.mem.u32(property + 0x20), 0x40);
+        assert_eq!(e.mem.u32(property + 0x38), 0);
+        assert_eq!(e.mem.f32(property + 0x7c), 1.0);
+        assert_eq!(e.mem.u32(list + 0x10), 0);
+        let off = values(&mut e, [-1.0, 0.0, 0.0, 0.0]);
+        e.mem.set_u32(property + 0x38, 9);
+        e.call(0x00b6_fa40, &args![geometry, off]);
+        assert_eq!(e.mem.u32(property + 0x20), 0);
+        assert_eq!(e.mem.u32(property + 0x38), 0);
+        assert_eq!(e.mem.f32(property + 0x7c), 1.0);
+        // Another property type: untouched.
+        e.mem.set_u32(property + 0x1c, 0x14);
+        e.mem.set_u32(property + 0x38, 9);
+        e.call(0x00b6_fa40, &args![geometry, on]);
+        assert_eq!(e.mem.u32(property + 0x38), 9);
+    }
+
+    #[test]
+    fn fn_00b6fc20_saves_the_mode_name_and_falloff() {
+        let mut e = rig();
+        e.register(BASE_SAVE_BINARY_00BA9380, |_, _| Ret::default());
+        e.register(STREAM_SAVE_STRING_00A64160, |_, _| Ret::default());
+        e.register(0x0f00_0300, |e, a| {
+            assert_eq!(e.mem.u32(a[3]), a[2]);
+            a[2].into_ret()
+        });
+        let file = e.mem.alloc(0x20);
+        e.mem.set_u32(file + 0xc, 0x0f00_0300);
+        let stream = e.mem.alloc(0x260);
+        e.mem.set_u32(stream + 0x250, file);
+        let this = e.mem.alloc(0x80);
+        e.mem.set_u32(this + 0x64, 0x5555);
+        e.call(0x00b6_fc20, &args![this, stream]);
+        assert_eq!(
+            calls(&e, BASE_SAVE_BINARY_00BA9380),
+            vec![vec![this, stream]]
+        );
+        assert_eq!(
+            calls(&e, STREAM_SAVE_STRING_00A64160),
+            vec![vec![stream, 0x5555]]
+        );
+        let writes: Vec<(u32, u32)> = calls(&e, 0x0f00_0300)
+            .iter()
+            .map(|w| (w[1] - this, w[2]))
+            .collect();
+        assert_eq!(writes, vec![(0x6c, 4), (0x70, 0x10)]);
+        assert_eq!(e.mem.u32(file + 4), 0x14);
+    }
+
+    #[test]
+    fn fn_00b6fd10_stores_the_clamp_mode() {
+        let mut e = rig();
+        let this = e.mem.alloc(0x80);
+        e.call(0x00b6_fd10, &args![this, 2u32]);
+        assert_eq!(e.mem.u32(this + 0x6c), 2);
+    }
+
+    #[test]
+    fn viewer_strings_name_the_texture_and_falloff() {
+        let mut e = rig();
+        e.mem.set_u32(RTTI, 0x00a0_0000);
+        e.register(SHADER_PROPERTY_GET_VIEWER_STRINGS, |_, _| Ret::default());
+        e.register(VIEWER_STRING, |_, a| a[0].into_ret());
+        e.register(GET_TEXTURE_NAME, |_, _| Ret::default());
+        e.register(VIEWER_STRING_OBJECT, |_, a| (a[1] | 1).into_ret());
+        e.register(VIEWER_STRING_FLOAT, |_, a| {
+            (f32::from_bits(a[1]) as u32).into_ret()
+        });
+        e.register(STRINGS_SET_SIZE, |_, _| Ret::default());
+        e.register(STRINGS_SET_AT, |e, a| {
+            let base = e.mem.u32(a[0] + 4);
+            let v = e.mem.u32(a[2]);
+            e.mem.set_u32(base + 4 * a[1], v);
+            e.mem.set_u16(a[0] + 0xa, a[1] as u16 + 1);
+            Ret::default()
+        });
+        let this = e.mem.alloc(0x80);
+        e.mem.set_u32(this + 0x60, 0x4440);
+        for k in 0..4u32 {
+            e.mem.set_f32(this + 0x70 + 4 * k, (k + 5) as f32);
+        }
+        let strings = e.mem.alloc(0x10);
+        let base = e.mem.alloc(0x40);
+        e.mem.set_u32(strings + 4, base);
+        e.mem.set_u16(strings + 8, 16);
+        e.call(0x00b6_ff20, &args![this, strings]);
+        assert_eq!(e.mem.u16(strings + 0xa), 2);
+        assert_eq!(e.mem.u32(base + 4), 0x4441);
+        e.mem.set_u32(this + 0x20, 0x40);
+        e.call(0x00b6_ff20, &args![this, strings]);
+        assert_eq!(e.mem.u16(strings + 0xa), 8);
+        assert_eq!(e.mem.u32(base + 0x1c), 8);
+        let floats = calls(&e, VIEWER_STRING_FLOAT);
+        let labels: Vec<u32> = floats.iter().map(|w| w[0]).collect();
+        assert_eq!(labels, FALLOFF_LABELS.to_vec());
     }
 }

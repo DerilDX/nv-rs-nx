@@ -77,9 +77,22 @@ pub fn fn_00ba2d80(e: &mut Engine, this: Ptr) {
     }
 }
 
+// Translated from 00ba2d30 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Ghidra made no function here: a slot of the vtable that holds it at `010b7f60`
+/// (`thiscall`, no stack words). When the word at `+0x4c` (a function) is set, jumps to it
+/// with `this` and answers its `EAX`; otherwise returns at once, `EAX` holding that null word.
+pub fn fn_00ba2d30(e: &mut Engine, this: Ptr) -> u32 {
+    let function = e.mem.u32(this.addr() + 0x4c);
+    if function == 0 {
+        return 0;
+    }
+    e.call(function, &args![this]).u32()
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x00ba_2d30, fn_00ba2d30(Ptr) -> u32),
         entry!(0x00ba_2d40, fn_00ba2d40(Ptr) -> Ptr),
         entry!(0x00ba_2d70, fn_00ba2d70(Ptr) -> u32),
         entry!(0x00ba_2d80, fn_00ba2d80(Ptr)),
@@ -174,5 +187,21 @@ mod semaphore_tests {
         );
         assert_eq!(calls_to(&e, 0x0000_7000), vec![vec![thread, 1]]);
         assert_eq!(e.mem.u32(this + 4), 0);
+    }
+}
+
+#[cfg(test)]
+mod n013_tests {
+    use super::*;
+
+    #[test]
+    fn fn_00ba2d30_jumps_to_the_function_when_set() {
+        const FUNCTION: u32 = 0x0e00_5000;
+        let mut e = Engine::new();
+        e.register(FUNCTION, |_, a| (a[0] + 1).into_ret());
+        let this = e.mem.alloc(0x50);
+        assert_eq!(e.call(0x00ba_2d30, &args![this]).u32(), 0);
+        e.mem.set_u32(this + 0x4c, FUNCTION);
+        assert_eq!(e.call(0x00ba_2d30, &args![this]).u32(), this + 1);
     }
 }

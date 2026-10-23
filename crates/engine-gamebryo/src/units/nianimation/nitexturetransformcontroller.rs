@@ -588,10 +588,150 @@ pub fn ni_texture_transform_controller_load_binary(
     }
 }
 
+/// The base `IsEqual` (`00a57c10`) and `SaveBinary` (`00a57c00`), both `thiscall` with one
+/// word: the engine map names them `NiBoolInterpController`'s; each is a jump to
+/// `NiSingleInterpController`'s (`00a39030`, `00a39010`).
+const BASE_IS_EQUAL: u32 = 0x00a5_7c10;
+const BASE_SAVE_BINARY: u32 = 0x00a5_7c00;
+/// `NiStream::m_pkOstr` (Xbox PDB) +0x250; the output stream's `m_pfnWrite` (+0xC, the same
+/// arguments as the read).
+const STREAM_OUTPUT: u32 = 0x250;
+
+/// One `m_pfnWrite` call of the stream's output: the component size word at `size_word` is
+/// set to `size`, and the bytes it answers are added to the output's position.
+fn stream_write(e: &mut Engine, stream: u32, buffer: u32, size: u32, size_word: u32) {
+    let output = e.mem.u32(stream + STREAM_OUTPUT);
+    let write = e.mem.u32(output + 0xc);
+    e.mem.set_u32(size_word, size);
+    let count = e
+        .call(write, &args![output, buffer, size, size_word, 1u32])
+        .u32();
+    let position = e.mem.u32(output + 4);
+    e.mem.set_u32(output + 4, position.wrapping_add(count));
+}
+
+// Translated from 00a461a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiTextureTransformController::SetTarget` (Xbox PDB; `thiscall`, the target): a new target
+/// forgets the map (`m_pkMap` cleared); then `NiTimeController::SetTarget` (`00a6d450`, a
+/// tail jump; its `EAX` is answered).
+pub fn ni_texture_transform_controller_set_target(
+    e: &mut Engine,
+    this: Ptr<NiTextureTransformController>,
+    target: u32,
+) -> u32 {
+    if e.get(this, NiTextureTransformController::m_pkTarget) != target {
+        e.set(this, NiTextureTransformController::m_pkMap, 0);
+    }
+    e.call(SET_TARGET, &args![this, target]).u32()
+}
+
+// Translated from 00a461e0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiTextureTransformController::IsEqual` (Xbox PDB; `thiscall`, the other object): the
+/// base `IsEqual` (`00a57c10`), then `m_uiLastIdx`, `m_bShaderMap`, `m_uiMapIndex` and
+/// `m_eMember` equal.
+pub fn ni_texture_transform_controller_is_equal(
+    e: &mut Engine,
+    this: Ptr<NiTextureTransformController>,
+    other: Ptr<NiTextureTransformController>,
+) -> bool {
+    type C = NiTextureTransformController;
+    e.call(BASE_IS_EQUAL, &args![this, other]).bool()
+        && e.get(other, C::m_uiLastIdx) == e.get(this, C::m_uiLastIdx)
+        && e.get(other, C::m_bShaderMap) == e.get(this, C::m_bShaderMap)
+        && e.get(other, C::m_uiMapIndex) == e.get(this, C::m_uiMapIndex)
+        && e.get(other, C::m_eMember) == e.get(this, C::m_eMember)
+}
+
+// Translated from 00a463e0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`thiscall` on an `NiTexturingProperty`, an index): the shader
+/// map at `index` of the array at +0x2C (the pointers at +4, the size at +0xA), or 0 without
+/// the array or past its size.
+pub fn fn_00a463e0(e: &mut Engine, this: Ptr, index: u32) -> u32 {
+    let shader_maps = e.mem.u32(this.addr() + 0x2c);
+    if shader_maps == 0 || index >= u32::from(e.mem.u16(shader_maps + 0xa)) {
+        return 0;
+    }
+    let array = e.mem.u32(shader_maps + 4);
+    e.mem.u32(array.wrapping_add(index.wrapping_mul(4)))
+}
+
+// Translated from 00a46660 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiTextureTransformController::GetTargetFloatValue` (Xbox PDB; `thiscall`, the address
+/// of the float): when the map is found (`SetInternalMap`), its transform (+0xC of the map)
+/// gives the member `m_eMember` names (0 translate U +0, 1 translate V +4, 2 rotation +8, 3
+/// scale U +0xC, 4 scale V +0x10, through the x87 stack); a map without a transform gives
+/// 0; a member above 4 leaves the float as it is, and so does a missing map.
+pub fn ni_texture_transform_controller_get_target_float_value(
+    e: &mut Engine,
+    this: Ptr<NiTextureTransformController>,
+    value: Ptr,
+) {
+    if !ni_texture_transform_controller_set_internal_map(e, this) {
+        return;
+    }
+    let map = e.get(this, NiTextureTransformController::m_pkMap);
+    let transform = e.mem.u32(map + 0xc);
+    if transform == 0 {
+        e.mem.set_u32(value.addr(), x87_store32(0.0));
+        return;
+    }
+    // The compiler's jump table (`00a4672c`): one case per member.
+    let offset = match e.get(this, NiTextureTransformController::m_eMember) {
+        0 => 0,
+        1 => 4,
+        2 => 8,
+        3 => 0xc,
+        4 => 0x10,
+        _ => return,
+    };
+    let word = x87_quiet_bits(e.mem.u32(transform + offset));
+    e.mem.set_u32(value.addr(), word);
+}
+
+// Translated from 00a46a30 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiTextureTransformController::SaveBinary` (Xbox PDB; `thiscall`, the stream): the base
+/// `SaveBinary` (`00a57c00`), then `m_bShaderMap` (1 byte, copied into the low byte of the
+/// stream argument's own stack slot first), `m_uiMapIndex` and `m_eMember` (4 bytes each),
+/// the component size word being the function's one local.
+pub fn ni_texture_transform_controller_save_binary(
+    e: &mut Engine,
+    this: Ptr<NiTextureTransformController>,
+    stream: u32,
+) {
+    e.call(BASE_SAVE_BINARY, &args![this, stream]);
+    let shader = e.get(this, NiTextureTransformController::m_bShaderMap);
+    e.with_stack(8, |e, slots| {
+        let argument = slots.addr();
+        let size_word = argument + 4;
+        e.mem.set_u32(argument, stream);
+        e.mem.set_u8(argument, shader);
+        stream_write(e, stream, argument, 1, size_word);
+        stream_write(e, stream, this.addr() + 0x44, 4, size_word);
+        stream_write(e, stream, this.addr() + 0x48, 4, size_word);
+    });
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     type C = NiTextureTransformController;
     vec![
+        entry!(
+            0x00a4_61a0,
+            ni_texture_transform_controller_set_target(Ptr<C>, u32) -> u32
+        ),
+        entry!(
+            0x00a4_61e0,
+            ni_texture_transform_controller_is_equal(Ptr<C>, Ptr<C>) -> bool
+        ),
+        entry!(0x00a4_63e0, fn_00a463e0(Ptr, u32) -> u32),
+        entry!(
+            0x00a4_6660,
+            ni_texture_transform_controller_get_target_float_value(Ptr<C>, Ptr)
+        ),
+        entry!(
+            0x00a4_6a30,
+            ni_texture_transform_controller_save_binary(Ptr<C>, u32)
+        ),
         entry!(0x00a46220, fn_00a46220(Ptr, Ptr)),
         entry!(0x00a46270, fn_00a46270(Ptr, f32)),
         entry!(0x00a462b0, fn_00a462b0(Ptr, Ptr)),
@@ -1070,5 +1210,154 @@ mod tests {
         e.call_log = Some(vec![]);
         e.call(0x00a4_6970, &args![this, stream]);
         assert!(calls_to(&e, STREAM_00A645B0).is_empty());
+    }
+}
+
+#[cfg(test)]
+mod n005_tests {
+    use super::*;
+
+    type C = NiTextureTransformController;
+
+    fn calls_to(e: &Engine, address: u32) -> Vec<Vec<u32>> {
+        e.call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|(a, _)| *a == address)
+            .map(|(_, w)| w.clone())
+            .collect()
+    }
+
+    #[test]
+    fn set_target_forgets_the_map_for_a_new_target() {
+        let mut e = Engine::new();
+        e.register(SET_TARGET, |_, a| a[1].into_ret());
+        let this = e.new_object::<C>();
+        e.set(this, C::m_pkTarget, 0x1000);
+        e.set(this, C::m_pkMap, 0x2000);
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x00a4_61a0, &[this.addr(), 0x1000]).u32(), 0x1000);
+        assert_eq!(e.get(this, C::m_pkMap), 0x2000);
+        e.call(0x00a4_61a0, &[this.addr(), 0x3000]);
+        assert_eq!(e.get(this, C::m_pkMap), 0);
+        assert_eq!(
+            calls_to(&e, SET_TARGET),
+            vec![vec![this.addr(), 0x1000], vec![this.addr(), 0x3000]]
+        );
+    }
+
+    #[test]
+    fn is_equal_compares_the_map_settings() {
+        let mut e = Engine::new();
+        e.register(BASE_IS_EQUAL, |e, a| (e.mem.u32(a[1] + 4) == 0).into_ret());
+        let this = e.new_object::<C>();
+        let other = e.new_object::<C>();
+        for object in [this, other] {
+            e.set(object, C::m_uiLastIdx, 3);
+            e.set(object, C::m_bShaderMap, 1);
+            e.set(object, C::m_uiMapIndex, 2);
+            e.set(object, C::m_eMember, 4);
+        }
+        let equal = |e: &mut Engine| e.call(0x00a4_61e0, &[this.addr(), other.addr()]).bool();
+        assert!(equal(&mut e));
+        e.mem.set_u32(other.addr() + 4, 1);
+        assert!(!equal(&mut e));
+        e.mem.set_u32(other.addr() + 4, 0);
+        e.set(other, C::m_uiLastIdx, 4);
+        assert!(!equal(&mut e));
+        e.set(other, C::m_uiLastIdx, 3);
+        e.set(other, C::m_bShaderMap, 0);
+        assert!(!equal(&mut e));
+        e.set(other, C::m_bShaderMap, 1);
+        e.set(other, C::m_uiMapIndex, 0);
+        assert!(!equal(&mut e));
+        e.set(other, C::m_uiMapIndex, 2);
+        e.set(other, C::m_eMember, 1);
+        assert!(!equal(&mut e));
+    }
+
+    #[test]
+    fn shader_map_00a463e0_is_range_checked() {
+        let mut e = Engine::new();
+        let property = e.mem.alloc(0x40);
+        assert_eq!(e.call(0x00a4_63e0, &[property, 0]).u32(), 0);
+        let maps = e.mem.alloc(0x10);
+        let array = e.mem.alloc(0x10);
+        e.mem.set_u32(array + 4, 0x5555);
+        e.mem.set_u32(maps + 4, array);
+        e.mem.set_u16(maps + 0xa, 2);
+        e.mem.set_u32(property + 0x2c, maps);
+        assert_eq!(e.call(0x00a4_63e0, &[property, 1]).u32(), 0x5555);
+        assert_eq!(e.call(0x00a4_63e0, &[property, 2]).u32(), 0);
+    }
+
+    #[test]
+    fn target_float_value_reads_the_member_of_the_transform() {
+        let mut e = Engine::new();
+        let this = e.new_object::<C>();
+        let value = e.mem.alloc(4);
+        e.mem.set_u32(value, 0x1234);
+        // No target: SetInternalMap fails and the value stays.
+        e.call(0x00a4_6660, &[this.addr(), value]);
+        assert_eq!(e.mem.u32(value), 0x1234);
+        let map = e.mem.alloc(0x10);
+        e.set(this, C::m_pkMap, map);
+        // A map without a transform: 0.
+        e.call(0x00a4_6660, &[this.addr(), value]);
+        assert_eq!(e.mem.u32(value), 0);
+        let transform = e.mem.alloc(0x20);
+        for i in 0..5u32 {
+            e.mem.set_f32(transform + 4 * i, i as f32 + 0.5);
+        }
+        e.mem.set_u32(map + 0xc, transform);
+        for member in 0..5u32 {
+            e.set(this, C::m_eMember, member);
+            e.call(0x00a4_6660, &[this.addr(), value]);
+            assert_eq!(e.mem.f32(value), member as f32 + 0.5);
+        }
+        // A signalling NaN comes out quiet; a member above 4 leaves the value.
+        e.mem.set_u32(transform + 8, 0x7f80_0001);
+        e.set(this, C::m_eMember, 2);
+        e.call(0x00a4_6660, &[this.addr(), value]);
+        assert_eq!(e.mem.u32(value), 0x7fc0_0001);
+        e.set(this, C::m_eMember, 5);
+        e.call(0x00a4_6660, &[this.addr(), value]);
+        assert_eq!(e.mem.u32(value), 0x7fc0_0001);
+    }
+
+    #[test]
+    fn save_binary_writes_the_map_settings() {
+        let mut e = Engine::new();
+        e.register(BASE_SAVE_BINARY, |_, _| Ret::default());
+        e.register(0x0300_0000, |e, a| {
+            assert_eq!(e.mem.u32(a[3]), a[2]);
+            if a[2] == 1 {
+                assert_eq!(e.mem.u8(a[1]), 1);
+            }
+            a[2].into_ret()
+        });
+        let stream = e.mem.alloc(0x300);
+        let output = e.mem.alloc(0x10);
+        e.mem.set_u32(output + 0xc, 0x0300_0000);
+        e.mem.set_u32(stream + STREAM_OUTPUT, output);
+        let this = e.new_object::<C>();
+        e.set(this, C::m_bShaderMap, 1);
+        e.call_log = Some(vec![]);
+        e.call(0x00a4_6a30, &[this.addr(), stream]);
+        let writes: Vec<(u32, u32)> = calls_to(&e, 0x0300_0000)
+            .iter()
+            .map(|a| (a[1], a[2]))
+            .collect();
+        assert_eq!(
+            writes[1..],
+            [(this.addr() + 0x44, 4), (this.addr() + 0x48, 4)]
+        );
+        assert_eq!(writes[0].1, 1);
+        assert_eq!(e.mem.u32(output + 4), 9);
+        assert_eq!(
+            calls_to(&e, BASE_SAVE_BINARY),
+            vec![vec![this.addr(), stream]]
+        );
     }
 }

@@ -138,6 +138,65 @@ pub fn ni_tri_strips_ni_tri_strips(
     this
 }
 
+/// The renderer's vtable slot +0x1B0 that `RenderImmediate` calls for a tri-strips object.
+const RENDERER_RENDER_TRI_STRIPS_SLOT: u32 = 0x1b0;
+/// `NiGeometry::m_spModelData` (Xbox PDB) +0xB8, the geometry data's vertex array
+/// (`NiGeometryData::m_pkVertex`, +0x20, twelve bytes per vertex) and the data's vtable slot
+/// +0xAC that gives a triangle's three vertex indices (thiscall: the triangle, then three
+/// out pointers to 16-bit indices; `NiTriStripsData::GetTriangleIndices` in the Xbox PDB's
+/// slot order).
+const MODEL_DATA: u32 = 0xb8;
+const DATA_VERTICES: u32 = 0x20;
+const DATA_TRIANGLE_INDICES_SLOT: u32 = 0xac;
+
+// Translated from 00a71d30 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiTriStrips::RenderImmediate` (Xbox PDB; thiscall, `RET 4`): `NiGeometry::RenderImmediate`
+/// on `renderer`, then, when the renderer's word at +0x200 is 1 or 2 and its byte at +0x208
+/// is 1, the renderer's vtable slot +0x1B0 with `this`.
+pub fn ni_tri_strips_render_immediate(e: &mut Engine, this: Ptr, renderer: Ptr) {
+    e.call(GEOMETRY_RENDER_IMMEDIATE, &args![this, renderer]);
+    let mode = e.mem.u32(renderer.addr().wrapping_add(RENDERER_MODE));
+    if (mode == 1 || mode == 2) && e.mem.u8(renderer.addr().wrapping_add(RENDERER_IMMEDIATE)) == 1 {
+        e.vcall(
+            renderer.addr(),
+            RENDERER_RENDER_TRI_STRIPS_SLOT,
+            &args![this],
+        );
+    }
+}
+
+// Translated from 00a71e00 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiTriStrips::GetModelTriangle` (Xbox PDB; thiscall, `RET 0x10`: the triangle and three
+/// out pointers): the model data's vertex array is read first, then the data's slot +0xAC
+/// gives the triangle's three indices (the first written over the triangle argument's own
+/// stack word, the other two into locals), and each out pointer gets the address of its
+/// vertex (twelve bytes per vertex).
+pub fn ni_tri_strips_get_model_triangle(
+    e: &mut Engine,
+    this: Ptr,
+    triangle: u32,
+    first: u32,
+    second: u32,
+    third: u32,
+) {
+    let data = e.mem.u32(this.addr() + MODEL_DATA);
+    let vertices = e.mem.u32(data + DATA_VERTICES);
+    e.with_stack(12, |e, frame| {
+        // The triangle's stack word, then the two locals.
+        let slot = frame.addr();
+        e.mem.set_u32(slot, triangle);
+        e.vcall(
+            data,
+            DATA_TRIANGLE_INDICES_SLOT,
+            &args![triangle, slot, slot + 4, slot + 8],
+        );
+        for (index_slot, out) in [(slot, first), (slot + 4, second), (slot + 8, third)] {
+            let index = u32::from(e.mem.u16(index_slot));
+            e.mem.set_u32(out, vertices.wrapping_add(index * 12));
+        }
+    });
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -151,6 +210,11 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
             ni_tri_strips_ni_tri_strips(
                 Ptr, u32, u32, u32, u32, u32, u32, u32, u32, u32, u32, u32
             ) -> Ptr
+        ),
+        entry!(0x00a7_1d30, ni_tri_strips_render_immediate(Ptr, Ptr)),
+        entry!(
+            0x00a7_1e00,
+            ni_tri_strips_get_model_triangle(Ptr, u32, u32, u32, u32)
         ),
     ]
 }
@@ -342,5 +406,76 @@ mod b014_tests {
             );
             assert_eq!(e.mem.u32(this), NI_TRI_STRIPS_VTABLE);
         }
+    }
+}
+
+#[cfg(test)]
+mod n020_tests {
+    use super::*;
+
+    const RENDERER_VTABLE: u32 = 0x0710_0000;
+    const RENDER_DOUBLE: u32 = 0x0720_0000;
+    const DATA_VTABLE: u32 = 0x0730_0000;
+    const INDICES_DOUBLE: u32 = 0x0740_0000;
+
+    fn calls_to(e: &Engine, callee: u32) -> Vec<Vec<u32>> {
+        e.call_log
+            .iter()
+            .flatten()
+            .filter(|(a, _)| *a == callee)
+            .map(|(_, w)| w.clone())
+            .collect()
+    }
+
+    #[test]
+    fn render_immediate_asks_renderers_in_modes_1_and_2() {
+        let mut e = Engine::new();
+        e.register(GEOMETRY_RENDER_IMMEDIATE, |_, _| Ret::default());
+        e.register(RENDER_DOUBLE, |_, _| Ret::default());
+        let mut slots = vec![0u32; 0x200 / 4];
+        slots[RENDERER_RENDER_TRI_STRIPS_SLOT as usize / 4] = RENDER_DOUBLE;
+        e.put_vtable(RENDERER_VTABLE, &slots);
+        let renderer = e.mem.alloc(0x210);
+        e.mem.set_u32(renderer, RENDERER_VTABLE);
+        let this = e.mem.alloc(0xc4);
+        e.call_log = Some(vec![]);
+        for (mode, flag) in [(1u32, 1u8), (2, 1), (0, 1), (3, 1), (1, 0)] {
+            e.mem.set_u32(renderer + RENDERER_MODE, mode);
+            e.mem.set_u8(renderer + RENDERER_IMMEDIATE, flag);
+            e.call(0x00a7_1d30, &args![this, renderer]);
+        }
+        assert_eq!(calls_to(&e, GEOMETRY_RENDER_IMMEDIATE).len(), 5);
+        assert_eq!(calls_to(&e, RENDER_DOUBLE), vec![vec![renderer, this]; 2]);
+    }
+
+    #[test]
+    fn model_triangle_points_at_the_three_vertices() {
+        let mut e = Engine::new();
+        e.register(INDICES_DOUBLE, |e, a| {
+            // The first out pointer is the triangle's own word.
+            assert_eq!(e.mem.u32(a[2]), a[1]);
+            e.mem.set_u16(a[2], 4);
+            e.mem.set_u16(a[3], 0xffff);
+            e.mem.set_u16(a[4], 2);
+            Ret::default()
+        });
+        let mut slots = vec![0u32; 0xb0 / 4];
+        slots[DATA_TRIANGLE_INDICES_SLOT as usize / 4] = INDICES_DOUBLE;
+        e.put_vtable(DATA_VTABLE, &slots);
+        let data = e.mem.alloc(0x40);
+        e.mem.set_u32(data, DATA_VTABLE);
+        e.mem.set_u32(data + DATA_VERTICES, 0x0100_0000);
+        let this = e.mem.alloc(0xc4);
+        e.mem.set_u32(this + MODEL_DATA, data);
+        let out = e.mem.alloc(12);
+        e.call_log = Some(vec![]);
+        e.call(
+            0x00a7_1e00,
+            &args![this, 0x0003_0007u32, out, out + 4, out + 8],
+        );
+        assert_eq!(calls_to(&e, INDICES_DOUBLE)[0][..2], [data, 0x0003_0007]);
+        assert_eq!(e.mem.u32(out), 0x0100_0000 + 4 * 12);
+        assert_eq!(e.mem.u32(out + 4), 0x0100_0000 + 0xffff * 12);
+        assert_eq!(e.mem.u32(out + 8), 0x0100_0000 + 2 * 12);
     }
 }

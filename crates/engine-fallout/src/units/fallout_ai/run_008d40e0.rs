@@ -89,9 +89,45 @@ pub fn fn_008d40e0(e: &mut Engine, this: Ptr, skip_height: u8) -> bool {
     child
 }
 
+// Translated from 008d4210 (decompiled, FalloutNV.exe 1.4.0.525)
+/// After `008c1270`, slots 0x440 and 0x43C (their floats dropped) and,
+/// with 3D (slot 0x1D0) and a process, the process gets the three nodes it
+/// lacks: when its slot 0x790 / 0x798 answers 0 the node named by
+/// `008d3f70` / `008d3f80` (`004ade00` on the 3D) is looked up in
+/// `011d5bf8` (`00653270`) and handed to slot 0x794 / 0x79C; when slot
+/// 0x7A0 answers 0 the node of `008d3f90` goes straight to slot 0x7A4.
+pub fn fn_008d4210(e: &mut Engine, this: Ptr) {
+    let at = this.addr();
+    e.call(0x008c_1270, &args![this]);
+    e.vcall(at, 0x440, &[]);
+    e.vcall(at, 0x43c, &[]);
+    let node = e.vcall(at, 0x1d0, &[]).u32();
+    if node == 0 || e.mem.u32(at + 0x68) == 0 {
+        return;
+    }
+    for (test, set, name, look_up) in [
+        (0x790, 0x794, 0x008d_3f70, true),
+        (0x798, 0x79c, 0x008d_3f80, true),
+        (0x7a0, 0x7a4, 0x008d_3f90, false),
+    ] {
+        let process = e.mem.u32(at + 0x68);
+        if e.vcall(process, test, &[]).u32() != 0 {
+            continue;
+        }
+        let text = e.call(name, &[]).u32();
+        let mut found = e.call(0x004a_de00, &args![node, text]).u32();
+        if look_up {
+            found = e.call(0x0065_3270, &args![0x011d_5bf8u32, found]).u32();
+        }
+        let process = e.mem.u32(at + 0x68);
+        e.vcall(process, set, &args![found]);
+    }
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x008d_4210, fn_008d4210(Ptr)),
         entry!(0x008d_4380, fn_008d4380(Ptr)),
         entry!(0x008d_4360, fn_008d4360(Ptr) -> Ptr),
         entry!(0x008d_41f0, fn_008d41f0(Ptr) -> bool),
@@ -246,5 +282,90 @@ mod tests {
             e.call(0x008d_40e0, &args![this, 0u32]).bool(),
             "no base form"
         );
+    }
+}
+
+#[cfg(test)]
+mod n028_tests {
+    use super::*;
+
+    fn calls_to(e: &Engine, callee: u32) -> Vec<Vec<u32>> {
+        e.call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|(address, _)| *address == callee)
+            .map(|(_, words)| words.clone())
+            .collect()
+    }
+
+    fn object(e: &mut Engine, size: u32, base: u32) -> u32 {
+        let this = e.mem.alloc(size);
+        let table = e.mem.alloc(0x800);
+        for slot in (0..0x800).step_by(4) {
+            e.mem.set_u32(table + slot, base + slot);
+        }
+        e.mem.set_u32(this, table);
+        this
+    }
+
+    #[test]
+    fn fn_008d4210_fills_the_missing_nodes() {
+        let mut e = Engine::new();
+        let this = object(&mut e, 0x200, 0x7100_0000);
+        let process = object(&mut e, 0x100, 0x7300_0000);
+        e.mem.set_u32(this + 0x68, process);
+        for callee in [
+            0x008c_1270,
+            0x7100_0440,
+            0x7100_043c,
+            0x7300_0794,
+            0x7300_079c,
+            0x7300_07a4,
+        ] {
+            e.register(callee, |_, _| Ret::default());
+        }
+        e.register(0x7100_01d0, |_, _| Ret {
+            eax: 0x3d00,
+            ..Ret::default()
+        });
+        e.register(0x7300_0790, |_, _| Ret::default());
+        e.register(0x7300_0798, |_, _| Ret {
+            eax: 1,
+            ..Ret::default()
+        });
+        e.register(0x7300_07a0, |_, _| Ret::default());
+        e.register(0x008d_3f70, |_, _| Ret {
+            eax: 0x70,
+            ..Ret::default()
+        });
+        e.register(0x008d_3f80, |_, _| Ret {
+            eax: 0x80,
+            ..Ret::default()
+        });
+        e.register(0x008d_3f90, |_, _| Ret {
+            eax: 0x90,
+            ..Ret::default()
+        });
+        e.register(0x004a_de00, |_, a| Ret {
+            eax: a[1] + 1,
+            ..Ret::default()
+        });
+        e.register(0x0065_3270, |_, a| Ret {
+            eax: a[1] + 0x100,
+            ..Ret::default()
+        });
+        e.call_log = Some(vec![]);
+        e.call(0x008d_4210, &[this]);
+        assert_eq!(calls_to(&e, 0x7300_0794), vec![vec![process, 0x171]]);
+        assert!(calls_to(&e, 0x7300_079c).is_empty());
+        assert_eq!(calls_to(&e, 0x7300_07a4), vec![vec![process, 0x91]]);
+        assert_eq!(calls_to(&e, 0x0065_3270), vec![vec![0x011d_5bf8, 0x71]]);
+        // Without a process only the first calls run.
+        e.mem.set_u32(this + 0x68, 0);
+        e.call_log = Some(vec![]);
+        e.call(0x008d_4210, &[this]);
+        assert!(calls_to(&e, 0x7300_0790).is_empty());
+        assert_eq!(calls_to(&e, 0x7100_01d0).len(), 1);
     }
 }

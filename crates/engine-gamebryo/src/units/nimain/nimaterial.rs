@@ -113,9 +113,96 @@ pub fn ni_t_fixed_string_map_ni_material_p_scalar_deleting_destructor(
     this
 }
 
+/// Import slot of `InterlockedIncrement` (`stdcall`, one word: the address of the count).
+const INTERLOCKED_INCREMENT: u32 = 0x00fd_f1c0;
+/// `NiRefObject::ms_uiObjects` (`011f4400`) and the vtables of `NiRefObject` (`0101dce4`),
+/// `NiMaterial` (`0109f73c`) and the material map's base class (`0109f72c`, RTTI
+/// `NiTFixedStringMapBase<DFALL<NiTMapItem<NiFixedString,NiMaterial *>>,NiMaterial *>`).
+const REF_OBJECT_COUNT: u32 = 0x011f_4400;
+const NI_REF_OBJECT_VTABLE: u32 = 0x0101_dce4;
+const NI_MATERIAL_VTABLE: u32 = 0x0109_f73c;
+const MATERIAL_MAP_BASE_VTABLE: u32 = 0x0109_f72c;
+/// The material map's `SetAt` (`00a6e980`, engine map `NiTFixedStringMapBase<..>::SetAt`;
+/// `thiscall`, the key's address and the value) and `00aa0250` (`thiscall` on the map, the
+/// key's address), which the destructor runs with the material's name.
+const MAP_SET_AT: u32 = 0x00a6_e980;
+const MAP_REMOVE_KEY: u32 = 0x00aa_0250;
+/// The sized delete (`00aa1460`, `cdecl`: pointer, size).
+const SIZED_DELETE: u32 = 0x00aa_1460;
+/// `NiMaterial` (Xbox PDB) `m_kName` (+8, an `NiFixedString` handle whose count is 8 bytes
+/// before it).
+const NAME: u32 = 0x8;
+
+// Translated from 00a8f910 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (the scalar deleting destructor of the material map's base
+/// class by the vtable it sets, `0109f72c`): sets that vtable, empties the map
+/// (`00aa01f0`), frees the bucket table at +8 (`00aa10f0`), and for bit 0 of `flags` gives
+/// `this` back to the memory manager. Answers `this`.
+pub fn fn_00a8f910(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    e.mem.set_u32(this.addr(), MATERIAL_MAP_BASE_VTABLE);
+    e.call(MAP_REMOVE_ALL, &args![this]);
+    let buckets = e.mem.u32(this.addr() + 8);
+    e.call(FREE_BLOCK, &args![buckets]);
+    if flags & 1 != 0 {
+        e.call(DEALLOCATE, &args![MEMORY_MANAGER, this]);
+    }
+    this
+}
+
+// Translated from 00a8f950 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiMaterial::NiMaterial` (Xbox PDB; the address of the name): the inlined `NiRefObject`
+/// constructor (its vtable, count 0, `ms_uiObjects` raised), `NiMaterial`'s vtable, the
+/// name's handle taken (its count raised unless it is the empty string's) and stored at +8,
+/// and the material entered in the material map under its name (`SetAt`). Answers `this`.
+pub fn ni_material_ni_material(e: &mut Engine, this: Ptr, name: Ptr) -> Ptr {
+    let material = this.addr();
+    e.mem.set_u32(material, NI_REF_OBJECT_VTABLE);
+    e.mem.set_u32(material + 4, 0);
+    e.call(INTERLOCKED_INCREMENT, &args![REF_OBJECT_COUNT]);
+    e.mem.set_u32(material, NI_MATERIAL_VTABLE);
+    let handle = e.mem.u32(name.addr());
+    if handle != e.global::<u32>(EMPTY_FIXED_STRING) {
+        e.call(INTERLOCKED_INCREMENT, &args![handle.wrapping_sub(8)]);
+    }
+    let handle = e.mem.u32(name.addr());
+    e.mem.set_u32(material + NAME, handle);
+    let map = e.mem.u32(MATERIAL_MAP);
+    e.call(MAP_SET_AT, &args![map, material + NAME, material]);
+    this
+}
+
+// Translated from 00a8f9b0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiMaterial::_scalar_deleting_destructor_` (Xbox PDB): `NiMaterial`'s vtable, the name
+/// given to `00aa0250` on the material map, the name's count dropped (unless it is the
+/// empty string's), the inlined `NiRefObject` destructor (its vtable, `ms_uiObjects`
+/// dropped), then the sized delete of 0xc bytes when bit 0 of `flags` is set. Answers
+/// `this`.
+pub fn ni_material_scalar_deleting_destructor(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    let material = this.addr();
+    e.mem.set_u32(material, NI_MATERIAL_VTABLE);
+    let map = e.mem.u32(MATERIAL_MAP);
+    e.call(MAP_REMOVE_KEY, &args![map, material + NAME]);
+    let handle = e.mem.u32(material + NAME);
+    if handle != e.global::<u32>(EMPTY_FIXED_STRING) {
+        e.call(INTERLOCKED_DECREMENT, &args![handle.wrapping_sub(8)]);
+    }
+    e.mem.set_u32(material, NI_REF_OBJECT_VTABLE);
+    e.call(INTERLOCKED_DECREMENT, &args![REF_OBJECT_COUNT]);
+    if flags & 1 != 0 {
+        e.call(SIZED_DELETE, &args![this, 0xcu32]);
+    }
+    this
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x00a8_f910, fn_00a8f910(Ptr, u32) -> Ptr),
+        entry!(0x00a8_f950, ni_material_ni_material(Ptr, Ptr) -> Ptr),
+        entry!(
+            0x00a8_f9b0,
+            ni_material_scalar_deleting_destructor(Ptr, u32) -> Ptr
+        ),
         entry!(0x00a8f860, ni_material_get_rtti() -> Ptr),
         entry!(0x00a8_f870, fn_00a8f870()),
         entry!(
@@ -226,5 +313,112 @@ mod tests_b043 {
             assert_eq!(log[1..], expected[..]);
             assert_eq!(e.mem.u32(this), 0x0109_f72c);
         }
+    }
+}
+
+#[cfg(test)]
+mod a06_tests {
+    use super::*;
+
+    fn calls(e: &Engine, addr: u32) -> Vec<Vec<u32>> {
+        e.call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|c| c.0 == addr)
+            .map(|c| c.1.clone())
+            .collect()
+    }
+
+    fn engine() -> Engine {
+        let mut e = Engine::new();
+        e.map(0x011f_4000, 0x2000);
+        e.map(0x0109_b000, 0x1000);
+        e.mem.set_u32(EMPTY_FIXED_STRING, 0x0300_0008);
+        e.mem.set_u32(MATERIAL_MAP, 0x0310_0000);
+        for addr in [
+            INTERLOCKED_INCREMENT,
+            INTERLOCKED_DECREMENT,
+            MAP_SET_AT,
+            MAP_REMOVE_KEY,
+            MAP_REMOVE_ALL,
+            FREE_BLOCK,
+            DEALLOCATE,
+            SIZED_DELETE,
+        ] {
+            e.register(addr, |_, _| Ret::default());
+        }
+        e
+    }
+
+    #[test]
+    fn map_base_destructor_empties_frees_and_deletes_on_bit_0() {
+        let mut e = engine();
+        let map = e.mem.alloc(0x10);
+        e.mem.set_u32(map + 8, 0x0320_0000);
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x00a8_f910, &args![map, 0u32]).u32(), map);
+        assert_eq!(e.mem.u32(map), MATERIAL_MAP_BASE_VTABLE);
+        assert_eq!(calls(&e, MAP_REMOVE_ALL), vec![vec![map]]);
+        assert_eq!(calls(&e, FREE_BLOCK), vec![vec![0x0320_0000]]);
+        assert!(calls(&e, DEALLOCATE).is_empty());
+        e.call(0x00a8_f910, &args![map, 1u32]);
+        assert_eq!(calls(&e, DEALLOCATE), vec![vec![MEMORY_MANAGER, map]]);
+    }
+
+    #[test]
+    fn constructor_takes_the_name_and_enters_the_map() {
+        let mut e = engine();
+        let material = e.mem.alloc(0xc);
+        let name = e.mem.alloc(4);
+        e.mem.set_u32(name, 0x0330_0008);
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x00a8_f950, &args![material, name]).u32(), material);
+        assert_eq!(e.mem.u32(material), NI_MATERIAL_VTABLE);
+        assert_eq!(e.mem.u32(material + 4), 0);
+        assert_eq!(e.mem.u32(material + NAME), 0x0330_0008);
+        assert_eq!(
+            calls(&e, INTERLOCKED_INCREMENT),
+            vec![vec![REF_OBJECT_COUNT], vec![0x0330_0000]]
+        );
+        assert_eq!(
+            calls(&e, MAP_SET_AT),
+            vec![vec![0x0310_0000, material + NAME, material]]
+        );
+        // The empty string is not counted.
+        e.mem.set_u32(name, 0x0300_0008);
+        e.call_log = Some(vec![]);
+        e.call(0x00a8_f950, &args![material, name]);
+        assert_eq!(
+            calls(&e, INTERLOCKED_INCREMENT),
+            vec![vec![REF_OBJECT_COUNT]]
+        );
+    }
+
+    #[test]
+    fn destructor_leaves_the_map_drops_the_name_and_deletes_on_bit_0() {
+        let mut e = engine();
+        let material = e.mem.alloc(0xc);
+        e.mem.set_u32(material + NAME, 0x0330_0008);
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x00a8_f9b0, &args![material, 0u32]).u32(), material);
+        assert_eq!(e.mem.u32(material), NI_REF_OBJECT_VTABLE);
+        assert_eq!(
+            calls(&e, MAP_REMOVE_KEY),
+            vec![vec![0x0310_0000, material + NAME]]
+        );
+        assert_eq!(
+            calls(&e, INTERLOCKED_DECREMENT),
+            vec![vec![0x0330_0000], vec![REF_OBJECT_COUNT]]
+        );
+        assert!(calls(&e, SIZED_DELETE).is_empty());
+        e.mem.set_u32(material + NAME, 0x0300_0008);
+        e.call_log = Some(vec![]);
+        e.call(0x00a8_f9b0, &args![material, 1u32]);
+        assert_eq!(
+            calls(&e, INTERLOCKED_DECREMENT),
+            vec![vec![REF_OBJECT_COUNT]]
+        );
+        assert_eq!(calls(&e, SIZED_DELETE), vec![vec![material, 0xc]]);
     }
 }

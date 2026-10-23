@@ -2451,9 +2451,138 @@ pub fn fn_00bd1480(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
     this
 }
 
+/// `00b71b90` (thiscall, no stack words): the shared tail the renderer-data functions below
+/// jump to.
+const SHADER_00B71B90: u32 = 0x00b7_1b90;
+/// `00e81880` (thiscall, `RET 4`): the jump target of `00bd16d0`.
+const JUMP_TARGET_00BD16D0: u32 = 0x00e8_1880;
+/// The record `00bd0f60` answers (`01202330`).
+const RTTI_01202330: u32 = 0x0120_2330;
+
+/// Each object of the `count` pointers at `this + offset` that is set gets its virtual slot
+/// `slot` (no stack words).
+fn call_each(e: &mut Engine, this: u32, offset: u32, count: u32, slot: u32) {
+    for index in 0..count {
+        let object = e.mem.u32(this + offset + 4 * index);
+        if object != 0 {
+            e.vcall(object, slot, &args![]);
+        }
+    }
+}
+
+/// The shader's virtual slot +0x128 with each word of the pass table from `table` up to
+/// `end` (read as it goes).
+fn each_pass(e: &mut Engine, this: u32, table: u32, end: u32) {
+    let mut slot = table;
+    while (slot as i32) < (end as i32) {
+        let pass = e.mem.u32(slot);
+        e.vcall(this, 0x128, &args![pass]);
+        slot = slot.wrapping_add(4);
+    }
+}
+
+// Translated from 00bcc570 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (fastcall; slot +0x120 of the vtables at `010bb7a8` and
+/// `010bb980`): the shader's own virtual slot +0x144, then a jump to its slot +0x158.
+pub fn fn_00bcc570(e: &mut Engine, this: Ptr) {
+    e.vcall(this.addr(), 0x144, &args![]);
+    e.vcall(this.addr(), 0x158, &args![]);
+}
+
+// Translated from 00bcc6f0 (PC disassembly, FalloutNV.exe 1.4.0.525; Ghidra made no function here)
+/// Unnamed in the engine map (fastcall; slot +0xd0 of the vtable at `010bb7a8`, the
+/// [`fn_00bcd390`] shader): the 0x14 objects at +0x8c get their virtual slot +0xa0 and the
+/// 0x21 at +0xdc their slot +0x88 (null ones skipped), then a jump to `00b71b90`.
+pub fn fn_00bcc6f0(e: &mut Engine, this: Ptr) {
+    call_each(e, this.addr(), 0x8c, 0x14, 0xa0);
+    call_each(e, this.addr(), 0xdc, 0x21, 0x88);
+    e.call(SHADER_00B71B90, &args![this]);
+}
+
+// Translated from 00bcce10 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (fastcall; slot +0x124 of the vtable at `010bb7a8`): the shader's
+/// virtual slot +0x128 with each word of the pass table `01202230`..`012022b4`.
+pub fn fn_00bcce10(e: &mut Engine, this: Ptr) {
+    each_pass(e, this.addr(), 0x0120_2230, 0x0120_22b4);
+}
+
+// Translated from 00bce8f0 (PC disassembly, FalloutNV.exe 1.4.0.525; Ghidra made no function here)
+/// Unnamed in the engine map (fastcall; slot +0xd0 of the vtable at `010bb980`, the
+/// [`fn_00bcf7f0`] shader): the 0x1a objects at +0x8c get their virtual slot +0xa0 and the
+/// 0xd at +0xf4 their slot +0x88, then a jump to `00b71b90`.
+pub fn fn_00bce8f0(e: &mut Engine, this: Ptr) {
+    call_each(e, this.addr(), 0x8c, 0x1a, 0xa0);
+    call_each(e, this.addr(), 0xf4, 0xd, 0x88);
+    e.call(SHADER_00B71B90, &args![this]);
+}
+
+// Translated from 00bcf7c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (fastcall; slot +0x124 of the vtable at `010bb980`): the shader's
+/// virtual slot +0x128 with each word of the pass table `012022c0`..`01202328`.
+pub fn fn_00bcf7c0(e: &mut Engine, this: Ptr) {
+    each_pass(e, this.addr(), 0x0120_22c0, 0x0120_2328);
+}
+
+// Translated from 00bd0490 (PC disassembly, FalloutNV.exe 1.4.0.525; Ghidra made no function here)
+/// Unnamed in the engine map (fastcall; slot +0x120 of the vtable at `010bbb50`, the
+/// [`fn_00bd12c0`] shader): a jump to the shader's own virtual slot +0x144.
+pub fn fn_00bd0490(e: &mut Engine, this: Ptr) {
+    e.vcall(this.addr(), 0x144, &args![]);
+}
+
+// Translated from 00bd04a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (fastcall; slot +0xd0 of the vtable at `010bbb50`): with a word at
+/// +0x28, the 7 objects at +0x94 and the 7 at +0xbc get their virtual slot +0xa0; then, three
+/// times, the objects at +0xb0 + 4i and +0xd8 + 4i their slot +0x88 (null ones skipped), and a
+/// jump to `00b71b90`.
+pub fn fn_00bd04a0(e: &mut Engine, this: Ptr) {
+    let base = this.addr();
+    if e.mem.u32(base + 0x28) != 0 {
+        call_each(e, base, 0x94, 7, 0xa0);
+        call_each(e, base, 0xbc, 7, 0xa0);
+    }
+    for index in 0..3u32 {
+        call_each(e, base, 0xb0 + 4 * index, 1, 0x88);
+        call_each(e, base, 0xd8 + 4 * index, 1, 0x88);
+    }
+    e.call(SHADER_00B71B90, &args![this]);
+}
+
+// Translated from 00bd0cb0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (fastcall; slot +0x124 of the vtable at `010bbb50`): the shader's
+/// virtual slot +0x128 with each word of the pass table `011fdff8`..`011fe000`.
+pub fn fn_00bd0cb0(e: &mut Engine, this: Ptr) {
+    each_pass(e, this.addr(), 0x011f_dff8, 0x011f_e000);
+}
+
+// Translated from 00bd0f60 (PC disassembly, FalloutNV.exe 1.4.0.525; Ghidra made no function here)
+/// The `GetRTTI` of the vtable at `010bbb50` (its slot +8): the address of the record at
+/// `01202330`.
+pub fn fn_00bd0f60(_e: &mut Engine) -> Ptr {
+    Ptr::new(RTTI_01202330)
+}
+
+// Translated from 00bd16d0 (PC disassembly, FalloutNV.exe 1.4.0.525; Ghidra made no function here)
+/// Unnamed in the engine map (slot +0x50 of the vtable at `010bbd08`): a 5-byte jump to
+/// `00e81880` (thiscall, `RET 4`) with `this` and its one stack word, answering what it
+/// answers.
+pub fn fn_00bd16d0(e: &mut Engine, this: Ptr, word: u32) -> u32 {
+    e.call(JUMP_TARGET_00BD16D0, &args![this, word]).u32()
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x00bc_c570, fn_00bcc570(Ptr)),
+        entry!(0x00bc_c6f0, fn_00bcc6f0(Ptr)),
+        entry!(0x00bc_ce10, fn_00bcce10(Ptr)),
+        entry!(0x00bc_e8f0, fn_00bce8f0(Ptr)),
+        entry!(0x00bc_f7c0, fn_00bcf7c0(Ptr)),
+        entry!(0x00bd_0490, fn_00bd0490(Ptr)),
+        entry!(0x00bd_04a0, fn_00bd04a0(Ptr)),
+        entry!(0x00bd_0cb0, fn_00bd0cb0(Ptr)),
+        entry!(0x00bd_0f60, fn_00bd0f60() -> Ptr),
+        entry!(0x00bd_16d0, fn_00bd16d0(Ptr, u32) -> u32),
         entry!(0x00bc_d390, fn_00bcd390(Ptr, Ptr) -> Ptr),
         entry!(0x00bc_f7f0, fn_00bcf7f0(Ptr, Ptr, Ptr) -> Ptr),
         entry!(0x00bd_12c0, fn_00bd12c0(Ptr, Ptr, Ptr) -> Ptr),
@@ -3024,5 +3153,177 @@ mod b053_tests {
             assert_eq!(e.mem.u32(object + 4), 2);
         }
         assert!(calls(&e, REFERENCE_DELETE).is_empty());
+    }
+}
+
+#[cfg(test)]
+mod n014_tests {
+    use super::*;
+
+    /// One double for every virtual slot used here: it records (object, slot) in the log
+    /// through a slot-specific address.
+    fn slot_address(slot: u32) -> u32 {
+        0x03f2_0000 + slot
+    }
+
+    /// An object whose vtable maps every slot below 0x200 to `slot_address(slot)`.
+    fn object(e: &mut Engine) -> u32 {
+        let vtable = e.mem.alloc(0x200);
+        for slot in (0..0x200u32).step_by(4) {
+            e.mem.set_u32(vtable + slot, slot_address(slot));
+        }
+        let object = e.mem.alloc(0x200);
+        e.mem.set_u32(object, vtable);
+        object
+    }
+
+    fn engine() -> Engine {
+        let mut e = Engine::new();
+        for slot in (0..0x200u32).step_by(4) {
+            e.register(slot_address(slot), |_, _| Ret::default());
+        }
+        e.register(SHADER_00B71B90, |_, _| Ret::default());
+        e.call_log = Some(vec![]);
+        e
+    }
+
+    /// The (object, slot) pairs of the virtual calls made, in order.
+    fn slot_calls(e: &Engine) -> Vec<(u32, u32)> {
+        e.call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|c| (0x03f2_0000..0x03f2_0200).contains(&c.0))
+            .map(|c| (c.1[0], c.0 - 0x03f2_0000))
+            .collect()
+    }
+
+    #[test]
+    fn slot_120_runs_slots_144_then_158() {
+        let mut e = engine();
+        let this = object(&mut e);
+        e.call(0x00bc_c570, &args![this]);
+        assert_eq!(slot_calls(&e), vec![(this, 0x144), (this, 0x158)]);
+    }
+
+    fn renderer_data_case(address: u32, arrays: [(u32, u32, u32); 2]) {
+        let mut e = engine();
+        let this = object(&mut e);
+        let mut expected = vec![];
+        for (offset, count, slot) in arrays {
+            for index in 0..count {
+                // Every other pointer is null.
+                if index % 2 == 0 {
+                    let member = object(&mut e);
+                    e.mem.set_u32(this + offset + 4 * index, member);
+                    expected.push((member, slot));
+                }
+            }
+        }
+        e.call(address, &args![this]);
+        assert_eq!(slot_calls(&e), expected);
+        let log = e.call_log.take().unwrap();
+        assert_eq!(log.last().unwrap(), &(SHADER_00B71B90, vec![this]));
+    }
+
+    #[test]
+    fn first_shader_renderer_data_walks_both_arrays() {
+        renderer_data_case(0x00bc_c6f0, [(0x8c, 0x14, 0xa0), (0xdc, 0x21, 0x88)]);
+    }
+
+    #[test]
+    fn second_shader_renderer_data_walks_both_arrays() {
+        renderer_data_case(0x00bc_e8f0, [(0x8c, 0x1a, 0xa0), (0xf4, 0xd, 0x88)]);
+    }
+
+    fn pass_table_case(address: u32, table: u32, end: u32) {
+        let mut e = engine();
+        e.mem.map(table, end - table);
+        for slot in (table..end).step_by(4) {
+            e.mem.set_u32(slot, slot ^ 0x5555);
+        }
+        let this = object(&mut e);
+        e.call(address, &args![this]);
+        let log = e.call_log.take().unwrap();
+        let passes: Vec<u32> = log
+            .iter()
+            .filter(|c| c.0 == slot_address(0x128))
+            .map(|c| c.1[1])
+            .collect();
+        let wanted: Vec<u32> = (table..end).step_by(4).map(|slot| slot ^ 0x5555).collect();
+        assert_eq!(passes, wanted);
+    }
+
+    #[test]
+    fn first_shader_reloads_each_pass_of_its_table() {
+        pass_table_case(0x00bc_ce10, 0x0120_2230, 0x0120_22b4);
+    }
+
+    #[test]
+    fn second_shader_reloads_each_pass_of_its_table() {
+        pass_table_case(0x00bc_f7c0, 0x0120_22c0, 0x0120_2328);
+    }
+
+    #[test]
+    fn third_shader_reloads_each_pass_of_its_table() {
+        pass_table_case(0x00bd_0cb0, 0x011f_dff8, 0x011f_e000);
+    }
+
+    #[test]
+    fn third_shader_slot_120_jumps_to_slot_144() {
+        let mut e = engine();
+        let this = object(&mut e);
+        e.call(0x00bd_0490, &args![this]);
+        assert_eq!(slot_calls(&e), vec![(this, 0x144)]);
+    }
+
+    #[test]
+    fn third_shader_renderer_data_skips_the_first_arrays_without_the_word() {
+        let mut e = engine();
+        let this = object(&mut e);
+        let mut members = vec![];
+        for offset in (0x94..0xe4u32).step_by(4) {
+            let member = object(&mut e);
+            e.mem.set_u32(this + offset, member);
+            members.push((offset, member));
+        }
+        let at = |offset: u32| members.iter().find(|m| m.0 == offset).unwrap().1;
+        e.call(0x00bd_04a0, &args![this]);
+        let tail: Vec<(u32, u32)> = [0xb0u32, 0xd8, 0xb4, 0xdc, 0xb8, 0xe0]
+            .iter()
+            .map(|offset| (at(*offset), 0x88))
+            .collect();
+        assert_eq!(slot_calls(&e), tail);
+        // With the word at +0x28: the 14 slot +0xa0 calls first.
+        e.mem.set_u32(this + 0x28, 1);
+        e.call_log = Some(vec![]);
+        e.call(0x00bd_04a0, &args![this]);
+        let calls = slot_calls(&e);
+        assert_eq!(calls.len(), 20);
+        assert_eq!(calls[0], (at(0x94), 0xa0));
+        assert_eq!(calls[13], (at(0xd4), 0xa0));
+        assert_eq!(calls[14..], tail[..]);
+    }
+
+    #[test]
+    fn third_shader_get_rtti_answers_the_record() {
+        let mut e = Engine::new();
+        assert_eq!(e.call(0x00bd_0f60, &args![]).u32(), RTTI_01202330);
+    }
+
+    #[test]
+    fn thunk_00bd16d0_forwards_and_answers() {
+        let mut e = Engine::new();
+        e.register(JUMP_TARGET_00BD16D0, |_, a| (a[0] + a[1]).into_ret());
+        e.call_log = Some(vec![]);
+        assert_eq!(
+            e.call(0x00bd_16d0, &args![0x1000u32, 0x22u32]).u32(),
+            0x1022
+        );
+        let log = e.call_log.take().unwrap();
+        assert_eq!(
+            log.iter().filter(|c| c.0 == JUMP_TARGET_00BD16D0).count(),
+            1
+        );
     }
 }

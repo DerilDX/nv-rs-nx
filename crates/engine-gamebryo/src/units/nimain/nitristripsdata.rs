@@ -3,6 +3,7 @@
 
 #[allow(unused_imports)]
 use crate::prelude::*;
+use crate::types::NiTArray;
 
 layout! {
     /// `NiTriStripsData` (Xbox PDB), 0x50 bytes: only the fields used so far.
@@ -319,6 +320,204 @@ pub fn ni_tri_strips_data_save_binary(e: &mut Engine, this: Ptr, stream: Ptr) {
     });
 }
 
+/// `NiTriStripsData::ms_RTTI` (`011f4a70`): its first word is the class name.
+const NI_TRI_STRIPS_DATA_RTTI: u32 = 0x011f_4a70;
+/// `NiTriBasedGeomData::IsEqual` (`00a8a9c0`) and `GetViewerStrings` (`00a8aab0`), and
+/// `NiGeometryData::GetBlockAllocationSize` (`00a66f90`): thiscall.
+const TRI_BASED_GEOM_DATA_IS_EQUAL: u32 = 0x00a8_a9c0;
+const TRI_BASED_GEOM_DATA_GET_VIEWER_STRINGS: u32 = 0x00a8_aab0;
+const GEOMETRY_DATA_GET_BLOCK_ALLOCATION_SIZE: u32 = 0x00a6_6f90;
+/// `NiGetViewerString` (cdecl, the class name), `NiGetViewerString_ov6` (cdecl, a name and
+/// a 16-bit value, `"%s = %hu"`) and `NiGetViewerString_ov10` (cdecl, a name and a pointer,
+/// `"%s = %p"`): each returns a new string.
+const VIEWER_STRING_NAME: u32 = 0x00a7_d330;
+const VIEWER_STRING_U16: u32 = 0x00a7_d490;
+const VIEWER_STRING_POINTER: u32 = 0x00a7_d5a0;
+/// The strings array's `SetSize` (thiscall, the new size) and `SetAt` (thiscall, the index
+/// and the address of the element).
+const STRING_ARRAY_SET_SIZE: u32 = 0x0096_ad30;
+const STRING_ARRAY_SET_AT: u32 = 0x0096_ae90;
+/// `"m_usStrips"`, `"m_pusStripLengths"` and `"m_pusStripLists"`.
+const TEXT_STRIPS: u32 = 0x0109_d984;
+const TEXT_STRIP_LENGTHS: u32 = 0x0109_d970;
+const TEXT_STRIP_LISTS: u32 = 0x0109_d960;
+
+/// Adds the string word at `slot` at the end of the strings array (`SetSize` to the size
+/// plus the grow-by step when the array is full, then `SetAt`).
+fn add_viewer_string(e: &mut Engine, strings: Ptr<NiTArray>, slot: u32) {
+    let index = u32::from(e.get(strings, NiTArray::m_usSize));
+    if index >= u32::from(e.get(strings, NiTArray::m_usMaxSize)) {
+        let grow = u32::from(e.get(strings, NiTArray::m_usGrowBy));
+        e.call(STRING_ARRAY_SET_SIZE, &args![strings, grow + index]);
+    }
+    e.call(STRING_ARRAY_SET_AT, &args![strings, index, slot]);
+}
+
+/// The number of strip-list entries: twice the strip count plus the triangle count, in
+/// 16 bits.
+fn strip_list_length(e: &Engine, this: u32) -> u16 {
+    let strips = e.mem.u16(this + STRIPS);
+    strips
+        .wrapping_add(strips)
+        .wrapping_add(e.mem.u16(this + TRIANGLES))
+}
+
+// Translated from 00a75f40 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiTriStripsData::GetStripData` (Xbox PDB; thiscall, `RET 0x10`, four out pointers): the
+/// strip count (16 bits), the strip lengths (+0x48), the strip lists (+0x4C) and the list
+/// length (twice the strips plus the triangles, in 16 bits).
+pub fn ni_tri_strips_data_get_strip_data(
+    e: &mut Engine,
+    this: Ptr,
+    strips: u32,
+    strip_lengths: u32,
+    strip_lists: u32,
+    list_length: u32,
+) {
+    let base = this.addr();
+    let count = e.mem.u16(base + STRIPS);
+    e.mem.set_u16(strips, count);
+    let lengths = e.mem.u32(base + STRIP_LENGTHS);
+    e.mem.set_u32(strip_lengths, lengths);
+    let lists = e.mem.u32(base + STRIP_LISTS);
+    e.mem.set_u32(strip_lists, lists);
+    let length = strip_list_length(e, base);
+    e.mem.set_u32(list_length, u32::from(length));
+}
+
+// Translated from 00a75f80 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiTriStripsData::IsEqual` (Xbox PDB; thiscall, `RET 4`): `NiTriBasedGeomData::IsEqual`,
+/// the same strip count, every strip length the same, and every strip-list entry (twice
+/// the strips plus this object's triangles, 16 bits) the same.
+pub fn ni_tri_strips_data_is_equal(e: &mut Engine, this: Ptr, other: Ptr) -> bool {
+    if e.call(TRI_BASED_GEOM_DATA_IS_EQUAL, &args![this, other])
+        .u32() as u8
+        == 0
+    {
+        return false;
+    }
+    let (mine, theirs) = (this.addr(), other.addr());
+    let strips = e.mem.u16(mine + STRIPS);
+    if strips != e.mem.u16(theirs + STRIPS) {
+        return false;
+    }
+    let count = u32::from(strips);
+    if count != 0 {
+        let a = e.mem.u32(mine + STRIP_LENGTHS);
+        let b = e.mem.u32(theirs + STRIP_LENGTHS);
+        for i in 0..count {
+            if e.mem.u16(a.wrapping_add(i * 2)) != e.mem.u16(b.wrapping_add(i * 2)) {
+                return false;
+            }
+        }
+    }
+    let count = u32::from(strip_list_length(e, mine));
+    if count != 0 {
+        let a = e.mem.u32(mine + STRIP_LISTS);
+        let b = e.mem.u32(theirs + STRIP_LISTS);
+        for i in 0..count {
+            if e.mem.u16(a.wrapping_add(i * 2)) != e.mem.u16(b.wrapping_add(i * 2)) {
+                return false;
+            }
+        }
+    }
+    true
+}
+
+// Translated from 00a76020 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiTriStripsData::GetBlockAllocationSize` (Xbox PDB; thiscall, no arguments):
+/// `NiGeometryData::GetBlockAllocationSize` plus two bytes for each strip length and each
+/// strip-list entry.
+pub fn ni_tri_strips_data_get_block_allocation_size(e: &mut Engine, this: Ptr) -> u32 {
+    let strips = u32::from(e.mem.u16(this.addr() + STRIPS));
+    let length = u32::from(strip_list_length(e, this.addr()));
+    let own = (length + strips) * 2;
+    e.call(GEOMETRY_DATA_GET_BLOCK_ALLOCATION_SIZE, &args![this])
+        .u32()
+        .wrapping_add(own)
+}
+
+/// Drops one reference to the object's group (vtable +0x80), destroying it
+/// (`00a8a670`, then the 0x10-byte sized delete) when none are left.
+fn release_group(e: &mut Engine, this: Ptr) {
+    let group = e.vcall(this.addr(), GET_GROUP_SLOT, &args![]).u32();
+    let count = e.mem.u32(group + GROUP_REF_COUNT).wrapping_sub(1);
+    e.mem.set_u32(group + GROUP_REF_COUNT, count);
+    if count == 0 {
+        e.call(OBJECT_GROUP_DESTRUCTOR, &args![group]);
+        e.call(SIZED_DELETE, &args![group, 0x10u32]);
+    }
+}
+
+// Translated from 00a760c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map; the body replaces the strips (thiscall, `RET 0xc`: the strip
+/// count, the strip lengths, the strip lists). A strip array that changes is let go: with
+/// a group (vtable +0x80) by dropping one group reference for it, otherwise with
+/// `NiFree`. Then the strip count (16 bits), both arrays and a triangle count of the sum
+/// of each strip's length less 2 (16 bits) are stored.
+pub fn fn_00a760c0(e: &mut Engine, this: Ptr, strips: u32, lengths: u32, lists: u32) {
+    let base = this.addr();
+    if e.vcall(base, GET_GROUP_SLOT, &args![]).u32() != 0 {
+        if lengths != e.mem.u32(base + STRIP_LENGTHS) {
+            release_group(e, this);
+        }
+        if lists != e.mem.u32(base + STRIP_LISTS) {
+            release_group(e, this);
+        }
+    } else {
+        let old = e.mem.u32(base + STRIP_LENGTHS);
+        if lengths != old {
+            e.call(NI_FREE, &args![old]);
+        }
+        let old = e.mem.u32(base + STRIP_LISTS);
+        if lists != old {
+            e.call(NI_FREE, &args![old]);
+        }
+    }
+    let strips = strips as u16;
+    e.mem.set_u16(base + STRIPS, strips);
+    e.mem.set_u32(base + STRIP_LENGTHS, lengths);
+    e.mem.set_u32(base + STRIP_LISTS, lists);
+    e.mem.set_u16(base + TRIANGLES, 0);
+    for i in 0..u32::from(strips) {
+        let length = e.mem.u16(lengths.wrapping_add(i * 2)).wrapping_sub(2);
+        let triangles = e.mem.u16(base + TRIANGLES).wrapping_add(length);
+        e.mem.set_u16(base + TRIANGLES, triangles);
+    }
+}
+
+// Translated from 00a76430 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiTriStripsData::GetViewerStrings` (Xbox PDB; thiscall, `RET 4`):
+/// `NiTriBasedGeomData::GetViewerStrings`, then the class name (the first word of
+/// `ms_RTTI`), `"m_usStrips"` with the strip count, and `"m_pusStripLengths"` and
+/// `"m_pusStripLists"` with the two array addresses, each held in the argument's stack
+/// word and added at the array's end.
+pub fn ni_tri_strips_data_get_viewer_strings(e: &mut Engine, this: Ptr, strings: Ptr<NiTArray>) {
+    e.call(
+        TRI_BASED_GEOM_DATA_GET_VIEWER_STRINGS,
+        &args![this, strings],
+    );
+    e.with_stack(4, |e, slot| {
+        let class_name = e.global::<u32>(NI_TRI_STRIPS_DATA_RTTI);
+        let text = e.call(VIEWER_STRING_NAME, &args![class_name]).u32();
+        e.mem.set_u32(slot.addr(), text);
+        add_viewer_string(e, strings, slot.addr());
+        let count = u32::from(e.mem.u16(this.addr() + STRIPS));
+        let text = e.call(VIEWER_STRING_U16, &args![TEXT_STRIPS, count]).u32();
+        e.mem.set_u32(slot.addr(), text);
+        add_viewer_string(e, strings, slot.addr());
+        for (name, field) in [
+            (TEXT_STRIP_LENGTHS, STRIP_LENGTHS),
+            (TEXT_STRIP_LISTS, STRIP_LISTS),
+        ] {
+            let pointer = e.mem.u32(this.addr() + field);
+            let text = e.call(VIEWER_STRING_POINTER, &args![name, pointer]).u32();
+            e.mem.set_u32(slot.addr(), text);
+            add_viewer_string(e, strings, slot.addr());
+        }
+    });
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -335,6 +534,20 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(
             0x00a75f10,
             ni_tri_strips_data_get_strip_lists(Ptr<NiTriStripsData>) -> Ptr
+        ),
+        entry!(
+            0x00a7_5f40,
+            ni_tri_strips_data_get_strip_data(Ptr, u32, u32, u32, u32)
+        ),
+        entry!(0x00a7_5f80, ni_tri_strips_data_is_equal(Ptr, Ptr) -> bool),
+        entry!(
+            0x00a7_6020,
+            ni_tri_strips_data_get_block_allocation_size(Ptr) -> u32
+        ),
+        entry!(0x00a7_60c0, fn_00a760c0(Ptr, u32, u32, u32)),
+        entry!(
+            0x00a7_6430,
+            ni_tri_strips_data_get_viewer_strings(Ptr, Ptr<NiTArray>)
         ),
     ]
 }
@@ -656,5 +869,183 @@ mod b014_tests {
                 assert_eq!(log.len(), 3);
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod n020_tests {
+    use super::*;
+
+    const OBJECT_VTABLE: u32 = 0x0710_0000;
+    const GET_GROUP_DOUBLE: u32 = 0x0720_0000;
+    /// Where the group double finds the group it answers (0 for none).
+    const GROUP_HOLDER: u32 = 0x0730_0000;
+
+    fn calls_to(e: &Engine, callee: u32) -> Vec<Vec<u32>> {
+        e.call_log
+            .iter()
+            .flatten()
+            .filter(|(a, _)| *a == callee)
+            .map(|(_, w)| w.clone())
+            .collect()
+    }
+
+    fn u16_array(e: &mut Engine, values: &[u16]) -> u32 {
+        let block = e.mem.alloc(2 * values.len() as u32 + 2);
+        for (i, v) in values.iter().enumerate() {
+            e.mem.set_u16(block + 2 * i as u32, *v);
+        }
+        block
+    }
+
+    /// Strips data with the given lengths and lists (triangles: the sum of each length
+    /// less 2).
+    fn strips_data(e: &mut Engine, lengths: &[u16], lists: &[u16]) -> u32 {
+        let this = e.mem.alloc(0x50);
+        e.mem.set_u32(this, OBJECT_VTABLE);
+        e.mem.set_u16(this + STRIPS, lengths.len() as u16);
+        let triangles: u16 = lengths.iter().map(|l| l - 2).sum();
+        e.mem.set_u16(this + TRIANGLES, triangles);
+        let lengths = u16_array(e, lengths);
+        e.mem.set_u32(this + STRIP_LENGTHS, lengths);
+        let lists = u16_array(e, lists);
+        e.mem.set_u32(this + STRIP_LISTS, lists);
+        this
+    }
+
+    fn object_vtable(e: &mut Engine) {
+        let mut slots = vec![0u32; 0x84 / 4];
+        slots[GET_GROUP_SLOT as usize / 4] = GET_GROUP_DOUBLE;
+        e.put_vtable(OBJECT_VTABLE, &slots);
+        e.map(GROUP_HOLDER, 4);
+        e.register(GET_GROUP_DOUBLE, |e, _| e.mem.u32(GROUP_HOLDER).into_ret());
+    }
+
+    #[test]
+    fn strip_data_gives_the_arrays_and_the_list_length() {
+        let mut e = Engine::new();
+        let this = strips_data(&mut e, &[4, 5], &[0; 9]);
+        let out = e.mem.alloc(0x10);
+        e.mem.set_u32(out, 0xffff_ffff);
+        e.call(0x00a7_5f40, &args![this, out, out + 4, out + 8, out + 0xc]);
+        assert_eq!(e.mem.u32(out), 0xffff_0002);
+        assert_eq!(e.mem.u32(out + 4), e.mem.u32(this + STRIP_LENGTHS));
+        assert_eq!(e.mem.u32(out + 8), e.mem.u32(this + STRIP_LISTS));
+        assert_eq!(e.mem.u32(out + 0xc), 2 * 2 + 5);
+        // The length is kept to 16 bits.
+        e.mem.set_u16(this + TRIANGLES, 0xfffe);
+        e.call(0x00a7_5f40, &args![this, out, out + 4, out + 8, out + 0xc]);
+        assert_eq!(e.mem.u32(out + 0xc), 2);
+    }
+
+    #[test]
+    fn is_equal_compares_strip_lengths_and_lists() {
+        let mut e = Engine::new();
+        e.register(TRI_BASED_GEOM_DATA_IS_EQUAL, |e, a| {
+            u32::from(e.mem.u32(a[0] + 4) == 0).into_ret()
+        });
+        let a = strips_data(&mut e, &[3, 4], &[1, 2, 3, 4, 5, 6, 7]);
+        let b = strips_data(&mut e, &[3, 4], &[1, 2, 3, 4, 5, 6, 7]);
+        assert_eq!(e.call(0x00a7_5f80, &args![a, b]).u32() & 0xff, 1);
+        e.mem.set_u32(a + 4, 1);
+        assert_eq!(e.call(0x00a7_5f80, &args![a, b]).u32() & 0xff, 0);
+        e.mem.set_u32(a + 4, 0);
+        let lists = e.mem.u32(b + STRIP_LISTS);
+        e.mem.set_u16(lists + 12, 8);
+        assert_eq!(e.call(0x00a7_5f80, &args![a, b]).u32() & 0xff, 0);
+        e.mem.set_u16(lists + 12, 7);
+        let lengths = e.mem.u32(b + STRIP_LENGTHS);
+        e.mem.set_u16(lengths + 2, 9);
+        assert_eq!(e.call(0x00a7_5f80, &args![a, b]).u32() & 0xff, 0);
+        let c = strips_data(&mut e, &[3], &[1, 2, 3]);
+        assert_eq!(e.call(0x00a7_5f80, &args![a, c]).u32() & 0xff, 0);
+    }
+
+    #[test]
+    fn block_allocation_size_adds_two_bytes_per_entry() {
+        let mut e = Engine::new();
+        e.register(GEOMETRY_DATA_GET_BLOCK_ALLOCATION_SIZE, |_, _| {
+            0x100u32.into_ret()
+        });
+        let this = strips_data(&mut e, &[3, 5], &[0; 8]);
+        // Two lengths and 2 * 2 + 4 list entries.
+        assert_eq!(e.call(0x00a7_6020, &args![this]).u32(), 0x100 + 2 * (2 + 8));
+    }
+
+    #[test]
+    fn replacing_strips_frees_changed_arrays_and_counts_triangles() {
+        let mut e = Engine::new();
+        object_vtable(&mut e);
+        e.register(NI_FREE, |_, _| Ret::default());
+        e.register(OBJECT_GROUP_DESTRUCTOR, |_, _| Ret::default());
+        e.register(SIZED_DELETE, |_, _| Ret::default());
+        let this = strips_data(&mut e, &[3], &[0; 3]);
+        let old_lengths = e.mem.u32(this + STRIP_LENGTHS);
+        let old_lists = e.mem.u32(this + STRIP_LISTS);
+        let lengths = u16_array(&mut e, &[4, 6, 1]);
+        e.call_log = Some(vec![]);
+        e.call(0x00a7_60c0, &args![this, 0x1_0003u32, lengths, old_lists]);
+        assert_eq!(calls_to(&e, NI_FREE), vec![vec![old_lengths]]);
+        assert_eq!(e.mem.u16(this + STRIPS), 3);
+        assert_eq!(e.mem.u32(this + STRIP_LENGTHS), lengths);
+        // 2 + 4 + 0xffff, in 16 bits.
+        assert_eq!(e.mem.u16(this + TRIANGLES), 5);
+        // With a group: each changed array drops one reference; the last one destroys it.
+        let group = e.mem.alloc(0x10);
+        e.mem.set_u32(group + GROUP_REF_COUNT, 2);
+        e.mem.set_u32(GROUP_HOLDER, group);
+        let other = u16_array(&mut e, &[0; 3]);
+        e.call_log = Some(vec![]);
+        e.call(0x00a7_60c0, &args![this, 0u32, other, other]);
+        assert_eq!(e.mem.u32(group + GROUP_REF_COUNT), 0);
+        assert_eq!(calls_to(&e, OBJECT_GROUP_DESTRUCTOR), vec![vec![group]]);
+        assert_eq!(calls_to(&e, SIZED_DELETE), vec![vec![group, 0x10]]);
+        assert!(calls_to(&e, NI_FREE).is_empty());
+        assert_eq!(e.mem.u16(this + TRIANGLES), 0);
+    }
+
+    #[test]
+    fn viewer_strings_add_the_class_the_count_and_both_arrays() {
+        let mut e = Engine::new();
+        e.map(NI_TRI_STRIPS_DATA_RTTI, 4);
+        e.set_global(NI_TRI_STRIPS_DATA_RTTI, 0x0104_0000u32);
+        e.register(TRI_BASED_GEOM_DATA_GET_VIEWER_STRINGS, |_, _| {
+            Ret::default()
+        });
+        e.register(VIEWER_STRING_NAME, |_, a| (a[0] + 1).into_ret());
+        e.register(VIEWER_STRING_U16, |_, a| {
+            assert_eq!(a[0], TEXT_STRIPS);
+            (0x0500_0000 + a[1]).into_ret()
+        });
+        e.register(VIEWER_STRING_POINTER, |_, a| (a[0] ^ a[1]).into_ret());
+        e.register(STRING_ARRAY_SET_SIZE, |e, a| {
+            e.mem.set_u16(a[0] + 8, a[1] as u16);
+            Ret::default()
+        });
+        e.register(STRING_ARRAY_SET_AT, |e, a| {
+            let base = e.mem.u32(a[0] + 4);
+            let value = e.mem.u32(a[2]);
+            e.mem.set_u32(base + a[1] * 4, value);
+            e.mem.set_u16(a[0] + 0xa, a[1] as u16 + 1);
+            Ret::default()
+        });
+        let strings = e.mem.alloc(0x10);
+        let base = e.mem.alloc(0x40);
+        e.mem.set_u32(strings + 4, base);
+        e.mem.set_u16(strings + 0xe, 3);
+        let this = strips_data(&mut e, &[3, 3], &[0; 6]);
+        let lengths = e.mem.u32(this + STRIP_LENGTHS);
+        let lists = e.mem.u32(this + STRIP_LISTS);
+        e.call(0x00a7_6430, &args![this, strings]);
+        let words: Vec<u32> = (0..4).map(|i| e.mem.u32(base + 4 * i)).collect();
+        assert_eq!(
+            words,
+            vec![
+                0x0104_0001,
+                0x0500_0002,
+                TEXT_STRIP_LENGTHS ^ lengths,
+                TEXT_STRIP_LISTS ^ lists
+            ]
+        );
     }
 }

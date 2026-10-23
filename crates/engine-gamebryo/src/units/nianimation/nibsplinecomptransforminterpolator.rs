@@ -227,9 +227,112 @@ pub fn ni_b_spline_comp_transform_interpolator_update(
     true
 }
 
+/// `NiBSplineTransformInterpolator::IsEqual` (`00a501b0`), `SaveBinary`
+/// (`00a503e0`) and `GetViewerStrings` (`00a50500`); engine map names,
+/// `thiscall`, one word each.
+const TRANSFORM_INTERPOLATOR_IS_EQUAL: u32 = 0x00a5_01b0;
+const TRANSFORM_INTERPOLATOR_SAVE_BINARY: u32 = 0x00a5_03e0;
+const TRANSFORM_INTERPOLATOR_GET_VIEWER_STRINGS: u32 = 0x00a5_0500;
+/// `NiGetViewerString` (`00a7d330`, `cdecl (text)`); the viewer-string
+/// array's grow (`0096ad30`, `thiscall (array; new capacity)`) and store
+/// (`0096ae90`, `thiscall (array; index, &string)`).
+const NI_GET_VIEWER_STRING: u32 = 0x00a7_d330;
+const STRINGS_GROW: u32 = 0x0096_ad30;
+const STRINGS_SET_AT: u32 = 0x0096_ae90;
+/// `m_afCompScalars` (Xbox PDB): six floats from +0x48.
+const COMP_SCALARS: u32 = 0x48;
+
+// Translated from 00a50e00 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiBSplineCompTransformInterpolator::IsEqual` (Xbox PDB, matched by the
+/// engine map; `thiscall`, one word: the other object): the transform
+/// interpolator's `IsEqual` (`00a501b0`) and all six compact scalars equal
+/// (`FUCOMPP`, in order; a NaN is unequal).
+pub fn ni_b_spline_comp_transform_interpolator_is_equal(
+    e: &mut Engine,
+    this: Ptr,
+    other: Ptr,
+) -> bool {
+    if !e
+        .call(TRANSFORM_INTERPOLATOR_IS_EQUAL, &args![this, other])
+        .bool()
+    {
+        return false;
+    }
+    for i in 0..6 {
+        let ours = x87_load32(e.mem.u32(this.addr() + COMP_SCALARS + 4 * i));
+        let theirs = x87_load32(e.mem.u32(other.addr() + COMP_SCALARS + 4 * i));
+        if theirs != ours {
+            return false;
+        }
+    }
+    true
+}
+
+// Translated from 00a51180 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiBSplineCompTransformInterpolator::SaveBinary` (Xbox PDB, matched by
+/// the engine map; `thiscall`, one word: the stream): the transform
+/// interpolator's `SaveBinary` (`00a503e0`), then the six compact scalars
+/// in one write of 0x18 bytes (component size 4) through the stream
+/// writer (+0x250, its function at +0xC), the answer added to the writer's
+/// +4.
+pub fn ni_b_spline_comp_transform_interpolator_save_binary(e: &mut Engine, this: Ptr, stream: Ptr) {
+    e.call(TRANSFORM_INTERPOLATOR_SAVE_BINARY, &args![this, stream]);
+    let output = e.mem.u32(stream.addr() + 0x250);
+    let write = e.mem.u32(output + 0xc);
+    let source = this.addr() + COMP_SCALARS;
+    let answer = e.with_stack(4, |e, size| {
+        e.mem.set_u32(size.addr(), 4);
+        e.call(write, &args![output, source, 0x18u32, size, 1u32])
+            .u32()
+    });
+    let total = e.mem.u32(output + 4).wrapping_add(answer);
+    e.mem.set_u32(output + 4, total);
+}
+
+// Translated from 00a511c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiBSplineCompTransformInterpolator::GetViewerStrings` (Xbox PDB,
+/// matched by the engine map; `thiscall`, one word: the strings array): the
+/// transform interpolator's strings (`00a50500`), then the class name (the
+/// first word of the `NiRTTI` record) appended: when the 16-bit size (+0xA)
+/// has reached the capacity (+0x8) the array grows to the step (+0xE) plus
+/// the size first, then the string is stored at the old size.
+pub fn ni_b_spline_comp_transform_interpolator_get_viewer_strings(
+    e: &mut Engine,
+    this: Ptr,
+    strings: Ptr,
+) {
+    e.call(
+        TRANSFORM_INTERPOLATOR_GET_VIEWER_STRINGS,
+        &args![this, strings],
+    );
+    let class_name: u32 = e.global(NI_B_SPLINE_COMP_TRANSFORM_INTERPOLATOR_RTTI);
+    let text = e.call(NI_GET_VIEWER_STRING, &args![class_name]).u32();
+    let size = u32::from(e.mem.u16(strings.addr() + 0xa));
+    if size >= u32::from(e.mem.u16(strings.addr() + 8)) {
+        let step = u32::from(e.mem.u16(strings.addr() + 0xe));
+        e.call(STRINGS_GROW, &args![strings, step + size]);
+    }
+    e.with_stack(4, |e, slot| {
+        e.mem.set_u32(slot.addr(), text);
+        e.call(STRINGS_SET_AT, &args![strings, size, slot]);
+    });
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(
+            0x00a5_0e00,
+            ni_b_spline_comp_transform_interpolator_is_equal(Ptr, Ptr) -> bool
+        ),
+        entry!(
+            0x00a5_1180,
+            ni_b_spline_comp_transform_interpolator_save_binary(Ptr, Ptr)
+        ),
+        entry!(
+            0x00a5_11c0,
+            ni_b_spline_comp_transform_interpolator_get_viewer_strings(Ptr, Ptr)
+        ),
         entry!(0x00a50e40, ni_b_spline_comp_transform_interpolator_get_rtti() -> Ptr),
         entry!(0x00a50e50, ni_b_spline_comp_transform_interpolator_scalar_deleting_destructor(Ptr, u32) -> Ptr),
         entry!(0x00a5_0f00, fn_00a50f00() -> Ptr),
@@ -466,5 +569,108 @@ mod b037_tests {
             .bool();
         assert!(!set);
         assert!(calls(&e, GET_COMPACTED_VALUE_DEGREE3).is_empty());
+    }
+}
+
+#[cfg(test)]
+mod n002_tests {
+    use super::*;
+
+    fn word(value: u32) -> Ret {
+        Ret {
+            eax: value,
+            ..Ret::default()
+        }
+    }
+
+    fn calls(e: &Engine, addr: u32) -> Vec<Vec<u32>> {
+        e.call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|c| c.0 == addr)
+            .map(|c| c.1.clone())
+            .collect()
+    }
+
+    #[test]
+    fn is_equal_compares_the_scalars_after_the_base() {
+        let mut e = Engine::new();
+        e.register(TRANSFORM_INTERPOLATOR_IS_EQUAL, |_, _| word(1));
+        e.call_log = Some(vec![]);
+        let this = e.mem.alloc(0x60);
+        let other = e.mem.alloc(0x60);
+        assert!(e.call(0x00a5_0e00, &args![this, other]).bool());
+        assert_eq!(
+            calls(&e, TRANSFORM_INTERPOLATOR_IS_EQUAL),
+            vec![vec![this, other]]
+        );
+        for i in 0..6u32 {
+            let at = COMP_SCALARS + 4 * i;
+            e.mem.set_f32(other + at, 1.0);
+            assert!(!e.call(0x00a5_0e00, &args![this, other]).bool());
+            e.mem.set_f32(other + at, 0.0);
+        }
+        e.register(TRANSFORM_INTERPOLATOR_IS_EQUAL, |_, _| word(0));
+        assert!(!e.call(0x00a5_0e00, &args![this, other]).bool());
+    }
+
+    #[test]
+    fn save_binary_writes_the_scalars_at_once() {
+        const WRITE: u32 = 0x0300_0800;
+        let mut e = Engine::new();
+        e.register(TRANSFORM_INTERPOLATOR_SAVE_BINARY, |_, _| Ret::default());
+        e.register(WRITE, |e, a| {
+            assert_eq!((e.mem.u32(a[3]), a[4]), (4, 1));
+            word(a[2])
+        });
+        e.call_log = Some(vec![]);
+        let writer = e.mem.alloc(0x10);
+        e.mem.set_u32(writer + 0xc, WRITE);
+        let stream = e.mem.alloc(0x254);
+        e.mem.set_u32(stream + 0x250, writer);
+        let this = e.mem.alloc(0x60);
+        e.call(0x00a5_1180, &args![this, stream]);
+        assert_eq!(
+            calls(&e, TRANSFORM_INTERPOLATOR_SAVE_BINARY),
+            vec![vec![this, stream]]
+        );
+        assert_eq!(
+            calls(&e, WRITE)[0][..3],
+            [writer, this + COMP_SCALARS, 4 * 6u32]
+        );
+        assert_eq!(e.mem.u32(writer + 4), 4 * 6u32);
+    }
+
+    #[test]
+    fn get_viewer_strings_appends_the_class_name() {
+        let mut e = Engine::new();
+        e.map(NI_B_SPLINE_COMP_TRANSFORM_INTERPOLATOR_RTTI, 4);
+        e.set_global(
+            NI_B_SPLINE_COMP_TRANSFORM_INTERPOLATOR_RTTI,
+            0x0109_eeee_u32,
+        );
+        e.register(TRANSFORM_INTERPOLATOR_GET_VIEWER_STRINGS, |_, _| {
+            Ret::default()
+        });
+        e.register(NI_GET_VIEWER_STRING, |_, _| word(0x81));
+        e.register(STRINGS_GROW, |_, _| Ret::default());
+        e.register(STRINGS_SET_AT, |e, a| {
+            assert_eq!(e.mem.u32(a[2]), 0x81);
+            Ret::default()
+        });
+        e.call_log = Some(vec![]);
+        let strings = e.mem.alloc(0x10);
+        e.mem.set_u16(strings + 8, 2);
+        e.mem.set_u16(strings + 0xa, 2);
+        e.mem.set_u16(strings + 0xe, 5);
+        e.call(0x00a5_11c0, &args![0x1000u32, strings]);
+        assert_eq!(
+            calls(&e, TRANSFORM_INTERPOLATOR_GET_VIEWER_STRINGS),
+            vec![vec![0x1000, strings]]
+        );
+        assert_eq!(calls(&e, NI_GET_VIEWER_STRING), vec![vec![0x0109_eeee]]);
+        assert_eq!(calls(&e, STRINGS_GROW), vec![vec![strings, 7]]);
+        assert_eq!(calls(&e, STRINGS_SET_AT)[0][..2], [strings, 2]);
     }
 }

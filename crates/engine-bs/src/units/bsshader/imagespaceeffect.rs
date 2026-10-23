@@ -103,6 +103,25 @@ pub fn image_space_effect_destructor(e: &mut Engine, this: Ptr<ImageSpaceEffect>
     }
 }
 
+// Translated from 00ba3ce0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map: the deleting destructor of an `NiTPrimitiveArray` member
+/// (`thiscall`, one word: the flags): the primitive-array vtable `010b9d24`, its element
+/// block released (`00aa10f0`), then the array freed through the memory manager when bit 0
+/// of the flags is set. Answers `this`.
+pub fn fn_00ba3ce0(
+    e: &mut Engine,
+    this: Ptr<crate::types::NiTArray>,
+    flags: u32,
+) -> Ptr<crate::types::NiTArray> {
+    let elements = e.get(this, crate::types::NiTArray::m_pBase);
+    e.mem.set_u32(this.addr(), PRIMITIVE_ARRAY_VTABLE);
+    e.call(RELEASE_BLOCK, &args![elements]);
+    if flags & 1 != 0 {
+        e.call(MEMORY_DEALLOCATE, &args![MEMORY_MANAGER, this]);
+    }
+    this
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -113,6 +132,10 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(
             0x00ba_3d30,
             image_space_effect_destructor(Ptr<ImageSpaceEffect>)
+        ),
+        entry!(
+            0x00ba_3ce0,
+            fn_00ba3ce0(Ptr<crate::types::NiTArray>, u32) -> Ptr<crate::types::NiTArray>
         ),
     ]
 }
@@ -206,5 +229,36 @@ mod tests {
         let log = e.call_log.take().unwrap();
         assert!(!log.iter().any(|(a, _)| *a == MEMORY_DEALLOCATE));
         assert_eq!(log.iter().filter(|(a, _)| *a == RELEASE_BLOCK).count(), 5);
+    }
+}
+
+#[cfg(test)]
+mod n012_tests {
+    use super::*;
+
+    #[test]
+    fn primitive_array_deleting_destructor_releases_and_frees() {
+        let mut e = Engine::new();
+        e.register(RELEASE_BLOCK, |_, _| Ret::default());
+        e.register(MEMORY_DEALLOCATE, |_, _| Ret::default());
+        let array = e.mem.alloc(0x10);
+        e.mem.set_u32(array + 4, 0x5150);
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x00ba_3ce0, &args![array, 0u32]).u32(), array);
+        assert_eq!(e.mem.u32(array), PRIMITIVE_ARRAY_VTABLE);
+        e.call(0x00ba_3ce0, &args![array, 1u32]);
+        let log = e.call_log.take().unwrap();
+        let released: Vec<&Vec<u32>> = log
+            .iter()
+            .filter(|(a, _)| *a == RELEASE_BLOCK)
+            .map(|(_, w)| w)
+            .collect();
+        assert_eq!(released, vec![&vec![0x5150], &vec![0x5150]]);
+        let freed: Vec<&Vec<u32>> = log
+            .iter()
+            .filter(|(a, _)| *a == MEMORY_DEALLOCATE)
+            .map(|(_, w)| w)
+            .collect();
+        assert_eq!(freed, vec![&vec![MEMORY_MANAGER, array]]);
     }
 }

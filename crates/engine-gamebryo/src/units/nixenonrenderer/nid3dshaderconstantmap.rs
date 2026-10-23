@@ -1050,6 +1050,525 @@ pub fn fn_00e87690(e: &mut Engine, this: Ptr) {
     interlocked_decrement(e, NI_REF_OBJECT_COUNT_011F4400);
 }
 
+/// What `SetDefinedConstant` calls: D3DX's `D3DXMatrixInverse` (`00ee6dda`; `stdcall`: out,
+/// determinant, matrix), `D3DXMatrixTranspose` (`00ee6dd4`: out, matrix), `D3DXMatrixMultiply`
+/// (`00ee6de0`: out, first, second) and `00ee6dfe` (unnamed; `stdcall`: out and two matrices);
+/// `NiD3DShaderConstantMap::SetupTextureTransformMatrix` (`00e83550`, engine map; `cdecl`: out,
+/// matrix, two bytes, a count); `NiTextureTransform::UpdateMatrix` (`00bc5c20`, engine map;
+/// `thiscall`, answers its matrix); `00a463e0` (unit `nitexturetransformcontroller.cpp`;
+/// `thiscall` on a texturing property with an index, answers a map); the extra data name
+/// handle (`011bf65c`) with the `NiFixedString` constructor `00438170` (`thiscall`, the
+/// handle) and destructor `004381b0`; `NiObjectNET::GetExtraData` (`00a5bdd0`, engine map;
+/// `thiscall`, the address of the name); the CRT's x87 helpers `00eca0a0`, `00ec9f70` and
+/// `00eca5d0` (the value in and out in ST0); `00653290` (unit `bsfacegenmanager.cpp`;
+/// `thiscall` with the record `011f5f6c`, answers an object or 0) and `00633b40` (unnamed;
+/// `thiscall` with the address of three floats and a float).
+const MATRIX_INVERSE_00EE6DDA: u32 = 0x00ee_6dda;
+const MATRIX_TRANSPOSE_00EE6DD4: u32 = 0x00ee_6dd4;
+const MATRIX_MULTIPLY_00EE6DE0: u32 = 0x00ee_6de0;
+const MATRIX_PRODUCT_00EE6DFE: u32 = 0x00ee_6dfe;
+const SETUP_TEXTURE_TRANSFORM_00E83550: u32 = 0x00e8_3550;
+const UPDATE_MATRIX_00BC5C20: u32 = 0x00bc_5c20;
+const MAP_AT_00A463E0: u32 = 0x00a4_63e0;
+const EXTRA_DATA_NAME_011BF65C: u32 = 0x011b_f65c;
+const FIXED_STRING_CONSTRUCT_00438170: u32 = 0x0043_8170;
+const FIXED_STRING_DESTRUCT_004381B0: u32 = 0x0043_81b0;
+const GET_EXTRA_DATA_00A5BDD0: u32 = 0x00a5_bdd0;
+const CRT_HELPER_00ECA0A0: u32 = 0x00ec_a0a0;
+const CRT_HELPER_00EC9F70: u32 = 0x00ec_9f70;
+const CRT_HELPER_00ECA5D0: u32 = 0x00ec_a5d0;
+const LIGHT_CAST_00653290: u32 = 0x0065_3290;
+const LIGHT_RECORD_011F5F6C: u32 = 0x011f_5f6c;
+const LIGHT_OFFSET_00633B40: u32 = 0x0063_3b40;
+/// Three floats `SetDefinedConstant` reads for the constants 73 and 74 (`011f4998` to
+/// `011f49a0`) and 2^32 as a float (`01099378`).
+const VECTOR_011F4998: u32 = 0x011f_4998;
+const TWO_TO_32_01099378: u32 = 0x0109_9378;
+
+/// The results `SetDefinedConstant` answers: the extra data not found (0x10) and the program
+/// refusing the constant (0x50).
+const NO_EXTRA_DATA: u32 = 0x10;
+const NOT_SET: u32 = 0x50;
+/// 1.0 as a float (what `FLD1` and a float store leave).
+const ONE: u32 = 0x3f80_0000;
+
+/// `FLD dword` then `FSTP dword` of the float at `at`: its bits, a signalling NaN quieted.
+fn copy_float(e: &Engine, at: u32) -> u32 {
+    x87_quiet_bits(e.mem.u32(at))
+}
+
+/// 16 words copied (`REP MOVSD`).
+fn copy_matrix(e: &mut Engine, from: u32, to: u32) {
+    for word in 0..16u32 {
+        let value = e.mem.u32(from.wrapping_add(4 * word));
+        e.mem.set_u32(to.wrapping_add(4 * word), value);
+    }
+}
+
+/// The matrix at `matrix` inverted in place (`D3DXMatrixInverse` with no determinant) when
+/// `inverse`, then transposed in place when `transpose`.
+fn invert_transpose(e: &mut Engine, matrix: u32, inverse: bool, transpose: bool) {
+    if inverse {
+        e.call(MATRIX_INVERSE_00EE6DDA, &args![matrix, 0u32, matrix]);
+    }
+    if transpose {
+        e.call(MATRIX_TRANSPOSE_00EE6DD4, &args![matrix, matrix]);
+    }
+}
+
+/// Stores four float bit patterns at `at`.
+fn store_vector(e: &mut Engine, at: u32, values: [u32; 4]) {
+    for (i, value) in values.iter().enumerate() {
+        e.mem.set_u32(at.wrapping_add(4 * i as u32), *value);
+    }
+}
+
+/// The value of the 16-bit dimension a texture's slot answers as `FILD` takes it (2^32 added,
+/// `FADD` of the float at `01099378`, when it is negative as a signed word), stored as a float.
+fn unsigned_to_float(e: &Engine, word: u32) -> u32 {
+    let mut value = f64::from(word as i32);
+    if (word as i32) < 0 {
+        value = x87_add(value, x87_m32(e.mem.u32(TWO_TO_32_01099378)));
+    }
+    x87_store32(value)
+}
+
+/// A CRT helper on the float `time` (`FLD`, the call with the value in ST0, its result stored
+/// as a float, loaded and stored again): the result's bits.
+fn crt_on(e: &mut Engine, helper: u32, time: u32) -> u32 {
+    let result = e.call(helper, &args![x87_load32(time)]).f64();
+    x87_quiet_bits(x87_store32(result))
+}
+
+// Translated from 00e83db0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiD3DShaderConstantMap::SetDefinedConstant` (engine map), `thiscall` with eleven words (the
+/// sixth and the last three not read): the shader program, the constant map entry, an object
+/// with extra data, two words for the skinning constants, the property state and the dynamic
+/// effect state. The entry's predefined constant (+0x10) picks the data handed to the program's
+/// `SetShaderConstant` (its slot 0x74: the entry, the data, 0); answers 0, or 0x50 when the
+/// program answers false. The compiler's switch over the constant (a byte map and a jump
+/// table in the code) is the `match` below. By constant (the renderer is `m_pkD3DRenderer`
+/// +0x3c, Xbox PDB; "inverted and transposed" means the second and fourth constant of a group
+/// of four inverted with `D3DXMatrixInverse`, the third and fourth transposed with
+/// `D3DXMatrixTranspose`):
+/// - 1/2/13/14, 3/4/15/16, 5/6/17/18: a copy of the renderer's matrix at +0x9c0, +0x980 or
+///   +0x940, inverted for 2/14, 4/16, 6/18 and transposed for 13/14, 15/16, 17/18.
+/// - 7/8/19/20: the product (`D3DXMatrixMultiply`) of copies of +0x940 and +0x980, inverted for
+///   8/20 and transposed for 19/20; 9/10/21/22 the product of +0x980 and +0x9c0 (10/22, 21/22).
+/// - 11/12/23/24: `00ee6dfe` of +0x940 and +0xa00 into the stack.
+/// - 25 to 28 (needing the fourth word): a copy of +0x980; 29 to 32 (needing it): the product of
+///   +0x980 and +0x9c0; inverted and transposed.
+/// - 33/35 (needing the fourth and fifth words) and 34/36 (needing the fourth): the program's
+///   `SetShaderConstantArray` (slot 0x78) with the entry, the fourth word's +0x28, the fifth's
+///   16-bit +0x20, the fourth's +0x20 and the fifth's +4.
+/// - 37 to 60 and 88 to 95 in groups of four: the texture maps 0 to 5, then 6 and 7, of the
+///   property state's texturing property (+0x14, its map array at +0x20); 61 to 64 the map at
+///   the entry's +0x18 in the array from +0x20; 65 to 68 the map `00a463e0` answers for that
+///   index. A map with a transform (+0xc) gives its matrix (`UpdateMatrix`) and the two flags
+///   (inverted, transposed) to `SetupTextureTransformMatrix` (`00e83550`, with 4); without a
+///   map neither.
+/// - 73/74, 75, 76, 77: four floats from the property state's +8 object (none: answers 0): the
+///   floats at `011f4998` and its +0x3c; its +0x1c to +0x24 and +0x3c; three floats from its
+///   +0x34 (or else its +0x28) and +0x3c; its +0x38 four times.
+/// - 78, 79: the last and the third row of a copy of the renderer's +0xa40 matrix.
+/// - 80, 81: no data.
+/// - 82 to 86: the float +0xc of the object's extra data named by `011bf65c` (none: the result
+///   becomes 0x10 and the read is made at address 0xc, as the code makes it): four times as it
+///   is, four times through each of the CRT helpers `00eca0a0`, `00ec9f70`, `00eca5d0`, or the
+///   value and the three.
+/// - 87: (0, 0, 0, 1) plus, for each light of the effect state's list (+0xc) that `00653290`
+///   answers an object for, the three floats `00633b40` gives from its +0xc8 and +0xc4.
+/// - 96 to 99 (needing the fourth word): the identity, inverted and transposed.
+/// - 103, 104, 105: map 5's four floats at +0x18 (else 1s); its +0x14 and +0x10 (else 0 and
+///   1); map 7's +0x10 (else 0).
+/// - 106 to 115 (needing the texturing property): the width and height (slots 0x94 and 0x98 of
+///   the map's texture +8, as unsigned) for maps 0 to 7, the map at the entry's index or the one
+///   `00a463e0` answers (else 0 and 0).
+/// - Any other: answers 0.
+pub fn ni_d3d_shader_constant_map_set_defined_constant(
+    e: &mut Engine,
+    this: Ptr,
+    program: u32,
+    entry: u32,
+    object: u32,
+    fourth: u32,
+    fifth: u32,
+    _unused_6: u32,
+    properties: u32,
+    effects: u32,
+    _unused_9: u32,
+    _unused_10: u32,
+    _unused_11: u32,
+) -> u32 {
+    let base = this.addr();
+    let id = e.mem.u32(entry.wrapping_add(0x10));
+    // The inverted and transposed members of the group of four from `first`.
+    let flags = |first: u32| {
+        (
+            id == first + 1 || id == first + 3,
+            id == first + 2 || id == first + 3,
+        )
+    };
+    let renderer = |e: &Engine| e.mem.u32(base.wrapping_add(0x3c));
+    let texturing = |e: &Engine| e.mem.u32(properties.wrapping_add(0x14));
+    // The texturing property's map array (+0x20, not checked) word at `offset`.
+    let map_word = |e: &Engine, texturing: u32, offset: u32| {
+        let maps = e.mem.u32(texturing.wrapping_add(0x20));
+        e.mem.u32(maps.wrapping_add(offset))
+    };
+    let entry_index = |e: &Engine| e.mem.u32(entry.wrapping_add(0x18));
+    e.with_stack(0x110, |e, frame| {
+        let frame = frame.addr();
+        let pair = frame + 0x1c;
+        let single = frame + 0x24;
+        let vector = frame + 0x30;
+        let first_matrix = frame + 0x40;
+        let name = frame + 0x8c;
+        let second_matrix = frame + 0x90;
+        let third_matrix = frame + 0xd0;
+        let mut result = 0u32;
+        // A copy of the renderer's matrix at `offset`, inverted and transposed as asked.
+        let renderer_matrix = |e: &mut Engine, offset: u32, inverse: bool, transpose: bool| {
+            let from = renderer(e).wrapping_add(offset);
+            copy_matrix(e, from, first_matrix);
+            invert_transpose(e, first_matrix, inverse, transpose);
+            first_matrix
+        };
+        // The product of the renderer's matrices at `left` and `right` (copied into the second
+        // and third stack matrices, the left one in whichever the code uses), inverted and
+        // transposed as asked.
+        let product = |e: &mut Engine,
+                       left: (u32, u32),
+                       right: (u32, u32),
+                       inverse: bool,
+                       transpose: bool| {
+            let renderer = renderer(e);
+            copy_matrix(e, renderer.wrapping_add(left.0), left.1);
+            copy_matrix(e, renderer.wrapping_add(right.0), right.1);
+            e.call(
+                MATRIX_MULTIPLY_00EE6DE0,
+                &args![first_matrix, left.1, right.1],
+            );
+            invert_transpose(e, first_matrix, inverse, transpose);
+            first_matrix
+        };
+        // The texture transform of `map` (0 for none) set up into the second stack matrix.
+        let texture_transform = |e: &mut Engine, map: u32, first: u32| {
+            let mut matrix = 0;
+            let (mut inverse, mut transpose) = (false, false);
+            if map != 0 {
+                let transform = e.mem.u32(map.wrapping_add(0xc));
+                if transform != 0 {
+                    matrix = e.call(UPDATE_MATRIX_00BC5C20, &args![transform]).u32();
+                    (inverse, transpose) = flags(first);
+                }
+            }
+            // The flags go as whole stack words whose upper three bytes the code never wrote;
+            // the callee reads only their low bytes.
+            e.call(
+                SETUP_TEXTURE_TRANSFORM_00E83550,
+                &args![
+                    second_matrix,
+                    matrix,
+                    u32::from(inverse),
+                    u32::from(transpose),
+                    4u32
+                ],
+            );
+            second_matrix
+        };
+        // A texture map of the texturing property, 0 without the property.
+        let slot_map = |e: &Engine, offset: u32| {
+            let texturing = texturing(e);
+            if texturing == 0 {
+                0
+            } else {
+                map_word(e, texturing, offset)
+            }
+        };
+        let data = match id {
+            1 | 2 | 13 | 14 => renderer_matrix(e, 0x9c0, id == 2 || id == 14, id >= 13),
+            3 | 4 | 15 | 16 => renderer_matrix(e, 0x980, id == 4 || id == 16, id >= 15),
+            5 | 6 | 17 | 18 => renderer_matrix(e, 0x940, id == 6 || id == 18, id >= 17),
+            7 | 8 | 19 | 20 => product(
+                e,
+                (0x940, second_matrix),
+                (0x980, third_matrix),
+                id == 8 || id == 20,
+                id >= 19,
+            ),
+            9 | 10 | 21 | 22 => product(
+                e,
+                (0x980, third_matrix),
+                (0x9c0, second_matrix),
+                id == 10 || id == 22,
+                id >= 21,
+            ),
+            11 | 12 | 23 | 24 => {
+                let renderer = renderer(e);
+                e.call(
+                    MATRIX_PRODUCT_00EE6DFE,
+                    &args![
+                        second_matrix,
+                        renderer.wrapping_add(0x940),
+                        renderer.wrapping_add(0xa00)
+                    ],
+                );
+                second_matrix
+            }
+            25..=28 => {
+                if fourth == 0 {
+                    return 0;
+                }
+                let (inverse, transpose) = flags(0x19);
+                renderer_matrix(e, 0x980, inverse, transpose)
+            }
+            29..=32 => {
+                if fourth == 0 {
+                    return 0;
+                }
+                let (inverse, transpose) = flags(0x1d);
+                product(
+                    e,
+                    (0x980, third_matrix),
+                    (0x9c0, second_matrix),
+                    inverse,
+                    transpose,
+                )
+            }
+            33..=36 => {
+                if fourth == 0 || ((id == 33 || id == 35) && fifth == 0) {
+                    return 0;
+                }
+                let matrices = e.mem.u32(fourth.wrapping_add(0x28));
+                let bones = u32::from(e.mem.u16(fifth.wrapping_add(0x20)));
+                let registers = e.mem.u32(fourth.wrapping_add(0x20));
+                let indices = e.mem.u32(fifth.wrapping_add(4));
+                let set = e
+                    .vcall(
+                        program,
+                        0x78,
+                        &args![entry, matrices, bones, registers, indices],
+                    )
+                    .bool();
+                return if set { result } else { NOT_SET };
+            }
+            37..=40 => texture_transform(e, slot_map(e, 0), 0x25),
+            41..=44 => texture_transform(e, slot_map(e, 4), 0x29),
+            45..=48 => texture_transform(e, slot_map(e, 8), 0x2d),
+            49..=52 => texture_transform(e, slot_map(e, 0xc), 0x31),
+            53..=56 => texture_transform(e, slot_map(e, 0x10), 0x35),
+            57..=60 => texture_transform(e, slot_map(e, 0x14), 0x39),
+            88..=91 => texture_transform(e, slot_map(e, 0x18), 0x58),
+            92..=95 => texture_transform(e, slot_map(e, 0x1c), 0x5c),
+            61..=64 => {
+                let index = entry_index(e);
+                let map = slot_map(e, index.wrapping_mul(4).wrapping_add(0x20));
+                texture_transform(e, map, 0x3d)
+            }
+            65..=68 => {
+                let texturing = texturing(e);
+                let map = if texturing != 0 {
+                    let index = entry_index(e);
+                    e.call(MAP_AT_00A463E0, &args![texturing, index]).u32()
+                } else {
+                    0
+                };
+                texture_transform(e, map, 0x41)
+            }
+            73..=77 => {
+                let source = e.mem.u32(properties.wrapping_add(8));
+                if source == 0 {
+                    return 0;
+                }
+                let at = |offset: u32| source.wrapping_add(offset);
+                let values = match id {
+                    73 | 74 => [
+                        copy_float(e, VECTOR_011F4998),
+                        copy_float(e, VECTOR_011F4998 + 4),
+                        copy_float(e, VECTOR_011F4998 + 8),
+                        copy_float(e, at(0x3c)),
+                    ],
+                    75 => [
+                        copy_float(e, at(0x1c)),
+                        copy_float(e, at(0x20)),
+                        copy_float(e, at(0x24)),
+                        copy_float(e, at(0x3c)),
+                    ],
+                    76 => {
+                        let held = e.mem.u32(at(0x34));
+                        let from = if held != 0 { held } else { at(0x28) };
+                        [
+                            copy_float(e, from),
+                            copy_float(e, from.wrapping_add(4)),
+                            copy_float(e, from.wrapping_add(8)),
+                            copy_float(e, at(0x3c)),
+                        ]
+                    }
+                    _ => [copy_float(e, at(0x38)); 4],
+                };
+                store_vector(e, vector, values);
+                vector
+            }
+            78 | 79 => {
+                let from = renderer(e).wrapping_add(0xa40);
+                copy_matrix(e, from, first_matrix);
+                let row = first_matrix + if id == 78 { 0x30 } else { 0x20 };
+                let values = [0u32, 4, 8, 0xc].map(|offset| copy_float(e, row + offset));
+                store_vector(e, vector, values);
+                vector
+            }
+            80 | 81 => 0,
+            82..=86 => {
+                let handle = e.mem.u32(EXTRA_DATA_NAME_011BF65C);
+                let held = e
+                    .call(FIXED_STRING_CONSTRUCT_00438170, &args![name, handle])
+                    .u32();
+                let extra = e.call(GET_EXTRA_DATA_00A5BDD0, &args![object, held]).u32();
+                e.call(FIXED_STRING_DESTRUCT_004381B0, &args![name]);
+                if extra == 0 {
+                    result = NO_EXTRA_DATA;
+                }
+                let time = copy_float(e, extra.wrapping_add(0xc));
+                e.mem.set_u32(pair, time);
+                let values = match id - 0x52 {
+                    0 => [time; 4],
+                    1 => [crt_on(e, CRT_HELPER_00ECA0A0, time); 4],
+                    2 => [crt_on(e, CRT_HELPER_00EC9F70, time); 4],
+                    3 => [crt_on(e, CRT_HELPER_00ECA5D0, time); 4],
+                    4 => [
+                        time,
+                        crt_on(e, CRT_HELPER_00ECA0A0, time),
+                        crt_on(e, CRT_HELPER_00EC9F70, time),
+                        crt_on(e, CRT_HELPER_00ECA5D0, time),
+                    ],
+                    // The code's inner switch answers 0x10 for any other value (82 to 86 never
+                    // reach it).
+                    _ => return NO_EXTRA_DATA,
+                };
+                store_vector(e, vector, values);
+                vector
+            }
+            87 => {
+                store_vector(e, vector, [0, 0, 0, ONE]);
+                let mut node = if effects != 0 {
+                    e.mem.u32(effects.wrapping_add(0xc))
+                } else {
+                    0
+                };
+                while node != 0 {
+                    let light = e.mem.u32(node.wrapping_add(4));
+                    node = e.mem.u32(node);
+                    if light == 0 {
+                        continue;
+                    }
+                    let found = e
+                        .call(LIGHT_CAST_00653290, &args![light, LIGHT_RECORD_011F5F6C])
+                        .u32();
+                    if found == 0 {
+                        continue;
+                    }
+                    let strength = copy_float(e, found.wrapping_add(0xc4));
+                    e.call(
+                        LIGHT_OFFSET_00633B40,
+                        &args![found.wrapping_add(0xc8), single, strength],
+                    );
+                    for component in 0..3u32 {
+                        let at = vector + 4 * component;
+                        let sum = x87_add(
+                            x87_load32(e.mem.u32(at)),
+                            x87_m32(e.mem.u32(single + 4 * component)),
+                        );
+                        e.mem.set_u32(at, x87_store32(sum));
+                    }
+                }
+                vector
+            }
+            96..=99 => {
+                if fourth == 0 {
+                    return 0;
+                }
+                for word in 0..16u32 {
+                    let value = if word % 5 == 0 { ONE } else { 0 };
+                    e.mem.set_u32(first_matrix + 4 * word, value);
+                }
+                let (inverse, transpose) = flags(0x60);
+                invert_transpose(e, first_matrix, inverse, transpose);
+                first_matrix
+            }
+            103 => {
+                store_vector(e, vector, [ONE; 4]);
+                let map = slot_map(e, 0x14);
+                if map != 0 {
+                    let values = [0x18u32, 0x1c, 0x20, 0x24]
+                        .map(|offset| copy_float(e, map.wrapping_add(offset)));
+                    store_vector(e, vector, values);
+                }
+                vector
+            }
+            104 => {
+                e.mem.set_u32(single, 0);
+                e.mem.set_u32(single + 4, ONE);
+                let map = slot_map(e, 0x14);
+                if map != 0 {
+                    let first = copy_float(e, map.wrapping_add(0x14));
+                    e.mem.set_u32(single, first);
+                    let second = copy_float(e, map.wrapping_add(0x10));
+                    e.mem.set_u32(single + 4, second);
+                }
+                single
+            }
+            105 => {
+                e.mem.set_u32(single, 0);
+                let map = slot_map(e, 0x1c);
+                if map != 0 {
+                    let value = copy_float(e, map.wrapping_add(0x10));
+                    e.mem.set_u32(single, value);
+                }
+                single
+            }
+            106..=115 => {
+                let texturing = texturing(e);
+                if texturing == 0 {
+                    return 0;
+                }
+                let map = match id - 0x6a {
+                    slot @ 0..=7 => map_word(e, texturing, 4 * slot),
+                    8 => {
+                        let index = entry_index(e);
+                        map_word(e, texturing, index.wrapping_mul(4).wrapping_add(0x20))
+                    }
+                    9 => {
+                        let index = entry_index(e);
+                        e.call(MAP_AT_00A463E0, &args![texturing, index]).u32()
+                    }
+                    // The inner switch's default leaves no map (106 to 115 never reach it).
+                    _ => 0,
+                };
+                e.mem.set_u32(pair, 0);
+                e.mem.set_u32(pair + 4, 0);
+                if map != 0 {
+                    let texture = e.mem.u32(map.wrapping_add(8));
+                    if texture != 0 {
+                        for (slot, at) in [(0x94u32, pair), (0x98, pair + 4)] {
+                            let size = e.vcall(texture, slot, &args![]).u32();
+                            e.mem.set_u32(single, size);
+                            let value = unsigned_to_float(e, size);
+                            e.mem.set_u32(at, value);
+                        }
+                    }
+                }
+                pair
+            }
+            _ => return 0,
+        };
+        if !e.vcall(program, 0x74, &args![entry, data, 0u32]).bool() {
+            result = NOT_SET;
+        }
+        result
+    })
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -1109,6 +1628,12 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
             ) -> bool
         ),
         entry!(0x00e8_7690, fn_00e87690(Ptr)),
+        entry!(
+            0x00e8_3db0,
+            ni_d3d_shader_constant_map_set_defined_constant(
+                Ptr, u32, u32, u32, u32, u32, u32, u32, u32, u32, u32, u32
+            ) -> u32
+        ),
     ]
 }
 
@@ -1899,5 +2424,480 @@ mod b054_tests {
         assert_eq!(e.mem.u32(map + 0x1c), ENTRY_ARRAY_VTABLE_010EF53C);
         assert_eq!(e.mem.u32(map), NI_REF_OBJECT_VTABLE_0101DCE4);
         assert_eq!(e.global::<u32>(NI_REF_OBJECT_COUNT_011F4400), 4);
+    }
+}
+
+#[cfg(test)]
+mod n008_tests {
+    use super::*;
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    const PROGRAM_VTABLE: u32 = 0x0e00_0000;
+    const SET_CONSTANT: u32 = 0x0e01_0074;
+    const SET_CONSTANT_ARRAY: u32 = 0x0e01_0078;
+    const TEXTURE_VTABLE: u32 = 0x0e02_0000;
+    const TEXTURE_WIDTH: u32 = 0x0e03_0094;
+    const TEXTURE_HEIGHT: u32 = 0x0e03_0098;
+
+    /// What the program's `SetShaderConstant` saw: the data address and its first 16 words.
+    type Seen = Rc<RefCell<Vec<(u32, Vec<u32>)>>>;
+
+    struct Rig {
+        e: Engine,
+        map: u32,
+        program: u32,
+        entry: u32,
+        renderer: u32,
+        properties: u32,
+        seen: Seen,
+    }
+
+    fn calls(e: &Engine, addr: u32) -> Vec<Vec<u32>> {
+        e.call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|c| c.0 == addr)
+            .map(|c| c.1.clone())
+            .collect()
+    }
+
+    /// A constant map whose renderer holds the words `0x9400 + i` at +0x940, `0x9800 + i` at
+    /// +0x980, `0x9c00 + i` at +0x9c0, `0xa000 + i` at +0xa00 and `0xa400 + i` at +0xa40; a
+    /// program that accepts (`accepts`) every constant.
+    fn rig(accepts: bool) -> Rig {
+        let mut e = Engine::new();
+        e.map(0x011b_f000, 0x1000);
+        e.map(0x011f_4000, 0x2000);
+        e.map(0x0109_9000, 0x1000);
+        e.mem
+            .set_u32(TWO_TO_32_01099378, 4_294_967_296.0f32.to_bits());
+        let mut slots = vec![0u32; 0x1f];
+        slots[0x74 / 4] = SET_CONSTANT;
+        slots[0x78 / 4] = SET_CONSTANT_ARRAY;
+        e.put_vtable(PROGRAM_VTABLE, &slots);
+        let seen: Seen = Rc::new(RefCell::new(vec![]));
+        let log = seen.clone();
+        e.register_double(SET_CONSTANT, move |e, a| {
+            let words = if a[2] != 0 {
+                (0..16).map(|i| e.mem.u32(a[2] + 4 * i)).collect()
+            } else {
+                vec![]
+            };
+            log.borrow_mut().push((a[2], words));
+            u32::from(accepts).into_ret()
+        });
+        e.register_double(SET_CONSTANT_ARRAY, move |_, _| {
+            u32::from(accepts).into_ret()
+        });
+        for callee in [
+            MATRIX_INVERSE_00EE6DDA,
+            MATRIX_TRANSPOSE_00EE6DD4,
+            MATRIX_MULTIPLY_00EE6DE0,
+            MATRIX_PRODUCT_00EE6DFE,
+            SETUP_TEXTURE_TRANSFORM_00E83550,
+            FIXED_STRING_DESTRUCT_004381B0,
+        ] {
+            e.register(callee, |_, _| Ret::default());
+        }
+        let renderer = e.mem.alloc(0xa80);
+        for (offset, tag) in [
+            (0x940u32, 0x9400u32),
+            (0x980, 0x9800),
+            (0x9c0, 0x9c00),
+            (0xa00, 0xa000),
+            (0xa40, 0xa400),
+        ] {
+            for i in 0..16 {
+                e.mem.set_u32(renderer + offset + 4 * i, tag + i);
+            }
+        }
+        let map = e.mem.alloc(0x44);
+        e.mem.set_u32(map + 0x3c, renderer);
+        let program = e.mem.alloc(4);
+        e.mem.set_u32(program, PROGRAM_VTABLE);
+        let entry = e.mem.alloc(0x38);
+        let properties = e.mem.alloc(0x20);
+        e.call_log = Some(vec![]);
+        Rig {
+            e,
+            map,
+            program,
+            entry,
+            renderer,
+            properties,
+            seen,
+        }
+    }
+
+    impl Rig {
+        /// The function for constant `id` with the fourth, fifth and effect words.
+        fn run(&mut self, id: u32, fourth: u32, fifth: u32, effects: u32) -> u32 {
+            self.e.mem.set_u32(self.entry + 0x10, id);
+            self.seen.borrow_mut().clear();
+            self.e.call_log = Some(vec![]);
+            let call = args![
+                self.map,
+                self.program,
+                self.entry,
+                0x0e40_0000u32,
+                fourth,
+                fifth,
+                0u32,
+                self.properties,
+                effects,
+                0u32,
+                0u32,
+                0u32
+            ];
+            self.e.call(0x00e8_3db0, &call).u32()
+        }
+
+        fn seen(&self) -> Vec<(u32, Vec<u32>)> {
+            self.seen.borrow().clone()
+        }
+
+        fn tags(&self, tag: u32) -> Vec<u32> {
+            (0..16).map(|i| tag + i).collect()
+        }
+
+        fn floats(&self, count: usize) -> Vec<f32> {
+            self.seen()[0].1[..count]
+                .iter()
+                .map(|w| f32::from_bits(*w))
+                .collect()
+        }
+    }
+
+    #[test]
+    fn renderer_matrices_are_copied_inverted_and_transposed() {
+        let mut r = rig(true);
+        assert_eq!(r.run(1, 0, 0, 0), 0);
+        assert_eq!(r.seen()[0].1, r.tags(0x9c00));
+        assert!(calls(&r.e, MATRIX_INVERSE_00EE6DDA).is_empty());
+        assert!(calls(&r.e, MATRIX_TRANSPOSE_00EE6DD4).is_empty());
+        r.run(14, 0, 0, 0);
+        let data = r.seen()[0].0;
+        assert_eq!(
+            calls(&r.e, MATRIX_INVERSE_00EE6DDA),
+            vec![vec![data, 0, data]]
+        );
+        assert_eq!(
+            calls(&r.e, MATRIX_TRANSPOSE_00EE6DD4),
+            vec![vec![data, data]]
+        );
+        r.run(16, 0, 0, 0);
+        assert_eq!(r.seen()[0].1, r.tags(0x9800));
+        r.run(17, 0, 0, 0);
+        assert_eq!(r.seen()[0].1, r.tags(0x9400));
+        assert!(calls(&r.e, MATRIX_INVERSE_00EE6DDA).is_empty());
+        assert_eq!(calls(&r.e, MATRIX_TRANSPOSE_00EE6DD4).len(), 1);
+        // The program refusing: 0x50.
+        let mut r = rig(false);
+        assert_eq!(r.run(2, 0, 0, 0), NOT_SET);
+    }
+
+    #[test]
+    fn products_multiply_the_renderer_matrices_in_order() {
+        let mut r = rig(true);
+        let factors: Rc<RefCell<Vec<(u32, u32)>>> = Rc::new(RefCell::new(vec![]));
+        let log = factors.clone();
+        r.e.register_double(MATRIX_MULTIPLY_00EE6DE0, move |e, a| {
+            log.borrow_mut().push((e.mem.u32(a[1]), e.mem.u32(a[2])));
+            Ret::default()
+        });
+        r.run(8, 0, 0, 0);
+        assert_eq!(factors.borrow()[0], (0x9400, 0x9800));
+        assert_eq!(calls(&r.e, MATRIX_INVERSE_00EE6DDA).len(), 1);
+        assert!(calls(&r.e, MATRIX_TRANSPOSE_00EE6DD4).is_empty());
+        r.run(21, 0, 0, 0);
+        assert_eq!(factors.borrow()[1], (0x9800, 0x9c00));
+        assert!(calls(&r.e, MATRIX_INVERSE_00EE6DDA).is_empty());
+        assert_eq!(calls(&r.e, MATRIX_TRANSPOSE_00EE6DD4).len(), 1);
+        let multiplied = calls(&r.e, MATRIX_MULTIPLY_00EE6DE0)[0][0];
+        assert_eq!(r.seen()[0].0, multiplied);
+        // 11 to 24: 00ee6dfe of +0x940 and +0xa00, handed over as it is.
+        r.run(12, 0, 0, 0);
+        let product = &calls(&r.e, MATRIX_PRODUCT_00EE6DFE)[0];
+        assert_eq!(product[1..], [r.renderer + 0x940, r.renderer + 0xa00]);
+        assert_eq!(r.seen()[0].0, product[0]);
+    }
+
+    #[test]
+    fn constants_needing_the_fourth_word() {
+        let mut r = rig(true);
+        for id in [25u32, 30, 96] {
+            assert_eq!(r.run(id, 0, 0, 0), 0);
+            assert!(r.seen().is_empty());
+        }
+        r.run(28, 1, 0, 0);
+        assert_eq!(calls(&r.e, MATRIX_INVERSE_00EE6DDA).len(), 1);
+        assert_eq!(calls(&r.e, MATRIX_TRANSPOSE_00EE6DD4).len(), 1);
+        r.run(97, 1, 0, 0);
+        let one = 1.0f32.to_bits();
+        let identity: Vec<u32> = (0..16).map(|i| if i % 5 == 0 { one } else { 0 }).collect();
+        assert_eq!(r.seen()[0].1, identity);
+        assert_eq!(calls(&r.e, MATRIX_INVERSE_00EE6DDA).len(), 1);
+        assert!(calls(&r.e, MATRIX_TRANSPOSE_00EE6DD4).is_empty());
+    }
+
+    #[test]
+    fn skinning_constants_go_to_the_array_slot() {
+        let mut r = rig(true);
+        let fourth = r.e.mem.alloc(0x2c);
+        r.e.mem.set_u32(fourth + 0x20, 8);
+        r.e.mem.set_u32(fourth + 0x28, 0x0e50_0000);
+        let fifth = r.e.mem.alloc(0x24);
+        r.e.mem.set_u32(fifth + 4, 0x0e51_0000);
+        r.e.mem.set_u16(fifth + 0x20, 3);
+        assert_eq!(r.run(33, fourth, 0, 0), 0);
+        assert!(calls(&r.e, SET_CONSTANT_ARRAY).is_empty());
+        assert_eq!(r.run(36, fourth, fifth, 0), 0);
+        assert_eq!(
+            calls(&r.e, SET_CONSTANT_ARRAY),
+            vec![vec![r.program, r.entry, 0x0e50_0000, 3, 8, 0x0e51_0000]]
+        );
+        let mut r2 = rig(false);
+        let fourth = r2.e.mem.alloc(0x2c);
+        let fifth = r2.e.mem.alloc(0x24);
+        assert_eq!(r2.run(35, fourth, fifth, 0), NOT_SET);
+    }
+
+    /// A texturing property with map arrays: the map at `slot` holds a transform.
+    fn texturing(r: &mut Rig, slot: u32) -> u32 {
+        let texturing = r.e.mem.alloc(0x24);
+        let maps = r.e.mem.alloc(0x40);
+        r.e.mem.set_u32(texturing + 0x20, maps);
+        let map = r.e.mem.alloc(0x14);
+        r.e.mem.set_u32(map + 0xc, 0x0e60_0000);
+        r.e.mem.set_u32(maps + slot, map);
+        r.e.mem.set_u32(r.properties + 0x14, texturing);
+        map
+    }
+
+    #[test]
+    fn texture_transforms_set_up_the_map_matrix() {
+        let mut r = rig(true);
+        r.e.register(UPDATE_MATRIX_00BC5C20, |_, _| 0x0e61_0000u32.into_ret());
+        // No texturing property: no matrix, no flags.
+        r.run(40, 0, 0, 0);
+        let setup = &calls(&r.e, SETUP_TEXTURE_TRANSFORM_00E83550)[0];
+        assert_eq!(setup[1..], [0, 0, 0, 4]);
+        assert_eq!(r.seen()[0].0, setup[0]);
+        texturing(&mut r, 4);
+        r.run(42, 0, 0, 0);
+        assert_eq!(calls(&r.e, UPDATE_MATRIX_00BC5C20), vec![vec![0x0e60_0000]]);
+        assert_eq!(
+            calls(&r.e, SETUP_TEXTURE_TRANSFORM_00E83550)[0][1..],
+            [0x0e61_0000, 1, 0, 4]
+        );
+        r.run(44, 0, 0, 0);
+        assert_eq!(
+            calls(&r.e, SETUP_TEXTURE_TRANSFORM_00E83550)[0][1..],
+            [0x0e61_0000, 1, 1, 4]
+        );
+        // Map 6 for 88 to 91; the entry's index for 61 to 64.
+        texturing(&mut r, 0x18);
+        r.run(90, 0, 0, 0);
+        assert_eq!(
+            calls(&r.e, SETUP_TEXTURE_TRANSFORM_00E83550)[0][1..],
+            [0x0e61_0000, 0, 1, 4]
+        );
+        r.e.mem.set_u32(r.entry + 0x18, 2);
+        texturing(&mut r, 0x28);
+        r.run(62, 0, 0, 0);
+        assert_eq!(calls(&r.e, UPDATE_MATRIX_00BC5C20).len(), 1);
+        // 65 to 68: the map 00a463e0 answers for the index.
+        let map = texturing(&mut r, 0x3c);
+        r.e.register_double(MAP_AT_00A463E0, move |_, _| map.into_ret());
+        r.run(68, 0, 0, 0);
+        let texturing = r.e.mem.u32(r.properties + 0x14);
+        assert_eq!(calls(&r.e, MAP_AT_00A463E0), vec![vec![texturing, 2]]);
+        assert_eq!(
+            calls(&r.e, SETUP_TEXTURE_TRANSFORM_00E83550)[0][1..],
+            [0x0e61_0000, 1, 1, 4]
+        );
+    }
+
+    #[test]
+    fn property_vectors_and_renderer_rows() {
+        let mut r = rig(true);
+        assert_eq!(r.run(75, 0, 0, 0), 0);
+        assert!(r.seen().is_empty());
+        let source = r.e.mem.alloc(0x40);
+        for i in 0..16u32 {
+            r.e.mem.set_u32(source + 4 * i, (i as f32).to_bits());
+        }
+        r.e.mem.set_u32(r.properties + 8, source);
+        for i in 0..3u32 {
+            r.e.mem
+                .set_u32(VECTOR_011F4998 + 4 * i, (100.0 + i as f32).to_bits());
+        }
+        r.run(74, 0, 0, 0);
+        assert_eq!(r.floats(4), vec![100.0, 101.0, 102.0, 15.0]);
+        r.run(75, 0, 0, 0);
+        assert_eq!(r.floats(4), vec![7.0, 8.0, 9.0, 15.0]);
+        // 76 without a word at +0x34: the floats from +0x28 on.
+        r.e.mem.set_u32(source + 0x34, 0);
+        r.run(76, 0, 0, 0);
+        assert_eq!(r.floats(4), vec![10.0, 11.0, 12.0, 15.0]);
+        let held = r.e.mem.alloc(0xc);
+        r.e.mem.set_u32(held, 0x7f80_0001);
+        r.e.mem.set_u32(source + 0x34, held);
+        r.run(76, 0, 0, 0);
+        // The copy through FLD/FSTP quiets the signalling NaN.
+        assert_eq!(r.seen()[0].1[0], 0x7fc0_0001);
+        r.run(77, 0, 0, 0);
+        assert_eq!(r.floats(4), vec![14.0; 4]);
+        r.run(78, 0, 0, 0);
+        assert_eq!(r.seen()[0].1[..4], [0xa40c, 0xa40d, 0xa40e, 0xa40f]);
+        r.run(79, 0, 0, 0);
+        assert_eq!(r.seen()[0].1[..4], [0xa408, 0xa409, 0xa40a, 0xa40b]);
+        r.run(81, 0, 0, 0);
+        assert_eq!(r.seen()[0].0, 0);
+    }
+
+    #[test]
+    fn time_constants_read_the_extra_data() {
+        let mut r = rig(true);
+        r.e.mem.set_u32(EXTRA_DATA_NAME_011BF65C, 0x0e70_0000);
+        r.e.register(FIXED_STRING_CONSTRUCT_00438170, |_, a| a[0].into_ret());
+        let extra = r.e.mem.alloc(0x10);
+        r.e.mem.set_u32(extra + 0xc, 2.0f32.to_bits());
+        r.e.register_double(GET_EXTRA_DATA_00A5BDD0, move |_, _| extra.into_ret());
+        r.e.register(CRT_HELPER_00ECA0A0, |_, a| Ret {
+            st0: f64::from_bits(u64::from(a[0]) | u64::from(a[1]) << 32) + 1.0,
+            ..Ret::default()
+        });
+        r.e.register(CRT_HELPER_00EC9F70, |_, _| Ret {
+            st0: 0.5,
+            ..Ret::default()
+        });
+        r.e.register(CRT_HELPER_00ECA5D0, |_, _| Ret {
+            st0: -4.0,
+            ..Ret::default()
+        });
+        assert_eq!(r.run(82, 0, 0, 0), 0);
+        assert_eq!(r.floats(4), vec![2.0; 4]);
+        let name = calls(&r.e, FIXED_STRING_CONSTRUCT_00438170)[0].clone();
+        assert_eq!(name[1], 0x0e70_0000);
+        assert_eq!(
+            calls(&r.e, GET_EXTRA_DATA_00A5BDD0),
+            vec![vec![0x0e40_0000, name[0]]]
+        );
+        assert_eq!(
+            calls(&r.e, FIXED_STRING_DESTRUCT_004381B0),
+            vec![vec![name[0]]]
+        );
+        r.run(83, 0, 0, 0);
+        assert_eq!(r.floats(4), vec![3.0; 4]);
+        r.run(86, 0, 0, 0);
+        assert_eq!(r.floats(4), vec![2.0, 3.0, 0.5, -4.0]);
+        // No extra data: the result 0x10, the time read at address 0xc.
+        r.e.map(0, 0x1000);
+        r.e.mem.set_u32(0xc, 5.0f32.to_bits());
+        r.e.register(GET_EXTRA_DATA_00A5BDD0, |_, _| 0u32.into_ret());
+        assert_eq!(r.run(84, 0, 0, 0), NO_EXTRA_DATA);
+        assert_eq!(r.floats(4), vec![0.5; 4]);
+    }
+
+    #[test]
+    fn light_constant_sums_the_lights() {
+        let mut r = rig(true);
+        let light = r.e.mem.alloc(0xd0);
+        r.e.mem.set_u32(light + 0xc4, 0.25f32.to_bits());
+        let second = r.e.mem.alloc(4);
+        r.e.register_double(LIGHT_CAST_00653290, move |_, a| {
+            if a[0] == second {
+                0u32.into_ret()
+            } else {
+                a[0].into_ret()
+            }
+        });
+        r.e.register(LIGHT_OFFSET_00633B40, |e, a| {
+            assert_eq!(f32::from_bits(a[2]), 0.25);
+            for i in 0..3u32 {
+                e.mem.set_u32(a[1] + 4 * i, (i as f32 + 1.0).to_bits());
+            }
+            Ret::default()
+        });
+        let effects = r.e.mem.alloc(0x10);
+        let first_node = r.e.mem.alloc(8);
+        let second_node = r.e.mem.alloc(8);
+        let third_node = r.e.mem.alloc(8);
+        r.e.mem.set_u32(effects + 0xc, first_node);
+        r.e.mem.set_u32(first_node, second_node);
+        r.e.mem.set_u32(first_node + 4, light);
+        r.e.mem.set_u32(second_node, third_node);
+        r.e.mem.set_u32(second_node + 4, second);
+        r.e.mem.set_u32(third_node + 4, light);
+        r.run(87, 0, 0, effects);
+        assert_eq!(r.floats(4), vec![2.0, 4.0, 6.0, 1.0]);
+        assert_eq!(calls(&r.e, LIGHT_OFFSET_00633B40)[0][0], light + 0xc8);
+        r.run(87, 0, 0, 0);
+        assert_eq!(r.floats(4), vec![0.0, 0.0, 0.0, 1.0]);
+    }
+
+    #[test]
+    fn map_values_and_texture_sizes() {
+        let mut r = rig(true);
+        r.run(103, 0, 0, 0);
+        assert_eq!(r.floats(4), vec![1.0; 4]);
+        r.run(104, 0, 0, 0);
+        assert_eq!(r.floats(2), vec![0.0, 1.0]);
+        r.run(105, 0, 0, 0);
+        assert_eq!(r.floats(1), vec![0.0]);
+        assert_eq!(r.run(106, 0, 0, 0), 0);
+        assert!(r.seen().is_empty());
+        let fifth_map = texturing(&mut r, 0x14);
+        let seventh_map = r.e.mem.alloc(0x14);
+        let maps = r.e.mem.u32(r.e.mem.u32(r.properties + 0x14) + 0x20);
+        r.e.mem.set_u32(maps + 0x1c, seventh_map);
+        let fifth = r.e.mem.alloc(0x28);
+        for i in 0..10u32 {
+            r.e.mem.set_u32(fifth + 4 * i, (i as f32).to_bits());
+        }
+        r.e.mem.set_u32(maps + 0x14, fifth);
+        let _ = fifth_map;
+        r.e.mem.set_u32(seventh_map + 0x10, 9.5f32.to_bits());
+        r.run(103, 0, 0, 0);
+        assert_eq!(r.floats(4), vec![6.0, 7.0, 8.0, 9.0]);
+        r.run(104, 0, 0, 0);
+        assert_eq!(r.floats(2), vec![5.0, 4.0]);
+        r.run(105, 0, 0, 0);
+        assert_eq!(r.floats(1), vec![9.5]);
+        // The texture sizes: map 5 (constant 111) and the indexed map (114).
+        let texture = r.e.mem.alloc(4);
+        r.e.mem.set_u32(texture, TEXTURE_VTABLE);
+        let slots: Vec<u32> = (0..0x27)
+            .map(|i| match i * 4 {
+                0x94 => TEXTURE_WIDTH,
+                0x98 => TEXTURE_HEIGHT,
+                _ => 0,
+            })
+            .collect();
+        r.e.put_vtable(TEXTURE_VTABLE, &slots);
+        r.e.register(TEXTURE_WIDTH, |_, _| 256u32.into_ret());
+        r.e.register(TEXTURE_HEIGHT, |_, _| 0x8000_0000u32.into_ret());
+        r.e.mem.set_u32(fifth + 8, texture);
+        r.run(111, 0, 0, 0);
+        assert_eq!(r.floats(2), vec![256.0, 2_147_483_648.0]);
+        r.e.mem.set_u32(r.entry + 0x18, 1);
+        r.e.mem.set_u32(maps + 0x24, fifth);
+        r.run(114, 0, 0, 0);
+        assert_eq!(r.floats(2), vec![256.0, 2_147_483_648.0]);
+        // No map 6: zeros.
+        r.run(112, 0, 0, 0);
+        assert_eq!(r.floats(2), vec![0.0, 0.0]);
+    }
+
+    #[test]
+    fn unknown_constants_answer_zero() {
+        let mut r = rig(true);
+        for id in [0u32, 70, 101, 116] {
+            assert_eq!(r.run(id, 0, 0, 0), 0);
+        }
+        assert!(r.seen().is_empty());
     }
 }

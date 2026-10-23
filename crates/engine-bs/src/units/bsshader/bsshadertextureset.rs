@@ -120,6 +120,40 @@ pub fn bs_shader_texture_set_set_texture_filename(e: &mut Engine, this: Ptr, slo
     e.call(STRING_SET, &args![string, name, 0u32]);
 }
 
+/// `NiObject::SaveBinary` (`00a89af0`, `thiscall`, one word: the stream) and the stream's
+/// string save (`00a64160`, `thiscall` on the stream, the text: its length, then its
+/// characters).
+const OBJECT_SAVE_BINARY: u32 = 0x00a8_9af0;
+const STREAM_SAVE_STRING: u32 = 0x00a6_4160;
+
+// Translated from 00ba8970 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSShaderTextureSet::SaveBinary` (engine map; the body matches): `thiscall`, one word (the
+/// stream). `NiObject::SaveBinary`, the name count 6 (a local word written through the
+/// stream's file, `+0x250`: its write function `+0xc`, `cdecl (file, &count, 4, &size, 1)`,
+/// the result added to its position `+4`; the size word is the argument slot), then the six
+/// names (the text of each `BSStringT` at `+8 + 8 * i`, through `00a64160`).
+pub fn bs_shader_texture_set_save_binary(e: &mut Engine, this: Ptr, stream: u32) {
+    e.call(OBJECT_SAVE_BINARY, &args![this, stream]);
+    let file = e.mem.u32(stream.wrapping_add(0x250));
+    e.with_stack(8, |e, frame| {
+        let count = frame.addr();
+        let size = count + 4;
+        e.mem.set_u32(count, 6);
+        let write = e.mem.u32(file.wrapping_add(0xc));
+        e.mem.set_u32(size, 4);
+        let written = e.call(write, &args![file, count, 4u32, size, 1u32]).u32();
+        let position = e.mem.u32(file.wrapping_add(4));
+        e.mem
+            .set_u32(file.wrapping_add(4), position.wrapping_add(written));
+    });
+    let mut string = this.addr() + 8;
+    for _ in 0..6 {
+        let text = e.mem.u32(string);
+        e.call(STREAM_SAVE_STRING, &args![stream, text]);
+        string += 8;
+    }
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -132,6 +166,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
             0x00ba_89e0,
             bs_shader_texture_set_set_texture_filename(Ptr, u32, u32)
         ),
+        entry!(0x00ba_8970, bs_shader_texture_set_save_binary(Ptr, u32)),
     ]
 }
 
@@ -237,5 +272,41 @@ mod tests {
         e.call_log = Some(vec![]);
         e.call(0x00ba_89e0, &args![0x1000u32, 3u32, 0x2222u32]);
         assert_eq!(calls_to(&e, STRING_SET), vec![vec![0x1020, 0x2222, 0]]);
+    }
+}
+
+#[cfg(test)]
+mod n012_tests {
+    use super::*;
+
+    #[test]
+    fn save_binary_writes_the_count_and_six_names() {
+        const WRITE: u32 = 0x0100_0030;
+        let mut e = Engine::new();
+        e.register(OBJECT_SAVE_BINARY, |_, _| Ret::default());
+        e.register(STREAM_SAVE_STRING, |_, _| Ret::default());
+        e.register(WRITE, |e, a| {
+            assert_eq!((e.mem.u32(a[1]), a[2], e.mem.u32(a[3]), a[4]), (6, 4, 4, 1));
+            4u32.into_ret()
+        });
+        let file = e.mem.alloc(0x10);
+        e.mem.set_u32(file + 0xc, WRITE);
+        let stream = e.mem.alloc(0x260);
+        e.mem.set_u32(stream + 0x250, file);
+        let this = e.mem.alloc(0x38);
+        for k in 0..6u32 {
+            e.mem.set_u32(this + 8 + 8 * k, 0x100 + k);
+        }
+        e.call_log = Some(vec![]);
+        e.call(0x00ba_8970, &args![this, stream]);
+        let log = e.call_log.take().unwrap();
+        assert!(log.contains(&(OBJECT_SAVE_BINARY, vec![this, stream])));
+        let names: Vec<u32> = log
+            .iter()
+            .filter(|(a, _)| *a == STREAM_SAVE_STRING)
+            .map(|(_, w)| w[1])
+            .collect();
+        assert_eq!(names, (0x100..0x106).collect::<Vec<u32>>());
+        assert_eq!(e.mem.u32(file + 4), 4);
     }
 }

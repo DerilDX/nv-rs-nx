@@ -346,9 +346,135 @@ pub fn fn_00ee8760(
     group
 }
 
+/// `NiRenderTargetGroup::ms_RTTI` (the class's `NiRTTI` record).
+const NI_RENDER_TARGET_GROUP_RTTI: u32 = 0x0127_08ec;
+/// `NiObject::GetViewerStrings` (Xbox PDB, `thiscall`, the string array) and
+/// `NiGetViewerString` (Xbox PDB, `cdecl`, one word).
+const OBJECT_GET_VIEWER_STRINGS: u32 = 0x00a5_d6e0;
+const GET_VIEWER_STRING: u32 = 0x00a7_d330;
+/// `0096ad30` (`thiscall`, new capacity) and `0096ae90` (`thiscall`, index, pointer to the
+/// element): the viewer-string array's set-size and set-at.
+const ARRAY_SET_SIZE: u32 = 0x0096_ad30;
+const ARRAY_SET_AT: u32 = 0x0096_ae90;
+
+// Translated from 00ee84d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiRenderTargetGroup::GetDepthStencilWidth` (Xbox PDB): the depth-stencil buffer's
+/// width, 0 without one.
+pub fn ni_render_target_group_get_depth_stencil_width(
+    e: &mut Engine,
+    this: Ptr<NiRenderTargetGroup>,
+) -> u32 {
+    let buffer = e.get(this, NiRenderTargetGroup::m_spDepthStencilBuffer);
+    if buffer == 0 {
+        return 0;
+    }
+    e.mem.u32(buffer + BUFFER_WIDTH)
+}
+
+// Translated from 00ee84e0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiRenderTargetGroup::GetDepthStencilHeight` (Xbox PDB): the depth-stencil buffer's
+/// height, 0 without one.
+pub fn ni_render_target_group_get_depth_stencil_height(
+    e: &mut Engine,
+    this: Ptr<NiRenderTargetGroup>,
+) -> u32 {
+    let buffer = e.get(this, NiRenderTargetGroup::m_spDepthStencilBuffer);
+    if buffer == 0 {
+        return 0;
+    }
+    e.mem.u32(buffer + BUFFER_HEIGHT)
+}
+
+// Translated from 00ee8530 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiRenderTargetGroup::GetRTTI` (Xbox PDB): the address of the class's `NiRTTI` record.
+pub fn ni_render_target_group_get_rtti(_e: &mut Engine) -> Ptr {
+    Ptr::new(NI_RENDER_TARGET_GROUP_RTTI)
+}
+
+// Translated from 00ee8540 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`thiscall`, no stack word): the byte at +8, the one
+/// [`ni_render_target_group_set_resolve_depth_buffer_mode`] stores (`AL` only).
+pub fn fn_00ee8540(e: &mut Engine, this: Ptr<NiRenderTargetGroup>) -> u8 {
+    e.get(this, NiRenderTargetGroup::flag_08)
+}
+
+// Translated from 00ee8550 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiRenderTargetGroup::SetResolveDepthBufferMode` (Xbox PDB): stores the low byte of
+/// `mode` at +8.
+pub fn ni_render_target_group_set_resolve_depth_buffer_mode(
+    e: &mut Engine,
+    this: Ptr<NiRenderTargetGroup>,
+    mode: u8,
+) {
+    e.set(this, NiRenderTargetGroup::flag_08, mode);
+}
+
+// Translated from 00ee8600 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiRenderTargetGroup::GetDepthStencilPixelFormat` (Xbox PDB): the pixel format (+0xc)
+/// of the depth-stencil buffer's renderer data (+0x10), 0 without either.
+pub fn ni_render_target_group_get_depth_stencil_pixel_format(
+    e: &mut Engine,
+    this: Ptr<NiRenderTargetGroup>,
+) -> u32 {
+    let buffer = e.get(this, NiRenderTargetGroup::m_spDepthStencilBuffer);
+    if buffer == 0 {
+        return 0;
+    }
+    let data = e.mem.u32(buffer + BUFFER_RENDERER_DATA);
+    if data == 0 {
+        return 0;
+    }
+    e.mem.u32(data + BUFFER_DATA_PIXEL_FORMAT)
+}
+
+// Translated from 00ee8800 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiRenderTargetGroup::GetViewerStrings` (Xbox PDB): `NiObject::GetViewerStrings`, then
+/// appends `NiGetViewerString` of the class name (the first word of
+/// `NiRenderTargetGroup::ms_RTTI`, `012708ec`) to `strings`: when the count (+0xa) is not
+/// below the capacity (+8) the array first grows by `m_usGrowBy` (+0xe, `0096ad30`), then
+/// `0096ae90` stores the string held in the `strings` argument's stack word at the old
+/// count.
+pub fn ni_render_target_group_get_viewer_strings(e: &mut Engine, this: Ptr, strings: Ptr) {
+    e.call(OBJECT_GET_VIEWER_STRINGS, &args![this, strings]);
+    let class_name = e.global::<u32>(NI_RENDER_TARGET_GROUP_RTTI);
+    let text = e.call(GET_VIEWER_STRING, &args![class_name]).u32();
+    e.with_stack(4, |e, slot| {
+        e.mem.set_u32(slot.addr(), text);
+        let count = u32::from(e.mem.u16(strings.addr() + 0xa));
+        if count >= u32::from(e.mem.u16(strings.addr() + 8)) {
+            let grow_by = u32::from(e.mem.u16(strings.addr() + 0xe));
+            e.call(ARRAY_SET_SIZE, &args![strings, grow_by + count]);
+        }
+        e.call(ARRAY_SET_AT, &args![strings, count, slot]);
+    });
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
+    type G = NiRenderTargetGroup;
     vec![
+        entry!(
+            0x00ee_84d0,
+            ni_render_target_group_get_depth_stencil_width(Ptr<G>) -> u32
+        ),
+        entry!(
+            0x00ee_84e0,
+            ni_render_target_group_get_depth_stencil_height(Ptr<G>) -> u32
+        ),
+        entry!(0x00ee_8530, ni_render_target_group_get_rtti() -> Ptr),
+        entry!(0x00ee_8540, fn_00ee8540(Ptr<G>) -> u8),
+        entry!(
+            0x00ee_8550,
+            ni_render_target_group_set_resolve_depth_buffer_mode(Ptr<G>, u8)
+        ),
+        entry!(
+            0x00ee_8600,
+            ni_render_target_group_get_depth_stencil_pixel_format(Ptr<G>) -> u32
+        ),
+        entry!(
+            0x00ee_8800,
+            ni_render_target_group_get_viewer_strings(Ptr, Ptr)
+        ),
         entry!(0x00ee87e0, ni_render_target_group_scalar_deleting_destructor(Ptr, u32) -> Ptr),
         entry!(
             0x00ee8460,
@@ -601,5 +727,82 @@ mod b007_tests {
         assert_eq!(e.mem.u32(other + 0x20), 0);
         e.register_double(MAX_BUFFERS_DOUBLE, |_, _| word(0));
         assert_eq!(e.call(0x00ee8760, &args![buffer, renderer, ds]).u32(), 0);
+    }
+}
+
+#[cfg(test)]
+mod n018_tests {
+    use super::*;
+
+    fn calls_to(e: &Engine, addr: u32) -> Vec<Vec<u32>> {
+        e.call_log
+            .clone()
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|(a, _)| *a == addr)
+            .map(|(_, words)| words)
+            .collect()
+    }
+
+    #[test]
+    fn depth_stencil_size_and_format() {
+        let mut e = Engine::new();
+        let group = e.mem.alloc(0x28);
+        assert_eq!(e.call(0x00ee_84d0, &args![group]).u32(), 0);
+        assert_eq!(e.call(0x00ee_84e0, &args![group]).u32(), 0);
+        assert_eq!(e.call(0x00ee_8600, &args![group]).u32(), 0);
+        let buffer = e.mem.alloc(0x14);
+        e.mem.set_u32(buffer + 8, 640);
+        e.mem.set_u32(buffer + 0xc, 480);
+        e.mem.set_u32(group + 0x20, buffer);
+        assert_eq!(e.call(0x00ee_84d0, &args![group]).u32(), 640);
+        assert_eq!(e.call(0x00ee_84e0, &args![group]).u32(), 480);
+        // A buffer without renderer data has no pixel format.
+        assert_eq!(e.call(0x00ee_8600, &args![group]).u32(), 0);
+        let data = e.mem.alloc(0x10);
+        e.mem.set_u32(data + 0xc, 0x7777);
+        e.mem.set_u32(buffer + 0x10, data);
+        assert_eq!(e.call(0x00ee_8600, &args![group]).u32(), 0x7777);
+    }
+
+    #[test]
+    fn rtti_and_the_resolve_mode_byte() {
+        let mut e = Engine::new();
+        assert_eq!(
+            e.call(0x00ee_8530, &args![]).u32(),
+            NI_RENDER_TARGET_GROUP_RTTI
+        );
+        let group = e.mem.alloc(0x28);
+        e.mem.set_u32(group + 8, 0xaabb_cc00);
+        e.call(0x00ee_8550, &args![group, 0x1234_5601u32]);
+        assert_eq!(e.mem.u32(group + 8), 0xaabb_cc01);
+        assert_eq!(e.call(0x00ee_8540, &args![group]).u8(), 1);
+    }
+
+    #[test]
+    fn viewer_strings_append_the_class_name() {
+        let mut e = Engine::new();
+        e.map(0x0127_0000, 0x1000);
+        e.mem.set_u32(NI_RENDER_TARGET_GROUP_RTTI, 0x0127_0100);
+        e.register(OBJECT_GET_VIEWER_STRINGS, |_, _| Ret::default());
+        e.register(GET_VIEWER_STRING, |_, _| 0x5000u32.into_ret());
+        e.register(ARRAY_SET_SIZE, |_, _| Ret::default());
+        e.register(ARRAY_SET_AT, |e, a| {
+            assert_eq!(e.mem.u32(a[2]), 0x5000);
+            Ret::default()
+        });
+        e.call_log = Some(vec![]);
+        let strings = e.mem.alloc(0x10);
+        e.mem.set_u16(strings + 0xa, 2);
+        e.mem.set_u16(strings + 8, 2);
+        e.mem.set_u16(strings + 0xe, 3);
+        e.call(0x00ee_8800, &args![0x7777u32, strings]);
+        assert_eq!(
+            calls_to(&e, OBJECT_GET_VIEWER_STRINGS),
+            vec![vec![0x7777, strings]]
+        );
+        assert_eq!(calls_to(&e, GET_VIEWER_STRING), vec![vec![0x0127_0100]]);
+        assert_eq!(calls_to(&e, ARRAY_SET_SIZE), vec![vec![strings, 5]]);
+        assert_eq!(calls_to(&e, ARRAY_SET_AT)[0][..2], [strings, 2]);
     }
 }

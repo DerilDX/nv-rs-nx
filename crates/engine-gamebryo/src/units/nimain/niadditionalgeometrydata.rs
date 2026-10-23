@@ -727,9 +727,773 @@ pub fn ni_additional_geometry_data_create_object(e: &mut Engine) -> Ptr {
     fn_00a734c0(e, Ptr::new(object))
 }
 
+/// `NiAdditionalGeometryData`'s word at +8 (the revision id `00a734c0` clears).
+const REVISION_ID: u32 = 0x08;
+/// The data block's virtual slot +0xc (called with two zero words).
+const BLOCK_SLOT_0C: u32 = 0x0c;
+/// `NiObject::IsEqual` (`00a5d470`, thiscall: other object), `NiObject::SaveBinary`
+/// (`00a89af0`, thiscall: stream) and `NiObject::GetViewerStrings` (`00a5d6e0`, thiscall:
+/// string array).
+const NI_OBJECT_IS_EQUAL: u32 = 0x00a5_d470;
+const NI_OBJECT_SAVE_BINARY: u32 = 0x00a8_9af0;
+const NI_OBJECT_GET_VIEWER_STRINGS: u32 = 0x00a5_d6e0;
+/// The data block comparison (`00a72440`, thiscall on one block: the other; unnamed).
+const BLOCK_IS_EQUAL: u32 = 0x00a7_2440;
+/// The stream entry's element sizes (`00a72330`, thiscall on the entry, `RET 0xc`: the
+/// size array, the address of its count, the array's capacity; unnamed).
+const STREAM_ELEMENT_SIZES: u32 = 0x00a7_2330;
+/// The stream's output (`NiStream` +0x250) and, in it, its write function (+0xc, cdecl:
+/// output, source, size, element sizes, element count; returns the bytes written, added
+/// to the output's position at +4).
+const STREAM_OUTPUT: u32 = 0x250;
+const OUTPUT_WRITE: u32 = 0x0c;
+/// The string array's `SetSize` (`0096ad30`, thiscall: capacity), `SetAt` (`0096ae90`,
+/// thiscall: index, address of the element) and an add at the end (`0096a610`,
+/// thiscall: address of the element; the engine map places that body in
+/// `playercharacter.cpp`, folded code).
+const STRING_ARRAY_SET_SIZE: u32 = 0x0096_ad30;
+const STRING_ARRAY_SET_AT: u32 = 0x0096_ae90;
+const STRING_ARRAY_ADD: u32 = 0x0096_a610;
+/// `NiGetViewerString` overloads (cdecl): the text (`00a7d330`), label with a boolean word
+/// (`00a7d370`, `_ov2`), with a 16-bit value (`00a7d490`, `_ov6`), with a signed word
+/// (`00a7d4d0`, `_ov7`), with an unsigned word (`00a7d510`, `_ov8`), with a pointer
+/// (`00a7d5a0`, `_ov10`) and with a string (`00a7d5e0`, `_ov11`).
+const VIEWER_STRING_NAME: u32 = 0x00a7_d330;
+const VIEWER_STRING_BOOL: u32 = 0x00a7_d370;
+const VIEWER_STRING_SHORT: u32 = 0x00a7_d490;
+const VIEWER_STRING_INT: u32 = 0x00a7_d4d0;
+const VIEWER_STRING_UNSIGNED: u32 = 0x00a7_d510;
+const VIEWER_STRING_POINTER: u32 = 0x00a7_d5a0;
+const VIEWER_STRING_TEXT: u32 = 0x00a7_d5e0;
+/// The word at `011f4a30`: the class name the viewer strings start with.
+const CLASS_NAME: u32 = 0x011f_4a30;
+/// Viewer string labels.
+const TEXT_VERTEX_COUNT: u32 = 0x0109_d368;
+const TEXT_DATA_STREAM_COUNT: u32 = 0x0109_d354;
+const TEXT_DATA_STREAM_INDEX: u32 = 0x0109_d33c;
+const TEXT_DATA_BLOCKS_SIZE: u32 = 0x0109_d324;
+const TEXT_DATA_BLOCK_INDEX: u32 = 0x0109_d310;
+const TEXT_DATA_BLOCK_SIZE: u32 = 0x0109_d2f4;
+const TEXT_DATA_BLOCK: u32 = 0x0109_d2dc;
+/// `"NULL"`.
+const TEXT_NULL: u32 = 0x0101_f7a8;
+const TEXT_TYPE: u32 = 0x0109_d2b4;
+const TEXT_UNIT_SIZE: u32 = 0x0109_cffc;
+const TEXT_TOTAL_SIZE: u32 = 0x0109_cfe4;
+const TEXT_STRIDE: u32 = 0x0109_cfd0;
+const TEXT_BLOCK_INDEX: u32 = 0x0109_cfb8;
+const TEXT_BLOCK_OFFSET: u32 = 0x0109_cfa0;
+const TEXT_KEEP: u32 = 0x0109_cf90;
+const TEXT_CONSISTENCY: u32 = 0x0109_cf6c;
+/// `"MUTABLE"`, `"STATIC"`.
+const TEXT_MUTABLE: u32 = 0x0109_cf80;
+const TEXT_STATIC: u32 = 0x0109_cf88;
+/// `"UNKNOWN!!!"`.
+const TEXT_UNKNOWN_TYPE: u32 = 0x0109_d014;
+
+/// One write through the stream's output: `size` bytes from `source`, the element sizes
+/// at `sizes` (`count` of them); the bytes written are added to the output's position.
+fn output_write(e: &mut Engine, stream: u32, source: u32, size: u32, sizes: u32, count: u32) {
+    let output = e.mem.u32(stream.wrapping_add(STREAM_OUTPUT));
+    let write = e.mem.u32(output.wrapping_add(OUTPUT_WRITE));
+    let wrote = e
+        .call(write, &args![output, source, size, sizes, count])
+        .u32();
+    let position = e
+        .mem
+        .u32(output.wrapping_add(FILE_POSITION))
+        .wrapping_add(wrote);
+    e.mem.set_u32(output.wrapping_add(FILE_POSITION), position);
+}
+
+/// [`output_write`] of one element of `size` bytes, its size written to the stack word
+/// `sizes` first.
+fn output_write_one(e: &mut Engine, stream: u32, source: u32, size: u32, sizes: u32) {
+    e.mem.set_u32(sizes, size);
+    output_write(e, stream, source, size, sizes, 1);
+}
+
+/// Adds the string word at `slot` at the array's end: `SetSize` to the size plus the
+/// grow-by step when the array is full, then `SetAt` at the old size.
+fn add_viewer_string(e: &mut Engine, strings: u32, slot: u32) {
+    let index = u32::from(e.mem.u16(strings + 0xa));
+    if index >= u32::from(e.mem.u16(strings + 8)) {
+        let grow = u32::from(e.mem.u16(strings + 0xe));
+        e.call(
+            STRING_ARRAY_SET_SIZE,
+            &args![strings, grow.wrapping_add(index)],
+        );
+    }
+    e.call(STRING_ARRAY_SET_AT, &args![strings, index, slot]);
+}
+
+/// The same with `SetAt` inlined (the string array: `m_pBase` +4, `m_usMaxSize` +8,
+/// `m_usSize` +0xa, `m_usESize` +0xc, `m_usGrowBy` +0xe): grow when full, then the size
+/// raised past the index (counting a non-null text) or the non-null count kept in step
+/// with the replaced element, and the text stored.
+fn store_viewer_string(e: &mut Engine, strings: u32, text: u32) {
+    let index = e.mem.u16(strings + 0xa);
+    if index >= e.mem.u16(strings + 8) {
+        let grow = u32::from(e.mem.u16(strings + 0xe));
+        e.call(
+            STRING_ARRAY_SET_SIZE,
+            &args![strings, grow.wrapping_add(u32::from(index))],
+        );
+    }
+    let element = |e: &Engine| {
+        e.mem
+            .u32(strings + 4)
+            .wrapping_add(u32::from(index).wrapping_mul(4))
+    };
+    let bump = |e: &mut Engine, delta: u16| {
+        let used = e.mem.u16(strings + 0xc).wrapping_add(delta);
+        e.mem.set_u16(strings + 0xc, used);
+    };
+    if index >= e.mem.u16(strings + 0xa) {
+        e.mem.set_u16(strings + 0xa, index.wrapping_add(1));
+        if text != 0 {
+            bump(e, 1);
+        }
+    } else if text != 0 {
+        if e.mem.u32(element(e)) == 0 {
+            bump(e, 1);
+        }
+    } else if e.mem.u32(element(e)) != 0 {
+        bump(e, 0xffff);
+    }
+    let at = element(e);
+    e.mem.set_u32(at, text);
+}
+
+// Translated from 00a72550 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Data block `index`'s data (thiscall, `RET 8`; unnamed in the engine map): `*size` is
+/// cleared, then for an index below the block array's size and a present block set to the
+/// block's size (+4) and the answer is its data (+8); otherwise null.
+pub fn fn_00a72550(e: &mut Engine, this: Ptr, index: u32, size: Ptr) -> u32 {
+    let base = this.addr();
+    e.mem.set_u32(size.addr(), 0);
+    if index >= u32::from(e.mem.u16(base + BLOCKS_SIZE)) {
+        return 0;
+    }
+    let blocks = e.mem.u32(base + BLOCKS_BASE);
+    let block = e.mem.u32(blocks.wrapping_add(index.wrapping_mul(4)));
+    if block == 0 {
+        return 0;
+    }
+    let bytes = e.mem.u32(block.wrapping_add(BLOCK_DATA_SIZE));
+    e.mem.set_u32(size.addr(), bytes);
+    e.mem.u32(block.wrapping_add(BLOCK_DATA))
+}
+
+// Translated from 00a72590 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Data block `index`'s data, made writable (thiscall, `RET 8`; unnamed in the engine
+/// map): as [`fn_00a72550`], but for a present block its virtual slot +8 (with two zero
+/// words) runs after `*size` is set and before its data (+8) is read.
+pub fn fn_00a72590(e: &mut Engine, this: Ptr, index: u32, size: Ptr) -> u32 {
+    let base = this.addr();
+    e.mem.set_u32(size.addr(), 0);
+    if index >= u32::from(e.mem.u16(base + BLOCKS_SIZE)) {
+        return 0;
+    }
+    let blocks = e.mem.u32(base + BLOCKS_BASE);
+    let block = e.mem.u32(blocks.wrapping_add(index.wrapping_mul(4)));
+    if block == 0 {
+        return 0;
+    }
+    let bytes = e.mem.u32(block.wrapping_add(BLOCK_DATA_SIZE));
+    e.mem.set_u32(size.addr(), bytes);
+    e.vcall(block, BLOCK_SLOT_PROTECT, &args![0u32, 0u32]);
+    e.mem.u32(block.wrapping_add(BLOCK_DATA))
+}
+
+// Translated from 00a725d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Ends a change of data block `index` (thiscall, `RET 4`; unnamed in the engine map): for
+/// an index below the block array's size and a present block, the block's virtual slot
+/// +0xc (two zero words) and the revision id (+8) counted up.
+pub fn fn_00a725d0(e: &mut Engine, this: Ptr, index: u32) {
+    let base = this.addr();
+    if index >= u32::from(e.mem.u16(base + BLOCKS_SIZE)) {
+        return;
+    }
+    let blocks = e.mem.u32(base + BLOCKS_BASE);
+    let block = e.mem.u32(blocks.wrapping_add(index.wrapping_mul(4)));
+    if block == 0 {
+        return;
+    }
+    e.vcall(block, BLOCK_SLOT_0C, &args![0u32, 0u32]);
+    let revision = e.mem.u32(base + REVISION_ID).wrapping_add(1);
+    e.mem.set_u32(base + REVISION_ID, revision);
+}
+
+// Translated from 00a727b0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The block array's size (`m_usSize`, +0x26; unnamed in the engine map).
+pub fn fn_00a727b0(e: &mut Engine, this: Ptr) -> u16 {
+    e.mem.u16(this.addr() + BLOCKS_SIZE)
+}
+
+// Translated from 00a727f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiAdditionalGeometryData::IsEqual` (Xbox PDB; thiscall, `RET 4`): false when
+/// `NiObject::IsEqual` is, when the vertex counts or the stream counts differ, at the first
+/// stream entry whose words +4 to +0x18 or flag byte differ, or at the first block slot
+/// (over this object's block array size) where one block is missing and the other not,
+/// or the blocks compare unequal (`00a72440` on this object's block).
+pub fn ni_additional_geometry_data_is_equal(e: &mut Engine, this: Ptr, other: Ptr) -> bool {
+    let base = this.addr();
+    let theirs = other.addr();
+    if e.call(NI_OBJECT_IS_EQUAL, &args![this, other]).u8() == 0 {
+        return false;
+    }
+    if e.mem.u16(base + VERTEX_COUNT) != e.mem.u16(theirs + VERTEX_COUNT) {
+        return false;
+    }
+    let count = e.mem.u32(base + STREAM_COUNT);
+    if count != e.mem.u32(theirs + STREAM_COUNT) {
+        return false;
+    }
+    let mut i = 0u32;
+    if count != 0 {
+        let mut mine = e.mem.u32(base + STREAMS);
+        let mut other_entry = e.mem.u32(theirs + STREAMS);
+        loop {
+            for field in [
+                STREAM_TYPE,
+                STREAM_UNIT_SIZE,
+                STREAM_TOTAL_SIZE,
+                STREAM_STRIDE,
+                STREAM_BLOCK_INDEX,
+                STREAM_BLOCK_OFFSET,
+            ] {
+                if e.mem.u32(mine.wrapping_add(field)) != e.mem.u32(other_entry.wrapping_add(field))
+                {
+                    return false;
+                }
+            }
+            if e.mem.u8(mine) != e.mem.u8(other_entry) {
+                return false;
+            }
+            i = i.wrapping_add(1);
+            other_entry = other_entry.wrapping_add(STREAM_SIZE);
+            mine = mine.wrapping_add(STREAM_SIZE);
+            if i >= count {
+                break;
+            }
+        }
+    }
+    let blocks = u32::from(e.mem.u16(base + BLOCKS_SIZE));
+    let mut j = 0u32;
+    if blocks != 0 {
+        let mut other_slot = e.mem.u32(theirs + BLOCKS_BASE);
+        let distance = e.mem.u32(base + BLOCKS_BASE).wrapping_sub(other_slot);
+        loop {
+            let other_block = e.mem.u32(other_slot);
+            let my_block = e.mem.u32(distance.wrapping_add(other_slot));
+            if other_block == 0 {
+                if my_block != 0 {
+                    return false;
+                }
+            } else {
+                if my_block == 0 {
+                    return false;
+                }
+                if e.call(BLOCK_IS_EQUAL, &args![my_block, other_block]).u8() == 0 {
+                    return false;
+                }
+            }
+            j = j.wrapping_add(1);
+            other_slot = other_slot.wrapping_add(4);
+            if j >= blocks {
+                break;
+            }
+        }
+    }
+    true
+}
+
+// Translated from 00a728d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Saves a data block (thiscall on the block, `RET 0x14`; unnamed in the engine map; the
+/// counterpart of [`fn_00a72eb0`]): its size, then the stream entries of `block_index`
+/// (`entries`, `entry_count` of them) gathered and sorted by block offset (an insertion
+/// sort into a 32-word stack array, which the code does not bound); entries are grouped
+/// into parts, a new part starting at each entry whose offset is past the part start's
+/// offset plus its stride times `vertex_count`. Writes the part count and the parts'
+/// offsets, then for each part the element sizes of its entries (`00a72330` on each into a
+/// 32-word stack array), their count and the sizes, and the part's bytes (the sum of the
+/// sizes times `vertex_count`, from the block's data plus the part start's offset) with
+/// those element sizes.
+pub fn fn_00a728d0(
+    e: &mut Engine,
+    this: Ptr,
+    stream: u32,
+    block_index: u32,
+    entries: u32,
+    entry_count: u32,
+    vertex_count: u16,
+) {
+    let block = this.addr();
+    // The exe's frame from [esp+0x10] to [esp+0x228].
+    e.with_stack(0x218, |e, frame| {
+        let at = |offset: u32| frame.addr() + offset - 0x10;
+        let sizes_word = at(0x10);
+        let matched = at(0x14);
+        let part_count = at(0x18);
+        let size_count = at(0x1c);
+        let sorted = at(0x28);
+        let element_sizes = at(0xa8);
+        let part_starts = at(0x128);
+        let part_offsets = at(0x1a8);
+        let slot = |array: u32, index: u32| array.wrapping_add(index.wrapping_mul(4));
+        e.mem.set_u32(at(0x20), block);
+        output_write_one(e, stream, block + BLOCK_DATA_SIZE, 4, sizes_word);
+        let mut found = 0u32;
+        e.mem.set_u32(matched, 0);
+        if entry_count != 0 {
+            let mut entry = entries;
+            let mut left = entry_count;
+            loop {
+                if e.mem.u32(entry.wrapping_add(STREAM_BLOCK_INDEX)) == block_index {
+                    e.mem.set_u32(slot(sorted, found), entry);
+                    found = found.wrapping_add(1);
+                }
+                entry = entry.wrapping_add(STREAM_SIZE);
+                left = left.wrapping_sub(1);
+                if left == 0 {
+                    break;
+                }
+            }
+            e.mem.set_u32(matched, found);
+        }
+        let mut i = 0u32;
+        while i < found {
+            let mut carried = e.mem.u32(slot(sorted, i));
+            let mut k = 0u32;
+            while k < i {
+                let held = e.mem.u32(slot(sorted, k));
+                if e.mem.u32(held.wrapping_add(STREAM_BLOCK_OFFSET))
+                    > e.mem.u32(carried.wrapping_add(STREAM_BLOCK_OFFSET))
+                {
+                    e.mem.set_u32(slot(sorted, k), carried);
+                    carried = held;
+                }
+                k = k.wrapping_add(1);
+            }
+            e.mem.set_u32(slot(sorted, i), carried);
+            i = i.wrapping_add(1);
+        }
+        let mut start = e.mem.u32(sorted);
+        e.mem.set_u32(part_starts, 0);
+        e.mem.set_u32(part_offsets, 0);
+        let mut parts = 1u32;
+        e.mem.set_u32(part_count, parts);
+        let multiplier = u32::from(vertex_count);
+        let mut index = 1u32;
+        while index < found {
+            let end = e
+                .mem
+                .u32(start.wrapping_add(STREAM_STRIDE))
+                .wrapping_mul(multiplier)
+                .wrapping_add(e.mem.u32(start.wrapping_add(STREAM_BLOCK_OFFSET)));
+            let entry = e.mem.u32(slot(sorted, index));
+            let offset = e.mem.u32(entry.wrapping_add(STREAM_BLOCK_OFFSET));
+            if offset > end {
+                e.mem.set_u32(slot(part_starts, parts), index);
+                e.mem.set_u32(slot(part_offsets, parts), offset);
+                parts = parts.wrapping_add(1);
+                e.mem.set_u32(part_count, parts);
+                start = entry;
+            }
+            found = e.mem.u32(matched);
+            index = index.wrapping_add(1);
+        }
+        e.mem.set_u32(slot(part_starts, parts), found);
+        output_write_one(e, stream, part_count, 4, sizes_word);
+        let bytes = e.mem.u32(part_count).wrapping_mul(4);
+        e.mem.set_u32(sizes_word, 4);
+        output_write(e, stream, part_offsets, bytes, sizes_word, 1);
+        e.mem.set_u32(matched, 0);
+        if e.mem.u32(part_count) == 0 {
+            return;
+        }
+        e.mem.set_u32(at(0x24), multiplier);
+        let mut part = 0u32;
+        loop {
+            let first = e.mem.u32(slot(part_starts, part));
+            let last = e.mem.u32(slot(part_starts, part.wrapping_add(1)));
+            e.mem.set_u32(sizes_word, 0);
+            let mut member = first;
+            while member < last {
+                let entry = e.mem.u32(slot(sorted, member));
+                e.call(
+                    STREAM_ELEMENT_SIZES,
+                    &args![entry, element_sizes, sizes_word, 0x20u32],
+                );
+                member = member.wrapping_add(1);
+            }
+            let count = e.mem.u32(sizes_word);
+            e.mem.set_u32(size_count, count);
+            output_write_one(e, stream, size_count, 4, sizes_word);
+            let bytes = e.mem.u32(size_count).wrapping_mul(4);
+            e.mem.set_u32(sizes_word, 4);
+            output_write(e, stream, element_sizes, bytes, sizes_word, 1);
+            let start_entry = e.mem.u32(slot(sorted, first));
+            let destination = e
+                .mem
+                .u32(start_entry.wrapping_add(STREAM_BLOCK_OFFSET))
+                .wrapping_add(e.mem.u32(block.wrapping_add(BLOCK_DATA)));
+            let count = e.mem.u32(size_count);
+            let mut even_sum = 0u32;
+            let mut odd_sum = 0u32;
+            let mut k = 0u32;
+            e.mem.set_u32(sizes_word, 0);
+            if (count as i32) >= 2 {
+                loop {
+                    even_sum = even_sum.wrapping_add(e.mem.u32(slot(element_sizes, k)));
+                    odd_sum =
+                        odd_sum.wrapping_add(e.mem.u32(slot(element_sizes, k.wrapping_add(1))));
+                    k = k.wrapping_add(2);
+                    if k >= count.wrapping_sub(1) {
+                        break;
+                    }
+                }
+            }
+            let mut tail = e.mem.u32(sizes_word);
+            if k < count {
+                tail = e.mem.u32(slot(element_sizes, k));
+            }
+            let total = even_sum
+                .wrapping_add(odd_sum)
+                .wrapping_add(tail)
+                .wrapping_mul(e.mem.u32(at(0x24)));
+            output_write(e, stream, destination, total, element_sizes, count);
+            part = part.wrapping_add(1);
+            e.mem.set_u32(matched, part);
+            if part >= e.mem.u32(part_count) {
+                break;
+            }
+        }
+    });
+}
+
+// Translated from 00a72db0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Saves a stream entry (thiscall on the entry, `RET 4`; unnamed in the engine map; the
+/// counterpart of [`fn_00a72cb0`]): the words at +4, +8, +0xc, +0x10, +0x14 and +0x18,
+/// then the flag byte at +0, one element each (the element size in the argument's stack
+/// word).
+pub fn fn_00a72db0(e: &mut Engine, this: Ptr, stream: u32) {
+    let entry = this.addr();
+    e.with_stack(4, |e, sizes| {
+        for field in [
+            STREAM_TYPE,
+            STREAM_UNIT_SIZE,
+            STREAM_TOTAL_SIZE,
+            STREAM_STRIDE,
+            STREAM_BLOCK_INDEX,
+            STREAM_BLOCK_OFFSET,
+        ] {
+            output_write_one(e, stream, entry + field, 4, sizes.addr());
+        }
+        output_write_one(e, stream, entry + STREAM_FLAGS, 1, sizes.addr());
+    });
+}
+
+// Translated from 00a73370 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiAdditionalGeometryData::SaveBinary` (Xbox PDB; thiscall, `RET 4`; the counterpart of
+/// [`ni_additional_geometry_data_load_binary`]): `NiObject::SaveBinary`, the vertex count
+/// (2 bytes), the stream count (4 bytes), each stream entry ([`fn_00a72db0`]), the block
+/// array's size as a word, then for each block slot a flag byte (whether a block is there)
+/// and, for a block, the block ([`fn_00a728d0`] with the slot's index, the entries, their
+/// count and the vertex count). The element-size word and the flag byte live in the
+/// argument's stack word, as in the exe.
+pub fn ni_additional_geometry_data_save_binary(e: &mut Engine, this: Ptr, stream: u32) {
+    let base = this.addr();
+    e.call(NI_OBJECT_SAVE_BINARY, &args![this, stream]);
+    // The three local words (+0, +4, +8) and the argument word (+0xc).
+    e.with_stack(0x10, |e, frame| {
+        let index_word = frame.addr();
+        let sizes_local = frame.addr() + 4;
+        let block_word = frame.addr() + 8;
+        let argument = frame.addr() + 0xc;
+        e.mem.set_u32(argument, stream);
+        output_write_one(e, stream, base + VERTEX_COUNT, 2, argument);
+        output_write_one(e, stream, base + STREAM_COUNT, 4, argument);
+        if e.mem.u32(base + STREAM_COUNT) != 0 {
+            let mut j = 0u32;
+            e.mem.set_u32(argument, 0);
+            loop {
+                let entry = e.mem.u32(base + STREAMS).wrapping_add(e.mem.u32(argument));
+                fn_00a72db0(e, Ptr::new(entry), stream);
+                let next = e.mem.u32(argument).wrapping_add(STREAM_SIZE);
+                e.mem.set_u32(argument, next);
+                j = j.wrapping_add(1);
+                if j >= e.mem.u32(base + STREAM_COUNT) {
+                    break;
+                }
+            }
+        }
+        let blocks = u32::from(e.mem.u16(base + BLOCKS_SIZE));
+        e.mem.set_u32(index_word, blocks);
+        output_write_one(e, stream, index_word, 4, argument);
+        e.mem.set_u32(index_word, 0);
+        while e.mem.u32(index_word) < u32::from(e.mem.u16(base + BLOCKS_SIZE)) {
+            let i = e.mem.u32(index_word);
+            let blocks = e.mem.u32(base + BLOCKS_BASE);
+            let block = e.mem.u32(blocks.wrapping_add(i.wrapping_mul(4)));
+            e.mem.set_u32(block_word, block);
+            e.mem.set_u8(argument, u8::from(block != 0));
+            output_write_one(e, stream, argument, 1, sizes_local);
+            if e.mem.u8(argument) != 0 {
+                let vertices = e.mem.u16(base + VERTEX_COUNT);
+                let count = e.mem.u32(base + STREAM_COUNT);
+                let entries = e.mem.u32(base + STREAMS);
+                let i = e.mem.u32(index_word);
+                let block = e.mem.u32(block_word);
+                fn_00a728d0(e, Ptr::new(block), stream, i, entries, count, vertices);
+            }
+            let next = e.mem.u32(index_word).wrapping_add(1);
+            e.mem.set_u32(index_word, next);
+        }
+    });
+}
+
+/// The type name `NiAGDDataStream::GetViewerStrings` shows for stream type `kind` (the
+/// compiler's jump table at `00a73d04`, one case per type 0 to 0x21; anything else is
+/// `"UNKNOWN!!!"`, which the code adds differently).
+fn stream_type_name(kind: u32) -> Option<u32> {
+    let name = match kind {
+        0x00 => 0x0109_d2c8, // AGD_NITYPE_INVALID
+        0x01 => 0x0109_d2a0, // AGD_NITYPE_FLOAT1
+        0x02 => 0x0109_d28c, // AGD_NITYPE_FLOAT2
+        0x03 => 0x0109_d278, // AGD_NITYPE_FLOAT3
+        0x04 => 0x0109_d264, // AGD_NITYPE_FLOAT4
+        0x05 => 0x0109_d250, // AGD_NITYPE_LONG1
+        0x06 => 0x0109_d23c, // AGD_NITYPE_LONG2
+        0x07 => 0x0109_d228, // AGD_NITYPE_LONG3
+        0x08 => 0x0109_d214, // AGD_NITYPE_LONG4
+        0x09 => 0x0109_d200, // AGD_NITYPE_ULONG1
+        0x0a => 0x0109_d1ec, // AGD_NITYPE_ULONG2
+        0x0b => 0x0109_d1d8, // AGD_NITYPE_ULONG3
+        0x0c => 0x0109_d1c4, // AGD_NITYPE_ULONG4
+        0x0d => 0x0109_d1b0, // AGD_NITYPE_SHORT1
+        0x0e => 0x0109_d19c, // AGD_NITYPE_SHORT2
+        0x0f => 0x0109_d188, // AGD_NITYPE_SHORT3
+        0x10 => 0x0109_d174, // AGD_NITYPE_SHORT4
+        0x11 => 0x0109_d160, // AGD_NITYPE_USHORT1
+        0x12 => 0x0109_d14c, // AGD_NITYPE_USHORT2
+        0x13 => 0x0109_d138, // AGD_NITYPE_USHORT3
+        0x14 => 0x0109_d124, // AGD_NITYPE_USHORT4
+        0x15 => 0x0109_d110, // AGD_NITYPE_BYTE1
+        0x16 => 0x0109_d0fc, // AGD_NITYPE_BYTE2
+        0x17 => 0x0109_d0e8, // AGD_NITYPE_BYTE3
+        0x18 => 0x0109_d0d4, // AGD_NITYPE_BYTE4
+        0x19 => 0x0109_d0c0, // AGD_NITYPE_UBYTE1
+        0x1a => 0x0109_d0ac, // AGD_NITYPE_UBYTE2
+        0x1b => 0x0109_d098, // AGD_NITYPE_UBYTE3
+        0x1c => 0x0109_d084, // AGD_NITYPE_UBYTE4
+        0x1d => 0x0109_d070, // AGD_NITYPE_BLEND1
+        0x1e => 0x0109_d05c, // AGD_NITYPE_BLEND2
+        0x1f => 0x0109_d048, // AGD_NITYPE_BLEND3
+        0x20 => 0x0109_d034, // AGD_NITYPE_BLEND4
+        0x21 => 0x0109_d020, // AGD_NITYPE_COUNT
+        _ => return None,
+    };
+    Some(name)
+}
+
+// Translated from 00a73530 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiAdditionalGeometryData::NiAGDDataStream::GetViewerStrings` (Xbox PDB; thiscall on the
+/// entry, `RET 4`): `m_uiType` with its type name (types 0 to 0x21 added with `0096a610`,
+/// any other as `"UNKNOWN!!!"` through `SetSize`/`SetAt`), the unit size, total size,
+/// stride, block index and block offset, `Keep` (bit 0 of the flag byte, written into the
+/// low byte of the argument word that still holds the previous string) and `Consistency`
+/// (`"MUTABLE"` when bits 1 and 2 of the flags are 2, else `"STATIC"`). The first string
+/// is held in the local word, the others in the argument word.
+pub fn ni_agd_data_stream_get_viewer_strings(e: &mut Engine, this: Ptr, strings: u32) {
+    let entry = this.addr();
+    e.with_stack(8, |e, frame| {
+        let local = frame.addr();
+        let argument = frame.addr() + 4;
+        e.mem.set_u32(argument, strings);
+        let kind = e.mem.u32(entry + STREAM_TYPE);
+        match stream_type_name(kind) {
+            Some(name) => {
+                let text = e.call(VIEWER_STRING_TEXT, &args![TEXT_TYPE, name]).u32();
+                e.mem.set_u32(local, text);
+                e.call(STRING_ARRAY_ADD, &args![strings, local]);
+            }
+            None => {
+                let text = e
+                    .call(VIEWER_STRING_TEXT, &args![TEXT_TYPE, TEXT_UNKNOWN_TYPE])
+                    .u32();
+                e.mem.set_u32(local, text);
+                add_viewer_string(e, strings, local);
+            }
+        }
+        for (label, field) in [
+            (TEXT_UNIT_SIZE, STREAM_UNIT_SIZE),
+            (TEXT_TOTAL_SIZE, STREAM_TOTAL_SIZE),
+            (TEXT_STRIDE, STREAM_STRIDE),
+            (TEXT_BLOCK_INDEX, STREAM_BLOCK_INDEX),
+            (TEXT_BLOCK_OFFSET, STREAM_BLOCK_OFFSET),
+        ] {
+            let value = e.mem.u32(entry + field);
+            let text = e.call(VIEWER_STRING_UNSIGNED, &args![label, value]).u32();
+            e.mem.set_u32(argument, text);
+            add_viewer_string(e, strings, argument);
+        }
+        let keep = e.mem.u8(entry + STREAM_FLAGS) & 1;
+        e.mem.set_u8(argument, keep);
+        let word = e.mem.u32(argument);
+        let text = e.call(VIEWER_STRING_BOOL, &args![TEXT_KEEP, word]).u32();
+        e.mem.set_u32(argument, text);
+        add_viewer_string(e, strings, argument);
+        let consistency = if e.mem.u8(entry + STREAM_FLAGS) & 6 == 2 {
+            TEXT_MUTABLE
+        } else {
+            TEXT_STATIC
+        };
+        let text = e
+            .call(VIEWER_STRING_TEXT, &args![TEXT_CONSISTENCY, consistency])
+            .u32();
+        e.mem.set_u32(argument, text);
+        add_viewer_string(e, strings, argument);
+    });
+}
+
+// Translated from 00a73d90 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiAdditionalGeometryData::NiAGDDataBlock::GetViewerStrings` (Xbox PDB; thiscall on the
+/// block, `RET 4`): `m_uiDataBlockSize` (held in the local word) and `m_pucDataBlock` (a
+/// pointer string, held in the argument word), each added through `SetSize`/`SetAt`.
+pub fn ni_agd_data_block_get_viewer_strings(e: &mut Engine, this: Ptr, strings: u32) {
+    let block = this.addr();
+    e.with_stack(8, |e, frame| {
+        let local = frame.addr();
+        let argument = frame.addr() + 4;
+        e.mem.set_u32(argument, strings);
+        let size = e.mem.u32(block + BLOCK_DATA_SIZE);
+        let text = e
+            .call(VIEWER_STRING_UNSIGNED, &args![TEXT_DATA_BLOCK_SIZE, size])
+            .u32();
+        e.mem.set_u32(local, text);
+        add_viewer_string(e, strings, local);
+        let data = e.mem.u32(block + BLOCK_DATA);
+        let text = e
+            .call(VIEWER_STRING_POINTER, &args![TEXT_DATA_BLOCK, data])
+            .u32();
+        e.mem.set_u32(argument, text);
+        add_viewer_string(e, strings, argument);
+    });
+}
+
+// Translated from 00a73e40 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiAdditionalGeometryData::GetViewerStrings` (Xbox PDB; thiscall, `RET 4`): after
+/// `NiObject::GetViewerStrings`, the class name (the word at `011f4a30`), the vertex count
+/// and the stream count (through `SetSize`/`SetAt`), then per stream entry its index and
+/// the entry's own strings ([`ni_agd_data_stream_get_viewer_strings`]), the block array's
+/// size, and per block slot its index and either the block's strings
+/// ([`ni_agd_data_block_get_viewer_strings`]) or, for an empty slot, a zero size and
+/// `"NULL"` data; these later strings are stored with `SetAt` inlined. The argument word
+/// holds the first strings and then the running entry offset.
+pub fn ni_additional_geometry_data_get_viewer_strings(e: &mut Engine, this: Ptr, strings: u32) {
+    let base = this.addr();
+    e.with_stack(4, |e, frame| {
+        let argument = frame.addr();
+        e.mem.set_u32(argument, strings);
+        e.call(NI_OBJECT_GET_VIEWER_STRINGS, &args![this, strings]);
+        let class_name = e.global::<u32>(CLASS_NAME);
+        let text = e.call(VIEWER_STRING_NAME, &args![class_name]).u32();
+        e.mem.set_u32(argument, text);
+        add_viewer_string(e, strings, argument);
+        let vertices = u32::from(e.mem.u16(base + VERTEX_COUNT));
+        let text = e
+            .call(VIEWER_STRING_SHORT, &args![TEXT_VERTEX_COUNT, vertices])
+            .u32();
+        e.mem.set_u32(argument, text);
+        add_viewer_string(e, strings, argument);
+        let count = e.mem.u32(base + STREAM_COUNT);
+        let text = e
+            .call(
+                VIEWER_STRING_UNSIGNED,
+                &args![TEXT_DATA_STREAM_COUNT, count],
+            )
+            .u32();
+        e.mem.set_u32(argument, text);
+        add_viewer_string(e, strings, argument);
+        let mut i = 0u32;
+        if e.mem.u32(base + STREAM_COUNT) != 0 {
+            e.mem.set_u32(argument, 0);
+            loop {
+                let text = e
+                    .call(VIEWER_STRING_UNSIGNED, &args![TEXT_DATA_STREAM_INDEX, i])
+                    .u32();
+                store_viewer_string(e, strings, text);
+                let offset = e.mem.u32(argument);
+                let entry = e.mem.u32(base + STREAMS).wrapping_add(offset);
+                ni_agd_data_stream_get_viewer_strings(e, Ptr::new(entry), strings);
+                i = i.wrapping_add(1);
+                e.mem.set_u32(argument, offset.wrapping_add(STREAM_SIZE));
+                if i >= e.mem.u32(base + STREAM_COUNT) {
+                    break;
+                }
+            }
+        }
+        let blocks = u32::from(e.mem.u16(base + BLOCKS_SIZE));
+        let text = e
+            .call(
+                VIEWER_STRING_UNSIGNED,
+                &args![TEXT_DATA_BLOCKS_SIZE, blocks],
+            )
+            .u32();
+        store_viewer_string(e, strings, text);
+        let mut j = 0u32;
+        while j < u32::from(e.mem.u16(base + BLOCKS_SIZE)) {
+            let text = e
+                .call(VIEWER_STRING_UNSIGNED, &args![TEXT_DATA_BLOCK_INDEX, j])
+                .u32();
+            store_viewer_string(e, strings, text);
+            let block = e.mem.u32(
+                e.mem
+                    .u32(base + BLOCKS_BASE)
+                    .wrapping_add(j.wrapping_mul(4)),
+            );
+            if block != 0 {
+                ni_agd_data_block_get_viewer_strings(e, Ptr::new(block), strings);
+            } else {
+                let text = e
+                    .call(VIEWER_STRING_INT, &args![TEXT_DATA_BLOCK_SIZE, 0u32])
+                    .u32();
+                store_viewer_string(e, strings, text);
+                let text = e
+                    .call(VIEWER_STRING_TEXT, &args![TEXT_DATA_BLOCK, TEXT_NULL])
+                    .u32();
+                store_viewer_string(e, strings, text);
+            }
+            j = j.wrapping_add(1);
+        }
+    });
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x00a7_2550, fn_00a72550(Ptr, u32, Ptr) -> u32),
+        entry!(0x00a7_2590, fn_00a72590(Ptr, u32, Ptr) -> u32),
+        entry!(0x00a7_25d0, fn_00a725d0(Ptr, u32)),
+        entry!(0x00a7_27b0, fn_00a727b0(Ptr) -> u16),
+        entry!(
+            0x00a7_27f0,
+            ni_additional_geometry_data_is_equal(Ptr, Ptr) -> bool
+        ),
+        entry!(0x00a7_28d0, fn_00a728d0(Ptr, u32, u32, u32, u32, u16)),
+        entry!(0x00a7_2db0, fn_00a72db0(Ptr, u32)),
+        entry!(
+            0x00a7_3370,
+            ni_additional_geometry_data_save_binary(Ptr, u32)
+        ),
+        entry!(0x00a7_3530, ni_agd_data_stream_get_viewer_strings(Ptr, u32)),
+        entry!(0x00a7_3d90, ni_agd_data_block_get_viewer_strings(Ptr, u32)),
+        entry!(
+            0x00a7_3e40,
+            ni_additional_geometry_data_get_viewer_strings(Ptr, u32)
+        ),
         entry!(
             0x00a7_2510,
             ni_agd_data_block_allocate_buffer(Ptr, u32) -> u32
@@ -1321,5 +2085,514 @@ mod tests {
         assert_eq!(e.call(0x00a7_34c0, &args![this]).u32(), this);
         e.register(NI_ALLOCATE, |_, _| Ret::default());
         assert_eq!(e.call(0x00a7_3e20, &args![]).u32(), 0);
+    }
+}
+
+#[cfg(test)]
+mod n014_tests {
+    use super::*;
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    /// One write through the output: the bytes, the element sizes it was given, their
+    /// count.
+    type Writes = Rc<RefCell<Vec<(Vec<u8>, Vec<u32>, u32)>>>;
+
+    const WRITE: u32 = 0x0350_0000;
+
+    fn calls_to(e: &Engine, addr: u32) -> Vec<Vec<u32>> {
+        e.call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|c| c.0 == addr)
+            .map(|c| c.1.clone())
+            .collect()
+    }
+
+    /// A stream whose output records every write.
+    fn output_stream(e: &mut Engine) -> (u32, Writes) {
+        let writes: Writes = Rc::new(RefCell::new(vec![]));
+        let log = writes.clone();
+        e.register_double(WRITE, move |e, a| {
+            let bytes = e.mem.bytes(a[1], a[2]);
+            let sizes = (0..a[4]).map(|i| e.mem.u32(a[3] + 4 * i)).collect();
+            log.borrow_mut().push((bytes, sizes, a[4]));
+            a[2].into_ret()
+        });
+        let output = e.mem.alloc(0x10);
+        e.mem.set_u32(output + OUTPUT_WRITE, WRITE);
+        let stream = e.mem.alloc(0x260);
+        e.mem.set_u32(stream + STREAM_OUTPUT, output);
+        (stream, writes)
+    }
+
+    fn word(bytes: &[u8]) -> u32 {
+        u32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]])
+    }
+
+    /// An object with the given blocks (block array storage) and no streams.
+    fn object(e: &mut Engine, blocks: &[u32]) -> u32 {
+        let this = e.mem.alloc(0x2c);
+        let storage = e.mem.alloc(4 * blocks.len().max(1) as u32);
+        for (i, block) in blocks.iter().enumerate() {
+            e.mem.set_u32(storage + 4 * i as u32, *block);
+        }
+        e.mem.set_u32(this + BLOCKS_BASE, storage);
+        e.mem.set_u16(this + BLOCKS_SIZE, blocks.len() as u16);
+        e.mem.set_u16(this + BLOCKS_MAX_SIZE, blocks.len() as u16);
+        this
+    }
+
+    fn block(e: &mut Engine, size: u32, data: u32) -> u32 {
+        let block = e.mem.alloc(0x10);
+        e.mem.set_u32(block + BLOCK_DATA_SIZE, size);
+        e.mem.set_u32(block + BLOCK_DATA, data);
+        block
+    }
+
+    /// A string array with doubles for its `SetSize`, `SetAt` and add, and viewer string
+    /// builders answering `label + value`.
+    fn strings(e: &mut Engine) -> u32 {
+        e.register(STRING_ARRAY_SET_SIZE, |e, a| {
+            let base = e.mem.alloc(4 * a[1]);
+            let old = e.mem.u32(a[0] + 4);
+            for i in 0..u32::from(e.mem.u16(a[0] + 0xa)) {
+                let value = e.mem.u32(old + 4 * i);
+                e.mem.set_u32(base + 4 * i, value);
+            }
+            e.mem.set_u32(a[0] + 4, base);
+            e.mem.set_u16(a[0] + 8, a[1] as u16);
+            Ret::default()
+        });
+        e.register(STRING_ARRAY_SET_AT, |e, a| {
+            let base = e.mem.u32(a[0] + 4);
+            let value = e.mem.u32(a[2]);
+            e.mem.set_u32(base + 4 * a[1], value);
+            e.mem.set_u16(a[0] + 0xa, a[1] as u16 + 1);
+            Ret::default()
+        });
+        e.register(STRING_ARRAY_ADD, |e, a| {
+            let size = u32::from(e.mem.u16(a[0] + 0xa));
+            if size >= u32::from(e.mem.u16(a[0] + 8)) {
+                e.call(STRING_ARRAY_SET_SIZE, &args![a[0], size + 8]);
+            }
+            let base = e.mem.u32(a[0] + 4);
+            let value = e.mem.u32(a[1]);
+            e.mem.set_u32(base + 4 * size, value);
+            e.mem.set_u16(a[0] + 0xa, size as u16 + 1);
+            Ret::default()
+        });
+        for builder in [
+            VIEWER_STRING_BOOL,
+            VIEWER_STRING_SHORT,
+            VIEWER_STRING_INT,
+            VIEWER_STRING_UNSIGNED,
+            VIEWER_STRING_POINTER,
+            VIEWER_STRING_TEXT,
+        ] {
+            e.register(builder, |_, a| a[0].wrapping_add(a[1]).into_ret());
+        }
+        e.register(VIEWER_STRING_NAME, |_, a| a[0].wrapping_add(1).into_ret());
+        let strings = e.mem.alloc(0x10);
+        e.mem.set_u16(strings + 0xe, 4);
+        strings
+    }
+
+    fn texts(e: &Engine, strings: u32) -> Vec<u32> {
+        let base = e.mem.u32(strings + 4);
+        (0..u32::from(e.mem.u16(strings + 0xa)))
+            .map(|i| e.mem.u32(base + 4 * i))
+            .collect()
+    }
+
+    #[test]
+    fn block_data_answers_the_data_and_size_of_a_present_block() {
+        let mut e = Engine::new();
+        let present = block(&mut e, 0x40, 0x7000);
+        let this = object(&mut e, &[0, present]);
+        let size = e.mem.alloc(4);
+        e.mem.set_u32(size, 5);
+        assert_eq!(e.call(0x00a7_2550, &args![this, 1u32, size]).u32(), 0x7000);
+        assert_eq!(e.mem.u32(size), 0x40);
+        for index in [0u32, 2] {
+            e.mem.set_u32(size, 5);
+            assert_eq!(e.call(0x00a7_2550, &args![this, index, size]).u32(), 0);
+            assert_eq!(e.mem.u32(size), 0);
+        }
+    }
+
+    #[test]
+    fn writable_block_data_runs_the_block_slot_first() {
+        const SLOT_8: u32 = 0x0351_0000;
+        let mut e = Engine::new();
+        // The block's slot +8 replaces its data, so the answer must be read after it.
+        e.register(SLOT_8, |e, a| {
+            e.mem.set_u32(a[0] + BLOCK_DATA, 0x7100);
+            Ret::default()
+        });
+        let vtable = e.mem.alloc(0x20);
+        e.mem.set_u32(vtable + 8, SLOT_8);
+        let present = block(&mut e, 0x40, 0x7000);
+        e.mem.set_u32(present, vtable);
+        let this = object(&mut e, &[present, 0]);
+        let size = e.mem.alloc(4);
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x00a7_2590, &args![this, 0u32, size]).u32(), 0x7100);
+        assert_eq!(e.mem.u32(size), 0x40);
+        assert_eq!(calls_to(&e, SLOT_8), vec![vec![present, 0, 0]]);
+        assert_eq!(e.call(0x00a7_2590, &args![this, 1u32, size]).u32(), 0);
+        assert_eq!(e.call(0x00a7_2590, &args![this, 9u32, size]).u32(), 0);
+        assert_eq!(e.mem.u32(size), 0);
+        assert_eq!(calls_to(&e, SLOT_8).len(), 1);
+    }
+
+    #[test]
+    fn end_block_change_runs_the_slot_and_counts_the_revision() {
+        const SLOT_C: u32 = 0x0352_0000;
+        let mut e = Engine::new();
+        e.register(SLOT_C, |_, _| Ret::default());
+        let vtable = e.mem.alloc(0x20);
+        e.mem.set_u32(vtable + 0xc, SLOT_C);
+        let present = block(&mut e, 0x40, 0x7000);
+        e.mem.set_u32(present, vtable);
+        let this = object(&mut e, &[0, present]);
+        e.mem.set_u32(this + REVISION_ID, 7);
+        e.call_log = Some(vec![]);
+        e.call(0x00a7_25d0, &args![this, 1u32]);
+        assert_eq!(calls_to(&e, SLOT_C), vec![vec![present, 0, 0]]);
+        assert_eq!(e.mem.u32(this + REVISION_ID), 8);
+        e.call(0x00a7_25d0, &args![this, 0u32]);
+        e.call(0x00a7_25d0, &args![this, 2u32]);
+        assert_eq!(e.mem.u32(this + REVISION_ID), 8);
+    }
+
+    #[test]
+    fn block_count_reads_the_array_size() {
+        let mut e = Engine::new();
+        let this = object(&mut e, &[0, 0, 0]);
+        assert_eq!(e.call(0x00a7_27b0, &args![this]).u16(), 3);
+    }
+
+    #[test]
+    fn is_equal_compares_streams_and_blocks() {
+        const BASE_ANSWER: u32 = 0x0353_0000;
+        let mut e = Engine::new();
+        e.mem.map(BASE_ANSWER, 8);
+        e.mem.set_u32(BASE_ANSWER, 1);
+        e.mem.set_u32(BASE_ANSWER + 4, 1);
+        e.register(NI_OBJECT_IS_EQUAL, |e, _| e.mem.u32(BASE_ANSWER).into_ret());
+        e.register(BLOCK_IS_EQUAL, |e, _| e.mem.u32(BASE_ANSWER + 4).into_ret());
+        let blocks_a = [e.mem.alloc(0x10), 0];
+        let blocks_b = [e.mem.alloc(0x10), 0];
+        let a = object(&mut e, &blocks_a);
+        let b = object(&mut e, &blocks_b);
+        for this in [a, b] {
+            let entries = e.mem.alloc(2 * STREAM_SIZE);
+            for i in 0..2 * STREAM_SIZE / 4 {
+                e.mem.set_u32(entries + 4 * i, i);
+            }
+            e.mem.set_u32(this + STREAMS, entries);
+            e.mem.set_u32(this + STREAM_COUNT, 2);
+            e.mem.set_u16(this + VERTEX_COUNT, 9);
+        }
+        e.call_log = Some(vec![]);
+        assert!(e.call(0x00a7_27f0, &args![a, b]).bool());
+        assert_eq!(
+            calls_to(&e, BLOCK_IS_EQUAL),
+            vec![vec![blocks_a[0], blocks_b[0]]]
+        );
+        // Each stream field of the second entry, and its flag byte.
+        let other_entries = e.mem.u32(b + STREAMS);
+        for offset in [0u32, 4, 8, 0xc, 0x10, 0x14, 0x18] {
+            let address = other_entries + STREAM_SIZE + offset;
+            let old = e.mem.u32(address);
+            e.mem.set_u32(address, old ^ 0x80);
+            assert!(!e.call(0x00a7_27f0, &args![a, b]).bool());
+            e.mem.set_u32(address, old);
+        }
+        e.mem.set_u32(BASE_ANSWER + 4, 0x100);
+        assert!(!e.call(0x00a7_27f0, &args![a, b]).bool());
+        e.mem.set_u32(BASE_ANSWER + 4, 1);
+        // A block on one side only.
+        let other_storage = e.mem.u32(b + BLOCKS_BASE);
+        e.mem.set_u32(other_storage + 4, 0x4444);
+        assert!(!e.call(0x00a7_27f0, &args![a, b]).bool());
+        e.mem.set_u32(other_storage + 4, 0);
+        e.mem.set_u32(other_storage, 0);
+        assert!(!e.call(0x00a7_27f0, &args![a, b]).bool());
+        e.mem.set_u32(other_storage, blocks_b[0]);
+        e.mem.set_u32(b + STREAM_COUNT, 1);
+        assert!(!e.call(0x00a7_27f0, &args![a, b]).bool());
+        e.mem.set_u32(b + STREAM_COUNT, 2);
+        e.mem.set_u16(b + VERTEX_COUNT, 8);
+        assert!(!e.call(0x00a7_27f0, &args![a, b]).bool());
+        e.mem.set_u16(b + VERTEX_COUNT, 9);
+        e.mem.set_u32(BASE_ANSWER, 0);
+        assert!(!e.call(0x00a7_27f0, &args![a, b]).bool());
+    }
+
+    #[test]
+    fn block_save_writes_sorted_parts_with_their_element_sizes() {
+        let mut e = Engine::new();
+        let (stream, writes) = output_stream(&mut e);
+        // Each entry contributes one element size: its unit size.
+        e.register(STREAM_ELEMENT_SIZES, |e, a| {
+            let count = e.mem.u32(a[2]);
+            let unit = e.mem.u32(a[0] + STREAM_UNIT_SIZE);
+            e.mem.set_u32(a[1] + 4 * count, unit);
+            e.mem.set_u32(a[2], count + 1);
+            Ret::default()
+        });
+        let data = e.mem.alloc(0x100);
+        for i in 0..0x100 {
+            e.mem.set_u8(data + i, i as u8);
+        }
+        let this = block(&mut e, 0x100, data);
+        // Entries of block 1 at offsets 0x10 (stride 4), 0x00 (stride 4) and 0x40
+        // (stride 2); one entry of block 0 in between. Vertex count 4: the first part
+        // covers 0x00..0x10 and takes the entry at 0x10, the entry at 0x40 starts a
+        // second part.
+        let entries = e.mem.alloc(4 * STREAM_SIZE);
+        for (i, (index, offset, stride, unit)) in [
+            (1u32, 0x10u32, 4u32, 4u32),
+            (0, 0x20, 4, 4),
+            (1, 0x00, 4, 4),
+            (1, 0x40, 2, 2),
+        ]
+        .iter()
+        .enumerate()
+        {
+            let entry = entries + STREAM_SIZE * i as u32;
+            e.mem.set_u32(entry + STREAM_BLOCK_INDEX, *index);
+            e.mem.set_u32(entry + STREAM_BLOCK_OFFSET, *offset);
+            e.mem.set_u32(entry + STREAM_STRIDE, *stride);
+            e.mem.set_u32(entry + STREAM_UNIT_SIZE, *unit);
+        }
+        e.call_log = Some(vec![]);
+        e.call(0x00a7_28d0, &args![this, stream, 1u32, entries, 4u32, 4u32]);
+        let sizes_calls = calls_to(&e, STREAM_ELEMENT_SIZES);
+        assert_eq!(
+            sizes_calls.iter().map(|c| c[0]).collect::<Vec<_>>(),
+            vec![
+                entries + 2 * STREAM_SIZE,
+                entries,
+                entries + 3 * STREAM_SIZE
+            ]
+        );
+        assert!(sizes_calls.iter().all(|c| c[3] == 0x20));
+        let writes = writes.borrow();
+        assert_eq!(writes.len(), 9);
+        assert_eq!(word(&writes[0].0), 0x100);
+        assert_eq!(word(&writes[1].0), 2);
+        assert_eq!(writes[2].0.len(), 8);
+        assert_eq!((word(&writes[2].0), word(&writes[2].0[4..])), (0, 0x40));
+        assert_eq!(writes[2].1, vec![4]);
+        // First part: two sizes (4, 4), 4 * 8 bytes from offset 0.
+        assert_eq!(word(&writes[3].0), 2);
+        assert_eq!((word(&writes[4].0), word(&writes[4].0[4..])), (4, 4));
+        assert_eq!(writes[5].0, (0u8..0x20).collect::<Vec<_>>());
+        assert_eq!((writes[5].1.clone(), writes[5].2), (vec![4, 4], 2));
+        // Second part: one size (2), 4 * 2 bytes from offset 0x40.
+        assert_eq!(word(&writes[6].0), 1);
+        assert_eq!(word(&writes[7].0), 2);
+        assert_eq!(writes[8].0, (0x40u8..0x48).collect::<Vec<_>>());
+        assert_eq!((writes[8].1.clone(), writes[8].2), (vec![2], 1));
+        assert!(writes[..5].iter().all(|w| w.1 == vec![4] && w.2 == 1));
+    }
+
+    #[test]
+    fn stream_entry_save_writes_six_words_then_the_flag() {
+        let mut e = Engine::new();
+        let (stream, writes) = output_stream(&mut e);
+        let entry = e.mem.alloc(STREAM_SIZE);
+        for i in 0..7 {
+            e.mem.set_u32(entry + 4 * i, 0x10 + i);
+        }
+        e.call(0x00a7_2db0, &args![entry, stream]);
+        let writes = writes.borrow();
+        let words: Vec<u32> = writes[..6].iter().map(|w| word(&w.0)).collect();
+        assert_eq!(words, vec![0x11, 0x12, 0x13, 0x14, 0x15, 0x16]);
+        assert!(writes[..6].iter().all(|w| w.1 == vec![4]));
+        assert_eq!(
+            (writes[6].0.clone(), writes[6].1.clone()),
+            (vec![0x10], vec![1])
+        );
+        let output = e.mem.u32(stream + STREAM_OUTPUT);
+        assert_eq!(e.mem.u32(output + FILE_POSITION), 6 * 4 + 1);
+    }
+
+    #[test]
+    fn stream_entry_viewer_strings_name_the_type_and_the_flags() {
+        let mut e = Engine::new();
+        let strings = strings(&mut e);
+        let entry = e.mem.alloc(STREAM_SIZE);
+        for i in 1..7 {
+            e.mem.set_u32(entry + 4 * i, i);
+        }
+        e.mem.set_u8(entry, 3);
+        e.mem.set_u32(entry + STREAM_TYPE, 0x21);
+        e.call_log = Some(vec![]);
+        e.call(0x00a7_3530, &args![entry, strings]);
+        let shown = texts(&e, strings);
+        assert_eq!(shown.len(), 8);
+        assert_eq!(shown[0], TEXT_TYPE + 0x0109_d020);
+        assert_eq!(calls_to(&e, STRING_ARRAY_ADD).len(), 1);
+        assert_eq!(
+            shown[1..6],
+            [
+                TEXT_UNIT_SIZE + 2,
+                TEXT_TOTAL_SIZE + 3,
+                TEXT_STRIDE + 4,
+                TEXT_BLOCK_INDEX + 5,
+                TEXT_BLOCK_OFFSET + 6
+            ]
+        );
+        // `Keep`: the flag in the low byte of the word holding the previous string.
+        let previous = TEXT_BLOCK_OFFSET + 6;
+        assert_eq!(
+            calls_to(&e, VIEWER_STRING_BOOL),
+            vec![vec![TEXT_KEEP, (previous & 0xffff_ff00) | 1]]
+        );
+        assert_eq!(shown[7], TEXT_CONSISTENCY + TEXT_MUTABLE);
+        // An unknown type and static flags.
+        e.mem.set_u32(entry + STREAM_TYPE, 0x22);
+        e.mem.set_u8(entry, 6);
+        e.call(0x00a7_3530, &args![entry, strings]);
+        let shown = texts(&e, strings);
+        assert_eq!(shown[8], TEXT_TYPE + TEXT_UNKNOWN_TYPE);
+        assert_eq!(shown[15], TEXT_CONSISTENCY + TEXT_STATIC);
+        assert_eq!(calls_to(&e, STRING_ARRAY_ADD).len(), 1);
+        assert_eq!(stream_type_name(0), Some(0x0109_d2c8));
+        assert_eq!(stream_type_name(0x10), Some(0x0109_d174));
+    }
+
+    #[test]
+    fn data_block_viewer_strings_show_the_size_and_the_data() {
+        let mut e = Engine::new();
+        let strings = strings(&mut e);
+        let this = block(&mut e, 0x40, 0x7000);
+        e.call(0x00a7_3d90, &args![this, strings]);
+        assert_eq!(
+            texts(&e, strings),
+            vec![TEXT_DATA_BLOCK_SIZE + 0x40, TEXT_DATA_BLOCK + 0x7000]
+        );
+    }
+
+    #[test]
+    fn save_binary_writes_counts_entries_and_present_blocks() {
+        let mut e = Engine::new();
+        let (stream, writes) = output_stream(&mut e);
+        e.register(NI_OBJECT_SAVE_BINARY, |_, _| Ret::default());
+        e.register(STREAM_ELEMENT_SIZES, |e, a| {
+            let count = e.mem.u32(a[2]);
+            e.mem.set_u32(a[1] + 4 * count, 1);
+            e.mem.set_u32(a[2], count + 1);
+            Ret::default()
+        });
+        let data = e.mem.alloc(0x40);
+        let present = block(&mut e, 0x40, data);
+        let this = object(&mut e, &[0, present]);
+        let entries = e.mem.alloc(2 * STREAM_SIZE);
+        // Entry 0 is block 1's (offset 0, stride 1), entry 1 another block's.
+        for i in 0..2 {
+            let entry = entries + STREAM_SIZE * i;
+            e.mem.set_u32(entry + STREAM_TYPE, 0x10 + i);
+            e.mem.set_u32(entry + STREAM_BLOCK_INDEX, 1 + 4 * i);
+            e.mem.set_u32(entry + STREAM_STRIDE, 1);
+        }
+        e.mem.set_u32(this + STREAMS, entries);
+        e.mem.set_u32(this + STREAM_COUNT, 2);
+        e.mem.set_u16(this + VERTEX_COUNT, 0x33);
+        e.call_log = Some(vec![]);
+        e.call(0x00a7_3370, &args![this, stream]);
+        assert_eq!(
+            calls_to(&e, NI_OBJECT_SAVE_BINARY),
+            vec![vec![this, stream]]
+        );
+        let writes = writes.borrow();
+        // Vertex count, stream count, 2 entries of 7 writes, block count, two flags, and
+        // the present block's 6 writes.
+        assert_eq!(writes.len(), 2 + 14 + 1 + 2 + 6);
+        assert_eq!(
+            (writes[0].0.clone(), writes[0].1.clone()),
+            (vec![0x33, 0], vec![2])
+        );
+        assert_eq!(word(&writes[1].0), 2);
+        assert_eq!((word(&writes[2].0), word(&writes[9].0)), (0x10, 0x11));
+        assert_eq!(word(&writes[16].0), 2);
+        assert_eq!(
+            (writes[17].0.clone(), writes[17].1.clone()),
+            (vec![0], vec![1])
+        );
+        assert_eq!(
+            (writes[18].0.clone(), writes[18].1.clone()),
+            (vec![1], vec![1])
+        );
+        assert_eq!(word(&writes[19].0), 0x40);
+        // The block's one part: 0x33 vertices of one byte from its data.
+        assert_eq!((writes[24].0.len(), writes[24].1.clone()), (0x33, vec![1]));
+    }
+
+    #[test]
+    fn viewer_strings_list_counts_entries_and_blocks() {
+        let mut e = Engine::new();
+        let strings = strings(&mut e);
+        e.mem.map(CLASS_NAME, 4);
+        e.mem.set_u32(CLASS_NAME, 0x0109_0000);
+        e.register(NI_OBJECT_GET_VIEWER_STRINGS, |_, _| Ret::default());
+        let present = block(&mut e, 0x40, 0x7000);
+        let this = object(&mut e, &[0, present]);
+        let entries = e.mem.alloc(2 * STREAM_SIZE);
+        e.mem.set_u32(entries + STREAM_UNIT_SIZE, 0x11);
+        e.mem
+            .set_u32(entries + STREAM_SIZE + STREAM_UNIT_SIZE, 0x22);
+        e.mem.set_u32(this + STREAMS, entries);
+        e.mem.set_u32(this + STREAM_COUNT, 2);
+        e.mem.set_u16(this + VERTEX_COUNT, 0x33);
+        e.call_log = Some(vec![]);
+        e.call(0x00a7_3e40, &args![this, strings]);
+        assert_eq!(
+            calls_to(&e, NI_OBJECT_GET_VIEWER_STRINGS),
+            vec![vec![this, strings]]
+        );
+        let shown = texts(&e, strings);
+        // 3 strings, 2 entries (index and 8 strings), the block count, the empty slot
+        // (index, size, data) and the block (index and 2 strings).
+        assert_eq!(shown.len(), 3 + 18 + 1 + 3 + 3);
+        assert_eq!(
+            shown[..3],
+            [
+                0x0109_0001,
+                TEXT_VERTEX_COUNT + 0x33,
+                TEXT_DATA_STREAM_COUNT + 2
+            ]
+        );
+        assert_eq!(
+            (shown[3], shown[12]),
+            (TEXT_DATA_STREAM_INDEX, TEXT_DATA_STREAM_INDEX + 1)
+        );
+        assert_eq!(
+            (shown[5], shown[14]),
+            (TEXT_UNIT_SIZE + 0x11, TEXT_UNIT_SIZE + 0x22)
+        );
+        assert_eq!(
+            shown[21..],
+            [
+                TEXT_DATA_BLOCKS_SIZE + 2,
+                TEXT_DATA_BLOCK_INDEX,
+                TEXT_DATA_BLOCK_SIZE,
+                TEXT_DATA_BLOCK + TEXT_NULL,
+                TEXT_DATA_BLOCK_INDEX + 1,
+                TEXT_DATA_BLOCK_SIZE + 0x40,
+                TEXT_DATA_BLOCK + 0x7000,
+            ]
+        );
+        // `SetAt` inlined counts the strings it stores as non-null (the doubles do not).
+        assert_eq!(e.mem.u16(strings + 0xc), 7);
+        assert_eq!(
+            calls_to(&e, VIEWER_STRING_INT),
+            vec![vec![TEXT_DATA_BLOCK_SIZE, 0]]
+        );
     }
 }

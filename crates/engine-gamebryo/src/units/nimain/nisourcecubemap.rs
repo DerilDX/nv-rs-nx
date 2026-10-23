@@ -614,6 +614,266 @@ pub fn fn_00a61040(e: &mut Engine, name: Ptr, extra: u32, renderer: Ptr, prefere
     Ptr::new(map)
 }
 
+/// `NiRenderer::ms_pkRenderer` (`011f4748`); the renderer's virtual +0x144 makes a cube
+/// map's renderer data (one word: the map; answers a byte).
+const RENDERER_INSTANCE: u32 = 0x011f_4748;
+const RENDERER_CREATE_CUBE_MAP_DATA_SLOT: u32 = 0x144;
+/// `NiSourceTexture::m_pFile` (Xbox PDB, +0x44 on PC).
+const SOURCE_FILE: u32 = 0x44;
+/// `NiSourceTexture`'s `RegisterStreamables` (`00a5fa90`), `IsEqual` (`00a5fae0`),
+/// `LinkObject` (`00a5f9a0`), `LoadBinary` (`00a60180`) and `GetViewerStrings` (`00a60770`),
+/// `__thiscall` with one word.
+const NI_SOURCE_TEXTURE_REGISTER_STREAMABLES: u32 = 0x00a5_fa90;
+const NI_SOURCE_TEXTURE_IS_EQUAL: u32 = 0x00a5_fae0;
+const NI_SOURCE_TEXTURE_LINK_OBJECT: u32 = 0x00a5_f9a0;
+const NI_SOURCE_TEXTURE_LOAD_BINARY: u32 = 0x00a6_0180;
+const NI_SOURCE_TEXTURE_GET_VIEWER_STRINGS: u32 = 0x00a6_0770;
+/// The base class's `LoadBinary` (`00a47350`) and `LinkObject` (`00a47360`), `__thiscall` with
+/// the stream (the map names the folded bodies after `NiSequenceStreamHelper`).
+const BASE_LOAD_BINARY: u32 = 0x00a4_7350;
+const BASE_LINK_OBJECT: u32 = 0x00a4_7360;
+/// `NiStream`'s file version (+0xd8), the word at +0x1e8 that `LoadBinary` passes to
+/// `LoadFromFiles` as the search path, and its input stream (+0x24c; read function at +0x8,
+/// cdecl: stream, buffer, bytes, component sizes, component count; position at +0x4).
+const STREAM_VERSION: u32 = 0xd8;
+const STREAM_SEARCH_PATH: u32 = 0x1e8;
+const STREAM_INPUT: u32 = 0x24c;
+/// The first stream version whose cube maps load and link as plain source textures
+/// (10.3.0.6).
+const VERSION_10_3_0_6: u32 = 0x0a03_0006;
+/// `NiStream` methods (`__thiscall` on the stream): `GetNumberOfLinkIDs` (`00a63460`),
+/// `GetObjectFromLinkID` (`00a63430`), `LoadCString` (`00a64ce0`, one word: the address of the
+/// string pointer), `SetNumberOfLinkIDs` (`00a64700`, one word) and the link-id read
+/// `00a645b0` (no words).
+const STREAM_GET_NUMBER_OF_LINK_IDS: u32 = 0x00a6_3460;
+const STREAM_GET_OBJECT_FROM_LINK_ID: u32 = 0x00a6_3430;
+const STREAM_LOAD_C_STRING: u32 = 0x00a6_4ce0;
+const STREAM_SET_NUMBER_OF_LINK_IDS: u32 = 0x00a6_4700;
+const STREAM_READ_LINK_ID: u32 = 0x00a6_45b0;
+/// `NiGetViewerString` (`00a7d330`, cdecl: a name) and the string array's `SetSize`
+/// (`0096ad30`, `__thiscall`: the new size) and `SetAt` (`0096ae90`, `__thiscall`: index,
+/// address of the element).
+const NI_GET_VIEWER_STRING: u32 = 0x00a7_d330;
+const STRING_ARRAY_SET_SIZE: u32 = 0x0096_ad30;
+const STRING_ARRAY_SET_AT: u32 = 0x0096_ae90;
+
+/// Deletes the texture's file (its virtual 0 with 1) and clears `m_pFile`, when there is one.
+fn delete_file(e: &mut Engine, this: u32) {
+    let file = e.mem.u32(this + SOURCE_FILE);
+    if file != 0 {
+        e.vcall(file, 0, &args![1u32]);
+        e.mem.set_u32(this + SOURCE_FILE, 0);
+    }
+}
+
+// Translated from 00a60800 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiSourceCubeMap::CreateRendererData` (Xbox PDB): with a renderer (`011f4748`) its virtual
+/// +0x144 makes the data; when that fails the file is deleted and cleared and the answer is
+/// false. Otherwise (no renderer, or it succeeded) the file is deleted and cleared and the
+/// answer is true.
+pub fn ni_source_cube_map_create_renderer_data(e: &mut Engine, this: Ptr) -> bool {
+    let renderer = e.mem.u32(RENDERER_INSTANCE);
+    if renderer != 0
+        && !e
+            .vcall(renderer, RENDERER_CREATE_CUBE_MAP_DATA_SLOT, &args![this])
+            .bool()
+    {
+        delete_file(e, this.addr());
+        return false;
+    }
+    delete_file(e, this.addr());
+    true
+}
+
+// Translated from 00a60850 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiSourceCubeMap::RegisterStreamables` (Xbox PDB): `NiSourceTexture::RegisterStreamables`
+/// (`00a5fa90`), its byte made 0 or 1.
+pub fn ni_source_cube_map_register_streamables(e: &mut Engine, this: Ptr, stream: Ptr) -> bool {
+    e.call(NI_SOURCE_TEXTURE_REGISTER_STREAMABLES, &args![this, stream])
+        .bool()
+}
+
+// Translated from 00a60880 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiSourceCubeMap::IsEqual` (Xbox PDB): `NiSourceTexture::IsEqual` (`00a5fae0`), then the
+/// same pixel layout (+0x18), mipmap (+0x20) and alpha (+0x1c) words and static byte (+0x40).
+pub fn ni_source_cube_map_is_equal(e: &mut Engine, this: Ptr, other: Ptr) -> bool {
+    if !e
+        .call(NI_SOURCE_TEXTURE_IS_EQUAL, &args![this, other])
+        .bool()
+    {
+        return false;
+    }
+    let (a, b) = (this.addr(), other.addr());
+    e.mem.u32(a + 0x18) == e.mem.u32(b + 0x18)
+        && e.mem.u32(a + 0x20) == e.mem.u32(b + 0x20)
+        && e.mem.u32(a + 0x1c) == e.mem.u32(b + 0x1c)
+        && e.mem.u8(a + 0x40) == e.mem.u8(b + 0x40)
+}
+
+// Translated from 00a60ba0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiSourceCubeMap::LinkObject` (Xbox PDB): from stream version 10.3.0.6 on,
+/// `NiSourceTexture::LinkObject` (`00a5f9a0`). Before it: the base class's link
+/// (`00a47360`), then six stack `NiPointer`s (cleared) get the six linked faces when the
+/// stream has exactly six link ids (each `GetObjectFromLinkID` assigned in order); without
+/// pixel data (+0x3c) the map is made from them (`LoadFromPixelData`), and the six pointers
+/// are released, the last first.
+pub fn ni_source_cube_map_link_object(e: &mut Engine, this: Ptr, stream: Ptr) {
+    if e.mem.u32(stream.addr() + STREAM_VERSION) >= VERSION_10_3_0_6 {
+        e.call(NI_SOURCE_TEXTURE_LINK_OBJECT, &args![this, stream]);
+        return;
+    }
+    e.call(BASE_LINK_OBJECT, &args![this, stream]);
+    e.with_stack(0x18, |e, faces| {
+        let faces = faces.addr();
+        if e.call(STREAM_GET_NUMBER_OF_LINK_IDS, &args![stream]).u32() == 6 {
+            for index in 0..6u32 {
+                let face = e.call(STREAM_GET_OBJECT_FROM_LINK_ID, &args![stream]).u32();
+                assign_ni_pointer(e, faces + 4 * index, face);
+            }
+        }
+        if e.mem.u32(this.addr() + SOURCE_PIXEL_DATA) == 0 {
+            let face = |e: &Engine, index: u32| Ptr::new(e.mem.u32(faces + 4 * index));
+            let (f0, f1, f2) = (face(e, 0), face(e, 1), face(e, 2));
+            let (f3, f4, f5) = (face(e, 3), face(e, 4), face(e, 5));
+            ni_source_cube_map_load_from_pixel_data(e, this, f0, f1, f2, f3, f4, f5);
+        }
+        release_faces(e, faces);
+    });
+}
+
+// Translated from 00a60f30 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed (Ghidra made no function here; translated from the disassembled bytes), cdecl, no
+/// words: a new `NiSourceCubeMap` (0x4c bytes from `00aa13e0`; `NiSourceTexture`'s
+/// constructor `00a5fc10`, the vtable `0109babc`, +0x48 cleared), or 0 when the allocation
+/// fails. `fn_00a89cc0` (`nimainsdm.rs`) registers it as the loader for the class name
+/// `"NiSourceCubeMap"` (`0109bb6c`).
+pub fn fn_00a60f30(e: &mut Engine) -> Ptr {
+    let block = e.call(NI_ALLOCATE, &args![0x4cu32]).u32();
+    if block == 0 {
+        return Ptr::NULL;
+    }
+    e.call(NI_SOURCE_TEXTURE_CONSTRUCT, &args![block]);
+    e.mem.set_u32(block, NI_SOURCE_CUBE_MAP_VTABLE);
+    e.mem.set_u32(block + 0x48, 0);
+    Ptr::new(block)
+}
+
+/// One read through the stream's input: `bytes` into `buffer`, with the component size word
+/// at `sizes` (one component); the position moves on by what was read.
+fn read_input(e: &mut Engine, stream: u32, buffer: u32, bytes: u32, sizes: u32) {
+    let input = e.mem.u32(stream + STREAM_INPUT);
+    let function = e.mem.u32(input + 8);
+    let got = e
+        .call(function, &args![input, buffer, bytes, sizes, 1u32])
+        .u32();
+    let position = e.mem.u32(input + 4).wrapping_add(got);
+    e.mem.set_u32(input + 4, position);
+}
+
+// Translated from 00a612a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiSourceCubeMap::LoadBinary` (Xbox PDB): from stream version 10.3.0.6 on,
+/// `NiSourceTexture::LoadBinary` (`00a60180`). Before it, with a reference held on the map:
+/// the base class's load (`00a47350`), the "external" byte (read into the low byte of the
+/// stream argument's stack word, cleared first), six face names (`LoadCString` into six
+/// cleared stack pointers), six link ids (`SetNumberOfLinkIDs(6)`, then six reads); an
+/// external map loads its faces from the files (`LoadFromFiles` with the stream's +0x1e8 as
+/// the search path); the six names are freed (`00aa10f0`). Then the pixel layout (+0x18),
+/// mipmap (+0x20) and alpha (+0x1c) words (each stored before the next read, through the
+/// same two stack words the code alternates between buffer and size) and the static byte
+/// (+0x40, read over its old value, stored as 0 or 1). The held reference is given up (the
+/// map deleted through its virtual +4 at the last one).
+pub fn ni_source_cube_map_load_binary(e: &mut Engine, this: Ptr, stream: Ptr) {
+    let base = this.addr();
+    let stream_addr = stream.addr();
+    if e.mem.u32(stream_addr + STREAM_VERSION) >= VERSION_10_3_0_6 {
+        e.call(NI_SOURCE_TEXTURE_LOAD_BINARY, &args![this, stream]);
+        return;
+    }
+    e.call(BASE_LOAD_BINARY, &args![this, stream]);
+    e.call(IMPORT_INTERLOCKED_INCREMENT, &args![base + 4]);
+    // The frame below the return address (`ESP` at entry - 0x24): the static byte (+0x03),
+    // two words used as buffer and size (+0x04, +0x08) and the six names (+0x0c); the
+    // argument's stack word holds the stream pointer, its low byte the external byte.
+    e.with_stack(0x28, |e, frame| {
+        let frame = frame.addr();
+        let static_byte = frame + 0x03;
+        let word_04 = frame + 0x04;
+        let word_08 = frame + 0x08;
+        let names = frame + 0x0c;
+        e.with_stack(4, |e, argument| {
+            let external = argument.addr();
+            e.mem.set_u32(external, stream_addr);
+            e.mem.set_u8(external, 0);
+            e.mem.set_u32(word_04, 1);
+            read_input(e, stream_addr, external, 1, word_04);
+            for index in 0..6u32 {
+                e.mem.set_u32(names + 4 * index, 0);
+            }
+            for index in 0..6u32 {
+                e.call(STREAM_LOAD_C_STRING, &args![stream, names + 4 * index]);
+            }
+            e.call(STREAM_SET_NUMBER_OF_LINK_IDS, &args![stream, 6u32]);
+            for _ in 0..6 {
+                e.call(STREAM_READ_LINK_ID, &args![stream]);
+            }
+            if e.mem.u8(external) != 0 {
+                let search_path = Ptr::new(e.mem.u32(stream_addr + STREAM_SEARCH_PATH));
+                let name = |e: &Engine, index: u32| Ptr::new(e.mem.u32(names + 4 * index));
+                let (n0, n1, n2) = (name(e, 0), name(e, 1), name(e, 2));
+                let (n3, n4, n5) = (name(e, 3), name(e, 4), name(e, 5));
+                ni_source_cube_map_load_from_files(e, this, n0, n1, n2, n3, n4, n5, search_path);
+            }
+        });
+        for index in 0..6u32 {
+            let name = e.mem.u32(names + 4 * index);
+            e.call(FREE_00AA10F0, &args![name]);
+        }
+        e.mem.set_u32(word_04, 4);
+        read_input(e, stream_addr, word_08, 4, word_04);
+        let layout = e.mem.u32(word_08);
+        e.mem.set_u32(base + 0x18, layout);
+        e.mem.set_u32(word_08, 4);
+        read_input(e, stream_addr, word_04, 4, word_08);
+        let mipmap = e.mem.u32(word_04);
+        e.mem.set_u32(base + 0x20, mipmap);
+        e.mem.set_u32(word_08, 4);
+        read_input(e, stream_addr, word_04, 4, word_08);
+        let alpha = e.mem.u32(word_04);
+        let old_static = e.mem.u8(base + 0x40);
+        e.mem.set_u32(base + 0x1c, alpha);
+        e.mem.set_u8(static_byte, old_static);
+        e.mem.set_u32(word_08, 1);
+        read_input(e, stream_addr, static_byte, 1, word_08);
+        let value = e.mem.u8(static_byte) != 0;
+        e.mem.set_u8(base + 0x40, u8::from(value));
+    });
+    let left = e.call(IMPORT_INTERLOCKED_DECREMENT, &args![base + 4]).u32();
+    if left == 0 {
+        e.vcall(base, 4, &args![]);
+    }
+}
+
+// Translated from 00a61480 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiSourceCubeMap::GetViewerStrings` (Xbox PDB): `NiSourceTexture`'s strings (`00a60770`),
+/// then the class name (the first word of `ms_RTTI`, through `NiGetViewerString`) appended
+/// (the array grown to its size plus `m_usGrowBy` when full, `SetAt` at the old size).
+pub fn ni_source_cube_map_get_viewer_strings(e: &mut Engine, this: Ptr, strings: Ptr) {
+    let strings = strings.addr();
+    e.call(NI_SOURCE_TEXTURE_GET_VIEWER_STRINGS, &args![this, strings]);
+    let class_name = e.mem.u32(NI_SOURCE_CUBE_MAP_RTTI);
+    let text = e.call(NI_GET_VIEWER_STRING, &args![class_name]).u32();
+    let size = u32::from(e.mem.u16(strings + 0xa));
+    let capacity = u32::from(e.mem.u16(strings + 0x8));
+    if size >= capacity {
+        let grow_by = u32::from(e.mem.u16(strings + 0xe));
+        e.call(STRING_ARRAY_SET_SIZE, &args![strings, grow_by + size]);
+    }
+    e.with_stack(4, |e, element| {
+        e.mem.set_u32(element.addr(), text);
+        e.call(STRING_ARRAY_SET_AT, &args![strings, size, element]);
+    });
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -648,6 +908,13 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         ),
         entry!(0x00a5_fe30, ni_source_cube_map_create(u32, Ptr, Ptr, u8) -> Ptr),
         entry!(0x00a6_1040, fn_00a61040(Ptr, u32, Ptr, Ptr) -> Ptr),
+        entry!(0x00a6_0800, ni_source_cube_map_create_renderer_data(Ptr) -> bool),
+        entry!(0x00a6_0850, ni_source_cube_map_register_streamables(Ptr, Ptr) -> bool),
+        entry!(0x00a6_0880, ni_source_cube_map_is_equal(Ptr, Ptr) -> bool),
+        entry!(0x00a6_0ba0, ni_source_cube_map_link_object(Ptr, Ptr)),
+        entry!(0x00a6_0f30, fn_00a60f30() -> Ptr),
+        entry!(0x00a6_12a0, ni_source_cube_map_load_binary(Ptr, Ptr)),
+        entry!(0x00a6_1480, ni_source_cube_map_get_viewer_strings(Ptr, Ptr)),
     ]
 }
 
@@ -1444,5 +1711,353 @@ mod tests_b008 {
         assert!(log.contains(&(CHECK_SLOT, vec![renderer, block])));
         assert!(log.contains(&(DELETE_SLOT, vec![block, 1])));
         assert!(log.contains(&(IMPORT_INTERLOCKED_INCREMENT, vec![0x8000])));
+    }
+}
+
+#[cfg(test)]
+mod n019_tests {
+    use super::*;
+
+    use std::cell::RefCell;
+    use std::collections::VecDeque;
+    use std::rc::Rc;
+
+    fn calls_to(e: &Engine, callee: u32) -> Vec<Vec<u32>> {
+        e.call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|(address, _)| *address == callee)
+            .map(|(_, words)| words.clone())
+            .collect()
+    }
+
+    fn word(eax: u32) -> Ret {
+        Ret {
+            eax,
+            ..Ret::default()
+        }
+    }
+
+    /// An object whose virtual table has `slots` (byte offset, target).
+    fn object(e: &mut Engine, size: u32, slots: &[(u32, u32)]) -> u32 {
+        let object = e.mem.alloc(size);
+        let vtable = e.mem.alloc(0x200);
+        e.mem.set_u32(object, vtable);
+        for (slot, target) in slots {
+            e.mem.set_u32(vtable + slot, *target);
+        }
+        object
+    }
+
+    fn reference_counting(e: &mut Engine) {
+        e.register(IMPORT_INTERLOCKED_INCREMENT, |e, a| {
+            let count = e.mem.u32(a[0]).wrapping_add(1);
+            e.mem.set_u32(a[0], count);
+            word(count)
+        });
+        e.register(IMPORT_INTERLOCKED_DECREMENT, |e, a| {
+            let count = e.mem.u32(a[0]).wrapping_sub(1);
+            e.mem.set_u32(a[0], count);
+            word(count)
+        });
+    }
+
+    const RENDERER_DOUBLE: u32 = 0x0070_9000;
+    const DELETE_DOUBLE: u32 = 0x0070_9010;
+    const READ_DOUBLE: u32 = 0x0070_9020;
+    const SEARCH_DOUBLE: u32 = 0x0070_9030;
+
+    #[test]
+    fn create_renderer_data_deletes_the_file_either_way() {
+        let mut e = Engine::new();
+        e.map(RENDERER_INSTANCE, 4);
+        e.register(DELETE_DOUBLE, |_, _| Ret::default());
+        let map = e.mem.alloc(0x4c);
+        let file = object(&mut e, 0x10, &[(0, DELETE_DOUBLE)]);
+        e.mem.set_u32(map + 0x44, file);
+        e.call_log = Some(vec![]);
+        assert!(e.call(0x00a6_0800, &args![map]).bool());
+        assert_eq!(e.mem.u32(map + 0x44), 0);
+        assert_eq!(calls_to(&e, DELETE_DOUBLE), vec![vec![file, 1]]);
+        let renderer = object(&mut e, 0x10, &[(0x144, RENDERER_DOUBLE)]);
+        e.mem.set_u32(RENDERER_INSTANCE, renderer);
+        e.register(RENDERER_DOUBLE, |_, _| word(0x100));
+        e.mem.set_u32(map + 0x44, file);
+        assert!(!e.call(0x00a6_0800, &args![map]).bool());
+        assert_eq!(e.mem.u32(map + 0x44), 0);
+        assert_eq!(calls_to(&e, RENDERER_DOUBLE), vec![vec![renderer, map]]);
+        assert_eq!(calls_to(&e, DELETE_DOUBLE).len(), 2);
+        e.register(RENDERER_DOUBLE, |_, _| word(1));
+        // Without a file nothing is deleted.
+        assert!(e.call(0x00a6_0800, &args![map]).bool());
+        assert_eq!(calls_to(&e, DELETE_DOUBLE).len(), 2);
+    }
+
+    #[test]
+    fn register_streamables_and_is_equal_build_on_the_source_texture() {
+        let mut e = Engine::new();
+        e.register(NI_SOURCE_TEXTURE_REGISTER_STREAMABLES, |_, a| {
+            word(u32::from(a[1] == 0x100))
+        });
+        assert!(e.call(0x00a6_0850, &args![0x10u32, 0x100u32]).bool());
+        assert!(!e.call(0x00a6_0850, &args![0x10u32, 0x200u32]).bool());
+        e.register(NI_SOURCE_TEXTURE_IS_EQUAL, |_, _| word(1));
+        let a = e.mem.alloc(0x4c);
+        let b = e.mem.alloc(0x4c);
+        assert!(e.call(0x00a6_0880, &args![a, b]).bool());
+        for (offset, wide) in [(0x18u32, true), (0x20, true), (0x1c, true), (0x40, false)] {
+            if wide {
+                e.mem.set_u32(b + offset, 7);
+            } else {
+                e.mem.set_u8(b + offset, 1);
+            }
+            assert!(!e.call(0x00a6_0880, &args![a, b]).bool());
+            e.mem.set_u32(b + offset, 0);
+        }
+        e.register(NI_SOURCE_TEXTURE_IS_EQUAL, |_, _| word(0));
+        assert!(!e.call(0x00a6_0880, &args![a, b]).bool());
+    }
+
+    #[test]
+    fn link_object_makes_the_map_from_six_linked_faces() {
+        let mut e = Engine::new();
+        reference_counting(&mut e);
+        e.register(DELETE_DOUBLE, |_, _| Ret::default());
+        e.register(BASE_LINK_OBJECT, |_, _| Ret::default());
+        e.register(NI_SOURCE_TEXTURE_LINK_OBJECT, |_, _| Ret::default());
+        e.register(NI_ALLOCATE, |_, _| word(0));
+        let faces: Vec<u32> = (0..6)
+            .map(|_| {
+                let face = object(&mut e, 0x80, &[(4, DELETE_DOUBLE)]);
+                e.mem.set_u32(face + 4, 1);
+                face
+            })
+            .collect();
+        let queue = Rc::new(RefCell::new(VecDeque::from(faces.clone())));
+        let next = queue.clone();
+        e.register_double(STREAM_GET_OBJECT_FROM_LINK_ID, move |_, _| {
+            word(next.borrow_mut().pop_front().unwrap_or(0))
+        });
+        e.register(STREAM_GET_NUMBER_OF_LINK_IDS, |_, _| word(6));
+        let stream = e.mem.alloc(0x260);
+        e.mem.set_u32(stream + STREAM_VERSION, 0x0a03_0005);
+        let map = e.mem.alloc(0x4c);
+        e.call_log = Some(vec![]);
+        e.call(0x00a6_0ba0, &args![map, stream]);
+        assert_eq!(calls_to(&e, BASE_LINK_OBJECT), vec![vec![map, stream]]);
+        assert_eq!(calls_to(&e, STREAM_GET_OBJECT_FROM_LINK_ID).len(), 6);
+        // `LoadFromPixelData` ran (its allocation), and every face is back to one reference.
+        assert_eq!(calls_to(&e, NI_ALLOCATE), vec![vec![0x74]]);
+        for face in &faces {
+            assert_eq!(e.mem.u32(face + 4), 1);
+        }
+        // The last face is released first.
+        let releases = calls_to(&e, IMPORT_INTERLOCKED_DECREMENT);
+        assert_eq!(releases[releases.len() - 1], vec![faces[0] + 4]);
+        assert_eq!(releases[releases.len() - 6], vec![faces[5] + 4]);
+        // With pixel data, and with another link count, no map is made.
+        e.mem.set_u32(map + 0x3c, 0x5555);
+        e.register(STREAM_GET_NUMBER_OF_LINK_IDS, |_, _| word(5));
+        e.call(0x00a6_0ba0, &args![map, stream]);
+        assert_eq!(calls_to(&e, STREAM_GET_OBJECT_FROM_LINK_ID).len(), 6);
+        assert_eq!(calls_to(&e, NI_ALLOCATE).len(), 1);
+        // From 10.3.0.6 on the source texture links.
+        e.mem.set_u32(stream + STREAM_VERSION, 0x0a03_0006);
+        e.call(0x00a6_0ba0, &args![map, stream]);
+        assert_eq!(
+            calls_to(&e, NI_SOURCE_TEXTURE_LINK_OBJECT),
+            vec![vec![map, stream]]
+        );
+        assert_eq!(calls_to(&e, BASE_LINK_OBJECT).len(), 2);
+    }
+
+    #[test]
+    fn fn_00a60f30_makes_a_cube_map() {
+        let mut e = Engine::new();
+        let block = e.mem.alloc(0x4c);
+        e.mem.set_u32(block + 0x48, 9);
+        e.register_double(NI_ALLOCATE, move |_, _| word(block));
+        e.register(NI_SOURCE_TEXTURE_CONSTRUCT, |_, _| Ret::default());
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x00a6_0f30, &args![]).u32(), block);
+        assert_eq!(calls_to(&e, NI_ALLOCATE), vec![vec![0x4c]]);
+        assert_eq!(calls_to(&e, NI_SOURCE_TEXTURE_CONSTRUCT), vec![vec![block]]);
+        assert_eq!(e.mem.u32(block), NI_SOURCE_CUBE_MAP_VTABLE);
+        assert_eq!(e.mem.u32(block + 0x48), 0);
+        e.register(NI_ALLOCATE, |_, _| word(0));
+        assert_eq!(e.call(0x00a6_0f30, &args![]).u32(), 0);
+        assert_eq!(calls_to(&e, NI_SOURCE_TEXTURE_CONSTRUCT).len(), 1);
+    }
+
+    type Reads = Rc<RefCell<Vec<(u32, u32, u32)>>>;
+
+    /// A stream of `version` whose input serves `bytes` in order and records each read (the
+    /// buffer, the byte count and the size word).
+    fn input_stream(e: &mut Engine, version: u32, bytes: &[u8]) -> (u32, Reads) {
+        let stream = e.mem.alloc(0x260);
+        e.mem.set_u32(stream + STREAM_VERSION, version);
+        let input = e.mem.alloc(0x10);
+        e.mem.set_u32(input + 8, READ_DOUBLE);
+        e.mem.set_u32(stream + STREAM_INPUT, input);
+        let mut queue = VecDeque::from(bytes.to_vec());
+        let reads: Reads = Rc::new(RefCell::new(vec![]));
+        let log = reads.clone();
+        e.register_double(READ_DOUBLE, move |e, a| {
+            log.borrow_mut().push((a[1], a[2], e.mem.u32(a[3])));
+            for i in 0..a[2] {
+                let byte = queue.pop_front().unwrap();
+                e.mem.set_u8(a[1] + i, byte);
+            }
+            word(a[2])
+        });
+        (stream, reads)
+    }
+
+    fn load_doubles(e: &mut Engine) {
+        reference_counting(e);
+        e.register(BASE_LOAD_BINARY, |_, _| Ret::default());
+        e.register(NI_SOURCE_TEXTURE_LOAD_BINARY, |_, _| Ret::default());
+        e.register(STREAM_SET_NUMBER_OF_LINK_IDS, |_, _| Ret::default());
+        e.register(STREAM_READ_LINK_ID, |_, _| Ret::default());
+        e.register(FREE_00AA10F0, |_, _| Ret::default());
+        e.register(DELETE_DOUBLE, |_, _| Ret::default());
+        // Each name is a new one-letter string.
+        e.register(STREAM_LOAD_C_STRING, |e, a| {
+            let name = e.mem.alloc(2);
+            e.mem.set_u8(name, b'f');
+            e.mem.set_u32(a[1], name);
+            Ret::default()
+        });
+    }
+
+    fn values(layout: u32, mipmap: u32, alpha: u32, fixed: u8) -> Vec<u8> {
+        let mut bytes = vec![];
+        bytes.extend_from_slice(&layout.to_le_bytes());
+        bytes.extend_from_slice(&mipmap.to_le_bytes());
+        bytes.extend_from_slice(&alpha.to_le_bytes());
+        bytes.push(fixed);
+        bytes
+    }
+
+    #[test]
+    fn load_binary_of_an_old_internal_cube_map() {
+        let mut e = Engine::new();
+        load_doubles(&mut e);
+        let mut bytes = vec![0u8];
+        bytes.extend(values(3, 1, 2, 5));
+        let (stream, reads) = input_stream(&mut e, 0x0a03_0005, &bytes);
+        let map = object(&mut e, 0x4c, &[(4, DELETE_DOUBLE)]);
+        e.mem.set_u32(map + 4, 1);
+        e.call_log = Some(vec![]);
+        e.call(0x00a6_12a0, &args![map, stream]);
+        assert_eq!(calls_to(&e, BASE_LOAD_BINARY), vec![vec![map, stream]]);
+        assert_eq!(calls_to(&e, STREAM_LOAD_C_STRING).len(), 6);
+        assert_eq!(
+            calls_to(&e, STREAM_SET_NUMBER_OF_LINK_IDS),
+            vec![vec![stream, 6]]
+        );
+        assert_eq!(calls_to(&e, STREAM_READ_LINK_ID).len(), 6);
+        let names: Vec<u32> = calls_to(&e, STREAM_LOAD_C_STRING)
+            .iter()
+            .map(|c| e.mem.u32(c[1]))
+            .collect();
+        let freed: Vec<u32> = calls_to(&e, FREE_00AA10F0).iter().map(|c| c[0]).collect();
+        assert_eq!(freed.len(), 6);
+        assert!(freed.iter().all(|&f| f == 0 || names.contains(&f)));
+        assert_eq!(e.mem.u32(map + 0x18), 3);
+        assert_eq!(e.mem.u32(map + 0x20), 1);
+        assert_eq!(e.mem.u32(map + 0x1c), 2);
+        assert_eq!(e.mem.u8(map + 0x40), 1);
+        let sizes: Vec<(u32, u32)> = reads.borrow().iter().map(|r| (r.1, r.2)).collect();
+        assert_eq!(sizes, vec![(1, 1), (4, 4), (4, 4), (4, 4), (1, 1)]);
+        // The held reference is given up without deleting.
+        assert_eq!(e.mem.u32(map + 4), 1);
+        assert_eq!(calls_to(&e, DELETE_DOUBLE).len(), 0);
+        assert_eq!(calls_to(&e, GET_IMAGE_CONVERTER).len(), 0);
+    }
+
+    #[test]
+    fn load_binary_of_an_old_external_cube_map_loads_the_files() {
+        let mut e = Engine::new();
+        load_doubles(&mut e);
+        // `LoadFromFiles` runs for real: its search path finds no file.
+        for callee in [
+            GET_IMAGE_CONVERTER,
+            STRCPY_S,
+            PATH_STANDARDIZE,
+            CONVERT_FILE_NAME_TO_PLATFORM,
+            SEARCH_PATH_SET_FILE_PATH,
+            SEARCH_DOUBLE,
+        ] {
+            e.register(callee, |_, _| Ret::default());
+        }
+        e.register(ALLOCATE_00AA1070, |e, a| word(e.mem.alloc(a[0])));
+        let search = object(&mut e, 0x10, &[(4, SEARCH_DOUBLE), (8, SEARCH_DOUBLE)]);
+        let mut bytes = vec![1u8];
+        bytes.extend(values(4, 0, 1, 0));
+        let (stream, _) = input_stream(&mut e, 0x0a03_0005, &bytes);
+        e.mem.set_u32(stream + STREAM_SEARCH_PATH, search);
+        let map = object(&mut e, 0x4c, &[(4, DELETE_DOUBLE)]);
+        e.mem.set_u32(map + 0x40, 1);
+        e.call_log = Some(vec![]);
+        e.call(0x00a6_12a0, &args![map, stream]);
+        let first_name = e.mem.u32(calls_to(&e, STREAM_LOAD_C_STRING)[0][1]);
+        assert_eq!(calls_to(&e, STRCPY_S)[0][2], first_name);
+        assert_eq!(calls_to(&e, SEARCH_DOUBLE)[0], vec![search]);
+        assert_eq!(e.mem.u32(map + 0x18), 4);
+        assert_eq!(e.mem.u8(map + 0x40), 0);
+        // The count went from 0 to 1 and back: the map is deleted.
+        assert_eq!(calls_to(&e, DELETE_DOUBLE), vec![vec![map]]);
+    }
+
+    #[test]
+    fn load_binary_from_10_3_0_6_is_the_source_texture_load() {
+        let mut e = Engine::new();
+        load_doubles(&mut e);
+        let (stream, reads) = input_stream(&mut e, 0x0a03_0006, &[]);
+        let map = e.mem.alloc(0x4c);
+        e.call_log = Some(vec![]);
+        e.call(0x00a6_12a0, &args![map, stream]);
+        assert_eq!(
+            calls_to(&e, NI_SOURCE_TEXTURE_LOAD_BINARY),
+            vec![vec![map, stream]]
+        );
+        assert_eq!(calls_to(&e, BASE_LOAD_BINARY).len(), 0);
+        assert!(reads.borrow().is_empty());
+    }
+
+    #[test]
+    fn get_viewer_strings_appends_the_class_name() {
+        let mut e = Engine::new();
+        e.map(NI_SOURCE_CUBE_MAP_RTTI, 8);
+        e.mem.set_u32(NI_SOURCE_CUBE_MAP_RTTI, 0x0109_bb6c);
+        e.register(NI_SOURCE_TEXTURE_GET_VIEWER_STRINGS, |_, _| Ret::default());
+        e.register(NI_GET_VIEWER_STRING, |_, a| word(a[0] + 1));
+        e.register(STRING_ARRAY_SET_SIZE, |_, _| Ret::default());
+        e.register(STRING_ARRAY_SET_AT, |e, a| {
+            let value = e.mem.u32(a[2]);
+            e.mem.set_u32(a[0] + 0x20, value);
+            Ret::default()
+        });
+        let strings = e.mem.alloc(0x40);
+        e.mem.set_u16(strings + 8, 4);
+        e.mem.set_u16(strings + 0xa, 2);
+        let map = e.mem.alloc(0x4c);
+        e.call_log = Some(vec![]);
+        e.call(0x00a6_1480, &args![map, strings]);
+        assert_eq!(
+            calls_to(&e, NI_SOURCE_TEXTURE_GET_VIEWER_STRINGS),
+            vec![vec![map, strings]]
+        );
+        assert_eq!(calls_to(&e, NI_GET_VIEWER_STRING), vec![vec![0x0109_bb6c]]);
+        assert_eq!(calls_to(&e, STRING_ARRAY_SET_SIZE).len(), 0);
+        assert_eq!(calls_to(&e, STRING_ARRAY_SET_AT)[0][1], 2);
+        assert_eq!(e.mem.u32(strings + 0x20), 0x0109_bb6d);
+        // Full: grown by `m_usGrowBy`.
+        e.mem.set_u16(strings + 0xa, 4);
+        e.mem.set_u16(strings + 0xe, 2);
+        e.call(0x00a6_1480, &args![map, strings]);
+        assert_eq!(calls_to(&e, STRING_ARRAY_SET_SIZE), vec![vec![strings, 6]]);
     }
 }

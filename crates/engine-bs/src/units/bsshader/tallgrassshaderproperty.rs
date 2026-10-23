@@ -155,12 +155,23 @@ fn build_passes(e: &mut Engine, base: u32, geometry: u32) {
     });
 }
 
+// Translated from 00bc2b20 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The engine map's `TallGrassShaderProperty::SetClampNI`, a name the body does not confirm
+/// (it may be folded code): thiscall, `RET 0xc` (three words, the last two unread), the first
+/// word stored at +0xc.
+pub fn fn_00bc2b20(e: &mut Engine, this: Ptr, value: u32, _unused_2: u32, _unused_3: u32) {
+    e.mem.set_u32(this.addr().wrapping_add(0xc), value);
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
-    vec![entry!(
-        0x00b60790,
-        tall_grass_shader_property_get_render_passes(Ptr, u32, u32, u32, u32, u32, u32) -> u32
-    )]
+    vec![
+        entry!(
+            0x00b60790,
+            tall_grass_shader_property_get_render_passes(Ptr, u32, u32, u32, u32, u32, u32) -> u32
+        ),
+        entry!(0x00bc_2b20, fn_00bc2b20(Ptr, u32, u32, u32)),
+    ]
 }
 
 #[cfg(test)]
@@ -262,5 +273,19 @@ mod tests {
         let words = args![this, 0x5000u32, 0x203u32, 0u32, 2u32, 0u32, 0u32];
         assert_eq!(e.call(0x00b6_0790, &words).u32(), list);
         assert!(calls(&e, CHECK_CREATE_RENDER_PASS_ARRAY).is_empty());
+    }
+}
+
+#[cfg(test)]
+mod n014_tests {
+    use super::*;
+
+    #[test]
+    fn set_clamp_stores_the_first_word_at_0xc() {
+        let mut e = Engine::new();
+        let this = e.mem.alloc(0x10);
+        e.call(0x00bc_2b20, &args![this, 7u32, 8u32, 9u32]);
+        assert_eq!(e.mem.u32(this + 0xc), 7);
+        assert_eq!(e.mem.u32(this + 8), 0);
     }
 }

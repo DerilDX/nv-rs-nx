@@ -469,6 +469,275 @@ pub fn fn_00a8f770(e: &mut Engine, this: Ptr, position: Ptr, key: Ptr, value: Pt
     e.mem.set_u32(position.addr(), 0);
 }
 
+/// `00a724d0` (`thiscall`, the stream): the base's `SaveBinary` (the body the base's
+/// `LinkObject` shares; the engine map names it `NiPSysEmitterCtlrData::LinkObject`).
+const BASE_SAVE_BINARY: u32 = 0x00a7_24d0;
+/// `00a64160` (`thiscall` on the stream, the characters): writes a C string.
+const STREAM_SAVE_C_STRING: u32 = 0x00a6_4160;
+/// `00a88a50` (`thiscall`, the other object): the base's `IsEqual` (the engine map names it
+/// `Ni2DBuffer::IsEqual`, folded code).
+const BASE_IS_EQUAL: u32 = 0x00a8_8a50;
+/// `00ee8ac0` (`thiscall` on a map): the first item of its buckets, or 0.
+const MAP_GET_FIRST_POS: u32 = 0x00ee_8ac0;
+/// The memory manager's `Deallocate` (`thiscall`, the block).
+const MEMORY_DEALLOCATE: u32 = 0x00aa_4060;
+/// `NiAVObjectPalette::GetViewerStrings` (`thiscall`, the strings array).
+const BASE_GET_VIEWER_STRINGS: u32 = 0x00a8_8a70;
+/// `NiGetViewerString` of a class name (`cdecl`, one word).
+const GET_VIEWER_STRING: u32 = 0x00a7_d330;
+/// `0096ad30` (`thiscall`, the new size) grows an `NiTArray`; `0096ae90` (`thiscall`, index
+/// and the address of the element) stores an element.
+const ARRAY_SET_SIZE: u32 = 0x0096_ad30;
+const ARRAY_SET_AT: u32 = 0x0096_ae90;
+/// `sprintf` (`cdecl`: buffer, format, then the format's arguments).
+const SPRINTF: u32 = 0x00ec_623a;
+/// The first word of `NiDefaultAVObjectPalette`'s `NiRTTI` (its class name).
+const PALETTE_RTTI_NAME: u32 = 0x011f_4a04;
+/// `"m_pkScene = %s"`, `"UNKNOWN"` and `"%s"`.
+const FORMAT_SCENE: u32 = 0x0109_ca24;
+const TEXT_UNKNOWN: u32 = 0x0101_5890;
+const FORMAT_STRING: u32 = 0x0101_9f08;
+
+// Translated from 00a6e6c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiDefaultAVObjectPalette::SaveBinary` (Xbox PDB): the base's `SaveBinary` (`00a724d0`), the
+/// scene's link id (the stream's slot +0x30), the item count (+0x14) as 4 bytes (from a local
+/// word; the stream argument's stack word is the byte-count word), then for every item (walked
+/// from the first non-null bucket with [`fn_00a8f770`], the key taken into the stream
+/// argument's stack word, set to the empty string first) the key's characters (`00a64160`)
+/// and the object's link id; each key is released after.
+///
+/// Ghidra drops the release as unreachable; the disassembly runs it.
+pub fn ni_default_av_object_palette_save_binary(e: &mut Engine, this: Ptr, stream: Ptr) {
+    let t = this.addr();
+    e.call(BASE_SAVE_BINARY, &args![this, stream]);
+    let scene = e.mem.u32(t + 0x18);
+    e.vcall(stream.addr(), 0x30, &args![scene]);
+    e.with_stack(0x10, |e, locals| {
+        let position = locals.addr();
+        let count = locals.addr() + 4;
+        let value = locals.addr() + 8;
+        let slot = locals.addr() + 0xc;
+        let items = e.mem.u32(t + 0x14);
+        // NiStream::m_pkOstr +0x250; the output's position +4 and write function +0xc.
+        let output = e.mem.u32(stream.addr() + 0x250);
+        e.mem.set_u32(count, items);
+        let function = e.mem.u32(output + 0xc);
+        e.mem.set_u32(slot, 4);
+        let done = e
+            .call(function, &args![output, count, 4u32, slot, 1u32])
+            .u32();
+        let at = e.mem.u32(output + 4).wrapping_add(done);
+        e.mem.set_u32(output + 4, at);
+        if e.mem.u32(t + 0x14) == 0 {
+            return;
+        }
+        let size = e.mem.u32(t + 0xc);
+        let table = e.mem.u32(t + 0x10);
+        let first = first_item(e, size, table);
+        e.mem.set_u32(position, first);
+        if first == 0 {
+            return;
+        }
+        loop {
+            let empty = empty_handle(e);
+            e.mem.set_u32(slot, empty);
+            fn_00a8f770(
+                e,
+                Ptr::new(t + 8),
+                Ptr::new(position),
+                Ptr::new(slot),
+                Ptr::new(value),
+            );
+            let key = e.mem.u32(slot);
+            e.call(STREAM_SAVE_C_STRING, &args![stream, key]);
+            let object = e.mem.u32(value);
+            e.vcall(stream.addr(), 0x30, &args![object]);
+            release(e, key);
+            if e.mem.u32(position) == 0 {
+                break;
+            }
+        }
+    });
+}
+
+// Translated from 00a6e7b0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiDefaultAVObjectPalette::IsEqual` (Xbox PDB): the base's comparison (`00a88a50`) and the
+/// same item count (+0x14); then every key of this map (walked from `00ee8ac0` with
+/// [`fn_00a8f770`], into the `other` argument's stack word, set to the empty string first)
+/// must find an object in `other` (its slot +0x8c with the key); the key is released after
+/// each lookup. The objects themselves are not compared.
+pub fn ni_default_av_object_palette_is_equal(e: &mut Engine, this: Ptr, other: Ptr) -> bool {
+    let t = this.addr();
+    if !e.call(BASE_IS_EQUAL, &args![this, other]).bool() {
+        return false;
+    }
+    let count = e.mem.u32(t + 0x14);
+    if e.mem.u32(other.addr() + 0x14) != count {
+        return false;
+    }
+    if count == 0 {
+        return true;
+    }
+    let map = t + 8;
+    let first = e.call(MAP_GET_FIRST_POS, &args![map]).u32();
+    if first == 0 {
+        return true;
+    }
+    e.with_stack(0xc, |e, locals| {
+        let position = locals.addr();
+        let value = locals.addr() + 4;
+        let slot = locals.addr() + 8;
+        e.mem.set_u32(position, first);
+        loop {
+            let empty = empty_handle(e);
+            e.mem.set_u32(slot, empty);
+            fn_00a8f770(
+                e,
+                Ptr::new(map),
+                Ptr::new(position),
+                Ptr::new(slot),
+                Ptr::new(value),
+            );
+            let found = e.vcall(other.addr(), 0x8c, &args![slot]).u32();
+            let key = e.mem.u32(slot);
+            release(e, key);
+            if found == 0 {
+                return false;
+            }
+            if e.mem.u32(position) == 0 {
+                return true;
+            }
+        }
+    })
+}
+
+// Translated from 00a6eb20 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiTFixedStringMap<char const *>::_scalar_deleting_destructor_` (Xbox PDB): the map's two
+/// destructors (vtable `0109ca18`, `RemoveAll`; vtable `0109ca08`, `RemoveAll`), its buckets
+/// (+8) freed (`00aa10f0`) and, when bit 0 of the flags byte is set, the block given back to
+/// the memory manager (`00aa4060`). Answers `this`.
+pub fn ni_t_fixed_string_map_scalar_deleting_destructor(
+    e: &mut Engine,
+    this: Ptr,
+    flags: u32,
+) -> Ptr {
+    e.mem.set_u32(this.addr(), LOCAL_MAP_VTABLE);
+    e.call(MAP_REMOVE_ALL, &args![this]);
+    e.mem.set_u32(this.addr(), LOCAL_MAP_BASE_VTABLE);
+    e.call(MAP_REMOVE_ALL, &args![this]);
+    let table = e.mem.u32(this.addr() + 8);
+    e.call(TABLE_FREE, &args![table]);
+    if flags as u8 & 1 != 0 {
+        e.call(MEMORY_DEALLOCATE, &args![MEMORY_MANAGER, this]);
+    }
+    this
+}
+
+/// Appends the string pointer held in the word at `slot` to the viewer-string array (grown to
+/// count + `m_usGrowBy` by `0096ad30` when full, stored by `0096ae90`).
+fn append_viewer_string(e: &mut Engine, strings: Ptr, slot: u32) {
+    let count = e.mem.u16(strings.addr() + 0xa) as u32;
+    let capacity = e.mem.u16(strings.addr() + 8) as u32;
+    if count >= capacity {
+        let grow_by = e.mem.u16(strings.addr() + 0xe) as u32;
+        e.call(ARRAY_SET_SIZE, &args![strings, grow_by + count]);
+    }
+    e.call(ARRAY_SET_AT, &args![strings, count, slot]);
+}
+
+// Translated from 00a6ed90 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiDefaultAVObjectPalette::GetViewerStrings` (Xbox PDB): the base's strings (`00a88a70`),
+/// the class name (`NiGetViewerString` of the first word of the `NiRTTI` at `011f4a04`), then
+/// `"m_pkScene = <scene name>"` (`"UNKNOWN"` for a scene without a name; the scene at +0x18 is
+/// read without a null check) in 0x60 bytes from the memory manager; then for every item (as
+/// `SaveBinary` walks them) its key as `"%s"` in 0x60 bytes, appended by the array's inline
+/// `SetAtGrow` (grown by `0096ad30` when full; the count of non-null elements, +0xc, follows
+/// the stored pointer), the key released after.
+pub fn ni_default_av_object_palette_get_viewer_strings(e: &mut Engine, this: Ptr, strings: Ptr) {
+    let t = this.addr();
+    let s = strings.addr();
+    e.call(BASE_GET_VIEWER_STRINGS, &args![this, strings]);
+    e.with_stack(0x10, |e, locals| {
+        let position = locals.addr();
+        let value = locals.addr() + 4;
+        let slot = locals.addr() + 8;
+        let class_name = e.global::<u32>(PALETTE_RTTI_NAME);
+        let text = e.call(GET_VIEWER_STRING, &args![class_name]).u32();
+        e.mem.set_u32(slot, text);
+        append_viewer_string(e, strings, slot);
+        let text = e
+            .call(MEMORY_ALLOCATE, &args![MEMORY_MANAGER, 0x60u32])
+            .u32();
+        let scene = e.mem.u32(t + 0x18);
+        let mut name = e.mem.u32(scene.wrapping_add(8));
+        e.mem.set_u32(slot, text);
+        if name == 0 {
+            name = TEXT_UNKNOWN;
+        }
+        e.call(SPRINTF, &args![text, FORMAT_SCENE, name]);
+        append_viewer_string(e, strings, slot);
+        if e.mem.u32(t + 0x14) == 0 {
+            return;
+        }
+        let size = e.mem.u32(t + 0xc);
+        let map = t + 8;
+        let table = e.mem.u32(t + 0x10);
+        let first = first_item(e, size, table);
+        e.mem.set_u32(position, first);
+        if first == 0 {
+            return;
+        }
+        loop {
+            let empty = empty_handle(e);
+            e.mem.set_u32(slot, empty);
+            fn_00a8f770(
+                e,
+                Ptr::new(map),
+                Ptr::new(position),
+                Ptr::new(slot),
+                Ptr::new(value),
+            );
+            let text = e
+                .call(MEMORY_ALLOCATE, &args![MEMORY_MANAGER, 0x60u32])
+                .u32();
+            let key = e.mem.u32(slot);
+            e.call(SPRINTF, &args![text, FORMAT_STRING, key]);
+            let index = e.mem.u16(s + 0xa) as u32;
+            let capacity = e.mem.u16(s + 8) as u32;
+            if index >= capacity {
+                let grow_by = e.mem.u16(s + 0xe) as u32;
+                e.call(ARRAY_SET_SIZE, &args![strings, grow_by + index]);
+            }
+            let used = e.mem.u16(s + 0xa) as u32;
+            if index < used {
+                let base = e.mem.u32(s + 4);
+                let held = e.mem.u32(base + index * 4);
+                if text != 0 {
+                    if held == 0 {
+                        let non_null = e.mem.u16(s + 0xc).wrapping_add(1);
+                        e.mem.set_u16(s + 0xc, non_null);
+                    }
+                } else if held != 0 {
+                    let non_null = e.mem.u16(s + 0xc).wrapping_add(0xffff);
+                    e.mem.set_u16(s + 0xc, non_null);
+                }
+            } else {
+                e.mem.set_u16(s + 0xa, (index + 1) as u16);
+                if text != 0 {
+                    let non_null = e.mem.u16(s + 0xc).wrapping_add(1);
+                    e.mem.set_u16(s + 0xc, non_null);
+                }
+            }
+            let base = e.mem.u32(s + 4);
+            e.mem.set_u32(base + index * 4, text);
+            release(e, key);
+            if e.mem.u32(position) == 0 {
+                break;
+            }
+        }
+    });
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -497,6 +766,19 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
             ni_default_av_object_palette_create_clone(Ptr, Ptr) -> Ptr
         ),
         entry!(0x00a8_f770, fn_00a8f770(Ptr, Ptr, Ptr, Ptr)),
+        entry!(
+            0x00a6_e6c0,
+            ni_default_av_object_palette_save_binary(Ptr, Ptr)
+        ),
+        entry!(0x00a6_e7b0, ni_default_av_object_palette_is_equal(Ptr, Ptr) -> bool),
+        entry!(
+            0x00a6_eb20,
+            ni_t_fixed_string_map_scalar_deleting_destructor(Ptr, u32) -> Ptr
+        ),
+        entry!(
+            0x00a6_ed90,
+            ni_default_av_object_palette_get_viewer_strings(Ptr, Ptr)
+        ),
     ]
 }
 
@@ -834,5 +1116,253 @@ mod palette_tests {
         e.register(OPERATOR_NEW, |_, _| 0u32.into_ret());
         assert_eq!(e.call(0x00a6_ef70, &args![0x1000u32, 0x55u32]).u32(), 0);
         assert_eq!(calls_to(&e, OBJECT_COPY_MEMBERS)[1], vec![0x1000, 0, 0x55]);
+    }
+}
+
+#[cfg(test)]
+mod n015_tests {
+    use super::*;
+    use crate::units::nimain::nimainsdm::test_support::calls_to;
+
+    const OTHER_VTABLE: u32 = 0x0300_2000;
+    const GET_AV_OBJECT: u32 = 0x0300_3000;
+    const SAVE_LINK_ID: u32 = 0x0300_3004;
+    const WRITE: u32 = 0x0300_3008;
+
+    /// An engine with the empty string's handle 0x9000 (uncounted) and counting interlocked
+    /// doubles.
+    fn engine() -> Engine {
+        let mut e = Engine::new();
+        e.map(0x0109_b000, 0x1000);
+        e.map(0x011f_4000, 0x1000);
+        e.mem.set_u32(EMPTY_FIXED_STRING, 0x9000);
+        e.register(INTERLOCKED_INCREMENT, |e, a| {
+            let count = e.mem.u32(a[0]).wrapping_add(1);
+            e.mem.set_u32(a[0], count);
+            count.into_ret()
+        });
+        e.register(INTERLOCKED_DECREMENT, |e, a| {
+            let count = e.mem.u32(a[0]).wrapping_sub(1);
+            e.mem.set_u32(a[0], count);
+            count.into_ret()
+        });
+        e.call_log = Some(vec![]);
+        e
+    }
+
+    /// A counted fixed-string handle (count word at -8, count 1) for `text`.
+    fn handle(e: &mut Engine, text: &[u8]) -> u32 {
+        let block = e.mem.alloc(8 + text.len() as u32 + 1);
+        e.mem.set_u32(block, 1);
+        e.mem.set_cstr(block + 8, text);
+        block + 8
+    }
+
+    /// A palette whose map has `buckets` buckets and the given items (key, value).
+    fn palette(e: &mut Engine, buckets: u32, items: &[(u32, u32)]) -> u32 {
+        let p = e.mem.alloc(0x1c);
+        let table = e.mem.alloc(4 * buckets);
+        e.mem.set_u32(p + 0xc, buckets);
+        e.mem.set_u32(p + 0x10, table);
+        e.mem.set_u32(p + 0x14, items.len() as u32);
+        for (key, value) in items.iter().rev() {
+            let item = e.mem.alloc(0xc);
+            let slot = table + 4 * (key % buckets);
+            e.mem.set_u32(item, e.mem.u32(slot));
+            e.mem.set_u32(item + 4, *key);
+            e.mem.set_u32(item + 8, *value);
+            e.mem.set_u32(slot, item);
+        }
+        p
+    }
+
+    fn stream(e: &mut Engine) -> (u32, u32) {
+        e.put_vtable(0x0300_4000, &[0; 13]);
+        e.mem.set_u32(0x0300_4030, SAVE_LINK_ID);
+        e.register(SAVE_LINK_ID, |_, _| Ret::default());
+        e.register(WRITE, |_, a| a[2].into_ret());
+        let stream = e.mem.alloc(0x300);
+        e.mem.set_u32(stream, 0x0300_4000);
+        let output = e.mem.alloc(0x10);
+        e.mem.set_u32(output + 0xc, WRITE);
+        e.mem.set_u32(stream + 0x250, output);
+        (stream, output)
+    }
+
+    #[test]
+    fn save_binary_writes_the_scene_count_and_items() {
+        let mut e = engine();
+        e.register(BASE_SAVE_BINARY, |_, _| Ret::default());
+        e.register(STREAM_SAVE_C_STRING, |_, _| Ret::default());
+        let (stream, output) = stream(&mut e);
+        let first = handle(&mut e, b"a");
+        let second = handle(&mut e, b"b");
+        let this = palette(&mut e, 3, &[(first, 0x111), (second, 0x222)]);
+        e.mem.set_u32(this + 0x18, 0x5555);
+        e.call(0x00a6_e6c0, &args![this, stream]);
+        assert_eq!(calls_to(&e, BASE_SAVE_BINARY), vec![vec![this, stream]]);
+        let writes = calls_to(&e, WRITE);
+        assert_eq!(writes.len(), 1);
+        assert_eq!((writes[0][0], writes[0][2], writes[0][4]), (output, 4, 1));
+        assert_eq!(e.mem.u32(output + 4), 4);
+        let mut keys = calls_to(&e, STREAM_SAVE_C_STRING);
+        keys.sort();
+        let mut expected = vec![vec![stream, first], vec![stream, second]];
+        expected.sort();
+        assert_eq!(keys, expected);
+        let mut links: Vec<u32> = calls_to(&e, SAVE_LINK_ID).iter().map(|c| c[1]).collect();
+        assert_eq!(links.remove(0), 0x5555);
+        links.sort();
+        assert_eq!(links, vec![0x111, 0x222]);
+        // Taken and released: the counts are back to 1.
+        assert_eq!((e.mem.u32(first - 8), e.mem.u32(second - 8)), (1, 1));
+
+        // An empty map writes only the count.
+        let this = palette(&mut e, 3, &[]);
+        e.call_log = Some(vec![]);
+        e.call(0x00a6_e6c0, &args![this, stream]);
+        assert!(calls_to(&e, STREAM_SAVE_C_STRING).is_empty());
+        assert_eq!(calls_to(&e, WRITE).len(), 1);
+    }
+
+    #[test]
+    fn is_equal_looks_up_every_key_in_the_other_palette() {
+        let mut e = engine();
+        e.register(BASE_IS_EQUAL, |_, _| 1u32.into_ret());
+        e.register(MAP_GET_FIRST_POS, |e, a| {
+            let size = e.mem.u32(a[0] + 4);
+            let table = e.mem.u32(a[0] + 8);
+            first_item(e, size, table).into_ret()
+        });
+        e.put_vtable(OTHER_VTABLE, &[0; 0x24]);
+        e.mem.set_u32(OTHER_VTABLE + 0x8c, GET_AV_OBJECT);
+        // The other palette knows the key "a" only.
+        e.register(GET_AV_OBJECT, |e, a| {
+            let key = e.mem.u32(a[1]);
+            u32::from(e.mem.cstr(key) == b"a").into_ret()
+        });
+        let a = handle(&mut e, b"a");
+        let b = handle(&mut e, b"b");
+        let this = palette(&mut e, 3, &[(a, 0x111)]);
+        let other = palette(&mut e, 3, &[(a, 0x999)]);
+        e.mem.set_u32(other, OTHER_VTABLE);
+        assert!(e.call(0x00a6_e7b0, &args![this, other]).bool());
+        assert_eq!(calls_to(&e, GET_AV_OBJECT).len(), 1);
+        assert_eq!(e.mem.u32(a - 8), 1);
+        // A key the other palette lacks.
+        let this = palette(&mut e, 3, &[(a, 0x111), (b, 0x222)]);
+        e.mem.set_u32(other + 0x14, 2);
+        assert!(!e.call(0x00a6_e7b0, &args![this, other]).bool());
+        assert_eq!((e.mem.u32(a - 8), e.mem.u32(b - 8)), (1, 1));
+        // Different counts, or a failed base comparison.
+        e.mem.set_u32(other + 0x14, 1);
+        assert!(!e.call(0x00a6_e7b0, &args![this, other]).bool());
+        e.register(BASE_IS_EQUAL, |_, _| 0u32.into_ret());
+        assert!(!e.call(0x00a6_e7b0, &args![this, other]).bool());
+        // No items: equal without a lookup.
+        e.register(BASE_IS_EQUAL, |_, _| 1u32.into_ret());
+        let empty = palette(&mut e, 3, &[]);
+        let other_empty = palette(&mut e, 3, &[]);
+        e.call_log = Some(vec![]);
+        assert!(e.call(0x00a6_e7b0, &args![empty, other_empty]).bool());
+        assert!(calls_to(&e, MAP_GET_FIRST_POS).is_empty());
+    }
+
+    #[test]
+    fn fixed_string_map_destructor_empties_and_frees() {
+        let mut e = engine();
+        e.register(MAP_REMOVE_ALL, |e, a| {
+            let vtable = e.mem.u32(a[0]);
+            e.mem.set_u32(a[0] + 0xc, vtable);
+            Ret::default()
+        });
+        e.register(TABLE_FREE, |_, _| Ret::default());
+        e.register(MEMORY_DEALLOCATE, |_, _| Ret::default());
+        let map = e.mem.alloc(0x10);
+        e.mem.set_u32(map + 8, 0x4444);
+        assert_eq!(e.call(0x00a6_eb20, &args![map, 0u32]).u32(), map);
+        let removes: Vec<u32> = calls_to(&e, MAP_REMOVE_ALL).iter().map(|c| c[0]).collect();
+        assert_eq!(removes, vec![map, map]);
+        assert_eq!(e.mem.u32(map), LOCAL_MAP_BASE_VTABLE);
+        assert_eq!(e.mem.u32(map + 0xc), LOCAL_MAP_BASE_VTABLE);
+        assert_eq!(calls_to(&e, TABLE_FREE), vec![vec![0x4444]]);
+        assert!(calls_to(&e, MEMORY_DEALLOCATE).is_empty());
+        e.call(0x00a6_eb20, &args![map, 0x101u32]);
+        assert_eq!(
+            calls_to(&e, MEMORY_DEALLOCATE),
+            vec![vec![MEMORY_MANAGER, map]]
+        );
+    }
+
+    #[test]
+    fn viewer_strings_list_the_class_scene_and_keys() {
+        let mut e = engine();
+        e.register(BASE_GET_VIEWER_STRINGS, |_, _| Ret::default());
+        e.register(GET_VIEWER_STRING, |_, _| 0x7000u32.into_ret());
+        e.register(MEMORY_ALLOCATE, |e, a| e.mem.alloc(a[1]).into_ret());
+        e.register(SPRINTF, |_, _| Ret::default());
+        e.register(ARRAY_SET_SIZE, |e, a| {
+            let base = e.mem.alloc(4 * a[1]);
+            let old = e.mem.u32(a[0] + 4);
+            let count = e.mem.u16(a[0] + 0xa) as u32;
+            for index in 0..count {
+                let word = e.mem.u32(old + 4 * index);
+                e.mem.set_u32(base + 4 * index, word);
+            }
+            e.mem.set_u32(a[0] + 4, base);
+            e.mem.set_u16(a[0] + 8, a[1] as u16);
+            Ret::default()
+        });
+        e.register(ARRAY_SET_AT, |e, a| {
+            let base = e.mem.u32(a[0] + 4);
+            let value = e.mem.u32(a[2]);
+            e.mem.set_u32(base + 4 * a[1], value);
+            e.mem.set_u16(a[0] + 0xa, a[1] as u16 + 1);
+            let non_null = e.mem.u16(a[0] + 0xc) + 1;
+            e.mem.set_u16(a[0] + 0xc, non_null);
+            Ret::default()
+        });
+        e.mem.set_u32(PALETTE_RTTI_NAME, 0x0109_b100);
+        let a = handle(&mut e, b"a");
+        let b = handle(&mut e, b"b");
+        let this = palette(&mut e, 5, &[(a, 0x111), (b, 0x222)]);
+        let scene = e.mem.alloc(0x10);
+        e.mem.set_u32(this + 0x18, scene);
+        let strings = e.mem.alloc(0x10);
+        let first_base = e.mem.alloc(4);
+        e.mem.set_u32(strings + 4, first_base);
+        e.mem.set_u16(strings + 8, 1);
+        e.mem.set_u16(strings + 0xe, 1);
+        e.call(0x00a6_ed90, &args![this, strings]);
+        assert_eq!(calls_to(&e, GET_VIEWER_STRING), vec![vec![0x0109_b100]]);
+        let sprintf = calls_to(&e, SPRINTF);
+        assert_eq!(sprintf.len(), 3);
+        assert_eq!(sprintf[0][1..], [FORMAT_SCENE, TEXT_UNKNOWN]);
+        let mut keys: Vec<u32> = sprintf[1..].iter().map(|c| c[2]).collect();
+        keys.sort();
+        let mut expected = vec![a, b];
+        expected.sort();
+        assert_eq!(keys, expected);
+        assert!(sprintf[1..].iter().all(|c| c[1] == FORMAT_STRING));
+        // Four strings, all non-null; the array grew three times by one.
+        assert_eq!(e.mem.u16(strings + 0xa), 4);
+        assert_eq!(e.mem.u16(strings + 0xc), 4);
+        assert_eq!(calls_to(&e, ARRAY_SET_SIZE).len(), 3);
+        let base = e.mem.u32(strings + 4);
+        assert_eq!(e.mem.u32(base), 0x7000);
+        assert_eq!(e.mem.u32(base + 4), sprintf[0][0]);
+        assert_eq!(e.mem.u32(base + 8), sprintf[1][0]);
+        assert_eq!(e.mem.u32(base + 0xc), sprintf[2][0]);
+        assert_eq!((e.mem.u32(a - 8), e.mem.u32(b - 8)), (1, 1));
+
+        // A named scene, no items.
+        let this = palette(&mut e, 5, &[]);
+        e.mem.set_u32(scene + 8, a);
+        e.mem.set_u32(this + 0x18, scene);
+        e.call_log = Some(vec![]);
+        e.call(0x00a6_ed90, &args![this, strings]);
+        let sprintf = calls_to(&e, SPRINTF);
+        assert_eq!(sprintf.len(), 1);
+        assert_eq!(sprintf[0][2], a);
     }
 }

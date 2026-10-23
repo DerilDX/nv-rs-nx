@@ -334,9 +334,105 @@ pub fn fn_00b7fce0(e: &mut Engine, _this: Ptr, key1: u32, key2: u32) -> bool {
     e.call(NI_STRICMP, &args![key1, key2]).u32() == 0
 }
 
+/// `memcpy` (`00ec44d0`, `cdecl`, three words).
+const MEMCPY: u32 = 0x00ec_44d0;
+/// The array of package entries' grow (`00a90180`, `thiscall`, one word: the new size) and set
+/// (`00ba3aa0`, `thiscall`, two words: the index and the address of the element).
+const ENTRY_ARRAY_SET_SIZE_00A90180: u32 = 0x00a9_0180;
+const ENTRY_ARRAY_SET_AT_00BA3AA0: u32 = 0x00ba_3aa0;
+
+// Translated from 00b7fa40 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map: a 0x108-byte package entry's constructor (`thiscall`, three
+/// words: a name, a block of data and its size). The size goes to `+0x100`; with a size and
+/// data, a copy of the data (`size` bytes from the memory manager, `00aa3e40` on `011f6238`,
+/// filled by `memcpy`) goes to `+0x104`, else `+0x104` is cleared. The 0x100-byte name at `+0`
+/// is cleared (`_memset`) and, with a name, filled by `_strcpy_s` (0x100). Answers `this`.
+pub fn fn_00b7fa40(e: &mut Engine, this: Ptr, name: u32, data: u32, size: u32) -> Ptr {
+    let base = this.addr();
+    e.mem.set_u32(base + 0x100, size);
+    if size != 0 && data != 0 {
+        let copy = e.call(MEMORY_ALLOCATE, &args![MEMORY_MANAGER, size]).u32();
+        let size = e.mem.u32(base + 0x100);
+        e.mem.set_u32(base + 0x104, copy);
+        e.call(MEMCPY, &args![copy, data, size]);
+    } else {
+        e.mem.set_u32(base + 0x104, 0);
+    }
+    e.call(MEMSET, &args![base, 0u32, 0x100u32]);
+    if name != 0 {
+        e.call(STRCPY_S, &args![base, 0x100u32, name]);
+    }
+    this
+}
+
+// Translated from 00b7fd00 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map: the scalar deleting destructor of the map `fn_00b7fbe0` cleans
+/// (`thiscall`, one word: the flags): `fn_00b7fbe0`, then with bit 0 of the flags the map goes
+/// back to the memory manager (`00aa4060` on `011f6238`). Answers `this`.
+pub fn fn_00b7fd00(e: &mut Engine, this: Ptr, flags: u8) -> Ptr {
+    fn_00b7fbe0(e, this);
+    if flags & 1 != 0 {
+        e.call(MEMORY_DEALLOCATE, &args![MEMORY_MANAGER, this]);
+    }
+    this
+}
+
+// Translated from 00b7fd20 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map: the scalar deleting destructor of the map `fn_00b7fc50` cleans
+/// (`thiscall`, one word: the flags): `fn_00b7fc50`, then with bit 0 of the flags the map goes
+/// back to the memory manager (`00aa4060` on `011f6238`). Answers `this`.
+pub fn fn_00b7fd20(e: &mut Engine, this: Ptr, flags: u8) -> Ptr {
+    fn_00b7fc50(e, this);
+    if flags & 1 != 0 {
+        e.call(MEMORY_DEALLOCATE, &args![MEMORY_MANAGER, this]);
+    }
+    this
+}
+
+// Translated from 00b7fd90 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map: adds a package entry at the end of an `NiTArray` of entries
+/// (`thiscall` on the array, three words: the name, the data and its size). 0x108 bytes from
+/// the memory manager (`00aa3e40` on `011f6238`) are constructed by `fn_00b7fa40` with the
+/// three words (null when the allocation gave none); when `m_usSize` is not below
+/// `m_usMaxSize` the array grows to `m_usSize + m_usGrowBy` (`00a90180`), then the entry is set
+/// at index `m_usSize` (`00ba3aa0` with the address of the stack slot holding it).
+///
+/// The exception frame (`FS:[0]`) is not translated.
+// Translation incomplete: 00b7fd90 - the FS:[0] exception frame (unwinding on a throw) is not translated
+pub fn fn_00b7fd90(e: &mut Engine, this: Ptr, name: u32, data: u32, size: u32) {
+    let block = e
+        .call(MEMORY_ALLOCATE, &args![MEMORY_MANAGER, 0x108u32])
+        .u32();
+    let entry = if block != 0 {
+        fn_00b7fa40(e, Ptr::new(block), name, data, size).addr()
+    } else {
+        0
+    };
+    let array: Ptr<NiTArray> = this.cast();
+    let index = u32::from(e.get(array, NiTArray::m_usSize));
+    let capacity = u32::from(e.get(array, NiTArray::m_usMaxSize));
+    e.with_stack(4, |e, element| {
+        e.mem.set_u32(element.addr(), entry);
+        if index >= capacity {
+            let grow = u32::from(e.get(array, NiTArray::m_usGrowBy));
+            e.call(
+                ENTRY_ARRAY_SET_SIZE_00A90180,
+                &args![this, grow.wrapping_add(index)],
+            );
+        }
+        e.call(ENTRY_ARRAY_SET_AT_00BA3AA0, &args![this, index, element]);
+    });
+}
+
+use crate::types::NiTArray;
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x00b7_fa40, fn_00b7fa40(Ptr, u32, u32, u32) -> Ptr),
+        entry!(0x00b7_fd00, fn_00b7fd00(Ptr, u8) -> Ptr),
+        entry!(0x00b7_fd20, fn_00b7fd20(Ptr, u8) -> Ptr),
+        entry!(0x00b7_fd90, fn_00b7fd90(Ptr, u32, u32, u32)),
         entry!(0x00b7_fbe0, fn_00b7fbe0(Ptr) -> u32),
         entry!(0x00b7_faf0, fn_00b7faf0() -> u32),
         entry!(0x00b7_ff40, fn_00b7ff40(Ptr, i32) -> Ptr),
@@ -766,5 +862,115 @@ mod b048_tests {
             .map(|c| c.1.clone())
             .collect();
         assert_eq!(compares, vec![vec![0x10, 0x10], vec![0x10, 0x20]]);
+    }
+}
+
+#[cfg(test)]
+mod n013_tests {
+    use super::*;
+
+    fn calls(e: &Engine, callee: u32) -> Vec<Vec<u32>> {
+        e.call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|(address, _)| *address == callee)
+            .map(|(_, words)| words.clone())
+            .collect()
+    }
+
+    fn rig() -> Engine {
+        let mut e = Engine::new();
+        e.register(MEMORY_ALLOCATE, |e, a| e.mem.alloc(a[1]).into_ret());
+        e.register(MEMORY_DEALLOCATE, |_, _| Ret::default());
+        e.register(MEMCPY, |_, _| Ret::default());
+        e.register(MEMSET, |_, _| Ret::default());
+        e.register(STRCPY_S, |_, _| Ret::default());
+        e.call_log = Some(vec![]);
+        e
+    }
+
+    #[test]
+    fn fn_00b7fa40_copies_the_data_and_the_name() {
+        let mut e = rig();
+        let entry = e.mem.alloc(0x108);
+        assert_eq!(
+            e.call(0x00b7_fa40, &args![entry, 0x500u32, 0x600u32, 0x20u32])
+                .u32(),
+            entry
+        );
+        assert_eq!(e.mem.u32(entry + 0x100), 0x20);
+        let copy = e.mem.u32(entry + 0x104);
+        assert_eq!(calls(&e, MEMORY_ALLOCATE), vec![vec![MEMORY_MANAGER, 0x20]]);
+        assert_eq!(calls(&e, MEMCPY), vec![vec![copy, 0x600, 0x20]]);
+        assert_eq!(calls(&e, MEMSET), vec![vec![entry, 0, 0x100]]);
+        assert_eq!(calls(&e, STRCPY_S), vec![vec![entry, 0x100, 0x500]]);
+        // No data (or no size) and no name: nothing copied.
+        e.call_log = Some(vec![]);
+        e.call(0x00b7_fa40, &args![entry, 0u32, 0u32, 0x20u32]);
+        assert_eq!(e.mem.u32(entry + 0x104), 0);
+        assert!(calls(&e, MEMORY_ALLOCATE).is_empty());
+        assert!(calls(&e, STRCPY_S).is_empty());
+        e.call(0x00b7_fa40, &args![entry, 0u32, 0x600u32, 0u32]);
+        assert_eq!(e.mem.u32(entry + 0x100), 0);
+        assert!(calls(&e, MEMORY_ALLOCATE).is_empty());
+    }
+
+    #[test]
+    fn scalar_deleting_destructors_give_back_on_bit_0() {
+        let mut e = rig();
+        e.register(MAP_REMOVE_ALL_00B601A0, |_, _| Ret::default());
+        e.register(FREE_00AA10F0, |_, _| Ret::default());
+        let map = e.mem.alloc(0x14);
+        assert_eq!(e.call(0x00b7_fd00, &args![map, 0u32]).u32(), map);
+        assert!(calls(&e, MEMORY_DEALLOCATE).is_empty());
+        assert_eq!(e.mem.u32(map), MAP_VTABLE_010ADE18);
+        e.call(0x00b7_fd00, &args![map, 1u32]);
+        assert_eq!(
+            calls(&e, MEMORY_DEALLOCATE),
+            vec![vec![MEMORY_MANAGER, map]]
+        );
+        // The derived one stores its own vtable first and ends in the base.
+        e.call_log = Some(vec![]);
+        e.call(0x00b7_fd20, &args![map, 1u32]);
+        assert_eq!(calls(&e, MAP_REMOVE_ALL_00B601A0).len(), 2);
+        assert_eq!(
+            calls(&e, MEMORY_DEALLOCATE),
+            vec![vec![MEMORY_MANAGER, map]]
+        );
+        e.call_log = Some(vec![]);
+        e.call(0x00b7_fd20, &args![map, 0u32]);
+        assert!(calls(&e, MEMORY_DEALLOCATE).is_empty());
+    }
+
+    #[test]
+    fn fn_00b7fd90_adds_a_new_entry() {
+        let mut e = rig();
+        e.register(ENTRY_ARRAY_SET_SIZE_00A90180, |_, _| Ret::default());
+        e.register(ENTRY_ARRAY_SET_AT_00BA3AA0, |e, a| {
+            let entry = e.mem.u32(a[2]);
+            e.mem.set_u32(a[0] + 4, entry);
+            Ret::default()
+        });
+        let array = e.mem.alloc(0x10);
+        e.mem.set_u16(array + 8, 2);
+        e.mem.set_u16(array + 0xa, 1);
+        e.mem.set_u16(array + 0xe, 4);
+        e.call(0x00b7_fd90, &args![array, 0x500u32, 0x600u32, 8u32]);
+        let entry = e.mem.u32(array + 4);
+        assert_ne!(entry, 0);
+        assert_eq!(e.mem.u32(entry + 0x100), 8);
+        assert!(calls(&e, ENTRY_ARRAY_SET_SIZE_00A90180).is_empty());
+        assert_eq!(calls(&e, ENTRY_ARRAY_SET_AT_00BA3AA0)[0][..2], [array, 1]);
+        // Full: grows by the grow-by count first; a failed allocation adds a null entry.
+        e.mem.set_u16(array + 0xa, 2);
+        e.register(MEMORY_ALLOCATE, |_, _| 0u32.into_ret());
+        e.call(0x00b7_fd90, &args![array, 0x500u32, 0x600u32, 8u32]);
+        assert_eq!(
+            calls(&e, ENTRY_ARRAY_SET_SIZE_00A90180),
+            vec![vec![array, 6]]
+        );
+        assert_eq!(calls(&e, ENTRY_ARRAY_SET_AT_00BA3AA0)[1][..2], [array, 2]);
+        assert_eq!(e.mem.u32(array + 4), 0);
     }
 }

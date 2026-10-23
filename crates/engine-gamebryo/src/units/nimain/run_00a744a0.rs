@@ -37,11 +37,24 @@ pub fn ni_tri_shape_create_object(e: &mut Engine) -> Ptr {
     Ptr::new(object)
 }
 
+/// `00a9b140`: the jump target of `00a744c0` (engine map: `NiParticleMeshes::CopyMembers`,
+/// itself a jump; `thiscall`, clone and cloning process).
+const JUMP_TARGET_00A744C0: u32 = 0x00a9_b140;
+
+// Translated from 00a744c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (Ghidra names it `CopyMembers`): a 5-byte jump to `00a9b140`,
+/// passing on `this` and its two words (the clone and the cloning process, as the jump
+/// target takes them).
+pub fn fn_00a744c0(e: &mut Engine, this: Ptr, clone: Ptr, cloning_process: Ptr) {
+    e.call(JUMP_TARGET_00A744C0, &args![this, clone, cloning_process]);
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
         entry!(0x00a744a0, fn_00a744a0(Ptr) -> Ptr),
         entry!(0x00a744d0, ni_tri_shape_create_object() -> Ptr),
+        entry!(0x00a7_44c0, fn_00a744c0(Ptr, Ptr, Ptr)),
     ]
 }
 
@@ -70,5 +83,25 @@ mod tests {
         assert!(log.contains(&(NI_ALLOCATE, vec![0xc4])));
         e.register(NI_ALLOCATE, |_, _| 0u32.into_ret());
         assert_eq!(e.call(0x00a7_44d0, &args![]).u32(), 0);
+    }
+}
+
+#[cfg(test)]
+mod thunk_tests {
+    use super::*;
+
+    #[test]
+    fn thunk_00a744c0_forwards_its_words_to_the_jump_target() {
+        let mut e = Engine::new();
+        e.register(JUMP_TARGET_00A744C0, |_, _| Ret::default());
+        e.call_log = Some(vec![]);
+        e.call(0x00a7_44c0, &args![0x1000u32, 0x2000u32, 0x3000u32]);
+        let log = e.call_log.take().unwrap();
+        let hits: Vec<_> = log
+            .iter()
+            .filter(|call| call.0 == JUMP_TARGET_00A744C0)
+            .collect();
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].1, args![0x1000u32, 0x2000u32, 0x3000u32]);
     }
 }

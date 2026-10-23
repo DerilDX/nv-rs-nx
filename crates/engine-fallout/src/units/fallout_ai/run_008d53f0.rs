@@ -135,9 +135,89 @@ pub fn fn_008d53f0(
     fn_008d55e0(e, state, next);
 }
 
+/// `TESForm::SaveGameDataOLD` (`00484ce0`) and `TESForm::LoadGameDataOLD`
+/// (`00484d00`), `thiscall(address, size)` on the form (Xbox PDB names), and
+/// `00864980` (`thiscall(address, size)` on a load buffer).
+const SAVE_DATA: u32 = 0x0048_4ce0;
+const LOAD_DATA: u32 = 0x0048_4d00;
+const BUFFER_READ: u32 = 0x0086_4980;
+
+// Translated from 008d54e0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The size `fn_008d5510` saves: 1 + 4 (16-bit); the stack word (`RET 4`)
+/// is not read.
+pub fn fn_008d54e0(_e: &mut Engine, _this: u32, _unused_1: u32) -> u16 {
+    1 + 4
+}
+
+// Translated from 008d5510 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Saves the level-up state (`00559450` on `this`) through the object at
+/// `011dea3c`: its byte (size 1) and the word at +4 (size 4). The stack word
+/// (`RET 4`) is not read.
+pub fn fn_008d5510(e: &mut Engine, this: u32, _unused_1: u32) {
+    let player = e.mem.u32(OBJECT_011DEA3C);
+    let state = e.call(GET_MEMBER, &args![this]).u32();
+    e.call(SAVE_DATA, &args![player, state, 1u32]);
+    let state = e.call(GET_MEMBER, &args![this]).u32();
+    let player = e.mem.u32(OBJECT_011DEA3C);
+    e.call(SAVE_DATA, &args![player, state + 4, 4u32]);
+}
+
+// Translated from 008d5550 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Loads what `fn_008d5510` saves (`TESForm::LoadGameDataOLD`); the two stack
+/// words (`RET 8`) are not read.
+pub fn fn_008d5550(e: &mut Engine, this: u32, _unused_1: u32, _unused_2: u32) {
+    let player = e.mem.u32(OBJECT_011DEA3C);
+    let state = e.call(GET_MEMBER, &args![this]).u32();
+    e.call(LOAD_DATA, &args![player, state, 1u32]);
+    let state = e.call(GET_MEMBER, &args![this]).u32();
+    let player = e.mem.u32(OBJECT_011DEA3C);
+    e.call(LOAD_DATA, &args![player, state + 4, 4u32]);
+}
+
+// Translated from 008d5680 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `fn_008d56f0(buffer)` on the object held at `this` (not checked for null,
+/// as in the exe).
+pub fn fn_008d5680(e: &mut Engine, this: u32, buffer: u32) {
+    let held = e.mem.u32(this);
+    fn_008d56f0(e, held, buffer);
+}
+
+// Translated from 008d56a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `fn_008d5720` on the object held at `this` (not checked for null, as in
+/// the exe), with the stack word passed on.
+pub fn fn_008d56a0(e: &mut Engine, this: u32, value: u32) {
+    let held = e.mem.u32(this);
+    fn_008d5720(e, held, value);
+}
+
+// Translated from 008d56f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Reads the byte at `this` (size 1) and the word at +4 (size 4) through
+/// `00864980` on `buffer` (the load side of `fn_008d56c0`).
+pub fn fn_008d56f0(e: &mut Engine, this: u32, buffer: u32) {
+    e.call(BUFFER_READ, &args![buffer, this, 1u32]);
+    e.call(BUFFER_READ, &args![buffer, this + 4, 4u32]);
+}
+
+// Translated from 008d5720 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Clears the byte at `this` and stores `GetRequiredExperiencePoints(2)` at
+/// +4 (the start of `fn_008d55b0` without its last store); the stack word
+/// (`RET 4`) is not read.
+pub fn fn_008d5720(e: &mut Engine, this: u32, _unused_1: u32) {
+    e.mem.set_u8(this, 0);
+    let required = e.call(REQUIRED_EXPERIENCE, &args![2u32]).u32();
+    e.mem.set_u32(this + 4, required);
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x008d_54e0, fn_008d54e0(u32, u32) -> u16),
+        entry!(0x008d_5510, fn_008d5510(u32, u32)),
+        entry!(0x008d_5550, fn_008d5550(u32, u32, u32)),
+        entry!(0x008d_5680, fn_008d5680(u32, u32)),
+        entry!(0x008d_56a0, fn_008d56a0(u32, u32)),
+        entry!(0x008d_56f0, fn_008d56f0(u32, u32)),
+        entry!(0x008d_5720, fn_008d5720(u32, u32)),
         entry!(0x008d_55b0, fn_008d55b0(u32)),
         entry!(0x008d_5590, fn_008d5590(u32) -> u32),
         entry!(0x008d_56c0, fn_008d56c0(u32, u32)),
@@ -284,5 +364,74 @@ mod tests {
         e.call_log = Some(vec![]);
         e.call(0x008d_53f0, &[owner, 0x18, 0, 25.0f32.to_bits(), 0]);
         assert!(calls_to(&e, FTOL2).is_empty());
+    }
+}
+
+#[cfg(test)]
+mod n028_tests {
+    use super::*;
+
+    fn calls_to(e: &Engine, callee: u32) -> Vec<Vec<u32>> {
+        e.call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|(address, _)| *address == callee)
+            .map(|(_, words)| words.clone())
+            .collect()
+    }
+
+    #[test]
+    fn fn_008d54e0_answers_five() {
+        let mut e = Engine::new();
+        assert_eq!(e.call(0x008d_54e0, &[0, 9]).u16(), 5);
+    }
+
+    #[test]
+    fn save_and_load_go_through_the_player_form() {
+        let mut e = Engine::new();
+        e.map(OBJECT_011DEA3C, 4);
+        e.mem.set_u32(OBJECT_011DEA3C, 0x9a7e);
+        e.register(GET_MEMBER, |_, _| Ret {
+            eax: 0x5100,
+            ..Ret::default()
+        });
+        e.register(SAVE_DATA, |_, _| Ret::default());
+        e.register(LOAD_DATA, |_, _| Ret::default());
+        e.call_log = Some(vec![]);
+        e.call(0x008d_5510, &[0x4000, 0]);
+        assert_eq!(
+            calls_to(&e, SAVE_DATA),
+            vec![vec![0x9a7e, 0x5100, 1], vec![0x9a7e, 0x5104, 4]]
+        );
+        e.call(0x008d_5550, &[0x4000, 0, 0]);
+        assert_eq!(
+            calls_to(&e, LOAD_DATA),
+            vec![vec![0x9a7e, 0x5100, 1], vec![0x9a7e, 0x5104, 4]]
+        );
+        assert_eq!(calls_to(&e, GET_MEMBER), vec![vec![0x4000]; 4]);
+    }
+
+    #[test]
+    fn the_holder_forwards_to_the_held_state() {
+        let mut e = Engine::new();
+        let state = e.mem.alloc(8);
+        e.mem.set_u8(state, 1);
+        let holder = e.mem.alloc(4);
+        e.mem.set_u32(holder, state);
+        e.register(BUFFER_READ, |_, _| Ret::default());
+        e.register(REQUIRED_EXPERIENCE, |_, a| Ret {
+            eax: a[0] * 100,
+            ..Ret::default()
+        });
+        e.call_log = Some(vec![]);
+        e.call(0x008d_5680, &[holder, 0xb0f0]);
+        assert_eq!(
+            calls_to(&e, BUFFER_READ),
+            vec![vec![0xb0f0, state, 1], vec![0xb0f0, state + 4, 4]]
+        );
+        e.call(0x008d_56a0, &[holder, 0]);
+        assert_eq!(e.mem.u8(state), 0);
+        assert_eq!(e.mem.u32(state + 4), 200);
     }
 }

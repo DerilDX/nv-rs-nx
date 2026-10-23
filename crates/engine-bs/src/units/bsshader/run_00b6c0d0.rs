@@ -832,9 +832,83 @@ pub fn fn_00b6d4c0(e: &mut Engine, this: Ptr, item: u32) {
     });
 }
 
+// Translated from 00b6d120 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`thiscall` on the texture manager `fn_00b6d170` runs on, no
+/// words; `ShadowSceneNode`'s callers reach it through `011f91a8`): answers its word at
+/// `+0xa8` (the word `fn_00b6d170` passes on without flag 0x100).
+pub fn fn_00b6d120(e: &mut Engine, this: Ptr) -> u32 {
+    e.mem.u32(this.addr().wrapping_add(0xa8))
+}
+
+// Translated from 00b6d130 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`thiscall` on the texture manager, no words): lets go of the
+/// `NiPointer` at `+0xac` when it holds an object (count down, deleted at zero) and clears it.
+pub fn fn_00b6d130(e: &mut Engine, this: Ptr) {
+    let slot = this.addr().wrapping_add(0xac);
+    let object = e.mem.u32(slot);
+    if object != 0 {
+        release(e, object);
+        e.mem.set_u32(slot, 0);
+    }
+}
+
+// Translated from 00b6d370 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`thiscall` on the texture manager, four words: a renderer, a
+/// rendered-texture kind and two words passed on; `TakeLocalMapPicture` `0054e90a` uses the
+/// answer). Describes the kind (`fn_00b6c2c0` with the renderer, the kind and the addresses of
+/// four stack words for the width, height, format and cleared word, then of the renderer's
+/// and the kind's own stack slots, which receive the flags and the last word), then makes the
+/// texture (`fn_00b6d170` on `this` with the renderer, the width, height, format, the cleared
+/// word, the flags, the kind, the last word and the two passed-on words). Answers what
+/// `fn_00b6d170` answers (left in `EAX`).
+///
+/// For the kinds `fn_00b6c2c0` stores no size for (0xb, above 0x33) the exe passes on whatever
+/// its stack held in the width, height and format words; the translation's stack block starts
+/// zeroed instead.
+// Translation incomplete: 00b6d370 - for kinds 0xb and above 0x33 the width, height and format words passed to 00b6d170 are uninitialised stack in the exe (zero here)
+pub fn fn_00b6d370(
+    e: &mut Engine,
+    this: Ptr,
+    renderer: u32,
+    kind: u32,
+    third: u32,
+    fourth: u32,
+) -> u32 {
+    e.with_stack(0x18, |e, frame| {
+        let at = |offset: u32| Ptr::new(frame.addr() + offset);
+        // Locals as the exe lays them out: +0 cleared, +4 format, +8 height, +0xc width;
+        // then the two argument slots (+0x10 the renderer's, +0x14 the kind's).
+        e.mem.set_u32(frame.addr() + 0x10, renderer);
+        e.mem.set_u32(frame.addr() + 0x14, kind);
+        fn_00b6c2c0(
+            e,
+            Ptr::new(renderer),
+            kind,
+            at(0xc),
+            at(8),
+            at(4),
+            at(0),
+            at(0x10),
+            at(0x14),
+        );
+        let word = |e: &Engine, offset: u32| e.mem.u32(frame.addr() + offset);
+        let (width, height, format, cleared) = (word(e, 0xc), word(e, 8), word(e, 4), word(e, 0));
+        let (flags, last) = (word(e, 0x10), word(e, 0x14));
+        fn_00b6d170(
+            e, this, renderer, width, height, format, cleared, flags, kind, last, third, fourth,
+        )
+    })
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x00b6_d120, fn_00b6d120(Ptr) -> u32),
+        entry!(0x00b6_d130, fn_00b6d130(Ptr)),
+        entry!(
+            0x00b6_d370,
+            fn_00b6d370(Ptr, u32, u32, u32, u32) -> u32
+        ),
         entry!(0x00b6_c0d0, fn_00b6c0d0(u32, Ptr) -> u32),
         entry!(0x00b6_c130, fn_00b6c130()),
         entry!(0x00b6_d3f0, fn_00b6d3f0(Ptr) -> u32),
@@ -1458,5 +1532,86 @@ mod b061_tests {
         e.call(0x00b6_d4c0, &[this, 0x9999]);
         e.call(0x00b6_d4c0, &[this, 0]);
         assert!(calls(&e, LIST_REMOVE_POS).is_empty());
+    }
+}
+
+#[cfg(test)]
+mod n013_tests {
+    use super::*;
+
+    fn calls(e: &Engine, addr: u32) -> Vec<Vec<u32>> {
+        let log = e.call_log.as_ref().unwrap();
+        log.iter()
+            .filter(|c| c.0 == addr)
+            .map(|c| c.1.clone())
+            .collect()
+    }
+
+    #[test]
+    fn fn_00b6d120_answers_the_word_at_0xa8() {
+        let mut e = Engine::new();
+        let this = e.mem.alloc(0xb0);
+        e.mem.set_u32(this + 0xa8, 0x1234);
+        assert_eq!(e.call(0x00b6_d120, &args![this]).u32(), 0x1234);
+    }
+
+    #[test]
+    fn fn_00b6d130_lets_go_of_the_pointer() {
+        let mut e = Engine::new();
+        e.register(IMPORT_INTERLOCKED_DECREMENT, |e, a| {
+            let v = e.mem.u32(a[0]).wrapping_sub(1);
+            e.mem.set_u32(a[0], v);
+            v.into_ret()
+        });
+        e.put_vtable(0x0f00_1000, &[0, 0x0f00_0004]);
+        e.register(0x0f00_0004, |_, _| Ret::default());
+        let object = e.mem.alloc(8);
+        e.mem.set_u32(object, 0x0f00_1000);
+        e.mem.set_u32(object + 4, 1);
+        let this = e.mem.alloc(0xb0);
+        e.mem.set_u32(this + 0xac, object);
+        e.call_log = Some(vec![]);
+        e.call(0x00b6_d130, &args![this]);
+        assert_eq!(e.mem.u32(this + 0xac), 0);
+        assert_eq!(calls(&e, 0x0f00_0004), vec![vec![object]]);
+        // Empty: nothing happens.
+        e.call(0x00b6_d130, &args![this]);
+        assert_eq!(calls(&e, IMPORT_INTERLOCKED_DECREMENT).len(), 1);
+    }
+
+    #[test]
+    fn fn_00b6d370_describes_then_makes() {
+        const NAME: u32 = 0x0d20_0008;
+        const OBJECT: u32 = 0x0d10_0000;
+        let mut e = Engine::new();
+        for page in [
+            0x011f_4000u32,
+            0x011a_b000,
+            0x011b_f000,
+            0x011f_9000,
+            0x0109_b000,
+        ] {
+            e.map(page, 0x1000);
+        }
+        e.map(NAME - 8, 0x10);
+        e.register(QUERY_00B6C200, |_, _| 0u32.into_ret());
+        e.register(MAKE_FIXED_STRING_00A5B690, |_, _| NAME.into_ret());
+        e.register(MAKE_TEXTURE_00B6B610, |_, _| OBJECT.into_ret());
+        e.register(IMPORT_INTERLOCKED_DECREMENT, |_, _| 1u32.into_ret());
+        let this = e.mem.alloc(0xb0);
+        e.mem.set_u32(this + 0xa8, 0xabc0);
+        e.call_log = Some(vec![]);
+        // Kind 8: 0x200 square, format 0x24, flags 2.
+        let made = e
+            .call(0x00b6_d370, &args![this, 0x5000u32, 8u32, 0x99u32, 0x77u32])
+            .u32();
+        assert_eq!(made, OBJECT);
+        let named = calls(&e, MAKE_TEXTURE_00B6B610);
+        assert_eq!(named.len(), 1);
+        assert_eq!(&named[0][1..3], &[0x200, 0x200]);
+        assert_eq!(&named[0][6..], &[0xabc0, 0x99, 0x77]);
+        // The format made the making flag go up and down again.
+        assert_eq!(e.global::<u8>(MAKING_FLAG_011F4AC0), 0);
+        assert_eq!(e.global::<u32>(MAKING_FORMAT_011AB3C8), 0x24);
     }
 }

@@ -162,9 +162,76 @@ pub fn ni_d3d_shader_interface_initialize(e: &mut Engine, this: Ptr) -> u32 {
     e.call(NI_SHADER_INITIALIZE_00A8F3D0, &args![this]).u32()
 }
 
+// Translated from 00b79d90 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiD3DShaderInterface::GetIsBestImplementation` (engine map; the vtable slot +0xe4 the Xbox
+/// PDB names so), `thiscall`: the byte `m_bIsBestImplementation` (+0x20, Xbox PDB).
+pub fn ni_d3d_shader_interface_get_is_best_implementation(e: &mut Engine, this: Ptr) -> u8 {
+    e.mem.u8(this.addr().wrapping_add(0x20))
+}
+
+// Translated from 00b79da0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiD3DShaderInterface::SetIsBestImplementation` (engine map), `thiscall` with one stack word:
+/// its low byte goes to `m_bIsBestImplementation` (+0x20, Xbox PDB).
+pub fn ni_d3d_shader_interface_set_is_best_implementation(e: &mut Engine, this: Ptr, best: u8) {
+    e.mem.set_u8(this.addr().wrapping_add(0x20), best);
+}
+
+// Translated from 00eea540 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiD3DShaderInterface::SetD3DRenderState` (engine map), `thiscall` with one stack word:
+/// stores it in `m_pkD3DRenderState` (+0x1c, Xbox PDB).
+pub fn ni_d3d_shader_interface_set_d3d_render_state(e: &mut Engine, this: Ptr, state: u32) {
+    e.mem.set_u32(this.addr().wrapping_add(0x1c), state);
+}
+
+/// `NiD3DShaderInterface`'s RTTI record (`0126f75c`).
+const SHADER_INTERFACE_RTTI_0126F75C: u32 = 0x0126_f75c;
+
+// Translated from 00e818c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiD3DShaderInterface::GetRTTI` (engine map), `thiscall`, `this` not read: the RTTI record
+/// at `0126f75c`.
+pub fn ni_d3d_shader_interface_get_rtti(_e: &mut Engine, _this: Ptr) -> u32 {
+    SHADER_INTERFACE_RTTI_0126F75C
+}
+
+/// The sized free `00aa1460` (`cdecl`: block, size).
+const FREE_SIZED_00AA1460: u32 = 0x00aa_1460;
+
+// Translated from 00e81ab0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiD3DShaderInterface::scalar deleting destructor` (engine map), `thiscall` with the flags:
+/// the destructor inline (the same steps as [`fn_00e81a50`]), then with bit 0 the 0x24 bytes
+/// freed (`00aa1460`). Answers `this`.
+pub fn ni_d3d_shader_interface_scalar_deleting_destructor(
+    e: &mut Engine,
+    this: Ptr,
+    flags: u32,
+) -> Ptr {
+    fn_00e81a50(e, this);
+    if flags & 1 != 0 {
+        e.call(FREE_SIZED_00AA1460, &args![this, 0x24u32]);
+    }
+    this
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(
+            0x00b7_9d90,
+            ni_d3d_shader_interface_get_is_best_implementation(Ptr) -> u8
+        ),
+        entry!(
+            0x00b7_9da0,
+            ni_d3d_shader_interface_set_is_best_implementation(Ptr, u8)
+        ),
+        entry!(
+            0x00ee_a540,
+            ni_d3d_shader_interface_set_d3d_render_state(Ptr, u32)
+        ),
+        entry!(0x00e8_18c0, ni_d3d_shader_interface_get_rtti(Ptr) -> u32),
+        entry!(
+            0x00e8_1ab0,
+            ni_d3d_shader_interface_scalar_deleting_destructor(Ptr, u32) -> Ptr
+        ),
         entry!(
             0x00e8_1940,
             ni_d3d_shader_interface_initialize_shader_system(u32) -> u32
@@ -392,5 +459,80 @@ mod b052_tests {
         assert_eq!(e.call(0x00e8_1a90, &args![this]).u32(), 0x101);
         assert_eq!(e.mem.u32(this + 0x14), device);
         assert_eq!(calls(&e, NI_SHADER_INITIALIZE_00A8F3D0), vec![vec![this]]);
+    }
+}
+
+#[cfg(test)]
+mod n008_tests {
+    use super::*;
+
+    #[test]
+    fn set_is_best_implementation_stores_the_low_byte() {
+        let mut e = Engine::new();
+        let this = e.mem.alloc(0x24);
+        e.call(0x00b7_9da0, &args![this, 0xffff_ff01u32]);
+        assert_eq!(e.mem.u8(this + 0x20), 1);
+        assert_eq!(e.mem.u8(this + 0x21), 0);
+    }
+
+    #[test]
+    fn get_is_best_implementation_reads_the_byte() {
+        let mut e = Engine::new();
+        let this = e.mem.alloc(0x24);
+        e.mem.set_u8(this + 0x20, 0x5a);
+        assert_eq!(e.call(0x00b7_9d90, &args![this]).u8(), 0x5a);
+    }
+
+    #[test]
+    fn set_d3d_render_state_stores_the_word() {
+        let mut e = Engine::new();
+        let this = e.mem.alloc(0x24);
+        e.call(0x00ee_a540, &args![this, 0x0e00_1234u32]);
+        assert_eq!(e.mem.u32(this + 0x1c), 0x0e00_1234);
+    }
+
+    #[test]
+    fn get_rtti_answers_the_record() {
+        let mut e = Engine::new();
+        assert_eq!(e.call(0x00e8_18c0, &args![0u32]).u32(), 0x0126_f75c);
+    }
+
+    #[test]
+    fn scalar_deleting_destructor_frees_with_bit_zero() {
+        for (flags, frees) in [(1u32, true), (2, false)] {
+            let mut e = Engine::new();
+            e.put_vtable(0x0e00_0000, &[0, 0, 0x0e01_0008]);
+            e.register(0x0e01_0008, |_, _| Ret::default());
+            e.register(NI_SHADER_DESTRUCT_00A8F490, |_, _| Ret::default());
+            e.register(FREE_SIZED_00AA1460, |_, _| Ret::default());
+            let device = e.mem.alloc(4);
+            e.mem.set_u32(device, 0x0e00_0000);
+            let this = e.mem.alloc(0x24);
+            e.mem.set_u32(this + 0x14, device);
+            e.mem.set_u32(this + 0x18, 0x55);
+            e.mem.set_u32(this + 0x1c, 0x66);
+            e.call_log = Some(vec![]);
+            let result = e.call(0x00e8_1ab0, &args![this, flags]).u32();
+            assert_eq!(result, this);
+            assert_eq!(e.mem.u32(this), SHADER_INTERFACE_VTABLE_010EF39C);
+            for offset in [0x14u32, 0x18, 0x1c] {
+                assert_eq!(e.mem.u32(this + offset), 0);
+            }
+            let log = e.call_log.take().unwrap();
+            let picked = |addr: u32| -> Vec<Vec<u32>> {
+                log.iter()
+                    .filter(|c| c.0 == addr)
+                    .map(|c| c.1.clone())
+                    .collect()
+            };
+            assert_eq!(picked(0x0e01_0008), vec![vec![device]]);
+            assert_eq!(picked(NI_SHADER_DESTRUCT_00A8F490), vec![vec![this]]);
+            let freed = if frees {
+                vec![vec![this, 0x24]]
+            } else {
+                vec![]
+            };
+            assert_eq!(picked(FREE_SIZED_00AA1460), freed);
+        }
     }
 }

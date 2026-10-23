@@ -3,6 +3,7 @@
 
 #[allow(unused_imports)]
 use crate::prelude::*;
+use crate::types::NiTArray;
 
 /// The function pointer `00a62a10` calls through (`011a9600`; set to
 /// `00a62690` on first use when null).
@@ -92,11 +93,93 @@ pub fn fn_00a62a10(e: &mut Engine, first: u32, request: u32) -> u32 {
     e.call(builder, &args![first, request]).u32()
 }
 
+/// `NiTexture::m_pkRendererData` (Xbox PDB) +0x24: `NiTexture::RendererData*`.
+const RENDERER_DATA: u32 = 0x24;
+/// `NiTexture::RendererData` (Xbox PDB): `m_uiWidth` +0x0C, `m_uiHeight` +0x10,
+/// the bits-per-pixel byte of `m_kPixelFormat` (+0x14, `NiPixelFormat` +1) at +0x15.
+const RENDERER_DATA_WIDTH: u32 = 0x0c;
+const RENDERER_DATA_HEIGHT: u32 = 0x10;
+const RENDERER_DATA_BITS_PER_PIXEL: u32 = 0x15;
+/// The byte of the renderer data `GetViewerStrings` shows as `"State"` (+0x5B;
+/// the Xbox PDB's `RendererData` puts `cFlags` at +0x5C, so the PC field is unnamed).
+const RENDERER_DATA_STATE: u32 = 0x5b;
+
+/// `NiObjectNET::GetViewerStrings` (thiscall, the strings array).
+const OBJECT_NET_GET_VIEWER_STRINGS: u32 = 0x00a5_ca80;
+/// `NiGetViewerString` (cdecl, the class name) and `NiGetViewerString_ov7`
+/// (cdecl, a name and an `int`, `"%s = %d"`): each returns a new string.
+const VIEWER_STRING_NAME: u32 = 0x00a7_d330;
+const VIEWER_STRING_BYTE: u32 = 0x00a7_d4d0;
+/// The strings array's `SetSize` (thiscall, the new size) and `SetAt`
+/// (thiscall, the index and the address of the element).
+const STRING_ARRAY_SET_SIZE: u32 = 0x0096_ad30;
+const STRING_ARRAY_SET_AT: u32 = 0x0096_ae90;
+/// `NiTexture::ms_RTTI` (`011f450c`): its first word is the class name.
+const NI_TEXTURE_RTTI: u32 = 0x011f_450c;
+/// `"State"`.
+const TEXT_STATE: u32 = 0x0104_4a7c;
+
+/// Adds the string word at `slot` at the end of the strings array (`SetSize`
+/// to the size plus the grow-by step when the array is full, then `SetAt`).
+fn add_viewer_string(e: &mut Engine, strings: Ptr<NiTArray>, slot: u32) {
+    let index = u32::from(e.get(strings, NiTArray::m_usSize));
+    if index >= u32::from(e.get(strings, NiTArray::m_usMaxSize)) {
+        let grow = u32::from(e.get(strings, NiTArray::m_usGrowBy));
+        e.call(STRING_ARRAY_SET_SIZE, &args![strings, grow + index]);
+    }
+    e.call(STRING_ARRAY_SET_AT, &args![strings, index, slot]);
+}
+
+// Translated from 00a62670 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiTexture::GetMemorySize` (Xbox PDB; thiscall, no arguments): 0 without
+/// renderer data; otherwise its bits per pixel shifted right by 3 (bytes per
+/// pixel) times its height times its width, as a 32-bit product.
+pub fn ni_texture_get_memory_size(e: &mut Engine, this: Ptr) -> u32 {
+    let data = e.mem.u32(this.addr() + RENDERER_DATA);
+    if data == 0 {
+        return 0;
+    }
+    let bytes_per_pixel = u32::from(e.mem.u8(data + RENDERER_DATA_BITS_PER_PIXEL) >> 3);
+    bytes_per_pixel
+        .wrapping_mul(e.mem.u32(data + RENDERER_DATA_HEIGHT))
+        .wrapping_mul(e.mem.u32(data + RENDERER_DATA_WIDTH))
+}
+
+// Translated from 00a62a40 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiTexture::GetViewerStrings` (Xbox PDB; thiscall, `RET 4`):
+/// `NiObjectNET::GetViewerStrings`, then the class name (the first word of
+/// `NiTexture::ms_RTTI`) and `"State"` with the renderer data's byte at +0x5B
+/// (0 without renderer data), each held in the argument's stack word and
+/// added at the array's end.
+pub fn ni_texture_get_viewer_strings(e: &mut Engine, this: Ptr, strings: Ptr<NiTArray>) {
+    e.call(OBJECT_NET_GET_VIEWER_STRINGS, &args![this, strings]);
+    e.with_stack(4, |e, slot| {
+        let class_name = e.global::<u32>(NI_TEXTURE_RTTI);
+        let text = e.call(VIEWER_STRING_NAME, &args![class_name]).u32();
+        e.mem.set_u32(slot.addr(), text);
+        add_viewer_string(e, strings, slot.addr());
+        let data = e.mem.u32(this.addr() + RENDERER_DATA);
+        let state = if data == 0 {
+            0
+        } else {
+            u32::from(e.mem.u8(data + RENDERER_DATA_STATE))
+        };
+        let text = e.call(VIEWER_STRING_BYTE, &args![TEXT_STATE, state]).u32();
+        e.mem.set_u32(slot.addr(), text);
+        add_viewer_string(e, strings, slot.addr());
+    });
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
         entry!(0x00a6_2690, fn_00a62690(u32, u32) -> u32),
         entry!(0x00a6_2a10, fn_00a62a10(u32, u32) -> u32),
+        entry!(0x00a6_2670, ni_texture_get_memory_size(Ptr) -> u32),
+        entry!(
+            0x00a6_2a40,
+            ni_texture_get_viewer_strings(Ptr, Ptr<NiTArray>)
+        ),
     ]
 }
 
@@ -159,6 +242,55 @@ mod tests {
         assert_eq!(e.mem.u32(SEEN + 0x20), 1);
         // Out of range.
         assert_eq!(e.call(0x00a6_2690, &args![0u32, 0x8000_000au32]).u32(), 0);
+    }
+
+    #[test]
+    fn memory_size_is_bytes_per_pixel_times_height_times_width() {
+        let mut e = Engine::new();
+        let texture = e.mem.alloc(0x30);
+        assert_eq!(e.call(0x00a6_2670, &args![texture]).u32(), 0);
+        let data = e.mem.alloc(0x60);
+        e.mem.set_u32(texture + RENDERER_DATA, data);
+        e.mem.set_u32(data + RENDERER_DATA_WIDTH, 64);
+        e.mem.set_u32(data + RENDERER_DATA_HEIGHT, 32);
+        e.mem.set_u8(data + RENDERER_DATA_BITS_PER_PIXEL, 37);
+        assert_eq!(e.call(0x00a6_2670, &args![texture]).u32(), 4 * 64 * 32);
+    }
+
+    #[test]
+    fn viewer_strings_add_the_class_name_and_the_state() {
+        let mut e = Engine::new();
+        e.map(NI_TEXTURE_RTTI, 4);
+        e.set_global(NI_TEXTURE_RTTI, 0x0104_0000u32);
+        e.register(OBJECT_NET_GET_VIEWER_STRINGS, |_, _| Ret::default());
+        e.register(VIEWER_STRING_NAME, |_, a| (a[0] + 1).into_ret());
+        e.register(VIEWER_STRING_BYTE, |_, a| {
+            assert_eq!(a[0], TEXT_STATE);
+            (0x0700_0000 + a[1]).into_ret()
+        });
+        e.register(STRING_ARRAY_SET_SIZE, |e, a| {
+            e.mem.set_u16(a[0] + 8, a[1] as u16);
+            Ret::default()
+        });
+        e.register(STRING_ARRAY_SET_AT, |e, a| {
+            let value = e.mem.u32(a[2]);
+            e.mem.set_u32(SEEN + a[1] * 4, value);
+            e.mem.set_u16(a[0] + 0xa, a[1] as u16 + 1);
+            Ret::default()
+        });
+        e.map(SEEN, 0x40);
+        let strings = e.mem.alloc(0x10);
+        e.mem.set_u16(strings + 0xe, 1);
+        let texture = e.mem.alloc(0x30);
+        e.call(0x00a6_2a40, &args![texture, strings]);
+        assert_eq!(e.mem.u32(SEEN), 0x0104_0001);
+        assert_eq!(e.mem.u32(SEEN + 4), 0x0700_0000);
+        assert_eq!(e.mem.u16(strings + 8), 2);
+        let data = e.mem.alloc(0x60);
+        e.mem.set_u8(data + RENDERER_DATA_STATE, 3);
+        e.mem.set_u32(texture + RENDERER_DATA, data);
+        e.call(0x00a6_2a40, &args![texture, strings]);
+        assert_eq!(e.mem.u32(SEEN + 12), 0x0700_0003);
     }
 
     #[test]

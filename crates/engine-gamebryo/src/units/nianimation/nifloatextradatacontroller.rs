@@ -145,6 +145,43 @@ pub fn ni_float_extra_data_controller_update(e: &mut Engine, this: Ptr, update: 
     });
 }
 
+/// `00653290` (`thiscall` on an object, `RET 4`: an `NiRTTI` record): the
+/// object when it is of that class (or derived), else 0.
+const OBJECT_CAST: u32 = 0x0065_3290;
+/// `NiFloatInterpolator::ms_RTTI` (`011f3738`).
+const NI_FLOAT_INTERPOLATOR_RTTI: u32 = 0x011f_3738;
+/// `NiFloatInterpolator::SetPoseValue` (`00a3c500`; `thiscall`: the float).
+const FLOAT_INTERPOLATOR_SET_POSE_VALUE: u32 = 0x00a3_c500;
+
+// Translated from 00a412d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiFloatExtraDataController::SynchronizePoseInterpolator` (Xbox PDB;
+/// `thiscall`, `RET 8`: interpolator, index; the index word is not read):
+/// the interpolator cast to `NiFloatInterpolator` (`00653290`; a null
+/// interpolator gives 0 without the call) gets the float at +0xC of the
+/// controller's extra data as its pose value (`SetPoseValue`, the float
+/// copied through the x87 stack; called on the cast result even when it is
+/// 0).
+pub fn ni_float_extra_data_controller_synchronize_pose_interpolator(
+    e: &mut Engine,
+    this: Ptr,
+    interpolator: Ptr,
+    _unused_2: u32,
+) {
+    let cast = if interpolator.addr() == 0 {
+        0
+    } else {
+        e.call(
+            OBJECT_CAST,
+            &args![interpolator, NI_FLOAT_INTERPOLATOR_RTTI],
+        )
+        .u32()
+    };
+    // NiExtraDataController::m_spExtraData (Xbox PDB) +0x3C; NiFloatExtraData's value +0x0C.
+    let extra = e.mem.u32(this.addr() + 0x3c);
+    let value = x87_quiet_bits(e.mem.u32(extra.wrapping_add(0xc)));
+    e.call(FLOAT_INTERPOLATOR_SET_POSE_VALUE, &args![cast, value]);
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -156,6 +193,10 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00a4_1240, ni_float_extra_data_controller_create_pose_interpolator(Ptr, u32) -> Ptr),
         entry!(0x00a4_1280, ni_float_extra_data_controller_create_clone(Ptr, Ptr) -> Ptr),
         entry!(0x00a4_1300, ni_float_extra_data_controller_update(Ptr, Ptr)),
+        entry!(
+            0x00a4_12d0,
+            ni_float_extra_data_controller_synchronize_pose_interpolator(Ptr, Ptr, u32)
+        ),
     ]
 }
 
@@ -361,5 +402,49 @@ mod b037_tests {
         assert_eq!(e.mem.f32(this + 0x28), f32::MIN);
         assert_eq!(calls(&e, INTERPOLATOR_UPDATE)[0][1], f32::MIN.to_bits());
         assert_eq!(e.mem.f32(extra + 0xc), 2.5);
+    }
+}
+
+#[cfg(test)]
+mod n003_tests {
+    use super::*;
+
+    fn calls(e: &Engine, addr: u32) -> Vec<Vec<u32>> {
+        e.call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|c| c.0 == addr)
+            .map(|c| c.1.clone())
+            .collect()
+    }
+
+    #[test]
+    fn synchronize_pose_interpolator_sets_the_extra_data_value() {
+        let mut e = Engine::new();
+        e.register(OBJECT_CAST, |_, a| (a[0] + 1).into_ret());
+        e.register(FLOAT_INTERPOLATOR_SET_POSE_VALUE, |_, _| Ret::default());
+        let extra = e.mem.alloc(0x10);
+        e.mem.set_u32(extra + 0xc, 0x7f80_0001);
+        let this = e.mem.alloc(0x40);
+        e.mem.set_u32(this + 0x3c, extra);
+        e.call_log = Some(vec![]);
+        e.call(0x00a4_12d0, &args![this, 0x5000u32, 7u32]);
+        assert_eq!(
+            calls(&e, OBJECT_CAST),
+            vec![vec![0x5000, NI_FLOAT_INTERPOLATOR_RTTI]]
+        );
+        assert_eq!(
+            calls(&e, FLOAT_INTERPOLATOR_SET_POSE_VALUE),
+            vec![vec![0x5001, 0x7fc0_0001]]
+        );
+        // A null interpolator: no cast, the value still goes to 0.
+        e.mem.set_f32(extra + 0xc, 2.5);
+        e.call(0x00a4_12d0, &args![this, 0u32, 7u32]);
+        assert_eq!(calls(&e, OBJECT_CAST).len(), 1);
+        assert_eq!(
+            calls(&e, FLOAT_INTERPOLATOR_SET_POSE_VALUE)[1],
+            vec![0, 2.5f32.to_bits()]
+        );
     }
 }

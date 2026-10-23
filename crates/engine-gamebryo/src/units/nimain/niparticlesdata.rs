@@ -597,9 +597,324 @@ pub fn ni_particles_data_load_binary(e: &mut Engine, this: Ptr, stream: Ptr) {
     });
 }
 
+/// `00aa13e0` (`cdecl`, one word): allocates a block of that size.
+const ALLOCATE: u32 = 0x00aa_13e0;
+/// `NiGeometryData::NiGeometryData` (Xbox PDB, `00a67c00`; `thiscall`, no stack word).
+const GEOMETRY_DATA_CONSTRUCTOR: u32 = 0x00a6_7c00;
+/// `NiGeometryData::SetConsistency` (Xbox PDB, `thiscall`, the consistency).
+const SET_CONSISTENCY: u32 = 0x00a6_7050;
+/// `NiParticlesData`'s vtable (its RTTI names `NiParticlesData`).
+const NI_PARTICLES_DATA_VTABLE: u32 = 0x010a_05e4;
+/// The byte at +0x3c the creation functions clear after setting the consistency (a
+/// `NiGeometryData` field, not named here).
+const GEOMETRY_BYTE_3C: u32 = 0x3c;
+/// `NiGeometryData::IsEqual`, `SaveBinary` and `GetViewerStrings` (Xbox PDB, `thiscall`,
+/// one stack word each).
+const GEOMETRY_DATA_IS_EQUAL: u32 = 0x00a6_7840;
+const GEOMETRY_DATA_SAVE_BINARY: u32 = 0x00a6_8520;
+const GEOMETRY_DATA_GET_VIEWER_STRINGS: u32 = 0x00a6_88b0;
+/// `NiColorA::SaveBinary` (Xbox PDB, `thiscall` on the colour, the stream).
+const COLOR_A_SAVE_BINARY: u32 = 0x00a6_98a0;
+/// `NiStream::m_pkOstr` +0x250 (Xbox PDB name): the output, write function at +0xc.
+const STREAM_OUTPUT: u32 = 0x250;
+const BINARY_STREAM_WRITE: u32 = 0xc;
+/// `NiGetViewerString` (Xbox PDB, `cdecl`, one word) and its pointer (`_ov10`),
+/// `unsigned short` (`_ov6`) and `unsigned char` (`_ov4`) overloads (`cdecl`, name and
+/// value word).
+const GET_VIEWER_STRING: u32 = 0x00a7_d330;
+const GET_VIEWER_STRING_POINTER: u32 = 0x00a7_d5a0;
+const GET_VIEWER_STRING_USHORT: u32 = 0x00a7_d490;
+const GET_VIEWER_STRING_UCHAR: u32 = 0x00a7_d410;
+/// `0096ad30` (`thiscall`, new capacity) and `0096ae90` (`thiscall`, index, pointer to the
+/// element): the viewer-string array's set-size and set-at.
+const ARRAY_SET_SIZE: u32 = 0x0096_ad30;
+const ARRAY_SET_AT: u32 = 0x0096_ae90;
+/// The field names the viewer strings use: `m_pfRadii`, `m_usActive`, `m_pfSizes`,
+/// `m_pkRotations`, `m_pfRotationAngles`, `m_pkRotationAxes`, `m_pucTextureIndices`,
+/// `m_ucSubTextureOffsetCount`, `m_pkSubTextureOffsets`.
+const NAME_RADII: u32 = 0x010a_0724;
+const NAME_ACTIVE: u32 = 0x010a_0718;
+const NAME_SIZES: u32 = 0x010a_070c;
+const NAME_ROTATIONS: u32 = 0x010a_06fc;
+const NAME_ROTATION_ANGLES: u32 = 0x010a_06e8;
+const NAME_ROTATION_AXES: u32 = 0x010a_06d4;
+const NAME_TEXTURE_INDICES: u32 = 0x010a_06c0;
+const NAME_SUB_TEXTURE_OFFSET_COUNT: u32 = 0x010a_06a4;
+const NAME_SUB_TEXTURE_OFFSETS: u32 = 0x010a_068c;
+
+/// The creation functions' body: a new particles data (0x70 bytes from `00aa13e0`;
+/// `NiGeometryData`'s constructor, the vtable, every particle array and count cleared,
+/// `m_bIsOldRotatingParticlesObject` cleared, the consistency set to 0, the byte at +0x3c
+/// cleared), or 0 when the allocation fails.
+fn new_particles_data(e: &mut Engine) -> u32 {
+    let block = e.call(ALLOCATE, &args![0x70u32]).u32();
+    if block == 0 {
+        return 0;
+    }
+    e.call(GEOMETRY_DATA_CONSTRUCTOR, &args![block]);
+    e.mem.set_u32(block, NI_PARTICLES_DATA_VTABLE);
+    e.mem.set_u32(block + RADII, 0);
+    e.mem.set_u16(block + ACTIVE, 0);
+    for offset in [
+        SIZES,
+        ROTATIONS,
+        ROTATION_ANGLES,
+        ROTATION_AXES,
+        TEXTURE_INDICES,
+    ] {
+        e.mem.set_u32(block + offset, 0);
+    }
+    e.mem.set_u32(block + SUB_TEXTURE_OFFSETS, 0);
+    e.mem.set_u8(block + SUB_TEXTURE_OFFSET_COUNT, 0);
+    e.mem.set_u8(block + OLD_ROTATING, 0);
+    e.call(SET_CONSISTENCY, &args![block, 0u32]);
+    e.mem.set_u8(block + GEOMETRY_BYTE_3C, 0);
+    block
+}
+
+// Translated from 00a96600 (PC disassembly, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (a function Ghidra did not create; the creation function the
+/// stream registers for `NiParticlesData` and `NiAutoNormalParticlesData`): a new particles
+/// data ([`new_particles_data`]), or null.
+pub fn fn_00a96600(e: &mut Engine) -> Ptr {
+    Ptr::new(new_particles_data(e))
+}
+
+// Translated from 00a96660 (PC disassembly, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (a function Ghidra did not create; the creation function the
+/// stream registers for `NiRotatingParticlesData`): a new particles data
+/// ([`new_particles_data`]) with `m_bIsOldRotatingParticlesObject` (+0x40) set. When the
+/// allocation fails the exe still writes that byte at address 0x40.
+pub fn fn_00a96660(e: &mut Engine) -> Ptr {
+    let object = new_particles_data(e);
+    e.mem.set_u8(object.wrapping_add(OLD_ROTATING), 1);
+    Ptr::new(object)
+}
+
+/// Whether `count` floats at `mine` and `theirs` are all equal (`FUCOMPP` on each pair,
+/// a NaN never equal), compared in order.
+fn floats_equal(e: &Engine, mine: u32, theirs: u32, count: u32) -> bool {
+    (0..count).all(|i| {
+        let a = x87_load32(e.mem.u32(mine.wrapping_add(4 * i)));
+        let b = x87_load32(e.mem.u32(theirs.wrapping_add(4 * i)));
+        a == b
+    })
+}
+
+// Translated from 00a96a30 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiParticlesData::IsEqual` (Xbox PDB): `NiGeometryData::IsEqual`; the radii present on
+/// both or neither and, when present, equal for every vertex (the vertex count, +8); the
+/// same active count; the sizes and the rotations likewise present on both or neither and
+/// equal for the active particles; then, only by this object's arrays (the other's are read
+/// without a check), the rotation angles, rotation axes (3 floats), texture indices (bytes)
+/// and the sub-texture offsets (4 floats, this object's count +0x6c) equal.
+pub fn ni_particles_data_is_equal(e: &mut Engine, this: Ptr, other: Ptr) -> bool {
+    let mine = this.addr();
+    let theirs = other.addr();
+    if !e.call(GEOMETRY_DATA_IS_EQUAL, &args![this, other]).bool() {
+        return false;
+    }
+    let radii = e.mem.u32(mine + RADII);
+    if (radii != 0) != (e.mem.u32(theirs + RADII) != 0) {
+        return false;
+    }
+    if radii != 0 {
+        let vertices = u32::from(e.mem.u16(mine + VERTEX_COUNT));
+        let other_radii = e.mem.u32(theirs + RADII);
+        if !floats_equal(e, radii, other_radii, vertices) {
+            return false;
+        }
+    }
+    let active = e.mem.u16(mine + ACTIVE);
+    if active != e.mem.u16(theirs + ACTIVE) {
+        return false;
+    }
+    let active = u32::from(active);
+    for (field, floats) in [(SIZES, 1u32), (ROTATIONS, 4)] {
+        let array = e.mem.u32(mine + field);
+        let other_array = e.mem.u32(theirs + field);
+        if (array != 0) != (other_array != 0) {
+            return false;
+        }
+        if array != 0 && !floats_equal(e, array, other_array, active * floats) {
+            return false;
+        }
+    }
+    for (field, floats) in [(ROTATION_ANGLES, 1u32), (ROTATION_AXES, 3)] {
+        let array = e.mem.u32(mine + field);
+        if array != 0 {
+            let other_array = e.mem.u32(theirs + field);
+            if !floats_equal(e, array, other_array, active * floats) {
+                return false;
+            }
+        }
+    }
+    let indices = e.mem.u32(mine + TEXTURE_INDICES);
+    if indices != 0 {
+        let other_indices = e.mem.u32(theirs + TEXTURE_INDICES);
+        for i in 0..active {
+            if e.mem.u8(indices.wrapping_add(i)) != e.mem.u8(other_indices.wrapping_add(i)) {
+                return false;
+            }
+        }
+    }
+    let offsets = e.mem.u32(mine + SUB_TEXTURE_OFFSETS);
+    if offsets != 0 {
+        let count = u32::from(e.mem.u8(mine + SUB_TEXTURE_OFFSET_COUNT));
+        let other_offsets = e.mem.u32(theirs + SUB_TEXTURE_OFFSETS);
+        if !floats_equal(e, offsets, other_offsets, count * 4) {
+            return false;
+        }
+    }
+    true
+}
+
+/// One write through the stream output's write function: `function(file, from, size,
+/// count, 1)` with the word at `count` set to `count_value` first, the answer added to the
+/// file's position.
+fn stream_write(e: &mut Engine, stream: u32, from: u32, size: u32, count: u32, count_value: u32) {
+    let output = e.mem.u32(stream.wrapping_add(STREAM_OUTPUT));
+    let write = e.mem.u32(output.wrapping_add(BINARY_STREAM_WRITE));
+    e.mem.set_u32(count, count_value);
+    let bytes = e.call(write, &args![output, from, size, count, 1u32]).u32();
+    let position = e.mem.u32(output.wrapping_add(BINARY_STREAM_POSITION));
+    e.mem.set_u32(
+        output.wrapping_add(BINARY_STREAM_POSITION),
+        position.wrapping_add(bytes),
+    );
+}
+
+// Translated from 00a97290 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiParticlesData::SaveBinary` (Xbox PDB): `NiGeometryData::SaveBinary`, then to the
+/// stream's output: a byte saying whether there are radii (kept in the low byte of the
+/// stream argument's stack word), the active count (2 bytes), one byte each for sizes,
+/// rotations, rotation angles, rotation axes and texture indices being present (five stack
+/// bytes), the sub-texture offset count (1 byte), and each sub-texture offset
+/// (`NiColorA::SaveBinary`). The byte-count word is one local, which the offset loop then
+/// keeps its offset in.
+pub fn ni_particles_data_save_binary(e: &mut Engine, this: Ptr, stream: Ptr) {
+    let me = this.addr();
+    let s = stream.addr();
+    e.call(GEOMETRY_DATA_SAVE_BINARY, &args![this, stream]);
+    e.with_stack(0x10, |e, frame| {
+        // The frame's 0xc bytes of locals (the five flag bytes at +3 .. +7, the byte-count
+        // word at +8) and the stream argument's word at +0xc.
+        let base = frame.addr();
+        let count = base + 8;
+        let argument = base + 0xc;
+        e.mem.set_u32(argument, s);
+        e.mem.set_u8(argument, u8::from(e.mem.u32(me + RADII) != 0));
+        stream_write(e, s, argument, 1, count, 1);
+        stream_write(e, s, me + ACTIVE, 2, count, 2);
+        for (byte, field) in [
+            (3u32, SIZES),
+            (4, ROTATIONS),
+            (5, ROTATION_ANGLES),
+            (6, ROTATION_AXES),
+            (7, TEXTURE_INDICES),
+        ] {
+            let present = u8::from(e.mem.u32(me + field) != 0);
+            e.mem.set_u8(base + byte, present);
+            stream_write(e, s, base + byte, 1, count, 1);
+        }
+        stream_write(e, s, me + SUB_TEXTURE_OFFSET_COUNT, 1, count, 1);
+        let mut i = 0u32;
+        if e.mem.u8(me + SUB_TEXTURE_OFFSET_COUNT) != 0 {
+            e.mem.set_u32(count, 0);
+            loop {
+                let offset = e.mem.u32(count);
+                let color = e.mem.u32(me + SUB_TEXTURE_OFFSETS).wrapping_add(offset);
+                e.call(COLOR_A_SAVE_BINARY, &args![color, stream]);
+                let total = u32::from(e.mem.u8(me + SUB_TEXTURE_OFFSET_COUNT));
+                e.mem.set_u32(count, offset.wrapping_add(0x10));
+                i += 1;
+                if i >= total {
+                    break;
+                }
+            }
+        }
+    });
+}
+
+/// Appends the string pointer held in the word at `slot` to the viewer-string array: when
+/// the count (`m_usSize`, +0xa) is not below the capacity (`m_usMaxSize`, +8) the array first
+/// grows to count + `m_usGrowBy` (+0xe, `0096ad30`); then `0096ae90` stores it at the old
+/// count.
+fn append_viewer_string(e: &mut Engine, strings: Ptr, slot: u32) {
+    let count = e.mem.u16(strings.addr() + 0xa) as u32;
+    let capacity = e.mem.u16(strings.addr() + 8) as u32;
+    if count >= capacity {
+        let grow_by = e.mem.u16(strings.addr() + 0xe) as u32;
+        e.call(ARRAY_SET_SIZE, &args![strings, grow_by + count]);
+    }
+    e.call(ARRAY_SET_AT, &args![strings, count, slot]);
+}
+
+// Translated from 00a97420 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiParticlesData::GetViewerStrings` (Xbox PDB): `NiGeometryData::GetViewerStrings`, then
+/// ten strings appended to `strings`: the class name (the first word of
+/// `NiParticlesData::ms_RTTI`, `011f5ef0`), the radii pointer, the active count (16 bits),
+/// the size, rotation, rotation angle, rotation axis and texture index pointers, the
+/// sub-texture offset count (a byte) and the sub-texture offset pointer. Each string pointer
+/// is kept in the `strings` argument's stack word, whose address the array's set-at
+/// receives.
+pub fn ni_particles_data_get_viewer_strings(e: &mut Engine, this: Ptr, strings: Ptr) {
+    let me = this.addr();
+    e.call(GEOMETRY_DATA_GET_VIEWER_STRINGS, &args![this, strings]);
+    e.with_stack(4, |e, slot| {
+        let slot = slot.addr();
+        let class_name = e.global::<u32>(NI_PARTICLES_DATA_RTTI);
+        let text = e.call(GET_VIEWER_STRING, &args![class_name]).u32();
+        e.mem.set_u32(slot, text);
+        append_viewer_string(e, strings, slot);
+        let items = [
+            (GET_VIEWER_STRING_POINTER, NAME_RADII, RADII),
+            (GET_VIEWER_STRING_USHORT, NAME_ACTIVE, ACTIVE),
+            (GET_VIEWER_STRING_POINTER, NAME_SIZES, SIZES),
+            (GET_VIEWER_STRING_POINTER, NAME_ROTATIONS, ROTATIONS),
+            (
+                GET_VIEWER_STRING_POINTER,
+                NAME_ROTATION_ANGLES,
+                ROTATION_ANGLES,
+            ),
+            (GET_VIEWER_STRING_POINTER, NAME_ROTATION_AXES, ROTATION_AXES),
+            (
+                GET_VIEWER_STRING_POINTER,
+                NAME_TEXTURE_INDICES,
+                TEXTURE_INDICES,
+            ),
+            (
+                GET_VIEWER_STRING_UCHAR,
+                NAME_SUB_TEXTURE_OFFSET_COUNT,
+                SUB_TEXTURE_OFFSET_COUNT,
+            ),
+            (
+                GET_VIEWER_STRING_POINTER,
+                NAME_SUB_TEXTURE_OFFSETS,
+                SUB_TEXTURE_OFFSETS,
+            ),
+        ];
+        for (function, name, field) in items {
+            let value = match function {
+                GET_VIEWER_STRING_USHORT => u32::from(e.mem.u16(me + field)),
+                GET_VIEWER_STRING_UCHAR => u32::from(e.mem.u8(me + field)),
+                _ => e.mem.u32(me + field),
+            };
+            let text = e.call(function, &args![name, value]).u32();
+            e.mem.set_u32(slot, text);
+            append_viewer_string(e, strings, slot);
+        }
+    });
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x00a9_6600, fn_00a96600() -> Ptr),
+        entry!(0x00a9_6660, fn_00a96660() -> Ptr),
+        entry!(0x00a9_6a30, ni_particles_data_is_equal(Ptr, Ptr) -> bool),
+        entry!(0x00a9_7290, ni_particles_data_save_binary(Ptr, Ptr)),
+        entry!(0x00a9_7420, ni_particles_data_get_viewer_strings(Ptr, Ptr)),
         entry!(0x00a967d0, ni_particles_data_get_rtti() -> Ptr),
         entry!(0x00a96a10, ni_particles_data_scalar_deleting_destructor(Ptr, u32) -> Ptr),
         entry!(0x00a9_64c0, ni_particles_data_remove_particle(Ptr, u16)),
@@ -955,5 +1270,236 @@ mod tests {
         assert_eq!(e.mem.u32(this + ROTATIONS), 0);
         let sizes = e.mem.u32(this + SIZES);
         assert_eq!(e.mem.f32(sizes), 1.0);
+    }
+}
+
+#[cfg(test)]
+mod n018_tests {
+    use super::*;
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    fn calls_to(e: &Engine, addr: u32) -> Vec<Vec<u32>> {
+        e.call_log
+            .clone()
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|(a, _)| *a == addr)
+            .map(|(_, words)| words)
+            .collect()
+    }
+
+    fn engine() -> Engine {
+        let mut e = Engine::new();
+        e.register(ALLOCATE, |e, a| {
+            let block = e.mem.alloc(a[0]);
+            for i in 0..a[0] {
+                e.mem.set_u8(block + i, 0xcd);
+            }
+            block.into_ret()
+        });
+        e.register(GEOMETRY_DATA_CONSTRUCTOR, |_, _| Ret::default());
+        e.register(SET_CONSISTENCY, |_, _| Ret::default());
+        e.call_log = Some(vec![]);
+        e
+    }
+
+    #[test]
+    fn creation_functions_build_empty_data() {
+        let mut e = engine();
+        let data = e.call(0x00a9_6600, &args![]).u32();
+        assert_eq!(calls_to(&e, ALLOCATE), vec![vec![0x70]]);
+        assert_eq!(calls_to(&e, GEOMETRY_DATA_CONSTRUCTOR), vec![vec![data]]);
+        assert_eq!(calls_to(&e, SET_CONSISTENCY), vec![vec![data, 0]]);
+        assert_eq!(e.mem.u32(data), NI_PARTICLES_DATA_VTABLE);
+        assert_eq!(e.mem.bytes(data + 0x4c, 6), vec![0; 6]);
+        assert_eq!(e.mem.bytes(data + 0x54, 0x19), vec![0; 0x19]);
+        assert_eq!(e.mem.u8(data + 0x40), 0);
+        assert_eq!(e.mem.u8(data + 0x3c), 0);
+        // The padding after the 16-bit active count is left as allocated.
+        assert_eq!(e.mem.u16(data + 0x52), 0xcdcd);
+        let rotating = e.call(0x00a9_6660, &args![]).u32();
+        assert_eq!(e.mem.u8(rotating + 0x40), 1);
+        e.register(ALLOCATE, |_, _| 0u32.into_ret());
+        assert_eq!(e.call(0x00a9_6600, &args![]).u32(), 0);
+    }
+
+    /// A particles data with 2 vertices, 2 active particles and every array filled with
+    /// `seed`-based values.
+    fn data(e: &mut Engine, seed: f32) -> u32 {
+        let this = e.mem.alloc(0x70);
+        e.mem.set_u16(this + VERTEX_COUNT, 2);
+        e.mem.set_u16(this + ACTIVE, 2);
+        let floats = |e: &mut Engine, n: u32| {
+            let a = e.mem.alloc(4 * n);
+            for i in 0..n {
+                e.mem.set_f32(a + 4 * i, seed + i as f32);
+            }
+            a
+        };
+        for (field, n) in [
+            (RADII, 2u32),
+            (SIZES, 2),
+            (ROTATIONS, 8),
+            (ROTATION_ANGLES, 2),
+            (ROTATION_AXES, 6),
+            (SUB_TEXTURE_OFFSETS, 4),
+        ] {
+            let array = floats(e, n);
+            e.mem.set_u32(this + field, array);
+        }
+        let indices = e.mem.alloc(2);
+        e.mem.set_u8(indices + 1, 7);
+        e.mem.set_u32(this + TEXTURE_INDICES, indices);
+        e.mem.set_u8(this + SUB_TEXTURE_OFFSET_COUNT, 1);
+        this
+    }
+
+    #[test]
+    fn is_equal_compares_every_array() {
+        let mut e = engine();
+        e.register(GEOMETRY_DATA_IS_EQUAL, |_, _| 1u32.into_ret());
+        let a = data(&mut e, 1.0);
+        let b = data(&mut e, 1.0);
+        assert!(e.call(0x00a9_6a30, &args![a, b]).bool());
+        // A last element differing in each array.
+        for (field, last) in [
+            (RADII, 4u32),
+            (SIZES, 4),
+            (ROTATIONS, 28),
+            (ROTATION_ANGLES, 4),
+            (ROTATION_AXES, 20),
+            (SUB_TEXTURE_OFFSETS, 12),
+        ] {
+            let b = data(&mut e, 1.0);
+            let array = e.mem.u32(b + field);
+            e.mem.set_f32(array + last, 99.0);
+            assert!(!e.call(0x00a9_6a30, &args![a, b]).bool(), "{field:x}");
+        }
+        let c = data(&mut e, 1.0);
+        let indices = e.mem.u32(c + TEXTURE_INDICES);
+        e.mem.set_u8(indices + 1, 8);
+        assert!(!e.call(0x00a9_6a30, &args![a, c]).bool());
+        // Presence must match for radii, sizes and rotations.
+        for field in [RADII, SIZES, ROTATIONS] {
+            let d = data(&mut e, 1.0);
+            e.mem.set_u32(d + field, 0);
+            assert!(!e.call(0x00a9_6a30, &args![a, d]).bool(), "{field:x}");
+            assert!(!e.call(0x00a9_6a30, &args![d, a]).bool(), "{field:x}");
+        }
+        // Without its own rotation angles the other's are not looked at.
+        let f = data(&mut e, 1.0);
+        e.mem.set_u32(f + ROTATION_ANGLES, 0);
+        assert!(e.call(0x00a9_6a30, &args![f, a]).bool());
+        // A NaN radius is never equal; a different active count or base fails too.
+        let g = data(&mut e, 1.0);
+        e.mem.set_u16(g + ACTIVE, 1);
+        assert!(!e.call(0x00a9_6a30, &args![a, g]).bool());
+        let h = data(&mut e, f32::NAN);
+        assert!(!e.call(0x00a9_6a30, &args![h, h]).bool());
+        e.register(GEOMETRY_DATA_IS_EQUAL, |_, _| 0u32.into_ret());
+        assert!(!e.call(0x00a9_6a30, &args![a, b]).bool());
+    }
+
+    type Writes = Rc<RefCell<Vec<(u32, u32, u32, u32, u32)>>>;
+
+    #[test]
+    fn save_binary_writes_the_presence_bytes_and_offsets() {
+        let mut e = engine();
+        e.register(GEOMETRY_DATA_SAVE_BINARY, |_, _| Ret::default());
+        e.register(COLOR_A_SAVE_BINARY, |_, _| Ret::default());
+        let log: Writes = Rc::default();
+        let writes = log.clone();
+        e.register_double(0x0700_000c, move |e, a| {
+            let value = if a[2] == 1 {
+                u32::from(e.mem.u8(a[1]))
+            } else {
+                u32::from(e.mem.u16(a[1]))
+            };
+            writes
+                .borrow_mut()
+                .push((a[1], a[2], a[3], e.mem.u32(a[3]), value));
+            a[2].into_ret()
+        });
+        let output = e.mem.alloc(0x10);
+        e.mem.set_u32(output + 0xc, 0x0700_000c);
+        let stream = e.mem.alloc(0x254);
+        e.mem.set_u32(stream + STREAM_OUTPUT, output);
+        let this = data(&mut e, 1.0);
+        e.mem.set_u32(this + ROTATIONS, 0);
+        e.mem.set_u8(this + SUB_TEXTURE_OFFSET_COUNT, 2);
+        e.call(0x00a9_7290, &args![this, stream]);
+        let log = log.borrow();
+        let values: Vec<(u32, u32)> = log.iter().map(|w| (w.1, w.4)).collect();
+        assert_eq!(
+            values,
+            vec![
+                (1, 1),
+                (2, 2),
+                (1, 1),
+                (1, 0),
+                (1, 1),
+                (1, 1),
+                (1, 1),
+                (1, 2)
+            ]
+        );
+        assert_eq!(log[1].0, this + ACTIVE);
+        assert_eq!(log[7].0, this + SUB_TEXTURE_OFFSET_COUNT);
+        assert!(log.iter().all(|w| w.2 == log[0].2 && w.3 == w.1));
+        let offsets = e.mem.u32(this + SUB_TEXTURE_OFFSETS);
+        assert_eq!(
+            calls_to(&e, COLOR_A_SAVE_BINARY),
+            vec![vec![offsets, stream], vec![offsets + 0x10, stream]]
+        );
+        assert_eq!(e.mem.u32(output + 4), 9);
+    }
+
+    #[test]
+    fn viewer_strings_list_the_arrays() {
+        let mut e = engine();
+        e.map(0x011f_5000, 0x1000);
+        e.mem.set_u32(NI_PARTICLES_DATA_RTTI, 0x011f_5100);
+        e.register(GEOMETRY_DATA_GET_VIEWER_STRINGS, |_, _| Ret::default());
+        e.register(GET_VIEWER_STRING, |_, _| 0x5000u32.into_ret());
+        for function in [
+            GET_VIEWER_STRING_POINTER,
+            GET_VIEWER_STRING_USHORT,
+            GET_VIEWER_STRING_UCHAR,
+        ] {
+            e.register(function, |_, _| 0x6000u32.into_ret());
+        }
+        e.register(ARRAY_SET_SIZE, |e, a| {
+            e.mem.set_u16(a[0] + 8, a[1] as u16);
+            Ret::default()
+        });
+        e.register(ARRAY_SET_AT, |e, a| {
+            e.mem.set_u16(a[0] + 0xa, a[1] as u16 + 1);
+            Ret::default()
+        });
+        let strings = e.mem.alloc(0x10);
+        e.mem.set_u16(strings + 0xe, 16);
+        let this = data(&mut e, 1.0);
+        e.call(0x00a9_7420, &args![this, strings]);
+        assert_eq!(calls_to(&e, GET_VIEWER_STRING), vec![vec![0x011f_5100]]);
+        assert_eq!(
+            calls_to(&e, GET_VIEWER_STRING_USHORT),
+            vec![vec![NAME_ACTIVE, 2]]
+        );
+        assert_eq!(
+            calls_to(&e, GET_VIEWER_STRING_UCHAR),
+            vec![vec![NAME_SUB_TEXTURE_OFFSET_COUNT, 1]]
+        );
+        let pointers = calls_to(&e, GET_VIEWER_STRING_POINTER);
+        assert_eq!(pointers.len(), 7);
+        assert_eq!(pointers[0], vec![NAME_RADII, e.mem.u32(this + RADII)]);
+        assert_eq!(
+            pointers[6],
+            vec![
+                NAME_SUB_TEXTURE_OFFSETS,
+                e.mem.u32(this + SUB_TEXTURE_OFFSETS)
+            ]
+        );
+        assert_eq!(e.mem.u16(strings + 0xa), 10);
     }
 }

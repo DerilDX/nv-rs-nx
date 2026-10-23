@@ -715,6 +715,315 @@ pub fn ni_source_texture_load_binary(e: &mut Engine, this: Ptr<NiSourceTexture>,
     release(e, base);
 }
 
+/// The base class's `RegisterStreamables` (`00a62130`), `IsEqual` (`00a62140`) and
+/// `SaveBinary` (`00a5d7b0`), `__thiscall` with the stream or the other object (the map names
+/// them after `NiSequenceStreamHelper`, folded 5-byte bodies).
+const BASE_REGISTER_STREAMABLES: u32 = 0x00a6_2130;
+const BASE_IS_EQUAL: u32 = 0x00a6_2140;
+const BASE_SAVE_BINARY: u32 = 0x00a5_d7b0;
+/// `NiStream`'s virtual +0x20 (`RegisterFixedString`'s slot: one word, the fixed string's
+/// address) and +0x30 (one word: the object whose link id is saved).
+const STREAM_REGISTER_FIXED_STRING_SLOT: u32 = 0x20;
+const STREAM_SAVE_LINK_ID_SLOT: u32 = 0x30;
+/// `NiObject`'s virtual +0x54 (`RegisterStreamables`, one word: the stream) and +0x5c
+/// (`IsEqual`, one word: the other object).
+const OBJECT_REGISTER_STREAMABLES_SLOT: u32 = 0x54;
+const OBJECT_IS_EQUAL_SLOT: u32 = 0x5c;
+/// `NiImageConverter::GetImageConverter` (`00a76640`, no words) and the converter's virtual
+/// +0xc (three words: the platform file name, the old pixel data, 0) that reads a file's
+/// pixel data.
+const GET_IMAGE_CONVERTER: u32 = 0x00a7_6640;
+const CONVERTER_READ_FILE_SLOT: u32 = 0xc;
+/// `00c663d0` (`__thiscall` on a pointer slot, one word: the address of the new pointer): a
+/// reference-counted pointer assignment (the map puts it in `BSHavok/bhkworld.obj`).
+const POINTER_ASSIGN_FROM: u32 = 0x00c6_63d0;
+/// `NiFile::GetFile` (`00aa1a20`, cdecl: name, mode, buffer size).
+const FILE_GET_FILE: u32 = 0x00aa_1a20;
+/// The texture's virtual +0x9c (no words: the address of its file name) and the renderer
+/// data's byte +0x5b (the state `Upgrade` and `Degrade` test) and virtuals +0x8c and +0x90
+/// (one word: the texture).
+const GET_FILENAME_SLOT: u32 = 0x9c;
+const RENDERER_DATA_STATE: u32 = 0x5b;
+const RENDERER_DATA_UPGRADE_SLOT: u32 = 0x8c;
+const RENDERER_DATA_DEGRADE_SLOT: u32 = 0x90;
+/// `NiStream`'s output stream (+0x250) and its write function (+0xc: cdecl, stream, buffer,
+/// bytes, component sizes, component count); the bytes written are added to its position
+/// (+0x4).
+const STREAM_OUTPUT: u32 = 0x250;
+const BINARY_STREAM_WRITE: u32 = 0xc;
+/// `NiStream::SaveFixedString` (`00a641f0`, `__thiscall` on the stream, one word: the fixed
+/// string's address).
+const STREAM_SAVE_FIXED_STRING: u32 = 0x00a6_41f0;
+/// `NiTexture::GetViewerStrings` (`00a62a40`, `__thiscall`, the string array),
+/// `NiGetViewerString` (`00a7d330`, cdecl: a name) and `NiGetViewerString_ov11` (`00a7d5e0`,
+/// cdecl: a label and a fixed string), and the string array's `SetSize` (`0096ad30`,
+/// `__thiscall`: the new size) and `SetAt` (`0096ae90`, `__thiscall`: index, address of the
+/// element).
+const NI_TEXTURE_GET_VIEWER_STRINGS: u32 = 0x00a6_2a40;
+const NI_GET_VIEWER_STRING: u32 = 0x00a7_d330;
+const NI_GET_VIEWER_STRING_FIXED: u32 = 0x00a7_d5e0;
+const STRING_ARRAY_SET_SIZE: u32 = 0x0096_ad30;
+const STRING_ARRAY_SET_AT: u32 = 0x0096_ae90;
+/// `"File:"`.
+const FILE_LABEL: u32 = 0x0109_ba9c;
+
+/// One write through the output stream: `bytes` from `buffer`, one component of `size`
+/// bytes (the size is a word on the stack); the position moves on by what was written.
+fn write(e: &mut Engine, stream: u32, buffer: u32, bytes: u32, size: u32) {
+    let output = e.mem.u32(stream.wrapping_add(STREAM_OUTPUT));
+    let function = e.mem.u32(output.wrapping_add(BINARY_STREAM_WRITE));
+    e.with_stack(4, |e, sizes| {
+        e.mem.set_u32(sizes.addr(), size);
+        let written = e
+            .call(function, &args![output, buffer, bytes, sizes, 1u32])
+            .u32();
+        let position = e
+            .mem
+            .u32(output.wrapping_add(BINARY_STREAM_POSITION))
+            .wrapping_add(written);
+        e.mem
+            .set_u32(output.wrapping_add(BINARY_STREAM_POSITION), position);
+    });
+}
+
+/// One byte written through the output stream from a stack copy.
+fn write_byte(e: &mut Engine, stream: u32, value: u8) {
+    e.with_stack(4, |e, byte| {
+        e.mem.set_u8(byte.addr(), value);
+        write(e, stream, byte.addr(), 1, 1);
+    });
+}
+
+/// The inlined `NiTArray<char *>::Add`: grows the array to its size plus `m_usGrowBy` (+0xe)
+/// when the size (+0xa) has reached the capacity (+0x8), then stores `value` at the old size.
+fn add_viewer_string(e: &mut Engine, strings: u32, value: u32) {
+    let size = u32::from(e.mem.u16(strings.wrapping_add(0xa)));
+    let capacity = u32::from(e.mem.u16(strings.wrapping_add(0x8)));
+    if size >= capacity {
+        let grow_by = u32::from(e.mem.u16(strings.wrapping_add(0xe)));
+        e.call(STRING_ARRAY_SET_SIZE, &args![strings, grow_by + size]);
+    }
+    e.with_stack(4, |e, element| {
+        e.mem.set_u32(element.addr(), value);
+        e.call(STRING_ARRAY_SET_AT, &args![strings, size, element]);
+    });
+}
+
+// Translated from 00a5fa90 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiSourceTexture::RegisterStreamables` (Xbox PDB): false when the base class's
+/// registration (`00a62130`) is; otherwise registers the file name with the stream (its
+/// virtual +0x20) and answers the persistent renderer data's registration (virtual +0x54),
+/// or else the pixel data's, or true when the texture has neither.
+pub fn ni_source_texture_register_streamables(
+    e: &mut Engine,
+    this: Ptr<NiSourceTexture>,
+    stream: Ptr,
+) -> bool {
+    if !e
+        .call(BASE_REGISTER_STREAMABLES, &args![this, stream])
+        .bool()
+    {
+        return false;
+    }
+    e.vcall(
+        stream.addr(),
+        STREAM_REGISTER_FIXED_STRING_SLOT,
+        &args![this.addr() + 0x30],
+    );
+    let mut data = e.get(this, NiSourceTexture::m_spPersistentSrcRendererData);
+    if data == 0 {
+        data = e.get(this, NiSourceTexture::m_spSrcPixelData);
+        if data == 0 {
+            return true;
+        }
+    }
+    e.vcall(data, OBJECT_REGISTER_STREAMABLES_SLOT, &args![stream])
+        .bool()
+}
+
+/// One pointer of `IsEqual`: both null, or both set and the first's virtual `IsEqual`
+/// (+0x5c) true for the second.
+fn source_equal(e: &mut Engine, mine: u32, other: u32) -> bool {
+    if mine != 0 {
+        if other == 0 {
+            return false;
+        }
+    } else if other != 0 {
+        return false;
+    }
+    mine == 0 || e.vcall(mine, OBJECT_IS_EQUAL_SLOT, &args![other]).bool()
+}
+
+// Translated from 00a5fae0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiSourceTexture::IsEqual` (Xbox PDB): the base class's comparison (`00a62140`), the same
+/// file name handle, equal pixel data and persistent renderer data (each both null or equal
+/// by the first one's virtual `IsEqual`), the same pixel layout, mipmap and alpha
+/// preferences and the same static, load-straight and persistent bytes.
+pub fn ni_source_texture_is_equal(
+    e: &mut Engine,
+    this: Ptr<NiSourceTexture>,
+    other: Ptr<NiSourceTexture>,
+) -> bool {
+    if !e.call(BASE_IS_EQUAL, &args![this, other]).bool() {
+        return false;
+    }
+    if e.get(this, NiSourceTexture::m_kFilename) != e.get(other, NiSourceTexture::m_kFilename) {
+        return false;
+    }
+    let mine = e.get(this, NiSourceTexture::m_spSrcPixelData);
+    let theirs = e.get(other, NiSourceTexture::m_spSrcPixelData);
+    if !source_equal(e, mine, theirs) {
+        return false;
+    }
+    let mine = e.get(this, NiSourceTexture::m_spPersistentSrcRendererData);
+    let theirs = e.get(other, NiSourceTexture::m_spPersistentSrcRendererData);
+    if !source_equal(e, mine, theirs) {
+        return false;
+    }
+    e.get(this, NiSourceTexture::m_ePixelLayout) == e.get(other, NiSourceTexture::m_ePixelLayout)
+        && e.get(this, NiSourceTexture::m_eMipMapped) == e.get(other, NiSourceTexture::m_eMipMapped)
+        && e.get(this, NiSourceTexture::m_eAlphaFmt) == e.get(other, NiSourceTexture::m_eAlphaFmt)
+        && e.get(this, NiSourceTexture::m_bStatic) == e.get(other, NiSourceTexture::m_bStatic)
+        && e.get(this, NiSourceTexture::m_bLoadDirectToRendererHint)
+            == e.get(other, NiSourceTexture::m_bLoadDirectToRendererHint)
+        && e.get(this, NiSourceTexture::m_bSrcRendererDataIsPersistent)
+            == e.get(other, NiSourceTexture::m_bSrcRendererDataIsPersistent)
+}
+
+// Translated from 00a5ffe0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiSourceTexture::LoadPixelDataFromFile` (Xbox PDB): for a texture with a file name (not
+/// the empty handle `0109b220`) and neither pixel data nor persistent renderer data, the
+/// image converter (`00a76640`) reads the platform file (its virtual +0xc with the platform
+/// name, the pixel data and 0). The result, held by a stack reference, becomes the pixel data
+/// (`00c663d0`) unless it is already that pointer; the stack reference is then given up.
+pub fn ni_source_texture_load_pixel_data_from_file(e: &mut Engine, this: Ptr<NiSourceTexture>) {
+    if e.get(this, NiSourceTexture::m_kFilename) == e.mem.u32(EMPTY_FIXED_STRING) {
+        return;
+    }
+    if e.get(this, NiSourceTexture::m_spSrcPixelData) != 0
+        || e.get(this, NiSourceTexture::m_spPersistentSrcRendererData) != 0
+    {
+        return;
+    }
+    let converter = e.call(GET_IMAGE_CONVERTER, &args![]).u32();
+    let pixel_data = e.get(this, NiSourceTexture::m_spSrcPixelData);
+    let platform_name = e.get(this, NiSourceTexture::m_kPlatformFilename);
+    let data = e
+        .vcall(
+            converter,
+            CONVERTER_READ_FILE_SLOT,
+            &args![platform_name, pixel_data, 0u32],
+        )
+        .u32();
+    e.with_stack(4, |e, held| {
+        e.mem.set_u32(held.addr(), data);
+        if data != 0 {
+            e.call(INTERLOCKED_INCREMENT, &args![data + REF_COUNT]);
+        }
+        let current = e.get(this, NiSourceTexture::m_spSrcPixelData);
+        if current == 0 || data != current {
+            e.call(POINTER_ASSIGN_FROM, &args![this.addr() + 0x3c, held]);
+        }
+    });
+    release(e, data);
+}
+
+// Translated from 00a60090 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiSourceTexture::Upgrade` (Xbox PDB): when the renderer data's state byte (+0x5b) is 2 or
+/// 3, opens the texture's file (its virtual +0x9c gives the name; `NiFile::GetFile` with mode
+/// 0 and a 0x8000-byte buffer) into `m_pFile`; when that succeeds the renderer data's virtual
+/// +0x8c runs with the texture, the file is deleted (its virtual 0 with 1) and `m_pFile`
+/// cleared.
+pub fn ni_source_texture_upgrade(e: &mut Engine, this: Ptr<NiSourceTexture>) {
+    let data = e.get(this, NiSourceTexture::m_pkRendererData);
+    if data == 0 {
+        return;
+    }
+    let state = e.mem.u8(data + RENDERER_DATA_STATE);
+    if state != 2 && state != 3 {
+        return;
+    }
+    let name_slot = e.vcall(this.addr(), GET_FILENAME_SLOT, &args![]).u32();
+    let name = e.mem.u32(name_slot);
+    let file = e.call(FILE_GET_FILE, &args![name, 0u32, 0x8000u32]).u32();
+    e.set(this, NiSourceTexture::m_pFile, file);
+    if file == 0 {
+        return;
+    }
+    let data = e.get(this, NiSourceTexture::m_pkRendererData);
+    e.vcall(data, RENDERER_DATA_UPGRADE_SLOT, &args![this]);
+    let file = e.get(this, NiSourceTexture::m_pFile);
+    if file != 0 {
+        e.vcall(file, DELETING_DESTRUCTOR_SLOT, &args![1u32]);
+    }
+    e.set(this, NiSourceTexture::m_pFile, 0);
+}
+
+// Translated from 00a60100 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiSourceTexture::Degrade` (Xbox PDB): when the renderer data's state byte (+0x5b) is 4,
+/// its virtual +0x90 runs with the texture.
+pub fn ni_source_texture_degrade(e: &mut Engine, this: Ptr<NiSourceTexture>) {
+    let data = e.get(this, NiSourceTexture::m_pkRendererData);
+    if data != 0 && e.mem.u8(data + RENDERER_DATA_STATE) == 4 {
+        e.vcall(data, RENDERER_DATA_DEGRADE_SLOT, &args![this]);
+    }
+}
+
+// Translated from 00a60600 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiSourceTexture::SaveBinary` (Xbox PDB): the base class's save (`00a5d7b0`), then the
+/// "external" byte (1 when there is neither persistent renderer data nor pixel data; the
+/// code keeps it in the low byte of its stream argument's stack word), the file name
+/// (`SaveFixedString`), the link id of the persistent renderer data when the persistent byte
+/// is set or else of the pixel data (the stream's virtual +0x30), the pixel layout, mipmap
+/// and alpha words, and the static, load-straight and persistent bytes.
+pub fn ni_source_texture_save_binary(e: &mut Engine, this: Ptr<NiSourceTexture>, stream: Ptr) {
+    let stream = stream.addr();
+    e.call(BASE_SAVE_BINARY, &args![this, stream]);
+    let external = e.get(this, NiSourceTexture::m_spPersistentSrcRendererData) == 0
+        && e.get(this, NiSourceTexture::m_spSrcPixelData) == 0;
+    write_byte(e, stream, u8::from(external));
+    e.call(STREAM_SAVE_FIXED_STRING, &args![stream, this.addr() + 0x30]);
+    let linked = if e.get(this, NiSourceTexture::m_bSrcRendererDataIsPersistent) != 0 {
+        e.get(this, NiSourceTexture::m_spPersistentSrcRendererData)
+    } else {
+        e.get(this, NiSourceTexture::m_spSrcPixelData)
+    };
+    e.vcall(stream, STREAM_SAVE_LINK_ID_SLOT, &args![linked]);
+    write(e, stream, this.addr() + 0x18, 4, 4);
+    write(e, stream, this.addr() + 0x20, 4, 4);
+    write(e, stream, this.addr() + 0x1c, 4, 4);
+    let value = e.get(this, NiSourceTexture::m_bStatic);
+    write_byte(e, stream, value);
+    let value = e.get(this, NiSourceTexture::m_bLoadDirectToRendererHint);
+    write_byte(e, stream, value);
+    let value = e.get(this, NiSourceTexture::m_bSrcRendererDataIsPersistent);
+    write_byte(e, stream, value);
+}
+
+// Translated from 00a60770 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiSourceTexture::GetViewerStrings` (Xbox PDB): `NiTexture`'s strings (`00a62a40`), then
+/// the class name (the first word of `ms_RTTI`, through `NiGetViewerString`) and `"File:"`
+/// with the platform file name (`NiGetViewerString_ov11`), each appended to the array.
+pub fn ni_source_texture_get_viewer_strings(
+    e: &mut Engine,
+    this: Ptr<NiSourceTexture>,
+    strings: Ptr,
+) {
+    let strings = strings.addr();
+    e.call(NI_TEXTURE_GET_VIEWER_STRINGS, &args![this, strings]);
+    let class_name = e.mem.u32(NI_SOURCE_TEXTURE_RTTI);
+    let text = e.call(NI_GET_VIEWER_STRING, &args![class_name]).u32();
+    add_viewer_string(e, strings, text);
+    let platform_name = e.get(this, NiSourceTexture::m_kPlatformFilename);
+    let text = e
+        .call(
+            NI_GET_VIEWER_STRING_FIXED,
+            &args![FILE_LABEL, platform_name],
+        )
+        .u32();
+    add_viewer_string(e, strings, text);
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -756,6 +1065,28 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(
             0x00a60180,
             ni_source_texture_load_binary(Ptr<NiSourceTexture>, Ptr)
+        ),
+        entry!(
+            0x00a5fa90,
+            ni_source_texture_register_streamables(Ptr<NiSourceTexture>, Ptr) -> bool
+        ),
+        entry!(
+            0x00a5fae0,
+            ni_source_texture_is_equal(Ptr<NiSourceTexture>, Ptr<NiSourceTexture>) -> bool
+        ),
+        entry!(
+            0x00a5ffe0,
+            ni_source_texture_load_pixel_data_from_file(Ptr<NiSourceTexture>)
+        ),
+        entry!(0x00a60090, ni_source_texture_upgrade(Ptr<NiSourceTexture>)),
+        entry!(0x00a60100, ni_source_texture_degrade(Ptr<NiSourceTexture>)),
+        entry!(
+            0x00a60600,
+            ni_source_texture_save_binary(Ptr<NiSourceTexture>, Ptr)
+        ),
+        entry!(
+            0x00a60770,
+            ni_source_texture_get_viewer_strings(Ptr<NiSourceTexture>, Ptr)
         ),
     ]
 }
@@ -1339,5 +1670,357 @@ mod b007_tests {
         assert_ne!(e.mem.u32(t + 0x34), 0);
         assert_eq!(calls_to(&e, FOUND_DOUBLE), vec![vec![s, found]]);
         assert_eq!(e.mem.u32(found + 4), 1);
+    }
+}
+
+#[cfg(test)]
+mod n019_tests {
+    use super::*;
+
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    fn calls_to(e: &Engine, callee: u32) -> Vec<Vec<u32>> {
+        e.call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|(address, _)| *address == callee)
+            .map(|(_, words)| words.clone())
+            .collect()
+    }
+
+    fn word(eax: u32) -> Ret {
+        Ret {
+            eax,
+            ..Ret::default()
+        }
+    }
+
+    /// An object whose virtual table has `slots` (byte offset, target).
+    fn object(e: &mut Engine, size: u32, slots: &[(u32, u32)]) -> u32 {
+        let object = e.mem.alloc(size);
+        let vtable = e.mem.alloc(0x200);
+        e.mem.set_u32(object, vtable);
+        for (slot, target) in slots {
+            e.mem.set_u32(vtable + slot, *target);
+        }
+        object
+    }
+
+    const DATA_DOUBLE: u32 = 0x0070_8000;
+    const STREAM_DOUBLE: u32 = 0x0070_8010;
+    const WRITE_DOUBLE: u32 = 0x0070_8020;
+    const CONVERTER_DOUBLE: u32 = 0x0070_8030;
+    const DELETE_DOUBLE: u32 = 0x0070_8040;
+
+    type Writes = Rc<RefCell<Vec<(Vec<u8>, u32, u32)>>>;
+
+    /// A stream whose output records each write (the bytes, the byte count, the size word)
+    /// and answers the byte count.
+    fn stream(e: &mut Engine) -> (u32, Writes) {
+        let stream = object(e, 0x260, &[(0x20, STREAM_DOUBLE), (0x30, STREAM_DOUBLE)]);
+        let output = e.mem.alloc(0x20);
+        e.mem.set_u32(output + BINARY_STREAM_WRITE, WRITE_DOUBLE);
+        e.mem.set_u32(stream + STREAM_OUTPUT, output);
+        let writes: Writes = Rc::new(RefCell::new(vec![]));
+        let log = writes.clone();
+        e.register_double(WRITE_DOUBLE, move |e, a| {
+            let bytes = e.mem.bytes(a[1], a[2]);
+            log.borrow_mut().push((bytes, a[2], e.mem.u32(a[3])));
+            word(a[2])
+        });
+        e.register(STREAM_DOUBLE, |_, _| Ret::default());
+        (stream, writes)
+    }
+
+    #[test]
+    fn register_streamables_asks_the_base_then_the_source() {
+        let mut e = Engine::new();
+        e.register(BASE_REGISTER_STREAMABLES, |_, a| {
+            word(u32::from(a[1] != 0x99))
+        });
+        e.register(DATA_DOUBLE, |_, a| word(0x100 | (a[1] & 0xff)));
+        let (s, _) = stream(&mut e);
+        let t = e.mem.alloc(0x48);
+        e.call_log = Some(vec![]);
+        assert!(!e.call(0x00a5_fa90, &args![t, 0x99u32]).bool());
+        assert_eq!(calls_to(&e, STREAM_DOUBLE).len(), 0);
+        // Neither source: true after the file name is registered.
+        assert!(e.call(0x00a5_fa90, &args![t, s]).bool());
+        assert_eq!(calls_to(&e, STREAM_DOUBLE), vec![vec![s, t + 0x30]]);
+        // The pixel data alone answers its registration.
+        let pixels = object(&mut e, 0x10, &[(0x54, DATA_DOUBLE)]);
+        e.mem.set_u32(t + 0x3c, pixels);
+        assert_eq!(e.call(0x00a5_fa90, &args![t, s]).u32() & 0xff, s & 0xff);
+        // The persistent data comes first.
+        let persistent = object(&mut e, 0x10, &[(0x54, DATA_DOUBLE)]);
+        e.mem.set_u32(t + 0x38, persistent);
+        e.call(0x00a5_fa90, &args![t, s]);
+        let asked = calls_to(&e, DATA_DOUBLE);
+        assert_eq!(asked, vec![vec![pixels, s], vec![persistent, s]]);
+    }
+
+    #[test]
+    fn is_equal_compares_sources_and_preferences() {
+        let mut e = Engine::new();
+        e.register(BASE_IS_EQUAL, |_, _| word(1));
+        e.register(DATA_DOUBLE, |e, a| {
+            word(u32::from(e.mem.u32(a[0] + 8) == e.mem.u32(a[1] + 8)))
+        });
+        let a = e.mem.alloc(0x48);
+        let b = e.mem.alloc(0x48);
+        for t in [a, b] {
+            e.mem.set_u32(t + 0x30, 0x1234);
+            e.mem.set_u32(t + 0x18, 2);
+            e.mem.set_u32(t + 0x1c, 1);
+            e.mem.set_u32(t + 0x20, 3);
+            e.mem.set_u8(t + 0x40, 1);
+        }
+        assert!(e.call(0x00a5_fae0, &args![a, b]).bool());
+        e.mem.set_u8(b + 0x42, 1);
+        assert!(!e.call(0x00a5_fae0, &args![a, b]).bool());
+        e.mem.set_u8(b + 0x42, 0);
+        e.mem.set_u32(b + 0x1c, 4);
+        assert!(!e.call(0x00a5_fae0, &args![a, b]).bool());
+        e.mem.set_u32(b + 0x1c, 1);
+        // Pixel data on one side only.
+        let pixels_a = object(&mut e, 0x10, &[(0x5c, DATA_DOUBLE)]);
+        e.mem.set_u32(a + 0x3c, pixels_a);
+        assert!(!e.call(0x00a5_fae0, &args![a, b]).bool());
+        let pixels_b = object(&mut e, 0x10, &[(0x5c, DATA_DOUBLE)]);
+        e.mem.set_u32(b + 0x3c, pixels_b);
+        assert!(e.call(0x00a5_fae0, &args![a, b]).bool());
+        e.mem.set_u32(pixels_b + 8, 5);
+        assert!(!e.call(0x00a5_fae0, &args![a, b]).bool());
+        e.mem.set_u32(pixels_b + 8, 0);
+        // Persistent data on the other side only.
+        e.mem.set_u32(b + 0x38, pixels_b);
+        assert!(!e.call(0x00a5_fae0, &args![a, b]).bool());
+        e.mem.set_u32(b + 0x38, 0);
+        e.mem.set_u32(b + 0x30, 0x5678);
+        assert!(!e.call(0x00a5_fae0, &args![a, b]).bool());
+        e.mem.set_u32(b + 0x30, 0x1234);
+        e.register(BASE_IS_EQUAL, |_, _| word(0));
+        assert!(!e.call(0x00a5_fae0, &args![a, b]).bool());
+    }
+
+    fn reference_counting(e: &mut Engine) {
+        e.register(INTERLOCKED_INCREMENT, |e, a| {
+            let count = e.mem.u32(a[0]).wrapping_add(1);
+            e.mem.set_u32(a[0], count);
+            word(count)
+        });
+        e.register(INTERLOCKED_DECREMENT, |e, a| {
+            let count = e.mem.u32(a[0]).wrapping_sub(1);
+            e.mem.set_u32(a[0], count);
+            word(count)
+        });
+    }
+
+    #[test]
+    fn load_pixel_data_from_file_reads_through_the_converter() {
+        let mut e = Engine::new();
+        e.map(EMPTY_FIXED_STRING, 4);
+        e.mem.set_u32(EMPTY_FIXED_STRING, 0x0e0e);
+        reference_counting(&mut e);
+        let converter = object(&mut e, 0x10, &[(0xc, CONVERTER_DOUBLE)]);
+        e.register_double(GET_IMAGE_CONVERTER, move |_, _| word(converter));
+        let pixels = object(&mut e, 0x10, &[(0x4, DELETE_DOUBLE)]);
+        e.register_double(CONVERTER_DOUBLE, move |_, _| word(pixels));
+        e.register(DELETE_DOUBLE, |_, _| Ret::default());
+        // The assignment takes its reference as `00c663d0` does.
+        e.register(POINTER_ASSIGN_FROM, |e, a| {
+            let new = e.mem.u32(a[1]);
+            e.mem.set_u32(a[0], new);
+            e.mem.set_u32(new + 4, e.mem.u32(new + 4) + 1);
+            Ret::default()
+        });
+        let t = e.mem.alloc(0x48);
+        e.mem.set_u32(t + 0x30, 0x0e0e);
+        e.call_log = Some(vec![]);
+        e.call(0x00a5_ffe0, &args![t]);
+        assert_eq!(calls_to(&e, GET_IMAGE_CONVERTER).len(), 0);
+        e.mem.set_u32(t + 0x30, 0x2000);
+        e.mem.set_u32(t + 0x34, 0x3000);
+        e.mem.set_u32(t + 0x38, 0x10);
+        e.call(0x00a5_ffe0, &args![t]);
+        assert_eq!(calls_to(&e, GET_IMAGE_CONVERTER).len(), 0);
+        e.mem.set_u32(t + 0x38, 0);
+        e.call(0x00a5_ffe0, &args![t]);
+        assert_eq!(
+            calls_to(&e, CONVERTER_DOUBLE),
+            vec![vec![converter, 0x3000, 0, 0]]
+        );
+        assert_eq!(calls_to(&e, POINTER_ASSIGN_FROM)[0][0], t + 0x3c);
+        assert_eq!(e.mem.u32(t + 0x3c), pixels);
+        assert_eq!(e.mem.u32(pixels + 4), 1);
+        assert_eq!(calls_to(&e, DELETE_DOUBLE).len(), 0);
+        // With pixel data already there nothing more is read.
+        e.call(0x00a5_ffe0, &args![t]);
+        assert_eq!(calls_to(&e, CONVERTER_DOUBLE).len(), 1);
+        // A converter answering null still goes through the assignment, and gives nothing up.
+        e.mem.set_u32(t + 0x3c, 0);
+        e.register(CONVERTER_DOUBLE, |_, _| word(0));
+        e.register(POINTER_ASSIGN_FROM, |_, _| Ret::default());
+        e.call(0x00a5_ffe0, &args![t]);
+        assert_eq!(calls_to(&e, POINTER_ASSIGN_FROM).len(), 2);
+        assert_eq!(calls_to(&e, INTERLOCKED_DECREMENT).len(), 1);
+    }
+
+    #[test]
+    fn load_pixel_data_from_file_deletes_data_nobody_kept() {
+        let mut e = Engine::new();
+        e.map(EMPTY_FIXED_STRING, 4);
+        reference_counting(&mut e);
+        let converter = object(&mut e, 0x10, &[(0xc, CONVERTER_DOUBLE)]);
+        e.register_double(GET_IMAGE_CONVERTER, move |_, _| word(converter));
+        let pixels = object(&mut e, 0x10, &[(0x4, DELETE_DOUBLE)]);
+        e.register_double(CONVERTER_DOUBLE, move |_, _| word(pixels));
+        e.register(DELETE_DOUBLE, |_, _| Ret::default());
+        e.register(POINTER_ASSIGN_FROM, |_, _| Ret::default());
+        let t = e.mem.alloc(0x48);
+        e.mem.set_u32(t + 0x30, 0x2000);
+        e.call_log = Some(vec![]);
+        e.call(0x00a5_ffe0, &args![t]);
+        assert_eq!(calls_to(&e, DELETE_DOUBLE), vec![vec![pixels]]);
+    }
+
+    #[test]
+    fn upgrade_and_degrade_test_the_renderer_data_state() {
+        let mut e = Engine::new();
+        const NAME_DOUBLE: u32 = 0x0070_8050;
+        let data = object(&mut e, 0x60, &[(0x8c, DATA_DOUBLE), (0x90, DATA_DOUBLE)]);
+        e.register(DATA_DOUBLE, |_, _| Ret::default());
+        let t = object(&mut e, 0x48, &[(0x9c, NAME_DOUBLE)]);
+        let name_slot = e.mem.alloc(4);
+        e.mem.set_u32(name_slot, 0x4444);
+        e.register_double(NAME_DOUBLE, move |_, _| word(name_slot));
+        let file = object(&mut e, 0x10, &[(0, DELETE_DOUBLE)]);
+        e.register_double(FILE_GET_FILE, move |_, _| word(file));
+        e.register(DELETE_DOUBLE, |_, _| Ret::default());
+        e.call_log = Some(vec![]);
+        // No renderer data.
+        e.call(0x00a6_0090, &args![t]);
+        e.call(0x00a6_0100, &args![t]);
+        assert_eq!(calls_to(&e, NAME_DOUBLE).len(), 0);
+        e.mem.set_u32(t + 0x24, data);
+        e.mem.set_u8(data + 0x5b, 1);
+        e.call(0x00a6_0090, &args![t]);
+        assert_eq!(calls_to(&e, FILE_GET_FILE).len(), 0);
+        for state in [2u8, 3] {
+            e.mem.set_u8(data + 0x5b, state);
+            e.mem.set_u32(t + 0x44, 0x7777);
+            e.call(0x00a6_0090, &args![t]);
+            assert_eq!(e.mem.u32(t + 0x44), 0);
+        }
+        assert_eq!(calls_to(&e, FILE_GET_FILE)[0], vec![0x4444, 0, 0x8000]);
+        assert_eq!(
+            calls_to(&e, DATA_DOUBLE),
+            vec![vec![data, t], vec![data, t]]
+        );
+        assert_eq!(
+            calls_to(&e, DELETE_DOUBLE),
+            vec![vec![file, 1], vec![file, 1]]
+        );
+        // A file that does not open: the null stays and nothing upgrades.
+        e.register(FILE_GET_FILE, |_, _| word(0));
+        e.call(0x00a6_0090, &args![t]);
+        assert_eq!(calls_to(&e, DATA_DOUBLE).len(), 2);
+        // Degrade runs on state 4 only.
+        e.call(0x00a6_0100, &args![t]);
+        assert_eq!(calls_to(&e, DATA_DOUBLE).len(), 2);
+        e.mem.set_u8(data + 0x5b, 4);
+        e.call(0x00a6_0100, &args![t]);
+        assert_eq!(calls_to(&e, DATA_DOUBLE)[2], vec![data, t]);
+        e.call(0x00a6_0090, &args![t]);
+        assert_eq!(calls_to(&e, FILE_GET_FILE).len(), 3);
+    }
+
+    #[test]
+    fn save_binary_writes_the_fields_in_order() {
+        let mut e = Engine::new();
+        e.register(BASE_SAVE_BINARY, |_, _| Ret::default());
+        e.register(STREAM_SAVE_FIXED_STRING, |_, _| Ret::default());
+        let (s, writes) = stream(&mut e);
+        let t = e.mem.alloc(0x48);
+        e.mem.set_u32(t + 0x18, 0x11);
+        e.mem.set_u32(t + 0x1c, 0x22);
+        e.mem.set_u32(t + 0x20, 0x33);
+        e.mem.set_u8(t + 0x40, 1);
+        e.mem.set_u8(t + 0x41, 0);
+        e.mem.set_u8(t + 0x42, 1);
+        e.mem.set_u32(t + 0x38, 0x5000);
+        e.mem.set_u32(t + 0x3c, 0x6000);
+        e.call_log = Some(vec![]);
+        e.call(0x00a6_0600, &args![t, s]);
+        assert_eq!(calls_to(&e, BASE_SAVE_BINARY), vec![vec![t, s]]);
+        assert_eq!(
+            calls_to(&e, STREAM_SAVE_FIXED_STRING),
+            vec![vec![s, t + 0x30]]
+        );
+        assert_eq!(calls_to(&e, STREAM_DOUBLE), vec![vec![s, 0x5000]]);
+        let expected: Vec<(Vec<u8>, u32, u32)> = vec![
+            (vec![0], 1, 1),
+            (vec![0x11, 0, 0, 0], 4, 4),
+            (vec![0x33, 0, 0, 0], 4, 4),
+            (vec![0x22, 0, 0, 0], 4, 4),
+            (vec![1], 1, 1),
+            (vec![0], 1, 1),
+            (vec![1], 1, 1),
+        ];
+        assert_eq!(*writes.borrow(), expected);
+        let output = e.mem.u32(s + STREAM_OUTPUT);
+        assert_eq!(e.mem.u32(output + 4), 16);
+        // External (no sources, not persistent): byte 1 and the pixel data's link id.
+        e.mem.set_u32(t + 0x38, 0);
+        e.mem.set_u32(t + 0x3c, 0);
+        e.mem.set_u8(t + 0x42, 0);
+        writes.borrow_mut().clear();
+        e.call(0x00a6_0600, &args![t, s]);
+        assert_eq!(writes.borrow()[0], (vec![1], 1, 1));
+        assert_eq!(calls_to(&e, STREAM_DOUBLE)[1], vec![s, 0]);
+    }
+
+    #[test]
+    fn get_viewer_strings_appends_the_class_and_file() {
+        let mut e = Engine::new();
+        e.map(NI_SOURCE_TEXTURE_RTTI, 8);
+        e.mem.set_u32(NI_SOURCE_TEXTURE_RTTI, 0x0123_4567);
+        e.register(NI_TEXTURE_GET_VIEWER_STRINGS, |_, _| Ret::default());
+        e.register(NI_GET_VIEWER_STRING, |_, a| word(a[0] + 1));
+        e.register(NI_GET_VIEWER_STRING_FIXED, |_, a| word(a[1] + 2));
+        e.register(STRING_ARRAY_SET_SIZE, |e, a| {
+            e.mem.set_u16(a[0] + 8, a[1] as u16);
+            Ret::default()
+        });
+        e.register(STRING_ARRAY_SET_AT, |e, a| {
+            let value = e.mem.u32(a[2]);
+            let base = e.mem.u32(a[0] + 4);
+            e.mem.set_u32(base + 4 * a[1], value);
+            e.mem.set_u16(a[0] + 0xa, a[1] as u16 + 1);
+            Ret::default()
+        });
+        let strings = e.mem.alloc(0x10);
+        let base = e.mem.alloc(0x40);
+        e.mem.set_u32(strings + 4, base);
+        e.mem.set_u16(strings + 8, 1);
+        e.mem.set_u16(strings + 0xe, 3);
+        let t = e.mem.alloc(0x48);
+        e.mem.set_u32(t + 0x34, 0x7000);
+        e.call_log = Some(vec![]);
+        e.call(0x00a6_0770, &args![t, strings]);
+        assert_eq!(
+            calls_to(&e, NI_TEXTURE_GET_VIEWER_STRINGS),
+            vec![vec![t, strings]]
+        );
+        assert_eq!(
+            calls_to(&e, NI_GET_VIEWER_STRING_FIXED),
+            vec![vec![FILE_LABEL, 0x7000]]
+        );
+        assert_eq!(e.mem.u32(base), 0x0123_4568);
+        assert_eq!(e.mem.u32(base + 4), 0x7002);
+        // Full after the first: grown to 1 + 3.
+        assert_eq!(calls_to(&e, STRING_ARRAY_SET_SIZE), vec![vec![strings, 4]]);
     }
 }

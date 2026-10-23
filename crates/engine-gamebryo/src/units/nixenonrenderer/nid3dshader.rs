@@ -32,9 +32,448 @@ pub fn ni_d3d_shader_sdm_init(e: &mut Engine) {
     }
 }
 
+/// `NiD3DShader`'s RTTI record (`0126f754`).
+const SHADER_RTTI_0126F754: u32 = 0x0126_f754;
+
+// Translated from 00e7c680 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiD3DShader::GetRTTI` (slot +8 of the `NiD3DShader` vtable `010eeda4`; unnamed in the
+/// engine map), `thiscall`, `this` not read: the RTTI record at `0126f754`.
+pub fn ni_d3d_shader_get_rtti(_e: &mut Engine, _this: Ptr) -> u32 {
+    SHADER_RTTI_0126F754
+}
+
+/// The sized free `00aa1460` (`cdecl`: block, size).
+const FREE_SIZED_00AA1460: u32 = 0x00aa_1460;
+
+// Translated from 00e7c690 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiD3DShader::scalar deleting destructor` (slot 0 of the vtable `010eeda4`; unnamed in the
+/// engine map), `thiscall` with the flags: the destructor ([`fn_00e806c0`]), then with bit 0
+/// the 0x3c bytes freed (`00aa1460`). Answers `this`.
+pub fn ni_d3d_shader_scalar_deleting_destructor(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    fn_00e806c0(e, this);
+    if flags & 1 != 0 {
+        e.call(FREE_SIZED_00AA1460, &args![this, 0x3cu32]);
+    }
+    this
+}
+
+/// The shift that places the shader constant's second word (`01101294`, a word whose low byte
+/// is the count).
+const ENTRY_SHIFT_01101294: u32 = 0x0110_1294;
+
+// Translated from 00e80640 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiSCMExtraData::AddEntry` (engine map), `thiscall` with five words: a key, a second word,
+/// the list (0 or 1), a value and a byte. Appends an 8-byte entry to the list's array (`this`
+/// +0x24 + 4 * list, its count at +0x18 + 4 * list): the key ORed with the second word (0xff
+/// when the byte is set) shifted left by `01101294`'s low byte (as `SHL` masks it, the low five
+/// bits), then the value; the count goes up by one.
+pub fn ni_scm_extra_data_add_entry(
+    e: &mut Engine,
+    this: Ptr,
+    key: u32,
+    second: u32,
+    list: u32,
+    value: u32,
+    byte: u8,
+) {
+    let base = this.addr();
+    let high = if byte == 0 { second } else { 0xff };
+    let shift = e.mem.u32(ENTRY_SHIFT_01101294) & 0x1f;
+    let count_at = base.wrapping_add(list.wrapping_mul(4)).wrapping_add(0x18);
+    let array_at = base.wrapping_add(list.wrapping_mul(4)).wrapping_add(0x24);
+    let array = e.mem.u32(array_at);
+    let count = e.mem.u32(count_at);
+    let word = (high << shift) | key;
+    e.mem
+        .set_u32(array.wrapping_add(count.wrapping_mul(8)), word);
+    let count = e.mem.u32(count_at);
+    let array = e.mem.u32(array_at);
+    e.mem.set_u32(
+        array.wrapping_add(count.wrapping_mul(8)).wrapping_add(4),
+        value,
+    );
+    // `INC dword ptr`: the count read again.
+    let count = e.mem.u32(count_at);
+    e.mem.set_u32(count_at, count.wrapping_add(1));
+}
+
+/// The texture stage state setter `00e88fc0` (unit `run_00e88fc0`; `thiscall` on the stage's
+/// object at +0x10, three words: the state, its value and the caller's fourth word) and the
+/// value `00e80a50` takes from `0126f0e4`.
+const SET_STAGE_STATE_00E88FC0: u32 = 0x00e8_8fc0;
+const TRANSFORM_FLAGS_0126F0E4: u32 = 0x0126_f0e4;
+
+/// A product term: the float at `loaded` (`FLD dword`) times the float memory operand at
+/// `operand` (`FMUL dword`).
+fn product(e: &Engine, (loaded, operand): (u32, u32)) -> f64 {
+    x87_mul(x87_load32(e.mem.u32(loaded)), x87_m32(e.mem.u32(operand)))
+}
+
+/// One element as the code sums it: the first two products (`FADDP`), then the third.
+fn sum3(e: &Engine, terms: [(u32, u32); 3]) -> f64 {
+    x87_add(
+        x87_add(product(e, terms[0]), product(e, terms[1])),
+        product(e, terms[2]),
+    )
+}
+
+/// The destination offset and the three products (loaded, operand) of one element.
+type Element = (u32, [(u32, u32); 3]);
+
+/// The rotation part shared by `00e80860`, `00e80c50`, `00e80de0` and `00e80f70`: the 3x3 at
+/// `rotation` times the one at `matrices` +0xa40 (rows of 16 bytes), in the code's operand
+/// order.
+fn rotation_elements(r: u32, m: u32) -> [Element; 9] {
+    [
+        (
+            0x1c,
+            [(r + 4, m + 0xa44), (m + 0xa40, r), (m + 0xa48, r + 8)],
+        ),
+        (
+            0x2c,
+            [(r, m + 0xa50), (r + 4, m + 0xa54), (r + 8, m + 0xa58)],
+        ),
+        (
+            0x3c,
+            [(r, m + 0xa60), (r + 4, m + 0xa64), (r + 8, m + 0xa68)],
+        ),
+        (
+            0x20,
+            [
+                (r + 0x10, m + 0xa44),
+                (m + 0xa40, r + 0xc),
+                (m + 0xa48, r + 0x14),
+            ],
+        ),
+        (
+            0x30,
+            [
+                (r + 0x10, m + 0xa54),
+                (r + 0xc, m + 0xa50),
+                (m + 0xa58, r + 0x14),
+            ],
+        ),
+        (
+            0x40,
+            [
+                (r + 0x10, m + 0xa64),
+                (r + 0xc, m + 0xa60),
+                (m + 0xa68, r + 0x14),
+            ],
+        ),
+        (
+            0x24,
+            [
+                (m + 0xa40, r + 0x18),
+                (r + 0x1c, m + 0xa44),
+                (r + 0x20, m + 0xa48),
+            ],
+        ),
+        (
+            0x34,
+            [
+                (m + 0xa54, r + 0x1c),
+                (r + 0x18, m + 0xa50),
+                (r + 0x20, m + 0xa58),
+            ],
+        ),
+        (
+            0x44,
+            [
+                (m + 0xa64, r + 0x1c),
+                (r + 0x18, m + 0xa60),
+                (r + 0x20, m + 0xa68),
+            ],
+        ),
+    ]
+}
+
+/// Stores each element's sum as a float at `stage` + its offset, in order.
+fn store_elements(e: &mut Engine, stage: u32, elements: &[Element]) {
+    for (offset, terms) in elements {
+        let value = x87_store32(sum3(e, *terms));
+        e.mem.set_u32(stage.wrapping_add(*offset), value);
+    }
+}
+
+/// Stores the translated row: each element's sum plus the float at `translation` + 4 * i
+/// (`FADD dword`).
+fn store_translated(e: &mut Engine, stage: u32, translation: u32, elements: &[Element; 3]) {
+    for (i, (offset, terms)) in elements.iter().enumerate() {
+        let added = x87_m32(e.mem.u32(translation.wrapping_add(4 * i as u32)));
+        let value = x87_store32(x87_add(sum3(e, *terms), added));
+        e.mem.set_u32(stage.wrapping_add(*offset), value);
+    }
+}
+
+/// The `FLDZ` and four stores ending all five: +0x58, +0x48, +0x38, +0x28 cleared.
+fn clear_column(e: &mut Engine, stage: u32) {
+    for offset in [0x58u32, 0x48, 0x38, 0x28] {
+        e.mem.set_u32(stage.wrapping_add(offset), 0);
+    }
+}
+
+/// The two stage states the five set (`00e88fc0` on the stage's +0x10 with the fourth word):
+/// state 0xb with `first`, then (after `flag` goes to the stage's byte +0x5e) state 0x18 with
+/// `second`.
+fn set_states(e: &mut Engine, stage: u32, extra: u32, first: u32, flag: u8, second: u32) {
+    let target = e.mem.u32(stage.wrapping_add(0x10));
+    e.call(
+        SET_STAGE_STATE_00E88FC0,
+        &args![target, 0xbu32, first, extra],
+    );
+    let target = e.mem.u32(stage.wrapping_add(0x10));
+    e.mem.set_u8(stage.wrapping_add(0x5e), flag);
+    e.call(
+        SET_STAGE_STATE_00E88FC0,
+        &args![target, 0x18u32, second, extra],
+    );
+}
+
+// Translated from 00e80860 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (unit `nid3dshader.cpp`; the first of the five functions
+/// `_SDMInit` stores at `0126f738`), `cdecl` with five words: a 3x3 float matrix, a float
+/// translation, a stage, a word passed on and an object holding a 3x3 matrix at +0xa40 and a
+/// translation row at +0xa70 (rows of 16 bytes). Sets the stage states 0xb to 0x20000 and 0x18
+/// to 2 (the stage's byte +0x5e set to 1 between them); then the stage's 4x4 at +0x1c gets the
+/// product of the two matrices (x87, in the code's operand order), its row +0x4c the matrix
+/// times the object's +0xa70 row plus the translation, and +0x28, +0x38, +0x48, +0x58 0.
+pub fn fn_00e80860(
+    e: &mut Engine,
+    rotation: u32,
+    translation: u32,
+    stage: u32,
+    extra: u32,
+    matrices: u32,
+) {
+    set_states(e, stage, extra, 0x20000, 1, 2);
+    let (r, m) = (rotation, matrices);
+    store_elements(e, stage, &rotation_elements(r, m));
+    let translated = [
+        (
+            0x4c,
+            [(r, m + 0xa70), (r + 4, m + 0xa74), (r + 8, m + 0xa78)],
+        ),
+        (
+            0x50,
+            [
+                (r + 0x10, m + 0xa74),
+                (m + 0xa70, r + 0xc),
+                (r + 0x14, m + 0xa78),
+            ],
+        ),
+        (
+            0x54,
+            [
+                (m + 0xa70, r + 0x18),
+                (r + 0x1c, m + 0xa74),
+                (r + 0x20, m + 0xa78),
+            ],
+        ),
+    ];
+    store_translated(e, stage, translation, &translated);
+    clear_column(e, stage);
+}
+
+// Translated from 00e80a50 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (unit `nid3dshader.cpp`; the second of the five), `cdecl` with
+/// the same five words as [`fn_00e80860`]: stage state 0xb to 0x20000, the byte +0x5e set unless
+/// the word at `0126f0e4` is 0 or 0x100, and state 0x18 to that word; then the same product,
+/// translated row and cleared column, each element summed in this function's own operand order.
+pub fn fn_00e80a50(
+    e: &mut Engine,
+    rotation: u32,
+    translation: u32,
+    stage: u32,
+    extra: u32,
+    matrices: u32,
+) {
+    let target = e.mem.u32(stage.wrapping_add(0x10));
+    e.call(
+        SET_STAGE_STATE_00E88FC0,
+        &args![target, 0xbu32, 0x20000u32, extra],
+    );
+    let flags = e.mem.u32(TRANSFORM_FLAGS_0126F0E4);
+    let flag = u8::from(flags != 0 && flags != 0x100);
+    e.mem.set_u8(stage.wrapping_add(0x5e), flag);
+    let target = e.mem.u32(stage.wrapping_add(0x10));
+    e.call(
+        SET_STAGE_STATE_00E88FC0,
+        &args![target, 0x18u32, flags, extra],
+    );
+    let (r, m) = (rotation, matrices);
+    let elements = [
+        (
+            0x1c,
+            [(m + 0xa40, r), (m + 0xa44, r + 4), (m + 0xa48, r + 8)],
+        ),
+        (
+            0x2c,
+            [(r + 4, m + 0xa54), (r, m + 0xa50), (r + 8, m + 0xa58)],
+        ),
+        (
+            0x3c,
+            [(r + 4, m + 0xa64), (r, m + 0xa60), (r + 8, m + 0xa68)],
+        ),
+        (
+            0x20,
+            [
+                (m + 0xa40, r + 0xc),
+                (m + 0xa44, r + 0x10),
+                (r + 0x14, m + 0xa48),
+            ],
+        ),
+        (
+            0x30,
+            [
+                (r + 0x10, m + 0xa54),
+                (r + 0xc, m + 0xa50),
+                (r + 0x14, m + 0xa58),
+            ],
+        ),
+        (
+            0x40,
+            [
+                (r + 0x10, m + 0xa64),
+                (r + 0xc, m + 0xa60),
+                (r + 0x14, m + 0xa68),
+            ],
+        ),
+        (
+            0x24,
+            [
+                (m + 0xa40, r + 0x18),
+                (m + 0xa44, r + 0x1c),
+                (r + 0x20, m + 0xa48),
+            ],
+        ),
+        (
+            0x34,
+            [
+                (r + 0x18, m + 0xa50),
+                (m + 0xa54, r + 0x1c),
+                (r + 0x20, m + 0xa58),
+            ],
+        ),
+        (
+            0x44,
+            [
+                (r + 0x18, m + 0xa60),
+                (m + 0xa64, r + 0x1c),
+                (r + 0x20, m + 0xa68),
+            ],
+        ),
+    ];
+    store_elements(e, stage, &elements);
+    let translated = [
+        (
+            0x4c,
+            [(r, m + 0xa70), (m + 0xa74, r + 4), (m + 0xa78, r + 8)],
+        ),
+        (
+            0x50,
+            [
+                (r + 0xc, m + 0xa70),
+                (m + 0xa74, r + 0x10),
+                (r + 0x14, m + 0xa78),
+            ],
+        ),
+        (
+            0x54,
+            [
+                (m + 0xa74, r + 0x1c),
+                (r + 0x18, m + 0xa70),
+                (m + 0xa78, r + 0x20),
+            ],
+        ),
+    ];
+    store_translated(e, stage, translation, &translated);
+    clear_column(e, stage);
+}
+
+/// The body of `00e80c50`, `00e80de0` and `00e80f70` (they differ in the two state values):
+/// the states, the product of the two matrices, the translation copied into the row at +0x4c
+/// (`FLD`/`FSTP`, a signalling NaN quieted) and the cleared column.
+fn rotation_with_translation(
+    e: &mut Engine,
+    rotation: u32,
+    translation: u32,
+    stage: u32,
+    extra: u32,
+    matrices: u32,
+    first: u32,
+    second: u32,
+) {
+    set_states(e, stage, extra, first, 1, second);
+    store_elements(e, stage, &rotation_elements(rotation, matrices));
+    for i in 0..3u32 {
+        let value = x87_quiet_bits(e.mem.u32(translation.wrapping_add(4 * i)));
+        e.mem.set_u32(stage.wrapping_add(0x4c + 4 * i), value);
+    }
+    clear_column(e, stage);
+}
+
+// Translated from 00e80c50 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (unit `nid3dshader.cpp`; the third of the five), `cdecl` with the
+/// same five words as [`fn_00e80860`]: stage states 0xb to 0x30000 and 0x18 to 2 (the byte +0x5e
+/// set to 1 between them), the product of the two matrices into the stage's 4x4 at +0x1c (as
+/// `00e80860` sums it), the translation copied into its row +0x4c and +0x28 to +0x58 cleared.
+pub fn fn_00e80c50(
+    e: &mut Engine,
+    rotation: u32,
+    translation: u32,
+    stage: u32,
+    extra: u32,
+    matrices: u32,
+) {
+    rotation_with_translation(e, rotation, translation, stage, extra, matrices, 0x30000, 2);
+}
+
+// Translated from 00e80de0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (unit `nid3dshader.cpp`; the fourth of the five): as
+/// [`fn_00e80c50`] with the state 0x18 set to 3.
+pub fn fn_00e80de0(
+    e: &mut Engine,
+    rotation: u32,
+    translation: u32,
+    stage: u32,
+    extra: u32,
+    matrices: u32,
+) {
+    rotation_with_translation(e, rotation, translation, stage, extra, matrices, 0x30000, 3);
+}
+
+// Translated from 00e80f70 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (unit `nid3dshader.cpp`; the fifth of the five): as
+/// [`fn_00e80c50`] with the state 0xb set to 0x10000 and 0x18 to 3.
+pub fn fn_00e80f70(
+    e: &mut Engine,
+    rotation: u32,
+    translation: u32,
+    stage: u32,
+    extra: u32,
+    matrices: u32,
+) {
+    rotation_with_translation(e, rotation, translation, stage, extra, matrices, 0x10000, 3);
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x00e7_c680, ni_d3d_shader_get_rtti(Ptr) -> u32),
+        entry!(
+            0x00e7_c690,
+            ni_d3d_shader_scalar_deleting_destructor(Ptr, u32) -> Ptr
+        ),
+        entry!(
+            0x00e8_0640,
+            ni_scm_extra_data_add_entry(Ptr, u32, u32, u32, u32, u8)
+        ),
+        entry!(0x00e8_0860, fn_00e80860(u32, u32, u32, u32, u32)),
+        entry!(0x00e8_0a50, fn_00e80a50(u32, u32, u32, u32, u32)),
+        entry!(0x00e8_0c50, fn_00e80c50(u32, u32, u32, u32, u32)),
+        entry!(0x00e8_0de0, fn_00e80de0(u32, u32, u32, u32, u32)),
+        entry!(0x00e8_0f70, fn_00e80f70(u32, u32, u32, u32, u32)),
         entry!(0x00e8_1100, ni_d3d_shader_sdm_init()),
         entry!(0x00aa_1ac0, fn_00aa1ac0(Ptr) -> u32),
         entry!(0x00e8_0690, fn_00e80690()),
@@ -416,5 +855,229 @@ mod b052_tests {
         run(&mut e, 0);
         assert_eq!(calls(&e, SET_BONES), vec![vec![target, 0]]);
         assert_eq!(calls(&e, RENDERER_00E6FBB0), vec![vec![renderer, 7, 1]]);
+    }
+}
+
+#[cfg(test)]
+mod n008_tests {
+    use super::*;
+
+    fn calls(e: &Engine, addr: u32) -> Vec<Vec<u32>> {
+        e.call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|c| c.0 == addr)
+            .map(|c| c.1.clone())
+            .collect()
+    }
+
+    #[test]
+    fn get_rtti_answers_the_record() {
+        let mut e = Engine::new();
+        assert_eq!(e.call(0x00e7_c680, &args![0u32]).u32(), 0x0126_f754);
+    }
+
+    #[test]
+    fn scalar_deleting_destructor_runs_the_destructor_then_frees() {
+        for (flags, frees) in [(1u32, true), (0, false)] {
+            let mut e = Engine::new();
+            e.map(0x0126_f000, 0x1000);
+            e.map(0x0109_b000, 0x1000);
+            for callee in [
+                RELEASE_STATE_BLOCK_00E7F6B0,
+                SHADER_INTERFACE_DESTRUCT_00E81A50,
+                FREE_SIZED_00AA1460,
+            ] {
+                e.register(callee, |_, _| Ret::default());
+            }
+            // No name, renderer or objects: the destructor only stores and releases.
+            let this = e.mem.alloc(0x3c);
+            e.call_log = Some(vec![]);
+            assert_eq!(e.call(0x00e7_c690, &args![this, flags]).u32(), this);
+            assert_eq!(e.mem.u32(this), SHADER_VTABLE_010EEDA4);
+            assert_eq!(
+                calls(&e, SHADER_INTERFACE_DESTRUCT_00E81A50),
+                vec![vec![this]]
+            );
+            let freed = if frees {
+                vec![vec![this, 0x3c]]
+            } else {
+                vec![]
+            };
+            assert_eq!(calls(&e, FREE_SIZED_00AA1460), freed);
+        }
+    }
+
+    #[test]
+    fn add_entry_appends_to_the_chosen_list() {
+        let mut e = Engine::new();
+        e.map(0x0110_1000, 0x1000);
+        e.mem.set_u32(ENTRY_SHIFT_01101294, 0x0000_0128);
+        let this = e.mem.alloc(0x2c);
+        let array = e.mem.alloc(0x20);
+        e.mem.set_u32(this + 0x28, array);
+        e.mem.set_u32(this + 0x1c, 1);
+        e.call(
+            0x00e8_0640,
+            &args![this, 0x12u32, 0x34u32, 1u32, 0x99u32, 0u32],
+        );
+        // The shift is 0x28 & 0x1f = 8.
+        assert_eq!(e.mem.u32(array + 8), 0x3412);
+        assert_eq!(e.mem.u32(array + 12), 0x99);
+        assert_eq!(e.mem.u32(this + 0x1c), 2);
+        // The byte set: 0xff in place of the second word.
+        e.call(
+            0x00e8_0640,
+            &args![this, 0x12u32, 0x34u32, 1u32, 0x77u32, 1u32],
+        );
+        assert_eq!(e.mem.u32(array + 16), 0xff12);
+        assert_eq!(e.mem.u32(array + 20), 0x77);
+        assert_eq!(e.mem.u32(this + 0x1c), 3);
+    }
+
+    /// A stage (its object +0x10 doubled), a 3x3 rotation, a translation and the matrix object;
+    /// answers the engine, the four addresses.
+    fn transform_rig() -> (Engine, u32, u32, u32, u32) {
+        let mut e = Engine::new();
+        e.map(0x0126_f000, 0x1000);
+        e.register(SET_STAGE_STATE_00E88FC0, |_, _| Ret::default());
+        let stage = e.mem.alloc(0x60);
+        e.mem.set_u32(stage + 0x10, 0x0e00_0010);
+        for offset in [0x28u32, 0x38, 0x48, 0x58] {
+            e.mem.set_u32(stage + offset, 0x4000_0000);
+        }
+        let rotation = e.mem.alloc(0x24);
+        for i in 0..9u32 {
+            e.mem.set_u32(rotation + 4 * i, (i as f32 + 1.0).to_bits());
+        }
+        let translation = e.mem.alloc(0xc);
+        for i in 0..3u32 {
+            e.mem
+                .set_u32(translation + 4 * i, (10.0 * (i as f32 + 1.0)).to_bits());
+        }
+        let matrices = e.mem.alloc(0xa80);
+        for row in 0..4u32 {
+            for column in 0..3u32 {
+                let value = (row * 3 + column) as f32 * 0.5 + 0.25;
+                e.mem
+                    .set_u32(matrices + 0xa40 + 16 * row + 4 * column, value.to_bits());
+            }
+        }
+        e.call_log = Some(vec![]);
+        (e, stage, rotation, translation, matrices)
+    }
+
+    fn float(e: &Engine, at: u32) -> f32 {
+        f32::from_bits(e.mem.u32(at))
+    }
+
+    /// The stage's 3x3 at +0x1c, the products of rotation rows (stride 0xc) and matrix rows
+    /// (stride 0x10), checked against plain arithmetic (every value is exact here).
+    fn check_product(e: &Engine, stage: u32, rotation: u32, matrices: u32) {
+        let at = |base: u32, index: u32| float(e, base + 4 * index);
+        for row in 0..3u32 {
+            for column in 0..3u32 {
+                let mut sum = 0.0f32;
+                for k in 0..3u32 {
+                    sum += at(rotation, 3 * row + k) * at(matrices + 0xa40 + 16 * column, k);
+                }
+                assert_eq!(float(e, stage + 0x1c + 4 * row + 16 * column), sum);
+            }
+        }
+    }
+
+    #[test]
+    fn fn_00e80860_multiplies_and_translates() {
+        let (mut e, stage, rotation, translation, matrices) = transform_rig();
+        e.call(
+            0x00e8_0860,
+            &args![rotation, translation, stage, 0x77u32, matrices],
+        );
+        assert_eq!(
+            calls(&e, SET_STAGE_STATE_00E88FC0),
+            vec![
+                vec![0x0e00_0010, 0xb, 0x20000, 0x77],
+                vec![0x0e00_0010, 0x18, 2, 0x77]
+            ]
+        );
+        assert_eq!(e.mem.u8(stage + 0x5e), 1);
+        check_product(&e, stage, rotation, matrices);
+        for row in 0..3u32 {
+            let mut sum = 0.0f32;
+            for k in 0..3u32 {
+                sum +=
+                    float(&e, rotation + 4 * (3 * row + k)) * float(&e, matrices + 0xa70 + 4 * k);
+            }
+            sum += float(&e, translation + 4 * row);
+            assert_eq!(float(&e, stage + 0x4c + 4 * row), sum);
+        }
+        for offset in [0x28u32, 0x38, 0x48, 0x58] {
+            assert_eq!(e.mem.u32(stage + offset), 0);
+        }
+        // A signalling NaN loaded (FLD) is quieted and then wins over a smaller quiet operand:
+        // the first product of +0x1c loads the rotation's second float.
+        e.mem.set_u32(rotation + 4, 0x7f80_7000);
+        e.mem.set_u32(matrices + 0xa44, 0x7fc0_0001);
+        e.call(
+            0x00e8_0860,
+            &args![rotation, translation, stage, 0x77u32, matrices],
+        );
+        assert_eq!(e.mem.u32(stage + 0x1c), 0x7fc0_7000);
+    }
+
+    #[test]
+    fn fn_00e80a50_takes_the_flag_from_the_global() {
+        for (flags, flag) in [(0u32, 0u8), (0x100, 0), (3, 1)] {
+            let (mut e, stage, rotation, translation, matrices) = transform_rig();
+            e.mem.set_u32(TRANSFORM_FLAGS_0126F0E4, flags);
+            e.call(
+                0x00e8_0a50,
+                &args![rotation, translation, stage, 0x77u32, matrices],
+            );
+            assert_eq!(e.mem.u8(stage + 0x5e), flag);
+            assert_eq!(
+                calls(&e, SET_STAGE_STATE_00E88FC0)[1],
+                vec![0x0e00_0010, 0x18, flags, 0x77]
+            );
+            check_product(&e, stage, rotation, matrices);
+            assert_eq!(e.mem.u32(stage + 0x28), 0);
+        }
+        // Here the first product of +0x1c loads the matrix float: the rotation's signalling
+        // NaN stays the operand and loses to the quiet one.
+        let (mut e, stage, rotation, translation, matrices) = transform_rig();
+        e.mem.set_u32(rotation, 0x7f80_7000);
+        e.mem.set_u32(matrices + 0xa40, 0x7fc0_0001);
+        e.call(
+            0x00e8_0a50,
+            &args![rotation, translation, stage, 0x77u32, matrices],
+        );
+        assert_eq!(e.mem.u32(stage + 0x1c), 0x7fc0_0001);
+    }
+
+    #[test]
+    fn rotation_with_copied_translation_variants() {
+        for (addr, first, second) in [
+            (0x00e8_0c50u32, 0x30000u32, 2u32),
+            (0x00e8_0de0, 0x30000, 3),
+            (0x00e8_0f70, 0x10000, 3),
+        ] {
+            let (mut e, stage, rotation, translation, matrices) = transform_rig();
+            e.mem.set_u32(translation + 4, 0x7f80_0001);
+            e.call(addr, &args![rotation, translation, stage, 5u32, matrices]);
+            assert_eq!(
+                calls(&e, SET_STAGE_STATE_00E88FC0),
+                vec![
+                    vec![0x0e00_0010, 0xb, first, 5],
+                    vec![0x0e00_0010, 0x18, second, 5]
+                ]
+            );
+            check_product(&e, stage, rotation, matrices);
+            assert_eq!(float(&e, stage + 0x4c), 10.0);
+            // The copy goes through FLD/FSTP: the signalling NaN comes out quiet.
+            assert_eq!(e.mem.u32(stage + 0x50), 0x7fc0_0001);
+            assert_eq!(float(&e, stage + 0x54), 30.0);
+            assert_eq!(e.mem.u32(stage + 0x58), 0);
+        }
     }
 }

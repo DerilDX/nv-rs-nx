@@ -184,9 +184,17 @@ pub fn fn_008d50a0(e: &mut Engine, this: u32) {
     }
 }
 
+// Translated from 008d4ff0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Runs `008ab3a0` on `this` with `value`, then clears the word at +0x140.
+pub fn fn_008d4ff0(e: &mut Engine, this: u32, value: u32) {
+    e.call(0x008a_b3a0, &args![this, value]);
+    e.mem.set_u32(this + 0x140, 0);
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x008d_4ff0, fn_008d4ff0(u32, u32)),
         entry!(0x008d4e80, fn_008d4e80(Ptr)),
         entry!(0x008d_4cc0, fn_008d4cc0(u32) -> f32),
         entry!(0x008d_4db0, fn_008d4db0(u32) -> f32),
@@ -408,5 +416,24 @@ mod tests {
         assert_eq!(e.mem.f32(object + 0x1bc), -1.0);
         // Neighbours are untouched.
         assert_eq!(e.mem.f32(object + 0x1c0), 6.0);
+    }
+}
+
+#[cfg(test)]
+mod n028_tests {
+    use super::*;
+
+    #[test]
+    fn fn_008d4ff0_forwards_then_clears_0x140() {
+        let mut e = Engine::new();
+        let this = e.mem.alloc(0x150);
+        e.mem.set_u32(this + 0x140, 9);
+        e.register(0x008a_b3a0, |e, a| {
+            e.mem.set_u32(a[0] + 0x144, a[1]);
+            Ret::default()
+        });
+        e.call(0x008d_4ff0, &[this, 7]);
+        assert_eq!(e.mem.u32(this + 0x144), 7);
+        assert_eq!(e.mem.u32(this + 0x140), 0);
     }
 }

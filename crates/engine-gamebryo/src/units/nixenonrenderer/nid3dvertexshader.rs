@@ -180,9 +180,98 @@ pub fn ni_d3d_vertex_shader_set_shader_constant_array(
     true
 }
 
+/// `NiD3DShaderProgramFactory::RecreateVertexShader` (`00e92ee0`, engine map; `cdecl`, one
+/// word: the shader).
+const FACTORY_RECREATE_VERTEX_SHADER: u32 = 0x00e9_2ee0;
+
+// Translated from 00e89ac0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiD3DVertexShader::DestroyRendererData` (Xbox PDB, engine map), `thiscall`, no stack
+/// words: when the shader has a handle (+0x34), has its renderer (+0x24) purge it
+/// (`NiXenonRenderer::PurgeVertexShader` with the shader).
+pub fn ni_d3d_vertex_shader_destroy_renderer_data(e: &mut Engine, this: Ptr) {
+    let base = this.addr();
+    if e.mem.u32(base + 0x34) != 0 {
+        let renderer = e.mem.u32(base + 0x24);
+        e.call(RENDERER_PURGE_VERTEX_SHADER, &[renderer, base]);
+    }
+}
+
+// Translated from 00e89ad0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiD3DVertexShader::RecreateRendererData` (Xbox PDB, engine map), `thiscall`, no stack
+/// words: answers what `NiD3DShaderProgramFactory::RecreateVertexShader` (`00e92ee0`) answers
+/// for the shader (`EAX` as it comes back).
+pub fn ni_d3d_vertex_shader_recreate_renderer_data(e: &mut Engine, this: Ptr) -> u32 {
+    e.call(FACTORY_RECREATE_VERTEX_SHADER, &[this.addr()]).u32()
+}
+
+/// The renderer's device (+0x10f8) method at `slot` with (device, register, data, count):
+/// whether its result is not negative.
+fn renderer_device_call(
+    e: &mut Engine,
+    renderer: Ptr,
+    slot: u32,
+    register: u32,
+    data: u32,
+    count: u32,
+) -> bool {
+    let device = e.mem.u32(renderer.addr() + RENDERER_DEVICE);
+    device_call(e, device, slot, register, data, count)
+}
+
+// Translated from 00e89ae0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`thiscall` on the renderer, four words, the fourth unread):
+/// the renderer's device (+0x10f8) `SetVertexShaderConstantB` (slot +0x188) with the
+/// register, data and count; answers whether the result is not negative (`SETGE` into `AL`).
+pub fn fn_00e89ae0(
+    e: &mut Engine,
+    renderer: Ptr,
+    register: u32,
+    data: u32,
+    count: u32,
+    _unused_4: u32,
+) -> bool {
+    renderer_device_call(e, renderer, DEVICE_SET_CONSTANT_B, register, data, count)
+}
+
+// Translated from 00e89b10 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`thiscall` on the renderer, four words, the fourth unread): as
+/// `00e89ae0` with `SetVertexShaderConstantF` (slot +0x178).
+pub fn fn_00e89b10(
+    e: &mut Engine,
+    renderer: Ptr,
+    register: u32,
+    data: u32,
+    count: u32,
+    _unused_4: u32,
+) -> bool {
+    renderer_device_call(e, renderer, DEVICE_SET_CONSTANT_F, register, data, count)
+}
+
+// Translated from 00e89b40 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`thiscall` on the renderer, four words, the fourth unread): as
+/// `00e89ae0` with `SetVertexShaderConstantI` (slot +0x180).
+pub fn fn_00e89b40(
+    e: &mut Engine,
+    renderer: Ptr,
+    register: u32,
+    data: u32,
+    count: u32,
+    _unused_4: u32,
+) -> bool {
+    renderer_device_call(e, renderer, DEVICE_SET_CONSTANT_I, register, data, count)
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x00e8_9ac0, ni_d3d_vertex_shader_destroy_renderer_data(Ptr)),
+        entry!(
+            0x00e8_9ad0,
+            ni_d3d_vertex_shader_recreate_renderer_data(Ptr) -> u32
+        ),
+        entry!(0x00e8_9ae0, fn_00e89ae0(Ptr, u32, u32, u32, u32) -> bool),
+        entry!(0x00e8_9b10, fn_00e89b10(Ptr, u32, u32, u32, u32) -> bool),
+        entry!(0x00e8_9b40, fn_00e89b40(Ptr, u32, u32, u32, u32) -> bool),
         entry!(0x00e8_9b70, fn_00e89b70(Ptr)),
         entry!(
             0x00e8_9ba0,
@@ -352,5 +441,61 @@ mod tests {
             calls_to(&e, MEMCPY),
             vec![vec![0x5000, 0x8030, 0x40], vec![0x5010, 0x8010, 0x40]]
         );
+    }
+
+    #[test]
+    fn destroy_renderer_data_purges_a_live_shader() {
+        let mut e = Engine::new();
+        e.register(RENDERER_PURGE_VERTEX_SHADER, |_, _| Ret::default());
+        let this = e.mem.alloc(0x38);
+        e.mem.set_u32(this + 0x24, 0x7000);
+        e.call_log = Some(vec![]);
+        e.call(0x00e8_9ac0, &[this]);
+        assert!(calls_to(&e, RENDERER_PURGE_VERTEX_SHADER).is_empty());
+        e.mem.set_u32(this + 0x34, 9);
+        e.call(0x00e8_9ac0, &[this]);
+        assert_eq!(
+            calls_to(&e, RENDERER_PURGE_VERTEX_SHADER),
+            vec![vec![0x7000, this]]
+        );
+    }
+
+    #[test]
+    fn recreate_renderer_data_answers_the_factory() {
+        let mut e = Engine::new();
+        e.register(FACTORY_RECREATE_VERTEX_SHADER, |_, a| (a[0] + 1).into_ret());
+        let this = e.mem.alloc(0x38);
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x00e8_9ad0, &[this]).u32(), this + 1);
+        assert_eq!(
+            calls_to(&e, FACTORY_RECREATE_VERTEX_SHADER),
+            vec![vec![this]]
+        );
+    }
+
+    /// Calls `address` on the renderer of `engine(0)` and checks the device method got
+    /// (device, register, data, count) and the answer matches its sign.
+    fn renderer_constant(address: u32, method: u32, answer: bool) {
+        let (mut e, shader, _) = engine(0);
+        let renderer = e.mem.u32(shader + 0x28);
+        let device = device_of(&e, shader);
+        let words = [renderer, 4, 0x6000, 2, 0xdead];
+        assert_eq!(e.call(address, &words).bool(), answer);
+        assert_eq!(calls_to(&e, method), vec![vec![device, 4, 0x6000, 2]]);
+    }
+
+    #[test]
+    fn renderer_set_constant_b_calls_slot_0x188() {
+        renderer_constant(0x00e8_9ae0, SET_B, true);
+    }
+
+    #[test]
+    fn renderer_set_constant_f_calls_slot_0x178() {
+        renderer_constant(0x00e8_9b10, SET_F, true);
+    }
+
+    #[test]
+    fn renderer_set_constant_i_calls_slot_0x180() {
+        renderer_constant(0x00e8_9b40, SET_I, false);
     }
 }

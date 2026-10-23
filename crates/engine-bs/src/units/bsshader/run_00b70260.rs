@@ -78,9 +78,23 @@ pub fn fn_00b702e0(e: &mut Engine, this: Ptr, node: u32, before: u32) {
     e.mem.set_u32(before + 4, node);
 }
 
+/// `00c9a420` (`thiscall`, one word: the other object; `bool` in `AL`): the comparison
+/// `fn_00b70270` passes on (the slot +0x5c of `TallGrassShaderProperty`'s vtable, `IsEqual` in
+/// the Xbox PDB's slot list).
+const IS_EQUAL_00C9A420: u32 = 0x00c9_a420;
+
+// Translated from 00b70270 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map: slot +0x5c of `DistantLODShaderProperty`'s vtable `010adad0` and
+/// four others (`IsEqual` in the Xbox PDB's slot list; `thiscall`, one word: the other object).
+/// Answers whether `00c9a420` with `this` and the word answers true (`TEST AL,AL; SETNZ AL`).
+pub fn fn_00b70270(e: &mut Engine, this: Ptr, other: u32) -> bool {
+    e.call(IS_EQUAL_00C9A420, &args![this, other]).bool()
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x00b7_0270, fn_00b70270(Ptr, u32) -> bool),
         entry!(0x00b7_0260, fn_00b70260(Ptr, Ptr)),
         entry!(0x00b7_0290, fn_00b70290(Ptr, u32)),
         entry!(0x00b7_02b0, fn_00b702b0(Ptr, u32, u32)),
@@ -189,5 +203,23 @@ mod tests {
         assert_eq!(e.mem.u32(b), a);
         assert_eq!(e.mem.u32(list + 4), a);
         assert_eq!(e.mem.u32(a), 0);
+    }
+}
+
+#[cfg(test)]
+mod n013_tests {
+    use super::*;
+
+    #[test]
+    fn fn_00b70270_tests_the_low_byte() {
+        let mut e = Engine::new();
+        e.register(IS_EQUAL_00C9A420, |_, a| (a[1] << 8).into_ret());
+        e.call_log = Some(vec![]);
+        // A non-zero word whose low byte is 0 is false.
+        assert_eq!(e.call(0x00b7_0270, &args![0x10u32, 1u32]).u32(), 0);
+        e.register(IS_EQUAL_00C9A420, |_, a| a[1].into_ret());
+        assert_eq!(e.call(0x00b7_0270, &args![0x10u32, 0x7u32]).u32(), 1);
+        let log = e.call_log.take().unwrap();
+        assert!(log.contains(&(IS_EQUAL_00C9A420, vec![0x10, 7])));
     }
 }

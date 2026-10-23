@@ -225,6 +225,75 @@ pub fn fn_00a88f00(e: &mut Engine, this: Ptr<TextureTransform>, stream: Ptr) {
     e.set(this, TextureTransform::m_bMatrixDirty, 1);
 }
 
+/// The two-float point comparison (`0051c330`, `thiscall`, the other point; the engine map
+/// places it in `fallout shared/tesobjecttree.cpp`, folded code): true when they differ.
+const POINT_DIFFERS: u32 = 0x0051_c330;
+/// The point saver (`00a68ce0`, `thiscall` on the point, the stream on the stack).
+const POINT_SAVE: u32 = 0x00a6_8ce0;
+
+// Translated from 00a88c60 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The transforms' inequality (`thiscall`, the other transform; `RET 4`): 1 as soon as the
+/// rotation, the translation's x or its y differ (`FUCOMPP`: a NaN differs from
+/// everything), the scale points differ (`0051c330`), the methods differ, or the center
+/// points differ (`0051c330`); otherwise 0.
+pub fn fn_00a88c60(
+    e: &mut Engine,
+    this: Ptr<TextureTransform>,
+    other: Ptr<TextureTransform>,
+) -> u32 {
+    let base = this.addr();
+    let other_base = other.addr();
+    for offset in [8u32, 0, 4] {
+        if load(e, base, offset) != load(e, other_base, offset) {
+            return 1;
+        }
+    }
+    if e.call(POINT_DIFFERS, &args![base + 0xc, other_base + 0xc])
+        .u8()
+        != 0
+    {
+        return 1;
+    }
+    if e.get(this, TextureTransform::m_eMethod) != e.get(other, TextureTransform::m_eMethod) {
+        return 1;
+    }
+    if e.call(POINT_DIFFERS, &args![base + 0x14, other_base + 0x14])
+        .u8()
+        != 0
+    {
+        return 1;
+    }
+    0
+}
+
+// Translated from 00a88f80 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Saves the transform to a stream (the counterpart of [`fn_00a88f00`]; `thiscall`, the
+/// stream; `RET 4`): the translation and scale through the point saver (`00a68ce0`), then
+/// the rotation (+8) and the method (+0x44), 4 bytes each, through the stream output's write
+/// function (`NiStream` +0x250, the function +0xc, the position +4 advanced by its answer;
+/// the byte count in the stream argument's own word), then the center through the point
+/// saver.
+pub fn fn_00a88f80(e: &mut Engine, this: Ptr<TextureTransform>, stream: Ptr) {
+    let base = this.addr();
+    e.call(POINT_SAVE, &args![base, stream]);
+    e.call(POINT_SAVE, &args![base + 0x0c, stream]);
+    e.with_stack(4, |e, count| {
+        let count = count.addr();
+        e.mem.set_u32(count, stream.addr());
+        for source in [base + 8, base + 0x44] {
+            let output = e.mem.u32(stream.addr() + 0x250);
+            let write = e.mem.u32(output + 0xc);
+            e.mem.set_u32(count, 4);
+            let done = e
+                .call(write, &args![output, source, 4u32, count, 1u32])
+                .u32();
+            let position = e.mem.u32(output + 4);
+            e.mem.set_u32(output + 4, position.wrapping_add(done));
+        }
+    });
+    e.call(POINT_SAVE, &args![base + 0x14, stream]);
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -234,6 +303,11 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
             fn_00a88eb0(Ptr<TextureTransform>, Ptr, f32, Ptr, Ptr, u32) -> Ptr<TextureTransform>
         ),
         entry!(0x00a8_8f00, fn_00a88f00(Ptr<TextureTransform>, Ptr)),
+        entry!(
+            0x00a8_8c60,
+            fn_00a88c60(Ptr<TextureTransform>, Ptr<TextureTransform>) -> u32
+        ),
+        entry!(0x00a8_8f80, fn_00a88f80(Ptr<TextureTransform>, Ptr)),
     ]
 }
 
@@ -420,5 +494,92 @@ mod b004_tests {
         assert_eq!(e.mem.u32(this + 0x44), this ^ 0x0f0f);
         assert_eq!(e.mem.u32(file + 4), 106);
         assert_eq!(e.mem.u8(this + 0x1c), 1);
+    }
+}
+
+#[cfg(test)]
+mod compare_and_save_tests {
+    use super::*;
+
+    fn transform(e: &mut Engine) -> u32 {
+        let t = e.mem.alloc(0x48);
+        for (offset, value) in [(0u32, 1.0f32), (4, 2.0), (8, 0.5)] {
+            e.mem.set_f32(t + offset, value);
+        }
+        e.mem.set_u32(t + 0x44, 1);
+        t
+    }
+
+    #[test]
+    fn differs_on_any_field() {
+        let mut e = Engine::new();
+        e.register(POINT_DIFFERS, |_, _| 0x100u32.into_ret());
+        let a = transform(&mut e);
+        let b = transform(&mut e);
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x00a8_8c60, &args![a, b]).u32(), 0);
+        let points: Vec<_> = e
+            .call_log
+            .take()
+            .unwrap()
+            .into_iter()
+            .filter(|(f, _)| *f == POINT_DIFFERS)
+            .map(|(_, w)| w)
+            .collect();
+        assert_eq!(
+            points,
+            vec![vec![a + 0xc, b + 0xc], vec![a + 0x14, b + 0x14]]
+        );
+        for offset in [0u32, 4, 8] {
+            let b = transform(&mut e);
+            e.mem.set_f32(b + offset, 3.0);
+            assert_eq!(e.call(0x00a8_8c60, &args![a, b]).u32(), 1);
+            e.mem.set_f32(b + offset, f32::NAN);
+            e.mem.set_f32(a + offset, f32::NAN);
+            assert_eq!(e.call(0x00a8_8c60, &args![a, b]).u32(), 1);
+            let a2 = transform(&mut e);
+            e.mem.set_u32(a + offset, e.mem.u32(a2 + offset));
+        }
+        let c = transform(&mut e);
+        e.mem.set_u32(c + 0x44, 2);
+        assert_eq!(e.call(0x00a8_8c60, &args![a, c]).u32(), 1);
+        e.register(POINT_DIFFERS, |_, _| 1u32.into_ret());
+        assert_eq!(e.call(0x00a8_8c60, &args![a, b]).u32(), 1);
+    }
+
+    #[test]
+    fn save_writes_points_rotation_and_method() {
+        let mut e = Engine::new();
+        e.register(POINT_SAVE, |_, _| Ret::default());
+        e.register(0x0300_0000, |e, a| {
+            assert_eq!((e.mem.u32(a[3]), a[2], a[4]), (4, 4, 1));
+            4u32.into_ret()
+        });
+        let stream = e.mem.alloc(0x260);
+        let output = e.mem.alloc(0x10);
+        e.mem.set_u32(stream + 0x250, output);
+        e.mem.set_u32(output + 0xc, 0x0300_0000);
+        let this = transform(&mut e);
+        e.call_log = Some(vec![]);
+        e.call(0x00a8_8f80, &args![this, stream]);
+        let log: Vec<_> = e
+            .call_log
+            .take()
+            .unwrap()
+            .into_iter()
+            .skip(1)
+            .map(|(f, w)| (f, w[1]))
+            .collect();
+        assert_eq!(
+            log,
+            vec![
+                (POINT_SAVE, stream),
+                (POINT_SAVE, stream),
+                (0x0300_0000, this + 8),
+                (0x0300_0000, this + 0x44),
+                (POINT_SAVE, stream),
+            ]
+        );
+        assert_eq!(e.mem.u32(output + 4), 8);
     }
 }

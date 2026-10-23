@@ -240,9 +240,202 @@ pub fn fn_008c5e70(e: &mut Engine, this: Ptr) {
     }
 }
 
+/// `008d8520` (`thiscall`, no stack words; the engine map's name
+/// `MiddleHighProcess::GetSavedAcquireObject` is folded code): the object whose slot `+0x52c`
+/// [`fn_008c51f0`] asks.
+const GET_008D8520: u32 = 0x008d_8520;
+/// The vtable slot `+0x52c` of `008d8520`'s object (no stack words).
+const SLOT_52C: u32 = 0x52c;
+/// `008256d0` (`thiscall` on a list node, no stack words; a `bool` in `AL`): ends the scan.
+const LIST_IS_EMPTY_008256D0: u32 = 0x0082_56d0;
+/// `006815c0` (`thiscall` on a list node, no stack words): the address of the node's item.
+const LIST_ITEM_006815C0: u32 = 0x0068_15c0;
+/// `00726070` (`thiscall` on a list node, no stack words): the next node.
+const LIST_FOLLOWING_NODE: u32 = 0x0072_6070;
+/// `007df1d0` (`thiscall` on the effect, no stack words) and `00403e60` (`thiscall` on its
+/// answer, one stack word: here 0x40000; a `bool` in `AL`).
+const EFFECT_GET_007DF1D0: u32 = 0x007d_f1d0;
+const FLAGS_TEST_00403E60: u32 = 0x0040_3e60;
+/// `__RTDynamicCast` (`00ec43fb`, `cdecl`, five words) and the type descriptors of
+/// `ActiveEffect` (`011a0d1c`) and `SummonCreatureEffect` (`011a14d0`) (their decorated names
+/// read at descriptor + 8).
+const DYNAMIC_CAST: u32 = 0x00ec_43fb;
+const ACTIVE_EFFECT_TYPE: u32 = 0x011a_0d1c;
+const SUMMON_CREATURE_EFFECT_TYPE: u32 = 0x011a_14d0;
+/// `0068a810` (`thiscall` on the summon effect, no stack words): compared with `this`.
+const SUMMON_GET_0068A810: u32 = 0x0068_a810;
+/// `ActiveEffect::Dispel` (engine map, `00804210`; `thiscall`, one stack word).
+const ACTIVE_EFFECT_DISPEL: u32 = 0x0080_4210;
+
+// Translated from 008c51f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No map name (`thiscall`, no stack words; a `bool` in `AL`). `false` when `008d8520` answers
+/// null or its object's slot `+0x52c` answers 0. Otherwise walks the list that slot `+8` of
+/// that answer's `+0x94` gives (stopping at a null node or where `008256d0` answers true):
+/// for each node whose item is set and whose `00403e60(007df1d0(item), 0x40000)` answers
+/// true, the item cast to `SummonCreatureEffect`; when `0068a810` of the cast (0 for a failed
+/// cast) is `this`, the cast's `+0x4c` is cleared ([`fn_008c5330`]), the item dispelled
+/// (`ActiveEffect::Dispel(1)`) and the answer becomes `true`.
+pub fn fn_008c51f0(e: &mut Engine, this: Ptr) -> bool {
+    let mut dispelled = false;
+    let object = e.call(GET_008D8520, &args![this]).u32();
+    if object == 0 {
+        return false;
+    }
+    let object = e.call(GET_008D8520, &args![this]).u32();
+    if e.vcall(object, SLOT_52C, &args![]).u32() == 0 {
+        return false;
+    }
+    let object = e.call(GET_008D8520, &args![this]).u32();
+    let target = e.vcall(object, SLOT_52C, &args![]).u32();
+    let mut node = e.vcall(target + 0x94, 8, &args![]).u32();
+    while node != 0 {
+        if e.call(LIST_IS_EMPTY_008256D0, &args![node]).bool() {
+            break;
+        }
+        let slot = e.call(LIST_ITEM_006815C0, &args![node]).u32();
+        let effect = e.mem.u32(slot);
+        if effect != 0 {
+            let flags = e.call(EFFECT_GET_007DF1D0, &args![effect]).u32();
+            if e.call(FLAGS_TEST_00403E60, &args![flags, 0x40000u32])
+                .bool()
+            {
+                let summon = e
+                    .call(
+                        DYNAMIC_CAST,
+                        &args![
+                            effect,
+                            0u32,
+                            ACTIVE_EFFECT_TYPE,
+                            SUMMON_CREATURE_EFFECT_TYPE,
+                            0u32
+                        ],
+                    )
+                    .u32();
+                let owner = if summon != 0 {
+                    e.call(SUMMON_GET_0068A810, &args![summon]).u32()
+                } else {
+                    0
+                };
+                if owner == this.addr() {
+                    fn_008c5330(e, Ptr::new(summon));
+                    e.call(ACTIVE_EFFECT_DISPEL, &args![effect, 1u32]);
+                    dispelled = true;
+                }
+            }
+        }
+        node = e.call(LIST_FOLLOWING_NODE, &args![node]).u32();
+    }
+    dispelled
+}
+
+// Translated from 008c5330 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No map name (`thiscall`, no stack words): clears the word at `this + 0x4c`.
+pub fn fn_008c5330(e: &mut Engine, this: Ptr) {
+    e.mem.set_u32(this.addr() + 0x4c, 0);
+}
+
+/// `BGSRadiationStage::FindStageForRadLevel` (engine map, `00592220`; `cdecl`, one `float`).
+const RADIATION_STAGE_OF: u32 = 0x0059_2220;
+/// `00968730` (unnamed, engine map unit `playercharacter.cpp`, `thiscall` on the player, no
+/// stack words).
+const PLAYER_00968730: u32 = 0x0096_8730;
+/// The settings whose strings the radiation handler shows: rise (`011d3384`), fall
+/// (`011d40a8`) and no stage (`011d29ac`).
+const RADIATION_RISE_SETTING: u32 = 0x011d_3384;
+const RADIATION_FALL_SETTING: u32 = 0x011d_40a8;
+const RADIATION_NO_STAGE_SETTING: u32 = 0x011d_29ac;
+
+// Translated from 008c5350 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 008c5350 - the /GS cookie check (00ec408c) of its frame is not translated
+/// The radiation stage-change handler (`cdecl`: owner, actor value, old value, delta; no Xbox
+/// PDB name; referenced from `RegisterActorValues`). As [`stage_changed`] with stages by
+/// `BGSRadiationStage::FindStageForRadLevel` and the texts of `011d3384` (rise), `011d40a8`
+/// (fall) and `011d29ac` (no stage), and one step more: after the current value is read, when
+/// the actor's slot `+0x360` answers true again and `delta` is not equal to 0.0 (`FCOMP`,
+/// `TEST AH,0x44`, `JNP`: unordered counts as not equal), `00968730` runs on the player.
+pub fn fn_008c5350(e: &mut Engine, owner: u32, actor_value: u32, old: f32, delta: f32) {
+    let actor = if owner != 0 {
+        owner.wrapping_sub(0xa4)
+    } else {
+        0
+    };
+    if actor == 0 || !e.vcall(actor, 0x360, &args![]).bool() {
+        return;
+    }
+    let value = e.vcall(actor + 0xa4, 0xc, &args![actor_value]).f64();
+    let value_bits = x87_store32(value);
+    if e.vcall(actor, 0x360, &args![]).bool() {
+        let zero = e.mem.f64(ZERO_DOUBLE);
+        let delta_value = x87_load32(delta.to_bits());
+        // C3 xor C2: only "equal" jumps over the call (NaN compares not equal).
+        if delta_value != zero {
+            let player = e.mem.u32(PLAYER);
+            e.call(PLAYER_00968730, &args![player]);
+        }
+    }
+    let old_stage = e
+        .call(RADIATION_STAGE_OF, &args![x87_quiet_bits(old.to_bits())])
+        .u32();
+    let new_stage = e
+        .call(RADIATION_STAGE_OF, &args![x87_quiet_bits(value_bits)])
+        .u32();
+    if old_stage == new_stage {
+        return;
+    }
+    if old_stage != 0 {
+        let effect = e.call(STAGE_EFFECT, &args![old_stage]).u32();
+        let target = if effect != 0 { effect + 0x18 } else { 0 };
+        e.call(
+            MAGIC_TARGET_DISPEL,
+            &args![actor + 0x94, target, 0u32, 0u32],
+        );
+    }
+    if new_stage != 0 {
+        let effect = e.call(STAGE_EFFECT, &args![new_stage]).u32();
+        e.vcall(actor + 0x88, 8, &args![effect, 0u32]);
+    }
+    if actor != e.mem.u32(PLAYER) {
+        return;
+    }
+    e.with_stack(0x104, |e, text| {
+        let show = |e: &mut Engine, icon: u32| {
+            let time = x87_store32(x87_load32(e.mem.u32(MESSAGE_TIME)));
+            e.call(SHOW_MESSAGE, &args![text, 0u32, icon, 0u32, time, 0u32]);
+        };
+        // FCOMP 0.0; TEST AH,0x41; JNZ: below, equal or unordered fall.
+        let zero = e.mem.f64(ZERO_DOUBLE);
+        if x87_load32(delta.to_bits()) > zero {
+            let format = e.call(SETTING_STRING, &args![RADIATION_RISE_SETTING]).u32();
+            e.call(SPRINTF, &args![text, format]);
+            show(e, ICON_IN_PAIN);
+        } else {
+            let format = e.call(SETTING_STRING, &args![RADIATION_FALL_SETTING]).u32();
+            e.call(SPRINTF, &args![text, format]);
+            show(e, ICON_VERY_HAPPY);
+        }
+        if new_stage != 0 {
+            let effect = e.call(STAGE_EFFECT, &args![new_stage]).u32();
+            let name = e.call(EFFECT_NAME, &args![effect.wrapping_add(0x18)]).u32();
+            let prefix = e.call(SETTING_STRING, &args![STAGE_PREFIX_SETTING]).u32();
+            e.call(SPRINTF, &args![text, NAME_FORMAT, prefix, name]);
+            show(e, ICON_IN_PAIN);
+        } else {
+            let format = e
+                .call(SETTING_STRING, &args![RADIATION_NO_STAGE_SETTING])
+                .u32();
+            e.call(SPRINTF, &args![text, format]);
+            show(e, ICON_VERY_HAPPY);
+        }
+        e.call(MAGIC_TARGET_UPDATE, &args![actor + 0x94, x87_store32(0.0)]);
+    });
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x008c_51f0, fn_008c51f0(Ptr) -> bool),
+        entry!(0x008c_5330, fn_008c5330(Ptr)),
+        entry!(0x008c_5350, fn_008c5350(u32, u32, f32, f32)),
         entry!(0x008c_5e20, fn_008c5e20(Ptr) -> Ptr),
         entry!(0x008c5610, fn_008c5610(u32, u32, f32, f32)),
         entry!(0x008c5890, fn_008c5890(u32, u32, f32, f32)),
@@ -502,5 +695,265 @@ mod b019_tests {
         e.call(0x008c_5e70, &args![this]);
         assert_eq!(calls(&e, 0x00ab_0000), vec![vec![object, 1]]);
         assert_eq!(e.mem.u32(this + 4), object);
+    }
+}
+
+#[cfg(test)]
+mod n027_tests {
+    use super::*;
+
+    fn calls(e: &Engine, address: u32) -> Vec<Vec<u32>> {
+        let log = e.call_log.as_ref().unwrap();
+        log.iter()
+            .filter(|(a, _)| *a == address)
+            .map(|(_, w)| w.clone())
+            .collect()
+    }
+
+    #[test]
+    fn fn_008c5330_clears_the_word_at_0x4c() {
+        let mut e = Engine::new();
+        let this = e.mem.alloc(0x50);
+        e.mem.set_u32(this + 0x4c, 9);
+        e.mem.set_u32(this + 0x48, 7);
+        e.call(0x008c_5330, &args![this]);
+        assert_eq!(e.mem.u32(this + 0x4c), 0);
+        assert_eq!(e.mem.u32(this + 0x48), 7);
+    }
+
+    /// The scan for the actor `0x6000`: `008d8520` answers an object (or 0 without
+    /// `with_object`) whose slot `+0x52c` answers the target (or 0 without `has_target`); the
+    /// target's `+0x94` list (slot `+8`) has three nodes with the effects `0x7100` (its summon
+    /// owned by the actor), `0x7200` (owned by another) and none, and a fourth node where
+    /// `008256d0` stops the walk. Answers the engine and the cast for `0x7100`.
+    fn scan_engine(with_object: bool, has_target: bool) -> (Engine, u32) {
+        let mut e = Engine::new();
+        let object = e.mem.alloc(0x10);
+        let mut slots = vec![0u32; 0x150];
+        slots[SLOT_52C as usize / 4] = 0x0070_1000;
+        e.put_vtable(0x0070_0000, &slots);
+        e.mem.set_u32(object, 0x0070_0000);
+        let answer = if with_object { object } else { 0 };
+        e.register_double(GET_008D8520, move |_, _| answer.into_ret());
+        let target = e.mem.alloc(0x100);
+        let target_answer = if has_target { target } else { 0 };
+        e.register_double(0x0070_1000, move |_, _| target_answer.into_ret());
+        e.put_vtable(0x0071_0000, &[0, 0, 0x0071_1000]);
+        e.mem.set_u32(target + 0x94, 0x0071_0000);
+        let nodes = e.mem.alloc(0x40);
+        for (i, effect) in [0x7100u32, 0x7200, 0].iter().enumerate() {
+            e.mem.set_u32(nodes + 0x10 * i as u32, *effect);
+        }
+        e.register_double(0x0071_1000, move |_, _| nodes.into_ret());
+        e.register_double(LIST_IS_EMPTY_008256D0, move |_, a| {
+            (a[0] == nodes + 0x30).into_ret()
+        });
+        e.register(LIST_ITEM_006815C0, |_, a| a[0].into_ret());
+        e.register(LIST_FOLLOWING_NODE, |_, a| (a[0] + 0x10).into_ret());
+        e.register(EFFECT_GET_007DF1D0, |_, a| (a[0] + 1).into_ret());
+        e.register(FLAGS_TEST_00403E60, |_, a| {
+            (a[1] == 0x40000 && a[0] != 0).into_ret()
+        });
+        let casts = e.mem.alloc(0x200);
+        e.register_double(DYNAMIC_CAST, move |_, a| {
+            (casts + (a[0] - 0x7000) / 2).into_ret()
+        });
+        let owned = casts + 0x80;
+        e.register_double(SUMMON_GET_0068A810, move |_, a| {
+            if a[0] == owned {
+                0x6000u32.into_ret()
+            } else {
+                0x9999u32.into_ret()
+            }
+        });
+        e.register(ACTIVE_EFFECT_DISPEL, |_, _| Ret::default());
+        e.mem.set_u32(owned + 0x4c, 0x55);
+        e.call_log = Some(vec![]);
+        (e, owned)
+    }
+
+    #[test]
+    fn fn_008c51f0_dispels_the_actors_summon_effects() {
+        let (mut e, owned) = scan_engine(true, true);
+        assert!(e.call(0x008c_51f0, &args![0x6000u32]).bool());
+        assert_eq!(calls(&e, ACTIVE_EFFECT_DISPEL), vec![vec![0x7100, 1]]);
+        assert_eq!(e.mem.u32(owned + 0x4c), 0);
+        assert_eq!(
+            calls(&e, DYNAMIC_CAST),
+            vec![
+                vec![
+                    0x7100,
+                    0,
+                    ACTIVE_EFFECT_TYPE,
+                    SUMMON_CREATURE_EFFECT_TYPE,
+                    0
+                ],
+                vec![
+                    0x7200,
+                    0,
+                    ACTIVE_EFFECT_TYPE,
+                    SUMMON_CREATURE_EFFECT_TYPE,
+                    0
+                ]
+            ]
+        );
+        // Three nodes walked; the fourth stops it.
+        assert_eq!(calls(&e, LIST_FOLLOWING_NODE).len(), 3);
+        assert_eq!(calls(&e, FLAGS_TEST_00403E60)[0], vec![0x7101, 0x40000]);
+        assert_eq!(calls(&e, GET_008D8520).len(), 3);
+    }
+
+    #[test]
+    fn fn_008c51f0_answers_false_without_object_or_target() {
+        let (mut e, _) = scan_engine(false, true);
+        assert!(!e.call(0x008c_51f0, &args![0x6000u32]).bool());
+        assert!(calls(&e, 0x0070_1000).is_empty());
+        let (mut e, _) = scan_engine(true, false);
+        assert!(!e.call(0x008c_51f0, &args![0x6000u32]).bool());
+        assert_eq!(calls(&e, 0x0070_1000).len(), 1);
+        assert!(calls(&e, 0x0071_1000).is_empty());
+    }
+
+    struct Actor {
+        actor: u32,
+        owner: u32,
+    }
+
+    /// The radiation handler: the actor slot 0x360 answers `active`, the owner slot 0xC
+    /// answers `value`, stages 0x51 from 5 and 0x52 from 10; the player is another actor.
+    fn radiation_engine(active: bool, value: f32) -> (Engine, Actor) {
+        let mut e = Engine::new();
+        e.map(0x0101_2000, 0x1000);
+        e.map(0x0101_6000, 0x1000);
+        e.map(0x011d_e000, 0x1000);
+        e.set_global(ZERO_DOUBLE, 0.0f64);
+        e.set_global(MESSAGE_TIME, 2.0f32);
+        e.set_global(PLAYER, 0x0090_0000u32);
+        let actor = e.mem.alloc(0x100);
+        let vtable = e.mem.alloc(0x400);
+        e.mem.set_u32(actor, vtable);
+        e.mem.set_u32(vtable + 0x360, 0x00ab_0360);
+        e.register_double(0x00ab_0360, move |_, _| active.into_ret());
+        let owner_vtable = e.mem.alloc(0x10);
+        e.mem.set_u32(actor + 0xa4, owner_vtable);
+        e.mem.set_u32(owner_vtable + 0xc, 0x00ab_000c);
+        e.register_double(0x00ab_000c, move |_, _| Ret {
+            st0: f64::from(value),
+            ..Ret::default()
+        });
+        let caster_vtable = e.mem.alloc(0x10);
+        e.mem.set_u32(actor + 0x88, caster_vtable);
+        e.mem.set_u32(caster_vtable + 8, 0x00ab_0008);
+        e.register(0x00ab_0008, |_, _| Ret::default());
+        e.register(RADIATION_STAGE_OF, |_, a| {
+            let v = f32::from_bits(a[0]);
+            let stage: u32 = if v >= 10.0 {
+                0x52
+            } else if v >= 5.0 {
+                0x51
+            } else {
+                0
+            };
+            stage.into_ret()
+        });
+        e.register(STAGE_EFFECT, |_, a| (a[0] << 8).into_ret());
+        e.register(SETTING_STRING, |_, a| (a[0] + 4).into_ret());
+        e.register(EFFECT_NAME, |_, a| (a[0] + 1).into_ret());
+        for address in [
+            MAGIC_TARGET_DISPEL,
+            MAGIC_TARGET_UPDATE,
+            SPRINTF,
+            SHOW_MESSAGE,
+            PLAYER_00968730,
+        ] {
+            e.register(address, |_, _| Ret::default());
+        }
+        e.call_log = Some(vec![]);
+        (
+            e,
+            Actor {
+                actor,
+                owner: actor + 0xa4,
+            },
+        )
+    }
+
+    #[test]
+    fn fn_008c5350_stage_change_for_the_player() {
+        let (mut e, a) = radiation_engine(true, 11.0);
+        e.set_global(PLAYER, a.actor);
+        e.call(0x008c_5350, &args![a.owner, 3u32, 6.0f32, 5.0f32]);
+        assert_eq!(calls(&e, PLAYER_00968730), vec![vec![a.actor]]);
+        assert_eq!(
+            calls(&e, MAGIC_TARGET_DISPEL),
+            vec![vec![a.actor + 0x94, (0x51 << 8) + 0x18, 0, 0]]
+        );
+        assert_eq!(
+            calls(&e, 0x00ab_0008),
+            vec![vec![a.actor + 0x88, 0x52 << 8, 0]]
+        );
+        let sprintf = calls(&e, SPRINTF);
+        assert_eq!(sprintf[0][1], RADIATION_RISE_SETTING + 4);
+        assert_eq!(
+            &sprintf[1][1..],
+            &[
+                NAME_FORMAT,
+                STAGE_PREFIX_SETTING + 4,
+                (0x52 << 8) + 0x18 + 1
+            ]
+        );
+        let shown: Vec<u32> = calls(&e, SHOW_MESSAGE).iter().map(|w| w[2]).collect();
+        assert_eq!(shown, vec![ICON_IN_PAIN, ICON_IN_PAIN]);
+        assert_eq!(
+            calls(&e, MAGIC_TARGET_UPDATE),
+            vec![vec![a.actor + 0x94, 0]]
+        );
+    }
+
+    #[test]
+    fn fn_008c5350_leaving_every_stage_shows_fall_and_no_stage() {
+        let (mut e, a) = radiation_engine(true, 1.0);
+        e.set_global(PLAYER, a.actor);
+        e.call(0x008c_5350, &args![a.owner, 3u32, 6.0f32, -5.0f32]);
+        let formats: Vec<u32> = calls(&e, SPRINTF).iter().map(|w| w[1]).collect();
+        assert_eq!(
+            formats,
+            vec![RADIATION_FALL_SETTING + 4, RADIATION_NO_STAGE_SETTING + 4]
+        );
+        let shown: Vec<u32> = calls(&e, SHOW_MESSAGE).iter().map(|w| w[2]).collect();
+        assert_eq!(shown, vec![ICON_VERY_HAPPY, ICON_VERY_HAPPY]);
+    }
+
+    #[test]
+    fn fn_008c5350_player_call_skips_only_a_zero_delta() {
+        for (delta, called) in [
+            (0.0f32, 0usize),
+            (-0.0, 0),
+            (1.0, 1),
+            (-1.0, 1),
+            (f32::NAN, 1),
+        ] {
+            let (mut e, a) = radiation_engine(true, 6.0);
+            e.call(0x008c_5350, &args![a.owner, 3u32, 6.0f32, delta]);
+            assert_eq!(calls(&e, PLAYER_00968730).len(), called, "delta {delta}");
+            if called == 1 {
+                assert_eq!(calls(&e, PLAYER_00968730)[0], vec![0x0090_0000]);
+            }
+            // The same stage before and after: nothing else happens.
+            assert!(calls(&e, MAGIC_TARGET_DISPEL).is_empty());
+        }
+    }
+
+    #[test]
+    fn fn_008c5350_inactive_null_or_other_actor() {
+        let (mut e, a) = radiation_engine(false, 11.0);
+        e.call(0x008c_5350, &args![a.owner, 3u32, 1.0f32, 10.0f32]);
+        assert!(calls(&e, RADIATION_STAGE_OF).is_empty());
+        let (mut e, a) = radiation_engine(true, 11.0);
+        e.call(0x008c_5350, &args![0u32, 3u32, 1.0f32, 10.0f32]);
+        assert!(calls(&e, RADIATION_STAGE_OF).is_empty());
+        e.call(0x008c_5350, &args![a.owner, 3u32, 1.0f32, 10.0f32]);
+        assert_eq!(calls(&e, 0x00ab_0008).len(), 1);
+        assert!(calls(&e, SHOW_MESSAGE).is_empty());
     }
 }

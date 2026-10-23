@@ -100,9 +100,51 @@ pub fn fn_00bc2ae0(e: &mut Engine, this: Ptr, culler: u32) {
     }
 }
 
+/// `NiNode::GetViewerStrings` (`00a5ea70`, engine map), the record `00bc29d0` answers
+/// (`01201f74`), `NiNew`'s allocator (`00aa13e0`, cdecl) and the node member copy
+/// (`00a5dc80`, thiscall on the source: clone, cloning process).
+const NI_NODE_GET_VIEWER_STRINGS: u32 = 0x00a5_ea70;
+const RTTI_01201F74: u32 = 0x0120_1f74;
+const NI_ALLOCATE: u32 = 0x00aa_13e0;
+const NI_NODE_COPY_MEMBERS: u32 = 0x00a5_dc80;
+
+// Translated from 00bc29c0 (PC disassembly, FalloutNV.exe 1.4.0.525; Ghidra made no function here)
+/// The `GetViewerStrings` of the vtable at `010ba608` (its slot +0x60): a 5-byte jump to
+/// `NiNode::GetViewerStrings` (`00a5ea70`) with `this` and the string array.
+pub fn fn_00bc29c0(e: &mut Engine, this: Ptr, strings: u32) {
+    e.call(NI_NODE_GET_VIEWER_STRINGS, &args![this, strings]);
+}
+
+// Translated from 00bc29d0 (PC disassembly, FalloutNV.exe 1.4.0.525; Ghidra made no function here)
+/// The `GetRTTI` of the vtable at `010ba608` (its slot +8): the address of the record at
+/// `01201f74`.
+pub fn fn_00bc29d0(_e: &mut Engine) -> Ptr {
+    Ptr::new(RTTI_01201F74)
+}
+
+// Translated from 00bc2a30 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 00bc2a30 - the C++ exception frame (FS:[0] chain, unwind state 0 around the constructor) is not translated.
+/// The `CreateClone` of the vtable at `010ba608` (its slot +0x48; thiscall, `RET 4`: the
+/// cloning process): 0xb8 bytes (`00aa13e0`) constructed as [`fn_00bc2980`] does (the exe
+/// inlines that constructor; null when the allocation fails), then the node member copy
+/// (`00a5dc80`) into it (into null too). Answers the clone.
+pub fn fn_00bc2a30(e: &mut Engine, this: Ptr, cloning: u32) -> Ptr {
+    let block = e.call(NI_ALLOCATE, &args![0xb8u32]).u32();
+    let clone = if block == 0 {
+        Ptr::new(0)
+    } else {
+        fn_00bc2980(e, Ptr::new(block))
+    };
+    e.call(NI_NODE_COPY_MEMBERS, &args![this, clone, cloning]);
+    clone
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x00bc_29c0, fn_00bc29c0(Ptr, u32)),
+        entry!(0x00bc_29d0, fn_00bc29d0() -> Ptr),
+        entry!(0x00bc_2a30, fn_00bc2a30(Ptr, u32) -> Ptr),
         entry!(0x00bc_2980, fn_00bc2980(Ptr) -> Ptr),
         entry!(0x00bc2960, fn_00bc2960()),
         entry!(0x00bc29e0, fn_00bc29e0(Ptr, u32) -> Ptr),
@@ -211,5 +253,67 @@ mod tests {
         assert_eq!(e.mem.u32(this + 0xb0), 0x7fc0_0003);
         assert_eq!(e.mem.u8(this + 0xac), 0);
         assert_eq!(e.mem.u8(this + 0xad), 0);
+    }
+}
+
+#[cfg(test)]
+mod n014_tests {
+    use super::*;
+
+    fn calls_to(e: &Engine, addr: u32) -> Vec<Vec<u32>> {
+        e.call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|c| c.0 == addr)
+            .map(|c| c.1.clone())
+            .collect()
+    }
+
+    #[test]
+    fn get_viewer_strings_jumps_to_the_node() {
+        let mut e = Engine::new();
+        e.register(NI_NODE_GET_VIEWER_STRINGS, |_, _| Ret::default());
+        e.call_log = Some(vec![]);
+        e.call(0x00bc_29c0, &args![0x1000u32, 0x2000u32]);
+        assert_eq!(
+            calls_to(&e, NI_NODE_GET_VIEWER_STRINGS),
+            vec![vec![0x1000, 0x2000]]
+        );
+    }
+
+    #[test]
+    fn get_rtti_answers_the_record() {
+        let mut e = Engine::new();
+        assert_eq!(e.call(0x00bc_29d0, &args![]).u32(), RTTI_01201F74);
+    }
+
+    #[test]
+    fn create_clone_constructs_and_copies_even_into_null() {
+        let mut e = Engine::new();
+        e.register(NI_NODE_CONSTRUCT, |_, _| Ret::default());
+        e.register(NI_NODE_COPY_MEMBERS, |_, _| Ret::default());
+        e.register(NI_ALLOCATE, |e, a| e.mem.alloc(a[0]).into_ret());
+        e.mem.map(VALUE_FOR_B4_01016410, 4);
+        e.mem.set_f32(VALUE_FOR_B4_01016410, 100.0);
+        e.mem.map(VALUE_FOR_B0_010BA600, 4);
+        e.mem.set_u32(VALUE_FOR_B0_010BA600, 0x7f80_0001);
+        e.call_log = Some(vec![]);
+        let clone = e.call(0x00bc_2a30, &args![0x1000u32, 0x2000u32]).u32();
+        assert_eq!(calls_to(&e, NI_ALLOCATE), vec![vec![0xb8]]);
+        assert_eq!(calls_to(&e, NI_NODE_CONSTRUCT), vec![vec![clone, 0]]);
+        assert_eq!(e.mem.u32(clone), VTABLE_010BA608);
+        assert_eq!(e.mem.f32(clone + 0xb4), 100.0);
+        assert_eq!(e.mem.u32(clone + 0xb0), 0x7fc0_0001);
+        assert_eq!(
+            calls_to(&e, NI_NODE_COPY_MEMBERS),
+            vec![vec![0x1000, clone, 0x2000]]
+        );
+        e.register(NI_ALLOCATE, |_, _| Ret::default());
+        assert_eq!(e.call(0x00bc_2a30, &args![0x1000u32, 0x2000u32]).u32(), 0);
+        assert_eq!(
+            calls_to(&e, NI_NODE_COPY_MEMBERS)[1],
+            vec![0x1000, 0, 0x2000]
+        );
     }
 }

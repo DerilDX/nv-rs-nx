@@ -956,6 +956,487 @@ pub fn bs_shader_property_free_render_passes(e: &mut Engine, this: Ptr<BSShaderP
     }
 }
 
+/// `NiShadeProperty`'s run-time type record (`011f5ae0`), which `00a81450` answers.
+const NI_SHADE_PROPERTY_RTTI: u32 = 0x011f_5ae0;
+/// `BSShaderProperty`'s run-time type record (`01200464`); its first word is the class name.
+const BS_SHADER_PROPERTY_RTTI: u32 = 0x0120_0464;
+/// The object allocation `00aa13e0` (`cdecl`, one word: the size).
+const NEW_OBJECT_00AA13E0: u32 = 0x00aa_13e0;
+/// The base `SaveBinary` `00a815c0` (`thiscall`, one word: the stream).
+const BASE_SAVE_BINARY_00A815C0: u32 = 0x00a8_15c0;
+/// `NiShadeProperty::GetViewerStrings` (`00a81600`, `thiscall`, one word: the strings).
+const NI_SHADE_PROPERTY_GET_VIEWER_STRINGS: u32 = 0x00a8_1600;
+/// `BSShaderManager::GetPassName` (`00b4f9d0`, `cdecl`, one word: the pass).
+const GET_PASS_NAME: u32 = 0x00b4_f9d0;
+/// The viewer-string makers (`NiGetViewerString` and its overloads, `cdecl`): of a string
+/// (`00a7d330`), of a string and a flag (`00a7d370`), of a name and a signed integer
+/// (`00a7d4d0`), an unsigned integer (`00a7d510`), a `float` (`00a7d550`) or a string
+/// (`00a7d5e0`). Each answers the new string.
+pub(crate) const VIEWER_STRING: u32 = 0x00a7_d330;
+pub(crate) const VIEWER_STRING_FLAG: u32 = 0x00a7_d370;
+pub(crate) const VIEWER_STRING_INT: u32 = 0x00a7_d4d0;
+pub(crate) const VIEWER_STRING_UINT: u32 = 0x00a7_d510;
+pub(crate) const VIEWER_STRING_FLOAT: u32 = 0x00a7_d550;
+pub(crate) const VIEWER_STRING_TEXT: u32 = 0x00a7_d5e0;
+/// The string array's `SetSize` (`0096ad30`, `thiscall`, one word) and `SetAt` (`0096ae90`,
+/// `thiscall`, two words: index and the address of the element).
+pub(crate) const STRINGS_SET_SIZE: u32 = 0x0096_ad30;
+pub(crate) const STRINGS_SET_AT: u32 = 0x0096_ae90;
+
+/// The `NiTArray<char *>` add the viewer-string functions inline: the index is `m_usSize`;
+/// when it is not below `m_usMaxSize` the array is resized to `m_usGrowBy` more than it
+/// (`0096ad30`), then the string is stored there through a local word (`0096ae90`).
+pub(crate) fn viewer_strings_add(e: &mut Engine, strings: u32, string: u32) {
+    let array = Ptr::<NiTArray>::new(strings);
+    let index = u32::from(e.get(array, NiTArray::m_usSize));
+    if index >= u32::from(e.get(array, NiTArray::m_usMaxSize)) {
+        let grow = u32::from(e.get(array, NiTArray::m_usGrowBy));
+        e.call(STRINGS_SET_SIZE, &args![strings, grow.wrapping_add(index)]);
+    }
+    e.with_stack(4, |e, local| {
+        e.mem.set_u32(local.addr(), string);
+        e.call(STRINGS_SET_AT, &args![strings, index, local]);
+    });
+}
+
+/// The same add with `SetAt` inlined too, as some of the viewer-string functions have it:
+/// after the resize, an index at or past `m_usSize` makes `m_usSize` one more than it and a
+/// non-null string counts in `m_usESize`; an index below it counts a non-null string over a
+/// null slot up and a null string over a non-null slot down. Then the slot is written.
+pub(crate) fn viewer_strings_add_inline(e: &mut Engine, strings: u32, string: u32) {
+    let array = Ptr::<NiTArray>::new(strings);
+    let index = u32::from(e.get(array, NiTArray::m_usSize));
+    if index >= u32::from(e.get(array, NiTArray::m_usMaxSize)) {
+        let grow = u32::from(e.get(array, NiTArray::m_usGrowBy));
+        e.call(STRINGS_SET_SIZE, &args![strings, grow.wrapping_add(index)]);
+    }
+    if index >= u32::from(e.get(array, NiTArray::m_usSize)) {
+        e.set(array, NiTArray::m_usSize, index.wrapping_add(1) as u16);
+        if string != 0 {
+            let used = e.get(array, NiTArray::m_usESize);
+            e.set(array, NiTArray::m_usESize, used.wrapping_add(1));
+        }
+    } else {
+        let base = e.get(array, NiTArray::m_pBase);
+        let old = e.mem.u32(base.wrapping_add(index.wrapping_mul(4)));
+        if string != 0 {
+            if old == 0 {
+                let used = e.get(array, NiTArray::m_usESize);
+                e.set(array, NiTArray::m_usESize, used.wrapping_add(1));
+            }
+        } else if old != 0 {
+            let used = e.get(array, NiTArray::m_usESize);
+            e.set(array, NiTArray::m_usESize, used.wrapping_add(0xffff));
+        }
+    }
+    let base = e.get(array, NiTArray::m_pBase);
+    e.mem
+        .set_u32(base.wrapping_add(index.wrapping_mul(4)), string);
+}
+
+// Translated from 00a81450 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiShadeProperty::GetRTTI` (engine map, from the vtable): answers the run-time type
+/// record at `011f5ae0`.
+pub fn ni_shade_property_get_rtti(_e: &mut Engine, _this: Ptr) -> u32 {
+    NI_SHADE_PROPERTY_RTTI
+}
+
+// Translated from 00ba8b60 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map: `cdecl`, one byte, stored in the byte at `0120045c` (the first
+/// of the two guards [`fn_00ba9420`] tests).
+pub fn fn_00ba8b60(e: &mut Engine, value: u8) {
+    e.mem.set_u8(GUARD_0120045C, value);
+}
+
+// Translated from 00ba8b70 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map, no arguments: flips the byte at `0120045d` (the second guard
+/// [`fn_00ba9420`] tests) between 0 and 1 and answers its new value.
+pub fn fn_00ba8b70(e: &mut Engine) -> u8 {
+    let value = u8::from(e.mem.u8(GUARD_0120045D) == 0);
+    e.mem.set_u8(GUARD_0120045D, value);
+    value
+}
+
+// Translated from 00ba8e20 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map; slot 0 of the vtable `010b8480` (the one the render-pass
+/// arrays carry, no run-time type record before it): the deleting destructor of that
+/// `NiTArray`. Puts the vtable back, frees the buffer (`m_pBase`) and, when bit 0 of the
+/// flags is set, the array itself (both through the memory manager). Answers `this`.
+pub fn fn_00ba8e20(e: &mut Engine, this: Ptr<NiTArray>, flags: u32) -> Ptr<NiTArray> {
+    let base = e.get(this, NiTArray::m_pBase);
+    e.mem.set_u32(this.addr(), RENDER_PASS_ARRAY_VTABLE);
+    e.call(MEMORY_DEALLOCATE, &args![MEMORY_MANAGER, base]);
+    if flags & 1 != 0 {
+        e.call(MEMORY_DEALLOCATE, &args![MEMORY_MANAGER, this]);
+    }
+    this
+}
+
+// Translated from 00ba8eb0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map; slot 2 (`GetRTTI`) of `BSShaderProperty`'s vtable `010b8488`:
+/// answers the run-time type record at `01200464`.
+pub fn fn_00ba8eb0(_e: &mut Engine, _this: Ptr) -> u32 {
+    BS_SHADER_PROPERTY_RTTI
+}
+
+/// A new 0x60-byte object (`00aa13e0`) made a `BSShaderProperty`
+/// ([`bs_shader_property_bs_shader_property`]), or null when the allocation fails.
+fn new_shader_property(e: &mut Engine) -> u32 {
+    let block = e.call(NEW_OBJECT_00AA13E0, &args![0x60u32]).u32();
+    if block == 0 {
+        return 0;
+    }
+    bs_shader_property_bs_shader_property(e, Ptr::new(block)).addr()
+}
+
+// Translated from 00ba8ff0 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 00ba8ff0 - the FS:[0] exception frame (unwinding on a throw) is not translated
+/// Unnamed in the engine map: `thiscall` with one word passed on (a clone): makes a new
+/// `BSShaderProperty` (0x60 bytes, [`bs_shader_property_bs_shader_property`]; null when the
+/// allocation fails), runs [`fn_00a81430`] on it with the word, then copies both flag words,
+/// `fAlpha` and `fFadeAlpha` (`FLD`/`FSTP`, so a signalling NaN arrives quiet), `iShader`
+/// and `fDepthBias` into it and clears its `iLastRenderPassState`. Answers the new object.
+/// With a failed allocation the exe goes on with null and faults on the first store, as
+/// the translation does.
+pub fn fn_00ba8ff0(e: &mut Engine, this: Ptr<BSShaderProperty>, clone: u32) -> u32 {
+    let copy = new_shader_property(e);
+    fn_00a81430(e, this, copy, clone);
+    let d = Ptr::<BSShaderProperty>::new(copy);
+    let v = e.get(this, BSShaderProperty::ulFlags0);
+    e.set(d, BSShaderProperty::ulFlags0, v);
+    let v = e.get(this, BSShaderProperty::ulFlags1);
+    e.set(d, BSShaderProperty::ulFlags1, v);
+    let v = e.get(this, BSShaderProperty::fAlpha);
+    e.set(d, BSShaderProperty::fAlpha, x87_quiet_bits(v));
+    let v = e.get(this, BSShaderProperty::fFadeAlpha);
+    e.set(d, BSShaderProperty::iLastRenderPassState, 0);
+    e.set(d, BSShaderProperty::fFadeAlpha, x87_quiet_bits(v));
+    let v = e.get(this, BSShaderProperty::iShader);
+    e.set(d, BSShaderProperty::iShader, v);
+    let v = e.get(this, BSShaderProperty::fDepthBias);
+    e.set(d, BSShaderProperty::fDepthBias, x87_quiet_bits(v));
+    copy
+}
+
+// Translated from 00ba90a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSShaderProperty::ToggleMotionBlurRecurse` (engine map; the body matches): `cdecl`, one
+/// object. For a non-null object: a tri-based geometry (slot +0x1c non-zero) with a shader
+/// property (`GetProperty(3)`) gets [`bs_shader_property_set_motion_blurred`] with 1 when
+/// bit 4 of the property's first flag word is clear and 0 when it is set; any other object
+/// that is a node (slot +0xc) passes the call on to each of its non-null children (the array
+/// at node `+0xa0`, the count at `+0xa6` read once).
+pub fn bs_shader_property_toggle_motion_blur_recurse(e: &mut Engine, object: Ptr) {
+    if object.is_null() {
+        return;
+    }
+    if e.vcall(object.addr(), SLOT_IS_TRI_BASED_GEOM, &args![])
+        .u32()
+        != 0
+    {
+        let property = e
+            .call(
+                NI_AV_OBJECT_GET_PROPERTY,
+                &args![object, SHADER_PROPERTY_TYPE],
+            )
+            .u32();
+        if property != 0 {
+            let property = Ptr::<BSShaderProperty>::new(property);
+            let on = u8::from(e.mem.u8(property.addr().wrapping_add(0x20)) & 0x10 == 0);
+            bs_shader_property_set_motion_blurred(e, property, on);
+        }
+        return;
+    }
+    let node = e.vcall(object.addr(), SLOT_IS_NODE, &args![]).u32();
+    if node == 0 {
+        return;
+    }
+    let count = u32::from(e.mem.u16(node.wrapping_add(0xa6)));
+    let mut index = 0u32;
+    while index < count {
+        let buffer = e.mem.u32(node.wrapping_add(0xa0));
+        let child = e.mem.u32(buffer.wrapping_add(index.wrapping_mul(4)));
+        if child != 0 {
+            bs_shader_property_toggle_motion_blur_recurse(e, Ptr::new(child));
+        }
+        index = index.wrapping_add(1);
+    }
+}
+
+// Translated from 00ba9250 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 00ba9250 - the FS:[0] exception frame (unwinding on a throw) is not translated
+/// Unnamed in the engine map, no arguments (registered with `NiStream` as the
+/// `BSShaderProperty` creator, `bsshadermanager.cpp`'s table at `010a93a0`): a new 0x60-byte
+/// object (`00aa13e0`) made a `BSShaderProperty`, or null when the allocation fails.
+pub fn fn_00ba9250(e: &mut Engine) -> u32 {
+    new_shader_property(e)
+}
+
+/// One write through the stream's file (`[stream + 0x250]`): its write function at file
+/// `+0xc` (`cdecl`: file, buffer, 4, the address of a word holding 4, 1); the answer is
+/// added to the file's word at `+4`.
+fn stream_write_word(e: &mut Engine, stream: u32, buffer: u32) {
+    let file = e.mem.u32(stream.wrapping_add(0x250));
+    let write = e.mem.u32(file.wrapping_add(0xc));
+    let n = e.with_stack(4, |e, size| {
+        e.mem.set_u32(size.addr(), 4);
+        e.call(write, &args![file, buffer, 4u32, size, 1u32]).u32()
+    });
+    let position = e.mem.u32(file.wrapping_add(4));
+    e.mem
+        .set_u32(file.wrapping_add(4), position.wrapping_add(n));
+}
+
+// Translated from 00ba9380 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map: `thiscall` with one word, a stream (the `SaveBinary` that
+/// pairs with [`fn_00ba92c0`]). Runs the base save (`00a815c0`), then writes `iShader`, the
+/// two flag words and `fEnvmapScale`, one word each through the stream's file.
+pub fn fn_00ba9380(e: &mut Engine, this: Ptr<BSShaderProperty>, stream: u32) {
+    e.call(BASE_SAVE_BINARY_00A815C0, &args![this, stream]);
+    stream_write_word(e, stream, this.addr().wrapping_add(0x58));
+    let mut flags = this.addr().wrapping_add(0x20);
+    let mut remaining = 2u32;
+    loop {
+        stream_write_word(e, stream, flags);
+        flags = flags.wrapping_add(4);
+        remaining -= 1;
+        if remaining == 0 {
+            break;
+        }
+    }
+    stream_write_word(e, stream, this.addr().wrapping_add(0x30));
+}
+
+/// The four `CheckCreate...RenderPassArray` bodies: when the list at `offset` is null, a new
+/// render-pass array of `size` passes (null when the allocation fails) is stored there.
+fn check_create_list(e: &mut Engine, this: Ptr<BSShaderProperty>, offset: u32, size: u32) {
+    let slot = this.addr().wrapping_add(offset);
+    if e.mem.u32(slot) != 0 {
+        return;
+    }
+    let array = new_render_pass_array(e, size);
+    e.mem.set_u32(slot, array);
+}
+
+// Translated from 00ba96d0 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 00ba96d0 - the FS:[0] exception frame (unwinding on a throw) is not translated
+/// Unnamed in the engine map (`CheckCreateLocalMapRenderPassArray` by its field): when
+/// `pLocalMapRenderPassList` is null, makes a new render-pass array of the given size.
+pub fn fn_00ba96d0(e: &mut Engine, this: Ptr<BSShaderProperty>, size: u32) {
+    check_create_list(e, this, 0x48, size);
+}
+
+// Translated from 00ba9740 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 00ba9740 - the FS:[0] exception frame (unwinding on a throw) is not translated
+/// `BSShaderProperty::CheckCreateConstAlphaRenderPassArray` (engine map; the body matches):
+/// when `pConstAlphaRenderPassList` is null, makes a new render-pass array of the given size.
+pub fn bs_shader_property_check_create_const_alpha_render_pass_array(
+    e: &mut Engine,
+    this: Ptr<BSShaderProperty>,
+    size: u32,
+) {
+    check_create_list(e, this, 0x44, size);
+}
+
+// Translated from 00ba97b0 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 00ba97b0 - the FS:[0] exception frame (unwinding on a throw) is not translated
+/// Unnamed in the engine map: when `pWaterFogRenderPassList` is null, makes a new
+/// render-pass array of the given size.
+pub fn fn_00ba97b0(e: &mut Engine, this: Ptr<BSShaderProperty>, size: u32) {
+    check_create_list(e, this, 0x50, size);
+}
+
+// Translated from 00ba9820 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 00ba9820 - the FS:[0] exception frame (unwinding on a throw) is not translated
+/// Unnamed in the engine map: when `pSilhouettePassList` is null, makes a new render-pass
+/// array of the given size.
+pub fn fn_00ba9820(e: &mut Engine, this: Ptr<BSShaderProperty>, size: u32) {
+    check_create_list(e, this, 0x54, size);
+}
+
+/// The 56 flag names `GetViewerStrings` builds on its stack (immediates of the code, read
+/// in Ghidra): bit `n` of the two flag words (`ulFlags[n / 32]`) is named by entry `n`
+/// (`"specular"`, `"skinned"`, ... `"stinger prop"`).
+const FLAG_NAMES: [u32; 56] = [
+    0x010b_8950,
+    0x010b_8948,
+    0x010b_893c,
+    0x010b_892c,
+    0x010b_8920,
+    0x010b_8914,
+    0x010b_890c,
+    0x010b_88f8,
+    0x010b_88e8,
+    0x010b_88dc,
+    0x010b_88d4,
+    0x010b_88c8,
+    0x010b_88b4,
+    0x010b_889c,
+    0x010b_8890,
+    0x010b_8884,
+    0x010b_8874,
+    0x010b_885c,
+    0x010b_8854,
+    0x010b_8844,
+    0x010b_882c,
+    0x010b_8810,
+    0x010b_8800,
+    0x010b_87f0,
+    0x010b_87dc,
+    0x010b_87c8,
+    0x010b_87c0,
+    0x010b_87b0,
+    0x010b_879c,
+    0x010b_8788,
+    0x010b_877c,
+    0x010b_876c,
+    0x010b_875c,
+    0x010b_874c,
+    0x010b_873c,
+    0x010b_8734,
+    0x010b_8724,
+    0x010b_8714,
+    0x010b_8708,
+    0x010b_86ec,
+    0x010b_86e0,
+    0x010b_86d4,
+    0x010b_86c4,
+    0x010b_86b4,
+    0x010b_86a8,
+    0x010b_869c,
+    0x010b_8688,
+    0x010b_8674,
+    0x010b_8668,
+    0x010b_8658,
+    0x010b_8644,
+    0x010b_8634,
+    0x010b_8620,
+    0x010b_8614,
+    0x010b_85f4,
+    0x010b_85e4,
+];
+/// The labels: `"fAlpha"`, `"fFadeAlpha"`, `"fDepthBias"`, `"Envmap Scale"`,
+/// `"Shader Index"`, `"iLastRenderPassState"`, `"pRenderPassList not found"`,
+/// `"number of passes"`, `" Fpass"` and `"  pass"`.
+const LABEL_ALPHA: u32 = 0x010b_85dc;
+const LABEL_FADE_ALPHA: u32 = 0x010b_85d0;
+const LABEL_DEPTH_BIAS: u32 = 0x010b_85c4;
+const LABEL_ENVMAP_SCALE: u32 = 0x010b_85b4;
+const LABEL_SHADER_INDEX: u32 = 0x010b_85a4;
+const LABEL_LAST_PASS_STATE: u32 = 0x010b_858c;
+const LABEL_NO_PASS_LIST: u32 = 0x010b_8570;
+const LABEL_PASS_COUNT: u32 = 0x010b_855c;
+const LABEL_FIRST_PASS: u32 = 0x010b_8554;
+const LABEL_PASS: u32 = 0x010b_854c;
+
+// Translated from 00ba9890 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSShaderProperty::GetViewerStrings` (engine map; the body matches): `thiscall`, one word
+/// (the `NiTArray<char *>` of strings). The `NiShadeProperty` strings (`00a81600`), the class
+/// name, the name of each set flag bit (bits 0 to 55 of the two flag words), then `fAlpha`
+/// and `fFadeAlpha` when below 1.0, `fDepthBias` when above 0.0 (NaN shows none of them),
+/// `fEnvmapScale` when bit 7 of the first flag word is set (each `float` through
+/// `FLD`/`FSTP`), `iShader` and `iLastRenderPassState`; then, without a pass list, the
+/// not-found string, or else the pass count and a line per pass whose enum is below 0x2f7
+/// (the pass name, labelled by its first-pass flag). The two integer lines and the pass
+/// lines use the inlined `SetAt` ([`viewer_strings_add_inline`]).
+pub fn bs_shader_property_get_viewer_strings(
+    e: &mut Engine,
+    this: Ptr<BSShaderProperty>,
+    strings: u32,
+) {
+    e.call(NI_SHADE_PROPERTY_GET_VIEWER_STRINGS, &args![this, strings]);
+    let class_name = e.mem.u32(BS_SHADER_PROPERTY_RTTI);
+    let text = e.call(VIEWER_STRING, &args![class_name]).u32();
+    viewer_strings_add(e, strings, text);
+    let mut bit = 1u32;
+    for (index, name) in FLAG_NAMES.iter().enumerate() {
+        let word = this.addr().wrapping_add(0x20 + 4 * (index as u32 >> 5));
+        if e.mem.u32(word) & bit != 0 && *name != 0 {
+            let text = e.call(VIEWER_STRING_FLAG, &args![*name, 1u32]).u32();
+            viewer_strings_add(e, strings, text);
+        }
+        bit = bit.rotate_left(1);
+    }
+    let alpha = e.get(this, BSShaderProperty::fAlpha);
+    if 1.0 > f32::from_bits(alpha) {
+        let text = e
+            .call(
+                VIEWER_STRING_FLOAT,
+                &args![LABEL_ALPHA, x87_quiet_bits(alpha)],
+            )
+            .u32();
+        viewer_strings_add(e, strings, text);
+    }
+    let fade = e.get(this, BSShaderProperty::fFadeAlpha);
+    if 1.0 > f32::from_bits(fade) {
+        let text = e
+            .call(
+                VIEWER_STRING_FLOAT,
+                &args![LABEL_FADE_ALPHA, x87_quiet_bits(fade)],
+            )
+            .u32();
+        viewer_strings_add(e, strings, text);
+    }
+    let bias = e.get(this, BSShaderProperty::fDepthBias);
+    if 0.0 < f32::from_bits(bias) {
+        let text = e
+            .call(
+                VIEWER_STRING_FLOAT,
+                &args![LABEL_DEPTH_BIAS, x87_quiet_bits(bias)],
+            )
+            .u32();
+        viewer_strings_add(e, strings, text);
+    }
+    if e.get(this, BSShaderProperty::ulFlags0) & 0x80 != 0 {
+        let scale = x87_quiet_bits(e.get(this, BSShaderProperty::fEnvmapScale));
+        let text = e
+            .call(
+                VIEWER_STRING_FLOAT,
+                &args![LABEL_ENVMAP_SCALE, x87_quiet_bits(scale)],
+            )
+            .u32();
+        viewer_strings_add(e, strings, text);
+    }
+    let shader = e.get(this, BSShaderProperty::iShader);
+    let text = e
+        .call(VIEWER_STRING_INT, &args![LABEL_SHADER_INDEX, shader])
+        .u32();
+    viewer_strings_add_inline(e, strings, text);
+    let state = e.get(this, BSShaderProperty::iLastRenderPassState);
+    let text = e
+        .call(VIEWER_STRING_INT, &args![LABEL_LAST_PASS_STATE, state])
+        .u32();
+    viewer_strings_add_inline(e, strings, text);
+    let list = e.get(this, BSShaderProperty::pRenderPassList);
+    if list == 0 {
+        let text = e.call(VIEWER_STRING, &args![LABEL_NO_PASS_LIST]).u32();
+        viewer_strings_add(e, strings, text);
+        return;
+    }
+    let count = e.get(Ptr::<RenderPassArray>::new(list), RenderPassArray::iSize);
+    let text = e
+        .call(VIEWER_STRING_UINT, &args![LABEL_PASS_COUNT, count])
+        .u32();
+    viewer_strings_add(e, strings, text);
+    let mut index = 0u32;
+    while index < count {
+        let list = e.get(this, BSShaderProperty::pRenderPassList);
+        let base = e.get(Ptr::<NiTArray>::new(list), NiTArray::m_pBase);
+        let pass = Ptr::<RenderPass>::new(e.mem.u32(base.wrapping_add(index.wrapping_mul(4))));
+        let pass_enum = e.get(pass, RenderPass::usPassEnum);
+        if pass_enum < 0x2f7 {
+            let label = if e.get(pass, RenderPass::bFirstPass) != 0 {
+                LABEL_FIRST_PASS
+            } else {
+                LABEL_PASS
+            };
+            let name = e.call(GET_PASS_NAME, &args![u32::from(pass_enum)]).u32();
+            let text = e.call(VIEWER_STRING_TEXT, &args![label, name]).u32();
+            viewer_strings_add_inline(e, strings, text);
+        }
+        index = index.wrapping_add(1);
+    }
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -1042,6 +1523,35 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(
             0x00ba_a000,
             bs_shader_property_free_render_passes(Ptr<BSShaderProperty>)
+        ),
+        entry!(0x00a8_1450, ni_shade_property_get_rtti(Ptr) -> u32),
+        entry!(0x00ba_8b60, fn_00ba8b60(u8)),
+        entry!(0x00ba_8b70, fn_00ba8b70() -> u8),
+        entry!(
+            0x00ba_8e20,
+            fn_00ba8e20(Ptr<NiTArray>, u32) -> Ptr<NiTArray>
+        ),
+        entry!(0x00ba_8eb0, fn_00ba8eb0(Ptr) -> u32),
+        entry!(0x00ba_8ff0, fn_00ba8ff0(Ptr<BSShaderProperty>, u32) -> u32),
+        entry!(
+            0x00ba_90a0,
+            bs_shader_property_toggle_motion_blur_recurse(Ptr)
+        ),
+        entry!(0x00ba_9250, fn_00ba9250() -> u32),
+        entry!(0x00ba_9380, fn_00ba9380(Ptr<BSShaderProperty>, u32)),
+        entry!(0x00ba_96d0, fn_00ba96d0(Ptr<BSShaderProperty>, u32)),
+        entry!(
+            0x00ba_9740,
+            bs_shader_property_check_create_const_alpha_render_pass_array(
+                Ptr<BSShaderProperty>,
+                u32,
+            )
+        ),
+        entry!(0x00ba_97b0, fn_00ba97b0(Ptr<BSShaderProperty>, u32)),
+        entry!(0x00ba_9820, fn_00ba9820(Ptr<BSShaderProperty>, u32)),
+        entry!(
+            0x00ba_9890,
+            bs_shader_property_get_viewer_strings(Ptr<BSShaderProperty>, u32)
         ),
     ]
 }
@@ -1808,5 +2318,344 @@ mod shader_property_tests {
             .collect();
         // +0x48 before +0x44.
         assert_eq!(freed, vec![lists[0], lists[2], lists[1], lists[3]]);
+    }
+}
+
+#[cfg(test)]
+mod n012_tests {
+    use super::*;
+
+    fn calls(e: &Engine, addr: u32) -> Vec<Vec<u32>> {
+        e.call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|(a, _)| *a == addr)
+            .map(|(_, w)| w.clone())
+            .collect()
+    }
+
+    fn rig() -> Engine {
+        let mut e = Engine::new();
+        e.register(MEMORY_ALLOCATE, |e, a| e.mem.alloc(a[1].max(4)).into_ret());
+        e.register(MEMORY_DEALLOCATE, |_, _| Ret::default());
+        e.register(NEW_OBJECT_00AA13E0, |e, a| e.mem.alloc(a[0]).into_ret());
+        e.register(BASE_CONSTRUCTOR_00A5C200, |_, _| Ret::default());
+        e.register(COPY_MEMBERS_00A5D7A0, |_, _| Ret::default());
+        e.call_log = Some(vec![]);
+        e
+    }
+
+    /// A string array of capacity `max` (grow step 2), and doubles for the size change
+    /// (recorded only) and the store (writes the slot, raises `m_usSize`).
+    fn strings(e: &mut Engine, max: u16) -> u32 {
+        let this = e.mem.alloc(0x10);
+        let base = e.mem.alloc(4 * 64);
+        e.mem.set_u32(this + 4, base);
+        e.mem.set_u16(this + 8, max);
+        e.mem.set_u16(this + 0xe, 2);
+        e.register(STRINGS_SET_SIZE, |e, a| {
+            e.mem.set_u16(a[0] + 8, a[1] as u16);
+            Ret::default()
+        });
+        e.register(STRINGS_SET_AT, |e, a| {
+            let base = e.mem.u32(a[0] + 4);
+            let v = e.mem.u32(a[2]);
+            e.mem.set_u32(base + 4 * a[1], v);
+            if a[1] >= u32::from(e.mem.u16(a[0] + 0xa)) {
+                e.mem.set_u16(a[0] + 0xa, a[1] as u16 + 1);
+            }
+            Ret::default()
+        });
+        this
+    }
+
+    fn slots(e: &Engine, strings: u32) -> Vec<u32> {
+        let base = e.mem.u32(strings + 4);
+        (0..u32::from(e.mem.u16(strings + 0xa)))
+            .map(|i| e.mem.u32(base + 4 * i))
+            .collect()
+    }
+
+    #[test]
+    fn rtti_getters_answer_their_records() {
+        let mut e = rig();
+        assert_eq!(e.call(0x00a8_1450, &args![0x10u32]).u32(), 0x011f_5ae0);
+        assert_eq!(e.call(0x00ba_8eb0, &args![0x10u32]).u32(), 0x0120_0464);
+    }
+
+    #[test]
+    fn guard_setters_store_and_flip_the_bytes() {
+        let mut e = rig();
+        e.map(0x0120_0000, 0x1000);
+        e.call(0x00ba_8b60, &args![0x1234_5601u32]);
+        assert_eq!(e.mem.u8(GUARD_0120045C), 1);
+        assert_eq!(e.call(0x00ba_8b70, &args![]).u8(), 1);
+        assert_eq!(e.mem.u8(GUARD_0120045D), 1);
+        assert_eq!(e.call(0x00ba_8b70, &args![]).u8(), 0);
+        assert_eq!(e.mem.u8(GUARD_0120045D), 0);
+    }
+
+    #[test]
+    fn array_deleting_destructor_frees_the_array_only_with_bit_0() {
+        let mut e = rig();
+        let this = e.mem.alloc(0x10);
+        e.mem.set_u32(this + 4, 0x7000);
+        assert_eq!(e.call(0x00ba_8e20, &args![this, 2u32]).u32(), this);
+        assert_eq!(e.mem.u32(this), RENDER_PASS_ARRAY_VTABLE);
+        assert_eq!(
+            calls(&e, MEMORY_DEALLOCATE),
+            vec![vec![MEMORY_MANAGER, 0x7000]]
+        );
+        e.call(0x00ba_8e20, &args![this, 1u32]);
+        assert_eq!(
+            calls(&e, MEMORY_DEALLOCATE)[1..],
+            [vec![MEMORY_MANAGER, 0x7000], vec![MEMORY_MANAGER, this]]
+        );
+    }
+
+    #[test]
+    fn fn_00ba8ff0_makes_a_copy_of_the_shader_fields() {
+        let mut e = rig();
+        let this = e.mem.alloc(0x60);
+        e.mem.set_u32(this + 0x20, 0x11);
+        e.mem.set_u32(this + 0x24, 0x22);
+        e.mem.set_u32(this + 0x28, 0x7f80_0001);
+        e.mem.set_f32(this + 0x2c, 0.25);
+        e.mem.set_u32(this + 0x58, 7);
+        e.mem.set_f32(this + 0x5c, 2.5);
+        e.mem.set_u16(this + 0x18, 0x55);
+        let copy = e.call(0x00ba_8ff0, &args![this, 0x99u32]).u32();
+        assert_eq!(calls(&e, NEW_OBJECT_00AA13E0), vec![vec![0x60]]);
+        assert_eq!(
+            calls(&e, COPY_MEMBERS_00A5D7A0),
+            vec![vec![this, copy, 0x99]]
+        );
+        assert_eq!(e.mem.u32(copy), BS_SHADER_PROPERTY_VTABLE);
+        assert_eq!(e.mem.u16(copy + 0x18), 0x55);
+        assert_eq!(e.mem.u32(copy + 0x20), 0x11);
+        assert_eq!(e.mem.u32(copy + 0x24), 0x22);
+        assert_eq!(e.mem.u32(copy + 0x28), 0x7fc0_0001);
+        assert_eq!(e.mem.f32(copy + 0x2c), 0.25);
+        assert_eq!(e.mem.u32(copy + 0x38), 0);
+        assert_eq!(e.mem.u32(copy + 0x58), 7);
+        assert_eq!(e.mem.f32(copy + 0x5c), 2.5);
+    }
+
+    #[test]
+    fn toggle_motion_blur_recurse_flips_each_geometry_through_nodes() {
+        let mut e = rig();
+        let mut slots = [0u32; 8];
+        slots[SLOT_IS_NODE as usize / 4] = 0x0f00_e000;
+        slots[SLOT_IS_TRI_BASED_GEOM as usize / 4] = 0x0f00_e010;
+        e.put_vtable(0x0f00_e100, &slots);
+        e.register(0x0f00_e000, |e, a| e.mem.u32(a[0] + 0x14).into_ret());
+        e.register(0x0f00_e010, |e, a| e.mem.u32(a[0] + 0x10).into_ret());
+        e.register(NI_AV_OBJECT_GET_PROPERTY, |e, a| {
+            assert_eq!(a[1], 3);
+            e.mem.u32(a[0] + 0x18).into_ret()
+        });
+        let blurred = e.mem.alloc(0x60);
+        e.mem.set_u32(blurred + 0x20, 0x11);
+        e.mem.set_u32(blurred + 0x38, 5);
+        let sharp = e.mem.alloc(0x60);
+        e.mem.set_u32(sharp + 0x20, 0x1);
+        let geometry = |e: &mut Engine, property: u32| {
+            let g = e.mem.alloc(0x20);
+            e.mem.set_u32(g, 0x0f00_e100);
+            e.mem.set_u32(g + 0x10, 1);
+            e.mem.set_u32(g + 0x18, property);
+            g
+        };
+        let first = geometry(&mut e, blurred);
+        let second = geometry(&mut e, sharp);
+        let bare = geometry(&mut e, 0);
+        let node = e.mem.alloc(0xb0);
+        e.mem.set_u32(node, 0x0f00_e100);
+        e.mem.set_u32(node + 0x14, node);
+        let buffer = e.mem.alloc(0x10);
+        e.mem.set_u32(buffer, first);
+        e.mem.set_u32(buffer + 4, bare);
+        e.mem.set_u32(buffer + 0xc, second);
+        e.mem.set_u32(node + 0xa0, buffer);
+        e.mem.set_u16(node + 0xa6, 4);
+        e.call(0x00ba_90a0, &args![node]);
+        assert_eq!(e.mem.u32(blurred + 0x20), 0x1);
+        assert_eq!(e.mem.u32(blurred + 0x38), 0);
+        assert_eq!(e.mem.u32(sharp + 0x20), 0x11);
+        assert_eq!(calls(&e, NI_AV_OBJECT_GET_PROPERTY).len(), 3);
+        e.call(0x00ba_90a0, &args![0u32]);
+        assert_eq!(calls(&e, NI_AV_OBJECT_GET_PROPERTY).len(), 3);
+    }
+
+    #[test]
+    fn fn_00ba9250_creates_a_shader_property_or_null() {
+        let mut e = rig();
+        let made = e.call(0x00ba_9250, &args![]).u32();
+        assert_eq!(e.mem.u32(made), BS_SHADER_PROPERTY_VTABLE);
+        assert_eq!(e.mem.f32(made + 0x28), 1.0);
+        e.register(NEW_OBJECT_00AA13E0, |_, _| Ret::default());
+        assert_eq!(e.call(0x00ba_9250, &args![]).u32(), 0);
+    }
+
+    #[test]
+    fn fn_00ba9380_writes_shader_flags_and_scale() {
+        let mut e = rig();
+        e.register(BASE_SAVE_BINARY_00A815C0, |_, _| Ret::default());
+        e.register(0x0f00_0200, |e, a| {
+            assert_eq!((a[2], e.mem.u32(a[3]), a[4]), (4, 4, 1));
+            3u32.into_ret()
+        });
+        let file = e.mem.alloc(0x20);
+        e.mem.set_u32(file + 0xc, 0x0f00_0200);
+        e.mem.set_u32(file + 4, 10);
+        let stream = e.mem.alloc(0x260);
+        e.mem.set_u32(stream + 0x250, file);
+        let this = e.mem.alloc(0x60);
+        e.call(0x00ba_9380, &args![this, stream]);
+        assert_eq!(
+            calls(&e, BASE_SAVE_BINARY_00A815C0),
+            vec![vec![this, stream]]
+        );
+        let written: Vec<u32> = calls(&e, 0x0f00_0200).iter().map(|w| w[1]).collect();
+        assert_eq!(
+            written,
+            vec![this + 0x58, this + 0x20, this + 0x24, this + 0x30]
+        );
+        assert_eq!(e.mem.u32(file + 4), 22);
+    }
+
+    #[test]
+    fn check_create_lists_fill_only_empty_slots() {
+        let mut e = rig();
+        let this = e.mem.alloc(0x60);
+        e.mem.set_u32(this + 0x44, 0x1234);
+        e.call(0x00ba_96d0, &args![this, 2u32]);
+        e.call(0x00ba_9740, &args![this, 2u32]);
+        e.call(0x00ba_97b0, &args![this, 3u32]);
+        e.call(0x00ba_9820, &args![this, 4u32]);
+        assert_eq!(e.mem.u32(this + 0x44), 0x1234);
+        for (offset, size) in [(0x48u32, 2u16), (0x50, 3), (0x54, 4)] {
+            let list = e.mem.u32(this + offset);
+            assert_eq!(e.mem.u32(list), RENDER_PASS_ARRAY_VTABLE);
+            assert_eq!(e.mem.u16(list + 8), size);
+            assert_eq!(e.mem.u32(list + 0x10), 0);
+        }
+        let allocations = calls(&e, MEMORY_ALLOCATE)
+            .iter()
+            .filter(|w| w[1] == 0x14)
+            .count();
+        assert_eq!(allocations, 3);
+        e.register(MEMORY_ALLOCATE, |_, _| Ret::default());
+        e.mem.set_u32(this + 0x50, 0);
+        e.call(0x00ba_97b0, &args![this, 3u32]);
+        assert_eq!(e.mem.u32(this + 0x50), 0);
+    }
+
+    #[test]
+    fn get_viewer_strings_lists_flags_values_and_passes() {
+        let mut e = rig();
+        e.map(0x0120_0000, 0x1000);
+        e.mem.set_u32(BS_SHADER_PROPERTY_RTTI, 0x0cc0_0000);
+        e.register(NI_SHADE_PROPERTY_GET_VIEWER_STRINGS, |_, _| Ret::default());
+        e.register(VIEWER_STRING, |_, a| (0x1000_0000 | a[0]).into_ret());
+        e.register(VIEWER_STRING_FLAG, |_, a| {
+            assert_eq!(a[1], 1);
+            (0x2000_0000 | a[0]).into_ret()
+        });
+        e.register(VIEWER_STRING_FLOAT, |_, a| {
+            (0x3000_0000 | (a[0] & 0xfff) | (f32::from_bits(a[1]) as u32) << 12).into_ret()
+        });
+        e.register(VIEWER_STRING_INT, |_, a| {
+            (0x4000_0000 | (a[0] & 0xfff) | a[1] << 12).into_ret()
+        });
+        e.register(VIEWER_STRING_UINT, |_, a| {
+            (0x5000_0000 | (a[0] & 0xfff) | a[1] << 12).into_ret()
+        });
+        e.register(VIEWER_STRING_TEXT, |_, a| {
+            (0x6000_0000 | (a[0] & 0xfff) | a[1] << 12).into_ret()
+        });
+        e.register(GET_PASS_NAME, |_, a| (a[0] + 0x100).into_ret());
+        let list = e.mem.alloc(0x14);
+        let passes = e.mem.alloc(0xc);
+        let pass = |e: &mut Engine, pass_enum: u16, first: u8| {
+            let p = e.mem.alloc(0x10);
+            e.mem.set_u16(p + 4, pass_enum);
+            e.mem.set_u8(p + 7, first);
+            p
+        };
+        let first = pass(&mut e, 5, 1);
+        let skipped = pass(&mut e, 0x2f7, 0);
+        let last = pass(&mut e, 0x2f6, 0);
+        e.mem.set_u32(passes, first);
+        e.mem.set_u32(passes + 4, skipped);
+        e.mem.set_u32(passes + 8, last);
+        e.mem.set_u32(list + 4, passes);
+        e.mem.set_u32(list + 0x10, 3);
+        let this = e.mem.alloc(0x60);
+        e.mem.set_u32(this + 0x20, 0x8000_0081);
+        e.mem.set_u32(this + 0x24, 0x0080_0000);
+        e.mem.set_f32(this + 0x28, 0.5);
+        e.mem.set_f32(this + 0x2c, 1.0);
+        e.mem.set_u32(this + 0x5c, 0x7fc0_0000);
+        e.mem.set_f32(this + 0x30, 3.0);
+        e.mem.set_u32(this + 0x58, 2);
+        e.mem.set_u32(this + 0x38, 9);
+        e.mem.set_u32(this + 0x3c, list);
+        let strings = strings(&mut e, 4);
+        e.call(0x00ba_9890, &args![this, strings]);
+        assert_eq!(
+            slots(&e, strings),
+            vec![
+                0x1cc0_0000,
+                0x2000_0000 | FLAG_NAMES[0],
+                0x2000_0000 | FLAG_NAMES[7],
+                0x2000_0000 | FLAG_NAMES[31],
+                0x2000_0000 | FLAG_NAMES[55],
+                0x3000_0000 | (LABEL_ALPHA & 0xfff),
+                0x3000_3000 | (LABEL_ENVMAP_SCALE & 0xfff),
+                0x4000_2000 | (LABEL_SHADER_INDEX & 0xfff),
+                0x4000_9000 | (LABEL_LAST_PASS_STATE & 0xfff),
+                0x5000_3000 | (LABEL_PASS_COUNT & 0xfff),
+                0x6010_5000 | (LABEL_FIRST_PASS & 0xfff),
+                0x603f_6000 | (LABEL_PASS & 0xfff),
+            ]
+        );
+        assert_eq!(e.mem.u16(strings + 0xc), 4);
+        // Every add past the capacity first asks for more room.
+        let grows = calls(&e, STRINGS_SET_SIZE);
+        assert_eq!(grows[0], vec![strings, 6]);
+        assert_eq!(calls(&e, GET_PASS_NAME), vec![vec![5], vec![0x2f6]]);
+        // Without a pass list: the not-found line.
+        e.mem.set_u32(this + 0x3c, 0);
+        let strings = self::strings(&mut e, 16);
+        e.call(0x00ba_9890, &args![this, strings]);
+        assert_eq!(
+            slots(&e, strings).last(),
+            Some(&(0x1000_0000 | LABEL_NO_PASS_LIST))
+        );
+    }
+
+    #[test]
+    fn inline_add_counts_used_slots() {
+        let mut e = rig();
+        let strings = strings(&mut e, 2);
+        viewer_strings_add_inline(&mut e, strings, 5);
+        viewer_strings_add_inline(&mut e, strings, 0);
+        assert_eq!(slots(&e, strings), vec![5, 0]);
+        assert_eq!(e.mem.u16(strings + 0xc), 1);
+        // A resize that leaves the size above the index: the slot's old value decides.
+        let base = e.mem.u32(strings + 4);
+        e.mem.set_u32(base + 8, 7);
+        e.register(STRINGS_SET_SIZE, |e, a| {
+            e.mem.set_u16(a[0] + 8, 8);
+            e.mem.set_u16(a[0] + 0xa, 4);
+            Ret::default()
+        });
+        viewer_strings_add_inline(&mut e, strings, 0);
+        assert_eq!(e.mem.u32(base + 8), 0);
+        assert_eq!(e.mem.u16(strings + 0xc), 0);
+        assert_eq!(e.mem.u16(strings + 0xa), 4);
+        assert_eq!(calls(&e, STRINGS_SET_SIZE), vec![vec![strings, 4]]);
     }
 }

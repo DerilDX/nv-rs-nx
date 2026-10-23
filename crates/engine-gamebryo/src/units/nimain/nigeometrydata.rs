@@ -941,6 +941,850 @@ pub fn ni_geometry_data_save_binary(e: &mut Engine, this: Ptr, stream: Ptr) {
     e.vcall(stream, 0x30, &args![additional]);
 }
 
+/// `NiObject::IsEqual` (`00a5d470`, the other object) and `NiObject::GetViewerStrings`
+/// (`00a5d6e0`, the string array), both `thiscall`.
+const NI_OBJECT_IS_EQUAL: u32 = 0x00a5_d470;
+const NI_OBJECT_GET_VIEWER_STRINGS: u32 = 0x00a5_d6e0;
+/// `00e7cd40` (`thiscall`, no stack words; named `NiGPUProgramCache::IsNode` in the engine
+/// map, a folded body that answers 0): the base size `GetBlockAllocationSize` adds.
+const BASE_BLOCK_SIZE_00E7CD40: u32 = 0x00e7_cd40;
+/// The comparisons `IsEqual` runs per element, all `thiscall` on this side's element with
+/// the other's, nonzero when they differ: `00439090` (three floats; unit
+/// `multiboundmarkerdata.cpp`), `NiColorA::operator!=` (`004a4c90`, four floats; the engine
+/// map's name), `0051c330` (two floats; unit `tesobjecttree.cpp`) and `00a926b0` (the
+/// bound; unnamed).
+const POINTS_DIFFER_00439090: u32 = 0x0043_9090;
+const COLORS_DIFFER_004A4C90: u32 = 0x004a_4c90;
+const UVS_DIFFER_0051C330: u32 = 0x0051_c330;
+const BOUNDS_DIFFER_00A926B0: u32 = 0x00a9_26b0;
+/// `NiBound::GetViewerString` (`00a7fb20`, `thiscall` on the bound, a name).
+const BOUND_GET_VIEWER_STRING: u32 = 0x00a7_fb20;
+/// The array allocation (`00aa1070`, `cdecl`, one word; unnamed in the engine map).
+const ALLOCATE_ARRAY: u32 = 0x00aa_1070;
+/// `NiGetViewerString` (`00a7d330`, the class name), `NiGetViewerString_ov4` (`00a7d410`, a
+/// name and a byte), `NiGetViewerString_ov6` (`00a7d490`, a name and a 16-bit word),
+/// `NiGetViewerString_ov7` (`00a7d4d0`, a name and an integer) and `NiGetViewerString_ov10`
+/// (`00a7d5a0`, a name and a pointer), all `cdecl`, answering a new string.
+const VIEWER_STRING_CLASS: u32 = 0x00a7_d330;
+const VIEWER_STRING_BYTE: u32 = 0x00a7_d410;
+const VIEWER_STRING_SHORT: u32 = 0x00a7_d490;
+const VIEWER_STRING_INTEGER: u32 = 0x00a7_d4d0;
+const VIEWER_STRING_POINTER: u32 = 0x00a7_d5a0;
+/// The string array's grow (`0096ad30`, `thiscall`, the new size) and set-at (`0096ae90`,
+/// `thiscall`, (index, address of the string)), both unnamed in the engine map.
+const STRINGS_GROW: u32 = 0x0096_ad30;
+const STRINGS_SET_AT: u32 = 0x0096_ae90;
+/// The field names `GetViewerStrings` prints.
+const TEXT_M_US_VERTICES: u32 = 0x0109_c14c;
+const TEXT_M_PK_VERTEX: u32 = 0x0109_c140;
+const TEXT_M_PK_NORMAL: u32 = 0x0109_c134;
+const TEXT_NORMAL_BINORMAL_TANGENT: u32 = 0x0109_c11c;
+const TEXT_M_K_BOUND: u32 = 0x0109_c110;
+const TEXT_M_PK_COLOR: u32 = 0x0109_c104;
+const TEXT_NUM_TEXTURE_SETS: u32 = 0x0109_c0f0;
+const TEXT_M_PK_TEXTURE: u32 = 0x0109_c0e4;
+const TEXT_M_US_DIRTY_FLAGS: u32 = 0x0109_c0d4;
+const TEXT_M_UC_KEEP_FLAGS: u32 = 0x0109_c0c4;
+const TEXT_M_UC_COMPRESS_FLAGS: u32 = 0x0109_c0b0;
+const TEXT_M_SP_ADDITIONAL_GEOM_DATA: u32 = 0x0109_c098;
+/// `NiGeometryData` fields (Xbox PDB names, as `GetViewerStrings` prints them):
+/// `m_usVertices` (+0x8, 16 bits), the data flags (+0xc, 16 bits: bit 0 the texture sets,
+/// bits 12-15 the normal/binormal/tangent method), `m_usDirtyFlags` (+0xe), `m_kBound`
+/// (+0x10), `m_pkVertex` (+0x20, 12 bytes each), `m_pkNormal` (+0x24, 12 bytes each, three
+/// per vertex with binormals and tangents), `m_pkColor` (+0x28, 16 bytes each),
+/// `m_pkTexture` (+0x2c, 8 bytes each), `m_spAdditionalGeomData` (+0x30),
+/// `m_ucKeepFlags` (+0x38) and `m_ucCompressFlags` (+0x39).
+const VERTEX_COUNT: u32 = 0x8;
+const DATA_FLAGS: u32 = 0xc;
+const DIRTY_FLAGS: u32 = 0xe;
+const BOUND: u32 = 0x10;
+const VERTICES: u32 = 0x20;
+const NORMALS: u32 = 0x24;
+const COLORS: u32 = 0x28;
+const TEXTURES: u32 = 0x2c;
+const ADDITIONAL_DATA: u32 = 0x30;
+const KEEP_FLAGS: u32 = 0x38;
+const COMPRESS_FLAGS: u32 = 0x39;
+/// The normal/binormal/tangent method bits of the data flags.
+const NBT_METHOD_MASK: u32 = 0xf000;
+
+/// Appends `text` to a viewer-string array as the exe's inlined `Add` does: when the 16-bit
+/// size (+0xa) has reached the capacity (+0x8) the array grows to its step (+0xe) plus the
+/// size, then the string is stored at the old size (through a stack word holding it).
+fn push_viewer_string(e: &mut Engine, strings: Ptr, text: u32) {
+    let size = u32::from(e.mem.u16(strings.addr() + 0xa));
+    if size >= u32::from(e.mem.u16(strings.addr() + 8)) {
+        let step = u32::from(e.mem.u16(strings.addr() + 0xe));
+        e.call(STRINGS_GROW, &args![strings, step + size]);
+    }
+    e.with_stack(4, |e, slot| {
+        e.mem.set_u32(slot.addr(), text);
+        e.call(STRINGS_SET_AT, &args![strings, size, slot]);
+    });
+}
+
+/// The exe's float order of two arrays (`FLD a; FLD b; FCOMPP`): -1 at the first index
+/// where `b` is above `a`, 1 where it is below; equal and unordered (NaN) entries go on;
+/// 0 when all `count` match.
+fn float_order(e: &Engine, first: u32, second: u32, count: u32) -> i32 {
+    for index in 0..count {
+        let a = x87_load32(e.mem.u32(first.wrapping_add(4 * index)));
+        let b = x87_load32(e.mem.u32(second.wrapping_add(4 * index)));
+        if b > a {
+            return -1;
+        }
+        if b < a {
+            return 1;
+        }
+    }
+    0
+}
+
+// Translated from 00a66970 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (unit `nigeometrydata.cpp`); a register-argument helper of
+/// the vertex comparison `00a66db0`: the first array in `EAX`, the second in `ECX`, the
+/// float count in `EDI` (taken here in that order). Answers -1 at the first float where
+/// the second array's is greater, 1 where it is smaller, 0 when none differs (a NaN counts
+/// as equal).
+pub fn fn_00a66970(e: &mut Engine, first: Ptr, second: Ptr, count: u32) -> i32 {
+    float_order(e, first.addr(), second.addr(), count)
+}
+
+// Translated from 00a669d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiGeometryData::SetGroup` (Xbox PDB; static, one stack word): stores the group in
+/// `011f4880`, the global `GetGroup` answers.
+pub fn ni_geometry_data_set_group(e: &mut Engine, group: Ptr) {
+    e.mem.set_u32(GEOMETRY_GROUP, group.addr());
+}
+
+// Translated from 00a669f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiGeometryData::CreateNormals` (Xbox PDB; `thiscall`, a bool word): without normals
+/// (+0x24) allocates `m_usVertices` normals (three per vertex when the method bits are
+/// set), 12 bytes each (the size all ones on overflow); when the flag's byte is set the
+/// normals are cleared (`_memset`).
+pub fn ni_geometry_data_create_normals(e: &mut Engine, this: Ptr, initialize: u32) {
+    let base = this.addr();
+    let per_vertex = if u32::from(e.mem.u16(base + DATA_FLAGS)) & NBT_METHOD_MASK != 0 {
+        3
+    } else {
+        1
+    };
+    if e.mem.u32(base + NORMALS) == 0 {
+        let count = u32::from(e.mem.u16(base + VERTEX_COUNT)).wrapping_mul(per_vertex);
+        let normals = allocate(e, checked_size(count, 12));
+        e.mem.set_u32(base + NORMALS, normals);
+    }
+    if initialize as u8 != 0 {
+        let count = u32::from(e.mem.u16(base + VERTEX_COUNT)).wrapping_mul(per_vertex);
+        let normals = e.mem.u32(base + NORMALS);
+        e.call(MEMSET, &args![normals, 0u32, count.wrapping_mul(12)]);
+    }
+}
+
+// Translated from 00a66a60 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (unit `nigeometrydata.cpp`; `thiscall`, one word); by its body
+/// the setter of the normal/binormal/tangent method: nothing when the method bits (+0xc,
+/// 0xf000) already equal the word; otherwise they take it (the low 12 bits kept) and, when
+/// there are normals, a new array (one or, with a method, three normals per vertex, 12 bytes
+/// each) gets the old normals, the first binormal cleared when there is a method, the old
+/// array is freed and the new one kept.
+pub fn fn_00a66a60(e: &mut Engine, this: Ptr, method: u32) {
+    let base = this.addr();
+    let flags = u32::from(e.mem.u16(base + DATA_FLAGS));
+    if flags & NBT_METHOD_MASK == method {
+        return;
+    }
+    e.mem
+        .set_u16(base + DATA_FLAGS, ((flags & 0xfff) | method) as u16);
+    if e.mem.u32(base + NORMALS) == 0 {
+        return;
+    }
+    let per_vertex = if method != 0 { 3 } else { 1 };
+    let count = u32::from(e.mem.u16(base + VERTEX_COUNT)).wrapping_mul(per_vertex);
+    let normals = allocate(e, checked_size(count, 12));
+    let mut index = 0u32;
+    while index < u32::from(e.mem.u16(base + VERTEX_COUNT)) {
+        let old = e.mem.u32(base + NORMALS).wrapping_add(12 * index);
+        for offset in [0u32, 4, 8] {
+            let word = e.mem.u32(old + offset);
+            e.mem
+                .set_u32(normals.wrapping_add(12 * index + offset), word);
+        }
+        index += 1;
+    }
+    if method != 0 {
+        let binormal = normals.wrapping_add(12 * u32::from(e.mem.u16(base + VERTEX_COUNT)));
+        for offset in [0u32, 4, 8] {
+            e.mem.set_u32(binormal + offset, 0);
+        }
+    }
+    let old = e.mem.u32(base + NORMALS);
+    free(e, old);
+    e.mem.set_u32(base + NORMALS, normals);
+}
+
+// Translated from 00a66b30 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiGeometryData::SetData` (Xbox PDB; `thiscall`, seven words): the vertex count (16
+/// bits), vertices and normals are stored; when the active vertex count (slot +0x90) is not
+/// 0 and there are vertices the bound is computed from them (`NiBound::ComputeFromData`);
+/// then the colours (+0x28) and texture coordinates (+0x2c) are stored and the data flags
+/// become their bits 1-11 kept, bit 0 from the sixth word and the seventh word's 16 bits
+/// ored in.
+#[allow(clippy::too_many_arguments)]
+pub fn ni_geometry_data_set_data(
+    e: &mut Engine,
+    this: Ptr,
+    count: u32,
+    vertices: Ptr,
+    normals: Ptr,
+    colors: Ptr,
+    textures: Ptr,
+    texture_sets: u32,
+    method: u32,
+) {
+    let base = this.addr();
+    e.mem.set_u16(base + VERTEX_COUNT, count as u16);
+    e.mem.set_u32(base + VERTICES, vertices.addr());
+    e.mem.set_u32(base + NORMALS, normals.addr());
+    let active = e.vcall(base, SLOT_GET_ACTIVE_VERTEX_COUNT, &args![]).u16();
+    let vertices = e.mem.u32(base + VERTICES);
+    if active != 0 && vertices != 0 {
+        e.call(
+            BOUND_COMPUTE_FROM_DATA,
+            &args![base + BOUND, u32::from(active), vertices],
+        );
+    }
+    let flags = e.mem.u16(base + DATA_FLAGS);
+    e.mem.set_u32(base + TEXTURES, textures.addr());
+    e.mem.set_u32(base + COLORS, colors.addr());
+    let flags = (flags & 0x0ffe) | (texture_sets & 1) as u16 | method as u16;
+    e.mem.set_u16(base + DATA_FLAGS, flags);
+}
+
+// Translated from 00a66c00 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiGeometryData::ContainsVertexData` (Xbox PDB; `thiscall`, the parameter): true when
+/// the object at +0x34 says so (its slot +4); otherwise by the parameter (the exe's jump
+/// table): 0 vertices, 3 normals, 4 colours, 5 to 12 the texture set `n - 5` (texture
+/// coordinates and bit 0 of the flags at least `n - 4`), 13 and 14 normals with a
+/// normal/binormal/tangent method; 1, 2 and anything above 14 false.
+pub fn ni_geometry_data_contains_vertex_data(e: &mut Engine, this: Ptr, parameter: u32) -> bool {
+    let base = this.addr();
+    let other = e.mem.u32(base + 0x34);
+    if other != 0 && e.vcall(other, 4, &args![parameter]).bool() {
+        return true;
+    }
+    let sets = e.mem.u8(base + DATA_FLAGS) & 1;
+    match parameter {
+        0 => e.mem.u32(base + VERTICES) != 0,
+        3 => e.mem.u32(base + NORMALS) != 0,
+        4 => e.mem.u32(base + COLORS) != 0,
+        5..=12 => e.mem.u32(base + TEXTURES) != 0 && sets >= (parameter - 4) as u8,
+        13 | 14 => {
+            e.mem.u32(base + NORMALS) != 0
+                && u32::from(e.mem.u16(base + DATA_FLAGS)) & NBT_METHOD_MASK != 0
+        }
+        _ => false,
+    }
+}
+
+// Translated from 00a66db0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (unit `nigeometrydata.cpp`; `thiscall`: two vertex indices
+/// (16 bits each) and a mask); by its body the vertex order of the sort: with mask bit 0 the
+/// two vertices' three floats, bit 1 the normals (three floats, `00a66970`), bit 2 the
+/// colours (four floats), bit 3 each texture set's two floats (the sets `count` vertices
+/// apart, the offset taken as 16 bits); the first difference answers -1 (the first vertex
+/// below the second) or 1; 0 when none differs. Missing normals, colours or texture
+/// coordinates are skipped; the vertices are read without a null check.
+pub fn fn_00a66db0(e: &mut Engine, this: Ptr, first: u32, second: u32, mask: u32) -> i32 {
+    let base = this.addr();
+    let first = first & 0xffff;
+    let second = second & 0xffff;
+    if mask & 1 != 0 {
+        let vertices = e.mem.u32(base + VERTICES);
+        let order = float_order(
+            e,
+            vertices.wrapping_add(12 * first),
+            vertices.wrapping_add(12 * second),
+            3,
+        );
+        if order != 0 {
+            return order;
+        }
+    }
+    let normals = e.mem.u32(base + NORMALS);
+    if normals != 0 && mask & 2 != 0 {
+        let order = float_order(
+            e,
+            normals.wrapping_add(12 * first),
+            normals.wrapping_add(12 * second),
+            3,
+        );
+        if order != 0 {
+            return order;
+        }
+    }
+    let colors = e.mem.u32(base + COLORS);
+    if colors != 0 && mask & 4 != 0 {
+        let order = float_order(
+            e,
+            colors.wrapping_add(16 * first),
+            colors.wrapping_add(16 * second),
+            4,
+        );
+        if order != 0 {
+            return order;
+        }
+    }
+    let textures = e.mem.u32(base + TEXTURES);
+    if textures != 0 && mask & 8 != 0 {
+        let count = u32::from(e.mem.u16(base + VERTEX_COUNT));
+        let sets = e.mem.u16(base + DATA_FLAGS) & 1;
+        let mut offset = 0u32;
+        let mut set = 0u16;
+        while set < sets {
+            let start = offset & 0xffff;
+            let order = float_order(
+                e,
+                textures.wrapping_add(8 * (start + first)),
+                textures.wrapping_add(8 * (start + second)),
+                2,
+            );
+            if order != 0 {
+                return order;
+            }
+            set += 1;
+            offset = offset.wrapping_add(count);
+        }
+    }
+    0
+}
+
+// Translated from 00a66f90 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiGeometryData::GetBlockAllocationSize` (Xbox PDB): the bytes of the arrays present
+/// (vertices 12 per vertex; normals 12, or 36 with a normal/binormal/tangent method; colours
+/// 16; texture coordinates 8 per vertex times bit 0 of the flags) plus the base size
+/// (`00e7cd40`).
+pub fn ni_geometry_data_get_block_allocation_size(e: &mut Engine, this: Ptr) -> u32 {
+    let base = this.addr();
+    let count = u32::from(e.mem.u16(base + VERTEX_COUNT));
+    let flags = u32::from(e.mem.u16(base + DATA_FLAGS));
+    let mut size = if e.mem.u32(base + VERTICES) != 0 {
+        count * 12
+    } else {
+        0
+    };
+    if e.mem.u32(base + NORMALS) != 0 {
+        let per_vertex = if flags & NBT_METHOD_MASK != 0 { 3 } else { 1 };
+        size = size.wrapping_add(per_vertex * count * 12);
+    }
+    if e.mem.u32(base + COLORS) != 0 {
+        size = size.wrapping_add(count << 4);
+    }
+    if e.mem.u32(base + TEXTURES) != 0 {
+        size = size.wrapping_add((flags & 1) * count * 8);
+    }
+    let rest = e.call(BASE_BLOCK_SIZE_00E7CD40, &args![this]).u32();
+    rest.wrapping_add(size)
+}
+
+// Translated from 00a67000 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (unit `nigeometrydata.cpp`; `thiscall`); by its body the
+/// normals' release: frees `m_pkNormal` (+0x24) through the memory manager and clears it
+/// when it is set.
+pub fn fn_00a67000(e: &mut Engine, this: Ptr) {
+    let normals = e.mem.u32(this.addr() + NORMALS);
+    if normals != 0 {
+        free(e, normals);
+        e.mem.set_u32(this.addr() + NORMALS, 0);
+    }
+}
+
+// Translated from 00a67020 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Named `NiGeometryData::SetBound` in the engine map, but the body copies this object's
+/// bound out (`thiscall`, the address of a bound; nothing for null): the centre's three
+/// words from +0x10, the radius (+0x1c) through the x87 stack twice (`FLD`/`FSTP` into the
+/// argument's stack word, then into the bound's +0xc).
+pub fn fn_00a67020(e: &mut Engine, this: Ptr, bound: Ptr) {
+    let out = bound.addr();
+    if out == 0 {
+        return;
+    }
+    let base = this.addr();
+    let radius = x87_quiet_bits(e.mem.u32(base + 0x1c));
+    for offset in [0u32, 4, 8] {
+        let word = e.mem.u32(base + BOUND + offset);
+        e.mem.set_u32(out + offset, word);
+    }
+    e.mem.set_u32(out + 0xc, radius);
+}
+
+// Translated from 00a672b0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (unit `nigeometrydata.cpp`; `thiscall`: the index array (16
+/// bits each), the comparison mask, the low and high positions); by its body the sort's
+/// median of three: of the indices at the low, middle (`(low + high) >> 1`, arithmetic)
+/// and high positions, the one whose vertex lies between the other two by `00a66db0`.
+/// Answers it (16 bits, zero-extended).
+pub fn fn_00a672b0(e: &mut Engine, this: Ptr, indices: Ptr, mask: u32, low: i32, high: i32) -> u32 {
+    let at = |e: &Engine, position: i32| {
+        u32::from(
+            e.mem.u16(
+                indices
+                    .addr()
+                    .wrapping_add((position as u32).wrapping_mul(2)),
+            ),
+        )
+    };
+    let middle = at(e, low.wrapping_add(high) >> 1);
+    let first = at(e, low);
+    if fn_00a66db0(e, this, first, middle, mask) < 0 {
+        let last = at(e, high);
+        if fn_00a66db0(e, this, middle, last, mask) < 0 {
+            return middle;
+        }
+        if fn_00a66db0(e, this, first, last, mask) < 0 {
+            return last;
+        }
+        return first;
+    }
+    let last = at(e, high);
+    if fn_00a66db0(e, this, first, last, mask) < 0 {
+        return first;
+    }
+    if fn_00a66db0(e, this, middle, last, mask) < 0 {
+        last
+    } else {
+        middle
+    }
+}
+
+/// The three-word answer `00a674b0`, `00a67530`, `00a675b0` and `00a67660` write: a
+/// pointer, a stride word and a byte.
+fn write_stream_answer(e: &mut Engine, out: u32, pointer: u32, stride: u32, flag: u8) {
+    e.mem.set_u32(out, pointer);
+    e.mem.set_u32(out + 4, stride);
+    e.mem.set_u8(out + 8, flag);
+}
+
+/// The additional data's stream query `00a72720` (`thiscall`, seven words: the kind, then
+/// six addresses) as these functions make it: `locals` holds the exe's six words (+0 the
+/// pointer, +4 the stride, +8 .. +0x14 the rest, +8 cleared just before the call).
+fn query_additional_data(e: &mut Engine, additional: u32, kind: u32, locals: u32) {
+    e.mem.set_u32(locals + 8, 0);
+    e.call(
+        ADDITIONAL_DATA_00A72720,
+        &args![
+            additional,
+            kind,
+            locals,
+            locals + 0x14,
+            locals + 0xc,
+            locals + 0x10,
+            locals + 8,
+            locals + 4
+        ],
+    );
+}
+
+/// The shared body of `00a674b0` and `00a67530`: with the keep byte (+0x3a) clear nothing
+/// is written; otherwise, when the additional data (+0x30) is ready (slot +0x8c) and its
+/// flags (+0x2c) have bit 0, its stream `kind` is queried; the pointer and stride found
+/// (0 and 0 without) go out with a 0 byte.
+fn additional_stream(e: &mut Engine, this: Ptr, out: Ptr, kind: u32) {
+    let base = this.addr();
+    if e.mem.u8(base + 0x3a) == 0 {
+        return;
+    }
+    let additional = e.mem.u32(base + ADDITIONAL_DATA);
+    let (pointer, stride) = e.with_stack(0x18, |e, locals| {
+        let l = locals.addr();
+        e.mem.set_u32(l + 4, 0);
+        e.mem.set_u32(l + 0xc, 0);
+        e.mem.set_u32(l, 0);
+        if additional != 0
+            && e.vcall(additional, SLOT_GET_VB_READY, &args![]).bool()
+            && e.mem.u8(additional + 0x2c) & 1 != 0
+        {
+            query_additional_data(e, additional, kind, l);
+        }
+        (e.mem.u32(l), e.mem.u32(l + 4))
+    });
+    write_stream_answer(e, out.addr(), pointer, stride, 0);
+}
+
+// Translated from 00a674b0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed and unplaced in the engine map (`thiscall`, the address of a three-word answer;
+/// its callers ignore `EAX`): the additional data's stream 1 (see `additional_stream`).
+pub fn fn_00a674b0(e: &mut Engine, this: Ptr, out: Ptr) {
+    additional_stream(e, this, out, 1);
+}
+
+// Translated from 00a67530 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed and unplaced in the engine map (`thiscall`, the address of a three-word answer;
+/// its callers ignore `EAX`): the additional data's stream 2 (see `additional_stream`).
+pub fn fn_00a67530(e: &mut Engine, this: Ptr, out: Ptr) {
+    additional_stream(e, this, out, 2);
+}
+
+// Translated from 00a675b0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed and unplaced in the engine map (`thiscall`, the address of a three-word answer);
+/// by its body the normals' stream: with the keep byte (+0x3a) clear nothing is written;
+/// otherwise, when the additional data (+0x30) is ready (slot +0x8c), its stream 1 or 3
+/// (bit 0 of its flags +0x2c doubled, ored with 1) is queried; a pointer found goes out
+/// with its stride, else the normals (+0x24) with a stride of 12; the byte is 0.
+pub fn fn_00a675b0(e: &mut Engine, this: Ptr, out: Ptr) {
+    let base = this.addr();
+    if e.mem.u8(base + 0x3a) == 0 {
+        return;
+    }
+    let additional = e.mem.u32(base + ADDITIONAL_DATA);
+    let found = e.with_stack(0x18, |e, locals| {
+        let l = locals.addr();
+        e.mem.set_u32(l + 4, 0);
+        e.mem.set_u32(l + 0xc, 0);
+        e.mem.set_u32(l, 0);
+        if additional == 0 {
+            return None;
+        }
+        if e.vcall(additional, SLOT_GET_VB_READY, &args![]).bool() {
+            let kind = ((e.mem.u32(additional + 0x2c) & 1) * 2) | 1;
+            query_additional_data(e, additional, kind, l);
+        }
+        let pointer = e.mem.u32(l);
+        (pointer != 0).then(|| (pointer, e.mem.u32(l + 4)))
+    });
+    let (pointer, stride) = found.unwrap_or_else(|| (e.mem.u32(base + NORMALS), 0xc));
+    write_stream_answer(e, out.addr(), pointer, stride, 0);
+}
+
+// Translated from 00a67660 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed and unplaced in the engine map (`thiscall`, the address of a three-word answer);
+/// by its body the colours' stream: with the keep byte (+0x3a) clear nothing is written.
+/// When the additional data (+0x30) is ready (slot +0x8c) but bit 1 of its flags (+0x2c) is
+/// clear, nothing is written either; with bit 1 its stream 2 or 4 (bit 0 doubled plus 2) is
+/// queried and bit 5 sets the answer's byte. A pointer found goes out with its stride, else
+/// the colours (+0x28) with a stride of 16.
+pub fn fn_00a67660(e: &mut Engine, this: Ptr, out: Ptr) {
+    let base = this.addr();
+    if e.mem.u8(base + 0x3a) == 0 {
+        return;
+    }
+    let additional = e.mem.u32(base + ADDITIONAL_DATA);
+    let mut flag = 0u8;
+    let found = e.with_stack(0x18, |e, locals| {
+        let l = locals.addr();
+        e.mem.set_u32(l + 4, 0);
+        e.mem.set_u32(l + 0xc, 0);
+        e.mem.set_u32(l, 0);
+        if additional == 0 {
+            return Some(None);
+        }
+        if e.vcall(additional, SLOT_GET_VB_READY, &args![]).bool() {
+            let flags = e.mem.u32(additional + 0x2c);
+            if flags & 2 == 0 {
+                return None;
+            }
+            let kind = u32::from(flags & 1 != 0) * 2 + 2;
+            query_additional_data(e, additional, kind, l);
+            if flags & 0x20 != 0 {
+                flag = 1;
+            }
+        }
+        let pointer = e.mem.u32(l);
+        Some((pointer != 0).then(|| (pointer, e.mem.u32(l + 4))))
+    });
+    let Some(found) = found else {
+        return;
+    };
+    let (pointer, stride) = found.unwrap_or_else(|| (e.mem.u32(base + COLORS), 0x10));
+    write_stream_answer(e, out.addr(), pointer, stride, flag);
+}
+
+/// The null pairing `IsEqual` applies to a pair of pointers: false when exactly one is
+/// null.
+fn both_or_neither(mine: u32, theirs: u32) -> bool {
+    (mine == 0) == (theirs == 0)
+}
+
+/// Whether any of `count` elements of `size` bytes differ by `differs` (this side's
+/// element `thiscall` with the other's).
+fn any_differ(e: &mut Engine, differs: u32, mine: u32, theirs: u32, count: u32, size: u32) -> bool {
+    (0..count).any(|index| {
+        let offset = index.wrapping_mul(size);
+        e.call(
+            differs,
+            &args![mine.wrapping_add(offset), theirs.wrapping_add(offset)],
+        )
+        .bool()
+    })
+}
+
+// Translated from 00a67840 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiGeometryData::IsEqual` (Xbox PDB): `NiObject::IsEqual`, the same vertex count, the
+/// vertices present on both or neither side, the same keep and compress bytes, every vertex
+/// equal (`00439090`); normals present on both or neither, with the same method bits and
+/// every normal (three per vertex with a method) equal; the bounds equal (`00a926b0`);
+/// colours on this side need colours on the other, texture coordinates on the other need
+/// them on this side, every colour equal (`NiColorA::operator!=`); texture coordinates on
+/// both or neither, with the same bit 0 of the flags and every coordinate pair (bit 0 times
+/// the vertex count) equal (`0051c330`); additional data on both or neither, and when on
+/// both, its slot +0x5c true for the other's.
+pub fn ni_geometry_data_is_equal(e: &mut Engine, this: Ptr, other: Ptr) -> bool {
+    if !e.call(NI_OBJECT_IS_EQUAL, &args![this, other]).bool() {
+        return false;
+    }
+    let t = this.addr();
+    let o = other.addr();
+    let count = e.mem.u16(t + VERTEX_COUNT);
+    if count != e.mem.u16(o.wrapping_add(VERTEX_COUNT)) {
+        return false;
+    }
+    let count = u32::from(count);
+    let vertices = e.mem.u32(t + VERTICES);
+    if !both_or_neither(vertices, e.mem.u32(o.wrapping_add(VERTICES)))
+        || e.mem.u8(t + KEEP_FLAGS) != e.mem.u8(o.wrapping_add(KEEP_FLAGS))
+        || e.mem.u8(t + COMPRESS_FLAGS) != e.mem.u8(o.wrapping_add(COMPRESS_FLAGS))
+    {
+        return false;
+    }
+    if vertices != 0 {
+        let theirs = e.mem.u32(o.wrapping_add(VERTICES));
+        if any_differ(e, POINTS_DIFFER_00439090, vertices, theirs, count, 12) {
+            return false;
+        }
+    }
+    let normals = e.mem.u32(t + NORMALS);
+    if !both_or_neither(normals, e.mem.u32(o.wrapping_add(NORMALS))) {
+        return false;
+    }
+    if normals != 0 {
+        let method = e.mem.u16(t + DATA_FLAGS) & 0xf000;
+        if method != e.mem.u16(o.wrapping_add(DATA_FLAGS)) & 0xf000 {
+            return false;
+        }
+        let count = u32::from(e.mem.u16(t + VERTEX_COUNT));
+        let total = if method != 0 { count * 3 } else { count };
+        let theirs = e.mem.u32(o.wrapping_add(NORMALS));
+        if any_differ(e, POINTS_DIFFER_00439090, normals, theirs, total, 12) {
+            return false;
+        }
+    }
+    if e.call(
+        BOUNDS_DIFFER_00A926B0,
+        &args![t + BOUND, o.wrapping_add(BOUND)],
+    )
+    .bool()
+    {
+        return false;
+    }
+    let colors = e.mem.u32(t + COLORS);
+    if colors != 0 && e.mem.u32(o.wrapping_add(COLORS)) == 0 {
+        return false;
+    }
+    if e.mem.u32(t + TEXTURES) == 0 && e.mem.u32(o.wrapping_add(TEXTURES)) != 0 {
+        return false;
+    }
+    if colors != 0 {
+        let count = u32::from(e.mem.u16(t + VERTEX_COUNT));
+        let theirs = e.mem.u32(o.wrapping_add(COLORS));
+        if any_differ(e, COLORS_DIFFER_004A4C90, colors, theirs, count, 16) {
+            return false;
+        }
+    }
+    let textures = e.mem.u32(t + TEXTURES);
+    if !both_or_neither(textures, e.mem.u32(o.wrapping_add(TEXTURES))) {
+        return false;
+    }
+    if textures != 0 {
+        let flags = u32::from(e.mem.u16(t + DATA_FLAGS));
+        if (e.mem.u8(o.wrapping_add(DATA_FLAGS)) ^ flags as u8) & 1 != 0 {
+            return false;
+        }
+        let total = (flags & 1) * u32::from(e.mem.u16(t + VERTEX_COUNT));
+        let theirs = e.mem.u32(o.wrapping_add(TEXTURES));
+        if any_differ(e, UVS_DIFFER_0051C330, textures, theirs, total, 8) {
+            return false;
+        }
+    }
+    let additional = e.mem.u32(t + ADDITIONAL_DATA);
+    let theirs = e.mem.u32(o.wrapping_add(ADDITIONAL_DATA));
+    if !both_or_neither(additional, theirs) {
+        return false;
+    }
+    if additional != 0 && theirs != 0 && !e.vcall(additional, 0x5c, &args![theirs]).bool() {
+        return false;
+    }
+    true
+}
+
+// Translated from 00a67aa0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (unit `nigeometrydata.cpp`; `cdecl`: stream, buffer, count);
+/// by its body the read of `count` texture-coordinate pairs: `count * 8` bytes from the
+/// stream's input (`m_pkIstr`, its read function with a component size word of 4 and one
+/// component), the position advanced by the result.
+pub fn fn_00a67aa0(e: &mut Engine, stream: Ptr, buffer: Ptr, count: u32) {
+    stream_read(e, stream.addr(), buffer.addr(), count.wrapping_mul(8), 4);
+}
+
+// Translated from 00a67dd0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (unit `nigeometrydata.cpp`; `thiscall`: the index array (16
+/// bits each), the comparison mask, the low and high positions, signed); by its body the
+/// quicksort of the indices by `00a66db0`: while `high > low`, the median of three
+/// (`00a672b0`) is the pivot, the indices are partitioned (from the top while the pivot
+/// sorts below, from the bottom while the index sorts below the pivot, swapping until the
+/// two meet); a split at the top end shortens the range by one, any other sorts the lower
+/// part recursively and goes on with the upper part.
+pub fn fn_00a67dd0(e: &mut Engine, this: Ptr, indices: Ptr, mask: u32, low: i32, high: i32) {
+    let a = indices.addr();
+    let at = |e: &Engine, position: i32| {
+        u32::from(e.mem.u16(a.wrapping_add((position as u32).wrapping_mul(2))))
+    };
+    let (mut low, mut high) = (low, high);
+    while high > low {
+        let pivot = fn_00a672b0(e, this, indices, mask, low, high);
+        let mut i = low.wrapping_sub(1);
+        let mut j = high.wrapping_add(1);
+        loop {
+            loop {
+                j = j.wrapping_sub(1);
+                if fn_00a66db0(e, this, pivot, at(e, j), mask) >= 0 {
+                    break;
+                }
+            }
+            loop {
+                i = i.wrapping_add(1);
+                if fn_00a66db0(e, this, at(e, i), pivot, mask) >= 0 {
+                    break;
+                }
+            }
+            if i >= j {
+                break;
+            }
+            let (from, to) = (at(e, i), at(e, j));
+            e.mem
+                .set_u16(a.wrapping_add((i as u32).wrapping_mul(2)), to as u16);
+            e.mem
+                .set_u16(a.wrapping_add((j as u32).wrapping_mul(2)), from as u16);
+        }
+        if j == high {
+            high = j.wrapping_sub(1);
+        } else {
+            fn_00a67dd0(e, this, indices, mask, low, j);
+            low = j.wrapping_add(1);
+        }
+    }
+}
+
+// Translated from 00a68820 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (unit `nigeometrydata.cpp`; `thiscall`: two addresses that
+/// receive arrays, and the comparison mask); by its body the vertex sort: two arrays of
+/// `m_usVertices` 16-bit words are allocated (`00aa1070`) into the two addresses, the
+/// first filled with 0, 1, ... and sorted by the mask (`00a67dd0` over 0 to count - 1), the
+/// second made its inverse (second[first[i]] = i).
+pub fn fn_00a68820(e: &mut Engine, this: Ptr, order: Ptr, inverse: Ptr, mask: u32) {
+    let base = this.addr();
+    let count = e.mem.u16(base + VERTEX_COUNT);
+    let bytes = u32::from(count) * 2;
+    let block = e.call(ALLOCATE_ARRAY, &args![bytes]).u32();
+    e.mem.set_u32(order.addr(), block);
+    let block = e.call(ALLOCATE_ARRAY, &args![bytes]).u32();
+    e.mem.set_u32(inverse.addr(), block);
+    let mut index = 0u16;
+    while index < count {
+        let array = e.mem.u32(order.addr());
+        e.mem
+            .set_u16(array.wrapping_add(2 * u32::from(index)), index);
+        index += 1;
+    }
+    let array = e.mem.u32(order.addr());
+    let high = u32::from(count).wrapping_sub(1) as i32;
+    fn_00a67dd0(e, this, Ptr::new(array), mask, 0, high);
+    let mut index = 0u16;
+    while index < count {
+        let array = e.mem.u32(order.addr());
+        let at = e.mem.u16(array.wrapping_add(2 * u32::from(index)));
+        let back = e.mem.u32(inverse.addr());
+        e.mem.set_u16(back.wrapping_add(2 * u32::from(at)), index);
+        index += 1;
+    }
+}
+
+// Translated from 00a688b0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiGeometryData::GetViewerStrings` (Xbox PDB): `NiObject::GetViewerStrings`, the class
+/// name, then each field (`m_usVertices`, `m_pkVertex`, `m_pkNormal`, the method bits as
+/// `NormalBinormalTangent`, `m_kBound` through `NiBound::GetViewerString`, `m_pkColor`, bit 0
+/// of the flags as `Num Texture Sets`, `m_pkTexture`, `m_usDirtyFlags`, `m_ucKeepFlags`,
+/// `m_ucCompressFlags`), each appended to the array; the additional data, when present,
+/// adds its own strings (its slot +0x60, a tail call), else `m_spAdditionalGeomData` with 0.
+pub fn ni_geometry_data_get_viewer_strings(e: &mut Engine, this: Ptr, strings: Ptr) {
+    let t = this.addr();
+    e.call(NI_OBJECT_GET_VIEWER_STRINGS, &args![this, strings]);
+    let name = e.mem.u32(NI_GEOMETRY_DATA_RTTI);
+    let text = e.call(VIEWER_STRING_CLASS, &args![name]).u32();
+    push_viewer_string(e, strings, text);
+    let count = u32::from(e.mem.u16(t + VERTEX_COUNT));
+    let text = e
+        .call(VIEWER_STRING_SHORT, &args![TEXT_M_US_VERTICES, count])
+        .u32();
+    push_viewer_string(e, strings, text);
+    for (label, offset) in [(TEXT_M_PK_VERTEX, VERTICES), (TEXT_M_PK_NORMAL, NORMALS)] {
+        let pointer = e.mem.u32(t + offset);
+        let text = e.call(VIEWER_STRING_POINTER, &args![label, pointer]).u32();
+        push_viewer_string(e, strings, text);
+    }
+    let method = u32::from(e.mem.u16(t + DATA_FLAGS)) & NBT_METHOD_MASK;
+    let text = e
+        .call(
+            VIEWER_STRING_INTEGER,
+            &args![TEXT_NORMAL_BINORMAL_TANGENT, method],
+        )
+        .u32();
+    push_viewer_string(e, strings, text);
+    let text = e
+        .call(BOUND_GET_VIEWER_STRING, &args![t + BOUND, TEXT_M_K_BOUND])
+        .u32();
+    push_viewer_string(e, strings, text);
+    let colors = e.mem.u32(t + COLORS);
+    let text = e
+        .call(VIEWER_STRING_POINTER, &args![TEXT_M_PK_COLOR, colors])
+        .u32();
+    push_viewer_string(e, strings, text);
+    let sets = u32::from(e.mem.u16(t + DATA_FLAGS) & 1);
+    let text = e
+        .call(VIEWER_STRING_SHORT, &args![TEXT_NUM_TEXTURE_SETS, sets])
+        .u32();
+    push_viewer_string(e, strings, text);
+    let textures = e.mem.u32(t + TEXTURES);
+    let text = e
+        .call(VIEWER_STRING_POINTER, &args![TEXT_M_PK_TEXTURE, textures])
+        .u32();
+    push_viewer_string(e, strings, text);
+    let dirty = u32::from(e.mem.u16(t + DIRTY_FLAGS));
+    let text = e
+        .call(VIEWER_STRING_SHORT, &args![TEXT_M_US_DIRTY_FLAGS, dirty])
+        .u32();
+    push_viewer_string(e, strings, text);
+    for (label, offset) in [
+        (TEXT_M_UC_KEEP_FLAGS, KEEP_FLAGS),
+        (TEXT_M_UC_COMPRESS_FLAGS, COMPRESS_FLAGS),
+    ] {
+        let byte = u32::from(e.mem.u8(t + offset));
+        let text = e.call(VIEWER_STRING_BYTE, &args![label, byte]).u32();
+        push_viewer_string(e, strings, text);
+    }
+    let additional = e.mem.u32(t + ADDITIONAL_DATA);
+    if additional != 0 {
+        e.vcall(additional, 0x60, &args![strings]);
+        return;
+    }
+    let text = e
+        .call(
+            VIEWER_STRING_INTEGER,
+            &args![TEXT_M_SP_ADDITIONAL_GEOM_DATA, 0u32],
+        )
+        .u32();
+    push_viewer_string(e, strings, text);
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -978,6 +1822,35 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00a6_7c00, ni_geometry_data_ni_geometry_data(Ptr) -> Ptr),
         entry!(0x00a67bf0, ni_geometry_data_get_rtti() -> Ptr),
         entry!(0x00a68800, ni_geometry_data_scalar_deleting_destructor(Ptr, u32) -> Ptr),
+        entry!(0x00a6_6970, fn_00a66970(Ptr, Ptr, u32) -> i32),
+        entry!(0x00a6_69d0, ni_geometry_data_set_group(Ptr)),
+        entry!(0x00a6_69f0, ni_geometry_data_create_normals(Ptr, u32)),
+        entry!(0x00a6_6a60, fn_00a66a60(Ptr, u32)),
+        entry!(
+            0x00a6_6b30,
+            ni_geometry_data_set_data(Ptr, u32, Ptr, Ptr, Ptr, Ptr, u32, u32)
+        ),
+        entry!(
+            0x00a6_6c00,
+            ni_geometry_data_contains_vertex_data(Ptr, u32) -> bool
+        ),
+        entry!(0x00a6_6db0, fn_00a66db0(Ptr, u32, u32, u32) -> i32),
+        entry!(
+            0x00a6_6f90,
+            ni_geometry_data_get_block_allocation_size(Ptr) -> u32
+        ),
+        entry!(0x00a6_7000, fn_00a67000(Ptr)),
+        entry!(0x00a6_7020, fn_00a67020(Ptr, Ptr)),
+        entry!(0x00a6_72b0, fn_00a672b0(Ptr, Ptr, u32, i32, i32) -> u32),
+        entry!(0x00a6_74b0, fn_00a674b0(Ptr, Ptr)),
+        entry!(0x00a6_7530, fn_00a67530(Ptr, Ptr)),
+        entry!(0x00a6_75b0, fn_00a675b0(Ptr, Ptr)),
+        entry!(0x00a6_7660, fn_00a67660(Ptr, Ptr)),
+        entry!(0x00a6_7840, ni_geometry_data_is_equal(Ptr, Ptr) -> bool),
+        entry!(0x00a6_7aa0, fn_00a67aa0(Ptr, Ptr, u32)),
+        entry!(0x00a6_7dd0, fn_00a67dd0(Ptr, Ptr, u32, i32, i32)),
+        entry!(0x00a6_8820, fn_00a68820(Ptr, Ptr, Ptr, u32)),
+        entry!(0x00a6_88b0, ni_geometry_data_get_viewer_strings(Ptr, Ptr)),
     ]
 }
 
@@ -1687,5 +2560,550 @@ mod batch_b011_tests {
         assert_eq!(log[log.len() - 2], (24, 4, 0));
         // The dirty flags' bits 0x7000, low byte first.
         assert_eq!(log[log.len() - 1], (2, 2, 0));
+    }
+}
+
+#[cfg(test)]
+mod n016_tests {
+    use super::*;
+    use crate::units::nimain::nimainsdm::test_support::{calls_to, engine_with_counting};
+
+    /// The test vtable (slot `n` at `slot(n)`, each a double answering 1 unless a test
+    /// registers another).
+    const VTABLE: u32 = 0x0e10_0000;
+    fn slot(offset: u32) -> u32 {
+        0x0e00_0000 + offset
+    }
+
+    fn engine() -> Engine {
+        let mut e = engine_with_counting();
+        let slots: Vec<u32> = (0..0x30).map(|i| slot(4 * i)).collect();
+        e.put_vtable(VTABLE, &slots);
+        for i in 0..0x30u32 {
+            e.register(slot(4 * i), |_, _| 1u32.into_ret());
+        }
+        e.register(MEMORY_MANAGER_ALLOCATE, |e, a| {
+            e.mem.alloc(a[1].max(4)).into_ret()
+        });
+        e.register(ALLOCATE_ARRAY, |e, a| e.mem.alloc(a[0].max(4)).into_ret());
+        for double in [MEMORY_MANAGER_FREE, MEMSET, STRINGS_GROW, STRINGS_SET_AT] {
+            e.register(double, |_, _| Ret::default());
+        }
+        e.call_log = Some(vec![]);
+        e
+    }
+
+    /// A geometry data object with `count` vertices (the vtable above).
+    fn data(e: &mut Engine, count: u16) -> u32 {
+        let this = e.mem.alloc(0x40);
+        e.mem.set_u32(this, VTABLE);
+        e.mem.set_u16(this + VERTEX_COUNT, count);
+        this
+    }
+
+    fn floats(e: &mut Engine, values: &[f32]) -> u32 {
+        let block = e.mem.alloc(4 * values.len() as u32 + 4);
+        for (i, v) in values.iter().enumerate() {
+            e.mem.set_f32(block + 4 * i as u32, *v);
+        }
+        block
+    }
+
+    #[test]
+    fn float_compare_orders_by_the_first_difference() {
+        let mut e = engine();
+        let a = floats(&mut e, &[1.0, 2.0, 3.0]);
+        let b = floats(&mut e, &[1.0, 2.5, 0.0]);
+        assert_eq!(e.call(0x00a6_6970, &args![a, b, 3u32]).i32(), -1);
+        assert_eq!(e.call(0x00a6_6970, &args![b, a, 3u32]).i32(), 1);
+        assert_eq!(e.call(0x00a6_6970, &args![a, b, 1u32]).i32(), 0);
+        let nan = floats(&mut e, &[f32::NAN, 2.0, 3.0]);
+        assert_eq!(e.call(0x00a6_6970, &args![nan, a, 3u32]).i32(), 0);
+    }
+
+    #[test]
+    fn set_group_stores_the_global() {
+        let mut e = engine();
+        e.call(0x00a6_69d0, &args![0x0e70_0000u32]);
+        assert_eq!(e.mem.u32(GEOMETRY_GROUP), 0x0e70_0000);
+    }
+
+    #[test]
+    fn create_normals_allocates_and_clears() {
+        let mut e = engine();
+        let this = data(&mut e, 5);
+        e.call(0x00a6_69f0, &args![this, 0x100u32]);
+        assert_eq!(
+            calls_to(&e, MEMORY_MANAGER_ALLOCATE),
+            vec![vec![MEMORY_MANAGER_OBJECT, 60]]
+        );
+        assert!(calls_to(&e, MEMSET).is_empty());
+        let normals = e.mem.u32(this + NORMALS);
+        // With a method: three per vertex; existing normals are kept and cleared.
+        e.mem.set_u16(this + DATA_FLAGS, 0x1000);
+        e.call(0x00a6_69f0, &args![this, 1u32]);
+        assert_eq!(calls_to(&e, MEMORY_MANAGER_ALLOCATE).len(), 1);
+        assert_eq!(calls_to(&e, MEMSET), vec![vec![normals, 0, 180]]);
+        e.mem.set_u32(this + NORMALS, 0);
+        e.call(0x00a6_69f0, &args![this, 0u32]);
+        assert_eq!(calls_to(&e, MEMORY_MANAGER_ALLOCATE)[1][1], 180);
+    }
+
+    #[test]
+    fn method_setter_regrows_the_normals() {
+        let mut e = engine();
+        let this = data(&mut e, 2);
+        e.mem.set_u16(this + DATA_FLAGS, 0x0005);
+        let old = floats(&mut e, &[1.0, 2.0, 3.0, 4.0, 5.0, 6.0]);
+        e.mem.set_u32(this + NORMALS, old);
+        e.call(0x00a6_6a60, &args![this, 0x1000u32]);
+        assert_eq!(e.mem.u16(this + DATA_FLAGS), 0x1005);
+        assert_eq!(calls_to(&e, MEMORY_MANAGER_ALLOCATE)[0][1], 72);
+        let new = e.mem.u32(this + NORMALS);
+        assert_ne!(new, old);
+        assert_eq!(e.mem.f32(new + 20), 6.0);
+        assert_eq!(e.mem.bytes(new + 24, 12), vec![0; 12]);
+        assert_eq!(
+            calls_to(&e, MEMORY_MANAGER_FREE),
+            vec![vec![MEMORY_MANAGER_OBJECT, old]]
+        );
+        // The same method again changes nothing; no normals only sets the bits.
+        e.call(0x00a6_6a60, &args![this, 0x1000u32]);
+        assert_eq!(calls_to(&e, MEMORY_MANAGER_ALLOCATE).len(), 1);
+        e.mem.set_u32(this + NORMALS, 0);
+        e.call(0x00a6_6a60, &args![this, 0u32]);
+        assert_eq!(e.mem.u16(this + DATA_FLAGS), 0x0005);
+        assert_eq!(calls_to(&e, MEMORY_MANAGER_ALLOCATE).len(), 1);
+    }
+
+    #[test]
+    fn set_data_stores_the_arrays_and_flags() {
+        let mut e = engine();
+        e.register(BOUND_COMPUTE_FROM_DATA, |_, _| Ret::default());
+        e.register(slot(0x90), |_, _| 0x0001_0003u32.into_ret());
+        let this = data(&mut e, 0);
+        e.mem.set_u16(this + DATA_FLAGS, 0xf0f1);
+        let args = args![this, 0x0003u32, 0x10u32, 0x20u32, 0x30u32, 0x40u32, 3u32, 0x2000u32];
+        e.call(0x00a6_6b30, &args);
+        assert_eq!(e.mem.u16(this + VERTEX_COUNT), 3);
+        assert_eq!(
+            [VERTICES, NORMALS, COLORS, TEXTURES].map(|o| e.mem.u32(this + o)),
+            [0x10, 0x20, 0x30, 0x40]
+        );
+        assert_eq!(e.mem.u16(this + DATA_FLAGS), 0x20f1);
+        assert_eq!(
+            calls_to(&e, BOUND_COMPUTE_FROM_DATA),
+            vec![vec![this + BOUND, 3, 0x10]]
+        );
+        // No vertices: no bound.
+        let args = args![this, 0x0003u32, 0u32, 0x20u32, 0x30u32, 0x40u32, 2u32, 0u32];
+        e.call(0x00a6_6b30, &args);
+        assert_eq!(calls_to(&e, BOUND_COMPUTE_FROM_DATA).len(), 1);
+        assert_eq!(e.mem.u16(this + DATA_FLAGS), 0x00f0);
+    }
+
+    #[test]
+    fn contains_vertex_data_follows_the_jump_table() {
+        let mut e = engine();
+        let this = data(&mut e, 1);
+        let ask =
+            |e: &mut Engine, parameter: u32| e.call(0x00a6_6c00, &args![this, parameter]).bool();
+        for parameter in 0..16 {
+            assert!(!ask(&mut e, parameter));
+        }
+        for (offset, parameter) in [(VERTICES, 0u32), (NORMALS, 3), (COLORS, 4)] {
+            e.mem.set_u32(this + offset, 0x10);
+            assert!(ask(&mut e, parameter));
+        }
+        assert!(!ask(&mut e, 1));
+        assert!(!ask(&mut e, 13));
+        e.mem.set_u16(this + DATA_FLAGS, 0x1000);
+        assert!(ask(&mut e, 13) && ask(&mut e, 14));
+        e.mem.set_u32(this + TEXTURES, 0x10);
+        assert!(!ask(&mut e, 5));
+        e.mem.set_u16(this + DATA_FLAGS, 0x0001);
+        assert!(ask(&mut e, 5));
+        assert!(!ask(&mut e, 6));
+        assert!(!ask(&mut e, 15));
+        // The object at +0x34 answers first.
+        let other = e.mem.alloc(4);
+        e.mem.set_u32(other, VTABLE);
+        e.mem.set_u32(this + 0x34, other);
+        assert!(ask(&mut e, 1));
+        assert_eq!(calls_to(&e, slot(4)), vec![vec![other, 1]]);
+    }
+
+    #[test]
+    fn vertex_order_compares_the_masked_arrays() {
+        let mut e = engine();
+        let this = data(&mut e, 2);
+        let vertices = floats(&mut e, &[1.0, 1.0, 1.0, 1.0, 1.0, 1.0]);
+        let normals = floats(&mut e, &[0.0, 0.0, 1.0, 0.0, 0.0, 2.0]);
+        let colors = floats(&mut e, &[0.0; 8]);
+        let textures = floats(&mut e, &[0.5, 0.5, 0.25, 0.5]);
+        e.mem.set_u32(this + VERTICES, vertices);
+        e.mem.set_u32(this + NORMALS, normals);
+        e.mem.set_u32(this + COLORS, colors);
+        e.mem.set_u32(this + TEXTURES, textures);
+        let order = |e: &mut Engine, a: u32, b: u32, mask: u32| {
+            e.call(0x00a6_6db0, &args![this, a, b, mask]).i32()
+        };
+        assert_eq!(order(&mut e, 0, 1, 1), 0);
+        assert_eq!(order(&mut e, 0, 1, 3), -1);
+        assert_eq!(order(&mut e, 1, 0, 3), 1);
+        assert_eq!(order(&mut e, 0x1_0000, 0x1_0001, 2), -1);
+        assert_eq!(order(&mut e, 0, 1, 4), 0);
+        // Texture sets count only with bit 0 of the flags.
+        assert_eq!(order(&mut e, 0, 1, 8), 0);
+        e.mem.set_u16(this + DATA_FLAGS, 1);
+        assert_eq!(order(&mut e, 0, 1, 8), 1);
+        e.mem.set_u32(this + NORMALS, 0);
+        assert_eq!(order(&mut e, 0, 1, 0xa), 1);
+    }
+
+    #[test]
+    fn block_allocation_size_adds_the_arrays() {
+        let mut e = engine();
+        e.register(BASE_BLOCK_SIZE_00E7CD40, |_, _| 0x100u32.into_ret());
+        let this = data(&mut e, 4);
+        let size = |e: &mut Engine| e.call(0x00a6_6f90, &args![this]).u32();
+        assert_eq!(size(&mut e), 0x100);
+        e.mem.set_u32(this + VERTICES, 1);
+        e.mem.set_u32(this + NORMALS, 1);
+        e.mem.set_u32(this + COLORS, 1);
+        e.mem.set_u32(this + TEXTURES, 1);
+        assert_eq!(size(&mut e), 0x100 + 48 + 48 + 64);
+        e.mem.set_u16(this + DATA_FLAGS, 0x2001);
+        assert_eq!(size(&mut e), 0x100 + 48 + 144 + 64 + 32);
+        assert_eq!(calls_to(&e, BASE_BLOCK_SIZE_00E7CD40)[0], vec![this]);
+    }
+
+    #[test]
+    fn normals_release_frees_once() {
+        let mut e = engine();
+        let this = data(&mut e, 1);
+        e.mem.set_u32(this + NORMALS, 0x0e70_0000);
+        e.call(0x00a6_7000, &args![this]);
+        e.call(0x00a6_7000, &args![this]);
+        assert_eq!(
+            calls_to(&e, MEMORY_MANAGER_FREE),
+            vec![vec![MEMORY_MANAGER_OBJECT, 0x0e70_0000]]
+        );
+        assert_eq!(e.mem.u32(this + NORMALS), 0);
+    }
+
+    #[test]
+    fn bound_copy_writes_centre_and_radius() {
+        let mut e = engine();
+        let this = data(&mut e, 1);
+        for (i, word) in [1.0f32, 2.0, 3.0].iter().enumerate() {
+            e.mem.set_f32(this + BOUND + 4 * i as u32, *word);
+        }
+        e.mem.set_u32(this + 0x1c, 0x7f80_0001);
+        let out = e.mem.alloc(0x10);
+        e.call(0x00a6_7020, &args![this, out]);
+        assert_eq!(e.mem.f32(out + 8), 3.0);
+        assert_eq!(e.mem.u32(out + 0xc), 0x7fc0_0001);
+        e.call(0x00a6_7020, &args![this, 0u32]);
+    }
+
+    /// A data object whose vertices are the given x values (y, z 0) and an index array.
+    fn sortable(e: &mut Engine, xs: &[f32]) -> (u32, u32) {
+        let this = data(e, xs.len() as u16);
+        let words: Vec<f32> = xs.iter().flat_map(|x| [*x, 0.0, 0.0]).collect();
+        let vertices = floats(e, &words);
+        e.mem.set_u32(this + VERTICES, vertices);
+        let indices = e.mem.alloc(2 * xs.len() as u32 + 2);
+        for i in 0..xs.len() as u32 {
+            e.mem.set_u16(indices + 2 * i, i as u16);
+        }
+        (this, indices)
+    }
+
+    #[test]
+    fn median_of_three_picks_the_middle_vertex() {
+        let mut e = engine();
+        for (xs, median) in [
+            ([1.0f32, 2.0, 3.0], 1u32),
+            ([3.0, 2.0, 1.0], 1),
+            ([2.0, 3.0, 1.0], 0),
+            ([1.0, 3.0, 2.0], 2),
+            ([3.0, 1.0, 2.0], 2),
+            ([2.0, 1.0, 3.0], 0),
+        ] {
+            let (this, indices) = sortable(&mut e, &xs);
+            let answer = e.call(0x00a6_72b0, &args![this, indices, 1u32, 0i32, 2i32]);
+            assert_eq!(answer.u32(), median, "{xs:?}");
+        }
+    }
+
+    #[test]
+    fn quicksort_and_vertex_sort_order_the_indices() {
+        let mut e = engine();
+        let xs = [5.0f32, 1.0, 4.0, 1.0, 3.0, 9.0, 0.0];
+        let (this, indices) = sortable(&mut e, &xs);
+        e.call(0x00a6_7dd0, &args![this, indices, 1u32, 0i32, 6i32]);
+        let sorted: Vec<f32> = (0..7)
+            .map(|i| xs[e.mem.u16(indices + 2 * i) as usize])
+            .collect();
+        assert_eq!(sorted, vec![0.0, 1.0, 1.0, 3.0, 4.0, 5.0, 9.0]);
+        let order = e.mem.alloc(4);
+        let inverse = e.mem.alloc(4);
+        e.call(0x00a6_8820, &args![this, order, inverse, 1u32]);
+        let (order, inverse) = (e.mem.u32(order), e.mem.u32(inverse));
+        assert_eq!(calls_to(&e, ALLOCATE_ARRAY), vec![vec![14], vec![14]]);
+        for i in 0..7u32 {
+            let at = u32::from(e.mem.u16(order + 2 * i));
+            assert_eq!(u32::from(e.mem.u16(inverse + 2 * at)), i);
+        }
+        assert_eq!(xs[e.mem.u16(order + 12) as usize], 9.0);
+    }
+
+    /// A data object with the keep byte set and additional data whose flags are `flags`
+    /// and whose ready slot answers `ready`; the query double writes `pointer` and the
+    /// stride 0x24 into the first two addresses it gets.
+    fn streamed(e: &mut Engine, flags: u32, ready: bool, pointer: u32) -> (u32, u32) {
+        let this = data(e, 3);
+        e.mem.set_u8(this + 0x3a, 1);
+        e.mem.set_u32(this + NORMALS, 0x0e50_0000);
+        e.mem.set_u32(this + COLORS, 0x0e60_0000);
+        let additional = e.mem.alloc(0x30);
+        e.mem.set_u32(additional, VTABLE);
+        e.mem.set_u32(additional + 0x2c, flags);
+        e.mem.set_u32(this + ADDITIONAL_DATA, additional);
+        e.register_double(slot(0x8c), move |_, _| u32::from(ready).into_ret());
+        e.register_double(ADDITIONAL_DATA_00A72720, move |e, a| {
+            assert_eq!(e.mem.u32(a[6]), 0);
+            e.mem.set_u32(a[2], pointer);
+            e.mem.set_u32(a[7], 0x24);
+            Ret::default()
+        });
+        (this, additional)
+    }
+
+    fn answer(e: &Engine, out: u32) -> (u32, u32, u8) {
+        (e.mem.u32(out), e.mem.u32(out + 4), e.mem.u8(out + 8))
+    }
+
+    #[test]
+    fn additional_streams_query_kinds_one_and_two() {
+        let mut e = engine();
+        let (this, additional) = streamed(&mut e, 1, true, 0x0e70_0000);
+        let out = e.mem.alloc(0xc);
+        e.call(0x00a6_74b0, &args![this, out]);
+        assert_eq!(answer(&e, out), (0x0e70_0000, 0x24, 0));
+        e.call(0x00a6_7530, &args![this, out]);
+        let kinds: Vec<u32> = calls_to(&e, ADDITIONAL_DATA_00A72720)
+            .iter()
+            .map(|c| c[1])
+            .collect();
+        assert_eq!(kinds, vec![1, 2]);
+        assert_eq!(calls_to(&e, ADDITIONAL_DATA_00A72720)[0][0], additional);
+        // Without bit 0 nothing is queried and zeros go out.
+        e.mem.set_u32(additional + 0x2c, 0);
+        e.call(0x00a6_74b0, &args![this, out]);
+        assert_eq!(answer(&e, out), (0, 0, 0));
+        // Without the keep byte nothing is written.
+        e.mem.write(out, &[0xcc; 0xc]);
+        e.mem.set_u8(this + 0x3a, 0);
+        e.call(0x00a6_7530, &args![this, out]);
+        assert_eq!(e.mem.u32(out), 0xcccc_cccc);
+    }
+
+    #[test]
+    fn normal_stream_falls_back_to_the_normals() {
+        let mut e = engine();
+        let (this, additional) = streamed(&mut e, 1, true, 0x0e70_0000);
+        let out = e.mem.alloc(0xc);
+        e.call(0x00a6_75b0, &args![this, out]);
+        assert_eq!(answer(&e, out), (0x0e70_0000, 0x24, 0));
+        assert_eq!(calls_to(&e, ADDITIONAL_DATA_00A72720)[0][1], 3);
+        let (this, _) = streamed(&mut e, 0, true, 0);
+        e.call(0x00a6_75b0, &args![this, out]);
+        assert_eq!(answer(&e, out), (0x0e50_0000, 0xc, 0));
+        assert_eq!(calls_to(&e, ADDITIONAL_DATA_00A72720)[1][1], 1);
+        e.mem.set_u32(this + ADDITIONAL_DATA, 0);
+        e.mem.set_u32(out, 0);
+        e.call(0x00a6_75b0, &args![this, out]);
+        assert_eq!(answer(&e, out), (0x0e50_0000, 0xc, 0));
+        assert_ne!(additional, 0);
+    }
+
+    #[test]
+    fn color_stream_needs_bit_1_and_flags_bit_5() {
+        let mut e = engine();
+        let (this, additional) = streamed(&mut e, 0x23, true, 0x0e70_0000);
+        let out = e.mem.alloc(0xc);
+        e.call(0x00a6_7660, &args![this, out]);
+        assert_eq!(answer(&e, out), (0x0e70_0000, 0x24, 1));
+        assert_eq!(calls_to(&e, ADDITIONAL_DATA_00A72720)[0][1], 4);
+        // Ready without bit 1: nothing written.
+        e.mem.write(out, &[0xcc; 0xc]);
+        e.mem.set_u32(additional + 0x2c, 1);
+        e.call(0x00a6_7660, &args![this, out]);
+        assert_eq!(e.mem.u32(out), 0xcccc_cccc);
+        // Not ready, or no additional data: the colours with a stride of 16.
+        let (this, _) = streamed(&mut e, 2, false, 0);
+        e.call(0x00a6_7660, &args![this, out]);
+        assert_eq!(answer(&e, out), (0x0e60_0000, 0x10, 0));
+        e.mem.set_u32(this + ADDITIONAL_DATA, 0);
+        e.call(0x00a6_7660, &args![this, out]);
+        assert_eq!(answer(&e, out), (0x0e60_0000, 0x10, 0));
+    }
+
+    #[test]
+    fn is_equal_compares_every_array() {
+        let mut e = engine();
+        e.register(NI_OBJECT_IS_EQUAL, |_, _| 1u32.into_ret());
+        for differs in [
+            POINTS_DIFFER_00439090,
+            COLORS_DIFFER_004A4C90,
+            UVS_DIFFER_0051C330,
+            BOUNDS_DIFFER_00A926B0,
+        ] {
+            e.register(differs, |e, a| {
+                u32::from(e.mem.u32(a[0]) != e.mem.u32(a[1])).into_ret()
+            });
+        }
+        let make = |e: &mut Engine| {
+            let this = data(e, 2);
+            e.mem.set_u16(this + DATA_FLAGS, 1);
+            for offset in [VERTICES, NORMALS, COLORS, TEXTURES] {
+                let block = floats(e, &[1.0; 8]);
+                e.mem.set_u32(this + offset, block);
+            }
+            this
+        };
+        let this = make(&mut e);
+        let other = make(&mut e);
+        let equal = |e: &mut Engine| e.call(0x00a6_7840, &args![this, other]).bool();
+        assert!(equal(&mut e));
+        assert_eq!(calls_to(&e, POINTS_DIFFER_00439090).len(), 4);
+        assert_eq!(calls_to(&e, COLORS_DIFFER_004A4C90).len(), 2);
+        assert_eq!(calls_to(&e, UVS_DIFFER_0051C330).len(), 2);
+        // A differing normal, colour or texture coordinate.
+        for (offset, at) in [
+            (NORMALS, 12u32),
+            (COLORS, 16),
+            (TEXTURES, 8),
+            (VERTICES, 12),
+        ] {
+            let block = e.mem.u32(other + offset);
+            e.mem.set_f32(block + at, 2.0);
+            assert!(!equal(&mut e));
+            e.mem.set_f32(block + at, 1.0);
+        }
+        // Keep byte, method bits, texture bit and bound.
+        e.mem.set_u8(other + KEEP_FLAGS, 1);
+        assert!(!equal(&mut e));
+        e.mem.set_u8(other + KEEP_FLAGS, 0);
+        e.mem.set_u16(other + DATA_FLAGS, 0x1001);
+        assert!(!equal(&mut e));
+        e.mem.set_u16(other + DATA_FLAGS, 0);
+        assert!(!equal(&mut e));
+        e.mem.set_u16(other + DATA_FLAGS, 1);
+        e.mem.set_u32(other + BOUND, 5);
+        assert!(!equal(&mut e));
+        e.mem.set_u32(other + BOUND, 0);
+        // Colours only on the other side are not checked; textures only there are.
+        let colors = e.mem.u32(this + COLORS);
+        e.mem.set_u32(this + COLORS, 0);
+        assert!(equal(&mut e));
+        e.mem.set_u32(this + COLORS, colors);
+        let textures = e.mem.u32(this + TEXTURES);
+        e.mem.set_u32(this + TEXTURES, 0);
+        assert!(!equal(&mut e));
+        e.mem.set_u32(this + TEXTURES, textures);
+        // Additional data on both: its slot +0x5c decides.
+        let additional = e.mem.alloc(4);
+        e.mem.set_u32(additional, VTABLE);
+        e.mem.set_u32(this + ADDITIONAL_DATA, additional);
+        assert!(!equal(&mut e));
+        e.mem.set_u32(other + ADDITIONAL_DATA, 0x0e70_0000);
+        assert!(equal(&mut e));
+        e.register(slot(0x5c), |_, _| 0u32.into_ret());
+        assert!(!equal(&mut e));
+        // A different count or the base answering false.
+        e.mem.set_u16(other + VERTEX_COUNT, 3);
+        assert!(!equal(&mut e));
+        e.register(NI_OBJECT_IS_EQUAL, |_, _| 0u32.into_ret());
+        assert!(!e.call(0x00a6_7840, &args![this, this]).bool());
+    }
+
+    #[test]
+    fn texture_read_takes_eight_bytes_a_pair() {
+        let mut e = engine();
+        e.register(0x0300_0000, |e, a| {
+            assert_eq!((e.mem.u32(a[3]), a[4]), (4, 1));
+            a[2].into_ret()
+        });
+        let stream = e.mem.alloc(0x260);
+        let input = e.mem.alloc(0x10);
+        e.mem.set_u32(stream + STREAM_INPUT, input);
+        e.mem.set_u32(input + BINARY_READ, 0x0300_0000);
+        e.call(0x00a6_7aa0, &args![stream, 0x0e70_0000u32, 3u32]);
+        assert_eq!(calls_to(&e, 0x0300_0000)[0][..3], [input, 0x0e70_0000, 24]);
+        assert_eq!(e.mem.u32(input + BINARY_POSITION), 24);
+    }
+
+    #[test]
+    fn get_viewer_strings_lists_the_fields() {
+        let mut e = engine();
+        e.mem.set_u32(NI_GEOMETRY_DATA_RTTI, 0x0123_0000);
+        for text in [
+            NI_OBJECT_GET_VIEWER_STRINGS,
+            VIEWER_STRING_CLASS,
+            VIEWER_STRING_BYTE,
+            VIEWER_STRING_SHORT,
+            VIEWER_STRING_INTEGER,
+            VIEWER_STRING_POINTER,
+            BOUND_GET_VIEWER_STRING,
+        ] {
+            e.register(text, |_, _| 0x0e60_0000u32.into_ret());
+        }
+        let this = data(&mut e, 7);
+        e.mem.set_u16(this + DATA_FLAGS, 0x3001);
+        e.mem.set_u16(this + DIRTY_FLAGS, 0x42);
+        e.mem.set_u8(this + KEEP_FLAGS, 5);
+        e.mem.set_u32(this + VERTICES, 0x10);
+        let strings = e.mem.alloc(0x10);
+        e.mem.set_u16(strings + 8, 0x20);
+        e.call(0x00a6_88b0, &args![this, strings]);
+        assert_eq!(
+            calls_to(&e, VIEWER_STRING_SHORT),
+            vec![
+                vec![TEXT_M_US_VERTICES, 7],
+                vec![TEXT_NUM_TEXTURE_SETS, 1],
+                vec![TEXT_M_US_DIRTY_FLAGS, 0x42]
+            ]
+        );
+        assert_eq!(
+            calls_to(&e, VIEWER_STRING_INTEGER),
+            vec![
+                vec![TEXT_NORMAL_BINORMAL_TANGENT, 0x3000],
+                vec![TEXT_M_SP_ADDITIONAL_GEOM_DATA, 0]
+            ]
+        );
+        assert_eq!(
+            calls_to(&e, VIEWER_STRING_POINTER)[0],
+            vec![TEXT_M_PK_VERTEX, 0x10]
+        );
+        assert_eq!(
+            calls_to(&e, VIEWER_STRING_BYTE)[0],
+            vec![TEXT_M_UC_KEEP_FLAGS, 5]
+        );
+        assert_eq!(
+            calls_to(&e, BOUND_GET_VIEWER_STRING),
+            vec![vec![this + BOUND, TEXT_M_K_BOUND]]
+        );
+        assert_eq!(calls_to(&e, STRINGS_SET_AT).len(), 13);
+        // With additional data its own strings close the list.
+        let additional = e.mem.alloc(4);
+        e.mem.set_u32(additional, VTABLE);
+        e.mem.set_u32(this + ADDITIONAL_DATA, additional);
+        e.call(0x00a6_88b0, &args![this, strings]);
+        assert_eq!(calls_to(&e, slot(0x60)), vec![vec![additional, strings]]);
+        assert_eq!(calls_to(&e, STRINGS_SET_AT).len(), 25);
+        assert_eq!(calls_to(&e, VIEWER_STRING_INTEGER).len(), 3);
     }
 }

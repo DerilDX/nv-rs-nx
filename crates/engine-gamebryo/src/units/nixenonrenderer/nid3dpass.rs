@@ -714,9 +714,307 @@ pub fn ni_d3d_pass_vector_deleting_destructor(e: &mut Engine, this: Ptr, flags: 
     base
 }
 
+// Translated from 00e7f7f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiD3DPass::CheckFreeStages` (engine map), `thiscall` with two words, the stages and the
+/// textures wanted. False when `m_uiCurrentStage` (+0x14) plus the stages is above the limit at
+/// `011bf558`, or `m_uiTexturesPerPass` (+0x1c) plus the textures above the limit at
+/// `011bf55c`; else whether `m_uiCurrentStage` plus the textures is within `011bf55c` (the
+/// code's last test adds the textures to +0x14 again). Unsigned compares of wrapping sums.
+pub fn ni_d3d_pass_check_free_stages(
+    e: &mut Engine,
+    this: Ptr<NiD3DPass>,
+    stages: u32,
+    textures: u32,
+) -> bool {
+    let current = e.get(this, NiD3DPass::m_uiCurrentStage);
+    if e.mem.u32(PASS_LIMIT_011BF558) < current.wrapping_add(stages) {
+        return false;
+    }
+    let limit = e.mem.u32(PASS_LIMIT_011BF55C);
+    let used = e.get(this, NiD3DPass::m_uiTexturesPerPass);
+    if limit < used.wrapping_add(textures) {
+        return false;
+    }
+    limit >= current.wrapping_add(textures)
+}
+
+/// A virtual call on the render state object at `0126f728` as the pass code makes it around
+/// another call: the object's vtable is read before `argument` runs, the slot's function after
+/// it, and the object read again for the call (two words: the argument's result and 0 or the
+/// given second word).
+fn render_state_call(
+    e: &mut Engine,
+    slot: u32,
+    argument: impl FnOnce(&mut Engine) -> u32,
+    second: Option<u32>,
+) {
+    let vtable = e.mem.u32(e.mem.u32(PASS_LIBRARY_0126F728));
+    let value = argument(e);
+    let function = e.mem.u32(vtable.wrapping_add(slot));
+    let state = e.mem.u32(PASS_LIBRARY_0126F728);
+    match second {
+        Some(word) => e.call(function, &args![state, value, word]),
+        None => e.call(function, &args![state, value]),
+    };
+}
+
+/// The render state group's apply `00e7eed0` (unnamed; `thiscall`, no stack words), a stage's
+/// `00e7eb00` (unnamed; `thiscall`, one word; answers a byte) and `00e7dd50` (unnamed; `cdecl`,
+/// the first stage left unused).
+const GROUP_APPLY_00E7EED0: u32 = 0x00e7_eed0;
+const STAGE_APPLY_00E7EB00: u32 = 0x00e7_eb00;
+const DISABLE_STAGES_00E7DD50: u32 = 0x00e7_dd50;
+
+// Translated from 00e7f860 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiD3DPass::SetupRenderingPass` (engine map; slot +8 of the vtable `010ef364`), `thiscall`
+/// with eight words it does not read. The render state object (`0126f728`) gets, through its
+/// slot 0xe8, the byte the vertex shader's (+0x5c) slot 0x94 answers, or without a vertex
+/// shader `m_bSoftwareVP` (+0x60). With a render state group (+0x30) it is applied
+/// (`00e7eed0`). Then for each stage (up to the 16-bit +0x2a, stopping at a null one) whose
+/// byte +0x64 is set, `00e7eb00` runs with 0 and its byte is kept; when fewer stages than the
+/// limit at `011bf560` were walked, `00e7dd50` gets the count. Answers the byte kept last (0
+/// when none ran).
+pub fn ni_d3d_pass_setup_rendering_pass(
+    e: &mut Engine,
+    this: Ptr<NiD3DPass>,
+    _unused_1: u32,
+    _unused_2: u32,
+    _unused_3: u32,
+    _unused_4: u32,
+    _unused_5: u32,
+    _unused_6: u32,
+    _unused_7: u32,
+    _unused_8: u32,
+) -> u8 {
+    let base = this.addr();
+    let shader = e.mem.u32(base.wrapping_add(0x5c));
+    if shader != 0 {
+        render_state_call(
+            e,
+            0xe8,
+            |e| u32::from(e.vcall(shader, 0x94, &args![]).u8()),
+            None,
+        );
+    } else {
+        let software = u32::from(e.get(this, NiD3DPass::m_bSoftwareVP));
+        let state = e.mem.u32(PASS_LIBRARY_0126F728);
+        e.vcall(state, 0xe8, &args![software]);
+    }
+    let group = e.get(this, NiD3DPass::m_pkRenderStateGroup);
+    if group != 0 {
+        e.call(GROUP_APPLY_00E7EED0, &args![group]);
+    }
+    let mut result = 0u8;
+    let count = u32::from(e.mem.u16(base.wrapping_add(0x2a)));
+    let mut stage_index = 0u32;
+    while stage_index < count {
+        let stages = e.get(this, NiD3DPass::m_kStages_m_pBase);
+        let stage = e.mem.u32(stages.wrapping_add(stage_index.wrapping_mul(4)));
+        if stage == 0 {
+            break;
+        }
+        if e.mem.u8(stage.wrapping_add(0x64)) != 0 {
+            result = e.call(STAGE_APPLY_00E7EB00, &args![stage, 0u32]).u8();
+        }
+        stage_index += 1;
+    }
+    if stage_index < e.mem.u32(PASS_LIMIT_011BF560) {
+        e.call(DISABLE_STAGES_00E7DD50, &args![stage_index]);
+    }
+    result
+}
+
+/// A texture's `00e89060` (unnamed; `thiscall` with three words: a value and the addresses of
+/// a word and a byte it fills; answers a byte).
+const TEXTURE_QUERY_00E89060: u32 = 0x00e8_9060;
+
+// Translated from 00e7f990 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (slot +4 of the `NiD3DPass` vtable `010ef364`, which the Xbox PDB
+/// names `SetupShaderPrograms`), `thiscall` with nine words. The render state object
+/// (`0126f728`): its slot 0x7c gets the pixel shader's (`m_spPixelShader` +0x44) handle (its
+/// slot 0x7c) and 0, and the pixel constant map (+0x34), when set, its slot 0x78 with the pixel
+/// shader, the nine words and 0; without a pixel shader slot 0x7c gets 0 and 0. With a vertex
+/// shader (`m_spVertexShader` +0x5c): slot 0x8c gets its handle (its slot 0x84) and 0, the
+/// vertex constant map (+0x48) its slot 0x78 as above with the vertex shader; then for each of
+/// the `011bf558` samplers the render state's slot 0xc0 gets (sampler, 0xb, sampler, 0) and
+/// (sampler, 0x18, value, 0), the value 0x100 when the sampler has a stage (below
+/// `m_uiStageCount`, not null) whose texture (+0x10) answers true from `00e89060` (0x18 and
+/// two argument words of this function it uses as out words: the ninth, cleared, and the
+/// first's low byte, cleared) with bit 0x100 set in the ninth, else 0. Without a vertex shader:
+/// slot 0x8c gets 0 and 0; the buffer data is the fourth word, else the third's +0x28, else the
+/// first's +0xb8 object's +0x34; its +0xc goes to slot 0x9c (with 0) when set, else its +0x10
+/// to slot 0xac (with 0). Answers 0.
+pub fn ni_d3d_pass_setup_shader_programs(
+    e: &mut Engine,
+    this: Ptr<NiD3DPass>,
+    first: u32,
+    second: u32,
+    third: u32,
+    fourth: u32,
+    fifth: u32,
+    sixth: u32,
+    seventh: u32,
+    eighth: u32,
+    ninth: u32,
+) -> u32 {
+    let base = this.addr();
+    let words = [
+        first, second, third, fourth, fifth, sixth, seventh, eighth, ninth,
+    ];
+    let program_maps = |e: &mut Engine, map_at: u32, shader_at: u32| {
+        let map = e.mem.u32(base.wrapping_add(map_at));
+        if map != 0 {
+            let shader = e.mem.u32(base.wrapping_add(shader_at));
+            let mut call = vec![shader];
+            call.extend_from_slice(&words);
+            call.push(0);
+            e.vcall(map, 0x78, &call);
+        }
+    };
+    let pixel_shader = e.mem.u32(base.wrapping_add(0x44));
+    if pixel_shader != 0 {
+        render_state_call(
+            e,
+            0x7c,
+            |e| e.vcall(pixel_shader, 0x7c, &args![]).u32(),
+            Some(0),
+        );
+        program_maps(e, 0x34, 0x44);
+    } else {
+        let state = e.mem.u32(PASS_LIBRARY_0126F728);
+        e.vcall(state, 0x7c, &args![0u32, 0u32]);
+    }
+    let vertex_shader = e.mem.u32(base.wrapping_add(0x5c));
+    if vertex_shader == 0 {
+        let state = e.mem.u32(PASS_LIBRARY_0126F728);
+        e.vcall(state, 0x8c, &args![0u32, 0u32]);
+        let buffer = if fourth != 0 {
+            fourth
+        } else if third != 0 {
+            e.mem.u32(third.wrapping_add(0x28))
+        } else {
+            let data = e.mem.u32(first.wrapping_add(0xb8));
+            e.mem.u32(data.wrapping_add(0x34))
+        };
+        let declaration = e.mem.u32(buffer.wrapping_add(0xc));
+        let state = e.mem.u32(PASS_LIBRARY_0126F728);
+        if declaration != 0 {
+            e.vcall(state, 0x9c, &args![declaration, 0u32]);
+        } else {
+            let format = e.mem.u32(buffer.wrapping_add(0x10));
+            e.vcall(state, 0xac, &args![format, 0u32]);
+        }
+        return 0;
+    }
+    render_state_call(
+        e,
+        0x8c,
+        |e| e.vcall(vertex_shader, 0x84, &args![]).u32(),
+        Some(0),
+    );
+    program_maps(e, 0x48, 0x5c);
+    // The first and ninth argument words, which the loop uses as out words.
+    e.with_stack(8, |e, slots| {
+        let byte_word = slots.addr();
+        let word = byte_word + 4;
+        e.mem.set_u32(byte_word, first);
+        e.mem.set_u32(word, ninth);
+        let mut sampler = 0u32;
+        while sampler < e.mem.u32(PASS_LIMIT_011BF558) {
+            let state = e.mem.u32(PASS_LIBRARY_0126F728);
+            e.vcall(state, 0xc0, &args![sampler, 0xbu32, sampler, 0u32]);
+            let mut value = 0u32;
+            if sampler < e.get(this, NiD3DPass::m_uiStageCount) {
+                let stages = e.get(this, NiD3DPass::m_kStages_m_pBase);
+                let stage = e.mem.u32(stages.wrapping_add(sampler.wrapping_mul(4)));
+                if stage != 0 {
+                    let texture = e.mem.u32(stage.wrapping_add(0x10));
+                    if texture != 0 {
+                        e.mem.set_u32(word, 0);
+                        e.mem.set_u8(byte_word, 0);
+                        let answered = e
+                            .call(
+                                TEXTURE_QUERY_00E89060,
+                                &args![texture, 0x18u32, word, byte_word],
+                            )
+                            .bool();
+                        if answered && e.mem.u32(word) & 0x100 != 0 {
+                            value = 0x100;
+                        }
+                    }
+                }
+            }
+            let state = e.mem.u32(PASS_LIBRARY_0126F728);
+            e.vcall(state, 0xc0, &args![sampler, 0x18u32, value, 0u32]);
+            sampler += 1;
+        }
+    });
+    0
+}
+
+// Translated from 00e7fe70 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiTObjectArray<NiPointer<NiD3DTextureStage> >::scalar deleting destructor` (engine map),
+/// `thiscall` with the flags: the base array table (`010ef35c`) stored, the stage array (+4)
+/// freed with [`fn_00e7fcd0`], then with bit 0 the array given back to the memory manager
+/// (`00aa4060`). Answers `this`.
+pub fn ni_t_object_array_texture_stage_scalar_deleting_destructor(
+    e: &mut Engine,
+    this: Ptr,
+    flags: u32,
+) -> Ptr {
+    let base = this.addr();
+    let stages = e.mem.u32(base.wrapping_add(4));
+    e.mem.set_u32(base, STAGE_ARRAY_BASE_VTABLE_010EF35C);
+    fn_00e7fcd0(e, Ptr::new(stages));
+    if flags & 1 != 0 {
+        e.call(
+            MEMORY_MANAGER_DEALLOCATE,
+            &args![MEMORY_MANAGER_OBJECT, base],
+        );
+    }
+    this
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(
+            0x00e7_f7f0,
+            ni_d3d_pass_check_free_stages(Ptr<NiD3DPass>, u32, u32) -> bool
+        ),
+        entry!(
+            0x00e7_f860,
+            ni_d3d_pass_setup_rendering_pass(
+                Ptr<NiD3DPass>,
+                u32,
+                u32,
+                u32,
+                u32,
+                u32,
+                u32,
+                u32,
+                u32,
+            ) -> u8
+        ),
+        entry!(
+            0x00e7_f990,
+            ni_d3d_pass_setup_shader_programs(
+                Ptr<NiD3DPass>,
+                u32,
+                u32,
+                u32,
+                u32,
+                u32,
+                u32,
+                u32,
+                u32,
+                u32,
+            ) -> u32
+        ),
+        entry!(
+            0x00e7_fe70,
+            ni_t_object_array_texture_stage_scalar_deleting_destructor(Ptr, u32) -> Ptr
+        ),
         entry!(
             0x00e7_f7d0,
             ni_d3d_pass_post_process_rendering_pass(Ptr<NiD3DPass>, u32) -> u32
@@ -1420,5 +1718,230 @@ mod b049_tests {
         );
         assert_eq!(calls_to(&e, FREE_ARRAY_00AA1490), vec![vec![block, 0x68]]);
         assert!(calls_to(&e, FREE_SIZED_00AA1460).is_empty());
+    }
+}
+
+#[cfg(test)]
+mod n008_tests {
+    use super::*;
+
+    const STATE_VTABLE: u32 = 0x0e80_0000;
+    /// Render state slots at `0x0e81_0000 + slot`.
+    const STATE_SLOTS: u32 = 0x0e81_0000;
+    const SHADER_VTABLE: u32 = 0x0e82_0000;
+    const SHADER_SLOTS: u32 = 0x0e83_0000;
+    const MAP_VTABLE: u32 = 0x0e84_0000;
+    const MAP_SETUP: u32 = 0x0e85_0078;
+
+    fn calls(e: &Engine, addr: u32) -> Vec<Vec<u32>> {
+        e.call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|c| c.0 == addr)
+            .map(|c| c.1.clone())
+            .collect()
+    }
+
+    /// The render state calls (slot, words after the object) in order.
+    fn state_calls(e: &Engine) -> Vec<(u32, Vec<u32>)> {
+        e.call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|c| c.0 & 0xffff_0000 == STATE_SLOTS)
+            .map(|c| (c.0 - STATE_SLOTS, c.1[1..].to_vec()))
+            .collect()
+    }
+
+    /// A pass, the render state object at `0126f728` and a shader vtable whose slots 0x7c and
+    /// 0x84 answer handles and 0x94 the word 0x101 (low byte 1).
+    fn rig() -> (Engine, Ptr<NiD3DPass>) {
+        let mut e = Engine::new();
+        e.map(0x0126_f000, 0x1000);
+        e.map(0x011b_f000, 0x1000);
+        let slots: Vec<u32> = (0..0x40).map(|i| STATE_SLOTS + 4 * i).collect();
+        e.put_vtable(STATE_VTABLE, &slots);
+        for slot in &slots {
+            e.register(*slot, |_, _| Ret::default());
+        }
+        let shader_slots: Vec<u32> = (0..0x40).map(|i| SHADER_SLOTS + 4 * i).collect();
+        e.put_vtable(SHADER_VTABLE, &shader_slots);
+        e.register(SHADER_SLOTS + 0x7c, |_, _| 0x7c7cu32.into_ret());
+        e.register(SHADER_SLOTS + 0x84, |_, _| 0x8484u32.into_ret());
+        e.register(SHADER_SLOTS + 0x94, |_, _| 0x101u32.into_ret());
+        let mut map_slots = vec![0u32; 0x1f];
+        map_slots[0x78 / 4] = MAP_SETUP;
+        e.put_vtable(MAP_VTABLE, &map_slots);
+        e.register(MAP_SETUP, |_, _| Ret::default());
+        let state = e.mem.alloc(4);
+        e.mem.set_u32(state, STATE_VTABLE);
+        e.mem.set_u32(PASS_LIBRARY_0126F728, state);
+        let pass = e.new_object::<NiD3DPass>();
+        e.call_log = Some(vec![]);
+        (e, pass)
+    }
+
+    fn object(e: &mut Engine, vtable: u32) -> u32 {
+        let object = e.mem.alloc(0x70);
+        e.mem.set_u32(object, vtable);
+        object
+    }
+
+    #[test]
+    fn check_free_stages_tests_both_limits() {
+        let (mut e, pass) = rig();
+        e.mem.set_u32(PASS_LIMIT_011BF558, 8);
+        e.mem.set_u32(PASS_LIMIT_011BF55C, 4);
+        e.set(pass, NiD3DPass::m_uiCurrentStage, 2);
+        e.set(pass, NiD3DPass::m_uiTexturesPerPass, 1);
+        let check = |e: &mut Engine, stages: u32, textures: u32| {
+            e.call(0x00e7_f7f0, &args![pass, stages, textures]).bool()
+        };
+        assert!(check(&mut e, 6, 2));
+        assert!(!check(&mut e, 7, 2));
+        assert!(!check(&mut e, 1, 4));
+        // The last test adds the textures to the current stage: 2 + 3 > 4.
+        assert!(!check(&mut e, 1, 3));
+    }
+
+    #[test]
+    fn setup_rendering_pass_sets_the_vertex_processing_and_applies_stages() {
+        let (mut e, pass) = rig();
+        e.register(STAGE_APPLY_00E7EB00, |_, a| (a[0] & 0xff).into_ret());
+        e.register(GROUP_APPLY_00E7EED0, |_, _| Ret::default());
+        e.register(DISABLE_STAGES_00E7DD50, |_, _| Ret::default());
+        e.mem.set_u32(PASS_LIMIT_011BF560, 4);
+        let base = pass.addr();
+        let stages = e.mem.alloc(0x10);
+        e.set(pass, NiD3DPass::m_kStages_m_pBase, stages);
+        e.mem.set_u16(base + 0x2a, 3);
+        let first = e.mem.alloc(0x68);
+        let second = e.mem.alloc(0x68);
+        e.mem.set_u8(first + 0x64, 1);
+        e.mem.set_u32(stages, first);
+        e.mem.set_u32(stages + 4, second);
+        // The third stage is null: the walk stops at 2.
+        e.set(pass, NiD3DPass::m_bSoftwareVP, 1);
+        e.set(pass, NiD3DPass::m_pkRenderStateGroup, 0x0e90_0000);
+        let call = args![pass, 0u32, 0u32, 0u32, 0u32, 0u32, 0u32, 0u32, 0u32];
+        let result = e.call(0x00e7_f860, &call).u8();
+        assert_eq!(u32::from(result), first & 0xff);
+        assert_eq!(state_calls(&e), vec![(0xe8, vec![1])]);
+        assert_eq!(calls(&e, GROUP_APPLY_00E7EED0), vec![vec![0x0e90_0000]]);
+        assert_eq!(calls(&e, STAGE_APPLY_00E7EB00), vec![vec![first, 0]]);
+        assert_eq!(calls(&e, DISABLE_STAGES_00E7DD50), vec![vec![2]]);
+        // With a vertex shader its byte goes; all three stages walked, none below the limit.
+        let shader = object(&mut e, SHADER_VTABLE);
+        e.mem.set_u32(base + 0x5c, shader);
+        e.mem.set_u32(stages + 8, second);
+        e.mem.set_u32(PASS_LIMIT_011BF560, 3);
+        e.set(pass, NiD3DPass::m_pkRenderStateGroup, 0);
+        e.call_log = Some(vec![]);
+        e.call(0x00e7_f860, &call);
+        assert_eq!(state_calls(&e), vec![(0xe8, vec![1])]);
+        assert!(calls(&e, GROUP_APPLY_00E7EED0).is_empty());
+        assert!(calls(&e, DISABLE_STAGES_00E7DD50).is_empty());
+    }
+
+    #[test]
+    fn setup_shader_programs_with_both_shaders_walks_the_samplers() {
+        let (mut e, pass) = rig();
+        let base = pass.addr();
+        let pixel = object(&mut e, SHADER_VTABLE);
+        let vertex = object(&mut e, SHADER_VTABLE);
+        let pixel_map = object(&mut e, MAP_VTABLE);
+        e.mem.set_u32(base + 0x44, pixel);
+        e.mem.set_u32(base + 0x34, pixel_map);
+        e.mem.set_u32(base + 0x5c, vertex);
+        e.mem.set_u32(PASS_LIMIT_011BF558, 3);
+        e.set(pass, NiD3DPass::m_uiStageCount, 2);
+        let stages = e.mem.alloc(8);
+        e.set(pass, NiD3DPass::m_kStages_m_pBase, stages);
+        let stage = e.mem.alloc(0x68);
+        e.mem.set_u32(stage + 0x10, 0x0e95_0000);
+        e.mem.set_u32(stages, stage);
+        e.register(TEXTURE_QUERY_00E89060, |e, a| {
+            // The ninth word cleared, and the first word with its low byte cleared.
+            assert_eq!(e.mem.u32(a[2]), 0);
+            assert_eq!(e.mem.u32(a[3]), 0x0000_1200);
+            e.mem.set_u32(a[2], 0x0100);
+            1u32.into_ret()
+        });
+        let call = args![pass, 0x1234u32, 2u32, 3u32, 4u32, 5u32, 6u32, 7u32, 8u32, 9u32];
+        assert_eq!(e.call(0x00e7_f990, &call).u32(), 0);
+        assert_eq!(
+            calls(&e, MAP_SETUP),
+            vec![vec![pixel_map, pixel, 0x1234, 2, 3, 4, 5, 6, 7, 8, 9, 0]]
+        );
+        assert_eq!(
+            state_calls(&e),
+            vec![
+                (0x7c, vec![0x7c7c, 0]),
+                (0x8c, vec![0x8484, 0]),
+                (0xc0, vec![0, 0xb, 0, 0]),
+                (0xc0, vec![0, 0x18, 0x100, 0]),
+                (0xc0, vec![1, 0xb, 1, 0]),
+                (0xc0, vec![1, 0x18, 0, 0]),
+                (0xc0, vec![2, 0xb, 2, 0]),
+                (0xc0, vec![2, 0x18, 0, 0]),
+            ]
+        );
+    }
+
+    #[test]
+    fn setup_shader_programs_without_shaders_sets_the_declaration_or_format() {
+        let (mut e, pass) = rig();
+        let buffer = e.mem.alloc(0x14);
+        e.mem.set_u32(buffer + 0xc, 0x0ec0_0000);
+        let call = args![pass, 0u32, 0u32, 0u32, buffer, 0u32, 0u32, 0u32, 0u32, 0u32];
+        e.call(0x00e7_f990, &call);
+        assert_eq!(
+            state_calls(&e),
+            vec![
+                (0x7c, vec![0, 0]),
+                (0x8c, vec![0, 0]),
+                (0x9c, vec![0x0ec0_0000, 0])
+            ]
+        );
+        // No fourth word: the third word's +0x28; no declaration: the format (+0x10) to 0xac.
+        let partition = e.mem.alloc(0x2c);
+        e.mem.set_u32(partition + 0x28, buffer);
+        e.mem.set_u32(buffer + 0xc, 0);
+        e.mem.set_u32(buffer + 0x10, 0x52);
+        e.call_log = Some(vec![]);
+        let call = args![pass, 0u32, 0u32, partition, 0u32, 0u32, 0u32, 0u32, 0u32, 0u32];
+        e.call(0x00e7_f990, &call);
+        assert_eq!(state_calls(&e)[2], (0xac, vec![0x52, 0]));
+        // Neither: the object at the first word +0xb8, its +0x34.
+        let geometry = e.mem.alloc(0xbc);
+        let data = e.mem.alloc(0x38);
+        e.mem.set_u32(geometry + 0xb8, data);
+        e.mem.set_u32(data + 0x34, buffer);
+        e.call_log = Some(vec![]);
+        let call = args![pass, geometry, 0u32, 0u32, 0u32, 0u32, 0u32, 0u32, 0u32, 0u32];
+        e.call(0x00e7_f990, &call);
+        assert_eq!(state_calls(&e)[2], (0xac, vec![0x52, 0]));
+    }
+
+    #[test]
+    fn stage_array_scalar_deleting_destructor_frees_the_stages() {
+        for (flags, frees) in [(1u32, true), (0, false)] {
+            let (mut e, _) = rig();
+            e.register(MEMORY_MANAGER_DEALLOCATE, |_, _| Ret::default());
+            let block = e.mem.alloc(8);
+            // An empty stage array: its count word 0.
+            let stages = block + 4;
+            let array = e.mem.alloc(0x10);
+            e.mem.set_u32(array + 4, stages);
+            let result = e.call(0x00e7_fe70, &args![array, flags]).u32();
+            assert_eq!(result, array);
+            assert_eq!(e.mem.u32(array), STAGE_ARRAY_BASE_VTABLE_010EF35C);
+            let mut expected = vec![vec![MEMORY_MANAGER_OBJECT, block]];
+            if frees {
+                expected.push(vec![MEMORY_MANAGER_OBJECT, array]);
+            }
+            assert_eq!(calls(&e, MEMORY_MANAGER_DEALLOCATE), expected);
+        }
     }
 }

@@ -639,9 +639,39 @@ pub fn fn_00bd9150(e: &mut Engine, this: Ptr) {
     e.call(MEMORY_DEALLOCATE, &args![MEMORY_MANAGER, block]);
 }
 
+/// `BSCubeMapCamera`'s two render functions (`00bd77c0`, thiscall, no stack words, and
+/// `00bd7bb0`, thiscall, `RET 4`; unit `bscubemapcamera.cpp` by the engine map).
+const CUBE_MAP_CAMERA_00BD77C0: u32 = 0x00bd_77c0;
+const CUBE_MAP_CAMERA_00BD7BB0: u32 = 0x00bd_7bb0;
+
+// Translated from 00bd84b0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSCubeMapCamera::Click` (slot +0xdc of the vtable at `010bc470`, which `BSCubeMapCamera`'s
+/// constructor `00bd8290` installs; the Xbox PDB's name for that slot; thiscall, `RET 4`).
+/// By `eCubeMapType` (+0x114 on PC; the compiler's jump table at `00bd8540`): type 0 runs
+/// `00bd77c0`, type 3 `00bd7bb0` with the word, types 1, 2 and any other nothing. Then
+/// `spRenderedCubeMap` (+0x130) and the six `spRenderedTexture` pointers (+0x118) are released
+/// and cleared.
+pub fn bs_cube_map_camera_click(e: &mut Engine, this: Ptr, word: u32) {
+    let base = this.addr();
+    match e.mem.u32(base + 0x114) {
+        0 => {
+            e.call(CUBE_MAP_CAMERA_00BD77C0, &args![this]);
+        }
+        3 => {
+            e.call(CUBE_MAP_CAMERA_00BD7BB0, &args![this, word]);
+        }
+        _ => {}
+    }
+    release_and_clear(e, base + 0x130);
+    for index in 0..6u32 {
+        release_and_clear(e, base + 0x118 + 4 * index);
+    }
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x00bd_84b0, bs_cube_map_camera_click(Ptr, u32)),
         entry!(0x00bd_9120, fn_00bd9120(Ptr) -> Ptr),
         entry!(0x00bd_8480, fn_00bd8480(Ptr, u32) -> Ptr),
         entry!(0x00bd_8550, fn_00bd8550(Ptr, u32, u32) -> u32),
@@ -1195,5 +1225,68 @@ mod entry_tests {
         e.call(0x00bd_9150, &[this]);
         let log = e.call_log.take().unwrap();
         assert_eq!(log[1], (MEMORY_DEALLOCATE, vec![MEMORY_MANAGER, 0x1234]));
+    }
+}
+
+#[cfg(test)]
+mod n014_tests {
+    use super::*;
+
+    #[test]
+    fn click_renders_by_type_and_releases_the_textures() {
+        const DELETE: u32 = 0x03f3_0000;
+        let mut e = Engine::new();
+        for address in [CUBE_MAP_CAMERA_00BD77C0, CUBE_MAP_CAMERA_00BD7BB0, DELETE] {
+            e.register(address, |_, _| Ret::default());
+        }
+        e.register(INTERLOCKED_DECREMENT, |e, a| {
+            let count = e.mem.u32(a[0]) - 1;
+            e.mem.set_u32(a[0], count);
+            count.into_ret()
+        });
+        let vtable = e.mem.alloc(8);
+        e.mem.set_u32(vtable + 4, DELETE);
+        let this = e.mem.alloc(0x170);
+        let mut textures = vec![];
+        for offset in [0x130u32, 0x118, 0x120, 0x12c] {
+            let texture = e.mem.alloc(8);
+            e.mem.set_u32(texture, vtable);
+            // The first texture is held elsewhere too and survives.
+            e.mem
+                .set_u32(texture + 4, if offset == 0x130 { 2 } else { 1 });
+            e.mem.set_u32(this + offset, texture);
+            textures.push(texture);
+        }
+        for (kind, zero_calls, three_calls) in
+            [(0u32, 1usize, 0usize), (3, 0, 1), (1, 0, 0), (7, 0, 0)]
+        {
+            e.mem.set_u32(this + 0x114, kind);
+            e.call_log = Some(vec![]);
+            e.call(0x00bd_84b0, &args![this, 0x55u32]);
+            let log = e.call_log.take().unwrap();
+            let count = |addr: u32| log.iter().filter(|c| c.0 == addr).count();
+            assert_eq!(count(CUBE_MAP_CAMERA_00BD77C0), zero_calls);
+            assert_eq!(count(CUBE_MAP_CAMERA_00BD7BB0), three_calls);
+            if kind == 3 {
+                let call = log
+                    .iter()
+                    .find(|c| c.0 == CUBE_MAP_CAMERA_00BD7BB0)
+                    .unwrap();
+                assert_eq!(call.1, vec![this, 0x55]);
+            }
+            if kind == 0 {
+                // The first run released all four: three deleted, the shared one kept.
+                let deleted: Vec<u32> = log
+                    .iter()
+                    .filter(|c| c.0 == DELETE)
+                    .map(|c| c.1[0])
+                    .collect();
+                assert_eq!(deleted, textures[1..].to_vec());
+                assert_eq!(e.mem.u32(textures[0] + 4), 1);
+            }
+            for offset in [0x130u32, 0x118, 0x11c, 0x120, 0x124, 0x128, 0x12c] {
+                assert_eq!(e.mem.u32(this + offset), 0);
+            }
+        }
     }
 }

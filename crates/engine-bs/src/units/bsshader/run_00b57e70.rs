@@ -284,6 +284,316 @@ pub fn fn_00b58670(e: &mut Engine) -> u32 {
     static_map(e, &STATIC_MAP_00B58670)
 }
 
+use crate::units::bsshader::bsshaderproperty::BSShaderProperty;
+
+/// `BSShaderLightingProperty`'s constructor (`00b71720`, `thiscall`, no words) and destructor
+/// body (`00b71410`, `thiscall`), and the base member copy (`00b702b0`, `thiscall`, two words:
+/// the clone and the cloning process).
+const LIGHTING_PROPERTY_CONSTRUCT_00B71720: u32 = 0x00b7_1720;
+const LIGHTING_PROPERTY_DESTROY_00B71410: u32 = 0x00b7_1410;
+const LIGHTING_PROPERTY_COPY_MEMBERS_00B702B0: u32 = 0x00b7_02b0;
+/// The allocation `00aa13e0` (`cdecl`, one word: the size) and the sized free `00aa1460`
+/// (`cdecl`, two words: the block and its size).
+const ALLOCATE_00AA13E0: u32 = 0x00aa_13e0;
+const FREE_SIZED_00AA1460: u32 = 0x00aa_1460;
+/// The memory manager at `011f6238` and its allocation (`00aa3e40`, `thiscall`, one word: the
+/// size) and deallocation (`00aa4060`, `thiscall`, one word: the block).
+const MEMORY_MANAGER_011F6238: u32 = 0x011f_6238;
+const MEMORY_ALLOCATE_00AA3E40: u32 = 0x00aa_3e40;
+const MEMORY_DEALLOCATE_00AA4060: u32 = 0x00aa_4060;
+/// `DistantLODShaderProperty`'s vtable (`010adad0`; its slot +8 answers the RTTI record
+/// `011f9648`, which the static initializer `00fb9850` names `"DistantLODShaderProperty"`
+/// from `010adc08`).
+const DISTANT_LOD_PROPERTY_VTABLE: u32 = 0x010a_dad0;
+/// `DistantLODShaderProperty::ms_RTTI` (`011f9648`).
+const DISTANT_LOD_PROPERTY_RTTI: u32 = 0x011f_9648;
+/// `NiRefObject`'s vtable (`0101dce4`) and its live-object count `ms_uiObjects` (`011f4400`).
+const REF_OBJECT_VTABLE_0101DCE4: u32 = 0x0101_dce4;
+const REF_OBJECT_COUNT_011F4400: u32 = 0x011f_4400;
+/// The static map's lookup (`00e92760`, `thiscall`, two words: the key and the address of an
+/// `NiPointer` that receives the value; `bool` in `AL`).
+const MAP_GET_AT_00E92760: u32 = 0x00e9_2760;
+
+layout! {
+    /// `DistantLODShaderProperty` (Xbox PDB), 0x8c bytes on PC (the clone `fn_00b58420`
+    /// allocates): its own fields 8 bytes below the Xbox PDB's, as the base
+    /// `BSShaderLightingProperty` is 0x7c bytes on PC.
+    pub struct DistantLODShaderProperty: 0x8c {
+        /// `pDistantLODGroup` (Xbox PDB +0x84).
+        0x7c pDistantLODGroup: u32,
+        /// `spBaseTexture` (Xbox PDB +0x88): `NiPointer<NiTexture>`.
+        0x80 spBaseTexture: u32,
+        /// `TextureClampMode` (Xbox PDB +0x8c).
+        0x84 TextureClampMode: u32,
+        /// `pDistantLODParam` (Xbox PDB +0x90).
+        0x88 pDistantLODParam: u32,
+    }
+}
+
+type Distant = DistantLODShaderProperty;
+
+/// An `NiPointer` assignment as the code inlines it: when the slot holds another object, the
+/// old one is released, the new one stored and, when not null, counted (`InterlockedIncrement`
+/// on `+4`).
+fn assign_pointer(e: &mut Engine, slot: u32, value: u32) {
+    let old = e.mem.u32(slot);
+    if old != value {
+        if old != 0 {
+            release_reference(e, old);
+        }
+        e.mem.set_u32(slot, value);
+        if value != 0 {
+            e.call(INTERLOCKED_INCREMENT, &args![value.wrapping_add(4)]);
+        }
+    }
+}
+
+// Translated from 00b57e70 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map: an empty `NiTPointerList` (`thiscall`): the count, tail and head
+/// cleared, in that order.
+pub fn fn_00b57e70(e: &mut Engine, this: Ptr<NiTPointerList>) {
+    e.set(this, NiTPointerList::m_uiCount, 0);
+    e.set(this, NiTPointerList::m_pkTail, 0);
+    e.set(this, NiTPointerList::m_pkHead, 0);
+}
+
+// Translated from 00b57e80 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Ghidra made no function here: `DistantLODShaderProperty`'s vtable slot +0xd0
+/// (`SetClampD3D` in the Xbox PDB's slot list; `thiscall`, one word). Stores 0 in
+/// `TextureClampMode` when the word is 3, otherwise 3 (`SUB 3; NEG; SBB; AND 3`).
+pub fn fn_00b57e80(e: &mut Engine, this: Ptr<Distant>, mode: u32) {
+    let value = if mode.wrapping_sub(3) != 0 { 3 } else { 0 };
+    e.set(this, Distant::TextureClampMode, value);
+}
+
+// Translated from 00b57f90 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map: `DistantLODShaderProperty`'s constructor (`thiscall`, no
+/// words). The base `BSShaderLightingProperty` constructor (`00b71720`) runs, then the vtable
+/// (`010adad0`), no base texture and no LOD group, `iShader` 3 and `iShaderPropertyType` 2.
+/// Answers `this`.
+pub fn fn_00b57f90(e: &mut Engine, this: Ptr<Distant>) -> Ptr<Distant> {
+    e.call(LIGHTING_PROPERTY_CONSTRUCT_00B71720, &args![this]);
+    e.mem.set_u32(this.addr(), DISTANT_LOD_PROPERTY_VTABLE);
+    e.set(this, Distant::spBaseTexture, 0);
+    e.set(this, Distant::pDistantLODGroup, 0);
+    let base: Ptr<BSShaderProperty> = this.cast();
+    e.set(base, BSShaderProperty::iShader, 3);
+    e.set(base, BSShaderProperty::iShaderPropertyType, 2);
+    this
+}
+
+// Translated from 00b57fd0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Ghidra made no function here: `DistantLODShaderProperty`'s vtable slot +8 (`GetRTTI` in the
+/// Xbox PDB's slot list): answers the address of its RTTI record, `011f9648`.
+pub fn fn_00b57fd0(_e: &mut Engine, _this: Ptr<Distant>) -> u32 {
+    DISTANT_LOD_PROPERTY_RTTI
+}
+
+// Translated from 00b57fe0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Ghidra made no function here: `DistantLODShaderProperty`'s vtable slot +0xd8 (`SetClampNI`
+/// in the Xbox PDB's slot list; `thiscall`, one word): stores the word in `TextureClampMode`.
+pub fn fn_00b57fe0(e: &mut Engine, this: Ptr<Distant>, mode: u32) {
+    e.set(this, Distant::TextureClampMode, mode);
+}
+
+// Translated from 00b57ff0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map: `DistantLODShaderProperty`'s destructor body (`thiscall`). The
+/// vtable (`010adad0`) is set, the LOD group cleared and the base texture released; then the
+/// base `BSShaderLightingProperty` destructor body (`00b71410`) runs.
+///
+/// The exception frame (`FS:[0]`) is not translated.
+// Translation incomplete: 00b57ff0 - the FS:[0] exception frame (unwinding on a throw) is not translated
+pub fn fn_00b57ff0(e: &mut Engine, this: Ptr<Distant>) {
+    e.mem.set_u32(this.addr(), DISTANT_LOD_PROPERTY_VTABLE);
+    e.set(this, Distant::pDistantLODGroup, 0);
+    let texture = e.get(this, Distant::spBaseTexture);
+    if texture != 0 {
+        release_reference(e, texture);
+    }
+    e.call(LIGHTING_PROPERTY_DESTROY_00B71410, &args![this]);
+}
+
+// Translated from 00b58090 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Ghidra made no function here: `DistantLODShaderProperty`'s vtable slot +0xb4
+/// (`GetBaseTexture` in the Xbox PDB's slot list): answers `spBaseTexture`.
+pub fn fn_00b58090(e: &mut Engine, this: Ptr<Distant>) -> u32 {
+    e.get(this, Distant::spBaseTexture)
+}
+
+// Translated from 00b58110 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map: `DistantLODShaderProperty`'s scalar deleting destructor
+/// (`thiscall`, one word: the flags). The destructor body (`fn_00b57ff0`) runs; with bit 0 of
+/// the flags the 0x8c bytes are freed (`00aa1460`). Answers `this`.
+pub fn fn_00b58110(e: &mut Engine, this: Ptr<Distant>, flags: u8) -> Ptr<Distant> {
+    fn_00b57ff0(e, this);
+    if flags & 1 != 0 {
+        e.call(FREE_SIZED_00AA1460, &args![this, 0x8cu32]);
+    }
+    this
+}
+
+// Translated from 00b58140 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map: `DistantLODShaderProperty`'s member copy into a clone
+/// (`thiscall`, two words: the clone and the cloning process). The base copy (`00b702b0`, with
+/// the same two words) runs; then the clone's base texture becomes this one's (an `NiPointer`
+/// assignment), and `TextureClampMode`, `pDistantLODParam` and `pDistantLODGroup` are copied.
+pub fn fn_00b58140(e: &mut Engine, this: Ptr<Distant>, clone: Ptr<Distant>, process: u32) {
+    e.call(
+        LIGHTING_PROPERTY_COPY_MEMBERS_00B702B0,
+        &args![this, clone, process],
+    );
+    let texture = e.get(this, Distant::spBaseTexture);
+    assign_pointer(e, clone.addr().wrapping_add(0x80), texture);
+    let mode = e.get(this, Distant::TextureClampMode);
+    e.set(clone, Distant::TextureClampMode, mode);
+    let param = e.get(this, Distant::pDistantLODParam);
+    e.set(clone, Distant::pDistantLODParam, param);
+    let group = e.get(this, Distant::pDistantLODGroup);
+    e.set(clone, Distant::pDistantLODGroup, group);
+}
+
+// Translated from 00b581c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map: the destructor body of a 0x34-byte reference-counted object
+/// (its scalar deleting destructor `fn_00b584c0` frees 0x34 bytes; `thiscall`). The
+/// `NiPointer`s at +0x24, +0x20, +0x1c, +0x18 and +0x8 are released in that order; then the
+/// `NiRefObject` vtable (`0101dce4`) is set and `NiRefObject::ms_uiObjects` (`011f4400`)
+/// decremented.
+///
+/// The exception frame (`FS:[0]`) is not translated.
+// Translation incomplete: 00b581c0 - the FS:[0] exception frame (unwinding on a throw) is not translated
+pub fn fn_00b581c0(e: &mut Engine, this: Ptr) {
+    for offset in [0x24u32, 0x20, 0x1c, 0x18, 0x8] {
+        let object = e.mem.u32(this.addr().wrapping_add(offset));
+        if object != 0 {
+            release_reference(e, object);
+        }
+    }
+    e.mem.set_u32(this.addr(), REF_OBJECT_VTABLE_0101DCE4);
+    e.call(INTERLOCKED_DECREMENT, &args![REF_OBJECT_COUNT_011F4400]);
+}
+
+// Translated from 00b58400 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map: the scalar deleting destructor of the map `fn_00b580a0` destroys
+/// (`thiscall`, one word: the flags). With bit 0 of the flags the map goes back to the memory
+/// manager (`00aa4060` on `011f6238`). Answers `this`.
+pub fn fn_00b58400(e: &mut Engine, this: Ptr<NiTPointerMap>, flags: u8) -> Ptr<NiTPointerMap> {
+    fn_00b580a0(e, this);
+    if flags & 1 != 0 {
+        e.call(
+            MEMORY_DEALLOCATE_00AA4060,
+            &args![MEMORY_MANAGER_011F6238, this],
+        );
+    }
+    this
+}
+
+// Translated from 00b58420 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map: `DistantLODShaderProperty`'s vtable slot +0x48 (`CreateClone` in
+/// the Xbox PDB's slot list; `thiscall`, one word: the cloning process). 0x8c bytes are
+/// allocated (`00aa13e0`) and, when that gave a block, constructed as `fn_00b57f90` does
+/// (inlined there); then this property's members are copied into it (`fn_00b58140`, also with
+/// a null clone). Answers the clone.
+///
+/// The exception frame (`FS:[0]`) is not translated.
+// Translation incomplete: 00b58420 - the FS:[0] exception frame (unwinding on a throw) is not translated
+pub fn fn_00b58420(e: &mut Engine, this: Ptr<Distant>, process: u32) -> Ptr<Distant> {
+    let block: Ptr<Distant> = e.call(ALLOCATE_00AA13E0, &args![0x8cu32]).ptr();
+    let clone = if block.is_null() {
+        Ptr::NULL
+    } else {
+        fn_00b57f90(e, block)
+    };
+    fn_00b58140(e, this, clone, process);
+    clone
+}
+
+// Translated from 00b584c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map: the scalar deleting destructor of the object `fn_00b581c0`
+/// destroys (`thiscall`, one word: the flags). With bit 0 of the flags the 0x34 bytes are
+/// freed (`00aa1460`). Answers `this`.
+pub fn fn_00b584c0(e: &mut Engine, this: Ptr, flags: u8) -> Ptr {
+    fn_00b581c0(e, this);
+    if flags & 1 != 0 {
+        e.call(FREE_SIZED_00AA1460, &args![this, 0x34u32]);
+    }
+    this
+}
+
+// Translated from 00b584e0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map: adds an element at the tail of an `NiTPointerList` whose items
+/// come from the memory manager (`thiscall`, one word: the address of the element). A 0xc-byte
+/// item (`00aa3e40` on `011f6238`) gets the element, no next item and the old tail as its
+/// previous one; the old tail (if any) links to it, otherwise it also becomes the head; the
+/// count goes up and it becomes the tail.
+pub fn fn_00b584e0(e: &mut Engine, this: Ptr<NiTPointerList>, element: Ptr) {
+    let item: Ptr<NiTListItem> = e
+        .call(
+            MEMORY_ALLOCATE_00AA3E40,
+            &args![MEMORY_MANAGER_011F6238, 0xcu32],
+        )
+        .ptr();
+    let value = e.mem.u32(element.addr());
+    e.set(item, NiTListItem::m_element, value);
+    e.set(item, NiTListItem::m_pkNext, 0);
+    let tail = e.get(this, NiTPointerList::m_pkTail);
+    e.set(item, NiTListItem::m_pkPrev, tail);
+    let tail = e.get(this, NiTPointerList::m_pkTail);
+    let count = e.get(this, NiTPointerList::m_uiCount).wrapping_add(1);
+    if tail != 0 {
+        e.mem.set_u32(tail, item.addr());
+        e.set(this, NiTPointerList::m_uiCount, count);
+        e.set(this, NiTPointerList::m_pkTail, item.addr());
+        return;
+    }
+    e.set(this, NiTPointerList::m_uiCount, count);
+    e.set(this, NiTPointerList::m_pkHead, item.addr());
+    e.set(this, NiTPointerList::m_pkTail, item.addr());
+}
+
+// Translated from 00b58530 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map: empties an `NiTPointerList` whose items belong to the memory
+/// manager (`thiscall`): from the head, each item's element is cleared and the item given back
+/// (`00aa4060` on `011f6238`); then the count, head and tail are cleared.
+pub fn fn_00b58530(e: &mut Engine, this: Ptr<NiTPointerList>) {
+    let mut item = e.get(this, NiTPointerList::m_pkHead);
+    while item != 0 {
+        let next = e.mem.u32(item);
+        e.mem.set_u32(item.wrapping_add(8), 0);
+        e.call(
+            MEMORY_DEALLOCATE_00AA4060,
+            &args![MEMORY_MANAGER_011F6238, item],
+        );
+        item = next;
+    }
+    e.set(this, NiTPointerList::m_uiCount, 0);
+    e.set(this, NiTPointerList::m_pkHead, 0);
+    e.set(this, NiTPointerList::m_pkTail, 0);
+}
+
+// Translated from 00b58720 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`cdecl`, one word: a key; `bool` in `AL`): false for a null key;
+/// otherwise looks the key up in the static map of `fn_00b58670` (`00e92760` with the key and
+/// an `NiPointer` on the stack) and answers whether it was found with a non-null value, then
+/// releases the `NiPointer`.
+///
+/// The exception frame (`FS:[0]`) is not translated.
+// Translation incomplete: 00b58720 - the FS:[0] exception frame (unwinding on a throw) is not translated
+pub fn fn_00b58720(e: &mut Engine, key: u32) -> bool {
+    if key == 0 {
+        return false;
+    }
+    e.with_stack(4, |e, value| {
+        let map = fn_00b58670(e);
+        let found = e.call(MAP_GET_AT_00E92760, &args![map, key, value]).bool();
+        let object = e.mem.u32(value.addr());
+        let answer = found && object != 0;
+        if object != 0 {
+            release_reference(e, object);
+        }
+        answer
+    })
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -295,6 +605,25 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00b5_82b0, fn_00b582b0(Ptr<NiTPointerMap>, u32, u32)),
         entry!(0x00b5_85c0, fn_00b585c0() -> u32),
         entry!(0x00b5_8670, fn_00b58670() -> u32),
+        entry!(0x00b5_7e70, fn_00b57e70(Ptr<NiTPointerList>)),
+        entry!(0x00b5_7e80, fn_00b57e80(Ptr<Distant>, u32)),
+        entry!(0x00b5_7f90, fn_00b57f90(Ptr<Distant>) -> Ptr<Distant>),
+        entry!(0x00b5_7fd0, fn_00b57fd0(Ptr<Distant>) -> u32),
+        entry!(0x00b5_7fe0, fn_00b57fe0(Ptr<Distant>, u32)),
+        entry!(0x00b5_7ff0, fn_00b57ff0(Ptr<Distant>)),
+        entry!(0x00b5_8090, fn_00b58090(Ptr<Distant>) -> u32),
+        entry!(0x00b5_8110, fn_00b58110(Ptr<Distant>, u8) -> Ptr<Distant>),
+        entry!(0x00b5_8140, fn_00b58140(Ptr<Distant>, Ptr<Distant>, u32)),
+        entry!(0x00b5_81c0, fn_00b581c0(Ptr)),
+        entry!(
+            0x00b5_8400,
+            fn_00b58400(Ptr<NiTPointerMap>, u8) -> Ptr<NiTPointerMap>
+        ),
+        entry!(0x00b5_8420, fn_00b58420(Ptr<Distant>, u32) -> Ptr<Distant>),
+        entry!(0x00b5_84c0, fn_00b584c0(Ptr, u8) -> Ptr),
+        entry!(0x00b5_84e0, fn_00b584e0(Ptr<NiTPointerList>, Ptr)),
+        entry!(0x00b5_8530, fn_00b58530(Ptr<NiTPointerList>)),
+        entry!(0x00b5_8720, fn_00b58720(u32) -> bool),
     ]
 }
 
@@ -531,5 +860,311 @@ mod map_tests {
         assert_eq!(e.mem.u32(0x011f_9670), MAP_VTABLE_010ADBAC);
         assert_eq!(calls(&e, ATEXIT)[1], vec![0x00fd_cc30]);
         assert_eq!(calls(&e, ALLOCATE_00AA1070), vec![vec![0x94], vec![0x94]]);
+    }
+}
+
+#[cfg(test)]
+mod distant_lod_tests {
+    use super::*;
+
+    fn calls(e: &Engine, addr: u32) -> Vec<Vec<u32>> {
+        e.call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|(a, _)| *a == addr)
+            .map(|(_, w)| w.clone())
+            .collect()
+    }
+
+    /// Reference counting on `+4` (`InterlockedIncrement`/`Decrement`), deletion through the
+    /// counted object's vtable slot +4 (`0f00_0004`), and a call log.
+    fn rig() -> Engine {
+        let mut e = Engine::new();
+        e.register(INTERLOCKED_DECREMENT, |e, a| {
+            let v = e.mem.u32(a[0]).wrapping_sub(1);
+            e.mem.set_u32(a[0], v);
+            v.into_ret()
+        });
+        e.register(INTERLOCKED_INCREMENT, |e, a| {
+            let v = e.mem.u32(a[0]).wrapping_add(1);
+            e.mem.set_u32(a[0], v);
+            v.into_ret()
+        });
+        e.put_vtable(0x0f00_2000, &[0, 0x0f00_0004]);
+        e.register(0x0f00_0004, |_, _| Ret::default());
+        e.call_log = Some(vec![]);
+        e
+    }
+
+    fn counted(e: &mut Engine, references: u32) -> u32 {
+        let o = e.mem.alloc(8);
+        e.mem.set_u32(o, 0x0f00_2000);
+        e.mem.set_u32(o + 4, references);
+        o
+    }
+
+    #[test]
+    fn fn_00b57e70_clears_the_list() {
+        let mut e = Engine::new();
+        let list = e.mem.alloc(0xc);
+        for i in 0..3 {
+            e.mem.set_u32(list + 4 * i, 9);
+        }
+        e.call(0x00b5_7e70, &args![list]);
+        assert_eq!(
+            (e.mem.u32(list), e.mem.u32(list + 4), e.mem.u32(list + 8)),
+            (0, 0, 0)
+        );
+    }
+
+    #[test]
+    fn clamp_setters_store_the_mode() {
+        let mut e = Engine::new();
+        let p = e.new_object::<Distant>();
+        e.call(0x00b5_7e80, &args![p, 3u32]);
+        assert_eq!(e.get(p, Distant::TextureClampMode), 0);
+        e.call(0x00b5_7e80, &args![p, 1u32]);
+        assert_eq!(e.get(p, Distant::TextureClampMode), 3);
+        e.call(0x00b5_7fe0, &args![p, 7u32]);
+        assert_eq!(e.get(p, Distant::TextureClampMode), 7);
+    }
+
+    #[test]
+    fn constructor_sets_vtable_and_shader_numbers() {
+        let mut e = rig();
+        e.register(LIGHTING_PROPERTY_CONSTRUCT_00B71720, |e, a| {
+            e.mem.set_u32(a[0] + 0x80, 0x55);
+            e.mem.set_u32(a[0] + 0x7c, 0x66);
+            Ret::default()
+        });
+        let p = e.new_object::<Distant>();
+        assert_eq!(e.call(0x00b5_7f90, &args![p]).u32(), p.addr());
+        assert_eq!(e.mem.u32(p.addr()), DISTANT_LOD_PROPERTY_VTABLE);
+        assert_eq!(e.get(p, Distant::spBaseTexture), 0);
+        assert_eq!(e.get(p, Distant::pDistantLODGroup), 0);
+        assert_eq!(e.mem.u32(p.addr() + 0x58), 3);
+        assert_eq!(e.mem.u32(p.addr() + 0x1c), 2);
+        assert_eq!(
+            calls(&e, LIGHTING_PROPERTY_CONSTRUCT_00B71720),
+            vec![vec![p.addr()]]
+        );
+    }
+
+    #[test]
+    fn rtti_and_base_texture_getters() {
+        let mut e = Engine::new();
+        let p = e.new_object::<Distant>();
+        e.set(p, Distant::spBaseTexture, 0x1234);
+        assert_eq!(e.call(0x00b5_7fd0, &args![p]).u32(), 0x011f_9648);
+        assert_eq!(e.call(0x00b5_8090, &args![p]).u32(), 0x1234);
+    }
+
+    #[test]
+    fn destructor_releases_the_texture_and_runs_the_base() {
+        let mut e = rig();
+        e.register(LIGHTING_PROPERTY_DESTROY_00B71410, |_, _| Ret::default());
+        let p = e.new_object::<Distant>();
+        let texture = counted(&mut e, 1);
+        e.set(p, Distant::spBaseTexture, texture);
+        e.set(p, Distant::pDistantLODGroup, 9);
+        e.call(0x00b5_7ff0, &args![p]);
+        assert_eq!(e.mem.u32(p.addr()), DISTANT_LOD_PROPERTY_VTABLE);
+        assert_eq!(e.get(p, Distant::pDistantLODGroup), 0);
+        assert_eq!(calls(&e, 0x0f00_0004), vec![vec![texture]]);
+        assert_eq!(
+            calls(&e, LIGHTING_PROPERTY_DESTROY_00B71410),
+            vec![vec![p.addr()]]
+        );
+        // Without a texture only the base runs.
+        let q = e.new_object::<Distant>();
+        e.call(0x00b5_7ff0, &args![q]);
+        assert_eq!(calls(&e, INTERLOCKED_DECREMENT).len(), 1);
+    }
+
+    #[test]
+    fn scalar_deleting_destructor_frees_on_bit_0() {
+        let mut e = rig();
+        e.register(LIGHTING_PROPERTY_DESTROY_00B71410, |_, _| Ret::default());
+        e.register(FREE_SIZED_00AA1460, |_, _| Ret::default());
+        let p = e.new_object::<Distant>();
+        assert_eq!(e.call(0x00b5_8110, &args![p, 0x100u32]).u32(), p.addr());
+        assert!(calls(&e, FREE_SIZED_00AA1460).is_empty());
+        e.call(0x00b5_8110, &args![p, 1u32]);
+        assert_eq!(calls(&e, FREE_SIZED_00AA1460), vec![vec![p.addr(), 0x8c]]);
+    }
+
+    #[test]
+    fn copy_members_assigns_the_texture_and_copies_fields() {
+        let mut e = rig();
+        e.register(LIGHTING_PROPERTY_COPY_MEMBERS_00B702B0, |_, _| {
+            Ret::default()
+        });
+        let p = e.new_object::<Distant>();
+        let clone = e.new_object::<Distant>();
+        let texture = counted(&mut e, 1);
+        let old = counted(&mut e, 1);
+        e.set(p, Distant::spBaseTexture, texture);
+        e.set(p, Distant::TextureClampMode, 2);
+        e.set(p, Distant::pDistantLODParam, 0x77);
+        e.set(p, Distant::pDistantLODGroup, 0x88);
+        e.set(clone, Distant::spBaseTexture, old);
+        e.call(0x00b5_8140, &args![p, clone, 0x4444u32]);
+        assert_eq!(
+            calls(&e, LIGHTING_PROPERTY_COPY_MEMBERS_00B702B0),
+            vec![vec![p.addr(), clone.addr(), 0x4444]]
+        );
+        assert_eq!(e.get(clone, Distant::spBaseTexture), texture);
+        assert_eq!(e.mem.u32(texture + 4), 2);
+        assert_eq!(calls(&e, 0x0f00_0004), vec![vec![old]]);
+        assert_eq!(e.get(clone, Distant::TextureClampMode), 2);
+        assert_eq!(e.get(clone, Distant::pDistantLODParam), 0x77);
+        assert_eq!(e.get(clone, Distant::pDistantLODGroup), 0x88);
+        // The same texture again: no counting.
+        e.call(0x00b5_8140, &args![p, clone, 0u32]);
+        assert_eq!(e.mem.u32(texture + 4), 2);
+    }
+
+    #[test]
+    fn fn_00b581c0_releases_five_pointers_in_order() {
+        let mut e = rig();
+        e.map(0x011f_4000, 0x1000);
+        e.set_global(REF_OBJECT_COUNT_011F4400, 5u32);
+        let object = e.mem.alloc(0x34);
+        let mut held = vec![];
+        for offset in [0x24u32, 0x20, 0x1c, 0x18, 0x8] {
+            let o = counted(&mut e, 1);
+            e.mem.set_u32(object + offset, o);
+            held.push(vec![o]);
+        }
+        // A null pointer is skipped.
+        e.mem.set_u32(object + 0x1c, 0);
+        held.remove(2);
+        e.call(0x00b5_81c0, &args![object]);
+        assert_eq!(calls(&e, 0x0f00_0004), held);
+        assert_eq!(e.mem.u32(object), REF_OBJECT_VTABLE_0101DCE4);
+        assert_eq!(e.global::<u32>(REF_OBJECT_COUNT_011F4400), 4);
+    }
+
+    #[test]
+    fn map_scalar_deleting_destructor_gives_the_map_back() {
+        let mut e = rig();
+        e.register(MAP_REMOVE_ALL_00B601A0, |_, _| Ret::default());
+        e.register(FREE_00AA10F0, |_, _| Ret::default());
+        e.register(MEMORY_DEALLOCATE_00AA4060, |_, _| Ret::default());
+        let map = e.mem.alloc(0x10);
+        e.call(0x00b5_8400, &args![map, 0u32]);
+        assert!(calls(&e, MEMORY_DEALLOCATE_00AA4060).is_empty());
+        assert_eq!(e.call(0x00b5_8400, &args![map, 1u32]).u32(), map);
+        assert_eq!(
+            calls(&e, MEMORY_DEALLOCATE_00AA4060),
+            vec![vec![MEMORY_MANAGER_011F6238, map]]
+        );
+    }
+
+    #[test]
+    fn create_clone_constructs_and_copies() {
+        let mut e = rig();
+        e.register(ALLOCATE_00AA13E0, |e, a| e.mem.alloc(a[0]).into_ret());
+        e.register(LIGHTING_PROPERTY_CONSTRUCT_00B71720, |_, _| Ret::default());
+        e.register(LIGHTING_PROPERTY_COPY_MEMBERS_00B702B0, |_, _| {
+            Ret::default()
+        });
+        let p = e.new_object::<Distant>();
+        e.set(p, Distant::TextureClampMode, 1);
+        let clone = e.call(0x00b5_8420, &args![p, 0x99u32]).u32();
+        assert_ne!(clone, 0);
+        assert_eq!(e.mem.u32(clone), DISTANT_LOD_PROPERTY_VTABLE);
+        assert_eq!(e.mem.u32(clone + 0x58), 3);
+        assert_eq!(e.mem.u32(clone + 0x84), 1);
+        assert_eq!(
+            calls(&e, LIGHTING_PROPERTY_COPY_MEMBERS_00B702B0),
+            vec![vec![p.addr(), clone, 0x99]]
+        );
+        assert_eq!(calls(&e, ALLOCATE_00AA13E0), vec![vec![0x8c]]);
+    }
+
+    #[test]
+    fn fn_00b584c0_frees_0x34_bytes_on_bit_0() {
+        let mut e = rig();
+        e.map(0x011f_4000, 0x1000);
+        e.register(FREE_SIZED_00AA1460, |_, _| Ret::default());
+        let object = e.mem.alloc(0x34);
+        e.call(0x00b5_84c0, &args![object, 0u32]);
+        assert!(calls(&e, FREE_SIZED_00AA1460).is_empty());
+        assert_eq!(e.call(0x00b5_84c0, &args![object, 1u32]).u32(), object);
+        assert_eq!(calls(&e, FREE_SIZED_00AA1460), vec![vec![object, 0x34]]);
+    }
+
+    #[test]
+    fn add_tail_and_remove_all_use_the_memory_manager() {
+        let mut e = rig();
+        e.register(MEMORY_ALLOCATE_00AA3E40, |e, a| {
+            e.mem.alloc(a[1]).into_ret()
+        });
+        e.register(MEMORY_DEALLOCATE_00AA4060, |_, _| Ret::default());
+        let list = e.mem.alloc(0xc);
+        let element = e.mem.alloc(4);
+        e.mem.set_u32(element, 0x11);
+        e.call(0x00b5_84e0, &args![list, element]);
+        let first = e.mem.u32(list);
+        assert_eq!(e.mem.u32(list + 4), first);
+        assert_eq!(e.mem.u32(list + 8), 1);
+        assert_eq!(e.mem.u32(first + 8), 0x11);
+        e.mem.set_u32(element, 0x22);
+        e.call(0x00b5_84e0, &args![list, element]);
+        let second = e.mem.u32(list + 4);
+        assert_eq!(e.mem.u32(first), second);
+        assert_eq!(e.mem.u32(second + 4), first);
+        assert_eq!(e.mem.u32(list + 8), 2);
+        assert_eq!(
+            calls(&e, MEMORY_ALLOCATE_00AA3E40),
+            vec![vec![MEMORY_MANAGER_011F6238, 0xc]; 2]
+        );
+        e.call(0x00b5_8530, &args![list]);
+        assert_eq!(
+            calls(&e, MEMORY_DEALLOCATE_00AA4060),
+            vec![
+                vec![MEMORY_MANAGER_011F6238, first],
+                vec![MEMORY_MANAGER_011F6238, second]
+            ]
+        );
+        assert_eq!(e.mem.u32(first + 8), 0);
+        assert_eq!(e.mem.u32(second + 8), 0);
+        assert_eq!(
+            (e.mem.u32(list), e.mem.u32(list + 4), e.mem.u32(list + 8)),
+            (0, 0, 0)
+        );
+    }
+
+    #[test]
+    fn fn_00b58720_answers_found_and_not_null() {
+        let mut e = rig();
+        e.map(0x011f_9000, 0x1000);
+        // The static map was made already.
+        e.set_global(STATIC_MAP_00B58670.guard, 1u32);
+        let value = counted(&mut e, 2);
+        e.mem.set_u32(0x011f_9ff0, value);
+        e.register(MAP_GET_AT_00E92760, |e, a| {
+            // Key 1: found with the value (counted); key 2: found with null; else not found.
+            match a[1] {
+                1 => {
+                    let v = e.mem.u32(0x011f_9ff0);
+                    e.mem.set_u32(a[2], v);
+                    let n = e.mem.u32(v + 4) + 1;
+                    e.mem.set_u32(v + 4, n);
+                    true.into_ret()
+                }
+                2 => true.into_ret(),
+                _ => false.into_ret(),
+            }
+        });
+        assert!(!e.call(0x00b5_8720, &args![0u32]).bool());
+        assert!(calls(&e, MAP_GET_AT_00E92760).is_empty());
+        assert!(e.call(0x00b5_8720, &args![1u32]).bool());
+        assert_eq!(e.mem.u32(value + 4), 2);
+        assert_eq!(calls(&e, MAP_GET_AT_00E92760)[0][0], 0x011f_9670);
+        assert!(!e.call(0x00b5_8720, &args![2u32]).bool());
+        assert!(!e.call(0x00b5_8720, &args![3u32]).bool());
     }
 }

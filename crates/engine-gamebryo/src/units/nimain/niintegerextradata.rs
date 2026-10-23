@@ -34,9 +34,63 @@ pub fn ni_integer_extra_data_create_clone(e: &mut Engine, this: Ptr, cloning: Pt
     Ptr::new(clone)
 }
 
+/// `NiIntegerExtraData::ms_RTTI` (the class's `NiRTTI` record; its first word is the class
+/// name).
+const NI_INTEGER_EXTRA_DATA_RTTI: u32 = 0x011f_5f2c;
+/// `NiExtraData::GetViewerStrings` (`00a7b580`, `thiscall`, the string array).
+const EXTRA_DATA_GET_VIEWER_STRINGS: u32 = 0x00a7_b580;
+/// `NiGetViewerString` (`00a7d330`, the class name) and `NiGetViewerString_ov7`
+/// (`00a7d4d0`, a name and an integer), both `cdecl`, answering a new string.
+const VIEWER_STRING_CLASS: u32 = 0x00a7_d330;
+const VIEWER_STRING_INTEGER: u32 = 0x00a7_d4d0;
+/// The string array's grow (`0096ad30`, `thiscall`, the new size) and set-at (`0096ae90`,
+/// `thiscall`, (index, address of the string)), both unnamed in the engine map.
+const STRINGS_GROW: u32 = 0x0096_ad30;
+const STRINGS_SET_AT: u32 = 0x0096_ae90;
+/// The literal `"m_iValue"`.
+const TEXT_M_I_VALUE: u32 = 0x010a_0db8;
+
+/// Appends `text` to a viewer-string array as the exe's inlined `Add` does: when the 16-bit
+/// size (+0xa) has reached the capacity (+0x8) the array grows to its step (+0xe) plus the
+/// size, then the string is stored at the old size (through a stack word holding it).
+fn push_viewer_string(e: &mut Engine, strings: Ptr, text: u32) {
+    let size = u32::from(e.mem.u16(strings.addr() + 0xa));
+    if size >= u32::from(e.mem.u16(strings.addr() + 8)) {
+        let step = u32::from(e.mem.u16(strings.addr() + 0xe));
+        e.call(STRINGS_GROW, &args![strings, step + size]);
+    }
+    e.with_stack(4, |e, slot| {
+        e.mem.set_u32(slot.addr(), text);
+        e.call(STRINGS_SET_AT, &args![strings, size, slot]);
+    });
+}
+
+// Translated from 00a99d70 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiIntegerExtraData::GetViewerStrings` (Xbox PDB): `NiExtraData::GetViewerStrings`, then
+/// the class name (`NiGetViewerString` of `ms_RTTI`'s name word) and `"m_iValue"` with the
+/// value (+0xc, `NiGetViewerString_ov7`) appended to the array.
+pub fn ni_integer_extra_data_get_viewer_strings(e: &mut Engine, this: Ptr, strings: Ptr) {
+    e.call(EXTRA_DATA_GET_VIEWER_STRINGS, &args![this, strings]);
+    let name = e.mem.u32(NI_INTEGER_EXTRA_DATA_RTTI);
+    let text = e.call(VIEWER_STRING_CLASS, &args![name]).u32();
+    push_viewer_string(e, strings, text);
+    // NiIntegerExtraData::m_iValue (Xbox PDB) +0x0C.
+    let value = e.mem.u32(this.addr() + 0xc);
+    let text = e
+        .call(VIEWER_STRING_INTEGER, &args![TEXT_M_I_VALUE, value])
+        .u32();
+    push_viewer_string(e, strings, text);
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
-    vec![entry!(0x00a9_9c80, ni_integer_extra_data_create_clone(Ptr, Ptr) -> Ptr)]
+    vec![
+        entry!(0x00a9_9c80, ni_integer_extra_data_create_clone(Ptr, Ptr) -> Ptr),
+        entry!(
+            0x00a9_9d70,
+            ni_integer_extra_data_get_viewer_strings(Ptr, Ptr)
+        ),
+    ]
 }
 
 #[cfg(test)]
@@ -97,5 +151,57 @@ mod tests {
         assert_eq!(copies[0].1, vec![source, 0, 0x7000]);
         // The exe then writes the value through the null clone (address 0x0C).
         assert_eq!(e.mem.u32(0xc), 9);
+    }
+}
+
+#[cfg(test)]
+mod n016_tests {
+    use super::*;
+
+    fn calls_to(e: &Engine, addr: u32) -> Vec<Vec<u32>> {
+        e.call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|c| c.0 == addr)
+            .map(|c| c.1.clone())
+            .collect()
+    }
+
+    #[test]
+    fn get_viewer_strings_adds_the_class_and_value() {
+        let mut e = Engine::new();
+        e.map(0x011f_5000, 0x1000);
+        e.mem.set_u32(NI_INTEGER_EXTRA_DATA_RTTI, 0x0123_0000);
+        e.register(EXTRA_DATA_GET_VIEWER_STRINGS, |_, _| Ret::default());
+        e.register(VIEWER_STRING_CLASS, |_, _| 0x0e00_0001u32.into_ret());
+        e.register(VIEWER_STRING_INTEGER, |_, _| 0x0e00_0002u32.into_ret());
+        e.register(STRINGS_GROW, |_, _| Ret::default());
+        e.register(STRINGS_SET_AT, |e, a| {
+            let size = e.mem.u16(a[0] + 0xa);
+            e.mem.set_u16(a[0] + 0xa, size + 1);
+            Ret::default()
+        });
+        e.call_log = Some(vec![]);
+        let this = e.mem.alloc(0x10);
+        e.mem.set_u32(this + 0xc, 0xffff_fffe);
+        // Size 1 of capacity 2, step 3: the second string grows the array to 3 + 2.
+        let strings = e.mem.alloc(0x10);
+        e.mem.set_u16(strings + 8, 2);
+        e.mem.set_u16(strings + 0xa, 1);
+        e.mem.set_u16(strings + 0xe, 3);
+        e.call(0x00a9_9d70, &args![this, strings]);
+        assert_eq!(
+            calls_to(&e, EXTRA_DATA_GET_VIEWER_STRINGS),
+            vec![vec![this, strings]]
+        );
+        assert_eq!(calls_to(&e, VIEWER_STRING_CLASS), vec![vec![0x0123_0000]]);
+        assert_eq!(
+            calls_to(&e, VIEWER_STRING_INTEGER),
+            vec![vec![TEXT_M_I_VALUE, 0xffff_fffe]]
+        );
+        assert_eq!(calls_to(&e, STRINGS_GROW), vec![vec![strings, 5]]);
+        let set: Vec<u32> = calls_to(&e, STRINGS_SET_AT).iter().map(|c| c[1]).collect();
+        assert_eq!(set, vec![1, 2]);
     }
 }

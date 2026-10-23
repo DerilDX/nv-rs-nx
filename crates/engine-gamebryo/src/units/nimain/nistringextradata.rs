@@ -108,6 +108,96 @@ pub fn ni_string_extra_data_create_clone(e: &mut Engine, this: Ptr, cloning: u32
     Ptr::new(clone)
 }
 
+/// `NiExtraData::RegisterStreamables` (`00a7b290`), `NiExtraData::SaveBinary` (`00a7b2c0`)
+/// and `NiExtraData::GetViewerStrings` (`00a7b580`), `__thiscall` with one word.
+const EXTRA_DATA_REGISTER_STREAMABLES: u32 = 0x00a7_b290;
+const EXTRA_DATA_SAVE_BINARY: u32 = 0x00a7_b2c0;
+const EXTRA_DATA_GET_VIEWER_STRINGS: u32 = 0x00a7_b580;
+/// `NiStream`'s virtual +0x20 (one word: the address of a fixed string it registers) and
+/// `NiStream::SaveFixedString` (`00a641f0`, `__thiscall`, the address of the handle).
+const STREAM_REGISTER_FIXED_STRING_SLOT: u32 = 0x20;
+const SAVE_FIXED_STRING: u32 = 0x00a6_41f0;
+/// `NiGetViewerString` (`00a7d330`, cdecl: a name) and `NiGetViewerString_ov11` (`00a7d5e0`,
+/// cdecl: a label and a fixed string); the string array's `SetSize` (`0096ad30`,
+/// `__thiscall`: the new size) and `SetAt` (`0096ae90`, `__thiscall`: index, address of the
+/// element); the label `"m_kString"`.
+const NI_GET_VIEWER_STRING: u32 = 0x00a7_d330;
+const NI_GET_VIEWER_STRING_FIXED: u32 = 0x00a7_d5e0;
+const STRING_ARRAY_SET_SIZE: u32 = 0x0096_ad30;
+const STRING_ARRAY_SET_AT: u32 = 0x0096_ae90;
+const LABEL_STRING: u32 = 0x0109_d430;
+
+// Translated from 00a741d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiStringExtraData::RegisterStreamables` (Xbox PDB): false when
+/// `NiExtraData::RegisterStreamables` (`00a7b290`) is; otherwise the string (+0x0c) is
+/// registered with the stream (its virtual +0x20) and the answer is true.
+pub fn ni_string_extra_data_register_streamables(e: &mut Engine, this: Ptr, stream: Ptr) -> bool {
+    if !e
+        .call(EXTRA_DATA_REGISTER_STREAMABLES, &args![this, stream])
+        .bool()
+    {
+        return false;
+    }
+    e.vcall(
+        stream.addr(),
+        STREAM_REGISTER_FIXED_STRING_SLOT,
+        &args![this.addr() + STRING],
+    );
+    true
+}
+
+// Translated from 00a74200 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiStringExtraData::SaveBinary` (Xbox PDB): `NiExtraData::SaveBinary` (`00a7b2c0`), then
+/// the string (+0x0c) through `NiStream::SaveFixedString` (`00a641f0`).
+pub fn ni_string_extra_data_save_binary(e: &mut Engine, this: Ptr, stream: Ptr) {
+    e.call(EXTRA_DATA_SAVE_BINARY, &args![this, stream]);
+    e.call(SAVE_FIXED_STRING, &args![stream, this.addr() + STRING]);
+}
+
+// Translated from 00a742a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map; the `NiStringExtraData` vtable's slot +0x5c (`0109d3f8`, the
+/// `IsEqual` slot of `NiObject`'s table) holds it: false for a null `other`, otherwise
+/// whether both strings (+0x0c) are the same handle. The base class is not asked.
+pub fn fn_00a742a0(e: &mut Engine, this: Ptr, other: Ptr) -> bool {
+    if other.is_null() {
+        return false;
+    }
+    e.mem.u32(this.addr() + STRING) == e.mem.u32(other.addr() + STRING)
+}
+
+/// The inlined `NiTArray<char *>::Add`: grows the array to its size plus `m_usGrowBy` (+0xe)
+/// when the size (+0xa) has reached the capacity (+0x8), then stores `value` at the old size
+/// through a stack word.
+fn add_viewer_string(e: &mut Engine, strings: u32, value: u32) {
+    let size = u32::from(e.mem.u16(strings + 0xa));
+    let capacity = u32::from(e.mem.u16(strings + 0x8));
+    if size >= capacity {
+        let grow_by = u32::from(e.mem.u16(strings + 0xe));
+        e.call(STRING_ARRAY_SET_SIZE, &args![strings, grow_by + size]);
+    }
+    e.with_stack(4, |e, element| {
+        e.mem.set_u32(element.addr(), value);
+        e.call(STRING_ARRAY_SET_AT, &args![strings, size, element]);
+    });
+}
+
+// Translated from 00a74380 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiStringExtraData::GetViewerStrings` (Xbox PDB): `NiExtraData`'s strings (`00a7b580`),
+/// then the class name (`NiGetViewerString` of `ms_RTTI`'s first word) and `"m_kString"`
+/// with the string (`NiGetViewerString_ov11`), each appended to the array.
+pub fn ni_string_extra_data_get_viewer_strings(e: &mut Engine, this: Ptr, strings: Ptr) {
+    let strings = strings.addr();
+    e.call(EXTRA_DATA_GET_VIEWER_STRINGS, &args![this, strings]);
+    let class_name = e.mem.u32(NI_STRING_EXTRA_DATA_RTTI);
+    let text = e.call(NI_GET_VIEWER_STRING, &args![class_name]).u32();
+    add_viewer_string(e, strings, text);
+    let string = e.mem.u32(this.addr() + STRING);
+    let text = e
+        .call(NI_GET_VIEWER_STRING_FIXED, &args![LABEL_STRING, string])
+        .u32();
+    add_viewer_string(e, strings, text);
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -119,6 +209,13 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
             ni_string_extra_data_scalar_deleting_destructor(Ptr, u32) -> Ptr
         ),
         entry!(0x00a7_4300, ni_string_extra_data_create_clone(Ptr, u32) -> Ptr),
+        entry!(0x00a7_41d0, ni_string_extra_data_register_streamables(Ptr, Ptr) -> bool),
+        entry!(0x00a7_4200, ni_string_extra_data_save_binary(Ptr, Ptr)),
+        entry!(0x00a7_42a0, fn_00a742a0(Ptr, Ptr) -> bool),
+        entry!(
+            0x00a7_4380,
+            ni_string_extra_data_get_viewer_strings(Ptr, Ptr)
+        ),
     ]
 }
 
@@ -228,5 +325,116 @@ mod string_extra_data_tests {
             calls_to(&e, EXTRA_DATA_COPY_MEMBERS),
             vec![vec![this, clone, 0x55]]
         );
+    }
+}
+
+#[cfg(test)]
+mod n019_tests {
+    use super::*;
+
+    fn calls_to(e: &Engine, callee: u32) -> Vec<Vec<u32>> {
+        e.call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|(address, _)| *address == callee)
+            .map(|(_, words)| words.clone())
+            .collect()
+    }
+
+    fn word(eax: u32) -> Ret {
+        Ret {
+            eax,
+            ..Ret::default()
+        }
+    }
+
+    const STREAM_DOUBLE: u32 = 0x0070_b000;
+
+    #[test]
+    fn register_streamables_registers_the_string() {
+        let mut e = Engine::new();
+        e.register(EXTRA_DATA_REGISTER_STREAMABLES, |_, a| {
+            word(u32::from(a[0] != 0x40))
+        });
+        e.register(STREAM_DOUBLE, |_, _| Ret::default());
+        let stream = e.mem.alloc(0x10);
+        let vtable = e.mem.alloc(0x40);
+        e.mem.set_u32(stream, vtable);
+        e.mem.set_u32(vtable + 0x20, STREAM_DOUBLE);
+        let data = e.mem.alloc(0x10);
+        e.call_log = Some(vec![]);
+        assert!(e.call(0x00a7_41d0, &args![data, stream]).bool());
+        assert_eq!(calls_to(&e, STREAM_DOUBLE), vec![vec![stream, data + 0xc]]);
+        assert!(!e.call(0x00a7_41d0, &args![0x40u32, stream]).bool());
+        assert_eq!(calls_to(&e, STREAM_DOUBLE).len(), 1);
+    }
+
+    #[test]
+    fn save_binary_saves_the_base_then_the_string() {
+        let mut e = Engine::new();
+        e.register(EXTRA_DATA_SAVE_BINARY, |_, _| Ret::default());
+        e.register(SAVE_FIXED_STRING, |_, _| Ret::default());
+        e.call_log = Some(vec![]);
+        e.call(0x00a7_4200, &args![0x100u32, 0x200u32]);
+        let log = e.call_log.take().unwrap();
+        let order: Vec<_> = log.iter().skip(1).cloned().collect();
+        assert_eq!(
+            order,
+            vec![
+                (EXTRA_DATA_SAVE_BINARY, vec![0x100, 0x200]),
+                (SAVE_FIXED_STRING, vec![0x200, 0x10c]),
+            ]
+        );
+    }
+
+    #[test]
+    fn fn_00a742a0_compares_the_string_handles() {
+        let mut e = Engine::new();
+        let a = e.mem.alloc(0x10);
+        let b = e.mem.alloc(0x10);
+        e.mem.set_u32(a + 0xc, 0x1234);
+        assert!(!e.call(0x00a7_42a0, &args![a, 0u32]).bool());
+        assert!(!e.call(0x00a7_42a0, &args![a, b]).bool());
+        e.mem.set_u32(b + 0xc, 0x1234);
+        assert!(e.call(0x00a7_42a0, &args![a, b]).bool());
+    }
+
+    #[test]
+    fn get_viewer_strings_appends_the_class_and_string() {
+        let mut e = Engine::new();
+        e.map(NI_STRING_EXTRA_DATA_RTTI, 8);
+        e.mem.set_u32(NI_STRING_EXTRA_DATA_RTTI, 0x0109_d400);
+        e.register(EXTRA_DATA_GET_VIEWER_STRINGS, |_, _| Ret::default());
+        e.register(NI_GET_VIEWER_STRING, |_, a| word(a[0] + 1));
+        e.register(NI_GET_VIEWER_STRING_FIXED, |_, a| word(a[1] + 2));
+        e.register(STRING_ARRAY_SET_SIZE, |e, a| {
+            e.mem.set_u16(a[0] + 8, a[1] as u16);
+            Ret::default()
+        });
+        e.register(STRING_ARRAY_SET_AT, |e, a| {
+            let value = e.mem.u32(a[2]);
+            e.mem.set_u32(a[0] + 0x10 + 4 * a[1], value);
+            e.mem.set_u16(a[0] + 0xa, a[1] as u16 + 1);
+            Ret::default()
+        });
+        let strings = e.mem.alloc(0x20);
+        e.mem.set_u16(strings + 8, 1);
+        e.mem.set_u16(strings + 0xe, 1);
+        let data = e.mem.alloc(0x10);
+        e.mem.set_u32(data + 0xc, 0x5000);
+        e.call_log = Some(vec![]);
+        e.call(0x00a7_4380, &args![data, strings]);
+        assert_eq!(
+            calls_to(&e, EXTRA_DATA_GET_VIEWER_STRINGS),
+            vec![vec![data, strings]]
+        );
+        assert_eq!(
+            calls_to(&e, NI_GET_VIEWER_STRING_FIXED),
+            vec![vec![LABEL_STRING, 0x5000]]
+        );
+        assert_eq!(e.mem.u32(strings + 0x10), 0x0109_d401);
+        assert_eq!(e.mem.u32(strings + 0x14), 0x5002);
+        assert_eq!(calls_to(&e, STRING_ARRAY_SET_SIZE), vec![vec![strings, 2]]);
     }
 }

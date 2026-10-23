@@ -107,6 +107,27 @@ pub fn ni_ambient_light_create_clone(e: &mut Engine, this: Ptr, cloning: Ptr) ->
     Ptr::new(clone)
 }
 
+// Translated from 00a9b430 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiAmbientLight::GetViewerStrings` (Xbox PDB; `thiscall`, `RET 4`): `NiLight::GetViewerStrings`
+/// (`00a721e0`, `this` passed on in `ECX`), then the class name (`NiGetViewerString`, `00a7d330`,
+/// of the first word of the `NiRTTI` at `011f5f6c`), kept in the `strings` argument's stack word
+/// and appended (grown to count + `m_usGrowBy` by `0096ad30` when full, stored by `0096ae90`).
+pub fn ni_ambient_light_get_viewer_strings(e: &mut Engine, this: Ptr, strings: Ptr) {
+    e.call(0x00a7_21e0, &args![this, strings]);
+    let class_name = e.global::<u32>(NI_AMBIENT_LIGHT_RTTI);
+    let text = e.call(0x00a7_d330, &args![class_name]).u32();
+    let count = e.mem.u16(strings.addr() + 0xa) as u32;
+    let capacity = e.mem.u16(strings.addr() + 8) as u32;
+    if count >= capacity {
+        let grow_by = e.mem.u16(strings.addr() + 0xe) as u32;
+        e.call(0x0096_ad30, &args![strings, grow_by + count]);
+    }
+    e.with_stack(4, |e, slot| {
+        e.mem.set_u32(slot.addr(), text);
+        e.call(0x0096_ae90, &args![strings, count, slot]);
+    });
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -118,6 +139,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00a9_b380, ni_ambient_light_is_equal(Ptr, Ptr) -> bool),
         entry!(0x00a9_b3a0, ni_ambient_light_scalar_deleting_destructor(Ptr, u32) -> Ptr),
         entry!(0x00a9_b3d0, ni_ambient_light_create_clone(Ptr, Ptr) -> Ptr),
+        entry!(0x00a9_b430, ni_ambient_light_get_viewer_strings(Ptr, Ptr)),
     ]
 }
 
@@ -274,5 +296,37 @@ mod b037_tests {
         assert_eq!(e.call(0x00a9_b3d0, &args![0x6000u32, 0x7000u32]).u32(), 0);
         assert!(calls(&e, LIGHT_CONSTRUCTOR).is_empty());
         assert_eq!(calls(&e, LIGHT_COPY_MEMBERS), vec![vec![0x6000, 0, 0x7000]]);
+    }
+}
+
+#[cfg(test)]
+mod n015_tests {
+    use super::*;
+    use crate::units::nimain::nimainsdm::test_support::calls_to;
+
+    #[test]
+    fn viewer_strings_add_the_class_name() {
+        let mut e = Engine::new();
+        e.map(0x011f_5000, 0x1000);
+        e.mem.set_u32(NI_AMBIENT_LIGHT_RTTI, 0x0102_0000);
+        e.register(0x00a7_21e0, |_, _| Ret::default());
+        e.register(0x00a7_d330, |_, _| 0x7000u32.into_ret());
+        e.register(0x0096_ad30, |_, _| Ret::default());
+        e.register(0x0096_ae90, |e, a| {
+            let value = e.mem.u32(a[2]);
+            e.mem.set_u32(0x011f_5f00, value);
+            Ret::default()
+        });
+        let strings = e.mem.alloc(0x10);
+        e.mem.set_u16(strings + 0xa, 2);
+        e.mem.set_u16(strings + 8, 2);
+        e.mem.set_u16(strings + 0xe, 3);
+        e.call_log = Some(vec![]);
+        e.call(0x00a9_b430, &args![0x4000u32, strings]);
+        assert_eq!(calls_to(&e, 0x00a7_21e0), vec![vec![0x4000, strings]]);
+        assert_eq!(calls_to(&e, 0x00a7_d330), vec![vec![0x0102_0000]]);
+        assert_eq!(calls_to(&e, 0x0096_ad30), vec![vec![strings, 5]]);
+        assert_eq!(calls_to(&e, 0x0096_ae90)[0][1], 2);
+        assert_eq!(e.mem.u32(0x011f_5f00), 0x7000);
     }
 }

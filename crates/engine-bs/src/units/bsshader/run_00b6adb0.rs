@@ -233,9 +233,73 @@ pub fn fn_00b6b160(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
     this
 }
 
+/// The allocation `00aa13e0` (`cdecl`, one word: the size), `WaterShaderProperty`'s
+/// constructor (`00b6abb0`, engine map; `thiscall`, no words) and the water property's member
+/// copy `00b6a6c0` (unit `run_00b69e10`; `thiscall`, two words: the clone and the process).
+const ALLOCATE_00AA13E0: u32 = 0x00aa_13e0;
+const WATER_SHADER_PROPERTY_CONSTRUCT: u32 = 0x00b6_abb0;
+const WATER_COPY_MEMBERS_00B6A6C0: u32 = 0x00b6_a6c0;
+
+/// 0x150 bytes from `00aa13e0` constructed as a `WaterShaderProperty` (`00b6abb0`), or null
+/// when the allocation gave none.
+fn new_water_property(e: &mut Engine) -> u32 {
+    let block = e.call(ALLOCATE_00AA13E0, &args![0x150u32]).u32();
+    if block == 0 {
+        return 0;
+    }
+    e.call(WATER_SHADER_PROPERTY_CONSTRUCT, &args![block]).u32()
+}
+
+// Translated from 00b6ade0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map: `WaterShaderProperty`'s vtable slot +0x48 (`CreateClone` in the
+/// Xbox PDB's slot list; `thiscall`, one word: the cloning process). A new water property
+/// (0x150 bytes, `00b6abb0`; null when the allocation gave none) gets this one's members
+/// (`00b6a6c0` with it and the process, also with a null one). Answers the clone.
+///
+/// The exception frame (`FS:[0]`) is not translated.
+// Translation incomplete: 00b6ade0 - the FS:[0] exception frame (unwinding on a throw) is not translated
+pub fn fn_00b6ade0(e: &mut Engine, this: Ptr, process: u32) -> u32 {
+    let clone = new_water_property(e);
+    e.call(WATER_COPY_MEMBERS_00B6A6C0, &args![this, clone, process]);
+    clone
+}
+
+// Translated from 00b6ae60 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (Ghidra's library match `CreateObject` is the decompiler's;
+/// `cdecl`, no arguments): a new `WaterShaderProperty` (0x150 bytes from `00aa13e0`,
+/// constructed by `00b6abb0`), or null when the allocation gave none.
+///
+/// The exception frame (`FS:[0]`) is not translated.
+// Translation incomplete: 00b6ae60 - the FS:[0] exception frame (unwinding on a throw) is not translated
+pub fn fn_00b6ae60(e: &mut Engine) -> u32 {
+    new_water_property(e)
+}
+
+// Translated from 00b6b0b0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`cdecl`, no arguments): pops the pointer stack of
+/// `fn_00b6b050`. When the count (`011fa020`) is not 0 it goes down by one and the slot at the
+/// new count, when it holds an object, is let go (count down, deleted at zero) and cleared.
+pub fn fn_00b6b0b0(e: &mut Engine) {
+    let count = e.mem.u32(POINTER_STACK_COUNT_011FA020);
+    if count == 0 {
+        return;
+    }
+    let count = count.wrapping_sub(1);
+    let slot = POINTER_STACK_011FA024.wrapping_add(count.wrapping_mul(4));
+    let object = e.mem.u32(slot);
+    e.mem.set_u32(POINTER_STACK_COUNT_011FA020, count);
+    if object != 0 {
+        release_reference(e, object);
+        e.mem.set_u32(slot, 0);
+    }
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x00b6_ade0, fn_00b6ade0(Ptr, u32) -> u32),
+        entry!(0x00b6_ae60, fn_00b6ae60() -> u32),
+        entry!(0x00b6_b0b0, fn_00b6b0b0()),
         entry!(0x00b6_b180, fn_00b6b180(Ptr, Ptr) -> u32),
         entry!(0x00b6_aed0, fn_00b6aed0(Ptr, u32) -> Ptr),
         entry!(0x00b6_adb0, fn_00b6adb0(Ptr, u32) -> Ptr),
@@ -500,5 +564,89 @@ mod b051_tests {
         e.mem.set_u32(POINTER_STACK_011FA024 + 4, 0x55);
         assert_eq!(e.call(0x00b6_b100, &args![]).u32(), 0x55);
         assert!(calls(&e, IMPORT_INTERLOCKED_DECREMENT).is_empty());
+    }
+}
+
+#[cfg(test)]
+mod n013_tests {
+    use super::*;
+
+    fn calls(e: &Engine, callee: u32) -> Vec<Vec<u32>> {
+        e.call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|(address, _)| *address == callee)
+            .map(|(_, words)| words.clone())
+            .collect()
+    }
+
+    #[test]
+    fn create_clone_makes_and_copies() {
+        let mut e = Engine::new();
+        e.register(ALLOCATE_00AA13E0, |e, a| e.mem.alloc(a[0]).into_ret());
+        e.register(WATER_SHADER_PROPERTY_CONSTRUCT, |_, a| a[0].into_ret());
+        e.register(WATER_COPY_MEMBERS_00B6A6C0, |_, _| Ret::default());
+        e.call_log = Some(vec![]);
+        let clone = e.call(0x00b6_ade0, &args![0x400u32, 0x77u32]).u32();
+        assert_ne!(clone, 0);
+        assert_eq!(calls(&e, ALLOCATE_00AA13E0), vec![vec![0x150]]);
+        assert_eq!(
+            calls(&e, WATER_COPY_MEMBERS_00B6A6C0),
+            vec![vec![0x400, clone, 0x77]]
+        );
+        // No block: the copy still runs, with a null clone.
+        e.register(ALLOCATE_00AA13E0, |_, _| 0u32.into_ret());
+        assert_eq!(e.call(0x00b6_ade0, &args![0x400u32, 0x77u32]).u32(), 0);
+        assert_eq!(
+            calls(&e, WATER_COPY_MEMBERS_00B6A6C0)[1],
+            vec![0x400, 0, 0x77]
+        );
+        assert_eq!(calls(&e, WATER_SHADER_PROPERTY_CONSTRUCT).len(), 1);
+    }
+
+    #[test]
+    fn create_object_makes_a_water_property() {
+        let mut e = Engine::new();
+        e.register(ALLOCATE_00AA13E0, |e, a| e.mem.alloc(a[0]).into_ret());
+        e.register(WATER_SHADER_PROPERTY_CONSTRUCT, |_, a| {
+            (a[0] + 1).into_ret()
+        });
+        e.call_log = Some(vec![]);
+        let made = e.call(0x00b6_ae60, &args![]).u32();
+        let block = calls(&e, WATER_SHADER_PROPERTY_CONSTRUCT)[0][0];
+        assert_eq!(made, block + 1);
+        e.register(ALLOCATE_00AA13E0, |_, _| 0u32.into_ret());
+        assert_eq!(e.call(0x00b6_ae60, &args![]).u32(), 0);
+    }
+
+    #[test]
+    fn pop_releases_the_top() {
+        let mut e = Engine::new();
+        e.map(0x011f_a000, 0x1000);
+        e.register(IMPORT_INTERLOCKED_DECREMENT, |e, a| {
+            let v = e.mem.u32(a[0]).wrapping_sub(1);
+            e.mem.set_u32(a[0], v);
+            v.into_ret()
+        });
+        e.put_vtable(0x0f00_1000, &[0, 0x0f00_0004]);
+        e.register(0x0f00_0004, |_, _| Ret::default());
+        let object = e.mem.alloc(8);
+        e.mem.set_u32(object, 0x0f00_1000);
+        e.mem.set_u32(object + 4, 1);
+        e.set_global(POINTER_STACK_COUNT_011FA020, 2u32);
+        e.set_global(POINTER_STACK_011FA024 + 4, object);
+        e.call_log = Some(vec![]);
+        e.call(0x00b6_b0b0, &args![]);
+        assert_eq!(e.global::<u32>(POINTER_STACK_COUNT_011FA020), 1);
+        assert_eq!(e.global::<u32>(POINTER_STACK_011FA024 + 4), 0);
+        assert_eq!(calls(&e, 0x0f00_0004), vec![vec![object]]);
+        // An empty slot: only the count moves.
+        e.call(0x00b6_b0b0, &args![]);
+        assert_eq!(e.global::<u32>(POINTER_STACK_COUNT_011FA020), 0);
+        // Empty stack: nothing.
+        e.call(0x00b6_b0b0, &args![]);
+        assert_eq!(e.global::<u32>(POINTER_STACK_COUNT_011FA020), 0);
+        assert_eq!(calls(&e, IMPORT_INTERLOCKED_DECREMENT).len(), 1);
     }
 }

@@ -458,9 +458,80 @@ pub fn fn_00e7f0f0(e: &mut Engine, this: Ptr, count: u32) -> Ptr {
     this
 }
 
+/// An entry unlinked from one of the block's lists (count at `count`, last entry at `last`):
+/// its neighbours (+8 the one before, +0xc the one after) linked to each other, the last
+/// entry moved back when it is the entry, the count down by one and the entry's links
+/// cleared.
+fn unlink_entry(e: &mut Engine, block: u32, entry: u32, count: u32, last: u32) {
+    let before = e.mem.u32(entry.wrapping_add(8));
+    let after = e.mem.u32(entry.wrapping_add(0xc));
+    if before != 0 {
+        e.mem.set_u32(before.wrapping_add(0xc), after);
+    }
+    if after != 0 {
+        e.mem.set_u32(after.wrapping_add(8), before);
+    }
+    if entry == e.mem.u32(block.wrapping_add(last)) {
+        e.mem.set_u32(block.wrapping_add(last), before);
+    }
+    let entries = e.mem.u32(block.wrapping_add(count)).wrapping_sub(1);
+    e.mem.set_u32(block.wrapping_add(count), entries);
+    e.mem.set_u32(entry.wrapping_add(8), 0);
+    e.mem.set_u32(entry.wrapping_add(0xc), 0);
+}
+
+// Translated from 00e7ef80 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map: a render-state block's unlink of `entry` from its first list
+/// (`thiscall`, one word; count +4, last entry +8): the neighbours linked to each other, the
+/// last entry moved back when it is this one, the count down and the entry's links (+8,
+/// +0xc) cleared.
+pub fn fn_00e7ef80(e: &mut Engine, this: Ptr, entry: u32) {
+    unlink_entry(e, this.addr(), entry, 4, 8);
+}
+
+// Translated from 00e7efc0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map: as [`fn_00e7ef80`] for the block's second list (count +0xc,
+/// last entry +0x10).
+pub fn fn_00e7efc0(e: &mut Engine, this: Ptr, entry: u32) {
+    unlink_entry(e, this.addr(), entry, 0xc, 0x10);
+}
+
+// Translated from 00e7f550 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`thiscall`, one word: a state; called by the fragment shader's
+/// alpha set-up): looks the state up in the render-state block (`00e7f000`, with a cleared
+/// byte it sets to the entry's list); when found the entry is unlinked from its list (the
+/// exe inlines [`fn_00e7efc0`] for the second list and [`fn_00e7ef80`] for the first) and
+/// given back to the entry pool (`0126f71c`, `AddUnique` with the address of a word holding
+/// it, the argument's own slot in the exe).
+pub fn fn_00e7f550(e: &mut Engine, this: Ptr, state: u32) {
+    let base = this.addr();
+    let (entry, in_second) = e.with_stack(4, |e, local| {
+        let flag = local.addr() + 3;
+        e.mem.set_u8(flag, 0);
+        let entry = e.call(FIND_ENTRY_00E7F000, &args![base, state, flag]).u32();
+        (entry, e.mem.u8(flag))
+    });
+    if entry == 0 {
+        return;
+    }
+    if in_second != 0 {
+        unlink_entry(e, base, entry, 0xc, 0x10);
+    } else {
+        unlink_entry(e, base, entry, 4, 8);
+    }
+    let pool = e.mem.u32(ENTRY_POOL_0126F71C);
+    e.with_stack(4, |e, slot| {
+        e.mem.set_u32(slot.addr(), entry);
+        e.call(POOL_ADD_UNIQUE_00E7EC00, &args![pool, slot]);
+    });
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x00e7_ef80, fn_00e7ef80(Ptr, u32)),
+        entry!(0x00e7_efc0, fn_00e7efc0(Ptr, u32)),
+        entry!(0x00e7_f550, fn_00e7f550(Ptr, u32)),
         entry!(0x00e7_f2b0, fn_00e7f2b0()),
         entry!(0x00e7_f430, fn_00e7f430(Ptr, u32, u32, u8)),
         entry!(0x00e7_f5d0, fn_00e7f5d0() -> u32),
@@ -1201,5 +1272,94 @@ mod b052_tests {
         let mut e = engine();
         e.mem.set_u32(0x0126_f728, 0x1234);
         assert_eq!(e.call(0x00e7_f7c0, &args![]).u32(), 0x1234);
+    }
+}
+
+#[cfg(test)]
+mod n010_tests {
+    use super::*;
+
+    /// A block whose first list is a, b, c (c last) and whose second list is d (d last).
+    fn block(e: &mut Engine) -> (u32, [u32; 4]) {
+        let mut entries = [0u32; 4];
+        for (i, entry) in entries.iter_mut().enumerate() {
+            *entry = e.mem.alloc(0x10);
+            e.mem.set_u32(*entry, i as u32 + 1);
+        }
+        let [a, b, c, d] = entries;
+        e.mem.set_u32(b + 8, a);
+        e.mem.set_u32(a + 0xc, b);
+        e.mem.set_u32(c + 8, b);
+        e.mem.set_u32(b + 0xc, c);
+        let block = e.mem.alloc(0x14);
+        e.mem.set_u32(block + 4, 3);
+        e.mem.set_u32(block + 8, c);
+        e.mem.set_u32(block + 0xc, 1);
+        e.mem.set_u32(block + 0x10, d);
+        (block, entries)
+    }
+
+    #[test]
+    fn fn_00e7ef80_unlinks_from_the_first_list() {
+        let mut e = Engine::new();
+        let (block, [a, b, c, _]) = block(&mut e);
+        e.call(0x00e7_ef80, &args![block, b]);
+        assert_eq!(e.mem.u32(a + 0xc), c);
+        assert_eq!(e.mem.u32(c + 8), a);
+        assert_eq!(e.mem.u32(block + 4), 2);
+        assert_eq!(e.mem.u32(block + 8), c);
+        assert_eq!((e.mem.u32(b + 8), e.mem.u32(b + 0xc)), (0, 0));
+        // The last entry: the block's last moves back.
+        e.call(0x00e7_ef80, &args![block, c]);
+        assert_eq!(e.mem.u32(block + 8), a);
+        assert_eq!(e.mem.u32(a + 0xc), 0);
+        assert_eq!(e.mem.u32(block + 4), 1);
+    }
+
+    #[test]
+    fn fn_00e7efc0_unlinks_from_the_second_list() {
+        let mut e = Engine::new();
+        let (block, [_, _, _, d]) = block(&mut e);
+        e.call(0x00e7_efc0, &args![block, d]);
+        assert_eq!(e.mem.u32(block + 0x10), 0);
+        assert_eq!(e.mem.u32(block + 0xc), 0);
+        assert_eq!(e.mem.u32(block + 4), 3);
+    }
+
+    #[test]
+    fn fn_00e7f550_removes_a_found_state_and_pools_its_entry() {
+        let mut e = Engine::new();
+        e.map(0x0126_f000, 0x1000);
+        e.mem.set_u32(ENTRY_POOL_0126F71C, 0x0e70_0000);
+        let (block, [_, b, _, d]) = block(&mut e);
+        // The lookup finds state 2 (b) in the first list and state 4 (d) in the second.
+        e.register_double(FIND_ENTRY_00E7F000, move |e, a| match a[1] {
+            2 => b.into_ret(),
+            4 => {
+                e.mem.set_u8(a[2], 1);
+                d.into_ret()
+            }
+            _ => Ret::default(),
+        });
+        e.register(POOL_ADD_UNIQUE_00E7EC00, |e, a| {
+            assert_eq!(a[0], 0x0e70_0000);
+            e.mem.u32(a[1]).into_ret()
+        });
+        e.call_log = Some(vec![]);
+        e.call(0x00e7_f550, &args![block, 2u32]);
+        assert_eq!(e.mem.u32(block + 4), 2);
+        e.call(0x00e7_f550, &args![block, 4u32]);
+        assert_eq!(e.mem.u32(block + 0xc), 0);
+        assert_eq!(e.mem.u32(block + 0x10), 0);
+        e.call(0x00e7_f550, &args![block, 9u32]);
+        let log = e.call_log.take().unwrap();
+        let finds: Vec<_> = log.iter().filter(|c| c.0 == FIND_ENTRY_00E7F000).collect();
+        assert_eq!(finds.len(), 3);
+        assert_eq!(&finds[0].1[..2], &[block, 2]);
+        let pooled: Vec<_> = log
+            .iter()
+            .filter(|c| c.0 == POOL_ADD_UNIQUE_00E7EC00)
+            .collect();
+        assert_eq!(pooled.len(), 2);
     }
 }

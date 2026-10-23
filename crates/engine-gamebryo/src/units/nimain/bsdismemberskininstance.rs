@@ -270,9 +270,314 @@ pub fn bs_dismember_skin_instance_load_binary(
     }
 }
 
+use crate::types::NiTArray;
+
+/// `NiSkinInstance::RegisterStreamables` (`00a86460`; `thiscall`: stream).
+const SKIN_INSTANCE_REGISTER_STREAMABLES: u32 = 0x00a8_6460;
+/// `NiSkinInstance::IsEqual` (`00a864d0`; `thiscall`: other object).
+const SKIN_INSTANCE_IS_EQUAL: u32 = 0x00a8_64d0;
+/// `NiSkinInstance::SaveBinary` (`00a867a0`; `thiscall`: stream).
+const SKIN_INSTANCE_SAVE_BINARY: u32 = 0x00a8_67a0;
+/// `NiSkinInstance::GetViewerStrings` (`00a86920`; `thiscall`: string array).
+const SKIN_INSTANCE_GET_VIEWER_STRINGS: u32 = 0x00a8_6920;
+/// `NiGetViewerString` (`00a7d330`; `cdecl`: text): a copy of the text.
+const VIEWER_STRING_NAME: u32 = 0x00a7_d330;
+/// `NiGetViewerString_ov2` (`00a7d370`; `cdecl`: label, boolean word).
+const VIEWER_STRING_BOOL: u32 = 0x00a7_d370;
+/// `NiGetViewerString_ov8` (`00a7d510`; `cdecl`: label, unsigned word).
+const VIEWER_STRING_UNSIGNED: u32 = 0x00a7_d510;
+/// The string array's `SetSize` (`0096ad30`; `thiscall`: new capacity) and `SetAt`
+/// (`0096ae90`; `thiscall`: index, address of the element).
+const STRING_ARRAY_SET_SIZE: u32 = 0x0096_ad30;
+const STRING_ARRAY_SET_AT: u32 = 0x0096_ae90;
+/// `00406d00`: the bounded `sprintf` (`cdecl`: buffer, size, format, ...).
+const FORMAT_BOUNDED: u32 = 0x0040_6d00;
+/// The word at `011f49d8`: the class name the viewer strings start with (the class's
+/// `NiRTTI` name pointer).
+const CLASS_NAME: u32 = 0x011f_49d8;
+/// `"Num Partitions"`, `"Visible"`.
+const TEXT_NUM_PARTITIONS: u32 = 0x0109_c7f8;
+const TEXT_VISIBLE: u32 = 0x0109_c7f0;
+/// `", State Change"` and the empty string `""` (`01011584`).
+const TEXT_STATE_CHANGE: u32 = 0x0109_c7e0;
+const TEXT_EMPTY: u32 = 0x0101_1584;
+/// `"Enabled"`, `"Disabled"`.
+const TEXT_ENABLED: u32 = 0x0109_c7d8;
+const TEXT_DISABLED: u32 = 0x0109_c7cc;
+/// `"%d = BodyPart %d [%s%s]"`.
+const TEXT_PARTITION_FORMAT: u32 = 0x0109_c7b4;
+/// `NiStream::m_pkOstr` (the output object, `+0x250`; its write function at `+0xc`, `cdecl`:
+/// output, source, bytes, component sizes, component count; the answer is added to its word
+/// at `+4`) and the stream's byte at `+0x1e4` (1: the items are written as they are, else
+/// swapped first and swapped back after).
+const STREAM_OUTPUT: u32 = 0x250;
+const STREAM_NO_SWAP: u32 = 0x1e4;
+
+// Translated from 00a6c680 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSDismemberSkinInstance::RegisterStreamables` (Xbox PDB; `thiscall`, `RET 4`: stream):
+/// `NiSkinInstance::RegisterStreamables` (`00a86460`), its answer as a boolean.
+pub fn bs_dismember_skin_instance_register_streamables(
+    e: &mut Engine,
+    this: Ptr<BSDismemberSkinInstance>,
+    stream: Ptr,
+) -> bool {
+    e.call(SKIN_INSTANCE_REGISTER_STREAMABLES, &args![this, stream])
+        .u8()
+        != 0
+}
+
+// Translated from 00a6c6a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSDismemberSkinInstance::IsEqual` (Xbox PDB; `thiscall`, `RET 4`: other object): false
+/// when `NiSkinInstance::IsEqual` (`00a864d0`) is, when the partition counts differ, or at
+/// the first partition item whose first byte, second byte or 16-bit word differs.
+pub fn bs_dismember_skin_instance_is_equal(
+    e: &mut Engine,
+    this: Ptr<BSDismemberSkinInstance>,
+    other: Ptr<BSDismemberSkinInstance>,
+) -> bool {
+    if e.call(SKIN_INSTANCE_IS_EQUAL, &args![this, other]).u8() == 0 {
+        return false;
+    }
+    let count = e.get(this, BSDismemberSkinInstance::uiPartitionDataArraySize);
+    if count != e.get(other, BSDismemberSkinInstance::uiPartitionDataArraySize) {
+        return false;
+    }
+    let mut index = 0u32;
+    if count != 0 {
+        let mut mine = e.get(this, BSDismemberSkinInstance::pPartitionDataArray);
+        let mut theirs = e.get(other, BSDismemberSkinInstance::pPartitionDataArray);
+        loop {
+            if e.mem.u8(mine) != e.mem.u8(theirs)
+                || e.mem.u8(mine.wrapping_add(1)) != e.mem.u8(theirs.wrapping_add(1))
+                || e.mem.u16(mine.wrapping_add(2)) != e.mem.u16(theirs.wrapping_add(2))
+            {
+                return false;
+            }
+            index = index.wrapping_add(1);
+            theirs = theirs.wrapping_add(4);
+            mine = mine.wrapping_add(4);
+            if index >= count {
+                break;
+            }
+        }
+    }
+    true
+}
+
+/// One write through the stream's output object (`NiStream` `+0x250`, write function at
+/// `+0xc`) with one component of `size_word`'s size, the answer added to the output's word
+/// at `+4`.
+fn stream_write(e: &mut Engine, stream: Ptr, source: u32, bytes: u32, size_word: u32) {
+    let output = e.mem.u32(stream.addr().wrapping_add(STREAM_OUTPUT));
+    let write = e.mem.u32(output.wrapping_add(0xc));
+    let answer = e
+        .call(write, &args![output, source, bytes, size_word, 1u32])
+        .u32();
+    let total = e.mem.u32(output.wrapping_add(4)).wrapping_add(answer);
+    e.mem.set_u32(output.wrapping_add(4), total);
+}
+
+/// Swaps the two bytes of the 16-bit word at `address`.
+fn swap_word(e: &mut Engine, address: u32) {
+    let word = e.mem.u16(address);
+    e.mem.set_u16(address, word.swap_bytes());
+}
+
+/// `BSWAP` of the word at `address`.
+fn swap_dword(e: &mut Engine, address: u32) {
+    let word = e.mem.u32(address);
+    e.mem.set_u32(address, word.swap_bytes());
+}
+
+// Translated from 00a6c9c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSDismemberSkinInstance::SaveBinary` (Xbox PDB; `thiscall`, `RET 4`: stream). After
+/// `NiSkinInstance::SaveBinary` (`00a867a0`), writes the partition count (4 bytes, one
+/// 4-byte component) and the items (count * 4 bytes, one 4-byte component). Unless the
+/// stream's byte at `+0x1e4` is 1, each item is swapped before the write (its 16-bit word at
+/// `+2`, then the whole item with `BSWAP`) and swapped back after it (`BSWAP`, then the word
+/// at `+2`). The component-size word of each write is a stack slot set to 4 (the first in
+/// the function's local word, the second in its stream argument word).
+pub fn bs_dismember_skin_instance_save_binary(
+    e: &mut Engine,
+    this: Ptr<BSDismemberSkinInstance>,
+    stream: Ptr,
+) {
+    e.call(SKIN_INSTANCE_SAVE_BINARY, &args![this, stream]);
+    let count_field = this.addr().wrapping_add(0x34);
+    e.with_stack(8, |e, frame| {
+        let local = frame.addr();
+        let argument = frame.addr() + 4;
+        e.mem.set_u32(argument, stream.addr());
+        e.mem.set_u32(local, 4);
+        stream_write(e, stream, count_field, 4, local);
+        if e.mem.u8(stream.addr().wrapping_add(STREAM_NO_SWAP)) != 1 {
+            let mut index = 0u32;
+            while index < e.mem.u32(count_field) {
+                let offset = index.wrapping_mul(4);
+                let array = e.get(this, BSDismemberSkinInstance::pPartitionDataArray);
+                swap_word(e, array.wrapping_add(offset).wrapping_add(2));
+                index = index.wrapping_add(1);
+                let array = e.get(this, BSDismemberSkinInstance::pPartitionDataArray);
+                swap_dword(e, array.wrapping_add(offset));
+            }
+        }
+        let bytes = e.mem.u32(count_field).wrapping_mul(4);
+        let array = e.get(this, BSDismemberSkinInstance::pPartitionDataArray);
+        e.mem.set_u32(argument, 4);
+        stream_write(e, stream, array, bytes, argument);
+        if e.mem.u8(stream.addr().wrapping_add(STREAM_NO_SWAP)) != 1 {
+            let mut index = 0u32;
+            while index < e.mem.u32(count_field) {
+                let offset = index.wrapping_mul(4);
+                let array = e.get(this, BSDismemberSkinInstance::pPartitionDataArray);
+                swap_dword(e, array.wrapping_add(offset));
+                let array = e.get(this, BSDismemberSkinInstance::pPartitionDataArray);
+                index = index.wrapping_add(1);
+                swap_word(e, array.wrapping_add(offset).wrapping_add(2));
+            }
+        }
+    });
+}
+
+/// Adds the string word at `slot` at the array's end: `SetSize` (`0096ad30`) to the size
+/// plus the grow-by step when the array is full, then `SetAt` (`0096ae90`) at the old size.
+fn add_viewer_string(e: &mut Engine, strings: Ptr<NiTArray>, slot: u32) {
+    let index = e.get(strings, NiTArray::m_usSize) as u32;
+    if index >= e.get(strings, NiTArray::m_usMaxSize) as u32 {
+        let grow = e.get(strings, NiTArray::m_usGrowBy) as u32;
+        e.call(
+            STRING_ARRAY_SET_SIZE,
+            &args![strings, grow.wrapping_add(index)],
+        );
+    }
+    e.call(STRING_ARRAY_SET_AT, &args![strings, index, slot]);
+}
+
+// Translated from 00a6cac0 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 00a6cac0 - the /GS stack cookie (011c16bc, __security_check_cookie 00ec408c) is not translated
+/// `BSDismemberSkinInstance::GetViewerStrings` (Xbox PDB; `thiscall`, `RET 4`: string
+/// array). After `NiSkinInstance::GetViewerStrings` (`00a86920`), adds the class name (the
+/// word at `011f49d8`), `"Num Partitions"` with the count and `"Visible"` with the
+/// visible-partitions byte (each through `SetSize`/`SetAt`), then for each partition
+/// `"%d = BodyPart %d [%s%s]"` formatted into a 64-byte buffer (`00406d00`: the index, the
+/// item's 16-bit word, `"Enabled"` or `"Disabled"` by its first byte, `", State Change"` or
+/// `""` by its second) and copied (`00a7d330`), stored with `SetAt` inlined (grow, then the
+/// size and the non-null count kept as `SetAt` keeps them).
+pub fn bs_dismember_skin_instance_get_viewer_strings(
+    e: &mut Engine,
+    this: Ptr<BSDismemberSkinInstance>,
+    strings: Ptr<NiTArray>,
+) {
+    // The frame: the string word (+0) and the 64-byte format buffer (+4).
+    e.with_stack(0x44, |e, frame| {
+        let slot = frame.addr();
+        let buffer = frame.addr() + 4;
+        e.call(SKIN_INSTANCE_GET_VIEWER_STRINGS, &args![this, strings]);
+        let class_name = e.global::<u32>(CLASS_NAME);
+        let text = e.call(VIEWER_STRING_NAME, &args![class_name]).u32();
+        e.mem.set_u32(slot, text);
+        add_viewer_string(e, strings, slot);
+        let count = e.get(this, BSDismemberSkinInstance::uiPartitionDataArraySize);
+        let text = e
+            .call(VIEWER_STRING_UNSIGNED, &args![TEXT_NUM_PARTITIONS, count])
+            .u32();
+        e.mem.set_u32(slot, text);
+        add_viewer_string(e, strings, slot);
+        let visible = e.get(this, BSDismemberSkinInstance::bVisiblePartitions) as u32;
+        let text = e
+            .call(VIEWER_STRING_BOOL, &args![TEXT_VISIBLE, visible])
+            .u32();
+        e.mem.set_u32(slot, text);
+        add_viewer_string(e, strings, slot);
+        let mut index = 0u32;
+        while index < e.get(this, BSDismemberSkinInstance::uiPartitionDataArraySize) {
+            let array = e.get(this, BSDismemberSkinInstance::pPartitionDataArray);
+            let item = array.wrapping_add(index.wrapping_mul(4));
+            let change = if e.mem.u8(item.wrapping_add(1)) != 0 {
+                TEXT_STATE_CHANGE
+            } else {
+                TEXT_EMPTY
+            };
+            let state = if e.mem.u8(item) != 0 {
+                TEXT_ENABLED
+            } else {
+                TEXT_DISABLED
+            };
+            let body_part = e.mem.u16(item.wrapping_add(2)) as u32;
+            e.call(
+                FORMAT_BOUNDED,
+                &args![
+                    buffer,
+                    0x40u32,
+                    TEXT_PARTITION_FORMAT,
+                    index,
+                    body_part,
+                    state,
+                    change
+                ],
+            );
+            let text = e.call(VIEWER_STRING_NAME, &args![buffer]).u32();
+            let at = e.get(strings, NiTArray::m_usSize);
+            if at >= e.get(strings, NiTArray::m_usMaxSize) {
+                let grow = e.get(strings, NiTArray::m_usGrowBy) as u32;
+                e.call(
+                    STRING_ARRAY_SET_SIZE,
+                    &args![strings, grow.wrapping_add(at as u32)],
+                );
+            }
+            let base = e.get(strings, NiTArray::m_pBase);
+            let element = base.wrapping_add((at as u32).wrapping_mul(4));
+            if at >= e.get(strings, NiTArray::m_usSize) {
+                e.set(strings, NiTArray::m_usSize, at.wrapping_add(1));
+                if text != 0 {
+                    let used = e.get(strings, NiTArray::m_usESize).wrapping_add(1);
+                    e.set(strings, NiTArray::m_usESize, used);
+                }
+            } else if text != 0 {
+                if e.mem.u32(element) == 0 {
+                    let used = e.get(strings, NiTArray::m_usESize).wrapping_add(1);
+                    e.set(strings, NiTArray::m_usESize, used);
+                }
+            } else if e.mem.u32(element) != 0 {
+                let used = e.get(strings, NiTArray::m_usESize).wrapping_add(0xffff);
+                e.set(strings, NiTArray::m_usESize, used);
+            }
+            let base = e.get(strings, NiTArray::m_pBase);
+            index = index.wrapping_add(1);
+            e.mem
+                .set_u32(base.wrapping_add((at as u32).wrapping_mul(4)), text);
+        }
+    });
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(
+            0x00a6_c680,
+            bs_dismember_skin_instance_register_streamables(
+                Ptr<BSDismemberSkinInstance>,
+                Ptr,
+            ) -> bool
+        ),
+        entry!(
+            0x00a6_c6a0,
+            bs_dismember_skin_instance_is_equal(
+                Ptr<BSDismemberSkinInstance>,
+                Ptr<BSDismemberSkinInstance>,
+            ) -> bool
+        ),
+        entry!(
+            0x00a6_c9c0,
+            bs_dismember_skin_instance_save_binary(Ptr<BSDismemberSkinInstance>, Ptr)
+        ),
+        entry!(
+            0x00a6_cac0,
+            bs_dismember_skin_instance_get_viewer_strings(
+                Ptr<BSDismemberSkinInstance>,
+                Ptr<NiTArray>,
+            )
+        ),
         entry!(
             0x00a6_c670,
             bs_dismember_skin_instance_link_object(Ptr, Ptr)
@@ -492,5 +797,208 @@ mod b037_tests {
             (reads[0][1], reads[0][2], reads[1][1], reads[1][2]),
             (this + 0x34, 4, e.mem.u32(this + 0x38), 12)
         );
+    }
+}
+
+#[cfg(test)]
+mod n014_tests {
+    use super::*;
+
+    fn calls(e: &Engine, addr: u32) -> Vec<Vec<u32>> {
+        e.call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|c| c.0 == addr)
+            .map(|c| c.1.clone())
+            .collect()
+    }
+
+    #[test]
+    fn register_streamables_answers_the_base_byte() {
+        let mut e = Engine::new();
+        e.register(SKIN_INSTANCE_REGISTER_STREAMABLES, |_, a| {
+            // Only the low byte counts.
+            (if a[1] == 0x2000 { 0x100u32 } else { 0x101 }).into_ret()
+        });
+        e.call_log = Some(vec![]);
+        assert!(!e.call(0x00a6_c680, &args![0x1000u32, 0x2000u32]).bool());
+        assert!(e.call(0x00a6_c680, &args![0x1000u32, 0x3000u32]).bool());
+        assert_eq!(
+            calls(&e, SKIN_INSTANCE_REGISTER_STREAMABLES)[0],
+            vec![0x1000, 0x2000]
+        );
+    }
+
+    #[test]
+    fn is_equal_compares_the_base_count_and_every_item() {
+        const BASE_ANSWER: u32 = 0x0300_0000;
+        let mut e = Engine::new();
+        e.register(SKIN_INSTANCE_IS_EQUAL, |e, _| {
+            e.mem.u32(BASE_ANSWER).into_ret()
+        });
+        e.mem.map(BASE_ANSWER, 4);
+        e.mem.set_u32(BASE_ANSWER, 1);
+        let a = e.mem.alloc(0x40);
+        let b = e.mem.alloc(0x40);
+        let items_a = e.mem.alloc(8);
+        let items_b = e.mem.alloc(8);
+        for items in [items_a, items_b] {
+            e.mem.set_u32(items, 0x1234_0201);
+            e.mem.set_u32(items + 4, 0x5678_0403);
+        }
+        for (this, items) in [(a, items_a), (b, items_b)] {
+            e.mem.set_u32(this + 0x34, 2);
+            e.mem.set_u32(this + 0x38, items);
+        }
+        assert!(e.call(0x00a6_c6a0, &args![a, b]).bool());
+        // The first byte, the second byte and the word of the second item.
+        for value in [0x5678_0400u32, 0x5678_0003, 0x5600_0403] {
+            e.mem.set_u32(items_b + 4, value);
+            assert!(!e.call(0x00a6_c6a0, &args![a, b]).bool());
+        }
+        e.mem.set_u32(items_b + 4, 0x5678_0403);
+        e.mem.set_u32(b + 0x34, 1);
+        assert!(!e.call(0x00a6_c6a0, &args![a, b]).bool());
+        // No partitions on either side: equal without reading the arrays.
+        e.mem.set_u32(a + 0x34, 0);
+        e.mem.set_u32(b + 0x34, 0);
+        e.mem.set_u32(a + 0x38, 0);
+        assert!(e.call(0x00a6_c6a0, &args![a, b]).bool());
+        e.mem.set_u32(BASE_ANSWER, 0x100);
+        assert!(!e.call(0x00a6_c6a0, &args![a, b]).bool());
+    }
+
+    #[test]
+    fn save_binary_swaps_the_items_around_the_write_unless_told_not_to() {
+        const WRITE: u32 = 0x0310_0000;
+        const WRITTEN: u32 = 0x0320_0000;
+        for no_swap in [0u8, 1] {
+            let mut e = Engine::new();
+            e.register(SKIN_INSTANCE_SAVE_BINARY, |_, _| Ret::default());
+            e.register(WRITE, |e, a| {
+                assert_eq!((e.mem.u32(a[3]), a[4]), (4, 1));
+                if a[2] == 8 {
+                    // The items as written.
+                    let first = e.mem.u32(a[1]);
+                    let second = e.mem.u32(a[1] + 4);
+                    e.mem.set_u32(WRITTEN, first);
+                    e.mem.set_u32(WRITTEN + 4, second);
+                }
+                a[2].into_ret()
+            });
+            e.mem.map(WRITTEN, 8);
+            let output = e.mem.alloc(0x10);
+            e.mem.set_u32(output + 4, 0x10);
+            e.mem.set_u32(output + 0xc, WRITE);
+            let stream = e.mem.alloc(0x260);
+            e.mem.set_u32(stream + 0x250, output);
+            e.mem.set_u8(stream + 0x1e4, no_swap);
+            let this = e.mem.alloc(0x40);
+            let items = e.mem.alloc(8);
+            e.mem.set_u32(items, 0x4433_2211);
+            e.mem.set_u32(items + 4, 0x8877_6655);
+            e.mem.set_u32(this + 0x34, 2);
+            e.mem.set_u32(this + 0x38, items);
+            e.call_log = Some(vec![]);
+            e.call(0x00a6_c9c0, &args![this, stream]);
+            assert_eq!(
+                calls(&e, SKIN_INSTANCE_SAVE_BINARY),
+                vec![vec![this, stream]]
+            );
+            let writes = calls(&e, WRITE);
+            assert_eq!(writes.len(), 2);
+            assert_eq!((writes[0][1], writes[0][2]), (this + 0x34, 4));
+            assert_eq!((writes[1][1], writes[1][2]), (items, 8));
+            assert_eq!(e.mem.u32(output + 4), 0x10 + 4 + 8);
+            let written = (e.mem.u32(WRITTEN), e.mem.u32(WRITTEN + 4));
+            if no_swap == 1 {
+                assert_eq!(written, (0x4433_2211, 0x8877_6655));
+            } else {
+                // The word at +2 swapped (11 22 44 33), then the whole item reversed.
+                assert_eq!(written, (0x1122_4433, 0x5566_8877));
+            }
+            assert_eq!(e.mem.u32(items), 0x4433_2211);
+            assert_eq!(e.mem.u32(items + 4), 0x8877_6655);
+        }
+    }
+
+    #[test]
+    fn get_viewer_strings_lists_the_count_the_flag_and_each_partition() {
+        let mut e = Engine::new();
+        e.mem.map(CLASS_NAME, 4);
+        e.mem.set_u32(CLASS_NAME, 0x0109_0000);
+        e.register(SKIN_INSTANCE_GET_VIEWER_STRINGS, |_, _| Ret::default());
+        e.register(VIEWER_STRING_NAME, |_, a| a[0].wrapping_add(1).into_ret());
+        e.register(VIEWER_STRING_UNSIGNED, |_, a| (a[1] + 0x100).into_ret());
+        e.register(VIEWER_STRING_BOOL, |_, a| (a[1] + 0x200).into_ret());
+        e.register(FORMAT_BOUNDED, |_, _| Ret::default());
+        e.register(STRING_ARRAY_SET_SIZE, |e, a| {
+            let base = e.mem.alloc(4 * a[1]);
+            let old = e.mem.u32(a[0] + 4);
+            let size = e.mem.u16(a[0] + 0xa) as u32;
+            for index in 0..size {
+                let value = e.mem.u32(old + 4 * index);
+                e.mem.set_u32(base + 4 * index, value);
+            }
+            e.mem.set_u32(a[0] + 4, base);
+            e.mem.set_u16(a[0] + 8, a[1] as u16);
+            Ret::default()
+        });
+        e.register(STRING_ARRAY_SET_AT, |e, a| {
+            let base = e.mem.u32(a[0] + 4);
+            let value = e.mem.u32(a[2]);
+            e.mem.set_u32(base + 4 * a[1], value);
+            e.mem.set_u16(a[0] + 0xa, a[1] as u16 + 1);
+            let used = e.mem.u16(a[0] + 0xc) + 1;
+            e.mem.set_u16(a[0] + 0xc, used);
+            Ret::default()
+        });
+        let strings = e.mem.alloc(0x10);
+        e.mem.set_u16(strings + 0xe, 2);
+        let this = e.mem.alloc(0x40);
+        let items = e.mem.alloc(8);
+        e.mem.set_u32(items, 0x0007_0001);
+        e.mem.set_u32(items + 4, 0x0009_0100);
+        e.mem.set_u32(this + 0x34, 2);
+        e.mem.set_u32(this + 0x38, items);
+        e.mem.set_u8(this + 0x3c, 1);
+        e.call_log = Some(vec![]);
+        e.call(0x00a6_cac0, &args![this, strings]);
+        assert_eq!(
+            calls(&e, SKIN_INSTANCE_GET_VIEWER_STRINGS),
+            vec![vec![this, strings]]
+        );
+        let formats = calls(&e, FORMAT_BOUNDED);
+        assert_eq!(formats.len(), 2);
+        assert_eq!(
+            formats[0][1..],
+            [0x40, TEXT_PARTITION_FORMAT, 0, 7, TEXT_ENABLED, TEXT_EMPTY]
+        );
+        assert_eq!(
+            formats[1][1..],
+            [
+                0x40,
+                TEXT_PARTITION_FORMAT,
+                1,
+                9,
+                TEXT_DISABLED,
+                TEXT_STATE_CHANGE
+            ]
+        );
+        assert_eq!(
+            calls(&e, VIEWER_STRING_UNSIGNED),
+            vec![vec![TEXT_NUM_PARTITIONS, 2]]
+        );
+        assert_eq!(calls(&e, VIEWER_STRING_BOOL), vec![vec![TEXT_VISIBLE, 1]]);
+        // Five strings: the class name, the count, the flag and the two partitions.
+        assert_eq!(e.mem.u16(strings + 0xa), 5);
+        assert_eq!(e.mem.u16(strings + 0xc), 5);
+        let base = e.mem.u32(strings + 4);
+        assert_eq!(e.mem.u32(base), 0x0109_0001);
+        assert_eq!(e.mem.u32(base + 4), 0x102);
+        assert_eq!(e.mem.u32(base + 8), 0x201);
+        assert_eq!(e.mem.u32(base + 12), formats[0][0] + 1);
+        assert_eq!(e.mem.u32(base + 16), formats[1][0] + 1);
     }
 }

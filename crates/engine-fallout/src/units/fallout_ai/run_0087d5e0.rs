@@ -93,6 +93,34 @@ pub fn fn_0087d7b0(_e: &mut Engine, this: Ptr) -> u32 {
     this.addr().wrapping_sub(0x94)
 }
 
+/// `00931cc0` (unnamed, engine map unit `mobileobject.cpp`, `thiscall`, one stack word).
+const MOBILE_OBJECT_00931CC0: u32 = 0x0093_1cc0;
+
+// Translated from 0087d5e0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No map name (`thiscall`, one stack word, `RET 4`): passes `this` and the word on to
+/// `00931cc0` and its `EAX` back.
+pub fn fn_0087d5e0(e: &mut Engine, this: Ptr, word: u32) -> u32 {
+    e.call(MOBILE_OBJECT_00931CC0, &args![this, word]).u32()
+}
+
+// Translated from 0087d630 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No map name (`thiscall`, one stack word, `RET 4`): stores the byte at `this + 0x144`.
+pub fn fn_0087d630(e: &mut Engine, this: Ptr, value: u8) {
+    e.mem.set_u8(this.addr() + 0x144, value);
+}
+
+// Translated from 0087d650 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No map name (`thiscall`, no stack words): the byte at `this + 0x144` (in `AL`).
+pub fn fn_0087d650(e: &mut Engine, this: Ptr) -> u8 {
+    e.mem.u8(this.addr() + 0x144)
+}
+
+// Translated from 0087d690 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No map name (`thiscall`, no stack words): answers 0x4d.
+pub fn fn_0087d690(_e: &mut Engine, _this: Ptr) -> u32 {
+    0x4d
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -107,6 +135,10 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x0087d770, fn_0087d770(Ptr) -> u8),
         entry!(0x0087d790, fn_0087d790(Ptr) -> u32),
         entry!(0x0087d7b0, fn_0087d7b0(Ptr) -> u32),
+        entry!(0x0087_d5e0, fn_0087d5e0(Ptr, u32) -> u32),
+        entry!(0x0087_d630, fn_0087d630(Ptr, u8)),
+        entry!(0x0087_d650, fn_0087d650(Ptr) -> u8),
+        entry!(0x0087_d690, fn_0087d690(Ptr) -> u32),
     ]
 }
 
@@ -192,5 +224,45 @@ mod tests {
                 expected
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod n027_tests {
+    use super::*;
+
+    #[test]
+    fn fn_0087d5e0_forwards_to_the_mobile_object_call() {
+        let mut e = Engine::new();
+        e.register(MOBILE_OBJECT_00931CC0, |_, a| (a[0] ^ a[1]).into_ret());
+        e.call_log = Some(vec![]);
+        assert_eq!(
+            e.call(0x0087_d5e0, &args![0x1000u32, 0x22u32]).u32(),
+            0x1022
+        );
+        let log = e.call_log.take().unwrap();
+        let inner: Vec<_> = log
+            .iter()
+            .filter(|c| c.0 == MOBILE_OBJECT_00931CC0)
+            .collect();
+        assert_eq!(inner.len(), 1);
+        assert_eq!(inner[0].1, vec![0x1000, 0x22]);
+    }
+
+    #[test]
+    fn byte_at_0x144_round_trips() {
+        let mut e = Engine::new();
+        let this = e.mem.alloc(0x150);
+        e.mem.set_u8(this + 0x145, 0x77);
+        e.call(0x0087_d630, &args![this, 0x1ffu32]);
+        assert_eq!(e.mem.u8(this + 0x144), 0xff);
+        assert_eq!(e.mem.u8(this + 0x145), 0x77);
+        assert_eq!(e.call(0x0087_d650, &args![this]).u8(), 0xff);
+    }
+
+    #[test]
+    fn fn_0087d690_answers_0x4d() {
+        let mut e = Engine::new();
+        assert_eq!(e.call(0x0087_d690, &args![0x1000u32]).u32(), 0x4d);
     }
 }

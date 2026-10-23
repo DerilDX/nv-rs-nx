@@ -90,12 +90,31 @@ pub fn ni_uv_data_constructor(e: &mut Engine, this: Ptr<NiUVData>) -> Ptr<NiUVDa
     this
 }
 
+/// `00aa13e0` (`cdecl`, the size): the Gamebryo allocation the objects are made with.
+const NI_ALLOCATE: u32 = 0x00aa_13e0;
+
+// Translated from 00a44ff0 (PC disassembly, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (a function Ghidra did not create; no arguments; by its body
+/// `NiUVData`'s creation function): 0x4c bytes from `00aa13e0`, built by
+/// [`ni_uv_data_constructor`] (a tail jump). Answers the object, null when the allocation
+/// fails.
+pub fn fn_00a44ff0(e: &mut Engine) -> Ptr<NiUVData> {
+    let object = e.call(NI_ALLOCATE, &args![0x4cu32]).u32();
+    if object == 0 {
+        return Ptr::new(0);
+    }
+    ni_uv_data_constructor(e, Ptr::new(object))
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
-    vec![entry!(
-        0x00a44f90,
-        ni_uv_data_constructor(Ptr<NiUVData>) -> Ptr<NiUVData>
-    )]
+    vec![
+        entry!(
+            0x00a44f90,
+            ni_uv_data_constructor(Ptr<NiUVData>) -> Ptr<NiUVData>
+        ),
+        entry!(0x00a4_4ff0, fn_00a44ff0() -> Ptr<NiUVData>),
+    ]
 }
 
 #[cfg(test)]
@@ -126,5 +145,21 @@ mod tests {
         assert_eq!(e.get(this, NiUVData::m_fLastUTiling), 1.0);
         assert_eq!(e.get(this, NiUVData::m_fLastVTiling), 1.0);
         assert_eq!(e.mem.u32(this.addr() + 0x48), 0);
+    }
+}
+
+#[cfg(test)]
+mod n007_tests {
+    use super::*;
+
+    #[test]
+    fn creation_function_allocates_and_constructs() {
+        let mut e = Engine::new();
+        e.register(OBJECT_CONSTRUCT, |_, _| Ret::default());
+        e.register(NI_ALLOCATE, |e, a| e.mem.alloc(a[0]).into_ret());
+        let object = e.call(0x00a4_4ff0, &[]).u32();
+        assert_eq!(e.mem.u32(object), NI_UV_DATA_VTABLE);
+        e.register(NI_ALLOCATE, |_, _| 0u32.into_ret());
+        assert_eq!(e.call(0x00a4_4ff0, &[]).u32(), 0);
     }
 }

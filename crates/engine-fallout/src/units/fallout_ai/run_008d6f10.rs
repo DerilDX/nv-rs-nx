@@ -41,9 +41,16 @@ pub fn fn_008d6f50(e: &mut Engine, this: Ptr, object: u32) {
     e.call(REGISTER, &args![REGISTER_LIST, this]);
 }
 
+// Translated from 008d6f10 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Calls `0043b370` on `this` with the low byte of `flag` and `0x100000`.
+pub fn fn_008d6f10(e: &mut Engine, this: Ptr, flag: u32) {
+    e.call(0x0043_b370, &args![this, flag & 0xff, 0x0010_0000u32]);
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x008d_6f10, fn_008d6f10(Ptr, u32)),
         entry!(0x008d6f30, fn_008d6f30(Ptr) -> u32),
         entry!(0x008d_6f50, fn_008d6f50(Ptr, u32)),
     ]
@@ -89,5 +96,20 @@ mod tests {
         let log = e.call_log.take().unwrap();
         assert_eq!(log[2], (SET_UP, vec![this, 0x5000]));
         assert_eq!(log.len(), 4);
+    }
+}
+
+#[cfg(test)]
+mod n028_tests {
+    use super::*;
+
+    #[test]
+    fn fn_008d6f10_passes_the_byte_and_the_mask() {
+        let mut e = Engine::new();
+        e.register(0x0043_b370, |_, _| Ret::default());
+        e.call_log = Some(vec![]);
+        e.call(0x008d_6f10, &[0x9000, 0x0301]);
+        let log = e.call_log.as_ref().unwrap();
+        assert_eq!(log[1], (0x0043_b370, vec![0x9000, 1, 0x0010_0000]));
     }
 }

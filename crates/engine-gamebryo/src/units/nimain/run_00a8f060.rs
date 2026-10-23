@@ -21,9 +21,19 @@ pub fn fn_00a8f060(e: &mut Engine, this: Ptr) {
     e.mem.set_u32(this.addr() + 0x50, 0);
 }
 
+// Translated from 00a8f080 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`thiscall`, two words; `RET 8`): stores them at +8 and +0xc.
+pub fn fn_00a8f080(e: &mut Engine, this: Ptr, first: u32, second: u32) {
+    e.mem.set_u32(this.addr() + 8, first);
+    e.mem.set_u32(this.addr() + 0xc, second);
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
-    vec![entry!(0x00a8_f060, fn_00a8f060(Ptr))]
+    vec![
+        entry!(0x00a8_f060, fn_00a8f060(Ptr)),
+        entry!(0x00a8_f080, fn_00a8f080(Ptr, u32, u32)),
+    ]
 }
 
 #[cfg(test)]
@@ -49,5 +59,20 @@ mod tests {
             assert_eq!(e.mem.u32(this + 0x50 + 4 * i), 0);
         }
         assert_eq!(e.mem.u32(this + 0x4c), 9);
+    }
+}
+
+#[cfg(test)]
+mod store_tests {
+    use super::*;
+
+    #[test]
+    fn stores_both_words() {
+        let mut e = Engine::new();
+        let this = e.mem.alloc(0x10);
+        e.call(0x00a8_f080, &args![this, 0x11u32, 0x22u32]);
+        assert_eq!(e.mem.u32(this + 8), 0x11);
+        assert_eq!(e.mem.u32(this + 0xc), 0x22);
+        assert_eq!(e.mem.u32(this + 4), 0);
     }
 }

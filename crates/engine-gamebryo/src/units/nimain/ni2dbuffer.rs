@@ -231,9 +231,105 @@ pub fn ni2_d_buffer_scalar_deleting_destructor(
     this
 }
 
+/// `NiObject::IsEqual` (`00a5d470`, thiscall: other object).
+const NI_OBJECT_IS_EQUAL: u32 = 0x00a5_d470;
+/// The renderer's virtual slots +0x114 (`FastCopy`) and +0x118 (`Copy`), each taking the
+/// source buffer, the destination and the three words the buffer's method passes on.
+const RENDERER_FAST_COPY_SLOT: u32 = 0x114;
+const RENDERER_COPY_SLOT: u32 = 0x118;
+
+// Translated from 00a88a50 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Ni2DBuffer::IsEqual` (Xbox PDB; thiscall, `RET 4`): `NiObject::IsEqual` (`00a5d470`),
+/// its answer as a boolean.
+pub fn ni2_d_buffer_is_equal(e: &mut Engine, this: Ptr<Ni2DBuffer>, other: Ptr) -> bool {
+    e.call(NI_OBJECT_IS_EQUAL, &args![this, other]).u8() != 0
+}
+
+/// The copy both `FastCopy` and `Copy` make: false unless this buffer has renderer data,
+/// there is a renderer and the destination has renderer data; else the renderer's slot
+/// with (this, destination, the three words), its byte answer.
+fn copy_through_renderer(
+    e: &mut Engine,
+    slot: u32,
+    this: Ptr<Ni2DBuffer>,
+    destination: Ptr<Ni2DBuffer>,
+    words: [u32; 3],
+) -> bool {
+    if e.get(this, Ni2DBuffer::m_spRendererData) == 0 {
+        return false;
+    }
+    let renderer = e.mem.u32(RENDERER_INSTANCE);
+    if renderer == 0 {
+        return false;
+    }
+    if e.get(destination, Ni2DBuffer::m_spRendererData) == 0 {
+        return false;
+    }
+    e.vcall(
+        renderer,
+        slot,
+        &args![this, destination, words[0], words[1], words[2]],
+    )
+    .u8()
+        != 0
+}
+
+// Translated from 00a8f0a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Ni2DBuffer::FastCopy` (Xbox PDB; thiscall, `RET 0x10`: destination and three words
+/// passed on as they are): the renderer's virtual slot +0x114 when both buffers have
+/// renderer data and there is a renderer, else false.
+pub fn ni2_d_buffer_fast_copy(
+    e: &mut Engine,
+    this: Ptr<Ni2DBuffer>,
+    destination: Ptr<Ni2DBuffer>,
+    first: u32,
+    second: u32,
+    third: u32,
+) -> bool {
+    copy_through_renderer(
+        e,
+        RENDERER_FAST_COPY_SLOT,
+        this,
+        destination,
+        [first, second, third],
+    )
+}
+
+// Translated from 00a8f0f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Ni2DBuffer::Copy` (Xbox PDB; thiscall, `RET 0x10`): as [`ni2_d_buffer_fast_copy`],
+/// through the renderer's virtual slot +0x118.
+pub fn ni2_d_buffer_copy(
+    e: &mut Engine,
+    this: Ptr<Ni2DBuffer>,
+    destination: Ptr<Ni2DBuffer>,
+    first: u32,
+    second: u32,
+    third: u32,
+) -> bool {
+    copy_through_renderer(
+        e,
+        RENDERER_COPY_SLOT,
+        this,
+        destination,
+        [first, second, third],
+    )
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(
+            0x00a8_8a50,
+            ni2_d_buffer_is_equal(Ptr<Ni2DBuffer>, Ptr) -> bool
+        ),
+        entry!(
+            0x00a8_f0a0,
+            ni2_d_buffer_fast_copy(Ptr<Ni2DBuffer>, Ptr<Ni2DBuffer>, u32, u32, u32) -> bool
+        ),
+        entry!(
+            0x00a8_f0f0,
+            ni2_d_buffer_copy(Ptr<Ni2DBuffer>, Ptr<Ni2DBuffer>, u32, u32, u32) -> bool
+        ),
         entry!(0x00a8f140, fn_00a8f140(Ptr<Ni2DBuffer>, Ptr)),
         entry!(0x00a8f190, fn_00a8f190(Ptr<Ni2DBuffer>) -> Ptr<Ni2DBuffer>),
         entry!(0x00a8f1c0, fn_00a8f1c0(Ptr<Ni2DBuffer>)),
@@ -474,5 +570,73 @@ mod b007_tests {
         assert_eq!(e.mem.u32(fresh + 0x10), data);
         // The second assignment finds the data in place: no reference taken.
         assert_eq!(e.mem.u32(data + 4), 0);
+    }
+}
+
+#[cfg(test)]
+mod n014_tests {
+    use super::*;
+
+    const SLOT_TARGET: u32 = 0x0390_0000;
+
+    fn calls_to(e: &Engine, addr: u32) -> Vec<Vec<u32>> {
+        e.call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|c| c.0 == addr)
+            .map(|c| c.1.clone())
+            .collect()
+    }
+
+    #[test]
+    fn is_equal_answers_the_base_byte() {
+        let mut e = Engine::new();
+        e.register(NI_OBJECT_IS_EQUAL, |_, a| (0x100 | (a[1] & 1)).into_ret());
+        e.call_log = Some(vec![]);
+        assert!(e.call(0x00a8_8a50, &args![0x1000u32, 0x2001u32]).bool());
+        assert!(!e.call(0x00a8_8a50, &args![0x1000u32, 0x2000u32]).bool());
+        assert_eq!(calls_to(&e, NI_OBJECT_IS_EQUAL)[0], vec![0x1000, 0x2001]);
+    }
+
+    fn copy_case(address: u32, slot: u32) {
+        let mut e = Engine::new();
+        e.register(SLOT_TARGET, |_, _| 0x301u32.into_ret());
+        let vtable = e.mem.alloc(0x200);
+        e.mem.set_u32(vtable + slot, SLOT_TARGET);
+        let renderer = e.mem.alloc(4);
+        e.mem.set_u32(renderer, vtable);
+        e.mem.map(RENDERER_INSTANCE, 4);
+        e.mem.set_u32(RENDERER_INSTANCE, renderer);
+        let source = e.mem.alloc(0x14);
+        let target = e.mem.alloc(0x14);
+        e.mem.set_u32(source + 0x10, 0x4444);
+        e.mem.set_u32(target + 0x10, 0x5555);
+        e.call_log = Some(vec![]);
+        let words = args![source, target, 7u32, 8u32, 9u32];
+        assert!(e.call(address, &words).bool());
+        assert_eq!(
+            calls_to(&e, SLOT_TARGET),
+            vec![vec![renderer, source, target, 7, 8, 9]]
+        );
+        e.mem.set_u32(target + 0x10, 0);
+        assert!(!e.call(address, &words).bool());
+        e.mem.set_u32(target + 0x10, 0x5555);
+        e.mem.set_u32(RENDERER_INSTANCE, 0);
+        assert!(!e.call(address, &words).bool());
+        e.mem.set_u32(RENDERER_INSTANCE, renderer);
+        e.mem.set_u32(source + 0x10, 0);
+        assert!(!e.call(address, &words).bool());
+        assert_eq!(calls_to(&e, SLOT_TARGET).len(), 1);
+    }
+
+    #[test]
+    fn fast_copy_goes_through_the_renderer_when_both_have_data() {
+        copy_case(0x00a8_f0a0, RENDERER_FAST_COPY_SLOT);
+    }
+
+    #[test]
+    fn copy_goes_through_the_renderer_when_both_have_data() {
+        copy_case(0x00a8_f0f0, RENDERER_COPY_SLOT);
     }
 }

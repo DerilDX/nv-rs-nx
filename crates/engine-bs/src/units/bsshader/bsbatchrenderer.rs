@@ -2412,9 +2412,283 @@ fn take_first_pass(e: &mut Engine, group: u32) {
     e.mem.set_u32(group + 0x10, next);
 }
 
+// Translated from 00b99890 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (thiscall on a `BSTPersistentList` element,
+/// one word: the address of the item): prepends the item (a node from the
+/// free list or the allocator) and counts it (+0x10); an empty list's
+/// tail becomes the node too.
+pub fn fn_00b99890(e: &mut Engine, this: Ptr, item: Ptr) {
+    let element = this.addr();
+    let node = take_node(e, element);
+    let value = e.mem.u32(item.addr());
+    e.mem.set_u32(node + 8, value);
+    let head = e.mem.u32(element + 4);
+    e.mem.set_u32(node, head);
+    e.mem.set_u32(node + 4, 0);
+    let head = e.mem.u32(element + 4);
+    let count = e.mem.u32(element + 0x10).wrapping_add(1);
+    if head != 0 {
+        e.mem.set_u32(head + 4, node);
+        e.mem.set_u32(element + 0x10, count);
+        e.mem.set_u32(element + 4, node);
+    } else {
+        e.mem.set_u32(element + 0x10, count);
+        e.mem.set_u32(element + 8, node);
+        e.mem.set_u32(element + 4, node);
+    }
+}
+
+// Translated from 00b99b70 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map: the scalar deleting destructor of a
+/// `BSTPersistentList` element (thiscall, one word: the flags). Sets the
+/// element's vtable (`010b7dc0`), cleans it (`00b63e90`), moves its nodes
+/// to the free list (+0x0C) and clears head, tail and count, cleans it
+/// again, and with flag bit 0 gives the block back to the memory manager
+/// (`00aa4060`). Answers `this`.
+pub fn fn_00b99b70(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    let element = this.addr();
+    e.mem.set_u32(element, PERSISTENT_LIST_VTABLE);
+    e.call(PERSISTENT_LIST_CLEAR, &[element]);
+    let head = e.mem.u32(element + 4);
+    e.mem.set_u32(element + 0xc, head);
+    e.mem.set_u32(element + 4, 0);
+    e.mem.set_u32(element + 8, 0);
+    e.mem.set_u32(element + 0x10, 0);
+    e.call(PERSISTENT_LIST_CLEAR, &[element]);
+    if flags & 1 != 0 {
+        e.call(MEMORY_DEALLOCATE, &[MEMORY_MANAGER, element]);
+    }
+    this
+}
+
+/// `BSShaderManager::GetAccumulator` (engine map, `00b4f5c0`; no arguments).
+const GET_ACCUMULATOR: u32 = 0x00b4_f5c0;
+/// The byte at `011f94a6` that makes `RenderBatches` first run `00bbb840`
+/// (no arguments; it copies four words of `011a9bd0` to `01201b30` and sets
+/// three flags).
+const BATCH_SETUP_FLAG_011F94A6: u32 = 0x011f_94a6;
+const BATCH_SETUP_00BBB840: u32 = 0x00bb_b840;
+
+// Translated from 00b99e20 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSBatchRenderer::RenderBatches` (Xbox PDB name, engine map): thiscall,
+/// three words (the first and last pass type to render, `0` for 1..0x2F1,
+/// and a word passed on to `RenderPassImmediately`). Runs `00bbb840` when
+/// the byte at `011f94a6` is set. Then, when the active pass list (+0x2C)
+/// is not empty, for each listed pass type within the range: looks up its
+/// pass group in the render-pass map (+0x0C, `00853130`); a shadow pass
+/// (`IsShadowPass`) while the accumulator's byte +0x164 or +0x165 is set
+/// only has its group cleared (`00b99a50`). Otherwise each of the group's
+/// five element lists that has a head node is rendered with its own state
+/// (`00b984d0`, the alpha test `00b97ed0`, alpha to coverage `00b98540`
+/// when the renderer has the switch at `011f9421`): every item through
+/// `RenderPassImmediately(item, type, flag, third word, 0)` with the flag
+/// 0 for lists 0 and 1 and 1 for lists 2..4, then alpha to coverage off
+/// (twice with the switch, which also drops the count at `011ffa28`) and
+/// the counters at `011ffa24` and `011ff9e8` dropped when not zero; then the
+/// group is cleared. Ends with `00b984d0(1)`, the alpha test off and
+/// `EndPass`.
+///
+/// The flag is a byte the exe stores in the second argument's stack word and
+/// pushes as the whole word: its upper three bytes are those of the second
+/// argument as passed (`RenderPassImmediately` reads only the low byte).
+/// `00b984d0` is pushed a second word it does not read (cdecl).
+pub fn bs_batch_renderer_render_batches(
+    e: &mut Engine,
+    this: Ptr<BSBatchRenderer>,
+    first: u32,
+    last: u32,
+    third: u32,
+) {
+    let base = this.addr();
+    let (low, high) = if first == 0 {
+        (1, 0x2f1)
+    } else {
+        (first, last)
+    };
+    if e.mem.u8(BATCH_SETUP_FLAG_011F94A6) != 0 {
+        e.call(BATCH_SETUP_00BBB840, &[]);
+    }
+    let list = base + 0x2c;
+    if e.mem.u32(base + 0x30) != 0 || e.mem.u16(list) != 0 {
+        let mut node = list;
+        while node != 0 {
+            let pass_type = u32::from(e.mem.u16(node));
+            if pass_type > high || pass_type < low {
+                node = e.mem.u32(node + 4);
+                continue;
+            }
+            let group = e.with_stack(4, |e, slot| {
+                e.mem.set_u32(slot.addr(), 0);
+                e.call(MAP_GET_AT, &[base + 0xc, pass_type, slot.addr()]);
+                e.mem.u32(slot.addr())
+            });
+            let skip = e.call(IS_SHADOW_PASS, &[pass_type]).u8() != 0 && {
+                let accumulator = e.call(GET_ACCUMULATOR, &[]).u32();
+                e.mem.u8(accumulator + 0x164) != 0 || {
+                    let accumulator = e.call(GET_ACCUMULATOR, &[]).u32();
+                    e.mem.u8(accumulator + 0x165) != 0
+                }
+            };
+            let offset = group.wrapping_mul(0x68);
+            if !skip {
+                for index in 0..5u32 {
+                    let groups = e.mem.u32(base + 8);
+                    let element = (index * 0x14).wrapping_add(offset).wrapping_add(groups);
+                    if e.mem.u32(element.wrapping_add(4)) == 0 {
+                        continue;
+                    }
+                    let mut flag = 0u8;
+                    let coverage = match index {
+                        0 => {
+                            fn_00b984d0(e, 1);
+                            e.call(SET_ALPHA_TEST_ENABLE, &[0, 0]);
+                            Some(0)
+                        }
+                        1 => {
+                            fn_00b984d0(e, 3);
+                            e.call(SET_ALPHA_TEST_ENABLE, &[0, 0]);
+                            Some(0)
+                        }
+                        2 | 3 => {
+                            fn_00b984d0(e, if index == 2 { 3 } else { 1 });
+                            e.call(SET_ALPHA_TEST_ENABLE, &[1, 1]);
+                            flag = 1;
+                            Some(1)
+                        }
+                        _ => {
+                            fn_00b984d0(e, 1);
+                            e.call(SET_ALPHA_TEST_ENABLE, &[1, 1]);
+                            flag = 1;
+                            Some(0)
+                        }
+                    };
+                    if let Some(on) = coverage {
+                        if e.mem.u8(COVERAGE_AVAILABLE) != 0 {
+                            e.call(SET_ALPHA_TO_COVERAGE, &[on, 1]);
+                        }
+                    }
+                    let flag_word = (last & 0xffff_ff00) | u32::from(flag);
+                    let groups = e.mem.u32(base + 8);
+                    let element = (index * 0x14).wrapping_add(offset).wrapping_add(groups);
+                    let mut item_node = e.mem.u32(element.wrapping_add(4));
+                    while item_node != 0 {
+                        let item = e.mem.u32(item_node + 8);
+                        item_node = e.mem.u32(item_node);
+                        bs_batch_renderer_render_pass_immediately(
+                            e,
+                            Ptr::new(item),
+                            pass_type,
+                            flag_word,
+                            third,
+                            0,
+                        );
+                    }
+                    if e.mem.u8(COVERAGE_AVAILABLE) != 0 {
+                        let count = e.mem.u32(COVERAGE_LOCK).wrapping_sub(1);
+                        e.mem.set_u32(COVERAGE_LOCK, count);
+                        e.call(SET_ALPHA_TO_COVERAGE, &[0, 0]);
+                    }
+                    e.call(SET_ALPHA_TO_COVERAGE, &[0, 0]);
+                    let count = e.mem.u32(LOCK_COUNT_011FFA24);
+                    if count != 0 {
+                        e.mem.set_u32(LOCK_COUNT_011FFA24, count - 1);
+                    }
+                    let count = e.mem.u32(LOCK_COUNT_4);
+                    if count != 0 {
+                        e.mem.set_u32(LOCK_COUNT_4, count - 1);
+                    }
+                }
+            }
+            let groups = e.mem.u32(base + 8);
+            fn_00b99a50(e, Ptr::new(groups.wrapping_add(offset)), 0);
+            node = e.mem.u32(node + 4);
+        }
+    }
+    fn_00b984d0(e, 1);
+    e.call(SET_ALPHA_TEST_ENABLE, &[0, 0]);
+    bs_batch_renderer_end_pass(e);
+}
+
+// Translated from 00b9a3c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (thiscall, four words; `RET 0x10`, the fourth
+/// never read): looks up the pass group of the pass type `*pass_type` in
+/// the render-pass map (+0x0C, `00853130`, the slot cleared first), clears
+/// that group (`00b99a50`) and answers `00b9a090(pass_type, element,
+/// flag)`.
+pub fn fn_00b9a3c0(
+    e: &mut Engine,
+    this: Ptr<BSBatchRenderer>,
+    pass_type: Ptr,
+    element: Ptr,
+    flag: Ptr,
+    _unused_4: u32,
+) -> bool {
+    let base = this.addr();
+    let key = e.mem.u32(pass_type.addr());
+    let group = e.with_stack(4, |e, slot| {
+        e.mem.set_u32(slot.addr(), 0);
+        e.call(MAP_GET_AT, &[base + 0xc, key, slot.addr()]);
+        e.mem.u32(slot.addr())
+    });
+    let groups = e.mem.u32(base + 8);
+    fn_00b99a50(
+        e,
+        Ptr::new(group.wrapping_mul(0x68).wrapping_add(groups)),
+        0,
+    );
+    fn_00b9a090(e, this, pass_type, element, flag)
+}
+
+// Translated from 00b9a4d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map: renders a `BSBatchRenderer::GeometryGroup`
+/// (Xbox PDB; thiscall, one word passed on). With `ucFlags` bit 0 its own
+/// pass list (+0x0C) through `00b99990`; else, when it has a
+/// `pBatchRenderer` (+0x08), that renderer's virtual slot +0x90 with (1,
+/// 0x2F1, the word). Then, with a renderer, clears the renderer's active
+/// pass list (+0x2C, `00b64ec0`); either way clears `usCount` (+0x02).
+pub fn fn_00b9a4d0(e: &mut Engine, this: Ptr, word: u32) {
+    let group = this.addr();
+    if e.mem.u8(group) & 1 != 0 {
+        fn_00b99990(e, Ptr::new(group + 0xc), word);
+    } else {
+        let renderer = e.mem.u32(group + 8);
+        if renderer != 0 {
+            e.vcall(renderer, 0x90, &[1, 0x2f1, word]);
+        }
+    }
+    let renderer = e.mem.u32(group + 8);
+    if renderer != 0 {
+        e.call(ACTIVE_LIST_CLEAR, &[renderer + 0x2c]);
+    }
+    e.mem.set_u16(group + 2, 0);
+}
+
+/// `BSBatchRenderer::ms_RTTI` (`011ffe3c`).
+const BATCH_RENDERER_RTTI: u32 = 0x011f_fe3c;
+
+// Translated from 00b9aa70 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSBatchRenderer`'s `GetRTTI` (slot +8 of its vtable `010b7dc8`, the
+/// only reference; Ghidra made no function of it, read from the bytes):
+/// answers `&ms_RTTI` (`011ffe3c`).
+pub fn bs_batch_renderer_get_rtti(_e: &mut Engine, _this: Ptr) -> u32 {
+    BATCH_RENDERER_RTTI
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x00b9_9890, fn_00b99890(Ptr, Ptr)),
+        entry!(0x00b9_9b70, fn_00b99b70(Ptr, u32) -> Ptr),
+        entry!(
+            0x00b9_9e20,
+            bs_batch_renderer_render_batches(Ptr<BSBatchRenderer>, u32, u32, u32)
+        ),
+        entry!(
+            0x00b9_a3c0,
+            fn_00b9a3c0(Ptr<BSBatchRenderer>, Ptr, Ptr, Ptr, u32) -> bool
+        ),
+        entry!(0x00b9_a4d0, fn_00b9a4d0(Ptr, u32)),
+        entry!(0x00b9_aa70, bs_batch_renderer_get_rtti(Ptr) -> u32),
         entry!(0x00b9_84d0, fn_00b984d0(u32)),
         entry!(0x00b9_88e0, bs_batch_renderer_end_pass()),
         entry!(
@@ -3994,5 +4268,317 @@ mod b061_tests {
         let cam = camera(&mut e, [1.0, 0.0, 0.0]);
         e.call(0x00b9_af60, &args![this, 0u32, cam, 0u8, 10.0f32]);
         assert_eq!(e.call_log.as_ref().unwrap().len(), 1);
+    }
+}
+
+#[cfg(test)]
+mod n011_tests {
+    use super::*;
+
+    fn engine() -> Engine {
+        let mut e = Engine::new();
+        e.map(0x011f_4000, 0xc000);
+        e.call_log = Some(vec![]);
+        e
+    }
+
+    fn quiet(e: &mut Engine, addr: u32) {
+        e.register(addr, |_, _| Ret::default());
+    }
+
+    fn word(eax: u32) -> Ret {
+        Ret {
+            eax,
+            ..Ret::default()
+        }
+    }
+
+    fn calls_to(e: &Engine, addr: u32) -> Vec<Vec<u32>> {
+        e.call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|(a, _)| *a == addr)
+            .map(|(_, w)| w.clone())
+            .collect()
+    }
+
+    /// A `BSTPersistentList` element (0x14 bytes) with the given head and tail.
+    fn element(e: &mut Engine, head: u32, tail: u32, count: u32) -> u32 {
+        let element = e.mem.alloc(0x14);
+        e.mem.set_u32(element + 4, head);
+        e.mem.set_u32(element + 8, tail);
+        e.mem.set_u32(element + 0x10, count);
+        element
+    }
+
+    #[test]
+    fn prepend_links_a_free_node_before_the_head() {
+        let mut e = engine();
+        let old = e.mem.alloc(0xc);
+        let free = e.mem.alloc(0xc);
+        let spare = e.mem.alloc(0xc);
+        e.mem.set_u32(free, spare);
+        let list = element(&mut e, old, old, 1);
+        e.mem.set_u32(list + 0xc, free);
+        let item = e.mem.alloc(4);
+        e.mem.set_u32(item, 0x0e0a_0001);
+        e.call(0x00b9_9890, &[list, item]);
+        assert_eq!(e.mem.u32(list + 0xc), spare);
+        assert_eq!(e.mem.u32(list + 4), free);
+        assert_eq!(e.mem.u32(list + 8), old);
+        assert_eq!(e.mem.u32(list + 0x10), 2);
+        assert_eq!(e.mem.u32(free), old);
+        assert_eq!(e.mem.u32(free + 4), 0);
+        assert_eq!(e.mem.u32(free + 8), 0x0e0a_0001);
+        assert_eq!(e.mem.u32(old + 4), free);
+    }
+
+    #[test]
+    fn prepend_to_an_empty_list_allocates_and_sets_the_tail() {
+        let mut e = engine();
+        let node = e.mem.alloc(0xc);
+        e.register_double(LIST_NODE_ALLOCATE, move |_, _| word(node));
+        let list = element(&mut e, 0, 0, 0);
+        let item = e.mem.alloc(4);
+        e.mem.set_u32(item, 0x0e0a_0002);
+        e.call(0x00b9_9890, &[list, item]);
+        assert_eq!(calls_to(&e, LIST_NODE_ALLOCATE), vec![vec![list + 0x10]]);
+        assert_eq!(e.mem.u32(list + 4), node);
+        assert_eq!(e.mem.u32(list + 8), node);
+        assert_eq!(e.mem.u32(list + 0x10), 1);
+        assert_eq!(e.mem.u32(node), 0);
+        assert_eq!(e.mem.u32(node + 8), 0x0e0a_0002);
+    }
+
+    #[test]
+    fn persistent_list_deleting_destructor_frees_on_bit_zero() {
+        for (flags, frees) in [(0u32, false), (0x100, false), (1, true)] {
+            let mut e = engine();
+            quiet(&mut e, PERSISTENT_LIST_CLEAR);
+            quiet(&mut e, MEMORY_DEALLOCATE);
+            let head = e.mem.alloc(0xc);
+            let list = element(&mut e, head, head, 1);
+            assert_eq!(e.call(0x00b9_9b70, &[list, flags]).u32(), list);
+            assert_eq!(e.mem.u32(list), PERSISTENT_LIST_VTABLE);
+            assert_eq!(calls_to(&e, PERSISTENT_LIST_CLEAR), vec![vec![list]; 2]);
+            assert_eq!(e.mem.u32(list + 0xc), head);
+            for offset in [4, 8, 0x10] {
+                assert_eq!(e.mem.u32(list + offset), 0);
+            }
+            let freed = calls_to(&e, MEMORY_DEALLOCATE);
+            if frees {
+                assert_eq!(freed, vec![vec![MEMORY_MANAGER, list]]);
+            } else {
+                assert!(freed.is_empty());
+            }
+        }
+    }
+
+    /// A renderer with two pass groups and an active list of the pass types `types`; the
+    /// render-pass map answers group `type >> 4` minus one.
+    fn batches(e: &mut Engine, types: &[u16]) -> (Ptr<BSBatchRenderer>, u32) {
+        let this: Ptr<BSBatchRenderer> = e.new_object();
+        let groups = e.mem.alloc(0x68 * 2);
+        e.set(this, BSBatchRenderer::pRenderPassA, groups);
+        let mut node = this.addr() + 0x2c;
+        for (i, &value) in types.iter().enumerate() {
+            e.mem.set_u16(node, value);
+            if i + 1 < types.len() {
+                let next = e.mem.alloc(8);
+                e.mem.set_u32(node + 4, next);
+                node = next;
+            }
+        }
+        e.register(MAP_GET_AT, |e, a| {
+            e.mem.set_u32(a[2], (a[1] >> 4).wrapping_sub(1));
+            Ret::default()
+        });
+        quiet(e, PERSISTENT_LIST_CLEAR);
+        quiet(e, SET_ALPHA_TEST_ENABLE);
+        quiet(e, SET_ALPHA_TO_COVERAGE);
+        quiet(e, 0x00e8_79b0);
+        // `00b984d0`'s render-state object.
+        let renderer = e.mem.alloc(0x900);
+        e.mem.set_u32(renderer + 0x8b8, 0x0e0c_0000);
+        e.mem.set_u32(RENDERER, renderer);
+        quiet(e, RENDERER_IS_SKINNED);
+        (this, groups)
+    }
+
+    /// A pass of type `pass_type` whose geometry renders itself (slot +0x30 answers 1,
+    /// slot +0xDC records the call).
+    fn own_pass(e: &mut Engine, pass_type: u16) -> u32 {
+        let vtable = e.mem.alloc(0x100);
+        e.mem.set_u32(vtable + 0x30, 0x00ee_0030);
+        e.mem.set_u32(vtable + 0xdc, 0x00ee_00dc);
+        e.register(0x00ee_0030, |_, _| word(1));
+        quiet(e, 0x00ee_00dc);
+        let geometry = e.mem.alloc(0x100);
+        e.mem.set_u32(geometry, vtable);
+        let pass = e.mem.alloc(8);
+        e.mem.set_u32(pass, geometry);
+        e.mem.set_u16(pass + 4, pass_type);
+        pass
+    }
+
+    fn list_node(e: &mut Engine, item: u32, next: u32) -> u32 {
+        let node = e.mem.alloc(0xc);
+        e.mem.set_u32(node, next);
+        e.mem.set_u32(node + 8, item);
+        node
+    }
+
+    #[test]
+    fn render_batches_renders_each_list_with_its_state_and_skips_shadow_passes() {
+        let mut e = engine();
+        e.register(IS_SHADOW_PASS, |_, a| word(u32::from(a[0] == 0x20)));
+        let accumulator = e.mem.alloc(0x200);
+        e.mem.set_u8(accumulator + 0x165, 1);
+        e.register_double(GET_ACCUMULATOR, move |_, _| word(accumulator));
+        // 0x10 renders (group 0), 0x20 is a shadow pass (group 1), 0x400 is out of range.
+        let (this, groups) = batches(&mut e, &[0x10, 0x20, 0x400]);
+        e.mem.set_u32(CURRENT_PASS_TYPE, 0x10);
+        let first = own_pass(&mut e, 0x10);
+        let second = own_pass(&mut e, 0x10);
+        let third = own_pass(&mut e, 0x10);
+        let tail = list_node(&mut e, second, 0);
+        let head = list_node(&mut e, first, tail);
+        e.mem.set_u32(groups + 4, head);
+        e.mem.set_u32(groups + 0x10, 2);
+        let only = list_node(&mut e, third, 0);
+        e.mem.set_u32(groups + 2 * 0x14 + 4, only);
+        e.mem.set_u32(groups + 2 * 0x14 + 0x10, 1);
+        e.mem.set_u32(groups + 0x68 + 0x64, 9);
+        e.mem.set_u32(groups + 0x64, 9);
+        e.mem.set_u32(LOCK_COUNT_011FFA24, 1);
+        e.mem.set_u32(LOCK_COUNT_4, 0);
+        e.call(0x00b9_9e20, &[this.addr(), 0, 7, 0x55]);
+
+        let lookups: Vec<Vec<u32>> = calls_to(&e, MAP_GET_AT)
+            .iter()
+            .map(|c| c[..2].to_vec())
+            .collect();
+        assert_eq!(
+            lookups,
+            vec![vec![this.addr() + 0xc, 0x10], vec![this.addr() + 0xc, 0x20]]
+        );
+        // List 0 at state 1, list 2 at state 3 with the alpha test, then state 1 at the end.
+        let states: Vec<u32> = calls_to(&e, 0x00e8_79b0).iter().map(|c| c[1]).collect();
+        assert_eq!(states, vec![1, 3, 1]);
+        assert_eq!(
+            calls_to(&e, SET_ALPHA_TEST_ENABLE),
+            vec![vec![0, 0], vec![1, 1], vec![0, 0]]
+        );
+        // Coverage switch absent: only the closing call after each list.
+        assert_eq!(calls_to(&e, SET_ALPHA_TO_COVERAGE), vec![vec![0, 0]; 2]);
+        // Every item rendered through its own slot.
+        assert_eq!(calls_to(&e, 0x00ee_00dc).len(), 3);
+        assert_eq!(e.mem.u32(LOCK_COUNT_011FFA24), 0);
+        assert_eq!(e.mem.u32(LOCK_COUNT_4), 0);
+        // Both groups cleared: the rendered one and the skipped shadow pass.
+        assert_eq!(e.mem.u32(groups + 0x64), 0);
+        assert_eq!(e.mem.u32(groups + 0x68 + 0x64), 0);
+        assert_eq!(
+            calls_to(&e, PERSISTENT_LIST_CLEAR),
+            vec![vec![groups], vec![groups + 0x28]]
+        );
+        assert_eq!(e.mem.u32(groups + 0xc), head);
+    }
+
+    #[test]
+    fn render_batches_switches_coverage_and_keeps_the_range() {
+        let mut e = engine();
+        quiet(&mut e, IS_SHADOW_PASS);
+        let (this, groups) = batches(&mut e, &[0x10, 0x20]);
+        e.mem.set_u8(COVERAGE_AVAILABLE, 1);
+        e.mem.set_u32(COVERAGE_LOCK, 5);
+        e.mem.set_u32(LOCK_COUNT_4, 2);
+        e.mem.set_u32(CURRENT_PASS_TYPE, 0x20);
+        let pass = own_pass(&mut e, 0x20);
+        // Group 1, list 3 (state 1, alpha test, coverage on).
+        let only = list_node(&mut e, pass, 0);
+        e.mem.set_u32(groups + 0x68 + 3 * 0x14 + 4, only);
+        // The range 0x18..0x20 leaves out 0x10.
+        e.call(0x00b9_9e20, &[this.addr(), 0x18, 0x20, 0]);
+        assert_eq!(calls_to(&e, MAP_GET_AT).len(), 1);
+        assert_eq!(
+            calls_to(&e, SET_ALPHA_TO_COVERAGE),
+            vec![vec![1, 1], vec![0, 0], vec![0, 0], vec![0, 0]]
+        );
+        let states: Vec<u32> = calls_to(&e, 0x00e8_79b0).iter().map(|c| c[1]).collect();
+        assert_eq!(states, vec![1, 1]);
+        assert_eq!(e.mem.u32(COVERAGE_LOCK), 4);
+        assert_eq!(e.mem.u32(LOCK_COUNT_4), 1);
+        assert_eq!(calls_to(&e, 0x00ee_00dc).len(), 1);
+    }
+
+    #[test]
+    fn render_batches_with_an_empty_list_only_resets_the_state() {
+        let mut e = engine();
+        e.mem.set_u8(BATCH_SETUP_FLAG_011F94A6, 1);
+        quiet(&mut e, BATCH_SETUP_00BBB840);
+        let (this, _) = batches(&mut e, &[0]);
+        e.call(0x00b9_9e20, &[this.addr(), 0, 0, 0]);
+        assert_eq!(calls_to(&e, BATCH_SETUP_00BBB840).len(), 1);
+        assert!(calls_to(&e, MAP_GET_AT).is_empty());
+        assert_eq!(calls_to(&e, SET_ALPHA_TEST_ENABLE), vec![vec![0, 0]]);
+        assert_eq!(e.mem.u32(CURRENT_PASS_TYPE), 0);
+    }
+
+    #[test]
+    fn render_list_clears_the_group_and_finds_the_next_element() {
+        let mut e = engine();
+        let (this, groups) = batches(&mut e, &[0x20]);
+        let item = e.mem.alloc(8);
+        e.mem.set_u8(item + 7, 0x5a);
+        let node = list_node(&mut e, item, 0);
+        e.mem.set_u32(groups + 0x68 + 2 * 0x14 + 4, node);
+        e.mem.set_u32(groups + 0x68 + 0x64, 3);
+        let words = e.mem.alloc(0xc);
+        e.mem.set_u32(words, 0x20);
+        let answer = e.call(0x00b9_a3c0, &[this.addr(), words, words + 4, words + 8, 0]);
+        assert!(answer.bool());
+        assert_eq!(e.mem.u32(groups + 0x68 + 0x64), 0);
+        assert_eq!(e.mem.u32(words + 4), 2);
+        assert_eq!(e.mem.u8(words + 8), 0x5a);
+    }
+
+    #[test]
+    fn geometry_group_render_picks_its_own_list_or_the_renderer() {
+        // Bit 0 set: its own list (empty here), no renderer.
+        let mut e = engine();
+        let group = e.mem.alloc(0x24);
+        e.mem.set_u8(group, 1);
+        e.mem.set_u16(group + 2, 7);
+        e.call(0x00b9_a4d0, &[group, 1]);
+        assert_eq!(e.mem.u16(group + 2), 0);
+        assert!(calls_to(&e, ACTIVE_LIST_CLEAR).is_empty());
+
+        // Bit 0 clear: the renderer's slot +0x90, then its active list cleared.
+        let mut e = engine();
+        quiet(&mut e, ACTIVE_LIST_CLEAR);
+        quiet(&mut e, 0x00ee_0090);
+        let vtable = e.mem.alloc(0x100);
+        e.mem.set_u32(vtable + 0x90, 0x00ee_0090);
+        let renderer = e.mem.alloc(0x98);
+        e.mem.set_u32(renderer, vtable);
+        let group = e.mem.alloc(0x24);
+        e.mem.set_u8(group, 2);
+        e.mem.set_u16(group + 2, 7);
+        e.mem.set_u32(group + 8, renderer);
+        e.call(0x00b9_a4d0, &[group, 0x33]);
+        assert_eq!(
+            calls_to(&e, 0x00ee_0090),
+            vec![vec![renderer, 1, 0x2f1, 0x33]]
+        );
+        assert_eq!(calls_to(&e, ACTIVE_LIST_CLEAR), vec![vec![renderer + 0x2c]]);
+        assert_eq!(e.mem.u16(group + 2), 0);
+    }
+
+    #[test]
+    fn get_rtti_answers_the_class_record() {
+        let mut e = engine();
+        assert_eq!(e.call(0x00b9_aa70, &[0x0e00_1000]).u32(), 0x011f_fe3c);
     }
 }

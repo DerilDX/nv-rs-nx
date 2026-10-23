@@ -3,6 +3,7 @@
 
 #[allow(unused_imports)]
 use crate::prelude::*;
+use crate::types::NiTArray;
 
 /// `NiTriShapeData::ms_RTTI` (the class's `NiRTTI` record).
 const NI_TRI_SHAPE_DATA_RTTI: u32 = 0x011f_4a88;
@@ -434,6 +435,166 @@ pub fn ni_tri_shape_data_save_binary(e: &mut Engine, this: Ptr<NiTriShapeData>, 
     });
 }
 
+/// `NiTriBasedGeomData::IsEqual` (`00a8a9c0`) and `GetViewerStrings` (`00a8aab0`),
+/// thiscall, one word each.
+const TRI_BASED_GEOM_DATA_IS_EQUAL: u32 = 0x00a8_a9c0;
+const TRI_BASED_GEOM_DATA_GET_VIEWER_STRINGS: u32 = 0x00a8_aab0;
+/// `NiGetViewerString` (cdecl, the class name), `NiGetViewerString_ov8` (cdecl, a name and
+/// an unsigned value, `"%s = %u"`) and `NiGetViewerString_ov10` (cdecl, a name and a
+/// pointer, `"%s = %p"`): each returns a new string.
+const VIEWER_STRING_NAME: u32 = 0x00a7_d330;
+const VIEWER_STRING_UNSIGNED: u32 = 0x00a7_d510;
+const VIEWER_STRING_POINTER: u32 = 0x00a7_d5a0;
+/// The strings array `SetSize` (thiscall, the new size) and `SetAt` (thiscall, the index
+/// and the address of the element).
+const STRING_ARRAY_SET_SIZE: u32 = 0x0096_ad30;
+const STRING_ARRAY_SET_AT: u32 = 0x0096_ae90;
+/// `"m_uiTriListLength"` and `"m_pusTriList"`.
+const TEXT_TRI_LIST_LENGTH: u32 = 0x0109_db88;
+const TEXT_TRI_LIST: u32 = 0x0109_db78;
+/// `NiTriShapeData::SNAMemBlock` (0x14 bytes): its memory (+0x00, freed with `NiFree`)
+/// and the next block (+0x10).
+const BLOCK_MEMORY: u32 = 0x00;
+const BLOCK_NEXT: u32 = 0x10;
+
+/// Adds the string word at `slot` at the end of the strings array (`SetSize` to the size
+/// plus the grow-by step when the array is full, then `SetAt`).
+fn add_viewer_string(e: &mut Engine, strings: Ptr<NiTArray>, slot: u32) {
+    let index = u32::from(e.get(strings, NiTArray::m_usSize));
+    if index >= u32::from(e.get(strings, NiTArray::m_usMaxSize)) {
+        let grow = u32::from(e.get(strings, NiTArray::m_usGrowBy));
+        e.call(STRING_ARRAY_SET_SIZE, &args![strings, grow + index]);
+    }
+    e.call(STRING_ARRAY_SET_AT, &args![strings, index, slot]);
+}
+
+// Translated from 00a7b700 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map; the body sets the triangles (thiscall, `RET 8`: the triangle
+/// count and the index list): the count (16 bits, +0x40), three times it as the list length
+/// and the list, without freeing the old one.
+pub fn fn_00a7b700(e: &mut Engine, this: Ptr<NiTriShapeData>, triangles: u32, list: u32) {
+    let triangles = triangles as u16;
+    e.mem.set_u16(this.addr() + TRIANGLES, triangles);
+    e.set(
+        this,
+        NiTriShapeData::m_uiTriListLength,
+        u32::from(triangles) * 3,
+    );
+    e.set(this, NiTriShapeData::m_pusTriList, list);
+}
+
+// Translated from 00a7b760 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiTriShapeData::GetStripData` (Xbox PDB; thiscall, `RET 0x10`, four out pointers): the
+/// triangle count as the strip count (16 bits), no strip lengths (0), the index list and
+/// three times the triangle count as the list length.
+pub fn ni_tri_shape_data_get_strip_data(
+    e: &mut Engine,
+    this: Ptr<NiTriShapeData>,
+    strips: u32,
+    strip_lengths: u32,
+    tri_list: u32,
+    tri_list_length: u32,
+) {
+    let triangles = e.mem.u16(this.addr() + TRIANGLES);
+    e.mem.set_u16(strips, triangles);
+    e.mem.set_u32(strip_lengths, 0);
+    let list = e.get(this, NiTriShapeData::m_pusTriList);
+    e.mem.set_u32(tri_list, list);
+    let triangles = u32::from(e.mem.u16(this.addr() + TRIANGLES));
+    e.mem.set_u32(tri_list_length, triangles * 3);
+}
+
+// Translated from 00a7b7e0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiTriShapeData::IsEqual` (Xbox PDB; thiscall, `RET 4`): `NiTriBasedGeomData::IsEqual`,
+/// the same list length, and the two index lists equal over twice the length in bytes (the
+/// code inline `memcmp`: four bytes at a time, then up to three single bytes).
+pub fn ni_tri_shape_data_is_equal(
+    e: &mut Engine,
+    this: Ptr<NiTriShapeData>,
+    other: Ptr<NiTriShapeData>,
+) -> bool {
+    if e.call(TRI_BASED_GEOM_DATA_IS_EQUAL, &args![this, other])
+        .u32() as u8
+        == 0
+    {
+        return false;
+    }
+    let length = e.get(this, NiTriShapeData::m_uiTriListLength);
+    if length != e.get(other, NiTriShapeData::m_uiTriListLength) {
+        return false;
+    }
+    let mut theirs = e.get(other, NiTriShapeData::m_pusTriList);
+    let mut mine = e.get(this, NiTriShapeData::m_pusTriList);
+    let mut bytes = length.wrapping_add(length);
+    while bytes >= 4 {
+        if e.mem.u32(mine) != e.mem.u32(theirs) {
+            return false;
+        }
+        bytes -= 4;
+        theirs = theirs.wrapping_add(4);
+        mine = mine.wrapping_add(4);
+    }
+    for i in 0..bytes {
+        if e.mem.u8(theirs.wrapping_add(i)) != e.mem.u8(mine.wrapping_add(i)) {
+            return false;
+        }
+    }
+    true
+}
+
+// Translated from 00a7b880 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map; the body is the scalar deleting destructor of a shared-normal
+/// memory block (`NiTriShapeData::SNAMemBlock`; thiscall, `RET 4`): frees the block memory
+/// (`NiFree`), deletes the next block the same way (flags 1) when there is one, then gives
+/// the block back to the memory manager (`00aa4060` on `011f6238`) when bit 0 of `flags` is
+/// set. Returns `this`.
+pub fn fn_00a7b880(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    let memory = e.mem.u32(this.addr() + BLOCK_MEMORY);
+    e.call(NI_FREE_00AA10F0, &args![memory]);
+    let next = e.mem.u32(this.addr() + BLOCK_NEXT);
+    if next != 0 {
+        fn_00a7b880(e, Ptr::new(next), 1);
+    }
+    if flags & 1 != 0 {
+        e.call(MEMORY_MANAGER_FREE, &args![MEMORY_MANAGER_OBJECT, this]);
+    }
+    this
+}
+
+// Translated from 00a7bd60 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiTriShapeData::GetViewerStrings` (Xbox PDB; thiscall, `RET 4`):
+/// `NiTriBasedGeomData::GetViewerStrings`, then the class name (the first word of
+/// `ms_RTTI`), `"m_uiTriListLength"` with the list length and `"m_pusTriList"` with the
+/// list address, each held in the argument stack word and added at the array end.
+pub fn ni_tri_shape_data_get_viewer_strings(
+    e: &mut Engine,
+    this: Ptr<NiTriShapeData>,
+    strings: Ptr<NiTArray>,
+) {
+    e.call(
+        TRI_BASED_GEOM_DATA_GET_VIEWER_STRINGS,
+        &args![this, strings],
+    );
+    e.with_stack(4, |e, slot| {
+        let class_name = e.global::<u32>(NI_TRI_SHAPE_DATA_RTTI);
+        let text = e.call(VIEWER_STRING_NAME, &args![class_name]).u32();
+        e.mem.set_u32(slot.addr(), text);
+        add_viewer_string(e, strings, slot.addr());
+        let length = e.get(this, NiTriShapeData::m_uiTriListLength);
+        let text = e
+            .call(VIEWER_STRING_UNSIGNED, &args![TEXT_TRI_LIST_LENGTH, length])
+            .u32();
+        e.mem.set_u32(slot.addr(), text);
+        add_viewer_string(e, strings, slot.addr());
+        let list = e.get(this, NiTriShapeData::m_pusTriList);
+        let text = e
+            .call(VIEWER_STRING_POINTER, &args![TEXT_TRI_LIST, list])
+            .u32();
+        e.mem.set_u32(slot.addr(), text);
+        add_viewer_string(e, strings, slot.addr());
+    });
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -479,6 +640,20 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(
             0x00a7_b690,
             ni_tri_shape_data_ni_tri_shape_data_ov2(Ptr<NiTriShapeData>) -> Ptr<NiTriShapeData>
+        ),
+        entry!(0x00a7_b700, fn_00a7b700(Ptr<NiTriShapeData>, u32, u32)),
+        entry!(
+            0x00a7_b760,
+            ni_tri_shape_data_get_strip_data(Ptr<NiTriShapeData>, u32, u32, u32, u32)
+        ),
+        entry!(
+            0x00a7_b7e0,
+            ni_tri_shape_data_is_equal(Ptr<NiTriShapeData>, Ptr<NiTriShapeData>) -> bool
+        ),
+        entry!(0x00a7_b880, fn_00a7b880(Ptr, u32) -> Ptr),
+        entry!(
+            0x00a7_bd60,
+            ni_tri_shape_data_get_viewer_strings(Ptr<NiTriShapeData>, Ptr<NiTArray>)
         ),
     ]
 }
@@ -841,5 +1016,139 @@ mod batch_b011_tests {
             calls(&e, NI_TRI_BASED_GEOM_DATA_SAVE_BINARY),
             vec![vec![this.addr(), stream]]
         );
+    }
+}
+
+#[cfg(test)]
+mod n020_tests {
+    use super::*;
+
+    fn calls_to(e: &Engine, callee: u32) -> Vec<Vec<u32>> {
+        e.call_log
+            .iter()
+            .flatten()
+            .filter(|(a, _)| *a == callee)
+            .map(|(_, w)| w.clone())
+            .collect()
+    }
+
+    /// Shape data whose list holds `indices` (length: their count).
+    fn shape_data(e: &mut Engine, indices: &[u16]) -> u32 {
+        let this = e.mem.alloc(0x58);
+        let list = e.mem.alloc(2 * indices.len() as u32 + 4);
+        for (i, v) in indices.iter().enumerate() {
+            e.mem.set_u16(list + 2 * i as u32, *v);
+        }
+        e.mem.set_u32(this + 0x44, indices.len() as u32);
+        e.mem.set_u32(this + 0x48, list);
+        this
+    }
+
+    #[test]
+    fn setting_triangles_stores_count_length_and_list() {
+        let mut e = Engine::new();
+        let this = e.mem.alloc(0x58);
+        e.call(0x00a7_b700, &args![this, 0x7_0005u32, 0x0abc_0000u32]);
+        assert_eq!(e.mem.u16(this + TRIANGLES), 5);
+        assert_eq!(e.mem.u32(this + 0x44), 15);
+        assert_eq!(e.mem.u32(this + 0x48), 0x0abc_0000);
+    }
+
+    #[test]
+    fn strip_data_is_the_triangle_list() {
+        let mut e = Engine::new();
+        let this = shape_data(&mut e, &[0; 6]);
+        e.mem.set_u16(this + TRIANGLES, 2);
+        let out = e.mem.alloc(0x10);
+        e.mem.set_u32(out, 0xffff_ffff);
+        e.mem.set_u32(out + 4, 0xffff_ffff);
+        e.call(0x00a7_b760, &args![this, out, out + 4, out + 8, out + 0xc]);
+        assert_eq!(e.mem.u32(out), 0xffff_0002);
+        assert_eq!(e.mem.u32(out + 4), 0);
+        assert_eq!(e.mem.u32(out + 8), e.mem.u32(this + 0x48));
+        assert_eq!(e.mem.u32(out + 0xc), 6);
+    }
+
+    #[test]
+    fn is_equal_compares_the_lists_byte_for_byte() {
+        let mut e = Engine::new();
+        e.register(TRI_BASED_GEOM_DATA_IS_EQUAL, |e, a| {
+            u32::from(e.mem.u32(a[0] + 4) == 0).into_ret()
+        });
+        // Three entries: one four-byte step and two single bytes.
+        let a = shape_data(&mut e, &[1, 2, 0x0304]);
+        let b = shape_data(&mut e, &[1, 2, 0x0304]);
+        assert_eq!(e.call(0x00a7_b7e0, &args![a, b]).u32() & 0xff, 1);
+        let lb = e.mem.u32(b + 0x48);
+        e.mem.set_u8(lb + 5, 9);
+        assert_eq!(e.call(0x00a7_b7e0, &args![a, b]).u32() & 0xff, 0);
+        e.mem.set_u8(lb + 5, 3);
+        e.mem.set_u16(lb + 2, 7);
+        assert_eq!(e.call(0x00a7_b7e0, &args![a, b]).u32() & 0xff, 0);
+        e.mem.set_u16(lb + 2, 2);
+        e.mem.set_u32(b + 0x44, 2);
+        assert_eq!(e.call(0x00a7_b7e0, &args![a, b]).u32() & 0xff, 0);
+        e.mem.set_u32(b + 0x44, 3);
+        e.mem.set_u32(a + 4, 1);
+        assert_eq!(e.call(0x00a7_b7e0, &args![a, b]).u32() & 0xff, 0);
+    }
+
+    #[test]
+    fn memory_block_delete_frees_the_whole_chain() {
+        let mut e = Engine::new();
+        e.register(NI_FREE_00AA10F0, |_, _| Ret::default());
+        e.register(MEMORY_MANAGER_FREE, |_, _| Ret::default());
+        let second = e.mem.alloc(0x14);
+        e.mem.set_u32(second + BLOCK_MEMORY, 0x0b00_0000);
+        let first = e.mem.alloc(0x14);
+        e.mem.set_u32(first + BLOCK_MEMORY, 0x0a00_0000);
+        e.mem.set_u32(first + BLOCK_NEXT, second);
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x00a7_b880, &args![first, 0u32]).u32(), first);
+        assert_eq!(
+            calls_to(&e, NI_FREE_00AA10F0),
+            vec![vec![0x0a00_0000], vec![0x0b00_0000]]
+        );
+        // Only the next block is given back: the first was called with flags 0.
+        assert_eq!(
+            calls_to(&e, MEMORY_MANAGER_FREE),
+            vec![vec![MEMORY_MANAGER_OBJECT, second]]
+        );
+    }
+
+    #[test]
+    fn viewer_strings_add_the_class_length_and_list() {
+        let mut e = Engine::new();
+        e.map(NI_TRI_SHAPE_DATA_RTTI, 4);
+        e.set_global(NI_TRI_SHAPE_DATA_RTTI, 0x0104_0000u32);
+        e.register(TRI_BASED_GEOM_DATA_GET_VIEWER_STRINGS, |_, _| {
+            Ret::default()
+        });
+        e.register(VIEWER_STRING_NAME, |_, a| (a[0] + 1).into_ret());
+        e.register(VIEWER_STRING_UNSIGNED, |_, a| {
+            assert_eq!(a[0], TEXT_TRI_LIST_LENGTH);
+            (0x0500_0000 + a[1]).into_ret()
+        });
+        e.register(VIEWER_STRING_POINTER, |_, a| (a[0] ^ a[1]).into_ret());
+        e.register(STRING_ARRAY_SET_SIZE, |e, a| {
+            e.mem.set_u16(a[0] + 8, a[1] as u16);
+            Ret::default()
+        });
+        e.register(STRING_ARRAY_SET_AT, |e, a| {
+            let base = e.mem.u32(a[0] + 4);
+            let value = e.mem.u32(a[2]);
+            e.mem.set_u32(base + a[1] * 4, value);
+            e.mem.set_u16(a[0] + 0xa, a[1] as u16 + 1);
+            Ret::default()
+        });
+        let strings = e.mem.alloc(0x10);
+        let base = e.mem.alloc(0x40);
+        e.mem.set_u32(strings + 4, base);
+        e.mem.set_u16(strings + 0xe, 2);
+        let this = shape_data(&mut e, &[0; 3]);
+        let list = e.mem.u32(this + 0x48);
+        e.call(0x00a7_bd60, &args![this, strings]);
+        let words: Vec<u32> = (0..3).map(|i| e.mem.u32(base + 4 * i)).collect();
+        assert_eq!(words, vec![0x0104_0001, 0x0500_0003, TEXT_TRI_LIST ^ list]);
     }
 }

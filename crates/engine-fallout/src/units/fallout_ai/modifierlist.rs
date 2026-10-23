@@ -596,9 +596,224 @@ pub fn fn_00937f40(e: &mut Engine, this: Ptr) {
     e.mem.set_u32(this.addr(), 0);
 }
 
+/// The save/load game object (`TESSaveLoadGame*`, `011de45c`).
+const SAVE_LOAD_GAME: u32 = 0x011d_e45c;
+/// `008579b0` and `008579e0` (unnamed, engine map unit `tessaveloadgame.cpp`; `thiscall` on
+/// the save/load game object, `RET 8`: address, size): write and read that many bytes.
+const SAVE_LOAD_WRITE: u32 = 0x0085_79b0;
+const SAVE_LOAD_READ: u32 = 0x0085_79e0;
+/// `00825c00` (unnamed, `thiscall` on the save/load game object, no stack words): the address
+/// the count is written back to at the end of [`modifier_list_save_game`].
+const SAVE_LOAD_COUNT_SLOT: u32 = 0x0082_5c00;
+/// `005ae380` (`thiscall`, no stack words; the engine map's name `VATS::GetCount` is folded
+/// code): the number of items in the list.
+const LIST_COUNT: u32 = 0x005a_e380;
+/// `BGSLoadGameBuffer` raw load (`00864980`, `thiscall`, `RET 8`: data, size) and
+/// `BGSLoadGameBuffer::LoadVariableSizedValue` (engine map, `00864a60`, no stack words).
+const LOAD_BYTES: u32 = 0x0086_4980;
+const LOAD_VARIABLE_SIZE: u32 = 0x0086_4a60;
+/// The fast slot of an actor value without one, and the number of actor values.
+const ACTOR_VALUE_COUNT: i32 = 0x4d;
+
+// Translated from 00937870 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Writes one modifier (unnamed in the engine map; `thiscall`, one stack word, `RET 4`; `this`
+/// is not read): `false` for a null modifier; otherwise its actor value byte
+/// ([`fn_009373f0`]) and its `float` value (`006b9130`, stored as a `float`) go through the
+/// save/load game object (`008579b0`, 1 and 4 bytes, from locals), and the answer is `true`.
+pub fn fn_00937870(e: &mut Engine, _unused_0: Ptr<ModifierList>, modifier: u32) -> bool {
+    if modifier == 0 {
+        return false;
+    }
+    e.with_stack(8, |e, local| {
+        let kind_at = local.addr() + 3;
+        let value_at = local.addr() + 4;
+        let kind = fn_009373f0(e, Ptr::new(modifier));
+        e.mem.set_u8(kind_at, kind);
+        let value = e.call(MODIFIER_VALUE, &args![modifier]).f64();
+        e.mem.set_u32(value_at, x87_store32(value));
+        let save = e.global::<u32>(SAVE_LOAD_GAME);
+        e.call(SAVE_LOAD_WRITE, &args![save, kind_at, 1u32]);
+        let save = e.global::<u32>(SAVE_LOAD_GAME);
+        e.call(SAVE_LOAD_WRITE, &args![save, value_at, 4u32]);
+    });
+    true
+}
+
+// Translated from 009378d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ModifierList::SaveGame` (engine map; `thiscall`, no stack words): through the save/load
+/// game object, a 16-bit count written as 0 first (`008579b0`, after `00825c00` gave the
+/// address the final count goes to); then every list item (walking the nodes from `this`
+/// while the node's item is set) written by [`fn_00937870`], counted when it answers true;
+/// then, with `pFastModifiers`, each of the `011e0750` slots written and counted whatever
+/// the answer. The count is stored as 16 bits at `00825c00`'s address.
+pub fn modifier_list_save_game(e: &mut Engine, this: Ptr<ModifierList>) {
+    e.with_stack(4, |e, count_local| {
+        let mut count: u16 = 0;
+        let save = e.global::<u32>(SAVE_LOAD_GAME);
+        let count_slot = e.call(SAVE_LOAD_COUNT_SLOT, &args![save]).u32();
+        e.mem.set_u16(count_local.addr(), count);
+        let save = e.global::<u32>(SAVE_LOAD_GAME);
+        e.call(SAVE_LOAD_WRITE, &args![save, count_local, 2u32]);
+        let mut node = this.addr();
+        while node != 0 {
+            let item_address = e.call(NODE_ITEM_ADDRESS, &args![node]).u32();
+            if e.mem.u32(item_address) == 0 {
+                break;
+            }
+            let item_address = e.call(NODE_ITEM_ADDRESS, &args![node]).u32();
+            let item = e.mem.u32(item_address);
+            if fn_00937870(e, this, item) {
+                count = count.wrapping_add(1);
+            }
+            node = e.call(NEXT_NODE, &args![node]).u32();
+        }
+        let slots = if e.get(this, ModifierList::pFastModifiers) != 0 {
+            e.mem.u32(FAST_SLOT_COUNT)
+        } else {
+            0
+        };
+        let mut index = 0i32;
+        while index < slots as i32 {
+            let item = e
+                .mem
+                .u32(fast_slots(e, this).wrapping_add((index as u32).wrapping_mul(4)));
+            fn_00937870(e, this, item);
+            count = count.wrapping_add(1);
+            index += 1;
+        }
+        e.mem.set_u16(count_slot, count);
+    });
+}
+
+// Translated from 009379c0 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 009379c0 - the C++ exception unwinding states (FS:[0] frame, handler 00f0d3ab) are not translated
+/// `ModifierList::LoadGame` (engine map; `thiscall`, no stack words): through the save/load
+/// game object (`008579e0`), a 16-bit count, then for each modifier its actor value byte and
+/// its `float` value; each becomes a new 8-byte modifier ([`fn_009375b0`]; 0 when the
+/// allocation fails) taken in by [`fn_00937380`].
+pub fn modifier_list_load_game(e: &mut Engine, this: Ptr<ModifierList>) {
+    e.with_stack(8, |e, local| {
+        let count_at = local.addr();
+        let kind_at = local.addr() + 3;
+        let value_at = local.addr() + 4;
+        let save = e.global::<u32>(SAVE_LOAD_GAME);
+        e.call(SAVE_LOAD_READ, &args![save, count_at, 2u32]);
+        let mut index = 0u32;
+        while index < u32::from(e.mem.u16(count_at)) {
+            let save = e.global::<u32>(SAVE_LOAD_GAME);
+            e.call(SAVE_LOAD_READ, &args![save, kind_at, 1u32]);
+            let save = e.global::<u32>(SAVE_LOAD_GAME);
+            e.call(SAVE_LOAD_READ, &args![save, value_at, 4u32]);
+            let kind = e.mem.u8(kind_at);
+            let value = x87_quiet_bits(e.mem.u32(value_at));
+            let modifier = new_modifier(e, kind, value);
+            fn_00937380(e, this, modifier);
+            index += 1;
+        }
+    });
+}
+
+// Translated from 00937ab0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ModifierList::GetSaveSize` (engine map; `thiscall`, no stack words; a 16-bit answer in
+/// `AX`): 5 bytes a modifier (the exe tests that local constant against 0, answering 0) times
+/// the list's item count (`005ae380`) plus 2, plus 5 for each of the `011e0750` fast slots
+/// when `pFastModifiers` is set; 16-bit arithmetic.
+pub fn modifier_list_get_save_size(e: &mut Engine, this: Ptr<ModifierList>) -> u16 {
+    let mut size: u16 = 0;
+    let per_modifier: u16 = 5;
+    if per_modifier == 0 {
+        return 0;
+    }
+    let items = e.call(LIST_COUNT, &args![this]).u32();
+    size = (u32::from(size)
+        .wrapping_add(u32::from(per_modifier).wrapping_mul(items))
+        .wrapping_add(2)) as u16;
+    let slots = if e.get(this, ModifierList::pFastModifiers) != 0 {
+        e.mem.u32(FAST_SLOT_COUNT)
+    } else {
+        0
+    };
+    (u32::from(size).wrapping_add(u32::from(per_modifier).wrapping_mul(slots))) as u16
+}
+
+// Translated from 00937d30 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The modifier default constructor (unnamed in the engine map; `thiscall`, no stack words):
+/// the actor value byte 0 and the value 0.0 (`FLDZ`). Returns `this`.
+pub fn fn_00937d30(e: &mut Engine, this: Ptr) -> Ptr {
+    e.mem.set_u8(this.addr(), 0);
+    e.mem.set_u32(this.addr() + 4, x87_store32(0.0));
+    this
+}
+
+// Translated from 00937c60 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 00937c60 - the C++ exception unwinding states (FS:[0] frame, handler 00f01e5b) are not translated
+/// `ModifierList::LoadGame_ov2` (engine map; `thiscall`, one stack word: the load buffer,
+/// `RET 4`): the count (`LoadVariableSizedValue`), then for each modifier a new 8-byte one
+/// ([`fn_00937d30`]; 0 when the allocation fails, which the exe then reads into) whose
+/// actor value byte and 4-byte value are read from the buffer (`00864980`), taken in by
+/// [`fn_00937380`].
+pub fn modifier_list_load_game_ov2(e: &mut Engine, this: Ptr<ModifierList>, buffer: u32) {
+    let count = e.call(LOAD_VARIABLE_SIZE, &args![buffer]).u32();
+    let mut index = 0u32;
+    while index < count {
+        let block = e.call(ALLOCATE, &args![8u32]).u32();
+        let modifier = if block != 0 {
+            fn_00937d30(e, Ptr::new(block)).addr()
+        } else {
+            0
+        };
+        e.call(LOAD_BYTES, &args![buffer, modifier, 1u32]);
+        e.call(LOAD_BYTES, &args![buffer, modifier.wrapping_add(4), 4u32]);
+        fn_00937380(e, this, modifier);
+        index += 1;
+    }
+}
+
+// Translated from 00938060 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Frees and clears the fast slot of an actor value (unnamed in the engine map; `thiscall` on
+/// the fast-modifier collection, one stack word, `RET 4`): for `kind` in `0..0x4d` (signed),
+/// with an array, a slot (`011e0618[kind]` below 0x4d, signed) and a modifier in it: the
+/// modifier is freed (`00401030`) and the slot cleared.
+pub fn fn_00938060(e: &mut Engine, this: Ptr, kind: i32) {
+    if !(0..ACTOR_VALUE_COUNT).contains(&kind) {
+        return;
+    }
+    if e.mem.u32(this.addr()) == 0 {
+        return;
+    }
+    let index_at = FAST_SLOT_INDEX.wrapping_add((kind as u32).wrapping_mul(4));
+    if e.mem.i32(index_at) >= ACTOR_VALUE_COUNT {
+        return;
+    }
+    let slot_at = |e: &Engine| {
+        let index = e.mem.u32(index_at);
+        e.mem.u32(this.addr()).wrapping_add(index.wrapping_mul(4))
+    };
+    if e.mem.u32(slot_at(e)) == 0 {
+        return;
+    }
+    let modifier = e.mem.u32(slot_at(e));
+    e.call(FREE, &args![modifier]);
+    let slot = slot_at(e);
+    e.mem.set_u32(slot, 0);
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x0093_7870, fn_00937870(Ptr<ModifierList>, u32) -> bool),
+        entry!(0x0093_78d0, modifier_list_save_game(Ptr<ModifierList>)),
+        entry!(0x0093_79c0, modifier_list_load_game(Ptr<ModifierList>)),
+        entry!(
+            0x0093_7ab0,
+            modifier_list_get_save_size(Ptr<ModifierList>) -> u16
+        ),
+        entry!(
+            0x0093_7c60,
+            modifier_list_load_game_ov2(Ptr<ModifierList>, u32)
+        ),
+        entry!(0x0093_7d30, fn_00937d30(Ptr) -> Ptr),
+        entry!(0x0093_8060, fn_00938060(Ptr, i32)),
         entry!(
             0x0093_7160,
             fn_00937160(Ptr<ModifierList>, Ptr<ModifierList>)
@@ -1223,5 +1438,242 @@ mod b019_tests {
         assert_eq!(e.mem.u32(this), 0);
         e.call(0x0093_7f40, &args![this]);
         assert_eq!(calls(&e, FREE).len(), 2);
+    }
+}
+
+#[cfg(test)]
+mod n027_tests {
+    use super::*;
+
+    fn calls(e: &Engine, address: u32) -> Vec<Vec<u32>> {
+        e.call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|(a, _)| *a == address)
+            .map(|(_, w)| w.clone())
+            .collect()
+    }
+
+    fn nothing(_: &mut Engine, _: &[u32]) -> Ret {
+        Ret::default()
+    }
+
+    /// The save/load game object at `0x5000` (`011de45c`) and the fast slot globals mapped;
+    /// the writer double records the bytes it is given (`(size, value)`).
+    fn save_engine() -> (Engine, std::rc::Rc<std::cell::RefCell<Vec<(u32, u32)>>>) {
+        let mut e = Engine::new();
+        e.map(0x011d_e000, 0x3000);
+        e.set_global(SAVE_LOAD_GAME, 0x5000u32);
+        let written = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let record = written.clone();
+        e.register_double(SAVE_LOAD_WRITE, move |e, a| {
+            let value = match a[2] {
+                1 => u32::from(e.mem.u8(a[1])),
+                2 => u32::from(e.mem.u16(a[1])),
+                _ => e.mem.u32(a[1]),
+            };
+            record.borrow_mut().push((a[2], value));
+            Ret::default()
+        });
+        e.register(MODIFIER_VALUE, |e, a| {
+            f64::from(e.mem.f32(a[0] + 4)).into_ret()
+        });
+        e.register(NODE_ITEM_ADDRESS, |_, a| a[0].into_ret());
+        e.register(NEXT_NODE, |e, a| e.mem.u32(a[0] + 4).into_ret());
+        e.call_log = Some(vec![]);
+        (e, written)
+    }
+
+    fn modifier(e: &mut Engine, kind: u8, value: f32) -> u32 {
+        let block = e.mem.alloc(8);
+        e.mem.set_u8(block, kind);
+        e.mem.set_f32(block + 4, value);
+        block
+    }
+
+    #[test]
+    fn fn_00937870_writes_kind_and_value() {
+        let (mut e, written) = save_engine();
+        let item = modifier(&mut e, 0x12, 2.5);
+        assert!(e.call(0x0093_7870, &args![0u32, item]).bool());
+        assert_eq!(*written.borrow(), vec![(1, 0x12), (4, 2.5f32.to_bits())]);
+        assert_eq!(calls(&e, SAVE_LOAD_WRITE)[0][0], 0x5000);
+        assert!(!e.call(0x0093_7870, &args![0u32, 0u32]).bool());
+        assert_eq!(written.borrow().len(), 2);
+    }
+
+    #[test]
+    fn save_game_writes_the_list_and_fast_slots_and_the_count() {
+        let (mut e, written) = save_engine();
+        let count_slot = e.mem.alloc(4);
+        e.register_double(SAVE_LOAD_COUNT_SLOT, move |_, _| count_slot.into_ret());
+        // A list of two items (head node is the list itself), then a node with no item.
+        let list: Ptr<ModifierList> = e.new_object();
+        let second = e.mem.alloc(8);
+        let third = e.mem.alloc(8);
+        let a = modifier(&mut e, 1, 1.0);
+        let b = modifier(&mut e, 2, 2.0);
+        e.mem.set_u32(list.addr(), a);
+        e.mem.set_u32(list.addr() + 4, second);
+        e.mem.set_u32(second, b);
+        e.mem.set_u32(second + 4, third);
+        // Two fast slots: one used, one empty (written and counted all the same).
+        e.set_global(FAST_SLOT_COUNT, 2u32);
+        let collection = e.mem.alloc(4);
+        let slots = e.mem.alloc(8);
+        e.mem.set_u32(collection, slots);
+        let c = modifier(&mut e, 3, 3.0);
+        e.mem.set_u32(slots, c);
+        e.set(list, ModifierList::pFastModifiers, collection);
+        e.call(0x0093_78d0, &args![list]);
+        assert_eq!(
+            *written.borrow(),
+            vec![
+                (2, 0),
+                (1, 1),
+                (4, 1.0f32.to_bits()),
+                (1, 2),
+                (4, 2.0f32.to_bits()),
+                (1, 3),
+                (4, 3.0f32.to_bits())
+            ]
+        );
+        assert_eq!(e.mem.u16(count_slot), 4);
+        // Without the collection only the list counts.
+        e.set(list, ModifierList::pFastModifiers, 0);
+        e.call(0x0093_78d0, &args![list]);
+        assert_eq!(e.mem.u16(count_slot), 2);
+    }
+
+    #[test]
+    fn load_game_reads_each_modifier_into_the_list() {
+        let mut e = Engine::new();
+        e.map(0x011d_e000, 0x3000);
+        e.set_global(SAVE_LOAD_GAME, 0x5000u32);
+        // The stream: count 2, then (kind, value) pairs.
+        let stream = [2u32, 7, 1.5f32.to_bits(), 9, 4.0f32.to_bits()];
+        let mut next = 0usize;
+        e.register_double(SAVE_LOAD_READ, move |e, a| {
+            let value = stream[next];
+            next += 1;
+            match a[2] {
+                1 => e.mem.set_u8(a[1], value as u8),
+                2 => e.mem.set_u16(a[1], value as u16),
+                _ => e.mem.set_u32(a[1], value),
+            }
+            Ret::default()
+        });
+        e.register(ALLOCATE, |e, a| e.mem.alloc(a[0]).into_ret());
+        e.register(MODIFIER_SET_VALUE, |e, a| {
+            e.mem.set_u32(a[0] + 4, a[1]);
+            Ret::default()
+        });
+        // Taken in: through the list (no actor value info).
+        e.register(ACTOR_VALUE_INFO, |_, _| 0u32.into_ret());
+        e.register(LIST_ADD, |e, a| {
+            let modifier = e.mem.u32(a[1]);
+            let count = e.mem.u32(a[0] + 8);
+            e.mem.set_u32(a[0] + 0x10 + 4 * count, modifier);
+            e.mem.set_u32(a[0] + 8, count + 1);
+            Ret::default()
+        });
+        let list = e.mem.alloc(0x20);
+        e.call_log = Some(vec![]);
+        e.call(0x0093_79c0, &args![list]);
+        assert_eq!(e.mem.u32(list + 8), 2);
+        let first = e.mem.u32(list + 0x10);
+        let second = e.mem.u32(list + 0x14);
+        assert_eq!((e.mem.u8(first), e.mem.f32(first + 4)), (7, 1.5));
+        assert_eq!((e.mem.u8(second), e.mem.f32(second + 4)), (9, 4.0));
+        assert_eq!(calls(&e, SAVE_LOAD_READ).len(), 5);
+        assert_eq!(calls(&e, SAVE_LOAD_READ)[0][0], 0x5000);
+    }
+
+    #[test]
+    fn get_save_size_counts_five_bytes_a_modifier() {
+        let mut e = Engine::new();
+        e.map(0x011e_0000, 0x1000);
+        e.set_global(FAST_SLOT_COUNT, 3u32);
+        e.register(LIST_COUNT, |_, _| 4u32.into_ret());
+        let list: Ptr<ModifierList> = e.new_object();
+        assert_eq!(e.call(0x0093_7ab0, &args![list]).u16(), 22);
+        e.set(list, ModifierList::pFastModifiers, 0x100);
+        assert_eq!(e.call(0x0093_7ab0, &args![list]).u16(), 37);
+        // 16-bit arithmetic.
+        e.register(LIST_COUNT, |_, _| 0x3334u32.into_ret());
+        assert_eq!(
+            e.call(0x0093_7ab0, &args![list]).u16(),
+            ((5 * 0x3334 + 2 + 15) & 0xffff) as u16
+        );
+    }
+
+    #[test]
+    fn fn_00937d30_clears_kind_and_value() {
+        let mut e = Engine::new();
+        let block = modifier(&mut e, 5, 9.0);
+        e.mem.set_u8(block + 1, 0x66);
+        assert_eq!(e.call(0x0093_7d30, &args![block]).u32(), block);
+        assert_eq!(e.mem.u8(block), 0);
+        assert_eq!(e.mem.u8(block + 1), 0x66);
+        assert_eq!(e.mem.u32(block + 4), 0);
+    }
+
+    #[test]
+    fn load_game_ov2_reads_into_new_modifiers() {
+        let mut e = Engine::new();
+        e.register(LOAD_VARIABLE_SIZE, |_, _| 2u32.into_ret());
+        e.register(ALLOCATE, |e, a| e.mem.alloc(a[0]).into_ret());
+        e.register(LOAD_BYTES, |e, a| {
+            if a[2] == 1 {
+                e.mem.set_u8(a[1], 4);
+            } else {
+                e.mem.set_f32(a[1], 0.5);
+            }
+            Ret::default()
+        });
+        e.register(ACTOR_VALUE_INFO, |_, _| 0u32.into_ret());
+        e.register(LIST_ADD, nothing);
+        let list = e.mem.alloc(0x10);
+        e.call_log = Some(vec![]);
+        e.call(0x0093_7c60, &args![list, 0x6000u32]);
+        let loads = calls(&e, LOAD_BYTES);
+        assert_eq!(loads.len(), 4);
+        assert_eq!(loads[0][0], 0x6000);
+        assert_eq!(loads[0][2], 1);
+        assert_eq!(loads[1][1], loads[0][1] + 4);
+        assert_eq!(loads[1][2], 4);
+        let added = calls(&e, LIST_ADD);
+        assert_eq!(added.len(), 2);
+        assert_eq!(e.mem.u8(loads[2][1]), 4);
+        assert_eq!(e.mem.f32(loads[3][1]), 0.5);
+    }
+
+    #[test]
+    fn fn_00938060_frees_and_clears_the_slot() {
+        let mut e = Engine::new();
+        e.map(0x011e_0000, 0x1000);
+        // Actor value 3 uses slot 1; 4 has no slot (0x4d).
+        e.mem.set_u32(FAST_SLOT_INDEX + 4 * 3, 1);
+        e.mem.set_u32(FAST_SLOT_INDEX + 4 * 4, 0x4d);
+        e.register(FREE, nothing);
+        let collection = e.mem.alloc(4);
+        let slots = e.mem.alloc(8);
+        e.mem.set_u32(collection, slots);
+        e.mem.set_u32(slots + 4, 0x7777);
+        e.call_log = Some(vec![]);
+        for kind in [-1i32, 0x4d, 4] {
+            e.call(0x0093_8060, &args![collection, kind]);
+        }
+        // Slot 0 (actor value 0) is empty.
+        e.call(0x0093_8060, &args![collection, 0i32]);
+        assert!(calls(&e, FREE).is_empty());
+        e.call(0x0093_8060, &args![collection, 3i32]);
+        assert_eq!(calls(&e, FREE), vec![vec![0x7777]]);
+        assert_eq!(e.mem.u32(slots + 4), 0);
+        // No array.
+        e.mem.set_u32(collection, 0);
+        e.call(0x0093_8060, &args![collection, 3i32]);
+        assert_eq!(calls(&e, FREE).len(), 1);
     }
 }

@@ -169,9 +169,24 @@ pub fn fn_00e94130(e: &mut Engine, this: Ptr) {
     e.mem.set_u8(this.addr().wrapping_add(4), 1);
 }
 
+// Translated from 00e94050 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`run_00e93f50`), `thiscall` with the device: when the byte +4 is
+/// set it is cleared and the device's slot 0xc4 (by the interface's order `SetMaterial`)
+/// gets the word +0 (the record's address).
+pub fn fn_00e94050(e: &mut Engine, this: Ptr, device: u32) {
+    let base = this.addr();
+    if e.mem.u8(base.wrapping_add(4)) == 0 {
+        return;
+    }
+    e.mem.set_u8(base.wrapping_add(4), 0);
+    let record = e.mem.u32(base);
+    e.vcall(device, 0xc4, &args![record]);
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x00e9_4050, fn_00e94050(Ptr, u32)),
         entry!(0x00e9_3f50, fn_00e93f50(u32)),
         entry!(0x00e9_3fb0, fn_00e93fb0(Ptr, u32) -> bool),
         entry!(0x00e9_4070, fn_00e94070(Ptr, u32)),
@@ -333,5 +348,31 @@ mod b052_tests {
         // +0 was cleared first, so the copy is stored again; +4 set at the end.
         assert_eq!(e.mem.u32(this), copy);
         assert_eq!(e.mem.u8(this + 4), 1);
+    }
+}
+
+#[cfg(test)]
+mod n011_tests {
+    use super::*;
+
+    #[test]
+    fn fn_00e94050_sends_the_record_once() {
+        let mut e = Engine::new();
+        e.put_vtable(0x6000, &[0; 0x31]);
+        e.mem.set_u32(0x6000 + 0xc4, 0x60c4);
+        e.register(0x60c4, |_, _| Ret::default());
+        let device = e.mem.alloc(4);
+        e.mem.set_u32(device, 0x6000);
+        let this = e.mem.alloc(8);
+        e.mem.set_u32(this, 0x0e0e_0000);
+        e.mem.set_u8(this + 4, 1);
+        e.call_log = Some(vec![]);
+        e.call(0x00e9_4050, &args![this, device]);
+        e.call(0x00e9_4050, &args![this, device]);
+        let log = e.call_log.take().unwrap();
+        let sent: Vec<_> = log.iter().filter(|c| c.0 == 0x60c4).collect();
+        assert_eq!(sent.len(), 1);
+        assert_eq!(sent[0].1, vec![device, 0x0e0e_0000]);
+        assert_eq!(e.mem.u8(this + 4), 0);
     }
 }

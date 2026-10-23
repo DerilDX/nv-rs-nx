@@ -110,6 +110,149 @@ pub fn ni_light_load_binary(e: &mut Engine, this: Ptr, stream: Ptr) {
     }
 }
 
+/// The sized delete (`00aa1460`, `cdecl`: block, size).
+const SIZED_DELETE: u32 = 0x00aa_1460;
+/// `NiDynamicEffect::SaveBinary` (`00a68f80`, the stream), `NiDynamicEffect::IsEqual`
+/// (`00a68d80`, the other object) and `NiDynamicEffect::GetViewerStrings` (`00a69140`, the
+/// string array), all `thiscall`.
+const NI_DYNAMIC_EFFECT_SAVE_BINARY: u32 = 0x00a6_8f80;
+const NI_DYNAMIC_EFFECT_IS_EQUAL: u32 = 0x00a6_8d80;
+const NI_DYNAMIC_EFFECT_GET_VIEWER_STRINGS: u32 = 0x00a6_9140;
+/// `NiColor::SaveBinary` (`00a69780`, the stream) and `NiColor::GetViewerString`
+/// (`00a696c0`, a name, answering a new string), both `thiscall` on the colour.
+const NI_COLOR_SAVE_BINARY: u32 = 0x00a6_9780;
+const NI_COLOR_GET_VIEWER_STRING: u32 = 0x00a6_96c0;
+/// `00439090` (`thiscall` on a colour, the other colour; unit `multiboundmarkerdata.cpp` in
+/// the engine map): nonzero when the two colours differ.
+const COLORS_DIFFER_00439090: u32 = 0x0043_9090;
+/// `NiGetViewerString` (`00a7d330`, the class name) and `NiGetViewerString_ov9`
+/// (`00a7d550`, a name and a float), both `cdecl`, answering a new string.
+const VIEWER_STRING_CLASS: u32 = 0x00a7_d330;
+const VIEWER_STRING_FLOAT: u32 = 0x00a7_d550;
+/// The string array's grow (`0096ad30`, `thiscall`, the new size) and set-at (`0096ae90`,
+/// `thiscall`, (index, address of the string)), both unnamed in the engine map.
+const STRINGS_GROW: u32 = 0x0096_ad30;
+const STRINGS_SET_AT: u32 = 0x0096_ae90;
+/// The literals `"m_fDimmer"`, `"m_kAmb"`, `"m_kDiff"` and `"m_kSpec"`.
+const TEXT_M_F_DIMMER: u32 = 0x0109_cf40;
+const TEXT_M_K_AMB: u32 = 0x0109_cf38;
+const TEXT_M_K_DIFF: u32 = 0x0109_cf30;
+const TEXT_M_K_SPEC: u32 = 0x0109_cf28;
+/// `NiLight` (Xbox PDB): the dimmer `m_fDimmer` (+0xc4) and the ambient, diffuse and
+/// specular colours `m_kAmb`, `m_kDiff`, `m_kSpec` (three floats each at +0xc8, +0xd4,
+/// +0xe0).
+const LIGHT_DIMMER: u32 = 0xc4;
+const LIGHT_COLORS: [u32; 3] = [0xc8, 0xd4, 0xe0];
+
+/// Appends `text` to a viewer-string array as the exe's inlined `Add` does: when the 16-bit
+/// size (+0xa) has reached the capacity (+0x8) the array grows to its step (+0xe) plus the
+/// size, then the string is stored at the old size (through a stack word holding it).
+fn push_viewer_string(e: &mut Engine, strings: Ptr, text: u32) {
+    let size = u32::from(e.mem.u16(strings.addr() + 0xa));
+    if size >= u32::from(e.mem.u16(strings.addr() + 8)) {
+        let step = u32::from(e.mem.u16(strings.addr() + 0xe));
+        e.call(STRINGS_GROW, &args![strings, step + size]);
+    }
+    e.with_stack(4, |e, slot| {
+        e.mem.set_u32(slot.addr(), text);
+        e.call(STRINGS_SET_AT, &args![strings, size, slot]);
+    });
+}
+
+// Translated from 00a72040 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiLight`'s scalar deleting destructor (unnamed in the engine map; `thiscall`, the
+/// flags): the destructor body (vtable, the light listener `011f4748`'s slot +0xf8, the
+/// `NiDynamicEffect` destructor) inlined, then the sized delete of 0xf0 bytes when bit 0 of
+/// `flags` is set. Answers `this`.
+pub fn fn_00a72040(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    ni_light_destructor(e, this);
+    if flags & 1 != 0 {
+        e.call(SIZED_DELETE, &args![this, 0xf0u32]);
+    }
+    this
+}
+
+// Translated from 00a720f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiLight::SaveBinary` (Xbox PDB): `NiDynamicEffect::SaveBinary`, the dimmer (4 bytes
+/// through the stream's output `m_pkOstr`, its write function with a component size word
+/// of 4 and one component, the position advanced by the result), then the three colours
+/// save themselves (`NiColor::SaveBinary`).
+pub fn ni_light_save_binary(e: &mut Engine, this: Ptr, stream: Ptr) {
+    let t = this.addr();
+    e.call(NI_DYNAMIC_EFFECT_SAVE_BINARY, &args![this, stream]);
+    let writer = e.mem.u32(stream.addr() + 0x250);
+    let write = e.mem.u32(writer + 0xc);
+    let done = e.with_stack(4, |e, slot| {
+        e.mem.set_u32(slot.addr(), 4);
+        e.call(write, &args![writer, t + LIGHT_DIMMER, 4u32, slot, 1u32])
+            .u32()
+    });
+    let total = e.mem.u32(writer + 4).wrapping_add(done);
+    e.mem.set_u32(writer + 4, total);
+    for colour in LIGHT_COLORS {
+        e.call(NI_COLOR_SAVE_BINARY, &args![t + colour, stream]);
+    }
+}
+
+// Translated from 00a72160 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiLight::IsEqual` (Xbox PDB): true when `NiDynamicEffect::IsEqual` holds, the dimmers
+/// compare equal (`FUCOMPP`, a NaN is not equal) and none of the three colours differs
+/// (`00439090`, checked in order, stopping at the first that differs).
+pub fn ni_light_is_equal(e: &mut Engine, this: Ptr, other: Ptr) -> bool {
+    if !e
+        .call(NI_DYNAMIC_EFFECT_IS_EQUAL, &args![this, other])
+        .bool()
+    {
+        return false;
+    }
+    let t = this.addr();
+    let o = other.addr();
+    let mine = x87_load32(e.mem.u32(t + LIGHT_DIMMER));
+    let theirs = x87_load32(e.mem.u32(o.wrapping_add(LIGHT_DIMMER)));
+    if theirs != mine {
+        return false;
+    }
+    for colour in LIGHT_COLORS {
+        if e.call(
+            COLORS_DIFFER_00439090,
+            &args![t + colour, o.wrapping_add(colour)],
+        )
+        .bool()
+        {
+            return false;
+        }
+    }
+    true
+}
+
+// Translated from 00a721e0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiLight::GetViewerStrings` (Xbox PDB): `NiDynamicEffect::GetViewerStrings`, then the
+/// class name (`NiGetViewerString` of `ms_RTTI`'s name word), `"m_fDimmer"` with the
+/// dimmer and the three colours (`NiColor::GetViewerString` with `"m_kAmb"`, `"m_kDiff"`,
+/// `"m_kSpec"`), each appended to the array.
+pub fn ni_light_get_viewer_strings(e: &mut Engine, this: Ptr, strings: Ptr) {
+    let t = this.addr();
+    e.call(NI_DYNAMIC_EFFECT_GET_VIEWER_STRINGS, &args![this, strings]);
+    let name = e.mem.u32(NI_LIGHT_RTTI);
+    let text = e.call(VIEWER_STRING_CLASS, &args![name]).u32();
+    push_viewer_string(e, strings, text);
+    let dimmer = x87_quiet_bits(e.mem.u32(t + LIGHT_DIMMER));
+    let text = e
+        .call(VIEWER_STRING_FLOAT, &args![TEXT_M_F_DIMMER, dimmer])
+        .u32();
+    push_viewer_string(e, strings, text);
+    for (colour, label) in
+        LIGHT_COLORS
+            .into_iter()
+            .zip([TEXT_M_K_AMB, TEXT_M_K_DIFF, TEXT_M_K_SPEC])
+    {
+        let text = e
+            .call(NI_COLOR_GET_VIEWER_STRING, &args![t + colour, label])
+            .u32();
+        push_viewer_string(e, strings, text);
+    }
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -119,6 +262,10 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00a9_0010, ni_light_register_streamables(Ptr, Ptr) -> bool),
         entry!(0x00a7_2010, ni_light_destructor(Ptr)),
         entry!(0x00a7_2080, ni_light_load_binary(Ptr, Ptr)),
+        entry!(0x00a7_2040, fn_00a72040(Ptr, u32) -> Ptr),
+        entry!(0x00a7_20f0, ni_light_save_binary(Ptr, Ptr)),
+        entry!(0x00a7_2160, ni_light_is_equal(Ptr, Ptr) -> bool),
+        entry!(0x00a7_21e0, ni_light_get_viewer_strings(Ptr, Ptr)),
     ]
 }
 
@@ -263,5 +410,146 @@ mod tests_b008 {
                 NI_COLOR_LOAD_BINARY
             ]
         );
+    }
+}
+
+#[cfg(test)]
+mod n016_tests {
+    use super::*;
+
+    fn calls_to(e: &Engine, addr: u32) -> Vec<Vec<u32>> {
+        e.call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|c| c.0 == addr)
+            .map(|c| c.1.clone())
+            .collect()
+    }
+
+    fn engine() -> Engine {
+        let mut e = Engine::new();
+        e.map(0x011f_4000, 0x1000);
+        for double in [
+            SIZED_DELETE,
+            NI_DYNAMIC_EFFECT_DESTRUCT,
+            NI_DYNAMIC_EFFECT_SAVE_BINARY,
+            NI_DYNAMIC_EFFECT_GET_VIEWER_STRINGS,
+            NI_COLOR_SAVE_BINARY,
+            STRINGS_GROW,
+            STRINGS_SET_AT,
+        ] {
+            e.register(double, |_, _| Ret::default());
+        }
+        e.call_log = Some(vec![]);
+        e
+    }
+
+    #[test]
+    fn scalar_deleting_destructor_tells_the_listener_and_deletes_on_bit_0() {
+        let mut e = engine();
+        let listener = e.mem.alloc(4);
+        let mut slots = vec![0u32; 0x40];
+        slots[0xf8 / 4] = 0x0e00_00f8;
+        e.put_vtable(0x0e10_0000, &slots);
+        e.mem.set_u32(listener, 0x0e10_0000);
+        e.register(0x0e00_00f8, |_, _| Ret::default());
+        e.mem.set_u32(LIGHT_LISTENER, listener);
+        let this = e.mem.alloc(0xf0);
+        assert_eq!(e.call(0x00a7_2040, &args![this, 1u32]).u32(), this);
+        assert_eq!(e.mem.u32(this), NI_LIGHT_VTABLE);
+        assert_eq!(calls_to(&e, 0x0e00_00f8), vec![vec![listener, this]]);
+        assert_eq!(calls_to(&e, NI_DYNAMIC_EFFECT_DESTRUCT), vec![vec![this]]);
+        assert_eq!(calls_to(&e, SIZED_DELETE), vec![vec![this, 0xf0]]);
+        e.mem.set_u32(LIGHT_LISTENER, 0);
+        e.call(0x00a7_2040, &args![this, 0u32]);
+        assert_eq!(calls_to(&e, 0x0e00_00f8).len(), 1);
+        assert_eq!(calls_to(&e, SIZED_DELETE).len(), 1);
+        assert_eq!(calls_to(&e, NI_DYNAMIC_EFFECT_DESTRUCT).len(), 2);
+    }
+
+    #[test]
+    fn save_binary_writes_the_dimmer_and_colours() {
+        let mut e = engine();
+        let stream = e.mem.alloc(0x260);
+        let writer = e.mem.alloc(0x10);
+        e.mem.set_u32(stream + 0x250, writer);
+        e.mem.set_u32(writer + 0xc, 0x0300_0000);
+        e.register(0x0300_0000, |e, a| {
+            assert_eq!((a[2], e.mem.u32(a[3]), a[4]), (4, 4, 1));
+            4u32.into_ret()
+        });
+        let this = e.mem.alloc(0xf0);
+        e.call(0x00a7_20f0, &args![this, stream]);
+        assert_eq!(
+            calls_to(&e, NI_DYNAMIC_EFFECT_SAVE_BINARY),
+            vec![vec![this, stream]]
+        );
+        assert_eq!(calls_to(&e, 0x0300_0000)[0][..2], [writer, this + 0xc4]);
+        assert_eq!(e.mem.u32(writer + 4), 4);
+        assert_eq!(
+            calls_to(&e, NI_COLOR_SAVE_BINARY),
+            vec![
+                vec![this + 0xc8, stream],
+                vec![this + 0xd4, stream],
+                vec![this + 0xe0, stream]
+            ]
+        );
+    }
+
+    #[test]
+    fn is_equal_checks_the_base_dimmer_and_colours() {
+        let mut e = engine();
+        e.register(NI_DYNAMIC_EFFECT_IS_EQUAL, |_, _| 1u32.into_ret());
+        e.register(COLORS_DIFFER_00439090, |e, a| {
+            u32::from(e.mem.u32(a[0]) != e.mem.u32(a[1])).into_ret()
+        });
+        let this = e.mem.alloc(0xf0);
+        let other = e.mem.alloc(0xf0);
+        e.mem.set_f32(this + 0xc4, 0.5);
+        e.mem.set_f32(other + 0xc4, 0.5);
+        assert!(e.call(0x00a7_2160, &args![this, other]).bool());
+        assert_eq!(calls_to(&e, COLORS_DIFFER_00439090).len(), 3);
+        e.mem.set_f32(other + 0xd4, 1.0);
+        assert!(!e.call(0x00a7_2160, &args![this, other]).bool());
+        assert_eq!(calls_to(&e, COLORS_DIFFER_00439090).len(), 5);
+        e.mem.set_f32(other + 0xd4, 0.0);
+        e.mem.set_f32(other + 0xc4, 0.25);
+        assert!(!e.call(0x00a7_2160, &args![this, other]).bool());
+        assert_eq!(calls_to(&e, COLORS_DIFFER_00439090).len(), 5);
+        e.register(NI_DYNAMIC_EFFECT_IS_EQUAL, |_, _| 0u32.into_ret());
+        assert!(!e.call(0x00a7_2160, &args![this, this]).bool());
+    }
+
+    #[test]
+    fn get_viewer_strings_lists_the_dimmer_and_colours() {
+        let mut e = engine();
+        e.mem.set_u32(NI_LIGHT_RTTI, 0x0123_0000);
+        e.register(VIEWER_STRING_CLASS, |_, _| 0x0e00_0001u32.into_ret());
+        e.register(VIEWER_STRING_FLOAT, |_, _| 0x0e00_0002u32.into_ret());
+        e.register(NI_COLOR_GET_VIEWER_STRING, |_, _| 0x0e00_0003u32.into_ret());
+        let this = e.mem.alloc(0xf0);
+        e.mem.set_f32(this + 0xc4, 0.75);
+        let strings = e.mem.alloc(0x10);
+        e.mem.set_u16(strings + 8, 8);
+        e.call(0x00a7_21e0, &args![this, strings]);
+        assert_eq!(
+            calls_to(&e, NI_DYNAMIC_EFFECT_GET_VIEWER_STRINGS),
+            vec![vec![this, strings]]
+        );
+        assert_eq!(calls_to(&e, VIEWER_STRING_CLASS), vec![vec![0x0123_0000]]);
+        assert_eq!(
+            calls_to(&e, VIEWER_STRING_FLOAT),
+            vec![vec![TEXT_M_F_DIMMER, 0.75f32.to_bits()]]
+        );
+        assert_eq!(
+            calls_to(&e, NI_COLOR_GET_VIEWER_STRING),
+            vec![
+                vec![this + 0xc8, TEXT_M_K_AMB],
+                vec![this + 0xd4, TEXT_M_K_DIFF],
+                vec![this + 0xe0, TEXT_M_K_SPEC]
+            ]
+        );
+        assert_eq!(calls_to(&e, STRINGS_SET_AT).len(), 5);
     }
 }

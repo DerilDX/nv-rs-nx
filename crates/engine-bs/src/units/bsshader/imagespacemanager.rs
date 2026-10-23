@@ -7328,6 +7328,559 @@ pub fn fn_00b97690(e: &mut Engine, this: Ptr) {
     e.call(NI_FREE_00AA10F0, &args![block]);
 }
 
+/// The camera (`011f917c`) whose world position (`+0x8c` to `+0x94`) the distance-based
+/// requests measure from, the screen projection `00b59d30` (`cdecl`: the point, the address
+/// of the screen coordinates, the address of a `float` it writes), the CRT square root
+/// (`00ec6040`, ST0 in and out), and the request setters `00b8b000` (`thiscall`, six words)
+/// and `00b8b0d0` (`thiscall`, five words).
+const CAMERA_011F917C: u32 = 0x011f_917c;
+const PROJECT_00B59D30: u32 = 0x00b5_9d30;
+const CRT_SQRT: u32 = 0x00ec_6040;
+const REQUEST_00B8B000: u32 = 0x00b8_b000;
+const REQUEST_00B8B0D0: u32 = 0x00b8_b0d0;
+/// The two words `00b8b1e0` stores (`012023f4`, `012023f8`).
+const PAIR_012023F4: u32 = 0x0120_23f4;
+/// The run-time type record `00b8bd90` answers (`0126f554`).
+const RTTI_0126F554: u32 = 0x0126_f554;
+/// The set `00b8b270` (`thiscall` on the manager's `+0x58`, two words: index, the address of
+/// a flag byte) `00b8bc80` calls four times.
+const SET_FLAG_00B8B270: u32 = 0x00b8_b270;
+/// `ImageSpaceTexture`'s set calls (`00ba37f0` and `00ba37a0`, `thiscall`, one word), its
+/// destructor (`00ba3a00`), `ImageSpaceTexture::GetTexture` (`00ba3780`) and
+/// `ImageSpaceEffect::SetTexture` (`00ba3cb0`, `thiscall`: index, texture, a third word).
+const IMAGE_SPACE_TEXTURE_SET_00BA37F0: u32 = 0x00ba_37f0;
+const IMAGE_SPACE_TEXTURE_SET_00BA37A0: u32 = 0x00ba_37a0;
+const IMAGE_SPACE_TEXTURE_DESTRUCTOR: u32 = 0x00ba_3a00;
+const IMAGE_SPACE_TEXTURE_GET_TEXTURE: u32 = 0x00ba_3780;
+const EFFECT_SET_TEXTURE: u32 = 0x00ba_3cb0;
+/// `"Interface Effect Partial"` (`010b04c8`) and `-2.0` (`double`, `0106d4c8`).
+const PARTIAL_GEOMETRY_NAME_010B04C8: u32 = 0x010b_04c8;
+const MINUS_TWO_0106D4C8: u32 = 0x0106_d4c8;
+
+// Translated from 00b8ad00 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ImageSpaceParameterData::Endian` (engine map; the body matches), `thiscall`: swaps the
+/// byte order of the words 0 to 14 (`+0` to `+0x38`), the three at `+0x3c`, the three at
+/// `+0x48`, the twelve at `+0x64` and the one at `+0x94` (the four at `+0x54` stay).
+pub fn image_space_parameter_data_endian(e: &mut Engine, this: Ptr) {
+    let base = this.addr();
+    let swap = |e: &mut Engine, at: u32| {
+        let v = e.mem.u32(at);
+        e.mem.set_u32(at, v.swap_bytes());
+    };
+    for k in 0..15u32 {
+        swap(e, base + 4 * k);
+    }
+    for k in 0..3u32 {
+        swap(e, base + 0x3c + 4 * k);
+    }
+    for k in 0..3u32 {
+        swap(e, base + 0x48 + 4 * k);
+    }
+    for k in 0..12u32 {
+        swap(e, base + 0x64 + 4 * k);
+    }
+    swap(e, base + 0x94);
+}
+
+// Translated from 00b8b060 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map, `thiscall` with seven words (the depth/radial blur request the
+/// game's modifiers use without a target): only when the `float` at `+0x2d0` is below the
+/// first `float` (NaN takes nothing), it takes the first `float` and the request: `+0x2d4`
+/// and `+0x2d8` the fifth and sixth `float`s, `+0x2dc` and `+0x2e0` the third and fourth (all
+/// through `FLD`/`FSTP`), `+0x2e4` and `+0x2e8` the two words at the seventh word's address
+/// (the screen point) and `+0x2ec` the second word.
+pub fn fn_00b8b060(
+    e: &mut Engine,
+    this: Ptr,
+    strength: u32,
+    second: u32,
+    third: u32,
+    fourth: u32,
+    fifth: u32,
+    sixth: u32,
+    point: u32,
+) {
+    let base = this.addr();
+    if !(x87_m32(e.mem.u32(base + 0x2d0)) < x87_m32(strength)) {
+        return;
+    }
+    e.mem.set_u32(base + 0x2d0, x87_quiet_bits(strength));
+    e.mem.set_u32(base + 0x2d4, x87_quiet_bits(fifth));
+    e.mem.set_u32(base + 0x2d8, x87_quiet_bits(sixth));
+    let x = e.mem.u32(point);
+    e.mem.set_u32(base + 0x2dc, x87_quiet_bits(third));
+    e.mem.set_u32(base + 0x2e4, x);
+    let y = e.mem.u32(point.wrapping_add(4));
+    e.mem.set_u32(base + 0x2e0, x87_quiet_bits(fourth));
+    e.mem.set_u32(base + 0x2e8, y);
+    e.mem.set_u32(base + 0x2ec, second);
+}
+
+// Translated from 00b8b1c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map, `thiscall` with two words (`this` not read): the screen
+/// projection `00b59d30` of the first word with the second and the address of the second's
+/// own stack word.
+pub fn fn_00b8b1c0(e: &mut Engine, _this: u32, point: u32, screen: u32) {
+    e.with_stack(4, |e, slot| {
+        e.mem.set_u32(slot.addr(), screen);
+        e.call(PROJECT_00B59D30, &args![point, screen, slot]);
+    });
+}
+
+// Translated from 00b8b1e0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map, `thiscall` with one word (`this` not read): copies the two words
+/// at that address to `012023f4` and `012023f8`.
+pub fn fn_00b8b1e0(e: &mut Engine, _this: u32, pair: u32) {
+    let v = e.mem.u32(pair);
+    e.mem.set_u32(PAIR_012023F4, v);
+    let v = e.mem.u32(pair.wrapping_add(4));
+    e.mem.set_u32(PAIR_012023F4 + 4, v);
+}
+
+// Translated from 00b8b3b0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map, `thiscall` without words: for each non-null effect pointer from
+/// `+0x88` to `+0x1cc` of the effect table (`+8`), calls slot +0x120 of the object 0x6c
+/// before it (of null when the pointer is null).
+pub fn fn_00b8b3b0(e: &mut Engine, this: Ptr) {
+    let mut offset = 0x88u32;
+    while offset < 0x1d0 {
+        let slot = e.mem.u32(this.addr() + EFFECTS).wrapping_add(offset);
+        if e.mem.u32(slot) != 0 {
+            let effect = e.mem.u32(slot);
+            let shader = if effect != 0 {
+                effect.wrapping_sub(0x6c)
+            } else {
+                0
+            };
+            e.vcall(shader, 0x120, &args![]);
+        }
+        offset += 4;
+    }
+}
+
+/// The squared distance the distance-based requests compute: each coordinate difference to
+/// the camera stored as a `float` (`FSUB`, `FSTP`), then `dy*dy + dx*dx`, plus `dz*dz`, in
+/// that order (one rounding per x87 instruction).
+fn camera_distance_squared(e: &Engine, point: u32) -> f64 {
+    let camera = e.mem.u32(CAMERA_011F917C);
+    let mut d = [0u32; 3];
+    for (k, v) in d.iter_mut().enumerate() {
+        let offset = 4 * k as u32;
+        *v = x87_store32(x87_sub(
+            x87_m32(e.mem.u32(point.wrapping_add(offset))),
+            x87_m32(e.mem.u32(camera.wrapping_add(0x8c + offset))),
+        ));
+    }
+    let dx = x87_load32(d[0]);
+    let dy = x87_load32(d[1]);
+    let dz = x87_load32(d[2]);
+    x87_add(x87_add(x87_mul(dy, dy), x87_mul(dx, dx)), x87_mul(dz, dz))
+}
+
+/// The camera distance of `point` as the requests take it: the squared distance stored as a
+/// `float`, its square root (`00ec6040`) stored as a `float`.
+fn camera_distance(e: &mut Engine, point: u32) -> u32 {
+    let squared = x87_store32(camera_distance_squared(e, point));
+    let root = e.call(CRT_SQRT, &args![x87_load32(squared)]).f64();
+    x87_store32(root)
+}
+
+// Translated from 00b8b760 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map, `thiscall` with six words (the radial blur request with a
+/// target): projects the point (sixth word, `00b59d30`, the screen coordinates into a local
+/// and a `float` into the sixth word's stack slot), then hands `00b8b000` the first two
+/// words, that `float` plus the third, the fourth, that `float` plus the fifth (each sum
+/// stored as a `float`) and the address of the screen coordinates.
+pub fn fn_00b8b760(
+    e: &mut Engine,
+    this: Ptr,
+    first: u32,
+    second: u32,
+    third: u32,
+    fourth: u32,
+    fifth: u32,
+    point: u32,
+) {
+    e.with_stack(0xc, |e, locals| {
+        let screen = locals.addr();
+        let slot = screen + 8;
+        e.mem.set_u32(slot, point);
+        e.call(PROJECT_00B59D30, &args![point, screen, slot]);
+        let depth = x87_m32(e.mem.u32(slot));
+        let far = x87_store32(x87_add(depth, x87_m32(fifth)));
+        let near = x87_store32(x87_add(depth, x87_m32(third)));
+        e.call(
+            REQUEST_00B8B000,
+            &args![
+                this,
+                x87_quiet_bits(first),
+                x87_quiet_bits(second),
+                near,
+                x87_quiet_bits(fourth),
+                far,
+                screen
+            ],
+        );
+    });
+}
+
+// Translated from 00b8b7d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map, `thiscall` with five words (the depth/radial blur request with a
+/// target): the camera distance of the point (fifth word, [`camera_distance`]), the point
+/// projected (`00b59d30`, the screen coordinates into a local and a `float` into the fifth
+/// word's stack slot), then [`fn_00b8b060`] with the first two words, the distance twice, the
+/// third word, that `float` plus the fourth (stored as a `float`) and the screen coordinates.
+pub fn fn_00b8b7d0(
+    e: &mut Engine,
+    this: Ptr,
+    strength: u32,
+    second: u32,
+    third: u32,
+    fourth: u32,
+    point: u32,
+) {
+    let distance = camera_distance(e, point);
+    e.with_stack(0xc, |e, locals| {
+        let screen = locals.addr();
+        let slot = screen + 8;
+        e.mem.set_u32(slot, distance);
+        e.call(PROJECT_00B59D30, &args![point, screen, slot]);
+        let depth = x87_store32(x87_add(x87_m32(e.mem.u32(slot)), x87_m32(fourth)));
+        let distance = x87_quiet_bits(distance);
+        fn_00b8b060(
+            e,
+            this,
+            x87_quiet_bits(strength),
+            second,
+            distance,
+            distance,
+            x87_quiet_bits(third),
+            x87_quiet_bits(depth),
+            screen,
+        );
+    });
+}
+
+// Translated from 00b8b8d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map, `thiscall` with four words (the depth of field request with a
+/// target): `00b8b0d0` with the first two words, the third and the camera distance of the
+/// point (fourth word, [`camera_distance`]) twice (all `float`s through `FLD`/`FSTP`).
+pub fn fn_00b8b8d0(e: &mut Engine, this: Ptr, strength: u32, second: u32, third: u32, point: u32) {
+    let distance = x87_quiet_bits(camera_distance(e, point));
+    e.call(
+        REQUEST_00B8B0D0,
+        &args![
+            this,
+            x87_quiet_bits(strength),
+            second,
+            x87_quiet_bits(third),
+            distance,
+            distance
+        ],
+    );
+}
+
+// Translated from 00b8bb70 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map, `thiscall` with two words (`this` not read; a point and the
+/// address of two `float`s): both `float`s become the point's camera distance
+/// ([`camera_distance`], copied through `FLD`/`FSTP` on the way).
+pub fn fn_00b8bb70(e: &mut Engine, _this: u32, point: u32, out: u32) {
+    let distance = x87_quiet_bits(x87_quiet_bits(camera_distance(e, point)));
+    e.mem.set_u32(out, distance);
+    e.mem.set_u32(out.wrapping_add(4), distance);
+}
+
+// Translated from 00b8bc80 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map, `thiscall` without words: `00b8b270` on the manager's `+0x58`
+/// for the indices 0 to 3 with the address of a local flag byte holding 1, 1, 0 and 1.
+pub fn fn_00b8bc80(e: &mut Engine, this: Ptr) {
+    let target = this.addr() + 0x58;
+    e.with_stack(4, |e, flag| {
+        for (index, value) in [1u8, 1, 0, 1].iter().enumerate() {
+            e.mem.set_u8(flag.addr(), *value);
+            e.call(SET_FLAG_00B8B270, &args![target, index as u32, flag]);
+        }
+    });
+}
+
+// Translated from 00b8bd90 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map, no arguments: answers the run-time type record at `0126f554`
+/// (the one `BSShaderManager`'s `00b557d0` looks for).
+pub fn fn_00b8bd90(_e: &mut Engine) -> u32 {
+    RTTI_0126F554
+}
+
+/// An `ImageSpaceTexture` local (0x10 bytes: three zero bytes and three zero words).
+fn image_space_texture_local(e: &mut Engine, texture: u32) {
+    for k in 0..3u32 {
+        e.mem.set_u8(texture + k, 0);
+    }
+    for k in 1..4u32 {
+        e.mem.set_u32(texture + 4 * k, 0);
+    }
+}
+
+/// The geometry the effects render with: `+0x1f8` (the partial screen geometry) when the byte
+/// `+0x1fc` is set, else `+0x1f0`.
+fn effect_geometry(e: &Engine, this: u32) -> u32 {
+    if e.mem.u8(this + 0x1fc) != 0 {
+        e.mem.u32(this + 0x1f8)
+    } else {
+        e.mem.u32(this + 0x1f0)
+    }
+}
+
+// Translated from 00b8c3b0 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 00b8c3b0 - the FS:[0] exception frame (unwinding on a throw) is not translated
+/// `ImageSpaceManager::CreatePartialScreenGeometry` (engine map; the body matches):
+/// `thiscall`, three words (a width and a height as `float`s, the address of an `NiPointer`).
+/// With the thread's allocation context at 0x27: an `NiScreenElementsData` (0x70 bytes, 0, 0,
+/// 1, 1, 1, 4, 1, 2, 1; held in a local `NiPointer`) and an `NiScreenElements` on it (0xc4
+/// bytes) into `+0x1f8`; on the elements' data `Insert(4, 0, 0)`, `SetRectangle(0, -1.0, 1.0,
+/// 2 * width, height * -2.0)` (the -1.0 at `01012054`, the -2.0 `double` at `0106d4c8`),
+/// `UpdateBound` and `SetTextures(0, 0, 0.0, 0.0, width, height)`; `UpdateProperties`, the
+/// update `00a59c60` (a 0.0 `float` and five clear bytes) and the name `"Interface Effect
+/// Partial"`; then the `NiPointer` argument takes the elements and the local data pointer is
+/// released before the context is put back.
+pub fn image_space_manager_create_partial_screen_geometry(
+    e: &mut Engine,
+    this: Ptr,
+    width: u32,
+    height: u32,
+    result: u32,
+) {
+    let base = this.addr();
+    let tls = e.tls();
+    let saved = e.mem.u32(tls + TLS_CONTEXT);
+    e.mem.set_u32(tls + TLS_CONTEXT, CONTEXT_IMAGE_SPACE);
+    let block = e.call(NI_ALLOCATE, &args![0x70u32]).u32();
+    let data = if block != 0 {
+        e.call(
+            SCREEN_ELEMENTS_DATA_CONSTRUCT,
+            &args![block, 0u32, 0u32, 1u32, 1u32, 1u32, 4u32, 1u32, 2u32, 1u32],
+        )
+        .u32()
+    } else {
+        0
+    };
+    if data != 0 {
+        e.call(IMPORT_INTERLOCKED_INCREMENT, &args![data + 4]);
+    }
+    let block = e.call(NI_ALLOCATE, &args![0xc4u32]).u32();
+    let elements = if block != 0 {
+        e.call(SCREEN_ELEMENTS_CONSTRUCT, &args![block, data]).u32()
+    } else {
+        0
+    };
+    assign_pointer(e, base + 0x1f8, elements);
+    let elements_data = |e: &Engine| e.mem.u32(e.mem.u32(base + 0x1f8) + 0xb8);
+    let double_width = x87_store32(x87_add(x87_m32(width), x87_m32(width)));
+    let minus_two: f64 = e.global(MINUS_TWO_0106D4C8);
+    let scaled_height = x87_store32(x87_mul(x87_m32(height), minus_two));
+    let target = elements_data(e);
+    e.call(
+        SCREEN_ELEMENTS_DATA_INSERT,
+        &args![target, 4u32, 0u32, 0u32],
+    );
+    let target = elements_data(e);
+    let x = x87_quiet_bits(e.global::<u32>(RECTANGLE_X_01012054));
+    e.call(
+        SCREEN_ELEMENTS_DATA_SET_RECTANGLE,
+        &args![
+            target,
+            0u32,
+            x,
+            x87_store32(1.0),
+            x87_quiet_bits(double_width),
+            x87_quiet_bits(scaled_height)
+        ],
+    );
+    let target = elements_data(e);
+    e.call(SCREEN_ELEMENTS_DATA_UPDATE_BOUND, &args![target]);
+    let target = elements_data(e);
+    e.call(
+        SCREEN_ELEMENTS_DATA_SET_TEXTURES,
+        &args![
+            target,
+            0u32,
+            0u32,
+            x87_store32(0.0),
+            x87_store32(0.0),
+            x87_quiet_bits(width),
+            x87_quiet_bits(height)
+        ],
+    );
+    let elements = e.mem.u32(base + 0x1f8);
+    e.call(UPDATE_PROPERTIES, &args![elements]);
+    e.with_stack(0x10, |e, locals| {
+        let update = locals.addr();
+        let name_slot = update + 0xc;
+        let elements = e.mem.u32(base + 0x1f8);
+        e.mem.set_u32(update, x87_store32(0.0));
+        for offset in 4..9u32 {
+            e.mem.set_u8(update + offset, 0);
+        }
+        e.call(UPDATE_00A59C60, &args![elements, update]);
+        let name = e
+            .call(
+                MAKE_FIXED_STRING_00A5B690,
+                &args![PARTIAL_GEOMETRY_NAME_010B04C8],
+            )
+            .u32();
+        e.mem.set_u32(name_slot, name);
+        let elements = e.mem.u32(base + 0x1f8);
+        e.call(SET_NAME_00A5B950, &args![elements, name_slot]);
+        let name = e.mem.u32(name_slot);
+        if name != e.global::<u32>(NULL_NAME_0109B220) {
+            e.call(IMPORT_INTERLOCKED_DECREMENT, &args![name.wrapping_sub(8)]);
+        }
+    });
+    let elements = e.mem.u32(base + 0x1f8);
+    assign_pointer(e, result, elements);
+    if data != 0 {
+        let left = e.call(IMPORT_INTERLOCKED_DECREMENT, &args![data + 4]).u32();
+        if left == 0 {
+            e.vcall(data, 4, &args![]);
+        }
+    }
+    e.mem.set_u32(tls + TLS_CONTEXT, saved);
+}
+
+// Translated from 00b8c730 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 00b8c730 - the FS:[0] exception frame (unwinding on a throw) is not translated
+/// `ImageSpaceManager::RenderEffect` (engine map; the body matches): `thiscall`, five words (an
+/// effect index, a renderer word, a texture, two more words). With the thread's allocation
+/// context at 0x27, a local `ImageSpaceTexture` takes the texture (`00ba37a0`); when the
+/// effect (`+8` table) exists it gets the local as texture 0 (`00ba3cb0`), is rendered (its
+/// slot +4 with the effect geometry ([`effect_geometry`]), the second, fourth and fifth
+/// words) and has texture 0 cleared. The local is destroyed (`00ba3a00`) and the context put
+/// back.
+pub fn image_space_manager_render_effect(
+    e: &mut Engine,
+    this: Ptr,
+    index: u32,
+    renderer: u32,
+    texture: u32,
+    fourth: u32,
+    fifth: u32,
+) {
+    let base = this.addr();
+    let tls = e.tls();
+    let saved = e.mem.u32(tls + TLS_CONTEXT);
+    e.mem.set_u32(tls + TLS_CONTEXT, CONTEXT_IMAGE_SPACE);
+    let table = e.mem.u32(base + EFFECTS);
+    let effect = e.mem.u32(table.wrapping_add(index.wrapping_mul(4)));
+    e.with_stack(0x10, |e, local| {
+        let local = local.addr();
+        image_space_texture_local(e, local);
+        e.call(IMAGE_SPACE_TEXTURE_SET_00BA37A0, &args![local, texture]);
+        if effect != 0 {
+            e.call(EFFECT_SET_TEXTURE, &args![effect, 0u32, local, 0u32]);
+            let geometry = effect_geometry(e, base);
+            e.vcall(effect, 4, &args![geometry, renderer, fourth, fifth]);
+            e.call(EFFECT_SET_TEXTURE, &args![effect, 0u32, 0u32, 0u32]);
+        }
+        e.call(IMAGE_SPACE_TEXTURE_DESTRUCTOR, &args![local]);
+    });
+    e.mem.set_u32(tls + TLS_CONTEXT, saved);
+}
+
+// Translated from 00b8c980 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 00b8c980 - the FS:[0] exception frame (unwinding on a throw) is not translated
+/// Unnamed in the engine map, `thiscall` with six words (an effect, a renderer word, two
+/// textures, two more words): the two-texture `RenderEffect`. With the thread's allocation
+/// context at 0x27, two local `ImageSpaceTexture`s take the textures (the first through
+/// `00ba37f0`, the second through `00ba37a0`); when the effect is not null it gets the second
+/// local as texture 0 and the first as texture 1 (`00ba3cb0`), is rendered (slot +4 with the
+/// effect geometry, the second, fifth and sixth words) and has both textures cleared. Both
+/// locals are destroyed (`00ba3a00`, the second first) and the context put back.
+pub fn fn_00b8c980(
+    e: &mut Engine,
+    this: Ptr,
+    effect: u32,
+    renderer: u32,
+    first: u32,
+    second: u32,
+    fifth: u32,
+    sixth: u32,
+) {
+    let base = this.addr();
+    let tls = e.tls();
+    let saved = e.mem.u32(tls + TLS_CONTEXT);
+    e.mem.set_u32(tls + TLS_CONTEXT, CONTEXT_IMAGE_SPACE);
+    e.with_stack(0x20, |e, locals| {
+        let one = locals.addr();
+        let two = one + 0x10;
+        image_space_texture_local(e, one);
+        image_space_texture_local(e, two);
+        e.call(IMAGE_SPACE_TEXTURE_SET_00BA37F0, &args![one, first]);
+        e.call(IMAGE_SPACE_TEXTURE_SET_00BA37A0, &args![two, second]);
+        if effect != 0 {
+            e.call(EFFECT_SET_TEXTURE, &args![effect, 0u32, two, 0u32]);
+            e.call(EFFECT_SET_TEXTURE, &args![effect, 1u32, one, 0u32]);
+            let geometry = effect_geometry(e, base);
+            e.vcall(effect, 4, &args![geometry, renderer, fifth, sixth]);
+            e.call(EFFECT_SET_TEXTURE, &args![effect, 0u32, 0u32, 0u32]);
+            e.call(EFFECT_SET_TEXTURE, &args![effect, 1u32, 0u32, 0u32]);
+        }
+        e.call(IMAGE_SPACE_TEXTURE_DESTRUCTOR, &args![two]);
+        e.call(IMAGE_SPACE_TEXTURE_DESTRUCTOR, &args![one]);
+    });
+    e.mem.set_u32(tls + TLS_CONTEXT, saved);
+}
+
+// Translated from 00b8cb00 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map, `thiscall` with one word: stores it at `+0xb0`; the thread's
+/// allocation context word is read before and written back unchanged after.
+pub fn fn_00b8cb00(e: &mut Engine, this: Ptr, value: u32) {
+    let tls = e.tls();
+    let context = e.mem.u32(tls + TLS_CONTEXT);
+    e.mem.set_u32(this.addr() + 0xb0, value);
+    e.mem.set_u32(tls + TLS_CONTEXT, context);
+}
+
+// Translated from 00b8d440 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed (Ghidra made no function here; slot 6 of the vtable at `010b04f4`), `thiscall`
+/// without words: 1 when the effect's texture 2 (`pTextures`, buffer at `+0x2c`) exists and
+/// has a texture (`ImageSpaceTexture::GetTexture`), else 0.
+pub fn fn_00b8d440(e: &mut Engine, this: Ptr) -> u32 {
+    let textures = e.mem.u32(this.addr() + 0x2c);
+    let texture = e.mem.u32(textures.wrapping_add(8));
+    if texture == 0 {
+        return 0;
+    }
+    let held = e.mem.u32(textures.wrapping_add(8));
+    if e.call(IMAGE_SPACE_TEXTURE_GET_TEXTURE, &args![held]).u32() != 0 {
+        1
+    } else {
+        0
+    }
+}
+
+// Translated from 00b975f0 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 00b975f0 - the FS:[0] exception frame (unwinding on a throw) is not translated
+/// Unnamed in the engine map, `thiscall` with six words (an effect index, a renderer word, two
+/// textures, two more words): with the thread's allocation context at 0x27, [`fn_00b8c980`]
+/// with the indexed effect (`+8` table) and the other five words; the context put back.
+pub fn fn_00b975f0(
+    e: &mut Engine,
+    this: Ptr,
+    index: u32,
+    renderer: u32,
+    first: u32,
+    second: u32,
+    fifth: u32,
+    sixth: u32,
+) {
+    let tls = e.tls();
+    let saved = e.mem.u32(tls + TLS_CONTEXT);
+    e.mem.set_u32(tls + TLS_CONTEXT, CONTEXT_IMAGE_SPACE);
+    let table = e.mem.u32(this.addr() + EFFECTS);
+    let effect = e.mem.u32(table.wrapping_add(index.wrapping_mul(4)));
+    fn_00b8c980(e, this, effect, renderer, first, second, fifth, sixth);
+    e.mem.set_u32(tls + TLS_CONTEXT, saved);
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -7758,6 +8311,32 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00b9_4270, fn_00b94270(Ptr, u32) -> Ptr),
         entry!(0x00b9_43c0, fn_00b943c0(Ptr, u32) -> Ptr),
         entry!(0x00b9_4510, fn_00b94510(Ptr, u32) -> Ptr),
+        entry!(0x00b8_ad00, image_space_parameter_data_endian(Ptr)),
+        entry!(
+            0x00b8_b060,
+            fn_00b8b060(Ptr, u32, u32, u32, u32, u32, u32, u32)
+        ),
+        entry!(0x00b8_b1c0, fn_00b8b1c0(u32, u32, u32)),
+        entry!(0x00b8_b1e0, fn_00b8b1e0(u32, u32)),
+        entry!(0x00b8_b3b0, fn_00b8b3b0(Ptr)),
+        entry!(0x00b8_b760, fn_00b8b760(Ptr, u32, u32, u32, u32, u32, u32)),
+        entry!(0x00b8_b7d0, fn_00b8b7d0(Ptr, u32, u32, u32, u32, u32)),
+        entry!(0x00b8_b8d0, fn_00b8b8d0(Ptr, u32, u32, u32, u32)),
+        entry!(0x00b8_bb70, fn_00b8bb70(u32, u32, u32)),
+        entry!(0x00b8_bc80, fn_00b8bc80(Ptr)),
+        entry!(0x00b8_bd90, fn_00b8bd90() -> u32),
+        entry!(
+            0x00b8_c3b0,
+            image_space_manager_create_partial_screen_geometry(Ptr, u32, u32, u32)
+        ),
+        entry!(
+            0x00b8_c730,
+            image_space_manager_render_effect(Ptr, u32, u32, u32, u32, u32)
+        ),
+        entry!(0x00b8_c980, fn_00b8c980(Ptr, u32, u32, u32, u32, u32, u32)),
+        entry!(0x00b8_cb00, fn_00b8cb00(Ptr, u32)),
+        entry!(0x00b8_d440, fn_00b8d440(Ptr) -> u32),
+        entry!(0x00b9_75f0, fn_00b975f0(Ptr, u32, u32, u32, u32, u32, u32)),
     ]
 }
 
@@ -12950,5 +13529,416 @@ mod manager_tests {
             assert_eq!(e.mem.u32(this + 4), 0x010b_9d24);
             assert_eq!(calls(&e, NI_FREE_00AA10F0), vec![vec![block]]);
         }
+    }
+}
+
+#[cfg(test)]
+mod n012_tests {
+    use super::*;
+
+    fn calls(e: &Engine, addr: u32) -> Vec<Vec<u32>> {
+        e.call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|(a, _)| *a == addr)
+            .map(|(_, w)| w.clone())
+            .collect()
+    }
+
+    fn rig() -> Engine {
+        let mut e = Engine::new();
+        e.map(0x011f_9000, 0x1000);
+        e.map(0x0120_2000, 0x1000);
+        e.map(0x0101_2000, 0x1000);
+        e.map(0x0106_d000, 0x1000);
+        e.map(0x0109_b000, 0x1000);
+        e.call_log = Some(vec![]);
+        e
+    }
+
+    /// A camera at (1, 2, 3) and a point at (4, 6, 15): distance 13.
+    fn camera_and_point(e: &mut Engine) -> u32 {
+        let camera = e.mem.alloc(0x100);
+        for (k, v) in [1.0f32, 2.0, 3.0].iter().enumerate() {
+            e.mem.set_f32(camera + 0x8c + 4 * k as u32, *v);
+        }
+        e.mem.set_u32(CAMERA_011F917C, camera);
+        e.register(CRT_SQRT, |_, a| {
+            let v = f64::from_bits(u64::from(a[0]) | u64::from(a[1]) << 32);
+            v.sqrt().into_ret()
+        });
+        let point = e.mem.alloc(0xc);
+        for (k, v) in [4.0f32, 6.0, 15.0].iter().enumerate() {
+            e.mem.set_f32(point + 4 * k as u32, *v);
+        }
+        point
+    }
+
+    #[test]
+    fn endian_swaps_the_listed_words() {
+        let mut e = rig();
+        let this = e.mem.alloc(0x98);
+        for k in 0..0x26u32 {
+            e.mem.set_u32(this + 4 * k, 0x0102_0300 + k);
+        }
+        e.call(0x00b8_ad00, &args![this]);
+        assert_eq!(e.mem.u32(this), 0x0003_0201);
+        assert_eq!(e.mem.u32(this + 0x38), 0x0e03_0201);
+        assert_eq!(e.mem.u32(this + 0x3c), 0x0f03_0201);
+        assert_eq!(e.mem.u32(this + 0x50), 0x1403_0201);
+        assert_eq!(e.mem.u32(this + 0x54), 0x0102_0315);
+        assert_eq!(e.mem.u32(this + 0x60), 0x0102_0318);
+        assert_eq!(e.mem.u32(this + 0x64), 0x1903_0201);
+        assert_eq!(e.mem.u32(this + 0x90), 0x2403_0201);
+        assert_eq!(e.mem.u32(this + 0x94), 0x2503_0201);
+    }
+
+    #[test]
+    fn fn_00b8b060_takes_only_a_stronger_request() {
+        let mut e = rig();
+        let this = e.mem.alloc(0x2f0);
+        e.mem.set_f32(this + 0x2d0, 0.5);
+        let point = e.mem.alloc(8);
+        e.mem.set_u32(point, 0x11);
+        e.mem.set_u32(point + 4, 0x22);
+        let f = |v: f32| v.to_bits();
+        e.call(
+            0x00b8_b060,
+            &args![this, f(0.25), 7u32, f(1.0), f(2.0), f(3.0), f(4.0), point],
+        );
+        assert_eq!(e.mem.f32(this + 0x2d0), 0.5);
+        assert_eq!(e.mem.u32(this + 0x2ec), 0);
+        e.call(
+            0x00b8_b060,
+            &args![this, f(0.75), 7u32, f(1.0), f(2.0), f(3.0), f(4.0), point],
+        );
+        assert_eq!(e.mem.f32(this + 0x2d0), 0.75);
+        assert_eq!(
+            (e.mem.f32(this + 0x2d4), e.mem.f32(this + 0x2d8)),
+            (3.0, 4.0)
+        );
+        assert_eq!(
+            (e.mem.f32(this + 0x2dc), e.mem.f32(this + 0x2e0)),
+            (1.0, 2.0)
+        );
+        assert_eq!(
+            (
+                e.mem.u32(this + 0x2e4),
+                e.mem.u32(this + 0x2e8),
+                e.mem.u32(this + 0x2ec)
+            ),
+            (0x11, 0x22, 7)
+        );
+        e.call(
+            0x00b8_b060,
+            &args![
+                this,
+                0x7fc0_0000u32,
+                9u32,
+                f(1.0),
+                f(2.0),
+                f(3.0),
+                f(4.0),
+                point
+            ],
+        );
+        assert_eq!(e.mem.u32(this + 0x2ec), 7);
+    }
+
+    #[test]
+    fn small_globals_and_projection_wrappers() {
+        let mut e = rig();
+        e.register(PROJECT_00B59D30, |e, a| {
+            assert_eq!(e.mem.u32(a[2]), a[1]);
+            Ret::default()
+        });
+        e.call(0x00b8_b1c0, &args![0u32, 0x100u32, 0x200u32]);
+        assert_eq!(calls(&e, PROJECT_00B59D30)[0][..2], [0x100, 0x200]);
+        let pair = e.mem.alloc(8);
+        e.mem.set_u32(pair, 5);
+        e.mem.set_u32(pair + 4, 6);
+        e.call(0x00b8_b1e0, &args![0u32, pair]);
+        assert_eq!(
+            (e.mem.u32(PAIR_012023F4), e.mem.u32(PAIR_012023F4 + 4)),
+            (5, 6)
+        );
+        assert_eq!(e.call(0x00b8_bd90, &args![]).u32(), RTTI_0126F554);
+    }
+
+    #[test]
+    fn fn_00b8b3b0_calls_each_effect_shader() {
+        let mut e = rig();
+        let mut slots = [0u32; 0x49];
+        slots[0x120 / 4] = 0x0f00_0120;
+        e.put_vtable(0x0f00_1000, &slots);
+        e.register(0x0f00_0120, |_, _| Ret::default());
+        let shader = e.mem.alloc(0x80);
+        e.mem.set_u32(shader, 0x0f00_1000);
+        let table = e.mem.alloc(0x1d0);
+        e.mem.set_u32(table + 0x88, shader + 0x6c);
+        e.mem.set_u32(table + 0x1cc, shader + 0x6c);
+        e.mem.set_u32(table + 0x84, shader + 0x6c);
+        let this = e.mem.alloc(0x200);
+        e.mem.set_u32(this + 8, table);
+        e.call(0x00b8_b3b0, &args![this]);
+        assert_eq!(calls(&e, 0x0f00_0120), vec![vec![shader], vec![shader]]);
+    }
+
+    #[test]
+    fn distance_requests_measure_from_the_camera() {
+        let mut e = rig();
+        let point = camera_and_point(&mut e);
+        e.register(REQUEST_00B8B0D0, |_, _| Ret::default());
+        let this = e.mem.alloc(0x2f0);
+        e.call(0x00b8_b8d0, &args![this, 0.5f32, 3u32, 2.0f32, point]);
+        assert_eq!(
+            calls(&e, REQUEST_00B8B0D0),
+            vec![vec![
+                this,
+                0.5f32.to_bits(),
+                3,
+                2.0f32.to_bits(),
+                13.0f32.to_bits(),
+                13.0f32.to_bits()
+            ]]
+        );
+        let out = e.mem.alloc(8);
+        e.call(0x00b8_bb70, &args![0u32, point, out]);
+        assert_eq!((e.mem.f32(out), e.mem.f32(out + 4)), (13.0, 13.0));
+        // 00b8b7d0: the projection's depth plus the fourth word, into 00b8b060.
+        e.register(PROJECT_00B59D30, |e, a| {
+            e.mem.set_f32(a[1], 0.25);
+            e.mem.set_f32(a[1] + 4, 0.75);
+            e.mem.set_f32(a[2], 100.0);
+            Ret::default()
+        });
+        e.call(
+            0x00b8_b7d0,
+            &args![this, 1.0f32, 9u32, 5.0f32, 20.0f32, point],
+        );
+        assert_eq!(e.mem.f32(this + 0x2d0), 1.0);
+        assert_eq!(e.mem.u32(this + 0x2ec), 9);
+        assert_eq!(
+            (e.mem.f32(this + 0x2dc), e.mem.f32(this + 0x2e0)),
+            (13.0, 13.0)
+        );
+        assert_eq!(
+            (e.mem.f32(this + 0x2d4), e.mem.f32(this + 0x2d8)),
+            (5.0, 120.0)
+        );
+        assert_eq!(e.mem.f32(this + 0x2e4), 0.25);
+        // 00b8b760: the sums with the projection's depth.
+        e.register(REQUEST_00B8B000, |_, _| Ret::default());
+        e.call(
+            0x00b8_b760,
+            &args![this, 1.0f32, 2.0f32, 3.0f32, 4.0f32, 5.0f32, point],
+        );
+        let request = calls(&e, REQUEST_00B8B000).pop().unwrap();
+        assert_eq!(
+            request[..6],
+            [
+                this,
+                1.0f32.to_bits(),
+                2.0f32.to_bits(),
+                103.0f32.to_bits(),
+                4.0f32.to_bits(),
+                105.0f32.to_bits()
+            ]
+        );
+    }
+
+    #[test]
+    fn fn_00b8bc80_sets_the_four_flags() {
+        let mut e = rig();
+        e.register_double(SET_FLAG_00B8B270, |e, a| {
+            let v = e.mem.u8(a[2]);
+            Ret {
+                eax: u32::from(v),
+                ..Ret::default()
+            }
+        });
+        let this = e.mem.alloc(0x200);
+        e.call(0x00b8_bc80, &args![this]);
+        let set = calls(&e, SET_FLAG_00B8B270);
+        let indices: Vec<u32> = set.iter().map(|w| w[1]).collect();
+        assert_eq!(indices, vec![0, 1, 2, 3]);
+        assert!(set.iter().all(|w| w[0] == this + 0x58));
+    }
+
+    fn render_rig(e: &mut Engine) -> (u32, u32) {
+        for addr in [
+            IMAGE_SPACE_TEXTURE_SET_00BA37F0,
+            IMAGE_SPACE_TEXTURE_SET_00BA37A0,
+            IMAGE_SPACE_TEXTURE_DESTRUCTOR,
+            EFFECT_SET_TEXTURE,
+        ] {
+            e.register(addr, |_, _| Ret::default());
+        }
+        e.register(0x0f00_0004, |e, _| {
+            let tls = e.tls();
+            assert_eq!(e.mem.u32(tls + TLS_CONTEXT), CONTEXT_IMAGE_SPACE);
+            Ret::default()
+        });
+        e.put_vtable(0x0f00_2000, &[0, 0x0f00_0004]);
+        let effect = e.mem.alloc(0x60);
+        e.mem.set_u32(effect, 0x0f00_2000);
+        let this = e.mem.alloc(0x200);
+        let table = e.mem.alloc(0x10);
+        e.mem.set_u32(table + 4, effect);
+        e.mem.set_u32(this + 8, table);
+        e.mem.set_u32(this + 0x1f0, 0x1f0);
+        e.mem.set_u32(this + 0x1f8, 0x1f8);
+        let tls = e.tls();
+        e.mem.set_u32(tls + TLS_CONTEXT, 3);
+        (this, effect)
+    }
+
+    #[test]
+    fn render_effect_renders_with_one_texture() {
+        let mut e = rig();
+        let (this, effect) = render_rig(&mut e);
+        e.call(
+            0x00b8_c730,
+            &args![this, 1u32, 0xaau32, 0x7e7eu32, 0xbbu32, 0xccu32],
+        );
+        assert_eq!(
+            calls(&e, 0x0f00_0004),
+            vec![vec![effect, 0x1f0, 0xaa, 0xbb, 0xcc]]
+        );
+        let set = calls(&e, EFFECT_SET_TEXTURE);
+        assert_eq!(set.len(), 2);
+        assert_eq!(set[1], vec![effect, 0, 0, 0]);
+        assert_eq!(calls(&e, IMAGE_SPACE_TEXTURE_SET_00BA37A0)[0][1], 0x7e7e);
+        let tls = e.tls();
+        assert_eq!(e.mem.u32(tls + TLS_CONTEXT), 3);
+        // No effect at that index: only the local texture.
+        e.call(
+            0x00b8_c730,
+            &args![this, 0u32, 0xaau32, 0x7e7eu32, 0xbbu32, 0xccu32],
+        );
+        assert_eq!(calls(&e, 0x0f00_0004).len(), 1);
+        assert_eq!(calls(&e, IMAGE_SPACE_TEXTURE_DESTRUCTOR).len(), 2);
+    }
+
+    #[test]
+    fn two_texture_render_uses_the_partial_geometry_when_set() {
+        let mut e = rig();
+        let (this, effect) = render_rig(&mut e);
+        e.mem.set_u8(this + 0x1fc, 1);
+        e.call(
+            0x00b9_75f0,
+            &args![this, 1u32, 0xaau32, 0x11u32, 0x22u32, 0xbbu32, 0xccu32],
+        );
+        assert_eq!(
+            calls(&e, 0x0f00_0004),
+            vec![vec![effect, 0x1f8, 0xaa, 0xbb, 0xcc]]
+        );
+        assert_eq!(calls(&e, IMAGE_SPACE_TEXTURE_SET_00BA37F0)[0][1], 0x11);
+        assert_eq!(calls(&e, IMAGE_SPACE_TEXTURE_SET_00BA37A0)[0][1], 0x22);
+        let set = calls(&e, EFFECT_SET_TEXTURE);
+        let one = calls(&e, IMAGE_SPACE_TEXTURE_SET_00BA37F0)[0][0];
+        let two = calls(&e, IMAGE_SPACE_TEXTURE_SET_00BA37A0)[0][0];
+        assert_eq!(set[0], vec![effect, 0, two, 0]);
+        assert_eq!(set[1], vec![effect, 1, one, 0]);
+        assert_eq!(set.len(), 4);
+        let destroyed: Vec<u32> = calls(&e, IMAGE_SPACE_TEXTURE_DESTRUCTOR)
+            .iter()
+            .map(|w| w[0])
+            .collect();
+        assert_eq!(destroyed, vec![two, one]);
+        let tls = e.tls();
+        assert_eq!(e.mem.u32(tls + TLS_CONTEXT), 3);
+    }
+
+    #[test]
+    fn fn_00b8cb00_and_00b8d440() {
+        let mut e = rig();
+        let this = e.mem.alloc(0x200);
+        e.call(0x00b8_cb00, &args![this, 0x55u32]);
+        assert_eq!(e.mem.u32(this + 0xb0), 0x55);
+        e.register(IMAGE_SPACE_TEXTURE_GET_TEXTURE, |_, a| {
+            u32::from(a[0] == 0x7000).into_ret()
+        });
+        let textures = e.mem.alloc(0xc);
+        e.mem.set_u32(this + 0x2c, textures);
+        assert_eq!(e.call(0x00b8_d440, &args![this]).u32(), 0);
+        e.mem.set_u32(textures + 8, 0x7001);
+        assert_eq!(e.call(0x00b8_d440, &args![this]).u32(), 0);
+        e.mem.set_u32(textures + 8, 0x7000);
+        assert_eq!(e.call(0x00b8_d440, &args![this]).u32(), 1);
+    }
+
+    #[test]
+    fn create_partial_screen_geometry_builds_and_hands_out_the_elements() {
+        let mut e = rig();
+        e.mem.set_f32(RECTANGLE_X_01012054, -1.0);
+        e.mem.set_f64(MINUS_TWO_0106D4C8, -2.0);
+        e.mem.set_u32(NULL_NAME_0109B220, 0x0e0e);
+        e.register(NI_ALLOCATE, |e, a| e.mem.alloc(a[0]).into_ret());
+        e.register(IMPORT_INTERLOCKED_INCREMENT, |e, a| {
+            let v = e.mem.u32(a[0]) + 1;
+            e.mem.set_u32(a[0], v);
+            v.into_ret()
+        });
+        e.register(IMPORT_INTERLOCKED_DECREMENT, |e, a| {
+            let v = e.mem.u32(a[0]).wrapping_sub(1);
+            e.mem.set_u32(a[0], v);
+            v.into_ret()
+        });
+        e.register(SCREEN_ELEMENTS_DATA_CONSTRUCT, |e, a| {
+            e.mem.set_u32(a[0] + 4, 1);
+            a[0].into_ret()
+        });
+        e.register(SCREEN_ELEMENTS_CONSTRUCT, |e, a| {
+            e.mem.set_u32(a[0] + 0xb8, a[1]);
+            a[0].into_ret()
+        });
+        for addr in [
+            SCREEN_ELEMENTS_DATA_INSERT,
+            SCREEN_ELEMENTS_DATA_SET_RECTANGLE,
+            SCREEN_ELEMENTS_DATA_SET_TEXTURES,
+            SCREEN_ELEMENTS_DATA_UPDATE_BOUND,
+            SET_NAME_00A5B950,
+            UPDATE_PROPERTIES,
+            UPDATE_00A59C60,
+        ] {
+            e.register(addr, |_, _| Ret::default());
+        }
+        e.register(MAKE_FIXED_STRING_00A5B690, |_, _| 0x0e0eu32.into_ret());
+        let this = e.mem.alloc(0x200);
+        let result = e.mem.alloc(4);
+        e.call(0x00b8_c3b0, &args![this, 0.5f32, 0.25f32, result]);
+        let elements = e.mem.u32(this + 0x1f8);
+        let data = calls(&e, SCREEN_ELEMENTS_DATA_CONSTRUCT)[0][0];
+        assert_eq!(e.mem.u32(result), elements);
+        assert_eq!(e.mem.u32(elements + 4), 2);
+        // The local data pointer took a reference and gave it back.
+        assert_eq!(e.mem.u32(data + 4), 1);
+        assert_eq!(
+            calls(&e, SCREEN_ELEMENTS_DATA_SET_RECTANGLE),
+            vec![vec![
+                data,
+                0,
+                (-1.0f32).to_bits(),
+                1.0f32.to_bits(),
+                1.0f32.to_bits(),
+                (-0.5f32).to_bits()
+            ]]
+        );
+        assert_eq!(
+            calls(&e, SCREEN_ELEMENTS_DATA_SET_TEXTURES),
+            vec![vec![data, 0, 0, 0, 0, 0.5f32.to_bits(), 0.25f32.to_bits()]]
+        );
+        assert_eq!(
+            calls(&e, SCREEN_ELEMENTS_DATA_INSERT),
+            vec![vec![data, 4, 0, 0]]
+        );
+        assert_eq!(
+            calls(&e, MAKE_FIXED_STRING_00A5B690),
+            vec![vec![PARTIAL_GEOMETRY_NAME_010B04C8]]
+        );
+        let tls = e.tls();
+        assert_eq!(e.mem.u32(tls + TLS_CONTEXT), 0);
     }
 }

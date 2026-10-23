@@ -652,6 +652,121 @@ pub fn ni_billboard_node_rotate_to_camera(e: &mut Engine, this: Ptr<NiBillboardN
     });
 }
 
+// Translated from 00a7dab0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiBillboardNode::UpdateRigidDownwardPass` (Xbox PDB; `thiscall`, `RET 8`): keeps the
+/// update's time (the float at `data`) at `+0xb0`, runs `NiNode::UpdateRigidDownwardPass`
+/// (`00a5e1f0`) and the node's virtual slot `+0xbc`.
+pub fn ni_billboard_node_update_rigid_downward_pass(
+    e: &mut Engine,
+    this: Ptr<NiBillboardNode>,
+    data: Ptr,
+    flags: u32,
+) {
+    let time = load(e, data.addr());
+    store(e, this.addr().wrapping_add(0xb0), time);
+    e.call(0x00a5_e1f0, &args![this, data, flags]);
+    e.vcall(this.addr(), 0xbc, &[]);
+}
+
+/// `NiNode::IsEqual` (`00a5e600`, `thiscall`, the other object).
+const NODE_IS_EQUAL: u32 = 0x00a5_e600;
+
+// Translated from 00a7db30 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiBillboardNode::IsEqual` (Xbox PDB): `NiNode::IsEqual`, then the same face mode (bits 0
+/// to 2 of the flag word +0xac).
+pub fn ni_billboard_node_is_equal(e: &mut Engine, this: Ptr<NiBillboardNode>, other: Ptr) -> bool {
+    if !e.call(NODE_IS_EQUAL, &args![this, other]).bool() {
+        return false;
+    }
+    (e.mem.u8(other.addr() + 0xac) ^ e.mem.u8(this.addr() + 0xac)) & 7 == 0
+}
+
+/// `00aa1070` (unnamed, `cdecl`, one word): allocates the text of a viewer string.
+const ALLOCATE_TEXT: u32 = 0x00aa_1070;
+/// `NiSprintf` (`00a305b0`, `cdecl`: buffer, size, format, then the format's arguments).
+const NI_SPRINTF: u32 = 0x00a3_05b0;
+
+// Translated from 00a7db60 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiBillboardNode::GetViewerString` (Xbox PDB), `cdecl`: a text of `strlen(name) + 0x16`
+/// bytes (`00aa1070`) written as `"<name> = ALWAYS_FACE_CAMERA"`, `ROTATE_ABOUT_UP`,
+/// `RIGID_FACE_CAMERA`, `ALWAYS_FACE_CENTER`, `RIGID_FACE_CENTER` or `BSROTATE_ABOUT_UP` for a
+/// mode 0 to 5 (the formats at `0109de98` down to `0109de20`, the jump table as the `match`);
+/// for any other mode the text is answered unwritten.
+pub fn ni_billboard_node_get_viewer_string(e: &mut Engine, name: Ptr, mode: u32) -> Ptr {
+    let size = (e.mem.cstr(name.addr()).len() as u32).wrapping_add(0x16);
+    let text = e.call(ALLOCATE_TEXT, &args![size]).u32();
+    let format = match mode {
+        0 => Some(0x0109_de98u32),
+        1 => Some(0x0109_de80),
+        2 => Some(0x0109_de68),
+        3 => Some(0x0109_de50),
+        4 => Some(0x0109_de38),
+        5 => Some(0x0109_de20),
+        _ => None,
+    };
+    if let Some(format) = format {
+        e.call(NI_SPRINTF, &args![text, size, format, name]);
+    }
+    Ptr::new(text)
+}
+
+// Translated from 00a7e850 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiBillboardNode::SaveBinary` (Xbox PDB): `NiNode::SaveBinary` (`00a5e880`), then the flag
+/// word (+0xac, 2 bytes) through the stream's output (`+0x250`, its write function at +0xc; the
+/// stream argument's stack word is the byte-count word).
+pub fn ni_billboard_node_save_binary(e: &mut Engine, this: Ptr<NiBillboardNode>, stream: Ptr) {
+    e.call(0x00a5_e880, &args![this, stream]);
+    let output = e.mem.u32(stream.addr() + 0x250);
+    let write = e.mem.u32(output + 0xc);
+    let done = e.with_stack(4, |e, count| {
+        e.mem.set_u32(count.addr(), 2);
+        e.call(write, &args![output, this.addr() + 0xac, 2u32, count, 1u32])
+            .u32()
+    });
+    let position = e.mem.u32(output + 4).wrapping_add(done);
+    e.mem.set_u32(output + 4, position);
+}
+
+/// `0096ad30` (`thiscall`, the new size) grows an `NiTArray`; `0096ae90` (`thiscall`, index
+/// and the address of the element) stores an element.
+const ARRAY_SET_SIZE: u32 = 0x0096_ad30;
+const ARRAY_SET_AT: u32 = 0x0096_ae90;
+
+/// Appends the string pointer held in the word at `slot` to the viewer-string array (grown to
+/// count + `m_usGrowBy` by `0096ad30` when full, stored by `0096ae90`).
+fn append_viewer_string(e: &mut Engine, strings: Ptr, slot: u32) {
+    let count = e.mem.u16(strings.addr() + 0xa) as u32;
+    let capacity = e.mem.u16(strings.addr() + 8) as u32;
+    if count >= capacity {
+        let grow_by = e.mem.u16(strings.addr() + 0xe) as u32;
+        e.call(ARRAY_SET_SIZE, &args![strings, grow_by + count]);
+    }
+    e.call(ARRAY_SET_AT, &args![strings, count, slot]);
+}
+
+// Translated from 00a7e890 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiBillboardNode::GetViewerStrings` (Xbox PDB): `NiNode::GetViewerStrings` (`00a5ea70`),
+/// then the class name (`NiGetViewerString`, `00a7d330`, of the first word of the `NiRTTI` at
+/// `011f4aa0`) and `m_eMode` (`0109debc`, [`ni_billboard_node_get_viewer_string`] of bits 0 to
+/// 2 of the flag word), each kept in the `strings` argument's stack word and appended.
+pub fn ni_billboard_node_get_viewer_strings(
+    e: &mut Engine,
+    this: Ptr<NiBillboardNode>,
+    strings: Ptr,
+) {
+    e.call(0x00a5_ea70, &args![this, strings]);
+    e.with_stack(4, |e, slot| {
+        let class_name = e.global::<u32>(0x011f_4aa0);
+        let text = e.call(0x00a7_d330, &args![class_name]).u32();
+        e.mem.set_u32(slot.addr(), text);
+        append_viewer_string(e, strings, slot.addr());
+        let mode = u32::from(e.mem.u16(this.addr() + 0xac)) & 7;
+        let text = ni_billboard_node_get_viewer_string(e, Ptr::new(0x0109_debc), mode);
+        e.mem.set_u32(slot.addr(), text.addr());
+        append_viewer_string(e, strings, slot.addr());
+    });
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -686,6 +801,23 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(
             0x00a7_de40,
             ni_billboard_node_rotate_to_camera(Ptr<NiBillboardNode>, Ptr)
+        ),
+        entry!(
+            0x00a7_dab0,
+            ni_billboard_node_update_rigid_downward_pass(Ptr<NiBillboardNode>, Ptr, u32)
+        ),
+        entry!(
+            0x00a7_db30,
+            ni_billboard_node_is_equal(Ptr<NiBillboardNode>, Ptr) -> bool
+        ),
+        entry!(0x00a7_db60, ni_billboard_node_get_viewer_string(Ptr, u32) -> Ptr),
+        entry!(
+            0x00a7_e850,
+            ni_billboard_node_save_binary(Ptr<NiBillboardNode>, Ptr)
+        ),
+        entry!(
+            0x00a7_e890,
+            ni_billboard_node_get_viewer_strings(Ptr<NiBillboardNode>, Ptr)
         ),
     ]
 }
@@ -1155,5 +1287,121 @@ mod b015_tests {
         let log = e.call_log.take().unwrap();
         assert_eq!(calls_to(&log, 0x00a5_dbe0), vec![vec![this, culler]]);
         assert_eq!(calls_to(&log, 0x0043_f8d0).len(), 1);
+    }
+}
+
+#[cfg(test)]
+mod n015_tests {
+    use super::*;
+    use crate::units::nimain::nimainsdm::test_support::calls_to;
+
+    #[test]
+    fn update_rigid_downward_pass_keeps_the_time() {
+        let mut e = Engine::new();
+        e.register(0x00a5_e1f0, |_, _| Ret::default());
+        e.register(0x0300_00bc, |_, _| Ret::default());
+        let mut slots = vec![0u32; 0x30];
+        slots[0x2f] = 0x0300_00bc;
+        e.put_vtable(0x0300_1000, &slots);
+        let this = e.mem.alloc(0xb4);
+        e.mem.set_u32(this, 0x0300_1000);
+        let data = e.mem.alloc(4);
+        e.mem.set_f32(data, 2.5);
+        e.call_log = Some(vec![]);
+        e.call(0x00a7_dab0, &args![this, data, 7u32]);
+        assert_eq!(e.mem.f32(this + 0xb0), 2.5);
+        assert_eq!(calls_to(&e, 0x00a5_e1f0), vec![vec![this, data, 7]]);
+        assert_eq!(calls_to(&e, 0x0300_00bc), vec![vec![this]]);
+    }
+
+    #[test]
+    fn is_equal_compares_the_mode() {
+        let mut e = Engine::new();
+        e.register(NODE_IS_EQUAL, |_, _| 1u32.into_ret());
+        let this = e.mem.alloc(0xb4);
+        let other = e.mem.alloc(0xb4);
+        e.mem.set_u16(this + 0xac, 0xf3);
+        e.mem.set_u16(other + 0xac, 0x0b);
+        assert!(e.call(0x00a7_db30, &args![this, other]).bool());
+        e.mem.set_u16(other + 0xac, 0x0c);
+        assert!(!e.call(0x00a7_db30, &args![this, other]).bool());
+        e.mem.set_u16(other + 0xac, 0x0b);
+        e.register(NODE_IS_EQUAL, |_, _| 0u32.into_ret());
+        assert!(!e.call(0x00a7_db30, &args![this, other]).bool());
+    }
+
+    #[test]
+    fn viewer_string_by_mode() {
+        let mut e = Engine::new();
+        e.register(ALLOCATE_TEXT, |e, a| e.mem.alloc(a[0]).into_ret());
+        e.register(NI_SPRINTF, |_, _| Ret::default());
+        let name = e.mem.alloc(8);
+        e.mem.set_cstr(name, b"mode");
+        e.call_log = Some(vec![]);
+        for (mode, format) in [(0u32, 0x0109_de98u32), (2, 0x0109_de68), (5, 0x0109_de20)] {
+            let text = e.call(0x00a7_db60, &args![name, mode]).u32();
+            assert_eq!(
+                calls_to(&e, NI_SPRINTF).last().unwrap(),
+                &vec![text, 0x1a, format, name]
+            );
+        }
+        let text = e.call(0x00a7_db60, &args![name, 6u32]).u32();
+        assert_ne!(text, 0);
+        assert_eq!(calls_to(&e, NI_SPRINTF).len(), 3);
+        assert_eq!(calls_to(&e, ALLOCATE_TEXT).len(), 4);
+    }
+
+    #[test]
+    fn save_binary_writes_the_flags() {
+        let mut e = Engine::new();
+        e.register(0x00a5_e880, |_, _| Ret::default());
+        e.register(0x0300_0000, |e, a| {
+            assert_eq!((a[2], e.mem.u32(a[3]), a[4]), (2, 2, 1));
+            2u32.into_ret()
+        });
+        let stream = e.mem.alloc(0x300);
+        let output = e.mem.alloc(0x10);
+        e.mem.set_u32(stream + 0x250, output);
+        e.mem.set_u32(output + 0xc, 0x0300_0000);
+        let this = e.mem.alloc(0xb4);
+        e.call_log = Some(vec![]);
+        e.call(0x00a7_e850, &args![this, stream]);
+        assert_eq!(calls_to(&e, 0x00a5_e880), vec![vec![this, stream]]);
+        assert_eq!(calls_to(&e, 0x0300_0000)[0][..2], [output, this + 0xac]);
+        assert_eq!(e.mem.u32(output + 4), 2);
+    }
+
+    #[test]
+    fn viewer_strings_add_the_class_and_mode() {
+        let mut e = Engine::new();
+        e.map(0x011f_4000, 0x1000);
+        e.map(0x0109_d000, 0x1000);
+        e.mem.set_u32(0x011f_4aa0, 0x0109_d100);
+        e.register(0x00a5_ea70, |_, _| Ret::default());
+        e.register(0x00a7_d330, |_, _| 0x7000u32.into_ret());
+        e.register(ALLOCATE_TEXT, |_, _| 0x8000u32.into_ret());
+        e.register(NI_SPRINTF, |_, _| Ret::default());
+        e.register(ARRAY_SET_SIZE, |_, _| Ret::default());
+        e.register(ARRAY_SET_AT, |e, a| {
+            let count = e.mem.u16(a[0] + 0xa) + 1;
+            e.mem.set_u16(a[0] + 0xa, count);
+            let value = e.mem.u32(a[2]);
+            e.mem.set_u32(0x011f_4f00 + 4 * a[1], value);
+            Ret::default()
+        });
+        let strings = e.mem.alloc(0x10);
+        e.mem.set_u16(strings + 8, 1);
+        e.mem.set_u16(strings + 0xe, 4);
+        let this = e.mem.alloc(0xb4);
+        e.mem.set_u16(this + 0xac, 0x0b);
+        e.call_log = Some(vec![]);
+        e.call(0x00a7_e890, &args![this, strings]);
+        assert_eq!(calls_to(&e, 0x00a7_d330), vec![vec![0x0109_d100]]);
+        assert_eq!(calls_to(&e, NI_SPRINTF)[0][2..], [0x0109_de50, 0x0109_debc]);
+        assert_eq!(calls_to(&e, ARRAY_SET_SIZE), vec![vec![strings, 5]]);
+        assert_eq!(
+            (e.mem.u32(0x011f_4f00), e.mem.u32(0x011f_4f04)),
+            (0x7000, 0x8000)
+        );
     }
 }

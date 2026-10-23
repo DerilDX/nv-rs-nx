@@ -330,9 +330,60 @@ pub fn ni_bool_timeline_interpolator_create_object(e: &mut Engine) -> Ptr {
     Ptr::new(object)
 }
 
+/// `NiBoolInterpolator::GetViewerStrings` (`00a536d0`, engine map;
+/// `thiscall`, one word: the strings array).
+const BOOL_INTERPOLATOR_GET_VIEWER_STRINGS: u32 = 0x00a5_36d0;
+/// `NiGetViewerString` (`00a7d330`, `cdecl (text)`); the viewer-string
+/// array's grow (`0096ad30`, `thiscall (array; new capacity)`) and store
+/// (`0096ae90`, `thiscall (array; index, &string)`).
+const NI_GET_VIEWER_STRING: u32 = 0x00a7_d330;
+const STRINGS_GROW: u32 = 0x0096_ad30;
+const STRINGS_SET_AT: u32 = 0x0096_ae90;
+
+// Translated from 00a52f00 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The `NiBoolTimelineInterpolator(NiBoolData*)` constructor (`thiscall`,
+/// one word: the data; the engine map gives it no name): the
+/// `NiBoolInterpolator` constructor on the data (`00a53280`), previous
+/// index 0, previous value 0, then the vtable. Returns `this`.
+pub fn fn_00a52f00(e: &mut Engine, this: Ptr, data: u32) -> Ptr {
+    e.call(BOOL_INTERPOLATOR_CONSTRUCT, &args![this, data]);
+    let object = this.addr();
+    e.mem.set_u32(object.wrapping_add(PREVIOUS_INDEX), 0);
+    e.mem.set_u8(object.wrapping_add(PREVIOUS_VALUE), 0);
+    e.mem.set_u32(object, NI_BOOL_TIMELINE_INTERPOLATOR_VTABLE);
+    this
+}
+
+// Translated from 00a53020 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiBoolTimelineInterpolator::GetViewerStrings` (Xbox PDB, matched by
+/// the engine map; `thiscall`, one word: the strings array):
+/// `NiBoolInterpolator::GetViewerStrings` (`00a536d0`), then the class
+/// name (the first word of the `NiRTTI` record) appended: when the 16-bit
+/// size (+0xA) has reached the capacity (+0x8) the array grows to the step
+/// (+0xE) plus the size first, then the string is stored at the old size.
+pub fn ni_bool_timeline_interpolator_get_viewer_strings(e: &mut Engine, this: Ptr, strings: Ptr) {
+    e.call(BOOL_INTERPOLATOR_GET_VIEWER_STRINGS, &args![this, strings]);
+    let class_name: u32 = e.global(NI_BOOL_TIMELINE_INTERPOLATOR_RTTI);
+    let text = e.call(NI_GET_VIEWER_STRING, &args![class_name]).u32();
+    let size = u32::from(e.mem.u16(strings.addr() + 0xa));
+    if size >= u32::from(e.mem.u16(strings.addr() + 8)) {
+        let step = u32::from(e.mem.u16(strings.addr() + 0xe));
+        e.call(STRINGS_GROW, &args![strings, step + size]);
+    }
+    e.with_stack(4, |e, slot| {
+        e.mem.set_u32(slot.addr(), text);
+        e.call(STRINGS_SET_AT, &args![strings, size, slot]);
+    });
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x00a5_2f00, fn_00a52f00(Ptr, u32) -> Ptr),
+        entry!(
+            0x00a5_3020,
+            ni_bool_timeline_interpolator_get_viewer_strings(Ptr, Ptr)
+        ),
         entry!(0x00a52d70, ni_bool_timeline_interpolator_get_rtti() -> Ptr),
         entry!(
             0x00a5_14d0,
@@ -670,5 +721,80 @@ mod tests {
                 (BOOL_INTERPOLATOR_COPY_MEMBERS, vec![this, 0, 0x9000]),
             ]
         );
+    }
+}
+
+#[cfg(test)]
+mod n002_tests {
+    use super::*;
+
+    fn word(value: u32) -> Ret {
+        Ret {
+            eax: value,
+            ..Ret::default()
+        }
+    }
+
+    fn calls(e: &Engine, addr: u32) -> Vec<Vec<u32>> {
+        e.call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|c| c.0 == addr)
+            .map(|c| c.1.clone())
+            .collect()
+    }
+
+    #[test]
+    fn data_constructor_builds_on_the_bool_interpolator() {
+        let mut e = Engine::new();
+        e.register(BOOL_INTERPOLATOR_CONSTRUCT, |_, a| word(a[0]));
+        e.call_log = Some(vec![]);
+        let this = e.mem.alloc(0x20);
+        e.mem.write(this, &[0xcd; 0x20]);
+        assert_eq!(e.call(0x00a5_2f00, &args![this, 0x5000u32]).u32(), this);
+        assert_eq!(
+            calls(&e, BOOL_INTERPOLATOR_CONSTRUCT),
+            vec![vec![this, 0x5000]]
+        );
+        assert_eq!(e.mem.u32(this), NI_BOOL_TIMELINE_INTERPOLATOR_VTABLE);
+        assert_eq!(e.mem.u32(this + PREVIOUS_INDEX), 0);
+        assert_eq!(e.mem.u8(this + PREVIOUS_VALUE), 0);
+        assert_eq!(e.mem.u8(this + PREVIOUS_VALUE + 1), 0xcd);
+    }
+
+    #[test]
+    fn get_viewer_strings_appends_the_class_name() {
+        for (capacity, grows) in [(4u16, false), (2, true)] {
+            let mut e = Engine::new();
+            e.map(NI_BOOL_TIMELINE_INTERPOLATOR_RTTI, 4);
+            e.set_global(NI_BOOL_TIMELINE_INTERPOLATOR_RTTI, 0x0109_3333u32);
+            e.register(BOOL_INTERPOLATOR_GET_VIEWER_STRINGS, |_, _| Ret::default());
+            e.register(NI_GET_VIEWER_STRING, |_, _| word(0xc1));
+            e.register(STRINGS_GROW, |_, _| Ret::default());
+            e.register(STRINGS_SET_AT, |e, a| {
+                assert_eq!(e.mem.u32(a[2]), 0xc1);
+                Ret::default()
+            });
+            e.call_log = Some(vec![]);
+            let this = e.mem.alloc(0x20);
+            let strings = e.mem.alloc(0x10);
+            e.mem.set_u16(strings + 8, capacity);
+            e.mem.set_u16(strings + 0xa, 2);
+            e.mem.set_u16(strings + 0xe, 3);
+            e.call(0x00a5_3020, &args![this, strings]);
+            assert_eq!(
+                calls(&e, BOOL_INTERPOLATOR_GET_VIEWER_STRINGS),
+                vec![vec![this, strings]]
+            );
+            assert_eq!(calls(&e, NI_GET_VIEWER_STRING), vec![vec![0x0109_3333]]);
+            let grow = calls(&e, STRINGS_GROW);
+            if grows {
+                assert_eq!(grow, vec![vec![strings, 5]]);
+            } else {
+                assert!(grow.is_empty());
+            }
+            assert_eq!(calls(&e, STRINGS_SET_AT)[0][..2], [strings, 2]);
+        }
     }
 }

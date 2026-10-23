@@ -21,9 +21,30 @@ pub fn fn_00a575b0(e: &mut Engine, object: Ptr, value: u32) {
     e.mem.set_u32(object + 4, total);
 }
 
+// Translated from 00a57580 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`cdecl`, two words: an object and a destination). Calls the
+/// function pointer at `object+8` (`cdecl`, five words) with the object, the destination, 1,
+/// the address of a stack word holding 1, and 1, and adds its result to the word at
+/// `object+4`: one byte read into the destination, on the stream layout `fn_00a575b0`
+/// shares.
+pub fn fn_00a57580(e: &mut Engine, object: Ptr, dest: u32) {
+    let object = object.addr();
+    let function = e.mem.u32(object + 8);
+    let done = e.with_stack(4, |e, size| {
+        e.mem.set_u32(size.addr(), 1);
+        e.call(function, &args![object, dest, 1u32, size, 1u32])
+            .u32()
+    });
+    let total = e.mem.u32(object + 4).wrapping_add(done);
+    e.mem.set_u32(object + 4, total);
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
-    vec![entry!(0x00a5_75b0, fn_00a575b0(Ptr, u32))]
+    vec![
+        entry!(0x00a5_75b0, fn_00a575b0(Ptr, u32)),
+        entry!(0x00a5_7580, fn_00a57580(Ptr, u32)),
+    ]
 }
 
 #[cfg(test)]
@@ -49,5 +70,27 @@ mod tests {
         assert_eq!(calls.len(), 1);
         let w = &calls[0].1;
         assert_eq!((w[0], w[1], w[2], w[4]), (object, 0x5555, 4, 1));
+    }
+}
+
+#[cfg(test)]
+mod n007_tests {
+    use super::*;
+
+    #[test]
+    fn reads_one_byte_and_advances() {
+        let mut e = Engine::new();
+        let object = e.mem.alloc(0xc);
+        e.mem.set_u32(object + 4, 10);
+        e.mem.set_u32(object + 8, 0x034b_0000);
+        e.register(0x034b_0000, |e, a| {
+            assert_eq!((a[2], e.mem.u32(a[3]), a[4]), (1, 1, 1));
+            e.mem.set_u8(a[1], 0x5a);
+            1u32.into_ret()
+        });
+        let dest = e.mem.alloc(4);
+        e.call(0x00a5_7580, &args![object, dest]);
+        assert_eq!(e.mem.u8(dest), 0x5a);
+        assert_eq!(e.mem.u32(object + 4), 11);
     }
 }

@@ -141,9 +141,48 @@ pub fn ni_b_spline_basis_data_load_binary(e: &mut Engine, this: Ptr, stream: Ptr
     e.mem.set_u32(reader + 4, total);
 }
 
+/// `NiObject::IsEqual` (`00a5d470`, engine map; `thiscall`, one word) and
+/// the base `SaveBinary` (`00a89af0`, `thiscall`, one word).
+const OBJECT_IS_EQUAL: u32 = 0x00a5_d470;
+const OBJECT_SAVE_BINARY: u32 = 0x00a8_9af0;
+
+// Translated from 00a52bb0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiBSplineBasisData::IsEqual` (Xbox PDB, matched by the engine map;
+/// `thiscall`, one word: the other object): `NiObject::IsEqual` and the
+/// same word at +0x08 (the basis's control point count).
+pub fn ni_b_spline_basis_data_is_equal(e: &mut Engine, this: Ptr, other: Ptr) -> bool {
+    if !e.call(OBJECT_IS_EQUAL, &args![this, other]).bool() {
+        return false;
+    }
+    e.mem.u32(other.addr().wrapping_add(8)) == e.mem.u32(this.addr().wrapping_add(8))
+}
+
+// Translated from 00a52c50 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiBSplineBasisData::SaveBinary` (Xbox PDB, matched by the engine map;
+/// `thiscall`, one word: the stream): the base `SaveBinary` (`00a89af0`),
+/// then the word at +0x08 written through the stream's writer (`stream +
+/// 0x250`, its function at +0xC, `cdecl (writer, this + 8, 4, &4, 1)`, the
+/// count slot being the stack slot of the stream argument); the answer is
+/// added to the writer's word at +4.
+pub fn ni_b_spline_basis_data_save_binary(e: &mut Engine, this: Ptr, stream: Ptr) {
+    e.call(OBJECT_SAVE_BINARY, &args![this, stream]);
+    let writer = e.mem.u32(stream.addr() + 0x250);
+    let write_function = e.mem.u32(writer + 0xc);
+    let source = this.addr().wrapping_add(8);
+    let written = e.with_stack(4, |e, count| {
+        e.mem.set_u32(count.addr(), 4);
+        e.call(write_function, &args![writer, source, 4u32, count, 1u32])
+            .u32()
+    });
+    let total = e.mem.u32(writer + 4).wrapping_add(written);
+    e.mem.set_u32(writer + 4, total);
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x00a5_2bb0, ni_b_spline_basis_data_is_equal(Ptr, Ptr) -> bool),
+        entry!(0x00a5_2c50, ni_b_spline_basis_data_save_binary(Ptr, Ptr)),
         entry!(0x00a52af0, ni_b_spline_basis_data_get_rtti() -> Ptr),
         entry!(
             0x00a52c90,
@@ -321,5 +360,67 @@ mod basis_data_tests {
             (reads[0][0], reads[0][1], reads[0][2], reads[0][4]),
             (reader, this + 8, 4, 1)
         );
+    }
+}
+
+#[cfg(test)]
+mod n002_tests {
+    use super::*;
+
+    fn word(value: u32) -> Ret {
+        Ret {
+            eax: value,
+            ..Ret::default()
+        }
+    }
+
+    fn calls(e: &Engine, addr: u32) -> Vec<Vec<u32>> {
+        e.call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|c| c.0 == addr)
+            .map(|c| c.1.clone())
+            .collect()
+    }
+
+    #[test]
+    fn is_equal_compares_the_control_point_count() {
+        let mut e = Engine::new();
+        e.register(OBJECT_IS_EQUAL, |_, _| word(1));
+        e.call_log = Some(vec![]);
+        let this = e.mem.alloc(0x28);
+        let other = e.mem.alloc(0x28);
+        e.mem.set_u32(this + 8, 7);
+        e.mem.set_u32(other + 8, 7);
+        assert!(e.call(0x00a5_2bb0, &args![this, other]).bool());
+        assert_eq!(calls(&e, OBJECT_IS_EQUAL), vec![vec![this, other]]);
+        e.mem.set_u32(other + 8, 8);
+        assert!(!e.call(0x00a5_2bb0, &args![this, other]).bool());
+        e.mem.set_u32(other + 8, 7);
+        e.register(OBJECT_IS_EQUAL, |_, _| word(0));
+        assert!(!e.call(0x00a5_2bb0, &args![this, other]).bool());
+    }
+
+    #[test]
+    fn save_binary_writes_the_control_point_count() {
+        const WRITE: u32 = 0x0300_0200;
+        let mut e = Engine::new();
+        e.register(OBJECT_SAVE_BINARY, |_, _| Ret::default());
+        e.register(WRITE, |e, a| {
+            assert_eq!((a[2], e.mem.u32(a[3]), a[4]), (4, 4, 1));
+            word(4)
+        });
+        e.call_log = Some(vec![]);
+        let writer = e.mem.alloc(0x10);
+        e.mem.set_u32(writer + 4, 0x10);
+        e.mem.set_u32(writer + 0xc, WRITE);
+        let stream = e.mem.alloc(0x254);
+        e.mem.set_u32(stream + 0x250, writer);
+        let this = e.mem.alloc(0x28);
+        e.call(0x00a5_2c50, &args![this, stream]);
+        assert_eq!(calls(&e, OBJECT_SAVE_BINARY), vec![vec![this, stream]]);
+        assert_eq!(calls(&e, WRITE)[0][..2], [writer, this + 8]);
+        assert_eq!(e.mem.u32(writer + 4), 0x14);
     }
 }

@@ -310,9 +310,83 @@ pub fn ni_d3d_geometry_group_manager_create_group(
     group
 }
 
+// Translated from 00e88ca0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiD3DGeometryGroupManager::AddObjectToGroup` (engine map), `thiscall` with two words
+/// (`this` not read): the group and an object. 0 when the object already has a group entry
+/// (+0x1c); else the group's slot 4 with the object, and 1.
+pub fn ni_d3d_geometry_group_manager_add_object_to_group(
+    e: &mut Engine,
+    _this: Ptr,
+    group: u32,
+    object: u32,
+) -> bool {
+    if e.mem.u32(object.wrapping_add(0x1c)) != 0 {
+        return false;
+    }
+    e.vcall(group, 4, &args![object]);
+    true
+}
+
+// Translated from 00e88cc0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiD3DGeometryGroupManager::RemoveObjectFromGroup` (engine map), `thiscall` with one word
+/// (`this` not read): the object. 0 when it has no group entry (+0x1c); else the entry's group
+/// (+8) removes it (slot 0xc), runs its slot 0 when it is now empty (+4 is 0), and 1.
+pub fn ni_d3d_geometry_group_manager_remove_object_from_group(
+    e: &mut Engine,
+    _this: Ptr,
+    object: u32,
+) -> bool {
+    let entry = e.mem.u32(object.wrapping_add(0x1c));
+    if entry == 0 {
+        return false;
+    }
+    let group = e.mem.u32(entry.wrapping_add(8));
+    e.vcall(group, 0xc, &args![object]);
+    if e.mem.u32(group.wrapping_add(4)) == 0 {
+        e.vcall(group, 0, &args![]);
+    }
+    true
+}
+
+// Translated from 00e88fa0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiD3DGeometryGroupManager::AddObjectToGroup` (engine map `_ov3`), `thiscall` with three
+/// words (group, geometry data, skin instance): the `_ov2` form with the byte flag at
+/// `this`+0x18 and two zero words. Answers what it answers.
+pub fn ni_d3d_geometry_group_manager_add_object_to_group_ov3(
+    e: &mut Engine,
+    this: Ptr,
+    group: u32,
+    data: u32,
+    skin_instance: u32,
+) -> bool {
+    let flag = e.mem.u8(this.addr() + 0x18);
+    ni_d3d_geometry_group_manager_add_object_to_group_ov2(
+        e,
+        this,
+        group,
+        data,
+        skin_instance,
+        flag,
+        0,
+        0,
+    )
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(
+            0x00e8_8ca0,
+            ni_d3d_geometry_group_manager_add_object_to_group(Ptr, u32, u32) -> bool
+        ),
+        entry!(
+            0x00e8_8cc0,
+            ni_d3d_geometry_group_manager_remove_object_from_group(Ptr, u32) -> bool
+        ),
+        entry!(
+            0x00e8_8fa0,
+            ni_d3d_geometry_group_manager_add_object_to_group_ov3(Ptr, u32, u32, u32) -> bool
+        ),
         entry!(0x00e8_8eb0, fn_00e88eb0(u32, u32) -> u32),
         entry!(
             0x00e8_8c30,
@@ -641,5 +715,86 @@ mod b052_tests {
         // A maker answering 0, and an unknown type.
         assert_eq!(e.call(0x00e8_8f10, &args![this, 2u32]).u32(), 0);
         assert_eq!(e.call(0x00e8_8f10, &args![this, 3u32]).u32(), 0);
+    }
+}
+
+#[cfg(test)]
+mod n007_tests {
+    use super::*;
+
+    fn calls(e: &Engine, addr: u32) -> Vec<Vec<u32>> {
+        e.call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|c| c.0 == addr)
+            .map(|c| c.1.clone())
+            .collect()
+    }
+
+    /// A group whose slots 0, 4, 8 and 0xc are doubles at `0x034e_0000 + slot`.
+    fn group(e: &mut Engine) -> u32 {
+        let vtable = e.mem.alloc(0x10);
+        for slot in [0u32, 4, 8, 0xc] {
+            e.mem.set_u32(vtable + slot, 0x034e_0000 + slot);
+            e.register(0x034e_0000 + slot, |_, _| Ret::default());
+        }
+        let group = e.mem.alloc(8);
+        e.mem.set_u32(group, vtable);
+        group
+    }
+
+    #[test]
+    fn add_and_remove_object() {
+        let mut e = Engine::new();
+        e.call_log = Some(vec![]);
+        let group = group(&mut e);
+        let object = e.mem.alloc(0x20);
+        assert!(e.call(0x00e8_8ca0, &args![0u32, group, object]).bool());
+        assert_eq!(calls(&e, 0x034e_0004), vec![vec![group, object]]);
+        let entry = e.mem.alloc(0xc);
+        e.mem.set_u32(entry + 8, group);
+        e.mem.set_u32(object + 0x1c, entry);
+        assert!(!e.call(0x00e8_8ca0, &args![0u32, group, object]).bool());
+        // Removal: the group drops it; with objects left (+4) it is kept.
+        e.mem.set_u32(group + 4, 1);
+        assert!(e.call(0x00e8_8cc0, &args![0u32, object]).bool());
+        assert_eq!(calls(&e, 0x034e_000c), vec![vec![group, object]]);
+        assert!(calls(&e, 0x034e_0000).is_empty());
+        e.mem.set_u32(group + 4, 0);
+        assert!(e.call(0x00e8_8cc0, &args![0u32, object]).bool());
+        assert_eq!(calls(&e, 0x034e_0000), vec![vec![group]]);
+        e.mem.set_u32(object + 0x1c, 0);
+        assert!(!e.call(0x00e8_8cc0, &args![0u32, object]).bool());
+    }
+
+    #[test]
+    fn add_with_the_managers_flag() {
+        let mut e = Engine::new();
+        e.call_log = Some(vec![]);
+        let group = group(&mut e);
+        let manager = e.mem.alloc(0x1c);
+        e.mem.set_u8(manager + 0x18, 1);
+        // A skin instance with a partition list of one partition: added through slot 8.
+        let partitions = e.mem.alloc(0x2c);
+        let skin_partition = e.mem.alloc(0x10);
+        e.mem.set_u32(skin_partition + 8, 1);
+        e.mem.set_u32(skin_partition + 0xc, partitions);
+        let skin = e.mem.alloc(0x10);
+        e.mem.set_u32(skin + 0xc, skin_partition);
+        let data = e.mem.alloc(0x38);
+        assert!(e
+            .call(0x00e8_8fa0, &args![manager, group, data, skin])
+            .bool());
+        assert_eq!(
+            calls(&e, 0x034e_0008),
+            vec![vec![group, data, skin, partitions]]
+        );
+        // Flag clear: the data itself.
+        e.mem.set_u8(manager + 0x18, 0);
+        assert!(e
+            .call(0x00e8_8fa0, &args![manager, group, data, skin])
+            .bool());
+        assert_eq!(calls(&e, 0x034e_0008)[1], vec![group, data, skin, 0]);
     }
 }

@@ -763,9 +763,55 @@ pub fn fn_00e7bbf0(e: &mut Engine, this: Ptr, direct3d: u32, formats: Ptr<NiTPoi
     }
 }
 
+/// `NiTArray<NiDX9AdapterDesc*, NiTMallocInterface<NiDX9AdapterDesc*>>`'s vtable
+/// (`010eec4c`, RTTI).
+const ADAPTER_ARRAY_VTABLE: u32 = 0x010e_ec4c;
+/// The memory manager (`011f6238`) and its free (`00aa4060`, `thiscall`, the block).
+const MEMORY_MANAGER_011F6238: u32 = 0x011f_6238;
+const MEMORY_MANAGER_FREE_00AA4060: u32 = 0x00aa_4060;
+
+/// The two array destructors' shared body: `vtable` stored, the elements (`m_pBase`, read
+/// first) freed (`00aa10f0`) and, when `flags & 1`, the array given to the memory manager.
+fn destroy_array(e: &mut Engine, this: Ptr<NiTArray>, vtable: u32, flags: u32) -> Ptr<NiTArray> {
+    let elements = e.get(this, NiTArray::m_pBase);
+    e.mem.set_u32(this.addr(), vtable);
+    e.call(FREE_00AA10F0, &args![elements]);
+    if flags & 1 != 0 {
+        e.call(
+            MEMORY_MANAGER_FREE_00AA4060,
+            &args![MEMORY_MANAGER_011F6238, this],
+        );
+    }
+    this
+}
+
+// Translated from 00e7b200 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map: the scalar deleting destructor of
+/// `NiTArray<NiDX9AdapterDesc::ModeDesc*, NiTMallocInterface<...>>` (the vtable `010eec74`
+/// it stores, RTTI): frees the elements and, when `flags & 1`, the array. Returns `this`.
+pub fn fn_00e7b200(e: &mut Engine, this: Ptr<NiTArray>, flags: u32) -> Ptr<NiTArray> {
+    destroy_array(e, this, ARRAY_BASE_VTABLE, flags)
+}
+
+// Translated from 00e7b230 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map: the scalar deleting destructor of
+/// `NiTArray<NiDX9AdapterDesc*, NiTMallocInterface<NiDX9AdapterDesc*>>` (vtable `010eec4c`,
+/// RTTI), as [`fn_00e7b200`].
+pub fn fn_00e7b230(e: &mut Engine, this: Ptr<NiTArray>, flags: u32) -> Ptr<NiTArray> {
+    destroy_array(e, this, ADAPTER_ARRAY_VTABLE, flags)
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(
+            0x00e7_b200,
+            fn_00e7b200(Ptr<NiTArray>, u32) -> Ptr<NiTArray>
+        ),
+        entry!(
+            0x00e7_b230,
+            fn_00e7b230(Ptr<NiTArray>, u32) -> Ptr<NiTArray>
+        ),
         entry!(0x00e7_b550, fn_00e7b550(Ptr)),
         entry!(0x00e7_bb50, fn_00e7bb50(Ptr)),
         entry!(0x00e7_bbf0, fn_00e7bbf0(Ptr, u32, Ptr<NiTPointerList>)),
@@ -1219,5 +1265,50 @@ mod b048_tests {
         assert_eq!(e.mem.u32(desc), 1);
         assert_eq!(e.mem.u16(this + 0xe), 2);
         assert_eq!(e.mem.u16(this + 0x10), 1);
+    }
+}
+
+#[cfg(test)]
+mod n010_tests {
+    use super::*;
+
+    fn check(address: u32, vtable: u32) {
+        for flags in [0u32, 1] {
+            let mut e = Engine::new();
+            e.register(FREE_00AA10F0, |_, _| Ret::default());
+            e.register(MEMORY_MANAGER_FREE_00AA4060, |_, _| Ret::default());
+            let array = e.new_object::<NiTArray>();
+            e.set(array, NiTArray::m_pBase, 0x0e40_0000);
+            e.call_log = Some(vec![]);
+            assert_eq!(e.call(address, &args![array, flags]).u32(), array.addr());
+            assert_eq!(e.mem.u32(array.addr()), vtable);
+            let log = e.call_log.take().unwrap();
+            assert!(log.contains(&(FREE_00AA10F0, vec![0x0e40_0000])));
+            let deletes: Vec<_> = log
+                .iter()
+                .filter(|c| c.0 == MEMORY_MANAGER_FREE_00AA4060)
+                .collect();
+            if flags == 1 {
+                assert_eq!(
+                    deletes,
+                    vec![&(
+                        MEMORY_MANAGER_FREE_00AA4060,
+                        vec![MEMORY_MANAGER_011F6238, array.addr()]
+                    )]
+                );
+            } else {
+                assert!(deletes.is_empty());
+            }
+        }
+    }
+
+    #[test]
+    fn fn_00e7b200_destroys_the_mode_array() {
+        check(0x00e7_b200, ARRAY_BASE_VTABLE);
+    }
+
+    #[test]
+    fn fn_00e7b230_destroys_the_adapter_array() {
+        check(0x00e7_b230, ADAPTER_ARRAY_VTABLE);
     }
 }

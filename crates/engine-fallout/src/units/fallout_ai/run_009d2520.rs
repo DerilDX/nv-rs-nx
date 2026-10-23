@@ -12,9 +12,28 @@ pub fn fn_009d2550(e: &mut Engine, this: Ptr) {
     e.call(0x009c_a6c0, &args![this]);
 }
 
+/// `operator delete` (`00401030`, `cdecl`, one word).
+const OPERATOR_DELETE: u32 = 0x0040_1030;
+
+// Translated from 009d2520 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`thiscall`, `RET 4`): the scalar deleting destructor of the
+/// object with the vtable `010910f4` (RTTI `.?AVCombatProcedureBeInCover@@`); the
+/// destructor [`fn_009d2550`], then `operator delete` on `this` for bit 0 of `flags`.
+/// Returns `this`.
+pub fn fn_009d2520(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    fn_009d2550(e, this);
+    if flags & 1 != 0 {
+        e.call(OPERATOR_DELETE, &args![this]);
+    }
+    this
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
-    vec![entry!(0x009d_2550, fn_009d2550(Ptr))]
+    vec![
+        entry!(0x009d_2550, fn_009d2550(Ptr)),
+        entry!(0x009d_2520, fn_009d2520(Ptr, u32) -> Ptr),
+    ]
 }
 
 #[cfg(test)]
@@ -46,5 +65,27 @@ mod tests {
             0x0109_10f4,
             "the vtable was stored before the call"
         );
+    }
+}
+
+#[cfg(test)]
+mod n029_tests {
+    use super::*;
+
+    #[test]
+    fn fn_009d2520_destroys_and_frees_for_bit_0() {
+        let mut e = Engine::new();
+        e.register(0x009c_a6c0, |_, _| Ret::default());
+        e.register(OPERATOR_DELETE, |_, _| Ret::default());
+        let this = e.mem.alloc(0x20);
+        for flags in [0u32, 1, 2, 3] {
+            e.call_log = Some(vec![]);
+            assert_eq!(e.call(0x009d_2520, &args![this, flags]).u32(), this);
+            let log = e.call_log.take().unwrap();
+            let frees: Vec<_> = log.iter().filter(|c| c.0 == OPERATOR_DELETE).collect();
+            assert_eq!(frees.len(), (flags & 1) as usize);
+            assert!(log.contains(&(0x009c_a6c0, vec![this])));
+        }
+        assert_eq!(e.mem.u32(this), 0x0109_10f4);
     }
 }

@@ -11,7 +11,7 @@
 
 #[allow(unused_imports)]
 use crate::prelude::*;
-use crate::types::{NiRefObject, NiTPointerMap};
+use crate::types::{NiRefObject, NiTArray, NiTPointerMap};
 
 /// Import slots of `InterlockedIncrement` / `InterlockedDecrement`.
 const INTERLOCKED_INCREMENT: u32 = 0x00fd_f1c0;
@@ -349,6 +349,99 @@ pub fn ni_object_clone_ov2(e: &mut Engine, this: Ptr) -> Ptr {
     })
 }
 
+/// The sized delete (`00aa1460`, `cdecl`: pointer, size).
+const SIZED_DELETE: u32 = 0x00aa_1460;
+/// `NiObject::ms_RTTI` (`011f4418`, the record `NiObject`'s `GetRTTI` answers): its first
+/// word is the class name.
+const NI_OBJECT_RTTI: u32 = 0x011f_4418;
+/// Viewer string builders (`cdecl`): `NiGetViewerString` (`00a7d330`, the class name),
+/// `NiGetViewerString_ov10` (`00a7d5a0`, a label and a pointer) and `NiGetViewerString_ov8`
+/// (`00a7d510`, a label and an unsigned value), each answering a new string.
+const VIEWER_STRING_NAME: u32 = 0x00a7_d330;
+const VIEWER_STRING_POINTER: u32 = 0x00a7_d5a0;
+const VIEWER_STRING_UNSIGNED: u32 = 0x00a7_d510;
+/// `NiTArray<char *>` resize (`0096ad30`, one word: the new size) and `SetAt` (`0096ae90`:
+/// index, address of the value).
+const STRING_ARRAY_SET_SIZE: u32 = 0x0096_ad30;
+const STRING_ARRAY_SET_AT: u32 = 0x0096_ae90;
+/// The labels `"this"` (`010408ec`) and `"m_uiRefCount"` (`0109b580`).
+const TEXT_THIS: u32 = 0x0104_08ec;
+const TEXT_REF_COUNT: u32 = 0x0109_b580;
+
+// Translated from 00a5d470 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiObject::IsEqual` (Xbox PDB): false for a null `other`; otherwise whether the class
+/// names of the two objects' RTTI records (`GetRTTI`, vtable `+0x08`, first `other`'s then
+/// this one's; the name is the record's first word) are the same string (compared byte by
+/// byte, inlined `strcmp`).
+pub fn ni_object_is_equal(e: &mut Engine, this: Ptr, other: Ptr) -> bool {
+    if other.is_null() {
+        return false;
+    }
+    let other_rtti = e.vcall(other.addr(), GET_RTTI_SLOT, &args![]).u32();
+    let mut theirs = e.mem.u32(other_rtti);
+    let own_rtti = e.vcall(this.addr(), GET_RTTI_SLOT, &args![]).u32();
+    let mut ours = e.mem.u32(own_rtti);
+    loop {
+        let byte = e.mem.u8(ours);
+        if byte != e.mem.u8(theirs) {
+            return false;
+        }
+        if byte == 0 {
+            return true;
+        }
+        ours = ours.wrapping_add(1);
+        theirs = theirs.wrapping_add(1);
+    }
+}
+
+// Translated from 00a5d4e0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiObject::_scalar_deleting_destructor_` (Xbox PDB): the inlined destructor (the
+/// `NiRefObject` vtable, `NiRefObject::ms_uiObjects` decremented through
+/// `InterlockedDecrement`), then the sized delete (`00aa1460`) of 8 bytes when bit 0 of
+/// `flags` is set. Answers `this`.
+pub fn ni_object_scalar_deleting_destructor(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    e.mem.set_u32(this.addr(), NI_REF_OBJECT_VTABLE);
+    e.call(INTERLOCKED_DECREMENT, &args![REF_OBJECT_COUNT]);
+    if flags & 1 != 0 {
+        e.call(SIZED_DELETE, &args![this, 8u32]);
+    }
+    this
+}
+
+/// Adds the string in the word at `slot` to the viewer strings (`NiTArray<char *>`): grown by
+/// its grow-by count when full (`0096ad30`), then `SetAt` (`0096ae90`) at the old size.
+fn add_viewer_string(e: &mut Engine, strings: Ptr<NiTArray>, slot: u32) {
+    let index = e.get(strings, NiTArray::m_usSize) as u32;
+    if index >= e.get(strings, NiTArray::m_usMaxSize) as u32 {
+        let grow = e.get(strings, NiTArray::m_usGrowBy) as u32;
+        e.call(STRING_ARRAY_SET_SIZE, &args![strings, grow + index]);
+    }
+    e.call(STRING_ARRAY_SET_AT, &args![strings, index, slot]);
+}
+
+// Translated from 00a5d6e0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiObject::GetViewerStrings` (Xbox PDB): adds the class name (`NiObject`'s RTTI name,
+/// `00a7d330`), `"this"` with the object's address (`00a7d5a0`) and `"m_uiRefCount"` with
+/// the reference count (`00a7d510`).
+pub fn ni_object_get_viewer_strings(e: &mut Engine, this: Ptr, strings: Ptr<NiTArray>) {
+    e.with_stack(4, |e, slot| {
+        let name = e.mem.u32(NI_OBJECT_RTTI);
+        let text = e.call(VIEWER_STRING_NAME, &args![name]).u32();
+        e.mem.set_u32(slot.addr(), text);
+        add_viewer_string(e, strings, slot.addr());
+        let text = e.call(VIEWER_STRING_POINTER, &args![TEXT_THIS, this]).u32();
+        e.mem.set_u32(slot.addr(), text);
+        add_viewer_string(e, strings, slot.addr());
+        // `NiRefObject::m_uiRefCount` (Xbox PDB) +4.
+        let count = e.mem.u32(this.addr() + 4);
+        let text = e
+            .call(VIEWER_STRING_UNSIGNED, &args![TEXT_REF_COUNT, count])
+            .u32();
+        e.mem.set_u32(slot.addr(), text);
+        add_viewer_string(e, strings, slot.addr());
+    });
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -370,6 +463,15 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00a5_d510, ni_object_create_deep_copy(Ptr, Ptr)),
         entry!(0x00a5_d610, ni_object_load_binary(Ptr, Ptr)),
         entry!(0x00a5_d680, ni_object_clone_ov2(Ptr) -> Ptr),
+        entry!(0x00a5_d470, ni_object_is_equal(Ptr, Ptr) -> bool),
+        entry!(
+            0x00a5_d4e0,
+            ni_object_scalar_deleting_destructor(Ptr, u32) -> Ptr
+        ),
+        entry!(
+            0x00a5_d6e0,
+            ni_object_get_viewer_strings(Ptr, Ptr<NiTArray>)
+        ),
     ]
 }
 
@@ -771,6 +873,96 @@ mod tests {
                 (slot(CREATE_CLONE_SLOT), vec![this, cloning]),
                 (slot(PROCESS_CLONE_SLOT), vec![this, cloning]),
                 (slot(0), vec![clone_map, 1]),
+            ]
+        );
+    }
+
+    /// An object whose `GetRTTI` slot answers a record named `name`.
+    fn named(e: &mut Engine, name: &[u8], index: u32) -> u32 {
+        let vtable = e.mem.alloc(0x10);
+        let p = e.mem.alloc(8);
+        e.mem.set_u32(p, vtable);
+        let text = e.mem.alloc(name.len() as u32 + 1);
+        e.mem.write(text, name);
+        let rtti = e.mem.alloc(8);
+        e.mem.set_u32(rtti, text);
+        // Each object gets its own `GetRTTI` double at an address of its own.
+        let getter = 0x0310_0000 + 0x10 * index;
+        e.mem.set_u32(vtable + GET_RTTI_SLOT, getter);
+        e.register_double(getter, move |_, _| ret(rtti));
+        p
+    }
+
+    #[test]
+    fn is_equal_compares_the_class_names() {
+        let mut e = Engine::new();
+        let a = named(&mut e, b"NiNode", 0);
+        let b = named(&mut e, b"NiNode", 1);
+        let c = named(&mut e, b"NiNodeX", 2);
+        let d = named(&mut e, b"NiNodf", 3);
+        assert!(e.call(0x00a5_d470, &args![a, b]).bool());
+        assert!(!e.call(0x00a5_d470, &args![a, c]).bool());
+        assert!(!e.call(0x00a5_d470, &args![c, a]).bool());
+        assert!(!e.call(0x00a5_d470, &args![a, d]).bool());
+        assert!(!e.call(0x00a5_d470, &args![a, 0u32]).bool());
+    }
+
+    #[test]
+    fn scalar_deleting_destructor_counts_down_and_deletes_on_bit_0() {
+        let mut e = Engine::new();
+        counters(&mut e);
+        e.map(REF_OBJECT_COUNT & !0xfff, 0x1000);
+        e.mem.set_u32(REF_OBJECT_COUNT, 5);
+        let log = Log::default();
+        logged(&mut e, &log, SIZED_DELETE, 0);
+        let this = object(&mut e);
+        assert_eq!(e.call(0x00a5_d4e0, &args![this, 0u32]).u32(), this);
+        assert_eq!(e.mem.u32(this), NI_REF_OBJECT_VTABLE);
+        assert_eq!(e.mem.u32(REF_OBJECT_COUNT), 4);
+        assert!(log.borrow().is_empty());
+        assert_eq!(e.call(0x00a5_d4e0, &args![this, 0x101u32]).u32(), this);
+        assert_eq!(e.mem.u32(REF_OBJECT_COUNT), 3);
+        assert_eq!(*log.borrow(), [(SIZED_DELETE, vec![this, 8])]);
+    }
+
+    #[test]
+    fn viewer_strings_add_the_name_the_address_and_the_count_growing_when_full() {
+        let mut e = Engine::new();
+        e.map(NI_OBJECT_RTTI & !0xfff, 0x1000);
+        e.mem.set_u32(NI_OBJECT_RTTI, 0x0123_4567);
+        let this = object(&mut e);
+        e.mem.set_u32(this + 4, 7);
+        let strings: Ptr<NiTArray> = e.new_object();
+        e.set(strings, NiTArray::m_usMaxSize, 2);
+        e.set(strings, NiTArray::m_usSize, 1);
+        e.set(strings, NiTArray::m_usGrowBy, 4);
+        let log = Log::default();
+        logged(&mut e, &log, VIEWER_STRING_NAME, 0x11);
+        logged(&mut e, &log, VIEWER_STRING_POINTER, 0x22);
+        logged(&mut e, &log, VIEWER_STRING_UNSIGNED, 0x33);
+        logged(&mut e, &log, STRING_ARRAY_SET_SIZE, 0);
+        let l = log.clone();
+        e.register_double(STRING_ARRAY_SET_AT, move |e, a| {
+            l.borrow_mut()
+                .push((STRING_ARRAY_SET_AT, vec![a[0], a[1], e.mem.u32(a[2])]));
+            // The array grows by one used entry per add.
+            let size = e.mem.u16(a[0] + 0xa);
+            e.mem.set_u16(a[0] + 0xa, size + 1);
+            ret(0)
+        });
+        e.call(0x00a5_d6e0, &args![this, strings]);
+        let s = strings.addr();
+        assert_eq!(
+            *log.borrow(),
+            [
+                (VIEWER_STRING_NAME, vec![0x0123_4567]),
+                (STRING_ARRAY_SET_AT, vec![s, 1, 0x11]),
+                (VIEWER_STRING_POINTER, vec![TEXT_THIS, this]),
+                (STRING_ARRAY_SET_SIZE, vec![s, 6]),
+                (STRING_ARRAY_SET_AT, vec![s, 2, 0x22]),
+                (VIEWER_STRING_UNSIGNED, vec![TEXT_REF_COUNT, 7]),
+                (STRING_ARRAY_SET_SIZE, vec![s, 7]),
+                (STRING_ARRAY_SET_AT, vec![s, 3, 0x33]),
             ]
         );
     }

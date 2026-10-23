@@ -385,9 +385,138 @@ pub fn ni_blend_transform_interpolator_update(
     answer
 }
 
+/// `NiBlendInterpolator::IsEqual` (`00a36fd0`, engine map; `thiscall`, one
+/// word), `LoadBinary` (`00a37980`, engine map; `thiscall`, one word) and
+/// `GetViewerStrings` (`00a38080`, engine map; `thiscall`, one word).
+const BLEND_INTERPOLATOR_IS_EQUAL: u32 = 0x00a3_6fd0;
+const BLEND_INTERPOLATOR_LOAD_BINARY: u32 = 0x00a3_7980;
+const BLEND_INTERPOLATOR_GET_VIEWER_STRINGS: u32 = 0x00a3_8080;
+/// The `NiBlendInterpolator` default constructor body (`00a36890`,
+/// `thiscall`, no words) and its `CopyMembers` (`00a37510`, `thiscall
+/// (this; dest, cloning)`).
+const BLEND_INTERPOLATOR_CONSTRUCT: u32 = 0x00a3_6890;
+const BLEND_INTERPOLATOR_COPY_MEMBERS: u32 = 0x00a3_7510;
+/// `operator new` (`00aa13e0`, `cdecl (size)`).
+const OPERATOR_NEW: u32 = 0x00aa_13e0;
+/// The vtable of `NiBlendTransformInterpolator` (RTTI
+/// `.?AVNiBlendTransformInterpolator@@`) and the object's size.
+const VTABLE: u32 = 0x0109_750c;
+const OBJECT_SIZE: u32 = 0x30;
+/// `NiQuatTransform::LoadBinary` (`00a38bb0`, engine map; `thiscall
+/// (transform; stream)`).
+const QUAT_TRANSFORM_LOAD_BINARY: u32 = 0x00a3_8bb0;
+/// `NiStream::m_uiNifFileVersion` (+0xD8, as the PC code reads it) and the
+/// first file version that no longer stores the blend's transform.
+const STREAM_VERSION: u32 = 0xd8;
+const VERSION_WITHOUT_TRANSFORM: u32 = 0x0a01_006e;
+/// `NiGetViewerString` (`00a7d330`, `cdecl (text)`); the viewer-string
+/// array's grow (`0096ad30`, `thiscall (array; new capacity)`) and store
+/// (`0096ae90`, `thiscall (array; index, &string)`).
+const NI_GET_VIEWER_STRING: u32 = 0x00a7_d330;
+const STRINGS_GROW: u32 = 0x0096_ad30;
+const STRINGS_SET_AT: u32 = 0x0096_ae90;
+
+// Translated from 00a40a20 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiBlendTransformInterpolator::IsEqual` (Xbox PDB, matched by the engine
+/// map; `thiscall`, one word): `NiBlendInterpolator::IsEqual`'s answer.
+pub fn ni_blend_transform_interpolator_is_equal(e: &mut Engine, this: Ptr, other: Ptr) -> bool {
+    e.call(BLEND_INTERPOLATOR_IS_EQUAL, &args![this, other])
+        .bool()
+}
+
+// Translated from 00a40a50 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiBlendTransformInterpolator::CreateClone` (Xbox PDB, matched by the
+/// engine map; `thiscall`, one word: the cloning process): a 0x30-byte
+/// block constructed as a `NiBlendInterpolator` (`00a36890`) with this
+/// class's vtable, then `CopyMembers` (`00a37510`) into it. When the
+/// allocation fails `CopyMembers` still runs, into address 0, and null is
+/// the answer.
+pub fn ni_blend_transform_interpolator_create_clone(
+    e: &mut Engine,
+    this: Ptr,
+    cloning: u32,
+) -> Ptr {
+    let object = e.call(OPERATOR_NEW, &args![OBJECT_SIZE]).u32();
+    if object == 0 {
+        e.call(BLEND_INTERPOLATOR_COPY_MEMBERS, &args![this, 0u32, cloning]);
+        return Ptr::new(0);
+    }
+    e.call(BLEND_INTERPOLATOR_CONSTRUCT, &args![object]);
+    e.mem.set_u32(object, VTABLE);
+    e.call(
+        BLEND_INTERPOLATOR_COPY_MEMBERS,
+        &args![this, object, cloning],
+    );
+    Ptr::new(object)
+}
+
+// Translated from 00a40ab0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiBlendTransformInterpolator::LoadBinary` (Xbox PDB, matched by the
+/// engine map; `thiscall`, one word: the stream):
+/// `NiBlendInterpolator::LoadBinary`; files before version `0x0a01006e`
+/// also hold a transform, read (`NiQuatTransform::LoadBinary`, `00a38bb0`)
+/// into a stack `NiQuatTransform` that starts as a fresh one (translation
+/// `011a8400` and rotation `011f3704` copied as words, the scale `01096b8c`
+/// through the FPU) and is then dropped.
+pub fn ni_blend_transform_interpolator_load_binary(e: &mut Engine, this: Ptr, stream: Ptr) {
+    e.call(BLEND_INTERPOLATOR_LOAD_BINARY, &args![this, stream]);
+    if e.mem.u32(stream.addr() + STREAM_VERSION) >= VERSION_WITHOUT_TRANSFORM {
+        return;
+    }
+    e.with_stack(0x20, |e, transform| {
+        let transform = transform.addr();
+        for i in 0..3 {
+            let word = e.mem.u32(FRESH_TRANSLATE + 4 * i);
+            e.mem.set_u32(transform + 4 * i, word);
+        }
+        for i in 0..4 {
+            let word = e.mem.u32(FRESH_ROTATE + 4 * i);
+            e.mem.set_u32(transform + ROTATE + 4 * i, word);
+        }
+        let scale = x87_quiet_bits(e.mem.u32(INVALID_SCALE));
+        e.mem.set_u32(transform + SCALE, scale);
+        e.call(QUAT_TRANSFORM_LOAD_BINARY, &args![transform, stream]);
+    });
+}
+
+// Translated from 00a41170 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiBlendTransformInterpolator::GetViewerStrings` (Xbox PDB, matched by
+/// the engine map; `thiscall`, one word: the strings array):
+/// `NiBlendInterpolator::GetViewerStrings` (`00a38080`), then the class
+/// name (the first word of the `NiRTTI` record) appended: when the 16-bit
+/// size (+0xA) has reached the capacity (+0x8) the array grows to the step
+/// (+0xE) plus the size first, then the string is stored at the old size.
+pub fn ni_blend_transform_interpolator_get_viewer_strings(e: &mut Engine, this: Ptr, strings: Ptr) {
+    e.call(BLEND_INTERPOLATOR_GET_VIEWER_STRINGS, &args![this, strings]);
+    let class_name: u32 = e.global(NI_BLEND_TRANSFORM_INTERPOLATOR_RTTI);
+    let text = e.call(NI_GET_VIEWER_STRING, &args![class_name]).u32();
+    let size = u32::from(e.mem.u16(strings.addr() + 0xa));
+    if size >= u32::from(e.mem.u16(strings.addr() + 8)) {
+        let step = u32::from(e.mem.u16(strings.addr() + 0xe));
+        e.call(STRINGS_GROW, &args![strings, step + size]);
+    }
+    e.with_stack(4, |e, slot| {
+        e.mem.set_u32(slot.addr(), text);
+        e.call(STRINGS_SET_AT, &args![strings, size, slot]);
+    });
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x00a4_0a20, ni_blend_transform_interpolator_is_equal(Ptr, Ptr) -> bool),
+        entry!(
+            0x00a4_0a50,
+            ni_blend_transform_interpolator_create_clone(Ptr, u32) -> Ptr
+        ),
+        entry!(
+            0x00a4_0ab0,
+            ni_blend_transform_interpolator_load_binary(Ptr, Ptr)
+        ),
+        entry!(
+            0x00a4_1170,
+            ni_blend_transform_interpolator_get_viewer_strings(Ptr, Ptr)
+        ),
         entry!(0x00a40a40, ni_blend_transform_interpolator_get_rtti() -> Ptr),
         entry!(0x00a4_0aa0, fn_00a40aa0(Ptr, Ptr, Ptr)),
         entry!(
@@ -652,5 +781,148 @@ mod b014_tests {
         e.mem.set_u32(this.addr() + SINGLE_INTERPOLATOR, b);
         assert!(e.call(0x00a41110, &args![this, 4.5f32, 0u32, out]).bool());
         assert_eq!(e.mem.f32(out), 8.0);
+    }
+}
+
+#[cfg(test)]
+mod n002_tests {
+    use super::*;
+
+    fn word(value: u32) -> Ret {
+        Ret {
+            eax: value,
+            ..Ret::default()
+        }
+    }
+
+    fn calls(e: &Engine, addr: u32) -> Vec<Vec<u32>> {
+        e.call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|c| c.0 == addr)
+            .map(|c| c.1.clone())
+            .collect()
+    }
+
+    #[test]
+    fn is_equal_answers_the_base_compare() {
+        let mut e = Engine::new();
+        e.register(BLEND_INTERPOLATOR_IS_EQUAL, |_, _| word(0x100));
+        e.call_log = Some(vec![]);
+        assert!(!e.call(0x00a4_0a20, &args![0x1000u32, 0x2000u32]).bool());
+        assert_eq!(
+            calls(&e, BLEND_INTERPOLATOR_IS_EQUAL),
+            vec![vec![0x1000, 0x2000]]
+        );
+        e.register(BLEND_INTERPOLATOR_IS_EQUAL, |_, _| word(1));
+        assert!(e.call(0x00a4_0a20, &args![0x1000u32, 0x2000u32]).bool());
+    }
+
+    #[test]
+    fn create_clone_builds_and_copies() {
+        let mut e = Engine::new();
+        e.register(OPERATOR_NEW, |e, a| word(e.mem.alloc(a[0])));
+        e.register(BLEND_INTERPOLATOR_CONSTRUCT, |_, a| word(a[0]));
+        e.register(BLEND_INTERPOLATOR_COPY_MEMBERS, |_, _| Ret::default());
+        e.call_log = Some(vec![]);
+        let clone = e.call(0x00a4_0a50, &args![0x1000u32, 0x900u32]).u32();
+        assert_eq!(calls(&e, OPERATOR_NEW), vec![vec![0x30]]);
+        assert_eq!(calls(&e, BLEND_INTERPOLATOR_CONSTRUCT), vec![vec![clone]]);
+        assert_eq!(e.mem.u32(clone), VTABLE);
+        assert_eq!(
+            calls(&e, BLEND_INTERPOLATOR_COPY_MEMBERS),
+            vec![vec![0x1000, clone, 0x900]]
+        );
+        e.register(OPERATOR_NEW, |_, _| word(0));
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x00a4_0a50, &args![0x1000u32, 0x900u32]).u32(), 0);
+        assert!(calls(&e, BLEND_INTERPOLATOR_CONSTRUCT).is_empty());
+        assert_eq!(
+            calls(&e, BLEND_INTERPOLATOR_COPY_MEMBERS),
+            vec![vec![0x1000, 0, 0x900]]
+        );
+    }
+
+    #[test]
+    fn load_binary_reads_the_old_transform_into_a_fresh_one() {
+        let mut e = Engine::new();
+        e.map(FRESH_TRANSLATE, 0x10);
+        e.map(FRESH_ROTATE, 0x10);
+        e.map(INVALID_SCALE, 4);
+        for i in 0..3 {
+            e.mem.set_u32(FRESH_TRANSLATE + 4 * i, 0x100 + i);
+        }
+        for i in 0..4 {
+            e.mem.set_u32(FRESH_ROTATE + 4 * i, 0x200 + i);
+        }
+        e.mem.set_f32(INVALID_SCALE, 2.5);
+        e.register(BLEND_INTERPOLATOR_LOAD_BINARY, |_, _| Ret::default());
+        e.register(QUAT_TRANSFORM_LOAD_BINARY, |e, a| {
+            let words: Vec<u32> = (0..8).map(|i| e.mem.u32(a[0] + 4 * i)).collect();
+            assert_eq!(
+                words,
+                [
+                    0x100,
+                    0x101,
+                    0x102,
+                    0x200,
+                    0x201,
+                    0x202,
+                    0x203,
+                    2.5f32.to_bits()
+                ]
+            );
+            Ret::default()
+        });
+        let stream = e.mem.alloc(0x100);
+        e.mem.set_u32(stream + STREAM_VERSION, 0x0a01_006d);
+        e.call_log = Some(vec![]);
+        e.call(0x00a4_0ab0, &args![0x1000u32, stream]);
+        assert_eq!(
+            calls(&e, BLEND_INTERPOLATOR_LOAD_BINARY),
+            vec![vec![0x1000, stream]]
+        );
+        let load = calls(&e, QUAT_TRANSFORM_LOAD_BINARY);
+        assert_eq!((load.len(), load[0][1]), (1, stream));
+        // From version 0x0a01006e on: no transform.
+        e.mem.set_u32(stream + STREAM_VERSION, 0x0a01_006e);
+        e.call_log = Some(vec![]);
+        e.call(0x00a4_0ab0, &args![0x1000u32, stream]);
+        assert!(calls(&e, QUAT_TRANSFORM_LOAD_BINARY).is_empty());
+    }
+
+    #[test]
+    fn get_viewer_strings_appends_the_class_name() {
+        for (capacity, grows) in [(4u16, false), (2, true)] {
+            let mut e = Engine::new();
+            e.map(NI_BLEND_TRANSFORM_INTERPOLATOR_RTTI, 4);
+            e.set_global(NI_BLEND_TRANSFORM_INTERPOLATOR_RTTI, 0x0109_5555u32);
+            e.register(BLEND_INTERPOLATOR_GET_VIEWER_STRINGS, |_, _| Ret::default());
+            e.register(NI_GET_VIEWER_STRING, |_, _| word(0xe1));
+            e.register(STRINGS_GROW, |_, _| Ret::default());
+            e.register(STRINGS_SET_AT, |e, a| {
+                assert_eq!(e.mem.u32(a[2]), 0xe1);
+                Ret::default()
+            });
+            e.call_log = Some(vec![]);
+            let strings = e.mem.alloc(0x10);
+            e.mem.set_u16(strings + 8, capacity);
+            e.mem.set_u16(strings + 0xa, 2);
+            e.mem.set_u16(strings + 0xe, 3);
+            e.call(0x00a4_1170, &args![0x1000u32, strings]);
+            assert_eq!(
+                calls(&e, BLEND_INTERPOLATOR_GET_VIEWER_STRINGS),
+                vec![vec![0x1000, strings]]
+            );
+            assert_eq!(calls(&e, NI_GET_VIEWER_STRING), vec![vec![0x0109_5555]]);
+            let grow = calls(&e, STRINGS_GROW);
+            if grows {
+                assert_eq!(grow, vec![vec![strings, 5]]);
+            } else {
+                assert!(grow.is_empty());
+            }
+            assert_eq!(calls(&e, STRINGS_SET_AT)[0][..2], [strings, 2]);
+        }
     }
 }

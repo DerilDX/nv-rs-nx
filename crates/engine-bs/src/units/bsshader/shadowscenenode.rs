@@ -3951,9 +3951,659 @@ fn visit_other_side(
     }
 }
 
+/// The `BSSimpleArray`-shaped arrays of the functions below: vtable (+0; slot +4 allocates
+/// a buffer of a number of elements, slot +8 frees one), buffer (+4), count (+8), capacity
+/// (+0xc).
+const ARRAY_BUFFER: u32 = 4;
+const ARRAY_COUNT: u32 = 8;
+const ARRAY_CAPACITY: u32 = 0xc;
+/// `NiNode`'s children (`m_kChildren` +0x9c: buffer +0xa0, used size +0xa6) and the word at
+/// +0xb0 that [`fn_00b5aa40`] uses as a child index.
+const NODE_CHILD_INDEX: u32 = 0xb0;
+/// `lLightList`'s count (`NiTPointerList::m_uiCount`, +0xbc).
+const LIGHT_LIST_COUNT: u32 = 0xbc;
+/// The light's 16-bit word at +0x110 that [`fn_00b5ac60`] compares with 0xff.
+const LIGHT_WORD_110: u32 = 0x110;
+/// The renderer's `00b6d130` (thiscall on the renderer object, no stack words).
+const RENDERER_00B6D130: u32 = 0x00b6_d130;
+/// `00b9bdf0` (`ShadowSceneLight`, thiscall, `RET 0x1c`: two points and a word; answers a
+/// `float` in `ST0`).
+const LIGHT_00B9BDF0: u32 = 0x00b9_bdf0;
+/// `0.25` and `0.75` (`double`s at `010290b0` and `0101de30`).
+const QUARTER_010290B0: u32 = 0x0102_90b0;
+const THREE_QUARTERS_0101DE30: u32 = 0x0101_de30;
+/// `BSCompoundFrustum` methods (engine map names; thiscall): `SetCamera` (`00c47980`,
+/// `RET 4`), `AddCompoundFrustum` (`00c48800`, `RET 4`), `StartGroupUnion` (`00c47a70`),
+/// `EndGroup` (`00c47ae0`), `RemoveEmptyGroups` (`00c49700`) and `PrethreadOpList`
+/// (`00c49850`), the last four without stack words.
+const FRUSTUM_START_GROUP_UNION: u32 = 0x00c4_7a70;
+const FRUSTUM_END_GROUP: u32 = 0x00c4_7ae0;
+const FRUSTUM_REMOVE_EMPTY_GROUPS: u32 = 0x00c4_9700;
+const FRUSTUM_PRETHREAD_OP_LIST: u32 = 0x00c4_9850;
+/// `NiNode::GetViewerStrings` (`00a5ea70`, thiscall: string array), the string array's
+/// `SetSize` (`0096ad30`) and `SetAt` (`0096ae90`), and `NiGetViewerString` (`00a7d330`),
+/// `_ov6` (`00a7d490`: label, word) and `_ov7` (`00a7d4d0`: label, signed word).
+const NI_NODE_GET_VIEWER_STRINGS: u32 = 0x00a5_ea70;
+const STRING_ARRAY_SET_SIZE: u32 = 0x0096_ad30;
+const STRING_ARRAY_SET_AT: u32 = 0x0096_ae90;
+const VIEWER_STRING_NAME: u32 = 0x00a7_d330;
+const VIEWER_STRING_SHORT: u32 = 0x00a7_d490;
+const VIEWER_STRING_INT: u32 = 0x00a7_d4d0;
+/// `ShadowSceneNode::ms_RTTI` (`011f9e80`; its first word is the class name),
+/// `"light count"` and `"shadow light count"`.
+const SHADOW_SCENE_NODE_RTTI: u32 = 0x011f_9e80;
+const TEXT_LIGHT_COUNT: u32 = 0x010a_dcd4;
+const TEXT_SHADOW_LIGHT_COUNT: u32 = 0x010a_dcc0;
+
+// Translated from 00b5a930 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map: the search of an array (thiscall, `RET 0xc`: a value, the
+/// start index and a `cdecl` compare function taking the element's address and the value)
+/// from `start` up to the count (read each step): the first index whose compare answers a
+/// non-zero byte, skipping the calls while the buffer is null; else `0xffffffff`.
+pub fn fn_00b5a930(e: &mut Engine, this: Ptr, value: u32, start: u32, compare: u32) -> u32 {
+    let array = this.addr();
+    let mut index = start;
+    while index < e.mem.u32(array.wrapping_add(ARRAY_COUNT)) {
+        let buffer = e.mem.u32(array.wrapping_add(ARRAY_BUFFER));
+        if buffer != 0 {
+            let element = buffer.wrapping_add(index.wrapping_mul(4));
+            if e.call(compare, &args![element, value]).u8() != 0 {
+                return index;
+            }
+        }
+        index = index.wrapping_add(1);
+    }
+    0xffff_ffff
+}
+
+// Translated from 00b5aa40 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (fastcall on a node): the child at the node's index word
+/// (+0xb0) when it is not negative and below the children's used size (signed compare),
+/// else null.
+pub fn fn_00b5aa40(e: &mut Engine, this: Ptr) -> u32 {
+    let node = this.addr();
+    let index = e.mem.i32(node.wrapping_add(NODE_CHILD_INDEX));
+    let size = i32::from(e.mem.u16(node.wrapping_add(NODE_CHILDREN_SIZE)));
+    if !(0..size).contains(&index) {
+        return 0;
+    }
+    let children = e.mem.u32(node.wrapping_add(NODE_CHILDREN_BASE));
+    e.mem
+        .u32(children.wrapping_add((index as u32).wrapping_mul(4)))
+}
+
+// Translated from 00b5ac60 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (fastcall): the number of lights in `lLightList` whose 16-bit
+/// word at +0x110 is not 0xff (null elements not counted).
+pub fn fn_00b5ac60(e: &mut Engine, this: Ptr<ShadowSceneNode>) -> u32 {
+    let mut item = list_head(e, this.addr().wrapping_add(LIGHT_LIST));
+    let mut count = 0u32;
+    while item != 0 {
+        let light = item_element(e, item);
+        item = item_next(e, item);
+        if light != 0 && e.mem.u16(light.wrapping_add(LIGHT_WORD_110)) != 0xff {
+            count = count.wrapping_add(1);
+        }
+    }
+    count
+}
+
+// Translated from 00b5ade0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map: removes element `index` from an array (thiscall, `RET 8`: the
+/// index and a shrink flag byte). Without shrinking, or while the count is above a quarter
+/// of the capacity (capacity up to 0x400) or above the capacity less 0x800 (larger), the
+/// later elements move down one (`00cb9930`) and the count drops. Otherwise a smaller
+/// buffer (half the capacity, or 0x400 less above 0x800) comes from virtual slot +4, the
+/// elements before the index and then `count - 1` elements from after it are moved into it
+/// (the exe's count, not the number after the index), the old buffer goes to virtual slot
+/// +8, and the count, buffer and capacity are updated.
+pub fn fn_00b5ade0(e: &mut Engine, this: Ptr, index: u32, shrink: u8) {
+    let array = this.addr();
+    let capacity = e.mem.u32(array.wrapping_add(ARRAY_CAPACITY));
+    let shrinks = shrink != 0
+        && if capacity > 0x400 {
+            e.mem.u32(array.wrapping_add(ARRAY_COUNT)) <= capacity.wrapping_sub(0x800)
+        } else {
+            e.mem.u32(array.wrapping_add(ARRAY_COUNT)) <= capacity >> 2
+        };
+    if !shrinks {
+        let count = e
+            .mem
+            .u32(array.wrapping_add(ARRAY_COUNT))
+            .wrapping_sub(index)
+            .wrapping_sub(1);
+        let at = e
+            .mem
+            .u32(array.wrapping_add(ARRAY_BUFFER))
+            .wrapping_add(index.wrapping_mul(4));
+        e.call(
+            ARRAY_MOVE_00CB9930,
+            &args![array, at, at.wrapping_add(4), count],
+        );
+        let left = e.mem.u32(array.wrapping_add(ARRAY_COUNT)).wrapping_sub(1);
+        e.mem.set_u32(array.wrapping_add(ARRAY_COUNT), left);
+        return;
+    }
+    let new_capacity = if capacity > 0x800 {
+        capacity.wrapping_sub(0x400)
+    } else {
+        capacity >> 1
+    };
+    let fresh = e.vcall(array, 4, &args![new_capacity]).u32();
+    let buffer = e.mem.u32(array.wrapping_add(ARRAY_BUFFER));
+    e.call(ARRAY_MOVE_00CB9930, &args![array, fresh, buffer, index]);
+    let count = e.mem.u32(array.wrapping_add(ARRAY_COUNT)).wrapping_sub(1);
+    let buffer = e.mem.u32(array.wrapping_add(ARRAY_BUFFER));
+    e.call(
+        ARRAY_MOVE_00CB9930,
+        &args![
+            array,
+            fresh.wrapping_add(index.wrapping_mul(4)),
+            buffer.wrapping_add(index.wrapping_mul(4)).wrapping_add(4),
+            count
+        ],
+    );
+    let buffer = e.mem.u32(array.wrapping_add(ARRAY_BUFFER));
+    e.vcall(array, 8, &args![buffer]);
+    let left = e.mem.u32(array.wrapping_add(ARRAY_COUNT)).wrapping_sub(1);
+    e.mem.set_u32(array.wrapping_add(ARRAY_COUNT), left);
+    e.mem.set_u32(array.wrapping_add(ARRAY_BUFFER), fresh);
+    e.mem
+        .set_u32(array.wrapping_add(ARRAY_CAPACITY), new_capacity);
+}
+
+// Translated from 00b5aea0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map: removes `count` elements at `index` from an array
+/// (thiscall, `RET 8`) by moving the last `min(count, elements after them)` elements into
+/// the gap (`00cb9930`; unsigned minimum), then lowers the count by `count`.
+pub fn fn_00b5aea0(e: &mut Engine, this: Ptr, index: u32, count: u32) {
+    let array = this.addr();
+    let size = e.mem.u32(array.wrapping_add(ARRAY_COUNT));
+    let mut moved = size.wrapping_sub(index).wrapping_sub(count);
+    if moved >= count {
+        moved = count;
+    }
+    let buffer = e.mem.u32(array.wrapping_add(ARRAY_BUFFER));
+    e.call(
+        ARRAY_MOVE_00CB9930,
+        &args![
+            array,
+            buffer.wrapping_add(index.wrapping_mul(4)),
+            buffer.wrapping_add(size.wrapping_sub(moved).wrapping_mul(4)),
+            moved
+        ],
+    );
+    let left = e
+        .mem
+        .u32(array.wrapping_add(ARRAY_COUNT))
+        .wrapping_sub(count);
+    e.mem.set_u32(array.wrapping_add(ARRAY_COUNT), left);
+}
+
+// Translated from 00b5af80 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map: empties an array (thiscall, `RET 4`: a free flag byte). With
+/// a buffer: when `free` is non-zero the buffer goes to virtual slot +8 and the buffer and
+/// capacity are cleared; the count is cleared. Without a buffer nothing changes.
+pub fn fn_00b5af80(e: &mut Engine, this: Ptr, free: u8) {
+    let array = this.addr();
+    let buffer = e.mem.u32(array.wrapping_add(ARRAY_BUFFER));
+    if buffer == 0 {
+        return;
+    }
+    if free != 0 {
+        e.vcall(array, 8, &args![buffer]);
+        e.mem.set_u32(array.wrapping_add(ARRAY_BUFFER), 0);
+        e.mem.set_u32(array.wrapping_add(ARRAY_CAPACITY), 0);
+    }
+    e.mem.set_u32(array.wrapping_add(ARRAY_COUNT), 0);
+}
+
+// Translated from 00b5b1f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (fastcall): for each light of `lShadowLightList`, its dynamic
+/// shadow map (+0x10c) is given to the renderer object's `00b6d4c0` and then released
+/// (`NiPointer`, inlined) and cleared when present; at the end a jump to the renderer's
+/// `00b6d130`.
+pub fn fn_00b5b1f0(e: &mut Engine, this: Ptr<ShadowSceneNode>) {
+    let mut item = list_head(e, this.addr().wrapping_add(SHADOW_LIGHT_LIST));
+    while item != 0 {
+        let light = item_element(e, item);
+        item = item_next(e, item);
+        if light == 0 {
+            continue;
+        }
+        let map = e.mem.u32(light.wrapping_add(LIGHT_DYNAMIC_SHADOW_MAP));
+        let renderer = e.global::<u32>(RENDERER_011F91A8);
+        e.call(RENDERER_RELEASE_MAP_00B6D4C0, &args![renderer, map]);
+        let map = e.mem.u32(light.wrapping_add(LIGHT_DYNAMIC_SHADOW_MAP));
+        if map != 0 {
+            release(e, map);
+            e.mem
+                .set_u32(light.wrapping_add(LIGHT_DYNAMIC_SHADOW_MAP), 0);
+        }
+    }
+    let renderer = e.global::<u32>(RENDERER_011F91A8);
+    e.call(RENDERER_00B6D130, &args![renderer]);
+}
+
+// Translated from 00b5b610 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (a sibling of [`fn_00b5b4d0`]). `thiscall`, `RET 0x28`: a point
+/// `a`, a counter pointer, two `float` pointers, a point `b` and a word. Sums each light's
+/// `00b9bdf0` (both points and the word) over `lLightList`, counting each light after which
+/// the running sum is above the largest sum so far (which it then becomes). The sun light's
+/// `NiLight` gives the largest component of its two colours (+0xc8 and +0xd4) for the two
+/// `float` pointers. Answers `(1 - c) * second + (sum + first * 0.25)`, where `c` is the dot
+/// product of `0.75` times the normalised `b - a` (`004a0c10`) with the sun's normalised
+/// direction (+0xf0) plus `0.25`, clamped to `[0, 1]` (NaN kept). Each x87 step is
+/// translated in the exe's order, operands and `float` stores.
+pub fn fn_00b5b610(
+    e: &mut Engine,
+    this: Ptr<ShadowSceneNode>,
+    ax: u32,
+    ay: u32,
+    az: u32,
+    count: Ptr,
+    first_peak: Ptr,
+    second_peak: Ptr,
+    bx: u32,
+    by: u32,
+    bz: u32,
+    word: u32,
+) -> f32 {
+    let mut sum = x87_store32(0.0);
+    let mut largest = x87_store32(0.0);
+    e.mem.set_u32(count.addr(), 0);
+    let mut item = list_head(e, this.addr().wrapping_add(LIGHT_LIST));
+    while item != 0 {
+        let light = item_element(e, item);
+        item = item_next(e, item);
+        if light == 0 {
+            continue;
+        }
+        let value = e
+            .call(LIGHT_00B9BDF0, &args![light, ax, ay, az, bx, by, bz, word])
+            .f64();
+        sum = x87_store32(x87_add(value, x87_m32(sum)));
+        let running = x87_load32(sum);
+        if x87_load32(largest) < running {
+            let n = e.mem.u32(count.addr()).wrapping_add(1);
+            e.mem.set_u32(count.addr(), n);
+            largest = x87_store32(running);
+        }
+    }
+    let running = x87_load32(sum);
+    let sun = e.get(this, ShadowSceneNode::pSunLight);
+    let ni_light = e.mem.u32(sun.wrapping_add(LIGHT_SP_LIGHT));
+    let first = colour_peak(e, ni_light.wrapping_add(0xc8));
+    e.mem.set_u32(first_peak.addr(), first);
+    let quarter = f64::from_bits(e.global::<u64>(QUARTER_010290B0));
+    let direction = [
+        e.mem.u32(ni_light.wrapping_add(0xf0)),
+        e.mem.u32(ni_light.wrapping_add(0xf4)),
+        e.mem.u32(ni_light.wrapping_add(0xf8)),
+    ];
+    let sum = x87_store32(x87_add(running, x87_mul(x87_load32(first), quarter)));
+    let second = colour_peak(e, ni_light.wrapping_add(0xd4));
+    e.mem.set_u32(second_peak.addr(), second);
+    // The exe's two vectors on its stack: `b - a` (+0) and the sun's direction (+0xc).
+    let (towards, sun_direction) = e.with_stack(0x18, |e, frame| {
+        let towards = frame.addr();
+        let sun_direction = frame.addr() + 0xc;
+        for (i, (to, from)) in [(bx, ax), (by, ay), (bz, az)].iter().enumerate() {
+            let difference = x87_store32(x87_sub(x87_load32(*to), x87_m32(*from)));
+            e.mem.set_u32(towards + 4 * i as u32, difference);
+            e.mem.set_u32(sun_direction + 4 * i as u32, direction[i]);
+        }
+        e.call(POINT_NORMALIZE_004A0C10, &args![towards]);
+        e.call(POINT_NORMALIZE_004A0C10, &args![sun_direction]);
+        let read =
+            |e: &Engine, base: u32| [e.mem.u32(base), e.mem.u32(base + 4), e.mem.u32(base + 8)];
+        (read(e, towards), read(e, sun_direction))
+    });
+    let scale = x87_load64(e.global::<u64>(THREE_QUARTERS_0101DE30));
+    // `FMUL ST(1),ST(0)` (DC C9), then `FMUL ST(0),ST(1)` (D8 C9), then a `float` operand.
+    let scaled_x = x87_store32(x87_mul(x87_load32(towards[0]), scale));
+    let scaled_y = x87_store32(x87_mul(x87_load32(towards[1]), scale));
+    let scaled_z = x87_store32(x87_mul(scale, x87_m32(towards[2])));
+    let dot = x87_add(
+        x87_mul(x87_load32(sun_direction[1]), x87_m32(scaled_y)),
+        x87_mul(x87_load32(scaled_x), x87_m32(sun_direction[0])),
+    );
+    let dot = x87_add(
+        dot,
+        x87_mul(x87_load32(sun_direction[2]), x87_m32(scaled_z)),
+    );
+    let c = x87_store32(dot);
+    let c = x87_store32(x87_add(x87_load32(c), quarter));
+    let value = x87_load32(c);
+    let c = if 1.0 < value {
+        x87_store32(1.0)
+    } else {
+        x87_store32(value)
+    };
+    let value = x87_load32(c);
+    let c = if value < 0.0 {
+        x87_store32(0.0)
+    } else {
+        x87_store32(value)
+    };
+    let rest = x87_store32(x87_sub(1.0, x87_m32(c)));
+    let result = x87_store32(x87_add(
+        x87_mul(x87_load32(rest), x87_m32(second)),
+        x87_m32(sum),
+    ));
+    x87_quiet(f32::from_bits(result))
+}
+
+// Translated from 00b5ba80 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ShadowSceneNode::BuildSharedCompoundFrustum` (engine map; thiscall, `RET 8`: a camera and
+/// a portal). The portal's two rooms (+0xfc, +0x100) each give a frustum (its +0xcc, or the
+/// node's own at +0x138 for a missing room) and two flags: whether the room's object (+0xac,
+/// then +0xc, then its word +8) is 1 (the node's `bVisibleUnboundSpace` for a missing room),
+/// and whether that holds and the room has a frustum (for a missing room: whether the node's
+/// word at +0x160 is 0). The compound frustum of the portal's target (+0x104, its +0xac) is
+/// set to the camera; unless a room of the first kind has a frustum whose word +0x28 is 0,
+/// the frustums used are added (both inside a union group when both rooms count, else the
+/// one that counts), then the frustum's empty groups are removed and its op list prepared.
+pub fn shadow_scene_node_build_shared_compound_frustum(
+    e: &mut Engine,
+    this: Ptr<ShadowSceneNode>,
+    camera: u32,
+    portal: u32,
+) {
+    let node = this.addr();
+    let target = e.mem.u32(portal.wrapping_add(0x104));
+    let frustum = e.mem.u32(target.wrapping_add(0xac));
+    let first_room = e.mem.u32(portal.wrapping_add(0xfc));
+    let second_room = e.mem.u32(portal.wrapping_add(0x100));
+    let unbound = e.get(this, ShadowSceneNode::bVisibleUnboundSpace);
+    let room_is_one = |e: &Engine, room: u32| {
+        let object = e.mem.u32(room.wrapping_add(0xac));
+        let inner = e.mem.u32(object.wrapping_add(0xc));
+        u8::from(e.mem.u32(inner.wrapping_add(8)) == 1)
+    };
+    let first_flag = if first_room != 0 {
+        room_is_one(e, first_room)
+    } else {
+        unbound
+    };
+    let second_flag = if second_room != 0 {
+        room_is_one(e, second_room)
+    } else {
+        unbound
+    };
+    let no_own_word = e.mem.u32(node.wrapping_add(0x160)) == 0;
+    let first_counts = if first_room != 0 {
+        first_flag != 0 && e.mem.u32(first_room.wrapping_add(0xcc)) != 0
+    } else {
+        no_own_word
+    };
+    let second_counts = if second_room != 0 {
+        second_flag != 0 && e.mem.u32(second_room.wrapping_add(0xcc)) != 0
+    } else {
+        no_own_word
+    };
+    let first_frustum = if first_room != 0 {
+        e.mem.u32(first_room.wrapping_add(0xcc))
+    } else {
+        node.wrapping_add(0x138)
+    };
+    let second_frustum = if second_room != 0 {
+        e.mem.u32(second_room.wrapping_add(0xcc))
+    } else {
+        node.wrapping_add(0x138)
+    };
+    e.call(FRUSTUM_SET_CAMERA, &args![frustum, camera]);
+    if first_flag != 0 && e.mem.u32(first_frustum.wrapping_add(0x28)) == 0 {
+        return;
+    }
+    if second_flag != 0 && e.mem.u32(second_frustum.wrapping_add(0x28)) == 0 {
+        return;
+    }
+    if first_counts {
+        if second_counts {
+            e.call(FRUSTUM_START_GROUP_UNION, &args![frustum]);
+            e.call(FRUSTUM_MERGE, &args![frustum, first_frustum]);
+            e.call(FRUSTUM_MERGE, &args![frustum, second_frustum]);
+            e.call(FRUSTUM_END_GROUP, &args![frustum]);
+        } else {
+            e.call(FRUSTUM_MERGE, &args![frustum, first_frustum]);
+        }
+    } else if second_counts {
+        e.call(FRUSTUM_MERGE, &args![frustum, second_frustum]);
+    }
+    e.call(FRUSTUM_REMOVE_EMPTY_GROUPS, &args![frustum]);
+    e.call(FRUSTUM_PRETHREAD_OP_LIST, &args![frustum]);
+}
+
+// Translated from 00b5c450 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (thiscall, `RET 8`: an `NiLight` and a word): the first light
+/// of `lLightList` whose `spLight` is that `NiLight` gets `00b9dcb0` with the word; nothing
+/// when there is none.
+pub fn fn_00b5c450(e: &mut Engine, this: Ptr<ShadowSceneNode>, ni_light: u32, word: u32) {
+    let light = shadow_scene_node_get_light(e, this, ni_light);
+    if light != 0 {
+        e.call(LIGHT_00B9DCB0, &args![light, word]);
+    }
+}
+
+// Translated from 00b5c7d0 (PC disassembly, FalloutNV.exe 1.4.0.525; Ghidra made no function here)
+/// `ShadowSceneNode`'s `GetViewerStrings` (its vtable's slot +0x60; thiscall, `RET 4`):
+/// `NiNode::GetViewerStrings` (`00a5ea70`), the class name (the first word of `ms_RTTI`,
+/// `011f9e80`), `"light count"` with `lLightList`'s count (`_ov6`, the whole word passed),
+/// and `"shadow light count"` (`_ov7`) with the number of the list's lights whose
+/// `bCastShadow` (+0xec) is set: for each index below the count (as a 16-bit value, signed
+/// compare) the list is walked from its head to that index, a position at or past the count
+/// reading the null light's byte. The first three strings are added through
+/// `SetSize`/`SetAt` (held in the argument word), the last with `SetAt` inlined.
+pub fn shadow_scene_node_get_viewer_strings(
+    e: &mut Engine,
+    this: Ptr<ShadowSceneNode>,
+    strings: Ptr,
+) {
+    let list = strings.addr();
+    e.call(NI_NODE_GET_VIEWER_STRINGS, &args![this, strings]);
+    let add = |e: &mut Engine, slot: u32| {
+        let index = u32::from(e.mem.u16(list + 0xa));
+        if index >= u32::from(e.mem.u16(list + 8)) {
+            let grow = u32::from(e.mem.u16(list + 0xe));
+            e.call(
+                STRING_ARRAY_SET_SIZE,
+                &args![list, grow.wrapping_add(index)],
+            );
+        }
+        e.call(STRING_ARRAY_SET_AT, &args![list, index, slot]);
+    };
+    let shadow_lights = e.with_stack(4, |e, slot| {
+        let slot = slot.addr();
+        let class_name = e.global::<u32>(SHADOW_SCENE_NODE_RTTI);
+        let text = e.call(VIEWER_STRING_NAME, &args![class_name]).u32();
+        e.mem.set_u32(slot, text);
+        add(e, slot);
+        let lights = e.mem.u32(this.addr().wrapping_add(LIGHT_LIST_COUNT));
+        let text = e
+            .call(VIEWER_STRING_SHORT, &args![TEXT_LIGHT_COUNT, lights])
+            .u32();
+        e.mem.set_u32(slot, text);
+        add(e, slot);
+        let lights = e.mem.u32(this.addr().wrapping_add(LIGHT_LIST_COUNT));
+        e.mem.set_u32(slot, 0);
+        let mut index = 0u32;
+        while (index as i32) < i32::from(lights as u16) {
+            let position = index & 0xffff;
+            let light = if position >= lights {
+                0
+            } else {
+                let mut item = list_head(e, this.addr().wrapping_add(LIGHT_LIST));
+                let mut light = item_element(e, item);
+                item = item_next(e, item);
+                let mut steps = position;
+                while steps != 0 {
+                    steps -= 1;
+                    light = item_element(e, item);
+                    item = item_next(e, item);
+                }
+                light
+            };
+            if e.mem.u8(light.wrapping_add(LIGHT_CAST_SHADOW)) != 0 {
+                let n = e.mem.u32(slot).wrapping_add(1);
+                e.mem.set_u32(slot, n);
+            }
+            index = index.wrapping_add(1);
+        }
+        e.mem.u32(slot)
+    });
+    let text = e
+        .call(
+            VIEWER_STRING_INT,
+            &args![TEXT_SHADOW_LIGHT_COUNT, shadow_lights],
+        )
+        .u32();
+    let index = e.mem.u16(list + 0xa);
+    if index >= e.mem.u16(list + 8) {
+        let grow = u32::from(e.mem.u16(list + 0xe));
+        e.call(
+            STRING_ARRAY_SET_SIZE,
+            &args![list, grow.wrapping_add(u32::from(index))],
+        );
+    }
+    let element = |e: &Engine| {
+        e.mem
+            .u32(list + 4)
+            .wrapping_add(u32::from(index).wrapping_mul(4))
+    };
+    if index >= e.mem.u16(list + 0xa) {
+        e.mem.set_u16(list + 0xa, index.wrapping_add(1));
+        if text != 0 {
+            let used = e.mem.u16(list + 0xc).wrapping_add(1);
+            e.mem.set_u16(list + 0xc, used);
+        }
+    } else if text != 0 {
+        if e.mem.u32(element(e)) == 0 {
+            let used = e.mem.u16(list + 0xc).wrapping_add(1);
+            e.mem.set_u16(list + 0xc, used);
+        }
+    } else if e.mem.u32(element(e)) != 0 {
+        let used = e.mem.u16(list + 0xc).wrapping_add(0xffff);
+        e.mem.set_u16(list + 0xc, used);
+    }
+    let at = element(e);
+    e.mem.set_u32(at, text);
+}
+
+// Translated from 00b5e590 (PC disassembly, FalloutNV.exe 1.4.0.525; Ghidra made no function here)
+/// `ShadowSceneNode::GetRTTI` (its vtable's slot +8): the address of the class's `NiRTTI`
+/// record (`011f9e80`).
+pub fn shadow_scene_node_get_rtti(_e: &mut Engine) -> Ptr {
+    Ptr::new(SHADOW_SCENE_NODE_RTTI)
+}
+
+// Translated from 00b5f080 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (thiscall, `RET 4`: an `NiLight`): the first light of
+/// `lLightList` whose `spLight` is that `NiLight` is written into the argument word and the
+/// code jumps to [`fn_00b5d270`] with it; nothing when there is none.
+pub fn fn_00b5f080(e: &mut Engine, this: Ptr<ShadowSceneNode>, ni_light: u32) {
+    let light = shadow_scene_node_get_light(e, this, ni_light);
+    if light != 0 {
+        fn_00b5d270(e, this, light);
+    }
+}
+
+// Translated from 00b5f0c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ShadowSceneNode::FindAndCullLightRecurse` (engine map; thiscall, `RET 8`: a node and a
+/// word whose low byte says remove). For each child below the node's used size (read once;
+/// the children's buffer re-read): a child whose RTTI chain (`GetRTTI`, slot +8, then the
+/// base records at +4) reaches the record at `011f4a28` is removed
+/// ([`shadow_scene_node_remove_light`]) or added ([`shadow_scene_node_add_light`] with 1);
+/// any other child that is a node (slot +0xc) is walked the same way with the whole word.
+pub fn shadow_scene_node_find_and_cull_light_recurse(
+    e: &mut Engine,
+    this: Ptr<ShadowSceneNode>,
+    node: u32,
+    remove: u32,
+) {
+    let count = u32::from(e.mem.u16(node.wrapping_add(NODE_CHILDREN_SIZE)));
+    let mut index = 0u32;
+    while index < count {
+        let children = e.mem.u32(node.wrapping_add(NODE_CHILDREN_BASE));
+        let child = e.mem.u32(children.wrapping_add(index.wrapping_mul(4)));
+        index = index.wrapping_add(1);
+        if child == 0 {
+            continue;
+        }
+        if rtti_chain_has(e, child, LIGHT_RTTI_011F4A28) {
+            if remove as u8 != 0 {
+                shadow_scene_node_remove_light(e, this, child);
+            } else {
+                shadow_scene_node_add_light(e, this, child, 1);
+            }
+            continue;
+        }
+        if e.vcall(child, SLOT_IS_NODE, &args![]).u32() != 0 {
+            shadow_scene_node_find_and_cull_light_recurse(e, this, child, remove);
+        }
+    }
+}
+
+// Translated from 00b5f150 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ShadowSceneNode::FindAndCullLight` (engine map; thiscall, `RET 8`): for a node, a jump
+/// to [`shadow_scene_node_find_and_cull_light_recurse`] with the same words; nothing for
+/// null.
+pub fn shadow_scene_node_find_and_cull_light(
+    e: &mut Engine,
+    this: Ptr<ShadowSceneNode>,
+    node: u32,
+    remove: u32,
+) {
+    if node != 0 {
+        shadow_scene_node_find_and_cull_light_recurse(e, this, node, remove);
+    }
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x00b5_a930, fn_00b5a930(Ptr, u32, u32, u32) -> u32),
+        entry!(0x00b5_aa40, fn_00b5aa40(Ptr) -> u32),
+        entry!(0x00b5_ac60, fn_00b5ac60(Ptr<ShadowSceneNode>) -> u32),
+        entry!(0x00b5_ade0, fn_00b5ade0(Ptr, u32, u8)),
+        entry!(0x00b5_aea0, fn_00b5aea0(Ptr, u32, u32)),
+        entry!(0x00b5_af80, fn_00b5af80(Ptr, u8)),
+        entry!(0x00b5_b1f0, fn_00b5b1f0(Ptr<ShadowSceneNode>)),
+        entry!(
+            0x00b5_b610,
+            fn_00b5b610(
+                Ptr<ShadowSceneNode>,
+                u32,
+                u32,
+                u32,
+                Ptr,
+                Ptr,
+                Ptr,
+                u32,
+                u32,
+                u32,
+                u32,
+            ) -> f32
+        ),
+        entry!(
+            0x00b5_ba80,
+            shadow_scene_node_build_shared_compound_frustum(Ptr<ShadowSceneNode>, u32, u32)
+        ),
+        entry!(0x00b5_c450, fn_00b5c450(Ptr<ShadowSceneNode>, u32, u32)),
+        entry!(
+            0x00b5_c7d0,
+            shadow_scene_node_get_viewer_strings(Ptr<ShadowSceneNode>, Ptr)
+        ),
+        entry!(0x00b5_e590, shadow_scene_node_get_rtti() -> Ptr),
+        entry!(0x00b5_f080, fn_00b5f080(Ptr<ShadowSceneNode>, u32)),
+        entry!(
+            0x00b5_f0c0,
+            shadow_scene_node_find_and_cull_light_recurse(Ptr<ShadowSceneNode>, u32, u32)
+        ),
+        entry!(
+            0x00b5_f150,
+            shadow_scene_node_find_and_cull_light(Ptr<ShadowSceneNode>, u32, u32)
+        ),
         entry!(0x00b5_c7c0, fn_00b5c7c0(Ptr)),
         entry!(0x00b5_c360, fn_00b5c360(Ptr) -> u32),
         entry!(
@@ -5999,5 +6649,544 @@ mod b064_tests {
         assert_eq!(e.mem.u32(shown + 0x30), 0);
         assert_eq!(e.mem.u32(hidden + 0x30), 1);
         assert_eq!(calls(&e, SCRAP_HEAP_DEALLOCATE).len(), 1);
+    }
+}
+
+#[cfg(test)]
+mod n014_tests {
+    use super::*;
+
+    const TARGET: u32 = 0x03b0_0000;
+
+    fn calls_to(e: &Engine, addr: u32) -> Vec<Vec<u32>> {
+        e.call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|c| c.0 == addr)
+            .map(|c| c.1.clone())
+            .collect()
+    }
+
+    /// A pointer list at `list` holding `elements` in order (items of three words).
+    fn fill_list(e: &mut Engine, list: u32, elements: &[u32]) {
+        let mut next = 0u32;
+        let mut items = vec![];
+        for element in elements.iter().rev() {
+            let item = e.mem.alloc(0xc);
+            e.mem.set_u32(item, next);
+            e.mem.set_u32(item + 8, *element);
+            next = item;
+            items.push(item);
+        }
+        e.mem.set_u32(list, next);
+        e.mem.set_u32(list + 4, items.first().copied().unwrap_or(0));
+        e.mem.set_u32(list + 8, elements.len() as u32);
+    }
+
+    /// An array (vtable, buffer, count, capacity) holding `values`, its capacity `capacity`.
+    fn array(e: &mut Engine, values: &[u32], capacity: u32) -> u32 {
+        let array = e.mem.alloc(0x10);
+        let buffer = e.mem.alloc(4 * capacity.max(1));
+        for (i, value) in values.iter().enumerate() {
+            e.mem.set_u32(buffer + 4 * i as u32, *value);
+        }
+        e.mem.set_u32(array + 4, buffer);
+        e.mem.set_u32(array + 8, values.len() as u32);
+        e.mem.set_u32(array + 0xc, capacity);
+        array
+    }
+
+    #[test]
+    fn array_find_answers_the_first_match_from_the_start() {
+        let mut e = Engine::new();
+        // Matches when the element equals the value.
+        e.register(TARGET, |e, a| u32::from(e.mem.u32(a[0]) == a[1]).into_ret());
+        let this = array(&mut e, &[5, 7, 5, 9], 4);
+        assert_eq!(
+            e.call(0x00b5_a930, &args![this, 5u32, 0u32, TARGET]).u32(),
+            0
+        );
+        assert_eq!(
+            e.call(0x00b5_a930, &args![this, 5u32, 1u32, TARGET]).u32(),
+            2
+        );
+        assert_eq!(
+            e.call(0x00b5_a930, &args![this, 8u32, 0u32, TARGET]).u32(),
+            0xffff_ffff
+        );
+        e.mem.set_u32(this + 4, 0);
+        e.call_log = Some(vec![]);
+        assert_eq!(
+            e.call(0x00b5_a930, &args![this, 5u32, 0u32, TARGET]).u32(),
+            0xffff_ffff
+        );
+        assert!(calls_to(&e, TARGET).is_empty());
+    }
+
+    #[test]
+    fn indexed_child_checks_the_index_range() {
+        let mut e = Engine::new();
+        let node = e.mem.alloc(0xb4);
+        let children = e.mem.alloc(8);
+        e.mem.set_u32(children, 0x1111);
+        e.mem.set_u32(children + 4, 0x2222);
+        e.mem.set_u32(node + NODE_CHILDREN_BASE, children);
+        e.mem.set_u16(node + NODE_CHILDREN_SIZE, 2);
+        for (index, expected) in [(1i32, 0x2222u32), (0, 0x1111), (2, 0), (-1, 0)] {
+            e.mem.set_i32(node + NODE_CHILD_INDEX, index);
+            assert_eq!(e.call(0x00b5_aa40, &args![node]).u32(), expected);
+        }
+    }
+
+    #[test]
+    fn light_count_skips_null_and_marked_lights() {
+        let mut e = Engine::new();
+        let this = e.mem.alloc(0x200);
+        let lights: Vec<u32> = (0..3).map(|_| e.mem.alloc(0x120)).collect();
+        e.mem.set_u16(lights[1] + LIGHT_WORD_110, 0xff);
+        e.mem.set_u16(lights[2] + LIGHT_WORD_110, 0x1ff);
+        fill_list(
+            &mut e,
+            this + LIGHT_LIST,
+            &[lights[0], 0, lights[1], lights[2]],
+        );
+        assert_eq!(e.call(0x00b5_ac60, &args![this]).u32(), 2);
+    }
+
+    #[test]
+    fn remove_at_moves_down_or_shrinks_the_buffer() {
+        const ALLOCATE: u32 = 0x03b1_0000;
+        const FREE: u32 = 0x03b2_0000;
+        let mut e = Engine::new();
+        e.register(ARRAY_MOVE_00CB9930, |e, a| {
+            for i in 0..a[3] {
+                let value = e.mem.u32(a[2] + 4 * i);
+                e.mem.set_u32(a[1] + 4 * i, value);
+            }
+            Ret::default()
+        });
+        e.register(ALLOCATE, |e, a| e.mem.alloc(4 * a[1]).into_ret());
+        e.register(FREE, |_, _| Ret::default());
+        let vtable = e.mem.alloc(0x10);
+        e.mem.set_u32(vtable + 4, ALLOCATE);
+        e.mem.set_u32(vtable + 8, FREE);
+        // Plain removal: count 3 of 8, no shrink flag.
+        let this = array(&mut e, &[1, 2, 3], 8);
+        e.mem.set_u32(this, vtable);
+        e.call_log = Some(vec![]);
+        e.call(0x00b5_ade0, &args![this, 0u32, 0u32]);
+        let buffer = e.mem.u32(this + 4);
+        assert_eq!((e.mem.u32(buffer), e.mem.u32(buffer + 4)), (2, 3));
+        assert_eq!(e.mem.u32(this + 8), 2);
+        assert!(calls_to(&e, ALLOCATE).is_empty());
+        // Shrinking: count 2 of 8 is at most a quarter; the new buffer holds 4.
+        e.call(0x00b5_ade0, &args![this, 0u32, 1u32]);
+        let fresh = e.mem.u32(this + 4);
+        assert_ne!(fresh, buffer);
+        assert_eq!(calls_to(&e, ALLOCATE), vec![vec![this, 4]]);
+        assert_eq!(calls_to(&e, FREE), vec![vec![this, buffer]]);
+        assert_eq!((e.mem.u32(this + 8), e.mem.u32(this + 0xc)), (1, 4));
+        // The second move takes `count - 1` elements from after the index.
+        assert_eq!(calls_to(&e, ARRAY_MOVE_00CB9930)[2][3], 1);
+        assert_eq!(e.mem.u32(fresh), 3);
+        // A large capacity shrinks by 0x400 only when the count is at most capacity - 0x800.
+        let big = array(&mut e, &[1, 2, 3], 0x1000);
+        e.mem.set_u32(big, vtable);
+        e.mem.set_u32(big + 8, 0x801);
+        e.call(0x00b5_ade0, &args![big, 0u32, 1u32]);
+        assert_eq!(e.mem.u32(big + 0xc), 0x1000);
+        e.call(0x00b5_ade0, &args![big, 0u32, 1u32]);
+        assert_eq!(e.mem.u32(big + 0xc), 0xc00);
+    }
+
+    #[test]
+    fn remove_range_moves_the_tail_into_the_gap() {
+        let mut e = Engine::new();
+        e.register(ARRAY_MOVE_00CB9930, |e, a| {
+            for i in 0..a[3] {
+                let value = e.mem.u32(a[2] + 4 * i);
+                e.mem.set_u32(a[1] + 4 * i, value);
+            }
+            Ret::default()
+        });
+        let this = array(&mut e, &[1, 2, 3, 4, 5, 6], 6);
+        e.call_log = Some(vec![]);
+        e.call(0x00b5_aea0, &args![this, 1u32, 2u32]);
+        let buffer = e.mem.u32(this + 4);
+        let values: Vec<u32> = (0..4).map(|i| e.mem.u32(buffer + 4 * i)).collect();
+        assert_eq!(values, vec![1, 5, 6, 4]);
+        assert_eq!(e.mem.u32(this + 8), 4);
+        // Fewer elements after the gap than removed: only those move.
+        e.call(0x00b5_aea0, &args![this, 1u32, 2u32]);
+        assert_eq!(calls_to(&e, ARRAY_MOVE_00CB9930)[1][3], 1);
+        assert_eq!(e.mem.u32(this + 8), 2);
+    }
+
+    #[test]
+    fn clear_empties_and_frees_on_request() {
+        const FREE: u32 = 0x03b3_0000;
+        let mut e = Engine::new();
+        e.register(FREE, |_, _| Ret::default());
+        let vtable = e.mem.alloc(0x10);
+        e.mem.set_u32(vtable + 8, FREE);
+        let this = array(&mut e, &[1, 2], 4);
+        e.mem.set_u32(this, vtable);
+        let buffer = e.mem.u32(this + 4);
+        e.call_log = Some(vec![]);
+        e.call(0x00b5_af80, &args![this, 0u32]);
+        assert_eq!((e.mem.u32(this + 4), e.mem.u32(this + 8)), (buffer, 0));
+        e.mem.set_u32(this + 8, 2);
+        e.call(0x00b5_af80, &args![this, 1u32]);
+        assert_eq!(calls_to(&e, FREE), vec![vec![this, buffer]]);
+        assert_eq!(
+            (
+                e.mem.u32(this + 4),
+                e.mem.u32(this + 8),
+                e.mem.u32(this + 0xc)
+            ),
+            (0, 0, 0)
+        );
+        // Without a buffer the count stays.
+        e.mem.set_u32(this + 8, 5);
+        e.call(0x00b5_af80, &args![this, 1u32]);
+        assert_eq!(e.mem.u32(this + 8), 5);
+    }
+
+    #[test]
+    fn release_shadow_maps_gives_each_map_back_and_clears_it() {
+        let mut e = Engine::new();
+        e.register(RENDERER_RELEASE_MAP_00B6D4C0, |_, _| Ret::default());
+        e.register(RENDERER_00B6D130, |_, _| Ret::default());
+        e.register(IMPORT_INTERLOCKED_DECREMENT, |e, a| {
+            let left = e.mem.u32(a[0]) - 1;
+            e.mem.set_u32(a[0], left);
+            left.into_ret()
+        });
+        e.register(TARGET, |_, _| Ret::default());
+        e.mem.map(RENDERER_011F91A8, 4);
+        e.mem.set_u32(RENDERER_011F91A8, 0x5555);
+        let vtable = e.mem.alloc(8);
+        e.mem.set_u32(vtable + 4, TARGET);
+        let map = e.mem.alloc(8);
+        e.mem.set_u32(map, vtable);
+        e.mem.set_u32(map + 4, 1);
+        let with_map = e.mem.alloc(0x120);
+        e.mem.set_u32(with_map + LIGHT_DYNAMIC_SHADOW_MAP, map);
+        let without = e.mem.alloc(0x120);
+        let this = e.mem.alloc(0x200);
+        fill_list(&mut e, this + SHADOW_LIGHT_LIST, &[with_map, 0, without]);
+        e.call_log = Some(vec![]);
+        e.call(0x00b5_b1f0, &args![this]);
+        assert_eq!(
+            calls_to(&e, RENDERER_RELEASE_MAP_00B6D4C0),
+            vec![vec![0x5555, map], vec![0x5555, 0]]
+        );
+        assert_eq!(calls_to(&e, TARGET), vec![vec![map]]);
+        assert_eq!(e.mem.u32(with_map + LIGHT_DYNAMIC_SHADOW_MAP), 0);
+        assert_eq!(calls_to(&e, RENDERER_00B6D130), vec![vec![0x5555]]);
+    }
+
+    #[test]
+    fn light_sum_counts_new_maxima_and_blends_the_sun() {
+        let mut e = Engine::new();
+        e.mem.map(QUARTER_010290B0, 8);
+        e.mem.set_u64(QUARTER_010290B0, 0.25f64.to_bits());
+        e.mem.map(THREE_QUARTERS_0101DE30, 8);
+        e.mem.set_u64(THREE_QUARTERS_0101DE30, 0.75f64.to_bits());
+        // The lights answer 2, -1 and 3: sums 2, 1, 4; new maxima after the first and third.
+        e.register(LIGHT_00B9BDF0, |e, a| {
+            assert_eq!(a[1..], [1.0f32.to_bits(), 0, 0, 0, 0, 0, 0x99]);
+            Ret {
+                st0: f64::from(e.mem.f32(a[0])),
+                ..Ret::default()
+            }
+        });
+        // The normalisation leaves the vectors as they are (both unit already).
+        e.register(POINT_NORMALIZE_004A0C10, |_, _| Ret::default());
+        let this = e.mem.alloc(0x200);
+        let lights: Vec<u32> = [2.0f32, -1.0, 3.0]
+            .iter()
+            .map(|v| {
+                let light = e.mem.alloc(0x120);
+                e.mem.set_f32(light, *v);
+                light
+            })
+            .collect();
+        fill_list(
+            &mut e,
+            this + LIGHT_LIST,
+            &[lights[0], 0, lights[1], lights[2]],
+        );
+        let ni_light = e.mem.alloc(0x100);
+        for (offset, value) in [
+            (0xc8u32, 0.5f32),
+            (0xcc, 2.0),
+            (0xd0, 1.0),
+            (0xd4, 4.0),
+            (0xd8, 1.0),
+            (0xdc, 3.0),
+            (0xf0, -1.0),
+            (0xf4, 0.0),
+            (0xf8, 0.0),
+        ] {
+            e.mem.set_f32(ni_light + offset, value);
+        }
+        let sun = e.mem.alloc(0x100);
+        e.mem.set_u32(sun + LIGHT_SP_LIGHT, ni_light);
+        e.mem.set_u32(this + 0xe0, sun);
+        let outputs = e.mem.alloc(12);
+        let one = 1.0f32.to_bits();
+        let result = e
+            .call(
+                0x00b5_b610,
+                &args![
+                    this,
+                    one,
+                    0u32,
+                    0u32,
+                    outputs,
+                    outputs + 4,
+                    outputs + 8,
+                    0u32,
+                    0u32,
+                    0u32,
+                    0x99u32
+                ],
+            )
+            .f32();
+        assert_eq!(e.mem.u32(outputs), 2);
+        assert_eq!(e.mem.f32(outputs + 4), 2.0);
+        assert_eq!(e.mem.f32(outputs + 8), 4.0);
+        // b - a = (-1, 0, 0); times 0.75 dotted with (-1, 0, 0) is 0.75; plus 0.25 is 1.0.
+        // (1 - 1) * 4 + (4 + 2 * 0.25) = 4.5.
+        assert_eq!(result, 4.5);
+    }
+
+    #[test]
+    fn build_shared_compound_frustum_unions_both_rooms() {
+        let mut e = Engine::new();
+        for address in [
+            FRUSTUM_SET_CAMERA,
+            FRUSTUM_MERGE,
+            FRUSTUM_START_GROUP_UNION,
+            FRUSTUM_END_GROUP,
+            FRUSTUM_REMOVE_EMPTY_GROUPS,
+            FRUSTUM_PRETHREAD_OP_LIST,
+        ] {
+            e.register(address, |_, _| Ret::default());
+        }
+        let this = e.mem.alloc(0x200);
+        let frustum = e.mem.alloc(0x40);
+        let target = e.mem.alloc(0xb0);
+        e.mem.set_u32(target + 0xac, frustum);
+        // A room whose object chain answers 1 and whose frustum has a word +0x28.
+        let room = |e: &mut Engine, word: u32| {
+            let room = e.mem.alloc(0xd0);
+            let object = e.mem.alloc(0x10);
+            let inner = e.mem.alloc(0x10);
+            e.mem.set_u32(inner + 8, 1);
+            e.mem.set_u32(object + 0xc, inner);
+            e.mem.set_u32(room + 0xac, object);
+            let room_frustum = e.mem.alloc(0x30);
+            e.mem.set_u32(room_frustum + 0x28, word);
+            e.mem.set_u32(room + 0xcc, room_frustum);
+            (room, room_frustum)
+        };
+        let (first, first_frustum) = room(&mut e, 1);
+        let (second, second_frustum) = room(&mut e, 1);
+        let portal = e.mem.alloc(0x108);
+        e.mem.set_u32(portal + 0xfc, first);
+        e.mem.set_u32(portal + 0x100, second);
+        e.mem.set_u32(portal + 0x104, target);
+        e.call_log = Some(vec![]);
+        e.call(0x00b5_ba80, &args![this, 0x7777u32, portal]);
+        assert_eq!(
+            calls_to(&e, FRUSTUM_SET_CAMERA),
+            vec![vec![frustum, 0x7777]]
+        );
+        assert_eq!(calls_to(&e, FRUSTUM_START_GROUP_UNION).len(), 1);
+        assert_eq!(
+            calls_to(&e, FRUSTUM_MERGE),
+            vec![vec![frustum, first_frustum], vec![frustum, second_frustum]]
+        );
+        assert_eq!(calls_to(&e, FRUSTUM_PRETHREAD_OP_LIST).len(), 1);
+        // A missing second room uses the node's own frustum and counts by the word +0x160.
+        e.mem.set_u32(portal + 0x100, 0);
+        e.mem.set_u32(this + 0x160, 1);
+        e.mem.set_u8(this + 0x1dc, 0);
+        e.call_log = Some(vec![]);
+        e.call(0x00b5_ba80, &args![this, 0x7777u32, portal]);
+        assert_eq!(
+            calls_to(&e, FRUSTUM_MERGE),
+            vec![vec![frustum, first_frustum]]
+        );
+        assert!(calls_to(&e, FRUSTUM_START_GROUP_UNION).is_empty());
+        // A counting room whose frustum word +0x28 is 0 stops after the camera.
+        e.mem.set_u32(first_frustum + 0x28, 0);
+        e.call_log = Some(vec![]);
+        e.call(0x00b5_ba80, &args![this, 0x7777u32, portal]);
+        assert_eq!(calls_to(&e, FRUSTUM_SET_CAMERA).len(), 1);
+        assert!(calls_to(&e, FRUSTUM_REMOVE_EMPTY_GROUPS).is_empty());
+    }
+
+    #[test]
+    fn light_word_goes_to_the_matching_light() {
+        let mut e = Engine::new();
+        e.register(LIGHT_00B9DCB0, |_, _| Ret::default());
+        let this = e.mem.alloc(0x200);
+        let a = e.mem.alloc(0x120);
+        let b = e.mem.alloc(0x120);
+        e.mem.set_u32(a + LIGHT_SP_LIGHT, 0x10);
+        e.mem.set_u32(b + LIGHT_SP_LIGHT, 0x20);
+        fill_list(&mut e, this + LIGHT_LIST, &[a, 0, b]);
+        e.call_log = Some(vec![]);
+        e.call(0x00b5_c450, &args![this, 0x20u32, 7u32]);
+        e.call(0x00b5_c450, &args![this, 0x30u32, 8u32]);
+        assert_eq!(calls_to(&e, LIGHT_00B9DCB0), vec![vec![b, 7]]);
+    }
+
+    #[test]
+    fn viewer_strings_count_lights_and_shadow_lights() {
+        let mut e = Engine::new();
+        e.mem.map(SHADOW_SCENE_NODE_RTTI, 4);
+        e.mem.set_u32(SHADOW_SCENE_NODE_RTTI, 0x0109_0000);
+        e.register(NI_NODE_GET_VIEWER_STRINGS, |_, _| Ret::default());
+        e.register(VIEWER_STRING_NAME, |_, a| (a[0] + 1).into_ret());
+        e.register(VIEWER_STRING_SHORT, |_, a| (a[0] + a[1]).into_ret());
+        e.register(VIEWER_STRING_INT, |_, a| (a[0] + a[1]).into_ret());
+        e.register(STRING_ARRAY_SET_SIZE, |e, a| {
+            let base = e.mem.alloc(4 * a[1]);
+            let old = e.mem.u32(a[0] + 4);
+            for i in 0..u32::from(e.mem.u16(a[0] + 0xa)) {
+                let value = e.mem.u32(old + 4 * i);
+                e.mem.set_u32(base + 4 * i, value);
+            }
+            e.mem.set_u32(a[0] + 4, base);
+            e.mem.set_u16(a[0] + 8, a[1] as u16);
+            Ret::default()
+        });
+        e.register(STRING_ARRAY_SET_AT, |e, a| {
+            let base = e.mem.u32(a[0] + 4);
+            let value = e.mem.u32(a[2]);
+            e.mem.set_u32(base + 4 * a[1], value);
+            e.mem.set_u16(a[0] + 0xa, a[1] as u16 + 1);
+            Ret::default()
+        });
+        let this = e.mem.alloc(0x200);
+        let lights: Vec<u32> = (0..3).map(|_| e.mem.alloc(0x120)).collect();
+        e.mem.set_u8(lights[0] + LIGHT_CAST_SHADOW, 1);
+        e.mem.set_u8(lights[2] + LIGHT_CAST_SHADOW, 1);
+        fill_list(&mut e, this + LIGHT_LIST, &lights);
+        let strings = e.mem.alloc(0x10);
+        e.mem.set_u16(strings + 0xe, 4);
+        e.call_log = Some(vec![]);
+        e.call(0x00b5_c7d0, &args![this, strings]);
+        assert_eq!(
+            calls_to(&e, NI_NODE_GET_VIEWER_STRINGS),
+            vec![vec![this, strings]]
+        );
+        let base = e.mem.u32(strings + 4);
+        let shown: Vec<u32> = (0..u32::from(e.mem.u16(strings + 0xa)))
+            .map(|i| e.mem.u32(base + 4 * i))
+            .collect();
+        assert_eq!(
+            shown,
+            vec![
+                0x0109_0001,
+                TEXT_LIGHT_COUNT + 3,
+                TEXT_SHADOW_LIGHT_COUNT + 2
+            ]
+        );
+        // The inlined `SetAt` counts the last string.
+        assert_eq!(e.mem.u16(strings + 0xc), 1);
+        assert_eq!(e.call(0x00b5_e590, &args![]).u32(), SHADOW_SCENE_NODE_RTTI);
+    }
+
+    #[test]
+    fn queue_update_by_ni_light_finds_the_light() {
+        const ADDED: u32 = 0x03b6_0000;
+        let mut e = Engine::new();
+        e.mem.map(ADDED, 4);
+        e.register(IMPORT_INTERLOCKED_INCREMENT, |e, a| {
+            let count = e.mem.u32(a[0]) + 1;
+            e.mem.set_u32(a[0], count);
+            count.into_ret()
+        });
+        e.register(IMPORT_INTERLOCKED_DECREMENT, |e, a| {
+            let count = e.mem.u32(a[0]) - 1;
+            e.mem.set_u32(a[0], count);
+            count.into_ret()
+        });
+        e.register(LIST_ADD_TAIL_00A5A310, |e, a| {
+            let light = e.mem.u32(a[1]);
+            e.mem.set_u32(ADDED, light);
+            Ret::default()
+        });
+        let this = e.mem.alloc(0x200);
+        let light = e.mem.alloc(0x120);
+        e.mem.set_u32(light + 4, 1);
+        e.mem.set_u32(light + LIGHT_SP_LIGHT, 0x10);
+        fill_list(&mut e, this + LIGHT_LIST, &[0, light]);
+        e.call_log = Some(vec![]);
+        e.call(0x00b5_f080, &args![this, 0x30u32]);
+        assert!(calls_to(&e, LIST_ADD_TAIL_00A5A310).is_empty());
+        e.call(0x00b5_f080, &args![this, 0x10u32]);
+        let adds = calls_to(&e, LIST_ADD_TAIL_00A5A310);
+        assert_eq!(adds.len(), 1);
+        assert_eq!(adds[0][0], this + LIGHT_QUEUE_UPDATE);
+        assert_eq!(e.mem.u32(ADDED), light);
+        assert_eq!(e.mem.u32(light + 4), 1);
+    }
+
+    #[test]
+    fn find_and_cull_light_walks_child_nodes_and_lights() {
+        const GET_RTTI: u32 = 0x03b4_0000;
+        const IS_NODE: u32 = 0x03b5_0000;
+        let mut e = Engine::new();
+        // The object's word +0x10 is its RTTI record; +0x14 says node.
+        e.register(GET_RTTI, |e, a| e.mem.u32(a[0] + 0x10).into_ret());
+        e.register(IS_NODE, |e, a| e.mem.u32(a[0] + 0x14).into_ret());
+        let vtable = e.mem.alloc(0x20);
+        e.mem.set_u32(vtable + 8, GET_RTTI);
+        e.mem.set_u32(vtable + 0xc, IS_NODE);
+        // An RTTI chain whose base is the light record.
+        let derived = e.mem.alloc(8);
+        e.mem.set_u32(derived + 4, LIGHT_RTTI_011F4A28);
+        let object = |e: &mut Engine, rtti: u32, node: u32| {
+            let object = e.mem.alloc(0xb0);
+            e.mem.set_u32(object, vtable);
+            e.mem.set_u32(object + 0x10, rtti);
+            e.mem.set_u32(object + 0x14, node);
+            object
+        };
+        let light = object(&mut e, derived, 0);
+        let other = object(&mut e, 0, 0);
+        let inner = object(&mut e, 0, 1);
+        let inner_light = object(&mut e, LIGHT_RTTI_011F4A28, 0);
+        let set_children = |e: &mut Engine, node: u32, children: &[u32]| {
+            let buffer = e.mem.alloc(4 * children.len() as u32);
+            for (i, child) in children.iter().enumerate() {
+                e.mem.set_u32(buffer + 4 * i as u32, *child);
+            }
+            e.mem.set_u32(node + NODE_CHILDREN_BASE, buffer);
+            e.mem
+                .set_u16(node + NODE_CHILDREN_SIZE, children.len() as u16);
+        };
+        set_children(&mut e, inner, &[inner_light]);
+        let root = object(&mut e, 0, 1);
+        set_children(&mut e, root, &[light, 0, other, inner]);
+        // Removal needs the remove queues allowed and finds no shadow light: no change.
+        let this = e.mem.alloc(0x200);
+        e.call_log = Some(vec![]);
+        e.call(0x00b5_f150, &args![this, root, 0x101u32]);
+        let rtti_calls: Vec<u32> = calls_to(&e, GET_RTTI).iter().map(|c| c[0]).collect();
+        assert_eq!(rtti_calls, vec![light, other, inner, inner_light]);
+        let node_calls: Vec<u32> = calls_to(&e, IS_NODE).iter().map(|c| c[0]).collect();
+        assert_eq!(node_calls, vec![other, inner]);
+        // Null node: nothing.
+        e.call_log = Some(vec![]);
+        e.call(0x00b5_f150, &args![this, 0u32, 1u32]);
+        assert!(calls_to(&e, GET_RTTI).is_empty());
     }
 }

@@ -46,9 +46,31 @@ pub fn fn_00e7eea0(e: &mut Engine, renderer: u32) {
     e.mem.set_u32(LIBRARY_0126F714, library);
 }
 
+// Translated from 00e7eed0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`thiscall` on a render-state block, no stack words; answers
+/// 0): every entry of the block's first list (from its last entry, +8, back through each
+/// entry's +8) is set on the object at `0126f714` (its slot 0x68 with the entry's state (+0)
+/// and value (+4), 0, 0), then every entry of the second list (from +0x10) the same way with
+/// 1 in place of the first 0. The object is read again for each entry.
+pub fn fn_00e7eed0(e: &mut Engine, this: Ptr) -> u32 {
+    let base = this.addr();
+    for (start, list) in [(8u32, 0u32), (0x10, 1)] {
+        let mut entry = e.mem.u32(base.wrapping_add(start));
+        while entry != 0 {
+            let value = e.mem.u32(entry.wrapping_add(4));
+            let library = e.mem.u32(LIBRARY_0126F714);
+            let state = e.mem.u32(entry);
+            e.vcall(library, 0x68, &args![state, value, list, 0u32]);
+            entry = e.mem.u32(entry.wrapping_add(8));
+        }
+    }
+    0
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x00e7_eed0, fn_00e7eed0(Ptr) -> u32),
         entry!(0x00e7_eea0, fn_00e7eea0(u32)),
         entry!(0x00e7_ee70, fn_00e7ee70(Ptr) -> Ptr),
         entry!(0x00e7_ee80, fn_00e7ee80(Ptr) -> Ptr),
@@ -92,5 +114,52 @@ mod b000w_tests {
         assert_eq!(e.mem.u32(LIBRARY_0126F714), 0x77);
         e.call(0x00e7_eea0, &args![0u32]);
         assert_eq!(e.mem.u32(LIBRARY_0126F714), 0);
+    }
+}
+
+#[cfg(test)]
+mod n010_tests {
+    use super::*;
+
+    #[test]
+    fn fn_00e7eed0_sets_both_lists_on_the_library() {
+        let mut e = Engine::new();
+        e.map(0x0126_f000, 0x1000);
+        let set = 0x0e50_0068;
+        e.register(set, |_, _| Ret::default());
+        let vtable = e.mem.alloc(0x70);
+        e.mem.set_u32(vtable + 0x68, set);
+        let library = e.mem.alloc(4);
+        e.mem.set_u32(library, vtable);
+        e.mem.set_u32(LIBRARY_0126F714, library);
+        let entry = |e: &mut Engine, state: u32, value: u32, before: u32| {
+            let at = e.mem.alloc(0x10);
+            e.mem.set_u32(at, state);
+            e.mem.set_u32(at + 4, value);
+            e.mem.set_u32(at + 8, before);
+            at
+        };
+        let first = entry(&mut e, 1, 10, 0);
+        let second = entry(&mut e, 2, 20, first);
+        let other = entry(&mut e, 3, 30, 0);
+        let block = e.mem.alloc(0x14);
+        e.mem.set_u32(block + 8, second);
+        e.mem.set_u32(block + 0x10, other);
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x00e7_eed0, &args![block]).u32(), 0);
+        let log = e.call_log.take().unwrap();
+        let sets: Vec<_> = log
+            .iter()
+            .filter(|c| c.0 == set)
+            .map(|c| c.1.clone())
+            .collect();
+        assert_eq!(
+            sets,
+            vec![
+                vec![library, 2, 20, 0, 0],
+                vec![library, 1, 10, 0, 0],
+                vec![library, 3, 30, 1, 0]
+            ]
+        );
     }
 }

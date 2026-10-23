@@ -2076,6 +2076,684 @@ pub fn fn_00b66050(e: &mut Engine, this: Ptr<BSShaderAccumulator>, reference: u3
     });
 }
 
+use crate::types::NiTListItem;
+
+/// The calls `CreateRenderPassTree` makes: the `NiNode` constructor (`00a5ecb0`, `thiscall`,
+/// one word), the fixed-string maker (`00a5b690`, `cdecl`, the text), `SetName` (`00a5b950`,
+/// `thiscall`, the address of the handle) and the update with a local update record
+/// (`00a59c60`, `thiscall`, its address); the name (`"RenderPasses"`, `010adfac`) and the shared empty handle word (`0109b220`).
+const NI_NODE_CONSTRUCTOR: u32 = 0x00a5_ecb0;
+const FIXED_STRING_MAKE: u32 = 0x00a5_b690;
+const SET_NAME: u32 = 0x00a5_b950;
+const UPDATE_00A59C60: u32 = 0x00a5_9c60;
+const PASS_TREE_NAME_010ADFAC: u32 = 0x010a_dfac;
+const FIXED_STRING_EMPTY_0109B220: u32 = 0x0109_b220;
+/// The map lookup `00b63170` (`GetAt`, `thiscall`: key, the address of the value) and store
+/// `00a5d320` (`SetAt`, `thiscall`: key, value) on the room map.
+const ROOM_MAP_GET_AT: u32 = 0x00b6_3170;
+const ROOM_MAP_SET_AT: u32 = 0x00a5_d320;
+/// The generic register function `00b64020` the filtering ones jump to (Ghidra made no
+/// function there; `cdecl`, the five register words).
+const REGISTER_00B64020: u32 = 0x00b6_4020;
+/// `50.0` (`double`, `0101e2c0`): the value `00b64440` compares the geometry's float with.
+const LIMIT_0101E2C0: u32 = 0x0101_e2c0;
+/// The pass state call `00b97fa0` (`cdecl`, two words) and the counter `00b64530` lowers
+/// (`011ff9f0`).
+const PASS_STATE_00B97FA0: u32 = 0x00b9_7fa0;
+const COUNTER_011FF9F0: u32 = 0x011f_f9f0;
+/// The `ImageSpaceTexture` set-up `00b63c60` makes: 0x10 bytes, through the array store
+/// `00ba3aa0` (`thiscall`: index, the address of the element).
+const ARRAY_SET_AT_00BA3AA0: u32 = 0x00ba_3aa0;
+/// The byte `00b651e0` copies (`011ad80e`) and the two words it points the shaders at
+/// (`011f91e0` the pass, `011f91e4` its enum).
+const FLAG_011AD80E: u32 = 0x011a_d80e;
+const CURRENT_PASS_011F91E0: u32 = 0x011f_91e0;
+const CURRENT_PASS_ENUM_011F91E4: u32 = 0x011f_91e4;
+/// The list node allocation (`0043a010`, `thiscall` on the list's count, no words).
+const LIST_NEW_NODE: u32 = 0x0043_a010;
+
+// Translated from 00b63420 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 00b63420 - the FS:[0] exception frame (unwinding on a throw) is not translated
+/// `BSShaderAccumulator::CreateRenderPassTree` (engine map; the body matches), no
+/// arguments: a new 0xac-byte `NiNode` (`00aa13e0`, `00a5ecb0` with 0; null when the
+/// allocation fails, and the exe goes on with null) named with the fixed string made from
+/// `010adfac` (the handle released afterwards unless it is the shared word at `0109b220`:
+/// `InterlockedDecrement` on the handle minus 8), then updated (`00a59c60`) with a local
+/// record of a `float` 0.0 and five zero bytes. Answers the node.
+///
+/// The record is 12 bytes on the exe's stack and its last three bytes are never written
+/// there; the translation's are zero.
+pub fn bs_shader_accumulator_create_render_pass_tree(e: &mut Engine) -> u32 {
+    let block = e.call(OPERATOR_NEW, &args![0xacu32]).u32();
+    let node = if block != 0 {
+        e.call(NI_NODE_CONSTRUCTOR, &args![block, 0u32]).u32()
+    } else {
+        0
+    };
+    e.with_stack(4, |e, handle| {
+        let name = e
+            .call(FIXED_STRING_MAKE, &args![PASS_TREE_NAME_010ADFAC])
+            .u32();
+        e.mem.set_u32(handle.addr(), name);
+        e.call(SET_NAME, &args![node, handle]);
+        let name = e.mem.u32(handle.addr());
+        if name != e.mem.u32(FIXED_STRING_EMPTY_0109B220) {
+            e.call(IMPORT_INTERLOCKED_DECREMENT, &args![name.wrapping_sub(8)]);
+        }
+    });
+    e.with_stack(0xc, |e, record| {
+        e.mem.set_u32(record.addr(), x87_store32(0.0));
+        for k in 4..9 {
+            e.mem.set_u8(record.addr() + k, 0);
+        }
+        e.call(UPDATE_00A59C60, &args![node, record]);
+    });
+    node
+}
+
+// Translated from 00b63620 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map, `thiscall` without words: for each of the three occlusion
+/// query records at `+0x48` (0x14 bytes apart) that holds a query, reads its result
+/// (`00c4edf0` with the address of a zeroed local word and 1), destroys (`00c4ed40`) and
+/// frees the query and clears the record's word and its byte `+4`; then clears
+/// `bWaitingForSunQueury`.
+pub fn fn_00b63620(e: &mut Engine, this: Ptr<BSShaderAccumulator>) {
+    let mut record = this.addr().wrapping_add(0x48);
+    for _ in 0..3 {
+        let query = e.mem.u32(record);
+        if query != 0 {
+            e.with_stack(4, |e, result| {
+                e.call(QUERY_RESULT_00C4EDF0, &args![query, result, 1u32]);
+            });
+            let query = e.mem.u32(record);
+            if query != 0 {
+                e.call(QUERY_DESTRUCTOR, &args![query]);
+                e.call(MEMORY_DEALLOCATE, &args![MEMORY_MANAGER, query]);
+            }
+            e.mem.set_u32(record, 0);
+            e.mem.set_u8(record.wrapping_add(4), 0);
+        }
+        record = record.wrapping_add(0x14);
+    }
+    e.set(this, BSShaderAccumulator::bWaitingForSunQueury, 0);
+}
+
+// Translated from 00b63b10 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map, `thiscall` with one word (a key): inside the critical section
+/// at `+0x200`, looks the key up in the room map (`+0x1b4`, `00b63170`, its value written
+/// into the argument's own stack word) and, when it is not there, stores it with the value 1
+/// (`00a5d320`). Answers whether the key was new.
+pub fn fn_00b63b10(e: &mut Engine, this: Ptr<BSShaderAccumulator>, key: u32) -> bool {
+    let base = this.addr();
+    e.call(IMPORT_ENTER_CRITICAL_SECTION, &args![base + 0x200]);
+    let map = base.wrapping_add(0x1b4);
+    let found = e.with_stack(4, |e, slot| {
+        e.mem.set_u32(slot.addr(), key);
+        e.call(ROOM_MAP_GET_AT, &args![map, key, slot]).u8()
+    });
+    if found == 0 {
+        e.call(ROOM_MAP_SET_AT, &args![map, key, 1u32]);
+    }
+    e.call(IMPORT_LEAVE_CRITICAL_SECTION, &args![base + 0x200]);
+    found == 0
+}
+
+// Translated from 00b63bd0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed (Ghidra made no function here): slot 3 of the room map's base vtable `010adfbc`
+/// (`thiscall`, `this` not read, three words): stores the second word at `+4` of the first
+/// (a map item) and the third's low byte at `+8`.
+pub fn fn_00b63bd0(e: &mut Engine, _this: u32, target: u32, value: u32, flag: u8) {
+    e.mem.set_u32(target.wrapping_add(4), value);
+    e.mem.set_u8(target.wrapping_add(8), flag);
+}
+
+// Translated from 00b63bf0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map, `thiscall` with one word (the address of a 16-bit value): the
+/// list of 16-bit values at `this` (each 8-byte node: the value, then the next node). A zero
+/// value adds nothing. Otherwise the last node is found; when its value is zero it takes the
+/// new one, else a new node (8 bytes from the memory manager, the value and no next) is
+/// linked after it (a failed allocation links null).
+pub fn fn_00b63bf0(e: &mut Engine, this: u32, value: u32) {
+    let v = e.mem.u16(value);
+    if v == 0 {
+        return;
+    }
+    let mut last = this;
+    while e.mem.u32(last.wrapping_add(4)) != 0 {
+        last = e.mem.u32(last.wrapping_add(4));
+    }
+    if e.mem.u16(last) == 0 {
+        e.mem.set_u16(last, v);
+        return;
+    }
+    let node = e.call(MEMORY_ALLOCATE, &args![MEMORY_MANAGER, 8u32]).u32();
+    if node != 0 {
+        let v = e.mem.u16(value);
+        e.mem.set_u16(node, v);
+        e.mem.set_u32(node.wrapping_add(4), 0);
+    }
+    e.mem.set_u32(last.wrapping_add(4), node);
+}
+
+// Translated from 00b63c60 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map, `thiscall` without words (the counterpart of
+/// [`image_space_shader_volumetric_fog_return_volumetric_fog_texture`]): when element 2 of
+/// the array at `+0x94` (buffer at `+0x98`) is empty, a new zeroed 0x10-byte image-space
+/// texture is stored there (`00ba3aa0`; null when the allocation fails); when it has no
+/// rendered texture (`00ba3770`), it gets one borrowed from the texture manager at
+/// `011f91a8` (`00b6e110` with the renderer at `011f4748`, 0x20, 0, 0, 0; set through
+/// `00ba37a0`). Answers the element's rendered texture (`00ba3770`, a tail jump).
+pub fn fn_00b63c60(e: &mut Engine, this: Ptr) -> u32 {
+    let base = this.addr();
+    let holder = e.mem.u32(base.wrapping_add(0x98));
+    if e.mem.u32(holder.wrapping_add(8)) == 0 {
+        let texture = e
+            .call(MEMORY_ALLOCATE, &args![MEMORY_MANAGER, 0x10u32])
+            .u32();
+        if texture != 0 {
+            e.mem.set_u8(texture, 0);
+            e.mem.set_u8(texture + 1, 0);
+            e.mem.set_u8(texture + 2, 0);
+            e.mem.set_u32(texture + 4, 0);
+            e.mem.set_u32(texture + 8, 0);
+            e.mem.set_u32(texture + 0xc, 0);
+        }
+        e.with_stack(4, |e, element| {
+            e.mem.set_u32(element.addr(), texture);
+            e.call(
+                ARRAY_SET_AT_00BA3AA0,
+                &args![base.wrapping_add(0x94), 2u32, element],
+            );
+        });
+    }
+    let holder = e.mem.u32(base.wrapping_add(0x98));
+    let texture = e.mem.u32(holder.wrapping_add(8));
+    if e.call(IMAGE_SPACE_TEXTURE_GET_RENDERED, &args![texture])
+        .u32()
+        == 0
+    {
+        let renderer = e.mem.u32(RENDER_HOLDER);
+        let manager = e.mem.u32(TEXTURE_MANAGER);
+        let holder = e.mem.u32(base.wrapping_add(0x98));
+        let borrowed = e
+            .call(
+                TEXTURE_MANAGER_BORROW,
+                &args![manager, renderer, 0x20u32, 0u32, 0u32, 0u32],
+            )
+            .u32();
+        let texture = e.mem.u32(holder.wrapping_add(8));
+        e.call(IMAGE_SPACE_TEXTURE_SET, &args![texture, borrowed]);
+    }
+    let holder = e.mem.u32(base.wrapping_add(0x98));
+    let texture = e.mem.u32(holder.wrapping_add(8));
+    e.call(IMAGE_SPACE_TEXTURE_GET_RENDERED, &args![texture])
+        .u32()
+}
+
+// Translated from 00b63d60 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map, `thiscall` without words: the room map's base destructor
+/// (`NiTMapBase`): puts the base vtable `010adfbc` back, empties the map (`00b601a0`) and
+/// frees its buckets (`+8`, `00aa10f0`).
+pub fn fn_00b63d60(e: &mut Engine, this: Ptr<NiTPointerMap>) {
+    let base = this.addr();
+    e.mem.set_u32(base, MAP_BASE_VTABLE);
+    e.call(ROOM_MAP_REMOVE_ALL, &args![base]);
+    let buckets = e.mem.u32(base.wrapping_add(8));
+    e.call(FREE_BUCKETS, &args![buckets]);
+}
+
+// Translated from 00b63d80 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 00b63d80 - the FS:[0] exception frame (unwinding on a throw) is not translated
+/// Unnamed in the engine map, `thiscall` without words: the room map's destructor
+/// (`NiTPointerMap`): the map vtable `010adfd8`, emptied (`00b601a0`), then the base part as
+/// [`fn_00b63d60`] does it (base vtable, emptied again, buckets freed).
+pub fn fn_00b63d80(e: &mut Engine, this: Ptr<NiTPointerMap>) {
+    let base = this.addr();
+    e.mem.set_u32(base, MAP_VTABLE);
+    e.call(ROOM_MAP_REMOVE_ALL, &args![base]);
+    e.mem.set_u32(base, MAP_BASE_VTABLE);
+    e.call(ROOM_MAP_REMOVE_ALL, &args![base]);
+    let buckets = e.mem.u32(base.wrapping_add(8));
+    e.call(FREE_BUCKETS, &args![buckets]);
+}
+
+// Translated from 00b63df0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map; slot 6 of the room map's vtable `010adfd8` (`thiscall` with one
+/// word, a map item; `this` is not read):
+/// clears the node's byte `+8`, enters the node pool's lock, clears its `+4`, pushes it on
+/// the pool's free list (`011c5f58`) and leaves the lock (the count at `011c5f84` drops by
+/// one; at zero the owner word `011c5f80` is cleared).
+pub fn fn_00b63df0(e: &mut Engine, _this: u32, node: u32) {
+    e.mem.set_u8(node.wrapping_add(8), 0);
+    e.call(LOCK_ENTER, &args![NODE_POOL_LOCK, 0u32]);
+    e.mem.set_u32(node.wrapping_add(4), 0);
+    let free = e.mem.u32(NODE_POOL_FREE_LIST);
+    e.mem.set_u32(node, free);
+    let count = e.mem.u32(NODE_POOL_LOCK_COUNT).wrapping_sub(1);
+    e.mem.set_u32(NODE_POOL_LOCK_COUNT, count);
+    e.mem.set_u32(NODE_POOL_FREE_LIST, node);
+    if count == 0 {
+        e.mem.set_u32(NODE_POOL_LOCK, 0);
+    }
+}
+
+// Translated from 00b63e30 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map: the deleting destructor of the room map's base: the body of
+/// [`fn_00b63d60`], then the map freed through the memory manager when bit 0 of the flags is
+/// set. Answers `this`.
+pub fn fn_00b63e30(e: &mut Engine, this: Ptr<NiTPointerMap>, flags: u32) -> Ptr<NiTPointerMap> {
+    fn_00b63d60(e, this);
+    if flags & 1 != 0 {
+        e.call(MEMORY_DEALLOCATE, &args![MEMORY_MANAGER, this]);
+    }
+    this
+}
+
+// Translated from 00b63e70 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map: the deleting destructor of the room map: [`fn_00b63d80`], then
+/// the map freed through the memory manager when bit 0 of the flags is set. Answers `this`.
+pub fn fn_00b63e70(e: &mut Engine, this: Ptr<NiTPointerMap>, flags: u32) -> Ptr<NiTPointerMap> {
+    fn_00b63d80(e, this);
+    if flags & 1 != 0 {
+        e.call(MEMORY_DEALLOCATE, &args![MEMORY_MANAGER, this]);
+    }
+    this
+}
+
+/// Hands each pass of a render-pass array to the running thread's batch renderer
+/// (`pBatchRenderer[word +0x2bc of the thread block]`, slot +0x8c with the pass and its
+/// enum), skipping passes with enum 0 when `skip_zero` is set.
+fn register_passes(e: &mut Engine, accumulator: u32, list: u32, skip_zero: bool) {
+    let mut index = 0u32;
+    while index < e.mem.u32(list.wrapping_add(0x10)) {
+        let base = e.mem.u32(list.wrapping_add(4));
+        let pass = e.mem.u32(base.wrapping_add(index.wrapping_mul(4)));
+        let pass_enum = u32::from(e.mem.u16(pass.wrapping_add(4)));
+        if pass_enum != 0 || !skip_zero {
+            let tls = e.tls();
+            let thread = e.mem.u32(tls + TLS_WORD_2BC);
+            let renderer = batch_renderer(e, accumulator, thread);
+            e.vcall(renderer, 0x8c, &args![pass, pass_enum]);
+        }
+        index = index.wrapping_add(1);
+    }
+}
+
+// Translated from 00b63f90 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map; the register function of render mode 13 (`011f9fb4`):
+/// `cdecl` with the five register words (accumulator, geometry, property state, property,
+/// shader; the third and fifth are not read). Asks the property for its render passes
+/// (slot +0xa0 with the geometry, the shader flags at `011f91d8`, the address of a zeroed
+/// local word, `eRenderMode`, the accumulator and 1) and hands each pass with a non-zero
+/// enum to the thread's batch renderer. Answers true.
+pub fn fn_00b63f90(
+    e: &mut Engine,
+    accumulator: Ptr<BSShaderAccumulator>,
+    geometry: u32,
+    _unused_3: u32,
+    property: u32,
+    _unused_5: u32,
+) -> bool {
+    let mode = e.get(accumulator, BSShaderAccumulator::eRenderMode);
+    let flags = e.mem.u32(SHADER_FLAGS_011F91D8);
+    let list = e.with_stack(4, |e, local| {
+        e.vcall(
+            property,
+            0xa0,
+            &args![geometry, flags, local, mode, accumulator, 1u32],
+        )
+        .u32()
+    });
+    if list != 0 && e.mem.u32(list.wrapping_add(0x10)) != 0 {
+        register_passes(e, accumulator.addr(), list, true);
+    }
+    true
+}
+
+/// The shader flags word the render-pass queries take (`011f91d8`).
+const SHADER_FLAGS_011F91D8: u32 = 0x011f_91d8;
+
+// Translated from 00b64440 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed (Ghidra made no function here); the register function of render mode 9
+/// (`011f9fa4`), `cdecl` with the five register words. Answers true without registering
+/// when the `float` at `+0x1c` of the geometry's object at `+0xb8` is below 50.0, when the
+/// shader's word `+0x68` is 0x16, or when bit 18 (`0x40000`) of the property's second flag
+/// word is clear; otherwise jumps to the generic register function `00b64020` with the same
+/// words.
+pub fn fn_00b64440(
+    e: &mut Engine,
+    accumulator: u32,
+    geometry: u32,
+    state: u32,
+    property: u32,
+    shader: u32,
+) -> bool {
+    let object = e.mem.u32(geometry.wrapping_add(0xb8));
+    let value = x87_m32(e.mem.u32(object.wrapping_add(0x1c)));
+    let limit: f64 = e.global(LIMIT_0101E2C0);
+    if value < limit {
+        return true;
+    }
+    if e.mem.u32(shader.wrapping_add(0x68)) == 0x16 {
+        return true;
+    }
+    if e.mem.u32(property.wrapping_add(0x24)) & 0x40000 == 0 {
+        return true;
+    }
+    e.call(
+        REGISTER_00B64020,
+        &args![accumulator, geometry, state, property, shader],
+    )
+    .bool()
+}
+
+// Translated from 00b64490 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed (Ghidra made no function here); the register function of render mode 8
+/// (`011f9fa0`), `cdecl` with the five register words: answers true when the shader's word
+/// `+0x68` is 0x16, else jumps to `00b64020` with the same words.
+pub fn fn_00b64490(
+    e: &mut Engine,
+    accumulator: u32,
+    geometry: u32,
+    state: u32,
+    property: u32,
+    shader: u32,
+) -> bool {
+    if e.mem.u32(shader.wrapping_add(0x68)) == 0x16 {
+        return true;
+    }
+    e.call(
+        REGISTER_00B64020,
+        &args![accumulator, geometry, state, property, shader],
+    )
+    .bool()
+}
+
+// Translated from 00b644b0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed (Ghidra made no function here); the register function of render mode 14
+/// (`011f9fb8`), `cdecl` with the five register words (the third and fifth not read). With
+/// the accumulator's byte `+0x165` set, asks the property for a pass list (slot +0xb8 with
+/// the geometry) and hands each pass to the thread's batch renderer (slot +0x8c with the
+/// pass and its enum). Answers true.
+pub fn fn_00b644b0(
+    e: &mut Engine,
+    accumulator: u32,
+    geometry: u32,
+    _unused_3: u32,
+    property: u32,
+    _unused_5: u32,
+) -> bool {
+    if e.mem.u8(accumulator.wrapping_add(0x165)) == 0 {
+        return true;
+    }
+    let list = e.vcall(property, 0xb8, &args![geometry]).u32();
+    if list != 0 && e.mem.u32(list.wrapping_add(0x10)) != 0 {
+        register_passes(e, accumulator, list, false);
+    }
+    true
+}
+
+// Translated from 00b64530 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map; the function at `011f9f78`: `cdecl`, one word (an accumulator).
+/// When its `+8` is set: `00b97fa0(0, 1)`, the pass types 0x2d8 to 0x2ef rendered
+/// ([`fn_00b63770`] with 0 and -1), the word at `011ff9f0` lowered by one and
+/// `00b97fa0(0, 0)`.
+pub fn fn_00b64530(e: &mut Engine, accumulator: Ptr<BSShaderAccumulator>) {
+    if e.mem.u32(accumulator.addr().wrapping_add(8)) == 0 {
+        return;
+    }
+    e.call(PASS_STATE_00B97FA0, &args![0u32, 1u32]);
+    fn_00b63770(e, accumulator, 0x2d8, 0x2ef, 0, -1);
+    let v = e.mem.u32(COUNTER_011FF9F0).wrapping_sub(1);
+    e.mem.set_u32(COUNTER_011FF9F0, v);
+    e.call(PASS_STATE_00B97FA0, &args![0u32, 0u32]);
+}
+
+/// The object `00b651e0` takes the fog texture from: `+0xa8` of the object at `+8` of the
+/// image-space manager, less 0x6c (null stays null).
+fn fog_owner(e: &Engine) -> u32 {
+    let manager = e.mem.u32(IMAGE_SPACE_MANAGER);
+    let inner = e.mem.u32(manager.wrapping_add(8));
+    let field = e.mem.u32(inner.wrapping_add(0xa8));
+    if field != 0 {
+        field.wrapping_sub(0x6c)
+    } else {
+        0
+    }
+}
+
+// Translated from 00b651e0 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 00b651e0 - the FS:[0] exception frame (unwinding on a throw) is not translated
+/// Unnamed in the engine map, `thiscall` with two words (a camera and a render target):
+/// renders the volumetric fog geometry. Nothing happens unless the word at `+0x98` is
+/// non-zero (the answer is whether it is). Then: the renderer at `011f4748` cleared
+/// (`00b6b790`) when its `+0x200` is set; the fog texture fetched ([`fn_00b63c60`] on the
+/// object [`fog_owner`] finds); a local render pass made (`00ba8ec0` with 0, 0, 1, 0, 0);
+/// the camera put in `+8` (the old one kept); the background colour saved (renderer slot
+/// +0xb4) and set to (0, 0, 0, 1) (slot +0xac); `+0x18` pointed at the fog list `+0x90` and
+/// the accumulator's slot +0xa4 called; the pass enum 0x25b. For each geometry of the list
+/// whose shader property (`+0xa8`) is of type 0x16: the fog texture's target set (`00b6b8d0`
+/// with 3), the camera's columns copied and the renderer's camera set-up made; the shaders
+/// pointed at the pass (`011f91e0`, `011f91e4`); the geometry rendered (slot +0xdc with the
+/// renderer) once with the current enum when the byte at `011ad80e` was set, else twice,
+/// with enum 0x25a and then 0x259; the renderer cleared, the target's target set (with 0),
+/// the property's four words `+0x60` to `+0x6c` copied to `+0x58` of the image-space
+/// manager's effect (`+0x34` of its `+8`, byte `+5` set) and effect 0xd rendered (`00b97550`
+/// with the renderer, the target twice, 0 and 1). Afterwards the list is emptied
+/// (`00b71300`), the background restored, the camera put back, the fog texture returned
+/// ([`image_space_shader_volumetric_fog_return_volumetric_fog_texture`]) and the pass
+/// destroyed (`00ba8cd0`).
+pub fn fn_00b651e0(
+    e: &mut Engine,
+    this: Ptr<BSShaderAccumulator>,
+    camera: u32,
+    target: u32,
+) -> u32 {
+    let base = this.addr();
+    let count = e.mem.u32(base.wrapping_add(0x98));
+    if count == 0 {
+        return 0;
+    }
+    if e.mem.u32(e.mem.u32(RENDER_HOLDER).wrapping_add(0x200)) != 0 {
+        e.call(RENDERER_CLEAR, &args![]);
+    }
+    let renderer = e.mem.u32(RENDER_HOLDER);
+    e.with_stack(0x70, |e, frame| {
+        let f = frame.addr();
+        let pass = f + 0x50;
+        let saved = f + 0x60;
+        let black = f + 0x40;
+        let zero = x87_store32(0.0);
+        for k in 0..4 {
+            e.mem.set_u32(saved + k * 4, zero);
+        }
+        let owner = fog_owner(e);
+        let fog = fn_00b63c60(e, Ptr::new(owner));
+        e.call(
+            RENDER_PASS_CONSTRUCTOR,
+            &args![pass, 0u32, 0u32, 1u32, 0u32, 0u32],
+        );
+        let old_camera = e.mem.u32(base.wrapping_add(8));
+        let skip_second = e.mem.u8(FLAG_011AD80E);
+        e.mem.set_u32(base.wrapping_add(8), camera);
+        e.vcall(renderer, 0xb4, &args![saved]);
+        e.mem.set_u32(black, zero);
+        e.mem.set_u32(black + 4, zero);
+        e.mem.set_u32(black + 8, zero);
+        e.mem.set_u32(black + 0xc, x87_store32(1.0));
+        e.vcall(renderer, 0xac, &args![black]);
+        e.mem
+            .set_u32(base.wrapping_add(0x18), base.wrapping_add(0x90));
+        e.vcall(base, 0xa4, &args![]);
+        e.mem.set_u16(pass + 4, 0x25b);
+        let mut node = e.mem.u32(base.wrapping_add(0x90));
+        while node != 0 {
+            let next = e.mem.u32(node);
+            let geometry = e.mem.u32(node.wrapping_add(8));
+            node = next;
+            let property = e.mem.u32(geometry.wrapping_add(0xa8));
+            if property == 0 || e.mem.u32(property.wrapping_add(0x1c)) != 0x16 {
+                continue;
+            }
+            let fog_target = e.call(RENDER_TARGET_OF, &args![fog]).u32();
+            e.call(SET_RENDER_TARGET, &args![3u32, fog_target]);
+            let cam = e.mem.u32(base.wrapping_add(8));
+            camera_columns(e, cam, f + 0x40, f + 0x34, f + 0x28);
+            holder_camera_setup(e, renderer, cam, [f + 0x40, f + 0x34, f + 0x28], cam + 0xdc);
+            e.mem.set_u32(CURRENT_PASS_011F91E0, pass);
+            if skip_second != 0 {
+                let pass_enum = u32::from(e.mem.u16(pass + 4));
+                e.mem.set_u32(CURRENT_PASS_ENUM_011F91E4, pass_enum);
+            } else {
+                e.mem.set_u16(pass + 4, 0x25a);
+                e.mem.set_u32(CURRENT_PASS_ENUM_011F91E4, 0x25a);
+                let holder = e.mem.u32(RENDER_HOLDER);
+                e.vcall(geometry, 0xdc, &args![holder]);
+                e.mem.set_u32(CURRENT_PASS_011F91E0, pass);
+                e.mem.set_u16(pass + 4, 0x259);
+                e.mem.set_u32(CURRENT_PASS_ENUM_011F91E4, 0x259);
+            }
+            let holder = e.mem.u32(RENDER_HOLDER);
+            e.vcall(geometry, 0xdc, &args![holder]);
+            e.call(RENDERER_CLEAR, &args![]);
+            let rendered = e.call(RENDER_TARGET_OF, &args![target]).u32();
+            e.call(SET_RENDER_TARGET, &args![0u32, rendered]);
+            let manager = e.mem.u32(IMAGE_SPACE_MANAGER);
+            let effect = e
+                .mem
+                .u32(e.mem.u32(manager.wrapping_add(8)).wrapping_add(0x34));
+            let w0 = e.mem.u32(property.wrapping_add(0x60));
+            let w1 = e.mem.u32(property.wrapping_add(0x64));
+            let w2 = e.mem.u32(property.wrapping_add(0x68));
+            let w3 = e.mem.u32(property.wrapping_add(0x6c));
+            e.mem.set_u32(effect.wrapping_add(0x58), w0);
+            e.mem.set_u32(effect.wrapping_add(0x5c), w1);
+            e.mem.set_u32(effect.wrapping_add(0x60), w2);
+            e.mem.set_u8(effect.wrapping_add(5), 1);
+            e.mem.set_u32(effect.wrapping_add(0x64), w3);
+            let manager = e.mem.u32(IMAGE_SPACE_MANAGER);
+            e.call(
+                IMAGE_SPACE_RENDER_EFFECT,
+                &args![manager, 0xdu32, renderer, target, target, 0u32, 1u32],
+            );
+        }
+        e.call(POINTER_LIST_REMOVE_ALL, &args![base.wrapping_add(0x90)]);
+        e.vcall(renderer, 0xac, &args![saved]);
+        e.mem.set_u32(base.wrapping_add(8), old_camera);
+        let owner = fog_owner(e);
+        image_space_shader_volumetric_fog_return_volumetric_fog_texture(e, Ptr::new(owner));
+        e.call(RENDER_PASS_DESTRUCTOR, &args![pass]);
+    });
+    u32::from(count != 0)
+}
+
+// Translated from 00b65ec0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map, `thiscall` without words: adds the pass types 0x2f0 and 0x2f1
+/// to each batch renderer's 16-bit list at `+0x2c` ([`fn_00b63bf0`] with the addresses of two
+/// local words), renders them ([`fn_00b63770`] with 0 and -1) and clears each list
+/// (`00b64ec0`).
+pub fn fn_00b65ec0(e: &mut Engine, this: Ptr<BSShaderAccumulator>) {
+    let base = this.addr();
+    e.with_stack(8, |e, locals| {
+        let first = locals.addr();
+        let second = first + 4;
+        let mut i = 0u32;
+        if batch_count(e, base) != 0 {
+            e.mem.set_u32(first, 0x2f0);
+            e.mem.set_u32(second, 0x2f1);
+            while i < batch_count(e, base) {
+                let list = batch_renderer(e, base, i).wrapping_add(0x2c);
+                fn_00b63bf0(e, list, first);
+                let list = batch_renderer(e, base, i).wrapping_add(0x2c);
+                fn_00b63bf0(e, list, second);
+                i += 1;
+            }
+        }
+    });
+    fn_00b63770(e, this, 0x2f0, 0x2f1, 0, -1);
+    let mut i = 0u32;
+    while i < batch_count(e, base) {
+        let list = batch_renderer(e, base, i).wrapping_add(0x2c);
+        e.call(SHORT_LIST_CLEAR, &args![list]);
+        i += 1;
+    }
+}
+
+// Translated from 00b65f60 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map, `thiscall` with three words (a reference, the address of a
+/// point and a `float`, and a byte): the reference volume list (`ReferenceVolumeList`,
+/// `+0x140`). An entry whose `+0x10` is the reference gets the three words, the `float`
+/// (`FLD`/`FSTP`) and the byte at `+0x1a`. Otherwise a new 0x20-byte entry (null when the
+/// allocation fails) gets the point and `float`, the reference, zeros at `+0x14`, `+0x18`,
+/// `+0x19` and `+0x1c` and 1 at `+0x1a` (the byte argument is not used; the exe's stack
+/// word holding it takes the `float` on the way), and is put at the head of the list in a
+/// new node (`0043a010` on the count at `+0x148`).
+pub fn fn_00b65f60(
+    e: &mut Engine,
+    this: Ptr<BSShaderAccumulator>,
+    reference: u32,
+    point: u32,
+    flag: u8,
+) {
+    let list = Ptr::<NiTPointerList>::new(this.addr().wrapping_add(0x140));
+    let mut item = e.get(list, NiTPointerList::m_pkHead);
+    while item != 0 {
+        let node = Ptr::<NiTListItem>::new(item);
+        let entry = e.get(node, NiTListItem::m_element);
+        item = e.get(node, NiTListItem::m_pkNext);
+        if entry != 0 && e.mem.u32(entry.wrapping_add(0x10)) == reference {
+            for k in 0..3 {
+                let v = e.mem.u32(point + 4 * k);
+                e.mem.set_u32(entry + 4 * k, v);
+            }
+            let v = x87_quiet_bits(e.mem.u32(point.wrapping_add(0xc)));
+            e.mem.set_u32(entry.wrapping_add(0xc), v);
+            e.mem.set_u8(entry.wrapping_add(0x1a), flag);
+            return;
+        }
+    }
+    let entry = e
+        .call(MEMORY_ALLOCATE, &args![MEMORY_MANAGER, 0x20u32])
+        .u32();
+    if entry != 0 {
+        let v = e.mem.u32(point);
+        e.mem.set_u32(entry, v);
+        let scale = x87_quiet_bits(x87_quiet_bits(e.mem.u32(point.wrapping_add(0xc))));
+        let v = e.mem.u32(point.wrapping_add(4));
+        e.mem.set_u32(entry.wrapping_add(4), v);
+        let v = e.mem.u32(point.wrapping_add(8));
+        e.mem.set_u32(entry.wrapping_add(0xc), scale);
+        e.mem.set_u32(entry.wrapping_add(8), v);
+        e.mem.set_u32(entry.wrapping_add(0x10), reference);
+        e.mem.set_u32(entry.wrapping_add(0x14), 0);
+        e.mem.set_u8(entry.wrapping_add(0x18), 0);
+        e.mem.set_u8(entry.wrapping_add(0x19), 0);
+        e.mem.set_u8(entry.wrapping_add(0x1a), 1);
+        e.mem.set_u32(entry.wrapping_add(0x1c), 0);
+    }
+    let count = list.addr().wrapping_add(8);
+    let node = Ptr::<NiTListItem>::new(e.call(LIST_NEW_NODE, &args![count]).u32());
+    e.set(node, NiTListItem::m_element, entry);
+    e.set(node, NiTListItem::m_pkPrev, 0);
+    let head = e.get(list, NiTPointerList::m_pkHead);
+    e.set(node, NiTListItem::m_pkNext, head);
+    let head = e.get(list, NiTPointerList::m_pkHead);
+    if head != 0 {
+        e.set(
+            Ptr::<NiTListItem>::new(head),
+            NiTListItem::m_pkPrev,
+            node.addr(),
+        );
+        let n = e.get(list, NiTPointerList::m_uiCount);
+        e.set(list, NiTPointerList::m_uiCount, n.wrapping_add(1));
+    } else {
+        let n = e.get(list, NiTPointerList::m_uiCount);
+        e.set(list, NiTPointerList::m_uiCount, n.wrapping_add(1));
+        e.set(list, NiTPointerList::m_pkTail, node.addr());
+    }
+    e.set(list, NiTPointerList::m_pkHead, node.addr());
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -2160,6 +2838,46 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         ),
         entry!(0x00b6_56b0, fn_00b656b0(Ptr) -> u32),
         entry!(0x00b6_3e90, fn_00b63e90(Ptr) -> u32),
+        entry!(
+            0x00b6_3420,
+            bs_shader_accumulator_create_render_pass_tree() -> u32
+        ),
+        entry!(0x00b6_3620, fn_00b63620(Ptr<BSShaderAccumulator>)),
+        entry!(
+            0x00b6_3b10,
+            fn_00b63b10(Ptr<BSShaderAccumulator>, u32) -> bool
+        ),
+        entry!(0x00b6_3bd0, fn_00b63bd0(u32, u32, u32, u8)),
+        entry!(0x00b6_3bf0, fn_00b63bf0(u32, u32)),
+        entry!(0x00b6_3c60, fn_00b63c60(Ptr) -> u32),
+        entry!(0x00b6_3d60, fn_00b63d60(Ptr<NiTPointerMap>)),
+        entry!(0x00b6_3d80, fn_00b63d80(Ptr<NiTPointerMap>)),
+        entry!(0x00b6_3df0, fn_00b63df0(u32, u32)),
+        entry!(
+            0x00b6_3e30,
+            fn_00b63e30(Ptr<NiTPointerMap>, u32) -> Ptr<NiTPointerMap>
+        ),
+        entry!(
+            0x00b6_3e70,
+            fn_00b63e70(Ptr<NiTPointerMap>, u32) -> Ptr<NiTPointerMap>
+        ),
+        entry!(
+            0x00b6_3f90,
+            fn_00b63f90(Ptr<BSShaderAccumulator>, u32, u32, u32, u32) -> bool
+        ),
+        entry!(0x00b6_4440, fn_00b64440(u32, u32, u32, u32, u32) -> bool),
+        entry!(0x00b6_4490, fn_00b64490(u32, u32, u32, u32, u32) -> bool),
+        entry!(0x00b6_44b0, fn_00b644b0(u32, u32, u32, u32, u32) -> bool),
+        entry!(0x00b6_4530, fn_00b64530(Ptr<BSShaderAccumulator>)),
+        entry!(
+            0x00b6_51e0,
+            fn_00b651e0(Ptr<BSShaderAccumulator>, u32, u32) -> u32
+        ),
+        entry!(0x00b6_5ec0, fn_00b65ec0(Ptr<BSShaderAccumulator>)),
+        entry!(
+            0x00b6_5f60,
+            fn_00b65f60(Ptr<BSShaderAccumulator>, u32, u32, u8)
+        ),
     ]
 }
 
@@ -3450,5 +4168,502 @@ mod b061_tests {
         let removes = calls_to(&e, VOLUME_LIST_REMOVE);
         assert_eq!(removes.len(), 1);
         assert_eq!(removes[0][0], base + 0x140);
+    }
+}
+
+#[cfg(test)]
+mod n012_tests {
+    use super::*;
+
+    fn calls(e: &Engine, addr: u32) -> Vec<Vec<u32>> {
+        e.call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|(a, _)| *a == addr)
+            .map(|(_, w)| w.clone())
+            .collect()
+    }
+
+    fn rig() -> Engine {
+        let mut e = Engine::new();
+        e.map(0x011f_4000, 0x1000);
+        e.map(0x011f_9000, 0x1000);
+        e.map(0x011a_d000, 0x1000);
+        e.map(0x011c_5000, 0x1000);
+        e.map(0x011f_f000, 0x1000);
+        e.register(MEMORY_ALLOCATE, |e, a| e.mem.alloc(a[1].max(4)).into_ret());
+        e.register(MEMORY_DEALLOCATE, |_, _| Ret::default());
+        e.call_log = Some(vec![]);
+        e
+    }
+
+    /// An accumulator with one batch renderer (its own small vtable) and the pass arrays
+    /// `00b63770` uses; `BSBatchRenderer` calls doubled to report no lists.
+    fn accumulator(e: &mut Engine) -> (u32, u32) {
+        let this = e.mem.alloc(0x210);
+        let renderer = e.mem.alloc(0x98);
+        e.mem.set_u32(this + 0x174, renderer);
+        e.mem.set_u32(this + 0x18c, 1);
+        for offset in [0x17cu32, 0x180, 0x184, 0x188] {
+            let array = e.mem.alloc(8);
+            e.mem.set_u32(this + offset, array);
+        }
+        e.register(BATCH_NEXT_LIST, |_, _| Ret::default());
+        e.register(BATCH_END_PASS, |_, _| Ret::default());
+        e.register(SHORT_LIST_CLEAR, |_, _| Ret::default());
+        (this, renderer)
+    }
+
+    #[test]
+    fn create_render_pass_tree_names_and_updates_a_node() {
+        let mut e = rig();
+        e.map(0x0109_b000, 0x1000);
+        e.mem.set_u32(FIXED_STRING_EMPTY_0109B220, 0x5555);
+        e.register(OPERATOR_NEW, |e, a| e.mem.alloc(a[0]).into_ret());
+        e.register(NI_NODE_CONSTRUCTOR, |_, a| a[0].into_ret());
+        e.register(FIXED_STRING_MAKE, |_, _| 0x7008u32.into_ret());
+        e.register(SET_NAME, |_, _| Ret::default());
+        e.register(IMPORT_INTERLOCKED_DECREMENT, |_, _| 1u32.into_ret());
+        e.register(UPDATE_00A59C60, |e, a| {
+            assert_eq!(e.mem.f32(a[1]), 0.0);
+            assert_eq!(e.mem.bytes(a[1] + 4, 5), vec![0; 5]);
+            Ret::default()
+        });
+        let node = e.call(0x00b6_3420, &args![]).u32();
+        assert_eq!(calls(&e, OPERATOR_NEW), vec![vec![0xac]]);
+        assert_eq!(calls(&e, NI_NODE_CONSTRUCTOR), vec![vec![node, 0]]);
+        assert_eq!(
+            calls(&e, FIXED_STRING_MAKE),
+            vec![vec![PASS_TREE_NAME_010ADFAC]]
+        );
+        assert_eq!(calls(&e, SET_NAME)[0][0], node);
+        assert_eq!(calls(&e, IMPORT_INTERLOCKED_DECREMENT), vec![vec![0x7000]]);
+        assert_eq!(calls(&e, UPDATE_00A59C60)[0][0], node);
+        // The shared handle is not released.
+        e.register(FIXED_STRING_MAKE, |_, _| 0x5555u32.into_ret());
+        e.call(0x00b6_3420, &args![]);
+        assert_eq!(calls(&e, IMPORT_INTERLOCKED_DECREMENT).len(), 1);
+    }
+
+    #[test]
+    fn fn_00b63620_drops_each_query() {
+        let mut e = rig();
+        e.register(QUERY_RESULT_00C4EDF0, |e, a| {
+            assert_eq!((e.mem.u32(a[1]), a[2]), (0, 1));
+            e.mem.set_u32(a[1], 9);
+            Ret::default()
+        });
+        e.register(QUERY_DESTRUCTOR, |_, _| Ret::default());
+        let this = e.mem.alloc(0x210);
+        e.mem.set_u32(this + 0x48, 0x6000);
+        e.mem.set_u8(this + 0x4c, 1);
+        e.mem.set_u32(this + 0x70, 0x6100);
+        e.mem.set_u8(this + 0x74, 1);
+        e.mem.set_u8(this + 0x60, 1);
+        e.mem.set_u8(this + 0x40, 1);
+        e.call(0x00b6_3620, &args![this]);
+        assert_eq!(
+            calls(&e, QUERY_DESTRUCTOR),
+            vec![vec![0x6000], vec![0x6100]]
+        );
+        assert_eq!(calls(&e, QUERY_RESULT_00C4EDF0).len(), 2);
+        assert_eq!(
+            calls(&e, MEMORY_DEALLOCATE),
+            vec![vec![MEMORY_MANAGER, 0x6000], vec![MEMORY_MANAGER, 0x6100]]
+        );
+        assert_eq!((e.mem.u32(this + 0x48), e.mem.u8(this + 0x4c)), (0, 0));
+        assert_eq!((e.mem.u32(this + 0x70), e.mem.u8(this + 0x74)), (0, 0));
+        assert_eq!(e.mem.u8(this + 0x60), 1);
+        assert_eq!(e.mem.u8(this + 0x40), 0);
+    }
+
+    #[test]
+    fn fn_00b63b10_adds_new_keys_only() {
+        let mut e = rig();
+        e.register(IMPORT_ENTER_CRITICAL_SECTION, |_, _| Ret::default());
+        e.register(IMPORT_LEAVE_CRITICAL_SECTION, |_, _| Ret::default());
+        e.register(ROOM_MAP_GET_AT, |e, a| {
+            assert_eq!(e.mem.u32(a[2]), a[1]);
+            u32::from(a[1] == 7).into_ret()
+        });
+        e.register(ROOM_MAP_SET_AT, |_, _| Ret::default());
+        let this = e.mem.alloc(0x210);
+        assert!(e.call(0x00b6_3b10, &args![this, 3u32]).bool());
+        assert!(!e.call(0x00b6_3b10, &args![this, 7u32]).bool());
+        assert_eq!(calls(&e, ROOM_MAP_SET_AT), vec![vec![this + 0x1b4, 3, 1]]);
+        assert_eq!(calls(&e, IMPORT_LEAVE_CRITICAL_SECTION).len(), 2);
+    }
+
+    #[test]
+    fn fn_00b63bd0_stores_value_and_flag() {
+        let mut e = rig();
+        let item = e.mem.alloc(0xc);
+        e.call(0x00b6_3bd0, &args![0u32, item, 0x1234u32, 0x1ffu32]);
+        assert_eq!((e.mem.u32(item + 4), e.mem.u8(item + 8)), (0x1234, 0xff));
+    }
+
+    #[test]
+    fn fn_00b63bf0_fills_the_head_then_appends() {
+        let mut e = rig();
+        let list = e.mem.alloc(8);
+        let value = e.mem.alloc(4);
+        e.mem.set_u16(value, 0);
+        e.call(0x00b6_3bf0, &args![list, value]);
+        assert_eq!(e.mem.u16(list), 0);
+        e.mem.set_u16(value, 0x2f0);
+        e.call(0x00b6_3bf0, &args![list, value]);
+        assert_eq!(e.mem.u16(list), 0x2f0);
+        assert_eq!(e.mem.u32(list + 4), 0);
+        e.mem.set_u16(value, 0x2f1);
+        e.call(0x00b6_3bf0, &args![list, value]);
+        e.mem.set_u16(value, 0x2f2);
+        e.call(0x00b6_3bf0, &args![list, value]);
+        let second = e.mem.u32(list + 4);
+        let third = e.mem.u32(second + 4);
+        assert_eq!((e.mem.u16(second), e.mem.u16(third)), (0x2f1, 0x2f2));
+        assert_eq!(e.mem.u32(third + 4), 0);
+        assert_eq!(calls(&e, MEMORY_ALLOCATE).len(), 2);
+    }
+
+    #[test]
+    fn fn_00b63c60_makes_and_fills_the_fog_texture() {
+        let mut e = rig();
+        let this = e.mem.alloc(0xa0);
+        let holder = e.mem.alloc(0xc);
+        e.mem.set_u32(this + 0x98, holder);
+        e.register(ARRAY_SET_AT_00BA3AA0, |e, a| {
+            let holder = e.mem.u32(a[0] + 4);
+            let v = e.mem.u32(a[2]);
+            e.mem.set_u32(holder + 4 * a[1], v);
+            Ret::default()
+        });
+        e.register(IMAGE_SPACE_TEXTURE_GET_RENDERED, |e, a| {
+            e.mem.u32(a[0] + 0xc).into_ret()
+        });
+        e.register(IMAGE_SPACE_TEXTURE_SET, |e, a| {
+            e.mem.set_u32(a[0] + 0xc, a[1]);
+            Ret::default()
+        });
+        e.register(TEXTURE_MANAGER_BORROW, |_, _| 0x8800u32.into_ret());
+        e.mem.set_u32(RENDER_HOLDER, 0x4747);
+        e.mem.set_u32(TEXTURE_MANAGER, 0x91a8);
+        assert_eq!(e.call(0x00b6_3c60, &args![this]).u32(), 0x8800);
+        let texture = e.mem.u32(holder + 8);
+        assert_eq!(calls(&e, ARRAY_SET_AT_00BA3AA0)[0][..2], [this + 0x94, 2]);
+        assert_eq!(
+            calls(&e, TEXTURE_MANAGER_BORROW),
+            vec![vec![0x91a8, 0x4747, 0x20, 0, 0, 0]]
+        );
+        assert_eq!(
+            calls(&e, IMAGE_SPACE_TEXTURE_SET),
+            vec![vec![texture, 0x8800]]
+        );
+        // Made and filled: nothing more to do.
+        assert_eq!(e.call(0x00b6_3c60, &args![this]).u32(), 0x8800);
+        assert_eq!(calls(&e, TEXTURE_MANAGER_BORROW).len(), 1);
+        assert_eq!(calls(&e, MEMORY_ALLOCATE).len(), 1);
+    }
+
+    #[test]
+    fn map_destructors_empty_and_free() {
+        let mut e = rig();
+        e.register(ROOM_MAP_REMOVE_ALL, |e, a| {
+            assert!(e.mem.u32(a[0]) == MAP_VTABLE || e.mem.u32(a[0]) == MAP_BASE_VTABLE);
+            Ret::default()
+        });
+        e.register(FREE_BUCKETS, |_, _| Ret::default());
+        let map = e.mem.alloc(0x10);
+        e.mem.set_u32(map + 8, 0x9900);
+        e.call(0x00b6_3d60, &args![map]);
+        assert_eq!(e.mem.u32(map), MAP_BASE_VTABLE);
+        assert_eq!(calls(&e, ROOM_MAP_REMOVE_ALL).len(), 1);
+        e.call(0x00b6_3d80, &args![map]);
+        assert_eq!(calls(&e, ROOM_MAP_REMOVE_ALL).len(), 3);
+        assert_eq!(calls(&e, FREE_BUCKETS), vec![vec![0x9900], vec![0x9900]]);
+        assert_eq!(e.call(0x00b6_3e30, &args![map, 0u32]).u32(), map);
+        assert!(calls(&e, MEMORY_DEALLOCATE).is_empty());
+        assert_eq!(e.call(0x00b6_3e30, &args![map, 1u32]).u32(), map);
+        assert_eq!(e.call(0x00b6_3e70, &args![map, 1u32]).u32(), map);
+        assert_eq!(
+            calls(&e, MEMORY_DEALLOCATE),
+            vec![vec![MEMORY_MANAGER, map], vec![MEMORY_MANAGER, map]]
+        );
+        assert_eq!(calls(&e, ROOM_MAP_REMOVE_ALL).len(), 7);
+    }
+
+    #[test]
+    fn fn_00b63df0_returns_the_item_to_the_pool() {
+        let mut e = rig();
+        e.register(LOCK_ENTER, |e, _| {
+            let n = e.mem.u32(NODE_POOL_LOCK_COUNT);
+            e.mem.set_u32(NODE_POOL_LOCK_COUNT, n + 1);
+            e.mem.set_u32(NODE_POOL_LOCK, 0x1111);
+            Ret::default()
+        });
+        e.mem.set_u32(NODE_POOL_FREE_LIST, 0x2222);
+        let item = e.mem.alloc(0xc);
+        e.mem.set_u32(item + 4, 5);
+        e.mem.set_u8(item + 8, 1);
+        e.call(0x00b6_3df0, &args![0u32, item]);
+        assert_eq!(e.mem.u32(NODE_POOL_FREE_LIST), item);
+        assert_eq!(e.mem.u32(item), 0x2222);
+        assert_eq!((e.mem.u32(item + 4), e.mem.u8(item + 8)), (0, 0));
+        assert_eq!(e.mem.u32(NODE_POOL_LOCK_COUNT), 0);
+        assert_eq!(e.mem.u32(NODE_POOL_LOCK), 0);
+        // A lock still held: the owner stays.
+        e.mem.set_u32(NODE_POOL_LOCK_COUNT, 1);
+        e.call(0x00b6_3df0, &args![0u32, item]);
+        assert_eq!(e.mem.u32(NODE_POOL_LOCK), 0x1111);
+    }
+
+    #[test]
+    fn register_functions_filter_then_forward() {
+        let mut e = rig();
+        e.map(0x0101_e000, 0x1000);
+        e.mem.set_f64(LIMIT_0101E2C0, 50.0);
+        e.register(REGISTER_00B64020, |_, _| 0x100u32.into_ret());
+        let geometry = e.mem.alloc(0xc0);
+        let object = e.mem.alloc(0x20);
+        e.mem.set_u32(geometry + 0xb8, object);
+        let shader = e.mem.alloc(0x70);
+        let property = e.mem.alloc(0x60);
+        e.mem.set_u32(property + 0x24, 0x40000);
+        let words = |state: u32| args![0x10u32, geometry, state, property, shader];
+        e.mem.set_f32(object + 0x1c, 49.5);
+        assert!(e.call(0x00b6_4440, &words(1)).bool());
+        e.mem.set_f32(object + 0x1c, f32::NAN);
+        assert!(!e.call(0x00b6_4440, &words(2)).bool());
+        e.mem.set_f32(object + 0x1c, 50.0);
+        e.mem.set_u32(shader + 0x68, 0x16);
+        assert!(e.call(0x00b6_4440, &words(3)).bool());
+        assert!(e.call(0x00b6_4490, &words(4)).bool());
+        e.mem.set_u32(shader + 0x68, 0x15);
+        e.mem.set_u32(property + 0x24, 0x3ffff);
+        assert!(e.call(0x00b6_4440, &words(5)).bool());
+        assert!(!e.call(0x00b6_4490, &words(6)).bool());
+        assert_eq!(calls(&e, REGISTER_00B64020), vec![words(2), words(6)]);
+    }
+
+    #[test]
+    fn fn_00b63f90_and_00b644b0_hand_passes_to_the_thread_renderer() {
+        let mut e = rig();
+        let (this, renderer) = accumulator(&mut e);
+        let other = e.mem.alloc(0x98);
+        e.mem.set_u32(this + 0x178, other);
+        e.mem.set_u32(this + 0x18c, 2);
+        e.mem.set_u32(this + 0x19c, 6);
+        e.mem.set_u32(SHADER_FLAGS_011F91D8, 0x2f);
+        let mut slots = [0u32; 0x30];
+        slots[0x8c / 4] = 0x0f00_008c;
+        slots[0xa0 / 4] = 0x0f00_00a0;
+        slots[0xb8 / 4] = 0x0f00_00b8;
+        e.put_vtable(0x0f00_1000, &slots);
+        e.mem.set_u32(renderer, 0x0f00_1000);
+        e.mem.set_u32(other, 0x0f00_1000);
+        e.register(0x0f00_008c, |_, _| Ret::default());
+        let list = e.mem.alloc(0x14);
+        let passes = e.mem.alloc(8);
+        let zero = e.mem.alloc(0x10);
+        let lit = e.mem.alloc(0x10);
+        e.mem.set_u16(lit + 4, 0x2d);
+        e.mem.set_u32(passes, zero);
+        e.mem.set_u32(passes + 4, lit);
+        e.mem.set_u32(list + 4, passes);
+        e.mem.set_u32(list + 0x10, 2);
+        let property = e.mem.alloc(0x60);
+        e.mem.set_u32(property, 0x0f00_1000);
+        e.register_double(0x0f00_00a0, move |e, a| {
+            assert_eq!(e.mem.u32(a[3]), 0);
+            list.into_ret()
+        });
+        e.register_double(0x0f00_00b8, move |_, _| list.into_ret());
+        let tls = e.tls();
+        e.mem.set_u32(tls + TLS_WORD_2BC, 1);
+        assert!(e
+            .call(0x00b6_3f90, &args![this, 0x77u32, 0u32, property, 0u32])
+            .bool());
+        let asked = calls(&e, 0x0f00_00a0);
+        assert_eq!(asked[0][0..3], [property, 0x77, 0x2f]);
+        assert_eq!(asked[0][4..], [6, this, 1]);
+        assert_eq!(calls(&e, 0x0f00_008c), vec![vec![other, lit, 0x2d]]);
+        // 00b644b0: nothing without the byte +0x165, then every pass.
+        assert!(e
+            .call(0x00b6_44b0, &args![this, 0x77u32, 0u32, property, 0u32])
+            .bool());
+        assert!(calls(&e, 0x0f00_00b8).is_empty());
+        e.mem.set_u8(this + 0x165, 1);
+        e.mem.set_u32(tls + TLS_WORD_2BC, 0);
+        assert!(e
+            .call(0x00b6_44b0, &args![this, 0x77u32, 0u32, property, 0u32])
+            .bool());
+        assert_eq!(calls(&e, 0x0f00_00b8), vec![vec![property, 0x77]]);
+        assert_eq!(
+            calls(&e, 0x0f00_008c)[1..],
+            [vec![renderer, zero, 0], vec![renderer, lit, 0x2d]]
+        );
+    }
+
+    #[test]
+    fn fn_00b64530_renders_the_late_passes() {
+        let mut e = rig();
+        let (this, renderer) = accumulator(&mut e);
+        e.register(PASS_STATE_00B97FA0, |_, _| Ret::default());
+        e.mem.set_u32(COUNTER_011FF9F0, 3);
+        e.call(0x00b6_4530, &args![this]);
+        assert!(calls(&e, PASS_STATE_00B97FA0).is_empty());
+        e.mem.set_u32(this + 8, 1);
+        e.call(0x00b6_4530, &args![this]);
+        assert_eq!(calls(&e, PASS_STATE_00B97FA0), vec![vec![0, 1], vec![0, 0]]);
+        assert_eq!(
+            (e.mem.u32(renderer + 0x20), e.mem.u32(renderer + 0x24)),
+            (0x2d8, 0x2ef)
+        );
+        assert_eq!(e.mem.u32(COUNTER_011FF9F0), 2);
+    }
+
+    #[test]
+    fn fn_00b65ec0_adds_renders_and_clears_the_types() {
+        let mut e = rig();
+        let (this, renderer) = accumulator(&mut e);
+        e.call(0x00b6_5ec0, &args![this]);
+        let list = renderer + 0x2c;
+        assert_eq!(e.mem.u16(list), 0x2f0);
+        let next = e.mem.u32(list + 4);
+        assert_eq!(e.mem.u16(next), 0x2f1);
+        assert_eq!(
+            (e.mem.u32(renderer + 0x20), e.mem.u32(renderer + 0x24)),
+            (0x2f0, 0x2f1)
+        );
+        assert_eq!(calls(&e, SHORT_LIST_CLEAR), vec![vec![list]]);
+    }
+
+    #[test]
+    fn fn_00b65f60_updates_or_adds_a_reference_volume() {
+        let mut e = rig();
+        e.register(LIST_NEW_NODE, |e, _| e.mem.alloc(0xc).into_ret());
+        let this = e.mem.alloc(0x210);
+        let point = e.mem.alloc(0x10);
+        for (k, v) in [1.0f32, 2.0, 3.0].iter().enumerate() {
+            e.mem.set_f32(point + 4 * k as u32, *v);
+        }
+        e.mem.set_u32(point + 0xc, 0x7f80_0001);
+        e.call(0x00b6_5f60, &args![this, 0x500u32, point, 0u8]);
+        let head = e.mem.u32(this + 0x140);
+        assert_eq!(e.mem.u32(this + 0x144), head);
+        assert_eq!(e.mem.u32(this + 0x148), 1);
+        let entry = e.mem.u32(head + 8);
+        assert_eq!(e.mem.f32(entry + 8), 3.0);
+        assert_eq!(e.mem.u32(entry + 0xc), 0x7fc0_0001);
+        assert_eq!(e.mem.u32(entry + 0x10), 0x500);
+        assert_eq!(e.mem.u8(entry + 0x1a), 1);
+        // A second reference goes in front.
+        e.call(0x00b6_5f60, &args![this, 0x600u32, point, 0u8]);
+        let first = e.mem.u32(this + 0x140);
+        assert_eq!(e.mem.u32(first), head);
+        assert_eq!(e.mem.u32(head + 4), first);
+        assert_eq!(e.mem.u32(this + 0x148), 2);
+        // The first one again: updated in place with the byte.
+        e.mem.set_f32(point, 9.0);
+        e.call(0x00b6_5f60, &args![this, 0x500u32, point, 0u8]);
+        assert_eq!(e.mem.f32(entry), 9.0);
+        assert_eq!(e.mem.u8(entry + 0x1a), 0);
+        assert_eq!(e.mem.u32(this + 0x148), 2);
+    }
+
+    #[test]
+    fn fn_00b651e0_renders_each_fog_geometry() {
+        let mut e = rig();
+        let this = e.mem.alloc(0x210);
+        let renderer = e.mem.alloc(0x210);
+        e.mem.set_u32(RENDER_HOLDER, renderer);
+        let mut slots = [0u32; 0x70];
+        for slot in [0xa4u32, 0xac, 0xb4, 0xdc, 0x18c] {
+            slots[slot as usize / 4] = 0x0f00_0000 + slot;
+            e.register(0x0f00_0000 + slot, |_, _| Ret::default());
+        }
+        e.put_vtable(0x0f00_1000, &slots);
+        e.mem.set_u32(this, 0x0f00_1000);
+        e.mem.set_u32(renderer, 0x0f00_1000);
+        // The fog texture holder (`fog_owner` reaches it through the image-space manager).
+        let manager = e.mem.alloc(0x10);
+        let inner = e.mem.alloc(0xb0);
+        let effect = e.mem.alloc(0x70);
+        let owner = e.mem.alloc(0xa0);
+        let holder = e.mem.alloc(0xc);
+        e.mem.set_u32(holder + 8, 0x3330);
+        e.mem.set_u32(owner + 0x98, holder);
+        e.mem.set_u32(inner + 0xa8, owner + 0x6c);
+        e.mem.set_u32(inner + 0x34, effect);
+        e.mem.set_u32(manager + 8, inner);
+        e.mem.set_u32(IMAGE_SPACE_MANAGER, manager);
+        for addr in [
+            RENDERER_CLEAR,
+            RENDER_PASS_CONSTRUCTOR,
+            RENDER_PASS_DESTRUCTOR,
+            SET_RENDER_TARGET,
+            POINTER_LIST_REMOVE_ALL,
+            IMAGE_SPACE_RENDER_EFFECT,
+            TEXTURE_MANAGER_RETURN_RENDERED,
+            IMAGE_SPACE_TEXTURE_SET,
+        ] {
+            e.register(addr, |_, _| Ret::default());
+        }
+        e.register(IMAGE_SPACE_TEXTURE_GET_RENDERED, |_, a| {
+            (a[0] + 1).into_ret()
+        });
+        e.register(RENDER_TARGET_OF, |_, a| (a[0] + 0x10).into_ret());
+        // Nothing without the word at +0x98.
+        assert_eq!(e.call(0x00b6_51e0, &args![this, 0x40u32, 0x50u32]).u32(), 0);
+        assert!(calls(&e, RENDER_PASS_CONSTRUCTOR).is_empty());
+        e.mem.set_u32(this + 0x98, 2);
+        let geometry = |e: &mut Engine, kind: u32| {
+            let g = e.mem.alloc(0xb0);
+            e.mem.set_u32(g, 0x0f00_1000);
+            let p = e.mem.alloc(0x70);
+            e.mem.set_u32(p + 0x1c, kind);
+            for k in 0..4 {
+                e.mem.set_u32(p + 0x60 + 4 * k, 0x60 + k);
+            }
+            e.mem.set_u32(g + 0xa8, p);
+            g
+        };
+        let fog = geometry(&mut e, 0x16);
+        let plain = geometry(&mut e, 0x15);
+        let second = e.mem.alloc(0xc);
+        e.mem.set_u32(second + 8, plain);
+        let first = e.mem.alloc(0xc);
+        e.mem.set_u32(first, second);
+        e.mem.set_u32(first + 8, fog);
+        e.mem.set_u32(this + 0x90, first);
+        let camera = e.mem.alloc(0x110);
+        e.mem.set_u32(this + 8, 0x7777);
+        assert_eq!(e.call(0x00b6_51e0, &args![this, camera, 0x50u32]).u32(), 1);
+        assert_eq!(e.mem.u32(this + 8), 0x7777);
+        assert_eq!(e.mem.u32(this + 0x18), this + 0x90);
+        assert_eq!(calls(&e, 0x0f00_00a4), vec![vec![this]]);
+        // Rendered twice (the byte at 011ad80e clear), with 0x25a then 0x259.
+        assert_eq!(calls(&e, 0x0f00_00dc), vec![vec![fog, renderer]; 2]);
+        assert_eq!(e.mem.u32(CURRENT_PASS_ENUM_011F91E4), 0x259);
+        assert_eq!(
+            calls(&e, SET_RENDER_TARGET),
+            vec![vec![3, 0x3331 + 0x10], vec![0, 0x60]]
+        );
+        assert_eq!(
+            calls(&e, IMAGE_SPACE_RENDER_EFFECT),
+            vec![vec![manager, 0xd, renderer, 0x50, 0x50, 0, 1]]
+        );
+        assert_eq!(e.mem.u32(effect + 0x58), 0x60);
+        assert_eq!(e.mem.u32(effect + 0x64), 0x63);
+        assert_eq!(e.mem.u8(effect + 5), 1);
+        assert_eq!(calls(&e, POINTER_LIST_REMOVE_ALL), vec![vec![this + 0x90]]);
+        let saved = calls(&e, 0x0f00_00b4)[0][1];
+        assert_eq!(calls(&e, 0x0f00_00ac).last().unwrap()[1], saved);
+        assert_eq!(calls(&e, RENDER_PASS_DESTRUCTOR).len(), 1);
+        // With the byte set: once, keeping the enum 0x25b.
+        e.mem.set_u8(FLAG_011AD80E, 1);
+        e.call(0x00b6_51e0, &args![this, camera, 0x50u32]);
+        assert_eq!(calls(&e, 0x0f00_00dc).len(), 3);
+        assert_eq!(e.mem.u32(CURRENT_PASS_ENUM_011F91E4), 0x25b);
     }
 }

@@ -140,9 +140,19 @@ pub fn fn_008d1d00(e: &mut Engine) -> f32 {
     f32::from_bits(x87_quiet_bits(e.global::<u32>(TIME_LEFT)))
 }
 
+// Translated from 008d1d10 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Stores the two floats (cdecl) in the globals at `011dfed4` and `011dfed8`
+/// (`FLD`/`FSTP`, so a signalling NaN is stored quiet).
+pub fn fn_008d1d10(e: &mut Engine, value: f32, time_left: f32) {
+    e.mem.set_u32(VALUE, x87_quiet_bits(value.to_bits()));
+    e.mem
+        .set_u32(TIME_LEFT, x87_quiet_bits(time_left.to_bits()));
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x008d_1d10, fn_008d1d10(f32, f32)),
         entry!(0x008d_1b30, fn_008d1b30(f32, Ptr) -> f32),
         entry!(0x008d_1cf0, fn_008d1cf0() -> f32),
         entry!(0x008d_1d00, fn_008d1d00() -> f32),
@@ -246,5 +256,19 @@ mod tests {
         let mut e = timed_engine(0, 1.25, 2.5);
         assert_eq!(e.call(0x008d_1cf0, &args![]).f32(), 1.25);
         assert_eq!(e.call(0x008d_1d00, &args![]).f32(), 2.5);
+    }
+}
+
+#[cfg(test)]
+mod n028_tests {
+    use super::*;
+
+    #[test]
+    fn fn_008d1d10_stores_both_floats_quiet() {
+        let mut e = Engine::new();
+        e.map(VALUE, 8);
+        e.call(0x008d_1d10, &[1.5f32.to_bits(), 0x7f80_0001]);
+        assert_eq!(e.mem.f32(VALUE), 1.5);
+        assert_eq!(e.mem.u32(TIME_LEFT), 0x7fc0_0001);
     }
 }

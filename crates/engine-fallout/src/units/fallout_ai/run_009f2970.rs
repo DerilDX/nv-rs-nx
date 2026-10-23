@@ -38,9 +38,22 @@ pub fn fn_009f2a30(_e: &mut Engine, _this: Ptr) -> u32 {
     0xd
 }
 
+/// `TESObjectREFR::SetTargeted` (`00564db0`, engine map): `thiscall`, one word (`RET 4`).
+const SET_TARGETED: u32 = 0x0056_4db0;
+
+// Translated from 009f2970 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`thiscall`, `RET 4`): stores `reference` at `+8` and marks it
+/// targeted (`TESObjectREFR::SetTargeted` with 1, on the stored word).
+pub fn fn_009f2970(e: &mut Engine, this: Ptr, reference: u32) {
+    e.mem.set_u32(this.addr() + 0x8, reference);
+    let stored = e.mem.u32(this.addr() + 0x8);
+    e.call(SET_TARGETED, &args![stored, 1u32]);
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x009f_2970, fn_009f2970(Ptr, u32)),
         entry!(0x009f29a0, fn_009f29a0(Ptr) -> Ptr),
         entry!(0x009f2a30, fn_009f2a30(Ptr) -> u32),
     ]
@@ -73,5 +86,22 @@ mod tests {
     fn patrol_data_package_type_is_13() {
         let mut e = Engine::new();
         assert_eq!(e.call(0x009f_2a30, &args![0x1000u32]).u32(), 13);
+    }
+}
+
+#[cfg(test)]
+mod n029_tests {
+    use super::*;
+
+    #[test]
+    fn fn_009f2970_stores_and_targets_the_reference() {
+        let mut e = Engine::new();
+        e.register(SET_TARGETED, |_, _| Ret::default());
+        let this = e.mem.alloc(0x10);
+        e.call_log = Some(vec![]);
+        e.call(0x009f_2970, &args![this, 0x5000u32]);
+        assert_eq!(e.mem.u32(this + 8), 0x5000);
+        let log = e.call_log.take().unwrap();
+        assert!(log.contains(&(SET_TARGETED, vec![0x5000, 1])));
     }
 }

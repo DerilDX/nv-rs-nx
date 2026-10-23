@@ -638,9 +638,220 @@ pub fn ni_b_spline_data_get_compacted_value_degree3(
     });
 }
 
+/// `NiObject::IsEqual` (`00a5d470`, engine map; `thiscall`, one word), the
+/// base `SaveBinary` (`00a89af0`, `thiscall`, one word) and
+/// `NiObject::GetViewerStrings` (`00a5d6e0`, engine map; `thiscall`, one
+/// word).
+const OBJECT_IS_EQUAL: u32 = 0x00a5_d470;
+const OBJECT_SAVE_BINARY: u32 = 0x00a8_9af0;
+const OBJECT_GET_VIEWER_STRINGS: u32 = 0x00a5_d6e0;
+/// `NiGetViewerString` (`00a7d330`, `cdecl (text)`) and its unsigned
+/// overload (`00a7d510`, `cdecl (name, value)`); the viewer-string array's
+/// grow (`0096ad30`, `thiscall (array; new capacity)`) and store
+/// (`0096ae90`, `thiscall (array; index, &string)`).
+const NI_GET_VIEWER_STRING: u32 = 0x00a7_d330;
+const NI_GET_VIEWER_STRING_UNSIGNED: u32 = 0x00a7_d510;
+const STRINGS_GROW: u32 = 0x0096_ad30;
+const STRINGS_SET_AT: u32 = 0x0096_ae90;
+/// `"m_uiControlPointCount"` and `"m_uiCompactControlPointCount"`.
+const NAME_CONTROL_POINT_COUNT: u32 = 0x0109_9f08;
+const NAME_COMPACT_CONTROL_POINT_COUNT: u32 = 0x0109_9ee8;
+
+/// One write of `bytes` bytes from `source` through the stream's output
+/// object (`NiStream` +0x250; its write function at +0xC, `cdecl (output,
+/// source, bytes, address of the component size, 1)`), the answer added to
+/// the output's word at +4.
+fn stream_write(e: &mut Engine, stream: Ptr, source: u32, bytes: u32, component: u32) {
+    let output = e.mem.u32(stream.addr() + 0x250);
+    let write = e.mem.u32(output + 0xc);
+    let answer = e.with_stack(4, |e, size| {
+        e.mem.set_u32(size.addr(), component);
+        e.call(write, &args![output, source, bytes, size, 1u32])
+            .u32()
+    });
+    let total = e.mem.u32(output + 4).wrapping_add(answer);
+    e.mem.set_u32(output + 4, total);
+}
+
+/// Appends `text` to a viewer-string array as the exe's inlined `Add`
+/// does: when the 16-bit size (+0xA) has reached the capacity (+0x8) the
+/// array grows to the step (+0xE) plus the size, then the string is stored
+/// at the old size (through a stack slot holding it).
+fn push_viewer_string(e: &mut Engine, strings: Ptr, text: u32) {
+    let size = u32::from(e.mem.u16(strings.addr() + 0xa));
+    if size >= u32::from(e.mem.u16(strings.addr() + 8)) {
+        let step = u32::from(e.mem.u16(strings.addr() + 0xe));
+        e.call(STRINGS_GROW, &args![strings, step + size]);
+    }
+    e.with_stack(4, |e, slot| {
+        e.mem.set_u32(slot.addr(), text);
+        e.call(STRINGS_SET_AT, &args![strings, size, slot]);
+    });
+}
+
+// Translated from 00a51e50 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiBSplineData::IsEqual` (Xbox PDB, matched by the engine map;
+/// `thiscall`, one word: the other object): `NiObject::IsEqual` and the
+/// same control point and compact control point counts.
+pub fn ni_b_spline_data_is_equal(
+    e: &mut Engine,
+    this: Ptr<NiBSplineData>,
+    other: Ptr<NiBSplineData>,
+) -> bool {
+    e.call(OBJECT_IS_EQUAL, &args![this, other]).bool()
+        && e.get(other, NiBSplineData::m_uiControlPointCount)
+            == e.get(this, NiBSplineData::m_uiControlPointCount)
+        && e.get(other, NiBSplineData::m_uiCompactControlPointCount)
+            == e.get(this, NiBSplineData::m_uiCompactControlPointCount)
+}
+
+// Translated from 00a52550 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiBSplineData::GetValueDegree3` (Xbox PDB; `thiscall`, `RET 0x14`:
+/// time, output, dimension, basis data, control point handle). Computes the
+/// degree-3 basis of the basis data (`00a62660`, then
+/// [`ni_b_spline_basis_float3_compute`], the first index written into the
+/// time argument's own word and the last into the word the entry `PUSH
+/// ECX` made) and writes `dimension` floats from the control points at
+/// `points + 4 * (first * dimension + handle)`: the first basis value times
+/// the first point, then each further basis value times the next point
+/// added on (x87 `FMUL ST0,ST1` and `FADD`, one rounding to float per
+/// output word and step; the exe's four-at-a-time loop writes the same
+/// words in the same order).
+pub fn ni_b_spline_data_get_value_degree3(
+    e: &mut Engine,
+    this: Ptr<NiBSplineData>,
+    time: f32,
+    output: Ptr,
+    dimension: u32,
+    basis_data: Ptr,
+    handle: u32,
+) {
+    let basis = e.call(GET_DEGREE3_BASIS, &args![basis_data]).u32();
+    e.with_stack(8, |e, frame| {
+        // frame + 0: the time argument's word (reused for the first
+        // index), frame + 4: the entry's `PUSH ECX` word (the last index).
+        let first_slot = frame.addr();
+        let last_slot = first_slot + 4;
+        e.mem.set_u32(first_slot, time.to_bits());
+        e.mem.set_u32(last_slot, this.addr());
+        ni_b_spline_basis_float3_compute(
+            e,
+            Ptr::new(basis),
+            f32::from_bits(x87_quiet_bits(time.to_bits())),
+            Ptr::new(first_slot),
+            Ptr::new(last_slot),
+        );
+        let weight = x87_load32(e.mem.u32(basis + 4));
+        let first = e.mem.u32(first_slot);
+        let points = e.get(this, NiBSplineData::m_pafControlPoints);
+        let index = first.wrapping_mul(dimension).wrapping_add(handle);
+        let mut source = points.wrapping_add(index.wrapping_mul(4));
+        let out = output.addr();
+        for item in 0..dimension {
+            let value = x87_load32(e.mem.u32(source));
+            let product = x87_mul(value, weight);
+            e.mem
+                .set_u32(out.wrapping_add(item.wrapping_mul(4)), x87_store32(product));
+            source = source.wrapping_add(4);
+        }
+        let last = e.mem.u32(last_slot) as i32;
+        let first = first as i32;
+        let next = first.wrapping_add(1);
+        if next > last {
+            return;
+        }
+        let mut remaining = (last as u32).wrapping_sub(next as u32).wrapping_add(1);
+        let mut weight_address = basis
+            .wrapping_add((next.wrapping_sub(first) as u32).wrapping_mul(4))
+            .wrapping_add(4);
+        loop {
+            let weight = x87_load32(e.mem.u32(weight_address));
+            for item in 0..dimension {
+                let value = x87_load32(e.mem.u32(source));
+                let target = out.wrapping_add(item.wrapping_mul(4));
+                let sum = x87_add(x87_mul(value, weight), x87_m32(e.mem.u32(target)));
+                e.mem.set_u32(target, x87_store32(sum));
+                source = source.wrapping_add(4);
+            }
+            weight_address = weight_address.wrapping_add(4);
+            remaining = remaining.wrapping_sub(1);
+            if remaining == 0 {
+                break;
+            }
+        }
+    });
+}
+
+// Translated from 00a52950 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiBSplineData::SaveBinary` (Xbox PDB, matched by the engine map;
+/// `thiscall`, one word: the stream): the base `SaveBinary` (`00a89af0`),
+/// the control point count (4 bytes) and, when not zero, the control
+/// points (count * 4 bytes, component size 4); then the compact count and,
+/// when not zero, the compact points (count * 2 bytes, component size 2).
+pub fn ni_b_spline_data_save_binary(e: &mut Engine, this: Ptr<NiBSplineData>, stream: Ptr) {
+    e.call(OBJECT_SAVE_BINARY, &args![this, stream]);
+    stream_write(e, stream, this.addr() + 0x10, 4, 4);
+    let count = e.get(this, NiBSplineData::m_uiControlPointCount);
+    if count != 0 {
+        let points = e.get(this, NiBSplineData::m_pafControlPoints);
+        stream_write(e, stream, points, count.wrapping_mul(4), 4);
+    }
+    stream_write(e, stream, this.addr() + 0x14, 4, 4);
+    let count = e.get(this, NiBSplineData::m_uiCompactControlPointCount);
+    if count != 0 {
+        let compact = e.get(this, NiBSplineData::m_pasCompactControlPoints);
+        stream_write(e, stream, compact, count.wrapping_add(count), 2);
+    }
+}
+
+// Translated from 00a52a20 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiBSplineData::GetViewerStrings` (Xbox PDB, matched by the engine map;
+/// `thiscall`, one word: the strings array): `NiObject::GetViewerStrings`
+/// (`00a5d6e0`), then the class name (the first word of the `NiRTTI`
+/// record), `m_uiControlPointCount` and `m_uiCompactControlPointCount`,
+/// each appended.
+pub fn ni_b_spline_data_get_viewer_strings(e: &mut Engine, this: Ptr<NiBSplineData>, strings: Ptr) {
+    e.call(OBJECT_GET_VIEWER_STRINGS, &args![this, strings]);
+    let class_name: u32 = e.global(NI_B_SPLINE_DATA_RTTI);
+    let text = e.call(NI_GET_VIEWER_STRING, &args![class_name]).u32();
+    push_viewer_string(e, strings, text);
+    let count = e.get(this, NiBSplineData::m_uiControlPointCount);
+    let text = e
+        .call(
+            NI_GET_VIEWER_STRING_UNSIGNED,
+            &args![NAME_CONTROL_POINT_COUNT, count],
+        )
+        .u32();
+    push_viewer_string(e, strings, text);
+    let count = e.get(this, NiBSplineData::m_uiCompactControlPointCount);
+    let text = e
+        .call(
+            NI_GET_VIEWER_STRING_UNSIGNED,
+            &args![NAME_COMPACT_CONTROL_POINT_COUNT, count],
+        )
+        .u32();
+    push_viewer_string(e, strings, text);
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(
+            0x00a5_1e50,
+            ni_b_spline_data_is_equal(Ptr<NiBSplineData>, Ptr<NiBSplineData>) -> bool
+        ),
+        entry!(
+            0x00a5_2550,
+            ni_b_spline_data_get_value_degree3(Ptr<NiBSplineData>, f32, Ptr, u32, Ptr, u32)
+        ),
+        entry!(
+            0x00a5_2950,
+            ni_b_spline_data_save_binary(Ptr<NiBSplineData>, Ptr)
+        ),
+        entry!(
+            0x00a5_2a20,
+            ni_b_spline_data_get_viewer_strings(Ptr<NiBSplineData>, Ptr)
+        ),
         entry!(0x00a52500, ni_b_spline_data_get_rtti() -> Ptr),
         entry!(
             0x00a5_2870,
@@ -930,5 +1141,184 @@ mod b037_tests {
         e.call(0x00a5_2510, &args![this, 1u32]);
         assert_eq!(calls(&e, SIZED_DELETE), vec![vec![this, 0x18]]);
         assert_eq!(calls(&e, OBJECT_DESTRUCTOR).len(), 2);
+    }
+}
+
+#[cfg(test)]
+mod n002_tests {
+    use super::*;
+
+    type D = NiBSplineData;
+
+    fn word(value: u32) -> Ret {
+        Ret {
+            eax: value,
+            ..Ret::default()
+        }
+    }
+
+    fn calls(e: &Engine, addr: u32) -> Vec<Vec<u32>> {
+        e.call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|c| c.0 == addr)
+            .map(|c| c.1.clone())
+            .collect()
+    }
+
+    #[test]
+    fn is_equal_compares_both_counts() {
+        let mut e = Engine::new();
+        e.register(OBJECT_IS_EQUAL, |_, _| word(1));
+        e.call_log = Some(vec![]);
+        let this = e.new_object::<D>();
+        let other = e.new_object::<D>();
+        for target in [this, other] {
+            e.set(target, D::m_uiControlPointCount, 4);
+            e.set(target, D::m_uiCompactControlPointCount, 6);
+        }
+        assert!(e.call(0x00a5_1e50, &args![this, other]).bool());
+        assert_eq!(
+            calls(&e, OBJECT_IS_EQUAL),
+            vec![vec![this.addr(), other.addr()]]
+        );
+        e.set(other, D::m_uiCompactControlPointCount, 7);
+        assert!(!e.call(0x00a5_1e50, &args![this, other]).bool());
+        e.set(other, D::m_uiCompactControlPointCount, 6);
+        e.set(other, D::m_uiControlPointCount, 5);
+        assert!(!e.call(0x00a5_1e50, &args![this, other]).bool());
+        e.set(other, D::m_uiControlPointCount, 4);
+        e.register(OBJECT_IS_EQUAL, |_, _| word(0));
+        assert!(!e.call(0x00a5_1e50, &args![this, other]).bool());
+    }
+
+    #[test]
+    fn get_value_degree3_sums_the_weighted_control_points() {
+        let mut e = Engine::new();
+        e.register(GET_DEGREE3_BASIS, |_, a| word(a[0] + 8));
+        e.call_log = Some(vec![]);
+        // A basis already computed for time 0.5: indices 2..=5, weights.
+        let basis_data = e.mem.alloc(0x28);
+        let basis = basis_data + 8;
+        e.mem.set_u32(basis, 9);
+        for (i, w) in [1.0f32, 2.0, 0.5, 0.25].iter().enumerate() {
+            e.mem.set_f32(basis + 4 + 4 * i as u32, *w);
+        }
+        e.mem.set_u32(basis + 0x14, 0.5f32.to_bits());
+        e.mem.set_u32(basis + 0x18, 2);
+        e.mem.set_u32(basis + 0x1c, 5);
+        let points = e.mem.alloc(4 * 40);
+        for i in 0..40u32 {
+            e.mem.set_f32(points + 4 * i, i as f32);
+        }
+        let this = e.new_object::<D>();
+        e.set(this, D::m_pafControlPoints, points);
+        let output = e.mem.alloc(4 * 5);
+        e.call(
+            0x00a5_2550,
+            &args![this, 0.5f32, output, 5u32, basis_data, 1u32],
+        );
+        assert_eq!(calls(&e, GET_DEGREE3_BASIS), vec![vec![basis_data]]);
+        for k in 0..5u32 {
+            let p = |j: u32| (11 + 5 * j + k) as f32;
+            let expected = p(0) + 2.0 * p(1) + 0.5 * p(2) + 0.25 * p(3);
+            assert_eq!(e.mem.f32(output + 4 * k), expected);
+        }
+        // A one-point range: only the first weight.
+        e.mem.set_u32(basis + 0x1c, 2);
+        e.call(
+            0x00a5_2550,
+            &args![this, 0.5f32, output, 3u32, basis_data, 0u32],
+        );
+        for k in 0..3u32 {
+            assert_eq!(e.mem.f32(output + 4 * k), (6 + k) as f32);
+        }
+    }
+
+    fn output(e: &mut Engine, write: u32) -> u32 {
+        let output = e.mem.alloc(0x10);
+        e.mem.set_u32(output + 0xc, write);
+        let stream = e.mem.alloc(0x254);
+        e.mem.set_u32(stream + 0x250, output);
+        stream
+    }
+
+    #[test]
+    fn save_binary_writes_counts_and_points() {
+        const WRITE: u32 = 0x0300_0100;
+        let mut e = Engine::new();
+        e.register(OBJECT_SAVE_BINARY, |_, _| Ret::default());
+        e.register_double(WRITE, |e, a| {
+            let component = e.mem.u32(a[3]);
+            word(a[2] + component)
+        });
+        e.call_log = Some(vec![]);
+        let stream = output(&mut e, WRITE);
+        let this = e.new_object::<D>();
+        e.set(this, D::m_pafControlPoints, 0x5000);
+        e.set(this, D::m_pasCompactControlPoints, 0x6000);
+        e.set(this, D::m_uiControlPointCount, 3);
+        e.set(this, D::m_uiCompactControlPointCount, 5);
+        e.call(0x00a5_2950, &args![this, stream]);
+        assert_eq!(
+            calls(&e, OBJECT_SAVE_BINARY),
+            vec![vec![this.addr(), stream]]
+        );
+        let writes: Vec<_> = calls(&e, WRITE)
+            .iter()
+            .map(|w| (w[1], w[2], w[4]))
+            .collect();
+        assert_eq!(
+            writes,
+            vec![
+                (this.addr() + 0x10, 4, 1),
+                (0x5000, 12, 1),
+                (this.addr() + 0x14, 4, 1),
+                (0x6000, 10, 1)
+            ]
+        );
+        let output = e.mem.u32(stream + 0x250);
+        assert_eq!(e.mem.u32(output + 4), 8 + 16 + 8 + 12);
+        // Empty arrays: only the counts.
+        e.set(this, D::m_uiControlPointCount, 0);
+        e.set(this, D::m_uiCompactControlPointCount, 0);
+        e.call_log = Some(vec![]);
+        e.call(0x00a5_2950, &args![this, stream]);
+        assert_eq!(calls(&e, WRITE).len(), 2);
+    }
+
+    #[test]
+    fn get_viewer_strings_appends_name_and_counts() {
+        let mut e = Engine::new();
+        e.map(NI_B_SPLINE_DATA_RTTI, 4);
+        e.set_global(NI_B_SPLINE_DATA_RTTI, 0x0109_8888u32);
+        e.register(OBJECT_GET_VIEWER_STRINGS, |_, _| Ret::default());
+        e.register(NI_GET_VIEWER_STRING, |_, _| word(0x21));
+        e.register(NI_GET_VIEWER_STRING_UNSIGNED, |_, _| word(0x22));
+        e.register(STRINGS_GROW, |_, _| Ret::default());
+        e.register(STRINGS_SET_AT, |e, a| {
+            let size = e.mem.u16(a[0] + 0xa);
+            e.mem.set_u16(a[0] + 0xa, size + 1);
+            Ret::default()
+        });
+        e.call_log = Some(vec![]);
+        let this = e.new_object::<D>();
+        e.set(this, D::m_uiControlPointCount, 3);
+        e.set(this, D::m_uiCompactControlPointCount, 5);
+        let strings = e.mem.alloc(0x10);
+        e.mem.set_u16(strings + 8, 2);
+        e.mem.set_u16(strings + 0xe, 4);
+        e.call(0x00a5_2a20, &args![this, strings]);
+        assert_eq!(calls(&e, NI_GET_VIEWER_STRING), vec![vec![0x0109_8888]]);
+        assert_eq!(
+            calls(&e, NI_GET_VIEWER_STRING_UNSIGNED),
+            vec![
+                vec![NAME_CONTROL_POINT_COUNT, 3],
+                vec![NAME_COMPACT_CONTROL_POINT_COUNT, 5]
+            ]
+        );
+        assert_eq!(calls(&e, STRINGS_GROW), vec![vec![strings, 6]]);
+        assert_eq!(calls(&e, STRINGS_SET_AT).len(), 3);
     }
 }

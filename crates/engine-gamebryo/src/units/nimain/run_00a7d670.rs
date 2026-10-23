@@ -42,11 +42,29 @@ pub fn fn_00a7d6e0(e: &mut Engine) -> Ptr {
     fn_00a7d670(e, Ptr::new(block))
 }
 
+/// `00a71ec0` (unnamed in the engine map, `thiscall`, clone and cloning process): the
+/// light base's member copy.
+const LIGHT_COPY_MEMBERS: u32 = 0x00a7_1ec0;
+
+// Translated from 00a7d6a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The `NiPointLight` member copy (the engine map gives it no name; `thiscall`, clone and
+/// cloning process, `RET 8`): the light base's copy (`00a71ec0`), then the three
+/// attenuations (+0xF0, +0xF4, +0xF8) copied into the clone with `FLD`/`FSTP`, which quiets
+/// a signalling NaN.
+pub fn fn_00a7d6a0(e: &mut Engine, this: Ptr, clone: Ptr, cloning_process: Ptr) {
+    e.call(LIGHT_COPY_MEMBERS, &args![this, clone, cloning_process]);
+    for offset in [0xf0u32, 0xf4, 0xf8] {
+        let value = x87_quiet_bits(e.mem.u32(this.addr() + offset));
+        e.mem.set_u32(clone.addr() + offset, value);
+    }
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
         entry!(0x00a7_d670, fn_00a7d670(Ptr) -> Ptr),
         entry!(0x00a7_d6e0, fn_00a7d6e0() -> Ptr),
+        entry!(0x00a7_d6a0, fn_00a7d6a0(Ptr, Ptr, Ptr)),
     ]
 }
 
@@ -88,5 +106,28 @@ mod tests {
         assert_eq!(e.call_log.take().unwrap()[1], (NI_ALLOCATE, vec![0xfc]));
         assert_eq!(e.mem.u32(light), NI_POINT_LIGHT_VTABLE);
         assert_eq!(e.mem.f32(light + 0xf4), 1.0);
+    }
+}
+
+#[cfg(test)]
+mod copy_members_tests {
+    use super::*;
+
+    #[test]
+    fn copies_the_base_then_the_attenuations() {
+        let mut e = Engine::new();
+        e.register(LIGHT_COPY_MEMBERS, |_, _| Ret::default());
+        let this = e.mem.alloc(0xfc);
+        let clone = e.mem.alloc(0xfc);
+        e.mem.set_f32(this + 0xf0, 0.5);
+        e.mem.set_f32(this + 0xf4, 2.0);
+        e.mem.set_u32(this + 0xf8, 0x7f80_0001);
+        e.call_log = Some(vec![]);
+        e.call(0x00a7_d6a0, &args![this, clone, 0x77u32]);
+        let log = e.call_log.take().unwrap();
+        assert!(log.contains(&(LIGHT_COPY_MEMBERS, vec![this, clone, 0x77])));
+        assert_eq!(e.mem.f32(clone + 0xf0), 0.5);
+        assert_eq!(e.mem.f32(clone + 0xf4), 2.0);
+        assert_eq!(e.mem.u32(clone + 0xf8), 0x7fc0_0001);
     }
 }

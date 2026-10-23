@@ -59,9 +59,85 @@ pub fn ni_interp_controller_link_object(e: &mut Engine, this: Ptr, stream: Ptr<N
     e.call(TIME_CONTROLLER_LINK_OBJECT, &args![this, stream]);
 }
 
+/// `NiTimeController::m_fLoKeyTime` / `m_fHiKeyTime` (Xbox PDB) +0x14 / +0x18.
+const LO_KEY_TIME: u32 = 0x14;
+const HI_KEY_TIME: u32 = 0x18;
+
+// Translated from 00a2f8f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiInterpController::ResetTimeExtrema` (Xbox PDB): unless flag bit 5 of the controller's
+/// flags byte (+8) is set (the controller is managed), both key times become 0.0.
+pub fn ni_interp_controller_reset_time_extrema(e: &mut Engine, this: Ptr) {
+    if (e.mem.u8(this.addr() + 8) >> 5) & 1 != 0 {
+        return;
+    }
+    e.mem.set_f32(this.addr() + LO_KEY_TIME, 0.0);
+    e.mem.set_f32(this.addr() + HI_KEY_TIME, 0.0);
+}
+
+/// `NiTimeController::GetViewerStrings` (`00a6d830`, thiscall, the array).
+const TIME_CONTROLLER_GET_VIEWER_STRINGS: u32 = 0x00a6_d830;
+/// `NiGetViewerString` (`00a7d330`, cdecl, the text) and its bool form (`00a7d370`, cdecl,
+/// label and a word whose low byte is the value).
+const NI_GET_VIEWER_STRING: u32 = 0x00a7_d330;
+const NI_GET_VIEWER_STRING_BOOL: u32 = 0x00a7_d370;
+/// The viewer-string array's resize (`0096ad30`, one word) and `SetAt` (`0096ae90`: index,
+/// address of the value), both thiscall on the array.
+const VIEWER_STRINGS_GROW: u32 = 0x0096_ad30;
+const VIEWER_STRINGS_SET_AT: u32 = 0x0096_ae90;
+/// The label `"IsManagerControlled"`.
+const TEXT_IS_MANAGER_CONTROLLED: u32 = 0x0109_6414;
+
+/// Appends the string in the stack word `slot` to the viewer-string array `strings` (16-bit
+/// size +0xA, capacity +8, grow-by +0xE): grows it to size + grow-by when full, then `SetAt`
+/// at the old size with the slot's address.
+fn add_viewer_string(e: &mut Engine, strings: u32, slot: u32) {
+    let size = u32::from(e.mem.u16(strings + 0xa));
+    if size >= u32::from(e.mem.u16(strings + 8)) {
+        let step = u32::from(e.mem.u16(strings + 0xe));
+        e.call(VIEWER_STRINGS_GROW, &args![strings, step + size]);
+    }
+    e.call(VIEWER_STRINGS_SET_AT, &args![strings, size, slot]);
+}
+
+// Translated from 00a2f980 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiInterpController::GetViewerStrings` (Xbox PDB): `NiTimeController::GetViewerStrings`,
+/// then the class name (the first word of the `NiRTTI` record at `011f36b4` through
+/// `NiGetViewerString`) and `"IsManagerControlled"` with flag bit 5 of the flags byte (+8).
+/// Each string is held in the argument's own stack word; the bool is stored into that word's
+/// low byte only, so the word passed to `00a7d370` keeps the upper bytes of the class-name
+/// string's address.
+pub fn ni_interp_controller_get_viewer_strings(e: &mut Engine, this: Ptr, strings: Ptr) {
+    e.call(TIME_CONTROLLER_GET_VIEWER_STRINGS, &args![this, strings]);
+    let strings = strings.addr();
+    e.with_stack(4, |e, slot| {
+        let slot = slot.addr();
+        e.mem.set_u32(slot, strings);
+        let class_name = e.mem.u32(NI_INTERP_CONTROLLER_RTTI);
+        let text = e.call(NI_GET_VIEWER_STRING, &args![class_name]).u32();
+        e.mem.set_u32(slot, text);
+        add_viewer_string(e, strings, slot);
+        let managed = (e.mem.u8(this.addr() + 8) >> 5) & 1;
+        e.mem.set_u8(slot, managed);
+        let word = e.mem.u32(slot);
+        let text = e
+            .call(
+                NI_GET_VIEWER_STRING_BOOL,
+                &args![TEXT_IS_MANAGER_CONTROLLED, word],
+            )
+            .u32();
+        e.mem.set_u32(slot, text);
+        add_viewer_string(e, strings, slot);
+    });
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x00a2_f8f0, ni_interp_controller_reset_time_extrema(Ptr)),
+        entry!(
+            0x00a2_f980,
+            ni_interp_controller_get_viewer_strings(Ptr, Ptr)
+        ),
         entry!(0x00a2f8e0, ni_interp_controller_get_rtti() -> Ptr),
         entry!(
             0x00a2_f910,
@@ -130,5 +206,76 @@ mod tests {
             .collect();
         assert_eq!(hits.len(), 1);
         assert_eq!(hits[0].1, vec![0x1000, 0x2000]);
+    }
+}
+
+#[cfg(test)]
+mod n004_tests {
+    use super::*;
+
+    fn ret(eax: u32) -> Ret {
+        Ret {
+            eax,
+            ..Ret::default()
+        }
+    }
+
+    #[test]
+    fn reset_time_extrema_clears_the_key_times_unless_managed() {
+        let mut e = Engine::new();
+        let this = e.mem.alloc(0x40);
+        e.mem.set_f32(this + LO_KEY_TIME, 2.0);
+        e.mem.set_f32(this + HI_KEY_TIME, 3.0);
+        e.mem.set_u8(this + 8, 0x20);
+        e.call(0x00a2_f8f0, &args![this]);
+        assert_eq!(e.mem.f32(this + LO_KEY_TIME), 2.0);
+        e.mem.set_u8(this + 8, 0xdf);
+        e.call(0x00a2_f8f0, &args![this]);
+        assert_eq!(e.mem.u32(this + LO_KEY_TIME), 0);
+        assert_eq!(e.mem.u32(this + HI_KEY_TIME), 0);
+    }
+
+    #[test]
+    fn get_viewer_strings_adds_the_name_and_the_manager_flag() {
+        let mut e = Engine::new();
+        e.map(NI_INTERP_CONTROLLER_RTTI, 4);
+        e.mem.set_u32(NI_INTERP_CONTROLLER_RTTI, 0x0155_0000);
+        e.register(TIME_CONTROLLER_GET_VIEWER_STRINGS, |_, _| Ret::default());
+        e.register(NI_GET_VIEWER_STRING, |_, _| ret(0x1234_5678));
+        e.register(NI_GET_VIEWER_STRING_BOOL, |_, a| ret(a[1]));
+        e.register(VIEWER_STRINGS_GROW, |_, _| Ret::default());
+        e.register(VIEWER_STRINGS_SET_AT, |e, a| ret(e.mem.u32(a[2])));
+        let this = e.mem.alloc(0x40);
+        e.mem.set_u8(this + 8, 0x20);
+        let strings = e.mem.alloc(0x10);
+        e.mem.set_u16(strings + 8, 1);
+        e.mem.set_u16(strings + 0xa, 1);
+        e.mem.set_u16(strings + 0xe, 4);
+        e.call_log = Some(vec![]);
+        e.call(0x00a2_f980, &args![this, strings]);
+        let log = e.call_log.take().unwrap();
+        let of = |address: u32| -> Vec<Vec<u32>> {
+            log.iter()
+                .filter(|c| c.0 == address)
+                .map(|c| c.1.clone())
+                .collect()
+        };
+        assert_eq!(
+            of(TIME_CONTROLLER_GET_VIEWER_STRINGS),
+            [vec![this, strings]]
+        );
+        assert_eq!(of(NI_GET_VIEWER_STRING), [vec![0x0155_0000]]);
+        // The flag goes into the low byte of the word that held the name string.
+        assert_eq!(
+            of(NI_GET_VIEWER_STRING_BOOL),
+            [vec![TEXT_IS_MANAGER_CONTROLLED, 0x1234_5601]]
+        );
+        assert_eq!(
+            of(VIEWER_STRINGS_GROW),
+            [vec![strings, 5], vec![strings, 5]]
+        );
+        let set_at = of(VIEWER_STRINGS_SET_AT);
+        assert_eq!(set_at.len(), 2);
+        assert_eq!(&set_at[0][..2], [strings, 1]);
     }
 }

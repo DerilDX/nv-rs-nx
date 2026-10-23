@@ -49,9 +49,85 @@ pub fn fn_00a8bd20(e: &mut Engine, this: Ptr) -> Ptr {
     this
 }
 
+/// The three bytes the decoder makes of a 16-bit colour: `(c >> 8) & 0xf8`, `(c >> 3) &
+/// 0xfe` and the low byte shifted left by 3 (8 bits), as the exe computes them (the middle
+/// mask keeps one bit more than the 6-bit field).
+fn colour_bytes(colour: u16) -> [u8; 3] {
+    [
+        ((colour >> 8) as u8) & 0xf8,
+        ((colour >> 3) as u8) & 0xfe,
+        (colour as u8) << 3,
+    ]
+}
+
+// Translated from 00a8bab0 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 00a8bab0 - the /GS cookie check (00ec408c) is not modelled
+/// Unnamed in the engine map (`run_00a8bab0`, `thiscall`, the output; `RET 4`): decodes one
+/// colour block from the read pointer at +8 into 16 four-byte pixels at `output`. Reads two
+/// little-endian 16-bit colours (the pointer advanced by 2 after each), makes each into
+/// three bytes ([`colour_bytes`]) and alpha 0xff, and builds a four-entry palette: when the
+/// first colour is greater (unsigned) the two others are `(second + 2·first) / 3` and
+/// `(first + 2·second) / 3` per byte with alpha 0xff, otherwise both are the halves
+/// `(first + second) >> 1`, the third alpha 0xff and the fourth 0. Then four rows: each
+/// byte at the pointer (advanced by 1 after each row) gives four 2-bit palette indices, low
+/// bits first, one per pixel.
+pub fn fn_00a8bab0(e: &mut Engine, this: Ptr, output: Ptr) {
+    let reader = this.addr() + 8;
+    let at = e.mem.u32(reader);
+    let first = u16::from(e.mem.u8(at.wrapping_add(1)))
+        .wrapping_mul(0x100)
+        .wrapping_add(u16::from(e.mem.u8(at)));
+    let at = at.wrapping_add(2);
+    e.mem.set_u32(reader, at);
+    let second = u16::from(e.mem.u8(at.wrapping_add(1)))
+        .wrapping_mul(0x100)
+        .wrapping_add(u16::from(e.mem.u8(at)));
+    e.mem.set_u32(reader, at.wrapping_add(2));
+    let a = colour_bytes(first);
+    let b = colour_bytes(second);
+    let mut palette = [0u8; 16];
+    palette[..3].copy_from_slice(&a);
+    palette[3] = 0xff;
+    palette[4..7].copy_from_slice(&b);
+    palette[7] = 0xff;
+    palette[0xb] = 0xff;
+    if first > second {
+        for i in 0..3 {
+            let (x, y) = (u32::from(a[i]), u32::from(b[i]));
+            palette[8 + i] = ((y + 2 * x) / 3) as u8;
+            palette[0xc + i] = ((x + 2 * y) / 3) as u8;
+        }
+        palette[0xf] = 0xff;
+    } else {
+        for i in 0..3 {
+            let half = ((u32::from(b[i]) + u32::from(a[i])) >> 1) as u8;
+            palette[8 + i] = half;
+            palette[0xc + i] = half;
+        }
+        palette[0xf] = 0;
+    }
+    let mut out = output.addr();
+    for _ in 0..4 {
+        let indices = e.mem.u8(e.mem.u32(reader));
+        for pixel in 0..4u32 {
+            let entry = 4 * usize::from((indices >> (2 * pixel)) & 3);
+            for byte in 0..4u32 {
+                let value = palette[entry + byte as usize];
+                e.mem.set_u8(out.wrapping_add(4 * pixel + byte), value);
+            }
+        }
+        let next = e.mem.u32(reader).wrapping_add(1);
+        e.mem.set_u32(reader, next);
+        out = out.wrapping_add(0x10);
+    }
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
-    vec![entry!(0x00a8_bd20, fn_00a8bd20(Ptr) -> Ptr)]
+    vec![
+        entry!(0x00a8_bd20, fn_00a8bd20(Ptr) -> Ptr),
+        entry!(0x00a8_bab0, fn_00a8bab0(Ptr, Ptr)),
+    ]
 }
 
 #[cfg(test)]
@@ -107,5 +183,49 @@ mod tests {
             );
             assert_eq!(e.mem.u8(this + 0x11 + 2 * index), ((index >> 4) * 17) as u8);
         }
+    }
+}
+
+#[cfg(test)]
+mod block_tests {
+    use super::*;
+
+    fn decode(first: u16, second: u16, rows: [u8; 4]) -> (Vec<u8>, u32, u32) {
+        let mut e = Engine::new();
+        let this = e.mem.alloc(0x10);
+        let data = e.mem.alloc(8);
+        e.mem.write(data, &first.to_le_bytes());
+        e.mem.write(data + 2, &second.to_le_bytes());
+        e.mem.write(data + 4, &rows);
+        e.mem.set_u32(this + 8, data);
+        let output = e.mem.alloc(0x40);
+        e.call(0x00a8_bab0, &args![this, output]);
+        (e.mem.bytes(output, 0x40), e.mem.u32(this + 8), data)
+    }
+
+    #[test]
+    fn four_colour_blocks_interpolate_by_thirds() {
+        // 0xf81f: bytes f8, (0xf81f >> 3) & 0xfe = 0x02, 0x1f << 3 = 0xf8; 0x07e0: 0, 0xfc, 0.
+        let (pixels, reader, data) = decode(0xf81f, 0x07e0, [0b1110_0100, 0, 0xff, 0x55]);
+        assert_eq!(reader, data + 8);
+        assert_eq!(&pixels[..4], &[0xf8, 0x02, 0xf8, 0xff]);
+        assert_eq!(&pixels[4..8], &[0x00, 0xfc, 0x00, 0xff]);
+        // (second + 2 first) / 3 and (first + 2 second) / 3.
+        assert_eq!(&pixels[8..0xc], &[0xa5, 0x55, 0xa5, 0xff]);
+        assert_eq!(&pixels[0xc..0x10], &[0x52, 0xa8, 0x52, 0xff]);
+        assert_eq!(&pixels[0x10..0x14], &[0xf8, 0x02, 0xf8, 0xff]);
+        assert_eq!(&pixels[0x20..0x24], &[0x52, 0xa8, 0x52, 0xff]);
+        assert_eq!(&pixels[0x30..0x34], &[0x00, 0xfc, 0x00, 0xff]);
+    }
+
+    #[test]
+    fn three_colour_blocks_average_and_clear_the_last_alpha() {
+        let (pixels, _, _) = decode(0x07e0, 0xf81f, [0b1110_0100, 0, 0, 0]);
+        assert_eq!(&pixels[..4], &[0x00, 0xfc, 0x00, 0xff]);
+        assert_eq!(&pixels[8..0xc], &[0x7c, 0x7f, 0x7c, 0xff]);
+        assert_eq!(&pixels[0xc..0x10], &[0x7c, 0x7f, 0x7c, 0x00]);
+        // Equal colours take the same path.
+        let (pixels, _, _) = decode(0x1234, 0x1234, [0xff, 0, 0, 0]);
+        assert_eq!(pixels[3], 0);
     }
 }

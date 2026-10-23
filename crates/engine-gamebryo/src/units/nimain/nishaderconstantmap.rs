@@ -494,6 +494,247 @@ pub fn ni_shader_constant_map_look_up_predefined_mapping(
     })
 }
 
+// Translated from 00a9bcd0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiShaderConstantMap::LookUpObjectMappingType` (Xbox PDB; cdecl: mapping, register count
+/// out, element size out): the count and size start at 1 and 4; then by the compiler's switch
+/// (a byte table of the mapping less one, then four cases): 1 and 22 set the size to 1 and
+/// answer 4; 2 to 11, 14, 15 and 18 to 21 answer 7; 12, 13, 23 and 24 set 4 registers of 16
+/// bytes and answer 9; 16 and 17 set 3 registers of 12 bytes and answer 8; anything else
+/// answers 0.
+pub fn ni_shader_constant_map_look_up_object_mapping_type(
+    e: &mut Engine,
+    mapping: u32,
+    count: Ptr,
+    size: Ptr,
+) -> u32 {
+    e.mem.set_u32(count.addr(), 1);
+    e.mem.set_u32(size.addr(), 4);
+    match mapping {
+        1 | 22 => {
+            e.mem.set_u32(size.addr(), 1);
+            4
+        }
+        2..=11 | 14 | 15 | 18..=21 => 7,
+        12 | 13 | 23 | 24 => {
+            e.mem.set_u32(count.addr(), 4);
+            e.mem.set_u32(size.addr(), 0x10);
+            9
+        }
+        16 | 17 => {
+            e.mem.set_u32(count.addr(), 3);
+            e.mem.set_u32(size.addr(), 0xc);
+            8
+        }
+        _ => 0,
+    }
+}
+
+/// What the four `Add...Entry` stubs answer (0x30).
+const ADD_ENTRY_RESULT: u32 = 0x30;
+
+// Translated from 00a9bd60 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiShaderConstantMap::AddPredefinedEntry` (Xbox PDB; `__thiscall`, four words, none read):
+/// answers 0x30.
+pub fn ni_shader_constant_map_add_predefined_entry(
+    _e: &mut Engine,
+    _unused_0: Ptr,
+    _unused_1: u32,
+    _unused_2: u32,
+    _unused_3: u32,
+    _unused_4: u32,
+) -> u32 {
+    ADD_ENTRY_RESULT
+}
+
+// Translated from 00a9bd70 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiShaderConstantMap::AddEntry` (Xbox PDB; `__thiscall`, ten words, none read): answers
+/// 0x30.
+pub fn ni_shader_constant_map_add_entry(
+    _e: &mut Engine,
+    _unused_0: Ptr,
+    _unused_1: u32,
+    _unused_2: u32,
+    _unused_3: u32,
+    _unused_4: u32,
+    _unused_5: u32,
+    _unused_6: u32,
+    _unused_7: u32,
+    _unused_8: u32,
+    _unused_9: u32,
+    _unused_10: u32,
+) -> u32 {
+    ADD_ENTRY_RESULT
+}
+
+// Translated from 00a9bd80 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiShaderConstantMap::AddOperatorEntry` (Xbox PDB; `__thiscall`, six words, none read):
+/// answers 0x30.
+pub fn ni_shader_constant_map_add_operator_entry(
+    _e: &mut Engine,
+    _unused_0: Ptr,
+    _unused_1: u32,
+    _unused_2: u32,
+    _unused_3: u32,
+    _unused_4: u32,
+    _unused_5: u32,
+    _unused_6: u32,
+) -> u32 {
+    ADD_ENTRY_RESULT
+}
+
+// Translated from 00a9bd90 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiShaderConstantMap::AddObjectEntry` (Xbox PDB; `__thiscall`, five words, none read):
+/// answers 0x30.
+pub fn ni_shader_constant_map_add_object_entry(
+    _e: &mut Engine,
+    _unused_0: Ptr,
+    _unused_1: u32,
+    _unused_2: u32,
+    _unused_3: u32,
+    _unused_4: u32,
+    _unused_5: u32,
+) -> u32 {
+    ADD_ENTRY_RESULT
+}
+
+// Translated from 00a9c0a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiShaderConstantMap::LookUpPredefinedMappingType_ov2` (Xbox PDB; cdecl, a key): the
+/// register count (`LookUpPredefinedMappingType`) of the predefined mapping the key names
+/// (`LookUpPredefinedMapping` into two stack words); 0 when it names none or mapping 0.
+pub fn ni_shader_constant_map_look_up_predefined_mapping_type_ov2(e: &mut Engine, key: u32) -> u32 {
+    e.with_stack(8, |e, locals| {
+        let (mapping, index) = (locals.addr(), locals.addr() + 4);
+        if !ni_shader_constant_map_look_up_predefined_mapping(
+            e,
+            key,
+            Ptr::new(mapping),
+            Ptr::new(index),
+        ) {
+            return 0;
+        }
+        let found = e.mem.u32(mapping);
+        if found == 0 {
+            return 0;
+        }
+        let object_type = e.mem.u32(index);
+        ni_shader_constant_map_look_up_predefined_mapping_type(e, found, object_type)
+    })
+}
+
+// Translated from 00a9c0e0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiShaderConstantMap::LookUpObjectMapping` (Xbox PDB; cdecl: a name, the mapping out): the
+/// first entry of the second table (`011f602c`, count `011f6030`) whose name (+4) matches
+/// (`NiStricmp`) gives its number (+0) and true; false when none does.
+pub fn ni_shader_constant_map_look_up_object_mapping(
+    e: &mut Engine,
+    name: u32,
+    mapping: Ptr,
+) -> bool {
+    let mut entry = 0u32;
+    while entry < e.mem.u32(SECOND_TABLE_COUNT) {
+        let slot = e.mem.u32(SECOND_TABLE).wrapping_add(entry * 8);
+        let entry_name = e.mem.u32(slot + 4);
+        if e.call(NI_STRICMP, &args![entry_name, name]).u32() == 0 {
+            let number = e.mem.u32(slot);
+            e.mem.set_u32(mapping.addr(), number);
+            return true;
+        }
+        entry += 1;
+    }
+    false
+}
+
+/// `NiDynamicEffect`'s switch byte (+0x9c, the effect is on) and type byte (+0x9d).
+const EFFECT_ON: u32 = 0x9c;
+const EFFECT_TYPE: u32 = 0x9d;
+
+/// The `index`th effect that is on in a list (nodes: next +0, effect +4); 0 when none.
+fn nth_effect_on(e: &Engine, list: u32, index: u32) -> u32 {
+    let mut node = list;
+    let mut seen = 0u32;
+    while node != 0 {
+        let effect = e.mem.u32(node + 4);
+        node = e.mem.u32(node);
+        if effect != 0 && e.mem.u8(effect + EFFECT_ON) != 0 {
+            let at = seen;
+            seen += 1;
+            if at == index {
+                return effect;
+            }
+        }
+    }
+    0
+}
+
+/// A single effect field of the state: the effect when it is on, else 0.
+fn effect_if_on(e: &Engine, effect: u32) -> u32 {
+    if effect == 0 || e.mem.u8(effect + EFFECT_ON) == 0 {
+        0
+    } else {
+        effect
+    }
+}
+
+// Translated from 00a9c130 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiShaderConstantMap::GetDynamicEffectForObject` (Xbox PDB; cdecl: the dynamic effect
+/// state, the object type, an index): 0 without a state. By type (the compiler's jump table):
+/// 1 to 4 walk the light list (+0xc) and count the lights that are on whose type byte is the
+/// object type (or, for type 1, any type above it); 6 and 7 count the effects that are on in
+/// the lists at +0x14 and +0x10; the answer is the one at the index. 5 and 8 answer the effect
+/// at +0x18 or +0x1c when it is on. Other types, and no match, answer 0.
+pub fn ni_shader_constant_map_get_dynamic_effect_for_object(
+    e: &mut Engine,
+    state: Ptr,
+    object_type: u32,
+    index: u32,
+) -> Ptr {
+    let state = state.addr();
+    if state == 0 {
+        return Ptr::NULL;
+    }
+    let found = match object_type {
+        1..=4 => {
+            let mut node = e.mem.u32(state + 0xc);
+            if node == 0 {
+                return Ptr::NULL;
+            }
+            let mut seen = 0u32;
+            let mut effect;
+            // The code tests the node for null once more here (it cannot be); a null node would
+            // look at the effect 0.
+            if node == 0 {
+                effect = 0;
+            } else {
+                effect = e.mem.u32(node + 4);
+                node = e.mem.u32(node);
+            }
+            loop {
+                let kind = u32::from(e.mem.u8(effect.wrapping_add(EFFECT_TYPE)));
+                let on = e.mem.u8(effect.wrapping_add(EFFECT_ON));
+                let above = kind > object_type && object_type == 1;
+                if (kind == object_type) != above && on != 0 {
+                    let at = seen;
+                    seen += 1;
+                    if at == index {
+                        break effect;
+                    }
+                }
+                if node == 0 {
+                    break 0;
+                }
+                effect = e.mem.u32(node + 4);
+                node = e.mem.u32(node);
+            }
+        }
+        5 => effect_if_on(e, e.mem.u32(state + 0x18)),
+        6 => nth_effect_on(e, e.mem.u32(state + 0x14), index),
+        7 => nth_effect_on(e, e.mem.u32(state + 0x10), index),
+        8 => effect_if_on(e, e.mem.u32(state + 0x1c)),
+        _ => 0,
+    };
+    Ptr::new(found)
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -513,6 +754,40 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00a9_bda0, fn_00a9bda0(Ptr, u32, Ptr) -> Ptr),
         entry!(0x00a9_bdf0, fn_00a9bdf0(Ptr) -> Ptr),
         entry!(0x00a9_be30, fn_00a9be30(Ptr, Ptr) -> Ptr),
+        entry!(
+            0x00a9_bcd0,
+            ni_shader_constant_map_look_up_object_mapping_type(u32, Ptr, Ptr) -> u32
+        ),
+        entry!(
+            0x00a9_bd60,
+            ni_shader_constant_map_add_predefined_entry(Ptr, u32, u32, u32, u32) -> u32
+        ),
+        entry!(
+            0x00a9_bd70,
+            ni_shader_constant_map_add_entry(
+                Ptr, u32, u32, u32, u32, u32, u32, u32, u32, u32, u32
+            ) -> u32
+        ),
+        entry!(
+            0x00a9_bd80,
+            ni_shader_constant_map_add_operator_entry(Ptr, u32, u32, u32, u32, u32, u32) -> u32
+        ),
+        entry!(
+            0x00a9_bd90,
+            ni_shader_constant_map_add_object_entry(Ptr, u32, u32, u32, u32, u32) -> u32
+        ),
+        entry!(
+            0x00a9_c0a0,
+            ni_shader_constant_map_look_up_predefined_mapping_type_ov2(u32) -> u32
+        ),
+        entry!(
+            0x00a9_c0e0,
+            ni_shader_constant_map_look_up_object_mapping(u32, Ptr) -> bool
+        ),
+        entry!(
+            0x00a9_c130,
+            ni_shader_constant_map_get_dynamic_effect_for_object(Ptr, u32, u32) -> Ptr
+        ),
     ]
 }
 
@@ -846,5 +1121,176 @@ mod batch_b011_tests {
         e.mem.set_u32(mapping, 0);
         assert!(!e.call(0x00a9_bfd0, &args![key, mapping, index]).bool());
         assert_eq!(e.mem.u32(mapping), 0);
+    }
+}
+
+#[cfg(test)]
+mod n019_tests {
+    use super::*;
+
+    fn word(eax: u32) -> Ret {
+        Ret {
+            eax,
+            ..Ret::default()
+        }
+    }
+
+    #[test]
+    fn object_mapping_types_by_case() {
+        let mut e = Engine::new();
+        let out = e.mem.alloc(8);
+        let (count, size) = (out, out + 4);
+        let look = |e: &mut Engine, mapping: u32| {
+            let kind = e.call(0x00a9_bcd0, &args![mapping, count, size]).u32();
+            (kind, e.mem.u32(count), e.mem.u32(size))
+        };
+        assert_eq!(look(&mut e, 1), (4, 1, 1));
+        assert_eq!(look(&mut e, 22), (4, 1, 1));
+        for mapping in [2, 11, 14, 15, 18, 21] {
+            assert_eq!(look(&mut e, mapping), (7, 1, 4));
+        }
+        for mapping in [12, 13, 23, 24] {
+            assert_eq!(look(&mut e, mapping), (9, 4, 0x10));
+        }
+        assert_eq!(look(&mut e, 16), (8, 3, 0xc));
+        assert_eq!(look(&mut e, 17), (8, 3, 0xc));
+        assert_eq!(look(&mut e, 0), (0, 1, 4));
+        assert_eq!(look(&mut e, 25), (0, 1, 4));
+    }
+
+    #[test]
+    fn the_add_entry_stubs_answer_0x30() {
+        let mut e = Engine::new();
+        assert_eq!(e.call(0x00a9_bd60, &[0; 5]).u32(), 0x30);
+        assert_eq!(e.call(0x00a9_bd70, &[0; 11]).u32(), 0x30);
+        assert_eq!(e.call(0x00a9_bd80, &[0; 7]).u32(), 0x30);
+        assert_eq!(e.call(0x00a9_bd90, &[0; 6]).u32(), 0x30);
+    }
+
+    /// A table of (number, name) entries at `table`/`count`; names are small integers the
+    /// `NiStricmp` double compares as words.
+    fn table(e: &mut Engine, table: u32, count: u32, entries: &[(u32, u32)]) {
+        e.map(table, 4);
+        e.map(count, 4);
+        let block = e.mem.alloc(8 * entries.len() as u32);
+        for (i, (number, name)) in entries.iter().enumerate() {
+            e.mem.set_u32(block + 8 * i as u32, *number);
+            e.mem.set_u32(block + 8 * i as u32 + 4, *name);
+        }
+        e.mem.set_u32(table, block);
+        e.mem.set_u32(count, entries.len() as u32);
+    }
+
+    #[test]
+    fn look_up_object_mapping_by_name() {
+        let mut e = Engine::new();
+        e.register(NI_STRICMP, |_, a| word(u32::from(a[0] != a[1])));
+        table(
+            &mut e,
+            SECOND_TABLE,
+            SECOND_TABLE_COUNT,
+            &[(5, 0x10), (9, 0x20)],
+        );
+        let out = e.mem.alloc(4);
+        assert!(e.call(0x00a9_c0e0, &args![0x20u32, out]).bool());
+        assert_eq!(e.mem.u32(out), 9);
+        assert!(!e.call(0x00a9_c0e0, &args![0x30u32, out]).bool());
+    }
+
+    #[test]
+    fn predefined_mapping_type_of_a_key() {
+        let mut e = Engine::new();
+        // The key has no `_`: `ParseKeyName` copies it and keeps it whole.
+        e.register(STRCPY_S, |e, a| {
+            let text = e.mem.cstr(a[2]);
+            e.mem.set_cstr(a[0], &text);
+            Ret::default()
+        });
+        e.register(STRCHR, |_, _| word(0));
+        e.register(NI_STRICMP, |e, a| {
+            word(u32::from(e.mem.cstr(a[0]) != e.mem.cstr(a[1])))
+        });
+        let name = |e: &mut Engine, text: &[u8]| {
+            let p = e.mem.alloc(16);
+            e.mem.set_cstr(p, text);
+            p
+        };
+        let (world, zero, view) = (
+            name(&mut e, b"World"),
+            name(&mut e, b"Zero"),
+            name(&mut e, b"View"),
+        );
+        table(
+            &mut e,
+            FIRST_TABLE,
+            FIRST_TABLE_COUNT,
+            &[(0, zero), (33, world), (2, view)],
+        );
+        let key = name(&mut e, b"World");
+        assert_eq!(e.call(0x00a9_c0a0, &args![key]).u32(), 8);
+        let key = name(&mut e, b"View");
+        assert_eq!(e.call(0x00a9_c0a0, &args![key]).u32(), 9);
+        // Mapping 0 and an unknown key answer 0.
+        let key = name(&mut e, b"Zero");
+        assert_eq!(e.call(0x00a9_c0a0, &args![key]).u32(), 0);
+        let key = name(&mut e, b"None");
+        assert_eq!(e.call(0x00a9_c0a0, &args![key]).u32(), 0);
+    }
+
+    fn effect(e: &mut Engine, kind: u8, on: bool) -> u32 {
+        let effect = e.mem.alloc(0xa0);
+        e.mem.set_u8(effect + EFFECT_TYPE, kind);
+        e.mem.set_u8(effect + EFFECT_ON, u8::from(on));
+        effect
+    }
+
+    fn list(e: &mut Engine, effects: &[u32]) -> u32 {
+        let mut head = 0;
+        for effect in effects.iter().rev() {
+            let node = e.mem.alloc(8);
+            e.mem.set_u32(node, head);
+            e.mem.set_u32(node + 4, *effect);
+            head = node;
+        }
+        head
+    }
+
+    #[test]
+    fn dynamic_effects_by_type_and_index() {
+        let mut e = Engine::new();
+        let ambient = effect(&mut e, 1, true);
+        let point = effect(&mut e, 2, true);
+        let off_point = effect(&mut e, 2, false);
+        let spot = effect(&mut e, 3, true);
+        let lights = list(&mut e, &[ambient, off_point, point, spot]);
+        let state = e.mem.alloc(0x20);
+        e.mem.set_u32(state + 0xc, lights);
+        let get = |e: &mut Engine, kind: u32, index: u32| {
+            e.call(0x00a9_c130, &args![state, kind, index]).u32()
+        };
+        assert_eq!(get(&mut e, 2, 0), point);
+        assert_eq!(get(&mut e, 2, 1), 0);
+        // Type 1 also takes every type above it.
+        assert_eq!(get(&mut e, 1, 1), point);
+        assert_eq!(get(&mut e, 1, 2), spot);
+        assert_eq!(get(&mut e, 4, 0), 0);
+        let projector = effect(&mut e, 5, true);
+        let off = effect(&mut e, 5, false);
+        let lists = list(&mut e, &[off, 0, projector]);
+        e.mem.set_u32(state + 0x14, lists);
+        let single = list(&mut e, &[projector]);
+        e.mem.set_u32(state + 0x10, single);
+        assert_eq!(get(&mut e, 6, 0), projector);
+        assert_eq!(get(&mut e, 6, 1), 0);
+        assert_eq!(get(&mut e, 7, 0), projector);
+        e.mem.set_u32(state + 0x18, projector);
+        e.mem.set_u32(state + 0x1c, off);
+        assert_eq!(get(&mut e, 5, 9), projector);
+        assert_eq!(get(&mut e, 8, 0), 0);
+        assert_eq!(get(&mut e, 9, 0), 0);
+        assert_eq!(get(&mut e, 0, 0), 0);
+        assert_eq!(e.call(0x00a9_c130, &args![0u32, 2u32, 0u32]).u32(), 0);
+        e.mem.set_u32(state + 0xc, 0);
+        assert_eq!(get(&mut e, 2, 0), 0);
     }
 }

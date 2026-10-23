@@ -3,6 +3,7 @@
 
 #[allow(unused_imports)]
 use crate::prelude::*;
+use crate::types::NiTArray;
 use crate::units::nimain::nimainsdm::{interlocked_decrement, interlocked_increment};
 use crate::units::nimain::nistream::{NiBinaryStream, NiStream};
 
@@ -538,6 +539,378 @@ pub fn ni_time_controller_load_binary(
     e.set(this, NiTimeController::m_uFlags, (flags & 0xff7f) | 0x40);
 }
 
+/// `NiObject::IsEqual` (`00a5d470`) and `NiObject::RegisterStreamables` (`00a5d2f0`),
+/// thiscall, one word each (`AL`).
+const OBJECT_IS_EQUAL: u32 = 0x00a5_d470;
+const OBJECT_REGISTER_STREAMABLES: u32 = 0x00a5_d2f0;
+/// The base `SaveBinary` `00a89af0` (unnamed in the engine map, three bytes; thiscall, the
+/// stream).
+const BASE_SAVE_BINARY_00A89AF0: u32 = 0x00a8_9af0;
+/// The sized delete (`00aa1460`, cdecl `(pointer, size)`) and `NiAlloc` (`00aa1070`, cdecl:
+/// size).
+const SIZED_DELETE: u32 = 0x00aa_1460;
+const NI_ALLOC: u32 = 0x00aa_1070;
+/// `NiSprintf` (`00a305b0`, cdecl: buffer, size, format, then the format words).
+const NI_SPRINTF: u32 = 0x00a3_05b0;
+/// `NiGetViewerString` (cdecl, the class name), `NiGetViewerString_ov2` (cdecl, a name and a
+/// `bool` byte, `"%s = true"` / `"%s = false"`), `NiGetViewerString_ov9` (cdecl, a name and
+/// a `float`, `"%s = %g"`) and `NiGetViewerString_ov10` (cdecl, a name and a pointer,
+/// `"%s = %p"`): each returns a new string.
+const VIEWER_STRING_NAME: u32 = 0x00a7_d330;
+const VIEWER_STRING_BOOL: u32 = 0x00a7_d370;
+const VIEWER_STRING_FLOAT: u32 = 0x00a7_d550;
+const VIEWER_STRING_POINTER: u32 = 0x00a7_d5a0;
+/// The strings array `SetSize` (thiscall, the new size) and `SetAt` (thiscall, the index
+/// and the address of the element).
+const STRING_ARRAY_SET_SIZE: u32 = 0x0096_ad30;
+const STRING_ARRAY_SET_AT: u32 = 0x0096_ae90;
+/// The formats of the two type strings: `"%s = APP_TIME"`, `"%s = APP_INIT"`;
+/// `"%s = LOOP"`, `"%s = REVERSE"`, `"%s = CLAMP"`, `"%s = UNKNOWN!!!"`.
+const FORMAT_APP_TIME: u32 = 0x0109_c824;
+const FORMAT_APP_INIT: u32 = 0x0109_c834;
+const FORMAT_LOOP: u32 = 0x0109_c844;
+const FORMAT_REVERSE: u32 = 0x0109_c850;
+const FORMAT_CLAMP: u32 = 0x0109_c860;
+const FORMAT_UNKNOWN: u32 = 0x0109_b2ec;
+/// The viewer-string names: `"m_fFrequency"`, `"m_fPhase"`, `"m_fLoKeyTime"`,
+/// `"m_fHiKeyTime"`, `"m_fStartTime"`, `"m_fLastTime"`, `"m_pkTarget"`, `"anim type"`,
+/// `"cycle type"`, `"Active"` and `"Play Backwards"`.
+const TEXT_FREQUENCY: u32 = 0x0109_c99c;
+const TEXT_PHASE: u32 = 0x0109_c990;
+const TEXT_LO_KEY_TIME: u32 = 0x0109_c980;
+const TEXT_HI_KEY_TIME: u32 = 0x0109_c970;
+const TEXT_START_TIME: u32 = 0x0109_af98;
+const TEXT_LAST_TIME: u32 = 0x0109_c964;
+const TEXT_TARGET: u32 = 0x0109_c958;
+const TEXT_ANIM_TYPE: u32 = 0x0109_c94c;
+const TEXT_CYCLE_TYPE: u32 = 0x0109_c940;
+const TEXT_ACTIVE: u32 = 0x0109_c938;
+const TEXT_PLAY_BACKWARDS: u32 = 0x0109_c928;
+/// The controller vtable slots this file calls: `RegisterStreamables` +0x54, `Start` +0x8C
+/// and `IsStreamable` +0xAC (Xbox PDB slot order); the object slots `GetRTTI` +0x08 and
+/// `IsNode` +0x0C; the stream slot `SaveLinkID` +0x30.
+const SLOT_REGISTER_STREAMABLES: u32 = 0x54;
+const SLOT_START: u32 = 0x8c;
+const SLOT_IS_STREAMABLE: u32 = 0xac;
+const SLOT_GET_RTTI: u32 = 0x08;
+const SLOT_IS_NODE: u32 = 0x0c;
+const SLOT_SAVE_LINK_ID: u32 = 0x30;
+
+/// Adds the string word at `slot` at the end of the strings array (`SetSize` to the size
+/// plus the grow-by step when the array is full, then `SetAt`).
+fn add_viewer_string(e: &mut Engine, strings: Ptr<NiTArray>, slot: u32) {
+    let index = u32::from(e.get(strings, NiTArray::m_usSize));
+    if index >= u32::from(e.get(strings, NiTArray::m_usMaxSize)) {
+        let grow = u32::from(e.get(strings, NiTArray::m_usGrowBy));
+        e.call(STRING_ARRAY_SET_SIZE, &args![strings, grow + index]);
+    }
+    e.call(STRING_ARRAY_SET_AT, &args![strings, index, slot]);
+}
+
+/// Whether two `float` fields compare equal as `FLD`/`FLD`/`FUCOMPP` with `TEST AH,0x44`
+/// finds them (a NaN is never equal; +0 equals -0).
+fn floats_equal(a: u32, b: u32) -> bool {
+    f32::from_bits(a) == f32::from_bits(b)
+}
+
+// Translated from 00a6cc80 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiTimeController::IsEqual` (Xbox PDB; thiscall, `RET 4`): `NiObject::IsEqual`, the same
+/// flags (16 bits), frequency, phase, low and high key times (`FUCOMPP`: a NaN differs), and
+/// a target on both or on neither.
+pub fn ni_time_controller_is_equal(
+    e: &mut Engine,
+    this: Ptr<NiTimeController>,
+    other: Ptr<NiTimeController>,
+) -> bool {
+    if e.call(OBJECT_IS_EQUAL, &args![this, other]).u32() as u8 == 0 {
+        return false;
+    }
+    if e.get(this, NiTimeController::m_uFlags) != e.get(other, NiTimeController::m_uFlags) {
+        return false;
+    }
+    for field in [
+        NiTimeController::m_fFrequency,
+        NiTimeController::m_fPhase,
+        NiTimeController::m_fLoKeyTime,
+        NiTimeController::m_fHiKeyTime,
+    ] {
+        if !floats_equal(e.get(this, field), e.get(other, field)) {
+            return false;
+        }
+    }
+    let target = e.get(this, NiTimeController::m_pkTarget);
+    if target != 0 {
+        if e.get(other, NiTimeController::m_pkTarget) == 0 {
+            return false;
+        }
+    } else if e.get(other, NiTimeController::m_pkTarget) != 0 {
+        return false;
+    }
+    true
+}
+
+// Translated from 00a6cd00 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map; the body counts the controllers of the chain that starts at
+/// `this` (thiscall, no arguments; `this` may be null), following `m_spNext` (+0x30).
+pub fn fn_00a6cd00(e: &mut Engine, this: Ptr<NiTimeController>) -> u32 {
+    let mut count = 0u32;
+    let mut controller = this;
+    while !controller.is_null() {
+        controller = Ptr::new(e.get(controller, NiTimeController::m_spNext));
+        count = count.wrapping_add(1);
+    }
+    count
+}
+
+// Translated from 00a6cd30 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiTimeController::Stop` (Xbox PDB; thiscall, no arguments): clears flag bit 3 (`0x8`),
+/// sets the last time to `-FLT_MAX` (the float at `01015f5c`) and, when flag bit 0 is set,
+/// the start time to the same value.
+pub fn ni_time_controller_stop(e: &mut Engine, this: Ptr<NiTimeController>) {
+    let no_time = x87_store32(x87_load32(e.mem.u32(NO_TIME_FLOAT)));
+    let flags = e.get(this, NiTimeController::m_uFlags) & 0xfff7;
+    e.set(this, NiTimeController::m_uFlags, flags);
+    e.set(this, NiTimeController::m_fLastTime, no_time);
+    if e.get(this, NiTimeController::m_uFlags) & 1 != 0 {
+        e.set(this, NiTimeController::m_fStartTime, no_time);
+    }
+}
+
+// Translated from 00a6d0f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiTimeController::RegisterStreamables` (Xbox PDB; thiscall, `RET 4`): false when
+/// `NiObject::RegisterStreamables` is; otherwise the next controller (+0x30, when there is
+/// one) registers too (its slot +0x54, result ignored) and the answer is true.
+pub fn ni_time_controller_register_streamables(
+    e: &mut Engine,
+    this: Ptr<NiTimeController>,
+    stream: Ptr,
+) -> bool {
+    if e.call(OBJECT_REGISTER_STREAMABLES, &args![this, stream])
+        .u32() as u8
+        == 0
+    {
+        return false;
+    }
+    let next = e.get(this, NiTimeController::m_spNext);
+    if next != 0 {
+        e.vcall(next, SLOT_REGISTER_STREAMABLES, &args![stream]);
+    }
+    true
+}
+
+/// The length of the zero-terminated string at `text` (the code inline `strlen`).
+fn string_length(e: &Engine, text: u32) -> u32 {
+    let mut length = 0u32;
+    while e.mem.u8(text.wrapping_add(length)) != 0 {
+        length = length.wrapping_add(1);
+    }
+    length
+}
+
+// Translated from 00a6d120 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiTimeController::GetViewerString` (Xbox PDB; cdecl: a name and the animation type): a
+/// new `NiAlloc` buffer of the name length plus 12, filled by `NiSprintf` with
+/// `"%s = APP_TIME"` for type 0 or `"%s = APP_INIT"` for type 1; any other type leaves the
+/// buffer as allocated. Returns the buffer.
+pub fn ni_time_controller_get_viewer_string(e: &mut Engine, name: u32, kind: u32) -> u32 {
+    let size = string_length(e, name).wrapping_add(0xc);
+    let buffer = e.call(NI_ALLOC, &args![size]).u32();
+    let format = match kind {
+        0 => FORMAT_APP_TIME,
+        1 => FORMAT_APP_INIT,
+        _ => return buffer,
+    };
+    e.call(NI_SPRINTF, &args![buffer, size, format, name]);
+    buffer
+}
+
+// Translated from 00a6d190 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiTimeController::GetViewerString_ov2` (Xbox PDB; cdecl: a name and the cycle type): a
+/// new `NiAlloc` buffer of the name length plus 11, filled by `NiSprintf` with
+/// `"%s = LOOP"` (0), `"%s = REVERSE"` (1), `"%s = CLAMP"` (2) or `"%s = UNKNOWN!!!"`.
+/// Returns the buffer.
+pub fn ni_time_controller_get_viewer_string_ov2(e: &mut Engine, name: u32, kind: u32) -> u32 {
+    let size = string_length(e, name).wrapping_add(0xb);
+    let buffer = e.call(NI_ALLOC, &args![size]).u32();
+    let format = match kind {
+        0 => FORMAT_LOOP,
+        1 => FORMAT_REVERSE,
+        2 => FORMAT_CLAMP,
+        _ => FORMAT_UNKNOWN,
+    };
+    e.call(NI_SPRINTF, &args![buffer, size, format, name]);
+    buffer
+}
+
+// Translated from 00a6d390 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map; the body is the `NiTimeController::StartAnimations` overload
+/// with a time (cdecl: the object and a `float`): as [`ni_time_controller_start_animations`],
+/// but every controller starts (`Start`, slot +0x8C) at `time` (pushed through `FLD`/`FSTP`)
+/// and the recursion passes it on.
+pub fn fn_00a6d390(e: &mut Engine, object: Ptr, time: f32) {
+    let pushed = x87_quiet_bits(time.to_bits());
+    let mut controller = e.mem.u32(object.addr() + 0xc);
+    while controller != 0 {
+        e.vcall(controller, SLOT_START, &args![pushed]);
+        controller = e.mem.u32(controller + 0x30);
+    }
+    let mut rtti = e.vcall(object.addr(), SLOT_GET_RTTI, &args![]).u32();
+    while rtti != 0 {
+        if rtti == NI_AV_OBJECT_RTTI {
+            let mut item = e.mem.u32(object.addr() + 0x24);
+            while item != 0 {
+                let property = e.mem.u32(item + 8);
+                item = e.mem.u32(item);
+                if property != 0 && e.mem.u32(property + 0xc) != 0 {
+                    fn_00a6d390(e, Ptr::new(property), f32::from_bits(pushed));
+                }
+            }
+            break;
+        }
+        rtti = e.mem.u32(rtti + 4);
+    }
+    if e.vcall(object.addr(), SLOT_IS_NODE, &args![]).u32() != 0 {
+        let mut index = 0u32;
+        while index < u32::from(e.mem.u16(object.addr() + 0xa6)) {
+            let child = e.mem.u32(e.mem.u32(object.addr() + 0xa0) + index * 4);
+            if child != 0 {
+                fn_00a6d390(e, Ptr::new(child), f32::from_bits(pushed));
+            }
+            index += 1;
+        }
+    }
+}
+
+// Translated from 00a6d590 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map; the body is `NiTimeController`'s scalar deleting destructor
+/// (thiscall, `RET 4`): sets the class vtable (`0109c874`), releases the next controller
+/// (+0x30; `DeleteThis` when its count reaches 0; the field is left as it is), runs
+/// `NiObject`'s destructor body (`00a5d3d0`) and frees the 0x34-byte object when bit 0 of
+/// `flags` is set. Returns `this`.
+pub fn fn_00a6d590(
+    e: &mut Engine,
+    this: Ptr<NiTimeController>,
+    flags: u32,
+) -> Ptr<NiTimeController> {
+    e.mem.set_u32(this.addr(), NI_TIME_CONTROLLER_VTABLE);
+    let next = e.get(this, NiTimeController::m_spNext);
+    if next != 0 {
+        release(e, next);
+    }
+    e.call(OBJECT_DESTRUCT, &args![this]);
+    if flags & 1 != 0 {
+        e.call(SIZED_DELETE, &args![this, 0x34u32]);
+    }
+    this
+}
+
+/// One transfer of `size` bytes of the field at `field` through the stream being written
+/// (`m_pkOstr`, read again each time; its `m_pfnWrite`), the component size kept in the
+/// stream argument stack word.
+fn stream_write(e: &mut Engine, stream: Ptr<NiStream>, field: u32, size: u32) {
+    let output = Ptr::<NiBinaryStream>::new(e.get(stream, NiStream::m_pkOstr));
+    let function = e.get(output, NiBinaryStream::m_pfnWrite);
+    let done = e.with_stack(4, |e, count| {
+        e.mem.set_u32(count.addr(), size);
+        e.call(function, &args![output, field, size, count, 1u32])
+            .u32()
+    });
+    let position = e.get(output, NiBinaryStream::m_uiAbsoluteCurrentPos);
+    e.set(
+        output,
+        NiBinaryStream::m_uiAbsoluteCurrentPos,
+        position.wrapping_add(done),
+    );
+}
+
+// Translated from 00a6d730 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiTimeController::SaveBinary` (Xbox PDB; thiscall, `RET 4`): the base `SaveBinary`
+/// (`00a89af0`); the link to the first controller after this one whose slot +0xAC
+/// (`IsStreamable`) answers true, or null (the stream slot +0x30, `SaveLinkID`); the flags
+/// (2 bytes), frequency, phase, low and high key times (4 bytes each); then the link to the
+/// target.
+pub fn ni_time_controller_save_binary(
+    e: &mut Engine,
+    this: Ptr<NiTimeController>,
+    stream: Ptr<NiStream>,
+) {
+    e.call(BASE_SAVE_BINARY_00A89AF0, &args![this, stream]);
+    let mut next = e.get(this, NiTimeController::m_spNext);
+    while next != 0 {
+        if e.vcall(next, SLOT_IS_STREAMABLE, &args![]).u32() as u8 != 0 {
+            break;
+        }
+        next = e.mem.u32(next + 0x30);
+    }
+    e.vcall(stream.addr(), SLOT_SAVE_LINK_ID, &args![next]);
+    let base = this.addr();
+    stream_write(e, stream, base + 0x08, 2);
+    for field in [0x0c, 0x10, 0x14, 0x18] {
+        stream_write(e, stream, base + field, 4);
+    }
+    let target = e.get(this, NiTimeController::m_pkTarget);
+    e.vcall(stream.addr(), SLOT_SAVE_LINK_ID, &args![target]);
+}
+
+// Translated from 00a6d830 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiTimeController::GetViewerStrings` (Xbox PDB; thiscall, `RET 4`; no base class strings):
+/// the class name (the first word of `ms_RTTI`), the frequency, phase, low and high key,
+/// start and last times (`float`s pushed through `FLD`/`FSTP`), the target address, the
+/// animation type (flag bit 0) and cycle type (flag bits 1 and 2) through this class's two
+/// `GetViewerString`s, then `"Active"` (flag bit 3) and `"Play Backwards"` (bit 4) as
+/// `bool`s. The first string is held in a local, the others in the argument stack word;
+/// each `bool` is written over the low byte of that word, so its upper bytes are those of
+/// the string before it.
+pub fn ni_time_controller_get_viewer_strings(
+    e: &mut Engine,
+    this: Ptr<NiTimeController>,
+    strings: Ptr<NiTArray>,
+) {
+    e.with_stack(8, |e, frame| {
+        let local = frame.addr();
+        let slot = frame.addr() + 4;
+        let class_name = e.global::<u32>(NI_TIME_CONTROLLER_RTTI);
+        let text = e.call(VIEWER_STRING_NAME, &args![class_name]).u32();
+        e.mem.set_u32(local, text);
+        add_viewer_string(e, strings, local);
+        for (name, field) in [
+            (TEXT_FREQUENCY, NiTimeController::m_fFrequency),
+            (TEXT_PHASE, NiTimeController::m_fPhase),
+            (TEXT_LO_KEY_TIME, NiTimeController::m_fLoKeyTime),
+            (TEXT_HI_KEY_TIME, NiTimeController::m_fHiKeyTime),
+            (TEXT_START_TIME, NiTimeController::m_fStartTime),
+            (TEXT_LAST_TIME, NiTimeController::m_fLastTime),
+        ] {
+            let value = x87_quiet_bits(e.get(this, field));
+            let text = e.call(VIEWER_STRING_FLOAT, &args![name, value]).u32();
+            e.mem.set_u32(slot, text);
+            add_viewer_string(e, strings, slot);
+        }
+        let target = e.get(this, NiTimeController::m_pkTarget);
+        let text = e
+            .call(VIEWER_STRING_POINTER, &args![TEXT_TARGET, target])
+            .u32();
+        e.mem.set_u32(slot, text);
+        add_viewer_string(e, strings, slot);
+        let flags = u32::from(e.get(this, NiTimeController::m_uFlags));
+        let text = ni_time_controller_get_viewer_string(e, TEXT_ANIM_TYPE, flags & 1);
+        e.mem.set_u32(slot, text);
+        add_viewer_string(e, strings, slot);
+        let flags = u32::from(e.get(this, NiTimeController::m_uFlags));
+        let text = ni_time_controller_get_viewer_string_ov2(e, TEXT_CYCLE_TYPE, (flags >> 1) & 3);
+        e.mem.set_u32(slot, text);
+        add_viewer_string(e, strings, slot);
+        for (name, bit) in [(TEXT_ACTIVE, 3), (TEXT_PLAY_BACKWARDS, 4)] {
+            let flag = (e.mem.u8(this.addr() + 0x08) >> bit) & 1;
+            e.mem.set_u8(slot, flag);
+            let word = e.mem.u32(slot);
+            let text = e.call(VIEWER_STRING_BOOL, &args![name, word]).u32();
+            e.mem.set_u32(slot, text);
+            add_viewer_string(e, strings, slot);
+        }
+    });
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -575,6 +948,37 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(
             0x00a6_d5e0,
             ni_time_controller_load_binary(Ptr<NiTimeController>, Ptr<NiStream>)
+        ),
+        entry!(
+            0x00a6_cc80,
+            ni_time_controller_is_equal(Ptr<NiTimeController>, Ptr<NiTimeController>) -> bool
+        ),
+        entry!(0x00a6_cd00, fn_00a6cd00(Ptr<NiTimeController>) -> u32),
+        entry!(0x00a6_cd30, ni_time_controller_stop(Ptr<NiTimeController>)),
+        entry!(
+            0x00a6_d0f0,
+            ni_time_controller_register_streamables(Ptr<NiTimeController>, Ptr) -> bool
+        ),
+        entry!(
+            0x00a6_d120,
+            ni_time_controller_get_viewer_string(u32, u32) -> u32
+        ),
+        entry!(
+            0x00a6_d190,
+            ni_time_controller_get_viewer_string_ov2(u32, u32) -> u32
+        ),
+        entry!(0x00a6_d390, fn_00a6d390(Ptr, f32)),
+        entry!(
+            0x00a6_d590,
+            fn_00a6d590(Ptr<NiTimeController>, u32) -> Ptr<NiTimeController>
+        ),
+        entry!(
+            0x00a6_d730,
+            ni_time_controller_save_binary(Ptr<NiTimeController>, Ptr<NiStream>)
+        ),
+        entry!(
+            0x00a6_d830,
+            ni_time_controller_get_viewer_strings(Ptr<NiTimeController>, Ptr<NiTArray>)
         ),
     ]
 }
@@ -1010,5 +1414,328 @@ mod controller_tests {
         e.call(0x00a6_d5e0, &args![mid, stream]);
         assert_eq!(e.mem.u16(stream.addr() + 0x286), 0x00ff);
         assert_eq!(e.get(mid, NiTimeController::m_uFlags), 0x005f);
+    }
+}
+
+#[cfg(test)]
+mod n020_tests {
+    use super::*;
+    use crate::units::nimain::nimainsdm::test_support::{calls_to, engine_with_counting};
+
+    const VTABLE: u32 = 0x0710_0000;
+    const START_DOUBLE: u32 = 0x0720_0000;
+    const RTTI_DOUBLE: u32 = 0x0720_0010;
+    const IS_NODE_DOUBLE: u32 = 0x0720_0020;
+    const STREAMABLE_DOUBLE: u32 = 0x0720_0030;
+    const REGISTER_DOUBLE: u32 = 0x0720_0040;
+    const DELETE_DOUBLE: u32 = 0x0720_0050;
+    const SAVE_LINK_DOUBLE: u32 = 0x0720_0060;
+    const WRITE_DOUBLE: u32 = 0x0720_0070;
+    /// The answer of the `GetRTTI` double: an `NiAVObject` record below a made-up one.
+    const OWN_RTTI: u32 = 0x0730_0000;
+
+    /// One vtable for controllers, objects and streams: every slot this file calls is a
+    /// double; `IsNode` answers the object word at +0xA8, `IsStreamable` the word at +0x10.
+    fn engine() -> Engine {
+        let mut e = engine_with_counting();
+        e.map(0x0101_5000, 0x1000);
+        e.mem.set_u32(NO_TIME_FLOAT, 0xff7f_ffff);
+        let mut slots = vec![0u32; 0xb0 / 4];
+        slots[SLOT_START as usize / 4] = START_DOUBLE;
+        slots[SLOT_GET_RTTI as usize / 4] = RTTI_DOUBLE;
+        slots[SLOT_IS_NODE as usize / 4] = IS_NODE_DOUBLE;
+        slots[SLOT_IS_STREAMABLE as usize / 4] = STREAMABLE_DOUBLE;
+        slots[SLOT_REGISTER_STREAMABLES as usize / 4] = REGISTER_DOUBLE;
+        slots[1] = DELETE_DOUBLE;
+        slots[SLOT_SAVE_LINK_ID as usize / 4] = SAVE_LINK_DOUBLE;
+        e.put_vtable(VTABLE, &slots);
+        e.map(OWN_RTTI, 8);
+        e.mem.set_u32(OWN_RTTI + 4, NI_AV_OBJECT_RTTI);
+        for addr in [
+            START_DOUBLE,
+            REGISTER_DOUBLE,
+            DELETE_DOUBLE,
+            SAVE_LINK_DOUBLE,
+        ] {
+            e.register(addr, |_, _| Ret::default());
+        }
+        e.register(RTTI_DOUBLE, |e, a| e.mem.u32(a[0] + 0xac).into_ret());
+        e.register(IS_NODE_DOUBLE, |e, a| e.mem.u32(a[0] + 0xa8).into_ret());
+        e.register(STREAMABLE_DOUBLE, |e, a| e.mem.u32(a[0] + 0x10).into_ret());
+        e
+    }
+
+    fn controller(e: &mut Engine) -> Ptr<NiTimeController> {
+        let c = e.new_object::<NiTimeController>();
+        e.mem.set_u32(c.addr(), VTABLE);
+        c
+    }
+
+    #[test]
+    fn is_equal_compares_flags_times_and_target_presence() {
+        let mut e = engine();
+        e.register(OBJECT_IS_EQUAL, |_, _| 1u32.into_ret());
+        let a = controller(&mut e);
+        let b = controller(&mut e);
+        e.set(a, NiTimeController::m_fPhase, 0x8000_0000);
+        assert_eq!(e.call(0x00a6_cc80, &args![a, b]).u32() & 0xff, 1);
+        e.set(a, NiTimeController::m_fHiKeyTime, 0x7fc0_0000);
+        e.set(b, NiTimeController::m_fHiKeyTime, 0x7fc0_0000);
+        assert_eq!(e.call(0x00a6_cc80, &args![a, b]).u32() & 0xff, 0);
+        e.set(a, NiTimeController::m_fHiKeyTime, 0);
+        e.set(b, NiTimeController::m_fHiKeyTime, 0);
+        e.set(a, NiTimeController::m_pkTarget, 0x100);
+        assert_eq!(e.call(0x00a6_cc80, &args![a, b]).u32() & 0xff, 0);
+        e.set(b, NiTimeController::m_pkTarget, 0x200);
+        assert_eq!(e.call(0x00a6_cc80, &args![a, b]).u32() & 0xff, 1);
+        e.set(b, NiTimeController::m_uFlags, 1);
+        assert_eq!(e.call(0x00a6_cc80, &args![a, b]).u32() & 0xff, 0);
+        e.set(b, NiTimeController::m_uFlags, 0);
+        e.register(OBJECT_IS_EQUAL, |_, _| 0xff00u32.into_ret());
+        assert_eq!(e.call(0x00a6_cc80, &args![a, b]).u32() & 0xff, 0);
+    }
+
+    #[test]
+    fn chain_count_follows_the_next_links() {
+        let mut e = engine();
+        assert_eq!(e.call(0x00a6_cd00, &args![0u32]).u32(), 0);
+        let a = controller(&mut e);
+        let b = controller(&mut e);
+        e.set(a, NiTimeController::m_spNext, b.addr());
+        assert_eq!(e.call(0x00a6_cd00, &args![a]).u32(), 2);
+    }
+
+    #[test]
+    fn stop_clears_bit_3_and_resets_the_times() {
+        let mut e = engine();
+        let c = controller(&mut e);
+        e.set(c, NiTimeController::m_uFlags, 0x0f);
+        e.call(0x00a6_cd30, &args![c]);
+        assert_eq!(e.get(c, NiTimeController::m_uFlags), 0x07);
+        assert_eq!(e.get(c, NiTimeController::m_fLastTime), 0xff7f_ffff);
+        assert_eq!(e.get(c, NiTimeController::m_fStartTime), 0xff7f_ffff);
+        e.set(c, NiTimeController::m_uFlags, 0x0e);
+        e.set(c, NiTimeController::m_fStartTime, 5);
+        e.call(0x00a6_cd30, &args![c]);
+        assert_eq!(e.get(c, NiTimeController::m_fStartTime), 5);
+    }
+
+    #[test]
+    fn register_streamables_passes_on_to_the_next_controller() {
+        let mut e = engine();
+        e.register(OBJECT_REGISTER_STREAMABLES, |_, _| 1u32.into_ret());
+        let a = controller(&mut e);
+        let b = controller(&mut e);
+        e.set(a, NiTimeController::m_spNext, b.addr());
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x00a6_d0f0, &args![a, 0x50u32]).u32() & 0xff, 1);
+        assert_eq!(calls_to(&e, REGISTER_DOUBLE), vec![vec![b.addr(), 0x50]]);
+        e.register(OBJECT_REGISTER_STREAMABLES, |_, _| 0u32.into_ret());
+        assert_eq!(e.call(0x00a6_d0f0, &args![a, 0x50u32]).u32() & 0xff, 0);
+        assert_eq!(calls_to(&e, REGISTER_DOUBLE).len(), 1);
+    }
+
+    fn text(e: &mut Engine, s: &str) -> u32 {
+        let block = e.mem.alloc(s.len() as u32 + 1);
+        e.mem.write(block, s.as_bytes());
+        block
+    }
+
+    #[test]
+    fn type_strings_pick_their_formats() {
+        let mut e = engine();
+        e.register(NI_ALLOC, |e, a| e.mem.alloc(a[0]).into_ret());
+        e.register(NI_SPRINTF, |_, _| Ret::default());
+        let name = text(&mut e, "abcd");
+        e.call_log = Some(vec![]);
+        for kind in 0..3u32 {
+            e.call(0x00a6_d120, &args![name, kind]);
+        }
+        for kind in 0..4u32 {
+            e.call(0x00a6_d190, &args![name, kind]);
+        }
+        let formats: Vec<u32> = calls_to(&e, NI_SPRINTF).iter().map(|w| w[2]).collect();
+        assert_eq!(
+            formats,
+            vec![
+                FORMAT_APP_TIME,
+                FORMAT_APP_INIT,
+                FORMAT_LOOP,
+                FORMAT_REVERSE,
+                FORMAT_CLAMP,
+                FORMAT_UNKNOWN
+            ]
+        );
+        let sizes: Vec<u32> = calls_to(&e, NI_ALLOC).iter().map(|w| w[0]).collect();
+        assert_eq!(sizes, vec![16, 16, 16, 15, 15, 15, 15]);
+        assert!(calls_to(&e, NI_SPRINTF).iter().all(|w| w[3] == name));
+    }
+
+    #[test]
+    fn start_animations_with_a_time_walks_controllers_properties_and_children() {
+        let mut e = engine();
+        // A node (an NiAVObject) with one controller, one property with a controller and
+        // one child without anything.
+        let node = e.mem.alloc(0xb0);
+        e.mem.set_u32(node, VTABLE);
+        e.mem.set_u32(node + 0xac, OWN_RTTI);
+        e.mem.set_u32(node + 0xa8, 1);
+        let c = controller(&mut e);
+        e.mem.set_u32(node + 0xc, c.addr());
+        let property = e.mem.alloc(0xb0);
+        e.mem.set_u32(property, VTABLE);
+        let pc = controller(&mut e);
+        e.mem.set_u32(property + 0xc, pc.addr());
+        let item = e.mem.alloc(0xc);
+        e.mem.set_u32(item + 8, property);
+        e.mem.set_u32(node + 0x24, item);
+        let child = e.mem.alloc(0xb0);
+        e.mem.set_u32(child, VTABLE);
+        let children = e.mem.alloc(8);
+        e.mem.set_u32(children + 4, child);
+        e.mem.set_u32(node + 0xa0, children);
+        e.mem.set_u16(node + 0xa6, 2);
+        e.call_log = Some(vec![]);
+        // A signalling NaN is pushed quiet.
+        e.call(0x00a6_d390, &args![node, 0x7f80_0001u32]);
+        assert_eq!(
+            calls_to(&e, START_DOUBLE),
+            vec![vec![c.addr(), 0x7fc0_0001], vec![pc.addr(), 0x7fc0_0001]]
+        );
+        let rtti_asked: Vec<u32> = calls_to(&e, RTTI_DOUBLE).iter().map(|w| w[0]).collect();
+        assert_eq!(rtti_asked, vec![node, property, child]);
+    }
+
+    #[test]
+    fn deleting_destructor_releases_the_next_controller() {
+        let mut e = engine();
+        e.register(OBJECT_DESTRUCT, |_, _| Ret::default());
+        e.register(SIZED_DELETE, |_, _| Ret::default());
+        let a = controller(&mut e);
+        let b = controller(&mut e);
+        e.set(b, NiTimeController::m_uiRefCount, 1);
+        e.set(a, NiTimeController::m_spNext, b.addr());
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x00a6_d590, &args![a, 1u32]).u32(), a.addr());
+        assert_eq!(e.mem.u32(a.addr()), NI_TIME_CONTROLLER_VTABLE);
+        assert_eq!(calls_to(&e, DELETE_DOUBLE), vec![vec![b.addr()]]);
+        assert_eq!(calls_to(&e, SIZED_DELETE), vec![vec![a.addr(), 0x34]]);
+        assert_eq!(e.get(a, NiTimeController::m_spNext), b.addr());
+        e.call(0x00a6_d590, &args![a, 0u32]);
+        assert_eq!(calls_to(&e, SIZED_DELETE).len(), 1);
+    }
+
+    #[test]
+    fn save_binary_links_the_first_streamable_next_and_writes_the_fields() {
+        let mut e = engine();
+        e.register(BASE_SAVE_BINARY_00A89AF0, |_, _| Ret::default());
+        e.register(WRITE_DOUBLE, |e, a| {
+            assert_eq!(e.mem.u32(a[3]), a[2]);
+            a[2].into_ret()
+        });
+        let stream = e.mem.alloc(0x5c4);
+        e.mem.set_u32(stream, VTABLE);
+        let output = e.mem.alloc(0x10);
+        e.mem.set_u32(output + 0xc, WRITE_DOUBLE);
+        e.mem.set_u32(stream + 0x250, output);
+        let a = controller(&mut e);
+        let b = controller(&mut e);
+        let c = controller(&mut e);
+        e.set(a, NiTimeController::m_spNext, b.addr());
+        e.set(b, NiTimeController::m_spNext, c.addr());
+        e.set(c, NiTimeController::m_fPhase, 1);
+        e.set(a, NiTimeController::m_pkTarget, 0x0abc_0000);
+        e.call_log = Some(vec![]);
+        e.call(0x00a6_d730, &args![a, stream]);
+        assert_eq!(
+            calls_to(&e, SAVE_LINK_DOUBLE),
+            vec![vec![stream, c.addr()], vec![stream, 0x0abc_0000]]
+        );
+        let writes: Vec<(u32, u32)> = calls_to(&e, WRITE_DOUBLE)
+            .iter()
+            .map(|w| (w[1] - a.addr(), w[2]))
+            .collect();
+        assert_eq!(
+            writes,
+            vec![(0x8, 2), (0xc, 4), (0x10, 4), (0x14, 4), (0x18, 4)]
+        );
+        assert_eq!(e.mem.u32(output + 4), 18);
+        // No streamable controller: a null link.
+        e.set(c, NiTimeController::m_fPhase, 0);
+        e.call_log = Some(vec![]);
+        e.call(0x00a6_d730, &args![a, stream]);
+        assert_eq!(calls_to(&e, SAVE_LINK_DOUBLE)[0], vec![stream, 0]);
+    }
+
+    #[test]
+    fn viewer_strings_list_times_target_types_and_flags() {
+        let mut e = engine();
+        e.mem.set_u32(NI_TIME_CONTROLLER_RTTI, 0x0104_0000);
+        e.register(VIEWER_STRING_NAME, |_, a| (a[0] + 1).into_ret());
+        e.register(VIEWER_STRING_FLOAT, |_, a| (a[1] & 0xffff).into_ret());
+        e.register(VIEWER_STRING_POINTER, |_, a| a[1].into_ret());
+        e.register(VIEWER_STRING_BOOL, |_, a| (0x0b00_0000 + a[1]).into_ret());
+        e.register(NI_ALLOC, |_, a| (0x0c00_0000 + a[0]).into_ret());
+        e.register(NI_SPRINTF, |_, _| Ret::default());
+        e.register(STRING_ARRAY_SET_SIZE, |e, a| {
+            e.mem.set_u16(a[0] + 8, a[1] as u16);
+            Ret::default()
+        });
+        e.register(STRING_ARRAY_SET_AT, |e, a| {
+            let base = e.mem.u32(a[0] + 4);
+            let value = e.mem.u32(a[2]);
+            e.mem.set_u32(base + a[1] * 4, value);
+            e.mem.set_u16(a[0] + 0xa, a[1] as u16 + 1);
+            Ret::default()
+        });
+        e.map(0x0109_c000, 0x1000);
+        let strings = e.mem.alloc(0x10);
+        let base = e.mem.alloc(0x40);
+        e.mem.set_u32(strings + 4, base);
+        e.mem.set_u16(strings + 0xe, 4);
+        let c = controller(&mut e);
+        for (i, field) in [
+            NiTimeController::m_fFrequency,
+            NiTimeController::m_fPhase,
+            NiTimeController::m_fLoKeyTime,
+            NiTimeController::m_fHiKeyTime,
+            NiTimeController::m_fStartTime,
+            NiTimeController::m_fLastTime,
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            e.set(c, field, 0x3f80_0000 + i as u32);
+        }
+        e.set(c, NiTimeController::m_pkTarget, 0x0d00_0000);
+        // Anim type 1, cycle type 2, active, not backwards.
+        e.set(c, NiTimeController::m_uFlags, 0b0_1101);
+        e.call(0x00a6_d830, &args![c, strings]);
+        let words: Vec<u32> = (0..13).map(|i| e.mem.u32(base + 4 * i)).collect();
+        // The names are not mapped here (length 0): the cycle-type buffer is 0x0c00_0000
+        // plus its size 11; "Active" keeps its upper bytes, and "Play Backwards" those of
+        // the "Active" string.
+        let cycle = 0x0c00_0000 + 11;
+        let active = 0x0b00_0000 + ((cycle & !0xff) | 1);
+        let backwards = 0x0b00_0000 + (active & !0xff);
+        assert_eq!(
+            words,
+            vec![
+                0x0104_0001,
+                0,
+                1,
+                2,
+                3,
+                4,
+                5,
+                0x0d00_0000,
+                0x0c00_0000 + 12,
+                cycle,
+                active,
+                backwards,
+                0
+            ]
+        );
+        assert_eq!(e.mem.u16(strings + 0xa), 12);
     }
 }

@@ -220,9 +220,30 @@ pub fn fn_00a62330(e: &mut Engine, first: Ptr, second: Ptr, format: Ptr, faces: 
     })
 }
 
+// Translated from 00a62150 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`cdecl`, (words, count)): reverses the byte order of `count`
+/// 4-byte words in place.
+pub fn fn_00a62150(e: &mut Engine, words: Ptr, count: u32) {
+    let mut at = words.addr();
+    for _ in 0..count {
+        let (b0, b1, b2, b3) = (
+            e.mem.u8(at),
+            e.mem.u8(at + 1),
+            e.mem.u8(at + 2),
+            e.mem.u8(at + 3),
+        );
+        e.mem.set_u8(at, b3);
+        e.mem.set_u8(at + 3, b0);
+        e.mem.set_u8(at + 1, b2);
+        e.mem.set_u8(at + 2, b1);
+        at = at.wrapping_add(4);
+    }
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x00a6_2150, fn_00a62150(Ptr, u32)),
         entry!(0x00a62190, fn_00a62190(Ptr, u32) -> u32),
         entry!(0x00a62230, fn_00a62230(Ptr, u32) -> u8),
         entry!(0x00a62280, fn_00a62280()),
@@ -382,5 +403,25 @@ mod b007_tests {
         assert_eq!(e.mem.u32(0x8000 + 16 * 4), 0x7f00_ff00);
         assert_eq!(e.mem.u32(0x8000 + 16 * 128 + 16 * 4), 0xff00_00ff);
         assert_eq!(e.mem.u32(0x9000 + 16 * 128), 0x7f00_ff00);
+    }
+}
+
+#[cfg(test)]
+mod n007_tests {
+    use super::*;
+
+    #[test]
+    fn swaps_each_word() {
+        let mut e = Engine::new();
+        let words = e.mem.alloc(12);
+        e.mem.set_u32(words, 0x1122_3344);
+        e.mem.set_u32(words + 4, 0xaabb_ccdd);
+        e.mem.set_u32(words + 8, 0x5566_7788);
+        e.call(0x00a6_2150, &args![words, 2u32]);
+        assert_eq!(e.mem.u32(words), 0x4433_2211);
+        assert_eq!(e.mem.u32(words + 4), 0xddcc_bbaa);
+        assert_eq!(e.mem.u32(words + 8), 0x5566_7788);
+        e.call(0x00a6_2150, &args![words, 0u32]);
+        assert_eq!(e.mem.u32(words), 0x4433_2211);
     }
 }

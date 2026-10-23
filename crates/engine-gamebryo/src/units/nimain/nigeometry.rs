@@ -587,6 +587,523 @@ pub fn ni_geometry_load_binary(e: &mut Engine, this: Ptr, stream: Ptr) {
     });
 }
 
+/// `NiAVObject::RegisterStreamables` (`00a59f00`, the stream), `NiAVObject::IsEqual`
+/// (`00a5a260`, the other object), `NiAVObject::PurgeRendererData` (`00a59e50`, the
+/// renderer), `NiAVObject::SaveBinary` (`00a5a900`, the stream) and
+/// `NiAVObject::GetViewerStrings` (`00a5ad00`, the string array), all `thiscall`.
+const AV_OBJECT_REGISTER_STREAMABLES: u32 = 0x00a5_9f00;
+const AV_OBJECT_IS_EQUAL: u32 = 0x00a5_a260;
+const AV_OBJECT_PURGE_RENDERER_DATA: u32 = 0x00a5_9e50;
+const AV_OBJECT_SAVE_BINARY: u32 = 0x00a5_a900;
+const AV_OBJECT_GET_VIEWER_STRINGS: u32 = 0x00a5_ad00;
+/// `NiGeometryData::SetConsistency` (`00a67050`, `thiscall`, the flags).
+const GEOMETRY_DATA_SET_CONSISTENCY: u32 = 0x00a6_7050;
+/// The light listener (`011f4748`) whose slot +0xa0 `CalculateConsistency` asks.
+const LIGHT_LISTENER_011F4748: u32 = 0x011f_4748;
+/// `NiMatrix3::operator*` (`0043f8d0`; `thiscall` on the left matrix: the out matrix and
+/// the right one), `NiMatrix3::TransposeTimes` (`00a588a0`; `thiscall`: the out matrix and
+/// the other one), `NiMatrix3::Inverse_ov2` (`004b46a0`; `thiscall`: the out matrix) and
+/// `NiBound::ComputeFromData` (`00a7ee30`; `thiscall` on the bound: the count and the
+/// vertices).
+const MATRIX_PRODUCT: u32 = 0x0043_f8d0;
+const MATRIX_TRANSPOSE_TIMES: u32 = 0x00a5_88a0;
+const MATRIX_INVERSE: u32 = 0x004b_46a0;
+const BOUND_COMPUTE_FROM_DATA: u32 = 0x00a7_ee30;
+/// The sized delete (`00aa1460`, `cdecl`: block, size).
+const SIZED_DELETE: u32 = 0x00aa_1460;
+/// `NiGetViewerString` (`00a7d330`, the class name), `NiGetViewerString_ov8` (`00a7d510`,
+/// a name and an unsigned word), `NiGetViewerString_ov10` (`00a7d5a0`, a name and an
+/// object) and `NiGetViewerString_ov11` (`00a7d5e0`, a name and a fixed-string handle), all
+/// `cdecl`, answering a new string.
+const VIEWER_STRING_CLASS: u32 = 0x00a7_d330;
+const VIEWER_STRING_UNSIGNED: u32 = 0x00a7_d510;
+const VIEWER_STRING_OBJECT: u32 = 0x00a7_d5a0;
+const VIEWER_STRING_FIXED_STRING: u32 = 0x00a7_d5e0;
+/// The string array's grow (`0096ad30`, `thiscall`, the new size) and set-at (`0096ae90`,
+/// `thiscall`, (index, address of the string)), both unnamed in the engine map.
+const STRINGS_GROW: u32 = 0x0096_ad30;
+const STRINGS_SET_AT: u32 = 0x0096_ae90;
+/// The literals `"GeomData"`, `"shader"` and `"skin partitions"`.
+const TEXT_GEOM_DATA: u32 = 0x0109_e154;
+const TEXT_SHADER: u32 = 0x0109_e14c;
+const TEXT_SKIN_PARTITIONS: u32 = 0x0109_e13c;
+/// `NiGeometry` (PC offsets): `m_spModelData` (+0xb8), `m_spSkinInstance` (+0xbc),
+/// `m_spShader` (+0xc0); `NiAVObject`'s world transform: rotation (nine floats at +0x34),
+/// translation (+0x58) and scale (+0x64); `NiObjectNET::m_spControllers` (+0xc, controllers
+/// chained through their +0x30).
+const MODEL_DATA: u32 = 0xb8;
+const SKIN_INSTANCE: u32 = 0xbc;
+const SHADER: u32 = 0xc0;
+const WORLD_ROTATE: u32 = 0x34;
+const WORLD_TRANSLATE: u32 = 0x58;
+const WORLD_SCALE: u32 = 0x64;
+const CONTROLLERS: u32 = 0xc;
+const NEXT_CONTROLLER: u32 = 0x30;
+
+/// Appends `text` to a viewer-string array as the exe's inlined `Add` does: when the 16-bit
+/// size (+0xa) has reached the capacity (+0x8) the array grows to its step (+0xe) plus the
+/// size, then the string is stored at the old size (through a stack word holding it).
+fn push_viewer_string(e: &mut Engine, strings: Ptr, text: u32) {
+    let size = u32::from(e.mem.u16(strings.addr() + 0xa));
+    if size >= u32::from(e.mem.u16(strings.addr() + 8)) {
+        let step = u32::from(e.mem.u16(strings.addr() + 0xe));
+        e.call(STRINGS_GROW, &args![strings, step + size]);
+    }
+    e.with_stack(4, |e, slot| {
+        e.mem.set_u32(slot.addr(), text);
+        e.call(STRINGS_SET_AT, &args![strings, size, slot]);
+    });
+}
+
+// Translated from 00a7ff60 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiGeometry::CalculateNormals` (Xbox PDB): a tail jump into the model data's (+0xb8)
+/// virtual slot +0xa0.
+pub fn ni_geometry_calculate_normals(e: &mut Engine, this: Ptr) {
+    let data = e.mem.u32(this.addr() + MODEL_DATA);
+    e.vcall(data, 0xa0, &args![]);
+}
+
+/// The x87 loads and stores `ApplyTransform` makes: `FLD dword` (`load`), a `float` memory
+/// operand (`operand`) and `FSTP dword` (`store`).
+fn load(e: &Engine, at: u32) -> f64 {
+    x87_load32(e.mem.u32(at))
+}
+fn operand(e: &Engine, at: u32) -> f64 {
+    x87_m32(e.mem.u32(at))
+}
+fn store(e: &mut Engine, at: u32, value: f64) {
+    e.mem.set_u32(at, x87_store32(value));
+}
+
+/// The three rows of `matrix` (nine floats) times the vector at `vector`, each as the exe
+/// computes it: `(row[1] * y + row[0] * x) + row[2] * z` with the matrix words loaded and
+/// the vector words as memory operands.
+fn rows_times(e: &Engine, matrix: u32, vector: u32) -> [f64; 3] {
+    let mut out = [0.0; 3];
+    for (row, slot) in out.iter_mut().enumerate() {
+        let m = matrix + 12 * row as u32;
+        let a = x87_mul(load(e, m + 4), operand(e, vector + 4));
+        let b = x87_mul(load(e, m), operand(e, vector));
+        let sum = x87_add(a, b);
+        *slot = x87_add(sum, x87_mul(load(e, m + 8), operand(e, vector + 8)));
+    }
+    out
+}
+
+/// The normal loop both paths share (after `NiMatrix3::Inverse_ov2` into the matrix at
+/// `inverse`): each normal becomes the inverse's columns times it, with the inverse's
+/// words 4 to 8 held on the x87 stack. The two paths load different operands for the
+/// first products: `loads_normal` (the model-space path) loads the normal's word and
+/// multiplies by the matrix word in memory; otherwise the matrix word is loaded and the
+/// normal's word is the memory operand.
+fn transform_normals(
+    e: &mut Engine,
+    normals: u32,
+    count: u32,
+    inverse: u32,
+    locals: u32,
+    loads_normal: bool,
+) {
+    let b = |e: &Engine, i: u32| load(e, inverse + 4 * i);
+    let (b4, b5, b6, b7, b8) = (b(e, 4), b(e, 5), b(e, 6), b(e, 7), b(e, 8));
+    // `word * matrix[i]` as the path's instruction has it.
+    let by_memory = |e: &Engine, word: u32, i: u32| {
+        if loads_normal {
+            x87_mul(load(e, word), operand(e, inverse + 4 * i))
+        } else {
+            x87_mul(load(e, inverse + 4 * i), operand(e, word))
+        }
+    };
+    // `word * held` (a matrix word on the x87 stack) as the path's instruction has it.
+    let by_held = |e: &Engine, word: u32, held: f64| {
+        if loads_normal {
+            x87_mul(load(e, word), held)
+        } else {
+            x87_mul(held, operand(e, word))
+        }
+    };
+    for index in 0..count {
+        let n = normals + 12 * index;
+        let (x, y, z) = (n, n + 4, n + 8);
+        let p = by_memory(e, y, 3);
+        let q = by_memory(e, x, 0);
+        let s = x87_add(p, q);
+        let first = x87_add(s, x87_mul(b6, operand(e, z)));
+        store(e, locals + 0x34, first);
+        let p = by_memory(e, x, 1);
+        let s = x87_add(p, by_held(e, y, b4));
+        let second = x87_add(s, x87_mul(b7, operand(e, z)));
+        store(e, locals + 0x38, second);
+        let p = by_memory(e, x, 2);
+        let s = x87_add(p, by_held(e, y, b5));
+        let last = x87_mul(b8, operand(e, z));
+        let word = e.mem.u32(locals + 0x34);
+        e.mem.set_u32(x, word);
+        let word = e.mem.u32(locals + 0x38);
+        e.mem.set_u32(y, word);
+        store(e, locals + 0x3c, x87_add(s, last));
+        let word = e.mem.u32(locals + 0x3c);
+        e.mem.set_u32(z, word);
+    }
+}
+
+// Translated from 00a7ff70 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiGeometry::ApplyTransform` (Xbox PDB; `thiscall`: a matrix, a translation, a byte).
+/// The model data's slot +0x90 gives the vertex count (16 bits); its vertices (+0x20) and
+/// normals (+0x24) are read after it. With the byte 0 each vertex becomes matrix * vertex
+/// + translation and, when there are normals, each normal the columns of the matrix's
+/// `Inverse_ov2` (into a local) times it. Otherwise the transform is applied in this
+/// object's model space: `M1 = matrix * world rotation` (`NiMatrix3::operator*`),
+/// `M2 = world rotationᵀ * M1` (`TransposeTimes`), the offset `(world rotationᵀ *
+/// (matrix * world translation + translation - world translation)) / world scale`, each
+/// vertex `M2 * vertex + offset` and each normal by `Inverse_ov2` of `M2`. Every product
+/// and sum is the exe's x87 instruction in its order (rounded at each `float` store).
+/// Finally the data's bound (+0x10) is computed from the vertices
+/// (`NiBound::ComputeFromData`).
+pub fn ni_geometry_apply_transform(
+    e: &mut Engine,
+    this: Ptr,
+    matrix: Ptr,
+    translation: Ptr,
+    model_space: u32,
+) {
+    let t = this.addr();
+    let data = e.mem.u32(t + MODEL_DATA);
+    let count = u32::from(e.vcall(data, 0x90, &args![]).u32() as u16);
+    let data = e.mem.u32(t + MODEL_DATA);
+    let vertices = e.mem.u32(data + 0x20);
+    let normals = e.mem.u32(data + 0x24);
+    let m = matrix.addr();
+    let v = translation.addr();
+    // The frame's locals: +0x1c..+0x3c scratch floats, +0x40 M2, +0x64 M1 (and the inverse).
+    e.with_stack(0x88, |e, frame| {
+        let f = frame.addr();
+        if model_space as u8 == 0 {
+            if vertices != 0 {
+                for index in 0..count {
+                    let p = vertices + 12 * index;
+                    let (x, y, z) = (p, p + 4, p + 8);
+                    let s = x87_add(
+                        x87_mul(load(e, m + 4), operand(e, y)),
+                        x87_mul(load(e, m), operand(e, x)),
+                    );
+                    let a = x87_add(s, x87_mul(load(e, z), operand(e, m + 8)));
+                    let s = x87_add(
+                        x87_mul(load(e, m + 0x10), operand(e, y)),
+                        x87_mul(load(e, x), operand(e, m + 0xc)),
+                    );
+                    let b = x87_add(s, x87_mul(load(e, z), operand(e, m + 0x14)));
+                    let s = x87_add(
+                        x87_mul(load(e, m + 0x18), operand(e, x)),
+                        x87_mul(load(e, y), operand(e, m + 0x1c)),
+                    );
+                    let c = x87_add(s, x87_mul(load(e, z), operand(e, m + 0x20)));
+                    store(e, f + 0x34, a);
+                    store(e, f + 0x38, b);
+                    store(e, f + 0x3c, c);
+                    let x = x87_add(load(e, v), operand(e, f + 0x34));
+                    store(e, f + 0x28, x);
+                    let y = x87_add(load(e, f + 0x38), operand(e, v + 4));
+                    store(e, f + 0x2c, y);
+                    let z = x87_add(load(e, f + 0x3c), operand(e, v + 8));
+                    for (offset, local) in [(0u32, 0x28u32), (4, 0x2c)] {
+                        let word = e.mem.u32(f + local);
+                        e.mem.set_u32(p + offset, word);
+                    }
+                    store(e, f + 0x30, z);
+                    let word = e.mem.u32(f + 0x30);
+                    e.mem.set_u32(p + 8, word);
+                }
+            }
+            if normals != 0 {
+                e.call(MATRIX_INVERSE, &args![m, f + 0x64]);
+                transform_normals(e, normals, count, f + 0x64, f, false);
+            }
+        } else {
+            let rotate = t + WORLD_ROTATE;
+            let product = e.call(MATRIX_PRODUCT, &args![m, f + 0x64, rotate]).u32();
+            e.call(MATRIX_TRANSPOSE_TIMES, &args![rotate, f + 0x40, product]);
+            let moved = rows_times(e, m, t + WORLD_TRANSLATE);
+            for (i, value) in moved.into_iter().enumerate() {
+                store(e, f + 0x1c + 4 * i as u32, value);
+            }
+            for i in 0..3u32 {
+                let sum = x87_add(load(e, v + 4 * i), operand(e, f + 0x1c + 4 * i));
+                store(e, f + 0x28 + 4 * i, sum);
+            }
+            for i in 0..3u32 {
+                let offset = x87_sub(
+                    load(e, f + 0x28 + 4 * i),
+                    operand(e, t + WORLD_TRANSLATE + 4 * i),
+                );
+                store(e, f + 0x1c + 4 * i, offset);
+            }
+            let r = |e: &Engine, i: u32| load(e, rotate + 4 * i);
+            let (d0, d1, d2) = (load(e, f + 0x1c), load(e, f + 0x20), load(e, f + 0x24));
+            let p1 = x87_mul(r(e, 3), d1);
+            let p0 = x87_mul(r(e, 0), d0);
+            let s = x87_add(p0, p1);
+            let p2 = x87_mul(r(e, 6), d2);
+            store(e, f + 0x28, x87_add(p2, s));
+            let q1 = x87_mul(r(e, 4), d1);
+            let q0 = x87_mul(r(e, 1), d0);
+            let s = x87_add(q1, q0);
+            let q2 = x87_mul(r(e, 7), d2);
+            store(e, f + 0x2c, x87_add(s, q2));
+            let w1 = x87_mul(d1, r(e, 5));
+            let w0 = x87_mul(d0, r(e, 2));
+            let s = x87_add(w0, w1);
+            let w2 = x87_mul(d2, operand(e, rotate + 0x20));
+            store(e, f + 0x30, x87_add(s, w2));
+            let reciprocal = x87_div(1.0, load(e, t + WORLD_SCALE));
+            store(e, f + 0x18, reciprocal);
+            let k = load(e, f + 0x18);
+            store(e, f + 0x1c, x87_mul(k, operand(e, f + 0x28)));
+            store(e, f + 0x20, x87_mul(load(e, f + 0x2c), k));
+            store(e, f + 0x24, x87_mul(k, operand(e, f + 0x30)));
+            if vertices != 0 && count != 0 {
+                let a = |e: &Engine, i: u32| load(e, f + 0x40 + 4 * i);
+                let (a4, a5, a6, a7, a8) = (a(e, 4), a(e, 5), a(e, 6), a(e, 7), a(e, 8));
+                for index in 0..count {
+                    let p = vertices + 12 * index;
+                    let (x, y, z) = (p, p + 4, p + 8);
+                    let s = x87_add(
+                        x87_mul(load(e, x), operand(e, f + 0x40)),
+                        x87_mul(load(e, y), operand(e, f + 0x44)),
+                    );
+                    let first = x87_add(s, x87_mul(load(e, z), operand(e, f + 0x48)));
+                    store(e, f + 0x28, first);
+                    let s = x87_add(
+                        x87_mul(load(e, x), operand(e, f + 0x4c)),
+                        x87_mul(load(e, y), a4),
+                    );
+                    store(e, f + 0x2c, x87_add(s, x87_mul(load(e, z), a5)));
+                    let s = x87_add(x87_mul(load(e, x), a6), x87_mul(load(e, y), a7));
+                    store(e, f + 0x30, x87_add(s, x87_mul(load(e, z), a8)));
+                    for i in 0..3u32 {
+                        let sum = x87_add(load(e, f + 0x28 + 4 * i), operand(e, f + 0x1c + 4 * i));
+                        store(e, f + 0x34 + 4 * i, sum);
+                        let word = e.mem.u32(f + 0x34 + 4 * i);
+                        e.mem.set_u32(p + 4 * i, word);
+                    }
+                }
+            }
+            if normals != 0 {
+                e.call(MATRIX_INVERSE, &args![f + 0x40, f + 0x64]);
+                transform_normals(e, normals, count, f + 0x64, f, true);
+            }
+        }
+    });
+    let data = e.mem.u32(t + MODEL_DATA);
+    e.call(
+        BOUND_COMPUTE_FROM_DATA,
+        &args![data.wrapping_add(0x10), count, vertices],
+    );
+}
+
+// Translated from 00a80430 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiGeometry::RegisterStreamables` (Xbox PDB): false when
+/// `NiAVObject::RegisterStreamables` is false; otherwise the model data and, when present,
+/// the skin instance register themselves (their slot +0x54 with the stream) and the answer
+/// is true.
+pub fn ni_geometry_register_streamables(e: &mut Engine, this: Ptr, stream: Ptr) -> bool {
+    if !e
+        .call(AV_OBJECT_REGISTER_STREAMABLES, &args![this, stream])
+        .bool()
+    {
+        return false;
+    }
+    let data = e.mem.u32(this.addr() + MODEL_DATA);
+    e.vcall(data, 0x54, &args![stream]);
+    let skin = e.mem.u32(this.addr() + SKIN_INSTANCE);
+    if skin != 0 {
+        e.vcall(skin, 0x54, &args![stream]);
+    }
+    true
+}
+
+// Translated from 00a80470 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiGeometry::IsEqual` (Xbox PDB): `NiAVObject::IsEqual`; then false when only one side
+/// has a skin instance or the skin instances differ (this one's slot +0x5c with the
+/// other's); then what the model data's slot +0x5c answers for the other's data.
+pub fn ni_geometry_is_equal(e: &mut Engine, this: Ptr, other: Ptr) -> bool {
+    if !e.call(AV_OBJECT_IS_EQUAL, &args![this, other]).bool() {
+        return false;
+    }
+    let mine = e.mem.u32(this.addr() + SKIN_INSTANCE);
+    let theirs = e.mem.u32(other.addr().wrapping_add(SKIN_INSTANCE));
+    if (theirs == 0) != (mine == 0) {
+        return false;
+    }
+    if mine != 0 && !e.vcall(mine, 0x5c, &args![theirs]).bool() {
+        return false;
+    }
+    let data = e.mem.u32(this.addr() + MODEL_DATA);
+    let other_data = e.mem.u32(other.addr().wrapping_add(MODEL_DATA));
+    e.vcall(data, 0x5c, &args![other_data]).bool()
+}
+
+// Translated from 00a80650 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiGeometry::OnlyRenderImmediate` (engine map; `thiscall`, one word): stores the address
+/// of this object's property state (+0x9c) at the argument's +0xc, then runs each
+/// controller's (+0xc, chained through +0x30) virtual slot +0xa8.
+pub fn ni_geometry_only_render_immediate(e: &mut Engine, this: Ptr, target: Ptr) {
+    e.mem
+        .set_u32(target.addr().wrapping_add(0xc), this.addr() + 0x9c);
+    let mut controller = e.mem.u32(this.addr() + CONTROLLERS);
+    while controller != 0 {
+        e.vcall(controller, 0xa8, &args![]);
+        controller = e.mem.u32(controller + NEXT_CONTROLLER);
+    }
+}
+
+// Translated from 00a80930 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiGeometry::CalculateConsistency` (Xbox PDB; `thiscall`, a bool word): the consistency
+/// starts as 0x4000 (static) and becomes 0 when a controller's slot +0xa0 answers true (the
+/// walk stops there). With a skin instance: when the flag's byte is set, a skin instance
+/// without a word at +0xc makes it 0; when it is clear, a skin instance without that word
+/// makes it 0, and one with it makes it 0 unless the light listener (`011f4748`) is null or
+/// its slot +0xa0 answers bit 1. The model data takes it (`SetConsistency`).
+pub fn ni_geometry_calculate_consistency(e: &mut Engine, this: Ptr, force: u32) {
+    let t = this.addr();
+    let mut consistency = 0x4000u32;
+    let mut controller = e.mem.u32(t + CONTROLLERS);
+    while controller != 0 {
+        if e.vcall(controller, 0xa0, &args![]).bool() {
+            consistency = 0;
+            break;
+        }
+        controller = e.mem.u32(controller + NEXT_CONTROLLER);
+    }
+    let skin = e.mem.u32(t + SKIN_INSTANCE);
+    if skin != 0 {
+        let partitions = e.mem.u32(skin + 0xc);
+        if force as u8 != 0 {
+            if partitions == 0 {
+                consistency = 0;
+            }
+        } else if partitions == 0 {
+            consistency = 0;
+        } else {
+            let listener = e.mem.u32(LIGHT_LISTENER_011F4748);
+            if listener != 0 && e.vcall(listener, 0xa0, &args![]).u32() & 2 == 0 {
+                consistency = 0;
+            }
+        }
+    }
+    let data = e.mem.u32(t + MODEL_DATA);
+    e.call(GEOMETRY_DATA_SET_CONSISTENCY, &args![data, consistency]);
+}
+
+// Translated from 00a809b0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiGeometry::PurgeRendererData` (Xbox PDB): `NiAVObject::PurgeRendererData`, the
+/// renderer's slot +0xf0 with the model data and, with a skin instance, its slot +0x104
+/// with the skin instance and +0x100 with the skin instance's word at +0xc.
+pub fn ni_geometry_purge_renderer_data(e: &mut Engine, this: Ptr, renderer: Ptr) {
+    let t = this.addr();
+    let r = renderer.addr();
+    e.call(AV_OBJECT_PURGE_RENDERER_DATA, &args![this, renderer]);
+    let data = e.mem.u32(t + MODEL_DATA);
+    e.vcall(r, 0xf0, &args![data]);
+    let skin = e.mem.u32(t + SKIN_INSTANCE);
+    if skin != 0 {
+        e.vcall(r, 0x104, &args![skin]);
+        let skin = e.mem.u32(t + SKIN_INSTANCE);
+        let partitions = e.mem.u32(skin + 0xc);
+        e.vcall(r, 0x100, &args![partitions]);
+    }
+}
+
+// Translated from 00a80db0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiGeometry::SaveBinary` (Xbox PDB): `NiAVObject::SaveBinary`, the links of the model
+/// data and of the skin instance (the stream's slot +0x30 with each), then through the
+/// stream's output (`m_pkOstr`, its write function, the position advanced by each result)
+/// two 4-byte zeros and one zero byte (written from the stream argument's stack word whose
+/// low byte the exe clears), each from the exe's locals with its component size word.
+pub fn ni_geometry_save_binary(e: &mut Engine, this: Ptr, stream: Ptr) {
+    let t = this.addr();
+    let s = stream.addr();
+    e.call(AV_OBJECT_SAVE_BINARY, &args![this, stream]);
+    let data = e.mem.u32(t + MODEL_DATA);
+    e.vcall(s, 0x30, &args![data]);
+    let skin = e.mem.u32(t + SKIN_INSTANCE);
+    e.vcall(s, 0x30, &args![skin]);
+    e.with_stack(0x10, |e, locals| {
+        // +0 the size word, +4 and +8 the two words written, +0xc the argument's word.
+        let l = locals.addr();
+        e.mem.set_u32(l + 0xc, s);
+        for (data, size_word, value, bytes) in [(l + 4, l, 0u32, 4u32), (l + 8, l, 0, 4)] {
+            e.mem.set_u32(data, value);
+            write(e, s, data, bytes, size_word);
+        }
+        e.mem.set_u8(l + 0xc, 0);
+        write(e, s, l + 0xc, 1, l + 8);
+    });
+}
+
+/// One write through the stream's output (`m_pkOstr` +0x250, its `m_pfnWrite` +0xc,
+/// `cdecl`: (output, data, bytes, address of the size word, 1)) with the size word set to
+/// `bytes`; the position (+4) advanced by the result.
+fn write(e: &mut Engine, stream: u32, data: u32, bytes: u32, size_word: u32) {
+    let output = e.mem.u32(stream + 0x250);
+    let function = e.mem.u32(output + 0xc);
+    e.mem.set_u32(size_word, bytes);
+    let done = e
+        .call(function, &args![output, data, bytes, size_word, 1u32])
+        .u32();
+    let position = e.mem.u32(output + 4).wrapping_add(done);
+    e.mem.set_u32(output + 4, position);
+}
+
+// Translated from 00a80e70 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiGeometry::GetViewerStrings` (Xbox PDB): `NiAVObject::GetViewerStrings`, the class
+/// name, `"GeomData"` with the model data; with a shader, `"shader"` with the handle its
+/// slot +8 points at; with a skin instance whose word at +0xc is not null, `"skin
+/// partitions"` with that object's word at +8. Each appended to the array.
+pub fn ni_geometry_get_viewer_strings(e: &mut Engine, this: Ptr, strings: Ptr) {
+    let t = this.addr();
+    e.call(AV_OBJECT_GET_VIEWER_STRINGS, &args![this, strings]);
+    let name = e.mem.u32(NI_GEOMETRY_RTTI);
+    let text = e.call(VIEWER_STRING_CLASS, &args![name]).u32();
+    push_viewer_string(e, strings, text);
+    let data = e.mem.u32(t + MODEL_DATA);
+    let text = e
+        .call(VIEWER_STRING_OBJECT, &args![TEXT_GEOM_DATA, data])
+        .u32();
+    push_viewer_string(e, strings, text);
+    let shader = e.mem.u32(t + SHADER);
+    if shader != 0 {
+        let handle = e.vcall(shader, 8, &args![]).u32();
+        let handle = e.mem.u32(handle);
+        let text = e
+            .call(VIEWER_STRING_FIXED_STRING, &args![TEXT_SHADER, handle])
+            .u32();
+        push_viewer_string(e, strings, text);
+    }
+    let skin = e.mem.u32(t + SKIN_INSTANCE);
+    if skin != 0 {
+        let partitions = e.mem.u32(skin + 0xc);
+        if partitions != 0 {
+            let count = e.mem.u32(partitions + 8);
+            let text = e
+                .call(VIEWER_STRING_UNSIGNED, &args![TEXT_SKIN_PARTITIONS, count])
+                .u32();
+            push_viewer_string(e, strings, text);
+        }
+    }
+}
+
+// Translated from 00a9b1c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiGeometry::_scalar_deleting_destructor_` (Xbox PDB): the destructor (`00a80580`),
+/// then the sized delete of 0xc4 bytes when bit 0 of `flags` is set. Answers `this`.
+pub fn ni_geometry_scalar_deleting_destructor(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    ni_geometry_destructor(e, this);
+    if flags & 1 != 0 {
+        e.call(SIZED_DELETE, &args![this, 0xc4u32]);
+    }
+    this
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -613,6 +1130,22 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00a80530, ni_geometry_get_rtti() -> Ptr),
         entry!(0x00a7_fdb0, ni_geometry_set_bound(Ptr, Ptr)),
         entry!(0x00a7_fdc0, ni_geometry_post_link_object(Ptr, Ptr)),
+        entry!(0x00a7_ff60, ni_geometry_calculate_normals(Ptr)),
+        entry!(0x00a7_ff70, ni_geometry_apply_transform(Ptr, Ptr, Ptr, u32)),
+        entry!(
+            0x00a8_0430,
+            ni_geometry_register_streamables(Ptr, Ptr) -> bool
+        ),
+        entry!(0x00a8_0470, ni_geometry_is_equal(Ptr, Ptr) -> bool),
+        entry!(0x00a8_0650, ni_geometry_only_render_immediate(Ptr, Ptr)),
+        entry!(0x00a8_0930, ni_geometry_calculate_consistency(Ptr, u32)),
+        entry!(0x00a8_09b0, ni_geometry_purge_renderer_data(Ptr, Ptr)),
+        entry!(0x00a8_0db0, ni_geometry_save_binary(Ptr, Ptr)),
+        entry!(0x00a8_0e70, ni_geometry_get_viewer_strings(Ptr, Ptr)),
+        entry!(
+            0x00a9_b1c0,
+            ni_geometry_scalar_deleting_destructor(Ptr, u32) -> Ptr
+        ),
     ]
 }
 
@@ -1191,5 +1724,374 @@ mod batch_b011_tests {
         let (stream, log) = make_stream(&mut e, 0x0500_0014, vec![]);
         e.call(0x00a8_0bf0, &args![0x7000u32, stream]);
         assert!(log.borrow().is_empty());
+    }
+}
+
+#[cfg(test)]
+mod n016_tests {
+    use super::*;
+    use crate::units::nimain::nimainsdm::test_support::{calls_to, engine_with_counting};
+
+    /// Slot doubles of the test vtable `0x0e10_0000` (slot `n` at `0x0e00_0000 + n`).
+    const VTABLE: u32 = 0x0e10_0000;
+    fn slot(offset: u32) -> u32 {
+        0x0e00_0000 + offset
+    }
+
+    /// An engine whose test vtable has recording doubles answering 1 in every slot, and a
+    /// geometry with model data (vertex count `count` from slot +0x90) using that vtable.
+    fn rig(count: u32) -> (Engine, u32, u32) {
+        let mut e = engine_with_counting();
+        let slots: Vec<u32> = (0..0x48).map(|i| slot(4 * i)).collect();
+        e.put_vtable(VTABLE, &slots);
+        for i in 0..0x48u32 {
+            e.register(slot(4 * i), |_, _| 1u32.into_ret());
+        }
+        e.register_double(slot(0x90), move |_, _| (0xffff_0000 | count).into_ret());
+        let this = e.mem.alloc(0xc4);
+        let data = e.mem.alloc(0x40);
+        e.mem.set_u32(data, VTABLE);
+        e.mem.set_u32(this + MODEL_DATA, data);
+        e.call_log = Some(vec![]);
+        (e, this, data)
+    }
+
+    fn floats(e: &mut Engine, at: u32, values: &[f32]) {
+        for (i, v) in values.iter().enumerate() {
+            e.mem.set_f32(at + 4 * i as u32, *v);
+        }
+    }
+
+    fn read(e: &Engine, at: u32, n: u32) -> Vec<f32> {
+        (0..n).map(|i| e.mem.f32(at + 4 * i)).collect()
+    }
+
+    /// The inverse double: writes 1..9 into its out matrix.
+    fn inverse_writes_one_to_nine(e: &mut Engine) {
+        e.register(MATRIX_INVERSE, |e, a| {
+            for i in 0..9u32 {
+                e.mem.set_f32(a[1] + 4 * i, (i + 1) as f32);
+            }
+            1u32.into_ret()
+        });
+    }
+
+    #[test]
+    fn calculate_normals_jumps_into_the_data() {
+        let (mut e, this, data) = rig(0);
+        e.call(0x00a7_ff60, &args![this]);
+        assert_eq!(calls_to(&e, slot(0xa0)), vec![vec![data]]);
+    }
+
+    #[test]
+    fn apply_transform_with_byte_0_transforms_the_data_directly() {
+        let (mut e, this, data) = rig(1);
+        e.register(BOUND_COMPUTE_FROM_DATA, |_, _| Ret::default());
+        inverse_writes_one_to_nine(&mut e);
+        let vertices = e.mem.alloc(12);
+        let normals = e.mem.alloc(12);
+        floats(&mut e, vertices, &[1.0, 1.0, 1.0]);
+        floats(&mut e, normals, &[1.0, 2.0, 3.0]);
+        e.mem.set_u32(data + 0x20, vertices);
+        e.mem.set_u32(data + 0x24, normals);
+        let matrix = e.mem.alloc(0x24);
+        floats(
+            &mut e,
+            matrix,
+            &[1.0, 2.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 2.0],
+        );
+        let translation = e.mem.alloc(12);
+        floats(&mut e, translation, &[1.0, 2.0, 3.0]);
+        e.call(0x00a7_ff70, &args![this, matrix, translation, 0x100u32]);
+        assert_eq!(read(&e, vertices, 3), vec![4.0, 3.0, 5.0]);
+        // The columns of the inverse (1..9) times (1, 2, 3).
+        assert_eq!(read(&e, normals, 3), vec![30.0, 36.0, 42.0]);
+        let inverse = calls_to(&e, MATRIX_INVERSE);
+        assert_eq!(inverse[0][0], matrix);
+        assert_eq!(
+            calls_to(&e, BOUND_COMPUTE_FROM_DATA),
+            vec![vec![data + 0x10, 1, vertices]]
+        );
+        assert!(calls_to(&e, MATRIX_PRODUCT).is_empty());
+    }
+
+    #[test]
+    fn apply_transform_with_the_byte_set_goes_through_the_world_transform() {
+        let (mut e, this, data) = rig(1);
+        e.register(BOUND_COMPUTE_FROM_DATA, |_, _| Ret::default());
+        inverse_writes_one_to_nine(&mut e);
+        // operator* copies the left matrix out; TransposeTimes copies its argument out.
+        e.register(MATRIX_PRODUCT, |e, a| {
+            let words = e.mem.bytes(a[0], 0x24);
+            e.mem.write(a[1], &words);
+            a[1].into_ret()
+        });
+        e.register(MATRIX_TRANSPOSE_TIMES, |e, a| {
+            let words = e.mem.bytes(a[2], 0x24);
+            e.mem.write(a[1], &words);
+            a[1].into_ret()
+        });
+        floats(
+            &mut e,
+            this + WORLD_ROTATE,
+            &[1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0],
+        );
+        floats(&mut e, this + WORLD_TRANSLATE, &[10.0, 0.0, 0.0, 2.0]);
+        let vertices = e.mem.alloc(12);
+        let normals = e.mem.alloc(12);
+        floats(&mut e, vertices, &[1.0, 1.0, 1.0]);
+        floats(&mut e, normals, &[1.0, 2.0, 3.0]);
+        e.mem.set_u32(data + 0x20, vertices);
+        e.mem.set_u32(data + 0x24, normals);
+        let matrix = e.mem.alloc(0x24);
+        floats(
+            &mut e,
+            matrix,
+            &[2.0, 0.0, 0.0, 0.0, 2.0, 0.0, 0.0, 0.0, 2.0],
+        );
+        let translation = e.mem.alloc(12);
+        floats(&mut e, translation, &[4.0, 0.0, 0.0]);
+        e.call(0x00a7_ff70, &args![this, matrix, translation, 1u32]);
+        // offset = (2 * 10 + 4 - 10) / 2 = 7 on x.
+        assert_eq!(read(&e, vertices, 3), vec![9.0, 2.0, 2.0]);
+        assert_eq!(read(&e, normals, 3), vec![30.0, 36.0, 42.0]);
+        let product = calls_to(&e, MATRIX_PRODUCT);
+        assert_eq!(
+            (product[0][0], product[0][2]),
+            (matrix, this + WORLD_ROTATE)
+        );
+        let transposed = calls_to(&e, MATRIX_TRANSPOSE_TIMES);
+        assert_eq!(transposed[0][0], this + WORLD_ROTATE);
+        assert_eq!(transposed[0][2], product[0][1]);
+        assert_eq!(calls_to(&e, MATRIX_INVERSE)[0][0], transposed[0][1]);
+        // No vertices and no normals: only the bound.
+        e.mem.set_u32(data + 0x20, 0);
+        e.mem.set_u32(data + 0x24, 0);
+        e.call(0x00a7_ff70, &args![this, matrix, translation, 1u32]);
+        assert_eq!(calls_to(&e, MATRIX_INVERSE).len(), 1);
+        assert_eq!(
+            calls_to(&e, BOUND_COMPUTE_FROM_DATA)[1],
+            vec![data + 0x10, 1, 0]
+        );
+    }
+
+    #[test]
+    fn register_streamables_registers_data_and_skin() {
+        let (mut e, this, data) = rig(0);
+        e.register(AV_OBJECT_REGISTER_STREAMABLES, |_, _| 1u32.into_ret());
+        assert!(e.call(0x00a8_0430, &args![this, 0x77u32]).bool());
+        assert_eq!(calls_to(&e, slot(0x54)), vec![vec![data, 0x77]]);
+        let skin = e.mem.alloc(0x10);
+        e.mem.set_u32(skin, VTABLE);
+        e.mem.set_u32(this + SKIN_INSTANCE, skin);
+        e.call(0x00a8_0430, &args![this, 0x77u32]);
+        assert_eq!(calls_to(&e, slot(0x54))[2], vec![skin, 0x77]);
+        e.register(AV_OBJECT_REGISTER_STREAMABLES, |_, _| 0u32.into_ret());
+        assert!(!e.call(0x00a8_0430, &args![this, 0x77u32]).bool());
+        assert_eq!(calls_to(&e, slot(0x54)).len(), 3);
+    }
+
+    #[test]
+    fn is_equal_checks_skins_then_data() {
+        let (mut e, this, data) = rig(0);
+        e.register(AV_OBJECT_IS_EQUAL, |_, _| 1u32.into_ret());
+        let other = e.mem.alloc(0xc4);
+        let other_data = e.mem.alloc(0x10);
+        e.mem.set_u32(other + MODEL_DATA, other_data);
+        assert!(e.call(0x00a8_0470, &args![this, other]).bool());
+        assert_eq!(calls_to(&e, slot(0x5c)), vec![vec![data, other_data]]);
+        let skin = e.mem.alloc(0x10);
+        e.mem.set_u32(skin, VTABLE);
+        e.mem.set_u32(this + SKIN_INSTANCE, skin);
+        assert!(!e.call(0x00a8_0470, &args![this, other]).bool());
+        e.mem.set_u32(other + SKIN_INSTANCE, 0x0e70_0000);
+        assert!(e.call(0x00a8_0470, &args![this, other]).bool());
+        assert_eq!(calls_to(&e, slot(0x5c))[1], vec![skin, 0x0e70_0000]);
+        e.register(slot(0x5c), |_, a| u32::from(a[1] != 0x0e70_0000).into_ret());
+        assert!(!e.call(0x00a8_0470, &args![this, other]).bool());
+        e.register(AV_OBJECT_IS_EQUAL, |_, _| 0u32.into_ret());
+        assert!(!e.call(0x00a8_0470, &args![this, other]).bool());
+    }
+
+    #[test]
+    fn only_render_immediate_points_at_the_state_and_runs_controllers() {
+        let (mut e, this, _) = rig(0);
+        let first = e.mem.alloc(0x34);
+        let second = e.mem.alloc(0x34);
+        for controller in [first, second] {
+            e.mem.set_u32(controller, VTABLE);
+        }
+        e.mem.set_u32(first + NEXT_CONTROLLER, second);
+        e.mem.set_u32(this + CONTROLLERS, first);
+        let target = e.mem.alloc(0x10);
+        e.call(0x00a8_0650, &args![this, target]);
+        assert_eq!(e.mem.u32(target + 0xc), this + 0x9c);
+        assert_eq!(calls_to(&e, slot(0xa8)), vec![vec![first], vec![second]]);
+    }
+
+    #[test]
+    fn calculate_consistency_picks_static_or_mutable() {
+        let (mut e, this, data) = rig(0);
+        e.register(GEOMETRY_DATA_SET_CONSISTENCY, |_, _| Ret::default());
+        let consistency = |e: &mut Engine, force: u32| {
+            e.call(0x00a8_0930, &args![this, force]);
+            calls_to(e, GEOMETRY_DATA_SET_CONSISTENCY)
+                .last()
+                .unwrap()
+                .clone()
+        };
+        // No controllers, no skin: static.
+        assert_eq!(consistency(&mut e, 0), vec![data, 0x4000]);
+        // A controller answering true: mutable.
+        let controller = e.mem.alloc(0x34);
+        e.mem.set_u32(controller, VTABLE);
+        e.mem.set_u32(this + CONTROLLERS, controller);
+        assert_eq!(consistency(&mut e, 0)[1], 0);
+        e.register(slot(0xa0), |_, _| 0u32.into_ret());
+        e.mem.set_u32(this + CONTROLLERS, 0);
+        assert_eq!(consistency(&mut e, 0)[1], 0x4000);
+        // A skin without partitions: mutable either way.
+        let skin = e.mem.alloc(0x10);
+        e.mem.set_u32(this + SKIN_INSTANCE, skin);
+        assert_eq!(consistency(&mut e, 1)[1], 0);
+        assert_eq!(consistency(&mut e, 0)[1], 0);
+        // With partitions: forced stays static; otherwise the listener decides.
+        e.mem.set_u32(skin + 0xc, 0x0e70_0000);
+        assert_eq!(consistency(&mut e, 1)[1], 0x4000);
+        assert_eq!(consistency(&mut e, 0)[1], 0x4000);
+        let listener = e.mem.alloc(4);
+        e.mem.set_u32(listener, VTABLE);
+        e.mem.set_u32(LIGHT_LISTENER_011F4748, listener);
+        assert_eq!(consistency(&mut e, 0)[1], 0);
+        e.register(slot(0xa0), |_, _| 2u32.into_ret());
+        assert_eq!(consistency(&mut e, 0)[1], 0x4000);
+    }
+
+    #[test]
+    fn purge_renderer_data_releases_data_and_skin() {
+        let (mut e, this, data) = rig(0);
+        e.register(AV_OBJECT_PURGE_RENDERER_DATA, |_, _| Ret::default());
+        let renderer = e.mem.alloc(4);
+        e.mem.set_u32(renderer, VTABLE);
+        e.call(0x00a8_09b0, &args![this, renderer]);
+        assert_eq!(
+            calls_to(&e, AV_OBJECT_PURGE_RENDERER_DATA),
+            vec![vec![this, renderer]]
+        );
+        assert_eq!(calls_to(&e, slot(0xf0)), vec![vec![renderer, data]]);
+        assert!(calls_to(&e, slot(0x104)).is_empty());
+        let skin = e.mem.alloc(0x10);
+        e.mem.set_u32(skin + 0xc, 0x0e70_0000);
+        e.mem.set_u32(this + SKIN_INSTANCE, skin);
+        e.call(0x00a8_09b0, &args![this, renderer]);
+        assert_eq!(calls_to(&e, slot(0x104)), vec![vec![renderer, skin]]);
+        assert_eq!(calls_to(&e, slot(0x100)), vec![vec![renderer, 0x0e70_0000]]);
+    }
+
+    #[test]
+    fn save_binary_links_then_writes_zeros() {
+        let (mut e, this, data) = rig(0);
+        e.register(AV_OBJECT_SAVE_BINARY, |_, _| Ret::default());
+        e.register(0x0300_0000, |e, a| {
+            assert_eq!((e.mem.u32(a[3]), a[4]), (a[2], 1));
+            let value = if a[2] == 1 {
+                u32::from(e.mem.u8(a[1]))
+            } else {
+                e.mem.u32(a[1])
+            };
+            assert_eq!(value, 0);
+            a[2].into_ret()
+        });
+        let stream = e.mem.alloc(0x260);
+        let output = e.mem.alloc(0x10);
+        e.mem.set_u32(stream, VTABLE);
+        e.mem.set_u32(stream + 0x250, output);
+        e.mem.set_u32(output + 0xc, 0x0300_0000);
+        e.mem.set_u32(this + SKIN_INSTANCE, 0x0e70_0000);
+        e.call(0x00a8_0db0, &args![this, stream]);
+        assert_eq!(
+            calls_to(&e, AV_OBJECT_SAVE_BINARY),
+            vec![vec![this, stream]]
+        );
+        assert_eq!(
+            calls_to(&e, slot(0x30)),
+            vec![vec![stream, data], vec![stream, 0x0e70_0000]]
+        );
+        let sizes: Vec<u32> = calls_to(&e, 0x0300_0000).iter().map(|c| c[2]).collect();
+        assert_eq!(sizes, vec![4, 4, 1]);
+        assert_eq!(e.mem.u32(output + 4), 9);
+    }
+
+    #[test]
+    fn get_viewer_strings_lists_data_shader_and_partitions() {
+        let (mut e, this, data) = rig(0);
+        e.mem.set_u32(NI_GEOMETRY_RTTI, 0x0123_0000);
+        for double in [AV_OBJECT_GET_VIEWER_STRINGS, STRINGS_GROW, STRINGS_SET_AT] {
+            e.register(double, |_, _| Ret::default());
+        }
+        for text in [
+            VIEWER_STRING_CLASS,
+            VIEWER_STRING_OBJECT,
+            VIEWER_STRING_FIXED_STRING,
+            VIEWER_STRING_UNSIGNED,
+        ] {
+            e.register(text, |_, _| 0x0e60_0000u32.into_ret());
+        }
+        let strings = e.mem.alloc(0x10);
+        e.mem.set_u16(strings + 8, 8);
+        e.call(0x00a8_0e70, &args![this, strings]);
+        assert_eq!(
+            calls_to(&e, VIEWER_STRING_OBJECT),
+            vec![vec![TEXT_GEOM_DATA, data]]
+        );
+        assert_eq!(calls_to(&e, STRINGS_SET_AT).len(), 2);
+        // A shader (its slot +8 points at the handle) and a skin with partitions.
+        let handle = e.mem.alloc(4);
+        e.mem.set_u32(handle, 0x0e50_0000);
+        e.register_double(slot(8), move |_, _| handle.into_ret());
+        let shader = e.mem.alloc(4);
+        e.mem.set_u32(shader, VTABLE);
+        e.mem.set_u32(this + SHADER, shader);
+        let skin = e.mem.alloc(0x10);
+        let partitions = e.mem.alloc(0x10);
+        e.mem.set_u32(partitions + 8, 6);
+        e.mem.set_u32(skin + 0xc, partitions);
+        e.mem.set_u32(this + SKIN_INSTANCE, skin);
+        e.call(0x00a8_0e70, &args![this, strings]);
+        assert_eq!(
+            calls_to(&e, VIEWER_STRING_FIXED_STRING),
+            vec![vec![TEXT_SHADER, 0x0e50_0000]]
+        );
+        assert_eq!(
+            calls_to(&e, VIEWER_STRING_UNSIGNED),
+            vec![vec![TEXT_SKIN_PARTITIONS, 6]]
+        );
+        assert_eq!(calls_to(&e, STRINGS_SET_AT).len(), 6);
+        // A skin without partitions adds nothing.
+        e.mem.set_u32(skin + 0xc, 0);
+        e.call(0x00a8_0e70, &args![this, strings]);
+        assert_eq!(calls_to(&e, VIEWER_STRING_UNSIGNED).len(), 1);
+    }
+
+    #[test]
+    fn scalar_deleting_destructor_runs_the_destructor_and_deletes_on_bit_0() {
+        let (mut e, this, _) = rig(0);
+        for double in [
+            PROPERTY_STATE_DESTRUCT,
+            AV_OBJECT_DESTRUCT_00A5A390,
+            SIZED_DELETE,
+        ] {
+            e.register(double, |_, _| Ret::default());
+        }
+        e.mem.set_u32(this + MODEL_DATA, 0);
+        assert_eq!(e.call(0x00a9_b1c0, &args![this, 1u32]).u32(), this);
+        assert_eq!(e.mem.u32(this), NI_GEOMETRY_VTABLE);
+        assert_eq!(
+            calls_to(&e, PROPERTY_STATE_DESTRUCT),
+            vec![vec![this + 0x9c]]
+        );
+        assert_eq!(calls_to(&e, SIZED_DELETE), vec![vec![this, 0xc4]]);
+        e.call(0x00a9_b1c0, &args![this, 0u32]);
+        assert_eq!(calls_to(&e, SIZED_DELETE).len(), 1);
     }
 }

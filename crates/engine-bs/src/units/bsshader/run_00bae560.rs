@@ -267,9 +267,31 @@ fn add_pass(e: &mut Engine, passes: u32, geometry: u32, pass: u32) {
     );
 }
 
+/// Where `fn_00bae710` jumps (`00c9a420`, `thiscall`, one word: the other object).
+const IS_EQUAL_00C9A420: u32 = 0x00c9_a420;
+
+// Translated from 00bae710 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Ghidra made no function here: slot +0x5c of `SkyShaderProperty`'s vtable `010b8ce0`
+/// (`IsEqual` in the Xbox PDB's slot list): a jump to `00c9a420` with `this` and its one word;
+/// answers the target's `EAX`.
+pub fn fn_00bae710(e: &mut Engine, this: Ptr, other: u32) -> u32 {
+    e.call(IS_EQUAL_00C9A420, &args![this, other]).u32()
+}
+
+// Translated from 00bae720 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Ghidra made no function here: slot +0xc8 of `SkyShaderProperty`'s vtable `010b8ce0`
+/// (`SetClampD3D` in the Xbox PDB's slot list; `thiscall`, one word). Stores 0 in
+/// `TextureClampMode` when the word is 3, otherwise 3.
+pub fn fn_00bae720(e: &mut Engine, this: Ptr<SkyShaderProperty>, mode: u32) {
+    let value = if mode.wrapping_sub(3) != 0 { 3 } else { 0 };
+    e.set(this, SkyShaderProperty::TextureClampMode, value);
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x00ba_e710, fn_00bae710(Ptr, u32) -> u32),
+        entry!(0x00ba_e720, fn_00bae720(Ptr<SkyShaderProperty>, u32)),
         entry!(0x00ba_e560, fn_00bae560(Ptr, u32) -> bool),
         entry!(0x00ba_e740, fn_00bae740(Ptr<SkyShaderProperty>, u32)),
         entry!(0x00ba_e780, fn_00bae780(Ptr, u32) -> bool),
@@ -511,5 +533,27 @@ mod tests {
             .u32();
         assert_eq!(result, passes);
         assert!(calls_to(&e, RENDER_PASS_ARRAY_ADD).is_empty());
+    }
+}
+
+#[cfg(test)]
+mod n013_tests {
+    use super::*;
+
+    #[test]
+    fn fn_00bae710_jumps_on() {
+        let mut e = Engine::new();
+        e.register(IS_EQUAL_00C9A420, |_, a| (a[0] ^ a[1]).into_ret());
+        assert_eq!(e.call(0x00ba_e710, &args![0x10u32, 0x11u32]).u32(), 1);
+    }
+
+    #[test]
+    fn fn_00bae720_maps_3_to_0_and_the_rest_to_3() {
+        let mut e = Engine::new();
+        let this = e.new_object::<SkyShaderProperty>();
+        e.call(0x00ba_e720, &args![this, 3u32]);
+        assert_eq!(e.get(this, SkyShaderProperty::TextureClampMode), 0);
+        e.call(0x00ba_e720, &args![this, 0u32]);
+        assert_eq!(e.get(this, SkyShaderProperty::TextureClampMode), 3);
     }
 }

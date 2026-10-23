@@ -146,9 +146,47 @@ pub fn fn_00a415a0(e: &mut Engine) -> Ptr {
     Ptr::new(block)
 }
 
+// Translated from 00a41410 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`thiscall` on an array of pointers to two-word records, one
+/// word, `RET 4`): for each record (the used size +0xa re-read each step) whose first word
+/// equals the argument's word at +8, the second word's object is called through its vtable
+/// +4 with the argument.
+pub fn fn_00a41410(e: &mut Engine, this: Ptr<NiTArray>, argument: u32) {
+    let mut index = 0u32;
+    while index < u32::from(e.get(this, NiTArray::m_usSize)) {
+        let base = e.get(this, NiTArray::m_pBase);
+        let record = e.mem.u32(base.wrapping_add(index * 4));
+        if e.mem.u32(record) == e.mem.u32(argument + 8) {
+            let object = e.mem.u32(record + 4);
+            e.vcall(object, 4, &args![argument]);
+        }
+        index += 1;
+    }
+}
+
+// Translated from 00a414c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`thiscall`, the flags byte, `RET 4`; the deleting destructor of
+/// the `NiTArray<BSAnimNoteListener::BSAnimReceiverType *>` its vtable `010976ec` names): the
+/// vtable, the storage freed (`00aa10f0`) and, with flag 1, the array given back to the memory
+/// manager. Answers `this`.
+pub fn fn_00a414c0(e: &mut Engine, this: Ptr<NiTArray>, flags: u32) -> Ptr<NiTArray> {
+    let base = e.get(this, NiTArray::m_pBase);
+    e.mem.set_u32(this.addr(), RECEIVER_ARRAY_VTABLE);
+    e.call(ARRAY_FREE, &args![base]);
+    if flags as u8 & 1 != 0 {
+        e.call(MEMORY_DEALLOCATE, &args![MEMORY_MANAGER, this]);
+    }
+    this
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x00a4_1410, fn_00a41410(Ptr<NiTArray>, u32)),
+        entry!(
+            0x00a4_14c0,
+            fn_00a414c0(Ptr<NiTArray>, u32) -> Ptr<NiTArray>
+        ),
         entry!(0x00a4_13d0, fn_00a413d0(Ptr<NiTArray>, u32, u32) -> i32),
         entry!(0x00a4_1450, fn_00a41450(Ptr<NiTArray>)),
         entry!(0x00a4_14f0, fn_00a414f0(Ptr<NiTArray>) -> Ptr<NiTArray>),
@@ -299,5 +337,61 @@ mod tests {
         assert_eq!(e.mem.u8(object + 0x14), 0);
         e.register(OPERATOR_NEW, |_, _| 0u32.into_ret());
         assert_eq!(e.call(0x00a4_15a0, &args![]).u32(), 0);
+    }
+}
+
+#[cfg(test)]
+mod n007_tests {
+    use super::*;
+
+    #[test]
+    fn matching_records_call_their_object() {
+        let mut e = Engine::new();
+        let vtable = e.mem.alloc(8);
+        e.mem.set_u32(vtable + 4, 0x0343_0000);
+        e.register(0x0343_0000, |_, _| Ret::default());
+        e.call_log = Some(vec![]);
+        let object = e.mem.alloc(4);
+        e.mem.set_u32(object, vtable);
+        let array = e.new_object::<NiTArray>();
+        let base = e.mem.alloc(8);
+        for (i, kind) in [5u32, 6].iter().enumerate() {
+            let record = e.mem.alloc(8);
+            e.mem.set_u32(record, *kind);
+            e.mem.set_u32(record + 4, object);
+            e.mem.set_u32(base + 4 * i as u32, record);
+        }
+        e.set(array, NiTArray::m_pBase, base);
+        e.set(array, NiTArray::m_usSize, 2);
+        let argument = e.mem.alloc(0xc);
+        e.mem.set_u32(argument + 8, 6);
+        e.call(0x00a4_1410, &args![array, argument]);
+        let log = e.call_log.take().unwrap();
+        let calls: Vec<_> = log.iter().filter(|c| c.0 == 0x0343_0000).collect();
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].1, vec![object, argument]);
+    }
+
+    #[test]
+    fn deleting_destructor_frees_storage_and_array() {
+        let mut e = Engine::new();
+        e.register(ARRAY_FREE, |_, _| Ret::default());
+        e.register(MEMORY_DEALLOCATE, |_, _| Ret::default());
+        e.call_log = Some(vec![]);
+        let array = e.new_object::<NiTArray>();
+        e.set(array, NiTArray::m_pBase, 0x1230);
+        assert_eq!(
+            e.call(0x00a4_14c0, &args![array, 0x100u32]).u32(),
+            array.addr()
+        );
+        assert_eq!(e.mem.u32(array.addr()), RECEIVER_ARRAY_VTABLE);
+        e.call(0x00a4_14c0, &args![array, 1u32]);
+        let log = e.call_log.take().unwrap();
+        let frees: Vec<_> = log.iter().filter(|c| c.0 == ARRAY_FREE).collect();
+        assert_eq!(frees.len(), 2);
+        assert_eq!(frees[0].1, vec![0x1230]);
+        let deallocations: Vec<_> = log.iter().filter(|c| c.0 == MEMORY_DEALLOCATE).collect();
+        assert_eq!(deallocations.len(), 1);
+        assert_eq!(deallocations[0].1, vec![MEMORY_MANAGER, array.addr()]);
     }
 }

@@ -84,6 +84,46 @@ pub fn fn_00a9ff00(e: &mut Engine, buffer: Ptr, renderer: Ptr) -> Ptr {
     fn_00a9fe90(e, width, height, renderer, Ptr::new(format), data)
 }
 
+/// Import slots of `InterlockedIncrement` and `InterlockedDecrement` (`stdcall`, one word).
+const INTERLOCKED_INCREMENT: u32 = 0x00fd_f1c0;
+const INTERLOCKED_DECREMENT: u32 = 0x00fd_f1c4;
+
+// Translated from 00a9ff60 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`cdecl`, three words: a width, a height and a counted
+/// object): a new `NiDepthStencilBuffer` (0x14 bytes from `00aa13e0`, the base constructor
+/// `00a8f190`, the vtable; a failed allocation is used as null, as the exe does) with the
+/// width at +8, the height at +0xc and the object assigned to +0x10 as a counted pointer
+/// (the old one released through its virtual `+4` when its count at +4 reaches 0, the new
+/// one counted). Answers the buffer.
+pub fn fn_00a9ff60(e: &mut Engine, width: u32, height: u32, object: Ptr) -> Ptr {
+    let block = e.call(NI_ALLOCATE, &args![0x14u32]).u32();
+    let buffer = if block == 0 {
+        0
+    } else {
+        e.call(BASE_CONSTRUCT_00A8F190, &args![block]);
+        e.mem.set_u32(block, NI_DEPTH_STENCIL_BUFFER_VTABLE);
+        block
+    };
+    let object = object.addr();
+    e.mem.set_u32(buffer.wrapping_add(8), width);
+    e.mem.set_u32(buffer.wrapping_add(0xc), height);
+    let old = e.mem.u32(buffer.wrapping_add(0x10));
+    if old != object {
+        if old != 0
+            && e.call(INTERLOCKED_DECREMENT, &args![old.wrapping_add(4)])
+                .u32()
+                == 0
+        {
+            e.vcall(old, 4, &args![]);
+        }
+        e.mem.set_u32(buffer.wrapping_add(0x10), object);
+        if object != 0 {
+            e.call(INTERLOCKED_INCREMENT, &args![object.wrapping_add(4)]);
+        }
+    }
+    Ptr::new(buffer)
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -92,6 +132,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
             fn_00a9fe90(u32, u32, u32, Ptr, u32) -> Ptr
         ),
         entry!(0x00a9_ff00, fn_00a9ff00(Ptr, Ptr) -> Ptr),
+        entry!(0x00a9_ff60, fn_00a9ff60(u32, u32, Ptr) -> Ptr),
     ]
 }
 
@@ -255,5 +296,36 @@ mod buffer_target_tests {
         let log = e.call_log.take().unwrap();
         assert_eq!(log.iter().filter(|c| c.0 == FORMAT_OF).count(), 1);
         assert_eq!(log.iter().filter(|c| c.0 == NI_ALLOCATE).count(), 0);
+    }
+}
+
+#[cfg(test)]
+mod make_tests {
+    use super::*;
+
+    #[test]
+    fn makes_a_buffer_with_a_counted_object() {
+        let mut e = Engine::new();
+        e.register(NI_ALLOCATE, |e, a| e.mem.alloc(a[0]).into_ret());
+        e.register(BASE_CONSTRUCT_00A8F190, |_, _| Ret::default());
+        e.register(INTERLOCKED_INCREMENT, |e, a| {
+            let count = e.mem.u32(a[0]) + 1;
+            e.mem.set_u32(a[0], count);
+            count.into_ret()
+        });
+        let object = e.mem.alloc(8);
+        e.mem.set_u32(object + 4, 2);
+        e.call_log = Some(vec![]);
+        let buffer = e.call(0x00a9_ff60, &args![640u32, 480u32, object]).u32();
+        assert_eq!(e.mem.u32(buffer), NI_DEPTH_STENCIL_BUFFER_VTABLE);
+        assert_eq!((e.mem.u32(buffer + 8), e.mem.u32(buffer + 0xc)), (640, 480));
+        assert_eq!(e.mem.u32(buffer + 0x10), object);
+        assert_eq!(e.mem.u32(object + 4), 3);
+        let log = e.call_log.take().unwrap();
+        assert!(log.contains(&(BASE_CONSTRUCT_00A8F190, vec![buffer])));
+        // A null object leaves the new buffer without one and counts nothing.
+        let buffer = e.call(0x00a9_ff60, &args![1u32, 2u32, 0u32]).u32();
+        assert_eq!(e.mem.u32(buffer + 0x10), 0);
+        assert_eq!(e.mem.u32(object + 4), 3);
     }
 }

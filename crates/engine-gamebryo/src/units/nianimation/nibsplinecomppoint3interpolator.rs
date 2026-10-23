@@ -202,9 +202,68 @@ pub fn ni_b_spline_comp_point3_interpolator_update(
     true
 }
 
+/// `NiBSplinePoint3Interpolator::IsEqual` (`00a508d0`) and `SaveBinary`
+/// (`00a50880`); `thiscall`, one word each.
+const POINT3_INTERPOLATOR_IS_EQUAL: u32 = 0x00a5_08d0;
+const POINT3_INTERPOLATOR_SAVE_BINARY: u32 = 0x00a5_0880;
+
+// Translated from 00a51230 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiBSplineCompPoint3Interpolator::IsEqual` (Xbox PDB, matched by the
+/// engine map; `thiscall`, one word: the other object): the point3
+/// interpolator's `IsEqual` (`00a508d0`) and both scalars equal
+/// (`FUCOMPP`; a NaN is unequal).
+pub fn ni_b_spline_comp_point3_interpolator_is_equal(
+    e: &mut Engine,
+    this: Ptr,
+    other: Ptr,
+) -> bool {
+    if !e
+        .call(POINT3_INTERPOLATOR_IS_EQUAL, &args![this, other])
+        .bool()
+    {
+        return false;
+    }
+    for i in 0..2 {
+        let ours = x87_load32(e.mem.u32(this.addr() + COMP_OFFSET + 4 * i));
+        let theirs = x87_load32(e.mem.u32(other.addr() + COMP_OFFSET + 4 * i));
+        if theirs != ours {
+            return false;
+        }
+    }
+    true
+}
+
+// Translated from 00a51440 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiBSplineCompPoint3Interpolator::SaveBinary` (Xbox PDB, matched by the
+/// engine map; `thiscall`, one word: the stream): the point3
+/// interpolator's `SaveBinary` (`00a50880`), then the two scalars written
+/// in one call to the stream writer's function at its +0xC (`cdecl
+/// (writer, this + 0x2c, 8, &4, 1)`), the answer added to the writer's +4.
+pub fn ni_b_spline_comp_point3_interpolator_save_binary(e: &mut Engine, this: Ptr, stream: Ptr) {
+    e.call(POINT3_INTERPOLATOR_SAVE_BINARY, &args![this, stream]);
+    let writer = e.mem.u32(stream.addr() + 0x250);
+    let write_function = e.mem.u32(writer.wrapping_add(0xc));
+    let source = this.addr() + COMP_OFFSET;
+    let written = e.with_stack(4, |e, size| {
+        e.mem.set_u32(size.addr(), 4);
+        e.call(write_function, &args![writer, source, 8u32, size, 1u32])
+            .u32()
+    });
+    let position = e.mem.u32(writer.wrapping_add(4)).wrapping_add(written);
+    e.mem.set_u32(writer.wrapping_add(4), position);
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(
+            0x00a5_1230,
+            ni_b_spline_comp_point3_interpolator_is_equal(Ptr, Ptr) -> bool
+        ),
+        entry!(
+            0x00a5_1440,
+            ni_b_spline_comp_point3_interpolator_save_binary(Ptr, Ptr)
+        ),
         entry!(0x00a51270, ni_b_spline_comp_point3_interpolator_get_rtti() -> Ptr),
         entry!(
             0x00a51480,
@@ -423,5 +482,76 @@ mod tests {
             .bool());
         assert!(cp_calls_to(&e, GET_COMPACTED_VALUE_DEGREE3).is_empty());
         assert_eq!(e.mem.f32(this + LAST_TIME), 2.5);
+    }
+}
+
+#[cfg(test)]
+mod n002_tests {
+    use super::*;
+
+    fn word(value: u32) -> Ret {
+        Ret {
+            eax: value,
+            ..Ret::default()
+        }
+    }
+
+    fn calls(e: &Engine, addr: u32) -> Vec<Vec<u32>> {
+        e.call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|c| c.0 == addr)
+            .map(|c| c.1.clone())
+            .collect()
+    }
+
+    #[test]
+    fn is_equal_compares_the_scalars_after_the_base() {
+        let mut e = Engine::new();
+        e.register(POINT3_INTERPOLATOR_IS_EQUAL, |_, _| word(1));
+        e.call_log = Some(vec![]);
+        let this = e.mem.alloc(0x60);
+        let other = e.mem.alloc(0x60);
+        assert!(e.call(0x00a5_1230, &args![this, other]).bool());
+        assert_eq!(
+            calls(&e, POINT3_INTERPOLATOR_IS_EQUAL),
+            vec![vec![this, other]]
+        );
+        for i in 0..2u32 {
+            let at = COMP_OFFSET + 4 * i;
+            e.mem.set_f32(other + at, 1.0);
+            assert!(!e.call(0x00a5_1230, &args![this, other]).bool());
+            e.mem.set_f32(other + at, 0.0);
+        }
+        e.register(POINT3_INTERPOLATOR_IS_EQUAL, |_, _| word(0));
+        assert!(!e.call(0x00a5_1230, &args![this, other]).bool());
+    }
+
+    #[test]
+    fn save_binary_writes_the_scalars_at_once() {
+        const WRITE: u32 = 0x0300_0800;
+        let mut e = Engine::new();
+        e.register(POINT3_INTERPOLATOR_SAVE_BINARY, |_, _| Ret::default());
+        e.register(WRITE, |e, a| {
+            assert_eq!((e.mem.u32(a[3]), a[4]), (4, 1));
+            word(a[2])
+        });
+        e.call_log = Some(vec![]);
+        let writer = e.mem.alloc(0x10);
+        e.mem.set_u32(writer + 0xc, WRITE);
+        let stream = e.mem.alloc(0x254);
+        e.mem.set_u32(stream + 0x250, writer);
+        let this = e.mem.alloc(0x60);
+        e.call(0x00a5_1440, &args![this, stream]);
+        assert_eq!(
+            calls(&e, POINT3_INTERPOLATOR_SAVE_BINARY),
+            vec![vec![this, stream]]
+        );
+        assert_eq!(
+            calls(&e, WRITE)[0][..3],
+            [writer, this + COMP_OFFSET, 4 * 2u32]
+        );
+        assert_eq!(e.mem.u32(writer + 4), 4 * 2u32);
     }
 }

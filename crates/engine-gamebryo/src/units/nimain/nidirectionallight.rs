@@ -80,6 +80,74 @@ pub fn ni_directional_light_update_world_data(e: &mut Engine, this: Ptr, update:
     e.mem.set_u32(t + 0xa8, revision);
 }
 
+/// `operator new` (`cdecl`, the size).
+const OPERATOR_NEW: u32 = 0x00aa_13e0;
+/// `00a71ec0` (unnamed and unplaced in the engine map; `thiscall`: the clone and the cloning
+/// process): the light's member copy `CreateClone` runs.
+const LIGHT_COPY_MEMBERS_00A71EC0: u32 = 0x00a7_1ec0;
+/// `NiLight::GetViewerStrings` (`00a721e0`, `thiscall`, the string array).
+const NI_LIGHT_GET_VIEWER_STRINGS: u32 = 0x00a7_21e0;
+/// `NiGetViewerString` (`00a7d330`, `cdecl`, the class name), answering a new string.
+const VIEWER_STRING_CLASS: u32 = 0x00a7_d330;
+/// The string array's grow (`0096ad30`, `thiscall`, the new size) and set-at (`0096ae90`,
+/// `thiscall`, (index, address of the string)), both unnamed in the engine map.
+const STRINGS_GROW: u32 = 0x0096_ad30;
+const STRINGS_SET_AT: u32 = 0x0096_ae90;
+
+/// A new 0xfc-byte directional light (the constructor `00a75c20`), or null.
+fn new_directional_light(e: &mut Engine) -> u32 {
+    let block = e.call(OPERATOR_NEW, &args![0xfcu32]).u32();
+    if block == 0 {
+        return 0;
+    }
+    ni_directional_light_ni_directional_light(e, Ptr::new(block)).addr()
+}
+
+// Translated from 00a75cf0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiDirectionalLight::CreateClone` (Xbox PDB): a new directional light (null when the
+/// allocation fails), the light's member copy (`00a71ec0`) into it, then the three words at
+/// +0xf0 (the world direction) copied. Answers the clone.
+pub fn ni_directional_light_create_clone(e: &mut Engine, this: Ptr, cloning_process: Ptr) -> Ptr {
+    let clone = new_directional_light(e);
+    e.call(
+        LIGHT_COPY_MEMBERS_00A71EC0,
+        &args![this, clone, cloning_process],
+    );
+    for offset in [0xf0u32, 0xf4, 0xf8] {
+        let word = e.mem.u32(this.addr() + offset);
+        e.mem.set_u32(clone.wrapping_add(offset), word);
+    }
+    Ptr::new(clone)
+}
+
+// Translated from 00a75d50 (PC disassembly, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (a function Ghidra did not create; by its body the creation
+/// function of `NiDirectionalLight`): 0xfc bytes and a jump into the constructor
+/// (`00a75c20`), or null.
+pub fn fn_00a75d50(e: &mut Engine) -> Ptr {
+    Ptr::new(new_directional_light(e))
+}
+
+// Translated from 00a75d70 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiDirectionalLight::GetViewerStrings` (Xbox PDB): `NiLight::GetViewerStrings`, then
+/// the class name (`NiGetViewerString` of `ms_RTTI`'s name word) appended as the exe's
+/// inlined `Add` does (grow to step + size when full, set-at the old size through a stack
+/// word).
+pub fn ni_directional_light_get_viewer_strings(e: &mut Engine, this: Ptr, strings: Ptr) {
+    e.call(NI_LIGHT_GET_VIEWER_STRINGS, &args![this, strings]);
+    let name = e.mem.u32(NI_DIRECTIONAL_LIGHT_RTTI);
+    let text = e.call(VIEWER_STRING_CLASS, &args![name]).u32();
+    let size = u32::from(e.mem.u16(strings.addr() + 0xa));
+    if size >= u32::from(e.mem.u16(strings.addr() + 8)) {
+        let step = u32::from(e.mem.u16(strings.addr() + 0xe));
+        e.call(STRINGS_GROW, &args![strings, step + size]);
+    }
+    e.with_stack(4, |e, slot| {
+        e.mem.set_u32(slot.addr(), text);
+        e.call(STRINGS_SET_AT, &args![strings, size, slot]);
+    });
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -89,6 +157,15 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(
             0x00a7_5cb0,
             ni_directional_light_update_world_data(Ptr, u32)
+        ),
+        entry!(
+            0x00a7_5cf0,
+            ni_directional_light_create_clone(Ptr, Ptr) -> Ptr
+        ),
+        entry!(0x00a7_5d50, fn_00a75d50() -> Ptr),
+        entry!(
+            0x00a7_5d70,
+            ni_directional_light_get_viewer_strings(Ptr, Ptr)
         ),
     ]
 }
@@ -182,5 +259,86 @@ mod tests_b008 {
         assert_eq!(e.mem.u32(this + 0xf4), 0x7fc0_0001);
         assert_eq!(e.mem.f32(this + 0xf8), -2.0);
         assert_eq!(e.mem.u32(this + 0xa8), 5);
+    }
+}
+
+#[cfg(test)]
+mod n016_tests {
+    use super::*;
+
+    fn calls_to(e: &Engine, addr: u32) -> Vec<Vec<u32>> {
+        e.call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|c| c.0 == addr)
+            .map(|c| c.1.clone())
+            .collect()
+    }
+
+    fn engine() -> Engine {
+        let mut e = Engine::new();
+        e.register(OPERATOR_NEW, |e, a| e.mem.alloc(a[0]).into_ret());
+        for double in [
+            NI_LIGHT_BASE_CONSTRUCT,
+            LIGHT_COPY_MEMBERS_00A71EC0,
+            NI_LIGHT_GET_VIEWER_STRINGS,
+            STRINGS_GROW,
+            STRINGS_SET_AT,
+        ] {
+            e.register(double, |_, _| Ret::default());
+        }
+        e.call_log = Some(vec![]);
+        e
+    }
+
+    #[test]
+    fn create_clone_builds_copies_and_takes_the_direction() {
+        let mut e = engine();
+        let this = e.mem.alloc(0xfc);
+        for (i, offset) in [0xf0u32, 0xf4, 0xf8].into_iter().enumerate() {
+            e.mem.set_u32(this + offset, 0x0e00_0000 + i as u32);
+        }
+        let clone = e.call(0x00a7_5cf0, &args![this, 0x77u32]).u32();
+        assert_eq!(e.mem.u32(clone), NI_DIRECTIONAL_LIGHT_VTABLE);
+        assert_eq!(calls_to(&e, NI_LIGHT_BASE_CONSTRUCT), vec![vec![clone]]);
+        assert_eq!(
+            calls_to(&e, LIGHT_COPY_MEMBERS_00A71EC0),
+            vec![vec![this, clone, 0x77]]
+        );
+        assert_eq!(e.mem.u32(clone + 0xf4), 0x0e00_0001);
+        assert_eq!(e.mem.u32(clone + 0xf8), 0x0e00_0002);
+    }
+
+    #[test]
+    fn create_object_constructs_or_answers_null() {
+        let mut e = engine();
+        let object = e.call(0x00a7_5d50, &args![]).u32();
+        assert_eq!(calls_to(&e, OPERATOR_NEW), vec![vec![0xfc]]);
+        assert_eq!(e.mem.u32(object), NI_DIRECTIONAL_LIGHT_VTABLE);
+        assert_eq!(e.mem.u8(object + 0x9d), 3);
+        e.register(OPERATOR_NEW, |_, _| 0u32.into_ret());
+        assert_eq!(e.call(0x00a7_5d50, &args![]).u32(), 0);
+        assert_eq!(calls_to(&e, NI_LIGHT_BASE_CONSTRUCT).len(), 1);
+    }
+
+    #[test]
+    fn get_viewer_strings_adds_the_class_name() {
+        let mut e = engine();
+        e.map(0x011f_4000, 0x1000);
+        e.mem.set_u32(NI_DIRECTIONAL_LIGHT_RTTI, 0x0123_0000);
+        e.register(VIEWER_STRING_CLASS, |_, _| 0x0e00_0001u32.into_ret());
+        let this = e.mem.alloc(0xfc);
+        let strings = e.mem.alloc(0x10);
+        e.mem.set_u16(strings + 8, 4);
+        e.mem.set_u16(strings + 0xa, 1);
+        e.call(0x00a7_5d70, &args![this, strings]);
+        assert_eq!(
+            calls_to(&e, NI_LIGHT_GET_VIEWER_STRINGS),
+            vec![vec![this, strings]]
+        );
+        assert_eq!(calls_to(&e, VIEWER_STRING_CLASS), vec![vec![0x0123_0000]]);
+        assert!(calls_to(&e, STRINGS_GROW).is_empty());
+        assert_eq!(calls_to(&e, STRINGS_SET_AT)[0][..2], [strings, 1]);
     }
 }

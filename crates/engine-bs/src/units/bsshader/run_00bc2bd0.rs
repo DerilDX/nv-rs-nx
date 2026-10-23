@@ -51,9 +51,20 @@ pub fn fn_00bc2c20(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
     this
 }
 
+/// The record `00bc2bc0` answers (`01201f84`).
+const RTTI_01201F84: u32 = 0x0120_1f84;
+
+// Translated from 00bc2bc0 (PC disassembly, FalloutNV.exe 1.4.0.525; Ghidra made no function here)
+/// The `GetRTTI` of the vtable at `010ba730` (its slot +8; the class [`fn_00bc2bd0`]
+/// constructs): the address of the record at `01201f84`.
+pub fn fn_00bc2bc0(_e: &mut Engine) -> Ptr {
+    Ptr::new(RTTI_01201F84)
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x00bc_2bc0, fn_00bc2bc0() -> Ptr),
         entry!(0x00bc_2bd0, fn_00bc2bd0(Ptr) -> Ptr),
         entry!(0x00bc_2c20, fn_00bc2c20(Ptr, u32) -> Ptr),
     ]
@@ -96,5 +107,16 @@ mod tests {
         let deletes: Vec<_> = log.iter().filter(|c| c.0 == NI_SIZED_DELETE).collect();
         assert_eq!(deletes.len(), 1);
         assert_eq!(deletes[0].1, vec![this, NODE_SIZE]);
+    }
+}
+
+#[cfg(test)]
+mod n014_tests {
+    use super::*;
+
+    #[test]
+    fn get_rtti_answers_the_record() {
+        let mut e = Engine::new();
+        assert_eq!(e.call(0x00bc_2bc0, &args![]).u32(), RTTI_01201F84);
     }
 }

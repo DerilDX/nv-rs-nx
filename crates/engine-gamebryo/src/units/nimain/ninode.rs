@@ -1111,9 +1111,412 @@ pub fn ni_node_get_rtti(_e: &mut Engine) -> Ptr {
     Ptr::new(NI_NODE_RTTI)
 }
 
+/// `NiMatrix3::operator*` (`0043f8d0`, `thiscall` on the left matrix: result, right) and
+/// `NiMatrix3::TransposeTimes` (`00a588a0`, `thiscall`: result, other).
+const MATRIX_MULTIPLY: u32 = 0x0043_f8d0;
+const MATRIX_TRANSPOSE_TIMES: u32 = 0x00a5_88a0;
+/// `NiAVObject`'s local transform as the PC code reads it: the rotation (+0x34, nine
+/// floats), the translation (+0x58, three floats) and the scale (+0x64).
+const AV_LOCAL_ROTATE: u32 = 0x34;
+const AV_LOCAL_TRANSLATE: u32 = 0x58;
+const AV_LOCAL_SCALE: u32 = 0x64;
+/// `NiAVObject` vtable slots the children are called through: `PurgeRendererData` (+0xd8),
+/// `ApplyTransform` (+0x90), `UpdateControllers` (+0x8c), `UpdateRigidDownwardPass` (+0xac),
+/// `RegisterStreamables` (+0x54), `IsEqual` (+0x5c); and the node's own slot +0xb8 (run by
+/// the rigid pass with the update data).
+const SLOT_PURGE_RENDERER_DATA: u32 = 0xd8;
+const SLOT_APPLY_TRANSFORM: u32 = 0x90;
+const SLOT_UPDATE_CONTROLLERS: u32 = 0x8c;
+const SLOT_UPDATE_RIGID_DOWNWARD_PASS: u32 = 0xac;
+const SLOT_REGISTER_STREAMABLES: u32 = 0x54;
+const SLOT_IS_EQUAL: u32 = 0x5c;
+const SLOT_RIGID_PASS_OWN: u32 = 0xb8;
+/// `NiStream::SaveLinkID` (vtable +0x30, the object).
+const SLOT_SAVE_LINK_ID: u32 = 0x30;
+/// The `NiAVObject` versions the node functions start with (`thiscall` on the node):
+/// `PurgeRendererData` (`00a59e50`), `RegisterStreamables` (`00a59f00`), `IsEqual`
+/// (`00a5a260`), `SaveBinary` (`00a5a900`) and `GetViewerStrings` (`00a5ad00`).
+const AV_PURGE_RENDERER_DATA: u32 = 0x00a5_9e50;
+const AV_REGISTER_STREAMABLES: u32 = 0x00a5_9f00;
+const AV_IS_EQUAL: u32 = 0x00a5_a260;
+const AV_SAVE_BINARY: u32 = 0x00a5_a900;
+const AV_GET_VIEWER_STRINGS: u32 = 0x00a5_ad00;
+/// `NiStream::m_pkOstr` (+0x250) and the binary stream's write function (+0xc) and
+/// position (+4).
+const STREAM_OUTPUT: u32 = 0x250;
+const BINARY_STREAM_WRITE: u32 = 0xc;
+const BINARY_STREAM_POSITION: u32 = 0x4;
+/// Viewer string builders (`cdecl`): `NiGetViewerString` (`00a7d330`, the class name) and
+/// `NiGetViewerString_ov2` (`00a7d370`, a label and a flag word).
+const VIEWER_STRING_NAME: u32 = 0x00a7_d330;
+const VIEWER_STRING_BOOL: u32 = 0x00a7_d370;
+/// `"m_bVisual"` (`0109b6ac`).
+const TEXT_VISUAL: u32 = 0x0109_b6ac;
+/// `NiTArray<char *>` resize (`0096ad30`) and `SetAt` (`0096ae90`).
+const STRING_ARRAY_SET_SIZE: u32 = 0x0096_ad30;
+const STRING_ARRAY_SET_AT: u32 = 0x0096_ae90;
+
+/// Calls `call` on each non-null child, the used size read again after each one.
+fn for_each_child(e: &mut Engine, node: u32, call: &mut dyn FnMut(&mut Engine, u32)) {
+    let mut index = 0;
+    while index < child_count(e, node) {
+        let child = child_at(e, node, index);
+        if child != 0 {
+            call(e, child);
+        }
+        index += 1;
+    }
+}
+
+// Translated from 00a5d940 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiNode::ApplyTransform` (Xbox PDB; (matrix, translation, flag)): without the flag every
+/// child gets `ApplyTransform(matrix, translation, 1)` (vtable +0x90). With it the
+/// transform is moved into the node's frame: the matrix `R^T * (M * R)` (`R` the local
+/// rotation, `NiMatrix3::operator*` and `TransposeTimes`) and the translation
+/// `R^T (M T + t - T) / s` (`T` the local translation, `s` the local scale, each step
+/// stored as a float in the exe's order), and every child gets those with 1.
+pub fn ni_node_apply_transform(
+    e: &mut Engine,
+    this: Ptr,
+    matrix: Ptr,
+    translation: Ptr,
+    flag: u32,
+) {
+    let node = this.addr();
+    if flag as u8 == 0 {
+        for_each_child(e, node, &mut |e, child| {
+            e.vcall(
+                child,
+                SLOT_APPLY_TRANSFORM,
+                &args![matrix, translation, 1u32],
+            );
+        });
+        return;
+    }
+    e.with_stack(0x6c, |e, frame| {
+        let moved_translation = frame.addr() + 0x18;
+        let moved_matrix = frame.addr() + 0x24;
+        let product = frame.addr() + 0x48;
+        let rotate = node + AV_LOCAL_ROTATE;
+        let first = e
+            .call(MATRIX_MULTIPLY, &args![matrix, product, rotate])
+            .u32();
+        e.call(MATRIX_TRANSPOSE_TIMES, &args![rotate, moved_matrix, first]);
+        let (m, t) = (matrix.addr(), node + AV_LOCAL_TRANSLATE);
+        let ld = |e: &Engine, at: u32| x87_load32(e.mem.u32(at));
+        let op = |e: &Engine, at: u32| x87_m32(e.mem.u32(at));
+        let through_float = |value: f64| x87_load32(x87_store32(value));
+        // `M T`, row by row.
+        let mut rotated = [0u32; 3];
+        let products: [[(u32, u32); 3]; 3] = [
+            [(m + 4, t + 4), (t, m), (m + 8, t + 8)],
+            [(m + 0xc, t), (m + 0x10, t + 4), (m + 0x14, t + 8)],
+            [(m + 0x18, t), (m + 0x1c, t + 4), (m + 0x20, t + 8)],
+        ];
+        for (row, terms) in products.iter().enumerate() {
+            let term = |(loaded, operand): (u32, u32)| x87_mul(ld(e, loaded), op(e, operand));
+            rotated[row] = x87_store32(x87_add(
+                x87_add(term(terms[0]), term(terms[1])),
+                term(terms[2]),
+            ));
+        }
+        // `+ t`, then `- T`.
+        let mut offset = [0f64; 3];
+        for axis in 0..3u32 {
+            let shifted = x87_store32(x87_add(
+                ld(e, translation.addr() + 4 * axis),
+                x87_m32(rotated[axis as usize]),
+            ));
+            offset[axis as usize] =
+                through_float(x87_sub(x87_load32(shifted), op(e, t + 4 * axis)));
+        }
+        let [c0, c1, c2] = offset;
+        // `R^T` times the offset.
+        let r = rotate;
+        let d0 = through_float(x87_add(
+            x87_mul(ld(e, r + 0x18), c2),
+            x87_add(x87_mul(ld(e, r + 0xc), c1), x87_mul(c0, op(e, r))),
+        ));
+        let d1 = through_float(x87_add(
+            x87_add(x87_mul(ld(e, r + 0x10), c1), x87_mul(ld(e, r + 4), c0)),
+            x87_mul(ld(e, r + 0x1c), c2),
+        ));
+        let d2 = through_float(x87_add(
+            x87_mul(c2, ld(e, r + 0x20)),
+            x87_add(x87_mul(c1, ld(e, r + 0x14)), x87_mul(c0, op(e, r + 8))),
+        ));
+        let inverse = through_float(x87_div(1.0, ld(e, node + AV_LOCAL_SCALE)));
+        let out = moved_translation;
+        e.mem.set_u32(out, x87_store32(x87_mul(inverse, d0)));
+        e.mem.set_u32(out + 4, x87_store32(x87_mul(d1, inverse)));
+        e.mem.set_u32(out + 8, x87_store32(x87_mul(inverse, d2)));
+        for_each_child(e, node, &mut |e, child| {
+            e.vcall(
+                child,
+                SLOT_APPLY_TRANSFORM,
+                &args![moved_matrix, moved_translation, 1u32],
+            );
+        });
+    });
+}
+
+// Translated from 00a5dc30 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiNode::PurgeRendererData` (Xbox PDB): `NiAVObject::PurgeRendererData` (`00a59e50`),
+/// then `PurgeRendererData` (vtable +0xd8) of every child, with the renderer.
+pub fn ni_node_purge_renderer_data(e: &mut Engine, this: Ptr, renderer: u32) {
+    e.call(AV_PURGE_RENDERER_DATA, &args![this, renderer]);
+    for_each_child(e, this.addr(), &mut |e, child| {
+        e.vcall(child, SLOT_PURGE_RENDERER_DATA, &args![renderer]);
+    });
+}
+
+// Translated from 00a5e1f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiNode::UpdateRigidDownwardPass` (Xbox PDB; (update data, flags)): the data's byte +4
+/// set to bit 3 of the node's flags (+0x30) around `NiAVObject::UpdateObjectControllers`
+/// (`004eff50`, with 1) and put back; with flag bit 2 the node's slot +0xb8 with the data;
+/// flag bit 0 adds bit 0 to the flags passed on. Then every child with its flag bit 1 set
+/// gets `UpdateRigidDownwardPass` (vtable +0xac) with the data and those flags (the child
+/// count is read once).
+pub fn ni_node_update_rigid_downward_pass(e: &mut Engine, this: Ptr, data: u32, flags: u32) {
+    let node = this.addr();
+    let saved = e.mem.u8(data + 4);
+    let bit3 = ((e.mem.u32(node + AV_FLAGS) >> 3) & 1) as u8;
+    e.mem.set_u8(data + 4, bit3);
+    e.call(AV_UPDATE_OBJECT_CONTROLLERS, &args![this, data, 1u32]);
+    e.mem.set_u8(data + 4, saved);
+    if (e.mem.u32(node + AV_FLAGS) >> 2) & 1 != 0 {
+        e.vcall(node, SLOT_RIGID_PASS_OWN, &args![data]);
+    }
+    let mut flags = flags;
+    if e.mem.u8(node + AV_FLAGS) & 1 != 0 {
+        flags |= 1;
+    }
+    let count = child_count(e, node);
+    for index in 0..count {
+        let child = child_at(e, node, index);
+        if child != 0 && (e.mem.u32(child + AV_FLAGS) >> 1) & 1 != 0 {
+            e.vcall(child, SLOT_UPDATE_RIGID_DOWNWARD_PASS, &args![data, flags]);
+        }
+    }
+}
+
+// Translated from 00a5e280 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiNode::UpdateControllers` (Xbox PDB): `NiAVObject::UpdateObjectControllers`
+/// (`004eff50`, with 1), then `UpdateControllers` (vtable +0x8c) of every child (the child
+/// count is read once).
+pub fn ni_node_update_controllers(e: &mut Engine, this: Ptr, data: u32) {
+    let node = this.addr();
+    e.call(AV_UPDATE_OBJECT_CONTROLLERS, &args![this, data, 1u32]);
+    let count = child_count(e, node);
+    for index in 0..count {
+        let child = child_at(e, node, index);
+        if child != 0 {
+            e.vcall(child, SLOT_UPDATE_CONTROLLERS, &args![data]);
+        }
+    }
+}
+
+// Translated from 00a5e5b0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiNode::RegisterStreamables` (Xbox PDB): false when `NiAVObject::RegisterStreamables`
+/// (`00a59f00`) is; otherwise every child's `RegisterStreamables` (vtable +0x54) with the
+/// stream, and true.
+pub fn ni_node_register_streamables(e: &mut Engine, this: Ptr, stream: u32) -> bool {
+    if !e.call(AV_REGISTER_STREAMABLES, &args![this, stream]).bool() {
+        return false;
+    }
+    for_each_child(e, this.addr(), &mut |e, child| {
+        e.vcall(child, SLOT_REGISTER_STREAMABLES, &args![stream]);
+    });
+    true
+}
+
+// Translated from 00a5e600 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiNode::IsEqual` (Xbox PDB): `NiAVObject::IsEqual` (`00a5a260`), the same child count,
+/// and child by child both null or both present with the first's `IsEqual` (vtable +0x5c)
+/// true for the second.
+pub fn ni_node_is_equal(e: &mut Engine, this: Ptr, other: u32) -> bool {
+    if !e.call(AV_IS_EQUAL, &args![this, other]).bool() {
+        return false;
+    }
+    let node = this.addr();
+    let count = child_count(e, node);
+    if count != child_count(e, other) {
+        return false;
+    }
+    for index in 0..count {
+        let mine = child_at(e, node, index);
+        let theirs = child_at(e, other, index);
+        if mine == 0 {
+            if theirs != 0 {
+                return false;
+            }
+        } else if theirs == 0 || !e.vcall(mine, SLOT_IS_EQUAL, &args![theirs]).bool() {
+            return false;
+        }
+    }
+    true
+}
+
+/// One 4-byte write to the stream's output (`NiStream` +0x250): its write function
+/// (+0xc) with (output, the word's address, 4, the address of a count local set to 4, 1),
+/// the result added to its position (+4).
+fn write_word(e: &mut Engine, stream: u32, word: u32, count: u32) {
+    let output = e.mem.u32(stream + STREAM_OUTPUT);
+    let function = e.mem.u32(output + BINARY_STREAM_WRITE);
+    e.mem.set_u32(count, 4);
+    let done = e
+        .call(function, &args![output, word, 4u32, count, 1u32])
+        .u32();
+    let position = e
+        .mem
+        .u32(output + BINARY_STREAM_POSITION)
+        .wrapping_add(done);
+    e.mem.set_u32(output + BINARY_STREAM_POSITION, position);
+}
+
+// Translated from 00a5e880 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiNode::SaveBinary` (Xbox PDB): `NiAVObject::SaveBinary` (`00a5a900`), the child count
+/// as a 4-byte word, every child's link id (`NiStream::SaveLinkID`, vtable +0x30, nulls
+/// included), then a 4-byte 0.
+pub fn ni_node_save_binary(e: &mut Engine, this: Ptr, stream: u32) {
+    let node = this.addr();
+    e.call(AV_SAVE_BINARY, &args![this, stream]);
+    e.with_stack(0xc, |e, frame| {
+        let (count, zero, size) = (frame.addr(), frame.addr() + 4, frame.addr() + 8);
+        let children = child_count(e, node);
+        e.mem.set_u32(size, children);
+        write_word(e, stream, size, count);
+        for index in 0..children {
+            let child = child_at(e, node, index);
+            e.vcall(stream, SLOT_SAVE_LINK_ID, &args![child]);
+        }
+        e.mem.set_u32(zero, 0);
+        write_word(e, stream, zero, count);
+    });
+}
+
+/// Adds the string in the word at `slot` to the viewer strings: the array grown by its
+/// grow-by count when full (`0096ad30`), then `SetAt` (`0096ae90`) at the old size.
+fn add_viewer_string(e: &mut Engine, strings: u32, slot: u32) {
+    let index = u32::from(e.mem.u16(strings + 0xa));
+    if index >= u32::from(e.mem.u16(strings + 8)) {
+        let grow = u32::from(e.mem.u16(strings + 0xe));
+        e.call(STRING_ARRAY_SET_SIZE, &args![strings, grow + index]);
+    }
+    e.call(STRING_ARRAY_SET_AT, &args![strings, index, slot]);
+}
+
+// Translated from 00a5ea70 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiNode::GetViewerStrings` (Xbox PDB): after `NiAVObject::GetViewerStrings`
+/// (`00a5ad00`), adds the class name (`NiNode`'s RTTI name) and `"m_bVisual"`: whether
+/// the world bound (+0x20) exists with a radius not 0 (a NaN radius counts as visual).
+pub fn ni_node_get_viewer_strings(e: &mut Engine, this: Ptr, strings: u32) {
+    let node = this.addr();
+    e.call(AV_GET_VIEWER_STRINGS, &args![this, strings]);
+    e.with_stack(4, |e, slot| {
+        let name = e.mem.u32(NI_NODE_RTTI);
+        let text = e.call(VIEWER_STRING_NAME, &args![name]).u32();
+        e.mem.set_u32(slot.addr(), text);
+        add_viewer_string(e, strings, slot.addr());
+        let bound = e.mem.u32(node + AV_WORLD_BOUND);
+        let visual = bound != 0 && radius_not_zero(e, bound);
+        let text = e
+            .call(VIEWER_STRING_BOOL, &args![TEXT_VISUAL, u32::from(visual)])
+            .u32();
+        e.mem.set_u32(slot.addr(), text);
+        add_viewer_string(e, strings, slot.addr());
+    });
+}
+
+// Translated from 00a5ebe0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`thiscall` on an `NiTArray` of `NiPointer`s, (index, address
+/// of the pointer)): inserts the pointer at `index`. A null pointer answers `0xffffffff`.
+/// Otherwise every element from the used size down to `index + 1` takes the one before it
+/// (through a smart-pointer temporary: its count raised, `SetAt` `004b0310`, the count
+/// dropped with `DeleteThis`, slot +4, at zero), the array grown first by its grow-by
+/// count (`0060bef0`) when the used size has reached the capacity; then the pointer goes in
+/// at `index` (the array grown the same way when `index` has reached the capacity). Answers
+/// `index`.
+pub fn fn_00a5ebe0(e: &mut Engine, this: Ptr, index: u32, element: Ptr) -> u32 {
+    let array = this.addr();
+    if e.mem.u32(element.addr()) == 0 {
+        return 0xffff_ffff;
+    }
+    let size = u32::from(e.mem.u16(array + 0xa));
+    let mut position = size;
+    if position > index {
+        e.with_stack(4, |e, temp| loop {
+            let base = e.mem.u32(array + 4);
+            let moved = e
+                .mem
+                .u32(base.wrapping_add(position.wrapping_mul(4)).wrapping_sub(4));
+            e.mem.set_u32(temp.addr(), moved);
+            if moved != 0 {
+                take_reference(e, moved);
+            }
+            if position == size && position >= u32::from(e.mem.u16(array + 8)) {
+                let grow = u32::from(e.mem.u16(array + 0xe));
+                e.call(CHILD_ARRAY_SET_SIZE, &args![array, grow + position]);
+            }
+            e.call(CHILD_ARRAY_SET_AT, &args![array, position, temp]);
+            if moved != 0 {
+                drop_reference(e, moved);
+            }
+            position -= 1;
+            if position <= index {
+                break;
+            }
+        });
+    }
+    if index >= u32::from(e.mem.u16(array + 8)) {
+        let grow = u32::from(e.mem.u16(array + 0xe));
+        e.call(
+            CHILD_ARRAY_SET_SIZE,
+            &args![array, grow.wrapping_add(index)],
+        );
+    }
+    e.call(CHILD_ARRAY_SET_AT, &args![array, index, element]);
+    index
+}
+
+// Translated from 00a5edc0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiNode::InsertChildAt` (Xbox PDB; (index, child)): nothing for a null child. Otherwise
+/// the child's count is raised, `NiAVObject::AttachParent(child, this)` (`00a59d00`) runs,
+/// a smart-pointer temporary to the child (raising the count again) is inserted into the
+/// child array at `index` (`00a5ebe0`), and both references are dropped (`DeleteThis`,
+/// slot +4, at zero).
+pub fn ni_node_insert_child_at(e: &mut Engine, this: Ptr, index: u32, child: u32) {
+    if child == 0 {
+        return;
+    }
+    e.call(INTERLOCKED_INCREMENT, &args![child.wrapping_add(4)]);
+    e.call(NI_AV_OBJECT_ATTACH_PARENT, &args![child, this]);
+    e.with_stack(4, |e, temp| {
+        e.mem.set_u32(temp.addr(), child);
+        e.call(INTERLOCKED_INCREMENT, &args![child.wrapping_add(4)]);
+        let children = Ptr::new(this.addr() + CHILDREN);
+        fn_00a5ebe0(e, children, index, temp);
+    });
+    drop_reference(e, child);
+    drop_reference(e, child);
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x00a5_d940, ni_node_apply_transform(Ptr, Ptr, Ptr, u32)),
+        entry!(0x00a5_dc30, ni_node_purge_renderer_data(Ptr, u32)),
+        entry!(
+            0x00a5_e1f0,
+            ni_node_update_rigid_downward_pass(Ptr, u32, u32)
+        ),
+        entry!(0x00a5_e280, ni_node_update_controllers(Ptr, u32)),
+        entry!(0x00a5_e5b0, ni_node_register_streamables(Ptr, u32) -> bool),
+        entry!(0x00a5_e600, ni_node_is_equal(Ptr, u32) -> bool),
+        entry!(0x00a5_e880, ni_node_save_binary(Ptr, u32)),
+        entry!(0x00a5_ea70, ni_node_get_viewer_strings(Ptr, u32)),
+        entry!(0x00a5_ebe0, fn_00a5ebe0(Ptr, u32, Ptr) -> u32),
+        entry!(0x00a5_edc0, ni_node_insert_child_at(Ptr, u32, u32)),
         entry!(0x00a5ece0, ni_node_scalar_deleting_destructor(Ptr, u32) -> Ptr),
         entry!(0x00a5_ecb0, ni_node_ni_node(Ptr, u32) -> Ptr),
         entry!(0x00a5_ed10, ni_node_attach_child(Ptr, u32, u32)),
@@ -2044,5 +2447,410 @@ mod b008_tests {
     fn ni_node_get_rtti_answers_the_record() {
         let mut e = Engine::new();
         assert_eq!(e.call(0x00a5_e9c0, &args![]).u32(), NI_NODE_RTTI);
+    }
+}
+
+#[cfg(test)]
+mod a06_tests {
+    use super::*;
+
+    type Log = std::rc::Rc<std::cell::RefCell<Vec<(u32, Vec<u32>)>>>;
+
+    /// Every slot of the test vtable points at `TARGETS + slot`.
+    const VTABLE: u32 = 0x0320_0000;
+    const TARGETS: u32 = 0x0330_0000;
+
+    /// Reference counting that changes the count word, logged, and a logged `DeleteThis`.
+    fn engine() -> (Engine, Log) {
+        let mut e = Engine::new();
+        let slots: Vec<u32> = (0..0x50).map(|i| TARGETS + 4 * i).collect();
+        e.put_vtable(VTABLE, &slots);
+        let log = Log::default();
+        for (addr, step) in [
+            (INTERLOCKED_INCREMENT, 1u32),
+            (INTERLOCKED_DECREMENT, u32::MAX),
+        ] {
+            let l = log.clone();
+            e.register_double(addr, move |e, a| {
+                l.borrow_mut().push((addr, a.to_vec()));
+                let value = e.mem.u32(a[0]).wrapping_add(step);
+                e.mem.set_u32(a[0], value);
+                value.into_ret()
+            });
+        }
+        for addr in [
+            NI_AV_OBJECT_ATTACH_PARENT,
+            CHILD_ARRAY_SET_SIZE,
+            TARGETS + 4,
+        ] {
+            logged(&mut e, &log, addr, 0);
+        }
+        (e, log)
+    }
+
+    /// Logs calls to `addr` and answers `eax`.
+    fn logged(e: &mut Engine, log: &Log, addr: u32, eax: u32) {
+        let l = log.clone();
+        e.register_double(addr, move |_, a| {
+            l.borrow_mut().push((addr, a.to_vec()));
+            eax.into_ret()
+        });
+    }
+
+    fn calls(log: &Log, addr: u32) -> Vec<Vec<u32>> {
+        log.borrow()
+            .iter()
+            .filter(|c| c.0 == addr)
+            .map(|c| c.1.clone())
+            .collect()
+    }
+
+    fn object(e: &mut Engine, flags: u32) -> u32 {
+        let p = e.mem.alloc(0xac);
+        e.mem.set_u32(p, VTABLE);
+        e.mem.set_u32(p + AV_FLAGS, flags);
+        p
+    }
+
+    /// A node with the given children (0 for an empty slot) and spare capacity `extra`.
+    fn node(e: &mut Engine, children: &[u32], extra: u16) -> u32 {
+        let n = object(e, 0);
+        let capacity = children.len() as u16 + extra;
+        let block = e.mem.alloc(4 * u32::from(capacity) + 8);
+        for (i, c) in children.iter().enumerate() {
+            e.mem.set_u32(block + 4 * i as u32, *c);
+        }
+        e.mem.set_u32(n + CHILDREN_BASE, block);
+        e.mem.set_u16(n + CHILDREN_CAPACITY, capacity);
+        e.mem.set_u16(n + CHILDREN_SIZE, children.len() as u16);
+        e.mem.set_u16(n + 0xaa, 2);
+        n
+    }
+
+    fn put(e: &mut Engine, at: u32, values: &[f32]) {
+        for (i, v) in values.iter().enumerate() {
+            e.mem.set_f32(at + 4 * i as u32, *v);
+        }
+    }
+
+    #[test]
+    fn apply_transform_passes_on_or_moves_into_the_node_frame() {
+        let (mut e, log) = engine();
+        let (a, b) = (object(&mut e, 0), object(&mut e, 0));
+        let n = node(&mut e, &[a, 0, b], 0);
+        let seen = std::rc::Rc::new(std::cell::RefCell::new(vec![]));
+        let s = seen.clone();
+        e.register_double(TARGETS + SLOT_APPLY_TRANSFORM, move |e, a| {
+            let t: Vec<f32> = (0..3).map(|i| e.mem.f32(a[2] + 4 * i)).collect();
+            s.borrow_mut().push((a.to_vec(), t));
+            Ret::default()
+        });
+        let t = e.mem.alloc(0xc);
+        put(&mut e, t, &[4.0, 6.0, 8.0]);
+        e.call(0x00a5_d940, &args![n, 0x1111u32, t, 0x100u32]);
+        let got: Vec<Vec<u32>> = seen.borrow().iter().map(|c| c.0.clone()).collect();
+        assert_eq!(got, vec![vec![a, 0x1111, t, 1], vec![b, 0x1111, t, 1]]);
+        seen.borrow_mut().clear();
+
+        // A quarter turn about z as the local rotation, T = (1, 2, 3), scale 2, M = 2 I,
+        // t = (4, 6, 8): M T + t - T = (5, 8, 11), R^T of it (-8, 5, 11), halved.
+        put(
+            &mut e,
+            n + AV_LOCAL_ROTATE,
+            &[0.0, 1.0, 0.0, -1.0, 0.0, 0.0, 0.0, 0.0, 1.0],
+        );
+        put(&mut e, n + AV_LOCAL_TRANSLATE, &[1.0, 2.0, 3.0]);
+        put(&mut e, n + AV_LOCAL_SCALE, &[2.0]);
+        let m = e.mem.alloc(0x24);
+        put(&mut e, m, &[2.0, 0.0, 0.0, 0.0, 2.0, 0.0, 0.0, 0.0, 2.0]);
+        logged(&mut e, &log, MATRIX_MULTIPLY, 0x5555);
+        logged(&mut e, &log, MATRIX_TRANSPOSE_TIMES, 0);
+        e.call(0x00a5_d940, &args![n, m, t, 1u32]);
+        let product = calls(&log, MATRIX_MULTIPLY);
+        assert_eq!(product.len(), 1);
+        assert_eq!((product[0][0], product[0][2]), (m, n + AV_LOCAL_ROTATE));
+        let transposed = calls(&log, MATRIX_TRANSPOSE_TIMES);
+        assert_eq!(transposed[0][0], n + AV_LOCAL_ROTATE);
+        assert_eq!(transposed[0][2], 0x5555);
+        let seen = seen.borrow();
+        assert_eq!(seen.len(), 2);
+        for (call, child) in seen.iter().zip([a, b]) {
+            assert_eq!(call.0[0], child);
+            assert_eq!(call.0[1], transposed[0][1]);
+            assert_eq!(call.0[3], 1);
+            assert_eq!(call.1, vec![-4.0, 2.5, 5.5]);
+        }
+    }
+
+    #[test]
+    fn purge_renderer_data_runs_the_base_then_the_children() {
+        let (mut e, log) = engine();
+        let a = object(&mut e, 0);
+        let n = node(&mut e, &[0, a], 0);
+        logged(&mut e, &log, AV_PURGE_RENDERER_DATA, 0);
+        logged(&mut e, &log, TARGETS + SLOT_PURGE_RENDERER_DATA, 0);
+        e.call(0x00a5_dc30, &args![n, 0x77u32]);
+        assert_eq!(calls(&log, AV_PURGE_RENDERER_DATA), vec![vec![n, 0x77]]);
+        assert_eq!(
+            calls(&log, TARGETS + SLOT_PURGE_RENDERER_DATA),
+            vec![vec![a, 0x77]]
+        );
+    }
+
+    #[test]
+    fn rigid_downward_pass_sets_the_data_byte_and_picks_the_children() {
+        let (mut e, log) = engine();
+        let (a, b) = (object(&mut e, 2), object(&mut e, 0));
+        let n = node(&mut e, &[a, b, 0], 0);
+        let data = e.mem.alloc(8);
+        e.mem.set_u8(data + 4, 0x55);
+        let l = log.clone();
+        e.register_double(AV_UPDATE_OBJECT_CONTROLLERS, move |e, a| {
+            let byte = u32::from(e.mem.u8(a[1] + 4));
+            l.borrow_mut()
+                .push((AV_UPDATE_OBJECT_CONTROLLERS, vec![a[0], a[1], a[2], byte]));
+            Ret::default()
+        });
+        logged(&mut e, &log, TARGETS + SLOT_RIGID_PASS_OWN, 0);
+        logged(&mut e, &log, TARGETS + SLOT_UPDATE_RIGID_DOWNWARD_PASS, 0);
+        // Flag bits 3, 2 and 0.
+        e.mem.set_u32(n + AV_FLAGS, 0b1101);
+        e.call(0x00a5_e1f0, &args![n, data, 0x10u32]);
+        assert_eq!(
+            calls(&log, AV_UPDATE_OBJECT_CONTROLLERS),
+            vec![vec![n, data, 1, 1]]
+        );
+        assert_eq!(e.mem.u8(data + 4), 0x55);
+        assert_eq!(
+            calls(&log, TARGETS + SLOT_RIGID_PASS_OWN),
+            vec![vec![n, data]]
+        );
+        assert_eq!(
+            calls(&log, TARGETS + SLOT_UPDATE_RIGID_DOWNWARD_PASS),
+            vec![vec![a, data, 0x11]]
+        );
+        // No flag bits: byte 0 during the call, no own slot, the flags as given.
+        log.borrow_mut().clear();
+        e.mem.set_u32(n + AV_FLAGS, 0);
+        e.call(0x00a5_e1f0, &args![n, data, 0x10u32]);
+        assert_eq!(
+            calls(&log, AV_UPDATE_OBJECT_CONTROLLERS),
+            vec![vec![n, data, 1, 0]]
+        );
+        assert!(calls(&log, TARGETS + SLOT_RIGID_PASS_OWN).is_empty());
+        assert_eq!(
+            calls(&log, TARGETS + SLOT_UPDATE_RIGID_DOWNWARD_PASS),
+            vec![vec![a, data, 0x10]]
+        );
+    }
+
+    #[test]
+    fn update_controllers_runs_the_base_then_the_children() {
+        let (mut e, log) = engine();
+        let a = object(&mut e, 0);
+        let n = node(&mut e, &[a, 0], 0);
+        logged(&mut e, &log, AV_UPDATE_OBJECT_CONTROLLERS, 0);
+        logged(&mut e, &log, TARGETS + SLOT_UPDATE_CONTROLLERS, 0);
+        e.call(0x00a5_e280, &args![n, 0x99u32]);
+        assert_eq!(
+            calls(&log, AV_UPDATE_OBJECT_CONTROLLERS),
+            vec![vec![n, 0x99, 1]]
+        );
+        assert_eq!(
+            calls(&log, TARGETS + SLOT_UPDATE_CONTROLLERS),
+            vec![vec![a, 0x99]]
+        );
+    }
+
+    #[test]
+    fn register_streamables_stops_when_the_base_does() {
+        let (mut e, log) = engine();
+        let a = object(&mut e, 0);
+        let n = node(&mut e, &[a], 0);
+        logged(&mut e, &log, AV_REGISTER_STREAMABLES, 0);
+        logged(&mut e, &log, TARGETS + SLOT_REGISTER_STREAMABLES, 0);
+        assert!(!e.call(0x00a5_e5b0, &args![n, 0x44u32]).bool());
+        assert!(calls(&log, TARGETS + SLOT_REGISTER_STREAMABLES).is_empty());
+        logged(&mut e, &log, AV_REGISTER_STREAMABLES, 1);
+        assert!(e.call(0x00a5_e5b0, &args![n, 0x44u32]).bool());
+        assert_eq!(
+            calls(&log, TARGETS + SLOT_REGISTER_STREAMABLES),
+            vec![vec![a, 0x44]]
+        );
+    }
+
+    #[test]
+    fn is_equal_compares_the_base_the_count_and_each_child() {
+        let (mut e, log) = engine();
+        let (a, b) = (object(&mut e, 0), object(&mut e, 0));
+        let mine = node(&mut e, &[a, 0], 0);
+        let same = node(&mut e, &[b, 0], 0);
+        let shorter = node(&mut e, &[b], 0);
+        let swapped = node(&mut e, &[0, b], 0);
+        logged(&mut e, &log, AV_IS_EQUAL, 1);
+        logged(&mut e, &log, TARGETS + SLOT_IS_EQUAL, 1);
+        assert!(e.call(0x00a5_e600, &args![mine, same]).bool());
+        assert_eq!(calls(&log, TARGETS + SLOT_IS_EQUAL), vec![vec![a, b]]);
+        assert!(!e.call(0x00a5_e600, &args![mine, shorter]).bool());
+        assert!(!e.call(0x00a5_e600, &args![mine, swapped]).bool());
+        assert!(!e.call(0x00a5_e600, &args![swapped, mine]).bool());
+        logged(&mut e, &log, TARGETS + SLOT_IS_EQUAL, 0);
+        assert!(!e.call(0x00a5_e600, &args![mine, same]).bool());
+        logged(&mut e, &log, AV_IS_EQUAL, 0);
+        logged(&mut e, &log, TARGETS + SLOT_IS_EQUAL, 1);
+        assert!(!e.call(0x00a5_e600, &args![mine, same]).bool());
+    }
+
+    #[test]
+    fn save_binary_writes_the_count_the_links_and_a_zero() {
+        let (mut e, log) = engine();
+        let a = object(&mut e, 0);
+        let n = node(&mut e, &[a, 0], 0);
+        let stream = object(&mut e, 0);
+        let output = e.mem.alloc(0x10);
+        e.mem.set_u32(stream + STREAM_OUTPUT, output);
+        e.mem.set_u32(output + BINARY_STREAM_WRITE, 0x0340_0000);
+        e.mem.set_u32(output + BINARY_STREAM_POSITION, 0x20);
+        let l = log.clone();
+        e.register_double(0x0340_0000, move |e, a| {
+            assert_eq!((a[2], e.mem.u32(a[3]), a[4]), (4, 4, 1));
+            l.borrow_mut()
+                .push((0x0340_0000, vec![a[0], e.mem.u32(a[1])]));
+            4u32.into_ret()
+        });
+        logged(&mut e, &log, AV_SAVE_BINARY, 0);
+        logged(&mut e, &log, TARGETS + SLOT_SAVE_LINK_ID, 0);
+        e.call(0x00a5_e880, &args![n, stream]);
+        let order: Vec<(u32, Vec<u32>)> = log.borrow().clone();
+        assert_eq!(
+            order,
+            vec![
+                (AV_SAVE_BINARY, vec![n, stream]),
+                (0x0340_0000, vec![output, 2]),
+                (TARGETS + SLOT_SAVE_LINK_ID, vec![stream, a]),
+                (TARGETS + SLOT_SAVE_LINK_ID, vec![stream, 0]),
+                (0x0340_0000, vec![output, 0]),
+            ]
+        );
+        assert_eq!(e.mem.u32(output + BINARY_STREAM_POSITION), 0x28);
+    }
+
+    #[test]
+    fn viewer_strings_add_the_name_and_whether_the_bound_is_visual() {
+        let (mut e, log) = engine();
+        e.map(NI_NODE_RTTI & !0xfff, 0x1000);
+        e.mem.set_u32(NI_NODE_RTTI, 0x0abc_0000);
+        let n = node(&mut e, &[], 0);
+        let strings = e.mem.alloc(0x10);
+        e.mem.set_u16(strings + 8, 10);
+        logged(&mut e, &log, AV_GET_VIEWER_STRINGS, 0);
+        logged(&mut e, &log, VIEWER_STRING_NAME, 0x61);
+        logged(&mut e, &log, VIEWER_STRING_BOOL, 0x62);
+        let l = log.clone();
+        e.register_double(STRING_ARRAY_SET_AT, move |e, a| {
+            l.borrow_mut()
+                .push((STRING_ARRAY_SET_AT, vec![a[1], e.mem.u32(a[2])]));
+            Ret::default()
+        });
+        let bound = e.mem.alloc(0x10);
+        for (world_bound, radius) in [(0, 0.0f32), (bound, 0.0), (bound, 3.0), (bound, f32::NAN)] {
+            e.mem.set_u32(n + AV_WORLD_BOUND, world_bound);
+            e.mem.set_f32(bound + 0xc, radius);
+            e.call(0x00a5_ea70, &args![n, strings]);
+        }
+        let flags: Vec<u32> = calls(&log, VIEWER_STRING_BOOL)
+            .iter()
+            .map(|c| c[1])
+            .collect();
+        assert_eq!(flags, vec![0, 0, 1, 1]);
+        assert_eq!(calls(&log, VIEWER_STRING_BOOL)[0][0], TEXT_VISUAL);
+        assert_eq!(calls(&log, VIEWER_STRING_NAME)[0], vec![0x0abc_0000]);
+        assert_eq!(calls(&log, AV_GET_VIEWER_STRINGS)[0], vec![n, strings]);
+        assert_eq!(
+            calls(&log, STRING_ARRAY_SET_AT)[..2],
+            [vec![0, 0x61], vec![0, 0x62]]
+        );
+    }
+
+    #[test]
+    fn insert_at_shifts_the_tail_up_and_grows_when_full() {
+        let (mut e, log) = engine();
+        let (a, b, c) = (object(&mut e, 0), object(&mut e, 0), object(&mut e, 0));
+        for o in [a, b, c] {
+            e.mem.set_u32(o + 4, 1);
+        }
+        let n = node(&mut e, &[a, 0, b], 0);
+        let array = n + CHILDREN;
+        let l = log.clone();
+        e.register_double(CHILD_ARRAY_SET_AT, move |e, w| {
+            l.borrow_mut()
+                .push((CHILD_ARRAY_SET_AT, vec![w[1], e.mem.u32(w[2])]));
+            let base = e.mem.u32(w[0] + 4);
+            let value = e.mem.u32(w[2]);
+            e.mem.set_u32(base + 4 * w[1], value);
+            Ret::default()
+        });
+        let element = e.mem.alloc(4);
+        e.mem.set_u32(element, c);
+        assert_eq!(e.call(0x00a5_ebe0, &args![array, 1u32, element]).u32(), 1);
+        // Positions 3 and 2 take b and the empty slot, then c goes in at 1; the array grows
+        // once, at the first move (its size 3 has reached the capacity 3).
+        assert_eq!(
+            calls(&log, CHILD_ARRAY_SET_AT),
+            vec![vec![3, b], vec![2, 0], vec![1, c]]
+        );
+        assert_eq!(calls(&log, CHILD_ARRAY_SET_SIZE), vec![vec![array, 5]]);
+        // The moved object's count went up and back down, without a delete.
+        assert_eq!(e.mem.u32(b + 4), 1);
+        assert!(calls(&log, TARGETS + 4).is_empty());
+        // Inserting at the capacity grows the array by the grow-by count first.
+        log.borrow_mut().clear();
+        let n = node(&mut e, &[a], 0);
+        e.mem.set_u16(n + CHILDREN_SIZE, 0);
+        e.mem.set_u32(element, c);
+        assert_eq!(
+            e.call(0x00a5_ebe0, &args![n + CHILDREN, 1u32, element])
+                .u32(),
+            1
+        );
+        assert_eq!(
+            calls(&log, CHILD_ARRAY_SET_SIZE),
+            vec![vec![n + CHILDREN, 3]]
+        );
+        // A null pointer is refused.
+        e.mem.set_u32(element, 0);
+        assert_eq!(
+            e.call(0x00a5_ebe0, &args![array, 0u32, element]).u32(),
+            0xffff_ffff
+        );
+    }
+
+    #[test]
+    fn insert_child_at_attaches_and_inserts_with_balanced_references() {
+        let (mut e, log) = engine();
+        let child = object(&mut e, 0);
+        let n = node(&mut e, &[], 4);
+        let l = log.clone();
+        e.register_double(CHILD_ARRAY_SET_AT, move |e, a| {
+            l.borrow_mut()
+                .push((CHILD_ARRAY_SET_AT, vec![a[0], a[1], e.mem.u32(a[2])]));
+            Ret::default()
+        });
+        e.call(0x00a5_edc0, &args![n, 0u32, 0u32]);
+        assert!(log.borrow().is_empty());
+        e.call(0x00a5_edc0, &args![n, 2u32, child]);
+        assert_eq!(
+            calls(&log, NI_AV_OBJECT_ATTACH_PARENT),
+            vec![vec![child, n]]
+        );
+        assert_eq!(
+            calls(&log, CHILD_ARRAY_SET_AT),
+            vec![vec![n + CHILDREN, 2, child]]
+        );
+        assert_eq!(calls(&log, INTERLOCKED_INCREMENT).len(), 2);
+        assert_eq!(calls(&log, INTERLOCKED_DECREMENT).len(), 2);
+        // Nobody else held the child: the second drop reaches zero and deletes it.
+        assert_eq!(e.mem.u32(child + 4), 0);
+        assert_eq!(calls(&log, TARGETS + 4), vec![vec![child]]);
     }
 }

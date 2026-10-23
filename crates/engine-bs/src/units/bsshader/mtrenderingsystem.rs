@@ -17,16 +17,25 @@ const THREAD_CODE_00BA3190: u32 = 0x00ba_3190;
 const THREAD_NAME: u32 = 0x010b_7f84;
 
 // Translated from 00ba3720 (decompiled, FalloutNV.exe 1.4.0.525)
-/// `MTRenderingSystem::CreateThreads` (Xbox PDB). No arguments: when the byte at `011f94b4`
-/// is not 0, calls `MTRenderingSystem::AddThread` (`00ba2e00`) with 1, the word at
+/// `MTRenderingSystem::CreateThreads` (Xbox PDB). No stack arguments; it never touches ECX, so the
+/// caller's ECX (the rendering system `01200088` at its one call, 00b57750) reaches
+/// `MTRenderingSystem::AddThread` (`00ba2e00`) as its `this`. When the byte at `011f94b4` is not
+/// 0, calls AddThread with 1, the word at
 /// `01200080`, the code address `00ba3190`, the name `"Rendering Task Thread 2"`
 /// (`010b7f84`) and 0x20000.
-pub fn mt_rendering_system_create_threads(e: &mut Engine) {
+pub fn mt_rendering_system_create_threads(e: &mut Engine, this: Ptr) {
     if e.global::<u8>(SECOND_THREAD_ENABLED_011F94B4) != 0 {
         let word = e.global::<u32>(THREAD_ARGUMENT_01200080);
         e.call(
             ADD_THREAD,
-            &args![1u32, word, THREAD_CODE_00BA3190, THREAD_NAME, 0x20000u32],
+            &args![
+                this.addr(),
+                1u32,
+                word,
+                THREAD_CODE_00BA3190,
+                THREAD_NAME,
+                0x20000u32
+            ],
         );
     }
 }
@@ -338,10 +347,226 @@ pub fn fn_00ba3690(e: &mut Engine, this: Ptr) -> Ptr {
     this
 }
 
+/// The thread object's constructor (`008c76a0`, unit `ailineartaskthreadmanager.cpp`;
+/// `thiscall`, no words), its vtable (`010b7f50`) and `BSThread`'s destructor body (`00aa63c0`,
+/// unit `bsthread_xenon.cpp`; `thiscall`).
+const THREAD_CONSTRUCT_008C76A0: u32 = 0x008c_76a0;
+const RENDERING_THREAD_VTABLE: u32 = 0x010b_7f50;
+const BS_THREAD_DESTROY_00AA63C0: u32 = 0x00aa_63c0;
+/// `BSThread::Initialize` (engine map, `00aa6430`; `thiscall`, three words),
+/// `SetThreadProcessor` (`00aa6550`, one word), `SetThreadPriority` (`00aa6560`, one word) and
+/// `SetName` (`00aa6540`, one word: the name).
+const BS_THREAD_INITIALIZE: u32 = 0x00aa_6430;
+const BS_THREAD_SET_THREAD_PROCESSOR: u32 = 0x00aa_6550;
+const BS_THREAD_SET_THREAD_PRIORITY: u32 = 0x00aa_6560;
+const BS_THREAD_SET_NAME: u32 = 0x00aa_6540;
+/// The formatter `00406d00` (`cdecl`: buffer, size, format, ...) and the format
+/// `"Rendering Task Thread DEF %i"` (`010b7f64`).
+const FORMAT_00406D00: u32 = 0x0040_6d00;
+const DEFAULT_THREAD_NAME_FORMAT: u32 = 0x010b_7f64;
+/// The memory manager's deallocation (`00aa4060`, `thiscall` on `011f6238`, one word).
+const MEMORY_DEALLOCATE: u32 = 0x00aa_4060;
+/// `CloseHandle` (import slot).
+const CLOSE_HANDLE: u32 = 0x00fd_f07c;
+/// The rendering system the thread code works on (`01200088`): its accumulation tasks from
+/// the second on (`012000f0` is task 1's `+0xc`, up to `012003d0`), and the stage semaphore
+/// holder of thread 1 (its count at `012000ac`, its handle at `012000b0`).
+const RENDERING_SYSTEM_01200088: u32 = 0x0120_0088;
+const TASK_1_LIST_012000F0: u32 = 0x0120_00f0;
+const TASKS_END_012003D0: u32 = 0x0120_03d0;
+const THREAD_1_STAGE_COUNT_012000AC: u32 = 0x0120_00ac;
+const THREAD_1_STAGE_HANDLE_012000B0: u32 = 0x0120_00b0;
+/// The word of the thread block the thread code sets to each task's last word (`+0x2bc`, the
+/// allocation context).
+const TLS_ALLOCATION_CONTEXT: u32 = 0x2bc;
+/// `BSCompoundFrustum::~BSCompoundFrustum` (engine map, `00c47770`; `thiscall`).
+const COMPOUND_FRUSTUM_DESTRUCT: u32 = 0x00c4_7770;
+
+// Translated from 00ba2e00 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `MTRenderingSystem::AddThread` (Xbox PDB; `thiscall` on the rendering system, five words:
+/// the thread index, a processor word, the thread code, a name and a stack size). For an
+/// index below 2 (signed; the code also tests below 3 first) whose slot (`this + 4 * index`) is
+/// empty: a 0x50-byte thread from the memory manager (`00aa3e40` on `011f6238`) is constructed
+/// when the allocation gave one (`008c76a0`, then the vtable `010b7f50` and the code at
+/// `+0x4c`) and kept in the slot (null otherwise); then on the slot's thread
+/// `BSThread::Initialize` (the stack size, the name, 0), `SetThreadProcessor` (the processor
+/// word) and `SetThreadPriority` (0) run, and without a name the thread is named
+/// `"Rendering Task Thread DEF %i"` with the index (`00406d00` into a 0x104-byte stack buffer,
+/// then `SetName`).
+///
+/// The exception frame (`FS:[0]`) and the /GS cookie check are not translated.
+// Translation incomplete: 00ba2e00 - the FS:[0] exception frame and the /GS cookie check (00ec408c) of its stack buffer are not translated
+pub fn mt_rendering_system_add_thread(
+    e: &mut Engine,
+    this: Ptr,
+    index: i32,
+    processor: u32,
+    code: u32,
+    name: u32,
+    stack_size: u32,
+) {
+    // The code compares with 3, then with 2 (signed); only the second can decide.
+    if index >= 2 {
+        return;
+    }
+    let slot = this.addr().wrapping_add((index as u32).wrapping_mul(4));
+    if e.mem.u32(slot) != 0 {
+        return;
+    }
+    let block = e
+        .call(ALLOCATOR_ALLOCATE, &args![FRUSTUM_ALLOCATOR, 0x50u32])
+        .u32();
+    let thread = if block != 0 {
+        e.call(THREAD_CONSTRUCT_008C76A0, &args![block]);
+        e.mem.set_u32(block, RENDERING_THREAD_VTABLE);
+        e.mem.set_u32(block + 0x4c, code);
+        block
+    } else {
+        0
+    };
+    e.mem.set_u32(slot, thread);
+    e.call(BS_THREAD_INITIALIZE, &args![thread, stack_size, name, 0u32]);
+    let thread = e.mem.u32(slot);
+    e.call(BS_THREAD_SET_THREAD_PROCESSOR, &args![thread, processor]);
+    let thread = e.mem.u32(slot);
+    e.call(BS_THREAD_SET_THREAD_PRIORITY, &args![thread, 0u32]);
+    if name == 0 {
+        e.with_stack(0x104, |e, buffer| {
+            e.call(
+                FORMAT_00406D00,
+                &args![buffer, 0x104u32, DEFAULT_THREAD_NAME_FORMAT, index],
+            );
+            let thread = e.mem.u32(slot);
+            e.call(BS_THREAD_SET_NAME, &args![thread, buffer]);
+        });
+    }
+}
+
+// Translated from 00ba2ff0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map: the rendering thread's scalar deleting destructor (slot 0 of its
+/// vtable `010b7f50`; `thiscall`, one word: the flags). Closes the handles at `+0x40` and
+/// `+0x34` (`CloseHandle`), runs `BSThread`'s destructor body (`00aa63c0`) and with bit 0 of
+/// the flags gives the thread back to the memory manager. Answers `this`.
+pub fn fn_00ba2ff0(e: &mut Engine, this: Ptr, flags: u8) -> Ptr {
+    let base = this.addr();
+    let handle = e.mem.u32(base + 0x40);
+    e.call(CLOSE_HANDLE, &args![handle]);
+    let handle = e.mem.u32(base + 0x34);
+    e.call(CLOSE_HANDLE, &args![handle]);
+    e.call(BS_THREAD_DESTROY_00AA63C0, &args![base]);
+    if flags & 1 != 0 {
+        e.call(MEMORY_DEALLOCATE, &args![FRUSTUM_ALLOCATOR, base]);
+    }
+    this
+}
+
+/// Releases the `NiPointer` at `slot` when it holds an object and clears it.
+fn clear_reference(e: &mut Engine, slot: u32) {
+    let object = e.mem.u32(slot);
+    if object != 0 {
+        release_reference(e, object);
+        e.mem.set_u32(slot, 0);
+    }
+}
+
+// Translated from 00ba3190 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map: the second rendering thread's code (the address
+/// `MTRenderingSystem::CreateThreads` hands to `AddThread`; no arguments). For each
+/// accumulation task from the second to the 24th of the rendering system at `01200088` (stage
+/// 1 for the second, counting up): waits for thread 0 to reach the stage (`fn_00ba3130`); when
+/// the task has its object (`+0x14`), sets the thread block's `+0x2bc` to the task's last word
+/// (`+0x1c`), builds a `BSCullingProcess` on the stack as `AddAccumTask` does without threads
+/// (the `NiCullingProcess` constructor with 0, the vtable `0101e2ec`, `+0x90`, `+0xbc`, `+0xc0`,
+/// `+0xc4` cleared, the object counted into `+0xc4`, the task's `+0x18` into `+0x90` and its
+/// frustum into `+0xc0`), accumulates the task's scene (`AccumulateScene`) and two lists
+/// (`AccumulateSceneList`) with the task's camera when each is set, then clears the task: the
+/// last word and the two lists cleared, the object, camera and scene released and cleared,
+/// the frustum destroyed (`~BSCompoundFrustum`), given back to the memory manager and cleared,
+/// and the culling process destroyed (`~BSCullingProcess`). With the threads enabled
+/// (`011f94b4`) thread 1's stage semaphore is then released once and counted.
+///
+/// The exception frame (`FS:[0]`) is not translated, nor the `EAX` the code leaves at the end
+/// (its last call's, the thread's exit word through `fn_00ba2d30`).
+// Translation incomplete: 00ba3190 - the FS:[0] exception frame and the EAX left at the end (the last call's) are not translated
+pub fn fn_00ba3190(e: &mut Engine) {
+    let mut stage = 1i32;
+    let mut task = TASK_1_LIST_012000F0;
+    loop {
+        fn_00ba3130(e, Ptr::new(RENDERING_SYSTEM_01200088), 0, stage);
+        if e.mem.u32(task + 8) != 0 {
+            let tls = e.tls();
+            let last = e.mem.u32(task + 0x10);
+            e.mem.set_u32(tls + TLS_ALLOCATION_CONTEXT, last);
+            e.with_stack(0xc8, |e, process| {
+                let process = process.addr();
+                e.call(CULLING_PROCESS_CONSTRUCT, &args![process, 0u32]);
+                e.mem.set_u32(process, BS_CULLING_PROCESS_VTABLE);
+                e.mem.set_u32(process + 0x90, 0);
+                e.mem.set_u32(process + 0xbc, 0);
+                e.mem.set_u32(process + 0xc0, 0);
+                e.mem.set_u32(process + 0xc4, 0);
+                let object = e.mem.u32(task + 8);
+                if object != 0 {
+                    e.mem.set_u32(process + 0xc4, object);
+                    e.call(INTERLOCKED_INCREMENT, &args![object + 4]);
+                }
+                let scene = e.mem.u32(task - 4);
+                let value = e.mem.u32(task + 0xc);
+                let frustum = e.mem.u32(task - 8);
+                e.mem.set_u32(process + 0x90, value);
+                e.mem.set_u32(process + 0xc0, frustum);
+                if scene != 0 {
+                    let camera = e.mem.u32(task - 0xc);
+                    e.call(ACCUMULATE_SCENE, &args![camera, scene, process]);
+                }
+                let list = e.mem.u32(task);
+                if list != 0 {
+                    let camera = e.mem.u32(task - 0xc);
+                    e.call(ACCUMULATE_SCENE_LIST, &args![camera, list, process]);
+                }
+                let second = e.mem.u32(task + 4);
+                if second != 0 {
+                    let camera = e.mem.u32(task - 0xc);
+                    e.call(ACCUMULATE_SCENE_LIST, &args![camera, second, process]);
+                }
+                e.mem.set_u32(task + 0x10, 0);
+                e.mem.set_u32(task, 0);
+                e.mem.set_u32(task + 4, 0);
+                clear_reference(e, task + 8);
+                clear_reference(e, task - 0xc);
+                clear_reference(e, task - 4);
+                let frustum = e.mem.u32(task - 8);
+                if frustum != 0 {
+                    e.call(COMPOUND_FRUSTUM_DESTRUCT, &args![frustum]);
+                    e.call(MEMORY_DEALLOCATE, &args![FRUSTUM_ALLOCATOR, frustum]);
+                    e.mem.set_u32(task - 8, 0);
+                }
+                e.call(BS_CULLING_PROCESS_DESTRUCT, &args![process]);
+            });
+        }
+        if e.global::<u8>(SECOND_THREAD_ENABLED_011F94B4) != 0 {
+            let handle = e.mem.u32(THREAD_1_STAGE_HANDLE_012000B0);
+            e.call(RELEASE_SEMAPHORE, &args![handle, 1u32, 0u32]);
+            e.call(INTERLOCKED_INCREMENT, &args![THREAD_1_STAGE_COUNT_012000AC]);
+        }
+        task += 0x20;
+        stage += 1;
+        if (task as i32) >= TASKS_END_012003D0 as i32 {
+            break;
+        }
+    }
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
-        entry!(0x00ba_3720, mt_rendering_system_create_threads()),
+        entry!(
+            0x00ba_2e00,
+            mt_rendering_system_add_thread(Ptr, i32, u32, u32, u32, u32)
+        ),
+        entry!(0x00ba_2ff0, fn_00ba2ff0(Ptr, u8) -> Ptr),
+        entry!(0x00ba_3190, fn_00ba3190()),
+        entry!(0x00ba_3720, mt_rendering_system_create_threads(Ptr)),
         entry!(0x00ba_2f30, fn_00ba2f30(Ptr)),
         entry!(0x00ba_2fa0, fn_00ba2fa0(Ptr)),
         entry!(0x00ba_3030, fn_00ba3030(Ptr)),
@@ -382,14 +607,21 @@ mod tests {
         e.set_global(THREAD_ARGUMENT_01200080, 0x4242u32);
         e.register(ADD_THREAD, |_, _| Ret::default());
         e.call_log = Some(vec![]);
-        e.call(0x00ba_3720, &args![]);
+        e.call(0x00ba_3720, &args![RENDERING_SYSTEM_01200088]);
         assert!(add_thread_calls(&e).is_empty());
 
         e.set_global(SECOND_THREAD_ENABLED_011F94B4, 1u8);
-        e.call(0x00ba_3720, &args![]);
+        e.call(0x00ba_3720, &args![RENDERING_SYSTEM_01200088]);
         assert_eq!(
             add_thread_calls(&e),
-            vec![vec![1, 0x4242, 0x00ba_3190, 0x010b_7f84, 0x20000]]
+            vec![vec![
+                RENDERING_SYSTEM_01200088,
+                1,
+                0x4242,
+                0x00ba_3190,
+                0x010b_7f84,
+                0x20000
+            ]]
         );
     }
 }
@@ -684,5 +916,193 @@ mod rendering_system_tests {
         for offset in (0..0x18).step_by(4) {
             assert_eq!(e.mem.u32(this + offset), 0);
         }
+    }
+}
+
+#[cfg(test)]
+mod n013_tests {
+    use super::*;
+
+    fn calls(e: &Engine, addr: u32) -> Vec<Vec<u32>> {
+        e.call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|(a, _)| *a == addr)
+            .map(|(_, words)| words.clone())
+            .collect()
+    }
+
+    fn quiet(e: &mut Engine, addresses: &[u32]) {
+        for &addr in addresses {
+            e.register(addr, |_, _| Ret::default());
+        }
+    }
+
+    #[test]
+    fn add_thread_makes_and_sets_up_the_thread() {
+        let mut e = Engine::new();
+        e.register(ALLOCATOR_ALLOCATE, |e, a| e.mem.alloc(a[1]).into_ret());
+        quiet(
+            &mut e,
+            &[
+                THREAD_CONSTRUCT_008C76A0,
+                BS_THREAD_INITIALIZE,
+                BS_THREAD_SET_THREAD_PROCESSOR,
+                BS_THREAD_SET_THREAD_PRIORITY,
+                BS_THREAD_SET_NAME,
+                FORMAT_00406D00,
+            ],
+        );
+        let this = e.mem.alloc(8);
+        e.call_log = Some(vec![]);
+        e.call(
+            0x00ba_2e00,
+            &args![this, 1i32, 0x42u32, 0x00ba_3190u32, 0x900u32, 0x20000u32],
+        );
+        let thread = e.mem.u32(this + 4);
+        assert_ne!(thread, 0);
+        assert_eq!(e.mem.u32(thread), RENDERING_THREAD_VTABLE);
+        assert_eq!(e.mem.u32(thread + 0x4c), 0x00ba_3190);
+        assert_eq!(
+            calls(&e, ALLOCATOR_ALLOCATE),
+            vec![vec![FRUSTUM_ALLOCATOR, 0x50]]
+        );
+        assert_eq!(
+            calls(&e, BS_THREAD_INITIALIZE),
+            vec![vec![thread, 0x20000, 0x900, 0]]
+        );
+        assert_eq!(
+            calls(&e, BS_THREAD_SET_THREAD_PROCESSOR),
+            vec![vec![thread, 0x42]]
+        );
+        assert_eq!(
+            calls(&e, BS_THREAD_SET_THREAD_PRIORITY),
+            vec![vec![thread, 0]]
+        );
+        // A name was given: no default name.
+        assert!(calls(&e, FORMAT_00406D00).is_empty());
+        // The slot is taken now: nothing more.
+        e.call(
+            0x00ba_2e00,
+            &args![this, 1i32, 0x42u32, 0x00ba_3190u32, 0u32, 0x20000u32],
+        );
+        assert_eq!(calls(&e, ALLOCATOR_ALLOCATE).len(), 1);
+        // Index 2 is refused; index 0 without a name gets the default one.
+        e.call(0x00ba_2e00, &args![this, 2i32, 0u32, 0u32, 0u32, 0u32]);
+        assert_eq!(calls(&e, ALLOCATOR_ALLOCATE).len(), 1);
+        e.call(0x00ba_2e00, &args![this, 0i32, 0u32, 0u32, 0u32, 0u32]);
+        let format = calls(&e, FORMAT_00406D00);
+        assert_eq!(format.len(), 1);
+        assert_eq!(&format[0][1..], &[0x104, DEFAULT_THREAD_NAME_FORMAT, 0]);
+        let named = calls(&e, BS_THREAD_SET_NAME);
+        assert_eq!(named, vec![vec![e.mem.u32(this), format[0][0]]]);
+    }
+
+    #[test]
+    fn fn_00ba2ff0_closes_the_handles_and_frees_on_bit_0() {
+        let mut e = Engine::new();
+        quiet(
+            &mut e,
+            &[CLOSE_HANDLE, BS_THREAD_DESTROY_00AA63C0, MEMORY_DEALLOCATE],
+        );
+        let thread = e.mem.alloc(0x50);
+        e.mem.set_u32(thread + 0x34, 0x34);
+        e.mem.set_u32(thread + 0x40, 0x40);
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x00ba_2ff0, &args![thread, 0u32]).u32(), thread);
+        assert_eq!(calls(&e, CLOSE_HANDLE), vec![vec![0x40], vec![0x34]]);
+        assert_eq!(calls(&e, BS_THREAD_DESTROY_00AA63C0), vec![vec![thread]]);
+        assert!(calls(&e, MEMORY_DEALLOCATE).is_empty());
+        e.call(0x00ba_2ff0, &args![thread, 1u32]);
+        assert_eq!(
+            calls(&e, MEMORY_DEALLOCATE),
+            vec![vec![FRUSTUM_ALLOCATOR, thread]]
+        );
+    }
+
+    #[test]
+    fn thread_code_runs_and_clears_the_tasks() {
+        let mut e = Engine::new();
+        e.map(0x011f_9000, 0x1000);
+        e.map(0x0120_0000, 0x1000);
+        e.register(INTERLOCKED_INCREMENT, |e, a| {
+            let value = e.mem.u32(a[0]).wrapping_add(1);
+            e.mem.set_u32(a[0], value);
+            value.into_ret()
+        });
+        e.register(INTERLOCKED_DECREMENT, |e, a| {
+            let value = e.mem.u32(a[0]).wrapping_sub(1);
+            e.mem.set_u32(a[0], value);
+            value.into_ret()
+        });
+        e.put_vtable(0x0f00_0000, &[0, 0x0000_7004]);
+        quiet(
+            &mut e,
+            &[
+                0x0000_7004,
+                CULLING_PROCESS_CONSTRUCT,
+                ACCUMULATE_SCENE,
+                ACCUMULATE_SCENE_LIST,
+                BS_CULLING_PROCESS_DESTRUCT,
+                COMPOUND_FRUSTUM_DESTRUCT,
+                MEMORY_DEALLOCATE,
+                RELEASE_SEMAPHORE,
+            ],
+        );
+        let object = |e: &mut Engine| {
+            let o = e.mem.alloc(8);
+            e.mem.set_u32(o, 0x0f00_0000);
+            e.mem.set_u32(o + 4, 1);
+            o
+        };
+        // Task 3 (the third the code visits) has everything.
+        let task = TASK_1_LIST_012000F0 + 2 * 0x20 - 0xc;
+        let (camera, scene, held) = (object(&mut e), object(&mut e), object(&mut e));
+        e.mem.set_u32(task, camera);
+        e.mem.set_u32(task + 4, 0x4400);
+        e.mem.set_u32(task + 8, scene);
+        e.mem.set_u32(task + 0xc, 0xc00);
+        e.mem.set_u32(task + 0x10, 0x1000);
+        e.mem.set_u32(task + 0x14, held);
+        e.mem.set_u32(task + 0x18, 0x18);
+        e.mem.set_u32(task + 0x1c, 0x1c);
+        e.call_log = Some(vec![]);
+        e.call(0x00ba_3190, &args![]);
+        // Threads disabled: fn_00ba3130 returns at once; one task ran.
+        let scene_calls = calls(&e, ACCUMULATE_SCENE);
+        assert_eq!(scene_calls.len(), 1);
+        let process = scene_calls[0][2];
+        assert_eq!(&scene_calls[0][..2], &[camera, scene]);
+        assert_eq!(
+            calls(&e, ACCUMULATE_SCENE_LIST),
+            vec![vec![camera, 0xc00, process], vec![camera, 0x1000, process]]
+        );
+        assert_eq!(calls(&e, CULLING_PROCESS_CONSTRUCT), vec![vec![process, 0]]);
+        for offset in [0u32, 4, 8, 0xc, 0x10, 0x14, 0x1c] {
+            assert_eq!(e.mem.u32(task + offset), 0, "task word {offset:#x}");
+        }
+        assert_eq!(e.mem.u32(task + 0x18), 0x18);
+        // Camera and scene go; the object keeps the count the culling process took (its
+        // destructor is a double here).
+        assert_eq!(calls(&e, 0x0000_7004), vec![vec![camera], vec![scene]]);
+        assert_eq!(e.mem.u32(held + 4), 1);
+        assert_eq!(calls(&e, COMPOUND_FRUSTUM_DESTRUCT), vec![vec![0x4400]]);
+        assert_eq!(
+            calls(&e, MEMORY_DEALLOCATE),
+            vec![vec![FRUSTUM_ALLOCATOR, 0x4400]]
+        );
+        let tls = e.tls();
+        assert_eq!(e.mem.u32(tls + TLS_ALLOCATION_CONTEXT), 0x1c);
+        assert!(calls(&e, RELEASE_SEMAPHORE).is_empty());
+        // Threads enabled: each of the 23 tasks releases thread 1's stage semaphore.
+        e.set_global(SECOND_THREAD_ENABLED_011F94B4, 1u8);
+        e.set_global(THREAD_1_STAGE_HANDLE_012000B0, 0x77u32);
+        // Thread 0 is far ahead, so no waits.
+        e.set_global(RENDERING_SYSTEM_01200088 + 0xc, 100u32);
+        e.call_log = Some(vec![]);
+        e.call(0x00ba_3190, &args![]);
+        assert_eq!(calls(&e, RELEASE_SEMAPHORE).len(), 23);
+        assert_eq!(e.global::<u32>(THREAD_1_STAGE_COUNT_012000AC), 23);
     }
 }

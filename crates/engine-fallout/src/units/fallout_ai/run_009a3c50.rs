@@ -69,11 +69,24 @@ pub fn fn_009a3d00(e: &mut Engine, this: Ptr<BSSimpleArray>, reserve: u32, size:
     }
 }
 
+/// `004300a0` (unnamed): stores 0.0 in the float at `this` (`ECX` only) and returns
+/// `this`.
+const CLEAR_FLOAT: u32 = 0x0043_00a0;
+
+// Translated from 009a3d90 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`ECX` only): constructs an 8-byte item by clearing its
+/// float at `+4` (`004300a0`); returns `this`. `+0` is left as it is.
+pub fn fn_009a3d90(e: &mut Engine, this: Ptr) -> Ptr {
+    e.call(CLEAR_FLOAT, &args![this.addr() + 0x4]);
+    this
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
         entry!(0x009a_3c50, fn_009a3c50(Ptr<BSSimpleArray>, u32, u32)),
         entry!(0x009a_3d00, fn_009a3d00(Ptr<BSSimpleArray>, u32, u32)),
+        entry!(0x009a_3d90, fn_009a3d90(Ptr) -> Ptr),
     ]
 }
 
@@ -145,5 +158,24 @@ mod tests {
             vec![vec![this.addr(), 0x9020, 0x9018, 3]]
         );
         assert_eq!(calls_to(&e, FREE_BUFFER), vec![vec![this.addr()]]);
+    }
+}
+
+#[cfg(test)]
+mod item_tests {
+    use super::*;
+
+    #[test]
+    fn fn_009a3d90_clears_the_float_after_the_first_word() {
+        let mut e = Engine::new();
+        e.register(CLEAR_FLOAT, |e, a| {
+            e.mem.set_u32(a[0], 0);
+            Ret::default()
+        });
+        let item = e.mem.alloc(8);
+        e.mem.write(item, &[0xcd; 8]);
+        assert_eq!(e.call(0x009a_3d90, &args![item]).u32(), item);
+        assert_eq!(e.mem.u32(item), 0xcdcd_cdcd);
+        assert_eq!(e.mem.u32(item + 4), 0);
     }
 }

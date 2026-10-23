@@ -1100,9 +1100,779 @@ pub fn fn_00e8bf80(e: &mut Engine, this: Ptr) {
     e.mem.set_u32(at, value.wrapping_add(1));
 }
 
+/// `00e7c1e0` (cdecl: a Direct3D format and the `NiPixelFormat` it fills).
+const PIXEL_FORMAT_FROM_D3D: u32 = 0x00e7_c1e0;
+
+// Translated from 00e8a120 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`run_00e89ed0`): reads a Direct3D texture's description into
+/// the texture data (`thiscall`, one word: the texture). The level count (virtual slot 0x34,
+/// `GetLevelCount` by the interface's order) goes to +0x68; by the resource type (slot 0x28):
+/// 3 (texture) and 5 (cube texture) take the level 0 description (slot 0x44: 0 and a 0x20-byte
+/// buffer) and store its words +0x18 and +0x1c (width, height) at +0xc and +0x10; 4 (volume
+/// texture) takes words +0x10 and +0x14; any other type answers true at once. A failed
+/// description, or a format (word +0) of 0x28 or 0x29, answers false; otherwise the format is
+/// converted into the pixel format at +0x14 (`00e7c1e0`) and the answer is true.
+pub fn fn_00e8a120(e: &mut Engine, this: Ptr, texture: u32) -> bool {
+    let base = this.addr();
+    let levels = e.vcall(texture, 0x34, &args![]).u32();
+    e.mem.set_u32(base.wrapping_add(0x68), levels);
+    let kind = e.vcall(texture, 0x28, &args![]).u32();
+    let (width_at, height_at) = match kind {
+        3 | 5 => (0x18u32, 0x1cu32),
+        4 => (0x10, 0x14),
+        _ => return true,
+    };
+    e.with_stack(0x20, |e, desc| {
+        let desc = desc.addr();
+        if e.vcall(texture, 0x44, &args![0u32, desc]).i32() < 0 {
+            return false;
+        }
+        let width = e.mem.u32(desc + width_at);
+        let height = e.mem.u32(desc + height_at);
+        e.mem.set_u32(base.wrapping_add(0xc), width);
+        e.mem.set_u32(base.wrapping_add(0x10), height);
+        let format = e.mem.u32(desc);
+        if format == 0x28 || format == 0x29 {
+            return false;
+        }
+        e.call(
+            PIXEL_FORMAT_FROM_D3D,
+            &args![format, base.wrapping_add(0x14)],
+        );
+        true
+    })
+}
+
+// Translated from 00e8a240 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`run_00e89ed0`): the number of a pixel format's channels before
+/// the first whose type word (+0x14, 0xc bytes per channel) is 0x13, at most 4 (`thiscall`).
+pub fn fn_00e8a240(e: &mut Engine, this: Ptr) -> u32 {
+    let mut index = 0u32;
+    let mut channel = this.addr().wrapping_add(0x14);
+    loop {
+        if e.mem.u32(channel) == 0x13 {
+            return index;
+        }
+        index += 1;
+        channel = channel.wrapping_add(0xc);
+        if index >= 4 {
+            return 4;
+        }
+    }
+}
+
+// Translated from 00e8a9e0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`run_00e89ed0`): the texture data's scalar deleting destructor
+/// (`thiscall`, the flags). Its table (`010efb7c`); a Direct3D texture at +0x64 is first taken
+/// off the renderer's (+0x60) render state (+0x8b8, virtual slot 0xe4 with the texture), then
+/// released (`IUnknown` slot 8) and cleared; then the base table (`010a080c`) and the base
+/// destructor body (`00a5d3d0`), and with bit 0 the 0x6c bytes go back (`00aa1460`). Answers
+/// `this`.
+pub fn fn_00e8a9e0(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    let base = this.addr();
+    let texture = e.mem.u32(base.wrapping_add(0x64));
+    e.mem.set_u32(base, TEXTURE_DATA_VTABLE);
+    if texture != 0 {
+        let renderer = e.mem.u32(base.wrapping_add(0x60));
+        let state = e.mem.u32(renderer.wrapping_add(0x8b8));
+        e.vcall(state, 0xe4, &args![texture]);
+        let texture = e.mem.u32(base.wrapping_add(0x64));
+        e.vcall(texture, 8, &args![]);
+        e.mem.set_u32(base.wrapping_add(0x64), 0);
+    }
+    e.mem.set_u32(base, TEXTURE_BASE_VTABLE);
+    e.call(TEXTURE_BASE_DESTRUCTOR, &args![base]);
+    if flags & 1 != 0 {
+        e.call(DEALLOCATE, &args![base, 0x6cu32]);
+    }
+    this
+}
+
+/// The per-level copy from a source cube map's face (`00e683d0`, cdecl: source, level,
+/// surface, face).
+const COPY_SOURCE_SURFACE_00E683D0: u32 = 0x00e6_83d0;
+
+// Translated from 00e8ab70 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`run_00e89ed0`): copies one face of a source cube map into the
+/// cube texture (`thiscall`, two words: the source and the face). For each level below +0x68
+/// it takes the texture's (+0x64) surface (`GetCubeMapSurface`, virtual slot 0x48: face,
+/// level, out slot), copies into it (`00e683d0`: source, level, surface, face) and releases
+/// it (`IUnknown` slot 8). A failure prints the `GetSurfaceLevel` message with the level and
+/// `NiXenonErrorString` and stops. The exe's out slot is the stack word of `face`, whose
+/// value it read before.
+pub fn fn_00e8ab70(e: &mut Engine, this: Ptr, source: u32, face: u32) {
+    let base = this.addr();
+    let texture = e.mem.u32(base.wrapping_add(0x64));
+    let mut level = 0u32;
+    if e.mem.u32(base.wrapping_add(0x68)) <= level {
+        return;
+    }
+    e.with_stack(4, |e, out| {
+        let out = out.addr();
+        e.mem.set_u32(out, face);
+        loop {
+            let result = e.vcall(texture, 0x48, &args![face, level, out]).i32();
+            if result < 0 {
+                let text = e.call(ERROR_STRING, &args![result]).u32();
+                e.call(
+                    DEBUG_PRINT,
+                    &args![SURFACE_LEVEL_FAILED_MESSAGE, level, text],
+                );
+                return;
+            }
+            let surface = e.mem.u32(out);
+            e.call(
+                COPY_SOURCE_SURFACE_00E683D0,
+                &args![source, level, surface, face],
+            );
+            let surface = e.mem.u32(out);
+            e.vcall(surface, 8, &args![]);
+            level = level.wrapping_add(1);
+            if level >= e.mem.u32(base.wrapping_add(0x68)) {
+                return;
+            }
+        }
+    });
+}
+
+// Translated from 00e8b0c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`run_00e89ed0`): refreshes a converted cube map from its source
+/// pixel data (`thiscall`). Unless the byte +0x6c is set, with the texture's (+0x8) pixel data
+/// (+0x3c): the mipmap check `00e68760` (`thiscall` on this, the data's +0x4c) and, when it
+/// answers true or the data's revision (+0x68) differs from the one kept at +0x84, the image
+/// converter (slot 0x14: data, the format at +0x14, data, the byte +0x6d) makes new data, the
+/// revision is kept, each of its faces (+0x6c) is copied in (`00e8aaf0`) when there is a
+/// texture (+0x64), and the new data's reference count is raised and dropped (deleted
+/// through slot 4 at zero).
+pub fn fn_00e8b0c0(e: &mut Engine, this: Ptr) {
+    let base = this.addr();
+    if e.mem.u8(base.wrapping_add(0x6c)) != 0 {
+        return;
+    }
+    let texture = e.mem.u32(base.wrapping_add(8));
+    let data = e.mem.u32(texture.wrapping_add(0x3c));
+    if data == 0 {
+        return;
+    }
+    let mipmaps = e.mem.u32(data.wrapping_add(0x4c));
+    let changed = e.call(SET_MIPMAP_00E68760, &args![base, mipmaps]).u8() != 0;
+    if e.mem.u32(data.wrapping_add(0x68)) == e.mem.u32(base.wrapping_add(0x84)) && !changed {
+        return;
+    }
+    let converter = e.call(GET_IMAGE_CONVERTER, &args![]).u32();
+    let flag = u32::from(e.mem.u8(base.wrapping_add(0x6d)));
+    let converted = e
+        .vcall(
+            converter,
+            0x14,
+            &args![data, base.wrapping_add(0x14), data, flag],
+        )
+        .u32();
+    let revision = e.mem.u32(data.wrapping_add(0x68));
+    e.mem.set_u32(base.wrapping_add(0x84), revision);
+    if e.mem.u32(base.wrapping_add(0x64)) != 0 {
+        let mut face = 0u32;
+        while face < e.mem.u32(converted.wrapping_add(0x6c)) {
+            fn_00e8aaf0(e, this, converted, face);
+            face += 1;
+        }
+    }
+    if converted != 0 {
+        let count = converted.wrapping_add(4);
+        e.call(INTERLOCKED_INCREMENT, &args![count]);
+        if e.call(INTERLOCKED_DECREMENT, &args![count]).u32() == 0 {
+            e.vcall(converted, 4, &args![]);
+        }
+    }
+}
+
+// Translated from 00e8b1f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`run_00e89ed0`): takes a free light index from the light
+/// manager's 4096-bit set at +0x3c (`thiscall`), searching from the cursor +0x38 and wrapping
+/// at 0x1000: the first clear bit is set, the cursor moves past it (modulo 0x1000) and the
+/// index is answered; -1 when every bit is set.
+pub fn fn_00e8b1f0(e: &mut Engine, this: Ptr) -> u32 {
+    let base = this.addr();
+    let start = e.mem.u32(base.wrapping_add(0x38));
+    let mut index = start;
+    loop {
+        let bit = 1u32 << (index & 0x1f);
+        let word = base
+            .wrapping_add(0x3c)
+            .wrapping_add((index >> 5).wrapping_mul(4));
+        if e.mem.u32(word) & bit == 0 {
+            let bits = e.mem.u32(word);
+            e.mem.set_u32(word, bits | bit);
+            e.mem
+                .set_u32(base.wrapping_add(0x38), index.wrapping_add(1) & 0xfff);
+            return index;
+        }
+        index = index.wrapping_add(1);
+        if index == 0x1000 {
+            index = 0;
+        }
+        if index == start {
+            return 0xffff_ffff;
+        }
+    }
+}
+
+/// `pi` as the `float` 3.1415927 widened to a `double` (`0101ff40`), the `double` 90.0
+/// (`01066808`) and the `float` range every positioned light gets (`0126f9c4`).
+const PI_0101FF40: u32 = 0x0101_ff40;
+const NINETY_01066808: u32 = 0x0106_6808;
+const LIGHT_RANGE_0126F9C4: u32 = 0x0126_f9c4;
+
+/// `FLD dword` / `FSTP dword` of a float from `from` to `to`.
+fn copy_float(e: &mut Engine, from: u32, to: u32) {
+    let bits = x87_quiet_bits(e.mem.u32(from));
+    e.mem.set_u32(to, bits);
+}
+
+// Translated from 00e8b250 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`run_00e89ed0`): fills a light entry (a Direct3D 9 `D3DLIGHT9`
+/// at +0, 0x68 bytes) from an `NiLight` (`thiscall`, one word). When the light's revision
+/// (+0xa8) equals the one kept at +0x68 it answers false; otherwise it keeps the revision,
+/// clears the 0x68 bytes (`memset`) and by the light's kind byte (+0x9d): 2 is type 1 with
+/// the position (+0x8c..+0x94) at +0x34; 3 is type 3 with the direction (+0xf0..+0xf8) at
+/// +0x40; 4 is type 2 with the position, the direction (+0xfc..+0x104) at +0x40, +0x60 0.0,
+/// +0x64 the `float` +0x108 times `pi` over 90 and +0x50 the `float` +0x110. Types 1 and 2
+/// then take the attenuation (+0xf0..+0xf8) at +0x54 and the range at `0126f9c4` at +0x4c.
+/// Every kind gets its colours scaled by the dimmer (+0xc4): ambient (+0xc8..+0xd0) at +0x24,
+/// diffuse (+0xd4..+0xdc) at +0x4 and specular (+0xe0..+0xe8) at +0x14, each with alpha 1.0.
+/// Answers true.
+pub fn fn_00e8b250(e: &mut Engine, this: Ptr, light: u32) -> bool {
+    let base = this.addr();
+    let revision = e.mem.u32(light.wrapping_add(0xa8));
+    if e.mem.u32(base.wrapping_add(0x68)) == revision {
+        return false;
+    }
+    e.mem.set_u32(base.wrapping_add(0x68), revision);
+    e.call(MEMSET, &args![base, 0u32, 0x68u32]);
+    let kind = e.mem.u8(light.wrapping_add(0x9d));
+    let positioned = match kind {
+        2 => {
+            e.mem.set_u32(base, 1);
+            for i in 0..3u32 {
+                copy_float(e, light + 0x8c + 4 * i, base + 0x34 + 4 * i);
+            }
+            true
+        }
+        3 => {
+            e.mem.set_u32(base, 3);
+            for i in 0..3u32 {
+                copy_float(e, light + 0xf0 + 4 * i, base + 0x40 + 4 * i);
+            }
+            false
+        }
+        4 => {
+            e.mem.set_u32(base, 2);
+            for i in 0..3u32 {
+                copy_float(e, light + 0x8c + 4 * i, base + 0x34 + 4 * i);
+            }
+            for i in 0..3u32 {
+                copy_float(e, light + 0xfc + 4 * i, base + 0x40 + 4 * i);
+            }
+            e.mem.set_u32(base + 0x60, x87_store32(0.0));
+            let angle = x87_load32(e.mem.u32(light + 0x108));
+            let angle = x87_mul(angle, f64::from_bits(e.mem.u64(PI_0101FF40)));
+            let angle = x87_div(angle, f64::from_bits(e.mem.u64(NINETY_01066808)));
+            e.mem.set_u32(base + 0x64, x87_store32(angle));
+            copy_float(e, light + 0x110, base + 0x50);
+            true
+        }
+        _ => false,
+    };
+    if positioned {
+        for i in 0..3u32 {
+            copy_float(e, light + 0xf0 + 4 * i, base + 0x54 + 4 * i);
+        }
+        copy_float(e, LIGHT_RANGE_0126F9C4, base + 0x4c);
+    }
+    // The dimmer goes through the argument's stack word (FLD/FSTP) and is loaded back; each
+    // colour word is copied to a local (MOV) and loaded from there.
+    let dimmer = x87_load32(x87_quiet_bits(e.mem.u32(light + 0xc4)));
+    let colour = |e: &Engine, offset: u32| x87_load32(e.mem.u32(light + offset));
+    // FMULP ST2 (+0xc8 times the dimmer), then FMUL ST(0),ST(1) for the next seven, then
+    // FMUL dword (the dimmer times +0xe8).
+    let mut products = [0u32; 9];
+    for (i, offset) in (0xc8u32..0xe8).step_by(4).enumerate() {
+        products[i] = x87_store32(x87_mul(colour(e, offset), dimmer));
+    }
+    products[8] = x87_store32(x87_mul(dimmer, x87_m32(e.mem.u32(light + 0xe8))));
+    let one = x87_store32(1.0);
+    for (i, to) in [0x24u32, 0x28, 0x2c].iter().enumerate() {
+        e.mem.set_u32(base + to, x87_quiet_bits(products[i]));
+    }
+    e.mem.set_u32(base + 0x30, one);
+    for (i, to) in [0x4u32, 0x8, 0xc].iter().enumerate() {
+        e.mem.set_u32(base + to, x87_quiet_bits(products[3 + i]));
+    }
+    e.mem.set_u32(base + 0x10, one);
+    for (i, to) in [0x14u32, 0x18, 0x1c].iter().enumerate() {
+        e.mem.set_u32(base + to, x87_quiet_bits(products[6 + i]));
+    }
+    e.mem.set_u32(base + 0x20, one);
+    true
+}
+
+// Translated from 00e8b4b0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`run_00e89ed0`): the light entry constructor (`thiscall`, two
+/// words: the light and its index). The index at +0x6c, the revision +0x68 and the bytes
+/// +0x70 and +0x71 cleared, then filled from the light (`00e8b250`). Answers `this`.
+pub fn fn_00e8b4b0(e: &mut Engine, this: Ptr, light: u32, index: u32) -> Ptr {
+    let base = this.addr();
+    e.mem.set_u32(base.wrapping_add(0x6c), index);
+    e.mem.set_u32(base.wrapping_add(0x68), 0);
+    e.mem.set_u8(base.wrapping_add(0x70), 0);
+    e.mem.set_u8(base.wrapping_add(0x71), 0);
+    fn_00e8b250(e, this, light);
+    this
+}
+
+/// The memory manager singleton (`011f6238`) and its free (`00aa4060`, `thiscall`, block).
+const MEMORY_MANAGER: u32 = 0x011f_6238;
+const MEMORY_DEALLOCATE: u32 = 0x00aa_4060;
+
+// Translated from 00e8b4e0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`run_00e89ed0`): the scalar deleting destructor of the light
+/// map's base (`thiscall`, the flags): its table (`010efdd8`), the map's clean-up (`00b601a0`),
+/// the bucket array (+8) freed (`00aa10f0`), and with bit 0 the block goes back to the memory
+/// manager (`00aa4060`). Answers `this`.
+pub fn fn_00e8b4e0(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    let base = this.addr();
+    e.mem.set_u32(base, LIGHT_MAP_BASE_VTABLE);
+    e.call(LIGHT_MAP_CLEAN_UP, &args![base]);
+    let buckets = e.mem.u32(base.wrapping_add(8));
+    e.call(FREE_00AA10F0, &args![buckets]);
+    if flags & 1 != 0 {
+        e.call(MEMORY_DEALLOCATE, &args![MEMORY_MANAGER, base]);
+    }
+    this
+}
+
+// Translated from 00e8b520 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`run_00e89ed0`): the scalar deleting destructor of the light map
+/// (`thiscall`, the flags): its table (`010efdf8`) and the map's clean-up (`00b601a0`), the
+/// base's table (`010efdd8`) and the clean-up again, the bucket array (+8) freed
+/// (`00aa10f0`), and with bit 0 the block goes back to the memory manager (`00aa4060`).
+/// Answers `this`.
+pub fn fn_00e8b520(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    let base = this.addr();
+    e.mem.set_u32(base, LIGHT_MAP_VTABLE);
+    e.call(LIGHT_MAP_CLEAN_UP, &args![base]);
+    e.mem.set_u32(base, LIGHT_MAP_BASE_VTABLE);
+    e.call(LIGHT_MAP_CLEAN_UP, &args![base]);
+    let buckets = e.mem.u32(base.wrapping_add(8));
+    e.call(FREE_00AA10F0, &args![buckets]);
+    if flags & 1 != 0 {
+        e.call(MEMORY_DEALLOCATE, &args![MEMORY_MANAGER, base]);
+    }
+    this
+}
+
+/// `NiTPointerListBase<..>::AddHead` (engine map, `0043a010`; `thiscall` on the list's count
+/// word): a new node.
+const LIST_NODE_ALLOCATE: u32 = 0x0043_a010;
+
+// Translated from 00e8b5f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`run_00e89ed0`): prepends an item to an `NiTPointerList` (head
+/// +0, tail +4, count +8; `thiscall`, one word: the address of the item). The node comes from
+/// `0043a010` (on the count word) and holds the item at +8; the old head's previous link
+/// (+4) points at it, or the tail does when the list was empty; the count goes up.
+pub fn fn_00e8b5f0(e: &mut Engine, this: Ptr, item: Ptr) {
+    let list = this.addr();
+    let count_at = list.wrapping_add(8);
+    let node = e.call(LIST_NODE_ALLOCATE, &args![count_at]).u32();
+    let value = e.mem.u32(item.addr());
+    e.mem.set_u32(node.wrapping_add(8), value);
+    e.mem.set_u32(node.wrapping_add(4), 0);
+    let head = e.mem.u32(list);
+    e.mem.set_u32(node, head);
+    let head = e.mem.u32(list);
+    let count = e.mem.u32(count_at).wrapping_add(1);
+    if head != 0 {
+        e.mem.set_u32(head.wrapping_add(4), node);
+        e.mem.set_u32(count_at, count);
+        e.mem.set_u32(list, node);
+    } else {
+        e.mem.set_u32(count_at, count);
+        e.mem.set_u32(list.wrapping_add(4), node);
+        e.mem.set_u32(list, node);
+    }
+}
+
+/// `NiTPointerListBase<..>::RemoveHead` (`007b5390`) and `RemoveTail` (`004edf00`) (`thiscall`
+/// on the list, no stack words; names by their bodies' place in the list code, not confirmed).
+const LIST_REMOVE_HEAD_007B5390: u32 = 0x007b_5390;
+const LIST_REMOVE_TAIL_004EDF00: u32 = 0x004e_df00;
+
+/// Unlinks a node in the middle of the light list (+0x10 of the light manager): its previous
+/// and next nodes are linked, its item cleared, the node goes back to its pool (under the
+/// pool lock `011c5f80`) and the list's count (+0x18) goes down.
+fn unlink_light_node(e: &mut Engine, this: u32, node: u32) {
+    let previous = e.mem.u32(node.wrapping_add(4));
+    let next = e.mem.u32(node);
+    if previous != 0 {
+        e.mem.set_u32(previous, next);
+    }
+    if next != 0 {
+        e.mem.set_u32(next.wrapping_add(4), previous);
+    }
+    e.mem.set_u32(node.wrapping_add(8), 0);
+    e.call(NODE_POOL_LOCK_TAKE, &args![NODE_POOL_LOCK, 0u32]);
+    e.mem.set_u32(node.wrapping_add(4), 0);
+    let free = e.mem.u32(NODE_POOL_FREE_LIST);
+    e.mem.set_u32(node, free);
+    let count = e.mem.u32(NODE_POOL_LOCK_COUNT).wrapping_sub(1);
+    e.mem.set_u32(NODE_POOL_LOCK_COUNT, count);
+    e.mem.set_u32(NODE_POOL_FREE_LIST, node);
+    if count == 0 {
+        e.mem.set_u32(NODE_POOL_LOCK, 0);
+    }
+    let left = e.mem.u32(this.wrapping_add(0x18));
+    e.mem.set_u32(this.wrapping_add(0x18), left.wrapping_sub(1));
+}
+
+/// The 0.01 (`float`, `01013ea4`) below which a light's dimmer leaves it out, the `double`
+/// 255.0 (`0101e568`), `00b57ea0` (`thiscall` on the light map: the light and its entry, the
+/// map's set) and the entry's size.
+const LEAST_DIMMER_01013EA4: u32 = 0x0101_3ea4;
+const SCALE_0101E568: u32 = 0x0101_e568;
+const LIGHT_MAP_SET_00B57EA0: u32 = 0x00b5_7ea0;
+
+/// A colour channel of the ambient sum: times the `double` scale, `FISTP qword` under
+/// truncation, the low word clamped to 0xff (unsigned).
+fn ambient_byte(value: f64) -> u32 {
+    let low = x87_fistp64_chop(X87Ext::from(value)) as u32;
+    if low > 0xff {
+        0xff
+    } else {
+        low
+    }
+}
+
+// Translated from 00e8b740 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`run_00e89ed0`): sets the device's lights for a dynamic effect
+/// state (`thiscall`, one word, may be null). Every light on the manager's list (+0x10) has
+/// its entry's (the light's +0xec) byte +0x70 set. When lighting is on (byte +0x2d), the
+/// state's lights (a list at +0xc: next +0, light +4) are walked while fewer than 8 have been
+/// set: lights switched off (+0x9c clear) or dimmer than 0.01 (an ordered `FCOMP`) are
+/// skipped; ambient lights (kind +0x9d 0) add their colour (+0xc8..+0xd0) times the dimmer
+/// to the ambient sum; the others get an entry (a free index `00e8b1f0`, none: skipped; 0x74
+/// bytes from `00aa13e0`, built by `00e8b4b0`, put in the map `00b57ea0` and at +0xec) or have
+/// theirs refilled (`00e8b250`), go to the device's `SetLight` (slot 0xcc: index, entry) when
+/// new or changed, go on the list when not yet enabled (byte +0x71 clear, `00e8b5f0`) and lose
+/// their +0x70 mark. Lights still marked are switched off (`LightEnable`, slot 0xd4: index, 0;
+/// +0x71 cleared) and taken off the list; the rest not yet enabled are switched on (index, 1;
+/// +0x71 set). The ambient sum, each channel times 255.0 truncated and clamped to 0xff, goes
+/// with alpha 0xff to the render state's (+0x20) slot 0x68 as state 0x8b.
+pub fn fn_00e8b740(e: &mut Engine, this: Ptr, state: u32) {
+    let base = this.addr();
+    let list = base.wrapping_add(0x10);
+    let zero = x87_store32(0.0);
+    let mut sums = [zero; 3];
+    let mut node = e.mem.u32(list);
+    while node != 0 {
+        let light = e.mem.u32(node.wrapping_add(8));
+        node = e.mem.u32(node);
+        let entry = e.mem.u32(light.wrapping_add(0xec));
+        e.mem.set_u8(entry.wrapping_add(0x70), 1);
+    }
+    e.with_stack(4, |e, slot| {
+        let slot = slot.addr();
+        if e.mem.u8(base.wrapping_add(0x2d)) == 0 {
+            return;
+        }
+        let mut item = if state != 0 {
+            e.mem.u32(state.wrapping_add(0xc))
+        } else {
+            0
+        };
+        let mut set = 0u32;
+        while item != 0 {
+            if set >= 8 {
+                break;
+            }
+            // The exe tests the item again here (a null item gives a null light).
+            let light = if item == 0 {
+                0
+            } else {
+                let light = e.mem.u32(item.wrapping_add(4));
+                item = e.mem.u32(item);
+                light
+            };
+            e.mem.set_u32(slot, light);
+            if e.mem.u8(light.wrapping_add(0x9c)) == 0 {
+                continue;
+            }
+            // FLD 0.01; FCOMP dimmer; TEST AH,0x41; JZ: skipped only when 0.01 > dimmer.
+            let least = x87_load32(e.mem.u32(LEAST_DIMMER_01013EA4));
+            let dimmer_bits = e.mem.u32(light.wrapping_add(0xc4));
+            if least > x87_m32(dimmer_bits) {
+                continue;
+            }
+            if e.mem.u8(light.wrapping_add(0x9d)) == 0 {
+                let dimmer = x87_load32(x87_quiet_bits(dimmer_bits));
+                // FMULP ST2 then FADDP ST2,ST0 (the product plus the sum).
+                let red = x87_mul(x87_load32(e.mem.u32(light.wrapping_add(0xc8))), dimmer);
+                sums[0] = x87_store32(x87_add(red, x87_load32(sums[0])));
+                // FMUL ST(0),ST(1) then FADD dword.
+                let green = x87_mul(x87_load32(e.mem.u32(light.wrapping_add(0xcc))), dimmer);
+                sums[1] = x87_store32(x87_add(green, x87_m32(sums[1])));
+                // FMUL dword (the dimmer times blue) then FADD dword.
+                let blue = x87_mul(dimmer, x87_m32(e.mem.u32(light.wrapping_add(0xd0))));
+                sums[2] = x87_store32(x87_add(blue, x87_m32(sums[2])));
+                continue;
+            }
+            let mut entry = e.mem.u32(light.wrapping_add(0xec));
+            let send = if entry == 0 {
+                let index = fn_00e8b1f0(e, this);
+                if index == 0xffff_ffff {
+                    continue;
+                }
+                let block = e.call(ALLOCATE, &args![0x74u32]).u32();
+                entry = if block != 0 {
+                    fn_00e8b4b0(e, Ptr::new(block), light, index).addr()
+                } else {
+                    0
+                };
+                e.call(LIGHT_MAP_SET_00B57EA0, &args![base, light, entry]);
+                e.mem.set_u32(light.wrapping_add(0xec), entry);
+                true
+            } else {
+                fn_00e8b250(e, Ptr::new(entry), light)
+            };
+            if send {
+                let device = e.mem.u32(base.wrapping_add(0x1c));
+                let index = e.mem.u32(entry.wrapping_add(0x6c));
+                e.vcall(device, 0xcc, &args![index, entry]);
+            }
+            if e.mem.u8(entry.wrapping_add(0x71)) == 0 {
+                fn_00e8b5f0(e, Ptr::new(list), Ptr::new(slot));
+            }
+            e.mem.set_u8(entry.wrapping_add(0x70), 0);
+            set += 1;
+        }
+    });
+    let mut node = e.mem.u32(list);
+    while node != 0 {
+        let light = e.mem.u32(node.wrapping_add(8));
+        let entry = e.mem.u32(light.wrapping_add(0xec));
+        let current = node;
+        node = e.mem.u32(node);
+        if e.mem.u8(entry.wrapping_add(0x70)) == 0 {
+            continue;
+        }
+        let device = e.mem.u32(base.wrapping_add(0x1c));
+        let index = e.mem.u32(entry.wrapping_add(0x6c));
+        e.vcall(device, 0xd4, &args![index, 0u32]);
+        e.mem.set_u8(entry.wrapping_add(0x71), 0);
+        if current == e.mem.u32(list) {
+            pop_light_node(e, base);
+        } else if current == e.mem.u32(list.wrapping_add(4)) {
+            e.call(LIST_REMOVE_TAIL_004EDF00, &args![list]);
+        } else {
+            unlink_light_node(e, base, current);
+        }
+    }
+    let mut node = e.mem.u32(list);
+    while node != 0 {
+        let light = e.mem.u32(node.wrapping_add(8));
+        let entry = e.mem.u32(light.wrapping_add(0xec));
+        node = e.mem.u32(node);
+        if e.mem.u8(entry.wrapping_add(0x70)) == 0 && e.mem.u8(entry.wrapping_add(0x71)) == 0 {
+            let device = e.mem.u32(base.wrapping_add(0x1c));
+            let index = e.mem.u32(entry.wrapping_add(0x6c));
+            e.vcall(device, 0xd4, &args![index, 1u32]);
+            e.mem.set_u8(entry.wrapping_add(0x71), 1);
+        }
+    }
+    let scale = x87_load64(e.mem.u64(SCALE_0101E568));
+    // FMUL ST(1),ST(0) (bytes DC C9), FMUL ST(0),ST(1) (D8 C9), then FMUL dword.
+    let red = ambient_byte(x87_mul(x87_load32(sums[0]), scale));
+    let green = ambient_byte(x87_mul(x87_load32(sums[1]), scale));
+    let blue = ambient_byte(x87_mul(scale, x87_m32(sums[2])));
+    let packed = (((red | 0xffff_ff00) << 8) | green) << 8 | blue;
+    let render_state = e.mem.u32(base.wrapping_add(0x20));
+    e.vcall(render_state, 0x68, &args![0x8bu32, packed, 0u32, 0u32]);
+}
+
+// Translated from 00e8bb70 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`run_00e89ed0`): sets lighting up for a draw (`thiscall`, three
+/// words: the dynamic effect state, a property and a second property that may be null),
+/// through the render state's (+0x20) slot 0x68 (state, value, 0, 0). The property's mode
+/// (bits 1..3 of its 16-bit +0x18) goes to +0x30; with mode 0 and an object at `[[+0x20]]`
+/// whose +8 is set, state 0x89 gets 0 and nothing else happens. Otherwise the second
+/// property's bits 4..5 (0 without it) choose the colour sources: without bit 3, sources 1 and
+/// 3 turn state 0x89 off and stop, sources 0 and 2 clear lighting (+0x2d) and, when +0x34 is
+/// 1, reset states 0x94, 0x93 and 0x91 to 0 and clear +0x34; with bit 3 (or without the second
+/// property) a source different from +0x34 sets states 0x94, 0x93 and 0x91 to (0, 0, 0) for
+/// 0, (1, 0, 0) for 1 and (0, 1, 1) for 2 (none for 3) and is kept, and lighting is on. Then
+/// state 0x89 gets 1, and unless the effect state is the one set last (+0x28, which differs
+/// from +0x24) with the same lighting flag (+0x2d against +0x2c), the lights are set
+/// (`00e8b740`) and the state and flag kept.
+pub fn fn_00e8bb70(e: &mut Engine, this: Ptr, effects: u32, property: u32, second: u32) {
+    let base = this.addr();
+    let set_state = |e: &mut Engine, state: u32, value: u32| {
+        let render_state = e.mem.u32(base.wrapping_add(0x20));
+        e.vcall(render_state, 0x68, &args![state, value, 0u32, 0u32]);
+    };
+    let mode = u32::from(e.mem.u16(property.wrapping_add(0x18)) >> 1) & 7;
+    e.mem.set_u32(base.wrapping_add(0x30), mode);
+    let object = e.mem.u32(e.mem.u32(property.wrapping_add(0x20)));
+    if object != 0 && e.mem.u32(object.wrapping_add(8)) != 0 && mode == 0 {
+        let render_state = e.mem.u32(base.wrapping_add(0x20));
+        e.vcall(render_state, 0x68, &args![0x89u32, mode, mode, mode]);
+        return;
+    }
+    let mut source = 0u32;
+    let mut lit = true;
+    if second != 0 {
+        let flags = u32::from(e.mem.u16(second.wrapping_add(0x18)));
+        source = (flags >> 4) & 3;
+        if (flags >> 3) & 1 == 0 {
+            match source {
+                1 | 3 => {
+                    set_state(e, 0x89, 0);
+                    return;
+                }
+                _ => {
+                    e.mem.set_u8(base.wrapping_add(0x2d), 0);
+                    if e.mem.u32(base.wrapping_add(0x34)) == 1 {
+                        set_state(e, 0x94, 0);
+                        set_state(e, 0x93, 0);
+                        set_state(e, 0x91, 0);
+                        e.mem.set_u32(base.wrapping_add(0x34), 0);
+                    }
+                    lit = false;
+                }
+            }
+        }
+    }
+    if lit {
+        if source != e.mem.u32(base.wrapping_add(0x34)) {
+            let values = match source {
+                0 => Some((0, 0, 0)),
+                1 => Some((1, 0, 0)),
+                2 => Some((0, 1, 1)),
+                _ => None,
+            };
+            if let Some((first, middle, last)) = values {
+                set_state(e, 0x94, first);
+                set_state(e, 0x93, middle);
+                set_state(e, 0x91, last);
+            }
+            e.mem.set_u32(base.wrapping_add(0x34), source);
+        }
+        e.mem.set_u8(base.wrapping_add(0x2d), 1);
+    }
+    set_state(e, 0x89, 1);
+    let last = e.mem.u32(base.wrapping_add(0x28));
+    if last != e.mem.u32(base.wrapping_add(0x24))
+        && effects == last
+        && e.mem.u8(base.wrapping_add(0x2d)) == e.mem.u8(base.wrapping_add(0x2c))
+    {
+        return;
+    }
+    fn_00e8b740(e, this, effects);
+    let flag = e.mem.u8(base.wrapping_add(0x2d));
+    e.mem.set_u32(base.wrapping_add(0x28), effects);
+    e.mem.set_u8(base.wrapping_add(0x2c), flag);
+}
+
+// Translated from 00e8be20 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`run_00e89ed0`): takes every light out of the light manager
+/// (`thiscall`). Walks the map (bucket count +4, buckets +8; items next +0, light +4, entry +8;
+/// past an item's chain its next bucket after the key's hash, map slot 4): for each item
+/// with an entry, the device's `LightEnable` (slot 0xd4: index, 0), the entry's +0x71
+/// cleared, the light dropped (`00e91fd0`), its node (when found) taken off the light list
+/// (+0x10: at the head `007b5390`, at the tail `004edf00`, else unlinked here), the light's
+/// +0xec cleared and the 0x74-byte entry released (`00aa1460`).
+pub fn fn_00e8be20(e: &mut Engine, this: Ptr) {
+    let base = this.addr();
+    let bucket_count = |e: &Engine| e.mem.u32(base.wrapping_add(4));
+    let buckets = |e: &Engine| e.mem.u32(base.wrapping_add(8));
+    let mut item = 0u32;
+    let mut index = 0u32;
+    while index < bucket_count(e) {
+        let first = e.mem.u32(buckets(e).wrapping_add(index * 4));
+        if first != 0 {
+            item = first;
+            break;
+        }
+        index += 1;
+    }
+    while item != 0 {
+        let entry = e.mem.u32(item.wrapping_add(8));
+        let light = e.mem.u32(item.wrapping_add(4));
+        let next = e.mem.u32(item);
+        item = if next != 0 {
+            next
+        } else {
+            let mut index = e.vcall(base, 4, &args![light]).u32().wrapping_add(1);
+            let mut found = 0u32;
+            while index < bucket_count(e) {
+                let candidate = e.mem.u32(buckets(e).wrapping_add(index.wrapping_mul(4)));
+                if candidate != 0 {
+                    found = candidate;
+                    break;
+                }
+                index += 1;
+            }
+            found
+        };
+        if entry == 0 {
+            continue;
+        }
+        let device = e.mem.u32(base.wrapping_add(0x1c));
+        let light_index = e.mem.u32(entry.wrapping_add(0x6c));
+        e.vcall(device, 0xd4, &args![light_index, 0u32]);
+        e.mem.set_u8(entry.wrapping_add(0x71), 0);
+        e.call(LIGHT_DROP_00E91FD0, &args![base, light]);
+        let list = base.wrapping_add(0x10);
+        let head = e.mem.u32(list);
+        let mut node = head;
+        let mut found = 0u32;
+        while node != 0 {
+            let next = e.mem.u32(node);
+            if e.mem.u32(node.wrapping_add(8)) == light {
+                found = node;
+                break;
+            }
+            node = next;
+        }
+        if found != 0 {
+            if found == head {
+                e.call(LIST_REMOVE_HEAD_007B5390, &args![list]);
+            } else if found == e.mem.u32(list.wrapping_add(4)) {
+                e.call(LIST_REMOVE_TAIL_004EDF00, &args![list]);
+            } else {
+                unlink_light_node(e, base, found);
+            }
+        }
+        e.mem.set_u32(light.wrapping_add(0xec), 0);
+        e.call(DEALLOCATE, &args![entry, 0x74u32]);
+    }
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x00e8_a120, fn_00e8a120(Ptr, u32) -> bool),
+        entry!(0x00e8_a240, fn_00e8a240(Ptr) -> u32),
+        entry!(0x00e8_a9e0, fn_00e8a9e0(Ptr, u32) -> Ptr),
+        entry!(0x00e8_ab70, fn_00e8ab70(Ptr, u32, u32)),
+        entry!(0x00e8_b0c0, fn_00e8b0c0(Ptr)),
+        entry!(0x00e8_b1f0, fn_00e8b1f0(Ptr) -> u32),
+        entry!(0x00e8_b250, fn_00e8b250(Ptr, u32) -> bool),
+        entry!(0x00e8_b4b0, fn_00e8b4b0(Ptr, u32, u32) -> Ptr),
+        entry!(0x00e8_b4e0, fn_00e8b4e0(Ptr, u32) -> Ptr),
+        entry!(0x00e8_b520, fn_00e8b520(Ptr, u32) -> Ptr),
+        entry!(0x00e8_b5f0, fn_00e8b5f0(Ptr, Ptr)),
+        entry!(0x00e8_b740, fn_00e8b740(Ptr, u32)),
+        entry!(0x00e8_bb70, fn_00e8bb70(Ptr, u32, u32, u32)),
+        entry!(0x00e8_be20, fn_00e8be20(Ptr)),
         entry!(0x00e8_bae0, fn_00e8bae0(Ptr, u32, u32) -> Ptr),
         entry!(0x00e8_b170, fn_00e8b170(Ptr)),
         entry!(0x00e8_9ed0, fn_00e89ed0(Ptr, Ptr) -> u32),
@@ -1806,5 +2576,782 @@ mod b049_tests {
         e.mem.set_u32(this + 0x3c, 41);
         e.call(0x00e8_bf80, &args![this]);
         assert_eq!(e.mem.u32(this + 0x3c), 42);
+    }
+}
+
+#[cfg(test)]
+mod n011_tests {
+    use super::*;
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    fn calls(e: &Engine, addr: u32) -> Vec<Vec<u32>> {
+        e.call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|c| c.0 == addr)
+            .map(|c| c.1.clone())
+            .collect()
+    }
+
+    fn word(eax: u32) -> Ret {
+        Ret {
+            eax,
+            ..Ret::default()
+        }
+    }
+
+    fn quiet(e: &mut Engine, addr: u32) {
+        e.register(addr, |_, _| Ret::default());
+    }
+
+    /// An object whose virtual slots call quiet doubles at `doubles + slot`.
+    fn object(e: &mut Engine, doubles: u32, size: u32) -> u32 {
+        let table = e.mem.alloc(0x200);
+        for slot in (0..0x200).step_by(4) {
+            e.mem.set_u32(table + slot, doubles + slot);
+            quiet(e, doubles + slot);
+        }
+        let object = e.mem.alloc(size);
+        e.mem.set_u32(object, table);
+        object
+    }
+
+    const TEXTURE: u32 = 0x00ed_0000;
+
+    #[test]
+    fn fn_00e8a120_reads_the_level_description_by_type() {
+        // (type, width offset in the description, answer, format)
+        for (kind, width_at, format, answer) in [
+            (3u32, 0x18u32, 0x15u32, true),
+            (5, 0x18, 0x15, true),
+            (4, 0x10, 0x15, true),
+            (3, 0x18, 0x28, false),
+            (3, 0x18, 0x29, false),
+        ] {
+            let mut e = Engine::new();
+            let texture = object(&mut e, TEXTURE, 8);
+            e.register(TEXTURE + 0x34, |_, _| word(7));
+            e.register_double(TEXTURE + 0x28, move |_, _| word(kind));
+            e.register_double(TEXTURE + 0x44, move |e, a| {
+                e.mem.set_u32(a[2], format);
+                e.mem.set_u32(a[2] + width_at, 0x100);
+                e.mem.set_u32(a[2] + width_at + 4, 0x80);
+                word(0)
+            });
+            quiet(&mut e, PIXEL_FORMAT_FROM_D3D);
+            let this = e.mem.alloc(0x6c);
+            e.call_log = Some(vec![]);
+            let got = e.call(0x00e8_a120, &args![this, texture]).bool();
+            assert_eq!(got, answer);
+            assert_eq!(e.mem.u32(this + 0x68), 7);
+            assert_eq!(e.mem.u32(this + 0xc), 0x100);
+            assert_eq!(e.mem.u32(this + 0x10), 0x80);
+            assert_eq!(calls(&e, TEXTURE + 0x44)[0][..2], [texture, 0]);
+            let converted = calls(&e, PIXEL_FORMAT_FROM_D3D);
+            if answer {
+                assert_eq!(converted, vec![vec![format, this + 0x14]]);
+            } else {
+                assert!(converted.is_empty());
+            }
+        }
+    }
+
+    #[test]
+    fn fn_00e8a120_stops_on_a_failed_description_or_another_type() {
+        let mut e = Engine::new();
+        let texture = object(&mut e, TEXTURE, 8);
+        e.register(TEXTURE + 0x28, |_, _| word(3));
+        e.register(TEXTURE + 0x44, |_, _| word(0x8876_086c));
+        let this = e.mem.alloc(0x6c);
+        e.call_log = Some(vec![]);
+        assert!(!e.call(0x00e8_a120, &args![this, texture]).bool());
+        let mut e = Engine::new();
+        let texture = object(&mut e, TEXTURE, 8);
+        e.register(TEXTURE + 0x28, |_, _| word(1));
+        let this = e.mem.alloc(0x6c);
+        e.call_log = Some(vec![]);
+        assert!(e.call(0x00e8_a120, &args![this, texture]).bool());
+        assert!(calls(&e, TEXTURE + 0x44).is_empty());
+    }
+
+    #[test]
+    fn fn_00e8a240_counts_channels_before_type_0x13() {
+        let mut e = Engine::new();
+        let format = e.mem.alloc(0x50);
+        e.mem.set_u32(format + 0x14 + 2 * 0xc, 0x13);
+        assert_eq!(e.call(0x00e8_a240, &args![format]).u32(), 2);
+        let format = e.mem.alloc(0x50);
+        assert_eq!(e.call(0x00e8_a240, &args![format]).u32(), 4);
+    }
+
+    #[test]
+    fn fn_00e8a9e0_takes_the_texture_off_the_render_state_and_frees() {
+        for (flags, frees) in [(0u32, false), (1, true)] {
+            let mut e = Engine::new();
+            let texture = object(&mut e, TEXTURE, 8);
+            let state = object(&mut e, 0x00ee_0000, 0x10);
+            let renderer = e.mem.alloc(0x900);
+            e.mem.set_u32(renderer + 0x8b8, state);
+            quiet(&mut e, TEXTURE_BASE_DESTRUCTOR);
+            quiet(&mut e, DEALLOCATE);
+            let this = e.mem.alloc(0x6c);
+            e.mem.set_u32(this + 0x60, renderer);
+            e.mem.set_u32(this + 0x64, texture);
+            e.call_log = Some(vec![]);
+            assert_eq!(e.call(0x00e8_a9e0, &args![this, flags]).u32(), this);
+            assert_eq!(calls(&e, 0x00ee_00e4), vec![vec![state, texture]]);
+            assert_eq!(calls(&e, TEXTURE + 8), vec![vec![texture]]);
+            assert_eq!(e.mem.u32(this + 0x64), 0);
+            assert_eq!(e.mem.u32(this), TEXTURE_BASE_VTABLE);
+            assert_eq!(calls(&e, TEXTURE_BASE_DESTRUCTOR), vec![vec![this]]);
+            assert_eq!(calls(&e, DEALLOCATE).len(), usize::from(frees));
+        }
+    }
+
+    #[test]
+    fn fn_00e8ab70_copies_each_level_and_stops_on_a_failure() {
+        let mut e = Engine::new();
+        let texture = object(&mut e, TEXTURE, 8);
+        let surface = object(&mut e, 0x00ec_0000, 8);
+        let levels = Rc::new(RefCell::new(0u32));
+        let seen = levels.clone();
+        e.register_double(TEXTURE + 0x48, move |e, a| {
+            *seen.borrow_mut() += 1;
+            if a[2] == 2 {
+                return word(0x8876_0001);
+            }
+            e.mem.set_u32(a[3], surface);
+            word(0)
+        });
+        quiet(&mut e, COPY_SOURCE_SURFACE_00E683D0);
+        e.register(ERROR_STRING, |_, _| word(0x0e0e_0000));
+        quiet(&mut e, DEBUG_PRINT);
+        let this = e.mem.alloc(0x6c);
+        e.mem.set_u32(this + 0x64, texture);
+        e.mem.set_u32(this + 0x68, 4);
+        e.call_log = Some(vec![]);
+        e.call(0x00e8_ab70, &args![this, 0x0e0a_0000u32, 3u32]);
+        assert_eq!(
+            calls(&e, COPY_SOURCE_SURFACE_00E683D0),
+            vec![
+                vec![0x0e0a_0000, 0, surface, 3],
+                vec![0x0e0a_0000, 1, surface, 3]
+            ]
+        );
+        assert_eq!(calls(&e, 0x00ec_0008).len(), 2);
+        assert_eq!(
+            calls(&e, DEBUG_PRINT),
+            vec![vec![SURFACE_LEVEL_FAILED_MESSAGE, 2, 0x0e0e_0000]]
+        );
+        assert_eq!(*levels.borrow(), 3);
+        // No levels: nothing.
+        e.mem.set_u32(this + 0x68, 0);
+        e.call_log = Some(vec![]);
+        e.call(0x00e8_ab70, &args![this, 0x0e0a_0000u32, 3u32]);
+        assert!(calls(&e, TEXTURE + 0x48).is_empty());
+    }
+
+    #[test]
+    fn fn_00e8b0c0_converts_changed_source_data_into_each_face() {
+        let mut e = Engine::new();
+        let converter = object(&mut e, 0x00ee_0000, 8);
+        let converted = object(&mut e, 0x00ec_0000, 0x70);
+        e.mem.set_u32(converted + 0x6c, 2);
+        e.register_double(GET_IMAGE_CONVERTER, move |_, _| word(converter));
+        e.register_double(0x00ee_0014, move |_, _| word(converted));
+        e.register(SET_MIPMAP_00E68760, |_, _| word(0));
+        e.register(INTERLOCKED_INCREMENT, |_, _| word(1));
+        e.register(INTERLOCKED_DECREMENT, |_, _| word(0));
+        // The face copies (`00e8aaf0`) on a texture without levels do nothing.
+        let data = e.mem.alloc(0x70);
+        e.mem.set_u32(data + 0x68, 5);
+        let texture = e.mem.alloc(0x40);
+        e.mem.set_u32(texture + 0x3c, data);
+        let this = e.mem.alloc(0x90);
+        e.mem.set_u32(this + 8, texture);
+        e.mem.set_u32(this + 0x64, 0x0e0d_0000);
+        e.mem.set_u8(this + 0x6d, 1);
+        e.call_log = Some(vec![]);
+        e.call(0x00e8_b0c0, &args![this]);
+        assert_eq!(
+            calls(&e, 0x00ee_0014),
+            vec![vec![converter, data, this + 0x14, data, 1]]
+        );
+        assert_eq!(e.mem.u32(this + 0x84), 5);
+        assert_eq!(calls(&e, 0x00ec_0004), vec![vec![converted]]);
+        // Same revision and no mipmap change: nothing; with the flag byte set: nothing.
+        e.call_log = Some(vec![]);
+        e.call(0x00e8_b0c0, &args![this]);
+        assert!(calls(&e, GET_IMAGE_CONVERTER).is_empty());
+        e.mem.set_u32(data + 0x68, 6);
+        e.mem.set_u8(this + 0x6c, 1);
+        e.call_log = Some(vec![]);
+        e.call(0x00e8_b0c0, &args![this]);
+        assert!(calls(&e, SET_MIPMAP_00E68760).is_empty());
+    }
+
+    #[test]
+    fn fn_00e8b1f0_takes_the_next_free_index_and_wraps() {
+        let mut e = Engine::new();
+        let this = e.mem.alloc(0x23c);
+        e.mem.set_u32(this + 0x38, 0xffe);
+        e.mem.set_u32(this + 0x3c + 0x7f * 4, 1 << 30);
+        // 0xffe is taken: 0xfff is next, then the cursor wraps to 0.
+        assert_eq!(e.call(0x00e8_b1f0, &args![this]).u32(), 0xfff);
+        assert_eq!(e.mem.u32(this + 0x38), 0);
+        assert_eq!(e.mem.u32(this + 0x3c + 0x7f * 4), 0xc000_0000);
+        for word in 0..0x80u32 {
+            e.mem.set_u32(this + 0x3c + 4 * word, 0xffff_ffff);
+        }
+        assert_eq!(e.call(0x00e8_b1f0, &args![this]).u32(), 0xffff_ffff);
+    }
+
+    fn light(e: &mut Engine, kind: u8, revision: u32) -> u32 {
+        let light = e.mem.alloc(0x120);
+        e.mem.set_u8(light + 0x9c, 1);
+        e.mem.set_u8(light + 0x9d, kind);
+        e.mem.set_u32(light + 0xa8, revision);
+        e.mem.set_u32(light + 0xc4, 0.5f32.to_bits());
+        for (i, value) in (0..9).map(|i| (i, 0.25f32 * (i + 1) as f32)) {
+            e.mem.set_u32(light + 0xc8 + 4 * i, value.to_bits());
+        }
+        for i in 0..3u32 {
+            e.mem
+                .set_u32(light + 0x8c + 4 * i, (10.0f32 + i as f32).to_bits());
+            e.mem
+                .set_u32(light + 0xf0 + 4 * i, (20.0f32 + i as f32).to_bits());
+            e.mem
+                .set_u32(light + 0xfc + 4 * i, (30.0f32 + i as f32).to_bits());
+        }
+        e.mem.set_u32(light + 0x108, 45.0f32.to_bits());
+        e.mem.set_u32(light + 0x110, 2.0f32.to_bits());
+        light
+    }
+
+    fn entry_engine() -> Engine {
+        let mut e = Engine::new();
+        e.register(MEMSET, |e, a| {
+            for i in 0..a[2] {
+                e.mem.set_u8(a[0] + i, a[1] as u8);
+            }
+            Ret::default()
+        });
+        e.map(PI_0101FF40, 8);
+        e.map(NINETY_01066808, 8);
+        e.map(LIGHT_RANGE_0126F9C4, 4);
+        e.set_global(PI_0101FF40, f64::from(std::f32::consts::PI));
+        e.set_global(NINETY_01066808, 90.0f64);
+        e.set_global(LIGHT_RANGE_0126F9C4, 1000.0f32);
+        e
+    }
+
+    fn float(e: &Engine, at: u32) -> f32 {
+        f32::from_bits(e.mem.u32(at))
+    }
+
+    #[test]
+    fn fn_00e8b250_fills_a_spot_light_and_scales_the_colours() {
+        let mut e = entry_engine();
+        let light = light(&mut e, 4, 9);
+        let this = e.mem.alloc(0x74);
+        e.mem.set_u32(this + 0x2c, 0xdead);
+        assert!(e.call(0x00e8_b250, &args![this, light]).bool());
+        assert_eq!(e.mem.u32(this + 0x68), 9);
+        assert_eq!(e.mem.u32(this), 2);
+        assert_eq!(float(&e, this + 0x34), 10.0);
+        assert_eq!(float(&e, this + 0x40), 30.0);
+        assert_eq!(float(&e, this + 0x48), 32.0);
+        assert_eq!(float(&e, this + 0x54), 20.0);
+        assert_eq!(float(&e, this + 0x4c), 1000.0);
+        assert_eq!(float(&e, this + 0x50), 2.0);
+        assert_eq!(float(&e, this + 0x60), 0.0);
+        let phi = x87_div(x87_mul(45.0, f64::from(std::f32::consts::PI)), 90.0);
+        assert_eq!(e.mem.u32(this + 0x64), x87_store32(phi));
+        // Ambient 0.25, 0.5, 0.75 halved; diffuse 1.0..1.5; specular 1.75..2.25.
+        assert_eq!(float(&e, this + 0x24), 0.125);
+        assert_eq!(float(&e, this + 0x2c), 0.375);
+        assert_eq!(float(&e, this + 0x30), 1.0);
+        assert_eq!(float(&e, this + 0x4), 0.5);
+        assert_eq!(float(&e, this + 0xc), 0.75);
+        assert_eq!(float(&e, this + 0x10), 1.0);
+        assert_eq!(float(&e, this + 0x14), 0.875);
+        assert_eq!(float(&e, this + 0x1c), 1.125);
+        assert_eq!(float(&e, this + 0x20), 1.0);
+        // The same revision again: false, nothing changes.
+        e.mem.set_u32(this + 0x24, 0);
+        assert!(!e.call(0x00e8_b250, &args![this, light]).bool());
+        assert_eq!(e.mem.u32(this + 0x24), 0);
+    }
+
+    #[test]
+    fn fn_00e8b250_fills_point_and_directional_lights() {
+        let mut e = entry_engine();
+        let point = light(&mut e, 2, 1);
+        let this = e.mem.alloc(0x74);
+        e.call(0x00e8_b250, &args![this, point]);
+        assert_eq!(e.mem.u32(this), 1);
+        assert_eq!(float(&e, this + 0x3c), 12.0);
+        assert_eq!(e.mem.u32(this + 0x40), 0);
+        assert_eq!(float(&e, this + 0x5c), 22.0);
+        assert_eq!(float(&e, this + 0x4c), 1000.0);
+        let direction = light(&mut e, 3, 2);
+        e.call(0x00e8_b250, &args![this, direction]);
+        assert_eq!(e.mem.u32(this), 3);
+        assert_eq!(float(&e, this + 0x44), 21.0);
+        assert_eq!(e.mem.u32(this + 0x34), 0);
+        assert_eq!(e.mem.u32(this + 0x4c), 0);
+        let other = light(&mut e, 0, 3);
+        e.call(0x00e8_b250, &args![this, other]);
+        assert_eq!(e.mem.u32(this), 0);
+        assert_eq!(e.mem.u32(this + 0x44), 0);
+        assert_eq!(float(&e, this + 0x8), 0.625);
+    }
+
+    #[test]
+    fn fn_00e8b4b0_builds_an_entry() {
+        let mut e = entry_engine();
+        let light = light(&mut e, 2, 4);
+        let this = e.mem.alloc(0x74);
+        e.mem.set_u8(this + 0x70, 1);
+        e.mem.set_u8(this + 0x71, 1);
+        assert_eq!(e.call(0x00e8_b4b0, &args![this, light, 17u32]).u32(), this);
+        assert_eq!(e.mem.u32(this + 0x6c), 17);
+        assert_eq!(e.mem.u32(this + 0x68), 4);
+        assert_eq!(e.mem.u8(this + 0x70), 0);
+        assert_eq!(e.mem.u8(this + 0x71), 0);
+        assert_eq!(e.mem.u32(this), 1);
+    }
+
+    #[test]
+    fn map_deleting_destructors_clean_up_and_free_on_bit_zero() {
+        for (address, tables) in [
+            (0x00e8_b4e0u32, vec![LIGHT_MAP_BASE_VTABLE]),
+            (0x00e8_b520, vec![LIGHT_MAP_VTABLE, LIGHT_MAP_BASE_VTABLE]),
+        ] {
+            for (flags, frees) in [(0u32, false), (1, true)] {
+                let mut e = Engine::new();
+                let seen = Rc::new(RefCell::new(vec![]));
+                let tables_seen = seen.clone();
+                e.register_double(LIGHT_MAP_CLEAN_UP, move |e, a| {
+                    tables_seen.borrow_mut().push(e.mem.u32(a[0]));
+                    Ret::default()
+                });
+                quiet(&mut e, FREE_00AA10F0);
+                quiet(&mut e, MEMORY_DEALLOCATE);
+                let this = e.mem.alloc(0x10);
+                e.mem.set_u32(this + 8, 0x0e0b_0000);
+                e.call_log = Some(vec![]);
+                assert_eq!(e.call(address, &args![this, flags]).u32(), this);
+                assert_eq!(*seen.borrow(), tables);
+                assert_eq!(calls(&e, FREE_00AA10F0), vec![vec![0x0e0b_0000]]);
+                let freed = calls(&e, MEMORY_DEALLOCATE);
+                if frees {
+                    assert_eq!(freed, vec![vec![MEMORY_MANAGER, this]]);
+                } else {
+                    assert!(freed.is_empty());
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn fn_00e8b5f0_prepends_to_the_list() {
+        let mut e = Engine::new();
+        let nodes = Rc::new(RefCell::new(vec![]));
+        let made = nodes.clone();
+        e.register_double(LIST_NODE_ALLOCATE, move |e, _| {
+            let node = e.mem.alloc(0xc);
+            made.borrow_mut().push(node);
+            word(node)
+        });
+        let list = e.mem.alloc(0xc);
+        let item = e.mem.alloc(4);
+        e.mem.set_u32(item, 0x0e01_0000);
+        e.call_log = Some(vec![]);
+        e.call(0x00e8_b5f0, &args![list, item]);
+        e.mem.set_u32(item, 0x0e02_0000);
+        e.call(0x00e8_b5f0, &args![list, item]);
+        let nodes = nodes.borrow();
+        assert_eq!(calls(&e, LIST_NODE_ALLOCATE)[0], vec![list + 8]);
+        assert_eq!(e.mem.u32(list), nodes[1]);
+        assert_eq!(e.mem.u32(list + 4), nodes[0]);
+        assert_eq!(e.mem.u32(list + 8), 2);
+        assert_eq!(e.mem.u32(nodes[1]), nodes[0]);
+        assert_eq!(e.mem.u32(nodes[0] + 4), nodes[1]);
+        assert_eq!(e.mem.u32(nodes[1] + 8), 0x0e02_0000);
+    }
+
+    const DEVICE: u32 = 0x00ed_0000;
+    const RENDER_STATE: u32 = 0x00ee_0000;
+
+    /// A light manager with a device and a render state, its list empty.
+    fn manager(e: &mut Engine) -> u32 {
+        let this = e.mem.alloc(0x240);
+        let device = object(e, DEVICE, 8);
+        let state = object(e, RENDER_STATE, 8);
+        e.mem.set_u32(this + 0x1c, device);
+        e.mem.set_u32(this + 0x20, state);
+        e.map(NODE_POOL_LOCK & !0xfff, 0x1000);
+        quiet(e, NODE_POOL_LOCK_TAKE);
+        e.map(SCALE_0101E568, 8);
+        e.set_global(SCALE_0101E568, 255.0f64);
+        e.map(LEAST_DIMMER_01013EA4, 4);
+        e.set_global(LEAST_DIMMER_01013EA4, 0.01f32);
+        this
+    }
+
+    fn list_node(e: &mut Engine, next: u32, previous: u32, item: u32) -> u32 {
+        let node = e.mem.alloc(0xc);
+        e.mem.set_u32(node, next);
+        e.mem.set_u32(node + 4, previous);
+        e.mem.set_u32(node + 8, item);
+        node
+    }
+
+    #[test]
+    fn fn_00e8b740_switches_lights_and_sums_the_ambient() {
+        let mut e = entry_engine();
+        let this = manager(&mut e);
+        e.mem.set_u8(this + 0x2d, 1);
+        // An old light already on the list (to be switched off) and a kept one.
+        let old = light(&mut e, 2, 1);
+        let old_entry = e.mem.alloc(0x74);
+        e.mem.set_u32(old_entry + 0x6c, 5);
+        e.mem.set_u8(old_entry + 0x71, 1);
+        e.mem.set_u32(old + 0xec, old_entry);
+        let kept = light(&mut e, 2, 1);
+        let kept_entry = e.mem.alloc(0x74);
+        e.mem.set_u32(kept_entry + 0x6c, 6);
+        e.mem.set_u32(kept_entry + 0x68, 1);
+        e.mem.set_u8(kept_entry + 0x71, 1);
+        e.mem.set_u32(kept + 0xec, kept_entry);
+        let second = list_node(&mut e, 0, 0, kept);
+        let first = list_node(&mut e, second, 0, old);
+        e.mem.set_u32(second + 4, first);
+        e.mem.set_u32(this + 0x10, first);
+        e.mem.set_u32(this + 0x14, second);
+        e.mem.set_u32(this + 0x18, 2);
+        // The state's lights: an ambient one, a dim one, the kept one and a new one.
+        let ambient = light(&mut e, 0, 1);
+        let dim = light(&mut e, 2, 1);
+        e.mem.set_u32(dim + 0xc4, 0.005f32.to_bits());
+        let new = light(&mut e, 2, 7);
+        let items = [ambient, dim, kept, new];
+        let mut item = 0;
+        for &l in items.iter().rev() {
+            let node = e.mem.alloc(8);
+            e.mem.set_u32(node, item);
+            e.mem.set_u32(node + 4, l);
+            item = node;
+        }
+        let state = e.mem.alloc(0x10);
+        e.mem.set_u32(state + 0xc, item);
+        e.register(ALLOCATE, |e, a| word(e.mem.alloc(a[0])));
+        quiet(&mut e, LIGHT_MAP_SET_00B57EA0);
+        e.register(LIST_NODE_ALLOCATE, |e, _| word(e.mem.alloc(0xc)));
+        e.call_log = Some(vec![]);
+        e.call(0x00e8_b740, &args![this, state]);
+
+        let entry = e.mem.u32(new + 0xec);
+        assert_ne!(entry, 0);
+        assert_eq!(e.mem.u32(entry + 0x6c), 0);
+        assert_eq!(
+            calls(&e, LIGHT_MAP_SET_00B57EA0),
+            vec![vec![this, new, entry]]
+        );
+        let device = e.mem.u32(this + 0x1c);
+        assert_eq!(calls(&e, DEVICE + 0xcc), vec![vec![device, 0, entry]]);
+        // The old light goes off and leaves the list; the new one goes on.
+        assert_eq!(
+            calls(&e, DEVICE + 0xd4),
+            vec![vec![device, 5, 0], vec![device, 0, 1]]
+        );
+        assert_eq!(e.mem.u8(old_entry + 0x71), 0);
+        assert_eq!(e.mem.u8(entry + 0x71), 1);
+        assert_eq!(e.mem.u32(this + 0x18), 2);
+        let head = e.mem.u32(this + 0x10);
+        assert_eq!(e.mem.u32(head + 8), new);
+        // Ambient 0.25, 0.5, 0.75 times 0.5, times 255 truncated: 31, 63, 95.
+        assert_eq!(
+            calls(&e, RENDER_STATE + 0x68),
+            vec![vec![e.mem.u32(this + 0x20), 0x8b, 0xff1f_3f5f, 0, 0]]
+        );
+    }
+
+    #[test]
+    fn fn_00e8b740_takes_marked_lights_out_of_the_middle_and_the_tail() {
+        let mut e = entry_engine();
+        let this = manager(&mut e);
+        e.mem.set_u8(this + 0x2d, 1);
+        // The head's light is in the state (unchanged, already enabled): it stays.
+        let kept = light(&mut e, 2, 1);
+        let kept_entry = e.mem.alloc(0x74);
+        e.mem.set_u32(kept_entry + 0x68, 1);
+        e.mem.set_u8(kept_entry + 0x71, 1);
+        e.mem.set_u32(kept + 0xec, kept_entry);
+        let middle = light(&mut e, 2, 1);
+        let middle_entry = e.mem.alloc(0x74);
+        e.mem.set_u32(middle_entry + 0x6c, 4);
+        e.mem.set_u32(middle + 0xec, middle_entry);
+        let tail = light(&mut e, 2, 1);
+        let tail_entry = e.mem.alloc(0x74);
+        e.mem.set_u32(tail_entry + 0x6c, 5);
+        e.mem.set_u32(tail + 0xec, tail_entry);
+        let c = list_node(&mut e, 0, 0, tail);
+        let b = list_node(&mut e, c, 0, middle);
+        let a = list_node(&mut e, b, 0, kept);
+        e.mem.set_u32(b + 4, a);
+        e.mem.set_u32(c + 4, b);
+        e.mem.set_u32(this + 0x10, a);
+        e.mem.set_u32(this + 0x14, c);
+        e.mem.set_u32(this + 0x18, 3);
+        e.mem.set_u32(NODE_POOL_LOCK, 0x77);
+        e.mem.set_u32(NODE_POOL_LOCK_COUNT, 1);
+        let item = e.mem.alloc(8);
+        e.mem.set_u32(item + 4, kept);
+        let state = e.mem.alloc(0x10);
+        e.mem.set_u32(state + 0xc, item);
+        quiet(&mut e, LIST_REMOVE_TAIL_004EDF00);
+        e.call_log = Some(vec![]);
+        e.call(0x00e8_b740, &args![this, state]);
+        let device = e.mem.u32(this + 0x1c);
+        assert!(calls(&e, DEVICE + 0xcc).is_empty());
+        assert_eq!(
+            calls(&e, DEVICE + 0xd4),
+            vec![vec![device, 4, 0], vec![device, 5, 0]]
+        );
+        assert_eq!(
+            calls(&e, LIST_REMOVE_TAIL_004EDF00),
+            vec![vec![this + 0x10]]
+        );
+        assert_eq!(e.mem.u32(a), c);
+        assert_eq!(e.mem.u32(c + 4), a);
+        assert_eq!(e.mem.u32(this + 0x18), 2);
+        assert_eq!(e.mem.u32(NODE_POOL_FREE_LIST), b);
+        assert_eq!(e.mem.u32(NODE_POOL_LOCK), 0);
+        assert_eq!(e.mem.u32(b + 8), 0);
+        assert_eq!(e.mem.u8(kept_entry + 0x70), 0);
+        // No ambient light: black with alpha.
+        let packed = calls(&e, RENDER_STATE + 0x68)[0][2];
+        assert_eq!(packed, 0xff00_0000);
+    }
+
+    #[test]
+    fn fn_00e8b740_without_lighting_pops_the_head_and_clamps() {
+        let mut e = entry_engine();
+        let this = manager(&mut e);
+        let marked = light(&mut e, 2, 1);
+        let entry = e.mem.alloc(0x74);
+        e.mem.set_u32(entry + 0x6c, 3);
+        e.mem.set_u8(entry + 0x71, 1);
+        e.mem.set_u32(marked + 0xec, entry);
+        let a = list_node(&mut e, 0, 0, marked);
+        e.mem.set_u32(this + 0x10, a);
+        e.mem.set_u32(this + 0x14, a);
+        e.mem.set_u32(this + 0x18, 1);
+        e.call_log = Some(vec![]);
+        e.call(0x00e8_b740, &args![this, 0u32]);
+        let device = e.mem.u32(this + 0x1c);
+        assert_eq!(calls(&e, DEVICE + 0xd4), vec![vec![device, 3, 0]]);
+        assert_eq!(e.mem.u8(entry + 0x71), 0);
+        assert_eq!(e.mem.u32(this + 0x10), 0);
+        assert_eq!(e.mem.u32(this + 0x14), 0);
+        assert_eq!(e.mem.u32(this + 0x18), 0);
+        assert_eq!(e.mem.u32(NODE_POOL_FREE_LIST), a);
+        assert_eq!(ambient_byte(300.0), 0xff);
+        assert_eq!(ambient_byte(-1.0), 0xff);
+        assert_eq!(ambient_byte(12.9), 12);
+    }
+
+    fn lighting_engine() -> (Engine, u32) {
+        let mut e = entry_engine();
+        let this = manager(&mut e);
+        e.call_log = Some(vec![]);
+        (e, this)
+    }
+
+    fn property(e: &mut Engine, flags: u16) -> u32 {
+        let property = e.mem.alloc(0x24);
+        e.mem.set_u16(property + 0x18, flags);
+        let holder = e.mem.alloc(4);
+        e.mem.set_u32(property + 0x20, holder);
+        property
+    }
+
+    fn states(e: &Engine) -> Vec<(u32, u32)> {
+        calls(e, RENDER_STATE + 0x68)
+            .iter()
+            .map(|c| (c[1], c[2]))
+            .collect()
+    }
+
+    #[test]
+    fn fn_00e8bb70_turns_lighting_off_for_a_texture_only_mode() {
+        let (mut e, this) = lighting_engine();
+        let p = property(&mut e, 0);
+        let object = e.mem.alloc(0xc);
+        e.mem.set_u32(object + 8, 1);
+        let holder = e.mem.u32(p + 0x20);
+        e.mem.set_u32(holder, object);
+        e.call(0x00e8_bb70, &args![this, 0u32, p, 0u32]);
+        assert_eq!(states(&e), vec![(0x89, 0)]);
+        assert_eq!(e.mem.u32(this + 0x30), 0);
+    }
+
+    #[test]
+    fn fn_00e8bb70_picks_the_colour_sources_and_sets_the_lights() {
+        // No second property: source 0 (all three states 0), lighting on, lights set.
+        let (mut e, this) = lighting_engine();
+        let effects = e.mem.alloc(0x10);
+        e.mem.set_u32(this + 0x34, 7);
+        let p = property(&mut e, 3 << 1);
+        e.call(0x00e8_bb70, &args![this, effects, p, 0u32]);
+        assert_eq!(e.mem.u32(this + 0x30), 3);
+        let set = states(&e);
+        assert_eq!(&set[..4], &[(0x94, 0), (0x93, 0), (0x91, 0), (0x89, 1)]);
+        assert_eq!(e.mem.u32(this + 0x34), 0);
+        assert_eq!(e.mem.u32(this + 0x28), effects);
+        assert_eq!(e.mem.u8(this + 0x2c), 1);
+        // The same state again: no new light set-up.
+        e.call_log = Some(vec![]);
+        e.call(0x00e8_bb70, &args![this, effects, p, 0u32]);
+        assert_eq!(states(&e), vec![(0x89, 1)]);
+        // Bit 3 with source 2.
+        let (mut e, this) = lighting_engine();
+        let p = property(&mut e, 1 << 1);
+        let q = property(&mut e, (1 << 3) | (2 << 4));
+        e.call(0x00e8_bb70, &args![this, 0u32, p, q]);
+        assert_eq!(
+            &states(&e)[..4],
+            &[(0x94, 0), (0x93, 1), (0x91, 1), (0x89, 1)]
+        );
+        assert_eq!(e.mem.u32(this + 0x34), 2);
+        // Bit 3 with source 1.
+        let (mut e, this) = lighting_engine();
+        let p = property(&mut e, 1 << 1);
+        let q = property(&mut e, (1 << 3) | (1 << 4));
+        e.call(0x00e8_bb70, &args![this, 0u32, p, q]);
+        assert_eq!(&states(&e)[..3], &[(0x94, 1), (0x93, 0), (0x91, 0)]);
+    }
+
+    #[test]
+    fn fn_00e8bb70_without_bit_three_follows_the_source() {
+        // Sources 1 and 3: state 0x89 off, nothing else.
+        for source in [1u16, 3] {
+            let (mut e, this) = lighting_engine();
+            let p = property(&mut e, 1 << 1);
+            let q = property(&mut e, source << 4);
+            e.call(0x00e8_bb70, &args![this, 0u32, p, q]);
+            assert_eq!(states(&e), vec![(0x89, 0)]);
+        }
+        // Source 2 with +0x34 at 1: the three states reset, lighting off.
+        let (mut e, this) = lighting_engine();
+        e.mem.set_u32(this + 0x34, 1);
+        e.mem.set_u8(this + 0x2d, 1);
+        let p = property(&mut e, 1 << 1);
+        let q = property(&mut e, 2 << 4);
+        e.call(0x00e8_bb70, &args![this, 0u32, p, q]);
+        assert_eq!(
+            &states(&e)[..4],
+            &[(0x94, 0), (0x93, 0), (0x91, 0), (0x89, 1)]
+        );
+        assert_eq!(e.mem.u32(this + 0x34), 0);
+        assert_eq!(e.mem.u8(this + 0x2d), 0);
+    }
+
+    #[test]
+    fn fn_00e8be20_takes_every_light_out() {
+        let mut e = entry_engine();
+        let this = manager(&mut e);
+        let own = object(&mut e, 0x00ec_0000, 4);
+        let own_table = e.mem.u32(own);
+        e.mem.set_u32(this, own_table);
+        quiet(&mut e, LIGHT_DROP_00E91FD0);
+        quiet(&mut e, DEALLOCATE);
+        quiet(&mut e, LIST_REMOVE_HEAD_007B5390);
+        let lights: Vec<u32> = (0..3).map(|_| light(&mut e, 2, 1)).collect();
+        let entries: Vec<u32> = (0..3)
+            .map(|i| {
+                let entry = e.mem.alloc(0x74);
+                e.mem.set_u32(entry + 0x6c, 10 + i);
+                entry
+            })
+            .collect();
+        for (l, entry) in lights.iter().zip(&entries) {
+            e.mem.set_u32(l + 0xec, *entry);
+        }
+        // Buckets: 4 of them; bucket 0 holds lights 0 and 1, bucket 2 holds light 2 and an
+        // item without an entry.
+        let blank = e.mem.alloc(0xc);
+        let blank_light = light(&mut e, 2, 1);
+        e.mem.set_u32(blank + 4, blank_light);
+        let item2 = e.mem.alloc(0xc);
+        e.mem.set_u32(item2, blank);
+        e.mem.set_u32(item2 + 4, lights[2]);
+        e.mem.set_u32(item2 + 8, entries[2]);
+        let item1 = e.mem.alloc(0xc);
+        e.mem.set_u32(item1 + 4, lights[1]);
+        e.mem.set_u32(item1 + 8, entries[1]);
+        let item0 = e.mem.alloc(0xc);
+        e.mem.set_u32(item0, item1);
+        e.mem.set_u32(item0 + 4, lights[0]);
+        e.mem.set_u32(item0 + 8, entries[0]);
+        let buckets = e.mem.alloc(0x10);
+        e.mem.set_u32(buckets, item0);
+        e.mem.set_u32(buckets + 8, item2);
+        e.mem.set_u32(this + 4, 4);
+        e.mem.set_u32(this + 8, buckets);
+        // The light list holds light 1 at its head and light 2 in the middle.
+        let tail = list_node(&mut e, 0, 0, 0x0e0f_0000);
+        let middle = list_node(&mut e, tail, 0, lights[2]);
+        let head = list_node(&mut e, middle, 0, lights[1]);
+        e.mem.set_u32(middle + 4, head);
+        e.mem.set_u32(tail + 4, middle);
+        e.mem.set_u32(this + 0x10, head);
+        e.mem.set_u32(this + 0x14, tail);
+        e.mem.set_u32(this + 0x18, 3);
+        e.mem.set_u32(NODE_POOL_LOCK_COUNT, 2);
+        // The hash: bucket 0 for light 1 (the end of bucket 0's chain), bucket 2 for the
+        // light of the item without an entry.
+        let light1 = lights[1];
+        e.register_double(0x00ec_0004, move |_, a| {
+            word(if a[1] == light1 { 0 } else { 2 })
+        });
+        e.call_log = Some(vec![]);
+        e.call(0x00e8_be20, &args![this]);
+        let device = e.mem.u32(this + 0x1c);
+        assert_eq!(
+            calls(&e, DEVICE + 0xd4),
+            vec![
+                vec![device, 10, 0],
+                vec![device, 11, 0],
+                vec![device, 12, 0]
+            ]
+        );
+        assert_eq!(
+            calls(&e, LIGHT_DROP_00E91FD0),
+            lights.iter().map(|l| vec![this, *l]).collect::<Vec<_>>()
+        );
+        assert_eq!(
+            calls(&e, LIST_REMOVE_HEAD_007B5390),
+            vec![vec![this + 0x10]]
+        );
+        assert_eq!(e.mem.u32(NODE_POOL_FREE_LIST), middle);
+        assert_eq!(e.mem.u32(this + 0x18), 2);
+        assert_eq!(e.mem.u32(head), tail);
+        for l in &lights {
+            assert_eq!(e.mem.u32(l + 0xec), 0);
+        }
+        assert_eq!(
+            calls(&e, DEALLOCATE),
+            entries.iter().map(|x| vec![*x, 0x74]).collect::<Vec<_>>()
+        );
+        // The hash was asked at the end of each chain.
+        assert_eq!(
+            calls(&e, 0x00ec_0004),
+            vec![vec![this, lights[1]], vec![this, blank_light]]
+        );
     }
 }

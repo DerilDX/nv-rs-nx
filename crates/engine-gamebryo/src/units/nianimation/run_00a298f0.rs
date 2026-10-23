@@ -934,6 +934,849 @@ pub fn fn_00a2bc90(e: &mut Engine, result: Ptr, scalar: f32, quaternion: Ptr) ->
     result
 }
 
+// The key tables, 36 words each (one per key content row and key type column, `row * 6 +
+// column`), from `011f3780` in steps of 0x90: fill (`011f3780`), insert (`011f3810`), delete
+// (`011f38a0`), array (`011f3930`), copy (`011f39c0`), save (`011f3a50`), equal
+// (`011f3ae0`), the second (`011f3b70`) and first (`011f3c00`) derivative, interpolation
+// (`011f3c90`), the curve measure (`011f3d20`) and create (`011f3db0`). Each role is the one
+// the functions stored in it have (their bodies below and above).
+
+/// The float keys' insert table (`011f3810`), and the array (`011f3930`), copy (`011f39c0`),
+/// save (`011f3a50`) and equal (`011f3ae0`) tables, one word per key type.
+const FLOAT_KEY_INSERT: u32 = 0x011f_3810;
+const KEY_ARRAY: u32 = 0x011f_3930;
+const KEY_COPY: u32 = 0x011f_39c0;
+const KEY_SAVE: u32 = 0x011f_3a50;
+const KEY_EQUAL: u32 = 0x011f_3ae0;
+/// `00a3d5d0` (`cdecl`, (time, keys, count, &index, size byte)): the index a key at `time`
+/// goes to; false when a key has that time already.
+const INSERT_POSITION: u32 = 0x00a3_d5d0;
+/// `00a3d520` (`cdecl`, two keys): whether their times are equal.
+const TIMES_EQUAL: u32 = 0x00a3_d520;
+/// `_memcpy` (`cdecl`, (destination, source, size)).
+const MEMCPY: u32 = 0x00ec_44d0;
+/// `_CIsqrt` (`00ec6040`): the square root of ST0 (an `f64` argument), in ST0.
+const SQRT: u32 = 0x00ec_6040;
+/// `NiColorKey::GenInterp` (Xbox PDB; `cdecl`, (result, time, keys, type, count, &last
+/// index, size)).
+const COLOR_KEY_GEN_INTERP: u32 = 0x00a2_96c0;
+/// The four floats `00a298f0` answers without keys.
+const COLOR_KEY_DEFAULT: u32 = 0x011f_3680;
+/// The value of float keys at a time (`00a26d70`, `cdecl`, (time, keys, type, count, size);
+/// in ST0), of position keys (`00a276a0`) and of rotation keys (`00a289b0`, both `cdecl`,
+/// (result, time, keys, type, count, size)).
+const FLOAT_KEY_VALUE: u32 = 0x00a2_6d70;
+const POS_KEY_VALUE: u32 = 0x00a2_76a0;
+const ROT_KEY_VALUE: u32 = 0x00a2_89b0;
+/// `00a28ab0` (`cdecl`, (keys, count, size)): run on the rotation keys after an insert.
+const ROT_KEYS_AFTER_INSERT: u32 = 0x00a2_8ab0;
+/// The position keys' equal function (`00a27760`, `cdecl`: time and position) and save
+/// function (`00a27450`, `cdecl`, (stream, key): time and position).
+const POS_KEYS_EQUAL: u32 = 0x00a2_7760;
+const POS_KEY_SAVE: u32 = 0x00a2_7450;
+/// The comparisons of three (`004390c0`) and four (`004a4cc0`) floats (`thiscall`, the other
+/// floats).
+const THREE_FLOATS_EQUAL: u32 = 0x0043_90c0;
+const FOUR_FLOATS_EQUAL: u32 = 0x004a_4cc0;
+/// The constructor the 20-byte colour keys' arrays are built with (`0052d160`).
+const COLOR_KEY_CONSTRUCT: u32 = 0x0052_d160;
+/// The double 6 (`01034208`).
+const SIX_DOUBLE: u32 = 0x0103_4208;
+/// The steps `00a2b6d0` takes per key span (an `int`, 20 in the exe's data) and the
+/// parameter step (a `float`, set at run time).
+const CURVE_STEPS: u32 = 0x011a_7ed4;
+const CURVE_STEP: u32 = 0x011f_3658;
+
+/// The array functions' shared body: `count` keys of `size` bytes from the memory manager
+/// (the count in the word before them), built by the array constructor iterator with
+/// `constructor` when there is one. Answers the keys (null when the allocation fails).
+pub(crate) fn alloc_keys(e: &mut Engine, count: u32, size: u32, constructor: Option<u32>) -> u32 {
+    let block = e
+        .call(
+            MEMORY_ALLOCATE,
+            &args![MEMORY_MANAGER, key_array_bytes(count, size)],
+        )
+        .u32();
+    if block == 0 {
+        return 0;
+    }
+    e.mem.set_u32(block, count);
+    if let Some(constructor) = constructor {
+        e.call(
+            VECTOR_CONSTRUCT,
+            &args![block + 4, size, count, constructor],
+        );
+    }
+    block + 4
+}
+
+/// The insert functions' shared body (`cdecl`, (time, &keys, &count)): when `00a3d5d0` finds
+/// a free index for `time` (else false), a new array of `count + 1` keys (as
+/// [`alloc_keys`]), the keys before the index and those from it copied around the new one
+/// (`_memcpy`), the new key's time (through the x87 stack) and the `value_bytes` bytes after
+/// it from the buffer `value` fills (`value(e, time, old keys, count, buffer)`), the count
+/// one up, the old block given back (when not null) and the new keys stored. Answers true.
+pub(crate) fn insert_key(
+    e: &mut Engine,
+    time: f32,
+    keys_at: Ptr,
+    count_at: Ptr,
+    size: u32,
+    constructor: Option<u32>,
+    value_bytes: u32,
+    value: &mut dyn FnMut(&mut Engine, u32, u32, u32, u32),
+) -> bool {
+    let time_bits = x87_quiet_bits(time.to_bits());
+    let old = e.mem.u32(keys_at.addr());
+    e.with_stack(4 + value_bytes.next_multiple_of(4), |e, local| {
+        let index_at = local.addr();
+        let value_at = index_at + 4;
+        let count = e.mem.u32(count_at.addr());
+        if !e
+            .call(
+                INSERT_POSITION,
+                &args![time_bits, old, count, index_at, size],
+            )
+            .bool()
+        {
+            return false;
+        }
+        let grown = e.mem.u32(count_at.addr()).wrapping_add(1);
+        let new = alloc_keys(e, grown, size, constructor);
+        let index = e.mem.u32(index_at);
+        let before = index.wrapping_mul(size);
+        e.call(MEMCPY, &args![new, old, before]);
+        let count = e.mem.u32(count_at.addr());
+        if count > index {
+            e.call(
+                MEMCPY,
+                &args![
+                    new.wrapping_add(before).wrapping_add(size),
+                    old.wrapping_add(before),
+                    (count - index).wrapping_mul(size)
+                ],
+            );
+        }
+        let count = e.mem.u32(count_at.addr());
+        value(e, time_bits, old, count, value_at);
+        let key = new.wrapping_add(e.mem.u32(index_at).wrapping_mul(size));
+        e.mem.set_u32(key, time_bits);
+        for byte in 0..value_bytes {
+            let value = e.mem.u8(value_at + byte);
+            e.mem.set_u8(key + 4 + byte, value);
+        }
+        let count = e.mem.u32(count_at.addr());
+        e.mem.set_u32(count_at.addr(), count.wrapping_add(1));
+        if old != 0 {
+            e.call(
+                MEMORY_DEALLOCATE,
+                &args![MEMORY_MANAGER, old.wrapping_sub(4)],
+            );
+        }
+        e.mem.set_u32(keys_at.addr(), new);
+        true
+    })
+}
+
+/// Writes `size` bytes from `source` to the stream's output, the byte-count word at `count`
+/// set to `size` first.
+pub(crate) fn stream_write(e: &mut Engine, stream: Ptr, source: u32, size: u32, count: u32) {
+    // NiStream::m_pkOstr (Xbox PDB) +0x250; the output's position +4 and write function +0xc.
+    let output = e.mem.u32(stream.addr() + 0x250);
+    let function = e.mem.u32(output + 0xc);
+    e.mem.set_u32(count, size);
+    let done = e
+        .call(function, &args![output, source, size, count, 1u32])
+        .u32();
+    let position = e.mem.u32(output + 4).wrapping_add(done);
+    e.mem.set_u32(output + 4, position);
+}
+
+/// The copy functions' shared body: the `size / 4` words of `source` to `dest` in order, the
+/// words at `floats` through the x87 stack (`FLD`/`FSTP`), the others moved.
+pub(crate) fn copy_key(e: &mut Engine, dest: Ptr, source: Ptr, size: u32, floats: &[u32]) {
+    for offset in (0..size).step_by(4) {
+        let bits = e.mem.u32(source.addr() + offset);
+        let bits = if floats.contains(&offset) {
+            x87_quiet_bits(bits)
+        } else {
+            bits
+        };
+        e.mem.set_u32(dest.addr() + offset, bits);
+    }
+}
+
+// Translated from 00a298f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`cdecl`, (result, time, keys, type, count, size)): the colour
+/// keys' value at `time`, four words at `result`: the default (`011f3680`) without keys, the
+/// first key's (+4) when its time is after `time`, the last key's when its time is before
+/// `time`, otherwise `NiColorKey::GenInterp` from index 0. Answers `result`.
+pub fn fn_00a298f0(
+    e: &mut Engine,
+    result: Ptr,
+    time: f32,
+    keys: Ptr,
+    kind: u32,
+    count: u32,
+    size: u32,
+) -> Ptr {
+    let r = result.addr();
+    let copy = |e: &mut Engine, from: u32| {
+        for word in 0..4 {
+            let bits = e.mem.u32(from + 4 * word);
+            e.mem.set_u32(r + 4 * word, bits);
+        }
+    };
+    if count == 0 {
+        copy(e, COLOR_KEY_DEFAULT);
+        return result;
+    }
+    let k = keys.addr();
+    let t = x87_load32(time.to_bits());
+    if x87_load32(e.mem.u32(k)) > t {
+        copy(e, k + 4);
+        return result;
+    }
+    let last = k.wrapping_add(count.wrapping_sub(1).wrapping_mul(size & 0xff));
+    if x87_load32(e.mem.u32(last)) < t {
+        copy(e, last + 4);
+        return result;
+    }
+    e.with_stack(4, |e, index| {
+        e.mem.set_u32(index.addr(), 0);
+        e.call(
+            COLOR_KEY_GEN_INTERP,
+            &args![result, x87_store32(t), keys, kind, count, index, size],
+        );
+    });
+    result
+}
+
+// Translated from 00a299c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`cdecl`, two 20-byte keys; an equal function): the times
+/// (`00a3d520`), then the four floats at +4 (`004a4cc0`). Answers what the last of them
+/// answers (`AL`).
+pub fn fn_00a299c0(e: &mut Engine, first: Ptr, second: Ptr) -> u32 {
+    let same_time = e.call(TIMES_EQUAL, &args![first, second]).u32();
+    if same_time as u8 == 0 {
+        return same_time;
+    }
+    e.call(
+        FOUR_FLOATS_EQUAL,
+        &args![first.addr() + 4, second.addr() + 4],
+    )
+    .u32()
+}
+
+// Translated from 00a29c20 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`cdecl`, two Euler rotation keys; their equal function): for
+/// each axis list the counts, types and key size bytes must match, and every key pair must
+/// be equal by the type's equal function (`011f3ae0`). Only the axis lists are compared.
+pub fn fn_00a29c20(e: &mut Engine, first: Ptr, second: Ptr) -> bool {
+    let (f, s) = (first.addr(), second.addr());
+    for axis in 0..3u32 {
+        let count = e.mem.u32(f + 0x14 + 4 * axis);
+        if count != e.mem.u32(s + 0x14 + 4 * axis) {
+            return false;
+        }
+        let kind = e.mem.u32(f + 0x20 + 4 * axis);
+        if kind != e.mem.u32(s + 0x20 + 4 * axis) {
+            return false;
+        }
+        if e.mem.u8(f + 0x2c + axis) != e.mem.u8(s + 0x2c + axis) {
+            return false;
+        }
+        if count != 0 {
+            let equal = e.mem.u32(kind.wrapping_mul(4).wrapping_add(KEY_EQUAL));
+            let mut i = 0u32;
+            while i < e.mem.u32(f + 0x14 + 4 * axis) {
+                let b = u32::from(e.mem.u8(s + 0x2c + axis))
+                    .wrapping_mul(i)
+                    .wrapping_add(e.mem.u32(s + 0x30 + 4 * axis));
+                let a = u32::from(e.mem.u8(f + 0x2c + axis))
+                    .wrapping_mul(i)
+                    .wrapping_add(e.mem.u32(f + 0x30 + 4 * axis));
+                if !e.call(equal, &args![a, b]).bool() {
+                    return false;
+                }
+                i += 1;
+            }
+        }
+    }
+    true
+}
+
+// Translated from 00a29cf0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`cdecl`, (destination, source) Euler rotation keys; their copy
+/// function): for each axis list the count and type are copied and, with keys, a new array
+/// from the type's array function (`011f3930`) whose keys are copied one by one by the
+/// type's copy function (`011f39c0`), stepping by each key's own size byte. The time,
+/// quaternion, size bytes and last indices are not copied.
+pub fn fn_00a29cf0(e: &mut Engine, dest: Ptr, source: Ptr) {
+    let (d, s) = (dest.addr(), source.addr());
+    for axis in 0..3u32 {
+        let count = e.mem.u32(s + 0x14 + 4 * axis);
+        e.mem.set_u32(d + 0x14 + 4 * axis, count);
+        let kind = e.mem.u32(s + 0x20 + 4 * axis);
+        e.mem.set_u32(d + 0x20 + 4 * axis, kind);
+        let count = e.mem.u32(s + 0x14 + 4 * axis);
+        if count != 0 {
+            let kind = e.mem.u32(s + 0x20 + 4 * axis);
+            let array = e.mem.u32(kind.wrapping_mul(4).wrapping_add(KEY_ARRAY));
+            let keys = e.call(array, &args![count]).u32();
+            e.mem.set_u32(d + 0x30 + 4 * axis, keys);
+            let kind = e.mem.u32(s + 0x20 + 4 * axis);
+            let copy = e.mem.u32(kind.wrapping_mul(4).wrapping_add(KEY_COPY));
+            for i in 0..count {
+                let from = u32::from(e.mem.u8(s + 0x2c + axis))
+                    .wrapping_mul(i)
+                    .wrapping_add(e.mem.u32(s + 0x30 + 4 * axis));
+                let to = u32::from(e.mem.u8(d + 0x2c + axis))
+                    .wrapping_mul(i)
+                    .wrapping_add(e.mem.u32(d + 0x30 + 4 * axis));
+                e.call(copy, &args![to, from]);
+            }
+        }
+    }
+}
+
+// Translated from 00a29db0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`cdecl`, the count): the Euler rotation keys' array function:
+/// `count` keys of 0x48 bytes built by `00a29a70`.
+pub fn fn_00a29db0(e: &mut Engine, count: u32) -> u32 {
+    alloc_keys(e, count, 0x48, Some(0x00a2_9a70))
+}
+
+// Translated from 00a29e40 (PC disassembly, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (a function Ghidra did not create; `cdecl`, (time, &keys,
+/// &count)): the Euler rotation keys' insert function. Without keys it first makes one
+/// (0x4c bytes from the memory manager, count 1, built by `00a29a70`; null when the
+/// allocation fails) and sets the count to 1. Then for each axis list with keys the float
+/// keys' insert function of its type (`011f3810`) on copies of its keys and count, which are
+/// stored back with the last index 0. Answers whether any axis inserted.
+pub fn fn_00a29e40(e: &mut Engine, time: f32, keys_at: Ptr, count_at: Ptr) -> bool {
+    if e.mem.u32(count_at.addr()) == 0 {
+        let block = e
+            .call(MEMORY_ALLOCATE, &args![MEMORY_MANAGER, 0x4cu32])
+            .u32();
+        let key = if block != 0 {
+            e.mem.set_u32(block, 1);
+            e.call(
+                VECTOR_CONSTRUCT,
+                &args![block + 4, 0x48u32, 1u32, 0x00a2_9a70u32],
+            );
+            block + 4
+        } else {
+            0
+        };
+        e.mem.set_u32(keys_at.addr(), key);
+        e.mem.set_u32(count_at.addr(), 1);
+    }
+    let key = e.mem.u32(keys_at.addr());
+    let time_bits = x87_quiet_bits(time.to_bits());
+    e.with_stack(8, |e, local| {
+        let keys_local = local.addr();
+        let count_local = keys_local + 4;
+        let mut inserted = false;
+        for axis in 0..3u32 {
+            let keys = e.mem.u32(key + 0x30 + 4 * axis);
+            e.mem.set_u32(keys_local, keys);
+            let count = e.mem.u32(key + 0x14 + 4 * axis);
+            e.mem.set_u32(count_local, count);
+            if count != 0 {
+                let kind = e.mem.u32(key + 0x20 + 4 * axis);
+                let insert = e
+                    .mem
+                    .u32(kind.wrapping_mul(4).wrapping_add(FLOAT_KEY_INSERT));
+                if e.call(insert, &args![time_bits, keys_local, count_local])
+                    .bool()
+                {
+                    inserted = true;
+                }
+                let count = e.mem.u32(count_local);
+                e.mem.set_u32(key + 0x14 + 4 * axis, count);
+                let keys = e.mem.u32(keys_local);
+                e.mem.set_u32(key + 0x30 + 4 * axis, keys);
+                e.mem.set_u32(key + 0x3c + 4 * axis, 0);
+            }
+        }
+        inserted
+    })
+}
+
+// Translated from 00a29fe0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`cdecl`, (stream, Euler rotation key)): writes for each axis
+/// list its 4-byte count and, with keys, its 4-byte type and the keys through the type's
+/// save function (`011f3a50`, (stream, keys, count)). The time and quaternion are not
+/// written here.
+pub fn fn_00a29fe0(e: &mut Engine, stream: Ptr, key: Ptr) {
+    e.with_stack(4, |e, count_word| {
+        let count_word = count_word.addr();
+        for axis in 0..3u32 {
+            let count_at = key.addr() + 0x14 + 4 * axis;
+            stream_write(e, stream, count_at, 4, count_word);
+            if e.mem.u32(count_at) != 0 {
+                stream_write(e, stream, count_at + 0xc, 4, count_word);
+                let count = e.mem.u32(count_at);
+                let keys = e.mem.u32(count_at + 0x1c);
+                let kind = e.mem.u32(count_at + 0xc);
+                let save = e.mem.u32(kind.wrapping_mul(4).wrapping_add(KEY_SAVE));
+                e.call(save, &args![stream, keys, count]);
+            }
+        }
+    });
+}
+
+// Translated from 00a2a0e0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`cdecl`, (stream, keys, count)): the Euler rotation keys' save
+/// function: `00a29fe0` on each 0x48-byte key.
+pub fn fn_00a2a0e0(e: &mut Engine, stream: Ptr, keys: Ptr, count: u32) {
+    let mut key = keys.addr();
+    for _ in 0..count {
+        fn_00a29fe0(e, stream, Ptr::new(key));
+        key = key.wrapping_add(0x48);
+    }
+}
+
+// Translated from 00a2a1a0 (PC disassembly, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (a function Ghidra did not create; a jump to `00a299c0`).
+pub fn fn_00a2a1a0(e: &mut Engine, first: Ptr, second: Ptr) -> u32 {
+    fn_00a299c0(e, first, second)
+}
+
+// Translated from 00a2a1b0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`cdecl`, the count): the 20-byte colour keys' array function:
+/// `count` keys built by `0052d160`.
+pub fn fn_00a2a1b0(e: &mut Engine, count: u32) -> u32 {
+    alloc_keys(e, count, 0x14, Some(COLOR_KEY_CONSTRUCT))
+}
+
+// Translated from 00a2a320 (PC disassembly, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (a function Ghidra did not create; `cdecl`, (stream, count)):
+/// the 20-byte colour keys' create function: `count` keys built by `0052d160` and read by
+/// `00a29640`. Answers the keys.
+pub fn fn_00a2a320(e: &mut Engine, stream: Ptr, count: u32) -> u32 {
+    create_keys(
+        e,
+        stream,
+        count,
+        0x14,
+        Some(COLOR_KEY_CONSTRUCT),
+        KeyReader::Call(READ_KEY_00A29640),
+    )
+}
+
+// Translated from 00a2a390 (PC disassembly, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (a function Ghidra did not create; `cdecl`, (time, &keys,
+/// &count)): the 20-byte colour keys' insert function ([`insert_key`]; keys built by
+/// `0052d160`), the new key's colour from `00a298f0` on the old keys with type 1.
+pub fn fn_00a2a390(e: &mut Engine, time: f32, keys_at: Ptr, count_at: Ptr) -> bool {
+    insert_key(
+        e,
+        time,
+        keys_at,
+        count_at,
+        0x14,
+        Some(COLOR_KEY_CONSTRUCT),
+        16,
+        &mut |e, time, old, count, value| {
+            fn_00a298f0(
+                e,
+                Ptr::new(value),
+                f32::from_bits(time),
+                Ptr::new(old),
+                1,
+                count,
+                0x14,
+            );
+        },
+    )
+}
+
+// Translated from 00a2a620 (PC disassembly, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (a function Ghidra did not create; `cdecl`, (time, &keys,
+/// &count)): the 8-byte float keys' insert function ([`insert_key`]), the new key's value
+/// from `00a26d70` on the old keys with type 1, stored as a `float`.
+pub fn fn_00a2a620(e: &mut Engine, time: f32, keys_at: Ptr, count_at: Ptr) -> bool {
+    insert_key(
+        e,
+        time,
+        keys_at,
+        count_at,
+        8,
+        None,
+        4,
+        &mut |e, time, old, count, value| {
+            let v = e
+                .call(FLOAT_KEY_VALUE, &args![time, old, 1u32, count, 8u32])
+                .f64();
+            e.mem.set_u32(value, x87_store32(v));
+        },
+    )
+}
+
+// Translated from 00a2a7b0 (PC disassembly, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (a function Ghidra did not create; `cdecl`, (destination,
+/// source)): the 16-byte position keys' copy function: the time through the x87 stack, the
+/// position moved.
+pub fn fn_00a2a7b0(e: &mut Engine, dest: Ptr, source: Ptr) {
+    copy_key(e, dest, source, 0x10, &[0]);
+}
+
+// Translated from 00a2a7e0 (PC disassembly, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (a function Ghidra did not create; a jump to `00a27760`, the
+/// position keys' equal function).
+pub fn fn_00a2a7e0(e: &mut Engine, first: Ptr, second: Ptr) -> u32 {
+    e.call(POS_KEYS_EQUAL, &args![first, second]).u32()
+}
+
+// Translated from 00a2a890 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`cdecl`, (time (not read), first key, second key, result)):
+/// the linear position keys' first derivative: `second - first` of the positions (+4).
+pub fn fn_00a2a890(e: &mut Engine, _unused_0: u32, first: Ptr, second: Ptr, result: Ptr) {
+    let (f, s) = (first.addr(), second.addr());
+    let mut words = [0u32; 3];
+    for (i, word) in words.iter_mut().enumerate() {
+        let at = 4 + 4 * i as u32;
+        *word = x87_store32(x87_sub(
+            x87_load32(e.mem.u32(s + at)),
+            x87_m32(e.mem.u32(f + at)),
+        ));
+    }
+    for (i, word) in words.iter().enumerate() {
+        e.mem.set_u32(result.addr() + 4 * i as u32, *word);
+    }
+}
+
+// Translated from 00a2a940 (PC disassembly, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (a function Ghidra did not create; `cdecl`, (time, &keys,
+/// &count)): the 16-byte position keys' insert function ([`insert_key`]), the new key's
+/// position from `00a276a0` on the old keys with type 1.
+pub fn fn_00a2a940(e: &mut Engine, time: f32, keys_at: Ptr, count_at: Ptr) -> bool {
+    insert_key(
+        e,
+        time,
+        keys_at,
+        count_at,
+        0x10,
+        None,
+        12,
+        &mut |e, time, old, count, value| {
+            e.call(
+                POS_KEY_VALUE,
+                &args![value, time, old, 1u32, count, 0x10u32],
+            );
+        },
+    )
+}
+
+// Translated from 00a2ab10 (PC disassembly, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (a function Ghidra did not create; `cdecl`, (destination,
+/// source)): the 20-byte keys' copy function: the time through the x87 stack, the four
+/// words after it moved.
+pub fn fn_00a2ab10(e: &mut Engine, dest: Ptr, source: Ptr) {
+    copy_key(e, dest, source, 0x14, &[0]);
+}
+
+// Translated from 00a2ab40 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`cdecl`, the count): the 20-byte rotation keys' array
+/// function: `count` keys built by `00a2bdb0`.
+pub fn fn_00a2ab40(e: &mut Engine, count: u32) -> u32 {
+    alloc_keys(e, count, 0x14, Some(0x00a2_bdb0))
+}
+
+// Translated from 00a2ac30 (PC disassembly, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (a function Ghidra did not create; `cdecl`, (time, &keys,
+/// &count)): the 20-byte rotation keys' insert function ([`insert_key`]; keys built by
+/// `00a2bdb0`), the new key's quaternion from `00a289b0` on the old keys with type 1; after
+/// an insert `00a28ab0` runs on the new keys and count.
+pub fn fn_00a2ac30(e: &mut Engine, time: f32, keys_at: Ptr, count_at: Ptr) -> bool {
+    if !insert_key(
+        e,
+        time,
+        keys_at,
+        count_at,
+        0x14,
+        Some(0x00a2_bdb0),
+        16,
+        &mut |e, time, old, count, value| {
+            e.call(
+                ROT_KEY_VALUE,
+                &args![value, time, old, 1u32, count, 0x14u32],
+            );
+        },
+    ) {
+        return false;
+    }
+    let keys = e.mem.u32(keys_at.addr());
+    let count = e.mem.u32(count_at.addr());
+    e.call(ROT_KEYS_AFTER_INSERT, &args![keys, count, 0x14u32]);
+    true
+}
+
+// Translated from 00a2ae10 (PC disassembly, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (a function Ghidra did not create; `cdecl`, (destination,
+/// source)): the TCB position keys' copy function (0x4c bytes): the time, tension,
+/// continuity and bias through the x87 stack, the rest moved.
+pub fn fn_00a2ae10(e: &mut Engine, dest: Ptr, source: Ptr) {
+    copy_key(e, dest, source, 0x4c, &[0, 0x10, 0x14, 0x18]);
+}
+
+// Translated from 00a2ae90 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`cdecl`, two TCB position keys; their equal function): the
+/// position keys' equal function (`00a27760`; its answer when false), then tension,
+/// continuity and bias compared as floats (`FUCOMPP`, NaN unequal) and the four float
+/// triples from +0x1c compared by `004390c0`. Answers 1 or 0.
+pub fn fn_00a2ae90(e: &mut Engine, first: Ptr, second: Ptr) -> u32 {
+    let equal = e.call(POS_KEYS_EQUAL, &args![first, second]).u32();
+    if equal as u8 == 0 {
+        return equal;
+    }
+    let (f, s) = (first.addr(), second.addr());
+    for offset in [0x10u32, 0x14, 0x18] {
+        if x87_load32(e.mem.u32(s + offset)) != x87_load32(e.mem.u32(f + offset)) {
+            return 0;
+        }
+    }
+    for offset in [0x1cu32, 0x28, 0x34, 0x40] {
+        if !e
+            .call(THREE_FLOATS_EQUAL, &args![f + offset, s + offset])
+            .bool()
+        {
+            return 0;
+        }
+    }
+    1
+}
+
+// Translated from 00a2af30 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`cdecl`, the count): the TCB position keys' array function:
+/// `count` keys of 0x4c bytes, not constructed.
+pub fn fn_00a2af30(e: &mut Engine, count: u32) -> u32 {
+    alloc_keys(e, count, 0x4c, None)
+}
+
+// Translated from 00a2af70 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`cdecl`, (time, key, next key (not read), result)): the TCB
+/// position keys' interpolation: the cubic `position + t (outgoing + t (A + t B))` with the
+/// key's outgoing tangent (+0x28) and coefficients A (+0x34) and B (+0x40), each step
+/// stored as a `float`.
+pub fn fn_00a2af70(e: &mut Engine, time: f32, key: Ptr, _unused_2: u32, result: Ptr) {
+    let k = key.addr();
+    let ld = |e: &Engine, at: u32| x87_load32(e.mem.u32(k + at));
+    let t = x87_load32(time.to_bits());
+    let st = x87_store32;
+    let a0 = st(x87_mul(ld(e, 0x40), t));
+    let a1 = st(x87_mul(ld(e, 0x44), t));
+    let a2 = st(x87_mul(ld(e, 0x48), t));
+    let b0 = st(x87_add(ld(e, 0x34), x87_m32(a0)));
+    let b1 = st(x87_add(ld(e, 0x38), x87_m32(a1)));
+    let b2 = st(x87_add(ld(e, 0x3c), x87_m32(a2)));
+    let c0 = st(x87_mul(x87_load32(b0), t));
+    let c1 = st(x87_mul(x87_load32(b1), t));
+    let c2 = st(x87_mul(x87_load32(b2), t));
+    let d0 = st(x87_add(ld(e, 0x28), x87_m32(c0)));
+    let d1 = st(x87_add(ld(e, 0x2c), x87_m32(c1)));
+    let d2 = st(x87_add(ld(e, 0x30), x87_m32(c2)));
+    let e0 = st(x87_mul(x87_load32(d0), t));
+    let e1 = st(x87_mul(x87_load32(d1), t));
+    let e2 = st(x87_mul(t, x87_m32(d2)));
+    let r0 = st(x87_add(ld(e, 4), x87_m32(e0)));
+    let r1 = st(x87_add(ld(e, 8), x87_m32(e1)));
+    let r2 = st(x87_add(ld(e, 0xc), x87_m32(e2)));
+    let r = result.addr();
+    e.mem.set_u32(r, r0);
+    e.mem.set_u32(r + 4, r1);
+    e.mem.set_u32(r + 8, r2);
+}
+
+// Translated from 00a2b050 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`cdecl`, (time, key, next key (not read), result)): the TCB
+/// position keys' first derivative: `outgoing + t (2 A + 3 t B)`, each step stored as a
+/// `float` (the time slot holds `3 t`).
+pub fn fn_00a2b050(e: &mut Engine, time: f32, key: Ptr, _unused_2: u32, result: Ptr) {
+    let k = key.addr();
+    let ld = |e: &Engine, at: u32| x87_load32(e.mem.u32(k + at));
+    let md = |e: &Engine, at: u32| x87_m32(e.mem.u32(k + at));
+    let st = x87_store32;
+    let t = x87_load32(time.to_bits());
+    let three = x87_load64(e.mem.u64(THREE_DOUBLE));
+    let t3 = x87_load32(st(x87_mul(three, t)));
+    let b0 = st(x87_mul(ld(e, 0x40), t3));
+    let b1 = st(x87_mul(ld(e, 0x44), t3));
+    let b2 = st(x87_mul(t3, md(e, 0x48)));
+    let two = x87_load64(e.mem.u64(TWO_DOUBLE));
+    let a0 = st(x87_mul(ld(e, 0x34), two));
+    let a1 = st(x87_mul(ld(e, 0x38), two));
+    let a2 = st(x87_mul(two, md(e, 0x3c)));
+    let s0 = st(x87_add(x87_load32(a0), x87_m32(b0)));
+    let s1 = st(x87_add(x87_load32(a1), x87_m32(b1)));
+    let s2 = st(x87_add(x87_load32(a2), x87_m32(b2)));
+    let p0 = st(x87_mul(x87_load32(s0), t));
+    let p1 = st(x87_mul(x87_load32(s1), t));
+    let p2 = st(x87_mul(t, x87_m32(s2)));
+    let r0 = st(x87_add(ld(e, 0x28), x87_m32(p0)));
+    let r1 = st(x87_add(ld(e, 0x2c), x87_m32(p1)));
+    let r2 = st(x87_add(ld(e, 0x30), x87_m32(p2)));
+    let r = result.addr();
+    e.mem.set_u32(r, r0);
+    e.mem.set_u32(r + 4, r1);
+    e.mem.set_u32(r + 8, r2);
+}
+
+// Translated from 00a2b130 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`cdecl`, (time, key, next key (not read), result)): the TCB
+/// position keys' second derivative: `2 A + 6 t B`, each step stored as a `float`.
+pub fn fn_00a2b130(e: &mut Engine, time: f32, key: Ptr, _unused_2: u32, result: Ptr) {
+    let k = key.addr();
+    let ld = |e: &Engine, at: u32| x87_load32(e.mem.u32(k + at));
+    let md = |e: &Engine, at: u32| x87_m32(e.mem.u32(k + at));
+    let st = x87_store32;
+    let six = f64::from_bits(e.mem.u64(SIX_DOUBLE));
+    let t6 = x87_load32(st(x87_mul(x87_load32(time.to_bits()), six)));
+    let b0 = st(x87_mul(ld(e, 0x40), t6));
+    let b1 = st(x87_mul(ld(e, 0x44), t6));
+    let b2 = st(x87_mul(t6, md(e, 0x48)));
+    let two = x87_load64(e.mem.u64(TWO_DOUBLE));
+    let a0 = st(x87_mul(ld(e, 0x34), two));
+    let a1 = st(x87_mul(ld(e, 0x38), two));
+    let a2 = st(x87_mul(two, md(e, 0x3c)));
+    let r = result.addr();
+    e.mem.set_u32(r, st(x87_add(x87_load32(a0), x87_m32(b0))));
+    e.mem
+        .set_u32(r + 4, st(x87_add(x87_load32(b1), x87_m32(a1))));
+    e.mem
+        .set_u32(r + 8, st(x87_add(x87_load32(a2), x87_m32(b2))));
+}
+
+// Translated from 00a2b6d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`cdecl`, (keys, count); the TCB position keys' curve
+/// function): the largest `|d1 x d2| / |d1|^2` (the cross product's length from `_CIsqrt`,
+/// over the squared length of the first derivative) of every span between neighbouring
+/// keys at the parameters `i * step` (`011f3658`) for `i` from 0 to the step count
+/// (`011a7ed4`, re-read after each step), starting from 0. With one key it answers 0; with
+/// none the count less one wraps and it runs on (as in the exe).
+pub fn fn_00a2b6d0(e: &mut Engine, keys: Ptr, count: u32) -> f32 {
+    let st = x87_store32;
+    let mut max = st(0.0);
+    let mut remaining = count.wrapping_sub(1);
+    if remaining == 0 {
+        return f32::from_bits(max);
+    }
+    let mut key = keys.addr();
+    let mut steps = e.mem.u32(CURVE_STEPS) as i32;
+    e.with_stack(0x18, |e, local| {
+        let first = local.addr();
+        let second = first + 0xc;
+        loop {
+            let next = key.wrapping_add(0x4c);
+            let mut step = 0i32;
+            if steps >= 0 {
+                loop {
+                    let scale = e.mem.u32(CURVE_STEP);
+                    let u = st(x87_mul(f64::from(step), x87_m32(scale)));
+                    let u = f32::from_bits(x87_quiet_bits(u));
+                    fn_00a2b050(e, u, Ptr::new(key), next, Ptr::new(first));
+                    fn_00a2b130(e, u, Ptr::new(key), next, Ptr::new(second));
+                    let ld = |e: &Engine, at: u32| x87_load32(e.mem.u32(at));
+                    let (p0, p1, p2) = (ld(e, first), ld(e, first + 4), ld(e, first + 8));
+                    let (q0, q1, q2) = (ld(e, second), ld(e, second + 4), ld(e, second + 8));
+                    let c0 = st(x87_sub(x87_mul(p1, q2), x87_mul(p2, q1)));
+                    let c1 = st(x87_sub(x87_mul(p2, q0), x87_mul(q2, p0)));
+                    let c2 = st(x87_sub(x87_mul(q1, p0), x87_mul(q0, p1)));
+                    let (c0, c1, c2) = (x87_load32(c0), x87_load32(c1), x87_load32(c2));
+                    let cross = x87_add(x87_mul(c0, c0), x87_mul(c1, c1));
+                    let cross = st(x87_add(x87_mul(c2, c2), cross));
+                    let root = e.call(SQRT, &args![x87_load32(cross)]).f64();
+                    let root = x87_load32(st(root));
+                    let length = x87_add(x87_mul(p0, p0), x87_mul(p1, p1));
+                    let length = st(x87_add(length, x87_mul(p2, p2)));
+                    let ratio = st(x87_div(root, x87_m32(length)));
+                    if x87_load32(max) < x87_load32(ratio) {
+                        max = x87_quiet_bits(ratio);
+                    }
+                    steps = e.mem.u32(CURVE_STEPS) as i32;
+                    step += 1;
+                    if step > steps {
+                        break;
+                    }
+                }
+            }
+            remaining = remaining.wrapping_sub(1);
+            key = next;
+            if remaining == 0 {
+                break;
+            }
+        }
+    });
+    f32::from_bits(max)
+}
+
+// Translated from 00a2b850 (PC disassembly, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (a function Ghidra did not create; `cdecl`, (time, &keys,
+/// &count)): the TCB position keys' insert function ([`insert_key`], 0x4c-byte keys), the
+/// new key's position from `00a276a0` on the old keys with type 3 and its tension,
+/// continuity and bias 0; after an insert the keys are filled again (`00a2b410`).
+pub fn fn_00a2b850(e: &mut Engine, time: f32, keys_at: Ptr, count_at: Ptr) -> bool {
+    if !insert_key(
+        e,
+        time,
+        keys_at,
+        count_at,
+        0x4c,
+        None,
+        24,
+        &mut |e, time, old, count, value| {
+            e.call(
+                POS_KEY_VALUE,
+                &args![value, time, old, 3u32, count, 0x4cu32],
+            );
+            let zero = x87_store32(0.0);
+            for word in 3..6 {
+                e.mem.set_u32(value + 4 * word, zero);
+            }
+        },
+    ) {
+        return false;
+    }
+    let keys = e.mem.u32(keys_at.addr());
+    let count = e.mem.u32(count_at.addr());
+    fn_00a2b410(e, Ptr::new(keys), count, 0x4c);
+    true
+}
+
+// Translated from 00a2ba10 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`cdecl`, (stream, TCB position key)): the time and position
+/// (`00a27450`), then the 4-byte tension (+0x10), continuity (+0x14) and bias (+0x18); the
+/// key argument's stack word is the byte-count word.
+pub fn fn_00a2ba10(e: &mut Engine, stream: Ptr, key: Ptr) {
+    e.call(POS_KEY_SAVE, &args![stream, key]);
+    e.with_stack(4, |e, count| {
+        for offset in [0x10u32, 0x14, 0x18] {
+            stream_write(e, stream, key.addr() + offset, 4, count.addr());
+        }
+    });
+}
+
+// Translated from 00a2bb60 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`cdecl`, (stream, keys, count)): the TCB position keys' save
+/// function: `00a2ba10` on each 0x4c-byte key.
+pub fn fn_00a2bb60(e: &mut Engine, stream: Ptr, keys: Ptr, count: u32) {
+    let mut key = keys.addr();
+    for _ in 0..count {
+        fn_00a2ba10(e, stream, Ptr::new(key));
+        key = key.wrapping_add(0x4c);
+    }
+}
+
+// Translated from 00a2bbf0 (PC disassembly, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (a function Ghidra did not create; `cdecl`, (destination,
+/// source)): the TCB rotation keys' copy function (0x40 bytes): the time, tension,
+/// continuity and bias (+0x14..+0x1c) through the x87 stack, the rest moved.
+pub fn fn_00a2bbf0(e: &mut Engine, dest: Ptr, source: Ptr) {
+    copy_key(e, dest, source, 0x40, &[0, 0x14, 0x18, 0x1c]);
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -966,6 +1809,40 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00a2bb90, fn_00a2bb90() -> u32),
         entry!(0x00a2aa50, fn_00a2aa50(u32, u32)),
         entry!(0x00a2baa0, fn_00a2baa0(u32, u32)),
+        entry!(
+            0x00a2_98f0,
+            fn_00a298f0(Ptr, f32, Ptr, u32, u32, u32) -> Ptr
+        ),
+        entry!(0x00a2_99c0, fn_00a299c0(Ptr, Ptr) -> u32),
+        entry!(0x00a2_9c20, fn_00a29c20(Ptr, Ptr) -> bool),
+        entry!(0x00a2_9cf0, fn_00a29cf0(Ptr, Ptr)),
+        entry!(0x00a2_9db0, fn_00a29db0(u32) -> u32),
+        entry!(0x00a2_9e40, fn_00a29e40(f32, Ptr, Ptr) -> bool),
+        entry!(0x00a2_9fe0, fn_00a29fe0(Ptr, Ptr)),
+        entry!(0x00a2_a0e0, fn_00a2a0e0(Ptr, Ptr, u32)),
+        entry!(0x00a2_a1a0, fn_00a2a1a0(Ptr, Ptr) -> u32),
+        entry!(0x00a2_a1b0, fn_00a2a1b0(u32) -> u32),
+        entry!(0x00a2_a320, fn_00a2a320(Ptr, u32) -> u32),
+        entry!(0x00a2_a390, fn_00a2a390(f32, Ptr, Ptr) -> bool),
+        entry!(0x00a2_a620, fn_00a2a620(f32, Ptr, Ptr) -> bool),
+        entry!(0x00a2_a7b0, fn_00a2a7b0(Ptr, Ptr)),
+        entry!(0x00a2_a7e0, fn_00a2a7e0(Ptr, Ptr) -> u32),
+        entry!(0x00a2_a890, fn_00a2a890(u32, Ptr, Ptr, Ptr)),
+        entry!(0x00a2_a940, fn_00a2a940(f32, Ptr, Ptr) -> bool),
+        entry!(0x00a2_ab10, fn_00a2ab10(Ptr, Ptr)),
+        entry!(0x00a2_ab40, fn_00a2ab40(u32) -> u32),
+        entry!(0x00a2_ac30, fn_00a2ac30(f32, Ptr, Ptr) -> bool),
+        entry!(0x00a2_ae10, fn_00a2ae10(Ptr, Ptr)),
+        entry!(0x00a2_ae90, fn_00a2ae90(Ptr, Ptr) -> u32),
+        entry!(0x00a2_af30, fn_00a2af30(u32) -> u32),
+        entry!(0x00a2_af70, fn_00a2af70(f32, Ptr, u32, Ptr)),
+        entry!(0x00a2_b050, fn_00a2b050(f32, Ptr, u32, Ptr)),
+        entry!(0x00a2_b130, fn_00a2b130(f32, Ptr, u32, Ptr)),
+        entry!(0x00a2_b6d0, fn_00a2b6d0(Ptr, u32) -> f32),
+        entry!(0x00a2_b850, fn_00a2b850(f32, Ptr, Ptr) -> bool),
+        entry!(0x00a2_ba10, fn_00a2ba10(Ptr, Ptr)),
+        entry!(0x00a2_bb60, fn_00a2bb60(Ptr, Ptr, u32)),
+        entry!(0x00a2_bbf0, fn_00a2bbf0(Ptr, Ptr)),
     ]
 }
 
@@ -1304,5 +2181,546 @@ mod key_function_tests {
             .map(|w| f32::from_bits(*w))
             .collect();
         assert_eq!(words, vec![0.5, 1.0, 1.5, 2.0]);
+    }
+}
+
+#[cfg(test)]
+mod n007_tests {
+    use super::*;
+
+    type Writes = std::rc::Rc<std::cell::RefCell<Vec<(u32, u32)>>>;
+
+    fn calls_to(e: &Engine, addr: u32) -> Vec<Vec<u32>> {
+        e.call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|c| c.0 == addr)
+            .map(|c| c.1.clone())
+            .collect()
+    }
+
+    fn floats(e: &Engine, at: u32, n: u32) -> Vec<f32> {
+        (0..n).map(|i| e.mem.f32(at + 4 * i)).collect()
+    }
+
+    fn put(e: &mut Engine, at: u32, values: &[f32]) {
+        for (i, v) in values.iter().enumerate() {
+            e.mem.set_f32(at + 4 * i as u32, *v);
+        }
+    }
+
+    /// An engine with the double constants, the key tables' page, a heap allocator, a
+    /// do-nothing array constructor and a call log.
+    fn engine() -> Engine {
+        let mut e = Engine::new();
+        for page in [
+            0x0101_1000,
+            0x0102_1000,
+            0x0103_4000,
+            0x011a_7000,
+            0x011f_3000,
+        ] {
+            e.map(page, 0x1000);
+        }
+        e.mem.set_f64(TWO_DOUBLE, 2.0);
+        e.mem.set_f64(THREE_DOUBLE, 3.0);
+        e.mem.set_f64(SIX_DOUBLE, 6.0);
+        e.register(MEMORY_ALLOCATE, |e, a| e.mem.alloc(a[1]).into_ret());
+        e.register(MEMORY_DEALLOCATE, |_, _| Ret::default());
+        e.register(VECTOR_CONSTRUCT, |_, _| Ret::default());
+        e.call_log = Some(vec![]);
+        e
+    }
+
+    /// A stream whose output records (source word, size) of every write and answers the size.
+    fn output_stream(e: &mut Engine) -> (u32, Writes) {
+        let stream = e.mem.alloc(0x300);
+        let output = e.mem.alloc(0x10);
+        e.mem.set_u32(stream + 0x250, output);
+        e.mem.set_u32(output + 0xc, 0x0340_0000);
+        let writes: Writes = std::rc::Rc::new(std::cell::RefCell::new(vec![]));
+        let log = writes.clone();
+        e.register_double(0x0340_0000, move |e, a| {
+            assert_eq!((e.mem.u32(a[3]), a[4]), (a[2], 1));
+            log.borrow_mut().push((e.mem.u32(a[1]), a[2]));
+            a[2].into_ret()
+        });
+        (stream, writes)
+    }
+
+    /// `00a3d5d0` answering `index` (or false).
+    fn insert_at(e: &mut Engine, index: u32, free: bool) {
+        e.register_double(INSERT_POSITION, move |e, a| {
+            e.mem.set_u32(a[3], index);
+            u32::from(free).into_ret()
+        });
+    }
+
+    #[test]
+    fn colour_value_at_a_time() {
+        let mut e = engine();
+        e.mem.write(COLOR_KEY_DEFAULT, &[0x11; 16]);
+        e.register(COLOR_KEY_GEN_INTERP, |_, a| a[0].into_ret());
+        let result = e.mem.alloc(0x10);
+        let keys = e.mem.alloc(0x28);
+        put(
+            &mut e,
+            keys,
+            &[1.0, 0.1, 0.2, 0.3, 0.4, 3.0, 0.5, 0.6, 0.7, 0.8],
+        );
+        let call = |e: &mut Engine, time: f32, count: u32| {
+            e.call(
+                0x00a2_98f0,
+                &args![result, time, keys, 2u32, count, 0x14u32],
+            )
+            .u32()
+        };
+        assert_eq!(call(&mut e, 2.0, 0), result);
+        assert_eq!(e.mem.u32(result), 0x1111_1111);
+        call(&mut e, 0.5, 2);
+        assert_eq!(floats(&e, result, 4), vec![0.1, 0.2, 0.3, 0.4]);
+        call(&mut e, 4.0, 2);
+        assert_eq!(floats(&e, result, 4), vec![0.5, 0.6, 0.7, 0.8]);
+        assert!(calls_to(&e, COLOR_KEY_GEN_INTERP).is_empty());
+        // Inside the keys (and at a NaN time): the interpolation from index 0.
+        call(&mut e, 2.0, 2);
+        call(&mut e, f32::NAN, 2);
+        let calls = calls_to(&e, COLOR_KEY_GEN_INTERP);
+        assert_eq!(calls.len(), 2);
+        assert_eq!(&calls[0][..5], &[result, 2.0f32.to_bits(), keys, 2, 2]);
+        assert_eq!(calls[0][6], 0x14);
+    }
+
+    #[test]
+    fn twenty_byte_keys_compare_time_then_four_floats() {
+        let mut e = engine();
+        e.register(TIMES_EQUAL, |e, a| {
+            u32::from(e.mem.u32(a[0]) == e.mem.u32(a[1])).into_ret()
+        });
+        e.register(FOUR_FLOATS_EQUAL, |_, _| 7u32.into_ret());
+        let (a, b) = (e.mem.alloc(0x14), e.mem.alloc(0x14));
+        assert_eq!(e.call(0x00a2_99c0, &args![a, b]).u32(), 7);
+        assert_eq!(calls_to(&e, FOUR_FLOATS_EQUAL), vec![vec![a + 4, b + 4]]);
+        e.mem.set_f32(b, 1.0);
+        assert_eq!(e.call(0x00a2_a1a0, &args![a, b]).u32(), 0);
+        assert_eq!(calls_to(&e, FOUR_FLOATS_EQUAL).len(), 1);
+    }
+
+    /// An Euler rotation key whose second axis has `count` keys of type 1, size byte `size`.
+    fn euler_key(e: &mut Engine, count: u32, size: u8, keys: u32) -> u32 {
+        let key = e.mem.alloc(0x48);
+        e.mem.set_u32(key + 0x18, count);
+        e.mem.set_u32(key + 0x24, 1);
+        e.mem.set_u8(key + 0x2d, size);
+        e.mem.set_u32(key + 0x34, keys);
+        key
+    }
+
+    #[test]
+    fn euler_keys_equal_by_lists_and_keys() {
+        let mut e = engine();
+        e.mem.set_u32(KEY_EQUAL + 4, 0x0350_0000);
+        e.register(0x0350_0000, |e, a| {
+            u32::from(e.mem.u32(a[0]) == e.mem.u32(a[1])).into_ret()
+        });
+        e.map(0x7000, 0x2000);
+        let first = euler_key(&mut e, 2, 8, 0x7000);
+        let second = euler_key(&mut e, 2, 8, 0x8000);
+        assert!(e.call(0x00a2_9c20, &args![first, second]).bool());
+        assert_eq!(
+            calls_to(&e, 0x0350_0000),
+            vec![vec![0x7000, 0x8000], vec![0x7008, 0x8008]]
+        );
+        e.mem.set_u32(0x8008, 1);
+        assert!(!e.call(0x00a2_9c20, &args![first, second]).bool());
+        e.mem.set_u8(second + 0x2d, 4);
+        assert!(!e.call(0x00a2_9c20, &args![first, second]).bool());
+        e.mem.set_u32(second + 0x14, 1);
+        assert!(!e.call(0x00a2_9c20, &args![first, second]).bool());
+    }
+
+    #[test]
+    fn euler_copy_makes_new_axis_arrays() {
+        let mut e = engine();
+        e.mem.set_u32(KEY_ARRAY + 4, 0x0360_0000);
+        e.register(0x0360_0000, |_, _| 0x9000u32.into_ret());
+        e.mem.set_u32(KEY_COPY + 4, 0x0361_0000);
+        e.register(0x0361_0000, |_, _| Ret::default());
+        let source = euler_key(&mut e, 2, 8, 0x7000);
+        let dest = e.mem.alloc(0x48);
+        e.mem.set_u8(dest + 0x2d, 4);
+        e.call(0x00a2_9cf0, &args![dest, source]);
+        assert_eq!(e.mem.u32(dest + 0x18), 2);
+        assert_eq!(e.mem.u32(dest + 0x24), 1);
+        assert_eq!(e.mem.u32(dest + 0x34), 0x9000);
+        assert_eq!(calls_to(&e, 0x0360_0000), vec![vec![2]]);
+        // The destination's own size byte steps its keys.
+        assert_eq!(
+            calls_to(&e, 0x0361_0000),
+            vec![vec![0x9000, 0x7000], vec![0x9004, 0x7008]]
+        );
+    }
+
+    #[test]
+    fn array_functions_count_and_construct() {
+        let mut e = engine();
+        let keys = e.call(0x00a2_9db0, &args![2u32]).u32();
+        assert_eq!(e.mem.u32(keys - 4), 2);
+        let k2 = e.call(0x00a2_a1b0, &args![3u32]).u32();
+        let k3 = e.call(0x00a2_ab40, &args![1u32]).u32();
+        let k4 = e.call(0x00a2_af30, &args![1u32]).u32();
+        assert_eq!(
+            calls_to(&e, VECTOR_CONSTRUCT),
+            vec![
+                vec![keys, 0x48, 2, 0x00a2_9a70],
+                vec![k2, 0x14, 3, COLOR_KEY_CONSTRUCT],
+                vec![k3, 0x14, 1, 0x00a2_bdb0],
+            ]
+        );
+        assert_eq!(e.mem.u32(k4 - 4), 1);
+        let sizes: Vec<u32> = calls_to(&e, MEMORY_ALLOCATE).iter().map(|c| c[1]).collect();
+        assert_eq!(sizes, vec![0x94, 0x40, 0x18, 0x50]);
+        // Overflow: all ones; a failed allocation: null.
+        e.register(MEMORY_ALLOCATE, |_, _| 0u32.into_ret());
+        assert_eq!(e.call(0x00a2_af30, &args![0x0400_0000u32]).u32(), 0);
+        assert_eq!(calls_to(&e, MEMORY_ALLOCATE).last().unwrap()[1], u32::MAX);
+    }
+
+    #[test]
+    fn euler_insert_makes_a_key_and_inserts_per_axis() {
+        let mut e = engine();
+        let keys_at = e.mem.alloc(4);
+        let count_at = e.mem.alloc(4);
+        // No key yet: one is made (its lists empty, so nothing is inserted).
+        assert!(!e
+            .call(0x00a2_9e40, &args![1.0f32, keys_at, count_at])
+            .bool());
+        let key = e.mem.u32(keys_at);
+        assert_eq!((e.mem.u32(count_at), e.mem.u32(key - 4)), (1, 1));
+        assert_eq!(
+            calls_to(&e, VECTOR_CONSTRUCT),
+            vec![vec![key, 0x48, 1, 0x00a2_9a70]]
+        );
+        assert_eq!(
+            calls_to(&e, MEMORY_ALLOCATE),
+            vec![vec![MEMORY_MANAGER, 0x4c]]
+        );
+        // The second axis has keys of type 1: its insert function grows them.
+        e.mem.set_u32(key + 0x18, 2);
+        e.mem.set_u32(key + 0x24, 1);
+        e.mem.set_u32(key + 0x34, 0x7000);
+        e.mem.set_u32(key + 0x40, 5);
+        e.mem.set_u32(FLOAT_KEY_INSERT + 4, 0x0370_0000);
+        e.register(0x0370_0000, |e, a| {
+            e.mem.set_u32(a[1], 0x7100);
+            e.mem.set_u32(a[2], 3);
+            1u32.into_ret()
+        });
+        assert!(e
+            .call(0x00a2_9e40, &args![1.5f32, keys_at, count_at])
+            .bool());
+        assert_eq!(calls_to(&e, 0x0370_0000)[0][0], 1.5f32.to_bits());
+        assert_eq!(
+            (
+                e.mem.u32(key + 0x18),
+                e.mem.u32(key + 0x34),
+                e.mem.u32(key + 0x40)
+            ),
+            (3, 0x7100, 0)
+        );
+    }
+
+    #[test]
+    fn euler_save_writes_counts_types_and_keys() {
+        let mut e = engine();
+        let (stream, writes) = output_stream(&mut e);
+        e.mem.set_u32(KEY_SAVE + 4, 0x0380_0000);
+        e.register(0x0380_0000, |_, _| Ret::default());
+        let keys = e.mem.alloc(0x90);
+        e.mem.set_u32(keys + 0x48 + 0x18, 2);
+        e.mem.set_u32(keys + 0x48 + 0x24, 1);
+        e.mem.set_u32(keys + 0x48 + 0x34, 0x7000);
+        e.call(0x00a2_a0e0, &args![stream, keys, 2u32]);
+        let words: Vec<u32> = writes.borrow().iter().map(|w| w.0).collect();
+        assert_eq!(words, vec![0, 0, 0, 0, 2, 1, 0]);
+        assert_eq!(calls_to(&e, 0x0380_0000), vec![vec![stream, 0x7000, 2]]);
+        assert_eq!(e.mem.u32(e.mem.u32(stream + 0x250) + 4), 28);
+    }
+
+    #[test]
+    fn colour_create_constructs_and_reads() {
+        let mut e = engine();
+        e.register(READ_KEY_00A29640, |_, _| Ret::default());
+        let stream = e.mem.alloc(0x300);
+        let keys = e.call(0x00a2_a320, &args![stream, 2u32]).u32();
+        assert_eq!(
+            calls_to(&e, VECTOR_CONSTRUCT),
+            vec![vec![keys, 0x14, 2, COLOR_KEY_CONSTRUCT]]
+        );
+        assert_eq!(
+            calls_to(&e, READ_KEY_00A29640),
+            vec![vec![keys, stream], vec![keys + 0x14, stream]]
+        );
+    }
+
+    #[test]
+    fn float_insert_grows_the_keys() {
+        let mut e = engine();
+        let old = e.mem.alloc(0x14) + 4;
+        put(&mut e, old, &[0.0, 1.0, 2.0, 3.0]);
+        let keys_at = e.mem.alloc(4);
+        let count_at = e.mem.alloc(4);
+        e.mem.set_u32(keys_at, old);
+        e.mem.set_u32(count_at, 2);
+        insert_at(&mut e, 1, true);
+        e.register(FLOAT_KEY_VALUE, |_, _| Ret {
+            st0: 2.0,
+            ..Ret::default()
+        });
+        assert!(e
+            .call(0x00a2_a620, &args![1.0f32, keys_at, count_at])
+            .bool());
+        let new = e.mem.u32(keys_at);
+        assert_eq!(e.mem.u32(count_at), 3);
+        assert_eq!(e.mem.u32(new - 4), 3);
+        assert_eq!(floats(&e, new, 6), vec![0.0, 1.0, 1.0, 2.0, 2.0, 3.0]);
+        assert_eq!(
+            calls_to(&e, INSERT_POSITION)[0][..3],
+            [1.0f32.to_bits(), old, 2]
+        );
+        assert_eq!(
+            calls_to(&e, FLOAT_KEY_VALUE),
+            vec![vec![1.0f32.to_bits(), old, 1, 2, 8]]
+        );
+        assert_eq!(
+            calls_to(&e, MEMORY_DEALLOCATE),
+            vec![vec![MEMORY_MANAGER, old - 4]]
+        );
+        // A key at that time already: nothing changes.
+        insert_at(&mut e, 0, false);
+        assert!(!e
+            .call(0x00a2_a620, &args![1.0f32, keys_at, count_at])
+            .bool());
+        assert_eq!(e.mem.u32(count_at), 3);
+    }
+
+    #[test]
+    fn colour_insert_takes_the_colour_at_the_time() {
+        let mut e = engine();
+        let old = e.mem.alloc(0x18) + 4;
+        put(&mut e, old, &[5.0, 0.1, 0.2, 0.3, 0.4]);
+        let keys_at = e.mem.alloc(4);
+        let count_at = e.mem.alloc(4);
+        e.mem.set_u32(keys_at, old);
+        e.mem.set_u32(count_at, 1);
+        insert_at(&mut e, 0, true);
+        assert!(e
+            .call(0x00a2_a390, &args![1.0f32, keys_at, count_at])
+            .bool());
+        let new = e.mem.u32(keys_at);
+        // Before the only key: its colour.
+        assert_eq!(
+            floats(&e, new, 10),
+            vec![1.0, 0.1, 0.2, 0.3, 0.4, 5.0, 0.1, 0.2, 0.3, 0.4]
+        );
+        assert_eq!(
+            calls_to(&e, VECTOR_CONSTRUCT),
+            vec![vec![new, 0x14, 2, COLOR_KEY_CONSTRUCT]]
+        );
+    }
+
+    #[test]
+    fn position_rotation_and_tcb_inserts() {
+        let mut e = engine();
+        e.register(POS_KEY_VALUE, |e, a| {
+            for i in 0..3 {
+                e.mem.set_f32(a[0] + 4 * i, 7.0 + i as f32);
+            }
+            a[0].into_ret()
+        });
+        e.register(ROT_KEY_VALUE, |e, a| {
+            for i in 0..4 {
+                e.mem.set_f32(a[0] + 4 * i, 0.5);
+            }
+            a[0].into_ret()
+        });
+        e.register(ROT_KEYS_AFTER_INSERT, |_, _| Ret::default());
+        insert_at(&mut e, 0, true);
+        let keys_at = e.mem.alloc(4);
+        let count_at = e.mem.alloc(4);
+        assert!(e
+            .call(0x00a2_a940, &args![2.0f32, keys_at, count_at])
+            .bool());
+        let new = e.mem.u32(keys_at);
+        assert_eq!(floats(&e, new, 4), vec![2.0, 7.0, 8.0, 9.0]);
+        assert_eq!(calls_to(&e, POS_KEY_VALUE)[0][2..], [0, 1, 0, 0x10]);
+        // No old keys: nothing given back.
+        assert!(calls_to(&e, MEMORY_DEALLOCATE).is_empty());
+
+        let keys_at = e.mem.alloc(4);
+        let count_at = e.mem.alloc(4);
+        assert!(e
+            .call(0x00a2_ac30, &args![3.0f32, keys_at, count_at])
+            .bool());
+        let new = e.mem.u32(keys_at);
+        assert_eq!(floats(&e, new, 5), vec![3.0, 0.5, 0.5, 0.5, 0.5]);
+        assert_eq!(
+            calls_to(&e, ROT_KEYS_AFTER_INSERT),
+            vec![vec![new, 1, 0x14]]
+        );
+
+        let keys_at = e.mem.alloc(4);
+        let count_at = e.mem.alloc(4);
+        assert!(e
+            .call(0x00a2_b850, &args![4.0f32, keys_at, count_at])
+            .bool());
+        let new = e.mem.u32(keys_at);
+        assert_eq!(floats(&e, new, 7), vec![4.0, 7.0, 8.0, 9.0, 0.0, 0.0, 0.0]);
+        assert_eq!(calls_to(&e, POS_KEY_VALUE)[1][3..], [3, 0, 0x4c]);
+        insert_at(&mut e, 0, false);
+        assert!(!e
+            .call(0x00a2_b850, &args![4.0f32, keys_at, count_at])
+            .bool());
+    }
+
+    #[test]
+    fn copy_functions_quiet_the_floats_they_load() {
+        let mut e = engine();
+        let signalling = 0x7f80_0001u32;
+        let source = e.mem.alloc(0x4c);
+        for i in 0..0x13 {
+            e.mem.set_u32(source + 4 * i, signalling);
+        }
+        let check = |e: &mut Engine, addr: u32, size: u32, floats: &[u32]| {
+            let dest = e.mem.alloc(0x50);
+            e.call(addr, &args![dest, source]);
+            for offset in (0..size).step_by(4) {
+                let expected = if floats.contains(&offset) {
+                    0x7fc0_0001
+                } else {
+                    signalling
+                };
+                assert_eq!(e.mem.u32(dest + offset), expected, "{addr:x} {offset:#x}");
+            }
+            assert_eq!(e.mem.u32(dest + size), 0);
+        };
+        check(&mut e, 0x00a2_a7b0, 0x10, &[0]);
+        check(&mut e, 0x00a2_ab10, 0x14, &[0]);
+        check(&mut e, 0x00a2_ae10, 0x4c, &[0, 0x10, 0x14, 0x18]);
+        check(&mut e, 0x00a2_bbf0, 0x40, &[0, 0x14, 0x18, 0x1c]);
+    }
+
+    #[test]
+    fn position_equal_jump_and_first_derivative() {
+        let mut e = engine();
+        e.register(POS_KEYS_EQUAL, |_, _| 0x105u32.into_ret());
+        assert_eq!(e.call(0x00a2_a7e0, &args![1u32, 2u32]).u32(), 0x105);
+        assert_eq!(calls_to(&e, POS_KEYS_EQUAL), vec![vec![1, 2]]);
+        let first = e.mem.alloc(0x10);
+        let second = e.mem.alloc(0x10);
+        put(&mut e, first + 4, &[1.0, 2.0, 3.0]);
+        put(&mut e, second + 4, &[4.0, 4.0, 1.0]);
+        let result = e.mem.alloc(0xc);
+        e.call(0x00a2_a890, &args![0u32, first, second, result]);
+        assert_eq!(floats(&e, result, 3), vec![3.0, 2.0, -2.0]);
+    }
+
+    #[test]
+    fn tcb_equal_checks_parameters_and_tangents() {
+        let mut e = engine();
+        e.register(POS_KEYS_EQUAL, |e, a| {
+            u32::from(e.mem.u32(a[0] + 4) == e.mem.u32(a[1] + 4)).into_ret()
+        });
+        e.register(THREE_FLOATS_EQUAL, |_, _| 1u32.into_ret());
+        let (a, b) = (e.mem.alloc(0x4c), e.mem.alloc(0x4c));
+        assert_eq!(e.call(0x00a2_ae90, &args![a, b]).u32(), 1);
+        assert_eq!(
+            calls_to(&e, THREE_FLOATS_EQUAL),
+            vec![
+                vec![a + 0x1c, b + 0x1c],
+                vec![a + 0x28, b + 0x28],
+                vec![a + 0x34, b + 0x34],
+                vec![a + 0x40, b + 0x40]
+            ]
+        );
+        // NaN bias: unequal.
+        e.mem.set_f32(a + 0x18, f32::NAN);
+        e.mem.set_f32(b + 0x18, f32::NAN);
+        assert_eq!(e.call(0x00a2_ae90, &args![a, b]).u32(), 0);
+        e.mem.set_u32(a + 4, 1);
+        assert_eq!(e.call(0x00a2_ae90, &args![a, b]).u32(), 0);
+        e.register(THREE_FLOATS_EQUAL, |_, _| 0x100u32.into_ret());
+        e.mem.set_u32(a + 4, 0);
+        e.mem.set_u32(a + 0x18, 0);
+        e.mem.set_u32(b + 0x18, 0);
+        assert_eq!(e.call(0x00a2_ae90, &args![a, b]).u32(), 0);
+    }
+
+    /// A TCB key: position (1, 2, 3), outgoing tangent (1, 0, 0), A (0, 1, 0), B (0, 0, 1).
+    fn tcb_key(e: &mut Engine) -> u32 {
+        let key = e.mem.alloc(0x4c);
+        put(e, key + 4, &[1.0, 2.0, 3.0]);
+        put(
+            e,
+            key + 0x28,
+            &[1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0],
+        );
+        key
+    }
+
+    #[test]
+    fn tcb_cubic_and_its_derivatives() {
+        let mut e = engine();
+        let key = tcb_key(&mut e);
+        let result = e.mem.alloc(0xc);
+        // position + t out + t^2 A + t^3 B at t = 2.
+        e.call(0x00a2_af70, &args![2.0f32, key, 0u32, result]);
+        assert_eq!(floats(&e, result, 3), vec![3.0, 6.0, 11.0]);
+        // out + 2 t A + 3 t^2 B.
+        e.call(0x00a2_b050, &args![2.0f32, key, 0u32, result]);
+        assert_eq!(floats(&e, result, 3), vec![1.0, 4.0, 12.0]);
+        // 2 A + 6 t B.
+        e.call(0x00a2_b130, &args![2.0f32, key, 0u32, result]);
+        assert_eq!(floats(&e, result, 3), vec![0.0, 2.0, 12.0]);
+    }
+
+    #[test]
+    fn tcb_curve_measure_is_the_largest_ratio() {
+        let mut e = engine();
+        e.register(SQRT, |_, a| Ret {
+            st0: f64::take(a, &mut 0).sqrt(),
+            ..Ret::default()
+        });
+        let keys = e.mem.alloc(0x4c * 2);
+        put(&mut e, keys + 0x28, &[1.0, 0.0, 0.0, 0.0, 1.0, 0.0]);
+        e.mem.set_u32(CURVE_STEPS, 1);
+        e.mem.set_f32(CURVE_STEP, 1.0);
+        // u = 0: d1 (1, 0, 0), d2 (0, 2, 0): 2 / 1; u = 1: d1 (1, 2, 0): 2 / 5.
+        assert_eq!(e.call(0x00a2_b6d0, &args![keys, 2u32]).f32(), 2.0);
+        assert_eq!(calls_to(&e, SQRT).len(), 2);
+        // One key, or no steps: 0.
+        assert_eq!(e.call(0x00a2_b6d0, &args![keys, 1u32]).f32(), 0.0);
+        e.mem.set_u32(CURVE_STEPS, u32::MAX);
+        assert_eq!(e.call(0x00a2_b6d0, &args![keys, 2u32]).f32(), 0.0);
+        assert_eq!(calls_to(&e, SQRT).len(), 2);
+    }
+
+    #[test]
+    fn tcb_save_writes_the_parameters() {
+        let mut e = engine();
+        let (stream, writes) = output_stream(&mut e);
+        e.register(POS_KEY_SAVE, |_, _| Ret::default());
+        let keys = e.mem.alloc(0x98);
+        for (i, at) in [0x10u32, 0x14, 0x18, 0x5c, 0x60, 0x64].iter().enumerate() {
+            e.mem.set_u32(keys + at, i as u32 + 1);
+        }
+        e.call(0x00a2_bb60, &args![stream, keys, 2u32]);
+        assert_eq!(
+            calls_to(&e, POS_KEY_SAVE),
+            vec![vec![stream, keys], vec![stream, keys + 0x4c]]
+        );
+        let words: Vec<u32> = writes.borrow().iter().map(|w| w.0).collect();
+        assert_eq!(words, vec![1, 2, 3, 4, 5, 6]);
     }
 }

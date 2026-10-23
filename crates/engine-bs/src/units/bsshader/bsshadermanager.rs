@@ -293,7 +293,8 @@ pub fn fn_00b57420(e: &mut Engine) {
     }
     e.set_global(GLOBAL_011FFE2C, 0u32);
     e.set_global(GLOBAL_011FFE30, 0u32);
-    e.call(0x00ba_3720, &args![]);
+    // ECX at 00b57750 is the rendering system 01200088 (MOV ECX at 00b576d1), CreateThreads's `this`.
+    e.call(0x00ba_3720, &args![0x0120_0088u32]);
     e.call(0x00b9_7c10, &args![]);
     let copied = e.global::<u32>(GLOBAL_011F94F0);
     let count = e.global::<u32>(ACCUMULATOR_COUNT_011F916C);
@@ -2788,6 +2789,1020 @@ fn add_to(e: &mut Engine, at: u32, value: f64, mode: Addition) {
     e.mem.set_u32(at, store(sum));
 }
 
+/// `NiFile::GetFile` (`00aa1a20`, `cdecl`, three words), which `00b4f2e0` jumps to.
+const NI_FILE_GET_FILE: u32 = 0x00aa_1a20;
+/// The end of the shader table (`011f95d4`, one past index 0x22).
+const SHADER_TABLE_END_011F95D4: u32 = 0x011f_95d4;
+/// The two counters `00b540d0` lowers (`011ffa10`, `011ffa0c`) and the call it then makes
+/// (`00b984f0`, `cdecl`, two words).
+const COUNTER_011FFA10: u32 = 0x011f_fa10;
+const COUNTER_011FFA0C: u32 = 0x011f_fa0c;
+const FUNCTION_00B984F0: u32 = 0x00b9_84f0;
+/// The run-time type record `00b557d0` looks for in each shader's chain (`0126f554`, the one
+/// `00b8bd90` answers).
+const RTTI_0126F554: u32 = 0x0126_f554;
+/// The `ImageSpaceManager` method `00b8b3b0` (`thiscall`, no words) `00b557d0` ends with.
+const IMAGE_SPACE_MANAGER_00B8B3B0: u32 = 0x00b8_b3b0;
+/// The calls `00b578a0` makes on a reset (all without stack words): three set-ups, the
+/// destructors of the objects at `011f91ac` (`00b97690`) and `011f91a8` (`00b6f0b0`), their
+/// constructors (`00b97a80` for 0x31c bytes, `00b6dd80` for 0xb0 bytes) and `00b6e450`
+/// (`thiscall` on the object at `011f91a8`, one word).
+const RESET_00BA50D0: u32 = 0x00ba_50d0;
+const RESET_00BC0940: u32 = 0x00bc_0940;
+const RESET_00BC4610: u32 = 0x00bc_4610;
+const DESTRUCTOR_00B97690: u32 = 0x00b9_7690;
+const DESTRUCTOR_00B6F0B0: u32 = 0x00b6_f0b0;
+const CONSTRUCTOR_00B97A80: u32 = 0x00b9_7a80;
+const CONSTRUCTOR_00B6DD80: u32 = 0x00b6_dd80;
+const METHOD_00B6E450: u32 = 0x00b6_e450;
+/// The word `00b578a0` clears (`011f91e0`).
+const GLOBAL_011F91E0: u32 = 0x011f_91e0;
+/// The virtual slots (byte offsets) `SetEmittanceRecurse` and `RecursiveSetForcedDarkness`
+/// call: `IsGeometry` (+0x18) and `IsNode` (+0xc), as in `bsshaderproperty.rs`.
+const SLOT_IS_GEOMETRY: u32 = 0x18;
+const SLOT_IS_NODE: u32 = 0x0c;
+/// `GetProperty` types: the material property (2) and the shader property (3).
+const MATERIAL_PROPERTY_TYPE: u32 = 2;
+const SHADER_PROPERTY_TYPE: u32 = 3;
+/// The format the pass-name default prints the pass with (`010a9488`), the `sprintf_s` it
+/// uses (`00406d00`, `cdecl`: buffer, size, format, value) and the string it answers then
+/// (`010a93f4`).
+const PASS_NAME_FORMAT_010A9488: u32 = 0x010a_9488;
+const SPRINTF_S_00406D00: u32 = 0x0040_6d00;
+const PASS_NAME_UNKNOWN_010A93F4: u32 = 0x010a_93f4;
+
+// Translated from 00b4f2e0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed (Ghidra made no function here; the engine map's gap list puts it in this unit,
+/// stored as a function pointer by `00b54280`): `JMP 00aa1a20`, so the three `cdecl` words
+/// go unchanged to `NiFile::GetFile` and its file object comes back.
+pub fn fn_00b4f2e0(e: &mut Engine, name: u32, mode: u32, buffer_size: u32) -> u32 {
+    e.call(NI_FILE_GET_FILE, &args![name, mode, buffer_size])
+        .u32()
+}
+
+// Translated from 00b4f9a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map, no arguments: calls slot +0x124 of each non-null shader in
+/// the shader table (`011f9548` up to `011f95d4`).
+pub fn fn_00b4f9a0(e: &mut Engine) {
+    let mut slot = SHADER_TABLE_011F9548;
+    while slot < SHADER_TABLE_END_011F95D4 {
+        let shader = e.mem.u32(slot);
+        if shader != 0 {
+            e.vcall(shader, 0x124, &args![]);
+        }
+        slot = slot.wrapping_add(4);
+    }
+}
+
+// Translated from 00b4f9d0 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 00b4f9d0 - the /GS stack cookie check (00ec408c) is not translated
+/// `BSShaderManager::GetPassName` (engine map; the body matches): `cdecl`, one word, the
+/// pass enum. Passes 1 to 0x2f5 index the switch's jump table at `00b5342c` (read in
+/// Ghidra); each arm answers its name string (the match below: the addresses the arms'
+/// `MOV EAX` immediates load). The table's arms at `00b53403` (passes 0x158, 0x159, 0x179
+/// to 0x17e, 0x237 and 0x257 to 0x25b) and every other pass print the pass into a 12-byte
+/// local buffer (`00406d00` with the buffer, 10, the format `"??? %d"` at `010a9488` and the pass) and
+/// answer the string `"???"` at `010a93f4`, not the buffer.
+pub fn bs_shader_manager_get_pass_name(e: &mut Engine, pass: u32) -> u32 {
+    let name = match pass {
+        0x001 => 0x010a_d6c8,
+        0x002 => 0x010a_d6b8,
+        0x003 => 0x010a_d6a8,
+        0x004 => 0x010a_d690,
+        0x005 => 0x010a_d678,
+        0x006 => 0x010a_d668,
+        0x007 => 0x010a_d654,
+        0x008 => 0x010a_d640,
+        0x009 => 0x010a_d628,
+        0x00a => 0x010a_afc4,
+        0x00b => 0x010a_afb4,
+        0x00c => 0x010a_afa4,
+        0x00d => 0x010a_af90,
+        0x00e => 0x010a_af78,
+        0x00f => 0x010a_af5c,
+        0x010 => 0x010a_d618,
+        0x011 => 0x010a_d604,
+        0x012 => 0x010a_d5f4,
+        0x013 => 0x010a_d5e0,
+        0x014 => 0x010a_95e0,
+        0x015 => 0x010a_95c4,
+        0x016 => 0x010a_d13c,
+        0x017 => 0x010a_d11c,
+        0x018 => 0x010a_d0fc,
+        0x019 => 0x010a_d0dc,
+        0x01a => 0x010a_d0bc,
+        0x01b => 0x010a_d09c,
+        0x01c => 0x010a_d07c,
+        0x01d => 0x010a_d05c,
+        0x01e => 0x010a_d038,
+        0x01f => 0x010a_d014,
+        0x020 => 0x010a_cff0,
+        0x021 => 0x010a_cfcc,
+        0x022 => 0x010a_cfa8,
+        0x023 => 0x010a_cf84,
+        0x024 => 0x010a_cf60,
+        0x025 => 0x010a_cf3c,
+        0x026 => 0x010a_cf1c,
+        0x027 => 0x010a_cefc,
+        0x028 => 0x010a_cedc,
+        0x029 => 0x010a_ceb8,
+        0x02a => 0x010a_ce98,
+        0x02b => 0x010a_ce78,
+        0x02c => 0x010a_ce58,
+        0x02d => 0x010a_ce38,
+        0x02e => 0x010a_ce18,
+        0x02f => 0x010a_cdf8,
+        0x030 => 0x010a_cdd8,
+        0x031 => 0x010a_cdb8,
+        0x032 => 0x010a_cd98,
+        0x033 => 0x010a_cd78,
+        0x034 => 0x010a_cd54,
+        0x035 => 0x010a_cd30,
+        0x036 => 0x010a_cd0c,
+        0x037 => 0x010a_cce8,
+        0x038 => 0x010a_ccc4,
+        0x039 => 0x010a_cca0,
+        0x03a => 0x010a_cc80,
+        0x03b => 0x010a_cc60,
+        0x03c => 0x010a_cc40,
+        0x03d => 0x010a_cc20,
+        0x03e => 0x010a_cc10,
+        0x03f => 0x010a_cbfc,
+        0x040 => 0x010a_cbf0,
+        0x041 => 0x010a_cbd8,
+        0x042 => 0x010a_cbc8,
+        0x043 => 0x010a_cbb4,
+        0x044 => 0x010a_cb9c,
+        0x045 => 0x010a_cb88,
+        0x046 => 0x010a_cb04,
+        0x047 => 0x010a_caec,
+        0x048 => 0x010a_cad4,
+        0x049 => 0x010a_cabc,
+        0x04a => 0x010a_cb70,
+        0x04b => 0x010a_cb54,
+        0x04c => 0x010a_cb34,
+        0x04d => 0x010a_cb18,
+        0x04e => 0x010a_caa0,
+        0x04f => 0x010a_ca80,
+        0x050 => 0x010a_ca60,
+        0x051 => 0x010a_ca40,
+        0x052 => 0x010a_ca28,
+        0x053 => 0x010a_ca04,
+        0x054 => 0x010a_c9e0,
+        0x055 => 0x010a_c9ac,
+        0x056 => 0x010a_c990,
+        0x057 => 0x010a_c96c,
+        0x058 => 0x010a_c95c,
+        0x059 => 0x010a_c94c,
+        0x05a => 0x010a_c93c,
+        0x05b => 0x010a_c928,
+        0x05c => 0x010a_c918,
+        0x05d => 0x010a_c908,
+        0x05e => 0x010a_c8f4,
+        0x05f => 0x010a_c8e0,
+        0x060 => 0x010a_c8d0,
+        0x061 => 0x010a_c8c0,
+        0x062 => 0x010a_c8b0,
+        0x063 => 0x010a_c89c,
+        0x064 => 0x010a_c88c,
+        0x065 => 0x010a_c878,
+        0x066 => 0x010a_c83c,
+        0x067 => 0x010a_c828,
+        0x068 => 0x010a_c7e8,
+        0x069 => 0x010a_c7d4,
+        0x06a => 0x010a_c7c0,
+        0x06b => 0x010a_c780,
+        0x06c => 0x010a_c768,
+        0x06d => 0x010a_c754,
+        0x06e => 0x010a_c6fc,
+        0x06f => 0x010a_c6d0,
+        0x070 => 0x010a_c6bc,
+        0x071 => 0x010a_c67c,
+        0x072 => 0x010a_c664,
+        0x073 => 0x010a_c624,
+        0x074 => 0x010a_c5f8,
+        0x075 => 0x010a_c5e0,
+        0x076 => 0x010a_c5a0,
+        0x077 => 0x010a_c588,
+        0x078 => 0x010a_c570,
+        0x079 => 0x010a_c528,
+        0x07a => 0x010a_c4fc,
+        0x07b => 0x010a_c4e8,
+        0x07c => 0x010a_c4d0,
+        0x07d => 0x010a_c4b8,
+        0x07e => 0x010a_c4a0,
+        0x07f => 0x010a_c864,
+        0x080 => 0x010a_c850,
+        0x081 => 0x010a_c814,
+        0x082 => 0x010a_c7fc,
+        0x083 => 0x010a_c7ac,
+        0x084 => 0x010a_c794,
+        0x085 => 0x010a_c740,
+        0x086 => 0x010a_c72c,
+        0x087 => 0x010a_c714,
+        0x088 => 0x010a_c6e4,
+        0x089 => 0x010a_c6a8,
+        0x08a => 0x010a_c690,
+        0x08b => 0x010a_c650,
+        0x08c => 0x010a_c638,
+        0x08d => 0x010a_c5cc,
+        0x08e => 0x010a_c5b4,
+        0x08f => 0x010a_c60c,
+        0x090 => 0x010a_c558,
+        0x091 => 0x010a_c540,
+        0x092 => 0x010a_c510,
+        0x093 => 0x010a_c494,
+        0x094 => 0x010a_b540,
+        0x095 => 0x010a_bfa0,
+        0x096 => 0x010a_bf94,
+        0x097 => 0x010a_bf88,
+        0x098 => 0x010a_bf78,
+        0x099 => 0x010a_bf68,
+        0x09a => 0x010a_bf58,
+        0x09b => 0x010a_bf4c,
+        0x09c => 0x010a_bf3c,
+        0x09d => 0x010a_bf2c,
+        0x09e => 0x010a_bf1c,
+        0x09f => 0x010a_bf0c,
+        0x0a0 => 0x010a_befc,
+        0x0a1 => 0x010a_beec,
+        0x0a2 => 0x010a_bedc,
+        0x0a3 => 0x010a_becc,
+        0x0a4 => 0x010a_bebc,
+        0x0a5 => 0x010a_bea8,
+        0x0a6 => 0x010a_be98,
+        0x0a7 => 0x010a_be88,
+        0x0a8 => 0x010a_be78,
+        0x0a9 => 0x010a_be64,
+        0x0aa => 0x010a_be54,
+        0x0ab => 0x010a_be48,
+        0x0ac => 0x010a_be38,
+        0x0ad => 0x010a_be28,
+        0x0ae => 0x010a_be18,
+        0x0af => 0x010a_be08,
+        0x0b0 => 0x010a_bdf8,
+        0x0b1 => 0x010a_bde8,
+        0x0b2 => 0x010a_bdd8,
+        0x0b3 => 0x010a_bdc8,
+        0x0b4 => 0x010a_bdb8,
+        0x0b5 => 0x010a_bda8,
+        0x0b6 => 0x010a_bd98,
+        0x0b7 => 0x010a_bd88,
+        0x0b8 => 0x010a_bd78,
+        0x0b9 => 0x010a_bd64,
+        0x0ba => 0x010a_bd50,
+        0x0bb => 0x010a_bd3c,
+        0x0bc => 0x010a_bd2c,
+        0x0bd => 0x010a_bd18,
+        0x0be => 0x010a_bd04,
+        0x0bf => 0x010a_bcf0,
+        0x0c0 => 0x010a_bcdc,
+        0x0c1 => 0x010a_bcc8,
+        0x0c2 => 0x010a_bcb4,
+        0x0c3 => 0x010a_bca8,
+        0x0c4 => 0x010a_bc98,
+        0x0c5 => 0x010a_bc88,
+        0x0c6 => 0x010a_bc78,
+        0x0c7 => 0x010a_bc68,
+        0x0c8 => 0x010a_bc58,
+        0x0c9 => 0x010a_bc4c,
+        0x0ca => 0x010a_bc3c,
+        0x0cb => 0x010a_bc30,
+        0x0cc => 0x010a_bc20,
+        0x0cd => 0x010a_bc14,
+        0x0ce => 0x010a_bc04,
+        0x0cf => 0x010a_bbf4,
+        0x0d0 => 0x010a_bbe8,
+        0x0d1 => 0x010a_bbd8,
+        0x0d2 => 0x010a_bbc8,
+        0x0d3 => 0x010a_bbb8,
+        0x0d4 => 0x010a_bba8,
+        0x0d5 => 0x010a_bb98,
+        0x0d6 => 0x010a_bb88,
+        0x0d7 => 0x010a_c488,
+        0x0d8 => 0x010a_c47c,
+        0x0d9 => 0x010a_c470,
+        0x0da => 0x010a_c460,
+        0x0db => 0x010a_c454,
+        0x0dc => 0x010a_c448,
+        0x0dd => 0x010a_c43c,
+        0x0de => 0x010a_c42c,
+        0x0df => 0x010a_c420,
+        0x0e0 => 0x010a_c410,
+        0x0e1 => 0x010a_c400,
+        0x0e2 => 0x010a_c3f0,
+        0x0e3 => 0x010a_c3e0,
+        0x0e4 => 0x010a_c3d0,
+        0x0e5 => 0x010a_c3c0,
+        0x0e6 => 0x010a_c3b0,
+        0x0e7 => 0x010a_c3a0,
+        0x0e8 => 0x010a_c390,
+        0x0e9 => 0x010a_c384,
+        0x0ea => 0x010a_c378,
+        0x0eb => 0x010a_c36c,
+        0x0ec => 0x010a_c35c,
+        0x0ed => 0x010a_c350,
+        0x0ee => 0x010a_c344,
+        0x0ef => 0x010a_c338,
+        0x0f0 => 0x010a_c328,
+        0x0f1 => 0x010a_c31c,
+        0x0f2 => 0x010a_c30c,
+        0x0f3 => 0x010a_c2fc,
+        0x0f4 => 0x010a_c2ec,
+        0x0f5 => 0x010a_c2dc,
+        0x0f6 => 0x010a_c2cc,
+        0x0f7 => 0x010a_c2bc,
+        0x0f8 => 0x010a_c2ac,
+        0x0f9 => 0x010a_c29c,
+        0x0fa => 0x010a_c28c,
+        0x0fb => 0x010a_c280,
+        0x0fc => 0x010a_c270,
+        0x0fd => 0x010a_c260,
+        0x0fe => 0x010a_c254,
+        0x0ff => 0x010a_c248,
+        0x100 => 0x010a_c23c,
+        0x101 => 0x010a_c230,
+        0x102 => 0x010a_c220,
+        0x103 => 0x010a_c210,
+        0x104 => 0x010a_c204,
+        0x105 => 0x010a_c1f8,
+        0x106 => 0x010a_c1ec,
+        0x107 => 0x010a_c1dc,
+        0x108 => 0x010a_c1d0,
+        0x109 => 0x010a_c1c4,
+        0x10a => 0x010a_c1b4,
+        0x10b => 0x010a_c1a4,
+        0x10c => 0x010a_c194,
+        0x10d => 0x010a_c184,
+        0x10e => 0x010a_c174,
+        0x10f => 0x010a_c164,
+        0x110 => 0x010a_c154,
+        0x111 => 0x010a_c144,
+        0x112 => 0x010a_c134,
+        0x113 => 0x010a_c124,
+        0x114 => 0x010a_c114,
+        0x115 => 0x010a_c104,
+        0x116 => 0x010a_c0f8,
+        0x117 => 0x010a_c0ec,
+        0x118 => 0x010a_c0dc,
+        0x119 => 0x010a_c0cc,
+        0x11a => 0x010a_c0bc,
+        0x11b => 0x010a_c0b0,
+        0x11c => 0x010a_c0a4,
+        0x11d => 0x010a_c094,
+        0x11e => 0x010a_c084,
+        0x11f => 0x010a_c074,
+        0x120 => 0x010a_c064,
+        0x121 => 0x010a_c054,
+        0x122 => 0x010a_c044,
+        0x123 => 0x010a_c034,
+        0x124 => 0x010a_c024,
+        0x125 => 0x010a_c010,
+        0x126 => 0x010a_c000,
+        0x127 => 0x010a_bff0,
+        0x128 => 0x010a_bfe0,
+        0x129 => 0x010a_bfcc,
+        0x12a => 0x010a_bfbc,
+        0x12b => 0x010a_bfac,
+        0x12c => 0x010a_bb78,
+        0x12d => 0x010a_bb68,
+        0x12e => 0x010a_bb54,
+        0x12f => 0x010a_bb40,
+        0x130 => 0x010a_bb2c,
+        0x131 => 0x010a_bb18,
+        0x132 => 0x010a_bb08,
+        0x133 => 0x010a_baf4,
+        0x134 => 0x010a_bae0,
+        0x135 => 0x010a_bacc,
+        0x136 => 0x010a_bab8,
+        0x137 => 0x010a_baa4,
+        0x138 => 0x010a_ba90,
+        0x139 => 0x010a_ba78,
+        0x13a => 0x010a_ba60,
+        0x13b => 0x010a_ba48,
+        0x13c => 0x010a_ba30,
+        0x13d => 0x010a_ba18,
+        0x13e => 0x010a_ba08,
+        0x13f => 0x010a_b9f4,
+        0x140 => 0x010a_b9e0,
+        0x141 => 0x010a_b9cc,
+        0x142 => 0x010a_b9b8,
+        0x143 => 0x010a_b9a4,
+        0x144 => 0x010a_b990,
+        0x145 => 0x010a_b978,
+        0x146 => 0x010a_b960,
+        0x147 => 0x010a_b948,
+        0x148 => 0x010a_b930,
+        0x149 => 0x010a_b918,
+        0x14a => 0x010a_b908,
+        0x14b => 0x010a_b8f8,
+        0x14c => 0x010a_b8e8,
+        0x14d => 0x010a_b8d8,
+        0x14e => 0x010a_b8c8,
+        0x14f => 0x010a_b8b4,
+        0x150 => 0x010a_b8a0,
+        0x151 => 0x010a_b890,
+        0x152 => 0x010a_b880,
+        0x153 => 0x010a_b870,
+        0x154 => 0x010a_b85c,
+        0x155 => 0x010a_b84c,
+        0x156 => 0x010a_b838,
+        0x157 => 0x010a_b824,
+        0x15a => 0x010a_b810,
+        0x15b => 0x010a_b7f8,
+        0x15c => 0x010a_b7e0,
+        0x15d => 0x010a_b7c8,
+        0x15e => 0x010a_b7b0,
+        0x15f => 0x010a_b798,
+        0x160 => 0x010a_b780,
+        0x161 => 0x010a_b764,
+        0x162 => 0x010a_b748,
+        0x163 => 0x010a_b72c,
+        0x164 => 0x010a_b710,
+        0x165 => 0x010a_b6f4,
+        0x166 => 0x010a_b6e0,
+        0x167 => 0x010a_b6c8,
+        0x168 => 0x010a_b6b0,
+        0x169 => 0x010a_b698,
+        0x16a => 0x010a_b680,
+        0x16b => 0x010a_b668,
+        0x16c => 0x010a_b654,
+        0x16d => 0x010a_b63c,
+        0x16e => 0x010a_b624,
+        0x16f => 0x010a_b60c,
+        0x170 => 0x010a_b5f4,
+        0x171 => 0x010a_b5dc,
+        0x172 => 0x010a_b5c8,
+        0x173 => 0x010a_b5b0,
+        0x174 => 0x010a_b598,
+        0x175 => 0x010a_b580,
+        0x176 => 0x010a_b568,
+        0x177 => 0x010a_b550,
+        0x178 => 0x010a_afd4,
+        0x17f => 0x010a_af4c,
+        0x180 => 0x010a_af38,
+        0x181 => 0x010a_af24,
+        0x182 => 0x010a_af10,
+        0x183 => 0x010a_aefc,
+        0x184 => 0x010a_aee8,
+        0x185 => 0x010a_aed4,
+        0x186 => 0x010a_aec0,
+        0x187 => 0x010a_aeac,
+        0x188 => 0x010a_ae98,
+        0x189 => 0x010a_ae84,
+        0x18a => 0x010a_ae6c,
+        0x18b => 0x010a_ae54,
+        0x18c => 0x010a_ae40,
+        0x18d => 0x010a_ae28,
+        0x18e => 0x010a_ae14,
+        0x18f => 0x010a_adfc,
+        0x190 => 0x010a_ade4,
+        0x191 => 0x010a_adcc,
+        0x192 => 0x010a_adb4,
+        0x193 => 0x010a_ad9c,
+        0x194 => 0x010a_ad84,
+        0x195 => 0x010a_ad6c,
+        0x196 => 0x010a_ad54,
+        0x197 => 0x010a_ad3c,
+        0x198 => 0x010a_ad24,
+        0x199 => 0x010a_ad0c,
+        0x19a => 0x010a_acf0,
+        0x19b => 0x010a_acd8,
+        0x19c => 0x010a_acc0,
+        0x19d => 0x010a_acac,
+        0x19e => 0x010a_ac94,
+        0x19f => 0x010a_ac7c,
+        0x1a0 => 0x010a_ac64,
+        0x1a1 => 0x010a_ac4c,
+        0x1a2 => 0x010a_ac34,
+        0x1a3 => 0x010a_ac1c,
+        0x1a4 => 0x010a_ac04,
+        0x1a5 => 0x010a_abec,
+        0x1a6 => 0x010a_abd4,
+        0x1a7 => 0x010a_abbc,
+        0x1a8 => 0x010a_aba4,
+        0x1a9 => 0x010a_ab88,
+        0x1aa => 0x010a_ab70,
+        0x1ab => 0x010a_ab58,
+        0x1ac => 0x010a_ab40,
+        0x1ad => 0x010a_ab28,
+        0x1ae => 0x010a_ab10,
+        0x1af => 0x010a_aaf4,
+        0x1b0 => 0x010a_aad8,
+        0x1b1 => 0x010a_aabc,
+        0x1b2 => 0x010a_aaa0,
+        0x1b3 => 0x010a_aa88,
+        0x1b4 => 0x010a_aa6c,
+        0x1b5 => 0x010a_aa50,
+        0x1b6 => 0x010a_aa34,
+        0x1b7 => 0x010a_aa18,
+        0x1b8 => 0x010a_a9fc,
+        0x1b9 => 0x010a_a9e0,
+        0x1ba => 0x010a_a9c4,
+        0x1bb => 0x010a_a74c,
+        0x1bc => 0x010a_a734,
+        0x1bd => 0x010a_a9b4,
+        0x1be => 0x010a_a9a4,
+        0x1bf => 0x010a_a990,
+        0x1c0 => 0x010a_a97c,
+        0x1c1 => 0x010a_a96c,
+        0x1c2 => 0x010a_a958,
+        0x1c3 => 0x010a_a944,
+        0x1c4 => 0x010a_a924,
+        0x1c5 => 0x010a_a904,
+        0x1c6 => 0x010a_a8e4,
+        0x1c7 => 0x010a_a8c0,
+        0x1c8 => 0x010a_a8b0,
+        0x1c9 => 0x010a_a89c,
+        0x1ca => 0x010a_a888,
+        0x1cb => 0x010a_a874,
+        0x1cc => 0x010a_a804,
+        0x1cd => 0x010a_a7ec,
+        0x1ce => 0x010a_a7d4,
+        0x1cf => 0x010a_a7b8,
+        0x1d0 => 0x010a_a79c,
+        0x1d1 => 0x010a_a780,
+        0x1d2 => 0x010a_a760,
+        0x1d3 => 0x010a_a860,
+        0x1d4 => 0x010a_a848,
+        0x1d5 => 0x010a_a834,
+        0x1d6 => 0x010a_a81c,
+        0x1d7 => 0x010a_a67c,
+        0x1d8 => 0x010a_a66c,
+        0x1d9 => 0x010a_a65c,
+        0x1da => 0x010a_a648,
+        0x1db => 0x010a_a6a0,
+        0x1dc => 0x010a_a68c,
+        0x1dd => 0x010a_a724,
+        0x1de => 0x010a_a710,
+        0x1df => 0x010a_a6f8,
+        0x1e0 => 0x010a_a6e4,
+        0x1e1 => 0x010a_a6d0,
+        0x1e2 => 0x010a_9568,
+        0x1e3 => 0x010a_9550,
+        0x1e4 => 0x010a_9538,
+        0x1e5 => 0x010a_951c,
+        0x1e6 => 0x010a_9500,
+        0x1e7 => 0x010a_d5d4,
+        0x1e8 => 0x010a_d5c4,
+        0x1e9 => 0x010a_d5b4,
+        0x1ea => 0x010a_a6c0,
+        0x1eb => 0x010a_a6b0,
+        0x1ec => 0x010a_94f0,
+        0x1ed => 0x010a_94e0,
+        0x1ee => 0x010a_94cc,
+        0x1ef => 0x010a_b530,
+        0x1f0 => 0x010a_b520,
+        0x1f1 => 0x010a_b514,
+        0x1f2 => 0x010a_b504,
+        0x1f3 => 0x010a_b4f0,
+        0x1f4 => 0x010a_b4e0,
+        0x1f5 => 0x010a_b4d0,
+        0x1f6 => 0x010a_b4bc,
+        0x1f7 => 0x010a_b4b0,
+        0x1f8 => 0x010a_b4a0,
+        0x1f9 => 0x010a_b48c,
+        0x1fa => 0x010a_b474,
+        0x1fb => 0x010a_b464,
+        0x1fc => 0x010a_b450,
+        0x1fd => 0x010a_b43c,
+        0x1fe => 0x010a_b424,
+        0x1ff => 0x010a_b418,
+        0x200 => 0x010a_b408,
+        0x201 => 0x010a_b3f4,
+        0x202 => 0x010a_b3dc,
+        0x203 => 0x010a_b3cc,
+        0x204 => 0x010a_b3b8,
+        0x205 => 0x010a_b3a4,
+        0x206 => 0x010a_b38c,
+        0x207 => 0x010a_b380,
+        0x208 => 0x010a_b370,
+        0x209 => 0x010a_b35c,
+        0x20a => 0x010a_b344,
+        0x20b => 0x010a_b334,
+        0x20c => 0x010a_b320,
+        0x20d => 0x010a_b30c,
+        0x20e => 0x010a_b2f4,
+        0x20f => 0x010a_b2e8,
+        0x210 => 0x010a_b2d8,
+        0x211 => 0x010a_b2c4,
+        0x212 => 0x010a_b2ac,
+        0x213 => 0x010a_b29c,
+        0x214 => 0x010a_b288,
+        0x215 => 0x010a_b274,
+        0x216 => 0x010a_b25c,
+        0x217 => 0x010a_b250,
+        0x218 => 0x010a_b240,
+        0x219 => 0x010a_b22c,
+        0x21a => 0x010a_b214,
+        0x21b => 0x010a_b204,
+        0x21c => 0x010a_b1f0,
+        0x21d => 0x010a_b1dc,
+        0x21e => 0x010a_b1c4,
+        0x21f => 0x010a_b1b8,
+        0x220 => 0x010a_b1a8,
+        0x221 => 0x010a_b194,
+        0x222 => 0x010a_b17c,
+        0x223 => 0x010a_b16c,
+        0x224 => 0x010a_b158,
+        0x225 => 0x010a_b144,
+        0x226 => 0x010a_b12c,
+        0x227 => 0x010a_b120,
+        0x228 => 0x010a_b110,
+        0x229 => 0x010a_b0fc,
+        0x22a => 0x010a_b0e4,
+        0x22b => 0x010a_b0d4,
+        0x22c => 0x010a_b0c0,
+        0x22d => 0x010a_b0ac,
+        0x22e => 0x010a_b094,
+        0x22f => 0x010a_b084,
+        0x230 => 0x010a_b074,
+        0x231 => 0x010a_b05c,
+        0x232 => 0x010a_b044,
+        0x233 => 0x010a_b028,
+        0x234 => 0x010a_b010,
+        0x235 => 0x010a_b000,
+        0x236 => 0x010a_afe8,
+        0x238 => 0x010a_a638,
+        0x239 => 0x010a_a62c,
+        0x23a => 0x010a_a5fc,
+        0x23b => 0x010a_a5d8,
+        0x23c => 0x010a_a618,
+        0x23d => 0x010a_a5ac,
+        0x23e => 0x010a_a5bc,
+        0x23f => 0x010a_9a14,
+        0x240 => 0x010a_99f4,
+        0x241 => 0x010a_99cc,
+        0x242 => 0x010a_99c0,
+        0x243 => 0x010a_99b4,
+        0x244 => 0x010a_99a8,
+        0x245 => 0x010a_9998,
+        0x246 => 0x010a_9988,
+        0x247 => 0x010a_9978,
+        0x248 => 0x010a_9968,
+        0x249 => 0x010a_9954,
+        0x24a => 0x010a_9940,
+        0x24b => 0x010a_992c,
+        0x24c => 0x010a_98d0,
+        0x24d => 0x010a_98bc,
+        0x24e => 0x010a_991c,
+        0x24f => 0x010a_9908,
+        0x250 => 0x010a_98f4,
+        0x251 => 0x010a_98e0,
+        0x252 => 0x010a_98b0,
+        0x253 => 0x010a_98a4,
+        0x254 => 0x010a_9898,
+        0x255 => 0x010a_988c,
+        0x256 => 0x010a_9880,
+        0x25c => 0x010a_d59c,
+        0x25d => 0x010a_d584,
+        0x25e => 0x010a_d56c,
+        0x25f => 0x010a_d554,
+        0x260 => 0x010a_d53c,
+        0x261 => 0x010a_d524,
+        0x262 => 0x010a_d50c,
+        0x263 => 0x010a_d4f4,
+        0x264 => 0x010a_d4d8,
+        0x265 => 0x010a_d4bc,
+        0x266 => 0x010a_d4a0,
+        0x267 => 0x010a_d484,
+        0x268 => 0x010a_d468,
+        0x269 => 0x010a_d44c,
+        0x26a => 0x010a_d430,
+        0x26b => 0x010a_d414,
+        0x26c => 0x010a_d3fc,
+        0x26d => 0x010a_d3e4,
+        0x26e => 0x010a_d3cc,
+        0x26f => 0x010a_d3b0,
+        0x270 => 0x010a_d398,
+        0x271 => 0x010a_d380,
+        0x272 => 0x010a_d368,
+        0x273 => 0x010a_d350,
+        0x274 => 0x010a_d338,
+        0x275 => 0x010a_d320,
+        0x276 => 0x010a_d308,
+        0x277 => 0x010a_d2f0,
+        0x278 => 0x010a_d2d8,
+        0x279 => 0x010a_d2c0,
+        0x27a => 0x010a_d2a4,
+        0x27b => 0x010a_d288,
+        0x27c => 0x010a_d26c,
+        0x27d => 0x010a_d250,
+        0x27e => 0x010a_d234,
+        0x27f => 0x010a_d218,
+        0x280 => 0x010a_d200,
+        0x281 => 0x010a_d1e8,
+        0x282 => 0x010a_d1d0,
+        0x283 => 0x010a_d1b8,
+        0x284 => 0x010a_d1a4,
+        0x285 => 0x010a_d18c,
+        0x286 => 0x010a_d174,
+        0x287 => 0x010a_d15c,
+        0x288 => 0x010a_a024,
+        0x289 => 0x010a_9a44,
+        0x28a => 0x010a_a548,
+        0x28b => 0x010a_a518,
+        0x28c => 0x010a_a4f4,
+        0x28d => 0x010a_a4d0,
+        0x28e => 0x010a_a4b4,
+        0x28f => 0x010a_a478,
+        0x290 => 0x010a_a44c,
+        0x291 => 0x010a_a420,
+        0x292 => 0x010a_a404,
+        0x293 => 0x010a_a3c8,
+        0x294 => 0x010a_a39c,
+        0x295 => 0x010a_a370,
+        0x296 => 0x010a_a34c,
+        0x297 => 0x010a_a308,
+        0x298 => 0x010a_a2d0,
+        0x299 => 0x010a_a29c,
+        0x29a => 0x010a_a278,
+        0x29b => 0x010a_9fd4,
+        0x29c => 0x010a_9f58,
+        0x29d => 0x010a_9f7c,
+        0x29e => 0x010a_9fa0,
+        0x29f => 0x010a_9f38,
+        0x2a0 => 0x010a_9f08,
+        0x2a1 => 0x010a_9ed8,
+        0x2a2 => 0x010a_9e9c,
+        0x2a3 => 0x010a_9e7c,
+        0x2a4 => 0x010a_9de0,
+        0x2a5 => 0x010a_9e10,
+        0x2a6 => 0x010a_9e40,
+        0x2a7 => 0x010a_9db8,
+        0x2a8 => 0x010a_9d80,
+        0x2a9 => 0x010a_9d48,
+        0x2aa => 0x010a_9d00,
+        0x2ab => 0x010a_9cd4,
+        0x2ac => 0x010a_a26c,
+        0x2ad => 0x010a_a240,
+        0x2ae => 0x010a_a224,
+        0x2af => 0x010a_a208,
+        0x2b0 => 0x010a_a1f4,
+        0x2b1 => 0x010a_a1c0,
+        0x2b2 => 0x010a_a19c,
+        0x2b3 => 0x010a_a178,
+        0x2b4 => 0x010a_a164,
+        0x2b5 => 0x010a_a140,
+        0x2b6 => 0x010a_a11c,
+        0x2b7 => 0x010a_a0e8,
+        0x2b8 => 0x010a_a0cc,
+        0x2b9 => 0x010a_a090,
+        0x2ba => 0x010a_a064,
+        0x2bb => 0x010a_a038,
+        0x2bc => 0x010a_a004,
+        0x2bd => 0x010a_9fec,
+        0x2be => 0x010a_9cc4,
+        0x2bf => 0x010a_9c98,
+        0x2c0 => 0x010a_9c78,
+        0x2c1 => 0x010a_9c58,
+        0x2c2 => 0x010a_9c40,
+        0x2c3 => 0x010a_9c08,
+        0x2c4 => 0x010a_9be0,
+        0x2c5 => 0x010a_9bb8,
+        0x2c6 => 0x010a_9ba0,
+        0x2c7 => 0x010a_9b78,
+        0x2c8 => 0x010a_9b50,
+        0x2c9 => 0x010a_9b1c,
+        0x2ca => 0x010a_9afc,
+        0x2cb => 0x010a_9abc,
+        0x2cc => 0x010a_9a8c,
+        0x2cd => 0x010a_9a5c,
+        0x2ce => 0x010a_9a24,
+        0x2cf => 0x010a_99dc,
+        0x2d0 => 0x010a_963c,
+        0x2d1 => 0x010a_9628,
+        0x2d2 => 0x010a_a5e8,
+        0x2d3 => 0x010a_a594,
+        0x2d4 => 0x010a_a55c,
+        0x2d5 => 0x010a_a578,
+        0x2d6 => 0x010a_9614,
+        0x2d7 => 0x010a_95fc,
+        0x2d8 => 0x010a_986c,
+        0x2d9 => 0x010a_9858,
+        0x2da => 0x010a_9844,
+        0x2db => 0x010a_982c,
+        0x2dc => 0x010a_9818,
+        0x2dd => 0x010a_9800,
+        0x2de => 0x010a_97ec,
+        0x2df => 0x010a_97d4,
+        0x2e0 => 0x010a_97bc,
+        0x2e1 => 0x010a_97a4,
+        0x2e2 => 0x010a_978c,
+        0x2e3 => 0x010a_9774,
+        0x2e4 => 0x010a_9760,
+        0x2e5 => 0x010a_9748,
+        0x2e6 => 0x010a_9730,
+        0x2e7 => 0x010a_9718,
+        0x2e8 => 0x010a_9700,
+        0x2e9 => 0x010a_96e8,
+        0x2ea => 0x010a_96d0,
+        0x2eb => 0x010a_96b8,
+        0x2ec => 0x010a_96a0,
+        0x2ed => 0x010a_9684,
+        0x2ee => 0x010a_966c,
+        0x2ef => 0x010a_9650,
+        0x2f0 => 0x010a_949c,
+        0x2f1 => 0x010a_94b8,
+        0x2f2 => 0x010a_95ac,
+        0x2f3 => 0x010a_9594,
+        0x2f4 => 0x010a_957c,
+        0x2f5 => 0x010a_9490,
+        _ => 0,
+    };
+    if name != 0 {
+        return name;
+    }
+    e.with_stack(0xc, |e, buffer| {
+        e.call(
+            SPRINTF_S_00406D00,
+            &args![buffer, 0xau32, PASS_NAME_FORMAT_010A9488, pass],
+        );
+    });
+    PASS_NAME_UNKNOWN_010A93F4
+}
+
+// Translated from 00b540d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map, no arguments: lowers the words at `011ffa10` and `011ffa0c`
+/// by one and calls `00b984f0(0, 0)`.
+pub fn fn_00b540d0(e: &mut Engine) {
+    let v = e.global::<u32>(COUNTER_011FFA10);
+    e.set_global(COUNTER_011FFA10, v.wrapping_sub(1));
+    let v = e.global::<u32>(COUNTER_011FFA0C);
+    e.set_global(COUNTER_011FFA0C, v.wrapping_sub(1));
+    e.call(FUNCTION_00B984F0, &args![0u32, 0u32]);
+}
+
+// Translated from 00b553d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSShaderManager::SetEmittanceRecurse` (engine map; the body matches): `cdecl`, an object
+/// and the address of three words (a colour). For a non-null object: a geometry (slot +0x18
+/// non-zero) with both a material property (`GetProperty(2)`) and a shader property
+/// (`GetProperty(3)`) whose first flag word has bit 29 (`0x20000000`) set gets the three
+/// words at material `+0x28`, `+0x2c` and `+0x30` and its revision word at `+0x44` raised by
+/// one; any other object that is a node (slot +0xc) passes the call on to each non-null
+/// child (the array at node `+0xa0`, the count at `+0xa6` read once).
+pub fn bs_shader_manager_set_emittance_recurse(e: &mut Engine, object: u32, color: u32) {
+    if object == 0 {
+        return;
+    }
+    if e.vcall(object, SLOT_IS_GEOMETRY, &args![]).u32() != 0 {
+        let material = e
+            .call(GET_PROPERTY, &args![object, MATERIAL_PROPERTY_TYPE])
+            .u32();
+        let shader = e
+            .call(GET_PROPERTY, &args![object, SHADER_PROPERTY_TYPE])
+            .u32();
+        if material == 0 || shader == 0 {
+            return;
+        }
+        if e.mem.u32(shader.wrapping_add(0x20)) & 0x2000_0000 == 0 {
+            return;
+        }
+        let v = e.mem.u32(color);
+        e.mem.set_u32(material.wrapping_add(0x28), v);
+        let v = e.mem.u32(color.wrapping_add(4));
+        e.mem.set_u32(material.wrapping_add(0x2c), v);
+        let v = e.mem.u32(color.wrapping_add(8));
+        let revision = e.mem.u32(material.wrapping_add(0x44));
+        e.mem
+            .set_u32(material.wrapping_add(0x44), revision.wrapping_add(1));
+        e.mem.set_u32(material.wrapping_add(0x30), v);
+        return;
+    }
+    let node = e.vcall(object, SLOT_IS_NODE, &args![]).u32();
+    if node == 0 {
+        return;
+    }
+    let count = u32::from(e.mem.u16(node.wrapping_add(0xa6)));
+    let mut index = 0u32;
+    while index < count {
+        let buffer = e.mem.u32(node.wrapping_add(0xa0));
+        let child = e.mem.u32(buffer.wrapping_add(index.wrapping_mul(4)));
+        if child != 0 {
+            bs_shader_manager_set_emittance_recurse(e, child, color);
+        }
+        index = index.wrapping_add(1);
+    }
+}
+
+// Translated from 00b557d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map, no arguments: for each non-null shader in the shader table
+/// whose run-time type chain (slot +8, then each record's base at `+4`) reaches the record
+/// at `0126f554`, calls the shader's slot +0x120; then the `ImageSpaceManager` method
+/// `00b8b3b0` on the object at `011f91ac` (a tail jump).
+pub fn fn_00b557d0(e: &mut Engine) {
+    let mut slot = SHADER_TABLE_011F9548;
+    while slot < SHADER_TABLE_END_011F95D4 {
+        let shader = e.mem.u32(slot);
+        if shader != 0 {
+            let mut rtti = e.vcall(shader, 8, &args![]).u32();
+            let mut found = false;
+            while rtti != 0 {
+                if rtti == RTTI_0126F554 {
+                    found = true;
+                    break;
+                }
+                rtti = e.mem.u32(rtti.wrapping_add(4));
+            }
+            if found {
+                e.vcall(shader, 0x120, &args![]);
+            }
+        }
+        slot = slot.wrapping_add(4);
+    }
+    let manager = e.global::<u32>(OBJECT_011F91AC);
+    e.call(IMAGE_SPACE_MANAGER_00B8B3B0, &args![manager]);
+}
+
+// Translated from 00b55b00 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSShaderManager::RecursiveSetForcedDarkness` (engine map; the body matches): `cdecl`,
+/// an object and a `float`. A shader property (`GetProperty(3)`) whose
+/// `iShaderPropertyType` (`+0x1c`) is 1 to 12 gets the `float` at `+0x6c` (`FLD`/`FSTP`, a
+/// signalling NaN arrives quiet); then, when the object is a node (slot +0xc), each non-null
+/// child (the count at `+0xa6` read again after each one) gets the call with the `float`
+/// (pushed through `FLD`/`FSTP`).
+pub fn bs_shader_manager_recursive_set_forced_darkness(e: &mut Engine, object: u32, darkness: u32) {
+    let property = e
+        .call(GET_PROPERTY, &args![object, SHADER_PROPERTY_TYPE])
+        .u32();
+    if property != 0 {
+        let kind = e.mem.u32(property.wrapping_add(0x1c));
+        if kind.wrapping_sub(1) <= 0xb {
+            e.mem
+                .set_u32(property.wrapping_add(0x6c), x87_quiet_bits(darkness));
+        }
+    }
+    let node = e.vcall(object, SLOT_IS_NODE, &args![]).u32();
+    if node == 0 {
+        return;
+    }
+    let mut index = 0u32;
+    while index < u32::from(e.mem.u16(object.wrapping_add(0xa6))) {
+        let buffer = e.mem.u32(object.wrapping_add(0xa0));
+        let child = e.mem.u32(buffer.wrapping_add(index.wrapping_mul(4)));
+        if child != 0 {
+            bs_shader_manager_recursive_set_forced_darkness(e, child, x87_quiet_bits(darkness));
+        }
+        index = index.wrapping_add(1);
+    }
+}
+
+// Translated from 00b578a0 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 00b578a0 - the FS:[0] exception frame (unwinding on a throw) is not translated
+/// Unnamed in the engine map, no arguments (after a device reset). Before the set-up has
+/// run (the byte at `011f91c6` clear) it runs [`fn_00b57420`]. Otherwise: [`fn_00b4f9a0`],
+/// `00ba50d0`, `00bc0940` and `00bc4610`; the object at `011f91ac` destroyed (`00b97690`),
+/// freed and cleared, the one at `011f91a8` likewise (`00b6f0b0`); the word at `011f91e0`
+/// cleared; a new 0xb0-byte object (`00b6dd80`, null when the allocation fails) at
+/// `011f91a8`; with a word at `011f9508`, a new 0x31c-byte object (`00b97a80`) at
+/// `011f91ac`; and `00b6e450` on the object at `011f91a8` with the word at `011f9508`.
+pub fn fn_00b578a0(e: &mut Engine) {
+    if e.global::<u8>(SET_UP_DONE_011F91C6) == 0 {
+        fn_00b57420(e);
+        return;
+    }
+    fn_00b4f9a0(e);
+    e.call(RESET_00BA50D0, &args![]);
+    e.call(RESET_00BC0940, &args![]);
+    e.call(RESET_00BC4610, &args![]);
+    let object = e.global::<u32>(OBJECT_011F91AC);
+    if object != 0 {
+        e.call(DESTRUCTOR_00B97690, &args![object]);
+        e.call(MEMORY_DEALLOCATE, &args![MEMORY_MANAGER, object]);
+        e.set_global(OBJECT_011F91AC, 0u32);
+    }
+    let object = e.global::<u32>(OBJECT_011F91A8);
+    if object != 0 {
+        e.call(DESTRUCTOR_00B6F0B0, &args![object]);
+        e.call(MEMORY_DEALLOCATE, &args![MEMORY_MANAGER, object]);
+        e.set_global(OBJECT_011F91A8, 0u32);
+    }
+    e.set_global(GLOBAL_011F91E0, 0u32);
+    let block = e
+        .call(MEMORY_ALLOCATE, &args![MEMORY_MANAGER, 0xb0u32])
+        .u32();
+    let object = if block != 0 {
+        e.call(CONSTRUCTOR_00B6DD80, &args![block]).u32()
+    } else {
+        0
+    };
+    e.set_global(OBJECT_011F91A8, object);
+    if e.global::<u32>(GLOBAL_011F9508) != 0 {
+        let block = e
+            .call(MEMORY_ALLOCATE, &args![MEMORY_MANAGER, 0x31cu32])
+            .u32();
+        let object = if block != 0 {
+            e.call(CONSTRUCTOR_00B97A80, &args![block]).u32()
+        } else {
+            0
+        };
+        e.set_global(OBJECT_011F91AC, object);
+    }
+    let source = e.global::<u32>(GLOBAL_011F9508);
+    let object = e.global::<u32>(OBJECT_011F91A8);
+    e.call(METHOD_00B6E450, &args![object, source]);
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -2851,6 +3866,20 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
             bs_shader_manager_clone_material_property_recurse(u32)
         ),
         entry!(0x00b5_7e30, bs_shader_manager_prepare_object(u32, u8, u8)),
+        entry!(0x00b4_f2e0, fn_00b4f2e0(u32, u32, u32) -> u32),
+        entry!(0x00b4_f9a0, fn_00b4f9a0()),
+        entry!(0x00b4_f9d0, bs_shader_manager_get_pass_name(u32) -> u32),
+        entry!(0x00b5_40d0, fn_00b540d0()),
+        entry!(
+            0x00b5_53d0,
+            bs_shader_manager_set_emittance_recurse(u32, u32)
+        ),
+        entry!(0x00b5_57d0, fn_00b557d0()),
+        entry!(
+            0x00b5_5b00,
+            bs_shader_manager_recursive_set_forced_darkness(u32, u32)
+        ),
+        entry!(0x00b5_78a0, fn_00b578a0()),
     ]
 }
 
@@ -4957,5 +5986,259 @@ mod b047_tests {
         );
         assert!(calls_to(&e, REPLACE_DATA).is_empty());
         assert!(calls_to(&e, 0x0000_7000).is_empty());
+    }
+}
+
+#[cfg(test)]
+mod n012_tests {
+    use super::*;
+
+    fn calls(e: &Engine, addr: u32) -> Vec<Vec<u32>> {
+        e.call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|(a, _)| *a == addr)
+            .map(|(_, w)| w.clone())
+            .collect()
+    }
+
+    fn rig() -> Engine {
+        let mut e = Engine::new();
+        e.map(0x011f_9000, 0x2000);
+        e.call_log = Some(vec![]);
+        e
+    }
+
+    /// An object whose vtable answers slot `+0x18` (geometry) from its word `+0x10` and slot
+    /// `+0xc` (node) from its word `+0x14`.
+    fn scene_object(e: &mut Engine, geometry: bool, node: bool) -> u32 {
+        let mut slots = [0u32; 8];
+        slots[SLOT_IS_NODE as usize / 4] = 0x0f00_e000;
+        slots[SLOT_IS_GEOMETRY as usize / 4] = 0x0f00_e010;
+        e.put_vtable(0x0f00_e100, &slots);
+        e.register(0x0f00_e000, |e, a| e.mem.u32(a[0] + 0x14).into_ret());
+        e.register(0x0f00_e010, |e, a| e.mem.u32(a[0] + 0x10).into_ret());
+        let object = e.mem.alloc(0xb0);
+        e.mem.set_u32(object, 0x0f00_e100);
+        e.mem.set_u32(object + 0x10, u32::from(geometry));
+        if node {
+            e.mem.set_u32(object + 0x14, object);
+        }
+        object
+    }
+
+    fn children(e: &mut Engine, node: u32, items: &[u32]) {
+        let buffer = e.mem.alloc(4 * items.len() as u32);
+        for (i, item) in items.iter().enumerate() {
+            e.mem.set_u32(buffer + 4 * i as u32, *item);
+        }
+        e.mem.set_u32(node + 0xa0, buffer);
+        e.mem.set_u16(node + 0xa6, items.len() as u16);
+    }
+
+    #[test]
+    fn fn_00b4f2e0_jumps_to_get_file() {
+        let mut e = rig();
+        e.register(NI_FILE_GET_FILE, |_, a| (a[0] + a[1] + a[2]).into_ret());
+        assert_eq!(
+            e.call(0x00b4_f2e0, &args![0x100u32, 2u32, 3u32]).u32(),
+            0x105
+        );
+        assert_eq!(calls(&e, NI_FILE_GET_FILE), vec![vec![0x100, 2, 3]]);
+    }
+
+    #[test]
+    fn fn_00b4f9a0_calls_each_shader() {
+        let mut e = rig();
+        let mut slots = [0u32; 0x4a];
+        slots[0x124 / 4] = 0x0f00_0124;
+        e.put_vtable(0x0f00_1000, &slots);
+        e.register(0x0f00_0124, |_, _| Ret::default());
+        let first = e.mem.alloc(8);
+        let last = e.mem.alloc(8);
+        e.mem.set_u32(first, 0x0f00_1000);
+        e.mem.set_u32(last, 0x0f00_1000);
+        e.set_global(SHADER_TABLE_011F9548, first);
+        e.set_global(SHADER_TABLE_011F9548 + 4 * 0x22, last);
+        e.call(0x00b4_f9a0, &args![]);
+        assert_eq!(calls(&e, 0x0f00_0124), vec![vec![first], vec![last]]);
+    }
+
+    #[test]
+    fn get_pass_name_answers_the_arm_or_the_unknown_string() {
+        let mut e = rig();
+        e.register(SPRINTF_S_00406D00, |_, _| Ret::default());
+        assert_eq!(e.call(0x00b4_f9d0, &args![1u32]).u32(), 0x010a_d6c8);
+        assert_eq!(e.call(0x00b4_f9d0, &args![0x157u32]).u32(), 0x010a_b824);
+        assert_eq!(e.call(0x00b4_f9d0, &args![0x2f5u32]).u32(), 0x010a_9490);
+        assert!(calls(&e, SPRINTF_S_00406D00).is_empty());
+        for pass in [0u32, 0x158, 0x17e, 0x237, 0x25b, 0x2f6, 0xffff_ffff] {
+            assert_eq!(e.call(0x00b4_f9d0, &args![pass]).u32(), 0x010a_93f4);
+            let last = calls(&e, SPRINTF_S_00406D00).pop().unwrap();
+            assert_eq!(last[1..], [10, PASS_NAME_FORMAT_010A9488, pass]);
+        }
+    }
+
+    #[test]
+    fn fn_00b540d0_lowers_both_counters() {
+        let mut e = rig();
+        e.map(0x011f_f000, 0x1000);
+        e.register(FUNCTION_00B984F0, |_, _| Ret::default());
+        e.set_global(COUNTER_011FFA10, 5u32);
+        e.set_global(COUNTER_011FFA0C, 0u32);
+        e.call(0x00b5_40d0, &args![]);
+        assert_eq!(e.global::<u32>(COUNTER_011FFA10), 4);
+        assert_eq!(e.global::<u32>(COUNTER_011FFA0C), 0xffff_ffff);
+        assert_eq!(calls(&e, FUNCTION_00B984F0), vec![vec![0, 0]]);
+    }
+
+    #[test]
+    fn set_emittance_recurse_colours_flagged_geometry() {
+        let mut e = rig();
+        e.register(GET_PROPERTY, |e, a| {
+            e.mem.u32(a[0] + 0x20 + 4 * (a[1] - 2)).into_ret()
+        });
+        let material = e.mem.alloc(0x50);
+        e.mem.set_u32(material + 0x44, 7);
+        let flagged = e.mem.alloc(0x60);
+        e.mem.set_u32(flagged + 0x20, 0x2000_0000);
+        let plain = e.mem.alloc(0x60);
+        let lit = scene_object(&mut e, true, false);
+        e.mem.set_u32(lit + 0x20, material);
+        e.mem.set_u32(lit + 0x24, flagged);
+        let unlit = scene_object(&mut e, true, false);
+        let other = e.mem.alloc(0x50);
+        e.mem.set_u32(unlit + 0x20, other);
+        e.mem.set_u32(unlit + 0x24, plain);
+        let node = scene_object(&mut e, false, true);
+        children(&mut e, node, &[lit, 0, unlit]);
+        let color = e.mem.alloc(12);
+        e.mem.set_f32(color, 0.25);
+        e.mem.set_f32(color + 4, 0.5);
+        e.mem.set_f32(color + 8, 0.75);
+        e.call(0x00b5_53d0, &args![node, color]);
+        assert_eq!(e.mem.f32(material + 0x28), 0.25);
+        assert_eq!(e.mem.f32(material + 0x2c), 0.5);
+        assert_eq!(e.mem.f32(material + 0x30), 0.75);
+        assert_eq!(e.mem.u32(material + 0x44), 8);
+        assert_eq!(e.mem.u32(other + 0x28), 0);
+        assert_eq!(calls(&e, GET_PROPERTY).len(), 4);
+        e.call(0x00b5_53d0, &args![0u32, color]);
+        assert_eq!(calls(&e, GET_PROPERTY).len(), 4);
+    }
+
+    #[test]
+    fn fn_00b557d0_reaches_shaders_of_the_record_chain() {
+        let mut e = rig();
+        e.map(0x0126_f000, 0x1000);
+        let mut slots = [0u32; 0x49];
+        slots[2] = 0x0f00_0008;
+        slots[0x120 / 4] = 0x0f00_0120;
+        e.put_vtable(0x0f00_1000, &slots);
+        e.register(0x0f00_0008, |e, a| e.mem.u32(a[0] + 4).into_ret());
+        e.register(0x0f00_0120, |_, _| Ret::default());
+        e.register(IMAGE_SPACE_MANAGER_00B8B3B0, |_, _| Ret::default());
+        let derived = e.mem.alloc(8);
+        e.mem.set_u32(derived + 4, RTTI_0126F554);
+        let unrelated = e.mem.alloc(8);
+        let shader = |e: &mut Engine, rtti: u32| {
+            let s = e.mem.alloc(8);
+            e.mem.set_u32(s, 0x0f00_1000);
+            e.mem.set_u32(s + 4, rtti);
+            s
+        };
+        let hit = shader(&mut e, derived);
+        let miss = shader(&mut e, unrelated);
+        let direct = shader(&mut e, RTTI_0126F554);
+        e.set_global(SHADER_TABLE_011F9548 + 4, hit);
+        e.set_global(SHADER_TABLE_011F9548 + 8, miss);
+        e.set_global(SHADER_TABLE_011F9548 + 0x40, direct);
+        e.set_global(OBJECT_011F91AC, 0x4444u32);
+        e.call(0x00b5_57d0, &args![]);
+        assert_eq!(calls(&e, 0x0f00_0120), vec![vec![hit], vec![direct]]);
+        assert_eq!(calls(&e, IMAGE_SPACE_MANAGER_00B8B3B0), vec![vec![0x4444]]);
+    }
+
+    #[test]
+    fn forced_darkness_sets_lit_types_and_walks_children() {
+        let mut e = rig();
+        e.register(GET_PROPERTY, |e, a| {
+            assert_eq!(a[1], 3);
+            e.mem.u32(a[0] + 0x24).into_ret()
+        });
+        let property = |e: &mut Engine, kind: u32| {
+            let p = e.mem.alloc(0x80);
+            e.mem.set_u32(p + 0x1c, kind);
+            p
+        };
+        let first = property(&mut e, 1);
+        let twelfth = property(&mut e, 12);
+        let zero = property(&mut e, 0);
+        let thirteenth = property(&mut e, 13);
+        let leaf = |e: &mut Engine, p: u32| {
+            let o = scene_object(e, true, false);
+            e.mem.set_u32(o + 0x24, p);
+            o
+        };
+        let a = leaf(&mut e, first);
+        let b = leaf(&mut e, zero);
+        let c = leaf(&mut e, thirteenth);
+        let node = scene_object(&mut e, false, true);
+        e.mem.set_u32(node + 0x24, twelfth);
+        children(&mut e, node, &[a, 0, b, c]);
+        e.call(0x00b5_5b00, &args![node, 0x7f80_0001u32]);
+        assert_eq!(e.mem.u32(first + 0x6c), 0x7fc0_0001);
+        assert_eq!(e.mem.u32(twelfth + 0x6c), 0x7fc0_0001);
+        assert_eq!(e.mem.u32(zero + 0x6c), 0);
+        assert_eq!(e.mem.u32(thirteenth + 0x6c), 0);
+        assert_eq!(calls(&e, GET_PROPERTY).len(), 4);
+    }
+
+    #[test]
+    fn fn_00b578a0_rebuilds_the_two_objects() {
+        let mut e = rig();
+        for addr in [
+            RESET_00BA50D0,
+            RESET_00BC0940,
+            RESET_00BC4610,
+            DESTRUCTOR_00B97690,
+            DESTRUCTOR_00B6F0B0,
+            METHOD_00B6E450,
+            MEMORY_DEALLOCATE,
+        ] {
+            e.register(addr, |_, _| Ret::default());
+        }
+        e.register(MEMORY_ALLOCATE, |e, a| e.mem.alloc(a[1]).into_ret());
+        e.register(CONSTRUCTOR_00B6DD80, |_, a| a[0].into_ret());
+        e.register(CONSTRUCTOR_00B97A80, |_, a| a[0].into_ret());
+        e.set_global(SET_UP_DONE_011F91C6, 1u8);
+        e.set_global(OBJECT_011F91AC, 0x5000u32);
+        e.set_global(OBJECT_011F91A8, 0x6000u32);
+        e.set_global(GLOBAL_011F91E0, 9u32);
+        e.set_global(GLOBAL_011F9508, 0x7000u32);
+        e.call(0x00b5_78a0, &args![]);
+        assert_eq!(calls(&e, DESTRUCTOR_00B97690), vec![vec![0x5000]]);
+        assert_eq!(calls(&e, DESTRUCTOR_00B6F0B0), vec![vec![0x6000]]);
+        assert_eq!(
+            calls(&e, MEMORY_DEALLOCATE),
+            vec![vec![MEMORY_MANAGER, 0x5000], vec![MEMORY_MANAGER, 0x6000]]
+        );
+        let small = e.global::<u32>(OBJECT_011F91A8);
+        let large = e.global::<u32>(OBJECT_011F91AC);
+        assert_eq!(calls(&e, CONSTRUCTOR_00B6DD80), vec![vec![small]]);
+        assert_eq!(calls(&e, CONSTRUCTOR_00B97A80), vec![vec![large]]);
+        assert_eq!(calls(&e, METHOD_00B6E450), vec![vec![small, 0x7000]]);
+        assert_eq!(e.global::<u32>(GLOBAL_011F91E0), 0);
+        assert_eq!(calls(&e, RESET_00BC4610).len(), 1);
+        // Without the word at 011f9508 and with failing allocations: both stay null.
+        e.register(MEMORY_ALLOCATE, |_, _| Ret::default());
+        e.set_global(GLOBAL_011F9508, 0u32);
+        e.set_global(OBJECT_011F91AC, 0u32);
+        e.call(0x00b5_78a0, &args![]);
+        assert_eq!(e.global::<u32>(OBJECT_011F91A8), 0);
+        assert_eq!(e.global::<u32>(OBJECT_011F91AC), 0);
+        assert_eq!(calls(&e, CONSTRUCTOR_00B97A80).len(), 1);
+        assert_eq!(calls(&e, METHOD_00B6E450).last(), Some(&vec![0, 0]));
     }
 }

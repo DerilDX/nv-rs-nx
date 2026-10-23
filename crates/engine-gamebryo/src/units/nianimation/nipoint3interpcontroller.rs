@@ -39,10 +39,78 @@ pub fn ni_point3_interp_controller_get_viewer_strings(e: &mut Engine, this: Ptr,
     });
 }
 
+/// `operator new` (`00aa13e0`, `cdecl`, size), the `NiPoint3Interpolator(NiPoint3)`
+/// constructor (`00a49650`, `thiscall`, the point by value; answers the object),
+/// `NiPoint3Interpolator::SetPoseValue` (`00a494b0`, `thiscall`, the point by value), and
+/// the RTTI-checked cast `00653290` (`thiscall` on the object, the `NiRTTI` record; answers
+/// the object or null), here with `NiPoint3Interpolator::ms_RTTI` (`011f3f70`).
+const OPERATOR_NEW: u32 = 0x00aa_13e0;
+const POINT3_INTERPOLATOR_CONSTRUCT: u32 = 0x00a4_9650;
+const POINT3_INTERPOLATOR_SET_POSE_VALUE: u32 = 0x00a4_94b0;
+const RTTI_CAST: u32 = 0x0065_3290;
+const NI_POINT3_INTERPOLATOR_RTTI: u32 = 0x011f_3f70;
+
+// Translated from 00a57c20 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiPoint3InterpController::CreatePoseInterpolator` (Xbox PDB; `thiscall`, the index it
+/// does not read, `RET 4`): the target's point (this controller's slot +0xEC into a local),
+/// then a 0x20-byte `NiPoint3Interpolator` made with it (`00a49650`), or null when the
+/// allocation fails.
+pub fn ni_point3_interp_controller_create_pose_interpolator(
+    e: &mut Engine,
+    this: Ptr,
+    _unused_1: u32,
+) -> Ptr {
+    e.with_stack(0xc, |e, point| {
+        e.vcall(this.addr(), 0xec, &args![point]);
+        let object = e.call(OPERATOR_NEW, &args![0x20u32]).u32();
+        if object == 0 {
+            return Ptr::new(0);
+        }
+        let p = point.addr();
+        let (x, y, z) = (e.mem.u32(p), e.mem.u32(p + 4), e.mem.u32(p + 8));
+        e.call(POINT3_INTERPOLATOR_CONSTRUCT, &args![object, x, y, z])
+            .ptr()
+    })
+}
+
+// Translated from 00a57cb0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiPoint3InterpController::SynchronizePoseInterpolator` (Xbox PDB; `thiscall`, (the
+/// interpolator, an index it does not read), `RET 8`): the interpolator cast to
+/// `NiPoint3Interpolator` (`00653290`; null stays null), the target's point (slot +0xEC into
+/// a local), and that interpolator's `SetPoseValue` with it (run on the cast's answer, null
+/// or not).
+pub fn ni_point3_interp_controller_synchronize_pose_interpolator(
+    e: &mut Engine,
+    this: Ptr,
+    interpolator: u32,
+    _unused_2: u32,
+) {
+    let pose = if interpolator == 0 {
+        0
+    } else {
+        e.call(RTTI_CAST, &args![interpolator, NI_POINT3_INTERPOLATOR_RTTI])
+            .u32()
+    };
+    e.with_stack(0xc, |e, point| {
+        e.vcall(this.addr(), 0xec, &args![point]);
+        let p = point.addr();
+        let (x, y, z) = (e.mem.u32(p), e.mem.u32(p + 4), e.mem.u32(p + 8));
+        e.call(POINT3_INTERPOLATOR_SET_POSE_VALUE, &args![pose, x, y, z]);
+    });
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
         entry!(0x00a57ca0, ni_point3_interp_controller_get_rtti() -> Ptr),
+        entry!(
+            0x00a5_7c20,
+            ni_point3_interp_controller_create_pose_interpolator(Ptr, u32) -> Ptr
+        ),
+        entry!(
+            0x00a5_7cb0,
+            ni_point3_interp_controller_synchronize_pose_interpolator(Ptr, u32, u32)
+        ),
         entry!(
             0x00a57d10,
             ni_point3_interp_controller_get_viewer_strings(Ptr, Ptr)
@@ -115,5 +183,81 @@ mod tests {
             assert_eq!(&set.1[..2], [strings, size]);
             assert_eq!(stored.get(), 0x7777_0001);
         }
+    }
+}
+
+#[cfg(test)]
+mod n005_tests {
+    use super::*;
+
+    fn calls_to(e: &Engine, address: u32) -> Vec<Vec<u32>> {
+        e.call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|(a, _)| *a == address)
+            .map(|(_, w)| w.clone())
+            .collect()
+    }
+
+    /// A controller whose slot +0xEC writes the point (1, 2, 3) (as words).
+    fn controller(e: &mut Engine) -> u32 {
+        let this = e.mem.alloc(0x40);
+        let table = e.mem.alloc(0x100);
+        e.mem.set_u32(table + 0xec, 0x0099_00ec);
+        e.mem.set_u32(this, table);
+        e.register(0x0099_00ec, |e, a| {
+            for word in 0..3 {
+                e.mem.set_u32(a[1] + 4 * word, word + 1);
+            }
+            Ret::default()
+        });
+        this
+    }
+
+    #[test]
+    fn create_pose_interpolator_builds_one_at_the_target_point() {
+        let mut e = Engine::new();
+        let this = controller(&mut e);
+        e.register(OPERATOR_NEW, |_, _| 0x5000u32.into_ret());
+        e.register(POINT3_INTERPOLATOR_CONSTRUCT, |_, a| a[0].into_ret());
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x00a5_7c20, &[this, 9]).u32(), 0x5000);
+        assert_eq!(calls_to(&e, OPERATOR_NEW), vec![vec![0x20]]);
+        assert_eq!(
+            calls_to(&e, POINT3_INTERPOLATOR_CONSTRUCT),
+            vec![vec![0x5000, 1, 2, 3]]
+        );
+        e.register(OPERATOR_NEW, |_, _| 0u32.into_ret());
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x00a5_7c20, &[this, 9]).u32(), 0);
+        assert!(calls_to(&e, POINT3_INTERPOLATOR_CONSTRUCT).is_empty());
+        assert_eq!(calls_to(&e, 0x0099_00ec).len(), 1);
+    }
+
+    #[test]
+    fn synchronize_sets_the_cast_interpolator_pose() {
+        let mut e = Engine::new();
+        let this = controller(&mut e);
+        e.register(RTTI_CAST, |_, a| (a[0] + 0x10).into_ret());
+        e.register(POINT3_INTERPOLATOR_SET_POSE_VALUE, |_, _| Ret::default());
+        e.call_log = Some(vec![]);
+        e.call(0x00a5_7cb0, &[this, 0x6000, 0]);
+        assert_eq!(
+            calls_to(&e, RTTI_CAST),
+            vec![vec![0x6000, NI_POINT3_INTERPOLATOR_RTTI]]
+        );
+        assert_eq!(
+            calls_to(&e, POINT3_INTERPOLATOR_SET_POSE_VALUE),
+            vec![vec![0x6010, 1, 2, 3]]
+        );
+        // No interpolator: no cast, the pose set on null.
+        e.call_log = Some(vec![]);
+        e.call(0x00a5_7cb0, &[this, 0, 0]);
+        assert!(calls_to(&e, RTTI_CAST).is_empty());
+        assert_eq!(
+            calls_to(&e, POINT3_INTERPOLATOR_SET_POSE_VALUE),
+            vec![vec![0, 1, 2, 3]]
+        );
     }
 }

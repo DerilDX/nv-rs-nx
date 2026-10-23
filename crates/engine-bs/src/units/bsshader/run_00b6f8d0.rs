@@ -184,12 +184,104 @@ pub fn fn_00b6f5c0(
     e.get(this, BSShaderProperty::pRenderPassList)
 }
 
+/// `NiSourceTexture::ms_RTTI` (`011f444c`) and `NiRenderedTexture::ms_RTTI` (`011f4ac4`), the
+/// records `fn_00b6f8d0` looks for in its texture's RTTI chain.
+const SOURCE_TEXTURE_RTTI: u32 = 0x011f_444c;
+const RENDERED_TEXTURE_RTTI: u32 = 0x011f_4ac4;
+/// `00ba97b0` (unit `bsshaderproperty.cpp`; `thiscall`, one word): makes sure the water-fog
+/// pass list exists, as `fn_00b6f930` calls it with 1.
+const CHECK_CREATE_WATER_FOG_PASS_ARRAY_00BA97B0: u32 = 0x00ba_97b0;
+
+/// Walks an `NiRTTI` chain (the parent at `+4`) from `rtti`: whether `wanted` is in it.
+fn rtti_chain_has(e: &Engine, rtti: u32, wanted: u32) -> bool {
+    let mut rtti = rtti;
+    while rtti != 0 {
+        if rtti == wanted {
+            return true;
+        }
+        rtti = e.mem.u32(rtti.wrapping_add(4));
+    }
+    false
+}
+
+// Translated from 00b6f8d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map: slot +0xbc of `BSShaderNoLightingProperty`'s vtable `010ae670`
+/// (`thiscall`, two words: a `cdecl` callback taking three words, and a word passed through to
+/// it). When the base map (`+0x60`, `spBaseMap` in the Xbox PDB) is set, its RTTI chain (its
+/// slot +8, the parents at `+4`) is searched for `NiSourceTexture` and, when not found,
+/// searched again (with a second `GetRTTI`) for `NiRenderedTexture` (that result is not used);
+/// either way the callback gets the texture, 0 and the word.
+pub fn fn_00b6f8d0(e: &mut Engine, this: Ptr, callback: u32, data: u32) {
+    let base = this.addr();
+    let texture = e.mem.u32(base.wrapping_add(0x60));
+    if texture == 0 {
+        return;
+    }
+    let rtti = e.vcall(texture, 8, &args![]).u32();
+    if !rtti_chain_has(e, rtti, SOURCE_TEXTURE_RTTI) {
+        let texture = e.mem.u32(base.wrapping_add(0x60));
+        if texture != 0 {
+            let rtti = e.vcall(texture, 8, &args![]).u32();
+            rtti_chain_has(e, rtti, RENDERED_TEXTURE_RTTI);
+        }
+    }
+    let texture = e.mem.u32(base.wrapping_add(0x60));
+    e.call(callback, &args![texture, 0u32, data]);
+}
+
+// Translated from 00b6f930 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (Ghidra made no function of it): slot +0xb8 of
+/// `BSShaderNoLightingProperty`'s vtable `010ae670` (`GetWaterFogPassList` in the Xbox PDB's
+/// slot list; `thiscall`, one word: the geometry). Makes sure the water-fog pass list exists
+/// (`00ba97b0` with 1); when it is empty (`iSize`, +0x10 of the list at `+0x50`) adds one pass
+/// for the geometry (`RenderPassArray::Add` with six zero words after it):
+/// - with bit 0x20 of the byte `+0x24` (`ulFlags[1]`): 0x2ef/0x2ee when bit 9 of the 16-bit
+///   flags at +0x18 of the geometry's property at `+0x9c` is set (a null property counts as
+///   clear), else 0x2e9/0x2e8;
+/// - without it: 0x2e3/0x2e2, else 0x2dd/0x2dc;
+///
+/// the higher number of each pair when bit 2 of the byte `+0x20` (`ulFlags[0]`) is set.
+/// Answers the list.
+pub fn fn_00b6f930(e: &mut Engine, this: Ptr<BSShaderProperty>, geometry: u32) -> u32 {
+    let property = e.mem.u32(geometry.wrapping_add(0x9c));
+    let bit9 = property != 0 && (e.mem.u16(property.wrapping_add(0x18)) >> 9) as u8 & 1 != 0;
+    let flagged = e.mem.u8(this.addr().wrapping_add(0x24)) & 0x20 != 0;
+    e.call(
+        CHECK_CREATE_WATER_FOG_PASS_ARRAY_00BA97B0,
+        &args![this, 1u32],
+    );
+    let list = e.get(this, BSShaderProperty::pWaterFogRenderPassList);
+    if e.mem.u32(list.wrapping_add(0x10)) != 0 {
+        return e.get(this, BSShaderProperty::pWaterFogRenderPassList);
+    }
+    let high = e.mem.u8(this.addr().wrapping_add(0x20)) & 2 != 0;
+    let pass: u32 = match (flagged, bit9, high) {
+        (true, true, true) => 0x2ef,
+        (true, true, false) => 0x2ee,
+        (true, false, true) => 0x2e9,
+        (true, false, false) => 0x2e8,
+        (false, true, true) => 0x2e3,
+        (false, true, false) => 0x2e2,
+        (false, false, true) => 0x2dd,
+        (false, false, false) => 0x2dc,
+    };
+    e.call(
+        RENDER_PASS_ARRAY_ADD,
+        &args![list, geometry, pass, 0u32, 0u32, 0u32, 0u32, 0u32, 0u32],
+    );
+    e.get(this, BSShaderProperty::pWaterFogRenderPassList)
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
-    vec![entry!(
-        0x00b6_f5c0,
-        fn_00b6f5c0(Ptr<BSShaderProperty>, u32, u32, u32, u32, u32, u32) -> u32
-    )]
+    vec![
+        entry!(
+            0x00b6_f5c0,
+            fn_00b6f5c0(Ptr<BSShaderProperty>, u32, u32, u32, u32, u32, u32) -> u32
+        ),
+        entry!(0x00b6_f8d0, fn_00b6f8d0(Ptr, u32, u32)),
+        entry!(0x00b6_f930, fn_00b6f930(Ptr<BSShaderProperty>, u32) -> u32),
+    ]
 }
 
 #[cfg(test)]
@@ -451,5 +543,102 @@ mod tests {
             run(&mut w, 0, 0);
             assert_eq!(w.e.mem.u8(w.pass + 6), u8::from(marked), "{fade}");
         }
+    }
+}
+
+#[cfg(test)]
+mod n013_tests {
+    use super::*;
+
+    const CALLBACK: u32 = 0x0f00_0100;
+    const GET_RTTI: u32 = 0x0f00_0108;
+
+    fn calls(e: &Engine, callee: u32) -> Vec<Vec<u32>> {
+        e.call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|(address, _)| *address == callee)
+            .map(|(_, words)| words.clone())
+            .collect()
+    }
+
+    #[test]
+    fn fn_00b6f8d0_hands_out_the_base_map() {
+        let mut e = Engine::new();
+        e.put_vtable(0x0f00_1000, &[0, 0, GET_RTTI]);
+        e.register(GET_RTTI, |e, a| e.mem.u32(a[0] + 8).into_ret());
+        e.register(CALLBACK, |_, _| Ret::default());
+        let own = e.mem.alloc(8);
+        e.mem.set_u32(own + 4, SOURCE_TEXTURE_RTTI);
+        let texture = e.mem.alloc(0x10);
+        e.mem.set_u32(texture, 0x0f00_1000);
+        e.mem.set_u32(texture + 8, own);
+        let this = e.mem.alloc(0x88);
+        e.mem.set_u32(this + 0x60, texture);
+        e.call_log = Some(vec![]);
+        e.call(0x00b6_f8d0, &args![this, CALLBACK, 9u32]);
+        assert_eq!(calls(&e, CALLBACK), vec![vec![texture, 0, 9]]);
+        assert_eq!(calls(&e, GET_RTTI).len(), 1);
+        // Neither record in the chain: asked twice, still handed out.
+        e.mem.set_u32(own + 4, 0);
+        e.call_log = Some(vec![]);
+        e.call(0x00b6_f8d0, &args![this, CALLBACK, 9u32]);
+        assert_eq!(calls(&e, GET_RTTI).len(), 2);
+        assert_eq!(calls(&e, CALLBACK).len(), 1);
+        // No base map: nothing.
+        e.mem.set_u32(this + 0x60, 0);
+        e.call_log = Some(vec![]);
+        e.call(0x00b6_f8d0, &args![this, CALLBACK, 9u32]);
+        assert!(calls(&e, CALLBACK).is_empty());
+    }
+
+    #[test]
+    fn fn_00b6f930_adds_the_water_fog_pass_once() {
+        let mut e = Engine::new();
+        e.register(CHECK_CREATE_WATER_FOG_PASS_ARRAY_00BA97B0, |_, _| {
+            Ret::default()
+        });
+        e.register(RENDER_PASS_ARRAY_ADD, |_, _| Ret::default());
+        let list = e.mem.alloc(0x14);
+        let this = e.mem.alloc(0x88);
+        e.mem.set_u32(this + 0x50, list);
+        let property = e.mem.alloc(0x20);
+        let geometry = e.mem.alloc(0xa0);
+        let pass_for = |e: &mut Engine, flags20: u8, flags24: u8, bits: Option<u16>| {
+            e.mem.set_u8(this + 0x20, flags20);
+            e.mem.set_u8(this + 0x24, flags24);
+            match bits {
+                Some(bits) => {
+                    e.mem.set_u16(property + 0x18, bits);
+                    e.mem.set_u32(geometry + 0x9c, property);
+                }
+                None => e.mem.set_u32(geometry + 0x9c, 0),
+            }
+            e.call_log = Some(vec![]);
+            assert_eq!(e.call(0x00b6_f930, &args![this, geometry]).u32(), list);
+            let added = calls(e, RENDER_PASS_ARRAY_ADD);
+            assert_eq!(
+                calls(e, CHECK_CREATE_WATER_FOG_PASS_ARRAY_00BA97B0),
+                vec![vec![this, 1]]
+            );
+            assert_eq!(added.len(), 1);
+            assert_eq!(&added[0][..2], &[list, geometry]);
+            assert_eq!(&added[0][3..], &[0; 6]);
+            added[0][2]
+        };
+        assert_eq!(pass_for(&mut e, 2, 0x20, Some(0x200)), 0x2ef);
+        assert_eq!(pass_for(&mut e, 0, 0x20, Some(0x200)), 0x2ee);
+        assert_eq!(pass_for(&mut e, 2, 0x20, Some(0x1ff)), 0x2e9);
+        assert_eq!(pass_for(&mut e, 0, 0x20, None), 0x2e8);
+        assert_eq!(pass_for(&mut e, 2, 0, Some(0x200)), 0x2e3);
+        assert_eq!(pass_for(&mut e, 0, 0, Some(0x200)), 0x2e2);
+        assert_eq!(pass_for(&mut e, 2, 0, None), 0x2dd);
+        assert_eq!(pass_for(&mut e, 0, 0xdf, Some(0)), 0x2dc);
+        // A list that has passes is answered as it is.
+        e.mem.set_u32(list + 0x10, 1);
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x00b6_f930, &args![this, geometry]).u32(), list);
+        assert!(calls(&e, RENDER_PASS_ARRAY_ADD).is_empty());
     }
 }

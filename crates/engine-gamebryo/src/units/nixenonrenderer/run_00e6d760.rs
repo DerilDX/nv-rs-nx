@@ -194,12 +194,59 @@ pub fn fn_00e6d780(
     true
 }
 
+/// The object table at `0126f108` that `fn_00e6d760` indexes (one word per entry).
+const OBJECT_TABLE_0126F108: u32 = 0x0126_f108;
+
+// Translated from 00e6d760 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`thiscall` on the renderer, which it does not read, one word;
+/// `00e812f0` calls it with a shader declaration's word +0x2c): 0 for index 0, otherwise the
+/// answer of the virtual slot +0xb4 (no stack words) of the object at entry `index` of the
+/// table at `0126f108`.
+pub fn fn_00e6d760(e: &mut Engine, _unused_this: Ptr, index: u32) -> u32 {
+    if index == 0 {
+        return index;
+    }
+    let object = e
+        .mem
+        .u32(OBJECT_TABLE_0126F108.wrapping_add(index.wrapping_mul(4)));
+    e.vcall(object, 0xb4, &args![]).u32()
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
-    vec![entry!(
-        0x00e6_d780,
-        fn_00e6d780(Ptr, Ptr, Ptr, u32, Ptr, Ptr, u8) -> bool
-    )]
+    vec![
+        entry!(
+            0x00e6_d780,
+            fn_00e6d780(Ptr, Ptr, Ptr, u32, Ptr, Ptr, u8) -> bool
+        ),
+        entry!(0x00e6_d760, fn_00e6d760(Ptr, u32) -> u32),
+    ]
+}
+
+#[cfg(test)]
+mod n010_tests {
+    use super::*;
+
+    #[test]
+    fn fn_00e6d760_asks_the_table_entry() {
+        let mut e = Engine::new();
+        e.map(0x0126_f000, 0x1000);
+        e.register(0x0e50_0000, |_, a| (a[0] + 1).into_ret());
+        let vtable = e.mem.alloc(0xb8);
+        e.mem.set_u32(vtable + 0xb4, 0x0e50_0000);
+        let object = e.mem.alloc(4);
+        e.mem.set_u32(object, vtable);
+        e.mem.set_u32(OBJECT_TABLE_0126F108 + 3 * 4, object);
+        e.call_log = Some(vec![]);
+        assert_eq!(
+            e.call(0x00e6_d760, &args![0x0e10_0000u32, 3u32]).u32(),
+            object + 1
+        );
+        assert_eq!(e.call(0x00e6_d760, &args![0x0e10_0000u32, 0u32]).u32(), 0);
+        let log = e.call_log.take().unwrap();
+        let slot_calls: Vec<_> = log.iter().filter(|c| c.0 == 0x0e50_0000).collect();
+        assert_eq!(slot_calls, vec![&(0x0e50_0000, vec![object])]);
+    }
 }
 
 #[cfg(test)]

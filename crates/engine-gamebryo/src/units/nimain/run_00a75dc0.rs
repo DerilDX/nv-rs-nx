@@ -56,9 +56,31 @@ fn ni_tri_strips_data_construct_entry(e: &mut Engine, words: &[u32]) -> Ret {
     .into_ret()
 }
 
+/// `NiTriBasedGeomData::NiTriBasedGeomData` (`00a8a970`, engine map; `thiscall`, no stack
+/// words): the default constructor of the base.
+const NI_TRI_BASED_GEOM_DATA_DEFAULT_CONSTRUCT: u32 = 0x00a8_a970;
+
+// Translated from 00a75e20 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiTriStripsData`'s default constructor (by the vtable it stores; `thiscall`, no stack
+/// words): the `NiTriBasedGeomData` default constructor (`00a8a970`), then the strip count
+/// (+0x44, 16 bits), the strip lengths (+0x48) and the strip lists (+0x4c) cleared and the
+/// vtable. Returns `this`.
+pub fn fn_00a75e20(e: &mut Engine, this: Ptr) -> Ptr {
+    let base = this.addr();
+    e.call(NI_TRI_BASED_GEOM_DATA_DEFAULT_CONSTRUCT, &args![base]);
+    e.mem.set_u16(base + STRIPS, 0);
+    e.mem.set_u32(base + STRIP_LENGTHS, 0);
+    e.mem.set_u32(base + STRIP_LISTS, 0);
+    e.mem.set_u32(base, NI_TRI_STRIPS_DATA_VTABLE);
+    this
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
-    vec![(0x00a7_5dc0, ni_tri_strips_data_construct_entry as AbiFn)]
+    vec![
+        (0x00a7_5dc0, ni_tri_strips_data_construct_entry as AbiFn),
+        entry!(0x00a7_5e20, fn_00a75e20(Ptr) -> Ptr),
+    ]
 }
 
 #[cfg(test)]
@@ -102,5 +124,30 @@ mod tests {
             .filter(|(a, _)| *a == NI_TRI_BASED_GEOM_DATA_CONSTRUCT_00A8A920)
             .collect();
         assert_eq!(base[0].1, vec![this, 1, 2, 3, 4, 5, 6, 7, 8]);
+    }
+}
+
+#[cfg(test)]
+mod default_constructor_tests {
+    use super::*;
+
+    #[test]
+    fn constructs_the_base_then_clears_the_strip_fields() {
+        let mut e = Engine::new();
+        e.register(NI_TRI_BASED_GEOM_DATA_DEFAULT_CONSTRUCT, |e, a| {
+            e.mem.set_u32(a[0] + 0x40, 0x0007_0007);
+            Ret::default()
+        });
+        let this = e.mem.alloc(0x50);
+        e.mem.write(this + 0x44, &[0xdd; 0xc]);
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x00a7_5e20, &args![this]).u32(), this);
+        assert_eq!(e.mem.u32(this), NI_TRI_STRIPS_DATA_VTABLE);
+        assert_eq!(e.mem.u32(this + 0x40), 0x0007_0007);
+        assert_eq!(e.mem.u32(this + STRIPS), 0xdddd_0000);
+        assert_eq!(e.mem.u32(this + STRIP_LENGTHS), 0);
+        assert_eq!(e.mem.u32(this + STRIP_LISTS), 0);
+        let log = e.call_log.take().unwrap();
+        assert!(log.contains(&(NI_TRI_BASED_GEOM_DATA_DEFAULT_CONSTRUCT, vec![this])));
     }
 }

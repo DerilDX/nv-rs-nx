@@ -29,7 +29,30 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
         entry!(0x00aa0b00, ni_accumulator_get_rtti() -> Ptr),
         entry!(0x00aa0fe0, ni_accumulator_finish_accumulating(Ptr)),
+        entry!(
+            0x00aa_0b10,
+            ni_accumulator_scalar_deleting_destructor(Ptr, u8) -> Ptr
+        ),
     ]
+}
+
+/// `NiAccumulator`'s vtable (`010a2304`, the scalar deleting destructor's), the `NiObject`
+/// destructor body (`00a5d3d0`) and the sized free (`00aa1460`, cdecl: block, size).
+const NI_ACCUMULATOR_VTABLE: u32 = 0x010a_2304;
+const NI_OBJECT_DESTRUCT: u32 = 0x00a5_d3d0;
+const NI_FREE_SIZED: u32 = 0x00aa_1460;
+
+// Translated from 00aa0b10 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiAccumulator`'s scalar deleting destructor (Xbox PDB; thiscall, `RET 4`): the class's
+/// vtable, `NiObject`'s destructor body (`00a5d3d0`) and, with bit 0 of `flags`, the 0xc
+/// bytes given back (`00aa1460`). Answers `this`.
+pub fn ni_accumulator_scalar_deleting_destructor(e: &mut Engine, this: Ptr, flags: u8) -> Ptr {
+    e.mem.set_u32(this.addr(), NI_ACCUMULATOR_VTABLE);
+    e.call(NI_OBJECT_DESTRUCT, &args![this]);
+    if flags & 1 != 0 {
+        e.call(NI_FREE_SIZED, &args![this, 0xcu32]);
+    }
+    this
 }
 
 #[cfg(test)]
@@ -56,5 +79,27 @@ mod b014_tests {
         e.call(0x00aa0fe0, &args![this]);
         assert_eq!(e.mem.u32(this + 8), 0);
         assert_eq!(e.mem.u32(this + 0xc), 0x5678);
+    }
+}
+
+#[cfg(test)]
+mod n014_tests {
+    use super::*;
+
+    #[test]
+    fn scalar_deleting_destructor_frees_only_on_request() {
+        let mut e = Engine::new();
+        e.register(NI_OBJECT_DESTRUCT, |_, _| Ret::default());
+        e.register(NI_FREE_SIZED, |_, _| Ret::default());
+        let this = e.mem.alloc(0xc);
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x00aa_0b10, &args![this, 0u32]).u32(), this);
+        assert_eq!(e.mem.u32(this), NI_ACCUMULATOR_VTABLE);
+        e.call(0x00aa_0b10, &args![this, 1u32]);
+        let log = e.call_log.take().unwrap();
+        let frees: Vec<_> = log.iter().filter(|c| c.0 == NI_FREE_SIZED).collect();
+        assert_eq!(frees.len(), 1);
+        assert_eq!(frees[0].1, vec![this, 0xc]);
+        assert_eq!(log.iter().filter(|c| c.0 == NI_OBJECT_DESTRUCT).count(), 2);
     }
 }

@@ -321,6 +321,64 @@ pub fn ni_material_color_controller_scalar_deleting_destructor(
     this
 }
 
+/// The color the ambient and diffuse cases of `GetTargetPoint3Value` give (`011f4998`,
+/// three floats).
+const BLACK_COLOR: u32 = 0x011f_4998;
+/// The base `IsEqual` (`00a57c10`, thiscall, the other controller).
+const BASE_IS_EQUAL: u32 = 0x00a5_7c10;
+
+// Translated from 00a4b3c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiMaterialColorController::GetTargetPoint3Value` (Xbox PDB name in the engine map): by
+/// flag bits 0-2 (the jump table's four cases), the color at `011f4998` for the ambient (0)
+/// and diffuse (1) colors, the material's specular color (+0x1c) for 2, and for 3 the color
+/// the material's pointer at +0x34 points to, or its emissive color (+0x28) when that is
+/// null; 0.0 for the other values. Copied into `value` through the x87 stack.
+pub fn ni_material_color_controller_get_target_point3_value(
+    e: &mut Engine,
+    this: Ptr<NiMaterialColorController>,
+    value: Ptr,
+) {
+    let target = e.mem.u32(this.addr().wrapping_add(0x2c));
+    let source = match e.get(this, NiMaterialColorController::m_uFlags) & 7 {
+        0 | 1 => Some(BLACK_COLOR),
+        2 => Some(target.wrapping_add(0x1c)),
+        3 => {
+            let pointer = e.mem.u32(target.wrapping_add(0x34));
+            Some(if pointer == 0 {
+                target.wrapping_add(0x28)
+            } else {
+                pointer
+            })
+        }
+        _ => None,
+    };
+    let lanes = match source {
+        Some(source) => [0u32, 4, 8].map(|lane| e.mem.u32(source.wrapping_add(lane))),
+        None => [0; 3],
+    };
+    for (k, bits) in lanes.iter().enumerate() {
+        let at = value.addr().wrapping_add(4 * k as u32);
+        e.mem.set_u32(at, x87_quiet_bits(*bits));
+    }
+}
+
+// Translated from 00a4b540 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiMaterialColorController::IsEqual` (Xbox PDB name in the engine map): the base's
+/// `IsEqual` (`00a57c10`; its false is returned as is) and the same flag bits 0-2.
+pub fn ni_material_color_controller_is_equal(
+    e: &mut Engine,
+    this: Ptr<NiMaterialColorController>,
+    other: Ptr,
+) -> u8 {
+    let base = e.call(BASE_IS_EQUAL, &args![this, other]).u8();
+    if base == 0 {
+        return base;
+    }
+    let theirs = e.mem.u8(other.addr().wrapping_add(0x38));
+    let ours = e.mem.u8(this.addr().wrapping_add(0x38));
+    u8::from((theirs ^ ours) & 7 == 0)
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -330,6 +388,17 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
             ni_material_color_controller_get_viewer_strings(Ptr, Ptr)
         ),
         entry!(0x00a4_b790, fn_00a4b790() -> Ptr<NiMaterialColorController>),
+        entry!(
+            0x00a4_b3c0,
+            ni_material_color_controller_get_target_point3_value(
+                Ptr<NiMaterialColorController>,
+                Ptr,
+            )
+        ),
+        entry!(
+            0x00a4_b540,
+            ni_material_color_controller_is_equal(Ptr<NiMaterialColorController>, Ptr) -> u8
+        ),
         entry!(
             0x00a4_b7c0,
             ni_material_color_controller_load_binary(Ptr<NiMaterialColorController>, Ptr)
@@ -702,5 +771,64 @@ mod tests {
         assert!(log.contains(&(0x7000_0004, vec![interp])));
         assert!(log.contains(&(BASE_DESTRUCT, vec![this])));
         assert!(log.contains(&(NI_DELETE, vec![this, 0x3c])));
+    }
+}
+
+#[cfg(test)]
+mod n004_tests {
+    use super::*;
+    use std::cell::Cell;
+    use std::rc::Rc;
+
+    #[test]
+    fn get_target_point3_value_picks_the_driven_color() {
+        let mut e = Engine::new();
+        e.map(BLACK_COLOR, 0xc);
+        e.mem.set_f32(BLACK_COLOR, 0.5);
+        let material = e.mem.alloc(0x48);
+        for k in 0..3 {
+            e.mem.set_f32(material + 0x1c + 4 * k, 2.0 + k as f32);
+            e.mem.set_f32(material + 0x28 + 4 * k, 6.0 + k as f32);
+        }
+        let this = Ptr::<NiMaterialColorController>::new(e.mem.alloc(0x3c));
+        e.mem.set_u32(this.addr() + 0x2c, material);
+        let value = e.mem.alloc(0xc);
+        let read = |e: &mut Engine, flags: u16| -> [f32; 3] {
+            e.set(this, NiMaterialColorController::m_uFlags, flags);
+            e.call(0x00a4_b3c0, &args![this, value]);
+            [e.mem.f32(value), e.mem.f32(value + 4), e.mem.f32(value + 8)]
+        };
+        assert_eq!(read(&mut e, 0), [0.5, 0.0, 0.0]);
+        assert_eq!(read(&mut e, 9), [0.5, 0.0, 0.0]);
+        assert_eq!(read(&mut e, 2), [2.0, 3.0, 4.0]);
+        assert_eq!(read(&mut e, 3), [6.0, 7.0, 8.0]);
+        assert_eq!(read(&mut e, 4), [0.0, 0.0, 0.0]);
+        let elsewhere = e.mem.alloc(0xc);
+        e.mem.set_u32(elsewhere, 0x7f80_0009);
+        e.mem.set_u32(material + 0x34, elsewhere);
+        e.set(this, NiMaterialColorController::m_uFlags, 0xfff3);
+        e.call(0x00a4_b3c0, &args![this, value]);
+        assert_eq!(e.mem.u32(value), 0x7fc0_0009);
+    }
+
+    #[test]
+    fn is_equal_compares_flag_bits_0_to_2() {
+        let mut e = Engine::new();
+        let base = Rc::new(Cell::new(1u32));
+        let answer = base.clone();
+        e.register_double(BASE_IS_EQUAL, move |_, _| Ret {
+            eax: answer.get(),
+            ..Ret::default()
+        });
+        let this = e.mem.alloc(0x3c);
+        let other = e.mem.alloc(0x3c);
+        e.mem.set_u16(this + 0x38, 0x0b);
+        e.mem.set_u16(other + 0x38, 0x03);
+        assert_eq!(e.call(0x00a4_b540, &args![this, other]).u8(), 1);
+        e.mem.set_u16(other + 0x38, 0x02);
+        assert_eq!(e.call(0x00a4_b540, &args![this, other]).u8(), 0);
+        base.set(0);
+        e.mem.set_u16(other + 0x38, 0x03);
+        assert_eq!(e.call(0x00a4_b540, &args![this, other]).u8(), 0);
     }
 }

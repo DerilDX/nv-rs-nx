@@ -29,12 +29,23 @@ pub fn fn_00b5a9a0(e: &mut Engine, this: Ptr<NiTPointerList>, item: Ptr<NiTListI
     e.set(this, NiTPointerList::m_pkTail, item.addr());
 }
 
+// Translated from 00b5a980 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Ghidra made no function here: the comparison `ShadowSceneNode`'s callers pass to the array
+/// search `00b5a930` (`cdecl`, two words: the addresses of two elements): whether the two
+/// words are equal (`SETZ` into a cleared `EAX`).
+pub fn fn_00b5a980(e: &mut Engine, left: Ptr, right: Ptr) -> bool {
+    e.mem.u32(left.addr()) == e.mem.u32(right.addr())
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
-    vec![entry!(
-        0x00b5_a9a0,
-        fn_00b5a9a0(Ptr<NiTPointerList>, Ptr<NiTListItem>)
-    )]
+    vec![
+        entry!(
+            0x00b5_a9a0,
+            fn_00b5a9a0(Ptr<NiTPointerList>, Ptr<NiTListItem>)
+        ),
+        entry!(0x00b5_a980, fn_00b5a980(Ptr, Ptr) -> bool),
+    ]
 }
 
 #[cfg(test)]
@@ -62,5 +73,17 @@ mod tests {
         assert_eq!(e.get(list, NiTPointerList::m_uiCount), 2);
         assert_eq!(e.get(a, NiTListItem::m_pkNext), b.addr());
         assert_eq!(e.get(b, NiTListItem::m_pkPrev), a.addr());
+    }
+
+    #[test]
+    fn fn_00b5a980_compares_the_words() {
+        let mut e = Engine::new();
+        let a = e.mem.alloc(4);
+        let b = e.mem.alloc(4);
+        e.mem.set_u32(a, 0x1234);
+        e.mem.set_u32(b, 0x1234);
+        assert_eq!(e.call(0x00b5_a980, &args![a, b]).u32(), 1);
+        e.mem.set_u32(b, 0x1235);
+        assert_eq!(e.call(0x00b5_a980, &args![a, b]).u32(), 0);
     }
 }

@@ -273,6 +273,238 @@ pub fn ni_skin_data_load_binary(e: &mut Engine, this: Ptr, stream: Ptr) {
     });
 }
 
+/// `NiObject::IsEqual` (`00a5d470`), `NiTransform::operator!=` (`00a86c30`; the engine map's
+/// `operator_`, true when the transforms differ) and `00a926b0` (the same shape for the bound),
+/// all `__thiscall` with the other object.
+const NI_OBJECT_IS_EQUAL: u32 = 0x00a5_d470;
+const TRANSFORM_DIFFERS: u32 = 0x00a8_6c30;
+const BOUND_DIFFERS_00A926B0: u32 = 0x00a9_26b0;
+/// The base `SaveBinary` (`00a89af0`, a bare `RET 4`), the transform's save `00a86cd0` and
+/// `NiSphere::SaveBinary` (`00eb5410`), `__thiscall` with the stream.
+const NI_OBJECT_SAVE_BINARY: u32 = 0x00a8_9af0;
+const TRANSFORM_SAVE_BINARY: u32 = 0x00a8_6cd0;
+const SPHERE_SAVE_BINARY: u32 = 0x00eb_5410;
+/// `NiStream`'s output stream (+0x250; write function +0xc, cdecl like the read, position +4).
+const STREAM_OUTPUT: u32 = 0x250;
+/// `NiBound::ComputeFromData` (`00a7ee30`, `__thiscall` on the bound: point count, points) and
+/// `NiBound::Update` (`00a7fdd0`, `__thiscall` on the result: the bound, the transform).
+const BOUND_COMPUTE_FROM_DATA: u32 = 0x00a7_ee30;
+const BOUND_UPDATE: u32 = 0x00a7_fdd0;
+/// `BoneData` fields (Xbox PDB layout, PC offsets): the bound +0x34, the vertex weights +0x44
+/// (8 bytes each: a `u16` vertex index, a `float` weight), their count +0x48 (`u16`).
+const BONE_BOUND: u32 = 0x34;
+const BONE_VERTEX_DATA: u32 = 0x44;
+const BONE_VERTICES: u32 = 0x48;
+
+/// Writes `bytes` bytes of components of `size` bytes from `buffer` through the stream's
+/// output, and moves its position by what the write answers.
+fn write(e: &mut Engine, stream: Ptr, buffer: u32, bytes: u32, size: u32) {
+    let output = e.mem.u32(stream.addr() + STREAM_OUTPUT);
+    let function = e.mem.u32(output + 0xc);
+    let count = e.with_stack(4, |e, sizes| {
+        e.mem.set_u32(sizes.addr(), size);
+        e.call(function, &args![output, buffer, bytes, sizes, 1u32])
+            .u32()
+    });
+    let position = e.mem.u32(output + 4);
+    e.mem.set_u32(output + 4, position.wrapping_add(count));
+}
+
+// Translated from 00a84d70 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiSkinData::IsEqual` (Xbox PDB): `NiObject::IsEqual` (`00a5d470`), the same root-to-skin
+/// transform (`NiTransform::operator!=` false), the same bone count, and for each bone the same
+/// transform, the same bound (`00a926b0` false), the same vertex count and the same vertex
+/// weights (index, and the weight equal by `FUCOMPP`: an unordered weight is unequal).
+pub fn ni_skin_data_is_equal(e: &mut Engine, this: Ptr, other: Ptr) -> bool {
+    if !e.call(NI_OBJECT_IS_EQUAL, &args![this, other]).bool() {
+        return false;
+    }
+    let (a, b) = (this.addr(), other.addr());
+    if e.call(
+        TRANSFORM_DIFFERS,
+        &args![a + ROOT_TO_SKIN, b + ROOT_TO_SKIN],
+    )
+    .bool()
+    {
+        return false;
+    }
+    let bones = e.mem.u32(a + BONES);
+    if bones != e.mem.u32(b + BONES) {
+        return false;
+    }
+    let mut index = 0u32;
+    let mut offset = 0u32;
+    while index < bones {
+        let mine = e.mem.u32(a + BONE_DATA).wrapping_add(offset);
+        let theirs = e.mem.u32(b + BONE_DATA).wrapping_add(offset);
+        if e.call(TRANSFORM_DIFFERS, &args![mine, theirs]).bool() {
+            return false;
+        }
+        if e.call(
+            BOUND_DIFFERS_00A926B0,
+            &args![mine + BONE_BOUND, theirs + BONE_BOUND],
+        )
+        .bool()
+        {
+            return false;
+        }
+        let vertices = e.mem.u16(mine + BONE_VERTICES);
+        if vertices != e.mem.u16(theirs + BONE_VERTICES) {
+            return false;
+        }
+        let my_data = e.mem.u32(mine + BONE_VERTEX_DATA);
+        let their_data = e.mem.u32(theirs + BONE_VERTEX_DATA);
+        for vertex in 0..u32::from(vertices) {
+            let at = vertex * 8;
+            if e.mem.u16(my_data.wrapping_add(at)) != e.mem.u16(their_data.wrapping_add(at)) {
+                return false;
+            }
+            let my_weight = x87_load32(e.mem.u32(my_data.wrapping_add(at + 4)));
+            let their_weight = x87_load32(e.mem.u32(their_data.wrapping_add(at + 4)));
+            // `FUCOMPP; TEST AH,0x44; JP`: only an ordered equal compare goes on.
+            if their_weight != my_weight {
+                return false;
+            }
+        }
+        index += 1;
+        offset += BONE_DATA_SIZE;
+    }
+    true
+}
+
+// Translated from 00a84e70 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map: `Realloc` of an array of 12-byte elements (array +0, capacity
+/// +4, count +8) to `size` elements through the `MemoryManager` (all ones on overflow); the
+/// used elements are copied word by word, the old array is given back (also when null) and
+/// the new array and capacity stored. Nothing when the capacity is already `size`.
+pub fn fn_00a84e70(e: &mut Engine, this: Ptr, size: u32) {
+    let set = this.addr();
+    if size == e.mem.u32(set + 4) {
+        return;
+    }
+    let array = if size != 0 {
+        let array = allocate_array(e, size, 12);
+        let mut index = 0u32;
+        while index < e.mem.u32(set + 8) {
+            let from = e.mem.u32(set).wrapping_add(index * 12);
+            for word in 0..3u32 {
+                let value = e.mem.u32(from + 4 * word);
+                e.mem
+                    .set_u32(array.wrapping_add(index * 12 + 4 * word), value);
+            }
+            index += 1;
+        }
+        array
+    } else {
+        0
+    };
+    let old = e.mem.u32(set);
+    e.call(MEMORY_MANAGER_DEALLOCATE, &args![MEMORY_MANAGER, old]);
+    e.mem.set_u32(set, array);
+    e.mem.set_u32(set + 4, size);
+}
+
+// Translated from 00a85250 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiSkinData::SaveBinary` (Xbox PDB): the base save (`00a89af0`), the root-to-skin transform
+/// (`00a86cd0`), the bone count, and a byte saying whether the first bone has vertex weights
+/// (the code keeps it in the low byte of its stream argument's stack word). Then each bone's
+/// transform, bound (`NiSphere::SaveBinary`) and vertex count, and with the byte set its vertex
+/// weights (index, 2 bytes; weight, 4 bytes).
+pub fn ni_skin_data_save_binary(e: &mut Engine, this: Ptr, stream: Ptr) {
+    let base = this.addr();
+    e.call(NI_OBJECT_SAVE_BINARY, &args![this, stream]);
+    e.call(TRANSFORM_SAVE_BINARY, &args![base + ROOT_TO_SKIN, stream]);
+    write(e, stream, base + BONES, 4, 4);
+    let weighted = e.with_stack(4, |e, flag| {
+        let first = e.mem.u32(base + BONE_DATA);
+        let set = e.mem.u32(first + BONE_VERTEX_DATA) != 0;
+        e.mem.set_u32(flag.addr(), stream.addr());
+        e.mem.set_u8(flag.addr(), u8::from(set));
+        write(e, stream, flag.addr(), 1, 1);
+        e.mem.u8(flag.addr()) != 0
+    });
+    let mut index = 0u32;
+    let mut offset = 0u32;
+    while index < e.mem.u32(base + BONES) {
+        let bone = e.mem.u32(base + BONE_DATA).wrapping_add(offset);
+        e.call(TRANSFORM_SAVE_BINARY, &args![bone, stream]);
+        e.call(SPHERE_SAVE_BINARY, &args![bone + BONE_BOUND, stream]);
+        write(e, stream, bone + BONE_VERTICES, 2, 2);
+        if weighted {
+            let mut vertex = 0u32;
+            while vertex < u32::from(e.mem.u16(bone + BONE_VERTICES)) {
+                let at = e.mem.u32(bone + BONE_VERTEX_DATA).wrapping_add(vertex * 8);
+                write(e, stream, at, 2, 2);
+                write(e, stream, at + 4, 4, 4);
+                vertex += 1;
+            }
+        }
+        index += 1;
+        offset += BONE_DATA_SIZE;
+    }
+}
+
+// Translated from 00a853c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiSkinData::ComputeBoneBounds` (Xbox PDB; `__thiscall`, the address of the vertex
+/// positions, 12 bytes each): for each bone its vertices' positions are gathered into a stack
+/// array of points (grown by doubling from 1 through `00a84e70`, emptied again for each bone),
+/// the bone's bound is computed from them (`NiBound::ComputeFromData`) and moved through the
+/// bone's transform (`NiBound::Update`). The array is given back to the `MemoryManager` at the
+/// end (also when it was never made).
+pub fn ni_skin_data_compute_bone_bounds(e: &mut Engine, this: Ptr, positions: Ptr) {
+    let base = this.addr();
+    let array = e.with_stack(0xc, |e, points| {
+        let set = points.addr();
+        let mut index = 0u32;
+        let mut offset = 0u32;
+        while index < e.mem.u32(base + BONES) {
+            let mut count = 0u32;
+            let mut vertex = 0u32;
+            while vertex
+                < u32::from(
+                    e.mem
+                        .u16(e.mem.u32(base + BONE_DATA) + offset + BONE_VERTICES),
+                )
+            {
+                let bone = e.mem.u32(base + BONE_DATA).wrapping_add(offset);
+                let data = e.mem.u32(bone + BONE_VERTEX_DATA);
+                let which = u32::from(e.mem.u16(data.wrapping_add(vertex * 8)));
+                let from = positions.addr().wrapping_add(which.wrapping_mul(12));
+                let capacity = e.mem.u32(set + 4);
+                if count == capacity {
+                    let size = if capacity != 0 { capacity * 2 } else { 1 };
+                    fn_00a84e70(e, points, size);
+                    count = e.mem.u32(set + 8);
+                }
+                let to = e.mem.u32(set).wrapping_add(count.wrapping_mul(12));
+                for word in 0..3u32 {
+                    let value = e.mem.u32(from.wrapping_add(4 * word));
+                    e.mem.set_u32(to + 4 * word, value);
+                }
+                count += 1;
+                vertex += 1;
+                e.mem.set_u32(set + 8, count);
+            }
+            let array = e.mem.u32(set);
+            let bone = e.mem.u32(base + BONE_DATA).wrapping_add(offset);
+            e.call(
+                BOUND_COMPUTE_FROM_DATA,
+                &args![bone + BONE_BOUND, count, array],
+            );
+            let bone = e.mem.u32(base + BONE_DATA).wrapping_add(offset);
+            e.call(
+                BOUND_UPDATE,
+                &args![bone + BONE_BOUND, bone + BONE_BOUND, bone],
+            );
+            e.mem.set_u32(set + 8, 0);
+            index += 1;
+            offset += BONE_DATA_SIZE;
+        }
+        e.mem.u32(set)
+    });
+    e.call(MEMORY_MANAGER_DEALLOCATE, &args![MEMORY_MANAGER, array]);
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -281,6 +513,10 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00a84ce0, ni_skin_data_link_object(Ptr, Ptr)),
         entry!(0x00a84ef0, ni_skin_data_scalar_deleting_destructor(Ptr, u32) -> Ptr),
         entry!(0x00a84f50, ni_skin_data_load_binary(Ptr, Ptr)),
+        entry!(0x00a84d70, ni_skin_data_is_equal(Ptr, Ptr) -> bool),
+        entry!(0x00a84e70, fn_00a84e70(Ptr, u32)),
+        entry!(0x00a85250, ni_skin_data_save_binary(Ptr, Ptr)),
+        entry!(0x00a853c0, ni_skin_data_compute_bone_bounds(Ptr, Ptr)),
     ]
 }
 
@@ -475,5 +711,255 @@ mod tests {
         e.call(0x00a8_4f50, &args![this, stream]);
         let bones = e.mem.u32(this + BONE_DATA);
         assert_eq!(e.mem.u32(bones + 0x44), 0);
+    }
+}
+
+#[cfg(test)]
+mod n019_tests {
+    use super::*;
+
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    fn calls_to(e: &Engine, callee: u32) -> Vec<Vec<u32>> {
+        e.call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|(address, _)| *address == callee)
+            .map(|(_, words)| words.clone())
+            .collect()
+    }
+
+    fn word(eax: u32) -> Ret {
+        Ret {
+            eax,
+            ..Ret::default()
+        }
+    }
+
+    /// Skin data with `weights` per bone (vertex, weight).
+    fn skin(e: &mut Engine, bones: &[&[(u16, f32)]]) -> u32 {
+        let data = e.mem.alloc(0x48);
+        let array = e.mem.alloc(BONE_DATA_SIZE * bones.len() as u32 + 4);
+        for (i, weights) in bones.iter().enumerate() {
+            let bone = array + BONE_DATA_SIZE * i as u32;
+            let block = e.mem.alloc(8 * weights.len() as u32 + 8);
+            for (j, (vertex, weight)) in weights.iter().enumerate() {
+                e.mem.set_u16(block + 8 * j as u32, *vertex);
+                e.mem.set_f32(block + 8 * j as u32 + 4, *weight);
+            }
+            e.mem.set_u32(bone + BONE_VERTEX_DATA, block);
+            e.mem.set_u16(bone + BONE_VERTICES, weights.len() as u16);
+        }
+        e.mem.set_u32(data + BONE_DATA, array);
+        e.mem.set_u32(data + BONES, bones.len() as u32);
+        data
+    }
+
+    #[test]
+    fn is_equal_compares_transforms_bounds_and_weights() {
+        let mut e = Engine::new();
+        e.register(NI_OBJECT_IS_EQUAL, |_, _| word(1));
+        // Transforms and bounds differ when their first words do.
+        for callee in [TRANSFORM_DIFFERS, BOUND_DIFFERS_00A926B0] {
+            e.register(callee, |e, a| {
+                word(u32::from(e.mem.u32(a[0]) != e.mem.u32(a[1])))
+            });
+        }
+        let bones: [&[(u16, f32)]; 2] = [&[(0, 0.5), (1, 0.5)], &[(2, 1.0)]];
+        let a = skin(&mut e, &bones);
+        let b = skin(&mut e, &bones);
+        e.call_log = Some(vec![]);
+        assert!(e.call(0x00a8_4d70, &args![a, b]).bool());
+        assert_eq!(calls_to(&e, TRANSFORM_DIFFERS)[0], vec![a + 0xc, b + 0xc]);
+        let second = e.mem.u32(b + BONE_DATA) + BONE_DATA_SIZE;
+        let weights = e.mem.u32(second + BONE_VERTEX_DATA);
+        e.mem.set_f32(weights + 4, 0.75);
+        assert!(!e.call(0x00a8_4d70, &args![a, b]).bool());
+        // A NaN weight never compares equal, even to itself.
+        let mine = e
+            .mem
+            .u32(e.mem.u32(a + BONE_DATA) + BONE_DATA_SIZE + BONE_VERTEX_DATA);
+        e.mem.set_f32(mine + 4, f32::NAN);
+        e.mem.set_f32(weights + 4, f32::NAN);
+        assert!(!e.call(0x00a8_4d70, &args![a, b]).bool());
+        e.mem.set_f32(mine + 4, 1.0);
+        e.mem.set_f32(weights + 4, 1.0);
+        e.mem.set_u16(weights, 3);
+        assert!(!e.call(0x00a8_4d70, &args![a, b]).bool());
+        e.mem.set_u16(weights, 2);
+        e.mem.set_u32(second + BONE_BOUND, 9);
+        assert!(!e.call(0x00a8_4d70, &args![a, b]).bool());
+        e.mem.set_u32(second + BONE_BOUND, 0);
+        e.mem.set_u32(b + BONES, 1);
+        assert!(!e.call(0x00a8_4d70, &args![a, b]).bool());
+        e.mem.set_u32(b + BONES, 2);
+        e.mem.set_u32(b + 0xc, 1);
+        assert!(!e.call(0x00a8_4d70, &args![a, b]).bool());
+        e.mem.set_u32(b + 0xc, 0);
+        assert!(e.call(0x00a8_4d70, &args![a, b]).bool());
+        e.register(NI_OBJECT_IS_EQUAL, |_, _| word(0));
+        assert!(!e.call(0x00a8_4d70, &args![a, b]).bool());
+    }
+
+    #[test]
+    fn realloc_moves_twelve_byte_elements() {
+        let mut e = Engine::new();
+        e.register(MEMORY_MANAGER_ALLOCATE, |e, a| {
+            word(if a[1] < 0x1000 { e.mem.alloc(a[1]) } else { 0 })
+        });
+        e.register(MEMORY_MANAGER_DEALLOCATE, |_, _| Ret::default());
+        let set = e.mem.alloc(0xc);
+        let old = e.mem.alloc(24);
+        for i in 0..6 {
+            e.mem.set_u32(old + 4 * i, 10 + i);
+        }
+        e.mem.set_u32(set, old);
+        e.mem.set_u32(set + 4, 2);
+        e.mem.set_u32(set + 8, 2);
+        e.call_log = Some(vec![]);
+        e.call(0x00a8_4e70, &args![set, 2u32]);
+        assert_eq!(calls_to(&e, MEMORY_MANAGER_ALLOCATE).len(), 0);
+        e.call(0x00a8_4e70, &args![set, 4u32]);
+        assert_eq!(
+            calls_to(&e, MEMORY_MANAGER_ALLOCATE),
+            vec![vec![MEMORY_MANAGER, 48]]
+        );
+        assert_eq!(
+            calls_to(&e, MEMORY_MANAGER_DEALLOCATE),
+            vec![vec![MEMORY_MANAGER, old]]
+        );
+        let array = e.mem.u32(set);
+        let copied: Vec<u32> = (0..6).map(|i| e.mem.u32(array + 4 * i)).collect();
+        assert_eq!(copied, vec![10, 11, 12, 13, 14, 15]);
+        assert_eq!(e.mem.u32(set + 4), 4);
+        e.call(0x00a8_4e70, &args![set, 0u32]);
+        assert_eq!(e.mem.u32(set), 0);
+        e.mem.set_u32(set + 8, 0);
+        // An overflowing size asks for all ones.
+        e.call(0x00a8_4e70, &args![set, 0x2000_0000u32]);
+        assert_eq!(
+            calls_to(&e, MEMORY_MANAGER_ALLOCATE)[1],
+            vec![MEMORY_MANAGER, 0xffff_ffff]
+        );
+    }
+
+    type Writes = Rc<RefCell<Vec<(Vec<u8>, u32)>>>;
+
+    fn output(e: &mut Engine) -> (u32, Writes) {
+        const WRITE_DOUBLE: u32 = 0x0070_d000;
+        let stream = e.mem.alloc(0x260);
+        let out = e.mem.alloc(0x10);
+        e.mem.set_u32(out + 0xc, WRITE_DOUBLE);
+        e.mem.set_u32(stream + STREAM_OUTPUT, out);
+        let writes: Writes = Rc::new(RefCell::new(vec![]));
+        let log = writes.clone();
+        e.register_double(WRITE_DOUBLE, move |e, a| {
+            log.borrow_mut()
+                .push((e.mem.bytes(a[1], a[2]), e.mem.u32(a[3])));
+            word(a[2])
+        });
+        (stream, writes)
+    }
+
+    #[test]
+    fn save_binary_writes_bones_and_weights() {
+        let mut e = Engine::new();
+        for callee in [
+            NI_OBJECT_SAVE_BINARY,
+            TRANSFORM_SAVE_BINARY,
+            SPHERE_SAVE_BINARY,
+        ] {
+            e.register(callee, |_, _| Ret::default());
+        }
+        let data = skin(&mut e, &[&[(3, 0.5)], &[]]);
+        let (stream, writes) = output(&mut e);
+        e.call_log = Some(vec![]);
+        e.call(0x00a8_5250, &args![data, stream]);
+        let bones = e.mem.u32(data + BONE_DATA);
+        assert_eq!(
+            calls_to(&e, TRANSFORM_SAVE_BINARY),
+            vec![
+                vec![data + 0xc, stream],
+                vec![bones, stream],
+                vec![bones + BONE_DATA_SIZE, stream]
+            ]
+        );
+        assert_eq!(
+            calls_to(&e, SPHERE_SAVE_BINARY)[1],
+            vec![bones + BONE_DATA_SIZE + BONE_BOUND, stream]
+        );
+        let expected: Vec<(Vec<u8>, u32)> = vec![
+            (vec![2, 0, 0, 0], 4),
+            (vec![1], 1),
+            (vec![1, 0], 2),
+            (vec![3, 0], 2),
+            (0.5f32.to_le_bytes().to_vec(), 4),
+            (vec![0, 0], 2),
+        ];
+        assert_eq!(*writes.borrow(), expected);
+        // Without weights on the first bone, no weights at all.
+        let first = e.mem.u32(data + BONE_DATA);
+        e.mem.set_u32(first + BONE_VERTEX_DATA, 0);
+        writes.borrow_mut().clear();
+        e.call(0x00a8_5250, &args![data, stream]);
+        assert_eq!(writes.borrow()[1], (vec![0], 1));
+        assert_eq!(writes.borrow().len(), 4);
+    }
+
+    #[test]
+    fn compute_bone_bounds_gathers_each_bones_points() {
+        let mut e = Engine::new();
+        e.register(MEMORY_MANAGER_ALLOCATE, |e, a| word(e.mem.alloc(a[1])));
+        e.register(MEMORY_MANAGER_DEALLOCATE, |_, _| Ret::default());
+        let gathered: Rc<RefCell<Vec<Vec<u32>>>> = Rc::new(RefCell::new(vec![]));
+        let log = gathered.clone();
+        e.register_double(BOUND_COMPUTE_FROM_DATA, move |e, a| {
+            log.borrow_mut()
+                .push((0..3 * a[1]).map(|i| e.mem.u32(a[2] + 4 * i)).collect());
+            Ret::default()
+        });
+        e.register(BOUND_UPDATE, |_, _| Ret::default());
+        let data = skin(&mut e, &[&[(1, 1.0), (0, 1.0), (2, 1.0)], &[], &[(2, 1.0)]]);
+        let positions = e.mem.alloc(36);
+        for i in 0..9 {
+            e.mem.set_u32(positions + 4 * i, 100 + i);
+        }
+        e.call_log = Some(vec![]);
+        e.call(0x00a8_53c0, &args![data, positions]);
+        assert_eq!(
+            *gathered.borrow(),
+            vec![
+                vec![103, 104, 105, 100, 101, 102, 106, 107, 108],
+                vec![],
+                vec![106, 107, 108]
+            ]
+        );
+        let bones = e.mem.u32(data + BONE_DATA);
+        assert_eq!(
+            calls_to(&e, BOUND_UPDATE)[2],
+            vec![
+                bones + 2 * BONE_DATA_SIZE + BONE_BOUND,
+                bones + 2 * BONE_DATA_SIZE + BONE_BOUND,
+                bones + 2 * BONE_DATA_SIZE
+            ]
+        );
+        // Grown to 1, 2, then 4 points; the last array is given back.
+        let sizes: Vec<u32> = calls_to(&e, MEMORY_MANAGER_ALLOCATE)
+            .iter()
+            .map(|c| c[1])
+            .collect();
+        assert_eq!(sizes, vec![12, 24, 48]);
+        let freed = calls_to(&e, MEMORY_MANAGER_DEALLOCATE);
+        assert_eq!(freed.len(), 4);
+        assert_ne!(freed[3][1], 0);
+        // No bones: the null array is given back.
+        e.mem.set_u32(data + BONES, 0);
+        e.call(0x00a8_53c0, &args![data, positions]);
+        assert_eq!(
+            calls_to(&e, MEMORY_MANAGER_DEALLOCATE)[4],
+            vec![MEMORY_MANAGER, 0]
+        );
     }
 }

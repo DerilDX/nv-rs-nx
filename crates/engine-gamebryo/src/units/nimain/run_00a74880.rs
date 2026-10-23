@@ -128,6 +128,181 @@ pub fn fn_00a74a10(e: &mut Engine) {
     probe_cpu(e, host_cpuid);
 }
 
+/// `FLD dword` of the float at `address`.
+fn load(e: &Engine, address: u32) -> f64 {
+    x87_load32(e.mem.u32(address))
+}
+
+/// A `float` memory operand of an x87 arithmetic instruction at `address`.
+fn operand(e: &Engine, address: u32) -> f64 {
+    x87_m32(e.mem.u32(address))
+}
+
+/// `FSTP dword` of `value` to `address`.
+fn store(e: &mut Engine, address: u32, value: f64) {
+    e.mem.set_u32(address, x87_store32(value));
+}
+
+// Translated from 00a74cb0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`cdecl`: a point count (the low 16 bits of its word), the
+/// source points, the destination points, a 3x3 matrix of floats; one of the two callbacks
+/// `00a74da0` installs, at `011aa04c`): rotates `count` points of three floats: destination
+/// row `r` is `(m[3r] * x + y * m[3r+1]) + z * m[3r+2]`, one x87 instruction at a time.
+/// Each row is stored before the next row reads the source point again, so a source that is
+/// also the destination sees its own new values, as in the exe.
+pub fn fn_00a74cb0(e: &mut Engine, count: u16, source: Ptr, destination: Ptr, matrix: Ptr) {
+    let matrix = matrix.addr();
+    let mut source = source.addr();
+    let mut destination = destination.addr();
+    let mut i = 0u32;
+    while i < u32::from(count) {
+        for row in 0..3u32 {
+            let m = matrix + 0xc * row;
+            let first = x87_mul(load(e, m), operand(e, source));
+            let second = x87_mul(load(e, source + 4), operand(e, m + 4));
+            let sum = x87_add(first, second);
+            let third = x87_mul(load(e, source + 8), operand(e, m + 8));
+            let sum = x87_add(sum, third);
+            store(e, destination + 4 * row, sum);
+        }
+        i += 1;
+        source = source.wrapping_add(0xc);
+        destination = destination.wrapping_add(0xc);
+    }
+}
+
+// Translated from 00a74bc0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`cdecl`: a point count (the low 16 bits of its word), the
+/// source points, the destination points, a transform of floats: a 3x3 matrix, the
+/// translation at +0x24 and the scale at +0x30; one of the two callbacks `00a74da0`
+/// installs, at `011aa050`): transforms `count` points: destination row `r` is
+/// `((m[3r] * x + y * m[3r+1]) + z * m[3r+2]) * scale + t[r]`, one x87 instruction at a
+/// time. Each row is stored before the next row reads the source point again.
+pub fn fn_00a74bc0(e: &mut Engine, count: u16, source: Ptr, destination: Ptr, transform: Ptr) {
+    let transform = transform.addr();
+    let mut source = source.addr();
+    let mut destination = destination.addr();
+    let mut i = 0u32;
+    while i < u32::from(count) {
+        for row in 0..3u32 {
+            let m = transform + 0xc * row;
+            let first = x87_mul(load(e, m), operand(e, source));
+            let second = x87_mul(load(e, source + 4), operand(e, m + 4));
+            let sum = x87_add(first, second);
+            let third = x87_mul(load(e, source + 8), operand(e, m + 8));
+            let sum = x87_add(sum, third);
+            let scaled = x87_mul(sum, operand(e, transform + 0x30));
+            let moved = x87_add(scaled, operand(e, transform + 0x24 + 4 * row));
+            store(e, destination + 4 * row, moved);
+        }
+        i += 1;
+        source = source.wrapping_add(0xc);
+        destination = destination.wrapping_add(0xc);
+    }
+}
+
+// Translated from 00a74880 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`cdecl`, the words of [`fn_00a74cb0`]; the rotation callback
+/// `00a74da0` installs at `011aa04c` in modes 1 to 6): the same rotation of `count` points
+/// with the exe's other instruction order: each row is `(x * m[3r] + y * m[3r+1]) + z *
+/// m[3r+2]`, the x87 stack interleaving the rows (the first row is stored after the second
+/// row's `y` and `z` products are taken, the second after the third's), so a source that is
+/// also the destination is read and written in that order.
+pub fn fn_00a74880(e: &mut Engine, count: u16, source: Ptr, destination: Ptr, matrix: Ptr) {
+    let m = matrix.addr();
+    let mut s = source.addr();
+    let mut d = destination.addr();
+    for _ in 0..count {
+        let a = x87_mul(load(e, s), operand(e, m));
+        let b = x87_mul(load(e, s + 4), operand(e, m + 4));
+        let c = x87_mul(load(e, s + 8), operand(e, m + 8));
+        let ab = x87_add(a, b);
+        let dx = x87_mul(load(e, s), operand(e, m + 0xc));
+        let first = x87_add(c, ab);
+        let ey = x87_mul(load(e, s + 4), operand(e, m + 0x10));
+        let fz = x87_mul(load(e, s + 8), operand(e, m + 0x14));
+        store(e, d, first);
+        let de = x87_add(dx, ey);
+        let gx = x87_mul(load(e, s), operand(e, m + 0x18));
+        let second = x87_add(de, fz);
+        let hy = x87_mul(load(e, s + 4), operand(e, m + 0x1c));
+        let iz = x87_mul(load(e, s + 8), operand(e, m + 0x20));
+        let gh = x87_add(gx, hy);
+        store(e, d + 4, second);
+        let third = x87_add(gh, iz);
+        s = s.wrapping_add(0xc);
+        d = d.wrapping_add(0xc);
+        store(e, d.wrapping_sub(4), third);
+    }
+}
+
+// Translated from 00a74900 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`cdecl`, the words of [`fn_00a74bc0`]; the transform callback
+/// `00a74da0` installs at `011aa050` in modes 1 to 6): the same transform of `count` points
+/// with the scale applied to the matrix first: the translation and the scale are copied
+/// (`FLD`/`FSTP`, which quiets a signalling NaN) into the frame, the nine matrix entries
+/// multiplied by the scale into a local matrix (`m[i] * scale`, the last one `scale *
+/// m[8]`), then each destination row is `((x * l[3r] + y * l[3r+1]) + z * l[3r+2]) + t[r]`
+/// in the exe's interleaved order. All source reads of a point come before its stores.
+/// (The exe keeps the translation's z and the scale in the transform and count argument
+/// words; here they are frame words like the others.)
+pub fn fn_00a74900(e: &mut Engine, count: u16, source: Ptr, destination: Ptr, transform: Ptr) {
+    let t = transform.addr();
+    // Frame: the scaled matrix (9 floats), the translation (3 floats), the scale.
+    e.with_stack(0x34, |e, frame| {
+        let local = frame.addr();
+        let tx = local + 0x24;
+        let ty = local + 0x28;
+        let tz = local + 0x2c;
+        let scale_at = local + 0x30;
+        for (to, from) in [(tx, 0x24u32), (ty, 0x28), (tz, 0x2c), (scale_at, 0x30)] {
+            let value = load(e, t + from);
+            store(e, to, value);
+        }
+        let scale = load(e, scale_at);
+        let first = x87_mul(load(e, t), scale);
+        store(e, local, first);
+        for i in 1..8u32 {
+            let scaled = x87_mul(load(e, t + 4 * i), scale);
+            store(e, local + 4 * i, scaled);
+        }
+        let last = x87_mul(scale, operand(e, t + 0x20));
+        store(e, local + 0x20, last);
+
+        let l = local;
+        let mut s = source.addr();
+        let mut d = destination.addr();
+        for _ in 0..count {
+            let a = x87_mul(load(e, s), operand(e, l));
+            let b = x87_mul(load(e, s + 4), operand(e, l + 4));
+            let c = x87_mul(load(e, s + 8), operand(e, l + 8));
+            let ab = x87_add(a, b);
+            let dx = x87_mul(load(e, s), operand(e, l + 0xc));
+            let r0 = x87_add(c, ab);
+            let ey = x87_mul(load(e, s + 4), operand(e, l + 0x10));
+            let fz = x87_mul(load(e, s + 8), operand(e, l + 0x14));
+            let de = x87_add(dx, ey);
+            let first = x87_add(r0, operand(e, tx));
+            let l6 = load(e, l + 0x18);
+            let fde = x87_add(fz, de);
+            let gx = x87_mul(l6, operand(e, s));
+            let l7 = load(e, l + 0x1c);
+            let l8 = load(e, l + 0x20);
+            let hy = x87_mul(l7, operand(e, s + 4));
+            let second = x87_add(fde, operand(e, ty));
+            let iz = x87_mul(l8, operand(e, s + 8));
+            let gh = x87_add(gx, hy);
+            store(e, d, first);
+            let ghi = x87_add(iz, gh);
+            store(e, d + 4, second);
+            let third = x87_add(ghi, operand(e, tz));
+            s = s.wrapping_add(0xc);
+            d = d.wrapping_add(0xc);
+            store(e, d.wrapping_sub(4), third);
+        }
+    });
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -135,6 +310,10 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00a7_4d90, fn_00a74d90(u32)),
         entry!(0x00a7_4da0, fn_00a74da0()),
         entry!(0x00a7_4a10, fn_00a74a10()),
+        entry!(0x00a7_4880, fn_00a74880(u16, Ptr, Ptr, Ptr)),
+        entry!(0x00a7_4900, fn_00a74900(u16, Ptr, Ptr, Ptr)),
+        entry!(0x00a7_4bc0, fn_00a74bc0(u16, Ptr, Ptr, Ptr)),
+        entry!(0x00a7_4cb0, fn_00a74cb0(u16, Ptr, Ptr, Ptr)),
     ]
 }
 
@@ -274,5 +453,94 @@ mod probe_tests {
         // The third block: mode 0.
         let (mode, _, _) = probe(Some(0x7fff_ffff), None, None);
         assert_eq!(mode, 0);
+    }
+}
+
+#[cfg(test)]
+mod transform_tests {
+    use super::*;
+
+    fn floats(e: &mut Engine, values: &[f32]) -> u32 {
+        let block = e.mem.alloc(4 * values.len() as u32);
+        for (i, value) in values.iter().enumerate() {
+            e.mem.set_f32(block + 4 * i as u32, *value);
+        }
+        block
+    }
+
+    fn read(e: &Engine, block: u32, n: u32) -> Vec<f32> {
+        (0..n).map(|i| e.mem.f32(block + 4 * i)).collect()
+    }
+
+    const ROTATION: [f32; 9] = [1.0, 1.0, 1.0, 1.0, 0.0, 0.0, 1.0, 0.0, 0.0];
+
+    #[test]
+    fn rotations_differ_only_in_their_order_on_a_shared_buffer() {
+        let mut e = Engine::new();
+        let matrix = floats(&mut e, &ROTATION);
+        for (function, in_place) in [
+            (0x00a7_4cb0u32, [6.0f32, 6.0, 6.0]),
+            (0x00a7_4880, [6.0, 1.0, 6.0]),
+        ] {
+            // Separate buffers: both give the plain product, for each point.
+            let source = floats(&mut e, &[1.0, 2.0, 3.0, 0.5, 0.0, 0.0]);
+            let destination = floats(&mut e, &[0.0; 7]);
+            e.call(
+                function,
+                &args![0x0001_0002u32, source, destination, matrix],
+            );
+            assert_eq!(
+                read(&e, destination, 7),
+                vec![6.0, 1.0, 1.0, 0.5, 0.5, 0.5, 0.0]
+            );
+            // The same buffer: the exe's order of reads and stores shows.
+            let point = floats(&mut e, &[1.0, 2.0, 3.0]);
+            e.call(function, &args![1u32, point, point, matrix]);
+            assert_eq!(read(&e, point, 3), in_place.to_vec());
+            // No points: nothing written.
+            e.call(function, &args![0x0001_0000u32, point, destination, matrix]);
+            assert_eq!(read(&e, destination, 1), vec![6.0]);
+        }
+    }
+
+    #[test]
+    fn transforms_scale_then_translate() {
+        let mut e = Engine::new();
+        let transform = floats(
+            &mut e,
+            &[
+                1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 10.0, 20.0, 30.0, 2.0,
+            ],
+        );
+        for function in [0x00a7_4bc0u32, 0x00a7_4900] {
+            let source = floats(&mut e, &[1.0, 2.0, 3.0, -1.0, 0.0, 0.25]);
+            let destination = floats(&mut e, &[0.0; 7]);
+            e.call(function, &args![2u32, source, destination, transform]);
+            assert_eq!(
+                read(&e, destination, 7),
+                vec![12.0, 24.0, 36.0, 8.0, 20.0, 30.5, 0.0]
+            );
+            e.call(function, &args![0u32, source, destination, transform]);
+            assert_eq!(read(&e, destination, 1), vec![12.0]);
+        }
+    }
+
+    #[test]
+    fn the_scaled_matrix_rows_feed_the_interleaved_transform() {
+        // A full matrix: each row's sum with the scale applied before (00a74900) or after
+        // (00a74bc0) gives the same exact values here.
+        let mut e = Engine::new();
+        let transform = floats(
+            &mut e,
+            &[
+                1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 0.5, -0.5, 1.0, 0.5,
+            ],
+        );
+        for function in [0x00a7_4bc0u32, 0x00a7_4900] {
+            let source = floats(&mut e, &[1.0, 1.0, 2.0]);
+            let destination = floats(&mut e, &[0.0; 3]);
+            e.call(function, &args![1u32, source, destination, transform]);
+            assert_eq!(read(&e, destination, 3), vec![5.0, 10.0, 17.5]);
+        }
     }
 }

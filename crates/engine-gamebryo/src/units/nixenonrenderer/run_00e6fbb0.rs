@@ -302,12 +302,111 @@ fn write_rows(e: &mut Engine, rows: u32, transform: u32) {
     }
 }
 
+// Translated from 00e6fda0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`thiscall` on the renderer, three words: an object whose +0x28
+/// holds 0x40-byte bone matrices, a skin partition, a transform): gives the transform to the
+/// render-state object's slot +0x30, builds the world matrix at +0x940 from it
+/// (`00b71a40`: rotation, translation +0x24, scale +0x30) and, when the partition has at
+/// most 4 bones (`u16` +0x20), hands the matrices of its first four bones (16-bit indices
+/// at +4) to the device's `SetTransform` (+0xb0) as transforms 0x100 to 0x103.
+pub fn fn_00e6fda0(e: &mut Engine, this: Ptr, bones: Ptr, partition: Ptr, transform: Ptr) {
+    let base = this.addr();
+    let t = transform.addr();
+    let state = e.mem.u32(base + RENDERER_STATE_OBJECT);
+    e.vcall(state, 0x30, &args![t]);
+    // FLD/FSTP of the scale into the pushed word.
+    let scale = x87_quiet_bits(e.mem.u32(t + 0x30));
+    e.call(
+        MAKE_MATRIX_00B71A40,
+        &args![base + 0x940, t, t + 0x24, scale],
+    );
+    let partition = partition.addr();
+    if e.mem.u16(partition + 0x20) <= 4 {
+        let matrices = e.mem.u32(bones.addr() + 0x28);
+        for i in 0..4u32 {
+            let indices = e.mem.u32(partition + 4);
+            let bone = u32::from(e.mem.u16(indices.wrapping_add(i * 2)));
+            let device = e.mem.u32(base + RENDERER_DEVICE);
+            e.vcall(
+                device,
+                DEVICE_SET_TRANSFORM,
+                &args![i + 0x100, (bone << 6).wrapping_add(matrices)],
+            );
+        }
+    }
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
         entry!(0x00e6_fbb0, fn_00e6fbb0(Ptr, Ptr, u8)),
         entry!(0x00e6_fe30, fn_00e6fe30(Ptr, Ptr, Ptr, u8, u32, u8)),
+        entry!(0x00e6_fda0, fn_00e6fda0(Ptr, Ptr, Ptr, Ptr)),
     ]
+}
+
+#[cfg(test)]
+mod n010_tests {
+    use super::*;
+
+    #[test]
+    fn fn_00e6fda0_sets_the_world_and_the_bone_transforms() {
+        let mut e = Engine::new();
+        let state_slot = 0x0e50_0030;
+        let set_transform = 0x0e50_00b0;
+        e.register(state_slot, |_, _| Ret::default());
+        e.register(set_transform, |_, _| Ret::default());
+        e.register(MAKE_MATRIX_00B71A40, |_, _| Ret::default());
+        let vtable = e.mem.alloc(0x100);
+        e.mem.set_u32(vtable + 0x30, state_slot);
+        e.mem.set_u32(vtable + 0xb0, set_transform);
+        let state = e.mem.alloc(4);
+        e.mem.set_u32(state, vtable);
+        let device = e.mem.alloc(4);
+        e.mem.set_u32(device, vtable);
+        let renderer = e.mem.alloc(0x980);
+        e.mem.set_u32(renderer + RENDERER_STATE_OBJECT, state);
+        e.mem.set_u32(renderer + RENDERER_DEVICE, device);
+        let bones = e.mem.alloc(0x2c);
+        e.mem.set_u32(bones + 0x28, 0x0e60_0000);
+        let indices = e.mem.alloc(8);
+        for (i, bone) in [3u16, 0, 1, 7].iter().enumerate() {
+            e.mem.set_u16(indices + 2 * i as u32, *bone);
+        }
+        let partition = e.mem.alloc(0x24);
+        e.mem.set_u32(partition + 4, indices);
+        e.mem.set_u16(partition + 0x20, 4);
+        let transform = e.mem.alloc(TRANSFORM_SIZE);
+        e.mem.set_f32(transform + 0x30, 2.0);
+        e.call_log = Some(vec![]);
+        e.call(0x00e6_fda0, &args![renderer, bones, partition, transform]);
+        let log = e.call_log.take().unwrap();
+        assert_eq!(
+            log[1..].to_vec(),
+            vec![
+                (state_slot, vec![state, transform]),
+                (
+                    MAKE_MATRIX_00B71A40,
+                    vec![
+                        renderer + 0x940,
+                        transform,
+                        transform + 0x24,
+                        2.0f32.to_bits()
+                    ]
+                ),
+                (set_transform, vec![device, 0x100, 0x0e60_00c0]),
+                (set_transform, vec![device, 0x101, 0x0e60_0000]),
+                (set_transform, vec![device, 0x102, 0x0e60_0040]),
+                (set_transform, vec![device, 0x103, 0x0e60_01c0]),
+            ]
+        );
+        // More than four bones: no bone transforms.
+        e.mem.set_u16(partition + 0x20, 5);
+        e.call_log = Some(vec![]);
+        e.call(0x00e6_fda0, &args![renderer, bones, partition, transform]);
+        let log = e.call_log.take().unwrap();
+        assert!(!log.iter().any(|c| c.0 == set_transform));
+    }
 }
 
 #[cfg(test)]

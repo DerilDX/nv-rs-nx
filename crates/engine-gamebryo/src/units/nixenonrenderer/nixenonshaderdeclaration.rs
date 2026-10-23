@@ -96,7 +96,86 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         ),
         entry!(0x00e7_6a80, fn_00e76a80(Ptr) -> u32),
         entry!(0x00e7_8510, fn_00e78510(Ptr, u32) -> Ptr),
+        entry!(0x00e7_6500, fn_00e76500(Ptr, u32, u32) -> bool),
+        entry!(0x00e7_6570, fn_00e76570(Ptr, u32) -> bool),
+        entry!(0x00e7_6610, fn_00e76610(Ptr, u8)),
+        entry!(0x00e7_6620, fn_00e76620(Ptr) -> u8),
     ]
+}
+
+/// Marks one 0x1c-byte entry unused: its words +8 and +0xc become `0xffffffff` and 0x11.
+fn clear_entry(e: &mut Engine, at: u32) {
+    e.mem.set_u32(at.wrapping_add(8), 0xffff_ffff);
+    e.mem.set_u32(at.wrapping_add(0xc), 0x11);
+}
+
+/// After an entry change: `m_bModified` (+0x28) set and the Direct3D declaration
+/// (`m_hVertexDecl`, +0x30) released (its slot +8) and cleared when there is one.
+fn declaration_modified(e: &mut Engine, base: u32) {
+    let declaration = e.mem.u32(base.wrapping_add(0x30));
+    e.mem.set_u8(base.wrapping_add(0x28), 1);
+    if declaration != 0 {
+        e.vcall(declaration, 8, &args![]);
+        e.mem.set_u32(base.wrapping_add(0x30), 0);
+    }
+}
+
+// Translated from 00e76500 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (vtable `010ee70c` slot +0x90, `RemoveEntry`'s in the Xbox PDB;
+/// `thiscall`, two words): `false` for an entry at or past the entry count
+/// (`m_uiMaxStreamEntryCount`, +0x1c) or a stream at or past the stream count (+0x20).
+/// Otherwise the entry (0x1c bytes, in the entries at +8 of the 16-byte stream at +0x24) is
+/// marked unused (+8 `0xffffffff`, +0xc 0x11), the declaration marked modified (its Direct3D
+/// declaration released) and the result is `true`.
+pub fn fn_00e76500(e: &mut Engine, this: Ptr, entry: u32, stream: u32) -> bool {
+    let base = this.addr();
+    if entry >= e.mem.u32(base + 0x1c) || stream >= e.mem.u32(base + 0x20) {
+        return false;
+    }
+    let streams = e.mem.u32(base + 0x24);
+    let entries = e.mem.u32(streams.wrapping_add(stream << 4).wrapping_add(8));
+    clear_entry(e, entries.wrapping_add(entry.wrapping_mul(0x1c)));
+    declaration_modified(e, base);
+    true
+}
+
+// Translated from 00e76570 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (vtable `010ee70c` slot +0x9c, `ClearAllEntries`' in the Xbox
+/// PDB; `thiscall`, one word): `false` for a stream at or past the stream count (+0x20).
+/// Otherwise every entry of the stream (up to the entry count +0x1c, re-read each time) is
+/// marked unused as in `fn_00e76500`, the declaration marked modified and the result is
+/// `true`.
+pub fn fn_00e76570(e: &mut Engine, this: Ptr, stream: u32) -> bool {
+    let base = this.addr();
+    if stream >= e.mem.u32(base + 0x20) {
+        return false;
+    }
+    let record = (stream << 4).wrapping_add(e.mem.u32(base + 0x24));
+    let mut index = 0u32;
+    let mut offset = 0u32;
+    while index < e.mem.u32(base + 0x1c) {
+        let at = e.mem.u32(record.wrapping_add(8)).wrapping_add(offset);
+        index += 1;
+        clear_entry(e, at);
+        offset = offset.wrapping_add(0x1c);
+    }
+    declaration_modified(e, base);
+    true
+}
+
+// Translated from 00e76610 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (vtable `010ee70c` slot +0xa4, `SetSoftwareVertexProcessing`'s
+/// in the Xbox PDB): stores the byte at +0x34 (a PC-only field; the Xbox class ends at
+/// +0x34).
+pub fn fn_00e76610(e: &mut Engine, this: Ptr, value: u8) {
+    e.mem.set_u8(this.addr() + 0x34, value);
+}
+
+// Translated from 00e76620 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (vtable `010ee70c` slot +0xa8, `GetSoftwareVertexProcessing`'s
+/// in the Xbox PDB): the byte at +0x34.
+pub fn fn_00e76620(e: &mut Engine, this: Ptr) -> u8 {
+    e.mem.u8(this.addr() + 0x34)
 }
 
 // Translated from 00e76350 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -1138,5 +1217,101 @@ mod b052_tests {
             .map(|w| w[7])
             .collect();
         assert_eq!(packed, vec![0x700c, 0x7010]);
+    }
+}
+
+#[cfg(test)]
+mod n010_tests {
+    use super::*;
+
+    const RELEASE: u32 = 0x0e50_0008;
+
+    /// A declaration with 3 entries per stream and 2 streams, entries filled with 7, and a
+    /// Direct3D declaration whose slot +8 is `RELEASE`.
+    fn declaration(e: &mut Engine) -> (u32, u32) {
+        e.register(RELEASE, |_, _| Ret::default());
+        let vtable = e.mem.alloc(0x10);
+        e.mem.set_u32(vtable + 8, RELEASE);
+        let d3d = e.mem.alloc(4);
+        e.mem.set_u32(d3d, vtable);
+        let this = e.mem.alloc(0x38);
+        e.mem.set_u32(this + 0x1c, 3);
+        e.mem.set_u32(this + 0x20, 2);
+        e.mem.set_u32(this + 0x30, d3d);
+        let streams = e.mem.alloc(0x20);
+        for stream in 0..2u32 {
+            let entries = e.mem.alloc(3 * 0x1c);
+            e.mem.write(entries, &[7; 3 * 0x1c]);
+            e.mem.set_u32(streams + 0x10 * stream + 8, entries);
+        }
+        e.mem.set_u32(this + 0x24, streams);
+        e.call_log = Some(vec![]);
+        (this, d3d)
+    }
+
+    fn entry_at(e: &Engine, this: u32, stream: u32, entry: u32) -> u32 {
+        let streams = e.mem.u32(this + 0x24);
+        e.mem.u32(streams + 0x10 * stream + 8) + 0x1c * entry
+    }
+
+    fn releases(e: &mut Engine) -> usize {
+        let log = e.call_log.replace(vec![]).unwrap();
+        log.iter().filter(|c| c.0 == RELEASE).count()
+    }
+
+    #[test]
+    fn fn_00e76500_marks_one_entry_unused() {
+        let mut e = Engine::new();
+        let (this, _) = declaration(&mut e);
+        assert!(!e.call(0x00e7_6500, &args![this, 3u32, 0u32]).bool());
+        assert!(!e.call(0x00e7_6500, &args![this, 0u32, 2u32]).bool());
+        assert_eq!(e.mem.u8(this + 0x28), 0);
+        assert_eq!(releases(&mut e), 0);
+        assert!(e.call(0x00e7_6500, &args![this, 2u32, 1u32]).bool());
+        let at = entry_at(&e, this, 1, 2);
+        assert_eq!(e.mem.u32(at + 8), 0xffff_ffff);
+        assert_eq!(e.mem.u32(at + 0xc), 0x11);
+        assert_eq!(e.mem.u32(at + 4), 0x0707_0707);
+        assert_eq!(e.mem.u32(entry_at(&e, this, 1, 1) + 8), 0x0707_0707);
+        assert_eq!(e.mem.u8(this + 0x28), 1);
+        assert_eq!(e.mem.u32(this + 0x30), 0);
+        assert_eq!(releases(&mut e), 1);
+        // No Direct3D declaration left: nothing to release.
+        assert!(e.call(0x00e7_6500, &args![this, 0u32, 0u32]).bool());
+        assert_eq!(releases(&mut e), 0);
+    }
+
+    #[test]
+    fn fn_00e76570_marks_every_entry_of_the_stream_unused() {
+        let mut e = Engine::new();
+        let (this, _) = declaration(&mut e);
+        assert!(!e.call(0x00e7_6570, &args![this, 2u32]).bool());
+        assert_eq!(releases(&mut e), 0);
+        assert!(e.call(0x00e7_6570, &args![this, 0u32]).bool());
+        for entry in 0..3 {
+            let at = entry_at(&e, this, 0, entry);
+            assert_eq!(e.mem.u32(at + 8), 0xffff_ffff);
+            assert_eq!(e.mem.u32(at + 0xc), 0x11);
+        }
+        assert_eq!(e.mem.u32(entry_at(&e, this, 1, 0) + 8), 0x0707_0707);
+        assert_eq!(e.mem.u8(this + 0x28), 1);
+        assert_eq!(releases(&mut e), 1);
+    }
+
+    #[test]
+    fn fn_00e76610_and_00e76620_store_and_read_the_byte() {
+        let mut e = Engine::new();
+        let this = e.mem.alloc(0x38);
+        e.call(0x00e7_6610, &args![this, 0x5au8]);
+        assert_eq!(e.mem.u8(this + 0x34), 0x5a);
+        assert_eq!(e.call(0x00e7_6620, &args![this]).u8(), 0x5a);
+    }
+
+    #[test]
+    fn fn_00e76620_reads_the_byte() {
+        let mut e = Engine::new();
+        let this = e.mem.alloc(0x38);
+        e.mem.set_u8(this + 0x34, 1);
+        assert_eq!(e.call(0x00e7_6620, &args![this]).u8(), 1);
     }
 }

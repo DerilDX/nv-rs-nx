@@ -206,6 +206,218 @@ pub fn ni_stencil_property_load_binary(e: &mut Engine, this: Ptr, stream: Ptr) {
     });
 }
 
+/// `NiStencilProperty::ms_RTTI` (`011f4a0c`, what the class's `GetRTTI` `0049ed30` answers);
+/// its first word is the class name.
+const NI_STENCIL_PROPERTY_RTTI: u32 = 0x011f_4a0c;
+/// The base class's `IsEqual` (`00a62140`) and `SaveBinary` (`00a5d7b0`), `__thiscall` with
+/// one word (the map names the folded bodies after `NiSequenceStreamHelper`), and
+/// `NiProperty::GetViewerStrings` (`00a5d850`).
+const BASE_IS_EQUAL: u32 = 0x00a6_2140;
+const BASE_SAVE_BINARY: u32 = 0x00a5_d7b0;
+const NI_PROPERTY_GET_VIEWER_STRINGS: u32 = 0x00a5_d850;
+/// `NiStream`'s output stream (+0x250) and its write function (+0xc: cdecl, stream, buffer,
+/// bytes, component sizes, component count; the bytes written are added to its +0x4).
+const STREAM_OUTPUT: u32 = 0x250;
+const BINARY_STREAM_WRITE: u32 = 0xc;
+/// The allocation `00aa1070` (cdecl: size) and `NiSprintf` (`00a305b0`, cdecl: buffer, size,
+/// format, then the format's arguments).
+const ALLOCATE_00AA1070: u32 = 0x00aa_1070;
+const NI_SPRINTF: u32 = 0x00a3_05b0;
+/// `"%s = UNKNOWN!!!"`, the format of a value outside every list.
+const FORMAT_UNKNOWN: u32 = 0x0109_b2ec;
+/// `NiGetViewerString` (`00a7d330`, cdecl: a name), `NiGetViewerString_ov2` (`00a7d370`,
+/// cdecl: label, a `bool` word) and `NiGetViewerString_ov8` (`00a7d510`, cdecl: label, an
+/// unsigned word); the string array's `SetSize` (`0096ad30`, `__thiscall`: the new size) and
+/// `SetAt` (`0096ae90`, `__thiscall`: index, address of the element).
+const NI_GET_VIEWER_STRING: u32 = 0x00a7_d330;
+const NI_GET_VIEWER_STRING_BOOL: u32 = 0x00a7_d370;
+const NI_GET_VIEWER_STRING_UNSIGNED: u32 = 0x00a7_d510;
+const STRING_ARRAY_SET_SIZE: u32 = 0x0096_ad30;
+const STRING_ARRAY_SET_AT: u32 = 0x0096_ae90;
+/// The labels `GetViewerStrings` passes: `"Enabled"`, `"m_uiRef"`, `"m_uiMask"`,
+/// `"Test Funtion"` (sic), `"Test Fail Action"`, `"Depth Fail Action"`, `"Test Pass Action"`
+/// and `"Draw Mode"`.
+const LABEL_ENABLED: u32 = 0x0109_c7d8;
+const LABEL_REF: u32 = 0x0109_cb7c;
+const LABEL_MASK: u32 = 0x0109_cb70;
+const LABEL_TEST_FUNCTION: u32 = 0x0109_cb60;
+const LABEL_TEST_FAIL_ACTION: u32 = 0x0109_cb4c;
+const LABEL_DEPTH_FAIL_ACTION: u32 = 0x0109_cb38;
+const LABEL_TEST_PASS_ACTION: u32 = 0x0109_cb24;
+const LABEL_DRAW_MODE: u32 = 0x0109_cb18;
+
+// Translated from 00a6f070 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiStencilProperty::IsEqual` (Xbox PDB): the base class's comparison (`00a62140`), then the
+/// same flags word (+0x18), reference (+0x1c) and mask (+0x20).
+pub fn ni_stencil_property_is_equal(e: &mut Engine, this: Ptr, other: Ptr) -> bool {
+    if !e.call(BASE_IS_EQUAL, &args![this, other]).bool() {
+        return false;
+    }
+    let (a, b) = (this.addr(), other.addr());
+    e.mem.u16(b + STENCIL_FLAGS) == e.mem.u16(a + STENCIL_FLAGS)
+        && e.mem.u32(b + STENCIL_REF) == e.mem.u32(a + STENCIL_REF)
+        && e.mem.u32(b + STENCIL_MASK) == e.mem.u32(a + STENCIL_MASK)
+}
+
+/// The shared body of the three static `GetViewerString`s: a block of the name's length plus
+/// 0x16 bytes (`00aa1070`), `NiSprintf` into it with the case's format (or
+/// `"%s = UNKNOWN!!!"` for a value outside the cases) and the name; answers the block.
+fn viewer_string(e: &mut Engine, name: Ptr, format: Option<u32>) -> Ptr {
+    let size = (e.mem.cstr(name.addr()).len() as u32).wrapping_add(0x16);
+    let text = e.call(ALLOCATE_00AA1070, &args![size]).u32();
+    let format = format.unwrap_or(FORMAT_UNKNOWN);
+    e.call(NI_SPRINTF, &args![text, size, format, name]);
+    Ptr::new(text)
+}
+
+// Translated from 00a6f0b0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiStencilProperty::GetViewerString` (Xbox PDB; static, cdecl: name, test function): a new
+/// string `"<name> = TEST_<function>"` for functions 0..7 (NEVER, LESS, EQUAL, LESSEQUAL,
+/// GREATER, NOTEQUAL, GREATEREQUAL, ALWAYS; the compiler's jump table), or
+/// `"<name> = UNKNOWN!!!"`.
+pub fn ni_stencil_property_get_viewer_string(e: &mut Engine, name: Ptr, function: u32) -> Ptr {
+    let format = match function {
+        0 => Some(0x0109_b3ec),
+        1 => Some(0x0109_b460),
+        2 => Some(0x0109_b450),
+        3 => Some(0x0109_b43c),
+        4 => Some(0x0109_b428),
+        5 => Some(0x0109_b414),
+        6 => Some(0x0109_b3fc),
+        7 => Some(0x0109_b470),
+        _ => None,
+    };
+    viewer_string(e, name, format)
+}
+
+// Translated from 00a6f1e0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiStencilProperty::GetViewerString_ov2` (Xbox PDB; static, cdecl: name, action): a new
+/// string `"<name> = ACTION_<action>"` for actions 0..5 (KEEP, ZERO, REPLACE, INCREMENT,
+/// DECREMENT, INVERT; the compiler's jump table), or `"<name> = UNKNOWN!!!"`.
+pub fn ni_stencil_property_get_viewer_string_ov2(e: &mut Engine, name: Ptr, action: u32) -> Ptr {
+    let format = match action {
+        0 => Some(0x0109_cabc),
+        1 => Some(0x0109_caa8),
+        2 => Some(0x0109_ca94),
+        3 => Some(0x0109_ca7c),
+        4 => Some(0x0109_ca64),
+        5 => Some(0x0109_ca50),
+        _ => None,
+    };
+    viewer_string(e, name, format)
+}
+
+// Translated from 00a6f2d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiStencilProperty::GetViewerString_ov3` (Xbox PDB; static, cdecl: name, draw mode): a new
+/// string `"<name> = DRAW_<mode>"` for modes 0..3 (CCW_OR_BOTH, CCW, CW, BOTH; the compiler's
+/// jump table), or `"<name> = UNKNOWN!!!"`.
+pub fn ni_stencil_property_get_viewer_string_ov3(e: &mut Engine, name: Ptr, mode: u32) -> Ptr {
+    let format = match mode {
+        0 => Some(0x0109_cb00),
+        1 => Some(0x0109_caf0),
+        2 => Some(0x0109_cae0),
+        3 => Some(0x0109_cad0),
+        _ => None,
+    };
+    viewer_string(e, name, format)
+}
+
+/// One write through the stream's output: `size` bytes from `buffer` as one component of
+/// `size` bytes (the size word on the stack); the position moves on by what was written.
+fn stream_write(e: &mut Engine, stream: u32, buffer: u32, size: u32) {
+    let output = e.mem.u32(stream.wrapping_add(STREAM_OUTPUT));
+    let write = e.mem.u32(output.wrapping_add(BINARY_STREAM_WRITE));
+    e.with_stack(4, |e, slot| {
+        e.mem.set_u32(slot.addr(), size);
+        let bytes = e
+            .call(write, &args![output, buffer, size, slot, 1u32])
+            .u32();
+        let position = e.mem.u32(output.wrapping_add(BINARY_STREAM_POSITION));
+        e.mem.set_u32(
+            output.wrapping_add(BINARY_STREAM_POSITION),
+            position.wrapping_add(bytes),
+        );
+    });
+}
+
+// Translated from 00a6f740 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiStencilProperty::SaveBinary` (Xbox PDB): the base class's save (`00a5d7b0`), then the
+/// flags word (2 bytes), the reference and the mask (4 bytes each).
+pub fn ni_stencil_property_save_binary(e: &mut Engine, this: Ptr, stream: Ptr) {
+    e.call(BASE_SAVE_BINARY, &args![this, stream]);
+    let (this, stream) = (this.addr(), stream.addr());
+    stream_write(e, stream, this.wrapping_add(STENCIL_FLAGS), 2);
+    stream_write(e, stream, this.wrapping_add(STENCIL_REF), 4);
+    stream_write(e, stream, this.wrapping_add(STENCIL_MASK), 4);
+}
+
+/// The inlined `NiTArray<char *>::Add` through the stack word at `slot` (the code's own
+/// argument word): `value` stored there, the array grown to its size plus `m_usGrowBy`
+/// (+0xe) when the size (+0xa) has reached the capacity (+0x8), then `SetAt` at the old size.
+fn append(e: &mut Engine, strings: u32, slot: u32, value: u32) {
+    e.mem.set_u32(slot, value);
+    let size = u32::from(e.mem.u16(strings.wrapping_add(0xa)));
+    let capacity = u32::from(e.mem.u16(strings.wrapping_add(0x8)));
+    if size >= capacity {
+        let grow_by = u32::from(e.mem.u16(strings.wrapping_add(0xe)));
+        e.call(STRING_ARRAY_SET_SIZE, &args![strings, grow_by + size]);
+    }
+    e.call(STRING_ARRAY_SET_AT, &args![strings, size, slot]);
+}
+
+// Translated from 00a6f7d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiStencilProperty::GetViewerStrings` (Xbox PDB): `NiProperty`'s strings (`00a5d850`), then
+/// appended in order: the class name (`NiGetViewerString` of `ms_RTTI`'s first word),
+/// `"Enabled"` (flag bit 0), `"m_uiRef"`, `"m_uiMask"`, the test function (flag bits 12-15),
+/// the fail, depth-fail and pass actions (bits 1-3, 4-6, 7-9) and the draw mode (bits 10-11).
+/// Every string goes through the argument's stack word; the `bool` word for `"Enabled"` is
+/// that word with its low byte replaced (the upper bytes are the class name string's), as the
+/// code builds it.
+pub fn ni_stencil_property_get_viewer_strings(e: &mut Engine, this: Ptr, strings: Ptr) {
+    e.call(NI_PROPERTY_GET_VIEWER_STRINGS, &args![this, strings]);
+    let (this, strings) = (this.addr(), strings.addr());
+    e.with_stack(4, |e, slot| {
+        let slot = slot.addr();
+        e.mem.set_u32(slot, strings);
+        let class_name = e.mem.u32(NI_STENCIL_PROPERTY_RTTI);
+        let text = e.call(NI_GET_VIEWER_STRING, &args![class_name]).u32();
+        append(e, strings, slot, text);
+        let enabled = (e.mem.u32(slot) & 0xffff_ff00)
+            | u32::from(e.mem.u8(this.wrapping_add(STENCIL_FLAGS)) & 1);
+        let text = e
+            .call(NI_GET_VIEWER_STRING_BOOL, &args![LABEL_ENABLED, enabled])
+            .u32();
+        append(e, strings, slot, text);
+        let reference = e.mem.u32(this.wrapping_add(STENCIL_REF));
+        let text = e
+            .call(NI_GET_VIEWER_STRING_UNSIGNED, &args![LABEL_REF, reference])
+            .u32();
+        append(e, strings, slot, text);
+        let mask = e.mem.u32(this.wrapping_add(STENCIL_MASK));
+        let text = e
+            .call(NI_GET_VIEWER_STRING_UNSIGNED, &args![LABEL_MASK, mask])
+            .u32();
+        append(e, strings, slot, text);
+        let flags = |e: &Engine| u32::from(e.mem.u16(this.wrapping_add(STENCIL_FLAGS)));
+        let function = flags(e) >> 12;
+        let text =
+            ni_stencil_property_get_viewer_string(e, Ptr::new(LABEL_TEST_FUNCTION), function);
+        append(e, strings, slot, text.addr());
+        for (label, shift) in [
+            (LABEL_TEST_FAIL_ACTION, 1u32),
+            (LABEL_DEPTH_FAIL_ACTION, 4),
+            (LABEL_TEST_PASS_ACTION, 7),
+        ] {
+            let action = (flags(e) >> shift) & 7;
+            let text = ni_stencil_property_get_viewer_string_ov2(e, Ptr::new(label), action);
+            append(e, strings, slot, text.addr());
+        }
+        let mode = (flags(e) >> 10) & 3;
+        let text = ni_stencil_property_get_viewer_string_ov3(e, Ptr::new(LABEL_DRAW_MODE), mode);
+        append(e, strings, slot, text.addr());
+    });
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -214,6 +426,15 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00a6_f410, ni_stencil_property_create_object() -> Ptr),
         entry!(0x00a6_f4d0, fn_00a6f4d0()),
         entry!(0x00a6_f500, ni_stencil_property_load_binary(Ptr, Ptr)),
+        entry!(0x00a6_f070, ni_stencil_property_is_equal(Ptr, Ptr) -> bool),
+        entry!(0x00a6_f0b0, ni_stencil_property_get_viewer_string(Ptr, u32) -> Ptr),
+        entry!(0x00a6_f1e0, ni_stencil_property_get_viewer_string_ov2(Ptr, u32) -> Ptr),
+        entry!(0x00a6_f2d0, ni_stencil_property_get_viewer_string_ov3(Ptr, u32) -> Ptr),
+        entry!(0x00a6_f740, ni_stencil_property_save_binary(Ptr, Ptr)),
+        entry!(
+            0x00a6_f7d0,
+            ni_stencil_property_get_viewer_strings(Ptr, Ptr)
+        ),
     ]
 }
 
@@ -414,5 +635,206 @@ mod tests {
         // spill into the bits above, as the exe's shifts and ORs do.
         let (e, _, this, _) = load(0x0400_0002, &[0, 0, 0, 0, 0, 0, 0, 0x3f], 0xffff);
         assert_eq!(e.mem.u16(this + STENCIL_FLAGS), 0xfc00);
+    }
+}
+
+#[cfg(test)]
+mod n019_tests {
+    use super::*;
+
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    fn calls_to(e: &Engine, callee: u32) -> Vec<Vec<u32>> {
+        e.call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|(address, _)| *address == callee)
+            .map(|(_, words)| words.clone())
+            .collect()
+    }
+
+    fn word(eax: u32) -> Ret {
+        Ret {
+            eax,
+            ..Ret::default()
+        }
+    }
+
+    fn name(e: &mut Engine, text: &[u8]) -> u32 {
+        let p = e.mem.alloc(text.len() as u32 + 1);
+        e.mem.set_cstr(p, text);
+        p
+    }
+
+    #[test]
+    fn is_equal_compares_flags_reference_and_mask() {
+        let mut e = Engine::new();
+        e.register(BASE_IS_EQUAL, |_, _| word(1));
+        let a = e.mem.alloc(0x24);
+        let b = e.mem.alloc(0x24);
+        assert!(e.call(0x00a6_f070, &args![a, b]).bool());
+        for (offset, wide) in [
+            (STENCIL_FLAGS, false),
+            (STENCIL_REF, true),
+            (STENCIL_MASK, true),
+        ] {
+            if wide {
+                e.mem.set_u32(b + offset, 0x100);
+            } else {
+                e.mem.set_u16(b + offset, 0x100);
+            }
+            assert!(!e.call(0x00a6_f070, &args![a, b]).bool());
+            e.mem.set_u32(b + offset, 0);
+        }
+        e.register(BASE_IS_EQUAL, |_, _| word(0));
+        assert!(!e.call(0x00a6_f070, &args![a, b]).bool());
+    }
+
+    #[test]
+    fn the_static_viewer_strings_pick_the_case_format() {
+        let mut e = Engine::new();
+        let block = e.mem.alloc(0x40);
+        e.register_double(ALLOCATE_00AA1070, move |_, _| word(block));
+        e.register(NI_SPRINTF, |_, _| Ret::default());
+        let label = name(&mut e, b"Mode");
+        e.call_log = Some(vec![]);
+        let cases: [(u32, u32, u32); 6] = [
+            (0x00a6_f0b0, 0, 0x0109_b3ec),
+            (0x00a6_f0b0, 7, 0x0109_b470),
+            (0x00a6_f0b0, 8, FORMAT_UNKNOWN),
+            (0x00a6_f1e0, 5, 0x0109_ca50),
+            (0x00a6_f1e0, 6, FORMAT_UNKNOWN),
+            (0x00a6_f2d0, 2, 0x0109_cae0),
+        ];
+        for (function, value, format) in cases {
+            assert_eq!(e.call(function, &args![label, value]).u32(), block);
+            let printed = calls_to(&e, NI_SPRINTF);
+            assert_eq!(
+                printed[printed.len() - 1],
+                vec![block, 4 + 0x16, format, label]
+            );
+        }
+        assert_eq!(calls_to(&e, ALLOCATE_00AA1070)[0], vec![4 + 0x16]);
+        e.call(0x00a6_f2d0, &args![label, 4u32]);
+        assert_eq!(calls_to(&e, NI_SPRINTF)[6][2], FORMAT_UNKNOWN);
+        e.call(0x00a6_f1e0, &args![label, 1u32]);
+        assert_eq!(calls_to(&e, NI_SPRINTF)[7][2], 0x0109_caa8);
+        e.call(0x00a6_f0b0, &args![label, 3u32]);
+        assert_eq!(calls_to(&e, NI_SPRINTF)[8][2], 0x0109_b43c);
+    }
+
+    #[test]
+    fn save_binary_writes_flags_reference_and_mask() {
+        let mut e = Engine::new();
+        const WRITE_DOUBLE: u32 = 0x0070_a000;
+        e.register(BASE_SAVE_BINARY, |_, _| Ret::default());
+        let writes: Rc<RefCell<Vec<(Vec<u8>, u32)>>> = Rc::new(RefCell::new(vec![]));
+        let log = writes.clone();
+        e.register_double(WRITE_DOUBLE, move |e, a| {
+            log.borrow_mut()
+                .push((e.mem.bytes(a[1], a[2]), e.mem.u32(a[3])));
+            word(a[2])
+        });
+        let stream = e.mem.alloc(0x260);
+        let output = e.mem.alloc(0x10);
+        e.mem.set_u32(output + BINARY_STREAM_WRITE, WRITE_DOUBLE);
+        e.mem.set_u32(stream + STREAM_OUTPUT, output);
+        let p = e.mem.alloc(0x24);
+        e.mem.set_u16(p + STENCIL_FLAGS, 0x4180);
+        e.mem.set_u32(p + STENCIL_REF, 3);
+        e.mem.set_u32(p + STENCIL_MASK, 0xff);
+        e.call_log = Some(vec![]);
+        e.call(0x00a6_f740, &args![p, stream]);
+        assert_eq!(calls_to(&e, BASE_SAVE_BINARY), vec![vec![p, stream]]);
+        let expected = vec![
+            (vec![0x80, 0x41], 2),
+            (vec![3, 0, 0, 0], 4),
+            (vec![0xff, 0, 0, 0], 4),
+        ];
+        assert_eq!(*writes.borrow(), expected);
+        assert_eq!(e.mem.u32(output + 4), 10);
+    }
+
+    #[test]
+    fn get_viewer_strings_lists_every_field() {
+        let mut e = Engine::new();
+        e.map(NI_STENCIL_PROPERTY_RTTI, 8);
+        e.mem.set_u32(NI_STENCIL_PROPERTY_RTTI, 0x0109_cb90);
+        e.map(0x0109_cb00, 0x80);
+        for (label, text) in [
+            (LABEL_TEST_FUNCTION, &b"Test Funtion"[..]),
+            (LABEL_TEST_FAIL_ACTION, b"Test Fail Action"),
+            (LABEL_DEPTH_FAIL_ACTION, b"Depth Fail Action"),
+            (LABEL_TEST_PASS_ACTION, b"Test Pass Action"),
+            (LABEL_DRAW_MODE, b"Draw Mode"),
+        ] {
+            e.mem.set_cstr(label, text);
+        }
+        e.register(NI_PROPERTY_GET_VIEWER_STRINGS, |_, _| Ret::default());
+        e.register(NI_GET_VIEWER_STRING, |_, _| word(0x1234_5600));
+        e.register(NI_GET_VIEWER_STRING_BOOL, |_, a| word(a[1]));
+        e.register(NI_GET_VIEWER_STRING_UNSIGNED, |_, a| word(a[1]));
+        // The static strings run for real: the block is the value the format was chosen for.
+        e.register(ALLOCATE_00AA1070, |e, a| word(e.mem.alloc(a[0])));
+        e.register(NI_SPRINTF, |_, _| Ret::default());
+        e.register(STRING_ARRAY_SET_SIZE, |e, a| {
+            e.mem.set_u16(a[0] + 8, a[1] as u16);
+            Ret::default()
+        });
+        let stored: Rc<RefCell<Vec<u32>>> = Rc::new(RefCell::new(vec![]));
+        let log = stored.clone();
+        e.register_double(STRING_ARRAY_SET_AT, move |e, a| {
+            log.borrow_mut().push(e.mem.u32(a[2]));
+            e.mem.set_u16(a[0] + 0xa, a[1] as u16 + 1);
+            Ret::default()
+        });
+        let strings = e.mem.alloc(0x10);
+        e.mem.set_u16(strings + 0xe, 4);
+        let p = e.mem.alloc(0x24);
+        // Function 5, fail 2, depth fail 3, pass 4, draw mode 1, enabled.
+        let flags: u16 = (5 << 12) | (1 << 10) | (4 << 7) | (3 << 4) | (2 << 1) | 1;
+        e.mem.set_u16(p + STENCIL_FLAGS, flags);
+        e.mem.set_u32(p + STENCIL_REF, 7);
+        e.mem.set_u32(p + STENCIL_MASK, 0xf0);
+        e.call_log = Some(vec![]);
+        e.call(0x00a6_f7d0, &args![p, strings]);
+        assert_eq!(
+            calls_to(&e, NI_PROPERTY_GET_VIEWER_STRINGS),
+            vec![vec![p, strings]]
+        );
+        assert_eq!(calls_to(&e, NI_GET_VIEWER_STRING), vec![vec![0x0109_cb90]]);
+        // The bool word keeps the class name string's upper bytes.
+        assert_eq!(
+            calls_to(&e, NI_GET_VIEWER_STRING_BOOL),
+            vec![vec![LABEL_ENABLED, 0x1234_5601]]
+        );
+        assert_eq!(
+            calls_to(&e, NI_GET_VIEWER_STRING_UNSIGNED),
+            vec![vec![LABEL_REF, 7], vec![LABEL_MASK, 0xf0]]
+        );
+        let formats: Vec<(u32, u32)> = calls_to(&e, NI_SPRINTF)
+            .iter()
+            .map(|c| (c[3], c[2]))
+            .collect();
+        assert_eq!(
+            formats,
+            vec![
+                (LABEL_TEST_FUNCTION, 0x0109_b414),
+                (LABEL_TEST_FAIL_ACTION, 0x0109_ca94),
+                (LABEL_DEPTH_FAIL_ACTION, 0x0109_ca7c),
+                (LABEL_TEST_PASS_ACTION, 0x0109_ca64),
+                (LABEL_DRAW_MODE, 0x0109_caf0),
+            ]
+        );
+        assert_eq!(stored.borrow().len(), 9);
+        assert_eq!(stored.borrow()[0], 0x1234_5600);
+        assert_eq!(stored.borrow()[2], 7);
+        // Grown at 0, 4 and 8 by `m_usGrowBy` 4.
+        assert_eq!(
+            calls_to(&e, STRING_ARRAY_SET_SIZE),
+            vec![vec![strings, 4], vec![strings, 8], vec![strings, 12]]
+        );
     }
 }

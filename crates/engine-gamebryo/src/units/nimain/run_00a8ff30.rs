@@ -19,9 +19,32 @@ pub fn fn_00a8ff30(e: &mut Engine) {
     e.call(LIST_REALLOC, &args![LIBRARY_LIST, 0u32]);
 }
 
+/// The vtable of `NiScreenGeometryData::ScreenElement` (its RTTI locator names
+/// `.?AVScreenElement@NiScreenGeometryData@@`).
+const SCREEN_ELEMENT_VTABLE: u32 = 0x0109_f814;
+
+// Translated from 00a8ff50 (PC disassembly, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (a function Ghidra did not create; `thiscall`, no stack
+/// words): the `NiScreenGeometryData::ScreenElement` constructor by the vtable it stores:
+/// the two 16-bit words at +4 and +6 and the words at +8, +0xc and +0x10 cleared. Answers
+/// `this`.
+pub fn fn_00a8ff50(e: &mut Engine, this: Ptr) -> Ptr {
+    let base = this.addr();
+    e.mem.set_u32(base, SCREEN_ELEMENT_VTABLE);
+    e.mem.set_u16(base + 4, 0);
+    e.mem.set_u16(base + 6, 0);
+    for offset in [8u32, 0xc, 0x10] {
+        e.mem.set_u32(base + offset, 0);
+    }
+    this
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
-    vec![entry!(0x00a8_ff30, fn_00a8ff30())]
+    vec![
+        entry!(0x00a8_ff30, fn_00a8ff30()),
+        entry!(0x00a8_ff50, fn_00a8ff50(Ptr) -> Ptr),
+    ]
 }
 
 #[cfg(test)]
@@ -41,5 +64,21 @@ mod tests {
         e.call(0x00a8_ff30, &args![]);
         let log = e.call_log.take().unwrap();
         assert_eq!(log[1..], [(LIST_REALLOC, vec![LIBRARY_LIST, 0])]);
+    }
+}
+
+#[cfg(test)]
+mod screen_element_tests {
+    use super::*;
+
+    #[test]
+    fn constructs_an_empty_element() {
+        let mut e = Engine::new();
+        let this = e.mem.alloc(0x18);
+        e.mem.write(this, &[0xaa; 0x18]);
+        assert_eq!(e.call(0x00a8_ff50, &args![this]).u32(), this);
+        assert_eq!(e.mem.u32(this), SCREEN_ELEMENT_VTABLE);
+        assert_eq!(e.mem.bytes(this + 4, 0x10), vec![0; 0x10]);
+        assert_eq!(e.mem.u32(this + 0x14), 0xaaaa_aaaa);
     }
 }

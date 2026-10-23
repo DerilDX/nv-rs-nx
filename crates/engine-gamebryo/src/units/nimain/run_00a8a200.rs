@@ -212,6 +212,89 @@ pub fn fn_00a8a280(e: &mut Engine) {
     e.call(SHUTDOWN_LAST_STEP, &args![]);
 }
 
+/// `NiFree` (`00aa10f0`, `cdecl`, the block).
+const NI_FREE: u32 = 0x00aa_10f0;
+/// `00aa13e0` (`cdecl`, the size): `NiNew`'s allocator.
+const NI_ALLOCATE: u32 = 0x00aa_13e0;
+/// `NiLinesData`'s vtable (its RTTI locator names `.?AVNiLinesData@@`).
+const NI_LINES_DATA_VTABLE: u32 = 0x0109_f23c;
+/// `NiLinesData`'s size and its connection flags (`m_pkFlags`, Xbox PDB; +0x40 on PC as the
+/// code writes it).
+const NI_LINES_DATA_SIZE: u32 = 0x44;
+const LINES_FLAGS: u32 = 0x40;
+/// The `NiGeometryData` constructor taking the geometry's words (`00a67b20`, unit
+/// `nigeometrydata.cpp`, unnamed in the engine map; `thiscall`, seven stack words) and its
+/// default constructor (`NiGeometryData::NiGeometryData`, `00a67c00`, `thiscall`).
+const GEOMETRY_DATA_CONSTRUCT: u32 = 0x00a6_7b20;
+const GEOMETRY_DATA_DEFAULT_CONSTRUCT: u32 = 0x00a6_7c00;
+
+// Translated from 00a8a670 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`thiscall`, no stack words; the geometry data destructors
+/// `00a670c0`, `00a67c70`, `00a760c0` and `~NiTriStripsData` call it on their pools): frees
+/// the buffer (`m_pvBuffer`, +4) of a [`PoolBlock`] with `NiFree`.
+pub fn fn_00a8a670(e: &mut Engine, this: Ptr<PoolBlock>) {
+    let buffer = e.get(this, PoolBlock::m_pvBuffer);
+    e.call(NI_FREE, &args![buffer]);
+}
+
+// Translated from 00a8a680 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The `NiLinesData` constructor (by the vtable it stores; `thiscall`, `RET 0x1c`): the
+/// vertex count (the low 16 bits of its word), five geometry words and the connection
+/// flags. Runs the `NiGeometryData` constructor (`00a67b20`) with the count word, the first
+/// geometry word, 0 and the other four, stores the vtable, then the flags at +0x40; with no
+/// flags given it allocates one byte per vertex (`00aa1070`) and sets them to 1, 0, 1, 0, ...
+/// (vertex `i` connects to the next when `i` is even). Returns `this`.
+#[allow(clippy::too_many_arguments)]
+pub fn fn_00a8a680(
+    e: &mut Engine,
+    this: Ptr,
+    vertices: u32,
+    geometry_1: u32,
+    geometry_2: u32,
+    geometry_3: u32,
+    geometry_4: u32,
+    geometry_5: u32,
+    flags: u32,
+) -> Ptr {
+    let base = this.addr();
+    e.call(
+        GEOMETRY_DATA_CONSTRUCT,
+        &args![base, vertices, geometry_1, 0u32, geometry_2, geometry_3, geometry_4, geometry_5],
+    );
+    e.mem.set_u32(base, NI_LINES_DATA_VTABLE);
+    if flags != 0 {
+        e.mem.set_u32(base + LINES_FLAGS, flags);
+        return this;
+    }
+    let count = vertices as u16;
+    let block = e.call(ALLOCATE, &args![u32::from(count)]).u32();
+    e.mem.set_u32(base + LINES_FLAGS, block);
+    let mut i = 0u16;
+    while i < count {
+        let block = e.mem.u32(base + LINES_FLAGS);
+        e.mem
+            .set_u8(block.wrapping_add(u32::from(i)), !(i as u8) & 1);
+        i += 1;
+    }
+    this
+}
+
+// Translated from 00a8a700 (PC disassembly, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (a function Ghidra did not create; by its body the creation
+/// function of `NiLinesData`): a new 0x44-byte object (`00aa13e0`, the `NiGeometryData`
+/// default constructor `00a67c00`, the class's vtable, no flags at +0x40), or null when the
+/// allocation fails.
+pub fn fn_00a8a700(e: &mut Engine) -> Ptr {
+    let block = e.call(NI_ALLOCATE, &args![NI_LINES_DATA_SIZE]).u32();
+    if block == 0 {
+        return Ptr::new(0);
+    }
+    e.call(GEOMETRY_DATA_DEFAULT_CONSTRUCT, &args![block]);
+    e.mem.set_u32(block, NI_LINES_DATA_VTABLE);
+    e.mem.set_u32(block + LINES_FLAGS, 0);
+    Ptr::new(block)
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -222,6 +305,12 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00a8_a200, fn_00a8a200()),
         entry!(0x00a8_a240, fn_00a8a240()),
         entry!(0x00a8_a280, fn_00a8a280()),
+        entry!(0x00a8_a670, fn_00a8a670(Ptr<PoolBlock>)),
+        entry!(
+            0x00a8_a680,
+            fn_00a8a680(Ptr, u32, u32, u32, u32, u32, u32, u32) -> Ptr
+        ),
+        entry!(0x00a8_a700, fn_00a8a700() -> Ptr),
     ]
 }
 
@@ -376,5 +465,92 @@ mod tests_shutdown {
         assert_eq!(e.mem.u8(MODULE_INITIALIZED), 0);
         assert_eq!(e.mem.u32(FIRST_CHAIN_COUNT), 0);
         assert_eq!(e.mem.u32(SECOND_CHAIN_COUNT), 0);
+    }
+}
+
+#[cfg(test)]
+mod lines_data_tests {
+    use super::*;
+
+    fn calls(e: &mut Engine) -> Vec<(u32, Vec<u32>)> {
+        e.call_log
+            .replace(vec![])
+            .unwrap()
+            .into_iter()
+            .skip(1)
+            .collect()
+    }
+
+    #[test]
+    fn pool_block_buffer_is_freed() {
+        let mut e = Engine::new();
+        e.register(NI_FREE, |_, _| Ret::default());
+        let block = e.mem.alloc(0x10);
+        e.mem.set_u32(block + 4, 0x1234);
+        e.call_log = Some(vec![]);
+        e.call(0x00a8_a670, &args![block]);
+        assert_eq!(calls(&mut e), vec![(NI_FREE, vec![0x1234])]);
+    }
+
+    #[test]
+    fn constructor_keeps_given_flags_or_alternates_new_ones() {
+        let mut e = Engine::new();
+        e.register(GEOMETRY_DATA_CONSTRUCT, |_, _| Ret::default());
+        e.register(ALLOCATE, |e, a| e.mem.alloc(a[0].max(1)).into_ret());
+        let this = e.mem.alloc(0x44);
+        e.call_log = Some(vec![]);
+        let words = args![
+            this,
+            0x0001_0005u32,
+            2u32,
+            3u32,
+            4u32,
+            5u32,
+            6u32,
+            0x7777u32
+        ];
+        assert_eq!(e.call(0x00a8_a680, &words).u32(), this);
+        assert_eq!(
+            calls(&mut e),
+            vec![(
+                GEOMETRY_DATA_CONSTRUCT,
+                vec![this, 0x0001_0005, 2, 0, 3, 4, 5, 6]
+            )]
+        );
+        assert_eq!(e.mem.u32(this), NI_LINES_DATA_VTABLE);
+        assert_eq!(e.mem.u32(this + LINES_FLAGS), 0x7777);
+        let words = args![this, 0x0001_0005u32, 2u32, 3u32, 4u32, 5u32, 6u32, 0u32];
+        e.call(0x00a8_a680, &words);
+        let log = calls(&mut e);
+        assert_eq!(log[1], (ALLOCATE, vec![5]));
+        let block = e.mem.u32(this + LINES_FLAGS);
+        assert_eq!(e.mem.bytes(block, 5), vec![1, 0, 1, 0, 1]);
+        // No vertices: an empty block and no flags written.
+        let words = args![this, 0x0001_0000u32, 2u32, 3u32, 4u32, 5u32, 6u32, 0u32];
+        e.call(0x00a8_a680, &words);
+        assert_eq!(calls(&mut e)[1], (ALLOCATE, vec![0]));
+    }
+
+    #[test]
+    fn create_object_builds_an_empty_lines_data() {
+        let mut e = Engine::new();
+        e.register(NI_ALLOCATE, |e, a| e.mem.alloc(a[0]).into_ret());
+        e.register(GEOMETRY_DATA_DEFAULT_CONSTRUCT, |e, a| {
+            e.mem.set_u32(a[0] + LINES_FLAGS, 0xdead);
+            Ret::default()
+        });
+        e.call_log = Some(vec![]);
+        let object = e.call(0x00a8_a700, &args![]).u32();
+        assert_eq!(
+            calls(&mut e),
+            vec![
+                (NI_ALLOCATE, vec![0x44]),
+                (GEOMETRY_DATA_DEFAULT_CONSTRUCT, vec![object])
+            ]
+        );
+        assert_eq!(e.mem.u32(object), NI_LINES_DATA_VTABLE);
+        assert_eq!(e.mem.u32(object + LINES_FLAGS), 0);
+        e.register(NI_ALLOCATE, |_, _| 0u32.into_ret());
+        assert_eq!(e.call(0x00a8_a700, &args![]).u32(), 0);
     }
 }

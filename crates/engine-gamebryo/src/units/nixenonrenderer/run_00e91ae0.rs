@@ -65,9 +65,16 @@ pub fn fn_00e91b90(e: &mut Engine) {
     e.call(REGISTER_SHADER_CREATOR, &args![0x010b_c8a0u32, kept]);
 }
 
+// Translated from 00e91ae0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`run_00e91ae0`), `thiscall` with one word: stores it at +4.
+pub fn fn_00e91ae0(e: &mut Engine, this: Ptr, word: u32) {
+    e.mem.set_u32(this.addr().wrapping_add(4), word);
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x00e9_1ae0, fn_00e91ae0(Ptr, u32)),
         entry!(0x00e9_1af0, fn_00e91af0()),
         entry!(0x00e9_1b40, fn_00e91b40()),
         entry!(0x00e9_1b90, fn_00e91b90()),
@@ -134,5 +141,19 @@ mod start_up_tests {
         let calls = calls_to(&e, REGISTER_SHADER_CREATOR);
         assert_eq!(calls.len(), 5);
         assert!(calls.iter().all(|c| c[1] == 0));
+    }
+}
+
+#[cfg(test)]
+mod n011_tests {
+    use super::*;
+
+    #[test]
+    fn fn_00e91ae0_stores_the_word() {
+        let mut e = Engine::new();
+        let this = e.mem.alloc(8);
+        e.call(0x00e9_1ae0, &args![this, 0x1234_5678u32]);
+        assert_eq!(e.mem.u32(this + 4), 0x1234_5678);
+        assert_eq!(e.mem.u32(this), 0);
     }
 }

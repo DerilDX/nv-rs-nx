@@ -201,6 +201,253 @@ pub fn ni_shader_factory_destructor(e: &mut Engine, this: Ptr) {
     e.call(INTERLOCKED_DECREMENT, &args![NI_REF_OBJECT_COUNT]);
 }
 
+/// `vsprintf_s` (`00ec6bb5`, cdecl: buffer, size, format, argument list) and the factory's
+/// error callback (+0x20, cdecl: the message, the two words `ReportError` was given).
+const VSPRINTF_S: u32 = 0x00ec_6bb5;
+const ERROR_CALLBACK: u32 = 0x20;
+
+// Translated from 00aa0020 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiShaderFactory::ReportError` (Xbox PDB; cdecl: two words, a format, then the format's
+/// arguments): without a shader factory answers 0. Otherwise the message is printed into a
+/// 0x800-byte stack buffer (`vsprintf_s`, the argument list being the words after the format,
+/// copied to game memory), and the factory's callback (+0x20), when set, gets the message and
+/// the two words; its answer is answered (0 without a callback).
+// Translation incomplete: 00aa0020 - the /GS stack cookie check (00ec408c) is not translated.
+pub fn ni_shader_factory_report_error(
+    e: &mut Engine,
+    code: u32,
+    detail: u32,
+    format: Ptr,
+    rest: &[u32],
+) -> u32 {
+    let factory = e.global::<u32>(SHADER_FACTORY);
+    if factory == 0 {
+        return 0;
+    }
+    let size = 0x800 + 4 * rest.len() as u32;
+    e.with_stack(size, |e, frame| {
+        let buffer = frame.addr();
+        let list = buffer + 0x800;
+        for (i, word) in rest.iter().enumerate() {
+            e.mem.set_u32(list + 4 * i as u32, *word);
+        }
+        e.call(VSPRINTF_S, &args![buffer, 0x800u32, format, list]);
+        let factory = e.global::<u32>(SHADER_FACTORY);
+        let callback = e.mem.u32(factory + ERROR_CALLBACK);
+        if callback == 0 {
+            return 0;
+        }
+        e.call(callback, &args![buffer, code, detail]).u32()
+    })
+}
+
+/// The uniform-form entry of `ReportError`: the first three words, then the rest as the
+/// format's arguments.
+fn ni_shader_factory_report_error_entry(e: &mut Engine, words: &[u32]) -> Ret {
+    let result =
+        ni_shader_factory_report_error(e, words[0], words[1], Ptr::new(words[2]), &words[3..]);
+    Ret {
+        eax: result,
+        ..Ret::default()
+    }
+}
+
+// Translated from 00aa00c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map: answers false (`__thiscall`, two words, none read). Slot +0x14
+/// of `NiShaderFactory`'s vtable (`010a2178`) and two other tables (`0109df3c`, `0109df48`)
+/// hold it.
+pub fn fn_00aa00c0(_e: &mut Engine, _unused_0: Ptr, _unused_1: u32, _unused_2: u32) -> bool {
+    false
+}
+
+/// `NiGlobalConstantEntry`'s vtable (`010a2148`) and size; its name (+0x08, a fixed-string
+/// handle), type (+0x0c) and data (+0x14, freed by its destructor); its data set-up `00aa1010`
+/// (`__thiscall`: data size, data); the `MemoryManager`'s allocate (`00aa3e40` on `011f6238`);
+/// `00a5b690` (cdecl, a C string: its fixed-string handle) and the sized delete `00aa1460`.
+const GLOBAL_CONSTANT_ENTRY_VTABLE: u32 = 0x010a_2148;
+const GLOBAL_CONSTANT_ENTRY_SIZE: u32 = 0x18;
+const ENTRY_NAME: u32 = 0x08;
+const ENTRY_TYPE: u32 = 0x0c;
+const ENTRY_DATA: u32 = 0x14;
+const ENTRY_SET_DATA_00AA1010: u32 = 0x00aa_1010;
+const MEMORY_MANAGER_ALLOCATE: u32 = 0x00aa_3e40;
+const MEMORY_MANAGER_DEALLOCATE: u32 = 0x00aa_4060;
+const MEMORY_MANAGER: u32 = 0x011f_6238;
+const FIXED_STRING_FROM: u32 = 0x00a5_b690;
+const SIZED_DELETE: u32 = 0x00aa_1460;
+/// The allocation `00aa13e0` (cdecl) and `NiTFixedStringMapBase<..>::SetAt` (`00a6e980`,
+/// `__thiscall` on the map: the address of a key handle, the value).
+const NI_ALLOCATE: u32 = 0x00aa_13e0;
+const MAP_SET_AT: u32 = 0x00a6_e980;
+
+// Translated from 00aa00d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map: the `NiGlobalConstantEntry` constructor (`__thiscall`: a name
+/// (C string), the type, the data size, the data). `NiRefObject`'s part (vtable `0101dce4`,
+/// count 0, the object count `011f4400` up), the vtable `010a2148`, the empty name and zeroed
+/// type and data. The name goes through a fixed string made in a 4-byte `MemoryManager` block
+/// (the empty handle for a null name, `00a5b690` otherwise; the block is not given back): the
+/// entry's name takes its handle (counted, the old one released). Then the type and the data
+/// (`00aa1010`). Answers `this`.
+pub fn fn_00aa00d0(
+    e: &mut Engine,
+    this: Ptr,
+    name: Ptr,
+    kind: u32,
+    data_size: u32,
+    data: Ptr,
+) -> Ptr {
+    let base = this.addr();
+    e.mem.set_u32(base, NI_REF_OBJECT_VTABLE);
+    e.mem.set_u32(base + 4, 0);
+    e.call(INTERLOCKED_INCREMENT, &args![NI_REF_OBJECT_COUNT]);
+    e.mem.set_u32(base, GLOBAL_CONSTANT_ENTRY_VTABLE);
+    let empty = e.mem.u32(FIXED_STRING_EMPTY);
+    e.mem.set_u32(base + ENTRY_NAME, empty);
+    e.mem.set_u32(base + ENTRY_TYPE, 0);
+    e.mem.set_u32(base + 0x10, 0);
+    e.mem.set_u32(base + ENTRY_DATA, 0);
+    let holder = e
+        .call(MEMORY_MANAGER_ALLOCATE, &args![MEMORY_MANAGER, 4u32])
+        .u32();
+    if holder != 0 {
+        let handle = if name.is_null() {
+            e.mem.u32(FIXED_STRING_EMPTY)
+        } else {
+            e.call(FIXED_STRING_FROM, &args![name]).u32()
+        };
+        e.mem.set_u32(holder, handle);
+    }
+    let handle = e.mem.u32(holder);
+    if e.mem.u32(base + ENTRY_NAME) != handle {
+        if handle != e.mem.u32(FIXED_STRING_EMPTY) {
+            e.call(INTERLOCKED_INCREMENT, &args![handle.wrapping_sub(8)]);
+        }
+        let old = e.mem.u32(base + ENTRY_NAME);
+        if old != e.mem.u32(FIXED_STRING_EMPTY) {
+            e.call(INTERLOCKED_DECREMENT, &args![old.wrapping_sub(8)]);
+        }
+        e.mem.set_u32(base + ENTRY_NAME, handle);
+    }
+    e.mem.set_u32(base + ENTRY_TYPE, kind);
+    e.call(ENTRY_SET_DATA_00AA1010, &args![this, data_size, data]);
+    this
+}
+
+// Translated from 00aa0190 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiGlobalConstantEntry::_scalar_deleting_destructor_` (Xbox PDB): its vtable, the data
+/// freed (`00aa10f0`), the name's reference given up (unless empty), `NiRefObject`'s vtable and
+/// the object count (`011f4400`) down, then the sized delete of 0x18 bytes when bit 0 of
+/// `flags` is set. Answers `this`.
+pub fn ni_global_constant_entry_scalar_deleting_destructor(
+    e: &mut Engine,
+    this: Ptr,
+    flags: u32,
+) -> Ptr {
+    let base = this.addr();
+    let data = e.mem.u32(base + ENTRY_DATA);
+    e.mem.set_u32(base, GLOBAL_CONSTANT_ENTRY_VTABLE);
+    e.call(NI_FREE, &args![data]);
+    let name = e.mem.u32(base + ENTRY_NAME);
+    if name != e.mem.u32(FIXED_STRING_EMPTY) {
+        e.call(INTERLOCKED_DECREMENT, &args![name.wrapping_sub(8)]);
+    }
+    e.mem.set_u32(base, NI_REF_OBJECT_VTABLE);
+    e.call(INTERLOCKED_DECREMENT, &args![NI_REF_OBJECT_COUNT]);
+    if flags & 1 != 0 {
+        e.call(SIZED_DELETE, &args![this, GLOBAL_CONSTANT_ENTRY_SIZE]);
+    }
+    this
+}
+
+// Translated from 00aa02f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiTFixedStringMap<NiGlobalConstantEntry *>::_scalar_deleting_destructor_` (Xbox PDB): its
+/// vtable (`010a2154`) and `RemoveAll` (`00aa01f0`), the base's vtable (`010a2138`) and
+/// `RemoveAll` again, the bucket array freed, and the map given back to the `MemoryManager`
+/// when bit 0 of `flags` is set. Answers `this`.
+pub fn ni_t_fixed_string_map_scalar_deleting_destructor(
+    e: &mut Engine,
+    this: Ptr,
+    flags: u32,
+) -> Ptr {
+    let map = this.addr();
+    e.mem.set_u32(map, CONSTANT_MAP_VTABLE);
+    e.call(MAP_REMOVE_ALL, &args![map]);
+    e.mem.set_u32(map, CONSTANT_MAP_BASE_VTABLE);
+    e.call(MAP_REMOVE_ALL, &args![map]);
+    let buckets = e.mem.u32(map + 8);
+    e.call(NI_FREE, &args![buckets]);
+    if flags & 1 != 0 {
+        e.call(MEMORY_MANAGER_DEALLOCATE, &args![MEMORY_MANAGER, this]);
+    }
+    this
+}
+
+// Translated from 00aa0400 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiShaderFactory::RegisterGlobalShaderConstant` (Xbox PDB; cdecl: the address of the name
+/// handle, the type, the data size, the data): false without a shader factory. A constant of
+/// that name already in the factory's map (handle modulo the bucket count) with an entry:
+/// false when its type differs, otherwise a reference is taken on it and the answer is true.
+/// Otherwise a new `NiGlobalConstantEntry` (0x18 bytes, `fn_00aa00d0` with the handle as its
+/// name; false when the allocation fails) gets a reference and goes into the map (`SetAt`
+/// with a stack copy of the name, counted while it is used); true.
+pub fn ni_shader_factory_register_global_shader_constant(
+    e: &mut Engine,
+    name: Ptr,
+    kind: u32,
+    data_size: u32,
+    data: Ptr,
+) -> bool {
+    let factory = e.global::<u32>(SHADER_FACTORY);
+    if factory == 0 {
+        return false;
+    }
+    let key = e.mem.u32(name.addr());
+    let bucket = key % e.mem.u32(factory + 0xc);
+    let mut item = e
+        .mem
+        .u32(e.mem.u32(factory + 0x10).wrapping_add(bucket * 4));
+    while item != 0 {
+        if key == e.mem.u32(item + 4) {
+            let entry = e.mem.u32(item + 8);
+            if entry == 0 {
+                break;
+            }
+            if e.mem.u32(entry + ENTRY_TYPE) != kind {
+                return false;
+            }
+            e.call(INTERLOCKED_INCREMENT, &args![entry + 4]);
+            return true;
+        }
+        item = e.mem.u32(item);
+    }
+    let block = e
+        .call(NI_ALLOCATE, &args![GLOBAL_CONSTANT_ENTRY_SIZE])
+        .u32();
+    if block == 0 {
+        return false;
+    }
+    let handle = e.mem.u32(name.addr());
+    let entry = fn_00aa00d0(e, Ptr::new(block), Ptr::new(handle), kind, data_size, data).addr();
+    if entry == 0 {
+        return false;
+    }
+    e.call(INTERLOCKED_INCREMENT, &args![entry + 4]);
+    let key = e.mem.u32(name.addr());
+    if key != e.mem.u32(FIXED_STRING_EMPTY) {
+        e.call(INTERLOCKED_INCREMENT, &args![key.wrapping_sub(8)]);
+    }
+    let factory = e.global::<u32>(SHADER_FACTORY);
+    let key = e.mem.u32(name.addr());
+    e.with_stack(4, |e, copy| {
+        e.mem.set_u32(copy.addr(), key);
+        e.call(MAP_SET_AT, &args![factory + 8, copy, entry]);
+    });
+    if key != e.mem.u32(FIXED_STRING_EMPTY) {
+        e.call(INTERLOCKED_DECREMENT, &args![key.wrapping_sub(8)]);
+    }
+    true
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -209,6 +456,21 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00a9_fff0, ni_shader_factory_get_instance() -> u32),
         entry!(0x00aa_0000, fn_00aa0000()),
         entry!(0x00aa_05a0, ni_shader_factory_destructor(Ptr)),
+        (0x00aa_0020, ni_shader_factory_report_error_entry as AbiFn),
+        entry!(0x00aa_00c0, fn_00aa00c0(Ptr, u32, u32) -> bool),
+        entry!(0x00aa_00d0, fn_00aa00d0(Ptr, Ptr, u32, u32, Ptr) -> Ptr),
+        entry!(
+            0x00aa_0190,
+            ni_global_constant_entry_scalar_deleting_destructor(Ptr, u32) -> Ptr
+        ),
+        entry!(
+            0x00aa_02f0,
+            ni_t_fixed_string_map_scalar_deleting_destructor(Ptr, u32) -> Ptr
+        ),
+        entry!(
+            0x00aa_0400,
+            ni_shader_factory_register_global_shader_constant(Ptr, u32, u32, Ptr) -> bool
+        ),
     ]
 }
 
@@ -486,5 +748,212 @@ mod b000v_tests {
         e.map(SHADER_FACTORY, 4);
         e.mem.set_u32(SHADER_FACTORY, 0x1234_5678);
         assert_eq!(e.call(0x00a9_fff0, &args![]).u32(), 0x1234_5678);
+    }
+}
+
+#[cfg(test)]
+mod n019_tests {
+    use super::*;
+
+    fn calls_to(e: &Engine, callee: u32) -> Vec<Vec<u32>> {
+        e.call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|(address, _)| *address == callee)
+            .map(|(_, words)| words.clone())
+            .collect()
+    }
+
+    fn word(eax: u32) -> Ret {
+        Ret {
+            eax,
+            ..Ret::default()
+        }
+    }
+
+    const CALLBACK_DOUBLE: u32 = 0x0071_2000;
+
+    fn counting(e: &mut Engine) {
+        e.register(INTERLOCKED_INCREMENT, |e, a| {
+            let count = e.mem.u32(a[0]).wrapping_add(1);
+            e.mem.set_u32(a[0], count);
+            word(count)
+        });
+        e.register(INTERLOCKED_DECREMENT, |e, a| {
+            let count = e.mem.u32(a[0]).wrapping_sub(1);
+            e.mem.set_u32(a[0], count);
+            word(count)
+        });
+    }
+
+    /// The factory at `011f6044` with a map of `buckets` buckets.
+    fn factory(e: &mut Engine, buckets: u32) -> u32 {
+        e.map(SHADER_FACTORY, 4);
+        let factory = e.mem.alloc(0x24);
+        e.mem.set_u32(factory + 0xc, buckets);
+        let table = e.mem.alloc(4 * buckets);
+        e.mem.set_u32(factory + 0x10, table);
+        e.mem.set_u32(SHADER_FACTORY, factory);
+        factory
+    }
+
+    #[test]
+    fn report_error_prints_and_calls_back() {
+        let mut e = Engine::new();
+        e.map(SHADER_FACTORY, 4);
+        assert_eq!(e.call(0x00aa_0020, &args![1u32, 2u32, 0x3000u32]).u32(), 0);
+        let f = factory(&mut e, 1);
+        e.register(VSPRINTF_S, |e, a| {
+            // The list holds the words after the format.
+            let first = e.mem.u32(a[3]);
+            e.mem.set_u32(a[0], first);
+            Ret::default()
+        });
+        e.call_log = Some(vec![]);
+        assert_eq!(
+            e.call(0x00aa_0020, &args![1u32, 2u32, 0x3000u32, 0x77u32])
+                .u32(),
+            0
+        );
+        let printed = calls_to(&e, VSPRINTF_S);
+        assert_eq!(printed[0][1..3], [0x800, 0x3000]);
+        e.register(CALLBACK_DOUBLE, |e, a| word(e.mem.u32(a[0]) + a[1] + a[2]));
+        e.mem.set_u32(f + ERROR_CALLBACK, CALLBACK_DOUBLE);
+        assert_eq!(
+            e.call(0x00aa_0020, &args![1u32, 2u32, 0x3000u32, 0x77u32])
+                .u32(),
+            0x7a
+        );
+    }
+
+    #[test]
+    fn the_false_stub() {
+        let mut e = Engine::new();
+        assert!(!e.call(0x00aa_00c0, &args![0u32, 1u32, 2u32]).bool());
+    }
+
+    #[test]
+    fn entry_construct_and_destroy() {
+        let mut e = Engine::new();
+        counting(&mut e);
+        e.map(FIXED_STRING_EMPTY, 4);
+        e.map(NI_REF_OBJECT_COUNT, 4);
+        e.mem.set_u32(FIXED_STRING_EMPTY, 0x0e0e);
+        e.register(MEMORY_MANAGER_ALLOCATE, |e, a| word(e.mem.alloc(a[1])));
+        // A fixed string: a block whose count is at the handle - 8.
+        e.register(FIXED_STRING_FROM, |e, _| {
+            let block = e.mem.alloc(0x10);
+            word(block + 8)
+        });
+        e.register(ENTRY_SET_DATA_00AA1010, |_, _| Ret::default());
+        e.register(NI_FREE, |_, _| Ret::default());
+        e.register(SIZED_DELETE, |_, _| Ret::default());
+        let entry = e.mem.alloc(GLOBAL_CONSTANT_ENTRY_SIZE);
+        e.call_log = Some(vec![]);
+        let made = e
+            .call(0x00aa_00d0, &args![entry, 0x5000u32, 3u32, 8u32, 0x6000u32])
+            .u32();
+        assert_eq!(made, entry);
+        assert_eq!(e.mem.u32(entry), GLOBAL_CONSTANT_ENTRY_VTABLE);
+        assert_eq!(e.mem.u32(NI_REF_OBJECT_COUNT), 1);
+        let name = e.mem.u32(entry + ENTRY_NAME);
+        assert_eq!(e.mem.u32(name - 8), 1);
+        assert_eq!(e.mem.u32(entry + ENTRY_TYPE), 3);
+        assert_eq!(
+            calls_to(&e, ENTRY_SET_DATA_00AA1010),
+            vec![vec![entry, 8, 0x6000]]
+        );
+        // A null name keeps the empty one.
+        let other = e.mem.alloc(GLOBAL_CONSTANT_ENTRY_SIZE);
+        e.call(0x00aa_00d0, &args![other, 0u32, 1u32, 0u32, 0u32]);
+        assert_eq!(e.mem.u32(other + ENTRY_NAME), 0x0e0e);
+        e.mem.set_u32(entry + ENTRY_DATA, 0x7000);
+        assert_eq!(e.call(0x00aa_0190, &args![entry, 1u32]).u32(), entry);
+        assert_eq!(e.mem.u32(name - 8), 0);
+        assert_eq!(calls_to(&e, NI_FREE), vec![vec![0x7000]]);
+        assert_eq!(e.mem.u32(entry), NI_REF_OBJECT_VTABLE);
+        assert_eq!(e.mem.u32(NI_REF_OBJECT_COUNT), 1);
+        assert_eq!(
+            calls_to(&e, SIZED_DELETE),
+            vec![vec![entry, GLOBAL_CONSTANT_ENTRY_SIZE]]
+        );
+        e.call(0x00aa_0190, &args![other, 0u32]);
+        assert_eq!(calls_to(&e, SIZED_DELETE).len(), 1);
+    }
+
+    #[test]
+    fn map_destructor() {
+        let mut e = Engine::new();
+        e.register(MAP_REMOVE_ALL, |_, _| Ret::default());
+        e.register(NI_FREE, |_, _| Ret::default());
+        e.register(MEMORY_MANAGER_DEALLOCATE, |_, _| Ret::default());
+        let map = e.mem.alloc(0x10);
+        e.mem.set_u32(map + 8, 0x4400);
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x00aa_02f0, &args![map, 0u32]).u32(), map);
+        assert_eq!(e.mem.u32(map), CONSTANT_MAP_BASE_VTABLE);
+        assert_eq!(calls_to(&e, MAP_REMOVE_ALL).len(), 2);
+        assert_eq!(calls_to(&e, NI_FREE), vec![vec![0x4400]]);
+        assert_eq!(calls_to(&e, MEMORY_MANAGER_DEALLOCATE).len(), 0);
+        e.call(0x00aa_02f0, &args![map, 1u32]);
+        assert_eq!(
+            calls_to(&e, MEMORY_MANAGER_DEALLOCATE),
+            vec![vec![MEMORY_MANAGER, map]]
+        );
+    }
+
+    #[test]
+    fn register_global_shader_constant_finds_or_adds() {
+        let mut e = Engine::new();
+        counting(&mut e);
+        e.map(FIXED_STRING_EMPTY, 4);
+        e.map(NI_REF_OBJECT_COUNT, 4);
+        e.register(MEMORY_MANAGER_ALLOCATE, |e, a| word(e.mem.alloc(a[1])));
+        e.register(ENTRY_SET_DATA_00AA1010, |_, _| Ret::default());
+        e.register(NI_ALLOCATE, |e, a| word(e.mem.alloc(a[0])));
+        // The handle of the name comes back for the entry.
+        e.register(FIXED_STRING_FROM, |_, a| word(a[0]));
+        e.register(MAP_SET_AT, |e, a| {
+            let (map, key, value) = (a[0], e.mem.u32(a[1]), a[2]);
+            let item = e.mem.alloc(12);
+            let head = e.mem.u32(map + 8) + 4 * (key % e.mem.u32(map + 4));
+            e.mem.set_u32(item, e.mem.u32(head));
+            e.mem.set_u32(item + 4, key);
+            e.mem.set_u32(item + 8, value);
+            e.mem.set_u32(head, item);
+            Ret::default()
+        });
+        let name_block = e.mem.alloc(0x10);
+        let handle = name_block + 8;
+        let name = e.mem.alloc(4);
+        e.mem.set_u32(name, handle);
+        e.map(SHADER_FACTORY, 4);
+        assert!(!e.call(0x00aa_0400, &args![name, 1u32, 4u32, 0u32]).bool());
+        factory(&mut e, 5);
+        e.call_log = Some(vec![]);
+        assert!(e
+            .call(0x00aa_0400, &args![name, 1u32, 4u32, 0x9000u32])
+            .bool());
+        let set = calls_to(&e, MAP_SET_AT);
+        assert_eq!(set.len(), 1);
+        let entry = set[0][2];
+        assert_eq!(e.mem.u32(entry + 4), 1);
+        // The stack copy came and went; the entry name holds one reference.
+        assert_eq!(e.mem.u32(handle - 8), 1);
+        // Again: the same type takes a reference, another type is refused.
+        assert!(e
+            .call(0x00aa_0400, &args![name, 1u32, 4u32, 0x9000u32])
+            .bool());
+        assert_eq!(e.mem.u32(entry + 4), 2);
+        assert!(!e
+            .call(0x00aa_0400, &args![name, 2u32, 4u32, 0x9000u32])
+            .bool());
+        assert_eq!(calls_to(&e, MAP_SET_AT).len(), 1);
+        // A failed allocation answers false.
+        e.register(NI_ALLOCATE, |_, _| word(0));
+        let other = e.mem.alloc(4);
+        e.mem.set_u32(other, handle + 1);
+        assert!(!e.call(0x00aa_0400, &args![other, 1u32, 4u32, 0u32]).bool());
     }
 }

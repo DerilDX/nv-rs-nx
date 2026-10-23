@@ -54,12 +54,32 @@ pub fn ni_tri_based_geom_ni_tri_based_geom(e: &mut Engine, this: Ptr, model_data
     this
 }
 
+/// `NiGeometry::~NiGeometry` (`00a80580`, thiscall) and the sized delete (`00aa1460`,
+/// cdecl `(pointer, size)`).
+const NI_GEOMETRY_DESTRUCT: u32 = 0x00a8_0580;
+const SIZED_DELETE: u32 = 0x00aa_1460;
+
+// Translated from 00a89790 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map; the body is `NiTriBasedGeom`'s scalar deleting destructor
+/// (thiscall, `RET 4`): sets the class's vtable (`0109ed94`), runs
+/// `NiGeometry::~NiGeometry`, then frees the 0xC4-byte object (`00aa1460`) when bit 0 of
+/// `flags` is set. Returns `this`.
+pub fn fn_00a89790(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    e.mem.set_u32(this.addr(), NI_TRI_BASED_GEOM_VTABLE);
+    e.call(NI_GEOMETRY_DESTRUCT, &args![this]);
+    if flags & 1 != 0 {
+        e.call(SIZED_DELETE, &args![this, 0xc4u32]);
+    }
+    this
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
         entry!(0x00a89780, ni_tri_based_geom_get_rtti() -> Ptr),
         entry!(0x00a897c0, ni_tri_based_geom_get_viewer_strings(Ptr, Ptr)),
         entry!(0x00a8_9720, ni_tri_based_geom_ni_tri_based_geom(Ptr, Ptr) -> Ptr),
+        entry!(0x00a8_9790, fn_00a89790(Ptr, u32) -> Ptr),
     ]
 }
 
@@ -144,5 +164,32 @@ mod tests {
         assert_eq!(base.len(), 1);
         assert_eq!(base[0].1, [this, 0x5000]);
         assert_eq!(e.mem.u32(this), NI_TRI_BASED_GEOM_VTABLE);
+    }
+}
+
+#[cfg(test)]
+mod n020_tests {
+    use super::*;
+
+    #[test]
+    fn deleting_destructor_frees_only_with_bit_0() {
+        let mut e = Engine::new();
+        e.register(NI_GEOMETRY_DESTRUCT, |_, _| Ret::default());
+        e.register(SIZED_DELETE, |_, _| Ret::default());
+        let this = e.mem.alloc(0xc4);
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x00a8_9790, &args![this, 0xfeu32]).u32(), this);
+        assert_eq!(e.mem.u32(this), NI_TRI_BASED_GEOM_VTABLE);
+        e.call(0x00a8_9790, &args![this, 1u32]);
+        let calls = |addr: u32| -> Vec<Vec<u32>> {
+            e.call_log
+                .iter()
+                .flatten()
+                .filter(|(a, _)| *a == addr)
+                .map(|(_, w)| w.clone())
+                .collect()
+        };
+        assert_eq!(calls(NI_GEOMETRY_DESTRUCT), vec![vec![this]; 2]);
+        assert_eq!(calls(SIZED_DELETE), vec![vec![this, 0xc4]]);
     }
 }

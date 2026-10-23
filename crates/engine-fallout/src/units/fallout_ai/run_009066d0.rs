@@ -168,9 +168,196 @@ pub fn fn_00906c10(e: &mut Engine, this: Ptr, key: u32, second: u32, result: u32
     answer
 }
 
+/// The lock-free list's calls (`thiscall`): `0044dec0` the node a cursor
+/// word holds (no stack words), `0044df00` the node's record (no stack
+/// words), `006ecba0` builds a tagged word at `this` from (tag, node),
+/// `00559450` reads a tagged word's value, `004491c0` (cdecl, three words)
+/// swaps a word when it still holds the expected value, `005292a0` (one word)
+/// retires a node, `00529000` ends the operation, `0044ee20` (one word) the
+/// bucket of a key, `0044e370` (one word) / `0044cbf0` construct / release an
+/// `NiPointer` local, `0044dff0` tests a node's mark, `004b0460` (one word)
+/// compares the local with the wanted value. `0040fbe0` (no stack words, an
+/// empty body the engine map names `Error`) separates the stores from the
+/// reads that check them.
+const CURSOR_NODE: u32 = 0x0044_dec0;
+const NODE_RECORD: u32 = 0x0044_df00;
+const MAKE_TAGGED: u32 = 0x006e_cba0;
+const TAGGED_VALUE: u32 = 0x0055_9450;
+const COMPARE_SWAP: u32 = 0x0044_91c0;
+const RETIRE_NODE: u32 = 0x0052_92a0;
+const END_OPERATION: u32 = 0x0052_9000;
+const BUCKET_OF: u32 = 0x0044_ee20;
+const POINTER_CONSTRUCT: u32 = 0x0044_e370;
+const POINTER_RELEASE: u32 = 0x0044_cbf0;
+const NODE_MARKED: u32 = 0x0044_dff0;
+const POINTER_MATCHES: u32 = 0x004b_0460;
+const BARRIER: u32 = 0x0040_fbe0;
+
+/// The lock-free list's working words in the inner object: the cursor
+/// record (+0x10), the current (+0x14) and next (+0x18) cursor words, and
+/// the three hazard slots the found nodes are published to (+0x4, +0x8,
+/// +0xC, each a pointer to a word).
+const CURSOR_RECORD: u32 = 0x10;
+const CURRENT: u32 = 0x14;
+const NEXT: u32 = 0x18;
+
+// Translated from 009066d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unlinks the node of `key` from the inner object's lock-free list: while
+/// `fn_00906820` finds it, the node's next word is marked (`004491c0` on its
+/// record +8 with tag 1) until that succeeds, then it is unlinked from the
+/// previous record (`004491c0` on +0x10), retired on success (`005292a0`) or
+/// searched again (`fn_00906820`). Answers whether the key was found;
+/// `00529000` ends the operation either way.
+pub fn fn_009066d0(e: &mut Engine, this: Ptr, key: u32, value: u32) -> bool {
+    let at = this.addr();
+    let found = e.with_stack(0xc, |e, frame| {
+        // The tagged words at EBP-0x10, -0xC and -0x8.
+        let unmarked = frame.addr();
+        let marked = frame.addr() + 4;
+        let current = frame.addr() + 8;
+        loop {
+            if !fn_00906820(e, this, key, value) {
+                return false;
+            }
+            let node = e.call(CURSOR_NODE, &args![at + NEXT]).u32();
+            e.call(MAKE_TAGGED, &args![unmarked, 0u32, node]);
+            let node = e.call(CURSOR_NODE, &args![at + NEXT]).u32();
+            e.call(MAKE_TAGGED, &args![marked, 1u32, node]);
+            let expected = e.call(TAGGED_VALUE, &args![unmarked]).u32();
+            let wanted = e.call(TAGGED_VALUE, &args![marked]).u32();
+            let record = e.call(NODE_RECORD, &args![at + CURRENT]).u32();
+            if e.call(COMPARE_SWAP, &args![record + 8, wanted, expected])
+                .bool()
+            {
+                break;
+            }
+        }
+        let node = e.call(CURSOR_NODE, &args![at + CURRENT]).u32();
+        e.call(MAKE_TAGGED, &args![current, 0u32, node]);
+        let expected = e.call(TAGGED_VALUE, &args![current]).u32();
+        let wanted = e.call(TAGGED_VALUE, &args![unmarked]).u32();
+        let slot = e.mem.u32(at + CURSOR_RECORD);
+        if e.call(COMPARE_SWAP, &args![slot, wanted, expected]).bool() {
+            let node = e.call(CURSOR_NODE, &args![at + CURRENT]).u32();
+            e.call(RETIRE_NODE, &args![this, node]);
+        } else {
+            fn_00906820(e, this, key, value);
+        }
+        true
+    });
+    e.call(END_OPERATION, &args![this]);
+    found
+}
+
+// Translated from 009067f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The `LockFreeMap` scalar deleting destructor: the destructor body
+/// (`009064e0`), then `operator delete(this)` when bit 0 of `flags` is set.
+/// Returns `this`.
+pub fn fn_009067f0(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    e.call(0x0090_64e0, &args![this]);
+    if flags & 1 != 0 {
+        e.call(0x0040_1030, &args![this]);
+    }
+    this
+}
+
+// Translated from 00906820 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 00906820 - the compiler's exception frame (FS:[0]) that releases the pointer local when a step throws is not translated
+/// Finds `key`'s node in the inner object's lock-free list (bucket from
+/// `0044ee20` on the object at `this`): it walks the list, publishing each
+/// current and next node in the hazard slots and starting over from the
+/// bucket whenever a re-read shows the list changed. Marked nodes on the way
+/// are unlinked (`004491c0`, then retired with `005292a0`); a node whose
+/// pointer matches `value` (`004b0460`) answers true, the end of the list
+/// false.
+pub fn fn_00906820(e: &mut Engine, this: Ptr, key: u32, value: u32) -> bool {
+    let at = this.addr();
+    let owner = e.mem.u32(at);
+    let bucket = e.call(BUCKET_OF, &args![owner, key]).u32();
+    e.with_stack(0x10, |e, frame| {
+        // The tagged words at EBP-0x18, -0x1C and -0x24 and the pointer
+        // local at EBP-0x20.
+        let first = frame.addr();
+        let check = frame.addr() + 4;
+        let pointer = frame.addr() + 8;
+        let unmarked = frame.addr() + 0xc;
+        let publish = |e: &mut Engine, cursor: u32, slot: u32| {
+            let node = e.call(CURSOR_NODE, &args![at + cursor]).u32();
+            let hazard = e.mem.u32(at + slot);
+            e.mem.set_u32(hazard, node);
+            e.call(BARRIER, &[]);
+        };
+        'restart: loop {
+            e.mem.set_u32(at + CURSOR_RECORD, bucket);
+            let head = e.mem.u32(e.mem.u32(at + CURSOR_RECORD));
+            e.mem.set_u32(at + CURRENT, head);
+            publish(e, CURRENT, 8);
+            let node = e.call(CURSOR_NODE, &args![at + CURRENT]).u32();
+            e.call(MAKE_TAGGED, &args![first, 0u32, node]);
+            let record = e.mem.u32(at + CURSOR_RECORD);
+            let stored = e.call(TAGGED_VALUE, &args![record]).u32();
+            if stored != e.call(TAGGED_VALUE, &args![first]).u32() {
+                continue 'restart;
+            }
+            loop {
+                if e.call(CURSOR_NODE, &args![at + CURRENT]).u32() == 0 {
+                    return false;
+                }
+                let record = e.call(NODE_RECORD, &args![at + CURRENT]).u32();
+                let next = e.mem.u32(record + 8);
+                e.mem.set_u32(at + NEXT, next);
+                publish(e, NEXT, 4);
+                let read = e.call(TAGGED_VALUE, &args![at + NEXT]).u32();
+                let record = e.call(NODE_RECORD, &args![at + CURRENT]).u32();
+                if read != e.call(TAGGED_VALUE, &args![record + 8]).u32() {
+                    continue 'restart;
+                }
+                let node = e.call(CURSOR_NODE, &args![at + CURRENT]).u32();
+                e.call(POINTER_CONSTRUCT, &args![pointer, node + 4]);
+                let node = e.call(CURSOR_NODE, &args![at + CURRENT]).u32();
+                e.call(MAKE_TAGGED, &args![check, 0u32, node]);
+                let record = e.mem.u32(at + CURSOR_RECORD);
+                let stored = e.call(TAGGED_VALUE, &args![record]).u32();
+                if stored != e.call(TAGGED_VALUE, &args![check]).u32() {
+                    e.call(POINTER_RELEASE, &args![pointer]);
+                    continue 'restart;
+                }
+                if !e.call(NODE_MARKED, &args![at + NEXT]).bool() {
+                    if e.call(POINTER_MATCHES, &args![pointer, value]).bool() {
+                        e.call(POINTER_RELEASE, &args![pointer]);
+                        return true;
+                    }
+                    let record = e.call(NODE_RECORD, &args![at + CURRENT]).u32();
+                    e.mem.set_u32(at + CURSOR_RECORD, record + 8);
+                    publish(e, CURRENT, 0xc);
+                } else {
+                    let node = e.call(CURSOR_NODE, &args![at + NEXT]).u32();
+                    e.call(MAKE_TAGGED, &args![unmarked, 0u32, node]);
+                    let expected = e.call(TAGGED_VALUE, &args![check]).u32();
+                    let wanted = e.call(TAGGED_VALUE, &args![unmarked]).u32();
+                    let slot = e.mem.u32(at + CURSOR_RECORD);
+                    if !e.call(COMPARE_SWAP, &args![slot, wanted, expected]).bool() {
+                        e.call(POINTER_RELEASE, &args![pointer]);
+                        continue 'restart;
+                    }
+                    let node = e.call(CURSOR_NODE, &args![at + CURRENT]).u32();
+                    e.call(RETIRE_NODE, &args![this, node]);
+                }
+                let next = e.mem.u32(at + NEXT);
+                e.mem.set_u32(at + CURRENT, next);
+                publish(e, NEXT, 8);
+                e.call(POINTER_RELEASE, &args![pointer]);
+            }
+        }
+    })
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x0090_66d0, fn_009066d0(Ptr, u32, u32) -> bool),
+        entry!(0x0090_67f0, fn_009067f0(Ptr, u32) -> Ptr),
+        entry!(0x0090_6820, fn_00906820(Ptr, u32, u32) -> bool),
         entry!(0x0090_6dc0, fn_00906dc0(Ptr) -> Ptr),
         entry!(0x0090_6f60, fn_00906f60(Ptr) -> Ptr),
         entry!(0x0090_6f80, fn_00906f80(Ptr, u8, u8, u8)),
@@ -382,5 +569,144 @@ mod b035_tests {
                 .u8(),
             0
         );
+    }
+}
+
+#[cfg(test)]
+mod n028_tests {
+    use super::*;
+
+    fn ret(eax: u32) -> Ret {
+        Ret {
+            eax,
+            ..Ret::default()
+        }
+    }
+
+    fn calls_to(e: &Engine, callee: u32) -> Vec<Vec<u32>> {
+        e.call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|(address, _)| *address == callee)
+            .map(|(_, words)| words.clone())
+            .collect()
+    }
+
+    /// A list model for the doubles: a cursor word holds a node with bit 0
+    /// as the mark; a node's pointer is at +4 and its next word at +8.
+    fn list_doubles(e: &mut Engine, bucket: u32) {
+        e.register(CURSOR_NODE, |e, a| ret(e.mem.u32(a[0]) & !1));
+        e.register(NODE_RECORD, |e, a| ret(e.mem.u32(a[0]) & !1));
+        e.register(MAKE_TAGGED, |e, a| {
+            e.mem.set_u32(a[0], a[2] | a[1]);
+            ret(a[0])
+        });
+        e.register(TAGGED_VALUE, |e, a| ret(e.mem.u32(a[0])));
+        e.register(COMPARE_SWAP, |e, a| {
+            if e.mem.u32(a[0]) == a[2] {
+                e.mem.set_u32(a[0], a[1]);
+                ret(1)
+            } else {
+                ret(0)
+            }
+        });
+        e.register(NODE_MARKED, |e, a| ret(e.mem.u32(a[0]) & 1));
+        e.register(POINTER_CONSTRUCT, |e, a| {
+            let value = e.mem.u32(a[1]);
+            e.mem.set_u32(a[0], value);
+            ret(a[0])
+        });
+        e.register(POINTER_MATCHES, |e, a| {
+            ret(u32::from(e.mem.u32(a[0]) == e.mem.u32(a[1])))
+        });
+        e.register_double(BUCKET_OF, move |_, _| ret(bucket));
+        for callee in [POINTER_RELEASE, BARRIER, RETIRE_NODE, END_OPERATION] {
+            e.register(callee, |_, _| Ret::default());
+        }
+    }
+
+    /// The inner object (owner, three hazard slots, the cursor words), a
+    /// bucket word and the list `values` in order.
+    fn list(e: &mut Engine, values: &[u32]) -> (u32, u32, Vec<u32>) {
+        let this = e.mem.alloc(0x1c);
+        e.mem.set_u32(this, 0x0a00);
+        for slot in [4, 8, 0xc] {
+            let hazard = e.mem.alloc(4);
+            e.mem.set_u32(this + slot, hazard);
+        }
+        let bucket = e.mem.alloc(4);
+        let nodes: Vec<u32> = values.iter().map(|_| e.mem.alloc(0xc)).collect();
+        for (i, &value) in values.iter().enumerate() {
+            e.mem.set_u32(nodes[i] + 4, value);
+            let next = nodes.get(i + 1).copied().unwrap_or(0);
+            e.mem.set_u32(nodes[i] + 8, next);
+        }
+        e.mem.set_u32(bucket, nodes.first().copied().unwrap_or(0));
+        list_doubles(e, bucket);
+        (this, bucket, nodes)
+    }
+
+    fn wanted(e: &mut Engine, value: u32) -> u32 {
+        let word = e.mem.alloc(4);
+        e.mem.set_u32(word, value);
+        word
+    }
+
+    #[test]
+    fn fn_00906820_finds_the_node_with_the_value() {
+        let mut e = Engine::new();
+        let (this, bucket, nodes) = list(&mut e, &[0x111, 0x222]);
+        let value = wanted(&mut e, 0x222);
+        e.call_log = Some(vec![]);
+        assert!(e.call(0x0090_6820, &[this, 7, value]).bool());
+        assert_eq!(calls_to(&e, BUCKET_OF), vec![vec![0x0a00, 7]]);
+        assert_eq!(e.mem.u32(this + CURRENT), nodes[1]);
+        assert_eq!(e.mem.u32(this + CURSOR_RECORD), nodes[0] + 8);
+        assert_eq!(e.mem.u32(bucket), nodes[0]);
+        let missing = wanted(&mut e, 0x333);
+        assert!(!e.call(0x0090_6820, &[this, 7, missing]).bool());
+    }
+
+    #[test]
+    fn fn_00906820_unlinks_a_marked_node_on_the_way() {
+        let mut e = Engine::new();
+        let (this, bucket, nodes) = list(&mut e, &[0x111, 0x222]);
+        e.mem.set_u32(nodes[0] + 8, nodes[1] | 1);
+        let value = wanted(&mut e, 0x222);
+        e.call_log = Some(vec![]);
+        assert!(e.call(0x0090_6820, &[this, 7, value]).bool());
+        assert_eq!(e.mem.u32(bucket), nodes[1]);
+        assert_eq!(calls_to(&e, RETIRE_NODE), vec![vec![this, nodes[0]]]);
+    }
+
+    #[test]
+    fn fn_009066d0_marks_and_unlinks_the_found_node() {
+        let mut e = Engine::new();
+        let (this, _bucket, nodes) = list(&mut e, &[0x111, 0x222, 0x333]);
+        let value = wanted(&mut e, 0x222);
+        e.call_log = Some(vec![]);
+        assert!(e.call(0x0090_66d0, &[this, 7, value]).bool());
+        assert_eq!(e.mem.u32(nodes[1] + 8), nodes[2] | 1);
+        assert_eq!(e.mem.u32(nodes[0] + 8), nodes[2]);
+        assert_eq!(calls_to(&e, RETIRE_NODE), vec![vec![this, nodes[1]]]);
+        assert_eq!(calls_to(&e, END_OPERATION), vec![vec![this]]);
+        let missing = wanted(&mut e, 0x444);
+        e.call_log = Some(vec![]);
+        assert!(!e.call(0x0090_66d0, &[this, 7, missing]).bool());
+        assert_eq!(calls_to(&e, END_OPERATION), vec![vec![this]]);
+    }
+
+    #[test]
+    fn fn_009067f0_destroys_then_maybe_frees() {
+        let mut e = Engine::new();
+        e.register(0x0090_64e0, |_, _| Ret::default());
+        e.register(0x0040_1030, |_, _| Ret::default());
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x0090_67f0, &[0x9000, 0]).u32(), 0x9000);
+        assert!(calls_to(&e, 0x0040_1030).is_empty());
+        e.call(0x0090_67f0, &[0x9000, 1]);
+        assert_eq!(calls_to(&e, 0x0040_1030), vec![vec![0x9000]]);
+        assert_eq!(calls_to(&e, 0x0090_64e0).len(), 2);
     }
 }

@@ -1458,9 +1458,1065 @@ pub fn fn_00e914e0(e: &mut Engine, this: Ptr) {
     e.mem.set_u8(base.wrapping_add(0x1114), u8::from(fixed));
 }
 
+/// The two connectivity messages (`"NiDX9IndexBufferManager::ResizeTempPointConnectivity>
+/// Failed to create index buffer\n"` and the `ResizeTempLineConnectivity` one).
+const POINT_CONNECTIVITY_FAILED_010F0200: u32 = 0x010f_0200;
+const LINE_CONNECTIVITY_FAILED_010F0258: u32 = 0x010f_0258;
+
+/// Whether the index buffer's description (`GetDesc`, a five-word buffer) is 16-bit indices
+/// (0x65) of an index buffer (7) with the usage, the pool and at least `size` bytes. One that
+/// does not fit is released (slot 8); a failed `GetDesc` answers false without releasing it.
+fn index_buffer_fits(e: &mut Engine, buffer: u32, usage: u32, pool: u32, size: u32) -> bool {
+    e.with_stack(0x14, |e, desc| {
+        let desc = desc.addr();
+        for word in 0..5u32 {
+            e.mem.set_u32(desc + 4 * word, 0);
+        }
+        if e.vcall(buffer, INDEX_BUFFER_GET_DESC, &args![desc]).i32() < 0 {
+            return false;
+        }
+        let fits = e.mem.u32(desc) == FORMAT_INDEX16
+            && e.mem.u32(desc + 4) == RESOURCE_INDEX_BUFFER
+            && e.mem.u32(desc + 8) == usage
+            && e.mem.u32(desc + 0xc) == pool
+            && e.mem.u32(desc + 0x10) >= size;
+        if !fits {
+            e.vcall(buffer, 8, &args![]);
+        }
+        fits
+    })
+}
+
+// Translated from 00e8f360 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`run_00e8f190`): `NiDX9IndexBufferManager`'s point index buffer
+/// (its message names `ResizeTempPointConnectivity`), `thiscall` with five words: the needed
+/// count, the quad count, a refill byte, the usage and the pool. Without a device (+8) or a
+/// needed count it answers 0. The kept buffer (+0xc) is used when its description fits
+/// (`index_buffer_fits` with 12 bytes per needed quad): it is answered as it is unless the byte
+/// asks for a refill; one that does not fit is released (a failed `GetDesc` keeps it). Else a
+/// new buffer of 12 bytes per quad is created (`CreateIndexBuffer`: the size, the usage, 0x65,
+/// the pool, the out word, 0; a failure reports the create message, a null buffer the
+/// connectivity message and answers 0). The buffer is locked (`Lock` 0, size, out word, 0;
+/// failing, the lock message, `Unlock`, release, +0xc cleared, +0x10 the size and 0 answered)
+/// and filled with two triangles (0, 1, 2, 0, 2, 3) per quad, unlocked and kept at +0xc with
+/// its size at +0x10. Answers the buffer.
+///
+/// The exe's out words are the stack words of the refill byte (create) and of the needed count
+/// (lock).
+pub fn fn_00e8f360(
+    e: &mut Engine,
+    this: Ptr,
+    needed: u32,
+    quads: u32,
+    refill: u8,
+    usage: u32,
+    pool: u32,
+) -> u32 {
+    let base = this.addr();
+    if e.mem.u32(base.wrapping_add(8)) == 0 || needed == 0 {
+        return 0;
+    }
+    let size = quads.wrapping_mul(12);
+    let kept = e.mem.u32(base.wrapping_add(0xc));
+    let mut buffer = 0u32;
+    if kept != 0 {
+        let fits = index_buffer_fits(e, kept, usage, pool, needed.wrapping_mul(12));
+        if fits {
+            if refill == 0 {
+                return kept;
+            }
+            buffer = kept;
+        }
+    }
+    e.with_stack(4, |e, out| {
+        let out = out.addr();
+        if buffer == 0 {
+            let device = e.mem.u32(base.wrapping_add(8));
+            e.mem.set_u32(out, 0);
+            let result = e
+                .vcall(
+                    device,
+                    CREATE_INDEX_BUFFER,
+                    &args![size, usage, FORMAT_INDEX16, pool, out, 0u32],
+                )
+                .i32();
+            if result < 0 {
+                e.call(REPORT_00A29680, &args![CREATE_INDEX_BUFFER_FAILED_010F0184]);
+                e.mem.set_u32(out, 0);
+                buffer = 0;
+            } else {
+                buffer = e.mem.u32(out);
+            }
+            if buffer == 0 {
+                e.call(REPORT_00A29680, &args![POINT_CONNECTIVITY_FAILED_010F0200]);
+                return 0;
+            }
+        }
+        e.mem.set_u32(out, 0);
+        let result = e
+            .vcall(buffer, INDEX_BUFFER_LOCK, &args![0u32, size, out, 0u32])
+            .i32();
+        if result < 0 {
+            e.call(REPORT_00A29680, &args![PACK_LOCK_FAILED_010EDDD0]);
+            e.vcall(buffer, INDEX_BUFFER_UNLOCK, &args![]);
+            e.vcall(buffer, 8, &args![]);
+            e.mem.set_u32(base.wrapping_add(0xc), 0);
+            e.mem.set_u32(base.wrapping_add(0x10), size);
+            return 0;
+        }
+        let mut at = e.mem.u32(out);
+        let mut first = 0u32;
+        for _ in 0..quads {
+            let index = first & 0xffff;
+            for value in [index, index + 1, index + 2, index, index + 2, index + 3] {
+                e.mem.set_u16(at, value as u16);
+                at = at.wrapping_add(2);
+            }
+            first = first.wrapping_add(4);
+        }
+        e.vcall(buffer, INDEX_BUFFER_UNLOCK, &args![]);
+        e.mem.set_u32(base.wrapping_add(0xc), buffer);
+        e.mem.set_u32(base.wrapping_add(0x10), size);
+        buffer
+    })
+}
+
+// Translated from 00e8f520 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`run_00e8f190`): `NiDX9IndexBufferManager`'s line index buffer
+/// (its message names `ResizeTempLineConnectivity`), `thiscall` with five words: the vertex
+/// count, the connection flags (a byte per vertex), the address of the index count, the usage
+/// and the pool. Without a device (+8), a count or flags it answers 0. The size is 4 bytes per
+/// vertex plus 4; the kept buffer (+0x14) is used when its description fits, else (released
+/// unless `GetDesc` failed) a new one comes from `00e8f190` (the size, the usage, 0x65, the
+/// pool, no description; none: the connectivity message and 0). The index count is cleared,
+/// the buffer locked (failing: the lock message, `Unlock`, release and a null buffer) and for
+/// each vertex but the last whose flag is set the pair (i, i + 1) written and the count
+/// raised by 2; a set last flag closes the line with (last, 0). Unlocked; the buffer (or null)
+/// is kept at +0x14 with the size at +0x18 and answered.
+pub fn fn_00e8f520(
+    e: &mut Engine,
+    this: Ptr,
+    count: u32,
+    flags: u32,
+    indices: Ptr,
+    usage: u32,
+    pool: u32,
+) -> u32 {
+    let base = this.addr();
+    if e.mem.u32(base.wrapping_add(8)) == 0 || count == 0 || flags == 0 {
+        return 0;
+    }
+    let size = count.wrapping_mul(4).wrapping_add(4);
+    let kept = e.mem.u32(base.wrapping_add(0x14));
+    let mut buffer = 0u32;
+    if kept != 0 {
+        let fits = index_buffer_fits(e, kept, usage, pool, size);
+        if fits {
+            buffer = kept;
+        }
+    }
+    if buffer == 0 {
+        buffer = fn_00e8f190(e, this, size, usage, FORMAT_INDEX16, pool, 0);
+        if buffer == 0 {
+            e.call(REPORT_00A29680, &args![LINE_CONNECTIVITY_FAILED_010F0258]);
+            return 0;
+        }
+    }
+    let result = e.with_stack(4, |e, out| {
+        let out = out.addr();
+        e.mem.set_u32(indices.addr(), 0);
+        e.mem.set_u32(out, 0);
+        let locked = e
+            .vcall(buffer, INDEX_BUFFER_LOCK, &args![0u32, size, out, 0u32])
+            .i32();
+        if locked < 0 {
+            e.call(REPORT_00A29680, &args![PACK_LOCK_FAILED_010EDDD0]);
+            e.vcall(buffer, INDEX_BUFFER_UNLOCK, &args![]);
+            e.vcall(buffer, 8, &args![]);
+            return 0;
+        }
+        let mut at = e.mem.u32(out);
+        let last = count.wrapping_sub(1);
+        let mut flag = flags;
+        let mut vertex = 0u32;
+        let raise = |e: &mut Engine| {
+            let value = e.mem.u32(indices.addr()).wrapping_add(2);
+            e.mem.set_u32(indices.addr(), value);
+        };
+        while vertex < last {
+            if e.mem.u8(flag) != 0 {
+                let index = vertex & 0xffff;
+                e.mem.set_u16(at, index as u16);
+                e.mem.set_u16(at.wrapping_add(2), (index + 1) as u16);
+                at = at.wrapping_add(4);
+                raise(e);
+            }
+            flag = flag.wrapping_add(1);
+            vertex += 1;
+        }
+        if e.mem.u8(flag) != 0 {
+            e.mem.set_u16(at, last as u16);
+            e.mem.set_u16(at.wrapping_add(2), 0);
+            raise(e);
+        }
+        e.vcall(buffer, INDEX_BUFFER_UNLOCK, &args![]);
+        buffer
+    });
+    e.mem.set_u32(base.wrapping_add(0x14), result);
+    e.mem.set_u32(base.wrapping_add(0x18), size);
+    result
+}
+
+/// `00b57f20` (`thiscall` on a pointer map: the iterator, the key's and the value's out
+/// words): the map's `GetNext`.
+const MAP_ITERATE_00B57F20: u32 = 0x00b5_7f20;
+
+// Translated from 00e8f6d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`run_00e8f190`): frees the index buffer records of the first
+/// map (+0x1c) and the two kept buffers (`thiscall`). From the first non-null bucket each
+/// item goes through `GetNext` (`00b57f20`); a record has five entries at +8 to +0x18, each
+/// one not null releasing its +0x20 (slot 8) when set, cleaned up (`00e95b80`) and freed
+/// (0x38 bytes); then the record is freed (0x1c bytes). Then the map's `00b601a0`, and the
+/// kept buffers (+0xc, +0x14) released and cleared when set.
+pub fn fn_00e8f6d0(e: &mut Engine, this: Ptr) {
+    let base = this.addr();
+    let map = base.wrapping_add(0x1c);
+    let first = first_item_from(e, map, 0);
+    e.with_stack(0xc, |e, words| {
+        let iterator = words.addr();
+        let key = iterator + 4;
+        let value = iterator + 8;
+        e.mem.set_u32(iterator, first);
+        while e.mem.u32(iterator) != 0 {
+            e.call(MAP_ITERATE_00B57F20, &args![map, iterator, key, value]);
+            let record = e.mem.u32(value);
+            if record == 0 {
+                continue;
+            }
+            for slot in 0..5u32 {
+                let entry = e.mem.u32(record.wrapping_add(8 + 4 * slot));
+                if entry == 0 {
+                    continue;
+                }
+                let held = e.mem.u32(entry.wrapping_add(0x20));
+                if held != 0 {
+                    e.vcall(held, 8, &args![]);
+                }
+                e.call(ENTRY_CLEAN_UP_00E95B80, &args![entry]);
+                e.call(FREE_00AA1460, &args![entry, 0x38u32]);
+            }
+            e.call(FREE_00AA1460, &args![record, 0x1cu32]);
+        }
+    });
+    e.call(MAP_00B601A0, &args![map]);
+    for offset in [0xcu32, 0x14] {
+        let buffer = e.mem.u32(base.wrapping_add(offset));
+        if buffer != 0 {
+            e.vcall(buffer, 8, &args![]);
+            e.mem.set_u32(base.wrapping_add(offset), 0);
+        }
+    }
+}
+
+/// The memory manager singleton (`011f6238`) and its free (`00aa4060`, `thiscall`, block).
+const MEMORY_MANAGER: u32 = 0x011f_6238;
+const MEMORY_DEALLOCATE: u32 = 0x00aa_4060;
+
+// Translated from 00e8f7c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`run_00e8f190`): the scalar deleting destructor of an index
+/// buffer map's base (`thiscall`, the flags): its table (`010f02b0`), `00b601a0`, the bucket
+/// array (+8) freed (`00aa10f0`), and with bit 0 the block goes back to the memory manager
+/// (`00aa4060`). Answers `this`.
+pub fn fn_00e8f7c0(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    let base = this.addr();
+    e.mem.set_u32(base, IB_MAP_BASE_VTABLE);
+    e.call(MAP_00B601A0, &args![base]);
+    let buckets = e.mem.u32(base.wrapping_add(8));
+    e.call(FREE_00AA10F0, &args![buckets]);
+    if flags & 1 != 0 {
+        e.call(MEMORY_DEALLOCATE, &args![MEMORY_MANAGER, base]);
+    }
+    this
+}
+
+// Translated from 00e8f800 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`run_00e8f190`): the scalar deleting destructor of an index
+/// buffer map (`thiscall`, the flags): its table (`010f02d0`) and `00b601a0`, the base's table
+/// (`010f02b0`) and `00b601a0` again, the bucket array (+8) freed (`00aa10f0`), and with bit 0
+/// the block goes back to the memory manager (`00aa4060`). Answers `this`.
+pub fn fn_00e8f800(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    let base = this.addr();
+    e.mem.set_u32(base, IB_MAP_VTABLE);
+    e.call(MAP_00B601A0, &args![base]);
+    e.mem.set_u32(base, IB_MAP_BASE_VTABLE);
+    e.call(MAP_00B601A0, &args![base]);
+    let buckets = e.mem.u32(base.wrapping_add(8));
+    e.call(FREE_00AA10F0, &args![buckets]);
+    if flags & 1 != 0 {
+        e.call(MEMORY_DEALLOCATE, &args![MEMORY_MANAGER, base]);
+    }
+    this
+}
+
+// Translated from 00e8fd60 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`run_00e8f190`): the `NiDX9RenderedTextureData` constructor (the
+/// RTTI of its table), `thiscall` with three words, the last not read: the texture data base
+/// constructor (`00e8a260`: the texture and the renderer), then its table (`010f02fc`).
+/// Answers `this`.
+pub fn fn_00e8fd60(e: &mut Engine, this: Ptr, texture: u32, renderer: u32, _unused_2: u32) -> Ptr {
+    e.call(
+        TEXTURE_DATA_CONSTRUCT_00E8A260,
+        &args![this, texture, renderer],
+    );
+    e.mem
+        .set_u32(this.addr(), NI_DX9_RENDERED_TEXTURE_DATA_VTABLE);
+    this
+}
+
+// Translated from 00e8fd80 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`run_00e8f190`): the `NiDX9RenderedTextureData` destructor body
+/// (`thiscall`). Its table; the renderer's (+0x60) virtual slot 0x15c with the texture (+8);
+/// the surface at +0x6c released (slot 8) and cleared when set; then (a tail jump) the
+/// texture data base destructor (`00e8a2b0`).
+pub fn fn_00e8fd80(e: &mut Engine, this: Ptr) {
+    let base = this.addr();
+    let renderer = e.mem.u32(base.wrapping_add(0x60));
+    let texture = e.mem.u32(base.wrapping_add(8));
+    e.mem.set_u32(base, NI_DX9_RENDERED_TEXTURE_DATA_VTABLE);
+    e.vcall(renderer, 0x15c, &args![texture]);
+    let surface = e.mem.u32(base.wrapping_add(0x6c));
+    if surface != 0 {
+        e.vcall(surface, 8, &args![]);
+        e.mem.set_u32(base.wrapping_add(0x6c), 0);
+    }
+    e.call(TEXTURE_DATA_DOWN_00E8A2B0, &args![base]);
+}
+
+/// The `NiDX9RenderedCubeMapData` (`010f049c`) and `NiDX9DynamicTextureData` (`010f05ec`)
+/// tables (by their RTTI).
+const NI_DX9_RENDERED_CUBE_MAP_DATA_VTABLE: u32 = 0x010f_049c;
+const NI_DX9_DYNAMIC_TEXTURE_DATA_VTABLE: u32 = 0x010f_05ec;
+
+// Translated from 00e90080 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`run_00e8f190`): the `NiDX9RenderedCubeMapData` scalar deleting
+/// destructor (`thiscall`, the flags): its table, the renderer's (+0x60) slot 0x158 with the
+/// texture (+8), the rendered texture data destructor (`00e8fd80`), and with bit 0 the 0x70
+/// bytes freed (`00aa1460`). Answers `this`.
+pub fn fn_00e90080(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    let base = this.addr();
+    let renderer = e.mem.u32(base.wrapping_add(0x60));
+    let texture = e.mem.u32(base.wrapping_add(8));
+    e.mem.set_u32(base, NI_DX9_RENDERED_CUBE_MAP_DATA_VTABLE);
+    e.vcall(renderer, 0x158, &args![texture]);
+    fn_00e8fd80(e, this);
+    if flags & 1 != 0 {
+        e.call(FREE_00AA1460, &args![base, 0x70u32]);
+    }
+    this
+}
+
+/// The two messages of the rendered cube map (`"NiDX9RenderedCubeMapData::CreateSurf> Failed
+/// CreateImageSurface - %s"` and `"...::Create> NiDX9TextureBufferData::CreateCubeFace -
+/// %s"`), the device's `CreateCubeTexture` (slot 0x64, by the interface's order), the cube
+/// face maker `00e7d390` (cdecl, five words) and the render-target memory counters
+/// (`0126f9e0` bytes, `0126f9e4` page padding).
+const CREATE_SURF_FAILED_010F0550: u32 = 0x010f_0550;
+const CREATE_CUBE_FACE_FAILED_010F0598: u32 = 0x010f_0598;
+const CREATE_CUBE_TEXTURE: u32 = 0x64;
+const MAKE_CUBE_FACE_00E7D390: u32 = 0x00e7_d390;
+const TARGET_BYTES_0126F9E0: u32 = 0x0126_f9e0;
+const TARGET_PADDING_0126F9E4: u32 = 0x0126_f9e4;
+
+// Translated from 00e900c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`run_00e8f190`): `NiDX9RenderedCubeMapData::CreateSurf` (its
+/// message's name), `thiscall` with the texture (null answers 0). The texture's size (virtual
+/// slot 0x94) goes to +0x10 and +0xc, +0x68 becomes 1; the pixel format is picked
+/// (`00e89ed0`) for the texture's request (its words +0x18..+0x20) from the renderer's (+0x60)
+/// table at +0x808; the Direct3D format is the format's +0xc, or the texture's +0x44 when its
+/// byte +0x41 is set. The device (renderer +0x288) makes a cube texture (`CreateCubeTexture`:
+/// size, 1 level, usage 1, the format, pool 0, the out word, 0): failing, the message with
+/// `NiXenonErrorString`, +0x64 cleared and 0 answered; else the texture at +0x64 and the
+/// pixel format answered.
+///
+/// The exe's out word is the stack word of the texture argument.
+pub fn fn_00e900c0(e: &mut Engine, this: Ptr, texture: u32) -> u32 {
+    let base = this.addr();
+    if texture == 0 {
+        return 0;
+    }
+    let size = e.vcall(texture, 0x94, &args![]).u32();
+    e.mem.set_u32(base.wrapping_add(0x10), size);
+    e.mem.set_u32(base.wrapping_add(0xc), size);
+    e.mem.set_u32(base.wrapping_add(0x68), 1);
+    e.with_stack(0x10, |e, words| {
+        let request = words.addr();
+        let out = request + 0xc;
+        for word in 0..3u32 {
+            let value = e.mem.u32(texture.wrapping_add(0x18 + 4 * word));
+            e.mem.set_u32(request + 4 * word, value);
+        }
+        let renderer = e.mem.u32(base.wrapping_add(0x60));
+        let format = e
+            .call(
+                PICK_FORMAT_00E89ED0,
+                &args![request, renderer.wrapping_add(0x808)],
+            )
+            .u32();
+        let mut d3d_format = e.mem.u32(format.wrapping_add(0xc));
+        if e.mem.u8(texture.wrapping_add(0x41)) != 0 {
+            d3d_format = e.mem.u32(texture.wrapping_add(0x44));
+        }
+        let renderer = e.mem.u32(base.wrapping_add(0x60));
+        let device = e.mem.u32(renderer.wrapping_add(RENDERER_DEVICE));
+        let size = e.mem.u32(base.wrapping_add(0xc));
+        e.mem.set_u32(out, 0);
+        let result = e
+            .vcall(
+                device,
+                CREATE_CUBE_TEXTURE,
+                &args![size, 1u32, 1u32, d3d_format, 0u32, out, 0u32],
+            )
+            .i32();
+        if result < 0 {
+            let text = e.call(ERROR_STRING_00E89D50, &args![result]).u32();
+            e.call(REPORT_00A29680, &args![CREATE_SURF_FAILED_010F0550, text]);
+            e.mem.set_u32(base.wrapping_add(0x64), 0);
+            return 0;
+        }
+        let cube = e.mem.u32(out);
+        e.mem.set_u32(base.wrapping_add(0x64), cube);
+        format
+    })
+}
+
+/// Adds `bytes` to the render-target memory counter and the padding up to the next 4 KB page
+/// to the padding counter.
+fn count_target_memory(e: &mut Engine, bytes: u32) {
+    let total = e.mem.u32(TARGET_BYTES_0126F9E0).wrapping_add(bytes);
+    e.mem.set_u32(TARGET_BYTES_0126F9E0, total);
+    let page = bytes & 0xffff_f000;
+    let padding = if page == bytes {
+        0
+    } else {
+        page.wrapping_sub(bytes).wrapping_add(0x1000)
+    };
+    let total = e.mem.u32(TARGET_PADDING_0126F9E4).wrapping_add(padding);
+    e.mem.set_u32(TARGET_PADDING_0126F9E4, total);
+}
+
+// Translated from 00e901a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`run_00e8f190`): `NiDX9RenderedCubeMapData::Create` (its
+/// message's name), `cdecl` with the texture and the renderer. A 0x70-byte block (`00aa13e0`)
+/// is constructed as rendered texture data (`00e8fd60` with 0) with the cube map's table; its
+/// surface is created (`00e900c0`; failing, the block's deleting destructor, slot 0 with 1,
+/// and 0 answered). The texture's renderer data (+0x24 of the texture at +8) becomes the block.
+/// For each of the six faces (the texture's words from +0x4c) the block's slot 0x9c runs
+/// twice (no arguments) and the face maker (`00e7d390`: the second's answer, the face, the
+/// first face made, the device and the address of the face's word) makes it; failing, the
+/// message, the deleting destructor and 0. The six faces' bytes (the pixel format's bits per
+/// pixel over 8 times +0x10 times +0xc, six times) are counted as render-target memory.
+/// Answers the block.
+pub fn fn_00e901a0(e: &mut Engine, texture: u32, renderer: u32) -> u32 {
+    let block = e.call(NEW_OBJECT, &args![0x70u32]).u32();
+    let data = if block != 0 {
+        fn_00e8fd60(e, Ptr::new(block), texture, renderer, 0);
+        e.mem.set_u32(block, NI_DX9_RENDERED_CUBE_MAP_DATA_VTABLE);
+        block
+    } else {
+        0
+    };
+    let format = fn_00e900c0(e, Ptr::new(data), texture);
+    if format == 0 {
+        if data != 0 {
+            e.vcall(data, 0, &args![1u32]);
+        }
+        return 0;
+    }
+    let owner = e.mem.u32(data.wrapping_add(8));
+    e.mem.set_u32(owner.wrapping_add(0x24), data);
+    let mut first = 0u32;
+    let result = e.with_stack(4, |e, slot| {
+        let slot = slot.addr();
+        for face in 0..6u32 {
+            e.vcall(data, 0x9c, &args![]);
+            let word = e.mem.u32(texture.wrapping_add(0x4c + 4 * face));
+            let device = e.mem.u32(renderer.wrapping_add(RENDERER_DEVICE));
+            e.mem.set_u32(slot, word);
+            let answer = e.vcall(data, 0x9c, &args![]).u32();
+            let made = e
+                .call(
+                    MAKE_CUBE_FACE_00E7D390,
+                    &args![answer, face, first, device, slot],
+                )
+                .u32();
+            if made == 0 {
+                e.call(
+                    REPORT_00A29680,
+                    &args![
+                        CREATE_CUBE_FACE_FAILED_010F0598,
+                        BUFFER_DATA_FAILED_ARGUMENT_01011584
+                    ],
+                );
+                e.vcall(data, 0, &args![1u32]);
+                return false;
+            }
+            if first == 0 {
+                first = made;
+            }
+        }
+        true
+    });
+    if !result {
+        return 0;
+    }
+    let bits = u32::from(e.mem.u8(format.wrapping_add(1)) >> 3);
+    let bytes = bits
+        .wrapping_mul(e.mem.u32(data.wrapping_add(0x10)))
+        .wrapping_mul(e.mem.u32(data.wrapping_add(0xc)))
+        .wrapping_mul(6);
+    count_target_memory(e, bytes);
+    data
+}
+
+// Translated from 00e902e0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`run_00e8f190`; a virtual slot), `thiscall`: the byte at +0x70
+/// (in `AL`).
+pub fn fn_00e902e0(e: &mut Engine, this: Ptr) -> u8 {
+    e.mem.u8(this.addr().wrapping_add(0x70))
+}
+
+// Translated from 00e902f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`run_00e8f190`; a virtual slot), `thiscall` with one word: its
+/// low byte goes to +0x70.
+pub fn fn_00e902f0(e: &mut Engine, this: Ptr, value: u8) {
+    e.mem.set_u8(this.addr().wrapping_add(0x70), value);
+}
+
+// Translated from 00e90300 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`run_00e8f190`): the `NiDX9DynamicTextureData` scalar deleting
+/// destructor (`thiscall`, the flags): its table, the renderer's (+0x60) slot 0x160 with the
+/// texture (+8), the texture data base destructor (`00e8a2b0`), and with bit 0 the 0x74 bytes
+/// freed (`00aa1460`). Answers `this`.
+pub fn fn_00e90300(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    let base = this.addr();
+    let renderer = e.mem.u32(base.wrapping_add(0x60));
+    let texture = e.mem.u32(base.wrapping_add(8));
+    e.mem.set_u32(base, NI_DX9_DYNAMIC_TEXTURE_DATA_VTABLE);
+    e.vcall(renderer, 0x160, &args![texture]);
+    e.call(TEXTURE_DATA_DOWN_00E8A2B0, &args![base]);
+    if flags & 1 != 0 {
+        e.call(FREE_00AA1460, &args![base, 0x74u32]);
+    }
+    this
+}
+
+/// The dynamic texture's message (`"NiDX9DynamicTextureData::CreateSurf> Failed
+/// CreateImageSurface - %s"`).
+const DYNAMIC_SURF_FAILED_010F06B0: u32 = 0x010f_06b0;
+
+// Translated from 00e90340 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`run_00e8f190`): `NiDX9DynamicTextureData::CreateSurf` (its
+/// message's name), `thiscall` with the texture (null answers 0) and a byte. The texture's
+/// width and height (slots 0x94, 0x98) go to +0xc and +0x10, +0x68 becomes 1; the pixel format
+/// is picked (`00e89ed0`) for the texture's request from the renderer's (+0x60) table at
+/// +0x700 and its 0x44 bytes copied to +0x14. With the byte set the device (renderer +0x288)
+/// makes one texture (`CreateTexture`: width, height, 1 level, usage 0x200, the format, pool 0)
+/// kept at +0x64; without it one with usage 0 at +0x64 and a second in pool 2 at +0x6c. A
+/// failure prints the message with `NiXenonErrorString`, clears the word it was making and
+/// answers 0; else the pixel format is answered.
+///
+/// The exe's out word is the stack word of the texture argument.
+pub fn fn_00e90340(e: &mut Engine, this: Ptr, texture: u32, dynamic: u8) -> u32 {
+    let base = this.addr();
+    if texture == 0 {
+        return 0;
+    }
+    let width = e.vcall(texture, 0x94, &args![]).u32();
+    e.mem.set_u32(base.wrapping_add(0xc), width);
+    let height = e.vcall(texture, 0x98, &args![]).u32();
+    e.mem.set_u32(base.wrapping_add(0x10), height);
+    e.mem.set_u32(base.wrapping_add(0x68), 1);
+    e.with_stack(0x10, |e, words| {
+        let request = words.addr();
+        let out = request + 0xc;
+        for word in 0..3u32 {
+            let value = e.mem.u32(texture.wrapping_add(0x18 + 4 * word));
+            e.mem.set_u32(request + 4 * word, value);
+        }
+        let renderer = e.mem.u32(base.wrapping_add(0x60));
+        let format = e
+            .call(
+                PICK_FORMAT_00E89ED0,
+                &args![request, renderer.wrapping_add(0x700)],
+            )
+            .u32();
+        for word in 0..0x11u32 {
+            let value = e.mem.u32(format.wrapping_add(4 * word));
+            e.mem.set_u32(base.wrapping_add(0x14 + 4 * word), value);
+        }
+        let renderer = e.mem.u32(base.wrapping_add(0x60));
+        let d3d_format = e.mem.u32(format.wrapping_add(0xc));
+        let device = e.mem.u32(renderer.wrapping_add(RENDERER_DEVICE));
+        let create = |e: &mut Engine, usage: u32, pool: u32| {
+            let width = e.mem.u32(base.wrapping_add(0xc));
+            let height = e.mem.u32(base.wrapping_add(0x10));
+            e.vcall(
+                device,
+                CREATE_TEXTURE,
+                &args![width, height, 1u32, usage, d3d_format, pool, out, 0u32],
+            )
+            .i32()
+        };
+        let fail = |e: &mut Engine, result: i32, at: u32| {
+            let text = e.call(ERROR_STRING_00E89D50, &args![result]).u32();
+            e.call(REPORT_00A29680, &args![DYNAMIC_SURF_FAILED_010F06B0, text]);
+            e.mem.set_u32(base.wrapping_add(at), 0);
+        };
+        e.mem.set_u32(out, 0);
+        let result = create(e, if dynamic != 0 { 0x200 } else { 0 }, 0);
+        if result < 0 {
+            fail(e, result, 0x64);
+            return 0;
+        }
+        let made = e.mem.u32(out);
+        e.mem.set_u32(base.wrapping_add(0x64), made);
+        if dynamic != 0 {
+            return format;
+        }
+        e.mem.set_u32(out, 0);
+        let result = create(e, 0, 2);
+        if result < 0 {
+            fail(e, result, 0x6c);
+            return 0;
+        }
+        let made = e.mem.u32(out);
+        e.mem.set_u32(base.wrapping_add(0x6c), made);
+        format
+    })
+}
+
+/// The tiled-texture message (`"NiDX9DynamicTextureData Failed> Can not create a tiled dynamic
+/// texture.\n"`).
+const TILED_DYNAMIC_FAILED_010F06F8: u32 = 0x010f_06f8;
+
+// Translated from 00e904c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`run_00e8f190`): `NiDX9DynamicTextureData::Create` (its class by
+/// the RTTI and message), `cdecl` with the texture. A tiled texture (byte +0x38) prints the
+/// message and answers 0. Otherwise a 0x74-byte block is constructed as texture data
+/// (`00e8a260` with the renderer singleton `011f4748`) with the class's table, +0x6c and the
+/// byte +0x70 cleared; its surfaces are created (`00e90340`, with the renderer's byte +0x6f5);
+/// failing, the block's deleting destructor (slot 0 with 1) and 0. Else the texture's renderer
+/// data (+0x24 of the texture at +8) becomes the block, which is answered.
+///
+/// The exe stores the byte into the low byte of the texture's stack word and pushes that whole
+/// word; `00e90340` reads only the byte, which the direct call passes.
+pub fn fn_00e904c0(e: &mut Engine, texture: u32) -> u32 {
+    if e.mem.u8(texture.wrapping_add(0x38)) != 0 {
+        e.call(REPORT_00A29680, &args![TILED_DYNAMIC_FAILED_010F06F8]);
+        return 0;
+    }
+    let renderer = e.mem.u32(RENDERER_011F4748);
+    let block = e.call(NEW_OBJECT, &args![0x74u32]).u32();
+    let data = if block != 0 {
+        e.call(
+            TEXTURE_DATA_CONSTRUCT_00E8A260,
+            &args![block, texture, renderer],
+        );
+        e.mem.set_u32(block, NI_DX9_DYNAMIC_TEXTURE_DATA_VTABLE);
+        e.mem.set_u32(block.wrapping_add(0x6c), 0);
+        e.mem.set_u8(block.wrapping_add(0x70), 0);
+        block
+    } else {
+        0
+    };
+    let flag = e.mem.u8(renderer.wrapping_add(0x6f5));
+    if fn_00e90340(e, Ptr::new(data), texture, flag) == 0 {
+        if data != 0 {
+            e.vcall(data, 0, &args![1u32]);
+        }
+        return 0;
+    }
+    let owner = e.mem.u32(data.wrapping_add(8));
+    e.mem.set_u32(owner.wrapping_add(0x24), data);
+    data
+}
+
+/// `NiDX9ErrorShader::ms_RTTI` (`0126f9f0`; the function sits in slot +8 of the class's table
+/// `010f0764`).
+const ERROR_SHADER_RTTI_0126F9F0: u32 = 0x0126_f9f0;
+
+// Translated from 00e90550 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`run_00e8f190`): `NiDX9ErrorShader`'s `GetRTTI` (slot +8 of its
+/// table, the only reference): answers `0126f9f0`.
+pub fn fn_00e90550(_e: &mut Engine, _this: Ptr) -> u32 {
+    ERROR_SHADER_RTTI_0126F9F0
+}
+
+/// `rand` (`00ecadb8`), the `double`s -32767.0 (`0109ed88`) and 127.0 (`0102dfe0`), the
+/// render state group maker `00e7f5d0` (no arguments), the group's state set `00e7f430`
+/// (`thiscall`, three words) and `NiShader`'s base render `00a8f3e0` (`thiscall`, seven
+/// words).
+const RAND: u32 = 0x00ec_adb8;
+const MINUS_32767_0109ED88: u32 = 0x0109_ed88;
+const SCALE_127_0102DFE0: u32 = 0x0102_dfe0;
+const MAKE_STATE_GROUP_00E7F5D0: u32 = 0x00e7_f5d0;
+const GROUP_SET_STATE_00E7F430: u32 = 0x00e7_f430;
+const SHADER_RENDER_00A8F3E0: u32 = 0x00a8_f3e0;
+
+/// One channel of the error shader's colour: `rand()` (`FILD`) over -32767.0, rounded to a
+/// `float`, times 127.0, truncated (`FISTP` under chop); 0x80 minus its low byte.
+fn random_channel(e: &mut Engine) -> u8 {
+    let value = e.call(RAND, &args![]).i32();
+    let divisor = f64::from_bits(e.mem.u64(MINUS_32767_0109ED88));
+    let scale = f64::from_bits(e.mem.u64(SCALE_127_0102DFE0));
+    let ratio = x87_store32(x87_div(f64::from(value), divisor));
+    let scaled = x87_mul(x87_load32(ratio), scale);
+    0x80u8.wrapping_sub(crate::x87::fistp_chop(scaled) as u8)
+}
+
+// Translated from 00e90590 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`run_00e8f190`): the `NiDX9ErrorShader`'s render (`thiscall`,
+/// seven words passed on). A random colour (three `random_channel`s, alpha 0xff) goes to the
+/// property state's (+0x3c) render state group (+0x30, made by `00e7f5d0` when missing) as
+/// state 0x3c; states 0x1d, 0x1b, 0xf and 0x34 get 0 (each set with 1, the group made again
+/// when missing). Then (a tail jump) `NiShader`'s base render (`00a8f3e0`) with the seven
+/// words, whose answer it answers.
+pub fn fn_00e90590(
+    e: &mut Engine,
+    this: Ptr,
+    first: u32,
+    second: u32,
+    third: u32,
+    fourth: u32,
+    fifth: u32,
+    sixth: u32,
+    seventh: u32,
+) -> u32 {
+    let base = this.addr();
+    let red = random_channel(e);
+    let green = random_channel(e);
+    let blue = random_channel(e);
+    let colour = (((u32::from(red) | 0xffff_ff00) << 8) | u32::from(green)) << 8 | u32::from(blue);
+    for (state, value) in [(0x3cu32, colour), (0x1d, 0), (0x1b, 0), (0xf, 0), (0x34, 0)] {
+        let holder = e.mem.u32(base.wrapping_add(0x3c));
+        if e.mem.u32(holder.wrapping_add(0x30)) == 0 {
+            let group = e.call(MAKE_STATE_GROUP_00E7F5D0, &args![]).u32();
+            e.mem.set_u32(holder.wrapping_add(0x30), group);
+        }
+        let group = e.mem.u32(holder.wrapping_add(0x30));
+        e.call(GROUP_SET_STATE_00E7F430, &args![group, state, value, 1u32]);
+    }
+    e.call(
+        SHADER_RENDER_00A8F3E0,
+        &args![base, first, second, third, fourth, fifth, sixth, seventh],
+    )
+    .u32()
+}
+
+/// The `double`s 0.1 (`0101ffa0`), 32767.0 (`01029790`) and 1.0 (`01012070`) and the pass
+/// render `00e807d0` (`thiscall`, eight words).
+const TENTH_0101FFA0: u32 = 0x0101_ffa0;
+const RAND_MAX_01029790: u32 = 0x0102_9790;
+const ONE_01012070: u32 = 0x0101_2070;
+const RENDER_PASS_00E807D0: u32 = 0x00e8_07d0;
+
+// Translated from 00e90760 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`run_00e8f190`): the `NiDX9ErrorShader`'s jittered draw
+/// (`thiscall`, eight words: six passed through, the transform and the bound; the second and
+/// third are not read). The transform (13 words) is copied; each of its translation's three
+/// floats (+0x24, +0x28, +0x2c) moves by `(2 * rand() / 32767.0 - 1.0)` (rounded to a
+/// `float`) times a tenth of the bound's radius (+0xc, rounded to a `float`). Then `00e807d0`
+/// with the first word, 0, 0, the fourth to sixth, the copy and the bound.
+pub fn fn_00e90760(
+    e: &mut Engine,
+    this: Ptr,
+    first: u32,
+    _unused_1: u32,
+    _unused_2: u32,
+    fourth: u32,
+    fifth: u32,
+    sixth: u32,
+    transform: u32,
+    bound: u32,
+) {
+    e.with_stack(0x34, |e, copy| {
+        let copy = copy.addr();
+        for word in 0..0xdu32 {
+            let value = e.mem.u32(transform.wrapping_add(4 * word));
+            e.mem.set_u32(copy + 4 * word, value);
+        }
+        let tenth = f64::from_bits(e.mem.u64(TENTH_0101FFA0));
+        let radius = x87_load32(e.mem.u32(bound.wrapping_add(0xc)));
+        let scale = x87_store32(x87_mul(radius, tenth));
+        let rand_max = f64::from_bits(e.mem.u64(RAND_MAX_01029790));
+        let one = f64::from_bits(e.mem.u64(ONE_01012070));
+        for axis in 0..3u32 {
+            let value = f64::from(e.call(RAND, &args![]).i32());
+            let ratio = x87_sub(x87_div(x87_add(value, value), rand_max), one);
+            let ratio = x87_load32(x87_store32(ratio));
+            let at = copy + 0x24 + 4 * axis;
+            let moved = x87_add(x87_mul(ratio, x87_m32(scale)), x87_m32(e.mem.u32(at)));
+            e.mem.set_u32(at, x87_store32(moved));
+        }
+        e.call(
+            RENDER_PASS_00E807D0,
+            &args![this, first, 0u32, 0u32, fourth, fifth, sixth, copy, bound],
+        );
+    });
+}
+
+// Translated from 00e90d20 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`run_00e8f190`; the texture manager's), `thiscall` with a
+/// texture: the format word (+0x24) of its renderer data (+0x24) when it has one. Otherwise,
+/// when the texture has a source (`00653290` with the kind at `011f444c`) that the renderer's
+/// (+0xc) slot 0x13c accepts, the format of the renderer data the texture has by then; else
+/// 0x16.
+pub fn fn_00e90d20(e: &mut Engine, this: Ptr, texture: u32) -> u32 {
+    let data = e.mem.u32(texture.wrapping_add(0x24));
+    if data != 0 {
+        return e.mem.u32(data.wrapping_add(0x24));
+    }
+    let source = e
+        .call(SOURCE_OF_00653290, &args![texture, SOURCE_KIND_011F444C])
+        .u32();
+    if source != 0 {
+        let renderer = e.mem.u32(this.addr().wrapping_add(0xc));
+        if e.vcall(renderer, 0x13c, &args![source]).u8() != 0 {
+            let data = e.mem.u32(texture.wrapping_add(0x24));
+            if data != 0 {
+                return e.mem.u32(data.wrapping_add(0x24));
+            }
+        }
+    }
+    0x16
+}
+
+// Translated from 00e90db0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`run_00e8f190`; a virtual slot of `NiDX9RenderState`),
+/// `thiscall`: the current vertex format (+0x1104) and declaration (+0x110c) become the kept
+/// ones (+0x1108, +0x1110).
+pub fn fn_00e90db0(e: &mut Engine, this: Ptr) {
+    let base = this.addr();
+    let format = e.mem.u32(base.wrapping_add(0x1104));
+    let declaration = e.mem.u32(base.wrapping_add(0x110c));
+    e.mem.set_u32(base.wrapping_add(0x1108), format);
+    e.mem.set_u32(base.wrapping_add(0x1110), declaration);
+}
+
+// Translated from 00e90dd0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`run_00e8f190`; a virtual slot), `thiscall`: its own slots 0xa4
+/// and then 0xb4 (a tail jump), without arguments.
+pub fn fn_00e90dd0(e: &mut Engine, this: Ptr) {
+    let base = this.addr();
+    e.vcall(base, 0xa4, &args![]);
+    e.vcall(base, 0xb4, &args![]);
+}
+
+// Translated from 00e90df0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`run_00e8f190`; a virtual slot), `thiscall`: the byte at +0x1114
+/// (in `AL`).
+pub fn fn_00e90df0(e: &mut Engine, this: Ptr) -> u8 {
+    e.mem.u8(this.addr().wrapping_add(0x1114))
+}
+
+/// The device's `SetFVF` (slot 0x164, by the interface's order).
+const SET_FVF: u32 = 0x164;
+
+// Translated from 00e90ec0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`run_00e8f190`; a virtual slot), `thiscall` with a vertex format
+/// and a byte: a zero format does nothing; nor does the current one (+0x1104) while no
+/// declaration is set (byte +0x1100 clear). Otherwise the byte +0x1100 is cleared, with the
+/// byte argument the current format is kept at +0x1108, the format becomes current and goes to
+/// the device's `SetFVF` (a tail jump on the same stack words).
+pub fn fn_00e90ec0(e: &mut Engine, this: Ptr, format: u32, keep: u8) {
+    let base = this.addr();
+    if format == 0 {
+        return;
+    }
+    if e.mem.u8(base.wrapping_add(0x1100)) == 0 && e.mem.u32(base.wrapping_add(0x1104)) == format {
+        return;
+    }
+    e.mem.set_u8(base.wrapping_add(0x1100), 0);
+    if keep != 0 {
+        let current = e.mem.u32(base.wrapping_add(0x1104));
+        e.mem.set_u32(base.wrapping_add(0x1108), current);
+    }
+    e.mem.set_u32(base.wrapping_add(0x1104), format);
+    let device = e.mem.u32(base.wrapping_add(STATE_DEVICE));
+    e.vcall(device, SET_FVF, &args![format]);
+}
+
+// Translated from 00e90f20 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`run_00e8f190`; a virtual slot), `thiscall`: the current vertex
+/// format (+0x1104), or 0 while a declaration is set (byte +0x1100).
+pub fn fn_00e90f20(e: &mut Engine, this: Ptr) -> u32 {
+    let base = this.addr();
+    if e.mem.u8(base.wrapping_add(0x1100)) != 0 {
+        return 0;
+    }
+    e.mem.u32(base.wrapping_add(0x1104))
+}
+
+// Translated from 00e90f40 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`run_00e8f190`; a virtual slot), `thiscall`: its own slot 0x9c
+/// with the kept vertex format (+0x1108) and 0.
+pub fn fn_00e90f40(e: &mut Engine, this: Ptr) {
+    let base = this.addr();
+    let kept = e.mem.u32(base.wrapping_add(0x1108));
+    e.vcall(base, 0x9c, &args![kept, 0u32]);
+}
+
+// Translated from 00e90f60 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`run_00e8f190`; a virtual slot), `thiscall` with a vertex format
+/// that goes away: when it is not zero and no declaration is set (byte +0x1100 clear), a
+/// current format (+0x1104) equal to it becomes 2 and goes to the device's `SetFVF`, and a kept
+/// one (+0x1108) equal to it becomes 2.
+pub fn fn_00e90f60(e: &mut Engine, this: Ptr, format: u32) {
+    let base = this.addr();
+    if format == 0 || e.mem.u8(base.wrapping_add(0x1100)) != 0 {
+        return;
+    }
+    if e.mem.u32(base.wrapping_add(0x1104)) == format {
+        let device = e.mem.u32(base.wrapping_add(STATE_DEVICE));
+        e.mem.set_u32(base.wrapping_add(0x1104), 2);
+        e.vcall(device, SET_FVF, &args![2u32]);
+    }
+    if e.mem.u32(base.wrapping_add(0x1108)) == format {
+        e.mem.set_u32(base.wrapping_add(0x1108), 2);
+    }
+}
+
+// Translated from 00e91040 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`run_00e8f190`; a virtual slot), `thiscall`: its own slot 0xac
+/// with the kept vertex declaration (+0x1110) and 0.
+pub fn fn_00e91040(e: &mut Engine, this: Ptr) {
+    let base = this.addr();
+    let kept = e.mem.u32(base.wrapping_add(0x1110));
+    e.vcall(base, 0xac, &args![kept, 0u32]);
+}
+
+// Translated from 00e910f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`run_00e8f190`; a virtual slot), `thiscall` with a sampler and a
+/// state: the cached sampler state (+0xe20, 8 bytes per slot, 5 slots per sampler) when the
+/// state's slot (`0126f92c`) is below 5, else 0.
+pub fn fn_00e910f0(e: &mut Engine, this: Ptr, sampler: u32, state: u32) -> u32 {
+    let slot = u32::from(
+        e.mem
+            .u16(SAMPLER_STATE_SLOTS_0126F92C.wrapping_add(state.wrapping_mul(2))),
+    );
+    if slot >= 5 {
+        return 0;
+    }
+    let index = sampler.wrapping_mul(5).wrapping_add(slot);
+    e.mem.u32(
+        this.addr()
+            .wrapping_add(0xe20)
+            .wrapping_add(index.wrapping_mul(8)),
+    )
+}
+
+// Translated from 00e91120 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`run_00e8f190`; a virtual slot), `thiscall` with a sampler and a
+/// state: when the state's slot (`0126f92c`) is below 5, its own slot 0xcc with the sampler,
+/// the state, the state's second cached word (+0xe24) and 0.
+pub fn fn_00e91120(e: &mut Engine, this: Ptr, sampler: u32, state: u32) {
+    let slot = u32::from(
+        e.mem
+            .u16(SAMPLER_STATE_SLOTS_0126F92C.wrapping_add(state.wrapping_mul(2))),
+    );
+    if slot >= 5 {
+        return;
+    }
+    let base = this.addr();
+    let index = sampler.wrapping_mul(5).wrapping_add(slot);
+    let value = e
+        .mem
+        .u32(base.wrapping_add(0xe24).wrapping_add(index.wrapping_mul(8)));
+    e.vcall(base, 0xcc, &args![sampler, state, value, 0u32]);
+}
+
+// Translated from 00e91190 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`run_00e8f190`; a virtual slot), `thiscall` with a byte: when it
+/// differs from +0x1114 and the renderer's (+0x10fc) byte +0x5d5 is set, it is stored, goes to
+/// the device's slot 0x134 (by the interface's order `SetSoftwareVertexProcessing`) and the
+/// current vertex shader (+0x10e0) is set again through its own slot 0x98.
+pub fn fn_00e91190(e: &mut Engine, this: Ptr, value: u8) {
+    let base = this.addr();
+    if value == e.mem.u8(base.wrapping_add(0x1114)) {
+        return;
+    }
+    let renderer = e.mem.u32(base.wrapping_add(0x10fc));
+    if e.mem.u8(renderer.wrapping_add(0x5d5)) == 0 {
+        return;
+    }
+    let device = e.mem.u32(base.wrapping_add(STATE_DEVICE));
+    e.mem.set_u8(base.wrapping_add(0x1114), value);
+    e.vcall(device, 0x134, &args![u32::from(value)]);
+    let shader = e.mem.u32(base.wrapping_add(0x10e0));
+    e.vcall(base, 0x98, &args![shader]);
+}
+
+/// The renderer data's base constructor `00a981d0` (`thiscall`) and the
+/// `NiDX9PersistentSrcTextureRendererData` table (`010f099c`, by its RTTI).
+const RENDERER_DATA_CONSTRUCT_00A981D0: u32 = 0x00a9_81d0;
+const PERSISTENT_SRC_TEXTURE_RENDERER_DATA_VTABLE: u32 = 0x010f_099c;
+
+// Translated from 00e916d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (Ghidra made no function of it; read from the bytes): the
+/// `NiDX9PersistentSrcTextureRendererData` stream loader (registered by `00e76210`), `cdecl`,
+/// no arguments: a 0x94-byte block (`00aa13e0`) constructed by `00a981d0` with the class's
+/// table, or 0 when the allocation fails.
+pub fn fn_00e916d0(e: &mut Engine) -> u32 {
+    let block = e.call(NEW_OBJECT, &args![0x94u32]).u32();
+    if block == 0 {
+        return 0;
+    }
+    e.call(RENDERER_DATA_CONSTRUCT_00A981D0, &args![block]);
+    e.mem
+        .set_u32(block, PERSISTENT_SRC_TEXTURE_RENDERER_DATA_VTABLE);
+    block
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x00e8_f360, fn_00e8f360(Ptr, u32, u32, u8, u32, u32) -> u32),
+        entry!(0x00e8_f520, fn_00e8f520(Ptr, u32, u32, Ptr, u32, u32) -> u32),
+        entry!(0x00e8_f6d0, fn_00e8f6d0(Ptr)),
+        entry!(0x00e8_f7c0, fn_00e8f7c0(Ptr, u32) -> Ptr),
+        entry!(0x00e8_f800, fn_00e8f800(Ptr, u32) -> Ptr),
+        entry!(0x00e8_fd60, fn_00e8fd60(Ptr, u32, u32, u32) -> Ptr),
+        entry!(0x00e8_fd80, fn_00e8fd80(Ptr)),
+        entry!(0x00e9_0080, fn_00e90080(Ptr, u32) -> Ptr),
+        entry!(0x00e9_00c0, fn_00e900c0(Ptr, u32) -> u32),
+        entry!(0x00e9_01a0, fn_00e901a0(u32, u32) -> u32),
+        entry!(0x00e9_02e0, fn_00e902e0(Ptr) -> u8),
+        entry!(0x00e9_02f0, fn_00e902f0(Ptr, u8)),
+        entry!(0x00e9_0300, fn_00e90300(Ptr, u32) -> Ptr),
+        entry!(0x00e9_0340, fn_00e90340(Ptr, u32, u8) -> u32),
+        entry!(0x00e9_04c0, fn_00e904c0(u32) -> u32),
+        entry!(0x00e9_0550, fn_00e90550(Ptr) -> u32),
+        entry!(
+            0x00e9_0590,
+            fn_00e90590(Ptr, u32, u32, u32, u32, u32, u32, u32) -> u32
+        ),
+        entry!(
+            0x00e9_0760,
+            fn_00e90760(Ptr, u32, u32, u32, u32, u32, u32, u32, u32)
+        ),
+        entry!(0x00e9_0d20, fn_00e90d20(Ptr, u32) -> u32),
+        entry!(0x00e9_0db0, fn_00e90db0(Ptr)),
+        entry!(0x00e9_0dd0, fn_00e90dd0(Ptr)),
+        entry!(0x00e9_0df0, fn_00e90df0(Ptr) -> u8),
+        entry!(0x00e9_0ec0, fn_00e90ec0(Ptr, u32, u8)),
+        entry!(0x00e9_0f20, fn_00e90f20(Ptr) -> u32),
+        entry!(0x00e9_0f40, fn_00e90f40(Ptr)),
+        entry!(0x00e9_0f60, fn_00e90f60(Ptr, u32)),
+        entry!(0x00e9_1040, fn_00e91040(Ptr)),
+        entry!(0x00e9_10f0, fn_00e910f0(Ptr, u32, u32) -> u32),
+        entry!(0x00e9_1120, fn_00e91120(Ptr, u32, u32)),
+        entry!(0x00e9_1190, fn_00e91190(Ptr, u8)),
+        entry!(0x00e9_16d0, fn_00e916d0() -> u32),
         entry!(0x00e9_0850, fn_00e90850(Ptr) -> u8),
         entry!(0x00e8_fb20, fn_00e8fb20(Ptr, u32) -> Ptr),
         entry!(0x00e9_0a80, fn_00e90a80(Ptr, u32) -> Ptr),
@@ -2693,5 +3749,777 @@ mod b051_tests {
         e.call(0x00e9_14e0, &args![state]);
         assert_eq!(e.mem.u32(state + 8), 0xf0);
         assert_eq!(e.mem.u8(state + 0x1114), 0);
+    }
+}
+
+#[cfg(test)]
+mod n011_tests {
+    use super::*;
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    fn calls(e: &Engine, addr: u32) -> Vec<Vec<u32>> {
+        e.call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|c| c.0 == addr)
+            .map(|c| c.1.clone())
+            .collect()
+    }
+
+    fn word(eax: u32) -> Ret {
+        Ret {
+            eax,
+            ..Ret::default()
+        }
+    }
+
+    fn quiet(e: &mut Engine, addr: u32) {
+        e.register(addr, |_, _| Ret::default());
+    }
+
+    /// An object whose virtual slots call quiet doubles at `doubles + slot`.
+    fn object(e: &mut Engine, doubles: u32, size: u32) -> u32 {
+        let table = e.mem.alloc(0x200);
+        for slot in (0..0x200).step_by(4) {
+            e.mem.set_u32(table + slot, doubles + slot);
+            quiet(e, doubles + slot);
+        }
+        let object = e.mem.alloc(size);
+        e.mem.set_u32(object, table);
+        object
+    }
+
+    const DEVICE: u32 = 0x00ed_0000;
+    const BUFFER: u32 = 0x00ec_0000;
+    const OWN: u32 = 0x00ee_0000;
+
+    /// An index buffer manager with a device; `buffer` doubles answer a description and a
+    /// lock into `memory`.
+    fn manager(e: &mut Engine, desc: [u32; 5], memory: u32) -> (u32, u32) {
+        let this = e.mem.alloc(0x50);
+        let device = object(e, DEVICE, 8);
+        e.mem.set_u32(this + 8, device);
+        let buffer = object(e, BUFFER, 8);
+        e.register_double(BUFFER + INDEX_BUFFER_GET_DESC, move |e, a| {
+            for (i, value) in desc.iter().enumerate() {
+                e.mem.set_u32(a[1] + 4 * i as u32, *value);
+            }
+            word(0)
+        });
+        e.register_double(BUFFER + INDEX_BUFFER_LOCK, move |e, a| {
+            e.mem.set_u32(a[3], memory);
+            word(0)
+        });
+        e.register_double(DEVICE + CREATE_INDEX_BUFFER, move |e, a| {
+            e.mem.set_u32(a[5], buffer);
+            word(0)
+        });
+        quiet(e, REPORT_00A29680);
+        e.call_log = Some(vec![]);
+        (this, buffer)
+    }
+
+    fn shorts(e: &Engine, at: u32, count: u32) -> Vec<u16> {
+        (0..count).map(|i| e.mem.u16(at + 2 * i)).collect()
+    }
+
+    #[test]
+    fn fn_00e8f360_reuses_or_creates_and_fills_quads() {
+        let mut e = Engine::new();
+        let memory = e.mem.alloc(0x40);
+        let (this, buffer) = manager(&mut e, [0x65, 7, 8, 1, 0x30], memory);
+        e.mem.set_u32(this + 0xc, buffer);
+        // A fitting buffer without a refill comes back as it is.
+        let got = e.call(0x00e8_f360, &args![this, 2u32, 2u32, 0u32, 8u32, 1u32]);
+        assert_eq!(got.u32(), buffer);
+        assert!(calls(&e, BUFFER + INDEX_BUFFER_LOCK).is_empty());
+        // With the refill byte it is filled with two quads.
+        let got = e.call(0x00e8_f360, &args![this, 2u32, 2u32, 0x101u32, 8u32, 1u32]);
+        assert_eq!(got.u32(), buffer);
+        assert_eq!(
+            shorts(&e, memory, 12),
+            vec![0, 1, 2, 0, 2, 3, 4, 5, 6, 4, 6, 7]
+        );
+        assert_eq!(e.mem.u32(this + 0x10), 24);
+        // Another usage does not fit: released and created again.
+        e.call_log = Some(vec![]);
+        let got = e.call(0x00e8_f360, &args![this, 1u32, 1u32, 0u32, 9u32, 1u32]);
+        assert_eq!(got.u32(), buffer);
+        assert_eq!(calls(&e, BUFFER + 8), vec![vec![buffer]]);
+        let device = e.mem.u32(this + 8);
+        assert_eq!(
+            calls(&e, DEVICE + CREATE_INDEX_BUFFER)[0][..5],
+            [device, 12, 9, 0x65, 1]
+        );
+        assert_eq!(e.mem.u32(this + 0xc), buffer);
+        assert_eq!(e.mem.u32(this + 0x10), 12);
+    }
+
+    #[test]
+    fn fn_00e8f360_fails_cleanly() {
+        let mut e = Engine::new();
+        let memory = e.mem.alloc(0x40);
+        let (this, buffer) = manager(&mut e, [0; 5], memory);
+        // No needed count or no device: 0.
+        assert_eq!(
+            e.call(0x00e8_f360, &args![this, 0u32, 1u32, 0u32, 0u32, 0u32])
+                .u32(),
+            0
+        );
+        // A failed create reports both messages.
+        e.register(DEVICE + CREATE_INDEX_BUFFER, |_, _| word(0x8876_0001));
+        assert_eq!(
+            e.call(0x00e8_f360, &args![this, 1u32, 1u32, 0u32, 0u32, 0u32])
+                .u32(),
+            0
+        );
+        assert_eq!(
+            calls(&e, REPORT_00A29680),
+            vec![
+                vec![CREATE_INDEX_BUFFER_FAILED_010F0184],
+                vec![POINT_CONNECTIVITY_FAILED_010F0200]
+            ]
+        );
+        // A failed lock: unlock, release, cleared.
+        e.register_double(DEVICE + CREATE_INDEX_BUFFER, move |e, a| {
+            e.mem.set_u32(a[5], buffer);
+            word(0)
+        });
+        e.register(BUFFER + INDEX_BUFFER_LOCK, |_, _| word(0x8876_0002));
+        e.call_log = Some(vec![]);
+        assert_eq!(
+            e.call(0x00e8_f360, &args![this, 1u32, 1u32, 0u32, 0u32, 0u32])
+                .u32(),
+            0
+        );
+        assert_eq!(calls(&e, BUFFER + INDEX_BUFFER_UNLOCK).len(), 1);
+        assert_eq!(calls(&e, BUFFER + 8).len(), 1);
+        assert_eq!(e.mem.u32(this + 0xc), 0);
+        assert_eq!(e.mem.u32(this + 0x10), 12);
+    }
+
+    #[test]
+    fn fn_00e8f520_writes_line_pairs_for_set_flags() {
+        let mut e = Engine::new();
+        let memory = e.mem.alloc(0x40);
+        let (this, buffer) = manager(&mut e, [0x65, 7, 8, 1, 0x40], memory);
+        e.mem.set_u32(this + 0x14, buffer);
+        let flags = e.mem.alloc(4);
+        for (i, f) in [1u8, 0, 1, 1].iter().enumerate() {
+            e.mem.set_u8(flags + i as u32, *f);
+        }
+        let count = e.mem.alloc(4);
+        let got = e.call(0x00e8_f520, &args![this, 4u32, flags, count, 8u32, 1u32]);
+        assert_eq!(got.u32(), buffer);
+        // Pairs (0,1), (2,3) and the closing (3,0).
+        assert_eq!(shorts(&e, memory, 6), vec![0, 1, 2, 3, 3, 0]);
+        assert_eq!(e.mem.u32(count), 6);
+        assert_eq!(e.mem.u32(this + 0x18), 20);
+        assert!(calls(&e, DEVICE + CREATE_INDEX_BUFFER).is_empty());
+        // A missing flag array answers 0.
+        assert_eq!(
+            e.call(0x00e8_f520, &args![this, 4u32, 0u32, count, 8u32, 1u32])
+                .u32(),
+            0
+        );
+    }
+
+    #[test]
+    fn fn_00e8f520_creates_and_reports() {
+        let mut e = Engine::new();
+        let memory = e.mem.alloc(0x40);
+        let (this, buffer) = manager(&mut e, [0; 5], memory);
+        let flags = e.mem.alloc(4);
+        let count = e.mem.alloc(4);
+        // No kept buffer: `00e8f190` creates one.
+        let got = e.call(0x00e8_f520, &args![this, 2u32, flags, count, 8u32, 1u32]);
+        assert_eq!(got.u32(), buffer);
+        let device = e.mem.u32(this + 8);
+        assert_eq!(
+            calls(&e, DEVICE + CREATE_INDEX_BUFFER)[0][..5],
+            [device, 12, 8, 0x65, 1]
+        );
+        // A failed lock keeps a null buffer.
+        e.register(BUFFER + INDEX_BUFFER_LOCK, |_, _| word(0x8876_0002));
+        let got = e.call(0x00e8_f520, &args![this, 2u32, flags, count, 9u32, 1u32]);
+        assert_eq!(got.u32(), 0);
+        assert_eq!(e.mem.u32(this + 0x14), 0);
+        assert_eq!(e.mem.u32(this + 0x18), 12);
+        // A failed create: the connectivity message.
+        e.register(DEVICE + CREATE_INDEX_BUFFER, |_, _| word(0x8876_0001));
+        e.call_log = Some(vec![]);
+        let got = e.call(0x00e8_f520, &args![this, 2u32, flags, count, 9u32, 1u32]);
+        assert_eq!(got.u32(), 0);
+        assert_eq!(
+            calls(&e, REPORT_00A29680).last().unwrap(),
+            &vec![LINE_CONNECTIVITY_FAILED_010F0258]
+        );
+    }
+
+    #[test]
+    fn fn_00e8f6d0_frees_records_and_releases_both_buffers() {
+        let mut e = Engine::new();
+        let this = e.mem.alloc(0x40);
+        let buckets = e.mem.alloc(8);
+        e.mem.set_u32(this + 0x20, 2);
+        e.mem.set_u32(this + 0x24, buckets);
+        e.mem.set_u32(buckets + 4, 0x0e0a_0000);
+        let held = object(&mut e, BUFFER, 8);
+        let entry = e.mem.alloc(0x38);
+        e.mem.set_u32(entry + 0x20, held);
+        let record = e.mem.alloc(0x1c);
+        e.mem.set_u32(record + 0xc, entry);
+        e.register_double(MAP_ITERATE_00B57F20, move |e, a| {
+            e.mem.set_u32(a[1], 0);
+            e.mem.set_u32(a[3], record);
+            Ret::default()
+        });
+        let first = object(&mut e, DEVICE, 8);
+        e.mem.set_u32(this + 0xc, first);
+        quiet(&mut e, ENTRY_CLEAN_UP_00E95B80);
+        quiet(&mut e, FREE_00AA1460);
+        quiet(&mut e, MAP_00B601A0);
+        e.call_log = Some(vec![]);
+        e.call(0x00e8_f6d0, &args![this]);
+        assert_eq!(
+            calls(&e, FREE_00AA1460),
+            vec![vec![entry, 0x38], vec![record, 0x1c]]
+        );
+        assert_eq!(calls(&e, BUFFER + 8), vec![vec![held]]);
+        assert_eq!(calls(&e, MAP_00B601A0), vec![vec![this + 0x1c]]);
+        assert_eq!(calls(&e, DEVICE + 8), vec![vec![first]]);
+        assert_eq!(e.mem.u32(this + 0xc), 0);
+    }
+
+    #[test]
+    fn index_buffer_map_deleting_destructors_free_on_bit_zero() {
+        for (address, tables) in [
+            (0x00e8_f7c0u32, vec![IB_MAP_BASE_VTABLE]),
+            (0x00e8_f800, vec![IB_MAP_VTABLE, IB_MAP_BASE_VTABLE]),
+        ] {
+            for (flags, frees) in [(0u32, false), (1, true)] {
+                let mut e = Engine::new();
+                let seen = Rc::new(RefCell::new(vec![]));
+                let tables_seen = seen.clone();
+                e.register_double(MAP_00B601A0, move |e, a| {
+                    tables_seen.borrow_mut().push(e.mem.u32(a[0]));
+                    Ret::default()
+                });
+                quiet(&mut e, FREE_00AA10F0);
+                quiet(&mut e, MEMORY_DEALLOCATE);
+                let this = e.mem.alloc(0x10);
+                e.mem.set_u32(this + 8, 0x0e0b_0000);
+                e.call_log = Some(vec![]);
+                assert_eq!(e.call(address, &args![this, flags]).u32(), this);
+                assert_eq!(*seen.borrow(), tables);
+                assert_eq!(calls(&e, FREE_00AA10F0), vec![vec![0x0e0b_0000]]);
+                assert_eq!(calls(&e, MEMORY_DEALLOCATE).len(), usize::from(frees));
+            }
+        }
+    }
+
+    #[test]
+    fn rendered_texture_data_construct_and_destroy() {
+        let mut e = Engine::new();
+        quiet(&mut e, TEXTURE_DATA_CONSTRUCT_00E8A260);
+        quiet(&mut e, TEXTURE_DATA_DOWN_00E8A2B0);
+        quiet(&mut e, FREE_00AA1460);
+        let this = e.mem.alloc(0x74);
+        e.call_log = Some(vec![]);
+        assert_eq!(
+            e.call(0x00e8_fd60, &args![this, 0x11u32, 0x22u32, 0x33u32])
+                .u32(),
+            this
+        );
+        assert_eq!(
+            calls(&e, TEXTURE_DATA_CONSTRUCT_00E8A260),
+            vec![vec![this, 0x11, 0x22]]
+        );
+        assert_eq!(e.mem.u32(this), NI_DX9_RENDERED_TEXTURE_DATA_VTABLE);
+        let renderer = object(&mut e, OWN, 0x300);
+        let surface = object(&mut e, BUFFER, 8);
+        e.mem.set_u32(this + 0x60, renderer);
+        e.mem.set_u32(this + 8, 0x0e08_0000);
+        e.mem.set_u32(this + 0x6c, surface);
+        e.call(0x00e9_0080, &args![this, 1u32]);
+        assert_eq!(calls(&e, OWN + 0x158), vec![vec![renderer, 0x0e08_0000]]);
+        assert_eq!(calls(&e, OWN + 0x15c), vec![vec![renderer, 0x0e08_0000]]);
+        assert_eq!(calls(&e, BUFFER + 8), vec![vec![surface]]);
+        assert_eq!(e.mem.u32(this + 0x6c), 0);
+        assert_eq!(calls(&e, TEXTURE_DATA_DOWN_00E8A2B0), vec![vec![this]]);
+        assert_eq!(calls(&e, FREE_00AA1460), vec![vec![this, 0x70]]);
+        // The dynamic texture data's destructor: slot 0x160, no surface, 0x74 bytes.
+        e.call_log = Some(vec![]);
+        e.call(0x00e9_0300, &args![this, 0u32]);
+        assert_eq!(e.mem.u32(this), NI_DX9_DYNAMIC_TEXTURE_DATA_VTABLE);
+        assert_eq!(calls(&e, OWN + 0x160), vec![vec![renderer, 0x0e08_0000]]);
+        assert!(calls(&e, FREE_00AA1460).is_empty());
+    }
+
+    /// A texture whose size slots answer `width` and `height` and whose request words are set.
+    fn texture(e: &mut Engine, width: u32, height: u32) -> u32 {
+        let texture = object(e, 0x00eb_0000, 0x80);
+        e.register_double(0x00eb_0094, move |_, _| word(width));
+        e.register_double(0x00eb_0098, move |_, _| word(height));
+        for i in 0..3u32 {
+            e.mem.set_u32(texture + 0x18 + 4 * i, 0x40 + i);
+        }
+        texture
+    }
+
+    /// A renderer with a device and a picked pixel format (+0xc 0x15, byte +1 32 bits).
+    fn renderer(e: &mut Engine) -> (u32, u32) {
+        let renderer = e.mem.alloc(0x900);
+        let device = object(e, DEVICE, 8);
+        e.mem.set_u32(renderer + RENDERER_DEVICE, device);
+        let format = e.mem.alloc(0x44);
+        e.mem.set_u32(format + 0xc, 0x15);
+        e.mem.set_u8(format + 1, 32);
+        e.register_double(PICK_FORMAT_00E89ED0, move |_, _| word(format));
+        quiet(e, REPORT_00A29680);
+        e.register(ERROR_STRING_00E89D50, |_, _| word(0x0e0e_0000));
+        (renderer, format)
+    }
+
+    #[test]
+    fn fn_00e900c0_creates_the_cube_surface() {
+        let mut e = Engine::new();
+        let (renderer, format) = renderer(&mut e);
+        let cube = e.mem.alloc(8);
+        e.register_double(DEVICE + CREATE_CUBE_TEXTURE, move |e, a| {
+            e.mem.set_u32(a[6], cube);
+            word(0)
+        });
+        let tex = texture(&mut e, 64, 0);
+        let this = e.mem.alloc(0x70);
+        e.mem.set_u32(this + 0x60, renderer);
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x00e9_00c0, &args![this, tex]).u32(), format);
+        assert_eq!(e.mem.u32(this + 0xc), 64);
+        assert_eq!(e.mem.u32(this + 0x10), 64);
+        assert_eq!(e.mem.u32(this + 0x68), 1);
+        assert_eq!(e.mem.u32(this + 0x64), cube);
+        assert_eq!(calls(&e, PICK_FORMAT_00E89ED0)[0][1], renderer + 0x808);
+        let device = e.mem.u32(renderer + RENDERER_DEVICE);
+        assert_eq!(
+            calls(&e, DEVICE + CREATE_CUBE_TEXTURE)[0][..6],
+            [device, 64, 1, 1, 0x15, 0]
+        );
+        // The texture's own format with byte +0x41; a failure clears +0x64.
+        e.mem.set_u8(tex + 0x41, 1);
+        e.mem.set_u32(tex + 0x44, 0x33);
+        e.register(DEVICE + CREATE_CUBE_TEXTURE, |_, _| word(0x8876_0001));
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x00e9_00c0, &args![this, tex]).u32(), 0);
+        assert_eq!(calls(&e, DEVICE + CREATE_CUBE_TEXTURE)[0][4], 0x33);
+        assert_eq!(e.mem.u32(this + 0x64), 0);
+        assert_eq!(
+            calls(&e, REPORT_00A29680),
+            vec![vec![CREATE_SURF_FAILED_010F0550, 0x0e0e_0000]]
+        );
+        assert_eq!(e.call(0x00e9_00c0, &args![this, 0u32]).u32(), 0);
+    }
+
+    #[test]
+    fn fn_00e901a0_makes_six_faces_and_counts_the_memory() {
+        let mut e = Engine::new();
+        e.map(TARGET_BYTES_0126F9E0 & !0xfff, 0x1000);
+        let (renderer, _) = renderer(&mut e);
+        e.register(DEVICE + CREATE_CUBE_TEXTURE, |_, _| word(0));
+        let tex = texture(&mut e, 16, 0);
+        for face in 0..6u32 {
+            e.mem.set_u32(tex + 0x4c + 4 * face, 0x100 + face);
+        }
+        e.register(TEXTURE_DATA_CONSTRUCT_00E8A260, |e, a| {
+            e.mem.set_u32(a[0] + 8, a[1]);
+            e.mem.set_u32(a[0] + 0x60, a[2]);
+            Ret::default()
+        });
+        e.register(NEW_OBJECT, |e, a| word(e.mem.alloc(a[0])));
+        let faces = Rc::new(RefCell::new(vec![]));
+        let seen = faces.clone();
+        e.register_double(MAKE_CUBE_FACE_00E7D390, move |e, a| {
+            seen.borrow_mut().push((a[1], a[2], e.mem.u32(a[4])));
+            word(0x0e05_0000 + a[1])
+        });
+        // The class table's slot 0x9c (exe data) answers 0x9c.
+        e.map(NI_DX9_RENDERED_CUBE_MAP_DATA_VTABLE & !0xfff, 0x1000);
+        e.mem
+            .set_u32(NI_DX9_RENDERED_CUBE_MAP_DATA_VTABLE + 0x9c, 0x00ea_009c);
+        e.register(0x00ea_009c, |_, _| word(0x9c));
+        e.call_log = Some(vec![]);
+        let block = e.call(0x00e9_01a0, &args![tex, renderer]).u32();
+        assert_ne!(block, 0);
+        assert_eq!(e.mem.u32(block), NI_DX9_RENDERED_CUBE_MAP_DATA_VTABLE);
+        assert_eq!(e.mem.u32(tex + 0x24), block);
+        assert_eq!(
+            *faces.borrow(),
+            (0..6u32)
+                .map(|f| (f, if f == 0 { 0 } else { 0x0e05_0000 }, 0x100 + f))
+                .collect::<Vec<_>>()
+        );
+        // 4 bytes per pixel, 16 by 16, six faces: 6144 bytes, padded to 8192.
+        assert_eq!(e.mem.u32(TARGET_BYTES_0126F9E0), 6144);
+        assert_eq!(e.mem.u32(TARGET_PADDING_0126F9E4), 2048);
+        // Slot 0x9c twice per face; the face maker gets its second answer.
+        assert_eq!(calls(&e, 0x00ea_009c).len(), 12);
+        assert!(calls(&e, MAKE_CUBE_FACE_00E7D390)
+            .iter()
+            .all(|c| c[0] == 0x9c));
+    }
+
+    #[test]
+    fn fn_00e902e0_and_fn_00e902f0_keep_the_byte() {
+        let mut e = Engine::new();
+        let this = e.mem.alloc(0x74);
+        e.call(0x00e9_02f0, &args![this, 0x1234_5601u32]);
+        assert_eq!(e.mem.u8(this + 0x70), 1);
+        assert_eq!(e.call(0x00e9_02e0, &args![this]).u8(), 1);
+    }
+
+    #[test]
+    fn fn_00e90340_creates_one_or_two_textures() {
+        let mut e = Engine::new();
+        let (renderer, format) = renderer(&mut e);
+        let made = Rc::new(RefCell::new(0x0e00_1000u32));
+        let next = made.clone();
+        e.register_double(DEVICE + CREATE_TEXTURE, move |e, a| {
+            let value = *next.borrow();
+            *next.borrow_mut() += 0x10;
+            e.mem.set_u32(a[7], value);
+            word(0)
+        });
+        let tex = texture(&mut e, 32, 16);
+        let this = e.mem.alloc(0x74);
+        e.mem.set_u32(this + 0x60, renderer);
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x00e9_0340, &args![this, tex, 1u32]).u32(), format);
+        assert_eq!([e.mem.u32(this + 0xc), e.mem.u32(this + 0x10)], [32, 16]);
+        assert_eq!(e.mem.u32(this + 0x14 + 0xc), 0x15);
+        assert_eq!(calls(&e, PICK_FORMAT_00E89ED0)[0][1], renderer + 0x700);
+        let device = e.mem.u32(renderer + RENDERER_DEVICE);
+        assert_eq!(
+            calls(&e, DEVICE + CREATE_TEXTURE)[0][..7],
+            [device, 32, 16, 1, 0x200, 0x15, 0]
+        );
+        assert_eq!(e.mem.u32(this + 0x64), 0x0e00_1000);
+        // Not dynamic: usage 0 at +0x64, then pool 2 at +0x6c.
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x00e9_0340, &args![this, tex, 0u32]).u32(), format);
+        let created = calls(&e, DEVICE + CREATE_TEXTURE);
+        assert_eq!([created[0][4], created[0][6]], [0, 0]);
+        assert_eq!([created[1][4], created[1][6]], [0, 2]);
+        assert_eq!(e.mem.u32(this + 0x64), 0x0e00_1010);
+        assert_eq!(e.mem.u32(this + 0x6c), 0x0e00_1020);
+        // The second failing clears +0x6c.
+        let count = Rc::new(RefCell::new(0u32));
+        let tries = count.clone();
+        e.register_double(DEVICE + CREATE_TEXTURE, move |e, a| {
+            *tries.borrow_mut() += 1;
+            if *tries.borrow() == 2 {
+                return word(0x8876_0001);
+            }
+            e.mem.set_u32(a[7], 0x0e00_2000);
+            word(0)
+        });
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x00e9_0340, &args![this, tex, 0u32]).u32(), 0);
+        assert_eq!(e.mem.u32(this + 0x6c), 0);
+        assert_eq!(
+            calls(&e, REPORT_00A29680),
+            vec![vec![DYNAMIC_SURF_FAILED_010F06B0, 0x0e0e_0000]]
+        );
+        assert_eq!(e.call(0x00e9_0340, &args![this, 0u32, 0u32]).u32(), 0);
+    }
+
+    #[test]
+    fn fn_00e904c0_refuses_tiled_textures_and_builds_dynamic_data() {
+        let mut e = Engine::new();
+        e.map(RENDERER_011F4748 & !0xfff, 0x1000);
+        let (renderer, _) = renderer(&mut e);
+        e.mem.set_u32(RENDERER_011F4748, renderer);
+        e.mem.set_u8(renderer + 0x6f5, 1);
+        e.register(DEVICE + CREATE_TEXTURE, |_, _| word(0));
+        e.register(NEW_OBJECT, |e, a| word(e.mem.alloc(a[0])));
+        e.register(TEXTURE_DATA_CONSTRUCT_00E8A260, |e, a| {
+            e.mem.set_u32(a[0] + 8, a[1]);
+            e.mem.set_u32(a[0] + 0x60, a[2]);
+            Ret::default()
+        });
+        let tex = texture(&mut e, 8, 8);
+        e.mem.set_u8(tex + 0x38, 1);
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x00e9_04c0, &args![tex]).u32(), 0);
+        assert_eq!(
+            calls(&e, REPORT_00A29680),
+            vec![vec![TILED_DYNAMIC_FAILED_010F06F8]]
+        );
+        e.mem.set_u8(tex + 0x38, 0);
+        let block = e.call(0x00e9_04c0, &args![tex]).u32();
+        assert_ne!(block, 0);
+        assert_eq!(e.mem.u32(block), NI_DX9_DYNAMIC_TEXTURE_DATA_VTABLE);
+        assert_eq!(e.mem.u32(tex + 0x24), block);
+        // The renderer's byte asked for one dynamic texture.
+        assert_eq!(calls(&e, DEVICE + CREATE_TEXTURE)[0][4], 0x200);
+    }
+
+    #[test]
+    fn fn_00e90550_answers_the_class_record() {
+        let mut e = Engine::new();
+        assert_eq!(e.call(0x00e9_0550, &args![0u32]).u32(), 0x0126_f9f0);
+    }
+
+    fn constants(e: &mut Engine) {
+        for (at, value) in [
+            (MINUS_32767_0109ED88, -32767.0f64),
+            (SCALE_127_0102DFE0, 127.0),
+            (TENTH_0101FFA0, 0.1),
+            (RAND_MAX_01029790, 32767.0),
+            (ONE_01012070, 1.0),
+        ] {
+            e.map(at & !0xfff, 0x1000);
+            e.set_global(at, value);
+        }
+    }
+
+    #[test]
+    fn fn_00e90590_sets_a_random_colour_and_renders() {
+        let mut e = Engine::new();
+        constants(&mut e);
+        let values = Rc::new(RefCell::new(vec![0u32, 32767, 16384]));
+        let source = values.clone();
+        e.register_double(RAND, move |_, _| word(source.borrow_mut().remove(0)));
+        let group = e.mem.alloc(8);
+        e.register_double(MAKE_STATE_GROUP_00E7F5D0, move |_, _| word(group));
+        quiet(&mut e, GROUP_SET_STATE_00E7F430);
+        e.register(SHADER_RENDER_00A8F3E0, |_, _| word(0x5a));
+        let holder = e.mem.alloc(0x34);
+        let this = e.mem.alloc(0x40);
+        e.mem.set_u32(this + 0x3c, holder);
+        e.call_log = Some(vec![]);
+        let got = e.call(
+            0x00e9_0590,
+            &args![this, 1u32, 2u32, 3u32, 4u32, 5u32, 6u32, 7u32],
+        );
+        assert_eq!(got.u32(), 0x5a);
+        assert_eq!(calls(&e, MAKE_STATE_GROUP_00E7F5D0).len(), 1);
+        // rand 0 gives 0x80, 32767 gives 0x80 - (-127) = 0xff, 16384 gives 0x80 - (-63) = 0xbf.
+        let set = calls(&e, GROUP_SET_STATE_00E7F430);
+        assert_eq!(set[0], vec![group, 0x3c, 0xff80_ffbf, 1]);
+        let rest: Vec<u32> = set[1..].iter().map(|c| c[1]).collect();
+        assert_eq!(rest, vec![0x1d, 0x1b, 0xf, 0x34]);
+        assert_eq!(
+            calls(&e, SHADER_RENDER_00A8F3E0),
+            vec![vec![this, 1, 2, 3, 4, 5, 6, 7]]
+        );
+    }
+
+    #[test]
+    fn fn_00e90760_jitters_the_translation() {
+        let mut e = Engine::new();
+        constants(&mut e);
+        let values = Rc::new(RefCell::new(vec![32767u32, 0, 16383]));
+        let source = values.clone();
+        e.register_double(RAND, move |_, _| word(source.borrow_mut().remove(0)));
+        let seen = Rc::new(RefCell::new(vec![]));
+        let copy = seen.clone();
+        e.register_double(RENDER_PASS_00E807D0, move |e, a| {
+            for i in 0..3u32 {
+                copy.borrow_mut()
+                    .push(f32::from_bits(e.mem.u32(a[7] + 0x24 + 4 * i)));
+            }
+            Ret::default()
+        });
+        let transform = e.mem.alloc(0x34);
+        for (i, v) in [10.0f32, 20.0, 30.0].iter().enumerate() {
+            e.mem.set_u32(transform + 0x24 + 4 * i as u32, v.to_bits());
+        }
+        let bound = e.mem.alloc(0x10);
+        e.mem.set_u32(bound + 0xc, 50.0f32.to_bits());
+        e.call_log = Some(vec![]);
+        e.call(
+            0x00e9_0760,
+            &args![
+                0x0e00_0001u32,
+                1u32,
+                2u32,
+                3u32,
+                4u32,
+                5u32,
+                6u32,
+                transform,
+                bound
+            ],
+        );
+        let call = &calls(&e, RENDER_PASS_00E807D0)[0];
+        assert_eq!(&call[..7], &[0x0e00_0001, 1, 0, 0, 4, 5, 6]);
+        assert_eq!(call[8], bound);
+        let scale = f64::from(f32::from_bits(x87_store32(x87_mul(50.0, 0.1))));
+        let ratio = |r: f64| f64::from(((r + r) / 32767.0 - 1.0) as f32);
+        let expected: Vec<f32> = [(10.0, 32767.0), (20.0, 0.0), (30.0, 16383.0)]
+            .iter()
+            .map(|&(t, r)| (ratio(r) * scale + t) as f32)
+            .collect();
+        assert_eq!(*seen.borrow(), expected);
+        // The caller's transform is not changed.
+        assert_eq!(f32::from_bits(e.mem.u32(transform + 0x24)), 10.0);
+    }
+
+    #[test]
+    fn fn_00e90d20_answers_the_renderer_data_format() {
+        let mut e = Engine::new();
+        let renderer = object(&mut e, OWN, 8);
+        let this = e.mem.alloc(0x10);
+        e.mem.set_u32(this + 0xc, renderer);
+        let tex = e.mem.alloc(0x30);
+        let data = e.mem.alloc(0x30);
+        e.mem.set_u32(data + 0x24, 0x21);
+        e.mem.set_u32(tex + 0x24, data);
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x00e9_0d20, &args![this, tex]).u32(), 0x21);
+        // Without data: the source is offered to the renderer, which makes it.
+        e.mem.set_u32(tex + 0x24, 0);
+        e.register(SOURCE_OF_00653290, |_, _| word(0x0e0f_0000));
+        e.register_double(OWN + 0x13c, move |e, _| {
+            e.mem.set_u32(tex + 0x24, data);
+            word(1)
+        });
+        assert_eq!(e.call(0x00e9_0d20, &args![this, tex]).u32(), 0x21);
+        assert_eq!(
+            calls(&e, SOURCE_OF_00653290),
+            vec![vec![tex, SOURCE_KIND_011F444C]]
+        );
+        // Refused: 0x16.
+        e.mem.set_u32(tex + 0x24, 0);
+        e.register(OWN + 0x13c, |_, _| word(0x100));
+        assert_eq!(e.call(0x00e9_0d20, &args![this, tex]).u32(), 0x16);
+        e.register(SOURCE_OF_00653290, |_, _| word(0));
+        assert_eq!(e.call(0x00e9_0d20, &args![this, tex]).u32(), 0x16);
+    }
+
+    /// A render state with its own table and a device.
+    fn state(e: &mut Engine) -> u32 {
+        let this = object(e, OWN, 0x1248);
+        let device = object(e, DEVICE, 8);
+        e.mem.set_u32(this + STATE_DEVICE, device);
+        e.call_log = Some(vec![]);
+        this
+    }
+
+    #[test]
+    fn vertex_format_slots_keep_and_restore() {
+        let mut e = Engine::new();
+        let this = state(&mut e);
+        let device = e.mem.u32(this + STATE_DEVICE);
+        e.mem.set_u32(this + 0x1104, 0x12);
+        e.mem.set_u32(this + 0x110c, 0x34);
+        e.call(0x00e9_0db0, &args![this]);
+        assert_eq!(e.mem.u32(this + 0x1108), 0x12);
+        assert_eq!(e.mem.u32(this + 0x1110), 0x34);
+        // The same format again while no declaration is set: nothing.
+        e.call(0x00e9_0ec0, &args![this, 0x12u32, 1u32]);
+        assert!(calls(&e, DEVICE + SET_FVF).is_empty());
+        e.call(0x00e9_0ec0, &args![this, 0x0u32, 1u32]);
+        assert!(calls(&e, DEVICE + SET_FVF).is_empty());
+        // A new one with the keep byte.
+        e.mem.set_u8(this + 0x1100, 1);
+        e.call(0x00e9_0ec0, &args![this, 0x12u32, 1u32]);
+        assert_eq!(calls(&e, DEVICE + SET_FVF), vec![vec![device, 0x12]]);
+        assert_eq!(e.mem.u8(this + 0x1100), 0);
+        assert_eq!(e.call(0x00e9_0f20, &args![this]).u32(), 0x12);
+        e.mem.set_u8(this + 0x1100, 1);
+        assert_eq!(e.call(0x00e9_0f20, &args![this]).u32(), 0);
+        e.mem.set_u8(this + 0x1100, 0);
+        e.call(0x00e9_0f40, &args![this]);
+        assert_eq!(calls(&e, OWN + 0x9c), vec![vec![this, 0x12, 0]]);
+        e.call(0x00e9_1040, &args![this]);
+        assert_eq!(calls(&e, OWN + 0xac), vec![vec![this, 0x34, 0]]);
+        // A format going away becomes 2 where it was current or kept.
+        e.call_log = Some(vec![]);
+        e.call(0x00e9_0f60, &args![this, 0x12u32]);
+        assert_eq!(e.mem.u32(this + 0x1104), 2);
+        assert_eq!(e.mem.u32(this + 0x1108), 2);
+        assert_eq!(calls(&e, DEVICE + SET_FVF), vec![vec![device, 2]]);
+        e.mem.set_u8(this + 0x1100, 1);
+        e.mem.set_u32(this + 0x1104, 5);
+        e.call(0x00e9_0f60, &args![this, 5u32]);
+        assert_eq!(e.mem.u32(this + 0x1104), 5);
+    }
+
+    #[test]
+    fn render_state_small_slots() {
+        let mut e = Engine::new();
+        let this = state(&mut e);
+        e.call(0x00e9_0dd0, &args![this]);
+        let order: Vec<u32> = e
+            .call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .map(|c| c.0)
+            .filter(|&a| a & 0xffff_0000 == OWN)
+            .collect();
+        assert_eq!(order, vec![OWN + 0xa4, OWN + 0xb4]);
+        e.mem.set_u8(this + 0x1114, 9);
+        assert_eq!(e.call(0x00e9_0df0, &args![this]).u8(), 9);
+    }
+
+    #[test]
+    fn sampler_state_reads_and_resends() {
+        let mut e = Engine::new();
+        e.map(SAMPLER_STATE_SLOTS_0126F92C & !0xfff, 0x1000);
+        e.mem.set_u16(SAMPLER_STATE_SLOTS_0126F92C + 2 * 6, 3);
+        e.mem.set_u16(SAMPLER_STATE_SLOTS_0126F92C + 2 * 7, 5);
+        let this = state(&mut e);
+        e.mem.set_u32(this + 0xe20 + 8 * (2 * 5 + 3), 0x77);
+        e.mem.set_u32(this + 0xe24 + 8 * (2 * 5 + 3), 0x88);
+        assert_eq!(e.call(0x00e9_10f0, &args![this, 2u32, 6u32]).u32(), 0x77);
+        assert_eq!(e.call(0x00e9_10f0, &args![this, 2u32, 7u32]).u32(), 0);
+        e.call(0x00e9_1120, &args![this, 2u32, 6u32]);
+        e.call(0x00e9_1120, &args![this, 2u32, 7u32]);
+        assert_eq!(calls(&e, OWN + 0xcc), vec![vec![this, 2, 6, 0x88, 0]]);
+    }
+
+    #[test]
+    fn fn_00e91190_switches_software_processing_when_allowed() {
+        let mut e = Engine::new();
+        let this = state(&mut e);
+        let device = e.mem.u32(this + STATE_DEVICE);
+        let renderer = e.mem.alloc(0x600);
+        e.mem.set_u32(this + 0x10fc, renderer);
+        e.mem.set_u32(this + 0x10e0, 0x0e0c_0000);
+        // Not allowed by the renderer: nothing.
+        e.call(0x00e9_1190, &args![this, 1u32]);
+        assert!(calls(&e, DEVICE + 0x134).is_empty());
+        e.mem.set_u8(renderer + 0x5d5, 1);
+        e.call(0x00e9_1190, &args![this, 0x101u32]);
+        assert_eq!(calls(&e, DEVICE + 0x134), vec![vec![device, 1]]);
+        assert_eq!(calls(&e, OWN + 0x98), vec![vec![this, 0x0e0c_0000]]);
+        assert_eq!(e.mem.u8(this + 0x1114), 1);
+        // The same value again: nothing more.
+        e.call(0x00e9_1190, &args![this, 1u32]);
+        assert_eq!(calls(&e, DEVICE + 0x134).len(), 1);
+    }
+
+    #[test]
+    fn fn_00e916d0_makes_the_renderer_data() {
+        let mut e = Engine::new();
+        e.register(NEW_OBJECT, |e, a| word(e.mem.alloc(a[0])));
+        quiet(&mut e, RENDERER_DATA_CONSTRUCT_00A981D0);
+        e.call_log = Some(vec![]);
+        let block = e.call(0x00e9_16d0, &args![]).u32();
+        assert_eq!(
+            e.mem.u32(block),
+            PERSISTENT_SRC_TEXTURE_RENDERER_DATA_VTABLE
+        );
+        assert_eq!(calls(&e, NEW_OBJECT), vec![vec![0x94]]);
+        assert_eq!(
+            calls(&e, RENDERER_DATA_CONSTRUCT_00A981D0),
+            vec![vec![block]]
+        );
+        e.register(NEW_OBJECT, |_, _| word(0));
+        assert_eq!(e.call(0x00e9_16d0, &args![]).u32(), 0);
     }
 }

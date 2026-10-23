@@ -72,11 +72,44 @@ pub fn ni_transform_load_binary(e: &mut Engine, this: Ptr, stream: Ptr) {
     });
 }
 
+/// `NiMatrix3::operator==` (`004d9ae0`, thiscall, the other matrix; nonzero `AL` when
+/// equal) and the point comparison `00439090` (thiscall, the other point; nonzero `AL`
+/// when the points differ: it negates `004390c0`).
+const MATRIX_EQUAL: u32 = 0x004d_9ae0;
+const POINT_NOT_EQUAL_00439090: u32 = 0x0043_9090;
+
+// Translated from 00a86c30 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiTransform::operator_` (Xbox PDB; the body is `operator!=`, thiscall, `RET 4`):
+/// 0 when the rotations are equal (`004d9ae0`), the translations are not different
+/// (`00439090`) and the scales compare equal (`FUCOMPP`, a NaN counts as different);
+/// 1 otherwise.
+pub fn ni_transform_operator_not_equal(e: &mut Engine, this: Ptr, other: Ptr) -> bool {
+    if e.call(MATRIX_EQUAL, &args![this, other]).u32() as u8 != 0
+        && e.call(
+            POINT_NOT_EQUAL_00439090,
+            &args![
+                this.addr() + TRANSFORM_TRANSLATE,
+                other.addr() + TRANSFORM_TRANSLATE
+            ],
+        )
+        .u32() as u8
+            == 0
+    {
+        let mine = e.mem.f32(this.addr() + TRANSFORM_SCALE);
+        let theirs = e.mem.f32(other.addr() + TRANSFORM_SCALE);
+        if theirs == mine {
+            return false;
+        }
+    }
+    true
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
         entry!(0x00a86bf0, ni_transform_make_identity(Ptr)),
         entry!(0x00a86c80, ni_transform_load_binary(Ptr, Ptr)),
+        entry!(0x00a8_6c30, ni_transform_operator_not_equal(Ptr, Ptr) -> bool),
     ]
 }
 
@@ -143,5 +176,39 @@ mod b007_tests {
         assert_eq!(calls_to(&e, READ_DOUBLE)[0][..2], [input, t + 0x30]);
         assert_eq!(e.mem.u32(t + 0x30), 0x4000_0000);
         assert_eq!(e.mem.u32(input + BINARY_STREAM_POSITION), 0x24);
+    }
+}
+
+#[cfg(test)]
+mod n020_tests {
+    use super::*;
+
+    #[test]
+    fn transforms_differ_unless_rotation_translation_and_scale_match() {
+        let mut e = Engine::new();
+        // The doubles answer from the first word of each side.
+        e.register(MATRIX_EQUAL, |e, a| {
+            u32::from(e.mem.u32(a[0]) == e.mem.u32(a[1])).into_ret()
+        });
+        e.register(POINT_NOT_EQUAL_00439090, |e, a| {
+            u32::from(e.mem.u32(a[0]) != e.mem.u32(a[1])).into_ret()
+        });
+        let a = e.mem.alloc(0x34);
+        let b = e.mem.alloc(0x34);
+        e.mem.set_f32(a + TRANSFORM_SCALE, 1.5);
+        e.mem.set_f32(b + TRANSFORM_SCALE, 1.5);
+        assert_eq!(e.call(0x00a8_6c30, &args![a, b]).u32(), 0);
+        e.mem.set_f32(b + TRANSFORM_SCALE, 2.0);
+        assert_eq!(e.call(0x00a8_6c30, &args![a, b]).u32(), 1);
+        e.mem.set_u32(a + TRANSFORM_SCALE, 0x7fc0_0000);
+        e.mem.set_u32(b + TRANSFORM_SCALE, 0x7fc0_0000);
+        assert_eq!(e.call(0x00a8_6c30, &args![a, b]).u32(), 1);
+        e.mem.set_f32(a + TRANSFORM_SCALE, 1.5);
+        e.mem.set_f32(b + TRANSFORM_SCALE, 1.5);
+        e.mem.set_u32(b + TRANSFORM_TRANSLATE, 7);
+        assert_eq!(e.call(0x00a8_6c30, &args![a, b]).u32(), 1);
+        e.mem.set_u32(b + TRANSFORM_TRANSLATE, 0);
+        e.mem.set_u32(b, 7);
+        assert_eq!(e.call(0x00a8_6c30, &args![a, b]).u32(), 1);
     }
 }

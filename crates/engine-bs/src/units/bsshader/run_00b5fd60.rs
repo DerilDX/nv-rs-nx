@@ -501,9 +501,150 @@ pub fn fn_00b60750(e: &mut Engine, this: Ptr, out: Ptr) -> Ptr {
     out
 }
 
+/// `QueuedFileEntry::GetDescription` (Xbox PDB, `00c3d0e0`; `thiscall`, three words: the
+/// buffer, its size and the kind text) and the kind text `"grass load task"` (`010ade08`).
+const QUEUED_FILE_ENTRY_GET_DESCRIPTION: u32 = 0x00c3_d0e0;
+const GRASS_LOAD_TASK_KIND_010ADE08: u32 = 0x010a_de08;
+/// Where `fn_00b60160` jumps (`00bc3770`, itself a jump to `00ba8a80`).
+const REGISTER_STREAMABLES_00BC3770: u32 = 0x00bc_3770;
+/// The base `SaveBinary` (`00bb7160`, `thiscall`, one word: the stream) and the stream's
+/// string writer `00a64160` (`thiscall` on the stream, one word: the C string).
+const BASE_SAVE_BINARY_00BB7160: u32 = 0x00bb_7160;
+const STREAM_SAVE_STRING_00A64160: u32 = 0x00a6_4160;
+/// The float `fn_00b60170` truncates (`011fd890`).
+const SETTING_011FD890: u32 = 0x011f_d890;
+/// The vtable `fn_00b60400` and `fn_00b605e0` store (`010ade34`).
+const VTABLE_010ADE34: u32 = 0x010a_de34;
+/// The memory manager's deallocation (`00aa4060`, `thiscall` on `011f6238`, one word).
+const MEMORY_DEALLOCATE_00AA4060: u32 = 0x00aa_4060;
+
+// Translated from 00b600c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Ghidra made no function here: slot +0x10 of the queued-file vtable `010ade6c` (`thiscall`,
+/// two words: a buffer and its size). Calls `QueuedFileEntry::GetDescription` on `this` with
+/// them and the kind text `"grass load task"` (`010ade08`), and answers its `EAX`.
+pub fn fn_00b600c0(e: &mut Engine, this: Ptr, buffer: u32, size: u32) -> u32 {
+    e.call(
+        QUEUED_FILE_ENTRY_GET_DESCRIPTION,
+        &args![this, buffer, size, GRASS_LOAD_TASK_KIND_010ADE08],
+    )
+    .u32()
+}
+
+// Translated from 00b60100 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Ghidra made no function here: `TallGrassShaderProperty`'s vtable slot +0xd0 (the vtable
+/// `010adeac`, whose `GetRTTI` `00b60d60` answers the record `011f9f00` that the static
+/// initializer `00fb9910` names `"TallGrassShaderProperty"`; `SetClampD3D` in the Xbox PDB's
+/// slot list; `thiscall`, one word). Stores 0 in `TextureClampMode` (`+0x90` on PC, Xbox PDB
+/// +0x98) when the word is 3, otherwise 3.
+pub fn fn_00b60100(e: &mut Engine, this: Ptr, mode: u32) {
+    let value: u32 = if mode.wrapping_sub(3) != 0 { 3 } else { 0 };
+    e.mem.set_u32(this.addr().wrapping_add(0x90), value);
+}
+
+// Translated from 00b60160 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Ghidra made no function here: `TallGrassShaderProperty`'s vtable slot +0x54
+/// (`RegisterStreamables` in the Xbox PDB's slot list): a jump to `00bc3770` with `this` and
+/// its one stack word (the stream); answers the target's `EAX`.
+pub fn fn_00b60160(e: &mut Engine, this: Ptr, stream: u32) -> u32 {
+    e.call(REGISTER_STREAMABLES_00BC3770, &args![this, stream])
+        .u32()
+}
+
+// Translated from 00b60170 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`cdecl`, no arguments): the float at `011fd890` truncated
+/// (`FISTP qword` with the rounding control set to chop), its low word in `EAX`.
+pub fn fn_00b60170(e: &mut Engine) -> u32 {
+    let value = e.mem.u32(SETTING_011FD890);
+    x87_fistp64_chop(X87Ext::load32(value)) as u32
+}
+
+// Translated from 00b60210 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Ghidra made no function here: `TallGrassShaderProperty`'s vtable slot +0x58 (`SaveBinary`
+/// in the Xbox PDB's slot list; `thiscall`, one word: the stream). The base `00bb7160` runs
+/// with the stream; then the stream writes the C string at `+0x88` (the PC offset of the Xbox
+/// PDB's `TextureFilename`, a `BSStringT` whose first word is the characters) through
+/// `00a64160`.
+pub fn fn_00b60210(e: &mut Engine, this: Ptr, stream: u32) {
+    e.call(BASE_SAVE_BINARY_00BB7160, &args![this, stream]);
+    let name = e.mem.u32(this.addr().wrapping_add(0x88));
+    e.call(STREAM_SAVE_STRING_00A64160, &args![stream, name]);
+}
+
+/// The map destructor body shared by `fn_00b603e0`, `fn_00b60400`, `fn_00b605a0` and
+/// `fn_00b605e0`: the vtable stored, the clean-up `00b601a0`, the buckets (`+8`) freed.
+fn map_destroy(e: &mut Engine, this: Ptr, vtable: u32) {
+    let base = this.addr();
+    e.mem.set_u32(base, vtable);
+    e.call(MAP_CLEAR_00B601A0, &args![base]);
+    let buckets = e.mem.u32(base.wrapping_add(8));
+    e.call(NI_FREE, &args![buckets]);
+}
+
+/// The scalar deleting tail: with bit 0 of the flags the object goes back to the memory
+/// manager (`00aa4060` on `011f6238`).
+fn give_back(e: &mut Engine, this: Ptr, flags: u8) {
+    if flags & 1 != 0 {
+        e.call(MEMORY_DEALLOCATE_00AA4060, &args![MEMORY_MANAGER, this]);
+    }
+}
+
+// Translated from 00b603e0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`thiscall`, no stack words; a map destructor): stores the vtable
+/// `010ade18`, runs `00b601a0` and frees the buckets (`+8`, `00aa10f0`).
+pub fn fn_00b603e0(e: &mut Engine, this: Ptr) {
+    map_destroy(e, this, VTABLE_010ADE18);
+}
+
+// Translated from 00b60400 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`thiscall`, no stack words; a map destructor): stores the vtable
+/// `010ade34`, runs `00b601a0` and frees the buckets (`+8`, `00aa10f0`).
+pub fn fn_00b60400(e: &mut Engine, this: Ptr) {
+    map_destroy(e, this, VTABLE_010ADE34);
+}
+
+// Translated from 00b605a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map: the scalar deleting destructor of `fn_00b603e0`'s map
+/// (`thiscall`, one word: the flags; inlined body), the map given back to the memory manager
+/// with bit 0 of the flags. Answers `this`.
+pub fn fn_00b605a0(e: &mut Engine, this: Ptr, flags: u8) -> Ptr {
+    map_destroy(e, this, VTABLE_010ADE18);
+    give_back(e, this, flags);
+    this
+}
+
+// Translated from 00b605e0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map: the scalar deleting destructor of `fn_00b60400`'s map
+/// (`thiscall`, one word: the flags; inlined body), the map given back to the memory manager
+/// with bit 0 of the flags. Answers `this`.
+pub fn fn_00b605e0(e: &mut Engine, this: Ptr, flags: u8) -> Ptr {
+    map_destroy(e, this, VTABLE_010ADE34);
+    give_back(e, this, flags);
+    this
+}
+
+// Translated from 00b60620 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map: the scalar deleting destructor of the string-keyed map
+/// (`thiscall`, one word: the flags): `fn_00b60420`, then the map given back to the memory
+/// manager with bit 0 of the flags. Answers `this`.
+pub fn fn_00b60620(e: &mut Engine, this: Ptr, flags: u8) -> Ptr {
+    fn_00b60420(e, this);
+    give_back(e, this, flags);
+    this
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x00b6_00c0, fn_00b600c0(Ptr, u32, u32) -> u32),
+        entry!(0x00b6_0100, fn_00b60100(Ptr, u32)),
+        entry!(0x00b6_0160, fn_00b60160(Ptr, u32) -> u32),
+        entry!(0x00b6_0170, fn_00b60170() -> u32),
+        entry!(0x00b6_0210, fn_00b60210(Ptr, u32)),
+        entry!(0x00b6_03e0, fn_00b603e0(Ptr)),
+        entry!(0x00b6_0400, fn_00b60400(Ptr)),
+        entry!(0x00b6_05a0, fn_00b605a0(Ptr, u8) -> Ptr),
+        entry!(0x00b6_05e0, fn_00b605e0(Ptr, u8) -> Ptr),
+        entry!(0x00b6_0620, fn_00b60620(Ptr, u8) -> Ptr),
         entry!(0x00b6_02d0, fn_00b602d0(Ptr<NiTPointerList>) -> u32),
         entry!(0x00b5_fd60, fn_00b5fd60(Ptr)),
         entry!(0x00b6_0040, fn_00b60040()),
@@ -1034,5 +1175,137 @@ mod b053_tests {
         e.call(0x00b6_0750, &args![this, out]);
         assert_eq!(e.mem.u32(out), held);
         assert_eq!(e.mem.u32(held + 4), 3);
+    }
+}
+
+#[cfg(test)]
+mod n013_tests {
+    use super::*;
+    use crate::units::bsshader::geometrydecalshader::shader_test_rig::*;
+
+    const STUB: AbiFn = |_, _| Ret::default();
+
+    #[test]
+    fn fn_00b600c0_describes_a_grass_load_task() {
+        let mut e = rig();
+        e.register(QUEUED_FILE_ENTRY_GET_DESCRIPTION, |_, _| {
+            0x101u32.into_ret()
+        });
+        let r = e
+            .call(0x00b6_00c0, &args![0x500u32, 0x600u32, 0x40u32])
+            .u32();
+        assert_eq!(r, 0x101);
+        assert_eq!(
+            calls(&e, QUEUED_FILE_ENTRY_GET_DESCRIPTION),
+            vec![vec![0x500, 0x600, 0x40, GRASS_LOAD_TASK_KIND_010ADE08]]
+        );
+    }
+
+    #[test]
+    fn fn_00b60100_maps_3_to_0_and_the_rest_to_3() {
+        let mut e = rig();
+        let this = e.mem.alloc(0xa0);
+        e.call(0x00b6_0100, &args![this, 3u32]);
+        assert_eq!(e.mem.u32(this + 0x90), 0);
+        e.call(0x00b6_0100, &args![this, 0u32]);
+        assert_eq!(e.mem.u32(this + 0x90), 3);
+    }
+
+    #[test]
+    fn fn_00b60160_jumps_on() {
+        let mut e = rig();
+        e.register(REGISTER_STREAMABLES_00BC3770, |_, _| 0x0100u32.into_ret());
+        assert_eq!(e.call(0x00b6_0160, &args![0x10u32, 0x20u32]).u32(), 0x100);
+        assert_eq!(
+            calls(&e, REGISTER_STREAMABLES_00BC3770),
+            vec![vec![0x10, 0x20]]
+        );
+    }
+
+    #[test]
+    fn fn_00b60170_truncates_the_setting() {
+        let mut e = rig();
+        e.map(0x011f_d000, 0x1000);
+        e.set_global(SETTING_011FD890, 2.75f32);
+        assert_eq!(e.call(0x00b6_0170, &args![]).u32(), 2);
+        e.set_global(SETTING_011FD890, -2.75f32);
+        assert_eq!(e.call(0x00b6_0170, &args![]).i32(), -2);
+    }
+
+    #[test]
+    fn fn_00b60210_saves_the_base_then_the_name() {
+        let mut e = rig();
+        e.register(BASE_SAVE_BINARY_00BB7160, STUB);
+        e.register(STREAM_SAVE_STRING_00A64160, STUB);
+        let this = e.mem.alloc(0xa0);
+        e.mem.set_u32(this + 0x88, 0x7777);
+        e.call(0x00b6_0210, &args![this, 0x300u32]);
+        assert_eq!(
+            calls(&e, BASE_SAVE_BINARY_00BB7160),
+            vec![vec![this, 0x300]]
+        );
+        assert_eq!(
+            calls(&e, STREAM_SAVE_STRING_00A64160),
+            vec![vec![0x300, 0x7777]]
+        );
+    }
+
+    #[test]
+    fn map_destructors_store_their_vtable_clean_and_free() {
+        for (addr, vtable) in [
+            (0x00b6_03e0u32, VTABLE_010ADE18),
+            (0x00b6_0400, VTABLE_010ADE34),
+        ] {
+            let mut e = rig();
+            e.register(MAP_CLEAR_00B601A0, STUB);
+            e.register(NI_FREE, STUB);
+            let this = e.mem.alloc(0x10);
+            e.mem.set_u32(this + 8, 0x4444);
+            e.call(addr, &args![this]);
+            assert_eq!(e.mem.u32(this), vtable);
+            assert_eq!(calls(&e, MAP_CLEAR_00B601A0), vec![vec![this]]);
+            assert_eq!(calls(&e, NI_FREE), vec![vec![0x4444]]);
+        }
+    }
+
+    #[test]
+    fn map_scalar_deleting_destructors_give_back_on_bit_0() {
+        for (addr, vtable) in [
+            (0x00b6_05a0u32, VTABLE_010ADE18),
+            (0x00b6_05e0, VTABLE_010ADE34),
+        ] {
+            let mut e = rig();
+            e.register(MAP_CLEAR_00B601A0, STUB);
+            e.register(NI_FREE, STUB);
+            e.register(MEMORY_DEALLOCATE_00AA4060, STUB);
+            let this = e.mem.alloc(0x10);
+            e.mem.set_u32(this + 8, 0x4444);
+            assert_eq!(e.call(addr, &args![this, 0u32]).u32(), this);
+            assert!(calls(&e, MEMORY_DEALLOCATE_00AA4060).is_empty());
+            assert_eq!(e.mem.u32(this), vtable);
+            e.call(addr, &args![this, 1u32]);
+            assert_eq!(
+                calls(&e, MEMORY_DEALLOCATE_00AA4060),
+                vec![vec![MEMORY_MANAGER, this]]
+            );
+            assert_eq!(calls(&e, NI_FREE).len(), 2);
+        }
+    }
+
+    #[test]
+    fn fn_00b60620_destroys_the_string_map_and_gives_it_back() {
+        let mut e = rig();
+        e.register(MAP_BASE_DESTRUCT_00B580A0, STUB);
+        e.register(MEMORY_DEALLOCATE_00AA4060, STUB);
+        let this = e.mem.alloc(0x14);
+        e.call(0x00b6_0620, &args![this, 0u32]);
+        assert_eq!(e.mem.u32(this), VTABLE_010ADF84);
+        assert!(calls(&e, MEMORY_DEALLOCATE_00AA4060).is_empty());
+        assert_eq!(e.call(0x00b6_0620, &args![this, 1u32]).u32(), this);
+        assert_eq!(
+            calls(&e, MEMORY_DEALLOCATE_00AA4060),
+            vec![vec![MEMORY_MANAGER, this]]
+        );
+        assert_eq!(calls(&e, MAP_BASE_DESTRUCT_00B580A0).len(), 2);
     }
 }

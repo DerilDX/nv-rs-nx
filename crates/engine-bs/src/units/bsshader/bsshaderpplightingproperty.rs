@@ -1705,6 +1705,487 @@ pub fn fn_00b69be0(e: &mut Engine, this: Ptr, geometry: u32) -> u32 {
     added
 }
 
+use crate::units::bsshader::bsshaderproperty::{
+    viewer_strings_add, VIEWER_STRING, VIEWER_STRING_FLAG, VIEWER_STRING_FLOAT, VIEWER_STRING_INT,
+    VIEWER_STRING_TEXT,
+};
+
+/// The vtable `00b669f0` stores first (`010ae0c8`).
+const VTABLE_010AE0C8: u32 = 0x010a_e0c8;
+/// The flag setter `00441130` (`thiscall`: bit index, byte value), the float setter
+/// `00b66700` (`thiscall`, one `float`) and `_ftol2` (`00ec62c0`, the value in ST0).
+const SET_FLAG_00441130: u32 = 0x0044_1130;
+const SET_VALUE_00B66700: u32 = 0x00b6_6700;
+const FTOL: u32 = 0x00ec_62c0;
+/// The virtual slots (byte offsets) `SetRefractionRecurse` calls: `IsTriBasedGeom` (+0x1c)
+/// and `IsNode` (+0xc).
+const SLOT_IS_TRI_BASED_GEOM: u32 = 0x1c;
+const SLOT_IS_NODE: u32 = 0x0c;
+/// The shader globals `00b683e0` reads: a byte (`011f9427`), a word (`011f95e4`), the shader
+/// flags (`011f91d8`), the shader level (`011f91c0`) and the two flag words it chooses from
+/// (`010a91d8` when the four allow it, else `010a91d4`).
+const BYTE_SWITCH_011F9427: u32 = 0x011f_9427;
+const SWITCH_011F95E4: u32 = 0x011f_95e4;
+const SHADER_FLAGS_011F91D8: u32 = 0x011f_91d8;
+const PASS_FLAGS_010A91D8: u32 = 0x010a_91d8;
+const PASS_FLAGS_010A91D4: u32 = 0x010a_91d4;
+/// `BSShaderManager::GetAccumulator` (`00b4f5c0`, no words).
+const GET_ACCUMULATOR_00B4F5C0: u32 = 0x00b4_f5c0;
+/// `BSShaderProperty`'s water-fog array check (`00ba97b0`, `thiscall`, one word: the size)
+/// and `RenderPassArray::Add` (`00ba9ee0`, `thiscall`, eight words).
+const CHECK_CREATE_WATER_FOG_PASSES_00BA97B0: u32 = 0x00ba_97b0;
+const RENDER_PASS_ARRAY_ADD: u32 = 0x00ba_9ee0;
+/// The base `SaveBinary` (`00bb7160`, `thiscall`, one word: the stream).
+const BASE_SAVE_BINARY_00BB7160: u32 = 0x00bb_7160;
+/// `BSShaderLightingProperty::GetViewerStrings` (`00b71450`, `thiscall`, one word), the
+/// class-name record (`011fa010`), `BSUtilities::GetTextureName` (`00c4bb40`, `cdecl`, one
+/// word), the viewer-string makers of a name and an object (`00a7d5a0`) and of a name and a
+/// 16-bit value (`00a7d490`), and the string array's `Add` (`0096a610`, `thiscall`, the
+/// address of the element).
+const LIGHTING_GET_VIEWER_STRINGS: u32 = 0x00b7_1450;
+const CLASS_RTTI_011FA010: u32 = 0x011f_a010;
+const GET_TEXTURE_NAME: u32 = 0x00c4_bb40;
+const VIEWER_STRING_OBJECT: u32 = 0x00a7_d5a0;
+const VIEWER_STRING_SHORT: u32 = 0x00a7_d490;
+const STRINGS_ADD_0096A610: u32 = 0x0096_a610;
+/// The labels `GetViewerStrings` uses (read in Ghidra).
+const LABEL_BASE_DIFF: u32 = 0x010a_e428;
+const LABEL_BASE_NORMAL: u32 = 0x010a_e41c;
+const LABEL_MULTI_DIFF: u32 = 0x010a_e410;
+const LABEL_MULTI_NORMAL: u32 = 0x010a_e400;
+const LABEL_LANDSCAPE_TEXTURING: u32 = 0x010a_e3ec;
+const LABEL_LANDSCAPE_TEXTURES: u32 = 0x010a_e3d8;
+const LABEL_BASE_TEX: u32 = 0x010a_e3cc;
+const LABEL_NORMAL_MAP: u32 = 0x010a_e3c0;
+const LABEL_SPECULAR: u32 = 0x010a_e3b4;
+const LABEL_GLOW_MAP: u32 = 0x010a_e3a8;
+const LABEL_HEIGHTMAP: u32 = 0x010a_e394;
+const LABEL_GLOW_SKIN_HAIR: u32 = 0x010a_e370;
+const LABEL_ENVMAP: u32 = 0x010a_e360;
+const LABEL_ENVMAP_MASK: u32 = 0x010a_e34c;
+const LABEL_CLAMP: u32 = 0x010a_e344;
+const LABEL_REFRACTION_POWER: u32 = 0x010a_e330;
+const LABEL_REFRACTION_PERIOD: u32 = 0x010a_e31c;
+const LABEL_SPECULAR_LOD: u32 = 0x010a_e30c;
+const LABEL_ENVMAP_LOD: u32 = 0x010a_e300;
+const LABEL_TEX_EFFECT_DATA: u32 = 0x010a_e2f0;
+/// The texture effect data lines: the offset of each `float` and its label (`"Fill Color
+/// R"`, `"Fill Color G"`, `"Fill Color R"` again, `"Fill Color A"`, `"Edge Color R"`,
+/// `"Edge Color G"`, `"Edge Color R"` again, `"Edge Color A"`, `"Edge Falloff"`), as the
+/// exe has them.
+const TEX_EFFECT_LINES: [(u32, u32); 9] = [
+    (0xc, 0x010a_e2e0),
+    (0x10, 0x010a_e2d0),
+    (0x14, 0x010a_e2e0),
+    (0x18, 0x010a_e2c0),
+    (0x1c, 0x010a_e2b0),
+    (0x20, 0x010a_e2a0),
+    (0x24, 0x010a_e2b0),
+    (0x28, 0x010a_e290),
+    (0x54, 0x010a_e280),
+];
+
+// Translated from 00b669f0 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 00b669f0 - the FS:[0] exception frame (unwinding on a throw) is not translated
+/// Unnamed in the engine map, `thiscall` without words: the destructor of a 0x74-byte
+/// reference-counted object (vtable `010ae0c8`; [`fn_00b675a0`] deletes it). Puts its vtable
+/// back, releases and clears the `NiPointer`s at `+8` and `+0x6c`, then runs the members'
+/// own destructors (each releases its pointer again when it is not null: both are null by
+/// then), stores the base vtable `0101dce4` and lowers the object count at `011f4400`.
+pub fn fn_00b669f0(e: &mut Engine, this: Ptr) {
+    let base = this.addr();
+    e.mem.set_u32(base, VTABLE_010AE0C8);
+    ni_pointer_clear(e, base + 8);
+    ni_pointer_clear(e, base + 0x6c);
+    let member = e.mem.u32(base + 0x6c);
+    if member != 0 {
+        release_reference(e, member);
+    }
+    let member = e.mem.u32(base + 8);
+    if member != 0 {
+        release_reference(e, member);
+    }
+    e.mem.set_u32(base, VTABLE_0101DCE4);
+    e.call(IMPORT_INTERLOCKED_DECREMENT, &args![OBJECT_COUNT_011F4400]);
+}
+
+// Translated from 00b671d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed (Ghidra made no function here; slot 57 of the vtable at `010ae0d0`), `thiscall`
+/// with one word: stores it in the texture clamp mode `+0xd8` ([`fn_00b671c0`] answers it).
+pub fn fn_00b671d0(e: &mut Engine, this: Ptr, mode: u32) {
+    e.mem.set_u32(this.addr() + 0xd8, mode);
+}
+
+// Translated from 00b67280 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed (Ghidra made no function here; slot 45 of the vtable at `010ae0d0`), `thiscall`
+/// without words: answers the first texture of the first kind's array (`+0xac`).
+pub fn fn_00b67280(e: &mut Engine, this: Ptr) -> u32 {
+    let array = e.mem.u32(this.addr() + 0xac);
+    e.mem.u32(array)
+}
+
+// Translated from 00b67330 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed (Ghidra made no function here; slot 65 of the vtable at `010ae0d0`), `thiscall`
+/// with two words (index, texture): assigns the texture at that index of the third kind's
+/// array (`+0xb4`).
+pub fn fn_00b67330(e: &mut Engine, this: Ptr, index: u32, texture: u32) {
+    let array = e.mem.u32(this.addr() + 0xb4);
+    ni_pointer_assign(e, array.wrapping_add(index.wrapping_mul(4)), texture);
+}
+
+// Translated from 00b675a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map: the deleting destructor of [`fn_00b669f0`]'s object: that
+/// destructor, then the sized delete (`00aa1460` with 0x74) when bit 0 of the flags is set.
+/// Answers `this`.
+pub fn fn_00b675a0(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    fn_00b669f0(e, this);
+    if flags & 1 != 0 {
+        e.call(NI_SIZED_DELETE, &args![this, 0x74u32]);
+    }
+    this
+}
+
+// Translated from 00b675c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSShaderPPLightingProperty::SetTextureEffectData` (engine map; the body matches):
+/// assigns the object to the `NiPointer` at `+0xdc` and clears `iLastRenderPassState`.
+pub fn bs_shader_pp_lighting_property_set_texture_effect_data(
+    e: &mut Engine,
+    this: Ptr,
+    data: u32,
+) {
+    ni_pointer_assign(e, this.addr() + 0xdc, data);
+    e.mem.set_u32(this.addr() + 0x38, 0);
+}
+
+// Translated from 00b683e0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed (Ghidra made no function here; slot 41 of the vtable at `010ae0d0`), `thiscall`
+/// with one word (a geometry): asks this property for its render passes (slot +0xa0 with the
+/// geometry, a flag word, the address of a zeroed local word, 0, the accumulator
+/// `00b4f5c0` answers, 0) and answers the low 16 bits of that local word. The flag word is
+/// the one at `010a91d8` when the byte at `011f9427` is clear, the word at `011f95e4` set,
+/// bit 5 of the shader flags (`011f91d8`) set and the shader level (`011f91c0`) 2 or more;
+/// else the one at `010a91d4`.
+pub fn fn_00b683e0(e: &mut Engine, this: Ptr, geometry: u32) -> u16 {
+    let allowed = e.mem.u8(BYTE_SWITCH_011F9427) == 0
+        && e.mem.u32(SWITCH_011F95E4) != 0
+        && e.mem.u8(SHADER_FLAGS_011F91D8) & 0x20 != 0
+        && e.mem.i32(SHADER_LEVEL_011F91C0) >= 2;
+    let flags = if allowed {
+        e.mem.u32(PASS_FLAGS_010A91D8)
+    } else {
+        e.mem.u32(PASS_FLAGS_010A91D4)
+    };
+    e.with_stack(4, |e, local| {
+        let accumulator = e.call(GET_ACCUMULATOR_00B4F5C0, &args![]).u32();
+        e.vcall(
+            this.addr(),
+            0xa0,
+            &args![geometry, flags, local, 0u32, accumulator, 0u32],
+        );
+        e.mem.u16(local.addr())
+    })
+}
+
+// Translated from 00b68770 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSShaderPPLightingProperty::SetRefractionRecurse` (engine map; the body matches):
+/// `cdecl`, six words: an object, a flag word, the refraction power (`float`), a byte, the
+/// refraction period (`float`) and a byte. For a non-null object: a tri-based geometry
+/// (slot +0x1c non-zero) whose shader property (`+0xa8`) has an `iShaderPropertyType` of 8
+/// to 12 gets bit 15 set to the flag word (`00441130`), bit 16 to "flag and first byte",
+/// bit 36 to "flag and second byte", the power through `00b66700` and, with the first byte
+/// set, the period truncated to an integer (`_ftol2`) at `+0xe4`. Any other object that is
+/// a node (slot +0xc) passes the six words on to each non-null child (the count at `+0xa6`
+/// read once; the `float`s pushed through `FLD`/`FSTP`).
+pub fn bs_shader_pp_lighting_property_set_refraction_recurse(
+    e: &mut Engine,
+    object: u32,
+    flag: u32,
+    power: u32,
+    fire: u32,
+    period: u32,
+    second: u32,
+) {
+    if object == 0 {
+        return;
+    }
+    if e.vcall(object, SLOT_IS_TRI_BASED_GEOM, &args![]).u32() != 0 {
+        let property = e.mem.u32(object.wrapping_add(0xa8));
+        if property == 0 {
+            return;
+        }
+        let kind = e.mem.i32(property.wrapping_add(0x1c));
+        if !(8..=0xc).contains(&kind) {
+            return;
+        }
+        e.call(SET_FLAG_00441130, &args![property, 0xfu32, flag]);
+        let both = u32::from(flag as u8 != 0 && fire as u8 != 0);
+        e.call(SET_FLAG_00441130, &args![property, 0x10u32, both]);
+        let both = u32::from(flag as u8 != 0 && second as u8 != 0);
+        e.call(SET_FLAG_00441130, &args![property, 0x24u32, both]);
+        e.call(SET_VALUE_00B66700, &args![property, x87_quiet_bits(power)]);
+        if fire as u8 != 0 {
+            let whole = e.call(FTOL, &args![x87_load32(period)]).u32();
+            e.mem.set_u32(property.wrapping_add(0xe4), whole);
+        }
+        return;
+    }
+    let node = e.vcall(object, SLOT_IS_NODE, &args![]).u32();
+    if node == 0 {
+        return;
+    }
+    let count = u32::from(e.mem.u16(node.wrapping_add(0xa6)));
+    let mut index = 0u32;
+    while index < count {
+        let buffer = e.mem.u32(node.wrapping_add(0xa0));
+        let child = e.mem.u32(buffer.wrapping_add(index.wrapping_mul(4)));
+        if child != 0 {
+            bs_shader_pp_lighting_property_set_refraction_recurse(
+                e,
+                child,
+                flag,
+                x87_quiet_bits(power),
+                fire,
+                x87_quiet_bits(period),
+                second,
+            );
+        }
+        index = index.wrapping_add(1);
+    }
+}
+
+// Translated from 00b68c10 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed (Ghidra made no function here; slot 46 of the vtable at `010ae0d0`), `thiscall`
+/// with one word (a geometry): the water-fog pass list. Null when the `float` at `+0xe0` is
+/// above 0.0. Otherwise the list (`+0x50`) is made with one pass when missing (`00ba97b0`)
+/// and, when it is empty, gets one pass for the geometry (`00ba9ee0`, first pass, no
+/// lights): 0x2d8 plus 6 when bit 5 of the second flag word is set, plus 1 when bit 9 of the
+/// word `+0x18` of the geometry's `+0x9c` object is set, and plus 0xc more of those with
+/// bit 1 of the first flag word (0x2d8 to 0x2eb). Answers the list.
+pub fn fn_00b68c10(e: &mut Engine, this: Ptr, geometry: u32) -> u32 {
+    let base = this.addr();
+    let refraction = f32::from_bits(e.mem.u32(base + 0xe0));
+    if 0.0 < refraction {
+        return 0;
+    }
+    e.call(CHECK_CREATE_WATER_FOG_PASSES_00BA97B0, &args![this, 1u32]);
+    let list = e.mem.u32(base + 0x50);
+    if e.mem.u32(list.wrapping_add(0x10)) != 0 {
+        return e.mem.u32(base + 0x50);
+    }
+    let state = e.mem.u32(geometry.wrapping_add(0x9c));
+    let skinned = state != 0 && (e.mem.u16(state.wrapping_add(0x18)) >> 9) & 1 != 0;
+    let second = e.mem.u8(base + 0x24) & 0x20 != 0;
+    let pass_enum: u32 = if e.mem.u8(base + 0x20) & 2 != 0 {
+        match (second, skinned) {
+            (true, true) => 0x2eb,
+            (true, false) => 0x2e5,
+            (false, true) => 0x2df,
+            (false, false) => 0x2d9,
+        }
+    } else {
+        match (second, skinned) {
+            (true, true) => 0x2ea,
+            (true, false) => 0x2e4,
+            (false, true) => 0x2de,
+            (false, false) => 0x2d8,
+        }
+    };
+    e.call(
+        RENDER_PASS_ARRAY_ADD,
+        &args![list, geometry, pass_enum, 1u32, 0u32, 0u32, 0u32, 0u32, 0u32],
+    );
+    e.mem.u32(base + 0x50)
+}
+
+/// One write through the stream's file (`[stream + 0x250]`): its write function at file
+/// `+0xc` (`cdecl`: file, buffer, 4, the address of a word holding 4, 1); the answer is
+/// added to the file's word at `+4`.
+fn stream_write_word(e: &mut Engine, stream: u32, buffer: u32) {
+    let file = e.mem.u32(stream.wrapping_add(0x250));
+    let write = e.mem.u32(file.wrapping_add(0xc));
+    let n = e.with_stack(4, |e, size| {
+        e.mem.set_u32(size.addr(), 4);
+        e.call(write, &args![file, buffer, 4u32, size, 1u32]).u32()
+    });
+    let position = e.mem.u32(file.wrapping_add(4));
+    e.mem
+        .set_u32(file.wrapping_add(4), position.wrapping_add(n));
+}
+
+// Translated from 00b68ed0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map, `thiscall` with one word (a stream; the `SaveBinary` that pairs
+/// with [`fn_00b68dc0`]): the base save (`00bb7160`), the clamp mode `+0xd8`, the texture set
+/// `+0xa4` as a link (the stream's slot +0x30), then the four words `+0xe0` to `+0xec`, each
+/// word written through the stream's file.
+pub fn fn_00b68ed0(e: &mut Engine, this: Ptr, stream: u32) {
+    let base = this.addr();
+    e.call(BASE_SAVE_BINARY_00BB7160, &args![this, stream]);
+    stream_write_word(e, stream, base + 0xd8);
+    let set = e.mem.u32(base + 0xa4);
+    e.vcall(stream, 0x30, &args![set]);
+    for offset in [0xe0u32, 0xe4, 0xe8, 0xec] {
+        stream_write_word(e, stream, base + offset);
+    }
+}
+
+/// The viewer string of the texture in slot `index` of the array at `offset`: through its
+/// name (`00c4bb40`) when it has one (`00a7d5e0`), else through the object (`00a7d5a0`,
+/// the slot read again).
+fn texture_line(e: &mut Engine, this: u32, offset: u32, index: u32, label: u32) -> u32 {
+    let slot = |e: &Engine| {
+        e.mem
+            .u32(this.wrapping_add(offset))
+            .wrapping_add(index.wrapping_mul(4))
+    };
+    let texture = e.mem.u32(slot(e));
+    let name = e.call(GET_TEXTURE_NAME, &args![texture]).u32();
+    if name != 0 {
+        e.call(VIEWER_STRING_TEXT, &args![label, name]).u32()
+    } else {
+        let texture = e.mem.u32(slot(e));
+        e.call(VIEWER_STRING_OBJECT, &args![label, texture]).u32()
+    }
+}
+
+/// The texture in slot `index` of the array at `offset`.
+fn texture_at(e: &Engine, this: u32, offset: u32, index: u32) -> u32 {
+    let array = e.mem.u32(this.wrapping_add(offset));
+    e.mem.u32(array.wrapping_add(index.wrapping_mul(4)))
+}
+
+/// The string array's own `Add` (`0096a610`) with the string in a local word.
+fn strings_append(e: &mut Engine, strings: u32, string: u32) {
+    e.with_stack(4, |e, local| {
+        e.mem.set_u32(local.addr(), string);
+        e.call(STRINGS_ADD_0096A610, &args![strings, local]);
+    });
+}
+
+/// A `float` viewer line (`00a7d550`), the value through `FLD`/`FSTP`, added inline.
+fn float_line(e: &mut Engine, strings: u32, label: u32, bits: u32) {
+    let text = e
+        .call(VIEWER_STRING_FLOAT, &args![label, x87_quiet_bits(bits)])
+        .u32();
+    viewer_strings_add(e, strings, text);
+}
+
+// Translated from 00b690d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSShaderPPLightingProperty::GetViewerStrings` (engine map; the body matches):
+/// `thiscall`, one word (the strings). The `BSShaderLightingProperty` strings (`00b71450`),
+/// the class name, then the textures: without the landscape flag (bit 14 of the first flag
+/// word) the base diffuse and normal maps and, when present, the second diffuse and normal
+/// maps; with it, the landscape flag line, the texture count (`+0xa8`) and for each of the
+/// nine layers that has a base texture its base texture, normal map, specular flag (the
+/// byte array `+0xcc`) and glow map. Then the heightmap (`+0xb8`), glow/skin (`+0xb4`),
+/// environment map (`+0xbc`) and its mask (`+0xc0`) when present; "clamp" when slot +0xe0
+/// answers 0; the refraction power (`+0xe0`) with bit 15 of the first flag word, or with bit
+/// 16 the power and the period (`+0xe4`); the specular LOD (slot +0x10c) with bit 0; the
+/// environment map LOD (slot +0x110) with bit 7; and with texture effect data (`+0xdc`) the
+/// object and its nine `float`s. Lines are added inline or through `0096a610` as the exe
+/// does for each.
+pub fn bs_shader_pp_lighting_property_get_viewer_strings(e: &mut Engine, this: Ptr, strings: u32) {
+    let base = this.addr();
+    e.call(LIGHTING_GET_VIEWER_STRINGS, &args![this, strings]);
+    let class_name = e.mem.u32(CLASS_RTTI_011FA010);
+    let text = e.call(VIEWER_STRING, &args![class_name]).u32();
+    viewer_strings_add(e, strings, text);
+    if e.mem.u32(base + 0x20) & 0x4000 == 0 {
+        let text = texture_line(e, base, 0xac, 0, LABEL_BASE_DIFF);
+        viewer_strings_add(e, strings, text);
+        let text = texture_line(e, base, 0xb0, 0, LABEL_BASE_NORMAL);
+        viewer_strings_add(e, strings, text);
+        if texture_at(e, base, 0xac, 1) != 0 {
+            let text = texture_line(e, base, 0xac, 1, LABEL_MULTI_DIFF);
+            strings_append(e, strings, text);
+        }
+        if texture_at(e, base, 0xb0, 1) != 0 {
+            let text = texture_line(e, base, 0xb0, 1, LABEL_MULTI_NORMAL);
+            strings_append(e, strings, text);
+        }
+    } else {
+        let text = e
+            .call(VIEWER_STRING_FLAG, &args![LABEL_LANDSCAPE_TEXTURING, 1u32])
+            .u32();
+        viewer_strings_add(e, strings, text);
+        let count = u32::from(e.mem.u16(base + 0xa8));
+        let text = e
+            .call(VIEWER_STRING_SHORT, &args![LABEL_LANDSCAPE_TEXTURES, count])
+            .u32();
+        viewer_strings_add(e, strings, text);
+        for layer in 0..9u32 {
+            if texture_at(e, base, 0xac, layer) == 0 {
+                continue;
+            }
+            let text = texture_line(e, base, 0xac, layer, LABEL_BASE_TEX);
+            viewer_strings_add(e, strings, text);
+            if texture_at(e, base, 0xb0, layer) != 0 {
+                let text = texture_line(e, base, 0xb0, layer, LABEL_NORMAL_MAP);
+                strings_append(e, strings, text);
+            }
+            let speculars = e.mem.u32(base + 0xcc);
+            if e.mem.u8(speculars.wrapping_add(layer)) != 0 {
+                let text = e
+                    .call(VIEWER_STRING_FLAG, &args![LABEL_SPECULAR, 1u32])
+                    .u32();
+                viewer_strings_add(e, strings, text);
+            }
+            if texture_at(e, base, 0xb4, layer) != 0 {
+                let text = texture_line(e, base, 0xb4, layer, LABEL_GLOW_MAP);
+                strings_append(e, strings, text);
+            }
+        }
+    }
+    for (offset, label) in [
+        (0xb8u32, LABEL_HEIGHTMAP),
+        (0xb4, LABEL_GLOW_SKIN_HAIR),
+        (0xbc, LABEL_ENVMAP),
+        (0xc0, LABEL_ENVMAP_MASK),
+    ] {
+        if texture_at(e, base, offset, 0) != 0 {
+            let text = texture_line(e, base, offset, 0, label);
+            viewer_strings_add(e, strings, text);
+        }
+    }
+    if e.vcall(base, 0xe0, &args![]).u32() == 0 {
+        let text = e.call(VIEWER_STRING_FLAG, &args![LABEL_CLAMP, 1u32]).u32();
+        viewer_strings_add(e, strings, text);
+    }
+    let flags = e.mem.u32(base + 0x20);
+    if flags & 0x8000 != 0 {
+        let power = e.mem.u32(base + 0xe0);
+        float_line(e, strings, LABEL_REFRACTION_POWER, power);
+    } else if flags & 0x10000 != 0 {
+        let power = e.mem.u32(base + 0xe0);
+        float_line(e, strings, LABEL_REFRACTION_POWER, power);
+        let period = e.mem.u32(base + 0xe4);
+        let text = e
+            .call(VIEWER_STRING_INT, &args![LABEL_REFRACTION_PERIOD, period])
+            .u32();
+        viewer_strings_add(e, strings, text);
+    }
+    if e.mem.u8(base + 0x20) & 1 != 0 {
+        let lod = e.vcall(base, 0x10c, &args![]).f64();
+        float_line(e, strings, LABEL_SPECULAR_LOD, x87_store32(lod));
+    }
+    if e.mem.u32(base + 0x20) & 0x80 != 0 {
+        let lod = e.vcall(base, 0x110, &args![]).f64();
+        float_line(e, strings, LABEL_ENVMAP_LOD, x87_store32(lod));
+    }
+    let data = e.mem.u32(base + 0xdc);
+    if data == 0 {
+        return;
+    }
+    let text = e
+        .call(VIEWER_STRING_OBJECT, &args![LABEL_TEX_EFFECT_DATA, data])
+        .u32();
+    viewer_strings_add(e, strings, text);
+    for (offset, label) in TEX_EFFECT_LINES {
+        let data = e.mem.u32(base + 0xdc);
+        let value = e.mem.u32(data.wrapping_add(offset));
+        float_line(e, strings, label, value);
+    }
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -1754,6 +2235,26 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
             bs_shader_pp_lighting_property_post_link_object(Ptr, u32)
         ),
         entry!(0x00b6_9be0, fn_00b69be0(Ptr, u32) -> u32),
+        entry!(0x00b6_69f0, fn_00b669f0(Ptr)),
+        entry!(0x00b6_71d0, fn_00b671d0(Ptr, u32)),
+        entry!(0x00b6_7280, fn_00b67280(Ptr) -> u32),
+        entry!(0x00b6_7330, fn_00b67330(Ptr, u32, u32)),
+        entry!(0x00b6_75a0, fn_00b675a0(Ptr, u32) -> Ptr),
+        entry!(
+            0x00b6_75c0,
+            bs_shader_pp_lighting_property_set_texture_effect_data(Ptr, u32)
+        ),
+        entry!(0x00b6_83e0, fn_00b683e0(Ptr, u32) -> u16),
+        entry!(
+            0x00b6_8770,
+            bs_shader_pp_lighting_property_set_refraction_recurse(u32, u32, u32, u32, u32, u32)
+        ),
+        entry!(0x00b6_8c10, fn_00b68c10(Ptr, u32) -> u32),
+        entry!(0x00b6_8ed0, fn_00b68ed0(Ptr, u32)),
+        entry!(
+            0x00b6_90d0,
+            bs_shader_pp_lighting_property_get_viewer_strings(Ptr, u32)
+        ),
     ]
 }
 
@@ -2704,5 +3205,431 @@ mod tests {
         e.mem.set_u32(geometry + 0x18, 0);
         e.mem.set_u32(this + 0xd0, 0);
         assert_eq!(e.call(0x00b6_9be0, &args![this, geometry]).u32(), 0);
+    }
+}
+
+#[cfg(test)]
+mod n012_tests {
+    use super::*;
+    use crate::units::bsshader::bsshaderproperty::{STRINGS_SET_AT, STRINGS_SET_SIZE};
+
+    fn calls(e: &Engine, addr: u32) -> Vec<Vec<u32>> {
+        e.call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|(a, _)| *a == addr)
+            .map(|(_, w)| w.clone())
+            .collect()
+    }
+
+    /// Reference counts on the word at +4: decrement, increment, and a destroyed object
+    /// recorded through its slot +4 (`0x0f00_0004`).
+    fn rig() -> Engine {
+        let mut e = Engine::new();
+        e.map(0x011f_4000, 0x1000);
+        e.map(0x011f_9000, 0x2000);
+        e.map(0x010a_9000, 0x1000);
+        e.register(IMPORT_INTERLOCKED_DECREMENT, |e, a| {
+            let v = e.mem.u32(a[0]).wrapping_sub(1);
+            e.mem.set_u32(a[0], v);
+            v.into_ret()
+        });
+        e.register(IMPORT_INTERLOCKED_INCREMENT, |e, a| {
+            let v = e.mem.u32(a[0]).wrapping_add(1);
+            e.mem.set_u32(a[0], v);
+            v.into_ret()
+        });
+        e.register(0x0f00_0004, |_, _| Ret::default());
+        e.put_vtable(0x0f00_2000, &[0, 0x0f00_0004]);
+        e.call_log = Some(vec![]);
+        e
+    }
+
+    fn counted(e: &mut Engine, count: u32) -> u32 {
+        let object = e.mem.alloc(0x10);
+        e.mem.set_u32(object, 0x0f00_2000);
+        e.mem.set_u32(object + 4, count);
+        object
+    }
+
+    /// A string array (64 slots) with doubles for the size change and the two stores.
+    fn strings(e: &mut Engine) -> u32 {
+        let this = e.mem.alloc(0x10);
+        let base = e.mem.alloc(4 * 64);
+        e.mem.set_u32(this + 4, base);
+        e.mem.set_u16(this + 8, 64);
+        e.mem.set_u16(this + 0xe, 2);
+        e.register(STRINGS_SET_SIZE, |_, _| Ret::default());
+        let store = |e: &mut Engine, a: &[u32], index: u32| {
+            let base = e.mem.u32(a[0] + 4);
+            let v = e.mem.u32(a[a.len() - 1]);
+            e.mem.set_u32(base + 4 * index, v);
+            if index >= u32::from(e.mem.u16(a[0] + 0xa)) {
+                e.mem.set_u16(a[0] + 0xa, index as u16 + 1);
+            }
+        };
+        e.register_double(STRINGS_SET_AT, move |e, a| {
+            store(e, a, a[1]);
+            Ret::default()
+        });
+        e.register_double(STRINGS_ADD_0096A610, move |e, a| {
+            let index = u32::from(e.mem.u16(a[0] + 0xa));
+            store(e, a, index);
+            Ret::default()
+        });
+        this
+    }
+
+    fn slots(e: &Engine, strings: u32) -> Vec<u32> {
+        let base = e.mem.u32(strings + 4);
+        (0..u32::from(e.mem.u16(strings + 0xa)))
+            .map(|i| e.mem.u32(base + 4 * i))
+            .collect()
+    }
+
+    #[test]
+    fn fn_00b669f0_releases_both_pointers_and_lowers_the_count() {
+        let mut e = rig();
+        let first = counted(&mut e, 1);
+        let second = counted(&mut e, 2);
+        let this = e.mem.alloc(0x74);
+        e.mem.set_u32(this + 8, first);
+        e.mem.set_u32(this + 0x6c, second);
+        e.mem.set_u32(OBJECT_COUNT_011F4400, 5);
+        e.register(NI_SIZED_DELETE, |_, _| Ret::default());
+        e.call(0x00b6_75a0, &args![this, 1u32]);
+        assert_eq!(calls(&e, 0x0f00_0004), vec![vec![first]]);
+        assert_eq!(e.mem.u32(second + 4), 1);
+        assert_eq!((e.mem.u32(this + 8), e.mem.u32(this + 0x6c)), (0, 0));
+        assert_eq!(e.mem.u32(this), VTABLE_0101DCE4);
+        assert_eq!(e.mem.u32(OBJECT_COUNT_011F4400), 4);
+        assert_eq!(calls(&e, NI_SIZED_DELETE), vec![vec![this, 0x74]]);
+        e.call(0x00b6_75a0, &args![this, 0u32]);
+        assert_eq!(calls(&e, NI_SIZED_DELETE).len(), 1);
+        assert_eq!(e.mem.u32(OBJECT_COUNT_011F4400), 3);
+    }
+
+    #[test]
+    fn small_accessors_read_and_assign() {
+        let mut e = rig();
+        let this = e.mem.alloc(0x104);
+        e.call(0x00b6_71d0, &args![this, 3u32]);
+        assert_eq!(e.mem.u32(this + 0xd8), 3);
+        let first = e.mem.alloc(0x24);
+        let third = e.mem.alloc(0x24);
+        e.mem.set_u32(first, 0x77);
+        e.mem.set_u32(this + 0xac, first);
+        e.mem.set_u32(this + 0xb4, third);
+        assert_eq!(e.call(0x00b6_7280, &args![this]).u32(), 0x77);
+        let old = counted(&mut e, 1);
+        let new = counted(&mut e, 0);
+        e.mem.set_u32(third + 8, old);
+        e.call(0x00b6_7330, &args![this, 2u32, new]);
+        assert_eq!(e.mem.u32(third + 8), new);
+        assert_eq!(e.mem.u32(new + 4), 1);
+        assert_eq!(calls(&e, 0x0f00_0004), vec![vec![old]]);
+    }
+
+    #[test]
+    fn set_texture_effect_data_assigns_and_resets_the_pass_state() {
+        let mut e = rig();
+        let this = e.mem.alloc(0x104);
+        let data = counted(&mut e, 0);
+        e.mem.set_u32(this + 0x38, 9);
+        e.call(0x00b6_75c0, &args![this, data]);
+        assert_eq!((e.mem.u32(this + 0xdc), e.mem.u32(data + 4)), (data, 1));
+        assert_eq!(e.mem.u32(this + 0x38), 0);
+        e.mem.set_u32(this + 0x38, 9);
+        e.call(0x00b6_75c0, &args![this, data]);
+        assert_eq!(e.mem.u32(data + 4), 1);
+        assert_eq!(e.mem.u32(this + 0x38), 0);
+    }
+
+    #[test]
+    fn fn_00b683e0_asks_for_passes_with_the_chosen_flags() {
+        let mut e = rig();
+        e.mem.set_u32(PASS_FLAGS_010A91D8, 0xd8);
+        e.mem.set_u32(PASS_FLAGS_010A91D4, 0xd4);
+        e.register(GET_ACCUMULATOR_00B4F5C0, |_, _| 0xacc0u32.into_ret());
+        let mut slots = [0u32; 0x29];
+        slots[0xa0 / 4] = 0x0f00_00a0;
+        e.put_vtable(0x0f00_3000, &slots);
+        e.register(0x0f00_00a0, |e, a| {
+            e.mem.set_u32(a[3], 0x1234_5678);
+            0xffffu32.into_ret()
+        });
+        let this = e.mem.alloc(0x104);
+        e.mem.set_u32(this, 0x0f00_3000);
+        assert_eq!(e.call(0x00b6_83e0, &args![this, 0x55u32]).u16(), 0x5678);
+        e.mem.set_u32(SWITCH_011F95E4, 1);
+        e.mem.set_u8(SHADER_FLAGS_011F91D8, 0x20);
+        e.mem.set_u32(SHADER_LEVEL_011F91C0, 2);
+        e.call(0x00b6_83e0, &args![this, 0x55u32]);
+        e.mem.set_u8(BYTE_SWITCH_011F9427, 1);
+        e.call(0x00b6_83e0, &args![this, 0x55u32]);
+        let asked = calls(&e, 0x0f00_00a0);
+        assert_eq!(asked[0][..3], [this, 0x55, 0xd4]);
+        assert_eq!(asked[0][4..], [0, 0xacc0, 0]);
+        assert_eq!(asked[1][2], 0xd8);
+        assert_eq!(asked[2][2], 0xd4);
+    }
+
+    #[test]
+    fn set_refraction_recurse_sets_lit_geometry_through_nodes() {
+        let mut e = rig();
+        let mut slots = [0u32; 8];
+        slots[SLOT_IS_NODE as usize / 4] = 0x0f00_e000;
+        slots[SLOT_IS_TRI_BASED_GEOM as usize / 4] = 0x0f00_e010;
+        e.put_vtable(0x0f00_e100, &slots);
+        e.register(0x0f00_e000, |e, a| e.mem.u32(a[0] + 0x14).into_ret());
+        e.register(0x0f00_e010, |e, a| e.mem.u32(a[0] + 0x10).into_ret());
+        e.register(SET_FLAG_00441130, |_, _| Ret::default());
+        e.register(SET_VALUE_00B66700, |_, _| Ret::default());
+        e.register(FTOL, |_, a| {
+            (f64::from_bits(u64::from(a[0]) | u64::from(a[1]) << 32) as i32).into_ret()
+        });
+        let geometry = |e: &mut Engine, kind: u32| {
+            let g = e.mem.alloc(0xb0);
+            e.mem.set_u32(g, 0x0f00_e100);
+            e.mem.set_u32(g + 0x10, 1);
+            let p = e.mem.alloc(0x104);
+            e.mem.set_u32(p + 0x1c, kind);
+            e.mem.set_u32(g + 0xa8, p);
+            (g, p)
+        };
+        let (lit, lit_property) = geometry(&mut e, 8);
+        let (last, last_property) = geometry(&mut e, 12);
+        let (other, _) = geometry(&mut e, 13);
+        let node = e.mem.alloc(0xb0);
+        e.mem.set_u32(node, 0x0f00_e100);
+        e.mem.set_u32(node + 0x14, node);
+        let buffer = e.mem.alloc(0x10);
+        for (i, child) in [lit, 0, last, other].iter().enumerate() {
+            e.mem.set_u32(buffer + 4 * i as u32, *child);
+        }
+        e.mem.set_u32(node + 0xa0, buffer);
+        e.mem.set_u16(node + 0xa6, 4);
+        let words = args![node, 0x101u32, 0x7f80_0001u32, 1u32, 2.75f32, 0u32];
+        e.call(0x00b6_8770, &words);
+        let flags = calls(&e, SET_FLAG_00441130);
+        assert_eq!(
+            flags[..3],
+            [
+                vec![lit_property, 0xf, 0x101],
+                vec![lit_property, 0x10, 1],
+                vec![lit_property, 0x24, 0]
+            ]
+        );
+        assert_eq!(flags.len(), 6);
+        assert_eq!(
+            calls(&e, SET_VALUE_00B66700),
+            vec![
+                vec![lit_property, 0x7fc0_0001],
+                vec![last_property, 0x7fc0_0001]
+            ]
+        );
+        assert_eq!(e.mem.u32(lit_property + 0xe4), 2);
+        assert_eq!(e.mem.u32(last_property + 0xe4), 2);
+        // Without the first byte: no period, and "flag and byte" bits off.
+        e.call(
+            0x00b6_8770,
+            &args![lit, 0x100u32, 1.0f32, 0u32, 9.0f32, 1u32],
+        );
+        let flags = calls(&e, SET_FLAG_00441130);
+        assert_eq!(
+            flags[6..],
+            [
+                vec![lit_property, 0xf, 0x100],
+                vec![lit_property, 0x10, 0],
+                vec![lit_property, 0x24, 0]
+            ]
+        );
+        assert_eq!(e.mem.u32(lit_property + 0xe4), 2);
+    }
+
+    #[test]
+    fn fn_00b68c10_adds_the_water_fog_pass() {
+        let mut e = rig();
+        let list = e.mem.alloc(0x14);
+        e.register_double(CHECK_CREATE_WATER_FOG_PASSES_00BA97B0, move |e, a| {
+            if e.mem.u32(a[0] + 0x50) == 0 {
+                e.mem.set_u32(a[0] + 0x50, list);
+            }
+            Ret::default()
+        });
+        e.register(RENDER_PASS_ARRAY_ADD, |_, _| Ret::default());
+        let this = e.mem.alloc(0x104);
+        let geometry = e.mem.alloc(0xb0);
+        e.mem.set_f32(this + 0xe0, 0.5);
+        assert_eq!(e.call(0x00b6_8c10, &args![this, geometry]).u32(), 0);
+        assert!(calls(&e, CHECK_CREATE_WATER_FOG_PASSES_00BA97B0).is_empty());
+        let cases: [(u8, u8, u16, u32); 8] = [
+            (0, 0, 0, 0x2d8),
+            (0, 0, 0x200, 0x2de),
+            (0, 0x20, 0, 0x2e4),
+            (0, 0x20, 0x200, 0x2ea),
+            (2, 0, 0, 0x2d9),
+            (2, 0, 0x200, 0x2df),
+            (2, 0x20, 0, 0x2e5),
+            (2, 0x20, 0x200, 0x2eb),
+        ];
+        let state = e.mem.alloc(0x20);
+        e.mem.set_u32(geometry + 0x9c, state);
+        for (first, second, skin, expected) in cases {
+            e.mem.set_u32(this + 0xe0, 0x7fc0_0000);
+            e.mem.set_u8(this + 0x20, first);
+            e.mem.set_u8(this + 0x24, second);
+            e.mem.set_u16(state + 0x18, skin);
+            assert_eq!(e.call(0x00b6_8c10, &args![this, geometry]).u32(), list);
+            let added = calls(&e, RENDER_PASS_ARRAY_ADD).pop().unwrap();
+            assert_eq!(added, vec![list, geometry, expected, 1, 0, 0, 0, 0, 0]);
+        }
+        // A list with passes is answered as it is.
+        e.mem.set_u32(list + 0x10, 1);
+        e.mem.set_f32(this + 0xe0, 0.0);
+        assert_eq!(e.call(0x00b6_8c10, &args![this, geometry]).u32(), list);
+        assert_eq!(calls(&e, RENDER_PASS_ARRAY_ADD).len(), 8);
+    }
+
+    #[test]
+    fn fn_00b68ed0_saves_the_clamp_mode_set_and_four_words() {
+        let mut e = rig();
+        e.register(BASE_SAVE_BINARY_00BB7160, |_, _| Ret::default());
+        e.register(0x0f00_0300, |_, _| 4u32.into_ret());
+        e.register(0x0f00_0330, |_, _| Ret::default());
+        let mut slots = [0u32; 0xd];
+        slots[0x30 / 4] = 0x0f00_0330;
+        e.put_vtable(0x0f00_3300, &slots);
+        let file = e.mem.alloc(0x20);
+        e.mem.set_u32(file + 0xc, 0x0f00_0300);
+        let stream = e.mem.alloc(0x260);
+        e.mem.set_u32(stream, 0x0f00_3300);
+        e.mem.set_u32(stream + 0x250, file);
+        let this = e.mem.alloc(0x104);
+        e.mem.set_u32(this + 0xa4, 0xa4a4);
+        e.call(0x00b6_8ed0, &args![this, stream]);
+        assert_eq!(
+            calls(&e, BASE_SAVE_BINARY_00BB7160),
+            vec![vec![this, stream]]
+        );
+        assert_eq!(calls(&e, 0x0f00_0330), vec![vec![stream, 0xa4a4]]);
+        let written: Vec<u32> = calls(&e, 0x0f00_0300).iter().map(|w| w[1] - this).collect();
+        assert_eq!(written, vec![0xd8, 0xe0, 0xe4, 0xe8, 0xec]);
+        assert_eq!(e.mem.u32(file + 4), 20);
+    }
+
+    #[test]
+    fn get_viewer_strings_lists_textures_and_values() {
+        let mut e = rig();
+        e.mem.set_u32(CLASS_RTTI_011FA010, 0x0c1a_0000);
+        e.register(LIGHTING_GET_VIEWER_STRINGS, |_, _| Ret::default());
+        e.register(VIEWER_STRING, |_, a| {
+            (0x1000_0000 | (a[0] & 0xffff)).into_ret()
+        });
+        e.register(VIEWER_STRING_FLAG, |_, a| {
+            (0x2000_0000 | (a[0] & 0xffff)).into_ret()
+        });
+        e.register(VIEWER_STRING_FLOAT, |_, a| {
+            (0x3000_0000 | (a[0] & 0xfff) | (f32::from_bits(a[1]) as u32) << 12).into_ret()
+        });
+        e.register(VIEWER_STRING_INT, |_, a| {
+            (0x4000_0000 | (a[0] & 0xfff) | a[1] << 12).into_ret()
+        });
+        e.register(VIEWER_STRING_SHORT, |_, a| {
+            (0x5000_0000 | (a[0] & 0xfff) | a[1] << 12).into_ret()
+        });
+        e.register(VIEWER_STRING_TEXT, |_, a| {
+            (0x6000_0000 | (a[0] & 0xfff) | (a[1] & 0xff) << 12).into_ret()
+        });
+        e.register(VIEWER_STRING_OBJECT, |_, a| {
+            (0x7000_0000 | (a[0] & 0xfff) | (a[1] & 0xff) << 12).into_ret()
+        });
+        // Textures 0x..1 have a name (their low byte + 0x80), the others none.
+        e.register(GET_TEXTURE_NAME, |_, a| {
+            if a[0] & 1 != 0 {
+                (a[0] & 0xff) + 0x80
+            } else {
+                0
+            }
+            .into_ret()
+        });
+        let mut vt = [0u32; 0x45];
+        vt[0xe0 / 4] = 0x0f00_00e0;
+        vt[0x10c / 4] = 0x0f00_010c;
+        vt[0x110 / 4] = 0x0f00_0110;
+        e.put_vtable(0x0f00_4000, &vt);
+        e.register(0x0f00_00e0, |_, _| Ret::default());
+        e.register(0x0f00_010c, |_, _| 2.0f32.into_ret());
+        e.register(0x0f00_0110, |_, _| 3.0f32.into_ret());
+        let this = e.mem.alloc(0x104);
+        e.mem.set_u32(this, 0x0f00_4000);
+        let mut arrays = vec![];
+        for kind in 0..6u32 {
+            let array = e.mem.alloc(4 * 9);
+            e.mem.set_u32(this + 0xac + 4 * kind, array);
+            arrays.push(array);
+        }
+        e.mem.set_u32(arrays[0], 0x11);
+        e.mem.set_u32(arrays[1], 0x22);
+        e.mem.set_u32(arrays[1] + 4, 0x23);
+        e.mem.set_u32(arrays[4], 0x45);
+        e.mem.set_u32(this + 0x20, 0x0001_0081);
+        e.mem.set_f32(this + 0xe0, 1.0);
+        e.mem.set_u32(this + 0xe4, 7);
+        let data = e.mem.alloc(0x60);
+        for (offset, _) in TEX_EFFECT_LINES {
+            e.mem.set_f32(data + offset, offset as f32);
+        }
+        e.mem.set_u32(this + 0xdc, data);
+        let strings = strings(&mut e);
+        e.call(0x00b6_90d0, &args![this, strings]);
+        let mut expected = vec![
+            0x1000_0000,
+            0x6000_0000 | (LABEL_BASE_DIFF & 0xfff) | 0x91 << 12,
+            0x7000_0000 | (LABEL_BASE_NORMAL & 0xfff) | 0x22 << 12,
+            0x6000_0000 | (LABEL_MULTI_NORMAL & 0xfff) | 0xa3 << 12,
+            0x6000_0000 | (LABEL_ENVMAP & 0xfff) | 0xc5 << 12,
+            0x2000_0000 | (LABEL_CLAMP & 0xffff),
+            0x3000_1000 | (LABEL_REFRACTION_POWER & 0xfff),
+            0x4000_7000 | (LABEL_REFRACTION_PERIOD & 0xfff),
+            0x3000_2000 | (LABEL_SPECULAR_LOD & 0xfff),
+            0x3000_3000 | (LABEL_ENVMAP_LOD & 0xfff),
+            0x7000_0000 | (LABEL_TEX_EFFECT_DATA & 0xfff) | (data & 0xff) << 12,
+        ];
+        for (offset, label) in TEX_EFFECT_LINES {
+            expected.push(0x3000_0000 | (label & 0xfff) | offset << 12);
+        }
+        expected[0] |= 0x0c1a_0000 & 0xffff;
+        assert_eq!(slots(&e, strings), expected);
+        assert_eq!(calls(&e, STRINGS_ADD_0096A610).len(), 1);
+        // Landscape texturing: the layer lines.
+        e.mem.set_u32(this + 0x20, 0x4000);
+        e.mem.set_u16(this + 0xa8, 2);
+        e.mem.set_u32(this + 0xdc, 0);
+        let speculars = e.mem.alloc(9);
+        e.mem.set_u8(speculars + 1, 1);
+        e.mem.set_u32(this + 0xcc, speculars);
+        e.mem.set_u32(arrays[0] + 4, 0x13);
+        e.mem.set_u32(arrays[2] + 4, 0x34);
+        e.register(0x0f00_00e0, |_, _| 1u32.into_ret());
+        let strings = self::strings(&mut e);
+        e.call(0x00b6_90d0, &args![this, strings]);
+        assert_eq!(
+            slots(&e, strings),
+            vec![
+                // The label word 0x0c1a_0000 has no low 16 bits, so only the kind remains.
+                0x1000_0000,
+                0x2000_0000 | (LABEL_LANDSCAPE_TEXTURING & 0xffff),
+                0x5000_2000 | (LABEL_LANDSCAPE_TEXTURES & 0xfff),
+                0x6000_0000 | (LABEL_BASE_TEX & 0xfff) | 0x91 << 12,
+                0x7000_0000 | (LABEL_NORMAL_MAP & 0xfff) | 0x22 << 12,
+                0x6000_0000 | (LABEL_BASE_TEX & 0xfff) | 0x93 << 12,
+                0x6000_0000 | (LABEL_NORMAL_MAP & 0xfff) | 0xa3 << 12,
+                0x2000_0000 | (LABEL_SPECULAR & 0xffff),
+                0x7000_0000 | (LABEL_GLOW_MAP & 0xfff) | 0x34 << 12,
+                0x6000_0000 | (LABEL_ENVMAP & 0xfff) | 0xc5 << 12,
+            ]
+        );
     }
 }

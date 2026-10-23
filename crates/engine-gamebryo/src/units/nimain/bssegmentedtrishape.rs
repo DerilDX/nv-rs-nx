@@ -308,9 +308,278 @@ pub fn fn_00a87140(e: &mut Engine) -> Ptr<BSSegmentedTriShape> {
     this
 }
 
+/// `NiTriShape::RenderImmediate` (`00a745c0`, thiscall: renderer), the member copy
+/// (`00a744c0`, thiscall on the source: clone, cloning process), the base `SaveBinary`
+/// (`00a71d10`, thiscall: stream; the map names it `NiParticleMeshes::SaveBinary`, a folded
+/// name) and `NiTriShape::GetViewerStrings` (`00a74690`, thiscall: string array).
+const TRI_SHAPE_RENDER_IMMEDIATE: u32 = 0x00a7_45c0;
+const TRI_SHAPE_COPY_MEMBERS: u32 = 0x00a7_44c0;
+const BASE_SAVE_BINARY: u32 = 0x00a7_1d10;
+const TRI_SHAPE_GET_VIEWER_STRINGS: u32 = 0x00a7_4690;
+/// The string array's `SetSize` (`0096ad30`) and `SetAt` (`0096ae90`), `NiGetViewerString`
+/// (`00a7d330`) and `NiGetViewerString_ov8` (`00a7d510`, label and unsigned word).
+const STRING_ARRAY_SET_SIZE: u32 = 0x0096_ad30;
+const STRING_ARRAY_SET_AT: u32 = 0x0096_ae90;
+const VIEWER_STRING_NAME: u32 = 0x00a7_d330;
+const VIEWER_STRING_UNSIGNED: u32 = 0x00a7_d510;
+/// `"Num Segments"`, `"Enabled Segment"`, `"Disabled Segment"`, `"Empty Segments"`.
+const TEXT_NUM_SEGMENTS: u32 = 0x0109_e95c;
+const TEXT_ENABLED_SEGMENT: u32 = 0x0109_e94c;
+const TEXT_DISABLED_SEGMENT: u32 = 0x0109_e938;
+const TEXT_EMPTY_SEGMENTS: u32 = 0x0109_e928;
+
+/// One write through the stream's output (`NiStream` +0x250, write function at +0xc,
+/// cdecl: output, source, size, element sizes, element count; the answer added to the
+/// output's position at +4) of one element whose size is in the stack word `sizes`.
+fn stream_write(e: &mut Engine, stream: Ptr, source: u32, size: u32, sizes: u32) {
+    let output = e.mem.u32(stream.addr().wrapping_add(0x250));
+    let function = e.mem.u32(output.wrapping_add(0xc));
+    e.mem.set_u32(sizes, size);
+    let done = e
+        .call(function, &args![output, source, size, sizes, 1u32])
+        .u32();
+    let position = e.mem.u32(output.wrapping_add(4)).wrapping_add(done);
+    e.mem.set_u32(output.wrapping_add(4), position);
+}
+
+/// Adds the string word at `slot` at the array's end (`SetSize` when full, then `SetAt`).
+fn add_viewer_string(e: &mut Engine, strings: u32, slot: u32) {
+    let index = u32::from(e.mem.u16(strings + 0xa));
+    if index >= u32::from(e.mem.u16(strings + 8)) {
+        let grow = u32::from(e.mem.u16(strings + 0xe));
+        e.call(
+            STRING_ARRAY_SET_SIZE,
+            &args![strings, grow.wrapping_add(index)],
+        );
+    }
+    e.call(STRING_ARRAY_SET_AT, &args![strings, index, slot]);
+}
+
+// Translated from 00a87120 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSSegmentedTriShape::RenderImmediate` (Xbox PDB), `(renderer)`: the enabled segments
+/// are merged, then a jump to `NiTriShape::RenderImmediate` (`00a745c0`) with the same
+/// argument (the merge keeps `ECX`).
+pub fn bs_segmented_tri_shape_render_immediate(
+    e: &mut Engine,
+    this: Ptr<BSSegmentedTriShape>,
+    renderer: Ptr,
+) {
+    bs_segmented_tri_shape_merge_enabled_segments(e, this);
+    e.call(TRI_SHAPE_RENDER_IMMEDIATE, &args![this, renderer]);
+}
+
+// Translated from 00a871a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSSegmentedTriShape`'s member copy (unnamed in the engine map; thiscall on the source,
+/// `RET 8`: clone, cloning process): the base copy (`00a744c0`), the clone's old segments
+/// given back (`MemoryManager::Deallocate`, the pointer not cleared), then with source
+/// segments their count and changed flag and a new array (`count * 0x14` bytes, all ones
+/// when the product overflows) filled word by word; without them the clone gets no
+/// segments and a zero count.
+pub fn fn_00a871a0(
+    e: &mut Engine,
+    this: Ptr<BSSegmentedTriShape>,
+    clone: Ptr<BSSegmentedTriShape>,
+    cloning: Ptr,
+) {
+    e.call(TRI_SHAPE_COPY_MEMBERS, &args![this, clone, cloning]);
+    let old = e.get(clone, BSSegmentedTriShape::pSegments);
+    if old != 0 {
+        e.call(MEMORY_DEALLOCATE, &args![MEMORY_MANAGER, old]);
+    }
+    if e.get(this, BSSegmentedTriShape::pSegments) == 0 {
+        e.set(clone, BSSegmentedTriShape::pSegments, 0);
+        e.set(clone, BSSegmentedTriShape::iNumSegments, 0);
+        return;
+    }
+    let count = e.get(this, BSSegmentedTriShape::iNumSegments);
+    e.set(clone, BSSegmentedTriShape::iNumSegments, count);
+    let changed = e.get(this, BSSegmentedTriShape::bSegmentsChanged);
+    e.set(clone, BSSegmentedTriShape::bSegmentsChanged, changed);
+    let count = e.get(this, BSSegmentedTriShape::iNumSegments);
+    let bytes = count.checked_mul(0x14).unwrap_or(u32::MAX);
+    let segments = e.call(MEMORY_ALLOCATE, &args![MEMORY_MANAGER, bytes]).u32();
+    e.set(clone, BSSegmentedTriShape::pSegments, segments);
+    let mut index = 0u32;
+    let mut offset = 0u32;
+    while index < e.get(this, BSSegmentedTriShape::iNumSegments) {
+        let source = e
+            .get(this, BSSegmentedTriShape::pSegments)
+            .wrapping_add(offset);
+        let target = e
+            .get(clone, BSSegmentedTriShape::pSegments)
+            .wrapping_add(offset);
+        for word in [0u32, 4, 8, 0xc, 0x10] {
+            let value = e.mem.u32(source.wrapping_add(word));
+            e.mem.set_u32(target.wrapping_add(word), value);
+        }
+        index = index.wrapping_add(1);
+        offset = offset.wrapping_add(0x14);
+    }
+}
+
+// Translated from 00a87340 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSSegmentedTriShape::CreateClone` (Xbox PDB; thiscall, `RET 4`: cloning process): a
+/// 0xd0-byte block (`operator new`) constructed as an `NiTriShape` (`00a744a0`) with the
+/// class's vtable, no segments, count 0 and not changed, then the members copied into it
+/// ([`fn_00a871a0`]). When the allocation fails the copy still runs, into null, and the
+/// answer is null.
+pub fn bs_segmented_tri_shape_create_clone(
+    e: &mut Engine,
+    this: Ptr<BSSegmentedTriShape>,
+    cloning: Ptr,
+) -> Ptr<BSSegmentedTriShape> {
+    let block = e.call(OPERATOR_NEW, &args![0xd0u32]).u32();
+    if block == 0 {
+        fn_00a871a0(e, this, Ptr::new(0), cloning);
+        return Ptr::new(0);
+    }
+    let clone = Ptr::<BSSegmentedTriShape>::new(block);
+    e.call(TRI_SHAPE_CONSTRUCTOR, &args![clone]);
+    e.mem.set_u32(block, BS_SEGMENTED_TRI_SHAPE_VTABLE);
+    e.set(clone, BSSegmentedTriShape::pSegments, 0);
+    e.set(clone, BSSegmentedTriShape::iNumSegments, 0);
+    e.set(clone, BSSegmentedTriShape::bSegmentsChanged, 0);
+    fn_00a871a0(e, this, clone, cloning);
+    clone
+}
+
+// Translated from 00a87520 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSSegmentedTriShape::SaveBinary` (Xbox PDB; thiscall, `RET 4`; the counterpart of
+/// [`bs_segmented_tri_shape_load_binary`]): the base `SaveBinary` (`00a71d10`), the segment
+/// count (4 bytes), then per segment a zero byte (the low byte of the argument's stack
+/// word; its element size in a local word), the start index and the primitive count (4
+/// bytes each, the element size in the argument word).
+pub fn bs_segmented_tri_shape_save_binary(
+    e: &mut Engine,
+    this: Ptr<BSSegmentedTriShape>,
+    stream: Ptr,
+) {
+    e.call(BASE_SAVE_BINARY, &args![this, stream]);
+    // The local word (+0) and the argument word (+4).
+    e.with_stack(8, |e, frame| {
+        let local = frame.addr();
+        let argument = frame.addr() + 4;
+        e.mem.set_u32(argument, stream.addr());
+        stream_write(e, stream, this.addr() + 0xc8, 4, argument);
+        let mut index = 0u32;
+        let mut offset = 0u32;
+        while index < e.get(this, BSSegmentedTriShape::iNumSegments) {
+            e.mem.set_u8(argument, 0);
+            stream_write(e, stream, argument, 1, local);
+            let segments = e.get(this, BSSegmentedTriShape::pSegments);
+            stream_write(e, stream, segments.wrapping_add(offset), 4, argument);
+            let segments = e.get(this, BSSegmentedTriShape::pSegments);
+            stream_write(
+                e,
+                stream,
+                segments.wrapping_add(offset).wrapping_add(4),
+                4,
+                argument,
+            );
+            index = index.wrapping_add(1);
+            offset = offset.wrapping_add(0x14);
+        }
+    });
+}
+
+// Translated from 00a87620 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSSegmentedTriShape::GetViewerStrings` (Xbox PDB; thiscall, `RET 4`):
+/// `NiTriShape::GetViewerStrings` (`00a74690`), the class name (the first word of
+/// `ms_RTTI`, `011f5b40`) and `"Num Segments"`; with a segment array, each segment with
+/// primitives as `"Enabled Segment"` or `"Disabled Segment"` with its index, then
+/// `"Empty Segments"` with the number of segments without primitives. Each string is added
+/// through `SetSize`/`SetAt`; the segment strings are held in a local word, the others in
+/// the argument word (which holds the running segment offset in between).
+pub fn bs_segmented_tri_shape_get_viewer_strings(
+    e: &mut Engine,
+    this: Ptr<BSSegmentedTriShape>,
+    strings: Ptr,
+) {
+    let list = strings.addr();
+    e.call(TRI_SHAPE_GET_VIEWER_STRINGS, &args![this, strings]);
+    // The empty count (+0), the segment string (+4) and the argument word (+8).
+    e.with_stack(0xc, |e, frame| {
+        let empty = frame.addr();
+        let local = frame.addr() + 4;
+        let argument = frame.addr() + 8;
+        let class_name = e.global::<u32>(BS_SEGMENTED_TRI_SHAPE_RTTI);
+        let text = e.call(VIEWER_STRING_NAME, &args![class_name]).u32();
+        e.mem.set_u32(argument, text);
+        add_viewer_string(e, list, argument);
+        let count = e.get(this, BSSegmentedTriShape::iNumSegments);
+        let text = e
+            .call(VIEWER_STRING_UNSIGNED, &args![TEXT_NUM_SEGMENTS, count])
+            .u32();
+        e.mem.set_u32(argument, text);
+        add_viewer_string(e, list, argument);
+        if e.get(this, BSSegmentedTriShape::pSegments) == 0 {
+            return;
+        }
+        e.mem.set_u32(empty, 0);
+        let mut index = 0u32;
+        if e.get(this, BSSegmentedTriShape::iNumSegments) != 0 {
+            e.mem.set_u32(argument, 0);
+            loop {
+                let current = e
+                    .mem
+                    .u32(argument)
+                    .wrapping_add(e.get(this, BSSegmentedTriShape::pSegments));
+                if e.mem.u32(current.wrapping_add(4)) == 0 {
+                    let count = e.mem.u32(empty).wrapping_add(1);
+                    e.mem.set_u32(empty, count);
+                } else {
+                    let label = if e.mem.u8(current.wrapping_add(8)) != 0 {
+                        TEXT_ENABLED_SEGMENT
+                    } else {
+                        TEXT_DISABLED_SEGMENT
+                    };
+                    let text = e.call(VIEWER_STRING_UNSIGNED, &args![label, index]).u32();
+                    e.mem.set_u32(local, text);
+                    add_viewer_string(e, list, local);
+                }
+                let offset = e.mem.u32(argument).wrapping_add(0x14);
+                e.mem.set_u32(argument, offset);
+                index = index.wrapping_add(1);
+                if index >= e.get(this, BSSegmentedTriShape::iNumSegments) {
+                    break;
+                }
+            }
+        }
+        let count = e.mem.u32(empty);
+        let text = e
+            .call(VIEWER_STRING_UNSIGNED, &args![TEXT_EMPTY_SEGMENTS, count])
+            .u32();
+        e.mem.set_u32(argument, text);
+        add_viewer_string(e, list, argument);
+    });
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(
+            0x00a8_7120,
+            bs_segmented_tri_shape_render_immediate(Ptr<BSSegmentedTriShape>, Ptr)
+        ),
+        entry!(
+            0x00a8_71a0,
+            fn_00a871a0(Ptr<BSSegmentedTriShape>, Ptr<BSSegmentedTriShape>, Ptr)
+        ),
+        entry!(
+            0x00a8_7340,
+            bs_segmented_tri_shape_create_clone(
+                Ptr<BSSegmentedTriShape>,
+                Ptr,
+            ) -> Ptr<BSSegmentedTriShape>
+        ),
+        entry!(
+            0x00a8_7520,
+            bs_segmented_tri_shape_save_binary(Ptr<BSSegmentedTriShape>, Ptr)
+        ),
+        entry!(
+            0x00a8_7620,
+            bs_segmented_tri_shape_get_viewer_strings(Ptr<BSSegmentedTriShape>, Ptr)
+        ),
         entry!(0x00a86fe0, bs_segmented_tri_shape_get_rtti() -> Ptr),
         entry!(
             0x00a86ff0,
@@ -580,5 +849,213 @@ mod tests {
         assert_eq!(calls_at(&e, TRI_SHAPE_CONSTRUCTOR), vec![vec![made]]);
         e.register(OPERATOR_NEW, |_, _| Ret::default());
         assert_eq!(e.call(0x00a87140, &args![]).u32(), 0);
+    }
+}
+
+#[cfg(test)]
+mod n014_tests {
+    use super::*;
+
+    fn calls_to(e: &Engine, addr: u32) -> Vec<Vec<u32>> {
+        e.call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|c| c.0 == addr)
+            .map(|c| c.1.clone())
+            .collect()
+    }
+
+    /// A shape with `count` segments whose words are `0x100 * segment + word index`.
+    fn shape(e: &mut Engine, count: u32) -> u32 {
+        let this = e.mem.alloc(0xd0);
+        let segments = e.mem.alloc(0x14 * count.max(1));
+        for i in 0..count * 5 {
+            e.mem.set_u32(segments + 4 * i, 0x100 * (i / 5) + i % 5);
+        }
+        e.mem.set_u32(this + 0xc4, segments);
+        e.mem.set_u32(this + 0xc8, count);
+        this
+    }
+
+    #[test]
+    fn render_immediate_merges_then_renders() {
+        let mut e = Engine::new();
+        e.register(TRI_SHAPE_RENDER_IMMEDIATE, |e, a| {
+            // The merge ran first: the changed flag is clear.
+            assert_eq!(e.mem.u8(a[0] + 0xcc), 0);
+            Ret::default()
+        });
+        let this = shape(&mut e, 1);
+        e.mem.set_u8(this + 0xcc, 1);
+        e.call_log = Some(vec![]);
+        e.call(0x00a8_7120, &args![this, 0x5000u32]);
+        assert_eq!(
+            calls_to(&e, TRI_SHAPE_RENDER_IMMEDIATE),
+            vec![vec![this, 0x5000]]
+        );
+    }
+
+    #[test]
+    fn copy_members_copies_the_segments_or_clears_them() {
+        let mut e = Engine::new();
+        e.register(TRI_SHAPE_COPY_MEMBERS, |_, _| Ret::default());
+        e.register(MEMORY_DEALLOCATE, |_, _| Ret::default());
+        e.register(MEMORY_ALLOCATE, |e, a| e.mem.alloc(a[1]).into_ret());
+        let this = shape(&mut e, 2);
+        e.mem.set_u8(this + 0xcc, 1);
+        let clone = shape(&mut e, 1);
+        let old = e.mem.u32(clone + 0xc4);
+        e.call_log = Some(vec![]);
+        e.call(0x00a8_71a0, &args![this, clone, 0x6000u32]);
+        assert_eq!(
+            calls_to(&e, TRI_SHAPE_COPY_MEMBERS),
+            vec![vec![this, clone, 0x6000]]
+        );
+        assert_eq!(
+            calls_to(&e, MEMORY_DEALLOCATE),
+            vec![vec![MEMORY_MANAGER, old]]
+        );
+        assert_eq!(
+            calls_to(&e, MEMORY_ALLOCATE),
+            vec![vec![MEMORY_MANAGER, 0x28]]
+        );
+        let copy = e.mem.u32(clone + 0xc4);
+        assert_ne!(copy, old);
+        assert_eq!(e.mem.u32(clone + 0xc8), 2);
+        assert_eq!(e.mem.u8(clone + 0xcc), 1);
+        let source = e.mem.u32(this + 0xc4);
+        assert_eq!(e.mem.bytes(copy, 0x28), e.mem.bytes(source, 0x28));
+        // A source without segments.
+        e.mem.set_u32(this + 0xc4, 0);
+        e.call(0x00a8_71a0, &args![this, clone, 0x6000u32]);
+        assert_eq!((e.mem.u32(clone + 0xc4), e.mem.u32(clone + 0xc8)), (0, 0));
+        assert_eq!(calls_to(&e, MEMORY_DEALLOCATE).len(), 2);
+    }
+
+    #[test]
+    fn create_clone_builds_an_empty_shape_and_copies_into_it() {
+        let mut e = Engine::new();
+        e.register(TRI_SHAPE_CONSTRUCTOR, |_, _| Ret::default());
+        e.register(TRI_SHAPE_COPY_MEMBERS, |_, _| Ret::default());
+        e.register(MEMORY_ALLOCATE, |e, a| e.mem.alloc(a[1]).into_ret());
+        e.register(OPERATOR_NEW, |e, a| {
+            let block = e.mem.alloc(a[0]);
+            e.mem.set_u32(block + 0xc4, 0);
+            block.into_ret()
+        });
+        let this = shape(&mut e, 1);
+        e.call_log = Some(vec![]);
+        let clone = e.call(0x00a8_7340, &args![this, 0x6000u32]).u32();
+        assert_eq!(calls_to(&e, OPERATOR_NEW), vec![vec![0xd0]]);
+        assert_eq!(calls_to(&e, TRI_SHAPE_CONSTRUCTOR), vec![vec![clone]]);
+        assert_eq!(e.mem.u32(clone), BS_SEGMENTED_TRI_SHAPE_VTABLE);
+        assert_eq!(e.mem.u32(clone + 0xc8), 1);
+        assert_eq!(
+            calls_to(&e, TRI_SHAPE_COPY_MEMBERS),
+            vec![vec![this, clone, 0x6000]]
+        );
+        // A failed allocation still copies, into null.
+        e.register(OPERATOR_NEW, |_, _| Ret::default());
+        e.mem.set_u32(this + 0xc4, 0);
+        e.mem.map(0, 0x100);
+        assert_eq!(e.call(0x00a8_7340, &args![this, 0x6000u32]).u32(), 0);
+        assert_eq!(
+            calls_to(&e, TRI_SHAPE_COPY_MEMBERS)[1],
+            vec![this, 0, 0x6000]
+        );
+    }
+
+    #[test]
+    fn save_binary_writes_the_count_and_each_segment() {
+        const WRITE: u32 = 0x0380_0000;
+        let mut e = Engine::new();
+        e.register(BASE_SAVE_BINARY, |_, _| Ret::default());
+        e.register(WRITE, |e, a| {
+            assert_eq!((e.mem.u32(a[3]), a[4]), (a[2], 1));
+            let value = if a[2] == 1 {
+                u32::from(e.mem.u8(a[1]))
+            } else {
+                e.mem.u32(a[1])
+            };
+            (value << 8 | a[2]).into_ret()
+        });
+        let output = e.mem.alloc(0x10);
+        e.mem.set_u32(output + 0xc, WRITE);
+        let stream = e.mem.alloc(0x260);
+        e.mem.set_u32(stream + 0x250, output);
+        let this = shape(&mut e, 2);
+        e.call_log = Some(vec![]);
+        e.call(0x00a8_7520, &args![this, stream]);
+        assert_eq!(calls_to(&e, BASE_SAVE_BINARY), vec![vec![this, stream]]);
+        let segments = e.mem.u32(this + 0xc4);
+        let writes: Vec<(u32, u32)> = calls_to(&e, WRITE).iter().map(|c| (c[1], c[2])).collect();
+        assert_eq!(writes.len(), 7);
+        assert_eq!(writes[0], (this + 0xc8, 4));
+        assert_eq!(writes[1].1, 1);
+        assert_eq!(writes[2], (segments, 4));
+        assert_eq!(writes[3], (segments + 4, 4));
+        assert_eq!(writes[5], (segments + 0x14, 4));
+        assert_eq!(writes[6], (segments + 0x18, 4));
+    }
+
+    #[test]
+    fn get_viewer_strings_lists_segments_and_counts_empty_ones() {
+        let mut e = Engine::new();
+        e.mem.map(BS_SEGMENTED_TRI_SHAPE_RTTI, 4);
+        e.mem.set_u32(BS_SEGMENTED_TRI_SHAPE_RTTI, 0x0109_0000);
+        e.register(TRI_SHAPE_GET_VIEWER_STRINGS, |_, _| Ret::default());
+        e.register(VIEWER_STRING_NAME, |_, a| (a[0] + 1).into_ret());
+        e.register(VIEWER_STRING_UNSIGNED, |_, a| (a[0] + a[1]).into_ret());
+        e.register(STRING_ARRAY_SET_SIZE, |e, a| {
+            let base = e.mem.alloc(4 * a[1]);
+            let old = e.mem.u32(a[0] + 4);
+            for i in 0..u32::from(e.mem.u16(a[0] + 0xa)) {
+                let value = e.mem.u32(old + 4 * i);
+                e.mem.set_u32(base + 4 * i, value);
+            }
+            e.mem.set_u32(a[0] + 4, base);
+            e.mem.set_u16(a[0] + 8, a[1] as u16);
+            Ret::default()
+        });
+        e.register(STRING_ARRAY_SET_AT, |e, a| {
+            let base = e.mem.u32(a[0] + 4);
+            let value = e.mem.u32(a[2]);
+            e.mem.set_u32(base + 4 * a[1], value);
+            e.mem.set_u16(a[0] + 0xa, a[1] as u16 + 1);
+            Ret::default()
+        });
+        let strings = e.mem.alloc(0x10);
+        e.mem.set_u16(strings + 0xe, 4);
+        let this = shape(&mut e, 3);
+        let segments = e.mem.u32(this + 0xc4);
+        // Segment 0 enabled, 1 empty, 2 disabled.
+        e.mem.set_u8(segments + 8, 1);
+        e.mem.set_u32(segments + 0x14 + 4, 0);
+        e.mem.set_u8(segments + 0x28 + 8, 0);
+        e.call_log = Some(vec![]);
+        e.call(0x00a8_7620, &args![this, strings]);
+        assert_eq!(
+            calls_to(&e, TRI_SHAPE_GET_VIEWER_STRINGS),
+            vec![vec![this, strings]]
+        );
+        let base = e.mem.u32(strings + 4);
+        let shown: Vec<u32> = (0..u32::from(e.mem.u16(strings + 0xa)))
+            .map(|i| e.mem.u32(base + 4 * i))
+            .collect();
+        assert_eq!(
+            shown,
+            vec![
+                0x0109_0001,
+                TEXT_NUM_SEGMENTS + 3,
+                TEXT_ENABLED_SEGMENT,
+                TEXT_DISABLED_SEGMENT + 2,
+                TEXT_EMPTY_SEGMENTS + 1
+            ]
+        );
+        // Without a segment array only the first two strings.
+        e.mem.set_u32(this + 0xc4, 0);
+        e.call(0x00a8_7620, &args![this, strings]);
+        assert_eq!(e.mem.u16(strings + 0xa), 7);
     }
 }

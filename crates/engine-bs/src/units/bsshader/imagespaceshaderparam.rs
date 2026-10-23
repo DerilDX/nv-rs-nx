@@ -400,9 +400,46 @@ pub fn fn_00b8aaf0(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
     this
 }
 
+// Translated from 00b8a760 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`thiscall`, five words: an index and four floats): the four
+/// floats into vertex constant `index + 3` (the buffer at +0x3c, 16 bytes each; the code
+/// indexes `(index * 4 + 0xc) * 4`), each through `FLD`/`FSTP`.
+pub fn fn_00b8a760(e: &mut Engine, this: Ptr, index: u32, x: f32, y: f32, z: f32, w: f32) {
+    let buffer = e.mem.u32(this.addr() + 0x3c);
+    let slot = buffer.wrapping_add(index.wrapping_mul(4).wrapping_add(0xc).wrapping_mul(4));
+    e.mem.set_u32(slot, x87_quiet_bits(x.to_bits()));
+    e.mem
+        .set_u32(slot.wrapping_add(4), x87_quiet_bits(y.to_bits()));
+    e.mem
+        .set_u32(slot.wrapping_add(8), x87_quiet_bits(z.to_bits()));
+    e.mem
+        .set_u32(slot.wrapping_add(0xc), x87_quiet_bits(w.to_bits()));
+}
+
+// Translated from 00b8a860 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`thiscall`, two words: an index and the address of four floats):
+/// the four floats into pixel constant `index` (the buffer at +0x44, 16 bytes each). The code
+/// reads the second, third and fourth floats first (each through `FLD`/`FSTP` into a stack
+/// temporary), then copies the first and then the three temporaries (`FLD`/`FSTP` again).
+pub fn fn_00b8a860(e: &mut Engine, this: Ptr, index: u32, source: u32) {
+    let second = x87_quiet_bits(e.mem.u32(source.wrapping_add(4)));
+    let buffer = e.mem.u32(this.addr() + 0x44);
+    let third = x87_quiet_bits(e.mem.u32(source.wrapping_add(8)));
+    let fourth = x87_quiet_bits(e.mem.u32(source.wrapping_add(0xc)));
+    let slot = buffer.wrapping_add(index.wrapping_mul(16));
+    let first = x87_quiet_bits(e.mem.u32(source));
+    e.mem.set_u32(slot, first);
+    e.mem.set_u32(slot.wrapping_add(4), x87_quiet_bits(second));
+    e.mem.set_u32(slot.wrapping_add(8), x87_quiet_bits(third));
+    e.mem
+        .set_u32(slot.wrapping_add(0xc), x87_quiet_bits(fourth));
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x00b8_a760, fn_00b8a760(Ptr, u32, f32, f32, f32, f32)),
+        entry!(0x00b8_a860, fn_00b8a860(Ptr, u32, u32)),
         entry!(
             0x00b8_ab10,
             image_space_shader_param_init_constant_map(Ptr, u32, u32)
@@ -795,5 +832,54 @@ mod shader_param_tests {
         assert_eq!(e.mem.u32(this + 0x84), 0);
         assert_eq!(calls_to(&e, NI_MALLOC), vec![vec![0x94]]);
         assert_eq!(calls_to(&e, MEMSET), vec![vec![0x8800, 0, 0x94]]);
+    }
+}
+
+#[cfg(test)]
+mod n013_tests {
+    use super::*;
+
+    #[test]
+    fn fn_00b8a760_writes_vertex_constant_index_plus_3() {
+        let mut e = Engine::new();
+        let this = e.mem.alloc(0x80);
+        let buffer = e.mem.alloc(0x100);
+        e.mem.set_u32(this + 0x3c, buffer);
+        e.call(
+            0x00b8_a760,
+            &args![
+                this,
+                1u32,
+                1.5f32,
+                -2.0f32,
+                f32::from_bits(0x7f80_0001),
+                4.0f32
+            ],
+        );
+        let slot = buffer + 0x40;
+        assert_eq!(e.mem.f32(slot), 1.5);
+        assert_eq!(e.mem.f32(slot + 4), -2.0);
+        // A signalling NaN comes out quiet.
+        assert_eq!(e.mem.u32(slot + 8), 0x7fc0_0001);
+        assert_eq!(e.mem.f32(slot + 0xc), 4.0);
+    }
+
+    #[test]
+    fn fn_00b8a860_copies_four_floats_to_pixel_constant_index() {
+        let mut e = Engine::new();
+        let this = e.mem.alloc(0x80);
+        let buffer = e.mem.alloc(0x100);
+        e.mem.set_u32(this + 0x44, buffer);
+        let source = e.mem.alloc(0x10);
+        for (i, v) in [0.25f32, 0.5, 0.75, 1.0].iter().enumerate() {
+            e.mem.set_f32(source + 4 * i as u32, *v);
+        }
+        e.mem.set_u32(source + 4, 0xff80_0002);
+        e.call(0x00b8_a860, &args![this, 2u32, source]);
+        let slot = buffer + 0x20;
+        assert_eq!(e.mem.f32(slot), 0.25);
+        assert_eq!(e.mem.u32(slot + 4), 0xffc0_0002);
+        assert_eq!(e.mem.f32(slot + 8), 0.75);
+        assert_eq!(e.mem.f32(slot + 0xc), 1.0);
     }
 }

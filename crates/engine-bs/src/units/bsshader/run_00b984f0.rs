@@ -142,9 +142,25 @@ pub fn fn_00b988a0(_e: &mut Engine, first: u32, second: u32) -> i32 {
     }
 }
 
+/// The counter word `fn_00b985f0` takes from (`011ffa1c`, index 0x11 of the counters at
+/// `011ff9d8`) and the colour-write setter it then calls (`00b983d0`, unit `run_00b98380`;
+/// `cdecl`, four words).
+const COUNTER_011FFA1C: u32 = 0x011f_fa1c;
+const COLOR_WRITE_123_00B983D0: u32 = 0x00b9_83d0;
+
+// Translated from 00b985f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`cdecl`, one word; `fn_00b98610`'s setter for render state 0xbe):
+/// takes the word from the counter at `011ffa1c`, then calls `00b983d0` with four zero words.
+pub fn fn_00b985f0(e: &mut Engine, value: u32) {
+    let counter = e.mem.u32(COUNTER_011FFA1C);
+    e.mem.set_u32(COUNTER_011FFA1C, counter.wrapping_sub(value));
+    e.call(COLOR_WRITE_123_00B983D0, &args![0u32, 0u32, 0u32, 0u32]);
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x00b9_85f0, fn_00b985f0(u32)),
         entry!(0x00b9_88c0, fn_00b988c0(Ptr) -> Ptr),
         entry!(0x00b9_84f0, fn_00b984f0(u8, i32)),
         entry!(0x00b9_8540, fn_00b98540(u8, i32)),
@@ -272,5 +288,23 @@ mod tests {
         assert_eq!(e.mem.u32(this + 0xc), 0);
         // +0x10 is not touched.
         assert_eq!(e.mem.u32(this + 0x10), 0xdead_beef);
+    }
+}
+
+#[cfg(test)]
+mod n013_tests {
+    use super::*;
+
+    #[test]
+    fn fn_00b985f0_takes_from_the_counter_then_resets_the_masks() {
+        let mut e = Engine::new();
+        e.map(0x011f_f000, 0x1000);
+        e.set_global(COUNTER_011FFA1C, 5u32);
+        e.register(COLOR_WRITE_123_00B983D0, |_, _| Ret::default());
+        e.call_log = Some(vec![]);
+        e.call(0x00b9_85f0, &args![7u32]);
+        assert_eq!(e.global::<u32>(COUNTER_011FFA1C), 0xffff_fffe);
+        let log = e.call_log.take().unwrap();
+        assert!(log.contains(&(COLOR_WRITE_123_00B983D0, vec![0, 0, 0, 0])));
     }
 }

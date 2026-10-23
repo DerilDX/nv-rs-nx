@@ -3,6 +3,7 @@
 
 #[allow(unused_imports)]
 use crate::prelude::*;
+use crate::types::NiTArray;
 
 /// `NiTriShape::ms_RTTI` (the class's `NiRTTI` record).
 const NI_TRI_SHAPE_RTTI: u32 = 0x011f_4a40;
@@ -128,6 +129,78 @@ pub fn ni_tri_shape_create_clone(e: &mut Engine, this: Ptr, cloning: Ptr) -> Ptr
     Ptr::new(block)
 }
 
+/// `NiGeometry::m_spModelData` (Xbox PDB) +0xB8 and the geometry data's vertex array
+/// (`NiGeometryData::m_pkVertex`, +0x20, twelve bytes per vertex).
+const MODEL_DATA: u32 = 0xb8;
+const DATA_VERTICES: u32 = 0x20;
+/// `NiTriShapeData::GetTriList` (`00a7b850`, thiscall, no arguments): the 16-bit index list.
+const NI_TRI_SHAPE_DATA_GET_TRI_LIST: u32 = 0x00a7_b850;
+/// `NiTriBasedGeom::GetViewerStrings` (`00a897c0`, thiscall, the strings array).
+const NI_TRI_BASED_GEOM_GET_VIEWER_STRINGS: u32 = 0x00a8_97c0;
+/// `NiGetViewerString` (cdecl, the class name), and the strings array's `SetSize`
+/// (thiscall, the new size) and `SetAt` (thiscall, the index and the address of the
+/// element).
+const VIEWER_STRING_NAME: u32 = 0x00a7_d330;
+const STRING_ARRAY_SET_SIZE: u32 = 0x0096_ad30;
+const STRING_ARRAY_SET_AT: u32 = 0x0096_ae90;
+
+// Translated from 00a74560 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiTriShape::GetModelTriangle` (Xbox PDB; thiscall, `RET 0x10`: the triangle and three
+/// out pointers): with the model data's vertex array and its index list
+/// (`NiTriShapeData::GetTriList`), the triangle's three indices are list entries
+/// `3 * triangle`, then one and two more, each position kept to 16 bits; each out pointer
+/// gets the address of its vertex (twelve bytes per vertex).
+pub fn ni_tri_shape_get_model_triangle(
+    e: &mut Engine,
+    this: Ptr,
+    triangle: u32,
+    first: u32,
+    second: u32,
+    third: u32,
+) {
+    let data = e.mem.u32(this.addr() + MODEL_DATA);
+    let vertices = e.mem.u32(data + DATA_VERTICES);
+    let list = e.call(NI_TRI_SHAPE_DATA_GET_TRI_LIST, &args![data]).u32();
+    let start = triangle.wrapping_mul(3) as u16;
+    for (step, out) in [(0u16, first), (1, second), (2, third)] {
+        let position = u32::from(start.wrapping_add(step));
+        let index = u32::from(e.mem.u16(list.wrapping_add(position * 2)));
+        e.mem.set_u32(out, vertices.wrapping_add(index * 12));
+    }
+}
+
+// Translated from 00a745c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiTriShape::RenderImmediate` (Xbox PDB; thiscall, `RET 4`): `NiGeometry::RenderImmediate`
+/// (`00a80610`), then when the renderer's word +0x200 is 1 or 2 and its byte +0x208 is 1,
+/// the renderer's slot +0x1ac with `this`.
+pub fn ni_tri_shape_render_immediate(e: &mut Engine, this: Ptr, renderer: Ptr) {
+    e.call(NI_GEOMETRY_RENDER_IMMEDIATE, &args![this, renderer]);
+    let mode = e.mem.u32(renderer.addr() + 0x200);
+    if (mode == 1 || mode == 2) && e.mem.u8(renderer.addr() + 0x208) == 1 {
+        e.vcall(renderer.addr(), 0x1ac, &args![this]);
+    }
+}
+
+// Translated from 00a74690 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiTriShape::GetViewerStrings` (Xbox PDB; thiscall, `RET 4`):
+/// `NiTriBasedGeom::GetViewerStrings`, then the class name (the first word of `ms_RTTI`),
+/// held in the argument's stack word and added at the array's end (`SetSize` to the size
+/// plus the grow-by step when full, then `SetAt`).
+pub fn ni_tri_shape_get_viewer_strings(e: &mut Engine, this: Ptr, strings: Ptr<NiTArray>) {
+    e.call(NI_TRI_BASED_GEOM_GET_VIEWER_STRINGS, &args![this, strings]);
+    let class_name = e.global::<u32>(NI_TRI_SHAPE_RTTI);
+    let text = e.call(VIEWER_STRING_NAME, &args![class_name]).u32();
+    e.with_stack(4, |e, slot| {
+        e.mem.set_u32(slot.addr(), text);
+        let index = u32::from(e.get(strings, NiTArray::m_usSize));
+        if index >= u32::from(e.get(strings, NiTArray::m_usMaxSize)) {
+            let grow = u32::from(e.get(strings, NiTArray::m_usGrowBy));
+            e.call(STRING_ARRAY_SET_SIZE, &args![strings, grow + index]);
+        }
+        e.call(STRING_ARRAY_SET_AT, &args![strings, index, slot]);
+    });
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -140,6 +213,15 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00a74520, ni_tri_shape_get_rtti() -> Ptr),
         entry!(0x00a74530, fn_00a74530(Ptr, u32) -> Ptr),
         entry!(0x00a7_4480, ni_tri_shape_ni_tri_shape_ov2(Ptr, Ptr) -> Ptr),
+        entry!(
+            0x00a7_4560,
+            ni_tri_shape_get_model_triangle(Ptr, u32, u32, u32, u32)
+        ),
+        entry!(0x00a7_45c0, ni_tri_shape_render_immediate(Ptr, Ptr)),
+        entry!(
+            0x00a7_4690,
+            ni_tri_shape_get_viewer_strings(Ptr, Ptr<NiTArray>)
+        ),
     ]
 }
 
@@ -288,6 +370,108 @@ mod batch_b011_tests {
         assert_eq!(
             calls(&e, COPY_MEMBERS_00A9B140),
             vec![vec![0x5000, 0, 0x77]]
+        );
+    }
+}
+
+#[cfg(test)]
+mod n020_tests {
+    use super::*;
+
+    const RENDERER_VTABLE: u32 = 0x0710_0000;
+    const RENDER_DOUBLE: u32 = 0x0720_0000;
+
+    fn calls_to(e: &Engine, callee: u32) -> Vec<Vec<u32>> {
+        e.call_log
+            .iter()
+            .flatten()
+            .filter(|(a, _)| *a == callee)
+            .map(|(_, w)| w.clone())
+            .collect()
+    }
+
+    #[test]
+    fn model_triangle_reads_three_list_entries_in_sixteen_bits() {
+        let mut e = Engine::new();
+        let list = e.mem.alloc(0x2_0000);
+        e.mem.set_u16(list + 2 * 6, 1);
+        e.mem.set_u16(list + 2 * 7, 2);
+        e.mem.set_u16(list + 2 * 8, 3);
+        // 3 * 0x5556 = 0x10002: the position wraps to 2, 3, 4.
+        e.mem.set_u16(list + 2 * 2, 9);
+        e.mem.set_u16(list + 2 * 3, 10);
+        e.mem.set_u16(list + 2 * 4, 0xffff);
+        e.register_double(NI_TRI_SHAPE_DATA_GET_TRI_LIST, move |_, _| list.into_ret());
+        let data = e.mem.alloc(0x40);
+        e.mem.set_u32(data + DATA_VERTICES, 0x0100_0000);
+        let this = e.mem.alloc(0xc4);
+        e.mem.set_u32(this + MODEL_DATA, data);
+        let out = e.mem.alloc(12);
+        e.call_log = Some(vec![]);
+        e.call(0x00a7_4560, &args![this, 2u32, out, out + 4, out + 8]);
+        assert_eq!(
+            calls_to(&e, NI_TRI_SHAPE_DATA_GET_TRI_LIST),
+            vec![vec![data]]
+        );
+        let words: Vec<u32> = (0..3).map(|i| e.mem.u32(out + 4 * i)).collect();
+        assert_eq!(words, vec![0x0100_000c, 0x0100_0018, 0x0100_0024]);
+        e.call(0x00a7_4560, &args![this, 0x5556u32, out, out + 4, out + 8]);
+        let words: Vec<u32> = (0..3).map(|i| e.mem.u32(out + 4 * i)).collect();
+        assert_eq!(
+            words,
+            vec![
+                0x0100_0000 + 9 * 12,
+                0x0100_0000 + 10 * 12,
+                0x0100_0000 + 0xffff * 12
+            ]
+        );
+    }
+
+    #[test]
+    fn render_immediate_asks_renderers_in_modes_1_and_2() {
+        let mut e = Engine::new();
+        e.register(NI_GEOMETRY_RENDER_IMMEDIATE, |_, _| Ret::default());
+        e.register(RENDER_DOUBLE, |_, _| Ret::default());
+        let mut slots = vec![0u32; 0x200 / 4];
+        slots[0x1ac / 4] = RENDER_DOUBLE;
+        e.put_vtable(RENDERER_VTABLE, &slots);
+        let renderer = e.mem.alloc(0x210);
+        e.mem.set_u32(renderer, RENDERER_VTABLE);
+        let this = e.mem.alloc(0xc4);
+        e.call_log = Some(vec![]);
+        for (mode, flag) in [(1u32, 1u8), (2, 1), (0, 1), (3, 1), (2, 2)] {
+            e.mem.set_u32(renderer + 0x200, mode);
+            e.mem.set_u8(renderer + 0x208, flag);
+            e.call(0x00a7_45c0, &args![this, renderer]);
+        }
+        assert_eq!(calls_to(&e, NI_GEOMETRY_RENDER_IMMEDIATE).len(), 5);
+        assert_eq!(calls_to(&e, RENDER_DOUBLE), vec![vec![renderer, this]; 2]);
+    }
+
+    #[test]
+    fn viewer_strings_add_the_class_name_growing_a_full_array() {
+        let mut e = Engine::new();
+        e.map(NI_TRI_SHAPE_RTTI, 4);
+        e.set_global(NI_TRI_SHAPE_RTTI, 0x0104_0000u32);
+        e.register(NI_TRI_BASED_GEOM_GET_VIEWER_STRINGS, |_, _| Ret::default());
+        e.register(VIEWER_STRING_NAME, |_, a| (a[0] + 1).into_ret());
+        e.register(STRING_ARRAY_SET_SIZE, |_, _| Ret::default());
+        e.register(STRING_ARRAY_SET_AT, |e, a| {
+            assert_eq!(e.mem.u32(a[2]), 0x0104_0001);
+            Ret::default()
+        });
+        let strings = e.mem.alloc(0x10);
+        e.mem.set_u16(strings + 8, 3);
+        e.mem.set_u16(strings + 0xa, 3);
+        e.mem.set_u16(strings + 0xe, 5);
+        let this = e.mem.alloc(0xc4);
+        e.call_log = Some(vec![]);
+        e.call(0x00a7_4690, &args![this, strings]);
+        assert_eq!(calls_to(&e, STRING_ARRAY_SET_SIZE), vec![vec![strings, 8]]);
+        assert_eq!(calls_to(&e, STRING_ARRAY_SET_AT)[0][..2], [strings, 3]);
+        assert_eq!(
+            calls_to(&e, NI_TRI_BASED_GEOM_GET_VIEWER_STRINGS),
+            vec![vec![this, strings]]
         );
     }
 }

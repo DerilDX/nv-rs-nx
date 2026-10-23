@@ -239,6 +239,213 @@ pub fn ni_dynamic_effect_link_object(e: &mut Engine, this: Ptr, stream: Ptr) {
     }
 }
 
+/// `NiAVObject::IsEqual` (`00a5a260`, the other object), `NiAVObject::SaveBinary`
+/// (`00a5a900`, the stream) and `NiAVObject::GetViewerStrings` (`00a5ad00`, the string
+/// array), all `thiscall`.
+const NI_AV_OBJECT_IS_EQUAL: u32 = 0x00a5_a260;
+const NI_AV_OBJECT_SAVE_BINARY: u32 = 0x00a5_a900;
+const NI_AV_OBJECT_GET_VIEWER_STRINGS: u32 = 0x00a5_ad00;
+/// The sized delete (`00aa1460`, `cdecl`: block, size).
+const SIZED_DELETE: u32 = 0x00aa_1460;
+/// `NiSprintf` (`00a305b0`, `cdecl`: buffer, size, format, arguments).
+const NI_SPRINTF: u32 = 0x00a3_05b0;
+/// `NiGetViewerString` (`00a7d330`, the class name) and `NiGetViewerString_ov10`
+/// (`00a7d5a0`, a name and an object), both `cdecl`, answering a new string.
+const VIEWER_STRING_CLASS: u32 = 0x00a7_d330;
+const VIEWER_STRING_OBJECT: u32 = 0x00a7_d5a0;
+/// The string array's grow (`0096ad30`, `thiscall`, the new size) and set-at (`0096ae90`,
+/// `thiscall`, (index, address of the string)), both unnamed in the engine map.
+const STRINGS_GROW: u32 = 0x0096_ad30;
+const STRINGS_SET_AT: u32 = 0x0096_ae90;
+/// The formats `"affected node[%d]"` and `"unaffected node[%d]"`.
+const FORMAT_AFFECTED_NODE: u32 = 0x0109_c264;
+const FORMAT_UNAFFECTED_NODE: u32 = 0x0109_c250;
+/// The two node lists (`NiTPointerList`: head, tail, count; nodes next +0, previous +4,
+/// item +8): the affected nodes at +0xac and the unaffected nodes at +0xb8, by the names
+/// `GetViewerStrings` gives them.
+const AFFECTED_NODES: u32 = 0xac;
+const UNAFFECTED_NODES: u32 = 0xb8;
+
+/// Appends `text` to a viewer-string array with the set-at inlined (`NiTArray::SetAt`):
+/// the array grows to its step (+0xe) plus its size (+0xa) when the size has reached the
+/// capacity (+0x8); after the grow the size is read again; storing at or past it makes the
+/// size the index plus one and counts a non-null string in the 16-bit used count (+0xc);
+/// storing below it adjusts the used count by the change between the old element and
+/// `text`. The string goes into the elements (+0x4) at the old size.
+fn push_viewer_string_inline(e: &mut Engine, strings: Ptr, text: u32) {
+    let base = strings.addr();
+    let index = u32::from(e.mem.u16(base + 0xa));
+    if index >= u32::from(e.mem.u16(base + 8)) {
+        let step = u32::from(e.mem.u16(base + 0xe));
+        e.call(STRINGS_GROW, &args![strings, step + index]);
+    }
+    let size = u32::from(e.mem.u16(base + 0xa));
+    if index >= size {
+        e.mem.set_u16(base + 0xa, (index + 1) as u16);
+        if text != 0 {
+            let used = e.mem.u16(base + 0xc);
+            e.mem.set_u16(base + 0xc, used.wrapping_add(1));
+        }
+    } else {
+        let old = e.mem.u32(e.mem.u32(base + 4).wrapping_add(4 * index));
+        if text != 0 {
+            if old == 0 {
+                let used = e.mem.u16(base + 0xc);
+                e.mem.set_u16(base + 0xc, used.wrapping_add(1));
+            }
+        } else if old != 0 {
+            let used = e.mem.u16(base + 0xc);
+            e.mem.set_u16(base + 0xc, used.wrapping_add(0xffff));
+        }
+    }
+    let elements = e.mem.u32(base + 4);
+    e.mem.set_u32(elements.wrapping_add(4 * index), text);
+}
+
+/// The two lists' node walk of `IsEqual`: from this list's head, each node's item and the
+/// other list's node's item must both be null or both not null (the items themselves are
+/// not compared); the other list is followed in step without its own end check.
+fn same_items(e: &Engine, mine: u32, theirs: u32) -> bool {
+    let mut node = e.mem.u32(mine);
+    let mut other = e.mem.u32(theirs);
+    while node != 0 {
+        let item = e.mem.u32(node + 8);
+        let next = e.mem.u32(node);
+        let other_item = e.mem.u32(other.wrapping_add(8));
+        other = e.mem.u32(other);
+        if (item != 0) != (other_item != 0) {
+            return false;
+        }
+        node = next;
+    }
+    true
+}
+
+// Translated from 00a68d80 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiDynamicEffect::IsEqual` (Xbox PDB): `NiAVObject::IsEqual`, then for each node list
+/// (+0xac, +0xb8) the counts must match and, when the count is not 0 and this list has a
+/// head, the nodes must have items in the same places (null or not null).
+pub fn ni_dynamic_effect_is_equal(e: &mut Engine, this: Ptr, other: Ptr) -> bool {
+    if !e.call(NI_AV_OBJECT_IS_EQUAL, &args![this, other]).bool() {
+        return false;
+    }
+    let t = this.addr();
+    let o = other.addr();
+    for list in [AFFECTED_NODES, UNAFFECTED_NODES] {
+        let count = e.mem.u32(t + list + 8);
+        if count != e.mem.u32(o.wrapping_add(list + 8)) {
+            return false;
+        }
+        if count != 0 && !same_items(e, t + list, o.wrapping_add(list)) {
+            return false;
+        }
+    }
+    true
+}
+
+// Translated from 00a68f80 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiDynamicEffect::SaveBinary` (Xbox PDB): `NiAVObject::SaveBinary`, then through the
+/// stream's output (`m_pkOstr`, its write function, the position advanced by each result)
+/// the on byte (+0x9c, 1 byte, written from the stream argument's stack word) and the
+/// unaffected-node count (+0xc0, 4 bytes from a local); when that local is above 0 (signed)
+/// each node of the list at +0xb8, from its tail back through the previous links, has its
+/// item saved through the stream's virtual slot +0x30.
+pub fn ni_dynamic_effect_save_binary(e: &mut Engine, this: Ptr, stream: Ptr) {
+    let t = this.addr();
+    e.call(NI_AV_OBJECT_SAVE_BINARY, &args![this, stream]);
+    let on = e.mem.u8(t + 0x9c);
+    let count = e.mem.u32(t + UNAFFECTED_NODES + 8);
+    let saved = e.with_stack(0xc, |e, locals| {
+        // locals: +0 the stream argument's word, +4 the count local, +8 the size local.
+        let word = locals.addr();
+        e.mem.set_u8(word, on);
+        write(e, stream, word, 1, word + 8);
+        e.mem.set_u32(word + 4, count);
+        write(e, stream, word + 4, 4, word + 8);
+        e.mem.u32(word + 4)
+    });
+    if (saved as i32) <= 0 {
+        return;
+    }
+    let mut node = e.mem.u32(t + UNAFFECTED_NODES + 4);
+    while node != 0 {
+        let item = e.mem.u32(node + 8);
+        node = e.mem.u32(node + 4);
+        e.vcall(stream.addr(), 0x30, &args![item]);
+    }
+}
+
+/// One write through the stream's output: its write function (`m_pfnWrite` +0xc of
+/// `m_pkOstr` +0x250, `cdecl`: (output, data, bytes, address of the size word, 1)) with the
+/// size word at `size_word` set to `bytes`; the position (+4) advanced by the result.
+fn write(e: &mut Engine, stream: Ptr, data: u32, bytes: u32, size_word: u32) {
+    let output = e.mem.u32(stream.addr() + 0x250);
+    let function = e.mem.u32(output + 0xc);
+    e.mem.set_u32(size_word, bytes);
+    let done = e
+        .call(function, &args![output, data, bytes, size_word, 1u32])
+        .u32();
+    let position = e.mem.u32(output + 4).wrapping_add(done);
+    e.mem.set_u32(output + 4, position);
+}
+
+// Translated from 00a69140 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 00a69140 - the /GS cookie check (00ec408c) guarding the 0x40-byte text buffer is not modeled
+/// `NiDynamicEffect::GetViewerStrings` (Xbox PDB): `NiAVObject::GetViewerStrings`, the
+/// class name; then, only when the affected-node count (+0xb4) is not 0, one string per
+/// node of the affected list (+0xac) and then of the unaffected list (+0xb8), each named
+/// `"affected node[%d]"` / `"unaffected node[%d]"` (`NiSprintf` into a 0x40-byte stack
+/// buffer, one index counting through both lists) with the node's item
+/// (`NiGetViewerString_ov10`), appended with the array's set-at inlined.
+pub fn ni_dynamic_effect_get_viewer_strings(e: &mut Engine, this: Ptr, strings: Ptr) {
+    let t = this.addr();
+    e.call(NI_AV_OBJECT_GET_VIEWER_STRINGS, &args![this, strings]);
+    let name = e.mem.u32(NI_DYNAMIC_EFFECT_RTTI);
+    let text = e.call(VIEWER_STRING_CLASS, &args![name]).u32();
+    let size = u32::from(e.mem.u16(strings.addr() + 0xa));
+    if size >= u32::from(e.mem.u16(strings.addr() + 8)) {
+        let step = u32::from(e.mem.u16(strings.addr() + 0xe));
+        e.call(STRINGS_GROW, &args![strings, step + size]);
+    }
+    e.with_stack(4, |e, slot| {
+        e.mem.set_u32(slot.addr(), text);
+        e.call(STRINGS_SET_AT, &args![strings, size, slot]);
+    });
+    if e.mem.u32(t + AFFECTED_NODES + 8) == 0 {
+        return;
+    }
+    let mut index = 0u32;
+    for (list, format) in [
+        (AFFECTED_NODES, FORMAT_AFFECTED_NODE),
+        (UNAFFECTED_NODES, FORMAT_UNAFFECTED_NODE),
+    ] {
+        let mut node = e.mem.u32(t + list);
+        while node != 0 {
+            let item = e.mem.u32(node + 8);
+            node = e.mem.u32(node);
+            let text = e.with_stack(0x40, |e, buffer| {
+                e.call(NI_SPRINTF, &args![buffer, 0x40u32, format, index]);
+                e.call(VIEWER_STRING_OBJECT, &args![buffer, item]).u32()
+            });
+            push_viewer_string_inline(e, strings, text);
+            index = index.wrapping_add(1);
+        }
+    }
+}
+
+// Translated from 00a69390 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiDynamicEffect::_scalar_deleting_destructor_` (Xbox PDB): the destructor body
+/// (`00a69030`: vtable, the unaffected list emptied, both lists' `RemoveAll`, the
+/// `NiAVObject` destructor) inlined, then the sized delete of 0xc4 bytes when bit 0 of
+/// `flags` is set. Answers `this`.
+pub fn ni_dynamic_effect_scalar_deleting_destructor(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    fn_00a69030(e, this);
+    if flags & 1 != 0 {
+        e.call(SIZED_DELETE, &args![this, 0xc4u32]);
+    }
+    this
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -248,6 +455,13 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00a6_9030, fn_00a69030(Ptr)),
         entry!(0x00a6_8ea0, ni_dynamic_effect_load_binary(Ptr, Ptr)),
         entry!(0x00a6_9070, ni_dynamic_effect_link_object(Ptr, Ptr)),
+        entry!(0x00a6_8d80, ni_dynamic_effect_is_equal(Ptr, Ptr) -> bool),
+        entry!(0x00a6_8f80, ni_dynamic_effect_save_binary(Ptr, Ptr)),
+        entry!(0x00a6_9140, ni_dynamic_effect_get_viewer_strings(Ptr, Ptr)),
+        entry!(
+            0x00a6_9390,
+            ni_dynamic_effect_scalar_deleting_destructor(Ptr, u32) -> Ptr
+        ),
     ]
 }
 
@@ -469,5 +683,181 @@ mod tests_b008 {
         e.mem.set_u32(s + 0xd8, 0x0a00_010d);
         e.call(0x00a6_9070, &args![this, s]);
         assert_eq!(e.call_log.take().unwrap().len(), 2);
+    }
+}
+
+#[cfg(test)]
+mod n016_tests {
+    use super::*;
+
+    fn calls_to(e: &Engine, addr: u32) -> Vec<Vec<u32>> {
+        e.call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|c| c.0 == addr)
+            .map(|c| c.1.clone())
+            .collect()
+    }
+
+    /// Builds the list at `list` of `object` from `items` (head to tail).
+    fn list(e: &mut Engine, object: u32, list: u32, items: &[u32]) {
+        let mut previous = 0u32;
+        for item in items {
+            let node = e.mem.alloc(0xc);
+            e.mem.set_u32(node + 4, previous);
+            e.mem.set_u32(node + 8, *item);
+            if previous == 0 {
+                e.mem.set_u32(object + list, node);
+            } else {
+                e.mem.set_u32(previous, node);
+            }
+            previous = node;
+        }
+        e.mem.set_u32(object + list + 4, previous);
+        e.mem.set_u32(object + list + 8, items.len() as u32);
+    }
+
+    #[test]
+    fn is_equal_compares_counts_and_item_places() {
+        let mut e = Engine::new();
+        e.register(NI_AV_OBJECT_IS_EQUAL, |_, _| 1u32.into_ret());
+        e.call_log = Some(vec![]);
+        let this = e.mem.alloc(0xc4);
+        let other = e.mem.alloc(0xc4);
+        list(&mut e, this, AFFECTED_NODES, &[1, 0, 3]);
+        list(&mut e, other, AFFECTED_NODES, &[7, 0, 9]);
+        list(&mut e, this, UNAFFECTED_NODES, &[5]);
+        list(&mut e, other, UNAFFECTED_NODES, &[6]);
+        assert!(e.call(0x00a6_8d80, &args![this, other]).bool());
+        list(&mut e, other, UNAFFECTED_NODES, &[0]);
+        assert!(!e.call(0x00a6_8d80, &args![this, other]).bool());
+        list(&mut e, other, UNAFFECTED_NODES, &[6, 6]);
+        assert!(!e.call(0x00a6_8d80, &args![this, other]).bool());
+        list(&mut e, other, UNAFFECTED_NODES, &[6]);
+        list(&mut e, other, AFFECTED_NODES, &[7, 8, 9]);
+        assert!(!e.call(0x00a6_8d80, &args![this, other]).bool());
+        // A count with no head is not walked.
+        list(&mut e, other, AFFECTED_NODES, &[7, 0, 9]);
+        e.mem.set_u32(this + AFFECTED_NODES, 0);
+        assert!(e.call(0x00a6_8d80, &args![this, other]).bool());
+        e.register(NI_AV_OBJECT_IS_EQUAL, |_, _| 0u32.into_ret());
+        assert!(!e.call(0x00a6_8d80, &args![this, this]).bool());
+    }
+
+    #[test]
+    fn save_binary_writes_on_and_count_then_links_from_the_tail() {
+        let mut e = Engine::new();
+        e.register(NI_AV_OBJECT_SAVE_BINARY, |_, _| Ret::default());
+        e.register(0x0300_0000, |e, a| {
+            assert_eq!((e.mem.u32(a[3]), a[4]), (a[2], 1));
+            let first = e.mem.u32(a[1]);
+            e.mem.set_u32(0x0e70_0000 + 4 * a[2], first);
+            a[2].into_ret()
+        });
+        e.map(0x0e70_0000, 0x1000);
+        let mut slots = vec![0u32; 0x10];
+        slots[0x30 / 4] = 0x0e00_0030;
+        e.put_vtable(0x0e10_0000, &slots);
+        e.register(0x0e00_0030, |_, _| Ret::default());
+        e.call_log = Some(vec![]);
+        let stream = e.mem.alloc(0x260);
+        let output = e.mem.alloc(0x10);
+        e.mem.set_u32(stream, 0x0e10_0000);
+        e.mem.set_u32(stream + 0x250, output);
+        e.mem.set_u32(output + 0xc, 0x0300_0000);
+        let this = e.mem.alloc(0xc4);
+        e.mem.set_u8(this + 0x9c, 1);
+        list(&mut e, this, UNAFFECTED_NODES, &[0x11, 0x22, 0x33]);
+        e.call(0x00a6_8f80, &args![this, stream]);
+        assert_eq!(
+            calls_to(&e, NI_AV_OBJECT_SAVE_BINARY),
+            vec![vec![this, stream]]
+        );
+        assert_eq!(e.mem.u8(0x0e70_0004), 1);
+        assert_eq!(e.mem.u32(0x0e70_0010), 3);
+        assert_eq!(e.mem.u32(output + 4), 5);
+        assert_eq!(
+            calls_to(&e, 0x0e00_0030),
+            vec![vec![stream, 0x33], vec![stream, 0x22], vec![stream, 0x11]]
+        );
+        // A count of 0 (or below, as a signed word) saves no links.
+        e.mem.set_u32(this + UNAFFECTED_NODES + 8, 0x8000_0000);
+        e.call(0x00a6_8f80, &args![this, stream]);
+        assert_eq!(calls_to(&e, 0x0e00_0030).len(), 3);
+    }
+
+    #[test]
+    fn get_viewer_strings_names_both_lists_with_one_index() {
+        let mut e = Engine::new();
+        e.map(0x011f_4000, 0x1000);
+        e.mem.set_u32(NI_DYNAMIC_EFFECT_RTTI, 0x0123_0000);
+        for double in [
+            NI_AV_OBJECT_GET_VIEWER_STRINGS,
+            NI_SPRINTF,
+            STRINGS_GROW,
+            STRINGS_SET_AT,
+        ] {
+            e.register(double, |_, _| Ret::default());
+        }
+        e.register(VIEWER_STRING_CLASS, |_, _| 0x0e00_0001u32.into_ret());
+        e.register(VIEWER_STRING_OBJECT, |_, a| (0x0e10_0000 + a[1]).into_ret());
+        e.call_log = Some(vec![]);
+        let this = e.mem.alloc(0xc4);
+        list(&mut e, this, AFFECTED_NODES, &[0x11, 0x22]);
+        list(&mut e, this, UNAFFECTED_NODES, &[0x33]);
+        let strings = e.mem.alloc(0x10);
+        let elements = e.mem.alloc(0x20);
+        e.mem.set_u32(strings + 4, elements);
+        e.mem.set_u16(strings + 8, 8);
+        e.call(0x00a6_9140, &args![this, strings]);
+        assert_eq!(
+            calls_to(&e, NI_AV_OBJECT_GET_VIEWER_STRINGS),
+            vec![vec![this, strings]]
+        );
+        assert_eq!(calls_to(&e, STRINGS_SET_AT)[0][..2], [strings, 0]);
+        let printed: Vec<(u32, u32, u32)> = calls_to(&e, NI_SPRINTF)
+            .iter()
+            .map(|c| (c[1], c[2], c[3]))
+            .collect();
+        assert_eq!(
+            printed,
+            vec![
+                (0x40, FORMAT_AFFECTED_NODE, 0),
+                (0x40, FORMAT_AFFECTED_NODE, 1),
+                (0x40, FORMAT_UNAFFECTED_NODE, 2)
+            ]
+        );
+        let items: Vec<u32> = calls_to(&e, VIEWER_STRING_OBJECT)
+            .iter()
+            .map(|c| c[1])
+            .collect();
+        assert_eq!(items, vec![0x11, 0x22, 0x33]);
+        assert_eq!(e.mem.u16(strings + 0xa), 3);
+        assert_eq!(e.mem.u32(elements + 8), 0x0e10_0033);
+        // No affected nodes: neither list is listed.
+        e.mem.set_u32(this + AFFECTED_NODES + 8, 0);
+        e.call(0x00a6_9140, &args![this, strings]);
+        assert_eq!(calls_to(&e, NI_SPRINTF).len(), 3);
+    }
+
+    #[test]
+    fn scalar_deleting_destructor_deletes_on_bit_0() {
+        let mut e = Engine::new();
+        for double in [POINTER_LIST_REMOVE_ALL, NI_AV_OBJECT_DESTRUCT, SIZED_DELETE] {
+            e.register(double, |_, _| Ret::default());
+        }
+        e.call_log = Some(vec![]);
+        let this = e.mem.alloc(0xc4);
+        assert_eq!(e.call(0x00a6_9390, &args![this, 1u32]).u32(), this);
+        assert_eq!(e.mem.u32(this), NI_DYNAMIC_EFFECT_VTABLE);
+        assert_eq!(
+            calls_to(&e, POINTER_LIST_REMOVE_ALL),
+            vec![vec![this + 0xb8], vec![this + 0xac]]
+        );
+        assert_eq!(calls_to(&e, NI_AV_OBJECT_DESTRUCT), vec![vec![this]]);
+        assert_eq!(calls_to(&e, SIZED_DELETE), vec![vec![this, 0xc4]]);
+        e.call(0x00a6_9390, &args![this, 0u32]);
+        assert_eq!(calls_to(&e, SIZED_DELETE).len(), 1);
     }
 }

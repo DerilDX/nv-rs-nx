@@ -73,9 +73,48 @@ pub fn ni_screen_elements_scalar_deleting_destructor(e: &mut Engine, this: Ptr, 
     this
 }
 
+// Translated from 00a87790 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiScreenElements::Draw` (Xbox PDB): a tail jump to the object's virtual +0xdc with the
+/// same `this` and stack word (the renderer, as its callers push it); the callee's answer is
+/// passed on.
+pub fn ni_screen_elements_draw(e: &mut Engine, this: Ptr, renderer: Ptr) -> u32 {
+    e.vcall(this.addr(), 0xdc, &args![renderer]).u32()
+}
+
+/// `00aa13e0` (`cdecl`, one word): allocates a block of that size.
+const ALLOCATE: u32 = 0x00aa_13e0;
+/// `00a744a0` (`thiscall`, no stack word; unnamed in the engine map): the base constructor
+/// the clone starts with.
+const CLONE_BASE_CONSTRUCTOR: u32 = 0x00a7_44a0;
+/// `00a744c0` (`thiscall`, (clone, cloning process); unnamed in the engine map): the base's
+/// member copy.
+const CLONE_COPY_MEMBERS: u32 = 0x00a7_44c0;
+
+// Translated from 00a87860 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiScreenElements::CreateClone` (Xbox PDB): a new screen elements object (0xc4 bytes
+/// from `00aa13e0`, the base constructor `00a744a0`, the vtable `0109e984`) given this
+/// one's members (`00a744c0`). When the allocation fails the member copy still runs on
+/// null and the answer is null.
+pub fn ni_screen_elements_create_clone(e: &mut Engine, this: Ptr, cloning_process: Ptr) -> Ptr {
+    let clone = e.call(ALLOCATE, &args![0xc4u32]).u32();
+    if clone != 0 {
+        e.call(CLONE_BASE_CONSTRUCTOR, &args![clone]);
+        e.mem.set_u32(clone, NI_SCREEN_ELEMENTS_VTABLE);
+        e.call(CLONE_COPY_MEMBERS, &args![this, clone, cloning_process]);
+        return Ptr::new(clone);
+    }
+    e.call(CLONE_COPY_MEMBERS, &args![this, 0u32, cloning_process]);
+    Ptr::new(0)
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x00a8_7790, ni_screen_elements_draw(Ptr, Ptr) -> u32),
+        entry!(
+            0x00a8_7860,
+            ni_screen_elements_create_clone(Ptr, Ptr) -> Ptr
+        ),
         entry!(
             0x00a8_7830,
             ni_screen_elements_scalar_deleting_destructor(Ptr, u32) -> Ptr
@@ -204,6 +243,67 @@ mod batch_b011_tests {
                 .filter(|c| c.0 == DESTRUCTOR_BODY_00A89760)
                 .count(),
             2
+        );
+    }
+}
+
+#[cfg(test)]
+mod n018_tests {
+    use super::*;
+
+    fn calls_to(e: &Engine, addr: u32) -> Vec<Vec<u32>> {
+        e.call_log
+            .clone()
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|(a, _)| *a == addr)
+            .map(|(_, words)| words)
+            .collect()
+    }
+
+    #[test]
+    fn draw_forwards_to_the_virtual_slot() {
+        let mut e = Engine::new();
+        e.put_vtable(0x0300_0000, &[0; 0x38]);
+        e.mem.set_u32(0x0300_00dc, 0x0300_1000);
+        e.register(0x0300_1000, |_, _| 0x55u32.into_ret());
+        e.call_log = Some(vec![]);
+        let this = e.mem.alloc(0xc4);
+        e.mem.set_u32(this, 0x0300_0000);
+        assert_eq!(e.call(0x00a8_7790, &args![this, 0x4444u32]).u32(), 0x55);
+        assert_eq!(calls_to(&e, 0x0300_1000), vec![vec![this, 0x4444]]);
+    }
+
+    #[test]
+    fn create_clone_builds_and_copies() {
+        let mut e = Engine::new();
+        e.register(ALLOCATE, |e, a| e.mem.alloc(a[0]).into_ret());
+        e.register(CLONE_BASE_CONSTRUCTOR, |_, _| Ret::default());
+        e.register(CLONE_COPY_MEMBERS, |e, a| {
+            // The vtable is in place when the members are copied.
+            assert_eq!(e.mem.u32(a[1]), NI_SCREEN_ELEMENTS_VTABLE);
+            Ret::default()
+        });
+        e.call_log = Some(vec![]);
+        let clone = e.call(0x00a8_7860, &args![0x7000u32, 0x4444u32]).u32();
+        assert_eq!(calls_to(&e, ALLOCATE), vec![vec![0xc4]]);
+        assert_eq!(calls_to(&e, CLONE_BASE_CONSTRUCTOR), vec![vec![clone]]);
+        assert_eq!(
+            calls_to(&e, CLONE_COPY_MEMBERS),
+            vec![vec![0x7000, clone, 0x4444]]
+        );
+    }
+
+    #[test]
+    fn create_clone_copies_onto_null_when_the_allocation_fails() {
+        let mut e = Engine::new();
+        e.register(ALLOCATE, |_, _| 0u32.into_ret());
+        e.register(CLONE_COPY_MEMBERS, |_, _| Ret::default());
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x00a8_7860, &args![0x7000u32, 0x4444u32]).u32(), 0);
+        assert_eq!(
+            calls_to(&e, CLONE_COPY_MEMBERS),
+            vec![vec![0x7000, 0, 0x4444]]
         );
     }
 }

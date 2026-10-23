@@ -1,4 +1,4 @@
-# Handoff: engine port push (updated 2026-10-20)
+# Handoff: engine port push (updated 2026-10-23)
 
 For the next Claude session leading the nv-rs engine port. Read AGENTS.md,
 docs/MILESTONES.md, docs/ENGINE_PORT_PLAN.md, docs/FRAME_SKELETON.md and
@@ -7,7 +7,32 @@ machinery runs.
 
 ## Resume here
 
-### Claude lead, 2026-10-20 evening (current; read this first, then the night section below)
+### Claude lead, 2026-10-22/23 (current; read this first, then 2026-10-20 evening below)
+
+**Merged:** PR #229 (005e0830's slot result), PR #230 (recorded batches b054-b075, n001-n003, the last nixenonrenderer functions: 37,226 translated, 84.9% covered) and PR #239 (the animation, renderer, scene graph and AI batches n004-n029; 40,291 translated, 89.3% covered).
+
+**Recorded play queue:** b001-b075 are all done. What the recorded game ran and is still untranslated is CRT and platform start-up code, which the play build picks up as it reaches it.
+
+**Next queue (private `phase0/lists/next/`):** n001-n035, whole units, about 110 functions each, in this order: NiAnimation, NiXenonRenderer, BSShader, NiMain, fallout/ai, pathfinding, NiCollision. n001-n029 are done; n030-n035 are written and not assigned. `assigned.txt` says what is done and where. The rest of the exe after these: about 10,000 open functions; the biggest open groups are fallout shared, fallout/interface, BSShader, fallout/ai and (unplaced) (counts in docs/SYSTEMS.md).
+
+**Play build (branch `claude/build43-movement`, private worktree `wt-build43`, local, not pushed):** the game's own `main` now runs its start-up through the INI settings, the CRT and archives, Main::Main, Renderer::Init (our own Direct3D 9 device, textures through D3DX and a capture cache, render states, shaders, the camera set-up, nvapi from the machine table) and the whole of InitSceneGraph (every shader built), into the next stage (00702250). No game frame has run yet, so there are no movement numbers and no play copy. The handover with the exact last stop and commands is the top of the private `phase0/build43-status.md`. Decisions made on the way (keep to them):
+- atiadlxx.dll is reached only with bEnableEyefinity; not on this machine.
+- nvapi.dll: answers captured into the machine table (`scripts/nvapi-capture`).
+- D3DX: the maths are our own, measured bit for bit against the player's d3dx9_38.dll (`scripts/d3dx-measure`); texture creation copies the stored levels itself and takes everything D3DX makes (sub-block DXT levels, generated mips, format conversions) from a git-ignored capture cache (`scripts/d3dx-texture-capture`; each player runs it once); the shader compiler/assembler are to be captured the same way.
+- CPUID: the player's leaf 0/1 answers are captured into the machine table, so the CRT's SSE2 maths switch is set as in the real game.
+- The CRT maths (sin, cos, tan, pow, exp, log, asin, acos, atan, atan2, floor) are the exe's own x87 and SSE2 code now, verified against the exe run natively; no host-maths stand-ins remain.
+- _msize/realloc are platform, like malloc (our allocator owns the blocks), with every edge read from the exe.
+- The machine table and the D3DX cache describe the player's machine and files: git-ignored, never committed.
+
+**Build speed:** the play loop builds the viewer with `--profile play` (opt-level 1 for the engine crates, incremental): a platform edit rebuilds in about 65 s instead of 28 min. Packaging the play copy stays on `--release`. The private queue (`phase0/bin/heavy2.sh`) puts the play build and the slots listed in `phase0/heavy.priority` first.
+
+**Machine:** the memory watchdog is `phase0/bin/watchdog3.ps1` (it spares the biggest rustc). Never read its log with `tail -F`: a reader holding the file open made its writes fail while builds were still stopped, which looked like silent rustc crashes (exit 0xffffffff) for most of 2026-10-22. Agents test engine-fallout files only in stand-in crates; the lead runs engine-fallout once per collection (its lib-test build needs about 15 GB).
+
+**Review notes for PR #239:** see the PR body. Open suspects (private `phase0/lists/fix/suspects.txt`): argument counts of 00a27ee0 and fn_00b984d0, fn_00a68d40's missing this, 00a291e0's guessed shape, the 01012060 constant written as a literal, the printf float stand-in in the play branch's crt.rs, and an unused computation left out of 00a58550.
+
+**Contributor PRs:** #29, #50, #87, #91 and #108 (abusager13) were updated on 2026-10-21. Reviews are drafted in the private `agents/scratch/lead/review-*.md` (not posted: the maintainer said to leave the PRs for now). Their CI runs wait for the maintainer's approval (fork PRs).
+
+### Claude lead, 2026-10-20 evening (read this after 2026-10-22/23, then the night section below)
 
 **Merged today:** PR #226 (recorded batches, renderer start-up, CPU-exact x87
 helpers) and PR #227 (recorded batches b008-b046 and Renderer::Init's layers

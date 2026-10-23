@@ -378,6 +378,128 @@ pub fn ni_image_converter_convert_pixel_data(
     Ptr::new(destination)
 }
 
+/// `NiFile::GetFile` (`00aa1a20`, `cdecl`: path, mode, buffer size), answering the opened
+/// file or null.
+const NI_FILE_GET_FILE: u32 = 0x00aa_1a20;
+
+/// Runs `body` with a stack `NiFilename` (0x404 bytes) built from `path`, then asks the
+/// reader part (+0x80, its virtual slot +4) whether it reads the name's extension
+/// (`NiFilename` +0x103); `body` runs only on a yes, with the reader.
+fn with_reader<T>(
+    e: &mut Engine,
+    this: Ptr,
+    path: Ptr,
+    no: T,
+    body: impl FnOnce(&mut Engine, u32) -> T,
+) -> T {
+    e.with_stack(FILENAME_SIZE, |e, filename| {
+        e.call(FILENAME_CONSTRUCTOR, &args![filename, path]);
+        let reader = this.addr() + READER_PART;
+        if !e.vcall(reader, 4, &args![filename.addr() + 0x103]).bool() {
+            return no;
+        }
+        body(e, reader)
+    })
+}
+
+// Translated from 00a766d0 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 00a766d0 - the /GS cookie check (00ec408c) guarding the stack NiFilename is not modeled
+/// `NiImageConverter::ReadImageFileInfo` (Xbox PDB; `thiscall`, six words: the path, then
+/// the addresses the format, mipmap flag, width, height and face count go to): false when
+/// the reader part (+0x80) does not take the name's extension, when `NiFile::GetFile`
+/// (mode 0, 0x8000 bytes) gives no file, or when the file's slot +4 says it is not good;
+/// otherwise the reader's slot +0xc reads the header (file, width, height, format,
+/// mipmap, faces). The file is deleted (its slot 0 with 1) once opened. Answers what the
+/// reader answered.
+#[allow(clippy::too_many_arguments)]
+pub fn ni_image_converter_read_image_file_info(
+    e: &mut Engine,
+    this: Ptr,
+    path: Ptr,
+    format: Ptr,
+    mipmap: Ptr,
+    width: Ptr,
+    height: Ptr,
+    faces: Ptr,
+) -> bool {
+    with_reader(e, this, path, false, |e, reader| {
+        let file = e
+            .call(NI_FILE_GET_FILE, &args![path, 0u32, 0x8000u32])
+            .u32();
+        if file == 0 {
+            return false;
+        }
+        if !e.vcall(file, 4, &args![]).bool() {
+            e.vcall(file, 0, &args![1u32]);
+            return false;
+        }
+        let read = e
+            .vcall(
+                reader,
+                0xc,
+                &args![file, width, height, format, mipmap, faces],
+            )
+            .bool();
+        e.vcall(file, 0, &args![1u32]);
+        read
+    })
+}
+
+// Translated from 00a767c0 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 00a767c0 - the /GS cookie check (00ec408c) guarding the stack NiFilename is not modeled
+/// `NiImageConverter::ReadImageFile` (Xbox PDB; `thiscall`, three words: the path, the
+/// pixel data to read into, a file or null): when the reader part (+0x80) does not take the
+/// name's extension, a given file is deleted (slot 0 with 1) and null answered. Otherwise
+/// without a file one is opened (`NiFile::GetFile`, mode 0, 0x8000 bytes; null answers
+/// null); a file whose slot +4 says it is not good is deleted and null answered; else the
+/// reader's slot +8 reads the pixel data (file, the pixel data), the file is deleted and
+/// the reader's answer returned (null stays null).
+pub fn ni_image_converter_read_image_file(
+    e: &mut Engine,
+    this: Ptr,
+    path: Ptr,
+    pixel_data: Ptr,
+    file: Ptr,
+) -> Ptr {
+    let given = file.addr();
+    let read = with_reader(e, this, path, None, |e, reader| {
+        let mut file = given;
+        if file == 0 {
+            file = e
+                .call(NI_FILE_GET_FILE, &args![path, 0u32, 0x8000u32])
+                .u32();
+            if file == 0 {
+                return Some(0);
+            }
+        }
+        if !e.vcall(file, 4, &args![]).bool() {
+            e.vcall(file, 0, &args![1u32]);
+            return Some(0);
+        }
+        let data = e.vcall(reader, 8, &args![file, pixel_data]).u32();
+        e.vcall(file, 0, &args![1u32]);
+        Some(data)
+    });
+    match read {
+        Some(data) => Ptr::new(data),
+        None => {
+            if given != 0 {
+                e.vcall(given, 0, &args![1u32]);
+            }
+            Ptr::new(0)
+        }
+    }
+}
+
+// Translated from 00a76a60 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (unit `niimageconverter.cpp`; `thiscall`, one word); by its
+/// body the pixel data's palette setter: the counted assignment of the palette to
+/// `m_spPalette` (+0x4c; nothing when it is already there, the old one released and freed
+/// through its slot +4 at a count of 0, the new one counted).
+pub fn fn_00a76a60(e: &mut Engine, this: Ptr, palette: Ptr) {
+    assign_ref_counted(e, this.addr() + PIXEL_DATA_PALETTE, palette.addr());
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -395,6 +517,15 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00a76b60, fn_00a76b60(Ptr)),
         entry!(0x00a76bb0, ni_image_converter_scalar_deleting_destructor(Ptr, u32) -> Ptr),
         entry!(0x00a76c10, ni_image_converter_convert_pixel_data(Ptr, Ptr, Ptr, Ptr, u32) -> Ptr),
+        entry!(
+            0x00a7_66d0,
+            ni_image_converter_read_image_file_info(Ptr, Ptr, Ptr, Ptr, Ptr, Ptr, Ptr) -> bool
+        ),
+        entry!(
+            0x00a7_67c0,
+            ni_image_converter_read_image_file(Ptr, Ptr, Ptr, Ptr) -> Ptr
+        ),
+        entry!(0x00a7_6a60, fn_00a76a60(Ptr, Ptr)),
     ]
 }
 
@@ -727,5 +858,156 @@ mod b007_tests {
         e.call_log = Some(vec![]);
         e.call(0x00a76c10, &args![0u32, source, 1u32, destination, 0u32]);
         assert_eq!(calls_to(&e, SET_PALETTE), vec![vec![destination, 0]]);
+    }
+}
+
+#[cfg(test)]
+mod n016_tests {
+    use super::*;
+    use crate::units::nimain::nimainsdm::test_support::*;
+
+    /// Slots of the reader (`0x0e10_0000`) and file (`0x0e20_0000`) vtables.
+    const READER_TAKES: u32 = 0x0e00_1004;
+    const READER_READ: u32 = 0x0e00_1008;
+    const READER_HEADER: u32 = 0x0e00_100c;
+    const FILE_DELETE: u32 = 0x0e00_2000;
+    const FILE_GOOD: u32 = 0x0e00_2004;
+
+    /// A converter whose reader takes every extension, a file that is good, and a header
+    /// read that answers true and a pixel read that answers `0x0e30_0000`.
+    fn rig() -> (Engine, u32, u32) {
+        let mut e = engine_with_counting();
+        e.put_vtable(0x0e10_0000, &[0, READER_TAKES, READER_READ, READER_HEADER]);
+        e.put_vtable(0x0e20_0000, &[FILE_DELETE, FILE_GOOD]);
+        e.register(FILENAME_CONSTRUCTOR, |_, _| Ret::default());
+        e.register(READER_TAKES, |_, _| 1u32.into_ret());
+        e.register(READER_READ, |_, _| 0x0e30_0000u32.into_ret());
+        e.register(READER_HEADER, |_, _| 1u32.into_ret());
+        e.register(FILE_DELETE, |_, _| Ret::default());
+        e.register(FILE_GOOD, |_, _| 1u32.into_ret());
+        let file = e.mem.alloc(4);
+        e.mem.set_u32(file, 0x0e20_0000);
+        e.register_double(NI_FILE_GET_FILE, move |_, _| file.into_ret());
+        let this = e.mem.alloc(0x780);
+        e.mem.set_u32(this + READER_PART, 0x0e10_0000);
+        e.call_log = Some(vec![]);
+        (e, this, file)
+    }
+
+    #[test]
+    fn read_image_file_info_reads_the_header_through_the_reader() {
+        let (mut e, this, file) = rig();
+        let args = args![this, 0x0e40_0000u32, 1u32, 2u32, 3u32, 4u32, 5u32];
+        assert!(e.call(0x00a7_66d0, &args).bool());
+        let filename = calls_to(&e, FILENAME_CONSTRUCTOR)[0][0];
+        assert_eq!(calls_to(&e, FILENAME_CONSTRUCTOR)[0][1], 0x0e40_0000);
+        assert_eq!(
+            calls_to(&e, READER_TAKES),
+            vec![vec![this + READER_PART, filename + 0x103]]
+        );
+        assert_eq!(
+            calls_to(&e, NI_FILE_GET_FILE),
+            vec![vec![0x0e40_0000, 0, 0x8000]]
+        );
+        assert_eq!(
+            calls_to(&e, READER_HEADER),
+            vec![vec![this + READER_PART, file, 3, 4, 1, 2, 5]]
+        );
+        assert_eq!(calls_to(&e, FILE_DELETE), vec![vec![file, 1]]);
+        // A bad file is deleted; no file or no reader answers false.
+        e.register(FILE_GOOD, |_, _| 0u32.into_ret());
+        assert!(!e.call(0x00a7_66d0, &args).bool());
+        assert_eq!(calls_to(&e, FILE_DELETE).len(), 2);
+        assert_eq!(calls_to(&e, READER_HEADER).len(), 1);
+        e.register(NI_FILE_GET_FILE, |_, _| 0u32.into_ret());
+        assert!(!e.call(0x00a7_66d0, &args).bool());
+        e.register(READER_TAKES, |_, _| 0u32.into_ret());
+        assert!(!e.call(0x00a7_66d0, &args).bool());
+        assert_eq!(calls_to(&e, NI_FILE_GET_FILE).len(), 3);
+        // The reader's false comes back after the delete.
+        e.register(READER_TAKES, |_, _| 1u32.into_ret());
+        e.register(FILE_GOOD, |_, _| 1u32.into_ret());
+        e.register_double(NI_FILE_GET_FILE, move |_, _| file.into_ret());
+        e.register(READER_HEADER, |_, _| 0u32.into_ret());
+        assert!(!e.call(0x00a7_66d0, &args).bool());
+        assert_eq!(calls_to(&e, FILE_DELETE).len(), 3);
+    }
+
+    #[test]
+    fn read_image_file_opens_or_takes_the_file() {
+        let (mut e, this, file) = rig();
+        let read = e.call(
+            0x00a7_67c0,
+            &args![this, 0x0e40_0000u32, 0x0e50_0000u32, 0u32],
+        );
+        assert_eq!(read.u32(), 0x0e30_0000);
+        assert_eq!(
+            calls_to(&e, READER_READ),
+            vec![vec![this + READER_PART, file, 0x0e50_0000]]
+        );
+        assert_eq!(calls_to(&e, FILE_DELETE), vec![vec![file, 1]]);
+        // A given file is used (no open) and deleted too.
+        let given = e.mem.alloc(4);
+        e.mem.set_u32(given, 0x0e20_0000);
+        e.call(
+            0x00a7_67c0,
+            &args![this, 0x0e40_0000u32, 0x0e50_0000u32, given],
+        );
+        assert_eq!(calls_to(&e, NI_FILE_GET_FILE).len(), 1);
+        assert_eq!(calls_to(&e, FILE_DELETE)[1], vec![given, 1]);
+        // The reader refusing the name deletes a given file and answers null.
+        e.register(READER_TAKES, |_, _| 0u32.into_ret());
+        let read = e.call(
+            0x00a7_67c0,
+            &args![this, 0x0e40_0000u32, 0x0e50_0000u32, given],
+        );
+        assert_eq!(read.u32(), 0);
+        assert_eq!(calls_to(&e, FILE_DELETE)[2], vec![given, 1]);
+        e.call(
+            0x00a7_67c0,
+            &args![this, 0x0e40_0000u32, 0x0e50_0000u32, 0u32],
+        );
+        assert_eq!(calls_to(&e, FILE_DELETE).len(), 3);
+        // A bad file is deleted and null answered; no file answers null.
+        e.register(READER_TAKES, |_, _| 1u32.into_ret());
+        e.register(FILE_GOOD, |_, _| 0u32.into_ret());
+        let read = e.call(
+            0x00a7_67c0,
+            &args![this, 0x0e40_0000u32, 0x0e50_0000u32, 0u32],
+        );
+        assert_eq!(read.u32(), 0);
+        assert_eq!(calls_to(&e, FILE_DELETE).len(), 4);
+        e.register(NI_FILE_GET_FILE, |_, _| 0u32.into_ret());
+        let read = e.call(
+            0x00a7_67c0,
+            &args![this, 0x0e40_0000u32, 0x0e50_0000u32, 0u32],
+        );
+        assert_eq!(read.u32(), 0);
+        assert_eq!(calls_to(&e, READER_READ).len(), 2);
+    }
+
+    #[test]
+    fn palette_setter_counts_the_new_palette() {
+        let mut e = engine_with_counting();
+        e.put_vtable(0x0e20_0000, &[0, FILE_DELETE]);
+        e.register(FILE_DELETE, |_, _| Ret::default());
+        e.call_log = Some(vec![]);
+        let data = e.mem.alloc(0x64);
+        let old = e.mem.alloc(8);
+        let new = e.mem.alloc(8);
+        for (palette, count) in [(old, 1u32), (new, 3)] {
+            e.mem.set_u32(palette, 0x0e20_0000);
+            e.mem.set_u32(palette + 4, count);
+        }
+        e.mem.set_u32(data + PIXEL_DATA_PALETTE, old);
+        e.call(0x00a7_6a60, &args![data, new]);
+        assert_eq!(e.mem.u32(data + PIXEL_DATA_PALETTE), new);
+        assert_eq!(e.mem.u32(new + 4), 4);
+        assert_eq!(calls_to(&e, FILE_DELETE), vec![vec![old]]);
+        e.call(0x00a7_6a60, &args![data, new]);
+        assert_eq!(e.mem.u32(new + 4), 4);
+        e.call(0x00a7_6a60, &args![data, 0u32]);
+        assert_eq!(e.mem.u32(data + PIXEL_DATA_PALETTE), 0);
+        assert_eq!(e.mem.u32(new + 4), 3);
     }
 }

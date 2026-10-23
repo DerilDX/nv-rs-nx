@@ -189,9 +189,157 @@ pub fn tile_shader_property_tile_shader_property(
     this
 }
 
+/// `BSShaderProperty::CheckCreateRenderPassArray` (`00ba95e0`, thiscall: a word, `RET 4`)
+/// and `BSShaderProperty::RenderPassArray::Add` (`00ba9ee0`, thiscall on the array, `RET
+/// 0x20`: geometry, pass number, then six words), engine map names.
+const CHECK_CREATE_RENDER_PASS_ARRAY: u32 = 0x00ba_95e0;
+const RENDER_PASS_ARRAY_ADD: u32 = 0x00ba_9ee0;
+/// The base member copy (`00ba8b10`, thiscall: destination and a word, `RET 8`), the base
+/// `SaveBinary` (`00ba9380`, thiscall: stream) and `00a64160` (thiscall on the stream: a
+/// C string, the file name's text).
+const BASE_COPY_MEMBERS: u32 = 0x00ba_8b10;
+const BASE_SAVE_BINARY: u32 = 0x00ba_9380;
+const STREAM_SAVE_C_STRING_00A64160: u32 = 0x00a6_4160;
+
+// Translated from 00bb7a60 (PC disassembly, FalloutNV.exe 1.4.0.525; Ghidra made no function here)
+/// `TileShaderProperty::GetRenderPasses` (the vtable's slot +0xa0, `GetRenderPasses` in the
+/// Xbox PDB; `thiscall`, `RET 0x18`: the geometry, a pass word, an unread word, the pass
+/// type and two unread words). Makes the render pass list when needed
+/// (`00ba95e0` with 1); when it is empty, adds pass 0x42 for the geometry (`00ba9ee0` with
+/// 1 and five zeros), marks the last pass's `eAccumulationHint` byte (+6) 1 and stores
+/// `pass_type << 8 | pass_word` in `iLastRenderPassState`. Answers the list.
+pub fn tile_shader_property_get_render_passes(
+    e: &mut Engine,
+    this: Ptr<TileShaderProperty>,
+    geometry: u32,
+    pass_word: u32,
+    _unused_3: u32,
+    pass_type: u32,
+    _unused_5: u32,
+    _unused_6: u32,
+) -> u32 {
+    use crate::units::bsshader::bsshaderproperty::BSShaderProperty;
+    let property = Ptr::<BSShaderProperty>::new(this.addr());
+    e.call(CHECK_CREATE_RENDER_PASS_ARRAY, &args![this, 1u32]);
+    let list = e.get(property, BSShaderProperty::pRenderPassList);
+    // `RenderPassArray::iSize` (+0x10) and its buffer (+4).
+    if e.mem.u32(list.wrapping_add(0x10)) != 0 {
+        return list;
+    }
+    e.call(
+        RENDER_PASS_ARRAY_ADD,
+        &args![list, geometry, 0x42u32, 1u32, 0u32, 0u32, 0u32, 0u32, 0u32],
+    );
+    let list = e.get(property, BSShaderProperty::pRenderPassList);
+    let count = e.mem.u32(list.wrapping_add(0x10));
+    let buffer = e.mem.u32(list.wrapping_add(4));
+    let last = e
+        .mem
+        .u32(buffer.wrapping_add(count.wrapping_mul(4)).wrapping_sub(4));
+    let key = (pass_type << 8) | pass_word;
+    e.mem.set_u8(last.wrapping_add(6), 1);
+    let list = e.get(property, BSShaderProperty::pRenderPassList);
+    e.set(property, BSShaderProperty::iLastRenderPassState, key as i32);
+    list
+}
+
+// Translated from 00bb7ac0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The tile shader property's member copy (unnamed in the engine map; called by the copy
+/// at `00bb7e70`; thiscall, `RET 8`: destination and a word): the base copy (`00ba8b10`), the
+/// `NiPointer` assignment of `spTileTexture` (inlined: nothing for the same texture, else the
+/// old one released and the new one referenced), then the tint colour, `TexClampMode`,
+/// `fAlpha` (through `FLD`/`FSTP`, quieting a signalling NaN), `bUseTexturingProperty` and
+/// `bNoBlend`.
+pub fn fn_00bb7ac0(
+    e: &mut Engine,
+    this: Ptr<TileShaderProperty>,
+    destination: Ptr<TileShaderProperty>,
+    word: u32,
+) {
+    e.call(BASE_COPY_MEMBERS, &args![this, destination, word]);
+    let old = e.get(destination, TileShaderProperty::spTileTexture);
+    if old != e.get(this, TileShaderProperty::spTileTexture) {
+        if old != 0 {
+            release_reference(e, old);
+        }
+        let texture = e.get(this, TileShaderProperty::spTileTexture);
+        e.set(destination, TileShaderProperty::spTileTexture, texture);
+        if texture != 0 {
+            e.call(INTERLOCKED_INCREMENT, &args![texture.wrapping_add(4)]);
+        }
+    }
+    for field in [
+        TileShaderProperty::TintColor_r,
+        TileShaderProperty::TintColor_g,
+        TileShaderProperty::TintColor_b,
+        TileShaderProperty::TintColor_a,
+        TileShaderProperty::TexClampMode,
+    ] {
+        let value = e.get(this, field);
+        e.set(destination, field, value);
+    }
+    let alpha = x87_quiet_bits(e.get(this, TileShaderProperty::fAlpha));
+    e.set(destination, TileShaderProperty::fAlpha, alpha);
+    let texturing = e.get(this, TileShaderProperty::bUseTexturingProperty);
+    e.set(
+        destination,
+        TileShaderProperty::bUseTexturingProperty,
+        texturing,
+    );
+    let no_blend = e.get(this, TileShaderProperty::bNoBlend);
+    e.set(destination, TileShaderProperty::bNoBlend, no_blend);
+}
+
+// Translated from 00bb7be0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TileShaderProperty::SaveBinary` (the vtable's slot +0x58; thiscall, `RET 4`): the base
+/// `SaveBinary` (`00ba9380`), `TexClampMode` (4 bytes, the element size in the argument's
+/// stack word) through the stream's output (+0x250, write function at +0xc), then the texture
+/// file name's text through `00a64160`.
+pub fn tile_shader_property_save_binary(
+    e: &mut Engine,
+    this: Ptr<TileShaderProperty>,
+    stream: u32,
+) {
+    e.call(BASE_SAVE_BINARY, &args![this, stream]);
+    let output = e.mem.u32(stream.wrapping_add(0x250));
+    let write = e.mem.u32(output.wrapping_add(0xc));
+    let wrote = e.with_stack(4, |e, sizes| {
+        e.mem.set_u32(sizes.addr(), 4);
+        e.call(
+            write,
+            &args![output, this.addr().wrapping_add(0x8c), 4u32, sizes, 1u32],
+        )
+        .u32()
+    });
+    let position = e.mem.u32(output.wrapping_add(4)).wrapping_add(wrote);
+    e.mem.set_u32(output.wrapping_add(4), position);
+    let text = e.get(this, TileShaderProperty::TextureFilename_pString);
+    e.call(STREAM_SAVE_C_STRING_00A64160, &args![stream, text]);
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(
+            0x00bb_7a60,
+            tile_shader_property_get_render_passes(
+                Ptr<TileShaderProperty>,
+                u32,
+                u32,
+                u32,
+                u32,
+                u32,
+                u32,
+            ) -> u32
+        ),
+        entry!(
+            0x00bb_7ac0,
+            fn_00bb7ac0(Ptr<TileShaderProperty>, Ptr<TileShaderProperty>, u32)
+        ),
+        entry!(
+            0x00bb_7be0,
+            tile_shader_property_save_binary(Ptr<TileShaderProperty>, u32)
+        ),
         entry!(
             0x00bb_7a10,
             tile_shader_property_set_tile_texture(Ptr<TileShaderProperty>, u32)
@@ -330,5 +478,141 @@ mod tests {
         assert_eq!(e.mem.u32(this + 0x58), 0x20);
         assert_eq!(e.mem.u32(this + 0x1c), 0x13);
         assert!(calls(&e, INTERLOCKED_DECREMENT).is_empty());
+    }
+}
+
+#[cfg(test)]
+mod n014_tests {
+    use super::*;
+
+    fn calls_to(e: &Engine, addr: u32) -> Vec<Vec<u32>> {
+        e.call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|c| c.0 == addr)
+            .map(|c| c.1.clone())
+            .collect()
+    }
+
+    #[test]
+    fn get_render_passes_adds_the_tile_pass_once() {
+        let mut e = Engine::new();
+        e.register(CHECK_CREATE_RENDER_PASS_ARRAY, |_, _| Ret::default());
+        // The add appends a fresh 0x10-byte pass to the array.
+        e.register(RENDER_PASS_ARRAY_ADD, |e, a| {
+            let pass = e.mem.alloc(0x10);
+            let count = e.mem.u32(a[0] + 0x10);
+            let buffer = e.mem.u32(a[0] + 4);
+            e.mem.set_u32(buffer + 4 * count, pass);
+            e.mem.set_u32(a[0] + 0x10, count + 1);
+            Ret::default()
+        });
+        let this = e.mem.alloc(0xb0);
+        let list = e.mem.alloc(0x14);
+        let buffer = e.mem.alloc(0x10);
+        e.mem.set_u32(list + 4, buffer);
+        e.mem.set_u32(this + 0x3c, list);
+        e.call_log = Some(vec![]);
+        let words = args![this, 0x5000u32, 7u32, 1u32, 3u32, 2u32, 9u32];
+        assert_eq!(e.call(0x00bb_7a60, &words).u32(), list);
+        assert_eq!(
+            calls_to(&e, CHECK_CREATE_RENDER_PASS_ARRAY),
+            vec![vec![this, 1]]
+        );
+        assert_eq!(
+            calls_to(&e, RENDER_PASS_ARRAY_ADD),
+            vec![vec![list, 0x5000, 0x42, 1, 0, 0, 0, 0, 0]]
+        );
+        let pass = e.mem.u32(buffer);
+        assert_eq!(e.mem.u8(pass + 6), 1);
+        assert_eq!(e.mem.u32(this + 0x38), 0x307);
+        // A list with passes already is answered as it is.
+        e.mem.set_u32(this + 0x38, 0);
+        assert_eq!(e.call(0x00bb_7a60, &words).u32(), list);
+        assert_eq!(calls_to(&e, RENDER_PASS_ARRAY_ADD).len(), 1);
+        assert_eq!(e.mem.u32(this + 0x38), 0);
+    }
+
+    #[test]
+    fn copy_members_assigns_the_texture_and_copies_the_fields() {
+        const DELETE: u32 = 0x03d0_0000;
+        let mut e = Engine::new();
+        e.register(BASE_COPY_MEMBERS, |_, _| Ret::default());
+        e.register(DELETE, |_, _| Ret::default());
+        e.register(INTERLOCKED_INCREMENT, |e, a| {
+            let count = e.mem.u32(a[0]) + 1;
+            e.mem.set_u32(a[0], count);
+            count.into_ret()
+        });
+        e.register(INTERLOCKED_DECREMENT, |e, a| {
+            let count = e.mem.u32(a[0]) - 1;
+            e.mem.set_u32(a[0], count);
+            count.into_ret()
+        });
+        let vtable = e.mem.alloc(8);
+        e.mem.set_u32(vtable + 4, DELETE);
+        let texture = |e: &mut Engine| {
+            let texture = e.mem.alloc(8);
+            e.mem.set_u32(texture, vtable);
+            e.mem.set_u32(texture + 4, 1);
+            texture
+        };
+        let new = texture(&mut e);
+        let old = texture(&mut e);
+        let this = e.mem.alloc(0xb0);
+        let target = e.mem.alloc(0xb0);
+        e.mem.set_u32(this + 0x60, new);
+        e.mem.set_u32(target + 0x60, old);
+        for (offset, value) in [(0x68u32, 1u32), (0x6c, 2), (0x70, 3), (0x74, 4), (0x8c, 5)] {
+            e.mem.set_u32(this + offset, value);
+        }
+        e.mem.set_u32(this + 0x78, 0x7f80_0001);
+        e.mem.set_u32(this + 0x7c, 0x1234);
+        e.mem.set_u8(this + 0x93, 1);
+        e.mem.set_u8(this + 0x90, 1);
+        e.call_log = Some(vec![]);
+        e.call(0x00bb_7ac0, &args![this, target, 6u32]);
+        assert_eq!(calls_to(&e, BASE_COPY_MEMBERS), vec![vec![this, target, 6]]);
+        assert_eq!(calls_to(&e, DELETE), vec![vec![old]]);
+        assert_eq!(e.mem.u32(target + 0x60), new);
+        assert_eq!(e.mem.u32(new + 4), 2);
+        for (offset, value) in [(0x68u32, 1u32), (0x6c, 2), (0x70, 3), (0x74, 4), (0x8c, 5)] {
+            assert_eq!(e.mem.u32(target + offset), value);
+        }
+        assert_eq!(e.mem.u32(target + 0x78), 0x7fc0_0001);
+        assert_eq!(e.mem.u32(target + 0x7c), 0);
+        assert_eq!((e.mem.u8(target + 0x93), e.mem.u8(target + 0x90)), (1, 1));
+        // The same texture again: no reference change.
+        e.call(0x00bb_7ac0, &args![this, target, 6u32]);
+        assert_eq!(e.mem.u32(new + 4), 2);
+    }
+
+    #[test]
+    fn save_binary_writes_the_clamp_mode_and_the_file_name() {
+        const WRITE: u32 = 0x03d1_0000;
+        let mut e = Engine::new();
+        e.register(BASE_SAVE_BINARY, |_, _| Ret::default());
+        e.register(STREAM_SAVE_C_STRING_00A64160, |_, _| Ret::default());
+        e.register(WRITE, |e, a| {
+            assert_eq!((e.mem.u32(a[3]), a[4]), (4, 1));
+            a[2].into_ret()
+        });
+        let output = e.mem.alloc(0x10);
+        e.mem.set_u32(output + 0xc, WRITE);
+        let stream = e.mem.alloc(0x260);
+        e.mem.set_u32(stream + 0x250, output);
+        let this = e.mem.alloc(0xb0);
+        e.mem.set_u32(this + 0x94, 0x6000);
+        e.call_log = Some(vec![]);
+        e.call(0x00bb_7be0, &args![this, stream]);
+        assert_eq!(calls_to(&e, BASE_SAVE_BINARY), vec![vec![this, stream]]);
+        let writes = calls_to(&e, WRITE);
+        assert_eq!((writes[0][1], writes[0][2]), (this + 0x8c, 4));
+        assert_eq!(e.mem.u32(output + 4), 4);
+        assert_eq!(
+            calls_to(&e, STREAM_SAVE_C_STRING_00A64160),
+            vec![vec![stream, 0x6000]]
+        );
     }
 }

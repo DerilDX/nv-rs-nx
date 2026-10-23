@@ -39,6 +39,27 @@ pub fn ni_alpha_accumulator_destructor(e: &mut Engine, this: Ptr) -> u32 {
     e.call(BACK_TO_FRONT_DESTRUCTOR, &[this.addr()]).u32()
 }
 
+/// `00aa13e0` (`cdecl`, the size): `NiNew`'s allocator.
+const NI_ALLOCATE: u32 = 0x00aa_13e0;
+
+// Translated from 00a9b4b0 (PC disassembly, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (a function Ghidra did not create; by its body the creation
+/// function of `NiAlphaAccumulator`): a new 0x34-byte object (`00aa13e0`, the
+/// `NiBackToFrontAccumulator` base constructor, the vtable, `m_bObserveNoSortHint` (+0x30)
+/// 1, +0x31 and +0x32 cleared), or null when the allocation fails.
+pub fn fn_00a9b4b0(e: &mut Engine) -> Ptr {
+    let block = e.call(NI_ALLOCATE, &args![0x34u32]).u32();
+    if block == 0 {
+        return Ptr::NULL;
+    }
+    e.call(BACK_TO_FRONT_CONSTRUCTOR, &[block]);
+    e.mem.set_u32(block, ALPHA_ACCUMULATOR_VTABLE);
+    e.mem.set_u8(block + 0x30, 1);
+    e.mem.set_u8(block + 0x31, 0);
+    e.mem.set_u8(block + 0x32, 0);
+    Ptr::new(block)
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -47,6 +68,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
             ni_alpha_accumulator_ni_alpha_accumulator(Ptr) -> Ptr
         ),
         entry!(0x00a9_b4a0, ni_alpha_accumulator_destructor(Ptr) -> u32),
+        entry!(0x00a9_b4b0, fn_00a9b4b0() -> Ptr),
     ]
 }
 
@@ -95,5 +117,29 @@ mod tests {
         e.call_log = Some(vec![]);
         assert_eq!(e.call(0x00a9_b4a0, &[this]).u32(), 0x55);
         assert_eq!(calls_to(&e, BACK_TO_FRONT_DESTRUCTOR), vec![vec![this]]);
+    }
+}
+
+#[cfg(test)]
+mod create_tests {
+    use super::*;
+
+    #[test]
+    fn creates_an_alpha_accumulator_or_null() {
+        let mut e = Engine::new();
+        e.register(NI_ALLOCATE, |e, a| e.mem.alloc(a[0]).into_ret());
+        e.register(BACK_TO_FRONT_CONSTRUCTOR, |e, a| {
+            e.mem.write(a[0] + 0x30, &[0xaa; 4]);
+            Ret::default()
+        });
+        e.call_log = Some(vec![]);
+        let object = e.call(0x00a9_b4b0, &args![]).u32();
+        let log = e.call_log.take().unwrap();
+        assert!(log.contains(&(NI_ALLOCATE, vec![0x34])));
+        assert!(log.contains(&(BACK_TO_FRONT_CONSTRUCTOR, vec![object])));
+        assert_eq!(e.mem.u32(object), ALPHA_ACCUMULATOR_VTABLE);
+        assert_eq!(e.mem.bytes(object + 0x30, 4), vec![1, 0, 0, 0xaa]);
+        e.register(NI_ALLOCATE, |_, _| 0u32.into_ret());
+        assert_eq!(e.call(0x00a9_b4b0, &args![]).u32(), 0);
     }
 }

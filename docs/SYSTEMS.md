@@ -25,27 +25,27 @@ build. Game threads are stepped on the main thread behind one seam in
 ## Coverage by code group
 
 "Covered" counts translated, partial and table-run static initializer
-functions (ledger of 2026-10-22). Regenerate the numbers before relying on them.
+functions (ledger of 2026-10-23). Regenerate the numbers before relying on them.
 
 | Code group | Functions | Covered | % | System(s) | Phase |
 |---|---:|---:|---:|---|---|
 | compiler: static init/exit | 22,771 | 22,463 | 99 | Start-up and shut-down (table-run initializers and atexit destructors; refused rows left for hand translation) | done |
-| (unplaced: no unit in the map) | 2,430 | 1,594 | 66 | Spread across every system; assign by caller | all |
+| (unplaced: no unit in the map) | 2,430 | 1,597 | 66 | Spread across every system; assign by caller | all |
 | fallout shared (forms, references, world data) | 10,479 | 9,316 | 89 | Forms, records, references, cells, extra data | C |
-| fallout/ai | 4,849 | 3,903 | 80 | AI, processes, movement, combat AI | A (movement), C |
+| fallout/ai | 4,849 | 4,790 | 99 | AI, processes, movement, combat AI | A (movement), C |
 | fallout/interface | 2,645 | 1,727 | 65 | Menus, HUD, interface manager | C |
 | Havok SDK | 7,377 | 7,377 | 100 | Physics engine (739 functions keep a marked part, mostly C++ exception frames) | A |
 | BSHavok | 1,634 | 1,634 | 100 | Bethesda's Havok layer: character controller, ragdolls, constraints | A |
 | NiCollision | 238 | 92 | 39 | Gamebryo collision | A |
 | fallout shared/havok | 478 | 454 | 95 | Game-side physics: water, camera caster, listeners | A |
 | fallout shared/pathfinding | 1,788 | 1,467 | 82 | Navmesh, pathfinding | C |
-| NiAnimation | 1,413 | 784 | 55 | Animation: controllers, blending, keyframes | A |
+| NiAnimation | 1,413 | 1,412 | 100 | Animation: controllers, blending, keyframes | A |
 | FaceGen + fallout shared/facegen | 907 | 475 | 52 | Faces, head morphs, lip sync | A |
 | BSAudio + fallout/audio | 494 | 431 | 87 | Audio | A |
-| NiMain | 1,722 | 882 | 51 | Scene graph, cameras, properties | B |
-| BSShader | 1,987 | 1,459 | 73 | Shaders, passes, accumulators, image space (game code, ADR-0007) | B |
-| NiXenonRenderer + d3d9/d3dx9 | 992 | 475 | 48 | Gamebryo Direct3D 9 renderer, translated onto our own Direct3D 9 layer (ADR-0007) | B |
-| NiParticle | 704 | 325 | 46 | Particles, effects | B |
+| NiMain | 1,722 | 1,717 | 100 | Scene graph, cameras, properties | B |
+| BSShader | 1,987 | 1,766 | 89 | Shaders, passes, accumulators, image space (game code, ADR-0007) | B |
+| NiXenonRenderer + d3d9/d3dx9 | 992 | 874 | 88 | Gamebryo Direct3D 9 renderer, translated onto our own Direct3D 9 layer (ADR-0007) | B |
+| NiParticle | 704 | 327 | 46 | Particles, effects | B |
 | SpeedTree + fallout shared/speedtree | 847 | 821 | 97 | Trees | B |
 | BSMain | 991 | 593 | 60 | Scene helpers, culling, debris, scene graph | B |
 | fallout shared/sky | 164 | 149 | 91 | Sky, weather, sun, clouds | B |
@@ -59,7 +59,7 @@ functions (ledger of 2026-10-22). Regenerate the numbers before relying on them.
 | BSCore + BSSystem + BSSystemUtilities | 559 | 285 | 51 | Memory, threads, files, strings | platform |
 | BSMovie | 64 | 8 | 13 | Bink video playback (decoder in crates/bink) | D |
 | NiSystem, BSDevices, BSDiag, XAPILIB, XBOXKRNL, RemoteLog | 115 | 55 | 48 | Platform glue, input devices, diagnostics | platform |
-| LIBCMT, libcpmt, zLib | 815 | 110 | 13 | C runtime, zlib (platform replacements or translation) | platform |
+| LIBCMT, libcpmt, zLib | 815 | 114 | 14 | C runtime, zlib (platform replacements or translation) | platform |
 | fallout/debug, fallout shared/settings | 19 | 9 | 47 | Debug, settings | D |
 
 ## Systems and what each needs

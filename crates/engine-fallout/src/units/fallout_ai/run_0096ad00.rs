@@ -947,9 +947,54 @@ pub fn fn_0096c7c0(e: &mut Engine, this: Ptr) {
     }
 }
 
+// Translated from 0096af60 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The pointer array's scalar deleting destructor: `fn_0096ad00`, then
+/// `operator delete(this)` (`00401030`) when bit 0 of `flags` is set.
+/// Returns `this`.
+pub fn fn_0096af60(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    fn_0096ad00(e, this);
+    if flags & 1 != 0 {
+        e.call(0x0040_1030, &args![this]);
+    }
+    this
+}
+
+// Translated from 0096af90 (decompiled, FalloutNV.exe 1.4.0.525)
+/// A scalar deleting destructor around `0096a930` (`run_0096a850.rs`):
+/// that body, then `operator delete(this)` (`00401030`) when bit 0 of
+/// `flags` is set. Returns `this`.
+pub fn fn_0096af90(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    e.call(0x0096_a930, &args![this]);
+    if flags & 1 != 0 {
+        e.call(0x0040_1030, &args![this]);
+    }
+    this
+}
+
+// Translated from 0096bc50 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Counts the actors of process level 0 (the list object at +4, from
+/// `005de0f0(0)` to `005be5c0(0)`, each from `00968670`) whose slot 0x100
+/// answers true; empty slots are skipped.
+pub fn fn_0096bc50(e: &mut Engine, this: Ptr) -> u32 {
+    let list = this.addr() + 4;
+    let mut count = 0u32;
+    let mut index = e.call(LEVEL_BEGIN, &args![list, 0u32]).u32();
+    while index < e.call(LEVEL_END, &args![list, 0u32]).u32() {
+        let actor = e.call(ACTOR_AT, &args![list, index]).u32();
+        if actor != 0 && e.vcall(actor, 0x100, &[]).bool() {
+            count = count.wrapping_add(1);
+        }
+        index += 1;
+    }
+    count
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x0096_af60, fn_0096af60(Ptr, u32) -> Ptr),
+        entry!(0x0096_af90, fn_0096af90(Ptr, u32) -> Ptr),
+        entry!(0x0096_bc50, fn_0096bc50(Ptr) -> u32),
         entry!(0x0096_ad30, fn_0096ad30(Ptr, u32)),
         entry!(0x0096_ae90, fn_0096ae90(Ptr, u32, Ptr)),
         entry!(0x0096_af30, fn_0096af30(Ptr, u32, u32) -> Ptr),
@@ -1792,5 +1837,81 @@ mod b035_tests {
         assert!(calls(&log, 0x0096_7350).is_empty());
         // The level does not start at index 0 and is not empty.
         assert!(calls(&log, 0x008c_8bb0).is_empty());
+    }
+}
+
+#[cfg(test)]
+mod n028_tests {
+    use super::*;
+
+    fn calls_to(e: &Engine, callee: u32) -> Vec<Vec<u32>> {
+        e.call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|(address, _)| *address == callee)
+            .map(|(_, words)| words.clone())
+            .collect()
+    }
+
+    #[test]
+    fn the_deleting_destructors_free_on_bit_0() {
+        let mut e = Engine::new();
+        e.register(0x004e_de70, |_, _| Ret::default());
+        e.register(0x0096_a930, |_, _| Ret::default());
+        e.register(0x0040_1030, |_, _| Ret::default());
+        let this = e.mem.alloc(0x10);
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x0096_af60, &[this, 1]).u32(), this);
+        assert_eq!(e.mem.u32(this), 0x0108_c0c8);
+        assert_eq!(calls_to(&e, 0x0040_1030), vec![vec![this]]);
+        assert_eq!(e.call(0x0096_af90, &[this, 0]).u32(), this);
+        assert_eq!(calls_to(&e, 0x0096_a930), vec![vec![this]]);
+        assert_eq!(calls_to(&e, 0x0040_1030).len(), 1);
+        e.call(0x0096_af90, &[this, 1]);
+        assert_eq!(calls_to(&e, 0x0040_1030).len(), 2);
+    }
+
+    #[test]
+    fn fn_0096bc50_counts_the_accepting_actors() {
+        let mut e = Engine::new();
+        let this = e.mem.alloc(0x20);
+        e.register(LEVEL_BEGIN, |_, _| Ret {
+            eax: 1,
+            ..Ret::default()
+        });
+        e.register(LEVEL_END, |_, _| Ret {
+            eax: 5,
+            ..Ret::default()
+        });
+        let actors: Vec<u32> = (0..5)
+            .map(|i| {
+                let actor = e.mem.alloc(8);
+                let table = e.mem.alloc(0x104);
+                e.mem.set_u32(table + 0x100, 0x7100_0000 + i);
+                e.mem.set_u32(actor, table);
+                actor
+            })
+            .collect();
+        let list = actors.clone();
+        e.register_double(ACTOR_AT, move |_, a| Ret {
+            eax: if a[1] == 2 { 0 } else { list[a[1] as usize] },
+            ..Ret::default()
+        });
+        for i in 0..5 {
+            e.register(0x7100_0000 + i, |_, _| Ret::default());
+        }
+        e.register(0x7100_0001, |_, _| Ret {
+            eax: 1,
+            ..Ret::default()
+        });
+        e.register(0x7100_0004, |_, _| Ret {
+            eax: 0x101,
+            ..Ret::default()
+        });
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x0096_bc50, &[this]).u32(), 2);
+        assert_eq!(calls_to(&e, LEVEL_BEGIN), vec![vec![this + 4, 0]]);
+        assert_eq!(calls_to(&e, ACTOR_AT).len(), 4);
     }
 }

@@ -62,9 +62,47 @@ pub fn combat_timer_save_game(e: &mut Engine, this: Ptr, buffer: Ptr) {
     e.call(SAVE_BYTES, &args![buffer, this.addr() + 4, 4u32, 0u32]);
 }
 
+/// `BGSLoadGameBuffer`'s byte load (`00864980`, thiscall on the buffer:
+/// destination, size).
+const LOAD_BYTES: u32 = 0x0086_4980;
+
+// Translated from 009a5f20 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `CombatTimer::LoadGame` (Xbox PDB; thiscall, `RET 4`): loads the
+/// timer's `float` and the 4 bytes at +4 from `buffer`, then, when the
+/// `float` is strictly between `-FLT_MAX` and `FLT_MAX`, makes it absolute
+/// again (`local + base`, the `float` at `011f1bf0`, x87).
+pub fn combat_timer_load_game(e: &mut Engine, this: Ptr, buffer: Ptr) {
+    e.call(LOAD_BYTES, &args![buffer, this, 4u32]);
+    e.call(LOAD_BYTES, &args![buffer, this.addr() + 4, 4u32]);
+    let bits = e.mem.u32(this.addr());
+    if is_finite_time(e, bits) {
+        let base = e.global::<u32>(TIMER_TIME_BASE);
+        let value = x87_store32(x87_add(x87_load32(bits), x87_m32(base)));
+        e.mem.set_u32(this.addr(), value);
+    }
+}
+
+// Translated from 009a5ff0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `CombatTimeStamp::LoadGame` (Xbox PDB; thiscall, `RET 4`): loads the
+/// stamp's `float` from `buffer`, then, when it is strictly between
+/// `-FLT_MAX` and `FLT_MAX`, makes it absolute again (`time + local`, the
+/// time from `00435dd0` in ST0, x87).
+pub fn combat_time_stamp_load_game(e: &mut Engine, this: Ptr, buffer: Ptr) {
+    e.call(LOAD_BYTES, &args![buffer, this, 4u32]);
+    let bits = e.mem.u32(this.addr());
+    if is_finite_time(e, bits) {
+        let time = e.call(TIME_STAMP_TIME_BASE, &args![]).f64();
+        let bits = e.mem.u32(this.addr());
+        let value = x87_store32(x87_add(time, x87_m32(bits)));
+        e.mem.set_u32(this.addr(), value);
+    }
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x009a_5f20, combat_timer_load_game(Ptr, Ptr)),
+        entry!(0x009a_5ff0, combat_time_stamp_load_game(Ptr, Ptr)),
         entry!(0x009a_5f90, combat_time_stamp_save_game(Ptr, Ptr)),
         entry!(0x009a_5eb0, combat_timer_save_game(Ptr, Ptr)),
     ]
@@ -159,6 +197,87 @@ mod tests {
         assert_eq!(
             timer_saves(f32::MAX.to_bits()),
             vec![f32::MAX.to_bits(), 0x0102_0304]
+        );
+    }
+}
+
+#[cfg(test)]
+mod n026_tests {
+    use super::*;
+
+    /// The byte-load double writes the next word of `LOADED` (the count at
+    /// +0, the words from +4) into the destination.
+    const LOADED: u32 = 0x0331_0000;
+
+    fn setup(e: &mut Engine, words: &[u32]) {
+        e.map(FLT_MAX_CONSTANT, 4);
+        e.mem.set_u32(FLT_MAX_CONSTANT, f32::MAX.to_bits());
+        e.map(TIMER_TIME_BASE, 4);
+        e.mem.set_u32(TIMER_TIME_BASE, 2.5f32.to_bits());
+        e.register(TIME_STAMP_TIME_BASE, |_, _| Ret {
+            st0: 1.25,
+            ..Ret::default()
+        });
+        e.map(LOADED, 0x40);
+        for (i, word) in words.iter().enumerate() {
+            e.mem.set_u32(LOADED + 4 + 4 * i as u32, *word);
+        }
+        e.register(LOAD_BYTES, |e, a| {
+            assert_eq!(a[0], 0x0abc_0000);
+            assert_eq!(a[2], 4);
+            let used = e.mem.u32(LOADED);
+            let word = e.mem.u32(LOADED + 4 + used * 4);
+            e.mem.set_u32(a[1], word);
+            e.mem.set_u32(LOADED, used + 1);
+            Ret::default()
+        });
+    }
+
+    fn timer_loads(value: u32) -> (u32, u32) {
+        let mut e = Engine::new();
+        setup(&mut e, &[value, 0x0102_0304]);
+        let this = e.mem.alloc(8);
+        e.call(0x009a_5f20, &args![this, 0x0abc_0000u32]);
+        assert_eq!(e.mem.u32(LOADED), 2);
+        (e.mem.u32(this), e.mem.u32(this + 4))
+    }
+
+    #[test]
+    fn timer_loads_both_words_and_adds_the_base() {
+        assert_eq!(
+            timer_loads(7.5f32.to_bits()),
+            (10.0f32.to_bits(), 0x0102_0304)
+        );
+        assert_eq!(
+            timer_loads(f32::MAX.to_bits()),
+            (f32::MAX.to_bits(), 0x0102_0304)
+        );
+        assert_eq!(timer_loads((-f32::MAX).to_bits()).0, (-f32::MAX).to_bits());
+        // A signalling NaN is unordered and stays as loaded (no FSTP).
+        assert_eq!(timer_loads(0x7f80_0001).0, 0x7f80_0001);
+    }
+
+    fn stamp_loads(value: u32) -> u32 {
+        let mut e = Engine::new();
+        setup(&mut e, &[value]);
+        let this = e.mem.alloc(8);
+        e.call(0x009a_5ff0, &args![this, 0x0abc_0000u32]);
+        assert_eq!(e.mem.u32(LOADED), 1);
+        e.mem.u32(this)
+    }
+
+    #[test]
+    fn time_stamp_loads_and_adds_the_time() {
+        assert_eq!(stamp_loads(8.75f32.to_bits()), 10.0f32.to_bits());
+        assert_eq!(
+            stamp_loads(f32::INFINITY.to_bits()),
+            f32::INFINITY.to_bits()
+        );
+        assert_eq!(stamp_loads(0xffa0_0000), 0xffa0_0000);
+        let below = f32::from_bits(f32::MAX.to_bits() - 1);
+        assert_eq!(
+            stamp_loads(below.to_bits()),
+            x87_store32(x87_add(1.25, f64::from(below)))
         );
     }
 }

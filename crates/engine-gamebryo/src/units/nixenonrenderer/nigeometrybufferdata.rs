@@ -225,9 +225,71 @@ pub fn ni_geometry_buffer_data_scalar_deleting_destructor(
     this
 }
 
+/// `NiGeometryBufferData::m_uiFlags` (Xbox PDB) +0x04.
+const FLAGS: u32 = 0x04;
+
+// Translated from 00e8ee80 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiGeometryData::RendererData::'scalar deleting destructor'` (Xbox PDB, engine map),
+/// `thiscall` with one stack word (the flags): installs the base vtable (`010f0170`) and, when
+/// bit 0 of the flags is set, frees the object through the memory manager (`00aa4060` on
+/// `011f6238`). Answers `this`.
+pub fn ni_geometry_data_renderer_data_scalar_deleting_destructor(
+    e: &mut Engine,
+    this: Ptr,
+    flags: u32,
+) -> Ptr {
+    e.mem.set_u32(this.addr(), RENDERER_DATA_VTABLE);
+    if flags & 1 != 0 {
+        e.call(MEMORY_MANAGER_FREE, &args![MEMORY_MANAGER_OBJECT, this]);
+    }
+    this
+}
+
+// Translated from 00e8f010 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`thiscall`, one word): sets the FVF (+0x0C) and, when the data
+/// holds a vertex declaration, releases it (`Release`) and clears it.
+pub fn fn_00e8f010(e: &mut Engine, this: Ptr<NiGeometryBufferData>, fvf: u32) {
+    e.set(this, NiGeometryBufferData::m_uiFVF, fvf);
+    let declaration = e.get(this, NiGeometryBufferData::m_hDeclaration);
+    if declaration != 0 {
+        e.vcall(declaration, RELEASE, &[]);
+        e.set(this, NiGeometryBufferData::m_hDeclaration, 0);
+    }
+}
+
+// Translated from 00e8f080 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiGeometryBufferData::ContainsVertexData` (Xbox PDB, engine map), `thiscall`, one word
+/// (the kind of data asked about). The compiler's switch on `kind - 3` (byte table
+/// `00e8f0e0`, jump table `00e8f0d0`), as `match` arms: 3 answers bit 23 of `m_uiFlags`
+/// (+0x04), 4 bit 22, 13 and 14 bit 21, 5 to 12 whether `kind - 5` is below the flags' top
+/// byte (+0x07, unsigned); anything else answers 0 (in `AL`).
+pub fn ni_geometry_buffer_data_contains_vertex_data(
+    e: &mut Engine,
+    this: Ptr<NiGeometryBufferData>,
+    kind: u32,
+) -> bool {
+    let flags = e.mem.u32(this.addr() + FLAGS);
+    match kind.wrapping_sub(3) {
+        0 => (flags >> 0x17) & 1 != 0,
+        1 => (flags >> 0x16) & 1 != 0,
+        2..=9 => kind.wrapping_sub(5) < u32::from(e.mem.u8(this.addr() + 7)),
+        10 | 11 => (flags >> 0x15) & 1 != 0,
+        _ => false,
+    }
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(
+            0x00e8_ee80,
+            ni_geometry_data_renderer_data_scalar_deleting_destructor(Ptr, u32) -> Ptr
+        ),
+        entry!(0x00e8_f010, fn_00e8f010(Ptr<NiGeometryBufferData>, u32)),
+        entry!(
+            0x00e8_f080,
+            ni_geometry_buffer_data_contains_vertex_data(Ptr<NiGeometryBufferData>, u32) -> bool
+        ),
         entry!(0x00e8_eeb0, fn_00e8eeb0(Ptr<NiGeometryBufferData>) -> bool),
         entry!(
             0x00e8_eee0,
@@ -497,5 +559,58 @@ mod tests {
         let log = e.call_log.take().unwrap();
         assert!(calls_to(&log, MEMORY_MANAGER_FREE).is_empty());
         assert_eq!(e.mem.u32(bare.addr()), RENDERER_DATA_VTABLE);
+    }
+
+    #[test]
+    fn renderer_data_deleting_destructor_frees_on_bit_0() {
+        let mut e = engine();
+        let data = e.mem.alloc(8);
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x00e8_ee80, &args![data, 0u32]).u32(), data);
+        assert_eq!(e.mem.u32(data), RENDERER_DATA_VTABLE);
+        e.call(0x00e8_ee80, &args![data, 1u32]);
+        let log = e.call_log.take().unwrap();
+        assert_eq!(
+            calls_to(&log, MEMORY_MANAGER_FREE),
+            vec![vec![MEMORY_MANAGER_OBJECT, data]]
+        );
+    }
+
+    #[test]
+    fn set_fvf_releases_the_declaration() {
+        let mut e = engine();
+        let data: Ptr<NiGeometryBufferData> = e.new_object();
+        let declaration = com_object(&mut e);
+        e.set(data, NiGeometryBufferData::m_hDeclaration, declaration);
+        e.call_log = Some(vec![]);
+        e.call(0x00e8_f010, &args![data, 0x142u32]);
+        assert_eq!(e.get(data, NiGeometryBufferData::m_uiFVF), 0x142);
+        assert_eq!(e.get(data, NiGeometryBufferData::m_hDeclaration), 0);
+        e.call(0x00e8_f010, &args![data, 0x2u32]);
+        let log = e.call_log.take().unwrap();
+        assert_eq!(calls_to(&log, RELEASE_FN), vec![vec![declaration]]);
+        assert_eq!(e.get(data, NiGeometryBufferData::m_uiFVF), 2);
+    }
+
+    #[test]
+    fn contains_vertex_data_reads_the_flags() {
+        let mut e = engine();
+        let data: Ptr<NiGeometryBufferData> = e.new_object();
+        let ask = |e: &mut Engine, kind: u32| e.call(0x00e8_f080, &args![data, kind]).bool();
+        e.mem.set_u32(data.addr() + FLAGS, 0x0380_0000);
+        assert!(ask(&mut e, 3));
+        assert!(!ask(&mut e, 4));
+        assert!(!ask(&mut e, 13));
+        // Top byte 3: kinds 5, 6 and 7 are below it.
+        assert!(ask(&mut e, 7));
+        assert!(!ask(&mut e, 8));
+        e.mem.set_u32(data.addr() + FLAGS, 0x0060_0000);
+        assert!(!ask(&mut e, 3));
+        assert!(ask(&mut e, 4));
+        assert!(ask(&mut e, 14));
+        assert!(!ask(&mut e, 5));
+        for kind in [0u32, 2, 15, 0xffff_ffff] {
+            assert!(!ask(&mut e, kind));
+        }
     }
 }

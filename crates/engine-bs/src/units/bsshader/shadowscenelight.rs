@@ -2592,9 +2592,313 @@ pub fn shadow_scene_light_compute_weighted_shadow_light(
     });
 }
 
+/// `NiLight` fields `00b9bdf0` reads (PC offsets): the dimmer (+0xc4), the world translate
+/// (+0x8c), the colour at +0xd4 (three `float`s) and the radius `float` at +0xe0.
+const NI_LIGHT_DIMMER: u32 = 0xc4;
+const NI_LIGHT_COLOUR_D4: u32 = 0xd4;
+const NI_LIGHT_RADIUS_E0: u32 = 0xe0;
+
+// Translated from 00b9bdf0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`thiscall`, `RET 0x1c`: points `a` and `b`, three words each,
+/// and an `NiLight`; answers a `float` in `ST0`): 0.0 when the light's `spLight` is that
+/// `NiLight`, the light casts shadows (`bCastShadow` 1) or its `NiLight` is culled (flag
+/// bit 0). Otherwise the luminance (`fLuminance`, +0xc) becomes 1.0, for a point light
+/// `1 - t * t` with `t` the distance from the light to `a` (`00457990`) over the radius,
+/// clamped with `00404010` (against 0.0) and `0040ebd0` (against 1.0); then it is multiplied
+/// by the facing term (the dot product of `-(b - a)` normalised with `a - light` normalised,
+/// above 1.0 cut to 1.0 and below 0.0 to 0.0, NaN kept) and by the largest component of the
+/// dimmer times the colour at +0xd4, stored and answered. Each x87 step follows the exe.
+pub fn fn_00b9bdf0(
+    e: &mut Engine,
+    this: Ptr<ShadowSceneLight>,
+    ax: u32,
+    ay: u32,
+    az: u32,
+    bx: u32,
+    by: u32,
+    bz: u32,
+    ni_light_argument: u32,
+) -> f32 {
+    let ni_light = e.get(this, ShadowSceneLight::spLight);
+    if ni_light == ni_light_argument
+        || e.get(this, ShadowSceneLight::bCastShadow) == 1
+        || e.mem.u8(ni_light.wrapping_add(FLAGS)) & 1 != 0
+    {
+        return 0.0;
+    }
+    let point_light = e.get(this, ShadowSceneLight::bPointLight) != 0;
+    let dimmer = x87_load32(x87_store32(x87_load32(
+        e.mem.u32(ni_light.wrapping_add(NI_LIGHT_DIMMER)),
+    )));
+    let position = read_words(e, ni_light.wrapping_add(WORLD_TRANSLATE));
+    let colour = read_words(e, ni_light.wrapping_add(NI_LIGHT_COLOUR_D4));
+    let scaled = [
+        x87_store32(x87_mul(dimmer, x87_m32(colour[0]))),
+        x87_store32(x87_mul(dimmer, x87_m32(colour[1]))),
+        x87_store32(x87_mul(dimmer, x87_m32(colour[2]))),
+    ];
+    let radius = x87_store32(x87_load32(
+        e.mem.u32(ni_light.wrapping_add(NI_LIGHT_RADIUS_E0)),
+    ));
+    e.set(this, ShadowSceneLight::fLuminance, 1.0);
+    let a = [ax, ay, az];
+    let b = [bx, by, bz];
+    // The exe's two vectors on its stack: `a - light` (+0) and `b - a` (+0xc).
+    let (to_point, along) = e.with_stack(0x18, |e, frame| {
+        let to_point = frame.addr();
+        let along = frame.addr() + 0xc;
+        for i in 0..3 {
+            let difference = x87_store32(x87_sub(x87_load32(a[i]), x87_m32(position[i])));
+            e.mem.set_u32(to_point + 4 * i as u32, difference);
+        }
+        if point_light {
+            let length = e.call(POINT_LENGTH, &args![to_point]).st0;
+            let ratio = x87_quiet_bits(x87_store32(x87_div(length, x87_m32(radius))));
+            let zero = x87_store32(0.0);
+            let larger = x87_store32(e.call(FLOAT_MAX, &args![zero, ratio]).st0);
+            let one = x87_store32(1.0);
+            let t = x87_load32(x87_store32(e.call(FLOAT_MIN, &args![one, larger]).st0));
+            let luminance = x87_store32(x87_sub(1.0, x87_mul(t, t)));
+            e.mem.set_u32(this.addr() + 0xc, luminance);
+        }
+        for i in 0..3 {
+            let difference = x87_store32(x87_sub(x87_load32(b[i]), x87_m32(a[i])));
+            e.mem.set_u32(along + 4 * i as u32, difference);
+        }
+        e.call(POINT_NORMALIZE_004A0C10, &args![along]);
+        e.call(POINT_NORMALIZE_004A0C10, &args![to_point]);
+        (read_words(e, to_point), read_words(e, along))
+    });
+    let negated = [
+        x87_store32(-x87_load32(along[0])),
+        x87_store32(-x87_load32(along[1])),
+        x87_store32(-x87_load32(along[2])),
+    ];
+    let dot = x87_add(
+        x87_mul(x87_load32(negated[1]), x87_m32(to_point[1])),
+        x87_mul(x87_load32(negated[0]), x87_m32(to_point[0])),
+    );
+    let dot = x87_add(dot, x87_mul(x87_load32(negated[2]), x87_m32(to_point[2])));
+    let facing = x87_load32(x87_store32(x87_load32(x87_store32(dot))));
+    // `FCOM 1.0; TEST AH,0x41; JNZ`: cut to 1.0 only when greater (NaN kept).
+    let one: f64 = e.global(ONE_01012070);
+    let facing = if facing > one { 1.0 } else { facing };
+    let facing = x87_load32(x87_store32(facing));
+    let zero: f64 = e.global(ZERO_01012060);
+    let facing = x87_store32(if facing < zero { 0.0 } else { facing });
+    let peak = x87_store32(x87_keep_larger(
+        x87_load32(scaled[1]),
+        x87_load32(scaled[2]),
+    ));
+    let peak = x87_store32(x87_keep_larger(x87_load32(scaled[0]), x87_load32(peak)));
+    let luminance = e.mem.u32(this.addr() + 0xc);
+    let result = x87_store32(x87_mul(
+        x87_mul(x87_load32(luminance), x87_m32(facing)),
+        x87_m32(peak),
+    ));
+    let result = x87_quiet(f32::from_bits(result));
+    e.set(this, ShadowSceneLight::fLuminance, result);
+    result
+}
+
+/// The pointer the code reads at `011f91ec` (a `cdecl` function of the geometry, called when
+/// set), the byte flags at `011ad82c`, the words `011f91e0` and `011f91e4`, the renderer's
+/// object at its +8 (`011f4748`) and its `00aa0ff0` (thiscall, answers a byte), the two
+/// `cdecl` setters `00b7a870` and `00bbd880` (a pass number and 0), and `NiAVObject::Cull`
+/// (`00a59e00`, thiscall: culler).
+const GEOMETRY_CALLBACK_011F91EC: u32 = 0x011f_91ec;
+const RENDER_FLAGS_011AD82C: u32 = 0x011a_d82c;
+const PASS_STATE_011F91E0: u32 = 0x011f_91e0;
+const PASS_011F91E4: u32 = 0x011f_91e4;
+const RENDERER_00AA0FF0: u32 = 0x00aa_0ff0;
+const PASS_SETTER_00B7A870: u32 = 0x00b7_a870;
+const PASS_SETTER_00BBD880: u32 = 0x00bb_d880;
+const NI_AV_OBJECT_CULL: u32 = 0x00a5_9e00;
+
+// Translated from 00b9d020 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`thiscall`, `RET 4`: a culler; answers 1). Unless the light's
+/// `NiLight` is culled (flag bit 0), for each geometry of the light's list (+0xe0) with a
+/// property at +0xc0: the callback at `011f91ec` (when set) gets the geometry; with bit 0 of
+/// `011ad82c`, the renderer's `00aa0ff0` answers a byte and the property's word +0x68 picks a
+/// pass: for 1 to 5, when the byte is 0, `011f91e0` is cleared and pass 0x5c (geometry word
+/// +0xbc set) or 0x58 goes to `011f91e4` and `00b7a870`; for 0x11 likewise 0x1ca or 0x1c8
+/// through `00bbd880`; after a pass the property's objects at +0x34 and +0x30 get their
+/// virtual slot +0x24. The geometry is then culled (`NiAVObject::Cull`); a word +0x68 of any
+/// other value skips it.
+pub fn fn_00b9d020(e: &mut Engine, this: Ptr<ShadowSceneLight>, culler: u32) -> bool {
+    let ni_light = e.get(this, ShadowSceneLight::spLight);
+    if e.mem.u8(ni_light.wrapping_add(FLAGS)) & 1 != 0 {
+        return true;
+    }
+    let mut item = e.mem.u32(this.addr() + GEOM_LIST);
+    while item != 0 {
+        let geometry = e.get(Ptr::<NiTListItem>::new(item), NiTListItem::m_element);
+        item = e.get(Ptr::<NiTListItem>::new(item), NiTListItem::m_pkNext);
+        if geometry == 0 {
+            continue;
+        }
+        let property = e.mem.u32(geometry.wrapping_add(0xc0));
+        if property == 0 {
+            continue;
+        }
+        let callback = e.global::<u32>(GEOMETRY_CALLBACK_011F91EC);
+        if callback != 0 {
+            e.call(callback, &args![geometry]);
+        }
+        if e.global::<u8>(RENDER_FLAGS_011AD82C) & 1 == 0 || property == 0 {
+            continue;
+        }
+        let renderer = e.global::<u32>(RENDERER_SINGLETON_011F4748);
+        let object = e.mem.u32(renderer.wrapping_add(8));
+        let busy = e.call(RENDERER_00AA0FF0, &args![object]).u8();
+        let kind = e.mem.i32(property.wrapping_add(0x68));
+        let with_word = e.mem.u32(geometry.wrapping_add(0xbc)) != 0;
+        let pass = if (1..=5).contains(&kind) {
+            if busy != 0 {
+                None
+            } else {
+                Some((PASS_SETTER_00B7A870, if with_word { 0x5c } else { 0x58 }))
+            }
+        } else if kind == 0x11 {
+            if busy != 0 {
+                None
+            } else {
+                Some((PASS_SETTER_00BBD880, if with_word { 0x1ca } else { 0x1c8 }))
+            }
+        } else {
+            continue;
+        };
+        if let Some((setter, pass)) = pass {
+            e.set_global(PASS_STATE_011F91E0, 0u32);
+            e.set_global(PASS_011F91E4, pass);
+            e.call(setter, &args![pass, 0u32]);
+            let first = e.mem.u32(property.wrapping_add(0x34));
+            e.vcall(first, 0x24, &args![]);
+            let second = e.mem.u32(property.wrapping_add(0x30));
+            e.vcall(second, 0x24, &args![]);
+        }
+        e.call(NI_AV_OBJECT_CULL, &args![geometry, culler]);
+    }
+    true
+}
+
+/// `BSCubeMapCamera`'s constructor (`00bd8290`, thiscall: a word, `RET 4`),
+/// `SetupTransformation` (`00bd7200`, thiscall: the face, `RET 4`) and destructor
+/// (`00bd74a0`); `NiAVObject::Update` (`00a59c60`, thiscall: the update data).
+const CUBE_MAP_CAMERA_CONSTRUCT: u32 = 0x00bd_8290;
+const CUBE_MAP_CAMERA_SETUP_TRANSFORMATION: u32 = 0x00bd_7200;
+const CUBE_MAP_CAMERA_DESTRUCT: u32 = 0x00bd_74a0;
+
+// Translated from 00b9de90 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 00b9de90 - the C++ exception frame (FS:[0] chain, unwind states 0 and 1 around the local camera) and the /GS cookie (011c16bc, __security_check_cookie) are not translated.
+/// `ShadowSceneLight::CubeFaceFrustumFrustumIntersection` (engine map; `thiscall`, `RET 0x18`:
+/// a position, three words; an unread word; an object whose camera is at +0xc; a 16-bit cube
+/// face). With the TLS word +0x2b4 set to 0x20 for its duration: a local `BSCubeMapCamera`
+/// (constructed with 0) gets the position at its +0x58, is set up for the face, updated with
+/// zeroed update data (`float` 0.0 and five zero bytes), and the answer is [`fn_00b9c020`]
+/// of the object's camera and the local camera; the local camera is destroyed.
+pub fn shadow_scene_light_cube_face_frustum_frustum_intersection(
+    e: &mut Engine,
+    this: Ptr<ShadowSceneLight>,
+    x: u32,
+    y: u32,
+    z: u32,
+    _unused_4: u32,
+    source: Ptr,
+    face: u16,
+) -> bool {
+    let tls = e.tls();
+    let camera_of_source = e.mem.u32(source.addr().wrapping_add(0xc));
+    let saved = e.mem.u32(tls + TLS_WORD_2B4);
+    e.mem.set_u32(tls + TLS_WORD_2B4, 0x20);
+    // The exe's frame: the update data (+0) and the local camera (+0x10, 0x140 bytes).
+    let answer = e.with_stack(0x150, |e, frame| {
+        let data = frame.addr();
+        let camera = frame.addr() + 0x10;
+        e.call(CUBE_MAP_CAMERA_CONSTRUCT, &args![camera, 0u32]);
+        e.mem.set_u32(camera + 0x58, x);
+        e.mem.set_u32(camera + 0x5c, y);
+        e.mem.set_u32(camera + 0x60, z);
+        e.call(
+            CUBE_MAP_CAMERA_SETUP_TRANSFORMATION,
+            &args![camera, u32::from(face)],
+        );
+        e.mem.set_u32(data, x87_store32(0.0));
+        for offset in 4..9 {
+            e.mem.set_u8(data + offset, 0);
+        }
+        e.call(OBJECT_UPDATE_00A59C60, &args![camera, data]);
+        let answer = fn_00b9c020(e, this, Ptr::new(camera_of_source), Ptr::new(camera));
+        e.call(CUBE_MAP_CAMERA_DESTRUCT, &args![camera]);
+        answer
+    });
+    e.mem.set_u32(tls + TLS_WORD_2B4, saved);
+    answer
+}
+
+/// The `BSSimpleArray` vtable these destructors store (`010b7ea8`) and the word at
+/// `010b7eb0` (its slot +8, the buffer free, called directly: thiscall with the buffer).
+const SIMPLE_ARRAY_FREE_SLOT_010B7EB0: u32 = 0x010b_7eb0;
+/// The memory manager (`011f6238`) and its `Deallocate` (`00aa4060`, thiscall: block).
+const MEMORY_MANAGER: u32 = 0x011f_6238;
+const MEMORY_MANAGER_DEALLOCATE: u32 = 0x00aa_4060;
+
+/// The destructor body both `00b9e8f0` and `00b9e920` run: the vtable, then a present buffer
+/// freed (the function at `010b7eb0`) and the buffer, capacity and count cleared.
+fn simple_array_destruct(e: &mut Engine, array: u32) {
+    let buffer = e.mem.u32(array.wrapping_add(4));
+    e.mem.set_u32(array, SIMPLE_ARRAY_VTABLE_010B7EA8);
+    if buffer != 0 {
+        let free = e.global::<u32>(SIMPLE_ARRAY_FREE_SLOT_010B7EB0);
+        e.call(free, &args![array, buffer]);
+        e.mem.set_u32(array.wrapping_add(4), 0);
+        e.mem.set_u32(array.wrapping_add(0xc), 0);
+        e.mem.set_u32(array.wrapping_add(8), 0);
+    }
+}
+
+// Translated from 00b9e8f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map: the destructor of the `BSSimpleArray` with vtable `010b7ea8`
+/// (fastcall): the vtable stored, a present buffer freed through the function at `010b7eb0`
+/// and the buffer, capacity and count cleared.
+pub fn fn_00b9e8f0(e: &mut Engine, this: Ptr) {
+    simple_array_destruct(e, this.addr());
+}
+
+// Translated from 00b9e920 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map: that array's scalar deleting destructor (thiscall, `RET 4`):
+/// the destructor body, then with bit 0 of `flags` the memory manager's `Deallocate`
+/// (`00aa4060`) of the array. Answers `this`.
+pub fn fn_00b9e920(e: &mut Engine, this: Ptr, flags: u8) -> Ptr {
+    simple_array_destruct(e, this.addr());
+    if flags & 1 != 0 {
+        e.call(MEMORY_MANAGER_DEALLOCATE, &args![MEMORY_MANAGER, this]);
+    }
+    this
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(
+            0x00b9_bdf0,
+            fn_00b9bdf0(Ptr<ShadowSceneLight>, u32, u32, u32, u32, u32, u32, u32) -> f32
+        ),
+        entry!(0x00b9_d020, fn_00b9d020(Ptr<ShadowSceneLight>, u32) -> bool),
+        entry!(
+            0x00b9_de90,
+            shadow_scene_light_cube_face_frustum_frustum_intersection(
+                Ptr<ShadowSceneLight>,
+                u32,
+                u32,
+                u32,
+                u32,
+                Ptr,
+                u16,
+            ) -> bool
+        ),
+        entry!(0x00b9_e8f0, fn_00b9e8f0(Ptr)),
+        entry!(0x00b9_e920, fn_00b9e920(Ptr, u8) -> Ptr),
         entry!(
             0x00b9_d150,
             shadow_scene_light_compute_weighted_shadow_light(
@@ -4164,5 +4468,293 @@ mod weighted_light_tests {
         assert_eq!(get3(&e, ni_light + 0xd4), [1.0; 3]);
         assert_eq!(get3(&e, ni_light + 0xe0), [16.0, 0.0, 0.0]);
         assert_eq!(e.mem.u32(ni_light + 0xa8), 7);
+    }
+}
+
+#[cfg(test)]
+mod n014_tests {
+    use super::*;
+
+    fn calls_to(e: &Engine, addr: u32) -> Vec<Vec<u32>> {
+        e.call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|c| c.0 == addr)
+            .map(|c| c.1.clone())
+            .collect()
+    }
+
+    fn st0(value: f64) -> Ret {
+        Ret {
+            st0: value,
+            ..Ret::default()
+        }
+    }
+
+    /// A light whose `NiLight` sits at the origin with dimmer 2, colour (0.5, 1.5, 1.0)
+    /// and radius 10.
+    fn light(e: &mut Engine, point: bool) -> (u32, u32) {
+        let this = e.mem.alloc(0x250);
+        let ni_light = e.mem.alloc(0x100);
+        e.mem.set_u32(this + 0xf8, ni_light);
+        e.mem.set_u8(this + 0xf4, u8::from(point));
+        e.mem.set_f32(ni_light + NI_LIGHT_DIMMER, 2.0);
+        e.mem.set_f32(ni_light + NI_LIGHT_COLOUR_D4, 0.5);
+        e.mem.set_f32(ni_light + NI_LIGHT_COLOUR_D4 + 4, 1.5);
+        e.mem.set_f32(ni_light + NI_LIGHT_COLOUR_D4 + 8, 1.0);
+        e.mem.set_f32(ni_light + NI_LIGHT_RADIUS_E0, 10.0);
+        (this, ni_light)
+    }
+
+    fn light_engine() -> Engine {
+        let mut e = Engine::new();
+        e.mem.map(ONE_01012070, 8);
+        e.mem.set_u64(ONE_01012070, 1.0f64.to_bits());
+        e.mem.map(ZERO_01012060, 8);
+        e.mem.set_u64(ZERO_01012060, 0);
+        // The vectors are unit already; the length of (5, 0, 0) is 5.
+        e.register(POINT_NORMALIZE_004A0C10, |_, _| Ret::default());
+        e.register(POINT_LENGTH, |e, a| st0(f64::from(e.mem.f32(a[0]))));
+        e.register(FLOAT_MAX, |_, a| {
+            st0(f64::from(f32::from_bits(a[0]).max(f32::from_bits(a[1]))))
+        });
+        e.register(FLOAT_MIN, |_, a| {
+            st0(f64::from(f32::from_bits(a[0]).min(f32::from_bits(a[1]))))
+        });
+        e
+    }
+
+    #[test]
+    fn luminance_is_zero_for_the_excluded_shadow_or_culled_lights() {
+        let mut e = light_engine();
+        let (this, ni_light) = light(&mut e, false);
+        let words = |ni: u32| args![this, 0u32, 0u32, 0u32, 0u32, 0u32, 0u32, ni];
+        assert_eq!(e.call(0x00b9_bdf0, &words(ni_light)).f32(), 0.0);
+        e.mem.set_u8(this + 0xec, 1);
+        assert_eq!(e.call(0x00b9_bdf0, &words(0)).f32(), 0.0);
+        e.mem.set_u8(this + 0xec, 0);
+        e.mem.set_u32(ni_light + FLAGS, 1);
+        assert_eq!(e.call(0x00b9_bdf0, &words(0)).f32(), 0.0);
+        assert_eq!(e.mem.u32(this + 0xc), 0);
+    }
+
+    #[test]
+    fn luminance_combines_attenuation_facing_and_the_colour_peak() {
+        let mut e = light_engine();
+        let (this, _) = light(&mut e, true);
+        // a = (5, 0, 0): a - light = (5, 0, 0) (taken as unit by the double), length 5,
+        // t = 0.5, attenuation 0.75. b - a = (-1, 0, 0): facing -(-1) * 5 = 5, cut to 1.
+        // Peak of 2 * (0.5, 1.5, 1.0) is 3.
+        let five = 5.0f32.to_bits();
+        let four = 4.0f32.to_bits();
+        let value = e
+            .call(
+                0x00b9_bdf0,
+                &args![this, five, 0u32, 0u32, four, 0u32, 0u32, 0u32],
+            )
+            .f32();
+        assert_eq!(value, 0.75 * 3.0);
+        assert_eq!(e.mem.f32(this + 0xc), 2.25);
+        // Not a point light: no attenuation; b behind gives a negative facing cut to 0.
+        let (other, _) = light(&mut e, false);
+        let six = 6.0f32.to_bits();
+        let value = e
+            .call(
+                0x00b9_bdf0,
+                &args![other, five, 0u32, 0u32, six, 0u32, 0u32, 0u32],
+            )
+            .f32();
+        assert_eq!(value, 0.0);
+        // A NaN facing is kept through both cuts.
+        let nan = 0x7fc0_0000u32;
+        let value = e
+            .call(
+                0x00b9_bdf0,
+                &args![other, five, 0u32, 0u32, nan, 0u32, 0u32, 0u32],
+            )
+            .f32();
+        assert!(value.is_nan());
+    }
+
+    #[test]
+    fn geometry_pass_runs_for_the_known_kinds_then_culls() {
+        const SLOT_24: u32 = 0x03c0_0000;
+        let mut e = Engine::new();
+        for address in [
+            RENDERER_00AA0FF0,
+            PASS_SETTER_00B7A870,
+            PASS_SETTER_00BBD880,
+            NI_AV_OBJECT_CULL,
+            SLOT_24,
+        ] {
+            e.register(address, |_, _| Ret::default());
+        }
+        e.mem.map(GEOMETRY_CALLBACK_011F91EC, 4);
+        e.mem.map(RENDER_FLAGS_011AD82C, 4);
+        e.mem.set_u8(RENDER_FLAGS_011AD82C, 1);
+        e.mem.map(PASS_STATE_011F91E0, 8);
+        e.mem.set_u32(PASS_STATE_011F91E0, 9);
+        e.mem.map(RENDERER_SINGLETON_011F4748, 4);
+        let renderer = e.mem.alloc(0x10);
+        e.mem.set_u32(renderer + 8, 0x4444);
+        e.mem.set_u32(RENDERER_SINGLETON_011F4748, renderer);
+        let vtable = e.mem.alloc(0x30);
+        e.mem.set_u32(vtable + 0x24, SLOT_24);
+        let object = e.mem.alloc(4);
+        e.mem.set_u32(object, vtable);
+        let geometry = |e: &mut Engine, kind: i32, word: u32| {
+            let geometry = e.mem.alloc(0xc4);
+            let property = e.mem.alloc(0x70);
+            e.mem.set_i32(property + 0x68, kind);
+            e.mem.set_u32(property + 0x30, object);
+            e.mem.set_u32(property + 0x34, object);
+            e.mem.set_u32(geometry + 0xc0, property);
+            e.mem.set_u32(geometry + 0xbc, word);
+            geometry
+        };
+        let a = geometry(&mut e, 3, 1);
+        let b = geometry(&mut e, 0x11, 0);
+        let c = geometry(&mut e, 7, 0);
+        let bare = e.mem.alloc(0xc4);
+        let this = e.mem.alloc(0x250);
+        let ni_light = e.mem.alloc(0x40);
+        e.mem.set_u32(this + 0xf8, ni_light);
+        // The list at +0xe0: a, null, b, c, a geometry without a property.
+        let mut next = 0u32;
+        for element in [bare, c, b, 0, a] {
+            let item = e.mem.alloc(0xc);
+            e.mem.set_u32(item, next);
+            e.mem.set_u32(item + 8, element);
+            next = item;
+        }
+        e.mem.set_u32(this + GEOM_LIST, next);
+        e.call_log = Some(vec![]);
+        assert!(e.call(0x00b9_d020, &args![this, 0x7777u32]).bool());
+        assert_eq!(calls_to(&e, PASS_SETTER_00B7A870), vec![vec![0x5c, 0]]);
+        assert_eq!(calls_to(&e, PASS_SETTER_00BBD880), vec![vec![0x1c8, 0]]);
+        assert_eq!(e.mem.u32(PASS_011F91E4), 0x1c8);
+        assert_eq!(e.mem.u32(PASS_STATE_011F91E0), 0);
+        assert_eq!(calls_to(&e, SLOT_24).len(), 4);
+        assert_eq!(
+            calls_to(&e, NI_AV_OBJECT_CULL),
+            vec![vec![a, 0x7777], vec![b, 0x7777]]
+        );
+        assert_eq!(calls_to(&e, RENDERER_00AA0FF0), vec![vec![0x4444]; 3]);
+        // A busy renderer skips the passes but still culls.
+        e.register(RENDERER_00AA0FF0, |_, _| 1u32.into_ret());
+        e.call_log = Some(vec![]);
+        e.call(0x00b9_d020, &args![this, 0x7777u32]);
+        assert!(calls_to(&e, PASS_SETTER_00B7A870).is_empty());
+        assert_eq!(calls_to(&e, NI_AV_OBJECT_CULL).len(), 2);
+        // A culled `NiLight` does nothing.
+        e.mem.set_u8(ni_light + FLAGS, 1);
+        e.call_log = Some(vec![]);
+        assert!(e.call(0x00b9_d020, &args![this, 0x7777u32]).bool());
+        assert_eq!(e.call_log.as_ref().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn cube_face_test_builds_a_camera_for_the_face() {
+        let mut e = Engine::new();
+        for address in [
+            CUBE_MAP_CAMERA_CONSTRUCT,
+            CUBE_MAP_CAMERA_DESTRUCT,
+            NI_PLANE_CONSTRUCT,
+            CULLER_CONSTRUCT_00A69400,
+            CULLER_DESTROY_00A693E0,
+            CULLER_SET_FRUSTUM_00A694A0,
+        ] {
+            e.register(address, |_, _| Ret::default());
+        }
+        e.register(CUBE_MAP_CAMERA_SETUP_TRANSFORMATION, |e, a| {
+            // The position is in place before the set-up.
+            assert_eq!(e.mem.u32(a[0] + 0x58), 1);
+            assert_eq!(e.mem.u32(a[0] + 0x60), 3);
+            Ret::default()
+        });
+        e.register(OBJECT_UPDATE_00A59C60, |e, a| {
+            assert_eq!(e.mem.bytes(a[1], 9), vec![0; 9]);
+            Ret::default()
+        });
+        let tls = e.tls();
+        e.mem.set_u32(tls + TLS_WORD_2B4, 0x55);
+        e.register_double(CUBE_MAP_CAMERA_DESTRUCT, move |e, _| {
+            assert_eq!(e.mem.u32(tls + TLS_WORD_2B4), 0x20);
+            Ret::default()
+        });
+        let this = e.mem.alloc(0x250);
+        let source_camera = e.mem.alloc(0x200);
+        let source = e.mem.alloc(0x10);
+        e.mem.set_u32(source + 0xc, source_camera);
+        e.call_log = Some(vec![]);
+        e.call(
+            0x00b9_de90,
+            &args![this, 1u32, 2u32, 3u32, 0xdeadu32, source, 0x2_0005u32],
+        );
+        let camera = calls_to(&e, CUBE_MAP_CAMERA_CONSTRUCT)[0][0];
+        assert_eq!(
+            calls_to(&e, CUBE_MAP_CAMERA_CONSTRUCT),
+            vec![vec![camera, 0]]
+        );
+        assert_eq!(
+            calls_to(&e, CUBE_MAP_CAMERA_SETUP_TRANSFORMATION),
+            vec![vec![camera, 5]]
+        );
+        assert_eq!(calls_to(&e, OBJECT_UPDATE_00A59C60)[0][0], camera);
+        // The intersection test runs on the source's camera and the local one.
+        assert_eq!(
+            calls_to(&e, CULLER_SET_FRUSTUM_00A694A0),
+            vec![
+                vec![
+                    calls_to(&e, CULLER_CONSTRUCT_00A69400)[0][0],
+                    source_camera + 0xdc
+                ],
+                vec![calls_to(&e, CULLER_CONSTRUCT_00A69400)[0][0], camera + 0xdc]
+            ]
+        );
+        assert_eq!(calls_to(&e, CUBE_MAP_CAMERA_DESTRUCT), vec![vec![camera]]);
+        assert_eq!(e.mem.u32(tls + TLS_WORD_2B4), 0x55);
+    }
+
+    #[test]
+    fn simple_array_destructor_frees_the_buffer() {
+        const FREE: u32 = 0x03c1_0000;
+        let mut e = Engine::new();
+        e.register(FREE, |_, _| Ret::default());
+        e.mem.map(SIMPLE_ARRAY_FREE_SLOT_010B7EB0, 4);
+        e.mem.set_u32(SIMPLE_ARRAY_FREE_SLOT_010B7EB0, FREE);
+        let this = e.mem.alloc(0x10);
+        for (offset, value) in [(4u32, 0x5000u32), (8, 3), (0xc, 4)] {
+            e.mem.set_u32(this + offset, value);
+        }
+        e.call_log = Some(vec![]);
+        e.call(0x00b9_e8f0, &args![this]);
+        assert_eq!(calls_to(&e, FREE), vec![vec![this, 0x5000]]);
+        assert_eq!(e.mem.u32(this), SIMPLE_ARRAY_VTABLE_010B7EA8);
+        assert_eq!(e.mem.bytes(this + 4, 12), vec![0; 12]);
+        e.call(0x00b9_e8f0, &args![this]);
+        assert_eq!(calls_to(&e, FREE).len(), 1);
+    }
+
+    #[test]
+    fn simple_array_deleting_destructor_deallocates_on_request() {
+        const FREE: u32 = 0x03c2_0000;
+        let mut e = Engine::new();
+        e.register(FREE, |_, _| Ret::default());
+        e.register(MEMORY_MANAGER_DEALLOCATE, |_, _| Ret::default());
+        e.mem.map(SIMPLE_ARRAY_FREE_SLOT_010B7EB0, 4);
+        e.mem.set_u32(SIMPLE_ARRAY_FREE_SLOT_010B7EB0, FREE);
+        let this = e.mem.alloc(0x10);
+        e.mem.set_u32(this + 4, 0x5000);
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x00b9_e920, &args![this, 0u32]).u32(), this);
+        assert!(calls_to(&e, MEMORY_MANAGER_DEALLOCATE).is_empty());
+        assert_eq!(e.call(0x00b9_e920, &args![this, 1u32]).u32(), this);
+        assert_eq!(
+            calls_to(&e, MEMORY_MANAGER_DEALLOCATE),
+            vec![vec![MEMORY_MANAGER, this]]
+        );
+        assert_eq!(calls_to(&e, FREE).len(), 1);
     }
 }

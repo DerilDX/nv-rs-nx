@@ -242,9 +242,241 @@ pub fn fn_00baeeb0(
     this
 }
 
+/// Imported `InterlockedIncrement` (import slot).
+const IMPORT_INTERLOCKED_INCREMENT: u32 = 0x00fd_f1c0;
+/// `BSShaderProperty`'s member copy (`00ba8b10`, `thiscall`, two words: the clone and the
+/// cloning process) and `SaveBinary` (`00ba9380`, `thiscall`, one word: the stream).
+const BASE_COPY_MEMBERS: u32 = 0x00ba_8b10;
+const BASE_SAVE_BINARY: u32 = 0x00ba_9380;
+/// The stream's string writer `00a64160` (`thiscall` on the stream, one word: the C string).
+const STREAM_SAVE_STRING: u32 = 0x00a6_4160;
+/// `BSShaderProperty::GetViewerStrings` (`00ba9890`, `thiscall`, one word), the
+/// `NiGetViewerString` overloads (engine map; `cdecl`): `00a7d330` (a name), `_ov7` `00a7d4d0`
+/// (a label and an integer), `_ov9` `00a7d550` (a label and a float), `_ov10` `00a7d5a0` (a
+/// label and a pointer), `_ov11` `00a7d5e0` (a label and a string); the string array's grow
+/// (`0096ad30`) and set (`0096ae90`), `thiscall`; `BSUtilities::GetTextureName` (`00c4bb40`,
+/// `cdecl`, one word); the formatter `00406d00` (`cdecl`).
+const BASE_GET_VIEWER_STRINGS: u32 = 0x00ba_9890;
+const VIEWER_STRING_NAME: u32 = 0x00a7_d330;
+const VIEWER_STRING_INT: u32 = 0x00a7_d4d0;
+const VIEWER_STRING_FLOAT: u32 = 0x00a7_d550;
+const VIEWER_STRING_POINTER: u32 = 0x00a7_d5a0;
+const VIEWER_STRING_TEXT: u32 = 0x00a7_d5e0;
+const ARRAY_SET_SIZE_0096AD30: u32 = 0x0096_ad30;
+const ARRAY_SET_AT_0096AE90: u32 = 0x0096_ae90;
+const GET_TEXTURE_NAME: u32 = 0x00c4_bb40;
+const FORMAT_00406D00: u32 = 0x0040_6d00;
+/// `_ftol2_sse` (`00ec62c0`, the value in ST0: a leading `f64` argument).
+const FTOL: u32 = 0x00ec_62c0;
+/// The viewer-string labels: `"SOType"` (`010b8de8`), `"Blend Texture"` (`010b8dd8`),
+/// `"Blend Value"` (`010b8dcc`), `"base texture"` (`010ae79c`), `"Blend Color"` (`010b8db4`),
+/// the format `"%d %d %d %d"` (`010b8dc0`) and `""` (`01011584`).
+const SO_TYPE_LABEL: u32 = 0x010b_8de8;
+const BLEND_TEXTURE_LABEL: u32 = 0x010b_8dd8;
+const BLEND_VALUE_LABEL: u32 = 0x010b_8dcc;
+const BASE_TEXTURE_LABEL: u32 = 0x010a_e79c;
+const BLEND_COLOR_LABEL: u32 = 0x010b_8db4;
+const COLOR_FORMAT: u32 = 0x010b_8dc0;
+const EMPTY_TEXT: u32 = 0x0101_1584;
+/// The `double` 255 (`0101e568`) the colour channels are scaled by.
+const CHANNEL_SCALE_0101E568: u32 = 0x0101_e568;
+
+/// An `NiPointer` assignment from this property's slot to the clone's, as the copy inlines it.
+fn copy_pointer(e: &mut Engine, source: u32, target: u32) {
+    let old = e.mem.u32(target);
+    if old == e.mem.u32(source) {
+        return;
+    }
+    if old != 0 {
+        release_reference(e, old);
+    }
+    let new = e.mem.u32(source);
+    e.mem.set_u32(target, new);
+    if new != 0 {
+        e.call(IMPORT_INTERLOCKED_INCREMENT, &args![new.wrapping_add(4)]);
+    }
+}
+
+// Translated from 00bae980 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map: `SkyShaderProperty`'s member copy into a clone (`thiscall`, two
+/// words: the clone and the cloning process). The base copy (`00ba8b10`); the blend texture
+/// assigned (an `NiPointer`); `fBlendValue` (`FLD`/`FSTP`) and `soType` copied; the base map
+/// assigned; `TextureClampMode` copied (the file name and the cloud layer are not).
+pub fn fn_00bae980(e: &mut Engine, this: Ptr<SkyShaderProperty>, clone: u32, process: u32) {
+    let base = this.addr();
+    e.call(BASE_COPY_MEMBERS, &args![base, clone, process]);
+    copy_pointer(e, base + 0x80, clone.wrapping_add(0x80));
+    let blend = x87_quiet_bits(e.mem.u32(base + 0x84));
+    e.mem.set_u32(clone.wrapping_add(0x84), blend);
+    let kind = e.mem.u32(base + 0x8c);
+    e.mem.set_u32(clone.wrapping_add(0x8c), kind);
+    copy_pointer(e, base + 0x70, clone.wrapping_add(0x70));
+    let mode = e.mem.u32(base + 0x7c);
+    e.mem.set_u32(clone.wrapping_add(0x7c), mode);
+}
+
+/// One write through the stream's writer (`+0x250`): its function at `+0xc` (`cdecl`) called
+/// with (writer, source, 4, the address of a count word holding 4, 1) and the answer added to
+/// the writer's `+4`.
+fn stream_write_word(e: &mut Engine, stream: u32, source: u32) {
+    e.with_stack(4, |e, count| {
+        let writer = e.mem.u32(stream + 0x250);
+        let write = e.mem.u32(writer + 0xc);
+        e.mem.set_u32(count.addr(), 4);
+        let done = e
+            .call(write, &args![writer, source, 4u32, count, 1u32])
+            .u32();
+        let total = e.mem.u32(writer + 4).wrapping_add(done);
+        e.mem.set_u32(writer + 4, total);
+    });
+}
+
+// Translated from 00baeb00 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map: `SkyShaderProperty::SaveBinary` (vtable slot +0x58, the Xbox
+/// PDB's `SaveBinary` slot; `thiscall`, one word: the stream), the mirror of
+/// `sky_shader_property_load_binary`: the base `SaveBinary` (`00ba9380`), four bytes from the
+/// clamp mode, the file name (`00a64160` with `TextureFilename`'s characters), four bytes from
+/// `soType`.
+pub fn fn_00baeb00(e: &mut Engine, this: Ptr<SkyShaderProperty>, stream: u32) {
+    let base = this.addr();
+    e.call(BASE_SAVE_BINARY, &args![base, stream]);
+    stream_write_word(e, stream, base + 0x7c);
+    let name = e.mem.u32(base + 0x74);
+    e.call(STREAM_SAVE_STRING, &args![stream, name]);
+    stream_write_word(e, stream, base + 0x8c);
+}
+
+// Translated from 00baec80 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Ghidra made no function here: slot +0xd0 of `SkyShaderProperty`'s vtable `010b8ce0`
+/// (`SetClampNI` in the Xbox PDB's slot list; `thiscall`, one word): stores the word in
+/// `TextureClampMode`.
+pub fn fn_00baec80(e: &mut Engine, this: Ptr<SkyShaderProperty>, mode: u32) {
+    e.set(this, SkyShaderProperty::TextureClampMode, mode);
+}
+
+// Translated from 00baedc0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map: `SkyShaderProperty`'s vtable slot +0x48 (`CreateClone` in the
+/// Xbox PDB's slot list; `thiscall`, one word: the cloning process). 0x90 bytes from `00aa13e0`
+/// constructed by `fn_00baeb80` (null when the allocation gave none) get this property's
+/// members (`fn_00bae980`). Answers the clone.
+///
+/// The exception frame (`FS:[0]`) is not translated.
+// Translation incomplete: 00baedc0 - the FS:[0] exception frame (unwinding on a throw) is not translated
+pub fn fn_00baedc0(e: &mut Engine, this: Ptr<SkyShaderProperty>, process: u32) -> u32 {
+    let block = e.call(NI_ALLOCATE, &args![0x90u32]).u32();
+    let clone = if block == 0 {
+        0
+    } else {
+        fn_00baeb80(e, Ptr::new(block)).addr()
+    };
+    fn_00bae980(e, this, clone, process);
+    clone
+}
+
+/// Adds `text` at the end of the viewer-string array: when `m_usSize` is not below
+/// `m_usMaxSize` it grows to `m_usSize + m_usGrowBy`, then the text is set at `m_usSize`
+/// through the stack word `element`.
+fn add_viewer_string(e: &mut Engine, strings: u32, element: u32, text: u32) {
+    e.mem.set_u32(element, text);
+    let size = u32::from(e.mem.u16(strings + 0xa));
+    let capacity = u32::from(e.mem.u16(strings + 8));
+    if size >= capacity {
+        let grow = u32::from(e.mem.u16(strings + 0xe));
+        e.call(
+            ARRAY_SET_SIZE_0096AD30,
+            &args![strings, grow.wrapping_add(size)],
+        );
+    }
+    e.call(ARRAY_SET_AT_0096AE90, &args![strings, size, element]);
+}
+
+// Translated from 00baeee0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map: `SkyShaderProperty`'s vtable slot +0x60 (`GetViewerStrings` in
+/// the Xbox PDB's slot list; `thiscall`, one word: the string array). After
+/// `BSShaderProperty::GetViewerStrings` it adds, each at the array's end: the class name (the
+/// name word of `012005b8`), `"SOType"` with `soType`, `"Blend Texture"` with the blend
+/// texture's name (`+8`; `""` without a texture or name), `"Blend Value"` with `fBlendValue`,
+/// `"base texture"` with the base map's texture name (`BSUtilities::GetTextureName`) or, when
+/// that is null, the base map as a pointer, and for a cloud (`soType` 3) `"Blend Color"` with
+/// `VertexColor`'s channels times 255 (each truncated by `_ftol2`) formatted `"%d %d %d %d"`
+/// (red, green, blue, alpha) into a 0x100-byte stack buffer.
+///
+/// The /GS cookie check is not translated.
+// Translation incomplete: 00baeee0 - the /GS cookie check (00ec408c) of its stack buffer is not translated
+pub fn fn_00baeee0(e: &mut Engine, this: Ptr<SkyShaderProperty>, strings: u32) {
+    let base = this.addr();
+    e.call(BASE_GET_VIEWER_STRINGS, &args![base, strings]);
+    e.with_stack(0x104, |e, frame| {
+        let element = frame.addr();
+        let buffer = frame.addr() + 4;
+        let name = e.mem.u32(RTTI);
+        let text = e.call(VIEWER_STRING_NAME, &args![name]).u32();
+        add_viewer_string(e, strings, element, text);
+
+        let kind = e.mem.u32(base + 0x8c);
+        let text = e.call(VIEWER_STRING_INT, &args![SO_TYPE_LABEL, kind]).u32();
+        add_viewer_string(e, strings, element, text);
+
+        let blend = e.mem.u32(base + 0x80);
+        let blend_name = if blend != 0 { e.mem.u32(blend + 8) } else { 0 };
+        let blend_name = if blend_name != 0 {
+            blend_name
+        } else {
+            EMPTY_TEXT
+        };
+        let text = e
+            .call(VIEWER_STRING_TEXT, &args![BLEND_TEXTURE_LABEL, blend_name])
+            .u32();
+        add_viewer_string(e, strings, element, text);
+
+        let value = x87_quiet_bits(e.mem.u32(base + 0x84));
+        let text = e
+            .call(VIEWER_STRING_FLOAT, &args![BLEND_VALUE_LABEL, value])
+            .u32();
+        add_viewer_string(e, strings, element, text);
+
+        let map = e.mem.u32(base + 0x70);
+        let map_name = e.call(GET_TEXTURE_NAME, &args![map]).u32();
+        let text = if map_name != 0 {
+            e.call(VIEWER_STRING_TEXT, &args![BASE_TEXTURE_LABEL, map_name])
+                .u32()
+        } else {
+            let map = e.mem.u32(base + 0x70);
+            e.call(VIEWER_STRING_POINTER, &args![BASE_TEXTURE_LABEL, map])
+                .u32()
+        };
+        add_viewer_string(e, strings, element, text);
+
+        if e.mem.u32(base + 0x8c) == 3 {
+            let scale: f64 = e.mem.f64(CHANNEL_SCALE_0101E568);
+            let alpha = x87_mul(x87_load32(e.mem.u32(base + 0x6c)), scale);
+            let alpha = e.call(FTOL, &args![alpha]).u32();
+            let blue = x87_mul(x87_load32(e.mem.u32(base + 0x68)), scale);
+            let blue = e.call(FTOL, &args![blue]).u32();
+            let green = x87_mul(x87_load32(e.mem.u32(base + 0x64)), scale);
+            let green = e.call(FTOL, &args![green]).u32();
+            let red = x87_mul(scale, x87_m32(e.mem.u32(base + 0x60)));
+            let red = e.call(FTOL, &args![red]).u32();
+            e.call(
+                FORMAT_00406D00,
+                &args![buffer, 0x100u32, COLOR_FORMAT, red, green, blue, alpha],
+            );
+            let text = e
+                .call(VIEWER_STRING_TEXT, &args![BLEND_COLOR_LABEL, buffer])
+                .u32();
+            add_viewer_string(e, strings, element, text);
+        }
+    });
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x00ba_e980, fn_00bae980(Ptr<SkyShaderProperty>, u32, u32)),
+        entry!(0x00ba_eb00, fn_00baeb00(Ptr<SkyShaderProperty>, u32)),
+        entry!(0x00ba_ec80, fn_00baec80(Ptr<SkyShaderProperty>, u32)),
+        entry!(0x00ba_edc0, fn_00baedc0(Ptr<SkyShaderProperty>, u32) -> u32),
+        entry!(0x00ba_eee0, fn_00baeee0(Ptr<SkyShaderProperty>, u32)),
         entry!(
             0x00ba_ea50,
             sky_shader_property_load_binary(Ptr<SkyShaderProperty>, u32)
@@ -444,5 +676,193 @@ mod tests {
         }
         assert_eq!(calls(&e, BASE_DESTRUCT).len(), 4);
         assert_eq!(calls(&e, NI_FREE_SIZED), vec![vec![this, 0x90]; 2]);
+    }
+}
+
+#[cfg(test)]
+mod n013_tests {
+    use super::*;
+
+    const STUB: AbiFn = |_, _| Ret::default();
+
+    fn calls(e: &Engine, callee: u32) -> Vec<Vec<u32>> {
+        e.call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|(address, _)| *address == callee)
+            .map(|(_, words)| words.clone())
+            .collect()
+    }
+
+    fn rig() -> Engine {
+        let mut e = Engine::new();
+        e.register(IMPORT_INTERLOCKED_INCREMENT, |e, a| {
+            let v = e.mem.u32(a[0]).wrapping_add(1);
+            e.mem.set_u32(a[0], v);
+            v.into_ret()
+        });
+        e.register(IMPORT_INTERLOCKED_DECREMENT, |e, a| {
+            let v = e.mem.u32(a[0]).wrapping_sub(1);
+            e.mem.set_u32(a[0], v);
+            v.into_ret()
+        });
+        e.put_vtable(0x0f00_1000, &[0, 0x0f00_0004]);
+        e.register(0x0f00_0004, STUB);
+        e.call_log = Some(vec![]);
+        e
+    }
+
+    fn object(e: &mut Engine) -> u32 {
+        let o = e.mem.alloc(0x10);
+        e.mem.set_u32(o, 0x0f00_1000);
+        e.mem.set_u32(o + 4, 1);
+        o
+    }
+
+    #[test]
+    fn fn_00bae980_copies_the_members() {
+        let mut e = rig();
+        e.register(BASE_COPY_MEMBERS, STUB);
+        let this = e.new_object::<SkyShaderProperty>();
+        let clone = e.new_object::<SkyShaderProperty>();
+        let (blend, map, old) = (object(&mut e), object(&mut e), object(&mut e));
+        e.set(this, SkyShaderProperty::spBlendTexture, blend);
+        e.set(this, SkyShaderProperty::spBaseMap, map);
+        e.set(clone, SkyShaderProperty::spBaseMap, old);
+        e.mem.set_u32(this.addr() + 0x84, 0x7f80_0001);
+        e.set(this, SkyShaderProperty::soType, 3);
+        e.set(this, SkyShaderProperty::TextureClampMode, 2);
+        e.call(0x00ba_e980, &args![this, clone, 0x44u32]);
+        assert_eq!(
+            calls(&e, BASE_COPY_MEMBERS),
+            vec![vec![this.addr(), clone.addr(), 0x44]]
+        );
+        assert_eq!(e.get(clone, SkyShaderProperty::spBlendTexture), blend);
+        assert_eq!(e.get(clone, SkyShaderProperty::spBaseMap), map);
+        assert_eq!((e.mem.u32(blend + 4), e.mem.u32(map + 4)), (2, 2));
+        assert_eq!(calls(&e, 0x0f00_0004), vec![vec![old]]);
+        assert_eq!(e.mem.u32(clone.addr() + 0x84), 0x7fc0_0001);
+        assert_eq!(e.get(clone, SkyShaderProperty::soType), 3);
+        assert_eq!(e.get(clone, SkyShaderProperty::TextureClampMode), 2);
+    }
+
+    #[test]
+    fn fn_00baeb00_saves_mode_name_and_type() {
+        const WRITE: u32 = 0x0f00_0200;
+        let mut e = rig();
+        e.register(BASE_SAVE_BINARY, STUB);
+        e.register(STREAM_SAVE_STRING, STUB);
+        e.register(WRITE, |e, a| {
+            assert_eq!(e.mem.u32(a[3]), 4);
+            a[2].into_ret()
+        });
+        let writer = e.mem.alloc(0x10);
+        e.mem.set_u32(writer + 0xc, WRITE);
+        let stream = e.mem.alloc(0x260);
+        e.mem.set_u32(stream + 0x250, writer);
+        let this = e.new_object::<SkyShaderProperty>();
+        e.mem.set_u32(this.addr() + 0x74, 0x5150);
+        e.call(0x00ba_eb00, &args![this, stream]);
+        assert_eq!(calls(&e, BASE_SAVE_BINARY), vec![vec![this.addr(), stream]]);
+        let writes = calls(&e, WRITE);
+        assert_eq!(writes.len(), 2);
+        assert_eq!(&writes[0][..3], &[writer, this.addr() + 0x7c, 4]);
+        assert_eq!(&writes[1][..3], &[writer, this.addr() + 0x8c, 4]);
+        assert_eq!(calls(&e, STREAM_SAVE_STRING), vec![vec![stream, 0x5150]]);
+        assert_eq!(e.mem.u32(writer + 4), 8);
+    }
+
+    #[test]
+    fn fn_00baec80_sets_the_clamp_mode() {
+        let mut e = rig();
+        let this = e.new_object::<SkyShaderProperty>();
+        e.call(0x00ba_ec80, &args![this, 6u32]);
+        assert_eq!(e.get(this, SkyShaderProperty::TextureClampMode), 6);
+    }
+
+    #[test]
+    fn fn_00baedc0_constructs_and_copies() {
+        let mut e = rig();
+        e.map(0x011a_9000, 0x1000);
+        for addr in [BASE_CONSTRUCT, BASE_COPY_MEMBERS] {
+            e.register(addr, |_, a| a[0].into_ret());
+        }
+        e.register(NI_ALLOCATE, |e, a| e.mem.alloc(a[0]).into_ret());
+        let this = e.new_object::<SkyShaderProperty>();
+        e.set(this, SkyShaderProperty::TextureClampMode, 1);
+        let clone = e.call(0x00ba_edc0, &args![this, 0x77u32]).u32();
+        assert_ne!(clone, 0);
+        assert_eq!(e.mem.u32(clone), VTABLE);
+        assert_eq!(e.mem.u32(clone + 0x7c), 1);
+        assert_eq!(
+            calls(&e, BASE_COPY_MEMBERS),
+            vec![vec![this.addr(), clone, 0x77]]
+        );
+    }
+
+    #[test]
+    fn fn_00baeee0_adds_the_strings() {
+        let mut e = rig();
+        e.map(0x0120_0000, 0x1000);
+        e.map(0x0101_e000, 0x1000);
+        e.mem.set_f64(CHANNEL_SCALE_0101E568, 255.0);
+        e.mem.set_u32(RTTI, 0x0123_0000);
+        e.register(BASE_GET_VIEWER_STRINGS, STUB);
+        for (addr, tag) in [
+            (VIEWER_STRING_NAME, 1u32),
+            (VIEWER_STRING_INT, 2),
+            (VIEWER_STRING_FLOAT, 3),
+            (VIEWER_STRING_POINTER, 4),
+            (VIEWER_STRING_TEXT, 5),
+        ] {
+            e.register_double(addr, move |_, _| tag.into_ret());
+        }
+        e.register(GET_TEXTURE_NAME, |_, _| 0u32.into_ret());
+        e.register(ARRAY_SET_SIZE_0096AD30, STUB);
+        e.register(ARRAY_SET_AT_0096AE90, |e, a| {
+            let text = e.mem.u32(a[2]);
+            e.mem.set_u32(a[0] + 0x10 + 4 * a[1], text);
+            e.mem.set_u16(a[0] + 0xa, a[1] as u16 + 1);
+            Ret::default()
+        });
+        e.register(FTOL, |_, a| (f64::take(a, &mut 0) as i32).into_ret());
+        e.register(FORMAT_00406D00, STUB);
+        let strings = e.mem.alloc(0x40);
+        e.mem.set_u16(strings + 8, 2);
+        e.mem.set_u16(strings + 0xe, 4);
+        let this = e.new_object::<SkyShaderProperty>();
+        let map = object(&mut e);
+        e.set(this, SkyShaderProperty::spBaseMap, map);
+        e.mem.set_f32(this.addr() + 0x84, 0.5);
+        e.set(this, SkyShaderProperty::soType, 3);
+        for (i, v) in [1.0f32, 0.5, 0.0, 1.0].iter().enumerate() {
+            e.mem.set_f32(this.addr() + 0x60 + 4 * i as u32, *v);
+        }
+        e.call(0x00ba_eee0, &args![this, strings]);
+        let added: Vec<u32> = (0..6).map(|i| e.mem.u32(strings + 0x10 + 4 * i)).collect();
+        assert_eq!(added, vec![1, 2, 5, 3, 4, 5]);
+        assert_eq!(calls(&e, VIEWER_STRING_NAME), vec![vec![0x0123_0000]]);
+        assert_eq!(calls(&e, VIEWER_STRING_INT), vec![vec![SO_TYPE_LABEL, 3]]);
+        assert_eq!(
+            calls(&e, VIEWER_STRING_TEXT)[0],
+            vec![BLEND_TEXTURE_LABEL, EMPTY_TEXT]
+        );
+        assert_eq!(
+            calls(&e, VIEWER_STRING_FLOAT),
+            vec![vec![BLEND_VALUE_LABEL, 0.5f32.to_bits()]]
+        );
+        assert_eq!(
+            calls(&e, VIEWER_STRING_POINTER),
+            vec![vec![BASE_TEXTURE_LABEL, map]]
+        );
+        let format = calls(&e, FORMAT_00406D00);
+        assert_eq!(&format[0][1..], &[0x100, COLOR_FORMAT, 255, 127, 0, 255]);
+        assert_eq!(
+            calls(&e, VIEWER_STRING_TEXT)[1],
+            vec![BLEND_COLOR_LABEL, format[0][0]]
+        );
+        // The array grew once it was full.
+        assert_eq!(calls(&e, ARRAY_SET_SIZE_0096AD30)[0], vec![strings, 6]);
     }
 }

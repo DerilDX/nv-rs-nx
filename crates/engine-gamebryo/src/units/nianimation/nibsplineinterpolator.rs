@@ -244,9 +244,295 @@ pub fn ni_b_spline_interpolator_load_binary(
     assign_pointer(e, this.addr() + 0x18, basis_data);
 }
 
+/// `NiBSplineInterpolator` virtual slots (Xbox PDB names): `GetChannelCount`
+/// +0xDC, `GetControlPointCount` +0xE0, `GetDimension` +0xE4,
+/// `UsesCompressedControlPoints` +0xF0, `GetControlHandle` +0xF8.
+const SLOT_GET_CHANNEL_COUNT: u32 = 0xdc;
+const SLOT_GET_CONTROL_POINT_COUNT: u32 = 0xe0;
+const SLOT_GET_DIMENSION: u32 = 0xe4;
+const SLOT_USES_COMPRESSED_CONTROL_POINTS: u32 = 0xf0;
+const SLOT_GET_CONTROL_HANDLE: u32 = 0xf8;
+/// `NiObject` virtual slots: `RegisterStreamables` +0x54, `IsEqual` +0x5C,
+/// `GetViewerStrings` +0x60.
+const SLOT_REGISTER_STREAMABLES: u32 = 0x54;
+const SLOT_IS_EQUAL: u32 = 0x5c;
+const SLOT_GET_VIEWER_STRINGS: u32 = 0x60;
+/// The handle that means "no control points".
+const INVALID_HANDLE: u32 = 0xffff;
+/// `NiBSplineBasisData::GetDegree3Basis` (`00a62660`, engine map;
+/// `thiscall`, answers the basis, whose first word is its control point
+/// count).
+const GET_DEGREE3_BASIS: u32 = 0x00a6_2660;
+/// The base `RegisterStreamables` (`00a81fe0`, a 5-byte jump to
+/// `00a5d2f0`), `IsEqual` (`00ba87d0`, a 5-byte jump to `NiObject::IsEqual`
+/// `00a5d470`) and `SaveBinary` (`00a724d0`, a 5-byte jump to `00a89af0`);
+/// `thiscall`, one word each.
+const BASE_REGISTER_STREAMABLES: u32 = 0x00a8_1fe0;
+const BASE_IS_EQUAL: u32 = 0x00ba_87d0;
+const BASE_SAVE_BINARY: u32 = 0x00a7_24d0;
+/// `NiInterpolator::GetViewerStrings` (`00a570b0`, engine map; `thiscall`,
+/// one word).
+const INTERPOLATOR_GET_VIEWER_STRINGS: u32 = 0x00a5_70b0;
+/// `NiGetViewerString` (`00a7d330`, `cdecl (text)`) and its float overload
+/// (`00a7d550`, `cdecl (name, value)`); the viewer-string array's grow
+/// (`0096ad30`, `thiscall (array; new capacity)`) and store (`0096ae90`,
+/// `thiscall (array; index, &string)`).
+const NI_GET_VIEWER_STRING: u32 = 0x00a7_d330;
+const NI_GET_VIEWER_STRING_FLOAT: u32 = 0x00a7_d550;
+const STRINGS_GROW: u32 = 0x0096_ad30;
+const STRINGS_SET_AT: u32 = 0x0096_ae90;
+/// `"m_fStartTime"` and `"m_fEndTime"`.
+const NAME_START_TIME: u32 = 0x0109_af98;
+const NAME_END_TIME: u32 = 0x0109_af8c;
+
+/// One 4-byte write from `source` through the stream's output object
+/// (`NiStream` +0x250; write function at +0xC, `cdecl (output, source, 4,
+/// address of the component size 4, 1)`); the answer added to the output's
+/// word at +4.
+fn write_word(e: &mut Engine, stream: Ptr, source: u32) {
+    let output = e.mem.u32(stream.addr() + 0x250);
+    let write = e.mem.u32(output + 0xc);
+    let answer = e.with_stack(4, |e, size| {
+        e.mem.set_u32(size.addr(), 4);
+        e.call(write, &args![output, source, 4u32, size, 1u32])
+            .u32()
+    });
+    let total = e.mem.u32(output + 4).wrapping_add(answer);
+    e.mem.set_u32(output + 4, total);
+}
+
+/// Appends `text` to a viewer-string array as the exe's inlined `Add`
+/// does: when the 16-bit size (+0xA) has reached the capacity (+0x8) the
+/// array grows to the step (+0xE) plus the size, then the string is stored
+/// at the old size (through a stack slot holding it).
+fn push_viewer_string(e: &mut Engine, strings: Ptr, text: u32) {
+    let size = u32::from(e.mem.u16(strings.addr() + 0xa));
+    if size >= u32::from(e.mem.u16(strings.addr() + 8)) {
+        let step = u32::from(e.mem.u16(strings.addr() + 0xe));
+        e.call(STRINGS_GROW, &args![strings, step + size]);
+    }
+    e.with_stack(4, |e, slot| {
+        e.mem.set_u32(slot.addr(), text);
+        e.call(STRINGS_SET_AT, &args![strings, size, slot]);
+    });
+}
+
+// Translated from 00a57da0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiBSplineInterpolator::GetAllocatedSize` (Xbox PDB, matched by the
+/// engine map; `thiscall`, one word: the channel): the channel's dimension
+/// times its control point count (both virtual, given the channel word)
+/// times 2 with compressed control points (vtable +0xF0), 4 without.
+pub fn ni_b_spline_interpolator_get_allocated_size(
+    e: &mut Engine,
+    this: Ptr<NiBSplineInterpolator>,
+    channel: u32,
+) -> u32 {
+    let object = this.addr();
+    let compressed = e
+        .vcall(object, SLOT_USES_COMPRESSED_CONTROL_POINTS, &args![])
+        .bool();
+    let dimension = e.vcall(object, SLOT_GET_DIMENSION, &args![channel]).u32();
+    let count = e
+        .vcall(object, SLOT_GET_CONTROL_POINT_COUNT, &args![channel])
+        .u32();
+    let size = dimension.wrapping_mul(count);
+    if compressed {
+        size.wrapping_add(size)
+    } else {
+        let size = size.wrapping_add(size);
+        size.wrapping_add(size)
+    }
+}
+
+// Translated from 00a57e00 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiBSplineInterpolator::GetControlPointCount` (Xbox PDB, matched by the
+/// engine map; `thiscall`, one word: the channel): for a channel below the
+/// channel count (vtable +0xDC, 16-bit compare), with data and a control
+/// handle (vtable +0xF8, given the whole channel word) other than 0xFFFF,
+/// the first word of the basis data's degree-3 basis (`00a62660`);
+/// otherwise 0.
+pub fn ni_b_spline_interpolator_get_control_point_count(
+    e: &mut Engine,
+    this: Ptr<NiBSplineInterpolator>,
+    channel: u32,
+) -> u32 {
+    let object = this.addr();
+    let channels = e.vcall(object, SLOT_GET_CHANNEL_COUNT, &args![]).u16();
+    if (channel as u16) < channels && e.get(this, NiBSplineInterpolator::m_spData) != 0 {
+        let handle = e
+            .vcall(object, SLOT_GET_CONTROL_HANDLE, &args![channel])
+            .u32();
+        if handle != INVALID_HANDLE {
+            let basis_data = e.get(this, NiBSplineInterpolator::m_spBasisData);
+            let basis = e.call(GET_DEGREE3_BASIS, &args![basis_data]).u32();
+            return e.mem.u32(basis);
+        }
+    }
+    0
+}
+
+// Translated from 00a57e50 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiBSplineInterpolator::RegisterStreamables` (Xbox PDB, matched by the
+/// engine map; `thiscall`, one word: the stream): false when the base
+/// registration (`00a81fe0`) answers false; otherwise the data and the
+/// basis data (when set) register themselves (vtable +0x54) and the answer
+/// is true.
+pub fn ni_b_spline_interpolator_register_streamables(
+    e: &mut Engine,
+    this: Ptr<NiBSplineInterpolator>,
+    stream: Ptr,
+) -> bool {
+    if !e
+        .call(BASE_REGISTER_STREAMABLES, &args![this, stream])
+        .bool()
+    {
+        return false;
+    }
+    let data = e.get(this, NiBSplineInterpolator::m_spData);
+    if data != 0 {
+        e.vcall(data, SLOT_REGISTER_STREAMABLES, &args![stream]);
+    }
+    let basis_data = e.get(this, NiBSplineInterpolator::m_spBasisData);
+    if basis_data != 0 {
+        e.vcall(basis_data, SLOT_REGISTER_STREAMABLES, &args![stream]);
+    }
+    true
+}
+
+// Translated from 00a57e90 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiBSplineInterpolator::IsEqual` (Xbox PDB, matched by the engine map;
+/// `thiscall`, one word: the other object), as the exe has it: after the
+/// base `IsEqual` (`00ba87d0`), equal start and end times (`FUCOMPP`; a NaN
+/// is unequal) answer true. Otherwise the data and then the basis data are
+/// compared the usual way (both null, or both set and equal by the first's
+/// `IsEqual`, vtable +0x5C; a mismatch stops), but every way through that
+/// answers false.
+pub fn ni_b_spline_interpolator_is_equal(
+    e: &mut Engine,
+    this: Ptr<NiBSplineInterpolator>,
+    other: Ptr<NiBSplineInterpolator>,
+) -> bool {
+    if !e.call(BASE_IS_EQUAL, &args![this, other]).bool() {
+        return false;
+    }
+    let start = x87_load32(e.get(this, NiBSplineInterpolator::m_fStartTime));
+    let other_start = x87_load32(e.get(other, NiBSplineInterpolator::m_fStartTime));
+    if other_start == start {
+        let end = x87_load32(e.get(this, NiBSplineInterpolator::m_fEndTime));
+        let other_end = x87_load32(e.get(other, NiBSplineInterpolator::m_fEndTime));
+        if other_end == end {
+            return true;
+        }
+    }
+    let data = e.get(this, NiBSplineInterpolator::m_spData);
+    let other_data = e.get(other, NiBSplineInterpolator::m_spData);
+    if data != 0 {
+        if other_data == 0 {
+            return false;
+        }
+        if !e.vcall(data, SLOT_IS_EQUAL, &args![other_data]).bool() {
+            return false;
+        }
+    } else if other_data != 0 {
+        return false;
+    }
+    let basis_data = e.get(this, NiBSplineInterpolator::m_spBasisData);
+    let other_basis_data = e.get(other, NiBSplineInterpolator::m_spBasisData);
+    if basis_data != 0 && other_basis_data != 0 {
+        // The exe drops this answer: the code after the call returns false.
+        e.vcall(basis_data, SLOT_IS_EQUAL, &args![other_basis_data]);
+    }
+    false
+}
+
+// Translated from 00a58160 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiBSplineInterpolator::SaveBinary` (Xbox PDB, matched by the engine
+/// map; `thiscall`, one word: the stream): the base `SaveBinary`
+/// (`00a724d0`), the start and end times (one 4-byte write each), then the
+/// data's and the basis data's link ids (the stream's vtable +0x30).
+pub fn ni_b_spline_interpolator_save_binary(
+    e: &mut Engine,
+    this: Ptr<NiBSplineInterpolator>,
+    stream: Ptr,
+) {
+    e.call(BASE_SAVE_BINARY, &args![this, stream]);
+    write_word(e, stream, this.addr() + 0xc);
+    write_word(e, stream, this.addr() + 0x10);
+    let data = e.get(this, NiBSplineInterpolator::m_spData);
+    e.vcall(stream.addr(), 0x30, &args![data]);
+    let basis_data = e.get(this, NiBSplineInterpolator::m_spBasisData);
+    e.vcall(stream.addr(), 0x30, &args![basis_data]);
+}
+
+// Translated from 00a58200 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiBSplineInterpolator::GetViewerStrings` (Xbox PDB, matched by the
+/// engine map; `thiscall`, one word: the strings array):
+/// `NiInterpolator::GetViewerStrings` (`00a570b0`), then the class name
+/// (the first word of the `NiRTTI` record), `m_fStartTime` and
+/// `m_fEndTime` (the floats through the FPU) appended, then the data's and
+/// the basis data's own strings (vtable +0x60, when set).
+pub fn ni_b_spline_interpolator_get_viewer_strings(
+    e: &mut Engine,
+    this: Ptr<NiBSplineInterpolator>,
+    strings: Ptr,
+) {
+    e.call(INTERPOLATOR_GET_VIEWER_STRINGS, &args![this, strings]);
+    let class_name: u32 = e.global(NI_B_SPLINE_INTERPOLATOR_RTTI);
+    let text = e.call(NI_GET_VIEWER_STRING, &args![class_name]).u32();
+    push_viewer_string(e, strings, text);
+    let start = x87_quiet_bits(e.get(this, NiBSplineInterpolator::m_fStartTime));
+    let text = e
+        .call(NI_GET_VIEWER_STRING_FLOAT, &args![NAME_START_TIME, start])
+        .u32();
+    push_viewer_string(e, strings, text);
+    let end = x87_quiet_bits(e.get(this, NiBSplineInterpolator::m_fEndTime));
+    let text = e
+        .call(NI_GET_VIEWER_STRING_FLOAT, &args![NAME_END_TIME, end])
+        .u32();
+    push_viewer_string(e, strings, text);
+    let data = e.get(this, NiBSplineInterpolator::m_spData);
+    if data != 0 {
+        e.vcall(data, SLOT_GET_VIEWER_STRINGS, &args![strings]);
+    }
+    let basis_data = e.get(this, NiBSplineInterpolator::m_spBasisData);
+    if basis_data != 0 {
+        e.vcall(basis_data, SLOT_GET_VIEWER_STRINGS, &args![strings]);
+    }
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(
+            0x00a5_7da0,
+            ni_b_spline_interpolator_get_allocated_size(Ptr<NiBSplineInterpolator>, u32) -> u32
+        ),
+        entry!(
+            0x00a5_7e00,
+            ni_b_spline_interpolator_get_control_point_count(
+                Ptr<NiBSplineInterpolator>,
+                u32,
+            ) -> u32
+        ),
+        entry!(
+            0x00a5_7e50,
+            ni_b_spline_interpolator_register_streamables(Ptr<NiBSplineInterpolator>, Ptr) -> bool
+        ),
+        entry!(
+            0x00a5_7e90,
+            ni_b_spline_interpolator_is_equal(
+                Ptr<NiBSplineInterpolator>,
+                Ptr<NiBSplineInterpolator>,
+            ) -> bool
+        ),
+        entry!(
+            0x00a5_8160,
+            ni_b_spline_interpolator_save_binary(Ptr<NiBSplineInterpolator>, Ptr)
+        ),
+        entry!(
+            0x00a5_8200,
+            ni_b_spline_interpolator_get_viewer_strings(Ptr<NiBSplineInterpolator>, Ptr)
+        ),
         entry!(0x00a57f70, ni_b_spline_interpolator_get_rtti() -> Ptr),
         entry!(0x00a581e0, ni_b_spline_interpolator_scalar_deleting_destructor(Ptr, u32) -> Ptr),
         entry!(
@@ -487,5 +773,236 @@ mod b037_tests {
             (data, basis)
         );
         assert_eq!((e.mem.u32(data + 4), e.mem.u32(basis + 4)), (1, 1));
+    }
+}
+
+#[cfg(test)]
+mod n002_tests {
+    use super::*;
+
+    type I = NiBSplineInterpolator;
+
+    const VTABLE: u32 = 0x0002_0000;
+    const CHANNELS: u32 = 0x0001_0300;
+    const POINTS: u32 = 0x0001_0310;
+    const DIMENSION: u32 = 0x0001_0320;
+    const COMPRESSED: u32 = 0x0001_0330;
+    const HANDLE: u32 = 0x0001_0340;
+    const CHILD: u32 = 0x0001_0350;
+
+    fn word(value: u32) -> Ret {
+        Ret {
+            eax: value,
+            ..Ret::default()
+        }
+    }
+
+    fn calls(e: &Engine, addr: u32) -> Vec<Vec<u32>> {
+        e.call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|c| c.0 == addr)
+            .map(|c| c.1.clone())
+            .collect()
+    }
+
+    /// An engine with one vtable for the interpolator and its children:
+    /// the slots answer the object's own words (+0x1C compressed flag,
+    /// +0x20 dimension, +0x24 control points, +0x28 channels, +0x2C
+    /// handle); the children's register / equal / strings slots answer
+    /// whether their argument is 0x4444.
+    fn engine() -> Engine {
+        let mut e = Engine::new();
+        e.register(COMPRESSED, |e, a| word(e.mem.u32(a[0] + 0x1c)));
+        e.register(DIMENSION, |e, a| word(e.mem.u32(a[0] + 0x20)));
+        e.register(POINTS, |e, a| word(e.mem.u32(a[0] + 0x24)));
+        e.register(CHANNELS, |e, a| word(e.mem.u32(a[0] + 0x28)));
+        e.register(HANDLE, |e, a| word(e.mem.u32(a[0] + 0x2c)));
+        e.register(CHILD, |_, a| word(u32::from(a[1] == 0x4444)));
+        let mut slots = vec![0u32; 0x40];
+        slots[(SLOT_GET_CHANNEL_COUNT / 4) as usize] = CHANNELS;
+        slots[(SLOT_GET_CONTROL_POINT_COUNT / 4) as usize] = POINTS;
+        slots[(SLOT_GET_DIMENSION / 4) as usize] = DIMENSION;
+        slots[(SLOT_USES_COMPRESSED_CONTROL_POINTS / 4) as usize] = COMPRESSED;
+        slots[(SLOT_GET_CONTROL_HANDLE / 4) as usize] = HANDLE;
+        slots[(SLOT_REGISTER_STREAMABLES / 4) as usize] = CHILD;
+        slots[(SLOT_IS_EQUAL / 4) as usize] = CHILD;
+        slots[(SLOT_GET_VIEWER_STRINGS / 4) as usize] = CHILD;
+        slots[0x30 / 4] = CHILD;
+        e.put_vtable(VTABLE, &slots);
+        e.call_log = Some(vec![]);
+        e
+    }
+
+    fn object(e: &mut Engine) -> u32 {
+        let object = e.mem.alloc(0x30);
+        e.mem.set_u32(object, VTABLE);
+        object
+    }
+
+    #[test]
+    fn allocated_size_is_dimension_times_points_times_the_point_size() {
+        let mut e = engine();
+        let this = object(&mut e);
+        e.mem.set_u32(this + 0x20, 3);
+        e.mem.set_u32(this + 0x24, 5);
+        assert_eq!(e.call(0x00a5_7da0, &args![this, 7u32]).u32(), 60);
+        assert_eq!(calls(&e, DIMENSION), vec![vec![this, 7]]);
+        assert_eq!(calls(&e, POINTS), vec![vec![this, 7]]);
+        e.mem.set_u32(this + 0x1c, 1);
+        assert_eq!(e.call(0x00a5_7da0, &args![this, 7u32]).u32(), 30);
+    }
+
+    #[test]
+    fn control_point_count_comes_from_the_basis() {
+        let mut e = engine();
+        e.register(GET_DEGREE3_BASIS, |_, a| word(a[0] + 8));
+        let this = object(&mut e);
+        let basis_data = e.mem.alloc(0x10);
+        e.mem.set_u32(basis_data + 8, 12);
+        e.mem.set_u32(this + 0x28, 2);
+        e.mem.set_u32(this + 0x14, 0x5000);
+        e.mem.set_u32(this + 0x18, basis_data);
+        let this = Ptr::<I>::new(this);
+        assert_eq!(e.call(0x00a5_7e00, &args![this, 0x0001_0001u32]).u32(), 12);
+        assert_eq!(calls(&e, HANDLE), vec![vec![this.addr(), 0x0001_0001]]);
+        assert_eq!(calls(&e, GET_DEGREE3_BASIS), vec![vec![basis_data]]);
+        // Channel out of range (16-bit compare), no data, no handle.
+        assert_eq!(e.call(0x00a5_7e00, &args![this, 2u32]).u32(), 0);
+        e.mem.set_u32(this.addr() + 0x2c, 0xffff);
+        assert_eq!(e.call(0x00a5_7e00, &args![this, 0u32]).u32(), 0);
+        e.mem.set_u32(this.addr() + 0x2c, 0);
+        e.set(this, I::m_spData, 0);
+        assert_eq!(e.call(0x00a5_7e00, &args![this, 0u32]).u32(), 0);
+        assert_eq!(calls(&e, GET_DEGREE3_BASIS).len(), 1);
+    }
+
+    #[test]
+    fn register_streamables_registers_both_children() {
+        let mut e = engine();
+        let this = object(&mut e);
+        let data = object(&mut e);
+        let basis_data = object(&mut e);
+        e.mem.set_u32(this + 0x14, data);
+        e.mem.set_u32(this + 0x18, basis_data);
+        e.register(BASE_REGISTER_STREAMABLES, |_, _| word(0));
+        assert!(!e.call(0x00a5_7e50, &args![this, 0x700u32]).bool());
+        assert!(calls(&e, CHILD).is_empty());
+        e.register(BASE_REGISTER_STREAMABLES, |_, _| word(1));
+        assert!(e.call(0x00a5_7e50, &args![this, 0x700u32]).bool());
+        assert_eq!(
+            calls(&e, CHILD),
+            vec![vec![data, 0x700], vec![basis_data, 0x700]]
+        );
+        e.mem.set_u32(this + 0x14, 0);
+        e.mem.set_u32(this + 0x18, 0);
+        assert!(e.call(0x00a5_7e50, &args![this, 0x700u32]).bool());
+        assert_eq!(calls(&e, CHILD).len(), 2);
+    }
+
+    #[test]
+    fn is_equal_answers_true_only_for_equal_times() {
+        let mut e = engine();
+        e.register(BASE_IS_EQUAL, |_, _| word(1));
+        let this = Ptr::<I>::new(object(&mut e));
+        let other = Ptr::<I>::new(object(&mut e));
+        e.set(this, I::m_fStartTime, 1.0f32.to_bits());
+        e.set(other, I::m_fStartTime, 1.0f32.to_bits());
+        e.set(this, I::m_fEndTime, 2.0f32.to_bits());
+        e.set(other, I::m_fEndTime, 2.0f32.to_bits());
+        assert!(e.call(0x00a5_7e90, &args![this, other]).bool());
+        // Different times: the children are compared, the answer is false.
+        let data = object(&mut e);
+        let basis_data = object(&mut e);
+        e.set(other, I::m_fEndTime, 3.0f32.to_bits());
+        e.set(this, I::m_spData, data);
+        e.set(other, I::m_spData, 0x4444);
+        e.set(this, I::m_spBasisData, basis_data);
+        e.set(other, I::m_spBasisData, 0x4444);
+        assert!(!e.call(0x00a5_7e90, &args![this, other]).bool());
+        assert_eq!(
+            calls(&e, CHILD),
+            vec![vec![data, 0x4444], vec![basis_data, 0x4444]]
+        );
+        // A NaN time is unequal; unequal data stops before the basis data.
+        e.set(other, I::m_fEndTime, 2.0f32.to_bits());
+        e.set(this, I::m_fStartTime, f32::NAN.to_bits());
+        e.set(other, I::m_spData, 0x4445);
+        e.call_log = Some(vec![]);
+        assert!(!e.call(0x00a5_7e90, &args![this, other]).bool());
+        assert_eq!(calls(&e, CHILD), vec![vec![data, 0x4445]]);
+        // One side without data: no compare at all.
+        e.set(other, I::m_spData, 0);
+        e.call_log = Some(vec![]);
+        assert!(!e.call(0x00a5_7e90, &args![this, other]).bool());
+        assert!(calls(&e, CHILD).is_empty());
+        e.register(BASE_IS_EQUAL, |_, _| word(0));
+        e.set(this, I::m_fStartTime, 1.0f32.to_bits());
+        assert!(!e.call(0x00a5_7e90, &args![this, this]).bool());
+    }
+
+    #[test]
+    fn save_binary_writes_times_and_links() {
+        const WRITE: u32 = 0x0001_0360;
+        let mut e = engine();
+        e.register(BASE_SAVE_BINARY, |_, _| Ret::default());
+        e.register(WRITE, |e, a| {
+            assert_eq!((a[2], e.mem.u32(a[3]), a[4]), (4, 4, 1));
+            word(4)
+        });
+        let output = e.mem.alloc(0x10);
+        e.mem.set_u32(output + 0xc, WRITE);
+        let stream = e.mem.alloc(0x254);
+        e.mem.set_u32(stream, VTABLE);
+        e.mem.set_u32(stream + 0x250, output);
+        let this = object(&mut e);
+        e.mem.set_u32(this + 0x14, 0x5000);
+        e.mem.set_u32(this + 0x18, 0x6000);
+        e.call(0x00a5_8160, &args![this, stream]);
+        assert_eq!(calls(&e, BASE_SAVE_BINARY), vec![vec![this, stream]]);
+        let writes = calls(&e, WRITE);
+        assert_eq!((writes[0][1], writes[1][1]), (this + 0xc, this + 0x10));
+        assert_eq!(e.mem.u32(output + 4), 8);
+        assert_eq!(
+            calls(&e, CHILD),
+            vec![vec![stream, 0x5000], vec![stream, 0x6000]]
+        );
+    }
+
+    #[test]
+    fn get_viewer_strings_appends_name_times_and_children() {
+        let mut e = engine();
+        e.map(NI_B_SPLINE_INTERPOLATOR_RTTI, 4);
+        e.set_global(NI_B_SPLINE_INTERPOLATOR_RTTI, 0x0109_7777u32);
+        e.register(INTERPOLATOR_GET_VIEWER_STRINGS, |_, _| Ret::default());
+        e.register(NI_GET_VIEWER_STRING, |_, _| word(0x11));
+        e.register(NI_GET_VIEWER_STRING_FLOAT, |_, _| word(0x12));
+        e.register(STRINGS_GROW, |_, _| Ret::default());
+        e.register(STRINGS_SET_AT, |e, a| {
+            let size = e.mem.u16(a[0] + 0xa);
+            e.mem.set_u16(a[0] + 0xa, size + 1);
+            Ret::default()
+        });
+        let this = object(&mut e);
+        e.mem.set_f32(this + 0xc, 1.5);
+        e.mem.set_f32(this + 0x10, 2.5);
+        let data = object(&mut e);
+        e.mem.set_u32(this + 0x14, data);
+        let strings = e.mem.alloc(0x10);
+        e.mem.set_u16(strings + 8, 2);
+        e.mem.set_u16(strings + 0xe, 1);
+        e.call(0x00a5_8200, &args![this, strings]);
+        assert_eq!(calls(&e, NI_GET_VIEWER_STRING), vec![vec![0x0109_7777]]);
+        assert_eq!(
+            calls(&e, NI_GET_VIEWER_STRING_FLOAT),
+            vec![
+                vec![NAME_START_TIME, 1.5f32.to_bits()],
+                vec![NAME_END_TIME, 2.5f32.to_bits()]
+            ]
+        );
+        assert_eq!(calls(&e, STRINGS_GROW), vec![vec![strings, 3]]);
+        assert_eq!(calls(&e, STRINGS_SET_AT).len(), 3);
+        assert_eq!(calls(&e, CHILD), vec![vec![data, strings]]);
     }
 }

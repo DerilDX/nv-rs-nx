@@ -105,9 +105,34 @@ pub fn ni_d3d_shader_program_creator_obj_scalar_deleting_destructor(
     this
 }
 
+// Translated from 00e91be0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiD3DShaderProgramCreator`'s scalar deleting destructor (engine map name; vtable
+/// `010f0a68` +0): stores the class's vtable and, when `flags & 1`, gives 4 bytes back (the
+/// size the exe passes). Returns `this`.
+pub fn ni_d3d_shader_program_creator_scalar_deleting_destructor(
+    e: &mut Engine,
+    this: Ptr<NiD3DShaderProgramCreator>,
+    flags: u32,
+) -> Ptr<NiD3DShaderProgramCreator> {
+    e.mem.set_u32(this.addr(), CREATOR_VTABLE);
+    if flags & 1 != 0 {
+        e.call(NI_DELETE, &args![this, 4u32]);
+    }
+    this
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(
+            0x00e9_1be0,
+            ni_d3d_shader_program_creator_scalar_deleting_destructor(
+                Ptr<NiD3DShaderProgramCreator>,
+                u32,
+            ) -> Ptr<
+                NiD3DShaderProgramCreator,
+            >
+        ),
         entry!(
             0x00a1_1db0,
             ni_t_list_base_add_node_tail(Ptr<NiTPointerList>, Ptr<NiTListItem>)
@@ -217,5 +242,18 @@ mod tests {
         e.call_log = Some(vec![]);
         e.call(0x00e9_1c40, &args![this, 0u32]);
         assert!(calls_to(&e, NI_DELETE).is_empty());
+    }
+
+    #[test]
+    fn ni_d3d_shader_program_creator_scalar_deleting_destructor_frees_four_bytes() {
+        let mut e = Engine::new();
+        e.register(NI_DELETE, |_, _| Ret::default());
+        let this = e.new_object::<NiD3DShaderProgramCreator>();
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x00e9_1be0, &args![this, 0u32]).u32(), this.addr());
+        assert_eq!(e.mem.u32(this.addr()), CREATOR_VTABLE);
+        assert!(calls_to(&e, NI_DELETE).is_empty());
+        e.call(0x00e9_1be0, &args![this, 1u32]);
+        assert_eq!(calls_to(&e, NI_DELETE), vec![vec![this.addr(), 4]]);
     }
 }

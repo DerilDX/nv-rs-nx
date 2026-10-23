@@ -345,9 +345,181 @@ pub fn creature_check_missing_limbs(e: &mut Engine, this: Ptr) {
     }
 }
 
+/// `0088b850` (`thiscall` on the actor; a `float` in ST0; no Xbox PDB name).
+const ACTOR_NUMBER_0088B850: u32 = 0x0088_b850;
+/// `005f9ad0` (`thiscall` on the `TESCreature`; a byte; no Xbox PDB name).
+const CREATURE_NUMBER_005F9AD0: u32 = 0x005f_9ad0;
+/// `0059f3a0` (`thiscall` on the `TESCreature`; a byte compared as signed
+/// with 7; no Xbox PDB name).
+const CREATURE_KIND_0059F3A0: u32 = 0x0059_f3a0;
+/// The setting whose `float` value multiplies [`fn_008d4750`]'s result for
+/// a creature whose `0059f3a0` byte is 7.
+const SETTING_011CE484: u32 = 0x011c_e484;
+
+/// The base object as a `TESCreature` (`__RTDynamicCast(base, 0,
+/// TESActorBase, TESCreature, 0)`), or 0.
+fn base_creature(e: &mut Engine, this: Ptr) -> u32 {
+    let base = e.call(GET_BASE_OBJECT, &args![this]).u32();
+    e.call(
+        RT_DYNAMIC_CAST,
+        &args![base, 0u32, TYPE_TES_ACTOR_BASE, TYPE_TES_CREATURE, 0u32],
+    )
+    .u32()
+}
+
+// Translated from 008d46f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// An integer actor value of a creature as ST0 (`thiscall`, no stack words;
+/// no Xbox PDB name): 0 unless the base object is a `TESCreature`, else the
+/// actor value owner's (+0xA4) virtual +8 for actor value 0x2D; the integer
+/// loaded with `FILD` (exact in an `f64`).
+pub fn fn_008d46f0(e: &mut Engine, this: Ptr) -> f64 {
+    let value = if base_creature(e, this) != 0 {
+        let owner = this.addr().wrapping_add(0xa4);
+        e.vcall(owner, 8, &args![0x2du32]).i32()
+    } else {
+        0
+    };
+    f64::from(value)
+}
+
+// Translated from 008d4750 (decompiled, FalloutNV.exe 1.4.0.525)
+/// A `float` of the creature (`thiscall`, result in ST0; no Xbox PDB name):
+/// without a `TESCreature` base object, `0088b850` (stored as a `float`);
+/// with one, its `005f9ad0` byte as a `float`, multiplied by the value of
+/// the setting at `011ce484` when its `0059f3a0` byte is 7.
+pub fn fn_008d4750(e: &mut Engine, this: Ptr) -> f32 {
+    // The `FLDZ`/`FSTP` of 0.0 into the local is overwritten on both paths.
+    let creature = base_creature(e, this);
+    let value = if creature == 0 {
+        let result = e.call(ACTOR_NUMBER_0088B850, &args![this]).f64();
+        x87_store32(result)
+    } else {
+        let byte = e.call(CREATURE_NUMBER_005F9AD0, &args![creature]).u8();
+        let value = x87_store32(f64::from(byte));
+        if e.call(CREATURE_KIND_0059F3A0, &args![creature]).u8() as i8 == 7 {
+            let setting = e.call(SETTING_VALUE, &args![SETTING_011CE484]).u32();
+            let factor = e.mem.u32(setting);
+            x87_store32(x87_mul(x87_load32(value), x87_m32(factor)))
+        } else {
+            value
+        }
+    };
+    f32::from_bits(x87_quiet_bits(value))
+}
+
+// Translated from 008d48a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `008806d0(mapped actor value, value)` on `this` (`thiscall`, two words;
+/// no Xbox PDB name), the actor value mapped by [`fn_008d4a80`].
+pub fn fn_008d48a0(e: &mut Engine, this: Ptr, index: u32, value: u32) {
+    let mapped = fn_008d4a80(e, this, index);
+    e.call(0x0088_06d0, &args![this, mapped, value]);
+}
+
+// Translated from 008d48d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `00880700(mapped actor value, value)` on `this` (`thiscall`, two words,
+/// the second a `float` copied through `FLD`/`FSTP`; no Xbox PDB name), the
+/// actor value mapped by [`fn_008d4a80`].
+pub fn fn_008d48d0(e: &mut Engine, this: Ptr, index: u32, value: f32) {
+    let value = x87_quiet_bits(value.to_bits());
+    let mapped = fn_008d4a80(e, this, index);
+    e.call(0x0088_0700, &args![this, mapped, value]);
+}
+
+// Translated from 008d4900 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `00880950(mapped actor value, value, extra)` on `this` (`thiscall`,
+/// three words; no Xbox PDB name), the actor value mapped by
+/// [`fn_008d4a80`].
+pub fn fn_008d4900(e: &mut Engine, this: Ptr, index: u32, value: u32, extra: u32) {
+    let mapped = fn_008d4a80(e, this, index);
+    e.call(0x0088_0950, &args![this, mapped, value, extra]);
+}
+
+// Translated from 008d4960 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `00880c70(mapped actor value, value, extra)` on `this` (`thiscall`,
+/// three words; no Xbox PDB name), the actor value mapped by
+/// [`fn_008d4a80`].
+pub fn fn_008d4960(e: &mut Engine, this: Ptr, index: u32, value: u32, extra: u32) {
+    let mapped = fn_008d4a80(e, this, index);
+    e.call(0x0088_0c70, &args![this, mapped, value, extra]);
+}
+
+// Translated from 008d4990 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `00880e00(mapped actor value, value, extra)` on `this` (`thiscall`,
+/// three words, the second a `float` copied through `FLD`/`FSTP`; no Xbox
+/// PDB name), the actor value mapped by [`fn_008d4a80`].
+pub fn fn_008d4990(e: &mut Engine, this: Ptr, index: u32, value: f32, extra: u32) {
+    let value = x87_quiet_bits(value.to_bits());
+    let mapped = fn_008d4a80(e, this, index);
+    e.call(0x0088_0e00, &args![this, mapped, value, extra]);
+}
+
+// Translated from 008d49c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `00880fb0(mapped actor value, value, extra)` on `this` (`thiscall`,
+/// three words; no Xbox PDB name), the actor value mapped by
+/// [`fn_008d4a80`].
+pub fn fn_008d49c0(e: &mut Engine, this: Ptr, index: u32, value: u32, extra: u32) {
+    let mapped = fn_008d4a80(e, this, index);
+    e.call(0x0088_0fb0, &args![this, mapped, value, extra]);
+}
+
+// Translated from 008d49f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `00881130(mapped actor value, value, extra)` on `this` (`thiscall`,
+/// three words, the second a `float` copied through `FLD`/`FSTP`; no Xbox
+/// PDB name), the actor value mapped by [`fn_008d4a80`].
+pub fn fn_008d49f0(e: &mut Engine, this: Ptr, index: u32, value: f32, extra: u32) {
+    let value = x87_quiet_bits(value.to_bits());
+    let mapped = fn_008d4a80(e, this, index);
+    e.call(0x0088_1130, &args![this, mapped, value, extra]);
+}
+
+// Translated from 008d4a20 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `00881330(mapped actor value, value)` on `this` (`thiscall`, two words;
+/// no Xbox PDB name), the actor value mapped by [`fn_008d4a80`].
+pub fn fn_008d4a20(e: &mut Engine, this: Ptr, index: u32, value: u32) {
+    let mapped = fn_008d4a80(e, this, index);
+    e.call(0x0088_1330, &args![this, mapped, value]);
+}
+
+// Translated from 008d4a50 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `00881360(mapped actor value, value)` on `this` (`thiscall`, two words,
+/// the second a `float` copied through `FLD`/`FSTP`; no Xbox PDB name), the
+/// actor value mapped by [`fn_008d4a80`].
+pub fn fn_008d4a50(e: &mut Engine, this: Ptr, index: u32, value: f32) {
+    let value = x87_quiet_bits(value.to_bits());
+    let mapped = fn_008d4a80(e, this, index);
+    e.call(0x0088_1360, &args![this, mapped, value]);
+}
+
+// Translated from 008d4ca0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The word at `011c6250` (no parameters; one of the node names
+/// [`creature_check_missing_limbs`] uses).
+pub fn fn_008d4ca0(e: &mut Engine) -> u32 {
+    e.global::<u32>(0x011c_6250)
+}
+
+// Translated from 008d4cb0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The word at `011c6258` (no parameters; one of the node names
+/// [`creature_check_missing_limbs`] uses).
+pub fn fn_008d4cb0(e: &mut Engine) -> u32 {
+    e.global::<u32>(0x011c_6258)
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x008d_46f0, fn_008d46f0(Ptr) -> f64),
+        entry!(0x008d_4750, fn_008d4750(Ptr) -> f32),
+        entry!(0x008d_48a0, fn_008d48a0(Ptr, u32, u32)),
+        entry!(0x008d_48d0, fn_008d48d0(Ptr, u32, f32)),
+        entry!(0x008d_4900, fn_008d4900(Ptr, u32, u32, u32)),
+        entry!(0x008d_4960, fn_008d4960(Ptr, u32, u32, u32)),
+        entry!(0x008d_4990, fn_008d4990(Ptr, u32, f32, u32)),
+        entry!(0x008d_49c0, fn_008d49c0(Ptr, u32, u32, u32)),
+        entry!(0x008d_49f0, fn_008d49f0(Ptr, u32, f32, u32)),
+        entry!(0x008d_4a20, fn_008d4a20(Ptr, u32, u32)),
+        entry!(0x008d_4a50, fn_008d4a50(Ptr, u32, f32)),
+        entry!(0x008d_4ca0, fn_008d4ca0() -> u32),
+        entry!(0x008d_4cb0, fn_008d4cb0() -> u32),
         entry!(0x008d_43a0, creature_constructor(Ptr) -> Ptr),
         entry!(0x008d_4500, creature_constructor_ov2(Ptr, u32) -> Ptr),
         entry!(0x008d_4490, fn_008d4490(Ptr, u8)),
@@ -699,5 +871,142 @@ mod creature_tests {
         e.call_log = Some(vec![]);
         e.call(0x008d_4b60, &args![this]);
         assert!(calls(&mut e).iter().all(|c| c.0 != SLOT_A));
+    }
+}
+
+#[cfg(test)]
+mod n026_tests {
+    use super::*;
+
+    type CallLog = [(u32, Vec<u32>)];
+
+    fn calls(log: &CallLog, addr: u32) -> Vec<Vec<u32>> {
+        log.iter()
+            .filter(|(a, _)| *a == addr)
+            .map(|(_, w)| w.clone())
+            .collect()
+    }
+
+    fn st0(value: f64) -> Ret {
+        Ret {
+            st0: value,
+            ..Ret::default()
+        }
+    }
+
+    /// The base object is 0x5000; the dynamic cast gives `creature`.
+    fn cast_doubles(e: &mut Engine, creature: u32) {
+        e.register(GET_BASE_OBJECT, |_, _| 0x5000u32.into_ret());
+        e.register_double(RT_DYNAMIC_CAST, move |_, a| {
+            assert_eq!(a, [0x5000, 0, TYPE_TES_ACTOR_BASE, TYPE_TES_CREATURE, 0]);
+            creature.into_ret()
+        });
+    }
+
+    #[test]
+    fn integer_value_needs_a_creature_base() {
+        let mut e = Engine::new();
+        cast_doubles(&mut e, 0x6000);
+        let this = e.mem.alloc(0x200);
+        e.put_vtable(0x0abc_0000, &[0, 0, 0x0abd_0008]);
+        e.mem.set_u32(this + 0xa4, 0x0abc_0000);
+        e.register(0x0abd_0008, |_, a| {
+            assert_eq!(a[1], 0x2d);
+            (-7i32 as u32).into_ret()
+        });
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x008d_46f0, &args![this]).f64(), -7.0);
+        let log = e.call_log.take().unwrap();
+        assert_eq!(calls(&log, 0x0abd_0008)[0][0], this + 0xa4);
+
+        let mut e = Engine::new();
+        cast_doubles(&mut e, 0);
+        assert_eq!(e.call(0x008d_46f0, &args![0x100u32]).f64(), 0.0);
+    }
+
+    fn float_value(creature: u32, kind: u8) -> f32 {
+        let mut e = Engine::new();
+        cast_doubles(&mut e, creature);
+        e.register(ACTOR_NUMBER_0088B850, |_, _| st0(0.1));
+        e.register(CREATURE_NUMBER_005F9AD0, |_, _| 0x1203u32.into_ret());
+        e.register_double(CREATURE_KIND_0059F3A0, move |_, _| {
+            (0xff00 | u32::from(kind)).into_ret()
+        });
+        let setting = e.mem.alloc(8);
+        e.mem.set_f32(setting + 4, 2.5);
+        e.register_double(SETTING_VALUE, move |_, a| {
+            assert_eq!(a[0], SETTING_011CE484);
+            (setting + 4).into_ret()
+        });
+        e.call(0x008d_4750, &args![0x100u32]).f32()
+    }
+
+    #[test]
+    fn float_value_from_the_actor_or_the_creature_byte() {
+        assert_eq!(float_value(0, 7), 0.1);
+        assert_eq!(float_value(0x6000, 6), 3.0);
+        assert_eq!(float_value(0x6000, 7), 7.5);
+    }
+
+    fn mapping_double(e: &mut Engine) {
+        e.register(ACTOR_VALUE_HAS_FLAGS, |_, a| {
+            assert_eq!(a[1], 0x400);
+            u32::from(a[0] == 0x10).into_ret()
+        });
+    }
+
+    #[test]
+    fn forwarders_pass_the_mapped_actor_value() {
+        let two_words: [(u32, u32); 4] = [
+            (0x008d_48a0, 0x0088_06d0),
+            (0x008d_48d0, 0x0088_0700),
+            (0x008d_4a20, 0x0088_1330),
+            (0x008d_4a50, 0x0088_1360),
+        ];
+        for (forwarder, callee) in two_words {
+            let mut e = Engine::new();
+            mapping_double(&mut e);
+            e.register(callee, |_, _| Ret::default());
+            e.call_log = Some(vec![]);
+            e.call(forwarder, &args![0x100u32, 0x10u32, 0x3f80_0000u32]);
+            e.call(forwarder, &args![0x100u32, 0x11u32, 0x7f80_0001u32]);
+            let log = e.call_log.take().unwrap();
+            let passed = calls(&log, callee);
+            assert_eq!(passed[0], vec![0x100, 0x2d, 0x3f80_0000]);
+            // The `float` forwarders copy the value through `FLD`/`FSTP`.
+            let second = if matches!(forwarder, 0x008d_48d0 | 0x008d_4a50) {
+                0x7fc0_0001
+            } else {
+                0x7f80_0001
+            };
+            assert_eq!(passed[1], vec![0x100, 0x11, second]);
+        }
+        let three_words: [(u32, u32, bool); 5] = [
+            (0x008d_4900, 0x0088_0950, false),
+            (0x008d_4960, 0x0088_0c70, false),
+            (0x008d_4990, 0x0088_0e00, true),
+            (0x008d_49c0, 0x0088_0fb0, false),
+            (0x008d_49f0, 0x0088_1130, true),
+        ];
+        for (forwarder, callee, float) in three_words {
+            let mut e = Engine::new();
+            mapping_double(&mut e);
+            e.register(callee, |_, _| Ret::default());
+            e.call_log = Some(vec![]);
+            e.call(forwarder, &args![0x100u32, 0x10u32, 0xff80_0001u32, 9u32]);
+            let log = e.call_log.take().unwrap();
+            let value = if float { 0xffc0_0001 } else { 0xff80_0001 };
+            assert_eq!(calls(&log, callee), vec![vec![0x100, 0x2d, value, 9]]);
+        }
+    }
+
+    #[test]
+    fn name_getters_read_their_globals() {
+        let mut e = Engine::new();
+        e.map(0x011c_6000, 0x1000);
+        e.mem.set_u32(0x011c_6250, 0x1111);
+        e.mem.set_u32(0x011c_6258, 0x2222);
+        assert_eq!(e.call(0x008d_4ca0, &args![]).u32(), 0x1111);
+        assert_eq!(e.call(0x008d_4cb0, &args![]).u32(), 0x2222);
     }
 }

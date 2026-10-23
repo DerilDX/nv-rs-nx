@@ -21,9 +21,36 @@ pub fn fn_00a50aa0(e: &mut Engine, this: Ptr, dest: Ptr, cloning: Ptr) {
     e.mem.set_u32(dest.addr().wrapping_add(0x20), handle);
 }
 
+/// `00aa13e0` (`cdecl`, the size): the Gamebryo allocation the objects are made with;
+/// `00a57f20` (unit `nibsplineinterpolator.cpp`, `thiscall`, two words): the base
+/// constructor; and `NiBSplineFloatInterpolator`'s vtable (`010997f4`, by its RTTI type
+/// descriptor).
+const NI_ALLOCATE: u32 = 0x00aa_13e0;
+const BASE_CONSTRUCT: u32 = 0x00a5_7f20;
+const B_SPLINE_FLOAT_INTERPOLATOR_VTABLE: u32 = 0x0109_97f4;
+
+// Translated from 00a50ad0 (PC disassembly, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (a function Ghidra did not create; no arguments; by its body
+/// `NiBSplineFloatInterpolator`'s creation function): 0x24 bytes from `00aa13e0`, the base
+/// constructor (`00a57f20` with 0, 0), the vtable `010997f4` and 0xffff at +0x20. Answers the
+/// object, null when the allocation fails.
+pub fn fn_00a50ad0(e: &mut Engine) -> Ptr {
+    let object = e.call(NI_ALLOCATE, &args![0x24u32]).u32();
+    if object == 0 {
+        return Ptr::NULL;
+    }
+    e.call(BASE_CONSTRUCT, &args![object, 0u32, 0u32]);
+    e.mem.set_u32(object, B_SPLINE_FLOAT_INTERPOLATOR_VTABLE);
+    e.mem.set_u32(object + 0x20, 0xffff);
+    Ptr::new(object)
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
-    vec![entry!(0x00a5_0aa0, fn_00a50aa0(Ptr, Ptr, Ptr))]
+    vec![
+        entry!(0x00a5_0aa0, fn_00a50aa0(Ptr, Ptr, Ptr)),
+        entry!(0x00a5_0ad0, fn_00a50ad0() -> Ptr),
+    ]
 }
 
 #[cfg(test)]
@@ -46,5 +73,27 @@ mod tests {
         assert!(log
             .iter()
             .any(|call| call.0 == BASE_COPY_MEMBERS && call.1 == vec![this, dest, 0x7000]));
+    }
+}
+
+#[cfg(test)]
+mod n007_tests {
+    use super::*;
+
+    #[test]
+    fn creation_function_allocates_and_constructs() {
+        let mut e = Engine::new();
+        e.register(NI_ALLOCATE, |e, a| e.mem.alloc(a[0]).into_ret());
+        e.register(BASE_CONSTRUCT, |_, a| a[0].into_ret());
+        e.call_log = Some(vec![]);
+        let object = e.call(0x00a5_0ad0, &[]).u32();
+        assert_eq!(e.mem.u32(object), B_SPLINE_FLOAT_INTERPOLATOR_VTABLE);
+        assert_eq!(e.mem.u32(object + 0x20), 0xffff);
+        let log = e.call_log.take().unwrap();
+        assert!(log
+            .iter()
+            .any(|c| c.0 == BASE_CONSTRUCT && c.1 == vec![object, 0, 0]));
+        e.register(NI_ALLOCATE, |_, _| 0u32.into_ret());
+        assert_eq!(e.call(0x00a5_0ad0, &[]).u32(), 0);
     }
 }

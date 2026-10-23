@@ -366,9 +366,205 @@ pub fn fn_00906690(e: &mut Engine, this: Ptr) -> Ptr {
     this
 }
 
+/// The word at +0x68 of an object (`008d8520`, thiscall; the engine map's
+/// `MiddleHighProcess::GetSavedAcquireObject` name sits on that body). Lip
+/// tasks call it on their mobile object and use the result's virtual
+/// +0x370, +0x374 and +0x380.
+const OBJECT_WORD_68: u32 = 0x008d_8520;
+/// The `LipTask` vtable `00905ba0` stores.
+const LIP_TASK_VTABLE: u32 = 0x0108_85b8;
+/// The source file name the lip-task functions pass to the scope guard
+/// (`"D:\_Fallout3\...\LipSyncBackgroundManager.cpp"`).
+const LIP_SYNC_SOURCE_FILE: u32 = 0x0108_85e8;
+/// The scope guard's constructor (`00404eb0`, thiscall(id, mode, file,
+/// line)) and destructor (`00404ee0`, thiscall).
+const SCOPE_GUARD_BEGIN: u32 = 0x0040_4eb0;
+const SCOPE_GUARD_END: u32 = 0x0040_4ee0;
+
+// Translated from 0044bb90 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The lip-task map's lookup forwarder (thiscall(`first`, `second`), `RET
+/// 8`, bool): `0044c8e0(00449f80(this), first, second)`.
+pub fn fn_0044bb90(e: &mut Engine, this: Ptr, first: u32, second: u32) -> bool {
+    let buckets = e.call(0x0044_9f80, &args![this]).u32();
+    e.call(0x0044_c8e0, &args![buckets, first, second]).bool()
+}
+
+// Translated from 00905ba0 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 00905ba0 - C++ exception unwinding (FS:[0] frame state) is not translated.
+/// The `LipTask` constructor (thiscall(`manager`, `mobile`, `third`), `RET
+/// 0xC`): the base constructor `00c3ce60(this, 0)`, the vtable `010885b8`,
+/// `+0x30` = `mobile`, `+0x34` = 0, `+0x38` = `manager`, then
+/// `00c3cee0(this, third)` and `00c3cf60(this, 4)`. Returns `this`.
+pub fn fn_00905ba0(e: &mut Engine, this: Ptr, manager: u32, mobile: u32, third: u32) -> Ptr {
+    let base = this.addr();
+    e.call(0x00c3_ce60, &args![this, 0u32]);
+    e.mem.set_u32(base, LIP_TASK_VTABLE);
+    e.mem.set_u32(base + 0x30, mobile);
+    e.mem.set_u32(base + 0x34, 0);
+    e.mem.set_u32(base + 0x38, manager);
+    e.call(0x00c3_cee0, &args![this, third]);
+    e.call(0x00c3_cf60, &args![this, 4u32]);
+    this
+}
+
+// Translated from 00905c50 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 00905c50 - C++ exception unwinding (FS:[0] frame state) is not translated.
+/// `LipTask::Run` (Xbox PDB): inside the scope guard (id 0x35, mode 1,
+/// `LipSyncBackgroundManager.cpp`, line 0x15) takes the file
+/// (`QueuedFileEntry::GetFile`, `00c3cff0(this, 4, 0x10)`); without one,
+/// the mobile object's `008d8520` object gets virtual +0x370(0) and then
+/// +0x374(1). `+0x34` becomes `004d5350(file)` (cdecl; the engine map's
+/// `LipSynchAnim::LoadFromFile_ov2`), null file included.
+pub fn lip_task_run(e: &mut Engine, this: Ptr) {
+    let base = this.addr();
+    e.with_stack(4, |e, scope| {
+        e.call(
+            SCOPE_GUARD_BEGIN,
+            &args![scope, 0x35u32, 1u32, LIP_SYNC_SOURCE_FILE, 0x15u32],
+        );
+        let file = e.call(0x00c3_cff0, &args![this, 4u32, 0x10u32]).u32();
+        if file == 0 {
+            let mobile = e.mem.u32(base + 0x30);
+            let object = e.call(OBJECT_WORD_68, &args![mobile]).u32();
+            e.vcall(object, 0x370, &args![0u32]);
+            let mobile = e.mem.u32(base + 0x30);
+            let object = e.call(OBJECT_WORD_68, &args![mobile]).u32();
+            e.vcall(object, 0x374, &args![1u32]);
+        }
+        let anim = e.call(0x004d_5350, &args![file]).u32();
+        e.mem.set_u32(base + 0x34, anim);
+        e.call(SCOPE_GUARD_END, &args![scope]);
+    });
+}
+
+// Translated from 00905d20 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `LipTask::Finish` (Xbox PDB): when the mobile object's `008d8520`
+/// object is not null, it gets virtual +0x380(`+0x34`) and +0x370(0), and,
+/// when `+0x34` is null, +0x374(1) (the object fetched again for each
+/// call). Then the manager (`+0x38`) drops the mobile object's entry
+/// (`009060f0`).
+pub fn lip_task_finish(e: &mut Engine, this: Ptr) {
+    let base = this.addr();
+    let mobile = e.mem.u32(base + 0x30);
+    if e.call(OBJECT_WORD_68, &args![mobile]).u32() != 0 {
+        let mobile = e.mem.u32(base + 0x30);
+        let object = e.call(OBJECT_WORD_68, &args![mobile]).u32();
+        let anim = e.mem.u32(base + 0x34);
+        e.vcall(object, 0x380, &args![anim]);
+        let mobile = e.mem.u32(base + 0x30);
+        let object = e.call(OBJECT_WORD_68, &args![mobile]).u32();
+        e.vcall(object, 0x370, &args![0u32]);
+        if e.mem.u32(base + 0x34) == 0 {
+            let mobile = e.mem.u32(base + 0x30);
+            let object = e.call(OBJECT_WORD_68, &args![mobile]).u32();
+            e.vcall(object, 0x374, &args![1u32]);
+        }
+    }
+    let mobile = e.mem.u32(base + 0x30);
+    let manager = Ptr::new(e.mem.u32(base + 0x38));
+    fn_009060f0(e, manager, mobile);
+}
+
+// Translated from 00905dc0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `LipTask::Cancel` (Xbox PDB; thiscall(`state`, `second`), `RET 8`):
+/// `QueuedFile::Cancel` (`00c3cb70(this, state, second)`), then, unless
+/// `state` is 5, the manager (`+0x38`) drops the mobile object's entry
+/// (`009060f0(+0x30)`).
+pub fn lip_task_cancel(e: &mut Engine, this: Ptr, state: u32, second: u32) {
+    let base = this.addr();
+    e.call(0x00c3_cb70, &args![this, state, second]);
+    if state != 5 {
+        let mobile = e.mem.u32(base + 0x30);
+        let manager = Ptr::new(e.mem.u32(base + 0x38));
+        fn_009060f0(e, manager, mobile);
+    }
+}
+
+// Translated from 00905e00 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `LipTask::GetDescription` (Xbox PDB; thiscall(`buffer`, `size`), `RET
+/// 8`): `QueuedFileEntry::GetDescription(this, buffer, size, 01088634)`
+/// (the last word the address of the task's description text).
+pub fn lip_task_get_description(e: &mut Engine, this: Ptr, buffer: u32, size: u32) {
+    e.call(0x00c3_d0e0, &args![this, buffer, size, 0x0108_8634u32]);
+}
+
+// Translated from 00905f30 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 00905f30 - C++ exception unwinding (FS:[0] frame state) is not translated.
+/// Queues a lip file for a mobile object (thiscall(`mobile`, `third`),
+/// `RET 8`): inside the scope guard (id 0x35, mode 1,
+/// `LipSyncBackgroundManager.cpp`, line 0x61), cancels the object's lip
+/// file (`CancelLipFile`), builds a `LipTask` (0x40 bytes,
+/// `00905ba0(task, this, mobile, third)`; null when the allocation
+/// failed) held in a stack `NiPointer` (`00528cb0`), adds it through the
+/// map's virtual +0x10(`mobile`, `&pointer`, 0) (its result unused),
+/// releases the `NiPointer` (`0044cbf0`), calls virtual +0x374(0) on the
+/// mobile object's `008d8520` object and hands the task to the task
+/// manager at `01202d98` (its virtual +0x48).
+pub fn fn_00905f30(e: &mut Engine, this: Ptr, mobile: u32, third: u32) {
+    e.with_stack(4, |e, scope| {
+        e.call(
+            SCOPE_GUARD_BEGIN,
+            &args![scope, 0x35u32, 1u32, LIP_SYNC_SOURCE_FILE, 0x61u32],
+        );
+        lip_sync_background_manager_cancel_lip_file(e, this, mobile);
+        let block = e.call(OPERATOR_NEW, &args![0x40u32]).u32();
+        let task = if block != 0 {
+            fn_00905ba0(e, Ptr::new(block), this.addr(), mobile, third).addr()
+        } else {
+            0
+        };
+        e.with_stack(4, |e, pointer| {
+            e.call(NI_POINTER_CONSTRUCT, &args![pointer, task]);
+            e.vcall(this.addr(), 0x10, &args![mobile, pointer, 0u32]);
+            e.call(NI_POINTER_DESTRUCT, &args![pointer]);
+        });
+        let object = e.call(OBJECT_WORD_68, &args![mobile]).u32();
+        e.vcall(object, 0x374, &args![0u32]);
+        let manager = e.global::<u32>(TASK_MANAGER_POINTER);
+        e.vcall(manager, 0x48, &args![task]);
+        e.call(SCOPE_GUARD_END, &args![scope]);
+    });
+}
+
+// Translated from 009060f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Drops a mobile object's entry from the lip-task map (thiscall(`key`),
+/// `RET 4`): the map's virtual +0x14(`key`).
+pub fn fn_009060f0(e: &mut Engine, this: Ptr, key: u32) {
+    e.vcall(this.addr(), 0x14, &args![key]);
+}
+
+// Translated from 00906130 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `LockFreeMap<MobileObject*,NiPointer<LipTask>>::LockFreeMapIterator::
+/// scalar deleting destructor` (Xbox PDB): the destructor body
+/// (`00906110`), then `operator delete(this)` when bit 0 of `flags` is set.
+/// Returns `this`.
+pub fn lip_task_map_iterator_scalar_deleting_destructor(
+    e: &mut Engine,
+    this: Ptr,
+    flags: u32,
+) -> Ptr {
+    fn_00906110(e, this);
+    if flags & 1 != 0 {
+        e.call(OPERATOR_DELETE, &args![this]);
+    }
+    this
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x0044_bb90, fn_0044bb90(Ptr, u32, u32) -> bool),
+        entry!(0x0090_5ba0, fn_00905ba0(Ptr, u32, u32, u32) -> Ptr),
+        entry!(0x0090_5c50, lip_task_run(Ptr)),
+        entry!(0x0090_5d20, lip_task_finish(Ptr)),
+        entry!(0x0090_5dc0, lip_task_cancel(Ptr, u32, u32)),
+        entry!(0x0090_5e00, lip_task_get_description(Ptr, u32, u32)),
+        entry!(0x0090_5f30, fn_00905f30(Ptr, u32, u32)),
+        entry!(0x0090_60f0, fn_009060f0(Ptr, u32)),
+        entry!(
+            0x0090_6130,
+            lip_task_map_iterator_scalar_deleting_destructor(Ptr, u32) -> Ptr
+        ),
         entry!(0x0090_5c30, fn_00905c30(Ptr)),
         entry!(0x0090_5e30, fn_00905e30(Ptr) -> Ptr),
         entry!(0x0090_6160, fn_00906160(Ptr, u32, u32, u32) -> Ptr),
@@ -818,5 +1014,266 @@ mod b016_tests {
         e.mem.set_u32(this, 0);
         e.call(0x0090_6110, &args![this]);
         assert_eq!(e.mem.u32(this), LIP_TASK_MAP_ITERATOR_VTABLE);
+    }
+}
+
+#[cfg(test)]
+mod n026_tests {
+    use super::*;
+
+    type CallLog = [(u32, Vec<u32>)];
+    type Logged = Vec<(u32, Vec<u32>)>;
+
+    fn calls(log: &CallLog, addr: u32) -> Vec<Vec<u32>> {
+        log.iter()
+            .filter(|(a, _)| *a == addr)
+            .map(|(_, w)| w.clone())
+            .collect()
+    }
+
+    fn quiet(e: &mut Engine, addresses: &[u32]) {
+        for address in addresses {
+            e.register(*address, |_, _| Ret::default());
+        }
+    }
+
+    /// A process-like object whose virtual +0x370, +0x374 and +0x380 are
+    /// recorded at the addresses 0x0abc_0370 .. 0x0abc_0380.
+    const PROCESS_VTABLE: u32 = 0x0abd_0000;
+
+    fn process(e: &mut Engine) -> u32 {
+        let mut slots = vec![0u32; 0x384 / 4];
+        slots[0x370 / 4] = 0x0abc_0370;
+        slots[0x374 / 4] = 0x0abc_0374;
+        slots[0x380 / 4] = 0x0abc_0380;
+        e.put_vtable(PROCESS_VTABLE, &slots);
+        quiet(e, &[0x0abc_0370, 0x0abc_0374, 0x0abc_0380]);
+        let object = e.mem.alloc(8);
+        e.mem.set_u32(object, PROCESS_VTABLE);
+        object
+    }
+
+    /// A map whose virtual +8, +0x10 and +0x14 are recorded as 0x0abe_0008,
+    /// 0x0abe_0010 and 0x0abe_0014 (+8 finds nothing).
+    fn map(e: &mut Engine) -> u32 {
+        e.put_vtable(
+            0x0abf_0000,
+            &[0, 0, 0x0abe_0008, 0, 0x0abe_0010, 0x0abe_0014],
+        );
+        quiet(e, &[0x0abe_0008, 0x0abe_0010, 0x0abe_0014]);
+        let map = e.mem.alloc(0x40);
+        e.mem.set_u32(map, 0x0abf_0000);
+        map
+    }
+
+    #[test]
+    fn lookup_forwards_to_the_bucket_object() {
+        let mut e = Engine::new();
+        e.register(0x0044_9f80, |_, a| (a[0] + 0x100).into_ret());
+        e.register(0x0044_c8e0, |_, a| u32::from(a[1] == 7).into_ret());
+        e.call_log = Some(vec![]);
+        assert!(e.call(0x0044_bb90, &args![0x1000u32, 7u32, 9u32]).bool());
+        assert!(!e.call(0x0044_bb90, &args![0x1000u32, 8u32, 9u32]).bool());
+        let log = e.call_log.take().unwrap();
+        assert_eq!(calls(&log, 0x0044_c8e0)[0], vec![0x1100, 7, 9]);
+    }
+
+    #[test]
+    fn task_constructor_fills_its_fields() {
+        let mut e = Engine::new();
+        quiet(&mut e, &[0x00c3_ce60, 0x00c3_cee0, 0x00c3_cf60]);
+        let task = e.mem.alloc(0x40);
+        e.call_log = Some(vec![]);
+        let back = e.call(0x0090_5ba0, &args![task, 0x11u32, 0x22u32, 0x33u32]);
+        let log = e.call_log.take().unwrap();
+        assert_eq!(back.u32(), task);
+        assert_eq!(e.mem.u32(task), LIP_TASK_VTABLE);
+        assert_eq!(e.mem.u32(task + 0x30), 0x22);
+        assert_eq!(e.mem.u32(task + 0x34), 0);
+        assert_eq!(e.mem.u32(task + 0x38), 0x11);
+        assert_eq!(calls(&log, 0x00c3_ce60), vec![vec![task, 0]]);
+        assert_eq!(calls(&log, 0x00c3_cee0), vec![vec![task, 0x33]]);
+        assert_eq!(calls(&log, 0x00c3_cf60), vec![vec![task, 4]]);
+    }
+
+    fn run_with_file(file: u32) -> (Engine, u32, Logged) {
+        let mut e = Engine::new();
+        let object = process(&mut e);
+        quiet(&mut e, &[SCOPE_GUARD_BEGIN, SCOPE_GUARD_END]);
+        e.register_double(0x00c3_cff0, move |_, _| file.into_ret());
+        e.register_double(OBJECT_WORD_68, move |_, _| object.into_ret());
+        e.register(0x004d_5350, |_, a| (a[0] | 0x5000).into_ret());
+        let task = e.mem.alloc(0x40);
+        e.mem.set_u32(task + 0x30, 0x77);
+        e.call_log = Some(vec![]);
+        e.call(0x0090_5c50, &args![task]);
+        let log = e.call_log.take().unwrap();
+        (e, task, log)
+    }
+
+    #[test]
+    fn run_loads_the_file_and_flags_a_missing_one() {
+        let (e, task, log) = run_with_file(0x40);
+        assert_eq!(e.mem.u32(task + 0x34), 0x5040);
+        assert_eq!(calls(&log, 0x00c3_cff0), vec![vec![task, 4, 0x10]]);
+        assert!(calls(&log, 0x0abc_0370).is_empty());
+        let guard = calls(&log, SCOPE_GUARD_BEGIN);
+        assert_eq!(guard[0][1..], [0x35, 1, LIP_SYNC_SOURCE_FILE, 0x15]);
+        assert_eq!(calls(&log, SCOPE_GUARD_END), vec![vec![guard[0][0]]]);
+
+        let (e, task, log) = run_with_file(0);
+        assert_eq!(e.mem.u32(task + 0x34), 0x5000);
+        assert_eq!(calls(&log, OBJECT_WORD_68), vec![vec![0x77], vec![0x77]]);
+        assert_eq!(calls(&log, 0x0abc_0370)[0][1], 0);
+        assert_eq!(calls(&log, 0x0abc_0374)[0][1], 1);
+        assert_eq!(calls(&log, 0x004d_5350), vec![vec![0]]);
+    }
+
+    fn finish(object: Option<u32>, anim: u32) -> (u32, Logged) {
+        let mut e = Engine::new();
+        let real = process(&mut e);
+        let object = object.unwrap_or(real);
+        e.register_double(OBJECT_WORD_68, move |_, _| object.into_ret());
+        let manager = map(&mut e);
+        let task = e.mem.alloc(0x40);
+        e.mem.set_u32(task + 0x30, 0x77);
+        e.mem.set_u32(task + 0x34, anim);
+        e.mem.set_u32(task + 0x38, manager);
+        e.call_log = Some(vec![]);
+        e.call(0x0090_5d20, &args![task]);
+        (manager, e.call_log.take().unwrap())
+    }
+
+    #[test]
+    fn finish_hands_the_animation_over_and_drops_the_entry() {
+        let (manager, log) = finish(None, 0x99);
+        assert_eq!(calls(&log, 0x0abc_0380)[0][1], 0x99);
+        assert_eq!(calls(&log, 0x0abc_0370)[0][1], 0);
+        assert!(calls(&log, 0x0abc_0374).is_empty());
+        assert_eq!(calls(&log, 0x0abe_0014), vec![vec![manager, 0x77]]);
+
+        let (_, log) = finish(None, 0);
+        assert_eq!(calls(&log, 0x0abc_0374)[0][1], 1);
+
+        let (manager, log) = finish(Some(0), 0);
+        assert!(calls(&log, 0x0abc_0380).is_empty());
+        assert_eq!(calls(&log, OBJECT_WORD_68).len(), 1);
+        assert_eq!(calls(&log, 0x0abe_0014), vec![vec![manager, 0x77]]);
+    }
+
+    #[test]
+    fn cancel_drops_the_entry_unless_the_state_is_five() {
+        for (state, drops) in [(4u32, true), (5, false), (6, true)] {
+            let mut e = Engine::new();
+            quiet(&mut e, &[0x00c3_cb70]);
+            let manager = map(&mut e);
+            let task = e.mem.alloc(0x40);
+            e.mem.set_u32(task + 0x30, 0x77);
+            e.mem.set_u32(task + 0x38, manager);
+            e.call_log = Some(vec![]);
+            e.call(0x0090_5dc0, &args![task, state, 0x12u32]);
+            let log = e.call_log.take().unwrap();
+            assert_eq!(calls(&log, 0x00c3_cb70), vec![vec![task, state, 0x12]]);
+            assert_eq!(calls(&log, 0x0abe_0014).len(), usize::from(drops));
+        }
+    }
+
+    #[test]
+    fn description_passes_the_task_text() {
+        let mut e = Engine::new();
+        quiet(&mut e, &[0x00c3_d0e0]);
+        e.call_log = Some(vec![]);
+        e.call(0x0090_5e00, &args![0x1000u32, 0x2000u32, 0x40u32]);
+        let log = e.call_log.take().unwrap();
+        assert_eq!(
+            calls(&log, 0x00c3_d0e0),
+            vec![vec![0x1000, 0x2000, 0x40, 0x0108_8634]]
+        );
+    }
+
+    fn queue(allocates: bool) -> (u32, Logged) {
+        let mut e = Engine::new();
+        let object = process(&mut e);
+        e.register_double(OBJECT_WORD_68, move |_, _| object.into_ret());
+        let manager = map(&mut e);
+        quiet(
+            &mut e,
+            &[
+                SCOPE_GUARD_BEGIN,
+                SCOPE_GUARD_END,
+                NI_POINTER_CONSTRUCT,
+                NI_POINTER_DESTRUCT,
+                0x00c3_ce60,
+                0x00c3_cee0,
+                0x00c3_cf60,
+                0x0abe_0048,
+            ],
+        );
+        let mut slots = vec![0u32; 0x48 / 4];
+        slots.push(0x0abe_0048);
+        e.put_vtable(0x0abf_1000, &slots);
+        let task_manager = e.mem.alloc(4);
+        e.mem.set_u32(task_manager, 0x0abf_1000);
+        e.map(TASK_MANAGER_POINTER, 4);
+        e.mem.set_u32(TASK_MANAGER_POINTER, task_manager);
+        e.register_double(OPERATOR_NEW, move |e, _| {
+            if allocates {
+                e.mem.alloc(0x40).into_ret()
+            } else {
+                Ret::default()
+            }
+        });
+        e.call_log = Some(vec![]);
+        e.call(0x0090_5f30, &args![manager, 0x77u32, 0x88u32]);
+        let log = e.call_log.take().unwrap();
+        assert_eq!(calls(&log, OPERATOR_NEW), vec![vec![0x40]]);
+        assert_eq!(calls(&log, 0x0abe_0008)[0][..2], [manager, 0x77]);
+        // The first `NiPointer` is `CancelLipFile`'s, the second holds the task.
+        let pointer = calls(&log, NI_POINTER_CONSTRUCT)[1].clone();
+        let added = calls(&log, 0x0abe_0010);
+        assert_eq!(added, vec![vec![manager, 0x77, pointer[0], 0]]);
+        assert_eq!(calls(&log, NI_POINTER_DESTRUCT)[1], vec![pointer[0]]);
+        assert_eq!(calls(&log, 0x0abc_0374)[0][1], 0);
+        let guard = calls(&log, SCOPE_GUARD_BEGIN);
+        assert_eq!(guard[0][1..], [0x35, 1, LIP_SYNC_SOURCE_FILE, 0x61]);
+        let handed = calls(&log, 0x0abe_0048);
+        assert_eq!(handed, vec![vec![task_manager, pointer[1]]]);
+        (pointer[1], log)
+    }
+
+    #[test]
+    fn queueing_builds_a_task_and_hands_it_to_the_manager() {
+        let (task, log) = queue(true);
+        assert_ne!(task, 0);
+        assert_eq!(calls(&log, 0x00c3_ce60), vec![vec![task, 0]]);
+        assert_eq!(calls(&log, 0x00c3_cee0), vec![vec![task, 0x88]]);
+        let (task, log) = queue(false);
+        assert_eq!(task, 0);
+        assert!(calls(&log, 0x00c3_ce60).is_empty());
+    }
+
+    #[test]
+    fn map_removal_goes_through_virtual_0x14() {
+        let mut e = Engine::new();
+        let manager = map(&mut e);
+        e.call_log = Some(vec![]);
+        e.call(0x0090_60f0, &args![manager, 0x77u32]);
+        let log = e.call_log.take().unwrap();
+        assert_eq!(calls(&log, 0x0abe_0014), vec![vec![manager, 0x77]]);
+    }
+
+    #[test]
+    fn iterator_deleting_destructor_frees_on_bit_zero() {
+        for flags in [0u32, 1, 2, 3] {
+            let mut e = Engine::new();
+            quiet(&mut e, &[OPERATOR_DELETE]);
+            let this = e.mem.alloc(0x10);
+            e.call_log = Some(vec![]);
+            let back = e.call(0x0090_6130, &args![this, flags]).u32();
+            let log = e.call_log.take().unwrap();
+            assert_eq!(back, this);
+            assert_eq!(e.mem.u32(this), LIP_TASK_MAP_ITERATOR_VTABLE);
+            assert_eq!(calls(&log, OPERATOR_DELETE).len(), (flags & 1) as usize);
+        }
     }
 }

@@ -3,6 +3,7 @@
 
 #[allow(unused_imports)]
 use crate::prelude::*;
+use crate::types::{NiTArray, NiTPointerMap};
 
 /// The list-item pool's lock (`011c5f80`: the `this` of the lock enter `0040fbf0`, `thiscall`
 /// with one word, and the lock's owner word), the lock's entry count (`011c5f84`) that the
@@ -34,10 +35,263 @@ pub fn fn_00e6e8a0(e: &mut Engine, _unused_this: Ptr, item: Ptr) {
     }
 }
 
+/// `NiTMapBase::RemoveAll` (`00b601a0`, `thiscall`, no stack words): empties a map's buckets
+/// through its vtable and zeroes the item count.
+const MAP_REMOVE_ALL: u32 = 0x00b6_01a0;
+/// `NiFree` (`00aa10f0`, `cdecl`, one word).
+const NI_FREE: u32 = 0x00aa_10f0;
+/// The memory manager (`011f6238`) and its free (`00aa4060`, `thiscall`, one word: the block).
+const MEMORY_MANAGER: u32 = 0x011f_6238;
+const MEMORY_MANAGER_FREE: u32 = 0x00aa_4060;
+
+/// `NiTMapBase<NiTPointerAllocator<unsigned int>, NiVBBlock*, NiDX9Renderer::PrePackObject*>`'s
+/// vtable (`010eda24`, RTTI) and `NiTPointerMap<NiVBBlock*, ...>`'s (`010edafc`).
+const VB_BLOCK_MAP_BASE_VTABLE: u32 = 0x010e_da24;
+const VB_BLOCK_MAP_VTABLE: u32 = 0x010e_dafc;
+/// `NiTMapBase<..., HWND__*, NiPointer<NiRenderTargetGroup>>` (`010eda44`) and
+/// `NiTPointerMap<HWND__*, ...>` (`010edb1c`), RTTI.
+const WINDOW_MAP_BASE_VTABLE: u32 = 0x010e_da44;
+const WINDOW_MAP_VTABLE: u32 = 0x010e_db1c;
+/// `NiTMapBase<..., NiRenderedTexture*, NiDX9RenderedTextureData*>` (`010eda64`) and
+/// `NiTPointerMap<NiRenderedTexture*, ...>` (`010edb3c`), RTTI.
+const RENDERED_TEXTURE_MAP_BASE_VTABLE: u32 = 0x010e_da64;
+const RENDERED_TEXTURE_MAP_VTABLE: u32 = 0x010e_db3c;
+/// `NiTMapBase<..., NiRenderedCubeMap*, NiDX9RenderedCubeMapData*>` (`010eda84`) and
+/// `NiTPointerMap<NiRenderedCubeMap*, ...>` (`010edb5c`), RTTI.
+const RENDERED_CUBE_MAP_MAP_BASE_VTABLE: u32 = 0x010e_da84;
+const RENDERED_CUBE_MAP_MAP_VTABLE: u32 = 0x010e_db5c;
+/// `NiTMapBase<..., NiDynamicTexture*, NiDX9DynamicTextureData*>` (`010edaa4`) and
+/// `NiTPointerMap<NiDynamicTexture*, ...>` (`010edb7c`), RTTI.
+const DYNAMIC_TEXTURE_MAP_BASE_VTABLE: u32 = 0x010e_daa4;
+const DYNAMIC_TEXTURE_MAP_VTABLE: u32 = 0x010e_db7c;
+/// `NiTArray<void*, NiTMallocInterface<void*>>`'s vtable (`010edae4`, RTTI).
+const MALLOC_POINTER_ARRAY_VTABLE: u32 = 0x010e_dae4;
+/// `NiTMapBase<DFALL<NiTMapItem<_D3DFORMAT, NiPixelFormat*>>, _D3DFORMAT, NiPixelFormat*>`
+/// (`010edac4`) and `NiTMap<_D3DFORMAT, NiPixelFormat*>` (`010edb9c`), RTTI.
+const PIXEL_FORMAT_MAP_BASE_VTABLE: u32 = 0x010e_dac4;
+const PIXEL_FORMAT_MAP_VTABLE: u32 = 0x010e_db9c;
+
+/// The shared body of the map destructors below: each vtable of `vtables` in turn (most
+/// derived first) is stored and the map emptied (`00b601a0`), then the bucket array (+8) goes
+/// to `NiFree` and, when `flags & 1`, the map to the memory manager's free. Returns `this`.
+fn destroy_map(
+    e: &mut Engine,
+    this: Ptr<NiTPointerMap>,
+    vtables: &[u32],
+    flags: u32,
+) -> Ptr<NiTPointerMap> {
+    for vtable in vtables {
+        e.mem.set_u32(this.addr(), *vtable);
+        e.call(MAP_REMOVE_ALL, &args![this]);
+    }
+    let table = e.get(this, NiTPointerMap::m_ppkHashTable);
+    e.call(NI_FREE, &args![table]);
+    if flags & 1 != 0 {
+        e.call(MEMORY_MANAGER_FREE, &args![MEMORY_MANAGER, this]);
+    }
+    this
+}
+
+// Translated from 00e6e8f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map: the scalar deleting destructor of
+/// `NiTMapBase<NiTPointerAllocator<unsigned int>, NiVBBlock*, NiDX9Renderer::PrePackObject*>`
+/// (its vtable `010eda24`, RTTI): empties the map, frees its buckets and, when `flags & 1`,
+/// the map. Returns `this`.
+pub fn fn_00e6e8f0(e: &mut Engine, this: Ptr<NiTPointerMap>, flags: u32) -> Ptr<NiTPointerMap> {
+    destroy_map(e, this, &[VB_BLOCK_MAP_BASE_VTABLE], flags)
+}
+
+// Translated from 00e6e930 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map: the scalar deleting destructor of
+/// `NiTPointerMap<NiVBBlock*, NiDX9Renderer::PrePackObject*>` (vtable `010edafc`, RTTI):
+/// empties the map as itself and again as its `NiTMapBase` (`010eda24`), frees the buckets
+/// and, when `flags & 1`, the map. Returns `this`.
+pub fn fn_00e6e930(e: &mut Engine, this: Ptr<NiTPointerMap>, flags: u32) -> Ptr<NiTPointerMap> {
+    destroy_map(
+        e,
+        this,
+        &[VB_BLOCK_MAP_VTABLE, VB_BLOCK_MAP_BASE_VTABLE],
+        flags,
+    )
+}
+
+// Translated from 00e6e970 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map: the scalar deleting destructor of
+/// `NiTMapBase<NiTPointerAllocator<unsigned int>, HWND__*, NiPointer<NiRenderTargetGroup>>`
+/// (vtable `010eda44`, RTTI), as [`fn_00e6e8f0`].
+pub fn fn_00e6e970(e: &mut Engine, this: Ptr<NiTPointerMap>, flags: u32) -> Ptr<NiTPointerMap> {
+    destroy_map(e, this, &[WINDOW_MAP_BASE_VTABLE], flags)
+}
+
+// Translated from 00e6e9b0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map: the scalar deleting destructor of
+/// `NiTPointerMap<HWND__*, NiPointer<NiRenderTargetGroup>>` (vtable `010edb1c`, RTTI), as
+/// [`fn_00e6e930`] with the base vtable `010eda44`.
+pub fn fn_00e6e9b0(e: &mut Engine, this: Ptr<NiTPointerMap>, flags: u32) -> Ptr<NiTPointerMap> {
+    destroy_map(e, this, &[WINDOW_MAP_VTABLE, WINDOW_MAP_BASE_VTABLE], flags)
+}
+
+// Translated from 00e6e9f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map: the scalar deleting destructor of
+/// `NiTMapBase<NiTPointerAllocator<unsigned int>, NiRenderedTexture*, NiDX9RenderedTextureData*>`
+/// (vtable `010eda64`, RTTI), as [`fn_00e6e8f0`].
+pub fn fn_00e6e9f0(e: &mut Engine, this: Ptr<NiTPointerMap>, flags: u32) -> Ptr<NiTPointerMap> {
+    destroy_map(e, this, &[RENDERED_TEXTURE_MAP_BASE_VTABLE], flags)
+}
+
+// Translated from 00e6ea30 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map: the scalar deleting destructor of
+/// `NiTPointerMap<NiRenderedTexture*, NiDX9RenderedTextureData*>` (vtable `010edb3c`, RTTI), as
+/// [`fn_00e6e930`] with the base vtable `010eda64`.
+pub fn fn_00e6ea30(e: &mut Engine, this: Ptr<NiTPointerMap>, flags: u32) -> Ptr<NiTPointerMap> {
+    destroy_map(
+        e,
+        this,
+        &[
+            RENDERED_TEXTURE_MAP_VTABLE,
+            RENDERED_TEXTURE_MAP_BASE_VTABLE,
+        ],
+        flags,
+    )
+}
+
+// Translated from 00e6ea70 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map: the scalar deleting destructor of
+/// `NiTMapBase<NiTPointerAllocator<unsigned int>, NiRenderedCubeMap*, NiDX9RenderedCubeMapData*>`
+/// (vtable `010eda84`, RTTI), as [`fn_00e6e8f0`].
+pub fn fn_00e6ea70(e: &mut Engine, this: Ptr<NiTPointerMap>, flags: u32) -> Ptr<NiTPointerMap> {
+    destroy_map(e, this, &[RENDERED_CUBE_MAP_MAP_BASE_VTABLE], flags)
+}
+
+// Translated from 00e6eab0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map: the scalar deleting destructor of
+/// `NiTPointerMap<NiRenderedCubeMap*, NiDX9RenderedCubeMapData*>` (vtable `010edb5c`, RTTI), as
+/// [`fn_00e6e930`] with the base vtable `010eda84`.
+pub fn fn_00e6eab0(e: &mut Engine, this: Ptr<NiTPointerMap>, flags: u32) -> Ptr<NiTPointerMap> {
+    destroy_map(
+        e,
+        this,
+        &[
+            RENDERED_CUBE_MAP_MAP_VTABLE,
+            RENDERED_CUBE_MAP_MAP_BASE_VTABLE,
+        ],
+        flags,
+    )
+}
+
+// Translated from 00e6eaf0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map: the scalar deleting destructor of
+/// `NiTMapBase<NiTPointerAllocator<unsigned int>, NiDynamicTexture*, NiDX9DynamicTextureData*>`
+/// (vtable `010edaa4`, RTTI), as [`fn_00e6e8f0`].
+pub fn fn_00e6eaf0(e: &mut Engine, this: Ptr<NiTPointerMap>, flags: u32) -> Ptr<NiTPointerMap> {
+    destroy_map(e, this, &[DYNAMIC_TEXTURE_MAP_BASE_VTABLE], flags)
+}
+
+// Translated from 00e6eb30 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map: the scalar deleting destructor of
+/// `NiTPointerMap<NiDynamicTexture*, NiDX9DynamicTextureData*>` (vtable `010edb7c`, RTTI), as
+/// [`fn_00e6e930`] with the base vtable `010edaa4`.
+pub fn fn_00e6eb30(e: &mut Engine, this: Ptr<NiTPointerMap>, flags: u32) -> Ptr<NiTPointerMap> {
+    destroy_map(
+        e,
+        this,
+        &[DYNAMIC_TEXTURE_MAP_VTABLE, DYNAMIC_TEXTURE_MAP_BASE_VTABLE],
+        flags,
+    )
+}
+
+// Translated from 00e6eb70 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map: the scalar deleting destructor of
+/// `NiTArray<void*, NiTMallocInterface<void*>>` (vtable `010edae4`, RTTI): stores the vtable,
+/// frees the elements (`m_pBase`, read before the store) with `NiFree` and, when `flags & 1`,
+/// the array through the memory manager. Returns `this`.
+pub fn fn_00e6eb70(e: &mut Engine, this: Ptr<NiTArray>, flags: u32) -> Ptr<NiTArray> {
+    let base = e.get(this, NiTArray::m_pBase);
+    e.mem.set_u32(this.addr(), MALLOC_POINTER_ARRAY_VTABLE);
+    e.call(NI_FREE, &args![base]);
+    if flags & 1 != 0 {
+        e.call(MEMORY_MANAGER_FREE, &args![MEMORY_MANAGER, this]);
+    }
+    this
+}
+
+// Translated from 00e6eba0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map: the scalar deleting destructor of
+/// `NiTMapBase<DFALL<NiTMapItem<_D3DFORMAT, NiPixelFormat*>>, _D3DFORMAT, NiPixelFormat*>`
+/// (vtable `010edac4`, RTTI), as [`fn_00e6e8f0`].
+pub fn fn_00e6eba0(e: &mut Engine, this: Ptr<NiTPointerMap>, flags: u32) -> Ptr<NiTPointerMap> {
+    destroy_map(e, this, &[PIXEL_FORMAT_MAP_BASE_VTABLE], flags)
+}
+
+// Translated from 00e6ebe0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map: the scalar deleting destructor of
+/// `NiTMap<_D3DFORMAT, NiPixelFormat*>` (vtable `010edb9c`, RTTI), as [`fn_00e6e930`] with the
+/// base vtable `010edac4`.
+pub fn fn_00e6ebe0(e: &mut Engine, this: Ptr<NiTPointerMap>, flags: u32) -> Ptr<NiTPointerMap> {
+    destroy_map(
+        e,
+        this,
+        &[PIXEL_FORMAT_MAP_VTABLE, PIXEL_FORMAT_MAP_BASE_VTABLE],
+        flags,
+    )
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
         entry!(0x00e6_e8a0, fn_00e6e8a0(Ptr, Ptr)),
+        entry!(
+            0x00e6_e8f0,
+            fn_00e6e8f0(Ptr<NiTPointerMap>, u32) -> Ptr<NiTPointerMap>
+        ),
+        entry!(
+            0x00e6_e930,
+            fn_00e6e930(Ptr<NiTPointerMap>, u32) -> Ptr<NiTPointerMap>
+        ),
+        entry!(
+            0x00e6_e970,
+            fn_00e6e970(Ptr<NiTPointerMap>, u32) -> Ptr<NiTPointerMap>
+        ),
+        entry!(
+            0x00e6_e9b0,
+            fn_00e6e9b0(Ptr<NiTPointerMap>, u32) -> Ptr<NiTPointerMap>
+        ),
+        entry!(
+            0x00e6_e9f0,
+            fn_00e6e9f0(Ptr<NiTPointerMap>, u32) -> Ptr<NiTPointerMap>
+        ),
+        entry!(
+            0x00e6_ea30,
+            fn_00e6ea30(Ptr<NiTPointerMap>, u32) -> Ptr<NiTPointerMap>
+        ),
+        entry!(
+            0x00e6_ea70,
+            fn_00e6ea70(Ptr<NiTPointerMap>, u32) -> Ptr<NiTPointerMap>
+        ),
+        entry!(
+            0x00e6_eab0,
+            fn_00e6eab0(Ptr<NiTPointerMap>, u32) -> Ptr<NiTPointerMap>
+        ),
+        entry!(
+            0x00e6_eaf0,
+            fn_00e6eaf0(Ptr<NiTPointerMap>, u32) -> Ptr<NiTPointerMap>
+        ),
+        entry!(
+            0x00e6_eb30,
+            fn_00e6eb30(Ptr<NiTPointerMap>, u32) -> Ptr<NiTPointerMap>
+        ),
+        entry!(
+            0x00e6_eb70,
+            fn_00e6eb70(Ptr<NiTArray>, u32) -> Ptr<NiTArray>
+        ),
+        entry!(
+            0x00e6_eba0,
+            fn_00e6eba0(Ptr<NiTPointerMap>, u32) -> Ptr<NiTPointerMap>
+        ),
+        entry!(
+            0x00e6_ebe0,
+            fn_00e6ebe0(Ptr<NiTPointerMap>, u32) -> Ptr<NiTPointerMap>
+        ),
         entry!(0x00e6_ec20, fn_00e6ec20()),
     ]
 }
@@ -197,5 +451,149 @@ mod shut_down_tests {
             vec![(LIST_REMOVE_ALL, vec![LIST_0126F0F8])]
         );
         assert_eq!(e.mem.u32(CLEARED_0126F0DC), 0);
+    }
+}
+
+#[cfg(test)]
+mod map_destructor_tests {
+    use super::*;
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    /// Runs the destructor at `address` on a map with buckets at `0x0e30_0000` and checks the
+    /// vtable seen by each `RemoveAll`, the bucket free and the map free for both flag values.
+    fn check(address: u32, vtables: &[u32]) {
+        for flags in [0u32, 1] {
+            let mut e = Engine::new();
+            let seen = Rc::new(RefCell::new(Vec::new()));
+            let record = seen.clone();
+            e.register_double(MAP_REMOVE_ALL, move |e, a| {
+                record.borrow_mut().push(e.mem.u32(a[0]));
+                Ret::default()
+            });
+            e.register(NI_FREE, |_, _| Ret::default());
+            e.register(MEMORY_MANAGER_FREE, |_, _| Ret::default());
+            let map = e.new_object::<NiTPointerMap>();
+            e.set(map, NiTPointerMap::m_ppkHashTable, 0x0e30_0000);
+            e.call_log = Some(vec![]);
+            assert_eq!(e.call(address, &args![map, flags]).u32(), map.addr());
+            assert_eq!(seen.borrow().as_slice(), vtables);
+            assert_eq!(e.mem.u32(map.addr()), *vtables.last().unwrap());
+            let log = e.call_log.take().unwrap();
+            let frees: Vec<_> = log.iter().filter(|c| c.0 == NI_FREE).collect();
+            assert_eq!(frees, vec![&(NI_FREE, vec![0x0e30_0000])]);
+            let deletes: Vec<_> = log.iter().filter(|c| c.0 == MEMORY_MANAGER_FREE).collect();
+            if flags == 1 {
+                assert_eq!(
+                    deletes,
+                    vec![&(MEMORY_MANAGER_FREE, vec![MEMORY_MANAGER, map.addr()])]
+                );
+            } else {
+                assert!(deletes.is_empty());
+            }
+        }
+    }
+
+    #[test]
+    fn fn_00e6e8f0_destroys_the_vb_block_map_base() {
+        check(0x00e6_e8f0, &[VB_BLOCK_MAP_BASE_VTABLE]);
+    }
+
+    #[test]
+    fn fn_00e6e930_destroys_the_vb_block_map() {
+        check(
+            0x00e6_e930,
+            &[VB_BLOCK_MAP_VTABLE, VB_BLOCK_MAP_BASE_VTABLE],
+        );
+    }
+
+    #[test]
+    fn fn_00e6e970_destroys_the_window_map_base() {
+        check(0x00e6_e970, &[WINDOW_MAP_BASE_VTABLE]);
+    }
+
+    #[test]
+    fn fn_00e6e9b0_destroys_the_window_map() {
+        check(0x00e6_e9b0, &[WINDOW_MAP_VTABLE, WINDOW_MAP_BASE_VTABLE]);
+    }
+
+    #[test]
+    fn fn_00e6e9f0_destroys_the_rendered_texture_map_base() {
+        check(0x00e6_e9f0, &[RENDERED_TEXTURE_MAP_BASE_VTABLE]);
+    }
+
+    #[test]
+    fn fn_00e6ea30_destroys_the_rendered_texture_map() {
+        check(
+            0x00e6_ea30,
+            &[
+                RENDERED_TEXTURE_MAP_VTABLE,
+                RENDERED_TEXTURE_MAP_BASE_VTABLE,
+            ],
+        );
+    }
+
+    #[test]
+    fn fn_00e6ea70_destroys_the_rendered_cube_map_map_base() {
+        check(0x00e6_ea70, &[RENDERED_CUBE_MAP_MAP_BASE_VTABLE]);
+    }
+
+    #[test]
+    fn fn_00e6eab0_destroys_the_rendered_cube_map_map() {
+        check(
+            0x00e6_eab0,
+            &[
+                RENDERED_CUBE_MAP_MAP_VTABLE,
+                RENDERED_CUBE_MAP_MAP_BASE_VTABLE,
+            ],
+        );
+    }
+
+    #[test]
+    fn fn_00e6eaf0_destroys_the_dynamic_texture_map_base() {
+        check(0x00e6_eaf0, &[DYNAMIC_TEXTURE_MAP_BASE_VTABLE]);
+    }
+
+    #[test]
+    fn fn_00e6eb30_destroys_the_dynamic_texture_map() {
+        check(
+            0x00e6_eb30,
+            &[DYNAMIC_TEXTURE_MAP_VTABLE, DYNAMIC_TEXTURE_MAP_BASE_VTABLE],
+        );
+    }
+
+    #[test]
+    fn fn_00e6eba0_destroys_the_pixel_format_map_base() {
+        check(0x00e6_eba0, &[PIXEL_FORMAT_MAP_BASE_VTABLE]);
+    }
+
+    #[test]
+    fn fn_00e6ebe0_destroys_the_pixel_format_map() {
+        check(
+            0x00e6_ebe0,
+            &[PIXEL_FORMAT_MAP_VTABLE, PIXEL_FORMAT_MAP_BASE_VTABLE],
+        );
+    }
+
+    #[test]
+    fn fn_00e6eb70_frees_the_elements_then_the_array_with_bit_zero() {
+        for flags in [0u32, 1] {
+            let mut e = Engine::new();
+            e.register(NI_FREE, |_, _| Ret::default());
+            e.register(MEMORY_MANAGER_FREE, |_, _| Ret::default());
+            let array = e.new_object::<NiTArray>();
+            e.set(array, NiTArray::m_pBase, 0x0e40_0000);
+            e.call_log = Some(vec![]);
+            assert_eq!(
+                e.call(0x00e6_eb70, &args![array, flags]).u32(),
+                array.addr()
+            );
+            assert_eq!(e.mem.u32(array.addr()), MALLOC_POINTER_ARRAY_VTABLE);
+            let log = e.call_log.take().unwrap();
+            let frees: Vec<_> = log.iter().filter(|c| c.0 == NI_FREE).collect();
+            assert_eq!(frees, vec![&(NI_FREE, vec![0x0e40_0000])]);
+            let deletes = log.iter().filter(|c| c.0 == MEMORY_MANAGER_FREE).count();
+            assert_eq!(deletes, flags as usize);
+        }
     }
 }

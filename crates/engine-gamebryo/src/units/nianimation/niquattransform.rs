@@ -326,9 +326,125 @@ pub fn ni_quat_transform_load_binary(
     });
 }
 
+/// `NiColor::SaveBinary` and `NiQuaternion::SaveBinary` (engine map; `thiscall`, the stream):
+/// three and four floats written in place, here the translation and the rotation.
+const WRITE_THREE_FLOATS: u32 = 0x00a6_9780;
+const WRITE_FOUR_FLOATS: u32 = 0x00a6_e4a0;
+/// `NiGetViewerString` (`cdecl`, the text), its float overload (`00a7d550`, `cdecl`, (name,
+/// float)), and the point's and the quaternion's `GetViewerString` (`00a59af0`, `00a6e190`;
+/// `thiscall` on the value, the name): each answers a new string.
+const NI_GET_VIEWER_STRING: u32 = 0x00a7_d330;
+const NI_GET_VIEWER_STRING_FLOAT: u32 = 0x00a7_d550;
+const POINT3_GET_VIEWER_STRING: u32 = 0x00a5_9af0;
+const QUATERNION_GET_VIEWER_STRING: u32 = 0x00a6_e190;
+/// The viewer-string array's `SetSize` (`0096ad30`, `thiscall`, the new size) and `SetAt`
+/// (`0096ae90`, `thiscall`, (index, address of the string)).
+const STRINGS_SET_SIZE: u32 = 0x0096_ad30;
+const STRINGS_SET_AT: u32 = 0x0096_ae90;
+/// `"NiQuatTransform"`, `"m_kTranslate"`, `"m_kRotate"` and `"m_fScale"`.
+const CLASS_NAME_TEXT: u32 = 0x0109_6bbc;
+const TRANSLATE_NAME_TEXT: u32 = 0x0109_6bac;
+const ROTATE_NAME_TEXT: u32 = 0x0109_6ba0;
+const SCALE_NAME_TEXT: u32 = 0x0109_6b94;
+
+/// The inlined `Add` of the viewer-string array (`NiTArray`: capacity +0x8, size +0xA, step
+/// +0xE): `text` goes into the stack word at `slot`; when the size has reached the capacity
+/// the array is grown to size + step first; then the word's address is stored at the old
+/// size (`SetAt`).
+fn add_viewer_string(e: &mut Engine, strings: Ptr, slot: u32, text: u32) {
+    let size = u32::from(e.mem.u16(strings.addr() + 0xa));
+    e.mem.set_u32(slot, text);
+    if size >= u32::from(e.mem.u16(strings.addr() + 8)) {
+        let step = u32::from(e.mem.u16(strings.addr() + 0xe));
+        e.call(STRINGS_SET_SIZE, &args![strings, step + size]);
+    }
+    e.call(STRINGS_SET_AT, &args![strings, size, slot]);
+}
+
+// Translated from 00a38b60 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiQuatTransform::SaveBinary` (Xbox PDB): the translation (`00a69780`) and the rotation
+/// (`00a6e4a0`), then the 4-byte scale through the output stream (`NiStream::m_pkOstr`
+/// +0x250): its write function (`m_pfnWrite`, `(stream, source, size, &component size,
+/// count)`) with the component size word (the stream argument's own stack slot) set to 4,
+/// and the byte count it answers added to its position.
+pub fn ni_quat_transform_save_binary(
+    e: &mut Engine,
+    this: Ptr<NiQuatTransform>,
+    stream: Ptr<NiStream>,
+) {
+    let t = this.addr();
+    e.call(WRITE_THREE_FLOATS, &args![this, stream]);
+    e.call(WRITE_FOUR_FLOATS, &args![t + 0xc, stream]);
+    e.with_stack(4, |e, slot| {
+        let output = Ptr::<NiBinaryStream>::new(e.get(stream, NiStream::m_pkOstr));
+        let function = e.get(output, NiBinaryStream::m_pfnWrite);
+        e.mem.set_u32(slot.addr(), 4);
+        let done = e
+            .call(function, &args![output, t + 0x1c, 4u32, slot, 1u32])
+            .u32();
+        let position = e.get(output, NiBinaryStream::m_uiAbsoluteCurrentPos);
+        e.set(
+            output,
+            NiBinaryStream::m_uiAbsoluteCurrentPos,
+            position.wrapping_add(done),
+        );
+    });
+}
+
+// Translated from 00a38cb0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiQuatTransform::GetViewerStrings` (Xbox PDB): appends `"NiQuatTransform"` to the
+/// viewer strings, then the translation's, the rotation's and the scale's strings for the
+/// parts that are set (the checked word unequal to the double `-FLT_MAX` at `010241b0`; a
+/// NaN is unequal, so it is listed).
+pub fn ni_quat_transform_get_viewer_strings(
+    e: &mut Engine,
+    this: Ptr<NiQuatTransform>,
+    strings: Ptr,
+) {
+    let t = this.addr();
+    // The two stack words that hold the strings: the local the function reserves, then the
+    // strings argument's own slot.
+    e.with_stack(8, |e, slots| {
+        let local = slots.addr();
+        let argument = local + 4;
+        let text = e.call(NI_GET_VIEWER_STRING, &args![CLASS_NAME_TEXT]).u32();
+        add_viewer_string(e, strings, local, text);
+        if !(x87_load32(e.mem.u32(t)) == unset_double(e)) {
+            let text = e
+                .call(POINT3_GET_VIEWER_STRING, &args![t, TRANSLATE_NAME_TEXT])
+                .u32();
+            add_viewer_string(e, strings, argument, text);
+        }
+        if !(x87_load32(e.mem.u32(t + 0x10)) == unset_double(e)) {
+            let text = e
+                .call(
+                    QUATERNION_GET_VIEWER_STRING,
+                    &args![t + 0xc, ROTATE_NAME_TEXT],
+                )
+                .u32();
+            add_viewer_string(e, strings, argument, text);
+        }
+        if !(x87_load32(e.mem.u32(t + 0x1c)) == unset_double(e)) {
+            let scale = x87_quiet_bits(e.mem.u32(t + 0x1c));
+            let text = e
+                .call(NI_GET_VIEWER_STRING_FLOAT, &args![SCALE_NAME_TEXT, scale])
+                .u32();
+            add_viewer_string(e, strings, argument, text);
+        }
+    });
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(
+            0x00a3_8b60,
+            ni_quat_transform_save_binary(Ptr<NiQuatTransform>, Ptr<NiStream>)
+        ),
+        entry!(
+            0x00a3_8cb0,
+            ni_quat_transform_get_viewer_strings(Ptr<NiQuatTransform>, Ptr)
+        ),
         entry!(
             0x00a3_86a0,
             ni_quat_transform_hier_invert(Ptr<NiQuatTransform>, Ptr)
@@ -566,5 +682,112 @@ mod tests {
         e.call(0x00a3_8bb0, &args![this, stream]);
         assert_eq!(e.mem.f32(this + 0x1c), 3.0);
         assert_eq!(e.get(input, NiBinaryStream::m_uiAbsoluteCurrentPos), 11);
+    }
+}
+
+#[cfg(test)]
+mod n005_tests {
+    use super::*;
+
+    const UNSET: u32 = 0xff7f_ffff;
+
+    fn calls_to(e: &Engine, addr: u32) -> Vec<Vec<u32>> {
+        e.call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|c| c.0 == addr)
+            .map(|c| c.1.clone())
+            .collect()
+    }
+
+    #[test]
+    fn save_binary_writes_translation_rotation_and_scale() {
+        let mut e = Engine::new();
+        e.register(WRITE_THREE_FLOATS, |_, _| Ret::default());
+        e.register(WRITE_FOUR_FLOATS, |_, _| Ret::default());
+        e.register(0x0300_0000, |e, a| {
+            assert_eq!(e.mem.u32(a[3]), 4);
+            assert_eq!(a[4], 1);
+            a[2].into_ret()
+        });
+        let stream = e.new_object::<NiStream>();
+        let output = e.new_object::<NiBinaryStream>();
+        e.set(stream, NiStream::m_pkOstr, output.addr());
+        e.set(output, NiBinaryStream::m_pfnWrite, 0x0300_0000);
+        e.set(output, NiBinaryStream::m_uiAbsoluteCurrentPos, 10);
+        let this = Ptr::<NiQuatTransform>::new(e.mem.alloc(0x20));
+        e.call_log = Some(vec![]);
+        e.call(0x00a3_8b60, &args![this, stream]);
+        assert_eq!(
+            calls_to(&e, WRITE_THREE_FLOATS),
+            vec![vec![this.addr(), stream.addr()]]
+        );
+        assert_eq!(
+            calls_to(&e, WRITE_FOUR_FLOATS),
+            vec![vec![this.addr() + 0xc, stream.addr()]]
+        );
+        let write = calls_to(&e, 0x0300_0000);
+        assert_eq!(write.len(), 1);
+        assert_eq!(write[0][..3], [output.addr(), this.addr() + 0x1c, 4]);
+        assert_eq!(e.get(output, NiBinaryStream::m_uiAbsoluteCurrentPos), 14);
+    }
+
+    #[test]
+    fn get_viewer_strings_lists_the_set_parts() {
+        let mut e = Engine::new();
+        e.map(0x0102_4000, 0x1000);
+        e.mem.set_u64(UNSET_DOUBLE, f64::from(f32::MIN).to_bits());
+        e.register(NI_GET_VIEWER_STRING, |_, _| 0x7000u32.into_ret());
+        e.register(POINT3_GET_VIEWER_STRING, |_, _| 0x7001u32.into_ret());
+        e.register(QUATERNION_GET_VIEWER_STRING, |_, _| 0x7002u32.into_ret());
+        e.register(NI_GET_VIEWER_STRING_FLOAT, |_, _| 0x7003u32.into_ret());
+        e.register(STRINGS_SET_SIZE, |_, _| Ret::default());
+        // SetAt stores the string the slot holds and grows the size.
+        e.register(STRINGS_SET_AT, |e, a| {
+            let text = e.mem.u32(a[2]);
+            let base = e.mem.u32(a[0] + 4);
+            e.mem.set_u32(base + 4 * a[1], text);
+            e.mem.set_u16(a[0] + 0xa, a[1] as u16 + 1);
+            Ret::default()
+        });
+        let strings = e.mem.alloc(0x10);
+        let base = e.mem.alloc(0x40);
+        e.mem.set_u32(strings + 4, base);
+        e.mem.set_u16(strings + 8, 2);
+        e.mem.set_u16(strings + 0xe, 3);
+        let this = e.mem.alloc(0x20);
+        e.mem.set_f32(this, 1.0);
+        e.mem.set_u32(this + 0x10, UNSET);
+        // A NaN scale is unequal to the unset value: listed.
+        e.mem.set_u32(this + 0x1c, 0x7f80_0001);
+        e.call_log = Some(vec![]);
+        e.call(0x00a3_8cb0, &args![this, strings]);
+        let listed: Vec<u32> = (0..3).map(|i| e.mem.u32(base + 4 * i)).collect();
+        assert_eq!(listed, [0x7000, 0x7001, 0x7003]);
+        assert_eq!(
+            calls_to(&e, NI_GET_VIEWER_STRING),
+            vec![vec![CLASS_NAME_TEXT]]
+        );
+        assert_eq!(
+            calls_to(&e, POINT3_GET_VIEWER_STRING),
+            vec![vec![this, TRANSLATE_NAME_TEXT]]
+        );
+        assert!(calls_to(&e, QUATERNION_GET_VIEWER_STRING).is_empty());
+        // The scale goes through the x87 stack: the signalling NaN comes out quiet.
+        assert_eq!(
+            calls_to(&e, NI_GET_VIEWER_STRING_FLOAT),
+            vec![vec![SCALE_NAME_TEXT, 0x7fc0_0001]]
+        );
+        // The array was full at the third string: grown to size + step.
+        assert_eq!(calls_to(&e, STRINGS_SET_SIZE), vec![vec![strings, 5]]);
+        // All unset: only the class name.
+        let unset = e.mem.alloc(0x20);
+        for at in [0u32, 0x10, 0x1c] {
+            e.mem.set_u32(unset + at, UNSET);
+        }
+        e.call_log = Some(vec![]);
+        e.call(0x00a3_8cb0, &args![unset, strings]);
+        assert_eq!(calls_to(&e, STRINGS_SET_AT).len(), 1);
     }
 }

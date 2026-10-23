@@ -160,9 +160,52 @@ pub fn fn_00b66700(e: &mut Engine, this: Ptr, value: f32) {
     e.mem.set_u32(this.addr() + 0xe0, stored);
 }
 
+/// `00b70270` (unit `run_00b70260`; `thiscall`, one word: the other object; `bool` in `AL`).
+const IS_EQUAL_00B70270: u32 = 0x00b7_0270;
+
+// Translated from 00b665c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map: slot +0x5c of `BSShaderPPLightingProperty`'s vtable `010ae0d0`
+/// (and two others; `IsEqual` in the Xbox PDB's slot list; `thiscall`, one word: the other
+/// object). Runs `00b70270` with `this` and the word, then answers false whatever it gave
+/// (`XOR AL,AL`).
+pub fn fn_00b665c0(e: &mut Engine, this: Ptr, other: u32) -> bool {
+    e.call(IS_EQUAL_00B70270, &args![this, other]);
+    false
+}
+
+// Translated from 00b66620 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Ghidra made no function here: slot +0xdc of `BSShaderPPLightingProperty`'s vtable
+/// `010ae0d0` and six others (`thiscall`, one word). Stores 0 in the word at `+0xd8` when the
+/// word is 3, otherwise 3 (`SUB 3; NEG; SBB; AND 3`).
+pub fn fn_00b66620(e: &mut Engine, this: Ptr, mode: u32) {
+    let value: u32 = if mode.wrapping_sub(3) != 0 { 3 } else { 0 };
+    e.mem.set_u32(this.addr().wrapping_add(0xd8), value);
+}
+
+// Translated from 00b666d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map: slot +0xf8 of `BSShaderPPLightingProperty`'s vtable `010ae0d0`
+/// and six others (`thiscall`, one word: an object). For the six words at `+0xac` in order
+/// calls the object's slot +0x90 with the index (0 to 5) and the word.
+pub fn fn_00b666d0(e: &mut Engine, this: Ptr, target: u32) {
+    let mut index = 0u32;
+    let mut slot = this.addr().wrapping_add(0xac);
+    loop {
+        let value = e.mem.u32(slot);
+        e.vcall(target, 0x90, &args![index, value]);
+        index += 1;
+        slot = slot.wrapping_add(4);
+        if index >= 6 {
+            break;
+        }
+    }
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x00b6_65c0, fn_00b665c0(Ptr, u32) -> bool),
+        entry!(0x00b6_6620, fn_00b66620(Ptr, u32)),
+        entry!(0x00b6_66d0, fn_00b666d0(Ptr, u32)),
         entry!(0x00b6_64f0, fn_00b664f0(Ptr, u8) -> Ptr),
         entry!(0x00b6_6520, fn_00b66520(Ptr)),
         entry!(0x00b6_6570, fn_00b66570(Ptr)),
@@ -356,5 +399,57 @@ mod tests {
             e.call(0x00b6_6700, &[this, input]);
             assert_eq!(e.mem.u32(this + 0xe0), expected, "{input:#x}");
         }
+    }
+}
+
+#[cfg(test)]
+mod n013_tests {
+    use super::*;
+
+    fn calls(e: &Engine, addr: u32) -> Vec<Vec<u32>> {
+        e.call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|(a, _)| *a == addr)
+            .map(|(_, w)| w.clone())
+            .collect()
+    }
+
+    #[test]
+    fn fn_00b665c0_runs_the_base_and_answers_false() {
+        let mut e = Engine::new();
+        e.register(IS_EQUAL_00B70270, |_, _| 1u32.into_ret());
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x00b6_65c0, &args![0x10u32, 0x20u32]).u8(), 0);
+        assert_eq!(calls(&e, IS_EQUAL_00B70270), vec![vec![0x10, 0x20]]);
+    }
+
+    #[test]
+    fn fn_00b66620_maps_3_to_0_and_the_rest_to_3() {
+        let mut e = Engine::new();
+        let this = e.mem.alloc(0xe0);
+        e.call(0x00b6_6620, &args![this, 3u32]);
+        assert_eq!(e.mem.u32(this + 0xd8), 0);
+        e.call(0x00b6_6620, &args![this, 4u32]);
+        assert_eq!(e.mem.u32(this + 0xd8), 3);
+    }
+
+    #[test]
+    fn fn_00b666d0_passes_the_six_words() {
+        let mut e = Engine::new();
+        e.put_vtable(0x0f00_1000, &[0; 0x25]);
+        e.mem.set_u32(0x0f00_1090, 0x0f00_0090);
+        e.register(0x0f00_0090, |_, _| Ret::default());
+        let target = e.mem.alloc(4);
+        e.mem.set_u32(target, 0x0f00_1000);
+        let this = e.mem.alloc(0xc4);
+        for i in 0..6 {
+            e.mem.set_u32(this + 0xac + 4 * i, 0x100 + i);
+        }
+        e.call_log = Some(vec![]);
+        e.call(0x00b6_66d0, &args![this, target]);
+        let expected: Vec<Vec<u32>> = (0..6).map(|i| vec![target, i, 0x100 + i]).collect();
+        assert_eq!(calls(&e, 0x0f00_0090), expected);
     }
 }

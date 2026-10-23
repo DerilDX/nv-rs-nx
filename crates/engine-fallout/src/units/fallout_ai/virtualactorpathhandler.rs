@@ -615,9 +615,283 @@ pub fn virtual_actor_path_handler_save_game(
     }
 }
 
+/// `00404010` (unnamed, `cdecl`, two `float`s; the larger in `ST0`).
+const LARGER_OF: u32 = 0x0040_4010;
+/// `008b6800` (unnamed, engine map unit `actor.cpp`, `thiscall` on the path, no stack words):
+/// compared unsigned with 0.
+const PATH_COUNT_008B6800: u32 = 0x008b_6800;
+/// `009ddb30` (unnamed, engine map unit `actormover.cpp`, `thiscall` on the path, no stack
+/// words): the node used past the path's last index.
+const PATH_LAST_NODE_009DDB30: u32 = 0x009d_db30;
+/// The actor's vtable slot `+0x1f4` (no stack words): the address of its position.
+const ACTOR_POSITION_SLOT_1F4: u32 = 0x1f4;
+/// `BGSLoadGameBuffer` raw load (`00864980`, `thiscall`: data, size).
+const LOAD_DATA: u32 = 0x0086_4980;
+/// The printer's slot `+0x14` (`cdecl`: printer, two words passed on, format, values).
+const PRINT_SLOT: u32 = 0x14;
+/// `"VirtualPathHandler: Actor's Positon %1.f..."` (the three coordinates).
+const STATUS_POSITION_FORMAT: u32 = 0x0109_2b28;
+/// `"Current path node %u of %u"`.
+const STATUS_NODE_FORMAT: u32 = 0x0109_2b0c;
+/// `"No path"`.
+const STATUS_NO_PATH_FORMAT: u32 = 0x0109_2b04;
+
+/// The actor's position (slot `+0x1f4`) copied to `out`.
+fn copy_actor_position(e: &mut Engine, this: Ptr<VirtualActorPathHandler>, out: u32) {
+    let actor = e.get(this, VirtualActorPathHandler::pActor);
+    let position = e.vcall(actor, ACTOR_POSITION_SLOT_1F4, &args![]).u32();
+    copy_point(e, out, position);
+}
+
+// Translated from 009ead60 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `VirtualActorPathHandler::UpdateWhilePlayerWaits` (Xbox PDB; `thiscall`, one `float`,
+/// `RET 4`): the handler's slot `+0xc` (`Update`) with the time (`FLD`/`FSTP` copy); its `EAX`
+/// is the answer.
+pub fn virtual_actor_path_handler_update_while_player_waits(
+    e: &mut Engine,
+    this: Ptr<VirtualActorPathHandler>,
+    time: f32,
+) -> u32 {
+    e.vcall(this.addr(), 0xc, &args![x87_quiet_bits(time.to_bits())])
+        .u32()
+}
+
+// Translated from 009eb070 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `VirtualActorPathHandler::GetDistanceRemaining` (Xbox PDB): `fPathLength -
+/// fDistanceTraveled` (stored as a `float`), and the larger of it and 0.0 (`00404010`),
+/// stored as a `float` and loaded into `ST0`.
+pub fn virtual_actor_path_handler_get_distance_remaining(
+    e: &mut Engine,
+    this: Ptr<VirtualActorPathHandler>,
+) -> f32 {
+    let length = e.mem.u32(this.addr() + 0x1c);
+    let traveled = e.mem.u32(this.addr() + 0x18);
+    let remaining = x87_store32(x87_sub(x87_load32(length), x87_m32(traveled)));
+    let larger = e
+        .call(
+            LARGER_OF,
+            &args![x87_quiet_bits(remaining), x87_store32(0.0)],
+        )
+        .f64();
+    x87_quiet(f32::from_bits(x87_store32(larger)))
+}
+
+// Translated from 009eb0b0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `VirtualActorPathHandler::GetPercentTraveled` (Xbox PDB): 0.0 without a path; 1.0 when the
+/// node index is at or past the node count, or when `fPathLength` is below or equal to 0.0
+/// (`FCOMP`, `TEST AH,0x41`, `JP`: greater and unordered divide); otherwise
+/// `fDistanceTraveled / fPathLength`, stored as a `float`.
+pub fn virtual_actor_path_handler_get_percent_traveled(
+    e: &mut Engine,
+    this: Ptr<VirtualActorPathHandler>,
+) -> f32 {
+    if e.call(WORD_AT, &args![this.addr() + 0xc]).u32() == 0 {
+        return 0.0;
+    }
+    let count = path_node_count(e, this);
+    if e.get(this, VirtualActorPathHandler::iCurrentNodeIndex) >= count {
+        return 1.0;
+    }
+    let length = e.mem.u32(this.addr() + 0x1c);
+    let zero = e.global::<f64>(ZERO);
+    let length_value = x87_load32(length);
+    let divides = length_value > zero || length_value.is_nan();
+    if !divides {
+        return 1.0;
+    }
+    let traveled = e.mem.u32(this.addr() + 0x18);
+    let percent = x87_store32(x87_div(x87_load32(traveled), x87_m32(length)));
+    x87_quiet(f32::from_bits(percent))
+}
+
+// Translated from 009eb120 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `VirtualActorPathHandler::ComputeApproximateLocation` (Xbox PDB; `thiscall`, two stack
+/// words, `RET 8`; the second is not read): the actor's position (slot `+0x1f4`) copied to
+/// `out`; answers `out`.
+pub fn virtual_actor_path_handler_compute_approximate_location(
+    e: &mut Engine,
+    this: Ptr<VirtualActorPathHandler>,
+    out: u32,
+    _unused_2: u32,
+) -> u32 {
+    copy_actor_position(e, this, out);
+    out
+}
+
+// Translated from 009eb160 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `VirtualActorPathHandler::GetNextNodeLocation` (Xbox PDB; `thiscall`, one stack word,
+/// `RET 4`): when `008b6800` of the path answers 0, the actor's position; otherwise the point
+/// (`005c3420`) of the part (`00717e50`) of the node after the current one, or, when that index
+/// is not below the node count, of `009ddb30`'s node. Written to `out`; answers `out`.
+pub fn virtual_actor_path_handler_get_next_node_location(
+    e: &mut Engine,
+    this: Ptr<VirtualActorPathHandler>,
+    out: u32,
+) -> u32 {
+    let path = e.call(WORD_AT, &args![this.addr() + 0xc]).u32();
+    if e.call(PATH_COUNT_008B6800, &args![path]).u32() == 0 {
+        copy_actor_position(e, this, out);
+        return out;
+    }
+    let next = e
+        .get(this, VirtualActorPathHandler::iCurrentNodeIndex)
+        .wrapping_add(1);
+    let node = if next < path_node_count(e, this) {
+        let next = e
+            .get(this, VirtualActorPathHandler::iCurrentNodeIndex)
+            .wrapping_add(1);
+        let path = e.call(WORD_AT, &args![this.addr() + 0xc]).u32();
+        e.call(PATH_NODE, &args![path, next]).u32()
+    } else {
+        let path = e.call(WORD_AT, &args![this.addr() + 0xc]).u32();
+        e.call(PATH_LAST_NODE_009DDB30, &args![path]).u32()
+    };
+    let part = e.call(NODE_PART, &args![node]).u32();
+    e.call(NODE_POINT, &args![part, out]);
+    out
+}
+
+// Translated from 009eb230 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `VirtualActorPathHandler::GetNodeLocation` (Xbox PDB; `thiscall`, two stack words: index
+/// and out, `RET 8`): `false` without a path or when `index` is not below the node count;
+/// otherwise the point of the node's part (`005c3420` into a local, through the address it
+/// answers) copied to `out`, and `true`.
+pub fn virtual_actor_path_handler_get_node_location(
+    e: &mut Engine,
+    this: Ptr<VirtualActorPathHandler>,
+    index: u32,
+    out: u32,
+) -> bool {
+    if e.call(WORD_AT, &args![this.addr() + 0xc]).u32() == 0 {
+        return false;
+    }
+    if index >= path_node_count(e, this) {
+        return false;
+    }
+    e.with_stack(0xc, |e, local| {
+        let path = e.call(WORD_AT, &args![this.addr() + 0xc]).u32();
+        let node = e.call(PATH_NODE, &args![path, index]).u32();
+        let part = e.call(NODE_PART, &args![node]).u32();
+        let point = e.call(NODE_POINT, &args![part, local]).u32();
+        copy_point(e, out, point);
+    });
+    true
+}
+
+// Translated from 009eb2b0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `VirtualActorPathHandler::PrintCurrentStatus` (Xbox PDB; `thiscall`, three stack words:
+/// the printer and two words passed on, `RET 0xc`): through the printer's slot `+0x14`
+/// (`cdecl`), the actor's position (slot `+0x1f4`, each coordinate as a `double`) with
+/// `01092b28`'s format, then `"Current path node %u of %u"` with the node index and count,
+/// or `"No path"` without a path.
+pub fn virtual_actor_path_handler_print_current_status(
+    e: &mut Engine,
+    this: Ptr<VirtualActorPathHandler>,
+    printer: u32,
+    first: u32,
+    second: u32,
+) {
+    let actor = e.get(this, VirtualActorPathHandler::pActor);
+    let position = e.vcall(actor, ACTOR_POSITION_SLOT_1F4, &args![]).u32();
+    let x = e.mem.u32(position);
+    let y = e.mem.u32(position + 4);
+    let z = e.mem.u32(position + 8);
+    e.vcall(
+        printer,
+        PRINT_SLOT,
+        &args![
+            first,
+            second,
+            STATUS_POSITION_FORMAT,
+            x87_load32(x),
+            x87_load32(y),
+            x87_load32(z)
+        ],
+    );
+    if e.call(WORD_AT, &args![this.addr() + 0xc]).u32() != 0 {
+        let count = path_node_count(e, this);
+        let index = e.get(this, VirtualActorPathHandler::iCurrentNodeIndex);
+        e.vcall(
+            printer,
+            PRINT_SLOT,
+            &args![first, second, STATUS_NODE_FORMAT, index, count],
+        );
+    } else {
+        e.vcall(
+            printer,
+            PRINT_SLOT,
+            &args![first, second, STATUS_NO_PATH_FORMAT],
+        );
+    }
+}
+
+// Translated from 009eb3e0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `VirtualActorPathHandler::LoadGame` (Xbox PDB; `RET 4`): the node index, the distance
+/// traveled and the path length, four bytes each (`00864980`).
+pub fn virtual_actor_path_handler_load_game(
+    e: &mut Engine,
+    this: Ptr<VirtualActorPathHandler>,
+    buffer: u32,
+) {
+    for offset in [0x14u32, 0x18, 0x1c] {
+        e.call(LOAD_DATA, &args![buffer, this.addr() + offset, 4u32]);
+    }
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(
+            0x009e_ad60,
+            virtual_actor_path_handler_update_while_player_waits(
+                Ptr<VirtualActorPathHandler>,
+                f32,
+            ) -> u32
+        ),
+        entry!(
+            0x009e_b070,
+            virtual_actor_path_handler_get_distance_remaining(Ptr<VirtualActorPathHandler>) -> f32
+        ),
+        entry!(
+            0x009e_b0b0,
+            virtual_actor_path_handler_get_percent_traveled(Ptr<VirtualActorPathHandler>) -> f32
+        ),
+        entry!(
+            0x009e_b120,
+            virtual_actor_path_handler_compute_approximate_location(
+                Ptr<VirtualActorPathHandler>,
+                u32,
+                u32,
+            ) -> u32
+        ),
+        entry!(
+            0x009e_b160,
+            virtual_actor_path_handler_get_next_node_location(
+                Ptr<VirtualActorPathHandler>,
+                u32,
+            ) -> u32
+        ),
+        entry!(
+            0x009e_b230,
+            virtual_actor_path_handler_get_node_location(
+                Ptr<VirtualActorPathHandler>,
+                u32,
+                u32,
+            ) -> bool
+        ),
+        entry!(
+            0x009e_b2b0,
+            virtual_actor_path_handler_print_current_status(
+                Ptr<VirtualActorPathHandler>,
+                u32,
+                u32,
+                u32,
+            )
+        ),
+        entry!(
+            0x009e_b3e0,
+            virtual_actor_path_handler_load_game(Ptr<VirtualActorPathHandler>, u32)
+        ),
         entry!(
             0x004a_7bd0,
             virtual_actor_path_handler_get_distance_traveled(Ptr<VirtualActorPathHandler>) -> f32
@@ -1057,5 +1331,205 @@ mod tests {
         e.set(this, VirtualActorPathHandler::iCurrentNodeIndex, 0);
         assert_eq!(e.call(0x009e_ad90, &args![this, point]).i32(), 0);
         assert_eq!(e.get(this, VirtualActorPathHandler::iCurrentNodeIndex), 1);
+    }
+}
+
+#[cfg(test)]
+mod n027_tests {
+    use super::*;
+
+    fn calls(e: &Engine, callee: u32) -> Vec<Vec<u32>> {
+        e.call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|(address, _)| *address == callee)
+            .map(|(_, words)| words.clone())
+            .collect()
+    }
+
+    const ACTOR_VTABLE: u32 = 0x0300_0000;
+    const ACTOR_POSITION: u32 = 0x0300_1000;
+    const HANDLER_VTABLE: u32 = 0x0301_0000;
+    const HANDLER_UPDATE: u32 = 0x0301_1000;
+    const PRINTER_VTABLE: u32 = 0x0302_0000;
+    const PRINTER_PRINT: u32 = 0x0302_1000;
+
+    /// A handler whose actor stands at (1, 2, 3) (slot +0x1f4 answers actor + 0x10), with a
+    /// path of `nodes` nodes (node i at x = 10 i) when `with_path`.
+    fn rig(nodes: u32, with_path: bool) -> (Engine, Ptr<VirtualActorPathHandler>, u32) {
+        let mut e = Engine::new();
+        e.map(0x0101_2000, 0x1000);
+        e.set_global(ZERO, 0.0f64);
+        e.put_vtable(ACTOR_VTABLE, &[0; 0x80]);
+        e.mem.set_u32(ACTOR_VTABLE + 0x1f4, ACTOR_POSITION);
+        let actor = e.mem.alloc(0x20);
+        e.mem.set_u32(actor, ACTOR_VTABLE);
+        e.mem.set_f32(actor + 0x10, 1.0);
+        e.mem.set_f32(actor + 0x14, 2.0);
+        e.mem.set_f32(actor + 0x18, 3.0);
+        e.register(ACTOR_POSITION, |_, a| (a[0] + 0x10).into_ret());
+        let this: Ptr<VirtualActorPathHandler> = e.new_object();
+        e.put_vtable(HANDLER_VTABLE, &[0, 0, 0, HANDLER_UPDATE]);
+        e.mem.set_u32(this.addr(), HANDLER_VTABLE);
+        e.set(this, VirtualActorPathHandler::pActor, actor);
+        let path = if with_path { e.mem.alloc(4) } else { 0 };
+        e.mem.set_u32(this.addr() + 0xc, path);
+        e.register(WORD_AT, |e, a| e.mem.u32(a[0]).into_ret());
+        e.register_double(PATH_NODE_COUNT, move |_, _| nodes.into_ret());
+        e.register_double(PATH_COUNT_008B6800, move |_, _| nodes.into_ret());
+        e.register(PATH_NODE, |_, a| (0x100 + a[1]).into_ret());
+        e.register(PATH_LAST_NODE_009DDB30, |_, _| 0x1ffu32.into_ret());
+        e.register(NODE_PART, |_, a| a[0].into_ret());
+        e.register(NODE_POINT, |e, a| {
+            e.mem.set_f32(a[1], 10.0 * (a[0] - 0x100) as f32);
+            e.mem.set_f32(a[1] + 4, 0.5);
+            e.mem.set_f32(a[1] + 8, 0.25);
+            a[1].into_ret()
+        });
+        e.call_log = Some(vec![]);
+        (e, this, actor)
+    }
+
+    fn point(e: &Engine, at: u32) -> [f32; 3] {
+        [e.mem.f32(at), e.mem.f32(at + 4), e.mem.f32(at + 8)]
+    }
+
+    #[test]
+    fn update_while_player_waits_calls_update() {
+        let (mut e, this, _) = rig(2, true);
+        e.register(HANDLER_UPDATE, |_, a| (a[1] ^ 0x77).into_ret());
+        let answer = e.call(0x009e_ad60, &args![this, 2.5f32]).u32();
+        assert_eq!(answer, 2.5f32.to_bits() ^ 0x77);
+        assert_eq!(
+            calls(&e, HANDLER_UPDATE),
+            vec![vec![this.addr(), 2.5f32.to_bits()]]
+        );
+    }
+
+    #[test]
+    fn distance_remaining_is_the_larger_of_the_rest_and_zero() {
+        let (mut e, this, _) = rig(2, true);
+        e.register(LARGER_OF, |_, a| {
+            f64::from(f32::from_bits(a[0]).max(f32::from_bits(a[1]))).into_ret()
+        });
+        e.set(this, VirtualActorPathHandler::fPathLength, 30.0);
+        e.set(this, VirtualActorPathHandler::fDistanceTraveled, 12.5);
+        assert_eq!(e.call(0x009e_b070, &args![this]).f32(), 17.5);
+        assert_eq!(calls(&e, LARGER_OF), vec![vec![17.5f32.to_bits(), 0]]);
+        e.set(this, VirtualActorPathHandler::fDistanceTraveled, 40.0);
+        assert_eq!(e.call(0x009e_b070, &args![this]).f32(), 0.0);
+    }
+
+    #[test]
+    fn percent_traveled_by_path_and_index() {
+        // No path.
+        let (mut e, this, _) = rig(3, false);
+        assert_eq!(e.call(0x009e_b0b0, &args![this]).f32(), 0.0);
+        // Index at the node count.
+        let (mut e, this, _) = rig(3, true);
+        e.set(this, VirtualActorPathHandler::iCurrentNodeIndex, 3);
+        assert_eq!(e.call(0x009e_b0b0, &args![this]).f32(), 1.0);
+        // A path of length zero or below.
+        e.set(this, VirtualActorPathHandler::iCurrentNodeIndex, 1);
+        for length in [0.0f32, -4.0] {
+            e.set(this, VirtualActorPathHandler::fPathLength, length);
+            assert_eq!(e.call(0x009e_b0b0, &args![this]).f32(), 1.0);
+        }
+        // The ratio; a NaN length divides.
+        e.set(this, VirtualActorPathHandler::fPathLength, 40.0);
+        e.set(this, VirtualActorPathHandler::fDistanceTraveled, 10.0);
+        assert_eq!(e.call(0x009e_b0b0, &args![this]).f32(), 0.25);
+        e.set(this, VirtualActorPathHandler::fPathLength, f32::NAN);
+        assert!(e.call(0x009e_b0b0, &args![this]).f32().is_nan());
+    }
+
+    #[test]
+    fn approximate_location_is_the_actor_position() {
+        let (mut e, this, _) = rig(3, true);
+        let out = e.mem.alloc(0xc);
+        assert_eq!(e.call(0x009e_b120, &args![this, out, 0x55u32]).u32(), out);
+        assert_eq!(point(&e, out), [1.0, 2.0, 3.0]);
+    }
+
+    #[test]
+    fn next_node_location_by_index() {
+        // Inside the path: the node after the current one.
+        let (mut e, this, _) = rig(3, true);
+        e.set(this, VirtualActorPathHandler::iCurrentNodeIndex, 1);
+        let out = e.mem.alloc(0xc);
+        assert_eq!(e.call(0x009e_b160, &args![this, out]).u32(), out);
+        assert_eq!(point(&e, out), [20.0, 0.5, 0.25]);
+        assert_eq!(calls(&e, PATH_NODE)[0][1], 2);
+        // At the last node: the node of 009ddb30.
+        e.set(this, VirtualActorPathHandler::iCurrentNodeIndex, 2);
+        e.call(0x009e_b160, &args![this, out]);
+        assert_eq!(point(&e, out), [10.0 * 0xff as f32, 0.5, 0.25]);
+        assert_eq!(calls(&e, PATH_LAST_NODE_009DDB30).len(), 1);
+        // 008b6800 answering 0: the actor position.
+        let (mut e, this, _) = rig(0, true);
+        e.call(0x009e_b160, &args![this, out]);
+        assert_eq!(point(&e, out), [1.0, 2.0, 3.0]);
+    }
+
+    #[test]
+    fn node_location_checks_path_and_index() {
+        let (mut e, this, _) = rig(3, true);
+        let out = e.mem.alloc(0xc);
+        assert!(e.call(0x009e_b230, &args![this, 2u32, out]).bool());
+        assert_eq!(point(&e, out), [20.0, 0.5, 0.25]);
+        e.mem.set_u32(out, 0x1234);
+        assert!(!e.call(0x009e_b230, &args![this, 3u32, out]).bool());
+        assert_eq!(e.mem.u32(out), 0x1234);
+        let (mut e, this, _) = rig(3, false);
+        assert!(!e.call(0x009e_b230, &args![this, 0u32, out]).bool());
+    }
+
+    #[test]
+    fn print_current_status_prints_position_then_nodes() {
+        for (with_path, second) in [(true, STATUS_NODE_FORMAT), (false, STATUS_NO_PATH_FORMAT)] {
+            let (mut e, this, _) = rig(3, with_path);
+            e.set(this, VirtualActorPathHandler::iCurrentNodeIndex, 1);
+            let printer = e.mem.alloc(4);
+            e.put_vtable(PRINTER_VTABLE, &[0, 0, 0, 0, 0, PRINTER_PRINT]);
+            e.mem.set_u32(printer, PRINTER_VTABLE);
+            e.register(PRINTER_PRINT, |_, _| Ret::default());
+            e.call(0x009e_b2b0, &args![this, printer, 7u32, 8u32]);
+            let prints = calls(&e, PRINTER_PRINT);
+            assert_eq!(prints.len(), 2);
+            assert_eq!(
+                prints[0],
+                args![
+                    printer,
+                    7u32,
+                    8u32,
+                    STATUS_POSITION_FORMAT,
+                    1.0f64,
+                    2.0f64,
+                    3.0f64
+                ]
+            );
+            if with_path {
+                assert_eq!(prints[1], vec![printer, 7, 8, second, 1, 3]);
+            } else {
+                assert_eq!(prints[1], vec![printer, 7, 8, second]);
+            }
+        }
+    }
+
+    #[test]
+    fn load_game_loads_three_words() {
+        let (mut e, this, _) = rig(3, true);
+        e.register(LOAD_DATA, |_, _| Ret::default());
+        e.call(0x009e_b3e0, &args![this, 0x4444u32]);
+        let base = this.addr();
+        assert_eq!(
+            calls(&e, LOAD_DATA),
+            vec![
+                vec![0x4444, base + 0x14, 4],
+                vec![0x4444, base + 0x18, 4],
+                vec![0x4444, base + 0x1c, 4]
+            ]
+        );
     }
 }

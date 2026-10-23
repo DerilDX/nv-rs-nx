@@ -58,9 +58,24 @@ pub fn fn_00b815e0(e: &mut Engine, pass: u32) {
     }
 }
 
+// Translated from 00b81730 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map: slot +0x124 of the vtable `010af9e0` (the one `WaterShader`'s
+/// constructor stores at `00b86c1a`; `thiscall`, no stack words). For each of the 0x4a words
+/// from `+0x6c` in order, calls the object's own slot +0x128 with the word.
+pub fn fn_00b81730(e: &mut Engine, this: Ptr) {
+    let base = this.addr();
+    for index in 0..0x4au32 {
+        let word = e.mem.u32(base + 0x6c + 4 * index);
+        e.vcall(base, 0x128, &args![word]);
+    }
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
-    vec![entry!(0x00b815e0, fn_00b815e0(u32))]
+    vec![
+        entry!(0x00b815e0, fn_00b815e0(u32)),
+        entry!(0x00b8_1730, fn_00b81730(Ptr)),
+    ]
 }
 
 #[cfg(test)]
@@ -87,5 +102,36 @@ mod tests {
         assert_eq!(bytes(&e, SECOND_TABLE_BYTES, 6), vec![0, 1, 0, 1, 0, 1]);
         let flags: Vec<u8> = objects.iter().map(|&object| e.mem.u8(object + 8)).collect();
         assert_eq!(flags, vec![1, 1, 1, 0, 1, 0, 1, 0, 1]);
+    }
+}
+
+#[cfg(test)]
+mod n013_tests {
+    use super::*;
+
+    #[test]
+    fn fn_00b81730_passes_each_word_to_slot_0x128() {
+        let mut e = Engine::new();
+        let mut slots = vec![0u32; 0x4b];
+        slots[0x4a] = 0x0f00_0128;
+        e.put_vtable(0x0f00_1000, &slots);
+        e.register(0x0f00_0128, |_, _| Ret::default());
+        let this = e.mem.alloc(0x6c + 0x4a * 4);
+        e.mem.set_u32(this, 0x0f00_1000);
+        for i in 0..0x4a {
+            e.mem.set_u32(this + 0x6c + 4 * i, 0x100 + i);
+        }
+        e.call_log = Some(vec![]);
+        e.call(0x00b8_1730, &args![this]);
+        let seen: Vec<Vec<u32>> = e
+            .call_log
+            .take()
+            .unwrap()
+            .into_iter()
+            .filter(|(a, _)| *a == 0x0f00_0128)
+            .map(|(_, w)| w)
+            .collect();
+        let expected: Vec<Vec<u32>> = (0..0x4a).map(|i| vec![this, 0x100 + i]).collect();
+        assert_eq!(seen, expected);
     }
 }

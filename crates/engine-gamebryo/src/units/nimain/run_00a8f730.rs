@@ -19,9 +19,26 @@ pub fn fn_00a8f730(e: &mut Engine) {
     e.mem.set_u32(HELD_OBJECT_SLOT, 0);
 }
 
+/// `011f5d30`: the byte (and object) `00a8f750` answers.
+const FLAG_OBJECT: u32 = 0x011f_5d30;
+
+// Translated from 00a8f750 (PC disassembly, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (no arguments; a function Ghidra did not create): the address
+/// `011f5d30` when its first byte is not 0 (`MOVSX`, `NEG`, `SBB`, `AND`), else 0.
+pub fn fn_00a8f750(e: &mut Engine) -> u32 {
+    if e.mem.u8(FLAG_OBJECT) != 0 {
+        FLAG_OBJECT
+    } else {
+        0
+    }
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
-    vec![entry!(0x00a8_f730, fn_00a8f730())]
+    vec![
+        entry!(0x00a8_f730, fn_00a8f730()),
+        entry!(0x00a8_f750, fn_00a8f750() -> u32),
+    ]
 }
 
 #[cfg(test)]
@@ -46,5 +63,19 @@ mod tests_b043 {
         e.call(0x00a8_f730, &args![]);
         assert_eq!(e.call_log.take().unwrap().len(), 1);
         assert_eq!(e.mem.u32(HELD_OBJECT_SLOT), 0);
+    }
+}
+
+#[cfg(test)]
+mod flag_tests {
+    use super::*;
+
+    #[test]
+    fn answers_the_address_while_the_byte_is_set() {
+        let mut e = Engine::new();
+        e.map(0x011f_5000, 0x1000);
+        assert_eq!(e.call(0x00a8_f750, &args![]).u32(), 0);
+        e.mem.set_u8(FLAG_OBJECT, 0x80);
+        assert_eq!(e.call(0x00a8_f750, &args![]).u32(), FLAG_OBJECT);
     }
 }
