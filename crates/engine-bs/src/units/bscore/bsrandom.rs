@@ -118,9 +118,31 @@ pub fn bs_random_unsigned_int(e: &mut Engine, this: Ptr<BSRandom>, maximum: u32)
     }
 }
 
+// Translated from 00aa5170 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (no code references it; `thiscall`, one word, `RET 4`): a
+/// `BSRandom` constructor with a seed: `rseed_sp` 0, `mti` 0x271, then the seeding
+/// `00aa51a0` with `seed`. Answers `this`: the exe ends on that call and leaves its `EAX`,
+/// which `00aa51a0` last loads with `this` before its loop test.
+pub fn fn_00aa5170(e: &mut Engine, this: Ptr<BSRandom>, seed: u32) -> Ptr<BSRandom> {
+    e.set(this, BSRandom::rseed_sp, 0);
+    e.set(this, BSRandom::mti, NOT_SEEDED);
+    fn_00aa51a0(e, this, seed);
+    this
+}
+
+// Translated from 00aa5220 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (no code references it; `thiscall`, no stack words): does
+/// nothing.
+pub fn fn_00aa5220(_e: &mut Engine, _this: Ptr<BSRandom>) {}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(
+            0x00aa_5170,
+            fn_00aa5170(Ptr<BSRandom>, u32) -> Ptr<BSRandom>
+        ),
+        entry!(0x00aa_5220, fn_00aa5220(Ptr<BSRandom>)),
         entry!(0x00aa51a0, fn_00aa51a0(Ptr<BSRandom>, u32)),
         entry!(
             0x00aa5140,
@@ -270,5 +292,35 @@ mod tests {
         let seeds: Vec<_> = log.iter().filter(|c| c.0 == SEED).collect();
         assert_eq!(seeds.len(), 1);
         assert_eq!(seeds[0].1, vec![object.addr(), 0x1234]);
+    }
+}
+
+#[cfg(test)]
+mod n082_tests {
+    use super::*;
+
+    #[test]
+    fn fn_00aa5170_seeds_a_new_generator_and_answers_this() {
+        let mut e = Engine::new();
+        let random = e.new_object::<BSRandom>();
+        e.set(random, BSRandom::rseed, 9);
+        e.set(random, BSRandom::rseed_sp, 5);
+        assert_eq!(
+            e.call(0x00aa_5170, &args![random, 7u32]).u32(),
+            random.addr()
+        );
+        assert_eq!(e.get(random, BSRandom::rseed), 9);
+        assert_eq!(e.get(random, BSRandom::rseed_sp), 0);
+        assert_eq!(e.get(random, BSRandom::mti), STATE_SIZE);
+        assert_eq!(e.mem.u32(random.addr() + 8), 7);
+        assert_eq!(e.mem.u32(random.addr() + 12), 7 * SEED_MULTIPLIER);
+    }
+
+    #[test]
+    fn fn_00aa5220_does_nothing() {
+        let mut e = Engine::new();
+        e.call_log = Some(vec![]);
+        e.call(0x00aa_5220, &args![0u32]);
+        assert_eq!(e.call_log.as_ref().unwrap().len(), 1);
     }
 }

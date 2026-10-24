@@ -2772,6 +2772,12 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00ae_d990, fn_00aed990(Ptr)),
         entry!(0x00ae_e580, fn_00aee580(Ptr, u32) -> u8),
         entry!(0x00af_0630, fn_00af0630(Ptr, Ptr, u32)),
+        entry!(0x00ae_abf0, fn_00aeabf0(u32, u32, u32, u32) -> i32),
+        entry!(0x00ae_ae10, fn_00aeae10(Ptr) -> Ptr),
+        entry!(0x00ae_fd90, fn_00aefd90(Ptr, u32, u32, u32)),
+        entry!(0x00af_1af0, fn_00af1af0(Ptr)),
+        entry!(0x00af_1cf0, fn_00af1cf0(u32, u32, u32, u32) -> i32),
+        entry!(0x00af_2230, fn_00af2230(u32) -> i32),
     ]
 }
 
@@ -3923,5 +3929,254 @@ mod b035_tests {
         assert!(calls(&log, SET_OPENED).is_empty());
         // Short sounds are padded to 250 ms (2 bytes * 44 per ms).
         assert_eq!(e.mem.u32(this.addr() + DATA_BYTES), 8 + 250 * 2 * 44);
+    }
+}
+
+/// `fseek` (CRT, cdecl: file, offset, origin).
+const FSEEK: u32 = 0x00ec_b65a;
+/// `BSFile::Close` (engine map), `00affd10` (thiscall).
+const BS_FILE_CLOSE: u32 = 0x00af_fd10;
+/// The `BSGameSound` constructor body `00ae9360` (thiscall; placed in
+/// `BSAudio` by the engine map).
+const GAME_SOUND_CONSTRUCTOR: u32 = 0x00ae_9360;
+/// The point the emitter position starts at (`011f426c`, three floats).
+const START_POSITION_011F426C: u32 = 0x011f_426c;
+
+// Translated from 00aeabf0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// A seek callback (cdecl: the file, a 64-bit offset as two words, the
+/// origin; stored in the callback tables at `011acc1c` and `011acc2c`): -1
+/// for a null file, otherwise `fseek(file, offset's low word, origin)`,
+/// whose answer it passes on.
+pub fn fn_00aeabf0(
+    e: &mut Engine,
+    file: u32,
+    offset_low: u32,
+    _offset_high: u32,
+    origin: u32,
+) -> i32 {
+    if file == 0 {
+        return -1;
+    }
+    e.call(FSEEK, &[file, offset_low, origin]).i32()
+}
+
+// Translated from 00aeae10 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSWin32GameSound` constructor (it stores the class's vtable; no caller
+/// or vtable entry in the exe): the `BSGameSound` constructor body
+/// `00ae9360`, the vtable, the PC fields cleared (data size, the buffers
+/// +0x19C, +0x1A0, +0x1D8, +0x1D0, +0x1D4, the DirectSound +0x198, the
+/// words +0x204 and +0x208, the position-set byte), the position from the
+/// point at `011f426c`, the 0x24-byte `DSBUFFERDESC` cleared, a 0x12-byte
+/// format block from the memory manager, no sample data, the attenuation
+/// curve 0, 600, 1400, 2600, 5000, and no stream or Ogg reader. Answers
+/// `this`.
+// Translation incomplete: 00aeae10 - C++ exception unwinding (SEH frame state) is not translated.
+pub fn fn_00aeae10(e: &mut Engine, this: Ptr) -> Ptr {
+    e.call(GAME_SOUND_CONSTRUCTOR, &[this.addr()]);
+    set_field(e, this, 0, WIN32_GAME_SOUND_VTABLE);
+    for offset in [
+        DATA_BYTES,
+        BUFFER,
+        SECOND_BUFFER,
+        BUFFER_1D8,
+        BUFFER_1D0,
+        BUFFER_3D,
+        DIRECT_SOUND,
+        WORD_204,
+        WORD_208,
+    ] {
+        set_field(e, this, offset, 0);
+    }
+    e.mem.set_u8(this.addr() + POSITION_SET, 0);
+    for i in 0..3 {
+        let word = e.mem.u32(START_POSITION_011F426C + 4 * i);
+        set_field(e, this, POSITION + 4 * i, word);
+    }
+    e.call(MEMSET, &[this.addr() + BUFFER_DESC, 0, 0x24]);
+    let format = e.call(ALLOCATE, &[MEMORY_MANAGER, 0x12]).u32();
+    set_field(e, this, WAVE_FORMAT, format);
+    set_field(e, this, SAMPLE_DATA, 0);
+    for (i, value) in [0u16, 600, 1400, 2600, 5000].into_iter().enumerate() {
+        e.mem
+            .set_u16(this.addr() + ATTENUATION_CURVE + 2 * i as u32, value);
+    }
+    set_field(e, this, STREAM, 0);
+    set_field(e, this, OGG_READER, 0);
+    this
+}
+
+// Translated from 00aefd90 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Empty method taking three words it does not read (slot +0x58 of
+/// `BSWin32GameSound`'s vtable, by its RTTI).
+pub fn fn_00aefd90(_e: &mut Engine, _this: Ptr, _unused_1: u32, _unused_2: u32, _unused_3: u32) {}
+
+// Translated from 00af1af0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Lets go of the second buffer and the buffer at +0x1D8 (no caller or
+/// vtable in the exe): with a second buffer (+0x1A0), counts the global at
+/// `011f7128` down, stops it (slot +0x48) and releases it (slot +8) until
+/// its count reaches 0, and clears the field; then releases +0x1D8 the same
+/// way when it is set.
+pub fn fn_00af1af0(e: &mut Engine, this: Ptr) {
+    if field(e, this, SECOND_BUFFER) != 0 {
+        let count = e.mem.u32(SECOND_BUFFER_COUNT_011F7128).wrapping_sub(1);
+        e.mem.set_u32(SECOND_BUFFER_COUNT_011F7128, count);
+        com(e, this, SECOND_BUFFER, 0x48, &[]);
+        release_all(e, this, SECOND_BUFFER);
+    }
+    if field(e, this, BUFFER_1D8) != 0 {
+        release_all(e, this, BUFFER_1D8);
+    }
+}
+
+// Translated from 00af1cf0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The same seek callback as [`fn_00aeabf0`] (cdecl; stored in the callback
+/// tables at `011acc7c` and `011acc8c`): -1 for a null file, otherwise
+/// `fseek(file, offset's low word, origin)`, whose answer it passes on.
+pub fn fn_00af1cf0(
+    e: &mut Engine,
+    file: u32,
+    offset_low: u32,
+    _offset_high: u32,
+    origin: u32,
+) -> i32 {
+    if file == 0 {
+        return -1;
+    }
+    e.call(FSEEK, &[file, offset_low, origin]).i32()
+}
+
+// Translated from 00af2230 (decompiled, FalloutNV.exe 1.4.0.525)
+/// A close callback for a `BSFile` (cdecl; no caller or vtable in the
+/// exe): -1 for a null file; otherwise `BSFile::Close` (`00affd10`), then
+/// its scalar deleting destructor (vtable slot 0) with 1, and answers 0.
+pub fn fn_00af2230(e: &mut Engine, file: u32) -> i32 {
+    if file == 0 {
+        return -1;
+    }
+    e.call(BS_FILE_CLOSE, &[file]);
+    if file != 0 {
+        e.vcall(file, 0, &[1]);
+    }
+    0
+}
+
+#[cfg(test)]
+mod n079_tests {
+    use super::*;
+
+    #[test]
+    fn seek_callbacks_skip_a_null_file() {
+        for addr in [0x00ae_abf0u32, 0x00af_1cf0] {
+            let mut e = Engine::new();
+            e.register(FSEEK, |_, a| (a[1] + a[2]).into_ret());
+            assert_eq!(e.call(addr, &[0, 5, 0, 1]).i32(), -1);
+            e.call_log = Some(vec![]);
+            assert_eq!(e.call(addr, &[0x1000, 5, 9, 1]).i32(), 6);
+            assert_eq!(e.call_log.take().unwrap()[1], (FSEEK, vec![0x1000, 5, 1]));
+        }
+    }
+
+    #[test]
+    fn constructor_sets_the_pc_fields() {
+        let mut e = Engine::new();
+        e.map(0x011f_4000, 0x1000);
+        for (i, v) in [1.0f32, 2.0, 3.0].into_iter().enumerate() {
+            e.mem
+                .set_u32(START_POSITION_011F426C + 4 * i as u32, v.to_bits());
+        }
+        e.register(GAME_SOUND_CONSTRUCTOR, |_, a| a[0].into_ret());
+        e.register(MEMSET, |e, a| {
+            e.mem.write(a[0], &vec![a[1] as u8; a[2] as usize]);
+            a[0].into_ret()
+        });
+        e.register(ALLOCATE, |_, _| 0x7700u32.into_ret());
+        let this = e.mem.alloc(0x230);
+        e.mem.write(this, &[0xaa; 0x230]);
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x00ae_ae10, &[this]).u32(), this);
+        let log = e.call_log.take().unwrap();
+        assert_eq!(log[1], (GAME_SOUND_CONSTRUCTOR, vec![this]));
+        assert!(log.contains(&(ALLOCATE, vec![MEMORY_MANAGER, 0x12])));
+        assert_eq!(e.mem.u32(this), WIN32_GAME_SOUND_VTABLE);
+        for offset in [
+            0x198u32, 0x19c, 0x1a0, 0x1a4, 0x1c4, 0x1c8, 0x1d0, 0x1d4, 0x1d8, 0x1dc, 0x204, 0x208,
+            0x228, 0x22c,
+        ] {
+            assert_eq!(e.mem.u32(this + offset), 0, "+{offset:#x}");
+        }
+        assert_eq!(e.mem.u32(this + 0x1b4), 0x7700);
+        assert_eq!(e.mem.u32(this + 0x1cc), 0xaaaa_aaaa);
+        assert_eq!(e.mem.f32(this + 0x21c), 2.0);
+        assert_eq!(e.mem.u8(this + 0x224), 0);
+        let curve: Vec<u16> = (0..5).map(|i| e.mem.u16(this + 0x20c + 2 * i)).collect();
+        assert_eq!(curve, vec![0, 600, 1400, 2600, 5000]);
+    }
+
+    #[test]
+    fn empty_slot_does_nothing() {
+        let mut e = Engine::new();
+        e.call_log = Some(vec![]);
+        e.call(0x00ae_fd90, &[0x1000, 1, 2, 3]);
+        assert_eq!(e.call_log.take().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn buffers_are_released_until_gone() {
+        const STOP: u32 = 0x00de_ad48;
+        const RELEASE: u32 = 0x00de_ad08;
+        let mut e = Engine::new();
+        e.map(0x011f_7000, 0x1000);
+        e.mem.set_u32(SECOND_BUFFER_COUNT_011F7128, 3);
+        e.register(STOP, |_, _| 0u32.into_ret());
+        e.register(RELEASE, |e, a| {
+            let n = e.mem.u32(a[0] + 4) - 1;
+            e.mem.set_u32(a[0] + 4, n);
+            n.into_ret()
+        });
+        let mut slots = vec![0u32; 0x13];
+        slots[2] = RELEASE;
+        slots[0x12] = STOP;
+        e.put_vtable(0x0072_0000, &slots);
+        let second = e.mem.alloc(8);
+        e.mem.set_u32(second, 0x0072_0000);
+        e.mem.set_u32(second + 4, 2);
+        let other = e.mem.alloc(8);
+        e.mem.set_u32(other, 0x0072_0000);
+        e.mem.set_u32(other + 4, 1);
+        let this = e.mem.alloc(0x230);
+        e.mem.set_u32(this + SECOND_BUFFER, second);
+        e.mem.set_u32(this + BUFFER_1D8, other);
+        e.call_log = Some(vec![]);
+        e.call(0x00af_1af0, &[this]);
+        let log = e.call_log.take().unwrap();
+        assert_eq!(log[1], (STOP, vec![second]));
+        assert_eq!(log.iter().filter(|(a, _)| *a == RELEASE).count(), 3);
+        assert_eq!(e.mem.u32(SECOND_BUFFER_COUNT_011F7128), 2);
+        assert_eq!(e.mem.u32(this + SECOND_BUFFER), 0);
+        assert_eq!(e.mem.u32(this + BUFFER_1D8), 0);
+        // Nothing set: nothing happens.
+        e.call_log = Some(vec![]);
+        e.call(0x00af_1af0, &[this]);
+        assert_eq!(e.call_log.take().unwrap().len(), 1);
+        assert_eq!(e.mem.u32(SECOND_BUFFER_COUNT_011F7128), 2);
+    }
+
+    #[test]
+    fn close_callback_closes_and_deletes() {
+        const DELETE: u32 = 0x00de_ad00;
+        let mut e = Engine::new();
+        e.register(BS_FILE_CLOSE, |_, _| 0u32.into_ret());
+        e.register(DELETE, |_, a| a[0].into_ret());
+        e.put_vtable(0x0073_0000, &[DELETE]);
+        let file = e.mem.alloc(8);
+        e.mem.set_u32(file, 0x0073_0000);
+        assert_eq!(e.call(0x00af_2230, &[0]).i32(), -1);
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x00af_2230, &[file]).i32(), 0);
+        let log = e.call_log.take().unwrap();
+        assert_eq!(
+            log[1..],
+            [(BS_FILE_CLOSE, vec![file]), (DELETE, vec![file, 1])]
+        );
     }
 }

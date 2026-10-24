@@ -350,8 +350,9 @@ pub fn bhk_list_shape_load_binary(e: &mut Engine, this: Ptr, stream: u32) {
 /// `bhkListShape::RegisterStreamables` (Xbox PDB), vtable slot `0x54`: calls slot `0x54`
 /// of the `bhkShape` wrapper of each child with `stream`, then `00aa0ad0` with
 /// `(this, stream)`. Children are counted once, at the start, and looked up afresh each
-/// time (a missing Havok shape, entry or wrapper is skipped).
-pub fn bhk_list_shape_register_streamables(e: &mut Engine, this: Ptr, stream: u32) {
+/// time (a missing Havok shape, entry or wrapper is skipped). The answer is `00aa0ad0`'s: the exe
+/// ends on that call and keeps its `AL` (the PDB's `bool`).
+pub fn bhk_list_shape_register_streamables(e: &mut Engine, this: Ptr, stream: u32) -> bool {
     let count = child_count(e, this.addr());
     for index in 0..count {
         let wrapper = child_wrapper(e, this.addr(), index * 0x10);
@@ -359,7 +360,8 @@ pub fn bhk_list_shape_register_streamables(e: &mut Engine, this: Ptr, stream: u3
             e.vcall(wrapper, 0x54, &args![stream]);
         }
     }
-    e.call(REGISTER_STREAMABLES_BASE, &args![this, stream]);
+    e.call(REGISTER_STREAMABLES_BASE, &args![this, stream])
+        .bool()
 }
 
 // Translated from 00c8b2b0 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -757,7 +759,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00c8b000, bhk_list_shape_copy_members(Ptr, u32, u32)),
         entry!(0x00c8b090, bhk_list_shape_init(Ptr, u32)),
         entry!(0x00c8b1d0, bhk_list_shape_load_binary(Ptr, u32)),
-        entry!(0x00c8b240, bhk_list_shape_register_streamables(Ptr, u32)),
+        entry!(0x00c8b240, bhk_list_shape_register_streamables(Ptr, u32) -> bool),
         entry!(0x00c8b2b0, fn_00c8b2b0(Ptr)),
         entry!(0x00c8b310, fn_00c8b310(Ptr)),
         entry!(0x00c8b410, bhk_list_shape_link(Ptr, u32)),
@@ -1025,6 +1027,17 @@ mod tests {
         assert_eq!(calls_to(&log, 0x0900_0350).len(), 2);
         assert_eq!(calls_to(&log, REGISTER_STREAMABLES_BASE).len(), 2);
         assert_ne!(shape, 0);
+    }
+
+    #[test]
+    fn register_streamables_answers_the_base() {
+        let mut e = Engine::new();
+        let (this, _) = list(&mut e, &[]);
+        e.mem.set_u32(this + 8, 0);
+        e.register(REGISTER_STREAMABLES_BASE, |_, _| 1u32.into_ret());
+        assert!(e.call(0x00c8_b240, &args![this, 0x99u32]).bool());
+        e.register(REGISTER_STREAMABLES_BASE, |_, _| 0u32.into_ret());
+        assert!(!e.call(0x00c8_b240, &args![this, 0x99u32]).bool());
     }
 
     #[test]

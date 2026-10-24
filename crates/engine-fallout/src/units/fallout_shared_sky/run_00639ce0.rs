@@ -130,6 +130,9 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x0063_9d40, fn_00639d40(Ptr) -> Ptr),
         entry!(0x0063_a030, fn_0063a030(u32, bool)),
     ]
+    .into_iter()
+    .chain(funcs_n086())
+    .collect()
 }
 
 #[cfg(test)]
@@ -205,5 +208,50 @@ mod tests {
         assert_eq!(e.mem.u32(sky + 0x118), 0x23);
         e.call(0x0063_a030, &args![sky, 0x100u32]);
         assert_eq!(e.mem.u32(sky + 0x118), 3);
+    }
+}
+
+// Translated from 00639ce0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`thiscall`, plain `RET`; the class is
+/// unconfirmed): the low 31 bits of the word at `+0x18`.
+pub fn fn_00639ce0(e: &mut Engine, this: Ptr) -> u32 {
+    e.mem.u32(this.addr().wrapping_add(0x18)) & 0x7fff_ffff
+}
+
+// Translated from 00639d00 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`thiscall`, `RET 4`): keeps the top bit of
+/// the word at `+0x18` and puts the low 31 bits of `value` under it (the
+/// word written twice, as the exe does).
+pub fn fn_00639d00(e: &mut Engine, this: Ptr, value: u32) {
+    let slot = this.addr().wrapping_add(0x18);
+    let top = e.mem.u32(slot) & 0x8000_0000;
+    e.mem.set_u32(slot, top);
+    let word = (value & 0x7fff_ffff) | e.mem.u32(slot);
+    e.mem.set_u32(slot, word);
+}
+
+/// This unit's n086 translations, by exe address.
+fn funcs_n086() -> Vec<(u32, AbiFn)> {
+    vec![
+        entry!(0x0063_9ce0, fn_00639ce0(Ptr) -> u32),
+        entry!(0x0063_9d00, fn_00639d00(Ptr, u32)),
+    ]
+}
+
+#[cfg(test)]
+mod n086_tests {
+    use super::*;
+
+    #[test]
+    fn the_low_31_bits_of_word_0x18() {
+        let mut e = Engine::new();
+        let this = e.mem.alloc(0x1c);
+        e.mem.set_u32(this + 0x18, 0x8000_0005);
+        assert_eq!(e.call(0x0063_9ce0, &args![this]).u32(), 5);
+        e.call(0x0063_9d00, &args![this, 0xffff_fff0u32]);
+        assert_eq!(e.mem.u32(this + 0x18), 0xffff_fff0);
+        e.mem.set_u32(this + 0x18, 0x7fff_ffff);
+        e.call(0x0063_9d00, &args![this, 0x8000_0003u32]);
+        assert_eq!(e.mem.u32(this + 0x18), 3);
     }
 }

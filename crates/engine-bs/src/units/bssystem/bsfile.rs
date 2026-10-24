@@ -11,6 +11,7 @@
 
 #[allow(unused_imports)]
 use crate::prelude::*;
+use crate::types::BSStringT;
 use crate::units::nisystem::run_00aa1380::NiFile;
 
 layout! {
@@ -303,9 +304,327 @@ pub fn bs_file_open(e: &mut Engine, this: Ptr<BSFile>, _unused_1: u32, text: boo
     e.get(file, NiFile::m_bGood) != 0
 }
 
+/// The byte swap of read and written components (`00aa1de0`, cdecl: buffer, size, the
+/// component sizes, their count).
+const SWAP_COMPONENTS: u32 = 0x00aa_1de0;
+/// `memcpy` (`00ec44d0`, cdecl) and `wcslen` (`00ecdb00`, cdecl).
+const MEMCPY: u32 = 0x00ec_44d0;
+const WCSLEN: u32 = 0x00ec_db00;
+/// `BSStringT<char>` set (`004037f0`, thiscall: text, size) and append
+/// (`BSStringT<char>::operator+=`, `00404820`, thiscall: text).
+const STRING_SET: u32 = 0x0040_37f0;
+const STRING_APPEND: u32 = 0x0040_4820;
+/// The `BSStringT<wchar_t>` set (`00afff50`, `BSSystem/run_00afff50`, thiscall: text, size).
+const WIDE_STRING_SET: u32 = 0x00af_ff50;
+/// `strlen` (`00ec6130`, cdecl).
+const STRLEN: u32 = 0x00ec_6130;
+/// The `BSFile` vtable slot `Open` (+0x20, two words).
+const OPEN_SLOT: u32 = 0x20;
+
+/// Calls `m_pfnRead` (+8) with five words (`this, buffer, size, &count, 1`, the count 1)
+/// and adds the answer to `m_uiAbsoluteCurrentPos`; answers it.
+fn read_through_pointer(e: &mut Engine, this: Ptr<BSFile>, buffer: u32, size: u32) -> u32 {
+    let read = e.with_stack(4, |e, count| {
+        e.mem.set_u32(count.addr(), 1);
+        let function = e.mem.u32(this.addr() + 8);
+        e.call(function, &args![this, buffer, size, count, 1u32])
+            .u32()
+    });
+    let file = ni_file(this);
+    let position = e
+        .get(file, NiFile::m_uiAbsoluteCurrentPos)
+        .wrapping_add(read);
+    e.set(file, NiFile::m_uiAbsoluteCurrentPos, position);
+    read
+}
+
+/// Calls `m_pfnWrite` (+0xc) the same way, adding the answer to `m_uiAbsoluteCurrentPos`
+/// and to `iTrueFilePos`; answers it.
+fn write_through_pointer(e: &mut Engine, this: Ptr<BSFile>, buffer: u32, size: u32) -> u32 {
+    let written = e.with_stack(4, |e, count| {
+        e.mem.set_u32(count.addr(), 1);
+        let function = e.mem.u32(this.addr() + 0xc);
+        e.call(function, &args![this, buffer, size, count, 1u32])
+            .u32()
+    });
+    let file = ni_file(this);
+    let position = e
+        .get(file, NiFile::m_uiAbsoluteCurrentPos)
+        .wrapping_add(written);
+    e.set(file, NiFile::m_uiAbsoluteCurrentPos, position);
+    let position = e.get(this, BSFile::iTrueFilePos).wrapping_add(written);
+    e.set(this, BSFile::iTrueFilePos, position);
+    written
+}
+
+// Translated from 00aff2a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (thiscall on a `BSFile`, one word): true at once when a `FILE`
+/// is open (`m_pFile`); otherwise clears `m_uiPos`, `m_uiBufferReadSize` and `m_pBuffer`,
+/// takes `file` as its `FILE`, checks it ([`bs_file_check_is_good`]) and answers `m_bGood`.
+pub fn fn_00aff2a0(e: &mut Engine, this: Ptr<BSFile>, file: u32) -> bool {
+    let stream = ni_file(this);
+    if e.get(stream, NiFile::m_pFile) != 0 {
+        return true;
+    }
+    e.set(stream, NiFile::m_uiPos, 0);
+    e.set(stream, NiFile::m_uiBufferReadSize, 0);
+    e.set(stream, NiFile::m_pBuffer, 0);
+    e.set(stream, NiFile::m_pFile, file);
+    bs_file_check_is_good(e, this);
+    e.get(stream, NiFile::m_bGood) != 0
+}
+
+// Translated from 00aff640 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (thiscall on a `BSFile`, two words): reads a wide string into
+/// the `BSStringT<wchar_t>` `string`. Opens the file first (vtable +0x20 with 0, 0) when no
+/// `FILE` is open. Then reads one 2-byte character at a time through `m_pfnRead` into a
+/// 0x104-character local; a short read, or more than `limit` bytes read, ends the text
+/// with a 0. Each full local (0x104 characters) or the end is handed to the string: the
+/// first through its set (`00afff50(local, 0)`), the next ones appended
+/// ([`fn_00b00120`]). Answers the bytes read over 2.
+// Translation incomplete: 00aff640 - its /GS stack cookie check is not translated
+pub fn fn_00aff640(e: &mut Engine, this: Ptr<BSFile>, string: u32, limit: u32) -> u32 {
+    if e.get(ni_file(this), NiFile::m_pFile) == 0 {
+        e.vcall(this.addr(), OPEN_SLOT, &args![0u32, 0u32]);
+    }
+    e.with_stack(0x20c, |e, locals| {
+        let character = locals.addr();
+        let text = character + 4;
+        let mut index = 0u32;
+        let mut handed = 0u32;
+        let mut read = 0u32;
+        loop {
+            let got = read_through_pointer(e, this, character, 2);
+            read = read.wrapping_add(got);
+            if got != 2 {
+                e.mem.set_u16(character, 0);
+            }
+            if read > limit {
+                e.mem.set_u16(character, 0);
+            }
+            let c = e.mem.u16(character);
+            e.mem.set_u16(text.wrapping_add(index.wrapping_mul(2)), c);
+            index = index.wrapping_add(1);
+            if index == 0x104 || c == 0 {
+                if handed != 0 {
+                    fn_00b00120(e, Ptr::new(string), text);
+                } else {
+                    e.call(WIDE_STRING_SET, &args![string, text, 0u32]);
+                }
+                handed = handed.wrapping_add(index);
+                if e.mem.u16(character) == 0 {
+                    break;
+                }
+                index = 0;
+            }
+        }
+        read >> 1
+    })
+}
+
+// Translated from 00aff7c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSFile::Read` (Xbox PDB; thiscall, two words): reads a string into the
+/// `BSStringT<char>` `string`, as [`fn_00aff640`] with one byte at a time, a local of 0x103
+/// characters plus the 0 written after each part, the first part set (`004037f0(local, 0)`)
+/// and the next ones appended (`00404820`). Answers the bytes read.
+// Translation incomplete: 00aff7c0 - its /GS stack cookie check is not translated
+pub fn bs_file_read(e: &mut Engine, this: Ptr<BSFile>, string: u32, limit: u32) -> u32 {
+    if e.get(ni_file(this), NiFile::m_pFile) == 0 {
+        e.vcall(this.addr(), OPEN_SLOT, &args![0u32, 0u32]);
+    }
+    e.with_stack(0x108, |e, locals| {
+        let character = locals.addr();
+        let text = character + 1;
+        let mut index = 0u32;
+        let mut handed = 0u32;
+        let mut read = 0u32;
+        loop {
+            let got = read_through_pointer(e, this, character, 1);
+            read = read.wrapping_add(got);
+            if got != 1 {
+                e.mem.set_u8(character, 0);
+            }
+            if read > limit {
+                e.mem.set_u8(character, 0);
+            }
+            let c = e.mem.u8(character);
+            e.mem.set_u8(text.wrapping_add(index), c);
+            index = index.wrapping_add(1);
+            if index == 0x103 || c == 0 {
+                e.mem.set_u8(text.wrapping_add(index), 0);
+                if handed != 0 {
+                    e.call(STRING_APPEND, &args![string, text]);
+                } else {
+                    e.call(STRING_SET, &args![string, text, 0u32]);
+                }
+                handed = handed.wrapping_add(index);
+                if e.mem.u8(character) == 0 {
+                    break;
+                }
+                index = 0;
+            }
+        }
+        read
+    })
+}
+
+// Translated from 00affa10 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (cdecl, five words): the byte-swapping `m_pfnRead`: 0 for an
+/// empty read; otherwise `stream`'s vtable +0x44 (`ReadF`) with `(buffer, size)`, then, with
+/// component sizes, the swap `00aa1de0(buffer, size, sizes, count)`; answers what was read.
+pub fn fn_00affa10(
+    e: &mut Engine,
+    stream: Ptr,
+    buffer: u32,
+    size: u32,
+    sizes: u32,
+    count: u32,
+) -> u32 {
+    if size == 0 {
+        return 0;
+    }
+    let read = e
+        .vcall(stream.addr(), READ_F_SLOT, &args![buffer, size])
+        .u32();
+    if sizes != 0 {
+        e.call(SWAP_COMPONENTS, &args![buffer, size, sizes, count]);
+    }
+    read
+}
+
+// Translated from 00affa60 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (cdecl, five words): the byte-swapping `m_pfnWrite`: 0 for an
+/// empty write; otherwise copies `buffer` into a block from the memory manager, swaps the
+/// copy (`00aa1de0`) when there are component sizes, writes it through `stream`'s vtable
+/// +0x48 (`WriteF`), frees it and answers what was written.
+pub fn fn_00affa60(
+    e: &mut Engine,
+    stream: Ptr,
+    buffer: u32,
+    size: u32,
+    sizes: u32,
+    count: u32,
+) -> u32 {
+    if size == 0 {
+        return 0;
+    }
+    let copy = e
+        .call(MEMORY_MANAGER_ALLOCATE, &args![MEMORY_MANAGER, size])
+        .u32();
+    e.call(MEMCPY, &args![copy, buffer, size]);
+    if sizes != 0 {
+        e.call(SWAP_COMPONENTS, &args![copy, size, sizes, count]);
+    }
+    let written = e
+        .vcall(stream.addr(), WRITE_F_SLOT, &args![copy, size])
+        .u32();
+    e.call(MEMORY_MANAGER_DEALLOCATE, &args![MEMORY_MANAGER, copy]);
+    written
+}
+
+/// The length of a `BSStringT`: `sLen`, or the measured length (`measure`) when it is
+/// 0xFFFF.
+fn string_length(e: &mut Engine, string: Ptr<BSStringT>, measure: u32) -> u32 {
+    if e.get(string, BSStringT::sLen) == 0xffff {
+        let text = e.get(string, BSStringT::pString);
+        e.call(measure, &args![text]).u32()
+    } else {
+        u32::from(e.get(string, BSStringT::sLen))
+    }
+}
+
+// Translated from 00affaf0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (thiscall on a `BSFile`, two words): writes the wide text of
+/// the `BSStringT<wchar_t>` `string` (its length, measured by `wcslen` when `sLen` is
+/// 0xFFFF, plus the terminator when `terminator` is set; 2 bytes a character) through
+/// `m_pfnWrite`; answers the characters written.
+pub fn fn_00affaf0(
+    e: &mut Engine,
+    this: Ptr<BSFile>,
+    string: Ptr<BSStringT>,
+    terminator: u8,
+) -> u32 {
+    let length = string_length(e, string, WCSLEN);
+    let text = e.get(string, BSStringT::pString);
+    let size = u32::from(terminator != 0).wrapping_add(length) << 1;
+    write_through_pointer(e, this, text, size) >> 1
+}
+
+// Translated from 00affbb0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (thiscall on a `BSFile`, two words): writes the text of the
+/// `BSStringT<char>` `string` (its length, measured by `strlen` when `sLen` is 0xFFFF, plus
+/// the terminator when `terminator` is set) through `m_pfnWrite`; answers the bytes
+/// written.
+pub fn fn_00affbb0(
+    e: &mut Engine,
+    this: Ptr<BSFile>,
+    string: Ptr<BSStringT>,
+    terminator: u8,
+) -> u32 {
+    let length = string_length(e, string, STRLEN);
+    let text = e.get(string, BSStringT::pString);
+    let size = u32::from(terminator != 0).wrapping_add(length);
+    write_through_pointer(e, this, text, size)
+}
+
+// Translated from 00b00120 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map: `BSStringT<wchar_t>` append (thiscall, one word): nothing for
+/// a null `text`; an empty string is set to it (`00afff50(text, 0)`); otherwise the string
+/// grows (`00afff50` with its own text and the new length) when the new length passes
+/// `sMaxLen`, `text` and its terminator are copied after the current text (`memcpy`), and
+/// `sLen` becomes the new length (0xFFFF from 0x10000 on). Lengths are `wcslen` where `sLen`
+/// is 0xFFFF. Returns `this`.
+pub fn fn_00b00120(e: &mut Engine, this: Ptr<BSStringT>, text: u32) -> Ptr<BSStringT> {
+    if text == 0 {
+        return this;
+    }
+    if e.get(this, BSStringT::pString) == 0 {
+        e.call(WIDE_STRING_SET, &args![this, text, 0u32]);
+        return this;
+    }
+    let added = if text != 0 {
+        e.call(WCSLEN, &args![text]).u32()
+    } else {
+        0
+    };
+    let total = string_length(e, this, WCSLEN).wrapping_add(added);
+    if total > u32::from(e.get(this, BSStringT::sMaxLen)) {
+        let own = e.get(this, BSStringT::pString);
+        e.call(WIDE_STRING_SET, &args![this, own, total]);
+    }
+    let length = string_length(e, this, WCSLEN);
+    let end = e
+        .get(this, BSStringT::pString)
+        .wrapping_add(length.wrapping_mul(2));
+    e.call(
+        MEMCPY,
+        &args![end, text, added.wrapping_mul(2).wrapping_add(2)],
+    );
+    let stored = if total > 0xffff { 0xffff } else { total as u16 };
+    e.set(this, BSStringT::sLen, stored);
+    this
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x00af_f2a0, fn_00aff2a0(Ptr<BSFile>, u32) -> bool),
+        entry!(0x00af_f640, fn_00aff640(Ptr<BSFile>, u32, u32) -> u32),
+        entry!(0x00af_f7c0, bs_file_read(Ptr<BSFile>, u32, u32) -> u32),
+        entry!(0x00af_fa10, fn_00affa10(Ptr, u32, u32, u32, u32) -> u32),
+        entry!(0x00af_fa60, fn_00affa60(Ptr, u32, u32, u32, u32) -> u32),
+        entry!(
+            0x00af_faf0,
+            fn_00affaf0(Ptr<BSFile>, Ptr<BSStringT>, u8) -> u32
+        ),
+        entry!(
+            0x00af_fbb0,
+            fn_00affbb0(Ptr<BSFile>, Ptr<BSStringT>, u8) -> u32
+        ),
+        entry!(
+            0x00b0_0120,
+            fn_00b00120(Ptr<BSStringT>, u32) -> Ptr<BSStringT>
+        ),
         entry!(0x00af_f990, fn_00aff990(Ptr<BSFile>, bool)),
         entry!(0x00af_f9d0, fn_00aff9d0(Ptr, Ptr, u32) -> u32),
         entry!(0x00af_f9f0, fn_00aff9f0(Ptr, Ptr, u32) -> u32),
@@ -667,5 +986,271 @@ mod tests {
         opens(&mut e, &[0]);
         assert!(!e.call(0x00af_f300, &args![this, 0u32, false]).bool());
         assert_eq!(calls_to(&e, FOPEN_S).len(), 1);
+    }
+}
+
+#[cfg(test)]
+mod n083_tests {
+    use super::*;
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    fn calls_to(e: &Engine, callee: u32) -> Vec<Vec<u32>> {
+        e.call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|(address, _)| *address == callee)
+            .map(|(_, words)| words.clone())
+            .collect()
+    }
+
+    const VTABLE: u32 = 0x0300_0000;
+    const OPEN: u32 = 0x0070_0020;
+    const READ_F: u32 = 0x0070_0044;
+    const WRITE_F: u32 = 0x0070_0048;
+    const READ_POINTER: u32 = 0x0070_0100;
+    const WRITE_POINTER: u32 = 0x0070_0104;
+
+    /// A `BSFile` with a test vtable (+0x20 `Open`, +0x44 `ReadF` answering 7, +0x48
+    /// `WriteF` answering 9) and an open `FILE`; `m_pfnRead` serves `data` from its start,
+    /// `m_pfnWrite` answers the size it is given.
+    fn file(e: &mut Engine, data: Vec<u8>) -> Ptr<BSFile> {
+        let mut slots = vec![0u32; 0x4c / 4 + 1];
+        slots[OPEN_SLOT as usize / 4] = OPEN;
+        slots[READ_F_SLOT as usize / 4] = READ_F;
+        slots[WRITE_F_SLOT as usize / 4] = WRITE_F;
+        e.put_vtable(VTABLE, &slots);
+        let this: Ptr<BSFile> = e.new_object();
+        e.mem.set_u32(this.addr(), VTABLE);
+        e.set(ni_file(this), NiFile::m_pFile, 0x5000);
+        e.register(OPEN, |_, _| Ret::default());
+        e.register(READ_F, |_, _| 7u32.into_ret());
+        e.register(WRITE_F, |_, _| 9u32.into_ret());
+        e.mem.set_u32(this.addr() + 8, READ_POINTER);
+        e.mem.set_u32(this.addr() + 0xc, WRITE_POINTER);
+        let at = Rc::new(RefCell::new(0usize));
+        e.register_double(READ_POINTER, move |e, w| {
+            let from = *at.borrow();
+            let size = w[2] as usize;
+            let end = (from + size).min(data.len());
+            e.mem.write(w[1], &data[from..end]);
+            *at.borrow_mut() = end;
+            ((end - from) as u32).into_ret()
+        });
+        e.register(WRITE_POINTER, |_, w| w[2].into_ret());
+        e.call_log = Some(vec![]);
+        this
+    }
+
+    #[test]
+    fn open_with_a_file_checks_it() {
+        let mut e = Engine::new();
+        let this = file(&mut e, vec![]);
+        assert!(e.call(0x00af_f2a0, &args![this, 0x6000u32]).bool());
+        assert_eq!(e.get(ni_file(this), NiFile::m_pFile), 0x5000);
+        e.set(ni_file(this), NiFile::m_pFile, 0);
+        e.set(ni_file(this), NiFile::m_uiPos, 3);
+        e.set(ni_file(this), NiFile::m_pBuffer, 4);
+        assert!(e.call(0x00af_f2a0, &args![this, 0x6000u32]).bool());
+        assert_eq!(e.get(ni_file(this), NiFile::m_pFile), 0x6000);
+        assert_eq!(e.get(ni_file(this), NiFile::m_uiPos), 0);
+        assert_eq!(e.get(ni_file(this), NiFile::m_pBuffer), 0);
+        e.set(ni_file(this), NiFile::m_pFile, 0);
+        assert!(!e.call(0x00af_f2a0, &args![this, 0u32]).bool());
+    }
+
+    fn wide(text: &str) -> Vec<u8> {
+        text.encode_utf16().flat_map(u16::to_le_bytes).collect()
+    }
+
+    #[test]
+    fn wide_string_is_read_up_to_its_end_or_the_limit() {
+        let mut e = Engine::new();
+        let this = file(&mut e, wide("hi\0rest"));
+        e.register(WIDE_STRING_SET, |_, _| Ret::default());
+        let string = e.mem.alloc(8);
+        e.register_double(WIDE_STRING_SET, |e, w| {
+            let text: Vec<u16> = (0..4).map(|i| e.mem.u16(w[1] + 2 * i)).collect();
+            assert_eq!(text[..3], [u16::from(b'h'), u16::from(b'i'), 0]);
+            Ret::default()
+        });
+        assert_eq!(e.call(0x00af_f640, &args![this, string, 0x100u32]).u32(), 3);
+        assert_eq!(calls_to(&e, WIDE_STRING_SET)[0][2], 0);
+        assert!(calls_to(&e, OPEN).is_empty());
+        assert_eq!(e.get(ni_file(this), NiFile::m_uiAbsoluteCurrentPos), 6);
+        // A limit of 2 bytes ends the text after one character; no file opens it.
+        let this = file(&mut e, wide("hi\0"));
+        e.set(ni_file(this), NiFile::m_pFile, 0);
+        e.register_double(WIDE_STRING_SET, |e, w| {
+            assert_eq!([e.mem.u16(w[1]), e.mem.u16(w[1] + 2)], [u16::from(b'h'), 0]);
+            Ret::default()
+        });
+        assert_eq!(e.call(0x00af_f640, &args![this, string, 2u32]).u32(), 2);
+        assert_eq!(calls_to(&e, OPEN), vec![vec![this.addr(), 0, 0]]);
+    }
+
+    #[test]
+    fn string_is_read_in_parts() {
+        let mut e = Engine::new();
+        let mut data = vec![b'a'; 0x105];
+        data.push(0);
+        let this = file(&mut e, data);
+        let parts = Rc::new(RefCell::new(Vec::<Vec<u8>>::new()));
+        let seen = parts.clone();
+        e.register_double(STRING_SET, move |e, w| {
+            seen.borrow_mut().push(e.mem.cstr(w[1]));
+            Ret::default()
+        });
+        let seen = parts.clone();
+        e.register_double(STRING_APPEND, move |e, w| {
+            seen.borrow_mut().push(e.mem.cstr(w[1]));
+            Ret::default()
+        });
+        let string = e.mem.alloc(8);
+        assert_eq!(
+            e.call(0x00af_f7c0, &args![this, string, 0x1000u32]).u32(),
+            0x106
+        );
+        assert_eq!(calls_to(&e, STRING_SET).len(), 1);
+        assert_eq!(calls_to(&e, STRING_SET)[0][2], 0);
+        assert_eq!(calls_to(&e, STRING_APPEND).len(), 1);
+        assert_eq!(parts.borrow()[0], vec![b'a'; 0x103]);
+        assert_eq!(parts.borrow()[1], vec![b'a'; 2]);
+        // A short read ends the text.
+        let this = file(&mut e, b"ab".to_vec());
+        e.call_log = Some(vec![]);
+        assert_eq!(
+            e.call(0x00af_f7c0, &args![this, string, 0x1000u32]).u32(),
+            2
+        );
+        assert_eq!(parts.borrow()[2], b"ab");
+    }
+
+    #[test]
+    fn swapping_read_and_write() {
+        let mut e = Engine::new();
+        let this = file(&mut e, vec![]);
+        e.register(SWAP_COMPONENTS, |_, _| Ret::default());
+        e.register(MEMORY_MANAGER_ALLOCATE, |_, _| 0x7000u32.into_ret());
+        e.register(MEMORY_MANAGER_DEALLOCATE, |_, _| Ret::default());
+        e.register(MEMCPY, |_, _| Ret::default());
+        assert_eq!(
+            e.call(0x00af_fa10, &args![this, 0x100u32, 0u32, 1u32, 2u32])
+                .u32(),
+            0
+        );
+        assert!(calls_to(&e, READ_F).is_empty());
+        assert_eq!(
+            e.call(0x00af_fa10, &args![this, 0x100u32, 8u32, 0u32, 2u32])
+                .u32(),
+            7
+        );
+        assert!(calls_to(&e, SWAP_COMPONENTS).is_empty());
+        e.call(0x00af_fa10, &args![this, 0x100u32, 8u32, 0x200u32, 2u32]);
+        assert_eq!(calls_to(&e, READ_F)[1], [this.addr(), 0x100, 8]);
+        assert_eq!(
+            calls_to(&e, SWAP_COMPONENTS),
+            vec![vec![0x100, 8, 0x200, 2]]
+        );
+        e.call_log = Some(vec![]);
+        assert_eq!(
+            e.call(0x00af_fa60, &args![this, 0x100u32, 0u32, 1u32, 2u32])
+                .u32(),
+            0
+        );
+        assert!(calls_to(&e, MEMORY_MANAGER_ALLOCATE).is_empty());
+        assert_eq!(
+            e.call(0x00af_fa60, &args![this, 0x100u32, 8u32, 0x200u32, 2u32])
+                .u32(),
+            9
+        );
+        assert_eq!(calls_to(&e, MEMCPY), vec![vec![0x7000, 0x100, 8]]);
+        assert_eq!(
+            calls_to(&e, SWAP_COMPONENTS),
+            vec![vec![0x7000, 8, 0x200, 2]]
+        );
+        assert_eq!(calls_to(&e, WRITE_F), vec![vec![this.addr(), 0x7000, 8]]);
+        assert_eq!(
+            calls_to(&e, MEMORY_MANAGER_DEALLOCATE),
+            vec![vec![MEMORY_MANAGER, 0x7000]]
+        );
+        e.call_log = Some(vec![]);
+        e.call(0x00af_fa60, &args![this, 0x100u32, 8u32, 0u32, 2u32]);
+        assert!(calls_to(&e, SWAP_COMPONENTS).is_empty());
+    }
+
+    #[test]
+    fn strings_are_written_with_or_without_terminator() {
+        let mut e = Engine::new();
+        let this = file(&mut e, vec![]);
+        e.register(WCSLEN, |_, _| 5u32.into_ret());
+        e.register(STRLEN, |_, _| 6u32.into_ret());
+        let string: Ptr<BSStringT> = e.new_object();
+        e.set(string, BSStringT::pString, 0x8000);
+        e.set(string, BSStringT::sLen, 3);
+        assert_eq!(e.call(0x00af_faf0, &args![this, string, 0u8]).u32(), 3);
+        assert_eq!(calls_to(&e, WRITE_POINTER)[0][1..3], [0x8000, 6]);
+        assert_eq!(e.call(0x00af_faf0, &args![this, string, 1u8]).u32(), 4);
+        e.set(string, BSStringT::sLen, 0xffff);
+        assert_eq!(e.call(0x00af_faf0, &args![this, string, 1u8]).u32(), 6);
+        assert_eq!(calls_to(&e, WCSLEN), vec![vec![0x8000]]);
+        assert_eq!(e.call(0x00af_fbb0, &args![this, string, 1u8]).u32(), 7);
+        assert_eq!(calls_to(&e, STRLEN), vec![vec![0x8000]]);
+        e.set(string, BSStringT::sLen, 3);
+        assert_eq!(e.call(0x00af_fbb0, &args![this, string, 0u8]).u32(), 3);
+        // Each write moves both positions.
+        assert_eq!(e.get(this, BSFile::iTrueFilePos), 6 + 8 + 12 + 7 + 3);
+        assert_eq!(
+            e.get(ni_file(this), NiFile::m_uiAbsoluteCurrentPos),
+            6 + 8 + 12 + 7 + 3
+        );
+    }
+
+    #[test]
+    fn wide_append_sets_grows_and_copies() {
+        let mut e = Engine::new();
+        e.register(WIDE_STRING_SET, |_, _| Ret::default());
+        e.register(MEMCPY, |_, _| Ret::default());
+        e.register_double(WCSLEN, |_, w| (w[0] & 0xff).into_ret());
+        e.call_log = Some(vec![]);
+        let string: Ptr<BSStringT> = e.new_object();
+        // Null text: nothing.
+        assert_eq!(
+            e.call(0x00b0_0120, &args![string, 0u32]).u32(),
+            string.addr()
+        );
+        assert_eq!(e.call_log.as_ref().unwrap().len(), 1);
+        // Empty string: set.
+        e.call(0x00b0_0120, &args![string, 0x9003u32]);
+        assert_eq!(
+            calls_to(&e, WIDE_STRING_SET),
+            vec![vec![string.addr(), 0x9003, 0]]
+        );
+        // Room enough: copied after the text.
+        e.set(string, BSStringT::pString, 0x8000);
+        e.set(string, BSStringT::sLen, 2);
+        e.set(string, BSStringT::sMaxLen, 8);
+        e.call_log = Some(vec![]);
+        e.call(0x00b0_0120, &args![string, 0x9003u32]);
+        assert!(calls_to(&e, WIDE_STRING_SET).is_empty());
+        assert_eq!(calls_to(&e, MEMCPY), vec![vec![0x8004, 0x9003, 8]]);
+        assert_eq!(e.get(string, BSStringT::sLen), 5);
+        // Past sMaxLen: grown first; a length of 0xFFFF is measured.
+        e.set(string, BSStringT::sMaxLen, 4);
+        e.set(string, BSStringT::sLen, 0xffff);
+        e.call_log = Some(vec![]);
+        e.call(0x00b0_0120, &args![string, 0x9007u32]);
+        assert_eq!(
+            calls_to(&e, WIDE_STRING_SET),
+            vec![vec![string.addr(), 0x8000, 7]]
+        );
+        assert_eq!(calls_to(&e, MEMCPY), vec![vec![0x8000, 0x9007, 16]]);
+        assert_eq!(e.get(string, BSStringT::sLen), 7);
+        // From 0x10000 on the length word holds 0xFFFF.
+        e.set(string, BSStringT::sLen, 0xfff0);
+        e.set(string, BSStringT::sMaxLen, 0xffff);
+        e.call(0x00b0_0120, &args![string, 0x9020u32]);
+        assert_eq!(e.get(string, BSStringT::sLen), 0xffff);
     }
 }

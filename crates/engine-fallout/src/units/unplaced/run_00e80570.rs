@@ -55,7 +55,128 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00e8_0580, fn_00e80580(u32) -> u32),
         entry!(0x00e8_0590, fn_00e80590(u32) -> u32),
         entry!(0x00e8_0630, fn_00e80630()),
+        entry!(0x00e8_05b0, fn_00e805b0(u32, u32, u32, u32, u32, u32, u32, u32) -> u32),
+        entry!(0x00e8_05f0, fn_00e805f0(u32, u32, u32, u32, u32, u32, u32, u32) -> u32),
+        entry!(0x00e8_0610, fn_00e80610(u32)),
     ]
+}
+
+/// The global object's slot `00e805b0` forwards to.
+const GLOBAL_OBJECT_FORWARD_SLOT: u32 = 0x8;
+/// `NiD3DRenderStateGroup::RestoreRenderStates` (engine map, `00e7ef40`; thiscall).
+const RESTORE_RENDER_STATES: u32 = 0x00e7_ef40;
+
+// Translated from 00e805b0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (a vtable word of many shader classes; `RET 0x1c`): forwards
+/// its seven words, then a 0, to slot +8 of the global object at `0126f74c`, passing on
+/// its answer. `this` is not read.
+#[allow(clippy::too_many_arguments)]
+pub fn fn_00e805b0(
+    e: &mut Engine,
+    _this: u32,
+    first: u32,
+    second: u32,
+    third: u32,
+    fourth: u32,
+    fifth: u32,
+    sixth: u32,
+    seventh: u32,
+) -> u32 {
+    let object = e.mem.u32(GLOBAL_OBJECT);
+    e.vcall(
+        object,
+        GLOBAL_OBJECT_FORWARD_SLOT,
+        &args![first, second, third, fourth, fifth, sixth, seventh, 0u32],
+    )
+    .u32()
+}
+
+// Translated from 00e805f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (a vtable word; `RET 0x1c`, its seven words not read): when the
+/// render-state group at +0x2c exists, restores it
+/// (`NiD3DRenderStateGroup::RestoreRenderStates`). Answers 0.
+#[allow(clippy::too_many_arguments)]
+pub fn fn_00e805f0(
+    e: &mut Engine,
+    this: u32,
+    _unused_1: u32,
+    _unused_2: u32,
+    _unused_3: u32,
+    _unused_4: u32,
+    _unused_5: u32,
+    _unused_6: u32,
+    _unused_7: u32,
+) -> u32 {
+    let group = e.mem.u32(this + 0x2c);
+    if group != 0 {
+        e.call(RESTORE_RENDER_STATES, &args![group]);
+    }
+    0
+}
+
+// Translated from 00e80610 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (a vtable word of many shader classes): clears the global
+/// object pointer at `0126f74c` and the word at +0x38.
+pub fn fn_00e80610(e: &mut Engine, this: u32) {
+    e.mem.set_u32(GLOBAL_OBJECT, 0);
+    e.mem.set_u32(this + 0x38, 0);
+}
+
+#[cfg(test)]
+mod n081_tests {
+    use super::*;
+
+    #[test]
+    fn forwards_seven_words_and_a_zero_to_the_global_object() {
+        let mut e = Engine::new();
+        e.map(GLOBAL_OBJECT, 4);
+        let vtable = e.mem.alloc(0xc);
+        e.mem.set_u32(vtable + 8, 0x0079_0008);
+        e.register(0x0079_0008, |_, a| a.iter().sum::<u32>().into_ret());
+        let object = e.mem.alloc(4);
+        e.mem.set_u32(object, vtable);
+        e.mem.set_u32(GLOBAL_OBJECT, object);
+        e.call_log = Some(vec![]);
+        let r = e.call(
+            0x00e8_05b0,
+            &args![0x1000u32, 1u32, 2u32, 3u32, 4u32, 5u32, 6u32, 7u32],
+        );
+        assert_eq!(r.u32(), object + 28);
+        assert_eq!(
+            e.call_log.take().unwrap()[1],
+            (0x0079_0008, vec![object, 1, 2, 3, 4, 5, 6, 7, 0])
+        );
+    }
+
+    #[test]
+    fn restores_the_render_states_when_there_is_a_group() {
+        let mut e = Engine::new();
+        e.register(RESTORE_RENDER_STATES, |_, _| 5u32.into_ret());
+        let this = e.mem.alloc(0x40);
+        e.call_log = Some(vec![]);
+        let words = args![this, 1u32, 2u32, 3u32, 4u32, 5u32, 6u32, 7u32];
+        assert_eq!(e.call(0x00e8_05f0, &words).u32(), 0);
+        assert_eq!(e.call_log.take().unwrap().len(), 1);
+        e.mem.set_u32(this + 0x2c, 0x6000);
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x00e8_05f0, &words).u32(), 0);
+        assert_eq!(
+            e.call_log.take().unwrap()[1],
+            (RESTORE_RENDER_STATES, vec![0x6000])
+        );
+    }
+
+    #[test]
+    fn clears_the_global_and_the_word() {
+        let mut e = Engine::new();
+        e.map(GLOBAL_OBJECT, 4);
+        e.mem.set_u32(GLOBAL_OBJECT, 9);
+        let this = e.mem.alloc(0x40);
+        e.mem.set_u32(this + 0x38, 9);
+        e.call(0x00e8_0610, &args![this]);
+        assert_eq!(e.mem.u32(GLOBAL_OBJECT), 0);
+        assert_eq!(e.mem.u32(this + 0x38), 0);
+    }
 }
 
 #[cfg(test)]

@@ -137,9 +137,36 @@ pub fn fn_00619bc0(e: &mut Engine, this: Ptr, quest: u32, flag: u8) -> bool {
     }
 }
 
+/// The `TESDataHandler` singleton pointer and `004612e0` (`ECX` = it): its topic list.
+const DATA_HANDLER: u32 = 0x011c_3f2c;
+const TOPIC_LIST_004612E0: u32 = 0x0046_12e0;
+/// `008256d0` (`ECX` = node): whether the list is empty (`AL`).
+const NODE_EMPTY: u32 = 0x0082_56d0;
+/// `00619a90` (`ECX` = topic, one stack word: the quest).
+const TOPIC_FOR_QUEST_00619A90: u32 = 0x0061_9a90;
+
+// Translated from 00619b60 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`cdecl`, one word; called by `0060d720`): with a non-null
+/// `quest`, `00619a90(quest)` on each topic of the data handler's topic list (`004612e0`),
+/// up to an empty node.
+pub fn fn_00619b60(e: &mut Engine, quest: u32) {
+    if quest == 0 {
+        return;
+    }
+    let handler: u32 = e.global(DATA_HANDLER);
+    let mut node = e.call(TOPIC_LIST_004612E0, &args![handler]).u32();
+    while node != 0 && e.call(NODE_EMPTY, &args![node]).u8() == 0 {
+        let item = e.call(NODE_ITEM, &args![node]).u32();
+        let topic = e.mem.u32(item);
+        e.call(TOPIC_FOR_QUEST_00619A90, &args![topic, quest]);
+        node = e.call(NODE_NEXT, &args![node]).u32();
+    }
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x0061_9b60, fn_00619b60(u32)),
         entry!(0x0061_9bc0, fn_00619bc0(Ptr, u32, u8) -> bool),
         entry!(0x0061_9d00, fn_00619d00(Ptr, u32) -> u32),
         entry!(0x0061_9df0, fn_00619df0(Ptr) -> bool),
@@ -311,5 +338,41 @@ mod la1_tests {
         assert!(ask(&mut e, 0x200, 0x100));
         // No entry for the quest: the walk ends at the null next node.
         assert!(!ask(&mut e, 0x300, 0));
+    }
+}
+
+#[cfg(test)]
+mod n075_tests {
+    use super::*;
+
+    #[test]
+    fn fn_00619b60_visits_every_topic_for_the_quest() {
+        let mut e = Engine::new();
+        e.map(0x011c_3000, 0x1000);
+        e.set_global(DATA_HANDLER, 0x9000u32);
+        let second = e.mem.alloc(8);
+        let first = e.mem.alloc(8);
+        e.mem.set_u32(first, 0x111);
+        e.mem.set_u32(first + 4, second);
+        e.mem.set_u32(second, 0x222);
+        e.register_double(TOPIC_LIST_004612E0, move |_, _| first.into_ret());
+        e.register(NODE_EMPTY, |e, a| {
+            u32::from(e.mem.u32(a[0]) == 0).into_ret()
+        });
+        e.register(NODE_ITEM, |_, a| a[0].into_ret());
+        e.register(NODE_NEXT, |e, a| e.mem.u32(a[0] + 4).into_ret());
+        e.register(TOPIC_FOR_QUEST_00619A90, |_, _| Ret::default());
+        e.call_log = Some(vec![]);
+        e.call(0x0061_9b60, &args![0x77u32]);
+        let log = e.call_log.take().unwrap();
+        let visits: Vec<_> = log
+            .iter()
+            .filter(|(a, _)| *a == TOPIC_FOR_QUEST_00619A90)
+            .map(|(_, w)| w.clone())
+            .collect();
+        assert_eq!(visits, vec![vec![0x111, 0x77], vec![0x222, 0x77]]);
+        e.call_log = Some(vec![]);
+        e.call(0x0061_9b60, &args![0u32]);
+        assert_eq!(e.call_log.take().unwrap().len(), 1);
     }
 }

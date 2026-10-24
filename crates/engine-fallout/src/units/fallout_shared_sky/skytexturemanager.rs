@@ -41,6 +41,9 @@ pub fn sky_task_run(e: &mut Engine, this: Ptr) {
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![entry!(0x0063_fac0, sky_task_run(Ptr))]
+        .into_iter()
+        .chain(funcs_n086())
+        .collect()
 }
 
 #[cfg(test)]
@@ -80,5 +83,54 @@ mod tests {
             calls_to(&e, SCOPE_DESTROY_00404EE0),
             vec![vec![scope[0][0]]]
         );
+    }
+}
+
+/// `QueuedFileEntry::GetDescription` (`00c3d0e0`, engine map; `thiscall`,
+/// `RET 0xc`) and the text `"skytask"` (`0104f194`) it gets.
+const QUEUED_FILE_ENTRY_GET_DESCRIPTION: u32 = 0x00c3_d0e0;
+const TEXT_SKYTASK: u32 = 0x0104_f194;
+
+// Translated from 0063fb40 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `SkyTask::GetDescription` (engine map; `thiscall`, `RET 8`):
+/// `QueuedFileEntry::GetDescription` with both words and `"skytask"`, its
+/// answer passed on.
+pub fn sky_task_get_description(e: &mut Engine, this: Ptr, buffer: u32, size: u32) -> u32 {
+    e.call(
+        QUEUED_FILE_ENTRY_GET_DESCRIPTION,
+        &args![this, buffer, size, TEXT_SKYTASK],
+    )
+    .u32()
+}
+
+/// This unit's n086 translations, by exe address.
+fn funcs_n086() -> Vec<(u32, AbiFn)> {
+    vec![entry!(
+        0x0063_fb40,
+        sky_task_get_description(Ptr, u32, u32) -> u32
+    )]
+}
+
+#[cfg(test)]
+mod n086_tests {
+    use super::*;
+
+    #[test]
+    fn get_description_names_the_sky_task() {
+        let mut e = Engine::new();
+        e.register(QUEUED_FILE_ENTRY_GET_DESCRIPTION, |_, a| a[1].into_ret());
+        e.call_log = Some(vec![]);
+        let answer = e.call(0x0063_fb40, &args![0x100u32, 0x200u32, 0x40u32]);
+        assert_eq!(answer.u32(), 0x200);
+        let call = e
+            .call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .find(|c| c.0 == QUEUED_FILE_ENTRY_GET_DESCRIPTION)
+            .unwrap()
+            .1
+            .clone();
+        assert_eq!(call, vec![0x100, 0x200, 0x40, TEXT_SKYTASK]);
     }
 }

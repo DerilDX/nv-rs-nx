@@ -371,6 +371,62 @@ pub fn fn_00ec3b9a(e: &mut Engine) -> u32 {
     }
 }
 
+// Translated from 00ec3e73 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 00ec3e73 - a structured-exception handler: the dispatcher context is not modelled, and its last step (resuming 00ec3e47 on the guard node's saved ESP/EBP, a stack switch) stops with a panic
+/// `TranslatorGuardHandler` (Ghidra library match; cdecl, four words: record, guard node,
+/// context, dispatcher). Checks the node's cookie (+8 XOR the node, `__security_check_cookie`);
+/// a record whose flags (+4) have a bit of 0x66 set (unwinding) sets the node's unwind flag
+/// (+0x24) and answers 1. Otherwise `__InternalCxxFrameHandler` (`00eceeb8`) with the record,
+/// the node's frame (+0x10), the context, 0, its function info (+0xc), nesting level (+0x14),
+/// catch frame (+0x18) and 1; when the unwind flag is still 0, [`unwind_nested_frames`] of the
+/// node; then [`call_se_translator`] with the code 0x123 into a local gives the continuation
+/// `00ec3e47`, which the exe jumps to with the stack and base pointers saved in the node
+/// (+0x1c, +0x20). That jump is not a call in this model.
+pub fn translator_guard_handler(
+    e: &mut Engine,
+    record: Ptr,
+    guard: Ptr,
+    context: Ptr,
+    _unused_3: u32,
+) -> u32 {
+    let node = guard.addr();
+    let cookie = e.mem.u32(node + 8) ^ node;
+    security_check_cookie(e, cookie);
+    if e.mem.u32(record.addr() + 4) & 0x66 != 0 {
+        e.mem.set_u32(node + 0x24, 1);
+        return 1;
+    }
+    let frame = e.mem.u32(node + 0x10);
+    let info = e.mem.u32(node + 0xc);
+    let level = e.mem.u32(node + 0x14);
+    let catch_frame = e.mem.u32(node + 0x18);
+    e.call(
+        INTERNAL_CXX_FRAME_HANDLER,
+        &args![record, frame, context, 0u32, info, level, catch_frame, 1u32],
+    );
+    if e.mem.u32(node + 0x24) == 0 {
+        unwind_nested_frames(e, guard, record);
+    }
+    let continuation = e.with_stack(4, |e, local| {
+        call_se_translator(
+            e,
+            Ptr::new(GET_CONTINUATION_CODE),
+            local,
+            Ptr::new(0),
+            0,
+            0,
+            0,
+            0,
+        );
+        e.mem.u32(local.addr())
+    });
+    panic!(
+        "00ec3e73: resuming {continuation:08x} with ESP {:08x} and EBP {:08x} (a stack switch) is not modelled",
+        e.mem.u32(node + 0x1c),
+        e.mem.u32(node + 0x20)
+    )
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -391,7 +447,647 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00ec_3b4f, fn_00ec3b4f()),
         entry!(0x00ec_3b5a, fn_00ec3b5a()),
         entry!(0x00ec_3b9a, fn_00ec3b9a() -> u32),
+        entry!(0x00ec_379c, tolower_ctype(i32, Ptr) -> i32),
+        entry!(0x00ec_3909, toupper_ctype(i32, Ptr) -> i32),
+        (0x00ec_3cd8, call_member_function_entry as AbiFn),
+        entry!(0x00ec_3cdf, unwind_nested_frames(Ptr, Ptr)),
+        entry!(0x00ec_3d33, cxx_frame_handler(u32, Ptr, Ptr, Ptr, Ptr) -> u32),
+        entry!(0x00ec_3d69, catch_guard_handler(Ptr, Ptr, Ptr, u32) -> u32),
+        entry!(0x00ec_3d9c, call_se_translator(Ptr, Ptr, Ptr, u32, u32, u32, u32) -> u32),
+        entry!(
+            0x00ec_3e73,
+            translator_guard_handler(Ptr, Ptr, Ptr, u32) -> u32
+        ),
+        entry!(0x00ec_3f12, get_range_of_trys_to_check(Ptr, i32, i32, Ptr, Ptr) -> u32),
+        entry!(0x00ec_3f87, create_frame_info(Ptr, u32) -> Ptr),
+        entry!(0x00ec_3fb3, is_exception_object_to_be_destroyed(u32) -> u32),
+        entry!(0x00ec_3fda, find_and_unlink_frame(Ptr)),
+        entry!(0x00ec_402c, call_catch_block2(Ptr, u32, u32, u32, u32) -> u32),
     ]
+}
+
+/// `_isupper` (`00ec8762`) and `_islower` (`00ec87e1`), cdecl, one word.
+const ISUPPER: u32 = 0x00ec_8762;
+const ISLOWER: u32 = 0x00ec_87e1;
+/// `__crtLCMapStringA` (`00ed0883`, cdecl, nine words).
+const LCMAP_STRING: u32 = 0x00ed_0883;
+/// `_getptd` (`00ed11de`): the thread's CRT data; `+0x80` holds the structured-exception
+/// translator, `+0x98` the list of frame infos.
+const GETPTD: u32 = 0x00ed_11de;
+const PTD_TRANSLATOR: u32 = 0x80;
+const PTD_FRAME_INFOS: u32 = 0x98;
+/// `_inconsistency` (`00ed1500`, no arguments; terminates).
+const INCONSISTENCY: u32 = 0x00ed_1500;
+/// `__InternalCxxFrameHandler` (`00eceeb8`, cdecl, eight words).
+const INTERNAL_CXX_FRAME_HANDLER: u32 = 0x00ec_eeb8;
+/// The `RtlUnwind` thunk (`00ee8210`, stdcall: frame, target address, record, value).
+const RTL_UNWIND: u32 = 0x00ee_8210;
+/// `_UnwindNestedFrames`' continuation address (the instruction after its `RtlUnwind`).
+const UNWIND_CONTINUATION: u32 = 0x00ec_3d0a;
+/// `_CallSETranslator`'s guard handler and continuation (`00ec3e73`, `00ec3e47`), and the
+/// code that asks for that continuation (0x123).
+const TRANSLATOR_GUARD_HANDLER: u32 = 0x00ec_3e73;
+const TRANSLATOR_CONTINUATION: u32 = 0x00ec_3e47;
+const GET_CONTINUATION_CODE: u32 = 0x123;
+/// `_CallCatchBlock2`'s guard handler (`CatchGuardHandler`, `00ec3d69`) and the catch call
+/// (`00ed1550`, cdecl: handler address, frame, nesting).
+const CATCH_GUARD_HANDLER: u32 = 0x00ec_3d69;
+const CALL_SETTING_FRAME: u32 = 0x00ed_1550;
+
+/// The shared body of `__Tolower` / `__Toupper` (one per address below, both inlined in the
+/// exe): `kind_bit` is the ctype bit tested (1 upper, 2 lower), `flags` the map flags (0x100
+/// lowercase, 0x200 uppercase), `classify` `_isupper` / `_islower`, `ascii_first` the first
+/// letter changed by the plain-ASCII fallback and `ascii_shift` its offset.
+#[allow(clippy::too_many_arguments)]
+fn map_case(
+    e: &mut Engine,
+    c: i32,
+    ctype: Ptr,
+    kind_bit: u8,
+    flags: u32,
+    classify: u32,
+    ascii_first: i32,
+    ascii_shift: i32,
+) -> i32 {
+    let ctype = ctype.addr();
+    let (handle, codepage) = if ctype == 0 {
+        let locale = e.call(LC_HANDLE_FUNC, &args![]).u32();
+        let handle = e.mem.u32(locale + 8);
+        (handle, e.call(LC_CODEPAGE_FUNC, &args![]).u32())
+    } else {
+        (e.mem.u32(ctype), e.mem.u32(ctype + 4))
+    };
+    if handle == 0 {
+        return if (c.wrapping_sub(ascii_first) as u32) <= 0x19 {
+            c.wrapping_add(ascii_shift)
+        } else {
+            c
+        };
+    }
+    if (c as u32) < 0x100 {
+        if ctype == 0 {
+            if e.call(classify, &args![c]).u32() == 0 {
+                return c;
+            }
+        } else {
+            let table = e.mem.u32(ctype + 8);
+            if e.mem.u8(table.wrapping_add((c as u32).wrapping_mul(2))) & kind_bit == 0 {
+                return c;
+            }
+        }
+    }
+    let high = c >> 8;
+    let lead = if ctype == 0 {
+        let table = e.call(PCTYPE_FUNC, &args![]).u32();
+        u32::from(e.mem.u16(table.wrapping_add(u32::from(high as u8) * 2))) & 0x8000
+    } else {
+        let table = e.mem.u32(ctype + 8);
+        let entry = e.mem.i16(table.wrapping_add((high as u32 & 0xff) * 2)) as i32 as u32;
+        (entry >> 15) & 1
+    };
+    e.with_stack(8, |e, locals| {
+        // +0 the exe's argument slot reused as the source bytes (it still holds the ctype
+        // pointer under them), +4 the result bytes.
+        let source = locals.addr();
+        let result = source + 4;
+        e.mem.set_u32(source, ctype);
+        let count = if lead != 0 {
+            e.mem.set_u8(source, high as u8);
+            e.mem.set_u8(source + 1, c as u8);
+            e.mem.set_u8(source + 2, 0);
+            2u32
+        } else {
+            e.mem.set_u8(source, c as u8);
+            e.mem.set_u8(source + 1, 0);
+            1
+        };
+        let mapped = e
+            .call(
+                LCMAP_STRING,
+                &args![0u32, handle, flags, source, count, result, 3u32, codepage, 1u32],
+            )
+            .u32();
+        match mapped {
+            0 => c,
+            1 => i32::from(e.mem.u8(result)),
+            _ => (i32::from(e.mem.u8(result)) << 8) | i32::from(e.mem.u8(result + 1)),
+        }
+    })
+}
+
+// Translated from 00ec379c (decompiled, FalloutNV.exe 1.4.0.525)
+/// `__Tolower` (Ghidra library match; cdecl: the character, a `_Ctypevec` or null for the
+/// current locale: locale handle +0, code page +4, ctype table +8). Without a locale handle
+/// `A`..`Z` become lowercase by ASCII. Otherwise a character below 0x100 that is not
+/// uppercase (`_isupper` / table bit 1) is answered as it is; a lead byte (bit 0x8000 of the
+/// high byte's entry) makes a two-byte source; `__crtLCMapStringA` (flags 0x100) maps it, 0
+/// answering the character, 1 the first result byte, 2 both bytes.
+pub fn tolower_ctype(e: &mut Engine, c: i32, ctype: Ptr) -> i32 {
+    map_case(e, c, ctype, 1, 0x100, ISUPPER, 0x41, 0x20)
+}
+
+// Translated from 00ec3909 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `__Toupper` (Ghidra library match): `__Tolower`'s body with `a`..`z`, the lowercase test
+/// (`_islower` / table bit 2) and map flags 0x200.
+pub fn toupper_ctype(e: &mut Engine, c: i32, ctype: Ptr) -> i32 {
+    map_case(e, c, ctype, 2, 0x200, ISLOWER, 0x61, -0x20)
+}
+
+// Translated from 00ec3cd8 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `_CallMemberFunction1` / `2` (Ghidra library match): pops its return address and `this`,
+/// puts the return address in place of the function pointer and jumps to that function: a
+/// `thiscall` of `function` on `this` with the rest of the caller's words, its result passed
+/// back.
+pub fn call_member_function(e: &mut Engine, this: u32, function: u32, rest: &[u32]) -> Ret {
+    let mut words = vec![this];
+    words.extend_from_slice(rest);
+    e.call(function, &words)
+}
+
+/// The registered form of `00ec3cd8`: `this`, the function, then every other word.
+fn call_member_function_entry(e: &mut Engine, words: &[u32]) -> Ret {
+    call_member_function(e, words[0], words[1], &words[2..])
+}
+
+// Translated from 00ec3cdf (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 00ec3cdf - the structured-exception chain at FS:[0] (saved before the unwind and relinked after) is not modelled
+/// `_UnwindNestedFrames` (Ghidra library match; stdcall: frame, exception record):
+/// `RtlUnwind` (`00ee8210`) of `frame` with the continuation `00ec3d0a`, the record and 0,
+/// then bit 1 of the record's flags (+4) cleared.
+pub fn unwind_nested_frames(e: &mut Engine, frame: Ptr, record: Ptr) {
+    e.call(RTL_UNWIND, &args![frame, UNWIND_CONTINUATION, record, 0u32]);
+    let flags = e.mem.u32(record.addr() + 4);
+    e.mem.set_u32(record.addr() + 4, flags & 0xffff_fffd);
+}
+
+// Translated from 00ec3d33 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `___CxxFrameHandler` (Ghidra library match; cdecl with the function info in `EAX`, the
+/// compiler's handler stubs load it there): `__InternalCxxFrameHandler` (`00eceeb8`) with
+/// the four words, the function info and three zeros, its answer passed on. The leading
+/// `function_info` word stands for `EAX`.
+pub fn cxx_frame_handler(
+    e: &mut Engine,
+    function_info: u32,
+    record: Ptr,
+    frame: Ptr,
+    context: Ptr,
+    dispatcher: Ptr,
+) -> u32 {
+    e.call(
+        INTERNAL_CXX_FRAME_HANDLER,
+        &args![
+            record,
+            frame,
+            context,
+            dispatcher,
+            function_info,
+            0u32,
+            0u32,
+            0u32
+        ],
+    )
+    .u32()
+}
+
+// Translated from 00ec3d69 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 00ec3d69 - a structured-exception handler: the dispatcher context it runs under is not modelled (its guard-node cookie check through 00ec408c runs as security_check_cookie)
+/// `CatchGuardHandler` (Ghidra library match; cdecl, four words): checks the guard node's
+/// cookie (+8 XOR the node's address, `__security_check_cookie`), then
+/// `__InternalCxxFrameHandler` with the record, the node's frame (+0x10), the context, 0,
+/// its function info (+0xc), nesting level (+0x14), the node and 0; its answer passed on.
+pub fn catch_guard_handler(
+    e: &mut Engine,
+    record: Ptr,
+    guard: Ptr,
+    context: Ptr,
+    _unused_3: u32,
+) -> u32 {
+    let node = guard.addr();
+    let cookie = e.mem.u32(node + 8) ^ node;
+    security_check_cookie(e, cookie);
+    let frame = e.mem.u32(node + 0x10);
+    let info = e.mem.u32(node + 0xc);
+    let level = e.mem.u32(node + 0x14);
+    e.call(
+        INTERNAL_CXX_FRAME_HANDLER,
+        &args![record, frame, context, 0u32, info, level, node, 0u32],
+    )
+    .u32()
+}
+
+// Translated from 00ec3d9c (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 00ec3d9c - the guard node is not linked into the structured-exception chain at FS:[0] (nor unlinked), so a translator that throws cannot come back through 00ec3e47 with the answer 1
+/// `_CallSETranslator` (Ghidra library match; cdecl, seven words). The code 0x123 is the
+/// request for the continuation: `*frame` = `00ec3e47`, answer 1. Otherwise a translator
+/// guard node (handler `00ec3e73`, cookie = `011c16bc` XOR the node, function info, frame,
+/// nesting level, catch frame, the frame's stack and base pointers, a 0 unwind flag) and
+/// the exception pointers (record, context) are built in the frame, the thread's translator
+/// (`_getptd` +0x80) is called with the record's code and the pointers, and the answer is 0.
+#[allow(clippy::too_many_arguments)]
+pub fn call_se_translator(
+    e: &mut Engine,
+    record: Ptr,
+    frame: Ptr,
+    context: Ptr,
+    _unused_3: u32,
+    function_info: u32,
+    nesting: u32,
+    catch_frame: u32,
+) -> u32 {
+    if record.addr() == GET_CONTINUATION_CODE {
+        e.mem.set_u32(frame.addr(), TRANSLATOR_CONTINUATION);
+        return 1;
+    }
+    e.with_stack(0x38, |e, base| {
+        // The exe's frame from EBP-0x38: +0 the answer, +4 the exception pointers (record,
+        // context), +0xc the translator, +0x10 the guard node (next, handler, cookie, function
+        // info, frame, nesting, catch frame, ESP, EBP, unwind flag).
+        let base = base.addr();
+        let node = base + 0x10;
+        let frame_pointer = base + 0x38;
+        e.mem.set_u32(node, 0);
+        e.mem.set_u32(node + 4, TRANSLATOR_GUARD_HANDLER);
+        let cookie = e.global::<u32>(SECURITY_COOKIE_011C16BC) ^ node;
+        e.mem.set_u32(node + 8, cookie);
+        e.mem.set_u32(node + 0xc, function_info);
+        e.mem.set_u32(node + 0x10, frame.addr());
+        e.mem.set_u32(node + 0x14, nesting);
+        e.mem.set_u32(node + 0x18, catch_frame);
+        e.mem.set_u32(node + 0x1c, 0);
+        e.mem.set_u32(node + 0x20, 0);
+        e.mem.set_u32(node + 0x24, 0);
+        e.mem.set_u32(node + 0x1c, frame_pointer.wrapping_sub(0x3c));
+        e.mem.set_u32(node + 0x20, frame_pointer);
+        e.mem.set_u32(base, 1);
+        e.mem.set_u32(base + 4, record.addr());
+        e.mem.set_u32(base + 8, context.addr());
+        let ptd = e.call(GETPTD, &args![]).u32();
+        let translator = e.mem.u32(ptd + PTD_TRANSLATOR);
+        e.mem.set_u32(base + 0xc, translator);
+        let code = e.mem.u32(record.addr());
+        e.call(translator, &args![code, base + 4]);
+        e.mem.set_u32(base, 0);
+        e.mem.u32(base)
+    })
+}
+
+// Translated from 00ec3f12 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `_GetRangeOfTrysToCheck` (Ghidra library match; cdecl): walks the function info's try
+/// map (+0x10, 0x14-byte entries, count +0xc) down from the end for `level` enclosing try
+/// blocks around `state` (an entry whose `tryLow < state <= tryHigh` (+4, +8) counts one
+/// level, as does running out at index -1, after which `_inconsistency` is called on the
+/// next pass); `*start` and `*end` get the first index after the last match and the index
+/// of the previous match; out-of-range results call `_inconsistency`. Answers the start
+/// entry's address.
+pub fn get_range_of_trys_to_check(
+    e: &mut Engine,
+    info: Ptr,
+    level: i32,
+    state: i32,
+    start: Ptr,
+    end: Ptr,
+) -> u32 {
+    let info = info.addr();
+    let map = e.mem.u32(info + 0x10);
+    let count = e.mem.u32(info + 0xc);
+    let mut index = count as i32;
+    let mut last = count;
+    let mut previous = index;
+    let mut level = level;
+    while level >= 0 {
+        if index == -1 {
+            e.call(INCONSISTENCY, &args![]);
+        }
+        index -= 1;
+        let entry = (index as u32).wrapping_mul(0x14).wrapping_add(map);
+        let inside = e.mem.i32(entry + 4) < state && state <= e.mem.i32(entry + 8);
+        if inside || index == -1 {
+            level -= 1;
+            last = previous as u32;
+            previous = index;
+        }
+    }
+    let first = index.wrapping_add(1) as u32;
+    e.mem.set_u32(start.addr(), first);
+    e.mem.set_u32(end.addr(), last);
+    if last > e.mem.u32(info + 0xc) || first > last {
+        e.call(INCONSISTENCY, &args![]);
+    }
+    first.wrapping_mul(0x14).wrapping_add(map)
+}
+
+// Translated from 00ec3f87 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `__CreateFrameInfo` (Ghidra library match; cdecl): fills `frame` with `object` and the
+/// thread's current frame-info list head (`_getptd` +0x98), makes it the new head and
+/// answers it.
+pub fn create_frame_info(e: &mut Engine, frame: Ptr, object: u32) -> Ptr {
+    e.mem.set_u32(frame.addr(), object);
+    let ptd = e.call(GETPTD, &args![]).u32();
+    let head = e.mem.u32(ptd + PTD_FRAME_INFOS);
+    e.mem.set_u32(frame.addr() + 4, head);
+    let ptd = e.call(GETPTD, &args![]).u32();
+    e.mem.set_u32(ptd + PTD_FRAME_INFOS, frame.addr());
+    frame
+}
+
+// Translated from 00ec3fb3 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `__IsExceptionObjectToBeDestroyed` (Ghidra library match; cdecl): 0 when `object` is the
+/// object of a frame info in the thread's list (`_getptd` +0x98, linked through +4), else 1.
+pub fn is_exception_object_to_be_destroyed(e: &mut Engine, object: u32) -> u32 {
+    let ptd = e.call(GETPTD, &args![]).u32();
+    let mut info = e.mem.u32(ptd + PTD_FRAME_INFOS);
+    while info != 0 {
+        if e.mem.u32(info) == object {
+            return 0;
+        }
+        info = e.mem.u32(info + 4);
+    }
+    1
+}
+
+// Translated from 00ec3fda (decompiled, FalloutNV.exe 1.4.0.525)
+/// `__FindAndUnlinkFrame` (Ghidra library match; cdecl): unlinks `frame` from the thread's
+/// frame-info list (the head, or the entry after which it follows); not finding it ends in
+/// `_inconsistency` (a tail jump).
+pub fn find_and_unlink_frame(e: &mut Engine, frame: Ptr) {
+    let frame = frame.addr();
+    let ptd = e.call(GETPTD, &args![]).u32();
+    if frame == e.mem.u32(ptd + PTD_FRAME_INFOS) {
+        let ptd = e.call(GETPTD, &args![]).u32();
+        let next = e.mem.u32(frame + 4);
+        e.mem.set_u32(ptd + PTD_FRAME_INFOS, next);
+        return;
+    }
+    let ptd = e.call(GETPTD, &args![]).u32();
+    let mut info = e.mem.u32(ptd + PTD_FRAME_INFOS);
+    while e.mem.u32(info + 4) != 0 {
+        let next = e.mem.u32(info + 4);
+        if frame == next {
+            let after = e.mem.u32(frame + 4);
+            e.mem.set_u32(info + 4, after);
+            return;
+        }
+        info = next;
+    }
+    e.call(INCONSISTENCY, &args![]);
+}
+
+// Translated from 00ec402c (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 00ec402c - the catch guard node is not linked into the structured-exception chain at FS:[0] (nor restored after)
+/// `_CallCatchBlock2` (Ghidra library match; cdecl, five words): builds a catch guard node
+/// in the frame (handler `CatchGuardHandler` `00ec3d69`, cookie = `011c16bc` XOR the node,
+/// the function info, the frame, `nesting + 1`) and calls the catch block through
+/// `00ed1550` (handler address, frame, the fifth word), answering its result.
+pub fn call_catch_block2(
+    e: &mut Engine,
+    frame: Ptr,
+    function_info: u32,
+    handler: u32,
+    nesting: u32,
+    trylevel: u32,
+) -> u32 {
+    e.with_stack(0x18, |e, node| {
+        let node = node.addr();
+        e.mem.set_u32(node, 0);
+        let cookie = e.global::<u32>(SECURITY_COOKIE_011C16BC) ^ node;
+        e.mem.set_u32(node + 8, cookie);
+        e.mem.set_u32(node + 0xc, function_info);
+        e.mem.set_u32(node + 4, CATCH_GUARD_HANDLER);
+        e.mem.set_u32(node + 0x10, frame.addr());
+        e.mem.set_u32(node + 0x14, nesting.wrapping_add(1));
+        e.call(CALL_SETTING_FRAME, &args![handler, frame, trylevel])
+            .u32()
+    })
+}
+
+#[cfg(test)]
+mod n081_tests {
+    use super::*;
+
+    fn calls_to(e: &Engine, addr: u32) -> Vec<Vec<u32>> {
+        e.call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|(a, _)| *a == addr)
+            .map(|(_, w)| w.clone())
+            .collect()
+    }
+
+    #[test]
+    fn case_mapping_with_and_without_a_locale() {
+        let mut e = Engine::new();
+        // No locale handle: ASCII only.
+        let ctype = e.mem.alloc(12);
+        assert_eq!(e.call(0x00ec_379c, &args![0x41u32, ctype]).i32(), 0x61);
+        assert_eq!(e.call(0x00ec_379c, &args![0x5bu32, ctype]).i32(), 0x5b);
+        assert_eq!(e.call(0x00ec_3909, &args![0x7au32, ctype]).i32(), 0x5a);
+        assert_eq!(e.call(0x00ec_3909, &args![0x40u32, ctype]).i32(), 0x40);
+        // A locale: not uppercase by the table answers the character.
+        let table = e.mem.alloc(0x200);
+        e.mem.set_u16(table + 2 * 0x41, 1);
+        e.mem.set_u16(table + 2 * 0x81, 0x8000);
+        e.mem.set_u32(ctype, 0x409);
+        e.mem.set_u32(ctype + 4, 1252);
+        e.mem.set_u32(ctype + 8, table);
+        e.register(LCMAP_STRING, |e, a| {
+            assert_eq!((a[1], a[6], a[7], a[8]), (0x409, 3, 1252, 1));
+            let first = e.mem.u8(a[3]);
+            if a[4] == 1 {
+                e.mem.set_u8(a[5], first + 0x20);
+                1u32.into_ret()
+            } else {
+                e.mem.set_u8(a[5], 0x12);
+                e.mem.set_u8(a[5] + 1, 0x34);
+                2u32.into_ret()
+            }
+        });
+        assert_eq!(e.call(0x00ec_379c, &args![0x42u32, ctype]).i32(), 0x42);
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x00ec_379c, &args![0x41u32, ctype]).i32(), 0x61);
+        assert_eq!(calls_to(&e, LCMAP_STRING)[0][2], 0x100);
+        // A wide character whose high byte is a lead byte: two source bytes, two results.
+        assert_eq!(e.call(0x00ec_379c, &args![0x8141u32, ctype]).i32(), 0x1234);
+        // The mapper answering 0 gives the character back.
+        e.register(LCMAP_STRING, |_, _| 0u32.into_ret());
+        assert_eq!(e.call(0x00ec_3909, &args![0x8141u32, ctype]).i32(), 0x8141);
+    }
+
+    #[test]
+    fn case_mapping_through_the_current_locale() {
+        let mut e = Engine::new();
+        let locale = e.mem.alloc(12);
+        e.mem.set_u32(locale + 8, 0x409);
+        e.register_double(LC_HANDLE_FUNC, move |_, _| locale.into_ret());
+        e.register(LC_CODEPAGE_FUNC, |_, _| 1252u32.into_ret());
+        e.register(ISLOWER, |_, a| u32::from(a[0] == 0x61).into_ret());
+        let ctype_table = e.mem.alloc(0x200);
+        e.register_double(PCTYPE_FUNC, move |_, _| ctype_table.into_ret());
+        e.register(LCMAP_STRING, |e, a| {
+            let first = e.mem.u8(a[3]);
+            e.mem.set_u8(a[5], first - 0x20);
+            1u32.into_ret()
+        });
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x00ec_3909, &args![0x61u32, 0u32]).i32(), 0x41);
+        assert_eq!(calls_to(&e, LCMAP_STRING)[0][2], 0x200);
+        assert_eq!(e.call(0x00ec_3909, &args![0x62u32, 0u32]).i32(), 0x62);
+    }
+
+    #[test]
+    fn member_call_thunk_and_handlers_forward_their_words() {
+        let mut e = Engine::new();
+        e.register(0x0079_0000, |_, a| a.iter().sum::<u32>().into_ret());
+        let r = e.call(0x00ec_3cd8, &args![0x100u32, 0x0079_0000u32, 2u32, 3u32]);
+        assert_eq!(r.u32(), 0x105);
+        e.register(INTERNAL_CXX_FRAME_HANDLER, |_, a| a[4].into_ret());
+        e.call_log = Some(vec![]);
+        let r = e.call(0x00ec_3d33, &args![0x77u32, 1u32, 2u32, 3u32, 4u32]);
+        assert_eq!(r.u32(), 0x77);
+        assert_eq!(
+            calls_to(&e, INTERNAL_CXX_FRAME_HANDLER),
+            vec![vec![1, 2, 3, 4, 0x77, 0, 0, 0]]
+        );
+    }
+
+    #[test]
+    fn catch_guard_checks_the_node_cookie() {
+        let mut e = Engine::new();
+        e.map(SECURITY_COOKIE_011C16BC, 4);
+        e.mem.set_u32(SECURITY_COOKIE_011C16BC, 0xabcd);
+        e.register(REPORT_GS_FAILURE, |_, _| Ret::default());
+        e.register(INTERNAL_CXX_FRAME_HANDLER, |_, _| 9u32.into_ret());
+        let node = e.mem.alloc(0x18);
+        e.mem.set_u32(node + 8, 0xabcd ^ node);
+        e.mem.set_u32(node + 0xc, 0x11);
+        e.mem.set_u32(node + 0x10, 0x22);
+        e.mem.set_u32(node + 0x14, 0x33);
+        e.call_log = Some(vec![]);
+        let r = e.call(0x00ec_3d69, &args![0x1000u32, node, 0x2000u32, 0x3000u32]);
+        assert_eq!(r.u32(), 9);
+        assert!(calls_to(&e, REPORT_GS_FAILURE).is_empty());
+        assert_eq!(
+            calls_to(&e, INTERNAL_CXX_FRAME_HANDLER),
+            vec![vec![0x1000, 0x22, 0x2000, 0, 0x11, 0x33, node, 0]]
+        );
+        e.mem.set_u32(node + 8, 0);
+        e.call_log = Some(vec![]);
+        e.call(0x00ec_3d69, &args![0x1000u32, node, 0x2000u32, 0x3000u32]);
+        assert_eq!(calls_to(&e, REPORT_GS_FAILURE).len(), 1);
+    }
+
+    #[test]
+    fn unwind_nested_frames_clears_the_unwinding_bit() {
+        let mut e = Engine::new();
+        e.register(RTL_UNWIND, |_, _| Ret::default());
+        let record = e.mem.alloc(8);
+        e.mem.set_u32(record + 4, 0x7);
+        e.call_log = Some(vec![]);
+        e.call(0x00ec_3cdf, &args![0x5000u32, record]);
+        assert_eq!(
+            calls_to(&e, RTL_UNWIND),
+            vec![vec![0x5000, UNWIND_CONTINUATION, record, 0]]
+        );
+        assert_eq!(e.mem.u32(record + 4), 5);
+    }
+
+    #[test]
+    fn se_translator_answers_the_continuation_or_calls_the_translator() {
+        let mut e = Engine::new();
+        let slot = e.mem.alloc(4);
+        let r = e.call(
+            0x00ec_3d9c,
+            &args![GET_CONTINUATION_CODE, slot, 0u32, 0u32, 0u32, 0u32, 0u32],
+        );
+        assert_eq!(r.u32(), 1);
+        assert_eq!(e.mem.u32(slot), TRANSLATOR_CONTINUATION);
+        e.map(SECURITY_COOKIE_011C16BC, 4);
+        let ptd = e.mem.alloc(0x100);
+        e.mem.set_u32(ptd + PTD_TRANSLATOR, 0x0079_0000);
+        e.register_double(GETPTD, move |_, _| ptd.into_ret());
+        e.register(0x0079_0000, |e, a| {
+            assert_eq!(e.mem.u32(a[1] - 4), 1);
+            assert_eq!(e.mem.u32(a[1] + 0x10), TRANSLATOR_GUARD_HANDLER);
+            Ret::default()
+        });
+        let record = e.mem.alloc(8);
+        e.mem.set_u32(record, 0xc000_0005);
+        e.call_log = Some(vec![]);
+        let r = e.call(
+            0x00ec_3d9c,
+            &args![record, 0x5000u32, 0x6000u32, 0u32, 0x11u32, 0x22u32, 0x33u32],
+        );
+        assert_eq!(r.u32(), 0);
+        let call = &calls_to(&e, 0x0079_0000)[0];
+        assert_eq!(call[0], 0xc000_0005);
+    }
+
+    #[test]
+    fn range_of_trys_finds_the_enclosing_blocks() {
+        let mut e = Engine::new();
+        e.register(INCONSISTENCY, |_, _| Ret::default());
+        // Three try blocks: (0, 2], (3, 5], (6, 8] as tryLow < state <= tryHigh.
+        let map = e.mem.alloc(0x14 * 3);
+        for (i, (low, high)) in [(0i32, 2i32), (3, 5), (6, 8)].iter().enumerate() {
+            e.mem.set_i32(map + 0x14 * i as u32 + 4, *low);
+            e.mem.set_i32(map + 0x14 * i as u32 + 8, *high);
+        }
+        let info = e.mem.alloc(0x14);
+        e.mem.set_u32(info + 0xc, 3);
+        e.mem.set_u32(info + 0x10, map);
+        let out = e.mem.alloc(8);
+        e.call_log = Some(vec![]);
+        // Level 0 around state 4: block 1; start 2, end 3.
+        let r = e
+            .call(0x00ec_3f12, &args![info, 0u32, 4u32, out, out + 4])
+            .u32();
+        assert_eq!((e.mem.u32(out), e.mem.u32(out + 4)), (2, 3));
+        assert_eq!(r, map + 0x28);
+        assert!(calls_to(&e, INCONSISTENCY).is_empty());
+    }
+
+    #[test]
+    fn frame_info_list_create_test_and_unlink() {
+        let mut e = Engine::new();
+        let ptd = e.mem.alloc(0x100);
+        e.register_double(GETPTD, move |_, _| ptd.into_ret());
+        e.register(INCONSISTENCY, |_, _| Ret::default());
+        let a = e.mem.alloc(8);
+        let b = e.mem.alloc(8);
+        assert_eq!(e.call(0x00ec_3f87, &args![a, 0x11u32]).u32(), a);
+        assert_eq!(e.call(0x00ec_3f87, &args![b, 0x22u32]).u32(), b);
+        assert_eq!(e.mem.u32(ptd + 0x98), b);
+        assert_eq!(e.mem.u32(b + 4), a);
+        assert_eq!(e.call(0x00ec_3fb3, &args![0x11u32]).u32(), 0);
+        assert_eq!(e.call(0x00ec_3fb3, &args![0x33u32]).u32(), 1);
+        // Unlink the inner one, then the head; an unknown frame ends in _inconsistency.
+        e.call(0x00ec_3fda, &args![a]);
+        assert_eq!(e.mem.u32(b + 4), 0);
+        e.call(0x00ec_3fda, &args![b]);
+        assert_eq!(e.mem.u32(ptd + 0x98), 0);
+        let c = e.mem.alloc(8);
+        e.mem.set_u32(ptd + 0x98, c);
+        e.call_log = Some(vec![]);
+        e.call(0x00ec_3fda, &args![a]);
+        assert_eq!(calls_to(&e, INCONSISTENCY).len(), 1);
+    }
+
+    #[test]
+    fn catch_block_builds_its_guard_and_calls() {
+        let mut e = Engine::new();
+        e.map(SECURITY_COOKIE_011C16BC, 4);
+        e.register(CALL_SETTING_FRAME, |_, a| (a[0] + a[2]).into_ret());
+        e.call_log = Some(vec![]);
+        let r = e.call(
+            0x00ec_402c,
+            &args![0x5000u32, 0x11u32, 0x700u32, 2u32, 0x9u32],
+        );
+        assert_eq!(r.u32(), 0x709);
+        assert_eq!(
+            calls_to(&e, CALL_SETTING_FRAME),
+            vec![vec![0x700, 0x5000, 9]]
+        );
+    }
 }
 
 #[cfg(test)]
@@ -778,5 +1474,54 @@ mod b001_tests {
         assert_eq!(calls_to(&e, ATEXIT), vec![vec![0x00ec_3b5a]]);
         e.register(ATEXIT, |_, _| 0xffff_ffffu32.into_ret());
         assert_eq!(e.call(0x00ec_3b9a, &args![]).u32(), 0x18);
+    }
+}
+
+#[cfg(test)]
+mod n089_tests {
+    use super::*;
+
+    #[test]
+    fn n089_00ec3e73_marks_unwinding_or_handles_and_resumes() {
+        let mut e = Engine::new();
+        e.map(SECURITY_COOKIE_011C16BC, 4);
+        e.set_global(SECURITY_COOKIE_011C16BC, 0x00c0_0c1eu32);
+        e.register(INTERNAL_CXX_FRAME_HANDLER, |_, _| Ret::default());
+        e.register(RTL_UNWIND, |_, _| Ret::default());
+        let node = e.mem.alloc(0x28);
+        e.mem.set_u32(node + 8, 0x00c0_0c1e ^ node);
+        for (offset, value) in [(0xcu32, 0xf1u32), (0x10, 0xf2), (0x14, 0xf3), (0x18, 0xf4)] {
+            e.mem.set_u32(node + offset, value);
+        }
+        e.mem.set_u32(node + 0x1c, 0x5500);
+        e.mem.set_u32(node + 0x20, 0x5600);
+        let record = e.mem.alloc(0x10);
+        e.mem.set_u32(record + 4, 2);
+        // Unwinding: the flag is set and the answer is 1.
+        assert_eq!(
+            e.call(0x00ec_3e73, &args![record, node, 0x0c0du32, 0u32])
+                .u32(),
+            1
+        );
+        assert_eq!(e.mem.u32(node + 0x24), 1);
+        // Dispatching: the frame handler runs; with the flag clear the frames are unwound; the
+        // resume on the node's stack stops.
+        e.mem.set_u32(record + 4, 0x81);
+        e.mem.set_u32(node + 0x24, 0);
+        e.call_log = Some(vec![]);
+        let stopped = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            e.call(0x00ec_3e73, &args![record, node, 0x0c0du32, 0u32]);
+        }));
+        assert!(stopped.is_err());
+        let log = e.call_log.take().unwrap();
+        let handler: Vec<_> = log
+            .iter()
+            .filter(|c| c.0 == INTERNAL_CXX_FRAME_HANDLER)
+            .collect();
+        assert_eq!(
+            handler[0].1,
+            vec![record, 0xf2, 0x0c0d, 0, 0xf1, 0xf3, 0xf4, 1]
+        );
+        assert!(log.iter().any(|c| c.0 == RTL_UNWIND && c.1[0] == node));
     }
 }

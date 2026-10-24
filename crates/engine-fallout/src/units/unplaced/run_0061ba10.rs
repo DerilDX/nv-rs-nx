@@ -271,9 +271,24 @@ pub fn fn_0061bdc0(e: &mut Engine, this: Ptr<NiTLargeArray>) {
     e.call(FREE_WORDS, &args![old]);
 }
 
+// Translated from 0061bbd0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// A vtable slot (`0104d2bc`; unnamed in the engine map; `ECX` not read, one byte word,
+/// `RET 4`): [`fn_0061bbf0`] on the byte.
+pub fn fn_0061bbd0(e: &mut Engine, _this: Ptr, kind: u8) -> bool {
+    fn_0061bbf0(e, kind)
+}
+
+// Translated from 0061bbf0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Whether the byte is 0x46 (unnamed in the engine map; `cdecl`, one byte word).
+pub fn fn_0061bbf0(_e: &mut Engine, kind: u8) -> bool {
+    kind == 0x46
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x0061_bbd0, fn_0061bbd0(Ptr, u8) -> bool),
+        entry!(0x0061_bbf0, fn_0061bbf0(u8) -> bool),
         entry!(0x0061bd20, fn_0061bd20(Ptr<NiTLargeArray>, u32, Ptr)),
         entry!(0x0061_ba10, fn_0061ba10(u32) -> bool),
         entry!(0x0061_ba90, fn_0061ba90(Ptr) -> bool),
@@ -637,5 +652,19 @@ mod list_tests {
         e.call(0x0061_bcf0, &args![this]);
         assert_eq!(e.mem.u32(this.addr()), TOPIC_INFO_ARRAY_VTABLE);
         assert_eq!(calls(&e, FREE_WORDS), vec![vec![0x6000]]);
+    }
+}
+
+#[cfg(test)]
+mod n075_tests {
+    use super::*;
+
+    #[test]
+    fn fn_0061bbd0_and_0061bbf0_test_for_0x46() {
+        let mut e = Engine::new();
+        assert!(e.call(0x0061_bbf0, &args![0x146u32]).bool());
+        assert!(!e.call(0x0061_bbf0, &args![0x45u32]).bool());
+        assert!(e.call(0x0061_bbd0, &args![0x1000u32, 0x46u32]).bool());
+        assert!(!e.call(0x0061_bbd0, &args![0x1000u32, 0x47u32]).bool());
     }
 }

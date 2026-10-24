@@ -92,9 +92,26 @@ pub fn fn_00ae93f0(e: &mut Engine, this: Ptr) {
     e.call(QUEUED_MESSAGES_REMOVE_ALL, &args![list]);
 }
 
+// Translation incomplete: 00ae92d0 - SEH exception frame (FS:[0], with its /GS cookie word) for the member list's unwinding is not modelled.
+// Translated from 00ae92d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (no code references it): a `BSGameSound` constructor
+/// (`thiscall`, one stack word it does not read, `RET 4`) with the body of `00ae9360`: sets
+/// the vtable (`010a3964`), empties the `QueuedMessages` list (count, head, tail), resets
+/// the fields (`00ae95e0`) and returns `this`.
+pub fn fn_00ae92d0(e: &mut Engine, this: Ptr, _unused_1: u32) -> Ptr {
+    e.mem.set_u32(this.addr(), BS_GAME_SOUND_VTABLE);
+    let list = Ptr::<NiTPointerList>::new(this.addr().wrapping_add(QUEUED_MESSAGES));
+    e.set(list, NiTPointerList::m_uiCount, 0);
+    e.set(list, NiTPointerList::m_pkHead, 0);
+    e.set(list, NiTPointerList::m_pkTail, 0);
+    e.call(BS_GAME_SOUND_RESET, &args![this]);
+    this
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x00ae_92d0, fn_00ae92d0(Ptr, u32) -> Ptr),
         entry!(0x00ae_91f0, fn_00ae91f0(Ptr<NiTPointerMap>)),
         entry!(0x00ae_9290, fn_00ae9290(Ptr)),
         entry!(0x00ae_9360, fn_00ae9360(Ptr) -> Ptr),
@@ -204,5 +221,31 @@ mod tests {
             calls_to(&e, QUEUED_MESSAGES_REMOVE_ALL),
             vec![vec![sound + 0x18c]]
         );
+    }
+}
+
+#[cfg(test)]
+mod n082_tests {
+    use super::*;
+
+    #[test]
+    fn fn_00ae92d0_constructs_like_the_constructor_body() {
+        let mut e = Engine::new();
+        e.register(BS_GAME_SOUND_RESET, |_, _| Ret::default());
+        let sound = e.mem.alloc(0x198);
+        e.mem.write(sound + 0x18c, &[0xffu8; 12]);
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x00ae_92d0, &args![sound, 0x77u32]).u32(), sound);
+        assert_eq!(e.mem.u32(sound), BS_GAME_SOUND_VTABLE);
+        assert_eq!(e.mem.bytes(sound + 0x18c, 12), vec![0u8; 12]);
+        let resets: Vec<_> = e
+            .call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|c| c.0 == BS_GAME_SOUND_RESET)
+            .map(|c| c.1.clone())
+            .collect();
+        assert_eq!(resets, vec![vec![sound]]);
     }
 }

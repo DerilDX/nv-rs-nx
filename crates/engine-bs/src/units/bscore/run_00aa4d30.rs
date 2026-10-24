@@ -39,9 +39,18 @@ pub fn fn_00aa4d40(
     0
 }
 
+// Translated from 00aa4d30 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map: slot +0xc of `BSCoreMessage`'s virtual table (`010a2708`;
+/// `Assert` in the Xbox PDB's order, not confirmed); no stack words, `this` not read:
+/// answers 0.
+pub fn fn_00aa4d30(_e: &mut Engine, _this: Ptr) -> u32 {
+    0
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x00aa_4d30, fn_00aa4d30(Ptr) -> u32),
         entry!(0x00aa_4d50, fn_00aa4d50()),
         entry!(0x00aa_4d40, fn_00aa4d40(Ptr, u32, u32, u32, u32, u32) -> u32),
     ]
@@ -101,5 +110,16 @@ mod b004_tests {
         let mut e = Engine::new();
         let r = e.call(0x00aa_4d40, &args![1u32, 2u32, 3u32, 4u32, 5u32, 6u32]);
         assert_eq!(r.u32(), 0);
+    }
+}
+
+#[cfg(test)]
+mod n082_tests {
+    use super::*;
+
+    #[test]
+    fn fn_00aa4d30_answers_zero() {
+        let mut e = Engine::new();
+        assert_eq!(e.call(0x00aa_4d30, &args![0x5000u32]).u32(), 0);
     }
 }

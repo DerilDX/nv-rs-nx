@@ -1308,7 +1308,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00716b00, fn_00716b00(Ptr<TextEntry>, u32)),
         entry!(0x00717010, fn_00717010(Ptr<TextEntry>, u8)),
         entry!(0x00717050, fn_00717050(Ptr<TextEntry>)),
-        entry!(0x007170a0, fn_007170a0(Ptr<TextEntry>)),
+        entry!(0x007170a0, fn_007170a0(Ptr<TextEntry>) -> u32),
         // @@ENTRIES@@
     ]
 }
@@ -7630,11 +7630,13 @@ pub fn fn_00717050(e: &mut Engine, this: Ptr<TextEntry>) {
 }
 
 // Translated from 007170a0 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 007170a0 - the /GS stack cookie check (00ec408c) is not translated
 /// Rebuilds the shown copy of the text (the string at `+8`): the text with
 /// the caret character (`|` or `0x7f`, by the caret phase) inserted at the
 /// caret while the entry is active. An empty result is replaced by the string
-/// at `01020770`.
-pub fn fn_007170a0(e: &mut Engine, this: Ptr<TextEntry>) {
+/// at `01020770`. The answer is the shown text's pointer (`00559450` on it): the exe ends on
+/// that call and keeps its `EAX` (`007e6700` passes it to the tile).
+pub fn fn_007170a0(e: &mut Engine, this: Ptr<TextEntry>) -> u32 {
     e.with_stack(0x800, |e, scratch| {
         let source = scratch.addr();
         let shown = scratch.addr() + 0x400;
@@ -7666,8 +7668,8 @@ pub fn fn_007170a0(e: &mut Engine, this: Ptr<TextEntry>) {
         if e.call(STRING_LENGTH, &args![display]).u32() == 0 {
             e.call(STRING_SET, &args![display, DISPLAY_FALLBACK_STRING]);
         }
-        e.call(NI_POINTER_GET, &args![display]);
-    });
+        e.call(NI_POINTER_GET, &args![display]).u32()
+    })
 }
 
 // @@FUNCS-END@@
@@ -13680,6 +13682,22 @@ mod tests {
         fn_00717050(&mut e, entry);
         assert_eq!(e.get(entry, TextEntry::caret_phase), 0);
         assert_eq!(calls(&e, FADE_CLOCK_READ)[0], vec![FADE_CLOCK]);
+    }
+
+    #[test]
+    fn the_shown_text_answers_its_pointer() {
+        let (mut e, entry, _strings) = text_world();
+        let text = e.mem.alloc(8);
+        e.mem.set_cstr(text, b"abc");
+        e.call(STRING_SET, &args![entry, text]);
+        e.mem.set_cstr(DISPLAY_FALLBACK_STRING, b"-");
+        // The exe ends on the shown string's pointer getter and keeps its EAX.
+        let shown = e.call(0x0071_70a0, &args![entry]).u32();
+        assert_eq!(e.mem.cstr(shown), b"abc".to_vec());
+        assert_eq!(
+            calls(&e, NI_POINTER_GET).last().unwrap()[0],
+            entry.addr() + 8
+        );
     }
 
     #[test]

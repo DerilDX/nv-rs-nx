@@ -225,9 +225,54 @@ pub fn bgs_load_game_buffer_load_string(
     output
 }
 
+/// The save/load game singleton pointer (`011ddf38`).
+const SAVE_LOAD_GAME: u32 = 0x011d_df38;
+/// `BGSSaveLoadGame::GetCurrentMinorVersion` (`00847570`, `thiscall`).
+const CURRENT_MINOR_VERSION: u32 = 0x0084_7570;
+/// `006815c0` (`thiscall`): the quaternion local's (empty) constructor.
+const TRIVIAL_CONSTRUCT: u32 = 0x0068_15c0;
+/// `NiQuaternion::ToRotation` (`004f0180`, `thiscall`, `RET 4`: the
+/// matrix).
+const QUATERNION_TO_ROTATION: u32 = 0x004f_0180;
+
+// Translated from 00864720 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BGSLoadGameBuffer::GetVersion` (Xbox PDB; `ECX` only, not read): the
+/// save/load game's current minor version (`00847570` on `011ddf38`), its
+/// `EAX` passed on.
+pub fn bgs_load_game_buffer_get_version(e: &mut Engine, _this: Ptr<BGSLoadGameBuffer>) -> u32 {
+    let game = e.global::<u32>(SAVE_LOAD_GAME);
+    e.call(CURRENT_MINOR_VERSION, &args![game]).u32()
+}
+
+// Translated from 00864a20 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BGSLoadGameBuffer::LoadData` (Xbox PDB) for a rotation (`thiscall`,
+/// `RET 8`; the second word is not read): loads a 16-byte quaternion
+/// (`00864980`) into a local and converts it into the matrix `rotation`
+/// (`NiQuaternion::ToRotation`).
+pub fn bgs_load_game_buffer_load_data(
+    e: &mut Engine,
+    this: Ptr<BGSLoadGameBuffer>,
+    rotation: u32,
+    _unused_2: u32,
+) {
+    e.with_stack(0x10, |e, quaternion| {
+        e.call(TRIVIAL_CONSTRUCT, &args![quaternion]);
+        load_raw(e, this, quaternion, 0x10);
+        e.call(QUATERNION_TO_ROTATION, &args![quaternion, rotation]);
+    });
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(
+            0x0086_4720,
+            bgs_load_game_buffer_get_version(Ptr<BGSLoadGameBuffer>) -> u32
+        ),
+        entry!(
+            0x0086_4a20,
+            bgs_load_game_buffer_load_data(Ptr<BGSLoadGameBuffer>, u32, u32)
+        ),
         entry!(
             0x008646b0,
             construct(Ptr<BGSLoadGameBuffer>) -> Ptr<BGSLoadGameBuffer>
@@ -518,5 +563,47 @@ mod b040_tests {
         let out = e.call(0x0086_49a0, &args![this, given]).u32();
         assert_eq!(out, given);
         assert_eq!(e.mem.u8(given), 0);
+    }
+}
+
+#[cfg(test)]
+mod n072_tests {
+    use super::*;
+
+    #[test]
+    fn get_version_asks_the_save_load_game() {
+        let mut e = Engine::new();
+        e.map(0x011d_d000, 0x1000);
+        e.set_global::<u32>(SAVE_LOAD_GAME, 0x6000);
+        e.register(CURRENT_MINOR_VERSION, |_, a| (a[0] + 0x0e).into_ret());
+        assert_eq!(e.call(0x0086_4720, &args![0x10u32]).u32(), 0x600e);
+    }
+
+    #[test]
+    fn load_data_reads_a_quaternion_into_the_matrix() {
+        let mut e = Engine::new();
+        e.register(TRIVIAL_CONSTRUCT, |_, a| a[0].into_ret());
+        let seen = std::rc::Rc::new(std::cell::RefCell::new(vec![]));
+        let log = seen.clone();
+        e.register_double(QUATERNION_TO_ROTATION, move |e, a| {
+            log.borrow_mut().push((e.mem.bytes(a[0], 0x10), a[1]));
+            Ret::default()
+        });
+        e.register(0x0040_1460, |e, a| {
+            let bytes = e.mem.bytes(a[1], a[2]);
+            e.mem.write(a[0], &bytes);
+            Ret::default()
+        });
+        e.register(0x0084_5cc0, |_, _| Ret::default());
+        let this = e.new_object::<BGSLoadGameBuffer>();
+        let data = e.mem.alloc(0x20);
+        let bytes: Vec<u8> = (1..=0x10).collect();
+        e.mem.write(data, &bytes);
+        e.mem.set_u8(data + 0x10, b'|');
+        e.set(this, BGSLoadGameBuffer::pBuffer, Ptr::new(data));
+        e.set(this, BGSLoadGameBuffer::iBufferSize, 0x20);
+        e.call(0x0086_4a20, &args![this, 0x5000u32, 0u32]);
+        assert_eq!(*seen.borrow(), vec![(bytes, 0x5000)]);
+        assert_eq!(e.get(this, BGSLoadGameBuffer::iBufferPosition), 0x11);
     }
 }

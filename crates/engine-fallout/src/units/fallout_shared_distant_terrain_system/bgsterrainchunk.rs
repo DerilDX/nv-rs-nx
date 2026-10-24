@@ -929,6 +929,97 @@ pub fn bgs_terrain_chunk_load_task_get_file_index(
     1
 }
 
+/// The list of chunks the two walks below run over (its head node, `.data`): `008256d0` (thiscall
+/// on a node) answers whether it is empty, `006815c0` gives the address of its item and
+/// `00726070` the next node.
+const CHUNK_LIST_011D8624: u32 = 0x011d_8624;
+const LIST_IS_EMPTY_008256D0: u32 = 0x0082_56d0;
+const LIST_ITEM_006815C0: u32 = 0x0068_15c0;
+const LIST_NEXT_00726070: u32 = 0x0072_6070;
+
+/// The walk shared by [`fn_006fb5d0`] and [`fn_006fb640`]: from the head node until a null node
+/// or an empty one, each chunk goes to `visit` and the walk goes on with the next node.
+fn each_listed_chunk(e: &mut Engine, visit: fn(&mut Engine, u32)) {
+    let mut node = CHUNK_LIST_011D8624;
+    while node != 0 {
+        if e.call(LIST_IS_EMPTY_008256D0, &args![node]).u8() != 0 {
+            return;
+        }
+        let item = e.call(LIST_ITEM_006815C0, &args![node]).u32();
+        let chunk = e.mem.u32(item);
+        visit(e, chunk);
+        node = e.call(LIST_NEXT_00726070, &args![node]).u32();
+    }
+}
+
+// Translated from 006fb5d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed (no arguments): for each chunk of the list at `011d8624`, [`fn_006fb760`] when
+/// [`fn_006fb150`] answers true for its node (`00559450` on the chunk), [`fn_006fb6e0`] otherwise.
+pub fn fn_006fb5d0(e: &mut Engine) {
+    each_listed_chunk(e, |e, chunk| {
+        let node = deref(e, chunk);
+        if fn_006fb150(e, Ptr::new(node)) != 0 {
+            fn_006fb760(e, Ptr::new(chunk));
+        } else {
+            fn_006fb6e0(e, Ptr::new(chunk));
+        }
+    });
+}
+
+// Translated from 006fb640 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed (no arguments): for each chunk of the list at `011d8624`, [`fn_006fb6e0`] when
+/// [`fn_006fb150`] and `006fa840` (thiscall) answer true for its node and `006fe920(0)` (thiscall
+/// on the chunk's first word) does too; [`fn_006fb760`] otherwise.
+pub fn fn_006fb640(e: &mut Engine) {
+    each_listed_chunk(e, |e, chunk| {
+        let node = deref(e, chunk);
+        let mut shown = fn_006fb150(e, Ptr::new(node)) != 0;
+        if shown {
+            let node = deref(e, chunk);
+            shown = e.call(0x006f_a840, &args![node]).u8() != 0;
+        }
+        if shown {
+            let first = e.mem.u32(chunk);
+            shown = e.call(0x006f_e920, &args![first, 0u32]).u8() != 0;
+        }
+        if shown {
+            fn_006fb6e0(e, Ptr::new(chunk));
+        } else {
+            fn_006fb760(e, Ptr::new(chunk));
+        }
+    });
+}
+
+// Translated from 006fbcd0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BGSTerrainChunkLoadTask::Cancel` (the map's name; thiscall, two words, `RET 8`): sets
+/// `bCanceled`, then the base `00c3cb70` (the map's `QueuedFile::Cancel`) with both words.
+pub fn bgs_terrain_chunk_load_task_cancel(
+    e: &mut Engine,
+    this: Ptr<BGSTerrainChunkLoadTask>,
+    first: u32,
+    second: u32,
+) {
+    e.set(this, BGSTerrainChunkLoadTask::bCanceled, 1);
+    e.call(0x00c3_cb70, &args![this, first, second]);
+}
+
+// Translated from 006fc400 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BGSTerrainChunkLoadTask::GetDescription` (the map's name; thiscall, two words: buffer and
+/// size; `RET 8`): formats `"Terrain LOD Task for chunk ( %i, %i ) at level ( %i )"`
+/// (`0106e2a4`) with `iX`, `iY` and `iLevel` (`sprintf_s`). Returns true (`AL` = 1).
+pub fn bgs_terrain_chunk_load_task_get_description(
+    e: &mut Engine,
+    this: Ptr<BGSTerrainChunkLoadTask>,
+    buffer: u32,
+    size: u32,
+) -> bool {
+    let x = e.get(this, BGSTerrainChunkLoadTask::iX);
+    let y = e.get(this, BGSTerrainChunkLoadTask::iY);
+    let level = e.get(this, BGSTerrainChunkLoadTask::iLevel);
+    e.call(SPRINTF_S, &args![buffer, size, 0x0106_e2a4u32, x, y, level]);
+    true
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -989,6 +1080,20 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(
             0x006f_c440,
             bgs_terrain_chunk_load_task_get_file_index(Ptr<BGSTerrainChunkLoadTask>) -> u32
+        ),
+        entry!(0x006f_b5d0, fn_006fb5d0()),
+        entry!(0x006f_b640, fn_006fb640()),
+        entry!(
+            0x006f_bcd0,
+            bgs_terrain_chunk_load_task_cancel(Ptr<BGSTerrainChunkLoadTask>, u32, u32)
+        ),
+        entry!(
+            0x006f_c400,
+            bgs_terrain_chunk_load_task_get_description(
+                Ptr<BGSTerrainChunkLoadTask>,
+                u32,
+                u32,
+            ) -> bool
         ),
     ]
 }
@@ -1664,5 +1769,116 @@ mod tests {
         assert_eq!(e.call(0x006f_c440, &args![0x5000u32]).u32(), 1);
         answer(&mut e, 0x0055_b980, 0);
         assert_eq!(e.call(0x006f_c440, &args![0x5000u32]).u32(), 1);
+    }
+}
+
+#[cfg(test)]
+mod n089_tests {
+    use super::*;
+
+    fn calls_to(e: &Engine, address: u32) -> Vec<Vec<u32>> {
+        e.call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|(a, _)| *a == address)
+            .map(|(_, words)| words.clone())
+            .collect()
+    }
+
+    /// Two chunks in the list (nodes keep the item at `+4` and the next node at `+8`; the second
+    /// node points at an empty third). Chunk 1's node byte is set, chunk 2's is clear; each
+    /// chunk has only a mesh. Returns the two meshes.
+    fn chunk_list(e: &mut Engine) -> (u32, u32) {
+        e.register(DEREF, |e, a| e.mem.u32(a[0]).into_ret());
+        e.register(LIST_IS_EMPTY_008256D0, |e, a| e.mem.u8(a[0]).into_ret());
+        e.register(LIST_ITEM_006815C0, |_, a| (a[0] + 4).into_ret());
+        e.register(LIST_NEXT_00726070, |e, a| e.mem.u32(a[0] + 8).into_ret());
+        e.register(0x0045_0f90, |_, _| Ret::default());
+        e.map(CHUNK_LIST_011D8624, 0x10);
+        let second = e.mem.alloc(0x10);
+        let third = e.mem.alloc(0x10);
+        e.mem.set_u8(third, 1);
+        let mut meshes = vec![];
+        for (node_at, next, flag) in [(CHUNK_LIST_011D8624, second, 1u8), (second, third, 0)] {
+            let chunk = e.mem.alloc(0x30);
+            let terrain_node = e.mem.alloc(0x60);
+            e.mem.set_u8(terrain_node + 0x5c, flag);
+            e.mem.set_u32(chunk, terrain_node);
+            let mesh_pointer = chunk + 4;
+            e.mem.set_u32(mesh_pointer, 0x0e00 + u32::from(flag));
+            meshes.push(0x0e00 + u32::from(flag));
+            e.mem.set_u32(node_at + 4, chunk);
+            e.mem.set_u32(node_at + 8, next);
+        }
+        (meshes[0], meshes[1])
+    }
+
+    #[test]
+    fn n089_006fb5d0_hides_or_shows_each_listed_chunk() {
+        let mut e = Engine::new();
+        let (flagged, clear) = chunk_list(&mut e);
+        e.call_log = Some(vec![]);
+        e.call(0x006f_b5d0, &args![]);
+        assert_eq!(
+            calls_to(&e, 0x0045_0f90),
+            vec![vec![flagged, 0], vec![clear, 1]]
+        );
+        assert_eq!(calls_to(&e, LIST_IS_EMPTY_008256D0).len(), 3);
+        assert_eq!(calls_to(&e, LIST_NEXT_00726070).len(), 2);
+    }
+
+    #[test]
+    fn n089_006fb640_shows_chunks_whose_node_is_ready() {
+        let mut e = Engine::new();
+        let (flagged, clear) = chunk_list(&mut e);
+        e.register(0x006f_a840, |_, _| 1u32.into_ret());
+        e.register(0x006f_e920, |_, _| 1u32.into_ret());
+        e.call_log = Some(vec![]);
+        e.call(0x006f_b640, &args![]);
+        assert_eq!(
+            calls_to(&e, 0x0045_0f90),
+            vec![vec![flagged, 1], vec![clear, 0]]
+        );
+        let first = calls_to(&e, 0x006f_e920);
+        assert_eq!(first.len(), 1);
+        assert_eq!(first[0][1], 0);
+        assert_eq!(calls_to(&e, 0x006f_a840)[0], vec![first[0][0]]);
+        // A refusal from either check hides the chunk.
+        e.register(0x006f_e920, |_, _| 0x100u32.into_ret());
+        e.call_log = Some(vec![]);
+        e.call(0x006f_b640, &args![]);
+        assert_eq!(calls_to(&e, 0x0045_0f90)[0], vec![flagged, 0]);
+        e.register(0x006f_a840, |_, _| 0u32.into_ret());
+        e.call_log = Some(vec![]);
+        e.call(0x006f_b640, &args![]);
+        assert!(calls_to(&e, 0x006f_e920).is_empty());
+    }
+
+    #[test]
+    fn n089_006fbcd0_cancels_the_task() {
+        let mut e = Engine::new();
+        e.register(0x00c3_cb70, |_, _| Ret::default());
+        let this = e.mem.alloc(0x60);
+        e.call_log = Some(vec![]);
+        e.call(0x006f_bcd0, &args![this, 5u32, 6u32]);
+        assert_eq!(e.mem.u8(this + 0x58), 1);
+        assert_eq!(calls_to(&e, 0x00c3_cb70), vec![vec![this, 5, 6]]);
+    }
+
+    #[test]
+    fn n089_006fc400_describes_the_task() {
+        let mut e = Engine::new();
+        e.register(SPRINTF_S, |_, _| 0x55u32.into_ret());
+        let this = e.mem.alloc(0x60);
+        e.mem.set_u32(this + 0x34, 7);
+        e.mem.set_u32(this + 0x38, 0xffff_fff9);
+        e.mem.set_u32(this + 0x3c, 2);
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x006f_c400, &args![this, 0xb0u32, 0x40u32]).u8(), 1);
+        assert_eq!(
+            calls_to(&e, SPRINTF_S),
+            vec![vec![0xb0, 0x40, 0x0106_e2a4, 7, 0xffff_fff9, 2]]
+        );
     }
 }

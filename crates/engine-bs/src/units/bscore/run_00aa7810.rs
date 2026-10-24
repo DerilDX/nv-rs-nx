@@ -220,9 +220,191 @@ pub fn fn_00aa7e70(e: &mut Engine, this: Ptr, pointer: u32) -> bool {
     pointer < end
 }
 
+/// `IMemoryHeap`'s vtable (`010a28c8`, RTTI `.?AVIMemoryHeap@@`).
+const I_MEMORY_HEAP_VTABLE: u32 = 0x010a_28c8;
+/// `AbstractHeap::pName` (Xbox PDB, +4).
+const NAME: u32 = 0x04;
+/// `AbstractHeap`'s stats, bucket and block writers (`00aaa0e0`, `00aaa310`, `00aaa430`;
+/// `thiscall`, two, one and two words), which the `AbstractHeap` vtable `010a2bbc` holds at
+/// +0x18, +0x1c and +0x20.
+const ABSTRACT_HEAP_STATS: u32 = 0x00aa_a0e0;
+const ABSTRACT_HEAP_BUCKETS: u32 = 0x00aa_a310;
+const ABSTRACT_HEAP_BLOCKS: u32 = 0x00aa_a430;
+/// A block header's flag the decommit sets in its size word (+4).
+const DECOMMITTED: u32 = 0x2000_0000;
+
+/// What `00aa7ca0` and `00aa7d00` write for a heap with the byte at +0x20f0 set: one zero
+/// word through the stream's virtual slot +8 (`(buffer, 4)`), answering what it answers.
+fn write_zero_word(e: &mut Engine, stream: u32) -> u32 {
+    e.with_stack(4, |e, word| {
+        e.mem.set_u32(word.addr(), 0);
+        e.vcall(stream, 8, &args![word, 4u32]).u32()
+    })
+}
+
+// Translated from 00aa7810 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (no code references it): the `IMemoryHeap` destructor body
+/// (`thiscall`, no stack words): stores its vtable (`010a28c8`).
+pub fn fn_00aa7810(e: &mut Engine, this: Ptr) {
+    e.mem.set_u32(this.addr(), I_MEMORY_HEAP_VTABLE);
+}
+
+// Translated from 00aa7840 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map: slot 0 of the `IMemoryHeap` vtable, its scalar deleting
+/// destructor (`thiscall`, one word of flags): the vtable `010a28c8`, then with flag bit 0
+/// the object given back to the `MemoryManager` (`00aa4060`). Answers `this`.
+pub fn fn_00aa7840(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    e.mem.set_u32(this.addr(), I_MEMORY_HEAP_VTABLE);
+    if flags & 1 != 0 {
+        e.call(MEMORY_MANAGER_DEALLOCATE, &args![MEMORY_MANAGER, this]);
+    }
+    this
+}
+
+// Translated from 00aa7870 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map: slot +4 of the `ZeroOverheadHeap` vtable (`010a2884`;
+/// `GetName` in the Xbox PDB's `IMemoryHeap` order) (`thiscall`, no stack words): the word at
+/// +8 (`ZeroOverheadHeap::pName`).
+pub fn fn_00aa7870(e: &mut Engine, this: Ptr) -> u32 {
+    e.mem.u32(this.addr() + 8)
+}
+
+// Translated from 00aa7890 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`thiscall`, one stack word it does not read; a shared body in
+/// several vtables, among them `BSCoreMessage`'s at +8 and +0x10 and `ZeroOverheadHeap`'s at
+/// +0x30 and +0x38): answers 0.
+pub fn fn_00aa7890(_e: &mut Engine, _this: Ptr, _unused_1: u32) -> u32 {
+    0
+}
+
+// Translated from 00aa7b70 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (no code references it; `thiscall`, one word: a block): true
+/// when the heap's own slot +0x10 (pointer in heap) answers true (`AL`) for the block and
+/// bit 0x4000_0000 of the block header's size word (`block - 8 + 4`) is clear. A further
+/// test of the constant 1 the compiler kept always passes; its false arm never runs and is
+/// left out.
+pub fn fn_00aa7b70(e: &mut Engine, this: Ptr, block: u32) -> bool {
+    let header = block.wrapping_sub(8);
+    if !e.vcall(this.addr(), 0x10, &args![block]).bool() {
+        return false;
+    }
+    e.mem.u32(header.wrapping_add(4)) & 0x4000_0000 == 0
+}
+
+// Translated from 00aa7c00 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map: slot +0x28 of the `MemoryHeap` vtable (`TotalSize` in the Xbox
+/// PDB's `IMemoryHeap` order) (`thiscall`, one word): the low 28 bits of the header word
+/// before the block, plus 8.
+pub fn fn_00aa7c00(e: &mut Engine, _this: Ptr, block: u32) -> u32 {
+    (e.mem.u32(block.wrapping_sub(4)) & 0x0fff_ffff).wrapping_add(8)
+}
+
+// Translated from 00aa7c30 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (no code references it; `thiscall`, no stack words): answers 0
+/// (through a local).
+pub fn fn_00aa7c30(_e: &mut Engine, _this: Ptr) -> u32 {
+    0
+}
+
+// Translated from 00aa7c50 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (no code references it; `thiscall`, no stack words): answers 0.
+pub fn fn_00aa7c50(_e: &mut Engine, _this: Ptr) -> u32 {
+    0
+}
+
+// Translated from 00aa7c60 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map: slot +0x18 of the `MemoryHeap` vtable (`GetHeapStats` in the
+/// Xbox PDB's order) (`thiscall`, two words): `00aaa0e0(stats, flag)` with the flag's low
+/// byte kept only while the byte at +0x20f0 is 0; answers what it answers.
+pub fn fn_00aa7c60(e: &mut Engine, this: Ptr, stats: u32, flag: u8) -> u32 {
+    let keep = if e.mem.u8(this.addr() + OWN_FLAG) != 0 {
+        0
+    } else {
+        1
+    };
+    let flag = flag & keep;
+    e.call(ABSTRACT_HEAP_STATS, &args![this, stats, u32::from(flag)])
+        .u32()
+}
+
+// Translated from 00aa7ca0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map: slot +0x1c of the `MemoryHeap` vtable (`OutputBucketInfo` in
+/// the Xbox PDB's order) (`thiscall`, one word: a stream): with the byte at +0x20f0 clear,
+/// `00aaa310(stream)`; else one zero word written through the stream's slot +8. Answers
+/// what that call answers.
+pub fn fn_00aa7ca0(e: &mut Engine, this: Ptr, stream: u32) -> u32 {
+    if e.mem.u8(this.addr() + OWN_FLAG) == 0 {
+        e.call(ABSTRACT_HEAP_BUCKETS, &args![this, stream]).u32()
+    } else {
+        write_zero_word(e, stream)
+    }
+}
+
+// Translated from 00aa7d00 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map: slot +0x20 of the `MemoryHeap` vtable (`OutputBlockInfo` in
+/// the Xbox PDB's order) (`thiscall`, two words: a stream and a flag byte): with the byte at
+/// +0x20f0 clear, `00aaa430(stream, flag)`; else one zero word written through the stream's
+/// slot +8. Answers what that call answers.
+pub fn fn_00aa7d00(e: &mut Engine, this: Ptr, stream: u32, flag: u8) -> u32 {
+    if e.mem.u8(this.addr() + OWN_FLAG) == 0 {
+        e.call(ABSTRACT_HEAP_BLOCKS, &args![this, stream, u32::from(flag)])
+            .u32()
+    } else {
+        write_zero_word(e, stream)
+    }
+}
+
+// Translated from 00aa7d60 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map: slot +0x40 of the `MemoryHeap` vtable (`thiscall`, one word: a
+/// free block's header). When the block's size (low 28 bits of the word at +4) is at least a
+/// page (`iPageSize`, +0x10), the whole pages inside its data (from header + 8, rounded up
+/// to a page; the rest of the size rounded down) are decommitted (`VirtualFree(..,
+/// MEM_DECOMMIT)`) if they make at least a page, and bit 0x2000_0000 of the size word is set.
+/// The compiler kept a test of the constant 1 before that; its clearing arm never runs and
+/// is left out.
+pub fn fn_00aa7d60(e: &mut Engine, this: Ptr, header: u32) {
+    let mut size = e.mem.u32(header.wrapping_add(4)) & 0x0fff_ffff;
+    if size < e.mem.u32(this.addr() + PAGE_SIZE) {
+        return;
+    }
+    let data = header.wrapping_add(8);
+    let page = e.mem.u32(this.addr() + PAGE_SIZE);
+    let mask = !e.mem.u32(this.addr() + PAGE_SIZE).wrapping_sub(1);
+    let start = data.wrapping_add(page).wrapping_sub(1) & mask;
+    let mask = !e.mem.u32(this.addr() + PAGE_SIZE).wrapping_sub(1);
+    size = size.wrapping_sub(start.wrapping_sub(data)) & mask;
+    if size < e.mem.u32(this.addr() + PAGE_SIZE) {
+        return;
+    }
+    e.call(VIRTUAL_FREE, &args![start, size, MEM_DECOMMIT]);
+    let word = e.mem.u32(header.wrapping_add(4));
+    e.mem.set_u32(header.wrapping_add(4), word | DECOMMITTED);
+}
+
+// Translated from 00aa7e50 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map: slot +4 of the `MemoryHeap` vtable (`GetName` in the Xbox
+/// PDB's order; also in the `AbstractHeap` vtable `010a2bbc`) (`thiscall`, no stack words):
+/// `pName` (+4).
+pub fn fn_00aa7e50(e: &mut Engine, this: Ptr) -> u32 {
+    e.mem.u32(this.addr() + NAME)
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x00aa_7810, fn_00aa7810(Ptr)),
+        entry!(0x00aa_7840, fn_00aa7840(Ptr, u32) -> Ptr),
+        entry!(0x00aa_7870, fn_00aa7870(Ptr) -> u32),
+        entry!(0x00aa_7890, fn_00aa7890(Ptr, u32) -> u32),
+        entry!(0x00aa_7b70, fn_00aa7b70(Ptr, u32) -> bool),
+        entry!(0x00aa_7c00, fn_00aa7c00(Ptr, u32) -> u32),
+        entry!(0x00aa_7c30, fn_00aa7c30(Ptr) -> u32),
+        entry!(0x00aa_7c50, fn_00aa7c50(Ptr) -> u32),
+        entry!(0x00aa_7c60, fn_00aa7c60(Ptr, u32, u8) -> u32),
+        entry!(0x00aa_7ca0, fn_00aa7ca0(Ptr, u32) -> u32),
+        entry!(0x00aa_7d00, fn_00aa7d00(Ptr, u32, u8) -> u32),
+        entry!(0x00aa_7d60, fn_00aa7d60(Ptr, u32)),
+        entry!(0x00aa_7e50, fn_00aa7e50(Ptr) -> u32),
         entry!(0x00aa7830, fn_00aa7830(Ptr)),
         entry!(
             0x00aa78a0,
@@ -487,6 +669,155 @@ mod tests {
             (0x5000_1000, false),
         ] {
             assert_eq!(e.call(0x00aa_7e70, &args![this, pointer]).bool(), inside);
+        }
+    }
+}
+
+#[cfg(test)]
+mod n082_tests {
+    use super::*;
+
+    fn calls_to(e: &Engine, callee: u32) -> Vec<Vec<u32>> {
+        e.call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|(address, _)| *address == callee)
+            .map(|(_, words)| words.clone())
+            .collect()
+    }
+
+    #[test]
+    fn i_memory_heap_destructors_restore_the_vtable() {
+        let mut e = Engine::new();
+        e.register(MEMORY_MANAGER_DEALLOCATE, |_, _| Ret::default());
+        let heap = e.mem.alloc(8);
+        e.call(0x00aa_7810, &args![heap]);
+        assert_eq!(e.mem.u32(heap), I_MEMORY_HEAP_VTABLE);
+        e.mem.set_u32(heap, 0);
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x00aa_7840, &args![heap, 0u32]).u32(), heap);
+        assert_eq!(e.mem.u32(heap), I_MEMORY_HEAP_VTABLE);
+        assert!(calls_to(&e, MEMORY_MANAGER_DEALLOCATE).is_empty());
+        e.call(0x00aa_7840, &args![heap, 1u32]);
+        assert_eq!(
+            calls_to(&e, MEMORY_MANAGER_DEALLOCATE),
+            vec![vec![MEMORY_MANAGER, heap]]
+        );
+    }
+
+    #[test]
+    fn small_getters_and_constants() {
+        let mut e = Engine::new();
+        let heap = e.mem.alloc(0x10);
+        e.mem.set_u32(heap + 4, 0x44);
+        e.mem.set_u32(heap + 8, 0x88);
+        assert_eq!(e.call(0x00aa_7870, &args![heap]).u32(), 0x88);
+        assert_eq!(e.call(0x00aa_7e50, &args![heap]).u32(), 0x44);
+        assert_eq!(e.call(0x00aa_7890, &args![heap, 5u32]).u32(), 0);
+        assert_eq!(e.call(0x00aa_7c30, &args![heap]).u32(), 0);
+        assert_eq!(e.call(0x00aa_7c50, &args![heap]).u32(), 0);
+        let block = e.mem.alloc(0x10) + 8;
+        e.mem.set_u32(block - 4, 0xf000_0030);
+        assert_eq!(e.call(0x00aa_7c00, &args![heap, block]).u32(), 0x38);
+    }
+
+    #[test]
+    fn fn_00aa7b70_needs_the_heap_and_a_clear_bit_30() {
+        let mut e = Engine::new();
+        let slots: Vec<u32> = (0..0x10).map(|i| 0x8000 + 4 * i).collect();
+        e.put_vtable(0x7000, &slots);
+        e.register(0x8010, |_, a| {
+            if a[1] >= 0x2000_0000 {
+                0x101u32.into_ret()
+            } else {
+                0x100u32.into_ret()
+            }
+        });
+        let heap = e.mem.alloc(8);
+        e.mem.set_u32(heap, 0x7000);
+        let block = e.mem.alloc(0x10) + 8;
+        assert!(e.call(0x00aa_7b70, &args![heap, block]).bool());
+        e.mem.set_u32(block - 4, 0x4000_0000);
+        assert!(!e.call(0x00aa_7b70, &args![heap, block]).bool());
+        // Outside the heap the header is not read.
+        assert!(!e.call(0x00aa_7b70, &args![heap, 0x1000u32]).bool());
+    }
+
+    #[test]
+    fn stats_and_output_go_to_the_base_unless_flagged() {
+        let mut e = Engine::new();
+        e.register(ABSTRACT_HEAP_STATS, |_, _| 0x51u32.into_ret());
+        e.register(ABSTRACT_HEAP_BUCKETS, |_, _| 0x52u32.into_ret());
+        e.register(ABSTRACT_HEAP_BLOCKS, |_, _| 0x53u32.into_ret());
+        let slots: Vec<u32> = (0..0x10).map(|i| 0x8000 + 4 * i).collect();
+        e.put_vtable(0x7000, &slots);
+        e.register(0x8008, |e, a| {
+            assert_eq!(e.mem.u32(a[1]), 0);
+            0x54u32.into_ret()
+        });
+        let stream = e.mem.alloc(4);
+        e.mem.set_u32(stream, 0x7000);
+        let heap = e.mem.alloc(0x2104);
+        e.call_log = Some(vec![]);
+        assert_eq!(
+            e.call(0x00aa_7c60, &args![heap, 0x60u32, 0x101u32]).u32(),
+            0x51
+        );
+        assert_eq!(e.call(0x00aa_7ca0, &args![heap, stream]).u32(), 0x52);
+        assert_eq!(
+            e.call(0x00aa_7d00, &args![heap, stream, 0x101u32]).u32(),
+            0x53
+        );
+        assert_eq!(calls_to(&e, ABSTRACT_HEAP_STATS), vec![vec![heap, 0x60, 1]]);
+        assert_eq!(
+            calls_to(&e, ABSTRACT_HEAP_BUCKETS),
+            vec![vec![heap, stream]]
+        );
+        assert_eq!(
+            calls_to(&e, ABSTRACT_HEAP_BLOCKS),
+            vec![vec![heap, stream, 1]]
+        );
+        // With the byte at +0x20f0 set: the flag is dropped, and the outputs write a zero word.
+        e.mem.set_u8(heap + OWN_FLAG, 1);
+        e.call_log = Some(vec![]);
+        e.call(0x00aa_7c60, &args![heap, 0x60u32, 1u32]);
+        assert_eq!(calls_to(&e, ABSTRACT_HEAP_STATS), vec![vec![heap, 0x60, 0]]);
+        assert_eq!(e.call(0x00aa_7ca0, &args![heap, stream]).u32(), 0x54);
+        assert_eq!(e.call(0x00aa_7d00, &args![heap, stream, 1u32]).u32(), 0x54);
+        let writes = calls_to(&e, 0x8008);
+        assert_eq!(writes.len(), 2);
+        assert_eq!(writes[0][0], stream);
+        assert_eq!(writes[0][2], 4);
+        assert!(calls_to(&e, ABSTRACT_HEAP_BUCKETS).is_empty());
+    }
+
+    #[test]
+    fn fn_00aa7d60_decommits_whole_pages_inside_a_block() {
+        let mut e = Engine::new();
+        e.register(VIRTUAL_FREE, |_, _| 1u32.into_ret());
+        let heap = e.mem.alloc(0x40);
+        e.mem.set_u32(heap + PAGE_SIZE, 0x1000);
+        let header = e.mem.alloc(8);
+        // Data at header + 8; pages from the next 0x1000 boundary.
+        let data = header + 8;
+        let start = (data + 0xfff) & !0xfff;
+        let size = (start - data) + 0x2800;
+        e.mem.set_u32(header + 4, 0x4000_0000 | size);
+        e.call_log = Some(vec![]);
+        e.call(0x00aa_7d60, &args![heap, header]);
+        assert_eq!(
+            calls_to(&e, VIRTUAL_FREE),
+            vec![vec![start, 0x2000, MEM_DECOMMIT]]
+        );
+        assert_eq!(e.mem.u32(header + 4), 0x6000_0000 | size);
+        // Less than a page inside, or a small block: nothing.
+        for small in [(start - data) + 0xfff, 0xfff] {
+            e.mem.set_u32(header + 4, small);
+            e.call_log = Some(vec![]);
+            e.call(0x00aa_7d60, &args![heap, header]);
+            assert!(calls_to(&e, VIRTUAL_FREE).is_empty());
+            assert_eq!(e.mem.u32(header + 4), small);
         }
     }
 }

@@ -255,9 +255,41 @@ pub fn fn_00afd390(e: &mut Engine, this: Ptr, path: Ptr, mode: u32) -> Ptr {
     this
 }
 
+/// The formatted print into a buffer (`00406d00`, cdecl: buffer, size, format, values).
+const PRINT_TO_BUFFER: u32 = 0x0040_6d00;
+/// `"%c%02X%c%c%08X"` (`010a46ac`).
+const HASH_TEXT_FORMAT: u32 = 0x010a_46ac;
+
+// Translated from 00afd860 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (thiscall on an 8-byte hash, one word): with an `out` buffer,
+/// prints the hash into it (0x20 bytes, `"%c%02X%c%c%08X"`: bytes 3, 2, 1 and 0, then the
+/// word at +4).
+pub fn fn_00afd860(e: &mut Engine, this: Ptr, out: u32) {
+    if out == 0 {
+        return;
+    }
+    let at = this.addr();
+    let word = e.mem.u32(at.wrapping_add(4));
+    let bytes = [3u32, 2, 1, 0].map(|i| u32::from(e.mem.u8(at.wrapping_add(i))));
+    e.call(
+        PRINT_TO_BUFFER,
+        &args![
+            out,
+            0x20u32,
+            HASH_TEXT_FORMAT,
+            bytes[0],
+            bytes[1],
+            bytes[2],
+            bytes[3],
+            word
+        ],
+    );
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x00af_d860, fn_00afd860(Ptr, u32)),
         entry!(0x00af_d230, fn_00afd230(Ptr)),
         entry!(0x00af_d4e0, fn_00afd4e0(Ptr, Ptr, Ptr)),
         entry!(0x00af_d270, fn_00afd270(Ptr, Ptr, Ptr)),
@@ -470,5 +502,43 @@ mod b004_tests {
                 .count();
             assert_eq!(splits, usize::from(mode != 2));
         }
+    }
+}
+
+#[cfg(test)]
+mod n083_tests {
+    use super::*;
+
+    #[test]
+    fn hash_is_printed_into_the_buffer() {
+        let mut e = Engine::new();
+        e.register(PRINT_TO_BUFFER, |_, _| Ret::default());
+        let hash = e.mem.alloc(8);
+        e.mem
+            .write(hash, &[0x61, 0x02, 0x63, 0x64, 0x78, 0x56, 0x34, 0x12]);
+        e.call_log = Some(vec![]);
+        e.call(0x00af_d860, &args![hash, 0u32]);
+        e.call(0x00af_d860, &args![hash, 0x5000u32]);
+        let calls: Vec<_> = e
+            .call_log
+            .take()
+            .unwrap()
+            .into_iter()
+            .filter(|c| c.0 == PRINT_TO_BUFFER)
+            .collect();
+        assert_eq!(calls.len(), 1);
+        assert_eq!(
+            calls[0].1,
+            [
+                0x5000,
+                0x20,
+                HASH_TEXT_FORMAT,
+                0x64,
+                0x63,
+                0x02,
+                0x61,
+                0x1234_5678
+            ]
+        );
     }
 }

@@ -157,6 +157,9 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x004f_8860, game_setting_collection_read_setting(Ptr, Ptr) -> bool),
         entry!(0x004f_89c0, game_setting_collection_read_setting_ov2(Ptr, u32, u32) -> bool),
     ]
+    .into_iter()
+    .chain(funcs_n086())
+    .collect()
 }
 
 #[cfg(test)]
@@ -344,5 +347,113 @@ mod tests_b008 {
         let names: Vec<u32> = calls(&mut e).into_iter().map(|c| c.0).collect();
         assert!(!names.contains(&READ_SLOT));
         assert!(names.contains(&DONE_SLOT));
+    }
+}
+
+/// `NiGetViewerString` (`00a7d330`, `cdecl`: a text) and
+/// `NiGetViewerString_ov8` (`00a7d510`, `cdecl`: a text and a word): a new
+/// viewer string.
+const NI_GET_VIEWER_STRING: u32 = 0x00a7_d330;
+const NI_GET_VIEWER_STRING_OV8: u32 = 0x00a7_d510;
+/// `0096a610` (`thiscall`, `RET 4`: the address of a string pointer): adds
+/// the string to the viewer string list.
+const STRINGS_ADD_0096A610: u32 = 0x0096_a610;
+/// `SettingCollectionMap<Setting>::GetViewerStrings` (`00404fd0`, engine
+/// map; `thiscall`, `RET 4`).
+const SETTING_MAP_GET_VIEWER_STRINGS: u32 = 0x0040_4fd0;
+/// The texts `"GameSettings"` (`010241d0`) and `"Total GameSettings"`
+/// (`010241bc`).
+const TEXT_GAME_SETTINGS: u32 = 0x0102_41d0;
+const TEXT_TOTAL_GAME_SETTINGS: u32 = 0x0102_41bc;
+
+// Translated from 004f8800 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `GameSettingCollection::GetViewerStrings` (engine map name; `thiscall`,
+/// `RET 4`: the string list): adds `"GameSettings"`, the map's own viewer
+/// strings (`00404fd0`), then `"Total GameSettings"` with the word that
+/// answers, each new string added through a stack word holding it
+/// (`0096a610`). Answers that word.
+pub fn game_setting_collection_get_viewer_strings(e: &mut Engine, this: Ptr, strings: u32) -> u32 {
+    e.with_stack(8, |e, locals| {
+        let title = e
+            .call(NI_GET_VIEWER_STRING, &args![TEXT_GAME_SETTINGS])
+            .u32();
+        e.mem.set_u32(locals.addr(), title);
+        e.call(STRINGS_ADD_0096A610, &args![strings, locals]);
+        let total = e
+            .call(SETTING_MAP_GET_VIEWER_STRINGS, &args![this, strings])
+            .u32();
+        let line = e
+            .call(
+                NI_GET_VIEWER_STRING_OV8,
+                &args![TEXT_TOTAL_GAME_SETTINGS, total],
+            )
+            .u32();
+        e.mem.set_u32(locals.addr() + 4, line);
+        e.call(STRINGS_ADD_0096A610, &args![strings, locals.addr() + 4]);
+        total
+    })
+}
+
+// Translated from 004f8980 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`thiscall`, `RET 4`; the stack word is not
+/// read): whether the file at `+0x108` (where `004f8a60` keeps it) is set.
+pub fn fn_004f8980(e: &mut Engine, this: Ptr, _unused_1: u32) -> bool {
+    e.mem.u32(this.addr().wrapping_add(0x108)) != 0
+}
+
+/// This unit's n086 translations, by exe address.
+fn funcs_n086() -> Vec<(u32, AbiFn)> {
+    vec![
+        entry!(
+            0x004f_8800,
+            game_setting_collection_get_viewer_strings(Ptr, u32) -> u32
+        ),
+        entry!(0x004f_8980, fn_004f8980(Ptr, u32) -> bool),
+    ]
+}
+
+#[cfg(test)]
+mod n086_tests {
+    use super::*;
+
+    #[test]
+    fn get_viewer_strings_adds_the_title_and_the_total() {
+        let mut e = Engine::new();
+        e.register(NI_GET_VIEWER_STRING, |_, a| (a[0] + 1).into_ret());
+        e.register(NI_GET_VIEWER_STRING_OV8, |_, a| (a[0] + a[1]).into_ret());
+        e.register(SETTING_MAP_GET_VIEWER_STRINGS, |_, _| 0x30u32.into_ret());
+        e.register_double(STRINGS_ADD_0096A610, |e, a| {
+            // Record the string the word holds in the list's first word.
+            let string = e.mem.u32(a[1]);
+            let n = e.mem.u32(a[0]);
+            e.mem.set_u32(a[0] + 4 + n * 4, string);
+            e.mem.set_u32(a[0], n + 1);
+            Ret::default()
+        });
+        let strings = e.mem.alloc(0x10);
+        e.call_log = Some(vec![]);
+        let total = e.call(0x004f_8800, &args![0x7000u32, strings]).u32();
+        assert_eq!(total, 0x30);
+        assert_eq!(e.mem.u32(strings), 2);
+        assert_eq!(e.mem.u32(strings + 4), TEXT_GAME_SETTINGS + 1);
+        assert_eq!(e.mem.u32(strings + 8), TEXT_TOTAL_GAME_SETTINGS + 0x30);
+        let map: Vec<_> = e
+            .call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|c| c.0 == SETTING_MAP_GET_VIEWER_STRINGS)
+            .map(|c| c.1.clone())
+            .collect();
+        assert_eq!(map, vec![vec![0x7000, strings]]);
+    }
+
+    #[test]
+    fn fn_004f8980_tests_the_file_word() {
+        let mut e = Engine::new();
+        let this = e.mem.alloc(0x110);
+        assert!(!e.call(0x004f_8980, &args![this, 5u32]).bool());
+        e.mem.set_u32(this + 0x108, 0x40);
+        assert!(e.call(0x004f_8980, &args![this, 5u32]).bool());
     }
 }

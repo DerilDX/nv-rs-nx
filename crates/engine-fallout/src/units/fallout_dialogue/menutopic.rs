@@ -757,6 +757,652 @@ pub fn fn_0083f260(e: &mut Engine, this: Ptr<MenuTopicManager>) -> u32 {
     node_item(e, this.addr() + 4)
 }
 
+/// `007627c0` (`thiscall` on an info): whether it is a speech challenge (`AL`).
+const INFO_IS_CHALLENGE_007627C0: u32 = 0x0076_27c0;
+/// The speaker's virtual slots `0x100` (whether it is an actor, `AL`), `0x344` (with the player
+/// and 0: an integer), `0xfc` (`AL`) and `0x460` (with the player and a `float`).
+const SPEAKER_IS_ACTOR_SLOT: u32 = 0x100;
+const SPEAKER_VALUE_SLOT: u32 = 0x344;
+const SPEAKER_FLAG_SLOT: u32 = 0xfc;
+const SPEAKER_SET_SLOT: u32 = 0x460;
+/// The setting `011d0a24` (its value's address through `00403e20`): the challenge difficulty
+/// used for a speaker that is not an actor.
+const SETTING_011D0A24: u32 = 0x011d_0a24;
+const SETTING_ADDRESS_00403E20: u32 = 0x0040_3e20;
+/// `0061f2b0` (`thiscall` on an info): the challenge's word passed to `00648ea0`.
+const INFO_CHALLENGE_0061F2B0: u32 = 0x0061_f2b0;
+/// `ActorValueOwner::GetClampedActorFloatValue` (engine map; `0066ef50`, `thiscall` on the
+/// player's `+0xa4`, one word: the actor value; `float` in ST0), here value `0x2b`.
+const CLAMPED_ACTOR_VALUE_0066EF50: u32 = 0x0066_ef50;
+/// `00648ea0` (`cdecl`: two `float`s and a word): the success chance; `00648f60` (`cdecl`, one
+/// word: the chance; `float` in ST0).
+const CHALLENGE_CHANCE_00648EA0: u32 = 0x0064_8ea0;
+const CHALLENGE_VALUE_00648F60: u32 = 0x0064_8f60;
+/// `00487f50` (no arguments): a random number.
+const RANDOM_00487F50: u32 = 0x0048_7f50;
+/// `008041a0` (`thiscall` on an info: its level) and
+/// `ExperiencePoints::GetExperiencePoints` (engine map; `006705b0`, `cdecl`: 4 and the level
+/// minus one).
+const INFO_LEVEL_008041A0: u32 = 0x0080_41a0;
+const EXPERIENCE_POINTS_006705B0: u32 = 0x0067_05b0;
+/// `MiscStatManager::Increment` (engine map; `004d5c60`, `cdecl`, one word).
+const MISC_STAT_INCREMENT_004D5C60: u32 = 0x004d_5c60;
+/// `"SpeechChallengeFailure topic had no matching info ..."` (`0107dd28`).
+const NO_FAILURE_INFO_MESSAGE: u32 = 0x0107_dd28;
+/// `0061f220`, `0061aef0` (`thiscall` on an info; `0061aef0` answers in `AL`) and `00935920`
+/// (`thiscall` on the speaker, one word: the info).
+const INFO_0061F220: u32 = 0x0061_f220;
+const INFO_FLAG_0061AEF0: u32 = 0x0061_aef0;
+const SPEAKER_INFO_00935920: u32 = 0x0093_5920;
+/// `00905330` (`thiscall` on a list, one word: the address of an item): removes the item.
+const LIST_REMOVE_00905330: u32 = 0x0090_5330;
+
+/// The save/load singleton holder (`011de45c`) and its `thiscall` helpers: `00825c00` (the
+/// current position), `008579b0` (write: address, size), `00857a10` (`SaveNumericID`),
+/// `008579e0` (read: address, size), `00857aa0` (`LoadNumericID`), `00862110`
+/// (`UseSaveGameBlocks`, `AL`), `004fd3e0` / `004fd3c0` (the form being saved / loaded, or 0)
+/// and `008df040` (the version, `AL`).
+const SAVE_LOAD_GAME_011DE45C: u32 = 0x011d_e45c;
+const SAVE_POSITION_00825C00: u32 = 0x0082_5c00;
+const SAVE_WRITE_008579B0: u32 = 0x0085_79b0;
+const SAVE_NUMERIC_ID_00857A10: u32 = 0x0085_7a10;
+const LOAD_READ_008579E0: u32 = 0x0085_79e0;
+const LOAD_NUMERIC_ID_00857AA0: u32 = 0x0085_7aa0;
+const USE_SAVE_GAME_BLOCKS_00862110: u32 = 0x0086_2110;
+const SAVING_FORM_004FD3E0: u32 = 0x004f_d3e0;
+const LOADING_FORM_004FD3C0: u32 = 0x004f_d3c0;
+const SAVE_VERSION_008DF040: u32 = 0x008d_f040;
+/// The setting at `011de4e8` (its value's address through `00408d60`): whether save sizes are
+/// reported (`Error`, `0040fbe0`, `cdecl`, variable).
+const SETTING_011DE4E8: u32 = 0x011d_e4e8;
+const SETTING_VALUE_00408D60: u32 = 0x0040_8d60;
+const ERROR_0040FBE0: u32 = 0x0040_fbe0;
+/// `"D:\_Fallout3\...\MenuTopic.cpp"` (`0107dd88`) and the messages: the save size
+/// (`01012cb0` with a form, `01012c78` without), the save (`010153a0`, `0101536c`), the block
+/// size (`01015318`), the block header (`01015718`, `010156a8`) and the overrun and underrun
+/// (`01015588`, `01015500` with a form, `010154a0`, `01015440` without).
+const SOURCE_FILE_0107DD88: u32 = 0x0107_dd88;
+const SAVE_SIZE_FORM_MESSAGE: u32 = 0x0101_2cb0;
+const SAVE_SIZE_MESSAGE: u32 = 0x0101_2c78;
+const SAVE_FORM_MESSAGE: u32 = 0x0101_53a0;
+const SAVE_MESSAGE: u32 = 0x0101_536c;
+const BLOCK_TOO_LARGE_MESSAGE: u32 = 0x0101_5318;
+const HEADER_FORM_MESSAGE: u32 = 0x0101_5718;
+const HEADER_MESSAGE: u32 = 0x0101_56a8;
+const OVERRUN_FORM_MESSAGE: u32 = 0x0101_5588;
+const UNDERRUN_FORM_MESSAGE: u32 = 0x0101_5500;
+const OVERRUN_MESSAGE: u32 = 0x0101_54a0;
+const UNDERRUN_MESSAGE: u32 = 0x0101_5440;
+/// The block tag `"KOLB"` read as a word (`0x424c4f4b`).
+const BLOCK_TAG: u32 = 0x424c_4f4b;
+/// `strlen` (`0044a670`, `cdecl`), `00559450` (`thiscall`: the string's characters), `memset`
+/// (`00403d30`, `cdecl`), the string setters `004037f0` (two words) and `00438390` (one word).
+const STRLEN_0044A670: u32 = 0x0044_a670;
+const STRING_CHARS_00559450: u32 = 0x0055_9450;
+const MEMSET_00403D30: u32 = 0x0040_3d30;
+const STRING_SET_004037F0: u32 = 0x0040_37f0;
+const STRING_SET_00438390: u32 = 0x0043_8390;
+/// A form's save id (`0084e3a0`, `thiscall`) and `004839c0` (`cdecl`, one word).
+const FORM_SAVE_ID_0084E3A0: u32 = 0x0084_e3a0;
+const CAST_SOURCE_004839C0: u32 = 0x0048_39c0;
+/// The type descriptors: the source `01183028` and the targets quest (`01186500`), topic
+/// (`01184720`) and info (`01184738`).
+const FORM_TYPE_01183028: u32 = 0x0118_3028;
+const QUEST_TYPE_01186500: u32 = 0x0118_6500;
+const TOPIC_TYPE_01184720: u32 = 0x0118_4720;
+const INFO_TYPE_01184738: u32 = 0x0118_4738;
+/// `BGSSaveGameBuffer` writers (`SaveString` `00865e70`, two words; the raw write `00865e50`,
+/// three words; `SaveFormID_ov2` `00865df0`, two words) and `BGSLoadGameBuffer` readers
+/// (`LoadString` `008649a0`, one word; the raw read `00864980`, two words; `LoadFormID`
+/// `008648a0`), all `thiscall` on the buffer.
+const SAVE_STRING_00865E70: u32 = 0x0086_5e70;
+const SAVE_DATA_00865E50: u32 = 0x0086_5e50;
+const SAVE_FORM_ID_00865DF0: u32 = 0x0086_5df0;
+const LOAD_STRING_008649A0: u32 = 0x0086_49a0;
+const LOAD_DATA_00864980: u32 = 0x0086_4980;
+const LOAD_FORM_ID_008648A0: u32 = 0x0086_48a0;
+/// The security cookie (`011c16bc`) and `__security_check_cookie` (`00ec408c`, fastcall).
+const SECURITY_COOKIE_011C16BC: u32 = 0x011c_16bc;
+const SECURITY_CHECK_COOKIE: u32 = 0x00ec_408c;
+
+/// The save/load singleton.
+fn save_load(e: &Engine) -> u32 {
+    e.global::<u32>(SAVE_LOAD_GAME_011DE45C)
+}
+
+/// `__RTDynamicCast(004839c0(form), 0, 01183028, target, 0)`.
+fn cast_form(e: &mut Engine, form: u32, target: u32) -> u32 {
+    let object = e.call(CAST_SOURCE_004839C0, &args![form]).u32();
+    e.call(
+        DYNAMIC_CAST,
+        &args![object, 0u32, FORM_TYPE_01183028, target, 0u32],
+    )
+    .u32()
+}
+
+/// Whether the setting at `011de4e8` is set (the byte at the address `00408d60` gives).
+fn reporting_sizes(e: &mut Engine) -> bool {
+    let value = e
+        .call(SETTING_VALUE_00408D60, &args![SETTING_011DE4E8])
+        .u32();
+    e.mem.u8(value) != 0
+}
+
+/// The size reports of [`fn_0083f280`] and [`fn_0083f3e0`]: with the form being saved
+/// (`004fd3e0`), `Error(form_message, size, form id, its name (slot 0x130 of 004839c0(form)),
+/// the word at +5, line, file)`; without, `Error(message, size, line, file)`.
+fn report_size(e: &mut Engine, size: u32, line: u32, form_message: u32, message: u32) {
+    let saver = save_load(e);
+    let form = e.call(SAVING_FORM_004FD3E0, &args![saver]).u32();
+    if form != 0 {
+        let id = e.mem.u32(form);
+        let object = e.call(CAST_SOURCE_004839C0, &args![id]).u32();
+        let flags = e.mem.u32(form + 5);
+        let name = e.vcall(object, 0x130, &args![]).u32();
+        let id = e.mem.u32(form);
+        e.call(
+            ERROR_0040FBE0,
+            &args![
+                form_message,
+                size,
+                id,
+                name,
+                flags,
+                line,
+                SOURCE_FILE_0107DD88
+            ],
+        );
+    } else {
+        e.call(
+            ERROR_0040FBE0,
+            &args![message, size, line, SOURCE_FILE_0107DD88],
+        );
+    }
+}
+
+/// The form-load reports of [`menu_topic_load_game`]: with the form being loaded (`004fd3c0`),
+/// `005b5e40(form_message, file, line, form id, its name, the byte at +9, the word at
+/// +5)`; without, `005b5e40(message, file, line, version)`.
+fn report_load(e: &mut Engine, line: u32, form_message: u32, message: u32) {
+    let loader = save_load(e);
+    let form = e.call(LOADING_FORM_004FD3C0, &args![loader]).u32();
+    if form != 0 {
+        let id = e.mem.u32(form);
+        let object = e.call(CAST_SOURCE_004839C0, &args![id]).u32();
+        let flags = e.mem.u32(form + 5);
+        let version = u32::from(e.mem.u8(form + 9));
+        let name = e.vcall(object, 0x130, &args![]).u32();
+        let id = e.mem.u32(form);
+        e.call(
+            REPORT_005B5E40,
+            &args![
+                form_message,
+                SOURCE_FILE_0107DD88,
+                line,
+                id,
+                name,
+                version,
+                flags
+            ],
+        );
+    } else {
+        let loader = save_load(e);
+        let version = u32::from(e.call(SAVE_VERSION_008DF040, &args![loader]).u8());
+        e.call(
+            REPORT_005B5E40,
+            &args![message, SOURCE_FILE_0107DD88, line, version],
+        );
+    }
+}
+
+// Translated from 0083e850 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 0083e850 - the FS:[0] exception frame (unwinding on a throw) is not translated
+/// `MenuTopicManager::DoSpeechChallengeCheck` (engine map; `thiscall`, `RET 4`: a menu topic).
+/// For a topic whose info (`009611e0`) is a speech challenge (`007627c0`): the difficulty is the
+/// speaker's slot `0x344` (with the player and 0, an integer made a `float`) for an actor (slot
+/// `0x100`), else the setting `011d0a24`'s `float`; the chance is `00648ea0(speech (the player's
+/// clamped actor value 0x2b), difficulty, 0061f2b0(info))`. A random number (`00487f50`) mod 100
+/// below the chance (signed) wins: `iLastDialogXP` = `GetExperiencePoints(4, level - 1)`.
+/// Otherwise `bSpeechChallengeLoss` is set, the stat `0x1f` incremented, and the failure topic
+/// (`TESTopic::GetTopic(0, 0xb)`) gives a matching info (`0061a790` with a result byte, the
+/// speaker, the player, 0, the topic's word at +4, 0); without one the message `0107dd28` is
+/// reported (`005b5e40` with 6). With one a new topic list (`operator new(8)`, `0096a2d0`) gets
+/// the greeting and a new menu topic (`operator new(0x2c)`, `0083db00` with the info's quest,
+/// the failure topic, the info, the speaker, 0; `0083e0c0` on it); the challenged info gets
+/// `0061f220`; when `00619b20` or `0061aef0` answer for it, `00935920` runs (when `0061aef0` and
+/// the speaker's slot `0xfc` do) and the topic is removed from the shown list (`00905330`). The
+/// list is shown ([`fn_0083f1a0`], [`menu_topic_manager_first_topic`] with 1). An actor speaker
+/// then gets its slot `0x460` with the player and `00648f60(chance)`. Returns
+/// `bSpeechChallengeLoss`.
+pub fn menu_topic_manager_do_speech_challenge_check(
+    e: &mut Engine,
+    this: Ptr<MenuTopicManager>,
+    topic: u32,
+) -> u8 {
+    let base = this.addr();
+    let speaker = move |e: &Engine| e.mem.u32(base + 0xc);
+    if topic == 0 {
+        return e.get(this, MenuTopicManager::bSpeechChallengeLoss);
+    }
+    let info = e.call(WORD_18, &args![topic]).u32();
+    if e.call(INFO_IS_CHALLENGE_007627C0, &args![info]).u8() == 0 {
+        return e.get(this, MenuTopicManager::bSpeechChallengeLoss);
+    }
+    let difficulty = if e.vcall(speaker(e), SPEAKER_IS_ACTOR_SLOT, &args![]).u8() != 0 {
+        let player = e.global::<u32>(PLAYER);
+        let value = e
+            .vcall(speaker(e), SPEAKER_VALUE_SLOT, &args![player, 0u32])
+            .i32();
+        x87_store32(f64::from(value))
+    } else {
+        let value = e
+            .call(SETTING_ADDRESS_00403E20, &args![SETTING_011D0A24])
+            .u32();
+        x87_quiet_bits(e.mem.u32(value))
+    };
+    let info = e.call(WORD_18, &args![topic]).u32();
+    let challenge = e.call(INFO_CHALLENGE_0061F2B0, &args![info]).u32();
+    let player = e.global::<u32>(PLAYER);
+    let speech = e
+        .call(
+            CLAMPED_ACTOR_VALUE_0066EF50,
+            &args![player.wrapping_add(0xa4), 0x2bu32],
+        )
+        .f64();
+    let chance = e
+        .call(
+            CHALLENGE_CHANCE_00648EA0,
+            &args![x87_store32(speech), difficulty, challenge],
+        )
+        .i32();
+    let roll = e.call(RANDOM_00487F50, &args![]).u32() % 100;
+    if (roll as i32) < chance {
+        let info = e.call(WORD_18, &args![topic]).u32();
+        let level = e.call(INFO_LEVEL_008041A0, &args![info]).u32();
+        let points = e
+            .call(
+                EXPERIENCE_POINTS_006705B0,
+                &args![4u32, level.wrapping_sub(1)],
+            )
+            .u32();
+        e.mem.set_u32(base + 0x14, points);
+        return e.get(this, MenuTopicManager::bSpeechChallengeLoss);
+    }
+    e.set(this, MenuTopicManager::bSpeechChallengeLoss, 1);
+    e.call(MISC_STAT_INCREMENT_004D5C60, &args![0x1fu32]);
+    let failure = e.call(GET_TOPIC, &args![0u32, 0xbu32]).u32();
+    e.with_stack(0x10, |e, locals| {
+        let found = locals.addr();
+        let greeting_at = locals.addr() + 4;
+        let topic_at = locals.addr() + 8;
+        let argument_at = locals.addr() + 0xc;
+        let word = e.call(WORD_4_0045CD60, &args![topic]).u32();
+        let player = e.global::<u32>(PLAYER);
+        let matching = e
+            .call(
+                GET_MATCHING_INFO_0061A790,
+                &args![failure, found, speaker(e), player, 0u32, word, 0u32],
+            )
+            .u32();
+        if matching == 0 {
+            e.call(REPORT_005B5E40, &args![6u32, NO_FAILURE_INFO_MESSAGE]);
+            return;
+        }
+        let block = e.call(ALLOCATE, &args![8u32]).u32();
+        let list = if block != 0 {
+            e.call(LIST_CONSTRUCTOR, &args![block]).u32()
+        } else {
+            0
+        };
+        let block = e.call(ALLOCATE, &args![0x2cu32]).u32();
+        let made = if block != 0 {
+            let quest = e.call(INFO_QUEST_00619D00, &args![failure, matching]).u32();
+            e.call(
+                MENU_TOPIC_CONSTRUCTOR,
+                &args![block, quest, failure, matching, speaker(e), 0u32],
+            )
+            .u32()
+        } else {
+            0
+        };
+        e.mem.set_u32(topic_at, made);
+        e.call(MENU_TOPIC_KEEP_0083E0C0, &args![made]);
+        let info = e.call(WORD_18, &args![topic]).u32();
+        e.call(INFO_0061F220, &args![info]);
+        let info = e.call(WORD_18, &args![topic]).u32();
+        let mut remove = e.call(INFO_FLAG_00619B20, &args![info]).u8() != 0;
+        if !remove {
+            let info = e.call(WORD_18, &args![topic]).u32();
+            remove = e.call(INFO_FLAG_0061AEF0, &args![info]).u8() != 0;
+        }
+        if remove {
+            let info = e.call(WORD_18, &args![topic]).u32();
+            if e.call(INFO_FLAG_0061AEF0, &args![info]).u8() != 0
+                && e.vcall(speaker(e), SPEAKER_FLAG_SLOT, &args![]).u8() != 0
+            {
+                let held = speaker(e);
+                let info = e.call(WORD_18, &args![topic]).u32();
+                e.call(SPEAKER_INFO_00935920, &args![held, info]);
+            }
+            e.mem.set_u32(argument_at, topic);
+            let shown = fn_0083f260(e, this);
+            e.call(LIST_REMOVE_00905330, &args![shown, argument_at]);
+        }
+        let greeting = menu_topic_manager_get_greeting(e, this);
+        e.mem.set_u32(greeting_at, greeting);
+        e.call(LIST_ADD, &args![list, greeting_at]);
+        e.call(LIST_ADD, &args![list, topic_at]);
+        fn_0083f1a0(e, this, list);
+        menu_topic_manager_first_topic(e, this, 1);
+    });
+    if e.vcall(speaker(e), SPEAKER_IS_ACTOR_SLOT, &args![]).u8() != 0 {
+        let value = e
+            .call(CHALLENGE_VALUE_00648F60, &args![chance as u32])
+            .f64();
+        let player = e.global::<u32>(PLAYER);
+        e.vcall(
+            speaker(e),
+            SPEAKER_SET_SLOT,
+            &args![player, x87_store32(value)],
+        );
+    }
+    e.get(this, MenuTopicManager::bSpeechChallengeLoss)
+}
+
+// Translated from 0083f1d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `MenuTopicManager::PopTopicList` (engine map; `thiscall`): when the topic lists have a
+/// second node and the first holds a list, that list is removed (`0063f7b0`), cleared
+/// ([`menu_topic_manager_clear_topic_list`] with 0), its items destroyed (`00470470`) and
+/// deleted (`004702f0` with 1). Returns the list now shown (the first node's item).
+pub fn menu_topic_manager_pop_topic_list(e: &mut Engine, this: Ptr<MenuTopicManager>) -> u32 {
+    let lists = this.addr() + 4;
+    if e.call(NODE_NEXT, &args![lists]).u32() != 0 {
+        let list = node_item(e, lists);
+        if list != 0 {
+            e.call(LIST_REMOVE_HEAD, &args![lists]);
+            menu_topic_manager_clear_topic_list(e, this, list, 0);
+            e.call(TOPIC_LIST_CLEAR, &args![list]);
+            if list != 0 {
+                e.call(TOPIC_LIST_DELETE, &args![list, 1u32]);
+            }
+        }
+    }
+    node_item(e, lists)
+}
+
+// Translated from 0083f280 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed (`thiscall` on a `MenuTopic`): its size in the older save format as a 16-bit value:
+/// 6 with save-game blocks (`00862110`), then the text's length plus one (`strlen` of
+/// `00559450`), three bytes and three words. With the setting `011de4e8` set the size is
+/// reported (line `0x2d9`, the messages `01012cb0` / `01012c78`).
+pub fn fn_0083f280(e: &mut Engine, this: Ptr<MenuTopic>) -> u16 {
+    let start = 0u16;
+    let mut size = start;
+    let saver = save_load(e);
+    if e.call(USE_SAVE_GAME_BLOCKS_00862110, &args![saver]).u8() != 0 {
+        size = size.wrapping_add(4).wrapping_add(2);
+    }
+    let text = e.call(STRING_CHARS_00559450, &args![this]).u32();
+    size = size.wrapping_add(1);
+    let length = e.call(STRLEN_0044A670, &args![text]).u32();
+    size = size.wrapping_add(length as u16);
+    for step in [1u16, 1, 1, 4, 4, 4] {
+        size = size.wrapping_add(step);
+    }
+    if reporting_sizes(e) {
+        let reported = u32::from(size).wrapping_sub(u32::from(start));
+        report_size(
+            e,
+            reported,
+            0x2d9,
+            SAVE_SIZE_FORM_MESSAGE,
+            SAVE_SIZE_MESSAGE,
+        );
+    }
+    size
+}
+
+// Translated from 0083f3e0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed (`thiscall` on a `MenuTopic`): saves it the older way through the `TESSaveLoadGame`
+/// at `011de45c`. With save-game blocks: the tag `"KOLB"` and a 16-bit size placeholder whose
+/// place is kept. Then the text (a length byte and, when not 0, the characters), the bytes at
+/// `+8`, `+0x24`, `+0x25` and the save ids (`0084e3a0`, 0 for none) of `+0x14`, `+0x28` and
+/// `pInfo`. With the setting `011de4e8` set the size written is reported (line `0x2ff`); with
+/// blocks a block over `0xffff` bytes is reported (`01015318`) and the size goes into its place.
+pub fn fn_0083f3e0(e: &mut Engine, this: Ptr<MenuTopic>) {
+    let base = this.addr();
+    e.with_stack(0x10, |e, locals| {
+        let size_at = locals.addr();
+        let tag_at = locals.addr() + 4;
+        let length_at = locals.addr() + 8;
+        let id_at = locals.addr() + 0xc;
+        e.mem.set_u16(size_at, 0);
+        let mut place = 0u32;
+        let saver = save_load(e);
+        let mut start = e.call(SAVE_POSITION_00825C00, &args![saver]).u32();
+        if reporting_sizes(e) {
+            let saver = save_load(e);
+            start = e.call(SAVE_POSITION_00825C00, &args![saver]).u32();
+        }
+        let saver = save_load(e);
+        if e.call(USE_SAVE_GAME_BLOCKS_00862110, &args![saver]).u8() != 0 {
+            e.mem.set_u32(tag_at, BLOCK_TAG);
+            let saver = save_load(e);
+            e.call(SAVE_WRITE_008579B0, &args![saver, tag_at, 4u32]);
+            let saver = save_load(e);
+            place = e.call(SAVE_POSITION_00825C00, &args![saver]).u32();
+            let saver = save_load(e);
+            e.call(SAVE_WRITE_008579B0, &args![saver, size_at, 2u32]);
+        }
+        let text = e.call(STRING_CHARS_00559450, &args![base]).u32();
+        let length = e.call(STRLEN_0044A670, &args![text]).u32() as u8;
+        e.mem.set_u8(length_at, length);
+        let saver = save_load(e);
+        e.call(SAVE_WRITE_008579B0, &args![saver, length_at, 1u32]);
+        let length = e.mem.u8(length_at);
+        if length != 0 {
+            let saver = save_load(e);
+            e.call(SAVE_WRITE_008579B0, &args![saver, text, u32::from(length)]);
+        }
+        for offset in [8u32, 0x24, 0x25] {
+            let saver = save_load(e);
+            e.call(SAVE_WRITE_008579B0, &args![saver, base + offset, 1u32]);
+        }
+        for offset in [0x14u32, 0x28, 0x18] {
+            e.mem.set_u32(id_at, 0);
+            let form = e.mem.u32(base + offset);
+            if form != 0 {
+                let id = e.call(FORM_SAVE_ID_0084E3A0, &args![form]).u32();
+                e.mem.set_u32(id_at, id);
+            }
+            let saver = save_load(e);
+            e.call(SAVE_NUMERIC_ID_00857A10, &args![saver, id_at, 4u32]);
+        }
+        if reporting_sizes(e) {
+            let saver = save_load(e);
+            let now = e.call(SAVE_POSITION_00825C00, &args![saver]).u32();
+            report_size(
+                e,
+                now.wrapping_sub(start),
+                0x2ff,
+                SAVE_FORM_MESSAGE,
+                SAVE_MESSAGE,
+            );
+        }
+        let saver = save_load(e);
+        if e.call(USE_SAVE_GAME_BLOCKS_00862110, &args![saver]).u8() != 0 {
+            let saver = save_load(e);
+            let now = e.call(SAVE_POSITION_00825C00, &args![saver]).u32();
+            if now > place.wrapping_add(0xffff) {
+                e.call(
+                    REPORT_005B5E40,
+                    &args![BLOCK_TOO_LARGE_MESSAGE, SOURCE_FILE_0107DD88, 0x2ffu32],
+                );
+            }
+            e.mem.set_u16(place, now.wrapping_sub(place) as u16);
+        }
+    });
+}
+
+// Translated from 0083f680 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 0083f680 - ends in the /GS cookie check (00ec408c), translated as a call
+/// `MenuTopic::LoadGame` (engine map; `thiscall`, `RET 4`: one word it does not read): loads the
+/// topic the older way through the `TESSaveLoadGame` at `011de45c`. With save-game blocks: the
+/// tag (a wrong one is reported, line `0x305`), the block start (`00825c00`) and its 16-bit
+/// size. The text (a length byte and, when not 0, the characters into a zeroed 0x104-byte stack
+/// buffer, `004037f0` with 0), the bytes at `+8`, `+0x24`, `+0x25`, and the numeric ids of
+/// `+0x14` (quest), `+0x28` (topic) and `pInfo`, each cast to its type. With blocks the end is
+/// checked against the block's size: an overrun or underrun is reported (line `0x329`).
+pub fn menu_topic_load_game(e: &mut Engine, this: Ptr<MenuTopic>, _unused_1: u32) {
+    let cookie = e.global::<u32>(SECURITY_COOKIE_011C16BC);
+    let base = this.addr();
+    e.with_stack(0x118, |e, locals| {
+        let size_at = locals.addr();
+        let tag_at = locals.addr() + 4;
+        let length_at = locals.addr() + 8;
+        let id_at = locals.addr() + 0xc;
+        let text = locals.addr() + 0x10;
+        e.mem.set_u16(size_at, 0);
+        let mut start = 0u32;
+        let loader = save_load(e);
+        if e.call(USE_SAVE_GAME_BLOCKS_00862110, &args![loader]).u8() != 0 {
+            let loader = save_load(e);
+            e.call(LOAD_READ_008579E0, &args![loader, tag_at, 4u32]);
+            if e.mem.u32(tag_at) != BLOCK_TAG {
+                report_load(e, 0x305, HEADER_FORM_MESSAGE, HEADER_MESSAGE);
+            }
+            let loader = save_load(e);
+            start = e.call(SAVE_POSITION_00825C00, &args![loader]).u32();
+            let loader = save_load(e);
+            e.call(LOAD_READ_008579E0, &args![loader, size_at, 2u32]);
+        }
+        e.call(MEMSET_00403D30, &args![text, 0u32, 0x104u32]);
+        let loader = save_load(e);
+        e.call(LOAD_READ_008579E0, &args![loader, length_at, 1u32]);
+        let length = e.mem.u8(length_at);
+        if length != 0 {
+            let loader = save_load(e);
+            e.call(LOAD_READ_008579E0, &args![loader, text, u32::from(length)]);
+            e.call(STRING_SET_004037F0, &args![base, text, 0u32]);
+        }
+        for offset in [8u32, 0x24, 0x25] {
+            let loader = save_load(e);
+            e.call(LOAD_READ_008579E0, &args![loader, base + offset, 1u32]);
+        }
+        for (offset, target) in [
+            (0x14u32, QUEST_TYPE_01186500),
+            (0x28, TOPIC_TYPE_01184720),
+            (0x18, INFO_TYPE_01184738),
+        ] {
+            let loader = save_load(e);
+            e.call(LOAD_NUMERIC_ID_00857AA0, &args![loader, id_at, 4u32]);
+            let form = e.mem.u32(id_at);
+            let cast = cast_form(e, form, target);
+            e.mem.set_u32(base + offset, cast);
+        }
+        let loader = save_load(e);
+        if e.call(USE_SAVE_GAME_BLOCKS_00862110, &args![loader]).u8() != 0 {
+            let loader = save_load(e);
+            let now = e.call(SAVE_POSITION_00825C00, &args![loader]).u32();
+            let loader = save_load(e);
+            let form = e.call(LOADING_FORM_004FD3C0, &args![loader]).u32();
+            let expected = |e: &Engine| u32::from(e.mem.u16(size_at)).wrapping_add(start);
+            if form != 0 {
+                let id = e.mem.u32(form);
+                let object = e.call(CAST_SOURCE_004839C0, &args![id]).u32();
+                let (message, difference) = if now > expected(e) {
+                    (OVERRUN_FORM_MESSAGE, now.wrapping_sub(expected(e)))
+                } else if now < expected(e) {
+                    (UNDERRUN_FORM_MESSAGE, expected(e).wrapping_sub(now))
+                } else {
+                    return;
+                };
+                let flags = e.mem.u32(form + 5);
+                let version = u32::from(e.mem.u8(form + 9));
+                let name = e.vcall(object, 0x130, &args![]).u32();
+                let id = e.mem.u32(form);
+                e.call(
+                    REPORT_005B5E40,
+                    &args![
+                        message,
+                        difference,
+                        SOURCE_FILE_0107DD88,
+                        0x329u32,
+                        id,
+                        name,
+                        version,
+                        flags
+                    ],
+                );
+            } else {
+                let (message, difference) = if now > expected(e) {
+                    (OVERRUN_MESSAGE, now.wrapping_sub(expected(e)))
+                } else if now < expected(e) {
+                    (UNDERRUN_MESSAGE, expected(e).wrapping_sub(now))
+                } else {
+                    return;
+                };
+                let loader = save_load(e);
+                let version = u32::from(e.call(SAVE_VERSION_008DF040, &args![loader]).u8());
+                e.call(
+                    REPORT_005B5E40,
+                    &args![message, difference, SOURCE_FILE_0107DD88, 0x329u32, version],
+                );
+            }
+        }
+    });
+    e.call(SECURITY_CHECK_COOKIE, &args![cookie]);
+}
+
+// Translated from 0083fb10 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `MenuTopic::SaveGame` (engine map; `thiscall`, `RET 4`: the save buffer): the text
+/// (`SaveString` with its characters and 0), the bytes at `+8`, `+0x24`, `+0x25`, `+9` and `+0xa`
+/// (one byte each), then the form ids of `+0x14`, `+0x28`, `+0x1c` and `pInfo`.
+pub fn menu_topic_save_game(e: &mut Engine, this: Ptr<MenuTopic>, buffer: u32) {
+    let base = this.addr();
+    let text = e.call(STRING_CHARS_00559450, &args![base]).u32();
+    e.call(SAVE_STRING_00865E70, &args![buffer, text, 0u32]);
+    for offset in [8u32, 0x24, 0x25, 9, 0xa] {
+        e.call(
+            SAVE_DATA_00865E50,
+            &args![buffer, base + offset, 1u32, 0u32],
+        );
+    }
+    for offset in [0x14u32, 0x28, 0x1c, 0x18] {
+        let form = e.mem.u32(base + offset);
+        e.call(SAVE_FORM_ID_00865DF0, &args![buffer, form, 0u32]);
+    }
+}
+
+// Translated from 0083fbe0 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 0083fbe0 - ends in the /GS cookie check (00ec408c), translated as a call
+/// `MenuTopic::LoadGame_ov2` (engine map; `thiscall`, `RET 4`: the load buffer): the text
+/// (`LoadString` into a 0x200-byte stack buffer, then `00438390`), the bytes at `+8`, `+0x24`,
+/// `+0x25`, `+9` and `+0xa`, then from `LoadFormID` `+0x14` (cast to a quest), `+0x28` and `+0x1c`
+/// (topics) and `pInfo` (an info).
+pub fn menu_topic_load_game_ov2(e: &mut Engine, this: Ptr<MenuTopic>, buffer: u32) {
+    let cookie = e.global::<u32>(SECURITY_COOKIE_011C16BC);
+    let base = this.addr();
+    e.with_stack(0x200, |e, text| {
+        e.call(LOAD_STRING_008649A0, &args![buffer, text]);
+        e.call(STRING_SET_00438390, &args![base, text]);
+    });
+    for offset in [8u32, 0x24, 0x25, 9, 0xa] {
+        e.call(LOAD_DATA_00864980, &args![buffer, base + offset, 1u32]);
+    }
+    for (offset, target) in [
+        (0x14u32, QUEST_TYPE_01186500),
+        (0x28, TOPIC_TYPE_01184720),
+        (0x1c, TOPIC_TYPE_01184720),
+        (0x18, INFO_TYPE_01184738),
+    ] {
+        let form = e.call(LOAD_FORM_ID_008648A0, &args![buffer]).u32();
+        let cast = cast_form(e, form, target);
+        e.mem.set_u32(base + offset, cast);
+    }
+    e.call(SECURITY_CHECK_COOKIE, &args![cookie]);
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -828,6 +1474,19 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x0083_f110, fn_0083f110(u32, u32) -> i32),
         entry!(0x0083_f1a0, fn_0083f1a0(Ptr<MenuTopicManager>, u32)),
         entry!(0x0083_f260, fn_0083f260(Ptr<MenuTopicManager>) -> u32),
+        entry!(
+            0x0083_e850,
+            menu_topic_manager_do_speech_challenge_check(Ptr<MenuTopicManager>, u32) -> u8
+        ),
+        entry!(
+            0x0083_f1d0,
+            menu_topic_manager_pop_topic_list(Ptr<MenuTopicManager>) -> u32
+        ),
+        entry!(0x0083_f280, fn_0083f280(Ptr<MenuTopic>) -> u16),
+        entry!(0x0083_f3e0, fn_0083f3e0(Ptr<MenuTopic>)),
+        entry!(0x0083_f680, menu_topic_load_game(Ptr<MenuTopic>, u32)),
+        entry!(0x0083_fb10, menu_topic_save_game(Ptr<MenuTopic>, u32)),
+        entry!(0x0083_fbe0, menu_topic_load_game_ov2(Ptr<MenuTopic>, u32)),
     ]
 }
 
@@ -1431,5 +2090,522 @@ mod tests {
         let made = called(&e, MENU_TOPIC_CONSTRUCTOR);
         assert_eq!(called(&e, FREE), vec![vec![made[0][0]]]);
         assert_eq!(e.mem.u32(shown), 0);
+    }
+}
+
+#[cfg(test)]
+mod n089_tests {
+    use super::*;
+
+    fn calls_to(e: &Engine, address: u32) -> Vec<Vec<u32>> {
+        e.call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|(a, _)| *a == address)
+            .map(|(_, words)| words.clone())
+            .collect()
+    }
+
+    fn quiet(_: &mut Engine, _: &[u32]) -> Ret {
+        Ret::default()
+    }
+
+    /// List doubles: a node keeps its item at `+0` and its next node at `+4`; a node with
+    /// neither is empty; adding appends a fresh node.
+    fn list_doubles(e: &mut Engine) {
+        e.register(NODE_ITEM, |_, a| a[0].into_ret());
+        e.register(NODE_NEXT, |e, a| e.mem.u32(a[0] + 4).into_ret());
+        e.register(LIST_IS_EMPTY, |e, a| {
+            u32::from(e.mem.u32(a[0]) == 0 && e.mem.u32(a[0] + 4) == 0).into_ret()
+        });
+        e.register(LIST_ADD, |e, a| {
+            let item = e.mem.u32(a[1]);
+            if e.mem.u32(a[0]) == 0 && e.mem.u32(a[0] + 4) == 0 {
+                e.mem.set_u32(a[0], item);
+                return Ret::default();
+            }
+            let mut node = a[0];
+            while e.mem.u32(node + 4) != 0 {
+                node = e.mem.u32(node + 4);
+            }
+            let fresh = e.mem.alloc(8);
+            e.mem.set_u32(fresh, item);
+            e.mem.set_u32(node + 4, fresh);
+            Ret::default()
+        });
+    }
+
+    /// A speaker object whose vtable slots `0x100`, `0x344`, `0xfc` and `0x460` are the doubles
+    /// at `0x0338_0000 + slot`.
+    fn speaker(e: &mut Engine, actor: bool) -> u32 {
+        let mut slots = vec![0u32; 0x119];
+        for slot in [
+            SPEAKER_IS_ACTOR_SLOT,
+            SPEAKER_VALUE_SLOT,
+            SPEAKER_FLAG_SLOT,
+            SPEAKER_SET_SLOT,
+        ] {
+            slots[(slot / 4) as usize] = 0x0338_0000 + slot;
+        }
+        e.put_vtable(0x0339_0000, &slots);
+        if actor {
+            e.register(0x0338_0000 + SPEAKER_IS_ACTOR_SLOT, |_, _| 1u32.into_ret());
+        } else {
+            e.register(0x0338_0000 + SPEAKER_IS_ACTOR_SLOT, |_, _| 0u32.into_ret());
+        }
+        e.register(0x0338_0000 + SPEAKER_VALUE_SLOT, |_, _| 50u32.into_ret());
+        e.register(0x0338_0000 + SPEAKER_FLAG_SLOT, |_, _| 1u32.into_ret());
+        e.register(0x0338_0000 + SPEAKER_SET_SLOT, quiet);
+        let object = e.mem.alloc(8);
+        e.mem.set_u32(object, 0x0339_0000);
+        object
+    }
+
+    /// The doubles of the challenge roll: a chance of 40 and the random number given.
+    fn challenge_doubles(e: &mut Engine, random: u32) {
+        e.map(PLAYER, 4);
+        e.set_global(PLAYER, 0x0070_0000u32);
+        e.register(WORD_18, |_, a| (a[0] + 0x18).into_ret());
+        e.register(INFO_IS_CHALLENGE_007627C0, |_, _| 1u32.into_ret());
+        e.register(INFO_CHALLENGE_0061F2B0, |_, _| 0xc4a1u32.into_ret());
+        e.register(CLAMPED_ACTOR_VALUE_0066EF50, |_, _| 35.5f32.into_ret());
+        e.register(CHALLENGE_CHANCE_00648EA0, |_, _| 40u32.into_ret());
+        e.register_double(RANDOM_00487F50, move |_, _| random.into_ret());
+        e.register(INFO_LEVEL_008041A0, |_, _| 3u32.into_ret());
+        e.register(EXPERIENCE_POINTS_006705B0, |_, a| {
+            (a[0] * 100 + a[1]).into_ret()
+        });
+        e.register(CHALLENGE_VALUE_00648F60, |_, a| {
+            (a[0] as f32 / 2.0).into_ret()
+        });
+        let setting = e.mem.alloc(4);
+        e.mem.set_u32(setting, 0x7f80_0001);
+        e.register_double(SETTING_ADDRESS_00403E20, move |_, _| setting.into_ret());
+    }
+
+    #[test]
+    fn n089_0083e850_wins_or_loses_the_speech_challenge() {
+        let mut e = Engine::new();
+        list_doubles(&mut e);
+        // 1039 % 100 = 39 < 40: won.
+        challenge_doubles(&mut e, 1039);
+        let this = e.mem.alloc(0x18);
+        let talker = speaker(&mut e, true);
+        e.mem.set_u32(this + 0xc, talker);
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x0083_e850, &args![this, 0x4000u32]).u8(), 0);
+        assert_eq!(e.mem.u32(this + 0x14), 400 + 2);
+        assert_eq!(
+            calls_to(&e, 0x0338_0000 + SPEAKER_VALUE_SLOT),
+            vec![vec![talker, 0x0070_0000, 0]]
+        );
+        assert_eq!(
+            calls_to(&e, CHALLENGE_CHANCE_00648EA0),
+            vec![vec![35.5f32.to_bits(), 50.0f32.to_bits(), 0xc4a1]]
+        );
+        assert_eq!(
+            calls_to(&e, CLAMPED_ACTOR_VALUE_0066EF50),
+            vec![vec![0x0070_00a4, 0x2b]]
+        );
+        assert!(calls_to(&e, 0x0338_0000 + SPEAKER_SET_SLOT).is_empty());
+        // No topic, or not a challenge: nothing.
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x0083_e850, &args![this, 0u32]).u8(), 0);
+        e.register(INFO_IS_CHALLENGE_007627C0, |_, _| 0x100u32.into_ret());
+        assert_eq!(e.call(0x0083_e850, &args![this, 0x4000u32]).u8(), 0);
+        assert!(calls_to(&e, RANDOM_00487F50).is_empty());
+    }
+
+    #[test]
+    fn n089_0083e850_shows_the_failure_topic() {
+        let mut e = Engine::new();
+        list_doubles(&mut e);
+        // 40 % 100 = 40, not below 40: lost.
+        challenge_doubles(&mut e, 40);
+        for address in [
+            MISC_STAT_INCREMENT_004D5C60,
+            MENU_TOPIC_KEEP_0083E0C0,
+            INFO_0061F220,
+            SPEAKER_INFO_00935920,
+            LIST_REMOVE_00905330,
+            REPORT_005B5E40,
+            LIST_ADD_HEAD,
+        ] {
+            e.register(address, quiet);
+        }
+        e.register(GET_TOPIC, |_, _| 0x7000u32.into_ret());
+        e.register(WORD_4_0045CD60, |_, a| (a[0] + 4).into_ret());
+        e.register(GET_MATCHING_INFO_0061A790, |_, _| 0x8000u32.into_ret());
+        e.register(ALLOCATE, |e, a| e.mem.alloc(a[0]).into_ret());
+        e.register(LIST_CONSTRUCTOR, |_, a| a[0].into_ret());
+        e.register(INFO_QUEST_00619D00, |_, a| (a[1] + 1).into_ret());
+        e.register(MENU_TOPIC_CONSTRUCTOR, |_, a| a[0].into_ret());
+        e.register(INFO_FLAG_00619B20, |_, _| 0u32.into_ret());
+        e.register(INFO_FLAG_0061AEF0, |_, _| 1u32.into_ret());
+        let this = e.mem.alloc(0x18);
+        let talker = speaker(&mut e, true);
+        e.mem.set_u32(this + 0xc, talker);
+        let shown = e.mem.alloc(8);
+        e.mem.set_u32(shown, 0x6000);
+        e.mem.set_u32(this + 4, shown);
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x0083_e850, &args![this, 0x4000u32]).u8(), 1);
+        assert_eq!(e.mem.u8(this + 0x10), 1);
+        assert_eq!(calls_to(&e, MISC_STAT_INCREMENT_004D5C60), vec![vec![0x1f]]);
+        assert_eq!(calls_to(&e, GET_TOPIC), vec![vec![0, 0xb]]);
+        let matching = calls_to(&e, GET_MATCHING_INFO_0061A790);
+        assert_eq!(matching[0][0], 0x7000);
+        assert_eq!(matching[0][2..], [talker, 0x0070_0000, 0, 0x4004, 0]);
+        let made = calls_to(&e, MENU_TOPIC_CONSTRUCTOR);
+        assert_eq!(made[0][1..], [0x8001, 0x7000, 0x8000, talker, 0]);
+        assert_eq!(
+            calls_to(&e, SPEAKER_INFO_00935920),
+            vec![vec![talker, 0x4018]]
+        );
+        let removed = calls_to(&e, LIST_REMOVE_00905330);
+        assert_eq!(removed.len(), 1);
+        assert_eq!(removed[0][0], shown);
+        // The new list holds the greeting, then the failure topic, and is shown.
+        let list = calls_to(&e, LIST_CONSTRUCTOR)[0][0];
+        assert_eq!(e.mem.u32(list), 0x6000);
+        let second = e.mem.u32(list + 4);
+        assert_eq!(e.mem.u32(second), made[0][0]);
+        assert_eq!(calls_to(&e, LIST_ADD_HEAD)[0][0], this + 4);
+        // The actor gets the challenge's value: 00648f60(40) = 20.0.
+        assert_eq!(
+            calls_to(&e, 0x0338_0000 + SPEAKER_SET_SLOT),
+            vec![vec![talker, 0x0070_0000, 20.0f32.to_bits()]]
+        );
+        // No matching info: reported, nothing shown; a non-actor speaker uses the setting
+        // (its signalling NaN quieted) and gets nothing at the end.
+        e.register(GET_MATCHING_INFO_0061A790, |_, _| 0u32.into_ret());
+        let talker = speaker(&mut e, false);
+        e.mem.set_u32(this + 0xc, talker);
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x0083_e850, &args![this, 0x4000u32]).u8(), 1);
+        assert_eq!(
+            calls_to(&e, REPORT_005B5E40),
+            vec![vec![6, NO_FAILURE_INFO_MESSAGE]]
+        );
+        assert!(calls_to(&e, ALLOCATE).is_empty());
+        assert_eq!(calls_to(&e, CHALLENGE_CHANCE_00648EA0)[0][1], 0x7fc0_0001);
+        assert!(calls_to(&e, 0x0338_0000 + SPEAKER_SET_SLOT).is_empty());
+    }
+
+    #[test]
+    fn n089_0083f1d0_pops_the_shown_list() {
+        let mut e = Engine::new();
+        list_doubles(&mut e);
+        for address in [TOPIC_LIST_CLEAR, TOPIC_LIST_DELETE] {
+            e.register(address, quiet);
+        }
+        // Removing the head moves the second node's item into it.
+        e.register(LIST_REMOVE_HEAD, |e, a| {
+            let next = e.mem.u32(a[0] + 4);
+            let item = e.mem.u32(next);
+            let after = e.mem.u32(next + 4);
+            e.mem.set_u32(a[0], item);
+            e.mem.set_u32(a[0] + 4, after);
+            Ret::default()
+        });
+        let this = e.mem.alloc(0x18);
+        let shown = e.mem.alloc(8);
+        let second = e.mem.alloc(8);
+        e.mem.set_u32(this + 4, shown);
+        e.mem.set_u32(this + 8, second);
+        e.mem.set_u32(second, 0x5500);
+        e.mem.set_u32(this, 0x77);
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x0083_f1d0, &args![this]).u32(), 0x5500);
+        assert_eq!(e.mem.u32(this), 0, "the current topic is cleared");
+        assert_eq!(calls_to(&e, TOPIC_LIST_CLEAR), vec![vec![shown]]);
+        assert_eq!(calls_to(&e, TOPIC_LIST_DELETE), vec![vec![shown, 1]]);
+        // A single list stays.
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x0083_f1d0, &args![this]).u32(), 0x5500);
+        assert!(calls_to(&e, LIST_REMOVE_HEAD).is_empty());
+    }
+
+    fn report_doubles(e: &mut Engine, report: bool, form: u32) {
+        e.map(SAVE_LOAD_GAME_011DE45C, 4);
+        e.set_global(SAVE_LOAD_GAME_011DE45C, 0x5a5a_0000u32);
+        let flag = e.mem.alloc(4);
+        e.mem.set_u8(flag, u8::from(report));
+        e.register_double(SETTING_VALUE_00408D60, move |_, _| flag.into_ret());
+        e.register_double(SAVING_FORM_004FD3E0, move |_, _| form.into_ret());
+        e.register_double(LOADING_FORM_004FD3C0, move |_, _| form.into_ret());
+        e.register(ERROR_0040FBE0, quiet);
+        e.register(REPORT_005B5E40, quiet);
+        e.register(CAST_SOURCE_004839C0, |_, a| (a[0] + 0x100).into_ret());
+        e.put_vtable(0x033a_0000, &[0; 0x4d]);
+        e.mem.set_u32(0x033a_0000 + 0x130, 0x033a_1130);
+        e.register(0x033a_1130, |_, _| 0x4e4du32.into_ret());
+        e.register(SAVE_VERSION_008DF040, |_, _| 0x0f0eu32.into_ret());
+    }
+
+    /// A form being saved or loaded: id `0x00ab_0001`, flags at `+5`, version byte at `+9`, its
+    /// cast object (`id + 0x100`) with the name slot.
+    fn current_form(e: &mut Engine) -> u32 {
+        let form = e.mem.alloc(0x10);
+        e.mem.set_u32(form, 0x00ab_0001);
+        e.mem.set_u32(form + 5, 0xf1a6_0000);
+        e.mem.set_u8(form + 9, 0x0f);
+        e.map(0x00ab_0101, 4);
+        e.mem.set_u32(0x00ab_0101, 0x033a_0000);
+        form
+    }
+
+    #[test]
+    fn n089_0083f280_sizes_the_topic() {
+        let mut e = Engine::new();
+        let form = current_form(&mut e);
+        report_doubles(&mut e, true, form);
+        e.register(USE_SAVE_GAME_BLOCKS_00862110, |_, _| 1u32.into_ret());
+        e.register(STRING_CHARS_00559450, |_, _| 0x7e47u32.into_ret());
+        e.register(STRLEN_0044A670, |_, _| 5u32.into_ret());
+        let this = e.mem.alloc(0x2c);
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x0083_f280, &args![this]).u16(), 6 + 1 + 5 + 3 + 12);
+        assert_eq!(calls_to(&e, STRLEN_0044A670), vec![vec![0x7e47]]);
+        assert_eq!(
+            calls_to(&e, ERROR_0040FBE0),
+            vec![vec![
+                SAVE_SIZE_FORM_MESSAGE,
+                27,
+                0x00ab_0001,
+                0x4e4d,
+                0xf1a6_0000,
+                0x2d9,
+                SOURCE_FILE_0107DD88
+            ]]
+        );
+        // No blocks, no form: the short report.
+        report_doubles(&mut e, true, 0);
+        e.register(USE_SAVE_GAME_BLOCKS_00862110, |_, _| 0u32.into_ret());
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x0083_f280, &args![this]).u16(), 21);
+        assert_eq!(
+            calls_to(&e, ERROR_0040FBE0),
+            vec![vec![SAVE_SIZE_MESSAGE, 21, 0x2d9, SOURCE_FILE_0107DD88]]
+        );
+        // Not reporting.
+        report_doubles(&mut e, false, 0);
+        e.call_log = Some(vec![]);
+        e.call(0x0083_f280, &args![this]);
+        assert!(calls_to(&e, ERROR_0040FBE0).is_empty());
+    }
+
+    #[test]
+    fn n089_0083f3e0_saves_the_topic_the_old_way() {
+        let mut e = Engine::new();
+        report_doubles(&mut e, true, 0);
+        e.register(USE_SAVE_GAME_BLOCKS_00862110, |_, _| 1u32.into_ret());
+        // The position advances by each write's size; the block size place is a real word.
+        let position = e.mem.alloc(0x20);
+        e.mem.set_u32(position, position + 8);
+        e.register_double(SAVE_POSITION_00825C00, move |e, _| {
+            e.mem.u32(position).into_ret()
+        });
+        e.register_double(SAVE_WRITE_008579B0, move |e, a| {
+            let now = e.mem.u32(position);
+            e.mem.set_u32(position, now + a[2]);
+            Ret::default()
+        });
+        e.register_double(SAVE_NUMERIC_ID_00857A10, move |e, a| {
+            let now = e.mem.u32(position);
+            e.mem.set_u32(position, now + a[2]);
+            Ret::default()
+        });
+        e.register(STRING_CHARS_00559450, |_, _| 0x7e47u32.into_ret());
+        e.register(STRLEN_0044A670, |_, _| 0x102u32.into_ret());
+        e.register(FORM_SAVE_ID_0084E3A0, |_, a| (a[0] + 1).into_ret());
+        let this = e.mem.alloc(0x2c);
+        e.mem.set_u32(this + 0x28, 0x2800);
+        e.call_log = Some(vec![]);
+        e.call(0x0083_f3e0, &args![this]);
+        let writes = calls_to(&e, SAVE_WRITE_008579B0);
+        assert_eq!(
+            writes.iter().map(|w| w[2]).collect::<Vec<_>>(),
+            vec![4, 2, 1, 2, 1, 1, 1],
+            "tag, size, length (0x102 as a byte: 2), text, three bytes"
+        );
+        assert_eq!(writes[3][1], 0x7e47);
+        assert_eq!(writes[4][1], this + 8);
+        assert_eq!(calls_to(&e, FORM_SAVE_ID_0084E3A0), vec![vec![0x2800]]);
+        // The block's size (from after the tag) goes into its place.
+        let place = position + 8 + 4;
+        assert_eq!(e.mem.u16(place), 2 + 1 + 2 + 3 + 12);
+        assert_eq!(
+            calls_to(&e, ERROR_0040FBE0),
+            vec![vec![SAVE_MESSAGE, 24, 0x2ff, SOURCE_FILE_0107DD88]]
+        );
+        assert!(calls_to(&e, REPORT_005B5E40).is_empty());
+    }
+
+    #[test]
+    fn n089_0083f680_loads_the_topic_the_old_way() {
+        let mut e = Engine::new();
+        let form = current_form(&mut e);
+        report_doubles(&mut e, false, form);
+        e.map(SECURITY_COOKIE_011C16BC, 4);
+        e.register(USE_SAVE_GAME_BLOCKS_00862110, |_, _| 1u32.into_ret());
+        e.register(SECURITY_CHECK_COOKIE, quiet);
+        e.register(MEMSET_00403D30, quiet);
+        e.register(STRING_SET_004037F0, quiet);
+        e.register(DYNAMIC_CAST, |_, a| (a[0] + a[3]).into_ret());
+        // Reads: a wrong tag, the size 9, the length 2 and its text, three bytes, three ids.
+        let stream = e.mem.alloc(0x40);
+        for (k, word) in [0x1234u32, 9, 2, 0x6968, 1, 2, 3, 0x11, 0x22, 0x33]
+            .iter()
+            .enumerate()
+        {
+            e.mem.set_u32(stream + 4 + 4 * k as u32, *word);
+        }
+        let reader = move |e: &mut Engine, a: &[u32]| {
+            let cursor = e.mem.u32(stream);
+            let word = e.mem.u32(stream + 4 + cursor * 4);
+            e.mem.set_u32(stream, cursor + 1);
+            match a[2] {
+                1 => e.mem.set_u8(a[1], word as u8),
+                2 => e.mem.set_u16(a[1], word as u16),
+                _ => e.mem.set_u32(a[1], word),
+            }
+            Ret::default()
+        };
+        e.register_double(LOAD_READ_008579E0, reader);
+        e.register_double(LOAD_NUMERIC_ID_00857AA0, reader);
+        // The position: the block starts at 100 and ends at 112 (3 past the size).
+        let position = e.mem.alloc(4);
+        e.mem.set_u32(position, 100);
+        e.register_double(SAVE_POSITION_00825C00, move |e, _| {
+            let now = e.mem.u32(position);
+            e.mem.set_u32(position, 112);
+            now.into_ret()
+        });
+        let this = e.mem.alloc(0x2c);
+        e.call_log = Some(vec![]);
+        e.call(0x0083_f680, &args![this, 0u32]);
+        let reports = calls_to(&e, REPORT_005B5E40);
+        assert_eq!(reports.len(), 2);
+        assert_eq!(
+            reports[0],
+            vec![
+                HEADER_FORM_MESSAGE,
+                SOURCE_FILE_0107DD88,
+                0x305,
+                0x00ab_0001,
+                0x4e4d,
+                0x0f,
+                0xf1a6_0000
+            ]
+        );
+        assert_eq!(
+            reports[1],
+            vec![
+                OVERRUN_FORM_MESSAGE,
+                3,
+                SOURCE_FILE_0107DD88,
+                0x329,
+                0x00ab_0001,
+                0x4e4d,
+                0x0f,
+                0xf1a6_0000
+            ]
+        );
+        let text = calls_to(&e, STRING_SET_004037F0);
+        assert_eq!(text.len(), 1);
+        assert_eq!(e.mem.cstr(text[0][1]), b"hi".to_vec());
+        assert_eq!(e.mem.u8(this + 8), 1);
+        assert_eq!(e.mem.u8(this + 0x25), 3);
+        assert_eq!(e.mem.u32(this + 0x14), 0x111 + QUEST_TYPE_01186500);
+        assert_eq!(e.mem.u32(this + 0x28), 0x122 + TOPIC_TYPE_01184720);
+        assert_eq!(e.mem.u32(this + 0x18), 0x133 + INFO_TYPE_01184738);
+        assert_eq!(calls_to(&e, SECURITY_CHECK_COOKIE).len(), 1);
+        // No form, the right tag, an underrun (the block ends 2 bytes short).
+        report_doubles(&mut e, false, 0);
+        e.mem.set_u32(stream, 0);
+        e.mem.set_u32(stream + 4, BLOCK_TAG);
+        e.mem.set_u32(stream + 8, 14);
+        e.mem.set_u32(position, 100);
+        e.call_log = Some(vec![]);
+        e.call(0x0083_f680, &args![this, 0u32]);
+        assert_eq!(
+            calls_to(&e, REPORT_005B5E40),
+            vec![vec![UNDERRUN_MESSAGE, 2, SOURCE_FILE_0107DD88, 0x329, 0x0e]]
+        );
+    }
+
+    #[test]
+    fn n089_0083fb10_saves_the_topic() {
+        let mut e = Engine::new();
+        for address in [
+            SAVE_STRING_00865E70,
+            SAVE_DATA_00865E50,
+            SAVE_FORM_ID_00865DF0,
+        ] {
+            e.register(address, quiet);
+        }
+        e.register(STRING_CHARS_00559450, |_, _| 0x7e47u32.into_ret());
+        let this = e.mem.alloc(0x2c);
+        for (offset, form) in [(0x14u32, 0x14u32), (0x18, 0x18), (0x1c, 0x1c), (0x28, 0x28)] {
+            e.mem.set_u32(this + offset, form);
+        }
+        e.call_log = Some(vec![]);
+        e.call(0x0083_fb10, &args![this, 0xb0ffu32]);
+        assert_eq!(
+            calls_to(&e, SAVE_STRING_00865E70),
+            vec![vec![0xb0ff, 0x7e47, 0]]
+        );
+        assert_eq!(
+            calls_to(&e, SAVE_DATA_00865E50)
+                .iter()
+                .map(|c| c[1] - this)
+                .collect::<Vec<_>>(),
+            vec![8, 0x24, 0x25, 9, 0xa]
+        );
+        assert_eq!(
+            calls_to(&e, SAVE_FORM_ID_00865DF0),
+            vec![
+                vec![0xb0ff, 0x14, 0],
+                vec![0xb0ff, 0x28, 0],
+                vec![0xb0ff, 0x1c, 0],
+                vec![0xb0ff, 0x18, 0]
+            ]
+        );
+    }
+
+    #[test]
+    fn n089_0083fbe0_loads_the_topic() {
+        let mut e = Engine::new();
+        e.map(SECURITY_COOKIE_011C16BC, 4);
+        for address in [
+            LOAD_STRING_008649A0,
+            STRING_SET_00438390,
+            LOAD_DATA_00864980,
+            SECURITY_CHECK_COOKIE,
+        ] {
+            e.register(address, quiet);
+        }
+        e.register(LOAD_FORM_ID_008648A0, |_, _| 0x900u32.into_ret());
+        e.register(CAST_SOURCE_004839C0, |_, a| (a[0] + 0x10).into_ret());
+        e.register(DYNAMIC_CAST, |_, a| (a[0] + a[3]).into_ret());
+        let this = e.mem.alloc(0x2c);
+        e.call_log = Some(vec![]);
+        e.call(0x0083_fbe0, &args![this, 0xb0ffu32]);
+        let text = calls_to(&e, LOAD_STRING_008649A0)[0][1];
+        assert_eq!(calls_to(&e, STRING_SET_00438390), vec![vec![this, text]]);
+        assert_eq!(
+            calls_to(&e, LOAD_DATA_00864980)
+                .iter()
+                .map(|c| (c[1] - this, c[2]))
+                .collect::<Vec<_>>(),
+            vec![(8, 1), (0x24, 1), (0x25, 1), (9, 1), (0xa, 1)]
+        );
+        assert_eq!(e.mem.u32(this + 0x14), 0x910 + QUEST_TYPE_01186500);
+        assert_eq!(e.mem.u32(this + 0x28), 0x910 + TOPIC_TYPE_01184720);
+        assert_eq!(e.mem.u32(this + 0x1c), 0x910 + TOPIC_TYPE_01184720);
+        assert_eq!(e.mem.u32(this + 0x18), 0x910 + INFO_TYPE_01184738);
+        assert_eq!(calls_to(&e, SECURITY_CHECK_COOKIE).len(), 1);
     }
 }

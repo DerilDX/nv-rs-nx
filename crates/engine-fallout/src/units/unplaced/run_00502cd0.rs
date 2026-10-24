@@ -300,9 +300,19 @@ pub fn fn_00502cd0(e: &mut Engine, this: Ptr, file: Ptr) -> bool {
     true
 }
 
+// Translated from 00503240 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`ECX`, plain `RET`; called by `00502cd0`, two `Save`s and two
+/// `Load`s): reverses the byte order of the words at +8 and +0x10 (`00401080`, each with
+/// the byte 0 the body zeroes).
+pub fn fn_00503240(e: &mut Engine, this: Ptr) {
+    e.call(SWAP_4_BYTES, &args![this.addr() + 8, 0u32]);
+    e.call(SWAP_4_BYTES, &args![this.addr() + 0x10, 0u32]);
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x0050_3240, fn_00503240(Ptr)),
         entry!(0x00503210, fn_00503210(Ptr)),
         entry!(0x00502cd0, fn_00502cd0(Ptr, Ptr) -> bool),
     ]
@@ -630,5 +640,26 @@ mod tests {
         e.call(0x0050_3210, &[0x4000]);
         let log = e.call_log.take().unwrap();
         assert_eq!(log[1..], [(SWAP_4_BYTES, vec![0x4000, 0])]);
+    }
+}
+
+#[cfg(test)]
+mod n075_tests {
+    use super::*;
+
+    #[test]
+    fn fn_00503240_swaps_the_words_at_8_and_0x10() {
+        let mut e = Engine::new();
+        e.register(SWAP_4_BYTES, |_, _| Ret::default());
+        e.call_log = Some(vec![]);
+        e.call(0x0050_3240, &args![0x1000u32]);
+        let log = e.call_log.take().unwrap();
+        assert_eq!(
+            log[1..],
+            [
+                (SWAP_4_BYTES, vec![0x1008, 0]),
+                (SWAP_4_BYTES, vec![0x1010, 0])
+            ]
+        );
     }
 }

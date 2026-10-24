@@ -23,9 +23,24 @@ pub fn fn_00b71410(e: &mut Engine, this: Ptr) {
     e.call(BASE_DESTRUCTOR, &args![this]);
 }
 
+/// The `NiRTTI` record at `011fa560` (built at start-up by `00fb9a40` with the name
+/// `BSShaderLightingProperty`, `010a9384`).
+const LIGHTING_PROPERTY_RTTI: u32 = 0x011f_a560;
+
+// Translated from 00b71440 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map: slot +8 of the virtual table `010ae7b0` (the table
+/// `fn_00b71410` stores), no words: answers the address of the `NiRTTI` record at
+/// `011fa560` (the one named `BSShaderLightingProperty`).
+pub fn fn_00b71440(_e: &mut Engine) -> u32 {
+    LIGHTING_PROPERTY_RTTI
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
-    vec![entry!(0x00b7_1410, fn_00b71410(Ptr))]
+    vec![
+        entry!(0x00b7_1410, fn_00b71410(Ptr)),
+        entry!(0x00b7_1440, fn_00b71440() -> u32),
+    ]
 }
 
 #[cfg(test)]
@@ -51,5 +66,11 @@ mod tests {
                 (BASE_DESTRUCTOR, vec![this]),
             ]
         );
+    }
+
+    #[test]
+    fn answers_the_lighting_property_rtti() {
+        let mut e = Engine::new();
+        assert_eq!(e.call(0x00b7_1440, &[]).u32(), 0x011f_a560);
     }
 }

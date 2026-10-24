@@ -120,9 +120,125 @@ pub fn zero_overhead_heap_scalar_deleting_destructor(
     this
 }
 
+/// Writes one zero word through `stream`'s virtual slot +8 (`(buffer, 4)`) for a non-null
+/// stream, answering what it answers; 0 for a null stream (`00aa7700`, `00aa7740`).
+fn write_zero_word(e: &mut Engine, stream: u32) -> u32 {
+    if stream == 0 {
+        return 0;
+    }
+    e.with_stack(4, |e, word| {
+        e.mem.set_u32(word.addr(), 0);
+        e.vcall(stream, 8, &args![word, 4u32]).u32()
+    })
+}
+
+// Translated from 00aa7630 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ZeroOverheadHeap::GetHeapStats` (Xbox PDB; `thiscall`, two words, `RET 8`, the second
+/// not read): with a non-null `stats`, fills its fourteen words: the name (the heap's own
+/// virtual slot +4), `iSize` twice, `pCurrentFree - pHeap`, `iAllocations`, 0, 0,
+/// `pCurrentFree - pHeap` again, 0, 0, 0x40, 0, `iAllocations * 4` and 0.
+pub fn zero_overhead_heap_get_heap_stats(
+    e: &mut Engine,
+    this: Ptr<ZeroOverheadHeap>,
+    stats: u32,
+    _unused_2: u32,
+) {
+    if stats == 0 {
+        return;
+    }
+    let name = e.vcall(this.addr(), 4, &args![]).u32();
+    e.mem.set_u32(stats, name);
+    let size = e.get(this, ZeroOverheadHeap::iSize);
+    e.mem.set_u32(stats + 4, size);
+    let size = e.get(this, ZeroOverheadHeap::iSize);
+    e.mem.set_u32(stats + 8, size);
+    let used = e
+        .get(this, ZeroOverheadHeap::pCurrentFree)
+        .wrapping_sub(e.get(this, ZeroOverheadHeap::pHeap));
+    e.mem.set_u32(stats + 0xc, used);
+    let allocations = e.get(this, ZeroOverheadHeap::iAllocations);
+    e.mem.set_u32(stats + 0x10, allocations);
+    e.mem.set_u32(stats + 0x14, 0);
+    e.mem.set_u32(stats + 0x18, 0);
+    let used = e
+        .get(this, ZeroOverheadHeap::pCurrentFree)
+        .wrapping_sub(e.get(this, ZeroOverheadHeap::pHeap));
+    e.mem.set_u32(stats + 0x1c, used);
+    e.mem.set_u32(stats + 0x20, 0);
+    e.mem.set_u32(stats + 0x24, 0);
+    e.mem.set_u32(stats + 0x28, 0x40);
+    e.mem.set_u32(stats + 0x2c, 0);
+    let allocations = e.get(this, ZeroOverheadHeap::iAllocations);
+    e.mem.set_u32(stats + 0x30, allocations << 2);
+    e.mem.set_u32(stats + 0x34, 0);
+}
+
+// Translated from 00aa7700 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map: slot +0x1c of the `ZeroOverheadHeap` vtable (`OutputBucketInfo`
+/// in the Xbox PDB's `IMemoryHeap` order) (`thiscall`, one word: a stream): 0 for a null
+/// stream, else one zero word written through the stream's slot +8, answering what that
+/// answers.
+pub fn fn_00aa7700(e: &mut Engine, _this: Ptr<ZeroOverheadHeap>, stream: u32) -> u32 {
+    write_zero_word(e, stream)
+}
+
+// Translated from 00aa7740 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map: slot +0x20 of the `ZeroOverheadHeap` vtable (`OutputBlockInfo`
+/// in the Xbox PDB's order) (`thiscall`, two words, the second not read): as `00aa7700`.
+pub fn fn_00aa7740(
+    e: &mut Engine,
+    _this: Ptr<ZeroOverheadHeap>,
+    stream: u32,
+    _unused_2: u32,
+) -> u32 {
+    write_zero_word(e, stream)
+}
+
+// Translated from 00aa7780 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ZeroOverheadHeap::Size` (Xbox PDB; `thiscall`, two words, the second not read): the
+/// block's size header, the word before it.
+pub fn zero_overhead_heap_size(
+    e: &mut Engine,
+    _this: Ptr<ZeroOverheadHeap>,
+    block: u32,
+    _unused_2: u32,
+) -> u32 {
+    e.mem.u32(block.wrapping_sub(4))
+}
+
+// Translated from 00aa77b0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ZeroOverheadHeap::TotalSize` (Xbox PDB; `thiscall`, one word): the heap's own slot +0x24
+/// (`Size`) with the block and 0, plus 4 (the header).
+pub fn zero_overhead_heap_total_size(
+    e: &mut Engine,
+    this: Ptr<ZeroOverheadHeap>,
+    block: u32,
+) -> u32 {
+    e.vcall(this.addr(), 0x24, &args![block, 0u32])
+        .u32()
+        .wrapping_add(4)
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(
+            0x00aa_7630,
+            zero_overhead_heap_get_heap_stats(Ptr<ZeroOverheadHeap>, u32, u32)
+        ),
+        entry!(0x00aa_7700, fn_00aa7700(Ptr<ZeroOverheadHeap>, u32) -> u32),
+        entry!(
+            0x00aa_7740,
+            fn_00aa7740(Ptr<ZeroOverheadHeap>, u32, u32) -> u32
+        ),
+        entry!(
+            0x00aa_7780,
+            zero_overhead_heap_size(Ptr<ZeroOverheadHeap>, u32, u32) -> u32
+        ),
+        entry!(
+            0x00aa_77b0,
+            zero_overhead_heap_total_size(Ptr<ZeroOverheadHeap>, u32) -> u32
+        ),
         entry!(
             0x00aa74c0,
             zero_overhead_heap_destruct(Ptr<ZeroOverheadHeap>)
@@ -264,5 +380,86 @@ mod tests {
                 usize::from(frees)
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod n082_tests {
+    use super::*;
+
+    /// A heap object whose vtable at 0x7000 has slot `i` at `0x8000 + 4 * i`.
+    fn heap(e: &mut Engine) -> Ptr<ZeroOverheadHeap> {
+        let slots: Vec<u32> = (0..0x10).map(|i| 0x8000 + 4 * i).collect();
+        e.put_vtable(0x7000, &slots);
+        let heap = e.new_object::<ZeroOverheadHeap>();
+        e.mem.set_u32(heap.addr(), 0x7000);
+        heap
+    }
+
+    #[test]
+    fn get_heap_stats_fills_the_record() {
+        let mut e = Engine::new();
+        let this = heap(&mut e);
+        e.register(0x8004, |_, _| 0x1234u32.into_ret());
+        e.set(this, ZeroOverheadHeap::iSize, 0x1000);
+        e.set(this, ZeroOverheadHeap::pHeap, 0x5000);
+        e.set(this, ZeroOverheadHeap::pCurrentFree, 0x5300);
+        e.set(this, ZeroOverheadHeap::iAllocations, 6);
+        let stats = e.mem.alloc(0x38);
+        for i in 0..14 {
+            e.mem.set_u32(stats + 4 * i, 0xdead_beef);
+        }
+        e.call(0x00aa_7630, &args![this, stats, 0u32]);
+        let words: Vec<u32> = (0..14).map(|i| e.mem.u32(stats + 4 * i)).collect();
+        assert_eq!(
+            words,
+            vec![0x1234, 0x1000, 0x1000, 0x300, 6, 0, 0, 0x300, 0, 0, 0x40, 0, 24, 0]
+        );
+        // A null record: nothing is called.
+        e.call_log = Some(vec![]);
+        e.call(0x00aa_7630, &args![this, 0u32, 0u32]);
+        assert_eq!(e.call_log.as_ref().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn outputs_write_one_zero_word_to_a_stream() {
+        let mut e = Engine::new();
+        let this = heap(&mut e);
+        e.register(0x8008, |e, a| {
+            assert_eq!(e.mem.u32(a[1]), 0);
+            (a[2] + 0x10).into_ret()
+        });
+        let stream = e.mem.alloc(4);
+        e.mem.set_u32(stream, 0x7000);
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x00aa_7700, &args![this, stream]).u32(), 0x14);
+        assert_eq!(e.call(0x00aa_7740, &args![this, stream, 9u32]).u32(), 0x14);
+        assert_eq!(e.call(0x00aa_7700, &args![this, 0u32]).u32(), 0);
+        assert_eq!(e.call(0x00aa_7740, &args![this, 0u32, 9u32]).u32(), 0);
+        let writes = e
+            .call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|c| c.0 == 0x8008)
+            .count();
+        assert_eq!(writes, 2);
+    }
+
+    #[test]
+    fn size_and_total_size_read_the_header() {
+        let mut e = Engine::new();
+        let this = heap(&mut e);
+        e.register(0x8024, |_, a| {
+            assert_eq!(a[2], 0);
+            (a[1] & 0xff).into_ret()
+        });
+        let block = e.mem.alloc(8) + 4;
+        e.mem.set_u32(block - 4, 0x30);
+        assert_eq!(e.call(0x00aa_7780, &args![this, block, 7u32]).u32(), 0x30);
+        assert_eq!(
+            e.call(0x00aa_77b0, &args![this, block]).u32(),
+            (block & 0xff) + 4
+        );
     }
 }

@@ -129,9 +129,39 @@ pub fn fn_00401250(e: &mut Engine, this: Ptr) -> bool {
     word_eight_has(e, this, 0x200)
 }
 
+// Translated from 00401130 (decompiled, FalloutNV.exe 1.4.0.525)
+/// A form vtable slot shared by about a hundred form classes (slot +0x30 of
+/// `BGSDehydrationStage`'s vtable `0101144c`, and the same slot of the others;
+/// unnamed in the engine map; `ECX` and one stack word, `RET 4`): hands its
+/// argument to the object's own vtable slot +0x20 and returns. The Xbox PDB's
+/// `TESForm` puts `LoadEdit` at +0x30 and `Load` at +0x20; that the PC
+/// layout matches is not confirmed here.
+pub fn fn_00401130(e: &mut Engine, this: Ptr, argument: u32) {
+    e.vcall(this.addr(), 0x20, &args![argument]);
+}
+
+// Translated from 00401270 (decompiled, FalloutNV.exe 1.4.0.525)
+/// A form vtable slot shared by about ninety form classes (slot +0x124 of
+/// `BGSDehydrationStage`'s vtable `0101144c`; unnamed in the engine map):
+/// takes `ECX` and five stack words (`RET 0x14`), reads none of them and
+/// answers false (`XOR AL,AL`).
+pub fn fn_00401270(
+    _e: &mut Engine,
+    _this: Ptr,
+    _unused_1: u32,
+    _unused_2: u32,
+    _unused_3: u32,
+    _unused_4: u32,
+    _unused_5: u32,
+) -> bool {
+    false
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x0040_1130, fn_00401130(Ptr, u32)),
+        entry!(0x0040_1270, fn_00401270(Ptr, u32, u32, u32, u32, u32) -> bool),
         entry!(0x0040_1150, fn_00401150(Ptr) -> u8),
         entry!(0x00401050, fn_00401050(u32, u32, i32, u32)),
         entry!(0x00401080, fn_00401080(Ptr, u32)),
@@ -301,5 +331,42 @@ mod flag_word_tests {
             e.mem.set_u32(form + 4, 0);
             e.mem.set_u32(form + 0xc, 0);
         }
+    }
+}
+
+#[cfg(test)]
+mod n075_tests {
+    use super::*;
+
+    #[test]
+    fn fn_00401130_forwards_its_word_to_slot_0x20() {
+        let mut e = Engine::new();
+        e.register(0x0060_0020, |_, a| {
+            assert_eq!(a.len(), 2);
+            Ret::default()
+        });
+        e.put_vtable(
+            0x0070_0000,
+            &[0; 8]
+                .iter()
+                .copied()
+                .chain([0x0060_0020])
+                .collect::<Vec<_>>(),
+        );
+        let object = e.mem.alloc(8);
+        e.mem.set_u32(object, 0x0070_0000);
+        e.call_log = Some(vec![]);
+        e.call(0x0040_1130, &args![object, 0x55u32]);
+        let log = e.call_log.take().unwrap();
+        let slot: Vec<_> = log.iter().filter(|(a, _)| *a == 0x0060_0020).collect();
+        assert_eq!(slot.len(), 1);
+        assert_eq!(slot[0].1, vec![object, 0x55]);
+    }
+
+    #[test]
+    fn fn_00401270_answers_false() {
+        let mut e = Engine::new();
+        let r = e.call(0x0040_1270, &args![0x1000u32, 1u32, 2u32, 3u32, 4u32, 5u32]);
+        assert!(!r.bool());
     }
 }

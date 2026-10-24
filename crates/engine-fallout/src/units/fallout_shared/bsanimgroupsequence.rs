@@ -316,13 +316,14 @@ pub fn bs_anim_group_sequence_save_game(e: &mut Engine, this: Ptr, buffer: Ptr, 
 /// non-zero, leads to the controller of RTTI `011f36bc` of `009611e0(root)`; when that exists,
 /// `004f0380(controller, m_fLastTime, 1)` runs (`+0x34`, copied as a `float`). Then
 /// `NiControllerSequence::Deactivate(this, ease_out, transition)` (`00a35030`, the low byte of
-/// `transition` zero-extended).
+/// `transition` zero-extended), whose answer is this one's: the exe ends on that call and keeps
+/// its `AL` (the PDB's `bool`).
 pub fn bs_anim_group_sequence_deactivate(
     e: &mut Engine,
     this: Ptr,
     ease_out: f32,
     transition: u32,
-) {
+) -> bool {
     let base = this.addr();
     if e.mem.u32(base + SEQUENCE_ACCUM_ROOT) != 0 {
         let group = e
@@ -347,7 +348,8 @@ pub fn bs_anim_group_sequence_deactivate(
     e.call(
         0x00a3_5030,
         &args![this, ease_out, u32::from(transition as u8)],
-    );
+    )
+    .bool()
 }
 /// The x87 condition bits `FCOM`/`FUCOM` leave in `AH` after `FNSTSW AX` for `st0` compared
 /// with `st1`: C0 (0x01) for less, C3 (0x40) for equal, C3|C2|C0 (0x45) for unordered, none for
@@ -892,7 +894,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x004e_fc90, bs_anim_group_sequence_save_game(Ptr, Ptr, f32)),
         entry!(
             0x004e_fdc0,
-            bs_anim_group_sequence_deactivate(Ptr, f32, u32)
+            bs_anim_group_sequence_deactivate(Ptr, f32, u32) -> bool
         ),
         entry!(0x004e_fa50, fn_004efa50(Ptr)),
         entry!(0x004e_faa0, fn_004efaa0() -> u16),
@@ -1277,6 +1279,17 @@ mod b035_tests {
         let log = e.call_log.take().unwrap();
         assert_eq!(calls(&log, 0x00a5_c570), vec![vec![0x200, 0x0120_31b8]]);
         assert!(calls(&log, 0x0096_11e0).is_empty());
+    }
+
+    #[test]
+    fn deactivate_answers_the_sequence_deactivate() {
+        let mut e = Engine::new();
+        let this = sequence(&mut e, 0);
+        e.mem.set_u32(this + SEQUENCE_ACCUM_ROOT, 0);
+        e.register(0x00a3_5030, |_, _| 1u32.into_ret());
+        assert!(e.call(0x004e_fdc0, &args![this, 0u32, 0u32]).bool());
+        e.register(0x00a3_5030, |_, _| 0u32.into_ret());
+        assert!(!e.call(0x004e_fdc0, &args![this, 0u32, 0u32]).bool());
     }
 
     struct Keys {

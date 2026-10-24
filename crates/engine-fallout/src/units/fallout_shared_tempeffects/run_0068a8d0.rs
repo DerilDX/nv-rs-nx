@@ -82,9 +82,23 @@ pub fn fn_0068a8f0(e: &mut Engine, this: Ptr, node: u32, list: u32, count: Ptr) 
     }
 }
 
+/// `0068a600` (unit `bstempeffectparticle.cpp`): restarts the particle's impact sounds.
+const RESTART_IMPACT_SOUNDS_0068A600: u32 = 0x0068_a600;
+
+// Translated from 0068a8d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed (`thiscall`, `RET 4`): stores the impact data at +0x58 of the
+/// particle effect and restarts its impact sounds (`0068a600`).
+pub fn fn_0068a8d0(e: &mut Engine, this: Ptr, impact_data: u32) {
+    e.mem.set_u32(this.addr() + 0x58, impact_data);
+    e.call(RESTART_IMPACT_SOUNDS_0068A600, &args![this]);
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
-    vec![entry!(0x0068_a8f0, fn_0068a8f0(Ptr, u32, u32, Ptr))]
+    vec![
+        entry!(0x0068_a8f0, fn_0068a8f0(Ptr, u32, u32, Ptr)),
+        entry!(0x0068_a8d0, fn_0068a8d0(Ptr, u32)),
+    ]
 }
 
 #[cfg(test)]
@@ -177,5 +191,22 @@ mod tests {
         e.call_log = Some(vec![]);
         e.call(0x0068_a8f0, &args![0x0e00_0000u32, 0u32, list, count]);
         assert_eq!(e.call_log.take().unwrap().len(), 1);
+    }
+}
+
+#[cfg(test)]
+mod tests_n073 {
+    use super::*;
+
+    #[test]
+    fn fn_0068a8d0_stores_the_impact_data_and_restarts_the_sounds() {
+        let mut e = Engine::new();
+        e.register(RESTART_IMPACT_SOUNDS_0068A600, |_, _| Ret::default());
+        let this = e.mem.alloc(0x74);
+        e.call_log = Some(vec![]);
+        e.call(0x0068_a8d0, &args![this, 0x1d1du32]);
+        let log = e.call_log.take().unwrap();
+        assert_eq!(e.mem.u32(this + 0x58), 0x1d1d);
+        assert_eq!(log[1..], [(RESTART_IMPACT_SOUNDS_0068A600, vec![this])]);
     }
 }

@@ -238,9 +238,104 @@ pub fn load_variable_sized_value_from_buffer(e: &mut Engine, buffer: u32, output
     size + 1
 }
 
+/// The save/load game singleton pointer (`011ddf38`).
+const SAVE_LOAD_GAME: u32 = 0x011d_df38;
+/// `BGSSaveLoadGame::SaveGameWarningFunction` (`0084ab00`, `thiscall`,
+/// `RET 8`: format, argument list).
+const SAVE_GAME_WARNING_FUNCTION: u32 = 0x0084_ab00;
+/// `00401170` (`thiscall`): the form's type.
+const FORM_TYPE: u32 = 0x0040_1170;
+
+// Translated from 00845cc0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `SaveGameWarning` (engine map; cdecl with variable arguments): with a
+/// save/load game (`011ddf38`), hands it `format` and the address of the
+/// argument words after it (`BGSSaveLoadGame::SaveGameWarningFunction`).
+pub fn save_game_warning(e: &mut Engine, format: u32, arguments: &[u32]) {
+    let list = e.mem.alloc(4 * arguments.len().max(1) as u32);
+    for (i, word) in arguments.iter().enumerate() {
+        e.mem.set_u32(list + 4 * i as u32, *word);
+    }
+    let game = e.global::<u32>(SAVE_LOAD_GAME);
+    if game != 0 {
+        e.call(SAVE_GAME_WARNING_FUNCTION, &args![game, format, list]);
+    }
+    e.mem.free(list);
+}
+
+/// The uniform form of `00845cc0`: the format, then any number of argument
+/// words.
+fn save_game_warning_entry(e: &mut Engine, words: &[u32]) -> Ret {
+    assert!(
+        !words.is_empty(),
+        "SaveGameWarning needs the format, got no argument words"
+    );
+    save_game_warning(e, words[0], &words[1..]);
+    Ret::default()
+}
+
+// Translated from 00845e50 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `LoadGameSizeFromFile` (engine map; cdecl): reads a value of size type
+/// 0, 1 or 2 (one, two or four bytes, `BGSSaveLoadFile::Read`) from `file`
+/// into the word at `output` (zero-extended) and answers its byte count; 0
+/// (nothing read) for any other size type.
+pub fn load_game_size_from_file(e: &mut Engine, file: u32, output: Ptr, size_type: u32) -> u32 {
+    match size_type {
+        0 => {
+            let value = e.with_stack(4, |e, local| {
+                e.mem.set_u8(local.addr(), 0);
+                e.call(SAVE_LOAD_FILE_READ, &args![file, local, 1u32]);
+                e.mem.u8(local.addr())
+            });
+            e.mem.set_u32(output.addr(), u32::from(value));
+            1
+        }
+        1 => {
+            let value = e.with_stack(4, |e, local| {
+                e.mem.set_u16(local.addr(), 0);
+                e.call(SAVE_LOAD_FILE_READ, &args![file, local, 2u32]);
+                e.mem.u16(local.addr())
+            });
+            e.mem.set_u32(output.addr(), u32::from(value));
+            2
+        }
+        2 => {
+            e.call(SAVE_LOAD_FILE_READ, &args![file, output, 4u32]);
+            4
+        }
+        _ => 0,
+    }
+}
+
+// Translated from 00846190 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `GetLocationCellOrWorld` (engine map; cdecl): false for a null form; a
+/// form of type 0x41 is stored at `type_41_out`, one of type 0x39 at
+/// `type_39_out` (true); false for any other type.
+pub fn get_location_cell_or_world(
+    e: &mut Engine,
+    form: u32,
+    type_39_out: Ptr,
+    type_41_out: Ptr,
+) -> bool {
+    if form == 0 {
+        return false;
+    }
+    if e.call(FORM_TYPE, &args![form]).u32() == 0x41 {
+        e.mem.set_u32(type_41_out.addr(), form);
+        return true;
+    }
+    if e.call(FORM_TYPE, &args![form]).u32() == 0x39 {
+        e.mem.set_u32(type_39_out.addr(), form);
+        return true;
+    }
+    false
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        (0x0084_5cc0, save_game_warning_entry as AbiFn),
+        entry!(0x0084_5e50, load_game_size_from_file(u32, Ptr, u32) -> u32),
+        entry!(0x0084_6190, get_location_cell_or_world(u32, Ptr, Ptr) -> bool),
         entry!(0x0084_5d00, save_game_data_to_file_function(u32, u32, u32) -> u32),
         entry!(0x0084_5d20, load_game_data_from_file_function(u32, u32, u32) -> u32),
         entry!(0x0084_5d40, get_size_type_for_size(u32) -> u32),
@@ -386,5 +481,83 @@ mod tests {
             calls_to(&e, SAVE_LOAD_ERROR),
             vec![vec![FORMAT_NO_SEPARATOR]]
         );
+    }
+}
+
+#[cfg(test)]
+mod n072_tests {
+    use super::*;
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    #[test]
+    fn save_game_warning_forwards_the_arguments() {
+        let mut e = Engine::new();
+        e.map(0x011d_d000, 0x1000);
+        let seen: Rc<RefCell<Vec<Vec<u32>>>> = Rc::default();
+        let log = seen.clone();
+        e.register_double(SAVE_GAME_WARNING_FUNCTION, move |e, a| {
+            log.borrow_mut()
+                .push(vec![a[0], a[1], e.mem.u32(a[2]), e.mem.u32(a[2] + 4)]);
+            Ret::default()
+        });
+        e.call(0x0084_5cc0, &args![0x0107_0000u32, 7u32, 9u32]);
+        assert!(seen.borrow().is_empty());
+        e.set_global::<u32>(SAVE_LOAD_GAME, 0x5000);
+        e.call(0x0084_5cc0, &args![0x0107_0000u32, 7u32, 9u32]);
+        e.call(0x0084_5cc0, &args![0x0107_0004u32]);
+        let seen = seen.borrow();
+        assert_eq!(seen[0], vec![0x5000, 0x0107_0000, 7, 9]);
+        assert_eq!(seen[1][..2], [0x5000, 0x0107_0004]);
+    }
+
+    fn reads(e: &mut Engine) {
+        e.register(SAVE_LOAD_FILE_READ, |e, a| {
+            for i in 0..a[2] {
+                e.mem.set_u8(a[1] + i, 0xf1 + i as u8);
+            }
+            Ret::default()
+        });
+    }
+
+    #[test]
+    fn load_game_size_from_file_reads_by_size_type() {
+        let mut e = Engine::new();
+        reads(&mut e);
+        let output = e.mem.alloc(4);
+        e.mem.set_u32(output, 0xdead_beef);
+        let read =
+            |e: &mut Engine, kind: u32| e.call(0x0084_5e50, &args![0x700u32, output, kind]).u32();
+        assert_eq!(read(&mut e, 0), 1);
+        assert_eq!(e.mem.u32(output), 0xf1);
+        assert_eq!(read(&mut e, 1), 2);
+        assert_eq!(e.mem.u32(output), 0xf2f1);
+        assert_eq!(read(&mut e, 2), 4);
+        assert_eq!(e.mem.u32(output), 0xf4f3_f2f1);
+        e.mem.set_u32(output, 5);
+        assert_eq!(read(&mut e, 3), 0);
+        assert_eq!(e.mem.u32(output), 5);
+    }
+
+    #[test]
+    fn get_location_cell_or_world_sorts_by_type() {
+        let mut e = Engine::new();
+        e.register(FORM_TYPE, |e, a| e.mem.u32(a[0]).into_ret());
+        let first = e.mem.alloc(4);
+        let second = e.mem.alloc(4);
+        let world = e.mem.alloc(4);
+        e.mem.set_u32(world, 0x41);
+        let cell = e.mem.alloc(4);
+        e.mem.set_u32(cell, 0x39);
+        let other = e.mem.alloc(4);
+        e.mem.set_u32(other, 0x3b);
+        let sort =
+            |e: &mut Engine, form: u32| e.call(0x0084_6190, &args![form, first, second]).bool();
+        assert!(!sort(&mut e, 0));
+        assert!(sort(&mut e, world));
+        assert_eq!((e.mem.u32(first), e.mem.u32(second)), (0, world));
+        assert!(sort(&mut e, cell));
+        assert_eq!((e.mem.u32(first), e.mem.u32(second)), (cell, world));
+        assert!(!sort(&mut e, other));
     }
 }

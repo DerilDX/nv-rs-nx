@@ -151,9 +151,68 @@ pub fn fn_0044d670(e: &mut Engine, count: u32) -> u32 {
     e.call(OPERATOR_NEW, &args![count << 2]).u32()
 }
 
+/// `0044e460` (cdecl; five words pushed, four read).
+const FORWARD_0044E460: u32 = 0x0044_e460;
+/// `std::exception::exception` (`00ec78f1`, `ECX`, one stack word: the address of the
+/// message pointer).
+const EXCEPTION_CONSTRUCTOR: u32 = 0x00ec_78f1;
+/// `std::exception::~exception` (engine map, `00ec79a1`, `ECX`).
+const EXCEPTION_DESTRUCTOR: u32 = 0x00ec_79a1;
+/// The vtable both [`fn_0044d6c0`] and [`fn_0044d6f0`] store (the `bad_alloc` vtable, by
+/// the throw information [`fn_0044d670`] throws it with; not checked further).
+const BAD_ALLOC_VTABLE: u32 = 0x0101_76f8;
+
+// Translated from 0044d580 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`cdecl`, four words, plain `RET`; called by `erase` at
+/// `0044a6fb` and by `007ab0a0`, `007ab250`, ...): forwards its four words to `0044e460`
+/// with a fifth, the tag byte `0065e750` answers. `0065e750` is called with nothing pushed;
+/// it answers the top byte of the `ECX` it pushes, which is the `ECX` this function was
+/// entered with, so that register is this function's first parameter `ecx` (as in
+/// `0065e750`'s translation); the two words above its return address are this frame's
+/// pushed `ECX` and the saved `EBP` (0 here), which it does not read.
+pub fn fn_0044d580(
+    e: &mut Engine,
+    ecx: u32,
+    first: u32,
+    second: u32,
+    third: u32,
+    fourth: u32,
+) -> u32 {
+    let tag = e.call(ITERATOR_CATEGORY, &args![ecx, ecx, 0u32]).u8();
+    e.call(
+        FORWARD_0044E460,
+        &args![first, second, third, fourth, u32::from(tag)],
+    )
+    .u32()
+}
+
+// Translated from 0044d6c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The `bad_alloc` constructor (the engine map's name for `0044d6c0` in this unit's
+/// constants; `ECX` and one stack word, `RET 4`): `std::exception::exception` with the
+/// address of the `message` argument's slot, then the vtable `010176f8`. Answers `this`.
+pub fn fn_0044d6c0(e: &mut Engine, this: Ptr, message: u32) -> Ptr {
+    e.with_stack(4, |e, slot| {
+        e.mem.set_u32(slot.addr(), message);
+        e.call(EXCEPTION_CONSTRUCTOR, &args![this, slot]);
+    });
+    e.mem.set_u32(this.addr(), BAD_ALLOC_VTABLE);
+    this
+}
+
+// Translated from 0044d6f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The destructor body the scalar deleting destructor [`fn_0044d710`] runs (`ECX`, plain
+/// `RET`): the vtable `010176f8`, then `std::exception::~exception`.
+pub fn fn_0044d6f0(e: &mut Engine, this: Ptr) {
+    e.mem.set_u32(this.addr(), BAD_ALLOC_VTABLE);
+    e.call(EXCEPTION_DESTRUCTOR, &args![this]);
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x0044_d580, fn_0044d580(u32, u32, u32, u32, u32) -> u32),
+        entry!(0x0044_d6c0, fn_0044d6c0(Ptr, u32) -> Ptr),
+        entry!(0x0044_d6f0, fn_0044d6f0(Ptr)),
         entry!(0x0044_d710, fn_0044d710(Ptr, u32) -> Ptr),
         entry!(0x0044_d510, fn_0044d510(Ptr, u32, u32, u32) -> bool),
         entry!(0x0044_d5b0, fn_0044d5b0(u32) -> u32),
@@ -322,5 +381,55 @@ mod b004_tests {
         e.call(0x0044_d670, &args![0x3fff_ffffu32]);
         let log = log_without(&mut e, 0x0044_d670);
         assert_eq!(log, vec![(OPERATOR_NEW, vec![0xffff_fffc])]);
+    }
+}
+
+#[cfg(test)]
+mod n075_tests {
+    use super::*;
+
+    #[test]
+    fn fn_0044d580_adds_the_tag_byte_of_ecx() {
+        let mut e = Engine::new();
+        e.register(ITERATOR_CATEGORY, |_, a| (a[0] >> 24).into_ret());
+        e.register(FORWARD_0044E460, |_, _| 0x7777u32.into_ret());
+        e.call_log = Some(vec![]);
+        let r = e.call(0x0044_d580, &args![0xab00_0000u32, 1u32, 2u32, 3u32, 4u32]);
+        assert_eq!(r.u32(), 0x7777);
+        let log = e.call_log.take().unwrap();
+        assert_eq!(
+            log[1],
+            (ITERATOR_CATEGORY, vec![0xab00_0000, 0xab00_0000, 0])
+        );
+        assert_eq!(log[2], (FORWARD_0044E460, vec![1, 2, 3, 4, 0xab]));
+    }
+
+    #[test]
+    fn fn_0044d6c0_builds_the_exception_and_stores_the_vtable() {
+        let mut e = Engine::new();
+        e.register(EXCEPTION_CONSTRUCTOR, |e, a| {
+            // The message pointer is read through the slot's address.
+            assert_eq!(e.mem.u32(a[1]), 0x0123_4567);
+            e.mem.set_u32(a[0], 0x0010_f1fa);
+            a[0].into_ret()
+        });
+        let object = e.mem.alloc(0xc);
+        let r = e.call(0x0044_d6c0, &args![object, 0x0123_4567u32]).u32();
+        assert_eq!(r, object);
+        assert_eq!(e.mem.u32(object), BAD_ALLOC_VTABLE);
+    }
+
+    #[test]
+    fn fn_0044d6f0_restores_the_vtable_then_destroys_the_exception() {
+        let mut e = Engine::new();
+        e.register(EXCEPTION_DESTRUCTOR, |e, a| {
+            assert_eq!(e.mem.u32(a[0]), BAD_ALLOC_VTABLE);
+            Ret::default()
+        });
+        let object = e.mem.alloc(0xc);
+        e.call_log = Some(vec![]);
+        e.call(0x0044_d6f0, &args![object]);
+        let log = e.call_log.take().unwrap();
+        assert_eq!(log[1], (EXCEPTION_DESTRUCTOR, vec![object]));
     }
 }

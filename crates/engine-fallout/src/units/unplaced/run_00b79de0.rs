@@ -561,6 +561,17 @@ pub fn fn_00b7a870(e: &mut Engine, pass: u32) {
     }
 }
 
+// Translated from 00b79db0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No function in the engine map (Ghidra made none; disassembled from its bytes): slot
+/// +0x138 of the shader virtual table `010af2f8` (the table `00b79b00` stores) and of many
+/// other shader tables (`thiscall`, two words): stores the first word at +0x60 and the low
+/// byte of the second at +0x64 (`BSShader::ePass` and `bFirstPass` in the Xbox PDB, which
+/// puts another method in that slot, so the slot name is unconfirmed).
+pub fn fn_00b79db0(e: &mut Engine, this: Ptr, pass: u32, first_pass: u8) {
+    e.mem.set_u32(this.addr() + 0x60, pass);
+    e.mem.set_u8(this.addr() + 0x64, first_pass);
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -573,6 +584,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00b7_a170, fn_00b7a170() -> bool),
         entry!(0x00b7_9de0, fn_00b79de0(Ptr)),
         entry!(0x00b7_a870, fn_00b7a870(u32)),
+        entry!(0x00b7_9db0, fn_00b79db0(Ptr, u32, u8)),
     ]
 }
 
@@ -938,5 +950,15 @@ mod b008_tests {
         let log = calls(&mut e);
         assert!(log.contains(&(ASSIGN_00C663D0, vec![0x6030, 0x607c])));
         assert!(log.iter().all(|c| c.0 != MODEL_1_PASS_00C02F70));
+    }
+
+    #[test]
+    fn pass_setter_stores_the_pass_and_the_flag_byte() {
+        let mut e = Engine::new();
+        let shader = e.mem.alloc(0x6c);
+        e.mem.set_u32(shader + 0x64, 0xaaaa_aa00);
+        e.call(0x00b7_9db0, &args![shader, 0x1c8u32, 0x1234_5601u32]);
+        assert_eq!(e.mem.u32(shader + 0x60), 0x1c8);
+        assert_eq!(e.mem.u32(shader + 0x64), 0xaaaa_aa01);
     }
 }

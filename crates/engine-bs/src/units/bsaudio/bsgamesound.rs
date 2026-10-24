@@ -517,9 +517,138 @@ pub fn bs_game_sound_set_environment_type(e: &mut Engine, this: Ptr<BSGameSound>
     e.set(this, BSGameSound::iEnvironmentType, kind);
 }
 
+/// `BSGameSound`'s destructor body (`00ae93f0`, `thiscall`, no stack words), the heap the
+/// deleting destructor frees into (`011f6238`) and its free (`00aa4060`, `thiscall`, one
+/// word).
+const BS_GAME_SOUND_DESTRUCTOR: u32 = 0x00ae_93f0;
+const HEAP: u32 = 0x011f_6238;
+const HEAP_FREE: u32 = 0x00aa_4060;
+/// `iPriority` (Xbox PDB, +0x188 of `BSGameSound`; beyond the fields the layout above
+/// declares).
+const PRIORITY: u32 = 0x188;
+/// `iStateFlags` bit 0x20000: the sound is inaudible (`SetInaudible`).
+const STATE_INAUDIBLE: u32 = 0x2_0000;
+
+// Translated from 00ae9960 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSGameSound::Update` (Xbox PDB; `thiscall`, one stack word it does not read). When the
+/// sound has bit 0x2 of `iSoundTypeFlags` (`00ae9cf0`) or both 0x1 and 0x0800_0000
+/// (`00ae9d10`), lacks bit 0x100 there and is audible (`iStateFlags` bit 0x20000 clear), its
+/// virtual slot +4 answers true (`AL`), it has one of 0x10, 0x0400_0000, 0x0200_0000 but not
+/// 0x0200_0000, and `fDistanceToListener` is above `fMaxDist` (x87 `FCOMPP`, false for
+/// NaN): slot +0x38, then slot +0x14 with 1, and it answers. Otherwise, when it is inaudible,
+/// slot +0xc answers false (`AL`) and `fMaxDist` is above `fDistanceToListener`: slot +0x14
+/// with 0, then slot +0x30 with 1. Always answers true.
+pub fn bs_game_sound_update(e: &mut Engine, this: Ptr<BSGameSound>, _unused_1: u32) -> bool {
+    let object = this.addr();
+    let applies = fn_00ae9cf0(e, this) as u8 != 0 || fn_00ae9d10(e, this);
+    if applies
+        && e.get(this, BSGameSound::iSoundTypeFlags) & 0x100 == 0
+        && e.get(this, BSGameSound::iStateFlags) & STATE_INAUDIBLE == 0
+        && e.vcall(object, 0x4, &args![]).bool()
+    {
+        let kind = e.get(this, BSGameSound::iSoundTypeFlags);
+        let streamed = kind & 0x10 != 0 || kind & 0x0400_0000 != 0 || kind & 0x0200_0000 != 0;
+        if streamed && e.get(this, BSGameSound::iSoundTypeFlags) & 0x0200_0000 == 0 {
+            let distance = f32::from_bits(e.get(this, BSGameSound::fDistanceToListener));
+            let maximum = f32::from_bits(e.get(this, BSGameSound::fMaxDist));
+            if distance > maximum {
+                e.vcall(object, 0x38, &args![]);
+                e.vcall(object, 0x14, &args![1u32]);
+                return true;
+            }
+        }
+    }
+    if e.get(this, BSGameSound::iStateFlags) & STATE_INAUDIBLE != 0
+        && !e.vcall(object, 0xc, &args![]).bool()
+    {
+        let distance = f32::from_bits(e.get(this, BSGameSound::fDistanceToListener));
+        let maximum = f32::from_bits(e.get(this, BSGameSound::fMaxDist));
+        if maximum > distance {
+            e.vcall(object, 0x14, &args![0u32]);
+            e.vcall(object, 0x30, &args![1u32]);
+        }
+    }
+    true
+}
+
+// Translated from 00ae9ec0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSGameSound::_scalar_deleting_destructor_` (Xbox PDB; `thiscall`, one word of flags):
+/// the destructor body `00ae93f0`, then with flag bit 0 the block freed into the heap at
+/// `011f6238` (`00aa4060`). Answers `this`.
+pub fn bs_game_sound_scalar_deleting_destructor(
+    e: &mut Engine,
+    this: Ptr<BSGameSound>,
+    flags: u32,
+) -> Ptr<BSGameSound> {
+    e.call(BS_GAME_SOUND_DESTRUCTOR, &args![this]);
+    if flags & 1 != 0 {
+        e.call(HEAP_FREE, &args![HEAP, this]);
+    }
+    this
+}
+
+// Translated from 00ae9f70 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSGameSound::SetInaudible` (Xbox PDB; `thiscall`, one word, its low byte read): sets bit
+/// 0x20000 of `iStateFlags` for a nonzero `inaudible`, clears it otherwise.
+pub fn bs_game_sound_set_inaudible(e: &mut Engine, this: Ptr<BSGameSound>, inaudible: u8) {
+    let flags = e.get(this, BSGameSound::iStateFlags);
+    let flags = if inaudible != 0 {
+        flags | STATE_INAUDIBLE
+    } else {
+        flags & !STATE_INAUDIBLE
+    };
+    e.set(this, BSGameSound::iStateFlags, flags);
+}
+
+// Translated from 00ae9fd0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSGameSound::PriorityTest` (Xbox PDB; `thiscall`, one word: another sound): 1 when this
+/// sound's `iPriority` (+0x188) is below the other's (unsigned), else 0, in the whole of
+/// `EAX`.
+pub fn bs_game_sound_priority_test(
+    e: &mut Engine,
+    this: Ptr<BSGameSound>,
+    other: Ptr<BSGameSound>,
+) -> u32 {
+    let mine = e.mem.u32(this.addr().wrapping_add(PRIORITY));
+    let theirs = e.mem.u32(other.addr().wrapping_add(PRIORITY));
+    u32::from(mine < theirs)
+}
+
+// Translated from 00aea000 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSGameSound::PriorityTest` (Xbox PDB, the overload taking a priority; `thiscall`, one
+/// word): 1 when `iPriority` (+0x188) is below `priority` (unsigned), else 0, in the whole of
+/// `EAX`.
+pub fn bs_game_sound_priority_test_ov2(
+    e: &mut Engine,
+    this: Ptr<BSGameSound>,
+    priority: u32,
+) -> u32 {
+    u32::from(e.mem.u32(this.addr().wrapping_add(PRIORITY)) < priority)
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(
+            0x00ae_9960,
+            bs_game_sound_update(Ptr<BSGameSound>, u32) -> bool
+        ),
+        entry!(
+            0x00ae_9ec0,
+            bs_game_sound_scalar_deleting_destructor(Ptr<BSGameSound>, u32) -> Ptr<BSGameSound>
+        ),
+        entry!(
+            0x00ae_9f70,
+            bs_game_sound_set_inaudible(Ptr<BSGameSound>, u8)
+        ),
+        entry!(
+            0x00ae_9fd0,
+            bs_game_sound_priority_test(Ptr<BSGameSound>, Ptr<BSGameSound>) -> u32
+        ),
+        entry!(
+            0x00ae_a000,
+            bs_game_sound_priority_test_ov2(Ptr<BSGameSound>, u32) -> u32
+        ),
         entry!(
             0x00ae_9460,
             bs_game_sound_set_filename(Ptr<BSGameSound>, Ptr, u8) -> bool
@@ -890,5 +1019,165 @@ mod tests {
         assert_eq!(e.call(0x00ae_9f50, &args![sound]).f64(), 0.25);
         e.call(0x00ae_9fb0, &args![sound, 3u32]);
         assert_eq!(e.get(sound, BSGameSound::iEnvironmentType), 3);
+    }
+}
+
+#[cfg(test)]
+mod n082_tests {
+    use super::*;
+
+    fn calls_to(e: &Engine, callee: u32) -> Vec<Vec<u32>> {
+        e.call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|(address, _)| *address == callee)
+            .map(|(_, words)| words.clone())
+            .collect()
+    }
+
+    /// A sound whose virtual table at 0x7000 has slot `i` at `0x8000 + 4 * i`; slots +4 and
+    /// +0xc answer `alive` and `paused` (false as 0x100, so only `AL` counts), the others
+    /// nothing.
+    fn sound_engine(alive: bool, paused: bool) -> (Engine, Ptr<BSGameSound>) {
+        let mut e = Engine::new();
+        let slots: Vec<u32> = (0..0x20).map(|i| 0x8000 + 4 * i).collect();
+        e.put_vtable(0x7000, &slots);
+        for slot in [0x14u32, 0x30, 0x38] {
+            e.register(0x8000 + slot, |_, _| Ret::default());
+        }
+        let yes: AbiFn = |_, _| 1u32.into_ret();
+        let no: AbiFn = |_, _| 0x100u32.into_ret();
+        e.register(0x8004, if alive { yes } else { no });
+        e.register(0x800c, if paused { yes } else { no });
+        let sound = e.new_object::<BSGameSound>();
+        e.mem.set_u32(sound.addr(), 0x7000);
+        (e, sound)
+    }
+
+    fn slot_calls(e: &Engine) -> Vec<(u32, Vec<u32>)> {
+        e.call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|(address, _)| (0x8000..0x8080).contains(address))
+            .map(|(address, words)| (address - 0x8000, words[1..].to_vec()))
+            .collect()
+    }
+
+    #[test]
+    fn update_stops_a_streamed_sound_beyond_its_range_and_wakes_an_inaudible_one() {
+        let (mut e, sound) = sound_engine(true, false);
+        e.set(sound, BSGameSound::iSoundTypeFlags, 0x2 | 0x10);
+        e.set(sound, BSGameSound::fDistanceToListener, 2000.0f32.to_bits());
+        e.set(sound, BSGameSound::fMaxDist, 1500.0f32.to_bits());
+        e.call_log = Some(vec![]);
+        assert!(e.call(0x00ae_9960, &args![sound, 0u32]).bool());
+        assert_eq!(
+            slot_calls(&e),
+            vec![(0x4, vec![]), (0x38, vec![]), (0x14, vec![1])]
+        );
+        // Within range (or equal, or NaN): nothing more.
+        for distance in [1500.0f32, 100.0, f32::NAN] {
+            e.set(sound, BSGameSound::fDistanceToListener, distance.to_bits());
+            e.call_log = Some(vec![]);
+            e.call(0x00ae_9960, &args![sound, 0u32]);
+            assert_eq!(slot_calls(&e), vec![(0x4, vec![])]);
+        }
+        // Bit 0x0200_0000 (or no streaming bit) keeps it playing.
+        e.set(sound, BSGameSound::fDistanceToListener, 2000.0f32.to_bits());
+        for kind in [0x2 | 0x0200_0000, 0x2] {
+            e.set(sound, BSGameSound::iSoundTypeFlags, kind);
+            e.call_log = Some(vec![]);
+            e.call(0x00ae_9960, &args![sound, 0u32]);
+            assert_eq!(slot_calls(&e), vec![(0x4, vec![])]);
+        }
+        // 0x1 with 0x0800_0000 qualifies too; 0x100 does not.
+        e.set(
+            sound,
+            BSGameSound::iSoundTypeFlags,
+            0x1 | 0x0800_0000 | 0x0400_0000,
+        );
+        e.call_log = Some(vec![]);
+        e.call(0x00ae_9960, &args![sound, 0u32]);
+        assert_eq!(slot_calls(&e).len(), 3);
+        e.set(sound, BSGameSound::iSoundTypeFlags, 0x2 | 0x10 | 0x100);
+        e.call_log = Some(vec![]);
+        e.call(0x00ae_9960, &args![sound, 0u32]);
+        assert!(slot_calls(&e).is_empty());
+        // Inaudible and back in range: slot +0x14 with 0, slot +0x30 with 1.
+        e.set(sound, BSGameSound::iSoundTypeFlags, 0x2 | 0x10);
+        e.set(sound, BSGameSound::iStateFlags, STATE_INAUDIBLE);
+        e.set(sound, BSGameSound::fDistanceToListener, 100.0f32.to_bits());
+        e.call_log = Some(vec![]);
+        assert!(e.call(0x00ae_9960, &args![sound, 0u32]).bool());
+        assert_eq!(
+            slot_calls(&e),
+            vec![(0xc, vec![]), (0x14, vec![0]), (0x30, vec![1])]
+        );
+        // Still out of range: only the test.
+        e.set(sound, BSGameSound::fDistanceToListener, 1500.0f32.to_bits());
+        e.call_log = Some(vec![]);
+        e.call(0x00ae_9960, &args![sound, 0u32]);
+        assert_eq!(slot_calls(&e), vec![(0xc, vec![])]);
+    }
+
+    #[test]
+    fn update_leaves_a_sound_its_slots_refuse() {
+        // Slot +4 answers false (`AL` 0): no stop.
+        let (mut e, sound) = sound_engine(false, true);
+        e.set(sound, BSGameSound::iSoundTypeFlags, 0x2 | 0x10);
+        e.set(sound, BSGameSound::fDistanceToListener, 2000.0f32.to_bits());
+        e.set(sound, BSGameSound::fMaxDist, 1500.0f32.to_bits());
+        e.call_log = Some(vec![]);
+        assert!(e.call(0x00ae_9960, &args![sound, 0u32]).bool());
+        assert_eq!(slot_calls(&e), vec![(0x4, vec![])]);
+        // Inaudible and slot +0xc answering true: nothing.
+        e.set(sound, BSGameSound::iStateFlags, STATE_INAUDIBLE);
+        e.set(sound, BSGameSound::fDistanceToListener, 100.0f32.to_bits());
+        e.call_log = Some(vec![]);
+        e.call(0x00ae_9960, &args![sound, 0u32]);
+        assert_eq!(slot_calls(&e), vec![(0xc, vec![])]);
+    }
+
+    #[test]
+    fn scalar_deleting_destructor_frees_only_with_flag_bit_0() {
+        let mut e = Engine::new();
+        e.register(BS_GAME_SOUND_DESTRUCTOR, |_, _| Ret::default());
+        e.register(HEAP_FREE, |_, _| Ret::default());
+        let sound = 0x5000u32;
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x00ae_9ec0, &args![sound, 0xfeu32]).u32(), sound);
+        assert!(calls_to(&e, HEAP_FREE).is_empty());
+        assert_eq!(e.call(0x00ae_9ec0, &args![sound, 1u32]).u32(), sound);
+        assert_eq!(calls_to(&e, HEAP_FREE), vec![vec![HEAP, sound]]);
+        assert_eq!(calls_to(&e, BS_GAME_SOUND_DESTRUCTOR), vec![vec![sound]; 2]);
+    }
+
+    #[test]
+    fn set_inaudible_sets_or_clears_bit_0x20000() {
+        let mut e = Engine::new();
+        let sound = e.new_object::<BSGameSound>();
+        e.set(sound, BSGameSound::iStateFlags, 0x101);
+        e.call(0x00ae_9f70, &args![sound, 0x101u32]);
+        assert_eq!(e.get(sound, BSGameSound::iStateFlags), 0x2_0101);
+        // Only the low byte counts.
+        e.call(0x00ae_9f70, &args![sound, 0x100u32]);
+        assert_eq!(e.get(sound, BSGameSound::iStateFlags), 0x101);
+    }
+
+    #[test]
+    fn priority_tests_compare_unsigned() {
+        let mut e = Engine::new();
+        let a = e.new_object::<BSGameSound>();
+        let b = e.new_object::<BSGameSound>();
+        e.mem.set_u32(a.addr() + PRIORITY, 3);
+        e.mem.set_u32(b.addr() + PRIORITY, 0xffff_fff0);
+        assert_eq!(e.call(0x00ae_9fd0, &args![a, b]).u32(), 1);
+        assert_eq!(e.call(0x00ae_9fd0, &args![b, a]).u32(), 0);
+        assert_eq!(e.call(0x00ae_9fd0, &args![a, a]).u32(), 0);
+        assert_eq!(e.call(0x00ae_a000, &args![a, 4u32]).u32(), 1);
+        assert_eq!(e.call(0x00ae_a000, &args![a, 3u32]).u32(), 0);
+        assert_eq!(e.call(0x00ae_a000, &args![b, 2u32]).u32(), 0);
     }
 }

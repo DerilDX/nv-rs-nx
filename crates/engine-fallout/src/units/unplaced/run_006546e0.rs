@@ -1275,6 +1275,123 @@ pub fn fn_00654700(e: &mut Engine, this: Ptr, value: f32) {
     e.call(AFTER_SET_004BC480, &args![this, 1u32]);
 }
 
+/// The pointer object `00656db0` reads (`011f9510`).
+const POINTER_GLOBAL_011F9510: u32 = 0x011f_9510;
+
+// Translated from 00656db0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (no arguments): `00559450` on the global at `011f9510`
+/// (the word it holds).
+pub fn fn_00656db0(e: &mut Engine) -> u32 {
+    e.call(CALLEE_00559450, &args![POINTER_GLOBAL_011F9510])
+        .u32()
+}
+
+/// Callees of [`fn_00656dc0`]: the bound's centre setter (`0098ddd0`; `thiscall`: point
+/// address) and radius setter (`0063f790`; `thiscall`: float), the point default
+/// constructor (`006815c0`), the iterator's point at an index (`00534570`; `thiscall`:
+/// index, out point), its advance (`00657be0`), point addition and subtraction
+/// (`00439e90` / `00439ef0`; `thiscall`: out point, other point; answer the out point),
+/// scalar times point (`004a3760`; cdecl: out point, float, point), `NiPoint3::Dot`
+/// (`004b6190`, engine map; `thiscall`: other point; ST0) and the square root
+/// (`004579e0`; cdecl float; ST0).
+const BOUND_SET_CENTER: u32 = 0x0098_ddd0;
+const BOUND_SET_RADIUS: u32 = 0x0063_f790;
+const POINT_DEFAULT: u32 = 0x0068_15c0;
+const ITERATOR_POINT_AT: u32 = 0x0053_4570;
+const ITERATOR_ADVANCE: u32 = 0x0065_7be0;
+const POINT_ADD: u32 = 0x0043_9e90;
+const POINT_SUBTRACT: u32 = 0x0043_9ef0;
+const POINT_SCALE: u32 = 0x004a_3760;
+const POINT_DOT: u32 = 0x004b_6190;
+const SQUARE_ROOT: u32 = 0x0045_79e0;
+/// The `float` factor of the centre (`01016248`, read at run time).
+const CENTER_FACTOR: u32 = 0x0101_6248;
+/// The point the empty bound is centred on (`011f426c`).
+const BOUND_ZERO_POINT: u32 = 0x011f_426c;
+
+// Translated from 00656dc0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (cdecl: bound, point iterator, count). With `count < 1`
+/// (signed) the bound gets the point at `011f426c` as centre and radius 0.0. Otherwise
+/// the box of the `count` points (the first through `00534570(0)`, the rest by copying
+/// the iterator and stepping it, `00656fd0` / `00657be0`; a coordinate replaces the
+/// minimum when below it and the maximum when above it, never for a NaN) gives the
+/// centre `(min + max) * factor` (`01016248`), and the radius is the square root
+/// (`004579e0`) of the largest `Dot(p - centre, p - centre)` over all points (start 0.0,
+/// replaced when below, as a `float`).
+pub fn fn_00656dc0(e: &mut Engine, bound: u32, iterator: Ptr, count: i32) {
+    if count < 1 {
+        e.call(BOUND_SET_CENTER, &args![bound, BOUND_ZERO_POINT]);
+        e.call(BOUND_SET_RADIUS, &args![bound, 0u32]);
+        return;
+    }
+    // The frame from EBP - 0x78; `at(k)` is EBP - k.
+    e.with_stack(0x78, |e, frame| {
+        let at = |k: u32| frame.addr() + 0x78 - k;
+        let (center, best) = (at(0x10), at(0x4));
+        let (min, point, max) = (at(0x44), at(0x38), at(0x50));
+        let (walk, walk_again) = (at(0x20), at(0x2c));
+        e.call(POINT_DEFAULT, &args![center]);
+        e.mem.set_u32(best, 0);
+        e.call(POINT_DEFAULT, &args![min]);
+        e.call(POINT_DEFAULT, &args![point]);
+        e.call(ITERATOR_POINT_AT, &args![iterator, 0u32, min]);
+        for word in [0, 4, 8] {
+            let value = e.mem.u32(min + word);
+            e.mem.set_u32(max + word, value);
+        }
+        for word in [0, 4, 8] {
+            let value = e.mem.u32(iterator.addr().wrapping_add(word));
+            e.mem.set_u32(walk + word, value);
+        }
+        let mut index = 1;
+        while index < count {
+            fn_00656fd0(e, Ptr::new(walk), Ptr::new(point));
+            for word in [0, 4, 8] {
+                let p = e.mem.u32(point + word);
+                if x87_load32(p) < x87_load32(e.mem.u32(min + word)) {
+                    e.mem.set_u32(min + word, x87_quiet_bits(p));
+                }
+            }
+            for word in [0, 4, 8] {
+                let p = e.mem.u32(point + word);
+                if x87_load32(p) > x87_load32(e.mem.u32(max + word)) {
+                    e.mem.set_u32(max + word, x87_quiet_bits(p));
+                }
+            }
+            index += 1;
+            e.call(ITERATOR_ADVANCE, &args![walk]);
+        }
+        let sum = e.call(POINT_ADD, &args![min, at(0x6c), max]).u32();
+        let factor = x87_quiet_bits(e.mem.u32(CENTER_FACTOR));
+        let scaled = e.call(POINT_SCALE, &args![at(0x78), factor, sum]).u32();
+        for word in [0, 4, 8] {
+            let value = e.mem.u32(scaled.wrapping_add(word));
+            e.mem.set_u32(center + word, value);
+        }
+        for word in [0, 4, 8] {
+            let value = e.mem.u32(iterator.addr().wrapping_add(word));
+            e.mem.set_u32(walk_again + word, value);
+        }
+        let mut index = 0;
+        while index < count {
+            fn_00656fd0(e, Ptr::new(walk_again), Ptr::new(point));
+            let difference = at(0x60);
+            e.call(POINT_SUBTRACT, &args![point, difference, center]);
+            let dot = x87_store32(e.call(POINT_DOT, &args![difference, difference]).st0);
+            e.mem.set_u32(at(0x54), dot);
+            if x87_load32(e.mem.u32(best)) < x87_load32(dot) {
+                e.mem.set_u32(best, x87_quiet_bits(dot));
+            }
+            index += 1;
+            e.call(ITERATOR_ADVANCE, &args![walk_again]);
+        }
+        e.call(BOUND_SET_CENTER, &args![bound, center]);
+        let largest = x87_quiet_bits(e.mem.u32(best));
+        let radius = x87_store32(e.call(SQUARE_ROOT, &args![largest]).st0);
+        e.call(BOUND_SET_RADIUS, &args![bound, radius]);
+    });
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -1287,6 +1404,8 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x0065_58b0, fn_006558b0(u32, u32, u32, u8)),
         entry!(0x0065_4720, fn_00654720(u32, u32, u32, u8) -> bool),
         entry!(0x0065_5fa0, fn_00655fa0(u32, u32)),
+        entry!(0x0065_6db0, fn_00656db0() -> u32),
+        entry!(0x0065_6dc0, fn_00656dc0(u32, Ptr, i32)),
     ]
 }
 
@@ -1894,5 +2013,124 @@ mod face_gen_tests {
         assert_eq!(log[1..], [(AFTER_SET_004BC480, vec![this, 1])]);
         e.call(0x0065_4700, &args![this, 0.75f32]);
         assert_eq!(e.mem.u32(this + 0x38), 0.75f32.to_bits());
+    }
+}
+
+#[cfg(test)]
+mod n076_tests {
+    use super::*;
+
+    fn calls(e: &Engine, addr: u32) -> Vec<Vec<u32>> {
+        e.call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|c| c.0 == addr)
+            .map(|c| c.1.clone())
+            .collect()
+    }
+
+    #[test]
+    fn pointer_global_is_read_through_the_getter() {
+        let mut e = Engine::new();
+        e.register(CALLEE_00559450, |_, a| (a[0] + 1).into_ret());
+        assert_eq!(e.call(0x0065_6db0, &[]).u32(), 0x011f_9511);
+    }
+
+    /// Doubles doing what the point helpers do, on floats in memory.
+    fn bound_engine(points: &[[f32; 3]]) -> (Engine, u32) {
+        let mut e = Engine::new();
+        e.map(0x0101_6000, 0x1000);
+        e.map(0x011f_4000, 0x1000);
+        e.mem.set_f32(CENTER_FACTOR, 0.5);
+        for address in [BOUND_SET_CENTER, BOUND_SET_RADIUS, POINT_DEFAULT] {
+            e.register(address, |_, _| Ret::default());
+        }
+        // The iterator: word 0 points at the current point (12 bytes each).
+        let data = e.mem.alloc(12 * points.len() as u32 + 12);
+        for (i, p) in points.iter().enumerate() {
+            for (j, v) in p.iter().enumerate() {
+                e.mem.set_f32(data + 12 * i as u32 + 4 * j as u32, *v);
+            }
+        }
+        e.register(ITERATOR_POINT_AT, |e, a| {
+            let source = e.mem.u32(a[0]) + 12 * a[1];
+            for w in 0..3 {
+                let v = e.mem.u32(source + 4 * w);
+                e.mem.set_u32(a[2] + 4 * w, v);
+            }
+            Ret::default()
+        });
+        e.register(ITERATOR_ADVANCE, |e, a| {
+            let next = e.mem.u32(a[0]) + 12;
+            e.mem.set_u32(a[0], next);
+            Ret::default()
+        });
+        e.register(POINT_ADD, |e, a| {
+            for w in 0..3 {
+                let v = e.mem.f32(a[0] + 4 * w) + e.mem.f32(a[2] + 4 * w);
+                e.mem.set_f32(a[1] + 4 * w, v);
+            }
+            a[1].into_ret()
+        });
+        e.register(POINT_SUBTRACT, |e, a| {
+            for w in 0..3 {
+                let v = e.mem.f32(a[0] + 4 * w) - e.mem.f32(a[2] + 4 * w);
+                e.mem.set_f32(a[1] + 4 * w, v);
+            }
+            a[1].into_ret()
+        });
+        e.register(POINT_SCALE, |e, a| {
+            for w in 0..3 {
+                let v = f32::from_bits(a[1]) * e.mem.f32(a[2] + 4 * w);
+                e.mem.set_f32(a[0] + 4 * w, v);
+            }
+            a[0].into_ret()
+        });
+        e.register(POINT_DOT, |e, a| {
+            let dot: f32 = (0..3)
+                .map(|w| e.mem.f32(a[0] + 4 * w) * e.mem.f32(a[1] + 4 * w))
+                .sum();
+            f64::from(dot).into_ret()
+        });
+        e.register(SQUARE_ROOT, |_, a| {
+            f64::from(f32::from_bits(a[0]).sqrt()).into_ret()
+        });
+        let iterator = e.mem.alloc(12);
+        e.mem.set_u32(iterator, data);
+        (e, iterator)
+    }
+
+    #[test]
+    fn bound_of_points_is_the_box_centre_and_farthest_point() {
+        let points = [[0.0, 0.0, 0.0], [4.0, -2.0, 0.0], [2.0, 2.0, 6.0]];
+        let (mut e, iterator) = bound_engine(&points);
+        e.call_log = Some(vec![]);
+        e.call(0x0065_6dc0, &args![0x5000u32, iterator, 3i32]);
+        // The box walk starts at the iterator's own position, so it sees points 0, 0, 1:
+        // box (0, -2, 0) .. (4, 0, 0), centre (2, -1, 0); the farthest is point 2 (0+9+36).
+        let center = calls(&e, BOUND_SET_CENTER);
+        assert_eq!(center.len(), 1);
+        assert_eq!(center[0][0], 0x5000);
+        assert_eq!(calls(&e, SQUARE_ROOT), vec![vec![45.0f32.to_bits()]]);
+        assert_eq!(
+            calls(&e, BOUND_SET_RADIUS),
+            vec![vec![0x5000, 45.0f32.sqrt().to_bits()]]
+        );
+        assert_eq!(calls(&e, POINT_SCALE)[0][1], 0.5f32.to_bits());
+        assert_eq!(calls(&e, ITERATOR_ADVANCE).len(), 5);
+    }
+
+    #[test]
+    fn empty_bound_takes_the_zero_point() {
+        let (mut e, iterator) = bound_engine(&[]);
+        e.call_log = Some(vec![]);
+        e.call(0x0065_6dc0, &args![0x5000u32, iterator, 0i32]);
+        assert_eq!(
+            calls(&e, BOUND_SET_CENTER),
+            vec![vec![0x5000, BOUND_ZERO_POINT]]
+        );
+        assert_eq!(calls(&e, BOUND_SET_RADIUS), vec![vec![0x5000, 0]]);
+        assert!(calls(&e, ITERATOR_POINT_AT).is_empty());
     }
 }

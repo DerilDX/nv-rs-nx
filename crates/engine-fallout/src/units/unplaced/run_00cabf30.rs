@@ -57,7 +57,53 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00ca_bf30, fn_00cabf30(Ptr, u32) -> u32),
         entry!(0x00ca_bf40, fn_00cabf40(Ptr, u32) -> u32),
         entry!(0x00ca_bf50, fn_00cabf50(Ptr)),
+        entry!(0x00ca_bfd0, fn_00cabfd0(Ptr, Ptr)),
     ]
+}
+
+/// `00cac9a0` (unit `hkpcharacterproxy.cpp`, void; thiscall: the destination block).
+const PROXY_FILL_INFO: u32 = 0x00ca_c9a0;
+
+// Translated from 00cabfd0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map: when `this` is not null and its word at +8 (the Havok
+/// character proxy) is not null, jumps to `00cac9a0` on that object with `destination`;
+/// otherwise returns (`RET 4`).
+pub fn fn_00cabfd0(e: &mut Engine, this: Ptr, destination: Ptr) {
+    if this.addr() == 0 {
+        return;
+    }
+    let proxy = e.mem.u32(this.addr() + 8);
+    if proxy != 0 {
+        e.call(PROXY_FILL_INFO, &args![proxy, destination]);
+    }
+}
+
+#[cfg(test)]
+mod n081_tests {
+    use super::*;
+
+    #[test]
+    fn fn_00cabfd0_forwards_to_the_proxy_only_when_both_are_set() {
+        let mut e = Engine::new();
+        e.register(PROXY_FILL_INFO, |_, _| Ret::default());
+        let this = e.mem.alloc(0x10);
+        for (object, proxy, calls) in [(0u32, 0u32, 0usize), (this, 0, 0), (this, 0x6000, 1)] {
+            e.mem.set_u32(this + 8, proxy);
+            e.call_log = Some(vec![]);
+            e.call(0x00ca_bfd0, &args![object, 0x7000u32]);
+            let log: Vec<_> = e
+                .call_log
+                .take()
+                .unwrap()
+                .into_iter()
+                .filter(|c| c.0 == PROXY_FILL_INFO)
+                .collect();
+            assert_eq!(log.len(), calls);
+            if calls == 1 {
+                assert_eq!(log[0].1, vec![0x6000, 0x7000]);
+            }
+        }
+    }
 }
 
 #[cfg(test)]

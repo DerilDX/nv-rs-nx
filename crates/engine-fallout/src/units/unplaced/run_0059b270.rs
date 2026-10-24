@@ -179,9 +179,156 @@ pub fn fn_0059b9f0(e: &mut Engine, this: Ptr) {
     e.mem.set_u32(base + 0x28, 0);
 }
 
+/// RTTI type descriptor `.?AVTESCaravanMoney@@` (the source type is `TESForm`'s, from the
+/// shared constants of the caravan unit's loader).
+const TYPE_CARAVAN_MONEY: u32 = 0x0118_c5e4;
+const TYPE_TES_FORM_DESCRIPTOR: u32 = 0x0118_3028;
+/// `__RTDynamicCast` (`00ec43fb`).
+const RT_DYNAMIC_CAST: u32 = 0x00ec_43fb;
+/// `TESForm::CopyAllComponents` (`004851b0`) and `TESForm::CompareAllComponents`
+/// (`00485270`), `ECX` and one stack word.
+const COPY_ALL_COMPONENTS: u32 = 0x0048_51b0;
+const COMPARE_ALL_COMPONENTS: u32 = 0x0048_5270;
+/// `00408b20` (`cdecl`, two words: two strings): nonzero when they differ.
+const STRINGS_DIFFER: u32 = 0x0040_8b20;
+/// `00401170` (`ECX`): the form type byte; `004f15a0` (`ECX`, one stack word) sets it.
+const FORM_TYPE_BYTE: u32 = 0x0040_1170;
+const SET_FORM_TYPE: u32 = 0x004f_15a0;
+
+/// The cast of `form` from `TESForm` to `TESCaravanMoney`, or null.
+fn as_caravan_money(e: &mut Engine, form: Ptr) -> u32 {
+    e.call(
+        RT_DYNAMIC_CAST,
+        &args![
+            form,
+            0u32,
+            TYPE_TES_FORM_DESCRIPTOR,
+            TYPE_CARAVAN_MONEY,
+            0u32
+        ],
+    )
+    .u32()
+}
+
+// Translated from 0059b270 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The address of the 0x20-byte model entry `index` at +0x8c of `this` (unnamed in the
+/// engine map; `ECX` and one stack word, `RET 4`; called by `Save`, [`fn_0059b680`] and
+/// [`fn_0059b740`]).
+pub fn fn_0059b270(_e: &mut Engine, this: Ptr, index: u32) -> Ptr {
+    Ptr::new(
+        this.addr()
+            .wrapping_add(0x8c)
+            .wrapping_add(index.wrapping_shl(5)),
+    )
+}
+
+// Translated from 0059b680 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TESCaravanMoney`'s `Copy` slot (+0x108 of its vtable `010349b4`; unnamed in the engine
+/// map; `ECX` and one stack word, `RET 4`): when `source` casts to a `TESCaravanMoney`,
+/// `TESForm::CopyAllComponents` from it, each of the two model entries' path (the source
+/// entry's vtable slot +0x14) set on this one's (+0x8c, +0xac: slot +0x18), and the form
+/// type byte (`00401170` of `source`, into `004f15a0`).
+pub fn fn_0059b680(e: &mut Engine, this: Ptr, source: Ptr) {
+    let money = as_caravan_money(e, source);
+    if money == 0 {
+        return;
+    }
+    e.call(COPY_ALL_COMPONENTS, &args![this, money]);
+    for (index, offset) in [(0u32, 0x8cu32), (1, 0xac)] {
+        let entry = fn_0059b270(e, Ptr::new(money), index).addr();
+        let path = e.vcall(entry, 0x14, &args![]).u32();
+        e.vcall(this.addr() + offset, 0x18, &args![path]);
+    }
+    let kind = e.call(FORM_TYPE_BYTE, &args![source]).u32();
+    e.call(SET_FORM_TYPE, &args![this, kind]);
+}
+
+// Translated from 0059b740 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TESCaravanMoney`'s `Compare` slot (+0x10c of its vtable; unnamed in the engine map;
+/// `ECX` and one stack word, `RET 4`): true (different) when `other` is not a
+/// `TESCaravanMoney`, when `TESForm::CompareAllComponents` answers true, or when a model
+/// entry's path differs (`00408b20(this one's, the other's)`, each the entry's slot
+/// +0x14); false otherwise. The decompiler hangs the other's path on this one's getter; the
+/// getter takes no stack word and the path is `00408b20`'s second argument.
+pub fn fn_0059b740(e: &mut Engine, this: Ptr, other: Ptr) -> bool {
+    let money = as_caravan_money(e, other);
+    if money == 0 {
+        return true;
+    }
+    if e.call(COMPARE_ALL_COMPONENTS, &args![this, money]).u8() != 0 {
+        return true;
+    }
+    for (index, offset) in [(0u32, 0x8cu32), (1, 0xac)] {
+        let entry = fn_0059b270(e, Ptr::new(money), index).addr();
+        let theirs = e.vcall(entry, 0x14, &args![]).u32();
+        let mine = e.vcall(this.addr() + offset, 0x14, &args![]).u32();
+        if e.call(STRINGS_DIFFER, &args![mine, theirs]).u32() != 0 {
+            return true;
+        }
+    }
+    false
+}
+
+// Translated from 0059b820 (decompiled, FalloutNV.exe 1.4.0.525)
+/// A vtable slot of three vtables (`01026528`, `010348d8`, `01034b00`; unnamed in the
+/// engine map; `ECX` and two stack words, `RET 8`): `TESBoundObject::Clone3D` (`0050ee50`)
+/// with the same words (the second as its byte), answering its `EAX`.
+pub fn fn_0059b820(e: &mut Engine, this: Ptr, reference: u32, flag: u8) -> u32 {
+    e.call(0x0050_ee50, &args![this, reference, u32::from(flag)])
+        .u32()
+}
+
+// Translated from 0059b850 (decompiled, FalloutNV.exe 1.4.0.525)
+/// A `SaveGame` slot of three vtables (`010260bc`, `01026434`, `01034a0c`; also called by
+/// `0059bf90`; unnamed in the engine map; `ECX` and one stack word, `RET 4`): the base
+/// save (`00484c20`), then `TESValueForm::SaveGame` (`0048e9e0`) on the component at +0x78.
+pub fn fn_0059b850(e: &mut Engine, this: Ptr, buffer: u32) {
+    e.call(0x0048_4c20, &args![this, buffer]);
+    e.call(0x0048_e9e0, &args![this.addr() + 0x78, buffer]);
+}
+
+// Translated from 0059ba80 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TESCaravanDeck`'s form-save slot (+0x2c of its vtable `01034b4c`; unnamed in the engine
+/// map; `ECX`, plain `RET`): `TESForm::StartForm`, `TESFullName::Save` on +0x18, a `CARD`
+/// chunk (`00485910`) with the `0084e3a0` word of each card of the list `0059bb30`
+/// answers (up to the first null one), the 4 bytes at +0x28 (`TESForm::__SaveData`),
+/// byte-swapped before and back after when `00401500` says so (`00503210`), then
+/// `TESForm::CloseForm`.
+pub fn fn_0059ba80(e: &mut Engine, this: Ptr) {
+    let base = this.addr();
+    e.call(0x0048_55a0, &args![this]);
+    e.call(0x0048_7010, &args![base + 0x18]);
+    let mut node = e.call(0x0059_bb30, &args![this]).u32();
+    while node != 0 {
+        let item = e.call(0x0068_15c0, &args![node]).u32();
+        if e.mem.u32(item) == 0 {
+            break;
+        }
+        let item = e.call(0x0068_15c0, &args![node]).u32();
+        let card = e.mem.u32(item);
+        let word = e.call(0x0084_e3a0, &args![card]).u32();
+        e.call(0x0048_5910, &args![0x4452_4143u32, word]);
+        node = e.call(0x0072_6070, &args![node]).u32();
+    }
+    if e.call(0x0040_1500, &args![]).u8() != 0 {
+        e.call(0x0050_3210, &args![base + 0x28]);
+    }
+    e.call(0x0048_5e20, &args![this, base + 0x28, 4u32]);
+    if e.call(0x0040_1500, &args![]).u8() != 0 {
+        e.call(0x0050_3210, &args![base + 0x28]);
+    }
+    e.call(0x0048_5680, &args![this]);
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x0059_b270, fn_0059b270(Ptr, u32) -> Ptr),
+        entry!(0x0059_b680, fn_0059b680(Ptr, Ptr)),
+        entry!(0x0059_b740, fn_0059b740(Ptr, Ptr) -> bool),
+        entry!(0x0059_b820, fn_0059b820(Ptr, u32, u8) -> u32),
+        entry!(0x0059_b850, fn_0059b850(Ptr, u32)),
+        entry!(0x0059_ba80, fn_0059ba80(Ptr)),
         entry!(0x0059_b880, fn_0059b880(Ptr) -> Ptr),
         entry!(0x0059_b910, fn_0059b910(Ptr, u32) -> Ptr),
         entry!(0x0059_b290, fn_0059b290(Ptr, Ptr) -> bool),
@@ -459,6 +606,163 @@ mod tests {
             assert_eq!(calls.len(), if block == 0 { 1 } else { 2 });
             assert_eq!(e.mem.u32(deck + 0x24), expected);
             assert_eq!(e.mem.u32(deck + 0x28), 0);
+        }
+    }
+}
+
+#[cfg(test)]
+mod n075_tests {
+    use super::*;
+
+    type Log = Vec<(u32, Vec<u32>)>;
+
+    fn calls(log: &Log, callee: u32) -> Vec<Vec<u32>> {
+        log.iter()
+            .filter(|(a, _)| *a == callee)
+            .map(|(_, w)| w.clone())
+            .collect()
+    }
+
+    #[test]
+    fn fn_0059b270_indexes_the_model_entries() {
+        let mut e = Engine::new();
+        assert_eq!(e.call(0x0059_b270, &args![0x1000u32, 0u32]).u32(), 0x108c);
+        assert_eq!(e.call(0x0059_b270, &args![0x1000u32, 1u32]).u32(), 0x10ac);
+    }
+
+    /// Two money forms whose model entries' slot +0x14 answer the entry's address plus 1.
+    fn engine(cast: bool) -> (Engine, u32, u32) {
+        let mut e = Engine::new();
+        e.register(
+            RT_DYNAMIC_CAST,
+            if cast {
+                |_, a| a[0].into_ret()
+            } else {
+                |_, _| 0u32.into_ret()
+            },
+        );
+        e.register(0x0060_0014, |_, a| (a[0] + 1).into_ret());
+        e.register(0x0060_0018, |_, _| Ret::default());
+        e.put_vtable(0x0070_0000, &[0, 0, 0, 0, 0, 0x0060_0014, 0x0060_0018]);
+        let this = e.mem.alloc(0xd0);
+        let other = e.mem.alloc(0xd0);
+        for form in [this, other] {
+            e.mem.set_u32(form + 0x8c, 0x0070_0000);
+            e.mem.set_u32(form + 0xac, 0x0070_0000);
+        }
+        for callee in [COPY_ALL_COMPONENTS, SET_FORM_TYPE] {
+            e.register(callee, |_, _| Ret::default());
+        }
+        e.register(FORM_TYPE_BYTE, |_, _| 0x75u32.into_ret());
+        e.call_log = Some(vec![]);
+        (e, this, other)
+    }
+
+    #[test]
+    fn fn_0059b680_copies_the_model_paths() {
+        let (mut e, this, other) = engine(true);
+        e.call(0x0059_b680, &args![this, other]);
+        let log = e.call_log.take().unwrap();
+        assert_eq!(calls(&log, COPY_ALL_COMPONENTS), vec![vec![this, other]]);
+        assert_eq!(
+            calls(&log, 0x0060_0018),
+            vec![
+                vec![this + 0x8c, other + 0x8d],
+                vec![this + 0xac, other + 0xad]
+            ]
+        );
+        assert_eq!(calls(&log, SET_FORM_TYPE), vec![vec![this, 0x75]]);
+        let (mut e, this, other) = engine(false);
+        e.call(0x0059_b680, &args![this, other]);
+        assert_eq!(e.call_log.take().unwrap().len(), 2);
+    }
+
+    #[test]
+    fn fn_0059b740_compares_components_and_paths() {
+        let (mut e, this, other) = engine(true);
+        e.register(COMPARE_ALL_COMPONENTS, |_, _| 0u32.into_ret());
+        e.register(STRINGS_DIFFER, |_, _| 0u32.into_ret());
+        assert!(!e.call(0x0059_b740, &args![this, other]).bool());
+        let log = e.call_log.take().unwrap();
+        assert_eq!(
+            calls(&log, STRINGS_DIFFER),
+            vec![
+                vec![this + 0x8d, other + 0x8d],
+                vec![this + 0xad, other + 0xad]
+            ]
+        );
+        e.register(STRINGS_DIFFER, |_, a| {
+            u32::from(a[0] & 0xff == 0xad).into_ret()
+        });
+        let differs = e.call(0x0059_b740, &args![this, other]).bool();
+        assert_eq!(differs, (this + 0xad) & 0xff == 0xad);
+        e.register(COMPARE_ALL_COMPONENTS, |_, _| 1u32.into_ret());
+        assert!(e.call(0x0059_b740, &args![this, other]).bool());
+        let (mut e, this, other) = engine(false);
+        assert!(e.call(0x0059_b740, &args![this, other]).bool());
+    }
+
+    #[test]
+    fn fn_0059b820_and_0059b850_forward() {
+        let mut e = Engine::new();
+        e.register(0x0050_ee50, |_, a| (a[0] + a[1] + a[2]).into_ret());
+        assert_eq!(
+            e.call(0x0059_b820, &args![0x1000u32, 0x20u32, 0x103u32])
+                .u32(),
+            0x1023
+        );
+        e.register(0x0048_4c20, |_, _| Ret::default());
+        e.register(0x0048_e9e0, |_, _| Ret::default());
+        e.call_log = Some(vec![]);
+        e.call(0x0059_b850, &args![0x1000u32, 0x9000u32]);
+        let log = e.call_log.take().unwrap();
+        assert_eq!(
+            log[1..],
+            [
+                (0x0048_4c20, vec![0x1000, 0x9000]),
+                (0x0048_e9e0, vec![0x1078, 0x9000])
+            ]
+        );
+    }
+
+    #[test]
+    fn fn_0059ba80_saves_the_deck() {
+        for swaps in [false, true] {
+            let mut e = Engine::new();
+            for callee in [
+                0x0048_55a0u32,
+                0x0048_7010,
+                0x0048_5910,
+                0x0050_3210,
+                0x0048_5e20,
+                0x0048_5680,
+            ] {
+                e.register(callee, |_, _| Ret::default());
+            }
+            e.register(
+                0x0040_1500,
+                if swaps {
+                    |_, _| 1u32.into_ret()
+                } else {
+                    |_, _| 0u32.into_ret()
+                },
+            );
+            let second = e.mem.alloc(8);
+            let first = e.mem.alloc(8);
+            e.mem.set_u32(first, 0x111);
+            e.mem.set_u32(first + 4, second);
+            e.register_double(0x0059_bb30, move |_, _| first.into_ret());
+            e.register(0x0068_15c0, |_, a| a[0].into_ret());
+            e.register(0x0072_6070, |e, a| e.mem.u32(a[0] + 4).into_ret());
+            e.register(0x0084_e3a0, |_, a| (a[0] + 1).into_ret());
+            e.call_log = Some(vec![]);
+            e.call(0x0059_ba80, &args![0x1000u32]);
+            let log = e.call_log.take().unwrap();
+            assert_eq!(calls(&log, 0x0048_5910), vec![vec![0x4452_4143, 0x112]]);
+            assert_eq!(calls(&log, 0x0048_7010), vec![vec![0x1018]]);
+            assert_eq!(calls(&log, 0x0048_5e20), vec![vec![0x1000, 0x1028, 4]]);
+            assert_eq!(calls(&log, 0x0050_3210).len(), if swaps { 2 } else { 0 });
+            assert_eq!(log.last().unwrap(), &(0x0048_5680, vec![0x1000]));
         }
     }
 }

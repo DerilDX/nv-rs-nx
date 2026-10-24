@@ -199,6 +199,11 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         ),
         entry!(0x00af_ea20, fn_00afea20(Ptr<BSSimpleArray>, u32, u32)),
         entry!(0x00af_eac0, fn_00afeac0(Ptr, Ptr) -> u32),
+        entry!(0x00af_e7b0, fn_00afe7b0(u32, u32) -> u32),
+        entry!(0x00af_e7d0, fn_00afe7d0(u32, u32, u32) -> u32),
+        entry!(0x00af_e830, fn_00afe830(u32, u32, u32)),
+        entry!(0x00af_ecd0, fn_00afecd0(Ptr, u32, u32, u32, Ptr) -> u32),
+        entry!(0x00af_ede0, fn_00afede0(Ptr, u32, u32, u32, Ptr) -> u32),
     ]
 }
 
@@ -416,5 +421,348 @@ mod la1_tests {
             .u32();
         assert_eq!(result, 4);
         assert_eq!(e.call_log.take().unwrap().len(), 1);
+    }
+}
+
+/// `memset` (CRT, cdecl).
+const MEMSET: u32 = 0x00ec_61c0;
+/// Finds the archive holding a file (`00af6160`, cdecl: the name, the
+/// flags; placed in `BSSystem/archive.cpp` by the engine map).
+const FIND_ARCHIVE: u32 = 0x00af_6160;
+/// `00b01b60` (cdecl: a name, the 8-byte result; placed in `BSSystem` by the
+/// engine map).
+const FILE_INFO: u32 = 0x00b0_1b60;
+/// `00ec7f1e` (cdecl, nine words, `_splitpath_s`'s shape: the path, then
+/// four buffer and size pairs; the engine map names it
+/// `NiFilename::Splitpath`).
+const SPLIT_PATH: u32 = 0x00ec_7f1e;
+/// `strlen`, `strncmp`, `strcat_s`, `strcpy_s` (CRT, cdecl).
+const STRLEN: u32 = 0x00ec_6130;
+const STRNCMP: u32 = 0x00ec_8a19;
+const STRCAT_S: u32 = 0x00ec_6bd2;
+const STRCPY_S: u32 = 0x00ec_65a6;
+/// `"..\\"`, `"\\"` and the empty string the code falls back to.
+const PARENT_PREFIX: u32 = 0x010a_46c4;
+const BACKSLASH: u32 = 0x010a_46c8;
+const EMPTY_010A46BE: u32 = 0x010a_46be;
+/// The size of the path buffers.
+const PATH_SIZE: u32 = 0x104;
+/// Import slots of `ReadFile` and `WriteFile` (stdcall, five words: the
+/// handle, the buffer, the size, the count's address and the overlapped
+/// pointer).
+const READ_FILE: u32 = 0x00fd_f080;
+const WRITE_FILE: u32 = 0x00fd_f0dc;
+
+// Translated from 00afe7b0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// [`fn_00afe7d0`] with the flags 0xFFFF (cdecl; no caller or vtable in the
+/// exe), whose answer it passes on.
+pub fn fn_00afe7b0(e: &mut Engine, name: u32, out: u32) -> u32 {
+    fn_00afe7d0(e, name, out, 0xffff)
+}
+
+// Translated from 00afe7d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Looks a file up (cdecl; called by `CompileVertexShaderHLSL`,
+/// `CompilePixelShaderHLSL` and [`fn_00afe7b0`]): clears the 8 bytes at
+/// `out`, finds the archive holding `name` (`00af6160` with `flags`); when
+/// there is one, its vtable slot +0x18 answers the name to use instead;
+/// then `00b01b60(name, out)`, whose answer it passes on.
+pub fn fn_00afe7d0(e: &mut Engine, name: u32, out: u32, flags: u32) -> u32 {
+    e.call(MEMSET, &[out, 0, 8]);
+    let archive = e.call(FIND_ARCHIVE, &[name, flags]).u32();
+    let mut name = name;
+    if archive != 0 {
+        name = e.vcall(archive, 0x18, &[]).u32();
+    }
+    e.call(FILE_INFO, &[name, out]).u32()
+}
+
+// Translated from 00afe830 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Resolves a path relative to the directory of `path` into `out` (cdecl,
+/// a `PATH_SIZE`-byte buffer; called by `00be1eed`'s code): takes the
+/// directory part (`00ec7f1e`) without a trailing backslash; each leading
+/// `"..\\"` of `relative` cuts the directory at its last backslash past the
+/// first character (at its start when there is none) and drops the prefix;
+/// with at least one, `out` is the directory, `"\\"` and the rest of
+/// `relative` (`strcat_s`), otherwise a copy of `relative` (`strcpy_s`).
+/// The trailing-backslash test of an empty directory reads the byte before
+/// the buffer, the top byte of the exe's local that holds its address; the
+/// frame here keeps that local just before the buffer too.
+// Translation incomplete: 00afe830 - the /GS stack cookie check (00ec408c) is not translated.
+pub fn fn_00afe830(e: &mut Engine, path: u32, relative: u32, out: u32) {
+    e.mem.set_u8(out, 0);
+    e.with_stack(4 + PATH_SIZE, |e, frame| {
+        let holder = frame.addr();
+        let directory = holder + 4;
+        e.call(SPLIT_PATH, &[path, 0, 0, directory, PATH_SIZE, 0, 0, 0, 0]);
+        let mut text = directory;
+        e.mem.set_u32(holder, text);
+        let length = e.call(STRLEN, &[text]).u32();
+        let last = text.wrapping_add(length).wrapping_sub(1);
+        if e.mem.u8(last) == b'\\' {
+            e.mem.set_u8(last, 0);
+        }
+        let mut relative = relative;
+        let mut climbed = false;
+        while e.call(STRNCMP, &[relative, PARENT_PREFIX, 3]).u32() == 0 {
+            climbed = true;
+            let mut cut = text;
+            let length = e.call(STRLEN, &[text]).u32();
+            let mut index = length.wrapping_sub(1) as i32;
+            while index > 0 {
+                if e.mem.u8(text.wrapping_add(index as u32)) == b'\\' {
+                    cut = text.wrapping_add(index as u32);
+                    break;
+                }
+                index -= 1;
+            }
+            if cut != 0 {
+                e.mem.set_u8(cut, 0);
+                relative = relative.wrapping_add(3);
+            } else {
+                text = EMPTY_010A46BE;
+                e.mem.set_u32(holder, text);
+            }
+        }
+        if climbed {
+            e.call(STRCAT_S, &[out, PATH_SIZE, text]);
+            e.call(STRCAT_S, &[out, PATH_SIZE, BACKSLASH]);
+            e.call(STRCAT_S, &[out, PATH_SIZE, relative]);
+        } else {
+            e.call(STRCPY_S, &[out, PATH_SIZE, relative]);
+        }
+    });
+}
+
+/// A failed transfer's `GetLastError` mapped as the file object's other
+/// methods map it (the exe's byte map over 0..=0x13, as `match` arms): 0 to
+/// 0, 2 to 1, 3 to 2, 0x13 to 3, anything else to 4.
+fn transfer_error(e: &mut Engine) -> u32 {
+    match e.call(GET_LAST_ERROR, &[]).u32() {
+        0 => 0,
+        2 => 1,
+        3 => 2,
+        0x13 => 3,
+        _ => 4,
+    }
+}
+
+/// `ReadFile` or `WriteFile` on the file object's handle: 4 while its flag
+/// byte (+0xc) is set; on success the count (zero-extended to 8 bytes) at
+/// `count_out` and 0; on failure [`transfer_error`].
+fn transfer(e: &mut Engine, api: u32, this: Ptr, buffer: u32, size: u32, count_out: Ptr) -> u32 {
+    let base = this.addr();
+    if e.mem.u8(base + FILE_OVERLAPPED_FLAG) != 0 {
+        return 4;
+    }
+    e.with_stack(4, |e, count| {
+        e.mem.set_u32(count.addr(), 0);
+        let handle = e.mem.u32(base + FILE_HANDLE);
+        let done = e.call(api, &[handle, buffer, size, count.addr(), 0]).u32();
+        if done == 0 {
+            return transfer_error(e);
+        }
+        let moved = e.mem.u32(count.addr());
+        e.mem.set_u32(count_out.addr(), moved);
+        e.mem.set_u32(count_out.addr() + 4, 0);
+        0
+    })
+}
+
+// Translated from 00afecd0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The file object's read (thiscall, four words, the third never read;
+/// called by `DoRead`): `ReadFile(handle, buffer, size, &count, NULL)`; 4
+/// while the flag byte (+0xc) is set; on success the count as 8 bytes at
+/// `count_out` and 0; on failure `GetLastError` mapped as
+/// `00afeac0` does.
+pub fn fn_00afecd0(
+    e: &mut Engine,
+    this: Ptr,
+    buffer: u32,
+    size: u32,
+    _unused_3: u32,
+    count_out: Ptr,
+) -> u32 {
+    transfer(e, READ_FILE, this, buffer, size, count_out)
+}
+
+// Translated from 00afede0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The file object's write (thiscall, four words, the third never read;
+/// called by `DoWrite`): `WriteFile(handle, buffer, size, &count, NULL)`,
+/// answering as [`fn_00afecd0`] does.
+pub fn fn_00afede0(
+    e: &mut Engine,
+    this: Ptr,
+    buffer: u32,
+    size: u32,
+    _unused_3: u32,
+    count_out: Ptr,
+) -> u32 {
+    transfer(e, WRITE_FILE, this, buffer, size, count_out)
+}
+
+#[cfg(test)]
+mod n079_tests {
+    use super::*;
+
+    #[test]
+    fn lookups_use_the_archive_name() {
+        for archive in [0u32, 1] {
+            const NAME_SLOT: u32 = 0x00de_ad18;
+            let mut e = Engine::new();
+            e.register(MEMSET, |_, a| a[0].into_ret());
+            e.register(NAME_SLOT, |_, _| 0x4444u32.into_ret());
+            e.register(FILE_INFO, |_, a| (a[0] + 1).into_ret());
+            e.put_vtable(0x0074_0000, &[0, 0, 0, 0, 0, 0, NAME_SLOT]);
+            let found = if archive != 0 {
+                let a = e.mem.alloc(4);
+                e.mem.set_u32(a, 0x0074_0000);
+                a
+            } else {
+                0
+            };
+            e.register_double(FIND_ARCHIVE, move |_, _| found.into_ret());
+            e.call_log = Some(vec![]);
+            let answer = e.call(0x00af_e7b0, &[0x3000, 0x5000]).u32();
+            let log = e.call_log.take().unwrap();
+            assert_eq!(log[1], (MEMSET, vec![0x5000, 0, 8]));
+            assert_eq!(log[2], (FIND_ARCHIVE, vec![0x3000, 0xffff]));
+            if archive != 0 {
+                assert_eq!(answer, 0x4445);
+            } else {
+                assert_eq!(answer, 0x3001);
+            }
+        }
+    }
+
+    /// An engine with the string functions doubled on real memory, the
+    /// directory part given by `directory`.
+    fn path_engine(directory: &'static [u8]) -> Engine {
+        let mut e = Engine::new();
+        e.map(0x010a_4000, 0x1000);
+        e.mem.write(PARENT_PREFIX, b"..\\\0");
+        e.mem.write(BACKSLASH, b"\\\0");
+        e.register_double(SPLIT_PATH, move |e, a| {
+            e.mem.write(a[3], directory);
+            0u32.into_ret()
+        });
+        e.register(STRLEN, |e, a| {
+            let mut n = 0;
+            while e.mem.u8(a[0] + n) != 0 {
+                n += 1;
+            }
+            n.into_ret()
+        });
+        e.register(STRNCMP, |e, a| {
+            let same = (0..a[2]).all(|i| e.mem.u8(a[0] + i) == e.mem.u8(a[1] + i));
+            u32::from(!same).into_ret()
+        });
+        e.register(STRCPY_S, |e, a| {
+            let mut i = 0;
+            loop {
+                let b = e.mem.u8(a[2] + i);
+                e.mem.set_u8(a[0] + i, b);
+                if b == 0 {
+                    break;
+                }
+                i += 1;
+            }
+            0u32.into_ret()
+        });
+        e.register(STRCAT_S, |e, a| {
+            let mut end = a[0];
+            while e.mem.u8(end) != 0 {
+                end += 1;
+            }
+            let mut i = 0;
+            loop {
+                let b = e.mem.u8(a[2] + i);
+                e.mem.set_u8(end + i, b);
+                if b == 0 {
+                    break;
+                }
+                i += 1;
+            }
+            0u32.into_ret()
+        });
+        e
+    }
+
+    fn resolve(directory: &'static [u8], relative: &[u8]) -> Vec<u8> {
+        let mut e = path_engine(directory);
+        let rel = e.mem.alloc(0x40);
+        e.mem.write(rel, relative);
+        let out = e.mem.alloc(PATH_SIZE);
+        e.mem.set_u8(out, 0x55);
+        e.call(0x00af_e830, &[0x2000, rel, out]);
+        let mut text = vec![];
+        let mut i = 0;
+        while e.mem.u8(out + i) != 0 {
+            text.push(e.mem.u8(out + i));
+            i += 1;
+        }
+        text
+    }
+
+    #[test]
+    fn relative_paths_climb_the_directory() {
+        assert_eq!(resolve(b"\\a\\b\\\0", b"c.txt\0"), b"c.txt".to_vec());
+        assert_eq!(
+            resolve(b"\\a\\b\\\0", b"..\\c.txt\0"),
+            b"\\a\\c.txt".to_vec()
+        );
+        assert_eq!(
+            resolve(b"\\a\\b\\\0", b"..\\..\\c.txt\0"),
+            b"\\c.txt".to_vec()
+        );
+        // Without a backslash past the first character the cut is at the
+        // start.
+        assert_eq!(resolve(b"ab\0", b"..\\c\0"), b"\\c".to_vec());
+    }
+
+    fn file(e: &mut Engine, flag: u8) -> Ptr {
+        let this = Ptr::new(e.mem.alloc(0x14));
+        e.mem.set_u8(this.addr() + FILE_OVERLAPPED_FLAG, flag);
+        e.mem.set_u32(this.addr() + FILE_HANDLE, 0x44);
+        this
+    }
+
+    #[test]
+    fn reads_and_writes_report_the_count() {
+        for (addr, api) in [(0x00af_ecd0u32, READ_FILE), (0x00af_ede0, WRITE_FILE)] {
+            let mut e = Engine::new();
+            e.register(api, |e, a| {
+                e.mem.set_u32(a[3], a[2] - 1);
+                1u32.into_ret()
+            });
+            let this = file(&mut e, 0);
+            let out = e.mem.alloc(8);
+            e.mem.set_u32(out + 4, 0x77);
+            e.call_log = Some(vec![]);
+            assert_eq!(e.call(addr, &[this.addr(), 0x9000, 16, 5, out]).u32(), 0);
+            let log = e.call_log.take().unwrap();
+            assert_eq!(log[1].1[..3], [0x44, 0x9000, 16]);
+            assert_eq!(log[1].1[4], 0);
+            assert_eq!((e.mem.u32(out), e.mem.u32(out + 4)), (15, 0));
+            // The flag byte answers 4 without a call.
+            let this = file(&mut e, 1);
+            e.call_log = Some(vec![]);
+            assert_eq!(e.call(addr, &[this.addr(), 0x9000, 16, 5, out]).u32(), 4);
+            assert_eq!(e.call_log.take().unwrap().len(), 1);
+        }
+    }
+
+    #[test]
+    fn failed_transfers_map_the_error() {
+        for (error, answer) in [(0u32, 0u32), (2, 1), (3, 2), (0x13, 3), (5, 4), (0x14, 4)] {
+            let mut e = Engine::new();
+            e.register(READ_FILE, |_, _| 0u32.into_ret());
+            e.register_double(GET_LAST_ERROR, move |_, _| error.into_ret());
+            let this = file(&mut e, 0);
+            let out = e.mem.alloc(8);
+            assert_eq!(
+                e.call(0x00af_ecd0, &[this.addr(), 0, 1, 0, out]).u32(),
+                answer
+            );
+        }
     }
 }

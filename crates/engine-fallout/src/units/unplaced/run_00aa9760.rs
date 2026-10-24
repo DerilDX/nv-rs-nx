@@ -221,6 +221,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00aa9970, fn_00aa9970(Ptr, Ptr, Ptr)),
         entry!(0x00aa9a70, fn_00aa9a70(Ptr)),
         entry!(0x00aa9bd0, fn_00aa9bd0(Ptr, Ptr)),
+        entry!(0x00aa_9760, fn_00aa9760(u32, u32, u32)),
     ]
 }
 
@@ -427,5 +428,116 @@ mod tests {
         );
         // Its neighbours are in use: no merge.
         assert_eq!(e.mem.u32(h + HEAP_NUM_BLOCKS), 3);
+    }
+}
+
+/// The formatter `00406d00` (cdecl: buffer, size, format, ...).
+const FORMAT: u32 = 0x0040_6d00;
+/// The message handler pointer the report goes to (its virtual at +0x14
+/// takes the message type 2, the text and three zero words).
+const MESSAGE_HANDLER: u32 = 0x011f_6388;
+/// `"AbstractHeap: Checking list for block size %u\n"`.
+const CHECKING_LIST_FORMAT: u32 = 0x010a_2a78;
+/// `"\tNumber of blocks free: %u\n\tLargest free block: %u\n\tTotal space
+/// ..."` (four `%u`: count, largest, total, available physical memory).
+const LIST_TOTALS_FORMAT: u32 = 0x010a_2aa8;
+/// `GlobalMemoryStatus` (import slot; stdcall: a 0x20-byte `MEMORYSTATUS`).
+const IMPORT_GLOBAL_MEMORY_STATUS: u32 = 0x00fd_f144;
+
+/// Formats into the 0x100-byte text and gives it to the message handler.
+fn report(e: &mut Engine, text: u32, words: &[u32]) {
+    let mut arguments = vec![text, 0x100];
+    arguments.extend_from_slice(words);
+    e.call(FORMAT, &arguments);
+    let handler = e.global::<u32>(MESSAGE_HANDLER);
+    e.vcall(handler, 0x14, &args![2u32, text, 0u32, 0u32, 0u32]);
+}
+
+// Translated from 00aa9760 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Reports a free list (thiscall on an `AbstractHeap`, `this` not read; no
+/// caller or vtable in the exe): only with a message handler at `011f6388`,
+/// reports `"AbstractHeap: Checking list for block size %u"` with `size`,
+/// walks the blocks from the list's first block (`*list`, nothing for a null
+/// `list`) to a null block, each step to the block after it in memory
+/// (`block + size + 8`), counting them, their sizes and the largest, reads
+/// `GlobalMemoryStatus`, and reports the count, the largest, the total and
+/// the available physical memory (`MEMORYSTATUS` +0x0C).
+// Translation incomplete: 00aa9760 - the /GS stack cookie check (00ec408c) is not translated.
+pub fn fn_00aa9760(e: &mut Engine, _this: u32, size: u32, list: u32) {
+    if e.global::<u32>(MESSAGE_HANDLER) == 0 {
+        return;
+    }
+    let mut count = 0u32;
+    let mut largest = 0u32;
+    let mut total = 0u32;
+    e.with_stack(0x100, |e, text| {
+        let text = text.addr();
+        report(e, text, &[CHECKING_LIST_FORMAT, size]);
+        if list != 0 {
+            let mut block = e.mem.u32(list);
+            while block != 0 {
+                count = count.wrapping_add(1);
+                let length = block_size(e, block);
+                total = total.wrapping_add(length);
+                if length > largest {
+                    largest = length;
+                }
+                let length = block_size(e, block);
+                block = block.wrapping_add(length).wrapping_add(8);
+            }
+        }
+        let available = e.with_stack(0x20, |e, status| {
+            e.call(IMPORT_GLOBAL_MEMORY_STATUS, &[status.addr()]);
+            e.mem.u32(status.addr() + 0xc)
+        });
+        report(
+            e,
+            text,
+            &[LIST_TOTALS_FORMAT, count, largest, total, available],
+        );
+    });
+}
+
+#[cfg(test)]
+mod n079_tests {
+    use super::*;
+
+    #[test]
+    fn list_report_counts_until_a_null_block() {
+        const REPORT: u32 = 0x00de_ad14;
+        let mut e = Engine::new();
+        e.map(0x011f_6000, 0x1000);
+        e.register(FORMAT, |_, _| 0u32.into_ret());
+        e.register(REPORT, |_, _| 0u32.into_ret());
+        e.register(IMPORT_GLOBAL_MEMORY_STATUS, |e, a| {
+            e.mem.set_u32(a[0] + 0xc, 0x1234);
+            0u32.into_ret()
+        });
+        // Without a handler nothing happens.
+        e.call_log = Some(vec![]);
+        e.call(0x00aa_9760, &[0, 0x40, 0]);
+        assert_eq!(e.call_log.take().unwrap().len(), 1);
+        e.put_vtable(0x0070_0000, &[0, 0, 0, 0, 0, REPORT]);
+        let handler = e.mem.alloc(4);
+        e.mem.set_u32(handler, 0x0070_0000);
+        e.set_global(MESSAGE_HANDLER, handler);
+        // Two blocks at the top of memory: the second one's size leads to
+        // the null address.
+        e.map(0xffff_f000, 0x1000);
+        let first = 0xffff_fe00u32;
+        e.mem.set_u32(first + 4, 0x4000_00f8);
+        e.mem.set_u32(first + 0x104, 0xf8);
+        let list = e.mem.alloc(4);
+        e.mem.set_u32(list, first);
+        e.call_log = Some(vec![]);
+        e.call(0x00aa_9760, &[0, 0x40, list]);
+        let log = e.call_log.take().unwrap();
+        let formats: Vec<_> = log.iter().filter(|(a, _)| *a == FORMAT).collect();
+        assert_eq!(formats[0].1[2..], [CHECKING_LIST_FORMAT, 0x40]);
+        assert_eq!(
+            formats[1].1[2..],
+            [LIST_TOTALS_FORMAT, 2, 0xf8, 0x1f0, 0x1234]
+        );
+        assert_eq!(log.iter().filter(|(a, _)| *a == REPORT).count(), 2);
     }
 }

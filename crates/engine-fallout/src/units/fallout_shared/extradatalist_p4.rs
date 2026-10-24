@@ -1223,16 +1223,17 @@ pub fn fn_00422550(e: &mut Engine, this: Ptr<ExtraDataList>, follower: Ptr) -> b
 /// `ExtraDataList::AddFriendHit` (Xbox PDB): makes sure the list has a type
 /// `0x45` extra data (`EXTRA_FRIEND_HITS`; a new 0x1C-byte one is built by
 /// `ExtraFriendHits::ExtraFriendHits`, `00435c40`), then calls
-/// `ExtraFriendHits::AddHit` and `ExtraFriendHits::GetHitCount` on it (the
-/// count is not used).
-pub fn extra_data_list_add_friend_hit(e: &mut Engine, this: Ptr<ExtraDataList>) {
+/// `ExtraFriendHits::AddHit` and `ExtraFriendHits::GetHitCount` on it, whose
+/// count is the answer: the exe ends on that call and keeps its `EAX`
+/// (`Actor` `008987f0` stores it).
+pub fn extra_data_list_add_friend_hit(e: &mut Engine, this: Ptr<ExtraDataList>) -> u32 {
     let mut extra = find_extra(e, this, EXTRA_FRIEND_HITS);
     if extra.is_null() {
         extra = new_extra(e, 0x1c, FRIEND_HITS_INIT);
         add_extra(e, this, extra);
     }
     e.call(FRIEND_HITS_ADD_HIT, &args![extra]);
-    e.call(FRIEND_HITS_GET_HIT_COUNT, &args![extra]);
+    e.call(FRIEND_HITS_GET_HIT_COUNT, &args![extra]).u32()
 }
 
 // Translated from 00422640 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -4956,7 +4957,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00422550, fn_00422550(Ptr<ExtraDataList>, Ptr) -> bool),
         entry!(
             0x00422590,
-            extra_data_list_add_friend_hit(Ptr<ExtraDataList>)
+            extra_data_list_add_friend_hit(Ptr<ExtraDataList>) -> u32
         ),
         entry!(
             0x00422640,
@@ -5922,6 +5923,16 @@ mod tests {
         });
         assert!(calls_to(&log, OPERATOR_NEW).is_empty());
         assert_eq!(calls_to(&log, FRIEND_HITS_ADD_HIT).len(), 1);
+    }
+
+    #[test]
+    fn friend_hit_answers_the_hit_count() {
+        let mut e = engine();
+        stub(&mut e, FRIEND_HITS_ADD_HIT);
+        e.register(FRIEND_HITS_GET_HIT_COUNT, |_, _| returns(3));
+        let list = new_list(&mut e);
+        // The exe ends on GetHitCount and keeps its EAX.
+        assert_eq!(e.call(0x0042_2590, &args![list]).u32(), 3);
     }
 
     #[test]

@@ -18,10 +18,8 @@ pub fn fn_00617da0(e: &mut Engine, this: Ptr) -> Ptr {
     e.mem.set_u32(base, 0x0104_cc0c);
     e.mem.set_u32(base + 0x18, 0x0104_cbf4);
     e.mem.set_u32(base + 0x20, 0x0104_cbd4);
-    e.call(
-        0x0040_1050,
-        &args![this, base + 0x40, 0x8, 0x4, 0x0048_2c50],
-    );
+    // `vector constructor iterator` is stdcall with four words (`RET 0x10`): no `this`.
+    e.call(0x0040_1050, &args![base + 0x40, 0x8, 0x4, 0x0048_2c50]);
     e.call(0x004f_15a0, &args![this, 0xf]);
     e.call(0x0061_7e80, &args![this]);
     this
@@ -117,13 +115,7 @@ mod tests {
                 (0x0048_e270, &[A::T(0x20)]),
                 (
                     0x0040_1050,
-                    &[
-                        A::T(0x0),
-                        A::T(0x40),
-                        A::V(0x8),
-                        A::V(0x4),
-                        A::V(0x0048_2c50),
-                    ],
+                    &[A::T(0x40), A::V(0x8), A::V(0x4), A::V(0x0048_2c50)],
                 ),
                 (0x004f_15a0, &[A::T(0x0), A::V(0xf)]),
                 (0x0061_7e80, &[A::T(0x0)]),

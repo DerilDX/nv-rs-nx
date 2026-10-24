@@ -1112,6 +1112,433 @@ pub fn fn_0065f060(e: &mut Engine, this: Ptr) {
     fn_0065cfb0(e, this);
 }
 
+/// `std::vector<T>::max_size()` for one element size (thiscall on the vector): the
+/// allocator's `max_size` (`allocator_max_size`, thiscall on the allocator at `+8`).
+fn vector_max_size(e: &mut Engine, this: Ptr, allocator_max_size: u32) -> u32 {
+    e.call(allocator_max_size, &args![this.addr() + VECTOR_ALLOCATOR])
+        .u32()
+}
+
+/// The allocator's `allocate(count)` for one element size (thiscall, one word, `RET 4`):
+/// `std::_Allocate(count, 0)` (`allocate`, cdecl).
+fn allocator_allocate(
+    e: &mut Engine,
+    count: u32,
+    allocate: fn(&mut Engine, u32, u32) -> u32,
+) -> u32 {
+    allocate(e, count, 0)
+}
+
+/// The allocator's `max_size()` for one element size (thiscall, `this` not read): the
+/// constant `0xFFFFFFFF / element` the compiler folded, or 1 when that is 0.
+fn allocator_max_size(limit: u32) -> u32 {
+    if limit > 0 {
+        limit
+    } else {
+        1
+    }
+}
+
+// Translated from 0065db90 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `std::vector<T>::max_size` for 0xc-byte elements (`0065e020`); see [`vector_max_size`].
+pub fn fn_0065db90(e: &mut Engine, this: Ptr) -> u32 {
+    vector_max_size(e, this, 0x0065_e020)
+}
+
+// Translated from 0065dbb0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The allocator's `allocate` for 0xc-byte elements (`0065e310`); see
+/// [`allocator_allocate`].
+pub fn fn_0065dbb0(e: &mut Engine, _this: Ptr, count: u32) -> u32 {
+    allocator_allocate(e, count, fn_0065e310)
+}
+
+// Translated from 0065dbd0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `std::vector<T>::max_size` for 8-byte elements (`0065e050`).
+pub fn fn_0065dbd0(e: &mut Engine, this: Ptr) -> u32 {
+    vector_max_size(e, this, 0x0065_e050)
+}
+
+// Translated from 0065dc20 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The allocator's `allocate` for 8-byte elements (`0065e3a0`).
+pub fn fn_0065dc20(e: &mut Engine, _this: Ptr, count: u32) -> u32 {
+    allocator_allocate(e, count, fn_0065e3a0)
+}
+
+// Translated from 0065dc40 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `std::vector<T>::max_size` for 0x20-byte elements (`0065e080`).
+pub fn fn_0065dc40(e: &mut Engine, this: Ptr) -> u32 {
+    vector_max_size(e, this, 0x0065_e080)
+}
+
+// Translated from 0065dc60 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `std::vector<T>::_Destroy` for 0x20-byte elements (`0065e3f0`); see [`vector_destroy`].
+pub fn fn_0065dc60(e: &mut Engine, this: Ptr, first: u32, last: u32) {
+    vector_destroy(e, this, first, last, fn_0065e3f0);
+}
+
+// Translated from 0065dd50 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The allocator's `allocate` for 0x20-byte elements (`0065e430`).
+pub fn fn_0065dd50(e: &mut Engine, _this: Ptr, count: u32) -> u32 {
+    allocator_allocate(e, count, fn_0065e430)
+}
+
+// Translated from 0065dd70 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `std::vector<T>::max_size` for 0x2c-byte elements (`0065e0b0`).
+pub fn fn_0065dd70(e: &mut Engine, this: Ptr) -> u32 {
+    vector_max_size(e, this, 0x0065_e0b0)
+}
+
+// Translated from 0065dd90 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `std::vector<T>::_Destroy` for 0x2c-byte elements (`0065e480`).
+pub fn fn_0065dd90(e: &mut Engine, this: Ptr, first: u32, last: u32) {
+    vector_destroy(e, this, first, last, fn_0065e480);
+}
+
+// Translated from 0065ddc0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The allocator's `allocate` for 0x2c-byte elements (`0065e4c0`).
+pub fn fn_0065ddc0(e: &mut Engine, _this: Ptr, count: u32) -> u32 {
+    allocator_allocate(e, count, fn_0065e4c0)
+}
+
+// Translated from 0065dde0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `std::vector<T>::max_size` for 0x34-byte elements (`0065e0e0`).
+pub fn fn_0065dde0(e: &mut Engine, this: Ptr) -> u32 {
+    vector_max_size(e, this, 0x0065_e0e0)
+}
+
+// Translated from 0065de40 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The allocator's `allocate` for 0x34-byte elements (`0065e550`).
+pub fn fn_0065de40(e: &mut Engine, _this: Ptr, count: u32) -> u32 {
+    allocator_allocate(e, count, fn_0065e550)
+}
+
+// Translated from 0065de60 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `std::vector<T>::max_size` for 0x38-byte elements (`0065e110`).
+pub fn fn_0065de60(e: &mut Engine, this: Ptr) -> u32 {
+    vector_max_size(e, this, 0x0065_e110)
+}
+
+// Translated from 0065deb0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The allocator's `allocate` for 0x38-byte elements (`0065e5e0`).
+pub fn fn_0065deb0(e: &mut Engine, _this: Ptr, count: u32) -> u32 {
+    allocator_allocate(e, count, fn_0065e5e0)
+}
+
+// Translated from 0065def0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `std::vector<T>::max_size` for 0x1c-byte elements (`0065e140`).
+pub fn fn_0065def0(e: &mut Engine, this: Ptr) -> u32 {
+    vector_max_size(e, this, 0x0065_e140)
+}
+
+// Translated from 0065df40 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The allocator's `allocate` for 0x1c-byte elements (`0065e670`).
+pub fn fn_0065df40(e: &mut Engine, _this: Ptr, count: u32) -> u32 {
+    allocator_allocate(e, count, fn_0065e670)
+}
+
+// Translated from 0065df60 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `std::vector<T>::max_size` for 0x58-byte elements (`0065e170`).
+pub fn fn_0065df60(e: &mut Engine, this: Ptr) -> u32 {
+    vector_max_size(e, this, 0x0065_e170)
+}
+
+// Translated from 0065dfb0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The allocator's `allocate` for 0x58-byte elements (`0065e700`).
+pub fn fn_0065dfb0(e: &mut Engine, _this: Ptr, count: u32) -> u32 {
+    allocator_allocate(e, count, fn_0065e700)
+}
+
+// Translated from 0065e020 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The allocator's `max_size` for 0xc-byte elements: `0x15555555`; see
+/// [`allocator_max_size`].
+pub fn fn_0065e020(_e: &mut Engine, _this: Ptr) -> u32 {
+    allocator_max_size(0x1555_5555)
+}
+
+// Translated from 0065e050 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The allocator's `max_size` for 8-byte elements: `0x1FFFFFFF`.
+pub fn fn_0065e050(_e: &mut Engine, _this: Ptr) -> u32 {
+    allocator_max_size(0x1fff_ffff)
+}
+
+// Translated from 0065e080 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The allocator's `max_size` for 0x20-byte elements: `0x07FFFFFF`.
+pub fn fn_0065e080(_e: &mut Engine, _this: Ptr) -> u32 {
+    allocator_max_size(0x07ff_ffff)
+}
+
+// Translated from 0065e0b0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The allocator's `max_size` for 0x2c-byte elements: `0x05D1745D`.
+pub fn fn_0065e0b0(_e: &mut Engine, _this: Ptr) -> u32 {
+    allocator_max_size(0x05d1_745d)
+}
+
+// Translated from 0065e0e0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The allocator's `max_size` for 0x34-byte elements: `0x04EC4EC4`.
+pub fn fn_0065e0e0(_e: &mut Engine, _this: Ptr) -> u32 {
+    allocator_max_size(0x04ec_4ec4)
+}
+
+// Translated from 0065e110 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The allocator's `max_size` for 0x38-byte elements: `0x04924924`.
+pub fn fn_0065e110(_e: &mut Engine, _this: Ptr) -> u32 {
+    allocator_max_size(0x0492_4924)
+}
+
+// Translated from 0065e140 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The allocator's `max_size` for 0x1c-byte elements: `0x09249249`.
+pub fn fn_0065e140(_e: &mut Engine, _this: Ptr) -> u32 {
+    allocator_max_size(0x0924_9249)
+}
+
+// Translated from 0065e170 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The allocator's `max_size` for 0x58-byte elements: `0x02E8BA2E`.
+pub fn fn_0065e170(_e: &mut Engine, _this: Ptr) -> u32 {
+    allocator_max_size(0x02e8_ba2e)
+}
+
+// Translated from 0065e3f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `std::_Destroy_range` for 0x20-byte elements (`0065e880`); see [`destroy_range`].
+pub fn fn_0065e3f0(e: &mut Engine, first: u32, last: u32, allocator: u32) {
+    destroy_range(e, first, last, allocator, fn_0065e880);
+}
+
+// Translated from 0065e430 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `std::_Allocate` for 0x20-byte elements; see [`allocate_elements`].
+pub fn fn_0065e430(e: &mut Engine, count: u32, _unused_2: u32) -> u32 {
+    allocate_elements(e, count, 0x20)
+}
+
+// Translated from 0065e480 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `std::_Destroy_range` for 0x2c-byte elements (`0065e8b0`).
+pub fn fn_0065e480(e: &mut Engine, first: u32, last: u32, allocator: u32) {
+    destroy_range(e, first, last, allocator, fn_0065e8b0);
+}
+
+// Translated from 0065e4c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `std::_Allocate` for 0x2c-byte elements.
+pub fn fn_0065e4c0(e: &mut Engine, count: u32, _unused_2: u32) -> u32 {
+    allocate_elements(e, count, 0x2c)
+}
+
+// Translated from 0065e880 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The range destructor for 0x20-byte elements (`0065e9c0`); see [`destroy_each`].
+pub fn fn_0065e880(e: &mut Engine, first: u32, last: u32, allocator: u32, _unused_4: u32) {
+    destroy_each(e, first, last, allocator, 0x20, fn_0065e9c0);
+}
+
+// Translated from 0065e8b0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The range destructor for 0x2c-byte elements (`0065e9e0`).
+pub fn fn_0065e8b0(e: &mut Engine, first: u32, last: u32, allocator: u32, _unused_4: u32) {
+    destroy_each(e, first, last, allocator, 0x2c, fn_0065e9e0);
+}
+
+// Translated from 0065e9c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The allocator's `destroy(p)` for 0x20-byte elements (thiscall, one word): `0065eb00(p)`.
+pub fn fn_0065e9c0(e: &mut Engine, _this: Ptr, p: u32) {
+    fn_0065eb00(e, p);
+}
+
+// Translated from 0065e9e0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The allocator's `destroy(p)` for 0x2c-byte elements: `0065eb10(p)`.
+pub fn fn_0065e9e0(e: &mut Engine, _this: Ptr, p: u32) {
+    fn_0065eb10(e, p);
+}
+
+// Translated from 0065eb00 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `std::_Destroy(p)` for 0x20-byte elements (cdecl, one word): `0065ec10(p, 0)`.
+pub fn fn_0065eb00(e: &mut Engine, p: u32) {
+    fn_0065ec10(e, Ptr::new(p), 0);
+}
+
+// Translated from 0065eb10 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `std::_Destroy(p)` for 0x2c-byte elements: `0065ec40(p, 0)`.
+pub fn fn_0065eb10(e: &mut Engine, p: u32) {
+    fn_0065ec40(e, Ptr::new(p), 0);
+}
+
+// Translated from 0065ec10 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The 0x20-byte element's scalar deleting destructor (`0065ed30`); see
+/// [`scalar_deleting`].
+pub fn fn_0065ec10(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    scalar_deleting(e, this, flags, fn_0065ed30)
+}
+
+// Translated from 0065ec40 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The 0x2c-byte element's scalar deleting destructor (`0065ed50`).
+pub fn fn_0065ec40(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    scalar_deleting(e, this, flags, fn_0065ed50)
+}
+
+// Translated from 0065ed30 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The 0x20-byte element's destructor (thiscall): `0044a540` on its member at `+4`.
+pub fn fn_0065ed30(e: &mut Engine, this: Ptr) {
+    e.call(BASE_DTOR_0044A540, &args![this.addr() + 4]);
+}
+
+// Translated from 0065ed50 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The 0x2c-byte element's destructor (thiscall): `0044a540` on its member at `+0x10`.
+pub fn fn_0065ed50(e: &mut Engine, this: Ptr) {
+    e.call(BASE_DTOR_0044A540, &args![this.addr() + 0x10]);
+}
+
+// Translated from 0065eb60 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The 0x1c-byte element's copy constructor (thiscall, one word, `RET 4`): the float at
+/// `+0` (`FLD`/`FSTP`), then the vector member at `+4` assigned from the other's
+/// ([`fn_0065eed0`]). Returns `this`.
+pub fn fn_0065eb60(e: &mut Engine, this: Ptr, other: Ptr) -> Ptr {
+    let value = x87_quiet_bits(e.mem.u32(other.addr()));
+    e.mem.set_u32(this.addr(), value);
+    fn_0065eed0(e, this.byte_add(4), other.byte_add(4));
+    this
+}
+
+// Translated from 0065eb90 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The 0x58-byte element's copy constructor (thiscall, one word, `RET 4`): the float at
+/// `+0` (`FLD`/`FSTP`) and the words at `+4`, `+8` and `+0xC`, then each of the three
+/// 0x18-byte vector members at `+0x10` assigned from the other's ([`fn_0065f0c0`]).
+/// Returns `this`.
+pub fn fn_0065eb90(e: &mut Engine, this: Ptr, other: Ptr) -> Ptr {
+    let (to, from) = (this.addr(), other.addr());
+    let value = x87_quiet_bits(e.mem.u32(from));
+    e.mem.set_u32(to, value);
+    for word in [4u32, 8, 0xc] {
+        let value = e.mem.u32(from.wrapping_add(word));
+        e.mem.set_u32(to.wrapping_add(word), value);
+    }
+    for i in 0..3u32 {
+        let offset = i * 0x18 + 0x10;
+        fn_0065f0c0(
+            e,
+            Ptr::new(to.wrapping_add(offset)),
+            Ptr::new(from.wrapping_add(offset)),
+        );
+    }
+    this
+}
+
+/// The callees of one `std::vector<T>::operator=` instance: `size()` and `capacity()`
+/// (thiscall), `clear()` (thiscall), `_Buy(count)` (thiscall, `AL`), `_Destroy(first,
+/// last)` (thiscall), `std::copy(first, last, destination)` (cdecl, answers the end) and
+/// `_Ucopy(first, last, destination)` (thiscall, answers the end); the element size and
+/// whether `_Tidy`'s element count divides (by `IDIV`) the byte size.
+struct VectorAssign {
+    size: u32,
+    capacity: u32,
+    clear: u32,
+    buy: u32,
+    destroy: u32,
+    copy: u32,
+    uninitialized_copy: u32,
+    element: u32,
+}
+
+/// `std::vector<T>::operator=(other)` (thiscall, one word, `RET 4`), in the exe's order:
+/// nothing for itself; an empty `other` clears `this`; a smaller or equal `other` is copied
+/// over the start and the rest destroyed (`_Mylast = _Myfirst + other.size() * element`);
+/// one that fits the capacity is copied over the existing elements and the rest
+/// copy-constructed after them; otherwise the buffer is destroyed and freed (`0064df10`
+/// with the element count) and, when `_Buy(other.size())` succeeds, `other` is
+/// copy-constructed into the new one. Returns `this`.
+fn vector_assign(e: &mut Engine, this: Ptr, other: Ptr, f: &VectorAssign) -> Ptr {
+    let (mine, theirs) = (this.addr(), other.addr());
+    if mine == theirs {
+        return this;
+    }
+    let first = |e: &Engine, v: u32| e.mem.u32(v + VECTOR_FIRST);
+    let last = |e: &Engine, v: u32| e.mem.u32(v + VECTOR_LAST);
+    if e.call(f.size, &args![other]).u32() == 0 {
+        e.call(f.clear, &args![this]);
+        return this;
+    }
+    let other_size = e.call(f.size, &args![other]).u32();
+    if other_size <= e.call(f.size, &args![this]).u32() {
+        let (from, to, at) = (first(e, theirs), last(e, theirs), first(e, mine));
+        let end = e.call(f.copy, &args![from, to, at]).u32();
+        let old_last = last(e, mine);
+        e.call(f.destroy, &args![this, end, old_last]);
+        let count = e.call(f.size, &args![other]).u32();
+        let new_last = count.wrapping_mul(f.element).wrapping_add(first(e, mine));
+        e.mem.set_u32(mine + VECTOR_LAST, new_last);
+        return this;
+    }
+    let other_size = e.call(f.size, &args![other]).u32();
+    if other_size <= e.call(f.capacity, &args![this]).u32() {
+        let count = e.call(f.size, &args![this]).u32();
+        let middle = count.wrapping_mul(f.element).wrapping_add(first(e, theirs));
+        let (from, at) = (first(e, theirs), first(e, mine));
+        e.call(f.copy, &args![from, middle, at]);
+        let (to, at) = (last(e, theirs), last(e, mine));
+        let end = e
+            .call(f.uninitialized_copy, &args![this, middle, to, at])
+            .u32();
+        e.mem.set_u32(mine + VECTOR_LAST, end);
+        return this;
+    }
+    if first(e, mine) != 0 {
+        let (old_first, old_last) = (first(e, mine), last(e, mine));
+        e.call(f.destroy, &args![this, old_first, old_last]);
+        let bytes = e.mem.u32(mine + VECTOR_END).wrapping_sub(first(e, mine));
+        let elements = if f.element == 1 {
+            bytes
+        } else {
+            (bytes as i32).wrapping_div(f.element as i32) as u32
+        };
+        let old_first = first(e, mine);
+        e.call(
+            DEALLOCATE_0064DF10,
+            &args![mine + VECTOR_ALLOCATOR, old_first, elements],
+        );
+    }
+    let count = e.call(f.size, &args![other]).u32();
+    if e.call(f.buy, &args![this, count]).u8() != 0 {
+        let (from, to, at) = (first(e, theirs), last(e, theirs), first(e, mine));
+        let end = e
+            .call(f.uninitialized_copy, &args![this, from, to, at])
+            .u32();
+        e.mem.set_u32(mine + VECTOR_LAST, end);
+    }
+    this
+}
+
+/// The callees of [`fn_0065eed0`] (6-byte elements).
+const ASSIGN_6: VectorAssign = VectorAssign {
+    size: 0x0065_7bc0,
+    capacity: 0x0065_f2e0,
+    clear: 0x0065_f320,
+    buy: 0x0065_f380,
+    destroy: 0x0065_f400,
+    copy: 0x0065_f820,
+    uninitialized_copy: 0x0065_f890,
+    element: 6,
+};
+
+/// The callees of [`fn_0065f0c0`] (1-byte elements).
+const ASSIGN_1: VectorAssign = VectorAssign {
+    size: 0x0065_cc50,
+    capacity: 0x0065_f4b0,
+    clear: 0x0065_f4f0,
+    buy: 0x0065_7ee0,
+    destroy: 0x0065_f2b0,
+    copy: 0x0065_f8c0,
+    uninitialized_copy: 0x0065_f930,
+    element: 1,
+};
+
+// Translated from 0065eed0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `std::vector<T>::operator=` for 6-byte elements (callees in [`ASSIGN_6`]; the freed
+/// buffer's element count by `IDIV 6`); see [`vector_assign`].
+pub fn fn_0065eed0(e: &mut Engine, this: Ptr, other: Ptr) -> Ptr {
+    vector_assign(e, this, other, &ASSIGN_6)
+}
+
+// Translated from 0065f0c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `std::vector<T>::operator=` for 1-byte elements (callees in [`ASSIGN_1`]; the freed
+/// buffer's element count is its byte size); see [`vector_assign`].
+pub fn fn_0065f0c0(e: &mut Engine, this: Ptr, other: Ptr) -> Ptr {
+    vector_assign(e, this, other, &ASSIGN_1)
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -1197,6 +1624,50 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x0065_ee50, fn_0065ee50(Ptr)),
         entry!(0x0065_ee70, fn_0065ee70(Ptr)),
         entry!(0x0065_f060, fn_0065f060(Ptr)),
+        entry!(0x0065_db90, fn_0065db90(Ptr) -> u32),
+        entry!(0x0065_dbb0, fn_0065dbb0(Ptr, u32) -> u32),
+        entry!(0x0065_dbd0, fn_0065dbd0(Ptr) -> u32),
+        entry!(0x0065_dc20, fn_0065dc20(Ptr, u32) -> u32),
+        entry!(0x0065_dc40, fn_0065dc40(Ptr) -> u32),
+        entry!(0x0065_dc60, fn_0065dc60(Ptr, u32, u32)),
+        entry!(0x0065_dd50, fn_0065dd50(Ptr, u32) -> u32),
+        entry!(0x0065_dd70, fn_0065dd70(Ptr) -> u32),
+        entry!(0x0065_dd90, fn_0065dd90(Ptr, u32, u32)),
+        entry!(0x0065_ddc0, fn_0065ddc0(Ptr, u32) -> u32),
+        entry!(0x0065_dde0, fn_0065dde0(Ptr) -> u32),
+        entry!(0x0065_de40, fn_0065de40(Ptr, u32) -> u32),
+        entry!(0x0065_de60, fn_0065de60(Ptr) -> u32),
+        entry!(0x0065_deb0, fn_0065deb0(Ptr, u32) -> u32),
+        entry!(0x0065_def0, fn_0065def0(Ptr) -> u32),
+        entry!(0x0065_df40, fn_0065df40(Ptr, u32) -> u32),
+        entry!(0x0065_df60, fn_0065df60(Ptr) -> u32),
+        entry!(0x0065_dfb0, fn_0065dfb0(Ptr, u32) -> u32),
+        entry!(0x0065_e020, fn_0065e020(Ptr) -> u32),
+        entry!(0x0065_e050, fn_0065e050(Ptr) -> u32),
+        entry!(0x0065_e080, fn_0065e080(Ptr) -> u32),
+        entry!(0x0065_e0b0, fn_0065e0b0(Ptr) -> u32),
+        entry!(0x0065_e0e0, fn_0065e0e0(Ptr) -> u32),
+        entry!(0x0065_e110, fn_0065e110(Ptr) -> u32),
+        entry!(0x0065_e140, fn_0065e140(Ptr) -> u32),
+        entry!(0x0065_e170, fn_0065e170(Ptr) -> u32),
+        entry!(0x0065_e3f0, fn_0065e3f0(u32, u32, u32)),
+        entry!(0x0065_e430, fn_0065e430(u32, u32) -> u32),
+        entry!(0x0065_e480, fn_0065e480(u32, u32, u32)),
+        entry!(0x0065_e4c0, fn_0065e4c0(u32, u32) -> u32),
+        entry!(0x0065_e880, fn_0065e880(u32, u32, u32, u32)),
+        entry!(0x0065_e8b0, fn_0065e8b0(u32, u32, u32, u32)),
+        entry!(0x0065_e9c0, fn_0065e9c0(Ptr, u32)),
+        entry!(0x0065_e9e0, fn_0065e9e0(Ptr, u32)),
+        entry!(0x0065_eb00, fn_0065eb00(u32)),
+        entry!(0x0065_eb10, fn_0065eb10(u32)),
+        entry!(0x0065_ec10, fn_0065ec10(Ptr, u32) -> Ptr),
+        entry!(0x0065_ec40, fn_0065ec40(Ptr, u32) -> Ptr),
+        entry!(0x0065_ed30, fn_0065ed30(Ptr)),
+        entry!(0x0065_ed50, fn_0065ed50(Ptr)),
+        entry!(0x0065_eb60, fn_0065eb60(Ptr, Ptr) -> Ptr),
+        entry!(0x0065_eb90, fn_0065eb90(Ptr, Ptr) -> Ptr),
+        entry!(0x0065_eed0, fn_0065eed0(Ptr, Ptr) -> Ptr),
+        entry!(0x0065_f0c0, fn_0065f0c0(Ptr, Ptr) -> Ptr),
     ]
 }
 
@@ -2124,5 +2595,230 @@ mod b001_tests {
             );
             assert_eq!(calls_to(&e, EMPTY_BASE_00483710), vec![vec![this]]);
         }
+    }
+}
+
+#[cfg(test)]
+mod n076_tests {
+    use super::*;
+
+    fn calls_to(e: &Engine, callee: u32) -> Vec<Vec<u32>> {
+        e.call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|(address, _)| *address == callee)
+            .map(|(_, words)| words.clone())
+            .collect()
+    }
+
+    #[test]
+    fn max_sizes_come_from_the_allocator_constants() {
+        let mut e = Engine::new();
+        let vector = e.mem.alloc(0x18);
+        for (address, limit) in [
+            (0x0065_db90, 0x1555_5555u32),
+            (0x0065_dbd0, 0x1fff_ffff),
+            (0x0065_dc40, 0x07ff_ffff),
+            (0x0065_dd70, 0x05d1_745d),
+            (0x0065_dde0, 0x04ec_4ec4),
+            (0x0065_de60, 0x0492_4924),
+            (0x0065_def0, 0x0924_9249),
+            (0x0065_df60, 0x02e8_ba2e),
+        ] {
+            assert_eq!(e.call(address, &args![vector]).u32(), limit);
+        }
+        assert_eq!(allocator_max_size(0), 1);
+        e.call_log = Some(vec![]);
+        e.call(0x0065_e170, &args![vector + 8]);
+        assert_eq!(e.call_log.as_ref().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn allocators_allocate_count_times_the_element() {
+        let mut e = Engine::new();
+        e.register(OPERATOR_NEW, |_, a| (a[0] | 0x1000_0000).into_ret());
+        for (address, element) in [
+            (0x0065_dbb0, 0xcu32),
+            (0x0065_dc20, 8),
+            (0x0065_dd50, 0x20),
+            (0x0065_ddc0, 0x2c),
+            (0x0065_de40, 0x34),
+            (0x0065_deb0, 0x38),
+            (0x0065_df40, 0x1c),
+            (0x0065_dfb0, 0x58),
+        ] {
+            assert_eq!(
+                e.call(address, &args![0x5000u32, 3u32]).u32(),
+                0x1000_0000 | (3 * element)
+            );
+        }
+        assert_eq!(e.call(0x0065_e430, &args![0u32, 0u32]).u32(), 0x1000_0000);
+        assert_eq!(e.call(0x0065_e4c0, &args![2u32, 0u32]).u32(), 0x1000_0058);
+    }
+
+    #[test]
+    fn oversized_allocation_throws_bad_alloc_first() {
+        let mut e = Engine::new();
+        e.register(OPERATOR_NEW, |_, _| Ret::default());
+        e.register(BAD_ALLOC_CTOR_0044D6C0, |_, _| Ret::default());
+        e.register(CXX_THROW_EXCEPTION, |_, _| Ret::default());
+        e.call_log = Some(vec![]);
+        e.call(0x0065_e430, &args![0x0800_0000u32, 0u32]);
+        assert_eq!(calls_to(&e, CXX_THROW_EXCEPTION).len(), 1);
+        assert_eq!(calls_to(&e, OPERATOR_NEW), vec![vec![0]]);
+    }
+
+    #[test]
+    fn destroying_ranges_runs_each_element_destructor() {
+        let mut e = Engine::new();
+        e.register(BASE_DTOR_0044A540, |_, _| Ret::default());
+        e.register(OPERATOR_DELETE, |_, _| Ret::default());
+        let vector = e.mem.alloc(0x18);
+        e.call_log = Some(vec![]);
+        e.call(0x0065_dc60, &args![vector, 0x4000u32, 0x4040u32]);
+        assert_eq!(
+            calls_to(&e, BASE_DTOR_0044A540),
+            vec![vec![0x4004], vec![0x4024]]
+        );
+        e.call_log = Some(vec![]);
+        e.call(0x0065_dd90, &args![vector, 0x4000u32, 0x4058u32]);
+        assert_eq!(
+            calls_to(&e, BASE_DTOR_0044A540),
+            vec![vec![0x4010], vec![0x403c]]
+        );
+        // No element is deleted by the range destructors.
+        assert!(calls_to(&e, OPERATOR_DELETE).is_empty());
+        e.call(0x0065_ec10, &args![0x4000u32, 1u32]);
+        e.call(0x0065_ec40, &args![0x4000u32, 0u32]);
+        assert_eq!(calls_to(&e, OPERATOR_DELETE), vec![vec![0x4000]]);
+    }
+
+    /// Doubles for one `operator=` instance's callees on vectors in memory (element 1).
+    fn assign_engine() -> Engine {
+        let mut e = Engine::new();
+        let f = &ASSIGN_1;
+        e.register(f.size, |e, a| {
+            (e.mem.u32(a[0] + VECTOR_LAST) - e.mem.u32(a[0] + VECTOR_FIRST)).into_ret()
+        });
+        e.register(f.capacity, |e, a| {
+            (e.mem.u32(a[0] + VECTOR_END) - e.mem.u32(a[0] + VECTOR_FIRST)).into_ret()
+        });
+        e.register(f.clear, |_, _| Ret::default());
+        e.register(f.destroy, |_, _| Ret::default());
+        e.register(f.copy, |_, a| (a[2] + a[1] - a[0]).into_ret());
+        e.register(f.uninitialized_copy, |_, a| (a[3] + a[2] - a[1]).into_ret());
+        e.register(f.buy, |e, a| {
+            e.mem.set_u32(a[0] + VECTOR_FIRST, 0x9000);
+            e.mem.set_u32(a[0] + VECTOR_LAST, 0x9000);
+            e.mem.set_u32(a[0] + VECTOR_END, 0x9000 + a[1]);
+            1u32.into_ret()
+        });
+        e.register(DEALLOCATE_0064DF10, |_, _| Ret::default());
+        e
+    }
+
+    fn vector(e: &mut Engine, first: u32, size: u32, capacity: u32) -> u32 {
+        let v = e.mem.alloc(0x18);
+        e.mem.set_u32(v + VECTOR_FIRST, first);
+        e.mem.set_u32(v + VECTOR_LAST, first + size);
+        e.mem.set_u32(v + VECTOR_END, first + capacity);
+        v
+    }
+
+    #[test]
+    fn assignment_takes_the_branch_of_the_sizes() {
+        let f = &ASSIGN_1;
+        let mut e = assign_engine();
+        // Self-assignment does nothing; an empty source clears.
+        let this = vector(&mut e, 0x1000, 4, 8);
+        let empty = vector(&mut e, 0x2000, 0, 0);
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x0065_f0c0, &args![this, this]).u32(), this);
+        assert_eq!(e.call_log.as_ref().unwrap().len(), 1);
+        e.call(0x0065_f0c0, &args![this, empty]);
+        assert_eq!(calls_to(&e, f.clear), vec![vec![this]]);
+        // Smaller: copied over the start, the rest destroyed.
+        let small = vector(&mut e, 0x2000, 2, 2);
+        e.call_log = Some(vec![]);
+        e.call(0x0065_f0c0, &args![this, small]);
+        assert_eq!(calls_to(&e, f.copy), vec![vec![0x2000, 0x2002, 0x1000]]);
+        assert_eq!(calls_to(&e, f.destroy), vec![vec![this, 0x1002, 0x1004]]);
+        assert_eq!(e.mem.u32(this + VECTOR_LAST), 0x1002);
+        // Within the capacity: the overlap copied, the rest copy-constructed.
+        let more = vector(&mut e, 0x3000, 6, 6);
+        e.call_log = Some(vec![]);
+        e.call(0x0065_f0c0, &args![this, more]);
+        assert_eq!(calls_to(&e, f.copy), vec![vec![0x3000, 0x3002, 0x1000]]);
+        assert_eq!(
+            calls_to(&e, f.uninitialized_copy),
+            vec![vec![this, 0x3002, 0x3006, 0x1002]]
+        );
+        assert_eq!(e.mem.u32(this + VECTOR_LAST), 0x1006);
+        // Beyond it: freed (the byte count) and bought anew.
+        let large = vector(&mut e, 0x4000, 12, 12);
+        e.call_log = Some(vec![]);
+        e.call(0x0065_f0c0, &args![this, large]);
+        assert_eq!(calls_to(&e, f.destroy), vec![vec![this, 0x1000, 0x1006]]);
+        assert_eq!(
+            calls_to(&e, DEALLOCATE_0064DF10),
+            vec![vec![this + 8, 0x1000, 8]]
+        );
+        assert_eq!(calls_to(&e, f.buy), vec![vec![this, 12]]);
+        assert_eq!(e.mem.u32(this + VECTOR_LAST), 0x900c);
+    }
+
+    #[test]
+    fn six_byte_assignment_counts_elements() {
+        let f = &ASSIGN_6;
+        let mut e = Engine::new();
+        e.register(f.size, |e, a| {
+            ((e.mem.u32(a[0] + VECTOR_LAST) - e.mem.u32(a[0] + VECTOR_FIRST)) / 6).into_ret()
+        });
+        e.register(f.capacity, |_, _| 1u32.into_ret());
+        e.register(f.destroy, |_, _| Ret::default());
+        e.register(f.buy, |_, _| Ret::default());
+        e.register(DEALLOCATE_0064DF10, |_, _| Ret::default());
+        let this = vector(&mut e, 0x1000, 6, 12);
+        let other = vector(&mut e, 0x2000, 18, 18);
+        e.call_log = Some(vec![]);
+        e.call(0x0065_eed0, &args![this, other]);
+        assert_eq!(
+            calls_to(&e, DEALLOCATE_0064DF10),
+            vec![vec![this + 8, 0x1000, 2]]
+        );
+        // `_Buy` failed: nothing is copied.
+        assert_eq!(calls_to(&e, f.buy), vec![vec![this, 3]]);
+        assert!(calls_to(&e, f.uninitialized_copy).is_empty());
+        // Smaller: `_Mylast` is `_Myfirst + size * 6`.
+        e.register(f.copy, |_, a| a[2].into_ret());
+        let this = vector(&mut e, 0x1000, 12, 12);
+        let small = vector(&mut e, 0x2000, 6, 6);
+        e.call(0x0065_eed0, &args![this, small]);
+        assert_eq!(e.mem.u32(this + VECTOR_LAST), 0x1006);
+    }
+
+    #[test]
+    fn element_copies_copy_the_float_words_and_members() {
+        let mut e = Engine::new();
+        // Empty member vectors: each assignment clears.
+        e.register(ASSIGN_6.size, |_, _| Ret::default());
+        e.register(ASSIGN_6.clear, |_, _| Ret::default());
+        e.register(ASSIGN_1.size, |_, _| Ret::default());
+        e.register(ASSIGN_1.clear, |_, _| Ret::default());
+        let this = e.mem.alloc(0x58);
+        let other = e.mem.alloc(0x58);
+        e.mem.set_f32(other, 2.5);
+        e.mem.set_u32(other + 0xc, 0x77);
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x0065_eb60, &args![this, other]).u32(), this);
+        assert_eq!(e.mem.f32(this), 2.5);
+        assert_eq!(calls_to(&e, ASSIGN_6.clear), vec![vec![this + 4]]);
+        e.call(0x0065_eb90, &args![this, other]);
+        assert_eq!(e.mem.u32(this + 0xc), 0x77);
+        assert_eq!(
+            calls_to(&e, ASSIGN_1.clear),
+            vec![vec![this + 0x10], vec![this + 0x28], vec![this + 0x40]]
+        );
     }
 }

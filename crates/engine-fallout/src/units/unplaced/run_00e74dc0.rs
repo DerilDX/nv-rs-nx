@@ -228,7 +228,238 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00e74dc0, fn_00e74dc0(Ptr) -> bool),
         entry!(0x00e74f40, fn_00e74f40(Ptr) -> bool),
         entry!(0x00e75000, fn_00e75000(Ptr) -> bool),
+        entry!(0x00e7_50e0, fn_00e750e0(Ptr, Ptr)),
+        entry!(0x00e7_52a0, fn_00e752a0(Ptr, u32) -> u32),
     ]
+}
+
+/// The `MemoryManager` singleton and its allocation (`00aa3e40`, thiscall: size).
+const MEMORY_MANAGER: u32 = 0x011f_6238;
+const MEMORY_MANAGER_ALLOCATE: u32 = 0x00aa_3e40;
+/// The object allocator `00aa13e0` (cdecl: size).
+const OBJECT_ALLOCATE: u32 = 0x00aa_13e0;
+/// `NiPropertyState::NiPropertyState` (engine map, `00a89ab0`).
+const PROPERTY_STATE_CTOR: u32 = 0x00a8_9ab0;
+/// The three property constructors (`00a5f1e0`, `004391c0` (unit
+/// `multiboundmarkerdata.cpp`), `00a5f4d0`; thiscall) and the property-state setter
+/// `00a59f50` (unit `niavobject.cpp`; thiscall on the state: the property).
+const PROPERTY_CTOR_00A5F1E0: u32 = 0x00a5_f1e0;
+const PROPERTY_CTOR_004391C0: u32 = 0x0043_91c0;
+const PROPERTY_CTOR_00A5F4D0: u32 = 0x00a5_f4d0;
+const PROPERTY_STATE_SET: u32 = 0x00a5_9f50;
+/// The renderer's own state (+0x8a8), the object and word it calls with a geometry (+0x8ac,
+/// vtable +0x10; +0x8b0), and the current property state and effect words (+0xc, +0x10).
+const OWN_PROPERTY_STATE: u32 = 0x8a8;
+const BATCH_OBJECT: u32 = 0x8ac;
+const BATCH_WORD: u32 = 0x8b0;
+/// `00e74cc0` (the geometry buffer preparation) and `00e715a0` (unit NiXenonRenderer;
+/// thiscall, six words).
+const PREPARE_GEOMETRY: u32 = 0x00e7_4cc0;
+const RENDERER_DRAW_00E715A0: u32 = 0x00e7_15a0;
+/// The identity rotation copied into the local transform (`011a9448`, nine floats), the
+/// translation words (`011f426c`..`011f4274`) and the default property restored after
+/// (`011f49ac`).
+const IDENTITY_ROTATION: u32 = 0x011a_9448;
+const ZERO_TRANSLATION: u32 = 0x011f_426c;
+const DEFAULT_PROPERTY: u32 = 0x011f_49ac;
+/// `NiXenonRenderer::AddToBatch` (engine map, `00e74a40`; thiscall, one word).
+const ADD_TO_BATCH: u32 = 0x00e7_4a40;
+
+// Translated from 00e750e0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (a vtable word of the renderer): draws one geometry with the
+/// renderer's own property state. Nothing while the device is lost (+0x6fc) or without a
+/// geometry or its word at +0x10. The current state and effects (+0xc, +0x10) are saved.
+/// On first use the own state (+0x8a8) is made: an `NiPropertyState` (0x1c bytes from the
+/// memory manager, null when that fails) given three new properties (0x1c bytes each from
+/// `00aa13e0`, built by `00a5f1e0`, `004391c0`, `00a5f4d0`; their flag words at +0x18 set to
+/// `(f & 0xffd7) | 0x10`, `(f & 0xfeed) | 0xed`, `f & 0xfffc`) through `00a59f50`. The
+/// geometry's property (+0x14) is set on it, it becomes the current state (effects 0), the
+/// object at +0x8ac gets slot +0x10 with the word at +0x8b0 and the geometry, the buffers
+/// are prepared (`00e74cc0`), and `00e715a0` draws with an identity transform (rotation
+/// from `011a9448`, translation from `011f426c`, scale 1), a 0x10-byte local and the
+/// geometry's word at +0x1c. The default property (`011f49ac`) is set back and the saved
+/// state restored.
+pub fn fn_00e750e0(e: &mut Engine, this: Ptr, geometry: Ptr) {
+    let renderer = this.addr();
+    if e.mem.u8(renderer + DEVICE_LOST_STATE) != 0 {
+        return;
+    }
+    let geometry = geometry.addr();
+    if geometry == 0 || e.mem.u32(geometry + 0x10) == 0 {
+        return;
+    }
+    let saved_state = e.mem.u32(renderer + 0xc);
+    let saved_effects = e.mem.u32(renderer + 0x10);
+    if e.mem.u32(renderer + OWN_PROPERTY_STATE) == 0 {
+        let block = e
+            .call(MEMORY_MANAGER_ALLOCATE, &args![MEMORY_MANAGER, 0x1cu32])
+            .u32();
+        let state = if block != 0 {
+            e.call(PROPERTY_STATE_CTOR, &args![block]).u32()
+        } else {
+            0
+        };
+        e.mem.set_u32(renderer + OWN_PROPERTY_STATE, state);
+        for (ctor, mask, set) in [
+            (PROPERTY_CTOR_00A5F1E0, 0xffd7u16, 0x10u16),
+            (PROPERTY_CTOR_004391C0, 0xfeed, 0xed),
+            (PROPERTY_CTOR_00A5F4D0, 0xfffc, 0),
+        ] {
+            let block = e.call(OBJECT_ALLOCATE, &args![0x1cu32]).u32();
+            let property = if block != 0 {
+                e.call(ctor, &args![block]).u32()
+            } else {
+                0
+            };
+            let flags = e.mem.u16(property.wrapping_add(0x18));
+            e.mem
+                .set_u16(property.wrapping_add(0x18), (flags & mask) | set);
+            let state = e.mem.u32(renderer + OWN_PROPERTY_STATE);
+            e.call(PROPERTY_STATE_SET, &args![state, property]);
+        }
+    }
+    let state = e.mem.u32(renderer + OWN_PROPERTY_STATE);
+    let property = e.mem.u32(geometry + 0x14);
+    e.call(PROPERTY_STATE_SET, &args![state, property]);
+    let state = e.mem.u32(renderer + OWN_PROPERTY_STATE);
+    let word = e.mem.u32(renderer + BATCH_WORD);
+    e.mem.set_u32(renderer + 0xc, state);
+    let object = e.mem.u32(renderer + BATCH_OBJECT);
+    e.mem.set_u32(renderer + 0x10, 0);
+    e.vcall(object, 0x10, &args![word, geometry]);
+    e.call(PREPARE_GEOMETRY, &args![renderer, geometry]);
+    e.with_stack(0x50, |e, frame| {
+        // The exe's frame: a 0x10-byte local at +0xc, the transform (rotation, translation,
+        // scale) at +0x1c.
+        let local = frame.addr() + 0xc;
+        let transform = frame.addr() + 0x1c;
+        let rotation = e.mem.bytes(IDENTITY_ROTATION, 0x24);
+        e.mem.write(transform, &rotation);
+        e.mem.set_f32(transform + 0x30, 1.0);
+        let x = e.mem.u32(ZERO_TRANSLATION);
+        e.mem.set_u32(transform + 0x24, x);
+        let y = e.mem.u32(ZERO_TRANSLATION + 4);
+        e.mem.set_u32(transform + 0x28, y);
+        let z = e.mem.u32(ZERO_TRANSLATION + 8);
+        e.mem.set_u32(transform + 0x2c, z);
+        let extra = e.mem.u32(geometry + 0x1c);
+        e.call(
+            RENDERER_DRAW_00E715A0,
+            &args![renderer, 0u32, 0u32, 0u32, transform, local, extra],
+        );
+    });
+    let default = e.mem.u32(DEFAULT_PROPERTY);
+    let state = e.mem.u32(renderer + OWN_PROPERTY_STATE);
+    e.call(PROPERTY_STATE_SET, &args![state, default]);
+    e.mem.set_u32(renderer + 0xc, saved_state);
+    e.mem.set_u32(renderer + 0x10, saved_effects);
+}
+
+// Translated from 00e752a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (two vtable words): a jump to `NiXenonRenderer::AddToBatch`
+/// (`00e74a40`, `RET 4`) with `this` and the word, passing on its `EAX`.
+pub fn fn_00e752a0(e: &mut Engine, this: Ptr, object: u32) -> u32 {
+    e.call(ADD_TO_BATCH, &args![this, object]).u32()
+}
+
+#[cfg(test)]
+mod n081_tests {
+    use super::*;
+
+    #[test]
+    fn add_to_batch_thunk_passes_its_words_and_answer() {
+        let mut e = Engine::new();
+        e.register(ADD_TO_BATCH, |_, a| (a[0] + a[1]).into_ret());
+        assert_eq!(e.call(0x00e7_52a0, &args![0x10u32, 0x5u32]).u32(), 0x15);
+    }
+
+    #[test]
+    fn draw_with_own_state_builds_it_once_and_restores() {
+        let mut e = Engine::new();
+        e.map(IDENTITY_ROTATION, 0x24);
+        e.mem.set_f32(IDENTITY_ROTATION, 1.0);
+        e.map(ZERO_TRANSLATION, 0xc);
+        e.mem.set_f32(ZERO_TRANSLATION + 4, 7.0);
+        e.map(DEFAULT_PROPERTY, 4);
+        e.mem.set_u32(DEFAULT_PROPERTY, 0xd00d);
+        let state_block = e.mem.alloc(0x1c);
+        e.register_double(MEMORY_MANAGER_ALLOCATE, move |_, _| state_block.into_ret());
+        e.register(PROPERTY_STATE_CTOR, |_, a| a[0].into_ret());
+        e.register(OBJECT_ALLOCATE, |e, _| {
+            let p = e.mem.alloc(0x1c);
+            e.mem.set_u16(p + 0x18, 0xffff);
+            p.into_ret()
+        });
+        for ctor in [
+            PROPERTY_CTOR_00A5F1E0,
+            PROPERTY_CTOR_004391C0,
+            PROPERTY_CTOR_00A5F4D0,
+        ] {
+            e.register(ctor, |_, a| a[0].into_ret());
+        }
+        e.register(PROPERTY_STATE_SET, |_, _| Ret::default());
+        e.register(PREPARE_GEOMETRY, |_, _| Ret::default());
+        e.register(RENDERER_DRAW_00E715A0, |e, a| {
+            assert_eq!(e.mem.f32(a[4]), 1.0);
+            assert_eq!(e.mem.f32(a[4] + 0x28), 7.0);
+            assert_eq!(e.mem.f32(a[4] + 0x30), 1.0);
+            assert_eq!(a[5] + 0x10, a[4]);
+            Ret::default()
+        });
+        e.register(0x0079_0010, |_, _| Ret::default());
+        let vtable = e.mem.alloc(0x14);
+        e.mem.set_u32(vtable + 0x10, 0x0079_0010);
+        let batch = e.mem.alloc(4);
+        e.mem.set_u32(batch, vtable);
+        let renderer = e.mem.alloc(0x900);
+        e.mem.set_u32(renderer + BATCH_OBJECT, batch);
+        e.mem.set_u32(renderer + BATCH_WORD, 0x77);
+        e.mem.set_u32(renderer + 0xc, 0x1111);
+        e.mem.set_u32(renderer + 0x10, 0x2222);
+        let geometry = e.mem.alloc(0x20);
+        e.mem.set_u32(geometry + 0x10, 1);
+        e.mem.set_u32(geometry + 0x14, 0xbeef);
+        e.mem.set_u32(geometry + 0x1c, 0x99);
+        e.call_log = Some(vec![]);
+        e.call(0x00e7_50e0, &args![renderer, geometry]);
+        let log = e.call_log.take().unwrap();
+        let sets: Vec<u32> = log
+            .iter()
+            .filter(|c| c.0 == PROPERTY_STATE_SET)
+            .map(|c| c.1[1])
+            .collect();
+        assert_eq!(sets.len(), 5);
+        assert_eq!(&sets[3..], &[0xbeef, 0xd00d]);
+        let flags: Vec<u16> = sets[..3].iter().map(|p| e.mem.u16(p + 0x18)).collect();
+        assert_eq!(flags, vec![0xffd7, 0xfeed, 0xfffc]);
+        assert!(log.contains(&(0x0079_0010, vec![batch, 0x77, geometry])));
+        assert!(log.contains(&(PREPARE_GEOMETRY, vec![renderer, geometry])));
+        let draw: Vec<_> = log
+            .iter()
+            .filter(|c| c.0 == RENDERER_DRAW_00E715A0)
+            .collect();
+        assert_eq!(&draw[0].1[..4], &[renderer, 0, 0, 0]);
+        assert_eq!(draw[0].1[6], 0x99);
+        assert_eq!(e.mem.u32(renderer + OWN_PROPERTY_STATE), state_block);
+        assert_eq!(e.mem.u32(renderer + 0xc), 0x1111);
+        assert_eq!(e.mem.u32(renderer + 0x10), 0x2222);
+        // A second draw keeps the state; a lost device or an empty geometry does nothing.
+        e.call_log = Some(vec![]);
+        e.call(0x00e7_50e0, &args![renderer, geometry]);
+        assert_eq!(
+            e.call_log
+                .take()
+                .unwrap()
+                .iter()
+                .filter(|c| c.0 == PROPERTY_STATE_SET)
+                .count(),
+            2
+        );
+        e.mem.set_u32(geometry + 0x10, 0);
+        e.call_log = Some(vec![]);
+        e.call(0x00e7_50e0, &args![renderer, geometry]);
+        assert_eq!(e.call_log.take().unwrap().len(), 1);
+    }
 }
 
 #[cfg(test)]

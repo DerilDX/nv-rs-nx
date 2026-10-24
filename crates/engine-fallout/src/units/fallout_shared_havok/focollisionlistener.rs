@@ -369,9 +369,160 @@ pub fn fn_006240f0(e: &mut Engine, _this: Ptr, reference: u32, event: Ptr) {
     }
 }
 
+/// The free (`00401030`, cdecl, one word).
+const FREE: u32 = 0x0040_1030;
+/// The destructor bodies of the `hkpContactListener` base (`006234f0`) and
+/// of the next base (`006234d0`), not this task's.
+const CONTACT_LISTENER_DESTRUCTOR: u32 = 0x0062_34f0;
+const LISTENER_BASE_DESTRUCTOR: u32 = 0x0062_34d0;
+/// `FOCollisionListener`'s vtable (RTTI `.?AVFOCollisionListener@@`).
+const LISTENER_VTABLE: u32 = 0x0104_dd38;
+/// The word the destructor clears (`011cc224`).
+const LISTENER_WORD: u32 = 0x011c_c224;
+/// `0063f7b0` (`ECX` the list): removes the list's first item;
+/// `0046ffb0` (`ECX`): the list's destructor.
+const LIST_REMOVE_HEAD: u32 = 0x0063_f7b0;
+const LIST_DESTRUCT: u32 = 0x0046_ffb0;
+/// The damage record's members: the `NiPointer` constructor (`00633c90`)
+/// and destructor (`0045cec0`), the `NiPointer` assignment (`0066b0d0`)
+/// and the cause pointer at +8 (`0042f730` constructor, `0042f760`
+/// destructor, `NiPointer<ActorCause>::operator=` `0042f780`).
+const POINTER_CONSTRUCT: u32 = 0x0063_3c90;
+const POINTER_DESTRUCT: u32 = 0x0045_cec0;
+const POINTER_ASSIGN: u32 = 0x0066_b0d0;
+const CAUSE_CONSTRUCT: u32 = 0x0042_f730;
+const CAUSE_DESTRUCT: u32 = 0x0042_f760;
+const CAUSE_ASSIGN: u32 = 0x0042_f780;
+
+// Translated from 00623510 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `hkpContactListener` scalar deleting destructor (engine map; `RET 4`):
+/// the body (`006234f0`), then the free when bit 0 is set. Returns `this`.
+pub fn hkp_contact_listener_scalar_deleting_destructor(
+    e: &mut Engine,
+    this: Ptr,
+    flags: u32,
+) -> Ptr {
+    e.call(CONTACT_LISTENER_DESTRUCTOR, &args![this]);
+    if flags & 1 != 0 {
+        e.call(FREE, &args![this]);
+    }
+    this
+}
+
+// Translated from 00623540 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The listener base's scalar deleting destructor (`RET 4`; the engine map
+/// has no name): the body (`006234d0`), then the free when bit 0 is set.
+/// Returns `this`.
+pub fn fn_00623540(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    e.call(LISTENER_BASE_DESTRUCTOR, &args![this]);
+    if flags & 1 != 0 {
+        e.call(FREE, &args![this]);
+    }
+    this
+}
+
+// Translated from 00623590 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `FOCollisionListener` scalar deleting destructor (engine map; `RET 4`):
+/// [`fn_006235c0`], then the free when bit 0 is set. Returns `this`.
+pub fn fo_collision_listener_scalar_deleting_destructor(
+    e: &mut Engine,
+    this: Ptr,
+    flags: u32,
+) -> Ptr {
+    fn_006235c0(e, this);
+    if flags & 1 != 0 {
+        e.call(FREE, &args![this]);
+    }
+    this
+}
+
+// Translated from 006235c0 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 006235c0 - the FS:[0] exception frame (C++ unwinding during destruction) is not translated
+/// The `FOCollisionListener` destructor body (`ECX`; the engine map has no
+/// name): its vtable (`0104dd38`), the word at `011cc224` cleared, the
+/// queued records deleted ([`fn_00623c50`]), the list at +4 destroyed
+/// (`0046ffb0`) and the base's body (`006234d0`).
+pub fn fn_006235c0(e: &mut Engine, this: Ptr) {
+    e.mem.set_u32(this.addr(), LISTENER_VTABLE);
+    e.set_global(LISTENER_WORD, 0u32);
+    fn_00623c50(e, this);
+    e.call(LIST_DESTRUCT, &args![this.addr() + 4]);
+    e.call(LISTENER_BASE_DESTRUCTOR, &args![this]);
+}
+
+// Translated from 00623820 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The damage record's scalar deleting destructor (`RET 4`; the engine map
+/// has no name): [`fn_00623850`], then the free when bit 0 is set. Returns
+/// `this`.
+pub fn fn_00623820(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    fn_00623850(e, this);
+    if flags & 1 != 0 {
+        e.call(FREE, &args![this]);
+    }
+    this
+}
+
+// Translated from 00623850 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 00623850 - the FS:[0] exception frame (C++ unwinding during destruction) is not translated
+/// The damage record's destructor body (`ECX`; the engine map has no
+/// name): the cause pointer at +8 (`0042f760`), then the `NiPointer` at +0
+/// (`0045cec0`).
+pub fn fn_00623850(e: &mut Engine, this: Ptr) {
+    e.call(CAUSE_DESTRUCT, &args![this.addr() + 8]);
+    e.call(POINTER_DESTRUCT, &args![this]);
+}
+
+// Translated from 00623bd0 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 00623bd0 - the FS:[0] exception frame (C++ unwinding during construction) is not translated
+/// The damage record's constructor (`ECX`; the engine map has no name):
+/// the `NiPointer` at +0 and the cause pointer at +8 made empty
+/// (`00633c90`, `0042f730` with 0), the `NiPointer` assigned 0
+/// (`0066b0d0`), the `float` at +4 0.0 and the cause assigned 0
+/// (`0042f780`). Returns `this`.
+pub fn fn_00623bd0(e: &mut Engine, this: Ptr) -> Ptr {
+    let base = this.addr();
+    e.call(POINTER_CONSTRUCT, &args![this, 0u32]);
+    e.call(CAUSE_CONSTRUCT, &args![base + 8, 0u32]);
+    e.call(POINTER_ASSIGN, &args![this, 0u32]);
+    e.mem.set_u32(base + 4, 0.0f32.to_bits());
+    e.call(CAUSE_ASSIGN, &args![base + 8, 0u32]);
+    this
+}
+
+// Translated from 00623c50 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Empties the listener's record list (+4; `ECX`; the engine map has no
+/// name): while the list is not empty (`008256d0`), its first item
+/// (`006815c0`'s word) is deleted ([`fn_00623820`] with 1) when there is
+/// one, and the head removed (`0063f7b0`).
+pub fn fn_00623c50(e: &mut Engine, this: Ptr) {
+    let list = this.addr() + 4;
+    while !e.call(LIST_NODE_EMPTY, &args![list]).bool() {
+        let node = e.call(SELF, &args![list]).u32();
+        let item = e.mem.u32(node);
+        if item != 0 {
+            fn_00623820(e, Ptr::new(item), 1);
+        }
+        e.call(LIST_REMOVE_HEAD, &args![list]);
+    }
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(
+            0x0062_3510,
+            hkp_contact_listener_scalar_deleting_destructor(Ptr, u32) -> Ptr
+        ),
+        entry!(0x0062_3540, fn_00623540(Ptr, u32) -> Ptr),
+        entry!(
+            0x0062_3590,
+            fo_collision_listener_scalar_deleting_destructor(Ptr, u32) -> Ptr
+        ),
+        entry!(0x0062_35c0, fn_006235c0(Ptr)),
+        entry!(0x0062_3820, fn_00623820(Ptr, u32) -> Ptr),
+        entry!(0x0062_3850, fn_00623850(Ptr)),
+        entry!(0x0062_3bd0, fn_00623bd0(Ptr) -> Ptr),
+        entry!(0x0062_3c50, fn_00623c50(Ptr)),
         entry!(0x0062_4050, fn_00624050(Ptr) -> f32),
         entry!(0x0062_3570, fn_00623570(Ptr) -> Ptr),
         entry!(0x0062_3640, fn_00623640(Ptr)),
@@ -673,5 +824,128 @@ mod tests {
         e.call_log = Some(vec![]);
         e.call(0x0062_3cb0, &args![this, event]);
         assert_eq!(calls_to(&e, 0x0083_7550).len(), 1);
+    }
+}
+
+#[cfg(test)]
+mod n085_tests {
+    use super::*;
+
+    fn calls(e: &Engine, address: u32) -> Vec<Vec<u32>> {
+        e.call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|(a, _)| *a == address)
+            .map(|(_, w)| w.clone())
+            .collect()
+    }
+
+    fn quiet(e: &mut Engine, addrs: &[u32]) {
+        for &addr in addrs {
+            e.register(addr, |_, _| Ret::default());
+        }
+    }
+
+    #[test]
+    fn base_scalar_deleting_destructors() {
+        for flags in [0u32, 1] {
+            let mut e = Engine::new();
+            quiet(
+                &mut e,
+                &[CONTACT_LISTENER_DESTRUCTOR, LISTENER_BASE_DESTRUCTOR, FREE],
+            );
+            e.call_log = Some(vec![]);
+            assert_eq!(e.call(0x0062_3510, &args![0x7000u32, flags]).u32(), 0x7000);
+            assert_eq!(e.call(0x0062_3540, &args![0x7000u32, flags]).u32(), 0x7000);
+            assert_eq!(calls(&e, CONTACT_LISTENER_DESTRUCTOR), vec![vec![0x7000]]);
+            assert_eq!(calls(&e, LISTENER_BASE_DESTRUCTOR), vec![vec![0x7000]]);
+            assert_eq!(calls(&e, FREE).len(), 2 * flags as usize);
+        }
+    }
+
+    #[test]
+    fn listener_destructor_deletes_the_queued_records() {
+        for flags in [0u32, 1] {
+            let mut e = Engine::new();
+            e.map(0x011c_c000, 0x1000);
+            e.set_global(LISTENER_WORD, 5u32);
+            let this = e.mem.alloc(0x10);
+            // A list of two nodes: one record, then an empty item.
+            let record = e.mem.alloc(0x10);
+            let nodes = [record, 0u32];
+            let left = std::rc::Rc::new(std::cell::RefCell::new(2usize));
+            let l = left.clone();
+            e.register_double(LIST_NODE_EMPTY, move |_, _| {
+                u32::from(*l.borrow() == 0).into_ret()
+            });
+            let l = left.clone();
+            let slot = e.mem.alloc(4);
+            e.register_double(SELF, move |e, _| {
+                e.mem.set_u32(slot, nodes[2 - *l.borrow()]);
+                slot.into_ret()
+            });
+            let l = left;
+            e.register_double(LIST_REMOVE_HEAD, move |_, _| {
+                *l.borrow_mut() -= 1;
+                Ret::default()
+            });
+            quiet(
+                &mut e,
+                &[
+                    CAUSE_DESTRUCT,
+                    POINTER_DESTRUCT,
+                    FREE,
+                    LIST_DESTRUCT,
+                    LISTENER_BASE_DESTRUCTOR,
+                ],
+            );
+            e.call_log = Some(vec![]);
+            assert_eq!(e.call(0x0062_3590, &args![this, flags]).u32(), this);
+            assert_eq!(e.mem.u32(this), LISTENER_VTABLE);
+            assert_eq!(e.global::<u32>(LISTENER_WORD), 0);
+            assert_eq!(calls(&e, CAUSE_DESTRUCT), vec![vec![record + 8]]);
+            assert_eq!(calls(&e, POINTER_DESTRUCT), vec![vec![record]]);
+            assert_eq!(calls(&e, LIST_REMOVE_HEAD), vec![vec![this + 4]; 2]);
+            assert_eq!(calls(&e, LIST_DESTRUCT), vec![vec![this + 4]]);
+            assert_eq!(calls(&e, LISTENER_BASE_DESTRUCTOR), vec![vec![this]]);
+            // The record is always freed; the listener only with bit 0.
+            let mut freed = vec![vec![record]];
+            if flags & 1 != 0 {
+                freed.push(vec![this]);
+            }
+            assert_eq!(calls(&e, FREE), freed);
+        }
+    }
+
+    #[test]
+    fn record_constructor_and_destructor() {
+        let mut e = Engine::new();
+        quiet(
+            &mut e,
+            &[
+                POINTER_CONSTRUCT,
+                CAUSE_CONSTRUCT,
+                POINTER_ASSIGN,
+                CAUSE_ASSIGN,
+                CAUSE_DESTRUCT,
+                POINTER_DESTRUCT,
+                FREE,
+            ],
+        );
+        let record = e.mem.alloc(0x10);
+        e.mem.set_u32(record + 4, 0xffff_ffff);
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x0062_3bd0, &args![record]).u32(), record);
+        assert_eq!(e.mem.u32(record + 4), 0);
+        assert_eq!(calls(&e, POINTER_CONSTRUCT), vec![vec![record, 0]]);
+        assert_eq!(calls(&e, CAUSE_CONSTRUCT), vec![vec![record + 8, 0]]);
+        assert_eq!(calls(&e, POINTER_ASSIGN), vec![vec![record, 0]]);
+        assert_eq!(calls(&e, CAUSE_ASSIGN), vec![vec![record + 8, 0]]);
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x0062_3820, &args![record, 0u32]).u32(), record);
+        assert!(calls(&e, FREE).is_empty());
+        e.call(0x0062_3850, &args![record]);
+        assert_eq!(calls(&e, CAUSE_DESTRUCT).len(), 2);
     }
 }

@@ -1878,9 +1878,18 @@ pub fn water_shader_create_constant_maps(e: &mut Engine, this: Ptr) {
     });
 }
 
+// Translated from 00b861c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`ECX` only): `WaterShader::LoadShaders` (`00b827c0`), then the
+/// tail call to `00b83dd0` on `this`, whose answer it passes on.
+pub fn fn_00b861c0(e: &mut Engine, this: Ptr) -> bool {
+    water_shader_load_shaders(e, this);
+    fn_00b83dd0(e, this)
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x00b8_61c0, fn_00b861c0(Ptr) -> bool),
         entry!(0x00b8_24b0, fn_00b824b0(Ptr)),
         entry!(0x00b8_27b0, fn_00b827b0() -> Ptr),
         entry!(0x00b8_61d0, fn_00b861d0(Ptr) -> bool),
@@ -2625,5 +2634,38 @@ mod water_function_tests {
             assert_eq!(e.mem.u32(entry + 4), 1);
             global += 4;
         }
+    }
+}
+
+#[cfg(test)]
+mod n072_tests {
+    use super::*;
+    use crate::units::bsshader::geometrydecalshader::shader_test_rig::*;
+
+    #[test]
+    fn fn_00b861c0_loads_the_shaders_then_builds_the_passes() {
+        let mut e = pass_rig();
+        e.map(0x011f_9000, 0x1000);
+        e.map(0x011f_f000, 0x1000);
+        e.set_global::<i32>(SHADER_MODEL_011F91C0, 5);
+        e.register(FORMAT_00406D00, |e, a| {
+            e.mem.set_u32(a[0], a[2]);
+            Ret::default()
+        });
+        e.register(SET_BLEND_00B80040, |_, _| Ret::default());
+        e.register(SET_VERTEX_SHADER_00B79950, |_, _| Ret::default());
+        e.register(SET_PIXEL_SHADER_00B80600, |_, _| Ret::default());
+        let this = e.mem.alloc(0x250);
+        assert!(e.call(0x00b8_61c0, &args![this]).bool());
+        assert_eq!(calls(&e, COMPILE_VERTEX_SHADER).len(), 3);
+        assert_eq!(calls(&e, NEW_PASS_00E804D0).len(), 0x4a);
+        // The shaders exist before the first pass is made.
+        let log = e.call_log.as_ref().unwrap();
+        let last_compile = log
+            .iter()
+            .rposition(|c| c.0 == COMPILE_PIXEL_SHADER)
+            .unwrap();
+        let first_pass = log.iter().position(|c| c.0 == NEW_PASS_00E804D0).unwrap();
+        assert!(last_compile < first_pass);
     }
 }

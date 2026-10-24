@@ -73,9 +73,20 @@ pub fn fn_00e7ccf0(_e: &mut Engine, value: u32) -> u32 {
     }
 }
 
+/// The address `00e7cd30` answers (`0126f59c`).
+const RECORD_0126F59C: u32 = 0x0126_f59c;
+
+// Translated from 00e7cd30 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (no argument read; the shape of a `GetRTTI`):
+/// answers the address `0126f59c`.
+pub fn fn_00e7cd30(_e: &mut Engine) -> u32 {
+    RECORD_0126F59C
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x00e7_cd30, fn_00e7cd30() -> u32),
         entry!(0x00e7_cc50, fn_00e7cc50(u32, u32)),
         entry!(0x00e7_cc90, fn_00e7cc90(Ptr) -> bool),
         entry!(0x00e7_cca0, fn_00e7cca0(u32) -> bool),
@@ -175,5 +186,16 @@ mod tests {
             .map(|v| e.call(0x00e7_ccf0, &args![*v]).u32())
             .collect();
         assert_eq!(answers, vec![0, 2, 4, 8, 0, 0]);
+    }
+}
+
+#[cfg(test)]
+mod n072_tests {
+    use super::*;
+
+    #[test]
+    fn fn_00e7cd30_answers_the_record() {
+        let mut e = Engine::new();
+        assert_eq!(e.call(0x00e7_cd30, &args![]).u32(), 0x0126_f59c);
     }
 }

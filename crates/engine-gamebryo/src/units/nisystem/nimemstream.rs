@@ -202,9 +202,107 @@ pub fn ni_mem_stream_seek(e: &mut Engine, this: Ptr<NiMemStream>, offset: i32) {
     e.set(this, NiMemStream::m_uiAbsoluteCurrentPos, position);
 }
 
+/// The component byte swap (`00aa1de0`, cdecl: buffer, size, the component sizes, their
+/// count).
+const SWAP_COMPONENTS: u32 = 0x00aa_1de0;
+/// The memory manager singleton and its `Deallocate` (`00aa4060`, thiscall, one word).
+const MEMORY_MANAGER: u32 = 0x011f_6238;
+const MEMORY_DEALLOCATE: u32 = 0x00aa_4060;
+
+// Translated from 00aa2d90 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiMemStream::scalar deleting destructor` (engine map; thiscall, one word): the
+/// destructor's body inline (the vtable `010a256c`, the buffer freed (`00aa10f0`) unless it
+/// is user memory or frozen, the base destructor `00aa1d30`), then, with bit 0 of `flags`,
+/// the stream given back to the memory manager. Answers `this`.
+pub fn ni_mem_stream_scalar_deleting_destructor(
+    e: &mut Engine,
+    this: Ptr<NiMemStream>,
+    flags: u8,
+) -> Ptr<NiMemStream> {
+    e.mem.set_u32(this.addr(), MEM_STREAM_VTABLE);
+    if !e.get(this, NiMemStream::m_bUserMemory) && !e.get(this, NiMemStream::m_bFreeze) {
+        let buffer = e.get(this, NiMemStream::m_pBuffer);
+        e.call(FREE, &args![buffer]);
+    }
+    e.call(BASE_DESTRUCTOR, &args![this]);
+    if flags & 1 != 0 {
+        e.call(MEMORY_DEALLOCATE, &args![MEMORY_MANAGER, this]);
+    }
+    this
+}
+
+// Translated from 00aa2ec0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The byte-swapping read `SetEndianSwap` stores (unnamed in the engine map; cdecl, five
+/// words): 0 for an empty read; otherwise copies `min(count, m_uiEnd - m_uiPos)` bytes from
+/// `m_pBuffer + m_uiPos` (`memcpy`), advances `m_uiPos`, swaps the destination's `count`
+/// bytes by the component sizes (`00aa1de0`) and answers the bytes copied.
+pub fn fn_00aa2ec0(
+    e: &mut Engine,
+    this: Ptr<NiMemStream>,
+    destination: u32,
+    count: u32,
+    sizes: u32,
+    components: u32,
+) -> u32 {
+    if count == 0 {
+        return 0;
+    }
+    let position = e.get(this, NiMemStream::m_uiPos);
+    let available = e.get(this, NiMemStream::m_uiEnd).wrapping_sub(position);
+    let copied = if count > available { available } else { count };
+    let buffer = e.get(this, NiMemStream::m_pBuffer);
+    e.call(
+        MEMCPY,
+        &args![destination, buffer.wrapping_add(position), copied],
+    );
+    let position = e.get(this, NiMemStream::m_uiPos).wrapping_add(copied);
+    e.set(this, NiMemStream::m_uiPos, position);
+    e.call(
+        SWAP_COMPONENTS,
+        &args![destination, count, sizes, components],
+    );
+    copied
+}
+
+// Translated from 00aa2f20 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The byte-swapping write `SetEndianSwap` stores (unnamed in the engine map; cdecl, five
+/// words): 0 for an empty write; otherwise copies `source` into a block from `00aa1070`,
+/// swaps the copy by the component sizes (`00aa1de0`), writes it ([`fn_00aa2dd0`]), frees the
+/// copy (`00aa10f0`) and answers what the write answered.
+pub fn fn_00aa2f20(
+    e: &mut Engine,
+    this: Ptr<NiMemStream>,
+    source: u32,
+    count: u32,
+    sizes: u32,
+    components: u32,
+) -> u32 {
+    if count == 0 {
+        return 0;
+    }
+    let copy = e.call(ALLOCATE, &args![count]).u32();
+    e.call(MEMCPY, &args![copy, source, count]);
+    e.call(SWAP_COMPONENTS, &args![copy, count, sizes, components]);
+    let written = fn_00aa2dd0(e, this, copy, count);
+    e.call(FREE, &args![copy]);
+    written
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(
+            0x00aa_2d90,
+            ni_mem_stream_scalar_deleting_destructor(Ptr<NiMemStream>, u8) -> Ptr<NiMemStream>
+        ),
+        entry!(
+            0x00aa_2ec0,
+            fn_00aa2ec0(Ptr<NiMemStream>, u32, u32, u32, u32) -> u32
+        ),
+        entry!(
+            0x00aa_2f20,
+            fn_00aa2f20(Ptr<NiMemStream>, u32, u32, u32, u32) -> u32
+        ),
         entry!(
             0x00aa_2fb0,
             ni_mem_stream_constructor(Ptr<NiMemStream>, u32, u32) -> Ptr<NiMemStream>
@@ -467,5 +565,112 @@ mod b037_tests {
         e.call(0x00aa_2d70, &args![this, (-15i32) as u32]);
         assert_eq!(e.get(this, NiMemStream::m_uiPos), 0);
         assert_eq!(e.get(this, NiMemStream::m_uiAbsoluteCurrentPos), 0);
+    }
+}
+
+#[cfg(test)]
+mod n083_tests {
+    use super::*;
+
+    fn calls_to(e: &Engine, callee: u32) -> Vec<Vec<u32>> {
+        e.call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|(address, _)| *address == callee)
+            .map(|(_, words)| words.clone())
+            .collect()
+    }
+
+    #[test]
+    fn deleting_destructor_frees_an_owned_buffer_and_itself() {
+        let mut e = Engine::new();
+        for callee in [FREE, BASE_DESTRUCTOR, MEMORY_DEALLOCATE] {
+            e.register(callee, |_, _| Ret::default());
+        }
+        let this = e.new_object::<NiMemStream>();
+        e.set(this, NiMemStream::m_pBuffer, 0x5000);
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x00aa_2d90, &args![this, 1u32]).u32(), this.addr());
+        assert_eq!(e.mem.u32(this.addr()), MEM_STREAM_VTABLE);
+        assert_eq!(calls_to(&e, FREE), vec![vec![0x5000]]);
+        assert_eq!(calls_to(&e, BASE_DESTRUCTOR), vec![vec![this.addr()]]);
+        assert_eq!(
+            calls_to(&e, MEMORY_DEALLOCATE),
+            vec![vec![MEMORY_MANAGER, this.addr()]]
+        );
+        for (user, frozen) in [(true, false), (false, true)] {
+            e.set(this, NiMemStream::m_bUserMemory, user);
+            e.set(this, NiMemStream::m_bFreeze, frozen);
+            e.call_log = Some(vec![]);
+            e.call(0x00aa_2d90, &args![this, 0u32]);
+            assert!(calls_to(&e, FREE).is_empty());
+            assert!(calls_to(&e, MEMORY_DEALLOCATE).is_empty());
+        }
+    }
+
+    #[test]
+    fn swapping_read_copies_what_is_left_and_swaps_the_count() {
+        let mut e = Engine::new();
+        e.register(MEMCPY, |_, _| Ret::default());
+        e.register(SWAP_COMPONENTS, |_, _| Ret::default());
+        let this = e.new_object::<NiMemStream>();
+        e.set(this, NiMemStream::m_pBuffer, 0x5000);
+        e.set(this, NiMemStream::m_uiPos, 4);
+        e.set(this, NiMemStream::m_uiEnd, 10);
+        e.call_log = Some(vec![]);
+        assert_eq!(
+            e.call(0x00aa_2ec0, &args![this, 0x6000u32, 0u32, 1u32, 2u32])
+                .u32(),
+            0
+        );
+        assert!(calls_to(&e, MEMCPY).is_empty());
+        assert_eq!(
+            e.call(0x00aa_2ec0, &args![this, 0x6000u32, 8u32, 1u32, 2u32])
+                .u32(),
+            6
+        );
+        assert_eq!(calls_to(&e, MEMCPY), vec![vec![0x6000, 0x5004, 6]]);
+        assert_eq!(calls_to(&e, SWAP_COMPONENTS), vec![vec![0x6000, 8, 1, 2]]);
+        assert_eq!(e.get(this, NiMemStream::m_uiPos), 10);
+    }
+
+    #[test]
+    fn swapping_write_swaps_a_copy() {
+        let mut e = Engine::new();
+        e.register(MEMCPY, |_, _| Ret::default());
+        e.register(SWAP_COMPONENTS, |_, _| Ret::default());
+        e.register(ALLOCATE, |_, _| 0x7000u32.into_ret());
+        e.register(FREE, |_, _| Ret::default());
+        let this = e.new_object::<NiMemStream>();
+        e.set(this, NiMemStream::m_pBuffer, 0x5000);
+        e.set(this, NiMemStream::m_uiAllocSize, 0x100);
+        e.call_log = Some(vec![]);
+        assert_eq!(
+            e.call(0x00aa_2f20, &args![this, 0x6000u32, 0u32, 1u32, 2u32])
+                .u32(),
+            0
+        );
+        assert!(calls_to(&e, ALLOCATE).is_empty());
+        assert_eq!(
+            e.call(0x00aa_2f20, &args![this, 0x6000u32, 8u32, 1u32, 2u32])
+                .u32(),
+            8
+        );
+        assert_eq!(calls_to(&e, ALLOCATE), vec![vec![8]]);
+        assert_eq!(
+            calls_to(&e, MEMCPY),
+            vec![vec![0x7000, 0x6000, 8], vec![0x5000, 0x7000, 8]]
+        );
+        assert_eq!(calls_to(&e, SWAP_COMPONENTS), vec![vec![0x7000, 8, 1, 2]]);
+        assert_eq!(calls_to(&e, FREE), vec![vec![0x7000]]);
+        assert_eq!(e.get(this, NiMemStream::m_uiPos), 8);
+        // A stream over user memory writes nothing.
+        e.set(this, NiMemStream::m_bUserMemory, true);
+        assert_eq!(
+            e.call(0x00aa_2f20, &args![this, 0x6000u32, 8u32, 1u32, 2u32])
+                .u32(),
+            0
+        );
     }
 }

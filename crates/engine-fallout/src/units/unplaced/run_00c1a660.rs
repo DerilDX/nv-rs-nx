@@ -194,9 +194,205 @@ pub fn fn_00c1a7d0(e: &mut Engine) {
     e.call(AFTER_UNREGISTER_00C25AC0, &args![]);
 }
 
+// The tall-grass geometry: `TallGrassTriStrips` (vtable `010bcc90`, `NiRTTI` `012024b8`
+// built by `00fbaed0`) and `TallGrassTriShape` (vtable `010bcdc8`, `NiRTTI` `012024c0`
+// built by `00fbaef0`), names from those records. On PC both keep `iInstanceCount` (Xbox
+// PDB) at +0xc4 and `pLocalBound` (an `NiBound`: centre, radius) at +0xc8, and the
+// world bound pointer (`NiAVObject::m_kWorldBound`) at +0x20.
+
+/// The instance count, the local bound and the world bound pointer.
+const INSTANCE_COUNT: u32 = 0xc4;
+const LOCAL_BOUND: u32 = 0xc8;
+const WORLD_BOUND: u32 = 0x20;
+/// `NiTriStrips` and `NiTriShape` methods (engine map; `thiscall`, one word):
+/// `RenderImmediate`, `OnlyRenderImmediate`, `GetViewerStrings`, and
+/// `NiTriShape::CreateClone` and the `NiTriShape` constructor `NiTriShape_ov2`.
+const STRIPS_RENDER_IMMEDIATE: u32 = 0x00a7_1d30;
+const STRIPS_ONLY_RENDER_IMMEDIATE: u32 = 0x00a7_1d70;
+const STRIPS_GET_VIEWER_STRINGS: u32 = 0x00a7_1e70;
+const SHAPE_RENDER_IMMEDIATE: u32 = 0x00a7_45c0;
+const SHAPE_ONLY_RENDER_IMMEDIATE: u32 = 0x00a7_4600;
+const SHAPE_GET_VIEWER_STRINGS: u32 = 0x00a7_4690;
+const SHAPE_CREATE_CLONE: u32 = 0x00a7_4640;
+const SHAPE_CONSTRUCT: u32 = 0x00a7_4480;
+/// `NiBound::GetViewerString` (`thiscall`, one word: label), `NiGetViewerString_ov6`
+/// (`cdecl`, two words: label, value), `NiBound::Update` (`thiscall`, two words) and the
+/// `NiTArray` growth and element store (`thiscall`, one and two words).
+const BOUND_GET_VIEWER_STRING: u32 = 0x00a7_fb20;
+const NI_GET_VIEWER_STRING_OV6: u32 = 0x00a7_d490;
+const BOUND_UPDATE: u32 = 0x00a7_fdd0;
+const ARRAY_SET_SIZE_0096AD30: u32 = 0x0096_ad30;
+const ARRAY_SET_AT_0096AE90: u32 = 0x0096_ae90;
+/// The labels `pLocalBound` (`010bcda8`) and `instance count` (`010bcd98`).
+const LOCAL_BOUND_LABEL: u32 = 0x010b_cda8;
+const INSTANCE_COUNT_LABEL: u32 = 0x010b_cd98;
+/// `TallGrassTriShape`'s vtable and `NiRTTI` record.
+const GRASS_SHAPE_VTABLE: u32 = 0x010b_cdc8;
+const GRASS_SHAPE_RTTI: u32 = 0x0120_24c0;
+
+/// The render slots' shared shape: the world bound becomes the local one (the centre's
+/// three words copied, the radius through the FPU, quieted); with instances the call
+/// goes on to `render` (a jump, its `EAX` answered), otherwise the world bound pointer
+/// still in `EAX` is answered.
+fn render_with_local_bound(e: &mut Engine, this: u32, renderer: u32, render: u32) -> u32 {
+    // The exe's order: x, radius, world bound pointer read; x, y stored; z read; radius
+    // stored; z stored.
+    let x = e.mem.u32(this + LOCAL_BOUND);
+    let radius = x87_quiet_bits(e.mem.u32(this + LOCAL_BOUND + 0xc));
+    let world = e.mem.u32(this + WORLD_BOUND);
+    e.mem.set_u32(world, x);
+    let y = e.mem.u32(this + LOCAL_BOUND + 4);
+    e.mem.set_u32(world + 4, y);
+    let z = e.mem.u32(this + LOCAL_BOUND + 8);
+    e.mem.set_u32(world + 0xc, radius);
+    e.mem.set_u32(world + 8, z);
+    if e.mem.u16(this + INSTANCE_COUNT) != 0 {
+        return e.call(render, &args![this, renderer]).u32();
+    }
+    world
+}
+
+/// `NiTArray::Add` as the viewer-string slots inline it (grow to size plus `m_usGrowBy`
+/// when full, then store at the old size through a stack word); answers the store's
+/// `EAX`.
+fn append_viewer_string(e: &mut Engine, strings: u32, text: u32) -> u32 {
+    let size = u32::from(e.mem.u16(strings + 0xa));
+    let max = u32::from(e.mem.u16(strings + 0x8));
+    if size >= max {
+        let grow = u32::from(e.mem.u16(strings + 0xe));
+        e.call(ARRAY_SET_SIZE_0096AD30, &args![strings, grow + size]);
+    }
+    e.with_stack(4, |e, slot| {
+        e.mem.set_u32(slot.addr(), text);
+        e.call(ARRAY_SET_AT_0096AE90, &args![strings, size, slot])
+            .u32()
+    })
+}
+
+/// The viewer strings' shared shape: the base's, then the local bound's string and the
+/// instance count's appended.
+fn grass_viewer_strings(e: &mut Engine, this: u32, strings: u32, base: u32) -> u32 {
+    e.call(base, &args![this, strings]);
+    let text = e
+        .call(
+            BOUND_GET_VIEWER_STRING,
+            &args![this + LOCAL_BOUND, LOCAL_BOUND_LABEL],
+        )
+        .u32();
+    append_viewer_string(e, strings, text);
+    let count = u32::from(e.mem.u16(this + INSTANCE_COUNT));
+    let text = e
+        .call(
+            NI_GET_VIEWER_STRING_OV6,
+            &args![INSTANCE_COUNT_LABEL, count],
+        )
+        .u32();
+    append_viewer_string(e, strings, text)
+}
+
+// Translated from 00c1a500 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No function in the engine map (Ghidra made none; disassembled from its bytes):
+/// `TallGrassTriStrips` vtable slot +0xf4 (`thiscall`, one word: the renderer): the
+/// world bound set from the local bound, then with instances
+/// `NiTriStrips::RenderImmediate`.
+pub fn fn_00c1a500(e: &mut Engine, this: Ptr, renderer: u32) -> u32 {
+    render_with_local_bound(e, this.addr(), renderer, STRIPS_RENDER_IMMEDIATE)
+}
+
+// Translated from 00c1a550 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No function in the engine map (Ghidra made none; disassembled from its bytes):
+/// `TallGrassTriStrips` vtable slot +0xf8, as `fn_00c1a500` with
+/// `NiTriStrips::OnlyRenderImmediate`.
+pub fn fn_00c1a550(e: &mut Engine, this: Ptr, renderer: u32) -> u32 {
+    render_with_local_bound(e, this.addr(), renderer, STRIPS_ONLY_RENDER_IMMEDIATE)
+}
+
+// Translated from 00c1a5a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No function in the engine map (Ghidra made none; disassembled from its bytes):
+/// `TallGrassTriStrips` vtable slot +0x60 (`GetViewerStrings`; `thiscall`, one word: an
+/// `NiTArray` of strings): `NiTriStrips::GetViewerStrings`, then the local bound's string
+/// (`pLocalBound`) and the instance count's (`instance count`) appended. Ends in the
+/// element store; its `EAX` is answered.
+pub fn fn_00c1a5a0(e: &mut Engine, this: Ptr, strings: u32) -> u32 {
+    grass_viewer_strings(e, this.addr(), strings, STRIPS_GET_VIEWER_STRINGS)
+}
+
+// Translated from 00c1a630 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No function in the engine map (Ghidra made none; disassembled from its bytes):
+/// `TallGrassTriShape` vtable slot +0x48 (`CreateClone`; `thiscall`, one word), a jump to
+/// `NiTriShape::CreateClone`; its answer.
+pub fn fn_00c1a630(e: &mut Engine, this: Ptr, process: u32) -> u32 {
+    e.call(SHAPE_CREATE_CLONE, &args![this, process]).u32()
+}
+
+// Translated from 00c1a650 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No function in the engine map (Ghidra made none; disassembled from its bytes):
+/// `TallGrassTriShape` vtable slot +8 (`GetRTTI`): its `NiRTTI` record `012024c0`.
+pub fn fn_00c1a650(_e: &mut Engine) -> u32 {
+    GRASS_SHAPE_RTTI
+}
+
+// Translated from 00c1a660 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map: a `TallGrassTriShape` constructor (`thiscall`, one word
+/// passed on): `NiTriShape::NiTriShape_ov2` with the word, then the class's vtable
+/// `010bcdc8`. Answers `this`.
+pub fn fn_00c1a660(e: &mut Engine, this: Ptr, data: u32) -> Ptr {
+    e.call(SHAPE_CONSTRUCT, &args![this, data]);
+    e.mem.set_u32(this.addr(), GRASS_SHAPE_VTABLE);
+    this
+}
+
+// Translated from 00c1a680 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No function in the engine map (Ghidra made none; disassembled from its bytes):
+/// `TallGrassTriShape` vtable slot +0xbc (`thiscall`, no words): `NiBound::Update` on the
+/// world bound with the local bound (+0xc8) and the transform at +0x68; ends in that
+/// call, so its `EAX` is answered.
+pub fn fn_00c1a680(e: &mut Engine, this: Ptr) -> u32 {
+    let world = e.mem.u32(this.addr() + WORLD_BOUND);
+    e.call(
+        BOUND_UPDATE,
+        &args![world, this.addr() + LOCAL_BOUND, this.addr() + 0x68],
+    )
+    .u32()
+}
+
+// Translated from 00c1a6a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No function in the engine map (Ghidra made none; disassembled from its bytes):
+/// `TallGrassTriShape` vtable slot +0xf4, as `fn_00c1a500` with
+/// `NiTriShape::RenderImmediate`.
+pub fn fn_00c1a6a0(e: &mut Engine, this: Ptr, renderer: u32) -> u32 {
+    render_with_local_bound(e, this.addr(), renderer, SHAPE_RENDER_IMMEDIATE)
+}
+
+// Translated from 00c1a6f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No function in the engine map (Ghidra made none; disassembled from its bytes):
+/// `TallGrassTriShape` vtable slot +0xf8, as `fn_00c1a500` with
+/// `NiTriShape::OnlyRenderImmediate`.
+pub fn fn_00c1a6f0(e: &mut Engine, this: Ptr, renderer: u32) -> u32 {
+    render_with_local_bound(e, this.addr(), renderer, SHAPE_ONLY_RENDER_IMMEDIATE)
+}
+
+// Translated from 00c1a740 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No function in the engine map (Ghidra made none; disassembled from its bytes):
+/// `TallGrassTriShape` vtable slot +0x60, as `fn_00c1a5a0` with
+/// `NiTriShape::GetViewerStrings`.
+pub fn fn_00c1a740(e: &mut Engine, this: Ptr, strings: u32) -> u32 {
+    grass_viewer_strings(e, this.addr(), strings, SHAPE_GET_VIEWER_STRINGS)
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x00c1_a500, fn_00c1a500(Ptr, u32) -> u32),
+        entry!(0x00c1_a550, fn_00c1a550(Ptr, u32) -> u32),
+        entry!(0x00c1_a5a0, fn_00c1a5a0(Ptr, u32) -> u32),
+        entry!(0x00c1_a630, fn_00c1a630(Ptr, u32) -> u32),
+        entry!(0x00c1_a650, fn_00c1a650() -> u32),
+        entry!(0x00c1_a660, fn_00c1a660(Ptr, u32) -> Ptr),
+        entry!(0x00c1_a680, fn_00c1a680(Ptr) -> u32),
+        entry!(0x00c1_a6a0, fn_00c1a6a0(Ptr, u32) -> u32),
+        entry!(0x00c1_a6f0, fn_00c1a6f0(Ptr, u32) -> u32),
+        entry!(0x00c1_a740, fn_00c1a740(Ptr, u32) -> u32),
         entry!(0x00c1_ad50, fn_00c1ad50(Ptr) -> Ptr),
         entry!(0x00c1_aa00, fn_00c1aa00()),
         entry!(0x00c1a640, fn_00c1a640(Ptr, u16)),
@@ -295,5 +491,128 @@ mod tests {
         assert_eq!(names[0], 0x010b_d404);
         assert_eq!(names[50], 0x010b_cf04);
         assert_eq!(log.last().unwrap().0, AFTER_UNREGISTER_00C25AC0);
+    }
+}
+
+#[cfg(test)]
+mod grass_tests {
+    use super::*;
+
+    fn answer(eax: u32) -> Ret {
+        Ret {
+            eax,
+            ..Ret::default()
+        }
+    }
+
+    fn calls_to(e: &Engine, address: u32) -> Vec<Vec<u32>> {
+        e.call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|(a, _)| *a == address)
+            .map(|(_, w)| w.clone())
+            .collect()
+    }
+
+    fn grass(e: &mut Engine, count: u16) -> (u32, u32) {
+        let this = e.mem.alloc(0x110);
+        let world = e.mem.alloc(0x10);
+        e.mem.set_u32(this + WORLD_BOUND, world);
+        e.mem.set_u16(this + INSTANCE_COUNT, count);
+        for word in 0..3 {
+            e.mem.set_u32(this + LOCAL_BOUND + 4 * word, 0x100 + word);
+        }
+        e.mem.set_u32(this + LOCAL_BOUND + 0xc, 0x7f80_0005);
+        (this, world)
+    }
+
+    #[test]
+    fn render_slots_copy_the_bound_and_render_only_with_instances() {
+        let mut e = Engine::new();
+        let slots = [
+            (0x00c1_a500u32, STRIPS_RENDER_IMMEDIATE),
+            (0x00c1_a550, STRIPS_ONLY_RENDER_IMMEDIATE),
+            (0x00c1_a6a0, SHAPE_RENDER_IMMEDIATE),
+            (0x00c1_a6f0, SHAPE_ONLY_RENDER_IMMEDIATE),
+        ];
+        for (_, target) in slots {
+            e.register(target, |_, a| answer(a[1] + 1));
+        }
+        for (address, target) in slots {
+            let (this, world) = grass(&mut e, 2);
+            e.call_log = Some(vec![]);
+            assert_eq!(e.call(address, &args![this, 0x40u32]).u32(), 0x41);
+            assert_eq!(calls_to(&e, target), vec![vec![this, 0x40]]);
+            assert_eq!(
+                [0u32, 4, 8, 0xc].map(|o| e.mem.u32(world + o)),
+                [0x100, 0x101, 0x102, 0x7fc0_0005]
+            );
+            let (this, world) = grass(&mut e, 0);
+            e.call_log = Some(vec![]);
+            assert_eq!(e.call(address, &args![this, 0x40u32]).u32(), world);
+            assert!(calls_to(&e, target).is_empty());
+        }
+    }
+
+    #[test]
+    fn viewer_strings_add_the_bound_and_the_count() {
+        let mut e = Engine::new();
+        for base in [STRIPS_GET_VIEWER_STRINGS, SHAPE_GET_VIEWER_STRINGS] {
+            e.register(base, |_, _| Ret::default());
+        }
+        e.register(BOUND_GET_VIEWER_STRING, |_, _| answer(0x5100));
+        e.register(NI_GET_VIEWER_STRING_OV6, |_, a| answer(0x5200 + a[1]));
+        e.register(ARRAY_SET_SIZE_0096AD30, |_, _| Ret::default());
+        e.register(ARRAY_SET_AT_0096AE90, |e, a| answer(e.mem.u32(a[2])));
+        for (address, base) in [
+            (0x00c1_a5a0u32, STRIPS_GET_VIEWER_STRINGS),
+            (0x00c1_a740, SHAPE_GET_VIEWER_STRINGS),
+        ] {
+            let (this, _) = grass(&mut e, 3);
+            let strings = e.mem.alloc(0x10);
+            e.mem.set_u16(strings + 0x8, 1);
+            e.mem.set_u16(strings + 0xa, 1);
+            e.mem.set_u16(strings + 0xe, 4);
+            e.call_log = Some(vec![]);
+            assert_eq!(e.call(address, &args![this, strings]).u32(), 0x5203);
+            assert_eq!(calls_to(&e, base), vec![vec![this, strings]]);
+            assert_eq!(
+                calls_to(&e, BOUND_GET_VIEWER_STRING),
+                vec![vec![this + LOCAL_BOUND, LOCAL_BOUND_LABEL]]
+            );
+            assert_eq!(
+                calls_to(&e, NI_GET_VIEWER_STRING_OV6),
+                vec![vec![INSTANCE_COUNT_LABEL, 3]]
+            );
+            // The double does not grow the array, so both appends find it full.
+            assert_eq!(
+                calls_to(&e, ARRAY_SET_SIZE_0096AD30),
+                vec![vec![strings, 5], vec![strings, 5]]
+            );
+        }
+    }
+
+    #[test]
+    fn shape_clone_rtti_constructor_and_bound_update() {
+        let mut e = Engine::new();
+        e.register(SHAPE_CREATE_CLONE, |_, a| answer(a[1] + 2));
+        e.register(SHAPE_CONSTRUCT, |e, a| {
+            e.mem.set_u32(a[0], 0x1111);
+            Ret::default()
+        });
+        e.register(BOUND_UPDATE, |_, _| answer(0x77));
+        assert_eq!(e.call(0x00c1_a630, &args![0x9000u32, 0x30u32]).u32(), 0x32);
+        assert_eq!(e.call(0x00c1_a650, &[]).u32(), GRASS_SHAPE_RTTI);
+        let (this, world) = grass(&mut e, 0);
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x00c1_a660, &args![this, 0x6000u32]).u32(), this);
+        assert_eq!(e.mem.u32(this), GRASS_SHAPE_VTABLE);
+        assert_eq!(calls_to(&e, SHAPE_CONSTRUCT), vec![vec![this, 0x6000]]);
+        assert_eq!(e.call(0x00c1_a680, &args![this]).u32(), 0x77);
+        assert_eq!(
+            calls_to(&e, BOUND_UPDATE),
+            vec![vec![world, this + LOCAL_BOUND, this + 0x68]]
+        );
     }
 }

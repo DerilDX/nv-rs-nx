@@ -17,9 +17,40 @@ pub fn fn_00afdbc0(e: &mut Engine, this: u32, address: u32) -> bool {
     address < end
 }
 
+/// `00a62150` (cdecl, two words), called on the object's +4 with 1.
+const CALLEE_00A62150: u32 = 0x00a6_2150;
+
+// Translated from 00afd960 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (thiscall, no stack words): `00a62150(this + 4, 1)`, whose
+/// answer (EAX) it passes on.
+pub fn fn_00afd960(e: &mut Engine, this: u32) -> u32 {
+    e.call(CALLEE_00A62150, &args![this.wrapping_add(4), 1u32])
+        .u32()
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
-    vec![entry!(0x00af_dbc0, fn_00afdbc0(u32, u32) -> bool)]
+    vec![
+        entry!(0x00af_dbc0, fn_00afdbc0(u32, u32) -> bool),
+        entry!(0x00af_d960, fn_00afd960(u32) -> u32),
+    ]
+}
+
+#[cfg(test)]
+mod n083_tests {
+    use super::*;
+
+    #[test]
+    fn calls_on_the_word_after_the_vtable() {
+        let mut e = Engine::new();
+        e.register(CALLEE_00A62150, |_, _| 0x55u32.into_ret());
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x00af_d960, &args![0x1000u32]).u32(), 0x55);
+        let log = e.call_log.take().unwrap();
+        let calls: Vec<_> = log.iter().filter(|c| c.0 == CALLEE_00A62150).collect();
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].1, [0x1004, 1]);
+    }
 }
 
 #[cfg(test)]

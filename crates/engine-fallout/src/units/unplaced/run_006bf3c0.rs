@@ -117,6 +117,16 @@ pub fn fn_006bf4d0(e: &mut Engine, this: Ptr, first: u32, second: u32, third: u3
     Ptr::new(block)
 }
 
+// Translated from 006bf670 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the map (`thiscall`, `RET 4`; called from `UndoNavMeshFromObstacleUndoData`
+/// and others): the address of element `index` of a `BSSimpleArray<PortalEdgeSwap,1024>`
+/// (Xbox PDB; 0x1C-byte elements, `pBuffer` at +4): `pBuffer + index * 0x1C`.
+pub fn fn_006bf670(e: &mut Engine, this: Ptr, index: u32) -> u32 {
+    index
+        .wrapping_mul(0x1c)
+        .wrapping_add(e.mem.u32(this.addr() + 4))
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -124,6 +134,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x006bf3c0, fn_006bf3c0(Ptr, u16, u8, u8, u8) -> Ptr),
         entry!(0x006bf570, fn_006bf570(Ptr, u32, u32, u32) -> Ptr),
         entry!(0x006bf4d0, fn_006bf4d0(Ptr, u32, u32, u32) -> Ptr),
+        entry!(0x006b_f670, fn_006bf670(Ptr, u32) -> u32),
     ]
 }
 
@@ -242,5 +253,18 @@ mod tests {
             e.call(0x006bf570, &args![block, 1u32, 2u32, 3u32]).u32(),
             block
         );
+    }
+}
+
+#[cfg(test)]
+mod n076_tests {
+    use super::*;
+
+    #[test]
+    fn element_address_steps_by_0x1c() {
+        let mut e = Engine::new();
+        let array = e.mem.alloc(0x10);
+        e.mem.set_u32(array + 4, 0x4000);
+        assert_eq!(e.call(0x006b_f670, &args![array, 3u32]).u32(), 0x4054);
     }
 }

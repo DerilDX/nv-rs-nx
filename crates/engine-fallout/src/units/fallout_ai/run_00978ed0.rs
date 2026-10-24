@@ -16,9 +16,12 @@ pub fn fn_00978ef0(e: &mut Engine, this: Ptr) -> u32 {
 // Translated from 00978ed0 (decompiled, FalloutNV.exe 1.4.0.525)
 /// Assigns `pointer` to the `NiPointer` member at `this + 0x120` through
 /// `NiPointer<ActorCause>::operator=` (`0042f780`, engine map name; the body
-/// is a smart-pointer assignment). One stack word.
-pub fn fn_00978ed0(e: &mut Engine, this: Ptr, pointer: u32) {
-    e.call(0x0042_f780, &args![this.byte_add(0x120), pointer]);
+/// is a smart-pointer assignment). One stack word. The answer is the
+/// assignment's (the exe ends on that call and keeps its `EAX`; the virtual
+/// slot's `ActorCause*`).
+pub fn fn_00978ed0(e: &mut Engine, this: Ptr, pointer: u32) -> u32 {
+    e.call(0x0042_f780, &args![this.byte_add(0x120), pointer])
+        .u32()
 }
 
 // Translated from 00978f30 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -211,7 +214,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x0097_9140, fn_00979140(Ptr)),
         entry!(0x0097_9280, fn_00979280(Ptr)),
         entry!(0x0097_8ef0, fn_00978ef0(Ptr) -> u32),
-        entry!(0x0097_8ed0, fn_00978ed0(Ptr, u32)),
+        entry!(0x0097_8ed0, fn_00978ed0(Ptr, u32) -> u32),
         entry!(0x0097_8f30, fn_00978f30(Ptr) -> u32),
         entry!(0x0097_9260, fn_00979260(Ptr) -> f32),
     ]
@@ -251,6 +254,16 @@ mod b028_tests {
         let calls: Vec<_> = log.iter().filter(|c| c.0 == 0x0042_f780).collect();
         assert_eq!(calls.len(), 1);
         assert_eq!(calls[0].1, vec![0x4220, 0x7000]);
+    }
+
+    #[test]
+    fn fn_00978ed0_answers_the_assignment() {
+        let mut e = Engine::new();
+        e.register(0x0042_f780, |_, a| a[0].into_ret());
+        assert_eq!(
+            e.call(0x0097_8ed0, &args![0x4100u32, 0x7000u32]).u32(),
+            0x4220
+        );
     }
 
     #[test]

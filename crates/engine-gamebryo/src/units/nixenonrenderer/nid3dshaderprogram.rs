@@ -108,9 +108,61 @@ pub fn fn_00e89840(e: &mut Engine, this: Ptr) {
     );
 }
 
+/// The RTTI record `NiD3DShaderProgram::GetRTTI` answers (`0126f9a4`).
+const SHADER_PROGRAM_RTTI_0126F9A4: u32 = 0x0126_f9a4;
+/// The sized free `00aa1460` (`cdecl`: block, size).
+const NI_FREE_SIZED_00AA1460: u32 = 0x00aa_1460;
+
+// Translated from 00a8f430 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiD3DShaderProgram::SetShaderConstantArray` (engine map; `thiscall`,
+/// `RET 0x14`, none of the five words read): answers false.
+pub fn ni_d3d_shader_program_set_shader_constant_array(
+    _e: &mut Engine,
+    _this: Ptr,
+    _unused_1: u32,
+    _unused_2: u32,
+    _unused_3: u32,
+    _unused_4: u32,
+    _unused_5: u32,
+) -> bool {
+    false
+}
+
+// Translated from 00e89830 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiD3DShaderProgram::GetRTTI` (engine map; `ECX` not read): the RTTI
+/// record at `0126f9a4`.
+pub fn ni_d3d_shader_program_get_rtti(_e: &mut Engine, _this: Ptr) -> u32 {
+    SHADER_PROGRAM_RTTI_0126F9A4
+}
+
+// Translated from 00e898a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiD3DShaderProgram` scalar deleting destructor (engine map; `RET 4`):
+/// the destructor body (`00e89840`), then with flag bit 0 the 0x2c bytes
+/// freed (`00aa1460`). Answers `this`.
+pub fn ni_d3d_shader_program_scalar_deleting_destructor(
+    e: &mut Engine,
+    this: Ptr,
+    flags: u32,
+) -> Ptr {
+    fn_00e89840(e, this);
+    if flags & 1 != 0 {
+        e.call(NI_FREE_SIZED_00AA1460, &args![this, 0x2cu32]);
+    }
+    this
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(
+            0x00a8_f430,
+            ni_d3d_shader_program_set_shader_constant_array(Ptr, u32, u32, u32, u32, u32) -> bool
+        ),
+        entry!(0x00e8_9830, ni_d3d_shader_program_get_rtti(Ptr) -> u32),
+        entry!(
+            0x00e8_98a0,
+            ni_d3d_shader_program_scalar_deleting_destructor(Ptr, u32) -> Ptr
+        ),
         entry!(
             0x00e8_97d0,
             ni_d3d_shader_program_ni_d3d_shader_program(Ptr, Ptr, u32) -> Ptr
@@ -247,5 +299,48 @@ mod b054_tests {
         e.call(0x00e8_9840, &args![this]);
         let log = e.call_log.take().unwrap();
         assert!(log.iter().all(|c| c.0 != 0x0e01_0008));
+    }
+}
+
+#[cfg(test)]
+mod n072_tests {
+    use super::*;
+
+    #[test]
+    fn set_shader_constant_array_answers_false() {
+        let mut e = Engine::new();
+        let r = e.call(0x00a8_f430, &args![0x10u32, 1u32, 2u32, 3u32, 4u32, 5u32]);
+        assert_eq!(r.u32() & 0xff, 0);
+    }
+
+    #[test]
+    fn get_rtti_answers_the_record() {
+        let mut e = Engine::new();
+        assert_eq!(e.call(0x00e8_9830, &args![0x10u32]).u32(), 0x0126_f9a4);
+    }
+
+    #[test]
+    fn scalar_deleting_destructor_frees_0x2c_bytes_on_bit_0() {
+        for flags in [0u32, 1] {
+            let mut e = Engine::new();
+            e.register(NI_FREE_00AA10F0, |_, _| Ret::default());
+            e.register(IMPORT_INTERLOCKED_DECREMENT, |_, _| Ret::default());
+            e.register(NI_FREE_SIZED_00AA1460, |_, _| Ret::default());
+            let this = e.mem.alloc(0x2c);
+            e.call_log = Some(vec![]);
+            assert_eq!(e.call(0x00e8_98a0, &args![this, flags]).u32(), this);
+            assert_eq!(e.mem.u32(this), NI_REF_OBJECT_VTABLE_0101DCE4);
+            let log = e.call_log.take().unwrap();
+            let freed: Vec<_> = log
+                .iter()
+                .filter(|c| c.0 == NI_FREE_SIZED_00AA1460)
+                .map(|c| c.1.clone())
+                .collect();
+            if flags == 1 {
+                assert_eq!(freed, vec![vec![this, 0x2c]]);
+            } else {
+                assert!(freed.is_empty());
+            }
+        }
     }
 }

@@ -1422,6 +1422,9 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x0066_d720, fn_0066d720(Ptr) -> u32),
         entry!(0x0066_d470, fn_0066d470(Ptr)),
     ]
+    .into_iter()
+    .chain(funcs_n086())
+    .collect()
 }
 
 #[cfg(test)]
@@ -2304,5 +2307,869 @@ mod make_havok_leaves_tests {
         assert_eq!(calls_to(&e, REPORT), vec![vec![NOT_ALL_SPHERES]]);
         assert_eq!(calls_to(&e, MULTI_SPHERE_SHAPE_CONSTRUCT).len(), 1);
         assert_eq!(calls_to(&e, SPHERE_LIST_DESTRUCT).len(), 1);
+    }
+}
+
+/// The vtables (RTTI names) the n086 constructors store:
+/// `bhkCollisionObject` (`0103046c`), `bhkSPCollisionObject` (`01066acc`),
+/// `bhkPCollisionObject` (`01066b94`), `bhkMultiSphereShape` (`01066c5c`),
+/// `bhkTransformShape` (`01066d44`) and `bhkCapsuleShape` (`01066e2c`).
+const BHK_COLLISION_OBJECT_VTABLE: u32 = 0x0103_046c;
+const BHK_SP_COLLISION_OBJECT_VTABLE: u32 = 0x0106_6acc;
+const BHK_P_COLLISION_OBJECT_VTABLE: u32 = 0x0106_6b94;
+const BHK_MULTI_SPHERE_SHAPE_VTABLE: u32 = 0x0106_6c5c;
+const BHK_TRANSFORM_SHAPE_VTABLE: u32 = 0x0106_6d44;
+const BHK_CAPSULE_SHAPE_VTABLE: u32 = 0x0106_6e2c;
+/// The base constructors (no words) and the `Init` calls (one word: the
+/// construction info) of the three shapes, and the counters each
+/// constructor raises.
+const MULTI_SPHERE_BASE_0056E6C0: u32 = 0x0056_e6c0;
+const MULTI_SPHERE_INIT_00CB7B80: u32 = 0x00cb_7b80;
+const MULTI_SPHERE_COUNTER_012683DC: u32 = 0x0126_83dc;
+const TRANSFORM_BASE_0056E6F0: u32 = 0x0056_e6f0;
+const TRANSFORM_INIT_00C8C5B0: u32 = 0x00c8_c5b0;
+const TRANSFORM_COUNTER_012681B0: u32 = 0x0126_81b0;
+const CAPSULE_BASE_0056E690: u32 = 0x0056_e690;
+const CAPSULE_INIT_00CAB820: u32 = 0x00ca_b820;
+const CAPSULE_COUNTER_01268324: u32 = 0x0126_8324;
+/// `bhkMultiSphereShape::~bhkMultiSphereShape` (`00cb78b0`) and
+/// `bhkTransformShape::~bhkTransformShape` (`00c8bed0`), no words.
+const MULTI_SPHERE_DESTRUCTOR: u32 = 0x00cb_78b0;
+const TRANSFORM_DESTRUCTOR: u32 = 0x00c8_bed0;
+/// The collision object base constructors: `00c6b910` (no words) and
+/// `00c6b950` (one word).
+const COLLISION_BASE_00C6B910: u32 = 0x00c6_b910;
+const COLLISION_BASE_00C6B950: u32 = 0x00c6_b950;
+/// The steps of `hkTransformShapeCinfo::hkTransformShapeCinfo`: `004b5020`
+/// on `this`, `0056e270` and `0056e120` on `+0x10` (no words).
+const CINFO_BASE_004B5020: u32 = 0x004b_5020;
+const CINFO_MEMBER_0056E270: u32 = 0x0056_e270;
+const CINFO_MEMBER_0056E120: u32 = 0x0056_e120;
+/// The steps of `0066d650`: `0056e8d0` on `this`, `004b4fa0` on `+0x10` and
+/// `+0x20` (no words), `004b4ff0` on `+0x20` (four floats).
+const BASE_0056E8D0: u32 = 0x0056_e8d0;
+const MEMBER_004B4FA0: u32 = 0x004b_4fa0;
+const MEMBER_SET_004B4FF0: u32 = 0x004b_4ff0;
+/// The steps of `0066d770`: `0056e900` on `this`, `006299a0` on `+4` (no
+/// words).
+const BASE_0056E900: u32 = 0x0056_e900;
+const MEMBER_006299A0: u32 = 0x0062_99a0;
+/// The steps of `0066da50`: `0066dab0` and `00483710` (no words).
+const BODY_0066DAB0: u32 = 0x0066_dab0;
+const AFTER_00483710: u32 = 0x0048_3710;
+/// The steps of `0066c930`: `0062b0a0` (two words), `006815c0` (no words),
+/// `004a3c90` and `00561240` (one word each).
+const STEP_0062B0A0: u32 = 0x0062_b0a0;
+const STEP_006815C0: u32 = 0x0068_15c0;
+const STEP_004A3C90: u32 = 0x004a_3c90;
+const STEP_00561240: u32 = 0x0056_1240;
+/// The steps of `0066c9c0`: `004a3f10` (one word) on `this` and `+0x10`,
+/// `00560d30` (one word: 3) on `+0x10`, answering a float's address.
+const SET_004A3F10: u32 = 0x004a_3f10;
+const SLOT_00560D30: u32 = 0x0056_0d30;
+/// The steps of `0066d9b0`: `004a4840` (`thiscall` on a zeroed stack byte,
+/// one word) and `0066d9e0` (two words).
+const STEP_004A4840: u32 = 0x004a_4840;
+const STEP_0066D9E0: u32 = 0x0066_d9e0;
+/// `NiAVObject::AttachProperty` (`00439410`, engine map; one word) and
+/// `00a5b230` (one word: the property type), which removes a property.
+const ATTACH_PROPERTY: u32 = 0x0043_9410;
+const REMOVE_PROPERTY_00A5B230: u32 = 0x00a5_b230;
+/// The calls of `BSTreeNode::GetViewerStrings`: `NiNode::GetViewerStrings`
+/// (`00a5ea70`), `NiGetViewerString` (`00a7d330`, `cdecl`), the string list
+/// add (`0096a610`), the model test `00666f00` and the seed `008d6f30` (no
+/// words), and `00406d00` (`cdecl`: buffer, size, format, ...).
+const NI_NODE_GET_VIEWER_STRINGS: u32 = 0x00a5_ea70;
+const NI_GET_VIEWER_STRING: u32 = 0x00a7_d330;
+const STRINGS_ADD_0096A610: u32 = 0x0096_a610;
+const MODEL_TEST_00666F00: u32 = 0x0066_6f00;
+const MODEL_SEED_008D6F30: u32 = 0x008d_6f30;
+const FORMAT_00406D00: u32 = 0x0040_6d00;
+/// The texts: `"BSTreeNode"` (`01066f40`), `"Type = Instance"`
+/// (`01066f30`), `"Type = Base"` (`01066f24`), `"Seed = %d"` (`01066f18`)
+/// and `"-No Model-"` (`01066f0c`).
+const TEXT_BS_TREE_NODE: u32 = 0x0106_6f40;
+const TEXT_TYPE_INSTANCE: u32 = 0x0106_6f30;
+const TEXT_TYPE_BASE: u32 = 0x0106_6f24;
+const TEXT_SEED: u32 = 0x0106_6f18;
+const TEXT_NO_MODEL: u32 = 0x0106_6f0c;
+
+/// Adds one to the word at `counter`.
+fn count_instance(e: &mut Engine, counter: u32) {
+    let count = e.mem.u32(counter).wrapping_add(1);
+    e.mem.set_u32(counter, count);
+}
+
+// Translated from 00622430 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `bhkTransformShape::QCinfoSize` (engine map; `thiscall`, plain `RET`):
+/// `0x50`.
+pub fn bhk_transform_shape_q_cinfo_size(_e: &mut Engine, _this: Ptr) -> u32 {
+    0x50
+}
+
+// Translated from 0066b620 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSTreeNode::GetBillboard` (engine map; `thiscall`, plain `RET`): the
+/// billboard pointer at `+0xf0` (`00559450`).
+pub fn bs_tree_node_get_billboard(e: &mut Engine, this: Ptr) -> u32 {
+    e.call(POINTER_GET, &args![this.addr() + 0xf0]).u32()
+}
+
+// Translated from 0066b640 (decompiled, FalloutNV.exe 1.4.0.525)
+/// A `bhkCollisionObject` constructor (unnamed in the engine map;
+/// `thiscall`, plain `RET`): the base constructor `00c6b910`, then the
+/// vtable `0103046c`. Returns `this`.
+pub fn fn_0066b640(e: &mut Engine, this: Ptr) -> Ptr {
+    e.call(COLLISION_BASE_00C6B910, &args![this]);
+    e.mem.set_u32(this.addr(), BHK_COLLISION_OBJECT_VTABLE);
+    this
+}
+
+// Translated from 0066bbb0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSTreeNode::SetBillboard` (engine map; `thiscall`, `RET 4`): with a
+/// billboard and a node from the virtual slot `+0x10c`, the old billboard
+/// (when set) goes to the node's slot `+0xe8`, the new one to its slot
+/// `+0xdc` with 1, and becomes the pointer at `+0xf0` (`0066b0d0`).
+pub fn bs_tree_node_set_billboard(e: &mut Engine, this: Ptr, billboard: u32) {
+    if billboard == 0 {
+        return;
+    }
+    let node = e.vcall(this.addr(), 0x10c, &[]).u32();
+    if node == 0 {
+        return;
+    }
+    let slot = this.addr() + 0xf0;
+    if e.call(POINTER_GET, &args![slot]).u32() != 0 {
+        let old = e.call(POINTER_GET, &args![slot]).u32();
+        e.vcall(node, 0xe8, &args![old]);
+    }
+    e.vcall(node, 0xdc, &args![billboard, 1u32]);
+    e.call(POINTER_ASSIGN, &args![slot, billboard]);
+}
+
+// Translated from 0066bec0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSTreeNode::SetTexturePropOnBillboard` (engine map; `thiscall`,
+/// `RET 4`): false without a billboard (`+0xf0`) or a property; false when
+/// the billboard's property of type 5 (`NiAVObject::GetProperty`) already
+/// is `property`; otherwise that one (when set) is removed (`00a5b230` with
+/// 5), `property` attached (`NiAVObject::AttachProperty`), and true.
+pub fn bs_tree_node_set_texture_prop_on_billboard(
+    e: &mut Engine,
+    this: Ptr,
+    property: u32,
+) -> bool {
+    let slot = this.addr() + 0xf0;
+    if e.call(POINTER_GET, &args![slot]).u32() == 0 || property == 0 {
+        return false;
+    }
+    let billboard = e.call(POINTER_GET, &args![slot]).u32();
+    let current = e.call(GET_PROPERTY, &args![billboard, 5u32]).u32();
+    if current != 0 {
+        if current == property {
+            return false;
+        }
+        let billboard = e.call(POINTER_GET, &args![slot]).u32();
+        e.call(REMOVE_PROPERTY_00A5B230, &args![billboard, 5u32]);
+    }
+    let billboard = e.call(POINTER_GET, &args![slot]).u32();
+    e.call(ATTACH_PROPERTY, &args![billboard, property]);
+    true
+}
+
+// Translated from 0066c930 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 0066c930 - the /GS stack-cookie check (00ec408c) is not translated.
+/// Unnamed in the engine map (`thiscall`, plain `RET`; `this` is a 16-byte
+/// vector): `0062b0a0` on `this` with a stack temporary and `this`,
+/// `006815c0` on its answer; `RSQRTSS` of that vector (the first lane's
+/// reciprocal root estimate, the others kept) made into a value by
+/// `004a3c90` and `00561240`; `this` multiplied lane by lane (`MULPS`) by
+/// the vector that answers.
+pub fn fn_0066c930(e: &mut Engine, this: Ptr) {
+    e.with_stack(0x70, |e, frame| {
+        let frame = frame.addr();
+        let first = e
+            .call(STEP_0062B0A0, &args![this, frame + 0x50, this])
+            .u32();
+        let source = e.call(STEP_006815C0, &args![first]).u32();
+        let mut vector = read_xmm(e, source);
+        vector[0] = crate::x87::rsqrt_estimate(vector[0]);
+        write_xmm(e, frame + 0x30, vector);
+        e.call(STEP_004A3C90, &args![frame + 0x20, frame + 0x30]);
+        let factor = e
+            .call(STEP_00561240, &args![frame + 0x20, frame + 0x10])
+            .u32();
+        let factor = read_xmm(e, factor);
+        let product = crate::sse::mulps(read_xmm(e, this.addr()), factor);
+        write_xmm(e, frame, product);
+        write_xmm(e, this.addr(), product);
+    });
+}
+
+/// The four floats at `at` (`MOVAPS` load, bits kept).
+fn read_xmm(e: &Engine, at: u32) -> [f32; 4] {
+    std::array::from_fn(|lane| f32::from_bits(e.mem.u32(at + lane as u32 * 4)))
+}
+
+/// Stores four floats at `at` (`MOVAPS` store, bits kept).
+fn write_xmm(e: &mut Engine, at: u32, value: [f32; 4]) {
+    for (lane, v) in (0u32..).zip(value) {
+        e.mem.set_u32(at + lane * 4, v.to_bits());
+    }
+}
+
+// Translated from 0066c9c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`thiscall`, `RET 0xc`): `004a3f10` with
+/// `first` on `this` and with `second` on `this + 0x10`, then `value`
+/// (`FLD`/`FSTP`) stored where `00560d30` with 3 on `this + 0x10` points.
+pub fn fn_0066c9c0(e: &mut Engine, this: Ptr, first: u32, second: u32, value: f32) {
+    e.call(SET_004A3F10, &args![this, first]);
+    e.call(SET_004A3F10, &args![this.addr() + 0x10, second]);
+    let slot = e
+        .call(SLOT_00560D30, &args![this.addr() + 0x10, 3u32])
+        .u32();
+    e.mem.set_u32(slot, x87_quiet_bits(value.to_bits()));
+}
+
+// Translated from 0066d3a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// A `bhkSPCollisionObject` constructor (unnamed in the engine map;
+/// `thiscall`, `RET 4`): the `bhkPCollisionObject` constructor (`0066d3d0`)
+/// with the word, then the vtable `01066acc`. Returns `this`.
+pub fn fn_0066d3a0(e: &mut Engine, this: Ptr, object: u32) -> Ptr {
+    fn_0066d3d0(e, this, object);
+    e.mem.set_u32(this.addr(), BHK_SP_COLLISION_OBJECT_VTABLE);
+    this
+}
+
+// Translated from 0066d3d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// A `bhkPCollisionObject` constructor (unnamed in the engine map;
+/// `thiscall`, `RET 4`): the base constructor `00c6b950` with the word,
+/// then the vtable `01066b94`. Returns `this`.
+pub fn fn_0066d3d0(e: &mut Engine, this: Ptr, object: u32) -> Ptr {
+    e.call(COLLISION_BASE_00C6B950, &args![this, object]);
+    e.mem.set_u32(this.addr(), BHK_P_COLLISION_OBJECT_VTABLE);
+    this
+}
+
+// Translated from 0066d440 (decompiled, FalloutNV.exe 1.4.0.525)
+/// A scalar deleting destructor (unnamed in the engine map; `thiscall`,
+/// `RET 4`): the destructor `0066d470`, then the sized delete `00aa1460`
+/// of `this` (0x14 bytes) when bit 0 of `flags` is set. Returns `this`.
+pub fn fn_0066d440(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    fn_0066d470(e, this);
+    if flags & 1 != 0 {
+        e.call(NI_SIZED_DELETE, &args![this, 0x14u32]);
+    }
+    this
+}
+
+// Translated from 0066d490 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 0066d490 - the C++ exception-unwinding frame (FS:[0]) is not translated.
+/// `bhkMultiSphereShape::bhkMultiSphereShape` (engine map; `thiscall`,
+/// `RET 4`): the base constructor `0056e6c0`, the vtable `01066c5c`, `Init`
+/// (`00cb7b80`) with the construction info, and the counter at `012683dc`
+/// raised. Returns `this`.
+pub fn bhk_multi_sphere_shape_bhk_multi_sphere_shape(e: &mut Engine, this: Ptr, info: u32) -> Ptr {
+    e.call(MULTI_SPHERE_BASE_0056E6C0, &args![this]);
+    e.mem.set_u32(this.addr(), BHK_MULTI_SPHERE_SHAPE_VTABLE);
+    e.call(MULTI_SPHERE_INIT_00CB7B80, &args![this, info]);
+    count_instance(e, MULTI_SPHERE_COUNTER_012683DC);
+    this
+}
+
+// Translated from 0066d520 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The `bhkMultiSphereShape` scalar deleting destructor (engine map;
+/// `thiscall`, `RET 4`): the destructor (`00cb78b0`), then the sized delete
+/// `00aa1460` of `this` (0x14 bytes) when bit 0 of `flags` is set. Returns
+/// `this`.
+pub fn bhk_multi_sphere_shape_scalar_deleting_destructor(
+    e: &mut Engine,
+    this: Ptr,
+    flags: u32,
+) -> Ptr {
+    e.call(MULTI_SPHERE_DESTRUCTOR, &args![this]);
+    if flags & 1 != 0 {
+        e.call(NI_SIZED_DELETE, &args![this, 0x14u32]);
+    }
+    this
+}
+
+// Translated from 0066d550 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `hkTransformShapeCinfo::hkTransformShapeCinfo` (engine map; `thiscall`,
+/// plain `RET`): `004b5020` on `this`, `+4` cleared, `0056e270` and
+/// `0056e120` on `+0x10`. Returns `this`.
+pub fn hk_transform_shape_cinfo_hk_transform_shape_cinfo(e: &mut Engine, this: Ptr) -> Ptr {
+    e.call(CINFO_BASE_004B5020, &args![this]);
+    e.mem.set_u32(this.addr() + 4, 0);
+    e.call(CINFO_MEMBER_0056E270, &args![this.addr() + 0x10]);
+    e.call(CINFO_MEMBER_0056E120, &args![this.addr() + 0x10]);
+    this
+}
+
+// Translated from 0066d590 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 0066d590 - the C++ exception-unwinding frame (FS:[0]) is not translated.
+/// `bhkTransformShape::bhkTransformShape` (engine map; `thiscall`,
+/// `RET 4`): the base constructor `0056e6f0`, the vtable `01066d44`, `Init`
+/// (`00c8c5b0`) with the construction info, and the counter at `012681b0`
+/// raised. Returns `this`.
+pub fn bhk_transform_shape_bhk_transform_shape(e: &mut Engine, this: Ptr, info: u32) -> Ptr {
+    e.call(TRANSFORM_BASE_0056E6F0, &args![this]);
+    e.mem.set_u32(this.addr(), BHK_TRANSFORM_SHAPE_VTABLE);
+    e.call(TRANSFORM_INIT_00C8C5B0, &args![this, info]);
+    count_instance(e, TRANSFORM_COUNTER_012681B0);
+    this
+}
+
+// Translated from 0066d620 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The `bhkTransformShape` scalar deleting destructor (engine map;
+/// `thiscall`, `RET 4`): the destructor (`00c8bed0`), then the sized delete
+/// `00aa1460` of `this` (0x14 bytes) when bit 0 of `flags` is set. Returns
+/// `this`.
+pub fn bhk_transform_shape_scalar_deleting_destructor(
+    e: &mut Engine,
+    this: Ptr,
+    flags: u32,
+) -> Ptr {
+    e.call(TRANSFORM_DESTRUCTOR, &args![this]);
+    if flags & 1 != 0 {
+        e.call(NI_SIZED_DELETE, &args![this, 0x14u32]);
+    }
+    this
+}
+
+// Translated from 0066d650 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`thiscall`, plain `RET`; a constructor):
+/// `0056e8d0` on `this`, `004b4fa0` on `+0x10` and `+0x20`, then
+/// `004b4ff0` on `+0x20` with the floats 1, 0, 0, 0. Returns `this`.
+pub fn fn_0066d650(e: &mut Engine, this: Ptr) -> Ptr {
+    e.call(BASE_0056E8D0, &args![this]);
+    e.call(MEMBER_004B4FA0, &args![this.addr() + 0x10]);
+    e.call(MEMBER_004B4FA0, &args![this.addr() + 0x20]);
+    let (one, zero) = (1.0f32.to_bits(), 0.0f32.to_bits());
+    e.call(
+        MEMBER_SET_004B4FF0,
+        &args![this.addr() + 0x20, one, zero, zero, zero],
+    );
+    this
+}
+
+// Translated from 0066d6a0 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 0066d6a0 - the C++ exception-unwinding frame (FS:[0]) is not translated.
+/// `bhkCapsuleShape::bhkCapsuleShape` (engine map; `thiscall`, `RET 4`):
+/// the base constructor `0056e690`, the vtable `01066e2c`, `Init_ov2`
+/// (`00cab820`) with the construction info, and the counter at `01268324`
+/// raised. Returns `this`.
+pub fn bhk_capsule_shape_bhk_capsule_shape(e: &mut Engine, this: Ptr, info: u32) -> Ptr {
+    e.call(CAPSULE_BASE_0056E690, &args![this]);
+    e.mem.set_u32(this.addr(), BHK_CAPSULE_SHAPE_VTABLE);
+    e.call(CAPSULE_INIT_00CAB820, &args![this, info]);
+    count_instance(e, CAPSULE_COUNTER_01268324);
+    this
+}
+
+// Translated from 0066d770 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`thiscall`, plain `RET`; a constructor):
+/// `0056e900` on `this`, `006299a0` on `+4`. Returns `this`.
+pub fn fn_0066d770(e: &mut Engine, this: Ptr) -> Ptr {
+    e.call(BASE_0056E900, &args![this]);
+    e.call(MEMBER_006299A0, &args![this.addr() + 4]);
+    this
+}
+
+// Translated from 0066d7a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`thiscall`, plain `RET`): `0066da50` on
+/// `this + 4`, its answer passed on.
+pub fn fn_0066d7a0(e: &mut Engine, this: Ptr) -> u32 {
+    fn_0066da50(e, Ptr::new(this.addr() + 4))
+}
+
+// Translated from 0066d880 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSTreeNode::GetViewerStrings` (engine map; `thiscall`, `RET 4`: the
+/// string list): `NiNode::GetViewerStrings`, then `"BSTreeNode"`; with a
+/// model (`+0xe4`) a new 0x20-byte text (`00401000`, formatted by
+/// `00406d00`) `"Type = Instance"` or `"Type = Base"` by the model's
+/// `00666f00`, then another `"Seed = %d"` with its `008d6f30`; without one
+/// `"-No Model-"`. Each string goes to the list through a stack word
+/// holding it (`0096a610`).
+pub fn bs_tree_node_get_viewer_strings(e: &mut Engine, this: Ptr, strings: u32) {
+    e.call(NI_NODE_GET_VIEWER_STRINGS, &args![this, strings]);
+    e.with_stack(8, |e, locals| {
+        let text = locals.addr();
+        let title = locals.addr() + 4;
+        let line = e
+            .call(NI_GET_VIEWER_STRING, &args![TEXT_BS_TREE_NODE])
+            .u32();
+        e.mem.set_u32(title, line);
+        e.call(STRINGS_ADD_0096A610, &args![strings, title]);
+        let model_slot = this.addr() + 0xe4;
+        if e.call(POINTER_GET, &args![model_slot]).u32() != 0 {
+            let buffer = e.call(OPERATOR_NEW_ARRAY, &args![0x20u32]).u32();
+            e.mem.set_u32(text, buffer);
+            let model = e.call(POINTER_GET, &args![model_slot]).u32();
+            let kind = if e.call(MODEL_TEST_00666F00, &args![model]).u32() & 0xff != 0 {
+                TEXT_TYPE_INSTANCE
+            } else {
+                TEXT_TYPE_BASE
+            };
+            let buffer = e.mem.u32(text);
+            e.call(FORMAT_00406D00, &args![buffer, 0x20u32, kind]);
+            e.call(STRINGS_ADD_0096A610, &args![strings, text]);
+            let buffer = e.call(OPERATOR_NEW_ARRAY, &args![0x20u32]).u32();
+            e.mem.set_u32(text, buffer);
+            let model = e.call(POINTER_GET, &args![model_slot]).u32();
+            let seed = e.call(MODEL_SEED_008D6F30, &args![model]).u32();
+            let buffer = e.mem.u32(text);
+            e.call(FORMAT_00406D00, &args![buffer, 0x20u32, TEXT_SEED, seed]);
+            e.call(STRINGS_ADD_0096A610, &args![strings, text]);
+        } else {
+            let buffer = e.call(OPERATOR_NEW_ARRAY, &args![0x20u32]).u32();
+            e.mem.set_u32(text, buffer);
+            let buffer = e.mem.u32(text);
+            e.call(FORMAT_00406D00, &args![buffer, 0x20u32, TEXT_NO_MODEL]);
+            e.call(STRINGS_ADD_0096A610, &args![strings, text]);
+        }
+    });
+}
+
+// Translated from 0066d9b0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`thiscall`, `RET 4`): `004a4840` on a zeroed
+/// stack byte with `this`, then `0066d9e0` on `this` with that answer and
+/// `value` (the word the first call leaves pushed); its answer passed on.
+pub fn fn_0066d9b0(e: &mut Engine, this: Ptr, value: u32) -> u32 {
+    e.with_stack(4, |e, byte| {
+        e.mem.set_u8(byte.addr(), 0);
+        let first = e.call(STEP_004A4840, &args![byte, this]).u32();
+        e.call(STEP_0066D9E0, &args![this, first, value]).u32()
+    })
+}
+
+// Translated from 0066da50 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 0066da50 - the C++ exception-unwinding frame (FS:[0]) is not translated.
+/// Unnamed in the engine map (`thiscall`, plain `RET`; a destructor body):
+/// `0066dab0`, then `00483710` on `this`, whose answer is passed on.
+pub fn fn_0066da50(e: &mut Engine, this: Ptr) -> u32 {
+    e.call(BODY_0066DAB0, &args![this]);
+    e.call(AFTER_00483710, &args![this]).u32()
+}
+
+/// This unit's n086 translations, by exe address.
+fn funcs_n086() -> Vec<(u32, AbiFn)> {
+    vec![
+        entry!(0x0062_2430, bhk_transform_shape_q_cinfo_size(Ptr) -> u32),
+        entry!(0x0066_b620, bs_tree_node_get_billboard(Ptr) -> u32),
+        entry!(0x0066_b640, fn_0066b640(Ptr) -> Ptr),
+        entry!(0x0066_bbb0, bs_tree_node_set_billboard(Ptr, u32)),
+        entry!(
+            0x0066_bec0,
+            bs_tree_node_set_texture_prop_on_billboard(Ptr, u32) -> bool
+        ),
+        entry!(0x0066_c930, fn_0066c930(Ptr)),
+        entry!(0x0066_c9c0, fn_0066c9c0(Ptr, u32, u32, f32)),
+        entry!(0x0066_d3a0, fn_0066d3a0(Ptr, u32) -> Ptr),
+        entry!(0x0066_d3d0, fn_0066d3d0(Ptr, u32) -> Ptr),
+        entry!(0x0066_d440, fn_0066d440(Ptr, u32) -> Ptr),
+        entry!(
+            0x0066_d490,
+            bhk_multi_sphere_shape_bhk_multi_sphere_shape(Ptr, u32) -> Ptr
+        ),
+        entry!(
+            0x0066_d520,
+            bhk_multi_sphere_shape_scalar_deleting_destructor(Ptr, u32) -> Ptr
+        ),
+        entry!(
+            0x0066_d550,
+            hk_transform_shape_cinfo_hk_transform_shape_cinfo(Ptr) -> Ptr
+        ),
+        entry!(
+            0x0066_d590,
+            bhk_transform_shape_bhk_transform_shape(Ptr, u32) -> Ptr
+        ),
+        entry!(
+            0x0066_d620,
+            bhk_transform_shape_scalar_deleting_destructor(Ptr, u32) -> Ptr
+        ),
+        entry!(0x0066_d650, fn_0066d650(Ptr) -> Ptr),
+        entry!(
+            0x0066_d6a0,
+            bhk_capsule_shape_bhk_capsule_shape(Ptr, u32) -> Ptr
+        ),
+        entry!(0x0066_d770, fn_0066d770(Ptr) -> Ptr),
+        entry!(0x0066_d7a0, fn_0066d7a0(Ptr) -> u32),
+        entry!(0x0066_d880, bs_tree_node_get_viewer_strings(Ptr, u32)),
+        entry!(0x0066_d9b0, fn_0066d9b0(Ptr, u32) -> u32),
+        entry!(0x0066_da50, fn_0066da50(Ptr) -> u32),
+    ]
+}
+
+#[cfg(test)]
+mod n086_tests {
+    use super::*;
+
+    fn calls(e: &Engine, addr: u32) -> Vec<Vec<u32>> {
+        e.call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|c| c.0 == addr)
+            .map(|c| c.1.clone())
+            .collect()
+    }
+
+    fn quiet(e: &mut Engine, addrs: &[u32]) {
+        for &a in addrs {
+            e.register(a, |_, _| Ret::default());
+        }
+    }
+
+    fn plain_pointers(e: &mut Engine) {
+        e.register(POINTER_GET, |e, a| e.mem.u32(a[0]).into_ret());
+        e.register(POINTER_ASSIGN, |e, a| {
+            e.mem.set_u32(a[0], a[1]);
+            Ret::default()
+        });
+    }
+
+    /// An object whose vtable slots at `offsets` go to `0x7200_0000 + offset`.
+    fn object_with_slots(e: &mut Engine, offsets: &[u32]) -> u32 {
+        let object = e.mem.alloc(0x100);
+        let vtable = e.mem.alloc(0x200);
+        e.mem.set_u32(object, vtable);
+        for &offset in offsets {
+            e.mem.set_u32(vtable + offset, 0x7200_0000 + offset);
+        }
+        object
+    }
+
+    #[test]
+    fn small_getters() {
+        let mut e = Engine::new();
+        plain_pointers(&mut e);
+        assert_eq!(e.call(0x0062_2430, &args![0x1234u32]).u32(), 0x50);
+        let this = e.mem.alloc(0xf8);
+        e.mem.set_u32(this + 0xf0, 0xbbbb);
+        assert_eq!(e.call(0x0066_b620, &args![this]).u32(), 0xbbbb);
+    }
+
+    #[test]
+    fn collision_object_constructors_set_their_vtables() {
+        let mut e = Engine::new();
+        quiet(&mut e, &[COLLISION_BASE_00C6B910, COLLISION_BASE_00C6B950]);
+        let this = e.mem.alloc(0x14);
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x0066_b640, &args![this]).u32(), this);
+        assert_eq!(e.mem.u32(this), BHK_COLLISION_OBJECT_VTABLE);
+        assert_eq!(calls(&e, COLLISION_BASE_00C6B910), vec![vec![this]]);
+        assert_eq!(e.call(0x0066_d3d0, &args![this, 7u32]).u32(), this);
+        assert_eq!(e.mem.u32(this), BHK_P_COLLISION_OBJECT_VTABLE);
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x0066_d3a0, &args![this, 9u32]).u32(), this);
+        assert_eq!(e.mem.u32(this), BHK_SP_COLLISION_OBJECT_VTABLE);
+        assert_eq!(calls(&e, COLLISION_BASE_00C6B950), vec![vec![this, 9]]);
+    }
+
+    #[test]
+    fn set_billboard_swaps_the_child() {
+        let mut e = Engine::new();
+        plain_pointers(&mut e);
+        quiet(&mut e, &[0x7200_00e8, 0x7200_00dc]);
+        let node = object_with_slots(&mut e, &[0xe8, 0xdc]);
+        let this = object_with_slots(&mut e, &[0x10c]);
+        e.register_double(0x7200_010c, move |_, _| node.into_ret());
+        e.mem.set_u32(this + 0xf0, 0x0aaa);
+        e.call_log = Some(vec![]);
+        e.call(0x0066_bbb0, &args![this, 0x0bbbu32]);
+        assert_eq!(calls(&e, 0x7200_00e8), vec![vec![node, 0x0aaa]]);
+        assert_eq!(calls(&e, 0x7200_00dc), vec![vec![node, 0x0bbb, 1]]);
+        assert_eq!(e.mem.u32(this + 0xf0), 0x0bbb);
+        // No old billboard: no detach.
+        e.mem.set_u32(this + 0xf0, 0);
+        e.call_log = Some(vec![]);
+        e.call(0x0066_bbb0, &args![this, 0x0cccu32]);
+        assert!(calls(&e, 0x7200_00e8).is_empty());
+        assert_eq!(e.mem.u32(this + 0xf0), 0x0ccc);
+        // No billboard, or no node: nothing.
+        e.call_log = Some(vec![]);
+        e.call(0x0066_bbb0, &args![this, 0u32]);
+        assert!(calls(&e, 0x7200_010c).is_empty());
+        e.register(0x7200_010c, |_, _| 0u32.into_ret());
+        e.call(0x0066_bbb0, &args![this, 0x0dddu32]);
+        assert_eq!(e.mem.u32(this + 0xf0), 0x0ccc);
+    }
+
+    #[test]
+    fn set_texture_prop_on_billboard_replaces_the_property() {
+        let mut e = Engine::new();
+        plain_pointers(&mut e);
+        quiet(&mut e, &[REMOVE_PROPERTY_00A5B230, ATTACH_PROPERTY]);
+        e.register(GET_PROPERTY, |e, a| e.mem.u32(a[0]).into_ret());
+        let billboard = e.mem.alloc(4);
+        let this = e.mem.alloc(0xf8);
+        e.mem.set_u32(this + 0xf0, billboard);
+        e.mem.set_u32(billboard, 0x51);
+        e.call_log = Some(vec![]);
+        assert!(e.call(0x0066_bec0, &args![this, 0x52u32]).bool());
+        assert_eq!(calls(&e, GET_PROPERTY), vec![vec![billboard, 5]]);
+        assert_eq!(
+            calls(&e, REMOVE_PROPERTY_00A5B230),
+            vec![vec![billboard, 5]]
+        );
+        assert_eq!(calls(&e, ATTACH_PROPERTY), vec![vec![billboard, 0x52]]);
+        // The same property: false, nothing changed.
+        e.call_log = Some(vec![]);
+        assert!(!e.call(0x0066_bec0, &args![this, 0x51u32]).bool());
+        assert!(calls(&e, ATTACH_PROPERTY).is_empty());
+        // No current property: attached without a removal.
+        e.mem.set_u32(billboard, 0);
+        e.call_log = Some(vec![]);
+        assert!(e.call(0x0066_bec0, &args![this, 0x52u32]).bool());
+        assert!(calls(&e, REMOVE_PROPERTY_00A5B230).is_empty());
+        // No property or no billboard: false.
+        assert!(!e.call(0x0066_bec0, &args![this, 0u32]).bool());
+        e.mem.set_u32(this + 0xf0, 0);
+        assert!(!e.call(0x0066_bec0, &args![this, 0x52u32]).bool());
+    }
+
+    #[test]
+    fn fn_0066c930_scales_by_the_reciprocal_root() {
+        let mut e = Engine::new();
+        let this = e.mem.alloc(0x10);
+        for (i, v) in (0u32..).zip([2.0f32, 3.0, 4.0, 5.0]) {
+            e.mem.set_f32(this + i * 4, v);
+        }
+        let squares = e.mem.alloc(0x10);
+        for (i, v) in (0u32..).zip([16.0f32, 7.0, 8.0, 9.0]) {
+            e.mem.set_f32(squares + i * 4, v);
+        }
+        e.register(STEP_0062B0A0, |_, a| a[1].into_ret());
+        e.register_double(STEP_006815C0, move |_, _| squares.into_ret());
+        // 004a3c90 copies the estimate's first lane into every lane of
+        // `this`; 00561240 answers `this`.
+        e.register(STEP_004A3C90, |e, a| {
+            let r = e.mem.u32(a[1]);
+            for i in 0..4 {
+                e.mem.set_u32(a[0] + i * 4, r);
+            }
+            Ret::default()
+        });
+        e.register(STEP_00561240, |_, a| a[0].into_ret());
+        e.call_log = Some(vec![]);
+        e.call(0x0066_c930, &args![this]);
+        let r = crate::x87::rsqrt_estimate(16.0);
+        for (i, v) in (0u32..).zip([2.0f32, 3.0, 4.0, 5.0]) {
+            assert_eq!(e.mem.f32(this + i * 4), v * r);
+        }
+        assert_eq!(calls(&e, STEP_0062B0A0)[0][2], this);
+    }
+
+    #[test]
+    fn fn_0066c9c0_sets_both_parts_and_the_float() {
+        let mut e = Engine::new();
+        quiet(&mut e, &[SET_004A3F10]);
+        let slot = e.mem.alloc(4);
+        e.register_double(SLOT_00560D30, move |_, _| slot.into_ret());
+        let this = e.mem.alloc(0x20);
+        e.call_log = Some(vec![]);
+        e.call(0x0066_c9c0, &args![this, 1u32, 2u32, 0.5f32.to_bits()]);
+        assert_eq!(
+            calls(&e, SET_004A3F10),
+            vec![vec![this, 1], vec![this + 0x10, 2]]
+        );
+        assert_eq!(calls(&e, SLOT_00560D30), vec![vec![this + 0x10, 3]]);
+        assert_eq!(e.mem.f32(slot), 0.5);
+    }
+
+    #[test]
+    fn fn_0066d440_destroys_and_deletes_on_bit_0() {
+        let mut e = Engine::new();
+        quiet(&mut e, &[0x0066_d410, NI_SIZED_DELETE]);
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x0066_d440, &args![0x4000u32, 0u32]).u32(), 0x4000);
+        assert_eq!(calls(&e, 0x0066_d410), vec![vec![0x4000]]);
+        assert!(calls(&e, NI_SIZED_DELETE).is_empty());
+        e.call(0x0066_d440, &args![0x4000u32, 1u32]);
+        assert_eq!(calls(&e, NI_SIZED_DELETE), vec![vec![0x4000, 0x14]]);
+    }
+
+    #[test]
+    fn shape_constructors_init_and_count() {
+        let mut e = Engine::new();
+        let cases: [(u32, u32, u32, u32, u32); 3] = [
+            (
+                0x0066_d490,
+                MULTI_SPHERE_BASE_0056E6C0,
+                MULTI_SPHERE_INIT_00CB7B80,
+                MULTI_SPHERE_COUNTER_012683DC,
+                BHK_MULTI_SPHERE_SHAPE_VTABLE,
+            ),
+            (
+                0x0066_d590,
+                TRANSFORM_BASE_0056E6F0,
+                TRANSFORM_INIT_00C8C5B0,
+                TRANSFORM_COUNTER_012681B0,
+                BHK_TRANSFORM_SHAPE_VTABLE,
+            ),
+            (
+                0x0066_d6a0,
+                CAPSULE_BASE_0056E690,
+                CAPSULE_INIT_00CAB820,
+                CAPSULE_COUNTER_01268324,
+                BHK_CAPSULE_SHAPE_VTABLE,
+            ),
+        ];
+        for (addr, base, init, counter, vtable) in cases {
+            quiet(&mut e, &[base, init]);
+            e.map(counter, 4);
+            e.mem.set_u32(counter, 6);
+            let this = e.mem.alloc(0x14);
+            e.call_log = Some(vec![]);
+            assert_eq!(e.call(addr, &args![this, 0x99u32]).u32(), this);
+            assert_eq!(calls(&e, base), vec![vec![this]]);
+            assert_eq!(calls(&e, init), vec![vec![this, 0x99]]);
+            assert_eq!(e.mem.u32(this), vtable);
+            assert_eq!(e.mem.u32(counter), 7);
+        }
+    }
+
+    #[test]
+    fn shape_deleting_destructors_free_on_bit_0() {
+        let mut e = Engine::new();
+        quiet(
+            &mut e,
+            &[
+                MULTI_SPHERE_DESTRUCTOR,
+                TRANSFORM_DESTRUCTOR,
+                NI_SIZED_DELETE,
+            ],
+        );
+        for (addr, destructor) in [
+            (0x0066_d520, MULTI_SPHERE_DESTRUCTOR),
+            (0x0066_d620, TRANSFORM_DESTRUCTOR),
+        ] {
+            e.call_log = Some(vec![]);
+            assert_eq!(e.call(addr, &args![0x5000u32, 2u32]).u32(), 0x5000);
+            assert_eq!(calls(&e, destructor), vec![vec![0x5000]]);
+            assert!(calls(&e, NI_SIZED_DELETE).is_empty());
+            e.call(addr, &args![0x5000u32, 1u32]);
+            assert_eq!(calls(&e, NI_SIZED_DELETE), vec![vec![0x5000, 0x14]]);
+        }
+    }
+
+    #[test]
+    fn small_constructors_run_their_parts() {
+        let mut e = Engine::new();
+        quiet(
+            &mut e,
+            &[
+                CINFO_BASE_004B5020,
+                CINFO_MEMBER_0056E270,
+                CINFO_MEMBER_0056E120,
+                BASE_0056E8D0,
+                MEMBER_004B4FA0,
+                MEMBER_SET_004B4FF0,
+                BASE_0056E900,
+                MEMBER_006299A0,
+            ],
+        );
+        let this = e.mem.alloc(0x40);
+        e.mem.set_u32(this + 4, 0xffff);
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x0066_d550, &args![this]).u32(), this);
+        assert_eq!(e.mem.u32(this + 4), 0);
+        assert_eq!(calls(&e, CINFO_BASE_004B5020), vec![vec![this]]);
+        assert_eq!(calls(&e, CINFO_MEMBER_0056E270), vec![vec![this + 0x10]]);
+        assert_eq!(calls(&e, CINFO_MEMBER_0056E120), vec![vec![this + 0x10]]);
+        assert_eq!(e.call(0x0066_d650, &args![this]).u32(), this);
+        assert_eq!(calls(&e, BASE_0056E8D0), vec![vec![this]]);
+        assert_eq!(
+            calls(&e, MEMBER_004B4FA0),
+            vec![vec![this + 0x10], vec![this + 0x20]]
+        );
+        assert_eq!(
+            calls(&e, MEMBER_SET_004B4FF0),
+            vec![vec![this + 0x20, 0x3f80_0000, 0, 0, 0]]
+        );
+        assert_eq!(e.call(0x0066_d770, &args![this]).u32(), this);
+        assert_eq!(calls(&e, BASE_0056E900), vec![vec![this]]);
+        assert_eq!(calls(&e, MEMBER_006299A0), vec![vec![this + 4]]);
+    }
+
+    #[test]
+    fn destructor_bodies_pass_on_the_last_answer() {
+        let mut e = Engine::new();
+        quiet(&mut e, &[BODY_0066DAB0]);
+        e.register(AFTER_00483710, |_, a| (a[0] + 1).into_ret());
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x0066_da50, &args![0x6000u32]).u32(), 0x6001);
+        assert_eq!(calls(&e, BODY_0066DAB0), vec![vec![0x6000]]);
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x0066_d7a0, &args![0x6000u32]).u32(), 0x6005);
+        assert_eq!(calls(&e, BODY_0066DAB0), vec![vec![0x6004]]);
+    }
+
+    #[test]
+    fn get_viewer_strings_describes_the_model() {
+        let mut e = Engine::new();
+        plain_pointers(&mut e);
+        quiet(&mut e, &[NI_NODE_GET_VIEWER_STRINGS, FORMAT_00406D00]);
+        e.register(NI_GET_VIEWER_STRING, |_, _| 0x1111u32.into_ret());
+        e.register(OPERATOR_NEW_ARRAY, |_, _| 0x2222u32.into_ret());
+        e.register(MODEL_TEST_00666F00, |_, _| 0xff01u32.into_ret());
+        e.register(MODEL_SEED_008D6F30, |_, _| 42u32.into_ret());
+        e.register_double(STRINGS_ADD_0096A610, |e, a| {
+            let string = e.mem.u32(a[1]);
+            let n = e.mem.u32(a[0]);
+            e.mem.set_u32(a[0] + 4 + n * 4, string);
+            e.mem.set_u32(a[0], n + 1);
+            Ret::default()
+        });
+        let this = e.mem.alloc(0xf8);
+        e.mem.set_u32(this + 0xe4, 0x3333);
+        let strings = e.mem.alloc(0x20);
+        e.call_log = Some(vec![]);
+        e.call(0x0066_d880, &args![this, strings]);
+        assert_eq!(
+            calls(&e, NI_NODE_GET_VIEWER_STRINGS),
+            vec![vec![this, strings]]
+        );
+        assert_eq!(
+            calls(&e, NI_GET_VIEWER_STRING),
+            vec![vec![TEXT_BS_TREE_NODE]]
+        );
+        assert_eq!(
+            calls(&e, FORMAT_00406D00),
+            vec![
+                vec![0x2222, 0x20, TEXT_TYPE_INSTANCE],
+                vec![0x2222, 0x20, TEXT_SEED, 42]
+            ]
+        );
+        assert_eq!(e.mem.u32(strings), 3);
+        assert_eq!(e.mem.u32(strings + 4), 0x1111);
+        assert_eq!(e.mem.u32(strings + 8), 0x2222);
+        assert_eq!(calls(&e, MODEL_TEST_00666F00), vec![vec![0x3333]]);
+
+        // A base model; then no model.
+        e.register(MODEL_TEST_00666F00, |_, _| 0xff00u32.into_ret());
+        e.call_log = Some(vec![]);
+        e.call(0x0066_d880, &args![this, strings]);
+        assert_eq!(calls(&e, FORMAT_00406D00)[0][2], TEXT_TYPE_BASE);
+        e.mem.set_u32(this + 0xe4, 0);
+        e.call_log = Some(vec![]);
+        e.call(0x0066_d880, &args![this, strings]);
+        assert_eq!(
+            calls(&e, FORMAT_00406D00),
+            vec![vec![0x2222, 0x20, TEXT_NO_MODEL]]
+        );
+        assert!(calls(&e, MODEL_TEST_00666F00).is_empty());
+    }
+
+    #[test]
+    fn fn_0066d9b0_passes_the_left_word_on() {
+        let mut e = Engine::new();
+        e.register(STEP_004A4840, |e, a| {
+            (u32::from(e.mem.u8(a[0])) + a[1]).into_ret()
+        });
+        e.register(STEP_0066D9E0, |_, a| (a[1] ^ a[2]).into_ret());
+        e.call_log = Some(vec![]);
+        let answer = e.call(0x0066_d9b0, &args![0x100u32, 0x0f0fu32]).u32();
+        assert_eq!(answer, 0x100 ^ 0x0f0f);
+        assert_eq!(calls(&e, STEP_0066D9E0), vec![vec![0x100, 0x100, 0x0f0f]]);
     }
 }

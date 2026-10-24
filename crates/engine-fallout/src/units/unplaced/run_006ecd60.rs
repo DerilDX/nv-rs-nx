@@ -205,6 +205,75 @@ pub fn fn_006ed0e0(e: &mut Engine, this: Ptr) -> Ptr {
     this
 }
 
+/// `operator delete` (`00401030`, cdecl).
+const OPERATOR_DELETE: u32 = 0x0040_1030;
+
+/// The scalar deleting destructor shape: `destroy(this)`, then `operator delete(this)` when
+/// bit 0 of `flags` is set. Returns `this`.
+fn scalar_deleting(e: &mut Engine, this: Ptr, flags: u32, destroy: fn(&mut Engine, Ptr)) -> Ptr {
+    destroy(e, this);
+    if flags & 1 != 0 {
+        e.call(OPERATOR_DELETE, &args![this]);
+    }
+    this
+}
+
+// Translated from 006ecf40 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The scalar deleting destructor of `BSTFreeList<ActorPathingMessage>` (slot +0x00 of its
+/// vtable `0106d7a0`; `thiscall`, `RET 4`): [`fn_006ecf20`]; see [`scalar_deleting`].
+pub fn fn_006ecf40(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    scalar_deleting(e, this, flags, fn_006ecf20)
+}
+
+// Translated from 006ecf70 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The scalar deleting destructor of `BSTStaticFreeList<ActorPathingMessage,256>` (slot
+/// +0x00 of its vtable `0106d798`; `thiscall`, `RET 4`): [`fn_006ecfa0`].
+pub fn fn_006ecf70(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    scalar_deleting(e, this, flags, fn_006ecfa0)
+}
+
+/// The constructors `006ed100` runs on its members (thiscall): `006815c0` (a point's
+/// default constructor, answering its `this`), `006bbc30` (in `navmeshobstaclecutter.cpp`
+/// by the engine map), `006f2630`, `006f2750`, `006f2510` (three words each: 0, 0 and an
+/// address) and `006f2b30`; and the `float` stored at `+0x2C` (`0101e340`, read at run
+/// time).
+const POINT_DEFAULT: u32 = 0x0068_15c0;
+const CONSTRUCT_006BBC30: u32 = 0x006b_bc30;
+const CONSTRUCT_006F2630: u32 = 0x006f_2630;
+const CONSTRUCT_006F2750: u32 = 0x006f_2750;
+const CONSTRUCT_006F2510: u32 = 0x006f_2510;
+const CONSTRUCT_006F2B30: u32 = 0x006f_2b30;
+const FLOAT_AT_2C: u32 = 0x0101_e340;
+
+// Translated from 006ed100 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 006ed100 - the compiler's exception frame (FS:[0] unwind states 0..5) and the security-cookie word it pushes are not translated
+/// Unnamed in the map (`thiscall`, plain `RET`; called from `006cd8a0`, `006d1c60` and
+/// `006d1f80`): a constructor. The points at `+0x08` and `+0x14` (`006815c0`), the float at
+/// `+0x2C` from `0101e340`, the member at `+0x30` (`006bbc30`), then the members at `+0x40`
+/// and `+0x54` (`006f2630`), `+0x68` and `+0x7C` (`006f2750`) and `+0x90` (`006f2510`), each
+/// given `(0, 0, address)` with the address `006815c0` answers for `+0x30` (called again
+/// before each), and the member at `+0xA4` (`006f2b30`). Returns `this`.
+pub fn fn_006ed100(e: &mut Engine, this: Ptr) -> Ptr {
+    let base = this.addr();
+    e.call(POINT_DEFAULT, &args![base + 0x8]);
+    e.call(POINT_DEFAULT, &args![base + 0x14]);
+    let value = x87_quiet_bits(e.mem.u32(FLOAT_AT_2C));
+    e.mem.set_u32(base + 0x2c, value);
+    e.call(CONSTRUCT_006BBC30, &args![base + 0x30]);
+    for (offset, construct) in [
+        (0x40u32, CONSTRUCT_006F2630),
+        (0x54, CONSTRUCT_006F2630),
+        (0x68, CONSTRUCT_006F2750),
+        (0x7c, CONSTRUCT_006F2750),
+        (0x90, CONSTRUCT_006F2510),
+    ] {
+        let point = e.call(POINT_DEFAULT, &args![base + 0x30]).u32();
+        e.call(construct, &args![base + offset, 0u32, 0u32, point]);
+    }
+    e.call(CONSTRUCT_006F2B30, &args![base + 0xa4]);
+    this
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -216,6 +285,9 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x006e_d010, fn_006ed010(Ptr) -> Ptr),
         entry!(0x006e_d040, fn_006ed040(Ptr, u32, u32)),
         entry!(0x006e_d0e0, fn_006ed0e0(Ptr) -> Ptr),
+        entry!(0x006e_cf40, fn_006ecf40(Ptr, u32) -> Ptr),
+        entry!(0x006e_cf70, fn_006ecf70(Ptr, u32) -> Ptr),
+        entry!(0x006e_d100, fn_006ed100(Ptr) -> Ptr),
     ]
 }
 
@@ -441,5 +513,69 @@ mod free_list_tests {
         e.call(0x006e_d040, &args![this, 1u32, single]);
         assert_eq!(e.mem.u32(single + 8), 0);
         assert_eq!(e.mem.u32(this + 8), single);
+    }
+}
+
+#[cfg(test)]
+mod n076_tests {
+    use super::*;
+
+    fn calls_to(e: &Engine, callee: u32) -> Vec<Vec<u32>> {
+        let log = e.call_log.as_ref().unwrap();
+        log.iter()
+            .filter(|(address, _)| *address == callee)
+            .map(|(_, words)| words.clone())
+            .collect()
+    }
+
+    #[test]
+    fn deleting_destructors_put_their_vtables_back() {
+        let mut e = Engine::new();
+        e.register(OPERATOR_DELETE, |_, _| Ret::default());
+        e.register(VECTOR_DESTRUCTOR_ITERATOR, |_, _| Ret::default());
+        let this = e.mem.alloc(0x10);
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x006e_cf40, &args![this, 1u32]).u32(), this);
+        assert_eq!(e.mem.u32(this), FREE_LIST_VTABLE);
+        assert_eq!(calls_to(&e, OPERATOR_DELETE), vec![vec![this]]);
+        e.call(0x006e_cf70, &args![this, 0u32]);
+        assert_eq!(calls_to(&e, VECTOR_DESTRUCTOR_ITERATOR).len(), 1);
+        // The static list's destructor ends in the base one.
+        assert_eq!(e.mem.u32(this), FREE_LIST_VTABLE);
+        assert_eq!(calls_to(&e, OPERATOR_DELETE).len(), 1);
+    }
+
+    #[test]
+    fn constructor_builds_the_members_in_order() {
+        let mut e = Engine::new();
+        e.map(0x0101_e000, 0x1000);
+        e.mem.set_f32(FLOAT_AT_2C, 32.0);
+        e.register(POINT_DEFAULT, |_, a| a[0].into_ret());
+        for address in [
+            CONSTRUCT_006BBC30,
+            CONSTRUCT_006F2630,
+            CONSTRUCT_006F2750,
+            CONSTRUCT_006F2510,
+            CONSTRUCT_006F2B30,
+        ] {
+            e.register(address, |_, _| Ret::default());
+        }
+        let this = e.mem.alloc(0xc0);
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x006e_d100, &args![this]).u32(), this);
+        assert_eq!(e.mem.f32(this + 0x2c), 32.0);
+        assert_eq!(
+            calls_to(&e, CONSTRUCT_006F2630),
+            vec![
+                vec![this + 0x40, 0, 0, this + 0x30],
+                vec![this + 0x54, 0, 0, this + 0x30]
+            ]
+        );
+        assert_eq!(
+            calls_to(&e, CONSTRUCT_006F2510),
+            vec![vec![this + 0x90, 0, 0, this + 0x30]]
+        );
+        assert_eq!(calls_to(&e, POINT_DEFAULT).len(), 7);
+        assert_eq!(calls_to(&e, CONSTRUCT_006F2B30), vec![vec![this + 0xa4]]);
     }
 }

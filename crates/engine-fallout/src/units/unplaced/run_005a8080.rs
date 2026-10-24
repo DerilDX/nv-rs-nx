@@ -183,9 +183,249 @@ pub fn fn_005a8110(e: &mut Engine, this: Ptr, file: Ptr) -> bool {
     true
 }
 
+/// List helpers: whether a node is empty (`008256d0`, `AL`), its item word's address
+/// (`006815c0`), the next node (`00726070`, also the entry's second word), removing the
+/// first item (`0063f7b0`), and the first word of an entry (`00559450`).
+const NODE_EMPTY: u32 = 0x0082_56d0;
+const NODE_ITEM: u32 = 0x0068_15c0;
+const NODE_NEXT: u32 = 0x0072_6070;
+const LIST_REMOVE_FIRST: u32 = 0x0063_f7b0;
+const ENTRY_FIRST: u32 = 0x0055_9450;
+/// `0084e3a0` (`ECX` = a form): the word saved for it (its form id, by the chunks it goes
+/// into), and `00485910` (`cdecl`: chunk code, word) that writes one chunk.
+const FORM_WORD: u32 = 0x0084_e3a0;
+const WRITE_CHUNK: u32 = 0x0048_5910;
+/// The recipe's getter/setter pairs (`ECX` only; setters one stack word).
+const GET_006A1B60: u32 = 0x006a_1b60;
+const GET_006286D0: u32 = 0x0062_86d0;
+const GET_0059BB30: u32 = 0x0059_bb30;
+const GET_0045CD60: u32 = 0x0045_cd60;
+
+/// Writes `code` with the word of the entry's form (its second word) and `RCQY` with the
+/// entry's first word, for each entry of `list` up to the first null one.
+fn save_entries(e: &mut Engine, list: u32, code: u32) {
+    let mut node = list;
+    while node != 0 {
+        let item = e.call(NODE_ITEM, &args![node]).u32();
+        if e.mem.u32(item) == 0 {
+            break;
+        }
+        let item = e.call(NODE_ITEM, &args![node]).u32();
+        let entry = e.mem.u32(item);
+        node = e.call(NODE_NEXT, &args![node]).u32();
+        let form = e.call(NODE_NEXT, &args![entry]).u32();
+        let word = e.call(FORM_WORD, &args![form]).u32();
+        e.call(WRITE_CHUNK, &args![code, word]);
+        let count = e.call(ENTRY_FIRST, &args![entry]).u32();
+        e.call(WRITE_CHUNK, &args![CHUNK_RCQY, count]);
+    }
+}
+
+/// The word of the form `getter` answers for the recipe, or 0 when it answers null.
+fn form_word_or_zero(e: &mut Engine, this: Ptr, getter: u32) -> u32 {
+    if e.call(getter, &args![this]).u32() == 0 {
+        return 0;
+    }
+    let form = e.call(getter, &args![this]).u32();
+    e.call(FORM_WORD, &args![form]).u32()
+}
+
+// Translated from 005a8490 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TESRecipe`'s form-save slot (the vtable slot at `01036b58`; unnamed in the engine map,
+/// whose names for the getters come from folded code; `ECX`, plain `RET`):
+/// `TESForm::StartForm`, `TESFullName::Save` on +0x18, the conditions saved (`00680910`
+/// on `006a9540`'s answer), the words of the forms `006a1b60` and `006286d0` answer (0 for
+/// none) into +8 and +0xc of `00430830`'s data, the 0x10 bytes at +0x24
+/// (`TESForm::__SaveData`), byte-swapped before and back after when `00401500` says so
+/// (`00414220`), the entries of [`fn_005a8080`]'s list as `RCIL`/`RCQY` chunks and those
+/// of `005d43c0`'s as `RCOD`/`RCQY`, then `TESForm::CloseForm`.
+pub fn fn_005a8490(e: &mut Engine, this: Ptr) {
+    let base = this.addr();
+    e.call(0x0048_55a0, &args![this]);
+    e.call(0x0048_7010, &args![base + 0x18]);
+    let conditions = e.call(CONDITIONS, &args![this]).u32();
+    e.call(0x0068_0910, &args![conditions]);
+    let first = form_word_or_zero(e, this, GET_006A1B60);
+    let data = e.call(0x0043_0830, &args![this]).u32();
+    e.mem.set_u32(data + 8, first);
+    let second = form_word_or_zero(e, this, GET_006286D0);
+    let data = e.call(0x0043_0830, &args![this]).u32();
+    e.mem.set_u32(data + 0xc, second);
+    if e.call(0x0040_1500, &args![]).u8() != 0 {
+        e.call(0x0041_4220, &args![base + 0x24]);
+    }
+    e.call(0x0048_5e20, &args![this, base + 0x24, 0x10u32]);
+    if e.call(0x0040_1500, &args![]).u8() != 0 {
+        e.call(0x0041_4220, &args![base + 0x24]);
+    }
+    let list = fn_005a8080(e, this).addr();
+    save_entries(e, list, CHUNK_RCIL);
+    let list = e.call(RCOD_LIST, &args![this]).u32();
+    save_entries(e, list, CHUNK_RCOD);
+    e.call(0x0048_5680, &args![this]);
+}
+
+/// Empties the list `list_of` answers for `this`, then appends a copy of each entry of the
+/// source's (a new entry, `005a7be0`, given the source entry's first word through
+/// `00537e90` and its second through `006ecd40`; `00905820` with the slot holding it).
+fn copy_entries(e: &mut Engine, this: Ptr, source: u32, list_of: ListOf) {
+    loop {
+        let list = list_of(e, this);
+        if e.call(NODE_EMPTY, &args![list]).u8() != 0 {
+            break;
+        }
+        let list = list_of(e, this);
+        e.call(LIST_REMOVE_FIRST, &args![list]);
+    }
+    let mut node = list_of(e, Ptr::new(source));
+    e.with_stack(4, |e, slot| {
+        while node != 0 && e.call(NODE_EMPTY, &args![node]).u8() == 0 {
+            let item = e.call(NODE_ITEM, &args![node]).u32();
+            let entry = e.mem.u32(item);
+            let copy = new_entry(e);
+            e.mem.set_u32(slot.addr(), copy);
+            let copy = e.mem.u32(slot.addr());
+            let first = e.call(ENTRY_FIRST, &args![entry]).u32();
+            e.call(0x0053_7e90, &args![copy, first]);
+            let second = e.call(NODE_NEXT, &args![entry]).u32();
+            let copy = e.mem.u32(slot.addr());
+            e.call(0x006e_cd40, &args![copy, second]);
+            let list = list_of(e, this);
+            e.call(LIST_ADD, &args![list, slot]);
+            node = e.call(NODE_NEXT, &args![node]).u32();
+        }
+    });
+}
+
+/// A list getter of the recipe (answers the list's first node).
+type ListOf = fn(&mut Engine, Ptr) -> u32;
+
+fn other_list(e: &mut Engine, this: Ptr) -> u32 {
+    fn_005a8080(e, this).addr()
+}
+
+fn rcod_list(e: &mut Engine, this: Ptr) -> u32 {
+    e.call(RCOD_LIST, &args![this]).u32()
+}
+
+/// `__RTDynamicCast` (`00ec43fb`) and the RTTI type descriptors `.?AVTESForm@@` and
+/// `.?AVTESRecipe@@`.
+const DYNAMIC_CAST: u32 = 0x00ec_43fb;
+const TYPE_TES_FORM: u32 = 0x0118_3028;
+const TYPE_RECIPE: u32 = 0x0118_64b0;
+
+fn as_recipe(e: &mut Engine, form: Ptr) -> u32 {
+    e.call(
+        DYNAMIC_CAST,
+        &args![form, 0u32, TYPE_TES_FORM, TYPE_RECIPE, 0u32],
+    )
+    .u32()
+}
+
+// Translated from 005a8660 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 005a8660 - the C++ exception-unwinding frame (FS:[0] chain, handler at 00ef3d26, state variable around the two entry constructors) and the frame's cookie word are not translated.
+/// `TESRecipe`'s `Copy` slot (the vtable slot at `01036c34`; unnamed in the engine map;
+/// `ECX` and one stack word, `RET 4`): when `source` casts to a `TESRecipe`, copies the
+/// conditions (`00680a70(theirs, 0)` on this one's), the 0x10 bytes at +0x24
+/// (`00401460`), `TESForm::CopyAllComponents` from `source`, the entries of
+/// [`fn_005a8080`]'s list and of `005d43c0`'s (each emptied first), then the four values
+/// `0059bb30`→`007037c0`, `0045cd60`→`0061cc40`, `006a1b60`→`005a8040` and
+/// `006286d0`→`005a8060`.
+pub fn fn_005a8660(e: &mut Engine, this: Ptr, source: Ptr) {
+    let recipe = as_recipe(e, source);
+    if recipe == 0 {
+        return;
+    }
+    let theirs = e.call(CONDITIONS, &args![recipe]).u32();
+    let mine = e.call(CONDITIONS, &args![this]).u32();
+    e.call(0x0068_0a70, &args![mine, theirs, 0u32]);
+    e.call(
+        0x0040_1460,
+        &args![this.addr() + 0x24, recipe + 0x24, 0x10u32],
+    );
+    e.call(0x0048_51b0, &args![this, source]);
+    copy_entries(e, this, recipe, other_list);
+    copy_entries(e, this, recipe, rcod_list);
+    for (getter, setter) in [
+        (GET_0059BB30, 0x0070_37c0u32),
+        (GET_0045CD60, 0x0061_cc40),
+        (GET_006A1B60, 0x005a_8040),
+        (GET_006286D0, 0x005a_8060),
+    ] {
+        let value = e.call(getter, &args![recipe]).u32();
+        e.call(setter, &args![this, value]);
+    }
+}
+
+/// Walks this one's and the other's list side by side: true (different) when the other's
+/// has an entry where this one's has ended (null or empty), or when `005a7c00` (on this
+/// one's entry, with the other's) answers true; false at the end of the other's.
+fn entries_differ(e: &mut Engine, this: Ptr, other: u32, list_of: ListOf) -> bool {
+    let mut mine = list_of(e, this);
+    let mut theirs = list_of(e, Ptr::new(other));
+    while theirs != 0 && e.call(NODE_EMPTY, &args![theirs]).u8() == 0 {
+        if mine == 0 || e.call(NODE_EMPTY, &args![mine]).u8() != 0 {
+            return true;
+        }
+        let item = e.call(NODE_ITEM, &args![mine]).u32();
+        let my_entry = e.mem.u32(item);
+        let item = e.call(NODE_ITEM, &args![theirs]).u32();
+        let their_entry = e.mem.u32(item);
+        if e.call(0x005a_7c00, &args![my_entry, their_entry]).u8() != 0 {
+            return true;
+        }
+        theirs = e.call(NODE_NEXT, &args![theirs]).u32();
+        mine = e.call(NODE_NEXT, &args![mine]).u32();
+    }
+    false
+}
+
+// Translated from 005a8910 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TESRecipe`'s `Compare` slot (the vtable slot at `01036c38`; unnamed in the engine map;
+/// `ECX` and one stack word, `RET 4`): true (different) when `other` is not a `TESRecipe`,
+/// when `006a1b60`, `006286d0`, `0059bb30` or `0045cd60` answer differently,
+/// `TESForm::CompareAllComponents` or the conditions' compare (`00680b70`) answer true, the
+/// two lists' counts (`005ae380`) differ, or an entry differs ([`fn_005a8080`]'s list,
+/// then `005d43c0`'s); false otherwise.
+pub fn fn_005a8910(e: &mut Engine, this: Ptr, other: Ptr) -> bool {
+    let recipe = as_recipe(e, other);
+    if recipe == 0 {
+        return true;
+    }
+    for getter in [GET_006A1B60, GET_006286D0, GET_0059BB30, GET_0045CD60] {
+        let mine = e.call(getter, &args![this]).u32();
+        if mine != e.call(getter, &args![recipe]).u32() {
+            return true;
+        }
+    }
+    if e.call(0x0048_5270, &args![this, recipe]).u8() != 0 {
+        return true;
+    }
+    let theirs = e.call(CONDITIONS, &args![recipe]).u32();
+    let mine = e.call(CONDITIONS, &args![this]).u32();
+    if e.call(0x0068_0b70, &args![mine, theirs]).u8() != 0 {
+        return true;
+    }
+    for list_of in [other_list as ListOf, rcod_list] {
+        let list = list_of(e, this);
+        let mine = e.call(0x005a_e380, &args![list]).u32();
+        let list = list_of(e, Ptr::new(recipe));
+        if mine != e.call(0x005a_e380, &args![list]).u32() {
+            return true;
+        }
+    }
+    if entries_differ(e, this, recipe, other_list) {
+        return true;
+    }
+    entries_differ(e, this, recipe, rcod_list)
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x005a_8490, fn_005a8490(Ptr)),
+        entry!(0x005a_8660, fn_005a8660(Ptr, Ptr)),
+        entry!(0x005a_8910, fn_005a8910(Ptr, Ptr) -> bool),
         entry!(0x005a8080, fn_005a8080(Ptr) -> Ptr),
         entry!(0x005a_80a0, fn_005a80a0(Ptr)),
         entry!(0x005a_8110, fn_005a8110(Ptr, Ptr) -> bool),
@@ -398,5 +638,187 @@ mod record_tests {
         let (e, _, _) = record(0x69, vec![(CHUNK_DATA, 0)]);
         assert_eq!(calls(&e, 0x7000_0018).len(), 1);
         assert!(calls(&e, 0x0048_5110).is_empty());
+    }
+}
+
+#[cfg(test)]
+mod recipe_tests {
+    use super::*;
+
+    type Log = Vec<(u32, Vec<u32>)>;
+
+    fn calls(log: &Log, callee: u32) -> Vec<Vec<u32>> {
+        log.iter()
+            .filter(|(a, _)| *a == callee)
+            .map(|(_, w)| w.clone())
+            .collect()
+    }
+
+    /// Lists are nodes [item, next], empty when the item is 0; the `RCOD` list of a recipe
+    /// sits at +0x60 (the other at +0x3c, [`fn_005a8080`]). Entries are [count, form].
+    fn engine() -> Engine {
+        let mut e = Engine::new();
+        e.register(NODE_EMPTY, |e, a| {
+            u32::from(e.mem.u32(a[0]) == 0).into_ret()
+        });
+        e.register(NODE_ITEM, |_, a| a[0].into_ret());
+        e.register(NODE_NEXT, |e, a| e.mem.u32(a[0] + 4).into_ret());
+        e.register(ENTRY_FIRST, |e, a| e.mem.u32(a[0]).into_ret());
+        e.register(RCOD_LIST, |_, a| (a[0] + 0x60).into_ret());
+        e.register(FORM_WORD, |_, a| (a[0] | 0x0100_0000).into_ret());
+        e
+    }
+
+    fn recipe(e: &mut Engine, entries: &[(u32, u32)], rcod: &[(u32, u32)]) -> u32 {
+        let this = e.mem.alloc(0x80);
+        for (offset, list) in [(0x3cu32, entries), (0x60, rcod)] {
+            let mut node = this + offset;
+            for (i, (count, form)) in list.iter().enumerate() {
+                let entry = e.mem.alloc(8);
+                e.mem.set_u32(entry, *count);
+                e.mem.set_u32(entry + 4, *form);
+                e.mem.set_u32(node, entry);
+                if i + 1 < list.len() {
+                    let next = e.mem.alloc(8);
+                    e.mem.set_u32(node + 4, next);
+                    node = next;
+                }
+            }
+        }
+        this
+    }
+
+    #[test]
+    fn fn_005a8490_saves_the_recipe() {
+        let mut e = engine();
+        for callee in [
+            0x0048_55a0u32,
+            0x0048_7010,
+            0x0068_0910,
+            0x0048_5e20,
+            0x0048_5680,
+            WRITE_CHUNK,
+            0x0041_4220,
+        ] {
+            e.register(callee, |_, _| Ret::default());
+        }
+        e.register(CONDITIONS, |_, a| (a[0] + 0x70).into_ret());
+        e.register(0x0040_1500, |_, _| 1u32.into_ret());
+        e.register(GET_006A1B60, |_, _| 0x55u32.into_ret());
+        e.register(GET_006286D0, |_, _| 0u32.into_ret());
+        let data = e.mem.alloc(0x10);
+        e.register_double(0x0043_0830, move |_, _| data.into_ret());
+        let this = recipe(&mut e, &[(2, 0x11), (3, 0x22)], &[(1, 0x33)]);
+        e.call_log = Some(vec![]);
+        e.call(0x005a_8490, &args![this]);
+        let log = e.call_log.take().unwrap();
+        assert_eq!(e.mem.u32(data + 8), 0x0100_0055);
+        assert_eq!(e.mem.u32(data + 0xc), 0);
+        assert_eq!(calls(&log, 0x0068_0910), vec![vec![this + 0x70]]);
+        assert_eq!(calls(&log, 0x0041_4220).len(), 2);
+        assert_eq!(
+            calls(&log, WRITE_CHUNK),
+            vec![
+                vec![CHUNK_RCIL, 0x0100_0011],
+                vec![CHUNK_RCQY, 2],
+                vec![CHUNK_RCIL, 0x0100_0022],
+                vec![CHUNK_RCQY, 3],
+                vec![CHUNK_RCOD, 0x0100_0033],
+                vec![CHUNK_RCQY, 1],
+            ]
+        );
+        assert_eq!(log.last().unwrap(), &(0x0048_5680, vec![this]));
+    }
+
+    #[test]
+    fn fn_005a8660_copies_a_recipe() {
+        let mut e = engine();
+        e.register(DYNAMIC_CAST, |_, a| a[0].into_ret());
+        e.register(CONDITIONS, |_, a| (a[0] + 0x70).into_ret());
+        for callee in [
+            0x0068_0a70u32,
+            0x0040_1460,
+            0x0048_51b0,
+            0x0053_7e90,
+            0x006e_cd40,
+            LIST_ADD,
+            0x0070_37c0,
+            0x0061_cc40,
+            0x005a_8040,
+            0x005a_8060,
+        ] {
+            e.register(callee, |_, _| Ret::default());
+        }
+        e.register(0x0040_1000, |e, _| e.mem.alloc(8).into_ret());
+        e.register(0x005a_7be0, |_, a| a[0].into_ret());
+        // Removing the first item empties a one-entry list.
+        e.register(LIST_REMOVE_FIRST, |e, a| {
+            e.mem.set_u32(a[0], 0);
+            Ret::default()
+        });
+        for getter in [GET_0059BB30, GET_0045CD60, GET_006A1B60, GET_006286D0] {
+            e.register_double(getter, move |_, _| (getter & 0xff).into_ret());
+        }
+        let this = recipe(&mut e, &[(9, 0x99)], &[]);
+        let source = recipe(&mut e, &[(2, 0x11), (3, 0x22)], &[(1, 0x33)]);
+        e.call_log = Some(vec![]);
+        e.call(0x005a_8660, &args![this, source]);
+        let log = e.call_log.take().unwrap();
+        assert_eq!(
+            calls(&log, 0x0068_0a70),
+            vec![vec![this + 0x70, source + 0x70, 0]]
+        );
+        assert_eq!(
+            calls(&log, 0x0040_1460),
+            vec![vec![this + 0x24, source + 0x24, 0x10]]
+        );
+        assert_eq!(calls(&log, LIST_REMOVE_FIRST), vec![vec![this + 0x3c]]);
+        let firsts: Vec<u32> = calls(&log, 0x0053_7e90).iter().map(|w| w[1]).collect();
+        assert_eq!(firsts, vec![2, 3, 1]);
+        let seconds: Vec<u32> = calls(&log, 0x006e_cd40).iter().map(|w| w[1]).collect();
+        assert_eq!(seconds, vec![0x11, 0x22, 0x33]);
+        let lists: Vec<u32> = calls(&log, LIST_ADD).iter().map(|w| w[0]).collect();
+        assert_eq!(lists, vec![this + 0x3c, this + 0x3c, this + 0x60]);
+        assert_eq!(calls(&log, 0x0070_37c0), vec![vec![this, 0x30]]);
+        assert_eq!(calls(&log, 0x005a_8060), vec![vec![this, 0xd0]]);
+    }
+
+    #[test]
+    fn fn_005a8910_compares_recipes() {
+        let mut e = engine();
+        e.register(DYNAMIC_CAST, |_, a| a[0].into_ret());
+        e.register(CONDITIONS, |_, a| (a[0] + 0x70).into_ret());
+        for getter in [GET_006A1B60, GET_006286D0, GET_0059BB30, GET_0045CD60] {
+            e.register(getter, |_, _| 7u32.into_ret());
+        }
+        e.register(0x0048_5270, |_, _| 0u32.into_ret());
+        e.register(0x0068_0b70, |_, _| 0u32.into_ret());
+        // Counts: the number of nodes with an item.
+        e.register(0x005a_e380, |e, a| {
+            let mut node = a[0];
+            let mut count = 0u32;
+            while node != 0 && e.mem.u32(node) != 0 {
+                count += 1;
+                node = e.mem.u32(node + 4);
+            }
+            count.into_ret()
+        });
+        e.register(0x005a_7c00, |e, a| {
+            u32::from(e.mem.u32(a[0] + 4) != e.mem.u32(a[1] + 4)).into_ret()
+        });
+        let one = recipe(&mut e, &[(2, 0x11)], &[(1, 0x33)]);
+        let same = recipe(&mut e, &[(2, 0x11)], &[(1, 0x33)]);
+        let other = recipe(&mut e, &[(2, 0x12)], &[(1, 0x33)]);
+        let longer = recipe(&mut e, &[(2, 0x11)], &[(1, 0x33), (1, 0x34)]);
+        assert!(!e.call(0x005a_8910, &args![one, same]).bool());
+        assert!(e.call(0x005a_8910, &args![one, other]).bool());
+        assert!(e.call(0x005a_8910, &args![one, longer]).bool());
+        e.register(GET_0045CD60, |_, a| a[0].into_ret());
+        assert!(e.call(0x005a_8910, &args![one, same]).bool());
+        e.register(GET_0045CD60, |_, _| 7u32.into_ret());
+        e.register(0x0068_0b70, |_, _| 1u32.into_ret());
+        assert!(e.call(0x005a_8910, &args![one, same]).bool());
+        e.register(DYNAMIC_CAST, |_, _| 0u32.into_ret());
+        assert!(e.call(0x005a_8910, &args![one, same]).bool());
     }
 }

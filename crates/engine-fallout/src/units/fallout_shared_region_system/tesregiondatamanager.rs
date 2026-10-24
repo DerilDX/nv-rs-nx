@@ -136,6 +136,28 @@ pub fn tes_region_data_manager_is_region_data_landscape(
     data_of_type(e, data, 5)
 }
 
+// Translated from 004f38b0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TESRegionDataManager::IsRegionDataObjects` (Xbox PDB), `RET 4`: the
+/// data when its type is 2, else null.
+pub fn tes_region_data_manager_is_region_data_objects(
+    e: &mut Engine,
+    _this: Ptr<TESRegionDataManager>,
+    data: Ptr,
+) -> u32 {
+    data_of_type(e, data, 2)
+}
+
+// Translated from 004f3970 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TESRegionDataManager::IsRegionDataGrass` (Xbox PDB), `RET 4`: the data
+/// when its type is 6, else null.
+pub fn tes_region_data_manager_is_region_data_grass(
+    e: &mut Engine,
+    _this: Ptr<TESRegionDataManager>,
+    data: Ptr,
+) -> u32 {
+    data_of_type(e, data, 6)
+}
+
 // Translated from 004f39a0 (decompiled, FalloutNV.exe 1.4.0.525)
 /// `TESRegionDataManager::IsRegionDataSound` (Xbox PDB), `RET 4`: the data
 /// when its type is 7, else null.
@@ -245,6 +267,14 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(
             0x004f_3940,
             tes_region_data_manager_is_region_data_landscape(Ptr<TESRegionDataManager>, Ptr) -> u32
+        ),
+        entry!(
+            0x004f_38b0,
+            tes_region_data_manager_is_region_data_objects(Ptr<TESRegionDataManager>, Ptr) -> u32
+        ),
+        entry!(
+            0x004f_3970,
+            tes_region_data_manager_is_region_data_grass(Ptr<TESRegionDataManager>, Ptr) -> u32
         ),
         entry!(
             0x004f_39a0,
@@ -452,5 +482,32 @@ mod b025_tests {
         e.call_log = Some(vec![]);
         assert!(e.call(0x004f_3a00, &args![m, 0x9000u32, region]).bool());
         assert!(calls_to(&e, LOAD_FN).is_empty());
+    }
+}
+
+#[cfg(test)]
+mod tests_n073 {
+    use super::*;
+
+    #[test]
+    fn is_region_data_objects_and_grass_casts() {
+        let mut e = Engine::new();
+        e.put_vtable(0x0150_0000, &[0, 0, 0, 0, 0x0150_1010]);
+        e.register(0x0150_1010, |e, a| Ret {
+            eax: e.mem.u32(a[0] + 4),
+            ..Default::default()
+        });
+        let manager = e.mem.alloc(8);
+        for (address, kind) in [(0x004f_38b0u32, 2u32), (0x004f_3970, 6)] {
+            let right = e.mem.alloc(8);
+            e.mem.set_u32(right, 0x0150_0000);
+            e.mem.set_u32(right + 4, kind);
+            let wrong = e.mem.alloc(8);
+            e.mem.set_u32(wrong, 0x0150_0000);
+            e.mem.set_u32(wrong + 4, kind + 1);
+            assert_eq!(e.call(address, &args![manager, right]).u32(), right);
+            assert_eq!(e.call(address, &args![manager, wrong]).u32(), 0);
+            assert_eq!(e.call(address, &args![manager, 0u32]).u32(), 0);
+        }
     }
 }

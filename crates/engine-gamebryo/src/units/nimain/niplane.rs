@@ -130,9 +130,43 @@ pub fn ni_plane_ni_plane(e: &mut Engine, this: Ptr<NiPlane>) -> Ptr<NiPlane> {
     this
 }
 
+/// The `cdecl` allocation (`00aa1070`: size), `NiSprintf` (`00a305b0`, cdecl: buffer, size,
+/// format, values) and `"(%g,%g,%g), %g"` (`0109c380`).
+const NI_ALLOC: u32 = 0x00aa_1070;
+const NI_SPRINTF: u32 = 0x00a3_05b0;
+const VIEWER_FORMAT: u32 = 0x0109_c380;
+
+// Translated from 00a69a60 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiPlane::GetViewerString` (engine map; thiscall, one word): a new block of
+/// `strlen(prefix) + 0x38` bytes (`00aa1070`) holding the normal and the constant as
+/// `"(%g,%g,%g), %g"` (`NiSprintf`, each float widened to a `double`); the prefix itself is
+/// not printed. Answers the block.
+pub fn ni_plane_get_viewer_string(e: &mut Engine, this: Ptr<NiPlane>, prefix: u32) -> u32 {
+    let mut at = prefix;
+    while e.mem.u8(at) != 0 {
+        at = at.wrapping_add(1);
+    }
+    let size = at.wrapping_sub(prefix).wrapping_add(0x38);
+    let block = e.call(NI_ALLOC, &args![size]).u32();
+    let word = |e: &Engine, offset: u32| x87_load32(e.mem.u32(this.addr().wrapping_add(offset)));
+    let constant = word(e, 0xc);
+    let z = word(e, 8);
+    let y = word(e, 4);
+    let x = word(e, 0);
+    e.call(
+        NI_SPRINTF,
+        &args![block, size, VIEWER_FORMAT, x, y, z, constant],
+    );
+    block
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(
+            0x00a6_9a60,
+            ni_plane_get_viewer_string(Ptr<NiPlane>, u32) -> u32
+        ),
         entry!(0x00a6_9940, ni_plane_ni_plane(Ptr<NiPlane>) -> Ptr<NiPlane>),
         entry!(
             0x00a6_99d0,
@@ -264,5 +298,33 @@ mod lookahead2_tests {
         assert_eq!(r.u32(), this);
         let words: Vec<u32> = (0..4).map(|i| e.mem.u32(this + 4 * i)).collect();
         assert_eq!(words, vec![0x7f80_0001, 2, 3, 0]);
+    }
+}
+
+#[cfg(test)]
+mod n083_tests {
+    use super::*;
+
+    #[test]
+    fn viewer_string_prints_the_plane() {
+        let mut e = Engine::new();
+        e.register(NI_ALLOC, |_, _| 0x7000u32.into_ret());
+        e.register(NI_SPRINTF, |_, _| Ret::default());
+        let plane = e.new_object::<NiPlane>();
+        e.set(plane, NiPlane::m_kNormal_x, 1.0);
+        e.set(plane, NiPlane::m_kNormal_y, -2.5);
+        e.set(plane, NiPlane::m_kNormal_z, 0.5);
+        e.set(plane, NiPlane::m_fConstant, 3.0);
+        let prefix = e.mem.alloc(8);
+        e.mem.set_cstr(prefix, b"abc");
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x00a6_9a60, &args![plane, prefix]).u32(), 0x7000);
+        let log = e.call_log.take().unwrap();
+        let alloc: Vec<_> = log.iter().filter(|c| c.0 == NI_ALLOC).collect();
+        assert_eq!(alloc[0].1, [0x3b]);
+        let print: Vec<_> = log.iter().filter(|c| c.0 == NI_SPRINTF).collect();
+        let mut expected = vec![0x7000, 0x3b, VIEWER_FORMAT];
+        expected.extend(args![1.0f64, -2.5f64, 0.5f64, 3.0f64]);
+        assert_eq!(print[0].1, expected);
     }
 }

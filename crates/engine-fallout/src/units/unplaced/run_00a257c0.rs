@@ -171,6 +171,50 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00a2_6310, fn_00a26310(u32, u32, u32)),
         entry!(0x00a2_69f0, fn_00a269f0(u32, i32)),
         entry!(0x00a2_6520, fn_00a26520(u32, u32, u32, u32)),
+        entry!(0x00a2_5870, fn_00a25870() -> u8),
+        entry!(0x00a2_5880, fn_00a25880()),
+        entry!(0x00a2_5b00, fn_00a25b00(u32)),
+        entry!(0x00a2_5bb0, fn_00a25bb0(u32)),
+        entry!(0x00a2_5bc0, fn_00a25bc0(u32)),
+        entry!(0x00a2_5bd0, fn_00a25bd0(u32)),
+        entry!(0x00a2_5be0, fn_00a25be0(u32)),
+        entry!(0x00a2_5bf0, fn_00a25bf0(u32, u32) -> u8),
+        entry!(0x00a2_5c20, fn_00a25c20(u32, u32)),
+        entry!(0x00a2_5c80, fn_00a25c80(u32)),
+        entry!(0x00a2_5d30, fn_00a25d30(u32)),
+        entry!(0x00a2_5d40, fn_00a25d40(u32)),
+        entry!(0x00a2_5d50, fn_00a25d50(u32) -> u32),
+        entry!(0x00a2_5d70, fn_00a25d70(u32) -> u32),
+        entry!(0x00a2_5d80, fn_00a25d80(u32) -> bool),
+        entry!(0x00a2_5d90, fn_00a25d90(u32)),
+        entry!(0x00a2_5da0, fn_00a25da0(u32) -> bool),
+        entry!(0x00a2_5db0, fn_00a25db0(u32)),
+        entry!(0x00a2_5dc0, fn_00a25dc0(u32, u32)),
+        entry!(0x00a2_5dd0, fn_00a25dd0(u32, u32)),
+        entry!(0x00a2_5de0, fn_00a25de0(u32)),
+        entry!(0x00a2_5df0, fn_00a25df0(u32)),
+        entry!(0x00a2_5e00, fn_00a25e00(u32, u32) -> i32),
+        entry!(0x00a2_5e20, fn_00a25e20(u32, u32, u32, u32)),
+        entry!(0x00a2_5e70, fn_00a25e70(u32, u32, u32, u32)),
+        entry!(0x00a2_5ec0, fn_00a25ec0(u32, u32, u32, u32)),
+        entry!(0x00a2_5f10, fn_00a25f10(u32, u32, u32, u32)),
+        entry!(0x00a2_5f60, fn_00a25f60(u32, u32, u32, u32, u32)),
+        entry!(0x00a2_5fb0, fn_00a25fb0(u32, u32, u32)),
+        entry!(0x00a2_5fc0, fn_00a25fc0() -> bool),
+        entry!(0x00a2_5fd0, fn_00a25fd0(u32) -> bool),
+        entry!(0x00a2_6010, fn_00a26010(u32) -> bool),
+        entry!(0x00a2_6020, fn_00a26020(u32, u32) -> bool),
+        entry!(0x00a2_6090, fn_00a26090(u32, u32) -> bool),
+        entry!(0x00a2_6120, fn_00a26120(u32, u32)),
+        entry!(0x00a2_61a0, fn_00a261a0(u32, u32) -> u32),
+        entry!(0x00a2_6220, fn_00a26220(u32) -> u32),
+        entry!(0x00a2_6240, fn_00a26240(u32) -> u32),
+        entry!(0x00a2_6300, fn_00a26300(u32)),
+        entry!(0x00a2_6410, fn_00a26410(u32, u32, u32) -> u16),
+        entry!(0x00a2_6480, fn_00a26480(u32, u32, u32) -> u32),
+        entry!(0x00a2_64d0, fn_00a264d0(u32, u32, u32) -> u32),
+        entry!(0x00a2_6a50, fn_00a26a50(u32, u32, u32) -> u16),
+        entry!(0x00a2_6b00, fn_00a26b00(u32, u32) -> u32),
     ]
 }
 
@@ -641,5 +685,924 @@ mod channel_tests {
         assert_eq!(chop_low_word(f64::NAN), 0);
         assert_eq!(chop_low_word(3.0e10), 0);
         assert_eq!(chop_low_word(70000.0), 70000u32 as u16);
+    }
+}
+
+/// The byte global `00a25870` answers.
+const FLAG_011F3630: u32 = 0x011f_3630;
+/// The memory manager's free method (thiscall, one word: the block).
+const MEMORY_FREE: u32 = 0x00aa_4060;
+/// `memcpy` (CRT, cdecl: destination, source, size).
+const MEMCPY: u32 = 0x00ec_44d0;
+/// `CompareFileTime` (import slot; stdcall: two `FILETIME` pointers).
+const IMPORT_COMPARE_FILE_TIME: u32 = 0x00fd_f06c;
+/// The global the code reads in `00a25c80` and never uses.
+const UNUSED_GLOBAL_011F63A8: u32 = 0x011f_63a8;
+/// The word `00a25c80` reads (`011f3638` +4, an address the compiler
+/// tested against 0 and folded).
+const CHECKED_011F363C: u32 = 0x011f_363c;
+/// Creates the settings collection at `011f35a0` on first use (`004de4a0`,
+/// no arguments).
+const SETTINGS_CREATE: u32 = 0x004d_e4a0;
+/// The settings collection `004de4a0` creates.
+const SETTINGS: u32 = 0x011f_35a0;
+/// Finds a setting by name (`005e0860`, thiscall: the collection, the name,
+/// the out pointer that receives the setting).
+const SETTINGS_FIND: u32 = 0x005e_0860;
+/// `"uiRedeemedContent:GamePlay"`.
+const REDEEMED_CONTENT_NAME: u32 = 0x0108_b5bc;
+/// The word the code writes 0 to and uses when the setting is missing.
+const NULL_SETTING_WORD: u32 = 0x0120_2800;
+/// `__stricmp` (CRT, cdecl).
+const STRICMP: u32 = 0x00ec_68e4;
+/// The four content names `00a261a0` knows, bit 0 to bit 3: `"Classic"`,
+/// `"Tribal"`, `"Caravan"`, `"Mercenary"`.
+const CONTENT_NAMES: [u32; 4] = [0x0109_599c, 0x0109_5994, 0x0109_598c, 0x0101_b7dc];
+/// The double pi / 180 (`01023128`).
+const DEGREES_TO_RADIANS: u32 = 0x0102_3128;
+/// The double 1.0 (`01012070`).
+const ONE: u32 = 0x0101_2070;
+/// The LIBCMT math function at `00eca060` (a `double` argument, the result
+/// in ST0; which one it is is not confirmed here).
+const CRT_MATH_00ECA060: u32 = 0x00ec_a060;
+
+// Translated from 00a25870 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Answers the byte global at `011f3630` (no caller or vtable in the exe).
+pub fn fn_00a25870(e: &mut Engine) -> u8 {
+    e.mem.u8(FLAG_011F3630)
+}
+
+// Translated from 00a25880 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Builds the singleton at `011f3634` while it is null (0x14280 bytes,
+/// constructed by [`fn_00a259b0`], null when the allocation fails), then
+/// calls the empty method [`fn_00a25de0`] on it (no caller or vtable in the
+/// exe). EAX is left as the paths happen to leave it, so the uniform form
+/// answers nothing.
+// Translation incomplete: 00a25880 - C++ exception unwinding (SEH frame state) is not translated.
+pub fn fn_00a25880(e: &mut Engine) {
+    if e.mem.u32(SINGLETON) == 0 {
+        let block = e.call(MEMORY_ALLOCATE, &[MEMORY_MANAGER, 0x14280]).u32();
+        let object = if block != 0 { fn_00a259b0(e, block) } else { 0 };
+        e.mem.set_u32(SINGLETON, object);
+    }
+    let singleton = e.mem.u32(SINGLETON);
+    fn_00a25de0(e, singleton);
+}
+
+// Translated from 00a25b00 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Destructor of the 0x14280-byte singleton class: when the singleton at
+/// `011f3634` is set, destroys it (this function on it) and frees it through
+/// the memory manager (`00aa4060`), then calls the empty [`fn_00a25dd0`]
+/// with 0; in every case clears the list at +0x3AC ([`fn_00a26240`]). The
+/// global is never cleared, so with a singleton set the call on it recurses
+/// on the same singleton again (as the exe does; it never returns).
+// Translation incomplete: 00a25b00 - C++ exception unwinding (SEH frame state) is not translated.
+pub fn fn_00a25b00(e: &mut Engine, this: u32) {
+    let singleton = e.mem.u32(SINGLETON);
+    if singleton != 0 {
+        fn_00a25b00(e, singleton);
+        e.call(MEMORY_FREE, &[MEMORY_MANAGER, singleton]);
+        fn_00a25dd0(e, this, 0);
+    }
+    fn_00a26240(e, this + 0x3ac);
+}
+
+// Translated from 00a25bb0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Empty method (no caller or vtable in the exe).
+pub fn fn_00a25bb0(_e: &mut Engine, _this: u32) {}
+
+// Translated from 00a25bc0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Empty method (no caller or vtable in the exe).
+pub fn fn_00a25bc0(_e: &mut Engine, _this: u32) {}
+
+// Translated from 00a25bd0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Empty method (no caller or vtable in the exe).
+pub fn fn_00a25bd0(_e: &mut Engine, _this: u32) {}
+
+// Translated from 00a25be0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Empty method (no caller or vtable in the exe).
+pub fn fn_00a25be0(_e: &mut Engine, _this: u32) {}
+
+// Translated from 00a25bf0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Answers the singleton's byte at the offset its word +0x68 holds (no
+/// caller or vtable in the exe; the one stack word is not read).
+pub fn fn_00a25bf0(e: &mut Engine, this: u32, _unused_1: u32) -> u8 {
+    let index = e.mem.u32(this + 0x68);
+    e.mem.u8(this.wrapping_add(index))
+}
+
+// Translated from 00a25c20 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Appends a pair to the singleton's 8-byte records at +0x28 (count at
+/// +0x50): when [`fn_00a26010`] answers true and `value` is not 0, the
+/// record at the count gets `value` at +4 and the word +0x68 at +0, and the
+/// count grows by one (no caller or vtable in the exe).
+pub fn fn_00a25c20(e: &mut Engine, this: u32, value: u32) {
+    if !fn_00a26010(e, this) || value == 0 {
+        return;
+    }
+    let count = e.mem.u32(this + 0x50);
+    let record = this.wrapping_add(count.wrapping_mul(8));
+    e.mem.set_u32(record.wrapping_add(0x2c), value);
+    let count = e.mem.u32(this + 0x50);
+    let record = this.wrapping_add(count.wrapping_mul(8));
+    let current = e.mem.u32(this + 0x68);
+    e.mem.set_u32(record.wrapping_add(0x28), current);
+    let count = e.mem.u32(this + 0x50).wrapping_add(1);
+    e.mem.set_u32(this + 0x50, count);
+}
+
+// Translated from 00a25c80 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Reads state and does nothing with it (no caller or vtable in the exe):
+/// when the singleton's byte at the offset in +0x68 and its byte +4 are set
+/// and [`fn_00a26010`] answers true, reads the global `011f63a8`, and when
+/// the byte +0x87 is clear, the word at `011f363c`. The two blocks that
+/// would write `01202800` test the constant address `011f3638` against 0,
+/// which the compiler folded, so they never run and are left out.
+pub fn fn_00a25c80(e: &mut Engine, this: u32) {
+    let index = e.mem.u32(this + 0x68);
+    if e.mem.u8(this.wrapping_add(index)) == 0 || e.mem.u8(this + 4) == 0 {
+        return;
+    }
+    if !fn_00a26010(e, this) {
+        return;
+    }
+    let _unused = e.mem.u32(UNUSED_GLOBAL_011F63A8);
+    if e.mem.u8(this + 0x87) != 0 {
+        return;
+    }
+    let _unused = e.mem.u32(CHECKED_011F363C);
+}
+
+// Translated from 00a25d30 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Empty method (no caller or vtable in the exe).
+pub fn fn_00a25d30(_e: &mut Engine, _this: u32) {}
+
+// Translated from 00a25d40 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Empty method (no caller or vtable in the exe).
+pub fn fn_00a25d40(_e: &mut Engine, _this: u32) {}
+
+// Translated from 00a25d50 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Answers the singleton's word +0x14278 (no caller or vtable in the exe).
+pub fn fn_00a25d50(e: &mut Engine, this: u32) -> u32 {
+    e.mem.u32(this + 0x14278)
+}
+
+// Translated from 00a25d70 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Answers 0 (no caller or vtable in the exe).
+pub fn fn_00a25d70(_e: &mut Engine, _this: u32) -> u32 {
+    0
+}
+
+// Translated from 00a25d80 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Answers false (no caller or vtable in the exe).
+pub fn fn_00a25d80(_e: &mut Engine, _this: u32) -> bool {
+    false
+}
+
+// Translated from 00a25d90 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Empty method (no caller or vtable in the exe).
+pub fn fn_00a25d90(_e: &mut Engine, _this: u32) {}
+
+// Translated from 00a25da0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Answers false (no caller or vtable in the exe).
+pub fn fn_00a25da0(_e: &mut Engine, _this: u32) -> bool {
+    false
+}
+
+// Translated from 00a25db0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Empty method (no caller or vtable in the exe).
+pub fn fn_00a25db0(_e: &mut Engine, _this: u32) {}
+
+// Translated from 00a25dc0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Empty method taking one word it does not read (no caller or vtable in
+/// the exe).
+pub fn fn_00a25dc0(_e: &mut Engine, _this: u32, _unused_1: u32) {}
+
+// Translated from 00a25dd0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Empty method taking one word it does not read (called by the
+/// destructor [`fn_00a25b00`] with 0).
+pub fn fn_00a25dd0(_e: &mut Engine, _this: u32, _unused_1: u32) {}
+
+// Translated from 00a25de0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Empty method (called on the singleton by [`fn_00a25880`]).
+pub fn fn_00a25de0(_e: &mut Engine, _this: u32) {}
+
+// Translated from 00a25df0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Empty method (no caller or vtable in the exe).
+pub fn fn_00a25df0(_e: &mut Engine, _this: u32) {}
+
+// Translated from 00a25e00 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Compares the `FILETIME`s at +4 of two records (cdecl):
+/// `CompareFileTime(first + 4, second + 4)`, whose answer (-1, 0, 1) it
+/// passes on (no caller or vtable in the exe).
+pub fn fn_00a25e00(e: &mut Engine, first: u32, second: u32) -> i32 {
+    e.call(
+        IMPORT_COMPARE_FILE_TIME,
+        &[first.wrapping_add(4), second.wrapping_add(4)],
+    )
+    .i32()
+}
+
+/// Copies the `size` low bytes of `value` (from the exe's argument slot) to
+/// the cursor `*cursor` and advances `*count` and `*cursor` by `size`.
+fn write_value(e: &mut Engine, cursor: u32, count: u32, value: u32, size: u32) {
+    let destination = e.mem.u32(cursor);
+    e.with_stack(4, |e, slot| {
+        e.mem.set_u32(slot.addr(), value);
+        e.call(MEMCPY, &[destination, slot.addr(), size]);
+    });
+    let advanced = e.mem.u32(count).wrapping_add(size);
+    e.mem.set_u32(count, advanced);
+    let advanced = e.mem.u32(cursor).wrapping_add(size);
+    e.mem.set_u32(cursor, advanced);
+}
+
+// Translated from 00a25e20 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Writes a 4-byte `value` at the cursor `*cursor` (`memcpy` from its
+/// argument slot) and advances `*count` and `*cursor` by 4 (no caller or
+/// vtable in the exe; `this` is not read).
+pub fn fn_00a25e20(e: &mut Engine, _this: u32, cursor: u32, count: u32, value: u32) {
+    write_value(e, cursor, count, value, 4);
+}
+
+// Translated from 00a25e70 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Writes the low byte of `value` at the cursor `*cursor` and advances
+/// `*count` and `*cursor` by 1 (no caller or vtable in the exe).
+pub fn fn_00a25e70(e: &mut Engine, _this: u32, cursor: u32, count: u32, value: u32) {
+    write_value(e, cursor, count, value, 1);
+}
+
+// Translated from 00a25ec0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Writes a 4-byte `value` at the cursor (the same code as
+/// [`fn_00a25e20`], for another overload) and advances `*count` and
+/// `*cursor` by 4 (no caller or vtable in the exe).
+pub fn fn_00a25ec0(e: &mut Engine, _this: u32, cursor: u32, count: u32, value: u32) {
+    write_value(e, cursor, count, value, 4);
+}
+
+// Translated from 00a25f10 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Writes the low 16 bits of `value` at the cursor `*cursor` and advances
+/// `*count` and `*cursor` by 2 (no caller or vtable in the exe).
+pub fn fn_00a25f10(e: &mut Engine, _this: u32, cursor: u32, count: u32, value: u32) {
+    write_value(e, cursor, count, value, 2);
+}
+
+// Translated from 00a25f60 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Copies `size` bytes from `source` to the cursor `*cursor` (`memcpy`) and
+/// advances `*count` and `*cursor` by `size` (no caller or vtable in the
+/// exe).
+pub fn fn_00a25f60(e: &mut Engine, _this: u32, cursor: u32, count: u32, source: u32, size: u32) {
+    let destination = e.mem.u32(cursor);
+    e.call(MEMCPY, &[destination, source, size]);
+    let advanced = e.mem.u32(count).wrapping_add(size);
+    e.mem.set_u32(count, advanced);
+    let advanced = e.mem.u32(cursor).wrapping_add(size);
+    e.mem.set_u32(cursor, advanced);
+}
+
+// Translated from 00a25fb0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Empty method taking two words it does not read (no caller or vtable in
+/// the exe).
+pub fn fn_00a25fb0(_e: &mut Engine, _this: u32, _unused_1: u32, _unused_2: u32) {}
+
+// Translated from 00a25fc0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Answers false (no `this`; no caller or vtable in the exe).
+pub fn fn_00a25fc0(_e: &mut Engine) -> bool {
+    false
+}
+
+// Translated from 00a25fd0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Walks the singleton's list at +0x3AC (each node: item +0, next +4) up to
+/// its first node with a null item or its end, only reading, and answers
+/// true (no caller or vtable in the exe).
+pub fn fn_00a25fd0(e: &mut Engine, this: u32) -> bool {
+    let mut node = this.wrapping_add(0x3ac);
+    while node != 0 && e.mem.u32(node) != 0 {
+        let _item = e.mem.u32(node);
+        node = e.mem.u32(node + 4);
+    }
+    true
+}
+
+// Translated from 00a26010 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Answers true (called by [`fn_00a25c20`] and [`fn_00a25c80`]).
+pub fn fn_00a26010(_e: &mut Engine, _this: u32) -> bool {
+    true
+}
+
+/// The `"uiRedeemedContent:GamePlay"` setting (`004de4a0` makes sure the
+/// collection exists, `005e0860` finds it), or 0.
+fn redeemed_content_setting(e: &mut Engine) -> u32 {
+    e.call(SETTINGS_CREATE, &[]);
+    let settings = e.mem.u32(SETTINGS);
+    e.with_stack(4, |e, found| {
+        e.mem.set_u32(found.addr(), 0);
+        e.call(
+            SETTINGS_FIND,
+            &[settings, REDEEMED_CONTENT_NAME, found.addr()],
+        );
+        e.mem.u32(found.addr())
+    })
+}
+
+/// The setting's value word (+4), or the word at `01202800` (set to 0
+/// first) when the setting is missing.
+fn redeemed_content_word(e: &mut Engine, setting: u32) -> u32 {
+    if setting != 0 {
+        setting + 4
+    } else {
+        e.mem.set_u32(NULL_SETTING_WORD, 0);
+        NULL_SETTING_WORD
+    }
+}
+
+// Translated from 00a26020 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Whether the content `name` is redeemed (called by
+/// `IsCodeRedeemedFunction`): the bit [`fn_00a261a0`] gives the name, tested
+/// in the value of the `"uiRedeemedContent:GamePlay"` setting; false when
+/// the setting is missing.
+pub fn fn_00a26020(e: &mut Engine, this: u32, name: u32) -> bool {
+    let setting = redeemed_content_setting(e);
+    if setting == 0 {
+        return false;
+    }
+    let bit = fn_00a261a0(e, this, name);
+    e.mem.u32(setting + 4) & bit != 0
+}
+
+// Translated from 00a26090 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Marks the content `name` redeemed (called by `005dd960`): sets its bit
+/// ([`fn_00a261a0`]) in the `"uiRedeemedContent:GamePlay"` setting's value
+/// (in the word at `01202800`, cleared first, when the setting is missing);
+/// answers whether the name has a bit.
+pub fn fn_00a26090(e: &mut Engine, this: u32, name: u32) -> bool {
+    let setting = redeemed_content_setting(e);
+    let bit = fn_00a261a0(e, this, name);
+    let word = redeemed_content_word(e, setting);
+    let value = e.mem.u32(word) | bit;
+    e.mem.set_u32(word, value);
+    bit != 0
+}
+
+// Translated from 00a26120 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Clears the content `name`'s bit ([`fn_00a261a0`]) in the
+/// `"uiRedeemedContent:GamePlay"` setting's value (in the word at
+/// `01202800`, cleared first, when the setting is missing; called by
+/// `005dda00`, which ignores EAX).
+pub fn fn_00a26120(e: &mut Engine, this: u32, name: u32) {
+    let setting = redeemed_content_setting(e);
+    let word = redeemed_content_word(e, setting);
+    let bit = fn_00a261a0(e, this, name);
+    let value = !bit & e.mem.u32(word);
+    e.mem.set_u32(word, value);
+}
+
+// Translated from 00a261a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The bit of a content name: `1 << n` for the first of `"Classic"`,
+/// `"Tribal"`, `"Caravan"`, `"Mercenary"` that `__stricmp` finds equal to
+/// `name`, 0 when none is (`this` is not read).
+pub fn fn_00a261a0(e: &mut Engine, _this: u32, name: u32) -> u32 {
+    let mut index = 0u32;
+    while index < 4 {
+        if e.call(STRICMP, &[CONTENT_NAMES[index as usize], name])
+            .u32()
+            == 0
+        {
+            break;
+        }
+        index += 1;
+    }
+    if index == 4 {
+        0
+    } else {
+        1 << index
+    }
+}
+
+// Translated from 00a26220 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Clears the list at `this` ([`fn_00a26240`]) and passes on its EAX (no
+/// caller or vtable in the exe).
+pub fn fn_00a26220(e: &mut Engine, this: u32) -> u32 {
+    fn_00a26240(e, this)
+}
+
+// Translated from 00a26240 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Clears a singly linked list (word +0 the item, +4 the first node; each
+/// node is laid out the same way): unlinks each node, clears it (this
+/// function on it, its next already 0) and frees it through the memory
+/// manager (`00aa4060`), then sets the item word to 0. EAX is left holding
+/// `this` from the loop's last test, which [`fn_00a26220`] passes on.
+pub fn fn_00a26240(e: &mut Engine, this: u32) -> u32 {
+    while e.mem.u32(this + 4) != 0 {
+        let first = e.mem.u32(this + 4);
+        let next = e.mem.u32(first + 4);
+        e.mem.set_u32(first + 4, 0);
+        let node = e.mem.u32(this + 4);
+        if node != 0 {
+            fn_00a26240(e, node);
+            e.call(MEMORY_FREE, &[MEMORY_MANAGER, node]);
+        }
+        e.mem.set_u32(this + 4, next);
+    }
+    e.mem.set_u32(this, 0);
+    this
+}
+
+// Translated from 00a26300 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Empty method (no caller or vtable in the exe).
+pub fn fn_00a26300(_e: &mut Engine, _this: u32) {}
+
+// Translated from 00a26410 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The level of a vibration block (no caller or vtable in the exe): kind
+/// (+4) 0 the amount (+0) capped at 0xFFFF, kind 1 [`fn_00a26a50`]'s level,
+/// any other kind 0.
+pub fn fn_00a26410(e: &mut Engine, this: u32, block: u32, value: u32) -> u16 {
+    match e.mem.u32(block + 4) {
+        0 => {
+            let amount = e.mem.u32(block);
+            if amount > 0xffff {
+                0xffff
+            } else {
+                amount as u16
+            }
+        }
+        1 => fn_00a26a50(e, this, block, value),
+        _ => 0,
+    }
+}
+
+/// `(high - low) / step * scale` as `00a26480` and `00a264d0` compute it:
+/// 0 when the dword at `step` is 0; otherwise the signed quotient of the two
+/// 16-bit values' difference by the 16-bit step (a step whose low 16 bits
+/// are 0 faults, as `IDIV` does), its low 16 bits times the low 16 bits of
+/// `scale`.
+fn ramp_step(e: &mut Engine, block: u32, step: u32, low: u32, high: u32, scale: u32) -> u32 {
+    if e.mem.u32(block + step) == 0 {
+        return 0;
+    }
+    let difference = i32::from(e.mem.u16(block + high)) - i32::from(e.mem.u16(block + low));
+    let divisor = i32::from(e.mem.u16(block + step));
+    let quotient = (difference / divisor) as u16;
+    u32::from(quotient).wrapping_mul(scale & 0xffff)
+}
+
+// Translated from 00a26480 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The first channel's ramp step of a vibration block (no caller or vtable
+/// in the exe): with the dword +0x14 not 0, `(u16 +0x1A - u16 +0x18) /
+/// u16 +0x14` (signed) times the low 16 bits of `scale`; else 0.
+pub fn fn_00a26480(e: &mut Engine, _this: u32, block: u32, scale: u32) -> u32 {
+    ramp_step(e, block, 0x14, 0x18, 0x1a, scale)
+}
+
+// Translated from 00a264d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The second channel's ramp step (no caller or vtable in the exe): with
+/// the dword +0x1C not 0, `(u16 +0x22 - u16 +0x20) / u16 +0x1C` (signed)
+/// times the low 16 bits of `scale`; else 0.
+pub fn fn_00a264d0(e: &mut Engine, _this: u32, block: u32, scale: u32) -> u32 {
+    ramp_step(e, block, 0x1c, 0x20, 0x22, scale)
+}
+
+// Translated from 00a26a50 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The kind-1 level of [`fn_00a26410`]: computes `amount * (f(value * pi /
+/// 180) + 1.0) / 2.0` (`f` the LIBCMT function at `00eca060`) and stores it
+/// chopped, then replaces it: the amount's low 16 bits when `value % 360` is
+/// below 180, else 0.
+pub fn fn_00a26a50(e: &mut Engine, _this: u32, block: u32, value: u32) -> u16 {
+    let amount = f64::from(e.mem.u32(block));
+    let angle = x87_mul(f64::from(value), e.mem.f64(DEGREES_TO_RADIANS));
+    let wave = e.call(CRT_MATH_00ECA060, &args![angle]).f64();
+    let scaled = x87_div(
+        x87_mul(x87_add(wave, e.mem.f64(ONE)), amount),
+        e.mem.f64(TWO),
+    );
+    let _replaced = chop_low_word(scaled);
+    if value % 360 < 180 {
+        e.mem.u16(block)
+    } else {
+        0
+    }
+}
+
+/// The NiAnimation key comparison `00a26b00` starts with (`00a3d520`, cdecl:
+/// the two keys; answers in AL).
+const KEY_BASE_EQUAL: u32 = 0x00a3_d520;
+
+// Translated from 00a26b00 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Key equality (cdecl; called by `00a26f30`, `00a2c550` and `00a2d1d0`,
+/// and stored as a function pointer by `00a26e20`): when `00a3d520(first,
+/// second)` answers false, passes its EAX on; otherwise 1 when the floats
+/// at +4 compare equal (`FUCOMPP`; unordered counts as different), else 0.
+pub fn fn_00a26b00(e: &mut Engine, first: u32, second: u32) -> u32 {
+    let base = e.call(KEY_BASE_EQUAL, &[first, second]).u32();
+    if base as u8 == 0 {
+        return base;
+    }
+    let a = x87_load32(e.mem.u32(first + 4));
+    let b = x87_load32(e.mem.u32(second + 4));
+    u32::from(a == b)
+}
+
+#[cfg(test)]
+mod n079_tests {
+    use super::*;
+
+    fn calls_to(e: &Engine, addr: u32) -> Vec<Vec<u32>> {
+        e.call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|(a, _)| *a == addr)
+            .map(|(_, args)| args.clone())
+            .collect()
+    }
+
+    #[test]
+    fn byte_global_is_answered() {
+        let mut e = Engine::new();
+        e.map(0x011f_3000, 0x1000);
+        e.mem.set_u8(FLAG_011F3630, 0x5a);
+        assert_eq!(e.call(0x00a2_5870, &[]).u8(), 0x5a);
+    }
+
+    #[test]
+    fn singleton_getter_builds_once() {
+        let mut e = Engine::new();
+        e.map(0x011f_3000, 0x1000);
+        e.register(MEMSET, |_, a| a[0].into_ret());
+        e.register(MEMORY_ALLOCATE, |e, a| e.mem.alloc(a[1]).into_ret());
+        e.call_log = Some(vec![]);
+        e.call(0x00a2_5880, &[]);
+        let first = e.mem.u32(SINGLETON);
+        assert_ne!(first, 0);
+        assert_eq!(e.mem.u32(first + 0x74), 1);
+        e.call(0x00a2_5880, &[]);
+        assert_eq!(e.mem.u32(SINGLETON), first);
+        assert_eq!(calls_to(&e, MEMORY_ALLOCATE).len(), 1);
+        // A failed allocation leaves the singleton null.
+        let mut e = Engine::new();
+        e.map(0x011f_3000, 0x1000);
+        e.register(MEMORY_ALLOCATE, |_, _| 0u32.into_ret());
+        e.call(0x00a2_5880, &[]);
+        assert_eq!(e.mem.u32(SINGLETON), 0);
+    }
+
+    #[test]
+    fn destructor_without_singleton_clears_the_list() {
+        let mut e = Engine::new();
+        e.map(0x011f_3000, 0x1000);
+        e.register(MEMORY_FREE, |_, _| 0u32.into_ret());
+        let this = e.mem.alloc(0x3b4);
+        let node = e.mem.alloc(8);
+        e.mem.set_u32(node, 0x77);
+        e.mem.set_u32(this + 0x3ac, 0x55);
+        e.mem.set_u32(this + 0x3b0, node);
+        e.call_log = Some(vec![]);
+        e.call(0x00a2_5b00, &[this]);
+        assert_eq!(calls_to(&e, MEMORY_FREE), vec![vec![MEMORY_MANAGER, node]]);
+        assert_eq!(e.mem.u32(this + 0x3ac), 0);
+        assert_eq!(e.mem.u32(this + 0x3b0), 0);
+    }
+
+    #[test]
+    fn empty_methods_and_constant_answers() {
+        let mut e = Engine::new();
+        let this = e.mem.alloc(0x14280);
+        e.call_log = Some(vec![]);
+        for addr in [
+            0x00a2_5bb0u32,
+            0x00a2_5bc0,
+            0x00a2_5bd0,
+            0x00a2_5be0,
+            0x00a2_5d30,
+            0x00a2_5d40,
+            0x00a2_5d90,
+            0x00a2_5db0,
+            0x00a2_5de0,
+            0x00a2_5df0,
+            0x00a2_6300,
+        ] {
+            e.call(addr, &[this]);
+        }
+        e.call(0x00a2_5dc0, &[this, 1]);
+        e.call(0x00a2_5dd0, &[this, 1]);
+        e.call(0x00a2_5fb0, &[this, 1, 2]);
+        // Only the calls the test made: none of them calls anything.
+        assert_eq!(e.call_log.as_ref().unwrap().len(), 14);
+        assert_eq!(e.mem.bytes(this, 0x100), vec![0; 0x100]);
+        e.mem.set_u32(this + 0x14278, 0x1234);
+        assert_eq!(e.call(0x00a2_5d50, &[this]).u32(), 0x1234);
+        assert_eq!(e.call(0x00a2_5d70, &[this]).u32(), 0);
+        assert!(!e.call(0x00a2_5d80, &[this]).bool());
+        assert!(!e.call(0x00a2_5da0, &[this]).bool());
+        assert!(!e.call(0x00a2_5fc0, &[]).bool());
+        assert!(e.call(0x00a2_6010, &[this]).bool());
+    }
+
+    #[test]
+    fn byte_at_the_current_offset() {
+        let mut e = Engine::new();
+        let this = e.mem.alloc(0x100);
+        e.mem.set_u32(this + 0x68, 0x30);
+        e.mem.set_u8(this + 0x30, 0xc3);
+        assert_eq!(e.call(0x00a2_5bf0, &[this, 9]).u8(), 0xc3);
+    }
+
+    #[test]
+    fn records_append_non_zero_values() {
+        let mut e = Engine::new();
+        let this = e.mem.alloc(0x100);
+        e.mem.set_u32(this + 0x50, 1);
+        e.mem.set_u32(this + 0x68, 0x44);
+        e.call(0x00a2_5c20, &[this, 0x99]);
+        assert_eq!(e.mem.u32(this + 0x34), 0x99);
+        assert_eq!(e.mem.u32(this + 0x30), 0x44);
+        assert_eq!(e.mem.u32(this + 0x50), 2);
+        e.call(0x00a2_5c20, &[this, 0]);
+        assert_eq!(e.mem.u32(this + 0x50), 2);
+    }
+
+    #[test]
+    fn reading_method_changes_nothing() {
+        let mut e = Engine::new();
+        e.map(0x011f_3000, 0x1000);
+        e.map(0x011f_6000, 0x1000);
+        let this = e.mem.alloc(0x100);
+        e.mem.set_u32(this + 0x68, 0x10);
+        e.mem.set_u8(this + 0x10, 1);
+        e.mem.set_u8(this + 4, 1);
+        let before = e.mem.bytes(this, 0x100);
+        e.call_log = Some(vec![]);
+        e.call(0x00a2_5c80, &[this]);
+        e.mem.set_u8(this + 0x87, 1);
+        e.call(0x00a2_5c80, &[this]);
+        e.mem.set_u8(this + 4, 0);
+        e.call(0x00a2_5c80, &[this]);
+        assert_eq!(e.call_log.as_ref().unwrap().len(), 3);
+        let mut expected = before;
+        expected[0x87] = 1;
+        expected[4] = 0;
+        assert_eq!(e.mem.bytes(this, 0x100), expected);
+    }
+
+    #[test]
+    fn file_times_are_compared_at_plus_4() {
+        let mut e = Engine::new();
+        e.register(IMPORT_COMPARE_FILE_TIME, |_, _| (-1i32 as u32).into_ret());
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x00a2_5e00, &[0x100, 0x200]).i32(), -1);
+        assert_eq!(
+            calls_to(&e, IMPORT_COMPARE_FILE_TIME),
+            vec![vec![0x104, 0x204]]
+        );
+    }
+
+    fn memcpy_engine() -> Engine {
+        let mut e = Engine::new();
+        e.register(MEMCPY, |e, a| {
+            let bytes = e.mem.bytes(a[1], a[2]);
+            e.mem.write(a[0], &bytes);
+            a[0].into_ret()
+        });
+        e
+    }
+
+    #[test]
+    fn values_are_written_at_the_cursor() {
+        for (addr, size) in [
+            (0x00a2_5e20u32, 4u32),
+            (0x00a2_5e70, 1),
+            (0x00a2_5ec0, 4),
+            (0x00a2_5f10, 2),
+        ] {
+            let mut e = memcpy_engine();
+            let buffer = e.mem.alloc(8);
+            let cursor = e.mem.alloc(4);
+            let count = e.mem.alloc(4);
+            e.mem.set_u32(cursor, buffer + 1);
+            e.mem.set_u32(count, 10);
+            e.call(addr, &[0, cursor, count, 0x4433_2211]);
+            let expected: Vec<u8> = [0x11, 0x22, 0x33, 0x44][..size as usize].to_vec();
+            assert_eq!(e.mem.bytes(buffer + 1, size), expected);
+            assert_eq!(e.mem.u8(buffer + 1 + size), 0);
+            assert_eq!(e.mem.u32(cursor), buffer + 1 + size);
+            assert_eq!(e.mem.u32(count), 10 + size);
+        }
+    }
+
+    #[test]
+    fn blocks_are_copied_at_the_cursor() {
+        let mut e = memcpy_engine();
+        let buffer = e.mem.alloc(8);
+        let source = e.mem.alloc(3);
+        e.mem.write(source, &[7, 8, 9]);
+        let cursor = e.mem.alloc(4);
+        let count = e.mem.alloc(4);
+        e.mem.set_u32(cursor, buffer);
+        e.call(0x00a2_5f60, &[0, cursor, count, source, 3]);
+        assert_eq!(e.mem.bytes(buffer, 4), vec![7, 8, 9, 0]);
+        assert_eq!(e.mem.u32(cursor), buffer + 3);
+        assert_eq!(e.mem.u32(count), 3);
+    }
+
+    #[test]
+    fn list_walk_answers_true() {
+        let mut e = Engine::new();
+        let this = e.mem.alloc(0x3b4);
+        let node = e.mem.alloc(8);
+        e.mem.set_u32(this + 0x3ac, 1);
+        e.mem.set_u32(this + 0x3b0, node);
+        e.mem.set_u32(node, 2);
+        assert!(e.call(0x00a2_5fd0, &[this]).bool());
+    }
+
+    /// The setting `content_engine` finds when asked to (in a mapped page).
+    const SETTING: u32 = 0x0120_2100;
+
+    /// An engine whose setting lookup finds [`SETTING`] when `found` (else
+    /// nothing) and whose `__stricmp` matches names by address.
+    fn content_engine(found: bool) -> Engine {
+        let mut e = Engine::new();
+        e.map(0x011f_3000, 0x1000);
+        e.map(0x0120_2000, 0x1000);
+        e.register(SETTINGS_CREATE, |e, _| {
+            e.mem.set_u32(SETTINGS, 0x0066_0000);
+            0u32.into_ret()
+        });
+        let setting = if found { SETTING } else { 0 };
+        e.register_double(SETTINGS_FIND, move |e, a| {
+            e.mem.set_u32(a[2], setting);
+            u32::from(setting != 0).into_ret()
+        });
+        e.register(STRICMP, |_, a| u32::from(a[0] != a[1]).into_ret());
+        e
+    }
+
+    #[test]
+    fn content_names_have_bits() {
+        let mut e = content_engine(false);
+        for (index, name) in CONTENT_NAMES.into_iter().enumerate() {
+            assert_eq!(e.call(0x00a2_61a0, &[0, name]).u32(), 1 << index);
+        }
+        assert_eq!(e.call(0x00a2_61a0, &[0, 0x1234]).u32(), 0);
+    }
+
+    #[test]
+    fn redeemed_test_reads_the_setting() {
+        let mut e = content_engine(true);
+        e.mem.set_u32(SETTING + 4, 0b0100);
+        e.call_log = Some(vec![]);
+        assert!(e.call(0x00a2_6020, &[0, CONTENT_NAMES[2]]).bool());
+        assert_eq!(
+            calls_to(&e, SETTINGS_FIND)[0][..2],
+            [0x0066_0000, REDEEMED_CONTENT_NAME]
+        );
+        assert!(!e.call(0x00a2_6020, &[0, CONTENT_NAMES[1]]).bool());
+        // A missing setting: false, without looking at the name.
+        let mut e = content_engine(false);
+        e.call_log = Some(vec![]);
+        assert!(!e.call(0x00a2_6020, &[0, CONTENT_NAMES[2]]).bool());
+        assert!(calls_to(&e, STRICMP).is_empty());
+    }
+
+    #[test]
+    fn redeeming_sets_the_bit() {
+        let mut e = content_engine(true);
+        e.mem.set_u32(SETTING + 4, 0b0001);
+        assert!(e.call(0x00a2_6090, &[0, CONTENT_NAMES[3]]).bool());
+        assert_eq!(e.mem.u32(SETTING + 4), 0b1001);
+        assert!(!e.call(0x00a2_6090, &[0, 0x1234]).bool());
+        assert_eq!(e.mem.u32(SETTING + 4), 0b1001);
+        // Without the setting the word at 01202800 takes the change.
+        let mut e = content_engine(false);
+        e.mem.set_u32(NULL_SETTING_WORD, 0xff00);
+        assert!(e.call(0x00a2_6090, &[0, CONTENT_NAMES[1]]).bool());
+        assert_eq!(e.mem.u32(NULL_SETTING_WORD), 0b0010);
+    }
+
+    #[test]
+    fn clearing_clears_the_bit() {
+        let mut e = content_engine(true);
+        e.mem.set_u32(SETTING + 4, 0b1001);
+        e.call(0x00a2_6120, &[0, CONTENT_NAMES[0]]);
+        assert_eq!(e.mem.u32(SETTING + 4), 0b1000);
+        let mut e = content_engine(false);
+        e.mem.set_u32(NULL_SETTING_WORD, 0xff00);
+        e.call(0x00a2_6120, &[0, CONTENT_NAMES[1]]);
+        assert_eq!(e.mem.u32(NULL_SETTING_WORD), 0);
+    }
+
+    #[test]
+    fn list_clear_frees_every_node() {
+        let mut e = Engine::new();
+        e.register(MEMORY_FREE, |_, _| 0u32.into_ret());
+        let list = e.mem.alloc(8);
+        let second = e.mem.alloc(8);
+        let first = e.mem.alloc(8);
+        e.mem.set_u32(list, 9);
+        e.mem.set_u32(list + 4, first);
+        e.mem.set_u32(first + 4, second);
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x00a2_6220, &[list]).u32(), list);
+        assert_eq!(
+            calls_to(&e, MEMORY_FREE),
+            vec![vec![MEMORY_MANAGER, first], vec![MEMORY_MANAGER, second]]
+        );
+        assert_eq!(e.mem.u32(list), 0);
+        assert_eq!(e.mem.u32(list + 4), 0);
+        assert_eq!(e.mem.u32(first + 4), 0);
+        assert_eq!(e.call(0x00a2_6240, &[list]).u32(), list);
+    }
+
+    /// pi / 180 as the double at `01023128` holds it.
+    fn radians_per_degree() -> f64 {
+        f64::from_bits(0x3f91_df46_a000_0000)
+    }
+
+    fn wave_engine() -> Engine {
+        let mut e = Engine::new();
+        e.map(0x0101_1000, 0x2000);
+        e.map(0x0102_3000, 0x1000);
+        e.mem.set_f64(TWO, 2.0);
+        e.mem.set_f64(ONE, 1.0);
+        e.mem.set_f64(DEGREES_TO_RADIANS, radians_per_degree());
+        e.register(CRT_MATH_00ECA060, |_, _| 0.5f64.into_ret());
+        e
+    }
+
+    #[test]
+    fn block_levels_by_kind() {
+        let mut e = wave_engine();
+        let block = e.mem.alloc(0x24);
+        e.mem.set_u32(block, 0x12345);
+        assert_eq!(e.call(0x00a2_6410, &[0, block, 10]).u16(), 0xffff);
+        e.mem.set_u32(block, 0x1234);
+        assert_eq!(e.call(0x00a2_6410, &[0, block, 10]).u16(), 0x1234);
+        e.mem.set_u32(block + 4, 1);
+        assert_eq!(e.call(0x00a2_6410, &[0, block, 10]).u16(), 0x1234);
+        assert_eq!(e.call(0x00a2_6410, &[0, block, 200]).u16(), 0);
+        e.mem.set_u32(block + 4, 2);
+        assert_eq!(e.call(0x00a2_6410, &[0, block, 10]).u16(), 0);
+    }
+
+    #[test]
+    fn half_turns_keep_the_amount() {
+        let mut e = wave_engine();
+        let block = e.mem.alloc(0x24);
+        e.mem.set_u32(block, 0x0001_0040);
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x00a2_6a50, &[0, block, 370]).u16(), 0x40);
+        assert_eq!(
+            calls_to(&e, CRT_MATH_00ECA060),
+            vec![args![x87_mul(370.0, radians_per_degree())]]
+        );
+        assert_eq!(e.call(0x00a2_6a50, &[0, block, 180]).u16(), 0);
+        assert_eq!(e.call(0x00a2_6a50, &[0, block, 179]).u16(), 0x40);
+    }
+
+    #[test]
+    fn first_ramp_step_divides_signed() {
+        let mut e = Engine::new();
+        let block = e.mem.alloc(0x24);
+        assert_eq!(e.call(0x00a2_6480, &[0, block, 3]).u32(), 0);
+        e.mem.set_u32(block + 0x14, 4);
+        e.mem.set_u16(block + 0x18, 2);
+        e.mem.set_u16(block + 0x1a, 22);
+        assert_eq!(e.call(0x00a2_6480, &[0, block, 0xffff_0003]).u32(), 15);
+        e.mem.set_u16(block + 0x18, 22);
+        e.mem.set_u16(block + 0x1a, 2);
+        // -5 keeps its low 16 bits.
+        assert_eq!(e.call(0x00a2_6480, &[0, block, 2]).u32(), 0xfffb * 2);
+    }
+
+    #[test]
+    fn second_ramp_step_divides_signed() {
+        let mut e = Engine::new();
+        let block = e.mem.alloc(0x24);
+        assert_eq!(e.call(0x00a2_64d0, &[0, block, 3]).u32(), 0);
+        e.mem.set_u32(block + 0x1c, 3);
+        e.mem.set_u16(block + 0x20, 1);
+        e.mem.set_u16(block + 0x22, 10);
+        assert_eq!(e.call(0x00a2_64d0, &[0, block, 7]).u32(), 21);
+    }
+
+    #[test]
+    fn keys_compare_base_then_value() {
+        let mut e = Engine::new();
+        e.register(KEY_BASE_EQUAL, |e, a| {
+            (0x4400 | u32::from(e.mem.u32(a[0]) == e.mem.u32(a[1]))).into_ret()
+        });
+        let first = e.mem.alloc(8);
+        let second = e.mem.alloc(8);
+        e.mem.set_u32(first + 4, 1.5f32.to_bits());
+        e.mem.set_u32(second + 4, 1.5f32.to_bits());
+        assert_eq!(e.call(0x00a2_6b00, &[first, second]).u32(), 1);
+        e.mem.set_u32(second + 4, 2.5f32.to_bits());
+        assert_eq!(e.call(0x00a2_6b00, &[first, second]).u32(), 0);
+        e.mem.set_u32(first + 4, f32::NAN.to_bits());
+        e.mem.set_u32(second + 4, f32::NAN.to_bits());
+        assert_eq!(e.call(0x00a2_6b00, &[first, second]).u32(), 0);
+        // The base comparison failing passes its EAX on.
+        e.mem.set_u32(first, 1);
+        assert_eq!(e.call(0x00a2_6b00, &[first, second]).u32(), 0x4400);
     }
 }

@@ -335,9 +335,77 @@ pub fn tes_region_load(e: &mut Engine, this: Ptr, file: Ptr) -> bool {
     true
 }
 
+/// The save/load game singleton pointer (`011de45c`) `TESRegion::SaveGame`
+/// writes through.
+const SAVE_LOAD_GAME: u32 = 0x011d_e45c;
+/// `00825c00` (`thiscall` on the save/load game, no stack word): answers the
+/// address the region count is written to at the end.
+const SAVE_POSITION: u32 = 0x0082_5c00;
+/// `008579b0` (`thiscall`, `RET 8`: address, size): writes bytes.
+const SAVE_WRITE: u32 = 0x0085_79b0;
+/// `TESSaveLoadGame::SaveNumericID` (`00857a10`, `thiscall`, `RET 8`).
+const SAVE_NUMERIC_ID: u32 = 0x0085_7a10;
+/// `004169d0` (`thiscall` on the `TES`): the region list's holder (the
+/// list's first node is at +4).
+const REGION_LIST_OWNER: u32 = 0x0041_69d0;
+/// `008256d0` (`thiscall` on a node): the end-of-list test.
+const NODE_IS_EMPTY: u32 = 0x0082_56d0;
+/// `0084e3a0` (`thiscall`): the form's id.
+const FORM_ID: u32 = 0x0084_e3a0;
+/// `00526ae0` (`thiscall` on the region): a float in `ST0`.
+const REGION_VALUE_00526AE0: u32 = 0x0052_6ae0;
+
+// Translated from 004f1300 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TESRegion::SaveGame` (Xbox PDB; no argument): writes a 16-bit count
+/// placeholder (0), then for each node of the `TES`'s region list (from
+/// `004169d0` + 4, until a null node or `008256d0` answers true) the
+/// region's form id (`SaveNumericID`, 0 for an empty item) and its float
+/// from `00526ae0` (0.0 for an empty item), 4 bytes each; at the end the
+/// count goes to the address `00825c00` answered first.
+pub fn tes_region_save_game(e: &mut Engine) {
+    e.with_stack(0x10, |e, frame| {
+        let count_at = frame.addr();
+        let id_at = count_at + 4;
+        let value_at = count_at + 8;
+        e.mem.set_u16(count_at, 0);
+        let save = e.global::<u32>(SAVE_LOAD_GAME);
+        let position = e.call(SAVE_POSITION, &args![save]).u32();
+        let save = e.global::<u32>(SAVE_LOAD_GAME);
+        e.call(SAVE_WRITE, &args![save, count_at, 2u32]);
+        let tes = e.global::<u32>(TES_SINGLETON);
+        let owner = e.call(REGION_LIST_OWNER, &args![tes]).u32();
+        let mut node = if owner == 0 { 0 } else { owner.wrapping_add(4) };
+        while node != 0 {
+            if e.call(NODE_IS_EMPTY, &args![node]).bool() {
+                break;
+            }
+            let item_address = e.call(NODE_ITEM_ADDRESS, &args![node]).u32();
+            let region = e.mem.u32(item_address);
+            e.mem.set_u32(id_at, 0);
+            e.mem.set_u32(value_at, 0);
+            if region != 0 {
+                let id = e.call(FORM_ID, &args![region]).u32();
+                e.mem.set_u32(id_at, id);
+                let value = e.call(REGION_VALUE_00526AE0, &args![region]).f64();
+                e.mem.set_u32(value_at, x87_store32(value));
+            }
+            let save = e.global::<u32>(SAVE_LOAD_GAME);
+            e.call(SAVE_NUMERIC_ID, &args![save, id_at, 4u32]);
+            let save = e.global::<u32>(SAVE_LOAD_GAME);
+            e.call(SAVE_WRITE, &args![save, value_at, 4u32]);
+            let count = e.mem.u16(count_at).wrapping_add(1);
+            e.mem.set_u16(count_at, count);
+            node = e.call(NODE_NEXT, &args![node]).u32();
+        }
+        let count = e.mem.u16(count_at);
+        e.mem.set_u16(position, count);
+    });
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x004f_1300, tes_region_save_game()),
         entry!(0x004f_1260, fn_004f1260(Ptr, u32)),
         entry!(0x004f_0ef0, fn_004f0ef0(Ptr)),
         entry!(0x004f_0f80, fn_004f0f80(Ptr)),
@@ -646,5 +714,70 @@ mod b025_tests {
         // The walk restarted at the head: 0x111 asked twice.
         let asked: Vec<u32> = calls_to(&e, POINT_LIST_KEEP).iter().map(|c| c[0]).collect();
         assert_eq!(asked, [0x111, 0x222, 0x111, 0x333]);
+    }
+}
+
+#[cfg(test)]
+mod n072_tests {
+    use super::*;
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    #[test]
+    fn save_game_writes_each_region_and_the_count() {
+        let mut e = Engine::new();
+        e.map(0x011c_3000, 0x1000);
+        e.map(0x011d_e000, 0x1000);
+        e.set_global::<u32>(TES_SINGLETON, 0x7000);
+        e.set_global::<u32>(SAVE_LOAD_GAME, 0x8000);
+        let position = e.mem.alloc(4);
+        let holder = e.mem.alloc(12);
+        let second = e.mem.alloc(8);
+        let region = e.mem.alloc(0x30);
+        e.mem.set_u32(holder + 4, region);
+        e.mem.set_u32(holder + 8, second);
+        e.mem.set_u32(second, 0);
+        e.mem.set_u32(second + 4, 0);
+        e.register_double(SAVE_POSITION, move |_, _| position.into_ret());
+        e.register_double(REGION_LIST_OWNER, move |_, _| holder.into_ret());
+        e.register(NODE_IS_EMPTY, |_, _| 0u32.into_ret());
+        e.register(NODE_ITEM_ADDRESS, |_, a| a[0].into_ret());
+        e.register(NODE_NEXT, |e, a| e.mem.u32(a[0] + 4).into_ret());
+        e.register(FORM_ID, |_, _| 0x1234u32.into_ret());
+        e.register(REGION_VALUE_00526AE0, |_, _| 2.5f32.into_ret());
+        let written: Rc<RefCell<Vec<(u32, Vec<u8>)>>> = Rc::default();
+        let log = written.clone();
+        e.register_double(SAVE_WRITE, move |e, a| {
+            log.borrow_mut().push((a[0], e.mem.bytes(a[1], a[2])));
+            Ret::default()
+        });
+        let log = written.clone();
+        e.register_double(SAVE_NUMERIC_ID, move |e, a| {
+            log.borrow_mut().push((1, e.mem.bytes(a[1], a[2])));
+            Ret::default()
+        });
+        e.call(0x004f_1300, &args![]);
+        let written = written.borrow();
+        assert_eq!(written.len(), 5);
+        assert_eq!(written[0], (0x8000, vec![0, 0]));
+        assert_eq!(written[1], (1, 0x1234u32.to_le_bytes().to_vec()));
+        assert_eq!(written[2], (0x8000, 2.5f32.to_le_bytes().to_vec()));
+        assert_eq!(written[3], (1, vec![0; 4]));
+        assert_eq!(written[4], (0x8000, vec![0; 4]));
+        assert_eq!(e.mem.u16(position), 2);
+    }
+
+    #[test]
+    fn save_game_without_regions_writes_a_zero_count() {
+        let mut e = Engine::new();
+        e.map(0x011c_3000, 0x1000);
+        e.map(0x011d_e000, 0x1000);
+        let position = e.mem.alloc(4);
+        e.mem.set_u16(position, 0xffff);
+        e.register_double(SAVE_POSITION, move |_, _| position.into_ret());
+        e.register(REGION_LIST_OWNER, |_, _| 0u32.into_ret());
+        e.register(SAVE_WRITE, |_, _| Ret::default());
+        e.call(0x004f_1300, &args![]);
+        assert_eq!(e.mem.u16(position), 0);
     }
 }

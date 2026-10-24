@@ -22,9 +22,33 @@ pub fn fn_00682480(_e: &mut Engine, _this: Ptr) -> u32 {
     0x011f_5afc
 }
 
+/// `NiTask`'s vtable (RTTI `.?AVNiTask@@`).
+const NI_TASK_VTABLE: u32 = 0x0106_9674;
+/// `00a5d3d0` (unnamed in the engine map; no stack word): the base
+/// destructor body run after the vtable store.
+const BASE_DESTRUCTOR_00A5D3D0: u32 = 0x00a5_d3d0;
+
+// Translated from 006824c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiTask` destructor body (unnamed in the engine map): stores `NiTask`'s
+/// vtable, then runs the base destructor body `00a5d3d0`.
+pub fn fn_006824c0(e: &mut Engine, this: Ptr) {
+    e.mem.set_u32(this.addr(), NI_TASK_VTABLE);
+    e.call(BASE_DESTRUCTOR_00A5D3D0, &args![this]);
+}
+
+// Translated from 006824e0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed by its body (the engine map's `NiTask::Clear` does not fit a
+/// test): true when `m_eStatus` (+8, Xbox PDB) is 4 or 3.
+pub fn fn_006824e0(e: &mut Engine, this: Ptr) -> bool {
+    let status = e.mem.u32(this.addr() + 8);
+    status == 4 || status == 3
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x0068_24c0, fn_006824c0(Ptr)),
+        entry!(0x0068_24e0, fn_006824e0(Ptr) -> bool),
         entry!(0x0068_2480, fn_00682480(Ptr) -> u32),
         entry!(0x0068_2490, ni_task_scalar_deleting_destructor(Ptr, u32) -> Ptr),
     ]
@@ -72,5 +96,32 @@ mod constant_getter_tests {
         let mut e = Engine::new();
         assert_eq!(e.call(0x0068_2480, &args![0x1000u32]).u32(), 0x011f_5afc);
         assert_eq!(e.call(0x0068_2480, &args![0u32]).u32(), 0x011f_5afc);
+    }
+}
+
+#[cfg(test)]
+mod tests_n073 {
+    use super::*;
+
+    #[test]
+    fn fn_006824c0_stores_the_vtable_then_runs_the_base() {
+        let mut e = Engine::new();
+        e.register(BASE_DESTRUCTOR_00A5D3D0, |_, _| Ret::default());
+        let this = e.mem.alloc(0xc);
+        e.call_log = Some(vec![]);
+        e.call(0x0068_24c0, &args![this]);
+        let log = e.call_log.take().unwrap();
+        assert_eq!(e.mem.u32(this), NI_TASK_VTABLE);
+        assert_eq!(log[1..], [(BASE_DESTRUCTOR_00A5D3D0, vec![this])]);
+    }
+
+    #[test]
+    fn fn_006824e0_is_true_for_status_3_and_4() {
+        let mut e = Engine::new();
+        let this = e.mem.alloc(0xc);
+        for (status, expected) in [(0u32, false), (2, false), (3, true), (4, true), (5, false)] {
+            e.mem.set_u32(this + 8, status);
+            assert_eq!(e.call(0x0068_24e0, &args![this]).bool(), expected);
+        }
     }
 }

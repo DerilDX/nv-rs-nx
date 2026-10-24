@@ -103,6 +103,9 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x0063_f8d0, sky_object_destructor(Ptr<SkyObject>)),
         entry!(0x0063_f940, sky_object_initialize(Ptr<SkyObject>, u32)),
     ]
+    .into_iter()
+    .chain(funcs_n086())
+    .collect()
 }
 
 /// Test helpers the sky units share.
@@ -226,5 +229,55 @@ mod tests {
         assert_eq!(e.mem.u32(this + 4), 0);
         assert!(calls(&e, NI_NODE_CONSTRUCT).is_empty());
         assert_eq!(calls(&e, 0x0000_7770), vec![vec![parent, 0, 1]]);
+    }
+}
+
+/// `00401030` (`cdecl`, one word): frees a block.
+const FREE_00401030: u32 = 0x0040_1030;
+
+// Translated from 0063f8a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The `SkyObject` scalar deleting destructor (engine map; `thiscall`,
+/// `RET 4`): `SkyObject::~SkyObject` (`0063f8d0`), then `00401030` frees
+/// `this` when bit 0 of `flags` is set. Returns `this`.
+pub fn sky_object_scalar_deleting_destructor(
+    e: &mut Engine,
+    this: Ptr<SkyObject>,
+    flags: u32,
+) -> Ptr<SkyObject> {
+    sky_object_destructor(e, this);
+    if flags & 1 != 0 {
+        e.call(FREE_00401030, &args![this]);
+    }
+    this
+}
+
+/// This unit's n086 translations, by exe address.
+fn funcs_n086() -> Vec<(u32, AbiFn)> {
+    vec![entry!(
+        0x0063_f8a0,
+        sky_object_scalar_deleting_destructor(Ptr<SkyObject>, u32) -> Ptr<SkyObject>
+    )]
+}
+
+#[cfg(test)]
+mod n086_tests {
+    use super::test_support::*;
+    use super::*;
+
+    #[test]
+    fn scalar_deleting_destructor_frees_on_bit_0() {
+        let mut e = Engine::new();
+        plain_pointers(&mut e);
+        quiet(&mut e, &[NI_POINTER_DESTRUCT, FREE_00401030]);
+        let this = e.mem.alloc(8);
+        e.mem.set_u32(this + 4, 0x1234);
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x0063_f8a0, &args![this, 0u32]).u32(), this);
+        assert_eq!(e.mem.u32(this), SKY_OBJECT_VTABLE);
+        assert_eq!(e.mem.u32(this + 4), 0);
+        assert_eq!(calls(&e, NI_POINTER_DESTRUCT), vec![vec![this + 4]]);
+        assert!(calls(&e, FREE_00401030).is_empty());
+        e.call(0x0063_f8a0, &args![this, 3u32]);
+        assert_eq!(calls(&e, FREE_00401030), vec![vec![this]]);
     }
 }

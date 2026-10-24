@@ -184,6 +184,87 @@ pub fn fn_00650ba0(e: &mut Engine, this: Ptr, model: u32) {
     e.call(UNLOCK, &args![]);
 }
 
+/// `GetTickCount`'s wrapper (`00457fe0`, no arguments), `NiPointer` equality with a plain
+/// pointer (`00822510`; `thiscall`: the pointer) and `NiPointer` assignment from another
+/// (`006e5cc0`; `thiscall`: the other's address).
+const TICK_COUNT: u32 = 0x0045_7fe0;
+const POINTER_EQUALS: u32 = 0x0082_2510;
+const POINTER_ASSIGN: u32 = 0x006e_5cc0;
+
+// Translated from 00650cb0 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 00650cb0 - the compiler's exception frame (FS:[0] unwind states) is not translated
+/// Unnamed in the engine map (`thiscall`, `RET 8`; the release step of [`fn_00650ba0`]).
+/// Under the lock, walks the map at `this + 4` (key and value through stack words, the
+/// value an `NiPointer` temporary) and, skipping the entry holding `model` (`00822510`)
+/// and those whose size of `kind` is zero (0: `0065c110`, 1: `0065c490`, other kinds:
+/// all skipped), keeps the entry whose word `+0xC` is the oldest against the tick count
+/// read at the start (`now - word` largest, unsigned; the first found when none is kept
+/// yet). The kept entry's model then gets `0065c090` (kind 0) or `0065c3a0` (kind 1).
+/// The key of the kept entry is copied to a local the function never reads again.
+pub fn fn_00650cb0(e: &mut Engine, this: Ptr, kind: u32, model: u32) {
+    e.with_stack(16, |e, frame| {
+        let position = Ptr::<()>::new(frame.addr());
+        let key = Ptr::<()>::new(frame.addr() + 4);
+        let value = Ptr::new(frame.addr() + 8);
+        let best = Ptr::new(frame.addr() + 12);
+        e.mem.set_u32(key.addr(), 0);
+        e.call(POINTER_CONSTRUCTOR, &args![value, 0u32]);
+        e.call(POINTER_CONSTRUCTOR, &args![best, 0u32]);
+        let now = e.call(TICK_COUNT, &args![]).u32();
+        e.call(LOCK, &args![]);
+        let map = this.addr() + 4;
+        let first = e.call(MAP_FIRST, &args![map]).u32();
+        e.mem.set_u32(position.addr(), first);
+        while e.mem.u32(position.addr()) != 0 {
+            e.call(MAP_NEXT, &args![map, position, key, value]);
+            if e.call(POINTER_EQUALS, &args![value, model]).u8() != 0 {
+                continue;
+            }
+            let size = match kind {
+                0 => {
+                    let model = entry_model(e, value);
+                    e.call(SIZE_OF_KIND_0, &args![model]).u32()
+                }
+                1 => {
+                    let model = entry_model(e, value);
+                    e.call(SIZE_OF_KIND_1, &args![model]).u32()
+                }
+                _ => 0,
+            };
+            if size == 0 {
+                continue;
+            }
+            if e.call(POINTER_GET, &args![best]).u32() == 0 {
+                e.call(POINTER_ASSIGN, &args![best, value]);
+            } else {
+                let entry = e.call(POINTER_GET, &args![value]).u32();
+                let age = now.wrapping_sub(e.mem.u32(entry.wrapping_add(0xc)));
+                let kept = e.call(POINTER_GET, &args![best]).u32();
+                let kept_age = now.wrapping_sub(e.mem.u32(kept.wrapping_add(0xc)));
+                if age > kept_age {
+                    e.call(POINTER_ASSIGN, &args![best, value]);
+                }
+            }
+        }
+        if e.call(POINTER_GET, &args![best]).u32() != 0 {
+            match kind {
+                0 => {
+                    let model = entry_model(e, best);
+                    e.call(TRY_UNLOAD, &args![model]);
+                }
+                1 => {
+                    let model = entry_model(e, best);
+                    e.call(UPDATE_ENTRY, &args![model]);
+                }
+                _ => {}
+            }
+        }
+        e.call(UNLOCK, &args![]);
+        e.call(POINTER_DESTRUCTOR, &args![best]);
+        e.call(POINTER_DESTRUCTOR, &args![value]);
+    });
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -191,6 +272,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x0065_0930, fn_00650930(Ptr, u32) -> u32),
         entry!(0x0065_0a30, fn_00650a30(Ptr, u8)),
         entry!(0x0065_0ba0, fn_00650ba0(Ptr, u32)),
+        entry!(0x0065_0cb0, fn_00650cb0(Ptr, u32, u32)),
     ]
 }
 
@@ -335,5 +417,62 @@ mod tests {
         e.call(0x0065_0ba0, &args![this, 0u32]);
         assert!(calls(&e, RELEASE_STEP).is_empty());
         assert_eq!(calls(&e, MAP_FIRST).len(), 2);
+    }
+
+    #[test]
+    fn release_step_frees_the_oldest_other_entry() {
+        let mut e = engine(&[]);
+        // Entries (model, time stamp at +0xC): the oldest is skipped when it holds `model`.
+        let mut entries = vec![];
+        for (model, stamp) in [(0x100u32, 50u32), (0x200, 10), (0x300, 5), (0x400, 1)] {
+            let entry = e.mem.alloc(0x10);
+            e.mem.set_u32(entry + 8, model);
+            e.mem.set_u32(entry + 0xc, stamp);
+            entries.push(entry);
+        }
+        let skipped = entries[3];
+        let list = Rc::new(RefCell::new(entries));
+        let first = list.clone();
+        e.register_double(MAP_FIRST, move |_, _| {
+            u32::from(!first.borrow().is_empty()).into_ret()
+        });
+        e.register_double(MAP_NEXT, move |e, a| {
+            let entry = list.borrow_mut().remove(0);
+            e.mem.set_u32(a[2], entry);
+            e.mem.set_u32(a[3], entry);
+            e.mem.set_u32(a[1], u32::from(!list.borrow().is_empty()));
+            Ret::default()
+        });
+        e.register(TICK_COUNT, |_, _| 100u32.into_ret());
+        e.register(POINTER_EQUALS, |e, a| (e.mem.u32(a[0]) == a[1]).into_ret());
+        e.register(POINTER_ASSIGN, |e, a| {
+            let other = e.mem.u32(a[1]);
+            e.mem.set_u32(a[0], other);
+            a[0].into_ret()
+        });
+        // Kind 0: the third entry has no size.
+        e.register(SIZE_OF_KIND_0, |_, a| u32::from(a[0] != 0x300).into_ret());
+        e.register(TRY_UNLOAD, |_, _| Ret::default());
+        let this = e.mem.alloc(0x24);
+        // `engine` doubles the release step for the callers' tests: call it directly.
+        fn_00650cb0(&mut e, Ptr::new(this), 0, skipped);
+        assert_eq!(calls(&e, TRY_UNLOAD), vec![vec![0x200]]);
+        assert!(calls(&e, UPDATE_ENTRY).is_empty());
+        assert_eq!(calls(&e, POINTER_ASSIGN).len(), 2);
+        assert_eq!(calls(&e, LOCK).len(), 1);
+        assert_eq!(calls(&e, UNLOCK).len(), 1);
+        assert_eq!(calls(&e, POINTER_DESTRUCTOR).len(), 2);
+    }
+
+    #[test]
+    fn release_step_of_another_kind_frees_nothing() {
+        let mut e = engine(&[(1, 0x100)]);
+        e.register(TICK_COUNT, |_, _| Ret::default());
+        e.register(POINTER_EQUALS, |_, _| Ret::default());
+        let this = e.mem.alloc(0x24);
+        fn_00650cb0(&mut e, Ptr::new(this), 2, 0);
+        assert!(calls(&e, TRY_UNLOAD).is_empty());
+        assert!(calls(&e, UPDATE_ENTRY).is_empty());
+        assert_eq!(calls(&e, MAP_NEXT).len(), 1);
     }
 }

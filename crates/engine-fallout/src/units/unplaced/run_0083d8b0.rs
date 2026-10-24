@@ -400,9 +400,41 @@ pub fn fn_0083df80(
     });
 }
 
+/// The text `0083da50` sets (`01011584`; an empty string by its use, not confirmed).
+const TEXT_01011584: u32 = 0x0101_1584;
+
+// Translated from 0083da50 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 0083da50 - the C++ exception-unwinding frame (FS:[0] chain, handler at 00f12493, state variable around the two members) is not translated
+/// Unnamed in the engine map (`thiscall`, no stack word): a `MenuTopic` constructor without
+/// a topic: constructs `cTopicText` and `lResponses`, clears `pCurrentResponse`, `pQuest`,
+/// `pTopic` and `pInfo`, sets the text to the one at `01011584` (`004037f0` with 0) and
+/// clears `bInfoRefusal` and `bPersuasion`. Returns `this`.
+pub fn fn_0083da50(e: &mut Engine, this: Ptr<MenuTopic>) -> Ptr<MenuTopic> {
+    e.call(BS_STRING_CONSTRUCT, &args![this]);
+    e.call(RESPONSE_LIST_CONSTRUCT, &args![this.addr() + 0xc]);
+    e.set(this, MenuTopic::pCurrentResponse, 0);
+    e.set(this, MenuTopic::pQuest, 0);
+    e.set(this, MenuTopic::pTopic, 0);
+    e.set(this, MenuTopic::pInfo, 0);
+    e.call(BS_STRING_SET_004037F0, &args![this, TEXT_01011584, 0u32]);
+    e.set(this, MenuTopic::bInfoRefusal, 0);
+    e.set(this, MenuTopic::bPersuasion, 0);
+    this
+}
+
+// Translated from 0083dea0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`thiscall`, no stack word): whether `004048e0` on the member
+/// at +0x34 answers non-zero (unsigned), as 0 or 1.
+pub fn fn_0083dea0(e: &mut Engine, this: Ptr) -> u32 {
+    let value = e.call(CALLEE_004048E0, &args![this.addr() + 0x34]).u32();
+    u32::from(value != 0)
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x0083_da50, fn_0083da50(Ptr<MenuTopic>) -> Ptr<MenuTopic>),
+        entry!(0x0083_dea0, fn_0083dea0(Ptr) -> u32),
         entry!(0x0083_e0a0, fn_0083e0a0(Ptr) -> u32),
         entry!(0x0083_d8b0, fn_0083d8b0(Ptr, Ptr) -> Ptr),
         entry!(0x0083_da30, fn_0083da30(Ptr, u32) -> u32),
@@ -801,5 +833,53 @@ mod b040_tests {
         assert_eq!(e.get(t.this, MenuTopic::pInfo), 0);
         assert_eq!(e.get(t.this, MenuTopic::pQuest), 0x1111);
         assert!(calls_to(&e, INFO_CHECK_00619B40).is_empty());
+    }
+}
+
+#[cfg(test)]
+mod tests_n077 {
+    use super::*;
+
+    #[test]
+    fn fn_0083da50_constructs_an_empty_topic() {
+        let mut e = Engine::new();
+        for address in [
+            BS_STRING_CONSTRUCT,
+            RESPONSE_LIST_CONSTRUCT,
+            BS_STRING_SET_004037F0,
+        ] {
+            e.register(address, |_, _| Ret::default());
+        }
+        let this = e.mem.alloc(0x2c);
+        for offset in [0x14, 0x18, 0x20, 0x28] {
+            e.mem.set_u32(this + offset, 0x1111);
+        }
+        e.mem.set_u8(this + 9, 1);
+        e.mem.set_u8(this + 0xa, 1);
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x0083_da50, &args![this]).u32(), this);
+        let log = e.call_log.take().unwrap();
+        assert_eq!(
+            log[1..],
+            [
+                (BS_STRING_CONSTRUCT, vec![this]),
+                (RESPONSE_LIST_CONSTRUCT, vec![this + 0xc]),
+                (BS_STRING_SET_004037F0, vec![this, TEXT_01011584, 0]),
+            ]
+        );
+        for offset in [0x14, 0x18, 0x20, 0x28] {
+            assert_eq!(e.mem.u32(this + offset), 0);
+        }
+        assert_eq!((e.mem.u8(this + 9), e.mem.u8(this + 0xa)), (0, 0));
+    }
+
+    #[test]
+    fn fn_0083dea0_answers_whether_the_member_is_set() {
+        let mut e = Engine::new();
+        e.register(CALLEE_004048E0, |e, a| e.mem.u32(a[0]).into_ret());
+        let this = e.mem.alloc(0x40);
+        assert_eq!(e.call(0x0083_dea0, &args![this]).u32(), 0);
+        e.mem.set_u32(this + 0x34, 0x8000_0000);
+        assert_eq!(e.call(0x0083_dea0, &args![this]).u32(), 1);
     }
 }

@@ -147,9 +147,99 @@ pub fn fn_00631540(e: &mut Engine, this: Ptr, source: Ptr) {
     e.call(NI_POINTER_ASSIGN, &args![this, source]);
 }
 
+/// The `TES` singleton pointer; `0070ec90` (`ECX` = it): the object `004e59f0` is asked
+/// of; `004e59f0` (`ECX` = that, three stack words).
+const TES: u32 = 0x011d_ea10;
+const TES_OBJECT_0070EC90: u32 = 0x0070_ec90;
+const LOOKUP_004E59F0: u32 = 0x004e_59f0;
+/// `WaterZone`'s vtable (its RTTI name) and its base constructor `0061fc10` (`ECX`, two
+/// stack words).
+const WATER_ZONE_VTABLE: u32 = 0x0104_e4b0;
+const ZONE_BASE_CONSTRUCT: u32 = 0x0061_fc10;
+
+// Translated from 00631180 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 00631180 - the C++ exception-unwinding frame (FS:[0] chain, handler at 00eeb0fb, state variable around the constructor) and the frame's cookie word are not translated.
+/// A factory slot (the vtable slot at `0104e444`; unnamed in the engine map; `ECX` not
+/// read, two stack words, `RET 8`): a new `WaterZone` (0x20 bytes from `00401000`,
+/// [`fn_00631230`] with both words; null when the allocation fails) whose +0x1c gets
+/// `004e59f0(reference, 0, 0.0)` on the `TES`'s `0070ec90` object. The decompiler hangs the
+/// three words on `0070ec90`, which takes none (`RET`); `004e59f0` pops them (`RET 0xc`).
+pub fn fn_00631180(e: &mut Engine, _this: Ptr, reference: u32, second: u32) -> u32 {
+    let block = e.call(0x0040_1000, &args![0x20u32]).u32();
+    let zone = if block == 0 {
+        0
+    } else {
+        fn_00631230(e, Ptr::new(block), reference, second).addr()
+    };
+    let tes: u32 = e.global(TES);
+    let object = e.call(TES_OBJECT_0070EC90, &args![tes]).u32();
+    let value = e
+        .call(
+            LOOKUP_004E59F0,
+            &args![object, reference, 0u32, 0.0f32.to_bits()],
+        )
+        .u32();
+    e.mem.set_u32(zone + 0x1c, value);
+    zone
+}
+
+// Translated from 00631230 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 00631230 - the C++ exception-unwinding frame (FS:[0] chain, handler at 00efc7f8, state variable around the base constructor) and the frame's cookie word are not translated.
+/// The `WaterZone` constructor (by its vtable's RTTI; unnamed in the engine map; `ECX` and
+/// two stack words, `RET 8`): the base constructor `0061fc10` with both words, the vtable
+/// `0104e4b0`, the `float` at +8 of `reference`'s vtable slot +0x1f4 answer (0.0 for a null
+/// reference) at +0x18, and 0 at +0x1c. Answers `this`.
+pub fn fn_00631230(e: &mut Engine, this: Ptr, reference: u32, second: u32) -> Ptr {
+    e.call(ZONE_BASE_CONSTRUCT, &args![this, reference, second]);
+    let base = this.addr();
+    e.mem.set_u32(base, WATER_ZONE_VTABLE);
+    let height = if reference != 0 {
+        let data = e.vcall(reference, 0x1f4, &args![]).u32();
+        x87_quiet_bits(e.mem.u32(data + 8))
+    } else {
+        0.0f32.to_bits()
+    };
+    e.mem.set_u32(base + 0x18, x87_quiet_bits(height));
+    e.mem.set_u32(base + 0x1c, 0);
+    this
+}
+
+// Translated from 006312d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`ECX` and one stack word, `RET 4`; called by `0056fcb0`):
+/// with the object `0062fe80` (`cdecl`) answers for `key`, for each node of its list
+/// (`00825c00`, next `0061fef0`) whose +0x10 word (`0084e3a0`) is a reference: while
+/// `0042f130(object)` answers true on that reference's extra list (`005d43c0`), calls
+/// `0042f030(object, 0)` on it. Then `006205e0(object)` on the part at +0x14 of `this`. The
+/// decompiler hangs the object on `005d43c0`, which takes no stack word.
+pub fn fn_006312d0(e: &mut Engine, this: Ptr, key: u32) {
+    let object = e.call(0x0062_fe80, &args![key]).u32();
+    if object == 0 {
+        return;
+    }
+    let mut node = e.call(0x0082_5c00, &args![object]).u32();
+    while node != 0 {
+        let reference = e.call(0x0084_e3a0, &args![node + 0x10]).u32();
+        if reference != 0 {
+            loop {
+                let extra = e.call(0x005d_43c0, &args![reference]).u32();
+                if e.call(0x0042_f130, &args![extra, object]).u8() == 0 {
+                    break;
+                }
+                let extra = e.call(0x005d_43c0, &args![reference]).u32();
+                e.call(0x0042_f030, &args![extra, object, 0u32]);
+            }
+        }
+        node = e.call(0x0061_fef0, &args![node]).u32();
+    }
+    e.call(0x0062_05e0, &args![this.addr() + 0x14, object]);
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x0063_1180, fn_00631180(Ptr, u32, u32) -> u32),
+        entry!(0x0063_1230, fn_00631230(Ptr, u32, u32) -> Ptr),
+        entry!(0x0063_12d0, fn_006312d0(Ptr, u32)),
         entry!(0x0063_1370, fn_00631370(Ptr, u32, u8, u8)),
         entry!(0x0063_1540, fn_00631540(Ptr, Ptr)),
     ]
@@ -416,5 +506,117 @@ mod physics_work_ahead_tests {
         e.call(0x0063_1370, &args![this, 0u32, 0u8, 0u8]);
         assert_eq!(calls(&e, LIST_FIRST_NODE), vec![vec![this + 0x34]]);
         assert!(calls(&e, LIST_NEXT_NODE).is_empty());
+    }
+}
+
+#[cfg(test)]
+mod n075_tests {
+    use super::*;
+
+    type Log = Vec<(u32, Vec<u32>)>;
+
+    fn calls(log: &Log, callee: u32) -> Vec<Vec<u32>> {
+        log.iter()
+            .filter(|(a, _)| *a == callee)
+            .map(|(_, w)| w.clone())
+            .collect()
+    }
+
+    /// A reference whose vtable slot +0x1f4 answers data holding 3.5 at +8.
+    fn reference(e: &mut Engine) -> u32 {
+        let data = e.mem.alloc(0x10);
+        e.mem.set_u32(data + 8, 3.5f32.to_bits());
+        e.register_double(0x0060_01f4, move |_, _| data.into_ret());
+        let mut slots = vec![0u32; 0x7e];
+        slots[0x1f4 / 4] = 0x0060_01f4;
+        e.put_vtable(0x0070_0000, &slots);
+        let reference = e.mem.alloc(8);
+        e.mem.set_u32(reference, 0x0070_0000);
+        reference
+    }
+
+    #[test]
+    fn fn_00631230_builds_the_water_zone() {
+        let mut e = Engine::new();
+        e.register(ZONE_BASE_CONSTRUCT, |_, _| Ret::default());
+        let reference = reference(&mut e);
+        let zone = e.mem.alloc(0x20);
+        e.mem.set_u32(zone + 0x1c, 9);
+        e.call_log = Some(vec![]);
+        assert_eq!(
+            e.call(0x0063_1230, &args![zone, reference, 5u32]).u32(),
+            zone
+        );
+        let log = e.call_log.take().unwrap();
+        assert_eq!(
+            calls(&log, ZONE_BASE_CONSTRUCT),
+            vec![vec![zone, reference, 5]]
+        );
+        assert_eq!(e.mem.u32(zone), WATER_ZONE_VTABLE);
+        assert_eq!(e.mem.f32(zone + 0x18), 3.5);
+        assert_eq!(e.mem.u32(zone + 0x1c), 0);
+        e.call(0x0063_1230, &args![zone, 0u32, 5u32]);
+        assert_eq!(e.mem.f32(zone + 0x18), 0.0);
+    }
+
+    #[test]
+    fn fn_00631180_makes_a_zone_and_looks_its_word_up() {
+        let mut e = Engine::new();
+        e.register(ZONE_BASE_CONSTRUCT, |_, _| Ret::default());
+        e.register(0x0040_1000, |e, _| e.mem.alloc(0x20).into_ret());
+        e.map(0x011d_e000, 0x1000);
+        e.set_global(TES, 0x9000u32);
+        e.register(TES_OBJECT_0070EC90, |_, _| 0x9100u32.into_ret());
+        e.register(LOOKUP_004E59F0, |_, _| 0x4242u32.into_ret());
+        let reference = reference(&mut e);
+        e.call_log = Some(vec![]);
+        let zone = e
+            .call(0x0063_1180, &args![0x1000u32, reference, 5u32])
+            .u32();
+        let log = e.call_log.take().unwrap();
+        assert_eq!(calls(&log, TES_OBJECT_0070EC90), vec![vec![0x9000]]);
+        assert_eq!(
+            calls(&log, LOOKUP_004E59F0),
+            vec![vec![0x9100, reference, 0, 0]]
+        );
+        assert_eq!(e.mem.u32(zone + 0x1c), 0x4242);
+        assert_eq!(e.mem.u32(zone), WATER_ZONE_VTABLE);
+    }
+
+    #[test]
+    fn fn_006312d0_clears_each_reference_then_the_object() {
+        let mut e = Engine::new();
+        e.register(0x0062_fe80, |_, a| {
+            (if a[0] == 7 { 0x5000u32 } else { 0 }).into_ret()
+        });
+        // Two nodes; the first holds a reference, the second none.
+        let second = e.mem.alloc(0x20);
+        let first = e.mem.alloc(0x20);
+        e.mem.set_u32(first, second);
+        e.mem.set_u32(first + 0x10, 0x6000);
+        e.register_double(0x0082_5c00, move |_, _| first.into_ret());
+        e.register(0x0061_fef0, |e, a| e.mem.u32(a[0]).into_ret());
+        e.register(0x0084_e3a0, |e, a| e.mem.u32(a[0]).into_ret());
+        e.register(0x005d_43c0, |_, a| (a[0] + 0x44).into_ret());
+        // The extra list holds the object twice.
+        let left = std::rc::Rc::new(std::cell::Cell::new(2u32));
+        let seen = left.clone();
+        e.register_double(0x0042_f130, move |_, _| {
+            u32::from(seen.get() > 0).into_ret()
+        });
+        e.register_double(0x0042_f030, move |_, _| {
+            left.set(left.get() - 1);
+            Ret::default()
+        });
+        e.register(0x0062_05e0, |_, _| Ret::default());
+        e.call_log = Some(vec![]);
+        e.call(0x0063_12d0, &args![0x1000u32, 7u32]);
+        let log = e.call_log.take().unwrap();
+        assert_eq!(calls(&log, 0x0042_f030), vec![vec![0x6044, 0x5000, 0]; 2]);
+        assert_eq!(calls(&log, 0x0042_f130).len(), 3);
+        assert_eq!(calls(&log, 0x0062_05e0), vec![vec![0x1014, 0x5000]]);
+        e.call_log = Some(vec![]);
+        e.call(0x0063_12d0, &args![0x1000u32, 8u32]);
+        assert_eq!(e.call_log.take().unwrap().len(), 2);
     }
 }

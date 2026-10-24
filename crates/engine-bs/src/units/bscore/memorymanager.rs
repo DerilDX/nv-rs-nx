@@ -340,9 +340,68 @@ pub fn fn_00aa44c0(e: &mut Engine, this: Ptr<MemoryManager>, block: u32) -> u32 
     e.call(MSIZE, &args![block]).u32()
 }
 
+// Translated from 00aa3a10 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (no code references it; `thiscall`, no stack words): clears the
+/// thread block's word at +0x2b4 (the allocation context, `*(*(FS:[0x2c]) + _tls_index * 4)`
+/// with the index at `0126fd98`) and sets the byte at `this` to 1. Answers `this` (left in
+/// `EAX`).
+pub fn fn_00aa3a10(e: &mut Engine, this: Ptr) -> Ptr {
+    let thread = e.tls();
+    e.mem.set_u32(thread + TLS_CONTEXT, 0);
+    e.mem.set_u8(this.addr(), 1);
+    this
+}
+
+// Translated from 00aa41e0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (no code references it; `thiscall`, two stack words it does
+/// not read, `RET 8`): answers 0.
+pub fn fn_00aa41e0(_e: &mut Engine, _this: Ptr, _unused_1: u32, _unused_2: u32) -> u32 {
+    0
+}
+
+// Translated from 00aa41f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (no code references it; `thiscall`, three stack words it does
+/// not read, `RET 0xc`): does nothing.
+pub fn fn_00aa41f0(_e: &mut Engine, _this: Ptr, _unused_1: u32, _unused_2: u32, _unused_3: u32) {}
+
+// Translated from 00aa4200 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the map: the reallocation the `Reallocate` wrapper at `00aa2340` calls
+/// (`thiscall`, five stack words, `RET 0x14`; only the block and the new size are read).
+/// When `00aa44c0` knows the block's size, allocates `size` bytes with `Allocate` (on
+/// `this`), copies the smaller of the two sizes and frees the old block with `Deallocate`
+/// (on `this`); otherwise it is `_realloc(block, size)`. Returns the new block.
+pub fn fn_00aa4200(
+    e: &mut Engine,
+    this: Ptr<MemoryManager>,
+    block: u32,
+    size: u32,
+    _unused_3: u32,
+    _unused_4: u32,
+    _unused_5: u32,
+) -> u32 {
+    let mut old_size = fn_00aa44c0(e, this, block);
+    if old_size == 0 {
+        return e.call(REALLOC, &args![block, size]).u32();
+    }
+    let new_block = e.call(ALLOCATE, &args![this, size]).u32();
+    if old_size > size {
+        old_size = size;
+    }
+    e.call(MEMCPY, &args![new_block, block, old_size]);
+    e.call(DEALLOCATE, &args![this, block]);
+    new_block
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x00aa_3a10, fn_00aa3a10(Ptr) -> Ptr),
+        entry!(0x00aa_41e0, fn_00aa41e0(Ptr, u32, u32) -> u32),
+        entry!(0x00aa_41f0, fn_00aa41f0(Ptr, u32, u32, u32)),
+        entry!(
+            0x00aa_4200,
+            fn_00aa4200(Ptr<MemoryManager>, u32, u32, u32, u32, u32) -> u32
+        ),
         entry!(0x00aa4030, allocate_with_context(Ptr, u32, u32, u32, u32) -> Ptr),
         entry!(0x00aa42c0, fn_00aa42c0(Ptr, Ptr, u32)),
         entry!(0x00aa_39c0, memory_manager_initialize(Ptr<MemoryManager>)),
@@ -764,5 +823,101 @@ mod b001_tests {
             calls_to(&e, MAP_SET_AT_00AA4860),
             vec![vec![map, 0x1234, 0]]
         );
+    }
+}
+
+#[cfg(test)]
+mod n082_tests {
+    use super::*;
+
+    fn calls_to(e: &Engine, callee: u32) -> Vec<Vec<u32>> {
+        e.call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|(address, _)| *address == callee)
+            .map(|(_, words)| words.clone())
+            .collect()
+    }
+
+    #[test]
+    fn fn_00aa3a10_clears_the_thread_context_and_marks_this() {
+        let mut e = Engine::new();
+        let thread = e.tls();
+        e.mem.set_u32(thread + TLS_CONTEXT, 7);
+        let this = e.mem.alloc(4);
+        e.mem.set_u32(this, 0xffff_ff00);
+        assert_eq!(e.call(0x00aa_3a10, &args![this]).u32(), this);
+        assert_eq!(e.mem.u32(thread + TLS_CONTEXT), 0);
+        assert_eq!(e.mem.u32(this), 0xffff_ff01);
+    }
+
+    #[test]
+    fn fn_00aa41e0_answers_zero_and_fn_00aa41f0_does_nothing() {
+        let mut e = Engine::new();
+        assert_eq!(e.call(0x00aa_41e0, &args![1u32, 2u32, 3u32]).u32(), 0);
+        e.call_log = Some(vec![]);
+        e.call(0x00aa_41f0, &args![1u32, 2u32, 3u32, 4u32]);
+        assert_eq!(e.call_log.as_ref().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn fn_00aa4200_copies_the_smaller_size_or_uses_realloc() {
+        let mut e = Engine::new();
+        // No pool for the blocks; `00aa45a0` finds a heap whose slot 0x24 says 0x40 bytes
+        // for 0x0300_0040, and none for other blocks.
+        e.map(POOLS_BY_ADDRESS & !0xfff, 0x1000);
+        let heap = e.mem.alloc(4);
+        e.put_vtable(0x7000, &[0, 0, 0, 0, 0, 0, 0, 0, 0, 0x8024]);
+        e.mem.set_u32(heap, 0x7000);
+        e.register(0x8024, |_, _| 0x40u32.into_ret());
+        e.register_double(HEAP_FOR_BLOCK_00AA45A0, move |_, a| {
+            if a[1] == 0x0300_0040 {
+                heap.into_ret()
+            } else {
+                0u32.into_ret()
+            }
+        });
+        e.register(HEAP_FOR_BLOCK_00AA4610, |_, _| Ret::default());
+        e.register(MSIZE, |_, _| Ret::default());
+        for callee in [MEMCPY, DEALLOCATE] {
+            e.register(callee, |_, _| Ret::default());
+        }
+        e.register(ALLOCATE, |_, _| 0x0400_0000u32.into_ret());
+        e.register(REALLOC, |_, _| 0x0410_0000u32.into_ret());
+        let this = 0x0500_0000u32;
+        e.call_log = Some(vec![]);
+        assert_eq!(
+            e.call(
+                0x00aa_4200,
+                &args![this, 0x0300_0040u32, 0x30u32, 7u32, 8u32, 9u32]
+            )
+            .u32(),
+            0x0400_0000
+        );
+        assert_eq!(calls_to(&e, ALLOCATE), vec![vec![this, 0x30]]);
+        assert_eq!(
+            calls_to(&e, MEMCPY),
+            vec![vec![0x0400_0000, 0x0300_0040, 0x30]]
+        );
+        assert_eq!(calls_to(&e, DEALLOCATE), vec![vec![this, 0x0300_0040]]);
+        e.call_log = Some(vec![]);
+        e.call(
+            0x00aa_4200,
+            &args![this, 0x0300_0040u32, 0x100u32, 0u32, 0u32, 0u32],
+        );
+        assert_eq!(calls_to(&e, MEMCPY)[0][2], 0x40);
+        // A block nothing knows: _realloc.
+        e.call_log = Some(vec![]);
+        assert_eq!(
+            e.call(
+                0x00aa_4200,
+                &args![this, 0x0600_0000u32, 0x100u32, 0u32, 0u32, 0u32]
+            )
+            .u32(),
+            0x0410_0000
+        );
+        assert_eq!(calls_to(&e, REALLOC), vec![vec![0x0600_0000, 0x100]]);
+        assert!(calls_to(&e, ALLOCATE).is_empty());
     }
 }

@@ -282,9 +282,295 @@ pub fn tes_biped_model_form_get_biped_tes_model_ov2(e: &mut Engine, this: Ptr, s
         .wrapping_add(0xc)
 }
 
+/// `00401500`: whether saved data is byte-swapped (`AL`); `00503210`
+/// (`ECX`): swaps the biped model data's words.
+const SAVE_SWAPS_ENDIAN: u32 = 0x0040_1500;
+const SWAP_BIPED_DATA: u32 = 0x0050_3210;
+/// `TESForm::__AddChunkData` (Xbox PDB, `00485990`, cdecl: code, data,
+/// size), `TESModelTextureSwap::Save` (`0048a520`, `RET 0xC`),
+/// `TESModel::SaveFlags` (`00489240`, `RET 4`), `TESTexture::Save`
+/// (`0048e370`, `RET 4`), `BGSMessageIcon::Save` (`0047a240`, `RET 4`) and
+/// `TESModel::Save` (`004891d0`, `RET 8`), by the decompiler's names.
+const ADD_CHUNK_DATA: u32 = 0x0048_5990;
+const TEXTURE_SWAP_SAVE: u32 = 0x0048_a520;
+const MODEL_SAVE_FLAGS: u32 = 0x0048_9240;
+const TEXTURE_SAVE: u32 = 0x0048_e370;
+const MESSAGE_ICON_SAVE: u32 = 0x0047_a240;
+const MODEL_SAVE: u32 = 0x0048_91d0;
+/// `memcpy` (`00401460`) and `_memcmp` (`00ec4835`), cdecl, three words.
+const MEMCPY: u32 = 0x0040_1460;
+const MEMCMP: u32 = 0x00ec_4835;
+/// `.?AVBaseFormComponent@@`, the type the component copy and compare cast
+/// from.
+const TYPE_BASE_FORM_COMPONENT: u32 = 0x0118_3040;
+/// The components the copy and the compare visit, in the exe's order:
+/// `bipedModel[0]`, `worldModel[0]`, `inventoryIcon[0]`, `messageIcon[0]`,
+/// `bipedModel[1]`, `worldModel[1]`, `inventoryIcon[1]`, `messageIcon[1]`,
+/// `ConstraintTemplate` (Xbox PDB names).
+const COPY_COMPONENTS: [u32; 9] = [0x0c, 0x4c, 0x8c, 0xa4, 0x2c, 0x6c, 0x98, 0xb4, 0xc4];
+/// `TESObjectREFR::GetOwner` (`00567790`) and `TESActorBase::GetSex`
+/// (`005f0cc0`).
+const GET_OWNER: u32 = 0x0056_7790;
+const GET_SEX: u32 = 0x005f_0cc0;
+
+/// The sex of `reference`'s owner as the getters below pick it: 0 unless
+/// the owner (`TESObjectREFR::GetOwner`) has form type 0x2A, then
+/// `TESActorBase::GetSex`.
+fn owner_sex(e: &mut Engine, reference: u32) -> u32 {
+    let owner = e.call(GET_OWNER, &args![reference]).u32();
+    if owner != 0 && e.call(FORM_TYPE_BYTE, &args![owner]).u32() == 0x2a {
+        e.call(GET_SEX, &args![owner]).u32()
+    } else {
+        0
+    }
+}
+
+/// `form` cast from `TESForm` to the biped model form (`01183978`).
+fn as_biped_model_form(e: &mut Engine, form: u32) -> u32 {
+    e.call(
+        RT_DYNAMIC_CAST,
+        &args![form, 0u32, TYPE_TES_FORM, TYPE_BIPED_MODEL_FORM, 0u32],
+    )
+    .u32()
+}
+
+// Translated from 00480610 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TESBipedModelForm::Save` (Xbox PDB; `ECX`): the biped model data
+/// (`BMDT`, 8 bytes at +4, swapped before and after when saving swaps),
+/// then each component: `MODL`/`MODT`/`MODS` and `MODD` for
+/// `bipedModel[0]`, `MOD2`/`MO2T`/`MO2S` for `worldModel[0]`, `ICON` and
+/// `MICO` for the icons, `MOD3`/`MO3T`/`MO3S` and `MOSD` for
+/// `bipedModel[1]`, `MOD4`/`MO4T`/`MO4S` for `worldModel[1]`, `ICO2` and
+/// `MIC2`, and `BMCT` (with 0) for the constraint template.
+pub fn tes_biped_model_form_save(e: &mut Engine, this: Ptr) {
+    let base = this.addr();
+    if e.call(SAVE_SWAPS_ENDIAN, &args![]).bool() {
+        e.call(SWAP_BIPED_DATA, &args![base + 4]);
+    }
+    e.call(ADD_CHUNK_DATA, &args![0x5444_4d42u32, base + 4, 8u32]);
+    if e.call(SAVE_SWAPS_ENDIAN, &args![]).bool() {
+        e.call(SWAP_BIPED_DATA, &args![base + 4]);
+    }
+    let swap = |e: &mut Engine, at: u32, codes: [u32; 3]| {
+        e.call(
+            TEXTURE_SWAP_SAVE,
+            &args![base + at, codes[0], codes[1], codes[2]],
+        );
+    };
+    swap(e, 0x0c, [0x4c44_4f4d, 0x5444_4f4d, 0x5344_4f4d]);
+    e.call(MODEL_SAVE_FLAGS, &args![base + 0x0c, 0x4444_4f4du32]);
+    swap(e, 0x4c, [0x3244_4f4d, 0x5432_4f4d, 0x5332_4f4d]);
+    e.call(TEXTURE_SAVE, &args![base + 0x8c, 0x4e4f_4349u32]);
+    e.call(MESSAGE_ICON_SAVE, &args![base + 0xa4, 0x4f43_494du32]);
+    swap(e, 0x2c, [0x3344_4f4d, 0x5433_4f4d, 0x5333_4f4d]);
+    e.call(MODEL_SAVE_FLAGS, &args![base + 0x2c, 0x4453_4f4du32]);
+    swap(e, 0x6c, [0x3444_4f4d, 0x5434_4f4d, 0x5334_4f4d]);
+    e.call(TEXTURE_SAVE, &args![base + 0x98, 0x324f_4349u32]);
+    e.call(MESSAGE_ICON_SAVE, &args![base + 0xb4, 0x3243_494du32]);
+    e.call(MODEL_SAVE, &args![base + 0xc4, 0x5443_4d42u32, 0u32]);
+}
+
+// Translated from 004807a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TESBipedModelForm::CopyComponent` (Xbox PDB; `RET 4`: the source
+/// component): when the source casts from `BaseFormComponent` to the biped
+/// model form, the 8 bytes of biped model data and each component's copy
+/// (its vtable slot +8 with the source's component).
+pub fn tes_biped_model_form_copy_component(e: &mut Engine, this: Ptr, source: u32) {
+    let other = e
+        .call(
+            RT_DYNAMIC_CAST,
+            &args![
+                source,
+                0u32,
+                TYPE_BASE_FORM_COMPONENT,
+                TYPE_BIPED_MODEL_FORM,
+                0u32
+            ],
+        )
+        .u32();
+    if other == 0 {
+        return;
+    }
+    e.call(MEMCPY, &args![this.addr() + 4, other + 4, 8u32]);
+    for offset in COPY_COMPONENTS {
+        e.vcall(this.addr() + offset, 8, &args![other + offset]);
+    }
+}
+
+// Translated from 004808f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TESBipedModelForm::CompareComponent` (Xbox PDB; `RET 4`: the other
+/// component): true (different) unless the other casts to the biped model
+/// form, the 8 bytes of biped model data match and no component's compare
+/// (its vtable slot +0xC with the other's component) answers true.
+pub fn tes_biped_model_form_compare_component(e: &mut Engine, this: Ptr, other: u32) -> bool {
+    let form = e
+        .call(
+            RT_DYNAMIC_CAST,
+            &args![
+                other,
+                0u32,
+                TYPE_BASE_FORM_COMPONENT,
+                TYPE_BIPED_MODEL_FORM,
+                0u32
+            ],
+        )
+        .u32();
+    if form == 0 {
+        return true;
+    }
+    if e.call(MEMCMP, &args![this.addr() + 4, form + 4, 8u32])
+        .u32()
+        != 0
+    {
+        return true;
+    }
+    for offset in COPY_COMPONENTS {
+        if e.vcall(this.addr() + offset, 0xc, &args![form + offset])
+            .bool()
+        {
+            return true;
+        }
+    }
+    false
+}
+
+// Translated from 00480ad0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Whether two biped model forms share a biped slot (`RET 4`: the other;
+/// the engine map has no name): the AND of their slot words (+4) is not 0.
+pub fn fn_00480ad0(e: &mut Engine, this: Ptr, other: Ptr) -> bool {
+    e.mem.u32(this.addr() + 4) & e.mem.u32(other.addr() + 4) != 0
+}
+
+// Translated from 00480e60 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TESBipedModelForm::GetIcon` (Xbox PDB; cdecl: a form and a reference):
+/// 0 when the form is no biped model form; without a reference
+/// `worldModel[0]`'s vtable slot +0x14 (its file name); otherwise
+/// [`tes_biped_model_form_get_icon_ov2`] for the sex of the reference's
+/// owner. The function ends in those calls, so their `EAX` is the answer.
+pub fn tes_biped_model_form_get_icon(e: &mut Engine, form: u32, reference: u32) -> u32 {
+    let biped = as_biped_model_form(e, form);
+    if biped == 0 {
+        return 0;
+    }
+    if reference == 0 {
+        return e.vcall(biped + 0x4c, 0x14, &args![]).u32();
+    }
+    let sex = owner_sex(e, reference);
+    tes_biped_model_form_get_icon_ov2(e, Ptr::new(biped), sex)
+}
+
+// Translated from 00480ef0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The inventory icon's text (cdecl: a form and a reference; the engine map
+/// has no name): 0 when the form is no biped model form; without a
+/// reference `00408da0` on `inventoryIcon[0]` (+0x8C); otherwise `00481230`
+/// for the sex of the reference's owner. The callee's `EAX` is the answer.
+pub fn fn_00480ef0(e: &mut Engine, form: u32, reference: u32) -> u32 {
+    let biped = as_biped_model_form(e, form);
+    if biped == 0 {
+        return 0;
+    }
+    if reference == 0 {
+        return e.call(0x0040_8da0, &args![biped + 0x8c]).u32();
+    }
+    let sex = owner_sex(e, reference);
+    e.call(0x0048_1230, &args![biped, sex]).u32()
+}
+
+// Translated from 00480f80 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The message icon's answer (cdecl: a form and a reference; the engine
+/// map has no name): 0 when the form is no biped model form; without a
+/// reference `0047a300` on `messageIcon[0]` (+0xA4); otherwise `00481280`
+/// for the sex of the reference's owner. The callee's `EAX` is the answer.
+pub fn fn_00480f80(e: &mut Engine, form: u32, reference: u32) -> u32 {
+    let biped = as_biped_model_form(e, form);
+    if biped == 0 {
+        return 0;
+    }
+    if reference == 0 {
+        return e.call(0x0047_a300, &args![biped + 0xa4]).u32();
+    }
+    let sex = owner_sex(e, reference);
+    e.call(0x0048_1280, &args![biped, sex]).u32()
+}
+
+// Translated from 00481090 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TESBipedModelForm::GetBipedTESModel` (Xbox PDB; cdecl: a form and a
+/// reference): null when the form is no biped model form; without a
+/// reference `bipedModel[0]` (+0xC); otherwise
+/// [`tes_biped_model_form_get_biped_tes_model_ov2`] for the sex of the
+/// reference's owner.
+pub fn tes_biped_model_form_get_biped_tes_model(e: &mut Engine, form: u32, reference: u32) -> u32 {
+    let biped = as_biped_model_form(e, form);
+    if biped == 0 {
+        return 0;
+    }
+    if reference == 0 {
+        return biped + 0xc;
+    }
+    let sex = owner_sex(e, reference);
+    tes_biped_model_form_get_biped_tes_model_ov2(e, Ptr::new(biped), sex)
+}
+
+// Translated from 00481190 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TESBipedModelForm::GetIcon_ov2` (Xbox PDB; `RET 4`: the sex):
+/// `worldModel[sex]`'s vtable slot +0x14 (sex 1 falling back to 0 when
+/// that model has no file name, `0048cee0`); the slot's `EAX` is the
+/// answer.
+pub fn tes_biped_model_form_get_icon_ov2(e: &mut Engine, this: Ptr, sex: u32) -> u32 {
+    let mut sex = sex;
+    let model = this
+        .addr()
+        .wrapping_add(sex.wrapping_shl(5))
+        .wrapping_add(0x4c);
+    if e.call(MODEL_HAS_NAME, &args![model]).u32() == 0 && sex == 1 {
+        sex = 0;
+    }
+    let model = this
+        .addr()
+        .wrapping_add(sex.wrapping_shl(5))
+        .wrapping_add(0x4c);
+    e.vcall(model, 0x14, &args![]).u32()
+}
+
+// Translated from 004811e0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TESBipedModelForm::GetBipedModel` (Xbox PDB; `RET 4`: the sex):
+/// `bipedModel[sex]`'s vtable slot +0x14 (sex 1 falling back to 0 when that
+/// model has no file name, `0048cee0`); the slot's `EAX` is the answer.
+pub fn tes_biped_model_form_get_biped_model(e: &mut Engine, this: Ptr, sex: u32) -> u32 {
+    let mut sex = sex;
+    let model = this
+        .addr()
+        .wrapping_add(sex.wrapping_shl(5))
+        .wrapping_add(0xc);
+    if e.call(MODEL_HAS_NAME, &args![model]).u32() == 0 && sex == 1 {
+        sex = 0;
+    }
+    let model = this
+        .addr()
+        .wrapping_add(sex.wrapping_shl(5))
+        .wrapping_add(0xc);
+    e.vcall(model, 0x14, &args![]).u32()
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x0048_0610, tes_biped_model_form_save(Ptr)),
+        entry!(0x0048_07a0, tes_biped_model_form_copy_component(Ptr, u32)),
+        entry!(
+            0x0048_08f0,
+            tes_biped_model_form_compare_component(Ptr, u32) -> bool
+        ),
+        entry!(0x0048_0ad0, fn_00480ad0(Ptr, Ptr) -> bool),
+        entry!(0x0048_0e60, tes_biped_model_form_get_icon(u32, u32) -> u32),
+        entry!(0x0048_0ef0, fn_00480ef0(u32, u32) -> u32),
+        entry!(0x0048_0f80, fn_00480f80(u32, u32) -> u32),
+        entry!(
+            0x0048_1090,
+            tes_biped_model_form_get_biped_tes_model(u32, u32) -> u32
+        ),
+        entry!(0x0048_1190, tes_biped_model_form_get_icon_ov2(Ptr, u32) -> u32),
+        entry!(0x0048_11e0, tes_biped_model_form_get_biped_model(Ptr, u32) -> u32),
         entry!(0x0048_1150, tes_biped_model_form_get_biped_tes_model_ov2(Ptr, u32) -> u32),
         entry!(0x0048_0db0, tes_biped_model_form_get_form_as_biped_model(Ptr) -> Ptr),
         entry!(0x0048_0af0, tes_biped_model_form_fills_biped_slot(Ptr, u32, u8, Ptr) -> bool),
@@ -661,5 +947,236 @@ mod la1_tests {
         assert_eq!(at(&mut e, 1), this + 0x2c);
         // Other indices are not checked: 2 without a name stays 2.
         assert_eq!(at(&mut e, 2), this + 0x4c);
+    }
+}
+
+#[cfg(test)]
+mod n085_tests {
+    use super::*;
+
+    fn calls(e: &Engine, address: u32) -> Vec<Vec<u32>> {
+        e.call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|(a, _)| *a == address)
+            .map(|(_, w)| w.clone())
+            .collect()
+    }
+
+    fn quiet(e: &mut Engine, addrs: &[u32]) {
+        for &addr in addrs {
+            e.register(addr, |_, _| Ret::default());
+        }
+    }
+
+    /// A biped model form whose components share one vtable: slot +8 and
+    /// +0xC log, +0x14 answers the component's address plus 1.
+    fn form(e: &mut Engine) -> u32 {
+        let this = e.mem.alloc(0xd0);
+        let vtable = e.mem.alloc(0x18);
+        e.mem.set_u32(vtable + 8, 0x7800_0008);
+        e.mem.set_u32(vtable + 0xc, 0x7800_000c);
+        e.mem.set_u32(vtable + 0x14, 0x7800_0014);
+        for offset in COPY_COMPONENTS {
+            e.mem.set_u32(this + offset, vtable);
+        }
+        quiet(e, &[0x7800_0008]);
+        e.register(0x7800_000c, |_, _| Ret::default());
+        e.register(0x7800_0014, |_, a| (a[0] + 1).into_ret());
+        this
+    }
+
+    #[test]
+    fn save_writes_every_chunk_in_order() {
+        let mut e = Engine::new();
+        let this = e.mem.alloc(0xd0);
+        e.register(SAVE_SWAPS_ENDIAN, |_, _| 1u32.into_ret());
+        quiet(
+            &mut e,
+            &[
+                SWAP_BIPED_DATA,
+                ADD_CHUNK_DATA,
+                TEXTURE_SWAP_SAVE,
+                MODEL_SAVE_FLAGS,
+                TEXTURE_SAVE,
+                MESSAGE_ICON_SAVE,
+                MODEL_SAVE,
+            ],
+        );
+        e.call_log = Some(vec![]);
+        e.call(0x0048_0610, &args![this]);
+        assert_eq!(calls(&e, SWAP_BIPED_DATA), vec![vec![this + 4]; 2]);
+        assert_eq!(
+            calls(&e, ADD_CHUNK_DATA),
+            vec![vec![0x5444_4d42, this + 4, 8]]
+        );
+        let swaps = calls(&e, TEXTURE_SWAP_SAVE);
+        assert_eq!(
+            swaps.iter().map(|a| a[0] - this).collect::<Vec<_>>(),
+            vec![0x0c, 0x4c, 0x2c, 0x6c]
+        );
+        assert_eq!(swaps[2][1..], [0x3344_4f4d, 0x5433_4f4d, 0x5333_4f4d]);
+        assert_eq!(
+            calls(&e, MODEL_SAVE_FLAGS),
+            vec![
+                vec![this + 0x0c, 0x4444_4f4d],
+                vec![this + 0x2c, 0x4453_4f4d]
+            ]
+        );
+        assert_eq!(
+            calls(&e, TEXTURE_SAVE),
+            vec![
+                vec![this + 0x8c, 0x4e4f_4349],
+                vec![this + 0x98, 0x324f_4349]
+            ]
+        );
+        assert_eq!(
+            calls(&e, MESSAGE_ICON_SAVE),
+            vec![
+                vec![this + 0xa4, 0x4f43_494d],
+                vec![this + 0xb4, 0x3243_494d]
+            ]
+        );
+        assert_eq!(
+            calls(&e, MODEL_SAVE),
+            vec![vec![this + 0xc4, 0x5443_4d42, 0]]
+        );
+    }
+
+    #[test]
+    fn copy_and_compare_visit_every_component() {
+        let mut e = Engine::new();
+        let this = form(&mut e);
+        let other = 0x9000u32;
+        e.register(RT_DYNAMIC_CAST, |_, a| a[0].into_ret());
+        quiet(&mut e, &[MEMCPY]);
+        e.register(MEMCMP, |_, _| Ret::default());
+        e.call_log = Some(vec![]);
+        e.call(0x0048_07a0, &args![this, other]);
+        assert_eq!(
+            calls(&e, RT_DYNAMIC_CAST),
+            vec![vec![
+                other,
+                0,
+                TYPE_BASE_FORM_COMPONENT,
+                TYPE_BIPED_MODEL_FORM,
+                0
+            ]]
+        );
+        assert_eq!(calls(&e, MEMCPY), vec![vec![this + 4, other + 4, 8]]);
+        let copies = calls(&e, 0x7800_0008);
+        assert_eq!(copies.len(), 9);
+        assert_eq!(copies[3], vec![this + 0xa4, other + 0xa4]);
+        // All the same: not different.
+        assert!(!e.call(0x0048_08f0, &args![this, other]).bool());
+        assert_eq!(calls(&e, 0x7800_000c).len(), 9);
+        // The fourth component differs: the rest are not asked.
+        e.register_double(0x7800_000c, |_, a| {
+            u32::from(a[1] == 0x9000 + 0xa4).into_ret()
+        });
+        e.call_log = Some(vec![]);
+        assert!(e.call(0x0048_08f0, &args![this, other]).bool());
+        assert_eq!(calls(&e, 0x7800_000c).len(), 4);
+        // Different data, or no biped model form: different.
+        e.register(MEMCMP, |_, _| 1u32.into_ret());
+        assert!(e.call(0x0048_08f0, &args![this, other]).bool());
+        e.register(RT_DYNAMIC_CAST, |_, _| Ret::default());
+        assert!(e.call(0x0048_08f0, &args![this, other]).bool());
+        e.call_log = Some(vec![]);
+        e.call(0x0048_07a0, &args![this, other]);
+        assert!(calls(&e, MEMCPY).is_empty());
+    }
+
+    #[test]
+    fn shared_slots_test_the_slot_words() {
+        let mut e = Engine::new();
+        let (a, b) = (e.mem.alloc(8), e.mem.alloc(8));
+        e.mem.set_u32(a + 4, 0b0110);
+        e.mem.set_u32(b + 4, 0b1001);
+        assert!(!e.call(0x0048_0ad0, &args![a, b]).bool());
+        e.mem.set_u32(b + 4, 0b0100);
+        assert!(e.call(0x0048_0ad0, &args![a, b]).bool());
+    }
+
+    /// Doubles for the getters: the cast answers its first word; the owner
+    /// of reference 0x5000 is 0x5100 (form type 0x2A, sex 1).
+    fn getters(e: &mut Engine, has_name: bool) {
+        e.register(RT_DYNAMIC_CAST, |_, a| a[0].into_ret());
+        e.register(GET_OWNER, |_, a| {
+            (if a[0] == 0x5000 { 0x5100u32 } else { 0 }).into_ret()
+        });
+        e.register(FORM_TYPE_BYTE, |_, _| 0x2au32.into_ret());
+        e.register(GET_SEX, |_, _| 1u32.into_ret());
+        e.register_double(MODEL_HAS_NAME, move |_, _| u32::from(has_name).into_ret());
+        e.register(0x0040_8da0, |_, a| (a[0] | 0x8000_0000).into_ret());
+        e.register(0x0048_1230, |_, a| (a[0] + a[1]).into_ret());
+        e.register(0x0047_a300, |_, a| (a[0] | 0x4000_0000).into_ret());
+        e.register(0x0048_1280, |_, a| (a[0] + 2 * a[1]).into_ret());
+    }
+
+    #[test]
+    fn getters_pick_the_component_by_the_owner_sex() {
+        let mut e = Engine::new();
+        let this = form(&mut e);
+        getters(&mut e, true);
+        // Icons: worldModel[0] +0x14 without a reference, [1] for sex 1.
+        assert_eq!(
+            e.call(0x0048_0e60, &args![this, 0u32]).u32(),
+            this + 0x4c + 1
+        );
+        assert_eq!(
+            e.call(0x0048_0e60, &args![this, 0x5000u32]).u32(),
+            this + 0x6c + 1
+        );
+        // An owner of another form type: sex 0.
+        e.register(FORM_TYPE_BYTE, |_, _| 0x12au32.into_ret());
+        assert_eq!(
+            e.call(0x0048_0e60, &args![this, 0x5000u32]).u32(),
+            this + 0x4c + 1
+        );
+        e.register(FORM_TYPE_BYTE, |_, _| 0x2au32.into_ret());
+        assert_eq!(
+            e.call(0x0048_0ef0, &args![this, 0u32]).u32(),
+            (this + 0x8c) | 0x8000_0000
+        );
+        assert_eq!(e.call(0x0048_0ef0, &args![this, 0x5000u32]).u32(), this + 1);
+        assert_eq!(
+            e.call(0x0048_0f80, &args![this, 0u32]).u32(),
+            (this + 0xa4) | 0x4000_0000
+        );
+        assert_eq!(e.call(0x0048_0f80, &args![this, 0x5000u32]).u32(), this + 2);
+        assert_eq!(e.call(0x0048_1090, &args![this, 0u32]).u32(), this + 0xc);
+        assert_eq!(
+            e.call(0x0048_1090, &args![this, 0x5000u32]).u32(),
+            this + 0x2c
+        );
+        // No biped model form: 0 for all.
+        e.register(RT_DYNAMIC_CAST, |_, _| Ret::default());
+        for addr in [0x0048_0e60u32, 0x0048_0ef0, 0x0048_0f80, 0x0048_1090] {
+            assert_eq!(e.call(addr, &args![this, 0x5000u32]).u32(), 0);
+        }
+    }
+
+    #[test]
+    fn sexed_models_fall_back_to_the_first_without_a_name() {
+        for (has_name, offset) in [(true, 0x20u32), (false, 0)] {
+            let mut e = Engine::new();
+            let this = form(&mut e);
+            getters(&mut e, has_name);
+            assert_eq!(
+                e.call(0x0048_1190, &args![this, 1u32]).u32(),
+                this + 0x4c + offset + 1
+            );
+            assert_eq!(
+                e.call(0x0048_11e0, &args![this, 1u32]).u32(),
+                this + 0xc + offset + 1
+            );
+            // Sex 0 stays 0.
+            assert_eq!(
+                e.call(0x0048_11e0, &args![this, 0u32]).u32(),
+                this + 0xc + 1
+            );
+        }
     }
 }

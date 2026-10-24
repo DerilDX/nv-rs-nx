@@ -67,9 +67,109 @@ pub fn fn_00e74c00(e: &mut Engine, this: Ptr) -> bool {
     false
 }
 
+/// The geometry buffer data's two calls (`00e8eeb0`: answers a byte; `00e8ef10`: one word;
+/// unit `nigeometrybufferdata.cpp`, thiscall) and the renderer's buffer update `00e723a0`
+/// (unit `nixenonrenderer.cpp`; thiscall: the geometry, a word of flags).
+const BUFFER_DATA_CHECK: u32 = 0x00e8_eeb0;
+const BUFFER_DATA_PREPARE: u32 = 0x00e8_ef10;
+const RENDERER_UPDATE_BUFFERS: u32 = 0x00e7_23a0;
+
+// Translated from 00e74cc0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map: prepares a geometry's buffers for drawing. With a geometry,
+/// its buffer data (+0x1c) is checked (`00e8eeb0`), gets `0x01400000` at +4 and
+/// `00e8ef10(1)`; then, with the 16-bit dirty flags at +0x18 of the geometry: a failed
+/// check calls the buffer data's object (+8) slot +0x1c with the buffer data and 0, clears
+/// +0x38 and updates with flags 0xf; a passed check asks that object's slot +0x20 and
+/// updates with 0xf when it answers true, else with the dirty flags when there are any
+/// (`00e723a0`). The dirty flags are then cleared.
+pub fn fn_00e74cc0(e: &mut Engine, this: Ptr, geometry: Ptr) {
+    let geometry = geometry.addr();
+    if geometry == 0 {
+        return;
+    }
+    let buffers = e.mem.u32(geometry + 0x1c);
+    let checked = e.call(BUFFER_DATA_CHECK, &args![buffers]).u8();
+    e.mem.set_u32(buffers + 4, 0x0140_0000);
+    e.call(BUFFER_DATA_PREPARE, &args![buffers, 1u32]);
+    let object = e.mem.u32(buffers + 8);
+    let dirty = u32::from(e.mem.u16(geometry + 0x18));
+    let flags = if checked == 0 {
+        e.vcall(object, 0x1c, &args![buffers, 0u32]);
+        e.mem.set_u32(buffers + 0x38, 0);
+        Some(0xf)
+    } else if e.vcall(object, 0x20, &args![]).u8() != 0 {
+        Some(0xf)
+    } else if dirty != 0 {
+        Some(dirty)
+    } else {
+        None
+    };
+    if let Some(flags) = flags {
+        e.call(RENDERER_UPDATE_BUFFERS, &args![this, geometry, flags]);
+    }
+    e.mem.set_u16(geometry + 0x18, 0);
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
-    vec![entry!(0x00e74c00, fn_00e74c00(Ptr) -> bool)]
+    vec![
+        entry!(0x00e74c00, fn_00e74c00(Ptr) -> bool),
+        entry!(0x00e7_4cc0, fn_00e74cc0(Ptr, Ptr)),
+    ]
+}
+
+#[cfg(test)]
+mod n081_tests {
+    use super::*;
+
+    #[test]
+    fn prepares_buffers_and_updates_with_the_right_flags() {
+        for (checked, answer, dirty, want) in [
+            (0u32, 0u32, 3u16, Some(0xfu32)),
+            (1, 1, 3, Some(0xf)),
+            (1, 0, 3, Some(3)),
+            (1, 0, 0, None),
+        ] {
+            let mut e = Engine::new();
+            e.register_double(BUFFER_DATA_CHECK, move |_, _| (0x100 | checked).into_ret());
+            e.register(BUFFER_DATA_PREPARE, |_, _| Ret::default());
+            e.register(RENDERER_UPDATE_BUFFERS, |_, _| Ret::default());
+            e.register(0x0079_001c, |_, _| Ret::default());
+            e.register_double(0x0079_0020, move |_, _| (0x200 | answer).into_ret());
+            let vtable = e.mem.alloc(0x24);
+            e.mem.set_u32(vtable + 0x1c, 0x0079_001c);
+            e.mem.set_u32(vtable + 0x20, 0x0079_0020);
+            let object = e.mem.alloc(4);
+            e.mem.set_u32(object, vtable);
+            let buffers = e.mem.alloc(0x40);
+            e.mem.set_u32(buffers + 8, object);
+            e.mem.set_u32(buffers + 0x38, 9);
+            let geometry = e.mem.alloc(0x20);
+            e.mem.set_u32(geometry + 0x1c, buffers);
+            e.mem.set_u16(geometry + 0x18, dirty);
+            e.call_log = Some(vec![]);
+            e.call(0x00e7_4cc0, &args![0x5000u32, geometry]);
+            let log = e.call_log.take().unwrap();
+            let updates: Vec<_> = log
+                .iter()
+                .filter(|c| c.0 == RENDERER_UPDATE_BUFFERS)
+                .map(|c| c.1.clone())
+                .collect();
+            match want {
+                Some(flags) => assert_eq!(updates, vec![vec![0x5000, geometry, flags]]),
+                None => assert!(updates.is_empty()),
+            }
+            assert!(log.contains(&(BUFFER_DATA_PREPARE, vec![buffers, 1])));
+            assert_eq!(e.mem.u32(buffers + 4), 0x0140_0000);
+            assert_eq!(e.mem.u32(buffers + 0x38), if checked == 0 { 0 } else { 9 });
+            assert_eq!(e.mem.u16(geometry + 0x18), 0);
+        }
+        // No geometry: nothing.
+        let mut e = Engine::new();
+        e.call_log = Some(vec![]);
+        e.call(0x00e7_4cc0, &args![0x5000u32, 0u32]);
+        assert_eq!(e.call_log.take().unwrap().len(), 1);
+    }
 }
 
 #[cfg(test)]

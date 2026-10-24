@@ -103,9 +103,100 @@ pub fn fn_00864520(e: &mut Engine, this: Ptr) -> u32 {
     u32::from(e.mem.u8(this.addr())) >> 6
 }
 
+/// `BGSSaveLoadFile::Read` (`00846300`, `thiscall`, `RET 8`: destination,
+/// size).
+const FILE_READ: u32 = 0x0084_6300;
+/// `BGSNumericIDIndex::GetNumericID` (`00853500`, `thiscall`).
+const GET_NUMERIC_ID: u32 = 0x0085_3500;
+/// `LoadGameSizeFromFile` (`00845e50`, cdecl: file, output, size type).
+const LOAD_SIZE_FROM_FILE: u32 = 0x0084_5e50;
+/// `BGSLoadGameBuffer::Load_ov2` (`00864790`, `thiscall`, `RET 8`: file,
+/// size).
+const LOAD_FROM_FILE: u32 = 0x0086_4790;
+/// `BGSSaveLoadFile::SeekCurrent` (`00846490`, `thiscall`, `RET 4`).
+const FILE_SEEK_CURRENT: u32 = 0x0084_6490;
+
+// Translated from 008644b0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BGSLoadFormBuffer::LoadHeader` (Xbox PDB; `thiscall`, `RET 4`: the
+/// file): reads the nine-byte header into +0x14, takes the form id from it
+/// (`GetNumericID`, into `iFormID`) and reads `iSize` with the size type of
+/// the FormInfo byte (+0x1b, `00864520`). Answers the bytes the size read
+/// took, or -1 when that count differs from the size read.
+pub fn bgs_load_form_buffer_load_header(
+    e: &mut Engine,
+    this: Ptr<BGSLoadFormBuffer>,
+    file: u32,
+) -> i32 {
+    let base = this.addr();
+    e.call(FILE_READ, &args![file, base.wrapping_add(0x14), 9u32]);
+    let id = e
+        .call(GET_NUMERIC_ID, &args![base.wrapping_add(0x14)])
+        .u32();
+    e.set(this, BGSLoadFormBuffer::iFormID, id);
+    let size_type = fn_00864520(e, Ptr::new(base.wrapping_add(0x1b)));
+    let count = e
+        .call(
+            LOAD_SIZE_FROM_FILE,
+            &args![file, base.wrapping_add(0x20), size_type],
+        )
+        .u32();
+    if count == e.get(this, BGSLoadFormBuffer::iSize) {
+        count as i32
+    } else {
+        -1
+    }
+}
+
+// Translated from 00864540 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BGSLoadFormBuffer::LoadDataFromFile` (Xbox PDB; `thiscall`, `RET 4`):
+/// loads `iSize` bytes from the file (`BGSLoadGameBuffer::Load_ov2`);
+/// answers the count, or -1 when it is not `iSize`.
+pub fn bgs_load_form_buffer_load_data_from_file(
+    e: &mut Engine,
+    this: Ptr<BGSLoadFormBuffer>,
+    file: u32,
+) -> i32 {
+    let size = e.get(this, BGSLoadFormBuffer::iSize);
+    let count = e.call(LOAD_FROM_FILE, &args![this, file, size]).u32();
+    if count == e.get(this, BGSLoadFormBuffer::iSize) {
+        count as i32
+    } else {
+        -1
+    }
+}
+
+// Translated from 00864580 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BGSLoadFormBuffer::SkipData` (Xbox PDB; `thiscall`, `RET 8`: file,
+/// bytes already read): seeks the file past the rest of the data
+/// (`SeekCurrent` by `iSize - read`) unless nothing is left.
+pub fn bgs_load_form_buffer_skip_data(
+    e: &mut Engine,
+    this: Ptr<BGSLoadFormBuffer>,
+    file: u32,
+    read: u32,
+) {
+    let left = e.get(this, BGSLoadFormBuffer::iSize).wrapping_sub(read);
+    if left != 0 {
+        let left = e.get(this, BGSLoadFormBuffer::iSize).wrapping_sub(read);
+        e.call(FILE_SEEK_CURRENT, &args![file, left]);
+    }
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(
+            0x0086_44b0,
+            bgs_load_form_buffer_load_header(Ptr<BGSLoadFormBuffer>, u32) -> i32
+        ),
+        entry!(
+            0x0086_4540,
+            bgs_load_form_buffer_load_data_from_file(Ptr<BGSLoadFormBuffer>, u32) -> i32
+        ),
+        entry!(
+            0x0086_4580,
+            bgs_load_form_buffer_skip_data(Ptr<BGSLoadFormBuffer>, u32, u32)
+        ),
         entry!(
             0x008643b0,
             construct(Ptr<BGSLoadFormBuffer>) -> Ptr<BGSLoadFormBuffer>
@@ -222,5 +313,81 @@ mod tests {
         assert_eq!(e.call(0x00864520, &args![info]).u32(), 2);
         e.mem.set_u8(info, 0x3f);
         assert_eq!(e.call(0x00864520, &args![info]).u32(), 0);
+    }
+}
+
+#[cfg(test)]
+mod n072_tests {
+    use super::*;
+
+    fn calls(e: &Engine, address: u32) -> Vec<Vec<u32>> {
+        e.call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|c| c.0 == address)
+            .map(|c| c.1.clone())
+            .collect()
+    }
+
+    #[test]
+    fn load_header_reads_the_header_and_the_size() {
+        let mut e = Engine::new();
+        e.register(FILE_READ, |e, a| {
+            // FormInfo byte (+7 of the header): size type 1.
+            e.mem.set_u8(a[1] + 7, 0x40);
+            Ret::default()
+        });
+        e.register(GET_NUMERIC_ID, |_, _| 0x0012_3456u32.into_ret());
+        e.register(LOAD_SIZE_FROM_FILE, |e, a| {
+            e.mem.set_u32(a[1], 2);
+            2u32.into_ret()
+        });
+        let this = e.new_object::<BGSLoadFormBuffer>();
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x0086_44b0, &args![this, 0x700u32]).i32(), 2);
+        assert_eq!(e.get(this, BGSLoadFormBuffer::iFormID), 0x0012_3456);
+        assert_eq!(
+            calls(&e, FILE_READ),
+            vec![vec![0x700, this.addr() + 0x14, 9]]
+        );
+        assert_eq!(
+            calls(&e, LOAD_SIZE_FROM_FILE),
+            vec![vec![0x700, this.addr() + 0x20, 1]]
+        );
+        // A size other than the bytes read answers -1.
+        e.register(LOAD_SIZE_FROM_FILE, |e, a| {
+            e.mem.set_u32(a[1], 0x40);
+            1u32.into_ret()
+        });
+        assert_eq!(e.call(0x0086_44b0, &args![this, 0x700u32]).i32(), -1);
+    }
+
+    #[test]
+    fn load_data_from_file_checks_the_count() {
+        let mut e = Engine::new();
+        let this = e.new_object::<BGSLoadFormBuffer>();
+        e.set(this, BGSLoadFormBuffer::iSize, 0x30);
+        e.register(LOAD_FROM_FILE, |_, a| a[2].into_ret());
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x0086_4540, &args![this, 0x700u32]).i32(), 0x30);
+        assert_eq!(
+            calls(&e, LOAD_FROM_FILE),
+            vec![vec![this.addr(), 0x700, 0x30]]
+        );
+        e.register(LOAD_FROM_FILE, |_, _| 0x10u32.into_ret());
+        assert_eq!(e.call(0x0086_4540, &args![this, 0x700u32]).i32(), -1);
+    }
+
+    #[test]
+    fn skip_data_seeks_past_the_rest() {
+        let mut e = Engine::new();
+        let this = e.new_object::<BGSLoadFormBuffer>();
+        e.set(this, BGSLoadFormBuffer::iSize, 0x30);
+        e.register(FILE_SEEK_CURRENT, |_, _| Ret::default());
+        e.call_log = Some(vec![]);
+        e.call(0x0086_4580, &args![this, 0x700u32, 0x10u32]);
+        e.call(0x0086_4580, &args![this, 0x700u32, 0x30u32]);
+        assert_eq!(calls(&e, FILE_SEEK_CURRENT), vec![vec![0x700, 0x20]]);
     }
 }

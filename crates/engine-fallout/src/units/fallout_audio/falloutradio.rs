@@ -2162,6 +2162,9 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x0083_7060, fn_00837060(u32, u32) -> bool),
         entry!(0x0083_73d0, fn_008373d0(Ptr) -> Ptr),
     ]
+    .into_iter()
+    .chain(funcs_n086())
+    .collect()
 }
 
 #[cfg(test)]
@@ -3124,5 +3127,2221 @@ mod la1_tests {
         assert_eq!(log[1..], [(TASK_BASE_CONSTRUCT, vec![this, 0])]);
         assert_eq!(e.mem.u32(this), RADIO_CONV_TASK_VTABLE);
         assert_eq!(e.mem.u32(this + 0x30), 0x5150);
+    }
+}
+
+/// The media calls `PipboyRadioEnable` makes (`cdecl`): whether media is
+/// playing (`00830ad0`, a byte), close (`008304a0`), play (`008300c0`, seven
+/// words) and `008304c0`.
+const MEDIA_IS_PLAYING_00830AD0: u32 = 0x0083_0ad0;
+/// The byte `PipboyRadioEnable` stores and answers (`011dd434`, the
+/// Pip-Boy radio's on flag).
+const PIPBOY_RADIO_ON: u32 = SAVED_BYTE;
+/// The save buffer's form id read (`008648e0`, `thiscall`, one word: the
+/// address it stores the id at), byte read (`00864980`, `thiscall`:
+/// address, size) and count (`00864a60`, `thiscall`).
+const BUFFER_READ_FORM_ID: u32 = 0x0086_48e0;
+const BUFFER_READ: u32 = 0x0086_4980;
+const BUFFER_COUNT: u32 = 0x0086_4a60;
+/// The RTTI type descriptors of `TESForm` (`01183028`) and
+/// `TESObjectREFR` (`011841cc`) for `__RTDynamicCast` (`00ec43fb`).
+const RTTI_TES_FORM: u32 = 0x0118_3028;
+const RTTI_TES_OBJECT_REFR: u32 = 0x0118_41cc;
+/// The form lookup by id (`004839c0`, `cdecl`).
+const LOOKUP_FORM: u32 = 0x0048_39c0;
+/// `Conversation::Conversation` (`0083b830`, 0xc bytes) and
+/// `Conversation::LoadGame_ov2` (`0083c330`, one word: the buffer), and the
+/// call `008363a0` makes on its conversation (`0083c420`, one word).
+const CONVERSATION_CONSTRUCTOR: u32 = 0x0083_b830;
+const CONVERSATION_LOAD_GAME_OV2: u32 = 0x0083_c330;
+const CONVERSATION_0083C420: u32 = 0x0083_c420;
+/// `0063f7b0` (`thiscall` on a list node): removes the head node.
+const LIST_REMOVE_HEAD_0063F7B0: u32 = 0x0063_f7b0;
+/// The text `"Radio conversation task"` (`0107cf4c`) and the bounded
+/// format (`00406d00`, `cdecl`: buffer, size, format, ...).
+const TEXT_RADIO_CONVERSATION_TASK: u32 = 0x0107_cf4c;
+const FORMAT_00406D00: u32 = 0x0040_6d00;
+/// The fill (`00403d30`, `cdecl`: block, byte, size).
+const FILL_00403D30: u32 = 0x0040_3d30;
+
+/// A form id at `slot` resolved to a reference (`004839c0`, then
+/// `__RTDynamicCast` from `TESForm` to `TESObjectREFR`), or null for 0.
+fn resolve_reference(e: &mut Engine, slot: u32) {
+    let reference = if e.mem.u32(slot) != 0 {
+        let id = e.mem.u32(slot);
+        let form = e.call(LOOKUP_FORM, &args![id]).u32();
+        e.call(
+            RTTI_CAST,
+            &args![form, 0u32, RTTI_TES_FORM, RTTI_TES_OBJECT_REFR, 0u32],
+        )
+        .u32()
+    } else {
+        0
+    };
+    e.mem.set_u32(slot, reference);
+}
+
+// Translated from 00832240 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 00832240 - the C++ exception-unwinding frame (FS:[0]) is not translated.
+/// The Pip-Boy station setter (`cdecl`, two words: a reference and a
+/// byte; unnamed in the engine map): false unless the Pip-Boy radio is on
+/// (`011dd434`) and not shutting down. Clears the saved string
+/// (`011dd448`, 0x104 bytes). Without a reference, the first station in
+/// range of the player (`004ff1a0` into a stack list) whose reference has
+/// a form is taken; with one and `keep`, the lost station is cleared and
+/// the stations updated (`00833d00` with 1). The current station
+/// (`011dd42c`) becomes the reference's form's station (`00832830`), else a
+/// new one (`00832cb0`; none turns the radio off, `008324e0` with 0), the
+/// stations updated when not `keep`; a found station of the same form takes
+/// the reference. When its flag `0x100` is set, its item restarts 50 after
+/// the audio time (`00832490` with 0); then its flag 1 is set and the lost
+/// station cleared. True.
+pub fn fn_00832240(e: &mut Engine, reference: u32, keep: u32) -> bool {
+    if e.global::<u8>(PIPBOY_RADIO_ON) == 0 || shutting_down(e) {
+        return false;
+    }
+    let keep = keep as u8;
+    let mut reference = reference;
+    e.call(FILL_00403D30, &args![SAVED_STRING, 0u32, 0x104u32]);
+    if reference == 0 {
+        e.with_stack(8, |e, list| {
+            e.call(LIST_CONSTRUCTOR, &args![list]);
+            let player = e.global::<u32>(PLAYER);
+            e.call(STATIONS_IN_RANGE, &args![player, list, 0u32]);
+            let node = list.addr();
+            if node != 0 && item_of(e, node) != 0 {
+                let first = item_of(e, node);
+                if e.call(FORM_OF, &args![first]).u32() != 0 {
+                    reference = item_of(e, node);
+                }
+            }
+            e.call(LIST_DESTRUCTOR, &args![list]);
+        });
+    } else if keep != 0 {
+        e.set_global(LOST_PIPBOY_STATION, 0u32);
+        fallout_radio_update_stations(e, 1);
+    }
+    let form = e.call(FORM_OF, &args![reference]).u32();
+    let station = fn_00832830(e, form);
+    e.set_global(CURRENT_PIPBOY_STATION, station);
+    if e.global::<u32>(CURRENT_PIPBOY_STATION) == 0 {
+        let station = fn_00832cb0(e, reference, 0);
+        e.set_global(CURRENT_PIPBOY_STATION, station);
+        if e.global::<u32>(CURRENT_PIPBOY_STATION) == 0 {
+            fallout_radio_pipboy_radio_enable(e, 0);
+        }
+        if keep == 0 {
+            fallout_radio_update_stations(e, 1);
+        }
+    } else {
+        let station = e.global::<u32>(CURRENT_PIPBOY_STATION);
+        let station_reference = e.mem.u32(station);
+        let station_form = e.call(FORM_OF, &args![station_reference]).u32();
+        if station_form == e.call(FORM_OF, &args![reference]).u32() {
+            let station = e.global::<u32>(CURRENT_PIPBOY_STATION);
+            e.mem.set_u32(station, reference);
+        }
+    }
+    let state = |e: &Engine| {
+        Ptr::new(
+            e.global::<u32>(CURRENT_PIPBOY_STATION)
+                .wrapping_add(STATION_STATE),
+        )
+    };
+    if fn_00832420(e, state(e)) {
+        let start = audio_time(e).wrapping_add(0x32);
+        let station = e.global::<u32>(CURRENT_PIPBOY_STATION);
+        e.mem.set_u32(station.wrapping_add(0xc), start);
+        fn_00832490(e, state(e), 0);
+    }
+    fn_00832440(e, state(e), 1);
+    e.set_global(LOST_PIPBOY_STATION, 0u32);
+    true
+}
+
+// Translated from 008324e0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `FalloutRadio::PipboyRadioEnable` (engine map; `cdecl`, one byte): false
+/// while shutting down. On: unless the byte at `011dd437` is set, the media
+/// is closed (`008304a0`), `008325a0` gets 1, media 7 plays (`008300c0`
+/// with 0, 1000, 0, 0, 0.0, 0) and `008304c0` runs. Off: playing media is
+/// closed (`008325a0` with 0), both Pip-Boy sound handles (`011dd5bc`,
+/// `011dd638`) stopped and released and the current station cleared. The
+/// byte is stored at `011dd434` and answered.
+pub fn fallout_radio_pipboy_radio_enable(e: &mut Engine, on: u32) -> u8 {
+    if shutting_down(e) {
+        return 0;
+    }
+    let on = on as u8;
+    if on != 0 {
+        if e.global::<u8>(STORED_FLAG_011DD437) == 0 {
+            e.call(MEDIA_CLOSE, &[]);
+            fn_008325a0(e, 1);
+            e.call(
+                MEDIA_PLAY_008300C0,
+                &args![7u32, 0u32, 0x3e8u32, 0u32, 0u32, 0.0f32.to_bits(), 0u32],
+            );
+            e.call(MEDIA_CALL_008304C0, &[]);
+        }
+    } else {
+        if e.call(MEDIA_IS_PLAYING_00830AD0, &[]).u32() & 0xff != 0 {
+            e.call(MEDIA_CLOSE, &[]);
+            fn_008325a0(e, 0);
+        }
+        stop_and_release(e, PIPBOY_HANDLE_5BC);
+        e.set_global(CURRENT_PIPBOY_STATION, 0u32);
+        stop_and_release(e, PIPBOY_HANDLE_638);
+    }
+    e.set_global(PIPBOY_RADIO_ON, on);
+    e.global::<u8>(PIPBOY_RADIO_ON)
+}
+
+// Translated from 00832c40 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`cdecl`, no words): queued radio state
+/// (`011dd438`) bit 1 cleared and bit 0 set (two writes), then the current
+/// Pip-Boy station, when there is one, updated (`00834260`).
+pub fn fn_00832c40(e: &mut Engine) {
+    let state = e.global::<u32>(QUEUED_STATE) & 0xffff_fffd;
+    e.set_global(QUEUED_STATE, state);
+    let state = e.global::<u32>(QUEUED_STATE) | 1;
+    e.set_global(QUEUED_STATE, state);
+    if e.global::<u32>(CURRENT_PIPBOY_STATION) != 0 {
+        let station = e.global::<u32>(CURRENT_PIPBOY_STATION);
+        fn_00834260(e, station);
+    }
+}
+
+// Translated from 00832c80 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`cdecl`, no words): queued radio state
+/// (`011dd438`) bit 0 cleared and bit 1 set (two writes).
+pub fn fn_00832c80(e: &mut Engine) {
+    let state = e.global::<u32>(QUEUED_STATE) & 0xffff_fffe;
+    e.set_global(QUEUED_STATE, state);
+    let state = e.global::<u32>(QUEUED_STATE) | 2;
+    e.set_global(QUEUED_STATE, state);
+}
+
+// Translated from 00835b90 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`cdecl`, one word: a reference): false while
+/// shutting down; otherwise whether the station of the reference's form
+/// (`00832830`) has its `00833040` flag, false without a station.
+pub fn fn_00835b90(e: &mut Engine, reference: u32) -> u8 {
+    if shutting_down(e) {
+        return 0;
+    }
+    let form = e.call(FORM_OF, &args![reference]).u32();
+    let station = fn_00832830(e, form);
+    if station == 0 {
+        return 0;
+    }
+    u8::from(fn_00833040(
+        e,
+        Ptr::new(station.wrapping_add(STATION_STATE)),
+    ))
+}
+
+// Translated from 00835f80 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The receiver's load (unnamed in the engine map; `thiscall`, `RET 4`: the
+/// load buffer): the radio's form id into `+0` (`008648e0`), then the four
+/// flag bytes `+0x1c` to `+0x1f` (`00864980`, one byte each).
+pub fn fn_00835f80(e: &mut Engine, this: Ptr<FORadioReceiver>, buffer: u32) {
+    e.call(BUFFER_READ_FORM_ID, &args![buffer, this]);
+    for offset in 0x1c..0x20u32 {
+        e.call(BUFFER_READ, &args![buffer, this.addr() + offset, 1u32]);
+    }
+}
+
+// Translated from 00835fe0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The receiver's load fix-up (unnamed in the engine map; `thiscall`,
+/// `RET 4`, the stack word is not read): the form id at `+0` becomes its
+/// reference (`004839c0`, cast to `TESObjectREFR`), or null for 0.
+pub fn fn_00835fe0(e: &mut Engine, this: Ptr<FORadioReceiver>, _unused_1: u32) {
+    resolve_reference(e, this.addr());
+}
+
+// Translated from 00836240 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 00836240 - the C++ exception-unwinding frame (FS:[0]) is not translated.
+/// The station state's load (unnamed in the engine map; `thiscall`,
+/// `RET 4`: the load buffer): `+8` and `+0xc` (4 bytes), `+0x10` and
+/// `+0x11` (1 byte), `+0x14` (4 bytes); the buffer's count of user form ids,
+/// each user that is an active receiver (`GetActiveReceiver`) added to the
+/// users at `+0x18` (`005ae3d0`); then a byte, and when it is set a new
+/// conversation (`0083b830`, 0xc bytes; null when the allocation fails) at
+/// `+0` loaded from the buffer (`0083c330`).
+pub fn fn_00836240(e: &mut Engine, this: Ptr<StationState>, buffer: u32) {
+    let base = this.addr();
+    for (offset, size) in [(8u32, 4u32), (0xc, 4), (0x10, 1), (0x11, 1), (0x14, 4)] {
+        e.call(BUFFER_READ, &args![buffer, base + offset, size]);
+    }
+    e.with_stack(0xc, |e, locals| {
+        let id = locals.addr();
+        let receiver = locals.addr() + 4;
+        let flag = locals.addr() + 8;
+        let users = e.call(BUFFER_COUNT, &args![buffer]).u32();
+        for _ in 0..users {
+            e.mem.set_u32(id, 0);
+            e.call(BUFFER_READ_FORM_ID, &args![buffer, id]);
+            let radio = e.mem.u32(id);
+            let found = fallout_radio_get_active_receiver(e, radio);
+            e.mem.set_u32(receiver, found);
+            if found != 0 {
+                e.call(LIST_ADD_HEAD, &args![base + 0x18, receiver]);
+            }
+        }
+        e.mem.set_u8(flag, 0);
+        e.call(BUFFER_READ, &args![buffer, flag, 1u32]);
+        if e.mem.u8(flag) != 0 {
+            let block = e.call(OPERATOR_NEW, &args![0xcu32]).u32();
+            let conversation = if block != 0 {
+                e.call(CONVERSATION_CONSTRUCTOR, &args![block]).u32()
+            } else {
+                0
+            };
+            e.mem.set_u32(base, conversation);
+            let conversation = e.mem.u32(base);
+            e.call(CONVERSATION_LOAD_GAME_OV2, &args![conversation, buffer]);
+        }
+    });
+}
+
+// Translated from 008363a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The station state's load fix-up (unnamed in the engine map;
+/// `thiscall`, `RET 4`): the conversation (when set) gets `0083c420` with
+/// the word; then the users at `+0x18` lose every entry without a receiver
+/// or whose receiver has no radio (removed after the previous node,
+/// `00905330`, or as the head, `0063f7b0`), until an empty node.
+pub fn fn_008363a0(e: &mut Engine, this: Ptr<StationState>, value: u32) {
+    let base = this.addr();
+    if e.mem.u32(base) != 0 {
+        let conversation = e.mem.u32(base);
+        e.call(CONVERSATION_0083C420, &args![conversation, value]);
+    }
+    let mut node = base + 0x18;
+    let mut previous = 0u32;
+    while node != 0 && !is_empty(e, node) {
+        let receiver = item_of(e, node);
+        let remove = receiver == 0 || e.mem.u32(receiver) == 0;
+        if remove {
+            if previous != 0 {
+                let slot = e.call(NODE_ITEM, &args![node]).u32();
+                e.call(LIST_REMOVE, &args![previous, slot]);
+                node = next_of(e, previous);
+            } else {
+                e.call(LIST_REMOVE_HEAD_0063F7B0, &args![node]);
+            }
+        } else {
+            previous = node;
+            node = next_of(e, node);
+        }
+    }
+}
+
+// Translated from 00836470 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The station state's load finish (unnamed in the engine map;
+/// `thiscall`, `RET 4`, the stack word is not read): when the audio time is
+/// before the item's start (`+8`) or the duration (`+0xc`) is not positive,
+/// the item restarts (start 0, duration 1, the conversation deleted,
+/// `00798450` with 1); otherwise the start becomes the audio time less it.
+/// Then each user (until an empty node or a null entry) whose radio is
+/// missing, has no form, or is a talking activator (`0x15`) without a
+/// radio station (`004fd3c0`) has both sound handles stopped and released
+/// and stops playing.
+pub fn fn_00836470(e: &mut Engine, this: Ptr<StationState>, _unused_1: u32) {
+    let base = this.addr();
+    let now = audio_time(e);
+    if now < e.mem.u32(base + 8) || e.mem.u32(base + 0xc) as i32 <= 0 {
+        e.mem.set_u32(base + 8, 0);
+        e.mem.set_u32(base + 0xc, 1);
+        let conversation = e.mem.u32(base);
+        delete_conversation(e, conversation);
+        e.mem.set_u32(base, 0);
+    } else {
+        let start = audio_time(e).wrapping_sub(e.mem.u32(base + 8));
+        e.mem.set_u32(base + 8, start);
+    }
+    let mut node = base + 0x18;
+    while node != 0 && !is_empty(e, node) && item_of(e, node) != 0 {
+        let stop = if radio_of(e, node) == 0 {
+            true
+        } else {
+            let radio = radio_of(e, node);
+            if e.call(FORM_OF, &args![radio]).u32() == 0 {
+                true
+            } else {
+                let radio = radio_of(e, node);
+                let form = e.call(FORM_OF, &args![radio]).u32();
+                if e.call(FORM_TYPE, &args![form]).u32() == 0x15 {
+                    let radio = radio_of(e, node);
+                    let form = e.call(FORM_OF, &args![radio]).u32();
+                    e.call(RADIO_STATION_FORM, &args![form]).u32() == 0
+                } else {
+                    false
+                }
+            }
+        };
+        if stop {
+            for offset in [4u32, 0x10] {
+                let receiver = item_of(e, node);
+                e.call(SOUND_HANDLE_STOP, &args![receiver + offset]);
+                let receiver = item_of(e, node);
+                e.call(SOUND_HANDLE_RELEASE, &args![receiver + offset]);
+            }
+            let receiver = item_of(e, node);
+            e.mem.set_u8(receiver + 0x1c, 0);
+        }
+        node = next_of(e, node);
+    }
+}
+
+// Translated from 00836630 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The station's load (unnamed in the engine map; `thiscall`, `RET 4`: the
+/// load buffer): the reference's form id into `+0` (`008648e0`), then the
+/// state at `+4` (`00836240`).
+pub fn fn_00836630(e: &mut Engine, this: Ptr, buffer: u32) {
+    e.call(BUFFER_READ_FORM_ID, &args![buffer, this]);
+    fn_00836240(e, Ptr::new(this.addr() + STATION_STATE), buffer);
+}
+
+// Translated from 00836660 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The station's load fix-up (unnamed in the engine map; `thiscall`,
+/// `RET 4`): the form id at `+0` resolved to its reference (null for 0),
+/// then the state's fix-up (`008363a0`) with the word.
+pub fn fn_00836660(e: &mut Engine, this: Ptr, value: u32) {
+    resolve_reference(e, this.addr());
+    fn_008363a0(e, Ptr::new(this.addr() + STATION_STATE), value);
+}
+
+// Translated from 008366c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The station's load finish (unnamed in the engine map; `thiscall`,
+/// `RET 4`): the state's (`00836470`) with the word.
+pub fn fn_008366c0(e: &mut Engine, this: Ptr, value: u32) {
+    fn_00836470(e, Ptr::new(this.addr() + STATION_STATE), value);
+}
+
+// Translated from 00837280 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`thiscall`, plain `RET`; a `RadioConvTask`
+/// slot): 3 in `AL`.
+pub fn fn_00837280(_e: &mut Engine, _this: Ptr) -> u8 {
+    3
+}
+
+// Translated from 00837290 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `RadioConvTask`'s scalar deleting destructor (engine map; `thiscall`,
+/// `RET 4`): the destructor (`008372c0`), then `00401030` frees `this` when
+/// bit 0 of `flags` is set. Returns `this`.
+pub fn radio_conv_task_scalar_deleting_destructor(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    fn_008372c0(e, this);
+    if flags & 1 != 0 {
+        e.call(OPERATOR_DELETE, &args![this]);
+    }
+    this
+}
+
+// Translated from 008373a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `RadioConvTask::GetDescription` (engine map; `thiscall`, `RET 8`):
+/// `"Radio conversation task"` formatted into the buffer (`00406d00`), and
+/// true.
+pub fn radio_conv_task_get_description(e: &mut Engine, _this: Ptr, buffer: u32, size: u32) -> bool {
+    e.call(
+        FORMAT_00406D00,
+        &args![buffer, size, TEXT_RADIO_CONVERSATION_TASK],
+    );
+    true
+}
+
+/// This unit's n086 translations, by exe address.
+fn funcs_n086() -> Vec<(u32, AbiFn)> {
+    vec![
+        entry!(0x0083_2240, fn_00832240(u32, u32) -> bool),
+        entry!(0x0083_24e0, fallout_radio_pipboy_radio_enable(u32) -> u8),
+        entry!(0x0083_2c40, fn_00832c40()),
+        entry!(0x0083_2c80, fn_00832c80()),
+        entry!(0x0083_5b90, fn_00835b90(u32) -> u8),
+        entry!(0x0083_5f80, fn_00835f80(Ptr<FORadioReceiver>, u32)),
+        entry!(0x0083_5fe0, fn_00835fe0(Ptr<FORadioReceiver>, u32)),
+        entry!(0x0083_6240, fn_00836240(Ptr<StationState>, u32)),
+        entry!(0x0083_63a0, fn_008363a0(Ptr<StationState>, u32)),
+        entry!(0x0083_6470, fn_00836470(Ptr<StationState>, u32)),
+        entry!(0x0083_6630, fn_00836630(Ptr, u32)),
+        entry!(0x0083_6660, fn_00836660(Ptr, u32)),
+        entry!(0x0083_66c0, fn_008366c0(Ptr, u32)),
+        entry!(0x0083_7280, fn_00837280(Ptr) -> u8),
+        entry!(
+            0x0083_7290,
+            radio_conv_task_scalar_deleting_destructor(Ptr, u32) -> Ptr
+        ),
+        entry!(
+            0x0083_73a0,
+            radio_conv_task_get_description(Ptr, u32, u32) -> bool
+        ),
+        entry!(0x0083_31c0, fallout_radio_pipboy_update(u32)),
+        entry!(0x0083_5810, fallout_radio_enable_npc_radio(u32, u32)),
+        entry!(0x0083_59e0, fn_008359e0(u32, u32)),
+        entry!(
+            0x0083_5be0,
+            fallout_radio_start_radio_conversation(u32, u32)
+        ),
+        entry!(0x0083_68b0, fallout_radio_load_game(u32)),
+        entry!(0x0083_6af0, fallout_radio_init_load_game(u32)),
+        entry!(0x0083_6e20, fallout_radio_finish_load_game(u32)),
+        entry!(0x0083_6ef0, fallout_radio_revert()),
+        entry!(0x0083_72e0, radio_conv_task_run(Ptr)),
+    ]
+}
+
+#[cfg(test)]
+mod n086_tests {
+    use super::*;
+
+    fn calls(e: &Engine, addr: u32) -> Vec<Vec<u32>> {
+        e.call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|c| c.0 == addr)
+            .map(|c| c.1.clone())
+            .collect()
+    }
+
+    fn quiet(e: &mut Engine, addrs: &[u32]) {
+        for &a in addrs {
+            e.register(a, |_, _| Ret::default());
+        }
+    }
+
+    fn lists(e: &mut Engine) {
+        e.register(NODE_ITEM, |_, a| a[0].into_ret());
+        e.register(NODE_NEXT, |e, a| e.mem.u32(a[0] + 4).into_ret());
+        e.register(NODE_EMPTY, |e, a| {
+            u32::from(e.mem.u32(a[0]) == 0 && e.mem.u32(a[0] + 4) == 0).into_ret()
+        });
+    }
+
+    fn globals(e: &mut Engine) {
+        for page in [0x011d_d000u32, 0x011d_e000] {
+            e.map(page, 0x1000);
+        }
+    }
+
+    /// Nodes (item +0, next +4) for `items` from `head` on.
+    fn fill(e: &mut Engine, head: u32, items: &[u32]) {
+        let mut node = head;
+        for (i, &item) in items.iter().enumerate() {
+            e.mem.set_u32(node, item);
+            if i + 1 < items.len() {
+                let next = e.mem.alloc(8);
+                e.mem.set_u32(node + 4, next);
+                node = next;
+            } else {
+                e.mem.set_u32(node + 4, 0);
+            }
+        }
+    }
+
+    #[test]
+    fn queued_state_bits_and_the_pipboy_update() {
+        let mut e = Engine::new();
+        globals(&mut e);
+        e.set_global(QUEUED_STATE, 0x12u32);
+        // A station without a reference: 00834260 returns at once.
+        let station = e.mem.alloc(0x24);
+        e.set_global(CURRENT_PIPBOY_STATION, station);
+        e.call(0x0083_2c40, &[]);
+        assert_eq!(e.global::<u32>(QUEUED_STATE), 0x11);
+        e.call(0x0083_2c80, &[]);
+        assert_eq!(e.global::<u32>(QUEUED_STATE), 0x12);
+    }
+
+    #[test]
+    fn pipboy_radio_enable_on_and_off() {
+        let mut e = Engine::new();
+        globals(&mut e);
+        quiet(
+            &mut e,
+            &[
+                MEDIA_CLOSE,
+                MEDIA_PLAY_008300C0,
+                MEDIA_CALL_008304C0,
+                SOUND_HANDLE_STOP,
+                SOUND_HANDLE_RELEASE,
+            ],
+        );
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x0083_24e0, &args![0x101u32]).u32() & 0xff, 1);
+        assert_eq!(e.global::<u8>(PIPBOY_RADIO_ON), 1);
+        assert_eq!(e.global::<u8>(HOLD_FLAG_011DD313), 1);
+        assert_eq!(
+            calls(&e, MEDIA_PLAY_008300C0),
+            vec![vec![7, 0, 0x3e8, 0, 0, 0, 0]]
+        );
+        e.register(MEDIA_IS_PLAYING_00830AD0, |_, _| 0x101u32.into_ret());
+        e.set_global(CURRENT_PIPBOY_STATION, 0x77u32);
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x0083_24e0, &args![0u32]).u32() & 0xff, 0);
+        assert_eq!(e.global::<u8>(HOLD_FLAG_011DD313), 0);
+        assert_eq!(e.global::<u32>(CURRENT_PIPBOY_STATION), 0);
+        assert_eq!(
+            calls(&e, SOUND_HANDLE_STOP),
+            vec![vec![PIPBOY_HANDLE_5BC], vec![PIPBOY_HANDLE_638]]
+        );
+        // While shutting down: nothing.
+        e.set_global(SHUTTING_DOWN, 1u8);
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x0083_24e0, &args![1u32]).u32() & 0xff, 0);
+        assert!(calls(&e, MEDIA_CLOSE).is_empty());
+    }
+
+    #[test]
+    fn set_pipboy_station_takes_the_found_station() {
+        let mut e = Engine::new();
+        globals(&mut e);
+        lists(&mut e);
+        quiet(&mut e, &[FILL_00403D30]);
+        e.register(FORM_OF, |e, a| e.mem.u32(a[0] + 0x20).into_ret());
+        e.register(REFERENCE_TEST_00440DA0, |_, _| 0u32.into_ret());
+        e.register(REFERENCE_VALUE_0056B210, |_, _| 0u32.into_ret());
+        e.register(AUDIO_INSTANCE, |_, _| 0u32.into_ret());
+        e.register(AUDIO_TIME, |_, _| 1000u32.into_ret());
+        // A station of form 0x55 in the station list.
+        let old = e.mem.alloc(0x30);
+        e.mem.set_u32(old + 0x20, 0x55);
+        let station = e.mem.alloc(0x24);
+        e.mem.set_u32(station, old);
+        e.mem.set_u32(station + 4 + 0x14, 0x100);
+        fill(&mut e, STATION_LIST, &[station]);
+        let reference = e.mem.alloc(0x30);
+        e.mem.set_u32(reference + 0x20, 0x55);
+        e.set_global(PIPBOY_RADIO_ON, 1u8);
+        e.set_global(LOST_PIPBOY_STATION, 9u32);
+        e.call_log = Some(vec![]);
+        assert!(e.call(0x0083_2240, &args![reference, 0u32]).bool());
+        assert_eq!(e.global::<u32>(CURRENT_PIPBOY_STATION), station);
+        assert_eq!(e.mem.u32(station), reference);
+        // Flag 0x100 restarted the item 50 after the audio time, then
+        // cleared; flag 1 set.
+        assert_eq!(e.mem.u32(station + 0xc), 1050);
+        assert_eq!(e.mem.u32(station + 4 + 0x14), 1);
+        assert_eq!(e.global::<u32>(LOST_PIPBOY_STATION), 0);
+        assert_eq!(calls(&e, FILL_00403D30), vec![vec![SAVED_STRING, 0, 0x104]]);
+        // Radio off: false at once.
+        e.set_global(PIPBOY_RADIO_ON, 0u8);
+        e.call_log = Some(vec![]);
+        assert!(!e.call(0x0083_2240, &args![reference, 0u32]).bool());
+        assert!(calls(&e, FILL_00403D30).is_empty());
+    }
+
+    #[test]
+    fn station_flag_of_a_reference() {
+        let mut e = Engine::new();
+        globals(&mut e);
+        lists(&mut e);
+        e.register(FORM_OF, |e, a| e.mem.u32(a[0] + 0x20).into_ret());
+        e.register(REFERENCE_TEST_00440DA0, |_, _| 0u32.into_ret());
+        e.register(REFERENCE_VALUE_0056B210, |_, _| 0u32.into_ret());
+        let reference = e.mem.alloc(0x30);
+        e.mem.set_u32(reference + 0x20, 0x66);
+        let station = e.mem.alloc(0x24);
+        e.mem.set_u32(station, reference);
+        fill(&mut e, STATION_LIST, &[station]);
+        let flag = fn_00833040(&mut e, Ptr::new(station + 4));
+        assert_eq!(
+            e.call(0x0083_5b90, &args![reference]).u32() & 0xff,
+            u32::from(flag)
+        );
+        e.mem.set_u32(station + 4 + 0x14, 0xffff_ffff);
+        let flag = fn_00833040(&mut e, Ptr::new(station + 4));
+        assert!(flag);
+        assert_eq!(e.call(0x0083_5b90, &args![reference]).u32() & 0xff, 1);
+        let other = e.mem.alloc(0x30);
+        assert_eq!(e.call(0x0083_5b90, &args![other]).u32() & 0xff, 0);
+        e.set_global(SHUTTING_DOWN, 1u8);
+        assert_eq!(e.call(0x0083_5b90, &args![reference]).u32() & 0xff, 0);
+    }
+
+    #[test]
+    fn receiver_and_station_loads_read_their_fields() {
+        let mut e = Engine::new();
+        globals(&mut e);
+        lists(&mut e);
+        quiet(
+            &mut e,
+            &[
+                BUFFER_READ_FORM_ID,
+                BUFFER_READ,
+                LIST_ADD_HEAD,
+                CONVERSATION_LOAD_GAME_OV2,
+            ],
+        );
+        let receiver = e.mem.alloc(0x20);
+        e.call_log = Some(vec![]);
+        e.call(0x0083_5f80, &args![receiver, 0x4000u32]);
+        assert_eq!(calls(&e, BUFFER_READ_FORM_ID), vec![vec![0x4000, receiver]]);
+        assert_eq!(
+            calls(&e, BUFFER_READ),
+            (0x1c..0x20)
+                .map(|o| vec![0x4000, receiver + o, 1])
+                .collect::<Vec<_>>()
+        );
+
+        // The station: its state's fields, two users (one active), and a
+        // conversation.
+        e.register(BUFFER_COUNT, |_, _| 2u32.into_ret());
+        e.register(BUFFER_READ_FORM_ID, |e, a| {
+            e.mem.set_u32(a[1], 0x1234);
+            Ret::default()
+        });
+        e.register(BUFFER_READ, |e, a| {
+            if a[2] == 1 {
+                e.mem.set_u8(a[1], 1);
+            }
+            Ret::default()
+        });
+        let active = e.mem.alloc(0x20);
+        e.mem.set_u32(active, 0x1234);
+        fill(&mut e, RECEIVER_LIST, &[active]);
+        e.register(OPERATOR_NEW, |_, _| 0x9000u32.into_ret());
+        e.register(CONVERSATION_CONSTRUCTOR, |_, a| (a[0] + 4).into_ret());
+        let station = e.mem.alloc(0x24);
+        e.call_log = Some(vec![]);
+        e.call(0x0083_6630, &args![station, 0x4000u32]);
+        let reads = calls(&e, BUFFER_READ);
+        assert_eq!(reads[0], vec![0x4000, station + 4 + 8, 4]);
+        assert_eq!(reads[4], vec![0x4000, station + 4 + 0x14, 4]);
+        assert_eq!(calls(&e, LIST_ADD_HEAD).len(), 2);
+        assert_eq!(calls(&e, LIST_ADD_HEAD)[0][0], station + 4 + 0x18);
+        assert_eq!(e.mem.u32(station + 4), 0x9004);
+        assert_eq!(
+            calls(&e, CONVERSATION_LOAD_GAME_OV2),
+            vec![vec![0x9004, 0x4000]]
+        );
+    }
+
+    #[test]
+    fn load_fix_ups_resolve_and_prune() {
+        let mut e = Engine::new();
+        globals(&mut e);
+        lists(&mut e);
+        quiet(&mut e, &[CONVERSATION_0083C420, LIST_REMOVE_HEAD_0063F7B0]);
+        e.register(LIST_REMOVE, |e, a| {
+            let after = e.mem.u32(a[1] + 4);
+            e.mem.set_u32(a[0] + 4, after);
+            Ret::default()
+        });
+        e.register(LOOKUP_FORM, |_, a| (a[0] + 1).into_ret());
+        e.register(RTTI_CAST, |_, a| (a[0] + 2).into_ret());
+        let receiver = e.mem.alloc(0x20);
+        e.mem.set_u32(receiver, 0x500);
+        e.call_log = Some(vec![]);
+        e.call(0x0083_5fe0, &args![receiver, 0u32]);
+        assert_eq!(e.mem.u32(receiver), 0x503);
+        assert_eq!(
+            calls(&e, RTTI_CAST),
+            vec![vec![0x501, 0, RTTI_TES_FORM, RTTI_TES_OBJECT_REFR, 0]]
+        );
+        e.mem.set_u32(receiver, 0);
+        e.call(0x0083_5fe0, &args![receiver, 0u32]);
+        assert_eq!(e.mem.u32(receiver), 0);
+
+        // A station whose second user lost its radio.
+        let kept = e.mem.alloc(0x20);
+        e.mem.set_u32(kept, 0x77);
+        let lost = e.mem.alloc(0x20);
+        let station = e.mem.alloc(0x24);
+        e.mem.set_u32(station, 0x600);
+        e.mem.set_u32(station + 4, 0x0c0c);
+        fill(&mut e, station + 4 + 0x18, &[kept, lost]);
+        let second = e.mem.u32(station + 4 + 0x18 + 4);
+        e.call_log = Some(vec![]);
+        e.call(0x0083_6660, &args![station, 9u32]);
+        assert_eq!(e.mem.u32(station), 0x603);
+        assert_eq!(calls(&e, CONVERSATION_0083C420), vec![vec![0x0c0c, 9]]);
+        assert_eq!(
+            calls(&e, LIST_REMOVE),
+            vec![vec![station + 4 + 0x18, second]]
+        );
+        // A head entry without a receiver goes as the head.
+        let head = station + 4 + 0x18;
+        e.mem.set_u32(head, 0);
+        e.mem.set_u32(head + 4, 0);
+        e.register(LIST_REMOVE_HEAD_0063F7B0, |e, a| {
+            e.mem.set_u32(a[0] + 4, 0);
+            Ret::default()
+        });
+        let next = e.mem.alloc(8);
+        e.mem.set_u32(head + 4, next);
+        e.call_log = Some(vec![]);
+        e.call(0x0083_63a0, &args![station + 4, 9u32]);
+        assert_eq!(calls(&e, LIST_REMOVE_HEAD_0063F7B0), vec![vec![head]]);
+    }
+
+    #[test]
+    fn load_finish_restarts_or_rebases_the_item() {
+        let mut e = Engine::new();
+        globals(&mut e);
+        lists(&mut e);
+        quiet(
+            &mut e,
+            &[CONVERSATION_DELETE, SOUND_HANDLE_STOP, SOUND_HANDLE_RELEASE],
+        );
+        e.register(AUDIO_INSTANCE, |_, _| 0u32.into_ret());
+        e.register(AUDIO_TIME, |_, _| 500u32.into_ret());
+        e.register(FORM_OF, |e, a| e.mem.u32(a[0] + 0x20).into_ret());
+        e.register(FORM_TYPE, |e, a| e.mem.u32(a[0]).into_ret());
+        e.register(RADIO_STATION_FORM, |e, a| e.mem.u32(a[0] + 4).into_ret());
+        let station = e.mem.alloc(0x24);
+        let state = station + 4;
+        e.mem.set_u32(state + 8, 200);
+        e.mem.set_u32(state + 0xc, 10);
+        // Users: a plain radio (kept), a talking activator without a
+        // station (stopped).
+        let form = e.mem.alloc(8);
+        e.mem.set_u32(form, 0x15);
+        let radio = e.mem.alloc(0x24);
+        e.mem.set_u32(radio + 0x20, form);
+        let plain_form = e.mem.alloc(8);
+        let plain = e.mem.alloc(0x24);
+        e.mem.set_u32(plain + 0x20, plain_form);
+        let kept = e.mem.alloc(0x20);
+        e.mem.set_u32(kept, plain);
+        e.mem.set_u8(kept + 0x1c, 1);
+        let stopped = e.mem.alloc(0x20);
+        e.mem.set_u32(stopped, radio);
+        e.mem.set_u8(stopped + 0x1c, 1);
+        fill(&mut e, state + 0x18, &[kept, stopped]);
+        e.call_log = Some(vec![]);
+        e.call(0x0083_66c0, &args![station, 0u32]);
+        assert_eq!(e.mem.u32(state + 8), 300);
+        assert_eq!(e.mem.u8(kept + 0x1c), 1);
+        assert_eq!(e.mem.u8(stopped + 0x1c), 0);
+        assert_eq!(
+            calls(&e, SOUND_HANDLE_STOP),
+            vec![vec![stopped + 4], vec![stopped + 0x10]]
+        );
+        // A non-positive duration restarts the item.
+        e.mem.set_u32(state, 0x0d0d);
+        e.mem.set_u32(state + 0xc, 0);
+        e.call_log = Some(vec![]);
+        e.call(0x0083_6470, &args![state, 0u32]);
+        assert_eq!(e.mem.u32(state + 8), 0);
+        assert_eq!(e.mem.u32(state + 0xc), 1);
+        assert_eq!(e.mem.u32(state), 0);
+        assert_eq!(calls(&e, CONVERSATION_DELETE), vec![vec![0x0d0d, 1]]);
+    }
+
+    #[test]
+    fn radio_conv_task_slots() {
+        let mut e = Engine::new();
+        quiet(&mut e, &[0x00c3_cea0, OPERATOR_DELETE, FORMAT_00406D00]);
+        assert_eq!(e.call(0x0083_7280, &args![0u32]).u32() & 0xff, 3);
+        let this = e.mem.alloc(0x40);
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x0083_7290, &args![this, 0u32]).u32(), this);
+        assert_eq!(e.mem.u32(this), 0x0107_cf18);
+        assert!(calls(&e, OPERATOR_DELETE).is_empty());
+        e.call(0x0083_7290, &args![this, 1u32]);
+        assert_eq!(calls(&e, OPERATOR_DELETE), vec![vec![this]]);
+        e.call_log = Some(vec![]);
+        assert!(e.call(0x0083_73a0, &args![this, 0x500u32, 0x40u32]).bool());
+        assert_eq!(
+            calls(&e, FORMAT_00406D00),
+            vec![vec![0x500, 0x40, TEXT_RADIO_CONVERSATION_TASK]]
+        );
+    }
+}
+
+/// The texts and doubles of `PipboyUpdate`: the lost-signal sound
+/// `"UIRadioSignalLost"` (`0107ce80`), the music file extension `".wav"`
+/// (`0107ce2c`), the news path `"data\sound\"` (`0107ce20`) with the format
+/// `"%s%s"` (`0101996c`), and the volume factor (`0101ffa0`, a double).
+const SOUND_SIGNAL_LOST: u32 = 0x0107_ce80;
+const TEXT_WAV: u32 = 0x0107_ce2c;
+const TEXT_SOUND_PATH: u32 = 0x0107_ce20;
+const TEXT_TWO_STRINGS: u32 = 0x0101_996c;
+const VOLUME_FACTOR_0101FFA0: u32 = 0x0101_ffa0;
+/// The setting (`011d25f8`) whose text (`00403df0`) is the lost-signal
+/// message format, and the HUD object (`011d96c0`) whose `00775380`
+/// (`thiscall`, six words) shows it.
+const SETTING_SIGNAL_LOST: u32 = 0x011d_25f8;
+const SETTING_TEXT_00403DF0: u32 = 0x0040_3df0;
+const HUD_011D96C0: u32 = 0x011d_96c0;
+const HUD_SHOW_00775380: u32 = 0x0077_5380;
+/// `00830750` (`cdecl`: media, 1; a byte): whether media 7 is playing.
+const MEDIA_PLAYING_00830750: u32 = 0x0083_0750;
+/// `00700270` (`thiscall`, one word; a byte): the response list's test.
+const RESPONSE_LIST_TEST_00700270: u32 = 0x0070_0270;
+/// `strstr` (`00ec7750`, `cdecl`).
+const STRSTR: u32 = 0x00ec_7750;
+/// The string constructor from a text (`0040c0e0`, `thiscall`, one word).
+const STRING_FROM_TEXT: u32 = 0x0040_c0e0;
+/// `00ad8930` (`thiscall` on a sound handle; a byte).
+const SOUND_TEST_00AD8930: u32 = 0x00ad_8930;
+/// `00ad7ae0` (`thiscall` on the audio; a float in `ST0`): the volume the
+/// radio's sounds are scaled by outside dialogue.
+const AUDIO_VOLUME_00AD7AE0: u32 = 0x00ad_7ae0;
+/// `00705210` (`cdecl`, nine words): the subtitle for a played response
+/// (its text, the sound handle and the player's position by value, the
+/// player, 0).
+const SHOW_SUBTITLE_00705210: u32 = 0x0070_5210;
+/// The save buffer's string read (`008649a0`, one word: the address) and
+/// form read (`008648a0`, no words: the form id).
+const BUFFER_READ_STRING: u32 = 0x0086_49a0;
+const BUFFER_READ_FORM: u32 = 0x0086_48a0;
+/// The RTTI type descriptor of `TESBoundObject` (`01183108`).
+const RTTI_TES_BOUND_OBJECT: u32 = 0x0118_3108;
+/// `00726c60` (`thiscall` on a list node, one word: the address of the
+/// item): sets the node's item.
+const NODE_SET_ITEM_00726C60: u32 = 0x0072_6c60;
+/// `00511370` (`thiscall` on the station's form, one word): the broadcast
+/// state given to the form.
+const FORM_SET_BROADCAST_00511370: u32 = 0x0051_1370;
+/// The critical section names (`0107cecc`
+/// `"FalloutRadio::SetBroadcastState"`, `0107ceec`
+/// `"FalloutRadio::StartRadioConversation"`).
+const NAME_SET_BROADCAST_STATE: u32 = 0x0107_cecc;
+const NAME_START_RADIO_CONVERSATION: u32 = 0x0107_ceec;
+/// The import `EnableNPCRadio` calls for a station without a reference
+/// (`00fdf0c8`, no words).
+const IMPORT_00FDF0C8: u32 = 0x00fd_f0c8;
+
+/// Media 7 restarted for the Pip-Boy (`008304a0`, `008325a0` with 1,
+/// `008300c0` with 0, 1000, 0, 0, 0.0, 0, `008304c0`).
+fn restart_media(e: &mut Engine) {
+    e.call(MEDIA_CLOSE, &[]);
+    fn_008325a0(e, 1);
+    e.call(
+        MEDIA_PLAY_008300C0,
+        &args![7u32, 0u32, 0x3e8u32, 0u32, 0u32, 0.0f32.to_bits(), 0u32],
+    );
+    e.call(MEDIA_CALL_008304C0, &[]);
+}
+
+/// The Pip-Boy's voice handle (`011dd5bc`) given the volume: the strength
+/// times the double `0101ffa0` in dialogue (`00833cf0`), else the audio's
+/// volume (`00ad7ae0`) times the strength.
+fn set_voice_volume(e: &mut Engine, strength: u32) {
+    let volume = if fn_00833cf0(e) != 0 {
+        let factor = f64::from_bits(e.mem.u64(VOLUME_FACTOR_0101FFA0));
+        x87_store32(x87_mul(x87_load32(strength), factor))
+    } else {
+        let audio = e.call(AUDIO_INSTANCE, &[]).u32();
+        let volume = e.call(AUDIO_VOLUME_00AD7AE0, &args![audio]).f64();
+        x87_store32(x87_mul(volume, x87_m32(strength)))
+    };
+    e.call(
+        SOUND_SET_VOLUME,
+        &args![PIPBOY_HANDLE_5BC, x87_quiet_bits(volume)],
+    );
+}
+
+/// A sound by name into the handle at `handle` (`GetSoundHandleByName`
+/// into a stack temporary, assigned, the temporary destroyed).
+fn load_named_sound(e: &mut Engine, handle: u32, name: u32, flags: u32) {
+    e.with_stack(0xc, |e, temporary| {
+        let audio = e.call(AUDIO_INSTANCE, &[]).u32();
+        let found = e
+            .call(AUDIO_SOUND_BY_NAME, &args![audio, temporary, name, flags])
+            .u32();
+        e.call(SOUND_HANDLE_ASSIGN, &args![handle, found]);
+        e.call(SOUND_HANDLE_DESTRUCTOR, &args![temporary]);
+    });
+}
+
+/// A sound by file into the voice handle (`00ad7480` into a stack
+/// temporary with the flags `0x100101` and the form, assigned, the
+/// temporary destroyed).
+fn load_voice_file(e: &mut Engine, file: u32, form: u32) {
+    e.with_stack(0xc, |e, temporary| {
+        let audio = e.call(AUDIO_INSTANCE, &[]).u32();
+        let found = e
+            .call(
+                AUDIO_SOUND_BY_FILE,
+                &args![audio, temporary, file, 0x0010_0101u32, form],
+            )
+            .u32();
+        e.call(SOUND_HANDLE_ASSIGN, &args![PIPBOY_HANDLE_5BC, found]);
+        e.call(SOUND_HANDLE_DESTRUCTOR, &args![temporary]);
+    });
+}
+
+/// The current Pip-Boy station's state (`011dd42c` read again, plus 4).
+fn pipboy_state(e: &Engine) -> Ptr<StationState> {
+    Ptr::new(
+        e.global::<u32>(CURRENT_PIPBOY_STATION)
+            .wrapping_add(STATION_STATE),
+    )
+}
+
+/// The current Pip-Boy station (`011dd42c`).
+fn pipboy_station(e: &Engine) -> u32 {
+    e.global::<u32>(CURRENT_PIPBOY_STATION)
+}
+
+/// The current response of `item` (`0083c820`).
+fn current_response(e: &mut Engine, item: u32) -> u32 {
+    e.call(CURRENT_RESPONSE, &args![item]).u32()
+}
+
+// Translated from 008331c0 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 008331c0 - the C++ exception-unwinding frame (FS:[0]) and the /GS stack-cookie check (00ec408c) are not translated.
+/// `FalloutRadio::PipboyUpdate` (engine map; `cdecl`, one byte: force).
+/// The strength is the current station's power over 100 (0 without a
+/// station). A station that lost its signal (flag 4) plays
+/// `"UIRadioSignalLost"`, becomes the lost station, turns the Pip-Boy radio
+/// off, stops the static and shows the setting `011d25f8`'s message with
+/// the station's name (`00775380`), and nothing else happens. Below full
+/// power the static (`"UIRadioStaticLP"`, started when not valid) gets the
+/// curve volume of the missing power; at full power a valid static stops.
+/// A station with no duration takes the voice's (`00ad8b30`). With a
+/// conversation, unless media 7 or the voice is playing (and not `force`):
+/// the current item's response (first one made current when there is
+/// none): a response with a form plays as news (flag 8, unless
+/// `00833ce0`), a response with a long enough text whose list passes
+/// `00700270`, or whose sound file has `".wav"`, plays as music through the
+/// voice handle (by file from the form, else from the response list; the
+/// completion callback `008357e0` with the station, the synch start, the
+/// volume, a subtitle when the voice is not valid), and news plays as media
+/// 7 from `"data\sound\"` and the file (kept at `011dd448`, the duration
+/// taken from the media when the station has none); neither sets the
+/// duration to 1. Without one, a station without flags `0x20`, `0x80` and
+/// `0x10` and with the voice not `00ad8930` plays the static through the
+/// voice handle (flag `0x40` set, flag 8 cleared). The voice gets the
+/// volume unless music started it.
+pub fn fallout_radio_pipboy_update(e: &mut Engine, force: u32) {
+    let force = force as u8;
+    e.with_stack(0x1e0, |e, frame| {
+        // The frame is EBP - 0x1e0.
+        let f = frame.addr();
+        let at = |offset: u32| f + 0x1e0 - offset;
+        let strength = if pipboy_station(e) != 0 {
+            let power = fn_00833c20(e, pipboy_state(e)) as u8;
+            power_volume(e, power)
+        } else {
+            0.0f32.to_bits()
+        };
+        let mut volume_set = false;
+        if pipboy_station(e) != 0 && fn_00833bc0(e, pipboy_state(e)) {
+            let message = at(0x1c);
+            let temporary = at(0x28);
+            e.call(STRING_CONSTRUCT, &args![message]);
+            let audio = e.call(AUDIO_INSTANCE, &[]).u32();
+            e.call(
+                AUDIO_SOUND_BY_NAME,
+                &args![audio, temporary, SOUND_SIGNAL_LOST, 0x0010_0121u32],
+            );
+            e.call(SOUND_HANDLE_PLAY, &args![temporary, 0u32]);
+            let station = pipboy_station(e);
+            let reference = e.mem.u32(station);
+            let name = e.call(REFERENCE_NAME, &args![reference]).u32();
+            let format = e
+                .call(SETTING_TEXT_00403DF0, &args![SETTING_SIGNAL_LOST])
+                .u32();
+            e.call(STRING_FORMAT, &args![message, format, name]);
+            let station = pipboy_station(e);
+            e.set_global(LOST_PIPBOY_STATION, station);
+            fallout_radio_pipboy_radio_enable(e, 0);
+            stop_and_release(e, PIPBOY_HANDLE_638);
+            let text = e.call(STRING_C_STR, &args![message]).u32();
+            let hud = e.global::<u32>(HUD_011D96C0);
+            let time = x87_quiet_bits(e.global::<u32>(MESSAGE_TIME));
+            e.call(
+                HUD_SHOW_00775380,
+                &args![hud, text, 0u32, DISCOVERY_TEXT, 0u32, time, 0u32],
+            );
+            e.call(SOUND_HANDLE_DESTRUCTOR, &args![temporary]);
+            e.call(STRING_DESTROY, &args![message]);
+            return;
+        }
+        if pipboy_station(e) != 0 && (fn_00833c20(e, pipboy_state(e)) & 0xff) < 100 {
+            if e.call(SOUND_IS_VALID, &args![PIPBOY_HANDLE_638]).u32() & 0xff == 0 {
+                stop_and_release(e, PIPBOY_HANDLE_638);
+                load_named_sound(e, PIPBOY_HANDLE_638, STATIC_SOUND, 0x0010_0031);
+                e.call(SOUND_HANDLE_PLAY, &args![PIPBOY_HANDLE_638, 0u32]);
+            }
+            let power = fn_00833c20(e, pipboy_state(e)) as u8;
+            let volume = static_volume(e, power);
+            e.call(
+                SOUND_SET_VOLUME,
+                &args![PIPBOY_HANDLE_638, x87_quiet_bits(volume)],
+            );
+        } else if pipboy_station(e) != 0
+            && fn_00833c20(e, pipboy_state(e)) & 0xff == 100
+            && e.call(SOUND_IS_VALID, &args![PIPBOY_HANDLE_638]).u32() & 0xff != 0
+        {
+            stop_and_release(e, PIPBOY_HANDLE_638);
+        }
+        if pipboy_station(e) != 0
+            && e.mem.u32(pipboy_station(e) + 0x10) as i32 <= 0
+            && e.call(SOUND_IS_VALID, &args![PIPBOY_HANDLE_5BC]).u32() & 0xff != 0
+            && e.call(SOUND_DURATION, &args![PIPBOY_HANDLE_5BC]).u32() != 0
+        {
+            let duration = e.call(SOUND_DURATION, &args![PIPBOY_HANDLE_5BC]).u32();
+            let station = pipboy_station(e);
+            e.mem.set_u32(station + 0x10, duration);
+        }
+        let talking = pipboy_station(e) != 0
+            && e.mem.u32(pipboy_station(e) + 4) != 0
+            && ((e.call(MEDIA_PLAYING_00830750, &args![7u32, 1u32]).u32() & 0xff == 0
+                && e.call(SOUND_IS_VALID, &args![PIPBOY_HANDLE_5BC]).u32() & 0xff == 0)
+                || force != 0);
+        if talking {
+            let conversation = e.mem.u32(pipboy_station(e) + 4);
+            let item = current_response(e, conversation);
+            if item == 0 {
+                return;
+            }
+            let mut news = false;
+            let mut music = false;
+            if current_response(e, item) == 0 {
+                e.call(FIRST_RESPONSE, &args![item]);
+            }
+            let response = current_response(e, item);
+            let with_form = response != 0 && {
+                let response = current_response(e, item);
+                e.call(FORM_OF, &args![response]).u32() != 0
+            };
+            if with_form && fn_00833ce0(e) == 0 {
+                news = true;
+                if pipboy_station(e) != 0 {
+                    fn_00833c40(e, pipboy_state(e), 1);
+                }
+            } else if pipboy_station(e) != 0 {
+                fn_00833c40(e, pipboy_state(e), 0);
+            }
+            let has_text = current_response(e, item) != 0 && {
+                let response = current_response(e, item);
+                let slot = e.call(NODE_ITEM, &args![response]).u32();
+                e.call(STRING_C_STR, &args![slot]).u32() != 0
+            };
+            if has_text {
+                let response = current_response(e, item);
+                let slot = e.call(NODE_ITEM, &args![response]).u32();
+                let text = e.call(STRING_C_STR, &args![slot]).u32();
+                let length = e.call(LIST_COUNT_0044A670, &args![text]).u32();
+                music = length > 2 && {
+                    let response = current_response(e, item);
+                    let list = e.call(RESPONSE_LIST_00460140, &args![response]).u32();
+                    e.call(RESPONSE_LIST_TEST_00700270, &args![list, 0u32])
+                        .u32()
+                        & 0xff
+                        != 0
+                };
+                if !music {
+                    let response = current_response(e, item);
+                    if e.call(FORM_OF, &args![response]).u32() != 0 {
+                        let response = current_response(e, item);
+                        let form = e.call(FORM_OF, &args![response]).u32();
+                        let file = e.call(SOUND_FILE_NAME, &args![form]).u32();
+                        if e.call(STRSTR, &args![file, TEXT_WAV]).u32() != 0 {
+                            music = true;
+                        }
+                    }
+                }
+            }
+            let _elapsed = audio_time(e).wrapping_sub(e.mem.u32(pipboy_station(e) + 0xc));
+            if music {
+                let response = current_response(e, item);
+                let has_form = e.call(FORM_OF, &args![response]).u32() != 0;
+                stop_and_release(e, PIPBOY_HANDLE_5BC);
+                if has_form {
+                    let response = current_response(e, item);
+                    let form = e.call(FORM_OF, &args![response]).u32();
+                    let response = current_response(e, item);
+                    let form_again = e.call(FORM_OF, &args![response]).u32();
+                    let file = e.call(SOUND_FILE_NAME, &args![form_again]).u32();
+                    load_voice_file(e, file, form);
+                } else {
+                    let response = current_response(e, item);
+                    let list = e.call(RESPONSE_LIST_00460140, &args![response]).u32();
+                    let file = e.call(STRING_C_STR, &args![list]).u32();
+                    load_voice_file(e, file, 0);
+                }
+                let station = pipboy_station(e);
+                e.call(
+                    SOUND_SET_COMPLETION,
+                    &args![PIPBOY_HANDLE_5BC, COMPLETION_CALLBACK, station],
+                );
+                let start = e.mem.u32(pipboy_station(e) + 0xc);
+                e.call(SOUND_SET_SYNCH_START, &args![PIPBOY_HANDLE_5BC, start]);
+                set_voice_volume(e, strength);
+                volume_set = true;
+                e.call(SOUND_HANDLE_PLAY, &args![PIPBOY_HANDLE_5BC, 0u32]);
+                if e.call(SOUND_IS_VALID, &args![PIPBOY_HANDLE_5BC]).u32() & 0xff == 0 {
+                    show_subtitle(e, item, at(0x184));
+                }
+            }
+            if news && fn_00833ce0(e) == 0 {
+                let buffer = at(0x154);
+                let path = at(0x15c);
+                let response = current_response(e, item);
+                let form = e.call(FORM_OF, &args![response]).u32();
+                let file = e.call(SOUND_FILE_NAME, &args![form]).u32();
+                e.call(
+                    FORMAT_00406D00,
+                    &args![buffer, 0x104u32, TEXT_TWO_STRINGS, TEXT_SOUND_PATH, file],
+                );
+                e.call(STRING_FROM_TEXT, &args![path, buffer]);
+                let start = e.mem.u32(pipboy_station(e) + 0xc);
+                e.call(
+                    MEDIA_PLAY_008300C0,
+                    &args![7u32, buffer, 0x1f4u32, 0u32, 1u32, 0.0f32.to_bits(), start],
+                );
+                e.call(COPY_BOUNDED, &args![SAVED_STRING, 0x104u32, buffer]);
+                fn_00833c40(e, pipboy_state(e), 1);
+                if e.mem.u32(pipboy_station(e) + 0x10) as i32 <= 0
+                    && e.call(MEDIA_DURATION, &args![7u32]).u32() != 0
+                {
+                    let duration = e.call(MEDIA_DURATION, &args![7u32]).u32();
+                    let station = pipboy_station(e);
+                    e.mem.set_u32(station + 0x10, duration);
+                }
+                e.call(STRING_DESTROY, &args![path]);
+            } else {
+                fn_00833c40(e, pipboy_state(e), 0);
+            }
+            if !news && !music {
+                let station = pipboy_station(e);
+                e.mem.set_u32(station + 0x10, 1);
+            }
+        } else if !fn_00833040(e, pipboy_state(e))
+            && !fn_00833c00(e, pipboy_state(e))
+            && !fn_00833be0(e, pipboy_state(e))
+            && e.call(SOUND_TEST_00AD8930, &args![PIPBOY_HANDLE_5BC]).u32() & 0xff == 0
+        {
+            stop_and_release(e, PIPBOY_HANDLE_5BC);
+            load_named_sound(e, PIPBOY_HANDLE_5BC, STATIC_SOUND, 0x0010_0031);
+            e.call(SOUND_SET_FLAG_004F15A0, &args![PIPBOY_HANDLE_5BC, 1u32]);
+            e.call(SOUND_HANDLE_PLAY, &args![PIPBOY_HANDLE_5BC, 0u32]);
+            fn_00833c90(e, pipboy_state(e), 1);
+            fn_00833c40(e, pipboy_state(e), 0);
+        }
+        if !volume_set {
+            set_voice_volume(e, strength);
+        }
+    });
+}
+
+/// The subtitle of `PipboyUpdate` (`00705210`): the voice handle copied
+/// into a stack temporary (`00418900`), the player's position (its slot
+/// `+0x1f4`) and both passed by value with the response's text, the player
+/// and 0.
+fn show_subtitle(e: &mut Engine, item: u32, handle_copy: u32) {
+    let player = e.global::<u32>(PLAYER);
+    let position = e.vcall(player, 0x1f4, &[]).u32();
+    let point: Vec<u32> = (0..3).map(|i| e.mem.u32(position + i * 4)).collect();
+    e.call(SOUND_HANDLE_ASSIGN, &args![handle_copy, PIPBOY_HANDLE_5BC]);
+    let handle: Vec<u32> = (0..3).map(|i| e.mem.u32(handle_copy + i * 4)).collect();
+    let response = current_response(e, item);
+    let slot = e.call(NODE_ITEM, &args![response]).u32();
+    let text = e.call(STRING_C_STR, &args![slot]).u32();
+    e.call(
+        SHOW_SUBTITLE_00705210,
+        &args![text, handle[0], handle[1], handle[2], point[0], point[1], point[2], player, 0u32],
+    );
+}
+
+// Translated from 00835810 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 00835810 - the C++ exception-unwinding frame (FS:[0]) is not translated.
+/// `FalloutRadio::EnableNPCRadio` (engine map; `cdecl`: the radio and the
+/// station references): nothing while shutting down. The station of the
+/// station's form (the age of its item computed from the audio time), else
+/// a new one (`00832cb0`; one without a reference calls the import at
+/// `00fdf0c8`); none stops here. The radio's receiver (a new one, 0x20
+/// bytes, added to the receiver list, when it has none) gets the radio,
+/// should-be-playing, just-started and is-actor set, joins the station's
+/// users and the station's flag 1 is set.
+pub fn fallout_radio_enable_npc_radio(e: &mut Engine, radio: u32, station_reference: u32) {
+    e.with_stack(4, |e, slot| {
+        let receiver = fallout_radio_get_active_receiver(e, radio);
+        e.mem.set_u32(slot.addr(), receiver);
+        if shutting_down(e) {
+            return;
+        }
+        let form = e.call(FORM_OF, &args![station_reference]).u32();
+        let mut station = fn_00832830(e, form);
+        if station != 0 {
+            let _age = audio_time(e).wrapping_sub(e.mem.u32(station + 0xc));
+        } else {
+            station = fn_00832cb0(e, radio, station_reference);
+            if station != 0 && e.mem.u32(station) == 0 {
+                e.call(IMPORT_00FDF0C8, &[]);
+            }
+            if station == 0 {
+                return;
+            }
+        }
+        let mut created = false;
+        if e.mem.u32(slot.addr()) == 0 {
+            let block = e.call(OPERATOR_NEW, &args![0x20u32]).u32();
+            let receiver = if block != 0 {
+                fn_008327d0(e, Ptr::new(block)).addr()
+            } else {
+                0
+            };
+            e.mem.set_u32(slot.addr(), receiver);
+            created = true;
+        }
+        let receiver = e.mem.u32(slot.addr());
+        e.mem.set_u32(receiver, radio);
+        e.mem.set_u8(receiver + 0x1c, 1);
+        e.mem.set_u8(receiver + 0x1d, 1);
+        e.mem.set_u8(receiver + 0x1f, 1);
+        if created {
+            e.call(LIST_ADD_HEAD, &args![RECEIVER_LIST, slot]);
+        }
+        e.call(LIST_ADD_HEAD, &args![station + STATION_USERS, slot]);
+        fn_00832440(e, Ptr::new(station + STATION_STATE), 1);
+    });
+}
+
+// Translated from 008359e0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The broadcast state setter (unnamed in the engine map; its lock is
+/// named `"FalloutRadio::SetBroadcastState"`; `cdecl`: the station
+/// reference and a byte): nothing while shutting down. Inside the radio's
+/// critical section, the station's form gets the byte (`00511370`); a
+/// station with flag `0x20` turned off has its users' voices stopped, the
+/// Pip-Boy voice stopped and media 7 restarted when it is the Pip-Boy's
+/// station (unless `00833ce0`), flag `0x10` cleared and its conversation
+/// deleted; then the station's flag `0x20` takes the byte.
+pub fn fn_008359e0(e: &mut Engine, station_reference: u32, on: u32) {
+    if shutting_down(e) {
+        return;
+    }
+    let on = on as u8;
+    let form = e.call(FORM_OF, &args![station_reference]).u32();
+    let station = fn_00832830(e, form);
+    e.call(
+        ENTER_CRITICAL_SECTION,
+        &args![RADIO_CRITICAL_SECTION, NAME_SET_BROADCAST_STATE],
+    );
+    let form = e.call(FORM_OF, &args![station_reference]).u32();
+    e.call(FORM_SET_BROADCAST_00511370, &args![form, u32::from(on)]);
+    if station != 0 {
+        let state = Ptr::new(station + STATION_STATE);
+        if fn_00833040(e, state) && on == 0 {
+            let mut node = station + STATION_USERS;
+            while node != 0 && !is_empty(e, node) {
+                let receiver = item_of(e, node);
+                if e.call(SOUND_IS_VALID, &args![receiver + 4]).u32() & 0xff != 0 {
+                    let receiver = item_of(e, node);
+                    e.call(SOUND_HANDLE_STOP, &args![receiver + 4]);
+                    let receiver = item_of(e, node);
+                    e.call(SOUND_HANDLE_RELEASE, &args![receiver + 4]);
+                }
+                node = next_of(e, node);
+            }
+            if pipboy_station(e) == station && e.global::<u8>(PIPBOY_RADIO_ON) != 0 {
+                stop_and_release(e, PIPBOY_HANDLE_5BC);
+                if fn_00833ce0(e) == 0 {
+                    restart_media(e);
+                }
+            }
+            fn_008330b0(e, state, 0);
+            let next = e.mem.u32(station + 4);
+            delete_conversation(e, next);
+            e.mem.set_u32(station + 4, 0);
+        }
+        fn_00833100(e, state, on);
+    }
+    e.call(LEAVE_CRITICAL_SECTION, &args![RADIO_CRITICAL_SECTION]);
+}
+
+// Translated from 00835be0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `FalloutRadio::StartRadioConversation` (engine map; `cdecl`: the station
+/// reference and a topic, 0 for topic 7 of `0061a2d0`): nothing while
+/// shutting down, or when the station (found in the station list until a
+/// null entry, else made by `00832cb0`) is missing or its reference passes
+/// `00440da0`. Inside the radio's critical section: the conversation is run
+/// to its end (`NextItem`); a station with flag `0x10` is updated
+/// (`00834260`) with flag `0x20` cleared and duration 1; the Pip-Boy voice
+/// stopped (media 7 restarted when `00833ce0` is set) for the Pip-Boy's
+/// station; the users' voices stopped; the conversation started on the
+/// topic (`00837060`) with duration 0, its sounds precached and its first
+/// item made current; without a current response it is deleted (duration
+/// 1), otherwise the Pip-Boy voice is handled again and the first response
+/// started; a duration over 1 becomes 0; the item restarts in 50
+/// (`00835690` with 1) and flag `0x20` gets its old value back.
+pub fn fallout_radio_start_radio_conversation(e: &mut Engine, station_reference: u32, topic: u32) {
+    if shutting_down(e) {
+        return;
+    }
+    let mut station = 0u32;
+    let mut node = STATION_LIST;
+    while node != 0 && item_of(e, node) != 0 {
+        let entry = item_of(e, node);
+        if e.mem.u32(entry) == station_reference {
+            station = item_of(e, node);
+            break;
+        }
+        node = next_of(e, node);
+    }
+    if station == 0 {
+        station = fn_00832cb0(e, station_reference, 0);
+    }
+    let topic = if topic != 0 {
+        topic
+    } else {
+        e.call(GET_TOPIC, &args![7u32, 0u32]).u32()
+    };
+    if station == 0 {
+        return;
+    }
+    let reference = e.mem.u32(station);
+    if e.call(REFERENCE_TEST_00440DA0, &args![reference]).u32() & 0xff != 0 {
+        return;
+    }
+    let state = Ptr::new(station + STATION_STATE);
+    let old = u8::from(fn_00833040(e, state));
+    e.call(
+        ENTER_CRITICAL_SECTION,
+        &args![RADIO_CRITICAL_SECTION, NAME_START_RADIO_CONVERSATION],
+    );
+    if e.mem.u32(station + 4) != 0 {
+        loop {
+            let conversation = e.mem.u32(station + 4);
+            if e.call(NEXT_ITEM, &args![conversation]).u32() & 0xff == 0 {
+                break;
+            }
+        }
+    }
+    if fn_00833be0(e, state) {
+        fn_00833100(e, state, 0);
+        e.mem.set_u32(station + 0x10, 1);
+        fn_00834260(e, station);
+    }
+    let pipboy_voice = |e: &mut Engine| {
+        if pipboy_station(e) == station && e.global::<u8>(PIPBOY_RADIO_ON) != 0 {
+            stop_and_release(e, PIPBOY_HANDLE_5BC);
+            if fn_00833ce0(e) != 0 {
+                restart_media(e);
+            }
+        }
+    };
+    pipboy_voice(e);
+    let mut node = station + STATION_USERS;
+    while node != 0 && item_of(e, node) != 0 {
+        let receiver = item_of(e, node);
+        e.call(SOUND_HANDLE_STOP, &args![receiver + 4]);
+        e.call(SOUND_HANDLE_RELEASE, &args![receiver + 4]);
+        node = next_of(e, node);
+    }
+    fn_00837060(e, station, topic);
+    e.mem.set_u32(station + 0x10, 0);
+    let conversation = e.mem.u32(station + 4);
+    e.call(PRECACHE_SOUNDS, &args![conversation]);
+    let conversation = e.mem.u32(station + 4);
+    e.call(FIRST_ITEM, &args![conversation]);
+    let conversation = e.mem.u32(station + 4);
+    if current_response(e, conversation) == 0 {
+        let conversation = e.mem.u32(station + 4);
+        delete_conversation(e, conversation);
+        e.mem.set_u32(station + 4, 0);
+        e.mem.set_u32(station + 0x10, 1);
+    } else {
+        pipboy_voice(e);
+        let conversation = e.mem.u32(station + 4);
+        let response = current_response(e, conversation);
+        e.call(FIRST_RESPONSE, &args![response]);
+    }
+    if e.mem.u32(station + 0x10) as i32 > 1 {
+        e.mem.set_u32(station + 0x10, 0);
+    }
+    let start = audio_time(e).wrapping_add(0x32);
+    e.mem.set_u32(station + 0xc, start);
+    fn_00835690(e, state, 1);
+    fn_00833100(e, state, old);
+    e.call(LEAVE_CRITICAL_SECTION, &args![RADIO_CRITICAL_SECTION]);
+}
+
+/// A form id read from the buffer (`008648a0`) resolved to a
+/// `TESBoundObject` (`004839c0`, `__RTDynamicCast` from `TESForm`).
+fn read_bound_object(e: &mut Engine, buffer: u32) -> u32 {
+    let id = e.call(BUFFER_READ_FORM, &args![buffer]).u32();
+    let form = e.call(LOOKUP_FORM, &args![id]).u32();
+    e.call(
+        RTTI_CAST,
+        &args![form, 0u32, RTTI_TES_FORM, RTTI_TES_BOUND_OBJECT, 0u32],
+    )
+    .u32()
+}
+
+// Translated from 008368b0 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 008368b0 - the C++ exception-unwinding frame (FS:[0]) is not translated.
+/// `FalloutRadio::LoadGame` (engine map; `cdecl`, one word: the load
+/// buffer): the saved word (4 bytes), the Pip-Boy radio byte and the saved
+/// string; the buffer's count of receivers (0x20 bytes each, `008327d0`,
+/// loaded by `00835f80`) and of stations (0x24 bytes, `00833150`, loaded by
+/// `00836630`), each added at the head of its list; the current and lost
+/// Pip-Boy stations as `TESBoundObject`s (fixed up later); and from version
+/// 10 on (the buffer's slot `+0`), the discovered stations' form ids.
+pub fn fallout_radio_load_game(e: &mut Engine, buffer: u32) {
+    e.call(BUFFER_READ, &args![buffer, SAVED_WORD, 4u32]);
+    e.call(BUFFER_READ, &args![buffer, SAVED_BYTE, 1u32]);
+    e.call(BUFFER_READ_STRING, &args![buffer, SAVED_STRING]);
+    e.with_stack(4, |e, slot| {
+        let receivers = e.call(BUFFER_COUNT, &args![buffer]).u32();
+        for _ in 0..receivers {
+            let block = e.call(OPERATOR_NEW, &args![0x20u32]).u32();
+            let receiver = if block != 0 {
+                fn_008327d0(e, Ptr::new(block)).addr()
+            } else {
+                0
+            };
+            e.mem.set_u32(slot.addr(), receiver);
+            fn_00835f80(e, Ptr::new(receiver), buffer);
+            e.call(LIST_ADD_HEAD, &args![RECEIVER_LIST, slot]);
+        }
+        let stations = e.call(BUFFER_COUNT, &args![buffer]).u32();
+        for _ in 0..stations {
+            let block = e.call(OPERATOR_NEW, &args![0x24u32]).u32();
+            let station = if block != 0 {
+                fn_00833150(e, Ptr::new(block)).addr()
+            } else {
+                0
+            };
+            e.mem.set_u32(slot.addr(), station);
+            fn_00836630(e, Ptr::new(station), buffer);
+            e.call(LIST_ADD_HEAD, &args![STATION_LIST, slot]);
+        }
+    });
+    let current = read_bound_object(e, buffer);
+    e.set_global(CURRENT_PIPBOY_STATION, current);
+    let lost = read_bound_object(e, buffer);
+    e.set_global(LOST_PIPBOY_STATION, lost);
+    if e.vcall(buffer, 0, &[]).u32() & 0xff >= 10 {
+        let count = e.call(BUFFER_COUNT, &args![buffer]).u32();
+        e.with_stack(4, |e, slot| {
+            for _ in 0..count {
+                e.mem.set_u32(slot.addr(), 0);
+                e.call(BUFFER_READ_FORM_ID, &args![buffer, slot]);
+                e.call(LIST_ADD_HEAD, &args![DISCOVERED_LIST, slot]);
+            }
+        });
+    }
+}
+
+/// The pruning walk of `InitLoadGame` and `FinishLoadGame`: `keep` decides
+/// for each entry (until an empty node) whether it stays; a dropped one is
+/// removed after the previous node (`00905330`) or as the head
+/// (`0063f7b0`).
+fn prune(e: &mut Engine, list: u32, keep: &mut dyn FnMut(&mut Engine, u32) -> bool) {
+    let mut node = list;
+    let mut previous = 0u32;
+    while node != 0 && !is_empty(e, node) {
+        if keep(e, node) {
+            previous = node;
+            node = next_of(e, node);
+        } else if previous != 0 {
+            let slot = e.call(NODE_ITEM, &args![node]).u32();
+            e.call(LIST_REMOVE, &args![previous, slot]);
+            node = next_of(e, previous);
+        } else {
+            e.call(LIST_REMOVE_HEAD_0063F7B0, &args![node]);
+        }
+    }
+}
+
+// Translated from 00836af0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `FalloutRadio::InitLoadGame` (engine map; `cdecl`, one word: the load
+/// buffer): every receiver's radio resolved (`00835fe0`); stations fixed up
+/// (`00836660`) and those without a reference deleted (`00832160` with 1)
+/// and dropped, null ones dropped; receivers without a radio deleted
+/// (`00832190` with 1) and dropped; the current and lost Pip-Boy stations
+/// looked up from their objects (`00832830`); and from version 10 on the
+/// discovered stations resolved to references (null ones dropped, the rest
+/// stored back with `00726c60`).
+pub fn fallout_radio_init_load_game(e: &mut Engine, buffer: u32) {
+    let mut node = RECEIVER_LIST;
+    while node != 0 {
+        let receiver = item_of(e, node);
+        if receiver != 0 {
+            fn_00835fe0(e, Ptr::new(receiver), buffer);
+        }
+        node = next_of(e, node);
+    }
+    prune(e, STATION_LIST, &mut |e, node| {
+        let station = item_of(e, node);
+        if station == 0 {
+            return false;
+        }
+        fn_00836660(e, Ptr::new(station), buffer);
+        if e.mem.u32(station) == 0 {
+            fn_00832160(e, Ptr::new(station), 1);
+            return false;
+        }
+        true
+    });
+    prune(e, RECEIVER_LIST, &mut |e, node| {
+        let receiver = item_of(e, node);
+        if receiver == 0 {
+            return false;
+        }
+        if e.mem.u32(receiver) == 0 {
+            fn_00832190(e, Ptr::new(receiver), 1);
+            return false;
+        }
+        true
+    });
+    if e.global::<u32>(CURRENT_PIPBOY_STATION) != 0 {
+        let object = e.global::<u32>(CURRENT_PIPBOY_STATION);
+        let station = fn_00832830(e, object);
+        e.set_global(CURRENT_PIPBOY_STATION, station);
+    }
+    if e.global::<u32>(LOST_PIPBOY_STATION) != 0 {
+        let object = e.global::<u32>(LOST_PIPBOY_STATION);
+        let station = fn_00832830(e, object);
+        e.set_global(LOST_PIPBOY_STATION, station);
+    }
+    if e.vcall(buffer, 0, &[]).u32() & 0xff >= 10 {
+        e.with_stack(4, |e, slot| {
+            prune(e, DISCOVERED_LIST, &mut |e, node| {
+                let id = item_of(e, node);
+                e.mem.set_u32(slot.addr(), id);
+                if id == 0 {
+                    return false;
+                }
+                resolve_reference(e, slot.addr());
+                if e.mem.u32(slot.addr()) == 0 {
+                    return false;
+                }
+                e.call(NODE_SET_ITEM_00726C60, &args![node, slot]);
+                true
+            });
+        });
+    }
+}
+
+// Translated from 00836e20 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `FalloutRadio::FinishLoadGame` (engine map; `cdecl`, one word): each
+/// station's load finish (`008366c0`), null entries dropped; the Pip-Boy
+/// radio set to its loaded byte (`PipboyRadioEnable`), and with a Pip-Boy
+/// station the Pip-Boy updated (`PipboyUpdate` with 1).
+pub fn fallout_radio_finish_load_game(e: &mut Engine, value: u32) {
+    prune(e, STATION_LIST, &mut |e, node| {
+        let station = item_of(e, node);
+        if station == 0 {
+            return false;
+        }
+        fn_008366c0(e, Ptr::new(station), value);
+        true
+    });
+    let on = e.global::<u8>(PIPBOY_RADIO_ON);
+    fallout_radio_pipboy_radio_enable(e, u32::from(on));
+    if e.global::<u32>(CURRENT_PIPBOY_STATION) != 0 {
+        fallout_radio_pipboy_update(e, 1);
+    }
+}
+
+// Translated from 00836ef0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `FalloutRadio::Revert` (engine map; `cdecl`): no current or lost
+/// station, last update 1, saved word 0, radio off, the discovery message
+/// shown again, empty saved string; every station deleted (`00832160` with
+/// 1) and every receiver (its valid sound stopped and released,
+/// `00832190` with 1) with their list heads removed; the discovered list
+/// cleared; both Pip-Boy handles stopped and released when valid.
+pub fn fallout_radio_revert(e: &mut Engine) {
+    e.set_global(CURRENT_PIPBOY_STATION, 0u32);
+    e.set_global(LOST_PIPBOY_STATION, 0u32);
+    e.set_global(LAST_UPDATE, 1u32);
+    e.set_global(SAVED_WORD, 0u32);
+    e.set_global(PIPBOY_RADIO_ON, 0u8);
+    e.set_global(SKIP_DISCOVERY_MESSAGE, 1u8);
+    e.set_global(SAVED_STRING, 0u8);
+    while !is_empty(e, STATION_LIST) {
+        let station = item_of(e, STATION_LIST);
+        if station != 0 {
+            fn_00832160(e, Ptr::new(station), 1);
+        }
+        e.call(LIST_REMOVE_HEAD_0063F7B0, &args![STATION_LIST]);
+    }
+    while !is_empty(e, RECEIVER_LIST) {
+        let receiver = item_of(e, RECEIVER_LIST);
+        if e.call(SOUND_IS_VALID, &args![receiver + 4]).u32() & 0xff != 0 {
+            e.call(SOUND_HANDLE_STOP, &args![receiver + 4]);
+            e.call(SOUND_HANDLE_RELEASE, &args![receiver + 4]);
+        }
+        if receiver != 0 {
+            fn_00832190(e, Ptr::new(receiver), 1);
+        }
+        e.call(LIST_REMOVE_HEAD_0063F7B0, &args![RECEIVER_LIST]);
+    }
+    e.call(LIST_CLEAR, &args![DISCOVERED_LIST]);
+    for handle in [PIPBOY_HANDLE_5BC, PIPBOY_HANDLE_638] {
+        if e.call(SOUND_IS_VALID, &args![handle]).u32() & 0xff != 0 {
+            stop_and_release(e, handle);
+        }
+    }
+}
+
+// Translated from 008372e0 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 008372e0 - the C++ exception-unwinding frame (FS:[0]) is not translated.
+/// `RadioConvTask::Run` (engine map; `thiscall`, plain `RET`): a station
+/// (`+0x30`) without a next conversation (`+8`) gets a new one (0xc bytes;
+/// `Conversation::Conversation_ov2` with the station's reference twice and
+/// topic 7 of `0061a2d0`; null when the allocation fails).
+pub fn radio_conv_task_run(e: &mut Engine, this: Ptr) {
+    let station = e.mem.u32(this.addr() + 0x30);
+    if station == 0 || e.mem.u32(station + 8) != 0 {
+        return;
+    }
+    let block = e.call(OPERATOR_NEW, &args![0xcu32]).u32();
+    let conversation = if block != 0 {
+        let topic = e.call(GET_TOPIC, &args![7u32, 0u32]).u32();
+        let station = e.mem.u32(this.addr() + 0x30);
+        let reference = e.mem.u32(station);
+        let station = e.mem.u32(this.addr() + 0x30);
+        let speaker = e.mem.u32(station);
+        e.call(
+            CONVERSATION_CONSTRUCT,
+            &args![block, speaker, reference, topic],
+        )
+        .u32()
+    } else {
+        0
+    };
+    let station = e.mem.u32(this.addr() + 0x30);
+    e.mem.set_u32(station + 8, conversation);
+}
+
+#[cfg(test)]
+mod n086b_tests {
+    use super::*;
+
+    fn calls(e: &Engine, addr: u32) -> Vec<Vec<u32>> {
+        e.call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|c| c.0 == addr)
+            .map(|c| c.1.clone())
+            .collect()
+    }
+
+    fn quiet(e: &mut Engine, addrs: &[u32]) {
+        for &a in addrs {
+            e.register(a, |_, _| Ret::default());
+        }
+    }
+
+    fn lists(e: &mut Engine) {
+        e.register(NODE_ITEM, |_, a| a[0].into_ret());
+        e.register(NODE_NEXT, |e, a| e.mem.u32(a[0] + 4).into_ret());
+        e.register(NODE_EMPTY, |e, a| {
+            u32::from(e.mem.u32(a[0]) == 0 && e.mem.u32(a[0] + 4) == 0).into_ret()
+        });
+        e.register(LIST_REMOVE_HEAD_0063F7B0, |e, a| {
+            // Take the next node's words into the head.
+            let next = e.mem.u32(a[0] + 4);
+            let (item, after) = if next != 0 {
+                (e.mem.u32(next), e.mem.u32(next + 4))
+            } else {
+                (0, 0)
+            };
+            e.mem.set_u32(a[0], item);
+            e.mem.set_u32(a[0] + 4, after);
+            Ret::default()
+        });
+        e.register(LIST_REMOVE, |e, a| {
+            let after = e.mem.u32(a[1] + 4);
+            e.mem.set_u32(a[0] + 4, after);
+            Ret::default()
+        });
+    }
+
+    fn globals(e: &mut Engine) {
+        for page in [
+            0x011d_d000u32,
+            0x011d_c000,
+            0x011d_e000,
+            0x011a_1000,
+            0x011d_9000,
+            0x011d_2000,
+            0x0101_6000,
+            0x0101_7000,
+            0x0101_f000,
+        ] {
+            e.map(page, 0x1000);
+        }
+        e.mem.set_u64(HUNDRED_DOUBLE, 100.0f64.to_bits());
+    }
+
+    fn fill(e: &mut Engine, head: u32, items: &[u32]) {
+        let mut node = head;
+        for (i, &item) in items.iter().enumerate() {
+            e.mem.set_u32(node, item);
+            if i + 1 < items.len() {
+                let next = e.mem.alloc(8);
+                e.mem.set_u32(node + 4, next);
+                node = next;
+            } else {
+                e.mem.set_u32(node + 4, 0);
+            }
+        }
+    }
+
+    fn sounds(e: &mut Engine) {
+        quiet(
+            e,
+            &[
+                SOUND_HANDLE_STOP,
+                SOUND_HANDLE_RELEASE,
+                SOUND_HANDLE_PLAY,
+                SOUND_HANDLE_ASSIGN,
+                SOUND_HANDLE_DESTRUCTOR,
+                SOUND_SET_VOLUME,
+                SOUND_SET_COMPLETION,
+                SOUND_SET_SYNCH_START,
+                SOUND_SET_FLAG_004F15A0,
+            ],
+        );
+        e.register(AUDIO_INSTANCE, |_, _| 0xa0d10u32.into_ret());
+        e.register(AUDIO_SOUND_BY_NAME, |_, a| a[1].into_ret());
+        e.register(AUDIO_SOUND_BY_FILE, |_, a| a[1].into_ret());
+        e.register(SOUND_IS_VALID, |_, _| 0u32.into_ret());
+    }
+
+    /// A station (0x24 bytes) with `reference` and the state flags.
+    fn station(e: &mut Engine, reference: u32, flags: u32) -> u32 {
+        let station = e.mem.alloc(0x24);
+        e.mem.set_u32(station, reference);
+        e.mem.set_u32(station + 4 + 0x14, flags);
+        station
+    }
+
+    #[test]
+    fn pipboy_update_signal_lost_shows_the_message() {
+        let mut e = Engine::new();
+        globals(&mut e);
+        sounds(&mut e);
+        quiet(
+            &mut e,
+            &[
+                STRING_CONSTRUCT,
+                STRING_DESTROY,
+                STRING_FORMAT,
+                HUD_SHOW_00775380,
+                MEDIA_IS_PLAYING_00830AD0,
+            ],
+        );
+        e.register(REFERENCE_NAME, |_, _| 0x4e4eu32.into_ret());
+        e.register(SETTING_TEXT_00403DF0, |_, _| 0xf0f0u32.into_ret());
+        e.register(STRING_C_STR, |_, _| 0x7e7eu32.into_ret());
+        let st = station(&mut e, 0x3030, 4);
+        e.set_global(CURRENT_PIPBOY_STATION, st);
+        e.set_global(PIPBOY_RADIO_ON, 1u8);
+        e.mem.set_f32(MESSAGE_TIME, 2.0);
+        e.call_log = Some(vec![]);
+        e.call(0x0083_31c0, &args![0u32]);
+        assert_eq!(
+            calls(&e, AUDIO_SOUND_BY_NAME)[0][2..],
+            [SOUND_SIGNAL_LOST, 0x0010_0121]
+        );
+        assert_eq!(calls(&e, STRING_FORMAT)[0][1..], [0xf0f0, 0x4e4e]);
+        assert_eq!(e.global::<u32>(LOST_PIPBOY_STATION), st);
+        assert_eq!(e.global::<u8>(PIPBOY_RADIO_ON), 0);
+        assert_eq!(e.global::<u32>(CURRENT_PIPBOY_STATION), 0);
+        let hud = calls(&e, HUD_SHOW_00775380);
+        assert_eq!(
+            hud[0][1..],
+            [0x7e7e, 0, DISCOVERY_TEXT, 0, 2.0f32.to_bits(), 0]
+        );
+        assert!(calls(&e, SOUND_SET_VOLUME).is_empty());
+    }
+
+    #[test]
+    fn pipboy_update_plays_static_and_news() {
+        let mut e = Engine::new();
+        globals(&mut e);
+        sounds(&mut e);
+        lists(&mut e);
+        quiet(
+            &mut e,
+            &[
+                FIRST_RESPONSE,
+                MEDIA_PLAY_008300C0,
+                COPY_BOUNDED,
+                FORMAT_00406D00,
+                STRING_FROM_TEXT,
+                STRING_DESTROY,
+            ],
+        );
+        e.register(VOLUME_CURVE, |_, _| Ret {
+            st0: 0.5,
+            ..Ret::default()
+        });
+        e.register(MEDIA_PLAYING_00830750, |_, _| 0u32.into_ret());
+        e.register(MEDIA_DURATION, |_, _| 900u32.into_ret());
+        e.register(AUDIO_TIME, |_, _| 10u32.into_ret());
+        e.register(AUDIO_VOLUME_00AD7AE0, |_, _| Ret {
+            st0: 0.5,
+            ..Ret::default()
+        });
+        // The conversation's item has a response with a form (news) and
+        // no text.
+        e.register(CURRENT_RESPONSE, |_, a| (a[0] + 1).into_ret());
+        e.register(FORM_OF, |_, a| (a[0] + 0x100).into_ret());
+        e.register(STRING_C_STR, |_, _| 0u32.into_ret());
+        e.register(SOUND_FILE_NAME, |_, _| 0x5f5fu32.into_ret());
+        let st = station(&mut e, 0x3030, 0);
+        e.mem.set_u8(st + 4 + 0x10, 50);
+        e.mem.set_u32(st + 4, 0x4000);
+        e.set_global(CURRENT_PIPBOY_STATION, st);
+        e.call_log = Some(vec![]);
+        e.call(0x0083_31c0, &args![0u32]);
+        // The static: started (not valid) at the curve volume.
+        assert_eq!(
+            calls(&e, AUDIO_SOUND_BY_NAME)[0][2..],
+            [STATIC_SOUND, 0x0010_0031]
+        );
+        assert_eq!(
+            calls(&e, SOUND_SET_VOLUME)[0],
+            vec![PIPBOY_HANDLE_638, 0.5f32.to_bits()]
+        );
+        // News: media 7 from the sound path, its duration taken; flag 8 set.
+        let media = calls(&e, MEDIA_PLAY_008300C0);
+        assert_eq!(media[0][0], 7);
+        assert_eq!(media[0][2..], [0x1f4, 0, 1, 0, 0]);
+        let format = calls(&e, FORMAT_00406D00);
+        assert_eq!(
+            format[0][1..],
+            [0x104, TEXT_TWO_STRINGS, TEXT_SOUND_PATH, 0x5f5f]
+        );
+        assert_eq!(e.mem.u32(st + 0x10), 900);
+        assert_eq!(e.mem.u32(st + 4 + 0x14) & 8, 8);
+        // The voice's volume: the audio's volume times the strength 0.5.
+        assert_eq!(
+            calls(&e, SOUND_SET_VOLUME).last().unwrap(),
+            &vec![PIPBOY_HANDLE_5BC, 0.25f32.to_bits()]
+        );
+    }
+
+    #[test]
+    fn pipboy_update_plays_the_voice_static_without_a_conversation() {
+        let mut e = Engine::new();
+        globals(&mut e);
+        sounds(&mut e);
+        e.register(SOUND_TEST_00AD8930, |_, _| 0u32.into_ret());
+        e.register(AUDIO_VOLUME_00AD7AE0, |_, _| Ret {
+            st0: 1.0,
+            ..Ret::default()
+        });
+        let st = station(&mut e, 0x3030, 0);
+        e.mem.set_u8(st + 4 + 0x10, 100);
+        e.mem.set_u32(st + 0x10, 5);
+        e.set_global(CURRENT_PIPBOY_STATION, st);
+        e.call_log = Some(vec![]);
+        e.call(0x0083_31c0, &args![0u32]);
+        assert_eq!(
+            calls(&e, SOUND_SET_FLAG_004F15A0),
+            vec![vec![PIPBOY_HANDLE_5BC, 1]]
+        );
+        assert_eq!(
+            calls(&e, SOUND_HANDLE_PLAY),
+            vec![vec![PIPBOY_HANDLE_5BC, 0]]
+        );
+        assert_eq!(e.mem.u32(st + 4 + 0x14), 0x40);
+        assert_eq!(
+            calls(&e, SOUND_SET_VOLUME),
+            vec![vec![PIPBOY_HANDLE_5BC, 1.0f32.to_bits()]]
+        );
+    }
+
+    #[test]
+    fn enable_npc_radio_adds_a_receiver() {
+        let mut e = Engine::new();
+        globals(&mut e);
+        lists(&mut e);
+        quiet(&mut e, &[LIST_ADD_HEAD, SOUND_HANDLE_CONSTRUCT]);
+        e.register(FORM_OF, |e, a| e.mem.u32(a[0] + 0x20).into_ret());
+        e.register(REFERENCE_TEST_00440DA0, |_, _| 0u32.into_ret());
+        e.register(REFERENCE_VALUE_0056B210, |_, _| 0u32.into_ret());
+        e.register(AUDIO_INSTANCE, |_, _| 0u32.into_ret());
+        e.register(AUDIO_TIME, |_, _| 10u32.into_ret());
+        let reference = e.mem.alloc(0x30);
+        e.mem.set_u32(reference + 0x20, 0x55);
+        let st = station(&mut e, reference, 0);
+        fill(&mut e, STATION_LIST, &[st]);
+        let block = e.mem.alloc(0x20);
+        e.register_double(OPERATOR_NEW, move |_, _| block.into_ret());
+        e.call_log = Some(vec![]);
+        e.call(0x0083_5810, &args![0x7777u32, reference]);
+        assert_eq!(e.mem.u32(block), 0x7777);
+        assert_eq!(e.mem.u8(block + 0x1c), 1);
+        assert_eq!(e.mem.u8(block + 0x1f), 1);
+        let adds = calls(&e, LIST_ADD_HEAD);
+        assert_eq!(adds.len(), 2);
+        assert_eq!(adds[0][0], RECEIVER_LIST);
+        assert_eq!(adds[1][0], st + STATION_USERS);
+        assert_eq!(e.mem.u32(st + 4 + 0x14) & 1, 1);
+        // Shutting down: nothing.
+        e.set_global(SHUTTING_DOWN, 1u8);
+        e.call_log = Some(vec![]);
+        e.call(0x0083_5810, &args![0x7777u32, reference]);
+        assert!(calls(&e, LIST_ADD_HEAD).is_empty());
+    }
+
+    #[test]
+    fn broadcast_state_off_stops_the_users() {
+        let mut e = Engine::new();
+        globals(&mut e);
+        lists(&mut e);
+        sounds(&mut e);
+        quiet(
+            &mut e,
+            &[
+                ENTER_CRITICAL_SECTION,
+                LEAVE_CRITICAL_SECTION,
+                FORM_SET_BROADCAST_00511370,
+                CONVERSATION_DELETE,
+                MEDIA_CLOSE,
+                MEDIA_PLAY_008300C0,
+                MEDIA_CALL_008304C0,
+            ],
+        );
+        e.register(SOUND_IS_VALID, |_, _| 1u32.into_ret());
+        e.register(FORM_OF, |e, a| e.mem.u32(a[0] + 0x20).into_ret());
+        e.register(REFERENCE_TEST_00440DA0, |_, _| 0u32.into_ret());
+        e.register(REFERENCE_VALUE_0056B210, |_, _| 0u32.into_ret());
+        let reference = e.mem.alloc(0x30);
+        e.mem.set_u32(reference + 0x20, 0x55);
+        let st = station(&mut e, reference, 0x32);
+        e.mem.set_u32(st + 4, 0x0c0c);
+        let receiver = e.mem.alloc(0x20);
+        fill(&mut e, st + STATION_USERS, &[receiver]);
+        fill(&mut e, STATION_LIST, &[st]);
+        e.set_global(CURRENT_PIPBOY_STATION, st);
+        e.set_global(PIPBOY_RADIO_ON, 1u8);
+        e.call_log = Some(vec![]);
+        e.call(0x0083_59e0, &args![reference, 0u32]);
+        assert_eq!(calls(&e, FORM_SET_BROADCAST_00511370), vec![vec![0x55, 0]]);
+        assert_eq!(
+            calls(&e, SOUND_HANDLE_STOP),
+            vec![vec![receiver + 4], vec![PIPBOY_HANDLE_5BC]]
+        );
+        assert_eq!(calls(&e, MEDIA_PLAY_008300C0).len(), 1);
+        assert_eq!(calls(&e, CONVERSATION_DELETE), vec![vec![0x0c0c, 1]]);
+        assert_eq!(e.mem.u32(st + 4), 0);
+        // Flags 0x20 and 0x10 cleared.
+        assert_eq!(e.mem.u32(st + 4 + 0x14), 2);
+        assert_eq!(
+            calls(&e, LEAVE_CRITICAL_SECTION),
+            vec![vec![RADIO_CRITICAL_SECTION]]
+        );
+        // Turning it on sets flag 0x20 again.
+        e.call_log = Some(vec![]);
+        e.call(0x0083_59e0, &args![reference, 1u32]);
+        assert_eq!(e.mem.u32(st + 4 + 0x14), 0x22);
+        assert!(calls(&e, SOUND_HANDLE_STOP).is_empty());
+    }
+
+    #[test]
+    fn start_radio_conversation_starts_the_first_response() {
+        let mut e = Engine::new();
+        globals(&mut e);
+        lists(&mut e);
+        sounds(&mut e);
+        quiet(
+            &mut e,
+            &[
+                ENTER_CRITICAL_SECTION,
+                LEAVE_CRITICAL_SECTION,
+                PRECACHE_SOUNDS,
+                FIRST_ITEM,
+                FIRST_RESPONSE,
+                CONVERSATION_DELETE,
+            ],
+        );
+        e.register(REFERENCE_TEST_00440DA0, |_, _| 0u32.into_ret());
+        e.register(NEXT_ITEM, |_, _| 0u32.into_ret());
+        e.register(AUDIO_TIME, |_, _| 1000u32.into_ret());
+        e.register(CURRENT_RESPONSE, |_, a| (a[0] + 1).into_ret());
+        let reference = e.mem.alloc(0x30);
+        let st = station(&mut e, reference, 0x20);
+        // 00837060 (this file) replaces the conversation: 0x6000 again.
+        e.mem.set_u32(st + 4, 0x6000);
+        fill(&mut e, STATION_LIST, &[st]);
+        e.register(OPERATOR_NEW, |_, _| 0x5000u32.into_ret());
+        e.register(CONVERSATION_CONSTRUCT, |_, _| 0x6000u32.into_ret());
+        e.call_log = Some(vec![]);
+        fallout_radio_start_radio_conversation(&mut e, reference, 0x8080);
+        assert_eq!(calls(&e, NEXT_ITEM), vec![vec![0x6000]]);
+        assert_eq!(calls(&e, FIRST_RESPONSE), vec![vec![0x6001]]);
+        assert_eq!(e.mem.u32(st + 0xc), 1050);
+        // Flag 0x80 set, flag 0x20 kept.
+        assert_eq!(e.mem.u32(st + 4 + 0x14) & 0xa0, 0xa0);
+        assert_eq!(e.mem.u32(st + 0x10), 0);
+        // Its reference passing 00440da0 stops it before the lock.
+        e.register(REFERENCE_TEST_00440DA0, |_, _| 1u32.into_ret());
+        e.call_log = Some(vec![]);
+        e.call(0x0083_5be0, &args![reference, 0x8080u32]);
+        assert!(calls(&e, ENTER_CRITICAL_SECTION).is_empty());
+    }
+
+    #[test]
+    fn load_game_reads_receivers_stations_and_pipboy_stations() {
+        let mut e = Engine::new();
+        globals(&mut e);
+        lists(&mut e);
+        quiet(
+            &mut e,
+            &[
+                BUFFER_READ,
+                BUFFER_READ_STRING,
+                BUFFER_READ_FORM_ID,
+                LIST_ADD_HEAD,
+                SOUND_HANDLE_CONSTRUCT,
+                LIST_CONSTRUCTOR,
+                CONVERSATION_LOAD_GAME_OV2,
+            ],
+        );
+        e.register(BUFFER_COUNT, |_, _| 1u32.into_ret());
+        e.register(OPERATOR_NEW, |e, a| e.mem.alloc(a[0]).into_ret());
+        e.register(BUFFER_READ_FORM, |_, _| 0x99u32.into_ret());
+        e.register(LOOKUP_FORM, |_, a| (a[0] + 1).into_ret());
+        e.register(RTTI_CAST, |_, a| (a[0] + 2).into_ret());
+        let buffer = e.mem.alloc(4);
+        let vtable = e.mem.alloc(4);
+        e.mem.set_u32(buffer, vtable);
+        e.mem.set_u32(vtable, 0x7700_0000);
+        e.register(0x7700_0000, |_, _| 10u32.into_ret());
+        e.call_log = Some(vec![]);
+        e.call(0x0083_68b0, &args![buffer]);
+        let reads = calls(&e, BUFFER_READ);
+        assert_eq!(reads[0], vec![buffer, SAVED_WORD, 4]);
+        assert_eq!(reads[1], vec![buffer, SAVED_BYTE, 1]);
+        let adds = calls(&e, LIST_ADD_HEAD);
+        assert_eq!(
+            adds.iter().map(|a| a[0]).collect::<Vec<_>>(),
+            vec![RECEIVER_LIST, STATION_LIST, DISCOVERED_LIST]
+        );
+        assert_eq!(e.global::<u32>(CURRENT_PIPBOY_STATION), 0x9c);
+        assert_eq!(e.global::<u32>(LOST_PIPBOY_STATION), 0x9c);
+        assert_eq!(
+            calls(&e, RTTI_CAST)[0],
+            vec![0x9a, 0, RTTI_TES_FORM, RTTI_TES_BOUND_OBJECT, 0]
+        );
+        // An older save has no discovered list.
+        e.register(0x7700_0000, |_, _| 9u32.into_ret());
+        e.call_log = Some(vec![]);
+        e.call(0x0083_68b0, &args![buffer]);
+        assert_eq!(calls(&e, LIST_ADD_HEAD).len(), 2);
+    }
+
+    #[test]
+    fn init_load_game_resolves_and_prunes() {
+        let mut e = Engine::new();
+        globals(&mut e);
+        lists(&mut e);
+        quiet(
+            &mut e,
+            &[
+                CONVERSATION_0083C420,
+                NODE_SET_ITEM_00726C60,
+                OPERATOR_DELETE,
+                SOUND_HANDLE_DESTRUCTOR,
+                LIST_DESTRUCTOR,
+            ],
+        );
+        e.register(LOOKUP_FORM, |_, a| a[0].into_ret());
+        e.register(RTTI_CAST, |_, a| a[0].into_ret());
+        e.register(FORM_OF, |e, a| e.mem.u32(a[0] + 0x20).into_ret());
+        e.register(REFERENCE_TEST_00440DA0, |_, _| 0u32.into_ret());
+        e.register(REFERENCE_VALUE_0056B210, |_, _| 0u32.into_ret());
+        // A receiver with a radio id, and one without.
+        let kept = e.mem.alloc(0x20);
+        e.mem.set_u32(kept, 0x0123);
+        let lost = e.mem.alloc(0x20);
+        fill(&mut e, RECEIVER_LIST, &[kept, lost]);
+        // A station without a reference id: deleted.
+        let empty_station = e.mem.alloc(0x24);
+        fill(&mut e, STATION_LIST, &[empty_station]);
+        let buffer = e.mem.alloc(4);
+        let vtable = e.mem.alloc(4);
+        e.mem.set_u32(buffer, vtable);
+        e.mem.set_u32(vtable, 0x7700_0000);
+        e.register(0x7700_0000, |_, _| 9u32.into_ret());
+        e.call_log = Some(vec![]);
+        e.call(0x0083_6af0, &args![buffer]);
+        assert_eq!(e.mem.u32(kept), 0x0123);
+        // The deleting destructors are this file's: they ran for real on
+        // the removed entries, which leaves the lists with the kept one.
+        assert_eq!(e.mem.u32(RECEIVER_LIST), kept);
+        assert_eq!(e.mem.u32(STATION_LIST), 0);
+    }
+
+    #[test]
+    fn finish_load_game_and_revert() {
+        let mut e = Engine::new();
+        globals(&mut e);
+        lists(&mut e);
+        sounds(&mut e);
+        quiet(
+            &mut e,
+            &[
+                CONVERSATION_DELETE,
+                MEDIA_CLOSE,
+                MEDIA_IS_PLAYING_00830AD0,
+                LIST_CLEAR,
+                OPERATOR_DELETE,
+                SOUND_HANDLE_DESTRUCTOR,
+                LIST_DESTRUCTOR,
+            ],
+        );
+        e.register(AUDIO_TIME, |_, _| 10u32.into_ret());
+        let st = station(&mut e, 0x3030, 0);
+        e.mem.set_u32(st + 0xc, 4);
+        e.mem.set_u32(st + 0x10, 1);
+        fill(&mut e, STATION_LIST, &[st, 0]);
+        e.call_log = Some(vec![]);
+        e.call(0x0083_6e20, &args![0u32]);
+        // The station's item rebased to 10 - 4; the radio stays off.
+        assert_eq!(e.mem.u32(st + 0xc), 6);
+        assert_eq!(e.global::<u8>(PIPBOY_RADIO_ON), 0);
+
+        // Revert: statics reset, every list emptied.
+        e.set_global(CURRENT_PIPBOY_STATION, st);
+        e.set_global(SAVED_WORD, 5u32);
+        e.register(SOUND_IS_VALID, |_, _| 1u32.into_ret());
+        let receiver = e.mem.alloc(0x20);
+        fill(&mut e, RECEIVER_LIST, &[receiver]);
+        e.call_log = Some(vec![]);
+        e.call(0x0083_6ef0, &[]);
+        assert_eq!(e.global::<u32>(CURRENT_PIPBOY_STATION), 0);
+        assert_eq!(e.global::<u32>(LAST_UPDATE), 1);
+        assert_eq!(e.global::<u32>(SAVED_WORD), 0);
+        assert_eq!(e.global::<u8>(SKIP_DISCOVERY_MESSAGE), 1);
+        assert_eq!(e.mem.u32(STATION_LIST), 0);
+        assert_eq!(e.mem.u32(RECEIVER_LIST), 0);
+        assert_eq!(calls(&e, LIST_CLEAR), vec![vec![DISCOVERED_LIST]]);
+        assert_eq!(
+            calls(&e, SOUND_HANDLE_STOP),
+            vec![
+                vec![receiver + 4],
+                vec![PIPBOY_HANDLE_5BC],
+                vec![PIPBOY_HANDLE_638]
+            ]
+        );
+    }
+
+    #[test]
+    fn radio_conv_task_run_makes_the_next_conversation() {
+        let mut e = Engine::new();
+        let block = e.mem.alloc(0xc);
+        e.register_double(OPERATOR_NEW, move |_, _| block.into_ret());
+        e.register(GET_TOPIC, |_, _| 0x7070u32.into_ret());
+        e.register(CONVERSATION_CONSTRUCT, |_, a| a[0].into_ret());
+        let this = e.mem.alloc(0x34);
+        let st = station(&mut e, 0x3030, 0);
+        e.mem.set_u32(this + 0x30, st);
+        e.call_log = Some(vec![]);
+        e.call(0x0083_72e0, &args![this]);
+        assert_eq!(e.mem.u32(st + 8), block);
+        assert_eq!(
+            calls(&e, CONVERSATION_CONSTRUCT),
+            vec![vec![block, 0x3030, 0x3030, 0x7070]]
+        );
+        assert_eq!(calls(&e, GET_TOPIC), vec![vec![7, 0]]);
+        // A next conversation already there: nothing.
+        e.call_log = Some(vec![]);
+        e.call(0x0083_72e0, &args![this]);
+        assert!(calls(&e, OPERATOR_NEW).is_empty());
     }
 }

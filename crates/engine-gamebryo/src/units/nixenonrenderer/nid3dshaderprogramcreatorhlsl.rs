@@ -1366,10 +1366,24 @@ pub fn fn_00e96c90(e: &mut Engine, this: Ptr) {
     e.call(PIXEL_SHADER_DESTRUCT, &args![this]);
 }
 
+/// The import slot `00ee6e2e` jumps through (`D3DXGetVertexShaderProfile`, see above).
+const IMPORT_SLOT_00EE6E2E: u32 = 0x00fd_f3f0;
+
+// Translated from 00ee6e2e (decompiled, FalloutNV.exe 1.4.0.525)
+/// Import thunk `JMP dword ptr [0x00fdf3f0]` (Ghidra labels the import
+/// `D3DXGetVertexShaderProfile`; the engine map's `NiD3DHLSLVertexShader` name
+/// is folded code). stdcall: the one stack word (the device; callers at
+/// 00e6bddc and 00e9667f push one) goes unchanged to the import and its result
+/// (the profile text) comes back.
+pub fn fn_00ee6e2e(e: &mut Engine, device: u32) -> u32 {
+    e.call(IMPORT_SLOT_00EE6E2E, &args![device]).u32()
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
         entry!(0x00be_0920, ni_d3d_shader_program_set_name(Ptr, u32)),
+        entry!(0x00ee_6e2e, fn_00ee6e2e(u32) -> u32),
         entry!(
             0x00be_09e0,
             ni_d3d_shader_program_set_shader_program_name(Ptr, u32)
@@ -2505,5 +2519,21 @@ mod tests {
         e.call_log = Some(vec![]);
         e.call(0x00e9_6c90, &args![shader]);
         assert!(calls(&e, COM_BASE + 8).is_empty());
+    }
+}
+
+#[cfg(test)]
+mod tests_n084 {
+    use super::*;
+
+    #[test]
+    fn fn_00ee6e2e_passes_the_device_and_the_answer() {
+        let mut e = Engine::new();
+        e.register(IMPORT_SLOT_00EE6E2E, |_, a| (a[0] + 1).into_ret());
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x00ee_6e2e, &args![0x7000u32]).u32(), 0x7001);
+        let log = e.call_log.take().unwrap();
+        let imports: Vec<_> = log.iter().filter(|c| c.0 == IMPORT_SLOT_00EE6E2E).collect();
+        assert_eq!(imports, vec![&(IMPORT_SLOT_00EE6E2E, vec![0x7000])]);
     }
 }

@@ -2583,8 +2583,8 @@ pub fn fn_0069ad70(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
 /// Sets the deleting-destructor vtable and forwards `count` to the embedded
 /// array's vector-deleting destructor.
 pub fn fn_0069ada0(e: &mut Engine, this: Ptr, array: Ptr, count: u32) -> Ptr {
-    let vtable = e.mem.u32(0x0106_abe4);
-    e.mem.set_u32(this.addr(), vtable);
+    // `MOV dword ptr [EAX],0x106abe4`: the vtable's address itself.
+    e.mem.set_u32(this.addr(), 0x0106_abe4);
     e.call(0x0069_2290, &args![this, array, count]);
     this
 }
@@ -2626,8 +2626,8 @@ pub fn fn_0069aeb0(e: &mut Engine, this: Ptr, comparator: Ptr) {
 // Translated from 0069aee0 (decompiled, FalloutNV.exe 1.4.0.525)
 /// Constructs the embedded 16-bit array with vtable `0106b1a4`.
 pub fn fn_0069aee0(e: &mut Engine, this: Ptr) -> Ptr {
-    let vtable = e.mem.u32(0x0106_b1a4);
-    e.mem.set_u32(this.addr(), vtable);
+    // `MOV dword ptr [EAX],0x106b1a4`: the vtable's address itself.
+    e.mem.set_u32(this.addr(), 0x0106_b1a4);
     e.call(0x006b_3eb0, &args![this, 0u32, 0u32]);
     this
 }
@@ -4955,7 +4955,11 @@ mod tests {
         e.mem.set_u32(0x0106_abe4, 0x7788);
         let destroy = recorder(&mut e, 0x0069_2290, 0);
         assert_eq!(fn_0069ada0(&mut e, this, Ptr::new(0x4400), 5), this);
-        assert_eq!(e.mem.u32(this.addr()), 0x7788);
+        assert_eq!(
+            e.mem.u32(this.addr()),
+            0x0106_abe4,
+            "the vtable's address, not its first slot"
+        );
         assert_eq!(&*destroy.borrow(), &[vec![this.addr(), 0x4400, 5]]);
     }
 
@@ -4980,7 +4984,11 @@ mod tests {
         e.mem.set_u32(0x0106_b1a4, 0x7788);
         let initialize = recorder(&mut e, 0x006b_3eb0, 0);
         assert_eq!(fn_0069aee0(&mut e, this), this);
-        assert_eq!(e.mem.u32(this.addr()), 0x7788);
+        assert_eq!(
+            e.mem.u32(this.addr()),
+            0x0106_b1a4,
+            "the vtable's address, not its first slot"
+        );
         assert_eq!(&*initialize.borrow(), &[vec![this.addr(), 0, 0]]);
     }
 

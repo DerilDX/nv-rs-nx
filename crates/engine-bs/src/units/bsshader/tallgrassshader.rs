@@ -1686,9 +1686,168 @@ pub fn tall_grass_shader_load_shaders(e: &mut Engine, this: Ptr) {
     });
 }
 
+/// `BSShaderLightingProperty::GetFirstActiveNonShadowLight` (`00b70600`, `thiscall`, `RET 4`:
+/// an out word), `D3DXVec3TransformCoord` (`00ee6df8`, `stdcall`: out, vector, matrix),
+/// `D3DXMatrixMultiply` (`00ee6de0`, `stdcall`: out, a, b), `D3DXMatrixTranspose`
+/// (`00ee6dd4`, `stdcall`: out, matrix) and the matrix builder `00b71a40` (`cdecl`: out,
+/// rotation, translation, scale).
+const FIRST_ACTIVE_NON_SHADOW_LIGHT: u32 = 0x00b7_0600;
+const D3DX_VEC3_TRANSFORM_COORD: u32 = 0x00ee_6df8;
+const D3DX_MATRIX_MULTIPLY: u32 = 0x00ee_6de0;
+const D3DX_MATRIX_TRANSPOSE: u32 = 0x00ee_6dd4;
+const BUILD_MATRIX_00B71A40: u32 = 0x00b7_1a40;
+/// The point light block `UpdatePointLights` fills (`01200540`, four floats).
+const POINT_LIGHT_01200540: u32 = 0x0120_0540;
+/// The camera offset `00baa850` adds to the translation (`011f474c`, three floats) and the
+/// matrix blocks it fills (`01200510`, `01200520`, `01200540`, `01200570`, four floats each).
+const OFFSET_011F474C: u32 = 0x011f_474c;
+const MATRIX_ROWS_00BAA850: [u32; 4] = [0x0120_0510, 0x0120_0520, 0x0120_0540, 0x0120_0570];
+
+// Translated from 00baa720 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TallGrassShader::UpdatePointLights` (engine map; `thiscall`, `RET 0x10`: lighting
+/// property, matrix, scale float, pass): the first active non-shadow light's object (+0xf8 of
+/// what `00b70600` answers) gives its colour (+0xd4, three floats) with 1.0 at +0x1b0 of the
+/// shader, its position (+0x8c) transformed by the matrix (`D3DXVec3TransformCoord`) and its
+/// range (+0xe0; divided by the scale unless the pass is a shadow pass, `IsShadowPass`) into
+/// `01200540`. Every float goes through `FLD`/`FSTP`; the range is kept in the first
+/// argument's stack slot as in the exe.
+pub fn tall_grass_shader_update_point_lights(
+    e: &mut Engine,
+    this: Ptr,
+    property: u32,
+    matrix: u32,
+    scale: f32,
+    pass: u32,
+) {
+    let base = this.addr();
+    e.with_stack(0x20, |e, locals| {
+        let out_word = locals.addr();
+        let position = out_word + 4;
+        let transformed = out_word + 0x10;
+        e.mem.set_u32(out_word, 0);
+        let light = e
+            .call(FIRST_ACTIVE_NON_SHADOW_LIGHT, &args![property, out_word])
+            .u32();
+        let object = e.mem.u32(light.wrapping_add(0xf8));
+        for (index, offset) in [0xd4u32, 0xd8, 0xdc].into_iter().enumerate() {
+            let value = x87_quiet_bits(e.mem.u32(object.wrapping_add(offset)));
+            e.mem.set_u32(base + 0x1b0 + 4 * index as u32, value);
+        }
+        e.mem.set_u32(base + 0x1bc, x87_store32(1.0));
+        for (index, offset) in [0x8cu32, 0x90, 0x94].into_iter().enumerate() {
+            let value = x87_quiet_bits(e.mem.u32(object.wrapping_add(offset)));
+            e.mem.set_u32(position + 4 * index as u32, value);
+        }
+        e.call(
+            D3DX_VEC3_TRANSFORM_COORD,
+            &args![transformed, position, matrix],
+        );
+        let mut range = x87_quiet_bits(e.mem.u32(object.wrapping_add(0xe0)));
+        if !e.call(IS_SHADOW_PASS, &args![pass]).bool() {
+            range = x87_store32(x87_div(x87_load32(range), x87_m32(scale.to_bits())));
+        }
+        for index in 0..3u32 {
+            let value = x87_quiet_bits(e.mem.u32(transformed + 4 * index));
+            e.mem.set_u32(POINT_LIGHT_01200540 + 4 * index, value);
+        }
+        e.mem
+            .set_u32(POINT_LIGHT_01200540 + 0xc, x87_quiet_bits(range));
+    });
+}
+
+// Translated from 00baa850 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`thiscall`, `RET 8`: a word, the world transform): the shadow
+/// pass setup. Two identity matrices on the (16-byte aligned) stack; without the word the
+/// first is built from the transform (`00b71a40` with its rotation, translation +0x24 and
+/// scale +0x30), and the camera offset at `011f474c` is added to its translation row. It is
+/// multiplied (`D3DXMatrixMultiply`) by the 16 floats at +0x10 of the object the current
+/// record (`011f91e0` +0xc) holds, the product transposed (`D3DXMatrixTranspose`) into the
+/// second and stored row by row at `01200510`, `01200520`, `01200540`, `01200570`. That
+/// object's light (+0xf8) then gives its colour (+0xd4) with 1.0 at +0x1b0, its position
+/// (+0x8c) at +0x1c0 and its range (+0xe0) at +0x1cc of the shader (every float through
+/// `FLD`/`FSTP`).
+pub fn fn_00baa850(e: &mut Engine, this: Ptr, word: u32, transform: u32) {
+    let base = this.addr();
+    let one = x87_store32(1.0);
+    e.with_stack(0x110, |e, frame| {
+        let second = frame.addr();
+        let first = second + 0x58;
+        let record_matrix = second + 0x98;
+        let product = second + 0xd8;
+        for matrix in [second, first] {
+            for index in 0..16u32 {
+                let value = if index % 5 == 0 { one } else { 0 };
+                e.mem.set_u32(matrix + 4 * index, value);
+            }
+        }
+        if word == 0 {
+            let scale = x87_quiet_bits(e.mem.u32(transform.wrapping_add(0x30)));
+            e.call(
+                BUILD_MATRIX_00B71A40,
+                &args![first, transform, transform.wrapping_add(0x24), scale],
+            );
+        }
+        let record = e.global::<u32>(CURRENT_RECORD_011F91E0);
+        for index in 0..3u32 {
+            let offset = e.global::<u32>(OFFSET_011F474C + 4 * index);
+            let cell = first + 0x30 + 4 * index;
+            let sum = x87_add(x87_load32(offset), x87_m32(e.mem.u32(cell)));
+            e.mem.set_u32(cell, x87_store32(sum));
+        }
+        let holder = e.mem.u32(record.wrapping_add(0xc));
+        let object = e.mem.u32(holder);
+        for index in 0..16u32 {
+            let word = e.mem.u32(object.wrapping_add(0x10 + 4 * index));
+            e.mem.set_u32(record_matrix + 4 * index, word);
+        }
+        e.call(D3DX_MATRIX_MULTIPLY, &args![product, first, record_matrix]);
+        for index in 0..16u32 {
+            let word = e.mem.u32(product + 4 * index);
+            e.mem.set_u32(second + 4 * index, word);
+        }
+        e.call(D3DX_MATRIX_TRANSPOSE, &args![second, second]);
+        for (row, global) in MATRIX_ROWS_00BAA850.into_iter().enumerate() {
+            for column in 0..4u32 {
+                let value = x87_quiet_bits(e.mem.u32(second + 0x10 * row as u32 + 4 * column));
+                e.mem.set_u32(global + 4 * column, value);
+            }
+        }
+        let record = e.global::<u32>(CURRENT_RECORD_011F91E0);
+        let holder = e.mem.u32(record.wrapping_add(0xc));
+        let light = e.mem.u32(e.mem.u32(holder).wrapping_add(0xf8));
+        let read =
+            |e: &mut Engine, offset: u32| x87_quiet_bits(e.mem.u32(light.wrapping_add(offset)));
+        let color = [read(e, 0xd4), read(e, 0xd8), read(e, 0xdc)];
+        let position = [read(e, 0x8c), read(e, 0x90), read(e, 0x94)];
+        let range = read(e, 0xe0);
+        // The exe also loads +0xe4 and +0xe8 into locals it never uses.
+        let _ = (read(e, 0xe4), read(e, 0xe8));
+        for (index, value) in color.into_iter().chain([one]).enumerate() {
+            e.mem.set_u32(base + 0x1b0 + 4 * index as u32, value);
+        }
+        for (index, value) in position.into_iter().chain([range]).enumerate() {
+            e.mem.set_u32(base + 0x1c0 + 4 * index as u32, value);
+        }
+    });
+}
+
+// Translated from 00bac8b0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`ECX` only): vtable `+0x13c` on `this`, then the tail call to
+/// `00bac160` (the passes).
+pub fn fn_00bac8b0(e: &mut Engine, this: Ptr) {
+    e.vcall(this.addr(), 0x13c, &args![]);
+    fn_00bac160(e, this);
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(
+            0x00ba_a720,
+            tall_grass_shader_update_point_lights(Ptr, u32, u32, f32, u32)
+        ),
+        entry!(0x00ba_a850, fn_00baa850(Ptr, u32, u32)),
+        entry!(0x00ba_c8b0, fn_00bac8b0(Ptr)),
         entry!(0x00ba_cd00, fn_00bacd00(Ptr, Ptr) -> Ptr),
         entry!(0x00ba_cf00, fn_00bacf00() -> Ptr),
         entry!(0x00ba_a570, fn_00baa570(Ptr)),
@@ -2651,5 +2810,164 @@ mod shader_function_tests {
             ]
         );
         assert_eq!(&used[0][10..], &[0, 1]);
+    }
+}
+
+#[cfg(test)]
+mod n072_tests {
+    use super::*;
+    use crate::units::bsshader::geometrydecalshader::shader_test_rig::*;
+
+    /// A light whose object (+0xf8) holds floats at the offsets the two setups read.
+    fn light(e: &mut Engine) -> (u32, u32) {
+        let object = e.mem.alloc(0x100);
+        for (offset, value) in [
+            (0xd4u32, 0.25f32),
+            (0xd8, 0.5),
+            (0xdc, 0.75),
+            (0x8c, 10.0),
+            (0x90, 20.0),
+            (0x94, 30.0),
+            (0xe0, 600.0),
+        ] {
+            e.mem.set_f32(object + offset, value);
+        }
+        let light = e.mem.alloc(0x100);
+        e.mem.set_u32(light + 0xf8, object);
+        (light, object)
+    }
+
+    fn floats(e: &Engine, at: u32, count: u32) -> Vec<f32> {
+        (0..count).map(|i| e.mem.f32(at + 4 * i)).collect()
+    }
+
+    #[test]
+    fn update_point_lights_fills_the_light_block() {
+        for (shadow, range) in [(false, 300.0f32), (true, 600.0)] {
+            let mut e = rig();
+            e.map(0x0120_0000, 0x1000);
+            let (light, _) = light(&mut e);
+            e.register_double(FIRST_ACTIVE_NON_SHADOW_LIGHT, move |_, _| light.into_ret());
+            e.register(D3DX_VEC3_TRANSFORM_COORD, |e, a| {
+                for i in 0..3 {
+                    let v = e.mem.f32(a[1] + 4 * i) + 1.0;
+                    e.mem.set_f32(a[0] + 4 * i, v);
+                }
+                a[0].into_ret()
+            });
+            e.register_double(IS_SHADOW_PASS, move |_, _| u32::from(shadow).into_ret());
+            let this = e.mem.alloc(0x1e0);
+            e.call(
+                0x00ba_a720,
+                &args![this, 0x4000u32, 0x5000u32, 2.0f32, 7u32],
+            );
+            assert_eq!(floats(&e, this + 0x1b0, 4), vec![0.25, 0.5, 0.75, 1.0]);
+            assert_eq!(
+                floats(&e, POINT_LIGHT_01200540, 4),
+                vec![11.0, 21.0, 31.0, range]
+            );
+            assert_eq!(calls(&e, IS_SHADOW_PASS), vec![vec![7]]);
+            assert_eq!(calls(&e, D3DX_VEC3_TRANSFORM_COORD)[0][2], 0x5000);
+            assert_eq!(calls(&e, FIRST_ACTIVE_NON_SHADOW_LIGHT)[0][0], 0x4000);
+        }
+    }
+
+    fn shadow_setup(word: u32) -> (Engine, u32) {
+        let mut e = rig();
+        e.map(0x0120_0000, 0x1000);
+        e.map(0x011f_4000, 0x1000);
+        e.map(0x011f_9000, 0x1000);
+        for (i, v) in [100.0f32, 200.0, 300.0].into_iter().enumerate() {
+            e.set_global::<f32>(OFFSET_011F474C + 4 * i as u32, v);
+        }
+        // The record's object: its light at +0xf8 and a matrix at +0x10 with 2.0 on the
+        // diagonal and 1.0 in the first three cells of the last row.
+        let (_, lit) = light(&mut e);
+        let object = e.mem.alloc(0x100);
+        e.mem.set_u32(object + 0xf8, lit);
+        for i in 0..4 {
+            e.mem.set_f32(object + 0x10 + 20 * i, 2.0);
+        }
+        for i in 12..15 {
+            e.mem.set_f32(object + 0x10 + 4 * i, 1.0);
+        }
+        let holder = e.mem.alloc(4);
+        e.mem.set_u32(holder, object);
+        let record = e.mem.alloc(0x10);
+        e.mem.set_u32(record + 0xc, holder);
+        e.set_global::<u32>(CURRENT_RECORD_011F91E0, record);
+        e.register(BUILD_MATRIX_00B71A40, |e, a| {
+            e.mem.set_f32(a[0] + 0x30, 1.0);
+            Ret::default()
+        });
+        // Element-wise, which is enough to follow the cells.
+        e.register(D3DX_MATRIX_MULTIPLY, |e, a| {
+            for i in 0..16 {
+                let v = e.mem.f32(a[1] + 4 * i) * e.mem.f32(a[2] + 4 * i);
+                e.mem.set_f32(a[0] + 4 * i, v);
+            }
+            a[0].into_ret()
+        });
+        e.register(D3DX_MATRIX_TRANSPOSE, |e, a| {
+            let m: Vec<f32> = (0..16).map(|i| e.mem.f32(a[1] + 4 * i)).collect();
+            for r in 0..4 {
+                for c in 0..4 {
+                    e.mem
+                        .set_f32(a[0] + 4 * (4 * r + c), m[(4 * c + r) as usize]);
+                }
+            }
+            a[0].into_ret()
+        });
+        let this = e.mem.alloc(0x1e0);
+        let transform = e.mem.alloc(0x34);
+        e.call(0x00ba_a850, &args![this, word, transform]);
+        (e, this)
+    }
+
+    #[test]
+    fn fn_00baa850_stores_the_transposed_matrix_and_the_light() {
+        let (e, this) = shadow_setup(0);
+        assert_eq!(calls(&e, BUILD_MATRIX_00B71A40).len(), 1);
+        assert_eq!(floats(&e, 0x0120_0510, 4), vec![2.0, 0.0, 0.0, 101.0]);
+        assert_eq!(floats(&e, 0x0120_0520, 4), vec![0.0, 2.0, 0.0, 200.0]);
+        assert_eq!(floats(&e, 0x0120_0540, 4), vec![0.0, 0.0, 2.0, 300.0]);
+        assert_eq!(floats(&e, 0x0120_0570, 4), vec![0.0, 0.0, 0.0, 2.0]);
+        assert_eq!(floats(&e, this + 0x1b0, 4), vec![0.25, 0.5, 0.75, 1.0]);
+        assert_eq!(floats(&e, this + 0x1c0, 4), vec![10.0, 20.0, 30.0, 600.0]);
+        // With the word set the identity is kept: only the offset is added.
+        let (e, _) = shadow_setup(1);
+        assert!(calls(&e, BUILD_MATRIX_00B71A40).is_empty());
+        assert_eq!(floats(&e, 0x0120_0510, 4)[3], 100.0);
+    }
+
+    #[test]
+    fn fn_00bac8b0_runs_the_slot_then_the_passes() {
+        let mut e = pass_rig();
+        e.map(0x011f_9000, 0x1000);
+        e.map(0x0120_0000, 0x1000);
+        e.register(RENDERER_QUERY_004DC060, |_, _| 2u32.into_ret());
+        e.set_global(FOG_SWITCH_011F941E, 1u8);
+        e.set_global(TEXTURE_011F9534, 0x0e77_0000u32);
+        e.set_global(SHADOW_FILTER_RESULT_011F948C, 1u32);
+        e.set_global(STATE_VALUE_01200458, 0.5f32);
+        let this = e.mem.alloc(0x1e0);
+        for index in 0..0x2cu32 {
+            let pass = e.mem.alloc(0x70);
+            e.mem.set_u32(this + 0x6c + 4 * index, pass);
+        }
+        for offset in (0x128u32..0x1a4).step_by(4) {
+            let shader = object(&mut e, 1);
+            e.mem.set_u32(this + offset, shader);
+        }
+        let mut slots = vec![0u32; 0x50];
+        slots[0x13c / 4] = 0x0e60_013c;
+        e.put_vtable(0x0e61_0000, &slots);
+        e.mem.set_u32(this, 0x0e61_0000);
+        e.register(0x0e60_013c, |_, _| Ret::default());
+        e.call(0x00ba_c8b0, &args![this]);
+        let log = e.call_log.as_ref().unwrap();
+        let slot = log.iter().position(|c| c.0 == 0x0e60_013c).unwrap();
+        let first_stage = log.iter().position(|c| c.0 == PASS_SET_STAGE).unwrap();
+        assert!(slot < first_stage);
     }
 }

@@ -78,9 +78,41 @@ pub fn fn_0068ac40(
     this
 }
 
+/// `MemoryManager` deallocation (`00401030`, cdecl, the block).
+const DEALLOCATE: u32 = 0x0040_1030;
+
+// Translated from 0068abe0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed: a scalar deleting destructor (`thiscall`, `RET 4`): the body
+/// [`fn_0068ab80`], then frees `this` (`00401030`) when bit 0 of `flags` is
+/// set. Returns `this`.
+pub fn fn_0068abe0(e: &mut Engine, this: Ptr<NiTArray>, flags: u32) -> Ptr<NiTArray> {
+    fn_0068ab80(e, this);
+    if flags & 1 != 0 {
+        e.call(DEALLOCATE, &args![this]);
+    }
+    this
+}
+
+// Translated from 0068ac10 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed: a scalar deleting destructor (`thiscall`, `RET 4`): the body
+/// [`fn_0068ab60`], then frees `this` (`00401030`) when bit 0 of `flags` is
+/// set. Returns `this`.
+pub fn fn_0068ac10(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    fn_0068ab60(e, this);
+    if flags & 1 != 0 {
+        e.call(DEALLOCATE, &args![this]);
+    }
+    this
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(
+            0x0068_abe0,
+            fn_0068abe0(Ptr<NiTArray>, u32) -> Ptr<NiTArray>
+        ),
+        entry!(0x0068_ac10, fn_0068ac10(Ptr, u32) -> Ptr),
         entry!(0x0068_ab60, fn_0068ab60(Ptr)),
         entry!(0x0068ab80, fn_0068ab80(Ptr<NiTArray>)),
         entry!(
@@ -170,5 +202,27 @@ mod thunk_tests {
         e.call_log = Some(vec![]);
         e.call(0x0068_ab60, &args![0x0000_5000u32]);
         assert_eq!(calls_to(&e, 0x0068_ab80), vec![vec![0x5000]]);
+    }
+}
+
+#[cfg(test)]
+mod tests_n073 {
+    use super::*;
+
+    #[test]
+    fn array_deleting_destructors_free_on_flag_one() {
+        let mut e = Engine::new();
+        e.register(DEALLOCATE, |_, _| Ret::default());
+        e.register(FREE_ELEMENTS, |_, _| Ret::default());
+        for address in [0x0068_abe0u32, 0x0068_ac10] {
+            let this = e.mem.alloc(0x10);
+            e.call_log = Some(vec![]);
+            assert_eq!(e.call(address, &args![this, 0u32]).u32(), this);
+            e.call(address, &args![this, 3u32]);
+            let log = e.call_log.take().unwrap();
+            assert_eq!(e.mem.u32(this), NI_T_ARRAY_VTABLE);
+            let frees: Vec<_> = log.iter().filter(|(a, _)| *a == DEALLOCATE).collect();
+            assert_eq!(frees, vec![&(DEALLOCATE, vec![this])]);
+        }
     }
 }

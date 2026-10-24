@@ -103,9 +103,46 @@ pub fn fn_00c33170(e: &mut Engine, this: Ptr<Setting>, text: u32) -> Ptr<Setting
     this
 }
 
+// Translated from 00c32fb0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map: the size of a setting's value (`thiscall`, no words), by
+/// the key's first character (signed) through the exe's byte map and jump table at
+/// `00c3306c`/`00c3305c`: `S` and `s` the text's length plus its terminator (`strlen`;
+/// 0 without text), `a`, `f`, `i`, `r` and `u` 4, `b`, `c` and `h` 1; any other
+/// character, or no key, 0. The exe tests `this` for null again before reading the text
+/// (after reading the key through it); that test is kept.
+pub fn fn_00c32fb0(e: &mut Engine, this: Ptr<Setting>) -> u32 {
+    let key = e.get(this, Setting::pKey);
+    if key == 0 {
+        return 0;
+    }
+    let first = i32::from(e.mem.u8(key) as i8);
+    match first.wrapping_sub(0x53) as u32 {
+        0x00 | 0x20 => {
+            let text = if this.is_null() {
+                0
+            } else {
+                e.get(this, Setting::uValue)
+            };
+            if text == 0 {
+                return 0;
+            }
+            let text = if this.is_null() {
+                0
+            } else {
+                e.get(this, Setting::uValue)
+            };
+            e.call(STRLEN, &args![text]).u32().wrapping_add(1)
+        }
+        0x0e | 0x13 | 0x16 | 0x1f | 0x22 => 4,
+        0x0f | 0x10 | 0x15 => 1,
+        _ => 0,
+    }
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x00c3_2fb0, fn_00c32fb0(Ptr<Setting>) -> u32),
         entry!(0x00c3_3090, fn_00c33090(u32) -> u32),
         entry!(0x00c3_3170, fn_00c33170(Ptr<Setting>, u32) -> Ptr<Setting>),
     ]
@@ -234,5 +271,29 @@ mod tests {
         e.call(0x00c3_3170, &args![setting, value]);
         assert_eq!(e.mem.u32(setting.addr() + 4), 0);
         assert_eq!(e.call(0x00c3_3170, &args![0u32, value]).u32(), 0);
+    }
+
+    #[test]
+    fn value_size_follows_the_key_type() {
+        let mut e = Engine::new();
+        e.register(STRLEN, |e, a| (e.mem.cstr(a[0]).len() as u32).into_ret());
+        let setting: Ptr<Setting> = e.new_object();
+        assert_eq!(e.call(0x00c3_2fb0, &args![setting]).u32(), 0);
+        let cases: [(&[u8], u32); 6] = [
+            (b"fScale", 4),
+            (b"uCount", 4),
+            (b"bFlag", 1),
+            (b"hShort", 1),
+            (b"xOther", 0),
+            (b"sText", 0),
+        ];
+        for (key, size) in cases {
+            let key = text(&mut e, key);
+            e.mem.set_u32(setting.addr() + 8, key);
+            assert_eq!(e.call(0x00c3_2fb0, &args![setting]).u32(), size);
+        }
+        let value = text(&mut e, b"abc");
+        e.mem.set_u32(setting.addr() + 4, value);
+        assert_eq!(e.call(0x00c3_2fb0, &args![setting]).u32(), 4);
     }
 }

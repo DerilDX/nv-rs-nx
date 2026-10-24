@@ -283,9 +283,38 @@ pub fn save_variable_sized_value(e: &mut Engine, this: Ptr<BGSSaveGameBuffer>, v
     }
 }
 
+/// `006815c0` (`thiscall`): the quaternion local's (empty) constructor.
+const TRIVIAL_CONSTRUCT: u32 = 0x0068_15c0;
+/// `NiQuaternion::FromRotation` (`00a6df40`, `thiscall`, `RET 4`: the
+/// matrix).
+const QUATERNION_FROM_ROTATION: u32 = 0x00a6_df40;
+
+// Translated from 00865ee0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BGSSaveGameBuffer::SaveData` (Xbox PDB) for a rotation (`thiscall`,
+/// `RET 0xc`; only the first word is read): the matrix `rotation` as a
+/// 16-byte quaternion (`NiQuaternion::FromRotation` on a local), saved
+/// with `00865e50` (16 bytes, 0).
+pub fn bgs_save_game_buffer_save_data(
+    e: &mut Engine,
+    this: Ptr<BGSSaveGameBuffer>,
+    rotation: u32,
+    _unused_2: u32,
+    _unused_3: u32,
+) {
+    e.with_stack(0x10, |e, quaternion| {
+        e.call(TRIVIAL_CONSTRUCT, &args![quaternion]);
+        e.call(QUATERNION_FROM_ROTATION, &args![quaternion, rotation]);
+        save_bytes(e, this, quaternion, 0x10, 0);
+    });
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(
+            0x0086_5ee0,
+            bgs_save_game_buffer_save_data(Ptr<BGSSaveGameBuffer>, u32, u32, u32)
+        ),
         entry!(0x0086_5c10, destruct(Ptr<BGSSaveGameBuffer>)),
         entry!(0x0086_5c40, save(Ptr<BGSSaveGameBuffer>, Ptr)),
         entry!(0x0086_5c80, save_ov2(Ptr<BGSSaveGameBuffer>, Ptr, u32)),
@@ -798,5 +827,32 @@ mod tests {
             calls_to(&e, SAVE_GAME_WARNING),
             vec![vec![VALUE_TOO_LARGE_FORMAT, 0x4000_0000]]
         );
+    }
+}
+
+#[cfg(test)]
+mod n072_tests {
+    use super::*;
+
+    #[test]
+    fn save_data_saves_the_rotation_as_a_quaternion() {
+        let mut e = Engine::new();
+        e.register(TRIVIAL_CONSTRUCT, |_, a| a[0].into_ret());
+        e.register(QUATERNION_FROM_ROTATION, |e, a| {
+            for i in 0..0x10 {
+                e.mem.set_u8(a[0] + i, (a[1] as u8).wrapping_add(i as u8));
+            }
+            Ret::default()
+        });
+        let seen = std::rc::Rc::new(std::cell::RefCell::new(vec![]));
+        let log = seen.clone();
+        e.register_double(0x0086_5570, move |e, a| {
+            log.borrow_mut().push((a[0], e.mem.bytes(a[1], a[2]), a[3]));
+            Ret::default()
+        });
+        let this = e.new_object::<BGSSaveGameBuffer>();
+        e.call(0x0086_5ee0, &args![this, 0x10u32, 7u32, 9u32]);
+        let expected: Vec<u8> = (0x10..0x20).collect();
+        assert_eq!(*seen.borrow(), vec![(this.addr(), expected, 0)]);
     }
 }

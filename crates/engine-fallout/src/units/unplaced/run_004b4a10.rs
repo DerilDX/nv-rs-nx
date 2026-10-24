@@ -303,9 +303,33 @@ pub fn fn_004b5020(e: &mut Engine, this: Ptr) -> Ptr {
     this
 }
 
+/// The function pointer `011aa050` (a variable in `.data`): transforms an array of points
+/// (`cdecl`: count, source points, destination points, transform).
+const TRANSFORM_POINTS_POINTER: u32 = 0x011a_a050;
+
+// Translated from 004b4a10 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`cdecl`, four words; called by `004b4910`): calls the
+/// function whose address is the word at `011aa050` with the count zero-extended from its
+/// low 16 bits and the three other words, and answers its `EAX`.
+pub fn fn_004b4a10(
+    e: &mut Engine,
+    count: u16,
+    source: u32,
+    destination: u32,
+    transform: u32,
+) -> u32 {
+    let function: u32 = e.global(TRANSFORM_POINTS_POINTER);
+    e.call(
+        function,
+        &args![u32::from(count), source, destination, transform],
+    )
+    .u32()
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x004b_4a10, fn_004b4a10(u16, u32, u32, u32) -> u32),
         entry!(0x004b_4e50, fn_004b4e50(Ptr, Ptr) -> Ptr),
         entry!(0x004b4ab0, fn_004b4ab0(Ptr, u32, u32)),
         entry!(0x004b_4f20, fn_004b4f20(Ptr) -> Ptr),
@@ -733,5 +757,26 @@ mod b004_tests {
         let this = e.mem.alloc(8);
         assert_eq!(e.call(0x004b_5020, &args![this]).u32(), this);
         assert_eq!(e.mem.u32(this), 0);
+    }
+}
+
+#[cfg(test)]
+mod transform_points_tests {
+    use super::*;
+
+    #[test]
+    fn fn_004b4a10_calls_the_function_pointer_with_a_16_bit_count() {
+        let mut e = Engine::new();
+        e.map(0x011a_a000, 0x1000);
+        e.set_global(TRANSFORM_POINTS_POINTER, 0x0300_0001u32);
+        e.register(0x0300_0001, |_, _| 0x77u32.into_ret());
+        e.call_log = Some(vec![]);
+        let r = e.call(
+            0x004b_4a10,
+            &args![0xabcd_0005u32, 0x10u32, 0x20u32, 0x30u32],
+        );
+        assert_eq!(r.u32(), 0x77);
+        let log = e.call_log.take().unwrap();
+        assert_eq!(log[1], (0x0300_0001, vec![5, 0x10, 0x20, 0x30]));
     }
 }

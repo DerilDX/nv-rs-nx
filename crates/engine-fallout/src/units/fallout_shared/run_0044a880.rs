@@ -167,9 +167,26 @@ pub fn fn_0044ac20(e: &mut Engine, this: Ptr, source: Ptr) {
     e.mem.set_u32(this.addr(), value);
 }
 
+/// `0044a450` (`thiscall`, one word: the source; unnamed in the engine
+/// map): the base class's copy constructor `0044a9a0` runs first.
+const BASE_COPY_0044A450: u32 = 0x0044_a450;
+/// The vtable `0044a9a0` stores (RTTI `.?AVlength_error@std@@`).
+const LENGTH_ERROR_VTABLE: u32 = 0x0101_73dc;
+
+// Translated from 0044a9a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The `std::length_error` copy constructor (by the vtable it stores,
+/// whose RTTI name is `length_error`; `RET 4`: the source): the base's
+/// copy (`0044a450`), then the vtable. Returns `this`.
+pub fn fn_0044a9a0(e: &mut Engine, this: Ptr, source: Ptr) -> Ptr {
+    e.call(BASE_COPY_0044A450, &args![this, source]);
+    e.mem.set_u32(this.addr(), LENGTH_ERROR_VTABLE);
+    this
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x0044_a9a0, fn_0044a9a0(Ptr, Ptr) -> Ptr),
         entry!(0x0044a880, std_string_eos(Ptr<DebugString>, u32)),
         entry!(0x0044a8c0, char_traits_assign(Ptr, Ptr)),
         entry!(
@@ -360,5 +377,25 @@ mod tests {
         let mut e = engine();
         e.register(FORWARD_TARGET, |_, _| 0x6000u32.into_ret());
         assert_eq!(e.call(0x0044_abd0, &args![0x10u32, 0x77u32]).u32(), 0x6000);
+    }
+}
+
+#[cfg(test)]
+mod n085_tests {
+    use super::*;
+
+    #[test]
+    fn length_error_copy_runs_the_base_then_stores_the_vtable() {
+        let mut e = Engine::new();
+        e.register(BASE_COPY_0044A450, |e, a| {
+            e.mem.set_u32(a[0], 0x1111);
+            Ret::default()
+        });
+        let this = e.mem.alloc(0x10);
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x0044_a9a0, &args![this, 0x7000u32]).u32(), this);
+        assert_eq!(e.mem.u32(this), LENGTH_ERROR_VTABLE);
+        let log = e.call_log.take().unwrap();
+        assert!(log.contains(&(BASE_COPY_0044A450, vec![this, 0x7000])));
     }
 }

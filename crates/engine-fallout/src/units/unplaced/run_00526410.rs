@@ -179,9 +179,198 @@ pub fn fn_005269c0(e: &mut Engine, this: Ptr) {
     e.call(0x0048_4ab0, &args![this, 1u32]);
 }
 
+/// The save buffer's change flags: `00428110` (`ECX` = buffer, one stack word: a local it
+/// fills) and `0042ce30` (the same for a load buffer) answer the flags' address; `004280f0`
+/// (`ECX` = that, one stack word: a mask) whether a bit of the mask is set (`AL`).
+const CHANGE_FLAGS: u32 = 0x0042_8110;
+const LOAD_CHANGE_FLAGS: u32 = 0x0042_ce30;
+const FLAGS_TEST: u32 = 0x0042_80f0;
+/// `BGSSaveGameBuffer`'s byte save (`00865e50`, `ECX` = buffer: data, size, 0) and
+/// `BGSLoadGameBuffer`'s byte load (`00864980`, `ECX` = buffer: destination, size).
+const SAVE_BYTES: u32 = 0x0086_5e50;
+const LOAD_BYTES: u32 = 0x0086_4980;
+/// The base save, load and revert bodies (`00484d60`, `00484da0`, `004534f0`; `ECX` = the
+/// form, one stack word: the buffer).
+const FORM_SAVE_GAME: u32 = 0x0048_4d60;
+const FORM_LOAD_GAME: u32 = 0x0048_4da0;
+const FORM_REVERT: u32 = 0x0045_34f0;
+/// `TESForm::StartForm` (`004855a0`), `TESForm::__SaveData` (`00485e20`: data, size) and
+/// `TESForm::CloseForm` (`00485680`), all `ECX` = the form.
+const START_FORM: u32 = 0x0048_55a0;
+const SAVE_DATA: u32 = 0x0048_5e20;
+const CLOSE_FORM: u32 = 0x0048_5680;
+/// `00401500`: the byte global that says the save is written byte-swapped (`AL`).
+const SAVE_SWAPS: u32 = 0x0040_1500;
+/// `00401080` (`cdecl`: address, byte): reverses a word's byte order.
+const SWAP_WORD: u32 = 0x0040_1080;
+/// `__RTDynamicCast` (`00ec43fb`), the RTTI type descriptors `.?AVTESForm@@` and
+/// `.?AVBGSLightingTemplate@@`, `TESForm::CopyAllComponents` (`004851b0`),
+/// `TESForm::CompareAllComponents` (`00485270`), `00401460` (copies bytes) and `memcmp`.
+const DYNAMIC_CAST: u32 = 0x00ec_43fb;
+const TYPE_TES_FORM: u32 = 0x0118_3028;
+const TYPE_LIGHTING_TEMPLATE: u32 = 0x0118_a8d0;
+const COPY_ALL_COMPONENTS: u32 = 0x0048_51b0;
+const COMPARE_ALL_COMPONENTS: u32 = 0x0048_5270;
+const COPY_BYTES: u32 = 0x0040_1460;
+const MEMCMP: u32 = 0x00ec_4835;
+
+/// Whether the buffer's change flags (through `flags_of`) have a bit of `mask`.
+fn flags_have(e: &mut Engine, flags_of: u32, buffer: Ptr, mask: u32) -> bool {
+    e.with_stack(8, |e, local| {
+        let flags = e.call(flags_of, &args![buffer, local]).u32();
+        e.call(FLAGS_TEST, &args![flags, mask]).u8() != 0
+    })
+}
+
+// Translated from 00526410 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BGSEncounterZone`'s `SaveGame` slot (+0x54 of its vtable `0102cbbc`; unnamed in the
+/// engine map; `ECX` and one stack word, `RET 4`): the base save (`00484d60`); with change
+/// flag 2, the low bit of the byte at +0x1e (one byte); with change flag 0x80000000, the
+/// 0x10 bytes at +0x20.
+pub fn fn_00526410(e: &mut Engine, this: Ptr, buffer: Ptr) {
+    e.call(FORM_SAVE_GAME, &args![this, buffer]);
+    if flags_have(e, CHANGE_FLAGS, buffer, 2) {
+        e.with_stack(4, |e, byte| {
+            let flags = e.mem.u8(this.addr() + 0x1e) as i8 as i32;
+            e.mem.set_u8(byte.addr(), (flags & 1) as u8);
+            e.call(SAVE_BYTES, &args![buffer, byte, 1u32, 0u32]);
+        });
+    }
+    if flags_have(e, CHANGE_FLAGS, buffer, 0x8000_0000) {
+        e.call(
+            SAVE_BYTES,
+            &args![buffer, this.addr() + 0x20, 0x10u32, 0u32],
+        );
+    }
+}
+
+// Translated from 005264a0 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 005264a0 - the /GS cookie check (00ec408c) on the frame's buffers is not translated.
+/// `BGSEncounterZone`'s `LoadGame` slot (+0x5c of its vtable; unnamed in the engine map;
+/// `ECX` and one stack word, `RET 4`): the base load (`00484da0`); with change flag 2, a
+/// byte read into a local (the byte at +0x1e is rewritten from itself, unchanged: the exe
+/// ORs its own low bit back in, not the byte read); with change flag 0x80000000, the 0x10
+/// bytes at +0x20, or 8 bytes into a local when the buffer's version (its vtable slot +0,
+/// `AL`) is below 8.
+pub fn fn_005264a0(e: &mut Engine, this: Ptr, buffer: Ptr) {
+    e.call(FORM_LOAD_GAME, &args![this, buffer]);
+    let base = this.addr();
+    e.with_stack(0xc, |e, frame| {
+        let byte = frame.addr();
+        let old = frame.addr() + 4;
+        if flags_have(e, CHANGE_FLAGS, buffer, 2) {
+            e.mem.set_u8(byte, 0);
+            e.call(LOAD_BYTES, &args![buffer, byte, 1u32]);
+            let high = (e.mem.u8(base + 0x1e) as i8 as i32) & !1;
+            let low = (e.mem.u8(base + 0x1e) as i8 as i32) & 1;
+            e.mem.set_u8(base + 0x1e, (high | low) as u8);
+        }
+        if flags_have(e, CHANGE_FLAGS, buffer, 0x8000_0000) {
+            let version = e.vcall(buffer.addr(), 0, &args![]).u8();
+            if version < 8 {
+                e.call(LOAD_BYTES, &args![buffer, old, 8u32]);
+            } else {
+                e.call(LOAD_BYTES, &args![buffer, base + 0x20, 0x10u32]);
+            }
+        }
+    });
+}
+
+// Translated from 00526570 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BGSEncounterZone`'s `Revert` slot (+0x70 of its vtable; unnamed in the engine map;
+/// `ECX` and one stack word, `RET 4`): the base revert (`004534f0`); with change flag
+/// 0x80000000 (`0042ce30`), zeroes the 0x10 bytes at +0x20 (`00403d30`).
+pub fn fn_00526570(e: &mut Engine, this: Ptr, buffer: Ptr) {
+    e.call(FORM_REVERT, &args![this, buffer]);
+    if flags_have(e, LOAD_CHANGE_FLAGS, buffer, 0x8000_0000) {
+        e.call(FILL_MEMORY, &args![this.addr() + 0x20, 0u32, 0x10u32]);
+    }
+}
+
+// Translated from 00526730 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BGSLightingTemplate`'s form-save slot (+0x2c of its vtable `0102cd94`; unnamed in the
+/// engine map; `ECX`, plain `RET`): `TESForm::StartForm`, the 0x2c-byte data at +0x18
+/// (`TESForm::__SaveData`), byte-swapped before and back after when `00401500` says so
+/// ([`fn_00526790`]), then `TESForm::CloseForm`.
+pub fn fn_00526730(e: &mut Engine, this: Ptr) {
+    let data = Ptr::new(this.addr() + 0x18);
+    e.call(START_FORM, &args![this]);
+    if e.call(SAVE_SWAPS, &args![]).u8() != 0 {
+        fn_00526790(e, data);
+    }
+    e.call(SAVE_DATA, &args![this, data, 0x2cu32]);
+    if e.call(SAVE_SWAPS, &args![]).u8() != 0 {
+        fn_00526790(e, data);
+    }
+    e.call(CLOSE_FORM, &args![this]);
+}
+
+// Translated from 00526790 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The lighting template data's byte swap (unnamed in the engine map; `ECX`, plain `RET`;
+/// also called by `005268a0`, `00541ce0`, `005422d0`, ...): reverses the byte order of the
+/// ten words at +0 to +0x24 (`00401080`, each with the byte 0 the body zeroes).
+pub fn fn_00526790(e: &mut Engine, this: Ptr) {
+    for word in 0..10u32 {
+        e.call(SWAP_WORD, &args![this.addr() + 4 * word, 0u32]);
+    }
+}
+
+// Translated from 005269f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BGSLightingTemplate`'s `Copy` slot (+0x108 of its vtable; unnamed in the engine map;
+/// `ECX` and one stack word, `RET 4`): when `source` casts to a `BGSLightingTemplate`,
+/// copies its 0x2c bytes at +0x18 (`00401460`), then `TESForm::CopyAllComponents` from
+/// `source`.
+pub fn fn_005269f0(e: &mut Engine, this: Ptr, source: Ptr) {
+    let template = e
+        .call(
+            DYNAMIC_CAST,
+            &args![source, 0u32, TYPE_TES_FORM, TYPE_LIGHTING_TEMPLATE, 0u32],
+        )
+        .u32();
+    if template == 0 {
+        return;
+    }
+    e.call(
+        COPY_BYTES,
+        &args![this.addr() + 0x18, template + 0x18, 0x2cu32],
+    );
+    e.call(COPY_ALL_COMPONENTS, &args![this, source]);
+}
+
+// Translated from 00526a50 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BGSLightingTemplate`'s `Compare` slot (+0x10c of its vtable; unnamed in the engine map;
+/// `ECX` and one stack word, `RET 4`): true (different) when `other` is not a
+/// `BGSLightingTemplate`, when the 0x2c bytes at +0x18 differ (`memcmp`) or when
+/// `TESForm::CompareAllComponents` answers true; false otherwise.
+pub fn fn_00526a50(e: &mut Engine, this: Ptr, other: Ptr) -> bool {
+    let template = e
+        .call(
+            DYNAMIC_CAST,
+            &args![other, 0u32, TYPE_TES_FORM, TYPE_LIGHTING_TEMPLATE, 0u32],
+        )
+        .u32();
+    if template == 0 {
+        return true;
+    }
+    if e.call(MEMCMP, &args![this.addr() + 0x18, template + 0x18, 0x2cu32])
+        .u32()
+        != 0
+    {
+        return true;
+    }
+    e.call(COMPARE_ALL_COMPONENTS, &args![this, template]).u8() != 0
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x0052_6410, fn_00526410(Ptr, Ptr)),
+        entry!(0x0052_64a0, fn_005264a0(Ptr, Ptr)),
+        entry!(0x0052_6570, fn_00526570(Ptr, Ptr)),
+        entry!(0x0052_6730, fn_00526730(Ptr)),
+        entry!(0x0052_6790, fn_00526790(Ptr)),
+        entry!(0x0052_69f0, fn_005269f0(Ptr, Ptr)),
+        entry!(0x0052_6a50, fn_00526a50(Ptr, Ptr) -> bool),
         entry!(0x0052_65c0, fn_005265c0(Ptr) -> Ptr),
         entry!(0x0052_66c0, fn_005266c0(Ptr, u32) -> Ptr),
         entry!(0x0052_6640, fn_00526640(Ptr) -> Ptr),
@@ -380,5 +569,154 @@ mod b027_tests {
         e.call_log = Some(vec![]);
         e.call(0x0052_69c0, &args![0x4000u32]);
         assert!(calls(&e, 0x0048_3710).is_empty());
+    }
+}
+
+#[cfg(test)]
+mod n075_tests {
+    use super::*;
+
+    type Log = Vec<(u32, Vec<u32>)>;
+
+    fn calls(log: &Log, callee: u32) -> Vec<Vec<u32>> {
+        log.iter()
+            .filter(|(a, _)| *a == callee)
+            .map(|(_, w)| w.clone())
+            .collect()
+    }
+
+    /// An engine whose change flags answer `flags & mask`; the buffer's slot +0 answers
+    /// `version`.
+    fn engine(flags: u32, version: u32) -> (Engine, u32) {
+        let mut e = Engine::new();
+        e.register(CHANGE_FLAGS, |_, _| 0x7000u32.into_ret());
+        e.register(LOAD_CHANGE_FLAGS, |_, _| 0x7000u32.into_ret());
+        e.register_double(FLAGS_TEST, move |_, a| {
+            u32::from(flags & a[1] != 0).into_ret()
+        });
+        e.register_double(0x0060_0000, move |_, _| version.into_ret());
+        e.put_vtable(0x0070_0000, &[0x0060_0000]);
+        let buffer = e.mem.alloc(4);
+        e.mem.set_u32(buffer, 0x0070_0000);
+        for callee in [
+            SAVE_BYTES,
+            LOAD_BYTES,
+            FORM_SAVE_GAME,
+            FORM_LOAD_GAME,
+            FORM_REVERT,
+            FILL_MEMORY,
+            START_FORM,
+            SAVE_DATA,
+            CLOSE_FORM,
+            SWAP_WORD,
+            COPY_BYTES,
+            COPY_ALL_COMPONENTS,
+        ] {
+            e.register(callee, |_, _| Ret::default());
+        }
+        e.call_log = Some(vec![]);
+        (e, buffer)
+    }
+
+    #[test]
+    fn fn_00526410_saves_the_flagged_parts() {
+        let (mut e, buffer) = engine(2 | 0x8000_0000, 0);
+        let zone = e.mem.alloc(0x30);
+        e.mem.set_u8(zone + 0x1e, 0x83);
+        e.register(SAVE_BYTES, |e, a| {
+            if a[2] == 1 {
+                assert_eq!(e.mem.u8(a[1]), 1);
+            }
+            Ret::default()
+        });
+        e.call(0x0052_6410, &args![zone, buffer]);
+        let log = e.call_log.take().unwrap();
+        assert_eq!(calls(&log, FORM_SAVE_GAME), vec![vec![zone, buffer]]);
+        let saves = calls(&log, SAVE_BYTES);
+        assert_eq!(saves.len(), 2);
+        assert_eq!(saves[1], vec![buffer, zone + 0x20, 0x10, 0]);
+        let (mut e, buffer) = engine(0, 0);
+        e.call(0x0052_6410, &args![zone, buffer]);
+        assert!(calls(&e.call_log.take().unwrap(), SAVE_BYTES).is_empty());
+    }
+
+    #[test]
+    fn fn_005264a0_loads_by_version() {
+        let (mut e, buffer) = engine(2 | 0x8000_0000, 8);
+        let zone = e.mem.alloc(0x30);
+        e.mem.set_u8(zone + 0x1e, 0x82);
+        e.call(0x0052_64a0, &args![zone, buffer]);
+        assert_eq!(e.mem.u8(zone + 0x1e), 0x82);
+        let log = e.call_log.take().unwrap();
+        let loads = calls(&log, LOAD_BYTES);
+        assert_eq!(loads.len(), 2);
+        assert_eq!(loads[0][2], 1);
+        assert_eq!(loads[1], vec![buffer, zone + 0x20, 0x10]);
+        let (mut e, buffer) = engine(0x8000_0000, 7);
+        e.call(0x0052_64a0, &args![zone, buffer]);
+        let log = e.call_log.take().unwrap();
+        let loads = calls(&log, LOAD_BYTES);
+        assert_eq!(loads.len(), 1);
+        assert_eq!(loads[0][2], 8);
+        assert_ne!(loads[0][1], zone + 0x20);
+    }
+
+    #[test]
+    fn fn_00526570_clears_the_flagged_bytes() {
+        let (mut e, buffer) = engine(0x8000_0000, 0);
+        e.call(0x0052_6570, &args![0x1000u32, buffer]);
+        let log = e.call_log.take().unwrap();
+        assert_eq!(calls(&log, FORM_REVERT), vec![vec![0x1000, buffer]]);
+        assert_eq!(calls(&log, FILL_MEMORY), vec![vec![0x1020, 0, 0x10]]);
+        let (mut e, buffer) = engine(0, 0);
+        e.call(0x0052_6570, &args![0x1000u32, buffer]);
+        assert!(calls(&e.call_log.take().unwrap(), FILL_MEMORY).is_empty());
+    }
+
+    #[test]
+    fn fn_00526730_and_00526790_save_and_swap_the_data() {
+        for swaps in [false, true] {
+            let (mut e, _) = engine(0, 0);
+            e.register(
+                SAVE_SWAPS,
+                if swaps {
+                    |_, _| 1u32.into_ret()
+                } else {
+                    |_, _| 0u32.into_ret()
+                },
+            );
+            e.call(0x0052_6730, &args![0x1000u32]);
+            let log = e.call_log.take().unwrap();
+            assert_eq!(calls(&log, SAVE_DATA), vec![vec![0x1000, 0x1018, 0x2c]]);
+            let swapped = calls(&log, SWAP_WORD);
+            assert_eq!(swapped.len(), if swaps { 20 } else { 0 });
+            if swaps {
+                assert_eq!(swapped[0], vec![0x1018, 0]);
+                assert_eq!(swapped[9], vec![0x103c, 0]);
+            }
+            assert_eq!(log.last().unwrap(), &(CLOSE_FORM, vec![0x1000]));
+        }
+    }
+
+    #[test]
+    fn fn_005269f0_and_00526a50_copy_and_compare_templates() {
+        let (mut e, _) = engine(0, 0);
+        e.register(DYNAMIC_CAST, |_, a| a[0].into_ret());
+        e.call(0x0052_69f0, &args![0x1000u32, 0x2000u32]);
+        let log = e.call_log.take().unwrap();
+        assert_eq!(calls(&log, COPY_BYTES), vec![vec![0x1018, 0x2018, 0x2c]]);
+        assert_eq!(calls(&log, COPY_ALL_COMPONENTS), vec![vec![0x1000, 0x2000]]);
+        e.register(MEMCMP, |_, _| 0u32.into_ret());
+        e.register(COMPARE_ALL_COMPONENTS, |_, _| 0x100u32.into_ret());
+        assert!(!e.call(0x0052_6a50, &args![0x1000u32, 0x2000u32]).bool());
+        e.register(COMPARE_ALL_COMPONENTS, |_, _| 1u32.into_ret());
+        assert!(e.call(0x0052_6a50, &args![0x1000u32, 0x2000u32]).bool());
+        e.register(MEMCMP, |_, _| 1u32.into_ret());
+        assert!(e.call(0x0052_6a50, &args![0x1000u32, 0x2000u32]).bool());
+        e.register(DYNAMIC_CAST, |_, _| 0u32.into_ret());
+        assert!(e.call(0x0052_6a50, &args![0x1000u32, 0x2000u32]).bool());
+        e.call_log = Some(vec![]);
+        e.call(0x0052_69f0, &args![0x1000u32, 0x2000u32]);
+        assert_eq!(e.call_log.take().unwrap().len(), 2);
     }
 }

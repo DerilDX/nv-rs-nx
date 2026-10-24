@@ -115,9 +115,69 @@ pub fn fn_00b012f0(e: &mut Engine, _this: Ptr, first: u32, second: u32) {
     e.set_global(STORED_SECOND, second);
 }
 
+/// `00aff100` (no arguments): the object whose state word at +0x5c the two guards below
+/// move between 1 and 2 (4 leaves it alone).
+const STATE_OWNER: u32 = 0x00af_f100;
+const STATE_OFFSET: u32 = 0x5c;
+
+fn owner_state(e: &mut Engine) -> u32 {
+    let owner = e.call(STATE_OWNER, &args![]).u32();
+    owner.wrapping_add(STATE_OFFSET)
+}
+
+// Translated from 00b01040 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (thiscall, no stack words): its own vtable +0x2c with
+/// `(0, word +0x38, 1, 0)`, whose answer (EAX) it passes on.
+pub fn fn_00b01040(e: &mut Engine, this: Ptr) -> u32 {
+    let word = e.mem.u32(this.addr().wrapping_add(0x38));
+    e.vcall(this.addr(), 0x2c, &args![0u32, word, 1u32, 0u32])
+        .u32()
+}
+
+// Translated from 00b01070 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (thiscall, no stack words): does nothing.
+pub fn fn_00b01070(_e: &mut Engine, _this: Ptr) {}
+
+// Translated from 00b01220 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (thiscall, one word it never reads): a state guard's
+/// constructor. Unless the state of `00aff100`'s object (+0x5c) is 4, records in the byte at
+/// `this` whether it is 2 or 3, and raises a state of 1 to 2. Answers `this`.
+pub fn fn_00b01220(e: &mut Engine, this: Ptr, _unused_1: u32) -> Ptr {
+    let state = owner_state(e);
+    if e.mem.u32(state) != 4 {
+        let state = owner_state(e);
+        let value = e.mem.u32(state);
+        e.mem
+            .set_u8(this.addr(), u8::from(value == 2 || value == 3));
+        let state = owner_state(e);
+        if e.mem.u32(state) == 1 {
+            e.mem.set_u32(state, 2);
+        }
+    }
+    this
+}
+
+// Translated from 00b012a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (thiscall, no stack words): the state guard's destructor.
+/// Unless the state of `00aff100`'s object (+0x5c) is 4, when the byte at `this` is clear a
+/// state of 2 goes back to 1.
+pub fn fn_00b012a0(e: &mut Engine, this: Ptr) {
+    let state = owner_state(e);
+    if e.mem.u32(state) != 4 && e.mem.u8(this.addr()) == 0 {
+        let state = owner_state(e);
+        if e.mem.u32(state) == 2 {
+            e.mem.set_u32(state, 1);
+        }
+    }
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x00b0_1040, fn_00b01040(Ptr) -> u32),
+        entry!(0x00b0_1070, fn_00b01070(Ptr)),
+        entry!(0x00b0_1220, fn_00b01220(Ptr, u32) -> Ptr),
+        entry!(0x00b0_12a0, fn_00b012a0(Ptr)),
         entry!(0x00b0_0ec0, fn_00b00ec0(Ptr)),
         entry!(0x00b0_0f20, fn_00b00f20(Ptr) -> Ptr),
         entry!(0x00b0_1020, fn_00b01020(Ptr)),
@@ -203,5 +263,58 @@ mod tests {
         e.call(0x00b0_12f0, &args![0u32, 3u32, 4u32]);
         assert_eq!(e.global::<u32>(STORED_FIRST), 3);
         assert_eq!(e.global::<u32>(STORED_SECOND), 4);
+    }
+}
+
+#[cfg(test)]
+mod n083_tests {
+    use super::*;
+
+    #[test]
+    fn vtable_call_passes_its_answer() {
+        let mut e = Engine::new();
+        let this = e.mem.alloc(0x40);
+        e.put_vtable(0x0300_0000, &[0; 12]);
+        e.mem.set_u32(0x0300_002c, 0x0070_0000);
+        e.mem.set_u32(this, 0x0300_0000);
+        e.mem.set_u32(this + 0x38, 0x44);
+        e.register(0x0070_0000, |_, _| 0x99u32.into_ret());
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x00b0_1040, &args![this]).u32(), 0x99);
+        let log = e.call_log.take().unwrap();
+        let call = log.iter().find(|c| c.0 == 0x0070_0000).unwrap();
+        assert_eq!(call.1, [this, 0, 0x44, 1, 0]);
+        e.call(0x00b0_1070, &args![this]);
+    }
+
+    #[test]
+    fn state_guard_raises_and_lowers() {
+        let mut e = Engine::new();
+        let owner = e.mem.alloc(0x60);
+        e.register_double(STATE_OWNER, move |_, _| owner.into_ret());
+        let guard = e.mem.alloc(4);
+        let state = owner + STATE_OFFSET;
+        // 1: raised to 2, the guard remembers it was not raised already.
+        e.mem.set_u32(state, 1);
+        e.mem.set_u8(guard, 9);
+        assert_eq!(e.call(0x00b0_1220, &args![guard, 0u32]).u32(), guard);
+        assert_eq!((e.mem.u8(guard), e.mem.u32(state)), (0, 2));
+        e.call(0x00b0_12a0, &args![guard]);
+        assert_eq!(e.mem.u32(state), 1);
+        // 3: kept, and the guard leaves it.
+        e.mem.set_u32(state, 3);
+        e.call(0x00b0_1220, &args![guard, 0u32]);
+        assert_eq!((e.mem.u8(guard), e.mem.u32(state)), (1, 3));
+        e.mem.set_u32(state, 2);
+        e.call(0x00b0_12a0, &args![guard]);
+        assert_eq!(e.mem.u32(state), 2);
+        // 4: nothing at all.
+        e.mem.set_u32(state, 4);
+        e.mem.set_u8(guard, 7);
+        e.call(0x00b0_1220, &args![guard, 0u32]);
+        assert_eq!(e.mem.u8(guard), 7);
+        e.mem.set_u8(guard, 0);
+        e.call(0x00b0_12a0, &args![guard]);
+        assert_eq!(e.mem.u32(state), 4);
     }
 }

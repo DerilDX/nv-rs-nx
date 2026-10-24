@@ -321,9 +321,95 @@ pub fn file_finder_build_file_list(
     list
 }
 
+/// `00b01af0` (cdecl, one word: the path): whether the loose file exists.
+const LOOSE_FILE_EXISTS: u32 = 0x00b0_1af0;
+/// `strrchr` (`00ec6e30`) and `memcpy` (`00ec44d0`), cdecl.
+const STRRCHR: u32 = 0x00ec_6e30;
+const MEMCPY: u32 = 0x00ec_44d0;
+/// `005ae3d0` (thiscall on the list, one word: the address of the name): adds a name to
+/// the list.
+const LIST_ADD_NAME: u32 = 0x005a_e3d0;
+
+// Translated from 00afe1f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (thiscall on the finder, two words): [`fn_00afe220`] with
+/// `path`, `flags` and 0xFFFF, whose answer it passes on.
+pub fn fn_00afe1f0(e: &mut Engine, this: Ptr<FileFinder>, path: Ptr, flags: u32) -> u32 {
+    fn_00afe220(e, this, path, flags, 0xffff)
+}
+
+// Translated from 00afe400 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (cdecl, two words): `FileFinder::BuildFileList` with
+/// `pattern`, `second`, 0xFFFF and no list, whose answer it passes on.
+pub fn fn_00afe400(e: &mut Engine, pattern: Ptr, second: u32) -> u32 {
+    file_finder_build_file_list(e, pattern, second, 0xffff, 0)
+}
+
+// Translated from 00afe5b0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (cdecl, four words): the file list of a pattern without
+/// wildcards. `list` (made with both words cleared when null; a failed allocation leaves it
+/// null) gets, when the file exists (as a loose file, `00b01af0`, unless the search paths
+/// are on, `011acdf8` set and `011acdf9` clear; else in an archive, `00af6320` with
+/// `third`), the name made of `second` up to its last `\` followed by what comes after the
+/// pattern's last `\` (a block from the memory manager, `005ae3d0`); nothing when either
+/// has no `\`. A list whose two words are both still 0 is destroyed (`00470470`, then
+/// freed) and null is answered; otherwise the list.
+pub fn fn_00afe5b0(e: &mut Engine, pattern: u32, second: u32, third: u32, list: u32) -> u32 {
+    let mut list = list;
+    if list == 0 {
+        let block = e
+            .call(MEMORY_MANAGER_ALLOCATE, &args![MEMORY_MANAGER, LIST_SIZE])
+            .u32();
+        if block != 0 {
+            e.mem.set_u32(block, 0);
+            e.mem.set_u32(block + 4, 0);
+        }
+        list = block;
+    }
+    let mut found = false;
+    if e.global::<u8>(SEARCH_PATHS_ENABLED) == 0 || e.global::<u8>(SEARCH_PATHS_DISABLED) != 0 {
+        found = e.call(LOOSE_FILE_EXISTS, &args![pattern]).bool();
+    }
+    if !found {
+        found = e.call(ARCHIVE_CONTAINS, &args![pattern, third]).bool();
+    }
+    if found {
+        let mut length = e.call(STRLEN, &args![second]).u32();
+        let second_slash = e.call(STRRCHR, &args![second, 0x5cu32]).u32();
+        let pattern_slash = e.call(STRRCHR, &args![pattern, 0x5cu32]).u32();
+        if second_slash != 0 && pattern_slash != 0 {
+            let tail = e.call(STRLEN, &args![second_slash.wrapping_add(1)]).u32();
+            length = length.wrapping_sub(tail);
+            let name = e.call(STRLEN, &args![pattern_slash.wrapping_add(1)]).u32();
+            let size = length.wrapping_add(name).wrapping_add(1);
+            let block = e
+                .call(MEMORY_MANAGER_ALLOCATE, &args![MEMORY_MANAGER, size])
+                .u32();
+            e.call(MEMCPY, &args![block, second, length]);
+            e.mem.set_u8(block.wrapping_add(length), 0);
+            e.call(STRCAT_S, &args![block, size, pattern_slash.wrapping_add(1)]);
+            e.with_stack(4, |e, local| {
+                e.mem.set_u32(local.addr(), block);
+                e.call(LIST_ADD_NAME, &args![list, local]);
+            });
+        }
+    }
+    if e.mem.u32(list.wrapping_add(4)) == 0 && e.mem.u32(list) == 0 {
+        if list != 0 {
+            e.call(LIST_DESTRUCTOR, &args![list]);
+            // `MOV EDX,1; AND EDX,1; JZ`: the free always runs.
+            e.call(MEMORY_MANAGER_DEALLOCATE, &args![MEMORY_MANAGER, list]);
+        }
+        list = 0;
+    }
+    list
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x00af_e1f0, fn_00afe1f0(Ptr<FileFinder>, Ptr, u32) -> u32),
+        entry!(0x00af_e400, fn_00afe400(Ptr, u32) -> u32),
+        entry!(0x00af_e5b0, fn_00afe5b0(u32, u32, u32, u32) -> u32),
         entry!(
             0x00afe220,
             fn_00afe220(Ptr<FileFinder>, Ptr, u32, u32) -> u32
@@ -814,5 +900,145 @@ mod b006_tests {
             calls_to(&e, MEMORY_MANAGER_DEALLOCATE),
             vec![vec![MEMORY_MANAGER, list]]
         );
+    }
+}
+
+#[cfg(test)]
+mod n083_tests {
+    use super::*;
+
+    fn calls_to(e: &Engine, callee: u32) -> Vec<Vec<u32>> {
+        e.call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|(address, _)| *address == callee)
+            .map(|(_, words)| words.clone())
+            .collect()
+    }
+
+    #[test]
+    fn lookup_wrapper_passes_0xffff_and_the_answer() {
+        let mut e = Engine::new();
+        e.register(ARCHIVE_CONTAINS, |_, _| 1u32.into_ret());
+        let finder: Ptr<FileFinder> = e.new_object();
+        e.call_log = Some(vec![]);
+        assert_eq!(
+            e.call(0x00af_e1f0, &args![finder, 0x5000u32, 0u32]).u32(),
+            2
+        );
+        assert_eq!(calls_to(&e, ARCHIVE_CONTAINS), vec![vec![0x5000, 0xffff]]);
+    }
+
+    #[test]
+    fn file_list_wrapper_passes_0xffff_and_no_list() {
+        let mut e = Engine::new();
+        e.register(STRSTR, |_, _| Ret::default());
+        e.register(BUILD_PLAIN_FILE_LIST, |_, _| 0x77u32.into_ret());
+        e.call_log = Some(vec![]);
+        assert_eq!(
+            e.call(0x00af_e400, &args![0x5000u32, 0x6000u32]).u32(),
+            0x77
+        );
+        assert_eq!(
+            calls_to(&e, BUILD_PLAIN_FILE_LIST),
+            vec![vec![0x5000, 0x6000, 0xffff, 0]]
+        );
+        assert_eq!(e.call(0x00af_e400, &args![0u32, 0x6000u32]).u32(), 0);
+    }
+
+    fn engine() -> Engine {
+        let mut e = Engine::new();
+        e.map(0x011a_c000, 0x1000);
+        e.register(STRLEN, |e, a| (e.mem.cstr(a[0]).len() as u32).into_ret());
+        e.register(STRRCHR, |e, a| {
+            let text = e.mem.cstr(a[0]);
+            let at = text.iter().rposition(|&c| u32::from(c) == a[1]);
+            at.map_or(0, |i| a[0] + i as u32).into_ret()
+        });
+        e.register(MEMCPY, |e, a| {
+            let bytes = e.mem.bytes(a[1], a[2]);
+            e.mem.write(a[0], &bytes);
+            Ret::default()
+        });
+        e.register(STRCAT_S, |e, a| {
+            let mut text = e.mem.cstr(a[0]);
+            text.extend(e.mem.cstr(a[2]));
+            e.mem.set_cstr(a[0], &text);
+            Ret::default()
+        });
+        e.register(MEMORY_MANAGER_ALLOCATE, |e, a| {
+            e.mem.alloc(a[1].max(1)).into_ret()
+        });
+        e.register(MEMORY_MANAGER_DEALLOCATE, |_, _| Ret::default());
+        e.register(LIST_DESTRUCTOR, |_, _| Ret::default());
+        e.register(LIST_ADD_NAME, |e, a| {
+            let name = e.mem.u32(a[1]);
+            e.mem.set_u32(a[0], name);
+            Ret::default()
+        });
+        e.call_log = Some(vec![]);
+        e
+    }
+
+    fn text(e: &mut Engine, value: &[u8]) -> u32 {
+        let at = e.mem.alloc(0x40);
+        e.mem.set_cstr(at, value);
+        at
+    }
+
+    #[test]
+    fn plain_file_list_names_the_found_file() {
+        let mut e = engine();
+        e.register(LOOSE_FILE_EXISTS, |_, _| 1u32.into_ret());
+        e.register(ARCHIVE_CONTAINS, |_, _| Ret::default());
+        let pattern = text(&mut e, b"meshes\\a\\b.nif");
+        let second = text(&mut e, b"data\\meshes\\x.nif");
+        let list = e
+            .call(0x00af_e5b0, &args![pattern, second, 3u32, 0u32])
+            .u32();
+        assert_ne!(list, 0);
+        assert_eq!(e.mem.cstr(e.mem.u32(list)), b"data\\meshes\\b.nif");
+        assert!(calls_to(&e, ARCHIVE_CONTAINS).is_empty());
+        // With the search paths on, only the archives are asked; given a list.
+        e.mem.set_u8(SEARCH_PATHS_ENABLED, 1);
+        e.register(ARCHIVE_CONTAINS, |_, _| 1u32.into_ret());
+        let mine = e.mem.alloc(8);
+        e.call_log = Some(vec![]);
+        assert_eq!(
+            e.call(0x00af_e5b0, &args![pattern, second, 3u32, mine])
+                .u32(),
+            mine
+        );
+        assert!(calls_to(&e, LOOSE_FILE_EXISTS).is_empty());
+        assert_eq!(calls_to(&e, ARCHIVE_CONTAINS), vec![vec![pattern, 3]]);
+    }
+
+    #[test]
+    fn plain_file_list_without_a_find_is_destroyed() {
+        let mut e = engine();
+        e.register(LOOSE_FILE_EXISTS, |_, _| Ret::default());
+        e.register(ARCHIVE_CONTAINS, |_, _| Ret::default());
+        let pattern = text(&mut e, b"meshes\\b.nif");
+        let second = text(&mut e, b"x.nif");
+        assert_eq!(
+            e.call(0x00af_e5b0, &args![pattern, second, 3u32, 0u32])
+                .u32(),
+            0
+        );
+        let made = calls_to(&e, MEMORY_MANAGER_ALLOCATE);
+        assert_eq!(made, vec![vec![MEMORY_MANAGER, 8]]);
+        assert_eq!(calls_to(&e, LIST_DESTRUCTOR).len(), 1);
+        assert_eq!(calls_to(&e, MEMORY_MANAGER_DEALLOCATE).len(), 1);
+        // Found, but `second` has no `\`: nothing added, destroyed too.
+        e.register(ARCHIVE_CONTAINS, |_, _| 1u32.into_ret());
+        e.call_log = Some(vec![]);
+        assert_eq!(
+            e.call(0x00af_e5b0, &args![pattern, second, 3u32, 0u32])
+                .u32(),
+            0
+        );
+        assert!(calls_to(&e, LIST_ADD_NAME).is_empty());
+        assert_eq!(calls_to(&e, LIST_DESTRUCTOR).len(), 1);
     }
 }

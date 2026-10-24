@@ -28,11 +28,48 @@ pub fn fn_00837500(e: &mut Engine) {
     e.call(IMPACT_MIXER_INIT_FOOTSTEPS, &[]);
 }
 
+/// The memory-context guard (`00404eb0`, thiscall on a 4-byte local: context, 1, source file,
+/// line; `RET 0x10`) and its end (`00404ee0`).
+const SCOPE_GUARD_ENTER_00404EB0: u32 = 0x0040_4eb0;
+const SCOPE_GUARD_LEAVE_00404EE0: u32 = 0x0040_4ee0;
+/// `"D:\_Fallout3\...\ImpactMixer.cpp"` (`.rdata`).
+const SOURCE_FILE_0107D0A8: u32 = 0x0107_d0a8;
+
+// Translated from 00837520 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The weapon-hit sound call as compiled (cdecl; its callers pass nine words, none read): only
+/// the memory-context guard of `ImpactMixer.cpp` line `0x10f` (context `0xb`) is entered and
+/// left; the body is empty in this build.
+#[allow(clippy::too_many_arguments)]
+pub fn fn_00837520(
+    e: &mut Engine,
+    _unused_0: u32,
+    _unused_1: u32,
+    _unused_2: u32,
+    _unused_3: u32,
+    _unused_4: u32,
+    _unused_5: u32,
+    _unused_6: u32,
+    _unused_7: u32,
+    _unused_8: u32,
+) {
+    e.with_stack(4, |e, guard| {
+        e.call(
+            SCOPE_GUARD_ENTER_00404EB0,
+            &args![guard, 0xbu32, 1u32, SOURCE_FILE_0107D0A8, 0x10fu32],
+        );
+        e.call(SCOPE_GUARD_LEAVE_00404EE0, &args![guard]);
+    });
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
         entry!(0x0083_74e0, fn_008374e0(u32, u32)),
         entry!(0x0083_7500, fn_00837500()),
+        entry!(
+            0x0083_7520,
+            fn_00837520(u32, u32, u32, u32, u32, u32, u32, u32, u32)
+        ),
     ]
 }
 
@@ -62,5 +99,33 @@ mod tests {
         assert_eq!(e.mem.u8(FLAG_011DD85C + 1), 9);
         let log = e.call_log.take().unwrap();
         assert!(log.contains(&(IMPACT_MIXER_INIT_FOOTSTEPS, vec![])));
+    }
+}
+
+#[cfg(test)]
+mod n089_tests {
+    use super::*;
+
+    #[test]
+    fn n089_00837520_only_enters_and_leaves_the_guard() {
+        let mut e = Engine::new();
+        e.register(SCOPE_GUARD_ENTER_00404EB0, |_, _| Ret::default());
+        e.register(SCOPE_GUARD_LEAVE_00404EE0, |_, _| Ret::default());
+        e.call_log = Some(vec![]);
+        e.call(
+            0x0083_7520,
+            &args![1u32, 2u32, 3u32, 4u32, 5u32, 6u32, 7u32, 8u32, 9u32],
+        );
+        let log = e.call_log.take().unwrap();
+        assert_eq!(log.len(), 3);
+        let guard = log[1].1[0];
+        assert_eq!(
+            log[1],
+            (
+                SCOPE_GUARD_ENTER_00404EB0,
+                vec![guard, 0xb, 1, SOURCE_FILE_0107D0A8, 0x10f]
+            )
+        );
+        assert_eq!(log[2], (SCOPE_GUARD_LEAVE_00404EE0, vec![guard]));
     }
 }

@@ -613,9 +613,54 @@ pub fn fn_00628f90(e: &mut Engine, this: Ptr, reference: u32, out: u32) {
     });
 }
 
+// Translated from 00628f30 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Sets (`set` nonzero) or clears ([`fn_00628f70`]) the bits of `mask` in the word at
+/// +0x10 (unnamed in the engine map; `ECX` and two stack words, `RET 8`).
+pub fn fn_00628f30(e: &mut Engine, this: Ptr, mask: u32, set: u8) {
+    if set != 0 {
+        let flags = e.mem.u32(this.addr() + 0x10) | mask;
+        e.mem.set_u32(this.addr() + 0x10, flags);
+    } else {
+        fn_00628f70(e, this, mask);
+    }
+}
+
+// Translated from 00628f70 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Clears the bits of `mask` in the word at +0x10 (unnamed in the engine map; `ECX` and one
+/// stack word, `RET 4`).
+pub fn fn_00628f70(e: &mut Engine, this: Ptr, mask: u32) {
+    let flags = !mask & e.mem.u32(this.addr() + 0x10);
+    e.mem.set_u32(this.addr() + 0x10, flags);
+}
+
+// Translated from 00629560 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`ECX` and one stack word, `RET 4`; called by `00628f90` and
+/// `FindWarpLocation`): `006285e0(this, this, value)`, then `00628640` the same way on the
+/// part at +0x10.
+pub fn fn_00629560(e: &mut Engine, this: Ptr, value: u32) {
+    let base = this.addr();
+    e.call(0x0062_85e0, &args![base, base, value]);
+    e.call(0x0062_8640, &args![base + 0x10, base + 0x10, value]);
+}
+
+// Translated from 006295a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`ECX`, plain `RET`; called by `00628f90` and
+/// `FindWarpLocation`): `004589c0` on `this` with the `float` at `0104da48`, then on the
+/// part at +0x10 with the `float` at `0104e148` (each through `FLD`/`FSTP`).
+pub fn fn_006295a0(e: &mut Engine, this: Ptr) {
+    let first = x87_quiet_bits(e.global::<u32>(0x0104_da48));
+    e.call(0x0045_89c0, &args![this, first]);
+    let second = x87_quiet_bits(e.global::<u32>(0x0104_e148));
+    e.call(0x0045_89c0, &args![this.addr() + 0x10, second]);
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x0062_8f30, fn_00628f30(Ptr, u32, u8)),
+        entry!(0x0062_8f70, fn_00628f70(Ptr, u32)),
+        entry!(0x0062_9560, fn_00629560(Ptr, u32)),
+        entry!(0x0062_95a0, fn_006295a0(Ptr)),
         entry!(0x0062_8da0, fn_00628da0(Ptr)),
         entry!(0x0062_8950, fn_00628950(Ptr, Ptr, Ptr) -> Ptr),
         entry!(0x0062_88a0, fn_006288a0(Ptr) -> Ptr),
@@ -1371,5 +1416,42 @@ mod lookahead2_tests {
             vec![vec![reference, floats[0][0]]]
         );
         assert!(calls(&e, LIST_CONSTRUCT).is_empty());
+    }
+}
+
+#[cfg(test)]
+mod n075_tests {
+    use super::*;
+
+    #[test]
+    fn fn_00628f30_and_00628f70_set_and_clear_bits() {
+        let mut e = Engine::new();
+        let this = e.mem.alloc(0x20);
+        e.mem.set_u32(this + 0x10, 0x0f);
+        e.call(0x0062_8f30, &args![this, 0x30u32, 1u32]);
+        assert_eq!(e.mem.u32(this + 0x10), 0x3f);
+        e.call(0x0062_8f30, &args![this, 0x11u32, 0x100u32]);
+        assert_eq!(e.mem.u32(this + 0x10), 0x2e);
+        e.call(0x0062_8f70, &args![this, 0x0eu32]);
+        assert_eq!(e.mem.u32(this + 0x10), 0x20);
+    }
+
+    #[test]
+    fn fn_00629560_and_006295a0_forward_to_both_parts() {
+        let mut e = Engine::new();
+        for callee in [0x0062_85e0u32, 0x0062_8640, 0x0045_89c0] {
+            e.register(callee, |_, _| Ret::default());
+        }
+        e.map(0x0104_d000, 0x2000);
+        e.set_global(0x0104_da48u32, 2.5f32.to_bits());
+        e.set_global(0x0104_e148u32, 0x7f80_0001u32);
+        e.call_log = Some(vec![]);
+        e.call(0x0062_9560, &args![0x1000u32, 7u32]);
+        e.call(0x0062_95a0, &args![0x1000u32]);
+        let log = e.call_log.take().unwrap();
+        assert_eq!(log[1], (0x0062_85e0, vec![0x1000, 0x1000, 7]));
+        assert_eq!(log[2], (0x0062_8640, vec![0x1010, 0x1010, 7]));
+        assert_eq!(log[4], (0x0045_89c0, vec![0x1000, 2.5f32.to_bits()]));
+        assert_eq!(log[5], (0x0045_89c0, vec![0x1010, 0x7fc0_0001]));
     }
 }

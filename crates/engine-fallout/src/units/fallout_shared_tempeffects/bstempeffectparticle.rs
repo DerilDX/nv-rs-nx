@@ -660,9 +660,549 @@ pub fn fn_0068aa50(e: &mut Engine, this: Ptr, node: u32) {
     });
 }
 
+use crate::units::fallout_shared_tempeffects::bstempeffectgeometrydecal::{
+    buffer_position, load_bad_header, load_block_end, load_bytes, report_flag, save_block_begin,
+    save_block_end, save_bytes, save_report, uses_blocks, BLOCK_TAG, SAVE_REPORT, SAVE_REPORT_FORM,
+    SIZE_REPORT, SIZE_REPORT_FORM,
+};
+
+/// The source file name the save reports give (`...\BSTempEffectParticle.cpp`).
+const PARTICLE_SOURCE_FILE: u32 = 0x0106_9d20;
+/// The controller manager lookup (`00653270`, cdecl: the RTTI at `011f36ac`
+/// and the first controller): the particle object's controller manager.
+const FIND_CONTROLLER_00653270: u32 = 0x0065_3270;
+const CONTROLLER_MANAGER_RTTI: u32 = 0x011f_36ac;
+/// `00438170` (`RET 4`) and `004381b0`: a fixed-string local's
+/// constructor and destructor.
+const FIXED_STRING_INIT_00438170: u32 = 0x0043_8170;
+const FIXED_STRING_DESTROY_004381B0: u32 = 0x0043_81b0;
+/// `0047a520` (`RET 4`): the manager's sequence of a name.
+const MANAGER_SEQUENCE_0047A520: u32 = 0x0047_a520;
+/// `0047aab0` (`RET 0x18`): activates a sequence (sequence, 0, 0, 1.0, 0.0, 0).
+const MANAGER_ACTIVATE_0047AAB0: u32 = 0x0047_aab0;
+/// `00508100` (ST0): the sequence's length.
+const SEQUENCE_LENGTH_00508100: u32 = 0x0050_8100;
+/// `0044a670` (cdecl): the file name's length.
+const STRING_LENGTH_0044A670: u32 = 0x0044_a670;
+/// `0055fdb0` (cdecl, the manager; `u16`): the manager's saved sequence count.
+const MANAGER_SAVE_COUNT_0055FDB0: u32 = 0x0055_fdb0;
+/// `0055fe70` (cdecl: the manager, a `float`): saves the manager's state.
+const MANAGER_SAVE_0055FE70: u32 = 0x0055_fe70;
+/// `0055ffa0` (cdecl: the manager, the object, a `float`): loads it.
+const MANAGER_LOAD_0055FFA0: u32 = 0x0055_ffa0;
+/// `006a9540`, `0043c490`, `009cdae0` (no stack word): the object's
+/// rotation, translation and scale (ST0).
+const OBJECT_ROTATION_006A9540: u32 = 0x006a_9540;
+const OBJECT_TRANSLATION_0043C490: u32 = 0x0043_c490;
+const OBJECT_SCALE_009CDAE0: u32 = 0x009c_dae0;
+/// `NiQuaternion::FromRotation` and `ToRotation` (engine map; `RET 4`).
+const QUATERNION_FROM_ROTATION: u32 = 0x00a6_df40;
+const QUATERNION_TO_ROTATION: u32 = 0x004f_0180;
+/// `BSTempEffect::SaveGame` / `LoadGame` (`00682920`, `00682990`) and its
+/// save size (`006828e0`).
+const BS_TEMP_EFFECT_SAVE_GAME: u32 = 0x0068_2920;
+const BS_TEMP_EFFECT_LOAD_GAME: u32 = 0x0068_2990;
+const BS_TEMP_EFFECT_SAVE_SIZE: u32 = 0x0068_28e0;
+/// `00403d30` (cdecl: memset).
+const FILL_MEMORY_00403D30: u32 = 0x0040_3d30;
+/// `NiObject::Clone_ov2` (`00a5d680`, engine map).
+const NI_OBJECT_CLONE_OV2: u32 = 0x00a5_d680;
+/// `ModelLoader::FindModel` (`004472a0`, engine map; `RET 8`).
+const MODEL_LOADER_FIND_MODEL: u32 = 0x0044_72a0;
+/// `0040c110`: the model pointer local's destructor.
+const MODEL_POINTER_DESTROY_0040C110: u32 = 0x0040_c110;
+/// `005497a0` (no stack word): the cell's node the object is attached to
+/// (slot +0xDC with the object and 1).
+const CELL_ATTACH_NODE_005497A0: u32 = 0x0054_97a0;
+const SLOT_ATTACH_CHILD: u32 = 0xdc;
+/// `0043d410` (`RET 0xC`: a `float`, two words) and `00a59c60` (`RET 4`):
+/// the update data made from the time and the object's update with it.
+const UPDATE_DATA_INIT_0043D410: u32 = 0x0043_d410;
+const OBJECT_UPDATE_00A59C60: u32 = 0x00a5_9c60;
+/// The timer object whose `00825c00` gives milliseconds, and 1000.0 (`double`).
+const TIMER_011F6394: u32 = 0x011f_6394;
+const THOUSAND: u32 = 0x0101_7b70;
+/// `00857bd0` (`RET 4`): skips bytes of the save.
+const SKIP_BYTES_00857BD0: u32 = 0x0085_7bd0;
+/// `00825c00` (no stack word): reused on the timer above.
+const POSITION_00825C00: u32 = 0x0082_5c00;
+/// `BSAudio::QInstance` (`00453a70`) and `GetSoundHandleByNumericID`
+/// (`00ad73b0`, `RET 0xC`: result, id, flags).
+const BS_AUDIO_INSTANCE: u32 = 0x0045_3a70;
+const BS_AUDIO_GET_SOUND_HANDLE: u32 = 0x00ad_73b0;
+/// `00418900` (`RET 4`): assigns a sound handle.
+const SOUND_HANDLE_ASSIGN_00418900: u32 = 0x0041_8900;
+/// `0045bb80` (no stack word): the object's world position.
+const WORLD_POSITION_0045BB80: u32 = 0x0045_bb80;
+/// `BSSoundHandle::SetObjectToFollow` and `Play` (`RET 4` each).
+const BS_SOUND_HANDLE_SET_OBJECT_TO_FOLLOW: u32 = 0x00ad_8f20;
+const BS_SOUND_HANDLE_PLAY: u32 = 0x00ad_8830;
+/// `0084e3a0` (no stack word): the form id (+0xC).
+const FORM_ID_0084E3A0: u32 = 0x0084_e3a0;
+
+// Translated from 00689210 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 00689210 - the exception-unwinding frame (FS:[0]) is not translated.
+/// Unnamed (cdecl, eighteen words): makes a particle effect in `cell`
+/// (nothing, null, without a cell) with a given rotation: a new 0x74-byte
+/// `BSTempEffectParticle` ([`fn_00688fc0`] with `lifetime`, `filename`,
+/// `follow`; null when the allocation fails), initialized (`Init`) under
+/// the cell's node 4 (`00456fc0`) with the nine rotation words, the
+/// position, `scale` and `flags`, then added to the process lists. Returns
+/// the effect.
+pub fn fn_00689210(
+    e: &mut Engine,
+    cell: u32,
+    lifetime: f32,
+    filename: u32,
+    rotation: [u32; 9],
+    position: [u32; 3],
+    scale: f32,
+    flags: u32,
+    follow: u32,
+) -> u32 {
+    if cell == 0 {
+        return 0;
+    }
+    let block = e.call(NI_ALLOCATE, &args![0x74u32]).u32();
+    let effect = if block == 0 {
+        0
+    } else {
+        fn_00688fc0(e, Ptr::new(block), cell, lifetime, filename, follow).addr()
+    };
+    let node = e.call(CELL_NODE_00456FC0, &args![cell, 4u32]).u32();
+    let r = rotation;
+    bs_temp_effect_particle_init(
+        e,
+        Ptr::new(effect),
+        node,
+        r[0],
+        r[1],
+        r[2],
+        r[3],
+        r[4],
+        r[5],
+        r[6],
+        r[7],
+        r[8],
+        position[0],
+        position[1],
+        position[2],
+        f32::from_bits(x87_quiet_bits(scale.to_bits())),
+        flags,
+    );
+    e.call(PROCESS_LISTS_ADD_TEMP_EFFECT, &args![PROCESS_LISTS, effect]);
+    effect
+}
+
+/// The uniform form of [`fn_00689210`] (eighteen words).
+fn fn_00689210_entry(e: &mut Engine, a: &[u32]) -> Ret {
+    let rotation = [a[3], a[4], a[5], a[6], a[7], a[8], a[9], a[10], a[11]];
+    let effect = fn_00689210(
+        e,
+        a[0],
+        f32::from_bits(a[1]),
+        a[2],
+        rotation,
+        [a[12], a[13], a[14]],
+        f32::from_bits(a[15]),
+        a[16],
+        a[17],
+    );
+    Ret {
+        eax: effect,
+        ..Default::default()
+    }
+}
+
+/// The controller manager of the particle object (`00653270` on its first
+/// controller), or 0.
+fn controller_manager(e: &mut Engine, this: Ptr) -> u32 {
+    let object = e.call(POINTER_GET, &args![this.addr() + 0x18]).u32();
+    let controller = e.call(FIRST_CONTROLLER, &args![object]).u32();
+    e.call(
+        FIND_CONTROLLER_00653270,
+        &args![CONTROLLER_MANAGER_RTTI, controller],
+    )
+    .u32()
+}
+
+// Translated from 00689920 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 00689920 - the exception-unwinding frame (FS:[0]) is not translated.
+/// Unnamed (`RET 4`): plays the particle object's sequence `name`: with a
+/// controller manager and its sequence of that name (through a
+/// fixed-string local), the sequence is activated (`0047aab0` with 0, 0,
+/// 1.0, 0.0, 0) and, when the lifetime (+8) is below the sequence's length
+/// (ordered), the lifetime becomes the length.
+pub fn fn_00689920(e: &mut Engine, this: Ptr, name: u32) {
+    let manager = controller_manager(e, this);
+    if manager == 0 {
+        return;
+    }
+    let sequence = e.with_stack(4, |e, local| {
+        let text = e
+            .call(FIXED_STRING_INIT_00438170, &args![local, name])
+            .u32();
+        let sequence = e
+            .call(MANAGER_SEQUENCE_0047A520, &args![manager, text])
+            .u32();
+        e.call(FIXED_STRING_DESTROY_004381B0, &args![local]);
+        sequence
+    });
+    if sequence == 0 {
+        return;
+    }
+    e.call(
+        MANAGER_ACTIVATE_0047AAB0,
+        &args![
+            manager,
+            sequence,
+            0u32,
+            0u32,
+            x87_store32(1.0),
+            x87_store32(0.0),
+            0u32
+        ],
+    );
+    let length = e.call(SEQUENCE_LENGTH_00508100, &args![sequence]).f64();
+    let length = x87_store32(length);
+    let lifetime = x87_load32(e.mem.u32(this.addr() + 8));
+    if lifetime < x87_m32(length) {
+        e.mem.set_u32(this.addr() + 8, x87_quiet_bits(length));
+    }
+}
+
+// Translated from 00689af0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSTempEffectParticle::CheckShouldSave` (engine map): true with a file
+/// name (+0x1C) and a particle object (+0x18).
+pub fn bs_temp_effect_particle_check_should_save(e: &mut Engine, this: Ptr) -> bool {
+    e.mem.u32(this.addr() + 0x1c) != 0 && e.call(POINTER_GET, &args![this.addr() + 0x18]).u32() != 0
+}
+
+// Translated from 00689b20 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSTempEffectParticle::GetSaveSize` (engine map; a `u16`): 6 for a
+/// block header and size when the save uses blocks, the `BSTempEffect`
+/// size (`006828e0`), 1 and the file name's length, 16 (rotation), 12
+/// (translation), 4 (scale), 2 (sequence count), plus the controller
+/// manager's own size (`0055fdb0`) when there is one. With the report flag
+/// the size is reported (line 0x174).
+pub fn bs_temp_effect_particle_get_save_size(e: &mut Engine, this: Ptr) -> u16 {
+    let mut size: u16 = 0;
+    let start = size;
+    if uses_blocks(e) {
+        size = size.wrapping_add(4);
+        size = size.wrapping_add(2);
+    }
+    let base = e.call(BS_TEMP_EFFECT_SAVE_SIZE, &args![this]).u16();
+    size = size.wrapping_add(base);
+    size = size.wrapping_add(1);
+    let filename = e.mem.u32(this.addr() + 0x1c);
+    let length = e.call(STRING_LENGTH_0044A670, &args![filename]).u32();
+    size = (u32::from(size).wrapping_add(length)) as u16;
+    size = size.wrapping_add(0x10);
+    size = size.wrapping_add(0xc);
+    size = size.wrapping_add(4);
+    size = size.wrapping_add(2);
+    let manager = controller_manager(e, this);
+    if manager != 0 {
+        let extra = e.call(MANAGER_SAVE_COUNT_0055FDB0, &args![manager]).u16();
+        size = size.wrapping_add(extra);
+    }
+    if report_flag(e) {
+        let difference = (i32::from(size) - i32::from(start)) as u32;
+        save_report(
+            e,
+            SIZE_REPORT_FORM,
+            SIZE_REPORT,
+            difference,
+            0x174,
+            PARTICLE_SOURCE_FILE,
+        );
+    }
+    size
+}
+
+// Translated from 00689cb0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSTempEffectParticle::SaveGame` (engine map): within a save block
+/// (when the save uses blocks; line 0x19B), the `BSTempEffect` part, the
+/// file name's length (one byte) and the name, the particle object's
+/// rotation as a quaternion (16 bytes), its translation (12) and scale
+/// (4), the controller manager's count (2 bytes, 0 without a manager) and,
+/// when it is not 0, the manager's state (`0055fe70` with -1.0). With the
+/// report flag the bytes written are reported.
+pub fn bs_temp_effect_particle_save_game(e: &mut Engine, this: Ptr) {
+    let base = this.addr();
+    // EBP-0x3C .. EBP-4: the header word, the size, the translation, the
+    // length byte, the quaternion, the count and the scale.
+    e.with_stack(0x40, |e, frame| {
+        let local = |offset: u32| frame.addr() + 0x40 - offset;
+        let mut placeholder = 0;
+        let mut start = buffer_position(e);
+        if report_flag(e) {
+            start = buffer_position(e);
+        }
+        if uses_blocks(e) {
+            placeholder = save_block_begin(e, local(0x3c), local(0x30));
+        }
+        e.call(BS_TEMP_EFFECT_SAVE_GAME, &args![this]);
+        let filename = e.mem.u32(base + 0x1c);
+        let length = e.call(STRING_LENGTH_0044A670, &args![filename]).u8();
+        e.mem.set_u8(local(0x1d), length);
+        save_bytes(e, local(0x1d), 1);
+        let filename = e.mem.u32(base + 0x1c);
+        save_bytes(e, filename, u32::from(length));
+        let quaternion = local(0x1c);
+        e.call(MATRIX_INIT_006815C0, &args![quaternion]);
+        let object = e.call(POINTER_GET, &args![base + 0x18]).u32();
+        let rotation = e.call(OBJECT_ROTATION_006A9540, &args![object]).u32();
+        e.call(QUATERNION_FROM_ROTATION, &args![quaternion, rotation]);
+        save_bytes(e, quaternion, 0x10);
+        let object = e.call(POINTER_GET, &args![base + 0x18]).u32();
+        let translation = e.call(OBJECT_TRANSLATION_0043C490, &args![object]).u32();
+        for i in 0..3 {
+            let word = e.mem.u32(translation + 4 * i);
+            e.mem.set_u32(local(0x2c) + 4 * i, word);
+        }
+        save_bytes(e, local(0x2c), 0xc);
+        let object = e.call(POINTER_GET, &args![base + 0x18]).u32();
+        let scale = e.call(OBJECT_SCALE_009CDAE0, &args![object]).f64();
+        e.mem.set_u32(local(8), x87_store32(scale));
+        save_bytes(e, local(8), 4);
+        e.mem.set_u16(local(0xc), 0);
+        let manager = controller_manager(e, this);
+        if manager != 0 {
+            let count = e.call(MANAGER_SAVE_COUNT_0055FDB0, &args![manager]).u16();
+            e.mem.set_u16(local(0xc), count);
+        }
+        save_bytes(e, local(0xc), 2);
+        if e.mem.u16(local(0xc)) != 0 {
+            let minus_one = x87_quiet_bits(e.global::<u32>(MINUS_ONE_FLOAT));
+            e.call(MANAGER_SAVE_0055FE70, &args![manager, minus_one]);
+        }
+        if report_flag(e) {
+            let end = buffer_position(e);
+            save_report(
+                e,
+                SAVE_REPORT_FORM,
+                SAVE_REPORT,
+                end.wrapping_sub(start),
+                0x19b,
+                PARTICLE_SOURCE_FILE,
+            );
+        }
+        if uses_blocks(e) {
+            save_block_end(e, placeholder, 0x19b, PARTICLE_SOURCE_FILE);
+        }
+    });
+}
+
+// Translated from 00689f80 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 00689f80 - the exception-unwinding frame (FS:[0]) and the /GS cookie check (00ec408c) are not translated.
+/// `BSTempEffectParticle::LoadGame` (engine map): within a save block
+/// (header checked, line 0x1A4; end checked, line 0x1EC) reads what
+/// `SaveGame` wrote: the `BSTempEffect` part (its answer is the result),
+/// the file name into a cleared 0x104-byte buffer, the quaternion (turned
+/// into a rotation), the translation, the scale and the sequence count.
+/// When the base loaded, the model is loaded (`ModelLoader::LoadFile`) and
+/// cloned into the particle object (+0x18); the file name (+0x1C) becomes
+/// the found model's name; the object gets the translation, rotation and
+/// scale, is attached to the cell's node (slot +0xDC with 1), updates its
+/// properties and is updated at the timer's milliseconds / 1000; its
+/// animations start; with a count, the controller manager's state is
+/// loaded (`0055ffa0` with -1.0), and a missing manager fails the load. A
+/// missing model or object fails it too. A failed load with a count skips
+/// the manager's bytes (`00857bd0`).
+pub fn bs_temp_effect_particle_load_game(e: &mut Engine, this: Ptr) -> u8 {
+    let base = this.addr();
+    // The frame from EBP-0x1B8.
+    e.with_stack(0x1c0, |e, frame| {
+        let local = |offset: u32| frame.addr() + 0x1c0 - offset;
+        let tag = local(0x178);
+        let size = local(0x170);
+        let name = local(0x16c);
+        let length = local(0x4d);
+        let quaternion = local(0x4c);
+        let rotation = local(0x34);
+        let translation = local(0x5c);
+        let scale = local(0x38);
+        let count = local(0x3c);
+        let model_pointer = local(0x188);
+        let update_data = local(0x198);
+        let mut start = 0;
+        if uses_blocks(e) {
+            load_bytes(e, tag, 4);
+            if e.mem.u32(tag) != BLOCK_TAG {
+                load_bad_header(e, 0x1a4, PARTICLE_SOURCE_FILE);
+            }
+            start = buffer_position(e);
+            load_bytes(e, size, 2);
+        }
+        let mut loaded = e.call(BS_TEMP_EFFECT_LOAD_GAME, &args![this]).u8();
+        load_bytes(e, length, 1);
+        e.call(FILL_MEMORY_00403D30, &args![name, 0u32, 0x104u32]);
+        let name_length = u32::from(e.mem.u8(length));
+        load_bytes(e, name, name_length);
+        e.call(MATRIX_INIT_006815C0, &args![quaternion]);
+        load_bytes(e, quaternion, 0x10);
+        e.call(MATRIX_INIT_006815C0, &args![rotation]);
+        e.call(QUATERNION_TO_ROTATION, &args![quaternion, rotation]);
+        e.call(MATRIX_INIT_006815C0, &args![translation]);
+        load_bytes(e, translation, 0xc);
+        load_bytes(e, scale, 4);
+        load_bytes(e, count, 2);
+        if loaded != 0 {
+            let loader = e.global::<u32>(MODEL_LOADER);
+            let model = e
+                .call(
+                    MODEL_LOADER_LOAD_FILE,
+                    &args![loader, name, 0u32, 1u32, 0u32, 0u32, 0u32],
+                )
+                .u32();
+            if model == 0 {
+                loaded = 0;
+            } else {
+                let clone = e.call(NI_OBJECT_CLONE_OV2, &args![model]).u32();
+                e.call(POINTER_SET, &args![base + 0x18, clone]);
+                if e.call(POINTER_GET, &args![base + 0x18]).u32() == 0 {
+                    loaded = 0;
+                } else {
+                    e.call(POINTER_INIT, &args![model_pointer, 0u32]);
+                    let loader = e.global::<u32>(MODEL_LOADER);
+                    e.call(MODEL_LOADER_FIND_MODEL, &args![loader, name, model_pointer]);
+                    let found = e.call(POINTER_GET, &args![model_pointer]).u32();
+                    let found_name = e.call(POINTER_GET, &args![found]).u32();
+                    e.mem.set_u32(base + 0x1c, found_name);
+                    let object = e.call(POINTER_GET, &args![base + 0x18]).u32();
+                    e.call(SET_TRANSLATE, &args![object, translation]);
+                    let object = e.call(POINTER_GET, &args![base + 0x18]).u32();
+                    e.call(SET_ROTATE, &args![object, rotation]);
+                    let scale_bits = x87_quiet_bits(e.mem.u32(scale));
+                    let object = e.call(POINTER_GET, &args![base + 0x18]).u32();
+                    e.call(SET_SCALE, &args![object, scale_bits]);
+                    // `BSTempEffect::pCell` +0x0C.
+                    let cell = e.mem.u32(base + 0xc);
+                    let node = e.call(CELL_ATTACH_NODE_005497A0, &args![cell]).u32();
+                    let object = e.call(POINTER_GET, &args![base + 0x18]).u32();
+                    e.vcall(node, SLOT_ATTACH_CHILD, &args![object, 1u32]);
+                    let object = e.call(POINTER_GET, &args![base + 0x18]).u32();
+                    e.call(NI_AV_OBJECT_UPDATE_PROPERTIES, &args![object]);
+                    let milliseconds = e.call(POSITION_00825C00, &args![TIMER_011F6394]).u32();
+                    let thousand: f64 = e.global(THOUSAND);
+                    let time = x87_store32(x87_div(f64::from(milliseconds), thousand));
+                    e.call(
+                        UPDATE_DATA_INIT_0043D410,
+                        &args![update_data, x87_quiet_bits(time), 1u32, 0u32],
+                    );
+                    let object = e.call(POINTER_GET, &args![base + 0x18]).u32();
+                    e.call(OBJECT_UPDATE_00A59C60, &args![object, update_data]);
+                    let object = e.call(POINTER_GET, &args![base + 0x18]).u32();
+                    e.call(NI_TIME_CONTROLLER_START_ANIMATIONS, &args![object]);
+                    if e.mem.u16(count) != 0 {
+                        let manager = controller_manager(e, this);
+                        if manager != 0 {
+                            let minus_one = x87_quiet_bits(e.global::<u32>(MINUS_ONE_FLOAT));
+                            let object = e.call(POINTER_GET, &args![base + 0x18]).u32();
+                            e.call(MANAGER_LOAD_0055FFA0, &args![manager, object, minus_one]);
+                        } else {
+                            loaded = 0;
+                        }
+                    }
+                    e.call(MODEL_POINTER_DESTROY_0040C110, &args![model_pointer]);
+                }
+            }
+        }
+        if loaded == 0 && e.mem.u16(count) != 0 {
+            let skip = u32::from(e.mem.u16(count));
+            let game = e.global::<u32>(SAVE_LOAD_GAME);
+            e.call(SKIP_BYTES_00857BD0, &args![game, skip]);
+        }
+        if uses_blocks(e) {
+            let block_size = e.mem.u16(size);
+            load_block_end(e, start, block_size, 0x1ec, PARTICLE_SOURCE_FILE);
+        }
+        loaded
+    })
+}
+
+/// The `TESSaveLoadGame` singleton pointer.
+const SAVE_LOAD_GAME: u32 = 0x011d_e45c;
+
+/// The impact data's first (`0068a810`) or second (`0068a830`) sound.
+fn impact_sound(e: &mut Engine, data: u32, second: bool) -> u32 {
+    if second {
+        fn_0068a830(e, Ptr::new(data))
+    } else {
+        fn_0068a810(e, Ptr::new(data))
+    }
+}
+
+// Translated from 0068a600 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 0068a600 - the exception-unwinding frame (FS:[0]) is not translated.
+/// Unnamed: restarts the impact sounds. The sounds are stopped
+/// ([`bs_temp_effect_particle_stop_sounds`]); with a particle object and
+/// impact data (+0x58), each of the data's two sounds (`0068a810`,
+/// `0068a830`) that is set gets a handle by its form id (flags 0x102,
+/// through a temporary handle), placed at the object's world position,
+/// made to follow the object and played (`Sound1` +0x5C, `Sound2` +0x68).
+pub fn fn_0068a600(e: &mut Engine, this: Ptr) {
+    let base = this.addr();
+    bs_temp_effect_particle_stop_sounds(e, this);
+    if e.call(POINTER_GET, &args![base + 0x18]).u32() == 0 {
+        return;
+    }
+    let data = e.mem.u32(base + 0x58);
+    if data == 0 {
+        return;
+    }
+    for (second, handle_offset) in [(false, 0x5cu32), (true, 0x68)] {
+        let data = e.mem.u32(base + 0x58);
+        if impact_sound(e, data, second) == 0 {
+            continue;
+        }
+        let data = e.mem.u32(base + 0x58);
+        let sound = impact_sound(e, data, second);
+        let id = e.call(FORM_ID_0084E3A0, &args![sound]).u32();
+        e.with_stack(0xc, |e, temporary| {
+            let audio = e.call(BS_AUDIO_INSTANCE, &args![]).u32();
+            let handle = e
+                .call(
+                    BS_AUDIO_GET_SOUND_HANDLE,
+                    &args![audio, temporary, id, 0x102u32],
+                )
+                .u32();
+            e.call(
+                SOUND_HANDLE_ASSIGN_00418900,
+                &args![base + handle_offset, handle],
+            );
+            e.call(SOUND_HANDLE_DESTROY, &args![temporary]);
+        });
+        let object = e.call(POINTER_GET, &args![base + 0x18]).u32();
+        let position = e.call(WORLD_POSITION_0045BB80, &args![object]).u32();
+        fn_0068a7d0(e, Ptr::new(base + handle_offset), position);
+        let object = e.call(POINTER_GET, &args![base + 0x18]).u32();
+        e.call(
+            BS_SOUND_HANDLE_SET_OBJECT_TO_FOLLOW,
+            &args![base + handle_offset, object],
+        );
+        e.call(BS_SOUND_HANDLE_PLAY, &args![base + handle_offset, 0u32]);
+    }
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        (0x0068_9210, fn_00689210_entry as AbiFn),
+        entry!(0x0068_9920, fn_00689920(Ptr, u32)),
+        entry!(
+            0x0068_9af0,
+            bs_temp_effect_particle_check_should_save(Ptr) -> bool
+        ),
+        entry!(
+            0x0068_9b20,
+            bs_temp_effect_particle_get_save_size(Ptr) -> u16
+        ),
+        entry!(0x0068_9cb0, bs_temp_effect_particle_save_game(Ptr)),
+        entry!(0x0068_9f80, bs_temp_effect_particle_load_game(Ptr) -> u8),
+        entry!(0x0068_a600, fn_0068a600(Ptr)),
         entry!(0x0068_8fc0, fn_00688fc0(Ptr, u32, f32, u32, u32) -> Ptr),
         entry!(
             0x0068_90b0,
@@ -1371,5 +1911,423 @@ mod b066_tests {
         );
         assert_eq!(calls(&e, SET_ROTATE), vec![vec![0x5100, 0x5400]]);
         assert_eq!(calls(&e, ARRAY_DESTROY_0068AB60), vec![vec![array[0][0]]]);
+    }
+}
+
+#[cfg(test)]
+mod tests_n073 {
+    use super::*;
+
+    fn ret(eax: u32) -> Ret {
+        Ret {
+            eax,
+            ..Default::default()
+        }
+    }
+
+    fn st0(value: f64) -> Ret {
+        Ret {
+            st0: value,
+            ..Default::default()
+        }
+    }
+
+    fn calls_to(log: &[(u32, Vec<u32>)], addr: u32) -> Vec<Vec<u32>> {
+        log.iter()
+            .filter(|(a, _)| *a == addr)
+            .map(|(_, w)| w.clone())
+            .collect()
+    }
+
+    fn noop(e: &mut Engine, addresses: &[u32]) {
+        for &address in addresses {
+            e.register(address, |_, _| Ret::default());
+        }
+    }
+
+    fn pointer_doubles(e: &mut Engine) {
+        e.register(POINTER_GET, |e, a| ret(e.mem.u32(a[0])));
+        e.register(POINTER_SET, |e, a| {
+            e.mem.set_u32(a[0], a[1]);
+            Ret::default()
+        });
+        e.register(POINTER_INIT, |e, a| {
+            e.mem.set_u32(a[0], a[1]);
+            Ret::default()
+        });
+    }
+
+    #[test]
+    fn fn_00689210_makes_and_initializes_the_effect() {
+        let mut e = Engine::new();
+        // A null cell: nothing.
+        e.call_log = Some(vec![]);
+        let words: Vec<u32> = (0..18).map(|i| if i == 0 { 0 } else { i }).collect();
+        assert_eq!(e.call(0x0068_9210, &words).u32(), 0);
+        assert_eq!(e.call_log.take().unwrap().len(), 1);
+        // A new effect, constructed, then Init (no model loads: it stops).
+        let block = e.mem.alloc(0x74);
+        e.register_double(NI_ALLOCATE, move |_, _| ret(block));
+        pointer_doubles(&mut e);
+        noop(
+            &mut e,
+            &[
+                BS_TEMP_EFFECT_CONSTRUCT,
+                TRANSFORM_INIT,
+                SOUND_HANDLE_INIT,
+                NI_TRANSFORM_MAKE_IDENTITY,
+                POINTER_DESTROY,
+                MODEL_LOADER_LOAD_FILE,
+            ],
+        );
+        e.map(MODEL_LOADER & !0xfff, 0x1000);
+        e.register(CELL_NODE_00456FC0, |_, _| ret(0x4e0d));
+        e.register(PROCESS_LISTS_ADD_TEMP_EFFECT, |_, _| Ret::default());
+        let mut words: Vec<u32> = (0..18).map(|i| 0x100 + i).collect();
+        words[15] = 2.0f32.to_bits();
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x0068_9210, &words).u32(), block);
+        let log = e.call_log.take().unwrap();
+        assert_eq!(calls_to(&log, CELL_NODE_00456FC0), vec![vec![0x100, 4]]);
+        assert_eq!(
+            calls_to(&log, BS_TEMP_EFFECT_CONSTRUCT),
+            vec![vec![block, 0x100, 0x101]]
+        );
+        assert_eq!(e.mem.u32(block + 0x1c), 0x102);
+        assert_eq!(e.mem.u32(block + 0x20), 0x111);
+        assert_eq!(
+            calls_to(&log, PROCESS_LISTS_ADD_TEMP_EFFECT),
+            vec![vec![PROCESS_LISTS, block]]
+        );
+    }
+
+    #[test]
+    fn fn_00689920_plays_the_sequence_and_extends_the_lifetime() {
+        let mut e = Engine::new();
+        pointer_doubles(&mut e);
+        e.register(FIRST_CONTROLLER, |_, _| ret(0xc0));
+        e.register(FIND_CONTROLLER_00653270, |_, _| ret(0));
+        let this = e.mem.alloc(0x74);
+        e.call_log = Some(vec![]);
+        e.call(0x0068_9920, &args![this, 0x5e9u32]);
+        assert!(calls_to(&e.call_log.take().unwrap(), MANAGER_SEQUENCE_0047A520).is_empty());
+        e.register(FIND_CONTROLLER_00653270, |_, _| ret(0x3a3a));
+        e.register(FIXED_STRING_INIT_00438170, |_, a| ret(a[0]));
+        noop(
+            &mut e,
+            &[FIXED_STRING_DESTROY_004381B0, MANAGER_ACTIVATE_0047AAB0],
+        );
+        e.register(MANAGER_SEQUENCE_0047A520, |_, _| ret(0x5e00));
+        e.register(SEQUENCE_LENGTH_00508100, |_, _| st0(3.0));
+        e.mem.set_f32(this + 8, 2.0);
+        e.call_log = Some(vec![]);
+        e.call(0x0068_9920, &args![this, 0x5e9u32]);
+        let log = e.call_log.take().unwrap();
+        assert_eq!(
+            calls_to(&log, MANAGER_ACTIVATE_0047AAB0),
+            vec![vec![0x3a3a, 0x5e00, 0, 0, 1.0f32.to_bits(), 0, 0]]
+        );
+        assert_eq!(e.mem.f32(this + 8), 3.0);
+        // A longer lifetime stays.
+        e.mem.set_f32(this + 8, 4.0);
+        e.call(0x0068_9920, &args![this, 0x5e9u32]);
+        assert_eq!(e.mem.f32(this + 8), 4.0);
+    }
+
+    #[test]
+    fn check_should_save_needs_name_and_object() {
+        let mut e = Engine::new();
+        pointer_doubles(&mut e);
+        let this = e.mem.alloc(0x74);
+        assert!(!e.call(0x0068_9af0, &args![this]).bool());
+        e.mem.set_u32(this + 0x1c, 0x1234);
+        assert!(!e.call(0x0068_9af0, &args![this]).bool());
+        e.mem.set_u32(this + 0x18, 0x5678);
+        assert!(e.call(0x0068_9af0, &args![this]).bool());
+    }
+
+    fn save_globals(e: &mut Engine, blocks: u32) {
+        e.map(SAVE_LOAD_GAME & !0xfff, 0x1000);
+        e.set_global(SAVE_LOAD_GAME, 0x5a5au32);
+        e.register_double(0x0086_2110, move |_, _| ret(blocks));
+        let flag = e.mem.alloc(4);
+        e.register_double(0x0040_8d60, move |_, _| ret(flag));
+    }
+
+    #[test]
+    fn save_size_adds_the_parts() {
+        let mut e = Engine::new();
+        pointer_doubles(&mut e);
+        save_globals(&mut e, 1);
+        e.register(BS_TEMP_EFFECT_SAVE_SIZE, |_, _| ret(12));
+        e.register(STRING_LENGTH_0044A670, |_, _| ret(9));
+        e.register(FIRST_CONTROLLER, |_, _| ret(0xc0));
+        e.register(FIND_CONTROLLER_00653270, |_, _| ret(0x3a3a));
+        e.register(MANAGER_SAVE_COUNT_0055FDB0, |_, _| ret(0x20));
+        let this = e.mem.alloc(0x74);
+        // 6 + 12 + 1 + 9 + 16 + 12 + 4 + 2 + 0x20.
+        assert_eq!(e.call(0x0068_9b20, &args![this]).u16(), 94);
+        e.register(FIND_CONTROLLER_00653270, |_, _| ret(0));
+        assert_eq!(e.call(0x0068_9b20, &args![this]).u16(), 62);
+    }
+
+    #[test]
+    fn save_game_writes_the_parts_in_order() {
+        let mut e = Engine::new();
+        pointer_doubles(&mut e);
+        save_globals(&mut e, 1);
+        let buffer = e.mem.alloc(0x100);
+        let position = std::rc::Rc::new(std::cell::Cell::new(buffer));
+        let p = position.clone();
+        e.register_double(0x0082_5c00, move |_, _| ret(p.get()));
+        let p = position.clone();
+        let written = std::rc::Rc::new(std::cell::RefCell::new(vec![]));
+        let w = written.clone();
+        e.register_double(0x0085_79b0, move |e, a| {
+            w.borrow_mut().push(e.mem.bytes(a[1], a[2]));
+            p.set(p.get() + a[2]);
+            Ret::default()
+        });
+        noop(
+            &mut e,
+            &[
+                BS_TEMP_EFFECT_SAVE_GAME,
+                MATRIX_INIT_006815C0,
+                MANAGER_SAVE_0055FE70,
+            ],
+        );
+        e.register(STRING_LENGTH_0044A670, |_, _| ret(3));
+        e.register(OBJECT_ROTATION_006A9540, |_, _| ret(0x7070));
+        e.register(QUATERNION_FROM_ROTATION, |e, a| {
+            e.mem.set_f32(a[0], 0.5);
+            Ret::default()
+        });
+        let translation = e.mem.alloc(0xc);
+        e.mem.set_f32(translation, 7.0);
+        e.register_double(OBJECT_TRANSLATION_0043C490, move |_, _| ret(translation));
+        e.register(OBJECT_SCALE_009CDAE0, |_, _| st0(1.5));
+        e.register(FIRST_CONTROLLER, |_, _| ret(0xc0));
+        e.register(FIND_CONTROLLER_00653270, |_, _| ret(0x3a3a));
+        e.register(MANAGER_SAVE_COUNT_0055FDB0, |_, _| ret(4));
+        e.map(MINUS_ONE_FLOAT & !0xfff, 0x1000);
+        e.set_global(MINUS_ONE_FLOAT, (-1.0f32).to_bits());
+        let this = e.mem.alloc(0x74);
+        let name = e.mem.alloc(4);
+        e.mem.write(name, b"abc");
+        e.mem.set_u32(this + 0x1c, name);
+        e.mem.set_u32(this + 0x18, 0x0b1e);
+        e.call_log = Some(vec![]);
+        e.call(0x0068_9cb0, &args![this]);
+        let log = e.call_log.take().unwrap();
+        let w = written.borrow();
+        assert_eq!(w.len(), 8);
+        assert_eq!(w[0], b"KOLB".to_vec());
+        assert_eq!(w[2], vec![3]);
+        assert_eq!(w[3], b"abc".to_vec());
+        assert_eq!(w[4][..4], 0.5f32.to_le_bytes());
+        assert_eq!(w[5][..4], 7.0f32.to_le_bytes());
+        assert_eq!(w[6], 1.5f32.to_le_bytes().to_vec());
+        assert_eq!(w[7], vec![4, 0]);
+        assert_eq!(
+            calls_to(&log, MANAGER_SAVE_0055FE70),
+            vec![vec![0x3a3a, (-1.0f32).to_bits()]]
+        );
+        assert_eq!(calls_to(&log, QUATERNION_FROM_ROTATION)[0][1], 0x7070);
+        // The block size placeholder (at buffer + 4) counts what followed it.
+        assert_eq!(
+            u32::from(e.mem.u16(buffer + 4)),
+            position.get() - (buffer + 4)
+        );
+    }
+
+    /// The load setting: the save returns `bytes` in order for each read.
+    fn load_setup(e: &mut Engine, reads: Vec<Vec<u8>>) {
+        save_globals(e, 0);
+        let queue = std::rc::Rc::new(std::cell::RefCell::new(reads));
+        e.register_double(0x0085_79e0, move |e, a| {
+            let next = queue.borrow_mut().remove(0);
+            assert_eq!(next.len() as u32, a[2]);
+            e.mem.write(a[1], &next);
+            Ret::default()
+        });
+        e.register(FILL_MEMORY_00403D30, |e, a| {
+            for i in 0..a[2] {
+                e.mem.set_u8(a[0] + i, a[1] as u8);
+            }
+            Ret::default()
+        });
+        noop(
+            e,
+            &[
+                MATRIX_INIT_006815C0,
+                QUATERNION_TO_ROTATION,
+                SET_TRANSLATE,
+                SET_ROTATE,
+                SET_SCALE,
+                NI_AV_OBJECT_UPDATE_PROPERTIES,
+                UPDATE_DATA_INIT_0043D410,
+                OBJECT_UPDATE_00A59C60,
+                NI_TIME_CONTROLLER_START_ANIMATIONS,
+                MODEL_POINTER_DESTROY_0040C110,
+                SKIP_BYTES_00857BD0,
+                MANAGER_LOAD_0055FFA0,
+            ],
+        );
+    }
+
+    fn reads(count: u16) -> Vec<Vec<u8>> {
+        vec![
+            vec![2],
+            b"ab".to_vec(),
+            vec![0; 16],
+            vec![0; 12],
+            1.0f32.to_le_bytes().to_vec(),
+            count.to_le_bytes().to_vec(),
+        ]
+    }
+
+    #[test]
+    fn load_game_fails_without_base_or_model_and_skips_the_manager() {
+        let mut e = Engine::new();
+        pointer_doubles(&mut e);
+        load_setup(&mut e, reads(5));
+        e.register(BS_TEMP_EFFECT_LOAD_GAME, |_, _| ret(0));
+        let this = e.mem.alloc(0x74);
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x0068_9f80, &args![this]).u8(), 0);
+        let log = e.call_log.take().unwrap();
+        assert_eq!(calls_to(&log, SKIP_BYTES_00857BD0), vec![vec![0x5a5a, 5]]);
+        assert!(calls_to(&log, MODEL_LOADER_LOAD_FILE).is_empty());
+        // The base loads but the model does not.
+        let mut e = Engine::new();
+        pointer_doubles(&mut e);
+        load_setup(&mut e, reads(0));
+        e.register(BS_TEMP_EFFECT_LOAD_GAME, |_, _| ret(1));
+        e.map(MODEL_LOADER & !0xfff, 0x1000);
+        e.register(MODEL_LOADER_LOAD_FILE, |e, a| {
+            assert_eq!(e.mem.cstr(a[1]), b"ab".to_vec());
+            ret(0)
+        });
+        let this = e.mem.alloc(0x74);
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x0068_9f80, &args![this]).u8(), 0);
+        assert!(calls_to(&e.call_log.take().unwrap(), SKIP_BYTES_00857BD0).is_empty());
+    }
+
+    #[test]
+    fn load_game_rebuilds_the_object() {
+        let mut e = Engine::new();
+        pointer_doubles(&mut e);
+        load_setup(&mut e, reads(3));
+        e.register(BS_TEMP_EFFECT_LOAD_GAME, |_, _| ret(1));
+        e.map(MODEL_LOADER & !0xfff, 0x1000);
+        e.register(MODEL_LOADER_LOAD_FILE, |_, _| ret(0x0de1));
+        e.register(NI_OBJECT_CLONE_OV2, |_, _| ret(0xc10e));
+        let found = e.mem.alloc(4);
+        e.mem.set_u32(found, 0xfa5e);
+        e.register_double(MODEL_LOADER_FIND_MODEL, move |e, a| {
+            e.mem.set_u32(a[2], found);
+            Ret::default()
+        });
+        let node = e.mem.alloc(4);
+        let mut slots = vec![0u32; 0x38];
+        slots[0xdc / 4] = 0x0150_10dc;
+        e.put_vtable(0x0150_0000, &slots);
+        e.mem.set_u32(node, 0x0150_0000);
+        e.register(0x0150_10dc, |_, _| Ret::default());
+        e.register_double(CELL_ATTACH_NODE_005497A0, move |_, _| ret(node));
+        e.register(POSITION_00825C00, |_, _| ret(2500));
+        e.map(THOUSAND & !0xfff, 0x1000);
+        e.set_global(THOUSAND, 1000.0f64);
+        e.map(MINUS_ONE_FLOAT & !0xfff, 0x1000);
+        e.set_global(MINUS_ONE_FLOAT, (-1.0f32).to_bits());
+        e.register(FIRST_CONTROLLER, |_, _| ret(0xc0));
+        e.register(FIND_CONTROLLER_00653270, |_, _| ret(0x3a3a));
+        let this = e.mem.alloc(0x74);
+        e.mem.set_u32(this + 0xc, 0xce11);
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x0068_9f80, &args![this]).u8(), 1);
+        let log = e.call_log.take().unwrap();
+        assert_eq!(e.mem.u32(this + 0x18), 0xc10e);
+        assert_eq!(e.mem.u32(this + 0x1c), 0xfa5e);
+        assert_eq!(calls_to(&log, 0x0150_10dc), vec![vec![node, 0xc10e, 1]]);
+        assert_eq!(
+            calls_to(&log, CELL_ATTACH_NODE_005497A0),
+            vec![vec![0xce11]]
+        );
+        assert_eq!(
+            calls_to(&log, UPDATE_DATA_INIT_0043D410)[0][1..],
+            [2.5f32.to_bits(), 1, 0]
+        );
+        assert_eq!(
+            calls_to(&log, MANAGER_LOAD_0055FFA0),
+            vec![vec![0x3a3a, 0xc10e, (-1.0f32).to_bits()]]
+        );
+        assert_eq!(calls_to(&log, SET_SCALE)[0][1], 1.0f32.to_bits());
+        // Without a manager the load fails and the bytes are skipped.
+        load_setup(&mut e, reads(3));
+        e.register(BS_TEMP_EFFECT_LOAD_GAME, |_, _| ret(1));
+        e.register(FIND_CONTROLLER_00653270, |_, _| ret(0));
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x0068_9f80, &args![this]).u8(), 0);
+        assert_eq!(
+            calls_to(&e.call_log.take().unwrap(), SKIP_BYTES_00857BD0),
+            vec![vec![0x5a5a, 3]]
+        );
+    }
+
+    #[test]
+    fn fn_0068a600_restarts_the_impact_sounds() {
+        let mut e = Engine::new();
+        pointer_doubles(&mut e);
+        e.register(BS_SOUND_HANDLE_IS_VALID, |_, _| ret(0));
+        e.register(BS_AUDIO_INSTANCE, |_, _| ret(0xa0d1));
+        e.register(BS_AUDIO_GET_SOUND_HANDLE, |_, a| ret(a[1]));
+        noop(
+            &mut e,
+            &[
+                SOUND_HANDLE_ASSIGN_00418900,
+                SOUND_HANDLE_DESTROY,
+                BS_SOUND_HANDLE_SET_POSITION,
+                BS_SOUND_HANDLE_SET_OBJECT_TO_FOLLOW,
+                BS_SOUND_HANDLE_PLAY,
+            ],
+        );
+        let position = e.mem.alloc(0xc);
+        e.register_double(WORLD_POSITION_0045BB80, move |_, _| ret(position));
+        e.register(FORM_ID_0084E3A0, |e, a| ret(e.mem.u32(a[0] + 0xc)));
+        let this = e.mem.alloc(0x74);
+        // No object: only the stop.
+        e.call_log = Some(vec![]);
+        e.call(0x0068_a600, &args![this]);
+        assert!(calls_to(&e.call_log.take().unwrap(), BS_AUDIO_INSTANCE).is_empty());
+        e.mem.set_u32(this + 0x18, 0x0b1e);
+        let data = e.mem.alloc(0x54);
+        e.mem.set_u32(this + 0x58, data);
+        let sound = e.mem.alloc(0x10);
+        e.mem.set_u32(sound + 0xc, 0x50d);
+        e.mem.set_u32(data + 0x50, sound);
+        e.call_log = Some(vec![]);
+        e.call(0x0068_a600, &args![this]);
+        let log = e.call_log.take().unwrap();
+        let handles = calls_to(&log, BS_AUDIO_GET_SOUND_HANDLE);
+        assert_eq!(handles.len(), 1);
+        assert_eq!((handles[0][2], handles[0][3]), (0x50d, 0x102));
+        assert_eq!(
+            calls_to(&log, BS_SOUND_HANDLE_PLAY),
+            vec![vec![this + 0x68, 0]]
+        );
+        assert_eq!(
+            calls_to(&log, BS_SOUND_HANDLE_SET_OBJECT_TO_FOLLOW),
+            vec![vec![this + 0x68, 0x0b1e]]
+        );
+        // Both sounds.
+        e.mem.set_u32(data + 0x4c, sound);
+        e.call_log = Some(vec![]);
+        e.call(0x0068_a600, &args![this]);
+        assert_eq!(
+            calls_to(&e.call_log.take().unwrap(), BS_SOUND_HANDLE_PLAY),
+            vec![vec![this + 0x5c, 0], vec![this + 0x68, 0]]
+        );
     }
 }

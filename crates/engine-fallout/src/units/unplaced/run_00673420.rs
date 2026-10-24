@@ -370,12 +370,227 @@ pub fn fn_00673a40(e: &mut Engine, this: Ptr, file: Ptr) -> bool {
     }
 }
 
+/// `__RTDynamicCast` (`00ec43fb`, cdecl five words) and the type descriptors of `TESForm`
+/// (`01183028`) and `TESPackage` (`011846a0`).
+const DYNAMIC_CAST: u32 = 0x00ec_43fb;
+const TES_FORM_TYPE: u32 = 0x0118_3028;
+const TES_PACKAGE_TYPE: u32 = 0x0118_46a0;
+/// The part getters of a package (thiscall, no arguments; null when it has none): the
+/// second location `00672dd0`, the target `00671d10`, the schedule `0041d8a0`, the
+/// conditions `0087eaa0`, the idle collection `005f36f0`, the form `006733e0` and the
+/// getter `00441110` (the map's names for `005f36f0`, `006733e0` and `00441110` are folded
+/// bodies of other classes).
+const SECOND_LOCATION: u32 = 0x0067_2dd0;
+const PACKAGE_TARGET: u32 = 0x0067_1d10;
+const PACKAGE_SCHEDULE: u32 = 0x0041_d8a0;
+const PACKAGE_CONDITIONS: u32 = 0x0087_eaa0;
+const IDLE_COLLECTION: u32 = 0x005f_36f0;
+const PACKAGE_FORM: u32 = 0x0067_33e0;
+const GETTER_00441110: u32 = 0x0044_1110;
+/// The part comparisons (thiscall, the other part; `AL` true when they differ):
+/// `TESForm::CompareAllComponents` (`00485270`), `PackageLocation::Compare` (`0067f600`),
+/// `PackageTarget::Compare` (`00680220`), the schedule's `0067fe10`, the conditions'
+/// `00680b70` and `PackageEventAction::Compare` (`0067dbf0`), all names from the engine
+/// map; the idle collection compares through its slot +0x0C and the form through its
+/// slot +0x10C (`TESForm::Compare`, Xbox PDB), the package data through its slot +0x08.
+const COMPARE_ALL_COMPONENTS: u32 = 0x0048_5270;
+const LOCATION_COMPARE: u32 = 0x0067_f600;
+const TARGET_COMPARE: u32 = 0x0068_0220;
+const SCHEDULE_COMPARE: u32 = 0x0067_fe10;
+const CONDITIONS_COMPARE: u32 = 0x0068_0b70;
+const EVENT_ACTION_COMPARE: u32 = 0x0067_dbf0;
+
+/// One part of [`tes_package_compare`]: when `this` has the part (`get`), whether the
+/// comparison says it differs from `other`'s; otherwise whether `other` has one. A
+/// `slot` compares through the part's vtable (the getter on `this` asked before the one
+/// on `other`), a `compare` address directly (the getter on `other` first).
+fn part_differs(e: &mut Engine, this: u32, other: u32, get: u32, compare: Compare) -> bool {
+    if e.call(get, &args![this]).u32() == 0 {
+        return e.call(get, &args![other]).u32() != 0;
+    }
+    match compare {
+        Compare::Slot(slot) => {
+            let mine = e.call(get, &args![this]).u32();
+            let theirs = e.call(get, &args![other]).u32();
+            e.vcall(mine, slot, &args![theirs]).u8() != 0
+        }
+        Compare::Call(address) => {
+            let theirs = e.call(get, &args![other]).u32();
+            let mine = e.call(get, &args![this]).u32();
+            e.call(address, &args![mine, theirs]).u8() != 0
+        }
+    }
+}
+
+/// How a part of a package is compared.
+#[derive(Clone, Copy)]
+enum Compare {
+    Slot(u32),
+    Call(u32),
+}
+
+// Translated from 00673420 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TESPackage::Compare` (Xbox PDB slot name `TESForm::Compare`, vtable +0x10C; at +0x10C
+/// of `TESPackage`'s PC vtable `0106847c`; `thiscall`, `RET 4`): true (differs) when
+/// `form` is not a `TESPackage`, when the components differ, when the type (`0041ca90`),
+/// the `00441110` value or the 16-bit words at `+0x22` and `+0x24` differ, when any part
+/// differs (idle collection, location, second location, target, schedule, conditions,
+/// form; see [`part_differs`]), when only one has package data or both have and it
+/// differs, or when any of the event actions at `+0x4C`, `+0x5C`, `+0x6C` differs; false
+/// otherwise.
+pub fn tes_package_compare(e: &mut Engine, this: Ptr, form: u32) -> bool {
+    let other = e
+        .call(
+            DYNAMIC_CAST,
+            &args![form, 0u32, TES_FORM_TYPE, TES_PACKAGE_TYPE, 0u32],
+        )
+        .u32();
+    if other == 0 {
+        return true;
+    }
+    let mine = this.addr();
+    if e.call(COMPARE_ALL_COMPONENTS, &args![this, other]).u8() != 0 {
+        return true;
+    }
+    for getter in [PACKAGE_TYPE, GETTER_00441110] {
+        let value = e.call(getter, &args![this]).u32();
+        if value != e.call(getter, &args![other]).u32() {
+            return true;
+        }
+    }
+    for offset in [0x22u32, 0x24] {
+        if e.mem.u16(mine + offset) != e.mem.u16(other.wrapping_add(offset)) {
+            return true;
+        }
+    }
+    for (get, compare) in [
+        (IDLE_COLLECTION, Compare::Slot(0xc)),
+        (PACKAGE_LOCATION, Compare::Call(LOCATION_COMPARE)),
+        (SECOND_LOCATION, Compare::Call(LOCATION_COMPARE)),
+        (PACKAGE_TARGET, Compare::Call(TARGET_COMPARE)),
+        (PACKAGE_SCHEDULE, Compare::Call(SCHEDULE_COMPARE)),
+        (PACKAGE_CONDITIONS, Compare::Call(CONDITIONS_COMPARE)),
+        (PACKAGE_FORM, Compare::Slot(0x10c)),
+    ] {
+        if part_differs(e, mine, other, get, compare) {
+            return true;
+        }
+    }
+    let data = e.mem.u32(mine + 0x28);
+    let other_data = e.mem.u32(other.wrapping_add(0x28));
+    if data != 0 && other_data != 0 {
+        if e.vcall(data, 8, &args![other_data]).u8() != 0 {
+            return true;
+        }
+    } else if data != 0 || other_data != 0 {
+        return true;
+    }
+    for offset in [0x4cu32, 0x5c, 0x6c] {
+        let action = mine + offset;
+        let theirs = other.wrapping_add(offset);
+        if e.call(EVENT_ACTION_COMPARE, &args![action, theirs]).u8() != 0 {
+            return true;
+        }
+    }
+    false
+}
+
+/// The save side (`TESForm::StartForm` `004855a0`, `TESForm::CloseForm` `00485680`,
+/// `TESForm::__AddChunkData` `00485990` (cdecl chunk, data, size) and the one-word chunk
+/// writer `00485910` (cdecl chunk, value), names from the engine map), the byte-order test
+/// `00401500` (no arguments) and the package data's byte swap `00670760` (thiscall on
+/// `+0x1C`); the parts' savers (thiscall): `PackageLocation::Save` (`0067f6c0`, chunk),
+/// the schedule's `0067fec0`, `PackageTarget::Save` (`006802f0`, chunk),
+/// `TESCondition::Save` (`00680910`), `BGSIdleCollection::Save` (`004799f0`) and
+/// `PackageEventAction::Save` (`0067dc80`, chunk); the form's id getter `0084e3a0`.
+const START_FORM: u32 = 0x0048_55a0;
+const CLOSE_FORM: u32 = 0x0048_5680;
+const ADD_CHUNK_DATA: u32 = 0x0048_5990;
+const ADD_CHUNK_WORD: u32 = 0x0048_5910;
+const SAVE_NEEDS_BYTE_SWAP: u32 = 0x0040_1500;
+const PACKAGE_DATA_SWAP: u32 = 0x0067_0760;
+const LOCATION_SAVE: u32 = 0x0067_f6c0;
+const SCHEDULE_SAVE: u32 = 0x0067_fec0;
+const TARGET_SAVE: u32 = 0x0068_02f0;
+const CONDITIONS_SAVE: u32 = 0x0068_0910;
+const IDLE_COLLECTION_SAVE: u32 = 0x0047_99f0;
+const EVENT_ACTION_SAVE: u32 = 0x0067_dc80;
+const FORM_ID_0084E3A0: u32 = 0x0084_e3a0;
+
+/// Swaps the package data at `+0x1C` when the save needs its byte order converted.
+fn swap_package_data(e: &mut Engine, this: Ptr) {
+    if e.call(SAVE_NEEDS_BYTE_SWAP, &args![]).u8() != 0 {
+        e.call(PACKAGE_DATA_SWAP, &args![this.addr() + 0x1c]);
+    }
+}
+
+// Translated from 006738b0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TESPackage::Save` (Xbox PDB slot name `TESForm::Save`, vtable +0x2C; at +0x2C of
+/// `TESPackage`'s PC vtable `0106847c`; `thiscall`): starts the form, writes `PKDT` (the
+/// 0xC bytes at `+0x1C`, byte-swapped before and back after when the save needs it), then
+/// each part it has: `PLDT` (location), `PLD2` (second location), the schedule, `PTDT`
+/// (target), the conditions, the idle collection and `CNAM` (the form's id word,
+/// `0084e3a0`); the package data's slot +0x0C when there is one; the event actions `POBA`
+/// (`+0x4C`), `POEA` (`+0x5C`) and `POCA` (`+0x6C`); and closes the form.
+pub fn tes_package_save(e: &mut Engine, this: Ptr) {
+    let base = this.addr();
+    e.call(START_FORM, &args![this]);
+    swap_package_data(e, this);
+    e.call(ADD_CHUNK_DATA, &args![CHUNK_PKDT, base + 0x1c, 0xcu32]);
+    swap_package_data(e, this);
+    for (get, chunk) in [
+        (PACKAGE_LOCATION, CHUNK_PLDT),
+        (SECOND_LOCATION, CHUNK_PLD2),
+    ] {
+        if e.call(get, &args![this]).u32() != 0 {
+            let location = e.call(get, &args![this]).u32();
+            e.call(LOCATION_SAVE, &args![location, chunk]);
+        }
+    }
+    if e.call(PACKAGE_SCHEDULE, &args![this]).u32() != 0 {
+        let schedule = e.call(PACKAGE_SCHEDULE, &args![this]).u32();
+        e.call(SCHEDULE_SAVE, &args![schedule]);
+    }
+    if e.call(PACKAGE_TARGET, &args![this]).u32() != 0 {
+        let target = e.call(PACKAGE_TARGET, &args![this]).u32();
+        e.call(TARGET_SAVE, &args![target, CHUNK_PTDT]);
+    }
+    for (get, save) in [
+        (PACKAGE_CONDITIONS, CONDITIONS_SAVE),
+        (IDLE_COLLECTION, IDLE_COLLECTION_SAVE),
+    ] {
+        if e.call(get, &args![this]).u32() != 0 {
+            let part = e.call(get, &args![this]).u32();
+            e.call(save, &args![part]);
+        }
+    }
+    if e.call(PACKAGE_FORM, &args![this]).u32() != 0 {
+        let form = e.call(PACKAGE_FORM, &args![this]).u32();
+        let id = e.call(FORM_ID_0084E3A0, &args![form]).u32();
+        e.call(ADD_CHUNK_WORD, &args![CHUNK_CNAM, id]);
+    }
+    let data = e.mem.u32(base + 0x28);
+    if data != 0 {
+        e.vcall(data, 0xc, &[]);
+    }
+    for (offset, chunk) in [
+        (0x4cu32, CHUNK_POBA),
+        (0x5c, CHUNK_POEA),
+        (0x6c, CHUNK_POCA),
+    ] {
+        e.call(EVENT_ACTION_SAVE, &args![base + offset, chunk]);
+    }
+    e.call(CLOSE_FORM, &args![this]);
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
         entry!(0x0067_37a0, fn_006737a0(Ptr, Ptr) -> bool),
         entry!(0x0067_3890, fn_00673890(Ptr) -> bool),
         entry!(0x0067_3a40, fn_00673a40(Ptr, Ptr) -> bool),
+        entry!(0x0067_3420, tes_package_compare(Ptr, u32) -> bool),
+        entry!(0x0067_38b0, tes_package_save(Ptr)),
     ]
 }
 
@@ -733,5 +948,161 @@ mod b028_load_tests {
         e.call_log = Some(vec![]);
         e.call(0x0067_3a40, &args![p, 0x7000u32]);
         assert!(calls_to(&e.call_log.take().unwrap(), PACKAGE_TARGET_FROM_DATA).is_empty());
+    }
+}
+
+#[cfg(test)]
+mod n076_tests {
+    use super::*;
+
+    fn calls_to(e: &Engine, callee: u32) -> Vec<Vec<u32>> {
+        let log = e.call_log.as_ref().unwrap();
+        log.iter()
+            .filter(|(address, _)| *address == callee)
+            .map(|(_, words)| words.clone())
+            .collect()
+    }
+
+    const GETTERS: [u32; 9] = [
+        PACKAGE_TYPE,
+        GETTER_00441110,
+        IDLE_COLLECTION,
+        PACKAGE_LOCATION,
+        SECOND_LOCATION,
+        PACKAGE_TARGET,
+        PACKAGE_SCHEDULE,
+        PACKAGE_CONDITIONS,
+        PACKAGE_FORM,
+    ];
+
+    /// Two packages whose getters answer the word at `+0x70` (every part the same
+    /// value), and comparisons that all say "same".
+    fn engine() -> (Engine, u32, u32) {
+        let mut e = Engine::new();
+        let this = e.mem.alloc(0x80);
+        let other = e.mem.alloc(0x80);
+        e.register_double(DYNAMIC_CAST, move |_, a| {
+            if a[0] == other {
+                other.into_ret()
+            } else {
+                Ret::default()
+            }
+        });
+        for getter in GETTERS {
+            e.register(getter, |e, a| e.mem.u32(a[0] + 0x70).into_ret());
+        }
+        for compare in [
+            COMPARE_ALL_COMPONENTS,
+            LOCATION_COMPARE,
+            TARGET_COMPARE,
+            SCHEDULE_COMPARE,
+            CONDITIONS_COMPARE,
+            EVENT_ACTION_COMPARE,
+        ] {
+            e.register(compare, |_, _| Ret::default());
+        }
+        e.call_log = Some(vec![]);
+        (e, this, other)
+    }
+
+    fn differs(e: &mut Engine, this: u32, form: u32) -> bool {
+        e.call(0x0067_3420, &args![this, form]).u8() != 0
+    }
+
+    #[test]
+    fn packages_without_parts_compare_equal() {
+        let (mut e, this, other) = engine();
+        assert!(differs(&mut e, this, 0x1234));
+        assert!(!differs(&mut e, this, other));
+        assert_eq!(calls_to(&e, EVENT_ACTION_COMPARE).len(), 3);
+        e.mem.set_u16(other + 0x24, 1);
+        assert!(differs(&mut e, this, other));
+        e.mem.set_u16(other + 0x24, 0);
+        // Only one has package data.
+        e.mem.set_u32(other + 0x28, 0x5000);
+        assert!(differs(&mut e, this, other));
+    }
+
+    #[test]
+    fn parts_are_compared_through_their_comparisons() {
+        let (mut e, this, other) = engine();
+        // Both have every part: a vtable object answering "same" at +0x0C, +0x10C, +0x08.
+        let part = e.mem.alloc(8);
+        let table = e.mem.alloc(0x110);
+        for slot in [0x8u32, 0xc, 0x10c] {
+            e.mem.set_u32(table + slot, 0x0153_0000 + slot);
+            e.register(0x0153_0000 + slot, |_, _| Ret::default());
+        }
+        e.mem.set_u32(part, table);
+        e.mem.set_u32(this + 0x70, part);
+        e.mem.set_u32(other + 0x70, part);
+        e.mem.set_u32(this + 0x28, part);
+        e.mem.set_u32(other + 0x28, part);
+        assert!(!differs(&mut e, this, other));
+        assert_eq!(calls_to(&e, TARGET_COMPARE), vec![vec![part, part]]);
+        assert_eq!(calls_to(&e, LOCATION_COMPARE).len(), 2);
+        assert_eq!(calls_to(&e, 0x0153_010c).len(), 1);
+        assert_eq!(calls_to(&e, 0x0153_0008).len(), 1);
+        // A differing schedule stops there.
+        e.register(SCHEDULE_COMPARE, |_, _| 1u32.into_ret());
+        e.call_log = Some(vec![]);
+        assert!(differs(&mut e, this, other));
+        assert!(calls_to(&e, CONDITIONS_COMPARE).is_empty());
+    }
+
+    #[test]
+    fn save_writes_the_chunks_of_the_parts_it_has() {
+        let mut e = Engine::new();
+        let this = e.mem.alloc(0x80);
+        for getter in GETTERS {
+            e.register(getter, |e, a| e.mem.u32(a[0] + 0x70).into_ret());
+        }
+        for callee in [
+            START_FORM,
+            CLOSE_FORM,
+            ADD_CHUNK_DATA,
+            ADD_CHUNK_WORD,
+            PACKAGE_DATA_SWAP,
+            LOCATION_SAVE,
+            SCHEDULE_SAVE,
+            TARGET_SAVE,
+            CONDITIONS_SAVE,
+            IDLE_COLLECTION_SAVE,
+            EVENT_ACTION_SAVE,
+        ] {
+            e.register(callee, |_, _| Ret::default());
+        }
+        e.register(SAVE_NEEDS_BYTE_SWAP, |_, _| 1u32.into_ret());
+        e.register(FORM_ID_0084E3A0, |_, _| 0x0012_3456u32.into_ret());
+        e.call_log = Some(vec![]);
+        e.call(0x0067_38b0, &args![this]);
+        assert_eq!(
+            calls_to(&e, ADD_CHUNK_DATA),
+            vec![vec![CHUNK_PKDT, this + 0x1c, 0xc]]
+        );
+        assert_eq!(calls_to(&e, PACKAGE_DATA_SWAP).len(), 2);
+        assert!(calls_to(&e, LOCATION_SAVE).is_empty());
+        assert!(calls_to(&e, ADD_CHUNK_WORD).is_empty());
+        assert_eq!(
+            calls_to(&e, EVENT_ACTION_SAVE)[2],
+            vec![this + 0x6c, CHUNK_POCA]
+        );
+        // With every part.
+        e.mem.set_u32(this + 0x70, 0x6000);
+        e.register(SAVE_NEEDS_BYTE_SWAP, |_, _| Ret::default());
+        e.call_log = Some(vec![]);
+        e.call(0x0067_38b0, &args![this]);
+        assert_eq!(
+            calls_to(&e, LOCATION_SAVE),
+            vec![vec![0x6000, CHUNK_PLDT], vec![0x6000, CHUNK_PLD2]]
+        );
+        assert_eq!(calls_to(&e, TARGET_SAVE), vec![vec![0x6000, CHUNK_PTDT]]);
+        assert_eq!(
+            calls_to(&e, ADD_CHUNK_WORD),
+            vec![vec![CHUNK_CNAM, 0x0012_3456]]
+        );
+        assert_eq!(calls_to(&e, IDLE_COLLECTION_SAVE), vec![vec![0x6000]]);
+        assert!(calls_to(&e, PACKAGE_DATA_SWAP).is_empty());
+        assert_eq!(calls_to(&e, CLOSE_FORM), vec![vec![this]]);
     }
 }

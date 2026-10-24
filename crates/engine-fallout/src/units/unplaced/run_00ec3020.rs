@@ -519,7 +519,334 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00ec_3599, facet_register(u32)),
         entry!(0x00ec_35d7, locinfo_dtor(Ptr) -> u32),
         entry!(0x00ec_35ff, locimp_ctor(Ptr, u32) -> Ptr),
+        entry!(0x00ec_3093, out_of_range_ctor(Ptr, u32) -> Ptr),
+        entry!(0x00ec_31b3, ios_base_addstd(Ptr)),
+        entry!(0x00ec_3241, fn_00ec3241() -> u32),
+        entry!(0x00ec_3277, fn_00ec3277(Ptr) -> u32),
+        entry!(0x00ec_3280, fn_00ec3280(Ptr) -> u32),
+        entry!(0x00ec_3322, fiopen_wide(Ptr, u32, u32) -> u32),
+        entry!(0x00ec_33da, fiopen(Ptr, u32, u32) -> u32),
     ]
+}
+
+/// The base constructor `00ec3093` runs first (`0044a310`; thiscall: the message).
+const LOGIC_ERROR_BASE_CTOR: u32 = 0x0044_a310;
+/// `std::out_of_range`'s vtable (`010a57fc`; RTTI `.?AVout_of_range@std@@`).
+const OUT_OF_RANGE_VTABLE: u32 = 0x010a_57fc;
+/// The standard streams' table (`0126fafc`, eight words indexed by the stream's index).
+const STANDARD_STREAMS_0126FAFC: u32 = 0x0126_fafc;
+/// `00ece56e` (unnamed; the jump target of `00ec3241`).
+const PROCESSING_THROW_00ECE56E: u32 = 0x00ec_e56e;
+/// The open modes `fiopen_wide` accepts (`010f1e48`, zero-terminated words; the search
+/// starts with the value 1 and then reads from `010f1e4c`), the `fopen` mode texts for
+/// them (`011c15ec`, one pointer per mode) and the read-only mode text (`010f1e44`).
+const VALID_MODES_010F1E48: u32 = 0x010f_1e48;
+const VALID_MODES_010F1E4C: u32 = 0x010f_1e4c;
+const MODE_TEXTS_011C15EC: u32 = 0x011c_15ec;
+const READ_MODE_TEXT_010F1E44: u32 = 0x010f_1e44;
+/// The CRT calls of the two `_Fiopen`s: the wide open `00ecef9e` (cdecl: name, mode text,
+/// protection), `fclose` (`00ec9907`), `fseek` (`00ecb65a`: stream, 0, 2 = end) and
+/// `mbstowcs_s` (`00ecf315`: 0, buffer, 0x104, text, 0x103).
+const WIDE_OPEN: u32 = 0x00ec_ef9e;
+const FCLOSE: u32 = 0x00ec_9907;
+const FSEEK: u32 = 0x00ec_b65a;
+const MBSTOWCS_S: u32 = 0x00ec_f315;
+
+// Translated from 00ec3093 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The `std::out_of_range` constructor (by the vtable it sets; this file's string range
+/// check builds its exception with it): the base constructor `0044a310` with `message`,
+/// then the vtable `010a57fc`. Returns `this`.
+pub fn out_of_range_ctor(e: &mut Engine, this: Ptr, message: u32) -> Ptr {
+    e.call(LOGIC_ERROR_BASE_CTOR, &args![this, message]);
+    e.mem.set_u32(this.addr(), OUT_OF_RANGE_VTABLE);
+    this
+}
+
+// Translated from 00ec31b3 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `std::ios_base::_Addstd` (Ghidra library match; cdecl, one word): under the lock of kind
+/// 2 (`_Lockit`), the stream's index (+4) starts at 1 and moves up while the table slot
+/// (`0126fafc + 4 * index`) holds another stream, at most to 8; the stream is stored there
+/// and the index's byte count (`0126fb24 + index`) incremented.
+pub fn ios_base_addstd(e: &mut Engine, ios: Ptr) {
+    let ios = ios.addr();
+    e.with_stack(4, |e, lock| {
+        lockit_ctor(e, lock, 2);
+        e.mem.set_u32(ios + 4, 1);
+        loop {
+            let index = e.mem.u32(ios + 4);
+            let slot = e.mem.u32(
+                index
+                    .wrapping_mul(4)
+                    .wrapping_add(STANDARD_STREAMS_0126FAFC),
+            );
+            if slot == 0 || slot == ios {
+                break;
+            }
+            e.mem.set_u32(ios + 4, index.wrapping_add(1));
+            if e.mem.u32(ios + 4) >= 8 {
+                break;
+            }
+        }
+        let index = e.mem.u32(ios + 4);
+        e.mem.set_u32(
+            index
+                .wrapping_mul(4)
+                .wrapping_add(STANDARD_STREAMS_0126FAFC),
+            ios,
+        );
+        let index = e.mem.u32(ios + 4);
+        let at = index.wrapping_add(INDEX_COUNTS_0126FB24);
+        let count = e.mem.u8(at);
+        e.mem.set_u8(at, count.wrapping_add(1));
+        fn_00ec330b(e, lock);
+    });
+}
+
+// Translated from 00ec3241 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map: a jump to `00ece56e`, passing on its answer.
+pub fn fn_00ec3241(e: &mut Engine) -> u32 {
+    e.call(PROCESSING_THROW_00ECE56E, &args![]).u32()
+}
+
+// Translated from 00ec3277 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (the `std::_Mutex::_Lock` shape; thiscall): `__Mtxlock` on the
+/// critical section at +0, passing on its `EAX`.
+pub fn fn_00ec3277(e: &mut Engine, this: Ptr) -> u32 {
+    let section = e.mem.u32(this.addr());
+    e.call(MUTEX_LOCK, &args![section]).u32()
+}
+
+// Translated from 00ec3280 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (the `std::_Mutex::_Unlock` shape; thiscall): `__Mtxunlock` on
+/// the critical section at +0, passing on its `EAX`.
+pub fn fn_00ec3280(e: &mut Engine, this: Ptr) -> u32 {
+    let section = e.mem.u32(this.addr());
+    e.call(MUTEX_UNLOCK, &args![section]).u32()
+}
+
+// Translated from 00ec3322 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `std::_Fiopen(const wchar_t *, int, int)` (Ghidra library match; cdecl): `ate` (4) and
+/// `noreplace` (0x80) are kept aside, 0x40 sets bit 1 and 8
+/// sets bit 2; the mode without 4, 0x40, 0x80 must be one of the table
+/// (`010f1e48`, searched from the value 1), else null. With `noreplace` and bit 1 an
+/// existing file (opened with the text at `010f1e44`) is closed and null answered. The file
+/// is opened with the mode's text (`011c15ec`); with `ate` it is moved to its end, a failed
+/// move closing it and answering null.
+pub fn fiopen_wide(e: &mut Engine, name: Ptr, mode: u32, protection: u32) -> u32 {
+    let ate = mode & 4;
+    let no_replace = mode & 0x80;
+    let mut mode = mode;
+    if mode & 0x40 != 0 {
+        mode |= 1;
+    }
+    if mode & 8 != 0 {
+        mode |= 2;
+    }
+    let wanted = mode & 0xffff_ff3b;
+    let mut index = 0u32;
+    let mut candidate = 1u32;
+    while candidate != wanted {
+        candidate = e.mem.u32(VALID_MODES_010F1E4C + 4 * index);
+        index += 1;
+        if candidate == 0 {
+            break;
+        }
+    }
+    let slot = index << 2;
+    if e.mem.u32(VALID_MODES_010F1E48 + slot) == 0 {
+        return 0;
+    }
+    if no_replace != 0 && mode & 1 != 0 {
+        let existing = e
+            .call(WIDE_OPEN, &args![name, READ_MODE_TEXT_010F1E44, protection])
+            .u32();
+        if existing != 0 {
+            e.call(FCLOSE, &args![existing]);
+            return 0;
+        }
+    }
+    let text = e.mem.u32(MODE_TEXTS_011C15EC + slot);
+    let file = e.call(WIDE_OPEN, &args![name, text, protection]).u32();
+    if file == 0 {
+        return 0;
+    }
+    if ate != 0 && e.call(FSEEK, &args![file, 0u32, 2u32]).u32() != 0 {
+        e.call(FCLOSE, &args![file]);
+        return 0;
+    }
+    file
+}
+
+// Translated from 00ec33da (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 00ec33da - the /GS cookie check (00ec408c on the cookie at 011c16bc XOR the frame) is not translated
+/// `std::_Fiopen(const char *, int, int)` (Ghidra library match; cdecl): the name widened
+/// into a 0x104-character local (`mbstowcs_s`, at most 0x103); a failure answers null,
+/// otherwise the wide `_Fiopen`'s answer.
+pub fn fiopen(e: &mut Engine, name: Ptr, mode: u32, protection: u32) -> u32 {
+    e.with_stack(0x20c, |e, buffer| {
+        let failed = e
+            .call(MBSTOWCS_S, &args![0u32, buffer, 0x104u32, name, 0x103u32])
+            .u32();
+        if failed != 0 {
+            return 0;
+        }
+        fiopen_wide(e, buffer, mode, protection)
+    })
+}
+
+#[cfg(test)]
+mod n081_tests {
+    use super::*;
+
+    fn calls_to(e: &Engine, addr: u32) -> Vec<Vec<u32>> {
+        e.call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|(a, _)| *a == addr)
+            .map(|(_, w)| w.clone())
+            .collect()
+    }
+
+    #[test]
+    fn out_of_range_runs_the_base_then_sets_its_vtable() {
+        let mut e = Engine::new();
+        e.register(LOGIC_ERROR_BASE_CTOR, |e, a| {
+            e.mem.set_u32(a[0], 0x1111);
+            Ret::default()
+        });
+        let this = e.mem.alloc(0xc);
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x00ec_3093, &args![this, 0x77u32]).u32(), this);
+        assert_eq!(calls_to(&e, LOGIC_ERROR_BASE_CTOR), vec![vec![this, 0x77]]);
+        assert_eq!(e.mem.u32(this), OUT_OF_RANGE_VTABLE);
+    }
+
+    #[test]
+    fn addstd_takes_the_first_free_or_own_slot() {
+        let mut e = Engine::new();
+        e.map(0x0126_f000, 0x1000);
+        e.register(MUTEX_LOCK, |_, _| Ret::default());
+        e.register(MUTEX_UNLOCK, |_, _| Ret::default());
+        let ios = e.mem.alloc(0x30);
+        e.mem.set_u32(STANDARD_STREAMS_0126FAFC + 4, 0x5000);
+        e.mem.set_u32(STANDARD_STREAMS_0126FAFC + 8, 0x6000);
+        e.call_log = Some(vec![]);
+        e.call(0x00ec_31b3, &args![ios]);
+        assert_eq!(e.mem.u32(ios + 4), 3);
+        assert_eq!(e.mem.u32(STANDARD_STREAMS_0126FAFC + 12), ios);
+        assert_eq!(e.mem.u8(INDEX_COUNTS_0126FB24 + 3), 1);
+        assert_eq!(calls_to(&e, MUTEX_LOCK).len(), 1);
+        assert_eq!(calls_to(&e, MUTEX_UNLOCK).len(), 1);
+        // Its own slot again: the same index, the count 2.
+        e.call(0x00ec_31b3, &args![ios]);
+        assert_eq!(e.mem.u32(ios + 4), 3);
+        assert_eq!(e.mem.u8(INDEX_COUNTS_0126FB24 + 3), 2);
+    }
+
+    #[test]
+    fn thin_wrappers_pass_on_their_callees() {
+        let mut e = Engine::new();
+        e.register(PROCESSING_THROW_00ECE56E, |_, _| 0x101u32.into_ret());
+        e.register(MUTEX_LOCK, |_, a| (a[0] + 1).into_ret());
+        e.register(MUTEX_UNLOCK, |_, a| (a[0] + 2).into_ret());
+        assert_eq!(e.call(0x00ec_3241, &args![]).u32(), 0x101);
+        let mutex = e.mem.alloc(4);
+        e.mem.set_u32(mutex, 0x40);
+        assert_eq!(e.call(0x00ec_3277, &args![mutex]).u32(), 0x41);
+        assert_eq!(e.call(0x00ec_3280, &args![mutex]).u32(), 0x42);
+    }
+
+    fn modes(e: &mut Engine) {
+        e.map(0x010f_1000, 0x1000);
+        e.map(0x011c_1000, 0x1000);
+        // Valid modes 1 (in), 2 (out), 0x12 (out | trunc).
+        for (i, m) in [1u32, 2, 0x12, 0].iter().enumerate() {
+            e.mem.set_u32(VALID_MODES_010F1E48 + 4 * i as u32, *m);
+        }
+        for i in 0..3u32 {
+            e.mem.set_u32(MODE_TEXTS_011C15EC + 4 * i, 0x9000 + i);
+        }
+    }
+
+    #[test]
+    fn wide_fiopen_checks_the_mode_and_opens() {
+        let mut e = Engine::new();
+        modes(&mut e);
+        e.register(FCLOSE, |_, _| Ret::default());
+        e.register(FSEEK, |_, _| 0u32.into_ret());
+        e.register(WIDE_OPEN, |_, a| {
+            (if a[1] == READ_MODE_TEXT_010F1E44 {
+                0
+            } else {
+                0x7000
+            })
+            .into_ret()
+        });
+        e.call_log = Some(vec![]);
+        // out | trunc (0x12): slot 2.
+        assert_eq!(
+            e.call(0x00ec_3322, &args![0x100u32, 0x12u32, 0x40u32])
+                .u32(),
+            0x7000
+        );
+        assert_eq!(calls_to(&e, WIDE_OPEN), vec![vec![0x100, 0x9002, 0x40]]);
+        // An unknown mode answers null without opening.
+        e.call_log = Some(vec![]);
+        assert_eq!(
+            e.call(0x00ec_3322, &args![0x100u32, 0x30u32, 0x40u32])
+                .u32(),
+            0
+        );
+        assert!(calls_to(&e, WIDE_OPEN).is_empty());
+        // in | ate (5): moved to the end; a failed move closes and answers null.
+        assert_eq!(
+            e.call(0x00ec_3322, &args![0x100u32, 5u32, 0x40u32]).u32(),
+            0x7000
+        );
+        e.register(FSEEK, |_, _| 1u32.into_ret());
+        e.call_log = Some(vec![]);
+        assert_eq!(
+            e.call(0x00ec_3322, &args![0x100u32, 5u32, 0x40u32]).u32(),
+            0
+        );
+        assert_eq!(calls_to(&e, FCLOSE), vec![vec![0x7000]]);
+        // in | noreplace with an existing file: closed, null.
+        e.register(WIDE_OPEN, |_, _| 0x7100u32.into_ret());
+        e.call_log = Some(vec![]);
+        assert_eq!(
+            e.call(0x00ec_3322, &args![0x100u32, 0x81u32, 0x40u32])
+                .u32(),
+            0
+        );
+        assert_eq!(calls_to(&e, FCLOSE), vec![vec![0x7100]]);
+    }
+
+    #[test]
+    fn narrow_fiopen_widens_first() {
+        let mut e = Engine::new();
+        modes(&mut e);
+        e.register(WIDE_OPEN, |_, _| 0x7000u32.into_ret());
+        e.register_double(MBSTOWCS_S, |_, _| 0u32.into_ret());
+        e.call_log = Some(vec![]);
+        assert_eq!(
+            e.call(0x00ec_33da, &args![0x100u32, 2u32, 0x40u32]).u32(),
+            0x7000
+        );
+        let widen = calls_to(&e, MBSTOWCS_S);
+        assert_eq!(
+            (widen[0][0], widen[0][2], widen[0][3], widen[0][4]),
+            (0, 0x104, 0x100, 0x103)
+        );
+        assert_eq!(calls_to(&e, WIDE_OPEN)[0][0], widen[0][1]);
+        e.register(MBSTOWCS_S, |_, _| 22u32.into_ret());
+        e.call_log = Some(vec![]);
+        assert_eq!(
+            e.call(0x00ec_33da, &args![0x100u32, 2u32, 0x40u32]).u32(),
+            0
+        );
+        assert!(calls_to(&e, WIDE_OPEN).is_empty());
+    }
 }
 
 #[cfg(test)]

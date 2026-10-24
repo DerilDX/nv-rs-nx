@@ -142,9 +142,54 @@ pub fn fn_0061f460(e: &mut Engine, this: Ptr) -> Ptr {
     this
 }
 
+// Translated from 0061f280 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`ECX`, plain `RET`; called by `005d8930` and `00619a90`):
+/// clears the byte at +0x22, then calls `this`'s vtable slot +0x4c with `0x80000000`.
+pub fn fn_0061f280(e: &mut Engine, this: Ptr) {
+    e.mem.set_u8(this.addr() + 0x22, 0);
+    e.vcall(this.addr(), 0x4c, &args![0x8000_0000u32]);
+}
+
+/// `0043d4d0` (`ECX` = a setting): the address of its value.
+const SETTING_VALUE: u32 = 0x0043_d4d0;
+
+// Translated from 0061f2b0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`ECX`, plain `RET`; called by `LoadTopicsList` and
+/// `DoSpeechChallengeCheck`): the word of the setting chosen by the value at +0x44 (the
+/// compiler's jump table at `0061f328`: 1 `011cc06c`, 2 `011cc03c`, 3 `011cc058`, 4
+/// `011cc024`, 5 `011cbf54`), read through `0043d4d0`; -1 for any other value.
+pub fn fn_0061f2b0(e: &mut Engine, this: Ptr) -> u32 {
+    let setting = match e.mem.u32(this.addr() + 0x44).wrapping_sub(1) {
+        0 => 0x011c_c06c,
+        1 => 0x011c_c03c,
+        2 => 0x011c_c058,
+        3 => 0x011c_c024,
+        4 => 0x011c_bf54,
+        _ => return u32::MAX,
+    };
+    let value = e.call(SETTING_VALUE, &args![setting]).u32();
+    e.mem.u32(value)
+}
+
+// Translated from 0061f550 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `bhkEntityListener`'s scalar deleting destructor (slot 0 of its vtable `0104d91c`;
+/// unnamed in the engine map; `ECX` and one stack word, `RET 4`): the destructor body
+/// `005545f0`, then `operator delete` (`00401030`) when bit 0 of `flags` is set. Answers
+/// `this`.
+pub fn fn_0061f550(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    e.call(0x0055_45f0, &args![this]);
+    if flags & 1 != 0 {
+        e.call(0x0040_1030, &args![this]);
+    }
+    this
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x0061_f280, fn_0061f280(Ptr)),
+        entry!(0x0061_f2b0, fn_0061f2b0(Ptr) -> u32),
+        entry!(0x0061_f550, fn_0061f550(Ptr, u32) -> Ptr),
         entry!(0x0061_f440, fn_0061f440(Ptr)),
         entry!(0x0061_f260, fn_0061f260(Ptr) -> bool),
         entry!(0x0061_f220, fn_0061f220(Ptr)),
@@ -315,5 +360,68 @@ mod b015_tests {
         assert_eq!(e.mem.u32(this + 4), 0);
         assert_eq!(e.mem.u8(this + 0x14), 1);
         assert_eq!(calls_to(&e, 0x0061_fa10), vec![vec![this + 0x18, 0x25]]);
+    }
+}
+
+#[cfg(test)]
+mod n075_tests {
+    use super::*;
+
+    #[test]
+    fn fn_0061f280_clears_the_byte_and_calls_slot_0x4c() {
+        let mut e = Engine::new();
+        let mut slots = vec![0u32; 0x14];
+        slots[0x4c / 4] = 0x0060_004c;
+        e.put_vtable(0x0070_0000, &slots);
+        e.register(0x0060_004c, |_, _| Ret::default());
+        let this = e.mem.alloc(0x30);
+        e.mem.set_u32(this, 0x0070_0000);
+        e.mem.set_u8(this + 0x22, 5);
+        e.call_log = Some(vec![]);
+        e.call(0x0061_f280, &args![this]);
+        assert_eq!(e.mem.u8(this + 0x22), 0);
+        let log = e.call_log.take().unwrap();
+        assert_eq!(log[1], (0x0060_004c, vec![this, 0x8000_0000]));
+    }
+
+    #[test]
+    fn fn_0061f2b0_reads_the_setting_of_the_kind() {
+        let mut e = Engine::new();
+        e.map(0x011c_b000, 0x2000);
+        for (i, setting) in [
+            0x011c_c06cu32,
+            0x011c_c03c,
+            0x011c_c058,
+            0x011c_c024,
+            0x011c_bf54,
+        ]
+        .iter()
+        .enumerate()
+        {
+            e.mem.set_u32(setting + 4, 100 + i as u32);
+        }
+        e.register(SETTING_VALUE, |_, a| (a[0] + 4).into_ret());
+        let this = e.mem.alloc(0x48);
+        for kind in 1..=5u32 {
+            e.mem.set_u32(this + 0x44, kind);
+            assert_eq!(e.call(0x0061_f2b0, &args![this]).u32(), 99 + kind);
+        }
+        for kind in [0u32, 6] {
+            e.mem.set_u32(this + 0x44, kind);
+            assert_eq!(e.call(0x0061_f2b0, &args![this]).u32(), u32::MAX);
+        }
+    }
+
+    #[test]
+    fn fn_0061f550_frees_only_with_bit_0() {
+        let mut e = Engine::new();
+        e.register(0x0055_45f0, |_, _| Ret::default());
+        e.register(0x0040_1030, |_, _| Ret::default());
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x0061_f550, &args![0x5000u32, 1u32]).u32(), 0x5000);
+        assert_eq!(e.call_log.take().unwrap().len(), 3);
+        e.call_log = Some(vec![]);
+        e.call(0x0061_f550, &args![0x5000u32, 0u32]);
+        assert_eq!(e.call_log.take().unwrap().len(), 2);
     }
 }

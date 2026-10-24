@@ -26,12 +26,39 @@ pub fn fn_004a7c40(e: &mut Engine, this: Ptr<BGSSceneInfo>) -> Ptr<BGSSceneInfo>
     this
 }
 
+// Translated from 004a7c80 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`thiscall`, no stack words): clears the
+/// 0x40-byte `SCENE_INFO_DATA_STRUCT` at `ECX` (`00403d30` with 0 and 0x40)
+/// and returns it.
+pub fn fn_004a7c80(e: &mut Engine, this: Ptr) -> Ptr {
+    e.call(MEMSET, &args![this, 0u32, 0x40u32]);
+    this
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
-    vec![entry!(
-        0x004a_7c40,
-        fn_004a7c40(Ptr<BGSSceneInfo>) -> Ptr<BGSSceneInfo>
-    )]
+    vec![
+        entry!(
+            0x004a_7c40,
+            fn_004a7c40(Ptr<BGSSceneInfo>) -> Ptr<BGSSceneInfo>
+        ),
+        entry!(0x004a_7c80, fn_004a7c80(Ptr) -> Ptr),
+    ]
+}
+
+#[cfg(test)]
+mod n085_tests {
+    use super::*;
+
+    #[test]
+    fn scene_data_clear_zeroes_the_struct_and_returns_it() {
+        let mut e = Engine::new();
+        e.register(MEMSET, |_, _| Ret::default());
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x004a_7c80, &args![0x5000u32]).u32(), 0x5000);
+        let log = e.call_log.take().unwrap();
+        assert!(log.contains(&(MEMSET, vec![0x5000, 0, 0x40])));
+    }
 }
 
 #[cfg(test)]

@@ -765,6 +765,1061 @@ pub fn fn_00b4a670(e: &mut Engine, crc: u32, buffer: u32, length: u32) -> u32 {
     crc_bytes_reversed(!crc)
 }
 
+// The compressor's tree half: zlib's `trees.c`, `compress.c` and `crc32.c` shapes by their
+// bodies (the engine map names none of them). The compressor state's words they use:
+/// The pending buffer and count, the data-type byte and the level.
+const TS_PENDING_BUFFER: u32 = 0x08;
+const TS_PENDING: u32 = 0x14;
+const TS_DATA_TYPE: u32 = 0x1c;
+const TS_LEVEL: u32 = 0x7c;
+/// The literal/length, distance and bit-length trees (4-byte entries: frequency or code
+/// `u16` at +0, parent or length `u16` at +2).
+const TS_LITERAL_TREE: u32 = 0x8c;
+const TS_DISTANCE_TREE: u32 = 0x980;
+const TS_BIT_LENGTH_TREE: u32 = 0xa74;
+/// The three tree descriptors (tree, largest code, static descriptor).
+const TS_LITERAL_DESCRIPTOR: u32 = 0xb10;
+const TS_DISTANCE_DESCRIPTOR: u32 = 0xb1c;
+const TS_BIT_LENGTH_DESCRIPTOR: u32 = 0xb28;
+/// The bit-length counts (16 `u16`), the heap (573 words) with its length and top, and
+/// the depths (573 bytes).
+const TS_BIT_LENGTH_COUNT: u32 = 0xb34;
+const TS_HEAP: u32 = 0xb54;
+const TS_HEAP_LENGTH: u32 = 0x1448;
+const TS_HEAP_MAX: u32 = 0x144c;
+const TS_DEPTH: u32 = 0x1450;
+/// The literal buffer and its size, the literal count, the distance buffer, the optimal
+/// and static lengths, the match count, the last end-of-block length and the bit buffer.
+const TS_LITERAL_BUFFER: u32 = 0x1690;
+const TS_LITERAL_BUFFER_SIZE: u32 = 0x1694;
+const TS_LAST_LITERAL: u32 = 0x1698;
+const TS_DISTANCE_BUFFER: u32 = 0x169c;
+const TS_OPTIMAL_LENGTH: u32 = 0x16a0;
+const TS_STATIC_LENGTH: u32 = 0x16a4;
+const TS_MATCHES: u32 = 0x16a8;
+const TS_LAST_END_LENGTH: u32 = 0x16ac;
+const TS_BIT_BUFFER: u32 = 0x16b0;
+const TS_BIT_COUNT: u32 = 0x16b4;
+/// The heap's size (`2 * 286 + 1`).
+const HEAP_SIZE: i32 = 0x23d;
+/// The static tree descriptors (`.data`) and trees, the bit-length order, the length and
+/// distance code tables and their extra bits and bases (`.rdata`).
+const STATIC_LITERAL_DESCRIPTOR: u32 = 0x011a_d770;
+const STATIC_DISTANCE_DESCRIPTOR: u32 = 0x011a_d784;
+const STATIC_BIT_LENGTH_DESCRIPTOR: u32 = 0x011a_d798;
+const STATIC_LITERAL_TREE: u32 = 0x010a_86a0;
+const STATIC_DISTANCE_TREE: u32 = 0x010a_8b20;
+const BIT_LENGTH_ORDER: u32 = 0x010a_85c4;
+const LENGTH_CODE: u32 = 0x010a_8d98;
+const DISTANCE_CODE: u32 = 0x010a_8b98;
+const LENGTH_EXTRA_BITS: u32 = 0x010a_8550;
+const LENGTH_BASES: u32 = 0x010a_8e98;
+const DISTANCE_EXTRA_BITS: u32 = 0x010a_85d8;
+const DISTANCE_BASES: u32 = 0x010a_8f10;
+/// The compressor's `deflateInit_` (`00b46360`), `deflate` (`00b46b70`) and `deflateEnd`
+/// (`00b47370`), all in `run_00b45c00.rs`; the version string `compress2` passes
+/// (`011ad7ac`).
+const DEFLATE_INIT: u32 = 0x00b4_6360;
+const DEFLATE: u32 = 0x00b4_6b70;
+const DEFLATE_END: u32 = 0x00b4_7370;
+const COMPRESS_VERSION: u32 = 0x011a_d7ac;
+
+/// A pending byte.
+fn tree_put_byte(e: &mut Engine, state: u32, byte: u32) {
+    let buffer = e.mem.u32(state + TS_PENDING_BUFFER);
+    let pending = e.mem.u32(state + TS_PENDING);
+    e.mem.set_u8(buffer.wrapping_add(pending), byte as u8);
+    e.mem.set_u32(state + TS_PENDING, pending.wrapping_add(1));
+}
+
+/// The exe's inlined bit writer: with more bits held than fit with `length` more, the
+/// value shifted to the held count fills the 16-bit buffer, both its bytes go out and the
+/// buffer keeps the value's (16-bit) rest; otherwise the value is only added and counted.
+fn send_bits(e: &mut Engine, state: u32, value: u32, length: i32) {
+    let held = e.mem.i32(state + TS_BIT_COUNT);
+    if held > 16i32.wrapping_sub(length) {
+        let buffer = u32::from(e.mem.u16(state + TS_BIT_BUFFER)) | value.wrapping_shl(held as u32);
+        e.mem.set_u16(state + TS_BIT_BUFFER, buffer as u16);
+        let buffer = u32::from(e.mem.u16(state + TS_BIT_BUFFER));
+        tree_put_byte(e, state, buffer & 0xff);
+        let buffer = u32::from(e.mem.u16(state + TS_BIT_BUFFER));
+        tree_put_byte(e, state, buffer >> 8);
+        let shift = 16i32.wrapping_sub(e.mem.i32(state + TS_BIT_COUNT)) as u32;
+        let rest = (value & 0xffff).wrapping_shr(shift);
+        e.mem.set_u16(state + TS_BIT_BUFFER, rest as u16);
+        let held = e.mem.i32(state + TS_BIT_COUNT);
+        e.mem.set_i32(
+            state + TS_BIT_COUNT,
+            length.wrapping_add(held).wrapping_sub(16),
+        );
+    } else {
+        let buffer = u32::from(e.mem.u16(state + TS_BIT_BUFFER)) | value.wrapping_shl(held as u32);
+        e.mem.set_u16(state + TS_BIT_BUFFER, buffer as u16);
+        let held = e.mem.i32(state + TS_BIT_COUNT);
+        e.mem
+            .set_i32(state + TS_BIT_COUNT, held.wrapping_add(length));
+    }
+}
+
+/// The exe's inlined code writer: the tree entry's code with its length (read first).
+fn send_code(e: &mut Engine, state: u32, tree: u32, code: u32) {
+    let entry = tree.wrapping_add(code.wrapping_mul(4));
+    let length = i32::from(e.mem.u16(entry.wrapping_add(2)));
+    let value = u32::from(e.mem.u16(entry));
+    send_bits(e, state, value, length);
+}
+
+// Translated from 00b4a060 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map; zlib's `get_crc_table` by its body (no words): the address of
+/// the CRC table `010a6550`.
+pub fn fn_00b4a060(_e: &mut Engine) -> u32 {
+    CRC_TABLE
+}
+
+// Translated from 00b4ab70 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map; zlib's `tr_static_init` with the static trees built in (no
+/// words): does nothing.
+pub fn fn_00b4ab70(_e: &mut Engine) {}
+
+// Translated from 00b4ab80 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map; zlib's `init_block` by its body (`cdecl`, one word: the
+/// compressor state): clears the frequencies of the 286 literal/length, 30 distance and 19
+/// bit-length codes, counts the end-of-block code once, and clears the optimal and static
+/// lengths, the match and the literal counts.
+pub fn fn_00b4ab80(e: &mut Engine, state: u32) {
+    for (tree, count) in [
+        (TS_LITERAL_TREE, 0x11eu32),
+        (TS_DISTANCE_TREE, 0x1e),
+        (TS_BIT_LENGTH_TREE, 0x13),
+    ] {
+        for code in 0..count {
+            e.mem.set_u16(state + tree + 4 * code, 0);
+        }
+    }
+    e.mem.set_u16(state + TS_LITERAL_TREE + 4 * 0x100, 1);
+    e.mem.set_u32(state + TS_STATIC_LENGTH, 0);
+    e.mem.set_u32(state + TS_OPTIMAL_LENGTH, 0);
+    e.mem.set_u32(state + TS_MATCHES, 0);
+    e.mem.set_u32(state + TS_LAST_LITERAL, 0);
+}
+
+// Translated from 00b4aad0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map; zlib's `_tr_init` by its body (`cdecl`, one word: the
+/// compressor state): `fn_00b4ab70`, the three descriptors pointed at their trees and the
+/// static descriptors (`011ad770`, `011ad784`, `011ad798`), the bit buffer emptied, the
+/// last end-of-block length 8, and `fn_00b4ab80`.
+pub fn fn_00b4aad0(e: &mut Engine, state: u32) {
+    fn_00b4ab70(e);
+    for (descriptor, tree, statics) in [
+        (
+            TS_LITERAL_DESCRIPTOR,
+            TS_LITERAL_TREE,
+            STATIC_LITERAL_DESCRIPTOR,
+        ),
+        (
+            TS_DISTANCE_DESCRIPTOR,
+            TS_DISTANCE_TREE,
+            STATIC_DISTANCE_DESCRIPTOR,
+        ),
+        (
+            TS_BIT_LENGTH_DESCRIPTOR,
+            TS_BIT_LENGTH_TREE,
+            STATIC_BIT_LENGTH_DESCRIPTOR,
+        ),
+    ] {
+        e.mem.set_u32(state + descriptor, state + tree);
+        e.mem.set_u32(state + descriptor + 8, statics);
+    }
+    e.mem.set_u16(state + TS_BIT_BUFFER, 0);
+    e.mem.set_u32(state + TS_BIT_COUNT, 0);
+    e.mem.set_u32(state + TS_LAST_END_LENGTH, 8);
+    fn_00b4ab80(e, state);
+}
+
+// Translated from 00b4ac50 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map; zlib's `_tr_stored_block` by its body (`cdecl`, four words:
+/// the compressor state, a buffer, its length and the last-block flag): the stored block
+/// type (`flag` in 3 bits), then `fn_00b4dca0` with the header.
+pub fn fn_00b4ac50(e: &mut Engine, state: u32, buffer: u32, length: u32, last: u32) {
+    send_bits(e, state, last, 3);
+    fn_00b4dca0(e, state, buffer, length, 1);
+}
+
+// Translated from 00b4ad90 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map; zlib's `_tr_align` by its body (`cdecl`, one word: the
+/// compressor state): a static block type (2 in 3 bits) and the static end-of-block code
+/// (0 in 7 bits), then `fn_00b4daf0`; when the last end-of-block length plus 11 less the
+/// bits held is below 9, the same pair and flush again. The last end-of-block length
+/// becomes 7.
+pub fn fn_00b4ad90(e: &mut Engine, state: u32) {
+    send_bits(e, state, 2, 3);
+    send_bits(e, state, 0, 7);
+    fn_00b4daf0(e, state);
+    let room = e
+        .mem
+        .i32(state + TS_LAST_END_LENGTH)
+        .wrapping_add(0xb)
+        .wrapping_sub(e.mem.i32(state + TS_BIT_COUNT));
+    if room < 9 {
+        send_bits(e, state, 2, 3);
+        send_bits(e, state, 0, 7);
+        fn_00b4daf0(e, state);
+    }
+    e.mem.set_u32(state + TS_LAST_END_LENGTH, 7);
+}
+
+// Translated from 00b4b250 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map; zlib's `_tr_flush_block` by its body (`cdecl`, four words:
+/// the compressor state, the block's bytes or null, its length and the last-block flag).
+/// At a level above 0: the data type is guessed (`fn_00b4da00`) while unknown (2), both
+/// trees are built (`fn_00b4b600`) and the bit-length tree (`fn_00b4bf10`); the optimal
+/// and static byte counts are `(bits + 10) / 8` and the smaller counts. At level 0 both
+/// are the length plus 5. With bytes and a length plus 4 within that count the block is
+/// stored (`fn_00b4ac50`); else a static block (type `2 + last`, `fn_00b4d210` with the
+/// static trees) when that is as small, otherwise a dynamic one (type `4 + last`, the
+/// trees sent by `fn_00b4c170`, the data by `fn_00b4d210`). Then `fn_00b4ab80`, and for the
+/// last block `fn_00b4dbe0`.
+pub fn fn_00b4b250(e: &mut Engine, state: u32, buffer: u32, length: u32, last: u32) {
+    let mut max_index = 0i32;
+    let (optimal, fixed);
+    if e.mem.i32(state + TS_LEVEL) > 0 {
+        if e.mem.u8(state + TS_DATA_TYPE) == 2 {
+            fn_00b4da00(e, state);
+        }
+        fn_00b4b600(e, state, state + TS_LITERAL_DESCRIPTOR);
+        fn_00b4b600(e, state, state + TS_DISTANCE_DESCRIPTOR);
+        max_index = fn_00b4bf10(e, state);
+        let mut best = e.mem.u32(state + TS_OPTIMAL_LENGTH).wrapping_add(0xa) >> 3;
+        let static_bytes = e.mem.u32(state + TS_STATIC_LENGTH).wrapping_add(0xa) >> 3;
+        if static_bytes <= best {
+            best = static_bytes;
+        }
+        optimal = best;
+        fixed = static_bytes;
+    } else {
+        fixed = length.wrapping_add(5);
+        optimal = fixed;
+    }
+    if length.wrapping_add(4) <= optimal && buffer != 0 {
+        fn_00b4ac50(e, state, buffer, length, last);
+    } else if fixed == optimal {
+        send_bits(e, state, last.wrapping_add(2), 3);
+        fn_00b4d210(e, state, STATIC_LITERAL_TREE, STATIC_DISTANCE_TREE);
+    } else {
+        send_bits(e, state, last.wrapping_add(4), 3);
+        let literal_codes = e.mem.i32(state + TS_LITERAL_DESCRIPTOR + 4).wrapping_add(1);
+        let distance_codes = e
+            .mem
+            .i32(state + TS_DISTANCE_DESCRIPTOR + 4)
+            .wrapping_add(1);
+        fn_00b4c170(
+            e,
+            state,
+            literal_codes,
+            distance_codes,
+            max_index.wrapping_add(1),
+        );
+        fn_00b4d210(e, state, state + TS_LITERAL_TREE, state + TS_DISTANCE_TREE);
+    }
+    fn_00b4ab80(e, state);
+    if last != 0 {
+        fn_00b4dbe0(e, state);
+    }
+}
+
+/// The heap entry at `index`.
+fn heap_at(e: &Engine, state: u32, index: i32) -> i32 {
+    e.mem.i32(state + TS_HEAP + (index as u32).wrapping_mul(4))
+}
+
+fn set_heap_at(e: &mut Engine, state: u32, index: i32, value: i32) {
+    e.mem
+        .set_i32(state + TS_HEAP + (index as u32).wrapping_mul(4), value);
+}
+
+/// A node's frequency and depth.
+fn frequency(e: &Engine, tree: u32, node: i32) -> u32 {
+    u32::from(e.mem.u16(tree.wrapping_add((node as u32).wrapping_mul(4))))
+}
+
+fn depth(e: &Engine, state: u32, node: i32) -> u32 {
+    u32::from(e.mem.u8(state + TS_DEPTH + node as u32))
+}
+
+/// The heap order: a smaller frequency, or an equal one at no greater depth.
+fn smaller(e: &Engine, state: u32, tree: u32, n: i32, m: i32) -> bool {
+    frequency(e, tree, n) < frequency(e, tree, m)
+        || (frequency(e, tree, n) == frequency(e, tree, m)
+            && depth(e, state, n) <= depth(e, state, m))
+}
+
+// Translated from 00b4b9a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map; zlib's `pqdownheap` by its body (`cdecl`, three words: the
+/// compressor state, a tree and a heap index): sifts the entry at the index down the heap,
+/// swapping with the smaller child while that is smaller.
+pub fn fn_00b4b9a0(e: &mut Engine, state: u32, tree: u32, index: i32) {
+    let mut k = index;
+    let value = heap_at(e, state, k);
+    let mut j = k.wrapping_shl(1);
+    while j <= e.mem.i32(state + TS_HEAP_LENGTH) {
+        if j < e.mem.i32(state + TS_HEAP_LENGTH)
+            && smaller(
+                e,
+                state,
+                tree,
+                heap_at(e, state, j + 1),
+                heap_at(e, state, j),
+            )
+        {
+            j += 1;
+        }
+        if smaller(e, state, tree, value, heap_at(e, state, j)) {
+            break;
+        }
+        let child = heap_at(e, state, j);
+        set_heap_at(e, state, k, child);
+        k = j;
+        j = j.wrapping_shl(1);
+    }
+    set_heap_at(e, state, k, value);
+}
+
+// Translated from 00b4b600 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map; zlib's `build_tree` by its body (`cdecl`, two words: the
+/// compressor state and a tree descriptor). Puts every used code on the heap (unused ones
+/// get length 0), forces at least two (frequency 1, lowering the optimal and, with a static
+/// tree, the static length), keeps the largest used code, heapifies (`fn_00b4b9a0`), and
+/// combines the two smallest nodes into new ones (from the element count up, depth one
+/// more than the deeper) until one is left, the nodes saved at the heap's top. Then the
+/// lengths (`fn_00b4bb30`) and codes (`fn_00b4be40`).
+pub fn fn_00b4b600(e: &mut Engine, state: u32, descriptor: u32) {
+    let tree = e.mem.u32(descriptor);
+    let statics = e.mem.u32(descriptor + 8);
+    let static_tree = e.mem.u32(statics);
+    let elements = e.mem.i32(statics + 0xc);
+    let mut max_code = -1i32;
+    e.mem.set_i32(state + TS_HEAP_LENGTH, 0);
+    e.mem.set_i32(state + TS_HEAP_MAX, HEAP_SIZE);
+    let mut n = 0i32;
+    while n < elements {
+        if frequency(e, tree, n) != 0 {
+            max_code = n;
+            let length = e.mem.i32(state + TS_HEAP_LENGTH).wrapping_add(1);
+            e.mem.set_i32(state + TS_HEAP_LENGTH, length);
+            set_heap_at(e, state, length, max_code);
+            e.mem.set_u8(state + TS_DEPTH + n as u32, 0);
+        } else {
+            e.mem.set_u16(
+                tree.wrapping_add((n as u32).wrapping_mul(4))
+                    .wrapping_add(2),
+                0,
+            );
+        }
+        n += 1;
+    }
+    while e.mem.i32(state + TS_HEAP_LENGTH) < 2 {
+        let node = if max_code < 2 {
+            max_code += 1;
+            max_code
+        } else {
+            0
+        };
+        let length = e.mem.i32(state + TS_HEAP_LENGTH).wrapping_add(1);
+        e.mem.set_i32(state + TS_HEAP_LENGTH, length);
+        set_heap_at(e, state, length, node);
+        e.mem
+            .set_u16(tree.wrapping_add((node as u32).wrapping_mul(4)), 1);
+        e.mem.set_u8(state + TS_DEPTH + node as u32, 0);
+        let optimal = e.mem.u32(state + TS_OPTIMAL_LENGTH).wrapping_sub(1);
+        e.mem.set_u32(state + TS_OPTIMAL_LENGTH, optimal);
+        if static_tree != 0 {
+            let static_length = u32::from(
+                e.mem.u16(
+                    static_tree
+                        .wrapping_add((node as u32).wrapping_mul(4))
+                        .wrapping_add(2),
+                ),
+            );
+            let value = e
+                .mem
+                .u32(state + TS_STATIC_LENGTH)
+                .wrapping_sub(static_length);
+            e.mem.set_u32(state + TS_STATIC_LENGTH, value);
+        }
+    }
+    e.mem.set_i32(descriptor + 4, max_code);
+    let mut n = e.mem.i32(state + TS_HEAP_LENGTH) / 2;
+    while n >= 1 {
+        fn_00b4b9a0(e, state, tree, n);
+        n -= 1;
+    }
+    let mut node = elements;
+    loop {
+        let n = heap_at(e, state, 1);
+        let last = heap_at(e, state, e.mem.i32(state + TS_HEAP_LENGTH));
+        set_heap_at(e, state, 1, last);
+        let length = e.mem.i32(state + TS_HEAP_LENGTH).wrapping_sub(1);
+        e.mem.set_i32(state + TS_HEAP_LENGTH, length);
+        fn_00b4b9a0(e, state, tree, 1);
+        let m = heap_at(e, state, 1);
+        let top = e.mem.i32(state + TS_HEAP_MAX).wrapping_sub(1);
+        e.mem.set_i32(state + TS_HEAP_MAX, top);
+        set_heap_at(e, state, top, n);
+        let top = e.mem.i32(state + TS_HEAP_MAX).wrapping_sub(1);
+        e.mem.set_i32(state + TS_HEAP_MAX, top);
+        set_heap_at(e, state, top, m);
+        let sum = frequency(e, tree, n).wrapping_add(frequency(e, tree, m));
+        e.mem
+            .set_u16(tree.wrapping_add((node as u32).wrapping_mul(4)), sum as u16);
+        let deeper = if depth(e, state, n) >= depth(e, state, m) {
+            depth(e, state, n)
+        } else {
+            depth(e, state, m)
+        };
+        e.mem
+            .set_u8(state + TS_DEPTH + node as u32, deeper.wrapping_add(1) as u8);
+        for child in [m, n] {
+            e.mem.set_u16(
+                tree.wrapping_add((child as u32).wrapping_mul(4))
+                    .wrapping_add(2),
+                node as u16,
+            );
+        }
+        set_heap_at(e, state, 1, node);
+        node += 1;
+        fn_00b4b9a0(e, state, tree, 1);
+        if e.mem.i32(state + TS_HEAP_LENGTH) < 2 {
+            break;
+        }
+    }
+    let top = e.mem.i32(state + TS_HEAP_MAX).wrapping_sub(1);
+    e.mem.set_i32(state + TS_HEAP_MAX, top);
+    let root = heap_at(e, state, 1);
+    set_heap_at(e, state, top, root);
+    fn_00b4bb30(e, state, descriptor);
+    fn_00b4be40(e, tree, max_code, state + TS_BIT_LENGTH_COUNT);
+}
+
+// Translated from 00b4bb30 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map; zlib's `gen_bitlen` by its body (`cdecl`, two words: the
+/// compressor state and a tree descriptor). Clears the bit-length counts; walks the heap
+/// from its top giving each node its parent's length plus one (at most the descriptor's
+/// limit, counting the overflows), and for each code (not above the largest used one)
+/// counts its length and adds `frequency * (length + extra bits)` to the optimal length
+/// (and the static tree's length to the static one). With overflows it moves counts down
+/// from the limit (one less there, two more one level deeper) until none are left, then
+/// gives the codes, from the heap's end, the corrected lengths, the optimal length taking
+/// the differences.
+pub fn fn_00b4bb30(e: &mut Engine, state: u32, descriptor: u32) {
+    let tree = e.mem.u32(descriptor);
+    let max_code = e.mem.i32(descriptor + 4);
+    let statics = e.mem.u32(descriptor + 8);
+    let static_tree = e.mem.u32(statics);
+    let extra = e.mem.u32(statics + 4);
+    let base = e.mem.i32(statics + 8);
+    let max_length = e.mem.i32(statics + 0x10);
+    let length_of = |e: &Engine, node: u32| {
+        u32::from(
+            e.mem
+                .u16(tree.wrapping_add(node.wrapping_mul(4)).wrapping_add(2)),
+        )
+    };
+    let count_at = |bits: i32| state + TS_BIT_LENGTH_COUNT + (bits as u32).wrapping_mul(2);
+    let mut overflow = 0i32;
+    let mut bits = 0i32;
+    while bits <= 0xf {
+        e.mem.set_u16(count_at(bits), 0);
+        bits += 1;
+    }
+    let root = heap_at(e, state, e.mem.i32(state + TS_HEAP_MAX)) as u32;
+    e.mem
+        .set_u16(tree.wrapping_add(root.wrapping_mul(4)).wrapping_add(2), 0);
+    let mut h = e.mem.i32(state + TS_HEAP_MAX).wrapping_add(1);
+    while h < HEAP_SIZE {
+        let n = heap_at(e, state, h) as u32;
+        let parent = length_of(e, n);
+        let mut length = length_of(e, parent) as i32 + 1;
+        if length > max_length {
+            length = max_length;
+            overflow += 1;
+        }
+        e.mem.set_u16(
+            tree.wrapping_add(n.wrapping_mul(4)).wrapping_add(2),
+            length as u16,
+        );
+        if (n as i32) <= max_code {
+            let count = e.mem.u16(count_at(length)).wrapping_add(1);
+            e.mem.set_u16(count_at(length), count);
+            let mut extra_bits = 0i32;
+            if (n as i32) >= base {
+                extra_bits = e
+                    .mem
+                    .i32(extra.wrapping_add((n as i32).wrapping_sub(base) as u32 * 4));
+            }
+            let f = frequency(e, tree, n as i32);
+            let optimal = f
+                .wrapping_mul(length.wrapping_add(extra_bits) as u32)
+                .wrapping_add(e.mem.u32(state + TS_OPTIMAL_LENGTH));
+            e.mem.set_u32(state + TS_OPTIMAL_LENGTH, optimal);
+            if static_tree != 0 {
+                let static_length = u32::from(
+                    e.mem
+                        .u16(static_tree.wrapping_add(n.wrapping_mul(4)).wrapping_add(2)),
+                );
+                let value = f
+                    .wrapping_mul(static_length.wrapping_add(extra_bits as u32))
+                    .wrapping_add(e.mem.u32(state + TS_STATIC_LENGTH));
+                e.mem.set_u32(state + TS_STATIC_LENGTH, value);
+            }
+        }
+        h += 1;
+    }
+    if overflow == 0 {
+        return;
+    }
+    loop {
+        let mut bits = max_length - 1;
+        while e.mem.u16(count_at(bits)) == 0 {
+            bits -= 1;
+        }
+        let count = e.mem.u16(count_at(bits)).wrapping_sub(1);
+        e.mem.set_u16(count_at(bits), count);
+        let count = e.mem.u16(count_at(bits + 1)).wrapping_add(2);
+        e.mem.set_u16(count_at(bits + 1), count);
+        let count = e.mem.u16(count_at(max_length)).wrapping_sub(1);
+        e.mem.set_u16(count_at(max_length), count);
+        overflow -= 2;
+        if overflow <= 0 {
+            break;
+        }
+    }
+    let mut bits = max_length;
+    while bits != 0 {
+        let mut n = u32::from(e.mem.u16(count_at(bits)));
+        while n != 0 {
+            h -= 1;
+            let m = heap_at(e, state, h);
+            if m > max_code {
+                continue;
+            }
+            let length = length_of(e, m as u32);
+            if length != bits as u32 {
+                let optimal = (bits as u32)
+                    .wrapping_sub(length)
+                    .wrapping_mul(frequency(e, tree, m))
+                    .wrapping_add(e.mem.u32(state + TS_OPTIMAL_LENGTH));
+                e.mem.set_u32(state + TS_OPTIMAL_LENGTH, optimal);
+                e.mem.set_u16(
+                    tree.wrapping_add((m as u32).wrapping_mul(4))
+                        .wrapping_add(2),
+                    bits as u16,
+                );
+            }
+            n -= 1;
+        }
+        bits -= 1;
+    }
+}
+
+// Translated from 00b4be40 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map; zlib's `gen_codes` by its body (`cdecl`, three words: a
+/// tree, its largest code and the bit-length counts): the first code of each length
+/// (`(previous + count) * 2`, 16-bit) into a 16-entry local, then each code with a length
+/// takes the next code of its length reversed (`fn_00b4dab0`).
+// Translation incomplete: 00b4be40 - the /GS stack cookie (011c16bc, checked by 00ec408c) is not translated.
+pub fn fn_00b4be40(e: &mut Engine, tree: u32, max_code: i32, counts: u32) {
+    e.with_stack(0x20, |e, next| {
+        let next = next.addr();
+        let mut code = 0u16;
+        let mut bits = 1u32;
+        while bits <= 0xf {
+            let count = e.mem.u16(counts.wrapping_add(bits * 2).wrapping_sub(2));
+            code = code.wrapping_add(count).wrapping_shl(1);
+            e.mem.set_u16(next + bits * 2, code);
+            bits += 1;
+        }
+        let mut n = 0i32;
+        while n <= max_code {
+            let entry = tree.wrapping_add((n as u32).wrapping_mul(4));
+            let length = u32::from(e.mem.u16(entry.wrapping_add(2)));
+            if length != 0 {
+                let slot = next.wrapping_add(length.wrapping_mul(2));
+                let value = u32::from(e.mem.u16(slot));
+                let advanced = e.mem.u16(slot).wrapping_add(1);
+                e.mem.set_u16(slot, advanced);
+                let reversed = fn_00b4dab0(e, value, length as i32);
+                e.mem.set_u16(entry, reversed as u16);
+            }
+            n += 1;
+        }
+    });
+}
+
+// Translated from 00b4bf10 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map; zlib's `build_bl_tree` by its body (`cdecl`, one word: the
+/// compressor state): scans both trees (`fn_00b4bfd0`), builds the bit-length tree, finds
+/// the last bit-length code in transmit order (`010a85c4`, from 18 down to 3) with a
+/// length, adds `3 * (index + 1) + 14` to the optimal length and answers the index.
+pub fn fn_00b4bf10(e: &mut Engine, state: u32) -> i32 {
+    let max = e.mem.i32(state + TS_LITERAL_DESCRIPTOR + 4);
+    fn_00b4bfd0(e, state, state + TS_LITERAL_TREE, max);
+    let max = e.mem.i32(state + TS_DISTANCE_DESCRIPTOR + 4);
+    fn_00b4bfd0(e, state, state + TS_DISTANCE_TREE, max);
+    fn_00b4b600(e, state, state + TS_BIT_LENGTH_DESCRIPTOR);
+    let mut index = 0x12i32;
+    while index >= 3 {
+        let code = u32::from(e.mem.u8(BIT_LENGTH_ORDER + index as u32));
+        if e.mem.u16(state + TS_BIT_LENGTH_TREE + 2 + code * 4) != 0 {
+            break;
+        }
+        index -= 1;
+    }
+    let optimal = (index.wrapping_add(1).wrapping_mul(3) as u32)
+        .wrapping_add(e.mem.u32(state + TS_OPTIMAL_LENGTH))
+        .wrapping_add(0xe);
+    e.mem.set_u32(state + TS_OPTIMAL_LENGTH, optimal);
+    index
+}
+
+/// The run limits `fn_00b4bfd0` and `fn_00b4c670` switch between after a run: 138/3 before
+/// a zero length, 6/3 for a repeated length, 7/4 otherwise.
+fn run_limits(current: u32, next: u32) -> (i32, i32) {
+    if next == 0 {
+        (0x8a, 3)
+    } else if current == next {
+        (6, 3)
+    } else {
+        (7, 4)
+    }
+}
+
+// Translated from 00b4bfd0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map; zlib's `scan_tree` by its body (`cdecl`, three words: the
+/// compressor state, a tree and its largest code). Sets the length after the largest code
+/// to 0xffff (a guard) and counts the bit-length codes the run-length coding of the lengths
+/// needs: short runs count their length that often, zero runs code 17 (up to 10) or 18,
+/// other runs code 16 (after the length itself when it changed).
+pub fn fn_00b4bfd0(e: &mut Engine, state: u32, tree: u32, max_code: i32) {
+    let length_at = |e: &Engine, n: i32| {
+        u32::from(
+            e.mem.u16(
+                tree.wrapping_add((n as u32).wrapping_mul(4))
+                    .wrapping_add(2),
+            ),
+        )
+    };
+    let bl_frequency = |code: u32| state + TS_BIT_LENGTH_TREE + code * 4;
+    let mut previous = u32::MAX;
+    let first = length_at(e, 0);
+    let mut count = 0i32;
+    let (mut max_count, mut min_count) = (7i32, 4i32);
+    if first == 0 {
+        max_count = 0x8a;
+        min_count = 3;
+    }
+    e.mem.set_u16(
+        tree.wrapping_add((max_code as u32).wrapping_mul(4))
+            .wrapping_add(6),
+        0xffff,
+    );
+    let mut current = first;
+    let mut n = 0i32;
+    while n <= max_code {
+        let next = length_at(e, n + 1);
+        count += 1;
+        if count < max_count && current == next {
+            current = next;
+            n += 1;
+            continue;
+        }
+        if count < min_count {
+            let value = e.mem.u16(bl_frequency(current)).wrapping_add(count as u16);
+            e.mem.set_u16(bl_frequency(current), value);
+        } else if current != 0 {
+            if current != previous {
+                let value = e.mem.u16(bl_frequency(current)).wrapping_add(1);
+                e.mem.set_u16(bl_frequency(current), value);
+            }
+            let value = e.mem.u16(bl_frequency(16)).wrapping_add(1);
+            e.mem.set_u16(bl_frequency(16), value);
+        } else if count < 0xb {
+            let value = e.mem.u16(bl_frequency(17)).wrapping_add(1);
+            e.mem.set_u16(bl_frequency(17), value);
+        } else {
+            let value = e.mem.u16(bl_frequency(18)).wrapping_add(1);
+            e.mem.set_u16(bl_frequency(18), value);
+        }
+        count = 0;
+        previous = current;
+        (max_count, min_count) = run_limits(current, next);
+        current = next;
+        n += 1;
+    }
+}
+
+// Translated from 00b4c670 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map; zlib's `send_tree` by its body (`cdecl`, three words: the
+/// compressor state, a tree and its largest code): sends the tree's lengths run-length
+/// coded with the bit-length tree's codes: short runs as the length repeated, other runs
+/// as code 16 (after the length when it changed) and `count - 3` in 2 bits, zero runs as
+/// code 17 and `count - 3` in 3 bits (up to 10) or code 18 and `count - 11` in 7 bits.
+pub fn fn_00b4c670(e: &mut Engine, state: u32, tree: u32, max_code: i32) {
+    let length_at = |e: &Engine, n: i32| {
+        u32::from(
+            e.mem.u16(
+                tree.wrapping_add((n as u32).wrapping_mul(4))
+                    .wrapping_add(2),
+            ),
+        )
+    };
+    let bl_tree = state + TS_BIT_LENGTH_TREE;
+    let mut previous = u32::MAX;
+    let first = length_at(e, 0);
+    let mut count = 0i32;
+    let (mut max_count, mut min_count) = (7i32, 4i32);
+    if first == 0 {
+        max_count = 0x8a;
+        min_count = 3;
+    }
+    let mut current = first;
+    let mut n = 0i32;
+    while n <= max_code {
+        let next = length_at(e, n + 1);
+        count += 1;
+        if count < max_count && current == next {
+            current = next;
+            n += 1;
+            continue;
+        }
+        if count < min_count {
+            loop {
+                send_code(e, state, bl_tree, current);
+                count -= 1;
+                if count == 0 {
+                    break;
+                }
+            }
+        } else if current != 0 {
+            if current != previous {
+                send_code(e, state, bl_tree, current);
+                count -= 1;
+            }
+            send_code(e, state, bl_tree, 16);
+            send_bits(e, state, count.wrapping_sub(3) as u32, 2);
+        } else if count < 0xb {
+            send_code(e, state, bl_tree, 17);
+            send_bits(e, state, count.wrapping_sub(3) as u32, 3);
+        } else {
+            send_code(e, state, bl_tree, 18);
+            send_bits(e, state, count.wrapping_sub(0xb) as u32, 7);
+        }
+        count = 0;
+        previous = current;
+        (max_count, min_count) = run_limits(current, next);
+        current = next;
+        n += 1;
+    }
+}
+
+// Translated from 00b4c170 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map; zlib's `send_all_trees` by its body (`cdecl`, four words: the
+/// compressor state and the literal, distance and bit-length code counts): the counts less
+/// 257, 1 and 4 (5, 5 and 4 bits), the bit-length codes' lengths in transmit order (3 bits
+/// each), then both trees (`fn_00b4c670`).
+pub fn fn_00b4c170(
+    e: &mut Engine,
+    state: u32,
+    literal_codes: i32,
+    distance_codes: i32,
+    bl_codes: i32,
+) {
+    send_bits(e, state, literal_codes.wrapping_sub(0x101) as u32, 5);
+    send_bits(e, state, distance_codes.wrapping_sub(1) as u32, 5);
+    send_bits(e, state, bl_codes.wrapping_sub(4) as u32, 4);
+    let mut rank = 0i32;
+    while rank < bl_codes {
+        let code = u32::from(e.mem.u8(BIT_LENGTH_ORDER + rank as u32));
+        let length = u32::from(e.mem.u16(state + TS_BIT_LENGTH_TREE + 2 + code * 4));
+        send_bits(e, state, length, 3);
+        rank += 1;
+    }
+    fn_00b4c670(
+        e,
+        state,
+        state + TS_LITERAL_TREE,
+        literal_codes.wrapping_sub(1),
+    );
+    fn_00b4c670(
+        e,
+        state,
+        state + TS_DISTANCE_TREE,
+        distance_codes.wrapping_sub(1),
+    );
+}
+
+/// The distance code of a (0-based) distance.
+fn distance_code(e: &Engine, distance: u32) -> u32 {
+    if distance < 0x100 {
+        u32::from(e.mem.u8(DISTANCE_CODE + distance))
+    } else {
+        u32::from(e.mem.u8(DISTANCE_CODE + 0x100 + (distance >> 7)))
+    }
+}
+
+// Translated from 00b4d0e0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map; zlib's `_tr_tally` by its body (`cdecl`, three words: the
+/// compressor state, a distance (0 for a literal) and the literal or length less 3): both
+/// into the buffers; a literal's frequency counted, or for a match the match count, the
+/// length code's and the distance code's frequencies. Answers whether the literal buffer
+/// is full (one short of its size).
+pub fn fn_00b4d0e0(e: &mut Engine, state: u32, distance: u32, value: u32) -> bool {
+    let last = e.mem.u32(state + TS_LAST_LITERAL);
+    let distances = e.mem.u32(state + TS_DISTANCE_BUFFER);
+    e.mem.set_u16(
+        distances.wrapping_add(last.wrapping_mul(2)),
+        distance as u16,
+    );
+    let literals = e.mem.u32(state + TS_LITERAL_BUFFER);
+    let last = e.mem.u32(state + TS_LAST_LITERAL);
+    e.mem.set_u8(literals.wrapping_add(last), value as u8);
+    let last = e.mem.u32(state + TS_LAST_LITERAL).wrapping_add(1);
+    e.mem.set_u32(state + TS_LAST_LITERAL, last);
+    if distance == 0 {
+        let at = state + TS_LITERAL_TREE + value.wrapping_mul(4);
+        e.mem.set_u16(at, e.mem.u16(at).wrapping_add(1));
+    } else {
+        let matches = e.mem.u32(state + TS_MATCHES).wrapping_add(1);
+        e.mem.set_u32(state + TS_MATCHES, matches);
+        let code = u32::from(e.mem.u8(LENGTH_CODE.wrapping_add(value)));
+        let at = state + TS_LITERAL_TREE + (code + 0x101) * 4;
+        e.mem.set_u16(at, e.mem.u16(at).wrapping_add(1));
+        let code = distance_code(e, distance.wrapping_sub(1));
+        let at = state + TS_DISTANCE_TREE + code * 4;
+        e.mem.set_u16(at, e.mem.u16(at).wrapping_add(1));
+    }
+    e.mem.u32(state + TS_LAST_LITERAL) == e.mem.u32(state + TS_LITERAL_BUFFER_SIZE).wrapping_sub(1)
+}
+
+// Translated from 00b4d210 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map; zlib's `compress_block` by its body (`cdecl`, three words: the
+/// compressor state, the literal/length tree and the distance tree): sends each buffered
+/// literal as its code, each match as its length code with the length's extra bits
+/// (`010a8550`/`010a8e98`) and its distance code with the distance's extra bits
+/// (`010a85d8`/`010a8f10`); then the end-of-block code, whose length becomes the last
+/// end-of-block length.
+pub fn fn_00b4d210(e: &mut Engine, state: u32, literal_tree: u32, distance_tree: u32) {
+    let mut index = 0u32;
+    if e.mem.u32(state + TS_LAST_LITERAL) != 0 {
+        loop {
+            let distances = e.mem.u32(state + TS_DISTANCE_BUFFER);
+            let mut distance = u32::from(e.mem.u16(distances.wrapping_add(index * 2)));
+            let literals = e.mem.u32(state + TS_LITERAL_BUFFER);
+            let mut value = u32::from(e.mem.u8(literals.wrapping_add(index)));
+            index += 1;
+            if distance == 0 {
+                send_code(e, state, literal_tree, value);
+            } else {
+                let code = u32::from(e.mem.u8(LENGTH_CODE.wrapping_add(value)));
+                send_code(e, state, literal_tree, code + 0x101);
+                let extra = e.mem.i32(LENGTH_EXTRA_BITS + code * 4);
+                if extra != 0 {
+                    value = value.wrapping_sub(e.mem.u32(LENGTH_BASES + code * 4));
+                    send_bits(e, state, value, extra);
+                }
+                distance = distance.wrapping_sub(1);
+                let code = distance_code(e, distance);
+                send_code(e, state, distance_tree, code);
+                let extra = e.mem.i32(DISTANCE_EXTRA_BITS + code * 4);
+                if extra != 0 {
+                    distance = distance.wrapping_sub(e.mem.u32(DISTANCE_BASES + code * 4));
+                    send_bits(e, state, distance, extra);
+                }
+            }
+            if index >= e.mem.u32(state + TS_LAST_LITERAL) {
+                break;
+            }
+        }
+    }
+    send_code(e, state, literal_tree, 0x100);
+    let length = u32::from(e.mem.u16(literal_tree + 0x100 * 4 + 2));
+    e.mem.set_u32(state + TS_LAST_END_LENGTH, length);
+}
+
+// Translated from 00b4da00 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map; zlib's `set_data_type` by its body (`cdecl`, one word: the
+/// compressor state): sums the literal frequencies of bytes 0..7 and 128..256 (binary) and
+/// 7..128 (text); the data-type byte becomes 0 when the binary sum exceeds a quarter of
+/// the text sum, else 1.
+pub fn fn_00b4da00(e: &mut Engine, state: u32) {
+    let mut text = 0u32;
+    let mut binary = 0u32;
+    let at = |n: u32| state + TS_LITERAL_TREE + n * 4;
+    let mut n = 0u32;
+    while n < 7 {
+        binary = u32::from(e.mem.u16(at(n))).wrapping_add(binary);
+        n += 1;
+    }
+    while n < 0x80 {
+        text = u32::from(e.mem.u16(at(n))).wrapping_add(text);
+        n += 1;
+    }
+    while n < 0x100 {
+        binary = u32::from(e.mem.u16(at(n))).wrapping_add(binary);
+        n += 1;
+    }
+    let data_type = 1u8.wrapping_sub(u8::from(text >> 2 < binary));
+    e.mem.set_u8(state + TS_DATA_TYPE, data_type);
+}
+
+// Translated from 00b4dab0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map; zlib's `bi_reverse` by its body (`cdecl`, two words: a code
+/// and its length): the code's low `length` bits reversed (at least one bit is taken).
+pub fn fn_00b4dab0(_e: &mut Engine, code: u32, length: i32) -> u32 {
+    let mut code = code;
+    let mut length = length;
+    let mut result = 0u32;
+    loop {
+        result |= code & 1;
+        code >>= 1;
+        result <<= 1;
+        length -= 1;
+        if length <= 0 {
+            break;
+        }
+    }
+    result >> 1
+}
+
+// Translated from 00b4daf0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map; zlib's `bi_flush` by its body (`cdecl`, one word: the
+/// compressor state): a full bit buffer (16) goes out as two bytes and empties; at least 8
+/// bits held send the low byte and keep the rest.
+pub fn fn_00b4daf0(e: &mut Engine, state: u32) {
+    if e.mem.i32(state + TS_BIT_COUNT) == 0x10 {
+        let buffer = u32::from(e.mem.u16(state + TS_BIT_BUFFER));
+        tree_put_byte(e, state, buffer & 0xff);
+        let buffer = u32::from(e.mem.u16(state + TS_BIT_BUFFER));
+        tree_put_byte(e, state, buffer >> 8);
+        e.mem.set_u16(state + TS_BIT_BUFFER, 0);
+        e.mem.set_u32(state + TS_BIT_COUNT, 0);
+    } else if e.mem.i32(state + TS_BIT_COUNT) > 7 {
+        let byte = u32::from(e.mem.u8(state + TS_BIT_BUFFER));
+        tree_put_byte(e, state, byte);
+        let buffer = e.mem.u16(state + TS_BIT_BUFFER) >> 8;
+        e.mem.set_u16(state + TS_BIT_BUFFER, buffer);
+        let held = e.mem.i32(state + TS_BIT_COUNT).wrapping_sub(8);
+        e.mem.set_i32(state + TS_BIT_COUNT, held);
+    }
+}
+
+// Translated from 00b4dbe0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map; zlib's `bi_windup` by its body (`cdecl`, one word: the
+/// compressor state): more than 8 bits held send both bytes, 1..8 the low one; the bit
+/// buffer then empties.
+pub fn fn_00b4dbe0(e: &mut Engine, state: u32) {
+    if e.mem.i32(state + TS_BIT_COUNT) > 8 {
+        let buffer = u32::from(e.mem.u16(state + TS_BIT_BUFFER));
+        tree_put_byte(e, state, buffer & 0xff);
+        let buffer = u32::from(e.mem.u16(state + TS_BIT_BUFFER));
+        tree_put_byte(e, state, buffer >> 8);
+    } else if e.mem.i32(state + TS_BIT_COUNT) > 0 {
+        let byte = u32::from(e.mem.u8(state + TS_BIT_BUFFER));
+        tree_put_byte(e, state, byte);
+    }
+    e.mem.set_u16(state + TS_BIT_BUFFER, 0);
+    e.mem.set_u32(state + TS_BIT_COUNT, 0);
+}
+
+// Translated from 00b4dca0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map; zlib's `copy_block` by its body (`cdecl`, four words: the
+/// compressor state, a buffer, its length and a header flag): `fn_00b4dbe0`, the last
+/// end-of-block length 8, with the flag the length and its complement (16 bits each, low
+/// byte first), then the bytes, one by one into the pending buffer.
+pub fn fn_00b4dca0(e: &mut Engine, state: u32, buffer: u32, length: u32, header: u32) {
+    fn_00b4dbe0(e, state);
+    e.mem.set_u32(state + TS_LAST_END_LENGTH, 8);
+    if header != 0 {
+        tree_put_byte(e, state, length & 0xff);
+        tree_put_byte(e, state, (length >> 8) & 0xff);
+        tree_put_byte(e, state, !length & 0xff);
+        tree_put_byte(e, state, !(length >> 8) & 0xff);
+    }
+    let mut at = buffer;
+    let mut left = length;
+    while left != 0 {
+        let byte = u32::from(e.mem.u8(at));
+        tree_put_byte(e, state, byte);
+        at = at.wrapping_add(1);
+        left -= 1;
+    }
+}
+
+// Translated from 00b4ddb0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map; zlib's `compress2` by its body (`cdecl`, five words: the
+/// destination, the address of its size, the source, its length and the level). A local
+/// stream record (input the source, output the destination with its size, default
+/// allocator) is set up with `deflateInit_` (`00b46360`, version `011ad7ac`; its error
+/// answered), finished in one `deflate` call (`00b46b70` with 4): anything but the end
+/// takes the stream down (`00b47370`) and answers -5 for 0, else the answer; the end
+/// stores the total out as the size and answers `deflateEnd`'s answer.
+pub fn fn_00b4ddb0(
+    e: &mut Engine,
+    destination: u32,
+    size: u32,
+    source: u32,
+    length: u32,
+    level: i32,
+) -> i32 {
+    e.with_stack(0x38, |e, stream| {
+        let stream = stream.addr();
+        e.mem.set_u32(stream, source);
+        e.mem.set_u32(stream + 4, length);
+        e.mem.set_u32(stream + 0xc, destination);
+        let room = e.mem.u32(size);
+        e.mem.set_u32(stream + 0x10, room);
+        if e.mem.u32(stream + 0x10) != e.mem.u32(size) {
+            return -5;
+        }
+        e.mem.set_u32(stream + 0x20, 0);
+        e.mem.set_u32(stream + 0x24, 0);
+        e.mem.set_u32(stream + 0x28, 0);
+        let answer = e
+            .call(
+                DEFLATE_INIT,
+                &args![stream, level, COMPRESS_VERSION, 0x38u32],
+            )
+            .i32();
+        if answer != 0 {
+            return answer;
+        }
+        let answer = e.call(DEFLATE, &args![stream, 4u32]).i32();
+        if answer != 1 {
+            e.call(DEFLATE_END, &args![stream]);
+            return if answer == 0 { -5 } else { answer };
+        }
+        let total = e.mem.u32(stream + 0x14);
+        e.mem.set_u32(size, total);
+        e.call(DEFLATE_END, &args![stream]).i32()
+    })
+}
+
+// Translated from 00b4de80 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map; zlib's `compress` by its body (`cdecl`, four words): the same
+/// words to `fn_00b4ddb0` with level -1; its answer.
+pub fn fn_00b4de80(e: &mut Engine, destination: u32, size: u32, source: u32, length: u32) -> i32 {
+    fn_00b4ddb0(e, destination, size, source, length, -1)
+}
+
+// Translated from 00b4dea0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map; zlib's `compressBound` by its body (`cdecl`, one word: a
+/// length): `length + (length >> 12) + (length >> 14) + 11`.
+pub fn fn_00b4dea0(_e: &mut Engine, length: u32) -> u32 {
+    (length >> 12)
+        .wrapping_add(length)
+        .wrapping_add(length >> 14)
+        .wrapping_add(0xb)
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -774,6 +1829,31 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00b4_a070, fn_00b4a070(u32, u32, u32) -> u32),
         entry!(0x00b4_a270, fn_00b4a270(u32, u32, u32) -> u32),
         entry!(0x00b4_a670, fn_00b4a670(u32, u32, u32) -> u32),
+        entry!(0x00b4_a060, fn_00b4a060() -> u32),
+        entry!(0x00b4_aad0, fn_00b4aad0(u32)),
+        entry!(0x00b4_ab70, fn_00b4ab70()),
+        entry!(0x00b4_ab80, fn_00b4ab80(u32)),
+        entry!(0x00b4_ac50, fn_00b4ac50(u32, u32, u32, u32)),
+        entry!(0x00b4_ad90, fn_00b4ad90(u32)),
+        entry!(0x00b4_b250, fn_00b4b250(u32, u32, u32, u32)),
+        entry!(0x00b4_b600, fn_00b4b600(u32, u32)),
+        entry!(0x00b4_b9a0, fn_00b4b9a0(u32, u32, i32)),
+        entry!(0x00b4_bb30, fn_00b4bb30(u32, u32)),
+        entry!(0x00b4_be40, fn_00b4be40(u32, i32, u32)),
+        entry!(0x00b4_bf10, fn_00b4bf10(u32) -> i32),
+        entry!(0x00b4_bfd0, fn_00b4bfd0(u32, u32, i32)),
+        entry!(0x00b4_c170, fn_00b4c170(u32, i32, i32, i32)),
+        entry!(0x00b4_c670, fn_00b4c670(u32, u32, i32)),
+        entry!(0x00b4_d0e0, fn_00b4d0e0(u32, u32, u32) -> bool),
+        entry!(0x00b4_d210, fn_00b4d210(u32, u32, u32)),
+        entry!(0x00b4_da00, fn_00b4da00(u32)),
+        entry!(0x00b4_dab0, fn_00b4dab0(u32, i32) -> u32),
+        entry!(0x00b4_daf0, fn_00b4daf0(u32)),
+        entry!(0x00b4_dbe0, fn_00b4dbe0(u32)),
+        entry!(0x00b4_dca0, fn_00b4dca0(u32, u32, u32, u32)),
+        entry!(0x00b4_ddb0, fn_00b4ddb0(u32, u32, u32, u32, i32) -> i32),
+        entry!(0x00b4_de80, fn_00b4de80(u32, u32, u32, u32) -> i32),
+        entry!(0x00b4_dea0, fn_00b4dea0(u32) -> u32),
     ]
 }
 
@@ -1248,5 +2328,444 @@ mod tests {
                 crc32(0x0bad_cafe, &seen)
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod n080_tests {
+    use super::*;
+
+    fn answer(eax: u32) -> Ret {
+        Ret {
+            eax,
+            ..Ret::default()
+        }
+    }
+
+    fn calls_to(e: &Engine, address: u32) -> Vec<Vec<u32>> {
+        e.call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|(a, _)| *a == address)
+            .map(|(_, w)| w.clone())
+            .collect()
+    }
+
+    /// A compressor state with a pending buffer, and the exe's table pages mapped.
+    fn state_engine() -> (Engine, u32) {
+        let mut e = Engine::new();
+        e.map(0x010a_8000, 0x1000);
+        e.map(0x011a_d000, 0x1000);
+        let state = e.mem.alloc(0x16b8);
+        let pending = e.mem.alloc(0x100);
+        e.mem.set_u32(state + TS_PENDING_BUFFER, pending);
+        (e, state)
+    }
+
+    fn pending_bytes(e: &Engine, state: u32) -> Vec<u8> {
+        let buffer = e.mem.u32(state + TS_PENDING_BUFFER);
+        e.mem.bytes(buffer, e.mem.u32(state + TS_PENDING))
+    }
+
+    /// Sets a tree entry's code (or frequency) and length.
+    fn set_entry(e: &mut Engine, tree: u32, n: u32, code: u16, length: u16) {
+        e.mem.set_u16(tree + 4 * n, code);
+        e.mem.set_u16(tree + 4 * n + 2, length);
+    }
+
+    /// The bits of `(value, length)` pairs packed low bit first.
+    fn packed(bits: &[(u32, u32)]) -> (u128, u32) {
+        let mut all = 0u128;
+        let mut count = 0u32;
+        for (value, length) in bits {
+            all |= u128::from(value & ((1 << length) - 1)) << count;
+            count += length;
+        }
+        (all, count)
+    }
+
+    #[test]
+    fn small_helpers() {
+        let mut e = Engine::new();
+        assert_eq!(e.call(0x00b4_a060, &[]).u32(), CRC_TABLE);
+        e.call(0x00b4_ab70, &[]);
+        assert_eq!(
+            e.call(0x00b4_dea0, &args![0x10000u32]).u32(),
+            0x10000 + 0x10 + 4 + 0xb
+        );
+        assert_eq!(e.call(0x00b4_dab0, &args![0b1101u32, 4i32]).u32(), 0b1011);
+        assert_eq!(e.call(0x00b4_dab0, &args![0b1u32, 0i32]).u32(), 1);
+    }
+
+    #[test]
+    fn init_resets_the_trees_and_bits() {
+        let (mut e, state) = state_engine();
+        e.mem.set_u16(state + TS_LITERAL_TREE + 4 * 7, 9);
+        e.mem.set_u16(state + TS_BIT_LENGTH_TREE + 4 * 18, 9);
+        e.mem.set_u32(state + TS_LAST_LITERAL, 5);
+        e.mem.set_u16(state + TS_BIT_BUFFER, 0x55);
+        e.call(0x00b4_aad0, &args![state]);
+        assert_eq!(e.mem.u16(state + TS_LITERAL_TREE + 4 * 7), 0);
+        assert_eq!(e.mem.u16(state + TS_BIT_LENGTH_TREE + 4 * 18), 0);
+        assert_eq!(e.mem.u16(state + TS_LITERAL_TREE + 4 * 0x100), 1);
+        assert_eq!(e.mem.u32(state + TS_LAST_LITERAL), 0);
+        assert_eq!(e.mem.u16(state + TS_BIT_BUFFER), 0);
+        assert_eq!(e.mem.u32(state + TS_LAST_END_LENGTH), 8);
+        assert_eq!(
+            e.mem.u32(state + TS_DISTANCE_DESCRIPTOR),
+            state + TS_DISTANCE_TREE
+        );
+        assert_eq!(
+            e.mem.u32(state + TS_BIT_LENGTH_DESCRIPTOR + 8),
+            STATIC_BIT_LENGTH_DESCRIPTOR
+        );
+    }
+
+    #[test]
+    fn stored_block_writes_header_and_bytes() {
+        let (mut e, state) = state_engine();
+        let data = e.mem.alloc(4);
+        e.mem.set_u8(data, b'A');
+        e.mem.set_u8(data + 1, b'B');
+        e.call(0x00b4_ac50, &args![state, data, 2u32, 1u32]);
+        assert_eq!(pending_bytes(&e, state), [1, 2, 0, 0xfd, 0xff, b'A', b'B']);
+        assert_eq!(e.mem.u32(state + TS_BIT_COUNT), 0);
+        assert_eq!(e.mem.u32(state + TS_LAST_END_LENGTH), 8);
+    }
+
+    #[test]
+    fn align_adds_a_second_empty_block_when_short() {
+        let (mut e, state) = state_engine();
+        e.mem.set_u32(state + TS_LAST_END_LENGTH, 8);
+        e.call(0x00b4_ad90, &args![state]);
+        assert_eq!(pending_bytes(&e, state), [2]);
+        assert_eq!(e.mem.u32(state + TS_BIT_COUNT), 2);
+        assert_eq!(e.mem.u32(state + TS_LAST_END_LENGTH), 7);
+        let (mut e, state) = state_engine();
+        e.mem.set_u32(state + TS_LAST_END_LENGTH, 0);
+        e.mem.set_u32(state + TS_BIT_COUNT, 1);
+        e.call(0x00b4_ad90, &args![state]);
+        assert_eq!(pending_bytes(&e, state), [4, 0x10]);
+        assert_eq!(e.mem.u32(state + TS_BIT_COUNT), 5);
+    }
+
+    #[test]
+    fn bit_flush_and_windup() {
+        let (mut e, state) = state_engine();
+        e.mem.set_u16(state + TS_BIT_BUFFER, 0x1234);
+        e.mem.set_u32(state + TS_BIT_COUNT, 16);
+        e.call(0x00b4_daf0, &args![state]);
+        assert_eq!(pending_bytes(&e, state), [0x34, 0x12]);
+        e.mem.set_u16(state + TS_BIT_BUFFER, 0x1ab);
+        e.mem.set_u32(state + TS_BIT_COUNT, 9);
+        e.call(0x00b4_daf0, &args![state]);
+        assert_eq!(e.mem.u16(state + TS_BIT_BUFFER), 1);
+        assert_eq!(e.mem.u32(state + TS_BIT_COUNT), 1);
+        e.call(0x00b4_dbe0, &args![state]);
+        assert_eq!(pending_bytes(&e, state), [0x34, 0x12, 0xab, 1]);
+        e.mem.set_u16(state + TS_BIT_BUFFER, 0x203);
+        e.mem.set_u32(state + TS_BIT_COUNT, 10);
+        e.call(0x00b4_dbe0, &args![state]);
+        assert_eq!(pending_bytes(&e, state)[4..], [3, 2]);
+        assert_eq!(e.mem.u32(state + TS_BIT_COUNT), 0);
+    }
+
+    #[test]
+    fn tally_counts_literals_and_matches() {
+        let (mut e, state) = state_engine();
+        let distances = e.mem.alloc(8);
+        let literals = e.mem.alloc(8);
+        e.mem.set_u32(state + TS_DISTANCE_BUFFER, distances);
+        e.mem.set_u32(state + TS_LITERAL_BUFFER, literals);
+        e.mem.set_u32(state + TS_LITERAL_BUFFER_SIZE, 3);
+        e.mem.set_u8(LENGTH_CODE + 10, 9);
+        e.mem.set_u8(DISTANCE_CODE + 0x100 + 2, 16);
+        assert!(!e.call(0x00b4_d0e0, &args![state, 0u32, 0x41u32]).bool());
+        assert!(e.call(0x00b4_d0e0, &args![state, 0x101u32, 10u32]).bool());
+        assert_eq!(e.mem.u16(state + TS_LITERAL_TREE + 4 * 0x41), 1);
+        assert_eq!(e.mem.u16(state + TS_LITERAL_TREE + 4 * (9 + 0x101)), 1);
+        assert_eq!(e.mem.u16(state + TS_DISTANCE_TREE + 4 * 16), 1);
+        assert_eq!(e.mem.u32(state + TS_MATCHES), 1);
+        assert_eq!(e.mem.u16(distances + 2), 0x101);
+        assert_eq!(e.mem.u8(literals + 1), 10);
+    }
+
+    #[test]
+    fn data_type_guess() {
+        let (mut e, state) = state_engine();
+        e.mem.set_u16(state + TS_LITERAL_TREE + 4 * b'a' as u32, 8);
+        e.mem.set_u16(state + TS_LITERAL_TREE + 4 * 0x90, 2);
+        e.call(0x00b4_da00, &args![state]);
+        assert_eq!(e.mem.u8(state + TS_DATA_TYPE), 1);
+        e.mem.set_u16(state + TS_LITERAL_TREE + 4 * 3, 1);
+        e.call(0x00b4_da00, &args![state]);
+        assert_eq!(e.mem.u8(state + TS_DATA_TYPE), 0);
+    }
+
+    #[test]
+    fn codes_follow_the_lengths() {
+        let (mut e, _) = state_engine();
+        let tree = e.mem.alloc(0x20);
+        for (n, length) in [2u16, 1, 3, 3].iter().enumerate() {
+            set_entry(&mut e, tree, n as u32, 0, *length);
+        }
+        let counts = e.mem.alloc(0x20);
+        e.mem.set_u16(counts + 2, 1);
+        e.mem.set_u16(counts + 4, 1);
+        e.mem.set_u16(counts + 6, 2);
+        e.call(0x00b4_be40, &args![tree, 3i32, counts]);
+        let codes: Vec<u16> = (0..4).map(|n| e.mem.u16(tree + 4 * n)).collect();
+        assert_eq!(codes, vec![1, 0, 3, 7]);
+    }
+
+    /// A static descriptor without a static tree: extra bits (all 0 but those given), a
+    /// base, the element count and the length limit.
+    fn descriptor(e: &mut Engine, extras: &[(u32, u32)], elements: u32, limit: u32) -> u32 {
+        let extra = e.mem.alloc(4 * elements);
+        for (n, bits) in extras {
+            e.mem.set_u32(extra + 4 * n, *bits);
+        }
+        let statics = e.mem.alloc(0x14);
+        e.mem.set_u32(statics + 4, extra);
+        e.mem.set_u32(statics + 0xc, elements);
+        e.mem.set_u32(statics + 0x10, limit);
+        statics
+    }
+
+    #[test]
+    fn tree_building_gives_huffman_lengths() {
+        let (mut e, state) = state_engine();
+        let statics = descriptor(&mut e, &[], 4, 15);
+        let tree = state + TS_LITERAL_TREE;
+        for (n, f) in [5u16, 9, 1, 1].iter().enumerate() {
+            set_entry(&mut e, tree, n as u32, *f, 0);
+        }
+        let desc = state + TS_LITERAL_DESCRIPTOR;
+        e.mem.set_u32(desc, tree);
+        e.mem.set_u32(desc + 8, statics);
+        e.call(0x00b4_b600, &args![state, desc]);
+        let lengths: Vec<u16> = (0..4).map(|n| e.mem.u16(tree + 4 * n + 2)).collect();
+        let codes: Vec<u16> = (0..4).map(|n| e.mem.u16(tree + 4 * n)).collect();
+        assert_eq!(lengths, vec![2, 1, 3, 3]);
+        assert_eq!(codes, vec![1, 0, 3, 7]);
+        assert_eq!(e.mem.i32(desc + 4), 3);
+        assert_eq!(e.mem.u32(state + TS_OPTIMAL_LENGTH), 25);
+    }
+
+    #[test]
+    fn length_limit_redistributes_the_overflow() {
+        let (mut e, state) = state_engine();
+        let statics = descriptor(&mut e, &[], 4, 2);
+        let tree = state + TS_LITERAL_TREE;
+        for (n, f) in [1u16, 1, 2, 4].iter().enumerate() {
+            set_entry(&mut e, tree, n as u32, *f, 0);
+        }
+        let desc = state + TS_LITERAL_DESCRIPTOR;
+        e.mem.set_u32(desc, tree);
+        e.mem.set_u32(desc + 8, statics);
+        e.call(0x00b4_b600, &args![state, desc]);
+        let lengths: Vec<u16> = (0..4).map(|n| e.mem.u16(tree + 4 * n + 2)).collect();
+        let codes: Vec<u16> = (0..4).map(|n| e.mem.u16(tree + 4 * n)).collect();
+        assert_eq!(lengths, vec![2, 2, 2, 2]);
+        assert_eq!(codes, vec![0, 2, 1, 3]);
+        assert_eq!(e.mem.u32(state + TS_OPTIMAL_LENGTH), 16);
+    }
+
+    #[test]
+    fn heap_sift_orders_by_frequency_then_depth() {
+        let (mut e, state) = state_engine();
+        let tree = e.mem.alloc(0x20);
+        for (n, f) in [7u16, 3, 3, 1].iter().enumerate() {
+            set_entry(&mut e, tree, n as u32, *f, 0);
+        }
+        e.mem.set_u8(state + TS_DEPTH + 1, 2);
+        for (i, node) in [0i32, 1, 2, 3].iter().enumerate() {
+            set_heap_at(&mut e, state, i as i32 + 1, *node);
+        }
+        e.mem.set_i32(state + TS_HEAP_LENGTH, 4);
+        e.call(0x00b4_b9a0, &args![state, tree, 1i32]);
+        // Node 0 (7) moves below the smaller child: node 2 (3, depth 0) beats node 1.
+        assert_eq!(
+            (1..=4).map(|i| heap_at(&e, state, i)).collect::<Vec<_>>(),
+            vec![2, 1, 0, 3]
+        );
+    }
+
+    /// Lengths 3,3,3,3,3,0,0,0 for codes 0..=7.
+    fn run_tree(e: &mut Engine, tree: u32) {
+        for n in 0..8 {
+            set_entry(e, tree, n, 0, if n < 5 { 3 } else { 0 });
+        }
+    }
+
+    #[test]
+    fn scan_counts_the_run_codes() {
+        let (mut e, state) = state_engine();
+        let tree = e.mem.alloc(0x40);
+        run_tree(&mut e, tree);
+        e.call(0x00b4_bfd0, &args![state, tree, 7i32]);
+        let bl = |e: &Engine, n: u32| e.mem.u16(state + TS_BIT_LENGTH_TREE + 4 * n);
+        assert_eq!(e.mem.u16(tree + 4 * 8 + 2), 0xffff);
+        assert_eq!(
+            [bl(&e, 3), bl(&e, 16), bl(&e, 17), bl(&e, 18)],
+            [1, 1, 1, 0]
+        );
+    }
+
+    #[test]
+    fn send_tree_codes_the_runs() {
+        let (mut e, state) = state_engine();
+        let tree = e.mem.alloc(0x40);
+        run_tree(&mut e, tree);
+        e.mem.set_u16(tree + 4 * 8 + 2, 0xffff);
+        let bl_tree = state + TS_BIT_LENGTH_TREE;
+        set_entry(&mut e, bl_tree, 3, 0, 1);
+        set_entry(&mut e, bl_tree, 16, 1, 2);
+        set_entry(&mut e, bl_tree, 17, 3, 2);
+        e.call(0x00b4_c670, &args![state, tree, 7i32]);
+        let (bits, count) = packed(&[(0, 1), (1, 2), (1, 2), (3, 2), (0, 3)]);
+        assert_eq!(u128::from(e.mem.u16(state + TS_BIT_BUFFER)), bits);
+        assert_eq!(e.mem.u32(state + TS_BIT_COUNT), count);
+    }
+
+    #[test]
+    fn all_trees_header_lengths_and_runs() {
+        let (mut e, state) = state_engine();
+        for (i, code) in [16u8, 17, 18, 0].iter().enumerate() {
+            e.mem.set_u8(BIT_LENGTH_ORDER + i as u32, *code);
+        }
+        let bl_tree = state + TS_BIT_LENGTH_TREE;
+        set_entry(&mut e, bl_tree, 0, 0, 1);
+        set_entry(&mut e, bl_tree, 18, 1, 1);
+        e.mem.set_u16(state + TS_LITERAL_TREE + 4 * 257 + 2, 0xffff);
+        e.mem.set_u16(state + TS_DISTANCE_TREE + 4 + 2, 0xffff);
+        e.call(0x00b4_c170, &args![state, 257i32, 1i32, 4i32]);
+        let (bits, count) = packed(&[
+            (0, 5),
+            (0, 5),
+            (0, 4),
+            (0, 3),
+            (0, 3),
+            (1, 3),
+            (1, 3),
+            (1, 1),
+            (127, 7),
+            (1, 1),
+            (108, 7),
+            (0, 1),
+        ]);
+        assert_eq!(count, 43);
+        let bytes: Vec<u8> = (0..4).map(|i| (bits >> (8 * i)) as u8).collect();
+        assert_eq!(pending_bytes(&e, state), bytes);
+        assert_eq!(u128::from(e.mem.u16(state + TS_BIT_BUFFER)), bits >> 32);
+        assert_eq!(e.mem.u32(state + TS_BIT_COUNT), 11);
+    }
+
+    #[test]
+    fn bit_length_tree_and_its_last_index() {
+        let (mut e, state) = state_engine();
+        let order = [
+            16u8, 17, 18, 0, 8, 7, 9, 6, 10, 5, 11, 4, 12, 3, 13, 2, 14, 1, 15,
+        ];
+        for (i, code) in order.iter().enumerate() {
+            e.mem.set_u8(BIT_LENGTH_ORDER + i as u32, *code);
+        }
+        let statics = descriptor(&mut e, &[(16, 2), (17, 3), (18, 7)], 19, 7);
+        e.mem
+            .set_u32(state + TS_BIT_LENGTH_DESCRIPTOR, state + TS_BIT_LENGTH_TREE);
+        e.mem.set_u32(state + TS_BIT_LENGTH_DESCRIPTOR + 8, statics);
+        run_tree(&mut e, state + TS_LITERAL_TREE);
+        e.mem.set_i32(state + TS_LITERAL_DESCRIPTOR + 4, 7);
+        set_entry(&mut e, state + TS_DISTANCE_TREE, 0, 0, 1);
+        e.mem.set_i32(state + TS_DISTANCE_DESCRIPTOR + 4, 0);
+        assert_eq!(e.call(0x00b4_bf10, &args![state]).i32(), 17);
+        let bl = |e: &Engine, n: u32| e.mem.u16(state + TS_BIT_LENGTH_TREE + 4 * n + 2);
+        assert_eq!([bl(&e, 1), bl(&e, 3), bl(&e, 16), bl(&e, 17)], [2, 2, 2, 2]);
+        assert_eq!(e.mem.u32(state + TS_OPTIMAL_LENGTH), 13 + 68);
+    }
+
+    #[test]
+    fn compress_block_sends_literals_matches_and_the_end() {
+        let (mut e, state) = state_engine();
+        e.mem.set_u8(LENGTH_CODE + 10, 9);
+        e.mem.set_u32(LENGTH_EXTRA_BITS + 4 * 9, 1);
+        e.mem.set_u32(LENGTH_BASES + 4 * 9, 10);
+        e.mem.set_u8(DISTANCE_CODE + 4, 4);
+        e.mem.set_u32(DISTANCE_EXTRA_BITS + 4 * 4, 1);
+        e.mem.set_u32(DISTANCE_BASES + 4 * 4, 4);
+        let distances = e.mem.alloc(8);
+        let literals = e.mem.alloc(8);
+        e.mem.set_u16(distances + 2, 5);
+        e.mem.set_u8(literals, b'A');
+        e.mem.set_u8(literals + 1, 10);
+        e.mem.set_u32(state + TS_DISTANCE_BUFFER, distances);
+        e.mem.set_u32(state + TS_LITERAL_BUFFER, literals);
+        e.mem.set_u32(state + TS_LAST_LITERAL, 2);
+        let ltree = e.mem.alloc(0x500);
+        let dtree = e.mem.alloc(0x80);
+        set_entry(&mut e, ltree, u32::from(b'A'), 2, 2);
+        set_entry(&mut e, ltree, 266, 1, 1);
+        set_entry(&mut e, ltree, 256, 3, 3);
+        set_entry(&mut e, dtree, 4, 0, 1);
+        e.call(0x00b4_d210, &args![state, ltree, dtree]);
+        assert_eq!(e.mem.u16(state + TS_BIT_BUFFER), 0xc6);
+        assert_eq!(e.mem.u32(state + TS_BIT_COUNT), 9);
+        assert_eq!(e.mem.u32(state + TS_LAST_END_LENGTH), 3);
+    }
+
+    #[test]
+    fn flush_block_stores_or_sends_static() {
+        let (mut e, state) = state_engine();
+        let data = e.mem.alloc(4);
+        e.mem.set_u8(data, b'h');
+        e.mem.set_u8(data + 1, b'i');
+        e.call(0x00b4_b250, &args![state, data, 2u32, 1u32]);
+        assert_eq!(pending_bytes(&e, state), [1, 2, 0, 0xfd, 0xff, b'h', b'i']);
+        assert_eq!(e.mem.u16(state + TS_LITERAL_TREE + 4 * 0x100), 1);
+        // Without the bytes: a static block with only the end code.
+        let (mut e, state) = state_engine();
+        set_entry(&mut e, STATIC_LITERAL_TREE, 256, 0, 7);
+        e.call(0x00b4_b250, &args![state, 0u32, 2u32, 0u32]);
+        assert_eq!(e.mem.u16(state + TS_BIT_BUFFER), 2);
+        assert_eq!(e.mem.u32(state + TS_BIT_COUNT), 10);
+        assert_eq!(e.mem.u32(state + TS_LAST_END_LENGTH), 7);
+    }
+
+    #[test]
+    fn compress_runs_one_deflate() {
+        let mut e = Engine::new();
+        e.register(DEFLATE_INIT, |e, a| {
+            // `compress` passes level -1, the later calls level 6.
+            assert!(a[1] as i32 == -1 || a[1] == 6);
+            assert_eq!(a[2..], [COMPRESS_VERSION, 0x38]);
+            e.mem.set_u32(a[0] + 0x14, 0x33);
+            answer(0)
+        });
+        e.register(DEFLATE, |e, a| answer(e.mem.u32(a[0] + 4) & 1));
+        e.register(DEFLATE_END, |_, _| answer(0));
+        let size = e.mem.alloc(4);
+        e.mem.set_u32(size, 0x100);
+        e.call_log = Some(vec![]);
+        assert_eq!(
+            e.call(0x00b4_de80, &args![0x5000u32, size, 0x6000u32, 9u32])
+                .i32(),
+            0
+        );
+        assert_eq!(e.mem.u32(size), 0x33);
+        assert_eq!(calls_to(&e, DEFLATE).len(), 1);
+        // A deflate that answers 0 (output full) gives -5 after taking the stream down.
+        assert_eq!(
+            e.call(0x00b4_ddb0, &args![0x5000u32, size, 0x6000u32, 8u32, 6i32])
+                .i32(),
+            -5
+        );
+        assert_eq!(calls_to(&e, DEFLATE_END).len(), 2);
+        e.register(DEFLATE_INIT, |_, _| answer((-2i32) as u32));
+        assert_eq!(
+            e.call(0x00b4_ddb0, &args![0x5000u32, size, 0x6000u32, 8u32, 6i32])
+                .i32(),
+            -2
+        );
     }
 }

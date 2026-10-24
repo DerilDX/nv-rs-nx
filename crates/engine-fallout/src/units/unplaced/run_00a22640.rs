@@ -431,9 +431,23 @@ pub fn fn_00a22ef0(e: &mut Engine, this: u32) {
     })
 }
 
+/// `BSStringT<char>`'s set from a C string `004037f0` (thiscall, two words; so other units
+/// describe it).
+const STRING_SET_TEXT: u32 = 0x0040_37f0;
+
+// Translated from 00a22640 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No references in Ghidra (thiscall, no stack words; it sits just before the constructor
+/// `00a22660`): the string set `004037f0` on the member at +0x38 with two zero words. Ends in
+/// that call, so its `EAX` is the answer.
+pub fn fn_00a22640(e: &mut Engine, this: u32) -> u32 {
+    e.call(STRING_SET_TEXT, &[this.wrapping_add(0x38), 0, 0])
+        .u32()
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x00a2_2640, fn_00a22640(u32) -> u32),
         entry!(0x00a22660, fn_00a22660(u32, u32) -> u32),
         entry!(0x00a22bf0, fn_00a22bf0(u32)),
         entry!(0x00a22cb0, fn_00a22cb0() -> i32),
@@ -971,5 +985,30 @@ mod tests {
             calls_to(&e, BINDING_SET),
             vec![vec![0x0066_0000, 2, 0x1f], vec![0x0066_0000, 10, 0xa0]]
         );
+    }
+}
+
+#[cfg(test)]
+mod n078_tests {
+    use super::*;
+
+    #[test]
+    fn string_member_00a22640_is_set_empty_and_its_answer_passed_on() {
+        let mut e = Engine::new();
+        e.register(STRING_SET_TEXT, |_, _| Ret {
+            eax: 0x1234,
+            ..Ret::default()
+        });
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x00a2_2640, &[0x0066_0000]).u32(), 0x1234);
+        let log: Vec<Vec<u32>> = e
+            .call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|(a, _)| *a == STRING_SET_TEXT)
+            .map(|(_, args)| args.clone())
+            .collect();
+        assert_eq!(log, vec![vec![0x0066_0038, 0, 0]]);
     }
 }

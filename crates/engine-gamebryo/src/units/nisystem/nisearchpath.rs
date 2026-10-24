@@ -99,12 +99,39 @@ pub fn ni_search_path_get_next_search_path(e: &mut Engine, this: Ptr, out: Ptr, 
     })
 }
 
+/// The `NiSearchPath` vtable (`010a2554`, RTTI `.?AVNiSearchPath@@`).
+const NI_SEARCH_PATH_VTABLE: u32 = 0x010a_2554;
+/// The memory manager object (`011f6238`), the `this` of its deallocate.
+const MEMORY_MANAGER_OBJECT: u32 = 0x011f_6238;
+/// `00aa4060` (`thiscall` on the memory manager, one word): its deallocate.
+const MEMORY_MANAGER_DEALLOCATE: u32 = 0x00aa_4060;
+
+// Translated from 00aa2510 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiSearchPath::scalar deleting destructor` (Xbox PDB), `thiscall`,
+/// `RET 4` (the flags): stores the `NiSearchPath` vtable (the destructor body
+/// has nothing else) and, when bit 0 of the flags is set, gives `this` back
+/// to the memory manager (`00aa4060`). Answers `this`.
+pub fn ni_search_path_scalar_deleting_destructor(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    e.mem.set_u32(this.addr(), NI_SEARCH_PATH_VTABLE);
+    if flags & 1 != 0 {
+        e.call(
+            MEMORY_MANAGER_DEALLOCATE,
+            &args![MEMORY_MANAGER_OBJECT, this],
+        );
+    }
+    this
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
         entry!(0x00aa_2540, ni_search_path_set_file_path(Ptr, Ptr)),
         entry!(0x00aa_2500, ni_search_path_reset(Ptr)),
         entry!(0x00aa_2580, ni_search_path_get_next_search_path(Ptr, Ptr, u32) -> bool),
+        entry!(
+            0x00aa_2510,
+            ni_search_path_scalar_deleting_destructor(Ptr, u32) -> Ptr
+        ),
     ]
 }
 
@@ -270,5 +297,33 @@ mod tests_b008 {
         assert!(!result);
         assert_eq!(calls.len(), 1);
         assert_eq!(next, 5);
+    }
+}
+
+#[cfg(test)]
+mod tests_n084 {
+    use super::*;
+
+    fn frees(e: &Engine) -> Vec<Vec<u32>> {
+        e.call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|c| c.0 == MEMORY_MANAGER_DEALLOCATE)
+            .map(|c| c.1.clone())
+            .collect()
+    }
+
+    #[test]
+    fn ni_search_path_scalar_deleting_destructor_frees_only_with_bit_0() {
+        let mut e = Engine::new();
+        e.register(MEMORY_MANAGER_DEALLOCATE, |_, _| Ret::default());
+        let this = e.mem.alloc(0x210);
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x00aa_2510, &args![this, 2u32]).u32(), this);
+        assert_eq!(e.mem.u32(this), NI_SEARCH_PATH_VTABLE);
+        assert!(frees(&e).is_empty());
+        assert_eq!(e.call(0x00aa_2510, &args![this, 1u32]).u32(), this);
+        assert_eq!(frees(&e), vec![vec![MEMORY_MANAGER_OBJECT, this]]);
     }
 }

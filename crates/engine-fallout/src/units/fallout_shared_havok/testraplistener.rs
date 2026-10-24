@@ -1080,6 +1080,9 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x0062_cc90, fn_0062cc90(Ptr, u32) -> u8),
         entry!(0x0062_de20, fn_0062de20(Ptr, f32)),
     ]
+    .into_iter()
+    .chain(funcs_n086())
+    .collect()
 }
 
 #[cfg(test)]
@@ -1869,5 +1872,583 @@ mod b015_tests {
         assert_eq!(calls_to(&log, 0x004b_59d0).len(), 1);
         assert_eq!(calls_to(&log, 0x0098_1000), vec![vec![item]]);
         assert_eq!(calls_to(&log, 0x0062_0180), vec![vec![item]]);
+    }
+}
+
+/// `00825c00` (`thiscall`, plain `RET`): the first item of a trap entry's
+/// target chain.
+const FIRST_TARGET_00825C00: u32 = 0x0082_5c00;
+/// `006210d0` (`cdecl`, one word): frees the block (the
+/// `hkpCdBodyPairCollector` deleting destructor's free).
+const FREE_006210D0: u32 = 0x0062_10d0;
+/// `00c85750` (`cdecl`, no words; `Havok SDK/hkmemoryrouter.cpp`): the
+/// memory router.
+const MEMORY_ROUTER_00C85750: u32 = 0x00c8_5750;
+/// `0044edb0` (`thiscall`, plain `RET`; named
+/// `BaseProcess::GetCurrentProcedureIndex` in the map, a folded getter): the
+/// router's allocator, whose virtual slot `+8` frees a block of a size.
+const ROUTER_ALLOCATOR_0044EDB0: u32 = 0x0044_edb0;
+/// The `TrapEntry` vtable (RTTI `.?AVTrapEntry@@`).
+const TRAP_ENTRY_VTABLE: u32 = 0x0104_e3e8;
+/// `0061fc10` (`thiscall`, `RET 8`): the base constructor of a trap entry.
+const TRAP_ENTRY_BASE_CONSTRUCTOR: u32 = 0x0061_fc10;
+/// `00620340` (`thiscall`, `RET 0x14`) and `00620680` (`thiscall`,
+/// `RET 8`): run on the listener (`this - 8`) for a body pair.
+const LISTENER_PAIR_00620340: u32 = 0x0062_0340;
+const LISTENER_PAIR_00620680: u32 = 0x0062_0680;
+
+// Translated from 0062c5a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TrapEntry::Run` (Xbox PDB; `thiscall`, plain `RET`): from the first
+/// target (`00825c00`), each target's virtual slot `+0` runs with `this`;
+/// the next target is `00726070` of the target's `+0x10` link less `0x10`
+/// (null stays null).
+pub fn trap_entry_run(e: &mut Engine, this: Ptr) {
+    let mut target = e.call(FIRST_TARGET_00825C00, &args![this]).u32();
+    while target != 0 {
+        e.vcall(target, 0, &args![this]);
+        let next = e.call(GET_WORD_4, &args![target.wrapping_add(0x10)]).u32();
+        target = if next == 0 {
+            0
+        } else {
+            next.wrapping_sub(0x10)
+        };
+    }
+}
+
+// Translated from 0062c600 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TrapTargetEntry::Run` (Xbox PDB; `thiscall`, `RET 4`): the target
+/// (`0084e3a0` of `this + 0x10`) runs its virtual slot `+0x18c` with
+/// `trap` and `this`.
+pub fn trap_target_entry_run(e: &mut Engine, this: Ptr, trap: u32) {
+    let target = e.call(GET_WORD_C, &args![at(this, 0x10)]).u32();
+    e.vcall(target, 0x18c, &args![trap, this]);
+}
+
+// Translated from 0062c720 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The `BSList<TriggerEntry::TriggerEvent*>` scalar deleting destructor
+/// (unnamed in the engine map; `thiscall`, `RET 4`): the destructor
+/// (`0062c700`), then `00401030` frees `this` when bit 0 of `flags` is set.
+/// Returns `this`.
+pub fn fn_0062c720(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    fn_0062c700(e, this);
+    if flags & 1 != 0 {
+        e.call(FREE, &args![this]);
+    }
+    this
+}
+
+// Translated from 0062c770 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The `BSPointerListBase<TriggerEntry::TriggerEvent*>` scalar deleting
+/// destructor (unnamed in the engine map; `thiscall`, `RET 4`): the
+/// destructor (`0062dfe0`), then `00401030` frees `this` when bit 0 of
+/// `flags` is set. Returns `this`.
+pub fn fn_0062c770(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    fn_0062dfe0(e, this);
+    if flags & 1 != 0 {
+        e.call(FREE, &args![this]);
+    }
+    this
+}
+
+// Translated from 0062d3f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The `hkpCdBodyPairCollector` scalar deleting destructor (unnamed in the
+/// engine map; `thiscall`, `RET 4`): the destructor (`0062d420`), then
+/// `006210d0` frees `this` when bit 0 of `flags` is set. Returns `this`.
+pub fn fn_0062d3f0(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    fn_0062d420(e, this);
+    if flags & 1 != 0 {
+        e.call(FREE_006210D0, &args![this]);
+    }
+    this
+}
+
+// Translated from 0062d440 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The `hkpAllCdBodyPairCollector` scalar deleting destructor (Xbox PDB;
+/// `thiscall`, `RET 4`): the destructor (`0062d4b0`), then `0062d470` frees
+/// `this` when bit 0 of `flags` is set. Returns `this`.
+pub fn hkp_all_cd_body_pair_collector_scalar_deleting_destructor(
+    e: &mut Engine,
+    this: Ptr,
+    flags: u32,
+) -> Ptr {
+    hkp_all_cd_body_pair_collector_destructor(e, this);
+    if flags & 1 != 0 {
+        fn_0062d470(e, this.addr());
+    }
+    this
+}
+
+// Translated from 0062d470 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`cdecl`, one word): a non-null `block` goes
+/// back to the memory router's allocator (`00c85750`, then `0044edb0` on
+/// it), whose virtual slot `+8` takes the block and its size `0x114`.
+pub fn fn_0062d470(e: &mut Engine, block: u32) {
+    if block != 0 {
+        let router = e.call(MEMORY_ROUTER_00C85750, &[]).u32();
+        let allocator = e.call(ROUTER_ALLOCATOR_0044EDB0, &args![router]).u32();
+        e.vcall(allocator, 8, &args![block, 0x114u32]);
+    }
+}
+
+// Translated from 0062d640 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `hkpPhantomListener::phantomShapeSetCallback` (Xbox PDB; `thiscall`,
+/// `RET 4`): when the phantom's word at `+8` (`0044ddc0`) is not zero, the
+/// listener's virtual slots `+8` and then `+4` run with the phantom.
+pub fn hkp_phantom_listener_phantom_shape_set_callback(e: &mut Engine, this: Ptr, phantom: u32) {
+    if e.call(GET_WORD_8, &args![phantom]).u32() != 0 {
+        e.vcall(this.addr(), 8, &args![phantom]);
+        e.vcall(this.addr(), 4, &args![phantom]);
+    }
+}
+
+// Translated from 0062d6c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The `bhkTrapListener` scalar deleting destructor (unnamed in the engine
+/// map; `thiscall`, `RET 4`): the destructor (`0062d760`), then `00401030`
+/// frees `this` when bit 0 of `flags` is set. Returns `this`.
+pub fn fn_0062d6c0(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    fn_0062d760(e, this);
+    if flags & 1 != 0 {
+        e.call(FREE, &args![this]);
+    }
+    this
+}
+
+// Translated from 0062d710 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The `hkpPhantomListener` scalar deleting destructor (Xbox PDB;
+/// `thiscall`, `RET 4`): the destructor (`0062d740`), then `00401030` frees
+/// `this` when bit 0 of `flags` is set. Returns `this`.
+pub fn hkp_phantom_listener_scalar_deleting_destructor(
+    e: &mut Engine,
+    this: Ptr,
+    flags: u32,
+) -> Ptr {
+    fn_0062d740(e, this);
+    if flags & 1 != 0 {
+        e.call(FREE, &args![this]);
+    }
+    this
+}
+
+// Translated from 0062d7c0 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 0062d7c0 - the C++ exception-unwinding frame (FS:[0]) is not translated.
+/// `TESTrapListener::CreateZoneEntry` (Xbox PDB; `thiscall`, `RET 8`): a
+/// new `0x18`-byte block (`00401000`) made a `TrapEntry` with both words
+/// (`0062d840`), or null when the allocation fails. `this` is not read.
+pub fn tes_trap_listener_create_zone_entry(
+    e: &mut Engine,
+    _this: Ptr,
+    first: u32,
+    second: u32,
+) -> u32 {
+    let block = e.call(ALLOCATE, &args![0x18u32]).u32();
+    if block == 0 {
+        return 0;
+    }
+    fn_0062d840(e, Ptr::new(block), first, second).addr()
+}
+
+// Translated from 0062d840 (decompiled, FalloutNV.exe 1.4.0.525)
+/// A `TrapEntry` constructor (unnamed in the engine map; `thiscall`,
+/// `RET 8`): the base constructor `0061fc10` with both words, then the
+/// vtable `0104e3e8`. Returns `this`.
+pub fn fn_0062d840(e: &mut Engine, this: Ptr, first: u32, second: u32) -> Ptr {
+    e.call(TRAP_ENTRY_BASE_CONSTRUCTOR, &args![this, first, second]);
+    e.mem.set_u32(this.addr(), TRAP_ENTRY_VTABLE);
+    this
+}
+
+/// The two references of a body pair: `FindCollidableRef` of the words at
+/// `+0x48` and `+0x20`, when both are set and the second's virtual slot
+/// `+0x100` answers true (its low byte).
+fn pair_references(e: &mut Engine, pair: u32) -> Option<(u32, u32)> {
+    let first_word = e.mem.u32(pair.wrapping_add(0x48));
+    let first = e.call(FIND_COLLIDABLE_REF, &args![first_word]).u32();
+    let second_word = e.mem.u32(pair.wrapping_add(0x20));
+    let second = e.call(FIND_COLLIDABLE_REF, &args![second_word]).u32();
+    if first == 0 || second == 0 {
+        return None;
+    }
+    if e.vcall(second, 0x100, &[]).u32() & 0xff == 0 {
+        return None;
+    }
+    Some((first, second))
+}
+
+// Translated from 0062dc80 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`thiscall` on the listener's `+8` part,
+/// `RET 4`): for the pair's two references (`FindCollidableRef` of its
+/// `+0x48` and `+0x20` words), when both are set and the second's virtual
+/// slot `+0x100` answers true, whether `00620340` on the listener
+/// (`this - 8`) with the pair, both references, 0 and 1 answers non-zero;
+/// otherwise false.
+pub fn fn_0062dc80(e: &mut Engine, this: Ptr, pair: u32) -> bool {
+    match pair_references(e, pair) {
+        Some((first, second)) => {
+            let listener = this.addr().wrapping_sub(8);
+            e.call(
+                LISTENER_PAIR_00620340,
+                &args![listener, pair, first, second, 0u32, 1u32],
+            )
+            .u32()
+                != 0
+        }
+        None => false,
+    }
+}
+
+// Translated from 0062dd20 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`thiscall` on the listener's `+8` part,
+/// `RET 4`): for the pair's two references as in `0062dc80`, when both are
+/// set and the second's virtual slot `+0x100` answers true, `00620680` on
+/// the listener (`this - 8`) with the pair's `+0x48` word (read again) and
+/// the second reference, and true; otherwise false.
+pub fn fn_0062dd20(e: &mut Engine, this: Ptr, pair: u32) -> bool {
+    match pair_references(e, pair) {
+        Some((_, second)) => {
+            let word = e.mem.u32(pair.wrapping_add(0x48));
+            let listener = this.addr().wrapping_sub(8);
+            e.call(LISTENER_PAIR_00620680, &args![listener, word, second]);
+            true
+        }
+        None => false,
+    }
+}
+
+// Translated from 0062dee0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`thiscall`, `RET 4`; a `TESTrapListener`):
+/// whether one of the trap entries (from `+0x20`, the next from
+/// `0062d990`) has `key` as its `0084e3a0` word.
+pub fn fn_0062dee0(e: &mut Engine, this: Ptr, key: u32) -> bool {
+    let mut entry = e.mem.u32(at(this, 0x20));
+    while entry != 0 {
+        if e.call(GET_WORD_C, &args![entry]).u32() == key {
+            return true;
+        }
+        entry = fn_0062d990(e, Ptr::new(entry));
+    }
+    false
+}
+
+// Translated from 0062e200 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The `BSListBase<TriggerEntry::TriggerEvent*>` scalar deleting destructor
+/// (Xbox PDB; `thiscall`, `RET 4`): the destructor (`0062e040`), then
+/// `00401030` frees `this` when bit 0 of `flags` is set. Returns `this`.
+pub fn bs_list_base_trigger_event_scalar_deleting_destructor(
+    e: &mut Engine,
+    this: Ptr,
+    flags: u32,
+) -> Ptr {
+    fn_0062e040(e, this);
+    if flags & 1 != 0 {
+        e.call(FREE, &args![this]);
+    }
+    this
+}
+
+/// This unit's n086 translations, by exe address.
+fn funcs_n086() -> Vec<(u32, AbiFn)> {
+    vec![
+        entry!(0x0062_c5a0, trap_entry_run(Ptr)),
+        entry!(0x0062_c600, trap_target_entry_run(Ptr, u32)),
+        entry!(0x0062_c720, fn_0062c720(Ptr, u32) -> Ptr),
+        entry!(0x0062_c770, fn_0062c770(Ptr, u32) -> Ptr),
+        entry!(0x0062_d3f0, fn_0062d3f0(Ptr, u32) -> Ptr),
+        entry!(
+            0x0062_d440,
+            hkp_all_cd_body_pair_collector_scalar_deleting_destructor(Ptr, u32) -> Ptr
+        ),
+        entry!(0x0062_d470, fn_0062d470(u32)),
+        entry!(
+            0x0062_d640,
+            hkp_phantom_listener_phantom_shape_set_callback(Ptr, u32)
+        ),
+        entry!(0x0062_d6c0, fn_0062d6c0(Ptr, u32) -> Ptr),
+        entry!(
+            0x0062_d710,
+            hkp_phantom_listener_scalar_deleting_destructor(Ptr, u32) -> Ptr
+        ),
+        entry!(
+            0x0062_d7c0,
+            tes_trap_listener_create_zone_entry(Ptr, u32, u32) -> u32
+        ),
+        entry!(0x0062_d840, fn_0062d840(Ptr, u32, u32) -> Ptr),
+        entry!(0x0062_dc80, fn_0062dc80(Ptr, u32) -> bool),
+        entry!(0x0062_dd20, fn_0062dd20(Ptr, u32) -> bool),
+        entry!(0x0062_dee0, fn_0062dee0(Ptr, u32) -> bool),
+        entry!(
+            0x0062_e200,
+            bs_list_base_trigger_event_scalar_deleting_destructor(Ptr, u32) -> Ptr
+        ),
+    ]
+}
+
+#[cfg(test)]
+mod n086_tests {
+    use super::*;
+
+    fn calls(e: &Engine, addr: u32) -> Vec<Vec<u32>> {
+        e.call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|c| c.0 == addr)
+            .map(|c| c.1.clone())
+            .collect()
+    }
+
+    /// An object whose vtable has `slots` entries at `0x7100_0000 + offset`,
+    /// each doubled to answer `answer`.
+    fn object_with_slots(e: &mut Engine, offsets: &[u32]) -> u32 {
+        let object = e.mem.alloc(0x20);
+        let vtable = e.mem.alloc(0x200);
+        e.mem.set_u32(object, vtable);
+        for &offset in offsets {
+            e.mem.set_u32(vtable + offset, 0x7100_0000 + offset);
+        }
+        object
+    }
+
+    #[test]
+    fn trap_entry_run_walks_the_target_chain() {
+        let mut e = Engine::new();
+        let first = object_with_slots(&mut e, &[0]);
+        let second = e.mem.alloc(0x20);
+        e.mem.set_u32(second, e.mem.u32(first));
+        e.mem.set_u32(first + 0x10, second + 0x10);
+        e.mem.set_u32(second + 0x10, 0);
+        e.register_double(FIRST_TARGET_00825C00, move |_, _| first.into_ret());
+        e.register(GET_WORD_4, |e, a| e.mem.u32(a[0]).into_ret());
+        e.register(0x7100_0000, |_, _| Ret::default());
+        e.call_log = Some(vec![]);
+        e.call(0x0062_c5a0, &args![0x5000u32]);
+        assert_eq!(
+            calls(&e, 0x7100_0000),
+            vec![vec![first, 0x5000], vec![second, 0x5000]]
+        );
+        assert_eq!(
+            calls(&e, GET_WORD_4),
+            vec![vec![first + 0x10], vec![second + 0x10]]
+        );
+
+        // No first target: nothing runs.
+        e.register(FIRST_TARGET_00825C00, |_, _| 0u32.into_ret());
+        e.call_log = Some(vec![]);
+        e.call(0x0062_c5a0, &args![0x5000u32]);
+        assert!(calls(&e, 0x7100_0000).is_empty());
+    }
+
+    #[test]
+    fn trap_target_entry_run_calls_the_target() {
+        let mut e = Engine::new();
+        let target = object_with_slots(&mut e, &[0x18c]);
+        e.register_double(GET_WORD_C, move |_, _| target.into_ret());
+        e.register(0x7100_018c, |_, _| Ret::default());
+        e.call_log = Some(vec![]);
+        e.call(0x0062_c600, &args![0x6000u32, 0x77u32]);
+        assert_eq!(calls(&e, GET_WORD_C), vec![vec![0x6010]]);
+        assert_eq!(calls(&e, 0x7100_018c), vec![vec![target, 0x77, 0x6000]]);
+    }
+
+    #[test]
+    fn scalar_deleting_destructors_free_on_bit_0() {
+        let mut e = Engine::new();
+        e.register(FREE, |_, _| Ret::default());
+        e.register(FREE_006210D0, |_, _| Ret::default());
+        e.register(0x0062_e290, |_, _| Ret::default());
+        e.register(0x0055_45f0, |_, _| Ret::default());
+        e.register(0x004a_4840, |_, _| Ret::default());
+        e.register(0x0062_e350, |_, _| Ret::default());
+        e.register(CALL_00483710, |_, _| Ret::default());
+        e.register(MEMORY_ROUTER_00C85750, |_, _| Ret::default());
+        let this = e.mem.alloc(0x40);
+        let cases: [(u32, u32, u32); 6] = [
+            (0x0062_c720, EVENT_LIST_BASE_VTABLE, FREE),
+            (0x0062_c770, EVENT_LIST_BASE_VTABLE, FREE),
+            (0x0062_d3f0, PAIR_COLLECTOR_VTABLE, FREE_006210D0),
+            (0x0062_d6c0, BHK_TRAP_LISTENER_VTABLE, FREE),
+            (0x0062_d710, PHANTOM_LISTENER_VTABLE, FREE),
+            (0x0062_e200, EVENT_LIST_BASE_VTABLE, FREE),
+        ];
+        for (addr, vtable, free) in cases {
+            e.mem.set_u32(this, BHK_TRAP_LISTENER_VTABLE);
+            e.call_log = Some(vec![]);
+            assert_eq!(e.call(addr, &args![this, 2u32]).u32(), this);
+            assert!(calls(&e, free).is_empty());
+            if addr != 0x0062_d6c0 {
+                assert_eq!(e.mem.u32(this), vtable);
+            }
+            e.call_log = Some(vec![]);
+            e.call(addr, &args![this, 1u32]);
+            assert_eq!(calls(&e, free), vec![vec![this]]);
+        }
+
+        // hkpAllCdBodyPairCollector: its free goes to the router (0062d470).
+        let allocator = object_with_slots(&mut e, &[8]);
+        e.register_double(ROUTER_ALLOCATOR_0044EDB0, move |_, _| allocator.into_ret());
+        e.register(0x7100_0008, |_, _| Ret::default());
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x0062_d440, &args![this, 0u32]).u32(), this);
+        assert_eq!(e.mem.u32(this), PAIR_COLLECTOR_VTABLE);
+        assert!(calls(&e, 0x7100_0008).is_empty());
+        e.call(0x0062_d440, &args![this, 1u32]);
+        assert_eq!(calls(&e, 0x7100_0008), vec![vec![allocator, this, 0x114]]);
+    }
+
+    #[test]
+    fn fn_0062d470_frees_through_the_router_unless_null() {
+        let mut e = Engine::new();
+        let allocator = object_with_slots(&mut e, &[8]);
+        e.register(MEMORY_ROUTER_00C85750, |_, _| 0x4444u32.into_ret());
+        e.register_double(ROUTER_ALLOCATOR_0044EDB0, move |_, _| allocator.into_ret());
+        e.register(0x7100_0008, |_, _| Ret::default());
+        e.call_log = Some(vec![]);
+        e.call(0x0062_d470, &args![0x9000u32]);
+        assert_eq!(calls(&e, ROUTER_ALLOCATOR_0044EDB0), vec![vec![0x4444]]);
+        assert_eq!(calls(&e, 0x7100_0008), vec![vec![allocator, 0x9000, 0x114]]);
+        e.call_log = Some(vec![]);
+        e.call(0x0062_d470, &args![0u32]);
+        assert!(calls(&e, MEMORY_ROUTER_00C85750).is_empty());
+    }
+
+    #[test]
+    fn phantom_shape_set_callback_needs_the_phantom_word() {
+        let mut e = Engine::new();
+        let this = object_with_slots(&mut e, &[4, 8]);
+        e.register(0x7100_0004, |_, _| Ret::default());
+        e.register(0x7100_0008, |_, _| Ret::default());
+        e.register(GET_WORD_8, |e, a| e.mem.u32(a[0] + 8).into_ret());
+        let phantom = e.mem.alloc(0x10);
+        e.mem.set_u32(phantom + 8, 1);
+        e.call_log = Some(vec![]);
+        e.call(0x0062_d640, &args![this, phantom]);
+        let order: Vec<u32> = e
+            .call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .map(|c| c.0)
+            .filter(|&a| a == 0x7100_0004 || a == 0x7100_0008)
+            .collect();
+        assert_eq!(order, vec![0x7100_0008, 0x7100_0004]);
+        assert_eq!(calls(&e, 0x7100_0004), vec![vec![this, phantom]]);
+        e.mem.set_u32(phantom + 8, 0);
+        e.call_log = Some(vec![]);
+        e.call(0x0062_d640, &args![this, phantom]);
+        assert!(calls(&e, 0x7100_0008).is_empty());
+    }
+
+    #[test]
+    fn create_zone_entry_constructs_a_trap_entry() {
+        let mut e = Engine::new();
+        let block = e.mem.alloc(0x18);
+        e.register_double(ALLOCATE, move |_, _| block.into_ret());
+        e.register(TRAP_ENTRY_BASE_CONSTRUCTOR, |_, _| Ret::default());
+        e.call_log = Some(vec![]);
+        let result = e.call(0x0062_d7c0, &args![0x1234u32, 7u32, 9u32]).u32();
+        assert_eq!(result, block);
+        assert_eq!(calls(&e, ALLOCATE), vec![vec![0x18]]);
+        assert_eq!(
+            calls(&e, TRAP_ENTRY_BASE_CONSTRUCTOR),
+            vec![vec![block, 7, 9]]
+        );
+        assert_eq!(e.mem.u32(block), TRAP_ENTRY_VTABLE);
+
+        e.register(ALLOCATE, |_, _| 0u32.into_ret());
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x0062_d7c0, &args![0x1234u32, 7u32, 9u32]).u32(), 0);
+        assert!(calls(&e, TRAP_ENTRY_BASE_CONSTRUCTOR).is_empty());
+    }
+
+    #[test]
+    fn constructor_0062d840_sets_the_vtable() {
+        let mut e = Engine::new();
+        e.register(TRAP_ENTRY_BASE_CONSTRUCTOR, |_, _| Ret::default());
+        let this = e.mem.alloc(0x18);
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x0062_d840, &args![this, 1u32, 2u32]).u32(), this);
+        assert_eq!(
+            calls(&e, TRAP_ENTRY_BASE_CONSTRUCTOR),
+            vec![vec![this, 1, 2]]
+        );
+        assert_eq!(e.mem.u32(this), TRAP_ENTRY_VTABLE);
+    }
+
+    /// A pair with words 0x11 (`+0x48`) and 0x22 (`+0x20`); references
+    /// found for them are `first` and `second` (null for zero).
+    fn pair_setup(e: &mut Engine, first: u32, flag: u32) -> (u32, u32) {
+        let pair = e.mem.alloc(0x50);
+        e.mem.set_u32(pair + 0x48, 0x11);
+        e.mem.set_u32(pair + 0x20, 0x22);
+        let second = object_with_slots(e, &[0x100]);
+        e.register_double(FIND_COLLIDABLE_REF, move |_, a| {
+            match a[0] {
+                0x11 => first,
+                _ => second,
+            }
+            .into_ret()
+        });
+        e.register_double(0x7100_0100, move |_, _| (0xff00 | flag).into_ret());
+        (pair, second)
+    }
+
+    #[test]
+    fn fn_0062dc80_enters_when_both_references_qualify() {
+        let mut e = Engine::new();
+        let (pair, second) = pair_setup(&mut e, 0x3000, 1);
+        e.register(LISTENER_PAIR_00620340, |_, _| 5u32.into_ret());
+        e.call_log = Some(vec![]);
+        assert!(e.call(0x0062_dc80, &args![0x1008u32, pair]).bool());
+        assert_eq!(
+            calls(&e, LISTENER_PAIR_00620340),
+            vec![vec![0x1000, pair, 0x3000, second, 0, 1]]
+        );
+        e.register(LISTENER_PAIR_00620340, |_, _| 0u32.into_ret());
+        assert!(!e.call(0x0062_dc80, &args![0x1008u32, pair]).bool());
+        // The slot's low byte is 0: nothing.
+        let (pair, _) = pair_setup(&mut e, 0x3000, 0);
+        e.call_log = Some(vec![]);
+        assert!(!e.call(0x0062_dc80, &args![0x1008u32, pair]).bool());
+        assert!(calls(&e, LISTENER_PAIR_00620340).is_empty());
+        // No first reference.
+        let (pair, _) = pair_setup(&mut e, 0, 1);
+        e.call_log = Some(vec![]);
+        assert!(!e.call(0x0062_dc80, &args![0x1008u32, pair]).bool());
+        assert!(calls(&e, 0x7100_0100).is_empty());
+    }
+
+    #[test]
+    fn fn_0062dd20_leaves_when_both_references_qualify() {
+        let mut e = Engine::new();
+        let (pair, second) = pair_setup(&mut e, 0x3000, 1);
+        e.register(LISTENER_PAIR_00620680, |_, _| Ret::default());
+        e.call_log = Some(vec![]);
+        assert!(e.call(0x0062_dd20, &args![0x1008u32, pair]).bool());
+        assert_eq!(
+            calls(&e, LISTENER_PAIR_00620680),
+            vec![vec![0x1000, 0x11, second]]
+        );
+        let (pair, _) = pair_setup(&mut e, 0x3000, 0);
+        e.call_log = Some(vec![]);
+        assert!(!e.call(0x0062_dd20, &args![0x1008u32, pair]).bool());
+        assert!(calls(&e, LISTENER_PAIR_00620680).is_empty());
+    }
+
+    #[test]
+    fn fn_0062dee0_finds_an_entry_by_key() {
+        let mut e = Engine::new();
+        let this = e.mem.alloc(0x24);
+        let first = e.mem.alloc(0x10);
+        let second = e.mem.alloc(0x10);
+        e.mem.set_u32(this + 0x20, first);
+        e.mem.set_u32(first + 4, second);
+        e.mem.set_u32(first + 0xc, 0xa);
+        e.mem.set_u32(second + 0xc, 0xb);
+        e.register(GET_WORD_4, |e, a| e.mem.u32(a[0] + 4).into_ret());
+        e.register(GET_WORD_C, |e, a| e.mem.u32(a[0] + 0xc).into_ret());
+        assert!(e.call(0x0062_dee0, &args![this, 0xbu32]).bool());
+        assert!(e.call(0x0062_dee0, &args![this, 0xau32]).bool());
+        assert!(!e.call(0x0062_dee0, &args![this, 0xcu32]).bool());
+        e.mem.set_u32(this + 0x20, 0);
+        assert!(!e.call(0x0062_dee0, &args![this, 0xau32]).bool());
     }
 }

@@ -81,6 +81,9 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
         entry!(0x00ad6f40, fn_00ad6f40(Ptr<BSAudio>) -> Ptr<BSAudio>),
         entry!(0x00ad7000, fn_00ad7000(Ptr<BSAudio>)),
+        entry!(0x00ad_6bb0, fn_00ad6bb0(u32, u32)),
+        entry!(0x00ad_6d30, fn_00ad6d30(u32, u32, u32, u32, u32, u32) -> u32),
+        entry!(0x00ad_6e20, fn_00ad6e20(u32, u32, u32, u32, u32, u32) -> u32),
     ]
 }
 
@@ -143,5 +146,154 @@ mod tests {
             calls_to(&e, SYNCH_TIMER_DESTRUCTOR),
             vec![vec![this + 0x14]]
         );
+    }
+}
+
+/// The copy constructors `00ad6d30` and `00ad6e20` construct their items
+/// with (thiscall: the source), placed in `FaceGen/algs.obj` by the engine
+/// map: one for 0x38-byte items, one for 0x18-byte items.
+const COPY_CONSTRUCT_0X38: u32 = 0x00ad_3000;
+const COPY_CONSTRUCT_0X18: u32 = 0x00ad_3150;
+
+// Translated from 00ad6bb0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Swaps two strings (thiscall; a `std::string::swap` shape, called by
+/// `00ad5250` and `00ad66e0`): unless they are the same, exchanges the
+/// 16-byte buffers at +4, the words +0x14 and the words +0x18. The branch
+/// for unequal allocators, which copies through a local string, tests the
+/// constant 1 the compiler folded, so it never runs and is left out.
+// Translation incomplete: 00ad6bb0 - C++ exception unwinding (SEH frame state) and the /GS stack cookie check (00ec408c) are not translated.
+pub fn fn_00ad6bb0(e: &mut Engine, this: u32, other: u32) {
+    if this == other {
+        return;
+    }
+    for offset in [4u32, 8, 0xc, 0x10] {
+        let mine = e.mem.u32(this + offset);
+        let theirs = e.mem.u32(other + offset);
+        e.mem.set_u32(this + offset, theirs);
+        e.mem.set_u32(other + offset, mine);
+    }
+    for offset in [0x14u32, 0x18] {
+        let mine = e.mem.u32(this + offset);
+        let theirs = e.mem.u32(other + offset);
+        e.mem.set_u32(this + offset, theirs);
+        e.mem.set_u32(other + offset, mine);
+    }
+}
+
+/// Constructs copies of the `size`-byte items `[first, last)` from `dest`
+/// on with `construct` (thiscall: the source), skipping a null place;
+/// answers the end of the new items.
+fn construct_copies(
+    e: &mut Engine,
+    construct: u32,
+    size: u32,
+    first: u32,
+    last: u32,
+    dest: u32,
+) -> u32 {
+    let mut from = first;
+    let mut to = dest;
+    while from != last {
+        if to != 0 {
+            e.call(construct, &[to, from]);
+        }
+        to = to.wrapping_add(size);
+        from = from.wrapping_add(size);
+    }
+    to
+}
+
+// Translated from 00ad6d30 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Constructs copies of the 0x38-byte items `[first, last)` from `dest` on
+/// (cdecl, six words, the last three never read; a
+/// `std::uninitialized_copy` shape, called by `00ad5f80` and `00ad6b10`),
+/// each through `00ad3000` unless its place is null. Answers the end of the
+/// new items. The exception handler that would destroy the items made so far
+/// is not translated.
+// Translation incomplete: 00ad6d30 - C++ exception unwinding (SEH frame state, its catch block) is not translated.
+pub fn fn_00ad6d30(
+    e: &mut Engine,
+    first: u32,
+    last: u32,
+    dest: u32,
+    _unused_3: u32,
+    _unused_4: u32,
+    _unused_5: u32,
+) -> u32 {
+    construct_copies(e, COPY_CONSTRUCT_0X38, 0x38, first, last, dest)
+}
+
+// Translated from 00ad6e20 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Constructs copies of the 0x18-byte items `[first, last)` from `dest` on
+/// (cdecl, six words, the last three never read; called by `00ad6040` and
+/// `00ad6b60`), each through `00ad3150` unless its place is null. Answers
+/// the end of the new items. The exception handler that would destroy the
+/// items made so far is not translated.
+// Translation incomplete: 00ad6e20 - C++ exception unwinding (SEH frame state, its catch block) is not translated.
+pub fn fn_00ad6e20(
+    e: &mut Engine,
+    first: u32,
+    last: u32,
+    dest: u32,
+    _unused_3: u32,
+    _unused_4: u32,
+    _unused_5: u32,
+) -> u32 {
+    construct_copies(e, COPY_CONSTRUCT_0X18, 0x18, first, last, dest)
+}
+
+#[cfg(test)]
+mod n079_tests {
+    use super::*;
+
+    #[test]
+    fn strings_swap_their_contents() {
+        let mut e = Engine::new();
+        let a = e.mem.alloc(0x1c);
+        let b = e.mem.alloc(0x1c);
+        for i in 0..7u32 {
+            e.mem.set_u32(a + 4 * i, 0x100 + i);
+            e.mem.set_u32(b + 4 * i, 0x200 + i);
+        }
+        e.call(0x00ad_6bb0, &[a, b]);
+        assert_eq!(e.mem.u32(a), 0x100);
+        assert_eq!(e.mem.u32(b), 0x200);
+        for i in 1..7u32 {
+            assert_eq!(e.mem.u32(a + 4 * i), 0x200 + i);
+            assert_eq!(e.mem.u32(b + 4 * i), 0x100 + i);
+        }
+        e.call(0x00ad_6bb0, &[a, a]);
+        assert_eq!(e.mem.u32(a + 4), 0x201);
+    }
+
+    #[test]
+    fn items_are_copy_constructed() {
+        for (addr, construct, size) in [
+            (0x00ad_6d30u32, COPY_CONSTRUCT_0X38, 0x38u32),
+            (0x00ad_6e20, COPY_CONSTRUCT_0X18, 0x18),
+        ] {
+            let mut e = Engine::new();
+            e.register(construct, |_, a| a[0].into_ret());
+            e.call_log = Some(vec![]);
+            let end = e
+                .call(addr, &[0x5000, 0x5000 + 2 * size, 0x1000, 0, 0, 0])
+                .u32();
+            assert_eq!(end, 0x1000 + 2 * size);
+            let log = e.call_log.take().unwrap();
+            assert_eq!(
+                log[1..],
+                [
+                    (construct, vec![0x1000, 0x5000]),
+                    (construct, vec![0x1000 + size, 0x5000 + size])
+                ]
+            );
+            // A null place is skipped but still counted.
+            e.call_log = Some(vec![]);
+            assert_eq!(
+                e.call(addr, &[0x5000, 0x5000 + size, 0, 0, 0, 0]).u32(),
+                size
+            );
+            assert_eq!(e.call_log.take().unwrap().len(), 1);
+        }
     }
 }

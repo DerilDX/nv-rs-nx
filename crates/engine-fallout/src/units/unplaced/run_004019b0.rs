@@ -576,9 +576,132 @@ pub fn fn_00402a90(e: &mut Engine, this: Ptr) -> bool {
     e.call(CAN_BE_POISON, &args![this]).u8() == 0
 }
 
+/// RTTI type descriptors `.?AVBGSHungerStage@@` and `.?AVBGSSleepDeprevationStage@@`.
+const TYPE_HUNGER_STAGE: u32 = 0x0118_307c;
+const TYPE_SLEEP_STAGE: u32 = 0x0118_30a0;
+/// `TESForm::CopyAllComponents` (Xbox PDB, `004851b0`, `ECX`, one stack word: the source).
+const COPY_ALL_COMPONENTS: u32 = 0x0048_51b0;
+/// `TESForm::CompareAllComponents` (Xbox PDB, `00485270`, `ECX`, one stack word), `AL`.
+const COMPARE_ALL_COMPONENTS: u32 = 0x0048_5270;
+/// `00401460` (`cdecl`, three words: destination, source, size).
+const COPY_BYTES_00401460: u32 = 0x0040_1460;
+/// The CRT's `memcmp` (`00ec4835`, `cdecl`).
+const MEMCMP: u32 = 0x00ec_4835;
+
+/// The `Copy` body shared by the two stage classes: cast `source` from `TESForm` to the
+/// class; when that answers a stage, copy its components and the 8 bytes of its stage data.
+fn stage_copy(e: &mut Engine, this: Ptr, source: Ptr, class: u32) {
+    let stage = e
+        .call(
+            DYNAMIC_CAST,
+            &args![source, 0u32, TYPE_TES_FORM, class, 0u32],
+        )
+        .u32();
+    if stage == 0 {
+        return;
+    }
+    e.call(COPY_ALL_COMPONENTS, &args![this, stage]);
+    let from = e.call(STAGE_DATA_00500940, &args![stage]).u32();
+    let to = e.call(STAGE_DATA_00500940, &args![this]).u32();
+    e.call(COPY_BYTES_00401460, &args![to, from, 8u32]);
+}
+
+/// The `Compare` body shared by the two stage classes: true (different) unless `other` is
+/// of the class, its components compare equal and the 8 bytes of the stage datas match.
+fn stage_compare(e: &mut Engine, this: Ptr, other: Ptr, class: u32) -> bool {
+    let stage = e
+        .call(
+            DYNAMIC_CAST,
+            &args![other, 0u32, TYPE_TES_FORM, class, 0u32],
+        )
+        .u32();
+    if stage == 0 {
+        return true;
+    }
+    if e.call(COMPARE_ALL_COMPONENTS, &args![this, stage]).u8() != 0 {
+        return true;
+    }
+    let theirs = e.call(STAGE_DATA_00500940, &args![stage]).u32();
+    let mine = e.call(STAGE_DATA_00500940, &args![this]).u32();
+    e.call(MEMCMP, &args![mine, theirs, 8u32]).u32() != 0
+}
+
+// Translated from 00401bf0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BGSHungerStage`'s `Copy` slot (+0x108 of its vtable `010115b4`; unnamed in the engine
+/// map; `ECX` and one stack word, `RET 4`): when `source` casts (`__RTDynamicCast` from
+/// `TESForm`) to a `BGSHungerStage`, `TESForm::CopyAllComponents` from it, then `00401460`
+/// copies the 8 bytes of its stage data (`00500940`) into this one's.
+pub fn fn_00401bf0(e: &mut Engine, this: Ptr, source: Ptr) {
+    stage_copy(e, this, source, TYPE_HUNGER_STAGE);
+}
+
+// Translated from 00401c50 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BGSHungerStage`'s `Compare` slot (+0x10c of its vtable `010115b4`; unnamed in the engine
+/// map; `ECX` and one stack word, `RET 4`): true (different) when `other` is not a
+/// `BGSHungerStage`, when `TESForm::CompareAllComponents` answers true, or when `memcmp`
+/// finds the 8 bytes of the two stage datas (this one's first) different; else false.
+pub fn fn_00401c50(e: &mut Engine, this: Ptr, other: Ptr) -> bool {
+    stage_compare(e, this, other, TYPE_HUNGER_STAGE)
+}
+
+// Translated from 004022b0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BGSSleepDeprevationStage`'s `Copy` slot (+0x108 of its vtable `010116fc`; unnamed in
+/// the engine map; `ECX` and one stack word, `RET 4`): the same as [`fn_00401bf0`] with the
+/// `BGSSleepDeprevationStage` type.
+pub fn fn_004022b0(e: &mut Engine, this: Ptr, source: Ptr) {
+    stage_copy(e, this, source, TYPE_SLEEP_STAGE);
+}
+
+// Translated from 00402310 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BGSSleepDeprevationStage`'s `Compare` slot (+0x10c of its vtable `010116fc`; unnamed in
+/// the engine map; `ECX` and one stack word, `RET 4`): the same as [`fn_00401c50`] with the
+/// `BGSSleepDeprevationStage` type.
+pub fn fn_00402310(e: &mut Engine, this: Ptr, other: Ptr) -> bool {
+    stage_compare(e, this, other, TYPE_SLEEP_STAGE)
+}
+
+// Translated from 004029b0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Slot +0x144 of `AlchemyItem`'s vtable (`01011964`; also called by `00403a50`; unnamed in
+/// the engine map; `ECX` only, plain `RET`): 1 when flag 1 of the item's flag byte at +0xbc
+/// is clear ([`fn_004029d0`]), else 0 (`NEG`/`SBB`/`ADD 1` on its `AL`).
+pub fn fn_004029b0(e: &mut Engine, this: Ptr) -> u32 {
+    let set = fn_004029d0(e, this, 1) as u8;
+    u32::from(set == 0)
+}
+
+// Translated from 004029f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Slot +0x148 of `AlchemyItem`'s vtable (`01011964`; also called by `00403a40`; unnamed in
+/// the engine map; `ECX` and one byte word, `RET 4`): sets flag 1 of the flag byte at +0xbc
+/// when `on` is 0 and clears it otherwise ([`fn_00402a20`] with mask 1).
+pub fn fn_004029f0(e: &mut Engine, this: Ptr, on: u8) {
+    fn_00402a20(e, this, 1, u8::from(on == 0));
+}
+
+// Translated from 00402a20 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`ECX` and two stack words, `RET 8`): ORs the low byte of
+/// `mask` into the `AlchemyItem` flag byte at +0xbc when `set` is nonzero, else ANDs the
+/// byte with `!mask`.
+pub fn fn_00402a20(e: &mut Engine, this: Ptr, mask: u32, set: u8) {
+    let address = this.addr() + 0xbc;
+    let flags = u32::from(e.mem.u8(address));
+    let flags = if set != 0 {
+        flags | mask
+    } else {
+        flags & !mask
+    };
+    e.mem.set_u8(address, flags as u8);
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x0040_1bf0, fn_00401bf0(Ptr, Ptr)),
+        entry!(0x0040_1c50, fn_00401c50(Ptr, Ptr) -> bool),
+        entry!(0x0040_22b0, fn_004022b0(Ptr, Ptr)),
+        entry!(0x0040_2310, fn_00402310(Ptr, Ptr) -> bool),
+        entry!(0x0040_29b0, fn_004029b0(Ptr) -> u32),
+        entry!(0x0040_29f0, fn_004029f0(Ptr, u8)),
+        entry!(0x0040_2a20, fn_00402a20(Ptr, u32, u8)),
         entry!(0x0040_1a10, fn_00401a10(Ptr) -> Ptr),
         entry!(0x0040_20f0, fn_004020f0(Ptr) -> Ptr),
         entry!(0x0040_2820, fn_00402820(Ptr) -> Ptr),
@@ -1101,5 +1224,146 @@ mod stage_tests {
         assert_eq!(e.call(0x0040_2ae0, &args![item + 0x3c]).u32(), 1);
         e.mem.set_u8(item + 0xbc, 0);
         assert_eq!(e.call(0x0040_2ae0, &args![item + 0x3c]).u32(), 0);
+    }
+}
+
+#[cfg(test)]
+mod n075_tests {
+    use super::*;
+
+    type Log = Vec<(u32, Vec<u32>)>;
+
+    fn engine(cast: bool, differ: bool, bytes_differ: bool) -> Engine {
+        let mut e = Engine::new();
+        e.register(
+            DYNAMIC_CAST,
+            if cast {
+                |_, a| a[0].into_ret()
+            } else {
+                |_, _| 0u32.into_ret()
+            },
+        );
+        e.register(COPY_ALL_COMPONENTS, |_, _| Ret::default());
+        e.register(
+            COMPARE_ALL_COMPONENTS,
+            if differ {
+                |_, _| 0x0101u32.into_ret()
+            } else {
+                |_, _| 0x0100u32.into_ret()
+            },
+        );
+        e.register(STAGE_DATA_00500940, |_, a| (a[0] + 0x18).into_ret());
+        e.register(COPY_BYTES_00401460, |_, _| Ret::default());
+        e.register(
+            MEMCMP,
+            if bytes_differ {
+                |_, _| 1u32.into_ret()
+            } else {
+                |_, _| 0u32.into_ret()
+            },
+        );
+        e.call_log = Some(vec![]);
+        e
+    }
+
+    fn log_without(e: &mut Engine, top: u32) -> Log {
+        e.call_log
+            .take()
+            .unwrap()
+            .into_iter()
+            .filter(|(a, _)| *a != top)
+            .collect()
+    }
+
+    fn check_copy(address: u32, class: u32) {
+        let mut e = engine(true, false, false);
+        e.call(address, &args![0x1000u32, 0x2000u32]);
+        assert_eq!(
+            log_without(&mut e, address),
+            vec![
+                (DYNAMIC_CAST, vec![0x2000, 0, TYPE_TES_FORM, class, 0]),
+                (COPY_ALL_COMPONENTS, vec![0x1000, 0x2000]),
+                (STAGE_DATA_00500940, vec![0x2000]),
+                (STAGE_DATA_00500940, vec![0x1000]),
+                (COPY_BYTES_00401460, vec![0x1018, 0x2018, 8]),
+            ]
+        );
+        let mut e = engine(false, false, false);
+        e.call(address, &args![0x1000u32, 0x2000u32]);
+        assert_eq!(log_without(&mut e, address).len(), 1);
+    }
+
+    fn check_compare(address: u32, class: u32) {
+        let compare = |cast, differ, bytes| {
+            let mut e = engine(cast, differ, bytes);
+            let r = e.call(address, &args![0x1000u32, 0x2000u32]).bool();
+            (r, log_without(&mut e, address))
+        };
+        let (r, log) = compare(false, false, false);
+        assert!(r);
+        assert_eq!(
+            log,
+            vec![(DYNAMIC_CAST, vec![0x2000, 0, TYPE_TES_FORM, class, 0])]
+        );
+        let (r, log) = compare(true, true, false);
+        assert!(r);
+        assert!(log.iter().all(|(a, _)| *a != MEMCMP));
+        assert!(compare(true, false, true).0);
+        let (r, log) = compare(true, false, false);
+        assert!(!r);
+        assert_eq!(log.last().unwrap(), &(MEMCMP, vec![0x1018, 0x2018, 8]));
+    }
+
+    #[test]
+    fn fn_00401bf0_copies_a_hunger_stage() {
+        check_copy(0x0040_1bf0, TYPE_HUNGER_STAGE);
+    }
+
+    #[test]
+    fn fn_00401c50_compares_a_hunger_stage() {
+        check_compare(0x0040_1c50, TYPE_HUNGER_STAGE);
+    }
+
+    #[test]
+    fn fn_004022b0_copies_a_sleep_stage() {
+        check_copy(0x0040_22b0, TYPE_SLEEP_STAGE);
+    }
+
+    #[test]
+    fn fn_00402310_compares_a_sleep_stage() {
+        check_compare(0x0040_2310, TYPE_SLEEP_STAGE);
+    }
+
+    #[test]
+    fn fn_004029b0_answers_one_while_flag_one_is_clear() {
+        let mut e = Engine::new();
+        let item = e.mem.alloc(0xc0);
+        e.mem.set_u8(item + 0xbc, 0xfe);
+        assert_eq!(e.call(0x0040_29b0, &args![item]).u32(), 1);
+        e.mem.set_u8(item + 0xbc, 0x01);
+        assert_eq!(e.call(0x0040_29b0, &args![item]).u32(), 0);
+    }
+
+    #[test]
+    fn fn_004029f0_sets_flag_one_for_zero_and_clears_it_otherwise() {
+        let mut e = Engine::new();
+        let item = e.mem.alloc(0xc0);
+        e.mem.set_u8(item + 0xbc, 0x80);
+        e.call(0x0040_29f0, &args![item, 0x100u32]);
+        assert_eq!(e.mem.u8(item + 0xbc), 0x81);
+        e.call(0x0040_29f0, &args![item, 0x102u32]);
+        assert_eq!(e.mem.u8(item + 0xbc), 0x80);
+    }
+
+    #[test]
+    fn fn_00402a20_ors_or_masks_the_flag_byte() {
+        let mut e = Engine::new();
+        let item = e.mem.alloc(0xc0);
+        e.mem.set_u8(item + 0xbc, 0x11);
+        e.call(0x0040_2a20, &args![item, 0x0f06u32, 0x100u32]);
+        assert_eq!(e.mem.u8(item + 0xbc), 0x11 & !0x06);
+        e.call(0x0040_2a20, &args![item, 0x0f06u32, 1u32]);
+        assert_eq!(e.mem.u8(item + 0xbc), 0x17);
+        assert_eq!(e.mem.u8(item + 0xbd), 0);
     }
 }

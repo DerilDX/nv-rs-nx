@@ -108,9 +108,32 @@ pub fn fn_00aea1b0(e: &mut Engine, this: Ptr) -> Ptr {
     this
 }
 
+/// `fseek` (`00ecb65a`, cdecl: stream, offset, origin).
+const FSEEK: u32 = 0x00ec_b65a;
+
+// Translated from 00aea180 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (cdecl; only data references: the second entry of two
+/// four-function tables at `011acb78` and `011acb88`, beside `fread`, `fclose` (or null) and
+/// `ftell`). It reads four words: a null `stream` answers -1; otherwise
+/// `fseek(stream, offset_low, origin)`. The third word (the high half of a 64-bit offset, by
+/// the gap) is not read.
+pub fn fn_00aea180(
+    e: &mut Engine,
+    stream: Ptr,
+    offset_low: u32,
+    _unused_2: u32,
+    origin: u32,
+) -> i32 {
+    if stream.is_null() {
+        return -1;
+    }
+    e.call(FSEEK, &args![stream, offset_low, origin]).i32()
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x00ae_a180, fn_00aea180(Ptr, u32, u32, u32) -> i32),
         entry!(0x00ae_a210, fn_00aea210(Ptr)),
         entry!(0x00ae_a020, fn_00aea020()),
         entry!(0x00ae_a0a0, fn_00aea0a0(Ptr) -> Ptr),
@@ -252,5 +275,36 @@ mod b049_tests {
         assert_eq!(e.mem.u32(this + 0x3c), 0);
         assert_eq!(e.mem.u32(this + 0xa0), 0);
         assert_eq!(calls_to(&e, MEMSET), vec![vec![this + 0x40, 0, 0x60]]);
+    }
+}
+
+#[cfg(test)]
+mod n082_tests {
+    use super::*;
+
+    #[test]
+    fn fn_00aea180_seeks_with_the_low_offset_or_refuses_null() {
+        let mut e = Engine::new();
+        e.register(FSEEK, |_, _| 5u32.into_ret());
+        e.call_log = Some(vec![]);
+        assert_eq!(
+            e.call(0x00ae_a180, &args![0u32, 1u32, 2u32, 0u32]).i32(),
+            -1
+        );
+        assert_eq!(e.call_log.as_ref().unwrap().len(), 1);
+        assert_eq!(
+            e.call(0x00ae_a180, &args![0x5000u32, 0x40u32, 0x99u32, 1u32])
+                .i32(),
+            5
+        );
+        let seeks: Vec<_> = e
+            .call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|c| c.0 == FSEEK)
+            .map(|c| c.1.clone())
+            .collect();
+        assert_eq!(seeks, vec![vec![0x5000, 0x40, 1]]);
     }
 }

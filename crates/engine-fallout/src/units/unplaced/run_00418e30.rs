@@ -62,9 +62,43 @@ pub fn fn_00418e30(e: &mut Engine, this: Ptr, value: u32) -> u32 {
     created
 }
 
+/// `004f15a0` (thiscall, one word): stores a type byte into the object (the stage and
+/// extra-data constructors run it with their type).
+const SET_TYPE_004F15A0: u32 = 0x004f_15a0;
+
+// Translated from 00418f60 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 00418f60 - the C++ exception-unwinding frame (FS:[0] chain, handler at 00f00bdb, state variable around the constructor) and the frame's cookie word are not translated.
+/// Unnamed in the engine map (`ECX` = an extra list, one stack word, `RET 4`; called by
+/// `00572770`): sets the word held by the list's type-0x40 extra data to `value` and returns
+/// that extra data. An existing one first releases its old word (`00418f10(old, 1)` when
+/// non-null); a missing one is made (0x10 bytes from `00401000`, `004308f0(value)` when the
+/// block is not null), given type 0x40 (`004f15a0`, also on a null result) and added to the
+/// list (`BaseExtraList::AddExtra`).
+pub fn fn_00418f60(e: &mut Engine, this: Ptr, value: u32) -> u32 {
+    let extra = e.call(GET_EXTRA_DATA, &args![this, 0x40u32]).u32();
+    if extra != 0 {
+        let old = e.mem.u32(extra + 0xc);
+        if old != 0 {
+            fn_00418f10(e, Ptr::new(old), 1);
+        }
+        e.mem.set_u32(extra + 0xc, value);
+        return extra;
+    }
+    let block = e.call(ALLOCATE_BLOCK, &args![0x10u32]).u32();
+    let created = if block != 0 {
+        e.call(EXTRA_CONSTRUCT, &args![block, value]).u32()
+    } else {
+        0
+    };
+    e.call(SET_TYPE_004F15A0, &args![created, 0x40u32]);
+    e.call(ADD_EXTRA, &args![this, created]);
+    created
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x0041_8f60, fn_00418f60(Ptr, u32) -> u32),
         entry!(0x0041_8f40, fn_00418f40(Ptr)),
         entry!(0x0041_8f10, fn_00418f10(Ptr, u32) -> Ptr),
         entry!(0x0041_8e30, fn_00418e30(Ptr, u32) -> u32),
@@ -179,5 +213,60 @@ mod tests {
             .iter()
             .any(|c| c.0 == 0x0041_8f40));
         assert_eq!(e.mem.u32(extra + 0xc), 0x7000);
+    }
+}
+
+#[cfg(test)]
+mod n075_tests {
+    use super::*;
+
+    fn engine(existing: u32) -> Engine {
+        let mut e = Engine::new();
+        e.register_double(GET_EXTRA_DATA, move |_, _| existing.into_ret());
+        e.register(ALLOCATE_BLOCK, |_, _| 0x0090_0000u32.into_ret());
+        e.register(EXTRA_CONSTRUCT, |_, a| a[0].into_ret());
+        e.register(SET_TYPE_004F15A0, |_, _| Ret::default());
+        e.register(ADD_EXTRA, |_, _| Ret::default());
+        e.register(0x0041_8f40, |_, _| Ret::default());
+        e.register(0x0040_1030, |_, _| Ret::default());
+        e.call_log = Some(vec![]);
+        e
+    }
+
+    #[test]
+    fn fn_00418f60_replaces_the_word_of_an_existing_extra() {
+        let mut e = engine(0);
+        let extra = e.mem.alloc(0x10);
+        e.register_double(GET_EXTRA_DATA, move |_, _| extra.into_ret());
+        e.mem.set_u32(extra + 0xc, 0x4444);
+        assert_eq!(
+            e.call(0x0041_8f60, &args![0x1000u32, 0x5555u32]).u32(),
+            extra
+        );
+        assert_eq!(e.mem.u32(extra + 0xc), 0x5555);
+        let log = e.call_log.take().unwrap();
+        assert!(log.contains(&(GET_EXTRA_DATA, vec![0x1000, 0x40])));
+        assert!(log.contains(&(0x0041_8f40, vec![0x4444])));
+        assert!(log.contains(&(0x0040_1030, vec![0x4444])));
+        assert!(!log.iter().any(|(a, _)| *a == ADD_EXTRA));
+    }
+
+    #[test]
+    fn fn_00418f60_makes_and_adds_a_missing_extra() {
+        let mut e = engine(0);
+        assert_eq!(
+            e.call(0x0041_8f60, &args![0x1000u32, 0x5555u32]).u32(),
+            0x0090_0000
+        );
+        let log = e.call_log.take().unwrap();
+        assert_eq!(
+            log[2..].to_vec(),
+            vec![
+                (ALLOCATE_BLOCK, vec![0x10]),
+                (EXTRA_CONSTRUCT, vec![0x0090_0000, 0x5555]),
+                (SET_TYPE_004F15A0, vec![0x0090_0000, 0x40]),
+                (ADD_EXTRA, vec![0x1000, 0x0090_0000]),
+            ]
+        );
     }
 }

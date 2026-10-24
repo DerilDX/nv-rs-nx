@@ -1295,6 +1295,921 @@ pub fn fn_00e68ef0(e: &mut Engine, texture: Ptr, renderer: Ptr) -> Ptr {
     })
 }
 
+// ---- n081: the triangle accessors, the convex hull builder and four texture-data methods ----
+
+/// `00e63af0` (unnamed; thiscall on a hull face: a point, the hull, the hull + 4): classifies
+/// a face for the point; `00e67660` reads 1 (visible: recurse), 2 (horizon) and 4 (stop).
+const HULL_CLASSIFY_FACE: u32 = 0x00e6_3af0;
+/// The normalizer's constants (SSE): the squared length that gives scale 0 (`01011d78`),
+/// and the Newton step's 3 (`01017718`) and 0.5 (`01016248`).
+const HULL_ZERO: u32 = 0x0101_1d78;
+const HULL_THREE: u32 = 0x0101_7718;
+const HULL_HALF: u32 = 0x0101_6248;
+/// The float a removed face's plane distance is set to (`0104da48`; the exe holds a value
+/// just under `FLT_MAX`), also the start of `00e67c50`'s best distance.
+const HULL_FAR: u32 = 0x0104_da48;
+/// `00e67ae0`'s two doubles (`010eb190`, `0106b9e8`).
+const HULL_EDGE_SCALE: u32 = 0x010e_b190;
+const HULL_PLANE_SCALE: u32 = 0x0106_b9e8;
+/// `00e67c50`'s constants: the cosine limit (`0102295c`), the epsilon (`0104da4c`) and the
+/// double 0 (`01012060`).
+const HULL_COSINE_LIMIT: u32 = 0x0102_295c;
+const HULL_EPSILON: u32 = 0x0104_da4c;
+const HULL_DOUBLE_ZERO: u32 = 0x0101_2060;
+/// The initial tetrahedron's edge table (`010ed0f0`): per edge three words, the vertex's
+/// byte offset from +0x20 and the twin's face and edge offsets from +0xf80.
+const HULL_EDGE_TABLE: u32 = 0x010e_d0f0;
+/// The CRT square root `00ec6040` (argument and result in `ST0`).
+const HULL_SQRT: u32 = 0x00ec_6040;
+
+/// The hull builder's layout (offsets as the PC code uses them): vertex records (0x40 bytes,
+/// the point at +0, the horizon-edge link at +0x30) from +0x20 (their count at +8), the
+/// free-face stack (count +0xc, at most 100 pointers from +0xde0), and face records (0x50
+/// bytes: the plane normal at +0, three half-edges of 0x10 bytes at +0x10 (vertex, next,
+/// twin, face), the plane distance at +0x40, a mark at +0x44) from +0xf70 (count +0x10).
+const HULL_FREE_COUNT: u32 = 0x0c;
+const HULL_FACE_COUNT: u32 = 0x10;
+const HULL_FREE_FACES: u32 = 0xde0;
+const HULL_FACES: u32 = 0xf70;
+const FACE_DISTANCE: u32 = 0x40;
+const FACE_MARK: u32 = 0x44;
+
+/// `NiPersistentSrcTextureRendererData` fields `00e683d0` reads besides the ones above (PC
+/// offsets): the pixel-format kind (+0x18), the pixels (+0x60) and the pixel stride (+0x78).
+const PERSISTENT_FORMAT_KIND: u32 = 0x18;
+const PERSISTENT_PIXELS: u32 = 0x60;
+const PERSISTENT_STRIDE: u32 = 0x78;
+/// The messages of `00e682b0`, `00e683d0` and `00e68920`.
+const CREATE_SURF_PERSISTENT_FAILED: u32 = 0x010e_d260;
+const PERSISTENT_GET_DESC_FAILED: u32 = 0x010e_d328;
+const PERSISTENT_LOCK_FAILED: u32 = 0x010e_d2d0;
+const PERSISTENT_GET_SURFACE_LEVEL_FAILED: u32 = 0x010e_d488;
+
+type Vector4 = crate::sse::Xmm;
+
+/// Four lanes of the 16-byte vector at `addr`.
+fn hull_load(e: &Engine, addr: u32) -> Vector4 {
+    std::array::from_fn(|lane| e.mem.f32(addr.wrapping_add(4 * lane as u32)))
+}
+
+/// Stores four lanes at `addr` (`MOVAPS`, bits kept).
+fn hull_store(e: &mut Engine, addr: u32, v: Vector4) {
+    for (lane, x) in v.iter().enumerate() {
+        e.mem
+            .set_u32(addr.wrapping_add(4 * lane as u32), x.to_bits());
+    }
+}
+
+/// `SHUFPS v,v,imm` with one register as both operands.
+fn hull_shuffle(v: Vector4, imm: u8) -> Vector4 {
+    std::array::from_fn(|lane| v[usize::from((imm >> (2 * lane)) & 3)])
+}
+
+/// The inlined three-lane sum `v[2] + (v[1] + v[0])` (`ADDSS`).
+fn hull_sum3(v: Vector4) -> f32 {
+    use crate::sse::add;
+    add(v[2], add(v[1], v[0]))
+}
+
+/// The inlined cross product `b.zxy * a.yzx - b.yzx * a.zxy` (`SHUFPS` 0xd2 / 0xc9).
+fn hull_cross(a: Vector4, b: Vector4) -> Vector4 {
+    use crate::sse::{mulps, subps};
+    subps(
+        mulps(hull_shuffle(b, 0xd2), hull_shuffle(a, 0xc9)),
+        mulps(hull_shuffle(b, 0xc9), hull_shuffle(a, 0xd2)),
+    )
+}
+
+/// The inlined normalizing scale of `v` (only lane 0 of the exe's register matters): the
+/// `RSQRTSS` estimate `r` of `l² = sum3(v * v)` refined once, `0.5 * r * (3 - l² r r)`, and
+/// 0 when `l²` equals the constant at `01011d78` (`CMPEQSS`/`ANDNPS`). The constants are
+/// read in the exe's order: zero first.
+fn hull_unit_scale(e: &Engine, length2: f32, zero: f32) -> f32 {
+    use crate::sse::{compare, mul, sub};
+    let estimate = crate::x87::rsqrt_estimate(length2);
+    let scaled = mul(mul(length2, estimate), estimate);
+    let three = e.mem.f32(HULL_THREE);
+    let half = e.mem.f32(HULL_HALF);
+    let step = mul(mul(half, estimate), sub(three, scaled));
+    if compare(length2, zero, 0) {
+        0.0
+    } else {
+        step
+    }
+}
+
+/// `v` scaled to unit length as the exe does it (`MULPS` broadcast first).
+fn hull_normalize(e: &Engine, v: Vector4) -> Vector4 {
+    use crate::sse::mulps;
+    let zero = e.mem.f32(HULL_ZERO);
+    let scale = hull_unit_scale(e, hull_sum3(mulps(v, v)), zero);
+    mulps([scale; 4], v)
+}
+
+// Translated from 00e673f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map: the triangle count of a geometry: the index count (+0x10, or
+/// +0x1c when that is 0) divided by 3 (signed, toward zero) when the signed type byte at +8
+/// is 1, else 0.
+pub fn fn_00e673f0(e: &mut Engine, this: Ptr) -> i32 {
+    let this = this.addr();
+    let mut count = e.mem.i32(this + 0x10);
+    if count == 0 {
+        count = e.mem.i32(this + 0x1c);
+    }
+    if e.mem.i8(this + 8) == 1 {
+        count / 3
+    } else {
+        0
+    }
+}
+
+// Translated from 00e67420 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map: the three vertex indices of triangle `triangle`. With a
+/// 16-bit index count (+0x10) the indices are words at +0xc, else with a 32-bit count
+/// (+0x1c) words of 4 bytes at +0x18; the signed type byte at +8 picks a list (1:
+/// `3 * triangle`) or a strip (2: `triangle`) start. Answers true; any other case stores
+/// -1 in all three and answers false.
+pub fn fn_00e67420(
+    e: &mut Engine,
+    this: Ptr,
+    triangle: u32,
+    first: Ptr,
+    second: Ptr,
+    third: Ptr,
+) -> bool {
+    let this = this.addr();
+    let outs = [first.addr(), second.addr(), third.addr()];
+    let kind = e.mem.i8(this + 8);
+    let (array_at, size, start) = if e.mem.u32(this + 0x10) != 0 {
+        match kind {
+            1 => (0x0c, 2u32, triangle.wrapping_mul(3)),
+            2 => (0x0c, 2, triangle),
+            _ => (0, 0, 0),
+        }
+    } else if e.mem.u32(this + 0x1c) != 0 {
+        match kind {
+            1 => (0x18, 4, triangle.wrapping_mul(3)),
+            2 => (0x18, 4, triangle),
+            _ => (0, 0, 0),
+        }
+    } else {
+        (0, 0, 0)
+    };
+    if size == 0 {
+        for out in outs {
+            e.mem.set_u32(out, 0xffff_ffff);
+        }
+        return false;
+    }
+    for (k, out) in outs.iter().enumerate() {
+        let base = e.mem.u32(this + array_at);
+        let at = base.wrapping_add(start.wrapping_add(k as u32).wrapping_mul(size));
+        let index = if size == 2 {
+            u32::from(e.mem.u16(at))
+        } else {
+            e.mem.u32(at)
+        };
+        e.mem.set_u32(*out, index);
+    }
+    true
+}
+
+// Translated from 00e67570 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map: a hull face's plane from its three half-edges' points
+/// (vertex pointers at +0x10, +0x20, +0x30): the normal `cross(p0 - p1, p1 - p2)` (SSE),
+/// stored, then normalized (see `hull_normalize`) and stored again at +0; the distance
+/// `normal · p0` (SSE sum, through a float local and the x87 stack) at +0x40.
+pub fn fn_00e67570(e: &mut Engine, this: Ptr) {
+    use crate::sse::{mulps, subps};
+    let face = this.addr();
+    let p1 = hull_load(e, e.mem.u32(face + 0x20));
+    let p0_at = e.mem.u32(face + 0x10);
+    let p0 = hull_load(e, p0_at);
+    let p2 = hull_load(e, e.mem.u32(face + 0x30));
+    let normal = hull_cross(subps(p0, p1), subps(p1, p2));
+    let unit = hull_normalize(e, normal);
+    hull_store(e, face, normal);
+    hull_store(e, face, unit);
+    let p0 = hull_load(e, p0_at);
+    let distance = hull_sum3(mulps(unit, p0));
+    e.mem
+        .set_u32(face + FACE_DISTANCE, x87_quiet(distance).to_bits());
+}
+
+// Translated from 00e67660 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (recursive): removes `face` and the faces it reaches that
+/// `point` sees. For each of its three edges the twin's face, when unmarked, is classified
+/// (`00e63af0` with the point, the hull and the hull + 4; the answer becomes its mark):
+/// 1 recurses into it (a recursion answering 2 stops the loop), 4 stops with 2; a face
+/// marked 2 (now or before) is on the horizon: the twin edge is linked from its vertex
+/// (+0x30), `*count` is incremented and `*edge` set to it. Then the face's distance becomes
+/// the float at `0104da48` and it goes on the free stack; a full stack (100) answers 2.
+/// Otherwise answers the last recursion's result (0 without one).
+pub fn fn_00e67660(e: &mut Engine, this: Ptr, face: Ptr, point: Ptr, count: Ptr, edge: Ptr) -> u32 {
+    let hull = this.addr();
+    let face_at = face.addr();
+    let mut result = 0u32;
+    for k in 0..3u32 {
+        let twin = e.mem.u32(face_at + 0x18 + 0x10 * k);
+        let other = e.mem.u32(twin + 0xc);
+        let mut mark = e.mem.u32(other + FACE_MARK);
+        if mark == 0 {
+            mark = e
+                .call(HULL_CLASSIFY_FACE, &args![other, point, hull, hull + 4])
+                .u32();
+            e.mem.set_u32(other + FACE_MARK, mark);
+            if mark == 1 {
+                result = fn_00e67660(e, this, Ptr::new(other), point, count, edge);
+                if result == 2 {
+                    break;
+                }
+                continue;
+            }
+            if mark == 4 {
+                result = 2;
+                break;
+            }
+        }
+        if mark == 2 {
+            let vertex = e.mem.u32(twin);
+            e.mem.set_u32(vertex + 0x30, twin);
+            let n = e.mem.u32(count.addr());
+            e.mem.set_u32(count.addr(), n.wrapping_add(1));
+            e.mem.set_u32(edge.addr(), twin);
+        }
+    }
+    let far = x87_quiet_bits(e.mem.u32(HULL_FAR));
+    e.mem.set_u32(face_at + FACE_DISTANCE, far);
+    let free = e.mem.i32(hull + HULL_FREE_COUNT);
+    if free >= 100 {
+        return 2;
+    }
+    e.mem
+        .set_u32(hull + HULL_FREE_FACES + 4 * free as u32, face_at);
+    e.mem.set_i32(hull + HULL_FREE_COUNT, free + 1);
+    result
+}
+
+// Translated from 00e67740 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map: builds `count` new faces from the horizon, starting at
+/// `start` and joining each horizon edge to `point`. The faces come from the free stack
+/// (top first) and then from new records (+0x10 grows); each gets its three half-edges
+/// (`point` on the third, twins with the horizon edge and the neighbours in the ring),
+/// its normal (`cross(vB - vA, vA - point)`, normalized) and distance. A zero squared
+/// normal length (x87 compare) or a missing horizon edge answers 2. The next horizon edge
+/// is the link at +0x30 of the edge's end vertex (cleared). Then all marks are cleared
+/// (`00e67fd0`'s loops) and the answer is 2 unless the walk came back to `start` (0).
+pub fn fn_00e67740(e: &mut Engine, this: Ptr, count: i32, start: Ptr, point: Ptr) -> u32 {
+    use crate::sse::{mulps, subps};
+    let hull = this.addr();
+    let point = point.addr();
+    e.with_stack(0x1c0, |e, frame| {
+        let faces = frame.addr() + 0x30;
+        // Take faces from the free stack.
+        let mut top = e.mem.i32(hull + HULL_FREE_COUNT).wrapping_sub(1);
+        let mut taken = 0u32;
+        let mut remaining = count;
+        if count != 0 {
+            let mut slot = (hull + HULL_FREE_FACES).wrapping_add((top as u32).wrapping_mul(4));
+            loop {
+                if top < 0 {
+                    break;
+                }
+                let face = e.mem.u32(slot);
+                let free = e.mem.u32(hull + HULL_FREE_COUNT);
+                e.mem.set_u32(hull + HULL_FREE_COUNT, free.wrapping_sub(1));
+                e.mem.set_u32(faces + 4 * taken, face);
+                remaining -= 1;
+                taken += 1;
+                top -= 1;
+                slot = slot.wrapping_sub(4);
+                if remaining == 0 {
+                    break;
+                }
+            }
+        }
+        if remaining > 0 {
+            let records = e.mem.i32(hull + HULL_FACE_COUNT);
+            let grown = records.wrapping_add(remaining);
+            let mut offset = (records as u32).wrapping_mul(0x50);
+            for _ in 0..remaining {
+                e.mem.set_u32(faces + 4 * taken, hull + HULL_FACES + offset);
+                offset = offset.wrapping_add(0x50);
+                taken += 1;
+            }
+            e.mem.set_i32(hull + HULL_FACE_COUNT, grown);
+        }
+        // Build the ring.
+        let mut edge = start.addr();
+        if count > 0 {
+            let zero = e.mem.f32(HULL_ZERO);
+            let mut index = 0i32;
+            loop {
+                if edge == 0 {
+                    return 2;
+                }
+                let face = e.mem.u32(faces + 4 * index as u32);
+                let next_index = index + 1;
+                let next = if next_index < count {
+                    e.mem.u32(faces + 4 * next_index as u32)
+                } else {
+                    e.mem.u32(faces)
+                };
+                e.mem.set_u32(face + 0x1c, face);
+                e.mem.set_u32(face + 0x2c, face);
+                e.mem.set_u32(face + 0x3c, face);
+                e.mem.set_u32(face + 0x14, face + 0x20);
+                e.mem.set_u32(face + 0x24, face + 0x30);
+                e.mem.set_u32(face + 0x34, face + 0x10);
+                let end_vertex = e.mem.u32(e.mem.u32(edge + 4));
+                let start_vertex = e.mem.u32(edge);
+                e.mem.set_u32(face + 0x10, end_vertex);
+                e.mem.set_u32(face + 0x30, point);
+                e.mem.set_u32(face + 0x20, start_vertex);
+                e.mem.set_u32(edge + 8, face + 0x10);
+                e.mem.set_u32(face + 0x18, edge);
+                e.mem.set_u32(next + 0x28, face + 0x30);
+                e.mem.set_u32(face + 0x38, next + 0x20);
+                let b = hull_load(e, end_vertex);
+                let a = hull_load(e, start_vertex);
+                let p = hull_load(e, point);
+                let normal = hull_cross(subps(b, a), subps(a, p));
+                let length2 = hull_sum3(mulps(normal, normal));
+                if f64::from(length2) == 0.0 {
+                    return 2;
+                }
+                let scale = hull_unit_scale(e, length2, zero);
+                let unit = mulps([scale; 4], normal);
+                let distance = hull_sum3(mulps(b, unit));
+                e.mem
+                    .set_u32(face + FACE_DISTANCE, x87_quiet(distance).to_bits());
+                hull_store(e, face, unit);
+                let vertex = e.mem.u32(e.mem.u32(edge + 4));
+                edge = e.mem.u32(vertex + 0x30);
+                e.mem.set_u32(vertex + 0x30, 0);
+                index = next_index;
+                if index >= count {
+                    break;
+                }
+            }
+        }
+        fn_00e67fd0(e, this);
+        if start.addr() != edge {
+            2
+        } else {
+            0
+        }
+    })
+}
+
+// Translated from 00e679d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map: builds the initial tetrahedron: four face records (+0x10 = 4),
+/// each with its half-edge ring, mark 0, and per edge its face, the vertex at
+/// `this + 0x20 + table[0]` and the twin at `this + 0xf80 + table[1] + table[2]` from the
+/// table at `010ed0f0`. The fourth face's plane is computed (`00e67570`); when vertex 0
+/// (+0x20) lies in front of it (`(v0 - v1) · normal > 0`, x87 compare) vertices 0 and 1
+/// (+0x20, +0x60) are swapped on six edges; then all four planes are computed.
+pub fn fn_00e679d0(e: &mut Engine, this: Ptr) {
+    use crate::sse::{mulps, subps};
+    let hull = this.addr();
+    e.mem.set_u32(hull + HULL_FACE_COUNT, 4);
+    let mut table = HULL_EDGE_TABLE;
+    for face_index in 0..4u32 {
+        let face = hull + HULL_FACES + 0x50 * face_index;
+        e.mem.set_u32(face + 0x14, face + 0x20);
+        e.mem.set_u32(face + 0x24, face + 0x30);
+        e.mem.set_u32(face + FACE_MARK, 0);
+        e.mem.set_u32(face + 0x34, face + 0x10);
+        for k in 0..3u32 {
+            let edge = face + 0x10 + 0x10 * k;
+            e.mem.set_u32(edge + 0xc, face);
+            let vertex = e.mem.u32(table).wrapping_add(hull).wrapping_add(0x20);
+            e.mem.set_u32(edge, vertex);
+            let twin = e
+                .mem
+                .u32(table + 8)
+                .wrapping_add(e.mem.u32(table + 4))
+                .wrapping_add(hull)
+                .wrapping_add(0xf80);
+            e.mem.set_u32(edge + 8, twin);
+            table += 0xc;
+        }
+    }
+    let last = hull + 0x1060;
+    fn_00e67570(e, Ptr::new(last));
+    let v1 = hull_load(e, hull + 0x60);
+    let v0 = hull_load(e, hull + 0x20);
+    let normal = hull_load(e, last);
+    let side = hull_sum3(mulps(subps(v0, v1), normal));
+    if 0.0 < f64::from(side) {
+        let (first, second) = (hull + 0x60, hull + 0x20);
+        e.mem.set_u32(hull + 0x1020, first);
+        e.mem.set_u32(hull + 0xfd0, first);
+        e.mem.set_u32(hull + 0xf80, first);
+        e.mem.set_u32(hull + 0x1070, second);
+        e.mem.set_u32(hull + 0xfe0, second);
+        e.mem.set_u32(hull + 0xfa0, second);
+    }
+    for face_index in 0..4u32 {
+        fn_00e67570(e, Ptr::new(hull + HULL_FACES + 0x50 * face_index));
+    }
+}
+
+// Translated from 00e67ae0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map: walks from `face` across edges to the face to work on. Marks
+/// are cleared first (`00e67fd0`); each face reached is marked 3. For its edges other than
+/// the one it was entered by, with `d = edge` and `c = cross(d, normal)` (SSE), an edge
+/// qualifies when `l² * scale > (c · v0) * |c · v0|` (x87, the doubles at `010eb190` and
+/// `0106b9e8`): the walk crosses it when the start face's distance is not above 0, or its
+/// distance times the second double is not above the neighbour's (NaN crossing). It stops
+/// on a face without a crossing (answered) or on reaching a face already marked 3 (that
+/// face is answered).
+pub fn fn_00e67ae0(e: &mut Engine, this: Ptr, face: Ptr) -> Ptr {
+    use crate::sse::{mulps, subps};
+    fn_00e67fd0(e, this);
+    let edge_scale = x87_load64(e.mem.u64(HULL_EDGE_SCALE));
+    let plane_scale = x87_load64(e.mem.u64(HULL_PLANE_SCALE));
+    let start = face.addr();
+    let mut current = start;
+    let mut entered = 0u32;
+    loop {
+        e.mem.set_u32(current + FACE_MARK, 3);
+        let mut crossing = None;
+        for k in 0..3u32 {
+            let edge = current + 0x10 + 0x10 * k;
+            if edge == entered {
+                continue;
+            }
+            let v0 = hull_load(e, e.mem.u32(edge));
+            let v1 = hull_load(e, e.mem.u32(e.mem.u32(edge + 4)));
+            let d = subps(v1, v0);
+            let length2 = hull_sum3(mulps(d, d));
+            let normal = hull_load(e, current);
+            let c = subps(
+                mulps(hull_shuffle(d, 0xc9), hull_shuffle(normal, 0xd2)),
+                mulps(hull_shuffle(d, 0xd2), hull_shuffle(normal, 0xc9)),
+            );
+            let side = x87_load32(hull_sum3(mulps(c, v0)).to_bits());
+            let magnitude = x87_store32(side.abs());
+            let weighted = x87_mul(side, x87_m32(magnitude));
+            let limit = x87_load32(x87_store32(x87_mul(
+                x87_load32(length2.to_bits()),
+                edge_scale,
+            )));
+            if !(limit > weighted) {
+                continue;
+            }
+            let twin = e.mem.u32(edge + 8);
+            let neighbour = e.mem.u32(twin + 0xc);
+            let start_distance = e.mem.u32(start + FACE_DISTANCE);
+            let crosses = if !(0.0 < x87_m32(start_distance)) {
+                true
+            } else {
+                let theirs = x87_load32(e.mem.u32(neighbour + FACE_DISTANCE));
+                let ours = x87_mul(x87_load32(start_distance), plane_scale);
+                !(ours > theirs)
+            };
+            if crosses {
+                crossing = Some((k, neighbour));
+                break;
+            }
+        }
+        let Some((k, neighbour)) = crossing else {
+            return Ptr::new(current);
+        };
+        let done = e.mem.u32(neighbour + FACE_MARK) == 3;
+        entered = e.mem.u32(current + 0x18 + 0x10 * k);
+        current = neighbour;
+        if done {
+            return Ptr::new(current);
+        }
+    }
+}
+
+// Translated from 00e67c50 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (cdecl, five words; nothing references it): finds the closest
+/// pair of planes of two hulls and the direction between them. For each face of `first`
+/// (last to first) whose squared distance does not exceed the best, and each face of
+/// `second` from its last down to index 1 likewise, with `c` the normals' cosine (SSE) not
+/// below the limit at `0102295c`: with `a`, `b` the two distances, `p = a - c b` and
+/// `q = b - c a` (x87, stored as floats) the pair's squared distance and weights are, when
+/// both exceed the epsilon at `0104da4c`, from the 2x2 solve (`q / p` or `p / q`, whichever
+/// is below 1), else `a²` with (1, 0) when `b > 0`, else `b²` with (0, 1) when `a` exceeds
+/// the epsilon, else `-c²` with (0.5, 0.5). A smaller value replaces the best, its weights
+/// and the two faces (`*first_face`, `*second_face`). At the end `direction` gets the
+/// normalized `wb * nB + wa * nA` (SSE) and its fourth lane the CRT square root of the best
+/// (0 when negative).
+pub fn fn_00e67c50(
+    e: &mut Engine,
+    first: Ptr,
+    second: Ptr,
+    direction: Ptr,
+    first_face: Ptr,
+    second_face: Ptr,
+) {
+    use crate::sse::{addps, mulps};
+    let store = |value: f64| x87_load32(x87_store32(value));
+    let mut best = store(x87_load32(e.mem.u32(HULL_FAR)));
+    let mut weight_a = 0.0f64;
+    let mut weight_b = 0.0f64;
+    let one = 1.0f64;
+    let zero = 0.0f64;
+    let first = first.addr();
+    let second = second.addr();
+    let mut index_a = e.mem.i32(first + HULL_FACE_COUNT).wrapping_sub(1);
+    while index_a >= 0 {
+        let face_a = first + HULL_FACES + 0x50 * index_a as u32;
+        let distance_a = x87_load32(e.mem.u32(face_a + FACE_DISTANCE));
+        let square_a = x87_mul(distance_a, distance_a);
+        let count_b = e.mem.i32(second + HULL_FACE_COUNT).wrapping_sub(1);
+        if !(best < square_a) && count_b >= 1 {
+            let mut index_b = count_b;
+            while index_b != 0 {
+                let face_b = second + HULL_FACES + 0x50 * index_b as u32;
+                let distance_b = x87_load32(e.mem.u32(face_b + FACE_DISTANCE));
+                let square_b = x87_mul(distance_b, distance_b);
+                if !(best < square_b) {
+                    let limit = x87_load32(e.mem.u32(HULL_COSINE_LIMIT));
+                    let normal_a = hull_load(e, face_a);
+                    let normal_b = hull_load(e, face_b);
+                    let c = x87_load32(hull_sum3(mulps(normal_b, normal_a)).to_bits());
+                    if !(c < limit) {
+                        let a = store(x87_load32(e.mem.u32(face_a + FACE_DISTANCE)));
+                        let b = store(x87_load32(e.mem.u32(face_b + FACE_DISTANCE)));
+                        let p = store(x87_sub(a, x87_mul(c, b)));
+                        let q = store(x87_sub(b, x87_mul(c, a)));
+                        let epsilon = x87_load32(e.mem.u32(HULL_EPSILON));
+                        let (value, wa, wb) = if p > epsilon {
+                            if q > epsilon {
+                                let (x, w, u, v) = if q < p {
+                                    let r = store(x87_div(q, p));
+                                    let denominator = x87_add(x87_mul(c, r), one);
+                                    let u = store(x87_div(one, denominator));
+                                    let v = store(x87_mul(u, r));
+                                    let w = store(x87_div(a, denominator));
+                                    (store(x87_mul(r, w)), w, u, v)
+                                } else {
+                                    let r = store(x87_div(p, q));
+                                    let denominator = x87_add(x87_mul(c, r), one);
+                                    let v = store(x87_div(one, denominator));
+                                    let u = store(x87_mul(r, v));
+                                    let x = store(x87_div(b, denominator));
+                                    (x, store(x87_mul(r, x)), u, v)
+                                };
+                                let y = store(x87_add(x87_mul(c, x), w));
+                                let c2 = x87_mul(c, c);
+                                let spread = x87_sub(one, c2);
+                                let xs = x87_mul(spread, x);
+                                let xx = x87_mul(x, xs);
+                                let yy = x87_mul(y, y);
+                                (store(x87_add(yy, xx)), u, v)
+                            } else if b > zero {
+                                (store(x87_mul(a, a)), one, store(zero))
+                            } else {
+                                let half = x87_load32(e.mem.u32(HULL_HALF));
+                                (store(x87_mul(c, -c)), store(half), store(half))
+                            }
+                        } else if epsilon < a {
+                            (store(x87_mul(b, b)), store(zero), one)
+                        } else {
+                            let half = x87_load32(e.mem.u32(HULL_HALF));
+                            (store(x87_mul(c, -c)), store(half), store(half))
+                        };
+                        if best > value {
+                            weight_a = wa;
+                            e.mem.set_u32(first_face.addr(), face_a);
+                            weight_b = wb;
+                            e.mem.set_u32(second_face.addr(), face_b);
+                            best = value;
+                        }
+                    }
+                }
+                index_b -= 1;
+            }
+        }
+        index_a -= 1;
+    }
+    let face_a = e.mem.u32(first_face.addr());
+    let scaled_a = mulps(
+        [f32::from_bits(x87_store32(weight_a)); 4],
+        hull_load(e, face_a),
+    );
+    hull_store(e, direction.addr(), scaled_a);
+    let face_b = e.mem.u32(second_face.addr());
+    let zero_bits = e.mem.f32(HULL_ZERO);
+    let sum = addps(
+        mulps(
+            [f32::from_bits(x87_store32(weight_b)); 4],
+            hull_load(e, face_b),
+        ),
+        scaled_a,
+    );
+    let scale = hull_unit_scale(e, hull_sum3(mulps(sum, sum)), zero_bits);
+    hull_store(e, direction.addr(), mulps([scale; 4], sum));
+    let floor = f64::from_bits(e.mem.u64(HULL_DOUBLE_ZERO));
+    let clamped = if best < floor { zero } else { best };
+    let root = e
+        .call(HULL_SQRT, &args![x87_load32(x87_store32(clamped))])
+        .f64();
+    let root = x87_store32(x87_load32(x87_store32(root)));
+    e.mem.set_u32(direction.addr() + 0xc, root);
+}
+
+// Translated from 00e682b0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (the persistent-data counterpart of `00e68010`; one call site
+/// in `00e68ef0`): creates the Direct3D texture for persistent data in the Direct3D format
+/// `format`. The level count is the data's (+0x74) when both sides are powers of two or the
+/// renderer allows other sizes (capability bit 8), else 1; the rest is `00e68010`'s: mipmap
+/// flag, skipped levels and halved sides, `CreateTexture` (dynamic or managed). Success with
+/// a texture stores it at +0x64 and answers true; otherwise the message `010ed260` is
+/// printed with the format and the error, +0x64 cleared, false.
+pub fn fn_00e682b0(
+    e: &mut Engine,
+    this: Ptr<NiDX9SourceTextureData>,
+    persistent: Ptr,
+    format: u32,
+) -> bool {
+    let width = e.get(this, NiDX9SourceTextureData::m_uiWidth);
+    let height = e.get(this, NiDX9SourceTextureData::m_uiHeight);
+    let mut full_chain = is_power_of_two(width) && is_power_of_two(height);
+    if !full_chain {
+        let renderer = e.get(this, NiDX9SourceTextureData::m_pkRenderer);
+        let caps = e.vcall(renderer, RENDERER_CAPS_SLOT, &args![]).u32();
+        full_chain = caps & CAPS_NONPOW2 != 0;
+    }
+    let levels = if full_chain {
+        e.mem.u32(persistent.addr() + PERSISTENT_LEVELS)
+    } else {
+        1
+    };
+    e.set(this, NiDX9SourceTextureData::m_uiLevels, levels);
+    e.set(
+        this,
+        NiDX9SourceTextureData::m_bMipmap,
+        u8::from(levels != 1),
+    );
+    let mut skipped = e.mem.u32(SKIP_LEVELS);
+    if skipped > levels.wrapping_sub(1) {
+        skipped = levels.wrapping_sub(1);
+    }
+    if skipped != 0 {
+        let mut width = e.get(this, NiDX9SourceTextureData::m_uiWidth);
+        let mut height = e.get(this, NiDX9SourceTextureData::m_uiHeight);
+        for _ in 0..skipped {
+            if width & 1 != 0 {
+                width = width.wrapping_add(1);
+            }
+            width >>= 1;
+            if height & 1 != 0 {
+                height = height.wrapping_add(1);
+            }
+            height >>= 1;
+        }
+        e.set(this, NiDX9SourceTextureData::m_uiWidth, width);
+        e.set(this, NiDX9SourceTextureData::m_uiHeight, height);
+    }
+    e.set(this, NiDX9SourceTextureData::m_uiLevelsSkipped, skipped);
+    e.with_stack(4, |e, texture_out| {
+        let texture_out = texture_out.addr();
+        let renderer = e.get(this, NiDX9SourceTextureData::m_pkRenderer);
+        let device = e.mem.u32(renderer + RENDERER_DEVICE);
+        let dynamic = e.mem.u8(DYNAMIC_TEXTURES);
+        let pool = u32::from(dynamic == 0);
+        let usage = if dynamic != 0 { D3DUSAGE_DYNAMIC } else { 0 };
+        let height = e.get(this, NiDX9SourceTextureData::m_uiHeight);
+        e.mem.set_u32(texture_out, 0);
+        let width = e.get(this, NiDX9SourceTextureData::m_uiWidth);
+        let result = e
+            .vcall(
+                device,
+                D3D_CREATE_TEXTURE,
+                &args![
+                    width,
+                    height,
+                    levels.wrapping_sub(skipped),
+                    usage,
+                    format,
+                    pool,
+                    texture_out,
+                    0u32
+                ],
+            )
+            .u32();
+        let texture = e.mem.u32(texture_out);
+        if (result as i32) >= 0 && texture != 0 {
+            e.set(this, NiDX9SourceTextureData::m_pkD3DTexture, texture);
+            return true;
+        }
+        print_error(e, CREATE_SURF_PERSISTENT_FAILED, &[format], result);
+        e.set(this, NiDX9SourceTextureData::m_pkD3DTexture, 0);
+        false
+    })
+}
+
+// Translated from 00e683d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (cdecl, four words: persistent data, level, surface, face; the
+/// persistent-data counterpart of `00e68150`): reads the surface's description and locks it
+/// (failures print `010ed328` / `010ed2d0` with the error and return), then copies the level
+/// into it with `00e68150`'s rules (row = stride (+0x78) * width, height at most the
+/// surface's, compressed kinds 4..6 by block rows), from
+/// `offsets[levels] * face + offsets[level]` into the pixels (+0x60); the surface is
+/// unlocked.
+pub fn fn_00e683d0(e: &mut Engine, persistent: Ptr, level: u32, surface: Ptr, face: u32) {
+    let data = persistent.addr();
+    let surface = surface.addr();
+    e.with_stack(0x2c, |e, frame| {
+        let frame = frame.addr();
+        let locked = frame + 4;
+        let desc = frame + 0xc;
+        let result = e.vcall(surface, D3D_SURFACE_GET_DESC, &args![desc]).u32();
+        if (result as i32) < 0 {
+            print_error(e, PERSISTENT_GET_DESC_FAILED, &[], result);
+            return;
+        }
+        let result = e
+            .vcall(surface, D3D_SURFACE_LOCK_RECT, &args![locked, 0u32, 0u32])
+            .u32();
+        if (result as i32) < 0 {
+            print_error(e, PERSISTENT_LOCK_FAILED, &[], result);
+            return;
+        }
+        let widths = e.mem.u32(data + PERSISTENT_WIDTHS);
+        let mut pitch = e.mem.u32(locked);
+        let width = e.mem.u32(widths.wrapping_add(4 * level));
+        let heights = e.mem.u32(data + PERSISTENT_HEIGHTS);
+        let mut height = e.mem.u32(heights.wrapping_add(4 * level));
+        let surface_height = e.mem.u32(desc + 0x1c);
+        let mut row = e.mem.u32(data + PERSISTENT_STRIDE).wrapping_mul(width);
+        if height > surface_height {
+            height = surface_height;
+        }
+        let kind = e.mem.i32(data + PERSISTENT_FORMAT_KIND);
+        if (FORMAT_DXT1..=FORMAT_DXT5).contains(&kind) {
+            pitch >>= 2;
+            row = width.wrapping_add(3);
+            if e.mem.u32(desc) == FOURCC_DXT1 {
+                row = (row >> 1) & 0x07ff_fffe;
+            } else {
+                row &= 0x0fff_fffc;
+            }
+            height = height.wrapping_add(3) & 0x0fff_fffc;
+        }
+        let offsets = e.mem.u32(data + PERSISTENT_OFFSETS);
+        let levels = e.mem.u32(data + PERSISTENT_LEVELS);
+        let face_size = e.mem.u32(offsets.wrapping_add(4 * levels));
+        let source = face_size
+            .wrapping_mul(face)
+            .wrapping_add(e.mem.u32(offsets.wrapping_add(4 * level)))
+            .wrapping_add(e.mem.u32(data + PERSISTENT_PIXELS));
+        let bits = e.mem.u32(locked + 4);
+        if row == pitch {
+            e.call(MEMCPY, &args![bits, source, height.wrapping_mul(row)]);
+        } else {
+            let copy = if row > pitch { pitch } else { row };
+            e.mem.set_u32(frame, copy);
+            let (mut to, mut from) = (bits, source);
+            for _ in 0..height {
+                let copy = e.mem.u32(frame);
+                e.call(MEMCPY, &args![to, from, copy]);
+                to = to.wrapping_add(e.mem.u32(locked));
+                from = from.wrapping_add(row);
+            }
+        }
+        e.vcall(surface, D3D_SURFACE_UNLOCK_RECT, &args![]);
+    });
+}
+
+// Translated from 00e687e0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (a vtable word of six classes): stores the word at +0x64 (the
+/// Direct3D texture slot of `NiDX9SourceTextureData`).
+pub fn fn_00e687e0(e: &mut Engine, this: Ptr, value: u32) {
+    e.mem.set_u32(this.addr() + 0x64, value);
+}
+
+// Translated from 00e68820 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (a vtable word): answers the word at +0x74
+/// (`NiDX9SourceTextureData::m_spPalette`).
+pub fn fn_00e68820(e: &mut Engine, this: Ptr) -> u32 {
+    e.mem.u32(this.addr() + 0x74)
+}
+
+// Translated from 00e68920 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (the persistent-data counterpart of `00e68870`): nothing
+/// without a Direct3D texture or for a cube or volume texture; otherwise each level from
+/// the skipped ones on (count `levels - skipped`, re-read) gets its surface
+/// (`GetSurfaceLevel`), the persistent data copied in (`00e683d0`, face 0) and the surface
+/// released; a failed `GetSurfaceLevel` prints `010ed488` with the level and the error and
+/// stops.
+pub fn fn_00e68920(e: &mut Engine, this: Ptr<NiDX9SourceTextureData>, persistent: Ptr) {
+    let texture = e.get(this, NiDX9SourceTextureData::m_pkD3DTexture);
+    if texture == 0 {
+        return;
+    }
+    if e.vcall(texture, D3D_GET_TYPE, &args![]).u32() == D3DRTYPE_CUBETEXTURE {
+        return;
+    }
+    let texture = e.get(this, NiDX9SourceTextureData::m_pkD3DTexture);
+    if e.vcall(texture, D3D_GET_TYPE, &args![]).u32() == D3DRTYPE_VOLUMETEXTURE {
+        return;
+    }
+    let levels = e.get(this, NiDX9SourceTextureData::m_uiLevels);
+    let texture = e.get(this, NiDX9SourceTextureData::m_pkD3DTexture);
+    let skipped = e.get(this, NiDX9SourceTextureData::m_uiLevelsSkipped);
+    if levels.wrapping_sub(skipped) == 0 {
+        return;
+    }
+    e.with_stack(4, |e, slot| {
+        let slot = slot.addr();
+        let mut level = 0u32;
+        loop {
+            let result = e
+                .vcall(texture, D3D_GET_SURFACE_LEVEL, &args![level, slot])
+                .u32();
+            if (result as i32) < 0 {
+                print_error(e, PERSISTENT_GET_SURFACE_LEVEL_FAILED, &[level], result);
+                return;
+            }
+            let surface = e.mem.u32(slot);
+            let skipped = e.get(this, NiDX9SourceTextureData::m_uiLevelsSkipped);
+            fn_00e683d0(
+                e,
+                persistent,
+                skipped.wrapping_add(level),
+                Ptr::new(surface),
+                0,
+            );
+            let surface = e.mem.u32(slot);
+            e.vcall(surface, D3D_RELEASE, &args![]);
+            let levels = e.get(this, NiDX9SourceTextureData::m_uiLevels);
+            let skipped = e.get(this, NiDX9SourceTextureData::m_uiLevelsSkipped);
+            level += 1;
+            if level >= levels.wrapping_sub(skipped) {
+                return;
+            }
+        }
+    });
+}
+
+// Translated from 00e689d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (a vtable word of `NiDX9SourceTextureData`): refreshes the
+/// texture from its source pixel data. Nothing for replacement data (+0x6c) or a texture
+/// without pixel data (`NiSourceTexture` +0x3c). A palette on the pixel data (+0x4c) whose
+/// revision (+0x10) or pointer differs from the stored ones (+0x80, +0x74: assigned through
+/// `00a5f860`) marks a change; with no change and the same pixel revision (+0x68 against
+/// +0x7c) nothing more happens. Otherwise the image converter (`00a76640`, vtable +0x14 with
+/// the pixel data, the pixel format at +0x14, the pixel data and the mipmap byte) gives new
+/// pixel data, the revision is stored, the data is copied to the surface (`00e68870`) while
+/// the texture (+8) is set, and the new data's reference is taken and released (deleted at
+/// zero through vtable +4).
+pub fn fn_00e689d0(e: &mut Engine, this: Ptr<NiDX9SourceTextureData>) {
+    let data = this.addr();
+    if e.get(this, NiDX9SourceTextureData::m_bReplacementData) != 0 {
+        return;
+    }
+    let texture = e.get(this, NiDX9SourceTextureData::m_pkTexture);
+    let pixel_data = e.mem.u32(texture + SOURCE_PIXEL_DATA);
+    if pixel_data == 0 {
+        return;
+    }
+    let palette = e.mem.u32(pixel_data + PIXEL_DATA_PALETTE);
+    let mut changed = false;
+    if palette != 0 {
+        let revision = e.mem.u32(palette + PALETTE_REVISION);
+        if e.get(this, NiDX9SourceTextureData::m_uiPalRevID) != revision {
+            changed = true;
+        }
+        let stored = e.get(this, NiDX9SourceTextureData::m_spPalette);
+        e.set(this, NiDX9SourceTextureData::m_uiPalRevID, revision);
+        if stored != palette {
+            e.call(POINTER_ASSIGN, &args![data + 0x74, palette]);
+            changed = true;
+        }
+    }
+    let revision = e.mem.u32(pixel_data + PIXEL_DATA_REVISION);
+    if revision == e.get(this, NiDX9SourceTextureData::m_uiSourceRevID) && !changed {
+        return;
+    }
+    let converter = e.call(GET_IMAGE_CONVERTER, &args![]).u32();
+    let mipmap = u32::from(e.get(this, NiDX9SourceTextureData::m_bMipmap));
+    let converted = e
+        .vcall(
+            converter,
+            CONVERTER_CONVERT_SLOT,
+            &args![pixel_data, data + PIXEL_FORMAT, pixel_data, mipmap],
+        )
+        .u32();
+    let texture_set = e.get(this, NiDX9SourceTextureData::m_pkTexture) != 0;
+    let revision = e.mem.u32(pixel_data + PIXEL_DATA_REVISION);
+    e.set(this, NiDX9SourceTextureData::m_uiSourceRevID, revision);
+    if texture_set {
+        fn_00e68870(e, this, Ptr::new(converted));
+    }
+    if converted != 0 {
+        e.call(INTERLOCKED_INCREMENT, &args![converted + REF_COUNT]);
+        release(e, converted);
+    }
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -1327,6 +2242,23 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00e68870, fn_00e68870(Ptr<NiDX9SourceTextureData>, Ptr)),
         entry!(0x00e68a80, fn_00e68a80(Ptr, Ptr, Ptr, Ptr, Ptr) -> bool),
         entry!(0x00e68ef0, fn_00e68ef0(Ptr, Ptr) -> Ptr),
+        entry!(0x00e6_73f0, fn_00e673f0(Ptr) -> i32),
+        entry!(0x00e6_7420, fn_00e67420(Ptr, u32, Ptr, Ptr, Ptr) -> bool),
+        entry!(0x00e6_7570, fn_00e67570(Ptr)),
+        entry!(0x00e6_7660, fn_00e67660(Ptr, Ptr, Ptr, Ptr, Ptr) -> u32),
+        entry!(0x00e6_7740, fn_00e67740(Ptr, i32, Ptr, Ptr) -> u32),
+        entry!(0x00e6_79d0, fn_00e679d0(Ptr)),
+        entry!(0x00e6_7ae0, fn_00e67ae0(Ptr, Ptr) -> Ptr),
+        entry!(0x00e6_7c50, fn_00e67c50(Ptr, Ptr, Ptr, Ptr, Ptr)),
+        entry!(
+            0x00e6_82b0,
+            fn_00e682b0(Ptr<NiDX9SourceTextureData>, Ptr, u32) -> bool
+        ),
+        entry!(0x00e6_83d0, fn_00e683d0(Ptr, u32, Ptr, u32)),
+        entry!(0x00e6_87e0, fn_00e687e0(Ptr, u32)),
+        entry!(0x00e6_8820, fn_00e68820(Ptr) -> u32),
+        entry!(0x00e6_8920, fn_00e68920(Ptr<NiDX9SourceTextureData>, Ptr)),
+        entry!(0x00e6_89d0, fn_00e689d0(Ptr<NiDX9SourceTextureData>)),
     ]
 }
 
@@ -2265,5 +3197,661 @@ mod tests {
         );
         assert_eq!(e.mem.u8(object + 0x6c), 1);
         assert_eq!((e.mem.u32(object + 0xc), e.mem.u32(object + 0x10)), (4, 4));
+    }
+}
+
+#[cfg(test)]
+mod n081_tests {
+    use super::*;
+
+    fn calls_to(e: &Engine, callee: u32) -> Vec<Vec<u32>> {
+        e.call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|(address, _)| *address == callee)
+            .map(|(_, words)| words.clone())
+            .collect()
+    }
+
+    fn word(eax: u32) -> Ret {
+        Ret {
+            eax,
+            ..Ret::default()
+        }
+    }
+
+    fn object_with(e: &mut Engine, slots: &[(u32, u32)]) -> u32 {
+        let object = e.mem.alloc(0x100);
+        let vtable = e.mem.alloc(0x200);
+        e.mem.set_u32(object, vtable);
+        for &(slot, target) in slots {
+            e.mem.set_u32(vtable + slot, target);
+        }
+        object
+    }
+
+    fn quiet_prints(e: &mut Engine) {
+        e.register(ERROR_STRING, |_, a| word(a[0] ^ 0xffff_0000));
+        e.register(DEBUG_PRINT, |_, _| Ret::default());
+    }
+
+    fn constants(e: &mut Engine) {
+        e.map(0x0101_0000, 0x0010_0000);
+        e.mem.set_f32(HULL_ZERO, 0.0);
+        e.mem.set_f32(HULL_THREE, 3.0);
+        e.mem.set_f32(HULL_HALF, 0.5);
+        e.mem.set_u32(HULL_FAR, 0x7f7f_ffee);
+        e.mem.set_f32(HULL_COSINE_LIMIT, -0.5);
+        e.mem.set_u32(HULL_EPSILON, 0x3400_0000);
+        e.mem.set_f64(HULL_DOUBLE_ZERO, 0.0);
+    }
+
+    fn close(a: [f32; 4], b: [f32; 4]) -> bool {
+        a.iter().zip(b.iter()).all(|(x, y)| (x - y).abs() < 2e-3)
+    }
+
+    #[test]
+    fn triangle_count_and_indices() {
+        let mut e = Engine::new();
+        let g = e.mem.alloc(0x20);
+        for (kind, count16, count32, want) in [
+            (1i8, 9u32, 0u32, 3i32),
+            (1, 0, 7, 2),
+            (2, 9, 0, 0),
+            (1, 0xffff_fff9, 0, -2),
+        ] {
+            e.mem.set_i8(g + 8, kind);
+            e.mem.set_u32(g + 0x10, count16);
+            e.mem.set_u32(g + 0x1c, count32);
+            assert_eq!(e.call(0x00e6_73f0, &args![g]).i32(), want);
+        }
+        let words = e.mem.alloc(16);
+        for i in 0..8u32 {
+            e.mem.set_u16(words + 2 * i, (10 + i) as u16);
+        }
+        let dwords = e.mem.alloc(32);
+        for i in 0..8u32 {
+            e.mem.set_u32(dwords + 4 * i, 20 + i);
+        }
+        e.mem.set_u32(g + 0xc, words);
+        e.mem.set_u32(g + 0x18, dwords);
+        let outs = e.mem.alloc(12);
+        let get = |e: &mut Engine, t: u32| {
+            let ok = e
+                .call(0x00e6_7420, &args![g, t, outs, outs + 4, outs + 8])
+                .bool();
+            (
+                ok,
+                [e.mem.u32(outs), e.mem.u32(outs + 4), e.mem.u32(outs + 8)],
+            )
+        };
+        e.mem.set_u32(g + 0x10, 6);
+        e.mem.set_i8(g + 8, 1);
+        assert_eq!(get(&mut e, 1), (true, [13, 14, 15]));
+        e.mem.set_i8(g + 8, 2);
+        assert_eq!(get(&mut e, 1), (true, [11, 12, 13]));
+        e.mem.set_i8(g + 8, 3);
+        assert_eq!(get(&mut e, 1), (false, [u32::MAX; 3]));
+        e.mem.set_u32(g + 0x10, 0);
+        e.mem.set_u32(g + 0x1c, 6);
+        e.mem.set_i8(g + 8, 1);
+        assert_eq!(get(&mut e, 1), (true, [23, 24, 25]));
+        e.mem.set_i8(g + 8, 2);
+        assert_eq!(get(&mut e, 2), (true, [22, 23, 24]));
+        e.mem.set_u32(g + 0x1c, 0);
+        assert_eq!(get(&mut e, 0), (false, [u32::MAX; 3]));
+    }
+
+    /// A hull block with vertex records at +0x20 (stride 0x40) holding `points`.
+    fn hull(e: &mut Engine, points: &[[f32; 4]]) -> u32 {
+        let hull = e.mem.alloc(0x1200);
+        for (i, p) in points.iter().enumerate() {
+            hull_store(e, hull + 0x20 + 0x40 * i as u32, *p);
+        }
+        hull
+    }
+
+    #[test]
+    fn face_plane_from_its_three_points() {
+        let mut e = Engine::new();
+        constants(&mut e);
+        let h = hull(
+            &mut e,
+            &[
+                [0.0, 0.0, 2.0, 0.0],
+                [1.0, 0.0, 2.0, 0.0],
+                [0.0, 1.0, 2.0, 0.0],
+            ],
+        );
+        let face = h + HULL_FACES;
+        for k in 0..3u32 {
+            e.mem.set_u32(face + 0x10 + 0x10 * k, h + 0x20 + 0x40 * k);
+        }
+        e.call(0x00e6_7570, &args![face]);
+        assert!(close(hull_load(&e, face), [0.0, 0.0, 1.0, 0.0]));
+        assert!((e.mem.f32(face + 0x40) - 2.0).abs() < 2e-3);
+    }
+
+    #[test]
+    fn tetrahedron_edges_and_the_orientation_swap() {
+        let mut e = Engine::new();
+        constants(&mut e);
+        let table: [u32; 36] = [
+            0x00, 0xa0, 0x20, 0x80, 0xf0, 0x00, 0x40, 0x50, 0x00, 0x00, 0x00, 0x20, 0x40, 0xf0,
+            0x20, 0xc0, 0xa0, 0x00, 0x00, 0x50, 0x20, 0xc0, 0xf0, 0x10, 0x80, 0x00, 0x00, 0x40,
+            0x00, 0x10, 0x80, 0xa0, 0x10, 0xc0, 0x50, 0x10,
+        ];
+        for (i, w) in table.iter().enumerate() {
+            e.mem.set_u32(HULL_EDGE_TABLE + 4 * i as u32, *w);
+        }
+        for (v0, swapped) in [
+            ([0.0f32, 0.0, 0.0, 0.0], false),
+            ([2.0, 2.0, 2.0, 0.0], true),
+        ] {
+            let h = hull(
+                &mut e,
+                &[
+                    v0,
+                    [1.0, 0.0, 0.0, 0.0],
+                    [0.0, 1.0, 0.0, 0.0],
+                    [0.0, 0.0, 1.0, 0.0],
+                ],
+            );
+            e.call(0x00e6_79d0, &args![h]);
+            assert_eq!(e.mem.u32(h + 0x10), 4);
+            // Face 0, edge 1: its face, and the twin at +0xf80 + 0xf0.
+            let f0 = h + HULL_FACES;
+            assert_eq!(e.mem.u32(f0 + 0x2c), f0);
+            assert_eq!(e.mem.u32(f0 + 0x28), h + 0xf80 + 0xf0);
+            assert_eq!(e.mem.u32(f0 + 0x14), f0 + 0x20);
+            assert_eq!(e.mem.u32(f0 + 0x34), f0 + 0x10);
+            let first = if swapped { h + 0x60 } else { h + 0x20 };
+            assert_eq!(e.mem.u32(h + 0xf80), first);
+            let second = if swapped { h + 0x20 } else { h + 0x60 };
+            assert_eq!(e.mem.u32(h + 0x1070), second);
+            if !swapped {
+                // Face 3 is (v1, v2, v3): normal along (1, 1, 1).
+                let n = hull_load(&e, h + 0x1060);
+                let s = 1.0 / 3.0f32.sqrt();
+                assert!(close(n, [s, s, s, 0.0]), "{n:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn remove_faces_marks_the_horizon_and_frees_faces() {
+        let mut e = Engine::new();
+        constants(&mut e);
+        let h = hull(&mut e, &[]);
+        let f0 = e.mem.alloc(0x50);
+        let a = e.mem.alloc(0x50);
+        let b = e.mem.alloc(0x50);
+        let c = e.mem.alloc(0x50);
+        let x = e.mem.alloc(0x50);
+        e.mem.set_u32(x + FACE_MARK, 3);
+        e.mem.set_u32(f0 + FACE_MARK, 3);
+        e.mem.set_u32(c + FACE_MARK, 2);
+        let twin_of = |e: &mut Engine, face: u32| {
+            let twin = e.mem.alloc(0x10);
+            let vertex = e.mem.alloc(0x40);
+            e.mem.set_u32(twin, vertex);
+            e.mem.set_u32(twin + 0xc, face);
+            twin
+        };
+        let t0 = twin_of(&mut e, a);
+        let t1 = twin_of(&mut e, b);
+        let t2 = twin_of(&mut e, c);
+        for (k, t) in [t0, t1, t2].iter().enumerate() {
+            e.mem.set_u32(f0 + 0x18 + 0x10 * k as u32, *t);
+        }
+        for k in 0..3u32 {
+            let t = twin_of(&mut e, x);
+            e.mem.set_u32(b + 0x18 + 0x10 * k, t);
+        }
+        e.register_double(HULL_CLASSIFY_FACE, move |_, args| {
+            word(if args[0] == a { 2 } else { 1 })
+        });
+        let counter = e.mem.alloc(4);
+        let edge = e.mem.alloc(4);
+        let point = e.mem.alloc(16);
+        e.call_log = Some(vec![]);
+        let r = e
+            .call(0x00e6_7660, &args![h, f0, point, counter, edge])
+            .u32();
+        assert_eq!(r, 0);
+        assert_eq!(
+            calls_to(&e, HULL_CLASSIFY_FACE),
+            vec![vec![a, point, h, h + 4], vec![b, point, h, h + 4]]
+        );
+        assert_eq!(e.mem.u32(counter), 2);
+        assert_eq!(e.mem.u32(edge), t2);
+        assert_eq!(e.mem.u32(e.mem.u32(t0) + 0x30), t0);
+        assert_eq!(e.mem.u32(a + FACE_MARK), 2);
+        assert_eq!(e.mem.u32(b + FACE_MARK), 1);
+        assert_eq!(e.mem.u32(h + 0xc), 2);
+        assert_eq!(e.mem.u32(h + 0xde0), b);
+        assert_eq!(e.mem.u32(h + 0xde4), f0);
+        assert_eq!(e.mem.u32(f0 + 0x40), 0x7f7f_ffee);
+        // A full free stack answers 2; a face answering 4 stops with 2.
+        e.mem.set_u32(h + 0xc, 100);
+        e.mem.set_u32(a + FACE_MARK, 0);
+        e.mem.set_u32(b + FACE_MARK, 3);
+        assert_eq!(
+            e.call(0x00e6_7660, &args![h, f0, point, counter, edge])
+                .u32(),
+            2
+        );
+        e.mem.set_u32(h + 0xc, 0);
+        e.mem.set_u32(a + FACE_MARK, 0);
+        e.register(HULL_CLASSIFY_FACE, |_, _| word(4));
+        assert_eq!(
+            e.call(0x00e6_7660, &args![h, f0, point, counter, edge])
+                .u32(),
+            2
+        );
+        assert_eq!(e.mem.u32(h + 0xc), 1);
+    }
+
+    #[test]
+    fn new_faces_join_the_horizon_to_the_point() {
+        let mut e = Engine::new();
+        constants(&mut e);
+        let h = hull(
+            &mut e,
+            &[
+                [0.0, 0.0, 0.0, 0.0],
+                [1.0, 0.0, 0.0, 0.0],
+                [0.0, 1.0, 0.0, 0.0],
+            ],
+        );
+        let (va, vb, p) = (h + 0x20, h + 0x60, h + 0xa0);
+        let next = e.mem.alloc(0x10);
+        e.mem.set_u32(next, vb);
+        let start = e.mem.alloc(0x10);
+        e.mem.set_u32(start, va);
+        e.mem.set_u32(start + 4, next);
+        // The walk returns to the start: answer 0.
+        e.mem.set_u32(vb + 0x30, start);
+        let face = e.mem.alloc(0x50);
+        e.mem.set_u32(h + 0xde0, face);
+        e.mem.set_u32(h + 0xc, 1);
+        assert_eq!(e.call(0x00e6_7740, &args![h, 1u32, start, p]).u32(), 0);
+        assert_eq!(e.mem.u32(h + 0xc), 0);
+        assert_eq!(e.mem.u32(face + 0x10), vb);
+        assert_eq!(e.mem.u32(face + 0x20), va);
+        assert_eq!(e.mem.u32(face + 0x30), p);
+        assert_eq!(e.mem.u32(start + 8), face + 0x10);
+        assert_eq!(e.mem.u32(face + 0x18), start);
+        assert_eq!(e.mem.u32(face + 0x28), face + 0x30);
+        assert_eq!(e.mem.u32(face + 0x38), face + 0x20);
+        assert_eq!(e.mem.u32(vb + 0x30), 0);
+        assert!(close(hull_load(&e, face), [0.0, 0.0, -1.0, 0.0]));
+        // Not back at the start: 2; new records come from +0xf70.
+        assert_eq!(e.call(0x00e6_7740, &args![h, 1u32, start, p]).u32(), 2);
+        assert_eq!(e.mem.u32(h + 0x10), 1);
+        assert_eq!(e.mem.u32(h + 0xf70 + 0x10), vb);
+        // A degenerate face (the point on the edge's line) answers 2.
+        assert_eq!(e.call(0x00e6_7740, &args![h, 1u32, start, vb]).u32(), 2);
+        // No start edge answers 2.
+        assert_eq!(e.call(0x00e6_7740, &args![h, 1u32, 0u32, p]).u32(), 2);
+    }
+
+    #[test]
+    fn walk_stops_or_crosses_to_a_visited_neighbour() {
+        let mut e = Engine::new();
+        constants(&mut e);
+        let h = hull(
+            &mut e,
+            &[
+                [0.0, 0.0, 0.0, 0.0],
+                [1.0, 0.0, 0.0, 0.0],
+                [0.0, 1.0, 0.0, 0.0],
+            ],
+        );
+        let face = h + HULL_FACES;
+        let neighbour = h + HULL_FACES + 0x50;
+        e.mem.set_u32(h + 0x10, 2);
+        hull_store(&mut e, face, [0.0, 0.0, 1.0, 0.0]);
+        hull_store(&mut e, neighbour, [0.0, 0.0, 1.0, 0.0]);
+        e.mem.set_f32(face + 0x40, -1.0);
+        let twin = e.mem.alloc(0x10);
+        e.mem.set_u32(twin + 0xc, neighbour);
+        for f in [face, neighbour] {
+            for k in 0..3u32 {
+                let edge = f + 0x10 + 0x10 * k;
+                e.mem.set_u32(edge, h + 0x20 + 0x40 * k);
+                e.mem.set_u32(edge + 4, f + 0x10 + 0x10 * ((k + 1) % 3));
+                e.mem.set_u32(edge + 8, twin);
+            }
+        }
+        e.mem.set_u32(face + 0x44, 7);
+        e.mem.set_u32(neighbour + 0x44, 7);
+        // A very negative edge scale: no edge qualifies, the face itself is answered.
+        e.mem.set_f64(HULL_EDGE_SCALE, -1e30);
+        e.mem.set_f64(HULL_PLANE_SCALE, 0.9);
+        assert_eq!(e.call(0x00e6_7ae0, &args![h, face]).u32(), face);
+        assert_eq!(e.mem.u32(face + 0x44), 3);
+        assert_eq!(e.mem.u32(neighbour + 0x44), 0);
+        // A huge one: an edge qualifies and, the start's distance not being above 0, the walk
+        // crosses into the neighbour (marked 3), whose own crossing leads back to itself
+        // (the shared twin's face), already marked: the neighbour is answered.
+        e.mem.set_f64(HULL_EDGE_SCALE, 1e30);
+        assert_eq!(e.call(0x00e6_7ae0, &args![h, face]).u32(), neighbour);
+        assert_eq!(e.mem.u32(neighbour + 0x44), 3);
+    }
+
+    /// A hull with two face records (the inner loop only reaches the second): normal and
+    /// distance of each.
+    fn two_faces(e: &mut Engine, faces: [([f32; 4], f32); 2]) -> u32 {
+        let h = e.mem.alloc(0x1200);
+        e.mem.set_u32(h + 0x10, 2);
+        for (i, (n, d)) in faces.iter().enumerate() {
+            let f = h + HULL_FACES + 0x50 * i as u32;
+            hull_store(e, f, *n);
+            e.mem.set_f32(f + 0x40, *d);
+        }
+        h
+    }
+
+    #[test]
+    fn closest_planes_of_two_hulls() {
+        let up = [0.0f32, 0.0, 1.0, 0.0];
+        let side = [1.0f32, 0.0, 0.0, 0.0];
+        let down = [0.0f32, 0.0, -1.0, 0.0];
+        let s = 1.0 / 1.25f32.sqrt();
+        for (b_normal, a_distance, b_distance, want_w, want_dir) in [
+            // Same normal, p = 1 - 2 <= eps, a > eps: b² = 4 with weights (0, 1).
+            (up, 1.0f32, 2.0f32, 2.0f32, up),
+            // Perpendicular: both above eps, q >= p: 5 with weights (0.5, 1).
+            (side, 1.0, 2.0, 5.0f32.sqrt(), [s, 0.0, 0.5 * s, 0.0]),
+            // Both distances 0: -c² = -1, clamped to 0 for the root.
+            (up, 0.0, 0.0, 0.0, up),
+        ] {
+            let mut e = Engine::new();
+            constants(&mut e);
+            e.register(HULL_SQRT, |_, a| Ret {
+                st0: f64::from_bits(u64::from(a[0]) | u64::from(a[1]) << 32).sqrt(),
+                ..Ret::default()
+            });
+            let first = two_faces(&mut e, [(down, 9.0), (up, a_distance)]);
+            let second = two_faces(&mut e, [(down, 9.0), (b_normal, b_distance)]);
+            let out = e.mem.alloc(16);
+            let faces = e.mem.alloc(8);
+            e.call(0x00e6_7c50, &args![first, second, out, faces, faces + 4]);
+            assert_eq!(e.mem.u32(faces), first + HULL_FACES + 0x50);
+            assert_eq!(e.mem.u32(faces + 4), second + HULL_FACES + 0x50);
+            let v = hull_load(&e, out);
+            assert!(close([v[0], v[1], v[2], 0.0], want_dir), "{v:?}");
+            assert!((v[3] - want_w).abs() < 1e-5, "{v:?}");
+        }
+        // Opposite normals (cosine -1, below the limit) never pair: the face words stay.
+        let mut e = Engine::new();
+        constants(&mut e);
+        e.register(HULL_SQRT, |_, _| Ret::default());
+        let first = two_faces(&mut e, [(up, 9.0), (up, 1.0)]);
+        let second = two_faces(&mut e, [(down, 9.0), (down, 1.0)]);
+        let out = e.mem.alloc(16);
+        let faces = e.mem.alloc(8);
+        e.mem.set_u32(faces, first + HULL_FACES);
+        e.mem.set_u32(faces + 4, second + HULL_FACES);
+        e.call(0x00e6_7c50, &args![first, second, out, faces, faces + 4]);
+        assert_eq!(e.mem.u32(faces), first + HULL_FACES);
+        assert_eq!(e.mem.u32(faces + 4), second + HULL_FACES);
+    }
+
+    const RENDERER_CAPS: u32 = 0x0076_0000;
+    const CREATE_TEXTURE: u32 = 0x0076_0010;
+
+    fn renderer(e: &mut Engine, caps: u32, result: u32, texture: u32) -> u32 {
+        e.register_double(RENDERER_CAPS, move |_, _| word(caps));
+        e.register_double(CREATE_TEXTURE, move |e, a| {
+            e.mem.set_u32(a[7], texture);
+            word(result)
+        });
+        let device = object_with(e, &[(D3D_CREATE_TEXTURE, CREATE_TEXTURE)]);
+        let renderer = e.mem.alloc(0x900);
+        let vtable = e.mem.alloc(0x200);
+        e.mem.set_u32(renderer, vtable);
+        e.mem.set_u32(vtable + RENDERER_CAPS_SLOT, RENDERER_CAPS);
+        e.mem.set_u32(renderer + RENDERER_DEVICE, device);
+        renderer
+    }
+
+    #[test]
+    fn persistent_create_surf() {
+        let mut e = Engine::new();
+        e.map(SKIP_LEVELS, 0x200);
+        e.map(DYNAMIC_TEXTURES, 0x10);
+        quiet_prints(&mut e);
+        let persistent = e.mem.alloc(0x80);
+        e.mem.set_u32(persistent + 0x74, 3);
+        // Sides not powers of two, without the capability: one level.
+        let r = renderer(&mut e, 0, 0, 0x7700);
+        let this = e.mem.alloc(0x84);
+        e.mem.set_u32(this + 0x60, r);
+        e.mem.set_u32(this + 0xc, 48);
+        e.mem.set_u32(this + 0x10, 32);
+        e.mem.set_u32(SKIP_LEVELS, 1);
+        e.call_log = Some(vec![]);
+        assert!(e
+            .call(0x00e6_82b0, &args![this, persistent, 0x15u32])
+            .bool());
+        let create = calls_to(&e, CREATE_TEXTURE);
+        assert_eq!(&create[0][1..7], &[48, 32, 1, 0, 0x15, 1]);
+        assert_eq!(e.mem.u8(this + 0x6d), 0);
+        assert_eq!(e.mem.u32(this + 0x64), 0x7700);
+        // Powers of two, dynamic, a failure: printed with the format.
+        let r = renderer(&mut e, 0, 0x8000_0005, 0);
+        e.mem.set_u32(this + 0x60, r);
+        e.mem.set_u32(this + 0xc, 64);
+        e.mem.set_u32(this + 0x10, 32);
+        e.mem.set_u8(DYNAMIC_TEXTURES, 1);
+        e.call_log = Some(vec![]);
+        assert!(!e
+            .call(0x00e6_82b0, &args![this, persistent, 0x15u32])
+            .bool());
+        let create = calls_to(&e, CREATE_TEXTURE);
+        assert_eq!(&create[0][1..7], &[32, 16, 2, D3DUSAGE_DYNAMIC, 0x15, 0]);
+        assert_eq!(
+            calls_to(&e, DEBUG_PRINT),
+            vec![vec![CREATE_SURF_PERSISTENT_FAILED, 0x15, 0x7fff_0005]]
+        );
+        assert_eq!(e.mem.u32(this + 0x64), 0);
+        assert_eq!(e.mem.u32(this + 0x78), 1);
+    }
+
+    const SURFACE_DESC: u32 = 0x0075_0000;
+    const SURFACE_LOCK: u32 = 0x0075_0010;
+    const SURFACE_UNLOCK: u32 = 0x0075_0020;
+
+    fn surface(e: &mut Engine, height: u32, bits: u32, pitch: u32, fail: u32) -> u32 {
+        e.register_double(SURFACE_DESC, move |e, a| {
+            e.mem.set_u32(a[1], 0x15);
+            e.mem.set_u32(a[1] + 0x1c, height);
+            word(if fail == 1 { 0x8000_0001 } else { 0 })
+        });
+        e.register_double(SURFACE_LOCK, move |e, a| {
+            e.mem.set_u32(a[1], pitch);
+            e.mem.set_u32(a[1] + 4, bits);
+            word(if fail == 2 { 0x8000_0002 } else { 0 })
+        });
+        e.register(SURFACE_UNLOCK, |_, _| Ret::default());
+        object_with(
+            e,
+            &[
+                (D3D_SURFACE_GET_DESC, SURFACE_DESC),
+                (D3D_SURFACE_LOCK_RECT, SURFACE_LOCK),
+                (D3D_SURFACE_UNLOCK_RECT, SURFACE_UNLOCK),
+            ],
+        )
+    }
+
+    /// Persistent data with one face of two levels (8 x 4, 4 x 2), 1 byte per pixel.
+    fn persistent(e: &mut Engine) -> u32 {
+        let p = e.mem.alloc(0x80);
+        let widths = e.mem.alloc(8);
+        let heights = e.mem.alloc(8);
+        let offsets = e.mem.alloc(12);
+        e.mem.set_u32(widths, 8);
+        e.mem.set_u32(widths + 4, 4);
+        e.mem.set_u32(heights, 4);
+        e.mem.set_u32(heights + 4, 2);
+        e.mem.set_u32(offsets + 4, 32);
+        e.mem.set_u32(offsets + 8, 40);
+        e.mem.set_u32(p + PERSISTENT_WIDTHS, widths);
+        e.mem.set_u32(p + PERSISTENT_HEIGHTS, heights);
+        e.mem.set_u32(p + PERSISTENT_OFFSETS, offsets);
+        e.mem.set_u32(p + PERSISTENT_LEVELS, 2);
+        e.mem.set_u32(p + PERSISTENT_PIXELS, 0x6000);
+        e.mem.set_u32(p + PERSISTENT_STRIDE, 1);
+        p
+    }
+
+    #[test]
+    fn persistent_copy_to_surface_level() {
+        let mut e = Engine::new();
+        quiet_prints(&mut e);
+        e.register(MEMCPY, |_, _| Ret::default());
+        let p = persistent(&mut e);
+        let s = surface(&mut e, 16, 0x9000, 8, 0);
+        e.call_log = Some(vec![]);
+        e.call(0x00e6_83d0, &args![p, 0u32, s, 0u32]);
+        assert_eq!(calls_to(&e, MEMCPY), vec![vec![0x9000, 0x6000, 32]]);
+        assert_eq!(calls_to(&e, SURFACE_UNLOCK), vec![vec![s]]);
+        let s = surface(&mut e, 1, 0x9000, 16, 0);
+        e.call_log = Some(vec![]);
+        e.call(0x00e6_83d0, &args![p, 1u32, s, 1u32]);
+        assert_eq!(
+            calls_to(&e, MEMCPY),
+            vec![vec![0x9000, 0x6000 + 40 + 32, 4]]
+        );
+        for (fail, message) in [
+            (1u32, PERSISTENT_GET_DESC_FAILED),
+            (2, PERSISTENT_LOCK_FAILED),
+        ] {
+            let s = surface(&mut e, 1, 0x9000, 16, fail);
+            e.call_log = Some(vec![]);
+            e.call(0x00e6_83d0, &args![p, 0u32, s, 0u32]);
+            assert_eq!(
+                calls_to(&e, DEBUG_PRINT),
+                vec![vec![message, 0x7fff_0000 | fail]]
+            );
+            assert!(calls_to(&e, SURFACE_UNLOCK).is_empty());
+        }
+    }
+
+    #[test]
+    fn texture_slot_setter_and_palette_getter() {
+        let mut e = Engine::new();
+        let this = e.mem.alloc(0x84);
+        e.call(0x00e6_87e0, &args![this, 0x1234u32]);
+        assert_eq!(e.mem.u32(this + 0x64), 0x1234);
+        e.mem.set_u32(this + 0x74, 0x5678);
+        assert_eq!(e.call(0x00e6_8820, &args![this]).u32(), 0x5678);
+    }
+
+    const GET_TYPE: u32 = 0x0074_0000;
+    const GET_SURFACE: u32 = 0x0074_0010;
+    const RELEASE_SURFACE: u32 = 0x0074_0020;
+
+    #[test]
+    fn persistent_copy_to_surface_runs_each_level() {
+        let mut e = Engine::new();
+        quiet_prints(&mut e);
+        e.register(MEMCPY, |_, _| Ret::default());
+        e.register(RELEASE_SURFACE, |_, _| Ret::default());
+        let surface_object = surface(&mut e, 16, 0x9000, 8, 0);
+        let vtable = e.mem.u32(surface_object);
+        e.mem.set_u32(vtable + D3D_RELEASE, RELEASE_SURFACE);
+        e.register_double(GET_SURFACE, move |e, a| {
+            e.mem.set_u32(a[2], surface_object);
+            word(if a[1] == 1 { 0x8000_0009 } else { 0 })
+        });
+        let p = persistent(&mut e);
+        for (kind, copies) in [(D3DRTYPE_TEXTURE, 1usize), (D3DRTYPE_CUBETEXTURE, 0)] {
+            e.register_double(GET_TYPE, move |_, _| word(kind));
+            let texture = object_with(
+                &mut e,
+                &[
+                    (D3D_GET_TYPE, GET_TYPE),
+                    (D3D_GET_SURFACE_LEVEL, GET_SURFACE),
+                ],
+            );
+            let this = e.mem.alloc(0x84);
+            e.mem.set_u32(this + 0x64, texture);
+            e.mem.set_u32(this + 0x68, 2);
+            e.call_log = Some(vec![]);
+            e.call(0x00e6_8920, &args![this, p]);
+            assert_eq!(calls_to(&e, MEMCPY).len(), copies);
+            if copies == 1 {
+                // Level 1's surface fails: printed with the level.
+                assert_eq!(
+                    calls_to(&e, DEBUG_PRINT),
+                    vec![vec![PERSISTENT_GET_SURFACE_LEVEL_FAILED, 1, 0x7fff_0009]]
+                );
+                assert_eq!(calls_to(&e, RELEASE_SURFACE).len(), 1);
+            }
+        }
+    }
+
+    #[test]
+    fn update_converts_only_on_a_change() {
+        const CONVERT: u32 = 0x0073_0014;
+        let mut e = Engine::new();
+        let converter = object_with(&mut e, &[(CONVERTER_CONVERT_SLOT, CONVERT)]);
+        e.register_double(GET_IMAGE_CONVERTER, move |_, _| word(converter));
+        let converted = e.mem.alloc(0x80);
+        let converted_vtable = e.mem.alloc(8);
+        e.mem.set_u32(converted, converted_vtable);
+        e.mem.set_u32(converted_vtable + 4, 0x0073_0100);
+        e.register(0x0073_0100, |_, _| Ret::default());
+        e.register_double(CONVERT, move |_, _| word(converted));
+        e.register(POINTER_ASSIGN, |_, _| Ret::default());
+        e.register(INTERLOCKED_INCREMENT, |e, a| {
+            let n = e.mem.u32(a[0]) + 1;
+            e.mem.set_u32(a[0], n);
+            word(n)
+        });
+        e.register(INTERLOCKED_DECREMENT, |e, a| {
+            let n = e.mem.u32(a[0]) - 1;
+            e.mem.set_u32(a[0], n);
+            word(n)
+        });
+        let pixel_data = e.mem.alloc(0x80);
+        e.mem.set_u32(pixel_data + PIXEL_DATA_REVISION, 5);
+        let source = e.mem.alloc(0x50);
+        e.mem.set_u32(source + SOURCE_PIXEL_DATA, pixel_data);
+        let this = e.mem.alloc(0x84);
+        e.mem.set_u32(this + 8, source);
+        e.mem.set_u32(this + 0x7c, 5);
+        // Same revision, no palette: nothing.
+        e.call_log = Some(vec![]);
+        e.call(0x00e6_89d0, &args![this]);
+        assert!(calls_to(&e, CONVERT).is_empty());
+        // A palette with a new revision: converted (no surface yet: the texture data has no
+        // Direct3D texture), the new data's reference taken and released (deleted).
+        let palette = e.mem.alloc(0x20);
+        e.mem.set_u32(palette + PALETTE_REVISION, 9);
+        e.mem.set_u32(pixel_data + PIXEL_DATA_PALETTE, palette);
+        e.mem.set_u8(this + 0x6d, 1);
+        e.call_log = Some(vec![]);
+        e.call(0x00e6_89d0, &args![this]);
+        assert_eq!(
+            calls_to(&e, CONVERT),
+            vec![vec![converter, pixel_data, this + 0x14, pixel_data, 1]]
+        );
+        assert_eq!(
+            calls_to(&e, POINTER_ASSIGN),
+            vec![vec![this + 0x74, palette]]
+        );
+        assert_eq!(e.mem.u32(this + 0x80), 9);
+        assert_eq!(calls_to(&e, 0x0073_0100), vec![vec![converted]]);
+        // Replacement data: nothing at all.
+        e.mem.set_u8(this + 0x6c, 1);
+        e.mem.set_u32(this + 0x7c, 0);
+        e.call_log = Some(vec![]);
+        e.call(0x00e6_89d0, &args![this]);
+        assert_eq!(e.call_log.take().unwrap().len(), 1);
     }
 }

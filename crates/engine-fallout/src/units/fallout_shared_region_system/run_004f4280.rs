@@ -30,9 +30,22 @@ pub fn fn_004f42a0(e: &mut Engine, this: Ptr) -> Ptr {
     this
 }
 
+/// `004048e0` (`thiscall`, no stack word; engine-map unit `effectitem.cpp`).
+const COUNT_004048E0: u32 = 0x0040_48e0;
+
+// Translated from 004f4280 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`ECX` only): `004048e0` on `this` plus 1
+/// (wrapping, as `ADD EAX,1`).
+pub fn fn_004f4280(e: &mut Engine, this: Ptr) -> u32 {
+    e.call(COUNT_004048E0, &args![this]).u32().wrapping_add(1)
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
-    vec![entry!(0x004f_42a0, fn_004f42a0(Ptr) -> Ptr)]
+    vec![
+        entry!(0x004f_42a0, fn_004f42a0(Ptr) -> Ptr),
+        entry!(0x004f_4280, fn_004f4280(Ptr) -> u32),
+    ]
 }
 
 #[cfg(test)]
@@ -67,5 +80,19 @@ mod tests {
                 (MEMBER_INIT_00470470, vec![this + 0x18]),
             ]
         );
+    }
+}
+
+#[cfg(test)]
+mod n072_tests {
+    use super::*;
+
+    #[test]
+    fn fn_004f4280_adds_one() {
+        let mut e = Engine::new();
+        e.register(COUNT_004048E0, |_, a| (a[0] + 4).into_ret());
+        assert_eq!(e.call(0x004f_4280, &args![0x10u32]).u32(), 0x15);
+        e.register(COUNT_004048E0, |_, _| 0xffff_ffffu32.into_ret());
+        assert_eq!(e.call(0x004f_4280, &args![0x10u32]).u32(), 0);
     }
 }

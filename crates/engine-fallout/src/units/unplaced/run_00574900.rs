@@ -511,9 +511,134 @@ pub fn fn_00575590(e: &mut Engine, this: Ptr, flag: u8, value: u8) -> i32 {
     result.wrapping_sub(1) as i32
 }
 
+/// The save-load game pointer `0047c850` is asked of, and `0047c850` itself (`AL`).
+const SAVE_LOAD_GAME: u32 = 0x011d_e45c;
+const SAVE_LOAD_TEST_0047C850: u32 = 0x0047_c850;
+/// The inventory-changes calls the reference slots below forward to (`ECX` = the
+/// changes): `004bffe0` (six stack words), `004c6d40` (three), `004c0cf0` (nine; the
+/// first is the address of the result byte), `004cfe20` (one, `AL`), `004c94f0` (one).
+const CHANGES_4BFFE0: u32 = 0x004b_ffe0;
+const CHANGES_4C6D40: u32 = 0x004c_6d40;
+const CHANGES_4C0CF0: u32 = 0x004c_0cf0;
+const CHANGES_4CFE20: u32 = 0x004c_fe20;
+const CHANGES_4C94F0: u32 = 0x004c_94f0;
+/// `00740960` (`ECX` = the data handler): the inventory changes used instead of the
+/// reference's own.
+const HANDLER_CHANGES_00740960: u32 = 0x0074_0960;
+
+// Translated from 00574a80 (decompiled, FalloutNV.exe 1.4.0.525)
+/// A reference vtable slot shared by many reference vtables (`0102f6e0`, `0107a6d8`, ...;
+/// unnamed in the engine map; `ECX` and four stack words, `RET 0x10`, the fourth not read):
+/// false without container data. Otherwise, for the player (`011dea3c`) two notices
+/// (`005f5950` with 10 and then 6, `second`, `first` and four zeros), the action flag 1 for
+/// `third` (`Script::SetActionFlag`), then `004bffe0(first, second, this, third, 0, 0)` on
+/// the reference's inventory changes; true.
+pub fn fn_00574a80(
+    e: &mut Engine,
+    this: Ptr,
+    first: u32,
+    second: u32,
+    third: u32,
+    _unused_4: u32,
+) -> bool {
+    if e.call(HAS_CONTAINER, &args![this]).u32() == 0 {
+        return false;
+    }
+    let changes = e.call(GET_INVENTORY_CHANGES, &args![this]).u32();
+    if this.addr() == e.global::<u32>(PLAYER) {
+        for kind in [10u32, 6] {
+            e.call(
+                NOTIFY_5F5950,
+                &args![kind, second, first, 0u32, 0u32, 0u32, 0u32],
+            );
+        }
+    }
+    e.call(SET_ACTION_FLAG, &args![this, third, 1u32]);
+    e.call(
+        CHANGES_4BFFE0,
+        &args![changes, first, second, this, third, 0u32, 0u32],
+    );
+    true
+}
+
+// Translated from 00575330 (decompiled, FalloutNV.exe 1.4.0.525)
+/// A reference vtable slot shared by many reference vtables (`0102f6dc`, `0107a6d4`, ...;
+/// unnamed in the engine map; `ECX` and three stack words, `RET 0xc`, the second a byte):
+/// with container data, `004c6d40(first, second, third)` on the inventory changes.
+pub fn fn_00575330(e: &mut Engine, this: Ptr, first: u32, second: u8, third: u32) {
+    if e.call(HAS_CONTAINER, &args![this]).u32() == 0 {
+        return;
+    }
+    let changes = e.call(GET_INVENTORY_CHANGES, &args![this]).u32();
+    e.call(
+        CHANGES_4C6D40,
+        &args![changes, first, u32::from(second), third],
+    );
+}
+
+// Translated from 00575380 (decompiled, FalloutNV.exe 1.4.0.525)
+/// A reference vtable slot shared by many reference vtables (`0102f6e4`, `0107a6dc`, ...;
+/// unnamed in the engine map; `ECX` and three stack words, `RET 0xc`): true without
+/// container data. Otherwise sets the action flag 8 for `third` unless `0047c850` answers
+/// true for the save-load game, then answers the byte `004c0cf0(&result, first, second,
+/// this, third, 0, 0, 0, 0)` leaves in its local (1 before the call).
+pub fn fn_00575380(e: &mut Engine, this: Ptr, first: u32, second: u32, third: u32) -> u8 {
+    let container = e.call(HAS_CONTAINER, &args![this]).u32();
+    e.with_stack(4, |e, result| {
+        e.mem.set_u8(result.addr(), 1);
+        if container != 0 {
+            let changes = e.call(GET_INVENTORY_CHANGES, &args![this]).u32();
+            let game: u32 = e.global(SAVE_LOAD_GAME);
+            if e.call(SAVE_LOAD_TEST_0047C850, &args![game]).u8() == 0 {
+                e.call(SET_ACTION_FLAG, &args![this, third, 8u32]);
+            }
+            e.call(
+                CHANGES_4C0CF0,
+                &args![changes, result, first, second, this, third, 0u32, 0u32, 0u32, 0u32],
+            );
+        }
+        e.mem.u8(result.addr())
+    })
+}
+
+// Translated from 00575450 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`ECX` and one stack word, `RET 4`; called by `ProcessEscort`,
+/// `ProcessAccompany`, `008f2610`): false without container data, else the byte
+/// `004cfe20(item)` answers on the inventory changes.
+pub fn fn_00575450(e: &mut Engine, this: Ptr, item: u32) -> u8 {
+    if e.call(HAS_CONTAINER, &args![this]).u32() == 0 {
+        return 0;
+    }
+    let changes = e.call(GET_INVENTORY_CHANGES, &args![this]).u32();
+    e.call(CHANGES_4CFE20, &args![changes, item]).u8()
+}
+
+// Translated from 005754a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`ECX` and two stack words, `RET 8`; called by
+/// `ShowInventoryFunction`, `0090dd80`, `0090e660`): 0 without container data, else
+/// `004c94f0(item)` on the inventory changes: the data handler's (`00740960`) when
+/// `handler` is nonzero, else the reference's own.
+pub fn fn_005754a0(e: &mut Engine, this: Ptr, item: u32, handler: u8) -> u32 {
+    if e.call(HAS_CONTAINER, &args![this]).u32() == 0 {
+        return 0;
+    }
+    let changes = if handler != 0 {
+        let data_handler: u32 = e.global(HOLDER_011C3F2C);
+        e.call(HANDLER_CHANGES_00740960, &args![data_handler]).u32()
+    } else {
+        e.call(GET_INVENTORY_CHANGES, &args![this]).u32()
+    };
+    e.call(CHANGES_4C94F0, &args![changes, item]).u32()
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x0057_4a80, fn_00574a80(Ptr, u32, u32, u32, u32) -> bool),
+        entry!(0x0057_5330, fn_00575330(Ptr, u32, u8, u32)),
+        entry!(0x0057_5380, fn_00575380(Ptr, u32, u32, u32) -> u8),
+        entry!(0x0057_5450, fn_00575450(Ptr, u32) -> u8),
+        entry!(0x0057_54a0, fn_005754a0(Ptr, u32, u8) -> u32),
         entry!(0x0057_5400, fn_00575400(Ptr, Ptr) -> bool),
         entry!(0x0057_4900, fn_00574900(Ptr) -> u8),
         entry!(0x0057_4920, fn_00574920(Ptr, u8)),
@@ -1091,5 +1216,143 @@ mod b027_tests {
             e.call(0x0057_5590, &args![0x4000u32, 2u32, 0x301u32]).i32(),
             0x105
         );
+    }
+}
+
+#[cfg(test)]
+mod n075_tests {
+    use super::*;
+
+    type Log = Vec<(u32, Vec<u32>)>;
+
+    fn calls(log: &Log, callee: u32) -> Vec<Vec<u32>> {
+        log.iter()
+            .filter(|(a, _)| *a == callee)
+            .map(|(_, w)| w.clone())
+            .collect()
+    }
+
+    fn engine(container: bool) -> Engine {
+        let mut e = Engine::new();
+        e.map(0x011c_3000, 0x1000);
+        e.map(0x011d_e000, 0x1000);
+        e.register(
+            HAS_CONTAINER,
+            if container {
+                |_, _| 0x40u32.into_ret()
+            } else {
+                |_, _| 0u32.into_ret()
+            },
+        );
+        e.register(GET_INVENTORY_CHANGES, |_, a| (a[0] + 0x100).into_ret());
+        for callee in [
+            NOTIFY_5F5950,
+            SET_ACTION_FLAG,
+            CHANGES_4BFFE0,
+            CHANGES_4C6D40,
+            CHANGES_4C0CF0,
+        ] {
+            e.register(callee, |_, _| Ret::default());
+        }
+        e.call_log = Some(vec![]);
+        e
+    }
+
+    #[test]
+    fn fn_00574a80_hands_the_item_on_and_notifies_for_the_player() {
+        let mut e = engine(true);
+        e.set_global(PLAYER, 0x1000u32);
+        assert!(e
+            .call(0x0057_4a80, &args![0x1000u32, 1u32, 2u32, 3u32, 4u32])
+            .bool());
+        let log = e.call_log.take().unwrap();
+        assert_eq!(
+            calls(&log, NOTIFY_5F5950),
+            vec![vec![10, 2, 1, 0, 0, 0, 0], vec![6, 2, 1, 0, 0, 0, 0]]
+        );
+        assert_eq!(calls(&log, SET_ACTION_FLAG), vec![vec![0x1000, 3, 1]]);
+        assert_eq!(
+            calls(&log, CHANGES_4BFFE0),
+            vec![vec![0x1100, 1, 2, 0x1000, 3, 0, 0]]
+        );
+        let mut e = engine(true);
+        assert!(e
+            .call(0x0057_4a80, &args![0x2000u32, 1u32, 2u32, 3u32, 4u32])
+            .bool());
+        assert!(calls(&e.call_log.take().unwrap(), NOTIFY_5F5950).is_empty());
+        let mut e = engine(false);
+        assert!(!e
+            .call(0x0057_4a80, &args![0x2000u32, 1u32, 2u32, 3u32, 4u32])
+            .bool());
+    }
+
+    #[test]
+    fn fn_00575330_forwards_with_a_container() {
+        let mut e = engine(true);
+        e.call(0x0057_5330, &args![0x1000u32, 1u32, 0x302u32, 3u32]);
+        let log = e.call_log.take().unwrap();
+        assert_eq!(calls(&log, CHANGES_4C6D40), vec![vec![0x1100, 1, 2, 3]]);
+        let mut e = engine(false);
+        e.call(0x0057_5330, &args![0x1000u32, 1u32, 2u32, 3u32]);
+        assert!(calls(&e.call_log.take().unwrap(), CHANGES_4C6D40).is_empty());
+    }
+
+    #[test]
+    fn fn_00575380_answers_the_byte_the_changes_leave() {
+        let mut e = engine(true);
+        e.register(SAVE_LOAD_TEST_0047C850, |_, _| 0u32.into_ret());
+        e.register(CHANGES_4C0CF0, |e, a| {
+            assert_eq!(e.mem.u8(a[1]), 1);
+            e.mem.set_u8(a[1], 0);
+            Ret::default()
+        });
+        assert_eq!(
+            e.call(0x0057_5380, &args![0x1000u32, 1u32, 2u32, 3u32])
+                .u32()
+                & 0xff,
+            0
+        );
+        let log = e.call_log.take().unwrap();
+        assert_eq!(calls(&log, SET_ACTION_FLAG), vec![vec![0x1000, 3, 8]]);
+        let call = &calls(&log, CHANGES_4C0CF0)[0];
+        assert_eq!(call[0], 0x1100);
+        assert_eq!(call[2..], [1, 2, 0x1000, 3, 0, 0, 0, 0]);
+        let mut e = engine(true);
+        e.register(SAVE_LOAD_TEST_0047C850, |_, _| 1u32.into_ret());
+        assert_eq!(
+            e.call(0x0057_5380, &args![0x1000u32, 1u32, 2u32, 3u32])
+                .u32()
+                & 0xff,
+            1
+        );
+        assert!(calls(&e.call_log.take().unwrap(), SET_ACTION_FLAG).is_empty());
+        let mut e = engine(false);
+        assert_eq!(
+            e.call(0x0057_5380, &args![0x1000u32, 1u32, 2u32, 3u32])
+                .u32()
+                & 0xff,
+            1
+        );
+    }
+
+    #[test]
+    fn fn_00575450_and_005754a0_ask_the_changes() {
+        let mut e = engine(true);
+        e.register(CHANGES_4CFE20, |_, a| (0x1200 | a[1]).into_ret());
+        assert_eq!(e.call(0x0057_5450, &args![0x1000u32, 7u32]).u32() & 0xff, 7);
+        e.register(CHANGES_4C94F0, |_, a| (a[0] + a[1]).into_ret());
+        e.set_global(HOLDER_011C3F2C, 0x5000u32);
+        e.register(HANDLER_CHANGES_00740960, |_, a| (a[0] + 0x10).into_ret());
+        assert_eq!(
+            e.call(0x0057_54a0, &args![0x1000u32, 7u32, 0u32]).u32(),
+            0x1107
+        );
+        assert_eq!(
+            e.call(0x0057_54a0, &args![0x1000u32, 7u32, 1u32]).u32(),
+            0x5017
+        );
+        let mut e = engine(false);
+        assert_eq!(e.call(0x0057_5450, &args![0x1000u32, 7u32]).u32() & 0xff, 0);
+        assert_eq!(e.call(0x0057_54a0, &args![0x1000u32, 7u32, 1u32]).u32(), 0);
     }
 }

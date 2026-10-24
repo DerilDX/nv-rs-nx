@@ -1710,6 +1710,1035 @@ pub fn fn_00ea2190(
     })
 }
 
+/// The `double` (`010c9300`; 2^-23 in the image) a new contact time must
+/// exceed the current one by before [`fn_00ea7d40`] takes its axis.
+const TIME_SLACK_010C9300: u32 = 0x010c_9300;
+/// The `float` 0.5 (`01016248` in the image) the overlap case halves the
+/// sum of the two centres with.
+const HALF_01016248: u32 = 0x0101_6248;
+/// The `double` 1.0 (`01012070` in the image) the normal's squared length
+/// is compared with.
+const ONE_01012070: u32 = 0x0101_2070;
+/// The `float` `1e-6` (`010959f4` in the image): an edge case whose
+/// `|1 - c^2|` is not above it takes its own axis's offset as zero.
+const PARALLEL_LIMIT_010959F4: u32 = 0x0109_59f4;
+/// `00439e90` and `00439ef0` (`thiscall` on a point `p`; out, `q`; `RET 8`;
+/// no Xbox name): by their bodies `p + q` and `p - q` into `out`,
+/// returning `out`.
+const POINT_SUM_00439E90: u32 = 0x0043_9e90;
+const POINT_DIFFERENCE_00439EF0: u32 = 0x0043_9ef0;
+/// `004a3760` (cdecl: out, a `float`, a point; no Xbox name): by its body
+/// the point times the float into `out`, returning `out`.
+const POINT_SCALE_004A3760: u32 = 0x004a_3760;
+/// `004a7290` (`thiscall` on a point; ST0; no Xbox name): by its body the
+/// point's squared length.
+const POINT_LENGTH_SQUARED_004A7290: u32 = 0x004a_7290;
+
+/// The bytes of [`fn_00ea7d40`]'s frame (`SUB ESP,0x1e8` under the four
+/// saved registers; the locals sit at `[ESP+0x10]` to `[ESP+0x1f7]`) and the
+/// locals whose address it hands to its callees: the copy of the relative
+/// velocity `V` (`[ESP+0xd8]`), the point `D` the edge cases project
+/// (`[ESP+0x54]`), and the overlap case's sum of the centres (`[ESP+0xe4]`)
+/// and half of it (`[ESP+0xa8]`).
+const FIND_FRAME: u32 = 0x1f8;
+const FIND_V_COPY: u32 = 0xd8;
+const FIND_D_POINT: u32 = 0x54;
+const FIND_CENTRE_SUM: u32 = 0xe4;
+const FIND_HALF_SUM: u32 = 0xa8;
+
+/// What [`fn_00ea7d40`] has found so far and what its contact cases read:
+/// the arguments, the frame, the axis dot products `c[i][j] = Ai . Bj`, the
+/// centre offset `T`, the contact axis (0 when none was taken) and its side
+/// (1 or -1, 0 when none).
+struct BoxFind {
+    time: u32,
+    a: u32,
+    va: u32,
+    b: u32,
+    vb: u32,
+    out_time: u32,
+    point: u32,
+    want_normals: bool,
+    normal: u32,
+    negated: u32,
+    frame: u32,
+    c: [[f64; 3]; 3],
+    t: [f64; 3],
+    axis: u32,
+    side: i32,
+}
+
+/// One separating axis of [`fn_00ea7d40`]: `r` the summed projected radii,
+/// `d0` the centre offset's projection now and `d1` (asked only when
+/// needed; the face axes have it computed before, the same value) its
+/// projection at the end of the motion. Above `r` (`TEST AH,0x5; JP` on
+/// `r` against `d0`): apart when `d1` is above `r` too, else the boxes meet
+/// at `(r - d0) * time_above / (d1 - d0)` (rounded); below `-r` (stored and
+/// reloaded) the same with `(r + d0) * -time / (d1 - d0)`. A NaN takes
+/// neither side. A meeting time above the current contact time plus
+/// [`TIME_SLACK_010C9300`] (the current one is the `0.0` of `FLDZ` for the
+/// first axis, `*out_time` after) becomes the contact time, with this axis
+/// and side. Returns true when the axis separates the boxes.
+#[allow(clippy::too_many_arguments)]
+fn find_axis(
+    e: &mut Engine,
+    s: &mut BoxFind,
+    axis: u32,
+    r: f64,
+    d0: f64,
+    d1: impl FnOnce() -> f64,
+    time_above: f64,
+    time: f64,
+) -> bool {
+    let (t, side) = if r < d0 {
+        let d1 = d1();
+        // `TEST AH,0x41; JNZ`: on unless `d1` is above `r`.
+        if d1 > r {
+            return true;
+        }
+        let t = rounded(x87_div(
+            x87_mul(x87_sub(r, d0), time_above),
+            x87_sub(d1, d0),
+        ));
+        (t, 1)
+    } else {
+        let negated = rounded(-r);
+        // `TEST AH,0x41; JNZ`: on to the next axis unless `-r` is above `d0`.
+        if !(negated > d0) {
+            return false;
+        }
+        let d1 = d1();
+        if negated > d1 {
+            return true;
+        }
+        let t = rounded(x87_div(x87_mul(x87_add(r, d0), -time), x87_sub(d1, d0)));
+        (t, -1)
+    };
+    let current = if axis == 1 {
+        0.0
+    } else {
+        load_float(e, s.out_time)
+    };
+    let slack = f64::from_bits(e.mem.u64(TIME_SLACK_010C9300));
+    // `FCOMPP; TEST AH,0x5; JP`: taken only when the slack sum is below.
+    if x87_add(current, slack) < t {
+        e.mem.set_u32(s.out_time, x87_store32(t));
+        s.axis = axis;
+        s.side = side;
+    }
+    false
+}
+
+/// The offset along one box axis of a contact point: `c` above zero gives
+/// `positive` (`FILD` of the side or its negation) times the half extent at
+/// `extent` (a memory operand), below zero the other sign, zero or a NaN
+/// `0.0` (the `FLDZ` stored), each product rounded.
+fn signed_extent(e: &Engine, c: f64, positive: i32, extent: u32) -> f64 {
+    if c > 0.0 {
+        rounded(x87_mul(f64::from(positive), float_operand(e, extent)))
+    } else if c < 0.0 {
+        rounded(x87_mul(
+            f64::from(positive.wrapping_neg()),
+            float_operand(e, extent),
+        ))
+    } else {
+        0.0
+    }
+}
+
+/// The contact point of the face and edge cases: box `bx`'s centre moved by
+/// `velocity` times the contact time, plus its three axes times `k`, added
+/// in that order (`(((ot v + centre) + k0 A0) + k1 A1) + k2 A2`) and
+/// stored component by component into `point`. The x of the first axis
+/// and the z of the axes `z_memory` names are memory operands, the other
+/// axis components loaded; `velocity_x_loaded` is the code that loads the
+/// velocity's x and takes the contact time as the operand (the faces of
+/// `a`), the others load the time.
+fn store_contact_point(
+    e: &mut Engine,
+    s: &BoxFind,
+    bx: u32,
+    velocity: u32,
+    k: [f64; 3],
+    velocity_x_loaded: bool,
+    z_memory: [bool; 3],
+) {
+    for component in 0..3u32 {
+        let moved = if component == 0 && velocity_x_loaded {
+            x87_mul(load_float(e, velocity), float_operand(e, s.out_time))
+        } else {
+            x87_mul(
+                load_float(e, s.out_time),
+                float_operand(e, velocity + 4 * component),
+            )
+        };
+        let mut sum = x87_add(moved, float_operand(e, bx + CENTER + 4 * component));
+        for (axis, &offset) in k.iter().enumerate() {
+            let field = bx + AXES + 0xc * axis as u32 + 4 * component;
+            let memory = match component {
+                0 => axis == 0,
+                1 => false,
+                _ => z_memory[axis],
+            };
+            let value = if memory {
+                float_operand(e, field)
+            } else {
+                load_float(e, field)
+            };
+            sum = x87_add(sum, x87_mul(offset, value));
+        }
+        e.mem.set_u32(s.point + 4 * component, x87_store32(sum));
+    }
+}
+
+/// `FLD; FCHS; FSTP` of the three floats at `from` into `to` (all three
+/// read before the first is written).
+fn store_negated_point(e: &mut Engine, to: u32, from: u32) {
+    let words = [0u32, 4, 8].map(|k| negated_bits(e.mem.u32(from + k)));
+    for (k, word) in words.iter().enumerate() {
+        e.mem.set_u32(to + 4 * k as u32, *word);
+    }
+}
+
+/// The time argument of [`fn_00ea7730`] as [`fn_00ea7d40`] passes it
+/// (`FLD; FSTP` onto the stack: a signalling NaN quieted).
+fn passed_time(s: &BoxFind) -> f32 {
+    f32::from_bits(x87_quiet_bits(s.time))
+}
+
+/// The end of [`fn_00ea7d40`] for the overlap and edge cases (`00ea96d5`):
+/// without `want_normals` nothing. Otherwise, when the normal's squared
+/// length (`004a7290`, rounded) differs from 1.0 by more than `FLT_EPSILON`
+/// (`|len2 - 1|` rounded; ordered compares), the normal is unitized
+/// (`004a0c10`) when the squared length is above `FLT_EPSILON`, else
+/// replaced by the default x axis (`011a946c`, three words). Then the
+/// negated normal is stored. Answers true.
+fn finish_normal(e: &mut Engine, s: &BoxFind) -> bool {
+    if !s.want_normals {
+        return true;
+    }
+    let length = rounded(
+        e.call(POINT_LENGTH_SQUARED_004A7290, &args![s.normal])
+            .f64(),
+    );
+    let one = x87_load64(e.mem.u64(ONE_01012070));
+    let off = rounded(rounded(x87_sub(length, one)).abs());
+    let epsilon = load_float(e, FLT_EPSILON);
+    if epsilon < off {
+        if epsilon < length {
+            e.call(UNITIZE_004A0C10, &args![s.normal]);
+        } else {
+            copy_point(e, s.normal, DEFAULT_AXIS_X);
+        }
+    }
+    store_negated_point(e, s.negated, s.normal);
+    true
+}
+
+/// Case 0 of [`fn_00ea7d40`] (no axis was taken: the boxes overlap at the
+/// start; the contact time stays 0): the contact point is half the sum of
+/// the centres (`00439e90` into `[ESP+0xe4]`, then `004a3760` with the
+/// float at `01016248` into `[ESP+0xa8]`, three words copied), the normal
+/// the point minus `a`'s centre (`00439ef0` into the copy of `V`), finished
+/// by [`finish_normal`].
+fn find_overlap(e: &mut Engine, s: &BoxFind) -> bool {
+    let f = s.frame;
+    let sum = e
+        .call(
+            POINT_SUM_00439E90,
+            &args![s.a + CENTER, f + FIND_CENTRE_SUM, s.b + CENTER],
+        )
+        .u32();
+    let half = x87_quiet_bits(e.mem.u32(HALF_01016248));
+    let point = e
+        .call(POINT_SCALE_004A3760, &args![f + FIND_HALF_SUM, half, sum])
+        .u32();
+    copy_point(e, s.point, point);
+    if !s.want_normals {
+        return true;
+    }
+    let normal = e
+        .call(
+            POINT_DIFFERENCE_00439EF0,
+            &args![s.point, f + FIND_V_COPY, s.a + CENTER],
+        )
+        .u32();
+    copy_point(e, s.normal, normal);
+    finish_normal(e, s)
+}
+
+/// Cases 1 to 3 of [`fn_00ea7d40`] (`a`'s axis `i` separated longest): the
+/// contact point is on `b`: its offsets along its axes `j` are
+/// [`signed_extent`] of `c[i][j]` with the negated side, `b` moved to the
+/// contact time ([`store_contact_point`]), then [`fn_00ea7730`] (`b`
+/// first). The normal is `a`'s axis `i` (the three words, or negated when
+/// the side is negative), the other output its negation; the normal is not
+/// unitized. Answers true.
+fn find_face_of_a(e: &mut Engine, s: &BoxFind, i: usize) -> bool {
+    let k = [0usize, 1, 2].map(|j| {
+        signed_extent(
+            e,
+            s.c[i][j],
+            s.side.wrapping_neg(),
+            s.b + EXTENTS + 4 * j as u32,
+        )
+    });
+    store_contact_point(e, s, s.b, s.vb, k, true, [false, false, true]);
+    let p = |x: u32| Ptr::new(x);
+    fn_00ea7730(
+        e,
+        passed_time(s),
+        p(s.b),
+        p(s.vb),
+        p(s.a),
+        p(s.va),
+        p(s.out_time),
+        p(s.point),
+    );
+    if !s.want_normals {
+        return true;
+    }
+    let axis = s.a + AXES + 0xc * i as u32;
+    if s.side < 0 {
+        store_negated_point(e, s.normal, axis);
+    } else {
+        copy_point(e, s.normal, axis);
+    }
+    store_negated_point(e, s.negated, s.normal);
+    true
+}
+
+/// Cases 4 to 6 of [`fn_00ea7d40`] (`b`'s axis `j`): as
+/// [`find_face_of_a`] with the boxes' roles exchanged: the point on `a`
+/// (offsets [`signed_extent`] of `c[i][j]` with the side itself), the
+/// normal `b`'s axis `j`.
+fn find_face_of_b(e: &mut Engine, s: &BoxFind, j: usize) -> bool {
+    let k =
+        [0usize, 1, 2].map(|i| signed_extent(e, s.c[i][j], s.side, s.a + EXTENTS + 4 * i as u32));
+    store_contact_point(e, s, s.a, s.va, k, false, [false, false, true]);
+    let p = |x: u32| Ptr::new(x);
+    fn_00ea7730(
+        e,
+        passed_time(s),
+        p(s.a),
+        p(s.va),
+        p(s.b),
+        p(s.vb),
+        p(s.out_time),
+        p(s.point),
+    );
+    if !s.want_normals {
+        return true;
+    }
+    let axis = s.b + AXES + 0xc * j as u32;
+    if s.side < 0 {
+        store_negated_point(e, s.normal, axis);
+    } else {
+        copy_point(e, s.normal, axis);
+    }
+    store_negated_point(e, s.negated, s.normal);
+    true
+}
+
+/// One edge case of [`fn_00ea7d40`] (`a`'s axis `i` times `b`'s axis `j`):
+/// `a_terms` and `b_terms` are the two other axes of each box, each with
+/// the `c` entry ([row, column]) whose sign gives its offset and whether a
+/// positive entry takes the negated side, in the code's order; `scale` the
+/// local `004a3760` writes `V` times the contact time into, `negative` and
+/// `positive` the locals `004b3800` writes the normal into for each side,
+/// `z_memory` the contact point's operand forms
+/// ([`store_contact_point`]).
+struct EdgeCase {
+    i: usize,
+    j: usize,
+    a_terms: [(usize, [usize; 2], bool); 2],
+    b_terms: [(usize, [usize; 2], bool); 2],
+    scale: u32,
+    negative: u32,
+    positive: u32,
+    z_memory: [bool; 3],
+}
+
+/// Cases 7 to 15 of [`fn_00ea7d40`], in order (`a`'s axis 0 with `b`'s
+/// axes 0, 1, 2, then `a`'s axes 1 and 2).
+const EDGE_CASES: [EdgeCase; 9] = [
+    EdgeCase {
+        i: 0,
+        j: 0,
+        a_terms: [(1, [2, 0], true), (2, [1, 0], false)],
+        b_terms: [(1, [0, 2], true), (2, [0, 1], false)],
+        scale: 0x1d4,
+        negative: 0x9c,
+        positive: 0x54,
+        z_memory: [false, false, true],
+    },
+    EdgeCase {
+        i: 0,
+        j: 1,
+        a_terms: [(1, [2, 1], true), (2, [1, 1], false)],
+        b_terms: [(0, [0, 2], false), (2, [0, 0], true)],
+        scale: 0xf0,
+        negative: 0x44,
+        positive: 0x1c,
+        z_memory: [false, false, true],
+    },
+    EdgeCase {
+        i: 0,
+        j: 2,
+        a_terms: [(1, [2, 2], true), (2, [1, 2], false)],
+        b_terms: [(0, [0, 1], true), (1, [0, 0], false)],
+        scale: 0x1ec,
+        negative: 0x28,
+        positive: 0x108,
+        z_memory: [false, false, true],
+    },
+    EdgeCase {
+        i: 1,
+        j: 0,
+        a_terms: [(0, [2, 0], false), (2, [0, 0], true)],
+        b_terms: [(1, [1, 2], true), (2, [1, 1], false)],
+        scale: 0x180,
+        negative: 0x120,
+        positive: 0x1e0,
+        z_memory: [false, true, true],
+    },
+    EdgeCase {
+        i: 1,
+        j: 1,
+        a_terms: [(0, [2, 1], false), (2, [0, 1], true)],
+        b_terms: [(0, [1, 2], false), (2, [1, 0], true)],
+        scale: 0x138,
+        negative: 0x198,
+        positive: 0x150,
+        z_memory: [false, true, true],
+    },
+    EdgeCase {
+        i: 1,
+        j: 2,
+        a_terms: [(0, [2, 2], false), (2, [0, 2], true)],
+        b_terms: [(0, [1, 1], true), (1, [1, 0], false)],
+        scale: 0x1c8,
+        negative: 0x168,
+        positive: 0x1b0,
+        z_memory: [false, true, true],
+    },
+    EdgeCase {
+        i: 2,
+        j: 0,
+        a_terms: [(0, [1, 0], true), (1, [0, 0], false)],
+        b_terms: [(1, [2, 2], true), (2, [2, 1], false)],
+        scale: 0xfc,
+        negative: 0x114,
+        positive: 0x12c,
+        z_memory: [false, false, false],
+    },
+    EdgeCase {
+        i: 2,
+        j: 1,
+        a_terms: [(0, [1, 1], true), (1, [0, 1], false)],
+        b_terms: [(0, [2, 2], false), (2, [2, 0], true)],
+        scale: 0x144,
+        negative: 0x15c,
+        positive: 0x174,
+        z_memory: [false, false, false],
+    },
+    EdgeCase {
+        i: 2,
+        j: 2,
+        a_terms: [(0, [1, 2], true), (1, [0, 2], false)],
+        b_terms: [(0, [2, 1], true), (1, [2, 0], false)],
+        scale: 0x18c,
+        negative: 0x1a4,
+        positive: 0x1bc,
+        z_memory: [false, false, false],
+    },
+];
+
+/// An edge case of [`fn_00ea7d40`] (see [`EdgeCase`]): the offsets of the
+/// four other axes are [`signed_extent`]s; `a`'s own offset along axis `i`
+/// solves for the closest point of the two edges when `|1 - c[i][j]^2|`
+/// (rounded) is above the float at `010959f4`: with `D = T + V * time`
+/// (`004a3760` on the copy of `V` with the contact time, each sum rounded,
+/// stored at `[ESP+0x54]`), `q` the sum of `a`'s other offsets times their
+/// `c[.][j]` (a `double`), `r1 = q - Bj . D` (rounded) and the
+/// `NiPoint3::Dot`s with `D`, it is
+/// `((Ai . D + r1 c[i][j]) + kb c[i][.] + kb' c[i][.]) / (1 - c[i][j]^2)`;
+/// otherwise 0. The contact point is on `a` moved to the contact time, then
+/// [`fn_00ea7730`]. The normal (with `want_normals`) is `Ai x Bj`
+/// (`004b3800`), negated for a negative side, finished by
+/// [`finish_normal`].
+fn find_edge(e: &mut Engine, s: &BoxFind, edge: &EdgeCase) -> bool {
+    let (i, j, c, f) = (edge.i, edge.j, s.c, s.frame);
+    let a_axis = |n: usize| s.a + AXES + 0xc * n as u32;
+    let b_axis = |n: usize| s.b + AXES + 0xc * n as u32;
+    let mut ka = [0.0f64; 3];
+    let mut kb = [0.0f64; 3];
+    for (n, [row, column], negated) in edge.a_terms {
+        let positive = if negated {
+            s.side.wrapping_neg()
+        } else {
+            s.side
+        };
+        ka[n] = signed_extent(e, c[row][column], positive, s.a + EXTENTS + 4 * n as u32);
+    }
+    for (n, [row, column], negated) in edge.b_terms {
+        let positive = if negated {
+            s.side.wrapping_neg()
+        } else {
+            s.side
+        };
+        kb[n] = signed_extent(e, c[row][column], positive, s.b + EXTENTS + 4 * n as u32);
+    }
+    let denominator = rounded(x87_sub(1.0, x87_mul(c[i][j], c[i][j])));
+    // `FCOMP float [010959f4]; TEST AH,0x41; JNZ`: solved only when above.
+    ka[i] = if rounded(denominator.abs()) > float_operand(e, PARALLEL_LIMIT_010959F4) {
+        let contact = x87_quiet_bits(e.mem.u32(s.out_time));
+        let moved = e
+            .call(
+                POINT_SCALE_004A3760,
+                &args![f + edge.scale, contact, f + FIND_V_COPY],
+            )
+            .u32();
+        let d = [
+            rounded(x87_add(s.t[0], float_operand(e, moved))),
+            rounded(x87_add(load_float(e, moved + 4), s.t[1])),
+            rounded(x87_add(load_float(e, moved + 8), s.t[2])),
+        ];
+        for (k, x) in d.iter().enumerate() {
+            e.mem
+                .set_u32(f + FIND_D_POINT + 4 * k as u32, x87_store32(*x));
+        }
+        let [(p0, _, _), (p1, _, _)] = edge.a_terms;
+        let q = x87_add(x87_mul(ka[p0], c[p0][j]), x87_mul(ka[p1], c[p1][j]));
+        let dot_b = e.call(POINT_DOT, &args![b_axis(j), f + FIND_D_POINT]).f64();
+        let r1 = rounded(x87_sub(q, dot_b));
+        let r1c = x87_mul(r1, c[i][j]);
+        let dot_a = e.call(POINT_DOT, &args![a_axis(i), f + FIND_D_POINT]).f64();
+        let [(s0, _, _), (s1, _, _)] = edge.b_terms;
+        let sum = x87_add(
+            x87_add(x87_add(dot_a, r1c), x87_mul(kb[s0], c[i][s0])),
+            x87_mul(kb[s1], c[i][s1]),
+        );
+        rounded(x87_div(sum, denominator))
+    } else {
+        0.0
+    };
+    store_contact_point(e, s, s.a, s.va, ka, false, edge.z_memory);
+    let p = |x: u32| Ptr::new(x);
+    fn_00ea7730(
+        e,
+        passed_time(s),
+        p(s.a),
+        p(s.va),
+        p(s.b),
+        p(s.vb),
+        p(s.out_time),
+        p(s.point),
+    );
+    if !s.want_normals {
+        return true;
+    }
+    if s.side < 0 {
+        let normal = e
+            .call(
+                POINT_CROSS_004B3800,
+                &args![a_axis(i), f + edge.negative, b_axis(j)],
+            )
+            .u32();
+        store_negated_point(e, s.normal, normal);
+    } else {
+        let normal = e
+            .call(
+                POINT_CROSS_004B3800,
+                &args![a_axis(i), f + edge.positive, b_axis(j)],
+            )
+            .u32();
+        copy_point(e, s.normal, normal);
+    }
+    finish_normal(e, s)
+}
+
+// Translated from 00ea7d40 (PC disassembly, FalloutNV.exe 1.4.0.525)
+/// Unnamed (a function Ghidra never created; the box row's box column of
+/// the find table set up at `00e99130`): the moving box-box `Find` (cdecl,
+/// ten words as [`fn_00ea3950`]: the time, box `a` and its velocity, box
+/// `b` and its velocity, `out_time`, `out_point`, `want_normals` (a byte),
+/// `out_normal`, `out_normal_negated`). With `V` the relative velocity
+/// (`b`'s minus `a`'s), `T` the centre offset (`b - a`), `T1 = T + V time`
+/// and `c[i][j] = Ai . Bj` (every value rounded where the code stores it),
+/// the fifteen separating axes are tried in turn ([`find_axis`]): `a`'s
+/// three axes, `b`'s three, then the nine products `Ai x Bj` (`a`'s axis
+/// major); the first that keeps the boxes apart for the whole motion
+/// answers false. Otherwise the axis whose meeting time is the latest (by
+/// more than the slack) is the contact axis, its time `*out_time` (0 when
+/// none was taken), and a `switch` on it (a jump table after the body)
+/// stores the contact point and, with `want_normals`, the normal and its
+/// negation: [`find_overlap`] (0), [`find_face_of_a`] (1 to 3),
+/// [`find_face_of_b`] (4 to 6), [`find_edge`] (7 to 15). Answers true.
+#[allow(clippy::too_many_arguments)]
+pub fn fn_00ea7d40(
+    e: &mut Engine,
+    time: f32,
+    a: Ptr,
+    a_velocity: Ptr,
+    b: Ptr,
+    b_velocity: Ptr,
+    out_time: Ptr,
+    out_point: Ptr,
+    want_normals: bool,
+    out_normal: Ptr,
+    out_normal_negated: Ptr,
+) -> bool {
+    e.with_stack(FIND_FRAME, |e, frame| {
+        let f = frame.addr();
+        let (a, va, b, vb) = (a.addr(), a_velocity.addr(), b.addr(), b_velocity.addr());
+        let ot = out_time.addr();
+        let ld = |e: &Engine, x: u32| load_float(e, x);
+        let op = |e: &Engine, x: u32| float_operand(e, x);
+        let time_l = x87_load32(time.to_bits());
+        let time_m = x87_m32(time.to_bits());
+        let v = [
+            rounded(x87_sub(ld(e, vb), op(e, va))),
+            rounded(x87_sub(ld(e, vb + 4), op(e, va + 4))),
+            rounded(x87_sub(ld(e, vb + 8), op(e, va + 8))),
+        ];
+        for (k, x) in v.iter().enumerate() {
+            e.mem
+                .set_u32(f + FIND_V_COPY + 4 * k as u32, x87_store32(*x));
+        }
+        let t = [
+            rounded(x87_sub(ld(e, b + 4), op(e, a + 4))),
+            rounded(x87_sub(ld(e, b + 8), op(e, a + 8))),
+            rounded(x87_sub(ld(e, b + 0xc), op(e, a + 0xc))),
+        ];
+        let m = [
+            rounded(x87_mul(v[0], time_l)),
+            rounded(x87_mul(v[1], time_l)),
+            rounded(x87_mul(time_l, v[2])),
+        ];
+        let t1 = [
+            rounded(x87_add(t[0], m[0])),
+            rounded(x87_add(m[1], t[1])),
+            rounded(x87_add(m[2], t[2])),
+        ];
+        // `FLDZ; FSTP [EDI]`.
+        e.mem.set_u32(ot, 0);
+        let mut s = BoxFind {
+            time: time.to_bits(),
+            a,
+            va,
+            b,
+            vb,
+            out_time: ot,
+            point: out_point.addr(),
+            want_normals,
+            normal: out_normal.addr(),
+            negated: out_normal_negated.addr(),
+            frame: f,
+            c: [[0.0; 3]; 3],
+            t,
+            axis: 0,
+            side: 0,
+        };
+        let mut c = [[0.0f64; 3]; 3];
+        let mut ac = [[0.0f64; 3]; 3];
+        let mut da = [0.0f64; 3];
+        let mut d1a = [0.0f64; 3];
+        // `a`'s first axis.
+        c[0] = [
+            rounded(x87_add(
+                x87_add(
+                    x87_mul(ld(e, b + 0x14), op(e, a + 0x14)),
+                    x87_mul(ld(e, b + 0x10), op(e, a + 0x10)),
+                ),
+                x87_mul(ld(e, b + 0x18), op(e, a + 0x18)),
+            )),
+            rounded(x87_add(
+                x87_add(
+                    x87_mul(ld(e, b + 0x20), op(e, a + 0x14)),
+                    x87_mul(ld(e, b + 0x1c), op(e, a + 0x10)),
+                ),
+                x87_mul(ld(e, b + 0x24), op(e, a + 0x18)),
+            )),
+            rounded(x87_add(
+                x87_add(
+                    x87_mul(ld(e, b + 0x2c), op(e, a + 0x14)),
+                    x87_mul(ld(e, a + 0x10), op(e, b + 0x28)),
+                ),
+                x87_mul(ld(e, b + 0x30), op(e, a + 0x18)),
+            )),
+        ];
+        da[0] = rounded(x87_add(
+            x87_add(
+                x87_mul(t[0], op(e, a + 0x10)),
+                x87_mul(t[1], op(e, a + 0x14)),
+            ),
+            x87_mul(t[2], op(e, a + 0x18)),
+        ));
+        d1a[0] = rounded(x87_add(
+            x87_add(
+                x87_mul(ld(e, a + 0x10), t1[0]),
+                x87_mul(t1[1], op(e, a + 0x14)),
+            ),
+            x87_mul(t1[2], op(e, a + 0x18)),
+        ));
+        // `FABS` of a stored float, stored and reloaded twice: exact.
+        ac[0] = c[0].map(f64::abs);
+        let rb = rounded(x87_add(
+            x87_add(
+                x87_mul(ld(e, b + 0x38), ac[0][1]),
+                x87_mul(ld(e, b + 0x34), ac[0][0]),
+            ),
+            x87_mul(ac[0][2], op(e, b + 0x3c)),
+        ));
+        let r = rounded(x87_add(rb, op(e, a + 0x34)));
+        let d1 = d1a[0];
+        if find_axis(e, &mut s, 1, r, da[0], || d1, time_l, time_l) {
+            return false;
+        }
+        // `a`'s second axis.
+        c[1] = [
+            rounded(x87_add(
+                x87_add(
+                    x87_mul(ld(e, a + 0x20), op(e, b + 0x14)),
+                    x87_mul(ld(e, b + 0x10), op(e, a + 0x1c)),
+                ),
+                x87_mul(ld(e, a + 0x24), op(e, b + 0x18)),
+            )),
+            rounded(x87_add(
+                x87_add(
+                    x87_mul(ld(e, b + 0x20), op(e, a + 0x20)),
+                    x87_mul(ld(e, b + 0x1c), op(e, a + 0x1c)),
+                ),
+                x87_mul(ld(e, b + 0x24), op(e, a + 0x24)),
+            )),
+            rounded(x87_add(
+                x87_add(
+                    x87_mul(ld(e, b + 0x2c), op(e, a + 0x20)),
+                    x87_mul(ld(e, b + 0x28), op(e, a + 0x1c)),
+                ),
+                x87_mul(ld(e, b + 0x30), op(e, a + 0x24)),
+            )),
+        ];
+        da[1] = rounded(x87_add(
+            x87_add(
+                x87_mul(ld(e, a + 0x20), t[1]),
+                x87_mul(t[0], op(e, a + 0x1c)),
+            ),
+            x87_mul(ld(e, a + 0x24), t[2]),
+        ));
+        d1a[1] = rounded(x87_add(
+            x87_add(
+                x87_mul(ld(e, a + 0x20), t1[1]),
+                x87_mul(ld(e, a + 0x1c), t1[0]),
+            ),
+            x87_mul(ld(e, a + 0x24), t1[2]),
+        ));
+        ac[1] = c[1].map(f64::abs);
+        let rb = rounded(x87_add(
+            x87_add(
+                x87_mul(ld(e, b + 0x38), ac[1][1]),
+                x87_mul(ld(e, b + 0x34), ac[1][0]),
+            ),
+            x87_mul(ac[1][2], op(e, b + 0x3c)),
+        ));
+        let r = rounded(x87_add(rb, op(e, a + 0x38)));
+        let d1 = d1a[1];
+        if find_axis(e, &mut s, 2, r, da[1], || d1, time_l, time_l) {
+            return false;
+        }
+        // `a`'s third axis.
+        c[2] = [
+            rounded(x87_add(
+                x87_add(
+                    x87_mul(ld(e, a + 0x2c), op(e, b + 0x14)),
+                    x87_mul(ld(e, a + 0x28), op(e, b + 0x10)),
+                ),
+                x87_mul(ld(e, a + 0x30), op(e, b + 0x18)),
+            )),
+            rounded(x87_add(
+                x87_add(
+                    x87_mul(ld(e, b + 0x20), op(e, a + 0x2c)),
+                    x87_mul(ld(e, b + 0x1c), op(e, a + 0x28)),
+                ),
+                x87_mul(ld(e, b + 0x24), op(e, a + 0x30)),
+            )),
+            rounded(x87_add(
+                x87_add(
+                    x87_mul(ld(e, b + 0x2c), op(e, a + 0x2c)),
+                    x87_mul(ld(e, b + 0x28), op(e, a + 0x28)),
+                ),
+                x87_mul(ld(e, b + 0x30), op(e, a + 0x30)),
+            )),
+        ];
+        da[2] = rounded(x87_add(
+            x87_add(
+                x87_mul(ld(e, a + 0x2c), t[1]),
+                x87_mul(t[0], op(e, a + 0x28)),
+            ),
+            x87_mul(ld(e, a + 0x30), t[2]),
+        ));
+        d1a[2] = rounded(x87_add(
+            x87_add(
+                x87_mul(ld(e, a + 0x2c), t1[1]),
+                x87_mul(ld(e, a + 0x28), t1[0]),
+            ),
+            x87_mul(ld(e, a + 0x30), t1[2]),
+        ));
+        ac[2] = c[2].map(f64::abs);
+        let rb = rounded(x87_add(
+            x87_add(
+                x87_mul(ld(e, b + 0x38), ac[2][1]),
+                x87_mul(ld(e, b + 0x34), ac[2][0]),
+            ),
+            x87_mul(ac[2][2], op(e, b + 0x3c)),
+        ));
+        let r = rounded(x87_add(rb, op(e, a + 0x3c)));
+        let d1 = d1a[2];
+        if find_axis(e, &mut s, 3, r, da[2], || d1, time_l, time_l) {
+            return false;
+        }
+        s.c = c;
+        // `b`'s axes (the meeting time of the first two takes the time as a
+        // memory operand).
+        let db0 = rounded(x87_add(
+            x87_add(
+                x87_mul(ld(e, b + 0x10), t[0]),
+                x87_mul(t[1], op(e, b + 0x14)),
+            ),
+            x87_mul(t[2], op(e, b + 0x18)),
+        ));
+        let d1b0 = rounded(x87_add(
+            x87_add(
+                x87_mul(ld(e, b + 0x10), t1[0]),
+                x87_mul(t1[1], op(e, b + 0x14)),
+            ),
+            x87_mul(t1[2], op(e, b + 0x18)),
+        ));
+        let ra = rounded(x87_add(
+            x87_add(
+                x87_mul(ld(e, a + 0x38), ac[1][0]),
+                x87_mul(ac[0][0], op(e, a + 0x34)),
+            ),
+            x87_mul(ld(e, a + 0x3c), ac[2][0]),
+        ));
+        let r = rounded(x87_add(ra, op(e, b + 0x34)));
+        if find_axis(e, &mut s, 4, r, db0, || d1b0, time_m, time_l) {
+            return false;
+        }
+        let db1 = rounded(x87_add(
+            x87_add(
+                x87_mul(ld(e, b + 0x20), t[1]),
+                x87_mul(t[0], op(e, b + 0x1c)),
+            ),
+            x87_mul(ld(e, b + 0x24), t[2]),
+        ));
+        let d1b1 = rounded(x87_add(
+            x87_add(
+                x87_mul(ld(e, b + 0x20), t1[1]),
+                x87_mul(ld(e, b + 0x1c), t1[0]),
+            ),
+            x87_mul(ld(e, b + 0x24), t1[2]),
+        ));
+        let ra = rounded(x87_add(
+            x87_add(
+                x87_mul(ld(e, a + 0x38), ac[1][1]),
+                x87_mul(ac[0][1], op(e, a + 0x34)),
+            ),
+            x87_mul(ld(e, a + 0x3c), ac[2][1]),
+        ));
+        let r = rounded(x87_add(ra, op(e, b + 0x38)));
+        if find_axis(e, &mut s, 5, r, db1, || d1b1, time_m, time_l) {
+            return false;
+        }
+        let db2 = rounded(x87_add(
+            x87_mul(t[2], ld(e, b + 0x30)),
+            x87_add(
+                x87_mul(t[0], ld(e, b + 0x28)),
+                x87_mul(t[1], ld(e, b + 0x2c)),
+            ),
+        ));
+        let d1b2 = rounded(x87_add(
+            x87_add(
+                x87_mul(t1[1], ld(e, b + 0x2c)),
+                x87_mul(t1[0], op(e, b + 0x28)),
+            ),
+            x87_mul(ld(e, b + 0x30), t1[2]),
+        ));
+        let ra = rounded(x87_add(
+            x87_add(
+                x87_mul(ld(e, a + 0x38), ac[1][2]),
+                x87_mul(ac[0][2], op(e, a + 0x34)),
+            ),
+            x87_mul(ld(e, a + 0x3c), ac[2][2]),
+        ));
+        let r = rounded(x87_add(ra, op(e, b + 0x3c)));
+        if find_axis(e, &mut s, 6, r, db2, || d1b2, time_l, time_l) {
+            return false;
+        }
+        // The nine products `Ai x Bj`: `d0` and `d1` from `a`'s projections,
+        // the radii as two rounded sums (each pair in the code's operand
+        // forms).
+        let cross = |p: f64, x: f64, q: f64, y: f64| rounded(x87_sub(x87_mul(p, x), x87_mul(q, y)));
+        let (eb, ea) = (|k: u32| b + EXTENTS + 4 * k, |k: u32| a + EXTENTS + 4 * k);
+        let pair = |x: f64, y: f64| rounded(x87_add(x, y));
+        // A0 x B0.
+        let d0 = cross(da[2], c[1][0], c[2][0], da[1]);
+        let r = pair(
+            pair(
+                x87_mul(ld(e, eb(1)), ac[0][2]),
+                x87_mul(ac[0][1], op(e, eb(2))),
+            ),
+            pair(
+                x87_mul(ld(e, ea(1)), ac[2][0]),
+                x87_mul(ld(e, ea(2)), ac[1][0]),
+            ),
+        );
+        let d1 = || cross(c[1][0], d1a[2], c[2][0], d1a[1]);
+        if find_axis(e, &mut s, 7, r, d0, d1, time_l, time_l) {
+            return false;
+        }
+        // A0 x B1.
+        let d0 = cross(da[2], c[1][1], c[2][1], da[1]);
+        let r = pair(
+            pair(
+                x87_mul(ld(e, ea(1)), ac[2][1]),
+                x87_mul(ld(e, ea(2)), ac[1][1]),
+            ),
+            pair(
+                x87_mul(ac[0][2], ld(e, eb(0))),
+                x87_mul(ac[0][0], op(e, eb(2))),
+            ),
+        );
+        let d1 = || cross(c[1][1], d1a[2], c[2][1], d1a[1]);
+        if find_axis(e, &mut s, 8, r, d0, d1, time_l, time_l) {
+            return false;
+        }
+        // A0 x B2.
+        let d0 = cross(da[2], c[1][2], c[2][2], da[1]);
+        let r = pair(
+            pair(
+                x87_mul(ld(e, ea(1)), ac[2][2]),
+                x87_mul(ld(e, ea(2)), ac[1][2]),
+            ),
+            pair(
+                x87_mul(ld(e, eb(1)), ac[0][0]),
+                x87_mul(ld(e, eb(0)), ac[0][1]),
+            ),
+        );
+        let d1 = || cross(c[1][2], d1a[2], c[2][2], d1a[1]);
+        if find_axis(e, &mut s, 9, r, d0, d1, time_l, time_l) {
+            return false;
+        }
+        // A1 x B0.
+        let d0 = cross(c[2][0], da[0], da[2], c[0][0]);
+        let r = pair(
+            pair(
+                x87_mul(ld(e, eb(1)), ac[1][2]),
+                x87_mul(ac[1][1], op(e, eb(2))),
+            ),
+            pair(
+                x87_mul(ld(e, ea(2)), ac[0][0]),
+                x87_mul(ac[2][0], op(e, ea(0))),
+            ),
+        );
+        let d1 = || cross(c[2][0], d1a[0], c[0][0], d1a[2]);
+        if find_axis(e, &mut s, 10, r, d0, d1, time_l, time_l) {
+            return false;
+        }
+        // A1 x B1.
+        let d0 = cross(c[2][1], da[0], da[2], c[0][1]);
+        let r = pair(
+            pair(
+                x87_mul(ld(e, ea(2)), ac[0][1]),
+                x87_mul(ac[2][1], op(e, ea(0))),
+            ),
+            pair(
+                x87_mul(ld(e, eb(0)), ac[1][2]),
+                x87_mul(ac[1][0], op(e, eb(2))),
+            ),
+        );
+        let d1 = || cross(c[2][1], d1a[0], c[0][1], d1a[2]);
+        if find_axis(e, &mut s, 11, r, d0, d1, time_l, time_l) {
+            return false;
+        }
+        // A1 x B2.
+        let d0 = cross(c[2][2], da[0], da[2], c[0][2]);
+        let r = pair(
+            pair(
+                x87_mul(ld(e, ea(2)), ac[0][2]),
+                x87_mul(ac[2][2], op(e, ea(0))),
+            ),
+            pair(
+                x87_mul(ld(e, eb(1)), ac[1][0]),
+                x87_mul(ld(e, eb(0)), ac[1][1]),
+            ),
+        );
+        let d1 = || cross(c[2][2], d1a[0], c[0][2], d1a[2]);
+        if find_axis(e, &mut s, 12, r, d0, d1, time_l, time_l) {
+            return false;
+        }
+        // A2 x B0.
+        let d0 = cross(da[1], c[0][0], c[1][0], da[0]);
+        let r = pair(
+            pair(
+                x87_mul(ld(e, eb(1)), ac[2][2]),
+                x87_mul(ac[2][1], op(e, eb(2))),
+            ),
+            pair(
+                x87_mul(ld(e, ea(1)), ac[0][0]),
+                x87_mul(ac[1][0], op(e, ea(0))),
+            ),
+        );
+        let d1 = || cross(d1a[1], c[0][0], c[1][0], d1a[0]);
+        if find_axis(e, &mut s, 13, r, d0, d1, time_l, time_l) {
+            return false;
+        }
+        // A2 x B1.
+        let d0 = cross(da[1], c[0][1], c[1][1], da[0]);
+        let r = pair(
+            pair(
+                x87_mul(ld(e, eb(0)), ac[2][2]),
+                x87_mul(ac[2][0], op(e, eb(2))),
+            ),
+            pair(
+                x87_mul(ld(e, ea(1)), ac[0][1]),
+                x87_mul(ac[1][1], op(e, ea(0))),
+            ),
+        );
+        let d1 = || cross(d1a[1], c[0][1], c[1][1], d1a[0]);
+        if find_axis(e, &mut s, 14, r, d0, d1, time_l, time_l) {
+            return false;
+        }
+        // A2 x B2.
+        let d0 = cross(da[1], c[0][2], da[0], c[1][2]);
+        let r = pair(
+            pair(
+                x87_mul(ld(e, eb(1)), ac[2][0]),
+                x87_mul(ld(e, eb(0)), ac[2][1]),
+            ),
+            pair(
+                x87_mul(ld(e, ea(1)), ac[0][2]),
+                x87_mul(ac[1][2], op(e, ea(0))),
+            ),
+        );
+        let d1 = || cross(d1a[1], c[0][2], d1a[0], c[1][2]);
+        if find_axis(e, &mut s, 15, r, d0, d1, time_l, time_l) {
+            return false;
+        }
+        // The jump table at `00eab768` (the compiler's bound check `JBE` on
+        // 15 lets a larger value fall through to the normal's end, which
+        // cannot happen: the axis is one of the fifteen or 0).
+        match s.axis {
+            0 => find_overlap(e, &s),
+            1..=3 => find_face_of_a(e, &s, s.axis as usize - 1),
+            4..=6 => find_face_of_b(e, &s, s.axis as usize - 4),
+            7..=15 => find_edge(e, &s, &EDGE_CASES[s.axis as usize - 7]),
+            _ => finish_normal(e, &s),
+        }
+    })
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -1759,6 +2788,10 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(
             0x00ea_2190,
             fn_00ea2190(f32, Ptr, Ptr, Ptr, Ptr, Ptr, Ptr) -> bool
+        ),
+        entry!(
+            0x00ea_7d40,
+            fn_00ea7d40(f32, Ptr, Ptr, Ptr, Ptr, Ptr, Ptr, bool, Ptr, Ptr) -> bool
         ),
     ]
 }
@@ -2519,5 +3552,433 @@ mod tests {
         let (hit, log) = box_triangle(&mut e, corner, 1.0, [-5.0, -5.0, 0.0]);
         assert!(hit);
         assert_eq!(calls(&log, POINT_DOT).len(), 2);
+    }
+
+    fn read3(e: &Engine, p: u32) -> [f32; 3] {
+        [e.mem.f32(p), e.mem.f32(p + 4), e.mem.f32(p + 8)]
+    }
+
+    fn write3(e: &mut Engine, p: u32, v: [f32; 3]) {
+        for (k, x) in v.iter().enumerate() {
+            e.mem.set_f32(p + 4 * k as u32, *x);
+        }
+    }
+
+    /// Everything `fn_00ea7d40` and the contact point clamp read: the data
+    /// floats, the vector helpers over plain floats, and the probe tests
+    /// answering "touching" (distance 0), so the point is never clamped.
+    fn find_world(e: &mut Engine) {
+        data(e);
+        vector_doubles(e);
+        for page in [
+            0x010c_9000u32,
+            0x0101_6000,
+            0x0101_2000,
+            0x0109_5000,
+            0x0101_3000,
+            0x0106_d000,
+        ] {
+            e.map(page, 0x1000);
+        }
+        e.mem.set_u64(TIME_SLACK_010C9300, 0x3e80_0000_0000_0000);
+        e.mem.set_f32(HALF_01016248, 0.5);
+        e.mem.set_u64(ONE_01012070, 1.0f64.to_bits());
+        e.mem.set_f32(PARALLEL_LIMIT_010959F4, 1e-6);
+        e.mem.set_f32(PROBE_RADIUS, 0.01);
+        e.mem.set_u64(CLAMP_FACTOR, 0x3fef_ae14_8000_0000);
+        e.register(SPHERE_BV_CONSTRUCT_00EAB8A0, nothing);
+        e.register(POINT_BOX_DISTANCE_00EB42E0, |_, _| st0(0.0));
+        e.register(SEGMENT_BOX_DISTANCE_00EB50F0, |_, _| st0(0.0));
+        e.register(POINT_SUM_00439E90, |e, a| {
+            let (p, q) = (read3(e, a[0]), read3(e, a[2]));
+            write3(e, a[1], [p[0] + q[0], p[1] + q[1], p[2] + q[2]]);
+            a[1].into_ret()
+        });
+        e.register(POINT_DIFFERENCE_00439EF0, |e, a| {
+            let (p, q) = (read3(e, a[0]), read3(e, a[2]));
+            write3(e, a[1], [p[0] - q[0], p[1] - q[1], p[2] - q[2]]);
+            a[1].into_ret()
+        });
+        e.register(POINT_SCALE_004A3760, |e, a| {
+            let (s, p) = (f32::from_bits(a[1]), read3(e, a[2]));
+            write3(e, a[0], [s * p[0], s * p[1], s * p[2]]);
+            a[0].into_ret()
+        });
+        e.register(POINT_LENGTH_SQUARED_004A7290, |e, a| {
+            let p = read3(e, a[0]);
+            st0(f64::from(p[2] * p[2] + p[1] * p[1] + p[0] * p[0]))
+        });
+        e.register(UNITIZE_004A0C10, |e, a| {
+            let p = read3(e, a[0]);
+            let length = (p[0] * p[0] + p[1] * p[1] + p[2] * p[2]).sqrt();
+            write3(e, a[0], [p[0] / length, p[1] / length, p[2] / length]);
+            Ret::default()
+        });
+    }
+
+    /// What one find leaves: the answer, the contact time, point, normal
+    /// and negated normal (words; `0x7777_7777` where nothing was stored)
+    /// and the call log.
+    struct Found {
+        hit: bool,
+        time: f32,
+        point: [f32; 3],
+        normal: [u32; 3],
+        negated: [u32; 3],
+        log: Vec<(u32, Vec<u32>)>,
+    }
+
+    fn find(
+        e: &mut Engine,
+        time: f32,
+        a: u32,
+        va: [f32; 3],
+        b: u32,
+        vb: [f32; 3],
+        want: bool,
+    ) -> Found {
+        let (va, vb) = (floats(e, &va), floats(e, &vb));
+        let outs = e.mem.alloc(0x28);
+        for word in 0..10 {
+            e.mem.set_u32(outs + 4 * word, 0x7777_7777);
+        }
+        e.call_log = Some(vec![]);
+        let hit = e
+            .call(
+                0x00ea_7d40,
+                &args![
+                    time,
+                    a,
+                    va,
+                    b,
+                    vb,
+                    outs,
+                    outs + 4,
+                    want,
+                    outs + 0x10,
+                    outs + 0x1c
+                ],
+            )
+            .bool();
+        let words = |at: u32| [0u32, 4, 8].map(|k| e.mem.u32(at + k));
+        Found {
+            hit,
+            time: e.mem.f32(outs),
+            point: read3(e, outs + 4),
+            normal: words(outs + 0x10),
+            negated: words(outs + 0x1c),
+            log: e.call_log.take().unwrap(),
+        }
+    }
+
+    fn bits(v: [f32; 3]) -> [u32; 3] {
+        v.map(f32::to_bits)
+    }
+
+    fn close(found: [f32; 3], want: [f32; 3]) -> bool {
+        found.iter().zip(want).all(|(x, y)| (x - y).abs() < 1e-5)
+    }
+
+    const STILL: [f32; 3] = [0.0; 3];
+
+    #[test]
+    fn box_box_find_separated_answers_false() {
+        let mut e = Engine::new();
+        find_world(&mut e);
+        let a = aligned(&mut e, [0.0; 3], [1.0; 3]);
+        // Apart on `a`'s first axis, on both sides, and still apart after
+        // a motion too short to close the gap.
+        for (centre, velocity) in [
+            ([5.0, 0.0, 0.0], STILL),
+            ([-5.0, 0.0, 0.0], STILL),
+            ([5.0, 0.0, 0.0], [-1.0, 0.0, 0.0]),
+            ([-5.0, 0.0, 0.0], [2.5, 0.0, 0.0]),
+            ([0.0, 0.0, 5.0], [0.0, 0.0, 1.0]),
+        ] {
+            let b = aligned(&mut e, centre, [1.0; 3]);
+            let found = find(&mut e, 1.0, a, STILL, b, velocity, true);
+            assert!(!found.hit);
+            // The contact time is cleared first; nothing else is stored.
+            assert_eq!(found.time, 0.0);
+            assert_eq!(found.normal, [0x7777_7777; 3]);
+            assert!(calls(&found.log, POINT_DOT).is_empty());
+        }
+    }
+
+    #[test]
+    fn box_box_find_overlap_takes_the_midpoint() {
+        let mut e = Engine::new();
+        find_world(&mut e);
+        let a = aligned(&mut e, [0.0; 3], [1.0; 3]);
+        // Overlapping at the start: case 0, the contact time stays 0.
+        let b = aligned(&mut e, [1.0, 0.0, 0.0], [1.0; 3]);
+        let found = find(&mut e, 1.0, a, STILL, b, STILL, true);
+        assert!(found.hit);
+        assert_eq!(found.time, 0.0);
+        assert_eq!(found.point, [0.5, 0.0, 0.0]);
+        // The normal is the point minus `a`'s centre, unitized (its squared
+        // length 0.25 is off 1 and above the epsilon).
+        assert_eq!(found.normal, bits([1.0, 0.0, 0.0]));
+        assert_eq!(found.negated, bits([-1.0, -0.0, -0.0]));
+        let log = &found.log;
+        let added = calls(log, POINT_SUM_00439E90);
+        assert_eq!([added[0][0], added[0][2]], [a + 4, b + 4]);
+        let scaled = calls(log, POINT_SCALE_004A3760);
+        assert_eq!(scaled[0][1], 0.5f32.to_bits());
+        assert_eq!(scaled[0][2], added[0][1]);
+        assert_eq!(calls(log, POINT_DIFFERENCE_00439EF0)[0][2], a + 4);
+        assert_eq!(calls(log, UNITIZE_004A0C10).len(), 1);
+        // A normal of length 1 is left alone.
+        let b = aligned(&mut e, [2.0, 0.0, 0.0], [1.0; 3]);
+        let found = find(&mut e, 1.0, a, STILL, b, STILL, true);
+        assert_eq!(found.point, [1.0, 0.0, 0.0]);
+        assert_eq!(found.normal, bits([1.0, 0.0, 0.0]));
+        assert!(calls(&found.log, UNITIZE_004A0C10).is_empty());
+        // Coinciding centres: a zero normal becomes the default x axis.
+        let b = aligned(&mut e, [0.0; 3], [0.5; 3]);
+        let found = find(&mut e, 1.0, a, STILL, b, STILL, true);
+        assert_eq!(found.point, [0.0; 3]);
+        assert_eq!(found.normal, bits([1.0, 0.0, 0.0]));
+        assert_eq!(found.negated, bits([-1.0, -0.0, -0.0]));
+        assert!(calls(&found.log, UNITIZE_004A0C10).is_empty());
+        // Without normals: the point only.
+        let b = aligned(&mut e, [1.0, 0.0, 0.0], [1.0; 3]);
+        let found = find(&mut e, 1.0, a, STILL, b, STILL, false);
+        assert_eq!(found.point, [0.5, 0.0, 0.0]);
+        assert_eq!(found.normal, [0x7777_7777; 3]);
+        assert!(calls(&found.log, POINT_DIFFERENCE_00439EF0).is_empty());
+    }
+
+    #[test]
+    fn box_box_find_face_of_the_first_box() {
+        let mut e = Engine::new();
+        find_world(&mut e);
+        let a = aligned(&mut e, [0.0; 3], [1.0; 3]);
+        // `b` comes along x and meets `a`'s face x = 1 at 3/4 of the time
+        // (`b`'s own x axis meets at the same time: not later by the slack).
+        let b = aligned(&mut e, [5.0, 0.0, 0.0], [1.0; 3]);
+        let found = find(&mut e, 1.0, a, STILL, b, [-4.0, 0.0, 0.0], true);
+        assert!(found.hit);
+        assert_eq!(found.time, 0.75);
+        // On `b`'s face: its centre at the contact time minus its extent.
+        assert_eq!(found.point, [1.0, 0.0, 0.0]);
+        assert_eq!(found.normal, bits([1.0, 0.0, 0.0]));
+        assert_eq!(found.negated, bits([-1.0, -0.0, -0.0]));
+        assert!(calls(&found.log, POINT_CROSS_004B3800).is_empty());
+        assert!(calls(&found.log, POINT_LENGTH_SQUARED_004A7290).is_empty());
+        // From the other side: the negative side, the negated axis.
+        let b = aligned(&mut e, [-5.0, 0.0, 0.0], [1.0; 3]);
+        let found = find(&mut e, 1.0, a, STILL, b, [4.0, 0.0, 0.0], true);
+        assert!(found.hit);
+        assert_eq!(found.time, 0.75);
+        assert_eq!(found.point, [-1.0, 0.0, 0.0]);
+        assert_eq!(found.normal, bits([-1.0, -0.0, -0.0]));
+        assert_eq!(found.negated, bits([1.0, 0.0, 0.0]));
+        // `a` moving instead, on y, for twice the time: the point on the
+        // still `b`'s face.
+        let b = aligned(&mut e, [0.0, 5.0, 0.0], [1.0; 3]);
+        let found = find(&mut e, 2.0, a, [0.0, 2.0, 0.0], b, STILL, false);
+        assert!(found.hit);
+        assert_eq!(found.time, 1.5);
+        assert_eq!(found.point, [0.0, 4.0, 0.0]);
+        assert_eq!(found.normal, [0x7777_7777; 3]);
+    }
+
+    /// `a` turned 45 degrees about z and then about x (no axis of it is
+    /// perpendicular to x), extents 1, at the origin.
+    fn tilted(e: &mut Engine) -> u32 {
+        let h = std::f32::consts::FRAC_1_SQRT_2;
+        box_volume(
+            e,
+            [
+                0.0, 0.0, 0.0, h, h, 0.0, -0.5, 0.5, h, 0.5, -0.5, h, 1.0, 1.0, 1.0,
+            ],
+        )
+    }
+
+    #[test]
+    fn box_box_find_face_of_the_second_box() {
+        let mut e = Engine::new();
+        find_world(&mut e);
+        let a = tilted(&mut e);
+        // `b` (aligned) comes along x: `a`'s corner hits `b`'s face x = -1.
+        let b = aligned(&mut e, [5.0, 0.0, 0.0], [1.0; 3]);
+        let found = find(&mut e, 1.0, a, STILL, b, [-4.0, 0.0, 0.0], true);
+        assert!(found.hit);
+        let reach = std::f32::consts::FRAC_1_SQRT_2 + 1.0;
+        assert!((found.time - (4.0 - reach) / 4.0).abs() < 1e-6);
+        // The corner of `a` reaching furthest along x: A0 - A1 + A2.
+        let h = std::f32::consts::FRAC_1_SQRT_2;
+        assert!(close(found.point, [h + 1.0, h - 1.0, 0.0]));
+        assert_eq!(found.normal, bits([1.0, 0.0, 0.0]));
+        assert_eq!(found.negated, bits([-1.0, -0.0, -0.0]));
+        assert!(calls(&found.log, POINT_CROSS_004B3800).is_empty());
+        // From the other side: the corner A1 - A0 - A2, the negated axis.
+        let b = aligned(&mut e, [-5.0, 0.0, 0.0], [1.0; 3]);
+        let found = find(&mut e, 1.0, a, STILL, b, [4.0, 0.0, 0.0], true);
+        assert!(found.hit);
+        assert!(close(found.point, [-h - 1.0, 1.0 - h, 0.0]));
+        assert_eq!(found.normal, bits([-1.0, -0.0, -0.0]));
+    }
+
+    /// `a` turned 45 degrees about z (an edge along z leading in x), `b`
+    /// 45 degrees about y (an edge along y leading in -x), `b` at `centre`.
+    fn crossed_boxes(e: &mut Engine, centre: [f32; 3]) -> (u32, u32) {
+        let h = std::f32::consts::FRAC_1_SQRT_2;
+        let a = box_volume(
+            e,
+            [
+                0.0, 0.0, 0.0, h, h, 0.0, -h, h, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0, 1.0,
+            ],
+        );
+        let b = box_volume(
+            e,
+            [
+                centre[0], centre[1], centre[2], h, 0.0, -h, 0.0, 1.0, 0.0, h, 0.0, h, 1.0, 1.0,
+                1.0,
+            ],
+        );
+        (a, b)
+    }
+
+    #[test]
+    fn box_box_find_edge_against_edge() {
+        let mut e = Engine::new();
+        find_world(&mut e);
+        let h = std::f32::consts::FRAC_1_SQRT_2;
+        // The edges meet when `b` has moved 5 - 2 sqrt 2: on the axis
+        // A2 x B1 = -x, the negative side (case 14).
+        let (a, b) = crossed_boxes(&mut e, [5.0, 0.0, 0.5]);
+        let found = find(&mut e, 1.0, a, STILL, b, [-4.0, 0.0, 0.0], true);
+        assert!(found.hit);
+        assert!((found.time - (5.0 - 4.0 * h) / 4.0).abs() < 1e-6);
+        // On `a`'s edge, at `b`'s edge's height: `a`'s own offset along z
+        // solved from the two edges (0.5).
+        assert!(close(found.point, [2.0 * h, 0.0, 0.5]));
+        let log = &found.log;
+        let scaled = calls(log, POINT_SCALE_004A3760);
+        assert_eq!(scaled.len(), 1);
+        assert_eq!(scaled[0][1], found.time.to_bits());
+        let dots = calls(log, POINT_DOT);
+        assert_eq!([dots[0][0], dots[1][0]], [b + 0x1c, a + 0x28]);
+        assert_eq!(dots[0][1], scaled[0][0] - 0x144 + 0x54);
+        // The normal: -(A2 x B1) through `004b3800`, already of length 1.
+        let crossed = calls(log, POINT_CROSS_004B3800);
+        assert_eq!([crossed[0][0], crossed[0][2]], [a + 0x28, b + 0x1c]);
+        assert_eq!(crossed[0][1], scaled[0][0] - 0x144 + 0x15c);
+        assert_eq!(found.normal, bits([1.0, -0.0, -0.0]));
+        assert_eq!(found.negated, bits([-1.0, 0.0, 0.0]));
+        assert!(calls(log, UNITIZE_004A0C10).is_empty());
+        // From the other side: the positive side, the product itself.
+        let (a, b) = crossed_boxes(&mut e, [-5.0, 0.0, -0.5]);
+        let found = find(&mut e, 1.0, a, STILL, b, [4.0, 0.0, 0.0], true);
+        assert!(found.hit);
+        assert!(close(found.point, [-2.0 * h, 0.0, -0.5]));
+        assert_eq!(found.normal, bits([-1.0, 0.0, 0.0]));
+        assert_eq!(found.negated, bits([1.0, -0.0, -0.0]));
+        let crossed = calls(&found.log, POINT_CROSS_004B3800);
+        let scaled = calls(&found.log, POINT_SCALE_004A3760);
+        assert_eq!(crossed[0][1], scaled[0][0] - 0x144 + 0x174);
+    }
+
+    #[test]
+    fn box_box_find_parallel_edges_skip_the_solve() {
+        let mut e = Engine::new();
+        find_world(&mut e);
+        // Case 7 with `a`'s and `b`'s first axes parallel (`1 - c00^2` is
+        // 0): `a`'s offset along it is 0, nothing is projected, and the zero
+        // product of the axes becomes the default normal.
+        let a = aligned(&mut e, [1.0, 2.0, 3.0], [1.0; 3]);
+        let b = aligned(&mut e, [4.0, 0.0, 0.0], [1.0; 3]);
+        let (va, vb, ot, point) = (
+            floats(&mut e, &[2.0, 0.0, 0.0]),
+            floats(&mut e, &[0.0; 3]),
+            floats(&mut e, &[0.5]),
+            e.mem.alloc(0x24),
+        );
+        let s = BoxFind {
+            time: 1.0f32.to_bits(),
+            a,
+            va,
+            b,
+            vb,
+            out_time: ot,
+            point,
+            want_normals: true,
+            normal: point + 0xc,
+            negated: point + 0x18,
+            frame: e.mem.alloc(FIND_FRAME),
+            c: [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]],
+            t: [3.0, -2.0, -3.0],
+            axis: 7,
+            side: 1,
+        };
+        e.call_log = Some(vec![]);
+        assert!(find_edge(&mut e, &s, &EDGE_CASES[0]));
+        let log = e.call_log.take().unwrap();
+        assert!(calls(&log, POINT_SCALE_004A3760).is_empty());
+        assert!(calls(&log, POINT_DOT).is_empty());
+        let crossed = calls(&log, POINT_CROSS_004B3800);
+        assert_eq!(crossed, vec![vec![a + 0x10, s.frame + 0x54, b + 0x10]]);
+        // `a`'s centre moved by half its velocity; every offset is 0.
+        assert_eq!(read3(&e, point), [2.0, 2.0, 3.0]);
+        assert_eq!(read3(&e, point + 0xc), [1.0, 0.0, 0.0]);
+        assert_eq!(read3(&e, point + 0x18), [-1.0, -0.0, -0.0]);
+    }
+
+    #[test]
+    fn box_box_find_signed_extents_and_the_slack() {
+        let mut e = Engine::new();
+        let x = e.mem.alloc(8);
+        e.mem.set_f32(x, 2.0);
+        e.mem.set_u32(x + 4, 0x7f80_0001);
+        assert_eq!(signed_extent(&e, 0.5, 1, x), 2.0);
+        assert_eq!(signed_extent(&e, -0.5, 1, x), -2.0);
+        assert_eq!(signed_extent(&e, 0.5, -1, x), -2.0);
+        assert_eq!(signed_extent(&e, 0.0, 1, x), 0.0);
+        assert_eq!(signed_extent(&e, f64::NAN, 1, x), 0.0);
+        // A signalling NaN extent comes back quiet.
+        assert_eq!(x87_store32(signed_extent(&e, 1.0, 1, x + 4)), 0x7fc0_0001);
+        // `find_axis`: a later meeting not later by the slack keeps the axis.
+        find_world(&mut e);
+        let ot = floats(&mut e, &[0.5]);
+        let mut s = BoxFind {
+            time: 0,
+            a: 0,
+            va: 0,
+            b: 0,
+            vb: 0,
+            out_time: ot,
+            point: 0,
+            want_normals: false,
+            normal: 0,
+            negated: 0,
+            frame: 0,
+            c: [[0.0; 3]; 3],
+            t: [0.0; 3],
+            axis: 3,
+            side: 1,
+        };
+        // (2 - 4) / (0 - 4) = 0.5: equal, not taken.
+        assert!(!find_axis(&mut e, &mut s, 5, 2.0, 4.0, || 0.0, 1.0, 1.0));
+        assert_eq!((s.axis, s.side), (3, 1));
+        // From below: (2 - 5) * -1 / (-1 + 5) = 0.75: taken, side -1.
+        assert!(!find_axis(&mut e, &mut s, 6, 2.0, -5.0, || -1.0, 1.0, 1.0));
+        assert_eq!((s.axis, s.side), (6, -1));
+        assert_eq!(e.mem.f32(ot), 0.75);
+        // Apart from below for the whole motion: separated.
+        assert!(find_axis(&mut e, &mut s, 8, 2.0, -5.0, || -3.0, 1.0, 1.0));
+        // A NaN offset takes neither side.
+        assert!(!find_axis(
+            &mut e,
+            &mut s,
+            9,
+            2.0,
+            f64::NAN,
+            || 0.0,
+            1.0,
+            1.0
+        ));
+        assert_eq!(s.axis, 6);
     }
 }

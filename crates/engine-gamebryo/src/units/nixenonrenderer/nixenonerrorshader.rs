@@ -80,9 +80,58 @@ pub fn ni_d3d_shader_constant_map_scalar_deleting_destructor(
     this
 }
 
+/// The vtable `00b7e2b0` stores (`010ef53c`), the `MemoryManager` singleton
+/// (`011f6238`) and its `Deallocate` (`00aa4060`, `thiscall`, `RET 4`), the
+/// CRT's `eh_vector_destructor_iterator` (`00ec5fce`, `stdcall`: array,
+/// element size, count, destructor) and the `NiPointer` destructor it is
+/// given (`0045cec0`).
+const OBJECT_ARRAY_VTABLE_010EF53C: u32 = 0x010e_f53c;
+const MEMORY_MANAGER: u32 = 0x011f_6238;
+const MEMORY_DEALLOCATE: u32 = 0x00aa_4060;
+const VECTOR_DESTRUCT: u32 = 0x00ec_5fce;
+const NI_POINTER_DESTRUCT_0045CEC0: u32 = 0x0045_cec0;
+/// The RTTI record `NiD3DShaderConstantMap::GetRTTI` answers (`0126f7c4`).
+const CONSTANT_MAP_RTTI_0126F7C4: u32 = 0x0126_f7c4;
+
+// Translated from 00b7e2b0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiTObjectArray<NiPointer<NiShaderConstantMapEntry>>` scalar deleting
+/// destructor (engine map; `RET 4`): stores the vtable `010ef53c`; an
+/// array at +4 has its elements destroyed (the count in the word before
+/// it, `NiPointer`'s destructor through `00ec5fce`) and its block (from
+/// the count word) given back (`MemoryManager::Deallocate`); with flag bit
+/// 0 `this` is given back too. Answers `this`.
+pub fn fn_00b7e2b0(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    let array = e.mem.u32(this.addr().wrapping_add(4));
+    e.mem.set_u32(this.addr(), OBJECT_ARRAY_VTABLE_010EF53C);
+    if array != 0 {
+        let count = e.mem.u32(array.wrapping_sub(4));
+        e.call(
+            VECTOR_DESTRUCT,
+            &args![array, 4u32, count, NI_POINTER_DESTRUCT_0045CEC0],
+        );
+        e.call(
+            MEMORY_DEALLOCATE,
+            &args![MEMORY_MANAGER, array.wrapping_sub(4)],
+        );
+    }
+    if flags & 1 != 0 {
+        e.call(MEMORY_DEALLOCATE, &args![MEMORY_MANAGER, this]);
+    }
+    this
+}
+
+// Translated from 00b7e400 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiD3DShaderConstantMap::GetRTTI` (engine map; `ECX` not read): the
+/// RTTI record at `0126f7c4`.
+pub fn ni_d3d_shader_constant_map_get_rtti(_e: &mut Engine, _this: Ptr) -> u32 {
+    CONSTANT_MAP_RTTI_0126F7C4
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x00b7_e2b0, fn_00b7e2b0(Ptr, u32) -> Ptr),
+        entry!(0x00b7_e400, ni_d3d_shader_constant_map_get_rtti(Ptr) -> u32),
         entry!(
             0x00b7_e330,
             ni_d3d_shader_constant_map_ni_d3d_shader_constant_map(Ptr, Ptr, u32) -> Ptr
@@ -167,5 +216,54 @@ mod b056_tests {
                 (CONSTANT_MAP_DESTRUCT_00E87690, vec![this]),
             ]
         );
+    }
+}
+
+#[cfg(test)]
+mod n072_tests {
+    use super::*;
+
+    fn calls(e: &Engine, address: u32) -> Vec<Vec<u32>> {
+        e.call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|c| c.0 == address)
+            .map(|c| c.1.clone())
+            .collect()
+    }
+
+    #[test]
+    fn object_array_destructor_destroys_and_gives_back() {
+        let mut e = Engine::new();
+        e.register(VECTOR_DESTRUCT, |_, _| Ret::default());
+        e.register(MEMORY_DEALLOCATE, |_, _| Ret::default());
+        let block = e.mem.alloc(0x10);
+        e.mem.set_u32(block, 3);
+        let this = e.mem.alloc(8);
+        e.mem.set_u32(this + 4, block + 4);
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x00b7_e2b0, &args![this, 1u32]).u32(), this);
+        assert_eq!(e.mem.u32(this), OBJECT_ARRAY_VTABLE_010EF53C);
+        assert_eq!(
+            calls(&e, VECTOR_DESTRUCT),
+            vec![vec![block + 4, 4, 3, NI_POINTER_DESTRUCT_0045CEC0]]
+        );
+        assert_eq!(
+            calls(&e, MEMORY_DEALLOCATE),
+            vec![vec![MEMORY_MANAGER, block], vec![MEMORY_MANAGER, this]]
+        );
+        // No array, no flag: nothing given back.
+        e.mem.set_u32(this + 4, 0);
+        e.call_log = Some(vec![]);
+        e.call(0x00b7_e2b0, &args![this, 0u32]);
+        assert!(calls(&e, MEMORY_DEALLOCATE).is_empty());
+        assert!(calls(&e, VECTOR_DESTRUCT).is_empty());
+    }
+
+    #[test]
+    fn get_rtti_answers_the_record() {
+        let mut e = Engine::new();
+        assert_eq!(e.call(0x00b7_e400, &args![0x10u32]).u32(), 0x0126_f7c4);
     }
 }

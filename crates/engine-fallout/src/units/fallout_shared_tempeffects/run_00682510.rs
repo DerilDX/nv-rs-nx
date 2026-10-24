@@ -111,9 +111,57 @@ pub fn fn_006827b0(e: &mut Engine, this: Ptr, cell: u32, lifetime: f32) -> Ptr {
     this
 }
 
+/// `MemoryManager` deallocation (`00401030`, cdecl, the block).
+const DEALLOCATE: u32 = 0x0040_1030;
+
+// Translated from 006826a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed: a scalar deleting destructor (thiscall, `RET 4`): the body
+/// [`fn_006826f0`], then frees `this` (`00401030`) when bit 0 of `flags`
+/// is set. Returns `this`.
+pub fn fn_006826a0(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    fn_006826f0(e, this);
+    if flags & 1 != 0 {
+        e.call(DEALLOCATE, &args![this]);
+    }
+    this
+}
+
+// Translated from 006826f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed: a destructor body: the array at `+0` is deleted
+/// ([`fn_00682740`]), then the object at `+8`, when set, is deleted the
+/// same way as this one ([`fn_006826a0`] with 1).
+pub fn fn_006826f0(e: &mut Engine, this: Ptr) {
+    let array = e.mem.u32(this.addr());
+    fn_00682740(e, array);
+    let next = e.mem.u32(this.addr() + 8);
+    if next != 0 {
+        fn_006826a0(e, Ptr::new(next), 1);
+    }
+}
+
+// Translated from 00682740 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed (cdecl, one word): deletes an array made with a count word in
+/// front of it. Nothing for null; when the count at `array - 4` is non-zero
+/// the first element's vtable slot 0 (its vector deleting destructor) runs
+/// with 3; otherwise the block at `array - 4` is freed (`00401030`). The
+/// exe leaves no meaningful value in `EAX`.
+pub fn fn_00682740(e: &mut Engine, array: u32) {
+    if array == 0 {
+        return;
+    }
+    if e.mem.u32(array.wrapping_sub(4)) != 0 {
+        e.vcall(array, 0, &args![3u32]);
+    } else {
+        e.call(DEALLOCATE, &args![array.wrapping_sub(4)]);
+    }
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x0068_26a0, fn_006826a0(Ptr, u32) -> Ptr),
+        entry!(0x0068_26f0, fn_006826f0(Ptr)),
+        entry!(0x0068_2740, fn_00682740(u32)),
         entry!(0x0068_25e0, fn_006825e0(Ptr)),
         entry!(0x0068_2680, fn_00682680(Ptr)),
         entry!(0x0068_2510, fn_00682510(Ptr, u32) -> Ptr),
@@ -276,5 +324,67 @@ mod b046_tests {
         assert_eq!(e.mem.u8(this + 0x14), 0);
         e.call(0x0068_27b0, &args![this, 0x44u32, 2.5f32]);
         assert_eq!(e.mem.u32(this + 8), 2.5f32.to_bits());
+    }
+}
+
+#[cfg(test)]
+mod tests_n073 {
+    use super::*;
+
+    fn calls_to(log: &[(u32, Vec<u32>)], addr: u32) -> Vec<Vec<u32>> {
+        log.iter()
+            .filter(|(a, _)| *a == addr)
+            .map(|(_, w)| w.clone())
+            .collect()
+    }
+
+    #[test]
+    fn fn_00682740_deletes_counted_arrays() {
+        let mut e = Engine::new();
+        e.register(DEALLOCATE, |_, _| Ret::default());
+        e.put_vtable(0x0150_0000, &[0x0150_1000]);
+        e.register(0x0150_1000, |_, _| Ret::default());
+        let block = e.mem.alloc(0x10);
+        let array = block + 4;
+        e.mem.set_u32(array, 0x0150_0000);
+        e.call_log = Some(vec![]);
+        e.call(0x0068_2740, &args![0u32]);
+        e.call(0x0068_2740, &args![array]);
+        e.mem.set_u32(block, 2);
+        e.call(0x0068_2740, &args![array]);
+        let log = e.call_log.take().unwrap();
+        assert_eq!(calls_to(&log, DEALLOCATE), vec![vec![block]]);
+        assert_eq!(calls_to(&log, 0x0150_1000), vec![vec![array, 3]]);
+    }
+
+    #[test]
+    fn fn_006826a0_deletes_the_chain_and_frees_on_flag_one() {
+        let mut e = Engine::new();
+        e.register(DEALLOCATE, |_, _| Ret::default());
+        let first = e.mem.alloc(0xc);
+        let second = e.mem.alloc(0xc);
+        e.mem.set_u32(first + 8, second);
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x0068_26a0, &args![first, 0u32]).u32(), first);
+        let log = e.call_log.take().unwrap();
+        // Only the chained object is freed (with 1); the arrays are null.
+        assert_eq!(calls_to(&log, DEALLOCATE), vec![vec![second]]);
+        e.call_log = Some(vec![]);
+        e.call(0x0068_26a0, &args![first, 3u32]);
+        let log = e.call_log.take().unwrap();
+        assert_eq!(calls_to(&log, DEALLOCATE), vec![vec![second], vec![first]]);
+    }
+
+    #[test]
+    fn fn_006826f0_deletes_the_array_then_the_next_object() {
+        let mut e = Engine::new();
+        e.register(DEALLOCATE, |_, _| Ret::default());
+        let this = e.mem.alloc(0xc);
+        let block = e.mem.alloc(8);
+        e.mem.set_u32(this, block + 4);
+        e.call_log = Some(vec![]);
+        e.call(0x0068_26f0, &args![this]);
+        let log = e.call_log.take().unwrap();
+        assert_eq!(calls_to(&log, DEALLOCATE), vec![vec![block]]);
     }
 }

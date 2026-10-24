@@ -235,9 +235,33 @@ pub fn tile_menu_post_parse(
     Ptr::NULL
 }
 
+/// `Tile::ForceTextureRelease` (engine map, `00a0b020`; thiscall, no stack words).
+const TILE_FORCE_TEXTURE_RELEASE: u32 = 0x00a0_b020;
+
+// Translated from 00a1f310 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TileMenu::ForceTextureRelease` (engine map; thiscall, no stack words): runs the base
+/// `Tile::ForceTextureRelease` (`00a0b020`) unless the tile has a menu whose id (virtual
+/// slot `+0x34`, asked once for each test) is 0x3EC or 0x3EF.
+pub fn tile_menu_force_texture_release(e: &mut Engine, this: Ptr<TileMenu>) {
+    let menu = e.get(this, TileMenu::pMenu);
+    if !menu.is_null() {
+        let id = e.vcall(menu.addr(), MENU_ID_SLOT, &args![]).u32();
+        if id == 0x3ec {
+            return;
+        }
+        let menu = e.get(this, TileMenu::pMenu);
+        let id = e.vcall(menu.addr(), MENU_ID_SLOT, &args![]).u32();
+        if id == 0x3ef {
+            return;
+        }
+    }
+    e.call(TILE_FORCE_TEXTURE_RELEASE, &args![this]);
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x00a1_f310, tile_menu_force_texture_release(Ptr<TileMenu>)),
         entry!(
             0x00a1_ef30,
             tile_menu_init(Ptr<TileMenu>, Ptr<Tile>, Ptr, u32)
@@ -503,5 +527,43 @@ mod tests {
         e.call(0x00a1_f160, &args![this, 0xfa3u32, 1.0f32, 0u32]);
         assert!(calls_to(&e, MENU_GET_ID).is_empty());
         assert!(calls_to(&e, MENU_USER_TRAIT).is_empty());
+    }
+}
+
+#[cfg(test)]
+mod n083_tests {
+    use super::*;
+
+    fn run(e: &mut Engine, this: Ptr<TileMenu>) -> (usize, usize) {
+        e.call_log = Some(vec![]);
+        e.call(0x00a1_f310, &args![this]);
+        let log = e.call_log.take().unwrap();
+        let asked = log.iter().filter(|c| c.0 == 0x0003_2000).count();
+        let released = log
+            .iter()
+            .filter(|c| c.0 == TILE_FORCE_TEXTURE_RELEASE)
+            .count();
+        (asked, released)
+    }
+
+    #[test]
+    fn force_texture_release_skips_two_menu_ids() {
+        let mut e = Engine::new();
+        e.register(TILE_FORCE_TEXTURE_RELEASE, |_, _| Ret::default());
+        let menu = e.mem.alloc(0x40);
+        e.put_vtable(0x0003_1000, &[0; 0x10]);
+        e.mem.set_u32(0x0003_1000 + MENU_ID_SLOT, 0x0003_2000);
+        e.mem.set_u32(menu, 0x0003_1000);
+        let this = e.new_object::<TileMenu>();
+        // No menu: released.
+        assert_eq!(run(&mut e, this), (0, 1));
+        e.set(this, TileMenu::pMenu, Ptr::new(menu));
+        for (id, expect) in [(0x3ecu32, (1, 0)), (0x3ef, (2, 0)), (0x3ed, (2, 1))] {
+            e.register_double(0x0003_2000, move |_, _| Ret {
+                eax: id,
+                ..Ret::default()
+            });
+            assert_eq!(run(&mut e, this), expect, "id {id:#x}");
+        }
     }
 }

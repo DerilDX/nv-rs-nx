@@ -148,9 +148,38 @@ pub fn fn_0061a270(e: &mut Engine) {
     }
 }
 
+/// `005d8a70` (`ECX` = topic): the list of its per-quest entries; `006815c0` (`ECX` =
+/// node): the address of its item word; `00726070` (`ECX` = node): the next node.
+const TOPIC_QUEST_LIST: u32 = 0x005d_8a70;
+const NODE_ITEM: u32 = 0x0068_15c0;
+const NODE_NEXT: u32 = 0x0072_6070;
+
+// Translated from 00619f70 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The info array (`00717e50`, +4) of the topic's per-quest entry for `quest` (unnamed in
+/// the engine map; `ECX` = the topic, one stack word, `RET 4`; called by `00619a90`): the
+/// first entry (up to the first null item) whose first word is `quest`, where a null
+/// `quest` also needs the entry's word at +0x2c to be 0; null when none.
+pub fn fn_00619f70(e: &mut Engine, this: Ptr, quest: u32) -> u32 {
+    let mut node = e.call(TOPIC_QUEST_LIST, &args![this]).u32();
+    while node != 0 {
+        let item = e.call(NODE_ITEM, &args![node]).u32();
+        if e.mem.u32(item) == 0 {
+            break;
+        }
+        let item = e.call(NODE_ITEM, &args![node]).u32();
+        let entry = e.mem.u32(item);
+        node = e.call(NODE_NEXT, &args![node]).u32();
+        if e.mem.u32(entry) == quest && (quest != 0 || e.mem.u32(entry + 0x2c) == 0) {
+            return e.call(PLUS_FOUR, &args![entry]).u32();
+        }
+    }
+    0
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x0061_9f70, fn_00619f70(Ptr, u32) -> u32),
         entry!(0x00619f20, fn_00619f20(Ptr, u32) -> u32),
         entry!(0x0061_9fe0, fn_00619fe0(Ptr)),
         entry!(0x0061_a040, fn_0061a040()),
@@ -331,5 +360,41 @@ mod b020_tests {
             vec![vec![timer[0][0], 0x35, 1, TESTOPIC_SOURCE_FILE, 0x1573]]
         );
         assert_eq!(calls_to(&e, 0x0040_4ee0), vec![vec![timer[0][0]]]);
+    }
+}
+
+#[cfg(test)]
+mod n075_tests {
+    use super::*;
+
+    #[test]
+    fn fn_00619f70_finds_the_entry_of_the_quest() {
+        let mut e = Engine::new();
+        let entries: Vec<u32> = (0..3).map(|_| e.mem.alloc(0x30)).collect();
+        e.mem.set_u32(entries[0], 0x77);
+        e.mem.set_u32(entries[1], 0);
+        e.mem.set_u32(entries[1] + 0x2c, 1);
+        e.mem.set_u32(entries[2], 0);
+        let nodes: Vec<u32> = (0..3).map(|_| e.mem.alloc(8)).collect();
+        for i in 0..3 {
+            e.mem.set_u32(nodes[i], entries[i]);
+            e.mem
+                .set_u32(nodes[i] + 4, nodes.get(i + 1).copied().unwrap_or(0));
+        }
+        let head = nodes[0];
+        e.register_double(TOPIC_QUEST_LIST, move |_, _| head.into_ret());
+        e.register(NODE_ITEM, |_, a| a[0].into_ret());
+        e.register(NODE_NEXT, |e, a| e.mem.u32(a[0] + 4).into_ret());
+        e.register(PLUS_FOUR, |_, a| (a[0] + 4).into_ret());
+        assert_eq!(
+            e.call(0x0061_9f70, &args![0x1000u32, 0x77u32]).u32(),
+            entries[0] + 4
+        );
+        // A null quest skips the entry whose +0x2c is set.
+        assert_eq!(
+            e.call(0x0061_9f70, &args![0x1000u32, 0u32]).u32(),
+            entries[2] + 4
+        );
+        assert_eq!(e.call(0x0061_9f70, &args![0x1000u32, 0x78u32]).u32(), 0);
     }
 }

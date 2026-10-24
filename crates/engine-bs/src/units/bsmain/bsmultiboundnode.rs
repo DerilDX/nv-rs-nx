@@ -115,9 +115,236 @@ pub fn bs_multi_bound_node_visible_against_active_occluders(
     })
 }
 
+/// `00c5f680` (unit `bsninode.obj`, unnamed; `thiscall`, two words: here the constructor's
+/// word and 1): the `BSNiNode` base that `00c46a40` builds on, and `00c5fb60` (unit
+/// `bsninode.obj`, unnamed; `thiscall`, two words: the clone and the cloning process):
+/// what `CopyMembers` runs first.
+const BS_NI_NODE_CONSTRUCT_00C5F680: u32 = 0x00c5_f680;
+const BS_NI_NODE_COPY_MEMBERS_00C5FB60: u32 = 0x00c5_fb60;
+/// `NiNode::RegisterStreamables` (`00a5e5b0`), `NiNode::SaveBinary` (`00a5e880`),
+/// `NiNode::IsEqual` (`00a5e600`) and `NiNode::GetViewerStrings` (`00a5ea70`), all
+/// `thiscall`, one word.
+const NI_NODE_REGISTER_STREAMABLES: u32 = 0x00a5_e5b0;
+const NI_NODE_SAVE_BINARY: u32 = 0x00a5_e880;
+const NI_NODE_IS_EQUAL: u32 = 0x00a5_e600;
+const NI_NODE_GET_VIEWER_STRINGS: u32 = 0x00a5_ea70;
+/// `NiGetViewerString` (`00a7d330`, cdecl, one word) and its two-string overload
+/// (`00a7d5e0`, cdecl: label and value), and `0096a610` (`thiscall` on the strings array,
+/// one word: the address of the string to add; folded code the map puts in
+/// `playercharacter.cpp`).
+const NI_GET_VIEWER_STRING: u32 = 0x00a7_d330;
+const NI_GET_VIEWER_STRING_OV11: u32 = 0x00a7_d5e0;
+const VIEWER_STRINGS_ADD: u32 = 0x0096_a610;
+/// `BSMultiBoundNode`'s `NiRTTI` (`01202e74`, the address `00c47650` answers): its first
+/// word is the class name.
+const BS_MULTI_BOUND_NODE_RTTI: u32 = 0x0120_2e74;
+/// The viewer strings `GetViewerStrings` uses: `"cull mode"` (`010c1e28`) and the mode
+/// names `"NORMAL"` (`01090d1c`), `"ALLPASS"` (`010c1e3c`) and `"ALLFAIL"` (`010c1e34`).
+const CULL_MODE_LABEL: u32 = 0x010c_1e28;
+const CULL_MODE_NORMAL: u32 = 0x0109_0d1c;
+const CULL_MODE_ALLPASS: u32 = 0x010c_1e3c;
+const CULL_MODE_ALLFAIL: u32 = 0x010c_1e34;
+
+/// Adds the string `text` to the viewer strings array through `0096a610`, which takes the
+/// address of a local holding it.
+fn add_viewer_string(e: &mut Engine, strings: Ptr, text: u32) {
+    e.with_stack(4, |e, local| {
+        e.mem.set_u32(local.addr(), text);
+        e.call(VIEWER_STRINGS_ADD, &args![strings, local]);
+    });
+}
+
+// Translation incomplete: 00c46a40 - the C++ exception frame (FS:[0] chain, unwind states 0 and 1, with its /GS cookie word) is not translated.
+// Translated from 00c46a40 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map: a `BSMultiBoundNode` constructor with one word (`thiscall`,
+/// `RET 4`): the `BSNiNode` base `00c5f680(word, 1)`, the vtable (`010c1d14`), the
+/// `NiPointer` at `+0xac` constructed as null (the inlined constructor's increment of a
+/// non-null pointer reads the word just written, so it never runs) and assigned null
+/// (`0066b0d0`). Unlike `00c46970` it leaves `m_uFlags` alone. Answers `this`.
+pub fn fn_00c46a40(e: &mut Engine, this: Ptr, word: u32) -> Ptr {
+    let base = this.addr();
+    e.call(BS_NI_NODE_CONSTRUCT_00C5F680, &args![this, word, 1u32]);
+    e.mem.set_u32(base, BS_MULTI_BOUND_NODE_VTABLE);
+    let pointer = base.wrapping_add(MULTI_BOUND);
+    e.mem.set_u32(pointer, 0);
+    let held = e.mem.u32(pointer);
+    if held != 0 {
+        e.call(IMPORT_INTERLOCKED_INCREMENT, &args![held.wrapping_add(4)]);
+    }
+    e.call(NI_POINTER_ASSIGN, &args![pointer, 0u32]);
+    this
+}
+
+// Translation incomplete: 00c46ba0 - the C++ exception frame (FS:[0] chain, unwind state 0 that frees the block if the constructor throws, with its /GS cookie word) is not translated.
+// Translated from 00c46ba0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSMultiBoundNode::CreateClone` (Xbox PDB; `thiscall`, one word: the cloning process):
+/// 0xb4 bytes from `00aa13e0` constructed by `00c46970` (null when the allocation fails),
+/// then `CopyMembers(clone, cloning)`. Answers the clone.
+pub fn bs_multi_bound_node_create_clone(e: &mut Engine, this: Ptr, cloning: Ptr) -> Ptr {
+    let block = e.call(ALLOCATE, &args![0xb4u32]).u32();
+    let clone = if block != 0 {
+        bs_multi_bound_node_bs_multi_bound_node(e, Ptr::new(block))
+    } else {
+        Ptr::NULL
+    };
+    bs_multi_bound_node_copy_members(e, this, clone, cloning);
+    clone
+}
+
+// Translated from 00c46c30 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSMultiBoundNode::CopyMembers` (Xbox PDB; `thiscall`, two words: the clone and the
+/// cloning process): `00c5fb60` with both, the clone's `spMultiBound` (`+0xac`, through
+/// `0066b0d0`) set to what this node's multi-bound's slot +0x48 makes with the cloning
+/// process, and `CullingMode` (`+0xb0`) copied.
+pub fn bs_multi_bound_node_copy_members(e: &mut Engine, this: Ptr, clone: Ptr, cloning: Ptr) {
+    e.call(
+        BS_NI_NODE_COPY_MEMBERS_00C5FB60,
+        &args![this, clone, cloning],
+    );
+    let multi_bound = e.mem.u32(this.addr() + MULTI_BOUND);
+    let copy = e.vcall(multi_bound, 0x48, &args![cloning]).u32();
+    e.call(
+        NI_POINTER_ASSIGN,
+        &args![clone.addr().wrapping_add(MULTI_BOUND), copy],
+    );
+    let mode = e.mem.u32(this.addr() + CULLING_MODE);
+    e.mem.set_u32(clone.addr().wrapping_add(CULLING_MODE), mode);
+}
+
+// Translated from 00c46d10 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSMultiBoundNode::RegisterStreamables` (Xbox PDB; `thiscall`, one word: the stream):
+/// false when `NiNode::RegisterStreamables` answers false (`AL`); else the multi-bound's
+/// slot +0x54 with the stream, and true.
+pub fn bs_multi_bound_node_register_streamables(e: &mut Engine, this: Ptr, stream: Ptr) -> bool {
+    if !e
+        .call(NI_NODE_REGISTER_STREAMABLES, &args![this, stream])
+        .bool()
+    {
+        return false;
+    }
+    let multi_bound = e.mem.u32(this.addr() + MULTI_BOUND);
+    e.vcall(multi_bound, 0x54, &args![stream]);
+    true
+}
+
+// Translated from 00c46d60 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSMultiBoundNode::SaveBinary` (Xbox PDB; `thiscall`, one word: the stream):
+/// `NiNode::SaveBinary`, then the stream's slot +0x30 with `spMultiBound` (its link id).
+pub fn bs_multi_bound_node_save_binary(e: &mut Engine, this: Ptr, stream: Ptr) {
+    e.call(NI_NODE_SAVE_BINARY, &args![this, stream]);
+    let multi_bound = e.mem.u32(this.addr() + MULTI_BOUND);
+    e.vcall(stream.addr(), 0x30, &args![multi_bound]);
+}
+
+// Translated from 00c46da0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSMultiBoundNode::IsEqual` (Xbox PDB; `thiscall`, one word: the other object):
+/// `NiNode::IsEqual` runs, but its answer is replaced: true exactly when both nodes hold the
+/// same `spMultiBound` (`+0xac`).
+pub fn bs_multi_bound_node_is_equal(e: &mut Engine, this: Ptr, other: Ptr) -> bool {
+    e.call(NI_NODE_IS_EQUAL, &args![this, other]);
+    e.mem.u32(this.addr() + MULTI_BOUND) == e.mem.u32(other.addr() + MULTI_BOUND)
+}
+
+// Translated from 00c46e70 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSMultiBoundNode::GetViewerStrings` (Xbox PDB; `thiscall`, one word: the strings
+/// array): `NiNode::GetViewerStrings`, then the class name (`NiGetViewerString` of the
+/// `NiRTTI` name at `01202e74`) and `"cull mode"` with `NORMAL` (mode 0), `ALLPASS` (1) or
+/// `ALLFAIL` (any other) added (`0096a610`); when the multi-bound has a shape (+0xc), the
+/// shape's slot +0x60 adds its own.
+pub fn bs_multi_bound_node_get_viewer_strings(e: &mut Engine, this: Ptr, strings: Ptr) {
+    e.call(NI_NODE_GET_VIEWER_STRINGS, &args![this, strings]);
+    let name = e.mem.u32(BS_MULTI_BOUND_NODE_RTTI);
+    let text = e.call(NI_GET_VIEWER_STRING, &args![name]).u32();
+    add_viewer_string(e, strings, text);
+    let mode = if e.mem.u32(this.addr() + CULLING_MODE) == 0 {
+        CULL_MODE_NORMAL
+    } else if e.mem.u32(this.addr() + CULLING_MODE) == 1 {
+        CULL_MODE_ALLPASS
+    } else {
+        CULL_MODE_ALLFAIL
+    };
+    let text = e
+        .call(NI_GET_VIEWER_STRING_OV11, &args![CULL_MODE_LABEL, mode])
+        .u32();
+    add_viewer_string(e, strings, text);
+    let multi_bound = e.mem.u32(this.addr() + MULTI_BOUND);
+    if multi_bound != 0 && e.mem.u32(multi_bound + 0xc) != 0 {
+        let shape = e.mem.u32(e.mem.u32(this.addr() + MULTI_BOUND) + 0xc);
+        e.vcall(shape, 0x60, &args![strings]);
+    }
+}
+
+/// Whether `object` (non-null) is a `BSMultiBoundNode` exactly: its slot +8 (`GetRTTI`)
+/// answers `01202e74`.
+fn is_multi_bound_node(e: &mut Engine, object: u32) -> bool {
+    e.vcall(object, 8, &args![]).u32() == BS_MULTI_BOUND_NODE_RTTI
+}
+
+// Translated from 00c474a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (no code references it; cdecl, one word): the nearest
+/// `BSMultiBoundNode` from `object` up through the parents (`m_pkParent`, +0x18), the
+/// object itself first; each test is the object's `GetRTTI` (slot +8) answering `01202e74`,
+/// and the one found is tested again before it is answered. Null when there is none.
+pub fn fn_00c474a0(e: &mut Engine, object: Ptr) -> Ptr {
+    let mut at = object.addr();
+    while at != 0 {
+        if is_multi_bound_node(e, at) {
+            break;
+        }
+        at = e.mem.u32(at + 0x18);
+    }
+    if at != 0 && is_multi_bound_node(e, at) {
+        Ptr::new(at)
+    } else {
+        Ptr::NULL
+    }
+}
+
+// Translated from 00c47530 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSMultiBoundNode::QPointWithin` (Xbox PDB; `thiscall`, one word: the point): the
+/// multi-bound's slot +0x8c with the point; the exe ends on that call, so its whole `EAX` is
+/// the answer.
+pub fn bs_multi_bound_node_q_point_within(e: &mut Engine, this: Ptr, point: Ptr) -> u32 {
+    let multi_bound = e.mem.u32(this.addr() + MULTI_BOUND);
+    e.vcall(multi_bound, 0x8c, &args![point]).u32()
+}
+
+// Translated from 00c47570 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSMultiBoundNode::CheckBound` (Xbox PDB; `thiscall`, one word): the multi-bound's shape
+/// (+0xc) slot +0x98 with the word, answering what it answers.
+pub fn bs_multi_bound_node_check_bound(e: &mut Engine, this: Ptr, bound: Ptr) -> u32 {
+    let shape = e.mem.u32(e.mem.u32(this.addr() + MULTI_BOUND) + 0xc);
+    e.vcall(shape, 0x98, &args![bound]).u32()
+}
+
+// Translated from 00c475c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSMultiBoundNode::CheckBound` (Xbox PDB, the other overload; `thiscall`, one word): the
+/// multi-bound's shape (+0xc) slot +0x94 with the word, answering what it answers.
+pub fn bs_multi_bound_node_check_bound_ov2(e: &mut Engine, this: Ptr, bound: Ptr) -> u32 {
+    let shape = e.mem.u32(e.mem.u32(this.addr() + MULTI_BOUND) + 0xc);
+    e.vcall(shape, 0x94, &args![bound]).u32()
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x00c4_6a40, fn_00c46a40(Ptr, u32) -> Ptr),
+        entry!(0x00c4_6ba0, bs_multi_bound_node_create_clone(Ptr, Ptr) -> Ptr),
+        entry!(0x00c4_6c30, bs_multi_bound_node_copy_members(Ptr, Ptr, Ptr)),
+        entry!(
+            0x00c4_6d10,
+            bs_multi_bound_node_register_streamables(Ptr, Ptr) -> bool
+        ),
+        entry!(0x00c4_6d60, bs_multi_bound_node_save_binary(Ptr, Ptr)),
+        entry!(0x00c4_6da0, bs_multi_bound_node_is_equal(Ptr, Ptr) -> bool),
+        entry!(
+            0x00c4_6e70,
+            bs_multi_bound_node_get_viewer_strings(Ptr, Ptr)
+        ),
+        entry!(0x00c4_74a0, fn_00c474a0(Ptr) -> Ptr),
+        entry!(0x00c4_7530, bs_multi_bound_node_q_point_within(Ptr, Ptr) -> u32),
+        entry!(0x00c4_7570, bs_multi_bound_node_check_bound(Ptr, Ptr) -> u32),
+        entry!(0x00c4_75c0, bs_multi_bound_node_check_bound_ov2(Ptr, Ptr) -> u32),
         entry!(
             0x00c4_7150,
             bs_multi_bound_node_visible_against_active_occluders(Ptr, u32, u32, u32, Ptr, Ptr) -> bool
@@ -748,5 +975,249 @@ mod la1_tests {
             .bool();
         assert!(visible);
         assert_eq!(e.mem.u32(shape + 8), 0);
+    }
+}
+
+#[cfg(test)]
+mod n082_tests {
+    use super::*;
+
+    fn calls_to(e: &Engine, callee: u32) -> Vec<Vec<u32>> {
+        e.call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|(address, _)| *address == callee)
+            .map(|(_, words)| words.clone())
+            .collect()
+    }
+
+    /// Doubles for every callee of these members: the base functions do nothing, the
+    /// `NiPointer` assignment stores its word, and objects made by `object` get a vtable at
+    /// 0x7000 whose slot `i` is `0x8000 + 4 * i` (all answering 0 unless registered again).
+    fn engine() -> Engine {
+        let mut e = Engine::new();
+        for callee in [
+            BS_NI_NODE_CONSTRUCT_00C5F680,
+            BS_NI_NODE_COPY_MEMBERS_00C5FB60,
+            BS_NI_NODE_CONSTRUCT,
+            NI_NODE_SAVE_BINARY,
+            NI_NODE_IS_EQUAL,
+            NI_NODE_GET_VIEWER_STRINGS,
+            VIEWER_STRINGS_ADD,
+        ] {
+            e.register(callee, |_, _| Ret::default());
+        }
+        e.register(NI_POINTER_ASSIGN, |e, a| {
+            e.mem.set_u32(a[0], a[1]);
+            Ret::default()
+        });
+        let slots: Vec<u32> = (0..0x30).map(|i| 0x8000 + 4 * i).collect();
+        e.put_vtable(0x7000, &slots);
+        for i in 0..0x30u32 {
+            e.register(0x8000 + 4 * i, |_, _| Ret::default());
+        }
+        e
+    }
+
+    fn object(e: &mut Engine, size: u32) -> u32 {
+        let at = e.mem.alloc(size);
+        e.mem.set_u32(at, 0x7000);
+        at
+    }
+
+    #[test]
+    fn fn_00c46a40_builds_the_base_and_a_null_multi_bound() {
+        let mut e = engine();
+        let node = e.mem.alloc(0xb4);
+        e.mem.set_u32(node + MULTI_BOUND, 0xdead_beef);
+        e.mem.set_u32(node + 0x30, 0x55);
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x00c4_6a40, &args![node, 9u32]).u32(), node);
+        assert_eq!(
+            calls_to(&e, BS_NI_NODE_CONSTRUCT_00C5F680),
+            vec![vec![node, 9, 1]]
+        );
+        assert_eq!(e.mem.u32(node), BS_MULTI_BOUND_NODE_VTABLE);
+        assert_eq!(e.mem.u32(node + MULTI_BOUND), 0);
+        assert_eq!(
+            calls_to(&e, NI_POINTER_ASSIGN),
+            vec![vec![node + MULTI_BOUND, 0]]
+        );
+        assert!(calls_to(&e, IMPORT_INTERLOCKED_INCREMENT).is_empty());
+        assert_eq!(e.mem.u32(node + 0x30), 0x55);
+    }
+
+    #[test]
+    fn create_clone_makes_a_node_and_copies_the_members() {
+        let mut e = engine();
+        let block = e.mem.alloc(0xb4);
+        e.register_double(ALLOCATE, move |_, _| block.into_ret());
+        let multi_bound = object(&mut e, 0x10);
+        e.register(0x8048, |_, _| 0x6000u32.into_ret());
+        let node = e.mem.alloc(0xb4);
+        e.mem.set_u32(node + MULTI_BOUND, multi_bound);
+        e.mem.set_u32(node + CULLING_MODE, 2);
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x00c4_6ba0, &args![node, 0x4000u32]).u32(), block);
+        assert_eq!(calls_to(&e, ALLOCATE), vec![vec![0xb4]]);
+        assert_eq!(e.mem.u32(block), BS_MULTI_BOUND_NODE_VTABLE);
+        assert_eq!(
+            calls_to(&e, BS_NI_NODE_COPY_MEMBERS_00C5FB60),
+            vec![vec![node, block, 0x4000]]
+        );
+        assert_eq!(calls_to(&e, 0x8048), vec![vec![multi_bound, 0x4000]]);
+        assert_eq!(e.mem.u32(block + MULTI_BOUND), 0x6000);
+        assert_eq!(e.mem.u32(block + CULLING_MODE), 2);
+        // A failed allocation still copies, into a null clone (the exe's own order).
+        e.register(ALLOCATE, |_, _| Ret::default());
+        e.map(0, 0x1000);
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x00c4_6ba0, &args![node, 0x4000u32]).u32(), 0);
+        assert_eq!(
+            calls_to(&e, BS_NI_NODE_COPY_MEMBERS_00C5FB60),
+            vec![vec![node, 0, 0x4000]]
+        );
+        assert_eq!(e.mem.u32(CULLING_MODE), 2);
+    }
+
+    #[test]
+    fn register_streamables_and_save_binary_pass_the_multi_bound_on() {
+        let mut e = engine();
+        let answer = std::rc::Rc::new(std::cell::Cell::new(1u32));
+        let given = answer.clone();
+        e.register_double(NI_NODE_REGISTER_STREAMABLES, move |_, _| {
+            given.get().into_ret()
+        });
+        let multi_bound = object(&mut e, 0x10);
+        let stream = object(&mut e, 0x10);
+        let node = e.mem.alloc(0xb4);
+        e.mem.set_u32(node + MULTI_BOUND, multi_bound);
+        e.call_log = Some(vec![]);
+        assert!(e.call(0x00c4_6d10, &args![node, stream]).bool());
+        assert_eq!(calls_to(&e, 0x8054), vec![vec![multi_bound, stream]]);
+        // `AL` 0 (0x100): false, the multi-bound not called.
+        answer.set(0x100);
+        e.call_log = Some(vec![]);
+        assert!(!e.call(0x00c4_6d10, &args![node, stream]).bool());
+        assert!(calls_to(&e, 0x8054).is_empty());
+        e.call_log = Some(vec![]);
+        e.call(0x00c4_6d60, &args![node, stream]);
+        assert_eq!(calls_to(&e, NI_NODE_SAVE_BINARY), vec![vec![node, stream]]);
+        assert_eq!(calls_to(&e, 0x8030), vec![vec![stream, multi_bound]]);
+    }
+
+    #[test]
+    fn is_equal_compares_only_the_multi_bounds() {
+        let mut e = engine();
+        e.register(NI_NODE_IS_EQUAL, |_, _| 1u32.into_ret());
+        let a = e.mem.alloc(0xb4);
+        let b = e.mem.alloc(0xb4);
+        e.mem.set_u32(a + MULTI_BOUND, 5);
+        e.mem.set_u32(b + MULTI_BOUND, 6);
+        e.call_log = Some(vec![]);
+        assert!(!e.call(0x00c4_6da0, &args![a, b]).bool());
+        assert_eq!(calls_to(&e, NI_NODE_IS_EQUAL), vec![vec![a, b]]);
+        e.mem.set_u32(b + MULTI_BOUND, 5);
+        e.register(NI_NODE_IS_EQUAL, |_, _| Ret::default());
+        assert!(e.call(0x00c4_6da0, &args![a, b]).bool());
+    }
+
+    #[test]
+    fn get_viewer_strings_adds_name_mode_and_shape_strings() {
+        let mut e = engine();
+        e.map(BS_MULTI_BOUND_NODE_RTTI & !0xfff, 0x1000);
+        e.mem.set_u32(BS_MULTI_BOUND_NODE_RTTI, 0x0102_0304);
+        e.register(NI_GET_VIEWER_STRING, |_, a| (a[0] + 1).into_ret());
+        e.register(NI_GET_VIEWER_STRING_OV11, |_, a| (a[1] + 2).into_ret());
+        let added = std::rc::Rc::new(std::cell::RefCell::new(vec![]));
+        let seen = added.clone();
+        e.register_double(VIEWER_STRINGS_ADD, move |e, a| {
+            seen.borrow_mut().push(e.mem.u32(a[1]));
+            Ret::default()
+        });
+        let shape = object(&mut e, 0x10);
+        let multi_bound = e.mem.alloc(0x10);
+        e.mem.set_u32(multi_bound + 0xc, shape);
+        let node = e.mem.alloc(0xb4);
+        e.mem.set_u32(node + MULTI_BOUND, multi_bound);
+        let strings = e.mem.alloc(0x10);
+        for (mode, text) in [
+            (0u32, CULL_MODE_NORMAL),
+            (1, CULL_MODE_ALLPASS),
+            (2, CULL_MODE_ALLFAIL),
+        ] {
+            e.mem.set_u32(node + CULLING_MODE, mode);
+            added.borrow_mut().clear();
+            e.call_log = Some(vec![]);
+            e.call(0x00c4_6e70, &args![node, strings]);
+            assert_eq!(*added.borrow(), vec![0x0102_0305, text + 2]);
+            assert_eq!(
+                calls_to(&e, NI_GET_VIEWER_STRING_OV11),
+                vec![vec![CULL_MODE_LABEL, text]]
+            );
+            assert_eq!(calls_to(&e, 0x8060), vec![vec![shape, strings]]);
+        }
+        assert_eq!(
+            calls_to(&e, NI_NODE_GET_VIEWER_STRINGS),
+            vec![vec![node, strings]]
+        );
+        // No shape, or no multi-bound: no shape strings.
+        e.mem.set_u32(multi_bound + 0xc, 0);
+        e.call_log = Some(vec![]);
+        e.call(0x00c4_6e70, &args![node, strings]);
+        e.mem.set_u32(node + MULTI_BOUND, 0);
+        e.call(0x00c4_6e70, &args![node, strings]);
+        assert!(calls_to(&e, 0x8060).is_empty());
+    }
+
+    #[test]
+    fn fn_00c474a0_finds_the_nearest_multi_bound_node() {
+        let mut e = engine();
+        let rtti = std::rc::Rc::new(std::cell::RefCell::new(std::collections::HashMap::new()));
+        let table = rtti.clone();
+        e.register_double(0x8008, move |_, a| {
+            (*table.borrow().get(&a[0]).unwrap_or(&0u32)).into_ret()
+        });
+        let child = object(&mut e, 0x20);
+        let parent = object(&mut e, 0x20);
+        let root = object(&mut e, 0x20);
+        e.mem.set_u32(child + 0x18, parent);
+        e.mem.set_u32(parent + 0x18, root);
+        rtti.borrow_mut().insert(parent, BS_MULTI_BOUND_NODE_RTTI);
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x00c4_74a0, &args![child]).u32(), parent);
+        // The found node is asked twice.
+        assert_eq!(
+            calls_to(&e, 0x8008),
+            vec![vec![child], vec![parent], vec![parent]]
+        );
+        assert_eq!(e.call(0x00c4_74a0, &args![parent]).u32(), parent);
+        rtti.borrow_mut().clear();
+        assert_eq!(e.call(0x00c4_74a0, &args![child]).u32(), 0);
+        assert_eq!(e.call(0x00c4_74a0, &args![0u32]).u32(), 0);
+    }
+
+    #[test]
+    fn point_and_bound_checks_answer_the_callee_word() {
+        let mut e = engine();
+        e.register(0x808c, |_, _| 0x1234_5601u32.into_ret());
+        e.register(0x8098, |_, a| (a[1] + 1).into_ret());
+        e.register(0x8094, |_, a| (a[1] + 2).into_ret());
+        let shape = object(&mut e, 0x10);
+        let multi_bound = object(&mut e, 0x10);
+        e.mem.set_u32(multi_bound + 0xc, shape);
+        let node = e.mem.alloc(0xb4);
+        e.mem.set_u32(node + MULTI_BOUND, multi_bound);
+        e.call_log = Some(vec![]);
+        assert_eq!(
+            e.call(0x00c4_7530, &args![node, 0x50u32]).u32(),
+            0x1234_5601
+        );
+        assert_eq!(calls_to(&e, 0x808c), vec![vec![multi_bound, 0x50]]);
+        assert_eq!(e.call(0x00c4_7570, &args![node, 0x60u32]).u32(), 0x61);
+        assert_eq!(e.call(0x00c4_75c0, &args![node, 0x60u32]).u32(), 0x62);
+        assert_eq!(calls_to(&e, 0x8098), vec![vec![shape, 0x60]]);
+        assert_eq!(calls_to(&e, 0x8094), vec![vec![shape, 0x60]]);
     }
 }

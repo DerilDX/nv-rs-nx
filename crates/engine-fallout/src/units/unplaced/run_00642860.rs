@@ -842,9 +842,227 @@ pub fn fn_00643bf0(e: &mut Engine, index: i32, word: Ptr, value: Ptr) {
     e.mem.set_u32(value.addr(), bits);
 }
 
+// Translated from 00642bc0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// A detection formula of the family of [`fn_00642ed0`] (`cdecl`, eleven words; no Xbox
+/// PDB name; called twice by `RunDetection`): a base term from `tenths` (the span of the
+/// settings `011cdd9c` over `011cdf04` times `tenths / 10`, plus `011cdf04`) weighted by
+/// `1 + s[11cdfc0] * flag_b + s[11cd774] * flag_a + s[11cdbd4] * flag_c` (each flag 0 or 1;
+/// the product is stored but not used further); the range ratio
+/// `(range - distance) / range` (`range` the setting `011cd7d8`, times `011cdcbc` with
+/// `long_range`) clamped by `00404010(ratio, 0)` and raised to the setting `011cd304`
+/// (`pow`), scaled by `011cd2e8` unless `sign_word > 0`; a first term
+/// `00404010(power' * s[11ce024] * (ftol(s[11cd080]) * product_factor), 0)`; a second term
+/// `00404010(held * power * ((added + s[11cdb84]) * s[11cd08c]) * ((100 - percent) / 100),
+/// 0)`. With the setting `011cd7e4` added to both, the sum answers 1 when strictly between
+/// 0 and 1, else its `_ftol2` truncation (NaN included). Every step is x87 in the exe's
+/// order, rounded at each store. Argument names describe their use only.
+#[allow(clippy::too_many_arguments)]
+pub fn fn_00642bc0(
+    e: &mut Engine,
+    tenths: i32,
+    sign_word: i32,
+    distance: f32,
+    percent: i32,
+    added: i32,
+    flag_a: u8,
+    flag_b: u8,
+    flag_c: u8,
+    product_factor: i32,
+    held: i32,
+    long_range: u8,
+) -> i32 {
+    let total_setting = setting(e, 0x011c_d7e4);
+    let total = x87_store32(load(e, total_setting));
+    let flag_b_word = i32::from(flag_b != 0);
+    let flag_a_word = i32::from(flag_a != 0);
+    let flag_c_word = i32::from(flag_c != 0);
+
+    let low = setting(e, 0x011c_df04);
+    let high = setting(e, 0x011c_dd9c);
+    let low_again = setting(e, 0x011c_df04);
+    let span = x87_sub(load(e, high), operand(e, low_again));
+    let tenths_divisor: f64 = e.global(TENTHS_DIVISOR_01020758);
+    let fraction = x87_div(f64::from(tenths), tenths_divisor);
+    let base_term = x87_mul(span, fraction);
+    let base_term = x87_add(base_term, operand(e, low));
+    let base_bits = x87_store32(base_term);
+
+    let flag_b_value = f64::from(flag_b_word);
+    let weight = setting(e, 0x011c_dfc0);
+    let sum = x87_mul(load(e, weight), flag_b_value);
+    let sum = x87_add(sum, 1.0);
+    let flag_a_value = f64::from(flag_a_word);
+    let weight = setting(e, 0x011c_d774);
+    let product = x87_mul(load(e, weight), flag_a_value);
+    let sum = x87_add(product, sum);
+    let flag_c_value = f64::from(flag_c_word);
+    let weight = setting(e, 0x011c_dbd4);
+    let product = x87_mul(load(e, weight), flag_c_value);
+    let sum = x87_add(product, sum);
+    let sum = x87_mul(sum, x87_m32(base_bits));
+    let base_bits = x87_store32(sum);
+
+    let positive = i32::from(sign_word > 0);
+    let range = if long_range != 0 {
+        let scale = setting(e, 0x011c_dcbc);
+        let range = setting(e, 0x011c_d7d8);
+        x87_mul(load(e, scale), operand(e, range))
+    } else {
+        let range = setting(e, 0x011c_d7d8);
+        load(e, range)
+    };
+    let range_bits = x87_store32(range);
+    let ratio = x87_sub(x87_load32(range_bits), x87_m32(distance.to_bits()));
+    let ratio = x87_div(ratio, x87_m32(range_bits));
+    let ratio_bits = x87_quiet_bits(x87_store32(ratio));
+    let clamped = e
+        .call(FLOAT_PAIR_00404010, &args![ratio_bits, x87_store32(0.0)])
+        .f64();
+    let clamped_bits = x87_store32(clamped);
+    let exponent = setting(e, 0x011c_d304);
+    let exponent_value = load(e, exponent);
+    let power = e
+        .call(POW, &args![x87_load32(clamped_bits), exponent_value])
+        .f64();
+    let power_bits = x87_store32(power);
+    let mut scaled_power = x87_quiet_bits(power_bits);
+    if positive == 0 {
+        let factor = setting(e, 0x011c_d2e8);
+        scaled_power = x87_store32(x87_mul(x87_load32(power_bits), operand(e, factor)));
+    }
+
+    let per = setting(e, 0x011c_d080);
+    let product_term = ftol(e, load(e, per)).wrapping_mul(product_factor);
+    let weight = setting(e, 0x011c_e024);
+    let first = x87_mul(x87_load32(scaled_power), operand(e, weight));
+    let first = x87_store32(x87_mul(first, f64::from(product_term)));
+    let first = e
+        .call(
+            FLOAT_PAIR_00404010,
+            &args![x87_quiet_bits(first), x87_store32(0.0)],
+        )
+        .f64();
+    let first_bits = x87_store32(first);
+
+    let add = setting(e, 0x011c_db84);
+    let added_term = x87_add(f64::from(added), operand(e, add));
+    let scale = setting(e, 0x011c_d08c);
+    let added_bits = x87_store32(x87_mul(load(e, scale), added_term));
+    let percent_word = 100i32.wrapping_sub(percent) / 100;
+    let percent_bits = x87_store32(f64::from(percent_word));
+    let second = x87_mul(f64::from(held), x87_m32(power_bits));
+    let second = x87_mul(second, x87_m32(added_bits));
+    let second = x87_mul(second, x87_m32(percent_bits));
+    let second = x87_store32(second);
+    let second = e
+        .call(
+            FLOAT_PAIR_00404010,
+            &args![x87_quiet_bits(second), x87_store32(0.0)],
+        )
+        .f64();
+    let second_bits = x87_store32(second);
+    // The exe also stores the base term times the power into a local it never reads.
+    let _base_times_power = x87_store32(x87_mul(x87_load32(base_bits), x87_m32(power_bits)));
+
+    let sum = x87_add(x87_load32(total), x87_m32(first_bits));
+    let sum = x87_add(sum, x87_m32(second_bits));
+    let value = x87_load32(x87_store32(sum));
+    let one: f64 = e.global(DOUBLE_ONE);
+    let zero: f64 = e.global(DOUBLE_ZERO);
+    // FCOMP with 1.0, TEST AH,5 / JP: below one goes on; FCOMP with 0.0, TEST AH,0x41 /
+    // JNZ: above zero answers 1. Everything else (NaN included) is truncated.
+    if value < one && value > zero {
+        1
+    } else {
+        ftol(e, value)
+    }
+}
+
+/// The settings [`fn_00643400`] weighs its three terms with, and its two limits.
+const PICKPOCKET_FIRST: (u32, u32) = (0x011c_def8, 0x011c_d8e4);
+const PICKPOCKET_SECOND: (u32, u32) = (0x011c_d48c, 0x011c_dec8);
+const PICKPOCKET_THIRD: (u32, u32) = (0x011c_da88, 0x011c_d8a8);
+const PICKPOCKET_MINIMUM: u32 = 0x011c_dffc;
+const PICKPOCKET_MAXIMUM: u32 = 0x011c_da40;
+
+// Translated from 00643400 (decompiled, FalloutNV.exe 1.4.0.525)
+/// A chance formula (`cdecl`, three words; no Xbox PDB name; called by
+/// `PickpocketCheck`): `first * s[11cd8e4] + s[11cdef8]` plus
+/// `second * s[11cdec8] + s[11cd48c]` plus `s[11cd8a8] * third + s[11cda88]` (each stored
+/// as a `float`, the integers loaded by `FILD`), truncated by `_ftol2`; raised to the
+/// truncated setting `011cdffc` when that is above it, else lowered to the truncated
+/// setting `011cda40` when that is below it (NaN keeps the sum). Argument names describe
+/// their use only.
+pub fn fn_00643400(e: &mut Engine, first: i32, second: i32, third: f32) -> i32 {
+    let add = setting(e, PICKPOCKET_FIRST.0);
+    let scale = setting(e, PICKPOCKET_FIRST.1);
+    let term = x87_mul(f64::from(first), operand(e, scale));
+    let first_bits = x87_store32(x87_add(term, operand(e, add)));
+    let add = setting(e, PICKPOCKET_SECOND.0);
+    let scale = setting(e, PICKPOCKET_SECOND.1);
+    let term = x87_mul(f64::from(second), operand(e, scale));
+    let second_bits = x87_store32(x87_add(term, operand(e, add)));
+    let add = setting(e, PICKPOCKET_THIRD.0);
+    let scale = setting(e, PICKPOCKET_THIRD.1);
+    let term = x87_mul(load(e, scale), x87_m32(third.to_bits()));
+    let third_bits = x87_store32(x87_add(term, operand(e, add)));
+    let sum = x87_add(x87_load32(first_bits), x87_m32(second_bits));
+    let sum = x87_add(sum, x87_m32(third_bits));
+    let mut result = ftol(e, sum);
+    let value = f64::from(result);
+    let minimum = setting(e, PICKPOCKET_MINIMUM);
+    // `FCOMP`, `TEST AH,0x41`, `JNZ`: the minimum only when it is above the sum.
+    if load(e, minimum) > value {
+        let minimum = setting(e, PICKPOCKET_MINIMUM);
+        result = ftol(e, load(e, minimum));
+    } else {
+        let value = f64::from(result);
+        let maximum = setting(e, PICKPOCKET_MAXIMUM);
+        // `FCOMP`, `TEST AH,5`, `JP`: the maximum only when it is below the sum.
+        if load(e, maximum) < value {
+            let maximum = setting(e, PICKPOCKET_MAXIMUM);
+            result = ftol(e, load(e, maximum));
+        }
+    }
+    result
+}
+
+// Translated from 00643b50 (decompiled, FalloutNV.exe 1.4.0.525)
+/// A derived actor value (`cdecl`, two words; no Xbox PDB name; registered by
+/// `RegisterActorValues`), in ST0: 0.0 unless `index` is 0x11; then the owner's clamped
+/// actor value 5 (`0066ef50`) plus the setting `011cd89c`, times the setting `011cd12c`
+/// (stored as a `float`), through `00406ce0`; a result above 0.0 is added to the 0.0 start
+/// (NaN not above).
+pub fn fn_00643b50(e: &mut Engine, owner: u32, index: i32) -> f32 {
+    let mut result = x87_store32(0.0);
+    if index == 0x11 {
+        let value = e
+            .call(GET_CLAMPED_ACTOR_FLOAT_VALUE, &args![owner, 5u32])
+            .f64();
+        let add = setting(e, 0x011c_d89c);
+        let sum = x87_add(load(e, add), value);
+        let scale = setting(e, 0x011c_d12c);
+        let product = x87_store32(x87_mul(load(e, scale), sum));
+        let rounded = e.call(0x0040_6ce0, &args![x87_quiet_bits(product)]).f64();
+        let rounded = x87_store32(rounded);
+        let zero: f64 = e.global(DOUBLE_ZERO);
+        // `FCOMP`, `TEST AH,0x41`, `JNZ`: added only when above zero.
+        if x87_load32(rounded) > zero {
+            result = x87_store32(x87_add(x87_load32(result), x87_m32(rounded)));
+        }
+    }
+    float_result(result)
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(
+            0x0064_2bc0,
+            fn_00642bc0(i32, i32, f32, i32, i32, u8, u8, u8, i32, i32, u8) -> i32
+        ),
+        entry!(0x0064_3400, fn_00643400(i32, i32, f32) -> i32),
+        entry!(0x0064_3b50, fn_00643b50(u32, i32) -> f32),
         entry!(0x0064_2860, fn_00642860(Ptr)),
         entry!(0x0064_2890, fn_00642890(Ptr)),
         entry!(0x0064_28b0, fn_006428b0(Ptr) -> f32),
@@ -1456,5 +1674,109 @@ mod tests {
         e.call(0x0064_3bf0, &args![2i32, w, v]);
         assert_eq!(e.mem.u32(w), 0x77);
         assert_eq!(e.mem.f32(v), 6.5);
+    }
+}
+
+#[cfg(test)]
+mod n075_tests {
+    use super::*;
+
+    type Log = Vec<(u32, Vec<u32>)>;
+
+    fn st0(value: f64) -> Ret {
+        Ret {
+            st0: value,
+            ..Ret::default()
+        }
+    }
+
+    /// Settings in a mapped block (value at +4, as `00403e20` answers); every setting
+    /// starts at 0.0.
+    fn engine(settings: &[(u32, f32)]) -> Engine {
+        let mut e = Engine::new();
+        e.map(0x011c_c000, 0x3000);
+        e.map(0x0101_0000, 0x2_0000);
+        for (setting, value) in settings {
+            e.mem.set_f32(setting + 4, *value);
+        }
+        e.set_global::<f64>(DOUBLE_ONE, 1.0);
+        e.set_global::<f64>(DOUBLE_ZERO, 0.0);
+        e.set_global::<f64>(TENTHS_DIVISOR_01020758, 10.0);
+        e.register(SETTING_VALUE, |_, a| (a[0] + 4).into_ret());
+        e.register(FTOL, |_, a| {
+            let v = f64::from_bits(u64::from(a[0]) | u64::from(a[1]) << 32);
+            (v as i32).into_ret()
+        });
+        e.register(FLOAT_PAIR_00404010, |_, a| {
+            st0(f64::from(f32::from_bits(a[0])))
+        });
+        e.register(POW, |_, a| {
+            let x = f64::from_bits(u64::from(a[0]) | u64::from(a[1]) << 32);
+            let y = f64::from_bits(u64::from(a[2]) | u64::from(a[3]) << 32);
+            st0(x.powf(y))
+        });
+        e.call_log = Some(vec![]);
+        e
+    }
+
+    fn ftol_calls(e: &mut Engine) -> usize {
+        let log: Log = e.call_log.take().unwrap();
+        log.iter().filter(|(a, _)| *a == FTOL).count()
+    }
+
+    fn detection(total: f32, held: i32) -> (i32, usize) {
+        let mut e = engine(&[
+            (0x011c_d7e4, total),
+            (0x011c_d7d8, 10.0),
+            (0x011c_d304, 1.0),
+            (0x011c_d080, 2.0),
+            (0x011c_e024, 0.25),
+            (0x011c_db84, 1.0),
+            (0x011c_d08c, 0.5),
+        ]);
+        let words = args![0u32, 1u32, 5.0f32, 0u32, 1u32, 0u32, 0u32, 0u32, 3u32, held, 0u32];
+        let result = e.call(0x0064_2bc0, &words).i32();
+        (result, ftol_calls(&mut e))
+    }
+
+    #[test]
+    fn fn_00642bc0_sums_the_terms() {
+        // 0.5 + 0.75 + 1.0 truncated; the first ftol is the d080 setting.
+        assert_eq!(detection(0.5, 2), (2, 2));
+        // -0.5 + 0.75 + 0.5 lies in (0, 1): 1 without a second ftol.
+        assert_eq!(detection(-0.5, 1), (1, 1));
+    }
+
+    #[test]
+    fn fn_00643400_clamps_the_chance() {
+        let settings = [
+            (0x011c_d8e4u32, 2.0f32),
+            (0x011c_def8, 1.0),
+            (0x011c_dec8, 3.0),
+            (0x011c_d8a8, 0.5),
+            (0x011c_dffc, 0.0),
+            (0x011c_da40, 100.0),
+        ];
+        let mut e = engine(&settings);
+        // 2*2+1 + 3*3 + 0.5*4 = 16.
+        assert_eq!(e.call(0x0064_3400, &args![2u32, 3u32, 4.0f32]).i32(), 16);
+        let mut e = engine(&[(0x011c_dffc, 20.0), (0x011c_da40, 100.0)]);
+        assert_eq!(e.call(0x0064_3400, &args![2u32, 3u32, 4.0f32]).i32(), 20);
+        let mut e = engine(&[(0x011c_def8, 50.0), (0x011c_dffc, 0.0), (0x011c_da40, 10.0)]);
+        assert_eq!(e.call(0x0064_3400, &args![0u32, 0u32, 0.0f32]).i32(), 10);
+    }
+
+    #[test]
+    fn fn_00643b50_derives_value_0x11() {
+        let mut e = engine(&[(0x011c_d89c, 1.0), (0x011c_d12c, 2.0)]);
+        e.register(GET_CLAMPED_ACTOR_FLOAT_VALUE, |_, a| {
+            assert_eq!(a[1], 5);
+            st0(3.0)
+        });
+        e.register(0x0040_6ce0, |_, a| st0(f64::from(f32::from_bits(a[0]))));
+        assert_eq!(e.call(0x0064_3b50, &args![0x1000u32, 0x11u32]).f64(), 8.0);
+        assert_eq!(e.call(0x0064_3b50, &args![0x1000u32, 0x10u32]).f64(), 0.0);
+        e.register(0x0040_6ce0, |_, _| st0(-1.0));
+        assert_eq!(e.call(0x0064_3b50, &args![0x1000u32, 0x11u32]).f64(), 0.0);
     }
 }

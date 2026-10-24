@@ -2224,6 +2224,9 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
             bs_tree_model_init_from_base(Ptr<BSTreeModel>, Ptr, u32) -> bool
         ),
     ]
+    .into_iter()
+    .chain(funcs_n086())
+    .collect()
 }
 
 #[cfg(test)]
@@ -3425,5 +3428,344 @@ mod tree_model_tests {
         assert!(e
             .call(0x0066_ac40, &args![this, Ptr::<()>::new(0), 0u32])
             .bool());
+    }
+}
+
+/// The scope local `00669500` keeps on its stack: constructor `00b029f0`
+/// and destructor `00b02ac0` (`thiscall`, no words).
+const SCOPE_00B029F0: u32 = 0x00b0_29f0;
+const SCOPE_END_00B02AC0: u32 = 0x00b0_2ac0;
+/// `CSpeedTreeRT::GetCamera` (`00b06b70`) and `CSpeedTreeRT::SetCamera`
+/// (`00b06c10`) (engine map; `cdecl`: position, direction), and
+/// `CSpeedTreeRT::SetLodLevel` (`00b08480`, `thiscall`, one float).
+const SPEED_TREE_GET_CAMERA: u32 = 0x00b0_6b70;
+const SPEED_TREE_SET_CAMERA_00B06C10: u32 = 0x00b0_6c10;
+/// The float the camera direction's second component starts as
+/// (`01012054`).
+const CAMERA_DIRECTION_Y_01012054: u32 = 0x0101_2054;
+/// `TESObjectTREE::CreateBillboardGeomData` (`0051c490`, engine map;
+/// `thiscall`, two words).
+const CREATE_BILLBOARD_GEOM_DATA: u32 = 0x0051_c490;
+/// `NiGeometryData::SetConsistency` (`00a67050`, engine map) and the setters
+/// `004410d0` and `004410f0` (`thiscall`, one word each).
+const GEOMETRY_SET_CONSISTENCY: u32 = 0x00a6_7050;
+const GEOMETRY_SET_004410D0: u32 = 0x0044_10d0;
+const GEOMETRY_SET_004410F0: u32 = 0x0044_10f0;
+/// `NiTriShape::NiTriShape_ov2` (`00a74480`, engine map; `thiscall`, one
+/// word: the data), 0xc4 bytes.
+const NI_TRI_SHAPE_CONSTRUCTOR: u32 = 0x00a7_4480;
+/// `00ba8630` (`thiscall`, no words): the constructor of the 0x104-byte
+/// shader property.
+const SHADER_PROPERTY_CONSTRUCTOR_00BA8630: u32 = 0x00ba_8630;
+/// The text `BSShaderPPLightingProperty::LoadTextureSet` (`00b66ad0`) gets
+/// here (`0102bf34`, `"STBB"`).
+const TEXT_STBB: u32 = 0x0102_bf34;
+/// `00656db0` (`cdecl`, no words): the word passed to the property's
+/// virtual slot `+0x100`.
+const PROPERTY_WORD_00656DB0: u32 = 0x0065_6db0;
+/// `BSShaderProperty::SetFlag` (`00441130`, engine map; `thiscall`, two
+/// words).
+const SHADER_PROPERTY_SET_FLAG: u32 = 0x0044_1130;
+/// `BSShaderManager::PrepareObject` (`00b57e30`, engine map; `cdecl`, three
+/// words).
+const SHADER_MANAGER_PREPARE_OBJECT: u32 = 0x00b5_7e30;
+/// `004030b0` (`thiscall`, no words): an object of the shape, kept when its
+/// `008d8520` (`thiscall`, no words) is 1 to 5.
+const SHAPE_OBJECT_004030B0: u32 = 0x0040_30b0;
+const OBJECT_COUNT_008D8520: u32 = 0x008d_8520;
+/// `0043c4b0` (`cdecl`, no words): the object whose virtual slot `+0xec`
+/// takes the shape, and on which `00e74120` (`thiscall`) runs.
+const RENDERER_0043C4B0: u32 = 0x0043_c4b0;
+const RENDERER_00E74120: u32 = 0x00e7_4120;
+
+// Translated from 00669500 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 00669500 - the C++ exception-unwinding frame (FS:[0]) is not translated.
+/// The billboard maker `BSTreeModel` calls with its tree form (unnamed in
+/// the engine map; `thiscall`, `RET 4`). Inside a scope local
+/// (`00b029f0`/`00b02ac0`), with a SpeedTree (`+0xc`) that is not of the
+/// second kind (`00666f00`) and a tree: the SpeedTree camera is saved and
+/// set to the origin looking along `(0, [01012054], 0)`, the level of
+/// detail set to 0, the tree's billboard geometry data made into a stack
+/// `NiPointer` (`CreateBillboardGeomData`) and given its consistency
+/// `0x4000`, `0x11` and 1; a new `NiTriShape` of it (null when the
+/// allocation fails) becomes `spBillboard`, which gets the new alpha
+/// property (`CreateAlphaProperty`, when set) and a new 0x104-byte shader
+/// property (`00ba8630`; null when the allocation fails) with the
+/// billboard texture set (`LoadTextureSet` with `"STBB"`), its slots
+/// `+0x100` (0, `00656db0`) and `+0xe4` (0), flags `0xd` and `0x16`;
+/// `PrepareObject` on the shape; when the shape's `004030b0` object has a
+/// `008d8520` count of 1 to 5, the renderer (`0043c4b0`) gets the shape
+/// with that object's `0x6c` pointer (slot `+0xec`) and `00e74120` runs;
+/// then the camera is restored and the stack pointers destroyed.
+pub fn fn_00669500(e: &mut Engine, this: Ptr<BSTreeModel>, tree: u32) {
+    let t = this.addr();
+    e.with_stack(0x1a0, |e, frame| {
+        // The frame is EBP - 0x1a0.
+        let f = frame.addr();
+        let scope = f + 0x34;
+        let saved_direction = f + 0x1c;
+        let direction = f + 0x28;
+        let saved_position = f + 0x174;
+        let data = f + 0x180;
+        let alpha = f + 0x184;
+        let position = f + 0x188;
+        e.call(SCOPE_00B029F0, &args![scope]);
+        for word in 0..3 {
+            e.mem.set_u32(position + word * 4, 0.0f32.to_bits());
+        }
+        e.mem.set_u32(direction, 0.0f32.to_bits());
+        let y = x87_quiet_bits(e.mem.u32(CAMERA_DIRECTION_Y_01012054));
+        e.mem.set_u32(direction + 4, y);
+        e.mem.set_u32(direction + 8, 0.0f32.to_bits());
+        if e.get(this, BSTreeModel::pSpeedTree) == 0
+            || bs_tree_model_fn_00666f00(e, this)
+            || tree == 0
+        {
+            e.call(SCOPE_END_00B02AC0, &args![scope]);
+            return;
+        }
+        e.call(
+            SPEED_TREE_GET_CAMERA,
+            &args![saved_position, saved_direction],
+        );
+        e.call(SPEED_TREE_SET_CAMERA_00B06C10, &args![position, direction]);
+        let speed_tree = e.get(this, BSTreeModel::pSpeedTree);
+        e.call(
+            SPEED_TREE_SET_LOD_LEVEL,
+            &args![speed_tree, 0.0f32.to_bits()],
+        );
+        e.call(NI_POINTER_CONSTRUCT, &args![data, 0u32]);
+        e.call(CREATE_BILLBOARD_GEOM_DATA, &args![tree, 0u32, data]);
+        let geometry = pointer(e, data);
+        e.call(GEOMETRY_SET_CONSISTENCY, &args![geometry, 0x4000u32]);
+        let geometry = pointer(e, data);
+        e.call(GEOMETRY_SET_004410D0, &args![geometry, 0x11u32]);
+        let geometry = pointer(e, data);
+        e.call(GEOMETRY_SET_004410F0, &args![geometry, 1u32]);
+        let block = e.call(NI_NEW, &args![0xc4u32]).u32();
+        let shape = if block != 0 {
+            let geometry = pointer(e, data);
+            e.call(NI_TRI_SHAPE_CONSTRUCTOR, &args![block, geometry])
+                .u32()
+        } else {
+            0
+        };
+        e.call(NI_POINTER_ASSIGN, &args![t + 0x1c, shape]);
+        let property = bs_tree_model_create_alpha_property(e).addr();
+        e.call(NI_POINTER_CONSTRUCT, &args![alpha, property]);
+        if pointer(e, alpha) != 0 {
+            let property = pointer(e, alpha);
+            let shape = pointer(e, t + 0x1c);
+            e.call(ATTACH_PROPERTY, &args![shape, property]);
+        }
+        let block = e.call(NI_NEW, &args![0x104u32]).u32();
+        let shader = if block != 0 {
+            e.call(SHADER_PROPERTY_CONSTRUCTOR_00BA8630, &args![block])
+                .u32()
+        } else {
+            0
+        };
+        let shape = pointer(e, t + 0x1c);
+        e.call(ATTACH_PROPERTY, &args![shape, shader]);
+        let texture_set = pointer(e, t + 0x34);
+        e.call(LOAD_TEXTURE_SET, &args![shader, TEXT_STBB, texture_set]);
+        let word = e.call(PROPERTY_WORD_00656DB0, &[]).u32();
+        e.vcall(shader, 0x100, &args![0u32, word]);
+        e.vcall(shader, 0xe4, &args![0u32]);
+        e.call(SHADER_PROPERTY_SET_FLAG, &args![shader, 0xdu32, 1u32]);
+        e.call(SHADER_PROPERTY_SET_FLAG, &args![shader, 0x16u32, 1u32]);
+        let shape = pointer(e, t + 0x1c);
+        e.call(SHADER_MANAGER_PREPARE_OBJECT, &args![shape, 0u32, 0u32]);
+        let shape = pointer(e, t + 0x1c);
+        let object = e.call(SHAPE_OBJECT_004030B0, &args![shape]).u32();
+        // Kept when its count is 1 to 5 (the count asked again for the
+        // upper bound).
+        let kept = if object != 0
+            && e.call(OBJECT_COUNT_008D8520, &args![object]).i32() >= 1
+            && e.call(OBJECT_COUNT_008D8520, &args![object]).i32() <= 5
+        {
+            object
+        } else {
+            0
+        };
+        if kept != 0 {
+            let renderer = e.call(RENDERER_0043C4B0, &[]).u32();
+            let word = fn_006698d0(e, Ptr::new(kept));
+            let shape = pointer(e, t + 0x1c);
+            e.vcall(renderer, 0xec, &args![shape, 0u32, 0u32, word]);
+            let renderer = e.call(RENDERER_0043C4B0, &[]).u32();
+            e.call(RENDERER_00E74120, &args![renderer]);
+        }
+        e.call(
+            SPEED_TREE_SET_CAMERA_00B06C10,
+            &args![saved_position, saved_direction],
+        );
+        e.call(NI_POINTER_DESTRUCT, &args![alpha]);
+        e.call(NI_POINTER_DESTRUCT, &args![data]);
+        e.call(SCOPE_END_00B02AC0, &args![scope]);
+    });
+}
+
+/// This unit's n086 translations, by exe address.
+fn funcs_n086() -> Vec<(u32, AbiFn)> {
+    vec![entry!(0x0066_9500, fn_00669500(Ptr<BSTreeModel>, u32))]
+}
+
+#[cfg(test)]
+mod n086_tests {
+    use super::*;
+
+    fn calls(e: &Engine, addr: u32) -> Vec<Vec<u32>> {
+        e.call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|c| c.0 == addr)
+            .map(|c| c.1.clone())
+            .collect()
+    }
+
+    fn quiet(e: &mut Engine, addrs: &[u32]) {
+        for &a in addrs {
+            e.register(a, |_, _| Ret::default());
+        }
+    }
+
+    fn setup(e: &mut Engine) -> (u32, u32) {
+        quiet(
+            e,
+            &[
+                SCOPE_00B029F0,
+                SCOPE_END_00B02AC0,
+                SPEED_TREE_GET_CAMERA,
+                SPEED_TREE_SET_CAMERA_00B06C10,
+                SPEED_TREE_SET_LOD_LEVEL,
+                CREATE_BILLBOARD_GEOM_DATA,
+                GEOMETRY_SET_CONSISTENCY,
+                GEOMETRY_SET_004410D0,
+                GEOMETRY_SET_004410F0,
+                ATTACH_PROPERTY,
+                LOAD_TEXTURE_SET,
+                SHADER_PROPERTY_SET_FLAG,
+                SHADER_MANAGER_PREPARE_OBJECT,
+                RENDERER_00E74120,
+                NI_POINTER_DESTRUCT,
+                ALPHA_PROPERTY_CONSTRUCTOR,
+                ALPHA_SET_0049ED90,
+                ALPHA_SET_004393C0,
+                ALPHA_SET_004393E0,
+                ALPHA_SET_0094DB80,
+                0x7300_0100,
+                0x7300_00e4,
+                0x7300_00ec,
+            ],
+        );
+        e.register(NI_POINTER_GET, |e, a| e.mem.u32(a[0]).into_ret());
+        e.register(NI_POINTER_ASSIGN, |e, a| {
+            e.mem.set_u32(a[0], a[1]);
+            Ret::default()
+        });
+        e.register(NI_POINTER_CONSTRUCT, |e, a| {
+            e.mem.set_u32(a[0], a[1]);
+            a[0].into_ret()
+        });
+        e.map(CAMERA_DIRECTION_Y_01012054, 4);
+        e.mem.set_f32(CAMERA_DIRECTION_Y_01012054, -1.0);
+        // A shader property with the slots the code calls.
+        let shader = e.mem.alloc(0x104);
+        let vtable = e.mem.alloc(0x200);
+        e.mem.set_u32(shader, vtable);
+        e.mem.set_u32(vtable + 0x100, 0x7300_0100);
+        e.mem.set_u32(vtable + 0xe4, 0x7300_00e4);
+        e.register_double(SHADER_PROPERTY_CONSTRUCTOR_00BA8630, move |_, _| {
+            shader.into_ret()
+        });
+        e.register(NI_NEW, |_, a| (0x0090_0000 + a[0]).into_ret());
+        e.register(ALPHA_PROPERTY_CONSTRUCTOR, |_, _| 0x0aaau32.into_ret());
+        e.register(NI_TRI_SHAPE_CONSTRUCTOR, |_, _| 0x0555u32.into_ret());
+        e.register(PROPERTY_WORD_00656DB0, |_, _| 0x66u32.into_ret());
+        let model = e.mem.alloc(0x80);
+        e.mem.set_u32(model + 0x0c, 0x0fff);
+        e.mem.set_u32(model + 0x08, 0);
+        e.mem.set_u32(model + 0x34, 0x0333);
+        (model, shader)
+    }
+
+    #[test]
+    fn billboard_needs_a_speed_tree_and_a_tree() {
+        let mut e = Engine::new();
+        let (model, _) = setup(&mut e);
+        e.call_log = Some(vec![]);
+        e.call(0x0066_9500, &args![model, 0u32]);
+        assert_eq!(calls(&e, SCOPE_00B029F0).len(), 1);
+        assert_eq!(calls(&e, SCOPE_END_00B02AC0).len(), 1);
+        assert!(calls(&e, SPEED_TREE_GET_CAMERA).is_empty());
+        e.mem.set_u32(model + 0x0c, 0);
+        e.call_log = Some(vec![]);
+        e.call(0x0066_9500, &args![model, 0x0777u32]);
+        assert!(calls(&e, SPEED_TREE_GET_CAMERA).is_empty());
+    }
+
+    #[test]
+    fn billboard_is_made_and_dressed() {
+        let mut e = Engine::new();
+        let (model, shader) = setup(&mut e);
+        let renderer = e.mem.alloc(4);
+        let vtable = e.mem.alloc(0x100);
+        e.mem.set_u32(renderer, vtable);
+        e.mem.set_u32(vtable + 0xec, 0x7300_00ec);
+        e.register_double(RENDERER_0043C4B0, move |_, _| renderer.into_ret());
+        let object = e.mem.alloc(0x70);
+        e.mem.set_u32(object + 0x6c, 0x0bbb);
+        e.register_double(SHAPE_OBJECT_004030B0, move |_, _| object.into_ret());
+        e.register(OBJECT_COUNT_008D8520, |_, _| 3u32.into_ret());
+        e.call_log = Some(vec![]);
+        e.call(0x0066_9500, &args![model, 0x0777u32]);
+        let saved = calls(&e, SPEED_TREE_GET_CAMERA);
+        assert_eq!(saved.len(), 1);
+        let set = calls(&e, SPEED_TREE_SET_CAMERA_00B06C10);
+        assert_eq!(set.len(), 2);
+        assert_eq!(set[1], saved[0]);
+        let direction = set[0][1];
+        assert_eq!(e.mem.f32(direction + 4), -1.0);
+        assert_eq!(calls(&e, SPEED_TREE_SET_LOD_LEVEL), vec![vec![0x0fff, 0]]);
+        let geometry = calls(&e, CREATE_BILLBOARD_GEOM_DATA);
+        assert_eq!(geometry[0][..2], [0x0777, 0]);
+        assert_eq!(e.mem.u32(model + 0x1c), 0x0555);
+        assert_eq!(
+            calls(&e, ATTACH_PROPERTY),
+            vec![vec![0x0555, 0x0aaa], vec![0x0555, shader]]
+        );
+        assert_eq!(
+            calls(&e, LOAD_TEXTURE_SET),
+            vec![vec![shader, TEXT_STBB, 0x0333]]
+        );
+        assert_eq!(calls(&e, 0x7300_0100), vec![vec![shader, 0, 0x66]]);
+        assert_eq!(calls(&e, 0x7300_00e4), vec![vec![shader, 0]]);
+        assert_eq!(
+            calls(&e, SHADER_PROPERTY_SET_FLAG),
+            vec![vec![shader, 0xd, 1], vec![shader, 0x16, 1]]
+        );
+        assert_eq!(
+            calls(&e, SHADER_MANAGER_PREPARE_OBJECT),
+            vec![vec![0x0555, 0, 0]]
+        );
+        assert_eq!(
+            calls(&e, 0x7300_00ec),
+            vec![vec![renderer, 0x0555, 0, 0, 0x0bbb]]
+        );
+        assert_eq!(calls(&e, RENDERER_00E74120), vec![vec![renderer]]);
+        assert_eq!(calls(&e, NI_POINTER_DESTRUCT).len(), 2);
+
+        // A count outside 1..=5: no renderer call.
+        e.register(OBJECT_COUNT_008D8520, |_, _| 6u32.into_ret());
+        e.call_log = Some(vec![]);
+        e.call(0x0066_9500, &args![model, 0x0777u32]);
+        assert!(calls(&e, RENDERER_0043C4B0).is_empty());
+        e.register(OBJECT_COUNT_008D8520, |_, _| 0u32.into_ret());
+        e.call_log = Some(vec![]);
+        e.call(0x0066_9500, &args![model, 0x0777u32]);
+        assert_eq!(calls(&e, OBJECT_COUNT_008D8520).len(), 1);
+        assert!(calls(&e, RENDERER_0043C4B0).is_empty());
     }
 }

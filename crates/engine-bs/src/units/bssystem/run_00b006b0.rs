@@ -96,9 +96,104 @@ pub fn fn_00b00820(e: &mut Engine, this: Ptr, argument: u32) -> Ptr {
     this
 }
 
+/// `_strcpy_s` and `_strcat_s` (`00ec65a6`, `00ec6bd2`; cdecl: destination, size, source).
+const STRCPY_S: u32 = 0x00ec_65a6;
+const STRCAT_S: u32 = 0x00ec_6bd2;
+/// `"\*"` (`010a47b0`) and the empty string just after it (`010a47b3`).
+const ALL_FILES_SUFFIX: u32 = 0x010a_47b0;
+const EMPTY_TEXT: u32 = 0x010a_47b3;
+/// Import slot: `CreateDirectoryA` (KERNEL32).
+const CREATE_DIRECTORY: u32 = 0x00fd_f0b8;
+/// The word `00b00970` stores (`011f8250`).
+const STORED_VALUE_011F8250: u32 = 0x011f_8250;
+
+// Translated from 00b006b0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`thiscall`, `RET 4`): a search's set-up. Answers 2 for a null
+/// `directory`; otherwise the pattern at +0x144 becomes `directory` followed by `"\*"`
+/// (`strcpy_s`, `strcat_s`, 0x104 each), the handle (+0) and the status (+0x248) are cleared
+/// and the status (0) is answered.
+pub fn fn_00b006b0(e: &mut Engine, this: Ptr, directory: u32) -> u32 {
+    if directory == 0 {
+        return 2;
+    }
+    let base = this.addr();
+    e.call(STRCPY_S, &args![base + PATTERN, 0x104u32, directory]);
+    e.call(STRCAT_S, &args![base + PATTERN, 0x104u32, ALL_FILES_SUFFIX]);
+    e.mem.set_u32(base, 0);
+    e.mem.set_u32(base + STATUS, 0);
+    e.mem.u32(base + STATUS)
+}
+
+// Translated from 00b00800 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (cdecl, one word): `CreateDirectoryA(path, null)`; answers 0
+/// when it succeeds, 4 when it fails.
+pub fn fn_00b00800(e: &mut Engine, path: u32) -> u32 {
+    let made = e.call(CREATE_DIRECTORY, &args![path, 0u32]).u32();
+    if made != 0 {
+        0
+    } else {
+        4
+    }
+}
+
+// Translated from 00b00880 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (thiscall, no callers found): clears the byte at +4 and
+/// answers `this`.
+pub fn fn_00b00880(e: &mut Engine, this: Ptr) -> Ptr {
+    e.mem.set_u8(this.addr().wrapping_add(4), 0);
+    this
+}
+
+// Translated from 00b008a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (thiscall, called from `00af2a60`): does nothing.
+pub fn fn_00b008a0(_e: &mut Engine, _this: Ptr) {}
+
+// Translated from 00b008b0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (thiscall, one word): stores `value` at +0 and answers `this`.
+pub fn fn_00b008b0(e: &mut Engine, this: Ptr, value: u32) -> Ptr {
+    e.mem.set_u32(this.addr(), value);
+    this
+}
+
+// Translated from 00b008d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (thiscall): answers the word at +0.
+pub fn fn_00b008d0(e: &mut Engine, this: Ptr) -> u32 {
+    e.mem.u32(this.addr())
+}
+
+// Translated from 00b008e0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (thiscall, `this` not read): answers the empty string at
+/// `010a47b3`.
+pub fn fn_00b008e0(_e: &mut Engine, _this: Ptr) -> u32 {
+    EMPTY_TEXT
+}
+
+// Translated from 00b008f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (thiscall, `this` not read, no callers found): answers 0.
+pub fn fn_00b008f0(_e: &mut Engine, _this: Ptr) -> u32 {
+    0
+}
+
+// Translated from 00b00970 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (cdecl, one word, no callers found): stores `value` in
+/// `011f8250` and answers it.
+pub fn fn_00b00970(e: &mut Engine, value: u32) -> u32 {
+    e.set_global(STORED_VALUE_011F8250, value);
+    value
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x00b0_06b0, fn_00b006b0(Ptr, u32) -> u32),
+        entry!(0x00b0_0800, fn_00b00800(u32) -> u32),
+        entry!(0x00b0_0880, fn_00b00880(Ptr) -> Ptr),
+        entry!(0x00b0_08a0, fn_00b008a0(Ptr)),
+        entry!(0x00b0_08b0, fn_00b008b0(Ptr, u32) -> Ptr),
+        entry!(0x00b0_08d0, fn_00b008d0(Ptr) -> u32),
+        entry!(0x00b0_08e0, fn_00b008e0(Ptr) -> u32),
+        entry!(0x00b0_08f0, fn_00b008f0(Ptr) -> u32),
+        entry!(0x00b0_0970, fn_00b00970(u32) -> u32),
         entry!(0x00b0_0900, fn_00b00900(Ptr, u32, u32, u32, u32) -> Ptr),
         entry!(0x00b0_0950, fn_00b00950(Ptr)),
         entry!(0x00b0_0720, fn_00b00720(Ptr, Ptr) -> u32),
@@ -220,5 +315,73 @@ mod tests {
             [0x248u32, 0x24c, 0x250, 0x254].map(|o| e.mem.u32(this + o)),
             [0, 0x99, 0, 0]
         );
+    }
+}
+
+#[cfg(test)]
+mod n083_tests {
+    use super::*;
+
+    fn calls_to(e: &Engine, callee: u32) -> Vec<Vec<u32>> {
+        e.call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|(address, _)| *address == callee)
+            .map(|(_, words)| words.clone())
+            .collect()
+    }
+
+    #[test]
+    fn search_set_up_builds_the_pattern() {
+        let mut e = Engine::new();
+        e.register(STRCPY_S, |_, _| Ret::default());
+        e.register(STRCAT_S, |_, _| Ret::default());
+        let this = e.mem.alloc(0x258);
+        e.mem.set_u32(this, 7);
+        e.mem.set_u32(this + STATUS, 7);
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x00b0_06b0, &args![this, 0u32]).u32(), 2);
+        assert!(calls_to(&e, STRCPY_S).is_empty());
+        assert_eq!(e.mem.u32(this), 7);
+        assert_eq!(e.call(0x00b0_06b0, &args![this, 0x5000u32]).u32(), 0);
+        assert_eq!(
+            calls_to(&e, STRCPY_S),
+            vec![vec![this + PATTERN, 0x104, 0x5000]]
+        );
+        assert_eq!(
+            calls_to(&e, STRCAT_S),
+            vec![vec![this + PATTERN, 0x104, ALL_FILES_SUFFIX]]
+        );
+        assert_eq!(e.mem.u32(this), 0);
+        assert_eq!(e.mem.u32(this + STATUS), 0);
+    }
+
+    #[test]
+    fn create_directory_answers_0_or_4() {
+        let mut e = Engine::new();
+        e.register(CREATE_DIRECTORY, |_, _| 1u32.into_ret());
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x00b0_0800, &args![0x5000u32]).u32(), 0);
+        assert_eq!(calls_to(&e, CREATE_DIRECTORY), vec![vec![0x5000, 0]]);
+        e.register(CREATE_DIRECTORY, |_, _| Ret::default());
+        assert_eq!(e.call(0x00b0_0800, &args![0x5000u32]).u32(), 4);
+    }
+
+    #[test]
+    fn small_accessors() {
+        let mut e = Engine::new();
+        let this = e.mem.alloc(8);
+        e.mem.set_u32(this + 4, 0xffff_ffff);
+        assert_eq!(e.call(0x00b0_0880, &args![this]).u32(), this);
+        assert_eq!(e.mem.u32(this + 4), 0xffff_ff00);
+        e.call(0x00b0_08a0, &args![this]);
+        assert_eq!(e.call(0x00b0_08b0, &args![this, 0x77u32]).u32(), this);
+        assert_eq!(e.call(0x00b0_08d0, &args![this]).u32(), 0x77);
+        assert_eq!(e.call(0x00b0_08e0, &args![this]).u32(), EMPTY_TEXT);
+        assert_eq!(e.call(0x00b0_08f0, &args![this]).u32(), 0);
+        e.map(STORED_VALUE_011F8250, 4);
+        assert_eq!(e.call(0x00b0_0970, &args![0x1234u32]).u32(), 0x1234);
+        assert_eq!(e.global::<u32>(STORED_VALUE_011F8250), 0x1234);
     }
 }

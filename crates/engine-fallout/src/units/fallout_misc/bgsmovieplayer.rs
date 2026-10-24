@@ -278,9 +278,30 @@ pub fn bgs_movie_player_check_continue_playing(e: &mut Engine, this: Ptr, skip: 
     true
 }
 
+/// `FalloutAudioMedia::MediaPause` (`008305e0`) and `MediaUnPause`
+/// (`00830610`): static, no arguments.
+const MEDIA_PAUSE: u32 = 0x0083_05e0;
+const MEDIA_UNPAUSE: u32 = 0x0083_0610;
+
+// Translated from 00867270 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BGSMoviePlayer::PauseMusic` (Xbox PDB; `ECX` only, not read):
+/// `FalloutAudioMedia::MediaPause`.
+pub fn bgs_movie_player_pause_music(e: &mut Engine, _this: Ptr) {
+    e.call(MEDIA_PAUSE, &args![]);
+}
+
+// Translated from 00867280 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BGSMoviePlayer::UnPauseMusic` (Xbox PDB; `ECX` only, not read):
+/// `FalloutAudioMedia::MediaUnPause`.
+pub fn bgs_movie_player_unpause_music(e: &mut Engine, _this: Ptr) {
+    e.call(MEDIA_UNPAUSE, &args![]);
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x0086_7270, bgs_movie_player_pause_music(Ptr)),
+        entry!(0x0086_7280, bgs_movie_player_unpause_music(Ptr)),
         entry!(0x0086_7180, fn_00867180(Ptr)),
         entry!(0x00867150, bgs_movie_player_scalar_deleting_destructor(Ptr, u32) -> Ptr),
         entry!(0x00866ff0, bgs_movie_player_create()),
@@ -535,5 +556,30 @@ mod b014_tests {
             assert_eq!(!calls(&e, MOVIE_STOP).is_empty(), stopped);
             assert_eq!(calls(&e, MOVIE_CONTINUE), vec![vec![this, u32::from(skip)]]);
         }
+    }
+}
+
+#[cfg(test)]
+mod n072_tests {
+    use super::*;
+
+    #[test]
+    fn pause_and_unpause_forward_to_the_media() {
+        let mut e = Engine::new();
+        e.register(MEDIA_PAUSE, |_, _| Ret::default());
+        e.register(MEDIA_UNPAUSE, |_, _| Ret::default());
+        e.call_log = Some(vec![]);
+        e.call(0x0086_7270, &args![0x10u32]);
+        e.call(0x0086_7280, &args![0x10u32]);
+        let log = e.call_log.take().unwrap();
+        assert_eq!(
+            log,
+            vec![
+                (0x0086_7270, vec![0x10]),
+                (MEDIA_PAUSE, vec![]),
+                (0x0086_7280, vec![0x10]),
+                (MEDIA_UNPAUSE, vec![]),
+            ]
+        );
     }
 }

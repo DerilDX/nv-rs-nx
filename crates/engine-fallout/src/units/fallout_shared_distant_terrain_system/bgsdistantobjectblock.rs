@@ -1119,9 +1119,389 @@ pub fn bgs_distant_object_block_load_task_finish(e: &mut Engine, this: Ptr) {
     }
 }
 
+/// `...\%s\Blocks\%s.Level%i.X%i.Y%i.PostApocalypse.NIF`.
+const BLOCK_FILE_PA_FORMAT: u32 = 0x0106_daf8;
+/// `...\%s\Stinger\%s.Level%i.X%i.Y%i.NIF`.
+const STINGER_FILE_FORMAT: u32 = 0x0106_db44;
+/// `...\%s\Stinger\%s.Level%i.High.X%i.Y%i.NIF`.
+const STINGER_FILE_HIGH_PRIORITY_FORMAT: u32 = 0x0106_db80;
+/// `"Object LOD Task for block ( %i, %i ) at level ( %i )"`.
+const TASK_DESCRIPTION_FORMAT: u32 = 0x0106_dcbc;
+/// `00450f90` (`thiscall`, `RET 4`): sets a flag of the object to the byte
+/// given.
+const SET_HIDDEN_00450F90: u32 = 0x0045_0f90;
+/// `00453470` (no stack word): a node's child count.
+const CHILD_COUNT_00453470: u32 = 0x0045_3470;
+/// `0045bb80` (no stack word): an object's world position.
+const WORLD_POSITION_0045BB80: u32 = 0x0045_bb80;
+/// The `TES` singleton pointer.
+const TES: u32 = 0x011d_ea10;
+/// `TES::GetWorldSpace` (`004fd3e0`, engine map).
+const TES_GET_WORLD_SPACE: u32 = 0x004f_d3e0;
+/// `TESWorldSpace::GetCellFromWorldCoord` (`00587550`, engine map; `RET 4`).
+const WORLD_SPACE_CELL_AT: u32 = 0x0058_7550;
+/// `TES::IsCellLoaded` (`004511e0`, engine map; `RET 8`).
+const TES_IS_CELL_LOADED: u32 = 0x0045_11e0;
+/// `TESObjectCELL::All3DWithVisibleDistantFadingIn` (`00557d30`, engine map).
+const CELL_ALL_3D_FADING_IN: u32 = 0x0055_7d30;
+/// The object's slot (+0x18) that answers it as geometry.
+const OBJECT_SLOT_AS_GEOMETRY: u32 = 0x18;
+/// `QueuedFile::Cancel` (`00c3cb70`, engine map; `RET 8`).
+const QUEUED_FILE_CANCEL: u32 = 0x00c3_cb70;
+
+// Translated from 006f5690 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BGSDistantObjectBlock::BuildBlockFileNamePA` (engine map), cdecl
+/// `(buffer, world space, level, x, y)`: as
+/// [`bgs_distant_object_block_build_block_file_name`] with the
+/// `...Level%i.X%i.Y%i.PostApocalypse.NIF` format.
+pub fn bgs_distant_object_block_build_block_file_name_pa(
+    e: &mut Engine,
+    buffer: u32,
+    world_space: u32,
+    level: u32,
+    x: i16,
+    y: i16,
+) {
+    build_name(e, buffer, world_space, level, x, y, BLOCK_FILE_PA_FORMAT);
+}
+
+// Translated from 006f56e0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BGSDistantObjectBlock::BuildStingerBlockFileName` (engine map): as
+/// [`bgs_distant_object_block_build_block_file_name`] with the
+/// `...\Stinger\%s.Level%i.X%i.Y%i.NIF` format.
+pub fn bgs_distant_object_block_build_stinger_block_file_name(
+    e: &mut Engine,
+    buffer: u32,
+    world_space: u32,
+    level: u32,
+    x: i16,
+    y: i16,
+) {
+    build_name(e, buffer, world_space, level, x, y, STINGER_FILE_FORMAT);
+}
+
+// Translated from 006f5730 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BGSDistantObjectBlock::BuildStingerBlockFileNameHighPriority` (engine
+/// map): as [`bgs_distant_object_block_build_block_file_name`] with the
+/// `...\Stinger\%s.Level%i.High.X%i.Y%i.NIF` format.
+pub fn bgs_distant_object_block_build_stinger_block_file_name_high_priority(
+    e: &mut Engine,
+    buffer: u32,
+    world_space: u32,
+    level: u32,
+    x: i16,
+    y: i16,
+) {
+    build_name(
+        e,
+        buffer,
+        world_space,
+        level,
+        x,
+        y,
+        STINGER_FILE_HIGH_PRIORITY_FORMAT,
+    );
+}
+
+// Translated from 006f58e0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (cdecl, `(object, value)`): a non-null
+/// object gets `00450f90(value == 0)` (the low byte compared); then, when
+/// the object is a node (slot +0xC; asked even of a null object, as the
+/// exe does), each child (`0045bc00`) gets the same with the `value` byte.
+pub fn fn_006f58e0(e: &mut Engine, object: u32, value: u32) {
+    if object != 0 {
+        e.call(
+            SET_HIDDEN_00450F90,
+            &args![object, u32::from(value as u8 == 0)],
+        );
+    }
+    if e.vcall(object, OBJECT_SLOT_C, &args![]).u32() == 0 {
+        return;
+    }
+    let node = e.vcall(object, OBJECT_SLOT_C, &args![]).u32();
+    let mut index: u32 = 0;
+    while index < e.call(CHILD_COUNT_00453470, &args![node]).u32() {
+        let child = e.call(NODE_FIND_MESH, &args![node, index]).u32();
+        fn_006f58e0(e, child, u32::from(value as u8));
+        index += 1;
+    }
+}
+
+// Translated from 006f5970 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BGSDistantObjectBlock::UpdateStingerVisibility` (engine map;
+/// `thiscall`, `RET 0x10`): a node's non-null children are visited with
+/// the same words (the two 16-bit ones zero-extended). A leaf object is
+/// shown ([`fn_006f58e0`] with 0) when the cell at its world position in
+/// the current world space is loaded (`TES::IsCellLoaded` with 1) and all
+/// its 3D is fading in, else hidden (with 1).
+pub fn bgs_distant_object_block_update_stinger_visibility(
+    e: &mut Engine,
+    this: Ptr,
+    object: u32,
+    word: u32,
+    first: u16,
+    second: u16,
+) {
+    if e.vcall(object, OBJECT_SLOT_C, &args![]).u32() != 0 {
+        let node = e.vcall(object, OBJECT_SLOT_C, &args![]).u32();
+        let mut index: u32 = 0;
+        while index < e.call(CHILD_COUNT_00453470, &args![node]).u32() {
+            let child = e.call(NODE_FIND_MESH, &args![node, index]).u32();
+            if child != 0 {
+                bgs_distant_object_block_update_stinger_visibility(
+                    e, this, child, word, first, second,
+                );
+            }
+            index += 1;
+        }
+        return;
+    }
+    let cell_ready = e.with_stack(0xc, |e, point| {
+        let position = e.call(WORLD_POSITION_0045BB80, &args![object]).u32();
+        for i in 0..3 {
+            let value = e.mem.u32(position + 4 * i);
+            e.mem.set_u32(point.addr() + 4 * i, value);
+        }
+        let tes: u32 = e.global(TES);
+        let world_space = e.call(TES_GET_WORLD_SPACE, &args![tes]).u32();
+        let cell = e
+            .call(WORLD_SPACE_CELL_AT, &args![world_space, point])
+            .u32();
+        let tes: u32 = e.global(TES);
+        e.call(TES_IS_CELL_LOADED, &args![tes, cell, 1u32]).u8() != 0
+            && e.call(CELL_ALL_3D_FADING_IN, &args![cell]).u8() != 0
+    });
+    fn_006f58e0(e, object, if cell_ready { 0 } else { 1 });
+}
+
+// Translated from 006f5a70 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`thiscall`, `RET 4`): a non-null `object`
+/// gets `00450f90(0)` and, when it is a node (slot +0xC;
+/// asked even of a null object), each of its children the same way (null
+/// children included).
+pub fn fn_006f5a70(e: &mut Engine, this: Ptr, object: u32) {
+    if object != 0 {
+        e.call(SET_HIDDEN_00450F90, &args![object, 0u32]);
+    }
+    if e.vcall(object, OBJECT_SLOT_C, &args![]).u32() == 0 {
+        return;
+    }
+    let node = e.vcall(object, OBJECT_SLOT_C, &args![]).u32();
+    let mut index: u32 = 0;
+    while index < e.call(CHILD_COUNT_00453470, &args![node]).u32() {
+        let child = e.call(NODE_FIND_MESH, &args![node, index]).u32();
+        fn_006f5a70(e, this, child);
+        index += 1;
+    }
+}
+
+// Translated from 006f6270 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 006f6270 - the C++ exception-unwinding frame (FS:[0]) that frees the task allocation and leaves the memory context when a call throws is not translated
+/// Unnamed in the engine map (the block's stinger load), `thiscall`
+/// `(world space, level, x, y)`: under the memory context 0x24 (source
+/// line 0x240) the mesh is kept as the old mesh, a new load task (0x58
+/// bytes; flag 1, high priority 1, not a stinger, the coordinates
+/// sign-extended) becomes `spLoadTask` and is queued (slot +0x20), and
+/// `bDoneLoading` and `bAttached` are cleared. The old load task is not
+/// cancelled here.
+pub fn fn_006f6270(e: &mut Engine, this: Ptr, world_space: u32, level: u32, x: i16, y: i16) {
+    let base = this.addr();
+    e.with_stack(4, |e, guard| {
+        e.call(
+            MEMORY_CONTEXT_ENTER,
+            &args![guard, 0x24u32, 1u32, SOURCE_FILE_NAME, 0x240u32],
+        );
+        e.call(
+            POINTER_COPY,
+            &args![base + BLOCK_OLD_MESH, base + BLOCK_MESH],
+        );
+        let block = e.call(ALLOCATE, &args![0x58u32]).u32();
+        let task = if block != 0 {
+            bgs_distant_object_block_load_task_construct(
+                e,
+                Ptr::new(block),
+                base,
+                world_space,
+                i32::from(x) as u32,
+                i32::from(y) as u32,
+                level,
+                1,
+                1,
+                0,
+            )
+            .addr()
+        } else {
+            0
+        };
+        e.call(TASK_POINTER_ASSIGN, &args![base + BLOCK_LOAD_TASK, task]);
+        let task = pointer(e, base + BLOCK_LOAD_TASK);
+        e.vcall(task, TASK_SLOT_QUEUE, &args![]);
+        e.mem.set_u8(base + BLOCK_DONE_LOADING, 0);
+        e.mem.set_u8(base + BLOCK_ATTACHED, 0);
+        e.call(MEMORY_CONTEXT_LEAVE, &args![guard]);
+    });
+}
+
+// Translated from 006f6a90 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 006f6a90 - the C++ exception-unwinding frame (FS:[0]) that frees the property allocation when its constructor throws is not translated
+/// Unnamed in the engine map (the stinger's prepare, `thiscall`, `RET 4`):
+/// nothing for a null object; a node's children are prepared in turn. A
+/// geometry (slot +0x18) loses its property of type `0040df90` for a new
+/// one (0x1C bytes, set up with 1, 0, 0x80, 4), its shader property gets
+/// flags 0x22 and 0x37 set, the shader property's clone (slot +0xB0 with
+/// the geometry, 0, 1) replaces it when there is one, the geometry gets
+/// its shader, its properties updated and the downward update with zeroed
+/// data; the terrain node's block visibility is updated; the geometry data
+/// is set up (`004410d0(0)`, consistency 0x4000, `004410f0(1)`) and the
+/// geometry handed to the renderer (slot +0xEC with the owner's slot
+/// +0x118 answer).
+pub fn fn_006f6a90(e: &mut Engine, this: Ptr, object: u32) {
+    if object == 0 {
+        return;
+    }
+    if e.vcall(object, OBJECT_SLOT_C, &args![]).u32() != 0 {
+        let node = e.vcall(object, OBJECT_SLOT_C, &args![]).u32();
+        let mut index: u32 = 0;
+        while index < e.call(CHILD_COUNT_00453470, &args![node]).u32() {
+            let child = e.call(NODE_FIND_MESH, &args![node, index]).u32();
+            fn_006f6a90(e, this, child);
+            index += 1;
+        }
+        return;
+    }
+    let geometry = e.vcall(object, OBJECT_SLOT_AS_GEOMETRY, &args![]).u32();
+    let shader_type = e.call(SHADER_PROPERTY_TYPE, &args![]).u32();
+    // The exe asks for this property twice and keeps only the second answer.
+    e.call(GET_PROPERTY, &args![geometry, shader_type]);
+    let shader_type = e.call(SHADER_PROPERTY_TYPE, &args![]).u32();
+    let mut shader_property = e.call(GET_PROPERTY, &args![geometry, shader_type]).u32();
+    let kind = e.call(PROPERTY_TYPE_40DF90, &args![]).u32();
+    e.call(REMOVE_PROPERTY, &args![geometry, kind]);
+    let block = e.call(NI_ALLOCATE, &args![0x1cu32]).u32();
+    let property = if block != 0 {
+        e.call(PROPERTY_CONSTRUCT, &args![block]).u32()
+    } else {
+        0
+    };
+    e.call(PROPERTY_SET_4393C0, &args![property, 1u32]);
+    e.call(PROPERTY_SET_49ED90, &args![property, 0u32]);
+    e.call(PROPERTY_SET_94DB80, &args![property, 0x80u32]);
+    e.call(PROPERTY_SET_4393E0, &args![property, 4u32]);
+    e.call(ATTACH_PROPERTY, &args![geometry, property]);
+    e.call(SHADER_SET_FLAG, &args![shader_property, 0x22u32, 1u32]);
+    e.call(SHADER_SET_FLAG, &args![shader_property, 0x37u32, 1u32]);
+    let clone = e
+        .vcall(
+            shader_property,
+            SHADER_SLOT_CLONE,
+            &args![geometry, 0u32, 1u32],
+        )
+        .u32();
+    if clone != 0 {
+        e.call(REMOVE_PROPERTY, &args![geometry, 3u32]);
+        shader_property = clone;
+        e.call(ATTACH_PROPERTY, &args![geometry, shader_property]);
+    }
+    let shader_id = e.call(SHADER_ID, &args![shader_property]).u32();
+    let shader = e.call(GET_SHADER, &args![shader_id]).u32();
+    e.call(SET_SHADER, &args![geometry, shader]);
+    e.with_stack(0xc, |e, data| {
+        e.call(
+            UPDATE_DATA_CONSTRUCT,
+            &args![data, x87_store32(0.0), 0u32, 0u32],
+        );
+        e.call(UPDATE_PROPERTIES, &args![geometry]);
+        e.call(UPDATE_DOWNWARD, &args![geometry, data]);
+    });
+    let terrain = e.mem.u32(this.addr() + BLOCK_NODE);
+    e.call(UPDATE_BLOCK_VISIBILITY, &args![terrain, 0u32]);
+    for (setter, value) in [
+        (DATA_SET_4410D0, 0u32),
+        (DATA_SET_CONSISTENCY, 0x4000),
+        (DATA_SET_4410F0, 1),
+    ] {
+        let data = e.call(MESH_DATA, &args![geometry]).u32();
+        e.call(setter, &args![data, value]);
+    }
+    let owner = e.call(MESH_OWNER_4030B0, &args![geometry]).u32();
+    let renderer = e.call(RENDERER, &args![]).u32();
+    let value = e
+        .vcall(owner, OWNER_SLOT_118, &args![geometry, shader_property])
+        .u32();
+    e.vcall(
+        renderer,
+        RENDERER_SLOT_EC,
+        &args![geometry, 0u32, 0u32, value],
+    );
+}
+
+// Translated from 006f71a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BGSDistantObjectBlockLoadTask::Cancel` (engine map; `RET 8`): once
+/// only (`bCanceled`, +0x50, then set), `QueuedFile::Cancel` with the two
+/// words.
+pub fn bgs_distant_object_block_load_task_cancel(e: &mut Engine, this: Ptr, a: u32, b: u32) {
+    let base = this.addr();
+    if e.mem.u8(base + TASK_CANCELED) != 0 {
+        return;
+    }
+    e.mem.set_u8(base + TASK_CANCELED, 1);
+    e.call(QUEUED_FILE_CANCEL, &args![this, a, b]);
+}
+
+// Translated from 006f74b0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BGSDistantObjectBlockLoadTask::GetDescription` (engine map; `RET 8`):
+/// prints `"Object LOD Task for block ( %i, %i ) at level ( %i )"` with
+/// `iX`, `iY` and `iLevel` into the buffer of the given size; true.
+pub fn bgs_distant_object_block_load_task_get_description(
+    e: &mut Engine,
+    this: Ptr,
+    buffer: u32,
+    size: u32,
+) -> bool {
+    let base = this.addr();
+    let x = e.mem.u32(base + TASK_X);
+    let y = e.mem.u32(base + TASK_Y);
+    let level = e.mem.u32(base + TASK_LEVEL);
+    e.call(
+        PRINT_FORMATTED,
+        &args![buffer, size, TASK_DESCRIPTION_FORMAT, x, y, level],
+    );
+    true
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(
+            0x006f_5690,
+            bgs_distant_object_block_build_block_file_name_pa(u32, u32, u32, i16, i16)
+        ),
+        entry!(
+            0x006f_56e0,
+            bgs_distant_object_block_build_stinger_block_file_name(u32, u32, u32, i16, i16)
+        ),
+        entry!(
+            0x006f_5730,
+            bgs_distant_object_block_build_stinger_block_file_name_high_priority(
+                u32, u32, u32, i16, i16
+            )
+        ),
+        entry!(0x006f_58e0, fn_006f58e0(u32, u32)),
+        entry!(
+            0x006f_5970,
+            bgs_distant_object_block_update_stinger_visibility(Ptr, u32, u32, u16, u16)
+        ),
+        entry!(0x006f_5a70, fn_006f5a70(Ptr, u32)),
+        entry!(0x006f_6270, fn_006f6270(Ptr, u32, u32, i16, i16)),
+        entry!(0x006f_6a90, fn_006f6a90(Ptr, u32)),
+        entry!(
+            0x006f_71a0,
+            bgs_distant_object_block_load_task_cancel(Ptr, u32, u32)
+        ),
+        entry!(
+            0x006f_74b0,
+            bgs_distant_object_block_load_task_get_description(Ptr, u32, u32) -> bool
+        ),
         entry!(
             0x006f55f0,
             bgs_distant_object_block_build_block_file_name(u32, u32, u32, i16, i16)
@@ -1897,5 +2277,306 @@ mod tests {
         e.call(0x006f_73d0, &args![task]);
         assert_eq!(e.mem.u32(block + BLOCK_LOAD_TASK), 0);
         assert_eq!(e.mem.u8(block + BLOCK_DONE_LOADING), 1);
+    }
+}
+
+#[cfg(test)]
+mod tests_n073 {
+    use super::*;
+
+    fn ret(eax: u32) -> Ret {
+        Ret {
+            eax,
+            ..Default::default()
+        }
+    }
+
+    fn calls_to(log: &[(u32, Vec<u32>)], addr: u32) -> Vec<Vec<u32>> {
+        log.iter()
+            .filter(|(a, _)| *a == addr)
+            .map(|(_, w)| w.clone())
+            .collect()
+    }
+
+    fn noop(e: &mut Engine, addresses: &[u32]) {
+        for &address in addresses {
+            e.register(address, |_, _| Ret::default());
+        }
+    }
+
+    #[test]
+    fn file_name_builders_use_their_formats() {
+        let mut e = Engine::new();
+        let mut slots = vec![0u32; 0x4d];
+        slots[0x130 / 4] = 0x0150_1130;
+        e.put_vtable(0x0150_0000, &slots);
+        e.register(0x0150_1130, |_, _| ret(0x4a4e));
+        e.register(PRINT_FORMATTED, |_, _| Ret::default());
+        let world = e.mem.alloc(4);
+        e.mem.set_u32(world, 0x0150_0000);
+        for (address, format) in [
+            (0x006f_5690u32, BLOCK_FILE_PA_FORMAT),
+            (0x006f_56e0, STINGER_FILE_FORMAT),
+            (0x006f_5730, STINGER_FILE_HIGH_PRIORITY_FORMAT),
+        ] {
+            e.call_log = Some(vec![]);
+            e.call(address, &args![0x900u32, world, 3u32, 0x1_fffeu32, 5u32]);
+            assert_eq!(
+                calls_to(&e.call_log.take().unwrap(), PRINT_FORMATTED),
+                vec![vec![
+                    0x900,
+                    0x104,
+                    format,
+                    0x4a4e,
+                    0x4a4e,
+                    3,
+                    (-2i32) as u32,
+                    5
+                ]]
+            );
+        }
+    }
+
+    /// A tree: a node (slot 0xC answers itself) whose children are at +0xC
+    /// on, their count at +8; a leaf's slot 0xC answers 0.
+    fn tree(e: &mut Engine, children: &[u32]) -> u32 {
+        e.put_vtable(0x0150_0000, &[0, 0, 0, 0x0150_100c, 0, 0, 0x0150_1018]);
+        e.put_vtable(0x0150_0100, &[0, 0, 0, 0x0150_110c, 0, 0, 0x0150_1118]);
+        e.register(0x0150_100c, |_, a| ret(a[0]));
+        e.register(0x0150_110c, |_, _| ret(0));
+        e.register(0x0150_1118, |_, a| ret(a[0] + 0x1000));
+        e.register(CHILD_COUNT_00453470, |e, a| ret(e.mem.u32(a[0] + 8)));
+        e.register(NODE_FIND_MESH, |e, a| ret(e.mem.u32(a[0] + 0xc + 4 * a[1])));
+        let node = e.mem.alloc(0x40);
+        e.mem.set_u32(node, 0x0150_0000);
+        e.mem.set_u32(node + 8, children.len() as u32);
+        for (i, child) in (0u32..).zip(children) {
+            e.mem.set_u32(node + 0xc + 4 * i, *child);
+        }
+        node
+    }
+
+    fn leaf(e: &mut Engine) -> u32 {
+        let object = e.mem.alloc(0x10);
+        e.mem.set_u32(object, 0x0150_0100);
+        object
+    }
+
+    #[test]
+    fn visibility_walks_the_tree() {
+        let mut e = Engine::new();
+        let a = leaf(&mut e);
+        let b = leaf(&mut e);
+        let root = tree(&mut e, &[a, b]);
+        e.register(SET_HIDDEN_00450F90, |_, _| Ret::default());
+        e.call_log = Some(vec![]);
+        e.call(0x006f_58e0, &args![root, 0x100u32]);
+        assert_eq!(
+            calls_to(&e.call_log.take().unwrap(), SET_HIDDEN_00450F90),
+            vec![vec![root, 1], vec![a, 1], vec![b, 1]]
+        );
+        e.call_log = Some(vec![]);
+        e.call(0x006f_58e0, &args![root, 1u32]);
+        assert_eq!(
+            calls_to(&e.call_log.take().unwrap(), SET_HIDDEN_00450F90),
+            vec![vec![root, 0], vec![a, 0], vec![b, 0]]
+        );
+        e.call_log = Some(vec![]);
+        e.call(0x006f_5a70, &args![0u32, root]);
+        assert_eq!(
+            calls_to(&e.call_log.take().unwrap(), SET_HIDDEN_00450F90),
+            vec![vec![root, 0], vec![a, 0], vec![b, 0]]
+        );
+    }
+
+    #[test]
+    fn stinger_visibility_follows_the_cells() {
+        let mut e = Engine::new();
+        let a = leaf(&mut e);
+        let root = tree(&mut e, &[0, a]);
+        e.register(SET_HIDDEN_00450F90, |_, _| Ret::default());
+        let position = e.mem.alloc(0xc);
+        e.mem.set_f32(position, 4.0);
+        e.register_double(WORLD_POSITION_0045BB80, move |_, _| ret(position));
+        e.map(TES & !0xfff, 0x1000);
+        e.set_global(TES, 0x7e5u32);
+        e.register(TES_GET_WORLD_SPACE, |_, _| ret(0x3a3a));
+        e.register(WORLD_SPACE_CELL_AT, |e, a| {
+            assert_eq!(e.mem.f32(a[1]), 4.0);
+            ret(0xce11)
+        });
+        e.register(TES_IS_CELL_LOADED, |_, _| ret(1));
+        e.register(CELL_ALL_3D_FADING_IN, |_, _| ret(1));
+        e.call_log = Some(vec![]);
+        e.call(0x006f_5970, &args![0u32, root, 9u32, 0xffff_0001u32, 2u32]);
+        let log = e.call_log.take().unwrap();
+        assert_eq!(calls_to(&log, SET_HIDDEN_00450F90), vec![vec![a, 1]]);
+        assert_eq!(
+            calls_to(&log, TES_IS_CELL_LOADED),
+            vec![vec![0x7e5, 0xce11, 1]]
+        );
+        e.register(CELL_ALL_3D_FADING_IN, |_, _| ret(0x100));
+        e.call_log = Some(vec![]);
+        e.call(0x006f_5970, &args![0u32, a, 0u32, 0u32, 0u32]);
+        assert_eq!(
+            calls_to(&e.call_log.take().unwrap(), SET_HIDDEN_00450F90),
+            vec![vec![a, 0]]
+        );
+    }
+
+    #[test]
+    fn stinger_load_queues_a_high_priority_task() {
+        let mut e = Engine::new();
+        noop(
+            &mut e,
+            &[
+                MEMORY_CONTEXT_ENTER,
+                MEMORY_CONTEXT_LEAVE,
+                POINTER_COPY,
+                TASK_POINTER_ASSIGN,
+            ],
+        );
+        e.register(ALLOCATE, |_, _| ret(0));
+        e.register(POINTER_GET, |e, a| ret(e.mem.u32(a[0])));
+        let mut slots = vec![0u32; 9];
+        slots[8] = 0x0150_1020;
+        e.put_vtable(0x0150_0000, &slots);
+        e.register(0x0150_1020, |_, _| Ret::default());
+        let task = e.mem.alloc(0x58);
+        e.mem.set_u32(task, 0x0150_0000);
+        let this = e.mem.alloc(0x2c);
+        e.mem.set_u32(this + BLOCK_LOAD_TASK, task);
+        e.mem.set_u8(this + BLOCK_DONE_LOADING, 1);
+        e.mem.set_u8(this + BLOCK_ATTACHED, 1);
+        e.call_log = Some(vec![]);
+        e.call(0x006f_6270, &args![this, 0x3a3au32, 2u32, 0xffffu32, 3u32]);
+        let log = e.call_log.take().unwrap();
+        assert_eq!(
+            calls_to(&log, MEMORY_CONTEXT_ENTER)[0][1..],
+            [0x24, 1, SOURCE_FILE_NAME, 0x240]
+        );
+        assert_eq!(
+            calls_to(&log, POINTER_COPY),
+            vec![vec![this + BLOCK_OLD_MESH, this + BLOCK_MESH]]
+        );
+        assert_eq!(
+            calls_to(&log, TASK_POINTER_ASSIGN),
+            vec![vec![this + BLOCK_LOAD_TASK, 0]]
+        );
+        assert_eq!(calls_to(&log, 0x0150_1020), vec![vec![task]]);
+        assert_eq!(e.mem.u8(this + BLOCK_DONE_LOADING), 0);
+        assert_eq!(e.mem.u8(this + BLOCK_ATTACHED), 0);
+        assert!(calls_to(&log, CANCEL_TASK).is_empty());
+    }
+
+    #[test]
+    fn stinger_prepare_sets_up_each_geometry() {
+        let mut e = Engine::new();
+        let a = leaf(&mut e);
+        let root = tree(&mut e, &[a]);
+        noop(
+            &mut e,
+            &[
+                REMOVE_PROPERTY,
+                PROPERTY_SET_4393C0,
+                PROPERTY_SET_49ED90,
+                PROPERTY_SET_94DB80,
+                PROPERTY_SET_4393E0,
+                ATTACH_PROPERTY,
+                SHADER_SET_FLAG,
+                SET_SHADER,
+                UPDATE_DATA_CONSTRUCT,
+                UPDATE_PROPERTIES,
+                UPDATE_DOWNWARD,
+                UPDATE_BLOCK_VISIBILITY,
+                DATA_SET_4410D0,
+                DATA_SET_CONSISTENCY,
+                DATA_SET_4410F0,
+            ],
+        );
+        e.register(SHADER_PROPERTY_TYPE, |_, _| ret(0x5a));
+        e.register(PROPERTY_TYPE_40DF90, |_, _| ret(0x40));
+        e.register(NI_ALLOCATE, |_, _| ret(0x1c1c));
+        e.register(PROPERTY_CONSTRUCT, |_, a| ret(a[0]));
+        let shader_property = e.mem.alloc(4);
+        let mut slots = vec![0u32; 0x2d];
+        slots[0xb0 / 4] = 0x0150_10b0;
+        e.put_vtable(0x0150_0200, &slots);
+        e.mem.set_u32(shader_property, 0x0150_0200);
+        e.register(0x0150_10b0, |_, _| ret(0));
+        e.register_double(GET_PROPERTY, move |_, _| ret(shader_property));
+        e.register(SHADER_ID, |_, _| ret(7));
+        e.register(GET_SHADER, |_, _| ret(0x5ade));
+        e.register(MESH_DATA, |_, a| ret(a[0] + 0x10));
+        let owner = e.mem.alloc(4);
+        let renderer = e.mem.alloc(4);
+        let mut slots = vec![0u32; 0x47];
+        slots[0x118 / 4] = 0x0150_1218;
+        slots[0xec / 4] = 0x0150_12ec;
+        e.put_vtable(0x0150_0300, &slots);
+        e.mem.set_u32(owner, 0x0150_0300);
+        e.mem.set_u32(renderer, 0x0150_0300);
+        e.register(0x0150_1218, |_, _| ret(0x118));
+        e.register(0x0150_12ec, |_, _| Ret::default());
+        e.register_double(MESH_OWNER_4030B0, move |_, _| ret(owner));
+        e.register_double(RENDERER, move |_, _| ret(renderer));
+        let this = e.mem.alloc(0x2c);
+        e.mem.set_u32(this + BLOCK_NODE, 0x7e77);
+        e.call_log = Some(vec![]);
+        e.call(0x006f_6a90, &args![this, 0u32]);
+        assert_eq!(e.call_log.take().unwrap().len(), 1);
+        e.call_log = Some(vec![]);
+        e.call(0x006f_6a90, &args![this, root]);
+        let log = e.call_log.take().unwrap();
+        let geometry = a + 0x1000;
+        assert_eq!(calls_to(&log, REMOVE_PROPERTY), vec![vec![geometry, 0x40]]);
+        assert_eq!(
+            calls_to(&log, SHADER_SET_FLAG),
+            vec![
+                vec![shader_property, 0x22, 1],
+                vec![shader_property, 0x37, 1]
+            ]
+        );
+        assert_eq!(
+            calls_to(&log, ATTACH_PROPERTY),
+            vec![vec![geometry, 0x1c1c]]
+        );
+        assert_eq!(calls_to(&log, SET_SHADER), vec![vec![geometry, 0x5ade]]);
+        assert_eq!(
+            calls_to(&log, UPDATE_BLOCK_VISIBILITY),
+            vec![vec![0x7e77, 0]]
+        );
+        assert_eq!(
+            calls_to(&log, DATA_SET_CONSISTENCY),
+            vec![vec![geometry + 0x10, 0x4000]]
+        );
+        assert_eq!(
+            calls_to(&log, 0x0150_12ec),
+            vec![vec![renderer, geometry, 0, 0, 0x118]]
+        );
+        assert_eq!(calls_to(&log, GET_PROPERTY).len(), 2);
+    }
+
+    #[test]
+    fn task_cancel_once_and_description() {
+        let mut e = Engine::new();
+        e.register(QUEUED_FILE_CANCEL, |_, _| Ret::default());
+        e.register(PRINT_FORMATTED, |_, _| Ret::default());
+        let task = e.mem.alloc(0x58);
+        e.call_log = Some(vec![]);
+        e.call(0x006f_71a0, &args![task, 1u32, 2u32]);
+        e.call(0x006f_71a0, &args![task, 1u32, 2u32]);
+        let log = e.call_log.take().unwrap();
+        assert_eq!(calls_to(&log, QUEUED_FILE_CANCEL), vec![vec![task, 1, 2]]);
+        assert_eq!(e.mem.u8(task + TASK_CANCELED), 1);
+        e.mem.set_u32(task + TASK_X, 4);
+        e.mem.set_u32(task + TASK_Y, 5);
+        e.mem.set_u32(task + TASK_LEVEL, 16);
+        e.call_log = Some(vec![]);
+        assert!(e.call(0x006f_74b0, &args![task, 0x900u32, 0x40u32]).bool());
+        assert_eq!(
+            calls_to(&e.call_log.take().unwrap(), PRINT_FORMATTED),
+            vec![vec![0x900, 0x40, TASK_DESCRIPTION_FORMAT, 4, 5, 16]]
+        );
     }
 }

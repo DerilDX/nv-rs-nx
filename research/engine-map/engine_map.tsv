@@ -43786,9 +43786,6 @@ address	size	name	name_tier	xbox	unit	subsystem	placed
 00ea7530	511				NiCollision/niboxbv.cpp	NiCollision	range
 00ea7730	1494				NiCollision/niboxbv.cpp	NiCollision	range
 00ea7d10	46	NiBoxBV::Clone	vt	82dfb098	NiCollision/niboxbv.cpp	NiCollision	name
-00ea96d5	108				NiCollision/niboxbv.cpp	NiCollision	range
-00ea97b3	28				NiCollision/niboxbv.cpp	NiCollision	range
-00ea9e2e	317				NiCollision/niboxbv.cpp	NiCollision	range
 00eab7b0	99	NiBoxBV::AddViewerStrings	vt	82dfb2d0	NiCollision/niboxbv.cpp	NiCollision	name
 00eab820	54	NiSphereBV::operator_	vt	82dfb518	NiCollision/nispherebv.cpp	NiCollision	name
 00eab860	28	NiSphereBV::LoadBinary	vt	82dfd8d0	NiCollision/nispherebv.cpp	NiCollision	name

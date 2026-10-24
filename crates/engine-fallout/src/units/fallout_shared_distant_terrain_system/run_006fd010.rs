@@ -129,6 +129,33 @@ pub fn fn_006fd1f0(e: &mut Engine, value: u8) {
     e.call(BLOCKS_006FA920, &args![u32::from(value)]);
 }
 
+/// `006ff4c0` (`thiscall`, no stack words; returns nothing): called on the manager's word at
+/// `+4` by [`fn_006fd060`].
+const TERRAIN_006FF4C0: u32 = 0x006f_f4c0;
+/// The two chunk-list walks of `bgsterrainchunk.cpp` (no arguments, no result).
+const CHUNKS_006FB5D0: u32 = 0x006f_b5d0;
+const CHUNKS_006FB640: u32 = 0x006f_b640;
+
+// Translated from 006fd060 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed (`thiscall`): thin wrapper, `006ff4c0` with `ECX` = the word at `+4`; the callee
+/// returns nothing, so nothing is passed on.
+pub fn fn_006fd060(e: &mut Engine, this: Ptr) {
+    let held = e.mem.u32(this.addr() + 4);
+    e.call(TERRAIN_006FF4C0, &args![held]);
+}
+
+// Translated from 006fd1a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed (no arguments): thin wrapper, `006fb5d0` (which returns nothing).
+pub fn fn_006fd1a0(e: &mut Engine) {
+    e.call(CHUNKS_006FB5D0, &args![]);
+}
+
+// Translated from 006fd1b0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed (no arguments): thin wrapper, `006fb640` (which returns nothing).
+pub fn fn_006fd1b0(e: &mut Engine) {
+    e.call(CHUNKS_006FB640, &args![]);
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -140,6 +167,9 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x006f_d1d0, fn_006fd1d0(u8)),
         entry!(0x006f_d1e0, fn_006fd1e0()),
         entry!(0x006f_d1f0, fn_006fd1f0(u8)),
+        entry!(0x006f_d060, fn_006fd060(Ptr)),
+        entry!(0x006f_d1a0, fn_006fd1a0()),
+        entry!(0x006f_d1b0, fn_006fd1b0()),
     ]
 }
 
@@ -286,5 +316,41 @@ mod tests {
         e.call_log = Some(vec![]);
         e.call(0x006f_d1f0, &args![0x1234_56ffu32]);
         assert_eq!(calls_to(&e, BLOCKS_006FA920), vec![vec![0xff]]);
+    }
+}
+
+#[cfg(test)]
+mod n089_tests {
+    use super::*;
+
+    #[test]
+    fn n089_006fd060_calls_the_held_object() {
+        let mut e = Engine::new();
+        e.register(TERRAIN_006FF4C0, |_, _| 0x99u32.into_ret());
+        let this = e.mem.alloc(8);
+        e.mem.set_u32(this + 4, 0x4440);
+        e.call_log = Some(vec![]);
+        e.call(0x006f_d060, &args![this]);
+        let log = e.call_log.take().unwrap();
+        let calls: Vec<_> = log.iter().filter(|c| c.0 == TERRAIN_006FF4C0).collect();
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].1, vec![0x4440]);
+    }
+
+    #[test]
+    fn n089_006fd1a0_and_006fd1b0_run_the_chunk_walks() {
+        let mut e = Engine::new();
+        e.register(CHUNKS_006FB5D0, |_, _| Ret::default());
+        e.register(CHUNKS_006FB640, |_, _| Ret::default());
+        e.call_log = Some(vec![]);
+        e.call(0x006f_d1a0, &args![]);
+        e.call(0x006f_d1b0, &args![]);
+        let log = e.call_log.take().unwrap();
+        let walks: Vec<u32> = log
+            .iter()
+            .map(|c| c.0)
+            .filter(|a| *a == CHUNKS_006FB5D0 || *a == CHUNKS_006FB640)
+            .collect();
+        assert_eq!(walks, vec![CHUNKS_006FB5D0, CHUNKS_006FB640]);
     }
 }

@@ -4,6 +4,7 @@
 #[allow(unused_imports)]
 use crate::prelude::*;
 
+use crate::types::BSSimpleArray;
 use crate::units::bsmenu::menu::Menu;
 use crate::units::platform::MEMORY_MANAGER;
 
@@ -112,9 +113,82 @@ pub fn menu_destructor(e: &mut Engine, this: Ptr<Menu>) {
     e.call(TEMPLATE_LIST_CLEAR_00AE83E0, &args![list]);
 }
 
+/// `memmove` (`00ec7230`, `cdecl`, three words).
+const MEMMOVE: u32 = 0x00ec_7230;
+/// The size of the items `00a1c400` moves.
+const ITEM_SIZE: u32 = 0x20;
+
+// Translated from 00a1c400 (decompiled, FalloutNV.exe 1.4.0.525)
+/// A `BSSimpleArray` item move for 0x20-byte items (no map name; `thiscall`, `this` not
+/// read): moves `count` items from `source` to `dest` one at a time with `memmove`, first
+/// to last when `dest` is below `source`, last to first when it is above, and nothing when
+/// they are equal or `count` is 0.
+pub fn fn_00a1c400(e: &mut Engine, _this: Ptr, dest: u32, source: u32, count: u32) {
+    if count == 0 {
+        return;
+    }
+    if dest < source {
+        for i in 0..count {
+            let offset = i.wrapping_mul(ITEM_SIZE);
+            e.call(
+                MEMMOVE,
+                &args![
+                    dest.wrapping_add(offset),
+                    source.wrapping_add(offset),
+                    ITEM_SIZE
+                ],
+            );
+        }
+    } else if dest > source {
+        // The index is compared signed (`JL`).
+        let mut i = count.wrapping_sub(1) as i32;
+        while i >= 0 {
+            let offset = (i as u32).wrapping_mul(ITEM_SIZE);
+            e.call(
+                MEMMOVE,
+                &args![
+                    dest.wrapping_add(offset),
+                    source.wrapping_add(offset),
+                    ITEM_SIZE
+                ],
+            );
+            i -= 1;
+        }
+    }
+}
+
+// Translated from 00a1c340 (decompiled, FalloutNV.exe 1.4.0.525)
+/// A `BSSimpleArray` buffer change for 0x20-byte items (no map name; `thiscall`, two
+/// words): without a buffer, allocates `reserve` items (vtable +0x04) and records
+/// `iReservedSize`; when `count` equals `iReservedSize`, reallocates the buffer in place
+/// (vtable +0x0C with the buffer and `reserve`); otherwise allocates a new buffer, moves the
+/// first `count` items into it ([`fn_00a1c400`]), frees the old one (vtable +0x08) and
+/// keeps the new one. Only the first case records the reserve.
+pub fn fn_00a1c340(e: &mut Engine, this: Ptr<BSSimpleArray>, reserve: u32, count: u32) {
+    if e.get(this, BSSimpleArray::pBuffer) == 0 {
+        let buffer = e.vcall(this.addr(), 0x04, &args![reserve]).u32();
+        e.set(this, BSSimpleArray::pBuffer, buffer);
+        e.set(this, BSSimpleArray::iReservedSize, reserve);
+    } else if count == e.get(this, BSSimpleArray::iReservedSize) {
+        let old = e.get(this, BSSimpleArray::pBuffer);
+        let buffer = e.vcall(this.addr(), 0x0c, &args![old, reserve]).u32();
+        e.set(this, BSSimpleArray::pBuffer, buffer);
+    } else {
+        let buffer = e.vcall(this.addr(), 0x04, &args![reserve]).u32();
+        let old = e.get(this, BSSimpleArray::pBuffer);
+        fn_00a1c400(e, this.cast(), buffer, old, count);
+        let old = e.get(this, BSSimpleArray::pBuffer);
+        e.vcall(this.addr(), 0x08, &args![old]);
+        e.set(this, BSSimpleArray::pBuffer, 0);
+        e.set(this, BSSimpleArray::pBuffer, buffer);
+    }
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x00a1_c400, fn_00a1c400(Ptr, u32, u32, u32)),
+        entry!(0x00a1_c340, fn_00a1c340(Ptr<BSSimpleArray>, u32, u32)),
         entry!(0x00a1_c4a0, menu_menu(Ptr<Menu>) -> Ptr<Menu>),
         entry!(0x00a1_c520, menu_destructor(Ptr<Menu>)),
     ]
@@ -244,5 +318,87 @@ mod tests {
         assert!(calls(&e, TILE_TEMPLATE_DESTRUCTOR).is_empty());
         assert!(calls(&e, QUERY_00A24660).is_empty());
         assert_eq!(calls(&e, MENU_ID_CLOSED_00A1E130), vec![vec![1000, 0]]);
+    }
+}
+
+#[cfg(test)]
+mod n083_tests {
+    use super::*;
+
+    fn calls_to(e: &Engine, addr: u32) -> Vec<Vec<u32>> {
+        e.call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|c| c.0 == addr)
+            .map(|c| c.1.clone())
+            .collect()
+    }
+
+    #[test]
+    fn item_move_picks_the_direction() {
+        let mut e = Engine::new();
+        e.register(MEMMOVE, |_, _| Ret::default());
+        e.call_log = Some(vec![]);
+        e.call(0x00a1_c400, &args![0u32, 0x1000u32, 0x2000u32, 2u32]);
+        assert_eq!(
+            calls_to(&e, MEMMOVE),
+            [vec![0x1000, 0x2000, 0x20], vec![0x1020, 0x2020, 0x20]]
+        );
+        e.call_log = Some(vec![]);
+        e.call(0x00a1_c400, &args![0u32, 0x3000u32, 0x2000u32, 2u32]);
+        assert_eq!(
+            calls_to(&e, MEMMOVE),
+            [vec![0x3020, 0x2020, 0x20], vec![0x3000, 0x2000, 0x20]]
+        );
+        e.call_log = Some(vec![]);
+        e.call(0x00a1_c400, &args![0u32, 0x2000u32, 0x2000u32, 2u32]);
+        e.call(0x00a1_c400, &args![0u32, 0x1000u32, 0x2000u32, 0u32]);
+        assert!(calls_to(&e, MEMMOVE).is_empty());
+    }
+
+    fn array(e: &mut Engine) -> Ptr<BSSimpleArray> {
+        let a = e.new_object::<BSSimpleArray>();
+        e.put_vtable(0x0300_0000, &[0, 0x0300_1004, 0x0300_1008, 0x0300_100c]);
+        e.mem.set_u32(a.addr(), 0x0300_0000);
+        e.register(0x0300_1004, |_, _| Ret {
+            eax: 0x0500_0000,
+            ..Ret::default()
+        });
+        e.register(0x0300_1008, |_, _| Ret::default());
+        e.register(0x0300_100c, |_, _| Ret {
+            eax: 0x0600_0000,
+            ..Ret::default()
+        });
+        e.register(MEMMOVE, |_, _| Ret::default());
+        a
+    }
+
+    #[test]
+    fn buffer_change_allocates_reallocates_or_moves() {
+        let mut e = Engine::new();
+        let a = array(&mut e);
+        // No buffer: allocate and record the reserve.
+        e.call_log = Some(vec![]);
+        e.call(0x00a1_c340, &args![a, 8u32, 0u32]);
+        assert_eq!(calls_to(&e, 0x0300_1004), [vec![a.addr(), 8]]);
+        assert_eq!(e.get(a, BSSimpleArray::pBuffer), 0x0500_0000);
+        assert_eq!(e.get(a, BSSimpleArray::iReservedSize), 8);
+        // Count equals the reserve: reallocate, the reserve is not recorded.
+        e.call_log = Some(vec![]);
+        e.call(0x00a1_c340, &args![a, 16u32, 8u32]);
+        assert_eq!(calls_to(&e, 0x0300_100c), [vec![a.addr(), 0x0500_0000, 16]]);
+        assert_eq!(e.get(a, BSSimpleArray::pBuffer), 0x0600_0000);
+        assert_eq!(e.get(a, BSSimpleArray::iReservedSize), 8);
+        // Otherwise: a new buffer, the items moved, the old one freed.
+        e.call_log = Some(vec![]);
+        e.call(0x00a1_c340, &args![a, 4u32, 1u32]);
+        assert_eq!(calls_to(&e, 0x0300_1004), [vec![a.addr(), 4]]);
+        assert_eq!(
+            calls_to(&e, MEMMOVE),
+            [vec![0x0500_0000, 0x0600_0000, 0x20]]
+        );
+        assert_eq!(calls_to(&e, 0x0300_1008), [vec![a.addr(), 0x0600_0000]]);
+        assert_eq!(e.get(a, BSSimpleArray::pBuffer), 0x0500_0000);
     }
 }

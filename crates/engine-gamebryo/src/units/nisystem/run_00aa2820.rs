@@ -112,9 +112,21 @@ pub fn fn_00aa2820(e: &mut Engine, this: Ptr, out: Ptr, size: u32) -> bool {
     true
 }
 
+/// Import slot of `MessageBoxA` (`stdcall`: owner, text, caption, type).
+const API_MESSAGE_BOX: u32 = 0x00fd_f2f4;
+
+// Translated from 00aa29e0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`cdecl`: the text and the caption): shows a
+/// message box with no owner and type 0x40000 (`MB_TOPMOST`), then answers 0.
+pub fn fn_00aa29e0(e: &mut Engine, text: Ptr, caption: Ptr) -> u32 {
+    e.call(API_MESSAGE_BOX, &args![0u32, text, caption, 0x40000u32]);
+    0
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x00aa_29e0, fn_00aa29e0(Ptr, Ptr) -> u32),
         entry!(0x00aa_29d0, fn_00aa29d0(Ptr, Ptr, u32) -> bool),
         entry!(0x00aa_2820, fn_00aa2820(Ptr, Ptr, u32) -> bool),
     ]
@@ -215,5 +227,24 @@ mod tests_b008 {
         let log = e.call_log.take().unwrap();
         assert!(log.iter().all(|c| c.1.get(2) != Some(&DOT_TEXT)));
         assert!(!e.call(0x00aa_2820, &args![this, 0u32, 4u32]).bool());
+    }
+}
+
+#[cfg(test)]
+mod tests_n084 {
+    use super::*;
+
+    #[test]
+    fn fn_00aa29e0_shows_a_topmost_box_and_answers_0() {
+        let mut e = Engine::new();
+        e.register(API_MESSAGE_BOX, |_, _| 1u32.into_ret());
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x00aa_29e0, &args![0x9000u32, 0x9100u32]).u32(), 0);
+        let log = e.call_log.take().unwrap();
+        let boxes: Vec<_> = log.iter().filter(|c| c.0 == API_MESSAGE_BOX).collect();
+        assert_eq!(
+            boxes,
+            vec![&(API_MESSAGE_BOX, vec![0, 0x9000, 0x9100, 0x40000])]
+        );
     }
 }

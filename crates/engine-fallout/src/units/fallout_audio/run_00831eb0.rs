@@ -88,6 +88,34 @@ pub fn fn_00831fb0(e: &mut Engine, this: Ptr) {
     e.call(BASE_DESTRUCTOR, &args![this]);
 }
 
+// Translated from 00831f70 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The interface methods at +0xC and +0x10 of the interface vtable `0107cd54` (`__stdcall`, the
+/// interface pointer as the only word, `RET 4`): answers 0 (`XOR EAX,EAX`).
+pub fn fn_00831f70(_e: &mut Engine, _interface: Ptr) -> u32 {
+    0
+}
+
+// Translated from 00831fe0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Thunk of the interface at +0x10 (`SUB [ESP+4],4; JMP`): [`fn_00831eb0`] on the interface at
+/// +0xC (`interface - 4`) with the same two words; its answer is passed on.
+pub fn fn_00831fe0(e: &mut Engine, interface: Ptr, first: u32, second: u32) -> u32 {
+    fn_00831eb0(e, Ptr::new(interface.addr().wrapping_sub(4)), first, second)
+}
+
+// Translated from 00831ff0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Thunk of the interface at +0x10: [`fn_00831f10`] on `interface - 4`; its answer is passed
+/// on.
+pub fn fn_00831ff0(e: &mut Engine, interface: Ptr) -> u32 {
+    fn_00831f10(e, Ptr::new(interface.addr().wrapping_sub(4)))
+}
+
+// Translated from 00832000 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Thunk of the interface at +0x10: [`fn_00831ee0`] on `interface - 4`; its answer is passed
+/// on.
+pub fn fn_00832000(e: &mut Engine, interface: Ptr) -> u32 {
+    fn_00831ee0(e, Ptr::new(interface.addr().wrapping_sub(4)))
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -97,6 +125,10 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x0083_1f40, fn_00831f40(Ptr, u32, u32) -> u32),
         entry!(0x0083_1f80, fn_00831f80(Ptr, u32) -> Ptr),
         entry!(0x0083_1fb0, fn_00831fb0(Ptr)),
+        entry!(0x0083_1f70, fn_00831f70(Ptr) -> u32),
+        entry!(0x0083_1fe0, fn_00831fe0(Ptr, u32, u32) -> u32),
+        entry!(0x0083_1ff0, fn_00831ff0(Ptr) -> u32),
+        entry!(0x0083_2000, fn_00832000(Ptr) -> u32),
     ]
 }
 
@@ -187,5 +219,60 @@ mod tests {
         assert_eq!(calls_to(&e, OPERATOR_DELETE), vec![vec![object]]);
         e.call(0x0083_1fb0, &args![object]);
         assert_eq!(calls_to(&e, BASE_DESTRUCTOR).len(), 3);
+    }
+}
+
+#[cfg(test)]
+mod n089_tests {
+    use super::*;
+
+    #[test]
+    fn n089_00831f70_answers_zero() {
+        let mut e = Engine::new();
+        assert_eq!(e.call(0x0083_1f70, &args![0x1234u32]).u32(), 0);
+    }
+
+    #[test]
+    fn n089_00831fe0_00831ff0_00832000_forward_from_the_second_interface() {
+        let (mut e, object, inner) = tests_reader();
+        let interface = object + 0x10;
+        e.call_log = Some(vec![]);
+        // Each inner slot answers its word count.
+        assert_eq!(e.call(0x0083_1fe0, &args![interface, 7u32, 8u32]).u32(), 3);
+        assert_eq!(e.call(0x0083_1ff0, &args![interface]).u32(), 1);
+        assert_eq!(e.call(0x0083_2000, &args![interface]).u32(), 1);
+        let log = e.call_log.take().unwrap();
+        let slots: Vec<_> = log
+            .iter()
+            .filter(|c| (0x0093_0000..0x0093_000c).contains(&c.0))
+            .cloned()
+            .collect();
+        assert_eq!(
+            slots,
+            vec![
+                (0x0093_0000, vec![inner, 7, 8]),
+                (0x0093_0008, vec![inner]),
+                (0x0093_0004, vec![inner])
+            ]
+        );
+        assert!(log
+            .iter()
+            .filter(|c| c.0 == INNER_OBJECT)
+            .all(|c| c.1 == vec![object]));
+    }
+
+    /// The reader of the `tests` module.
+    fn tests_reader() -> (Engine, u32, u32) {
+        let mut e = Engine::new();
+        e.register(INNER_OBJECT, |e, a| e.mem.u32(a[0] + 4).into_ret());
+        for slot in 0..3u32 {
+            e.register(0x0093_0000 + slot * 4, |_, a| (a.len() as u32).into_ret());
+        }
+        e.put_vtable(0x0093_1000, &[0x0093_0000, 0x0093_0004, 0x0093_0008]);
+        let object = e.mem.alloc(0x120);
+        let inner = e.mem.alloc(8);
+        e.mem.set_u32(inner, 0x0093_1000);
+        e.mem.set_u32(object + 4, inner);
+        (e, object, inner)
     }
 }

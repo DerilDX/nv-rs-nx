@@ -2916,9 +2916,793 @@ pub fn fn_00652130(e: &mut Engine) -> u32 {
     e.global(FACE_GEN_LOCK_DEPTH)
 }
 
+/// `BSStringT` (8 bytes): the constructor (`004037b0`) and destructor
+/// (`004037d0`).
+const STRING_CONSTRUCT: u32 = 0x0040_37b0;
+const STRING_DESTRUCT: u32 = 0x0040_37d0;
+/// `strchr` (`0043b9d0`, cdecl: text, character).
+const STRCHR: u32 = 0x0043_b9d0;
+/// `"FACEGEN:\t%3d\t%s\t%iKB\t%iKB\r\n"`, `"%s.nif"`, `"%s_50.NIF"` and
+/// `"Meshes\%s"`.
+const MODEL_LINE_FORMAT: u32 = 0x0106_567c;
+const NIF_FORMAT: u32 = 0x0106_578c;
+const LOW_LOD_NIF_FORMAT: u32 = 0x0106_57d8;
+const MESHES_FORMAT: u32 = 0x0101_9710;
+/// The model map's position walk: `004b9ba0` (the first position) and
+/// `NiTMapBase<..>::GetNext` (engine map name of `00559120`, `RET 0xC`:
+/// position, key and `NiPointer` out); `00726070` (the word at +4).
+const MAP_FIRST_POSITION: u32 = 0x004b_9ba0;
+const MAP_GET_NEXT: u32 = 0x0055_9120;
+const WORD_AT_4: u32 = 0x0072_6070;
+/// The coordinate block's statistics index (`011d59f0`) and the direction
+/// byte the debug sweep flips (`011d59e1`).
+const SWEEP_INDEX: u32 = 0x011d_59f0;
+const SWEEP_DOWN: u32 = 0x011d_59e1;
+/// 0.1 (`0101ffa0`), 10.0 (`01020758`) and -10.0 (`01065770`), `double`s.
+const SWEEP_STEP: u32 = 0x0101_ffa0;
+const SWEEP_TOP: u32 = 0x0102_0758;
+const SWEEP_BOTTOM: u32 = 0x0106_5770;
+/// 0.0 (`01012060`) and 1.0 (`01012070`), `double`s.
+const ZERO_DOUBLE: u32 = 0x0101_2060;
+const ONE_DOUBLE: u32 = 0x0101_2070;
+/// `fr2Assert` (`00aafb90`, cdecl: file, line) and `"d:\_fallout3\...\matrixVT.hpp"`.
+const FR2_ASSERT: u32 = 0x00aa_fb90;
+const MATRIX_VT_FILE: u32 = 0x0106_5830;
+
+// Translated from 0064fe80 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 0064fe80 - the FS:[0] exception frame (C++ unwinding of the stack NiPointer and string) is not translated
+/// `BSFaceGenModelMap::OutputModelMapContents` (Xbox PDB; `RET 4`: an
+/// optional output). Walks the map (+4) through a stack `NiPointer`; for
+/// each entry with a model, formats `"FACEGEN:\t%3d\t%s\t%iKB\t%iKB\r\n"`
+/// with the model's +4 word minus 1, the key, and the `0065c110` and
+/// `0065c490` sizes over 1024 (the entry's model at +8), prints it
+/// (`005b5e40`) and, with an output, gives it its vtable slot +0x38 with 1.
+pub fn bs_face_gen_model_map_output_model_map_contents(e: &mut Engine, this: Ptr, output: u32) {
+    let map = this.addr() + 4;
+    // The locals: string (-0x20, 8 bytes), NiPointer (-0x18), key (-0x14),
+    // position (-0x10).
+    e.with_stack(0x14, |e, block| {
+        let string = block.addr();
+        let pointer = string + 8;
+        let key = string + 0xc;
+        let position = string + 0x10;
+        let first = e.call(MAP_FIRST_POSITION, &args![map]).u32();
+        e.mem.set_u32(position, first);
+        e.call(POINTER_CONSTRUCT, &args![pointer, 0u32]);
+        while e.mem.u32(position) != 0 {
+            e.call(MAP_GET_NEXT, &args![map, position, key, pointer]);
+            if e.call(POINTER_GET, &args![pointer]).u32() == 0 {
+                continue;
+            }
+            e.call(STRING_CONSTRUCT, &args![string]);
+            let model = |e: &mut Engine| {
+                let entry = e.call(POINTER_GET, &args![pointer]).u32();
+                e.call(POINTER_GET, &args![entry.wrapping_add(8)]).u32()
+            };
+            let first = model(e);
+            let first = e.call(0x0065_c490, &args![first]).u32() >> 10;
+            let second = model(e);
+            let second = e.call(0x0065_c110, &args![second]).u32() >> 10;
+            let name = e.mem.u32(key);
+            let third = model(e);
+            let count = e.call(WORD_AT_4, &args![third]).u32().wrapping_sub(1);
+            e.call(
+                STRING_FORMAT,
+                &args![string, MODEL_LINE_FORMAT, count, name, second, first],
+            );
+            let text = e.call(POINTER_GET, &args![string]).u32();
+            e.call(PRINT_005B5E40, &args![text]);
+            if output != 0 {
+                e.vcall(output, 0x38, &args![string, 1u32]);
+            }
+            e.call(STRING_DESTRUCT, &args![string]);
+        }
+        e.call(POINTER_DESTRUCT, &args![pointer]);
+    });
+}
+
+// Translated from 00652320 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 00652320 - the FS:[0] exception frame (C++ unwinding of the two stack matrices) is not translated
+/// Sets statistic `index` of the coordinate block's matrix (`row`,
+/// `column`) to `value` (cdecl, five words; the engine map has no name):
+/// for a block and an index below the statistics' count (`00657a30`), the
+/// statistic's matrix (`006587a0` of the statistics entry into a stack
+/// matrix) scaled by `value` minus the current statistic ([`fn_00652230`];
+/// `FR2MatrixVTC<float>::operator*`, [`fn_00658260`]) is added to the
+/// block's matrix (`006586c0`); both stack matrices are destroyed
+/// (`00449680`).
+pub fn fn_00652320(e: &mut Engine, block: u32, row: u32, column: u32, index: u32, value: f32) {
+    if block == 0 {
+        return;
+    }
+    let entries = statistics(e, row, column);
+    // JNC: an unsigned compare.
+    if index >= fn_00657a30(e, entries) as u32 {
+        return;
+    }
+    let current = fn_00652230(e, block, row, column, index).to_bits();
+    let difference = x87_store32(x87_sub(x87_load32(value.to_bits()), x87_m32(current)));
+    // The stack matrices: the product at -0x54 and the statistic at -0x34.
+    e.with_stack(0x40, |e, matrices| {
+        let product = matrices.addr();
+        let statistic = product + 0x20;
+        let entries = statistics(e, row, column);
+        let entry = fn_00657a50(e, entries, index);
+        let made = e.call(0x0065_87a0, &args![entry, statistic]).u32();
+        let scaled = fn_00658260(
+            e,
+            Ptr::new(made),
+            Ptr::new(product),
+            f32::from_bits(x87_quiet_bits(difference)),
+        );
+        let matrix = block
+            .wrapping_add(row.wrapping_shl(6))
+            .wrapping_add(column.wrapping_shl(5));
+        e.call(0x0065_86c0, &args![matrix, scaled]);
+        e.call(ELEMENT_DESTRUCT_00449680, &args![product]);
+        e.call(ELEMENT_DESTRUCT_00449680, &args![statistic]);
+    });
+}
+
+// Translated from 00652470 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Sets one of two values (cdecl, four words: a key, the slot, a second
+/// key, the value; the engine map has no name): two floats on the stack,
+/// the slot's being the value (`FLD`/`FSTP`) and the other's `00652440`'s
+/// answer for its index, given to [`fn_006524e0`]; that call's `EAX` is the
+/// answer.
+pub fn fn_00652470(e: &mut Engine, first: u32, slot: u32, second: u32, value: f32) -> u32 {
+    e.with_stack(8, |e, values| {
+        for index in 0..2u32 {
+            let word = if index == slot {
+                x87_quiet_bits(value.to_bits())
+            } else {
+                x87_store32(fn_00652440(e, first, index, second))
+            };
+            e.mem.set_u32(values.addr() + 4 * index, word);
+        }
+        fn_006524e0(e, first, second, values.addr())
+    })
+}
+
+// Translated from 006524e0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `00aac170` on the manager's +0x118 with 0, the second and third words
+/// and the first (cdecl, three words; the engine map has no name); its
+/// `EAX` is the answer.
+pub fn fn_006524e0(e: &mut Engine, first: u32, second: u32, third: u32) -> u32 {
+    let manager = bs_face_gen_manager_get_instance(e);
+    e.call(
+        0x00aa_c170,
+        &args![manager.wrapping_add(0x118), 0u32, second, third, first],
+    )
+    .u32()
+}
+
+// Translated from 00652510 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 00652510 - the FS:[0] exception frame (C++ unwinding of the three stack coordinate blocks) is not translated
+/// A debug sweep of an actor's face (cdecl, one word: the actor; the
+/// engine map has no name). With the base form (`007af430`) and vtable
+/// +0x1D0 (then its +0xC, a value nothing reads), three stack blocks of four
+/// matrices are made; the first two take the form's face coordinates
+/// (`TESNPC::GetFaceCoord`). The statistic at `011d59f0` of the first moves
+/// by 0.1 up or down (`011d59e1`; turning at 10 and at -10 or below) and is
+/// set in the second ([`fn_00652320`]); the third takes the difference
+/// ([`fn_00652e00`]). Over two lists (vtable +0x1AC, then +0x1B0) each
+/// item's +0x1C object with an `00607310` object whose +0x94 answers
+/// something gets the third block (`0065a970`). Last [`fn_00652e00`] runs on
+/// `005d9fb0(00726070(form + 0x10C), sex)`, the second block and
+/// `00601800`'s answer, with the 0 the exe pushed earlier as its fourth
+/// word; the blocks are destroyed.
+pub fn fn_00652510(e: &mut Engine, actor: u32) {
+    let form = e.call(0x007a_f430, &args![actor]).u32();
+    let object = e.vcall(actor, 0x1d0, &args![]).u32();
+    if object != 0 {
+        e.vcall(object, 0xc, &args![]);
+    }
+    // The blocks: the first at -0x11C, the second at -0x1A4, the third at
+    // -0x8C (4 matrices of 0x20 bytes each).
+    e.with_stack(0x180, |e, blocks| {
+        let first = blocks.addr();
+        let second = first + 0x80;
+        let third = first + 0x100;
+        for block in [first, second, third] {
+            e.call(
+                VECTOR_CONSTRUCT,
+                &args![
+                    block,
+                    0x20u32,
+                    4u32,
+                    ELEMENT_CONSTRUCT_00449610,
+                    ELEMENT_DESTRUCT_00449680
+                ],
+            );
+        }
+        e.call(0x0060_3ad0, &args![form, first]);
+        e.call(0x0060_3ad0, &args![form, second]);
+        let index = e.global::<u32>(SWEEP_INDEX);
+        let mut value = fn_00652230(e, first, 0, 0, index).to_bits();
+        if e.global::<u8>(SWEEP_DOWN) != 0 {
+            value = x87_store32(x87_add(x87_load32(value), e.global::<f64>(SWEEP_STEP)));
+            // FCOMP; TEST AH,1; JNZ: turns once no longer below 10.
+            if !(x87_load32(value) < e.global::<f64>(SWEEP_TOP)) {
+                e.set_global(SWEEP_DOWN, 0u8);
+            }
+        } else {
+            value = x87_store32(x87_sub(x87_load32(value), e.global::<f64>(SWEEP_STEP)));
+            // FCOMP; TEST AH,0x41; JP: turns at -10 or below (not NaN).
+            if x87_load32(value) <= e.global::<f64>(SWEEP_BOTTOM) {
+                e.set_global(SWEEP_DOWN, 1u8);
+            }
+        }
+        let index = e.global::<u32>(SWEEP_INDEX);
+        fn_00652320(
+            e,
+            second,
+            0,
+            0,
+            index,
+            f32::from_bits(x87_quiet_bits(value)),
+        );
+        fn_00652e00(e, first, second, third, 0);
+        let mut list = e.vcall(actor, 0x1ac, &args![0u32]).u32();
+        for _ in 0..2 {
+            let count = e.call(0x0043_b480, &args![list]).u32();
+            let mut item = 0u32;
+            while item < count {
+                let entry = e.call(0x0043_b4a0, &args![list, item]).u32();
+                let model = if entry == 0 {
+                    0
+                } else {
+                    e.vcall(entry, 0x1c, &args![]).u32()
+                };
+                if model != 0 {
+                    let owner = e.call(OBJECT_OF_00607310, &args![model]).u32();
+                    let target = if owner == 0 {
+                        0
+                    } else {
+                        e.vcall(owner, 0x94, &args![]).u32()
+                    };
+                    if target != 0 {
+                        e.call(0x0065_a970, &args![target, third, model, 0u32]);
+                    }
+                }
+                item = item.wrapping_add(1);
+            }
+            list = e.vcall(actor, 0x1b0, &args![0u32]).u32();
+        }
+        let face = e.call(0x0060_1800, &args![form]).u32();
+        let sex = e.call(0x005f_0cc0, &args![form]).u32();
+        let holder = e.call(WORD_AT_4, &args![form.wrapping_add(0x10c)]).u32();
+        let source = e.call(0x005d_9fb0, &args![holder, sex]).u32();
+        fn_00652e00(e, source, second, face, 0);
+        for block in [third, second, first] {
+            e.call(
+                VECTOR_DESTRUCT,
+                &args![block, 0x20u32, 4u32, ELEMENT_DESTRUCT_00449680],
+            );
+        }
+    });
+}
+
+// Translated from 00652900 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Whether two coordinate blocks differ (cdecl, two words; the engine map
+/// has no name): true for two null blocks, false when only one is null,
+/// otherwise whether any of the four matrix pairs differs
+/// ([`fn_00657880`]).
+pub fn fn_00652900(e: &mut Engine, first: u32, second: u32) -> bool {
+    if first == 0 && second == 0 {
+        return true;
+    }
+    if first == 0 || second == 0 {
+        return false;
+    }
+    for row in 0..2u32 {
+        for column in 0..2u32 {
+            let offset = row.wrapping_shl(6).wrapping_add(column.wrapping_shl(5));
+            let this = Ptr::new(first.wrapping_add(offset));
+            if fn_00657880(e, this, second.wrapping_add(offset)) {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+// Translated from 00652e00 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The difference of two coordinate blocks (cdecl, four words: two blocks,
+/// the result block, a flag; the engine map has no name): nothing unless
+/// all three are set. Each result matrix takes the first block's
+/// dimensions (`std::vector<float>::resize`, 0 by 0 when one is 0); row 1
+/// with the flag copies the first block's matrix
+/// (`FR2MatrixVTC<float>::operator=`), otherwise the result is emptied
+/// (`0044a0a0`) and gets `second - first` for each value ([`fn_006578e0`]).
+pub fn fn_00652e00(e: &mut Engine, first: u32, second: u32, result: u32, flag: u8) {
+    if first == 0 || second == 0 || result == 0 {
+        return;
+    }
+    for row in 0..2u32 {
+        for column in 0..2u32 {
+            let offset = row.wrapping_shl(6).wrapping_add(column.wrapping_shl(5));
+            let (a, b, out) = (
+                first.wrapping_add(offset),
+                second.wrapping_add(offset),
+                result.wrapping_add(offset),
+            );
+            let rows = e.call(MATRIX_FIRST_DIMENSION, &args![a]).u32();
+            let columns = e.call(MATRIX_SECOND_DIMENSION, &args![a]).u32();
+            if rows == 0 || columns == 0 {
+                e.call(MATRIX_RESIZE, &args![out, 0u32, 0u32]);
+                continue;
+            }
+            e.call(MATRIX_RESIZE, &args![out, rows, columns]);
+            if row == 1 && flag != 0 {
+                fr2_matrix_vtc_operator_assign(e, Ptr::new(out), Ptr::new(a));
+                continue;
+            }
+            let count = rows.wrapping_mul(columns);
+            e.call(0x0044_a0a0, &args![out]);
+            let mut index = 0u32;
+            while index < count {
+                let from = fn_006578b0(e, Ptr::new(a), index);
+                let low = x87_quiet_bits(e.mem.u32(from));
+                let to = fn_006578b0(e, Ptr::new(b), index);
+                let high = x87_quiet_bits(e.mem.u32(to));
+                let difference = x87_store32(x87_sub(x87_load32(high), x87_m32(low)));
+                e.with_stack(4, |e, slot| {
+                    e.mem.set_u32(slot.addr(), difference);
+                    fn_006578e0(e, Ptr::new(out), slot);
+                });
+                index = index.wrapping_add(1);
+            }
+        }
+    }
+}
+
+// Translated from 00652fc0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `00aad6b0` on the manager's +0x118 with the float (`FLD`/`FSTP`) and
+/// the two words (cdecl, three words; the engine map has no name), when
+/// both words are set. Nothing is answered (the other path leaves `EAX`
+/// as it was).
+pub fn fn_00652fc0(e: &mut Engine, value: f32, first: u32, second: u32) {
+    if second == 0 || first == 0 {
+        return;
+    }
+    let manager = bs_face_gen_manager_get_instance(e);
+    e.call(
+        0x00aa_d6b0,
+        &args![
+            manager.wrapping_add(0x118),
+            x87_quiet_bits(value.to_bits()),
+            first,
+            second
+        ],
+    );
+}
+
+// Translated from 00653000 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Scales a coordinate block (cdecl, three words: a float, the block, a
+/// flag; the engine map has no name): for a block and a value not below 0
+/// and not above 1 (a NaN passes both tests), each matrix with both
+/// dimensions set is scaled (`FR2MatrixVTC<float>::operator*=`,
+/// `00658650`); the row and flag test the exe makes lets every matrix
+/// through.
+pub fn fn_00653000(e: &mut Engine, value: f32, block: u32, flag: u8) {
+    if block == 0 {
+        return;
+    }
+    let loaded = x87_load32(value.to_bits());
+    // FCOMP 0.0; TEST AH,5; JNP: out when below. FCOMP 1.0; TEST AH,0x41;
+    // JNZ: on when not above.
+    if loaded < e.global::<f64>(ZERO_DOUBLE) || loaded > e.global::<f64>(ONE_DOUBLE) {
+        return;
+    }
+    for row in 0..2u32 {
+        for column in 0..2u32 {
+            let matrix = block
+                .wrapping_add(row.wrapping_shl(6))
+                .wrapping_add(column.wrapping_shl(5));
+            if e.call(MATRIX_FIRST_DIMENSION, &args![matrix]).u32() == 0 {
+                continue;
+            }
+            if e.call(MATRIX_SECOND_DIMENSION, &args![matrix]).u32() == 0 {
+                continue;
+            }
+            let scales = row == 0 || (row == 1 && flag != 0) || flag == 0;
+            if scales {
+                e.call(0x0065_8650, &args![matrix, x87_quiet_bits(value.to_bits())]);
+            }
+        }
+    }
+}
+
+/// `00653620` and `00653c40`: the name cut at the last `cut` character,
+/// formatted as `"%s.nif"` into a stack buffer and set into `out`; `None`
+/// without that character.
+fn cut_model_name(e: &mut Engine, out: u32, name: u32, cut: u32) -> Option<u32> {
+    // The copy at -0x218 and the formatted name at -0x110 (0x108 each).
+    e.with_stack(0x210, |e, buffers| {
+        let copy = buffers.addr();
+        let formatted = copy + 0x108;
+        e.call(STRCPY_S, &args![copy, 0x104u32, name]);
+        let at = e.call(STRRCHR, &args![copy, cut]).u32();
+        if at == 0 {
+            return None;
+        }
+        e.mem.set_u8(at, 0);
+        e.call(SPRINTF_S, &args![formatted, 0x104u32, NIF_FORMAT, copy]);
+        e.call(STRING_SET, &args![out, formatted, 0u32]);
+        Some(e.call(POINTER_GET, &args![out]).u32())
+    })
+}
+
+// Translated from 00653620 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 00653620 - the /GS stack cookie check (00ec408c) is not translated.
+/// The model name without its extension (cdecl, two words: the out
+/// string, the name; the engine map has no name): 0 without a name or a
+/// `.`; otherwise the name cut at its last `.` with `.nif`, set into the
+/// string, whose text is the answer.
+pub fn fn_00653620(e: &mut Engine, out: u32, name: u32) -> u32 {
+    if name == 0 {
+        return 0;
+    }
+    cut_model_name(e, out, name, 0x2e).unwrap_or(0)
+}
+
+// Translated from 00653a10 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 00653a10 - the FS:[0] exception frame (C++ unwinding of the stack string) and the /GS stack cookie check (00ec408c) are not translated
+/// `BSFaceGenManager::GetAsNIFFileLowLOD` (Xbox PDB; cdecl: the out
+/// string, the name). With a stack string: 0 without a name; a name with a
+/// `_` is set into the out string as it is and answered; without a `.` the
+/// name is answered; otherwise the name cut at its last `.` with `_50.NIF`
+/// is set into the out string, `"Meshes\%s"` of it formatted into the
+/// stack string and looked up (`00afd270`, `00af6540` with two stack
+/// words made by `006815c0`): the out string's text when found, else 0.
+pub fn bs_face_gen_manager_get_as_nif_file_low_lod(e: &mut Engine, out: u32, name: u32) -> u32 {
+    // The locals: the string at -0x20, the words at -0x14 and -0x138, the
+    // copy at -0x244 and the formatted name at -0x12C (0x108 each).
+    e.with_stack(0x228, |e, block| {
+        let string = block.addr();
+        let second_word = string + 8;
+        let first_word = string + 0x10;
+        let copy = string + 0x18;
+        let formatted = copy + 0x108;
+        e.call(STRING_CONSTRUCT, &args![string]);
+        let answer = if name == 0 {
+            0
+        } else {
+            e.call(STRCPY_S, &args![copy, 0x104u32, name]);
+            if e.call(STRCHR, &args![copy, 0x5fu32]).u32() != 0 {
+                e.call(STRING_SET, &args![out, copy, 0u32]);
+                name
+            } else {
+                let dot = e.call(STRRCHR, &args![copy, 0x2eu32]).u32();
+                if dot == 0 {
+                    name
+                } else {
+                    e.mem.set_u8(dot, 0);
+                    e.call(
+                        SPRINTF_S,
+                        &args![formatted, 0x104u32, LOW_LOD_NIF_FORMAT, copy],
+                    );
+                    e.call(STRING_SET, &args![out, formatted, 0u32]);
+                    let text = e.call(POINTER_GET, &args![out]).u32();
+                    e.call(STRING_FORMAT, &args![string, MESHES_FORMAT, text]);
+                    e.call(0x0068_15c0, &args![first_word]);
+                    e.call(0x0068_15c0, &args![second_word]);
+                    let path = e.call(POINTER_GET, &args![string]).u32();
+                    e.call(0x00af_d270, &args![path, first_word, second_word]);
+                    let path = e.call(POINTER_GET, &args![string]).u32();
+                    let found = e
+                        .call(0x00af_6540, &args![0u32, first_word, second_word, path])
+                        .u32();
+                    if found == 0 {
+                        0
+                    } else {
+                        e.call(POINTER_GET, &args![out]).u32()
+                    }
+                }
+            }
+        };
+        e.call(STRING_DESTRUCT, &args![string]);
+        answer
+    })
+}
+
+// Translated from 00653c40 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 00653c40 - the /GS stack cookie check (00ec408c) is not translated.
+/// The model name without its `_` suffix (cdecl, two words: the out
+/// string, the name; the engine map has no name): 0 without a name; the
+/// name itself without a `_`; otherwise the name cut at its last `_` with
+/// `.nif`, set into the string, whose text is the answer.
+pub fn fn_00653c40(e: &mut Engine, out: u32, name: u32) -> u32 {
+    if name == 0 {
+        return 0;
+    }
+    cut_model_name(e, out, name, 0x5f).unwrap_or(name)
+}
+
+// Translated from 00657880 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Whether two matrices differ (`RET 4`: the other; the engine map has no
+/// name): not [`fn_00658160`].
+pub fn fn_00657880(e: &mut Engine, this: Ptr, other: u32) -> bool {
+    !fn_00658160(e, this, other)
+}
+
+// Translated from 00658020 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The 0x3C-byte elements' allocator's `allocate` (`RET 4`: the count; the
+/// engine map has no name): [`fn_00658c10`] with the count and 0; its
+/// `EAX` is the answer.
+pub fn fn_00658020(e: &mut Engine, _this: Ptr, count: u32) -> u32 {
+    fn_00658c10(e, count)
+}
+
+// Translated from 00658060 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The 0x88-byte elements' vector's destroy of `first`..`last` (`RET 8`;
+/// the engine map has no name): [`fn_00658c60`] with the vector's
+/// allocator (+8).
+pub fn fn_00658060(e: &mut Engine, this: Ptr, first: u32, last: u32) {
+    fn_00658c60(e, first, last, this.addr().wrapping_add(8));
+}
+
+// Translated from 00658090 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The 0x88-byte elements' allocator's `allocate` (`RET 4`: the count; the
+/// engine map has no name): [`fn_00658ca0`] with the count and 0; its
+/// `EAX` is the answer.
+pub fn fn_00658090(e: &mut Engine, _this: Ptr, count: u32) -> u32 {
+    fn_00658ca0(e, count)
+}
+
+// Translated from 00658100 (decompiled, FalloutNV.exe 1.4.0.525)
+/// An allocator's `max_size()` for 0x3C-byte elements: `0x4444444` (the
+/// library's `count > 0 ? count : 1`, whose second arm the constant makes
+/// unreachable but which is translated as written).
+pub fn fn_00658100(_e: &mut Engine, _this: Ptr) -> u32 {
+    let count: u32 = std::hint::black_box(0x0444_4444);
+    if count > 0 {
+        count
+    } else {
+        1
+    }
+}
+
+// Translated from 00658130 (decompiled, FalloutNV.exe 1.4.0.525)
+/// An allocator's `max_size()` for 0x88-byte elements: `0x1E1E1E1` (as
+/// [`fn_00658100`]).
+pub fn fn_00658130(_e: &mut Engine, _this: Ptr) -> u32 {
+    let count: u32 = std::hint::black_box(0x01e1_e1e1);
+    if count > 0 {
+        count
+    } else {
+        1
+    }
+}
+
+// Translated from 00658160 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Whether two matrices are equal (`RET 4`: the other; the engine map has
+/// no name): the same dimensions (+0x18, +0x1C) and, when both are set,
+/// the same `rows * 4 * columns` value bytes (`_memcmp` of the two
+/// matrices' element 0, [`fn_006578b0`]).
+pub fn fn_00658160(e: &mut Engine, this: Ptr, other: u32) -> bool {
+    let base = this.addr();
+    if e.mem.u32(other + 0x18) != e.mem.u32(base + 0x18)
+        || e.mem.u32(other + 0x1c) != e.mem.u32(base + 0x1c)
+    {
+        return false;
+    }
+    if e.mem.u32(base + 0x18) == 0 || e.mem.u32(base + 0x1c) == 0 {
+        return true;
+    }
+    let size = e
+        .mem
+        .u32(base + 0x18)
+        .wrapping_shl(2)
+        .wrapping_mul(e.mem.u32(base + 0x1c));
+    let theirs = fn_006578b0(e, Ptr::new(other), 0);
+    let own = fn_006578b0(e, this, 0);
+    e.call(0x00ec_4835, &args![own, theirs, size]).u32() == 0
+}
+
+// Translated from 00658500 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 00658500 - the FS:[0] exception frame (C++ unwinding of the stack matrix) is not translated
+/// `FR2MatrixVTC<float>::operator+` (Xbox PDB `operator__ov2`; `RET 8`: the
+/// result, the other matrix): `fr2Assert` (`matrixVT.hpp`, line 0x16D)
+/// when the dimensions differ; a stack matrix of this one's dimensions
+/// (`00659000`) gets each `this + other` value through three iterators
+/// (`0044a170`, `0065fd10`; `0065fd40`/`0065dfd0` the end test,
+/// `0064dda0`/`0064dbd0` the values, `00659100`/`006590c0` the steps);
+/// the result is copied from it (`00658f30`) and it is destroyed
+/// (`00449680`). Returns the result.
+pub fn fr2_matrix_vtc_operator_add(e: &mut Engine, this: Ptr, result: u32, other: u32) -> u32 {
+    let base = this.addr();
+    if e.mem.u32(base + 0x18) != e.mem.u32(other + 0x18)
+        || e.mem.u32(base + 0x1c) != e.mem.u32(other + 0x1c)
+    {
+        e.call(FR2_ASSERT, &args![MATRIX_VT_FILE, 0x16du32]);
+    }
+    // The frame below EBP from -0x74 up: `at(x)` is `EBP - x`.
+    e.with_stack(0x68, |e, frame| {
+        let at = |x: u32| frame.addr() + 0x74 - x;
+        let sum = at(0x3c);
+        let (own, theirs, out) = (at(0x44), at(0x1c), at(0x14));
+        let rows = e.mem.u32(base + 0x18);
+        let columns = e.mem.u32(base + 0x1c);
+        e.call(0x0065_9000, &args![sum, rows, columns]);
+        e.call(0x0044_a170, &args![sum, out]);
+        e.call(0x0065_fd10, &args![this, own]);
+        e.call(0x0065_fd10, &args![other, theirs]);
+        loop {
+            let end = e.call(0x0065_fd40, &args![this, at(0x64)]).u32();
+            if !e.call(0x0065_dfd0, &args![own, end]).bool() {
+                break;
+            }
+            let a = e.call(0x0064_dda0, &args![own]).u32();
+            let b = e.call(0x0064_dda0, &args![theirs]).u32();
+            let value = x87_store32(x87_add(x87_load32(e.mem.u32(a)), x87_m32(e.mem.u32(b))));
+            let slot = e.call(0x0064_dbd0, &args![out]).u32();
+            e.mem.set_u32(slot, x87_quiet_bits(value));
+            e.call(0x0065_9100, &args![own, at(0x4c), 0u32]);
+            e.call(0x0065_9100, &args![theirs, at(0x54), 0u32]);
+            e.call(0x0065_90c0, &args![out, at(0x5c), 0u32]);
+        }
+        e.call(0x0065_8f30, &args![result, sum]);
+        e.call(ELEMENT_DESTRUCT_00449680, &args![sum]);
+    });
+    result
+}
+
+// Translated from 00658c60 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `_Destroy_range` of `first`..`last` with `allocator` for 0x88-byte
+/// elements (cdecl, three words; the engine map has no name): the iterator
+/// category (`0065e750` on the two argument words) and [`fn_00659290`].
+pub fn fn_00658c60(e: &mut Engine, first: u32, last: u32, allocator: u32) {
+    e.with_stack(8, |e, words| {
+        let words = words.addr();
+        e.mem.set_u32(words, first);
+        e.mem.set_u32(words + 4, last);
+        let category = e.call(0x0065_e750, &args![words, words + 4]).u8();
+        let first = e.mem.u32(words);
+        let last = e.mem.u32(words + 4);
+        fn_00659290(e, first, last, allocator, u32::from(category));
+    });
+}
+
+// Translated from 00658ca0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Allocates `count` 0x88-byte elements (`00401000`; cdecl, one word read);
+/// a count whose size overflows throws `std::bad_alloc` (`0044d6c0`,
+/// `_CxxThrowException` `00ec7894` with `01140ef8`). A count of 0
+/// allocates 0 bytes.
+pub fn fn_00658ca0(e: &mut Engine, count: u32) -> u32 {
+    // (The exe stores 0 back into a count of 0.)
+    if count != 0 && u32::MAX / count < 0x88 {
+        e.with_stack(0xc, |e, exception| {
+            e.call(0x0044_d6c0, &args![exception, 0u32]);
+            e.call(0x00ec_7894, &args![exception, 0x0114_0ef8u32]);
+        });
+    }
+    e.call(ALLOCATE_PLAIN, &args![count.wrapping_mul(0x88)])
+        .u32()
+}
+
+/// The scalar deleting destructors below: the body, then the free
+/// (`00401030`) when bit 0 of the flags is set. Returns the map.
+fn scalar_delete(e: &mut Engine, this: Ptr, flags: u32, body: fn(&mut Engine, Ptr)) -> Ptr {
+    body(e, this);
+    if flags & 1 != 0 {
+        e.call(FREE, &args![this]);
+    }
+    this
+}
+
+// Translated from 00658d00 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSTCaseInsensitiveStringMap<NiPointer<BSFaceGenModelMap::Entry>>`
+/// scalar deleting destructor (engine map; `RET 4`): [`fn_00658bb0`], then
+/// the free when bit 0 is set.
+pub fn bst_case_insensitive_string_map_model_map_entry_scalar_deleting_destructor(
+    e: &mut Engine,
+    this: Ptr,
+    flags: u32,
+) -> Ptr {
+    scalar_delete(e, this, flags, fn_00658bb0)
+}
+
+// Translated from 00658ea0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiTMapBase<DFALL<..>,char const *,NiPointer<BSFaceGenModelMap::Entry>>`
+/// scalar deleting destructor (engine map; `RET 4`): [`fn_00658e70`], then
+/// the free when bit 0 is set.
+pub fn ni_t_map_base_model_map_entry_scalar_deleting_destructor(
+    e: &mut Engine,
+    this: Ptr,
+    flags: u32,
+) -> Ptr {
+    scalar_delete(e, this, flags, fn_00658e70)
+}
+
+// Translated from 00658ed0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiTMap<char const *,NiPointer<BSFaceGenModelMap::Entry>>` scalar
+/// deleting destructor (engine map; `RET 4`): [`fn_00658e10`], then the
+/// free when bit 0 is set.
+pub fn ni_t_map_model_map_entry_scalar_deleting_destructor(
+    e: &mut Engine,
+    this: Ptr,
+    flags: u32,
+) -> Ptr {
+    scalar_delete(e, this, flags, fn_00658e10)
+}
+
+// Translated from 00658f00 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiTStringTemplateMap<NiTMap<..>,NiPointer<BSFaceGenModelMap::Entry>>`
+/// scalar deleting destructor (engine map; `RET 4`): [`fn_00658d50`], then
+/// the free when bit 0 is set.
+pub fn ni_t_string_template_map_model_map_entry_scalar_deleting_destructor(
+    e: &mut Engine,
+    this: Ptr,
+    flags: u32,
+) -> Ptr {
+    scalar_delete(e, this, flags, fn_00658d50)
+}
+
+// Translated from 00659290 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `_Destroy_range` for 0x88-byte elements (cdecl, four words; the iterator
+/// category is not read; the engine map has no name): each element from
+/// `first` to `last` destroyed by the allocator (`00659310`).
+pub fn fn_00659290(e: &mut Engine, first: u32, last: u32, allocator: u32, _unused_4: u32) {
+    let mut element = first;
+    while element != last {
+        e.call(0x0065_9310, &args![allocator, element]);
+        element = element.wrapping_add(0x88);
+    }
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(
+            0x0064_fe80,
+            bs_face_gen_model_map_output_model_map_contents(Ptr, u32)
+        ),
+        entry!(0x0065_2320, fn_00652320(u32, u32, u32, u32, f32)),
+        entry!(0x0065_2470, fn_00652470(u32, u32, u32, f32) -> u32),
+        entry!(0x0065_24e0, fn_006524e0(u32, u32, u32) -> u32),
+        entry!(0x0065_2510, fn_00652510(u32)),
+        entry!(0x0065_2900, fn_00652900(u32, u32) -> bool),
+        entry!(0x0065_2e00, fn_00652e00(u32, u32, u32, u8)),
+        entry!(0x0065_2fc0, fn_00652fc0(f32, u32, u32)),
+        entry!(0x0065_3000, fn_00653000(f32, u32, u8)),
+        entry!(0x0065_3620, fn_00653620(u32, u32) -> u32),
+        entry!(
+            0x0065_3a10,
+            bs_face_gen_manager_get_as_nif_file_low_lod(u32, u32) -> u32
+        ),
+        entry!(0x0065_3c40, fn_00653c40(u32, u32) -> u32),
+        entry!(0x0065_7880, fn_00657880(Ptr, u32) -> bool),
+        entry!(0x0065_8020, fn_00658020(Ptr, u32) -> u32),
+        entry!(0x0065_8060, fn_00658060(Ptr, u32, u32)),
+        entry!(0x0065_8090, fn_00658090(Ptr, u32) -> u32),
+        entry!(0x0065_8100, fn_00658100(Ptr) -> u32),
+        entry!(0x0065_8130, fn_00658130(Ptr) -> u32),
+        entry!(0x0065_8160, fn_00658160(Ptr, u32) -> bool),
+        entry!(
+            0x0065_8500,
+            fr2_matrix_vtc_operator_add(Ptr, u32, u32) -> u32
+        ),
+        entry!(0x0065_8c60, fn_00658c60(u32, u32, u32)),
+        entry!(0x0065_8ca0, fn_00658ca0(u32) -> u32),
+        entry!(
+            0x0065_8d00,
+            bst_case_insensitive_string_map_model_map_entry_scalar_deleting_destructor(Ptr, u32) -> Ptr
+        ),
+        entry!(
+            0x0065_8ea0,
+            ni_t_map_base_model_map_entry_scalar_deleting_destructor(Ptr, u32) -> Ptr
+        ),
+        entry!(
+            0x0065_8ed0,
+            ni_t_map_model_map_entry_scalar_deleting_destructor(Ptr, u32) -> Ptr
+        ),
+        entry!(
+            0x0065_8f00,
+            ni_t_string_template_map_model_map_entry_scalar_deleting_destructor(Ptr, u32) -> Ptr
+        ),
+        entry!(0x0065_9290, fn_00659290(u32, u32, u32, u32)),
         entry!(0x0065_2130, fn_00652130() -> u32),
         entry!(0x00b9_fcc0, ni_t_pointer_list_base_remove(Ptr, Ptr, Ptr) -> Ptr),
         entry!(0x0065_8bb0, fn_00658bb0(Ptr)),
@@ -5603,5 +6387,680 @@ mod la1_tests {
         e.map(0x011d_5000, 0x1000);
         e.set_global(FACE_GEN_LOCK_DEPTH, 3u32);
         assert_eq!(e.call(0x0065_2130, &args![]).u32(), 3);
+    }
+}
+
+#[cfg(test)]
+mod n085_tests {
+    use super::*;
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    fn ret(eax: u32) -> Ret {
+        Ret {
+            eax,
+            ..Ret::default()
+        }
+    }
+
+    fn st0(value: f64) -> Ret {
+        Ret {
+            st0: value,
+            ..Ret::default()
+        }
+    }
+
+    fn quiet(e: &mut Engine, addrs: &[u32]) {
+        for &addr in addrs {
+            e.register(addr, |_, _| Ret::default());
+        }
+    }
+
+    fn calls(e: &Engine, address: u32) -> Vec<Vec<u32>> {
+        e.call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|(a, _)| *a == address)
+            .map(|(_, w)| w.clone())
+            .collect()
+    }
+
+    /// The manager singleton (`011d59e8`), already built.
+    fn manager(e: &mut Engine) -> u32 {
+        e.map(0x011d_5000, 0x1000);
+        let manager = e.mem.alloc(0x1200);
+        e.mem.set_u32(MANAGER, manager);
+        manager
+    }
+
+    fn put_text(e: &mut Engine, at: u32, text: &[u8]) {
+        for (i, b) in text.iter().enumerate() {
+            e.mem.set_u8(at + i as u32, *b);
+        }
+        e.mem.set_u8(at + text.len() as u32, 0);
+    }
+
+    fn text(e: &Engine, at: u32) -> Vec<u8> {
+        let mut out = vec![];
+        let mut at = at;
+        while e.mem.u8(at) != 0 {
+            out.push(e.mem.u8(at));
+            at += 1;
+        }
+        out
+    }
+
+    #[test]
+    fn model_map_contents_print_each_model() {
+        let mut e = Engine::new();
+        let this = e.mem.alloc(0x10);
+        // Two entries: the first without a model.
+        let entry = e.mem.alloc(0x10);
+        e.mem.set_u32(entry + 8, 0x6000);
+        let pointers = Rc::new(RefCell::new(vec![0u32, entry]));
+        e.register(MAP_FIRST_POSITION, |_, _| ret(2));
+        let p = pointers.clone();
+        e.register_double(MAP_GET_NEXT, move |e, a| {
+            let left = e.mem.u32(a[1]);
+            e.mem.set_u32(a[1], left - 1);
+            e.mem.set_u32(a[2], 0x7100 + left);
+            e.mem.set_u32(a[3], p.borrow()[2 - left as usize]);
+            Ret::default()
+        });
+        e.register(POINTER_GET, |e, a| ret(e.mem.u32(a[0])));
+        e.register(0x0065_c490, |_, _| ret(4096));
+        e.register(0x0065_c110, |_, _| ret(2048));
+        e.register(WORD_AT_4, |_, _| ret(3));
+        e.register(STRING_FORMAT, |e, a| {
+            e.mem.set_u32(a[0], 0x7300);
+            Ret::default()
+        });
+        let output = e.mem.alloc(4);
+        let vtable = e.mem.alloc(0x40);
+        e.mem.set_u32(output, vtable);
+        e.mem.set_u32(vtable + 0x38, 0x7b00_0038);
+        quiet(
+            &mut e,
+            &[
+                POINTER_CONSTRUCT,
+                POINTER_DESTRUCT,
+                STRING_CONSTRUCT,
+                STRING_DESTRUCT,
+                PRINT_005B5E40,
+                0x7b00_0038,
+            ],
+        );
+        e.call_log = Some(vec![]);
+        e.call(0x0064_fe80, &args![this, output]);
+        let format = calls(&e, STRING_FORMAT);
+        assert_eq!(format.len(), 1);
+        assert_eq!(format[0][1..], [MODEL_LINE_FORMAT, 2, 0x7101, 2, 4]);
+        assert_eq!(calls(&e, PRINT_005B5E40), vec![vec![0x7300]]);
+        assert_eq!(calls(&e, 0x7b00_0038), vec![vec![output, format[0][0], 1]]);
+        assert_eq!(calls(&e, MAP_FIRST_POSITION), vec![vec![this + 4]]);
+        assert_eq!(calls(&e, STRING_DESTRUCT).len(), 1);
+        assert_eq!(calls(&e, POINTER_DESTRUCT).len(), 1);
+        // Without an output: no vtable call.
+        e.call_log = Some(vec![]);
+        e.call(0x0064_fe80, &args![this, 0u32]);
+        assert!(calls(&e, 0x7b00_0038).is_empty());
+    }
+
+    #[test]
+    fn statistic_set_adds_the_scaled_difference() {
+        let mut e = Engine::new();
+        let manager = manager(&mut e);
+        let data = statistics_with(&mut e, manager + 0x30 + 0xb8, 3);
+        let block = e.mem.alloc(0x80);
+        let (current, cell) = statistic_doubles(&mut e);
+        e.mem.set_u32(current, 0.25f32.to_bits());
+        e.call_log = Some(vec![]);
+        e.call(0x0065_2320, &args![block, 1u32, 0u32, 2u32, 1.0f32]);
+        let made = calls(&e, 0x0065_87a0);
+        assert_eq!(made[0][0], data + 2 * 0x3c);
+        // The statistic's one value (1.0) times 1.0 - 0.25.
+        assert_eq!(e.mem.f32(cell), 0.75);
+        let added = calls(&e, 0x0065_86c0);
+        assert_eq!(added.len(), 1);
+        assert_eq!(added[0][0], block + 0x40);
+        let destroyed = calls(&e, ELEMENT_DESTRUCT_00449680);
+        assert_eq!(
+            destroyed[destroyed.len() - 2..],
+            [[added[0][1]], [made[0][1]]]
+        );
+        // An index past the count, or no block: nothing.
+        e.call_log = Some(vec![]);
+        e.call(0x0065_2320, &args![block, 1u32, 0u32, 3u32, 1.0f32]);
+        e.call(0x0065_2320, &args![0u32, 1u32, 0u32, 0u32, 1.0f32]);
+        assert!(calls(&e, 0x0065_87a0).is_empty());
+    }
+
+    /// A statistics vector at `entries` with `count` zeroed 0x3C-byte
+    /// entries; answers their data.
+    fn statistics_with(e: &mut Engine, entries: u32, count: u32) -> u32 {
+        let data = e.mem.alloc(0x3c * count.max(1));
+        e.mem.set_u32(entries + 0xc, data);
+        e.mem.set_u32(entries + 0x10, data + 0x3c * count);
+        data
+    }
+
+    /// Doubles for the statistic read (`fn_00652230`, its element through
+    /// `0060b370`/`00629ab0` is `current`) and the scaling (`fn_00658260`,
+    /// one value 1.0 written to `cell`).
+    fn statistic_doubles(e: &mut Engine) -> (u32, u32) {
+        let current = e.mem.alloc(4);
+        let one = e.mem.alloc(4);
+        e.mem.set_u32(one, 1.0f32.to_bits());
+        let cell = e.mem.alloc(4);
+        e.register(0x0060_b370, |_, a| ret(a[1]));
+        e.register_double(0x0062_9ab0, move |_, _| ret(current));
+        e.register(0x0065_87a0, |_, a| ret(a[1]));
+        let left = Rc::new(RefCell::new(0u32));
+        let l = left.clone();
+        e.register_double(0x0065_fd10, move |_, _| {
+            *l.borrow_mut() = 1;
+            Ret::default()
+        });
+        let l = left;
+        e.register_double(0x0065_dfd0, move |_, _| {
+            let mut left = l.borrow_mut();
+            let going = *left > 0;
+            *left = left.saturating_sub(1);
+            ret(u32::from(going))
+        });
+        e.register_double(0x0064_dda0, move |_, _| ret(one));
+        e.register_double(0x0064_dbd0, move |_, _| ret(cell));
+        quiet(
+            e,
+            &[
+                ELEMENT_DESTRUCT_00449680,
+                0x0065_86c0,
+                INVALID_PARAMETER,
+                0x0065_9000,
+                0x0065_8f30,
+                0x0044_a170,
+                0x0065_fd40,
+                0x0065_9100,
+                0x0065_90c0,
+                FR2_ASSERT,
+            ],
+        );
+        (current, cell)
+    }
+
+    #[test]
+    fn value_pair_and_controls() {
+        let mut e = Engine::new();
+        let manager = manager(&mut e);
+        e.register(0x00aa_bdb0, |_, a| st0(f64::from(a[2]) + 0.5));
+        let seen = Rc::new(RefCell::new(vec![]));
+        let s = seen.clone();
+        e.register_double(0x00aa_c170, move |e, a| {
+            s.borrow_mut()
+                .extend([e.mem.u32(a[3]), e.mem.u32(a[3] + 4)]);
+            ret(0x55)
+        });
+        e.call_log = Some(vec![]);
+        assert_eq!(
+            e.call(0x0065_2470, &args![0x10u32, 1u32, 0x20u32, 7.0f32])
+                .u32(),
+            0x55
+        );
+        assert_eq!(*seen.borrow(), vec![0.5f32.to_bits(), 7.0f32.to_bits()]);
+        let control = calls(&e, 0x00aa_c170);
+        assert_eq!(control[0][..3], [manager + 0x118, 0, 0x20]);
+        assert_eq!(control[0][4], 0x10);
+        // 00652fc0 only with both words.
+        quiet(&mut e, &[0x00aa_d6b0]);
+        e.call_log = Some(vec![]);
+        e.call(0x0065_2fc0, &args![2.0f32, 0u32, 5u32]);
+        e.call(0x0065_2fc0, &args![2.0f32, 4u32, 0u32]);
+        assert!(calls(&e, 0x00aa_d6b0).is_empty());
+        e.call(0x0065_2fc0, &args![2.0f32, 4u32, 5u32]);
+        assert_eq!(
+            calls(&e, 0x00aa_d6b0),
+            vec![vec![manager + 0x118, 2.0f32.to_bits(), 4, 5]]
+        );
+    }
+
+    /// A 0x20-byte matrix with `rows` by `columns` values `values` (its
+    /// storage words at +0xC and +0x10 hold the data's start and end).
+    fn matrix(e: &mut Engine, at: u32, rows: u32, columns: u32, values: &[f32]) {
+        let data = e.mem.alloc(4 * values.len().max(1) as u32);
+        for (i, v) in values.iter().enumerate() {
+            e.mem.set_u32(data + 4 * i as u32, v.to_bits());
+        }
+        e.mem.set_u32(at + 0xc, data);
+        e.mem.set_u32(at + 0x10, data + 4 * values.len() as u32);
+        e.mem.set_u32(at + 0x14, data + 4 * values.len() as u32);
+        e.mem.set_u32(at + 0x18, rows);
+        e.mem.set_u32(at + 0x1c, columns);
+    }
+
+    #[test]
+    fn matrix_equality_and_block_comparison() {
+        let mut e = Engine::new();
+        let (a, b) = (e.mem.alloc(0x80), e.mem.alloc(0x80));
+        for i in 0..4u32 {
+            matrix(&mut e, a + 0x20 * i, 1, 2, &[1.0, 2.0]);
+            matrix(&mut e, b + 0x20 * i, 1, 2, &[1.0, 2.0]);
+        }
+        vector_doubles(&mut e);
+        e.register(0x00ec_4835, |e, x| {
+            let differs = (0..x[2]).any(|i| e.mem.u8(x[0] + i) != e.mem.u8(x[1] + i));
+            ret(u32::from(differs))
+        });
+        assert!(e.call(0x0065_8160, &args![a, b]).bool());
+        assert!(!e.call(0x0065_7880, &args![a, b]).bool());
+        // Equal blocks: false; both null: true; one null: false.
+        assert!(!e.call(0x0065_2900, &args![a, b]).bool());
+        assert!(e.call(0x0065_2900, &args![0u32, 0u32]).bool());
+        assert!(!e.call(0x0065_2900, &args![a, 0u32]).bool());
+        // A value of the last matrix differs.
+        matrix(&mut e, b + 0x60, 1, 2, &[1.0, 3.0]);
+        assert!(!e.call(0x0065_8160, &args![a + 0x60, b + 0x60]).bool());
+        assert!(e.call(0x0065_2900, &args![a, b]).bool());
+        // Other dimensions differ; empty matrices of equal dimensions match.
+        matrix(&mut e, b, 2, 1, &[1.0, 2.0]);
+        assert!(!e.call(0x0065_8160, &args![a, b]).bool());
+        matrix(&mut e, a, 0, 2, &[]);
+        matrix(&mut e, b, 0, 2, &[]);
+        assert!(e.call(0x0065_8160, &args![a, b]).bool());
+    }
+
+    /// The `float` vector doubles: size from +0xC/+0x10, room for 16, the
+    /// end insert writing the value, the clear emptying, the sizing and
+    /// copy logged only.
+    fn vector_doubles(e: &mut Engine) {
+        e.register(FLOAT_VECTOR_SIZE, |e, a| {
+            ret((e.mem.u32(a[0] + 0x10) - e.mem.u32(a[0] + 0xc)) / 4)
+        });
+        e.register(0x0060_b860, |_, _| ret(16));
+        e.register(0x0060_b8a0, |e, a| {
+            let value = e.mem.u32(a[3]);
+            e.mem.set_u32(a[1], value);
+            ret(a[1] + 4)
+        });
+        e.register(0x0044_a0a0, |e, a| {
+            let begin = e.mem.u32(a[0] + 0xc);
+            e.mem.set_u32(a[0] + 0x10, begin);
+            Ret::default()
+        });
+        quiet(e, &[0x0060_b3f0, 0x0040_1460, INVALID_PARAMETER]);
+    }
+
+    /// Dimension doubles reading +0x18 and +0x1C; resize keeps a log only.
+    fn dimension_doubles(e: &mut Engine) {
+        e.register(MATRIX_FIRST_DIMENSION, |e, a| ret(e.mem.u32(a[0] + 0x18)));
+        e.register(MATRIX_SECOND_DIMENSION, |e, a| ret(e.mem.u32(a[0] + 0x1c)));
+        quiet(e, &[MATRIX_RESIZE]);
+    }
+
+    #[test]
+    fn block_difference_fills_the_result() {
+        let mut e = Engine::new();
+        let (a, b, out) = (e.mem.alloc(0x80), e.mem.alloc(0x80), e.mem.alloc(0x80));
+        for i in 0..4u32 {
+            matrix(&mut e, a + 0x20 * i, 1, 2, &[1.0, 2.0]);
+            matrix(&mut e, b + 0x20 * i, 1, 2, &[4.0, 8.0]);
+        }
+        matrix(&mut e, a + 0x20, 0, 2, &[]);
+        for i in 0..4u32 {
+            matrix(&mut e, out + 0x20 * i, 0, 0, &[0.0, 0.0]);
+        }
+        dimension_doubles(&mut e);
+        vector_doubles(&mut e);
+        e.call_log = Some(vec![]);
+        fn_00652e00(&mut e, a, b, out, 1);
+        let resized = calls(&e, MATRIX_RESIZE);
+        assert_eq!(resized[1], vec![out + 0x20, 0, 0]);
+        assert_eq!(resized[0], vec![out, 1, 2]);
+        // Row 0: emptied and refilled with b - a.
+        assert_eq!(calls(&e, 0x0044_a0a0), vec![vec![out]]);
+        let data = e.mem.u32(out + 0xc);
+        assert_eq!([e.mem.f32(data), e.mem.f32(data + 4)], [3.0, 6.0]);
+        // Row 1 with the flag: copies of the first block's matrices.
+        let copies = calls(&e, 0x0040_1460);
+        assert_eq!(copies.len(), 2);
+        assert_eq!(copies[0][1], e.mem.u32(a + 0x40 + 0xc));
+        // Without the flag every non-empty matrix is emptied and refilled.
+        e.call_log = Some(vec![]);
+        fn_00652e00(&mut e, a, b, out, 0);
+        assert!(calls(&e, 0x0040_1460).is_empty());
+        assert_eq!(calls(&e, 0x0044_a0a0).len(), 3);
+        // A null block: nothing.
+        e.call_log = Some(vec![]);
+        e.call(0x0065_2e00, &args![a, b, 0u32, 0u32]);
+        assert!(calls(&e, MATRIX_RESIZE).is_empty());
+    }
+
+    #[test]
+    fn block_scale_takes_values_from_zero_to_one() {
+        let mut e = Engine::new();
+        e.map(0x0101_2000, 0x1000);
+        e.set_global(ZERO_DOUBLE, 0.0f64);
+        e.set_global(ONE_DOUBLE, 1.0f64);
+        let block = e.mem.alloc(0x80);
+        for i in 0..4u32 {
+            matrix(&mut e, block + 0x20 * i, 1, 1, &[1.0]);
+        }
+        matrix(&mut e, block + 0x20, 1, 0, &[]);
+        dimension_doubles(&mut e);
+        quiet(&mut e, &[0x0065_8650]);
+        for (value, scaled) in [
+            (0.5f32, 3usize),
+            (1.5, 0),
+            (-0.5, 0),
+            (f32::NAN, 3),
+            (1.0, 3),
+        ] {
+            for flag in [0u32, 1] {
+                e.call_log = Some(vec![]);
+                e.call(0x0065_3000, &args![value, block, flag]);
+                let done = calls(&e, 0x0065_8650);
+                assert_eq!(done.len(), scaled);
+                if scaled > 0 {
+                    assert_eq!(done[0], vec![block, value.to_bits()]);
+                }
+            }
+        }
+        e.call_log = Some(vec![]);
+        e.call(0x0065_3000, &args![0.5f32, 0u32, 0u32]);
+        assert!(calls(&e, MATRIX_FIRST_DIMENSION).is_empty());
+    }
+
+    /// String doubles: copy, `strrchr`/`strchr` on real bytes, `sprintf_s`
+    /// with one `%s` word, the set and get of a string word.
+    fn string_doubles(e: &mut Engine) {
+        e.register(STRCPY_S, |e, a| {
+            let source = text(e, a[2]);
+            put_text(e, a[0], &source);
+            Ret::default()
+        });
+        e.register(STRRCHR, |e, a| {
+            let bytes = text(e, a[0]);
+            ret(bytes
+                .iter()
+                .rposition(|&b| u32::from(b) == a[1])
+                .map_or(0, |i| a[0] + i as u32))
+        });
+        e.register(STRCHR, |e, a| {
+            let bytes = text(e, a[0]);
+            ret(bytes
+                .iter()
+                .position(|&b| u32::from(b) == a[1])
+                .map_or(0, |i| a[0] + i as u32))
+        });
+        e.register(SPRINTF_S, |e, a| {
+            let mut out = text(e, a[3]);
+            out.extend_from_slice(b"+f");
+            put_text(e, a[0], &out);
+            Ret::default()
+        });
+        e.register(STRING_SET, |e, a| {
+            let copy = e.mem.alloc(0x110);
+            let value = text(e, a[1]);
+            put_text(e, copy, &value);
+            e.mem.set_u32(a[0], copy);
+            Ret::default()
+        });
+        e.register(POINTER_GET, |e, a| ret(e.mem.u32(a[0])));
+    }
+
+    #[test]
+    fn model_names_are_cut_at_the_dot_or_the_underscore() {
+        let mut e = Engine::new();
+        string_doubles(&mut e);
+        let out = e.mem.alloc(8);
+        let name = e.mem.alloc(0x20);
+        put_text(&mut e, name, b"head_hat.dds");
+        e.call_log = Some(vec![]);
+        let answer = e.call(0x0065_3620, &args![out, name]).u32();
+        assert_eq!(text(&e, answer), b"head_hat+f");
+        assert_eq!(calls(&e, SPRINTF_S)[0][2], NIF_FORMAT);
+        let answer = e.call(0x0065_3c40, &args![out, name]).u32();
+        assert_eq!(text(&e, answer), b"head+f");
+        // No dot: 0; no underscore: the name; no name: 0.
+        put_text(&mut e, name, b"head");
+        assert_eq!(e.call(0x0065_3620, &args![out, name]).u32(), 0);
+        assert_eq!(e.call(0x0065_3c40, &args![out, name]).u32(), name);
+        assert_eq!(e.call(0x0065_3620, &args![out, 0u32]).u32(), 0);
+        assert_eq!(e.call(0x0065_3c40, &args![out, 0u32]).u32(), 0);
+    }
+
+    #[test]
+    fn low_lod_name_is_looked_up_in_the_archives() {
+        let mut e = Engine::new();
+        string_doubles(&mut e);
+        quiet(
+            &mut e,
+            &[STRING_CONSTRUCT, STRING_DESTRUCT, 0x0068_15c0, 0x00af_d270],
+        );
+        e.register(STRING_FORMAT, |e, a| {
+            let mut out = b"M\\".to_vec();
+            out.extend(text(e, a[2]));
+            let at = e.mem.alloc(0x40);
+            put_text(e, at, &out);
+            e.mem.set_u32(a[0], at);
+            Ret::default()
+        });
+        let found = Rc::new(RefCell::new(1u32));
+        let f = found.clone();
+        e.register_double(0x00af_6540, move |_, _| ret(*f.borrow()));
+        let out = e.mem.alloc(8);
+        let name = e.mem.alloc(0x20);
+        put_text(&mut e, name, b"head.nif");
+        e.call_log = Some(vec![]);
+        let answer = e.call(0x0065_3a10, &args![out, name]).u32();
+        assert_eq!(text(&e, answer), b"head+f");
+        assert_eq!(calls(&e, SPRINTF_S)[0][2], LOW_LOD_NIF_FORMAT);
+        assert_eq!(calls(&e, STRING_FORMAT)[0][1], MESHES_FORMAT);
+        let lookup = calls(&e, 0x00af_6540);
+        assert_eq!(lookup[0][0], 0);
+        assert_eq!(text(&e, lookup[0][3]), b"M\\head+f");
+        assert_eq!(calls(&e, STRING_DESTRUCT).len(), 1);
+        // Not found: 0.
+        *found.borrow_mut() = 0;
+        assert_eq!(e.call(0x0065_3a10, &args![out, name]).u32(), 0);
+        // An underscore: set as it is, the name answered; no dot: the name.
+        put_text(&mut e, name, b"head_50.nif");
+        assert_eq!(e.call(0x0065_3a10, &args![out, name]).u32(), name);
+        assert_eq!(text(&e, e.mem.u32(out)), b"head_50.nif");
+        put_text(&mut e, name, b"head");
+        assert_eq!(e.call(0x0065_3a10, &args![out, name]).u32(), name);
+        assert_eq!(e.call(0x0065_3a10, &args![out, 0u32]).u32(), 0);
+    }
+
+    #[test]
+    fn allocators_and_destroy_ranges() {
+        let mut e = Engine::new();
+        e.register(ALLOCATE_PLAIN, |_, a| ret(a[0] + 0x10));
+        quiet(&mut e, &[0x0044_d6c0, 0x00ec_7894, 0x0065_9310]);
+        e.call_log = Some(vec![]);
+        assert_eq!(
+            e.call(0x0065_8090, &args![0u32, 2u32]).u32(),
+            2 * 0x88 + 0x10
+        );
+        assert_eq!(
+            e.call(0x0065_8020, &args![0u32, 2u32]).u32(),
+            2 * 0x3c + 0x10
+        );
+        assert!(calls(&e, 0x00ec_7894).is_empty());
+        e.call(0x0065_8ca0, &args![0x0200_0000u32]);
+        assert_eq!(calls(&e, 0x00ec_7894)[0][1], 0x0114_0ef8);
+        assert_eq!(e.call(0x0065_8100, &args![0u32]).u32(), 0x0444_4444);
+        assert_eq!(e.call(0x0065_8130, &args![0u32]).u32(), 0x01e1_e1e1);
+        e.register(0x0065_e750, |_, _| ret(0x1ff));
+        e.call_log = Some(vec![]);
+        let vector = e.mem.alloc(0x10);
+        e.call(0x0065_8060, &args![vector, 0x1000u32, 0x1000u32 + 2 * 0x88]);
+        assert_eq!(
+            calls(&e, 0x0065_9310),
+            vec![vec![vector + 8, 0x1000], vec![vector + 8, 0x1088]]
+        );
+        e.call_log = Some(vec![]);
+        e.call(0x0065_9290, &args![0x2000u32, 0x2000u32, 0u32, 0u32]);
+        assert!(calls(&e, 0x0065_9310).is_empty());
+    }
+
+    #[test]
+    fn matrix_sum_walks_three_iterators() {
+        let mut e = Engine::new();
+        let (a, b) = (e.mem.alloc(0x20), e.mem.alloc(0x20));
+        e.mem.set_u32(a + 0x18, 1);
+        e.mem.set_u32(a + 0x1c, 2);
+        e.mem.set_u32(b + 0x18, 2);
+        e.mem.set_u32(b + 0x1c, 1);
+        let (x, y, z) = (e.mem.alloc(8), e.mem.alloc(8), e.mem.alloc(8));
+        e.mem.set_u32(x, 1.5f32.to_bits());
+        e.mem.set_u32(x + 4, 2.0f32.to_bits());
+        e.mem.set_u32(y, 0.25f32.to_bits());
+        e.mem.set_u32(y + 4, 0.5f32.to_bits());
+        // Iterators hold an address word; their begin points them at x/y/z.
+        e.register_double(0x0065_fd10, move |e, a| {
+            e.mem
+                .set_u32(a[1], if e.mem.u32(a[0] + 0x18) == 1 { x } else { y });
+            Ret::default()
+        });
+        e.register_double(0x0044_a170, move |e, a| {
+            e.mem.set_u32(a[1], z);
+            Ret::default()
+        });
+        e.register_double(0x0065_fd40, move |_, _| ret(x + 8));
+        e.register(0x0065_dfd0, |e, a| ret(u32::from(e.mem.u32(a[0]) != a[1])));
+        e.register(0x0064_dda0, |e, a| ret(e.mem.u32(a[0])));
+        e.register(0x0064_dbd0, |e, a| ret(e.mem.u32(a[0])));
+        e.register(0x0065_9100, |e, a| {
+            let at = e.mem.u32(a[0]);
+            e.mem.set_u32(a[0], at + 4);
+            Ret::default()
+        });
+        e.register(0x0065_90c0, |e, a| {
+            let at = e.mem.u32(a[0]);
+            e.mem.set_u32(a[0], at + 4);
+            Ret::default()
+        });
+        quiet(
+            &mut e,
+            &[
+                0x0065_9000,
+                0x0065_8f30,
+                ELEMENT_DESTRUCT_00449680,
+                FR2_ASSERT,
+            ],
+        );
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x0065_8500, &args![a, 0x7000u32, b]).u32(), 0x7000);
+        assert_eq!(calls(&e, FR2_ASSERT), vec![vec![MATRIX_VT_FILE, 0x16d]]);
+        assert_eq!(calls(&e, 0x0065_9000)[0][1..], [1, 2]);
+        assert_eq!(e.mem.f32(z), 1.75);
+        assert_eq!(e.mem.f32(z + 4), 2.5);
+        let copied = calls(&e, 0x0065_8f30);
+        assert_eq!(copied[0][0], 0x7000);
+        assert_eq!(
+            calls(&e, ELEMENT_DESTRUCT_00449680),
+            vec![vec![copied[0][1]]]
+        );
+        // Equal dimensions: no assert.
+        e.mem.set_u32(b + 0x18, 1);
+        e.mem.set_u32(b + 0x1c, 2);
+        e.call_log = Some(vec![]);
+        e.call(0x0065_8500, &args![a, 0x7000u32, b]);
+        assert!(calls(&e, FR2_ASSERT).is_empty());
+    }
+
+    #[test]
+    fn model_map_scalar_deleting_destructors() {
+        for flags in [0u32, 1] {
+            let mut e = Engine::new();
+            quiet(&mut e, &[FREE, 0x0065_8d30, MAP_CLEAN_UP, 0x00aa_10f0]);
+            let map = e.mem.alloc(0x14);
+            e.call_log = Some(vec![]);
+            for addr in [0x0065_8d00u32, 0x0065_8ea0, 0x0065_8ed0, 0x0065_8f00] {
+                assert_eq!(e.call(addr, &args![map, flags]).u32(), map);
+            }
+            assert_eq!(calls(&e, FREE).len(), 4 * flags as usize);
+        }
+    }
+
+    #[test]
+    fn debug_sweep_moves_the_statistic_and_turns() {
+        let mut e = Engine::new();
+        let manager = manager(&mut e);
+        for page in [0x0101_f000u32, 0x0102_0000, 0x0106_5000] {
+            e.map(page, 0x1000);
+        }
+        e.set_global(SWEEP_STEP, 0.5f64);
+        e.set_global(SWEEP_TOP, 10.0f64);
+        e.set_global(SWEEP_BOTTOM, -10.0f64);
+        e.set_global(SWEEP_INDEX, 0u32);
+        // The statistics vector (0, 0): count 1.
+        statistics_with(&mut e, manager + 0xb8, 1);
+        let (current, _) = statistic_doubles(&mut e);
+        e.mem.set_u32(current, (-9.75f32).to_bits());
+        let actor = e.mem.alloc(8);
+        let vtable = e.mem.alloc(0x1e0);
+        e.mem.set_u32(actor, vtable);
+        e.mem.set_u32(vtable + 0x1d0, 0x7c00_01d0);
+        e.mem.set_u32(vtable + 0x1ac, 0x7c00_01ac);
+        e.mem.set_u32(vtable + 0x1b0, 0x7c00_01b0);
+        e.register(0x7c00_01d0, |_, _| ret(0));
+        e.register(0x7c00_01ac, |_, _| ret(0x5100));
+        e.register(0x7c00_01b0, |_, _| ret(0x5200));
+        e.register(0x0043_b480, |_, a| ret(u32::from(a[0] == 0x5100)));
+        let item = e.mem.alloc(4);
+        let item_vtable = e.mem.alloc(0x20);
+        e.mem.set_u32(item, item_vtable);
+        e.mem.set_u32(item_vtable + 0x1c, 0x7c00_001c);
+        e.register(0x7c00_001c, |_, _| ret(0x5300));
+        e.register_double(0x0043_b4a0, move |_, _| ret(item));
+        let owner = e.mem.alloc(4);
+        let owner_vtable = e.mem.alloc(0x98);
+        e.mem.set_u32(owner, owner_vtable);
+        e.mem.set_u32(owner_vtable + 0x94, 0x7c00_0094);
+        e.register(0x7c00_0094, |_, _| ret(0x5400));
+        e.register_double(OBJECT_OF_00607310, move |_, _| ret(owner));
+        e.register(0x007a_f430, |_, _| ret(0x5500));
+        e.register(0x0060_1800, |_, _| ret(0x5600));
+        e.register(0x005f_0cc0, |_, _| ret(1));
+        e.register(WORD_AT_4, |_, _| ret(0x5700));
+        e.register(0x005d_9fb0, |_, _| ret(0));
+        e.register(MATRIX_FIRST_DIMENSION, |_, _| ret(0));
+        e.register(MATRIX_SECOND_DIMENSION, |_, _| ret(0));
+        quiet(
+            &mut e,
+            &[
+                VECTOR_CONSTRUCT,
+                VECTOR_DESTRUCT,
+                0x0060_3ad0,
+                0x0065_86c0,
+                0x0065_a970,
+                MATRIX_RESIZE,
+                ELEMENT_DESTRUCT_00449680,
+                INVALID_PARAMETER,
+            ],
+        );
+        e.call_log = Some(vec![]);
+        e.call(0x0065_2510, &args![actor]);
+        // -9.75 - 0.5 = -10.25: at or below -10, the sweep turns up.
+        assert_eq!(e.global::<u8>(SWEEP_DOWN), 1);
+        assert_eq!(calls(&e, VECTOR_CONSTRUCT).len(), 3);
+        assert_eq!(calls(&e, VECTOR_DESTRUCT).len(), 3);
+        let faces = calls(&e, 0x0060_3ad0);
+        assert_eq!(faces.len(), 2);
+        assert!(faces.iter().all(|a| a[0] == 0x5500));
+        let applied = calls(&e, 0x0065_a970);
+        assert_eq!(applied.len(), 1);
+        assert_eq!(applied[0][0], 0x5400);
+        assert_eq!(applied[0][2..], [0x5300, 0]);
+        assert_eq!(calls(&e, 0x005d_9fb0), vec![vec![0x5700, 1]]);
+        assert_eq!(calls(&e, WORD_AT_4), vec![vec![0x5500 + 0x10c]]);
+        // Up: -9.75 + 0.5 stays below 10.
+        e.call(0x0065_2510, &args![actor]);
+        assert_eq!(e.global::<u8>(SWEEP_DOWN), 1);
+        e.mem.set_u32(current, 9.75f32.to_bits());
+        e.call(0x0065_2510, &args![actor]);
+        assert_eq!(e.global::<u8>(SWEEP_DOWN), 0);
     }
 }

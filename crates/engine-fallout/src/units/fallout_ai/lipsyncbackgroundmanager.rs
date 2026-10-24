@@ -483,9 +483,11 @@ pub fn lip_task_cancel(e: &mut Engine, this: Ptr, state: u32, second: u32) {
 // Translated from 00905e00 (decompiled, FalloutNV.exe 1.4.0.525)
 /// `LipTask::GetDescription` (Xbox PDB; thiscall(`buffer`, `size`), `RET
 /// 8`): `QueuedFileEntry::GetDescription(this, buffer, size, 01088634)`
-/// (the last word the address of the task's description text).
-pub fn lip_task_get_description(e: &mut Engine, this: Ptr, buffer: u32, size: u32) {
-    e.call(0x00c3_d0e0, &args![this, buffer, size, 0x0108_8634u32]);
+/// (the last word the address of the task's description text), whose answer is this one's (the
+/// exe ends on that call and keeps its `AL`; the PDB's `bool`).
+pub fn lip_task_get_description(e: &mut Engine, this: Ptr, buffer: u32, size: u32) -> bool {
+    e.call(0x00c3_d0e0, &args![this, buffer, size, 0x0108_8634u32])
+        .bool()
 }
 
 // Translated from 00905f30 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -558,7 +560,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x0090_5c50, lip_task_run(Ptr)),
         entry!(0x0090_5d20, lip_task_finish(Ptr)),
         entry!(0x0090_5dc0, lip_task_cancel(Ptr, u32, u32)),
-        entry!(0x0090_5e00, lip_task_get_description(Ptr, u32, u32)),
+        entry!(0x0090_5e00, lip_task_get_description(Ptr, u32, u32) -> bool),
         entry!(0x0090_5f30, fn_00905f30(Ptr, u32, u32)),
         entry!(0x0090_60f0, fn_009060f0(Ptr, u32)),
         entry!(
@@ -1176,6 +1178,19 @@ mod n026_tests {
             assert_eq!(calls(&log, 0x00c3_cb70), vec![vec![task, state, 0x12]]);
             assert_eq!(calls(&log, 0x0abe_0014).len(), usize::from(drops));
         }
+    }
+
+    #[test]
+    fn description_answers_the_queued_entry_s_byte() {
+        let mut e = Engine::new();
+        e.register(0x00c3_d0e0, |_, _| 1u32.into_ret());
+        assert!(e
+            .call(0x0090_5e00, &args![0x1000u32, 0x2000u32, 0x40u32])
+            .bool());
+        e.register(0x00c3_d0e0, |_, _| 0u32.into_ret());
+        assert!(!e
+            .call(0x0090_5e00, &args![0x1000u32, 0x2000u32, 0x40u32])
+            .bool());
     }
 
     #[test]

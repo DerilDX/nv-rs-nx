@@ -96,7 +96,54 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
         entry!(0x00ec_7b08, fn_00ec7b08(u32, u32, u32, u32, u32)),
         entry!(0x00ec_7af9, fn_00ec7af9(u32)),
+        entry!(0x00ec_7ad2, bad_typeid_deleting_dtor(Ptr, u32) -> Ptr),
     ]
+}
+
+/// `std::bad_typeid`'s vtable (`010f1fd0`; RTTI `.?AVbad_typeid@std@@`).
+const BAD_TYPEID_VTABLE: u32 = 0x010f_1fd0;
+/// `std::exception::~exception` (engine map, `00ec79a1`; thiscall) and `operator delete`
+/// (`00401030`, cdecl: the block).
+const EXCEPTION_DTOR: u32 = 0x00ec_79a1;
+const OPERATOR_DELETE: u32 = 0x0040_1030;
+
+// Translated from 00ec7ad2 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The deleting destructor of `std::bad_typeid` (slot 0 of its vtable, by its RTTI; unnamed
+/// in the engine map): the vtable, `std::exception::~exception`, then with bit 0 of `flags`
+/// `operator delete`. Returns `this`.
+pub fn bad_typeid_deleting_dtor(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    e.mem.set_u32(this.addr(), BAD_TYPEID_VTABLE);
+    e.call(EXCEPTION_DTOR, &args![this]);
+    if flags & 1 != 0 {
+        e.call(OPERATOR_DELETE, &args![this]);
+    }
+    this
+}
+
+#[cfg(test)]
+mod n081_tests {
+    use super::*;
+
+    #[test]
+    fn destroys_and_deletes_with_bit_0() {
+        for flags in [0u32, 1] {
+            let mut e = Engine::new();
+            e.register(EXCEPTION_DTOR, |e, a| {
+                assert_eq!(e.mem.u32(a[0]), BAD_TYPEID_VTABLE);
+                Ret::default()
+            });
+            e.register(OPERATOR_DELETE, |_, _| Ret::default());
+            let this = e.mem.alloc(0xc);
+            e.call_log = Some(vec![]);
+            assert_eq!(e.call(0x00ec_7ad2, &args![this, flags]).u32(), this);
+            let log = e.call_log.take().unwrap();
+            assert_eq!(log[1], (EXCEPTION_DTOR, vec![this]));
+            assert_eq!(
+                log.iter().filter(|c| c.0 == OPERATOR_DELETE).count(),
+                flags as usize
+            );
+        }
+    }
 }
 
 #[cfg(test)]

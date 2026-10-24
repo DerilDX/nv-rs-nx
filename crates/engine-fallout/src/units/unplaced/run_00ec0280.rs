@@ -264,6 +264,137 @@ pub fn fn_00ec0cd0(
     1
 }
 
+// Translated from 00ec0550 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (cdecl: a tiled movie frame, `x`, `y`, `width`, `height` as
+/// float bit patterns): draws the frame's tiles with `00ec0720` on its device (+0). The steps
+/// are `tile * width` and `tile * height` (the tile size +0x3c as a 64-bit `FILD`, x87,
+/// stored as floats). For each of the +0x28 rows, each of the +0x24 columns draws a
+/// `tile x tile` quad and then, with a right remainder (+0x2c), a `remainder x tile` one,
+/// `x` and then `y` advancing by the steps (x87 adds of floats); with a bottom remainder
+/// (+0x30) one more row draws `tile x bottom` quads and the `right x bottom` corner.
+pub fn fn_00ec0550(e: &mut Engine, frame: Ptr, x: u32, y: u32, width: u32, height: u32) {
+    let frame = frame.addr();
+    let tile = u64::from(e.mem.u32(frame + 0x3c));
+    let step_x = x87_store32(x87_mul(tile as f64, x87_m32(width)));
+    let tile = u64::from(e.mem.u32(frame + 0x3c));
+    let step_y = x87_store32(x87_mul(tile as f64, x87_m32(height)));
+    let advance = |value: u32, step: u32| x87_store32(x87_add(x87_load32(value), x87_m32(step)));
+    let quad = |e: &mut Engine, at_x: u32, at_y: u32, columns: u32, rows: u32| {
+        let device = e.mem.u32(frame);
+        fn_00ec0720(
+            e,
+            device,
+            x87_quiet_bits(at_x),
+            x87_quiet_bits(at_y),
+            x87_quiet_bits(width),
+            x87_quiet_bits(height),
+            columns as i32,
+            rows as i32,
+        );
+    };
+    let mut row_y = x87_quiet_bits(y);
+    let mut row = 0u32;
+    while row < e.mem.u32(frame + 0x28) {
+        let mut column_x = x87_quiet_bits(x);
+        let mut column = 0u32;
+        while column < e.mem.u32(frame + 0x24) {
+            let tile = e.mem.u32(frame + 0x3c);
+            quad(e, column_x, row_y, tile, tile);
+            column_x = advance(column_x, step_x);
+            column += 1;
+        }
+        let right = e.mem.u32(frame + 0x2c);
+        if right != 0 {
+            let tile = e.mem.u32(frame + 0x3c);
+            quad(e, column_x, row_y, right, tile);
+        }
+        row_y = advance(row_y, step_y);
+        row += 1;
+    }
+    let bottom = e.mem.u32(frame + 0x30);
+    if bottom != 0 {
+        let mut column_x = x87_quiet_bits(x);
+        let mut column = 0u32;
+        while column < e.mem.u32(frame + 0x24) {
+            let bottom = e.mem.u32(frame + 0x30);
+            let tile = e.mem.u32(frame + 0x3c);
+            quad(e, column_x, row_y, tile, bottom);
+            column_x = advance(column_x, step_x);
+            column += 1;
+        }
+        let right = e.mem.u32(frame + 0x2c);
+        if right != 0 {
+            let bottom = e.mem.u32(frame + 0x30);
+            quad(e, column_x, row_y, right, bottom);
+        }
+    }
+}
+
+// Translated from 00ec0720 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (cdecl: `device`, `x`, `y`, `width`, `height` as float bit
+/// patterns, `columns`, `rows`): draws one quad as a two-triangle fan of six-float vertices
+/// (position, 0, 1, 0, 0), built in a local frame as the exe copies them: `(x, y)`,
+/// `(x2, y)` twice, `(x2, y2)` twice, `(x, y2)` twice, with `x2 = columns * width + x` and
+/// `y2 = rows * height + y` (`FILD`, x87, stored as floats), and five more copies after
+/// them. The device (`IDirect3DDevice9` vtable) gets slot `0x10c` (0, 2, 0) and (0, 5, 0),
+/// `0x170` (0), `0x164` (0x104) and `0x14c` (6, 2, the first vertex, 0x18).
+#[allow(clippy::too_many_arguments)]
+pub fn fn_00ec0720(
+    e: &mut Engine,
+    device: u32,
+    x: u32,
+    y: u32,
+    width: u32,
+    height: u32,
+    columns: i32,
+    rows: i32,
+) {
+    e.with_stack(0x120, |e, base| {
+        // `base` is EBP-0x120; vertex `n` of the exe's chain sits at `base + 0x18 * n`.
+        let base = base.addr();
+        let vertex = |n: u32| base + 0x18 * n;
+        let copy = |e: &mut Engine, to: u32, from: u32| {
+            let bytes = e.mem.bytes(from, 0x18);
+            e.mem.write(to, &bytes);
+        };
+        let first = vertex(0);
+        e.mem.set_u32(first, x87_quiet_bits(x));
+        e.mem.set_u32(first + 4, x87_quiet_bits(y));
+        e.mem.set_f32(first + 8, 0.0);
+        e.mem.set_f32(first + 0xc, 1.0);
+        e.mem.set_f32(first + 0x10, 0.0);
+        e.mem.set_f32(first + 0x14, 0.0);
+        copy(e, vertex(1), vertex(0));
+        let far_x = x87_store32(x87_add(
+            x87_mul(f64::from(columns), x87_m32(width)),
+            x87_m32(x),
+        ));
+        e.mem.set_u32(vertex(1), far_x);
+        e.mem.set_u32(vertex(1) + 4, x87_quiet_bits(y));
+        copy(e, vertex(2), vertex(1));
+        copy(e, vertex(3), vertex(1));
+        let far_y = x87_store32(x87_add(
+            x87_mul(f64::from(rows), x87_m32(height)),
+            x87_m32(y),
+        ));
+        e.mem.set_u32(vertex(3) + 4, far_y);
+        copy(e, vertex(4), vertex(3));
+        copy(e, vertex(5), vertex(3));
+        e.mem.set_u32(vertex(5), x87_quiet_bits(x));
+        copy(e, vertex(6), vertex(5));
+        copy(e, vertex(7), vertex(0));
+        copy(e, vertex(8), vertex(0));
+        copy(e, vertex(9), vertex(3));
+        copy(e, vertex(10), vertex(2));
+        copy(e, vertex(11), vertex(6));
+        e.vcall(device, 0x10c, &args![0u32, 2u32, 0u32]);
+        e.vcall(device, 0x10c, &args![0u32, 5u32, 0u32]);
+        e.vcall(device, 0x170, &args![0u32]);
+        e.vcall(device, 0x164, &args![0x104u32]);
+        e.vcall(device, 0x14c, &args![6u32, 2u32, first, 0x18u32]);
+    });
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -271,6 +402,8 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00ec_0460, fn_00ec0460(u32)),
         entry!(0x00ec_0ac0, fn_00ec0ac0(Ptr, u32, u32, u32, u32) -> u8),
         entry!(0x00ec_0cd0, fn_00ec0cd0(Ptr, u32, u32, u32, u32) -> u8),
+        entry!(0x00ec_0550, fn_00ec0550(Ptr, u32, u32, u32, u32)),
+        entry!(0x00ec_0720, fn_00ec0720(u32, u32, u32, u32, u32, i32, i32)),
     ]
 }
 
@@ -507,6 +640,100 @@ mod b035_tests {
         assert_eq!(
             calls(&log, 0x005b_5e40),
             vec![vec![TEXTURES_FAILED_010F1BB4, 0x10]]
+        );
+    }
+}
+
+#[cfg(test)]
+mod n081_tests {
+    use super::*;
+
+    fn device(e: &mut Engine) -> u32 {
+        let vtable = e.mem.alloc(0x180);
+        for slot in [0x10cu32, 0x14c, 0x164, 0x170] {
+            e.mem.set_u32(vtable + slot, 0x0079_0000 + slot);
+        }
+        e.register(0x0079_010c, |_, _| Ret::default());
+        e.register(0x0079_0164, |_, _| Ret::default());
+        e.register(0x0079_0170, |_, _| Ret::default());
+        e.register(0x0079_014c, |_, _| Ret::default());
+        let device = e.mem.alloc(4);
+        e.mem.set_u32(device, vtable);
+        device
+    }
+
+    #[test]
+    fn quad_builds_the_fan_and_sets_the_states() {
+        let mut e = Engine::new();
+        let d = device(&mut e);
+        e.register_double(0x0079_014c, |e, a| {
+            assert_eq!(&a[1..], &[6, 2, a[3], 0x18]);
+            assert_eq!(e.mem.f32(a[3]), 10.0);
+            assert_eq!(e.mem.f32(a[3] + 4), 20.0);
+            assert_eq!(e.mem.f32(a[3] + 0xc), 1.0);
+            assert_eq!(e.mem.f32(a[3] + 0x18), 10.0 + 3.0 * 2.0);
+            assert_eq!(e.mem.f32(a[3] + 0x30), 16.0);
+            assert_eq!(e.mem.f32(a[3] + 0x48), 16.0);
+            assert_eq!(e.mem.f32(a[3] + 0x4c), 20.0 + 4.0 * 0.5);
+            assert_eq!(e.mem.f32(a[3] + 0x78), 10.0);
+            assert_eq!(e.mem.f32(a[3] + 0x7c), 22.0);
+            Ret::default()
+        });
+        e.call_log = Some(vec![]);
+        e.call(
+            0x00ec_0720,
+            &args![
+                d,
+                10.0f32.to_bits(),
+                20.0f32.to_bits(),
+                2.0f32.to_bits(),
+                0.5f32.to_bits(),
+                3u32,
+                4u32
+            ],
+        );
+        let log = e.call_log.take().unwrap();
+        let order: Vec<u32> = log.iter().skip(1).map(|c| c.0 - 0x0079_0000).collect();
+        assert_eq!(order, vec![0x10c, 0x10c, 0x170, 0x164, 0x14c]);
+        assert_eq!(log[2].1, vec![d, 0, 5, 0]);
+        assert_eq!(log[4].1, vec![d, 0x104]);
+    }
+
+    #[test]
+    fn tiles_cover_rows_columns_and_remainders() {
+        let mut e = Engine::new();
+        let d = device(&mut e);
+        let frame = e.mem.alloc(0x40);
+        e.mem.set_u32(frame, d);
+        e.mem.set_u32(frame + 0x24, 2);
+        e.mem.set_u32(frame + 0x28, 1);
+        e.mem.set_u32(frame + 0x2c, 5);
+        e.mem.set_u32(frame + 0x30, 7);
+        e.mem.set_u32(frame + 0x3c, 64);
+        let quads = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let seen = std::rc::Rc::clone(&quads);
+        e.register_double(0x0079_014c, move |e, a| {
+            let (x, y) = (e.mem.f32(a[3]), e.mem.f32(a[3] + 4));
+            let (x2, y2) = (e.mem.f32(a[3] + 0x18), e.mem.f32(a[3] + 0x4c));
+            seen.borrow_mut().push([x, y, x2 - x, y2 - y]);
+            Ret::default()
+        });
+        e.call(
+            0x00ec_0550,
+            &args![frame, 0u32, 0u32, 1.0f32.to_bits(), 1.0f32.to_bits()],
+        );
+        // One row of 2 tiles plus the right remainder, then the bottom row of 2 plus the
+        // corner.
+        assert_eq!(
+            *quads.borrow(),
+            vec![
+                [0.0, 0.0, 64.0, 64.0],
+                [64.0, 0.0, 64.0, 64.0],
+                [128.0, 0.0, 5.0, 64.0],
+                [0.0, 64.0, 64.0, 7.0],
+                [64.0, 64.0, 64.0, 7.0],
+                [128.0, 64.0, 5.0, 7.0],
+            ]
         );
     }
 }

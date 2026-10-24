@@ -537,9 +537,214 @@ pub fn fn_0044ed80(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
     this
 }
 
+/// `0092c870` (`ECX` = the pointed-to object): takes a reference.
+const ADD_REFERENCE: u32 = 0x0092_c870;
+/// `00529030` (`ECX` = `this`, two stack words: the key and a word), `AL`.
+const LOOP_BEGIN: u32 = 0x0052_9030;
+/// `004491c0` (`cdecl`, three words), `AL`.
+const UNLINK_TEST_004491C0: u32 = 0x0044_91c0;
+/// `00666510` (`ECX` = `this`, one stack word).
+const UNLINK_00666510: u32 = 0x0066_6510;
+
+// Translated from 0044e370 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Copy constructor of a reference-counted pointer word (unnamed in the engine map; `ECX`
+/// and one stack word, `RET 4`): copies the word at `source` into `this` and, when it is not
+/// null, takes a reference on the object (`0092c870`). Answers `this`.
+pub fn fn_0044e370(e: &mut Engine, this: Ptr, source: Ptr) -> Ptr {
+    let object = e.mem.u32(source.addr());
+    e.mem.set_u32(this.addr(), object);
+    let object = e.mem.u32(this.addr());
+    if object != 0 {
+        e.call(ADD_REFERENCE, &args![object]);
+    }
+    this
+}
+
+// Translated from 0044e460 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `_Traits_helper::move_s` with the secure-traits tag (the decompiler's library match;
+/// `cdecl`, five words, the tag not read): forwards to [`fn_0044e480`] and answers its
+/// result.
+pub fn fn_0044e460(
+    e: &mut Engine,
+    destination: u32,
+    destination_size: u32,
+    source: u32,
+    count: u32,
+    _unused_4: u32,
+) -> u32 {
+    fn_0044e480(e, destination, destination_size, source, count)
+}
+
+// Translated from 0044e480 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `char_traits::_Move_s` (the decompiler's library match; `cdecl`, four words):
+/// `memmove_s(dest, destsize, src, count)`, answers `dest`.
+pub fn fn_0044e480(
+    e: &mut Engine,
+    destination: u32,
+    destination_size: u32,
+    source: u32,
+    count: u32,
+) -> u32 {
+    e.call(
+        MEMMOVE_S,
+        &args![destination, destination_size, source, count],
+    );
+    destination
+}
+
+// Translated from 0044e680 (decompiled, FalloutNV.exe 1.4.0.525)
+/// A lookup of the lock-free map family of [`fn_0044e550`] (unnamed in the engine map;
+/// `ECX` and three stack words, `RET 0xc`; called by `0044b8d0`): after the empty hook,
+/// repeats `00529030(this, key, *argument)`; its answer picks the link to use, `+0x18`
+/// when true and `+0x14` when false. A null link answers false. While the linked node's
+/// flag (`0044df20`) is set, it starts over; otherwise it passes the node's first word and
+/// `argument` to vtable slot +0x30 of the object at `+0`, assigns the node's `+4` word into
+/// `holder` (`0092c820`) and answers true, unless the node's flag is set by then, in which
+/// case it clears `holder` (`006f74f0` with 0) and starts over. Ends with `00529000`.
+pub fn fn_0044e680(e: &mut Engine, this: Ptr, key: u32, argument: Ptr, holder: Ptr) -> bool {
+    e.call(EMPTY_HOOK, &[]);
+    let found = loop {
+        let word = e.mem.u32(argument.addr());
+        let began = e.call(LOOP_BEGIN, &args![this, key, word]).u8() != 0;
+        let link = Ptr::new(this.addr() + if began { 0x18 } else { 0x14 });
+        if fn_0044dec0(e, link) == 0 {
+            break false;
+        }
+        let node = fn_0044df00(e, link);
+        if fn_0044df20(e, Ptr::new(node)) {
+            continue;
+        }
+        let node = fn_0044df00(e, link);
+        let first = e.mem.u32(node);
+        let owner = e.mem.u32(this.addr());
+        e.vcall(owner, 0x30, &args![first, argument]);
+        let node = fn_0044df00(e, link);
+        e.call(HOLDER_ASSIGN, &args![holder, node.wrapping_add(4)]);
+        let node = fn_0044df00(e, link);
+        if fn_0044df20(e, Ptr::new(node)) {
+            e.call(POINTER_ASSIGN, &args![holder, 0u32]);
+            continue;
+        }
+        break true;
+    };
+    e.call(LOOP_RELEASE, &args![this]);
+    found
+}
+
+/// A local copy of a node pointer (`006ecba0(0, pointer)` on the local at `local`).
+fn copy_local(e: &mut Engine, local: u32, pointer: u32) {
+    e.call(LOCAL_CONSTRUCT, &args![local, 0u32, pointer]);
+}
+
+// Translated from 0044e820 (decompiled, FalloutNV.exe 1.4.0.525)
+/// A search of the lock-free map family of [`fn_0044e550`] (unnamed in the engine map;
+/// `ECX` and two stack words, `RET 8`; called by `0044d3f0`): finds the bucket for `key`
+/// once (`0044ee20` on the object at `+0`), then walks its chain with hazard words: the
+/// current link at `+0x10`, the node at `+0x14` (published at `*this[+8]`), the next at
+/// `+0x18` (published at `*this[+4]`), each publication followed by the empty hook. The walk
+/// restarts from the bucket whenever a key (`00559450`) no longer matches that of a local
+/// copy (`006ecba0`) of the pointer. A null node answers false. An unflagged next node
+/// (`0044dff0`): the node's `+4` word equal to `*value` answers true, otherwise the link
+/// moves to the node's `+8` (the node published at `*this[+0xc]`). A flagged next node is
+/// unlinked (`00666510` with the node) when `004491c0(link, key of the next copy, key of
+/// the node copy)` answers true, else the walk restarts. Then the next node becomes the
+/// current one, published at `*this[+8]`.
+pub fn fn_0044e820(e: &mut Engine, this: Ptr, key: u32, value: Ptr) -> bool {
+    let base = this.addr();
+    let owner = e.mem.u32(base);
+    let bucket = e.call(LOOKUP, &args![owner, key]).u32();
+    let node_link = Ptr::new(base + 0x14);
+    let next_link = Ptr::new(base + 0x18);
+    // The frame's three local copies (`EBP-0xc`, `EBP-0x10`, `EBP-0x18`).
+    e.with_stack(12, |e, frame| {
+        let (start_copy, node_copy, next_copy) = (frame.addr(), frame.addr() + 4, frame.addr() + 8);
+        loop {
+            e.mem.set_u32(base + 0x10, bucket);
+            let first = e.mem.u32(e.mem.u32(base + 0x10));
+            e.mem.set_u32(base + 0x14, first);
+            let node = fn_0044dec0(e, node_link);
+            let hazard = e.mem.u32(base + 8);
+            e.mem.set_u32(hazard, node);
+            e.call(EMPTY_HOOK, &[]);
+            let node = fn_0044dec0(e, node_link);
+            copy_local(e, start_copy, node);
+            let link = e.mem.u32(base + 0x10);
+            let link_key = e.call(OBJECT_KEY, &args![link]).u32();
+            if link_key != e.call(OBJECT_KEY, &args![start_copy]).u32() {
+                continue;
+            }
+            loop {
+                if fn_0044dec0(e, node_link) == 0 {
+                    return false;
+                }
+                let node = fn_0044df00(e, node_link);
+                let next = e.mem.u32(node.wrapping_add(8));
+                e.mem.set_u32(base + 0x18, next);
+                let next = fn_0044dec0(e, next_link);
+                let hazard = e.mem.u32(base + 4);
+                e.mem.set_u32(hazard, next);
+                e.call(EMPTY_HOOK, &[]);
+                let next_key = e.call(OBJECT_KEY, &args![next_link]).u32();
+                let node = fn_0044df00(e, node_link);
+                if next_key != e.call(OBJECT_KEY, &args![node.wrapping_add(8)]).u32() {
+                    break;
+                }
+                let node = fn_0044dec0(e, node_link);
+                let node_value = e.mem.u32(node.wrapping_add(4));
+                let node = fn_0044dec0(e, node_link);
+                copy_local(e, node_copy, node);
+                let link = e.mem.u32(base + 0x10);
+                let link_key = e.call(OBJECT_KEY, &args![link]).u32();
+                if link_key != e.call(OBJECT_KEY, &args![node_copy]).u32() {
+                    break;
+                }
+                if !fn_0044dff0(e, next_link) {
+                    if node_value == e.mem.u32(value.addr()) {
+                        return true;
+                    }
+                    let node = fn_0044df00(e, node_link);
+                    e.mem.set_u32(base + 0x10, node.wrapping_add(8));
+                    let node = fn_0044dec0(e, node_link);
+                    let hazard = e.mem.u32(base + 0xc);
+                    e.mem.set_u32(hazard, node);
+                    e.call(EMPTY_HOOK, &[]);
+                } else {
+                    let next = fn_0044dec0(e, next_link);
+                    copy_local(e, next_copy, next);
+                    let node_copy_key = e.call(OBJECT_KEY, &args![node_copy]).u32();
+                    let next_copy_key = e.call(OBJECT_KEY, &args![next_copy]).u32();
+                    let link = e.mem.u32(base + 0x10);
+                    let unlinked = e
+                        .call(
+                            UNLINK_TEST_004491C0,
+                            &args![link, next_copy_key, node_copy_key],
+                        )
+                        .u8();
+                    if unlinked == 0 {
+                        break;
+                    }
+                    let node = fn_0044dec0(e, node_link);
+                    e.call(UNLINK_00666510, &args![this, node]);
+                }
+                let next = e.mem.u32(base + 0x18);
+                e.mem.set_u32(base + 0x14, next);
+                let next = fn_0044dec0(e, next_link);
+                let hazard = e.mem.u32(base + 8);
+                e.mem.set_u32(hazard, next);
+                e.call(EMPTY_HOOK, &[]);
+            }
+        }
+    })
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x0044_e370, fn_0044e370(Ptr, Ptr) -> Ptr),
+        entry!(0x0044_e460, fn_0044e460(u32, u32, u32, u32, u32) -> u32),
+        entry!(0x0044_e480, fn_0044e480(u32, u32, u32, u32) -> u32),
+        entry!(0x0044_e680, fn_0044e680(Ptr, u32, Ptr, Ptr) -> bool),
+        entry!(0x0044_e820, fn_0044e820(Ptr, u32, Ptr) -> bool),
         entry!(0x0044dec0, fn_0044dec0(Ptr) -> u32),
         entry!(0x0044df00, fn_0044df00(Ptr) -> u32),
         entry!(0x0044df40, fn_0044df40(Ptr, u32, u32) -> Ptr),
@@ -1121,5 +1326,184 @@ mod tests {
                 assert_eq!(calls_to(&mut e, OPERATOR_DELETE).len(), frees as usize);
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod n075_tests {
+    use super::*;
+
+    type Log = Vec<(u32, Vec<u32>)>;
+
+    fn calls(log: &Log, callee: u32) -> Vec<Vec<u32>> {
+        log.iter()
+            .filter(|(a, _)| *a == callee)
+            .map(|(_, w)| w.clone())
+            .collect()
+    }
+
+    #[test]
+    fn fn_0044e370_copies_the_pointer_and_takes_a_reference() {
+        let mut e = Engine::new();
+        e.register(ADD_REFERENCE, |_, _| Ret::default());
+        let words = e.mem.alloc(8);
+        e.mem.set_u32(words + 4, 0x1234);
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x0044_e370, &args![words, words + 4]).u32(), words);
+        assert_eq!(e.mem.u32(words), 0x1234);
+        e.mem.set_u32(words + 4, 0);
+        e.call(0x0044_e370, &args![words, words + 4]);
+        assert_eq!(e.mem.u32(words), 0);
+        let log = e.call_log.take().unwrap();
+        assert_eq!(calls(&log, ADD_REFERENCE), vec![vec![0x1234]]);
+    }
+
+    #[test]
+    fn fn_0044e460_and_0044e480_move_through_memmove_s() {
+        let mut e = Engine::new();
+        e.register(MEMMOVE_S, |_, _| 0x22u32.into_ret());
+        e.call_log = Some(vec![]);
+        assert_eq!(
+            e.call(0x0044_e460, &args![0x10u32, 0x20u32, 0x30u32, 4u32, 9u32])
+                .u32(),
+            0x10
+        );
+        assert_eq!(
+            e.call(0x0044_e480, &args![0x11u32, 0x21u32, 0x31u32, 5u32])
+                .u32(),
+            0x11
+        );
+        let log = e.call_log.take().unwrap();
+        assert_eq!(
+            calls(&log, MEMMOVE_S),
+            vec![vec![0x10, 0x20, 0x30, 4], vec![0x11, 0x21, 0x31, 5]]
+        );
+    }
+
+    /// The map object for 0044e680: owner with a vtable whose slot +0x30 is a double.
+    fn map_engine(began: bool) -> (Engine, u32, u32) {
+        let mut e = Engine::new();
+        e.register(EMPTY_HOOK, |_, _| Ret::default());
+        e.register(LOOP_RELEASE, |_, _| Ret::default());
+        e.register(HOLDER_ASSIGN, |_, _| Ret::default());
+        e.register(POINTER_ASSIGN, |_, _| Ret::default());
+        e.register(0x0060_0030, |_, _| Ret::default());
+        e.register(
+            LOOP_BEGIN,
+            if began {
+                |_, _| 1u32.into_ret()
+            } else {
+                |_, _| 0x100u32.into_ret()
+            },
+        );
+        let mut slots = vec![0u32; 13];
+        slots[12] = 0x0060_0030;
+        e.put_vtable(0x0070_0000, &slots);
+        let owner = e.mem.alloc(4);
+        e.mem.set_u32(owner, 0x0070_0000);
+        let this = e.mem.alloc(0x20);
+        e.mem.set_u32(this, owner);
+        e.call_log = Some(vec![]);
+        (e, this, owner)
+    }
+
+    #[test]
+    fn fn_0044e680_reports_the_node_of_the_chosen_link() {
+        for began in [true, false] {
+            let (mut e, this, owner) = map_engine(began);
+            let node = e.mem.alloc(0x10);
+            e.mem.set_u32(node, 0x5151);
+            e.mem
+                .set_u32(this + if began { 0x18 } else { 0x14 }, node | 1);
+            let argument = e.mem.alloc(4);
+            e.mem.set_u32(argument, 0x77);
+            let found = e
+                .call(0x0044_e680, &args![this, 0x99u32, argument, 0x4000u32])
+                .bool();
+            assert!(found);
+            let log = e.call_log.take().unwrap();
+            assert_eq!(calls(&log, LOOP_BEGIN), vec![vec![this, 0x99, 0x77]]);
+            assert_eq!(
+                calls(&log, 0x0060_0030),
+                vec![vec![owner, 0x5151, argument]]
+            );
+            assert_eq!(calls(&log, HOLDER_ASSIGN), vec![vec![0x4000, node + 4]]);
+            assert_eq!(calls(&log, LOOP_RELEASE), vec![vec![this]]);
+        }
+    }
+
+    #[test]
+    fn fn_0044e680_answers_false_for_a_null_link() {
+        let (mut e, this, _) = map_engine(true);
+        let argument = e.mem.alloc(4);
+        let found = e
+            .call(0x0044_e680, &args![this, 0x99u32, argument, 0x4000u32])
+            .bool();
+        assert!(!found);
+        let log = e.call_log.take().unwrap();
+        assert!(calls(&log, HOLDER_ASSIGN).is_empty());
+        assert_eq!(calls(&log, LOOP_RELEASE).len(), 1);
+    }
+
+    /// The chain for 0044e820: `this` with its hazard words, the bucket holding `first`.
+    fn chain_engine(first: u32) -> (Engine, u32) {
+        let mut e = Engine::new();
+        e.register(EMPTY_HOOK, |_, _| Ret::default());
+        e.register(OBJECT_KEY, |_, _| 0u32.into_ret());
+        e.register(LOCAL_CONSTRUCT, |e, a| {
+            e.mem.set_u32(a[0], a[2]);
+            Ret::default()
+        });
+        e.register(UNLINK_TEST_004491C0, |_, _| 1u32.into_ret());
+        e.register(UNLINK_00666510, |_, _| Ret::default());
+        let this = e.mem.alloc(0x20);
+        let hazards = e.mem.alloc(0x10);
+        for (i, offset) in [4u32, 8, 0xc].iter().enumerate() {
+            e.mem.set_u32(this + offset, hazards + 4 * i as u32);
+        }
+        let bucket = e.mem.alloc(4);
+        e.mem.set_u32(bucket, first);
+        e.register_double(LOOKUP, move |_, _| bucket.into_ret());
+        e.call_log = Some(vec![]);
+        (e, this)
+    }
+
+    fn node(e: &mut Engine, value: u32, next: u32) -> u32 {
+        let node = e.mem.alloc(0x10);
+        e.mem.set_u32(node + 4, value);
+        e.mem.set_u32(node + 8, next);
+        node
+    }
+
+    #[test]
+    fn fn_0044e820_finds_a_value_or_reaches_the_end() {
+        let (mut e, this) = chain_engine(0);
+        let a = node(&mut e, 5, 0);
+        // Point the bucket at the node (the bucket word is the chain's first link).
+        let bucket = e.call(LOOKUP, &args![0u32, 0u32]).u32();
+        e.mem.set_u32(bucket, a);
+        let value = e.mem.alloc(4);
+        e.mem.set_u32(value, 5);
+        assert!(e.call(0x0044_e820, &args![this, 1u32, value]).bool());
+        e.mem.set_u32(value, 6);
+        assert!(!e.call(0x0044_e820, &args![this, 1u32, value]).bool());
+        // The link moved to the node's +8 before the end was reached.
+        assert_eq!(e.mem.u32(this + 0x10), a + 8);
+    }
+
+    #[test]
+    fn fn_0044e820_unlinks_a_flagged_next_node() {
+        let (mut e, this) = chain_engine(0);
+        let b = node(&mut e, 6, 0);
+        let a = node(&mut e, 5, b | 1);
+        let bucket = e.call(LOOKUP, &args![0u32, 0u32]).u32();
+        e.mem.set_u32(bucket, a);
+        let value = e.mem.alloc(4);
+        e.mem.set_u32(value, 6);
+        e.call_log = Some(vec![]);
+        assert!(e.call(0x0044_e820, &args![this, 1u32, value]).bool());
+        let log = e.call_log.take().unwrap();
+        assert_eq!(calls(&log, UNLINK_00666510), vec![vec![this, a]]);
+        assert_eq!(calls(&log, UNLINK_TEST_004491C0), vec![vec![bucket, 0, 0]]);
     }
 }

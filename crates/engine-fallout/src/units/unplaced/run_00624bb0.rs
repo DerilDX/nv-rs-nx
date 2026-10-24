@@ -11,9 +11,27 @@ pub fn fn_00624be0(e: &mut Engine, this: Ptr, flags: u32) -> u32 {
         .u32()
 }
 
+// Translated from 00624bb0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`ECX`, plain `RET`; called by `00624720`): `0047b4d0` on
+/// `this` with 8, answering its `EAX`.
+pub fn fn_00624bb0(e: &mut Engine, this: Ptr) -> u32 {
+    e.call(0x0047_b4d0, &args![this, 8u32]).u32()
+}
+
+// Translated from 00624bd0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Clears the counter at `011f942c` (unnamed in the engine map; no arguments, plain
+/// `RET`; called by `00624720`).
+pub fn fn_00624bd0(e: &mut Engine) {
+    e.set_global(0x011f_942cu32, 0u32);
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
-    vec![entry!(0x0062_4be0, fn_00624be0(Ptr, u32) -> u32)]
+    vec![
+        entry!(0x0062_4be0, fn_00624be0(Ptr, u32) -> u32),
+        entry!(0x0062_4bb0, fn_00624bb0(Ptr) -> u32),
+        entry!(0x0062_4bd0, fn_00624bd0()),
+    ]
 }
 
 #[cfg(test)]
@@ -48,5 +66,21 @@ mod le81_thunk_tests {
             check(0x0062_4be0, 0x0062_4190, 0x4, &[0x1]).u32(),
             0xdead_beef
         );
+    }
+}
+
+#[cfg(test)]
+mod n075_tests {
+    use super::*;
+
+    #[test]
+    fn fn_00624bb0_and_00624bd0() {
+        let mut e = Engine::new();
+        e.register(0x0047_b4d0, |_, a| (a[0] + a[1]).into_ret());
+        assert_eq!(e.call(0x0062_4bb0, &args![0x1000u32]).u32(), 0x1008);
+        e.map(0x011f_9000, 0x1000);
+        e.set_global(0x011f_942cu32, 7u32);
+        e.call(0x0062_4bd0, &args![]);
+        assert_eq!(e.global::<u32>(0x011f_942c), 0);
     }
 }

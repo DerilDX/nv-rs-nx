@@ -45,6 +45,9 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x004ed900, ni_t_pointer_list_base_remove_all(Ptr)),
         entry!(0x0076b660, ni_t_pointer_list_base_add_head(Ptr, Ptr)),
     ]
+    .into_iter()
+    .chain(funcs_n086())
+    .collect()
 }
 
 #[cfg(test)]
@@ -98,5 +101,62 @@ mod tests {
         let log = e.call_log.take().unwrap();
         let add = log.iter().find(|c| c.0 == ADD_NODE_HEAD).unwrap();
         assert_eq!(add.1, [list, 0x7300_0000]);
+    }
+}
+
+/// The list's insertion before a node (`004ede90`, `thiscall (list,
+/// before, node)`).
+const INSERT_NODE_BEFORE: u32 = 0x004e_de90;
+
+// Translated from 007b5330 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiTPointerListBase<NiTPointerAllocator<unsigned int>, Script*>::InsertBefore`
+/// (engine map): a new node (`0049fa80`) holding the element `*element` (at
+/// node +8), inserted before `before` (`004ede90`), whose answer is passed
+/// on.
+pub fn ni_t_pointer_list_base_insert_before(
+    e: &mut Engine,
+    this: Ptr,
+    before: u32,
+    element: Ptr,
+) -> u32 {
+    let node = e.call(NEW_NODE, &args![this]).u32();
+    let value = e.mem.u32(element.addr());
+    e.mem.set_u32(node + 8, value);
+    e.call(INSERT_NODE_BEFORE, &args![this, before, node]).u32()
+}
+
+/// This unit's n086 translations, by exe address.
+fn funcs_n086() -> Vec<(u32, AbiFn)> {
+    vec![entry!(
+        0x007b_5330,
+        ni_t_pointer_list_base_insert_before(Ptr, u32, Ptr) -> u32
+    )]
+}
+
+#[cfg(test)]
+mod n086_tests {
+    use super::*;
+
+    #[test]
+    fn insert_before_links_a_new_node() {
+        let mut e = Engine::new();
+        let node = e.mem.alloc(0xc);
+        e.register_double(NEW_NODE, move |_, _| node.into_ret());
+        e.register(INSERT_NODE_BEFORE, |_, a| a[2].into_ret());
+        let element = e.mem.alloc(4);
+        e.mem.set_u32(element, 0x5c5c);
+        e.call_log = Some(vec![]);
+        let answer = e.call(0x007b_5330, &args![0x100u32, 0x200u32, element]);
+        assert_eq!(answer.u32(), node);
+        assert_eq!(e.mem.u32(node + 8), 0x5c5c);
+        let inserted: Vec<_> = e
+            .call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|c| c.0 == INSERT_NODE_BEFORE)
+            .map(|c| c.1.clone())
+            .collect();
+        assert_eq!(inserted, vec![vec![0x100, 0x200, node]]);
     }
 }

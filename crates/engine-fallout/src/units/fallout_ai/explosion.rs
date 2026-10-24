@@ -117,7 +117,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x009b13a0, fn_009b13a0(Ptr)),
         entry!(0x009b1450, fn_009b1450(Ptr) -> bool),
         entry!(0x00471840, fn_00471840(Ptr) -> u32),
-        entry!(0x009ac170, fn_009ac170(Ptr, Ptr)),
+        entry!(0x009ac170, fn_009ac170(Ptr, Ptr) -> u32),
         entry!(0x009ac190, fn_009ac190(Ptr) -> Ptr),
         entry!(0x009ac1d0, fn_009ac1d0(Ptr, u32) -> Ptr),
         entry!(0x009ac550, fn_009ac550(Ptr) -> f32),
@@ -158,9 +158,10 @@ pub fn fn_00471840(_e: &mut Engine, _this: Ptr) -> u32 {
 
 // Translated from 009ac170 (decompiled, FalloutNV.exe 1.4.0.525)
 /// Assigns the actor-cause pointer held at `this+0xD0` through the engine's
-/// reference-pointer helper.
-pub fn fn_009ac170(e: &mut Engine, this: Ptr, cause: Ptr) {
-    e.call(0x0042_f780, &args![this.addr() + 0xd0, cause]);
+/// reference-pointer helper, answering the helper's value (the exe ends on
+/// that call and keeps its `EAX`; the virtual slot's `ActorCause*`).
+pub fn fn_009ac170(e: &mut Engine, this: Ptr, cause: Ptr) -> u32 {
+    e.call(0x0042_f780, &args![this.addr() + 0xd0, cause]).u32()
 }
 
 // Translated from 009ac190 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -5548,6 +5549,16 @@ mod tests {
         let mut e = engine_with(&[0x0042_f780]);
         fn_009ac170(&mut e, Ptr::new(0x1000), Ptr::new(0x2000));
         assert_eq!(e.call_log.unwrap()[0].1, vec![0x10d0, 0x2000]);
+    }
+
+    #[test]
+    fn actor_cause_release_answers_the_helper() {
+        let mut e = Engine::new();
+        e.register(0x0042_f780, |_, a| a[0].into_ret());
+        assert_eq!(
+            e.call(0x009a_c170, &args![0x1000u32, 0x2000u32]).u32(),
+            0x10d0
+        );
     }
 
     #[test]

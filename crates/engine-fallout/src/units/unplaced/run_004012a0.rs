@@ -303,9 +303,71 @@ pub fn fn_00401510(e: &mut Engine, this: Ptr, file: Ptr) -> bool {
     true
 }
 
+/// `__RTDynamicCast` (`00ec43fb`, `cdecl`: object, vftable delta, source type, target type,
+/// is-reference).
+const DYNAMIC_CAST: u32 = 0x00ec_43fb;
+/// RTTI type descriptors `.?AVTESForm@@` and `.?AVBGSDehydrationStage@@`.
+const TYPE_TES_FORM: u32 = 0x0118_3028;
+const TYPE_DEHYDRATION_STAGE: u32 = 0x0118_3004;
+/// `TESForm::CopyAllComponents` (Xbox PDB, `004851b0`, `ECX`, one stack word: the source).
+const COPY_ALL_COMPONENTS: u32 = 0x0048_51b0;
+/// `TESForm::CompareAllComponents` (Xbox PDB, `00485270`, `ECX`, one stack word), `AL`.
+const COMPARE_ALL_COMPONENTS: u32 = 0x0048_5270;
+/// `00401460` (`cdecl`, three words: destination, source, size).
+const COPY_BYTES_00401460: u32 = 0x0040_1460;
+/// The CRT's `memcmp` (`00ec4835`, `cdecl`).
+const MEMCMP: u32 = 0x00ec_4835;
+
+// Translated from 00401400 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BGSDehydrationStage`'s `Copy` slot (+0x108 of its vtable `0101144c`; unnamed in the
+/// engine map; `ECX` and one stack word, `RET 4`): casts `source` from `TESForm` to
+/// `BGSDehydrationStage`; when that answers a stage, `TESForm::CopyAllComponents` from it,
+/// then `00401460` copies 8 bytes from its stage data (`00500940`) into this one's.
+pub fn fn_00401400(e: &mut Engine, this: Ptr, source: Ptr) {
+    let stage = e
+        .call(
+            DYNAMIC_CAST,
+            &args![source, 0u32, TYPE_TES_FORM, TYPE_DEHYDRATION_STAGE, 0u32],
+        )
+        .u32();
+    if stage == 0 {
+        return;
+    }
+    e.call(COPY_ALL_COMPONENTS, &args![this, stage]);
+    let from = e.call(SORT_KEY_ADDRESS, &args![stage]).u32();
+    let to = e.call(SORT_KEY_ADDRESS, &args![this]).u32();
+    e.call(COPY_BYTES_00401460, &args![to, from, 8u32]);
+}
+
+// Translated from 00401480 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BGSDehydrationStage`'s `Compare` slot (+0x10c of its vtable `0101144c`; unnamed in the
+/// engine map; `ECX` and one stack word, `RET 4`): true (different) when `other` is not a
+/// `BGSDehydrationStage` (`__RTDynamicCast` from `TESForm`), when
+/// `TESForm::CompareAllComponents` answers true, or when `memcmp` finds the 8 bytes of the
+/// two stage datas (`00500940`; this one's first) different; false otherwise.
+pub fn fn_00401480(e: &mut Engine, this: Ptr, other: Ptr) -> bool {
+    let stage = e
+        .call(
+            DYNAMIC_CAST,
+            &args![other, 0u32, TYPE_TES_FORM, TYPE_DEHYDRATION_STAGE, 0u32],
+        )
+        .u32();
+    if stage == 0 {
+        return true;
+    }
+    if e.call(COMPARE_ALL_COMPONENTS, &args![this, stage]).u8() != 0 {
+        return true;
+    }
+    let theirs = e.call(SORT_KEY_ADDRESS, &args![stage]).u32();
+    let mine = e.call(SORT_KEY_ADDRESS, &args![this]).u32();
+    e.call(MEMCMP, &args![mine, theirs, 8u32]).u32() != 0
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x0040_1400, fn_00401400(Ptr, Ptr)),
+        entry!(0x0040_1480, fn_00401480(Ptr, Ptr) -> bool),
         entry!(0x0040_1970, fn_00401970(Ptr)),
         entry!(0x00401500, fn_00401500() -> u8),
         entry!(0x00401660, fn_00401660(Ptr<TESFile>) -> u32),
@@ -756,5 +818,96 @@ mod physics_work_ahead_tests {
             ]);
             assert_eq!(log, expected);
         }
+    }
+}
+
+#[cfg(test)]
+mod n075_tests {
+    use super::*;
+
+    type Log = Vec<(u32, Vec<u32>)>;
+
+    /// An engine whose cast answers its object when `cast` is set (else null), with the
+    /// component compare answering `differ` and `memcmp` answering `bytes_differ`.
+    fn engine(cast: bool, differ: bool, bytes_differ: bool) -> Engine {
+        let mut e = Engine::new();
+        e.register(
+            DYNAMIC_CAST,
+            if cast {
+                |_, a| a[0].into_ret()
+            } else {
+                |_, _| 0u32.into_ret()
+            },
+        );
+        e.register(COPY_ALL_COMPONENTS, |_, _| Ret::default());
+        e.register(
+            COMPARE_ALL_COMPONENTS,
+            if differ {
+                |_, _| 0x0101u32.into_ret()
+            } else {
+                |_, _| 0x0100u32.into_ret()
+            },
+        );
+        e.register(SORT_KEY_ADDRESS, |_, a| (a[0] + 0x18).into_ret());
+        e.register(COPY_BYTES_00401460, |_, _| Ret::default());
+        e.register(
+            MEMCMP,
+            if bytes_differ {
+                |_, _| 0xffff_ffffu32.into_ret()
+            } else {
+                |_, _| 0u32.into_ret()
+            },
+        );
+        e.call_log = Some(vec![]);
+        e
+    }
+
+    fn log_without(e: &mut Engine, top: u32) -> Log {
+        e.call_log
+            .take()
+            .unwrap()
+            .into_iter()
+            .filter(|(a, _)| *a != top)
+            .collect()
+    }
+
+    #[test]
+    fn fn_00401400_copies_components_and_data_from_a_stage() {
+        let mut e = engine(true, false, false);
+        e.call(0x0040_1400, &args![0x1000u32, 0x2000u32]);
+        let log = log_without(&mut e, 0x0040_1400);
+        assert_eq!(
+            log,
+            vec![
+                (
+                    DYNAMIC_CAST,
+                    vec![0x2000, 0, TYPE_TES_FORM, TYPE_DEHYDRATION_STAGE, 0]
+                ),
+                (COPY_ALL_COMPONENTS, vec![0x1000, 0x2000]),
+                (SORT_KEY_ADDRESS, vec![0x2000]),
+                (SORT_KEY_ADDRESS, vec![0x1000]),
+                (COPY_BYTES_00401460, vec![0x1018, 0x2018, 8]),
+            ]
+        );
+        let mut e = engine(false, false, false);
+        e.call(0x0040_1400, &args![0x1000u32, 0x2000u32]);
+        assert_eq!(log_without(&mut e, 0x0040_1400).len(), 1);
+    }
+
+    #[test]
+    fn fn_00401480_compares_type_components_and_data() {
+        let compare = |cast, differ, bytes| {
+            let mut e = engine(cast, differ, bytes);
+            let r = e.call(0x0040_1480, &args![0x1000u32, 0x2000u32]).bool();
+            (r, log_without(&mut e, 0x0040_1480))
+        };
+        assert!(compare(false, false, false).0);
+        let (r, log) = compare(true, true, false);
+        assert!(r);
+        assert!(log.iter().all(|(a, _)| *a != MEMCMP));
+        assert!(compare(true, false, true).0);
+        let (r, log) = compare(true, false, false);
+        assert!(!r);
+        assert_eq!(log.last().unwrap(), &(MEMCMP, vec![0x1018, 0x2018, 8]));
     }
 }

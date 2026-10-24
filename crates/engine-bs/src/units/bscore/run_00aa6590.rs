@@ -32,9 +32,23 @@ pub fn fn_00aa65b0(e: &mut Engine, this: Ptr<MemoryPool>) {
     }
 }
 
+/// Import slot of KERNEL32 `ExitThread` (stdcall, one word; it does not return).
+const EXIT_THREAD: u32 = 0x00fd_f148;
+
+// Translated from 00aa6590 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map: a thread's stop step (`thiscall`, two stack words, `RET 8`;
+/// `this` and the second word are not read): `ExitThread(exit_code)`. The exe's code after
+/// the call only returns.
+pub fn fn_00aa6590(e: &mut Engine, _this: Ptr, exit_code: u32, _unused_2: u32) {
+    e.call(EXIT_THREAD, &args![exit_code]);
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
-    vec![entry!(0x00aa65b0, fn_00aa65b0(Ptr<MemoryPool>))]
+    vec![
+        entry!(0x00aa_6590, fn_00aa6590(Ptr, u32, u32)),
+        entry!(0x00aa65b0, fn_00aa65b0(Ptr<MemoryPool>)),
+    ]
 }
 
 #[cfg(test)]
@@ -82,5 +96,27 @@ mod tests {
         e.call_log = Some(vec![]);
         e.call(0x00aa_65b0, &args![pool]);
         assert!(tries(&e.call_log.take().unwrap()).is_empty());
+    }
+}
+
+#[cfg(test)]
+mod n082_tests {
+    use super::*;
+
+    #[test]
+    fn fn_00aa6590_exits_the_thread_with_the_code() {
+        let mut e = Engine::new();
+        e.register(EXIT_THREAD, |_, _| Ret::default());
+        e.call_log = Some(vec![]);
+        e.call(0x00aa_6590, &args![0x5000u32, 3u32, 9u32]);
+        let exits: Vec<_> = e
+            .call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|c| c.0 == EXIT_THREAD)
+            .map(|c| c.1.clone())
+            .collect();
+        assert_eq!(exits, vec![vec![3]]);
     }
 }

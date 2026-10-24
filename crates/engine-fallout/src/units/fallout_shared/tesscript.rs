@@ -2435,9 +2435,10 @@ pub fn script_load(e: &mut Engine, this: Ptr<Script>, file: Ptr) -> bool {
 }
 
 // Translated from 005abd70 (decompiled, FalloutNV.exe 1.4.0.525)
-/// Passes its argument to `TESForm::Save` (`00483d20`).
-pub fn fn_005abd70(e: &mut Engine, this: Ptr<Script>, buffer: u32) {
-    e.call(FORM_SAVE, &args![this, buffer]);
+/// Passes its argument to `TESForm::Save` (`00483d20`) and answers its byte: the exe ends on
+/// that call and keeps its `AL` (the virtual slot's `bool`).
+pub fn fn_005abd70(e: &mut Engine, this: Ptr<Script>, buffer: u32) -> bool {
+    e.call(FORM_SAVE, &args![this, buffer]).bool()
 }
 
 /// Swaps the bytes of the script header when the save is big-endian
@@ -3635,7 +3636,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         ),
         entry!(0x005ab930, fn_005ab930(u32, u32, u32)),
         entry!(0x005ab9f0, script_load(Ptr<Script>, Ptr) -> bool),
-        entry!(0x005abd70, fn_005abd70(Ptr<Script>, u32)),
+        entry!(0x005abd70, fn_005abd70(Ptr<Script>, u32) -> bool),
         entry!(0x005abd90, fn_005abd90(Ptr<Script>)),
         entry!(0x005abe00, script_save_result_script(Ptr<Script>)),
         entry!(0x005abe50, script_set_text(Ptr<Script>, u32)),
@@ -6482,6 +6483,16 @@ mod tests {
         e.call(0x005a_bd70, &args![this, 0xb0f0u32]);
         let log = e.call_log.take().unwrap();
         assert_eq!(calls_to(&log, FORM_SAVE), vec![vec![this.addr(), 0xb0f0]]);
+    }
+
+    #[test]
+    fn save_answers_the_form_save() {
+        let mut e = tail_engine();
+        e.register(FORM_SAVE, |_, _| 1u32.into_ret());
+        let this = e.new_object::<Script>();
+        assert!(e.call(0x005a_bd70, &args![this, 0xb0f0u32]).bool());
+        e.register(FORM_SAVE, |_, _| 0u32.into_ret());
+        assert!(!e.call(0x005a_bd70, &args![this, 0xb0f0u32]).bool());
     }
 
     #[test]

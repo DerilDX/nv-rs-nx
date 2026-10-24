@@ -160,9 +160,25 @@ pub fn fn_00b79a60(e: &mut Engine, count: u32) -> Ptr {
     Ptr::new(array)
 }
 
+// Translated from 00b79d70 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`ECX` only): the byte at +0x10.
+pub fn fn_00b79d70(e: &mut Engine, this: Ptr) -> u8 {
+    e.mem.u8(this.addr().wrapping_add(0x10))
+}
+
+// Translated from 00b79d80 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`thiscall`, `RET 4`: a byte): stores the
+/// byte at +0x24 and answers true.
+pub fn fn_00b79d80(e: &mut Engine, this: Ptr, value: u8) -> bool {
+    e.mem.set_u8(this.addr().wrapping_add(0x24), value);
+    true
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x00b7_9d70, fn_00b79d70(Ptr) -> u8),
+        entry!(0x00b7_9d80, fn_00b79d80(Ptr, u8) -> bool),
         entry!(0x00b7_9a60, fn_00b79a60(u32) -> Ptr),
         entry!(0x00b7_9b00, fn_00b79b00(Ptr, Ptr, Ptr, Ptr, Ptr) -> Ptr),
         entry!(0x00b7_99c0, fn_00b799c0(Ptr)),
@@ -346,5 +362,21 @@ mod new_array_tests {
             ]
         );
         assert!(calls(&e, VECTOR_CONSTRUCT).is_empty());
+    }
+}
+
+#[cfg(test)]
+mod n072_tests {
+    use super::*;
+
+    #[test]
+    fn the_byte_accessors() {
+        let mut e = Engine::new();
+        let this = e.mem.alloc(0x28);
+        e.mem.set_u8(this + 0x10, 0x5a);
+        assert_eq!(e.call(0x00b7_9d70, &args![this]).u8(), 0x5a);
+        let r = e.call(0x00b7_9d80, &args![this, 0x1c3u32]);
+        assert_eq!(r.u8(), 1);
+        assert_eq!(e.mem.u8(this + 0x24), 0xc3);
     }
 }

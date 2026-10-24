@@ -1661,6 +1661,7 @@ address	size	unit	subsystem	evidence
 00ea3950	265	NiCollision/niboxbv.cpp	NiCollision	imm 00e99129
 00ea3c50	265	NiCollision/niboxbv.cpp	NiCollision	imm 00e99137
 00ea7490	87	NiCollision/niboxbv.cpp	NiCollision	imm 00e9901d
+00ea7d40	14888	NiCollision/niboxbv.cpp	NiCollision	imm 00e99130
 00eabb20	1608		NiCollision	imm 00e99114
 00eac170	93		NiCollision	imm 00e99045
 00eac3f0	1734	NiCollision/nispherebv.cpp	NiCollision	imm 00e991f2

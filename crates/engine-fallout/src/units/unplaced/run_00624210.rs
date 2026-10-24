@@ -462,9 +462,22 @@ pub fn fn_00624b10(e: &mut Engine, destination: Ptr, source: Ptr) -> Ptr {
     destination
 }
 
+/// The counter [`fn_00624560`] increments.
+const COUNTER: u32 = 0x011f_942c;
+
+// Translated from 00624560 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Increments the counter at `011f942c` (unnamed in the engine map; no arguments, plain
+/// `RET`; called by `00624340` and `00624580`) and answers its new value (`EAX`).
+pub fn fn_00624560(e: &mut Engine) -> u32 {
+    let value = e.global::<u32>(COUNTER).wrapping_add(1);
+    e.set_global(COUNTER, value);
+    value
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x0062_4560, fn_00624560() -> u32),
         entry!(0x0062_4210, fn_00624210(Ptr)),
         entry!(0x0062_4230, fn_00624230(Ptr)),
         entry!(0x0062_42a0, fn_006242a0(Ptr, Ptr)),
@@ -831,5 +844,19 @@ mod tests {
                 vec![0x1000, 2, point]
             ]
         );
+    }
+}
+
+#[cfg(test)]
+mod n075_tests {
+    use super::*;
+
+    #[test]
+    fn fn_00624560_counts_up() {
+        let mut e = Engine::new();
+        e.map(0x011f_9000, 0x1000);
+        e.set_global(COUNTER, 41u32);
+        assert_eq!(e.call(0x0062_4560, &args![]).u32(), 42);
+        assert_eq!(e.global::<u32>(COUNTER), 42);
     }
 }

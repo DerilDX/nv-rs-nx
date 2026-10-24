@@ -65,9 +65,40 @@ pub fn fn_00d87940(
     0
 }
 
+/// `GetCurrentThreadId` import slot (`kernel32`, no arguments).
+const GET_CURRENT_THREAD_ID: u32 = 0x00fd_f1d0;
+
+// Translated from 00d87a40 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map: the calling thread's id (`GetCurrentThreadId`) as a 64-bit
+/// value (`EDX` cleared).
+pub fn fn_00d87a40(e: &mut Engine) -> u64 {
+    let id = e.call(GET_CURRENT_THREAD_ID, &args![]).u32();
+    u64::from(id)
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
-    vec![entry!(0x00d8_7940, fn_00d87940(Ptr, u32, u32, Ptr, u32) -> u32)]
+    vec![
+        entry!(0x00d8_7940, fn_00d87940(Ptr, u32, u32, Ptr, u32) -> u32),
+        entry!(0x00d8_7a40, fn_00d87a40() -> u64),
+    ]
+}
+
+#[cfg(test)]
+mod n081_tests {
+    use super::*;
+
+    #[test]
+    fn thread_id_is_widened_with_a_zero_high_word() {
+        let mut e = Engine::new();
+        e.register(GET_CURRENT_THREAD_ID, |_, _| Ret {
+            eax: 0x1234,
+            edx: 0xdead,
+            ..Ret::default()
+        });
+        let r = e.call(0x00d8_7a40, &args![]);
+        assert_eq!((r.eax, r.edx), (0x1234, 0));
+    }
 }
 
 #[cfg(test)]

@@ -3725,9 +3725,991 @@ pub fn fn_00af7c40(e: &mut Engine, first: u32, second: u32, types: u32) {
     e.call(LEAVE_CRITICAL_SECTION, &args![ARCHIVE_LIST_LOCK]);
 }
 
+/// The single `NiPointer<Archive>` `00af5550` clears besides the two rows (`011f8188`).
+const ARCHIVE_POINTER_011F8188: u32 = 0x011f_8188;
+/// `BSRandom` (`BSCore/bsrandom.cpp`): the generator `00af7400` draws from (`011c4180`), its
+/// construction guard word (bit 0 at `011c4b4c`), its constructor (`00aa5140`, thiscall) and
+/// `BSRandom::UnsignedInt` (`00aa5230`, thiscall, one word: the bound).
+const RANDOM_GENERATOR: u32 = 0x011c_4180;
+const RANDOM_GENERATOR_GUARD: u32 = 0x011c_4b4c;
+const BS_RANDOM_CONSTRUCTOR: u32 = 0x00aa_5140;
+const BS_RANDOM_UNSIGNED_INT: u32 = 0x00aa_5230;
+/// The memory manager's reallocation (`00aa4150`, thiscall: block, size).
+const MEMORY_MANAGER_REALLOCATE: u32 = 0x00aa_4150;
+/// `BSSimpleArray<BSHash*,1024>`'s vtable (`010a469c`), its initial set-up (`00afcde0`,
+/// thiscall: reserve, size) and the clear its destructor runs (`00a1bfa0`, thiscall, one
+/// word; the engine map names it `BSSimpleArray<ButtonIcon,1024>::Clear`, a folded body).
+const HASH_ARRAY_VTABLE: u32 = 0x010a_469c;
+const HASH_ARRAY_INITIAL_SETUP: u32 = 0x00af_cde0;
+const SIMPLE_ARRAY_CLEAR_00A1BFA0: u32 = 0x00a1_bfa0;
+/// The `Archive` vtable slot (+0x18) that answers its name, and the `BSFile` slots the
+/// `ArchiveFile` reads go through on the archive: the seek (+0x14), and the two transfers
+/// (+0x2c, +0x30; buffer and size).
+const NAME_SLOT: u32 = 0x18;
+const TRANSFER_SLOT_2C: u32 = 0x2c;
+const TRANSFER_SLOT_30: u32 = 0x30;
+/// The `BSFile` word at +0x38 the `ArchiveFile` transfers read as a position (-1 when the
+/// true file position `iTrueFilePos` holds instead); not named here.
+const POSITION_OVERRIDE: u32 = 0x38;
+
+/// The address of `NiPointer` `index` of row `row` of the two rows at `011f8190`.
+fn archive_pointer(row: u32, index: u32) -> u32 {
+    ARCHIVE_POINTER_ROWS
+        .wrapping_add(row.wrapping_mul(ARCHIVE_POINTER_ROW_SIZE))
+        .wrapping_add(index.wrapping_mul(4))
+}
+
+// Translated from 00af4390 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (no arguments): answers false.
+pub fn fn_00af4390(_e: &mut Engine) -> bool {
+    false
+}
+
+// Translated from 00af44f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (no arguments): gives the two string copies `011f8158` and
+/// `011f815c` back to the memory manager (each when not null; the words are not cleared).
+pub fn fn_00af44f0(e: &mut Engine) {
+    if e.global::<u32>(STRING_011F8158) != 0 {
+        let block = e.global::<u32>(STRING_011F8158);
+        free(e, block);
+    }
+    if e.global::<u32>(STRING_011F815C) != 0 {
+        let block = e.global::<u32>(STRING_011F815C);
+        free(e, block);
+    }
+}
+
+// Translated from 00af5480 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (cdecl, one word): under the archive list's lock, adds
+/// `archive` at the end of the list `011f8160` ([`fn_00afcc10`] with an `NiPointer`
+/// temporary holding a reference) when there is a list.
+// Translation incomplete: 00af5480 - its FS:[0] exception frame (unwinding the NiPointer temporary) is not translated
+pub fn fn_00af5480(e: &mut Engine, archive: u32) {
+    e.call(ENTER_CRITICAL_SECTION, &args![ARCHIVE_LIST_LOCK]);
+    if e.global::<u32>(ARCHIVE_LIST) != 0 {
+        e.with_stack(4, |e, temporary| {
+            e.mem.set_u32(temporary.addr(), archive);
+            let held = e.mem.u32(temporary.addr());
+            if held != 0 {
+                add_ref(e, held);
+            }
+            let head = e.global::<u32>(ARCHIVE_LIST);
+            fn_00afcc10(e, Ptr::new(head), temporary);
+            let held = e.mem.u32(temporary.addr());
+            if held != 0 {
+                release(e, held);
+            }
+        });
+    }
+    e.call(LEAVE_CRITICAL_SECTION, &args![ARCHIVE_LIST_LOCK]);
+}
+
+// Translated from 00af5550 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (cdecl, one word): takes `archive` out. False without a list or
+/// an archive; otherwise, under the archive list's lock, removes it from the list
+/// ([`fn_00afc960`] with an `NiPointer` temporary), clears every pointer to it in the two
+/// rows at `011f8190` and in `011f8188` ([`fn_00afd1b0`] with null) and answers true.
+// Translation incomplete: 00af5550 - its FS:[0] exception frame (unwinding the NiPointer temporary) is not translated
+pub fn fn_00af5550(e: &mut Engine, archive: u32) -> bool {
+    if e.global::<u32>(ARCHIVE_LIST) == 0 || archive == 0 {
+        return false;
+    }
+    e.call(ENTER_CRITICAL_SECTION, &args![ARCHIVE_LIST_LOCK]);
+    e.with_stack(4, |e, temporary| {
+        e.mem.set_u32(temporary.addr(), archive);
+        let held = e.mem.u32(temporary.addr());
+        if held != 0 {
+            add_ref(e, held);
+        }
+        let head = e.global::<u32>(ARCHIVE_LIST);
+        fn_00afc960(e, Ptr::new(head), temporary);
+        let held = e.mem.u32(temporary.addr());
+        if held != 0 {
+            release(e, held);
+        }
+    });
+    for i in 0..9u32 {
+        if e.mem.u32(archive_pointer(0, i)) == archive {
+            fn_00afd1b0(e, Ptr::new(archive_pointer(0, i)), 0);
+        }
+        if e.mem.u32(archive_pointer(1, i)) == archive {
+            fn_00afd1b0(e, Ptr::new(archive_pointer(1, i)), 0);
+        }
+    }
+    if e.global::<u32>(ARCHIVE_POINTER_011F8188) == archive {
+        fn_00afd1b0(e, Ptr::new(ARCHIVE_POINTER_011F8188), 0);
+    }
+    e.call(LEAVE_CRITICAL_SECTION, &args![ARCHIVE_LIST_LOCK]);
+    true
+}
+
+// Translated from 00af56d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (cdecl, one word): false without a list or an archive;
+/// otherwise takes `archive` out ([`fn_00af5550`]) and answers true.
+pub fn fn_00af56d0(e: &mut Engine, archive: u32) -> bool {
+    if e.global::<u32>(ARCHIVE_LIST) == 0 || archive == 0 {
+        return false;
+    }
+    fn_00af5550(e, archive);
+    true
+}
+
+// Translated from 00af5700 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (cdecl, one word): takes out the opened archive named `name`.
+/// With a list, `name` is copied into a `char[0x104]` local, which the `FileFinder` lookup
+/// (`00afe0d0(name, local, 1, -1)`, none without a finder) rewrites; when it answers
+/// non-zero, the first archive of the list whose name (vtable +0x18) equals the local
+/// (`_stricmp`) is taken out ([`fn_00af5550`]) and the answer is true; false otherwise.
+// Translation incomplete: 00af5700 - its /GS stack cookie check is not translated
+pub fn fn_00af5700(e: &mut Engine, name: u32) -> bool {
+    if e.global::<u32>(ARCHIVE_LIST) == 0 {
+        return false;
+    }
+    e.with_stack(0x10c, |e, local| {
+        let local = local.addr();
+        e.call(STRCPY_S, &args![local, 0x104u32, name]);
+        let finder = e.global::<u32>(FILE_FINDER);
+        let found = if finder != 0 {
+            e.call(
+                FILE_FINDER_LOOKUP,
+                &args![finder, name, local, 1u32, 0xffff_ffffu32],
+            )
+            .u32()
+        } else {
+            0
+        };
+        if found == 0 {
+            return false;
+        }
+        let mut node = e.global::<u32>(ARCHIVE_LIST);
+        while node != 0 {
+            let archive = e.mem.u32(node);
+            if archive != 0 {
+                let own = e.vcall(archive, NAME_SLOT, &args![]).u32();
+                if e.call(STRICMP, &args![own, local]).i32() == 0 {
+                    fn_00af5550(e, archive);
+                    return true;
+                }
+            }
+            node = e.mem.u32(node + 4);
+        }
+        false
+    })
+}
+
+// Translated from 00af5e40 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ArchiveManager::InvalidateFile` (Xbox PDB; cdecl, one word): with a list, trims the path
+/// (`TrimFileName`), hashes its directory and file (`00afd270`) and asks each archive of the
+/// list in turn (holding a reference) to invalidate the file ([`fn_00afac20`]); answers
+/// whether one did.
+// Translation incomplete: 00af5e40 - its FS:[0] exception frame (unwinding the held reference) is not translated
+pub fn archive_manager_invalidate_file(e: &mut Engine, path: u32) -> bool {
+    if e.global::<u32>(ARCHIVE_LIST) == 0 {
+        return false;
+    }
+    let path = e.call(TRIM_FILE_NAME, &args![path]).u32();
+    e.with_stack(0x10, |e, hashes| {
+        let directory = hashes.addr();
+        let file = directory + 8;
+        e.call(HASH_PATH, &args![path, directory, file]);
+        let mut node = e.global::<u32>(ARCHIVE_LIST);
+        while node != 0 {
+            let archive = e.mem.u32(node);
+            if archive != 0 {
+                add_ref(e, archive);
+            }
+            if archive != 0
+                && fn_00afac20(
+                    e,
+                    Ptr::new(archive),
+                    Ptr::new(directory),
+                    Ptr::new(file),
+                    path,
+                )
+            {
+                if archive != 0 {
+                    release(e, archive);
+                }
+                return true;
+            }
+            node = e.mem.u32(node + 4);
+            if archive != 0 {
+                release(e, archive);
+            }
+        }
+        false
+    })
+}
+
+// Translated from 00af6430 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (cdecl, four words): the file entry ([`fn_00afa6e0`] with the
+/// last three words) in the archive of slot `index`: the first row's (`011f8190`) when it is
+/// set, else the second row's; 0 without an archive. A reference is held around the lookup.
+// Translation incomplete: 00af6430 - its FS:[0] exception frame (unwinding the held reference) is not translated
+pub fn fn_00af6430(e: &mut Engine, index: u32, directory: u32, file: u32, name: u32) -> u32 {
+    let mut result = 0;
+    let slot = if e.mem.u32(archive_pointer(0, index)) != 0 {
+        archive_pointer(0, index)
+    } else {
+        archive_pointer(1, index)
+    };
+    let archive = e.mem.u32(slot);
+    if archive != 0 {
+        add_ref(e, archive);
+    }
+    if archive != 0 {
+        result = fn_00afa6e0(
+            e,
+            Ptr::new(archive),
+            Ptr::new(directory),
+            Ptr::new(file),
+            Ptr::new(name),
+        );
+    }
+    if archive != 0 {
+        release(e, archive);
+    }
+    result
+}
+
+// Translated from 00af6690 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (cdecl, four words): the first file entry
+/// ([`fn_00afa6e0`] with the last three words) found in an archive of the list whose
+/// `iArchiveType` shares a bit with the low 16 bits of `types`, each archive held by a
+/// reference while it is asked; 0 when none has it.
+// Translation incomplete: 00af6690 - its FS:[0] exception frame (unwinding the held reference) is not translated
+pub fn fn_00af6690(e: &mut Engine, types: u32, directory: u32, file: u32, name: u32) -> u32 {
+    let mut node = e.global::<u32>(ARCHIVE_LIST);
+    while node != 0 {
+        let archive = e.mem.u32(node);
+        if archive != 0 {
+            add_ref(e, archive);
+        }
+        if archive != 0 {
+            let kind = u32::from(e.get(Ptr::<Archive>::new(archive), Archive::iArchiveType));
+            if kind & types & 0xffff != 0 {
+                let entry = fn_00afa6e0(
+                    e,
+                    Ptr::new(archive),
+                    Ptr::new(directory),
+                    Ptr::new(file),
+                    Ptr::new(name),
+                );
+                if entry != 0 {
+                    if archive != 0 {
+                        release(e, archive);
+                    }
+                    return entry;
+                }
+            }
+        }
+        node = e.mem.u32(node + 4);
+        if archive != 0 {
+            release(e, archive);
+        }
+    }
+    0
+}
+
+// Translated from 00af67d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (cdecl, three words): the name of the file of `entry` in the
+/// archive of slot `index` (the second row of `011f8190` when bit 31 of the entry's word
+/// +0xc is set, the first otherwise): with an archive, under its lock (+0x19c), the name
+/// [`fn_00af9ba0`] finds is copied into `out` (`strcpy_s`, 0x104); answers whether there was
+/// one. A reference is held around it.
+// Translation incomplete: 00af67d0 - its FS:[0] exception frame (unwinding the held reference) is not translated
+pub fn fn_00af67d0(e: &mut Engine, index: u32, entry: u32, out: u32) -> bool {
+    let mut found = false;
+    let row = u32::from(e.mem.u32(entry.wrapping_add(0xc)) & 0x8000_0000 != 0);
+    let archive = e.mem.u32(archive_pointer(row, index));
+    if archive != 0 {
+        add_ref(e, archive);
+    }
+    if archive != 0 {
+        e.call(ENTER_CRITICAL_SECTION, &args![archive + 0x19c]);
+        let name = fn_00af9ba0(e, Ptr::new(archive), entry);
+        if name != 0 {
+            e.call(STRCPY_S, &args![out, 0x104u32, name]);
+            found = true;
+        }
+        e.call(LEAVE_CRITICAL_SECTION, &args![archive + 0x19c]);
+    }
+    if archive != 0 {
+        release(e, archive);
+    }
+    found
+}
+
+/// The search `00af7400` and `00af7800` share: the path trimmed (`TrimFileName`), the
+/// archive type taken from its extension when `types` is 0xFFFF and it does not end in `\`,
+/// its hash made (`00afd390(path, 1)`), then the first archive of the list of a matching
+/// type whose directory search ([`fn_00af9c50`]) finds the hash. Then, with an archive, a
+/// directory entry and files in it, under the archive's lock unless bit 5 of its
+/// `cArchiveFlags` is set, `choose` picks a file of the entry, whose name
+/// ([`fn_00af96d0`]) replaces the part of the trimmed path after its last `\` in `out`.
+/// Without a `\` the answer is false and the lock is not left (as the exe does).
+fn pick_file_in_directory(
+    e: &mut Engine,
+    path: u32,
+    out: u32,
+    types: u32,
+    choose: fn(&mut Engine, u32) -> u32,
+) -> bool {
+    let path = e.call(TRIM_FILE_NAME, &args![path]).u32();
+    let length = e.call(STRLEN, &args![path]).u32();
+    let mut types = types;
+    if types == 0xffff && e.mem.u8(path.wrapping_add(length).wrapping_sub(1)) != b'\\' {
+        types = archive_manager_get_archive_type_from_file_extension(e, Ptr::new(path));
+    }
+    // Locals: the hash (+0), the directory index (+8), the found archive (+0xc) and the
+    // archive being asked (+0x10), both `NiPointer`s.
+    e.with_stack(0x14, |e, locals| {
+        let hash = locals.addr();
+        let index = hash + 8;
+        let found = hash + 0xc;
+        let current = hash + 0x10;
+        e.call(HASH_CONSTRUCTOR, &args![hash, path, 1u32]);
+        let mut entry = 0u32;
+        // The found pointer starts null; the exe tests it before taking a reference.
+        if e.mem.u32(found) != 0 {
+            let held = e.mem.u32(found);
+            add_ref(e, held);
+        }
+        if e.mem.u32(found) == 0 {
+            let mut node = e.global::<u32>(ARCHIVE_LIST);
+            while node != 0 {
+                let archive = e.mem.u32(node);
+                e.mem.set_u32(current, archive);
+                if archive != 0 {
+                    add_ref(e, archive);
+                }
+                let archive = e.mem.u32(current);
+                let matches = archive != 0 && {
+                    let kind =
+                        u32::from(e.get(Ptr::<Archive>::new(archive), Archive::iArchiveType));
+                    kind & types & 0xffff != 0
+                        && fn_00af9c50(
+                            e,
+                            Ptr::new(archive),
+                            Ptr::new(hash),
+                            Ptr::new(index),
+                            Ptr::NULL,
+                        )
+                };
+                if matches {
+                    fn_00afc770(e, Ptr::new(found), Ptr::new(current));
+                    let archive = Ptr::<Archive>::new(e.mem.u32(found));
+                    entry =
+                        (e.mem.u32(index) << 4).wrapping_add(e.get(archive, Archive::pDirectories));
+                    let held = e.mem.u32(current);
+                    if held != 0 {
+                        release(e, held);
+                    }
+                    break;
+                }
+                node = e.mem.u32(node + 4);
+                let held = e.mem.u32(current);
+                if held != 0 {
+                    release(e, held);
+                }
+            }
+        }
+        let archive = e.mem.u32(found);
+        let release_found = |e: &mut Engine| {
+            let held = e.mem.u32(found);
+            if held != 0 {
+                release(e, held);
+            }
+        };
+        if archive == 0 || entry == 0 || e.mem.u32(entry + 8) == 0 {
+            release_found(e);
+            return false;
+        }
+        let lock = e.get(Ptr::<Archive>::new(archive), Archive::cArchiveFlags) & 0x20 == 0;
+        if lock {
+            e.call(ENTER_CRITICAL_SECTION, &args![archive + 0x19c]);
+        }
+        let file = choose(e, entry);
+        let directory = e.mem.u32(index);
+        let name = fn_00af96d0(e, Ptr::new(archive), directory, file);
+        e.call(STRCPY_S, &args![out, 0x104u32, path]);
+        let slash = e.call(STRRCHR, &args![out, 0x5cu32]).u32();
+        if slash == 0 {
+            release_found(e);
+            return false;
+        }
+        let room = 0x104u32
+            .wrapping_sub(slash.wrapping_sub(out))
+            .wrapping_sub(1);
+        e.call(STRCPY_S, &args![slash.wrapping_add(1), room, name]);
+        if lock {
+            let archive = e.mem.u32(found);
+            e.call(LEAVE_CRITICAL_SECTION, &args![archive + 0x19c]);
+        }
+        release_found(e);
+        true
+    })
+}
+
+/// `00af7400`'s pick: a random file of the directory entry (`BSRandom::UnsignedInt` with the
+/// entry's file count, the generator `011c4180` constructed on first use).
+fn random_file(e: &mut Engine, entry: u32) -> u32 {
+    let count = e.mem.u32(entry + 8);
+    let guard = e.global::<u32>(RANDOM_GENERATOR_GUARD);
+    if guard & 1 == 0 {
+        e.set_global(RANDOM_GENERATOR_GUARD, guard | 1);
+        e.call(BS_RANDOM_CONSTRUCTOR, &args![RANDOM_GENERATOR]);
+    }
+    e.call(BS_RANDOM_UNSIGNED_INT, &args![RANDOM_GENERATOR, count])
+        .u32()
+}
+
+/// `00af7800`'s pick: the first file of the directory entry with the smallest low 30 bits
+/// of its word +8.
+fn smallest_file(e: &mut Engine, entry: u32) -> u32 {
+    let mut chosen = 0u32;
+    let mut smallest = 0xffff_ffffu32;
+    let mut i = 0u32;
+    while i < e.mem.u32(entry + 8) {
+        let file = (i << 4).wrapping_add(e.mem.u32(entry + 0xc));
+        let value = e.mem.u32(file.wrapping_add(8)) & 0x3fff_ffff;
+        if value < smallest {
+            smallest = value;
+            chosen = i;
+        }
+        i = i.wrapping_add(1);
+    }
+    chosen
+}
+
+// Translated from 00af7400 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (cdecl, three words): writes into `out` the path of a random
+/// file of the directory `path` names in the opened archives (see
+/// [`pick_file_in_directory`]; the file drawn by `BSRandom::UnsignedInt`); answers whether
+/// it did.
+// Translation incomplete: 00af7400 - its FS:[0] exception frame (unwinding the NiPointer locals and the generator's construction) is not translated
+pub fn fn_00af7400(e: &mut Engine, path: u32, out: u32, types: u32) -> bool {
+    pick_file_in_directory(e, path, out, types, random_file)
+}
+
+// Translated from 00af7800 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (cdecl, three words): as [`fn_00af7400`], the file picked being
+/// the first one with the smallest low 30 bits of its entry word +8.
+// Translation incomplete: 00af7800 - its FS:[0] exception frame (unwinding the NiPointer locals) is not translated
+pub fn fn_00af7800(e: &mut Engine, path: u32, out: u32, types: u32) -> bool {
+    pick_file_in_directory(e, path, out, types, smallest_file)
+}
+
+// Translated from 00af7e80 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (cdecl, two words): whether the hash of `name`
+/// (`00afd390(name, 0)`) compares equal ([`fn_00afcf00`] answers 0) with the hash at
+/// `hash`.
+pub fn fn_00af7e80(e: &mut Engine, name: u32, hash: u32) -> bool {
+    e.with_stack(8, |e, local| {
+        e.call(HASH_CONSTRUCTOR, &args![local, name, 0u32]);
+        fn_00afcf00(e, Ptr::new(hash), local) == 0
+    })
+}
+
+// Translated from 00af94c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (thiscall on an `Archive`, one word): the name of directory
+/// `directory`. With bit 4 of `cArchiveFlags` (the names kept) it is
+/// `pDirectoryStringArray + pDirectoryStringOffsets[directory]`; without names in the
+/// archive (`oFlags` bit 0) it is null. Otherwise it is read from the file: a seek (vtable
+/// +0x14, origin `010a2480`) past the header and the directory entries
+/// (`iDirectories * 16 + 0x24`), then for each directory before `directory` its length byte
+/// (through `m_pfnRead`) and a seek (origin `010a2484`) past that many bytes and its file
+/// entries; its own length byte; `pDirectoryStringArray` replaced by a block of that length
+/// (memory manager) that the name is read into.
+pub fn fn_00af94c0(e: &mut Engine, this: Ptr<Archive>, directory: u32) -> u32 {
+    if e.get(this, Archive::cArchiveFlags) & 0x10 != 0 {
+        let offsets = e.get(this, Archive::pDirectoryStringOffsets);
+        let offset = e.mem.u32(offsets.wrapping_add(directory.wrapping_mul(4)));
+        return e
+            .get(this, Archive::pDirectoryStringArray)
+            .wrapping_add(offset);
+    }
+    if e.get(this, Archive::oFlags) & 1 == 0 {
+        return 0;
+    }
+    let directories = e.get(this, Archive::iDirectories);
+    let origin = e.global::<u32>(NI_FILE_SEEK_SET);
+    e.vcall(
+        this.addr(),
+        SEEK_SLOT,
+        &args![(directories << 4).wrapping_add(0x24), origin],
+    );
+    e.with_stack(4, |e, length| {
+        let length = length.addr();
+        let mut i = 0u32;
+        while i < directory {
+            read_through_pointer(e, this, length, 1);
+            let entries = e.get(this, Archive::pDirectories);
+            let files = e.mem.u32(entries.wrapping_add(i << 4).wrapping_add(8));
+            let origin = e.global::<u32>(NI_FILE_SEEK_CURRENT);
+            let skip = u32::from(e.mem.u8(length)).wrapping_add(files << 4);
+            e.vcall(this.addr(), SEEK_SLOT, &args![skip, origin]);
+            i = i.wrapping_add(1);
+        }
+        read_through_pointer(e, this, length, 1);
+        if e.get(this, Archive::pDirectoryStringArray) != 0 {
+            let old = e.get(this, Archive::pDirectoryStringArray);
+            free(e, old);
+            e.set(this, Archive::pDirectoryStringArray, 0);
+        }
+        let size = u32::from(e.mem.u8(length));
+        let block = allocate(e, size);
+        e.set(this, Archive::pDirectoryStringArray, block);
+        let size = u32::from(e.mem.u8(length));
+        let block = e.get(this, Archive::pDirectoryStringArray);
+        read_through_pointer(e, this, block, size);
+        e.get(this, Archive::pDirectoryStringArray)
+    })
+}
+
+// Translated from 00af9ad0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (thiscall on an `Archive`, one word): the index of the
+/// directory whose file entries (16 bytes each, from its word +0xc, its word +8 of them)
+/// hold the address `entry`; -1 when none does.
+pub fn fn_00af9ad0(e: &mut Engine, this: Ptr<Archive>, entry: u32) -> u32 {
+    let mut i = 0u32;
+    while i < e.get(this, Archive::iDirectories) {
+        let directory = (i << 4).wrapping_add(e.get(this, Archive::pDirectories));
+        let first = e.mem.u32(directory.wrapping_add(0xc));
+        let size = e.mem.u32(directory.wrapping_add(8)) << 4;
+        if entry >= first && entry < first.wrapping_add(size) {
+            return i;
+        }
+        i = i.wrapping_add(1);
+    }
+    0xffff_ffff
+}
+
+// Translated from 00af9b60 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (thiscall on an `Archive`, two words): the index of the file
+/// entry `entry` in directory `directory` (`(entry - first entry) >> 4`).
+pub fn fn_00af9b60(e: &mut Engine, this: Ptr<Archive>, directory: u32, entry: u32) -> u32 {
+    let record = (directory << 4).wrapping_add(e.get(this, Archive::pDirectories));
+    let first = e.mem.u32(record.wrapping_add(0xc));
+    entry.wrapping_sub(first) >> 4
+}
+
+// Translated from 00af9ba0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (thiscall on an `Archive`, one word): the name of the file of
+/// `entry` ([`fn_00af96d0`] with its directory, [`fn_00af9ad0`], and its index there,
+/// [`fn_00af9b60`]); null when no directory holds the entry.
+pub fn fn_00af9ba0(e: &mut Engine, this: Ptr<Archive>, entry: u32) -> u32 {
+    let directory = fn_00af9ad0(e, this, entry);
+    if directory == 0xffff_ffff {
+        return 0;
+    }
+    let file = fn_00af9b60(e, this, directory, entry);
+    fn_00af96d0(e, this, directory, file)
+}
+
+// Translated from 00afa8e0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (thiscall on an `Archive`, three words): a name collision
+/// check. With the byte `011f8154` set and bits 0 and 1 of `oFlags`, `path` is split
+/// (`_splitpath_s`: directory and file name, 0x104 each) and, when the hashes find a file
+/// ([`fn_00af9bf0`]), the archive's directory name ([`fn_00af94c0`]) and file name
+/// ([`fn_00af96d0`]) are copied (memory-manager blocks of `strlen + 1`, `strcpy_s` given
+/// `strlen` as the size) and the four strings upper-cased (`_strupr_s`, given their
+/// lengths). A differing directory frees both copies and answers the archive's directory
+/// name; a differing file name frees both and answers the archive's file name; otherwise 0
+/// (the copies are kept, as the exe does).
+// Translation incomplete: 00afa8e0 - its /GS stack cookie check is not translated
+pub fn fn_00afa8e0(
+    e: &mut Engine,
+    this: Ptr<Archive>,
+    directory: u32,
+    file: u32,
+    path: u32,
+) -> u32 {
+    if e.global::<u8>(FLAG_SET_BY_00AF4460) == 0 {
+        return 0;
+    }
+    if e.get(this, Archive::oFlags) & 1 == 0 || e.get(this, Archive::oFlags) & 2 == 0 {
+        return 0;
+    }
+    e.with_stack(0x210, |e, locals| {
+        let split_directory = locals.addr();
+        let split_name = split_directory + 0x108;
+        let indices = split_directory + 0x208;
+        e.call(
+            SPLITPATH_S,
+            &args![
+                path,
+                0u32,
+                0u32,
+                split_directory,
+                0x104u32,
+                split_name,
+                0x104u32,
+                0u32,
+                0u32
+            ],
+        );
+        if !fn_00af9bf0(
+            e,
+            this,
+            Ptr::new(directory),
+            Ptr::new(file),
+            Ptr::new(indices),
+            Ptr::new(indices + 4),
+            Ptr::NULL,
+        ) {
+            return 0;
+        }
+        let directory_index = e.mem.u32(indices);
+        let own_directory = fn_00af94c0(e, this, directory_index);
+        let file_index = e.mem.u32(indices + 4);
+        let directory_index = e.mem.u32(indices);
+        let own_name = fn_00af96d0(e, this, directory_index, file_index);
+        let length = e.call(STRLEN, &args![own_directory]).u32();
+        let directory_copy = allocate(e, length.wrapping_add(1));
+        let length = e.call(STRLEN, &args![own_name]).u32();
+        let name_copy = allocate(e, length.wrapping_add(1));
+        let length = e.call(STRLEN, &args![own_directory]).u32();
+        e.call(STRCPY_S, &args![directory_copy, length, own_directory]);
+        let length = e.call(STRLEN, &args![own_name]).u32();
+        e.call(STRCPY_S, &args![name_copy, length, own_name]);
+        for text in [directory_copy, name_copy, split_directory, split_name] {
+            let length = e.call(STRLEN, &args![text]).u32();
+            e.call(STRUPR_S, &args![text, length]);
+        }
+        if e.call(STRICMP, &args![directory_copy, split_directory])
+            .i32()
+            != 0
+        {
+            free(e, directory_copy);
+            free(e, name_copy);
+            return own_directory;
+        }
+        if e.call(STRICMP, &args![name_copy, split_name]).i32() != 0 {
+            free(e, directory_copy);
+            free(e, name_copy);
+            return own_name;
+        }
+        0
+    })
+}
+
+/// Clears the low 31 bits of a file entry's word +0xc (its offset), keeping bit 31.
+fn clear_offset_keep_top_bit(e: &mut Engine, file: u32) {
+    let word = e.mem.u32(file.wrapping_add(0xc));
+    e.mem.set_u32(file.wrapping_add(0xc), word & 0x8000_0000);
+}
+
+// Translated from 00afac20 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (thiscall on an `Archive`, three words; the third is not read):
+/// when the hashes find a file ([`fn_00af9bf0`] with no name), clears its entry's offset
+/// (word +0xc less bit 31) and answers true.
+pub fn fn_00afac20(
+    e: &mut Engine,
+    this: Ptr<Archive>,
+    directory: Ptr,
+    file: Ptr,
+    _unused_3: u32,
+) -> bool {
+    e.with_stack(8, |e, indices| {
+        let directory_index = indices.addr();
+        let file_index = directory_index + 4;
+        if !fn_00af9bf0(
+            e,
+            this,
+            directory,
+            file,
+            Ptr::new(directory_index),
+            Ptr::new(file_index),
+            Ptr::NULL,
+        ) {
+            return false;
+        }
+        let record =
+            (e.mem.u32(directory_index) << 4).wrapping_add(e.get(this, Archive::pDirectories));
+        let entry = (e.mem.u32(file_index) << 4).wrapping_add(e.mem.u32(record.wrapping_add(0xc)));
+        clear_offset_keep_top_bit(e, entry);
+        true
+    })
+}
+
+// Translated from 00afac90 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (thiscall on an `Archive`, three words; the third is not read):
+/// when directory `directory` holds the file hash ([`fn_00afa120`] with no name, not any),
+/// clears its entry's offset (word +0xc less bit 31) and answers true.
+pub fn fn_00afac90(
+    e: &mut Engine,
+    this: Ptr<Archive>,
+    directory: u32,
+    file: Ptr,
+    _unused_3: u32,
+) -> bool {
+    e.with_stack(4, |e, index| {
+        if !fn_00afa120(e, this, directory, file, index, Ptr::NULL, false) {
+            return false;
+        }
+        let record = (directory << 4).wrapping_add(e.get(this, Archive::pDirectories));
+        let entry =
+            (e.mem.u32(index.addr()) << 4).wrapping_add(e.mem.u32(record.wrapping_add(0xc)));
+        clear_offset_keep_top_bit(e, entry);
+        true
+    })
+}
+
+/// The `ArchiveFile` transfer `00afbc70` (slot +0x30) and `00afbde0` (slot +0x2c) share:
+/// asks the archive its name (vtable +0x18, the answer unused), takes its lock (when there
+/// is an archive), seeks it (vtable +0x14, origin 0) to this file's position plus
+/// `iArchiveOffset` unless it is there already (each position the word +0x38, or
+/// `iTrueFilePos` when that is -1), runs the transfer with `buffer` and `iFileSize`, adds
+/// its answer to `iTrueFilePos`, leaves the lock and answers it.
+fn archive_file_transfer(e: &mut Engine, this: Ptr<ArchiveFile>, buffer: u32, slot: u32) -> u32 {
+    let at = this.addr();
+    let position_of = |e: &Engine, file: u32| {
+        let word = e.mem.u32(file.wrapping_add(POSITION_OVERRIDE));
+        if word == 0xffff_ffff {
+            e.get(Ptr::<BSFile>::new(file), BSFile::iTrueFilePos)
+        } else {
+            word
+        }
+    };
+    let archive = e.get(this, ArchiveFile::spArchive);
+    e.vcall(archive, NAME_SLOT, &args![]);
+    if e.get(this, ArchiveFile::spArchive) != 0 {
+        let archive = e.get(this, ArchiveFile::spArchive);
+        e.call(ENTER_CRITICAL_SECTION, &args![archive.wrapping_add(0x19c)]);
+    }
+    let position = e
+        .get(this, ArchiveFile::iArchiveOffset)
+        .wrapping_add(position_of(e, at));
+    let archive = e.get(this, ArchiveFile::spArchive);
+    if position_of(e, archive) != position {
+        e.vcall(archive, SEEK_SLOT, &args![position, 0u32]);
+    }
+    let archive = e.get(this, ArchiveFile::spArchive);
+    let size = e.get(this.cast::<BSFile>(), BSFile::iFileSize);
+    let done = e.vcall(archive, slot, &args![buffer, size]).u32();
+    let file = this.cast::<BSFile>();
+    let moved = e.get(file, BSFile::iTrueFilePos).wrapping_add(done);
+    e.set(file, BSFile::iTrueFilePos, moved);
+    if e.get(this, ArchiveFile::spArchive) != 0 {
+        let archive = e.get(this, ArchiveFile::spArchive);
+        e.call(LEAVE_CRITICAL_SECTION, &args![archive.wrapping_add(0x19c)]);
+    }
+    done
+}
+
+// Translated from 00afbc70 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (thiscall on an `ArchiveFile`, two words; the second is not
+/// read): the whole-file transfer through the archive's vtable +0x30 (see
+/// [`archive_file_transfer`]).
+pub fn fn_00afbc70(e: &mut Engine, this: Ptr<ArchiveFile>, buffer: u32, _unused_2: u32) -> u32 {
+    archive_file_transfer(e, this, buffer, TRANSFER_SLOT_30)
+}
+
+// Translated from 00afbde0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (thiscall on an `ArchiveFile`, two words; the second is not
+/// read): the whole-file transfer through the archive's vtable +0x2c (see
+/// [`archive_file_transfer`]).
+pub fn fn_00afbde0(e: &mut Engine, this: Ptr<ArchiveFile>, buffer: u32, _unused_2: u32) -> u32 {
+    archive_file_transfer(e, this, buffer, TRANSFER_SLOT_2C)
+}
+
+// Translated from 00afbf50 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (thiscall, two words, none read): answers 0.
+pub fn fn_00afbf50(_e: &mut Engine, _this: Ptr, _unused_1: u32, _unused_2: u32) -> u32 {
+    0
+}
+
+// Translated from 00afbf60 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (thiscall on an `ArchiveFile`): whether it has an archive
+/// (`spArchive` not null).
+pub fn fn_00afbf60(e: &mut Engine, this: Ptr<ArchiveFile>) -> bool {
+    e.get(this, ArchiveFile::spArchive) != 0
+}
+
+// Translated from 00afc3e0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (thiscall, two words, none read): answers 0.
+pub fn fn_00afc3e0(_e: &mut Engine, _this: Ptr, _unused_1: u32, _unused_2: u32) -> u32 {
+    0
+}
+
+// Translated from 00afc3f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (thiscall, two words, none read): answers 0.
+pub fn fn_00afc3f0(_e: &mut Engine, _this: Ptr, _unused_1: u32, _unused_2: u32) -> u32 {
+    0
+}
+
+// Translated from 00afc400 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (thiscall, two words, none read): answers 0.
+pub fn fn_00afc400(_e: &mut Engine, _this: Ptr, _unused_1: u32, _unused_2: u32) -> u32 {
+    0
+}
+
+// Translated from 00afc410 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (thiscall on an `ArchiveFile`): whether it has an archive
+/// (`spArchive` not null).
+pub fn fn_00afc410(e: &mut Engine, this: Ptr<ArchiveFile>) -> bool {
+    e.get(this, ArchiveFile::spArchive) != 0
+}
+
+// Translated from 00afc960 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (thiscall on a `BSSimpleList<NiPointer<Archive>>` head node,
+/// one word): removes the archive `*item`. Nothing for a null archive or an empty list.
+/// Found in the head, the next node's archive moves into the head ([`fn_00afc770`]) and
+/// that node is unlinked, destroyed ([`fn_00afc7f0`]) and freed, or, with no next node, the
+/// head's archive is cleared ([`fn_00afd1b0`] with null); found further on, its node is
+/// unlinked, destroyed and freed.
+pub fn fn_00afc960(e: &mut Engine, this: Ptr, item: Ptr) {
+    let head = this.addr();
+    if e.mem.u32(item.addr()) == 0 {
+        return;
+    }
+    if e.mem.u32(head + 4) == 0 && e.mem.u32(head) == 0 {
+        return;
+    }
+    let mut node = head;
+    let mut previous = head;
+    while node != 0 && e.mem.u32(node) != e.mem.u32(item.addr()) {
+        previous = node;
+        node = e.mem.u32(node + 4);
+    }
+    if node == 0 {
+        return;
+    }
+    if node == head {
+        if e.mem.u32(head + 4) != 0 {
+            let next = e.mem.u32(head + 4);
+            let after = e.mem.u32(next + 4);
+            e.mem.set_u32(head + 4, after);
+            fn_00afc770(e, this, Ptr::new(next));
+            e.mem.set_u32(next + 4, 0);
+            if next != 0 {
+                fn_00afc7f0(e, Ptr::new(next));
+                free(e, next);
+            }
+        } else {
+            fn_00afd1b0(e, this, 0);
+        }
+    } else {
+        let after = e.mem.u32(node + 4);
+        e.mem.set_u32(previous + 4, after);
+        e.mem.set_u32(node + 4, 0);
+        if node != 0 {
+            fn_00afc7f0(e, Ptr::new(node));
+            free(e, node);
+        }
+    }
+}
+
+// Translated from 00afcce0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map: the `BSSimpleArray<BSHash*,1024>` constructor (thiscall): its
+/// vtable (`010a469c`) and the initial set-up `00afcde0(0, 0)`. Returns `this`.
+pub fn fn_00afcce0(e: &mut Engine, this: Ptr) -> Ptr {
+    e.mem.set_u32(this.addr(), HASH_ARRAY_VTABLE);
+    e.call(HASH_ARRAY_INITIAL_SETUP, &args![this, 0u32, 0u32]);
+    this
+}
+
+// Translated from 00afcd10 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map: `BSSimpleArray<BSHash*,1024>::_Allocate` shape (thiscall, one
+/// word, `this` not read): `count` pointers from the memory manager.
+pub fn fn_00afcd10(e: &mut Engine, _this: Ptr, count: u32) -> u32 {
+    allocate(e, count << 2)
+}
+
+// Translated from 00afcd40 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map: `BSSimpleArray<BSHash*,1024>::_Deallocate` shape (thiscall,
+/// one word, `this` not read): gives `buffer` back to the memory manager, passing its answer
+/// on.
+pub fn fn_00afcd40(e: &mut Engine, _this: Ptr, buffer: u32) -> u32 {
+    e.call(MEMORY_MANAGER_DEALLOCATE, &args![MEMORY_MANAGER, buffer])
+        .u32()
+}
+
+// Translated from 00afcd60 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map: `BSSimpleArray<BSHash*,1024>::_Reallocate` shape (thiscall,
+/// two words, `this` not read): the memory manager's reallocation of `buffer` to `count`
+/// pointers (`00aa4150`), whose answer it passes on.
+pub fn fn_00afcd60(e: &mut Engine, _this: Ptr, buffer: u32, count: u32) -> u32 {
+    e.call(
+        MEMORY_MANAGER_REALLOCATE,
+        &args![MEMORY_MANAGER, buffer, count << 2],
+    )
+    .u32()
+}
+
+// Translated from 00afcdc0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map: the `BSSimpleArray<BSHash*,1024>` destructor (thiscall): its
+/// vtable (`010a469c`), then the clear `00a1bfa0(1)`, whose answer it passes on.
+pub fn fn_00afcdc0(e: &mut Engine, this: Ptr) -> u32 {
+    e.mem.set_u32(this.addr(), HASH_ARRAY_VTABLE);
+    e.call(SIMPLE_ARRAY_CLEAR_00A1BFA0, &args![this, 1u32])
+        .u32()
+}
+
+// Translated from 00afcd90 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSSimpleArray<BSHash*,1024>::scalar deleting destructor` (engine map; thiscall, one
+/// word): destroys the array ([`fn_00afcdc0`]) and, with bit 0 of `flags`, gives it back to
+/// the memory manager. Answers `this`.
+pub fn bs_simple_array_bs_hash_scalar_deleting_destructor(
+    e: &mut Engine,
+    this: Ptr,
+    flags: u32,
+) -> Ptr {
+    fn_00afcdc0(e, this);
+    if flags & 1 != 0 {
+        free(e, this.addr());
+    }
+    this
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x00af_4390, fn_00af4390() -> bool),
+        entry!(0x00af_44f0, fn_00af44f0()),
+        entry!(0x00af_5480, fn_00af5480(u32)),
+        entry!(0x00af_5550, fn_00af5550(u32) -> bool),
+        entry!(0x00af_56d0, fn_00af56d0(u32) -> bool),
+        entry!(0x00af_5700, fn_00af5700(u32) -> bool),
+        entry!(0x00af_5e40, archive_manager_invalidate_file(u32) -> bool),
+        entry!(0x00af_6430, fn_00af6430(u32, u32, u32, u32) -> u32),
+        entry!(0x00af_6690, fn_00af6690(u32, u32, u32, u32) -> u32),
+        entry!(0x00af_67d0, fn_00af67d0(u32, u32, u32) -> bool),
+        entry!(0x00af_7400, fn_00af7400(u32, u32, u32) -> bool),
+        entry!(0x00af_7800, fn_00af7800(u32, u32, u32) -> bool),
+        entry!(0x00af_7e80, fn_00af7e80(u32, u32) -> bool),
+        entry!(0x00af_94c0, fn_00af94c0(Ptr<Archive>, u32) -> u32),
+        entry!(0x00af_9ad0, fn_00af9ad0(Ptr<Archive>, u32) -> u32),
+        entry!(0x00af_9b60, fn_00af9b60(Ptr<Archive>, u32, u32) -> u32),
+        entry!(0x00af_9ba0, fn_00af9ba0(Ptr<Archive>, u32) -> u32),
+        entry!(0x00af_a8e0, fn_00afa8e0(Ptr<Archive>, u32, u32, u32) -> u32),
+        entry!(
+            0x00af_ac20,
+            fn_00afac20(Ptr<Archive>, Ptr, Ptr, u32) -> bool
+        ),
+        entry!(
+            0x00af_ac90,
+            fn_00afac90(Ptr<Archive>, u32, Ptr, u32) -> bool
+        ),
+        entry!(0x00af_bc70, fn_00afbc70(Ptr<ArchiveFile>, u32, u32) -> u32),
+        entry!(0x00af_bde0, fn_00afbde0(Ptr<ArchiveFile>, u32, u32) -> u32),
+        entry!(0x00af_bf50, fn_00afbf50(Ptr, u32, u32) -> u32),
+        entry!(0x00af_bf60, fn_00afbf60(Ptr<ArchiveFile>) -> bool),
+        entry!(0x00af_c3e0, fn_00afc3e0(Ptr, u32, u32) -> u32),
+        entry!(0x00af_c3f0, fn_00afc3f0(Ptr, u32, u32) -> u32),
+        entry!(0x00af_c400, fn_00afc400(Ptr, u32, u32) -> u32),
+        entry!(0x00af_c410, fn_00afc410(Ptr<ArchiveFile>) -> bool),
+        entry!(0x00af_c960, fn_00afc960(Ptr, Ptr)),
+        entry!(0x00af_cce0, fn_00afcce0(Ptr) -> Ptr),
+        entry!(0x00af_cd10, fn_00afcd10(Ptr, u32) -> u32),
+        entry!(0x00af_cd40, fn_00afcd40(Ptr, u32) -> u32),
+        entry!(0x00af_cd60, fn_00afcd60(Ptr, u32, u32) -> u32),
+        entry!(
+            0x00af_cd90,
+            bs_simple_array_bs_hash_scalar_deleting_destructor(Ptr, u32) -> Ptr
+        ),
+        entry!(0x00af_cdc0, fn_00afcdc0(Ptr) -> u32),
         entry!(0x00af_7c40, fn_00af7c40(u32, u32, u32)),
         entry!(
             0x00af_59e0,
@@ -5963,5 +6945,648 @@ mod tests {
         e.call(0x00af_7c40, &args![0x11u32, 0x22u32, 3u32]);
         assert!(calls_to(&e, ARCHIVE_PER_FILE).is_empty());
         assert!(calls_to(&e, INTERLOCKED_INCREMENT).is_empty());
+    }
+
+    // Batch n083.
+
+    #[test]
+    fn n083_constant_answers() {
+        let (mut e, _) = engine();
+        assert!(!e.call(0x00af_4390, &args![]).bool());
+        for addr in [0x00af_bf50u32, 0x00af_c3e0, 0x00af_c3f0, 0x00af_c400] {
+            assert_eq!(e.call(addr, &args![0x1000u32, 1u32, 2u32]).u32(), 0);
+        }
+        let file = archive_file(&mut e, 0);
+        for addr in [0x00af_bf60u32, 0x00af_c410] {
+            assert!(!e.call(addr, &args![file]).bool());
+            e.set(file, ArchiveFile::spArchive, 0x1234);
+            assert!(e.call(addr, &args![file]).bool());
+            e.set(file, ArchiveFile::spArchive, 0);
+        }
+    }
+
+    #[test]
+    fn n083_string_copies_are_freed() {
+        let (mut e, _) = engine();
+        e.call(0x00af_44f0, &args![]);
+        assert!(calls_to(&e, MEMORY_MANAGER_DEALLOCATE).is_empty());
+        e.set_global(STRING_011F8158, 0x5000u32);
+        e.set_global(STRING_011F815C, 0x6000u32);
+        e.call(0x00af_44f0, &args![]);
+        assert_eq!(
+            calls_to(&e, MEMORY_MANAGER_DEALLOCATE),
+            vec![vec![MEMORY_MANAGER, 0x5000], vec![MEMORY_MANAGER, 0x6000]]
+        );
+        assert_eq!(e.global::<u32>(STRING_011F8158), 0x5000);
+    }
+
+    #[test]
+    fn n083_archive_is_added_at_the_end_under_the_lock() {
+        let (mut e, _) = engine();
+        let first = archive(&mut e);
+        let added = archive(&mut e);
+        // No list: only the lock.
+        e.call(0x00af_5480, &args![added]);
+        assert_eq!(
+            calls_to(&e, ENTER_CRITICAL_SECTION),
+            vec![vec![ARCHIVE_LIST_LOCK]]
+        );
+        assert_eq!(
+            calls_to(&e, LEAVE_CRITICAL_SECTION),
+            vec![vec![ARCHIVE_LIST_LOCK]]
+        );
+        assert!(calls_to(&e, INTERLOCKED_INCREMENT).is_empty());
+        let head = node(&mut e, first.addr(), 0);
+        e.set_global(ARCHIVE_LIST, head);
+        e.call(0x00af_5480, &args![added]);
+        let second = e.mem.u32(head + 4);
+        assert_eq!(e.mem.u32(second), added.addr());
+        // The list keeps one reference; the temporary's is given back.
+        assert_eq!(count(&e, added), 1);
+    }
+
+    #[test]
+    fn n083_archive_is_taken_out_of_the_list_and_the_rows() {
+        let (mut e, _) = engine();
+        let first = archive(&mut e);
+        let gone = archive(&mut e);
+        // No list or no archive: false.
+        assert!(!e.call(0x00af_5550, &args![gone]).bool());
+        assert!(!e.call(0x00af_56d0, &args![gone]).bool());
+        let tail = node(&mut e, gone.addr(), 0);
+        let head = node(&mut e, first.addr(), tail);
+        e.set_global(ARCHIVE_LIST, head);
+        assert!(!e.call(0x00af_5550, &args![0u32]).bool());
+        for slot in [
+            archive_pointer(0, 2),
+            archive_pointer(1, 8),
+            ARCHIVE_POINTER_011F8188,
+        ] {
+            e.mem.set_u32(slot, gone.addr());
+            add_ref(&mut e, gone.addr());
+        }
+        e.mem.set_u32(archive_pointer(0, 3), first.addr());
+        e.call_log = Some(vec![]);
+        assert!(e.call(0x00af_56d0, &args![gone]).bool());
+        assert_eq!(e.mem.u32(head + 4), 0);
+        for slot in [
+            archive_pointer(0, 2),
+            archive_pointer(1, 8),
+            ARCHIVE_POINTER_011F8188,
+        ] {
+            assert_eq!(e.mem.u32(slot), 0);
+        }
+        assert_eq!(e.mem.u32(archive_pointer(0, 3)), first.addr());
+        assert_eq!(count(&e, gone), 0);
+        assert_eq!(calls_to(&e, DELETE_THIS).len(), 1);
+        assert_eq!(calls_to(&e, ENTER_CRITICAL_SECTION).len(), 1);
+        assert_eq!(calls_to(&e, LEAVE_CRITICAL_SECTION).len(), 1);
+    }
+
+    #[test]
+    fn n083_archive_is_taken_out_by_name() {
+        let (mut e, _) = engine();
+        let a = archive(&mut e);
+        let name = text(&mut e, b"Fallout - Misc.bsa");
+        e.put_vtable(0x0300_0400, &[0, 0, 0, 0, 0, 0, 0x0070_0400]);
+        e.mem.set_u32(a.addr(), 0x0300_0400);
+        e.register_double(0x0070_0400, move |_, _| name.into_ret());
+        let head = node(&mut e, a.addr(), 0);
+        let wanted = text(&mut e, b"fallout - misc.bsa");
+        // No list: false.
+        assert!(!e.call(0x00af_5700, &args![wanted]).bool());
+        e.set_global(ARCHIVE_LIST, head);
+        // No finder: false.
+        assert!(!e.call(0x00af_5700, &args![wanted]).bool());
+        e.set_global(FILE_FINDER, 0x0300_0500u32);
+        e.register(FILE_FINDER_LOOKUP, |_, w| u32::from(w[3] == 1).into_ret());
+        e.call_log = Some(vec![]);
+        assert!(e.call(0x00af_5700, &args![wanted]).bool());
+        let lookups = calls_to(&e, FILE_FINDER_LOOKUP);
+        assert_eq!(lookups[0][..2], [0x0300_0500, wanted]);
+        assert_eq!(lookups[0][3..], [1, 0xffff_ffff]);
+        assert_eq!(e.mem.u32(head), 0);
+        // A finder that finds nothing: false.
+        e.register(FILE_FINDER_LOOKUP, |_, _| Ret::default());
+        assert!(!e.call(0x00af_5700, &args![wanted]).bool());
+    }
+
+    #[test]
+    fn n083_invalidate_file_clears_the_entry_offset() {
+        let (mut e, _) = engine();
+        manager(&mut e);
+        let a = searchable(&mut e);
+        let path = text(&mut e, b"meshes\\a.nif");
+        assert!(!e.call(0x00af_5e40, &args![path]).bool());
+        let head = node(&mut e, a.addr(), 0);
+        e.set_global(ARCHIVE_LIST, head);
+        e.call_log = Some(vec![]);
+        assert!(e.call(0x00af_5e40, &args![path]).bool());
+        let files = e.mem.u32(e.get(a, Archive::pDirectories) + 16 + 0xc);
+        assert_eq!(e.mem.u32(files + 0xc), 0);
+        assert_eq!(count(&e, a), 1);
+        // A file no archive has: false, the references balanced.
+        e.register(HASH_PATH, |e, w| {
+            e.mem.set_u64(w[1], 0x20);
+            e.mem.set_u64(w[2], 7);
+            Ret::default()
+        });
+        assert!(!e.call(0x00af_5e40, &args![path]).bool());
+        assert_eq!(count(&e, a), 1);
+        // The top bit of the offset is kept (it matches bit 3 of the archive's flags).
+        e.set(a, Archive::cArchiveFlags, 8);
+        e.register(HASH_PATH, |e, w| {
+            e.mem.set_u64(w[1], 0x20);
+            e.mem.set_u64(w[2], 9);
+            Ret::default()
+        });
+        assert!(e.call(0x00af_5e40, &args![path]).bool());
+        assert_eq!(e.mem.u32(files + 16 + 0xc), 0x8000_0000);
+    }
+
+    #[test]
+    fn n083_entry_lookups_by_slot_and_type() {
+        let (mut e, _) = engine();
+        let a = searchable(&mut e);
+        e.set(a, Archive::iArchiveType, 2);
+        let directory = hash(&mut e, 0x20);
+        let file = hash(&mut e, 9);
+        let files = e.mem.u32(e.get(a, Archive::pDirectories) + 16 + 0xc);
+        // Slot 4: neither row set, then the second row, then the first.
+        assert_eq!(
+            e.call(0x00af_6430, &args![4u32, directory, file, 0u32])
+                .u32(),
+            0
+        );
+        e.mem.set_u32(archive_pointer(1, 4), a.addr());
+        let entry = e
+            .call(0x00af_6430, &args![4u32, directory, file, 0u32])
+            .u32();
+        assert_eq!(entry, files + 16);
+        e.mem.set_u32(archive_pointer(0, 4), a.addr());
+        let entry = e
+            .call(0x00af_6430, &args![4u32, directory, file, 0u32])
+            .u32();
+        assert_eq!(entry, files + 16);
+        assert_eq!(count(&e, a), 0);
+        // The list, by type.
+        let head = node(&mut e, a.addr(), 0);
+        e.set_global(ARCHIVE_LIST, head);
+        assert_eq!(
+            e.call(0x00af_6690, &args![1u32, directory, file, 0u32])
+                .u32(),
+            0
+        );
+        let entry = e
+            .call(0x00af_6690, &args![0x1_0002u32, directory, file, 0u32])
+            .u32();
+        assert_eq!(entry, files + 16);
+        let missing = hash(&mut e, 7);
+        assert_eq!(
+            e.call(0x00af_6690, &args![2u32, directory, missing, 0u32])
+                .u32(),
+            0
+        );
+        assert_eq!(count(&e, a), 1);
+    }
+
+    /// Gives `a` kept file names: `names` for directory 1's files, from `table`.
+    fn kept_names(e: &mut Engine, a: Ptr<Archive>, table: &[u8], offsets: &[u32]) {
+        e.set(a, Archive::cArchiveFlags, 0x20);
+        let block = e.mem.alloc(table.len() as u32 + 4);
+        e.mem.write(block, table);
+        e.set(a, Archive::pFileNameStringArray, block);
+        let rows = e.mem.alloc(8);
+        let row = e.mem.alloc(4 * offsets.len() as u32 + 4);
+        for (i, offset) in offsets.iter().enumerate() {
+            e.mem.set_u32(row + 4 * i as u32, *offset);
+        }
+        e.mem.set_u32(rows + 4, row);
+        e.set(a, Archive::pFileNameStringOffsets, rows);
+    }
+
+    #[test]
+    fn n083_entry_names_are_copied_under_the_lock() {
+        let (mut e, _) = engine();
+        let a = searchable(&mut e);
+        kept_names(&mut e, a, b"a.nif\0b.nif\0", &[0, 6]);
+        let files = e.mem.u32(e.get(a, Archive::pDirectories) + 16 + 0xc);
+        let out = e.mem.alloc(0x104);
+        assert!(!e.call(0x00af_67d0, &args![1u32, files, out]).bool());
+        // Entry 1 has bit 31 of its word +0xc: the second row.
+        e.mem.set_u32(archive_pointer(1, 1), a.addr());
+        e.call_log = Some(vec![]);
+        assert!(e.call(0x00af_67d0, &args![1u32, files + 16, out]).bool());
+        assert_eq!(e.mem.cstr(out), b"b.nif");
+        assert_eq!(
+            calls_to(&e, ENTER_CRITICAL_SECTION),
+            vec![vec![a.addr() + 0x19c]]
+        );
+        assert_eq!(
+            calls_to(&e, LEAVE_CRITICAL_SECTION),
+            vec![vec![a.addr() + 0x19c]]
+        );
+        // An entry outside the archive: no name, still locked and left.
+        let stray = e.mem.alloc(16);
+        e.mem.set_u32(stray + 0xc, 0x8000_0000);
+        assert!(!e.call(0x00af_67d0, &args![1u32, stray, out]).bool());
+        assert_eq!(count(&e, a), 0);
+    }
+
+    #[test]
+    fn n083_directory_files_are_picked_into_the_path() {
+        let (mut e, _) = engine();
+        manager(&mut e);
+        let a = searchable(&mut e);
+        e.set(a, Archive::iArchiveType, 1);
+        kept_names(&mut e, a, b"a.nif\0b.nif\0", &[0, 6]);
+        e.register(HASH_CONSTRUCTOR, |e, w| {
+            e.mem.set_u64(w[0], 0x20);
+            Ret::default()
+        });
+        e.register(BS_RANDOM_CONSTRUCTOR, |_, _| Ret::default());
+        e.register(BS_RANDOM_UNSIGNED_INT, |_, w| (w[1] - 1).into_ret());
+        e.map(RANDOM_GENERATOR_GUARD, 4);
+        let path = text(&mut e, b"meshes\\dir\\");
+        let out = e.mem.alloc(0x104);
+        // No list: false.
+        assert!(!e.call(0x00af_7400, &args![path, out, 1u32]).bool());
+        let head = node(&mut e, a.addr(), 0);
+        e.set_global(ARCHIVE_LIST, head);
+        // A type the archive lacks: false.
+        assert!(!e.call(0x00af_7400, &args![path, out, 2u32]).bool());
+        e.call_log = Some(vec![]);
+        assert!(e.call(0x00af_7400, &args![path, out, 0xffffu32]).bool());
+        assert_eq!(e.mem.cstr(out), b"meshes\\dir\\b.nif");
+        assert_eq!(
+            calls_to(&e, BS_RANDOM_CONSTRUCTOR),
+            vec![vec![RANDOM_GENERATOR]]
+        );
+        assert_eq!(
+            calls_to(&e, BS_RANDOM_UNSIGNED_INT),
+            vec![vec![RANDOM_GENERATOR, 2]]
+        );
+        // Bit 5 of the flags (names kept): no lock.
+        assert!(calls_to(&e, ENTER_CRITICAL_SECTION).is_empty());
+        assert_eq!(e.global::<u32>(RANDOM_GENERATOR_GUARD), 1);
+        assert_eq!(count(&e, a), 1);
+        // The generator is made once.
+        e.call_log = Some(vec![]);
+        e.call(0x00af_7400, &args![path, out, 1u32]);
+        assert!(calls_to(&e, BS_RANDOM_CONSTRUCTOR).is_empty());
+        // The smallest size word (low 30 bits) wins: 0x4000_0030 is 0x30 > 0x20.
+        e.call_log = Some(vec![]);
+        assert!(e.call(0x00af_7800, &args![path, out, 1u32]).bool());
+        assert_eq!(e.mem.cstr(out), b"meshes\\dir\\a.nif");
+        assert!(calls_to(&e, BS_RANDOM_UNSIGNED_INT).is_empty());
+        let files = e.mem.u32(e.get(a, Archive::pDirectories) + 16 + 0xc);
+        e.mem.set_u32(files + 8, 0x40);
+        assert!(e.call(0x00af_7800, &args![path, out, 1u32]).bool());
+        assert_eq!(e.mem.cstr(out), b"meshes\\dir\\b.nif");
+        // A path without a `\`: false.
+        let bare = text(&mut e, b"dir");
+        assert!(!e.call(0x00af_7800, &args![bare, out, 1u32]).bool());
+        assert_eq!(count(&e, a), 1);
+        // Names not kept (and none in the archive): locked around the pick, the name null.
+        e.set(a, Archive::cArchiveFlags, 0);
+        e.register(STRCPY_S, |e, a| {
+            if a[2] != 0 {
+                let text = e.mem.cstr(a[2]);
+                e.mem.set_cstr(a[0], &text);
+            }
+            Ret::default()
+        });
+        e.call_log = Some(vec![]);
+        assert!(e.call(0x00af_7800, &args![path, out, 1u32]).bool());
+        assert_eq!(
+            calls_to(&e, ENTER_CRITICAL_SECTION),
+            vec![vec![a.addr() + 0x19c]]
+        );
+        assert_eq!(
+            calls_to(&e, LEAVE_CRITICAL_SECTION),
+            vec![vec![a.addr() + 0x19c]]
+        );
+        let copies = calls_to(&e, STRCPY_S);
+        assert_eq!(copies[1][1..], [0x104 - 10 - 1, 0]);
+        // Without a `\` the lock is entered and never left.
+        e.call_log = Some(vec![]);
+        assert!(!e.call(0x00af_7800, &args![bare, out, 1u32]).bool());
+        assert!(calls_to(&e, LEAVE_CRITICAL_SECTION).is_empty());
+    }
+
+    #[test]
+    fn n083_name_hash_equality() {
+        let (mut e, _) = engine();
+        e.register(HASH_CONSTRUCTOR, |e, w| {
+            e.mem.set_u64(w[0], 0x0000_0005_0000_0061);
+            Ret::default()
+        });
+        e.register(HASH_FLAG, |_, _| Ret::default());
+        let same = hash(&mut e, 0x0000_0005_0000_0061);
+        let other = hash(&mut e, 0x0000_0006_0000_0061);
+        let name = text(&mut e, b"a");
+        assert!(e.call(0x00af_7e80, &args![name, same]).bool());
+        assert!(!e.call(0x00af_7e80, &args![name, other]).bool());
+        assert_eq!(calls_to(&e, HASH_CONSTRUCTOR)[0][1..], [name, 0]);
+    }
+
+    #[test]
+    fn n083_directory_names_come_from_the_table_or_the_file() {
+        let (mut e, _) = engine();
+        // Two directory names in the file after the 0x24-byte header and the two
+        // 16-byte directory entries: a length byte, the name, the file entries.
+        const TABLE: &[u8] = b"\x04ab\\\x000123456789abcdef\x03cd\0";
+        let a = archive(&mut e);
+        let mut slots = vec![0u32; 6];
+        slots[SEEK_SLOT as usize / 4] = 0x0070_0714;
+        e.put_vtable(0x0300_0700, &slots);
+        e.mem.set_u32(a.addr(), 0x0300_0700);
+        e.set_global(NI_FILE_SEEK_SET, 0u32);
+        e.set_global(NI_FILE_SEEK_CURRENT, 1u32);
+        let position = Rc::new(RefCell::new(0u32));
+        let at = position.clone();
+        e.register_double(0x0070_0714, move |_, w| {
+            let mut p = at.borrow_mut();
+            *p = if w[2] == 0 {
+                w[1]
+            } else {
+                p.wrapping_add(w[1])
+            };
+            Ret::default()
+        });
+        e.mem.set_u32(a.addr() + 8, 0x0070_0720);
+        e.register_double(0x0070_0720, move |e, w| {
+            let from = (*position.borrow() - 0x44) as usize;
+            e.mem.write(w[1], &TABLE[from..from + w[2] as usize]);
+            *position.borrow_mut() += w[2];
+            w[2].into_ret()
+        });
+        directories(&mut e, a, &[(1, &[(0, 0, 0)]), (2, &[])]);
+        assert_eq!(e.call(0x00af_94c0, &args![a, 1u32]).u32(), 0);
+        e.set(a, Archive::oFlags, 1);
+        let name = e.call(0x00af_94c0, &args![a, 1u32]).u32();
+        assert_eq!(e.mem.cstr(name), b"cd");
+        assert_eq!(e.get(a, Archive::pDirectoryStringArray), name);
+        // The block before is given back.
+        e.call_log = Some(vec![]);
+        let again = e.call(0x00af_94c0, &args![a, 0u32]).u32();
+        assert_eq!(e.mem.cstr(again), b"ab\\");
+        assert_eq!(
+            calls_to(&e, MEMORY_MANAGER_DEALLOCATE),
+            vec![vec![MEMORY_MANAGER, name]]
+        );
+        // Kept names: the table plus the offset.
+        e.set(a, Archive::cArchiveFlags, 0x10);
+        let offsets = e.mem.alloc(8);
+        e.mem.set_u32(offsets + 4, 7);
+        e.set(a, Archive::pDirectoryStringOffsets, offsets);
+        e.set(a, Archive::pDirectoryStringArray, 0x9000);
+        assert_eq!(e.call(0x00af_94c0, &args![a, 1u32]).u32(), 0x9007);
+    }
+
+    #[test]
+    fn n083_entry_directory_and_index() {
+        let (mut e, _) = engine();
+        let a = searchable(&mut e);
+        kept_names(&mut e, a, b"a.nif\0b.nif\0", &[0, 6]);
+        let directories = e.get(a, Archive::pDirectories);
+        let first = e.mem.u32(directories + 0xc);
+        let second = e.mem.u32(directories + 16 + 0xc);
+        assert_eq!(e.call(0x00af_9ad0, &args![a, first]).u32(), 0);
+        assert_eq!(e.call(0x00af_9ad0, &args![a, second + 16]).u32(), 1);
+        assert_eq!(e.call(0x00af_9ad0, &args![a, second + 32]).u32(), u32::MAX);
+        assert_eq!(e.call(0x00af_9b60, &args![a, 1u32, second + 16]).u32(), 1);
+        let name = e.call(0x00af_9ba0, &args![a, second + 16]).u32();
+        assert_eq!(e.mem.cstr(name), b"b.nif");
+        assert_eq!(e.call(0x00af_9ba0, &args![a, 0x10u32]).u32(), 0);
+    }
+
+    #[test]
+    fn n083_collision_check_answers_the_differing_name() {
+        let (mut e, _) = engine();
+        let a = searchable(&mut e);
+        kept_names(&mut e, a, b"a.nif\0b.nif\0", &[0, 6]);
+        // Bit 3 matches the file's offset bit 31; bits 4 and 5 keep the names.
+        e.set(a, Archive::cArchiveFlags, 0x38);
+        let names = text(&mut e, b"meshes");
+        let offsets = e.mem.alloc(8);
+        e.set(a, Archive::pDirectoryStringArray, names);
+        e.set(a, Archive::pDirectoryStringOffsets, offsets);
+        e.register(SPLITPATH_S, |e, w| {
+            let path = e.mem.cstr(w[0]);
+            let cut = path.iter().rposition(|&c| c == b'\\').unwrap();
+            e.mem.set_cstr(w[3], &path[..cut]);
+            e.mem.set_cstr(w[5], &path[cut + 1..]);
+            Ret::default()
+        });
+        e.register(STRUPR_S, |e, w| {
+            let upper: Vec<u8> = e.mem.cstr(w[0]).to_ascii_uppercase();
+            e.mem.set_cstr(w[0], &upper);
+            Ret::default()
+        });
+        let directory = hash(&mut e, 0x20);
+        let file = hash(&mut e, 9);
+        let path = text(&mut e, b"meshes\\B.nif");
+        // The flag byte off, or oFlags lacking a bit: 0 and nothing asked.
+        assert_eq!(
+            e.call(0x00af_a8e0, &args![a, directory, file, path]).u32(),
+            0
+        );
+        e.set_global(FLAG_SET_BY_00AF4460, 1u8);
+        e.set(a, Archive::oFlags, 1);
+        assert_eq!(
+            e.call(0x00af_a8e0, &args![a, directory, file, path]).u32(),
+            0
+        );
+        assert!(calls_to(&e, SPLITPATH_S).is_empty());
+        e.set(a, Archive::oFlags, 3);
+        // Same names: 0, the copies kept.
+        assert_eq!(
+            e.call(0x00af_a8e0, &args![a, directory, file, path]).u32(),
+            0
+        );
+        assert!(calls_to(&e, MEMORY_MANAGER_DEALLOCATE).is_empty());
+        // A differing file name: the archive's file name.
+        let other = text(&mut e, b"meshes\\c.nif");
+        let r = e.call(0x00af_a8e0, &args![a, directory, file, other]).u32();
+        assert_eq!(e.mem.cstr(r), b"b.nif");
+        assert_eq!(calls_to(&e, MEMORY_MANAGER_DEALLOCATE).len(), 2);
+        // A differing directory: the archive's directory name.
+        let elsewhere = text(&mut e, b"textures\\b.nif");
+        let r = e
+            .call(0x00af_a8e0, &args![a, directory, file, elsewhere])
+            .u32();
+        assert_eq!(r, names);
+        // Hashes not found: 0.
+        let missing = hash(&mut e, 7);
+        assert_eq!(
+            e.call(0x00af_a8e0, &args![a, directory, missing, other])
+                .u32(),
+            0
+        );
+    }
+
+    #[test]
+    fn n083_directory_file_offset_is_cleared() {
+        let (mut e, _) = engine();
+        let a = searchable(&mut e);
+        let files = e.mem.u32(e.get(a, Archive::pDirectories) + 16 + 0xc);
+        e.set(a, Archive::cArchiveFlags, 8);
+        let file = hash(&mut e, 9);
+        assert!(e.call(0x00af_ac90, &args![a, 1u32, file, 0u32]).bool());
+        assert_eq!(e.mem.u32(files + 16 + 0xc), 0x8000_0000);
+        let missing = hash(&mut e, 7);
+        assert!(!e.call(0x00af_ac90, &args![a, 1u32, missing, 0u32]).bool());
+    }
+
+    #[test]
+    fn n083_archive_file_transfers_seek_then_move() {
+        let (mut e, _) = engine();
+        let a = archive(&mut e);
+        let mut slots = vec![0u32; 13];
+        slots[NAME_SLOT as usize / 4] = 0x0070_0518;
+        slots[SEEK_SLOT as usize / 4] = 0x0070_0514;
+        slots[TRANSFER_SLOT_2C as usize / 4] = 0x0070_052c;
+        slots[TRANSFER_SLOT_30 as usize / 4] = 0x0070_0530;
+        e.put_vtable(0x0300_0600, &slots);
+        e.mem.set_u32(a.addr(), 0x0300_0600);
+        e.register(0x0070_0518, |_, _| Ret::default());
+        e.register(0x0070_0514, |_, _| Ret::default());
+        e.register(0x0070_052c, |_, w| (w[2] / 2).into_ret());
+        e.register(0x0070_0530, |_, w| w[2].into_ret());
+        let file = archive_file(&mut e, 0x40);
+        e.set(file, ArchiveFile::spArchive, a.addr());
+        e.set(file, ArchiveFile::iArchiveOffset, 0x100);
+        e.mem.set_u32(file.addr() + POSITION_OVERRIDE, 0xffff_ffff);
+        e.set(file.cast::<BSFile>(), BSFile::iTrueFilePos, 8);
+        e.mem.set_u32(a.addr() + POSITION_OVERRIDE, 0xffff_ffff);
+        e.set(a.cast::<BSFile>(), BSFile::iTrueFilePos, 0x108);
+        // In place already: no seek.
+        e.call_log = Some(vec![]);
+        assert_eq!(
+            e.call(0x00af_bc70, &args![file, 0x5000u32, 0u32]).u32(),
+            0x40
+        );
+        assert!(calls_to(&e, 0x0070_0514).is_empty());
+        assert_eq!(
+            calls_to(&e, 0x0070_0530),
+            vec![vec![a.addr(), 0x5000, 0x40]]
+        );
+        assert_eq!(e.get(file.cast::<BSFile>(), BSFile::iTrueFilePos), 0x48);
+        assert_eq!(
+            calls_to(&e, ENTER_CRITICAL_SECTION),
+            vec![vec![a.addr() + 0x19c]]
+        );
+        assert_eq!(
+            calls_to(&e, LEAVE_CRITICAL_SECTION),
+            vec![vec![a.addr() + 0x19c]]
+        );
+        assert_eq!(calls_to(&e, 0x0070_0518).len(), 1);
+        // Elsewhere (the word +0x38 standing for the position): a seek first.
+        e.mem.set_u32(file.addr() + POSITION_OVERRIDE, 0x10);
+        e.call_log = Some(vec![]);
+        assert_eq!(
+            e.call(0x00af_bde0, &args![file, 0x5000u32, 0u32]).u32(),
+            0x20
+        );
+        assert_eq!(calls_to(&e, 0x0070_0514), vec![vec![a.addr(), 0x110, 0]]);
+        assert_eq!(
+            calls_to(&e, 0x0070_052c),
+            vec![vec![a.addr(), 0x5000, 0x40]]
+        );
+        assert_eq!(e.get(file.cast::<BSFile>(), BSFile::iTrueFilePos), 0x68);
+    }
+
+    #[test]
+    fn n083_list_remove_handles_head_and_later_nodes() {
+        let (mut e, _) = engine();
+        let first = archive(&mut e);
+        let second = archive(&mut e);
+        let third = archive(&mut e);
+        let item = e.mem.alloc(4);
+        // Null item or empty list: nothing.
+        let empty = node(&mut e, 0, 0);
+        e.call(0x00af_c960, &args![empty, item]);
+        e.mem.set_u32(item, first.addr());
+        e.call(0x00af_c960, &args![empty, item]);
+        assert!(calls_to(&e, MEMORY_MANAGER_DEALLOCATE).is_empty());
+        let c = node(&mut e, third.addr(), 0);
+        let b = node(&mut e, second.addr(), c);
+        let head = node(&mut e, first.addr(), b);
+        // A later node: unlinked and freed.
+        e.mem.set_u32(item, second.addr());
+        e.call(0x00af_c960, &args![head, item]);
+        assert_eq!(e.mem.u32(head + 4), c);
+        assert_eq!(count(&e, second), 0);
+        assert_eq!(
+            calls_to(&e, MEMORY_MANAGER_DEALLOCATE),
+            vec![vec![MEMORY_MANAGER, b]]
+        );
+        // The head: the next archive moves in.
+        e.mem.set_u32(item, first.addr());
+        e.call(0x00af_c960, &args![head, item]);
+        assert_eq!(e.mem.u32(head), third.addr());
+        assert_eq!(e.mem.u32(head + 4), 0);
+        assert_eq!(count(&e, first), 0);
+        assert_eq!(count(&e, third), 1);
+        // The head alone: its archive cleared.
+        e.mem.set_u32(item, third.addr());
+        e.call(0x00af_c960, &args![head, item]);
+        assert_eq!(e.mem.u32(head), 0);
+        assert_eq!(count(&e, third), 0);
+        // Not in the list: nothing.
+        let lone = node(&mut e, first.addr(), 0);
+        e.mem.set_u32(item, second.addr());
+        e.call_log = Some(vec![]);
+        e.call(0x00af_c960, &args![lone, item]);
+        assert!(calls_to(&e, MEMORY_MANAGER_DEALLOCATE).is_empty());
+    }
+
+    #[test]
+    fn n083_hash_array_methods() {
+        let (mut e, _) = engine();
+        e.register(HASH_ARRAY_INITIAL_SETUP, |_, _| Ret::default());
+        e.register(SIMPLE_ARRAY_CLEAR_00A1BFA0, |_, _| Ret::default());
+        e.register(MEMORY_MANAGER_REALLOCATE, |_, _| 0x7777u32.into_ret());
+        let array = e.mem.alloc(0x10);
+        assert_eq!(e.call(0x00af_cce0, &args![array]).u32(), array);
+        assert_eq!(e.mem.u32(array), HASH_ARRAY_VTABLE);
+        assert_eq!(
+            calls_to(&e, HASH_ARRAY_INITIAL_SETUP),
+            vec![vec![array, 0, 0]]
+        );
+        e.call_log = Some(vec![]);
+        e.call(0x00af_cd10, &args![array, 3u32]);
+        assert_eq!(
+            calls_to(&e, MEMORY_MANAGER_ALLOCATE),
+            vec![vec![MEMORY_MANAGER, 12]]
+        );
+        e.call(0x00af_cd40, &args![array, 0x4000u32]);
+        assert_eq!(
+            calls_to(&e, MEMORY_MANAGER_DEALLOCATE),
+            vec![vec![MEMORY_MANAGER, 0x4000]]
+        );
+        assert_eq!(
+            e.call(0x00af_cd60, &args![array, 0x4000u32, 5u32]).u32(),
+            0x7777
+        );
+        assert_eq!(
+            calls_to(&e, MEMORY_MANAGER_REALLOCATE),
+            vec![vec![MEMORY_MANAGER, 0x4000, 20]]
+        );
+        e.call_log = Some(vec![]);
+        e.mem.set_u32(array, 0);
+        e.call(0x00af_cdc0, &args![array]);
+        assert_eq!(e.mem.u32(array), HASH_ARRAY_VTABLE);
+        assert_eq!(
+            calls_to(&e, SIMPLE_ARRAY_CLEAR_00A1BFA0),
+            vec![vec![array, 1]]
+        );
+        for (flags, freed) in [(0u32, 0usize), (1, 1)] {
+            e.call_log = Some(vec![]);
+            assert_eq!(e.call(0x00af_cd90, &args![array, flags]).u32(), array);
+            assert_eq!(calls_to(&e, SIMPLE_ARRAY_CLEAR_00A1BFA0).len(), 1);
+            assert_eq!(calls_to(&e, MEMORY_MANAGER_DEALLOCATE).len(), freed);
+        }
     }
 }

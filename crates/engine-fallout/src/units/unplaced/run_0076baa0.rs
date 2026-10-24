@@ -133,9 +133,26 @@ pub fn fn_0076bda0(e: &mut Engine, this: Ptr) -> Ptr {
     this
 }
 
+/// `005ae3d0` (`thiscall`, a pointer to the element): the other add of the list at
+/// `011d970c`.
+const LIST_ADD_005AE3D0: u32 = 0x005a_e3d0;
+
+// Translated from 0076baa0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`cdecl`, one word): adds `element` (passed by the address of
+/// its stack slot) to the list at `011d970c` through `005ae3d0`, then sorts the list with
+/// `0076bb00` (`0083fd60`).
+pub fn fn_0076baa0(e: &mut Engine, element: u32) {
+    e.with_stack(4, |e, slot| {
+        e.mem.set_u32(slot.addr(), element);
+        e.call(LIST_ADD_005AE3D0, &args![SORTED_LIST, slot]);
+    });
+    e.call(LIST_SORT, &args![SORTED_LIST, COMPARE]);
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x0076_baa0, fn_0076baa0(u32)),
         entry!(0x0076bad0, fn_0076bad0(u32)),
         entry!(0x0076bb00, fn_0076bb00(Ptr, Ptr) -> i32),
         entry!(0x0076bb40, fn_0076bb40(Ptr) -> Ptr),
@@ -250,5 +267,27 @@ mod tests {
         e.call_log = Some(vec![]);
         assert_eq!(e.call(0x0076_bda0, &args![0x500u32]).u32(), 0x500);
         assert_eq!(calls_to(&e, SET_OWNER_00AA50F0), vec![vec![0x500, 0x99]]);
+    }
+}
+
+#[cfg(test)]
+mod tests_n077 {
+    use super::*;
+
+    #[test]
+    fn fn_0076baa0_adds_through_the_argument_slot_then_sorts() {
+        let mut e = Engine::new();
+        e.register(LIST_ADD_005AE3D0, |e, a| {
+            assert_eq!(e.mem.u32(a[1]), 0x1234);
+            Ret::default()
+        });
+        e.register(LIST_SORT, |_, _| Ret::default());
+        e.call_log = Some(vec![]);
+        e.call(0x0076_baa0, &args![0x1234u32]);
+        let log = e.call_log.take().unwrap();
+        assert_eq!(log.len(), 3);
+        assert_eq!(log[1].0, LIST_ADD_005AE3D0);
+        assert_eq!(log[1].1[0], SORTED_LIST);
+        assert_eq!(log[2], (LIST_SORT, vec![SORTED_LIST, COMPARE]));
     }
 }

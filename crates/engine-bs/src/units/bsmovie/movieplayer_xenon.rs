@@ -765,9 +765,337 @@ pub fn fn_00ec2e50(e: &mut Engine, this: Ptr) {
     e.call(MAP_BASE_DESTRUCT, &args![map]);
 }
 
+/// `MemoryManager::Allocate` (`00aa3e40`, `thiscall` on the manager, one word).
+const MEMORY_ALLOCATE: u32 = 0x00aa_3e40;
+/// `NiAlloc`-style allocation (`00aa1070`, `cdecl`, one word: the size).
+const NI_ALLOC: u32 = 0x00aa_1070;
+/// `_strlen` (`00ec6130`), `_strcpy_s` (`00ec65a6`: destination, size, source) and
+/// `_stricmp` (`00ec68e4`), all `cdecl`.
+const STRLEN: u32 = 0x00ec_6130;
+const STRCPY_S: u32 = 0x00ec_65a6;
+const STRICMP: u32 = 0x00ec_68e4;
+/// The Direct3D texture slots the frame texture set uses: `LockRect` (`+0x4C`: level,
+/// locked rectangle, rectangle, flags) and `UnlockRect` (`+0x50`: level).
+const LOCK_RECT: u32 = 0x4c;
+const UNLOCK_RECT: u32 = 0x50;
+
+// Translated from 00ebfd20 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`cdecl`, one word): the frame texture set's release. With a
+/// texture array (+0x40), releases (COM slot +8) each non-null texture of the +0x20 count,
+/// clears the array word and gives the set itself back to the memory manager.
+pub fn fn_00ebfd20(e: &mut Engine, set: Ptr) {
+    let at = set.addr();
+    if e.mem.u32(at + 0x40) != 0 {
+        let mut i = 0u32;
+        while i < e.mem.u32(at + 0x20) {
+            let slot = e.mem.u32(at + 0x40).wrapping_add(i.wrapping_mul(4));
+            let texture = e.mem.u32(slot);
+            if texture != 0 {
+                e.vcall(texture, 8, &args![]);
+            }
+            i = i.wrapping_add(1);
+        }
+        e.mem.set_u32(at + 0x40, 0);
+        e.call(MEMORY_DEALLOCATE, &args![MEMORY_MANAGER, at]);
+    }
+}
+
+// Translated from 00ebfda0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`cdecl`, seven words): the frame texture set's next tile.
+/// While the cursor (+0x14) is below the texture count (+0x20) and locking the cursor's
+/// texture (`LockRect(0, &rect, 0, 0)`) succeeds, hands out (each where its address is not
+/// 0) the locked bits and pitch, the tile's x and y in pixels (column and row of the cursor
+/// in a grid of +0x24 full columns plus one when the partial width +0x2C is not 0, times the
+/// tile size +0x3C) and its width and height (the tile size, or the partial sizes +0x2C /
+/// +0x30 from column +0x24 / row +0x28 on), advances the cursor and answers 1; otherwise
+/// resets the cursor and answers 0.
+pub fn fn_00ebfda0(
+    e: &mut Engine,
+    set: Ptr,
+    bits: u32,
+    pitch: u32,
+    x: u32,
+    y: u32,
+    width: u32,
+    height: u32,
+) -> u32 {
+    let at = set.addr();
+    if e.mem.u32(at + 0x14) < e.mem.u32(at + 0x20) {
+        let locked = e.with_stack(8, |e, rect| {
+            let rect = rect.addr();
+            let cursor = e.mem.u32(at + 0x14);
+            let texture = e
+                .mem
+                .u32(e.mem.u32(at + 0x40).wrapping_add(cursor.wrapping_mul(4)));
+            let r = e
+                .vcall(texture, LOCK_RECT, &args![0u32, rect, 0u32, 0u32])
+                .i32();
+            // D3DLOCKED_RECT: Pitch at +0, pBits at +4.
+            (r >= 0).then(|| (e.mem.u32(rect + 4), e.mem.u32(rect)))
+        });
+        if let Some((locked_bits, locked_pitch)) = locked {
+            if bits != 0 {
+                e.mem.set_u32(bits, locked_bits);
+            }
+            if pitch != 0 {
+                e.mem.set_u32(pitch, locked_pitch);
+            }
+            let columns = u32::from(e.mem.u32(at + 0x2c) != 0).wrapping_add(e.mem.u32(at + 0x24));
+            let cursor = e.mem.u32(at + 0x14);
+            let row = cursor / columns;
+            let column = cursor.wrapping_sub(columns.wrapping_mul(row));
+            if x != 0 {
+                let v = column.wrapping_mul(e.mem.u32(at + 0x3c));
+                e.mem.set_u32(x, v);
+            }
+            if y != 0 {
+                let v = row.wrapping_mul(e.mem.u32(at + 0x3c));
+                e.mem.set_u32(y, v);
+            }
+            if width != 0 {
+                let v = if column < e.mem.u32(at + 0x24) {
+                    e.mem.u32(at + 0x3c)
+                } else {
+                    e.mem.u32(at + 0x2c)
+                };
+                e.mem.set_u32(width, v);
+            }
+            if height != 0 {
+                let v = if row < e.mem.u32(at + 0x28) {
+                    e.mem.u32(at + 0x3c)
+                } else {
+                    e.mem.u32(at + 0x30)
+                };
+                e.mem.set_u32(height, v);
+            }
+            let next = e.mem.u32(at + 0x14).wrapping_add(1);
+            e.mem.set_u32(at + 0x14, next);
+            return 1;
+        }
+    }
+    e.mem.set_u32(at + 0x14, 0);
+    0
+}
+
+// Translated from 00ebff00 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`cdecl`, one word): the frame texture set's step past a tile:
+/// unlocks (`UnlockRect(0)`) the texture before the cursor (+0x14) in the array (+0x40),
+/// passing its answer on.
+pub fn fn_00ebff00(e: &mut Engine, set: Ptr) -> u32 {
+    let at = set.addr();
+    let cursor = e.mem.u32(at + 0x14);
+    let slot = e
+        .mem
+        .u32(at + 0x40)
+        .wrapping_add(cursor.wrapping_mul(4))
+        .wrapping_sub(4);
+    let texture = e.mem.u32(slot);
+    e.vcall(texture, UNLOCK_RECT, &args![0u32]).u32()
+}
+
+// Translated from 00ec1570 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`thiscall`, no stack words): the movie's reset, run last by
+/// its close. Clears the words +0 to +0x10, sets the scale (+0x14) to 1.0, the position
+/// (+0x18, +0x1C) to 0.0, clears the play state (+0x20) and the busy byte (+0x24).
+pub fn fn_00ec1570(e: &mut Engine, this: Ptr) {
+    let at = this.addr();
+    for offset in [0u32, 4, 8, 0xc, 0x10] {
+        e.mem.set_u32(at + offset, 0);
+    }
+    e.mem.set_f32(at + 0x14, 1.0);
+    e.mem.set_f32(at + 0x18, 0.0);
+    e.mem.set_f32(at + 0x1c, 0.0);
+    e.mem.set_u32(at + 0x20, 0);
+    e.mem.set_u8(at + 0x24, 0);
+}
+
+// Translated from 00ec1a40 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiTMap<const char*, char*>::NewItem` (engine map; `thiscall`, no stack words, `this`
+/// not read): a 0xC-byte item from the memory manager.
+pub fn ni_t_map_new_item(e: &mut Engine, _this: Ptr) -> u32 {
+    e.call(MEMORY_ALLOCATE, &args![MEMORY_MANAGER, 0xcu32])
+        .u32()
+}
+
+// Translated from 00ec1a60 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiTMap<const char*, char*>::DeleteItem` (engine map; `thiscall`, one word, `this` not
+/// read): clears the item's value (+8) and gives the item back to the memory manager, passing
+/// its answer on.
+pub fn ni_t_map_delete_item(e: &mut Engine, _this: Ptr, item: u32) -> u32 {
+    e.mem.set_u32(item.wrapping_add(8), 0);
+    e.call(MEMORY_DEALLOCATE, &args![MEMORY_MANAGER, item])
+        .u32()
+}
+
+// Translated from 00ec1c30 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiTStringTemplateMap<NiTMap<const char*, char*>, char*>::KeyToHashIndex` (engine map;
+/// `thiscall`, one word): `hash = hash * 33 + c` over the key's characters (each
+/// sign-extended), modulo the bucket count (+4).
+pub fn ni_t_string_template_map_key_to_hash_index(e: &mut Engine, this: Ptr, key: u32) -> u32 {
+    let mut hash = 0u32;
+    let mut at = key;
+    loop {
+        let c = e.mem.u8(at) as i8;
+        if c == 0 {
+            break;
+        }
+        hash = (hash << 5)
+            .wrapping_add(hash)
+            .wrapping_add(i32::from(c) as u32);
+        at = at.wrapping_add(1);
+    }
+    hash % e.mem.u32(this.addr() + 4)
+}
+
+// Translated from 00ec1cc0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiTStringTemplateMap<NiTMap<const char*, char*>, char*>::SetValue` (engine map;
+/// `thiscall`, three words): the item's key (+4) is `key` itself, or, when the map copies
+/// its keys (byte +0x10), a copy (`strlen + 1` bytes from `00aa1070`, filled by
+/// `strcpy_s`); the item's value (+8) is `value`.
+pub fn ni_t_string_template_map_set_value(
+    e: &mut Engine,
+    this: Ptr,
+    item: u32,
+    key: u32,
+    value: u32,
+) {
+    if e.mem.u8(this.addr() + 0x10) != 0 {
+        let size = e.call(STRLEN, &args![key]).u32().wrapping_add(1);
+        let copy = e.call(NI_ALLOC, &args![size]).u32();
+        e.mem.set_u32(item.wrapping_add(4), copy);
+        let copy = e.mem.u32(item.wrapping_add(4));
+        e.call(STRCPY_S, &args![copy, size, key]);
+    } else {
+        e.mem.set_u32(item.wrapping_add(4), key);
+    }
+    e.mem.set_u32(item.wrapping_add(8), value);
+}
+
+// Translated from 00ec1dc0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSTCaseInsensitiveStringMap<char*>::IsKeysEqual` (engine map; `thiscall`, two words,
+/// `this` not read): whether `_stricmp` finds the keys equal (1 or 0).
+pub fn bst_case_insensitive_string_map_is_keys_equal(
+    e: &mut Engine,
+    _this: Ptr,
+    first: u32,
+    second: u32,
+) -> bool {
+    e.call(STRICMP, &args![first, second]).u32() == 0
+}
+
+// Translated from 00ec1df0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiTMapBase<DFALL<NiTMapItem<const char*, char*>>, const char*, char*>::scalar deleting
+/// destructor` (engine map; `thiscall`, one word): stores the base vtable (`010f1ca4`), runs
+/// the base destructor body (`00438af0`), frees the bucket array (+8, `00aa10f0`) and, with
+/// bit 0 of `flags`, gives the map back to the memory manager. Answers `this`.
+pub fn ni_t_map_base_scalar_deleting_destructor(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    let at = this.addr();
+    e.mem.set_u32(at, MAP_ROOT_VTABLE);
+    e.call(MAP_BASE_DESTRUCT, &args![at]);
+    let buckets = e.mem.u32(at + 8);
+    e.call(NI_FREE, &args![buckets]);
+    if flags & 1 != 0 {
+        e.call(MEMORY_DEALLOCATE, &args![MEMORY_MANAGER, at]);
+    }
+    this
+}
+
+// Translated from 00ec1e40 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiTMap<const char*, char*>::scalar deleting destructor` (engine map; `thiscall`, one
+/// word): the `NiTMap` vtable (`010f1cc4`) and the base destructor body (`00438af0`), then
+/// as [`ni_t_map_base_scalar_deleting_destructor`]: the base vtable (`010f1ca4`), the body
+/// again, the bucket array (+8) freed and, with bit 0 of `flags`, the map given back to the
+/// memory manager. Answers `this`.
+// Translation incomplete: 00ec1e40 - its FS:[0] exception frame (unwinding to the base destructor) is not translated
+pub fn ni_t_map_scalar_deleting_destructor(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    let at = this.addr();
+    e.mem.set_u32(at, MAP_BASE_VTABLE);
+    e.call(MAP_BASE_DESTRUCT, &args![at]);
+    e.mem.set_u32(at, MAP_ROOT_VTABLE);
+    e.call(MAP_BASE_DESTRUCT, &args![at]);
+    let buckets = e.mem.u32(at + 8);
+    e.call(NI_FREE, &args![buckets]);
+    if flags & 1 != 0 {
+        e.call(MEMORY_DEALLOCATE, &args![MEMORY_MANAGER, at]);
+    }
+    this
+}
+
+// Translated from 00ec1ee0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSTCaseInsensitiveStringMap<char*>::scalar deleting destructor` (engine map;
+/// `thiscall`, one word): stores its vtable (`010f1c20`), destroys the string map
+/// ([`ni_t_string_template_map_destruct`]) and, with bit 0 of `flags`, gives it back to the
+/// memory manager. Answers `this`.
+pub fn bst_case_insensitive_string_map_scalar_deleting_destructor(
+    e: &mut Engine,
+    this: Ptr,
+    flags: u32,
+) -> Ptr {
+    e.mem.set_u32(this.addr(), NAME_MAP_VTABLE);
+    ni_t_string_template_map_destruct(e, this);
+    if flags & 1 != 0 {
+        e.call(MEMORY_DEALLOCATE, &args![MEMORY_MANAGER, this]);
+    }
+    this
+}
+
+// Translated from 00ec2ff0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiTStringTemplateMap<NiTMap<const char*, char*>, char*>::scalar deleting destructor`
+/// (engine map; `thiscall`, one word): destroys the map
+/// ([`ni_t_string_template_map_destruct`]) and, with bit 0 of `flags`, gives it back to the
+/// memory manager. Answers `this`.
+pub fn ni_t_string_template_map_scalar_deleting_destructor(
+    e: &mut Engine,
+    this: Ptr,
+    flags: u32,
+) -> Ptr {
+    ni_t_string_template_map_destruct(e, this);
+    if flags & 1 != 0 {
+        e.call(MEMORY_DEALLOCATE, &args![MEMORY_MANAGER, this]);
+    }
+    this
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x00eb_fd20, fn_00ebfd20(Ptr)),
+        entry!(
+            0x00eb_fda0,
+            fn_00ebfda0(Ptr, u32, u32, u32, u32, u32, u32) -> u32
+        ),
+        entry!(0x00eb_ff00, fn_00ebff00(Ptr) -> u32),
+        entry!(0x00ec_1570, fn_00ec1570(Ptr)),
+        entry!(0x00ec_1a40, ni_t_map_new_item(Ptr) -> u32),
+        entry!(0x00ec_1a60, ni_t_map_delete_item(Ptr, u32) -> u32),
+        entry!(
+            0x00ec_1c30,
+            ni_t_string_template_map_key_to_hash_index(Ptr, u32) -> u32
+        ),
+        entry!(
+            0x00ec_1cc0,
+            ni_t_string_template_map_set_value(Ptr, u32, u32, u32)
+        ),
+        entry!(
+            0x00ec_1dc0,
+            bst_case_insensitive_string_map_is_keys_equal(Ptr, u32, u32) -> bool
+        ),
+        entry!(
+            0x00ec_1df0,
+            ni_t_map_base_scalar_deleting_destructor(Ptr, u32) -> Ptr
+        ),
+        entry!(
+            0x00ec_1e40,
+            ni_t_map_scalar_deleting_destructor(Ptr, u32) -> Ptr
+        ),
+        entry!(
+            0x00ec_1ee0,
+            bst_case_insensitive_string_map_scalar_deleting_destructor(Ptr, u32) -> Ptr
+        ),
+        entry!(
+            0x00ec_2ff0,
+            ni_t_string_template_map_scalar_deleting_destructor(Ptr, u32) -> Ptr
+        ),
         entry!(0x0086_70e0, fn_008670e0(Ptr) -> Ptr),
         entry!(0x00ebff30, fn_00ebff30(Ptr, f32, f32, f32, f32)),
         entry!(
@@ -1344,5 +1672,265 @@ mod lookahead2_tests {
         e.call(0x00ec_2e50, &args![this]);
         assert!(calls(&e, MAP_NEXT_ITEM).is_empty());
         assert_eq!(calls(&e, MAP_BASE_DESTRUCT).len(), 1);
+    }
+}
+
+#[cfg(test)]
+mod n083_tests {
+    use super::*;
+
+    fn calls_to(e: &Engine, addr: u32) -> Vec<Vec<u32>> {
+        e.call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|c| c.0 == addr)
+            .map(|c| c.1.clone())
+            .collect()
+    }
+
+    /// A texture whose vtable at `0x0300_0000` has 0x20 entries, each its own address.
+    fn texture(e: &mut Engine) -> u32 {
+        let slots: Vec<u32> = (0..0x20).map(|i| 0x0300_1000 + 4 * i).collect();
+        e.put_vtable(0x0300_0000, &slots);
+        let t = e.mem.alloc(8);
+        e.mem.set_u32(t, 0x0300_0000);
+        t
+    }
+
+    #[test]
+    fn texture_set_release_releases_each_texture_and_frees_the_set() {
+        let mut e = Engine::new();
+        let t = texture(&mut e);
+        e.register(0x0300_1008, |_, _| Ret::default());
+        e.register(MEMORY_DEALLOCATE, |_, _| Ret::default());
+        let set = e.mem.alloc(0x44);
+        let array = e.mem.alloc(0xc);
+        e.mem.set_u32(array, t);
+        e.mem.set_u32(array + 8, t);
+        e.mem.set_u32(set + 0x20, 3);
+        e.mem.set_u32(set + 0x40, array);
+        e.call_log = Some(vec![]);
+        e.call(0x00eb_fd20, &args![set]);
+        assert_eq!(calls_to(&e, 0x0300_1008), [vec![t], vec![t]]);
+        assert_eq!(e.mem.u32(set + 0x40), 0);
+        assert_eq!(calls_to(&e, MEMORY_DEALLOCATE), [vec![MEMORY_MANAGER, set]]);
+        // No array: nothing.
+        e.call_log = Some(vec![]);
+        e.call(0x00eb_fd20, &args![set]);
+        assert!(calls_to(&e, MEMORY_DEALLOCATE).is_empty());
+    }
+
+    fn next_tile(e: &mut Engine, set: u32, out: u32) -> u32 {
+        e.call(
+            0x00eb_fda0,
+            &args![
+                set,
+                out,
+                out + 4,
+                out + 8,
+                out + 0xc,
+                out + 0x10,
+                out + 0x14
+            ],
+        )
+        .u32()
+    }
+
+    fn words(e: &Engine, out: u32) -> Vec<u32> {
+        (0..6).map(|i| e.mem.u32(out + 4 * i)).collect()
+    }
+
+    #[test]
+    fn next_tile_hands_out_the_rectangle_and_advances() {
+        let mut e = Engine::new();
+        let t = texture(&mut e);
+        e.register(0x0300_104c, |e, w| {
+            e.mem.set_u32(w[2], 0x400);
+            e.mem.set_u32(w[2] + 4, 0x0700_0000);
+            Ret::default()
+        });
+        let set = e.mem.alloc(0x44);
+        let array = e.mem.alloc(0x20);
+        for i in 0..6 {
+            e.mem.set_u32(array + 4 * i, t);
+        }
+        // Two full columns and a partial one (16 wide), one full row and a partial one (8).
+        e.mem.set_u32(set + 0x20, 6);
+        e.mem.set_u32(set + 0x24, 2);
+        e.mem.set_u32(set + 0x28, 1);
+        e.mem.set_u32(set + 0x2c, 16);
+        e.mem.set_u32(set + 0x30, 8);
+        e.mem.set_u32(set + 0x3c, 64);
+        e.mem.set_u32(set + 0x40, array);
+        let out = e.mem.alloc(0x18);
+        assert_eq!(next_tile(&mut e, set, out), 1);
+        assert_eq!(words(&e, out), [0x0700_0000, 0x400, 0, 0, 64, 64]);
+        e.mem.set_u32(set + 0x14, 5);
+        assert_eq!(next_tile(&mut e, set, out), 1);
+        assert_eq!(words(&e, out), [0x0700_0000, 0x400, 128, 64, 16, 8]);
+        assert_eq!(e.mem.u32(set + 0x14), 6);
+        // Past the end: the cursor goes back to 0.
+        assert_eq!(next_tile(&mut e, set, out), 0);
+        assert_eq!(e.mem.u32(set + 0x14), 0);
+        // Null addresses are skipped; a failed lock answers 0 and resets too.
+        e.mem.set_u32(set + 0x14, 3);
+        let r = e.call(0x00eb_fda0, &args![set, 0u32, 0u32, 0u32, 0u32, 0u32, 0u32]);
+        assert_eq!(r.u32(), 1);
+        e.register(0x0300_104c, |_, _| Ret {
+            eax: 0x8876_0000,
+            ..Ret::default()
+        });
+        assert_eq!(next_tile(&mut e, set, out), 0);
+        assert_eq!(e.mem.u32(set + 0x14), 0);
+    }
+
+    #[test]
+    fn step_unlocks_the_texture_before_the_cursor() {
+        let mut e = Engine::new();
+        let t = texture(&mut e);
+        e.register(0x0300_1050, |_, _| Ret::default());
+        let set = e.mem.alloc(0x44);
+        let array = e.mem.alloc(0x10);
+        e.mem.set_u32(array + 4, t);
+        e.mem.set_u32(set + 0x14, 2);
+        e.mem.set_u32(set + 0x40, array);
+        e.call_log = Some(vec![]);
+        e.call(0x00eb_ff00, &args![set]);
+        assert_eq!(calls_to(&e, 0x0300_1050), [vec![t, 0]]);
+    }
+
+    #[test]
+    fn reset_clears_the_movie() {
+        let mut e = Engine::new();
+        let movie = e.mem.alloc(0x28);
+        for off in (0..0x28).step_by(4) {
+            e.mem.set_u32(movie + off, 0xffff_ffff);
+        }
+        e.call(0x00ec_1570, &args![movie]);
+        for off in [0u32, 4, 8, 0xc, 0x10, 0x18, 0x1c, 0x20] {
+            assert_eq!(e.mem.u32(movie + off), 0, "+{off:#x}");
+        }
+        assert_eq!(e.mem.f32(movie + 0x14), 1.0);
+        assert_eq!(e.mem.u8(movie + 0x24), 0);
+        assert_eq!(e.mem.u8(movie + 0x25), 0xff);
+    }
+
+    #[test]
+    fn map_items_come_from_and_go_to_the_memory_manager() {
+        let mut e = Engine::new();
+        e.register(MEMORY_ALLOCATE, |_, _| Ret {
+            eax: 0x4444,
+            ..Ret::default()
+        });
+        e.register(MEMORY_DEALLOCATE, |_, _| Ret::default());
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x00ec_1a40, &args![0x1000u32]).u32(), 0x4444);
+        assert_eq!(calls_to(&e, MEMORY_ALLOCATE), [vec![MEMORY_MANAGER, 0xc]]);
+        let item = e.mem.alloc(0xc);
+        e.mem.set_u32(item + 8, 9);
+        e.call(0x00ec_1a60, &args![0x1000u32, item]);
+        assert_eq!(e.mem.u32(item + 8), 0);
+        assert_eq!(
+            calls_to(&e, MEMORY_DEALLOCATE),
+            [vec![MEMORY_MANAGER, item]]
+        );
+    }
+
+    #[test]
+    fn key_hash_is_case_sensitive_and_signed() {
+        let mut e = Engine::new();
+        let map = e.mem.alloc(0x14);
+        e.mem.set_u32(map + 4, 37);
+        let key = e.mem.alloc(8);
+        e.mem.set_cstr(key, b"Ab\xe9");
+        // 0xE9 is -0x17 sign-extended.
+        let expected = ((u32::from(b'A') * 33 + u32::from(b'b')) * 33).wrapping_sub(0x17) % 37;
+        let r = e.call(0x00ec_1c30, &args![map, key]).u32();
+        assert_eq!(r, expected);
+        e.mem.set_cstr(key, b"");
+        assert_eq!(e.call(0x00ec_1c30, &args![map, key]).u32(), 0);
+    }
+
+    #[test]
+    fn set_value_copies_the_key_when_the_map_owns_keys() {
+        let mut e = Engine::new();
+        e.register(STRLEN, |_, _| Ret {
+            eax: 5,
+            ..Ret::default()
+        });
+        e.register(NI_ALLOC, |_, _| Ret {
+            eax: 0x5550,
+            ..Ret::default()
+        });
+        e.register(STRCPY_S, |_, _| Ret::default());
+        let map = e.mem.alloc(0x14);
+        let item = e.mem.alloc(0xc);
+        e.call_log = Some(vec![]);
+        e.call(0x00ec_1cc0, &args![map, item, 0x7000u32, 0x8000u32]);
+        assert_eq!(e.mem.u32(item + 4), 0x7000);
+        assert_eq!(e.mem.u32(item + 8), 0x8000);
+        assert!(calls_to(&e, STRLEN).is_empty());
+        e.mem.set_u8(map + 0x10, 1);
+        e.call(0x00ec_1cc0, &args![map, item, 0x7000u32, 0x9000u32]);
+        assert_eq!(calls_to(&e, NI_ALLOC), [vec![6]]);
+        assert_eq!(calls_to(&e, STRCPY_S), [vec![0x5550, 6, 0x7000]]);
+        assert_eq!(e.mem.u32(item + 4), 0x5550);
+        assert_eq!(e.mem.u32(item + 8), 0x9000);
+    }
+
+    #[test]
+    fn keys_equal_through_stricmp() {
+        let mut e = Engine::new();
+        e.register(STRICMP, |_, w| Ret {
+            eax: u32::from(w[0] != w[1]).wrapping_neg(),
+            ..Ret::default()
+        });
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x00ec_1dc0, &args![0u32, 5u32, 5u32]).u32(), 1);
+        assert_eq!(e.call(0x00ec_1dc0, &args![0u32, 5u32, 6u32]).u32(), 0);
+        assert_eq!(calls_to(&e, STRICMP)[1], [5, 6]);
+    }
+
+    fn quiet_destructors(e: &mut Engine) {
+        for a in [MAP_BASE_DESTRUCT, NI_FREE, MEMORY_DEALLOCATE] {
+            e.register(a, |_, _| Ret::default());
+        }
+    }
+
+    #[test]
+    fn map_deleting_destructors_free_on_bit_zero() {
+        let mut e = Engine::new();
+        quiet_destructors(&mut e);
+        let map = e.mem.alloc(0x14);
+        e.mem.set_u32(map + 8, 0x6000);
+        for (addr, bodies) in [(0x00ec_1df0u32, 1usize), (0x00ec_1e40, 2)] {
+            for flags in [0u32, 1] {
+                e.call_log = Some(vec![]);
+                assert_eq!(e.call(addr, &args![map, flags]).u32(), map);
+                assert_eq!(e.mem.u32(map), MAP_ROOT_VTABLE);
+                assert_eq!(calls_to(&e, MAP_BASE_DESTRUCT).len(), bodies);
+                assert_eq!(calls_to(&e, NI_FREE), [vec![0x6000]]);
+                assert_eq!(calls_to(&e, MEMORY_DEALLOCATE).len(), flags as usize);
+            }
+        }
+    }
+
+    #[test]
+    fn string_map_deleting_destructors_destroy_then_free() {
+        let mut e = Engine::new();
+        quiet_destructors(&mut e);
+        let map = e.mem.alloc(0x14);
+        e.mem.set_u32(map + 8, 0x6000);
+        for addr in [0x00ec_1ee0u32, 0x00ec_2ff0] {
+            for flags in [0u32, 3] {
+                e.call_log = Some(vec![]);
+                assert_eq!(e.call(addr, &args![map, flags]).u32(), map);
+                assert_eq!(e.mem.u32(map), MAP_ROOT_VTABLE);
+                assert_eq!(calls_to(&e, NI_FREE), [vec![0x6000]]);
+                let freed = calls_to(&e, MEMORY_DEALLOCATE);
+                assert_eq!(freed.len(), (flags & 1) as usize);
+            }
+        }
     }
 }

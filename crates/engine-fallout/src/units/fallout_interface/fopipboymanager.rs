@@ -798,6 +798,9 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
             fo_pipboy_manager_show_pipboy_light_effect(Ptr<FOPipboyManager>, u8, u8, u8)
         ),
     ]
+    .into_iter()
+    .chain(funcs_n086())
+    .collect()
 }
 
 #[cfg(test)]
@@ -1410,5 +1413,1378 @@ mod la1_tests {
         assert_eq!(e.mem.f32(this.addr() + 0xa8), 0.0);
         assert_eq!(e.mem.f32(this.addr() + 0xc0), 0.0);
         assert!(log.iter().all(|(a, _)| *a != MENU_LIGHT));
+    }
+}
+
+/// `007fa8d0` (`thiscall`, one word) runs first on menu open (with 0) and
+/// close (with the player's `Actor::IsRefractive`, `008c51c0`).
+const MENU_STATE_007FA8D0: u32 = 0x007f_a8d0;
+const ACTOR_IS_REFRACTIVE: u32 = 0x008c_51c0;
+/// The bytes menu open sets (`011d890a`, `011db378`; the second is
+/// cleared on close and tested by `SetTabKnobPosition`).
+const MENU_OPEN_BYTE_011D890A: u32 = 0x011d_890a;
+const PIPBOY_OPEN_011DB378: u32 = 0x011d_b378;
+/// `Interface::IsolateMenuElements` (`00702c80`, `cdecl`, two words) and
+/// `Interface::RestoreMenuElements` (`00702dd0`, `cdecl`).
+const ISOLATE_MENU_ELEMENTS: u32 = 0x0070_2c80;
+const RESTORE_MENU_ELEMENTS: u32 = 0x0070_2dd0;
+/// The Pip-Boy's hum sound handle (`+0x154`).
+const HUM_SOUND: u32 = 0x154;
+/// `BSSoundHandle` calls (engine map): `Stop` (`00ad88f0`), `Release`
+/// (`00ad8d10`), `Play` (`00ad8830`, one word), the constructor
+/// (`0041a250`), assignment (`00418900`, one word) and the destructor
+/// (`00483710`); `BSAudio::QInstance` (`00453a70`) and
+/// `BSAudio::GetSoundHandleByName` (`00ad7550`: out, name, flags).
+const SOUND_STOP: u32 = 0x00ad_88f0;
+const SOUND_RELEASE: u32 = 0x00ad_8d10;
+const SOUND_PLAY: u32 = 0x00ad_8830;
+const SOUND_CONSTRUCT: u32 = 0x0041_a250;
+const SOUND_ASSIGN: u32 = 0x0041_8900;
+const SOUND_DESTRUCT: u32 = 0x0048_3710;
+const AUDIO_INSTANCE: u32 = 0x0045_3a70;
+const AUDIO_GET_SOUND_BY_NAME: u32 = 0x00ad_7550;
+/// The sound names: `"UIPipBoyHumLP"` (`01078100`), `"UIPipBoyAccessDown"`
+/// (`01078110`), `"UIPipBoyScroll"` (`01071e30`), `"UIPipBoyTab"`
+/// (`01078260`).
+const SOUND_HUM: u32 = 0x0107_8100;
+const SOUND_ACCESS_DOWN: u32 = 0x0107_8110;
+const SOUND_SCROLL: u32 = 0x0107_1e30;
+const SOUND_TAB: u32 = 0x0107_8260;
+/// `FORenderedMenu::TriggerBurst` (`007fb150`, three floats),
+/// `FORenderedMenu::OnMenuOpen` (`007fb040`), `007fb0b0` (on close), and
+/// the two other burst-like calls of `007f8a80` (`007fb250`, two floats;
+/// `007fb2b0`, three floats) on the interface's rendered menu
+/// (`00704370` of `004b7210`).
+const TRIGGER_BURST: u32 = 0x007f_b150;
+const RENDERED_MENU_ON_MENU_OPEN: u32 = 0x007f_b040;
+const RENDERED_MENU_007FB0B0: u32 = 0x007f_b0b0;
+const RENDERED_MENU_007FB250: u32 = 0x007f_b250;
+const RENDERED_MENU_007FB2B0: u32 = 0x007f_b2b0;
+const INTERFACE_RENDERED_MENU: u32 = 0x0070_4370;
+/// The burst's last float (`01016248`) and its settings (`011db480`,
+/// `011db43c`), and the settings `007f8a80` reads.
+const BURST_FLOAT_01016248: u32 = 0x0101_6248;
+const SETTING_011DB480: u32 = 0x011d_b480;
+const SETTING_011DB43C: u32 = 0x011d_b43c;
+const SETTING_011DB4B4: u32 = 0x011d_b4b4;
+const SETTING_011DB4E0: u32 = 0x011d_b4e0;
+const SETTING_011DB4EC: u32 = 0x011d_b4ec;
+const SETTING_011DB3FC: u32 = 0x011d_b3fc;
+const SETTING_011DB414: u32 = 0x011d_b414;
+const SETTING_011DB3BC: u32 = 0x011d_b3bc;
+const SETTING_011DB3B0: u32 = 0x011d_b3b0;
+/// `TESImageSpaceModifier::GetGetHit` (`005d2860`) and
+/// `ImageSpaceModifierInstanceForm::Stop` (`00529c90`, `cdecl`), and
+/// `004de8c0` (`cdecl`, a float).
+const GET_HIT_MODIFIER: u32 = 0x005d_2860;
+const MODIFIER_STOP: u32 = 0x0052_9c90;
+const AFTER_OPEN_004DE8C0: u32 = 0x004d_e8c0;
+/// The byte `007f8160` stores (`0118abb1`).
+const OPEN_STATE_0118ABB1: u32 = 0x0118_abb1;
+/// The player's animation calls (engine map): `GetAnimation`
+/// (`00950a60`, one word), `Animation::SpecialIdleDonePlaying`
+/// (`004985f0`), `Animation::ClearGroup` (`00496080`: group, float),
+/// `Actor::GetAnimGroup` (`00897910`, four words) and `Animation::PlayGroup`
+/// (`00494740`, four words).
+const GET_ANIMATION: u32 = 0x0095_0a60;
+const SPECIAL_IDLE_DONE_PLAYING: u32 = 0x0049_85f0;
+const CLEAR_GROUP: u32 = 0x0049_6080;
+const GET_ANIM_GROUP: u32 = 0x0089_7910;
+const PLAY_GROUP: u32 = 0x0049_4740;
+/// The time of the last knob update (`011db370`).
+const LAST_KNOB_TIME: u32 = 0x011d_b370;
+/// The setting `SetTabKnobPosition` copies into the third knob's rate
+/// (`011db288`).
+const SETTING_TAB_KNOB_RATE: u32 = 0x011d_b288;
+/// The timer object (`011f6394`) with its time (`00825c00`, a word) and its
+/// float (`0084d030`, in `ST0`).
+const TIMER_011F6394: u32 = 0x011f_6394;
+const TIMER_TIME: u32 = 0x0082_5c00;
+const TIMER_FLOAT: u32 = 0x0084_d030;
+/// The fade's duration settings (`011db308` for `FadeLight`, `011db2bc`
+/// for `UpdateLightEffect`), the clamps it goes through (`0040ebd0` and
+/// `00404010`, `cdecl`, two floats, the result in `ST0`), the double `0.0`
+/// it compares the fade direction with (`01012060`), and the player's light
+/// (`00572750`, an `NiPointer` slot).
+const SETTING_FADE_LIGHT: u32 = 0x011d_b308;
+const SETTING_LIGHT_EFFECT: u32 = 0x011d_b2bc;
+const CLAMP_0040EBD0: u32 = 0x0040_ebd0;
+const CLAMP_00404010: u32 = 0x0040_4010;
+const ZERO_DOUBLE_01012060: u32 = 0x0101_2060;
+const PLAYER_LIGHT_00572750: u32 = 0x0057_2750;
+/// The float `00491180` gets last (`01012054`).
+const TIME_ARGUMENT_01012054: u32 = 0x0101_2054;
+/// The checks and calls of `007fa220`: `00703d50` (a byte), the interface's
+/// word `+0x4bc`, `00424940` on the interface (a byte), `00491040` on the
+/// animation (one word), `0048f7f0`, `005f2420` (a word), `00494710` (one
+/// word, a byte), `008eeaa0` (one word), `00491180` (three words),
+/// `00493900` (one word).
+const CHECK_00703D50: u32 = 0x0070_3d50;
+const INTERFACE_BYTE_00424940: u32 = 0x0042_4940;
+const ANIMATION_00491040: u32 = 0x0049_1040;
+const SEQUENCE_0048F7F0: u32 = 0x0048_f7f0;
+const SEQUENCE_WORD_005F2420: u32 = 0x005f_2420;
+const ANIMATION_TEST_00494710: u32 = 0x0049_4710;
+const ANIMATION_008EEAA0: u32 = 0x008e_eaa0;
+const ANIMATION_00491180: u32 = 0x0049_1180;
+const ANIMATION_00493900: u32 = 0x0049_3900;
+/// `005c5420` (`cdecl`, a float in `ST0`): the value `007f8a80` compares.
+const VALUE_005C5420: u32 = 0x005c_5420;
+/// The pick calls of `007f8720`: `007178a0` and `00717920` (bytes), the
+/// point constructor (`006815c0`), the `NiPick` constructor (`00e98f20`,
+/// two words), its setters (`00458b30`, `006ecd40`, `00792780`, one word;
+/// the target `00705fc0`), pick (`00e98e20`: origin, direction, 0; a byte),
+/// results (`00500940`), result at (`00968670`, one word), destructor
+/// (`00e98fa0`); the camera (`006629f0` of `0045c670`) and its ray
+/// (`00a71080`, five words); the cursor values of the interface
+/// (`00792760`, `009a9350`, in `ST0`, through `_ftol2` `00ec62c0`); a
+/// result's object (`00458b50`) and texture coordinates (`00891170`); the
+/// scale `00706e20` (in `ST0`) and the double `01078128`.
+const PICK_CHECK_007178A0: u32 = 0x0071_78a0;
+const PICK_CHECK_00717920: u32 = 0x0071_7920;
+const POINT_CONSTRUCT_006815C0: u32 = 0x0068_15c0;
+const PICK_CONSTRUCT: u32 = 0x00e9_8f20;
+const PICK_SET_00458B30: u32 = 0x0045_8b30;
+const PICK_SET_006ECD40: u32 = 0x006e_cd40;
+const PICK_SET_00792780: u32 = 0x0079_2780;
+const PICK_OBJECTS: u32 = 0x00e9_8e20;
+const PICK_RESULTS: u32 = 0x0050_0940;
+const PICK_RESULT_AT: u32 = 0x0096_8670;
+const PICK_DESTRUCT: u32 = 0x00e9_8fa0;
+const CAMERA_OWNER_0045C670: u32 = 0x0045_c670;
+const CAMERA_006629F0: u32 = 0x0066_29f0;
+const CAMERA_RAY: u32 = 0x00a7_1080;
+const CURSOR_X_00792760: u32 = 0x0079_2760;
+const CURSOR_Y_009A9350: u32 = 0x009a_9350;
+const FTOL2: u32 = 0x00ec_62c0;
+const RESULT_OBJECT_00458B50: u32 = 0x0045_8b50;
+const RESULT_UV_00891170: u32 = 0x0089_1170;
+const SCALE_00706E20: u32 = 0x0070_6e20;
+const SCALE_DOUBLE_01078128: u32 = 0x0107_8128;
+/// The button pressed on the last pick (`011a0ba0`, -1 for none).
+const PRESSED_BUTTON_011A0BA0: u32 = 0x011a_0ba0;
+/// The light effect's fields: `bLightEffectOn` (`+0x162`), its start time
+/// (`+0x164`) and the fade's end value (`+0x168`) (Xbox PDB names
+/// unconfirmed; the offsets the code uses).
+const LIGHT_EFFECT_ON: u32 = 0x162;
+const LIGHT_EFFECT_START: u32 = 0x164;
+const LIGHT_EFFECT_END: u32 = 0x168;
+/// `fTabKnobPosition`'s copy in the third knob target (`+0x120`) and rate
+/// (`+0x12c`).
+const THIRD_KNOB_TARGET: u32 = KNOB_TARGETS + 8;
+const THIRD_KNOB_RATE: u32 = KNOB_RATES + 8;
+
+/// A sound named `name` played once through a stack handle: constructed
+/// (`0041a250`), given the audio's handle for the name (a temporary,
+/// assigned and destroyed), played (`Play` with 0) and destroyed.
+fn play_named_sound(e: &mut Engine, name: u32) {
+    e.with_stack(8, |e, handles| {
+        let handle = handles.addr();
+        let temporary = handles.addr() + 4;
+        e.call(SOUND_CONSTRUCT, &args![handle]);
+        let audio = e.call(AUDIO_INSTANCE, &[]).u32();
+        let found = e
+            .call(
+                AUDIO_GET_SOUND_BY_NAME,
+                &args![audio, temporary, name, 0x121u32],
+            )
+            .u32();
+        e.call(SOUND_ASSIGN, &args![handle, found]);
+        e.call(SOUND_DESTRUCT, &args![temporary]);
+        e.call(SOUND_PLAY, &args![handle, 0u32]);
+        e.call(SOUND_DESTRUCT, &args![handle]);
+    });
+}
+
+/// The interface's rendered menu (`00704370` of `004b7210`).
+fn rendered_menu(e: &mut Engine) -> u32 {
+    let interface = e.call(INTERFACE_SINGLETON, &[]).u32();
+    e.call(INTERFACE_RENDERED_MENU, &args![interface]).u32()
+}
+
+/// A float argument copied through `FLD dword`/`FSTP dword`.
+fn float_copy(e: &Engine, addr: u32) -> u32 {
+    x87_quiet_bits(e.mem.u32(addr))
+}
+
+// Translated from 007f8010 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 007f8010 - the C++ exception-unwinding frame (FS:[0]) is not translated.
+/// `FOPipboyManager::OnMenuOpen` (engine map; `thiscall`, plain `RET`):
+/// nothing unless the Pip-Boy state test (`00974d90`) passes. `007fa8d0`
+/// with 0, `ResetColors`, the bytes `011d890a` and `011db378` set, the menu
+/// elements isolated (1, 1), the hum handle (`+0x154`) stopped, released,
+/// given `"UIPipBoyHumLP"` (flags `0x31`) and played; a burst with the
+/// settings `011db480`, `011db43c` and the float `01016248`, the rendered
+/// menu's `OnMenuOpen`, the get-hit image space modifier stopped, the byte
+/// `0118abb1` cleared (`007f8160`) and `004de8c0` with 0.0.
+pub fn fo_pipboy_manager_on_menu_open(e: &mut Engine, this: Ptr<FOPipboyManager>) {
+    if e.call(PIPBOY_STATE, &args![this]).u32() & 0xff == 0 {
+        return;
+    }
+    e.call(MENU_STATE_007FA8D0, &args![this, 0u32]);
+    fo_pipboy_manager_reset_colors(e, this);
+    e.set_global(MENU_OPEN_BYTE_011D890A, 1u8);
+    e.set_global(PIPBOY_OPEN_011DB378, 1u8);
+    e.call(ISOLATE_MENU_ELEMENTS, &args![1u32, 1u32]);
+    let hum = this.addr() + HUM_SOUND;
+    e.call(SOUND_STOP, &args![hum]);
+    e.call(SOUND_RELEASE, &args![hum]);
+    e.with_stack(4, |e, temporary| {
+        let audio = e.call(AUDIO_INSTANCE, &[]).u32();
+        let found = e
+            .call(
+                AUDIO_GET_SOUND_BY_NAME,
+                &args![audio, temporary, SOUND_HUM, 0x31u32],
+            )
+            .u32();
+        e.call(SOUND_ASSIGN, &args![hum, found]);
+        e.call(SOUND_DESTRUCT, &args![temporary]);
+    });
+    e.call(SOUND_PLAY, &args![hum, 0u32]);
+    let last = float_copy(e, BURST_FLOAT_01016248);
+    let second = setting_float_bits(e, SETTING_011DB43C);
+    let first = setting_float_bits(e, SETTING_011DB480);
+    e.call(TRIGGER_BURST, &args![this, first, second, last]);
+    e.call(RENDERED_MENU_ON_MENU_OPEN, &args![this]);
+    let modifier = e.call(GET_HIT_MODIFIER, &[]).u32();
+    e.call(MODIFIER_STOP, &args![modifier]);
+    fn_007f8160(e, 0);
+    e.call(AFTER_OPEN_004DE8C0, &args![0.0f32.to_bits()]);
+}
+
+// Translated from 007f8160 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`cdecl`, one word): its low byte stored at
+/// `0118abb1`.
+pub fn fn_007f8160(e: &mut Engine, value: u32) {
+    e.set_global(OPEN_STATE_0118ABB1, value as u8);
+}
+
+// Translated from 007f8170 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 007f8170 - the C++ exception-unwinding frame (FS:[0]) is not translated.
+/// `FOPipboyManager::OnMenuClose` (engine map; `thiscall`, plain `RET`):
+/// `007fa8d0` with the player's `IsRefractive`; with the player's
+/// first-person animation, its group 7 cleared (0.0) unless its special
+/// idle is done playing, the player's current group (`GetAnimGroup` with 0,
+/// 0, 0, 0) played on it and on the third-person animation (1, -1, -1),
+/// and group 0 (1, -1, 0) when the player's slot `+0x214` answers non-zero.
+/// Then, when the Pip-Boy state test passes, `"UIPipBoyAccessDown"` played,
+/// the hum stopped and released, the button glows hidden (`007fa010` with
+/// 0), the menu elements restored, `007fb0b0`, the byte `011db378` cleared
+/// and `007f8160` with 1.
+pub fn fo_pipboy_manager_on_menu_close(e: &mut Engine, this: Ptr<FOPipboyManager>) {
+    let player = e.global::<u32>(PLAYER);
+    let refractive = e.call(ACTOR_IS_REFRACTIVE, &args![player]).u32() & 0xff;
+    e.call(MENU_STATE_007FA8D0, &args![this, refractive]);
+    let player = e.global::<u32>(PLAYER);
+    let animation = e.call(GET_ANIMATION, &args![player, 1u32]).u32();
+    if animation != 0 {
+        if e.call(SPECIAL_IDLE_DONE_PLAYING, &args![animation]).u32() & 0xff == 0 {
+            e.call(CLEAR_GROUP, &args![animation, 7u32, 0.0f32.to_bits()]);
+        }
+        let player = e.global::<u32>(PLAYER);
+        let group = e
+            .call(GET_ANIM_GROUP, &args![player, 0u32, 0u32, 0u32, 0u32])
+            .u32()
+            & 0xffff;
+        e.call(
+            PLAY_GROUP,
+            &args![animation, group, 1u32, u32::MAX, u32::MAX],
+        );
+        let player = e.global::<u32>(PLAYER);
+        let group = e
+            .call(GET_ANIM_GROUP, &args![player, 0u32, 0u32, 0u32, 0u32])
+            .u32()
+            & 0xffff;
+        let player = e.global::<u32>(PLAYER);
+        let third = e.call(GET_ANIMATION, &args![player, 0u32]).u32();
+        e.call(PLAY_GROUP, &args![third, group, 1u32, u32::MAX, u32::MAX]);
+        let player = e.global::<u32>(PLAYER);
+        if e.vcall(player, 0x214, &[]).u32() != 0 {
+            e.call(PLAY_GROUP, &args![animation, 0u32, 1u32, u32::MAX, 0u32]);
+        }
+    }
+    if e.call(PIPBOY_STATE, &args![this]).u32() & 0xff == 0 {
+        return;
+    }
+    e.with_stack(4, |e, temporary| {
+        let audio = e.call(AUDIO_INSTANCE, &[]).u32();
+        let found = e
+            .call(
+                AUDIO_GET_SOUND_BY_NAME,
+                &args![audio, temporary, SOUND_ACCESS_DOWN, 0x121u32],
+            )
+            .u32();
+        e.call(SOUND_PLAY, &args![found, 0u32]);
+        e.call(SOUND_DESTRUCT, &args![temporary]);
+    });
+    let hum = this.addr() + HUM_SOUND;
+    e.call(SOUND_STOP, &args![hum]);
+    e.call(SOUND_RELEASE, &args![hum]);
+    fn_007fa010(e, this, 0);
+    e.call(RESTORE_MENU_ELEMENTS, &[]);
+    e.call(RENDERED_MENU_007FB0B0, &args![this]);
+    e.set_global(PIPBOY_OPEN_011DB378, 0u8);
+    fn_007f8160(e, 1);
+}
+
+/// One knob's step toward its target for `007f8320`: `rate * dt` added
+/// (below the target) or taken off (above it), not past the target.
+/// Answers whether it moved.
+fn step_knob(e: &mut Engine, this: Ptr<FOPipboyManager>, index: u32, dt: u32) -> bool {
+    let at = |offset: u32| this.addr() + offset + index * 4;
+    let mut moved = false;
+    // FLD target; FLD position; FCOMPP: position < target.
+    if fld(e, at(KNOB_POSITIONS)) < fld(e, at(KNOB_TARGETS)) {
+        let step = x87_mul(fld(e, at(KNOB_RATES)), x87_m32(dt));
+        let position = x87_add(step, fmem(e, at(KNOB_POSITIONS)));
+        e.mem.set_u32(at(KNOB_POSITIONS), x87_store32(position));
+        if fld(e, at(KNOB_TARGETS)) < fld(e, at(KNOB_POSITIONS)) {
+            let target = float_copy(e, at(KNOB_TARGETS));
+            e.mem.set_u32(at(KNOB_POSITIONS), target);
+        }
+        moved = true;
+    }
+    if fld(e, at(KNOB_POSITIONS)) > fld(e, at(KNOB_TARGETS)) {
+        let step = x87_mul(fld(e, at(KNOB_RATES)), x87_m32(dt));
+        // FSUBR: position - step.
+        let position = x87_sub(fmem(e, at(KNOB_POSITIONS)), step);
+        e.mem.set_u32(at(KNOB_POSITIONS), x87_store32(position));
+        if fld(e, at(KNOB_TARGETS)) > fld(e, at(KNOB_POSITIONS)) {
+            let target = float_copy(e, at(KNOB_TARGETS));
+            e.mem.set_u32(at(KNOB_POSITIONS), target);
+        }
+        moved = true;
+    }
+    moved
+}
+
+/// `FLD dword` of the float at `addr`.
+fn fld(e: &Engine, addr: u32) -> f64 {
+    x87_load32(e.mem.u32(addr))
+}
+
+/// A `float` memory operand at `addr`.
+fn fmem(e: &Engine, addr: u32) -> f64 {
+    x87_m32(e.mem.u32(addr))
+}
+
+// Translated from 007f8320 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The knob update (unnamed in the engine map; `thiscall`, `RET 4`: the
+/// time): each of the three knobs (`fKnobPositions` toward `fKnobTargets`
+/// at `fKnobRates` per unit of the time since `011db370`) steps, and each
+/// knob that moved and exists (`spKnobs`) is turned to its position about
+/// its axis (`006404b0`: the first about (1, 0, 0), the others about
+/// (0, 0, 1)) and updated (`00a59c60` with a stack update data, `0043d410`
+/// with 0.0, 0, 0). The time is kept at `011db370`.
+pub fn fn_007f8320(e: &mut Engine, this: Ptr<FOPipboyManager>, now: f32) {
+    let dt = x87_store32(x87_sub(x87_load32(now.to_bits()), fmem(e, LAST_KNOB_TIME)));
+    let mut moved = [false; 3];
+    for index in 0..3u32 {
+        moved[index as usize] = step_knob(e, this, index, dt);
+    }
+    let (one, zero) = (1.0f32.to_bits(), 0.0f32.to_bits());
+    for (index, moved) in (0u32..).zip(moved) {
+        let slot = this.addr() + KNOBS + index * 4;
+        if pointer(e, slot) == 0 || !moved {
+            continue;
+        }
+        let angle = float_copy(e, this.addr() + KNOB_POSITIONS + index * 4);
+        let knob = pointer(e, slot);
+        if index == 0 {
+            e.call(SET_AXIS_ANGLE, &args![knob, angle, one, zero, zero]);
+        } else {
+            e.call(SET_AXIS_ANGLE, &args![knob, angle, zero, zero, one]);
+        }
+        e.with_stack(0xc, |e, update| {
+            e.call(UPDATE_DATA_CONSTRUCT, &args![update, zero, 0u32, 0u32]);
+            let knob = pointer(e, slot);
+            e.call(NODE_UPDATE, &args![knob, update]);
+        });
+    }
+    e.set_global(LAST_KNOB_TIME, x87_quiet_bits(now.to_bits()));
+}
+
+// Translated from 007f8610 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 007f8610 - the C++ exception-unwinding frame (FS:[0]) is not translated.
+/// `FOPipboyManager::MoveKnob` (engine map; `thiscall`, `RET 0x10`): with
+/// `sound` and knob 0, `"UIPipBoyScroll"` plays; then the knob's target
+/// (`fKnobTargets`) moves by `delta` and its rate (`fKnobRates`) becomes
+/// `rate`.
+pub fn fo_pipboy_manager_move_knob(
+    e: &mut Engine,
+    this: Ptr<FOPipboyManager>,
+    index: u32,
+    delta: f32,
+    rate: f32,
+    sound: u32,
+) {
+    if sound & 0xff != 0 && index == 0 {
+        play_named_sound(e, SOUND_SCROLL);
+    }
+    let at = this.addr().wrapping_add(index.wrapping_mul(4));
+    let target = x87_add(
+        fld(e, at.wrapping_add(KNOB_TARGETS)),
+        x87_m32(delta.to_bits()),
+    );
+    e.mem
+        .set_u32(at.wrapping_add(KNOB_TARGETS), x87_store32(target));
+    e.mem
+        .set_u32(at.wrapping_add(KNOB_RATES), x87_quiet_bits(rate.to_bits()));
+}
+
+/// The ray from the cursor through the interface's camera for `007f8720`:
+/// the cursor values (`00792760`, `009a9350`, each through `_ftol2`) and
+/// `00a71080` on the camera (`006629f0` of `0045c670`, fetched first when
+/// `camera_first`) into the origin and direction.
+fn cursor_ray(e: &mut Engine, interface: u32, origin: u32, direction: u32, camera_first: bool) {
+    let mut camera = 0;
+    if camera_first {
+        let owner = e.call(CAMERA_OWNER_0045C670, &[]).u32();
+        camera = e.call(CAMERA_006629F0, &args![owner]).u32();
+    }
+    let x = e.call(CURSOR_X_00792760, &args![interface]).f64();
+    let x = e.call(FTOL2, &args![x]).u32();
+    let y = e.call(CURSOR_Y_009A9350, &args![interface]).f64();
+    let y = e.call(FTOL2, &args![y]).u32();
+    if !camera_first {
+        let owner = e.call(CAMERA_OWNER_0045C670, &[]).u32();
+        camera = e.call(CAMERA_006629F0, &args![owner]).u32();
+    }
+    e.call(CAMERA_RAY, &args![camera, y, x, origin, direction, 0u32]);
+}
+
+/// The first pick result's object (`00500940`, `00968670` with 0), when
+/// the pick (`00e98e20`) hit; null otherwise.
+fn pick_result(e: &mut Engine, pick: u32, origin: u32, direction: u32) -> u32 {
+    if e.call(PICK_OBJECTS, &args![pick, origin, direction, 0u32])
+        .u32()
+        & 0xff
+        == 0
+    {
+        return 0;
+    }
+    let results = e.call(PICK_RESULTS, &args![pick]).u32();
+    e.call(PICK_RESULT_AT, &args![results, 0u32]).u32()
+}
+
+// Translated from 007f8720 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 007f8720 - the C++ exception-unwinding frame (FS:[0]) is not translated.
+/// The Pip-Boy screen pick (unnamed in the engine map; `thiscall`,
+/// `RET 0x14`: press and release bytes, the texture coordinate outputs and
+/// the button output): false unless the screen object (`007fa950`) and the
+/// three buttons (`spButtons`) exist; false (nothing picked) unless
+/// `007178a0` and `00717920` pass and the Pip-Boy root is set. A stack
+/// `NiPick` (`00e98f20` with 0, 8) on the screen object picks along the
+/// cursor's ray; when its first result's object is the screen object, its
+/// texture coordinates (`00891170`) times the scale (`00706e20`, times the
+/// double `01078128` for u) go to the outputs and the answer is true. With
+/// a press or release, each button is picked: a hit with a press stores
+/// its index at `011a0ba0`, a hit without one keeps it; a release on the
+/// pressed button answers it plus 1 in the button output and clears
+/// `011a0ba0`.
+pub fn fn_007f8720(
+    e: &mut Engine,
+    this: Ptr<FOPipboyManager>,
+    press: u32,
+    release: u32,
+    out_u: u32,
+    out_v: u32,
+    out_button: u32,
+) -> u8 {
+    let mut hit = 0u8;
+    let interface = e.call(INTERFACE_SINGLETON, &[]).u32();
+    if e.call(INTERFACE_OBJECT_007FA950, &args![this]).u32() == 0
+        || pointer(e, this.addr() + BUTTONS) == 0
+        || pointer(e, this.addr() + BUTTONS + 4) == 0
+        || pointer(e, this.addr() + BUTTONS + 8) == 0
+    {
+        return 0;
+    }
+    if e.call(PICK_CHECK_007178A0, &[]).u32() & 0xff == 0
+        || e.call(PICK_CHECK_00717920, &[]).u32() & 0xff == 0
+        || pointer(e, this.addr() + PIPBOY_ROOT) == 0
+    {
+        return hit;
+    }
+    let (press, release) = (press & 0xff, release & 0xff);
+    e.with_stack(0x80, |e, frame| {
+        let f = frame.addr();
+        let direction = f + 0x1c;
+        let origin = f + 0x28;
+        let pick = f + 0x34;
+        e.call(POINT_CONSTRUCT_006815C0, &args![origin]);
+        e.call(POINT_CONSTRUCT_006815C0, &args![direction]);
+        e.call(PICK_CONSTRUCT, &args![pick, 0u32, 8u32]);
+        e.call(PICK_SET_00458B30, &args![pick, 1u32]);
+        let screen = e.call(INTERFACE_OBJECT_007FA950, &args![this]).u32();
+        e.call(SET_MEMBER_0X14, &args![pick, screen]);
+        e.call(PICK_SET_006ECD40, &args![pick, 0u32]);
+        e.call(PICK_SET_00792780, &args![pick, 1u32]);
+        cursor_ray(e, interface, origin, direction, true);
+        let result = pick_result(e, pick, origin, direction);
+        if result != 0 {
+            let object = e.call(RESULT_OBJECT_00458B50, &args![result]).u32();
+            if object == e.call(INTERFACE_OBJECT_007FA950, &args![this]).u32() {
+                let uv = e.call(RESULT_UV_00891170, &args![result]).u32();
+                let (u, v) = (e.mem.u32(uv), e.mem.u32(uv.wrapping_add(4)));
+                let scale = x87_store32(e.call(SCALE_00706E20, &[]).f64());
+                let factor = f64::from_bits(e.mem.u64(SCALE_DOUBLE_01078128));
+                let scale_u = x87_store32(x87_mul(x87_load32(scale), factor));
+                let x = x87_mul(x87_load32(u), x87_m32(scale_u));
+                e.mem.set_u32(out_u, x87_store32(x));
+                let y = x87_mul(x87_load32(v), x87_m32(scale));
+                e.mem.set_u32(out_v, x87_store32(y));
+                hit = 1;
+            }
+        }
+        if press != 0 || release != 0 {
+            let mut released = u32::MAX;
+            e.call(PICK_SET_006ECD40, &args![pick, 0u32]);
+            e.call(PICK_SET_00792780, &args![pick, 0u32]);
+            for button in 0..3u32 {
+                let target = pointer(e, this.addr() + BUTTONS + button * 4);
+                e.call(SET_MEMBER_0X14, &args![pick, target]);
+                cursor_ray(e, interface, origin, direction, false);
+                if pick_result(e, pick, origin, direction) != 0 {
+                    if press != 0 {
+                        e.set_global(PRESSED_BUTTON_011A0BA0, button);
+                    } else {
+                        released = button;
+                    }
+                }
+            }
+            if release != 0 && released == e.global::<u32>(PRESSED_BUTTON_011A0BA0) {
+                e.mem.set_u32(out_button, released.wrapping_add(1));
+                e.set_global(PRESSED_BUTTON_011A0BA0, u32::MAX);
+            }
+        }
+        e.call(PICK_DESTRUCT, &args![pick]);
+    });
+    hit
+}
+
+// Translated from 007f8a80 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`thiscall`, plain `RET`): with the value of
+/// `005c5420` below the setting `011db4b4`, the rendered menu's `007fb250`
+/// with the settings `011db4ec` and `011db3fc`; with it from that setting
+/// up to (not including) that plus `011db4e0`, its `007fb2b0` with
+/// `011db414`, `011db3bc` and `011db3b0`; then its burst with `011db480`,
+/// `011db43c` and the float `01016248`.
+pub fn fn_007f8a80(e: &mut Engine, _this: Ptr) {
+    let value = x87_store32(e.call(VALUE_005C5420, &[]).f64());
+    let value = x87_load32(value);
+    let address = e
+        .call(SETTING_VALUE_ADDRESS, &args![SETTING_011DB4B4])
+        .u32();
+    // FLD value; FLD setting; FCOMPP: setting above value.
+    if fld(e, address) > value {
+        let second = setting_float_bits(e, SETTING_011DB3FC);
+        let first = setting_float_bits(e, SETTING_011DB4EC);
+        let menu = rendered_menu(e);
+        e.call(RENDERED_MENU_007FB250, &args![menu, first, second]);
+    }
+    let address = e
+        .call(SETTING_VALUE_ADDRESS, &args![SETTING_011DB4B4])
+        .u32();
+    if fld(e, address) <= value {
+        let start = e
+            .call(SETTING_VALUE_ADDRESS, &args![SETTING_011DB4B4])
+            .u32();
+        let length = e
+            .call(SETTING_VALUE_ADDRESS, &args![SETTING_011DB4E0])
+            .u32();
+        let end = x87_add(fld(e, start), fmem(e, length));
+        if value < end {
+            let third = setting_float_bits(e, SETTING_011DB3B0);
+            let second = setting_float_bits(e, SETTING_011DB3BC);
+            let first = setting_float_bits(e, SETTING_011DB414);
+            let menu = rendered_menu(e);
+            e.call(RENDERED_MENU_007FB2B0, &args![menu, first, second, third]);
+        }
+    }
+    let last = float_copy(e, BURST_FLOAT_01016248);
+    let second = setting_float_bits(e, SETTING_011DB43C);
+    let first = setting_float_bits(e, SETTING_011DB480);
+    let menu = rendered_menu(e);
+    e.call(TRIGGER_BURST, &args![menu, first, second, last]);
+}
+
+// Translated from 007fa0f0 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 007fa0f0 - the C++ exception-unwinding frame (FS:[0]) is not translated.
+/// `FOPipboyManager::SetTabKnobPosition` (engine map; `thiscall`, `RET 8`):
+/// when tab position `index` (`fTabKnobPositions`) differs from the third
+/// knob's target (or either is a NaN), it becomes that target and the
+/// setting `011db288` that knob's rate; with the Pip-Boy open (`011db378`)
+/// and `sound`, `"UIPipBoyTab"` plays.
+pub fn fo_pipboy_manager_set_tab_knob_position(
+    e: &mut Engine,
+    this: Ptr<FOPipboyManager>,
+    index: u32,
+    sound: u32,
+) {
+    let position = this
+        .addr()
+        .wrapping_add(TAB_KNOB_POSITIONS)
+        .wrapping_add(index.wrapping_mul(4));
+    // FUCOMPP; TEST AH,0x44; JNP: equal skips.
+    if fld(e, position) == fld(e, this.addr() + THIRD_KNOB_TARGET) {
+        return;
+    }
+    let target = float_copy(e, position);
+    e.mem.set_u32(this.addr() + THIRD_KNOB_TARGET, target);
+    let rate = setting_float_bits(e, SETTING_TAB_KNOB_RATE);
+    e.mem.set_u32(this.addr() + THIRD_KNOB_RATE, rate);
+    if e.global::<u8>(PIPBOY_OPEN_011DB378) != 0 && sound & 0xff != 0 {
+        play_named_sound(e, SOUND_TAB);
+    }
+}
+
+// Translated from 007fa220 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`thiscall`, plain `RET`): unless `00703d50`
+/// is set, the interface's word `+0x4bc` is not 3 or its `00424940` byte is
+/// 4: on the player's first-person animation, group 1 is played (1, -1,
+/// -1) when its `00491040` sequence's `005f2420` word is not 1 and its
+/// `00494710` test with 1 passes; then `008eeaa0` with `0x17`, `00491180`
+/// with the player, the timer's float (`0084d030`) and the float
+/// `01012054`, and `00493900` with the player.
+pub fn fn_007fa220(e: &mut Engine, _this: Ptr) {
+    if e.call(CHECK_00703D50, &[]).u32() & 0xff != 0 {
+        return;
+    }
+    let interface = e.call(INTERFACE_SINGLETON, &[]).u32();
+    if e.mem.u32(interface.wrapping_add(0x4bc)) != 3 {
+        return;
+    }
+    let interface = e.call(INTERFACE_SINGLETON, &[]).u32();
+    if e.call(INTERFACE_BYTE_00424940, &args![interface]).u32() as i8 == 4 {
+        return;
+    }
+    let player = e.global::<u32>(PLAYER);
+    let animation = e.call(GET_ANIMATION, &args![player, 1u32]).u32();
+    let sequence = e.call(ANIMATION_00491040, &args![animation, 0u32]).u32();
+    if sequence != 0 {
+        let inner = e.call(SEQUENCE_0048F7F0, &args![sequence]).u32();
+        if e.call(SEQUENCE_WORD_005F2420, &args![inner]).u32() != 1
+            && e.call(ANIMATION_TEST_00494710, &args![animation, 1u32])
+                .u32()
+                & 0xff
+                != 0
+        {
+            e.call(
+                PLAY_GROUP,
+                &args![animation, 1u32, 1u32, u32::MAX, u32::MAX],
+            );
+        }
+    }
+    e.call(ANIMATION_008EEAA0, &args![animation, 0x17u32]);
+    let last = float_copy(e, TIME_ARGUMENT_01012054);
+    let time = x87_store32(e.call(TIMER_FLOAT, &args![TIMER_011F6394]).f64());
+    let player = e.global::<u32>(PLAYER);
+    e.call(ANIMATION_00491180, &args![animation, player, time, last]);
+    let player = e.global::<u32>(PLAYER);
+    e.call(ANIMATION_00493900, &args![animation, player]);
+}
+
+// Translated from 007fa540 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 007fa540 - the C++ exception-unwinding frame (FS:[0]) is not translated.
+/// `FOPipboyManager::UpdateLightEffect` (engine map; `thiscall`, `RET 4`:
+/// the time): while the light effect runs (`+0x162`): `FadeLight`, the
+/// light shown (`ShowPipboyLightEffect` with 0, 1, 0); the fade value (the
+/// time since `+0x164` over the setting `011db2bc`, clamped by `0040ebd0`
+/// with 1.0 and `00404010` with 0.0, reversed when the end value `+0x168`
+/// is 0) goes to the light node's (`0107778c`, else `0107826c`, under the
+/// Pip-Boy root) geometry property of kind `004af350`, or its shader
+/// property of kind `00438220`, and its properties are updated. When the
+/// value reaches the end value the effect stops, and for an end value of 0
+/// the light is hidden (`ShowPipboyLightEffect` with 0, 0, 0).
+pub fn fo_pipboy_manager_update_light_effect(e: &mut Engine, this: Ptr<FOPipboyManager>, now: f32) {
+    let base = this.addr();
+    if e.mem.u8(base + LIGHT_EFFECT_ON) == 0 {
+        return;
+    }
+    fo_pipboy_manager_fade_light(e, this, f32::from_bits(x87_quiet_bits(now.to_bits())));
+    fo_pipboy_manager_show_pipboy_light_effect(e, this, 0, 1, 0);
+    let root = pointer(e, base + PIPBOY_ROOT);
+    let value = fade_value(e, this, now, SETTING_LIGHT_EFFECT);
+    let mut light = find_under(e, root, LIGHT_NAME_ONE);
+    if light == 0 {
+        light = find_under(e, root, LIGHT_NAME_TWO);
+    }
+    let geometry = if light != 0 {
+        e.vcall(light, 0xc, &[]).u32()
+    } else {
+        0
+    };
+    if geometry != 0 && e.call(GEOMETRY_TEST_00453470, &args![geometry]).u32() != 0 {
+        let entry = e.call(PROPERTY_AT, &args![geometry, 0u32]).u32();
+        let object = e.vcall(entry, 0x18, &[]).u32();
+        if object != 0 {
+            let kind = e.call(PROPERTY_KIND_004AF350, &[]).u32();
+            let property = e.call(GET_PROPERTY, &args![object, kind]).u32();
+            if property != 0 {
+                e.call(PROPERTY_SET_0068C9F0, &args![property, float_bits(value)]);
+            } else {
+                let kind = e.call(PROPERTY_KIND_00438220, &[]).u32();
+                let shader = e.call(GET_PROPERTY, &args![object, kind]).u32();
+                e.call(SHADER_PROPERTY_SET_ALPHA, &args![shader, float_bits(value)]);
+            }
+            e.call(UPDATE_PROPERTIES, &args![object]);
+        }
+    }
+    // FLD value; FLD end; FUCOMPP: equal stops the effect.
+    if fld(e, base + LIGHT_EFFECT_END) == x87_load32(value) {
+        e.mem.set_u8(base + LIGHT_EFFECT_ON, 0);
+        if fld(e, base + LIGHT_EFFECT_END) == zero_double(e) {
+            fo_pipboy_manager_show_pipboy_light_effect(e, this, 0, 0, 0);
+        }
+    }
+}
+
+/// The double at `01012060` (`FCOMP qword`).
+fn zero_double(e: &Engine) -> f64 {
+    f64::from_bits(e.mem.u64(ZERO_DOUBLE_01012060))
+}
+
+/// A stored float passed through `FLD`/`FSTP` as an argument.
+fn float_bits(value: u32) -> u32 {
+    x87_quiet_bits(value)
+}
+
+/// The fade value of the light effect at `now`, as a stored float: the
+/// time since the start over the setting, `0040ebd0` with 1.0 and
+/// `00404010` with 0.0 (results in `ST0`, stored), then `1 - value` when
+/// the end value equals the double `01012060`.
+fn fade_value(e: &mut Engine, this: Ptr<FOPipboyManager>, now: f32, setting: u32) -> u32 {
+    let base = this.addr();
+    let elapsed = x87_store32(x87_sub(
+        x87_load32(now.to_bits()),
+        fmem(e, base + LIGHT_EFFECT_START),
+    ));
+    let duration = e.call(SETTING_VALUE_ADDRESS, &args![setting]).u32();
+    let ratio = x87_store32(x87_div(x87_load32(elapsed), fmem(e, duration)));
+    let one = 1.0f32.to_bits();
+    let clamped = e
+        .call(CLAMP_0040EBD0, &args![x87_quiet_bits(ratio), one])
+        .f64();
+    let value = x87_store32(clamped);
+    let clamped = e
+        .call(
+            CLAMP_00404010,
+            &args![0.0f32.to_bits(), x87_quiet_bits(value)],
+        )
+        .f64();
+    let mut value = x87_store32(clamped);
+    if fld(e, base + LIGHT_EFFECT_END) == zero_double(e) {
+        // FLD value; FLD1; FSUBRP: 1 - value.
+        value = x87_store32(x87_sub(1.0, x87_load32(value)));
+    }
+    value
+}
+
+// Translated from 007fa7a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `FOPipboyManager::FadeLightEffect` (engine map; `thiscall`, `RET 4`):
+/// with the first-person light on (`b1stPersonLightOn`), the effect starts
+/// now (the timer's time as a float at `+0x164`, `+0x162` set) toward 0.0
+/// for `fade_out`, else 1.0 (`+0x168`).
+pub fn fo_pipboy_manager_fade_light_effect(
+    e: &mut Engine,
+    this: Ptr<FOPipboyManager>,
+    fade_out: u32,
+) {
+    if e.get(this, FOPipboyManager::b1stPersonLightOn) == 0 {
+        return;
+    }
+    let base = this.addr();
+    let time = e.call(TIMER_TIME, &args![TIMER_011F6394]).u32();
+    // FILD qword of the zero-extended time.
+    e.mem
+        .set_u32(base + LIGHT_EFFECT_START, x87_store32(f64::from(time)));
+    e.mem.set_u8(base + LIGHT_EFFECT_ON, 1);
+    let end = if fade_out & 0xff != 0 { 0.0f32 } else { 1.0 };
+    e.mem.set_u32(base + LIGHT_EFFECT_END, end.to_bits());
+}
+
+// Translated from 007fa810 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `FOPipboyManager::FadeLight` (engine map; `thiscall`, `RET 4`: the
+/// time): the fade value (as in `UpdateLightEffect`, over the setting
+/// `011db308`) given to the player's light (`00572750`, when it and its
+/// object are set) as its dimmer (`0050dd20`).
+pub fn fo_pipboy_manager_fade_light(e: &mut Engine, this: Ptr<FOPipboyManager>, now: f32) {
+    let value = fade_value(e, this, now, SETTING_FADE_LIGHT);
+    let player = e.global::<u32>(PLAYER);
+    let light = e.call(PLAYER_LIGHT_00572750, &args![player]).u32();
+    if light != 0 && pointer(e, light) != 0 {
+        let object = pointer(e, light);
+        e.call(LIGHT_SET_DIMMER, &args![object, float_bits(value)]);
+    }
+}
+
+/// This unit's n086 translations, by exe address.
+fn funcs_n086() -> Vec<(u32, AbiFn)> {
+    vec![
+        entry!(
+            0x007f_8010,
+            fo_pipboy_manager_on_menu_open(Ptr<FOPipboyManager>)
+        ),
+        entry!(0x007f_8160, fn_007f8160(u32)),
+        entry!(
+            0x007f_8170,
+            fo_pipboy_manager_on_menu_close(Ptr<FOPipboyManager>)
+        ),
+        entry!(0x007f_8320, fn_007f8320(Ptr<FOPipboyManager>, f32)),
+        entry!(
+            0x007f_8610,
+            fo_pipboy_manager_move_knob(Ptr<FOPipboyManager>, u32, f32, f32, u32)
+        ),
+        entry!(
+            0x007f_8720,
+            fn_007f8720(Ptr<FOPipboyManager>, u32, u32, u32, u32, u32) -> u8
+        ),
+        entry!(0x007f_8a80, fn_007f8a80(Ptr)),
+        entry!(
+            0x007f_a0f0,
+            fo_pipboy_manager_set_tab_knob_position(Ptr<FOPipboyManager>, u32, u32)
+        ),
+        entry!(0x007f_a220, fn_007fa220(Ptr)),
+        entry!(
+            0x007f_a540,
+            fo_pipboy_manager_update_light_effect(Ptr<FOPipboyManager>, f32)
+        ),
+        entry!(
+            0x007f_a7a0,
+            fo_pipboy_manager_fade_light_effect(Ptr<FOPipboyManager>, u32)
+        ),
+        entry!(
+            0x007f_a810,
+            fo_pipboy_manager_fade_light(Ptr<FOPipboyManager>, f32)
+        ),
+    ]
+}
+
+#[cfg(test)]
+mod n086_tests {
+    use super::*;
+
+    fn calls(e: &Engine, addr: u32) -> Vec<Vec<u32>> {
+        e.call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|c| c.0 == addr)
+            .map(|c| c.1.clone())
+            .collect()
+    }
+
+    fn quiet(e: &mut Engine, addrs: &[u32]) {
+        for &a in addrs {
+            e.register(a, |_, _| Ret::default());
+        }
+    }
+
+    fn st0(value: f32) -> Ret {
+        Ret {
+            st0: f64::from(value),
+            ..Ret::default()
+        }
+    }
+
+    /// The pages of the globals and settings these functions read; each
+    /// setting's value is at the setting itself (`00403e20` answers its
+    /// argument).
+    fn world(e: &mut Engine) -> u32 {
+        for page in [
+            0x011d_8000u32,
+            0x011d_b000,
+            0x0118_a000,
+            0x011a_0000,
+            0x0101_6000,
+            0x0107_8000,
+            0x0101_2000,
+            0x011d_e000,
+        ] {
+            e.map(page, 0x1000);
+        }
+        e.register(SETTING_VALUE_ADDRESS, |_, a| a[0].into_ret());
+        e.register(POINTER_GET, |e, a| e.mem.u32(a[0]).into_ret());
+        let player = e.mem.alloc(0x10);
+        let vtable = e.mem.alloc(0x300);
+        e.mem.set_u32(player, vtable);
+        e.mem.set_u32(vtable + 0x214, 0x7500_0214);
+        e.set_global(PLAYER, player);
+        player
+    }
+
+    fn manager(e: &mut Engine) -> u32 {
+        e.mem.alloc(0x170)
+    }
+
+    fn sounds(e: &mut Engine) {
+        quiet(
+            e,
+            &[
+                SOUND_STOP,
+                SOUND_RELEASE,
+                SOUND_PLAY,
+                SOUND_CONSTRUCT,
+                SOUND_ASSIGN,
+                SOUND_DESTRUCT,
+            ],
+        );
+        e.register(AUDIO_INSTANCE, |_, _| 0xa0d10u32.into_ret());
+        e.register(AUDIO_GET_SOUND_BY_NAME, |_, a| {
+            (a[2] | 0x8000_0000).into_ret()
+        });
+    }
+
+    #[test]
+    fn on_menu_open_starts_the_hum_and_the_burst() {
+        let mut e = Engine::new();
+        world(&mut e);
+        sounds(&mut e);
+        quiet(
+            &mut e,
+            &[
+                MENU_STATE_007FA8D0,
+                COLOR_CONSTRUCT,
+                ISOLATE_MENU_ELEMENTS,
+                TRIGGER_BURST,
+                RENDERED_MENU_ON_MENU_OPEN,
+                MODIFIER_STOP,
+                AFTER_OPEN_004DE8C0,
+            ],
+        );
+        e.register(SYSTEM_COLORS, |_, _| 0u32.into_ret());
+        e.register(SYSTEM_COLOR, |_, _| 0u32.into_ret());
+        e.register(GET_HIT_MODIFIER, |_, _| 0x3131u32.into_ret());
+        e.register(PIPBOY_STATE, |_, _| 0xff00u32.into_ret());
+        let this = manager(&mut e);
+        e.call_log = Some(vec![]);
+        e.call(0x007f_8010, &args![this]);
+        assert!(calls(&e, MENU_STATE_007FA8D0).is_empty());
+        e.register(PIPBOY_STATE, |_, _| 1u32.into_ret());
+        e.mem.set_f32(SETTING_011DB480, 1.5);
+        e.mem.set_f32(SETTING_011DB43C, 2.5);
+        e.mem.set_f32(BURST_FLOAT_01016248, 3.5);
+        e.set_global(OPEN_STATE_0118ABB1, 9u8);
+        e.call_log = Some(vec![]);
+        e.call(0x007f_8010, &args![this]);
+        assert_eq!(calls(&e, MENU_STATE_007FA8D0), vec![vec![this, 0]]);
+        assert_eq!(e.global::<u8>(MENU_OPEN_BYTE_011D890A), 1);
+        assert_eq!(e.global::<u8>(PIPBOY_OPEN_011DB378), 1);
+        assert_eq!(calls(&e, ISOLATE_MENU_ELEMENTS), vec![vec![1, 1]]);
+        let hum = this + HUM_SOUND;
+        assert_eq!(calls(&e, SOUND_STOP), vec![vec![hum]]);
+        assert_eq!(
+            calls(&e, SOUND_ASSIGN),
+            vec![vec![hum, SOUND_HUM | 0x8000_0000]]
+        );
+        assert_eq!(
+            calls(&e, AUDIO_GET_SOUND_BY_NAME)[0][2..],
+            [SOUND_HUM, 0x31]
+        );
+        assert_eq!(calls(&e, SOUND_PLAY), vec![vec![hum, 0]]);
+        assert_eq!(
+            calls(&e, TRIGGER_BURST),
+            vec![vec![
+                this,
+                1.5f32.to_bits(),
+                2.5f32.to_bits(),
+                3.5f32.to_bits()
+            ]]
+        );
+        assert_eq!(calls(&e, MODIFIER_STOP), vec![vec![0x3131]]);
+        assert_eq!(e.global::<u8>(OPEN_STATE_0118ABB1), 0);
+        assert_eq!(calls(&e, AFTER_OPEN_004DE8C0), vec![vec![0]]);
+    }
+
+    #[test]
+    fn on_menu_close_restores_the_animations() {
+        let mut e = Engine::new();
+        let player = world(&mut e);
+        sounds(&mut e);
+        quiet(
+            &mut e,
+            &[
+                MENU_STATE_007FA8D0,
+                CLEAR_GROUP,
+                PLAY_GROUP,
+                RESTORE_MENU_ELEMENTS,
+                RENDERED_MENU_007FB0B0,
+            ],
+        );
+        e.register(ACTOR_IS_REFRACTIVE, |_, _| 0x1201u32.into_ret());
+        e.register(GET_ANIMATION, |_, a| (0x6000 + a[1]).into_ret());
+        e.register(SPECIAL_IDLE_DONE_PLAYING, |_, _| 0x100u32.into_ret());
+        e.register(GET_ANIM_GROUP, |_, _| 0xabcd_0012u32.into_ret());
+        e.register(0x7500_0214, |_, _| 1u32.into_ret());
+        e.register(PIPBOY_STATE, |_, _| 1u32.into_ret());
+        let this = manager(&mut e);
+        e.set_global(PIPBOY_OPEN_011DB378, 1u8);
+        e.call_log = Some(vec![]);
+        e.call(0x007f_8170, &args![this]);
+        assert_eq!(calls(&e, MENU_STATE_007FA8D0), vec![vec![this, 1]]);
+        assert_eq!(calls(&e, CLEAR_GROUP), vec![vec![0x6001, 7, 0]]);
+        assert_eq!(
+            calls(&e, PLAY_GROUP),
+            vec![
+                vec![0x6001, 0x12, 1, u32::MAX, u32::MAX],
+                vec![0x6000, 0x12, 1, u32::MAX, u32::MAX],
+                vec![0x6001, 0, 1, u32::MAX, 0]
+            ]
+        );
+        assert_eq!(calls(&e, GET_ANIM_GROUP)[0], vec![player, 0, 0, 0, 0]);
+        assert_eq!(
+            calls(&e, AUDIO_GET_SOUND_BY_NAME)[0][2..],
+            [SOUND_ACCESS_DOWN, 0x121]
+        );
+        assert_eq!(
+            calls(&e, SOUND_PLAY),
+            vec![vec![SOUND_ACCESS_DOWN | 0x8000_0000, 0]]
+        );
+        assert_eq!(calls(&e, SOUND_STOP), vec![vec![this + HUM_SOUND]]);
+        assert_eq!(calls(&e, RENDERED_MENU_007FB0B0), vec![vec![this]]);
+        assert_eq!(e.global::<u8>(PIPBOY_OPEN_011DB378), 0);
+        assert_eq!(e.global::<u8>(OPEN_STATE_0118ABB1), 1);
+
+        // No animation, and the state test fails: only 007fa8d0.
+        e.register(GET_ANIMATION, |_, _| 0u32.into_ret());
+        e.register(PIPBOY_STATE, |_, _| 0u32.into_ret());
+        e.call_log = Some(vec![]);
+        e.call(0x007f_8170, &args![this]);
+        assert!(calls(&e, PLAY_GROUP).is_empty());
+        assert!(calls(&e, SOUND_STOP).is_empty());
+    }
+
+    #[test]
+    fn knob_update_steps_toward_the_targets() {
+        let mut e = Engine::new();
+        world(&mut e);
+        quiet(
+            &mut e,
+            &[SET_AXIS_ANGLE, UPDATE_DATA_CONSTRUCT, NODE_UPDATE],
+        );
+        let this = manager(&mut e);
+        let knob = |i: u32| this + i * 4;
+        for (i, (position, target, rate)) in
+            (0u32..).zip([(0.0f32, 1.0f32, 2.0f32), (3.0, 1.0, 4.0), (1.0, 1.0, 1.0)])
+        {
+            e.mem.set_f32(knob(i) + KNOB_POSITIONS, position);
+            e.mem.set_f32(knob(i) + KNOB_TARGETS, target);
+            e.mem.set_f32(knob(i) + KNOB_RATES, rate);
+            e.mem.set_u32(knob(i) + KNOBS, 0x900 + i);
+        }
+        e.mem.set_f32(LAST_KNOB_TIME, 1.0);
+        e.call_log = Some(vec![]);
+        e.call(0x007f_8320, &args![this, 1.25f32.to_bits()]);
+        assert_eq!(e.mem.f32(knob(0) + KNOB_POSITIONS), 0.5);
+        assert_eq!(e.mem.f32(knob(1) + KNOB_POSITIONS), 2.0);
+        assert_eq!(e.mem.f32(knob(2) + KNOB_POSITIONS), 1.0);
+        let (one, half, two) = (1.0f32.to_bits(), 0.5f32.to_bits(), 2.0f32.to_bits());
+        assert_eq!(
+            calls(&e, SET_AXIS_ANGLE),
+            vec![vec![0x900, half, one, 0, 0], vec![0x901, two, 0, 0, one]]
+        );
+        assert_eq!(calls(&e, NODE_UPDATE).len(), 2);
+        assert_eq!(e.mem.f32(LAST_KNOB_TIME), 1.25);
+        // Overshooting stops at the target.
+        e.mem.set_f32(knob(0) + KNOB_RATES, 100.0);
+        e.call(0x007f_8320, &args![this, 2.0f32.to_bits()]);
+        assert_eq!(e.mem.f32(knob(0) + KNOB_POSITIONS), 1.0);
+        assert_eq!(e.mem.f32(knob(1) + KNOB_POSITIONS), 1.0);
+    }
+
+    #[test]
+    fn move_knob_moves_the_target() {
+        let mut e = Engine::new();
+        world(&mut e);
+        sounds(&mut e);
+        let this = manager(&mut e);
+        e.mem.set_f32(this + KNOB_TARGETS + 4, 1.0);
+        e.call_log = Some(vec![]);
+        e.call(
+            0x007f_8610,
+            &args![this, 1u32, 0.5f32.to_bits(), 3.0f32.to_bits(), 1u32],
+        );
+        assert_eq!(e.mem.f32(this + KNOB_TARGETS + 4), 1.5);
+        assert_eq!(e.mem.f32(this + KNOB_RATES + 4), 3.0);
+        assert!(calls(&e, SOUND_PLAY).is_empty());
+        e.call(
+            0x007f_8610,
+            &args![this, 0u32, 0.5f32.to_bits(), 3.0f32.to_bits(), 1u32],
+        );
+        assert_eq!(e.mem.f32(this + KNOB_TARGETS), 0.5);
+        assert_eq!(
+            calls(&e, AUDIO_GET_SOUND_BY_NAME)[0][2..],
+            [SOUND_SCROLL, 0x121]
+        );
+        assert_eq!(calls(&e, SOUND_PLAY).len(), 1);
+        assert_eq!(calls(&e, SOUND_DESTRUCT).len(), 2);
+    }
+
+    #[test]
+    fn screen_pick_answers_coordinates_and_buttons() {
+        let mut e = Engine::new();
+        world(&mut e);
+        quiet(
+            &mut e,
+            &[
+                POINT_CONSTRUCT_006815C0,
+                PICK_CONSTRUCT,
+                PICK_SET_00458B30,
+                SET_MEMBER_0X14,
+                PICK_SET_006ECD40,
+                PICK_SET_00792780,
+                CAMERA_RAY,
+                PICK_DESTRUCT,
+            ],
+        );
+        e.register(INTERFACE_SINGLETON, |_, _| 0x1111u32.into_ret());
+        e.register(INTERFACE_OBJECT_007FA950, |_, _| 0x5c5cu32.into_ret());
+        e.register(PICK_CHECK_007178A0, |_, _| 1u32.into_ret());
+        e.register(PICK_CHECK_00717920, |_, _| 1u32.into_ret());
+        e.register(CAMERA_OWNER_0045C670, |_, _| 0x2222u32.into_ret());
+        e.register(CAMERA_006629F0, |_, _| 0x3333u32.into_ret());
+        e.register(CURSOR_X_00792760, |_, _| st0(10.0));
+        e.register(CURSOR_Y_009A9350, |_, _| st0(20.0));
+        e.register(FTOL2, |_, a| {
+            (f64::from_bits(u64::from(a[0]) | (u64::from(a[1]) << 32)) as u32).into_ret()
+        });
+        e.register(PICK_OBJECTS, |_, _| 1u32.into_ret());
+        e.register(PICK_RESULTS, |_, _| 0x4444u32.into_ret());
+        e.register(PICK_RESULT_AT, |_, _| 0x4545u32.into_ret());
+        e.register(RESULT_OBJECT_00458B50, |_, _| 0x5c5cu32.into_ret());
+        let uv = e.mem.alloc(8);
+        e.mem.set_f32(uv, 0.5);
+        e.mem.set_f32(uv + 4, 0.25);
+        e.register_double(RESULT_UV_00891170, move |_, _| uv.into_ret());
+        e.register(SCALE_00706E20, |_, _| st0(2.0));
+        e.mem.set_u64(SCALE_DOUBLE_01078128, 1.5f64.to_bits());
+        let this = manager(&mut e);
+        for i in 0..3 {
+            e.mem.set_u32(this + BUTTONS + i * 4, 0x700 + i);
+        }
+        e.mem.set_u32(this + PIPBOY_ROOT, 0x800);
+        let outs = e.mem.alloc(12);
+        e.set_global(PRESSED_BUTTON_011A0BA0, u32::MAX);
+        e.call_log = Some(vec![]);
+        let hit = e.call(
+            0x007f_8720,
+            &args![this, 1u32, 0u32, outs, outs + 4, outs + 8],
+        );
+        assert_eq!(hit.u32() & 0xff, 1);
+        assert_eq!(e.mem.f32(outs), 1.5);
+        assert_eq!(e.mem.f32(outs + 4), 0.5);
+        let rays = calls(&e, CAMERA_RAY);
+        assert_eq!(rays.len(), 4);
+        assert_eq!(rays[0][..3], [0x3333, 20, 10]);
+        assert_eq!(e.global::<u32>(PRESSED_BUTTON_011A0BA0), 2);
+        let pick = calls(&e, PICK_CONSTRUCT)[0][0];
+        assert_eq!(
+            calls(&e, SET_MEMBER_0X14)[1..],
+            [vec![pick, 0x700], vec![pick, 0x701], vec![pick, 0x702]]
+        );
+        // A release on the pressed button answers it plus 1.
+        e.call(
+            0x007f_8720,
+            &args![this, 0u32, 1u32, outs, outs + 4, outs + 8],
+        );
+        assert_eq!(e.mem.u32(outs + 8), 3);
+        assert_eq!(e.global::<u32>(PRESSED_BUTTON_011A0BA0), u32::MAX);
+        // Without the third button: false, nothing picked.
+        e.mem.set_u32(this + BUTTONS + 8, 0);
+        e.call_log = Some(vec![]);
+        let hit = e.call(
+            0x007f_8720,
+            &args![this, 1u32, 0u32, outs, outs + 4, outs + 8],
+        );
+        assert_eq!(hit.u32() & 0xff, 0);
+        assert!(calls(&e, PICK_CONSTRUCT).is_empty());
+    }
+
+    #[test]
+    fn value_bursts_by_the_settings() {
+        let mut e = Engine::new();
+        world(&mut e);
+        quiet(
+            &mut e,
+            &[
+                RENDERED_MENU_007FB250,
+                RENDERED_MENU_007FB2B0,
+                TRIGGER_BURST,
+            ],
+        );
+        e.register(INTERFACE_SINGLETON, |_, _| 0x1111u32.into_ret());
+        e.register(INTERFACE_RENDERED_MENU, |_, _| 0x2222u32.into_ret());
+        e.register(VALUE_005C5420, |_, _| st0(1.0));
+        for (setting, value) in [
+            (SETTING_011DB4B4, 2.0f32),
+            (SETTING_011DB4E0, 5.0),
+            (SETTING_011DB4EC, 0.25),
+            (SETTING_011DB3FC, 0.5),
+            (SETTING_011DB414, 0.75),
+        ] {
+            e.mem.set_f32(setting, value);
+        }
+        e.call_log = Some(vec![]);
+        e.call(0x007f_8a80, &args![0u32]);
+        assert_eq!(
+            calls(&e, RENDERED_MENU_007FB250),
+            vec![vec![0x2222, 0.25f32.to_bits(), 0.5f32.to_bits()]]
+        );
+        assert!(calls(&e, RENDERED_MENU_007FB2B0).is_empty());
+        assert_eq!(calls(&e, TRIGGER_BURST).len(), 1);
+        e.register(VALUE_005C5420, |_, _| st0(3.0));
+        e.call_log = Some(vec![]);
+        e.call(0x007f_8a80, &args![0u32]);
+        assert!(calls(&e, RENDERED_MENU_007FB250).is_empty());
+        assert_eq!(calls(&e, RENDERED_MENU_007FB2B0)[0][1], 0.75f32.to_bits());
+        // At the window's end: no second call.
+        e.register(VALUE_005C5420, |_, _| st0(7.0));
+        e.call_log = Some(vec![]);
+        e.call(0x007f_8a80, &args![0u32]);
+        assert!(calls(&e, RENDERED_MENU_007FB2B0).is_empty());
+    }
+
+    #[test]
+    fn tab_knob_position_copies_and_ticks() {
+        let mut e = Engine::new();
+        world(&mut e);
+        sounds(&mut e);
+        let this = manager(&mut e);
+        e.mem.set_f32(this + TAB_KNOB_POSITIONS + 8, 0.75);
+        e.mem.set_f32(SETTING_TAB_KNOB_RATE, 4.0);
+        e.set_global(PIPBOY_OPEN_011DB378, 1u8);
+        e.call_log = Some(vec![]);
+        e.call(0x007f_a0f0, &args![this, 2u32, 1u32]);
+        assert_eq!(e.mem.f32(this + THIRD_KNOB_TARGET), 0.75);
+        assert_eq!(e.mem.f32(this + THIRD_KNOB_RATE), 4.0);
+        assert_eq!(
+            calls(&e, AUDIO_GET_SOUND_BY_NAME)[0][2..],
+            [SOUND_TAB, 0x121]
+        );
+        // The same position again: nothing.
+        e.mem.set_f32(SETTING_TAB_KNOB_RATE, 5.0);
+        e.call_log = Some(vec![]);
+        e.call(0x007f_a0f0, &args![this, 2u32, 1u32]);
+        assert_eq!(e.mem.f32(this + THIRD_KNOB_RATE), 4.0);
+        assert!(calls(&e, SOUND_PLAY).is_empty());
+    }
+
+    #[test]
+    fn fn_007fa220_plays_the_idle_groups() {
+        let mut e = Engine::new();
+        let player = world(&mut e);
+        quiet(
+            &mut e,
+            &[
+                PLAY_GROUP,
+                ANIMATION_008EEAA0,
+                ANIMATION_00491180,
+                ANIMATION_00493900,
+            ],
+        );
+        let interface = e.mem.alloc(0x500);
+        e.mem.set_u32(interface + 0x4bc, 3);
+        e.register_double(INTERFACE_SINGLETON, move |_, _| interface.into_ret());
+        e.register(CHECK_00703D50, |_, _| 0x100u32.into_ret());
+        e.register(INTERFACE_BYTE_00424940, |_, _| 0x105u32.into_ret());
+        e.register(GET_ANIMATION, |_, _| 0x6000u32.into_ret());
+        e.register(ANIMATION_00491040, |_, _| 0x6100u32.into_ret());
+        e.register(SEQUENCE_0048F7F0, |_, _| 0x6200u32.into_ret());
+        e.register(SEQUENCE_WORD_005F2420, |_, _| 2u32.into_ret());
+        e.register(ANIMATION_TEST_00494710, |_, _| 1u32.into_ret());
+        e.register(TIMER_FLOAT, |_, _| st0(0.5));
+        e.mem.set_f32(TIME_ARGUMENT_01012054, -1.0);
+        e.call_log = Some(vec![]);
+        e.call(0x007f_a220, &args![0u32]);
+        assert_eq!(
+            calls(&e, PLAY_GROUP),
+            vec![vec![0x6000, 1, 1, u32::MAX, u32::MAX]]
+        );
+        assert_eq!(calls(&e, ANIMATION_008EEAA0), vec![vec![0x6000, 0x17]]);
+        assert_eq!(
+            calls(&e, ANIMATION_00491180),
+            vec![vec![0x6000, player, 0.5f32.to_bits(), (-1.0f32).to_bits()]]
+        );
+        assert_eq!(calls(&e, ANIMATION_00493900), vec![vec![0x6000, player]]);
+        // The interface byte 4 stops it.
+        e.register(INTERFACE_BYTE_00424940, |_, _| 0x104u32.into_ret());
+        e.call_log = Some(vec![]);
+        e.call(0x007f_a220, &args![0u32]);
+        assert!(calls(&e, GET_ANIMATION).is_empty());
+    }
+
+    #[test]
+    fn light_effect_fades_and_stops() {
+        let mut e = Engine::new();
+        let player = world(&mut e);
+        quiet(
+            &mut e,
+            &[
+                LIGHT_SET_DIMMER,
+                SET_CULLED,
+                FIXED_STRING_DESTRUCT,
+                PROPERTY_SET_0068C9F0,
+                UPDATE_PROPERTIES,
+            ],
+        );
+        // The clamps: min with the second, max with the first.
+        e.register(CLAMP_0040EBD0, |_, a| {
+            st0(f32::from_bits(a[0]).min(f32::from_bits(a[1])))
+        });
+        e.register(CLAMP_00404010, |_, a| {
+            st0(f32::from_bits(a[0]).max(f32::from_bits(a[1])))
+        });
+        e.register(TIMER_TIME, |_, _| 100u32.into_ret());
+        let light = e.mem.alloc(4);
+        e.mem.set_u32(light, 0x0e0e);
+        e.register_double(PLAYER_LIGHT_00572750, move |_, _| light.into_ret());
+        let this = manager(&mut e);
+        e.mem.set_f32(SETTING_FADE_LIGHT, 4.0);
+        e.mem.set_f32(SETTING_LIGHT_EFFECT, 4.0);
+        // FadeLightEffect: only with the first-person light on.
+        e.call(0x007f_a7a0, &args![this, 0u32]);
+        assert_eq!(e.mem.u8(this + LIGHT_EFFECT_ON), 0);
+        e.set(
+            Ptr::<FOPipboyManager>::new(this),
+            FOPipboyManager::b1stPersonLightOn,
+            1,
+        );
+        e.call(0x007f_a7a0, &args![this, 0u32]);
+        assert_eq!(e.mem.f32(this + LIGHT_EFFECT_START), 100.0);
+        assert_eq!(e.mem.u8(this + LIGHT_EFFECT_ON), 1);
+        assert_eq!(e.mem.f32(this + LIGHT_EFFECT_END), 1.0);
+        // FadeLight at 101: a quarter.
+        e.call_log = Some(vec![]);
+        e.call(0x007f_a810, &args![this, 101.0f32.to_bits()]);
+        assert_eq!(calls(&e, PLAYER_LIGHT_00572750), vec![vec![player]]);
+        assert_eq!(
+            calls(&e, LIGHT_SET_DIMMER),
+            vec![vec![0x0e0e, 0.25f32.to_bits()]]
+        );
+        // Fading out: the value is reversed.
+        e.call(0x007f_a7a0, &args![this, 1u32]);
+        e.call_log = Some(vec![]);
+        e.call(0x007f_a810, &args![this, 101.0f32.to_bits()]);
+        assert_eq!(calls(&e, LIGHT_SET_DIMMER)[0][1], 0.75f32.to_bits());
+
+        // UpdateLightEffect at the end (value 0 = end 0): stops and hides.
+        let root = e.mem.alloc(4);
+        let vtable = e.mem.alloc(0x100);
+        e.mem.set_u32(root, vtable);
+        e.mem.set_u32(vtable + 0x9c, 0x7600_009c);
+        e.register(0x7600_009c, |_, _| 0u32.into_ret());
+        e.register(FIXED_STRING_CONSTRUCT, |_, a| a[1].into_ret());
+        e.mem.set_u32(this + PIPBOY_ROOT, root);
+        e.call_log = Some(vec![]);
+        e.call(0x007f_a540, &args![this, 200.0f32.to_bits()]);
+        assert_eq!(e.mem.u8(this + LIGHT_EFFECT_ON), 0);
+        // Two lookups for the effect's own light, two for each show.
+        assert_eq!(calls(&e, 0x7600_009c).len(), 6);
+        assert_eq!(calls(&e, LIGHT_SET_DIMMER).len(), 1);
+        // Not running: nothing.
+        e.call_log = Some(vec![]);
+        e.call(0x007f_a540, &args![this, 200.0f32.to_bits()]);
+        assert!(calls(&e, LIGHT_SET_DIMMER).is_empty());
     }
 }

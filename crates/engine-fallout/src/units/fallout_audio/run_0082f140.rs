@@ -69,6 +69,18 @@ pub fn fn_0082f610(e: &mut Engine, this: Ptr) -> Ptr {
     this
 }
 
+// Translated from 0082f160 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`fallout/audio`): the scalar deleting destructor of the class
+/// [`fn_0082f140`] destroys, `thiscall` with the flags (`RET 4`): the destructor, then with bit 0
+/// set the object freed (`00401030`). Answers `this`.
+pub fn fn_0082f160(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    fn_0082f140(e, this);
+    if flags & 1 != 0 {
+        e.call(OPERATOR_DELETE, &args![this]);
+    }
+    this
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -86,6 +98,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x0082_f520, fn_0082f520(Ptr, u32) -> Ptr),
         entry!(0x0082_f550, fn_0082f550(Ptr)),
         entry!(0x0082_f570, fn_0082f570(Ptr, Ptr) -> u64),
+        entry!(0x0082_f160, fn_0082f160(Ptr, u32) -> Ptr),
     ]
 }
 
@@ -540,5 +553,32 @@ mod b052_tests {
         e.mem.set_u64(result, 7);
         assert_eq!(e.call(0x0082_f570, &args![this, result]).u64(), 0);
         assert_eq!(e.mem.u64(result), 0);
+    }
+}
+
+#[cfg(test)]
+mod n089_tests {
+    use super::*;
+
+    #[test]
+    fn n089_0082f160_destroys_and_frees_on_bit_0() {
+        let mut e = Engine::new();
+        e.register(OPERATOR_DELETE, |_, _| Ret::default());
+        let this = e.mem.alloc(8);
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x0082_f160, &args![this, 2u32]).u32(), this);
+        assert_eq!(e.mem.u32(this), BASE_VTABLE_0107CB6C);
+        let deletes = |e: &Engine| {
+            e.call_log
+                .as_ref()
+                .unwrap()
+                .iter()
+                .filter(|c| c.0 == OPERATOR_DELETE)
+                .count()
+        };
+        assert_eq!(deletes(&e), 0);
+        e.call_log = Some(vec![]);
+        e.call(0x0082_f160, &args![this, 1u32]);
+        assert_eq!(deletes(&e), 1);
     }
 }

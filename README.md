@@ -76,7 +76,7 @@ plugins, Linux and VR.
 ## Progress
 
 <p align="center">
-  <img src="docs/media/progress.svg" alt="Engine port progress: 95.6% of the original program's functions covered" width="100%">
+  <img src="docs/media/progress.svg" alt="Engine port progress: 98.1% of the original program's functions covered" width="100%">
 </p>
 
 The original game's systems switch over one at a time, each in its own
@@ -85,11 +85,11 @@ playable build:
 | | System | Status |
 | :---: | --- | --- |
 | ✅ | **Foundations:** the map of the original program, the frame order, the engine running in play | Done (Build 42) |
-| 🔨 | **Movement and physics:** how walking, jumping and collisions feel | In progress: all 9,011 Havok functions translated (739 of them still have a marked untranslated part, mostly C++ exception frames), physics about 99%; wiring the game's own physics into play is under way: on the play-build branch the game's own start-up now runs from `main` through the archives, Main::Main and the scene graph through the renderer's start-up (its Direct3D 9 device, shaders and textures on our own layer) the whole scene-graph start-up and face generation, up to the intro movie |
-| 🔨 | **Animation and faces** | In progress: nearly all translated (99%) |
-| ⬜ | **Audio:** sounds, music and the radio | Nearly nine-tenths translated |
-| 🔨 | **Graphics:** lighting, weather and effects matching the original | Started: trees (SpeedTree) translated; the game's own renderer is being translated to run on our own Direct3D 9 layer ([ADR-0007](docs/adr/0007-renderer-translated-on-own-d3d9-layer.md)); about 95% done |
-| ⬜ | **Gameplay:** combat, AI, quests, dialogue, menus, V.A.T.S., perks, crafting and minigames | About 98% translated, not yet switched on |
+| 🔨 | **Movement and physics:** how walking, jumping and collisions feel | In progress: all 9,011 Havok functions translated (739 of them still have a marked untranslated part, mostly C++ exception frames), every physics function translated; wiring the game's own physics into play is under way: on the play-build branch the game's own start-up now runs from `main` through the archives, Main::Main and the scene graph through the renderer's start-up (its Direct3D 9 device, shaders and textures on our own layer) the whole scene-graph start-up, face generation, the movie player and the game data, into the player's creation |
+| 🔨 | **Animation and faces** | In progress: every function translated (some still lack their C++ exception frames), not yet switched on |
+| ⬜ | **Audio:** sounds, music and the radio | Every function translated, not yet switched on; sound output on our own DirectSound layer is being built |
+| 🔨 | **Graphics:** lighting, weather and effects matching the original | In progress: trees (SpeedTree) translated; the game's own renderer is translated to run on our own Direct3D 9 layer ([ADR-0007](docs/adr/0007-renderer-translated-on-own-d3d9-layer.md)); every function translated, being brought up in the play build |
+| ⬜ | **Gameplay:** combat, AI, quests, dialogue, menus, V.A.T.S., perks, crafting and minigames | Over 99% translated, not yet switched on |
 | ⬜ | **Saves and the open world:** original saves, world streaming | Planned |
 
 After that come optional bug fixes, script-extender compatibility and more

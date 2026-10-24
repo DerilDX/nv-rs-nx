@@ -409,9 +409,370 @@ pub fn fn_00865220(e: &mut Engine, this: Ptr) {
     e.call(VECTOR_DESTRUCT, &args![this, 0x10u32, 3u32, 0x0086_57e0u32]);
 }
 
+/// The player pointer (`011dea3c`).
+const PLAYER: u32 = 0x011d_ea3c;
+/// `007af430` (`thiscall`; engine map `BGSSaveFormBuffer::GetForm`, a
+/// folded body): the word the animation load compares the form with.
+const PLAYER_WORD_007AF430: u32 = 0x007a_f430;
+/// `PlayerCharacter::GetAnimation` (`00950a60`, `thiscall`, `RET 4`: a
+/// byte).
+const PLAYER_GET_ANIMATION: u32 = 0x0095_0a60;
+/// `0049b050` (`thiscall`, `RET 4`; engine-map unit `animation.cpp`): loads
+/// an animation from the load-form buffer.
+const ANIMATION_LOAD: u32 = 0x0049_b050;
+/// `005636e0` (`thiscall`, `RET 4`; `tesobjectrefr.cpp`): a reference's
+/// animation load from the buffer.
+const REFERENCE_LOAD_ANIMATION: u32 = 0x0056_36e0;
+/// `0081db60` (`thiscall`, `RET 4`): the load-form buffer's scalar deleting
+/// destructor.
+const LOAD_FORM_BUFFER_DELETE: u32 = 0x0081_db60;
+/// `MobileObject::GetCharController` (`009306d0`), `MiddleHighProcess::
+/// GetSavedAcquireObject` (`008d8520`, a folded body: the actor's process)
+/// and `MiddleHighProcess::LoadCharController` (`00928a50`, `RET 4`).
+const GET_CHAR_CONTROLLER: u32 = 0x0093_06d0;
+const ACTOR_PROCESS: u32 = 0x008d_8520;
+const PROCESS_LOAD_CHAR_CONTROLLER: u32 = 0x0092_8a50;
+/// `TESObjectREFR::LoadHavokData` (`00562ed0`, `thiscall`, `RET 4`).
+const REFERENCE_LOAD_HAVOK_DATA: u32 = 0x0056_2ed0;
+/// The load warnings (format, name, id).
+const WARNING_NOT_A_REFERENCE: u32 = 0x0108_2098;
+const WARNING_NO_ANIMATION: u32 = 0x0108_20e0;
+const WARNING_NOT_A_REFERENCE_FOR_CONTROLLER: u32 = 0x0108_2130;
+const WARNING_NOT_AN_ACTOR: u32 = 0x0108_2178;
+const WARNING_NO_CHAR_CONTROLLER: u32 = 0x0108_21d0;
+/// `BGSLoadFormBuffer::BGSLoadFormBuffer` (`008643b0`), its form setter
+/// (`007037c0`, `RET 4`), version setter (`008a8150`, `RET 4`) and
+/// `BGSLoadGameBuffer::SetBuffer` (`008647f0`, `RET 0xc`).
+const LOAD_FORM_BUFFER_CONSTRUCT: u32 = 0x0086_43b0;
+const LOAD_FORM_BUFFER_SET_FORM: u32 = 0x0070_37c0;
+const LOAD_FORM_BUFFER_SET_VERSION: u32 = 0x008a_8150;
+const LOAD_GAME_BUFFER_SET_BUFFER: u32 = 0x0086_47f0;
+/// `00844700` (`thiscall`, `RET 8`: key, value): the map's `SetAt`.
+const MAP_SET_AT: u32 = 0x0084_4700;
+/// `BGSLoadGameBuffer::LoadVariableSizedValue` (`00864a60`, `thiscall`).
+const BUFFER_LOAD_VARIABLE: u32 = 0x0086_4a60;
+/// `BGSUnloadedFormBuffer::BGSUnloadedFormBuffer` (`00537e90`, `thiscall`,
+/// `RET 4`: the data).
+const UNLOADED_FORM_BUFFER_CONSTRUCT: u32 = 0x0053_7e90;
+/// `0084da90` (`thiscall`, `RET 4`): the buffer's current read address.
+const BUFFER_CURRENT: u32 = 0x0084_da90;
+/// `0049bb50` (`thiscall`, `RET 4`): moves the buffer's position on.
+const BUFFER_SKIP: u32 = 0x0049_bb50;
+/// `00401030` (cdecl): the game's `operator delete`.
+const OPERATOR_DELETE: u32 = 0x0040_1030;
+/// `006b8310` (`thiscall`, `RET 4`): returns a map item to the allocator at
+/// +0xc.
+const MAP_FREE_ITEM: u32 = 0x006b_8310;
+/// `00865980` (`thiscall`): the new map item's constructor.
+const MAP_ITEM_CONSTRUCT: u32 = 0x0086_5980;
+
+/// The load-form buffer's deleting destructor when there is one
+/// (`0081db60` with 1).
+fn delete_load_form_buffer(e: &mut Engine, buffer: u32) {
+    if buffer != 0 {
+        e.call(LOAD_FORM_BUFFER_DELETE, &args![buffer, 1u32]);
+    }
+}
+
+/// `SaveGameWarning` with the form's name (vtable `+0x130`) and id.
+fn warn_with_form(e: &mut Engine, format: u32, form: u32) {
+    let id = e.call(WORD_AT_C, &args![form]).u32();
+    let name = e.vcall(form, 0x130, &args![]).u32();
+    e.call(SAVE_GAME_WARNING, &args![format, name, id]);
+}
+
+// Translated from 00864b00 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BGSLoadGameSubBuffer::LoadAnimation` (Xbox PDB; `thiscall`, `RET 4`):
+/// a form equal to the player's `007af430` word becomes the player (and
+/// marks it). The data goes into a load-form buffer (`00864e20`). For a
+/// reference (vtable `+0xf0`): an actor (`+0x100`) loads it into its
+/// animation (the player's `GetAnimation` with the mark, others' `+0x1e4`;
+/// `0049b050`), warning when it has none; another reference loads it
+/// itself (`005636e0`). Not a reference: a warning. The buffer is deleted.
+pub fn bgs_load_game_sub_buffer_load_animation(e: &mut Engine, this: Ptr, form: u32) {
+    let mut form = form;
+    let mut is_player = 0u32;
+    let player = e.global::<u32>(PLAYER);
+    if form == e.call(PLAYER_WORD_007AF430, &args![player]).u32() {
+        is_player = 1;
+        form = e.global::<u32>(PLAYER);
+    }
+    let buffer = bgs_load_game_sub_buffer_create_load_form_buffer(e, this, form);
+    if e.vcall(form, 0xf0, &args![]).bool() {
+        if e.vcall(form, 0x100, &args![]).bool() {
+            let animation = if form == e.global::<u32>(PLAYER) {
+                let player = e.global::<u32>(PLAYER);
+                e.call(PLAYER_GET_ANIMATION, &args![player, is_player])
+                    .u32()
+            } else {
+                e.vcall(form, 0x1e4, &args![]).u32()
+            };
+            if animation != 0 {
+                e.call(ANIMATION_LOAD, &args![animation, buffer]);
+            } else {
+                warn_with_form(e, WARNING_NO_ANIMATION, form);
+            }
+        } else {
+            e.call(REFERENCE_LOAD_ANIMATION, &args![form, buffer]);
+        }
+    } else {
+        warn_with_form(e, WARNING_NOT_A_REFERENCE, form);
+    }
+    delete_load_form_buffer(e, buffer);
+}
+
+// Translated from 00864c50 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BGSLoadGameSubBuffer::LoadCharController` (Xbox PDB; `thiscall`,
+/// `RET 4`): the data in a load-form buffer (`00864e20`) is loaded by the
+/// process of an actor (vtable `+0xf0`, then `+0xfc`) that has a character
+/// controller (`009306d0`; `008d8520`, `00928a50`); a warning for an actor
+/// without one, a reference that is no actor, or a form that is no
+/// reference. The buffer is deleted.
+pub fn bgs_load_game_sub_buffer_load_char_controller(e: &mut Engine, this: Ptr, form: u32) {
+    let buffer = bgs_load_game_sub_buffer_create_load_form_buffer(e, this, form);
+    if e.vcall(form, 0xf0, &args![]).bool() {
+        if e.vcall(form, 0xfc, &args![]).bool() {
+            if e.call(GET_CHAR_CONTROLLER, &args![form]).u32() != 0 {
+                let process = e.call(ACTOR_PROCESS, &args![form]).u32();
+                e.call(PROCESS_LOAD_CHAR_CONTROLLER, &args![process, buffer]);
+            } else {
+                warn_with_form(e, WARNING_NO_CHAR_CONTROLLER, form);
+            }
+        } else {
+            warn_with_form(e, WARNING_NOT_AN_ACTOR, form);
+        }
+    } else {
+        warn_with_form(e, WARNING_NOT_A_REFERENCE_FOR_CONTROLLER, form);
+    }
+    delete_load_form_buffer(e, buffer);
+}
+
+// Translated from 00864d80 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BGSLoadGameSubBuffer::LoadHavokData` (Xbox PDB; `thiscall`, `RET 4`):
+/// a reference (vtable `+0xf0`) loads the data from a load-form buffer
+/// (`00864e20`, `TESObjectREFR::LoadHavokData`); otherwise a warning. The
+/// buffer is deleted.
+pub fn bgs_load_game_sub_buffer_load_havok_data(e: &mut Engine, this: Ptr, form: u32) {
+    let buffer = bgs_load_game_sub_buffer_create_load_form_buffer(e, this, form);
+    if e.vcall(form, 0xf0, &args![]).bool() {
+        e.call(REFERENCE_LOAD_HAVOK_DATA, &args![form, buffer]);
+    } else {
+        warn_with_form(e, WARNING_NOT_A_REFERENCE, form);
+    }
+    delete_load_form_buffer(e, buffer);
+}
+
+// Translated from 00864e20 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BGSLoadGameSubBuffer::CreateLoadFormBuffer` (Xbox PDB; `thiscall`,
+/// `RET 4`): a new load-form buffer (0x30 bytes, `00401000`, its
+/// constructor; null when the allocation fails) for `form` (`007037c0`)
+/// with the data's version byte (`008a8150`), over the data at `this + 0`
+/// (`SetBuffer` with the size read after the version byte, `00846080`, and
+/// the header length as start). The sub-buffer gives the data up (its word
+/// cleared). Answers the buffer.
+// Translation incomplete: 00864e20 - the C++ exception frame (FS:[0] chain, unwind state 0 that frees the new buffer) and the /GS cookie word are not translated.
+pub fn bgs_load_game_sub_buffer_create_load_form_buffer(
+    e: &mut Engine,
+    this: Ptr,
+    form: u32,
+) -> u32 {
+    let block = e.call(ALLOCATE_BLOCK, &args![0x30u32]).u32();
+    let buffer = if block == 0 {
+        0
+    } else {
+        e.call(LOAD_FORM_BUFFER_CONSTRUCT, &args![block]).u32()
+    };
+    let data = e.mem.u32(this.addr());
+    e.call(LOAD_FORM_BUFFER_SET_FORM, &args![buffer, form]);
+    let version = u32::from(e.mem.u8(data));
+    e.call(LOAD_FORM_BUFFER_SET_VERSION, &args![buffer, version]);
+    e.with_stack(4, |e, size| {
+        let data = e.mem.u32(this.addr());
+        let read = e
+            .call(
+                LOAD_VARIABLE_SIZED_VALUE,
+                &args![data.wrapping_add(1), size],
+            )
+            .u32();
+        let start = read.wrapping_add(1);
+        let total = e.mem.u32(size.addr()).wrapping_add(start);
+        let data = e.mem.u32(this.addr());
+        e.call(
+            LOAD_GAME_BUFFER_SET_BUFFER,
+            &args![buffer, data, total, start],
+        );
+    });
+    e.mem.set_u32(this.addr(), 0);
+    buffer
+}
+
+// Translated from 008652f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BGSSaveLoadQueuedSubBufferMap::QueueSubBuffer` (Xbox PDB; `thiscall`,
+/// `RET 0xc`: kind, load buffer, form): loads a sub-buffer from the load
+/// buffer (`008655a0` on a local); when it holds data it is set into the
+/// kind's map (`this + 0x10 * kind`, `00844700`) under `form`, or without
+/// one under the load buffer's form (vtable `+4`).
+pub fn bgs_save_load_queued_sub_buffer_map_queue_sub_buffer(
+    e: &mut Engine,
+    this: Ptr,
+    kind: u32,
+    buffer: u32,
+    form: u32,
+) {
+    e.with_stack(4, |e, sub_buffer| {
+        e.call(SUB_BUFFER_CONSTRUCT, &args![sub_buffer]);
+        bgs_load_game_sub_buffer_load_game(e, sub_buffer, buffer);
+        if e.call(SUB_BUFFER_DATA, &args![sub_buffer]).u32() == 0 {
+            return;
+        }
+        let key = if form != 0 {
+            form
+        } else {
+            e.vcall(buffer, 4, &args![]).u32()
+        };
+        let data = e.mem.u32(sub_buffer.addr());
+        let map = (kind << 4).wrapping_add(this.addr());
+        e.call(MAP_SET_AT, &args![map, key, data]);
+    });
+}
+
+// Translated from 008655a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BGSLoadGameSubBuffer::LoadGame` (Xbox PDB; `thiscall`, `RET 4`): reads
+/// a size from the load buffer (`00864a60`); for a non-zero size a block of
+/// version byte, size encoding (`00845f70`, `00845fc0`) and data is made
+/// (`00401000`, kept with `00537e90`): the version from the buffer's
+/// vtable slot 0, the data copied from the buffer's current address
+/// (`0084da90`, `00401460`); the buffer then moves past it (`0049bb50`).
+pub fn bgs_load_game_sub_buffer_load_game(e: &mut Engine, this: Ptr, buffer: u32) {
+    let size = e.call(BUFFER_LOAD_VARIABLE, &args![buffer]).u32();
+    if size == 0 {
+        return;
+    }
+    let length = e.call(VARIABLE_SIZE_LENGTH, &args![size]).u32();
+    let total = size.wrapping_add(length).wrapping_add(1);
+    let block = e.call(ALLOCATE_BLOCK, &args![total]).u32();
+    e.call(UNLOADED_FORM_BUFFER_CONSTRUCT, &args![this, block]);
+    let version = e.vcall(buffer, 0, &args![]).u8();
+    e.mem.set_u8(block, version);
+    let mut cursor = block.wrapping_add(1);
+    e.call(SAVE_VARIABLE_SIZED_VALUE, &args![cursor, size]);
+    cursor = cursor.wrapping_add(length);
+    let source = e.call(BUFFER_CURRENT, &args![buffer, size]).u32();
+    e.call(COPY_BYTES, &args![cursor, source, size]);
+    e.call(BUFFER_SKIP, &args![buffer, size]);
+}
+
+// Translated from 00865690 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Scalar deleting destructor (engine map: `NiTMap<TESForm*,
+/// BGSLoadGameSubBuffer>`; `RET 4`): `008657e0`, then `operator delete` on
+/// flag bit 0. Answers `this`.
+pub fn fn_00865690(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    fn_008657e0(e, this);
+    if flags & 1 != 0 {
+        e.call(OPERATOR_DELETE, &args![this]);
+    }
+    this
+}
+
+// Translated from 00865730 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`thiscall`, `RET 0xc`: position, key out,
+/// value out): the map entry at `*position` (next, key at +4, value at
+/// +8) gives its key and value; the position moves to the next entry of
+/// the bucket, or of the following buckets (from the key's bucket, vtable
+/// `+4`, plus one, up to the count at +4 of the table at +8), or to 0.
+pub fn fn_00865730(e: &mut Engine, this: Ptr, position: Ptr, key: Ptr, value: Ptr) {
+    let item = e.mem.u32(position.addr());
+    e.mem.set_u32(key.addr(), e.mem.u32(item.wrapping_add(4)));
+    e.mem.set_u32(value.addr(), e.mem.u32(item.wrapping_add(8)));
+    let next = e.mem.u32(item);
+    if next != 0 {
+        e.mem.set_u32(position.addr(), next);
+        return;
+    }
+    let item_key = e.mem.u32(item.wrapping_add(4));
+    let mut bucket = e
+        .vcall(this.addr(), 4, &args![item_key])
+        .u32()
+        .wrapping_add(1);
+    while bucket < e.mem.u32(this.addr().wrapping_add(4)) {
+        let table = e.mem.u32(this.addr().wrapping_add(8));
+        let entry = e.mem.u32(table.wrapping_add(bucket.wrapping_mul(4)));
+        if entry != 0 {
+            e.mem.set_u32(position.addr(), entry);
+            return;
+        }
+        bucket = bucket.wrapping_add(1);
+    }
+    e.mem.set_u32(position.addr(), 0);
+}
+
+// Translated from 00865890 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`thiscall`, `RET 4`: a map item): stores a
+/// fresh change-flags word (`008c71b0` with 0 on a local) as the item's
+/// value (+8) and returns the item to the allocator at +0xc (`006b8310`).
+pub fn fn_00865890(e: &mut Engine, this: Ptr, item: u32) {
+    let flags = e.with_stack(4, |e, local| {
+        e.call(CHANGE_FLAGS_CONSTRUCT, &args![local, 0u32]);
+        e.mem.u32(local.addr())
+    });
+    e.mem.set_u32(item.wrapping_add(8), flags);
+    e.call(MAP_FREE_ITEM, &args![this.addr().wrapping_add(0xc), item]);
+}
+
+// Translated from 008658d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Scalar deleting destructor of the `NiTMapBase` under `00865690` (engine
+/// map name; `RET 4`): `00865840`, then `operator delete` on flag bit 0.
+/// Answers `this`.
+pub fn fn_008658d0(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    fn_00865840(e, this);
+    if flags & 1 != 0 {
+        e.call(OPERATOR_DELETE, &args![this]);
+    }
+    this
+}
+
+// Translated from 00865900 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`ECX` only, not read): a new 0xc-byte map
+/// item (`00401000`, constructed by `00865980`), null when the allocation
+/// fails.
+// Translation incomplete: 00865900 - the C++ exception frame (FS:[0] chain, unwind state 0 that frees the new item) and the /GS cookie word are not translated.
+pub fn fn_00865900(e: &mut Engine, _this: Ptr) -> u32 {
+    let block = e.call(ALLOCATE_BLOCK, &args![0xcu32]).u32();
+    if block == 0 {
+        return 0;
+    }
+    e.call(MAP_ITEM_CONSTRUCT, &args![block]).u32()
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(
+            0x0086_4b00,
+            bgs_load_game_sub_buffer_load_animation(Ptr, u32)
+        ),
+        entry!(
+            0x0086_4c50,
+            bgs_load_game_sub_buffer_load_char_controller(Ptr, u32)
+        ),
+        entry!(
+            0x0086_4d80,
+            bgs_load_game_sub_buffer_load_havok_data(Ptr, u32)
+        ),
+        entry!(
+            0x0086_4e20,
+            bgs_load_game_sub_buffer_create_load_form_buffer(Ptr, u32) -> u32
+        ),
+        entry!(
+            0x0086_52f0,
+            bgs_save_load_queued_sub_buffer_map_queue_sub_buffer(Ptr, u32, u32, u32)
+        ),
+        entry!(0x0086_55a0, bgs_load_game_sub_buffer_load_game(Ptr, u32)),
+        entry!(0x0086_5690, fn_00865690(Ptr, u32) -> Ptr),
+        entry!(0x0086_5730, fn_00865730(Ptr, Ptr, Ptr, Ptr)),
+        entry!(0x0086_5890, fn_00865890(Ptr, u32)),
+        entry!(0x0086_58d0, fn_008658d0(Ptr, u32) -> Ptr),
+        entry!(0x0086_5900, fn_00865900(Ptr) -> u32),
         entry!(0x00865570, append_bytes(Ptr, Ptr, u32, u8)),
         entry!(0x008656c0, fn_008656c0(Ptr, u32) -> Ptr),
         entry!(0x00865660, fn_00865660(Ptr, u32) -> Ptr),
@@ -863,5 +1224,351 @@ mod tests {
             calls_to(&mut e, VECTOR_DESTRUCT),
             vec![vec![0x6000, 0x10, 3, 0x0086_57e0]]
         );
+    }
+}
+
+#[cfg(test)]
+mod n072_tests {
+    use super::*;
+
+    fn calls(e: &Engine, address: u32) -> Vec<Vec<u32>> {
+        e.call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|c| c.0 == address)
+            .map(|c| c.1.clone())
+            .collect()
+    }
+
+    const FORM_VTABLE: u32 = 0x0150_0000;
+    const IS_REFERENCE: u32 = 0x0150_10f0;
+    const IS_ACTOR_FC: u32 = 0x0150_10fc;
+    const IS_ACTOR_100: u32 = 0x0150_1100;
+    const NAME: u32 = 0x0150_1130;
+    const ANIMATION_1E4: u32 = 0x0150_11e4;
+
+    /// A form whose slot answers are the words at +4 (`+0xf0`), +8
+    /// (`+0xfc`, `+0x100`) and +0xc (`+0x1e4`).
+    fn form(e: &mut Engine, reference: u32, actor: u32, animation: u32) -> u32 {
+        let f = e.mem.alloc(0x10);
+        e.mem.set_u32(f, FORM_VTABLE);
+        e.mem.set_u32(f + 4, reference);
+        e.mem.set_u32(f + 8, actor);
+        e.mem.set_u32(f + 0xc, animation);
+        f
+    }
+
+    /// Doubles for the load-form buffer creation (the buffer is the new
+    /// block) and everything the loads call.
+    fn engine() -> Engine {
+        let mut e = Engine::new();
+        let mut slots = vec![0u32; 0x80];
+        slots[0xf0 / 4] = IS_REFERENCE;
+        slots[0xfc / 4] = IS_ACTOR_FC;
+        slots[0x100 / 4] = IS_ACTOR_100;
+        slots[0x130 / 4] = NAME;
+        slots[0x1e4 / 4] = ANIMATION_1E4;
+        e.put_vtable(FORM_VTABLE, &slots);
+        e.register(IS_REFERENCE, |e, a| e.mem.u32(a[0] + 4).into_ret());
+        e.register(IS_ACTOR_FC, |e, a| e.mem.u32(a[0] + 8).into_ret());
+        e.register(IS_ACTOR_100, |e, a| e.mem.u32(a[0] + 8).into_ret());
+        e.register(NAME, |_, _| 0x0160_0000u32.into_ret());
+        e.register(ANIMATION_1E4, |e, a| e.mem.u32(a[0] + 0xc).into_ret());
+        e.register(WORD_AT_C, |_, _| 0x77u32.into_ret());
+        e.register(ALLOCATE_BLOCK, |e, a| e.mem.alloc(a[0]).into_ret());
+        e.register(LOAD_FORM_BUFFER_CONSTRUCT, |_, a| a[0].into_ret());
+        e.register(LOAD_VARIABLE_SIZED_VALUE, |e, a| {
+            e.mem.set_u32(a[1], 0x20);
+            2u32.into_ret()
+        });
+        e.map(0x011d_e000, 0x1000);
+        e.set_global::<u32>(PLAYER, 0x0170_0000);
+        e.register(PLAYER_WORD_007AF430, |_, _| 0x0171_0000u32.into_ret());
+        for a in [
+            LOAD_FORM_BUFFER_SET_FORM,
+            LOAD_FORM_BUFFER_SET_VERSION,
+            LOAD_GAME_BUFFER_SET_BUFFER,
+            LOAD_FORM_BUFFER_DELETE,
+            SAVE_GAME_WARNING,
+            ANIMATION_LOAD,
+            REFERENCE_LOAD_ANIMATION,
+            PROCESS_LOAD_CHAR_CONTROLLER,
+            REFERENCE_LOAD_HAVOK_DATA,
+        ] {
+            e.register(a, |_, _| Ret::default());
+        }
+        e.call_log = Some(vec![]);
+        e
+    }
+
+    fn sub_buffer(e: &mut Engine) -> u32 {
+        let data = e.mem.alloc(0x30);
+        e.mem.set_u8(data, 0x0e);
+        let this = e.mem.alloc(4);
+        e.mem.set_u32(this, data);
+        this
+    }
+
+    #[test]
+    fn create_load_form_buffer_hands_the_data_over() {
+        let mut e = engine();
+        let this = sub_buffer(&mut e);
+        let data = e.mem.u32(this);
+        let buffer = e.call(0x0086_4e20, &args![this, 0x4444u32]).u32();
+        assert_eq!(calls(&e, ALLOCATE_BLOCK), vec![vec![0x30]]);
+        assert_eq!(
+            calls(&e, LOAD_FORM_BUFFER_SET_FORM),
+            vec![vec![buffer, 0x4444]]
+        );
+        assert_eq!(
+            calls(&e, LOAD_FORM_BUFFER_SET_VERSION),
+            vec![vec![buffer, 0x0e]]
+        );
+        assert_eq!(calls(&e, LOAD_VARIABLE_SIZED_VALUE)[0][0], data + 1);
+        assert_eq!(
+            calls(&e, LOAD_GAME_BUFFER_SET_BUFFER),
+            vec![vec![buffer, data, 0x23, 3]]
+        );
+        assert_eq!(e.mem.u32(this), 0);
+    }
+
+    #[test]
+    fn load_animation_by_kind_of_form() {
+        let mut e = engine();
+        let this = sub_buffer(&mut e);
+        // An actor with an animation.
+        let actor = form(&mut e, 1, 1, 0x5500);
+        e.call(0x0086_4b00, &args![this, actor]);
+        let buffer = calls(&e, ANIMATION_LOAD)[0][1];
+        assert_eq!(calls(&e, ANIMATION_LOAD), vec![vec![0x5500, buffer]]);
+        assert_eq!(calls(&e, LOAD_FORM_BUFFER_DELETE), vec![vec![buffer, 1]]);
+        // An actor without one, a plain reference, not a reference.
+        let lone = form(&mut e, 1, 1, 0);
+        let reference = form(&mut e, 1, 0, 0);
+        let other = form(&mut e, 0, 0, 0);
+        for f in [lone, reference, other] {
+            let this = sub_buffer(&mut e);
+            e.call(0x0086_4b00, &args![this, f]);
+        }
+        assert_eq!(
+            calls(&e, SAVE_GAME_WARNING),
+            vec![
+                vec![WARNING_NO_ANIMATION, 0x0160_0000, 0x77],
+                vec![WARNING_NOT_A_REFERENCE, 0x0160_0000, 0x77]
+            ]
+        );
+        assert_eq!(calls(&e, REFERENCE_LOAD_ANIMATION)[0][0], reference);
+    }
+
+    #[test]
+    fn load_animation_of_the_player() {
+        let mut e = engine();
+        // The player is the form; its animation through GetAnimation with
+        // the mark set when the form was the player's `007af430` word.
+        let player = form(&mut e, 1, 1, 0);
+        e.set_global::<u32>(PLAYER, player);
+        e.register(PLAYER_GET_ANIMATION, |_, a| (0x6600 + a[1]).into_ret());
+        let this = sub_buffer(&mut e);
+        e.call(0x0086_4b00, &args![this, 0x0171_0000u32]);
+        let this = sub_buffer(&mut e);
+        e.call(0x0086_4b00, &args![this, player]);
+        assert_eq!(
+            calls(&e, PLAYER_GET_ANIMATION),
+            vec![vec![player, 1], vec![player, 0]]
+        );
+        assert_eq!(calls(&e, ANIMATION_LOAD)[0][0], 0x6601);
+    }
+
+    #[test]
+    fn load_char_controller_needs_an_actor_with_a_controller() {
+        let mut e = engine();
+        e.register(GET_CHAR_CONTROLLER, |e, a| e.mem.u32(a[0] + 0xc).into_ret());
+        e.register(ACTOR_PROCESS, |_, _| 0x9900u32.into_ret());
+        let with = form(&mut e, 1, 1, 1);
+        let without = form(&mut e, 1, 1, 0);
+        let reference = form(&mut e, 1, 0, 0);
+        let other = form(&mut e, 0, 0, 0);
+        for f in [with, without, reference, other] {
+            let this = sub_buffer(&mut e);
+            e.call(0x0086_4c50, &args![this, f]);
+        }
+        assert_eq!(calls(&e, PROCESS_LOAD_CHAR_CONTROLLER).len(), 1);
+        assert_eq!(calls(&e, PROCESS_LOAD_CHAR_CONTROLLER)[0][0], 0x9900);
+        let warnings: Vec<u32> = calls(&e, SAVE_GAME_WARNING).iter().map(|w| w[0]).collect();
+        assert_eq!(
+            warnings,
+            vec![
+                WARNING_NO_CHAR_CONTROLLER,
+                WARNING_NOT_AN_ACTOR,
+                WARNING_NOT_A_REFERENCE_FOR_CONTROLLER
+            ]
+        );
+        assert_eq!(calls(&e, LOAD_FORM_BUFFER_DELETE).len(), 4);
+    }
+
+    #[test]
+    fn load_havok_data_needs_a_reference() {
+        let mut e = engine();
+        let reference = form(&mut e, 1, 0, 0);
+        let other = form(&mut e, 0, 0, 0);
+        for f in [reference, other] {
+            let this = sub_buffer(&mut e);
+            e.call(0x0086_4d80, &args![this, f]);
+        }
+        assert_eq!(calls(&e, REFERENCE_LOAD_HAVOK_DATA)[0][0], reference);
+        assert_eq!(
+            calls(&e, SAVE_GAME_WARNING),
+            vec![vec![WARNING_NOT_A_REFERENCE, 0x0160_0000, 0x77]]
+        );
+        // A failed allocation leaves no buffer to delete.
+        e.register(ALLOCATE_BLOCK, |_, _| 0u32.into_ret());
+        e.call_log = Some(vec![]);
+        let this = sub_buffer(&mut e);
+        e.call(0x0086_4d80, &args![this, reference]);
+        assert!(calls(&e, LOAD_FORM_BUFFER_DELETE).is_empty());
+    }
+
+    /// The load buffer: vtable slot 0 the version 0x0e, slot 4 its form.
+    fn load_buffer(e: &mut Engine, size: u32) -> u32 {
+        e.put_vtable(0x0152_0000, &[0x0152_1000, 0x0152_1004]);
+        e.register(0x0152_1000, |_, _| 0x0eu32.into_ret());
+        e.register(0x0152_1004, |_, _| 0x8888u32.into_ret());
+        e.register_double(BUFFER_LOAD_VARIABLE, move |_, _| size.into_ret());
+        e.register(VARIABLE_SIZE_LENGTH, |_, _| 2u32.into_ret());
+        e.register(UNLOADED_FORM_BUFFER_CONSTRUCT, |e, a| {
+            e.mem.set_u32(a[0], a[1]);
+            Ret::default()
+        });
+        e.register(SAVE_VARIABLE_SIZED_VALUE, |_, _| Ret::default());
+        e.register(BUFFER_CURRENT, |_, _| 0x0153_0000u32.into_ret());
+        e.register(COPY_BYTES, |_, _| Ret::default());
+        e.register(BUFFER_SKIP, |_, _| Ret::default());
+        e.register(SUB_BUFFER_CONSTRUCT, |e, a| {
+            e.mem.set_u32(a[0], 0);
+            Ret::default()
+        });
+        e.register(SUB_BUFFER_DATA, |e, a| e.mem.u32(a[0]).into_ret());
+        e.register(MAP_SET_AT, |_, _| Ret::default());
+        let b = e.mem.alloc(4);
+        e.mem.set_u32(b, 0x0152_0000);
+        b
+    }
+
+    #[test]
+    fn load_game_copies_the_data_after_a_header() {
+        let mut e = engine();
+        let buffer = load_buffer(&mut e, 0x10);
+        let this = e.mem.alloc(4);
+        e.call(0x0086_55a0, &args![this, buffer]);
+        let block = e.mem.u32(this);
+        assert_eq!(calls(&e, ALLOCATE_BLOCK), vec![vec![0x13]]);
+        assert_eq!(e.mem.u8(block), 0x0e);
+        assert_eq!(
+            calls(&e, SAVE_VARIABLE_SIZED_VALUE),
+            vec![vec![block + 1, 0x10]]
+        );
+        assert_eq!(calls(&e, BUFFER_CURRENT), vec![vec![buffer, 0x10]]);
+        assert_eq!(
+            calls(&e, COPY_BYTES),
+            vec![vec![block + 3, 0x0153_0000, 0x10]]
+        );
+        assert_eq!(calls(&e, BUFFER_SKIP), vec![vec![buffer, 0x10]]);
+    }
+
+    #[test]
+    fn queue_sub_buffer_sets_the_data_under_the_form() {
+        let mut e = engine();
+        let buffer = load_buffer(&mut e, 0x10);
+        let this = e.mem.alloc(0x30);
+        e.call(0x0086_52f0, &args![this, 2u32, buffer, 0x4444u32]);
+        e.call(0x0086_52f0, &args![this, 1u32, buffer, 0u32]);
+        let set = calls(&e, MAP_SET_AT);
+        assert_eq!(set[0][..2], [this + 0x20, 0x4444]);
+        assert_eq!(set[1][..2], [this + 0x10, 0x8888]);
+        // No data: nothing is queued.
+        let empty = load_buffer(&mut e, 0);
+        e.call_log = Some(vec![]);
+        e.call(0x0086_52f0, &args![this, 0u32, empty, 0x4444u32]);
+        assert!(calls(&e, MAP_SET_AT).is_empty());
+    }
+
+    #[test]
+    fn the_scalar_deleting_destructors() {
+        for address in [0x0086_5690u32, 0x0086_58d0] {
+            for flags in [0u32, 1] {
+                let mut e = Engine::new();
+                for a in [BASE_TEARDOWN, FREE_BLOCK, OPERATOR_DELETE] {
+                    e.register(a, |_, _| Ret::default());
+                }
+                let this = e.mem.alloc(0x10);
+                e.call_log = Some(vec![]);
+                assert_eq!(e.call(address, &args![this, flags]).u32(), this);
+                assert_eq!(e.mem.u32(this), 0x0108_22a8);
+                assert_eq!(calls(&e, OPERATOR_DELETE).len() as u32, flags);
+            }
+        }
+    }
+
+    #[test]
+    fn fn_00865730_walks_to_the_next_entry() {
+        let mut e = Engine::new();
+        e.put_vtable(0x0154_0000, &[0, 0x0154_1004]);
+        e.register(0x0154_1004, |_, a| (a[1] % 4).into_ret());
+        let table = e.mem.alloc(16);
+        let map = e.mem.alloc(0x10);
+        e.mem.set_u32(map, 0x0154_0000);
+        e.mem.set_u32(map + 4, 4);
+        e.mem.set_u32(map + 8, table);
+        let item = |e: &mut Engine, next: u32, key: u32, value: u32| {
+            let i = e.mem.alloc(0xc);
+            e.mem.set_u32(i, next);
+            e.mem.set_u32(i + 4, key);
+            e.mem.set_u32(i + 8, value);
+            i
+        };
+        let last = item(&mut e, 0, 3, 0x33);
+        e.mem.set_u32(table + 12, last);
+        let second = item(&mut e, 0, 1, 0x11);
+        let first = item(&mut e, second, 5, 0x55);
+        e.mem.set_u32(table + 4, first);
+        let slots = e.mem.alloc(12);
+        let (position, key, value) = (slots, slots + 4, slots + 8);
+        e.mem.set_u32(position, first);
+        let mut seen = vec![];
+        while e.mem.u32(position) != 0 {
+            e.call(0x0086_5730, &args![map, position, key, value]);
+            seen.push((e.mem.u32(key), e.mem.u32(value)));
+        }
+        assert_eq!(seen, vec![(5, 0x55), (1, 0x11), (3, 0x33)]);
+    }
+
+    #[test]
+    fn fn_00865890_clears_the_value_and_frees_the_item() {
+        let mut e = Engine::new();
+        e.register(CHANGE_FLAGS_CONSTRUCT, |e, a| {
+            e.mem.set_u32(a[0], a[1] + 0x40);
+            Ret::default()
+        });
+        e.register(MAP_FREE_ITEM, |_, _| Ret::default());
+        let this = e.mem.alloc(0x10);
+        let item = e.mem.alloc(0xc);
+        e.mem.set_u32(item + 8, 0xffff);
+        e.call_log = Some(vec![]);
+        e.call(0x0086_5890, &args![this, item]);
+        assert_eq!(e.mem.u32(item + 8), 0x40);
+        assert_eq!(calls(&e, MAP_FREE_ITEM), vec![vec![this + 0xc, item]]);
+    }
+
+    #[test]
+    fn fn_00865900_makes_an_item() {
+        let mut e = Engine::new();
+        e.register(ALLOCATE_BLOCK, |_, _| 0x5000u32.into_ret());
+        e.register(MAP_ITEM_CONSTRUCT, |_, a| a[0].into_ret());
+        assert_eq!(e.call(0x0086_5900, &args![0x10u32]).u32(), 0x5000);
+        e.register(ALLOCATE_BLOCK, |_, _| 0u32.into_ret());
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x0086_5900, &args![0x10u32]).u32(), 0);
+        assert!(calls(&e, MAP_ITEM_CONSTRUCT).is_empty());
     }
 }

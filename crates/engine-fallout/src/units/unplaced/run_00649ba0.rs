@@ -1816,6 +1816,336 @@ pub fn bs_face_gen_image_constructor(
     this
 }
 
+/// `00649a50` (thiscall on a `BSFaceGenKeyframeMultiple`, `(index, value)`):
+/// stores `value` at `pQuantities[index]` (by its body, unchecked).
+const KEYFRAME_STORE_VALUE: u32 = 0x0064_9a50;
+/// The point the head-tracking functions compare with and copy from
+/// (`011f426c`, three floats; read at run time).
+const HEAD_TRACK_ZERO_POINT: u32 = 0x011f_426c;
+/// `004390c0` (thiscall `(const float *other)`): whether the three floats of
+/// `this` equal those of `other` (by its body); `00439090` (thiscall, one
+/// word) is its negation.
+const POINT_EQUAL: u32 = 0x0043_90c0;
+const POINT_NOT_EQUAL: u32 = 0x0043_9090;
+
+/// The shared body of the `SetAnim*Value` setters: when `index` is below
+/// `limit` (signed), stores `value` through `00649a50` in the keyframe at
+/// `offset`.
+fn set_anim_value(e: &mut Engine, this: FaceData, offset: u32, limit: i32, index: i32, value: f32) {
+    if index < limit {
+        let value = x87_quiet_bits(value.to_bits());
+        e.call(
+            KEYFRAME_STORE_VALUE,
+            &args![field(this, offset), index, value],
+        );
+    }
+}
+
+// Translated from 00649be0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSFaceGenAnimationData::SetAnimExpressionValue` (Xbox PDB, vtable
+/// +0xDC on PC): for `index < 15` (signed) stores `value` in
+/// `CurrentAnimExpressionData` (`00649a50`).
+pub fn bs_face_gen_animation_data_set_anim_expression_value(
+    e: &mut Engine,
+    this: FaceData,
+    index: i32,
+    value: f32,
+) {
+    set_anim_value(e, this, 0x24, 0xf, index, value);
+}
+
+// Translated from 00649c10 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSFaceGenAnimationData::SetAnimModifierValue` (Xbox PDB, vtable +0xE0
+/// on PC): for `index < 17` (signed) stores `value` in
+/// `CurrentAnimModifierData` (`00649a50`).
+pub fn bs_face_gen_animation_data_set_anim_modifier_value(
+    e: &mut Engine,
+    this: FaceData,
+    index: i32,
+    value: f32,
+) {
+    set_anim_value(e, this, 0x38, 0x11, index, value);
+}
+
+// Translated from 00649c40 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSFaceGenAnimationData::SetAnimPhonemeValue` (Xbox PDB, vtable +0xE4 on
+/// PC): for `index < 16` (signed) stores `value` in `CurrentAnimPhonemeData`
+/// (`00649a50`).
+pub fn bs_face_gen_animation_data_set_anim_phoneme_value(
+    e: &mut Engine,
+    this: FaceData,
+    index: i32,
+    value: f32,
+) {
+    set_anim_value(e, this, 0x4c, 0x10, index, value);
+}
+
+// Translated from 00649c70 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSFaceGenAnimationData::SetAnimCustomMorphValue` (Xbox PDB, vtable
+/// +0xE8 on PC): for `index < 1` (signed) stores `value` in
+/// `CurrentAnimCustomMorphData` (`00649a50`).
+pub fn bs_face_gen_animation_data_set_anim_custom_morph_value(
+    e: &mut Engine,
+    this: FaceData,
+    index: i32,
+    value: f32,
+) {
+    set_anim_value(e, this, 0x60, 1, index, value);
+}
+
+// Translated from 0064ac30 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 0064ac30 - the compiler's exception-unwinding frame (FS:[0]) is not translated
+/// `BSFaceGenAnimationData::AddCustomMorphKeyframe` (Xbox PDB, vtable +0x110
+/// on PC): unless dead, `values` is null or `time` is negative (a NaN
+/// passes), builds a custom-morph keyframe (type 3, one value) at `time`
+/// with `values[0]` and adds it to `SpeechCustomMorphKeyframeList`.
+pub fn bs_face_gen_animation_data_add_custom_morph_keyframe(
+    e: &mut Engine,
+    this: FaceData,
+    values: Ptr,
+    time: f32,
+) {
+    with_stack_keyframe(e, 3, 1, |e, keyframe| {
+        if e.get(this, BSFaceGenAnimationData::bDead) != 0
+            || values.is_null()
+            || x87_load32(time.to_bits()) < e.global::<f64>(ZERO)
+        {
+            return;
+        }
+        e.call(
+            KEYFRAME_SET_TIME_DIRECT,
+            &args![keyframe, x87_quiet_bits(time.to_bits())],
+        );
+        let value = x87_quiet_bits(e.mem.u32(values.addr()));
+        fn_0064a4d0(e, keyframe, 0, f32::from_bits(value));
+        let list = field(this, 0xf0);
+        e.call(KEYFRAME_ADD_TO_LIST, &args![keyframe, list]);
+    });
+}
+
+// Translated from 0064b0f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSFaceGenAnimationData::IsSpeechKeyframeListEmpty` (Xbox PDB, vtable
+/// +0x108): whether the speech list of `morph_type` has no items (count
+/// through `0044ddc0`): 0 phonemes (`SpeechPhonemeKeyframeList`), 2
+/// modifiers (`SpeechModifierKeyframeList`), 3 custom morphs
+/// (`SpeechCustomMorphKeyframeList`); true for any other type.
+pub fn bs_face_gen_animation_data_is_speech_keyframe_list_empty(
+    e: &mut Engine,
+    this: FaceData,
+    morph_type: u32,
+) -> bool {
+    let list = match morph_type {
+        0 => 0xbc,
+        2 => 0x88,
+        3 => 0xf0,
+        _ => return true,
+    };
+    e.call(LIST_COUNT, &args![field(this, list)]).u32() == 0
+}
+
+// Translated from 0064b160 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 0064b160 - the compiler's exception-unwinding frame (FS:[0]) is not translated
+/// `BSFaceGenAnimationData::SetExpressionTarget(const float *)` (Xbox PDB,
+/// the second overload; vtable +0x118 on PC): when dead or `values` is null,
+/// only clears the target (vtable +0x120). Otherwise deletes the old
+/// `pTargetExpressionData` (scalar deleting destructor, flag 1; the field is
+/// then overwritten), makes a new expression keyframe (0x14 bytes, type 1,
+/// 15 values; null when the allocation fails), sets its 15 values from
+/// `values` and clears the target when `CurrentTargetExpressionData`
+/// compares false with it (slot +0x2C).
+pub fn bs_face_gen_animation_data_set_expression_target_values(
+    e: &mut Engine,
+    this: FaceData,
+    values: Ptr,
+) {
+    if e.get(this, BSFaceGenAnimationData::bDead) != 0 || values.is_null() {
+        e.vcall(this.addr(), VT_CLEAR_EXPRESSION_TARGET, &[]);
+        return;
+    }
+    let old = e.get(this, BSFaceGenAnimationData::pTargetExpressionData);
+    if old != 0 {
+        e.vcall(old, 0, &args![1u32]);
+    }
+    let block = e.call(ALLOCATE, &args![0x14u32]).u32();
+    let target = if block == 0 {
+        0
+    } else {
+        e.call(KEYFRAME_CONSTRUCT, &args![block, 1u32, 0xfu32])
+            .u32()
+    };
+    e.set(this, BSFaceGenAnimationData::pTargetExpressionData, target);
+    for i in 0..0xfu32 {
+        let value = x87_quiet_bits(e.mem.u32(values.addr().wrapping_add(4 * i)));
+        let target = e.get(this, BSFaceGenAnimationData::pTargetExpressionData);
+        fn_0064a4d0(e, Ptr::new(target), i, f32::from_bits(value));
+    }
+    finish_expression_target(e, this);
+}
+
+// Translated from 0064bcc0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSFaceGenAnimationData::SetHeadTrackVector` (Xbox PDB, vtable +0xC0):
+/// the vector arrives by value (`x`, `y`, `z`; the fourth word is not read).
+/// When the current `HeadTrackVector` (+0x124) equals the point at
+/// `011f426c` and the new one differs from it (`004390c0` / `00439090`), the
+/// tracking state (+0x174) becomes 1 and its timer (+0x178) 0.0; when the
+/// new vector equals that point the state becomes 0. Then stores the vector
+/// and sets `bShouldHeadTrack`.
+pub fn bs_face_gen_animation_data_set_head_track_vector(
+    e: &mut Engine,
+    this: FaceData,
+    x: f32,
+    y: f32,
+    z: f32,
+    _unused_4: u32,
+) {
+    // The by-value vector lives in the argument words; the comparisons take
+    // its address.
+    e.with_stack(0xc, |e, vector| {
+        let vector = vector.addr();
+        e.mem.set_u32(vector, x.to_bits());
+        e.mem.set_u32(vector + 4, y.to_bits());
+        e.mem.set_u32(vector + 8, z.to_bits());
+        let current = field(this, 0x124);
+        if e.call(POINT_EQUAL, &args![current, HEAD_TRACK_ZERO_POINT])
+            .u8()
+            != 0
+            && e.call(POINT_NOT_EQUAL, &args![vector, HEAD_TRACK_ZERO_POINT])
+                .u8()
+                != 0
+        {
+            // BSFaceGenAnimationData::TrackingState (Xbox PDB) +0x174
+            e.mem.set_u32(field(this, 0x174), 1);
+            // BSFaceGenAnimationData::fJustAcquiredTimer (Xbox PDB) +0x178
+            e.mem.set_u32(field(this, 0x178), FLOAT_ZERO);
+        }
+        if e.call(POINT_EQUAL, &args![vector, HEAD_TRACK_ZERO_POINT])
+            .u8()
+            != 0
+        {
+            e.mem.set_u32(field(this, 0x174), 0);
+        }
+    });
+    // BSFaceGenAnimationData::HeadTrackVector (Xbox PDB) +0x124
+    e.mem.set_u32(field(this, 0x124), x.to_bits());
+    e.mem.set_u32(field(this, 0x128), y.to_bits());
+    e.mem.set_u32(field(this, 0x12c), z.to_bits());
+    e.set(this, BSFaceGenAnimationData::bShouldHeadTrack, 1u8);
+}
+
+// Translated from 0064bd60 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSFaceGenAnimationData::ClearHeadTracking` (Xbox PDB, vtable +0xC4):
+/// copies the point at `011f426c` into `HeadTrackVector` (+0x124) and
+/// stores `full_track_update` in `bFullTrackUpdate` (+0x188).
+pub fn bs_face_gen_animation_data_clear_head_tracking(
+    e: &mut Engine,
+    this: FaceData,
+    full_track_update: u8,
+) {
+    for word in [0u32, 4, 8] {
+        let value = e.mem.u32(HEAD_TRACK_ZERO_POINT + word);
+        e.mem.set_u32(field(this, 0x124 + word), value);
+    }
+    // BSFaceGenAnimationData::bFullTrackUpdate (Xbox PDB) +0x188
+    e.mem.set_u8(field(this, 0x188), full_track_update);
+}
+
+/// `NiNew`-style allocation (`00aa13e0`, cdecl size) and the
+/// `BSFaceGenAnimationData` constructor `00649680` the copy uses.
+const NI_ALLOCATE: u32 = 0x00aa_13e0;
+const FACE_GEN_ANIMATION_DATA_CONSTRUCT: u32 = 0x0064_9680;
+/// `0064fcd0` (thiscall `(const BSFaceGenKeyframeMultiple *)`): copies a
+/// keyframe into `this`; `0064ec10` (thiscall, one keyframe): the copy
+/// constructor of a new keyframe.
+const KEYFRAME_ASSIGN: u32 = 0x0064_fcd0;
+const KEYFRAME_COPY_CONSTRUCT: u32 = 0x0064_ec10;
+/// `NiTPointerList` helpers used by the copy: the head item (`00559450`),
+/// the address of an item's element (`006317a0`, `(item)`), the next item
+/// (`007b52d0`, `(item)`) and add-to-tail (`004ed8c0`, `(const T *)`).
+const LIST_HEAD: u32 = 0x0055_9450;
+const LIST_ITEM_ELEMENT: u32 = 0x0063_17a0;
+const LIST_NEXT: u32 = 0x007b_52d0;
+const LIST_ADD_TAIL: u32 = 0x004e_d8c0;
+/// `BSFaceGenKeyframe::IsMultiple` (Xbox PDB slot +0x44).
+const KF_IS_MULTIPLE: u32 = 0x44;
+
+/// Copies a keyframe into a new 0x14-byte block (`0064ec10`), or null when
+/// the allocation fails.
+fn copy_keyframe(e: &mut Engine, keyframe: u32) -> u32 {
+    let block = e.call(ALLOCATE, &args![0x14u32]).u32();
+    if block == 0 {
+        0
+    } else {
+        e.call(KEYFRAME_COPY_CONSTRUCT, &args![block, keyframe])
+            .u32()
+    }
+}
+
+// Translated from 0064c5a0 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 0064c5a0 - the compiler's exception-unwinding frame (FS:[0]) is not translated
+/// A copy of a `BSFaceGenAnimationData` (no Xbox name in the engine map;
+/// called from `LinearFaceGenHeadLoad` and `TESNPC` code): a new object
+/// (0x1C0 bytes through `00aa13e0`, constructed by `00649680`, null when
+/// the allocation fails; the copy then writes through it unchecked); the
+/// twelve current keyframes copied (`0064fcd0`, in the exe's order), the
+/// head-track vector and the flags `bChangedLastUpdate`, `bFullTrackUpdate`,
+/// `bMustUpdate`, `bAnimHeadCulled` and `bAnimHeadCulledLastFrame`; a copy of
+/// `pTargetExpressionData` (or null); then each keyframe of the modifier,
+/// phoneme and custom-morph speech lists, copied when its `IsMultiple`
+/// (slot +0x44) is true and null otherwise, added to the same list of the
+/// copy. Returns the copy.
+pub fn fn_0064c5a0(e: &mut Engine, this: FaceData) -> FaceData {
+    let block = e.call(NI_ALLOCATE, &args![0x1c0u32]).u32();
+    let copy = if block == 0 {
+        0
+    } else {
+        e.call(FACE_GEN_ANIMATION_DATA_CONSTRUCT, &args![block])
+            .u32()
+    };
+    for offset in [
+        0x10u32, 0x24, 0x74, 0x94, 0x38, 0xa8, 0xc8, 0x4c, 0xdc, 0xfc, 0x60, 0x110,
+    ] {
+        e.call(
+            KEYFRAME_ASSIGN,
+            &args![copy.wrapping_add(offset), field(this, offset)],
+        );
+    }
+    for offset in [0x124u32, 0x128, 0x12c] {
+        let value = e.mem.u32(field(this, offset));
+        e.mem.set_u32(copy.wrapping_add(offset), value);
+    }
+    for offset in [0x18bu32, 0x188, 0x18c, 0x18f, 0x190] {
+        let value = e.mem.u8(field(this, offset));
+        e.mem.set_u8(copy.wrapping_add(offset), value);
+    }
+    let target = e.get(this, BSFaceGenAnimationData::pTargetExpressionData);
+    let target_copy = if target == 0 {
+        0
+    } else {
+        copy_keyframe(e, target)
+    };
+    e.mem.set_u32(copy.wrapping_add(0xc), target_copy);
+    for list in [0x88u32, 0xbc, 0xf0] {
+        let source = field(this, list);
+        let mut item = e.call(LIST_HEAD, &args![source]).u32();
+        while item != 0 {
+            let element = e.call(LIST_ITEM_ELEMENT, &args![source, item]).u32();
+            let keyframe = e.mem.u32(element);
+            let multiple = e.vcall(keyframe, KF_IS_MULTIPLE, &[]).u8() != 0;
+            let added = if multiple {
+                copy_keyframe(e, keyframe)
+            } else {
+                0
+            };
+            e.with_stack(4, |e, slot| {
+                e.mem.set_u32(slot.addr(), added);
+                e.call(LIST_ADD_TAIL, &args![copy.wrapping_add(list), slot]);
+            });
+            item = e.call(LIST_NEXT, &args![source, item]).u32();
+        }
+    }
+    Ptr::new(copy)
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -1926,6 +2256,43 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
             0x0064_ccf0,
             bs_face_gen_image_constructor(Ptr<BSFaceGenImage>, Ptr) -> Ptr<BSFaceGenImage>
         ),
+        entry!(
+            0x0064_9be0,
+            bs_face_gen_animation_data_set_anim_expression_value(FaceData, i32, f32)
+        ),
+        entry!(
+            0x0064_9c10,
+            bs_face_gen_animation_data_set_anim_modifier_value(FaceData, i32, f32)
+        ),
+        entry!(
+            0x0064_9c40,
+            bs_face_gen_animation_data_set_anim_phoneme_value(FaceData, i32, f32)
+        ),
+        entry!(
+            0x0064_9c70,
+            bs_face_gen_animation_data_set_anim_custom_morph_value(FaceData, i32, f32)
+        ),
+        entry!(
+            0x0064_ac30,
+            bs_face_gen_animation_data_add_custom_morph_keyframe(FaceData, Ptr, f32)
+        ),
+        entry!(
+            0x0064_b0f0,
+            bs_face_gen_animation_data_is_speech_keyframe_list_empty(FaceData, u32) -> bool
+        ),
+        entry!(
+            0x0064_b160,
+            bs_face_gen_animation_data_set_expression_target_values(FaceData, Ptr)
+        ),
+        entry!(
+            0x0064_bcc0,
+            bs_face_gen_animation_data_set_head_track_vector(FaceData, f32, f32, f32, u32)
+        ),
+        entry!(
+            0x0064_bd60,
+            bs_face_gen_animation_data_clear_head_tracking(FaceData, u8)
+        ),
+        entry!(0x0064_c5a0, fn_0064c5a0(FaceData) -> FaceData),
     ]
 }
 
@@ -2990,5 +3357,203 @@ mod tests {
         e.call(0x0064_ccf0, &args![image, 0u32]);
         assert_eq!(e.mem.u32(image.addr() + 0x24), 0);
         assert_eq!(e.mem.u32(image.addr() + 0x28), 0);
+    }
+
+    #[test]
+    fn set_anim_values_store_below_each_limit() {
+        let mut e = face_engine();
+        let this = face(&mut e);
+        e.register(KEYFRAME_STORE_VALUE, |_, _| Ret::default());
+        e.call_log = Some(vec![]);
+        for (address, offset, limit) in [
+            (0x0064_9be0, 0x24, 15i32),
+            (0x0064_9c10, 0x38, 17),
+            (0x0064_9c40, 0x4c, 16),
+            (0x0064_9c70, 0x60, 1),
+        ] {
+            e.call(address, &args![this, limit - 1, 0.5f32]);
+            e.call(address, &args![this, limit, 0.5f32]);
+            e.call(address, &args![this, -2i32, 0.25f32]);
+            let stored = calls_to(&e, KEYFRAME_STORE_VALUE);
+            let n = stored.len();
+            assert_eq!(
+                stored[n - 2..],
+                [
+                    vec![this.addr() + offset, (limit - 1) as u32, bits(0.5)],
+                    vec![this.addr() + offset, -2i32 as u32, bits(0.25)],
+                ]
+            );
+        }
+        assert_eq!(calls_to(&e, KEYFRAME_STORE_VALUE).len(), 8);
+    }
+
+    #[test]
+    fn add_custom_morph_keyframe_takes_one_value() {
+        let mut e = face_engine();
+        let this = face(&mut e);
+        stack_keyframe_doubles(&mut e);
+        let values = e.mem.alloc(4);
+        e.mem.set_f32(values, 0.25);
+        e.call_log = Some(vec![]);
+        e.call(0x0064_ac30, &args![this, values, f32::NAN]);
+        let added = calls_to(&e, KEYFRAME_ADD_TO_LIST);
+        assert_eq!(added.len(), 1);
+        assert_eq!(added[0][1], this.addr() + 0xf0);
+        assert_eq!(e.mem.f32(0x011d_5000), 0.25);
+        assert_eq!(calls_to(&e, KEYFRAME_CONSTRUCT)[0][1..], [3, 1]);
+        e.call_log = Some(vec![]);
+        e.call(0x0064_ac30, &args![this, values, -0.5f32]);
+        e.call(0x0064_ac30, &args![this, 0u32, 0.5f32]);
+        assert!(calls_to(&e, KEYFRAME_ADD_TO_LIST).is_empty());
+        assert_eq!(calls_to(&e, KEYFRAME_DESTRUCT).len(), 2);
+    }
+
+    #[test]
+    fn speech_list_emptiness_by_type() {
+        let mut e = face_engine();
+        let this = face(&mut e);
+        e.mem.set_u32(this.addr() + 0xbc + 8, 1);
+        let empty = |e: &mut Engine, t: u32| e.call(0x0064_b0f0, &args![this, t]).u8();
+        assert_eq!(empty(&mut e, 0), 0);
+        assert_eq!(empty(&mut e, 2), 1);
+        assert_eq!(empty(&mut e, 3), 1);
+        assert_eq!(empty(&mut e, 1), 1);
+        e.mem.set_u32(this.addr() + 0x88 + 8, 2);
+        assert_eq!(empty(&mut e, 2), 0);
+    }
+
+    #[test]
+    fn expression_target_from_values_replaces_the_target() {
+        let mut e = face_engine();
+        let this = face(&mut e);
+        let target = new_keyframe(&mut e, this, 0.0, 1);
+        let target_values = give_values(&mut e, target, 15);
+        e.register_double(ALLOCATE, move |_, _| target.into_ret());
+        e.register(KEYFRAME_CONSTRUCT, |_, a| a[0].into_ret());
+        let values = e.mem.alloc(60);
+        e.mem.set_f32(values + 4 * 14, 0.75);
+        // Dead: only the clear.
+        e.mem.set_u8(this.addr() + 0x18e, 1);
+        e.call_log = Some(vec![]);
+        e.call(0x0064_b160, &args![this, values]);
+        assert_eq!(e.call_log.as_ref().unwrap().len(), 2);
+        assert_eq!(
+            calls_to(&e, FACE_SLOTS + VT_CLEAR_EXPRESSION_TARGET).len(),
+            1
+        );
+        e.mem.set_u8(this.addr() + 0x18e, 0);
+        let old = new_keyframe(&mut e, this, 0.0, 1);
+        e.mem.set_u32(this.addr() + 0xc, old);
+        e.call_log = Some(vec![]);
+        e.call(0x0064_b160, &args![this, values]);
+        assert_eq!(calls_to(&e, KEYFRAME_SLOTS), vec![vec![old, 1]]);
+        assert_eq!(calls_to(&e, KEYFRAME_CONSTRUCT), vec![vec![target, 1, 0xf]]);
+        assert_eq!(e.mem.u32(this.addr() + 0xc), target);
+        assert_eq!(e.mem.f32(target_values + 4 * 14), 0.75);
+        assert_eq!(
+            calls_to(&e, KEYFRAME_SLOTS + KF_COMPARE),
+            vec![vec![this.addr() + 0x10, target]]
+        );
+        assert_eq!(
+            calls_to(&e, FACE_SLOTS + VT_CLEAR_EXPRESSION_TARGET).len(),
+            1
+        );
+    }
+
+    fn point_doubles(e: &mut Engine) {
+        e.map(0x011f_4000, 0x1000);
+        e.register(POINT_EQUAL, |e, a| {
+            let same = (0..3).all(|i| e.mem.f32(a[0] + 4 * i) == e.mem.f32(a[1] + 4 * i));
+            same.into_ret()
+        });
+        e.register(POINT_NOT_EQUAL, |e, a| {
+            let same = (0..3).all(|i| e.mem.f32(a[0] + 4 * i) == e.mem.f32(a[1] + 4 * i));
+            (!same).into_ret()
+        });
+    }
+
+    #[test]
+    fn head_track_vector_starts_and_stops_tracking() {
+        let mut e = face_engine();
+        let this = face(&mut e);
+        point_doubles(&mut e);
+        e.mem.set_f32(this.addr() + 0x178, 3.0);
+        e.call(0x0064_bcc0, &args![this, 1.0f32, 2.0f32, 3.0f32, 0u32]);
+        assert_eq!(e.mem.u32(this.addr() + 0x174), 1);
+        assert_eq!(e.mem.f32(this.addr() + 0x178), 0.0);
+        assert_eq!(e.mem.f32(this.addr() + 0x12c), 3.0);
+        assert_eq!(e.mem.u8(this.addr() + 0x189), 1);
+        // From a set vector to another: the state stays.
+        e.mem.set_u32(this.addr() + 0x174, 5);
+        e.call(0x0064_bcc0, &args![this, 4.0f32, 2.0f32, 3.0f32, 0u32]);
+        assert_eq!(e.mem.u32(this.addr() + 0x174), 5);
+        assert_eq!(e.mem.f32(this.addr() + 0x124), 4.0);
+        // Back to the zero point: the state becomes 0.
+        e.call(0x0064_bcc0, &args![this, 0.0f32, 0.0f32, 0.0f32, 0u32]);
+        assert_eq!(e.mem.u32(this.addr() + 0x174), 0);
+    }
+
+    #[test]
+    fn clear_head_tracking_copies_the_zero_point() {
+        let mut e = face_engine();
+        let this = face(&mut e);
+        e.map(0x011f_4000, 0x1000);
+        e.mem.set_f32(HEAD_TRACK_ZERO_POINT + 8, 9.0);
+        e.mem.set_f32(this.addr() + 0x124, 1.0);
+        e.call(0x0064_bd60, &args![this, 1u32]);
+        assert_eq!(e.mem.f32(this.addr() + 0x124), 0.0);
+        assert_eq!(e.mem.f32(this.addr() + 0x12c), 9.0);
+        assert_eq!(e.mem.u8(this.addr() + 0x188), 1);
+    }
+
+    #[test]
+    fn copy_duplicates_keyframes_flags_and_lists() {
+        let mut e = face_engine();
+        let this = face(&mut e);
+        let copy = face(&mut e);
+        e.register_double(NI_ALLOCATE, move |_, _| copy.addr().into_ret());
+        e.register(FACE_GEN_ANIMATION_DATA_CONSTRUCT, |_, a| a[0].into_ret());
+        e.register(KEYFRAME_ASSIGN, |_, _| Ret::default());
+        e.register(ALLOCATE, |e, a| e.mem.alloc(a[0]).into_ret());
+        e.register(KEYFRAME_COPY_CONSTRUCT, |e, a| {
+            e.mem.set_u32(a[0] + 4, e.mem.u32(a[1] + 4));
+            a[0].into_ret()
+        });
+        e.register(LIST_HEAD, |e, a| e.mem.u32(a[0]).into_ret());
+        e.register(LIST_ITEM_ELEMENT, |_, a| (a[1] + 8).into_ret());
+        e.register(LIST_NEXT, |e, a| e.mem.u32(a[1]).into_ret());
+        let added = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let sink = added.clone();
+        e.register_double(LIST_ADD_TAIL, move |e, a| {
+            sink.borrow_mut().push((a[0], e.mem.u32(a[1])));
+            Ret::default()
+        });
+        // A keyframe is multiple when its type is not 9.
+        e.register(KEYFRAME_SLOTS + KF_IS_MULTIPLE, |e, a| {
+            (e.mem.u32(a[0] + 4) != 9).into_ret()
+        });
+        e.mem.set_f32(this.addr() + 0x128, 5.0);
+        e.mem.set_u8(this.addr() + 0x190, 1);
+        let target = new_keyframe(&mut e, this, 0.0, 1);
+        e.mem.set_u32(this.addr() + 0xc, target);
+        let multiple = new_keyframe(&mut e, this, 0.0, 2);
+        let single = new_keyframe(&mut e, this, 0.0, 9);
+        fill_list(&mut e, this.addr() + 0x88, &[multiple, single]);
+        e.call_log = Some(vec![]);
+        let result = e.call(0x0064_c5a0, &args![this]).u32();
+        assert_eq!(result, copy.addr());
+        let assigned = calls_to(&e, KEYFRAME_ASSIGN);
+        assert_eq!(assigned.len(), 12);
+        assert_eq!(assigned[2], vec![copy.addr() + 0x74, this.addr() + 0x74]);
+        assert_eq!(e.mem.f32(copy.addr() + 0x128), 5.0);
+        assert_eq!(e.mem.u8(copy.addr() + 0x190), 1);
+        let copied_target = e.mem.u32(copy.addr() + 0xc);
+        assert_ne!(copied_target, 0);
+        assert_eq!(e.mem.u32(copied_target + 4), 1);
+        let added = added.borrow();
+        assert_eq!(added.len(), 2);
+        assert_eq!(added[0].0, copy.addr() + 0x88);
+        assert_eq!(e.mem.u32(added[0].1 + 4), 2);
+        assert_eq!(added[1], (copy.addr() + 0x88, 0));
     }
 }

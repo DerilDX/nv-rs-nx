@@ -1913,8 +1913,9 @@ pub fn actor_is_close_to_ground(e: &mut Engine, this: Ptr<Actor>, limit: f32) ->
 
 // Translated from 008a83c0 (decompiled, FalloutNV.exe 1.4.0.525)
 /// Calls `004938c0` on `first` and then, whatever it answered, the actor's
-/// method `+0x3e8` with `first`, `second` and `third`. The fourth word is
-/// not read.
+/// method `+0x3e8` with `first`, `second` and `third`, whose byte is the
+/// answer (the exe ends on that call and keeps its `AL`; the virtual slot's
+/// `bool`). The fourth word is not read.
 pub fn fn_008a83c0(
     e: &mut Engine,
     this: Ptr<Actor>,
@@ -1922,9 +1923,10 @@ pub fn fn_008a83c0(
     second: u32,
     third: u8,
     _unused_4: u32,
-) {
+) -> bool {
     e.call(0x0049_38c0, &args![first]);
-    e.vcall(this.addr(), 0x3e8, &args![first, second, third as u32]);
+    e.vcall(this.addr(), 0x3e8, &args![first, second, third as u32])
+        .bool()
 }
 
 // Translated from 008a8420 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -6037,7 +6039,10 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
             0x008a8300,
             actor_is_close_to_ground(Ptr<Actor>, f32) -> bool
         ),
-        entry!(0x008a83c0, fn_008a83c0(Ptr<Actor>, u32, u32, u8, u32)),
+        entry!(
+            0x008a83c0,
+            fn_008a83c0(Ptr<Actor>, u32, u32, u8, u32) -> bool
+        ),
         entry!(0x008a8420, fn_008a8420(Ptr<Actor>, u32, i32, u8) -> bool),
         entry!(0x008a8820, fn_008a8820(Ptr, u16)),
         entry!(0x008a8840, actor_queue_reload(Ptr<Actor>)),
@@ -9132,6 +9137,21 @@ mod tests {
         assert!(e.call(0x008a_8300, &args![actor, 0.0f32]).bool());
         e.register(0x0093_06d0, |_, _| 0.into_ret());
         assert!(e.call(0x008a_8300, &args![actor, 0.0f32]).bool());
+    }
+
+    #[test]
+    fn move_forwarder_answers_method_0x3e8() {
+        let mut e = engine2();
+        let (actor, _) = actor2(&mut e);
+        e.register(0x0049_38c0, |_, _| 0.into_ret());
+        answer(&mut e, ACTOR2_VT, 0x3e8, 1);
+        assert!(e
+            .call(0x008a_83c0, &args![actor, 0x11u32, 0x22u32, 1u8, 0x33u32])
+            .bool());
+        answer(&mut e, ACTOR2_VT, 0x3e8, 0);
+        assert!(!e
+            .call(0x008a_83c0, &args![actor, 0x11u32, 0x22u32, 1u8, 0x33u32])
+            .bool());
     }
 
     #[test]

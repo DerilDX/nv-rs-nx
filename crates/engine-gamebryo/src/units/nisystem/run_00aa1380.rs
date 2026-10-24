@@ -486,9 +486,219 @@ pub fn fn_00aa1980(e: &mut Engine) {
     );
 }
 
+/// `00aa1b30` (`thiscall` on an `NiBinaryStream`, one word): sets the
+/// stream's read and write functions (to `00aa19a0` and `00aa19c0`).
+const BINARY_STREAM_SET_FUNCTIONS: u32 = 0x00aa_1b30;
+/// `00aa1070` (`cdecl`, the size): allocates the buffer.
+const ALLOCATE_BUFFER: u32 = 0x00aa_1070;
+/// CRT `fopen_s` (`00ec9a5e`, `cdecl`: the `FILE*` slot, the path, the mode).
+const FOPEN_S: u32 = 0x00ec_9a5e;
+/// CRT `fseek` (`00ecb65a`, `cdecl`: `FILE`, offset, origin).
+const FSEEK: u32 = 0x00ec_b65a;
+/// The open modes `"rb"`, `"wb"` and `"ab"` in `.rdata`.
+const MODE_READ_TEXT: u32 = 0x0106_e79c;
+const MODE_WRITE_TEXT: u32 = 0x0106_e798;
+const MODE_APPEND_TEXT: u32 = 0x010a_24b0;
+/// Import slots of `CreateDirectoryA` and `GetFileAttributesA` (`stdcall`).
+const API_CREATE_DIRECTORY: u32 = 0x00fd_f0b8;
+const API_GET_FILE_ATTRIBUTES: u32 = 0x00fd_f160;
+/// `00aa1de0` (`cdecl`: buffer, byte count, component sizes, their count):
+/// swaps the byte order of each component.
+const SWAP_COMPONENTS: u32 = 0x00aa_1de0;
+
+// Translated from 00aa14d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map: the `NiFile` constructor (`thiscall`, `RET 0xc`:
+/// the path, the open mode and the buffer size). Runs the base constructor
+/// (`00aa1d10`), installs the `NiFile` vtable, sets the stream functions
+/// (`00aa1b30` with 0), clears `m_uiCurrentFilePos`, keeps the mode and
+/// opens the file with `fopen_s` in `"rb"` (mode 0), `"wb"` (mode 1) or
+/// `"ab"` (any other). `m_bGood` says whether that gave a file. The buffer
+/// size is kept and the buffer positions cleared; a good file with a
+/// non-zero buffer size gets its buffer (`00aa1070`), any other a null one.
+/// Answers `this`.
+pub fn fn_00aa14d0(
+    e: &mut Engine,
+    this: Ptr<NiFile>,
+    path: Ptr,
+    mode: u32,
+    buffer_size: u32,
+) -> Ptr<NiFile> {
+    e.call(BINARY_STREAM_CONSTRUCTOR, &args![this]);
+    e.mem.set_u32(this.addr(), NI_FILE_VTABLE);
+    e.call(BINARY_STREAM_SET_FUNCTIONS, &args![this, 0u32]);
+    e.set(this, NiFile::m_uiCurrentFilePos, 0);
+    e.set(this, NiFile::m_eMode, mode);
+    let text = match mode {
+        0 => MODE_READ_TEXT,
+        1 => MODE_WRITE_TEXT,
+        _ => MODE_APPEND_TEXT,
+    };
+    let file_slot = this.addr().wrapping_add(0x24);
+    let error = e.call(FOPEN_S, &args![file_slot, path, text]).u32();
+    let good = error == 0 && e.get(this, NiFile::m_pFile) != 0;
+    e.set(this, NiFile::m_bGood, u8::from(good));
+    e.set(this, NiFile::m_uiBufferAllocSize, buffer_size);
+    e.set(this, NiFile::m_uiBufferReadSize, 0);
+    e.set(this, NiFile::m_uiPos, 0);
+    if good && buffer_size != 0 {
+        let buffer = e.call(ALLOCATE_BUFFER, &args![buffer_size]).u32();
+        e.set(this, NiFile::m_pBuffer, buffer);
+        return this;
+    }
+    e.set(this, NiFile::m_pBuffer, 0);
+    this
+}
+
+// Translated from 00aa15f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map: the `NiFile` file size (`thiscall`, no stack
+/// words). Answers 0 when `ftell` fails (negative); otherwise seeks to the
+/// end (`fseek(file, 0, 2)`), takes `ftell` there, seeks back to the old
+/// position (`fseek(file, old, 0)`) and answers the end position, or 0 when
+/// it is negative.
+pub fn fn_00aa15f0(e: &mut Engine, this: Ptr<NiFile>) -> u32 {
+    let file = e.get(this, NiFile::m_pFile);
+    let position = e.call(FTELL, &args![file]).i32();
+    if position < 0 {
+        return 0;
+    }
+    let file = e.get(this, NiFile::m_pFile);
+    e.call(FSEEK, &args![file, 0u32, 2u32]);
+    let file = e.get(this, NiFile::m_pFile);
+    let end = e.call(FTELL, &args![file]).i32();
+    let file = e.get(this, NiFile::m_pFile);
+    e.call(FSEEK, &args![file, position, 0u32]);
+    if end < 0 {
+        0
+    } else {
+        end as u32
+    }
+}
+
+// Translated from 00aa1650 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`cdecl`, the path): `CreateDirectoryA(path,
+/// null)`, answering whether it succeeded.
+pub fn fn_00aa1650(e: &mut Engine, path: Ptr) -> bool {
+    e.call(API_CREATE_DIRECTORY, &args![path, 0u32]).u32() != 0
+}
+
+// Translated from 00aa1670 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`cdecl`, the path): whether the path is a
+/// directory, by `GetFileAttributesA` (bit 4, `FILE_ATTRIBUTE_DIRECTORY`);
+/// a failed call (-1) answers false. On failure the code clears only `AL`
+/// (the rest of `EAX` keeps the -1's bytes); callers read `AL`.
+pub fn fn_00aa1670(e: &mut Engine, path: Ptr) -> bool {
+    let attributes = e.call(API_GET_FILE_ATTRIBUTES, &args![path]).u32();
+    if attributes == 0xffff_ffff {
+        return false;
+    }
+    (attributes >> 4) & 1 != 0
+}
+
+// Translated from 00aa18c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map: the `NiFile` scalar deleting destructor
+/// (`thiscall`, `RET 4`: the flags). The destructor body of `00aa1690`
+/// inlined (vtable, flush and `fclose` of a good open file, the buffer freed
+/// through `00aa10f0`, the base destructor `00aa1d30`), then, with bit 0 of
+/// the flags, `this` given back to the memory manager (`00aa4060`). Answers
+/// `this`.
+pub fn fn_00aa18c0(e: &mut Engine, this: Ptr<NiFile>, flags: u32) -> Ptr<NiFile> {
+    e.mem.set_u32(this.addr(), NI_FILE_VTABLE);
+    if e.get(this, NiFile::m_bGood) != 0 && e.get(this, NiFile::m_pFile) != 0 {
+        fn_00aa15a0(e, this);
+        let file = e.get(this, NiFile::m_pFile);
+        e.call(FCLOSE, &args![file]);
+    }
+    let buffer = e.get(this, NiFile::m_pBuffer);
+    e.call(FREE_BUFFER, &args![buffer]);
+    e.call(BINARY_STREAM_DESTRUCTOR, &args![this]);
+    if flags & 1 != 0 {
+        e.call(
+            MEMORY_MANAGER_DEALLOCATE,
+            &args![MEMORY_MANAGER_OBJECT, this],
+        );
+    }
+    this
+}
+
+// Translated from 00aa19a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (Ghidra made no function here; read from its
+/// bytes): the `NiFile` stream read function `00aa1b30` installs (`cdecl`:
+/// the file, the buffer, the count, and the component sizes and their count
+/// that the swapping variant `00aa19e0` takes, not read here). Answers
+/// `00aa1750`'s result.
+pub fn fn_00aa19a0(
+    e: &mut Engine,
+    file: Ptr<NiFile>,
+    buffer: Ptr,
+    count: u32,
+    _sizes: Ptr,
+    _size_count: u32,
+) -> u32 {
+    fn_00aa1750(e, file, buffer, count)
+}
+
+// Translated from 00aa19c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (Ghidra made no function here; read from its
+/// bytes): the `NiFile` stream write function `00aa1b30` installs (`cdecl`:
+/// the file, the buffer, the count, and two words not read here, as for
+/// `00aa19a0`). Answers `00aa1810`'s result.
+pub fn fn_00aa19c0(
+    e: &mut Engine,
+    file: Ptr<NiFile>,
+    buffer: Ptr,
+    count: u32,
+    _unused_4: u32,
+    _unused_5: u32,
+) -> u32 {
+    fn_00aa1810(e, file, buffer, count)
+}
+
+// Translated from 00aa19e0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`cdecl`: the file, the buffer, the byte count,
+/// the component sizes and their count): a read that swaps byte order. A
+/// count of 0 answers 0 and reads nothing; otherwise reads through
+/// `00aa1750`, swaps the components of the `count` bytes asked for
+/// (`00aa1de0(buffer, count, sizes, size count)`) and answers what the read
+/// gave.
+pub fn fn_00aa19e0(
+    e: &mut Engine,
+    file: Ptr<NiFile>,
+    buffer: Ptr,
+    count: u32,
+    sizes: Ptr,
+    size_count: u32,
+) -> u32 {
+    if count == 0 {
+        return 0;
+    }
+    let read = fn_00aa1750(e, file, buffer, count);
+    e.call(SWAP_COMPONENTS, &args![buffer, count, sizes, size_count]);
+    read
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(
+            0x00aa_14d0,
+            fn_00aa14d0(Ptr<NiFile>, Ptr, u32, u32) -> Ptr<NiFile>
+        ),
+        entry!(0x00aa_15f0, fn_00aa15f0(Ptr<NiFile>) -> u32),
+        entry!(0x00aa_1650, fn_00aa1650(Ptr) -> bool),
+        entry!(0x00aa_1670, fn_00aa1670(Ptr) -> bool),
+        entry!(0x00aa_18c0, fn_00aa18c0(Ptr<NiFile>, u32) -> Ptr<NiFile>),
+        entry!(
+            0x00aa_19a0,
+            fn_00aa19a0(Ptr<NiFile>, Ptr, u32, Ptr, u32) -> u32
+        ),
+        entry!(
+            0x00aa_19c0,
+            fn_00aa19c0(Ptr<NiFile>, Ptr, u32, u32, u32) -> u32
+        ),
+        entry!(
+            0x00aa_19e0,
+            fn_00aa19e0(Ptr<NiFile>, Ptr, u32, Ptr, u32) -> u32
+        ),
         entry!(0x00aa13e0, fn_00aa13e0(u32) -> Ptr),
         entry!(0x00aa_1920, fn_00aa1920()),
         entry!(0x00aa_1380, fn_00aa1380(Ptr)),
@@ -933,5 +1143,197 @@ mod b006_tests {
             calls_to(&e, MEMORY_MANAGER_DEALLOCATE),
             vec![vec![MEMORY_MANAGER_OBJECT, 0x5550]]
         );
+    }
+}
+
+#[cfg(test)]
+mod tests_n084 {
+    use super::*;
+
+    fn calls(e: &Engine, callee: u32) -> Vec<Vec<u32>> {
+        e.call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|c| c.0 == callee)
+            .map(|c| c.1.clone())
+            .collect()
+    }
+
+    fn quiet(e: &mut Engine, callees: &[u32]) {
+        for &f in callees {
+            e.register(f, |_, _| Ret::default());
+        }
+    }
+
+    #[test]
+    fn fn_00aa14d0_opens_in_each_mode_and_takes_a_buffer() {
+        for (mode, text) in [
+            (0u32, MODE_READ_TEXT),
+            (1, MODE_WRITE_TEXT),
+            (2, MODE_APPEND_TEXT),
+        ] {
+            let mut e = Engine::new();
+            quiet(
+                &mut e,
+                &[BINARY_STREAM_CONSTRUCTOR, BINARY_STREAM_SET_FUNCTIONS],
+            );
+            e.register(FOPEN_S, |e, a| {
+                e.mem.set_u32(a[0], 0x777);
+                Ret::default()
+            });
+            e.register(ALLOCATE_BUFFER, |_, _| 0x4400u32.into_ret());
+            let this = e.mem.alloc(0x30);
+            e.mem.set_u32(this + 0x18, 9);
+            e.call_log = Some(vec![]);
+            let r = e
+                .call(0x00aa_14d0, &args![this, 0x9000u32, mode, 0x100u32])
+                .u32();
+            assert_eq!(r, this);
+            assert_eq!(e.mem.u32(this), NI_FILE_VTABLE);
+            assert_eq!(calls(&e, BINARY_STREAM_SET_FUNCTIONS), vec![vec![this, 0]]);
+            assert_eq!(calls(&e, FOPEN_S), vec![vec![this + 0x24, 0x9000, text]]);
+            assert_eq!(e.mem.u32(this + 0x28), mode);
+            assert_eq!(e.mem.u8(this + 0x2c), 1);
+            assert_eq!(e.mem.u32(this + 0x10), 0x100);
+            assert_eq!(e.mem.u32(this + 0x18), 0);
+            assert_eq!(e.mem.u32(this + 0x20), 0x4400);
+        }
+    }
+
+    #[test]
+    fn fn_00aa14d0_without_a_file_has_no_buffer() {
+        let mut e = Engine::new();
+        quiet(
+            &mut e,
+            &[BINARY_STREAM_CONSTRUCTOR, BINARY_STREAM_SET_FUNCTIONS],
+        );
+        e.register(FOPEN_S, |_, _| 2u32.into_ret());
+        e.register(ALLOCATE_BUFFER, |_, _| 0x4400u32.into_ret());
+        let this = e.mem.alloc(0x30);
+        e.mem.set_u32(this + 0x20, 5);
+        e.call_log = Some(vec![]);
+        e.call(0x00aa_14d0, &args![this, 0x9000u32, 0u32, 0x100u32]);
+        assert_eq!(e.mem.u8(this + 0x2c), 0);
+        assert_eq!(e.mem.u32(this + 0x20), 0);
+        assert!(calls(&e, ALLOCATE_BUFFER).is_empty());
+    }
+
+    #[test]
+    fn fn_00aa15f0_measures_and_restores_the_position() {
+        let mut e = Engine::new();
+        let mut answers = vec![-1i32, 0x30, 0x10].into_iter();
+        e.register_double(FTELL, move |_, _| answers.next().unwrap().into_ret());
+        e.register(FSEEK, |_, _| Ret::default());
+        let this = e.mem.alloc(0x30);
+        e.mem.set_u32(this + 0x24, 0x777);
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x00aa_15f0, &args![this]).u32(), 0);
+        assert!(calls(&e, FSEEK).is_empty());
+        assert_eq!(e.call(0x00aa_15f0, &args![this]).u32(), 0x10);
+        assert_eq!(
+            calls(&e, FSEEK),
+            vec![vec![0x777, 0, 2], vec![0x777, 0x30, 0]]
+        );
+        let mut e2 = Engine::new();
+        let mut answers = vec![4i32, -5].into_iter();
+        e2.register_double(FTELL, move |_, _| answers.next().unwrap().into_ret());
+        e2.register(FSEEK, |_, _| Ret::default());
+        let this = e2.mem.alloc(0x30);
+        assert_eq!(e2.call(0x00aa_15f0, &args![this]).u32(), 0);
+    }
+
+    #[test]
+    fn fn_00aa1650_and_fn_00aa1670_ask_windows() {
+        let mut e = Engine::new();
+        e.register(API_CREATE_DIRECTORY, |_, a| (a[0] & 1).into_ret());
+        assert!(e.call(0x00aa_1650, &args![0x9001u32]).bool());
+        assert!(!e.call(0x00aa_1650, &args![0x9000u32]).bool());
+        e.register(API_GET_FILE_ATTRIBUTES, |_, a| a[0].into_ret());
+        assert!(!e.call(0x00aa_1670, &args![0xffff_ffffu32]).bool());
+        assert!(e.call(0x00aa_1670, &args![0x10u32]).bool());
+        assert!(!e.call(0x00aa_1670, &args![0x20u32]).bool());
+    }
+
+    #[test]
+    fn fn_00aa18c0_closes_frees_and_deletes_with_bit_0() {
+        let mut e = Engine::new();
+        quiet(
+            &mut e,
+            &[
+                FCLOSE,
+                FREE_BUFFER,
+                BINARY_STREAM_DESTRUCTOR,
+                MEMORY_MANAGER_DEALLOCATE,
+            ],
+        );
+        let this = e.mem.alloc(0x30);
+        e.mem.set_u8(this + 0x2c, 1);
+        e.mem.set_u32(this + 0x24, 0x777);
+        e.mem.set_u32(this + 0x20, 0x4400);
+        e.mem.set_u32(this + 0x14, 3);
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x00aa_18c0, &args![this, 1u32]).u32(), this);
+        assert_eq!(e.mem.u32(this), NI_FILE_VTABLE);
+        assert_eq!(e.mem.u32(this + 0x14), 0);
+        assert_eq!(calls(&e, FCLOSE), vec![vec![0x777]]);
+        assert_eq!(calls(&e, FREE_BUFFER), vec![vec![0x4400]]);
+        assert_eq!(calls(&e, BINARY_STREAM_DESTRUCTOR), vec![vec![this]]);
+        assert_eq!(
+            calls(&e, MEMORY_MANAGER_DEALLOCATE),
+            vec![vec![MEMORY_MANAGER_OBJECT, this]]
+        );
+        e.mem.set_u8(this + 0x2c, 0);
+        e.call(0x00aa_18c0, &args![this, 0u32]);
+        assert_eq!(calls(&e, FCLOSE).len(), 1);
+        assert_eq!(calls(&e, MEMORY_MANAGER_DEALLOCATE).len(), 1);
+    }
+
+    /// A good file in read mode with no buffer: reads go straight to the
+    /// file (`00aa8610`), writes straight to it (`00aa8660`).
+    fn direct_file(e: &mut Engine, mode: u32) -> u32 {
+        e.register(FILE_READ, |_, a| a[2].into_ret());
+        e.register(FILE_WRITE, |_, a| a[2].into_ret());
+        let this = e.mem.alloc(0x30);
+        e.mem.set_u8(this + 0x2c, 1);
+        e.mem.set_u32(this + 0x24, 0x777);
+        e.mem.set_u32(this + 0x28, mode);
+        this
+    }
+
+    #[test]
+    fn fn_00aa19a0_and_fn_00aa19c0_pass_on_the_answer() {
+        let mut e = Engine::new();
+        let file = direct_file(&mut e, 0);
+        e.call_log = Some(vec![]);
+        let r = e
+            .call(0x00aa_19a0, &args![file, 0x9000u32, 8u32, 0u32, 0u32])
+            .u32();
+        assert_eq!(r, 8);
+        assert_eq!(calls(&e, FILE_READ), vec![vec![0x9000, 1, 8, 0x777]]);
+        let file = direct_file(&mut e, 1);
+        let r = e
+            .call(0x00aa_19c0, &args![file, 0x9000u32, 6u32, 0u32, 0u32])
+            .u32();
+        assert_eq!(r, 6);
+        assert_eq!(calls(&e, FILE_WRITE), vec![vec![0x9000, 1, 6, 0x777]]);
+    }
+
+    #[test]
+    fn fn_00aa19e0_reads_then_swaps() {
+        let mut e = Engine::new();
+        e.register(SWAP_COMPONENTS, |_, _| Ret::default());
+        let file = direct_file(&mut e, 0);
+        e.call_log = Some(vec![]);
+        let r = e
+            .call(0x00aa_19e0, &args![file, 0x9000u32, 0u32, 0x8000u32, 2u32])
+            .u32();
+        assert_eq!(r, 0);
+        assert!(calls(&e, SWAP_COMPONENTS).is_empty());
+        let r = e
+            .call(0x00aa_19e0, &args![file, 0x9000u32, 8u32, 0x8000u32, 2u32])
+            .u32();
+        assert_eq!(r, 8);
+        assert_eq!(calls(&e, SWAP_COMPONENTS), vec![vec![0x9000, 8, 0x8000, 2]]);
     }
 }

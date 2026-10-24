@@ -370,9 +370,515 @@ pub fn fn_0058f7f0(e: &mut Engine, this: Ptr, index: i32) -> u32 {
     }
 }
 
+/// `ImpactSwap` (Xbox PDB, 0x15C bytes): `pRemappedData`, twelve
+/// `BSMap<BGSImpactData *,BGSImpactData *>` pointers from +0x00, and
+/// `pAltFootstepMaterialNames`, 300 bytes of names at +0x30.
+const SWAP_MAPS: u32 = 12;
+const SWAP_NAMES: u32 = 0x30;
+const SWAP_NAMES_SIZE: u32 = 300;
+/// The map helpers: `004b9ba0` (the first position, 0 when empty),
+/// `006b7f20` (`RET 0xC`: the position, key and value out; steps the
+/// position), `00438af0` (removes every entry), `BSMapBase::SetAt` (engine
+/// map, `006f9a80`, `RET 8`: key, value), `00853130` (`RET 8`: key, value
+/// out; the lookup).
+const MAP_FIRST: u32 = 0x004b_9ba0;
+const MAP_NEXT: u32 = 0x006b_7f20;
+const MAP_REMOVE_ALL: u32 = 0x0043_8af0;
+const MAP_SET_AT: u32 = 0x006f_9a80;
+const MAP_LOOKUP: u32 = 0x0085_3130;
+/// The map's entry count (`0084e3a0` reads the word at +0xC).
+const MAP_COUNT: u32 = FORM_ID_0084E3A0;
+/// The free (`00401030`, cdecl, one word).
+const FREE: u32 = 0x0040_1030;
+/// `memcpy` (`00401460`), `_memcmp` (`00ec4835`) and `_memset`
+/// (`00ec61c0`), cdecl, three words each.
+const MEMCPY: u32 = 0x0040_1460;
+const MEMCMP: u32 = 0x00ec_4835;
+const CRT_MEMSET: u32 = 0x00ec_61c0;
+/// `00401500`: whether saved data is byte-swapped (`AL`).
+const SAVE_SWAPS_ENDIAN: u32 = 0x0040_1500;
+/// `005a6b10` (`ECX`): swaps the three words of a 12-byte record.
+const SWAP_RECORD: u32 = 0x005a_6b10;
+/// `TESForm::StartForm`, `TESForm::CloseForm` (Xbox PDB) and the chunk
+/// writers `TESForm::AddChunkArray` (`004856f0`), `AddChunkArray_ov2`
+/// (`00485710`) and `__AddChunkData` (`00485990`), cdecl: code, data, size.
+const START_FORM: u32 = 0x0048_55a0;
+const CLOSE_FORM: u32 = 0x0048_5680;
+const ADD_CHUNK_ARRAY: u32 = 0x0048_56f0;
+const ADD_CHUNK_ARRAY_WORDS: u32 = 0x0048_5710;
+const ADD_CHUNK_DATA: u32 = 0x0048_5990;
+/// Chunk codes `IMPF` (the footstep names) and `IMPS` (one swap).
+const CHUNK_IMPF: u32 = 0x4650_4d49;
+const CHUNK_IMPS: u32 = 0x5350_4d49;
+/// "Could not find old ImpactData (%08X) for ImpactSwap on '%s' (%08X)."
+/// and its "new" twin.
+const MESSAGE_NO_OLD_DATA: u32 = 0x0103_3428;
+const MESSAGE_NO_NEW_DATA: u32 = 0x0103_33e0;
+/// The vtables of `BSMap<BGSImpactData *,BGSImpactData *>` (`01033470`)
+/// and its base `BSMapBase` (`01033490`), from the engine map's names of
+/// their scalar deleting destructors.
+const MAP_VTABLE: u32 = 0x0103_3470;
+const MAP_BASE_VTABLE: u32 = 0x0103_3490;
+
+/// The map at `swap + material * 4` deleted (its vtable slot 0, the scalar
+/// deleting destructor, with 1) when there is one, and the slot cleared.
+fn delete_swap_map(e: &mut Engine, swap: u32, material: u32) {
+    let map = e.mem.u32(swap + material * 4);
+    if map != 0 {
+        e.vcall(map, 0, &args![1u32]);
+    }
+    e.mem.set_u32(swap + material * 4, 0);
+}
+
+/// Each (key, value) of `map` in the map's own order (`004b9ba0`, then
+/// `006b7f20` with zeroed key and value words), handed to `each`.
+fn for_each_pair(e: &mut Engine, map: u32, mut each: impl FnMut(&mut Engine, u32, u32)) {
+    e.with_stack(0xc, |e, words| {
+        let position = words.addr();
+        let key = position + 4;
+        let value = position + 8;
+        let first = e.call(MAP_FIRST, &args![map]).u32();
+        e.mem.set_u32(position, first);
+        while e.mem.u32(position) != 0 {
+            e.mem.set_u32(key, 0);
+            e.mem.set_u32(value, 0);
+            e.call(MAP_NEXT, &args![map, position, key, value]);
+            let (k, v) = (e.mem.u32(key), e.mem.u32(value));
+            each(e, k, v);
+        }
+    });
+}
+
+// Translated from 0058eb30 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The impact data set's copy (`RET 4`: the source form; the engine map has
+/// no name): when the source casts to a `BGSImpactDataSet`,
+/// `TESForm::CopyAllComponents` and its twelve material slots (0x30 bytes
+/// at +0x1C).
+pub fn fn_0058eb30(e: &mut Engine, this: Ptr, source: u32) {
+    let set = e
+        .call(
+            DYNAMIC_CAST,
+            &args![source, 0u32, TYPE_TES_FORM, TYPE_IMPACT_DATA_SET, 0u32],
+        )
+        .u32();
+    if set == 0 {
+        return;
+    }
+    e.call(0x0048_51b0, &args![this, set]);
+    e.call(MEMCPY, &args![this.addr() + SLOTS, set + SLOTS, 0x30u32]);
+}
+
+// Translated from 0058eb90 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The impact data set's compare (`RET 4`: the other form; the engine map
+/// has no name): true (different) unless the other form casts to a
+/// `BGSImpactDataSet`, `TESForm::CompareAllComponents` finds no difference
+/// and the twelve slots match.
+pub fn fn_0058eb90(e: &mut Engine, this: Ptr, other: u32) -> bool {
+    let set = e
+        .call(
+            DYNAMIC_CAST,
+            &args![other, 0u32, TYPE_TES_FORM, TYPE_IMPACT_DATA_SET, 0u32],
+        )
+        .u32();
+    if set == 0 {
+        return true;
+    }
+    if e.call(0x0048_5270, &args![this, set]).bool() {
+        return true;
+    }
+    e.call(MEMCMP, &args![this.addr() + SLOTS, set + SLOTS, 0x30u32])
+        .u32()
+        != 0
+}
+
+// Translated from 0058ed50 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The impact data set's save (the engine map has no name):
+/// `TESForm::StartForm`, a `DATA` chunk of the twelve slots' form ids (0
+/// for an empty slot, `TESForm::AddChunkArray_ov2` of 12 words) and
+/// `TESForm::CloseForm`.
+pub fn fn_0058ed50(e: &mut Engine, this: Ptr) {
+    e.call(START_FORM, &args![this]);
+    e.with_stack(0x30, |e, ids| {
+        for material in 0..12u32 {
+            let data = e.mem.u32(this.addr() + SLOTS + material * 4);
+            let id = if data == 0 {
+                0
+            } else {
+                e.call(FORM_ID_0084E3A0, &args![data]).u32()
+            };
+            e.mem.set_u32(ids.addr() + material * 4, id);
+        }
+        e.call(ADD_CHUNK_ARRAY_WORDS, &args![CHUNK_DATA, ids, 12u32]);
+    });
+    e.call(CLOSE_FORM, &args![this]);
+}
+
+// Translated from 0058efd0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The `ImpactSwap` constructor (the engine map has no name; `ECX`):
+/// zeroes the twelve map pointers and the 300 bytes of footstep names
+/// (`memset`) and returns the swap.
+pub fn fn_0058efd0(e: &mut Engine, this: Ptr) -> Ptr {
+    e.call(MEMSET, &args![this, 0u32, 0x30u32]);
+    e.call(
+        MEMSET,
+        &args![this.addr() + SWAP_NAMES, 0u32, SWAP_NAMES_SIZE],
+    );
+    this
+}
+
+// Translated from 0058f010 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The `ImpactSwap` destructor body (the engine map has no name; `ECX`):
+/// deletes each of the twelve maps and clears its pointer.
+pub fn fn_0058f010(e: &mut Engine, this: Ptr) {
+    for material in 0..SWAP_MAPS {
+        delete_swap_map(e, this.addr(), material);
+    }
+}
+
+// Translated from 0058f080 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ImpactSwap::Save` (engine map): for each map, each pair as an `IMPS`
+/// chunk of 12 bytes (the material, the old and the new impact data's form
+/// ids, 0 for none), swapped before and after the write when saving swaps
+/// bytes; then the footstep names as one `IMPF` chunk of 300 bytes.
+pub fn impact_swap_save(e: &mut Engine, this: Ptr) {
+    for material in 0..SWAP_MAPS {
+        let map = e.mem.u32(this.addr() + material * 4);
+        if map == 0 {
+            continue;
+        }
+        // The locals: the position at -0x8, the record (material, old,
+        // new) at -0x14.
+        e.with_stack(0x10, |e, words| {
+            let record = words.addr();
+            let position = record + 0xc;
+            let first = e.call(MAP_FIRST, &args![map]).u32();
+            e.mem.set_u32(position, first);
+            while e.mem.u32(position) != 0 {
+                e.mem.set_u32(record, material);
+                e.call(MAP_NEXT, &args![map, position, record + 4, record + 8]);
+                for at in [record + 4, record + 8] {
+                    let data = e.mem.u32(at);
+                    if data != 0 {
+                        let id = e.call(FORM_ID_0084E3A0, &args![data]).u32();
+                        e.mem.set_u32(at, id);
+                    }
+                }
+                if e.call(SAVE_SWAPS_ENDIAN, &args![]).bool() {
+                    e.call(SWAP_RECORD, &args![record]);
+                }
+                e.call(ADD_CHUNK_DATA, &args![CHUNK_IMPS, record, 0xcu32]);
+                if e.call(SAVE_SWAPS_ENDIAN, &args![]).bool() {
+                    e.call(SWAP_RECORD, &args![record]);
+                }
+            }
+        });
+    }
+    e.call(
+        ADD_CHUNK_ARRAY,
+        &args![CHUNK_IMPF, this.addr() + SWAP_NAMES, SWAP_NAMES_SIZE],
+    );
+}
+
+// Translated from 0058f180 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ImpactSwap`'s chunk reader (`RET 4`: the file; the engine map has no
+/// name): an `IMPF` chunk fills the 300 bytes of footstep names; an `IMPS`
+/// chunk is read into a zeroed 12-byte record (swapped when the file needs
+/// it) whose material, old and new impact data go to [`fn_0058f740`];
+/// other chunks are left.
+pub fn fn_0058f180(e: &mut Engine, this: Ptr, file: Ptr) {
+    let chunk = e.call(GET_TES_CHUNK, &args![file]).u32();
+    if chunk == CHUNK_IMPF {
+        e.call(
+            GET_CHUNK_DATA_SIZED,
+            &args![file, this.addr() + SWAP_NAMES, SWAP_NAMES_SIZE],
+        );
+    } else if chunk == CHUNK_IMPS {
+        let record = e.with_stack(0xc, |e, record| {
+            e.call(MEMSET, &args![record, 0u32, 0xcu32]);
+            e.call(GET_CHUNK_DATA_SIZED, &args![file, record, 0xcu32]);
+            if e.call(NEEDS_SWAP, &args![file]).bool() {
+                e.call(SWAP_RECORD, &args![record]);
+            }
+            [0, 4, 8].map(|o| e.mem.u32(record.addr() + o))
+        });
+        fn_0058f740(e, this, record[0], record[1], record[2]);
+    }
+}
+
+// Translated from 0058f210 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ImpactSwap::InitItem` (engine map; `RET 4`: the form that holds the
+/// swap). Each map's pairs (form ids until now) are copied into a block of
+/// 12 bytes per entry (`00401000`; the size saturates at 0xFFFFFFFF when
+/// the product overflows) and the map emptied; each id is given the
+/// form's file's compile index and resolved to a `BGSImpactData` (a missing
+/// one reported with the id, the form's name and form id), and pairs with
+/// either side resolved go back in. The block is freed, and a map left
+/// empty is deleted.
+pub fn impact_swap_init_item(e: &mut Engine, this: Ptr, form: u32) {
+    for material in 0..SWAP_MAPS {
+        let map = e.mem.u32(this.addr() + material * 4);
+        if map == 0 {
+            continue;
+        }
+        let count = e.call(MAP_COUNT, &args![map]).u32();
+        let (size, overflow) = count.overflowing_mul(12);
+        let block = e
+            .call(ALLOCATE, &args![if overflow { u32::MAX } else { size }])
+            .u32();
+        e.with_stack(4, |e, position| {
+            let first = e.call(MAP_FIRST, &args![map]).u32();
+            e.mem.set_u32(position.addr(), first);
+            let mut index = 0u32;
+            while e.mem.u32(position.addr()) != 0 {
+                let entry = block.wrapping_add(index.wrapping_mul(12));
+                e.call(MAP_NEXT, &args![map, position, entry + 4, entry + 8]);
+                index = index.wrapping_add(1);
+            }
+        });
+        e.call(MAP_REMOVE_ALL, &args![map]);
+        for index in 0..count {
+            let entry = block.wrapping_add(index.wrapping_mul(12));
+            let old = resolve_impact_data(e, form, entry + 4, MESSAGE_NO_OLD_DATA);
+            let new = resolve_impact_data(e, form, entry + 8, MESSAGE_NO_NEW_DATA);
+            if old != 0 || new != 0 {
+                let map = e.mem.u32(this.addr() + material * 4);
+                e.call(MAP_SET_AT, &args![map, old, new]);
+            }
+        }
+        e.call(FREE, &args![block]);
+        let map = e.mem.u32(this.addr() + material * 4);
+        if e.call(MAP_COUNT, &args![map]).u32() == 0 {
+            delete_swap_map(e, this.addr(), material);
+        }
+    }
+}
+
+/// `ImpactSwap::InitItem`'s resolution of the form id at `id_at` (0 stays
+/// 0): the compile index of `form`'s file, the form cast to
+/// `BGSImpactData`, and `message` when that fails.
+fn resolve_impact_data(e: &mut Engine, form: u32, id_at: u32, message: u32) -> u32 {
+    let id = e.mem.u32(id_at);
+    if id == 0 {
+        return 0;
+    }
+    e.with_stack(4, |e, local| {
+        e.mem.set_u32(local.addr(), id);
+        let file = e.call(GET_FILE, &args![form, u32::MAX]).u32();
+        e.call(ADD_COMPILE_INDEX, &args![local, file]);
+        let id = e.mem.u32(local.addr());
+        let found = e.call(LOOKUP_FORM, &args![id]).u32();
+        let data = e
+            .call(
+                DYNAMIC_CAST,
+                &args![found, 0u32, TYPE_TES_FORM, TYPE_IMPACT_DATA, 0u32],
+            )
+            .u32();
+        if data == 0 {
+            let form_id = e.call(FORM_ID_0084E3A0, &args![form]).u32();
+            let name = e.vcall(form, 0x130, &args![]).u32();
+            let id = e.mem.u32(local.addr());
+            e.call(LOG, &args![message, id, name, form_id]);
+        }
+        data
+    })
+}
+
+// Translated from 0058f4c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ImpactSwap`'s copy (`RET 4`: the source swap; the engine map has no
+/// name): deletes its own maps, adds each pair of the source's maps
+/// ([`fn_0058f740`]) and copies the 300 bytes of footstep names.
+pub fn fn_0058f4c0(e: &mut Engine, this: Ptr, source: u32) {
+    for material in 0..SWAP_MAPS {
+        delete_swap_map(e, this.addr(), material);
+    }
+    for material in 0..SWAP_MAPS {
+        let map = e.mem.u32(source + material * 4);
+        if map == 0 {
+            continue;
+        }
+        for_each_pair(e, map, |e, old, new| {
+            fn_0058f740(e, this, material, old, new);
+        });
+    }
+    e.call(
+        MEMCPY,
+        &args![
+            this.addr() + SWAP_NAMES,
+            source + SWAP_NAMES,
+            SWAP_NAMES_SIZE
+        ],
+    );
+}
+
+// Translated from 0058f5c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ImpactSwap::Compare` (engine map; `RET 4`: the other swap): true
+/// (different) without another swap, when a material has a map on one side
+/// only, maps of different counts, a pair whose old data the other swap
+/// maps elsewhere ([`fn_0058f6f0`]), or different footstep names.
+pub fn impact_swap_compare(e: &mut Engine, this: Ptr, other: u32) -> bool {
+    if other == 0 {
+        return true;
+    }
+    for material in 0..SWAP_MAPS {
+        let own = e.mem.u32(this.addr() + material * 4);
+        let theirs = e.mem.u32(other + material * 4);
+        if own == 0 || theirs == 0 {
+            if own != 0 || theirs != 0 {
+                return true;
+            }
+            continue;
+        }
+        let own_count = e.call(MAP_COUNT, &args![own]).u32();
+        if own_count != e.call(MAP_COUNT, &args![theirs]).u32() {
+            return true;
+        }
+        let differs = e.with_stack(0xc, |e, words| {
+            let position = words.addr();
+            let first = e.call(MAP_FIRST, &args![own]).u32();
+            e.mem.set_u32(position, first);
+            while e.mem.u32(position) != 0 {
+                e.mem.set_u32(position + 4, 0);
+                e.mem.set_u32(position + 8, 0);
+                e.call(MAP_NEXT, &args![own, position, position + 4, position + 8]);
+                let old = e.mem.u32(position + 4);
+                if fn_0058f6f0(e, Ptr::new(other), material, old) != e.mem.u32(position + 8) {
+                    return true;
+                }
+            }
+            false
+        });
+        if differs {
+            return true;
+        }
+    }
+    e.call(
+        MEMCMP,
+        &args![
+            this.addr() + SWAP_NAMES,
+            other + SWAP_NAMES,
+            SWAP_NAMES_SIZE
+        ],
+    )
+    .u32()
+        != 0
+}
+
+// Translated from 0058f6f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ImpactSwap`'s lookup (`RET 8`: a material and an impact data; the
+/// engine map has no name): with a map for the material, the data it maps
+/// that impact data to (`00853130`; 0 when it has none); without one, the
+/// impact data itself.
+pub fn fn_0058f6f0(e: &mut Engine, this: Ptr, material: u32, data: u32) -> u32 {
+    let map = e
+        .mem
+        .u32(this.addr().wrapping_add(material.wrapping_mul(4)));
+    if map == 0 {
+        return data;
+    }
+    e.with_stack(4, |e, found| {
+        e.call(MAP_LOOKUP, &args![map, data, found]);
+        e.mem.u32(found.addr())
+    })
+}
+
+// Translated from 0058f740 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 0058f740 - C++ exception unwinding (FS:[0] frame state) is not translated.
+/// `ImpactSwap`'s add (`RET 0xC`: material, old and new impact data; the
+/// engine map has no name): nothing when old and new are the same;
+/// otherwise the material's map is made when missing (`00401000` of 0x10
+/// bytes, [`fn_0058f820`] with 37 buckets, null when the allocation fails)
+/// and the pair set in it (`BSMapBase::SetAt`).
+pub fn fn_0058f740(e: &mut Engine, this: Ptr, material: u32, old: u32, new: u32) {
+    if old == new {
+        return;
+    }
+    let slot = this.addr().wrapping_add(material.wrapping_mul(4));
+    if e.mem.u32(slot) == 0 {
+        let block = e.call(ALLOCATE, &args![0x10u32]).u32();
+        let map = if block == 0 {
+            0
+        } else {
+            fn_0058f820(e, Ptr::new(block), 0x25).addr()
+        };
+        e.mem.set_u32(slot, map);
+    }
+    let map = e.mem.u32(slot);
+    e.call(MAP_SET_AT, &args![map, old, new]);
+}
+
+// Translated from 0058f820 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The `BSMap<BGSImpactData *,BGSImpactData *>` constructor (`RET 4`: the
+/// bucket count; the engine map has no name): the base ([`fn_0058f880`]),
+/// then the map's own vtable (`01033470`). Returns the map.
+pub fn fn_0058f820(e: &mut Engine, this: Ptr, buckets: u32) -> Ptr {
+    fn_0058f880(e, this, buckets);
+    e.mem.set_u32(this.addr(), MAP_VTABLE);
+    this
+}
+
+// Translated from 0058f880 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The `BSMapBase<BGSImpactData *,BGSImpactData *>` constructor (`RET 4`:
+/// the bucket count; the engine map has no name): its vtable (`01033490`),
+/// the bucket count at +4, no entries (+0xC), and with buckets a zeroed
+/// table of that many words at +8 (`00401000`, `_memset`). Returns the map.
+pub fn fn_0058f880(e: &mut Engine, this: Ptr, buckets: u32) -> Ptr {
+    let base = this.addr();
+    e.mem.set_u32(base, MAP_BASE_VTABLE);
+    e.mem.set_u32(base + 4, buckets);
+    e.mem.set_u32(base + 0xc, 0);
+    if buckets != 0 {
+        let size = e.mem.u32(base + 4) << 2;
+        let table = e.call(ALLOCATE, &args![size]).u32();
+        e.mem.set_u32(base + 8, table);
+        let size = e.mem.u32(base + 4) << 2;
+        let table = e.mem.u32(base + 8);
+        e.call(CRT_MEMSET, &args![table, 0u32, size]);
+    }
+    this
+}
+
+// Translated from 0058f900 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 0058f900 - C++ exception unwinding (FS:[0] frame state) is not translated.
+/// The `BSMap<BGSImpactData *,BGSImpactData *>` destructor body (the
+/// engine map has no name; `ECX`): its vtable (`01033470`), every entry
+/// removed (`00438af0`), then the base's destructor body ([`fn_0058f960`]).
+pub fn fn_0058f900(e: &mut Engine, this: Ptr) {
+    e.mem.set_u32(this.addr(), MAP_VTABLE);
+    e.call(MAP_REMOVE_ALL, &args![this]);
+    fn_0058f960(e, this);
+}
+
+// Translated from 0058f960 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The `BSMapBase<BGSImpactData *,BGSImpactData *>` destructor body (the
+/// engine map has no name; `ECX`): its vtable (`01033490`) and the bucket
+/// table (+8) freed when there is one.
+pub fn fn_0058f960(e: &mut Engine, this: Ptr) {
+    e.mem.set_u32(this.addr(), MAP_BASE_VTABLE);
+    let table = e.mem.u32(this.addr() + 8);
+    if table != 0 {
+        e.call(FREE, &args![table]);
+    }
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x0058_eb30, fn_0058eb30(Ptr, u32)),
+        entry!(0x0058_eb90, fn_0058eb90(Ptr, u32) -> bool),
+        entry!(0x0058_ed50, fn_0058ed50(Ptr)),
+        entry!(0x0058_efd0, fn_0058efd0(Ptr) -> Ptr),
+        entry!(0x0058_f010, fn_0058f010(Ptr)),
+        entry!(0x0058_f080, impact_swap_save(Ptr)),
+        entry!(0x0058_f180, fn_0058f180(Ptr, Ptr)),
+        entry!(0x0058_f210, impact_swap_init_item(Ptr, u32)),
+        entry!(0x0058_f4c0, fn_0058f4c0(Ptr, u32)),
+        entry!(0x0058_f5c0, impact_swap_compare(Ptr, u32) -> bool),
+        entry!(0x0058_f6f0, fn_0058f6f0(Ptr, u32, u32) -> u32),
+        entry!(0x0058_f740, fn_0058f740(Ptr, u32, u32, u32)),
+        entry!(0x0058_f820, fn_0058f820(Ptr, u32) -> Ptr),
+        entry!(0x0058_f880, fn_0058f880(Ptr, u32) -> Ptr),
+        entry!(0x0058_f900, fn_0058f900(Ptr)),
+        entry!(0x0058_f960, fn_0058f960(Ptr)),
         entry!(0x0058_f7f0, fn_0058f7f0(Ptr, i32) -> u32),
         entry!(0x0058_e810, fn_0058e810(Ptr) -> Ptr),
         entry!(0x0058_f850, bs_map_bgs_impact_data_p_bgs_impact_data_p_scalar_deleting_destructor(Ptr, u32) -> Ptr),
@@ -771,5 +1277,435 @@ mod la1_tests {
             this + 0x30 + 0x1e
         );
         assert_eq!(e.call(0x0058_f7f0, &args![this, 2u32]).u32(), 0);
+    }
+}
+
+#[cfg(test)]
+mod n085_tests {
+    use super::*;
+    use std::cell::RefCell;
+    use std::collections::BTreeMap;
+    use std::rc::Rc;
+
+    fn ret(eax: u32) -> Ret {
+        Ret {
+            eax,
+            ..Ret::default()
+        }
+    }
+
+    fn quiet(e: &mut Engine, addrs: &[u32]) {
+        for &addr in addrs {
+            e.register(addr, |_, _| Ret::default());
+        }
+    }
+
+    fn calls(e: &Engine, addr: u32) -> Vec<Vec<u32>> {
+        e.call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|(a, _)| *a == addr)
+            .map(|(_, w)| w.clone())
+            .collect()
+    }
+
+    type Maps = Rc<RefCell<BTreeMap<u32, Vec<(u32, u32)>>>>;
+
+    /// Map doubles over Rust vectors keyed by the map's address: the
+    /// position is the next index plus one.
+    fn map_doubles(e: &mut Engine) -> Maps {
+        let maps: Maps = Rc::new(RefCell::new(BTreeMap::new()));
+        let m = maps.clone();
+        e.register_double(MAP_FIRST, move |_, a| {
+            ret(u32::from(
+                m.borrow().get(&a[0]).is_some_and(|v| !v.is_empty()),
+            ))
+        });
+        let m = maps.clone();
+        e.register_double(MAP_NEXT, move |e, a| {
+            let at = e.mem.u32(a[1]) as usize - 1;
+            let pairs = m.borrow()[&a[0]].clone();
+            e.mem.set_u32(a[2], pairs[at].0);
+            e.mem.set_u32(a[3], pairs[at].1);
+            let next = if at + 1 < pairs.len() {
+                at as u32 + 2
+            } else {
+                0
+            };
+            e.mem.set_u32(a[1], next);
+            Ret::default()
+        });
+        let m = maps.clone();
+        e.register_double(MAP_COUNT, move |_, a| {
+            ret(m.borrow().get(&a[0]).map_or(0, |v| v.len() as u32))
+        });
+        let m = maps.clone();
+        e.register_double(MAP_REMOVE_ALL, move |_, a| {
+            m.borrow_mut().insert(a[0], vec![]);
+            Ret::default()
+        });
+        let m = maps.clone();
+        e.register_double(MAP_SET_AT, move |_, a| {
+            m.borrow_mut().entry(a[0]).or_default().push((a[1], a[2]));
+            Ret::default()
+        });
+        let m = maps.clone();
+        e.register_double(MAP_LOOKUP, move |e, a| {
+            if let Some(&(_, v)) = m.borrow()[&a[0]].iter().find(|p| p.0 == a[1]) {
+                e.mem.set_u32(a[2], v);
+            }
+            Ret::default()
+        });
+        maps
+    }
+
+    #[test]
+    fn set_copy_and_compare_use_the_twelve_slots() {
+        for cast in [0u32, 0x9000] {
+            let mut e = Engine::new();
+            let this: Ptr = Ptr::new(e.mem.alloc(0x4c));
+            e.register_double(DYNAMIC_CAST, move |_, _| ret(cast));
+            quiet(&mut e, &[0x0048_51b0, MEMCPY]);
+            e.register(0x0048_5270, |_, _| ret(0));
+            e.register(MEMCMP, |_, _| ret(0));
+            e.call_log = Some(vec![]);
+            e.call(0x0058_eb30, &args![this, 0x5000u32]);
+            let different = e.call(0x0058_eb90, &args![this, 0x5000u32]).bool();
+            assert_eq!(
+                calls(&e, DYNAMIC_CAST)[0],
+                vec![0x5000, 0, TYPE_TES_FORM, TYPE_IMPACT_DATA_SET, 0]
+            );
+            if cast == 0 {
+                assert!(calls(&e, MEMCPY).is_empty());
+                assert!(different);
+            } else {
+                assert_eq!(
+                    calls(&e, MEMCPY),
+                    vec![vec![this.addr() + 0x1c, cast + 0x1c, 0x30]]
+                );
+                assert_eq!(
+                    calls(&e, MEMCMP),
+                    vec![vec![this.addr() + 0x1c, cast + 0x1c, 0x30]]
+                );
+                assert!(!different);
+            }
+        }
+        let mut e = Engine::new();
+        let this: Ptr = Ptr::new(e.mem.alloc(0x4c));
+        e.register(DYNAMIC_CAST, |_, _| ret(0x9000));
+        e.register(0x0048_5270, |_, _| ret(1));
+        assert!(e.call(0x0058_eb90, &args![this, 0x5000u32]).bool());
+        e.register(0x0048_5270, |_, _| ret(0));
+        e.register(MEMCMP, |_, _| ret(5));
+        assert!(e.call(0x0058_eb90, &args![this, 0x5000u32]).bool());
+    }
+
+    #[test]
+    fn set_save_writes_the_form_ids() {
+        let mut e = Engine::new();
+        let this: Ptr = Ptr::new(e.mem.alloc(0x4c));
+        e.mem.set_u32(this.addr() + 0x1c, 0x100);
+        e.mem.set_u32(this.addr() + 0x1c + 11 * 4, 0x200);
+        e.register(FORM_ID_0084E3A0, |_, a| ret(a[0] + 1));
+        quiet(&mut e, &[START_FORM, CLOSE_FORM]);
+        let seen = Rc::new(RefCell::new(vec![]));
+        let s = seen.clone();
+        e.register_double(ADD_CHUNK_ARRAY_WORDS, move |e, a| {
+            s.borrow_mut()
+                .extend((0..a[2]).map(|i| e.mem.u32(a[1] + 4 * i)));
+            Ret::default()
+        });
+        e.call_log = Some(vec![]);
+        e.call(0x0058_ed50, &args![this]);
+        assert_eq!(calls(&e, START_FORM), vec![vec![this.addr()]]);
+        assert_eq!(calls(&e, ADD_CHUNK_ARRAY_WORDS)[0][0], CHUNK_DATA);
+        let mut expected = vec![0u32; 12];
+        expected[0] = 0x101;
+        expected[11] = 0x201;
+        assert_eq!(*seen.borrow(), expected);
+        assert_eq!(calls(&e, CLOSE_FORM), vec![vec![this.addr()]]);
+    }
+
+    #[test]
+    fn swap_constructor_and_destructor() {
+        let mut e = Engine::new();
+        let this: Ptr = Ptr::new(e.mem.alloc(0x15c));
+        quiet(&mut e, &[MEMSET]);
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x0058_efd0, &args![this]).u32(), this.addr());
+        assert_eq!(
+            calls(&e, MEMSET),
+            vec![vec![this.addr(), 0, 0x30], vec![this.addr() + 0x30, 0, 300]]
+        );
+        // The destructor deletes each map through vtable slot 0 with 1.
+        let map = e.mem.alloc(0x10);
+        let vtable = e.mem.alloc(4);
+        e.mem.set_u32(vtable, 0x7400_0000);
+        e.mem.set_u32(map, vtable);
+        e.mem.set_u32(this.addr() + 8, map);
+        quiet(&mut e, &[0x7400_0000]);
+        e.call_log = Some(vec![]);
+        e.call(0x0058_f010, &args![this]);
+        assert_eq!(calls(&e, 0x7400_0000), vec![vec![map, 1]]);
+        assert_eq!(e.mem.u32(this.addr() + 8), 0);
+    }
+
+    #[test]
+    fn swap_save_writes_each_pair_and_the_names() {
+        let mut e = Engine::new();
+        let this: Ptr = Ptr::new(e.mem.alloc(0x15c));
+        let maps = map_doubles(&mut e);
+        e.mem.set_u32(this.addr() + 4 * 3, 0x6000);
+        maps.borrow_mut()
+            .insert(0x6000, vec![(0x10, 0), (0x20, 0x30)]);
+        e.register(FORM_ID_0084E3A0, |_, a| ret(a[0] + 0x100));
+        e.register(SAVE_SWAPS_ENDIAN, |_, _| ret(1));
+        quiet(&mut e, &[SWAP_RECORD, ADD_CHUNK_ARRAY]);
+        let seen = Rc::new(RefCell::new(vec![]));
+        let s = seen.clone();
+        e.register_double(ADD_CHUNK_DATA, move |e, a| {
+            s.borrow_mut().push([0, 4, 8].map(|o| e.mem.u32(a[1] + o)));
+            Ret::default()
+        });
+        e.call_log = Some(vec![]);
+        e.call(0x0058_f080, &args![this]);
+        assert_eq!(*seen.borrow(), vec![[3, 0x110, 0], [3, 0x120, 0x130]]);
+        assert!(calls(&e, ADD_CHUNK_DATA)
+            .iter()
+            .all(|a| a[0] == CHUNK_IMPS && a[2] == 0xc));
+        assert_eq!(calls(&e, SWAP_RECORD).len(), 4);
+        assert_eq!(
+            calls(&e, ADD_CHUNK_ARRAY),
+            vec![vec![CHUNK_IMPF, this.addr() + 0x30, 300]]
+        );
+    }
+
+    #[test]
+    fn swap_load_reads_the_names_or_one_pair() {
+        let mut e = Engine::new();
+        let this: Ptr = Ptr::new(e.mem.alloc(0x15c));
+        let file: Ptr = Ptr::new(e.mem.alloc(4));
+        let _ = map_doubles(&mut e);
+        e.register(MEMSET, |_, _| Ret::default());
+        e.register(GET_CHUNK_DATA_SIZED, |e, a| {
+            if a[2] == 0xc {
+                for (i, w) in [2u32, 0x10, 0x20].iter().enumerate() {
+                    e.mem.set_u32(a[1] + 4 * i as u32, *w);
+                }
+            }
+            Ret::default()
+        });
+        e.register(NEEDS_SWAP, |_, _| ret(1));
+        quiet(&mut e, &[SWAP_RECORD]);
+        e.register(ALLOCATE, |e, a| ret(e.mem.alloc(a[0])));
+        e.register(CRT_MEMSET, |_, _| Ret::default());
+        e.register(GET_TES_CHUNK, |_, _| ret(CHUNK_IMPS));
+        e.call_log = Some(vec![]);
+        e.call(0x0058_f180, &args![this, file]);
+        assert_eq!(calls(&e, SWAP_RECORD).len(), 1);
+        // A new map for material 2 with the pair.
+        let map = e.mem.u32(this.addr() + 8);
+        assert_ne!(map, 0);
+        assert_eq!(calls(&e, MAP_SET_AT), vec![vec![map, 0x10, 0x20]]);
+        e.register(GET_TES_CHUNK, |_, _| ret(CHUNK_IMPF));
+        e.call_log = Some(vec![]);
+        e.call(0x0058_f180, &args![this, file]);
+        assert_eq!(
+            calls(&e, GET_CHUNK_DATA_SIZED),
+            vec![vec![file.addr(), this.addr() + 0x30, 300]]
+        );
+        e.register(GET_TES_CHUNK, |_, _| ret(CHUNK_DATA));
+        e.call_log = Some(vec![]);
+        e.call(0x0058_f180, &args![this, file]);
+        assert!(calls(&e, GET_CHUNK_DATA_SIZED).is_empty());
+    }
+
+    #[test]
+    fn swap_init_item_resolves_the_pairs_and_drops_empty_maps() {
+        let mut e = Engine::new();
+        let this: Ptr = Ptr::new(e.mem.alloc(0x15c));
+        let maps = map_doubles(&mut e);
+        let form = e.mem.alloc(8);
+        let vtable = e.mem.alloc(0x134);
+        e.mem.set_u32(form, vtable);
+        e.mem.set_u32(vtable + 0x130, 0x7500_0130);
+        e.register(0x7500_0130, |_, _| ret(0x4e41));
+        // Material 0: one pair resolved, one with both sides missing.
+        // Material 1: nothing resolves, so the map is deleted.
+        e.mem.set_u32(this.addr(), 0x6000);
+        let map_vtable = e.mem.alloc(4);
+        e.mem.set_u32(map_vtable, 0x7600_0000);
+        let second = e.mem.alloc(0x10);
+        e.mem.set_u32(second, map_vtable);
+        e.mem.set_u32(this.addr() + 4, second);
+        maps.borrow_mut()
+            .insert(0x6000, vec![(0x11, 0x12), (0x91, 0x92)]);
+        maps.borrow_mut().insert(second, vec![(0x93, 0)]);
+        quiet(&mut e, &[0x7600_0000, LOG, FREE]);
+        e.register(ALLOCATE, |e, a| ret(e.mem.alloc(a[0])));
+        e.register(GET_FILE, |_, _| ret(0x7f));
+        e.register(ADD_COMPILE_INDEX, |e, a| {
+            let id = e.mem.u32(a[0]);
+            e.mem.set_u32(a[0], id | 0x0100_0000);
+            Ret::default()
+        });
+        e.register(LOOKUP_FORM, |_, a| ret(a[0]));
+        e.register(DYNAMIC_CAST, |_, a| {
+            ret(if a[0] & 0xf0 == 0x10 {
+                a[0] + 0x1000
+            } else {
+                0
+            })
+        });
+        // `0084e3a0` is both the map count and the form id: the count for
+        // the maps, 0xABCD for the form.
+        let m = maps.clone();
+        e.register_double(FORM_ID_0084E3A0, move |_, a| {
+            ret(m.borrow().get(&a[0]).map_or(0xabcd, |v| v.len() as u32))
+        });
+        e.call_log = Some(vec![]);
+        e.call(0x0058_f210, &args![this, form]);
+        assert_eq!(calls(&e, ALLOCATE), vec![vec![24], vec![12]]);
+        assert_eq!(maps.borrow()[&0x6000], vec![(0x0100_1011, 0x0100_1012)]);
+        let logged = calls(&e, LOG);
+        assert_eq!(
+            logged,
+            vec![
+                vec![MESSAGE_NO_OLD_DATA, 0x0100_0091, 0x4e41, 0xabcd],
+                vec![MESSAGE_NO_NEW_DATA, 0x0100_0092, 0x4e41, 0xabcd],
+                vec![MESSAGE_NO_OLD_DATA, 0x0100_0093, 0x4e41, 0xabcd],
+            ]
+        );
+        assert_eq!(calls(&e, GET_FILE)[0], vec![form, u32::MAX]);
+        assert_eq!(calls(&e, FREE).len(), 2);
+        assert_eq!(calls(&e, 0x7600_0000), vec![vec![second, 1]]);
+        assert_eq!(e.mem.u32(this.addr() + 4), 0);
+        assert_eq!(e.mem.u32(this.addr()), 0x6000);
+    }
+
+    #[test]
+    fn swap_copy_replaces_the_maps_and_names() {
+        let mut e = Engine::new();
+        let this: Ptr = Ptr::new(e.mem.alloc(0x15c));
+        let source = e.mem.alloc(0x15c);
+        let maps = map_doubles(&mut e);
+        e.mem.set_u32(source + 4 * 5, 0x6000);
+        maps.borrow_mut().insert(0x6000, vec![(1, 2), (3, 3)]);
+        let old_map = e.mem.alloc(0x10);
+        e.mem.set_u32(this.addr() + 4 * 5, old_map);
+        e.register(ALLOCATE, |e, a| ret(e.mem.alloc(a[0])));
+        e.register(CRT_MEMSET, |_, _| Ret::default());
+        let map_vtable = e.mem.alloc(4);
+        e.mem.set_u32(map_vtable, 0x7600_0000);
+        e.mem.set_u32(old_map, map_vtable);
+        quiet(&mut e, &[0x7600_0000, MEMCPY]);
+        e.call_log = Some(vec![]);
+        e.call(0x0058_f4c0, &args![this, source]);
+        assert_eq!(calls(&e, 0x7600_0000), vec![vec![old_map, 1]]);
+        let made = e.mem.u32(this.addr() + 4 * 5);
+        assert_ne!(made, old_map);
+        // (3, 3) is the same on both sides: not added.
+        assert_eq!(calls(&e, MAP_SET_AT), vec![vec![made, 1, 2]]);
+        assert_eq!(e.mem.u32(made), MAP_VTABLE);
+        assert_eq!(e.mem.u32(made + 4), 0x25);
+        assert_eq!(
+            calls(&e, MEMCPY),
+            vec![vec![this.addr() + 0x30, source + 0x30, 300]]
+        );
+    }
+
+    #[test]
+    fn swap_compare_checks_maps_pairs_and_names() {
+        let setup = |e: &mut Engine| {
+            let this: Ptr = Ptr::new(e.mem.alloc(0x15c));
+            let other = e.mem.alloc(0x15c);
+            let maps = map_doubles(e);
+            e.mem.set_u32(this.addr(), 0x6000);
+            e.mem.set_u32(other, 0x6100);
+            maps.borrow_mut().insert(0x6000, vec![(1, 2)]);
+            maps.borrow_mut().insert(0x6100, vec![(1, 2)]);
+            e.register(MEMCMP, |_, _| ret(0));
+            (this, other, maps)
+        };
+        let mut e = Engine::new();
+        let (this, other, maps) = setup(&mut e);
+        assert!(!e.call(0x0058_f5c0, &args![this, other]).bool());
+        assert!(e.call(0x0058_f5c0, &args![this, 0u32]).bool());
+        // A different value for the key.
+        maps.borrow_mut().insert(0x6100, vec![(1, 9)]);
+        assert!(e.call(0x0058_f5c0, &args![this, other]).bool());
+        // Different counts.
+        maps.borrow_mut().insert(0x6100, vec![(1, 2), (4, 5)]);
+        assert!(e.call(0x0058_f5c0, &args![this, other]).bool());
+        // A map on one side only.
+        let mut e = Engine::new();
+        let (this, other, _) = setup(&mut e);
+        e.mem.set_u32(other + 4, 0x6200);
+        assert!(e.call(0x0058_f5c0, &args![this, other]).bool());
+        // Different names.
+        let mut e = Engine::new();
+        let (this, other, _) = setup(&mut e);
+        e.register(MEMCMP, |_, _| ret(1));
+        e.call_log = Some(vec![]);
+        assert!(e.call(0x0058_f5c0, &args![this, other]).bool());
+        assert_eq!(
+            calls(&e, MEMCMP),
+            vec![vec![this.addr() + 0x30, other + 0x30, 300]]
+        );
+    }
+
+    #[test]
+    fn swap_lookup_maps_or_passes_through() {
+        let mut e = Engine::new();
+        let this: Ptr = Ptr::new(e.mem.alloc(0x15c));
+        let maps = map_doubles(&mut e);
+        assert_eq!(e.call(0x0058_f6f0, &args![this, 4u32, 0x77u32]).u32(), 0x77);
+        e.mem.set_u32(this.addr() + 16, 0x6000);
+        maps.borrow_mut().insert(0x6000, vec![(0x77, 0x88)]);
+        assert_eq!(e.call(0x0058_f6f0, &args![this, 4u32, 0x77u32]).u32(), 0x88);
+        assert_eq!(e.call(0x0058_f6f0, &args![this, 4u32, 0x66u32]).u32(), 0);
+    }
+
+    #[test]
+    fn swap_add_skips_identity_and_survives_a_failed_allocation() {
+        let mut e = Engine::new();
+        let this: Ptr = Ptr::new(e.mem.alloc(0x15c));
+        let _ = map_doubles(&mut e);
+        e.register(ALLOCATE, |_, _| ret(0));
+        e.call_log = Some(vec![]);
+        e.call(0x0058_f740, &args![this, 1u32, 5u32, 5u32]);
+        assert!(calls(&e, ALLOCATE).is_empty());
+        e.call(0x0058_f740, &args![this, 1u32, 5u32, 6u32]);
+        assert_eq!(calls(&e, ALLOCATE), vec![vec![0x10]]);
+        assert_eq!(calls(&e, MAP_SET_AT), vec![vec![0, 5, 6]]);
+    }
+
+    #[test]
+    fn map_constructors_and_destructors() {
+        let mut e = Engine::new();
+        let map: Ptr = Ptr::new(e.mem.alloc(0x10));
+        e.register(ALLOCATE, |_, _| ret(0x5550));
+        quiet(&mut e, &[CRT_MEMSET, MAP_REMOVE_ALL, FREE]);
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x0058_f880, &args![map, 3u32]).u32(), map.addr());
+        assert_eq!(e.mem.u32(map.addr()), MAP_BASE_VTABLE);
+        assert_eq!(e.mem.u32(map.addr() + 4), 3);
+        assert_eq!(e.mem.u32(map.addr() + 8), 0x5550);
+        assert_eq!(calls(&e, ALLOCATE), vec![vec![12]]);
+        assert_eq!(calls(&e, CRT_MEMSET), vec![vec![0x5550, 0, 12]]);
+        assert_eq!(e.call(0x0058_f820, &args![map, 0u32]).u32(), map.addr());
+        assert_eq!(e.mem.u32(map.addr()), MAP_VTABLE);
+        assert_eq!(calls(&e, ALLOCATE).len(), 1);
+        e.mem.set_u32(map.addr() + 8, 0x5550);
+        e.call_log = Some(vec![]);
+        e.call(0x0058_f900, &args![map]);
+        assert_eq!(calls(&e, MAP_REMOVE_ALL), vec![vec![map.addr()]]);
+        assert_eq!(calls(&e, FREE), vec![vec![0x5550]]);
+        assert_eq!(e.mem.u32(map.addr()), MAP_BASE_VTABLE);
+        e.mem.set_u32(map.addr() + 8, 0);
+        e.call_log = Some(vec![]);
+        e.call(0x0058_f960, &args![map]);
+        assert!(calls(&e, FREE).is_empty());
     }
 }

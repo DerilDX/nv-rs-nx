@@ -639,9 +639,152 @@ pub fn fn_00683850(e: &mut Engine, this: Ptr) {
     e.mem.set_u32(this.addr(), VTABLE_LIST_BASE_01069968);
 }
 
+/// `MemoryManager` deallocation (`00401030`, cdecl, the block).
+const DEALLOCATE: u32 = 0x0040_1030;
+/// `006815c0` (unnamed in the engine map; no stack word): run on the
+/// matrix local before it is filled.
+const LOCAL_INIT_006815C0: u32 = 0x0068_15c0;
+/// `00457990` (unnamed in the engine map; no stack word; ST0 result): a
+/// value of the vector local (with its third component zeroed first).
+const VECTOR_VALUE_00457990: u32 = 0x0045_7990;
+/// `atan2` (`004b5550`, engine map; cdecl, two `float`s; ST0 result).
+const ATAN2: u32 = 0x004b_5550;
+/// `NiMatrix3::FromEulerAnglesZYX` (`00a59780`, engine map; `thiscall`,
+/// `RET 0xC`: three `float`s).
+const MATRIX_FROM_EULER_ANGLES_ZYX: u32 = 0x00a5_9780;
+
+// Translated from 00682b00 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 00682b00 - the compiler's exception frame (FS:[0] chain, cookie 011c16bc) is not translated
+/// Unnamed: a `BSTempEffectDebris` constructor from a direction (by its
+/// vtable `0106986c`; thiscall, eleven words, `RET 0x2c`). As
+/// [`fn_00682c40`] up to the stored fields (the base constructor with the
+/// cell and lifetime, the vtable, `sp3D` at `+0x18` constructed and set to
+/// 0, `pFilename` at `+0x1c`, `bUseDebrisCounter` from the last byte,
+/// `bForceDelete` 0). The three floats at `direction` are copied into a
+/// local vector; with `z` the old third component and the third set to
+/// 0.0, a local matrix (`006815c0` run on it) is built by
+/// `NiMatrix3::FromEulerAnglesZYX(atan2(x, y), 0.0, -atan2(z, 00457990(vector)))`.
+/// Then [`fn_00682d10`] with the words before and after the direction, the
+/// matrix's address in the direction's place, the second float and the
+/// byte before the last (zero-extended). Returns `this`.
+pub fn fn_00682b00(
+    e: &mut Engine,
+    this: Ptr,
+    cell: u32,
+    lifetime: f32,
+    filename: u32,
+    for_00683190: u32,
+    for_00440460: u32,
+    direction: Ptr,
+    for_0062b8d0: u32,
+    for_0062ba80: u32,
+    float_for_00440490: f32,
+    from_cache: u32,
+    use_debris_counter: u32,
+) -> Ptr {
+    let base = this.addr();
+    e.call(
+        0x0068_27b0,
+        &args![base, cell, x87_quiet_bits(lifetime.to_bits())],
+    );
+    e.mem.set_u32(base, VTABLE_DEBRIS_0106986C);
+    e.call(0x0063_3c90, &args![base + 0x18, 0u32]);
+    e.call(POINTER_SET_0066B0D0, &args![base + 0x18, 0u32]);
+    e.mem.set_u32(base + 0x1c, filename);
+    e.mem.set_u8(base + 0x20, use_debris_counter as u8);
+    e.mem.set_u8(base + 0x21, 0);
+    // The frame from EBP-0x44: the vector (-0x44), the matrix (-0x34).
+    e.with_stack(0x34, |e, frame| {
+        let vector = frame.addr();
+        let matrix = frame.addr() + 0x10;
+        for i in 0..3 {
+            let word = e.mem.u32(direction.addr() + 4 * i);
+            e.mem.set_u32(vector + 4 * i, word);
+        }
+        e.call(LOCAL_INIT_006815C0, &args![matrix]);
+        let z = x87_quiet_bits(e.mem.u32(vector + 8));
+        e.mem.set_u32(vector + 8, x87_store32(0.0));
+        let value = e.call(VECTOR_VALUE_00457990, &args![vector]).f64();
+        let value = x87_store32(value);
+        let pitch = e.call(ATAN2, &args![z, x87_quiet_bits(value)]).f64();
+        let negated_pitch = x87_store32(-pitch);
+        let x = x87_quiet_bits(e.mem.u32(vector));
+        let y = x87_quiet_bits(e.mem.u32(vector + 4));
+        let yaw = e.call(ATAN2, &args![x, y]).f64();
+        let yaw = x87_store32(yaw);
+        e.call(
+            MATRIX_FROM_EULER_ANGLES_ZYX,
+            &args![matrix, yaw, x87_store32(0.0), negated_pitch],
+        );
+        fn_00682d10(
+            e,
+            this,
+            for_00683190,
+            for_00440460,
+            matrix,
+            for_0062b8d0,
+            for_0062ba80,
+            x87_quiet_bits(float_for_00440490.to_bits()),
+            from_cache & 0xff,
+        );
+    });
+    this
+}
+
+// Translated from 00683460 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed (thiscall, `RET 4`): stores the argument's low byte in
+/// `bForceDelete` (`+0x21`, Xbox PDB).
+pub fn fn_00683460(e: &mut Engine, this: Ptr, force_delete: u32) {
+    e.mem.set_u8(this.addr() + 0x21, force_delete as u8);
+}
+
+// Translated from 00683710 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed: a scalar deleting destructor (thiscall, `RET 4`): the body
+/// [`fn_00683740`], then frees `this` (`00401030`) when bit 0 of `flags`
+/// is set. Returns `this`.
+pub fn fn_00683710(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    fn_00683740(e, this);
+    if flags & 1 != 0 {
+        e.call(DEALLOCATE, &args![this]);
+    }
+    this
+}
+
+// Translated from 00683780 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed: the `BSPointerListBase<BSTempEffectDebris*>` scalar deleting
+/// destructor (thiscall, `RET 4`): [`fn_006837f0`], then frees `this`
+/// (`00401030`) when bit 0 of `flags` is set. Returns `this`.
+pub fn fn_00683780(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    fn_006837f0(e, this);
+    if flags & 1 != 0 {
+        e.call(DEALLOCATE, &args![this]);
+    }
+    this
+}
+
+// Translated from 00683870 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSListBase<BSTempEffectDebris*>` scalar deleting destructor (engine
+/// map; thiscall, `RET 4`): [`fn_00683850`], then frees `this`
+/// (`00401030`) when bit 0 of `flags` is set. Returns `this`.
+pub fn fn_00683870(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    fn_00683850(e, this);
+    if flags & 1 != 0 {
+        e.call(DEALLOCATE, &args![this]);
+    }
+    this
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(
+            0x0068_2b00,
+            fn_00682b00(Ptr, u32, f32, u32, u32, u32, Ptr, u32, u32, f32, u32, u32) -> Ptr
+        ),
+        entry!(0x0068_3460, fn_00683460(Ptr, u32)),
+        entry!(0x0068_3710, fn_00683710(Ptr, u32) -> Ptr),
+        entry!(0x0068_3780, fn_00683780(Ptr, u32) -> Ptr),
+        entry!(0x0068_3870, fn_00683870(Ptr, u32) -> Ptr),
         entry!(0x0068_2ac0, fn_00682ac0(Ptr) -> u32),
         entry!(0x0068_3480, fn_00683480(Ptr, u32) -> bool),
         entry!(0x0068_36f0, fn_006836f0(Ptr) -> Ptr),
@@ -1293,5 +1436,141 @@ mod b046_tests {
         e.mem.set_u32(this, 0);
         e.call(0x0068_3850, &args![this]);
         assert_eq!(e.mem.u32(this), VTABLE_LIST_BASE_01069968);
+    }
+}
+
+#[cfg(test)]
+mod tests_n073 {
+    use super::*;
+
+    fn ret(eax: u32) -> Ret {
+        Ret {
+            eax,
+            ..Default::default()
+        }
+    }
+
+    fn calls_to(log: &[(u32, Vec<u32>)], addr: u32) -> Vec<Vec<u32>> {
+        log.iter()
+            .filter(|(a, _)| *a == addr)
+            .map(|(_, w)| w.clone())
+            .collect()
+    }
+
+    #[test]
+    fn fn_00682b00_builds_the_rotation_from_the_direction() {
+        let mut e = Engine::new();
+        for address in [
+            0x0068_27b0u32,
+            0x0063_3c90,
+            POINTER_SET_0066B0D0,
+            LOCAL_INIT_006815C0,
+            MATRIX_FROM_EULER_ANGLES_ZYX,
+            0x007e_6580,
+            0x0044_7080,
+        ] {
+            e.register(address, |_, _| Ret::default());
+        }
+        e.map(MODEL_LOADER_011C3B3C & !0xfff, 0x1000);
+        e.map(0x011d_ea10 & !0xfff, 0x1000);
+        e.register(POINTER_GET_00559450, |_, _| ret(0));
+        // The vector value double checks the third component was zeroed.
+        e.register(VECTOR_VALUE_00457990, |e, a| {
+            assert_eq!(e.mem.u32(a[0] + 8), 0);
+            Ret {
+                st0: 5.0,
+                ..Default::default()
+            }
+        });
+        // atan2 double: x + 10 * y, to tell the calls apart.
+        e.register(ATAN2, |_, a| Ret {
+            st0: f64::from(f32::from_bits(a[0])) + 10.0 * f64::from(f32::from_bits(a[1])),
+            ..Default::default()
+        });
+        let this = e.mem.alloc(0x24);
+        let direction = e.mem.alloc(0xc);
+        e.mem.set_f32(direction, 1.0);
+        e.mem.set_f32(direction + 4, 2.0);
+        e.mem.set_f32(direction + 8, 3.0);
+        e.call_log = Some(vec![]);
+        let r = e
+            .call(
+                0x0068_2b00,
+                &args![
+                    this,
+                    0xce11u32,
+                    0.5f32.to_bits(),
+                    0xf11eu32,
+                    0x11u32,
+                    0x22u32,
+                    direction,
+                    0x44u32,
+                    0x55u32,
+                    0.25f32.to_bits(),
+                    0x101u32,
+                    0x301u32
+                ],
+            )
+            .u32();
+        let log = e.call_log.take().unwrap();
+        assert_eq!(r, this);
+        assert_eq!(e.mem.u32(this), VTABLE_DEBRIS_0106986C);
+        assert_eq!(e.mem.u32(this + 0x1c), 0xf11e);
+        assert_eq!(e.mem.u8(this + 0x20), 1);
+        assert_eq!(e.mem.u8(this + 0x21), 0);
+        assert_eq!(
+            calls_to(&log, 0x0068_27b0),
+            vec![vec![this, 0xce11, 0.5f32.to_bits()]]
+        );
+        // atan2(3, 5) = 53 and atan2(1, 2) = 21 under the double.
+        assert_eq!(
+            calls_to(&log, ATAN2),
+            vec![
+                vec![3.0f32.to_bits(), 5.0f32.to_bits()],
+                vec![1.0f32.to_bits(), 2.0f32.to_bits()]
+            ]
+        );
+        let euler = calls_to(&log, MATRIX_FROM_EULER_ANGLES_ZYX);
+        assert_eq!(euler.len(), 1);
+        assert_eq!(euler[0][1..], [21.0f32.to_bits(), 0, (-53.0f32).to_bits()]);
+        // fn_00682d10 runs with the matrix in the direction's place.
+        assert_eq!(calls_to(&log, 0x007e_6580), vec![vec![this, 0]]);
+        assert_eq!(calls_to(&log, LOCAL_INIT_006815C0), vec![vec![euler[0][0]]]);
+        // The direction itself is not changed.
+        assert_eq!(e.mem.f32(direction + 8), 3.0);
+    }
+
+    #[test]
+    fn fn_00683460_sets_force_delete() {
+        let mut e = Engine::new();
+        let this = e.mem.alloc(0x24);
+        e.call(0x0068_3460, &args![this, 0x1201u32]);
+        assert_eq!(e.mem.u8(this + 0x21), 1);
+        e.call(0x0068_3460, &args![this, 0x100u32]);
+        assert_eq!(e.mem.u8(this + 0x21), 0);
+    }
+
+    #[test]
+    fn list_deleting_destructors_free_on_flag_one() {
+        let mut e = Engine::new();
+        e.register(DEALLOCATE, |_, _| Ret::default());
+        e.register(0x0062_e290, |_, _| Ret::default());
+        for (address, vtable) in [
+            (0x0068_3710u32, VTABLE_LIST_BASE_01069968),
+            (0x0068_3780, VTABLE_LIST_BASE_01069968),
+            (0x0068_3870, VTABLE_LIST_BASE_01069968),
+        ] {
+            let this = e.mem.alloc(0x10);
+            e.call_log = Some(vec![]);
+            assert_eq!(e.call(address, &args![this, 0u32]).u32(), this);
+            assert_eq!(e.mem.u32(this), vtable);
+            assert!(calls_to(&e.call_log.take().unwrap(), DEALLOCATE).is_empty());
+            e.call_log = Some(vec![]);
+            e.call(address, &args![this, 1u32]);
+            assert_eq!(
+                calls_to(&e.call_log.take().unwrap(), DEALLOCATE),
+                vec![vec![this]]
+            );
+        }
     }
 }

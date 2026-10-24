@@ -15,9 +15,42 @@ pub fn fn_0040e650(e: &mut Engine, this: Ptr) {
     e.call(CALLEE_0040E210, &args![object, 0x20u32]);
 }
 
+/// `00639b40` (`precipitation.cpp` in the engine map; thiscall, no stack words).
+const CALLEE_00639B40: u32 = 0x0063_9b40;
+/// `006491d0` (`magicformulas.cpp` in the engine map; `cdecl`, one `float` word).
+const CALLEE_006491D0: u32 = 0x0064_91d0;
+
+// Translated from 0040e600 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Slot of the vtable at `01013f38` (unnamed in the engine map; `ECX` is a sub-object 0x24
+/// bytes into its object, no stack words, plain `RET`): when `0040e210(object, 1)` answers
+/// true in `AL`, runs `00639b40` on the object; otherwise calls the sub-object's own vtable
+/// slot +8 with 0 and hands its `ST0`, stored as a `float`, to `006491d0` (`cdecl`).
+pub fn fn_0040e600(e: &mut Engine, this: Ptr) {
+    let object = this.addr().wrapping_sub(0x24);
+    if e.call(CALLEE_0040E210, &args![object, 1u32]).u8() != 0 {
+        e.call(CALLEE_00639B40, &args![object]);
+    } else {
+        let value = e.vcall(this.addr(), 8, &args![0u32]).f64();
+        e.call(CALLEE_006491D0, &args![x87_store32(value)]);
+    }
+}
+
+// Translated from 0040e670 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Slot of the vtable at `01013f64` (unnamed in the engine map; `ECX` is a sub-object 0x18
+/// bytes into its object, plain `RET`): `0040e210(object, 0x40)`, whose `EAX` it leaves as
+/// its own result.
+pub fn fn_0040e670(e: &mut Engine, this: Ptr) -> u32 {
+    let object = this.addr().wrapping_sub(0x18);
+    e.call(CALLEE_0040E210, &args![object, 0x40u32]).u32()
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
-    vec![entry!(0x0040_e650, fn_0040e650(Ptr))]
+    vec![
+        entry!(0x0040_e650, fn_0040e650(Ptr)),
+        entry!(0x0040_e600, fn_0040e600(Ptr)),
+        entry!(0x0040_e670, fn_0040e670(Ptr) -> u32),
+    ]
 }
 
 #[cfg(test)]
@@ -34,5 +67,70 @@ mod tests {
         let calls: Vec<_> = log.iter().filter(|(a, _)| *a == CALLEE_0040E210).collect();
         assert_eq!(calls.len(), 1);
         assert_eq!(calls[0].1, vec![0x0500_0000, 0x20]);
+    }
+}
+
+#[cfg(test)]
+mod n075_tests {
+    use super::*;
+
+    fn engine(answer: u32) -> Engine {
+        let mut e = Engine::new();
+        e.register_double(CALLEE_0040E210, move |_, _| answer.into_ret());
+        e.register(CALLEE_00639B40, |_, _| Ret::default());
+        e.register(CALLEE_006491D0, |_, _| Ret::default());
+        e.register(0x0060_0008, |_, _| Ret {
+            st0: 0.5,
+            ..Ret::default()
+        });
+        e.put_vtable(0x0070_0000, &[0, 0, 0x0060_0008]);
+        e.call_log = Some(vec![]);
+        e
+    }
+
+    #[test]
+    fn fn_0040e600_runs_00639b40_when_flag_one_answers_true() {
+        let mut e = engine(0x0000_0101);
+        let object = e.mem.alloc(0x40);
+        let sub = object + 0x24;
+        e.mem.set_u32(sub, 0x0070_0000);
+        e.call(0x0040_e600, &args![sub]);
+        let log = e.call_log.take().unwrap();
+        assert_eq!(
+            log[1..].to_vec(),
+            vec![
+                (CALLEE_0040E210, vec![object, 1]),
+                (CALLEE_00639B40, vec![object]),
+            ]
+        );
+    }
+
+    #[test]
+    fn fn_0040e600_passes_the_slot_8_float_otherwise() {
+        let mut e = engine(0x0000_0100);
+        let object = e.mem.alloc(0x40);
+        let sub = object + 0x24;
+        e.mem.set_u32(sub, 0x0070_0000);
+        e.call(0x0040_e600, &args![sub]);
+        let log = e.call_log.take().unwrap();
+        assert_eq!(
+            log[1..].to_vec(),
+            vec![
+                (CALLEE_0040E210, vec![object, 1]),
+                (0x0060_0008, vec![sub, 0]),
+                (CALLEE_006491D0, vec![0.5f32.to_bits()]),
+            ]
+        );
+    }
+
+    #[test]
+    fn fn_0040e670_tests_mask_0x40_of_the_adjusted_object() {
+        let mut e = engine(0x1234_5601);
+        assert_eq!(
+            e.call(0x0040_e670, &args![0x0500_0018u32]).u32(),
+            0x1234_5601
+        );
+        let log = e.call_log.take().unwrap();
+        assert_eq!(log[1], (CALLEE_0040E210, vec![0x0500_0000, 0x40]));
     }
 }

@@ -209,9 +209,131 @@ pub fn fn_00600030(e: &mut Engine, this: Ptr) {
     });
 }
 
+/// The used item's level (`01199c8c`).
+const USED_ITEM_LEVEL: u32 = 0x0119_9c8c;
+
+// Translated from 006005c0 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 006005c0 - the /GS stack cookie check (00ec408c) is not translated.
+/// `TESIdleManager::GetRootIdleArray_ov2` (Xbox PDB; `RET 4`: a model):
+/// null without a model; otherwise the root idle array of the model's idle
+/// directory (`TESModel::GetModel`, `TESIdleManager::GetIdleDirName` into a
+/// 0x104-byte stack buffer, `TESIdleManager::GetRootIdleArray`).
+pub fn tes_idle_manager_get_root_idle_array_ov2(e: &mut Engine, this: Ptr, model: u32) -> u32 {
+    if model == 0 {
+        return 0;
+    }
+    e.with_stack(0x108, |e, directory| {
+        let path = e.call(MODEL_GET_MODEL, &args![model]).u32();
+        tes_idle_manager_get_idle_dir_name(e, Ptr::new(path), directory);
+        tes_idle_manager_get_root_idle_array(e, this, directory)
+    })
+}
+
+// Translated from 00600910 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The used item's level (the word at `01199c8c`; the engine map has no
+/// name; `TESIdleManager::SetUsedItemLevel` sets it).
+pub fn fn_00600910(e: &mut Engine) -> u32 {
+    e.global::<u32>(USED_ITEM_LEVEL)
+}
+
+// Translated from 00600920 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TESIdleManager::SetUsedItemLevel` (Xbox PDB; cdecl, one word): the
+/// word at `01199c8c`.
+pub fn tes_idle_manager_set_used_item_level(e: &mut Engine, level: u32) {
+    e.set_global(USED_ITEM_LEVEL, level);
+}
+
+// Translated from 00600940 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TESIdleManager::SetUsedItemActivate` (Xbox PDB; cdecl, one word whose
+/// low byte is stored): the byte at `011cb6a8`.
+pub fn tes_idle_manager_set_used_item_activate(e: &mut Engine, activate: u8) {
+    e.set_global(USED_ITEM_ACTIVATE, activate);
+}
+
+/// The scalar deleting destructors below: the body, then the free
+/// (`00401030`) when bit 0 of the flags is set. Returns the object.
+fn scalar_delete(e: &mut Engine, this: Ptr, flags: u32, body: fn(&mut Engine, Ptr)) -> Ptr {
+    body(e, this);
+    if flags & 1 != 0 {
+        e.call(OPERATOR_DELETE, &args![this]);
+    }
+    this
+}
+
+// Translated from 00600d40 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSTCaseInsensitiveStringMap<IDLE_ANIM_ROOT *>` scalar deleting
+/// destructor (engine map; `RET 4`: the flags): [`fn_00600b00`], then the
+/// free when bit 0 is set.
+pub fn bst_case_insensitive_string_map_idle_anim_root_p_scalar_deleting_destructor(
+    e: &mut Engine,
+    this: Ptr,
+    flags: u32,
+) -> Ptr {
+    scalar_delete(e, this, flags, fn_00600b00)
+}
+
+// Translated from 00600ee0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiTMapBase<DFALL<NiTMapItem<char const *,IDLE_ANIM_ROOT *>>,char const
+/// *,IDLE_ANIM_ROOT *>` scalar deleting destructor (engine map; `RET 4`):
+/// [`fn_00600eb0`], then the free when bit 0 is set.
+pub fn ni_t_map_base_idle_anim_root_p_scalar_deleting_destructor(
+    e: &mut Engine,
+    this: Ptr,
+    flags: u32,
+) -> Ptr {
+    scalar_delete(e, this, flags, fn_00600eb0)
+}
+
+// Translated from 00600f10 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiTMap<char const *,IDLE_ANIM_ROOT *>` scalar deleting destructor
+/// (engine map; `RET 4`): [`fn_00600e50`], then the free when bit 0 is
+/// set.
+pub fn ni_t_map_idle_anim_root_p_scalar_deleting_destructor(
+    e: &mut Engine,
+    this: Ptr,
+    flags: u32,
+) -> Ptr {
+    scalar_delete(e, this, flags, fn_00600e50)
+}
+
+// Translated from 00600f40 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiTStringTemplateMap<NiTMap<char const *,IDLE_ANIM_ROOT *>,IDLE_ANIM_ROOT
+/// *>` scalar deleting destructor (engine map; `RET 4`): [`fn_00600d90`],
+/// then the free when bit 0 is set.
+pub fn ni_t_string_template_map_idle_anim_root_p_scalar_deleting_destructor(
+    e: &mut Engine,
+    this: Ptr,
+    flags: u32,
+) -> Ptr {
+    scalar_delete(e, this, flags, fn_00600d90)
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(
+            0x0060_05c0,
+            tes_idle_manager_get_root_idle_array_ov2(Ptr, u32) -> u32
+        ),
+        entry!(0x0060_0910, fn_00600910() -> u32),
+        entry!(0x0060_0920, tes_idle_manager_set_used_item_level(u32)),
+        entry!(0x0060_0940, tes_idle_manager_set_used_item_activate(u8)),
+        entry!(
+            0x0060_0d40,
+            bst_case_insensitive_string_map_idle_anim_root_p_scalar_deleting_destructor(Ptr, u32) -> Ptr
+        ),
+        entry!(
+            0x0060_0ee0,
+            ni_t_map_base_idle_anim_root_p_scalar_deleting_destructor(Ptr, u32) -> Ptr
+        ),
+        entry!(
+            0x0060_0f10,
+            ni_t_map_idle_anim_root_p_scalar_deleting_destructor(Ptr, u32) -> Ptr
+        ),
+        entry!(
+            0x0060_0f40,
+            ni_t_string_template_map_idle_anim_root_p_scalar_deleting_destructor(Ptr, u32) -> Ptr
+        ),
         entry!(0x0060_0030, fn_00600030(Ptr)),
         entry!(0x0060_0700, tes_idle_manager_get_root_filename_list(Ptr, Ptr, u32) -> u32),
         entry!(0x0060_0170, tes_idle_manager_add_root_idle_array(Ptr, Ptr, Ptr, u8) -> u32),
@@ -1816,5 +1938,110 @@ mod la1_tests {
                 (FORM_ARRAY_CLEAR_00863DB0, vec![first_root + 0x18]),
             ]
         );
+    }
+}
+
+#[cfg(test)]
+mod n085_tests {
+    use super::*;
+
+    fn calls(e: &Engine, address: u32) -> Vec<Vec<u32>> {
+        e.call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|(a, _)| *a == address)
+            .map(|(_, w)| w.clone())
+            .collect()
+    }
+
+    fn put_text(e: &mut Engine, at: u32, text: &[u8]) {
+        for (i, b) in text.iter().enumerate() {
+            e.mem.set_u8(at + i as u32, *b);
+        }
+        e.mem.set_u8(at + text.len() as u32, 0);
+    }
+
+    fn text(e: &Engine, at: u32) -> Vec<u8> {
+        let mut out = vec![];
+        let mut at = at;
+        while e.mem.u8(at) != 0 {
+            out.push(e.mem.u8(at));
+            at += 1;
+        }
+        out
+    }
+
+    #[test]
+    fn root_idle_array_of_a_model_looks_up_its_idle_directory() {
+        let mut e = Engine::new();
+        let path = e.mem.alloc(0x20);
+        put_text(&mut e, path, b"meshes\\IdleAnims\\x.kf");
+        e.register_double(MODEL_GET_MODEL, move |_, _| path.into_ret());
+        e.register(STRING_COPY, |e, a| {
+            let source = text(e, a[2]);
+            put_text(e, a[0], &source);
+            Ret::default()
+        });
+        // "IdleAnims" is found after "meshes\\".
+        e.register(STRING_FIND, |_, a| (a[0] + 7).into_ret());
+        e.register(C_STRING_LENGTH, |_, _| 9u32.into_ret());
+        e.register(MAP_LOOKUP, |e, a| {
+            let key = text(e, a[1]);
+            if key == b"meshes\\IdleAnims" {
+                e.mem.set_u32(a[2], 0x7777);
+                1u32.into_ret()
+            } else {
+                0u32.into_ret()
+            }
+        });
+        let manager = e.mem.alloc(0x20);
+        e.call_log = Some(vec![]);
+        assert_eq!(
+            e.call(0x0060_05c0, &args![manager, 0x4000u32]).u32(),
+            0x7777
+        );
+        assert_eq!(calls(&e, MODEL_GET_MODEL), vec![vec![0x4000]]);
+        assert_eq!(calls(&e, MAP_LOOKUP)[0][0], manager);
+        // Without a model: nothing.
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x0060_05c0, &args![manager, 0u32]).u32(), 0);
+        assert!(calls(&e, MODEL_GET_MODEL).is_empty());
+    }
+
+    #[test]
+    fn used_item_level_and_activate() {
+        let mut e = Engine::new();
+        e.map(0x0119_9000, 0x1000);
+        e.map(0x011c_b000, 0x1000);
+        e.call(0x0060_0920, &args![17u32]);
+        assert_eq!(e.call(0x0060_0910, &args![]).u32(), 17);
+        e.call(0x0060_0940, &args![0x1234_5601u32]);
+        assert_eq!(e.global::<u8>(USED_ITEM_ACTIVATE), 1);
+        assert_eq!(e.global::<u8>(USED_ITEM_ACTIVATE + 1), 0);
+    }
+
+    #[test]
+    fn scalar_deleting_destructors_run_their_bodies() {
+        for flags in [0u32, 1] {
+            let mut e = Engine::new();
+            e.register(OPERATOR_DELETE, |_, _| Ret::default());
+            e.register(0x0060_0d90, |_, _| Ret::default());
+            e.register(MAP_REMOVE_ALL, |_, _| Ret::default());
+            e.register(MAP_FREE, |_, _| Ret::default());
+            let map = e.mem.alloc(0x14);
+            e.call_log = Some(vec![]);
+            assert_eq!(e.call(0x0060_0d40, &args![map, flags]).u32(), map);
+            // 00600b00: its vtable, then 00600d90 through 00600d70.
+            assert_eq!(calls(&e, 0x0060_0d90), vec![vec![map]]);
+            assert_eq!(e.call(0x0060_0ee0, &args![map, flags]).u32(), map);
+            assert_eq!(e.mem.u32(map), NI_T_MAP_BASE_VTABLE);
+            assert_eq!(e.call(0x0060_0f10, &args![map, flags]).u32(), map);
+            assert_eq!(calls(&e, MAP_REMOVE_ALL).len(), 3);
+            e.mem.set_u8(map + 0x10, 0);
+            assert_eq!(e.call(0x0060_0f40, &args![map, flags]).u32(), map);
+            assert_eq!(calls(&e, MAP_REMOVE_ALL).len(), 5);
+            assert_eq!(calls(&e, OPERATOR_DELETE).len(), 4 * flags as usize);
+        }
     }
 }

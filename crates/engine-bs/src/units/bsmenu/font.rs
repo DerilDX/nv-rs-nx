@@ -4811,9 +4811,85 @@ pub fn dynamic_initializer_for_font_manager_s_font_8_filename(e: &mut Engine) {
     );
 }
 
+/// The buffer change of the 0x20-byte item arrays (`00a1c340`, `BSMenu/run_00a1c340`,
+/// `thiscall`, two words: new reserve and item count).
+const ITEM_ARRAY_CHANGE_BUFFER_00A1C340: u32 = 0x00a1_c340;
+
+// Translated from 00a1c130 (decompiled, FalloutNV.exe 1.4.0.525)
+/// A `BSSimpleArray` append slot for 0x20-byte items (no map name; called from
+/// `AddTextIcon`, `Render` and `00a1bef0`): when the array is full (`iSize` equals
+/// `iReservedSize`), an empty array allocates 4 items (vtable +0x04) and records the
+/// reserve, otherwise the reserve doubles (up to 0x400 items) or grows by 0x400 through
+/// `00a1c340`, which then records it here. Then `iSize` grows by one; answers the index of
+/// the new last item.
+pub fn fn_00a1c130(e: &mut Engine, this: Ptr<BSSimpleArray>) -> u32 {
+    let full = e.get(this, BSSimpleArray::iSize) == e.get(this, BSSimpleArray::iReservedSize);
+    if full {
+        let reserved = e.get(this, BSSimpleArray::iReservedSize);
+        if reserved == 0 {
+            let buffer = e.vcall(this.addr(), 0x04, &args![4u32]).u32();
+            e.set(this, BSSimpleArray::pBuffer, buffer);
+            e.set(this, BSSimpleArray::iReservedSize, 4);
+        } else {
+            let grown = if reserved > 0x400 {
+                reserved.wrapping_add(0x400)
+            } else {
+                reserved << 1
+            };
+            let size = e.get(this, BSSimpleArray::iSize);
+            e.call(ITEM_ARRAY_CHANGE_BUFFER_00A1C340, &args![this, grown, size]);
+            e.set(this, BSSimpleArray::iReservedSize, grown);
+        }
+    }
+    let size = e.get(this, BSSimpleArray::iSize).wrapping_add(1);
+    e.set(this, BSSimpleArray::iSize, size);
+    e.get(this, BSSimpleArray::iSize).wrapping_sub(1)
+}
+
+// Translated from 00a1c1f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// A `BSSimpleArray` item construction for 0x20-byte items (no map name; `thiscall`, `this`
+/// not read, called from `AddTextIcon`): for each of the `count` items from `items` (when
+/// the item's address is not 0) stores 0.0 in the four floats at item `+0x10..+0x1C`.
+pub fn fn_00a1c1f0(e: &mut Engine, _this: Ptr, items: u32, count: u32) {
+    for i in 0..count {
+        let item = (i << 5).wrapping_add(items);
+        if item != 0 {
+            for off in [0x10u32, 0x14, 0x18, 0x1c] {
+                e.mem.set_f32(item.wrapping_add(off), 0.0);
+            }
+        }
+    }
+}
+
+// Translated from 00a1c270 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiTListBase::AddNodeHead` shape (no map name; `thiscall`, one word, called from
+/// `AddTextIcon`): puts `node` in front of the list: its previous link cleared, its next
+/// link the old head, which (or, for an empty list, the tail) then points back at it; the
+/// head becomes `node` and the count grows by one.
+pub fn fn_00a1c270(e: &mut Engine, this: Ptr<NiTPointerList>, node: Ptr<NiTListItem>) {
+    e.set(node, NiTListItem::m_pkPrev, 0);
+    let head = e.get(this, NiTPointerList::m_pkHead);
+    e.set(node, NiTListItem::m_pkNext, head);
+    if e.get(this, NiTPointerList::m_pkHead) != 0 {
+        let head = Ptr::<NiTListItem>::new(e.get(this, NiTPointerList::m_pkHead));
+        e.set(head, NiTListItem::m_pkPrev, node.addr());
+    } else {
+        e.set(this, NiTPointerList::m_pkTail, node.addr());
+    }
+    e.set(this, NiTPointerList::m_pkHead, node.addr());
+    let count = e.get(this, NiTPointerList::m_uiCount).wrapping_add(1);
+    e.set(this, NiTPointerList::m_uiCount, count);
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x00a1_c130, fn_00a1c130(Ptr<BSSimpleArray>) -> u32),
+        entry!(0x00a1_c1f0, fn_00a1c1f0(Ptr, u32, u32)),
+        entry!(
+            0x00a1_c270,
+            fn_00a1c270(Ptr<NiTPointerList>, Ptr<NiTListItem>)
+        ),
         entry!(
             0x00fb37f0,
             dynamic_initializer_for_font_manager_s_font_1_filename()
@@ -7201,5 +7277,102 @@ mod b004_tests {
             0x0109_5434,
             0x00fd_a740,
         );
+    }
+}
+
+#[cfg(test)]
+mod n083_tests {
+    use super::*;
+
+    fn calls_to(e: &Engine, addr: u32) -> Vec<Vec<u32>> {
+        e.call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|c| c.0 == addr)
+            .map(|c| c.1.clone())
+            .collect()
+    }
+
+    #[test]
+    fn append_slot_grows_a_full_array() {
+        let mut e = Engine::new();
+        let a = e.new_object::<BSSimpleArray>();
+        e.put_vtable(0x0300_0000, &[0, 0x0300_1004]);
+        e.mem.set_u32(a.addr(), 0x0300_0000);
+        e.register(0x0300_1004, |_, _| Ret {
+            eax: 0x0500_0000,
+            ..Ret::default()
+        });
+        e.register(ITEM_ARRAY_CHANGE_BUFFER_00A1C340, |_, _| Ret::default());
+        // Empty: four items allocated.
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x00a1_c130, &args![a]).u32(), 0);
+        assert_eq!(calls_to(&e, 0x0300_1004), [vec![a.addr(), 4]]);
+        assert_eq!(e.get(a, BSSimpleArray::pBuffer), 0x0500_0000);
+        assert_eq!(e.get(a, BSSimpleArray::iReservedSize), 4);
+        assert_eq!(e.get(a, BSSimpleArray::iSize), 1);
+        // Room left: only the size grows.
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x00a1_c130, &args![a]).u32(), 1);
+        assert!(calls_to(&e, ITEM_ARRAY_CHANGE_BUFFER_00A1C340).is_empty());
+        // Full at 0x400: doubles.
+        e.set(a, BSSimpleArray::iSize, 0x400);
+        e.set(a, BSSimpleArray::iReservedSize, 0x400);
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x00a1_c130, &args![a]).u32(), 0x400);
+        assert_eq!(
+            calls_to(&e, ITEM_ARRAY_CHANGE_BUFFER_00A1C340),
+            [vec![a.addr(), 0x800, 0x400]]
+        );
+        assert_eq!(e.get(a, BSSimpleArray::iReservedSize), 0x800);
+        // Full above 0x400: grows by 0x400.
+        e.set(a, BSSimpleArray::iSize, 0x800);
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x00a1_c130, &args![a]).u32(), 0x800);
+        assert_eq!(
+            calls_to(&e, ITEM_ARRAY_CHANGE_BUFFER_00A1C340),
+            [vec![a.addr(), 0xc00, 0x800]]
+        );
+        assert_eq!(e.get(a, BSSimpleArray::iSize), 0x801);
+    }
+
+    #[test]
+    fn item_construction_clears_the_four_floats() {
+        let mut e = Engine::new();
+        let items = e.mem.alloc(0x60);
+        for off in (0..0x60).step_by(4) {
+            e.mem.set_u32(items + off, 0xffff_ffff);
+        }
+        e.call(0x00a1_c1f0, &args![0u32, items, 2u32]);
+        for item in [items, items + 0x20] {
+            for off in (0..0x10).step_by(4) {
+                assert_eq!(e.mem.u32(item + off), 0xffff_ffff);
+            }
+            for off in (0x10..0x20).step_by(4) {
+                assert_eq!(e.mem.u32(item + off), 0);
+            }
+        }
+        assert_eq!(e.mem.u32(items + 0x50), 0xffff_ffff);
+    }
+
+    #[test]
+    fn add_node_head_links_the_node_in_front() {
+        let mut e = Engine::new();
+        let list = e.new_object::<NiTPointerList>();
+        let first = e.new_object::<NiTListItem>();
+        let second = e.new_object::<NiTListItem>();
+        e.set(first, NiTListItem::m_pkPrev, 0x55);
+        e.call(0x00a1_c270, &args![list, first]);
+        assert_eq!(e.get(list, NiTPointerList::m_pkHead), first.addr());
+        assert_eq!(e.get(list, NiTPointerList::m_pkTail), first.addr());
+        assert_eq!(e.get(first, NiTListItem::m_pkPrev), 0);
+        assert_eq!(e.get(first, NiTListItem::m_pkNext), 0);
+        e.call(0x00a1_c270, &args![list, second]);
+        assert_eq!(e.get(list, NiTPointerList::m_pkHead), second.addr());
+        assert_eq!(e.get(list, NiTPointerList::m_pkTail), first.addr());
+        assert_eq!(e.get(second, NiTListItem::m_pkNext), first.addr());
+        assert_eq!(e.get(first, NiTListItem::m_pkPrev), second.addr());
+        assert_eq!(e.get(list, NiTPointerList::m_uiCount), 2);
     }
 }

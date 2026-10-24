@@ -51,9 +51,35 @@ pub fn fn_00481230(e: &mut Engine, this: Ptr, sex: u32) -> u32 {
     e.call(STRING_TEXT_OR_EMPTY, &args![icon]).u32()
 }
 
+/// `0047a300` (`thiscall`, no stack words; unnamed in the engine map), on
+/// the 16-byte member `fn_00481280` picks.
+const CALLEE_0047A300: u32 = 0x0047_a300;
+
+// Translated from 00481280 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`thiscall`, one word: an index; `RET 4`):
+/// the 16-byte member `this + 0xA4 + index * 16`, index 1 falling back to 0
+/// when [`fn_004812d0`] answers 0 for it; answers `0047a300` on the chosen
+/// member (the function ends in that call, so its `EAX` is the answer).
+pub fn fn_00481280(e: &mut Engine, this: Ptr, index: u32) -> u32 {
+    let mut index = index;
+    let member = this
+        .addr()
+        .wrapping_add(index.wrapping_shl(4))
+        .wrapping_add(0xa4);
+    if fn_004812d0(e, Ptr::new(member)) == 0 && index == 1 {
+        index = 0;
+    }
+    let member = this
+        .addr()
+        .wrapping_add(index.wrapping_shl(4))
+        .wrapping_add(0xa4);
+    e.call(CALLEE_0047A300, &args![member]).u32()
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x0048_1280, fn_00481280(Ptr, u32) -> u32),
         entry!(0x0048_1230, fn_00481230(Ptr, u32) -> u32),
         entry!(0x0048_12d0, fn_004812d0(Ptr) -> u32),
         entry!(0x0048_12f0, fn_004812f0(u32, u32) -> u32),
@@ -115,5 +141,26 @@ mod la1_tests {
         assert_eq!(text(&mut e, 1), (this + 0x8c) | 0x8000_0000);
         e.mem.set_u32(this + 0x98 + 4, 1);
         assert_eq!(text(&mut e, 1), (this + 0x98) | 0x8000_0000);
+    }
+}
+
+#[cfg(test)]
+mod n085_tests {
+    use super::*;
+
+    #[test]
+    fn member_choice_falls_back_to_zero_and_passes_the_answer_on() {
+        let mut e = Engine::new();
+        // `0048cee0` (through fn_004812d0 on member + 4): the word there.
+        e.register(CALLEE_0048CEE0, |e, a| e.mem.u32(a[0]).into_ret());
+        e.register(CALLEE_0047A300, |_, a| (a[0] ^ 0x8000_0000).into_ret());
+        let this = e.mem.alloc(0xc0);
+        let answer = |e: &mut Engine, index: u32| e.call(0x0048_1280, &args![this, index]).u32();
+        // Member 1 without a name: member 0.
+        assert_eq!(answer(&mut e, 1), (this + 0xa4) ^ 0x8000_0000);
+        e.mem.set_u32(this + 0xb4 + 4, 5);
+        assert_eq!(answer(&mut e, 1), (this + 0xb4) ^ 0x8000_0000);
+        // Index 0 keeps index 0 whatever the name.
+        assert_eq!(answer(&mut e, 0), (this + 0xa4) ^ 0x8000_0000);
     }
 }

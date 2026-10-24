@@ -1992,6 +1992,142 @@ fn footstep_extra_sound(e: &mut Engine, reference: u32, side: u32) -> u32 {
     }
 }
 
+/// `operator delete` (`00401030`, cdecl).
+const OPERATOR_DELETE_00401030: u32 = 0x0040_1030;
+/// `BSAudio::GetSoundHandleByName` (engine map; thiscall on the audio instance: result, name,
+/// flags; `RET 0xc`).
+const GET_SOUND_HANDLE_BY_NAME_00AD7550: u32 = 0x00ad_7550;
+/// Thiscall on the weapon form: its block sound form (`005224e0`), and its skill index
+/// (`00446390`, -1 for none), as `008397f0` uses them.
+const WEAPON_BLOCK_SOUND_005224E0: u32 = 0x0052_24e0;
+const WEAPON_INDEX_00446390: u32 = 0x0044_6390;
+/// `"WPNBlockHand"` and `"WPNBlockMelee"` (`.rdata`).
+const BLOCK_HAND_0107D1DC: u32 = 0x0107_d1dc;
+const BLOCK_MELEE_0107D1CC: u32 = 0x0107_d1cc;
+/// The vector constructor `006815c0` (thiscall), run on the position local.
+const VECTOR_CONSTRUCT_006815C0: u32 = 0x0068_15c0;
+/// The `float` minimum (`0040ebd0`) and maximum (`00404010`), cdecl, the result in ST0.
+const FLOAT_MIN_0040EBD0: u32 = 0x0040_ebd0;
+const FLOAT_MAX_00404010: u32 = 0x0040_4010;
+
+// Translated from 008397f0 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 008397f0 - the C++ exception frame (FS:[0] chain) is not translated
+/// `ImpactMixer::PlayWeaponBlock` (Xbox PDB; cdecl, nine words: the first and the last are not
+/// read, then the weapon form and two positions). A sound handle local (`0041a250`) gets: with a
+/// weapon that has a block sound (`005224e0`), the handle `BSAudio::GetSoundHandleByFilename`
+/// gives for that sound's file name (`00511840`) with flags `0x182` and the sound; otherwise
+/// `GetSoundHandleByName` with `"WPNBlockHand"` when the weapon is null or its `00446390` is -1,
+/// `"WPNBlockMelee"` otherwise (each through a temporary handle, assigned by `00418900` and
+/// destroyed). The sound is placed at the middle of the two positions, per component
+/// `(max - min) / 2.0 + min` on the x87 (`0040ebd0`/`00404010`, results kept as `double`s, the
+/// constant at `01011590`), and played (`00ad8830(0)`); the handle is destroyed.
+#[allow(clippy::too_many_arguments)]
+pub fn impact_mixer_play_weapon_block(
+    e: &mut Engine,
+    _unused_0: u32,
+    weapon: u32,
+    first_x: f32,
+    first_y: f32,
+    first_z: f32,
+    second_x: f32,
+    second_y: f32,
+    second_z: f32,
+    _unused_8: u32,
+) {
+    e.with_stack(0x40, |e, frame| {
+        // The exe's locals from EBP - 0x4c.
+        let at = |offset: u32| frame.addr() + 0x4c - offset;
+        let handle = at(0x18);
+        let position = at(0x24);
+        e.call(SOUND_HANDLE_CONSTRUCT, &args![handle]);
+        let block_sound = if weapon != 0 {
+            e.call(WEAPON_BLOCK_SOUND_005224E0, &args![weapon]).u32()
+        } else {
+            0
+        };
+        if weapon != 0 && block_sound != 0 {
+            let sound = e.call(WEAPON_BLOCK_SOUND_005224E0, &args![weapon]).u32();
+            let form = e.call(WEAPON_BLOCK_SOUND_005224E0, &args![weapon]).u32();
+            let name = e.call(SOUND_FILE_NAME, &args![form]).u32();
+            let audio = e.call(AUDIO_INSTANCE, &args![]).u32();
+            let temporary = at(0x34);
+            let made = e
+                .call(
+                    GET_SOUND_HANDLE_BY_FILENAME,
+                    &args![audio, temporary, name, 0x182u32, sound],
+                )
+                .u32();
+            e.call(SOUND_HANDLE_ASSIGN, &args![handle, made]);
+            e.call(SOUND_HANDLE_DESTRUCT, &args![temporary]);
+        } else {
+            let index = if weapon != 0 {
+                e.call(WEAPON_INDEX_00446390, &args![weapon]).u32()
+            } else {
+                0xffff_ffff
+            };
+            let (name, temporary) = if index == 0xffff_ffff {
+                (BLOCK_HAND_0107D1DC, at(0x40))
+            } else {
+                (BLOCK_MELEE_0107D1CC, at(0x4c))
+            };
+            let audio = e.call(AUDIO_INSTANCE, &args![]).u32();
+            let made = e
+                .call(
+                    GET_SOUND_HANDLE_BY_NAME_00AD7550,
+                    &args![audio, temporary, name, 0x182u32],
+                )
+                .u32();
+            e.call(SOUND_HANDLE_ASSIGN, &args![handle, made]);
+            e.call(SOUND_HANDLE_DESTRUCT, &args![temporary]);
+        }
+        e.call(VECTOR_CONSTRUCT_006815C0, &args![position]);
+        let two: f64 = e.global(TWO_01011590);
+        for (k, (first, second)) in (0u32..).zip([
+            (first_x, second_x),
+            (first_y, second_y),
+            (first_z, second_z),
+        ]) {
+            let first = x87_quiet_bits(first.to_bits());
+            let second = x87_quiet_bits(second.to_bits());
+            let low = e.call(FLOAT_MIN_0040EBD0, &args![first, second]).f64();
+            let high = e.call(FLOAT_MAX_00404010, &args![first, second]).f64();
+            let low_again = e.call(FLOAT_MIN_0040EBD0, &args![first, second]).f64();
+            let middle = x87_add(x87_div(x87_sub(high, low_again), two), low);
+            e.mem.set_u32(position + k * 4, x87_store32(middle));
+        }
+        let words = [0u32, 4, 8].map(|offset| x87_quiet_bits(e.mem.u32(position + offset)));
+        e.call(
+            SOUND_SET_POSITION,
+            &args![handle, words[0], words[1], words[2]],
+        );
+        e.call(SOUND_PLAY, &args![handle, 0u32]);
+        e.call(SOUND_HANDLE_DESTRUCT, &args![handle]);
+    });
+}
+
+// Translated from 0083b610 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiTPointerMap<int, unsigned int>`'s scalar deleting destructor (the map's name; thiscall, one
+/// word, `RET 4`): [`fn_0083b6b0`], then with flag bit 0 `operator delete`. Returns `this`.
+pub fn ni_t_pointer_map_scalar_deleting_destructor(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    fn_0083b6b0(e, this);
+    if flags & 1 != 0 {
+        e.call(OPERATOR_DELETE_00401030, &args![this]);
+    }
+    this
+}
+
+// Translated from 0083b740 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiTMapBase<NiTPointerAllocator<unsigned int>, int, unsigned int>`'s scalar deleting
+/// destructor (the map's name; thiscall, one word, `RET 4`): [`fn_0083b710`], then with flag bit
+/// 0 `operator delete`. Returns `this`.
+pub fn ni_t_map_base_scalar_deleting_destructor(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    fn_0083b710(e, this);
+    if flags & 1 != 0 {
+        e.call(OPERATOR_DELETE_00401030, &args![this]);
+    }
+    this
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -2014,6 +2150,18 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x0083_91b0, impact_mixer_play_jump_land(u32, u32)),
         entry!(0x0083_8780, impact_mixer_play_jump(u32)),
         entry!(0x0083_7cc0, impact_mixer_play_footstep(u32, u32)),
+        entry!(
+            0x0083_97f0,
+            impact_mixer_play_weapon_block(u32, u32, f32, f32, f32, f32, f32, f32, u32)
+        ),
+        entry!(
+            0x0083_b610,
+            ni_t_pointer_map_scalar_deleting_destructor(Ptr, u32) -> Ptr
+        ),
+        entry!(
+            0x0083_b740,
+            ni_t_map_base_scalar_deleting_destructor(Ptr, u32) -> Ptr
+        ),
     ]
 }
 
@@ -3045,5 +3193,151 @@ mod b047_movement_tests {
         e.call(0x0083_7cc0, &args![actor, 3u32]);
         assert_eq!(calls_to(&e, GET_SOUND_HANDLE_BY_ID)[0][2], 0x6703);
         assert!(calls_to(&e, SOUND_SET_OBJECT_TO_FOLLOW).is_empty());
+    }
+}
+
+#[cfg(test)]
+mod n089_tests {
+    use super::*;
+
+    fn calls_to(e: &Engine, address: u32) -> Vec<Vec<u32>> {
+        e.call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|(a, _)| *a == address)
+            .map(|(_, words)| words.clone())
+            .collect()
+    }
+
+    fn quiet(_: &mut Engine, _: &[u32]) -> Ret {
+        Ret::default()
+    }
+
+    fn block_doubles(e: &mut Engine) {
+        for address in [
+            SOUND_HANDLE_CONSTRUCT,
+            SOUND_HANDLE_DESTRUCT,
+            SOUND_HANDLE_ASSIGN,
+            VECTOR_CONSTRUCT_006815C0,
+            SOUND_SET_POSITION,
+            SOUND_PLAY,
+        ] {
+            e.register(address, quiet);
+        }
+        e.register(FLOAT_MIN_0040EBD0, |_, a| {
+            f32::from_bits(a[0]).min(f32::from_bits(a[1])).into_ret()
+        });
+        e.register(FLOAT_MAX_00404010, |_, a| {
+            f32::from_bits(a[0]).max(f32::from_bits(a[1])).into_ret()
+        });
+        e.register(AUDIO_INSTANCE, |_, _| 0xa0d1_0000u32.into_ret());
+        e.register(GET_SOUND_HANDLE_BY_FILENAME, |_, a| a[1].into_ret());
+        e.register(GET_SOUND_HANDLE_BY_NAME_00AD7550, |_, a| a[1].into_ret());
+        e.register(SOUND_FILE_NAME, |_, a| (a[0] + 0x10).into_ret());
+        e.map(TWO_01011590, 8);
+        e.mem.set_u64(TWO_01011590, 0x4000_0000_0000_0000);
+    }
+
+    fn play(e: &mut Engine, weapon: u32) {
+        e.call_log = Some(vec![]);
+        e.call(
+            0x0083_97f0,
+            &args![0xdeadu32, weapon, 1.0f32, -4.0f32, 10.0f32, 3.0f32, 2.0f32, 10.5f32, 0xbeefu32],
+        );
+    }
+
+    #[test]
+    fn n089_008397f0_plays_the_block_sound_between_the_positions() {
+        let mut e = Engine::new();
+        block_doubles(&mut e);
+        // A weapon with its own block sound.
+        e.register(WEAPON_BLOCK_SOUND_005224E0, |_, _| 0x5050u32.into_ret());
+        play(&mut e, 0x7700);
+        let handle = calls_to(&e, SOUND_HANDLE_CONSTRUCT)[0][0];
+        let by_file = calls_to(&e, GET_SOUND_HANDLE_BY_FILENAME);
+        assert_eq!(by_file.len(), 1);
+        let temporary = by_file[0][1];
+        assert_eq!(
+            by_file[0],
+            vec![0xa0d1_0000, temporary, 0x5060, 0x182, 0x5050]
+        );
+        assert_eq!(calls_to(&e, WEAPON_BLOCK_SOUND_005224E0).len(), 3);
+        assert_eq!(
+            calls_to(&e, SOUND_HANDLE_ASSIGN),
+            vec![vec![handle, temporary]]
+        );
+        assert_eq!(
+            calls_to(&e, SOUND_SET_POSITION),
+            vec![vec![
+                handle,
+                2.0f32.to_bits(),
+                (-1.0f32).to_bits(),
+                10.25f32.to_bits()
+            ]]
+        );
+        assert_eq!(calls_to(&e, SOUND_PLAY), vec![vec![handle, 0]]);
+        assert_eq!(
+            calls_to(&e, SOUND_HANDLE_DESTRUCT),
+            vec![vec![temporary], vec![handle]]
+        );
+        assert_eq!(calls_to(&e, VECTOR_CONSTRUCT_006815C0)[0][0], handle - 0xc);
+        // No block sound and no skill: the hand sound.
+        e.register(WEAPON_BLOCK_SOUND_005224E0, |_, _| 0u32.into_ret());
+        e.register(WEAPON_INDEX_00446390, |_, _| 0xffff_ffffu32.into_ret());
+        play(&mut e, 0x7700);
+        assert_eq!(
+            calls_to(&e, GET_SOUND_HANDLE_BY_NAME_00AD7550)[0][2],
+            BLOCK_HAND_0107D1DC
+        );
+        assert_eq!(calls_to(&e, WEAPON_BLOCK_SOUND_005224E0).len(), 1);
+        // A skill: the melee sound.
+        e.register(WEAPON_INDEX_00446390, |_, _| 2u32.into_ret());
+        play(&mut e, 0x7700);
+        let by_name = calls_to(&e, GET_SOUND_HANDLE_BY_NAME_00AD7550);
+        assert_eq!(by_name[0][2..], [BLOCK_MELEE_0107D1CC, 0x182]);
+        // No weapon: the hand sound, without asking the weapon anything.
+        play(&mut e, 0);
+        assert_eq!(
+            calls_to(&e, GET_SOUND_HANDLE_BY_NAME_00AD7550)[0][2],
+            BLOCK_HAND_0107D1DC
+        );
+        assert!(calls_to(&e, WEAPON_BLOCK_SOUND_005224E0).is_empty());
+        assert!(calls_to(&e, WEAPON_INDEX_00446390).is_empty());
+    }
+
+    #[test]
+    fn n089_0083b610_deletes_the_pointer_map() {
+        let mut e = Engine::new();
+        for address in [MAP_REMOVE_ALL, NI_FREE, OPERATOR_DELETE_00401030] {
+            e.register(address, quiet);
+        }
+        let this = e.mem.alloc(0x10);
+        e.mem.set_u32(this + 8, 0x8800);
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x0083_b610, &args![this, 1u32]).u32(), this);
+        assert_eq!(e.mem.u32(this), MAP_BASE_VTABLE);
+        assert_eq!(calls_to(&e, MAP_REMOVE_ALL), vec![vec![this], vec![this]]);
+        assert_eq!(calls_to(&e, NI_FREE), vec![vec![0x8800]]);
+        assert_eq!(calls_to(&e, OPERATOR_DELETE_00401030), vec![vec![this]]);
+        e.call_log = Some(vec![]);
+        e.call(0x0083_b610, &args![this, 0u32]);
+        assert!(calls_to(&e, OPERATOR_DELETE_00401030).is_empty());
+    }
+
+    #[test]
+    fn n089_0083b740_deletes_the_map_base() {
+        let mut e = Engine::new();
+        for address in [MAP_REMOVE_ALL, NI_FREE, OPERATOR_DELETE_00401030] {
+            e.register(address, quiet);
+        }
+        let this = e.mem.alloc(0x10);
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x0083_b740, &args![this, 3u32]).u32(), this);
+        assert_eq!(calls_to(&e, MAP_REMOVE_ALL), vec![vec![this]]);
+        assert_eq!(calls_to(&e, OPERATOR_DELETE_00401030), vec![vec![this]]);
+        e.call_log = Some(vec![]);
+        e.call(0x0083_b740, &args![this, 2u32]);
+        assert!(calls_to(&e, OPERATOR_DELETE_00401030).is_empty());
     }
 }

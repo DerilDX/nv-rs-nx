@@ -664,9 +664,361 @@ pub fn fn_005800c0(e: &mut Engine, this: Ptr<TESWaterForm>, object: u32) -> u32 
     .u32()
 }
 
+/// The shader data words `0057f3a0` swaps, in its order: every word from
+/// +0x00 to +0xC0 but +0x34.
+const SHADER_DATA_SWAPPED: [u32; 48] = [
+    0x00, 0x04, 0x08, 0x0c, 0x10, 0x14, 0x18, 0x1c, 0x20, 0x24, 0x28, 0x2c, 0x30, 0x38, 0x3c, 0x40,
+    0x44, 0x48, 0x4c, 0x50, 0x54, 0x58, 0x5c, 0x60, 0x64, 0x68, 0x6c, 0x70, 0x74, 0x78, 0x7c, 0x80,
+    0x84, 0x88, 0x8c, 0x90, 0x94, 0x98, 0x9c, 0xa0, 0xa4, 0xa8, 0xac, 0xb0, 0xb4, 0xb8, 0xbc, 0xc0,
+];
+/// `TESForm::StartForm`, `TESForm::CloseForm`, `TESForm::SaveData`,
+/// `TESFullName::Save` (Xbox PDB names) and the chunk writers
+/// `TESForm::AddChunkArray` (`004856f0`, cdecl: code, data, size),
+/// `AddChunkArray_ov2` (`00485710`, code, words, count), the byte chunk
+/// `004858f0` (code, byte), the word chunk `00485910` (code, word) and
+/// `TESForm::__AddChunkData` (`00485990`).
+const START_FORM: u32 = 0x0048_55a0;
+const CLOSE_FORM: u32 = 0x0048_5680;
+const SAVE_DATA: u32 = 0x0048_5e00;
+const FULL_NAME_SAVE: u32 = 0x0048_7010;
+const ADD_CHUNK_ARRAY: u32 = 0x0048_56f0;
+const ADD_CHUNK_ARRAY_WORDS: u32 = 0x0048_5710;
+const ADD_CHUNK_BYTE: u32 = 0x0048_58f0;
+const ADD_CHUNK_WORD: u32 = 0x0048_5910;
+const ADD_CHUNK_DATA: u32 = 0x0048_5990;
+/// `00401500`: whether saved data is byte-swapped (`AL`).
+const SAVE_SWAPS_ENDIAN: u32 = 0x0040_1500;
+/// `004048e0` (`ECX` a `BSStringT`): its length.
+const STRING_LENGTH: u32 = 0x0040_48e0;
+/// `00559450` (`ECX`): the pointer word at the object (here the material
+/// string's text).
+const POINTER_GET: u32 = 0x0055_9450;
+/// `""` (`01011584`).
+const EMPTY_TEXT: u32 = 0x0101_1584;
+/// `TESForm::CopyAllComponents` / `CompareAllComponents` (Xbox PDB).
+const COPY_ALL_COMPONENTS: u32 = 0x0048_51b0;
+const COMPARE_ALL_COMPONENTS: u32 = 0x0048_5270;
+/// `memcpy` (`00401460`) and `_memcmp` (`00ec4835`), cdecl, three words.
+const MEMCPY: u32 = 0x0040_1460;
+const MEMCMP: u32 = 0x00ec_4835;
+/// `00407840` (`ECX` a form): the word `004febd0` stores (the `SNAM` word).
+const SNAM_GET: u32 = 0x0040_7840;
+/// `NiPointer<PathingDebugGeometryData>::operator=` (engine map name of the
+/// shared body `006e5cc0`, `RET 4`).
+const POINTER_COPY: u32 = 0x006e_5cc0;
+/// `"PlaceableAutoWater"`.
+const PLACEABLE_AUTO_WATER_NAME: u32 = 0x0103_161c;
+/// `pPlaceableAutoWater` (Xbox PDB name by its place beside
+/// `pPlaceableLODWater`; PC +0x180).
+const WATER_PLACEABLE_AUTO: u32 = 0x180;
+
+// Translated from 0057f3a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The `WaterShaderData` byte swap (`ECX`; the engine map has no name):
+/// `00401080` with 0 on each word but +0x34, from +0x00 to +0xC0.
+pub fn fn_0057f3a0(e: &mut Engine, data: Ptr) {
+    for offset in SHADER_DATA_SWAPPED {
+        e.call(SWAP_WORD, &args![data.addr() + offset, 0u32]);
+    }
+}
+
+// Translated from 0057fbf0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TESWaterForm`'s save (`ECX`; the engine map has no name):
+/// `TESForm::StartForm`, `TESFullName::Save`, `NNAM` (the noise texture's
+/// name with its terminator), `ANAM` and `FNAM` (alpha and flags bytes),
+/// `MNAM` (the material string with its terminator), `SNAM` and `XNAM`
+/// (the sound's and the spell's form ids, when set),
+/// `TESForm::SaveData`, `DNAM` (the 0xC4 shader data bytes, swapped
+/// before and after when saving swaps), `GNAM` (the three weather forms'
+/// ids, 0 for none) and `TESForm::CloseForm`.
+pub fn teswaterform_save(e: &mut Engine, this: Ptr<TESWaterForm>) {
+    let base = this.addr();
+    e.call(START_FORM, &args![this]);
+    e.call(FULL_NAME_SAVE, &args![base + WATER_FULL_NAME]);
+    let length = e
+        .call(TEXTURE_NAME_LENGTH, &args![base + WATER_NOISE_TEXTURE])
+        .u32()
+        .wrapping_add(1);
+    let text = e
+        .call(STRING_TEXT_OR_EMPTY, &args![base + WATER_NOISE_TEXTURE])
+        .u32();
+    e.call(ADD_CHUNK_ARRAY, &args![SIG_NNAM, text, length]);
+    let alpha = e.get(this, TESWaterForm::cAlpha);
+    e.call(ADD_CHUNK_BYTE, &args![SIG_ANAM, alpha]);
+    let flags = e.get(this, TESWaterForm::cFlags);
+    e.call(ADD_CHUNK_BYTE, &args![SIG_FNAM, flags]);
+    let length = e
+        .call(STRING_LENGTH, &args![base + WATER_MATERIAL_ID])
+        .u32()
+        .wrapping_add(1);
+    let text = fn_0057fda0(e, this);
+    e.call(ADD_CHUNK_ARRAY, &args![SIG_MNAM, text, length]);
+    let sound = e.get(this, TESWaterForm::pWaterSound);
+    if sound != 0 {
+        let id = e.call(FORM_ID, &args![sound]).u32();
+        e.call(ADD_CHUNK_WORD, &args![SIG_SNAM, id]);
+    }
+    let spell = e.get(this, TESWaterForm::pSpellItem);
+    if spell != 0 {
+        let id = e.call(FORM_ID, &args![spell]).u32();
+        e.call(ADD_CHUNK_WORD, &args![SIG_XNAM, id]);
+    }
+    e.call(SAVE_DATA, &args![this]);
+    if e.call(SAVE_SWAPS_ENDIAN, &args![]).bool() {
+        fn_0057f3a0(e, Ptr::new(base + WATER_DATA));
+    }
+    e.call(ADD_CHUNK_DATA, &args![SIG_DNAM, base + WATER_DATA, 0xc4u32]);
+    if e.call(SAVE_SWAPS_ENDIAN, &args![]).bool() {
+        fn_0057f3a0(e, Ptr::new(base + WATER_DATA));
+    }
+    e.with_stack(0xc, |e, ids| {
+        for i in 0..3 {
+            let form = e.mem.u32(base + WATER_WEATHER_CONTROL + 4 * i);
+            let id = if form == 0 {
+                0
+            } else {
+                e.call(FORM_ID, &args![form]).u32()
+            };
+            e.mem.set_u32(ids.addr() + 4 * i, id);
+        }
+        e.call(ADD_CHUNK_ARRAY_WORDS, &args![SIG_GNAM, ids, 3u32]);
+    });
+    e.call(CLOSE_FORM, &args![this]);
+}
+
+// Translated from 0057fda0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The material string's text (`ECX`; the engine map has no name): the
+/// text pointer of the `BSStringT` at +0x74 (`00559450`), `""`
+/// (`01011584`) when it has none.
+pub fn fn_0057fda0(e: &mut Engine, this: Ptr<TESWaterForm>) -> u32 {
+    let string = this.addr() + WATER_MATERIAL_ID;
+    if e.call(POINTER_GET, &args![string]).u32() == 0 {
+        return EMPTY_TEXT;
+    }
+    e.call(POINTER_GET, &args![string]).u32()
+}
+
+// Translated from 0057fde0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TESWaterForm`'s copy (`RET 4`: the source form; the engine map has no
+/// name): when the source casts to a `TESWaterForm`,
+/// `TESForm::CopyAllComponents`, the flags and alpha bytes, the 0xC4 shader
+/// data bytes, the `SNAM` word (`00407840` to `004febd0`), the spell
+/// ([`fn_0057fed0`] to [`fn_0057f890`]), the three weather forms, the
+/// noise texture (its vtable slot +8 with the source's) and the material
+/// text ([`fn_0057fda0`] to [`fn_0057fef0`]).
+pub fn fn_0057fde0(e: &mut Engine, this: Ptr<TESWaterForm>, source: u32) {
+    let other = e
+        .call(
+            RT_DYNAMIC_CAST,
+            &args![source, 0u32, TYPE_TES_FORM, TYPE_TES_WATER_FORM, 0u32],
+        )
+        .u32();
+    if other == 0 {
+        return;
+    }
+    let other_form: Ptr<TESWaterForm> = Ptr::new(other);
+    e.call(COPY_ALL_COMPONENTS, &args![this, other]);
+    let flags = e.get(other_form, TESWaterForm::cFlags);
+    e.set(this, TESWaterForm::cFlags, flags);
+    let alpha = e.get(other_form, TESWaterForm::cAlpha);
+    e.set(this, TESWaterForm::cAlpha, alpha);
+    let from = fn_0057eef0(e, other_form);
+    let to = fn_0057eef0(e, this);
+    e.call(MEMCPY, &args![to, from, 0xc4u32]);
+    let word = e.call(SNAM_GET, &args![other]).u32();
+    e.call(SNAM_STORE, &args![this, word]);
+    let spell = fn_0057fed0(e, other_form);
+    fn_0057f890(e, this, spell);
+    e.call(
+        MEMCPY,
+        &args![
+            this.addr() + WATER_WEATHER_CONTROL,
+            other + WATER_WEATHER_CONTROL,
+            0xcu32
+        ],
+    );
+    e.vcall(
+        this.addr() + WATER_NOISE_TEXTURE,
+        8,
+        &args![other + WATER_NOISE_TEXTURE],
+    );
+    let text = fn_0057fda0(e, other_form);
+    fn_0057fef0(e, this, text);
+}
+
+// Translated from 0057fed0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `pSpellItem` (+0x178; the engine map has no name).
+pub fn fn_0057fed0(e: &mut Engine, this: Ptr<TESWaterForm>) -> u32 {
+    e.get(this, TESWaterForm::pSpellItem)
+}
+
+// Translated from 0057fef0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Sets the material string (`RET 4`: the text; the engine map has no
+/// name): `004037f0` on the `BSStringT` at +0x74 with the text and 0; the
+/// callee's `EAX` is the answer.
+pub fn fn_0057fef0(e: &mut Engine, this: Ptr<TESWaterForm>, text: u32) -> u32 {
+    e.call(
+        STRING_SET,
+        &args![this.addr() + WATER_MATERIAL_ID, text, 0u32],
+    )
+    .u32()
+}
+
+// Translated from 0057ff10 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TESWaterForm`'s compare (`RET 4`: the other form; the engine map has no
+/// name): true (different) unless the other casts to a `TESWaterForm`,
+/// `TESForm::CompareAllComponents` finds nothing, the flags and alpha
+/// bytes, the shader data, the noise texture (its vtable slot +0xC), the
+/// `SNAM` words, the material texts (as pointers), the spells and the
+/// three weather forms all match.
+pub fn fn_0057ff10(e: &mut Engine, this: Ptr<TESWaterForm>, other: u32) -> bool {
+    let form = e
+        .call(
+            RT_DYNAMIC_CAST,
+            &args![other, 0u32, TYPE_TES_FORM, TYPE_TES_WATER_FORM, 0u32],
+        )
+        .u32();
+    if form == 0 {
+        return true;
+    }
+    let other_form: Ptr<TESWaterForm> = Ptr::new(form);
+    if e.call(COMPARE_ALL_COMPONENTS, &args![this, form]).bool() {
+        return true;
+    }
+    if e.get(this, TESWaterForm::cFlags) != e.get(other_form, TESWaterForm::cFlags) {
+        return true;
+    }
+    if e.get(this, TESWaterForm::cAlpha) != e.get(other_form, TESWaterForm::cAlpha) {
+        return true;
+    }
+    let theirs = fn_0057eef0(e, other_form);
+    let own = fn_0057eef0(e, this);
+    if e.call(MEMCMP, &args![own, theirs, 0xc4u32]).u32() != 0 {
+        return true;
+    }
+    if e.vcall(
+        this.addr() + WATER_NOISE_TEXTURE,
+        0xc,
+        &args![form + WATER_NOISE_TEXTURE],
+    )
+    .bool()
+    {
+        return true;
+    }
+    let own = e.call(SNAM_GET, &args![this]).u32();
+    if own != e.call(SNAM_GET, &args![form]).u32() {
+        return true;
+    }
+    if fn_0057fda0(e, this) != fn_0057fda0(e, other_form) {
+        return true;
+    }
+    if fn_0057fed0(e, this) != fn_0057fed0(e, other_form) {
+        return true;
+    }
+    e.call(
+        MEMCMP,
+        &args![
+            this.addr() + WATER_WEATHER_CONTROL,
+            form + WATER_WEATHER_CONTROL,
+            0xcu32
+        ],
+    )
+    .u32()
+        != 0
+}
+
+// Translated from 00580060 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TESWaterForm::GetDangerous` (Xbox PDB): bit 0 of the flags byte
+/// (+0x71).
+pub fn teswaterform_get_dangerous(e: &mut Engine, this: Ptr<TESWaterForm>) -> bool {
+    e.get(this, TESWaterForm::cFlags) & 1 != 0
+}
+
+// Translated from 005800e0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Copies the `NiPointer` at +0x17C into another (`RET 4`: the target
+/// pointer; the engine map has no name): `006e5cc0` on the target with the
+/// member; the callee's `EAX` is the answer.
+pub fn fn_005800e0(e: &mut Engine, this: Ptr<TESWaterForm>, target: u32) -> u32 {
+    e.call(
+        POINTER_COPY,
+        &args![target, this.addr() + WATER_POINTER_17C],
+    )
+    .u32()
+}
+
+// Translated from 00580130 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 00580130 - the exception-unwinding frame (FS:[0]) and the /GS cookie check (00ec408c) are not translated
+/// `TESWaterForm::GetPlaceableAutoWater` (Xbox PDB): the form's automatic
+/// `BGSPlaceableWater` (+0x180), made on the first call: 0x50 bytes
+/// (`00401000`), constructed (`004fc1b0`; null when the allocation fails),
+/// made temporary (`TESForm::SetTemporary`, `00484490`), its flags set
+/// (`004fc450(1)`, 0x400 on, `004fc3a0(1)`, 0x10 and 0x20 on), named
+/// "PlaceableAutoWater" (copied by `00406d00` into a stack buffer, given to
+/// vtable slot 0x134) and given this water form (`00589f50`).
+pub fn teswaterform_get_placeable_auto_water(e: &mut Engine, this: Ptr<TESWaterForm>) -> u32 {
+    let slot = this.addr() + WATER_PLACEABLE_AUTO;
+    if e.mem.u32(slot) == 0 {
+        let block = e.call(0x0040_1000, &args![0x50u32]).u32();
+        let water = if block != 0 {
+            e.call(0x004f_c1b0, &args![block]).u32()
+        } else {
+            0
+        };
+        e.mem.set_u32(slot, water);
+        let p = e.mem.u32(slot);
+        e.call(0x0048_4490, &args![p]);
+        let p = e.mem.u32(slot);
+        e.call(0x004f_c450, &args![p, 1u32]);
+        let p = e.mem.u32(slot);
+        fn_00580310(e, Ptr::new(p), 1);
+        let p = e.mem.u32(slot);
+        e.call(0x004f_c3a0, &args![p, 1u32]);
+        let p = e.mem.u32(slot);
+        fn_005802d0(e, Ptr::new(p), 1);
+        let p = e.mem.u32(slot);
+        fn_005802f0(e, Ptr::new(p), 1);
+        // The 0x10C-byte local at EBP-0x11C, of which 0x104 are passed on.
+        e.with_stack(0x10c, |e, name| {
+            e.call(
+                0x0040_6d00,
+                &args![name, 0x104u32, PLACEABLE_AUTO_WATER_NAME],
+            );
+            let p = e.mem.u32(slot);
+            e.vcall(p, 0x134, &args![name]);
+        });
+        let p = e.mem.u32(slot);
+        e.call(0x0058_9f50, &args![p, this]);
+    }
+    e.mem.u32(slot)
+}
+
+// Translated from 00580310 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Sets or clears the placeable water's flag 0x400 (`RET 4`: the byte; the
+/// engine map has no name): `004fc990` with 0x400 and the byte; the
+/// callee's `EAX` is the answer.
+pub fn fn_00580310(e: &mut Engine, this: Ptr, on: u8) -> u32 {
+    e.call(PLACEABLE_SET_FLAG, &args![this, 0x400u32, on]).u32()
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x0057_f3a0, fn_0057f3a0(Ptr)),
+        entry!(0x0057_fbf0, teswaterform_save(Ptr<TESWaterForm>)),
+        entry!(0x0057_fda0, fn_0057fda0(Ptr<TESWaterForm>) -> u32),
+        entry!(0x0057_fde0, fn_0057fde0(Ptr<TESWaterForm>, u32)),
+        entry!(0x0057_fed0, fn_0057fed0(Ptr<TESWaterForm>) -> u32),
+        entry!(0x0057_fef0, fn_0057fef0(Ptr<TESWaterForm>, u32) -> u32),
+        entry!(0x0057_ff10, fn_0057ff10(Ptr<TESWaterForm>, u32) -> bool),
+        entry!(
+            0x0058_0060,
+            teswaterform_get_dangerous(Ptr<TESWaterForm>) -> bool
+        ),
+        entry!(0x0058_00e0, fn_005800e0(Ptr<TESWaterForm>, u32) -> u32),
+        entry!(
+            0x0058_0130,
+            teswaterform_get_placeable_auto_water(Ptr<TESWaterForm>) -> u32
+        ),
+        entry!(0x0058_0310, fn_00580310(Ptr, u8) -> u32),
         entry!(0x0058_0080, fn_00580080(Ptr<TESWaterForm>) -> u32),
         entry!(0x0058_00a0, fn_005800a0(Ptr<TESWaterForm>) -> u32),
         entry!(0x0058_00c0, fn_005800c0(Ptr<TESWaterForm>, u32) -> u32),
@@ -1337,5 +1689,277 @@ mod la1_tests {
         let back = e.call(0x0058_00c0, &args![this, 0x7000u32]).u32();
         assert_eq!(back, this.addr() + 0x17c);
         assert_eq!(e.mem.u32(this.addr() + 0x17c), 0x7000);
+    }
+}
+
+#[cfg(test)]
+mod n085_tests {
+    use super::*;
+
+    fn calls(e: &Engine, address: u32) -> Vec<Vec<u32>> {
+        e.call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|(a, _)| *a == address)
+            .map(|(_, w)| w.clone())
+            .collect()
+    }
+
+    fn quiet(e: &mut Engine, addrs: &[u32]) {
+        for &addr in addrs {
+            e.register(addr, |_, _| Ret::default());
+        }
+    }
+
+    #[test]
+    fn shader_data_swap_skips_word_0x34() {
+        let mut e = Engine::new();
+        quiet(&mut e, &[SWAP_WORD]);
+        e.call_log = Some(vec![]);
+        e.call(0x0057_f3a0, &args![0x1000u32]);
+        let swapped: Vec<u32> = calls(&e, SWAP_WORD).iter().map(|a| a[0] - 0x1000).collect();
+        assert_eq!(swapped.len(), 48);
+        assert!(!swapped.contains(&0x34));
+        assert_eq!(swapped[12..14], [0x30, 0x38]);
+        assert_eq!(swapped.last(), Some(&0xc0));
+    }
+
+    #[test]
+    fn save_writes_the_chunks() {
+        let mut e = Engine::new();
+        let this: Ptr<TESWaterForm> = e.new_object();
+        let base = this.addr();
+        e.set(this, TESWaterForm::cAlpha, 0x4b);
+        e.set(this, TESWaterForm::cFlags, 3);
+        e.set(this, TESWaterForm::pWaterSound, 0x6000);
+        e.mem.set_u32(base + WATER_WEATHER_CONTROL + 4, 0x6100);
+        quiet(
+            &mut e,
+            &[
+                START_FORM,
+                CLOSE_FORM,
+                SAVE_DATA,
+                FULL_NAME_SAVE,
+                ADD_CHUNK_ARRAY,
+                ADD_CHUNK_BYTE,
+                ADD_CHUNK_WORD,
+                ADD_CHUNK_DATA,
+                SWAP_WORD,
+            ],
+        );
+        e.register(TEXTURE_NAME_LENGTH, |_, _| 5u32.into_ret());
+        e.register(STRING_TEXT_OR_EMPTY, |_, _| 0x7100u32.into_ret());
+        e.register(STRING_LENGTH, |_, _| 2u32.into_ret());
+        e.register(POINTER_GET, |_, _| 0x7200u32.into_ret());
+        e.register(FORM_ID, |_, a| (a[0] + 1).into_ret());
+        e.register(SAVE_SWAPS_ENDIAN, |_, _| 1u32.into_ret());
+        let ids = std::rc::Rc::new(std::cell::RefCell::new(vec![]));
+        let seen = ids.clone();
+        e.register_double(ADD_CHUNK_ARRAY_WORDS, move |e, a| {
+            seen.borrow_mut()
+                .extend((0..a[2]).map(|i| e.mem.u32(a[1] + 4 * i)));
+            Ret::default()
+        });
+        e.call_log = Some(vec![]);
+        e.call(0x0057_fbf0, &args![this]);
+        assert_eq!(
+            calls(&e, ADD_CHUNK_ARRAY),
+            vec![vec![SIG_NNAM, 0x7100, 6], vec![SIG_MNAM, 0x7200, 3]]
+        );
+        assert_eq!(
+            calls(&e, ADD_CHUNK_BYTE),
+            vec![vec![SIG_ANAM, 0x4b], vec![SIG_FNAM, 3]]
+        );
+        // Only the sound is set.
+        assert_eq!(calls(&e, ADD_CHUNK_WORD), vec![vec![SIG_SNAM, 0x6001]]);
+        assert_eq!(
+            calls(&e, ADD_CHUNK_DATA),
+            vec![vec![SIG_DNAM, base + 0x84, 0xc4]]
+        );
+        assert_eq!(calls(&e, SWAP_WORD).len(), 96);
+        assert_eq!(*ids.borrow(), vec![0, 0x6101, 0]);
+        assert_eq!(calls(&e, CLOSE_FORM), vec![vec![base]]);
+    }
+
+    #[test]
+    fn material_text_falls_back_to_empty() {
+        let mut e = Engine::new();
+        let this: Ptr<TESWaterForm> = e.new_object();
+        e.register(POINTER_GET, |e, a| e.mem.u32(a[0]).into_ret());
+        assert_eq!(e.call(0x0057_fda0, &args![this]).u32(), EMPTY_TEXT);
+        e.mem.set_u32(this.addr() + 0x74, 0x7300);
+        assert_eq!(e.call(0x0057_fda0, &args![this]).u32(), 0x7300);
+    }
+
+    /// Two water forms with a shared noise texture vtable (+8 copies, +0xC
+    /// compares as `compare` says).
+    fn pair(e: &mut Engine, compare: u32) -> (Ptr<TESWaterForm>, Ptr<TESWaterForm>) {
+        let a: Ptr<TESWaterForm> = e.new_object();
+        let b: Ptr<TESWaterForm> = e.new_object();
+        let vtable = e.mem.alloc(0x10);
+        e.mem.set_u32(vtable + 8, 0x7900_0008);
+        e.mem.set_u32(vtable + 0xc, 0x7900_000c);
+        for form in [a, b] {
+            e.mem.set_u32(form.addr() + 0x64, vtable);
+        }
+        quiet(e, &[0x7900_0008]);
+        e.register_double(0x7900_000c, move |_, _| compare.into_ret());
+        e.register(RT_DYNAMIC_CAST, |_, x| x[0].into_ret());
+        e.register(POINTER_GET, |e, x| e.mem.u32(x[0]).into_ret());
+        e.register(SNAM_GET, |e, x| e.mem.u32(x[0] + 0x40).into_ret());
+        e.register(MEMCMP, |e, x| {
+            let differs = (0..x[2]).any(|i| e.mem.u8(x[0] + i) != e.mem.u8(x[1] + i));
+            u32::from(differs).into_ret()
+        });
+        (a, b)
+    }
+
+    #[test]
+    fn copy_takes_every_part() {
+        let mut e = Engine::new();
+        let (this, other) = pair(&mut e, 0);
+        e.set(other, TESWaterForm::cFlags, 1);
+        e.set(other, TESWaterForm::cAlpha, 0x20);
+        e.set(other, TESWaterForm::pSpellItem, 0x6500);
+        e.mem.set_u32(other.addr() + 0x40, 0x99);
+        e.mem.set_u32(other.addr() + 0x74, 0x7300);
+        quiet(
+            &mut e,
+            &[COPY_ALL_COMPONENTS, MEMCPY, SNAM_STORE, STRING_SET],
+        );
+        e.call_log = Some(vec![]);
+        e.call(0x0057_fde0, &args![this, other]);
+        let (a, b) = (this.addr(), other.addr());
+        assert_eq!(e.get(this, TESWaterForm::cFlags), 1);
+        assert_eq!(e.get(this, TESWaterForm::cAlpha), 0x20);
+        assert_eq!(
+            calls(&e, MEMCPY),
+            vec![
+                vec![a + 0x84, b + 0x84, 0xc4],
+                vec![a + 0x148, b + 0x148, 0xc]
+            ]
+        );
+        assert_eq!(calls(&e, SNAM_STORE), vec![vec![a, 0x99]]);
+        assert_eq!(e.get(this, TESWaterForm::pSpellItem), 0x6500);
+        assert_eq!(calls(&e, 0x7900_0008), vec![vec![a + 0x64, b + 0x64]]);
+        assert_eq!(calls(&e, STRING_SET), vec![vec![a + 0x74, 0x7300, 0]]);
+        // Not a water form: nothing.
+        e.register(RT_DYNAMIC_CAST, |_, _| Ret::default());
+        e.call_log = Some(vec![]);
+        e.call(0x0057_fde0, &args![this, other]);
+        assert!(calls(&e, COPY_ALL_COMPONENTS).is_empty());
+    }
+
+    #[test]
+    fn compare_checks_every_part_in_order() {
+        let mut e = Engine::new();
+        let (this, other) = pair(&mut e, 0);
+        e.register(COMPARE_ALL_COMPONENTS, |_, _| Ret::default());
+        assert!(!e.call(0x0057_ff10, &args![this, other]).bool());
+        type Change = fn(&mut Engine, Ptr<TESWaterForm>);
+        let changes: [Change; 6] = [
+            |e, f| e.set(f, TESWaterForm::cFlags, 1),
+            |e, f| e.set(f, TESWaterForm::cAlpha, 1),
+            |e, f| e.mem.set_u8(f.addr() + 0x90, 1),
+            |e, f| e.mem.set_u32(f.addr() + 0x40, 7),
+            |e, f| e.set(f, TESWaterForm::pSpellItem, 7),
+            |e, f| e.mem.set_u32(f.addr() + 0x150, 7),
+        ];
+        for change in changes {
+            let mut e = Engine::new();
+            let (this, other) = pair(&mut e, 0);
+            e.register(COMPARE_ALL_COMPONENTS, |_, _| Ret::default());
+            change(&mut e, other);
+            assert!(e.call(0x0057_ff10, &args![this, other]).bool());
+        }
+        // A different material text pointer.
+        let mut e = Engine::new();
+        let (this, other) = pair(&mut e, 0);
+        e.register(COMPARE_ALL_COMPONENTS, |_, _| Ret::default());
+        e.mem.set_u32(other.addr() + 0x74, 0x7300);
+        assert!(e.call(0x0057_ff10, &args![this, other]).bool());
+        // The noise texture differs; the components differ; no water form.
+        let mut e = Engine::new();
+        let (this, other) = pair(&mut e, 1);
+        e.register(COMPARE_ALL_COMPONENTS, |_, _| Ret::default());
+        assert!(e.call(0x0057_ff10, &args![this, other]).bool());
+        e.register(0x7900_000c, |_, _| Ret::default());
+        e.register(COMPARE_ALL_COMPONENTS, |_, _| 1u32.into_ret());
+        assert!(e.call(0x0057_ff10, &args![this, other]).bool());
+        e.register(RT_DYNAMIC_CAST, |_, _| Ret::default());
+        assert!(e.call(0x0057_ff10, &args![this, other]).bool());
+    }
+
+    #[test]
+    fn small_accessors() {
+        let mut e = Engine::new();
+        let this: Ptr<TESWaterForm> = e.new_object();
+        e.set(this, TESWaterForm::pSpellItem, 0x6500);
+        assert_eq!(e.call(0x0057_fed0, &args![this]).u32(), 0x6500);
+        assert!(!e.call(0x0058_0060, &args![this]).bool());
+        e.set(this, TESWaterForm::cFlags, 0xff);
+        assert!(e.call(0x0058_0060, &args![this]).bool());
+        e.set(this, TESWaterForm::cFlags, 0xfe);
+        assert!(!e.call(0x0058_0060, &args![this]).bool());
+        e.register(STRING_SET, |_, a| (a[0] + 1).into_ret());
+        assert_eq!(
+            e.call(0x0057_fef0, &args![this, 0x7300u32]).u32(),
+            this.addr() + 0x75
+        );
+        e.register(POINTER_COPY, |_, a| (a[0] ^ a[1]).into_ret());
+        assert_eq!(
+            e.call(0x0058_00e0, &args![this, 0x5000u32]).u32(),
+            0x5000 ^ (this.addr() + 0x17c)
+        );
+        e.register(PLACEABLE_SET_FLAG, |_, a| (a[1] + a[2]).into_ret());
+        assert_eq!(
+            e.call(0x0058_0310, &args![0x5000u32, 0x101u32]).u32(),
+            0x401
+        );
+    }
+
+    #[test]
+    fn placeable_auto_water_is_made_once() {
+        let mut e = Engine::new();
+        let this: Ptr<TESWaterForm> = e.new_object();
+        let water = e.mem.alloc(0x50);
+        let vtable = e.mem.alloc(0x138);
+        e.mem.set_u32(water, vtable);
+        e.mem.set_u32(vtable + 0x134, 0x7a00_0134);
+        e.register(0x0040_1000, |_, _| 0x5000u32.into_ret());
+        e.register_double(0x004f_c1b0, move |_, _| water.into_ret());
+        quiet(
+            &mut e,
+            &[
+                0x0048_4490,
+                0x004f_c450,
+                0x004f_c3a0,
+                PLACEABLE_SET_FLAG,
+                0x0040_6d00,
+                0x7a00_0134,
+                0x0058_9f50,
+            ],
+        );
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x0058_0130, &args![this]).u32(), water);
+        assert_eq!(e.mem.u32(this.addr() + 0x180), water);
+        assert_eq!(calls(&e, 0x004f_c1b0), vec![vec![0x5000]]);
+        assert_eq!(
+            calls(&e, PLACEABLE_SET_FLAG),
+            vec![
+                vec![water, 0x400, 1],
+                vec![water, 0x10, 1],
+                vec![water, 0x20, 1]
+            ]
+        );
+        let named = calls(&e, 0x0040_6d00);
+        assert_eq!(named[0][1..], [0x104, PLACEABLE_AUTO_WATER_NAME]);
+        assert_eq!(calls(&e, 0x7a00_0134), vec![vec![water, named[0][0]]]);
+        assert_eq!(calls(&e, 0x0058_9f50), vec![vec![water, this.addr()]]);
+        // The second call answers the same water.
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x0058_0130, &args![this]).u32(), water);
+        assert!(calls(&e, 0x0040_1000).is_empty());
     }
 }

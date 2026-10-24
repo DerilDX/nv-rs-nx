@@ -97,9 +97,52 @@ pub fn tes_region_data_load_region_data(
     true
 }
 
+/// `memset` (`00403d30`, cdecl).
+const MEMSET: u32 = 0x0040_3d30;
+/// `004f1540` (`thiscall`, this unit, untranslated): the byte stored at
+/// +4 of the saved header.
+const HEADER_BYTE_004F1540: u32 = 0x004f_1540;
+/// `005bb4d0` (`thiscall`): the byte stored at +5 of the saved header.
+const HEADER_BYTE_005BB4D0: u32 = 0x005b_b4d0;
+/// `00401500` (no argument): whether saved data is byte-swapped.
+const SAVE_SWAPS: u32 = 0x0040_1500;
+/// `00503210` (`thiscall` on the word): swaps the word's bytes.
+const SWAP_WORD: u32 = 0x0050_3210;
+/// `TESForm::__AddChunkData` (`00485990`, cdecl: chunk, data, size).
+const ADD_CHUNK_DATA: u32 = 0x0048_5990;
+/// `RDAT`.
+const CHUNK_RDAT: u32 = 0x5441_4452;
+
+// Translated from 004f14c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TESRegionData::Save` (Xbox PDB; `thiscall`, no stack word): an 8-byte
+/// header on the stack, zeroed (`memset`): the data's type (vtable `+0x10`)
+/// at +0, the bytes from `004f1540` and `005bb4d0` at +4 and +5. When
+/// `00401500` answers true the first word is swapped (`00503210`) before
+/// the `RDAT` chunk is added (`TESForm::__AddChunkData`, 8 bytes) and
+/// swapped back after.
+pub fn tes_region_data_save(e: &mut Engine, this: Ptr<TESRegionData>) {
+    e.with_stack(8, |e, header| {
+        e.call(MEMSET, &args![header, 0u32, 8u32]);
+        let kind = e.vcall(this.addr(), 0x10, &args![]).u32();
+        e.mem.set_u32(header.addr(), kind);
+        let first = e.call(HEADER_BYTE_004F1540, &args![this]).u8();
+        e.mem.set_u8(header.addr() + 4, first);
+        let second = e.call(HEADER_BYTE_005BB4D0, &args![this]).u8();
+        e.mem.set_u8(header.addr() + 5, second);
+        if e.call(SAVE_SWAPS, &args![]).bool() {
+            e.call(SWAP_WORD, &args![header]);
+        }
+        e.call(ADD_CHUNK_DATA, &args![CHUNK_RDAT, header, 8u32]);
+        if e.call(SAVE_SWAPS, &args![]).bool() {
+            e.call(SWAP_WORD, &args![header]);
+        }
+    });
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x004f_14c0, tes_region_data_save(Ptr<TESRegionData>)),
         entry!(0x004f_1430, tes_region_data_scalar_deleting_destructor(Ptr, u32) -> Ptr),
         entry!(
             0x004f_1400,
@@ -212,5 +255,59 @@ mod tests {
             }
             assert_eq!(calls, expected);
         }
+    }
+}
+
+#[cfg(test)]
+mod n072_tests {
+    use super::*;
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    fn save(swaps: bool) -> (Vec<u8>, Vec<u32>) {
+        let mut e = Engine::new();
+        e.put_vtable(0x0150_0000, &[0, 0, 0, 0, 0x0150_1000]);
+        e.register(0x0150_1000, |_, _| 0x0000_0102u32.into_ret());
+        let this: Ptr<TESRegionData> = e.new_object();
+        e.mem.set_u32(this.addr(), 0x0150_0000);
+        e.register(MEMSET, |e, a| {
+            for i in 0..a[2] {
+                e.mem.set_u8(a[0] + i, a[1] as u8);
+            }
+            Ret::default()
+        });
+        e.register(HEADER_BYTE_004F1540, |_, _| 0x1107u32.into_ret());
+        e.register(HEADER_BYTE_005BB4D0, |_, _| 0x2208u32.into_ret());
+        if swaps {
+            e.register(SAVE_SWAPS, |_, _| 1u32.into_ret());
+        } else {
+            e.register(SAVE_SWAPS, |_, _| 0u32.into_ret());
+        }
+        e.register(SWAP_WORD, |e, a| {
+            let v = e.mem.u32(a[0]);
+            e.mem.set_u32(a[0], v.swap_bytes());
+            Ret::default()
+        });
+        let added: Rc<RefCell<(Vec<u8>, Vec<u32>)>> = Rc::default();
+        let log = added.clone();
+        e.register_double(ADD_CHUNK_DATA, move |e, a| {
+            *log.borrow_mut() = (e.mem.bytes(a[1], a[2]), vec![a[0], a[2]]);
+            Ret::default()
+        });
+        e.call(0x004f_14c0, &args![this]);
+        added.take()
+    }
+
+    #[test]
+    fn save_adds_the_rdat_header() {
+        let (bytes, words) = save(false);
+        assert_eq!(bytes, vec![2, 1, 0, 0, 7, 8, 0, 0]);
+        assert_eq!(words, vec![CHUNK_RDAT, 8]);
+    }
+
+    #[test]
+    fn save_swaps_the_type_word_when_the_save_swaps() {
+        let (bytes, _) = save(true);
+        assert_eq!(bytes, vec![0, 0, 1, 2, 7, 8, 0, 0]);
     }
 }

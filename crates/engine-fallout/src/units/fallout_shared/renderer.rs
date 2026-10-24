@@ -2976,9 +2976,118 @@ pub fn fn_004dcef0(e: &mut Engine) {
     });
 }
 
+/// The allocator (`00401000`, cdecl, one word) and the free (`00401030`).
+const ALLOCATE_00401000: u32 = 0x0040_1000;
+const FREE_00401030: u32 = 0x0040_1030;
+/// The destructor body of `SettingT<INIPrefSettingCollection>` (engine map
+/// name of its scalar deleting destructor, `004de3f0`).
+const PREF_SETTING_DESTRUCTOR_004DE420: u32 = 0x004d_e420;
+
+// Translated from 004dc6e0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The window position settings (cdecl, two words; the engine map has no
+/// name): unless the game runs full screen (`00446e10`), `iLocation X` and
+/// `iLocation Y` (`011c75d4`, `011c7654`) take the two words (`0045ce80`).
+pub fn fn_004dc6e0(e: &mut Engine, x: u32, y: u32) {
+    if e.call(FULL_SCREEN_MODE, &args![]).bool() {
+        return;
+    }
+    e.call(SETTING_INT_SET, &args![I_LOCATION_X, x]);
+    e.call(SETTING_INT_SET, &args![I_LOCATION_Y, y]);
+}
+
+// Translated from 004dd240 (decompiled, FalloutNV.exe 1.4.0.525)
+/// An allocation callback (stdcall, one word: the size; the engine map has
+/// no name): the allocator's block (`00401000`).
+pub fn fn_004dd240(e: &mut Engine, size: u32) -> u32 {
+    e.call(ALLOCATE_00401000, &args![size]).u32()
+}
+
+// Translated from 004dd270 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The matching free callback (stdcall, one word: the address of a block
+/// pointer; the engine map has no name): frees the block (`00401030`) and
+/// clears the pointer when it is set.
+pub fn fn_004dd270(e: &mut Engine, block: Ptr) {
+    let address = e.mem.u32(block.addr());
+    if address != 0 {
+        e.call(FREE_00401030, &args![address]);
+        e.mem.set_u32(block.addr(), 0);
+    }
+}
+
+// Translated from 004de0c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The Eyefinity total width (`float` at `0118948c`) in `ST0` (no map
+/// name; a signalling NaN comes out quiet).
+pub fn fn_004de0c0(e: &mut Engine) -> f32 {
+    let bits = e.global::<u32>(EYEFINITY_TOTAL_WIDTH_0118948C);
+    f32::from_bits(x87_quiet_bits(bits))
+}
+
+// Translated from 004de0d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The Eyefinity total height (`float` at `01189490`) in `ST0` (no map
+/// name).
+pub fn fn_004de0d0(e: &mut Engine) -> f32 {
+    let bits = e.global::<u32>(EYEFINITY_TOTAL_HEIGHT_01189490);
+    f32::from_bits(x87_quiet_bits(bits))
+}
+
+// Translated from 004de0f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The Eyefinity view height (`float` at `01189498`) in `ST0` (no map
+/// name).
+pub fn fn_004de0f0(e: &mut Engine) -> f32 {
+    let bits = e.global::<u32>(EYEFINITY_VIEW_HEIGHT_01189498);
+    f32::from_bits(x87_quiet_bits(bits))
+}
+
+// Translated from 004de2b0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// A bool setting's store (`ECX` the setting, `RET 4`: the byte; the
+/// engine map has no name): the byte at +4 of a non-null setting. Returns
+/// the setting.
+pub fn fn_004de2b0(e: &mut Engine, this: Ptr, value: u8) -> Ptr {
+    if !this.is_null() {
+        e.mem.set_u8(this.addr() + 4, value);
+    }
+    this
+}
+
+// Translated from 004de2d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The bool setting set (`ECX` the setting, `RET 4`: the byte; the engine
+/// map has no name): [`fn_004de2b0`] with the byte. Returns the setting.
+pub fn fn_004de2d0(e: &mut Engine, this: Ptr, value: u8) -> Ptr {
+    fn_004de2b0(e, this, value);
+    this
+}
+
+// Translated from 004de3f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `SettingT<INIPrefSettingCollection>` scalar deleting destructor (engine
+/// map name; `RET 4`: the flags): the destructor body (`004de420`), then
+/// the free (`00401030`) when bit 0 is set. Returns the setting.
+pub fn setting_t_ini_pref_setting_collection_scalar_deleting_destructor(
+    e: &mut Engine,
+    this: Ptr,
+    flags: u32,
+) -> Ptr {
+    e.call(PREF_SETTING_DESTRUCTOR_004DE420, &args![this]);
+    if flags & 1 != 0 {
+        e.call(FREE_00401030, &args![this]);
+    }
+    this
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x004d_c6e0, fn_004dc6e0(u32, u32)),
+        entry!(0x004d_d240, fn_004dd240(u32) -> u32),
+        entry!(0x004d_d270, fn_004dd270(Ptr)),
+        entry!(0x004d_e0c0, fn_004de0c0() -> f32),
+        entry!(0x004d_e0d0, fn_004de0d0() -> f32),
+        entry!(0x004d_e0f0, fn_004de0f0() -> f32),
+        entry!(0x004d_e2b0, fn_004de2b0(Ptr, u8) -> Ptr),
+        entry!(0x004d_e2d0, fn_004de2d0(Ptr, u8) -> Ptr),
+        entry!(
+            0x004d_e3f0,
+            setting_t_ini_pref_setting_collection_scalar_deleting_destructor(Ptr, u32) -> Ptr
+        ),
         entry!(0x004d_e0e0, fn_004de0e0() -> f32),
         entry!(0x004d_cef0, fn_004dcef0()),
         entry!(0x004d_c5c0, fn_004dc5c0()),
@@ -5597,6 +5706,101 @@ mod la1_tests {
                 [word(at), word(at + 1), word(at + 2), word(at + 3)],
                 [0, 257, 32896, 65535]
             );
+        }
+    }
+}
+
+#[cfg(test)]
+mod n085_tests {
+    use super::*;
+
+    fn calls(e: &Engine, address: u32) -> Vec<Vec<u32>> {
+        e.call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|(a, _)| *a == address)
+            .map(|(_, w)| w.clone())
+            .collect()
+    }
+
+    #[test]
+    fn window_position_is_kept_only_windowed() {
+        for full_screen in [false, true] {
+            let mut e = Engine::new();
+            e.register_double(FULL_SCREEN_MODE, move |_, _| {
+                u32::from(full_screen).into_ret()
+            });
+            e.register(SETTING_INT_SET, |_, _| Ret::default());
+            e.call_log = Some(vec![]);
+            e.call(0x004d_c6e0, &args![10u32, 20u32]);
+            if full_screen {
+                assert!(calls(&e, SETTING_INT_SET).is_empty());
+            } else {
+                assert_eq!(
+                    calls(&e, SETTING_INT_SET),
+                    vec![vec![I_LOCATION_X, 10], vec![I_LOCATION_Y, 20]]
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn allocation_callbacks_allocate_and_free() {
+        let mut e = Engine::new();
+        e.register(ALLOCATE_00401000, |_, a| (a[0] + 0x1000).into_ret());
+        e.register(FREE_00401030, |_, _| Ret::default());
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x004d_d240, &args![0x624u32]).u32(), 0x1624);
+        let slot = e.mem.alloc(4);
+        e.call(0x004d_d270, &args![slot]);
+        assert!(calls(&e, FREE_00401030).is_empty());
+        e.mem.set_u32(slot, 0x5000);
+        e.call(0x004d_d270, &args![slot]);
+        assert_eq!(calls(&e, FREE_00401030), vec![vec![0x5000]]);
+        assert_eq!(e.mem.u32(slot), 0);
+    }
+
+    #[test]
+    fn eyefinity_floats_come_back_quiet() {
+        let mut e = Engine::new();
+        e.map(0x0118_9000, 0x1000);
+        e.set_global(EYEFINITY_TOTAL_WIDTH_0118948C, 5760.0f32);
+        e.set_global(EYEFINITY_TOTAL_HEIGHT_01189490, 1080.0f32);
+        e.set_global(EYEFINITY_VIEW_HEIGHT_01189498, 0x7f80_0001u32);
+        assert_eq!(e.call(0x004d_e0c0, &args![]).f32(), 5760.0);
+        assert_eq!(e.call(0x004d_e0d0, &args![]).f32(), 1080.0);
+        assert_eq!(e.call(0x004d_e0f0, &args![]).f32().to_bits(), 0x7fc0_0001);
+    }
+
+    #[test]
+    fn bool_setting_store_and_set() {
+        let mut e = Engine::new();
+        let setting = e.mem.alloc(8);
+        assert_eq!(
+            e.call(0x004d_e2d0, &args![setting, 0x101u32]).u32(),
+            setting
+        );
+        assert_eq!(e.mem.u8(setting + 4), 1);
+        assert_eq!(e.call(0x004d_e2b0, &args![setting, 0u32]).u32(), setting);
+        assert_eq!(e.mem.u8(setting + 4), 0);
+        // A null setting is left alone.
+        assert_eq!(e.call(0x004d_e2b0, &args![0u32, 1u32]).u32(), 0);
+    }
+
+    #[test]
+    fn pref_setting_scalar_deleting_destructor() {
+        for flags in [0u32, 1] {
+            let mut e = Engine::new();
+            e.register(PREF_SETTING_DESTRUCTOR_004DE420, |_, _| Ret::default());
+            e.register(FREE_00401030, |_, _| Ret::default());
+            e.call_log = Some(vec![]);
+            assert_eq!(e.call(0x004d_e3f0, &args![0x7000u32, flags]).u32(), 0x7000);
+            assert_eq!(
+                calls(&e, PREF_SETTING_DESTRUCTOR_004DE420),
+                vec![vec![0x7000]]
+            );
+            assert_eq!(calls(&e, FREE_00401030).len(), flags as usize);
         }
     }
 }

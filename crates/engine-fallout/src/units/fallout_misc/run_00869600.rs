@@ -697,9 +697,171 @@ fn deactivate(e: &mut Engine) {
     }
 }
 
+/// The shared body of the eight scalar deleting destructors: `destroy` on
+/// `this`, then `operator delete` (`00401030`) on flag bit 0. Answers
+/// `this`.
+fn scalar_delete(e: &mut Engine, this: Ptr, flags: u32, destroy: fn(&mut Engine, Ptr)) -> Ptr {
+    destroy(e, this);
+    if flags & 1 != 0 {
+        e.call(MEMORY_FREE, &args![this]);
+    }
+    this
+}
+
+// Translated from 008699f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Scalar deleting destructor (`thiscall`, `RET 4`): `00869a20`, then
+/// deleted on flag bit 0.
+pub fn fn_008699f0(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    scalar_delete(e, this, flags, fn_00869a20)
+}
+
+// Translated from 00869a70 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Scalar deleting destructor (`thiscall`, `RET 4`): `00869a40`, then
+/// deleted on flag bit 0.
+pub fn fn_00869a70(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    scalar_delete(e, this, flags, fn_00869a40)
+}
+
+// Translated from 00869b40 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Scalar deleting destructor (`thiscall`, `RET 4`): `00869b70`, then
+/// deleted on flag bit 0.
+pub fn fn_00869b40(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    scalar_delete(e, this, flags, fn_00869b70)
+}
+
+// Translated from 00869bc0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Scalar deleting destructor (`thiscall`, `RET 4`): `00869b90`, then
+/// deleted on flag bit 0.
+pub fn fn_00869bc0(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    scalar_delete(e, this, flags, fn_00869b90)
+}
+
+// Translated from 00869c90 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Scalar deleting destructor (`thiscall`, `RET 4`): `00869cc0`, then
+/// deleted on flag bit 0.
+pub fn fn_00869c90(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    scalar_delete(e, this, flags, fn_00869cc0)
+}
+
+// Translated from 00869d10 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Scalar deleting destructor (`thiscall`, `RET 4`): `00869ce0`, then
+/// deleted on flag bit 0.
+pub fn fn_00869d10(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    scalar_delete(e, this, flags, fn_00869ce0)
+}
+
+// Translated from 00869de0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Scalar deleting destructor (`thiscall`, `RET 4`): `00869e10`, then
+/// deleted on flag bit 0.
+pub fn fn_00869de0(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    scalar_delete(e, this, flags, fn_00869e10)
+}
+
+// Translated from 00869e60 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Scalar deleting destructor (`thiscall`, `RET 4`): `00869e30`, then
+/// deleted on flag bit 0.
+pub fn fn_00869e60(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    scalar_delete(e, this, flags, fn_00869e30)
+}
+
+/// The callees of the shut-down callback `00869f30`, in its order.
+const MODEL_LOADER_INSTANCE: u32 = 0x0043_c4b0;
+const MODEL_LOADER_SHUTDOWN_00483710: u32 = 0x0048_3710;
+const SHUTDOWN_00867090: u32 = 0x0086_7090;
+/// The `IOManager` pointer (`01202d98`) and its calls `00c3e310`,
+/// `00877d30`, `00c3e340`.
+const IO_MANAGER: u32 = 0x0120_2d98;
+const IO_MANAGER_00C3E310: u32 = 0x00c3_e310;
+const IO_MANAGER_00877D30: u32 = 0x0087_7d30;
+const IO_MANAGER_00C3E340: u32 = 0x00c3_e340;
+/// The object at `011c3b3c` and its call `00449030`.
+const OBJECT_011C3B3C: u32 = 0x011c_3b3c;
+const OBJECT_00449030: u32 = 0x0044_9030;
+/// `00aff100` (no argument): an instance; `00b01130` runs on it, then its
+/// vtable `+8`.
+const INSTANCE_00AFF100: u32 = 0x00af_f100;
+const INSTANCE_00B01130: u32 = 0x00b0_1130;
+/// `FalloutAudioMedia::MediaClose` (`008304a0`), `0082f9c0`,
+/// `BSAudio::QInstance` (`00453a70`), `0078d050`, `0070ad30`,
+/// `BSTaskletManager::QInstance` (`00b00a00`): all without arguments.
+const MEDIA_CLOSE: u32 = 0x0083_04a0;
+const AUDIO_MEDIA_0082F9C0: u32 = 0x0082_f9c0;
+const AUDIO_INSTANCE: u32 = 0x0045_3a70;
+const LOADING_MENU_0078D050: u32 = 0x0078_d050;
+const INTERFACE_0070AD30: u32 = 0x0070_ad30;
+const TASKLET_MANAGER_INSTANCE: u32 = 0x00b0_0a00;
+
+// Translated from 00869f30 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (cdecl, one word; `main` registers it as a
+/// callback with `004fb090`): for `kind` 2 only, shuts systems down in
+/// order: the model loader (`0043c4b0`, `00483710` when there is one),
+/// `00867090`, the `IOManager` (`00c3e310` when there is one), `00449030`
+/// on `011c3b3c`, `00877d30` and `00c3e340` on the `IOManager`, `00b01130`
+/// and vtable `+8` on `00aff100`'s instance, `MediaClose`, `0082f9c0`, the
+/// audio instance's vtable `+8`, `0078d050`, `0070ad30`, the tasklet
+/// manager's vtable `+8`, and again `00c3e310` on the `IOManager`.
+pub fn fn_00869f30(e: &mut Engine, kind: u32) {
+    if kind != 2 {
+        return;
+    }
+    if e.call(MODEL_LOADER_INSTANCE, &args![]).u32() != 0 {
+        let loader = e.call(MODEL_LOADER_INSTANCE, &args![]).u32();
+        e.call(MODEL_LOADER_SHUTDOWN_00483710, &args![loader]);
+    }
+    e.call(SHUTDOWN_00867090, &args![]);
+    if e.global::<u32>(IO_MANAGER) != 0 {
+        let io = e.global::<u32>(IO_MANAGER);
+        e.call(IO_MANAGER_00C3E310, &args![io]);
+    }
+    let object = e.global::<u32>(OBJECT_011C3B3C);
+    e.call(OBJECT_00449030, &args![object]);
+    let io = e.global::<u32>(IO_MANAGER);
+    e.call(IO_MANAGER_00877D30, &args![io]);
+    let io = e.global::<u32>(IO_MANAGER);
+    e.call(IO_MANAGER_00C3E340, &args![io]);
+    let instance = e.call(INSTANCE_00AFF100, &args![]).u32();
+    e.call(INSTANCE_00B01130, &args![instance]);
+    let instance = e.call(INSTANCE_00AFF100, &args![]).u32();
+    e.vcall(instance, 8, &args![]);
+    e.call(MEDIA_CLOSE, &args![]);
+    e.call(AUDIO_MEDIA_0082F9C0, &args![]);
+    let audio = e.call(AUDIO_INSTANCE, &args![]).u32();
+    e.vcall(audio, 8, &args![]);
+    e.call(LOADING_MENU_0078D050, &args![]);
+    e.call(INTERFACE_0070AD30, &args![]);
+    let tasklets = e.call(TASKLET_MANAGER_INSTANCE, &args![]).u32();
+    e.vcall(tasklets, 8, &args![]);
+    if e.global::<u32>(IO_MANAGER) != 0 {
+        let io = e.global::<u32>(IO_MANAGER);
+        e.call(IO_MANAGER_00C3E310, &args![io]);
+    }
+}
+
+// Translated from 0086a020 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (no stack word read, plain `RET`; `main`
+/// registers it as a callback with `006ecd40`): the model loader's vtable
+/// `+0x8c` when there is one (`0043c4b0`); answers 0.
+pub fn fn_0086a020(e: &mut Engine) -> u32 {
+    if e.call(MODEL_LOADER_INSTANCE, &args![]).u32() != 0 {
+        let loader = e.call(MODEL_LOADER_INSTANCE, &args![]).u32();
+        e.vcall(loader, 0x8c, &args![]);
+    }
+    0
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x0086_99f0, fn_008699f0(Ptr, u32) -> Ptr),
+        entry!(0x0086_9a70, fn_00869a70(Ptr, u32) -> Ptr),
+        entry!(0x0086_9b40, fn_00869b40(Ptr, u32) -> Ptr),
+        entry!(0x0086_9bc0, fn_00869bc0(Ptr, u32) -> Ptr),
+        entry!(0x0086_9c90, fn_00869c90(Ptr, u32) -> Ptr),
+        entry!(0x0086_9d10, fn_00869d10(Ptr, u32) -> Ptr),
+        entry!(0x0086_9de0, fn_00869de0(Ptr, u32) -> Ptr),
+        entry!(0x0086_9e60, fn_00869e60(Ptr, u32) -> Ptr),
+        entry!(0x0086_9f30, fn_00869f30(u32)),
+        entry!(0x0086_a020, fn_0086a020() -> u32),
         entry!(0x0086_9600, fn_00869600(Ptr) -> u32),
         entry!(0x0086_9640, fn_00869640(Ptr<NiTArray>, u32, u32) -> u32),
         entry!(0x0086_9680, fn_00869680(Ptr<NiTArray>, u32, Ptr) -> u32),
@@ -1434,5 +1596,126 @@ mod window_proc_tests {
         );
         let (mut e, _, _) = fixture(true, &[(DEF_WINDOW_PROC, 9)]);
         assert_eq!(window_proc(&mut e, 0x112, 0xf140, 0), 9);
+    }
+}
+
+#[cfg(test)]
+mod n072_tests {
+    use super::*;
+
+    fn calls(e: &Engine, address: u32) -> Vec<Vec<u32>> {
+        e.call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|c| c.0 == address)
+            .map(|c| c.1.clone())
+            .collect()
+    }
+
+    #[test]
+    fn the_scalar_deleting_destructors_store_their_vtables() {
+        for (address, vtable) in [
+            (0x0086_99f0u32, ARRAY_VTABLE_REFERENCES),
+            (0x0086_9a70, ARRAY_VTABLE_REFERENCES),
+            (0x0086_9b40, ARRAY_VTABLE_BIPED_ANIMS),
+            (0x0086_9bc0, ARRAY_VTABLE_BIPED_ANIMS),
+            (0x0086_9c90, ARRAY_VTABLE_ANIMATIONS),
+            (0x0086_9d10, ARRAY_VTABLE_ANIMATIONS),
+            (0x0086_9de0, ARRAY_VTABLE_TEMP_EFFECTS),
+            (0x0086_9e60, ARRAY_VTABLE_TEMP_EFFECTS),
+        ] {
+            for flags in [0u32, 1] {
+                let mut e = Engine::new();
+                e.register(MEMORY_FREE, |_, _| Ret::default());
+                e.register(POINTER_ARRAY_DELETE, |_, _| Ret::default());
+                let this = e.mem.alloc(0x10);
+                e.call_log = Some(vec![]);
+                assert_eq!(e.call(address, &args![this, flags]).u32(), this);
+                assert_eq!(e.mem.u32(this), vtable);
+                let deleted = calls(&e, MEMORY_FREE).contains(&vec![this]);
+                assert_eq!(deleted, flags == 1);
+            }
+        }
+    }
+
+    fn shutdown_engine(loader: u32, io: u32) -> Engine {
+        let mut e = Engine::new();
+        e.map(0x011c_3000, 0x1000);
+        e.map(0x0120_2000, 0x1000);
+        e.set_global::<u32>(IO_MANAGER, io);
+        e.set_global::<u32>(OBJECT_011C3B3C, 0x3b3c);
+        e.register_double(MODEL_LOADER_INSTANCE, move |_, _| loader.into_ret());
+        e.put_vtable(0x0150_0000, &[0, 0, 0x0150_1008]);
+        e.register(0x0150_1008, |_, _| Ret::default());
+        let object = e.mem.alloc(4);
+        e.mem.set_u32(object, 0x0150_0000);
+        for a in [INSTANCE_00AFF100, AUDIO_INSTANCE, TASKLET_MANAGER_INSTANCE] {
+            e.register_double(a, move |_, _| object.into_ret());
+        }
+        for a in [
+            MODEL_LOADER_SHUTDOWN_00483710,
+            SHUTDOWN_00867090,
+            IO_MANAGER_00C3E310,
+            OBJECT_00449030,
+            IO_MANAGER_00877D30,
+            IO_MANAGER_00C3E340,
+            INSTANCE_00B01130,
+            MEDIA_CLOSE,
+            AUDIO_MEDIA_0082F9C0,
+            LOADING_MENU_0078D050,
+            INTERFACE_0070AD30,
+        ] {
+            e.register(a, |_, _| Ret::default());
+        }
+        e.call_log = Some(vec![]);
+        e
+    }
+
+    #[test]
+    fn fn_00869f30_shuts_down_on_kind_2_only() {
+        let mut e = shutdown_engine(0x4400, 0x9800);
+        e.call(0x0086_9f30, &args![1u32]);
+        assert_eq!(e.call_log.as_ref().unwrap().len(), 1);
+        e.call(0x0086_9f30, &args![2u32]);
+        assert_eq!(
+            calls(&e, MODEL_LOADER_SHUTDOWN_00483710),
+            vec![vec![0x4400]]
+        );
+        assert_eq!(calls(&e, IO_MANAGER_00C3E310), vec![vec![0x9800]; 2]);
+        assert_eq!(calls(&e, OBJECT_00449030), vec![vec![0x3b3c]]);
+        assert_eq!(calls(&e, 0x0150_1008).len(), 3);
+        let order: Vec<u32> = e.call_log.as_ref().unwrap().iter().map(|c| c.0).collect();
+        let at = |a: u32| order.iter().position(|x| *x == a).unwrap();
+        assert!(at(SHUTDOWN_00867090) < at(OBJECT_00449030));
+        assert!(at(MEDIA_CLOSE) < at(LOADING_MENU_0078D050));
+    }
+
+    #[test]
+    fn fn_00869f30_without_loader_or_io_manager() {
+        let mut e = shutdown_engine(0, 0);
+        e.call(0x0086_9f30, &args![2u32]);
+        assert!(calls(&e, MODEL_LOADER_SHUTDOWN_00483710).is_empty());
+        assert!(calls(&e, IO_MANAGER_00C3E310).is_empty());
+        assert_eq!(calls(&e, IO_MANAGER_00877D30), vec![vec![0]]);
+    }
+
+    #[test]
+    fn fn_0086a020_runs_the_loaders_slot() {
+        let mut e = Engine::new();
+        let mut slots = vec![0u32; 0x24];
+        slots[0x8c / 4] = 0x0150_108c;
+        e.put_vtable(0x0150_0000, &slots);
+        e.register(0x0150_108c, |_, _| 7u32.into_ret());
+        let loader = e.mem.alloc(4);
+        e.mem.set_u32(loader, 0x0150_0000);
+        e.register_double(MODEL_LOADER_INSTANCE, move |_, _| loader.into_ret());
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x0086_a020, &args![]).u32(), 0);
+        assert_eq!(calls(&e, 0x0150_108c), vec![vec![loader]]);
+        e.register(MODEL_LOADER_INSTANCE, |_, _| 0u32.into_ret());
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x0086_a020, &args![]).u32(), 0);
+        assert!(calls(&e, 0x0150_108c).is_empty());
     }
 }

@@ -309,9 +309,79 @@ pub fn fn_00aa21e0(e: &mut Engine, this: Ptr) {
     e.vcall(object, 0, &args![1u32]);
 }
 
+/// `00aa1d60` (`cdecl`: the address and a count of 8-byte values): reverses
+/// the bytes of each value.
+const SWAP_EIGHT_BYTES: u32 = 0x00aa_1d60;
+
+// Translated from 00aa1de0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`cdecl`: the buffer, its byte count, the
+/// component sizes and their count): swaps the byte order of the buffer's
+/// components in place. While fewer than `count` bytes have been passed, it
+/// goes through the sizes in order (a pass over all of them each round):
+/// a component of 2 bytes swaps its two bytes, of 4 bytes reverses them, of
+/// 8 bytes goes to `00aa1d60` with a count of 1, of 16 or 64 bytes reverses
+/// each of its 4-byte groups; any other size is left as it is. Every
+/// component moves on by its size. (The compiler's byte map and jump table
+/// for the size are the `match`; with no sizes and a non-zero count the exe
+/// never leaves the loop, and neither does this.)
+pub fn fn_00aa1de0(e: &mut Engine, buffer: Ptr, count: u32, sizes: Ptr, size_count: u32) {
+    if count == 0 {
+        return;
+    }
+    let mut at = buffer.addr();
+    let mut passed = 0u32;
+    loop {
+        let mut i = 0u32;
+        while i < size_count {
+            let size = e.mem.u32(sizes.addr().wrapping_add(i.wrapping_mul(4)));
+            match size {
+                2 => {
+                    let low = e.mem.u8(at.wrapping_add(1));
+                    let high = e.mem.u8(at);
+                    e.mem.set_u8(at, low);
+                    e.mem.set_u8(at.wrapping_add(1), high);
+                }
+                4 => swap_four(e, at),
+                8 => {
+                    e.call(SWAP_EIGHT_BYTES, &args![at, 1u32]);
+                }
+                16 | 64 => {
+                    let mut groups = size >> 2;
+                    let mut group = at;
+                    while groups != 0 {
+                        swap_four(e, group);
+                        group = group.wrapping_add(4);
+                        groups -= 1;
+                    }
+                }
+                _ => {}
+            }
+            passed = passed.wrapping_add(size);
+            i = i.wrapping_add(1);
+            at = at.wrapping_add(size);
+        }
+        if passed >= count {
+            return;
+        }
+    }
+}
+
+/// Reverses the four bytes at `at` (byte 0 with 3, then 1 with 2).
+fn swap_four(e: &mut Engine, at: u32) {
+    let first = e.mem.u8(at);
+    let last = e.mem.u8(at.wrapping_add(3));
+    e.mem.set_u8(at, last);
+    e.mem.set_u8(at.wrapping_add(3), first);
+    let third = e.mem.u8(at.wrapping_add(2));
+    let second = e.mem.u8(at.wrapping_add(1));
+    e.mem.set_u8(at.wrapping_add(1), third);
+    e.mem.set_u8(at.wrapping_add(2), second);
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x00aa_1de0, fn_00aa1de0(Ptr, u32, Ptr, u32)),
         entry!(0x00aa_21e0, fn_00aa21e0(Ptr)),
         entry!(
             0x00aa_1f10,
@@ -754,5 +824,58 @@ mod la1_tests {
         e.call_log = Some(vec![]);
         e.call(0x00aa_21e0, &args![holder]);
         assert_eq!(e.call_log.take().unwrap().len(), 1);
+    }
+}
+
+#[cfg(test)]
+mod tests_n084 {
+    use super::*;
+
+    #[test]
+    fn fn_00aa1de0_swaps_each_component_size() {
+        let mut e = Engine::new();
+        e.register(SWAP_EIGHT_BYTES, |_, _| Ret::default());
+        // Sizes 2, 4, 8, 16, 3: 33 bytes a round, two rounds for 40 bytes.
+        let sizes = e.mem.alloc(20);
+        for (i, s) in [2u32, 4, 8, 16, 3].iter().enumerate() {
+            e.mem.set_u32(sizes + 4 * i as u32, *s);
+        }
+        let buffer = e.mem.alloc(66);
+        let bytes: Vec<u8> = (0..66).collect();
+        e.mem.write(buffer, &bytes);
+        e.call_log = Some(vec![]);
+        e.call(0x00aa_1de0, &args![buffer, 40u32, sizes, 5u32]);
+        let mut out = vec![0u8; 66];
+        for (i, b) in out.iter_mut().enumerate() {
+            *b = e.mem.u8(buffer + i as u32);
+        }
+        let mut expected = Vec::new();
+        for round in 0..2u8 {
+            let b = round * 33;
+            expected.extend([b + 1, b]);
+            expected.extend([b + 5, b + 4, b + 3, b + 2]);
+            expected.extend(b + 6..b + 14);
+            for g in 0..4u8 {
+                let s = b + 14 + 4 * g;
+                expected.extend([s + 3, s + 2, s + 1, s]);
+            }
+            expected.extend(b + 30..b + 33);
+        }
+        assert_eq!(out, expected);
+        let eights: Vec<_> = e
+            .call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|c| c.0 == SWAP_EIGHT_BYTES)
+            .map(|c| c.1.clone())
+            .collect();
+        assert_eq!(eights, vec![vec![buffer + 6, 1], vec![buffer + 39, 1]]);
+    }
+
+    #[test]
+    fn fn_00aa1de0_does_nothing_for_no_bytes() {
+        let mut e = Engine::new();
+        e.call(0x00aa_1de0, &args![0u32, 0u32, 0u32, 0u32]);
     }
 }

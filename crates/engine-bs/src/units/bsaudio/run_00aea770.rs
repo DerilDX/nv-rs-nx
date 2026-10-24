@@ -161,9 +161,49 @@ pub fn fn_00aeaa80(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
     this
 }
 
+// Translated from 00aea800 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map: slot +4 of the `BSWin32AudioListener` virtual table
+/// (`010a3b7c`; `Init` in the Xbox PDB's `BSAudioListener` order, not confirmed) (`thiscall`,
+/// no stack words): does nothing.
+pub fn fn_00aea800(_e: &mut Engine, _this: Ptr) {}
+
+// Translated from 00aeaa10 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map: slot +0x20 of the `BSWin32AudioListener` virtual table
+/// (`SetVelocity` in the Xbox PDB's order, not confirmed) (`thiscall`, one word: three
+/// floats). Copies them to +0x28 (`vVelocity` in the Xbox PDB layout) as words, then, when
+/// there is a `DirectSound` listener at +0x48, hands them to its slot +0x40 with 1 (the
+/// object first; each float copied through `FLD`/`FSTP`, a signalling NaN quieted).
+pub fn fn_00aeaa10(e: &mut Engine, this: Ptr, velocity: Ptr) {
+    let base = this.addr();
+    let source = velocity.addr();
+    for i in 0..3u32 {
+        let word = e.mem.u32(source.wrapping_add(4 * i));
+        e.mem.set_u32(base.wrapping_add(0x28 + 4 * i), word);
+    }
+    let listener = e.mem.u32(base.wrapping_add(0x48));
+    if listener != 0 {
+        let z = x87_quiet_bits(e.mem.u32(source.wrapping_add(8)));
+        let y = x87_quiet_bits(e.mem.u32(source.wrapping_add(4)));
+        let x = x87_quiet_bits(e.mem.u32(source));
+        e.vcall(listener, 0x40, &args![x, y, z, 1u32]);
+    }
+}
+
+// Translated from 00aeaab0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (no code references it): the `BSAudioListener` destructor body
+/// (`thiscall`, no stack words): its virtual table (`010a3bb4`) and +0x44 cleared, as the end
+/// of `00aea770` does.
+pub fn fn_00aeaab0(e: &mut Engine, this: Ptr) {
+    e.mem.set_u32(this.addr(), LISTENER_VTABLE);
+    e.mem.set_u32(this.addr().wrapping_add(0x44), 0);
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x00ae_a800, fn_00aea800(Ptr)),
+        entry!(0x00ae_aa10, fn_00aeaa10(Ptr, Ptr)),
+        entry!(0x00ae_aab0, fn_00aeaab0(Ptr)),
         entry!(0x00ae_a770, fn_00aea770(Ptr)),
         entry!(0x00ae_a810, fn_00aea810(Ptr, Ptr)),
         entry!(0x00ae_a890, fn_00aea890(Ptr) -> u32),
@@ -340,5 +380,76 @@ mod b049_tests {
         assert!(calls_to(&e, HEAP_FREE).is_empty());
         e.call(0x00ae_aa80, &args![this, 1u32]);
         assert_eq!(calls_to(&e, HEAP_FREE), vec![vec![HEAP, this]]);
+    }
+}
+
+#[cfg(test)]
+mod n082_tests {
+    use super::*;
+
+    fn calls_to(e: &Engine, callee: u32) -> Vec<Vec<u32>> {
+        e.call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|(address, _)| *address == callee)
+            .map(|(_, words)| words.clone())
+            .collect()
+    }
+
+    #[test]
+    fn fn_00aea800_does_nothing() {
+        let mut e = Engine::new();
+        e.call_log = Some(vec![]);
+        e.call(0x00ae_a800, &args![0u32]);
+        assert_eq!(e.call_log.as_ref().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn fn_00aeaa10_keeps_the_velocity_and_hands_it_over() {
+        let mut e = Engine::new();
+        let slots: Vec<u32> = (0..0x20).map(|i| 0x8000 + 4 * i).collect();
+        e.put_vtable(0x7000, &slots);
+        e.register(0x8040, |_, _| Ret::default());
+        let sound = e.mem.alloc(4);
+        e.mem.set_u32(sound, 0x7000);
+        let this = e.mem.alloc(0x64);
+        let velocity = e.mem.alloc(12);
+        e.mem.set_f32(velocity, 1.0);
+        e.mem.set_f32(velocity + 4, -2.0);
+        e.mem.set_u32(velocity + 8, 0x7f80_0001);
+        // Without a sound listener only the copy (as words, the NaN untouched).
+        e.call_log = Some(vec![]);
+        e.call(0x00ae_aa10, &args![this, velocity]);
+        assert_eq!(e.mem.f32(this + 0x28), 1.0);
+        assert_eq!(e.mem.f32(this + 0x2c), -2.0);
+        assert_eq!(e.mem.u32(this + 0x30), 0x7f80_0001);
+        assert!(calls_to(&e, 0x8040).is_empty());
+        e.mem.set_u32(this + 0x48, sound);
+        e.call_log = Some(vec![]);
+        e.call(0x00ae_aa10, &args![this, velocity]);
+        assert_eq!(
+            calls_to(&e, 0x8040),
+            vec![vec![
+                sound,
+                1.0f32.to_bits(),
+                (-2.0f32).to_bits(),
+                0x7fc0_0001,
+                1
+            ]]
+        );
+    }
+
+    #[test]
+    fn fn_00aeaab0_resets_to_the_base_listener() {
+        let mut e = Engine::new();
+        let this = e.mem.alloc(0x64);
+        e.mem.set_u32(this, WIN32_LISTENER_VTABLE);
+        e.mem.set_u32(this + 0x44, 5);
+        e.mem.set_u32(this + 0x48, 9);
+        e.call(0x00ae_aab0, &args![this]);
+        assert_eq!(e.mem.u32(this), LISTENER_VTABLE);
+        assert_eq!(e.mem.u32(this + 0x44), 0);
+        assert_eq!(e.mem.u32(this + 0x48), 9);
     }
 }

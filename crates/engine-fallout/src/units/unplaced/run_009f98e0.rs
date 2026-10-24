@@ -2831,6 +2831,2378 @@ pub fn fn_009febd8(e: &mut Engine, word_0: u32, word_1: Ptr) -> u32 {
     e.call(target, &args![word_0, word_1]).u32()
 }
 
+// Batch n078: the rest of this unit. Class names again come only from the
+// RTTI records of the vtables (`CEnumPins` `01093c50`, `CEnumMediaTypes`
+// `01093c74`, `CMediaSample` `01093c9c`, `CMemAllocator` `01093cf8` and
+// `01093d28`, `CAsyncOutputPin` `01093d84`/`01093d9c`, `CAsyncReader`
+// `01093e54`/`01093e6c`/`01093eac`, `CBSAReader` `0107cd6c`/`0107cdac`,
+// `TrespassPackage` `010939ec`); slot offsets below are byte offsets into
+// those vtables.
+
+/// `TESPackage::InitLoadGame` (engine map), thiscall with one word.
+const PACKAGE_INIT_LOAD_GAME: u32 = 0x0067_9a90;
+/// `004839c0` (cdecl, one word; `fallout shared/tesform.cpp` in the engine
+/// map): 0, or the word `00853130` gives for its argument.
+const FORM_LOOKUP: u32 = 0x0048_39c0;
+
+// Import slots (Ghidra's labels for them).
+/// `GetSystemInfo`.
+const GET_SYSTEM_INFO: u32 = 0x00fd_f0f8;
+/// `VirtualAlloc`.
+const VIRTUAL_ALLOC: u32 = 0x00fd_f114;
+/// `VirtualFree`.
+const VIRTUAL_FREE: u32 = 0x00fd_f10c;
+/// `ReleaseSemaphore`.
+const RELEASE_SEMAPHORE: u32 = 0x00fd_f1b4;
+/// `CreateSemaphoreA`.
+const CREATE_SEMAPHORE_A: u32 = 0x00fd_f0b4;
+/// `CoInitialize`.
+const CO_INITIALIZE: u32 = 0x00fd_f454;
+/// `CoCreateInstance`.
+const CO_CREATE_INSTANCE: u32 = 0x00fd_f46c;
+/// `CoFreeUnusedLibraries`.
+const CO_FREE_UNUSED_LIBRARIES: u32 = 0x00fd_f468;
+/// `CoUninitialize`.
+const CO_UNINITIALIZE: u32 = 0x00fd_f464;
+/// `WaitForMultipleObjects`.
+const WAIT_FOR_MULTIPLE_OBJECTS: u32 = 0x00fd_f108;
+/// `CreateThread`.
+const CREATE_THREAD: u32 = 0x00fd_f124;
+/// `GetLastError`.
+const GET_LAST_ERROR: u32 = 0x00fd_f094;
+
+// More HRESULT values (Windows SDK names).
+const VFW_E_BUFFER_OVERFLOW: u32 = 0x8004_020d;
+const VFW_E_ALREADY_COMMITTED: u32 = 0x8004_020f;
+const VFW_E_BUFFERS_OUTSTANDING: u32 = 0x8004_0210;
+const VFW_E_NOT_COMMITTED: u32 = 0x8004_0211;
+const VFW_E_SIZENOTSET: u32 = 0x8004_0212;
+const VFW_E_NO_CLOCK: u32 = 0x8004_0213;
+const VFW_E_NOT_FOUND: u32 = 0x8004_0216;
+const VFW_E_SAMPLE_TIME_NOT_SET: u32 = 0x8004_0249;
+const VFW_E_MEDIA_TIME_NOT_SET: u32 = 0x8004_0251;
+const VFW_S_NO_STOP_TIME: u32 = 0x0004_0270;
+/// The HRESULT of Win32 error 2 (`ERROR_FILE_NOT_FOUND`), which the filter
+/// registration treats as success.
+const HRESULT_FILE_NOT_FOUND: u32 = 0x8007_0002;
+
+// More 16-byte ids in `.rdata` (first word in each comment).
+/// `56a86892-...`.
+const INTERFACE_ID_01093C2C: u32 = 0x0109_3c2c;
+/// `89c31040-...`.
+const INTERFACE_ID_01093C1C: u32 = 0x0109_3c1c;
+/// `56a8689a-...`.
+const INTERFACE_ID_01093BDC: u32 = 0x0109_3bdc;
+/// `36b73884-...`.
+const INTERFACE_ID_01093BCC: u32 = 0x0109_3bcc;
+/// `56a8689c-...`.
+const INTERFACE_ID_01093BBC: u32 = 0x0109_3bbc;
+/// `379a0cf0-...`.
+const INTERFACE_ID_01093BAC: u32 = 0x0109_3bac;
+/// `56a868a3-...`.
+const INTERFACE_ID_01093B8C: u32 = 0x0109_3b8c;
+/// `e436ebb2-...`: the class `009fba40`/`009fbab0` create.
+const CLASS_ID_0107CB08: u32 = 0x0107_cb08;
+
+/// `CMediaSample` (RTTI).
+const MEDIA_SAMPLE_VTABLE: u32 = 0x0109_3c9c;
+/// `CMemAllocator` (RTTI), its vtables at +0 and +0xc.
+const MEM_ALLOCATOR_VTABLE: u32 = 0x0109_3d28;
+const MEM_ALLOCATOR_VTABLE_C: u32 = 0x0109_3cf8;
+
+/// The thread routine `009fe780` starts (`009fe560`, a function Ghidra did
+/// not create).
+const THREAD_ROUTINE: u32 = 0x009f_e560;
+
+/// The 16-byte id at `at` as the four words a by-value push puts on the
+/// stack (first word at the lowest address).
+fn id_words(e: &Engine, at: u32) -> [u32; 4] {
+    [
+        e.mem.u32(at),
+        e.mem.u32(at.wrapping_add(4)),
+        e.mem.u32(at.wrapping_add(8)),
+        e.mem.u32(at.wrapping_add(0xc)),
+    ]
+}
+
+/// The critical section the `CMemAllocator` interface methods lock: `this +
+/// 4` (the object's +0x10), or 0 when the object (`this - 0xc`) is null.
+fn allocator_lock(this: Ptr) -> u32 {
+    if this.addr().wrapping_sub(0xc) != 0 {
+        this.addr().wrapping_add(0x4)
+    } else {
+        0
+    }
+}
+
+/// The byte at `base + offset`.
+fn byte_field(e: &Engine, base: Ptr, offset: u32) -> u8 {
+    e.mem.u8(base.addr().wrapping_add(offset))
+}
+
+// Translated from 009f98e0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Slot +0x64 of the `TrespassPackage` vtable (thiscall, `RET 4`):
+/// `TESPackage::InitLoadGame` (`00679a90`) with the stack word, then the
+/// words at +0x88 and +0x8c are each replaced by `004839c0` of them (0
+/// stays 0).
+pub fn fn_009f98e0(e: &mut Engine, this: Ptr, data: u32) {
+    e.call(PACKAGE_INIT_LOAD_GAME, &args![this, data]);
+    for at in [0x88u32, 0x8c] {
+        let held = field(e, this, at);
+        let value = if held != 0 {
+            e.call(FORM_LOOKUP, &args![held]).u32()
+        } else {
+            0
+        };
+        set_field(e, this, at, value);
+    }
+}
+
+// Translated from 009f9a50 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Media-type test (thiscall on the type, no stack words; called by
+/// `009fc0b0`): 1 when the 16-byte id at +0 or the one at +0x2c equals the
+/// id at `01093f04` (sixteen zero bytes in the exe's data), else 0.
+pub fn fn_009f9a50(e: &mut Engine, media_type: Ptr) -> u32 {
+    let any = Ptr::new(INTERFACE_ID_01093F04);
+    if fn_009f9980(e, media_type, any) == 0 && fn_009f9980(e, offset(media_type, 0x2c), any) == 0 {
+        return 0;
+    }
+    1
+}
+
+// Translated from 009f9a80 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Media-type match (thiscall, `RET 4`; called by `009fbfc0`): 0 unless the
+/// ids at +0 and +0x10 of `other` are each the id at `01093f04` or equal to
+/// `this`'s; then 1 when `other`'s id at +0x2c is the `01093f04` id, else
+/// that id must equal `this`'s, the sizes at +0x40 must match and the
+/// blocks at +0x44 must hold the same bytes (compared word by word, then
+/// byte by byte from the first differing word or the tail).
+pub fn fn_009f9a80(e: &mut Engine, this: Ptr, other: Ptr) -> u32 {
+    let any = Ptr::new(INTERFACE_ID_01093F04);
+    if fn_009f9980(e, other, any) == 0 && fn_009f9980(e, this, other) == 0 {
+        return 0;
+    }
+    let other_sub = offset(other, 0x10);
+    if fn_009f9980(e, other_sub, any) == 0 && fn_009f9980(e, offset(this, 0x10), other_sub) == 0 {
+        return 0;
+    }
+    let other_format = offset(other, 0x2c);
+    if fn_009f9980(e, other_format, any) != 0 {
+        return 1;
+    }
+    if fn_009f9980(e, offset(this, 0x2c), other_format) == 0 {
+        return 0;
+    }
+    let mut left = field(e, this, 0x40);
+    if left != field(e, other, 0x40) {
+        return 0;
+    }
+    if left == 0 {
+        return 1;
+    }
+    let mut b = field(e, other, 0x44);
+    let mut a = field(e, this, 0x44);
+    let mut word_differs = false;
+    while left >= 4 {
+        if e.mem.u32(a) != e.mem.u32(b) {
+            word_differs = true;
+            break;
+        }
+        left -= 4;
+        b = b.wrapping_add(4);
+        a = a.wrapping_add(4);
+    }
+    if !word_differs && left == 0 {
+        return 1;
+    }
+    let mut difference: i32 = 0;
+    for step in 0..4 {
+        difference = i32::from(e.mem.u8(a)) - i32::from(e.mem.u8(b));
+        // The fourth compare has no count test after it.
+        if difference != 0 || step == 3 {
+            break;
+        }
+        left -= 1;
+        b = b.wrapping_add(1);
+        a = a.wrapping_add(1);
+        if left == 0 {
+            break;
+        }
+    }
+    u32::from(difference == 0)
+}
+
+// Translated from 009f9cd0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Media-type duplicate (stdcall, `RET 4`): a 0x48-byte block from
+/// `CoTaskMemAlloc` gets a copy of `source` (`009f9bb0`); a failed copy
+/// frees the block again (`CoTaskMemFree`). Returns the block, or 0.
+pub fn fn_009f9cd0(e: &mut Engine, source: Ptr) -> Ptr {
+    let block = e.call(CO_TASK_MEM_ALLOC, &args![0x48u32]).u32();
+    if block == 0 {
+        return Ptr::NULL;
+    }
+    if !failed(fn_009f9bb0(e, Ptr::new(block), source)) {
+        return Ptr::new(block);
+    }
+    e.call(CO_TASK_MEM_FREE, &args![block]);
+    Ptr::NULL
+}
+
+// Translated from 009f9db0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Slot +0x10 of the `CAsyncReader` and `CBSAReader` vtables (thiscall,
+/// `RET 4`): `VFW_E_NO_CLOCK` without the clock at +0x18; otherwise asks
+/// it for the time into `out` (vtable +0xc) and, on success, subtracts the
+/// 64-bit start time at +0x20 from it and returns 0. A failure is returned
+/// as is.
+pub fn fn_009f9db0(e: &mut Engine, this: Ptr, out: Ptr) -> u32 {
+    let clock = field(e, this, 0x18);
+    if clock == 0 {
+        return VFW_E_NO_CLOCK;
+    }
+    let hr = e.vcall(clock, 0xc, &args![out]).u32();
+    if failed(hr) {
+        return hr;
+    }
+    // SUB [ESI],EAX then SBB [ESI+4],ECX.
+    let low = e.mem.u32(out.addr());
+    let start_low = field(e, this, 0x20);
+    e.mem.set_u32(out.addr(), low.wrapping_sub(start_low));
+    let borrow = u32::from(low < start_low);
+    let start_high = field(e, this, 0x24);
+    let high = e.mem.u32(out.addr().wrapping_add(4));
+    e.mem.set_u32(
+        out.addr().wrapping_add(4),
+        high.wrapping_sub(start_high).wrapping_sub(borrow),
+    );
+    0
+}
+
+// Translated from 009f9f40 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Returns `E_NOTIMPL` (slot +0x38 of the `CAsyncReader` and `CBSAReader`
+/// vtables; stdcall, `RET 8`: neither word is read).
+pub fn fn_009f9f40(_e: &mut Engine, _unused_0: u32, _unused_1: u32) -> u32 {
+    E_NOTIMPL
+}
+
+/// The shared shape of `009f9fe0` and `009fa120`: `E_POINTER` for a null
+/// `out`; the ids `own` and `01093f14` hand out `this` (`009fceb0`); any
+/// other clears `out` and gives `E_NOINTERFACE`.
+fn enumerator_lookup(e: &mut Engine, this: Ptr, id: Ptr, out: Ptr, own: u32) -> u32 {
+    if out.is_null() {
+        return E_POINTER;
+    }
+    if fn_009f9980(e, id, Ptr::new(own)) == 0
+        && fn_009f9980(e, id, Ptr::new(INTERFACE_ID_01093F14)) == 0
+    {
+        e.mem.set_u32(out.addr(), 0);
+        return E_NOINTERFACE;
+    }
+    fn_009fceb0(e, this, out)
+}
+
+// Translated from 009f9fe0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Slot +0 of the `CEnumPins` vtable (stdcall, `RET 0xc`): `E_POINTER` for
+/// a null `out`; the ids at `01093c2c` and `01093f14` hand out `this`
+/// (`009fceb0`); any other id clears `out` and returns `E_NOINTERFACE`.
+pub fn fn_009f9fe0(e: &mut Engine, this: Ptr, id: Ptr, out: Ptr) -> u32 {
+    enumerator_lookup(e, this, id, out, INTERFACE_ID_01093C2C)
+}
+
+// Translated from 009fa040 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Slot +4 of the `CEnumPins` vtable (stdcall, `RET 4` through the jump):
+/// `InterlockedIncrement` of the count at `this + 0x14`, whose result it
+/// returns.
+pub fn fn_009fa040(e: &mut Engine, this: Ptr) -> u32 {
+    e.call(INTERLOCKED_INCREMENT, &args![offset(this, 0x14)])
+        .u32()
+}
+
+// Translated from 009fa090 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Slot +0x14 of the `CEnumPins` vtable (stdcall, `RET 4`): the filter at
+/// +0xc gives the version (vtable +0x14, to +0x10) and the total (vtable
+/// +0x18, to +8), the position (+4) goes back to 0 and the list at +0x18 is
+/// cleared (`009fd140`). Returns 0.
+pub fn fn_009fa090(e: &mut Engine, this: Ptr) -> u32 {
+    fn_009fa0d0(e, this);
+    fn_009fd140(e, offset(this, 0x18));
+    0
+}
+
+// Translated from 009fa0d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `CEnumPins` refresh (stdcall, `RET 4`; called by `009fbb50`): the
+/// filter at +0xc gives the version (vtable +0x14, to +0x10) and the total
+/// (vtable +0x18, to +8), and the position (+4) goes back to 0. Returns 0.
+pub fn fn_009fa0d0(e: &mut Engine, this: Ptr) -> u32 {
+    let filter = field(e, this, 0xc);
+    let version = e.vcall(filter, 0x14, &args![]).u32();
+    set_field(e, this, 0x10, version);
+    let filter = field(e, this, 0xc);
+    let total = e.vcall(filter, 0x18, &args![]).u32();
+    set_field(e, this, 0x8, total);
+    set_field(e, this, 0x4, 0);
+    0
+}
+
+// Translated from 009fa120 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Slot +0 of the `CEnumMediaTypes` vtable (stdcall, `RET 0xc`):
+/// `E_POINTER` for a null `out`; the ids at `01093c1c` and `01093f14` hand
+/// out `this` (`009fceb0`); any other id clears `out` and returns
+/// `E_NOINTERFACE`.
+pub fn fn_009fa120(e: &mut Engine, this: Ptr, id: Ptr, out: Ptr) -> u32 {
+    enumerator_lookup(e, this, id, out, INTERFACE_ID_01093C1C)
+}
+
+// Translated from 009fa180 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Slot +4 of the `CEnumMediaTypes` vtable (stdcall, `RET 4` through the
+/// jump): `InterlockedIncrement` of the count at `this + 0x10`, whose result
+/// it returns.
+pub fn fn_009fa180(e: &mut Engine, this: Ptr) -> u32 {
+    e.call(INTERLOCKED_INCREMENT, &args![offset(this, 0x10)])
+        .u32()
+}
+
+// Translated from 009fa1d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Slot +0x14 of the `CEnumMediaTypes` vtable (stdcall, `RET 4`): the
+/// position (+4) goes back to 0 and the pin at +8 gives the version again
+/// (vtable +0x10, to +0xc). Returns 0.
+pub fn fn_009fa1d0(e: &mut Engine, this: Ptr) -> u32 {
+    let pin = field(e, this, 0x8);
+    set_field(e, this, 0x4, 0);
+    let version = e.vcall(pin, 0x10, &args![]).u32();
+    set_field(e, this, 0xc, version);
+    0
+}
+
+// Translated from 009fa4a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Slot +0x2c of the `CAsyncOutputPin` vtable at `01093d9c` (stdcall,
+/// `RET 8`): `E_POINTER` for a null `out`; otherwise the object at
+/// `this - 0xc` is asked (vtable +0x20, thiscall with `out`), and a
+/// negative answer becomes 1 (`S_FALSE`); any other answer is returned.
+pub fn fn_009fa4a0(e: &mut Engine, this: Ptr, out: Ptr) -> u32 {
+    if out.is_null() {
+        return E_POINTER;
+    }
+    let hr = e.vcall(back(this, 0xc).addr(), 0x20, &args![out]).u32();
+    if failed(hr) {
+        1
+    } else {
+        hr
+    }
+}
+
+// Translated from 009fa4e0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Slot +0x10 of the `CAsyncOutputPin` vtable at `01093d84` (stdcall,
+/// `RET 8`): stores `value` at +0x1c under the critical section held at
+/// +0x10. Returns 0.
+pub fn fn_009fa4e0(e: &mut Engine, this: Ptr, value: u32) -> u32 {
+    let section = field(e, this, 0x10);
+    enter(e, section);
+    set_field(e, this, 0x1c, value);
+    leave(e, section);
+    0
+}
+
+// Translated from 009fa510 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Returns `E_NOTIMPL` (slot +0xc of the `CAsyncOutputPin` vtable at
+/// `01093d84`; stdcall, `RET 0x20`: none of its eight words is read).
+pub fn fn_009fa510(
+    _e: &mut Engine,
+    _unused_0: u32,
+    _unused_1: u32,
+    _unused_2: u32,
+    _unused_3: u32,
+    _unused_4: u32,
+    _unused_5: u32,
+    _unused_6: u32,
+    _unused_7: u32,
+) -> u32 {
+    E_NOTIMPL
+}
+
+// Translated from 009fa520 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Slot +0x44 of the `CAsyncOutputPin` vtable at `01093d9c` (stdcall,
+/// `RET 0x1c`): stores its four words at +0x74, +0x78, +0x7c and +0x80 and
+/// the `double` after them at +0x84 (`FLD`/`FSTP qword`, which quiets a
+/// signalling NaN). Returns 0.
+pub fn fn_009fa520(
+    e: &mut Engine,
+    this: Ptr,
+    word_1: u32,
+    word_2: u32,
+    word_3: u32,
+    word_4: u32,
+    rate: f64,
+) -> u32 {
+    let loaded = x87_load64(rate.to_bits());
+    set_field(e, this, 0x74, word_1);
+    set_field(e, this, 0x78, word_2);
+    set_field(e, this, 0x7c, word_3);
+    set_field(e, this, 0x80, word_4);
+    e.mem
+        .set_u64(this.addr().wrapping_add(0x84), loaded.to_bits());
+    0
+}
+
+// Translated from 009fa560 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `CMediaSample` destructor shape (thiscall, no stack words; RTTI of the
+/// vtable it installs): frees the media type held at +0x3c (`009f9cb0`)
+/// when there is one.
+pub fn fn_009fa560(e: &mut Engine, this: Ptr) {
+    set_field(e, this, 0x0, MEDIA_SAMPLE_VTABLE);
+    let media_type = field(e, this, 0x3c);
+    if media_type != 0 {
+        fn_009f9cb0(e, Ptr::new(media_type));
+    }
+}
+
+// Translated from 009fa580 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Slot +0 of the `CMediaSample` vtable (stdcall, `RET 0xc`): the ids at
+/// `01093bdc`, `01093bcc` and `01093f14` hand out `this` (`009fceb0`);
+/// any other returns `E_NOINTERFACE` (`out` untouched).
+pub fn fn_009fa580(e: &mut Engine, this: Ptr, id: Ptr, out: Ptr) -> u32 {
+    for own in [
+        INTERFACE_ID_01093BDC,
+        INTERFACE_ID_01093BCC,
+        INTERFACE_ID_01093F14,
+    ] {
+        if fn_009f9980(e, id, Ptr::new(own)) != 0 {
+            return fn_009fceb0(e, this, out);
+        }
+    }
+    E_NOINTERFACE
+}
+
+// Translated from 009fa5d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Slot +4 of the `CMediaSample` vtable (stdcall, `RET 4` through the
+/// jump): `InterlockedIncrement` of the count at `this + 0x44`, whose result
+/// it returns.
+pub fn fn_009fa5d0(e: &mut Engine, this: Ptr) -> u32 {
+    e.call(INTERLOCKED_INCREMENT, &args![offset(this, 0x44)])
+        .u32()
+}
+
+// Translated from 009fa5f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Slot +8 of the `CMediaSample` vtable (stdcall, `RET 4`): a count (+0x44)
+/// of exactly 1 is cleared without the interlocked call; otherwise
+/// `InterlockedDecrement`, and a nonzero result is returned. At zero the
+/// sample's media type is dropped (its vtable +0x38 with 0, when flag 8 at
+/// +4 is set), the words at +4, +8 and +0x40 are cleared and the sample
+/// goes back to its allocator (the interface at +0xc of the object at
+/// +0x18, vtable +0x20 with the sample). Returns 0 then.
+pub fn fn_009fa5f0(e: &mut Engine, this: Ptr) -> u32 {
+    let remaining = if field(e, this, 0x44) == 1 {
+        set_field(e, this, 0x44, 0);
+        0
+    } else {
+        let count = e
+            .call(INTERLOCKED_DECREMENT, &args![offset(this, 0x44)])
+            .u32();
+        if count != 0 {
+            return count;
+        }
+        0
+    };
+    if byte_field(e, this, 0x4) & 0x8 != 0 {
+        e.vcall(this.addr(), 0x38, &args![0u32]);
+    }
+    let allocator = field(e, this, 0x18).wrapping_add(0xc);
+    set_field(e, this, 0x4, 0);
+    set_field(e, this, 0x8, 0);
+    set_field(e, this, 0x40, 0);
+    e.vcall(allocator, 0x20, &args![this]);
+    remaining
+}
+
+// Translated from 009fa650 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Slot +0xc of the `CMediaSample` vtable (stdcall, `RET 8`): stores the
+/// buffer address (+0xc) in `out`. Returns 0.
+pub fn fn_009fa650(e: &mut Engine, this: Ptr, out: Ptr) -> u32 {
+    let buffer = field(e, this, 0xc);
+    e.mem.set_u32(out.addr(), buffer);
+    0
+}
+
+// Translated from 009fa670 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Slot +0x10 of the `CMediaSample` vtable (stdcall, `RET 4`): the buffer
+/// size at +0x14.
+pub fn fn_009fa670(e: &mut Engine, this: Ptr) -> u32 {
+    field(e, this, 0x14)
+}
+
+// Translated from 009fa680 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Slot +0x14 of the `CMediaSample` vtable (stdcall, `RET 0xc`): with flag
+/// 0x100 at +4 the start (+0x20) and end (+0x28) times go to `start` and
+/// `end` and 0 is returned; with only flag 0x10 the start goes to `start`,
+/// start + 1 to `end`, and `VFW_S_NO_STOP_TIME` is returned; with neither,
+/// `VFW_E_SAMPLE_TIME_NOT_SET`.
+pub fn fn_009fa680(e: &mut Engine, this: Ptr, start: Ptr, end: Ptr) -> u32 {
+    let flags = field(e, this, 0x4);
+    let s = start.addr();
+    let t = end.addr();
+    if flags & 0x100 == 0 {
+        if flags & 0x10 == 0 {
+            return VFW_E_SAMPLE_TIME_NOT_SET;
+        }
+        let low = field(e, this, 0x20);
+        e.mem.set_u32(s, low);
+        let high = field(e, this, 0x24);
+        e.mem.set_u32(s.wrapping_add(4), high);
+        let low = field(e, this, 0x20);
+        let high = field(e, this, 0x24);
+        let next = (u64::from(high) << 32 | u64::from(low)).wrapping_add(1);
+        e.mem.set_u32(t, next as u32);
+        e.mem.set_u32(t.wrapping_add(4), (next >> 32) as u32);
+        return VFW_S_NO_STOP_TIME;
+    }
+    let low = field(e, this, 0x20);
+    e.mem.set_u32(s, low);
+    let high = field(e, this, 0x24);
+    e.mem.set_u32(s.wrapping_add(4), high);
+    let low = field(e, this, 0x28);
+    e.mem.set_u32(t, low);
+    let high = field(e, this, 0x2c);
+    e.mem.set_u32(t.wrapping_add(4), high);
+    0
+}
+
+// Translated from 009fa6f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Slot +0x18 of the `CMediaSample` vtable (stdcall, `RET 0xc`): without
+/// `start` clears flags 0x110 at +4; with `start` only, stores it at +0x20,
+/// clears flag 0x100 and sets 0x10; with both, stores them at +0x20 and
+/// +0x28 and sets 0x110. Returns 0.
+pub fn fn_009fa6f0(e: &mut Engine, this: Ptr, start: Ptr, end: Ptr) -> u32 {
+    if start.is_null() {
+        let flags = field(e, this, 0x4) & 0xffff_feef;
+        set_field(e, this, 0x4, flags);
+        return 0;
+    }
+    let s = start.addr();
+    if end.is_null() {
+        let low = e.mem.u32(s);
+        set_field(e, this, 0x20, low);
+        let flags = field(e, this, 0x4);
+        let high = e.mem.u32(s.wrapping_add(4));
+        set_field(e, this, 0x24, high);
+        set_field(e, this, 0x4, (flags & 0xffff_feff) | 0x10);
+        return 0;
+    }
+    let t = end.addr();
+    let low = e.mem.u32(s);
+    set_field(e, this, 0x20, low);
+    let high = e.mem.u32(s.wrapping_add(4));
+    set_field(e, this, 0x24, high);
+    let low = e.mem.u32(t);
+    set_field(e, this, 0x28, low);
+    let high = e.mem.u32(t.wrapping_add(4));
+    let flags = field(e, this, 0x4) | 0x110;
+    set_field(e, this, 0x4, flags);
+    set_field(e, this, 0x2c, high);
+    0
+}
+
+// Translated from 009fa760 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Slot +0x44 of the `CMediaSample` vtable (stdcall, `RET 0xc`): without
+/// flag 0x20 at +4 `VFW_E_MEDIA_TIME_NOT_SET`; otherwise the 64-bit media
+/// start (+0x30) goes to `start` and start + the signed length at +0x38 to
+/// `end`. Returns 0.
+pub fn fn_009fa760(e: &mut Engine, this: Ptr, start: Ptr, end: Ptr) -> u32 {
+    if byte_field(e, this, 0x4) & 0x20 == 0 {
+        return VFW_E_MEDIA_TIME_NOT_SET;
+    }
+    let s = start.addr();
+    let low = field(e, this, 0x30);
+    e.mem.set_u32(s, low);
+    let high = field(e, this, 0x34);
+    e.mem.set_u32(s.wrapping_add(4), high);
+    // CDQ of +0x38, ADD/ADC with +0x30/+0x34.
+    let length = field(e, this, 0x38);
+    let low = field(e, this, 0x30);
+    let sum_low = length.wrapping_add(low);
+    let carry = u32::from(sum_low < length);
+    let sign: u32 = if (length as i32) < 0 { 0xffff_ffff } else { 0 };
+    let high = field(e, this, 0x34);
+    let sum_high = sign.wrapping_add(high).wrapping_add(carry);
+    let t = end.addr();
+    e.mem.set_u32(t, sum_low);
+    e.mem.set_u32(t.wrapping_add(4), sum_high);
+    0
+}
+
+// Translated from 009fa7a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Slot +0x48 of the `CMediaSample` vtable (stdcall, `RET 0xc`): without
+/// `start` clears flag 0x20 at +4; otherwise stores `start` at +0x30, the
+/// low-word difference `end - start` at +0x38 (`end` is read without a null
+/// test) and sets flag 0x20. Returns 0.
+pub fn fn_009fa7a0(e: &mut Engine, this: Ptr, start: Ptr, end: Ptr) -> u32 {
+    if start.is_null() {
+        let flags = field(e, this, 0x4) & 0xffff_ffdf;
+        set_field(e, this, 0x4, flags);
+        return 0;
+    }
+    let s = start.addr();
+    let low = e.mem.u32(s);
+    set_field(e, this, 0x30, low);
+    let high = e.mem.u32(s.wrapping_add(4));
+    set_field(e, this, 0x34, high);
+    let length = e.mem.u32(end.addr()).wrapping_sub(e.mem.u32(s));
+    let flags = field(e, this, 0x4) | 0x20;
+    set_field(e, this, 0x4, flags);
+    set_field(e, this, 0x38, length);
+    0
+}
+
+/// Inverted flag bit `bit` of the byte at +4 (`NOT`/`MOVZX`/`SHR`/`AND 1`).
+fn flag_clear(e: &Engine, this: Ptr, bit: u32) -> u32 {
+    (u32::from(!byte_field(e, this, 0x4)) >> bit) & 1
+}
+
+/// Sets (`value` nonzero) or clears `mask` in the word at +4. Returns 0.
+fn flag_set(e: &mut Engine, this: Ptr, value: u32, mask: u32) -> u32 {
+    let flags = field(e, this, 0x4);
+    let flags = if value != 0 {
+        flags | mask
+    } else {
+        flags & !mask
+    };
+    set_field(e, this, 0x4, flags);
+    0
+}
+
+// Translated from 009fa7e0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Slot +0x1c of the `CMediaSample` vtable (stdcall, `RET 4`): 1 when flag
+/// 1 at +4 is clear, else 0.
+pub fn fn_009fa7e0(e: &mut Engine, this: Ptr) -> u32 {
+    flag_clear(e, this, 0)
+}
+
+// Translated from 009fa800 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Slot +0x20 of the `CMediaSample` vtable (stdcall, `RET 8`): sets flag 1
+/// at +4 for a nonzero `value`, clears it otherwise. Returns 0.
+pub fn fn_009fa800(e: &mut Engine, this: Ptr, value: u32) -> u32 {
+    flag_set(e, this, value, 0x1)
+}
+
+// Translated from 009fa820 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Slot +0x3c of the `CMediaSample` vtable (stdcall, `RET 4`): 1 when flag
+/// 4 at +4 is clear, else 0.
+pub fn fn_009fa820(e: &mut Engine, this: Ptr) -> u32 {
+    flag_clear(e, this, 2)
+}
+
+// Translated from 009fa840 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Slot +0x40 of the `CMediaSample` vtable (stdcall, `RET 8`): sets flag 4
+/// at +4 for a nonzero `value`, clears it otherwise. Returns 0.
+pub fn fn_009fa840(e: &mut Engine, this: Ptr, value: u32) -> u32 {
+    flag_set(e, this, value, 0x4)
+}
+
+// Translated from 009fa860 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Slot +0x24 of the `CMediaSample` vtable (stdcall, `RET 4`): 1 when flag
+/// 2 at +4 is clear, else 0.
+pub fn fn_009fa860(e: &mut Engine, this: Ptr) -> u32 {
+    flag_clear(e, this, 1)
+}
+
+// Translated from 009fa880 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Slot +0x28 of the `CMediaSample` vtable (stdcall, `RET 8`): sets flag 2
+/// at +4 for a nonzero `value`, clears it otherwise. Returns 0.
+pub fn fn_009fa880(e: &mut Engine, this: Ptr, value: u32) -> u32 {
+    flag_set(e, this, value, 0x2)
+}
+
+// Translated from 009fa8a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Slot +0x2c of the `CMediaSample` vtable (stdcall, `RET 4`): the data
+/// length at +0x10.
+pub fn fn_009fa8a0(e: &mut Engine, this: Ptr) -> u32 {
+    field(e, this, 0x10)
+}
+
+// Translated from 009fa8b0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Slot +0x30 of the `CMediaSample` vtable (stdcall, `RET 8`):
+/// `VFW_E_BUFFER_OVERFLOW` when `length` is above the buffer size at +0x14
+/// (signed); otherwise stores it at +0x10 and returns 0.
+pub fn fn_009fa8b0(e: &mut Engine, this: Ptr, length: i32) -> u32 {
+    if length > field(e, this, 0x14) as i32 {
+        return VFW_E_BUFFER_OVERFLOW;
+    }
+    set_field(e, this, 0x10, length as u32);
+    0
+}
+
+// Translated from 009fa8d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Slot +0x34 of the `CMediaSample` vtable (stdcall, `RET 8`): without flag
+/// 8 at +4 clears `out` and returns 1 (`S_FALSE`); otherwise stores a copy
+/// of the media type at +0x3c (`009f9cd0`) in `out` and returns 0, or
+/// `E_OUTOFMEMORY` when the copy is 0.
+pub fn fn_009fa8d0(e: &mut Engine, this: Ptr, out: Ptr) -> u32 {
+    if byte_field(e, this, 0x4) & 0x8 == 0 {
+        e.mem.set_u32(out.addr(), 0);
+        return 1;
+    }
+    let media_type = field(e, this, 0x3c);
+    let copy = fn_009f9cd0(e, Ptr::new(media_type)).addr();
+    e.mem.set_u32(out.addr(), copy);
+    allocated_or_out_of_memory(copy)
+}
+
+// Translated from 009fa910 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Slot +0x38 of the `CMediaSample` vtable (stdcall, `RET 8`): frees the
+/// media type held at +0x3c (`009f9cb0`) and clears it; without a new
+/// `media_type` clears flag 8 at +4 and returns 0; otherwise holds a copy
+/// (`009f9cd0`) and sets flag 8 (0 returned), or clears the flag and
+/// returns `E_OUTOFMEMORY` when the copy fails.
+pub fn fn_009fa910(e: &mut Engine, this: Ptr, media_type: Ptr) -> u32 {
+    let held = field(e, this, 0x3c);
+    if held != 0 {
+        fn_009f9cb0(e, Ptr::new(held));
+        set_field(e, this, 0x3c, 0);
+    }
+    if media_type.is_null() {
+        let flags = field(e, this, 0x4) & 0xffff_fff7;
+        set_field(e, this, 0x4, flags);
+        // EAX still holds the null `media_type`.
+        return 0;
+    }
+    let copy = fn_009f9cd0(e, media_type).addr();
+    set_field(e, this, 0x3c, copy);
+    if copy == 0 {
+        let flags = field(e, this, 0x4) & 0xffff_fff7;
+        set_field(e, this, 0x4, flags);
+        return E_OUTOFMEMORY;
+    }
+    let flags = field(e, this, 0x4) | 0x8;
+    set_field(e, this, 0x4, flags);
+    0
+}
+
+// Translated from 009fa960 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Slot +0x4c of the `CMediaSample` vtable (stdcall, `RET 0xc`): nothing
+/// for a `size` of 0 (0 returned), `E_POINTER` for a null `out`; otherwise
+/// a 0x30-byte property block is built on the stack and its first
+/// min(`size`, 0x30) bytes copied to `out` (`memcpy`): +0 that count, +4
+/// the word at +8, +8 the flags (+4) without 0x20, +0xc the length (+0x10),
+/// +0x10/+0x14 the start time (+0x20), +0x18/+0x1c the end time (+0x28),
+/// +0x20 the word at +0x40, +0x24 the media type (+0x3c, when flag 8 is
+/// set, else 0), +0x28 the buffer (+0xc), +0x2c its size (+0x14).
+/// Returns 0.
+pub fn fn_009fa960(e: &mut Engine, this: Ptr, size: u32, out: Ptr) -> u32 {
+    if size == 0 {
+        return 0;
+    }
+    if out.is_null() {
+        return E_POINTER;
+    }
+    let count = size.min(0x30);
+    e.with_stack(0x30, |e, local| {
+        let l = local.addr();
+        let flags = field(e, this, 0x4);
+        e.mem.set_u32(l + 0x8, flags & 0xffff_ffdf);
+        for (to, from) in [
+            (0x4u32, 0x8u32),
+            (0x28, 0xc),
+            (0x2c, 0x14),
+            (0xc, 0x10),
+            (0x10, 0x20),
+            (0x14, 0x24),
+            (0x18, 0x28),
+            (0x1c, 0x2c),
+            (0x20, 0x40),
+        ] {
+            let value = field(e, this, from);
+            e.mem.set_u32(l + to, value);
+        }
+        e.mem.set_u32(l, count);
+        let media_type = if flags & 0x8 != 0 {
+            field(e, this, 0x3c)
+        } else {
+            0
+        };
+        e.mem.set_u32(l + 0x24, media_type);
+        e.call(MEMCPY, &args![out, local, count]);
+    });
+    0
+}
+
+// Translated from 009faa20 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Slot +0x50 of the `CMediaSample` vtable (stdcall, `RET 0xc`): 0 for a
+/// `size` below 4, `E_POINTER` for a null `properties`. The block's own
+/// size (+0) caps `size`; either above 0x30 is `E_INVALIDARG`, as are
+/// (each test only when `size` covers the field) flags (+8) with a bit of
+/// 0xfffffe20 set, flag 0x10 on a sample without it when `size` is below
+/// 0x20, a buffer (+0x28) other than this one's (+0xc), a buffer size
+/// (+0x2c) other than this one's (+0x14) and a length (+0xc) above that
+/// size (signed; a zero size compares as 0). A new media type (+0x24, when
+/// flag 8 is set and `size` reaches 0x28) is copied first (`009f9cd0`; a
+/// null one is `E_POINTER`, a failed copy `E_OUTOFMEMORY`). Then, as far as
+/// `size` reaches: +0x20 to +0x40; the flags (keeping 0x20) to +4 and +4 to
+/// +8 (or only +4 to +8 for a size of 8 to 0xb); +0xc to +0x10; the end
+/// time +0x18 to +0x28; the start time +0x10 to +0x20; the copied type to
+/// +0x3c (the old one freed, `009f9cb0`). Flag 8 at +4 ends set when a type
+/// is held. Returns 0.
+pub fn fn_009faa20(e: &mut Engine, this: Ptr, size: u32, properties: Ptr) -> u32 {
+    if size < 4 {
+        return 0;
+    }
+    if properties.is_null() {
+        return E_POINTER;
+    }
+    let declared = field(e, properties, 0x0);
+    let size = size.min(declared);
+    if size > 0x30 || declared > 0x30 {
+        return E_INVALIDARG;
+    }
+    if size >= 0xc {
+        let flags = field(e, properties, 0x8);
+        if flags & 0xffff_fe20 != 0 {
+            return E_INVALIDARG;
+        }
+        if flags & 0x10 != 0 && byte_field(e, this, 0x4) & 0x10 == 0 && size < 0x20 {
+            return E_INVALIDARG;
+        }
+    }
+    if size >= 0x2c {
+        let buffer = field(e, properties, 0x28);
+        if buffer != 0 && buffer != field(e, this, 0xc) {
+            return E_INVALIDARG;
+        }
+    }
+    if size >= 0x30 {
+        let buffer_size = field(e, properties, 0x2c);
+        if buffer_size != 0 && buffer_size != field(e, this, 0x14) {
+            return E_INVALIDARG;
+        }
+        // The exe tests `size >= 0x10` again here (always true).
+        if size >= 0x10 && (buffer_size as i32) < field(e, properties, 0xc) as i32 {
+            return E_INVALIDARG;
+        }
+    }
+    let mut copy = 0u32;
+    if size >= 0x28 && byte_field(e, properties, 0x8) & 0x8 != 0 {
+        let media_type = field(e, properties, 0x24);
+        if media_type == 0 {
+            return E_POINTER;
+        }
+        copy = fn_009f9cd0(e, Ptr::new(media_type)).addr();
+        if copy == 0 {
+            return E_OUTOFMEMORY;
+        }
+    }
+    if size >= 0x24 {
+        let stream = field(e, properties, 0x20);
+        set_field(e, this, 0x40, stream);
+    }
+    if size >= 0xc {
+        let flags = (field(e, this, 0x4) & 0x20) | field(e, properties, 0x8);
+        set_field(e, this, 0x4, flags);
+        let specific = field(e, properties, 0x4);
+        set_field(e, this, 0x8, specific);
+    } else if size >= 0x8 {
+        let specific = field(e, properties, 0x4);
+        set_field(e, this, 0x8, specific);
+    }
+    if size >= 0x10 {
+        let length = field(e, properties, 0xc);
+        set_field(e, this, 0x10, length);
+    }
+    if size >= 0x20 {
+        let low = field(e, properties, 0x18);
+        set_field(e, this, 0x28, low);
+        let high = field(e, properties, 0x1c);
+        set_field(e, this, 0x2c, high);
+    }
+    if size >= 0x18 {
+        let low = field(e, properties, 0x10);
+        set_field(e, this, 0x20, low);
+        let high = field(e, properties, 0x14);
+        set_field(e, this, 0x24, high);
+    }
+    if size >= 0x28 && byte_field(e, properties, 0x8) & 0x8 != 0 {
+        let held = field(e, this, 0x3c);
+        if held != 0 {
+            fn_009f9cb0(e, Ptr::new(held));
+        }
+        set_field(e, this, 0x3c, copy);
+    }
+    let flags = field(e, this, 0x4);
+    let flags = if field(e, this, 0x3c) != 0 {
+        flags | 0x8
+    } else {
+        flags & 0xffff_fff7
+    };
+    set_field(e, this, 0x4, flags);
+    0
+}
+
+// Translated from 009fabb0 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 009fabb0 - C++ exception unwinding (FS:[0] frame state) is not translated.
+/// Allocator base destructor shape (thiscall, no stack words; called by the
+/// `CMemAllocator` destructor `009fb1c0`): closes the handle at +0x30 when
+/// set (`CloseHandle`), releases (vtable +8) the object at +0x58 when set,
+/// deletes the critical section at +0x10 and drops the object count
+/// (`009fce80`).
+pub fn fn_009fabb0(e: &mut Engine, this: Ptr) {
+    let handle = field(e, this, 0x30);
+    if handle != 0 {
+        e.call(CLOSE_HANDLE, &args![handle]);
+    }
+    if field(e, this, 0x58) != 0 {
+        let held = field(e, this, 0x58);
+        e.vcall(held, 0x8, &args![]);
+    }
+    e.call(DELETE_CRITICAL_SECTION, &args![offset(this, 0x10)]);
+    fn_009fce80(e);
+}
+
+// Translated from 009fac30 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Slot +0 of the `CMemAllocator` vtable at `01093d28` (stdcall,
+/// `RET 0xc`): the id at `01093bbc`, and the id at `01093bac` while the
+/// word at +0x5c is set, hand out the interface at +0xc (`009fceb0`, 0 for
+/// a null `this`); any other id goes to `009fcf10`.
+pub fn fn_009fac30(e: &mut Engine, this: Ptr, id: Ptr, out: Ptr) -> u32 {
+    let hands_out = fn_009f9980(e, id, Ptr::new(INTERFACE_ID_01093BBC)) != 0
+        || (fn_009f9980(e, id, Ptr::new(INTERFACE_ID_01093BAC)) != 0 && field(e, this, 0x5c) != 0);
+    if !hands_out {
+        return fn_009fcf10(e, this, id, out);
+    }
+    interface_of(e, this, 0xc, out)
+}
+
+// Translated from 009faca0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Slot +0x10 of the `CMemAllocator` vtable at `01093cf8` (stdcall,
+/// `RET 8`; `this` is the interface at object + 0xc): `E_POINTER` for a
+/// null `out`; otherwise, under the allocator's lock, fills `out` with the
+/// count (+0x2c), buffer size (+0x34), alignment (+0x38) and prefix
+/// (+0x3c). Returns 0.
+pub fn fn_009faca0(e: &mut Engine, this: Ptr, out: Ptr) -> u32 {
+    if out.is_null() {
+        return E_POINTER;
+    }
+    let lock = allocator_lock(this);
+    enter(e, lock);
+    for (to, from) in [(0x4u32, 0x34u32), (0x0, 0x2c), (0x8, 0x38), (0xc, 0x3c)] {
+        let value = field(e, this, from);
+        set_field(e, out, to, value);
+    }
+    leave(e, lock);
+    0
+}
+
+// Translated from 009fad00 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Slot +0x1c of the `CMemAllocator` vtable at `01093cf8` (stdcall,
+/// `RET 0x14`; the two time words are not read): clears `out`, then under
+/// the lock `VFW_E_NOT_COMMITTED` while +0x44 is 0; takes the first free
+/// sample (+0x1c, next at the sample's +0x1c, free count +0x20 down), marks
+/// it (+0x44 = 1) and returns it in `out` with 0. Without a free sample the
+/// waiting count (+0x28) grows; with flag 4 in `flags` that is
+/// `VFW_E_TIMEOUT`, otherwise it waits on the event at +0x24 (no timeout)
+/// and tries again.
+pub fn fn_009fad00(
+    e: &mut Engine,
+    this: Ptr,
+    out: Ptr,
+    _unused_2: u32,
+    _unused_3: u32,
+    flags: u32,
+) -> u32 {
+    e.mem.set_u32(out.addr(), 0);
+    loop {
+        let lock = allocator_lock(this);
+        enter(e, lock);
+        if field(e, this, 0x44) == 0 {
+            leave(e, lock);
+            return VFW_E_NOT_COMMITTED;
+        }
+        let sample = field(e, this, 0x1c);
+        if sample != 0 {
+            let next = e.mem.u32(sample.wrapping_add(0x1c));
+            let free = field(e, this, 0x20).wrapping_sub(1);
+            set_field(e, this, 0x20, free);
+            set_field(e, this, 0x1c, next);
+        } else {
+            let waiting = field(e, this, 0x28).wrapping_add(1);
+            set_field(e, this, 0x28, waiting);
+        }
+        leave(e, lock);
+        if sample != 0 {
+            e.mem.set_u32(sample.wrapping_add(0x44), 1);
+            e.mem.set_u32(out.addr(), sample);
+            return 0;
+        }
+        if flags & 0x4 != 0 {
+            return VFW_E_TIMEOUT;
+        }
+        let event = field(e, this, 0x24);
+        e.call(WAIT_FOR_SINGLE_OBJECT, &args![event, 0xffff_ffffu32]);
+    }
+}
+
+// Translated from 009fada0 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 009fada0 - C++ exception unwinding (FS:[0] frame state) is not translated.
+/// Slot +0x24 of the `CMemAllocator` vtable at `01093cf8` (stdcall,
+/// `RET 8`): under the lock adds a reference to `notify` (vtable +4, when
+/// set), releases the one held at +0x4c (vtable +8, when set) and holds
+/// `notify` there. Returns 0.
+pub fn fn_009fada0(e: &mut Engine, this: Ptr, notify: Ptr) -> u32 {
+    let lock = allocator_lock(this);
+    enter(e, lock);
+    if !notify.is_null() {
+        e.vcall(notify.addr(), 0x4, &args![]);
+    }
+    let held = field(e, this, 0x4c);
+    if held != 0 {
+        e.vcall(held, 0x8, &args![]);
+    }
+    set_field(e, this, 0x4c, notify.addr());
+    leave(e, lock);
+    0
+}
+
+// Translated from 009fae30 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Slot +0x28 of the `CMemAllocator` vtable at `01093cf8` (stdcall,
+/// `RET 8`): under the lock stores count (+0x2c) - allocated (+0x30) + free
+/// (+0x20) in `out` (no null test). Returns 0.
+pub fn fn_009fae30(e: &mut Engine, this: Ptr, out: Ptr) -> u32 {
+    let lock = allocator_lock(this);
+    enter(e, lock);
+    let value = field(e, this, 0x2c)
+        .wrapping_sub(field(e, this, 0x30))
+        .wrapping_add(field(e, this, 0x20));
+    e.mem.set_u32(out.addr(), value);
+    leave(e, lock);
+    0
+}
+
+// Translated from 009fae70 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Allocator wake-up (thiscall on the object, no stack words; called by
+/// `009faf50` and `009fc480`): when the waiting count at +0x34 is set,
+/// `ReleaseSemaphore` of the handle at +0x30 by that count (no previous
+/// count wanted) and the count cleared.
+pub fn fn_009fae70(e: &mut Engine, this: Ptr) {
+    let waiting = field(e, this, 0x34);
+    if waiting != 0 {
+        let semaphore = field(e, this, 0x30);
+        e.call(RELEASE_SEMAPHORE, &args![semaphore, waiting, 0u32]);
+        set_field(e, this, 0x34, 0);
+    }
+}
+
+// Translated from 009fae90 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 009fae90 - C++ exception unwinding (FS:[0] frame state) is not translated.
+/// Slot +0x14 of the `CMemAllocator` vtable at `01093cf8` (stdcall,
+/// `RET 4`): under the lock, when not yet committed (+0x44 is 0) sets it;
+/// a pending decommit (+0x48) is then just cancelled, otherwise the object
+/// (`this - 0xc`) allocates (vtable +0x14, thiscall) and on success a
+/// reference is added (vtable +4 of `this`). A failed allocation clears the
+/// commit flag again and is returned; otherwise 0.
+pub fn fn_009fae90(e: &mut Engine, this: Ptr) -> u32 {
+    let lock = allocator_lock(this);
+    enter(e, lock);
+    if field(e, this, 0x44) == 0 {
+        let pending = field(e, this, 0x48);
+        set_field(e, this, 0x44, 1);
+        if pending != 0 {
+            set_field(e, this, 0x48, 0);
+        } else {
+            let hr = e.vcall(back(this, 0xc).addr(), 0x14, &args![]).u32();
+            if failed(hr) {
+                set_field(e, this, 0x44, 0);
+                leave(e, lock);
+                return hr;
+            }
+            e.vcall(this.addr(), 0x4, &args![]);
+        }
+    }
+    leave(e, lock);
+    0
+}
+
+// Translated from 009faf50 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 009faf50 - C++ exception unwinding (FS:[0] frame state) is not translated.
+/// Slot +0x18 of the `CMemAllocator` vtable at `01093cf8` (stdcall,
+/// `RET 4`; also called by `009fb1c0`): nothing while neither committed
+/// (+0x44) nor a decommit pending (+0x48). Otherwise clears the commit;
+/// with fewer free samples (+0x20) than allocated (+0x30, signed) the
+/// decommit is left pending, else it is cleared, the object (`this - 0xc`)
+/// frees (vtable +0x10, thiscall) and a reference is released after the
+/// lock (vtable +8 of `this`). Waiters are woken (`009fae70`) in both
+/// cases. Returns 0.
+pub fn fn_009faf50(e: &mut Engine, this: Ptr) -> u32 {
+    let lock = allocator_lock(this);
+    enter(e, lock);
+    if field(e, this, 0x44) == 0 && field(e, this, 0x48) == 0 {
+        leave(e, lock);
+        return 0;
+    }
+    let free = field(e, this, 0x20) as i32;
+    let allocated = field(e, this, 0x30) as i32;
+    set_field(e, this, 0x44, 0);
+    let release = if free < allocated {
+        set_field(e, this, 0x48, 1);
+        false
+    } else {
+        set_field(e, this, 0x48, 0);
+        e.vcall(back(this, 0xc).addr(), 0x10, &args![]);
+        true
+    };
+    fn_009fae70(e, back(this, 0xc));
+    leave(e, lock);
+    if release {
+        e.vcall(this.addr(), 0x8, &args![]);
+    }
+    0
+}
+
+// Translated from 009fb020 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Allocator size check (thiscall on the object, no stack words; called by
+/// `009fcc60`): `VFW_E_SIZENOTSET` unless the count (+0x38), buffer size
+/// (+0x40) and alignment (+0x44) are all positive (signed); then 1 when the
+/// word at +0x4c is 0, else 0.
+pub fn fn_009fb020(e: &mut Engine, this: Ptr) -> u32 {
+    if field(e, this, 0x38) as i32 > 0
+        && field(e, this, 0x40) as i32 > 0
+        && field(e, this, 0x44) as i32 > 0
+    {
+        return u32::from(field(e, this, 0x4c) == 0);
+    }
+    VFW_E_SIZENOTSET
+}
+
+// Translated from 009fb050 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Slot +0xc of the `CMemAllocator` vtable at `01093cf8` (stdcall,
+/// `RET 0xc`): `E_POINTER` for a null `actual`; otherwise under the lock
+/// clears `actual` (16 bytes) and reads `GetSystemInfo` into a local. The
+/// requested alignment (`request` +8) must be nonzero and divide the
+/// allocation granularity (`VFW_E_BADALIGN`), the allocator must not be
+/// committed (+0x44 == 1: `VFW_E_ALREADY_COMMITTED`) and no buffers may be
+/// out (free +0x20 below allocated +0x30, signed:
+/// `VFW_E_BUFFERS_OUTSTANDING`). The buffer size plus prefix (`request` +4
+/// and +0xc) is rounded up to the alignment (signed `IDIV`); size minus
+/// prefix, the count (+0), the alignment and the prefix go to +0x34,
+/// +0x2c, +0x38, +0x3c and to `actual` (+4, +0, +8, +0xc); +0x40 is set.
+/// Returns 0.
+pub fn fn_009fb050(e: &mut Engine, this: Ptr, request: Ptr, actual: Ptr) -> u32 {
+    if actual.is_null() {
+        return E_POINTER;
+    }
+    let lock = allocator_lock(this);
+    enter(e, lock);
+    for at in [0x0u32, 0x4, 0x8, 0xc] {
+        set_field(e, actual, at, 0);
+    }
+    e.with_stack(0x24, |e, info| {
+        e.call(GET_SYSTEM_INFO, &args![info]);
+        let alignment = field(e, request, 0x8);
+        // SYSTEM_INFO +0x1c: the allocation granularity.
+        if alignment == 0 || field(e, info, 0x1c) & alignment.wrapping_sub(1) != 0 {
+            leave(e, lock);
+            return VFW_E_BADALIGN;
+        }
+        if field(e, this, 0x44) == 1 {
+            leave(e, lock);
+            return VFW_E_ALREADY_COMMITTED;
+        }
+        if (field(e, this, 0x20) as i32) < field(e, this, 0x30) as i32 {
+            leave(e, lock);
+            return VFW_E_BUFFERS_OUTSTANDING;
+        }
+        let mut size = field(e, request, 0x4).wrapping_add(field(e, request, 0xc));
+        let remainder = (size as i32).wrapping_rem(alignment as i32) as u32;
+        if remainder != 0 {
+            size = size.wrapping_add(alignment.wrapping_sub(remainder));
+        }
+        let buffer = size.wrapping_sub(field(e, request, 0xc));
+        set_field(e, this, 0x34, buffer);
+        set_field(e, actual, 0x4, buffer);
+        for (from, to) in [(0x0u32, 0x2cu32), (0x8, 0x38), (0xc, 0x3c)] {
+            let value = field(e, request, from);
+            set_field(e, this, to, value);
+            set_field(e, actual, from, value);
+        }
+        set_field(e, this, 0x40, 1);
+        leave(e, lock);
+        0
+    })
+}
+
+// Translated from 009fb170 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Allocator free-all (thiscall on the object, no stack words; called by
+/// `009fb1c0` and `009fcc60`): deletes every sample of the list at +0x28
+/// (next at the sample's +0x1c, count +0x2c down; the sample's vtable +0x54
+/// with 1), clears +0x3c and releases the block at +0x60 (`VirtualFree`,
+/// size 0, `MEM_RELEASE` 0x8000) when there is one.
+pub fn fn_009fb170(e: &mut Engine, this: Ptr) {
+    loop {
+        let sample = field(e, this, 0x28);
+        if sample == 0 {
+            break;
+        }
+        let next = e.mem.u32(sample.wrapping_add(0x1c));
+        let count = field(e, this, 0x2c).wrapping_sub(1);
+        set_field(e, this, 0x2c, count);
+        set_field(e, this, 0x28, next);
+        e.vcall(sample, 0x54, &args![1u32]);
+    }
+    let block = field(e, this, 0x60);
+    set_field(e, this, 0x3c, 0);
+    if block != 0 {
+        e.call(VIRTUAL_FREE, &args![block, 0u32, 0x8000u32]);
+        set_field(e, this, 0x60, 0);
+    }
+}
+
+// Translated from 009fb1c0 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 009fb1c0 - C++ exception unwinding (FS:[0] frame state) is not translated.
+/// `CMemAllocator` destructor shape (thiscall, no stack words; RTTI of the
+/// vtables it installs at +0 and +0xc): decommits (`009faf50` on the
+/// interface at +0xc), frees everything (`009fb170`) and runs the base
+/// destructor (`009fabb0`).
+pub fn fn_009fb1c0(e: &mut Engine, this: Ptr) {
+    set_field(e, this, 0x0, MEM_ALLOCATOR_VTABLE);
+    set_field(e, this, 0xc, MEM_ALLOCATOR_VTABLE_C);
+    fn_009faf50(e, offset(this, 0xc));
+    fn_009fb170(e, this);
+    fn_009fabb0(e, this);
+}
+
+// Translated from 009fb230 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Slot +0 of the `CMemAllocator` vtable at `01093cf8`: replaces its first
+/// stack word with the outer object at `this - 8` and jumps to that
+/// object's vtable +0 (the interface query: the object, an id and an out
+/// pointer).
+pub fn fn_009fb230(e: &mut Engine, this: Ptr, id: Ptr, out: Ptr) -> u32 {
+    let outer = e.mem.u32(this.addr().wrapping_sub(0x8));
+    e.vcall(outer, 0x0, &args![id, out]).u32()
+}
+
+// Translated from 009fb250 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Slot +4 of the `CMemAllocator` vtable at `01093cf8`: replaces its stack
+/// word with the outer object at `this - 8` and jumps to its vtable +4 (the
+/// reference add; one word).
+pub fn fn_009fb250(e: &mut Engine, this: Ptr) -> u32 {
+    let outer = e.mem.u32(this.addr().wrapping_sub(0x8));
+    e.vcall(outer, 0x4, &args![]).u32()
+}
+
+// Translated from 009fb270 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Slot +8 of the `CMemAllocator` vtable at `01093cf8`: replaces its stack
+/// word with the outer object at `this - 8` and jumps to its vtable +8 (the
+/// release; one word).
+pub fn fn_009fb270(e: &mut Engine, this: Ptr) -> u32 {
+    let outer = e.mem.u32(this.addr().wrapping_sub(0x8));
+    e.vcall(outer, 0x8, &args![]).u32()
+}
+
+// Translated from 009fb290 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Filter (un)registration through a mapper (stdcall, `RET 0xc`; called by
+/// `009fba40` with 1 and `009fbab0` with 0): 1 for a null `setup`.
+/// Otherwise the mapper (stdcall methods) first drops the class whose
+/// 16-byte id `setup` +0 points at (vtable +0x1c, the id by value); with
+/// `register` set it then adds it (vtable +0xc: id, name +4, merit +8) and,
+/// while the calls succeed, each of the +0xc pins of the 0x24-byte array at
+/// +0x10 (vtable +0x14: id, the pin's words +0 to +0x10, the id its +0x14
+/// points at, its +0x18) and each of a pin's +0x1c (major, minor) id
+/// pointer pairs at +0x20 (vtable +0x18: id, the pin's name, both ids by
+/// value). The last result is returned, with 0x80070002 turned into 0.
+pub fn fn_009fb290(e: &mut Engine, setup: Ptr, mapper: Ptr, register: u32) -> u32 {
+    if setup.is_null() {
+        return 1;
+    }
+    let m = mapper.addr();
+    let id = id_words(e, field(e, setup, 0x0));
+    let mut hr = e.vcall(m, 0x1c, &args![id[0], id[1], id[2], id[3]]).u32();
+    if register != 0 {
+        let merit = field(e, setup, 0x8);
+        let name = field(e, setup, 0x4);
+        let id = id_words(e, field(e, setup, 0x0));
+        hr = e
+            .vcall(m, 0xc, &args![id[0], id[1], id[2], id[3], name, merit])
+            .u32();
+        if !failed(hr) && field(e, setup, 0xc) != 0 {
+            let mut pin_index: u32 = 0;
+            let mut pin_offset: u32 = 0;
+            'pins: loop {
+                let pin = field(e, setup, 0x10).wrapping_add(pin_offset);
+                let connects_pin = e.mem.u32(pin.wrapping_add(0x18));
+                let connects = id_words(e, e.mem.u32(pin.wrapping_add(0x14)));
+                let many = e.mem.u32(pin.wrapping_add(0x10));
+                let zero = e.mem.u32(pin.wrapping_add(0xc));
+                let output = e.mem.u32(pin.wrapping_add(0x8));
+                let rendered = e.mem.u32(pin.wrapping_add(0x4));
+                let name = e.mem.u32(pin.wrapping_add(0x0));
+                let id = id_words(e, field(e, setup, 0x0));
+                hr = e
+                    .vcall(
+                        m,
+                        0x14,
+                        &args![
+                            id[0],
+                            id[1],
+                            id[2],
+                            id[3],
+                            name,
+                            rendered,
+                            output,
+                            zero,
+                            many,
+                            connects[0],
+                            connects[1],
+                            connects[2],
+                            connects[3],
+                            connects_pin
+                        ],
+                    )
+                    .u32();
+                if failed(hr) {
+                    break;
+                }
+                let pins = field(e, setup, 0x10);
+                if e.mem.u32(pin_offset.wrapping_add(pins).wrapping_add(0x1c)) != 0 {
+                    let mut type_index: u32 = 0;
+                    loop {
+                        let pins = field(e, setup, 0x10);
+                        let types = e.mem.u32(pin_offset.wrapping_add(pins).wrapping_add(0x20));
+                        let entry = types.wrapping_add(type_index.wrapping_mul(8));
+                        let minor = id_words(e, e.mem.u32(entry.wrapping_add(4)));
+                        let major = id_words(e, e.mem.u32(entry));
+                        let name = e.mem.u32(pin_offset.wrapping_add(pins));
+                        let id = id_words(e, field(e, setup, 0x0));
+                        hr = e
+                            .vcall(
+                                m,
+                                0x18,
+                                &args![
+                                    id[0], id[1], id[2], id[3], name, major[0], major[1], major[2],
+                                    major[3], minor[0], minor[1], minor[2], minor[3]
+                                ],
+                            )
+                            .u32();
+                        if failed(hr) {
+                            break 'pins;
+                        }
+                        type_index = type_index.wrapping_add(1);
+                        let pins = field(e, setup, 0x10);
+                        if type_index >= e.mem.u32(pin_offset.wrapping_add(pins).wrapping_add(0x1c))
+                        {
+                            break;
+                        }
+                    }
+                }
+                pin_index = pin_index.wrapping_add(1);
+                pin_offset = pin_offset.wrapping_add(0x24);
+                if pin_index >= field(e, setup, 0xc) {
+                    break;
+                }
+            }
+        }
+    }
+    if hr == HRESULT_FILE_NOT_FOUND {
+        0
+    } else {
+        hr
+    }
+}
+
+// Translated from 009fb650 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 009fb650 - C++ exception unwinding (FS:[0] frame state) is not translated.
+/// Slot +0x24 of the `CAsyncReader` vtable at `01093e6c` (and of
+/// `CBSAReader`'s; stdcall, `RET 8`): `E_POINTER` for a null `out`;
+/// otherwise, under the critical section held at +0x2c, adds a reference
+/// to the object at +0xc (vtable +4, when set) and stores it in `out`.
+/// Returns 0.
+pub fn fn_009fb650(e: &mut Engine, this: Ptr, out: Ptr) -> u32 {
+    if out.is_null() {
+        return E_POINTER;
+    }
+    let section = field(e, this, 0x2c);
+    enter(e, section);
+    if field(e, this, 0xc) != 0 {
+        let held = field(e, this, 0xc);
+        e.vcall(held, 0x4, &args![]);
+    }
+    let held = field(e, this, 0xc);
+    e.mem.set_u32(out.addr(), held);
+    leave(e, section);
+    0
+}
+
+// Translated from 009fb960 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 009fb960 - C++ exception unwinding (FS:[0] frame state) is not translated.
+/// Slot +0x2c of the `CAsyncReader` vtable at `01093e6c` (and of
+/// `CBSAReader`'s; stdcall, `RET 0xc`): `E_POINTER` for a null `out`;
+/// otherwise, under the critical section held at +0x2c, walks the pins of
+/// the object at `this - 0xc` (count vtable +0x18, pin vtable +0x1c with
+/// the index; thiscall) and for the first whose wide name (+0x14) equals
+/// `name` (`009fd030`) stores its interface (+0xc) in `out`, adds a
+/// reference (vtable +4) and returns 0. None: clears `out`,
+/// `VFW_E_NOT_FOUND`.
+pub fn fn_009fb960(e: &mut Engine, this: Ptr, name: Ptr, out: Ptr) -> u32 {
+    if out.is_null() {
+        return E_POINTER;
+    }
+    let section = field(e, this, 0x2c);
+    enter(e, section);
+    let filter = back(this, 0xc).addr();
+    let count = e.vcall(filter, 0x18, &args![]).u32() as i32;
+    let mut index: i32 = 0;
+    while index < count {
+        let pin = e.vcall(filter, 0x1c, &args![index]).u32();
+        let pin_name = e.mem.u32(pin.wrapping_add(0x14));
+        if fn_009fd030(e, Ptr::new(pin_name), name) == 0 {
+            let interface = pin.wrapping_add(0xc);
+            e.mem.set_u32(out.addr(), interface);
+            e.vcall(interface, 0x4, &args![]);
+            leave(e, section);
+            return 0;
+        }
+        index += 1;
+    }
+    e.mem.set_u32(out.addr(), 0);
+    leave(e, section);
+    VFW_E_NOT_FOUND
+}
+
+/// The shared body of `009fba40` and `009fbab0`: the setup block from the
+/// object at `this - 0x10` (vtable +0x20, thiscall; 1 returned at once when
+/// it is 0), `CoInitialize(0)`, the mapper from `CoCreateInstance` (class
+/// `0107cb08`, no outer object, context 1, interface `01093b8c`, written
+/// over the stack slot of `this`), `009fb290` with `register` and a release
+/// of the mapper (vtable +8) when that worked, `CoFreeUnusedLibraries`,
+/// `CoUninitialize`. Gives the setup test's 1 or the last result.
+fn register_filter(e: &mut Engine, this: Ptr, register: u32) -> Option<u32> {
+    let setup = e.vcall(back(this, 0x10).addr(), 0x20, &args![]).u32();
+    if setup == 0 {
+        return None;
+    }
+    e.call(CO_INITIALIZE, &args![0u32]);
+    let hr = e.with_stack(4, |e, slot| {
+        e.mem.set_u32(slot.addr(), this.addr());
+        let hr = e
+            .call(
+                CO_CREATE_INSTANCE,
+                &args![CLASS_ID_0107CB08, 0u32, 1u32, INTERFACE_ID_01093B8C, slot],
+            )
+            .u32();
+        if failed(hr) {
+            return hr;
+        }
+        let mapper = e.mem.u32(slot.addr());
+        let hr = fn_009fb290(e, Ptr::new(setup), Ptr::new(mapper), register);
+        let mapper = e.mem.u32(slot.addr());
+        e.vcall(mapper, 0x8, &args![]);
+        hr
+    });
+    e.call(CO_FREE_UNUSED_LIBRARIES, &args![]);
+    e.call(CO_UNINITIALIZE, &args![]);
+    Some(hr)
+}
+
+// Translated from 009fba40 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Slot +0xc of the `CAsyncReader` vtable at `01093e54` (stdcall, `RET 4`):
+/// registers the filter (`009fb290` with 1 through the mapper class
+/// `0107cb08`, see `register_filter`). Returns 1 without a setup block,
+/// else 0 whatever the registration gave.
+pub fn fn_009fba40(e: &mut Engine, this: Ptr) -> u32 {
+    match register_filter(e, this, 1) {
+        None => 1,
+        Some(_) => 0,
+    }
+}
+
+// Translated from 009fbab0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Slot +0x10 of the `CAsyncReader` vtable at `01093e54` (stdcall,
+/// `RET 4`): unregisters the filter (`009fb290` with 0, see
+/// `register_filter`). Returns 1 without a setup block; otherwise the
+/// `CoCreateInstance` failure or `009fb290`'s result, 0x80070002 turned
+/// into 0.
+pub fn fn_009fbab0(e: &mut Engine, this: Ptr) -> u32 {
+    match register_filter(e, this, 0) {
+        None => 1,
+        Some(hr) if hr == HRESULT_FILE_NOT_FOUND => 0,
+        Some(hr) => hr,
+    }
+}
+
+// Translated from 009fbc50 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Slot +0x10 of the `CEnumPins` vtable (stdcall, `RET 8`):
+/// `VFW_E_ENUM_OUT_OF_SYNC` when the filter's version (+0xc, vtable +0x14)
+/// is not the one held at +0x10; 1 (`S_FALSE`) when `count` is more than
+/// the pins left (total +8 - position +4, unsigned); otherwise moves the
+/// position on by `count` and returns 0.
+pub fn fn_009fbc50(e: &mut Engine, this: Ptr, count: u32) -> u32 {
+    let filter = field(e, this, 0xc);
+    if e.vcall(filter, 0x14, &args![]).u32() != field(e, this, 0x10) {
+        return VFW_E_ENUM_OUT_OF_SYNC;
+    }
+    let position = field(e, this, 0x4);
+    let left = field(e, this, 0x8).wrapping_sub(position);
+    if count > left {
+        return 1;
+    }
+    set_field(e, this, 0x4, position.wrapping_add(count));
+    0
+}
+
+// Translated from 009fbe40 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 009fbe40 - C++ exception unwinding (FS:[0] frame state) and the /GS cookie check (00ec408c) are not translated.
+/// Slot +0x10 of the `CEnumMediaTypes` vtable (stdcall, `RET 8`): 0 for a
+/// `count` of 0; `VFW_E_ENUM_OUT_OF_SYNC` when the pin's version (+8,
+/// vtable +0x10) is not the one at +0xc; otherwise moves the position (+4)
+/// on by `count` and asks the pin for the type at position - 1 (vtable
+/// +0x34, thiscall, into a stack media type made by `009f9c70` and freed by
+/// `009f9c60`). Returns 1 when that answer is nonzero, else 0.
+pub fn fn_009fbe40(e: &mut Engine, this: Ptr, count: u32) -> u32 {
+    if count == 0 {
+        return 0;
+    }
+    let pin = field(e, this, 0x8);
+    if e.vcall(pin, 0x10, &args![]).u32() != field(e, this, 0xc) {
+        return VFW_E_ENUM_OUT_OF_SYNC;
+    }
+    let position = field(e, this, 0x4).wrapping_add(count);
+    set_field(e, this, 0x4, position);
+    e.with_stack(0x48, |e, media_type| {
+        fn_009f9c70(e, media_type);
+        let pin = field(e, this, 0x8);
+        let at = field(e, this, 0x4).wrapping_sub(1);
+        let hr = e.vcall(pin, 0x34, &args![at, media_type]).u32();
+        fn_009f9c60(e, media_type);
+        u32::from(hr != 0)
+    })
+}
+
+// Translated from 009fc190 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 009fc190 - C++ exception unwinding (FS:[0] frame state) is not translated.
+/// Slot +0x10 of the `CAsyncOutputPin` vtable at `01093d9c` (stdcall,
+/// `RET 0xc`; `this` is the interface at pin + 0xc): `E_POINTER` for a
+/// null `connector` or `media_type`. Under the critical section held at
+/// +0x14: `VFW_E_ALREADY_CONNECTED` while +0xc holds a pin;
+/// `VFW_E_NOT_STOPPED` while the filter (+0x1c) has a state (+0x14) and
+/// the byte at +0x19 is 0. The pin object (`this - 0xc`, thiscall) then
+/// checks the connector (vtable +0x28) and the type (vtable +0x20); a
+/// failure breaks the connection (vtable +0x2c) and is returned (a nonzero
+/// type answer that is not a failure, `E_FAIL` or `E_INVALIDARG` becomes
+/// `VFW_E_TYPE_NOT_ACCEPTED`). Then the connector is held at +0xc with a
+/// reference, the type set (vtable +0x24) and the connection completed
+/// (vtable +0x30); a failure there releases and clears the connector,
+/// breaks the connection and is returned. Returns 0.
+pub fn fn_009fc190(e: &mut Engine, this: Ptr, connector: Ptr, media_type: Ptr) -> u32 {
+    if connector.is_null() || media_type.is_null() {
+        return E_POINTER;
+    }
+    let section = field(e, this, 0x14);
+    enter(e, section);
+    if field(e, this, 0xc) != 0 {
+        leave(e, section);
+        return VFW_E_ALREADY_CONNECTED;
+    }
+    let filter = field(e, this, 0x1c);
+    if e.mem.u32(filter.wrapping_add(0x14)) != 0 && byte_field(e, this, 0x19) == 0 {
+        leave(e, section);
+        return VFW_E_NOT_STOPPED;
+    }
+    let pin = back(this, 0xc).addr();
+    let hr = e.vcall(pin, 0x28, &args![connector]).u32();
+    if failed(hr) {
+        e.vcall(pin, 0x2c, &args![]);
+        leave(e, section);
+        return hr;
+    }
+    let mut hr = e.vcall(pin, 0x20, &args![media_type]).u32();
+    if hr != 0 {
+        e.vcall(pin, 0x2c, &args![]);
+        if !failed(hr) || hr == E_FAIL || hr == E_INVALIDARG {
+            hr = VFW_E_TYPE_NOT_ACCEPTED;
+        }
+        leave(e, section);
+        return hr;
+    }
+    set_field(e, this, 0xc, connector.addr());
+    e.vcall(connector.addr(), 0x4, &args![]);
+    let mut hr = e.vcall(pin, 0x24, &args![media_type]).u32();
+    if !failed(hr) {
+        hr = e.vcall(pin, 0x30, &args![connector]).u32();
+        if !failed(hr) {
+            leave(e, section);
+            return 0;
+        }
+    }
+    let held = field(e, this, 0xc);
+    e.vcall(held, 0x8, &args![]);
+    set_field(e, this, 0xc, 0);
+    e.vcall(pin, 0x2c, &args![]);
+    leave(e, section);
+    hr
+}
+
+// Translated from 009fc390 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 009fc390 - C++ exception unwinding (FS:[0] frame state) is not translated.
+/// Slot +0x1c of the `CAsyncOutputPin` vtable at `01093d9c` (stdcall,
+/// `RET 8`): `E_POINTER` for a null `out`; otherwise, under the critical
+/// section held at +0x14, copies the media type at +0x28 to `out`
+/// (`009f9bb0`, its result ignored) and returns 0 while connected (+0xc),
+/// or clears `out` (`009f9a30`) and returns `VFW_E_NOT_CONNECTED`.
+pub fn fn_009fc390(e: &mut Engine, this: Ptr, out: Ptr) -> u32 {
+    if out.is_null() {
+        return E_POINTER;
+    }
+    let section = field(e, this, 0x14);
+    enter(e, section);
+    if field(e, this, 0xc) != 0 {
+        fn_009f9bb0(e, out, offset(this, 0x28));
+        leave(e, section);
+        return 0;
+    }
+    fn_009f9a30(e, out);
+    leave(e, section);
+    VFW_E_NOT_CONNECTED
+}
+
+// Translated from 009fc460 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Slot +0x54 of the `CMediaSample` vtable (thiscall, `RET 4`): the
+/// destructor (`009fa560`), then `operator delete` when bit 0 of `flags`
+/// is set. Returns `this`.
+pub fn fn_009fc460(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    fn_009fa560(e, this);
+    if flags & 1 != 0 {
+        e.call(OPERATOR_DELETE, &args![this]);
+    }
+    this
+}
+
+// Translated from 009fc480 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 009fc480 - C++ exception unwinding (FS:[0] frame state) is not translated.
+/// Slot +0x20 of the `CMemAllocator` vtable at `01093cf8` (stdcall,
+/// `RET 8`): `E_POINTER` for a null `sample`. Under the lock the sample
+/// goes to the front of the free list (+0x1c, link at the sample's +0x1c;
+/// free count +0x20 up), waiters are woken (`009fae70`, when +0x28 is set)
+/// and, with a decommit pending (+0x48) and every sample back (free count
+/// equal to +0x30), the object (`this - 0xc`) frees (vtable +0x10,
+/// thiscall) and the decommit is cleared. After the lock the notify object
+/// at +0x4c is told (vtable +0xc) and, after such a free, a reference is
+/// released (vtable +8 of `this`). Returns 0.
+pub fn fn_009fc480(e: &mut Engine, this: Ptr, sample: Ptr) -> u32 {
+    if sample.is_null() {
+        return E_POINTER;
+    }
+    let lock = allocator_lock(this);
+    enter(e, lock);
+    let first = field(e, this, 0x1c);
+    set_field(e, sample, 0x1c, first);
+    set_field(e, this, 0x1c, sample.addr());
+    let free = field(e, this, 0x20).wrapping_add(1);
+    set_field(e, this, 0x20, free);
+    if field(e, this, 0x28) != 0 {
+        fn_009fae70(e, back(this, 0xc));
+    }
+    let free = field(e, this, 0x20);
+    let release = if field(e, this, 0x48) != 0 && free == field(e, this, 0x30) {
+        e.vcall(back(this, 0xc).addr(), 0x10, &args![]);
+        set_field(e, this, 0x48, 0);
+        true
+    } else {
+        false
+    };
+    leave(e, lock);
+    let notify = field(e, this, 0x4c);
+    if notify != 0 {
+        e.vcall(notify, 0xc, &args![]);
+    }
+    if release {
+        e.vcall(this.addr(), 0x8, &args![]);
+    }
+    0
+}
+
+// Translated from 009fc580 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Slot +0xc of the `CMemAllocator` vtable at `01093d28` (thiscall,
+/// `RET 4`): the destructor (`009fb1c0`), then `operator delete` when bit
+/// 0 of `flags` is set. Returns `this`.
+pub fn fn_009fc580(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    fn_009fb1c0(e, this);
+    if flags & 1 != 0 {
+        e.call(OPERATOR_DELETE, &args![this]);
+    }
+    this
+}
+
+// Translated from 009fc6d0 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 009fc6d0 - C++ exception unwinding (FS:[0] frame state) is not translated.
+/// Slot +0x18 of the `CEnumPins` vtable (stdcall, `RET 8`): `E_POINTER`
+/// for a null `out`; `VFW_E_ENUM_OUT_OF_SYNC` (with `out` cleared) when the
+/// filter's version (+0xc, vtable +0x14) is not the one at +0x10;
+/// otherwise a new 0x30-byte enumerator made from this one (`009fc600`
+/// with the filter and `this`) goes to `out`: 0, or `E_OUTOFMEMORY` when
+/// the allocation failed.
+pub fn fn_009fc6d0(e: &mut Engine, this: Ptr, out: Ptr) -> u32 {
+    if out.is_null() {
+        return E_POINTER;
+    }
+    let filter = field(e, this, 0xc);
+    if e.vcall(filter, 0x14, &args![]).u32() != field(e, this, 0x10) {
+        e.mem.set_u32(out.addr(), 0);
+        return VFW_E_ENUM_OUT_OF_SYNC;
+    }
+    let block = e.call(OPERATOR_NEW, &args![0x30u32]).u32();
+    let made = if block != 0 {
+        let filter = field(e, this, 0xc);
+        fn_009fc600(e, Ptr::new(block), Ptr::new(filter), this).addr()
+    } else {
+        0
+    };
+    e.mem.set_u32(out.addr(), made);
+    if made == 0 {
+        E_OUTOFMEMORY
+    } else {
+        0
+    }
+}
+
+// Translated from 009fc7e0 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 009fc7e0 - C++ exception unwinding (FS:[0] frame state) is not translated.
+/// Slot +0x18 of the `CEnumMediaTypes` vtable (stdcall, `RET 8`):
+/// `E_POINTER` for a null `out`; `VFW_E_ENUM_OUT_OF_SYNC` (with `out`
+/// cleared) when the pin's version (+8, vtable +0x10) is not the one at
+/// +0xc; otherwise a new 0x14-byte enumerator made from this one
+/// (`009fc780` with the pin and `this`) goes to `out`: 0, or
+/// `E_OUTOFMEMORY` when the allocation failed.
+pub fn fn_009fc7e0(e: &mut Engine, this: Ptr, out: Ptr) -> u32 {
+    if out.is_null() {
+        return E_POINTER;
+    }
+    let pin = field(e, this, 0x8);
+    if e.vcall(pin, 0x10, &args![]).u32() != field(e, this, 0xc) {
+        e.mem.set_u32(out.addr(), 0);
+        return VFW_E_ENUM_OUT_OF_SYNC;
+    }
+    let block = e.call(OPERATOR_NEW, &args![0x14u32]).u32();
+    let made = if block != 0 {
+        let pin = field(e, this, 0x8);
+        fn_009fc780(e, Ptr::new(block), Ptr::new(pin), this).addr()
+    } else {
+        0
+    };
+    e.mem.set_u32(out.addr(), made);
+    if made == 0 {
+        E_OUTOFMEMORY
+    } else {
+        0
+    }
+}
+
+// Translated from 009fcb50 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `CMediaSample` constructor shape (thiscall, `RET 0x14`; RTTI of the
+/// vtable it installs; the first and third words are not read): the buffer
+/// at +0xc, its size at +0x10 and +0x14, the allocator at +0x18, and +4,
+/// +8, +0x3c, +0x40, +0x44 cleared. Returns `this`.
+pub fn fn_009fcb50(
+    e: &mut Engine,
+    this: Ptr,
+    _unused_1: u32,
+    allocator: Ptr,
+    _unused_3: u32,
+    buffer: u32,
+    length: u32,
+) -> Ptr {
+    set_field(e, this, 0xc, buffer);
+    set_field(e, this, 0x10, length);
+    set_field(e, this, 0x14, length);
+    set_field(e, this, 0x0, MEDIA_SAMPLE_VTABLE);
+    set_field(e, this, 0x4, 0);
+    set_field(e, this, 0x8, 0);
+    set_field(e, this, 0x18, allocator.addr());
+    set_field(e, this, 0x3c, 0);
+    set_field(e, this, 0x40, 0);
+    set_field(e, this, 0x44, 0);
+    this
+}
+
+// Translated from 009fcb90 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Allocator base constructor shape (thiscall, `RET 0x14`; called by
+/// `009fcc20`): the reference-counted base (`009fcee0` with `name` and
+/// `outer`), `InitializeCriticalSection` at +0x10, +0x28 to +0x58 cleared
+/// and `callback` at +0x5c. With `semaphore` set a semaphore (count 0,
+/// maximum 0x7fffffff, unnamed; `CreateSemaphoreA`) goes to +0x30, and
+/// `E_OUTOFMEMORY` to `*status` when it is 0. Returns `this`.
+pub fn fn_009fcb90(
+    e: &mut Engine,
+    this: Ptr,
+    name: Ptr,
+    outer: Ptr,
+    status: Ptr,
+    semaphore: u32,
+    callback: u32,
+) -> Ptr {
+    fn_009fcee0(e, this, name, outer);
+    e.call(INITIALIZE_CRITICAL_SECTION, &args![offset(this, 0x10)]);
+    for at in (0x28u32..=0x58).step_by(4) {
+        set_field(e, this, at, 0);
+    }
+    set_field(e, this, 0x5c, callback);
+    if semaphore != 0 {
+        let handle = e
+            .call(CREATE_SEMAPHORE_A, &args![0u32, 0u32, 0x7fff_ffffu32, 0u32])
+            .u32();
+        set_field(e, this, 0x30, handle);
+        if handle == 0 {
+            e.mem.set_u32(status.addr(), E_OUTOFMEMORY);
+        }
+    }
+    this
+}
+
+// Translated from 009fcc20 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `CMemAllocator` constructor shape (thiscall, `RET 0xc`; called by
+/// `009fd5a0`; RTTI of the vtables it installs at +0 and +0xc): the
+/// allocator base (`009fcb90` with `name`, `outer`, `status`, 1, 1) and the
+/// block at +0x60 cleared. Returns `this`.
+pub fn fn_009fcc20(e: &mut Engine, this: Ptr, name: Ptr, outer: Ptr, status: Ptr) -> Ptr {
+    fn_009fcb90(e, this, name, outer, status, 1, 1);
+    set_field(e, this, 0x0, MEM_ALLOCATOR_VTABLE);
+    set_field(e, this, 0xc, MEM_ALLOCATOR_VTABLE_C);
+    set_field(e, this, 0x60, 0);
+    this
+}
+
+// Translated from 009fcc60 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 009fcc60 - C++ exception unwinding (FS:[0] frame state) is not translated.
+/// Slot +0x14 of the `CMemAllocator` vtable at `01093d28` (thiscall, no
+/// stack words): under the lock at +0x10 (0 for a null `this`) the size
+/// check (`009fb020`) is returned when it fails, and 1 means nothing to do
+/// (0 returned). Otherwise any old block is freed (`009fb170`, when +0x60
+/// is set); the buffer size (+0x40) plus prefix (+0x48) is rounded up to an
+/// alignment (+0x44) above 1 (signed `IDIV`); count (+0x38) times that is
+/// committed read/write (`VirtualAlloc` 0, size, 0x1000, 4) to +0x60
+/// (`E_OUTOFMEMORY` when 0); then, while the made count (+0x3c) is below
+/// the count, a 0x48-byte sample (`operator new`, `E_OUTOFMEMORY` when it
+/// fails) is constructed over the next stretch (`009fcb50`: no name, this
+/// allocator, the address of the lock's stack slot, buffer + prefix, the
+/// size) and put on the list at +0x28 (link at its +0x1c; +0x2c and +0x3c
+/// up). +0x4c is cleared at the end. Returns 0.
+pub fn fn_009fcc60(e: &mut Engine, this: Ptr) -> u32 {
+    let lock = if !this.is_null() {
+        this.addr().wrapping_add(0x10)
+    } else {
+        0
+    };
+    e.with_stack(4, |e, lock_slot| {
+        e.mem.set_u32(lock_slot.addr(), lock);
+        enter(e, lock);
+        let hr = fn_009fb020(e, this);
+        if failed(hr) {
+            leave(e, lock);
+            return hr;
+        }
+        if hr == 1 {
+            leave(e, lock);
+            return 0;
+        }
+        if field(e, this, 0x60) != 0 {
+            fn_009fb170(e, this);
+        }
+        let mut size = field(e, this, 0x40).wrapping_add(field(e, this, 0x48));
+        let alignment = field(e, this, 0x44);
+        if alignment as i32 > 1 {
+            let remainder = (size as i32).wrapping_rem(alignment as i32) as u32;
+            if remainder != 0 {
+                size = size.wrapping_add(alignment.wrapping_sub(remainder));
+            }
+        }
+        let total = field(e, this, 0x38).wrapping_mul(size);
+        let block = e
+            .call(VIRTUAL_ALLOC, &args![0u32, total, 0x1000u32, 0x4u32])
+            .u32();
+        set_field(e, this, 0x60, block);
+        if block == 0 {
+            leave(e, lock);
+            return E_OUTOFMEMORY;
+        }
+        let mut cursor = block;
+        while (field(e, this, 0x3c) as i32) < field(e, this, 0x38) as i32 {
+            let memory = e.call(OPERATOR_NEW, &args![0x48u32]).u32();
+            if memory == 0 {
+                leave(e, lock);
+                return E_OUTOFMEMORY;
+            }
+            let length = field(e, this, 0x40);
+            let data = field(e, this, 0x48).wrapping_add(cursor);
+            let sample =
+                fn_009fcb50(e, Ptr::new(memory), 0, this, lock_slot.addr(), data, length).addr();
+            if sample == 0 {
+                leave(e, lock);
+                return E_OUTOFMEMORY;
+            }
+            let first = field(e, this, 0x28);
+            e.mem.set_u32(sample.wrapping_add(0x1c), first);
+            set_field(e, this, 0x28, sample);
+            let count = field(e, this, 0x2c).wrapping_add(1);
+            set_field(e, this, 0x2c, count);
+            let made = field(e, this, 0x3c).wrapping_add(1);
+            set_field(e, this, 0x3c, made);
+            cursor = cursor.wrapping_add(size);
+        }
+        set_field(e, this, 0x4c, 0);
+        leave(e, lock);
+        0
+    })
+}
+
+// Translated from 009fd030 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Wide-string compare (stdcall, `RET 8`): 0 when both strings hold the
+/// same characters up to the terminator, else the first differing pair's
+/// difference (`first` - `second`, as unsigned 16-bit values).
+pub fn fn_009fd030(e: &mut Engine, first: Ptr, second: Ptr) -> i32 {
+    let mut a = first.addr();
+    let mut b = second.addr();
+    loop {
+        let x = e.mem.u16(a);
+        let y = e.mem.u16(b);
+        if x != y {
+            return i32::from(x) - i32::from(y);
+        }
+        a = a.wrapping_add(2);
+        if x == 0 {
+            return 0;
+        }
+        b = b.wrapping_add(2);
+        if y == 0 {
+            return 0;
+        }
+    }
+}
+
+// Translated from 009fd180 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Generic list step (the caller's `ECX`, the list, is not read; `RET 4`):
+/// 0 when the position at `*position` is 0; otherwise moves `*position` to
+/// the node's next (+4) and returns the node's object (+8).
+pub fn fn_009fd180(e: &mut Engine, position: Ptr) -> u32 {
+    let node = e.mem.u32(position.addr());
+    if node == 0 {
+        return 0;
+    }
+    let next = e.mem.u32(node.wrapping_add(0x4));
+    e.mem.set_u32(position.addr(), next);
+    e.mem.u32(node.wrapping_add(0x8))
+}
+
+// Translated from 009fd1a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Generic list object at a position (the caller's `ECX` is not read;
+/// `RET 4`): the node's object (+8), or 0 for a null node.
+pub fn fn_009fd1a0(e: &mut Engine, node: Ptr) -> u32 {
+    if node.is_null() {
+        return 0;
+    }
+    field(e, node, 0x8)
+}
+
+// Translated from 009fd2d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Generic list append (thiscall, `RET 4`): walks `other` from its head
+/// (`009fd0f0`, the position kept in the stack slot of `other`) and adds
+/// each object at this list's tail (`009fd270`). Returns 1, or 0 as soon as
+/// an add fails.
+pub fn fn_009fd2d0(e: &mut Engine, this: Ptr, other: Ptr) -> u32 {
+    let head = e.call(HEAD_POSITION, &args![other]).u32();
+    if head == 0 {
+        return 1;
+    }
+    e.with_stack(4, |e, position| {
+        e.mem.set_u32(position.addr(), head);
+        loop {
+            let object = fn_009fd180(e, position);
+            if fn_009fd270(e, this, Ptr::new(object)).is_null() {
+                return 0;
+            }
+            if e.mem.u32(position.addr()) == 0 {
+                return 1;
+            }
+        }
+    })
+}
+
+// Translated from 009fd5a0 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 009fd5a0 - C++ exception unwinding (FS:[0] frame state) is not translated.
+/// Allocator factory (stdcall, `RET 4`; called by `009fd6d0`): `E_POINTER`
+/// for a null `out`; otherwise clears `out`, constructs a 0x64-byte
+/// `CMemAllocator` (`009fcc20`: no name, no outer, the status kept in the
+/// stack slot of `out`, 0 at first); `E_OUTOFMEMORY` when that is 0. A
+/// failed status deletes it again (vtable +0xc with 1) and is returned;
+/// otherwise its interface at +0xc is asked for the id at `01093bbc` into
+/// `out` (vtable +0), and a failure deletes it and returns
+/// `E_NOINTERFACE`. Returns 0.
+pub fn fn_009fd5a0(e: &mut Engine, out: Ptr) -> u32 {
+    if out.is_null() {
+        return E_POINTER;
+    }
+    e.with_stack(4, |e, status| {
+        e.mem.set_u32(status.addr(), 0);
+        e.mem.set_u32(out.addr(), 0);
+        let memory = e.call(OPERATOR_NEW, &args![0x64u32]).u32();
+        let allocator = if memory != 0 {
+            fn_009fcc20(e, Ptr::new(memory), Ptr::NULL, Ptr::NULL, status).addr()
+        } else {
+            0
+        };
+        if allocator == 0 {
+            return E_OUTOFMEMORY;
+        }
+        if failed(e.mem.u32(status.addr())) {
+            e.vcall(allocator, 0xc, &args![1u32]);
+            return e.mem.u32(status.addr());
+        }
+        let interface = allocator.wrapping_add(0xc);
+        let hr = e
+            .vcall(interface, 0x0, &args![INTERFACE_ID_01093BBC, out])
+            .u32();
+        e.mem.set_u32(status.addr(), hr);
+        if failed(hr) {
+            e.vcall(allocator, 0xc, &args![1u32]);
+            return E_NOINTERFACE;
+        }
+        0
+    })
+}
+
+// Translated from 009fd7f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Slot +0x10 of the `CAsyncOutputPin` vtable at `01093e24` (stdcall,
+/// `RET 0xc`): queues a read for `sample`. `E_POINTER` for a null
+/// `sample`. Its times (vtable +0x14, start and end, 100 ns units) must be
+/// read; start and length are taken in seconds (`__alldiv` by 10,000,000,
+/// the length truncated to its low word). When start + length passes the
+/// reader's total (`009fe090` on the reader at `this + 0xa4`), the total
+/// is rounded up to the reader's alignment (`009fe1a0`); if the end still
+/// passes it, the length becomes total - start and the end time total *
+/// 10,000,000 (`__allmul`), set on the sample (vtable +0x18). Then the
+/// sample's buffer (vtable +0xc) must be read, and the request goes to
+/// `009fe960` (start, length, aligned 1, buffer, `sample`, `user`).
+/// Returns its result, or the first failure.
+pub fn fn_009fd7f0(e: &mut Engine, this: Ptr, sample: Ptr, user: u32) -> u32 {
+    if sample.is_null() {
+        return E_POINTER;
+    }
+    // The frame mirrors the exe's: +0 alignment, +4 buffer, +8 total
+    // (8 bytes), +0x18 end time, +0x20 start time, +0x28 the second word
+    // `009fe090` gets (8 bytes).
+    e.with_stack(0x30, |e, frame| {
+        let f = frame.addr();
+        let alignment = f;
+        let buffer = f + 0x4;
+        let total = f + 0x8;
+        let end = f + 0x18;
+        let start = f + 0x20;
+        let other = f + 0x28;
+        let s = sample.addr();
+        let hr = e.vcall(s, 0x14, &args![start, end]).u32();
+        if failed(hr) {
+            return hr;
+        }
+        let start_time = quad(e, start);
+        let first = e.call(ALLDIV, &args![start_time, TIME_UNITS, 0u32]).u64();
+        let span_time = quad(e, end).wrapping_sub(start_time);
+        let span = e.call(ALLDIV, &args![span_time, TIME_UNITS, 0u32]).u64();
+        let mut span_low = span as u32;
+        e.mem.set_u64(total, 0);
+        e.mem.set_u64(other, 0);
+        let reader = Ptr::new(field(e, this, 0xa4));
+        fn_009fe090(e, reader, Ptr::new(total), Ptr::new(other));
+        // CDQ of the low word, ADD/ADC with the first second.
+        let finish = i64::from(span_low as i32).wrapping_add(first as i64);
+        if finish > quad(e, total) as i64 {
+            let reader = Ptr::new(field(e, this, 0xa4));
+            fn_009fe1a0(e, reader, Ptr::new(alignment));
+            let unit = e.mem.u32(alignment);
+            let rounded = (quad(e, total) as i64)
+                .wrapping_add(i64::from(unit as i32))
+                .wrapping_sub(1)
+                & i64::from(!unit.wrapping_sub(1) as i32);
+            e.mem.set_u64(total, rounded as u64);
+            if finish > rounded {
+                span_low = (rounded as u32).wrapping_sub(first as u32);
+                let end_time = e
+                    .call(ALLMUL, &args![rounded as u64, TIME_UNITS, 0u32])
+                    .u64();
+                e.mem.set_u64(end, end_time);
+                e.vcall(s, 0x18, &args![start, end]);
+            }
+        }
+        let hr = e.vcall(s, 0xc, &args![buffer]).u32();
+        if failed(hr) {
+            return hr;
+        }
+        let data = e.mem.u32(buffer);
+        let reader = Ptr::new(field(e, this, 0xa4));
+        fn_009fe960(
+            e,
+            reader,
+            first as u32,
+            (first >> 32) as u32,
+            span_low,
+            1,
+            data,
+            s,
+            user,
+        )
+    })
+}
+
+// Translated from 009fdcf0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Slot +0 of the `CAsyncOutputPin` vtable at `01093d84`: moves its first
+/// stack word back by 0x18 (`SUB [ESP+4],0x18`) and jumps to `009fd3f0`
+/// with the other two words.
+pub fn fn_009fdcf0(e: &mut Engine, this: Ptr, id: Ptr, out: Ptr) -> u32 {
+    fn_009fd3f0(e, back(this, 0x18), id, out)
+}
+
+// Translated from 009fdd00 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Slot +0x40 of the `CAsyncOutputPin` vtable at `01093d9c`: moves its
+/// stack word back by 0x14 and jumps to `009fdbd0`.
+pub fn fn_009fdd00(e: &mut Engine, this: Ptr) -> u32 {
+    fn_009fdbd0(e, back(this, 0x14))
+}
+
+// Translated from 009fdd20 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Slot +8 of the `CAsyncOutputPin` vtable at `01093d84`: moves its stack
+/// word back by 0x18 and jumps to `009fd430`.
+pub fn fn_009fdd20(e: &mut Engine, this: Ptr) -> u32 {
+    fn_009fd430(e, back(this, 0x18))
+}
+
+// Translated from 009fdd30 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Slot +0x3c of the `CAsyncOutputPin` vtable at `01093d9c`: moves its
+/// stack word back by 0x14 and jumps to `009fdbb0`.
+pub fn fn_009fdd30(e: &mut Engine, this: Ptr) -> u32 {
+    fn_009fdbb0(e, back(this, 0x14))
+}
+
+// Translated from 009fdd60 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Slot +4 of the `CAsyncOutputPin` vtable at `01093d84`: moves its stack
+/// word back by 0x18 and jumps to `009fd410`.
+pub fn fn_009fdd60(e: &mut Engine, this: Ptr) -> u32 {
+    fn_009fd410(e, back(this, 0x18))
+}
+
+// Translated from 009fddd0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `CAsyncOutputPin` deleting destructor (thiscall, `RET 4`; reached
+/// through `009fdd50`): the destructor (`009fd3c0`), then `operator delete`
+/// when bit 0 of `flags` is set. Returns `this`.
+pub fn fn_009fddd0(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    fn_009fd3c0(e, this);
+    if flags & 1 != 0 {
+        e.call(OPERATOR_DELETE, &args![this]);
+    }
+    this
+}
+
+// Translated from 009fdeb0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Slot +0xc of the `CAsyncReader` vtable at `01093eac` (thiscall,
+/// `RET 4`): the destructor (`009fdc10`), then `operator delete` when bit
+/// 0 of `flags` is set. Returns `this`.
+pub fn fn_009fdeb0(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    fn_009fdc10(e, this);
+    if flags & 1 != 0 {
+        e.call(OPERATOR_DELETE, &args![this]);
+    }
+    this
+}
+
+// Translated from 009fe3f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Finished-request queue add (thiscall, `RET 4`; called by `009fe420` and
+/// `009fe690`): puts `request` at the tail of the list at +0x50
+/// (`009fd270`) and signals the event at +0x6c (`SetEvent`), returning 0;
+/// `E_OUTOFMEMORY` when the add fails.
+pub fn fn_009fe3f0(e: &mut Engine, this: Ptr, request: Ptr) -> u32 {
+    if fn_009fd270(e, offset(this, 0x50), request).is_null() {
+        return E_OUTOFMEMORY;
+    }
+    let event = field(e, this, 0x6c);
+    e.call(SET_EVENT, &args![event]);
+    0
+}
+
+// Translated from 009fe420 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 009fe420 - C++ exception unwinding (FS:[0] frame state) is not translated.
+/// Request loop (thiscall, no stack words; called by `009fe500`): under the
+/// critical section at +0x1c takes each queued request (`009fe2f0`) until
+/// none is left; for each the busy count at +0x70 goes up, the request runs
+/// outside the lock (`009fdf20`), then back under the lock it is queued as
+/// finished (`009fe3f0`), the busy count goes down and, at zero with a
+/// waiter flagged at +0x74, the event at +0x78 is signalled (`SetEvent`).
+pub fn fn_009fe420(e: &mut Engine, this: Ptr) {
+    let section = this.addr().wrapping_add(0x1c);
+    enter(e, section);
+    let mut request = fn_009fe2f0(e, this);
+    while request != 0 {
+        let busy = field(e, this, 0x70).wrapping_add(1);
+        set_field(e, this, 0x70, busy);
+        leave(e, section);
+        fn_009fdf20(e, Ptr::new(request));
+        enter(e, section);
+        fn_009fe3f0(e, this, Ptr::new(request));
+        let busy = field(e, this, 0x70).wrapping_sub(1);
+        set_field(e, this, 0x70, busy);
+        if busy == 0 && field(e, this, 0x74) != 0 {
+            let event = field(e, this, 0x78);
+            e.call(SET_EVENT, &args![event]);
+        }
+        leave(e, section);
+        enter(e, section);
+        request = fn_009fe2f0(e, this);
+    }
+    leave(e, section);
+}
+
+// Translated from 009fe500 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Reader thread body (thiscall, no stack words; called by `009fe560`):
+/// waits on the two handles at +0x7c and +0x68 (`WaitForMultipleObjects`,
+/// any, no timeout) and runs the request loop (`009fe420`) each time the
+/// second one is signalled (result 1). Returns 0 on any other result.
+pub fn fn_009fe500(e: &mut Engine, this: Ptr) -> u32 {
+    e.with_stack(8, |e, handles| {
+        let stop = field(e, this, 0x7c);
+        let work = field(e, this, 0x68);
+        e.mem.set_u32(handles.addr(), stop);
+        e.mem.set_u32(handles.addr().wrapping_add(4), work);
+        while e
+            .call(
+                WAIT_FOR_MULTIPLE_OBJECTS,
+                &args![2u32, handles, 0u32, 0xffff_ffffu32],
+            )
+            .u32()
+            == 1
+        {
+            fn_009fe420(e, this);
+        }
+    });
+    0
+}
+
+// Translated from 009fe560 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The thread routine `009fe780` passes to `CreateThread` (no Ghidra
+/// function; bytes `8b 4c 24 04 e8 ..`: stdcall, `RET 4`): the reader
+/// thread body (`009fe500`) on its parameter, whose result it returns.
+pub fn fn_009fe560(e: &mut Engine, this: Ptr) -> u32 {
+    fn_009fe500(e, this)
+}
+
+// Translated from 009fe780 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Reader thread start (thiscall, no stack words; called by `009fe7e0`): 0
+/// when a thread is held at +0x80; otherwise resets the event at +0x7c
+/// (`ResetEvent`) and starts `009fe560` on `this` (`CreateThread`: no
+/// attributes, default stack, flags 0, the id into a stack slot) into
+/// +0x80. A failed start returns `GetLastError` as an HRESULT
+/// (`0x80070000 | error & 0xffff`) when it is positive, else as is.
+pub fn fn_009fe780(e: &mut Engine, this: Ptr) -> u32 {
+    if field(e, this, 0x80) != 0 {
+        return 0;
+    }
+    let event = field(e, this, 0x7c);
+    e.call(RESET_EVENT, &args![event]);
+    e.with_stack(4, |e, thread_id| {
+        e.mem.set_u32(thread_id.addr(), this.addr());
+        let thread = e
+            .call(
+                CREATE_THREAD,
+                &args![0u32, 0u32, THREAD_ROUTINE, this, 0u32, thread_id],
+            )
+            .u32();
+        set_field(e, this, 0x80, thread);
+        if thread != 0 {
+            return 0;
+        }
+        let error = e.call(GET_LAST_ERROR, &args![]).u32();
+        if error as i32 > 0 {
+            (error & 0xffff) | 0x8007_0000
+        } else {
+            error
+        }
+    })
+}
+
+// Translated from 009fe7e0 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 009fe7e0 - C++ exception unwinding (FS:[0] frame state) is not translated.
+/// Request queue add (thiscall, `RET 4`; called by `009fe960`): under the
+/// critical section at +0x1c, `VFW_E_WRONG_STATE` while +0x34 is set;
+/// otherwise puts `request` at the tail of the list at +0x38 (`009fd270`,
+/// `E_OUTOFMEMORY` when that fails), signals the event at +0x68
+/// (`SetEvent`) and returns the thread start's result (`009fe780`).
+pub fn fn_009fe7e0(e: &mut Engine, this: Ptr, request: Ptr) -> u32 {
+    let section = this.addr().wrapping_add(0x1c);
+    enter(e, section);
+    let hr = if field(e, this, 0x34) != 0 {
+        VFW_E_WRONG_STATE
+    } else if !fn_009fd270(e, offset(this, 0x38), request).is_null() {
+        let event = field(e, this, 0x68);
+        e.call(SET_EVENT, &args![event]);
+        fn_009fe780(e, this)
+    } else {
+        E_OUTOFMEMORY
+    };
+    leave(e, section);
+    hr
+}
+
+// Translated from 009fe960 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Request (thiscall, `RET 0x1c`; called by `009fd7f0`): with `aligned`
+/// set, the position's low word, `length` and `buffer` must each be a
+/// multiple of the file's alignment (the object at +0x18, vtable +0x10,
+/// asked each time; `VFW_E_BADALIGN`). A 0x28-byte request (`operator
+/// new`, `E_OUTOFMEMORY` when it fails) is filled (`009fded0`: `this`, the
+/// file, the seven words) and queued (`009fe7e0`); a failure of either
+/// deletes it and is returned. Returns the queue's result.
+pub fn fn_009fe960(
+    e: &mut Engine,
+    this: Ptr,
+    position_low: u32,
+    position_high: u32,
+    length: u32,
+    aligned: u32,
+    buffer: u32,
+    sample: u32,
+    user: u32,
+) -> u32 {
+    if aligned != 0 {
+        for value in [position_low, length, buffer] {
+            let file = field(e, this, 0x18);
+            let unit = e.vcall(file, 0x10, &args![]).u32();
+            if value & unit.wrapping_sub(1) != 0 {
+                return VFW_E_BADALIGN;
+            }
+        }
+    }
+    let block = e.call(OPERATOR_NEW, &args![0x28u32]).u32();
+    if block == 0 {
+        return E_OUTOFMEMORY;
+    }
+    let file = field(e, this, 0x18);
+    let mut hr = fn_009fded0(
+        e,
+        Ptr::new(block),
+        this.addr(),
+        file,
+        position_low,
+        position_high,
+        length,
+        aligned,
+        buffer,
+        sample,
+        user,
+    );
+    if !failed(hr) {
+        hr = fn_009fe7e0(e, this, Ptr::new(block));
+        if !failed(hr) {
+            return hr;
+        }
+    }
+    e.call(OPERATOR_DELETE, &args![block]);
+    hr
+}
+
+// Translated from 009fea24 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The stub `009fea2a`'s table cells hold until they are resolved (the
+/// jumps `009fead0` and the others reach it; `RET`, so the caller's words
+/// stay): returns the word at `011a6224` (`009fea2a`'s first cell).
+pub fn fn_009fea24(e: &mut Engine) -> u32 {
+    e.global::<u32>(LIBRARY_FIRST_CELL)
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -2954,6 +5326,100 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x009f_e870, fn_009fe870(Ptr)),
         entry!(0x009f_ea2a, fn_009fea2a() -> u32),
         entry!(0x009f_ebd8, fn_009febd8(u32, Ptr) -> u32),
+        entry!(0x009f_98e0, fn_009f98e0(Ptr, u32)),
+        entry!(0x009f_9a50, fn_009f9a50(Ptr) -> u32),
+        entry!(0x009f_9a80, fn_009f9a80(Ptr, Ptr) -> u32),
+        entry!(0x009f_9cd0, fn_009f9cd0(Ptr) -> Ptr),
+        entry!(0x009f_9db0, fn_009f9db0(Ptr, Ptr) -> u32),
+        entry!(0x009f_9f40, fn_009f9f40(u32, u32) -> u32),
+        entry!(0x009f_9fe0, fn_009f9fe0(Ptr, Ptr, Ptr) -> u32),
+        entry!(0x009f_a040, fn_009fa040(Ptr) -> u32),
+        entry!(0x009f_a090, fn_009fa090(Ptr) -> u32),
+        entry!(0x009f_a0d0, fn_009fa0d0(Ptr) -> u32),
+        entry!(0x009f_a120, fn_009fa120(Ptr, Ptr, Ptr) -> u32),
+        entry!(0x009f_a180, fn_009fa180(Ptr) -> u32),
+        entry!(0x009f_a1d0, fn_009fa1d0(Ptr) -> u32),
+        entry!(0x009f_a4a0, fn_009fa4a0(Ptr, Ptr) -> u32),
+        entry!(0x009f_a4e0, fn_009fa4e0(Ptr, u32) -> u32),
+        entry!(0x009f_a510, fn_009fa510(u32, u32, u32, u32, u32, u32, u32, u32) -> u32),
+        entry!(0x009f_a520, fn_009fa520(Ptr, u32, u32, u32, u32, f64) -> u32),
+        entry!(0x009f_a560, fn_009fa560(Ptr)),
+        entry!(0x009f_a580, fn_009fa580(Ptr, Ptr, Ptr) -> u32),
+        entry!(0x009f_a5d0, fn_009fa5d0(Ptr) -> u32),
+        entry!(0x009f_a5f0, fn_009fa5f0(Ptr) -> u32),
+        entry!(0x009f_a650, fn_009fa650(Ptr, Ptr) -> u32),
+        entry!(0x009f_a670, fn_009fa670(Ptr) -> u32),
+        entry!(0x009f_a680, fn_009fa680(Ptr, Ptr, Ptr) -> u32),
+        entry!(0x009f_a6f0, fn_009fa6f0(Ptr, Ptr, Ptr) -> u32),
+        entry!(0x009f_a760, fn_009fa760(Ptr, Ptr, Ptr) -> u32),
+        entry!(0x009f_a7a0, fn_009fa7a0(Ptr, Ptr, Ptr) -> u32),
+        entry!(0x009f_a7e0, fn_009fa7e0(Ptr) -> u32),
+        entry!(0x009f_a800, fn_009fa800(Ptr, u32) -> u32),
+        entry!(0x009f_a820, fn_009fa820(Ptr) -> u32),
+        entry!(0x009f_a840, fn_009fa840(Ptr, u32) -> u32),
+        entry!(0x009f_a860, fn_009fa860(Ptr) -> u32),
+        entry!(0x009f_a880, fn_009fa880(Ptr, u32) -> u32),
+        entry!(0x009f_a8a0, fn_009fa8a0(Ptr) -> u32),
+        entry!(0x009f_a8b0, fn_009fa8b0(Ptr, i32) -> u32),
+        entry!(0x009f_a8d0, fn_009fa8d0(Ptr, Ptr) -> u32),
+        entry!(0x009f_a910, fn_009fa910(Ptr, Ptr) -> u32),
+        entry!(0x009f_a960, fn_009fa960(Ptr, u32, Ptr) -> u32),
+        entry!(0x009f_aa20, fn_009faa20(Ptr, u32, Ptr) -> u32),
+        entry!(0x009f_abb0, fn_009fabb0(Ptr)),
+        entry!(0x009f_ac30, fn_009fac30(Ptr, Ptr, Ptr) -> u32),
+        entry!(0x009f_aca0, fn_009faca0(Ptr, Ptr) -> u32),
+        entry!(0x009f_ad00, fn_009fad00(Ptr, Ptr, u32, u32, u32) -> u32),
+        entry!(0x009f_ada0, fn_009fada0(Ptr, Ptr) -> u32),
+        entry!(0x009f_ae30, fn_009fae30(Ptr, Ptr) -> u32),
+        entry!(0x009f_ae70, fn_009fae70(Ptr)),
+        entry!(0x009f_ae90, fn_009fae90(Ptr) -> u32),
+        entry!(0x009f_af50, fn_009faf50(Ptr) -> u32),
+        entry!(0x009f_b020, fn_009fb020(Ptr) -> u32),
+        entry!(0x009f_b050, fn_009fb050(Ptr, Ptr, Ptr) -> u32),
+        entry!(0x009f_b170, fn_009fb170(Ptr)),
+        entry!(0x009f_b1c0, fn_009fb1c0(Ptr)),
+        entry!(0x009f_b230, fn_009fb230(Ptr, Ptr, Ptr) -> u32),
+        entry!(0x009f_b250, fn_009fb250(Ptr) -> u32),
+        entry!(0x009f_b270, fn_009fb270(Ptr) -> u32),
+        entry!(0x009f_b290, fn_009fb290(Ptr, Ptr, u32) -> u32),
+        entry!(0x009f_b650, fn_009fb650(Ptr, Ptr) -> u32),
+        entry!(0x009f_b960, fn_009fb960(Ptr, Ptr, Ptr) -> u32),
+        entry!(0x009f_ba40, fn_009fba40(Ptr) -> u32),
+        entry!(0x009f_bab0, fn_009fbab0(Ptr) -> u32),
+        entry!(0x009f_bc50, fn_009fbc50(Ptr, u32) -> u32),
+        entry!(0x009f_be40, fn_009fbe40(Ptr, u32) -> u32),
+        entry!(0x009f_c190, fn_009fc190(Ptr, Ptr, Ptr) -> u32),
+        entry!(0x009f_c390, fn_009fc390(Ptr, Ptr) -> u32),
+        entry!(0x009f_c460, fn_009fc460(Ptr, u32) -> Ptr),
+        entry!(0x009f_c480, fn_009fc480(Ptr, Ptr) -> u32),
+        entry!(0x009f_c580, fn_009fc580(Ptr, u32) -> Ptr),
+        entry!(0x009f_c6d0, fn_009fc6d0(Ptr, Ptr) -> u32),
+        entry!(0x009f_c7e0, fn_009fc7e0(Ptr, Ptr) -> u32),
+        entry!(0x009f_cb50, fn_009fcb50(Ptr, u32, Ptr, u32, u32, u32) -> Ptr),
+        entry!(0x009f_cb90, fn_009fcb90(Ptr, Ptr, Ptr, Ptr, u32, u32) -> Ptr),
+        entry!(0x009f_cc20, fn_009fcc20(Ptr, Ptr, Ptr, Ptr) -> Ptr),
+        entry!(0x009f_cc60, fn_009fcc60(Ptr) -> u32),
+        entry!(0x009f_d030, fn_009fd030(Ptr, Ptr) -> i32),
+        entry!(0x009f_d180, fn_009fd180(Ptr) -> u32),
+        entry!(0x009f_d1a0, fn_009fd1a0(Ptr) -> u32),
+        entry!(0x009f_d2d0, fn_009fd2d0(Ptr, Ptr) -> u32),
+        entry!(0x009f_d5a0, fn_009fd5a0(Ptr) -> u32),
+        entry!(0x009f_d7f0, fn_009fd7f0(Ptr, Ptr, u32) -> u32),
+        entry!(0x009f_dcf0, fn_009fdcf0(Ptr, Ptr, Ptr) -> u32),
+        entry!(0x009f_dd00, fn_009fdd00(Ptr) -> u32),
+        entry!(0x009f_dd20, fn_009fdd20(Ptr) -> u32),
+        entry!(0x009f_dd30, fn_009fdd30(Ptr) -> u32),
+        entry!(0x009f_dd60, fn_009fdd60(Ptr) -> u32),
+        entry!(0x009f_ddd0, fn_009fddd0(Ptr, u32) -> Ptr),
+        entry!(0x009f_deb0, fn_009fdeb0(Ptr, u32) -> Ptr),
+        entry!(0x009f_e3f0, fn_009fe3f0(Ptr, Ptr) -> u32),
+        entry!(0x009f_e420, fn_009fe420(Ptr)),
+        entry!(0x009f_e500, fn_009fe500(Ptr) -> u32),
+        entry!(0x009f_e560, fn_009fe560(Ptr) -> u32),
+        entry!(0x009f_e780, fn_009fe780(Ptr) -> u32),
+        entry!(0x009f_e7e0, fn_009fe7e0(Ptr, Ptr) -> u32),
+        entry!(0x009f_e960, fn_009fe960(Ptr, u32, u32, u32, u32, u32, u32, u32) -> u32),
+        entry!(0x009f_ea24, fn_009fea24() -> u32),
     ]
 }
 
@@ -5585,5 +8051,2086 @@ mod b009_tests {
         e.register(OBJ, |_, _| ret(0x44));
         assert_eq!(e.call(0x009f_ebd8, &args![1u32, 0x2000u32]).u32(), 0x44);
         assert_eq!(calls(&e, OBJ), vec![vec![1, 0x2000]]);
+    }
+}
+
+#[cfg(test)]
+mod n078_tests {
+    use super::*;
+    use std::cell::Cell;
+    use std::rc::Rc;
+
+    fn ret(eax: u32) -> Ret {
+        Ret {
+            eax,
+            ..Ret::default()
+        }
+    }
+
+    fn noop(_: &mut Engine, _: &[u32]) -> Ret {
+        Ret::default()
+    }
+
+    /// Doubles over the imports and CRT helpers, the ids mapped (each id's
+    /// words are its address xor 0..3), the call log on.
+    fn rig() -> Engine {
+        let mut e = Engine::new();
+        for slot in [
+            ENTER_CRITICAL_SECTION,
+            LEAVE_CRITICAL_SECTION,
+            INITIALIZE_CRITICAL_SECTION,
+            DELETE_CRITICAL_SECTION,
+            CO_TASK_MEM_FREE,
+            OPERATOR_DELETE,
+            CLOSE_HANDLE,
+            SET_EVENT,
+            RESET_EVENT,
+            RELEASE_SEMAPHORE,
+            VIRTUAL_FREE,
+            CO_INITIALIZE,
+            CO_FREE_UNUSED_LIBRARIES,
+            CO_UNINITIALIZE,
+            FREE_LIBRARY,
+        ] {
+            e.register(slot, noop);
+        }
+        e.register(CO_TASK_MEM_ALLOC, |e, a| ret(e.mem.alloc(a[0])));
+        e.register(HEAD_POSITION, |e, a| ret(e.mem.u32(a[0])));
+        e.register(MEMSET, |e, a| {
+            for i in 0..a[2] {
+                e.mem.set_u8(a[0] + i, a[1] as u8);
+            }
+            ret(a[0])
+        });
+        e.register(OPERATOR_NEW, |e, a| ret(e.mem.alloc(a[0])));
+        e.register(VIRTUAL_ALLOC, |e, a| ret(e.mem.alloc(a[1])));
+        e.register(MEMCPY, |e, a| {
+            for i in 0..a[2] {
+                let b = e.mem.u8(a[1] + i);
+                e.mem.set_u8(a[0] + i, b);
+            }
+            ret(a[0])
+        });
+        e.register(INTERLOCKED_INCREMENT, |e, a| {
+            let v = e.mem.u32(a[0]).wrapping_add(1);
+            e.mem.set_u32(a[0], v);
+            ret(v)
+        });
+        e.register(INTERLOCKED_DECREMENT, |e, a| {
+            let v = e.mem.u32(a[0]).wrapping_sub(1);
+            e.mem.set_u32(a[0], v);
+            ret(v)
+        });
+        e.map(0x0107_c000, 0x1000);
+        e.map(0x0109_3000, 0x1000);
+        for id in [
+            INTERFACE_ID_01093F04,
+            INTERFACE_ID_01093F14,
+            INTERFACE_ID_01093C2C,
+            INTERFACE_ID_01093C1C,
+            INTERFACE_ID_01093BDC,
+            INTERFACE_ID_01093BCC,
+            INTERFACE_ID_01093BBC,
+            INTERFACE_ID_01093BAC,
+            INTERFACE_ID_01093B8C,
+            CLASS_ID_0107CB08,
+        ] {
+            for i in 0..4 {
+                e.mem.set_u32(id + 4 * i, id ^ i);
+            }
+        }
+        e.map(0x011f_3000, 0x1000);
+        e.call_log = Some(vec![]);
+        e
+    }
+
+    /// The argument words of every logged call to `addr`.
+    fn calls(e: &Engine, addr: u32) -> Vec<Vec<u32>> {
+        e.call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|c| c.0 == addr)
+            .map(|c| c.1.clone())
+            .collect()
+    }
+
+    /// A zeroed object of `size` bytes whose vtable slot at byte offset `s`
+    /// (up to 0x7c) points at `base + s`.
+    fn object(e: &mut Engine, base: u32, size: u32) -> u32 {
+        let vtable = e.mem.alloc(0x80);
+        for s in (0..0x80).step_by(4) {
+            e.mem.set_u32(vtable + s, base + s);
+        }
+        let this = e.mem.alloc(size);
+        e.mem.set_u32(this, vtable);
+        this
+    }
+
+    /// A heap copy of the 16-byte id at `id`.
+    fn id_copy(e: &mut Engine, id: u32) -> u32 {
+        let copy = e.mem.alloc(0x10);
+        for i in 0..4 {
+            let w = e.mem.u32(id + 4 * i);
+            e.mem.set_u32(copy + 4 * i, w);
+        }
+        copy
+    }
+
+    /// A heap wide string.
+    fn wide(e: &mut Engine, text: &str) -> u32 {
+        let units: Vec<u16> = text.encode_utf16().collect();
+        let at = e.mem.alloc(2 * units.len() as u32 + 2);
+        for (i, u) in units.iter().enumerate() {
+            e.mem.set_u16(at + 2 * i as u32, *u);
+        }
+        at
+    }
+
+    const OBJ: u32 = 0x7100_0000;
+    const OBJ2: u32 = 0x7100_1000;
+    const OBJ3: u32 = 0x7100_2000;
+
+    #[test]
+    fn trespass_init_load_game_009f98e0_resolves_both_words() {
+        let mut e = rig();
+        e.register(PACKAGE_INIT_LOAD_GAME, noop);
+        e.register(FORM_LOOKUP, |_, a| ret(a[0] + 0x100));
+        let this = e.mem.alloc(0x90);
+        e.mem.set_u32(this + 0x88, 5);
+        e.call(0x009f_98e0, &args![this, 0x77u32]);
+        assert_eq!(e.mem.u32(this + 0x88), 0x105);
+        assert_eq!(e.mem.u32(this + 0x8c), 0);
+        assert_eq!(calls(&e, PACKAGE_INIT_LOAD_GAME), vec![vec![this, 0x77]]);
+        assert_eq!(calls(&e, FORM_LOOKUP), vec![vec![5]]);
+    }
+
+    #[test]
+    fn media_type_test_009f9a50_checks_major_and_format_ids() {
+        let mut e = rig();
+        let media_type = e.mem.alloc(0x48);
+        assert_eq!(e.call(0x009f_9a50, &args![media_type]).u32(), 0);
+        for i in 0..4 {
+            let w = e.mem.u32(INTERFACE_ID_01093F04 + 4 * i);
+            e.mem.set_u32(media_type + 0x2c + 4 * i, w);
+        }
+        assert_eq!(e.call(0x009f_9a50, &args![media_type]).u32(), 1);
+        let other = e.mem.alloc(0x48);
+        for i in 0..4 {
+            let w = e.mem.u32(INTERFACE_ID_01093F04 + 4 * i);
+            e.mem.set_u32(other + 4 * i, w);
+        }
+        assert_eq!(e.call(0x009f_9a50, &args![other]).u32(), 1);
+    }
+
+    /// Two media types with ids 1/2/3 and a `size`-byte format block each.
+    fn type_pair(e: &mut Engine, size: u32) -> (u32, u32) {
+        let make = |e: &mut Engine| {
+            let t = e.mem.alloc(0x48);
+            for (at, v) in [(0u32, 1u32), (0x10, 2), (0x2c, 3)] {
+                e.mem.set_u32(t + at, v);
+            }
+            let block = e.mem.alloc(size + 4);
+            for i in 0..size {
+                e.mem.set_u8(block + i, i as u8);
+            }
+            e.mem.set_u32(t + 0x40, size);
+            e.mem.set_u32(t + 0x44, block);
+            t
+        };
+        (make(e), make(e))
+    }
+
+    #[test]
+    fn media_type_match_009f9a80_compares_ids_sizes_and_blocks() {
+        let mut e = rig();
+        let (a, b) = type_pair(&mut e, 6);
+        assert_eq!(e.call(0x009f_9a80, &args![a, b]).u32(), 1);
+        // The tail byte differs.
+        let block = e.mem.u32(b + 0x44);
+        e.mem.set_u8(block + 5, 0x55);
+        assert_eq!(e.call(0x009f_9a80, &args![a, b]).u32(), 0);
+        // A word differs.
+        e.mem.set_u8(block + 5, 5);
+        e.mem.set_u8(block + 1, 0x55);
+        assert_eq!(e.call(0x009f_9a80, &args![a, b]).u32(), 0);
+        e.mem.set_u8(block + 1, 1);
+        // The other's format id is the wildcard: 1 without the block test.
+        for i in 0..4 {
+            let w = e.mem.u32(INTERFACE_ID_01093F04 + 4 * i);
+            e.mem.set_u32(b + 0x2c + 4 * i, w);
+        }
+        e.mem.set_u32(b + 0x40, 99);
+        assert_eq!(e.call(0x009f_9a80, &args![a, b]).u32(), 1);
+        // Sizes differ / both zero.
+        let (a, b) = type_pair(&mut e, 4);
+        e.mem.set_u32(b + 0x40, 3);
+        assert_eq!(e.call(0x009f_9a80, &args![a, b]).u32(), 0);
+        e.mem.set_u32(a + 0x40, 0);
+        e.mem.set_u32(b + 0x40, 0);
+        assert_eq!(e.call(0x009f_9a80, &args![a, b]).u32(), 1);
+        // Subtype differs.
+        e.mem.set_u32(b + 0x10, 9);
+        assert_eq!(e.call(0x009f_9a80, &args![a, b]).u32(), 0);
+        // Major differs.
+        e.mem.set_u32(b + 0x10, 2);
+        e.mem.set_u32(b, 9);
+        assert_eq!(e.call(0x009f_9a80, &args![a, b]).u32(), 0);
+    }
+
+    #[test]
+    fn media_type_duplicate_009f9cd0_frees_a_failed_copy() {
+        let mut e = rig();
+        let source = e.mem.alloc(0x48);
+        e.mem.set_u32(source + 0x10, 0x42);
+        let copy = e.call(0x009f_9cd0, &args![source]).u32();
+        assert_ne!(copy, 0);
+        assert_eq!(e.mem.u32(copy + 0x10), 0x42);
+        // The format block's allocation fails: the block is freed.
+        e.mem.set_u32(source + 0x40, 8);
+        let first = Rc::new(Cell::new(true));
+        let f = first.clone();
+        e.register_double(CO_TASK_MEM_ALLOC, move |e, a| {
+            if f.replace(false) {
+                ret(e.mem.alloc(a[0]))
+            } else {
+                ret(0)
+            }
+        });
+        assert_eq!(e.call(0x009f_9cd0, &args![source]).u32(), 0);
+        assert_eq!(calls(&e, CO_TASK_MEM_FREE).len(), 1);
+        e.register(CO_TASK_MEM_ALLOC, |_, _| ret(0));
+        assert_eq!(e.call(0x009f_9cd0, &args![source]).u32(), 0);
+    }
+
+    #[test]
+    fn stream_time_009f9db0_subtracts_the_start() {
+        let mut e = rig();
+        let this = e.mem.alloc(0x28);
+        let out = e.mem.alloc(8);
+        assert_eq!(e.call(0x009f_9db0, &args![this, out]).u32(), VFW_E_NO_CLOCK);
+        let clock = object(&mut e, OBJ, 8);
+        e.mem.set_u32(this + 0x18, clock);
+        e.mem.set_u64(this + 0x20, 0x1_0000_0005);
+        e.register(OBJ + 0xc, |e, a| {
+            e.mem.set_u64(a[1], 0x2_0000_0003);
+            ret(0)
+        });
+        assert_eq!(e.call(0x009f_9db0, &args![this, out]).u32(), 0);
+        assert_eq!(e.mem.u64(out), 0x2_0000_0003 - 0x1_0000_0005);
+        e.register(OBJ + 0xc, |_, _| ret(E_FAIL));
+        assert_eq!(e.call(0x009f_9db0, &args![this, out]).u32(), E_FAIL);
+    }
+
+    #[test]
+    fn not_implemented_009f9f40_and_009fa510() {
+        let mut e = rig();
+        assert_eq!(e.call(0x009f_9f40, &args![1u32, 2u32]).u32(), E_NOTIMPL);
+        let words = [0u32; 8];
+        assert_eq!(e.call(0x009f_a510, &words).u32(), E_NOTIMPL);
+    }
+
+    fn lookup_test(addr: u32, own: u32) {
+        let mut e = rig();
+        let this = object(&mut e, OBJ, 0x20);
+        e.register(OBJ + 4, |_, _| ret(2));
+        let out = e.mem.alloc(4);
+        let id = id_copy(&mut e, own);
+        assert_eq!(e.call(addr, &args![this, id, 0u32]).u32(), E_POINTER);
+        assert_eq!(e.call(addr, &args![this, id, out]).u32(), 0);
+        assert_eq!(e.mem.u32(out), this);
+        let id = id_copy(&mut e, INTERFACE_ID_01093F14);
+        assert_eq!(e.call(addr, &args![this, id, out]).u32(), 0);
+        let id = id_copy(&mut e, INTERFACE_ID_01093B8C);
+        assert_eq!(e.call(addr, &args![this, id, out]).u32(), E_NOINTERFACE);
+        assert_eq!(e.mem.u32(out), 0);
+        assert_eq!(calls(&e, OBJ + 4).len(), 2);
+    }
+
+    #[test]
+    fn enum_pins_lookup_009f9fe0() {
+        lookup_test(0x009f_9fe0, INTERFACE_ID_01093C2C);
+    }
+
+    #[test]
+    fn enum_media_types_lookup_009fa120() {
+        lookup_test(0x009f_a120, INTERFACE_ID_01093C1C);
+    }
+
+    #[test]
+    fn reference_adds_009fa040_009fa180_009fa5d0() {
+        let mut e = rig();
+        let this = e.mem.alloc(0x48);
+        e.mem.set_u32(this + 0x14, 4);
+        e.mem.set_u32(this + 0x10, 7);
+        e.mem.set_u32(this + 0x44, 1);
+        assert_eq!(e.call(0x009f_a040, &args![this]).u32(), 5);
+        assert_eq!(e.call(0x009f_a180, &args![this]).u32(), 8);
+        assert_eq!(e.call(0x009f_a5d0, &args![this]).u32(), 2);
+    }
+
+    fn enum_pins(e: &mut Engine) -> u32 {
+        let filter = object(e, OBJ, 0x10);
+        e.register(OBJ + 0x14, |_, _| ret(0x33));
+        e.register(OBJ + 0x18, |_, _| ret(6));
+        let this = e.mem.alloc(0x30);
+        e.mem.set_u32(this + 0xc, filter);
+        e.mem.set_u32(this + 0x4, 2);
+        this
+    }
+
+    #[test]
+    fn enum_pins_reset_009fa090_also_clears_the_list() {
+        let mut e = rig();
+        let this = enum_pins(&mut e);
+        assert_eq!(e.call(0x009f_a090, &args![this]).u32(), 0);
+        assert_eq!(e.mem.u32(this + 0x10), 0x33);
+        assert_eq!(e.mem.u32(this + 0x8), 6);
+        assert_eq!(e.mem.u32(this + 0x4), 0);
+        assert_eq!(e.mem.u32(this + 0x18 + 8), 0);
+    }
+
+    #[test]
+    fn enum_pins_refresh_009fa0d0() {
+        let mut e = rig();
+        let this = enum_pins(&mut e);
+        e.mem.set_u32(this + 0x18, 0x1234);
+        assert_eq!(e.call(0x009f_a0d0, &args![this]).u32(), 0);
+        assert_eq!(e.mem.u32(this + 0x10), 0x33);
+        assert_eq!(e.mem.u32(this + 0x8), 6);
+        assert_eq!(e.mem.u32(this + 0x4), 0);
+        // The list is left alone.
+        assert_eq!(e.mem.u32(this + 0x18), 0x1234);
+    }
+
+    #[test]
+    fn enum_media_types_reset_009fa1d0() {
+        let mut e = rig();
+        let pin = object(&mut e, OBJ, 0x10);
+        e.register(OBJ + 0x10, |_, _| ret(0x44));
+        let this = e.mem.alloc(0x14);
+        e.mem.set_u32(this + 0x8, pin);
+        e.mem.set_u32(this + 0x4, 3);
+        assert_eq!(e.call(0x009f_a1d0, &args![this]).u32(), 0);
+        assert_eq!(e.mem.u32(this + 0x4), 0);
+        assert_eq!(e.mem.u32(this + 0xc), 0x44);
+    }
+
+    #[test]
+    fn query_009fa4a0_turns_failures_into_one() {
+        let mut e = rig();
+        let pin = object(&mut e, OBJ, 0x40);
+        let this = pin + 0xc;
+        let out = e.mem.alloc(4);
+        assert_eq!(e.call(0x009f_a4a0, &args![this, 0u32]).u32(), E_POINTER);
+        e.register(OBJ + 0x20, |_, _| ret(7));
+        assert_eq!(e.call(0x009f_a4a0, &args![this, out]).u32(), 7);
+        assert_eq!(calls(&e, OBJ + 0x20), vec![vec![pin, out]]);
+        e.register(OBJ + 0x20, |_, _| ret(E_FAIL));
+        assert_eq!(e.call(0x009f_a4a0, &args![this, out]).u32(), 1);
+    }
+
+    #[test]
+    fn locked_store_009fa4e0() {
+        let mut e = rig();
+        let this = e.mem.alloc(0x20);
+        e.mem.set_u32(this + 0x10, 0x99);
+        assert_eq!(e.call(0x009f_a4e0, &args![this, 0x55u32]).u32(), 0);
+        assert_eq!(e.mem.u32(this + 0x1c), 0x55);
+        assert_eq!(calls(&e, ENTER_CRITICAL_SECTION), vec![vec![0x99]]);
+        assert_eq!(calls(&e, LEAVE_CRITICAL_SECTION), vec![vec![0x99]]);
+    }
+
+    #[test]
+    fn store_009fa520_keeps_the_double_and_quiets_a_signalling_nan() {
+        let mut e = rig();
+        let this = e.mem.alloc(0x90);
+        let rate = 1.5f64;
+        assert_eq!(
+            e.call(0x009f_a520, &args![this, 1u32, 2u32, 3u32, 4u32, rate])
+                .u32(),
+            0
+        );
+        let words: Vec<u32> = (0..4).map(|i| e.mem.u32(this + 0x74 + 4 * i)).collect();
+        assert_eq!(words, vec![1, 2, 3, 4]);
+        assert_eq!(e.mem.u64(this + 0x84), 1.5f64.to_bits());
+        let signalling = f64::from_bits(0x7ff0_0000_0000_0001);
+        e.call(
+            0x009f_a520,
+            &args![this, 1u32, 2u32, 3u32, 4u32, signalling],
+        );
+        assert_eq!(e.mem.u64(this + 0x84), 0x7ff8_0000_0000_0001);
+    }
+
+    #[test]
+    fn sample_destructor_009fa560_and_deleting_009fc460() {
+        let mut e = rig();
+        let this = e.mem.alloc(0x48);
+        e.call(0x009f_a560, &args![this]);
+        assert_eq!(e.mem.u32(this), MEDIA_SAMPLE_VTABLE);
+        assert!(calls(&e, CO_TASK_MEM_FREE).is_empty());
+        let media_type = e.mem.alloc(0x48);
+        e.mem.set_u32(this + 0x3c, media_type);
+        assert_eq!(e.call(0x009f_c460, &args![this, 1u32]).u32(), this);
+        assert_eq!(calls(&e, CO_TASK_MEM_FREE), vec![vec![media_type]]);
+        assert_eq!(calls(&e, OPERATOR_DELETE), vec![vec![this]]);
+        e.mem.set_u32(this + 0x3c, 0);
+        e.call(0x009f_c460, &args![this, 0u32]);
+        assert_eq!(calls(&e, OPERATOR_DELETE).len(), 1);
+    }
+
+    #[test]
+    fn sample_lookup_009fa580() {
+        let mut e = rig();
+        let this = object(&mut e, OBJ, 0x48);
+        e.register(OBJ + 4, |_, _| ret(2));
+        let out = e.mem.alloc(4);
+        for own in [
+            INTERFACE_ID_01093BDC,
+            INTERFACE_ID_01093BCC,
+            INTERFACE_ID_01093F14,
+        ] {
+            e.mem.set_u32(out, 0);
+            let id = id_copy(&mut e, own);
+            assert_eq!(e.call(0x009f_a580, &args![this, id, out]).u32(), 0);
+            assert_eq!(e.mem.u32(out), this);
+        }
+        e.mem.set_u32(out, 0x77);
+        let id = id_copy(&mut e, INTERFACE_ID_01093C1C);
+        assert_eq!(
+            e.call(0x009f_a580, &args![this, id, out]).u32(),
+            E_NOINTERFACE
+        );
+        assert_eq!(e.mem.u32(out), 0x77);
+    }
+
+    #[test]
+    fn sample_release_009fa5f0_returns_the_sample_at_zero() {
+        let mut e = rig();
+        let this = object(&mut e, OBJ, 0x48);
+        let allocator = object(&mut e, OBJ2, 0x40);
+        e.register(OBJ + 0x38, noop);
+        e.register(OBJ2 + 0x20, noop);
+        e.mem.set_u32(this + 0x18, allocator - 0xc);
+        // Count 3: just decremented.
+        e.mem.set_u32(this + 0x44, 3);
+        assert_eq!(e.call(0x009f_a5f0, &args![this]).u32(), 2);
+        assert!(calls(&e, OBJ2 + 0x20).is_empty());
+        // Count 1: cleared without the interlocked call, type dropped, returned.
+        e.mem.set_u32(this + 0x44, 1);
+        e.mem.set_u32(this + 0x4, 0x18);
+        e.mem.set_u32(this + 0x8, 5);
+        e.mem.set_u32(this + 0x40, 6);
+        assert_eq!(e.call(0x009f_a5f0, &args![this]).u32(), 0);
+        assert_eq!(calls(&e, INTERLOCKED_DECREMENT).len(), 1);
+        assert_eq!(calls(&e, OBJ + 0x38), vec![vec![this, 0]]);
+        assert_eq!(calls(&e, OBJ2 + 0x20), vec![vec![allocator, this]]);
+        for at in [0x4u32, 0x8, 0x40] {
+            assert_eq!(e.mem.u32(this + at), 0);
+        }
+        // Count 2: decremented to 1, nothing else.
+        e.mem.set_u32(this + 0x44, 2);
+        assert_eq!(e.call(0x009f_a5f0, &args![this]).u32(), 1);
+        assert_eq!(calls(&e, OBJ2 + 0x20).len(), 1);
+    }
+
+    #[test]
+    fn sample_buffer_009fa650_and_size_009fa670_and_length_009fa8a0() {
+        let mut e = rig();
+        let this = e.mem.alloc(0x48);
+        e.mem.set_u32(this + 0xc, 0x1000);
+        e.mem.set_u32(this + 0x14, 0x200);
+        e.mem.set_u32(this + 0x10, 0x80);
+        let out = e.mem.alloc(4);
+        assert_eq!(e.call(0x009f_a650, &args![this, out]).u32(), 0);
+        assert_eq!(e.mem.u32(out), 0x1000);
+        assert_eq!(e.call(0x009f_a670, &args![this]).u32(), 0x200);
+        assert_eq!(e.call(0x009f_a8a0, &args![this]).u32(), 0x80);
+    }
+
+    #[test]
+    fn sample_times_009fa680_and_009fa6f0() {
+        let mut e = rig();
+        let this = e.mem.alloc(0x48);
+        let start = e.mem.alloc(8);
+        let end = e.mem.alloc(8);
+        assert_eq!(
+            e.call(0x009f_a680, &args![this, start, end]).u32(),
+            VFW_E_SAMPLE_TIME_NOT_SET
+        );
+        // Start only.
+        e.mem.set_u64(start, 0x1_ffff_ffff);
+        assert_eq!(e.call(0x009f_a6f0, &args![this, start, 0u32]).u32(), 0);
+        assert_eq!(e.mem.u32(this + 4), 0x10);
+        let a = e.mem.alloc(8);
+        let b = e.mem.alloc(8);
+        assert_eq!(
+            e.call(0x009f_a680, &args![this, a, b]).u32(),
+            VFW_S_NO_STOP_TIME
+        );
+        assert_eq!(e.mem.u64(a), 0x1_ffff_ffff);
+        assert_eq!(e.mem.u64(b), 0x2_0000_0000);
+        // Both.
+        e.mem.set_u64(end, 0x3_0000_0000);
+        assert_eq!(e.call(0x009f_a6f0, &args![this, start, end]).u32(), 0);
+        assert_eq!(e.mem.u32(this + 4), 0x110);
+        assert_eq!(e.call(0x009f_a680, &args![this, a, b]).u32(), 0);
+        assert_eq!(e.mem.u64(b), 0x3_0000_0000);
+        // Start only again: 0x100 cleared.
+        e.call(0x009f_a6f0, &args![this, start, 0u32]);
+        assert_eq!(e.mem.u32(this + 4), 0x10);
+        // None: both flags cleared.
+        e.mem.set_u32(this + 4, 0x111);
+        e.call(0x009f_a6f0, &args![this, 0u32, 0u32]);
+        assert_eq!(e.mem.u32(this + 4), 0x1);
+    }
+
+    #[test]
+    fn sample_media_times_009fa760_and_009fa7a0() {
+        let mut e = rig();
+        let this = e.mem.alloc(0x48);
+        let start = e.mem.alloc(8);
+        let end = e.mem.alloc(8);
+        assert_eq!(
+            e.call(0x009f_a760, &args![this, start, end]).u32(),
+            VFW_E_MEDIA_TIME_NOT_SET
+        );
+        e.mem.set_u64(start, 0x5_0000_0010);
+        e.mem.set_u64(end, 0x5_0000_0004);
+        assert_eq!(e.call(0x009f_a7a0, &args![this, start, end]).u32(), 0);
+        assert_eq!(e.mem.u32(this + 4), 0x20);
+        // The low-word difference is negative: signed extension on read.
+        assert_eq!(e.mem.u32(this + 0x38), 0xffff_fff4);
+        let a = e.mem.alloc(8);
+        let b = e.mem.alloc(8);
+        assert_eq!(e.call(0x009f_a760, &args![this, a, b]).u32(), 0);
+        assert_eq!(e.mem.u64(a), 0x5_0000_0010);
+        assert_eq!(e.mem.u64(b), 0x5_0000_0004);
+        e.call(0x009f_a7a0, &args![this, 0u32, 0u32]);
+        assert_eq!(e.mem.u32(this + 4), 0);
+    }
+
+    #[test]
+    fn sample_flags_009fa7e0_to_009fa880() {
+        let mut e = rig();
+        let this = e.mem.alloc(0x48);
+        for (get, set, mask) in [
+            (0x009f_a7e0u32, 0x009f_a800u32, 1u32),
+            (0x009f_a860, 0x009f_a880, 2),
+            (0x009f_a820, 0x009f_a840, 4),
+        ] {
+            assert_eq!(e.call(get, &args![this]).u32(), 1);
+            assert_eq!(e.call(set, &args![this, 7u32]).u32(), 0);
+            assert_eq!(e.mem.u32(this + 4) & mask, mask);
+            assert_eq!(e.call(get, &args![this]).u32(), 0);
+            e.call(set, &args![this, 0u32]);
+            assert_eq!(e.mem.u32(this + 4) & mask, 0);
+        }
+    }
+
+    #[test]
+    fn sample_set_length_009fa8b0_is_signed_against_the_size() {
+        let mut e = rig();
+        let this = e.mem.alloc(0x48);
+        e.mem.set_u32(this + 0x14, 0x100);
+        assert_eq!(
+            e.call(0x009f_a8b0, &args![this, 0x101u32]).u32(),
+            VFW_E_BUFFER_OVERFLOW
+        );
+        assert_eq!(e.call(0x009f_a8b0, &args![this, 0x100u32]).u32(), 0);
+        assert_eq!(e.mem.u32(this + 0x10), 0x100);
+        assert_eq!(e.call(0x009f_a8b0, &args![this, -1i32]).u32(), 0);
+        assert_eq!(e.mem.u32(this + 0x10), 0xffff_ffff);
+    }
+
+    #[test]
+    fn sample_media_type_009fa8d0_and_009fa910() {
+        let mut e = rig();
+        let this = e.mem.alloc(0x48);
+        let out = e.mem.alloc(4);
+        e.mem.set_u32(out, 5);
+        assert_eq!(e.call(0x009f_a8d0, &args![this, out]).u32(), 1);
+        assert_eq!(e.mem.u32(out), 0);
+        let media_type = e.mem.alloc(0x48);
+        e.mem.set_u32(media_type + 0x10, 0x31);
+        assert_eq!(e.call(0x009f_a910, &args![this, media_type]).u32(), 0);
+        assert_eq!(e.mem.u32(this + 4), 8);
+        let held = e.mem.u32(this + 0x3c);
+        assert_eq!(e.mem.u32(held + 0x10), 0x31);
+        assert_eq!(e.call(0x009f_a8d0, &args![this, out]).u32(), 0);
+        let copy = e.mem.u32(out);
+        assert_ne!(copy, held);
+        assert_eq!(e.mem.u32(copy + 0x10), 0x31);
+        // Cleared again: the held copy is freed.
+        assert_eq!(e.call(0x009f_a910, &args![this, 0u32]).u32(), 0);
+        assert_eq!(e.mem.u32(this + 4), 0);
+        assert_eq!(e.mem.u32(this + 0x3c), 0);
+        assert_eq!(calls(&e, CO_TASK_MEM_FREE), vec![vec![held]]);
+        // A failed copy.
+        e.register(CO_TASK_MEM_ALLOC, |_, _| ret(0));
+        e.mem.set_u32(this + 4, 8);
+        assert_eq!(
+            e.call(0x009f_a910, &args![this, media_type]).u32(),
+            E_OUTOFMEMORY
+        );
+        assert_eq!(e.mem.u32(this + 4), 0);
+        e.mem.set_u32(this + 4, 8);
+        assert_eq!(e.call(0x009f_a8d0, &args![this, out]).u32(), E_OUTOFMEMORY);
+    }
+
+    #[test]
+    fn sample_properties_009fa960_copies_at_most_0x30_bytes() {
+        let mut e = rig();
+        let this = e.mem.alloc(0x48);
+        for (at, v) in [
+            (0x4u32, 0x2bu32),
+            (0x8, 0x11),
+            (0xc, 0x1000),
+            (0x10, 0x22),
+            (0x14, 0x200),
+            (0x20, 0x33),
+            (0x24, 0x34),
+            (0x28, 0x35),
+            (0x2c, 0x36),
+            (0x3c, 0x4444),
+            (0x40, 0x55),
+        ] {
+            e.mem.set_u32(this + at, v);
+        }
+        let out = e.mem.alloc(0x40);
+        assert_eq!(e.call(0x009f_a960, &args![this, 0u32, out]).u32(), 0);
+        assert!(calls(&e, MEMCPY).is_empty());
+        assert_eq!(
+            e.call(0x009f_a960, &args![this, 4u32, 0u32]).u32(),
+            E_POINTER
+        );
+        assert_eq!(e.call(0x009f_a960, &args![this, 0x40u32, out]).u32(), 0);
+        let words: Vec<u32> = (0..12).map(|i| e.mem.u32(out + 4 * i)).collect();
+        assert_eq!(
+            words,
+            vec![0x30, 0x11, 0x0b, 0x22, 0x33, 0x34, 0x35, 0x36, 0x55, 0x4444, 0x1000, 0x200]
+        );
+        // Without flag 8 the type is 0; a short size copies only that much.
+        e.mem.set_u32(this + 4, 0);
+        let short = e.mem.alloc(0x40);
+        e.mem.set_u32(short + 4, 0x99);
+        assert_eq!(e.call(0x009f_a960, &args![this, 4u32, short]).u32(), 0);
+        assert_eq!(e.mem.u32(short), 4);
+        assert_eq!(e.mem.u32(short + 4), 0x99);
+    }
+
+    /// A 0x30-byte property block.
+    fn properties(e: &mut Engine, words: &[(u32, u32)]) -> u32 {
+        let p = e.mem.alloc(0x30);
+        e.mem.set_u32(p, 0x30);
+        for &(at, v) in words {
+            e.mem.set_u32(p + at, v);
+        }
+        p
+    }
+
+    #[test]
+    fn sample_set_properties_009faa20_checks_then_stores() {
+        let mut e = rig();
+        let this = e.mem.alloc(0x48);
+        e.mem.set_u32(this + 0xc, 0x1000);
+        e.mem.set_u32(this + 0x14, 0x200);
+        e.mem.set_u32(this + 4, 0x20);
+        assert_eq!(e.call(0x009f_aa20, &args![this, 3u32, 0u32]).u32(), 0);
+        assert_eq!(
+            e.call(0x009f_aa20, &args![this, 4u32, 0u32]).u32(),
+            E_POINTER
+        );
+        // Bad flags, a foreign buffer, a length above the size.
+        for words in [
+            vec![(0x8u32, 0x200u32)],
+            vec![(0x28, 0x2000)],
+            vec![(0x2c, 0x100)],
+            vec![(0xc, 0x201)],
+        ] {
+            let p = properties(&mut e, &words);
+            assert_eq!(
+                e.call(0x009f_aa20, &args![this, 0x30u32, p]).u32(),
+                E_INVALIDARG
+            );
+        }
+        // Flag 0x10 on a sample without it, below 0x20 bytes.
+        let p = properties(&mut e, &[(0x8, 0x10)]);
+        assert_eq!(
+            e.call(0x009f_aa20, &args![this, 0x1cu32, p]).u32(),
+            E_INVALIDARG
+        );
+        // A size above 0x30 in the block.
+        let p = properties(&mut e, &[(0x0, 0x34)]);
+        assert_eq!(
+            e.call(0x009f_aa20, &args![this, 0x40u32, p]).u32(),
+            E_INVALIDARG
+        );
+        // Flag 8 without a type.
+        let p = properties(&mut e, &[(0x8, 0x8)]);
+        assert_eq!(
+            e.call(0x009f_aa20, &args![this, 0x30u32, p]).u32(),
+            E_POINTER
+        );
+        // A full block with a type.
+        let media_type = e.mem.alloc(0x48);
+        let p = properties(
+            &mut e,
+            &[
+                (0x4, 0x11),
+                (0x8, 0x18),
+                (0xc, 0x80),
+                (0x10, 0x21),
+                (0x14, 0x22),
+                (0x18, 0x23),
+                (0x1c, 0x24),
+                (0x20, 0x25),
+                (0x24, media_type),
+                (0x2c, 0x200),
+            ],
+        );
+        assert_eq!(e.call(0x009f_aa20, &args![this, 0x30u32, p]).u32(), 0);
+        assert_eq!(e.mem.u32(this + 4), 0x38);
+        for (at, v) in [
+            (0x8u32, 0x11u32),
+            (0x10, 0x80),
+            (0x20, 0x21),
+            (0x24, 0x22),
+            (0x28, 0x23),
+            (0x2c, 0x24),
+            (0x40, 0x25),
+        ] {
+            assert_eq!(e.mem.u32(this + at), v, "+{at:#x}");
+        }
+        let held = e.mem.u32(this + 0x3c);
+        assert_ne!(held, 0);
+        // A short block (8 bytes): only +8 changes; the held type keeps flag 8.
+        let p = properties(&mut e, &[(0x0, 0x8), (0x4, 0x66)]);
+        assert_eq!(e.call(0x009f_aa20, &args![this, 0x30u32, p]).u32(), 0);
+        assert_eq!(e.mem.u32(this + 0x8), 0x66);
+        assert_eq!(e.mem.u32(this + 0x10), 0x80);
+        assert_eq!(e.mem.u32(this + 4), 0x38);
+        // A failed copy.
+        e.register(CO_TASK_MEM_ALLOC, |_, _| ret(0));
+        let p = properties(&mut e, &[(0x8, 0x8), (0x24, media_type)]);
+        assert_eq!(
+            e.call(0x009f_aa20, &args![this, 0x30u32, p]).u32(),
+            E_OUTOFMEMORY
+        );
+    }
+
+    #[test]
+    fn allocator_base_destructor_009fabb0() {
+        let mut e = rig();
+        let this = e.mem.alloc(0x64);
+        e.call(0x009f_abb0, &args![this]);
+        assert!(calls(&e, CLOSE_HANDLE).is_empty());
+        e.register(OBJ + 8, noop);
+        let held = object(&mut e, OBJ, 8);
+        e.mem.set_u32(this + 0x30, 0x44);
+        e.mem.set_u32(this + 0x58, held);
+        e.mem.set_u32(OBJECT_COUNT, 3);
+        e.call(0x009f_abb0, &args![this]);
+        assert_eq!(calls(&e, CLOSE_HANDLE), vec![vec![0x44]]);
+        assert_eq!(calls(&e, OBJ + 8), vec![vec![held]]);
+        assert_eq!(
+            calls(&e, DELETE_CRITICAL_SECTION),
+            vec![vec![this + 0x10]; 2]
+        );
+        assert_eq!(e.mem.u32(OBJECT_COUNT), 2);
+    }
+
+    #[test]
+    fn allocator_lookup_009fac30() {
+        let mut e = rig();
+        let this = e.mem.alloc(0x64);
+        let interface = object(&mut e, OBJ, 4);
+        e.mem.set_u32(this + 0xc, e.mem.u32(interface));
+        e.register(OBJ + 4, |_, _| ret(1));
+        let out = e.mem.alloc(4);
+        let id = id_copy(&mut e, INTERFACE_ID_01093BBC);
+        assert_eq!(e.call(0x009f_ac30, &args![this, id, out]).u32(), 0);
+        assert_eq!(e.mem.u32(out), this + 0xc);
+        // The second id only with +0x5c set.
+        let id = id_copy(&mut e, INTERFACE_ID_01093BAC);
+        assert_eq!(
+            e.call(0x009f_ac30, &args![this, id, out]).u32(),
+            E_NOINTERFACE
+        );
+        e.mem.set_u32(this + 0x5c, 1);
+        assert_eq!(e.call(0x009f_ac30, &args![this, id, out]).u32(), 0);
+        assert_eq!(e.mem.u32(out), this + 0xc);
+    }
+
+    /// A `CMemAllocator`-shaped object (its own vtable at +0 pointing at
+    /// `OBJ3`, the interface's at +0xc at `OBJ2`); returns the interface.
+    fn allocator(e: &mut Engine) -> u32 {
+        let this = object(e, OBJ3, 0x64);
+        let vtable = e.mem.alloc(0x80);
+        for s in (0..0x80).step_by(4) {
+            e.mem.set_u32(vtable + s, OBJ2 + s);
+        }
+        e.mem.set_u32(this + 0xc, vtable);
+        this + 0xc
+    }
+
+    #[test]
+    fn allocator_properties_009faca0() {
+        let mut e = rig();
+        let this = allocator(&mut e);
+        for (at, v) in [(0x2cu32, 4u32), (0x34, 0x100), (0x38, 8), (0x3c, 2)] {
+            e.mem.set_u32(this + at, v);
+        }
+        assert_eq!(e.call(0x009f_aca0, &args![this, 0u32]).u32(), E_POINTER);
+        let out = e.mem.alloc(0x10);
+        assert_eq!(e.call(0x009f_aca0, &args![this, out]).u32(), 0);
+        let words: Vec<u32> = (0..4).map(|i| e.mem.u32(out + 4 * i)).collect();
+        assert_eq!(words, vec![4, 0x100, 8, 2]);
+        assert_eq!(calls(&e, ENTER_CRITICAL_SECTION), vec![vec![this + 4]]);
+    }
+
+    #[test]
+    fn allocator_get_buffer_009fad00_takes_waits_or_fails() {
+        let mut e = rig();
+        let this = allocator(&mut e);
+        let out = e.mem.alloc(4);
+        assert_eq!(
+            e.call(0x009f_ad00, &args![this, out, 0u32, 0u32, 0u32])
+                .u32(),
+            VFW_E_NOT_COMMITTED
+        );
+        e.mem.set_u32(this + 0x44, 1);
+        // No free sample and flag 4: timeout, the waiting count grows.
+        assert_eq!(
+            e.call(0x009f_ad00, &args![this, out, 0u32, 0u32, 4u32])
+                .u32(),
+            VFW_E_TIMEOUT
+        );
+        assert_eq!(e.mem.u32(this + 0x28), 1);
+        // A wait that frees a sample.
+        let sample = e.mem.alloc(0x48);
+        e.mem.set_u32(this + 0x24, 0x88);
+        let s = sample;
+        let t = this;
+        e.register_double(WAIT_FOR_SINGLE_OBJECT, move |e, _| {
+            e.mem.set_u32(t + 0x1c, s);
+            e.mem.set_u32(t + 0x20, 1);
+            ret(0)
+        });
+        assert_eq!(
+            e.call(0x009f_ad00, &args![this, out, 0u32, 0u32, 0u32])
+                .u32(),
+            0
+        );
+        assert_eq!(e.mem.u32(out), sample);
+        assert_eq!(e.mem.u32(sample + 0x44), 1);
+        assert_eq!(e.mem.u32(this + 0x20), 0);
+        assert_eq!(e.mem.u32(this + 0x28), 2);
+        assert_eq!(
+            calls(&e, WAIT_FOR_SINGLE_OBJECT),
+            vec![vec![0x88, 0xffff_ffff]]
+        );
+    }
+
+    #[test]
+    fn allocator_notify_009fada0_swaps_references() {
+        let mut e = rig();
+        let this = allocator(&mut e);
+        let old = object(&mut e, OBJ, 8);
+        let new = object(&mut e, OBJ, 8);
+        e.register(OBJ + 4, noop);
+        e.register(OBJ + 8, noop);
+        e.mem.set_u32(this + 0x4c, old);
+        assert_eq!(e.call(0x009f_ada0, &args![this, new]).u32(), 0);
+        assert_eq!(e.mem.u32(this + 0x4c), new);
+        assert_eq!(calls(&e, OBJ + 4), vec![vec![new]]);
+        assert_eq!(calls(&e, OBJ + 8), vec![vec![old]]);
+        assert_eq!(e.call(0x009f_ada0, &args![this, 0u32]).u32(), 0);
+        assert_eq!(e.mem.u32(this + 0x4c), 0);
+    }
+
+    #[test]
+    fn allocator_free_count_009fae30() {
+        let mut e = rig();
+        let this = allocator(&mut e);
+        e.mem.set_u32(this + 0x2c, 10);
+        e.mem.set_u32(this + 0x30, 4);
+        e.mem.set_u32(this + 0x20, 1);
+        let out = e.mem.alloc(4);
+        assert_eq!(e.call(0x009f_ae30, &args![this, out]).u32(), 0);
+        assert_eq!(e.mem.u32(out), 7);
+    }
+
+    #[test]
+    fn allocator_wake_009fae70() {
+        let mut e = rig();
+        let this = e.mem.alloc(0x64);
+        e.call(0x009f_ae70, &args![this]);
+        assert!(calls(&e, RELEASE_SEMAPHORE).is_empty());
+        e.mem.set_u32(this + 0x30, 0x77);
+        e.mem.set_u32(this + 0x34, 3);
+        e.call(0x009f_ae70, &args![this]);
+        assert_eq!(calls(&e, RELEASE_SEMAPHORE), vec![vec![0x77, 3, 0]]);
+        assert_eq!(e.mem.u32(this + 0x34), 0);
+    }
+
+    #[test]
+    fn allocator_commit_009fae90() {
+        let mut e = rig();
+        let this = allocator(&mut e);
+        e.register(OBJ3 + 0x14, |_, _| ret(E_OUTOFMEMORY));
+        e.register(OBJ2 + 4, noop);
+        assert_eq!(e.call(0x009f_ae90, &args![this]).u32(), E_OUTOFMEMORY);
+        assert_eq!(e.mem.u32(this + 0x44), 0);
+        e.register(OBJ3 + 0x14, |_, _| ret(0));
+        assert_eq!(e.call(0x009f_ae90, &args![this]).u32(), 0);
+        assert_eq!(e.mem.u32(this + 0x44), 1);
+        assert_eq!(calls(&e, OBJ3 + 0x14), vec![vec![this - 0xc]; 2]);
+        assert_eq!(calls(&e, OBJ2 + 4), vec![vec![this]]);
+        // Already committed: nothing.
+        assert_eq!(e.call(0x009f_ae90, &args![this]).u32(), 0);
+        assert_eq!(calls(&e, OBJ3 + 0x14).len(), 2);
+        // A pending decommit is cancelled instead.
+        e.mem.set_u32(this + 0x44, 0);
+        e.mem.set_u32(this + 0x48, 1);
+        assert_eq!(e.call(0x009f_ae90, &args![this]).u32(), 0);
+        assert_eq!(e.mem.u32(this + 0x48), 0);
+        assert_eq!(e.mem.u32(this + 0x44), 1);
+        assert_eq!(calls(&e, OBJ3 + 0x14).len(), 2);
+    }
+
+    #[test]
+    fn allocator_decommit_009faf50() {
+        let mut e = rig();
+        let this = allocator(&mut e);
+        e.register(OBJ3 + 0x10, noop);
+        e.register(OBJ2 + 8, noop);
+        assert_eq!(e.call(0x009f_af50, &args![this]).u32(), 0);
+        assert!(calls(&e, OBJ3 + 0x10).is_empty());
+        // Buffers out: pending.
+        e.mem.set_u32(this + 0x44, 1);
+        e.mem.set_u32(this + 0x20, 1);
+        e.mem.set_u32(this + 0x30, 2);
+        assert_eq!(e.call(0x009f_af50, &args![this]).u32(), 0);
+        assert_eq!(e.mem.u32(this + 0x48), 1);
+        assert_eq!(e.mem.u32(this + 0x44), 0);
+        assert!(calls(&e, OBJ3 + 0x10).is_empty());
+        // All back: freed and released.
+        e.mem.set_u32(this + 0x20, 2);
+        e.mem.set_u32(this + 0x28, 1);
+        e.mem.set_u32(this + 0x24, 5);
+        assert_eq!(e.call(0x009f_af50, &args![this]).u32(), 0);
+        assert_eq!(e.mem.u32(this + 0x48), 0);
+        assert_eq!(calls(&e, OBJ3 + 0x10), vec![vec![this - 0xc]]);
+        assert_eq!(calls(&e, OBJ2 + 8), vec![vec![this]]);
+        assert_eq!(calls(&e, RELEASE_SEMAPHORE), vec![vec![5, 1, 0]]);
+    }
+
+    #[test]
+    fn allocator_size_check_009fb020() {
+        let mut e = rig();
+        let this = e.mem.alloc(0x64);
+        assert_eq!(e.call(0x009f_b020, &args![this]).u32(), VFW_E_SIZENOTSET);
+        e.mem.set_u32(this + 0x38, 1);
+        e.mem.set_u32(this + 0x40, 1);
+        e.mem.set_u32(this + 0x44, 1);
+        assert_eq!(e.call(0x009f_b020, &args![this]).u32(), 1);
+        e.mem.set_u32(this + 0x4c, 1);
+        assert_eq!(e.call(0x009f_b020, &args![this]).u32(), 0);
+        e.mem.set_u32(this + 0x44, 0xffff_ffff);
+        assert_eq!(e.call(0x009f_b020, &args![this]).u32(), VFW_E_SIZENOTSET);
+    }
+
+    #[test]
+    fn allocator_set_properties_009fb050() {
+        let mut e = rig();
+        let this = allocator(&mut e);
+        e.register(GET_SYSTEM_INFO, |e, a| {
+            e.mem.set_u32(a[0] + 0x1c, 0x1_0000);
+            ret(0)
+        });
+        let actual = e.mem.alloc(0x10);
+        let request = e.mem.alloc(0x10);
+        for (at, v) in [(0x0u32, 3u32), (0x4, 0x101), (0x8, 0x10), (0xc, 4)] {
+            e.mem.set_u32(request + at, v);
+        }
+        assert_eq!(
+            e.call(0x009f_b050, &args![this, request, 0u32]).u32(),
+            E_POINTER
+        );
+        assert_eq!(e.call(0x009f_b050, &args![this, request, actual]).u32(), 0);
+        let words: Vec<u32> = (0..4).map(|i| e.mem.u32(actual + 4 * i)).collect();
+        // 0x101 + 4 rounded up to 0x110, less the prefix.
+        assert_eq!(words, vec![3, 0x10c, 0x10, 4]);
+        assert_eq!(e.mem.u32(this + 0x34), 0x10c);
+        assert_eq!(e.mem.u32(this + 0x2c), 3);
+        assert_eq!(e.mem.u32(this + 0x40), 1);
+        // Bad alignments, committed, buffers out.
+        e.mem.set_u32(request + 8, 0x2_0000);
+        assert_eq!(
+            e.call(0x009f_b050, &args![this, request, actual]).u32(),
+            VFW_E_BADALIGN
+        );
+        e.mem.set_u32(request + 8, 0);
+        assert_eq!(
+            e.call(0x009f_b050, &args![this, request, actual]).u32(),
+            VFW_E_BADALIGN
+        );
+        e.mem.set_u32(request + 8, 0x10);
+        e.mem.set_u32(this + 0x44, 1);
+        assert_eq!(
+            e.call(0x009f_b050, &args![this, request, actual]).u32(),
+            VFW_E_ALREADY_COMMITTED
+        );
+        e.mem.set_u32(this + 0x44, 0);
+        e.mem.set_u32(this + 0x30, 2);
+        assert_eq!(
+            e.call(0x009f_b050, &args![this, request, actual]).u32(),
+            VFW_E_BUFFERS_OUTSTANDING
+        );
+        assert_eq!(
+            calls(&e, ENTER_CRITICAL_SECTION).len(),
+            calls(&e, LEAVE_CRITICAL_SECTION).len()
+        );
+    }
+
+    #[test]
+    fn allocator_free_all_009fb170() {
+        let mut e = rig();
+        let this = e.mem.alloc(0x64);
+        let a = object(&mut e, OBJ, 0x48);
+        let b = object(&mut e, OBJ, 0x48);
+        e.register(OBJ + 0x54, noop);
+        e.mem.set_u32(this + 0x28, a);
+        e.mem.set_u32(a + 0x1c, b);
+        e.mem.set_u32(this + 0x2c, 2);
+        e.mem.set_u32(this + 0x3c, 2);
+        e.mem.set_u32(this + 0x60, 0x5000);
+        e.call(0x009f_b170, &args![this]);
+        assert_eq!(calls(&e, OBJ + 0x54), vec![vec![a, 1], vec![b, 1]]);
+        assert_eq!(e.mem.u32(this + 0x2c), 0);
+        assert_eq!(e.mem.u32(this + 0x3c), 0);
+        assert_eq!(e.mem.u32(this + 0x60), 0);
+        assert_eq!(calls(&e, VIRTUAL_FREE), vec![vec![0x5000, 0, 0x8000]]);
+        e.call(0x009f_b170, &args![this]);
+        assert_eq!(calls(&e, VIRTUAL_FREE).len(), 1);
+    }
+
+    #[test]
+    fn allocator_destructor_009fb1c0_and_deleting_009fc580() {
+        let mut e = rig();
+        let this = e.mem.alloc(0x64);
+        assert_eq!(e.call(0x009f_c580, &args![this, 1u32]).u32(), this);
+        assert_eq!(e.mem.u32(this), MEM_ALLOCATOR_VTABLE);
+        assert_eq!(e.mem.u32(this + 0xc), MEM_ALLOCATOR_VTABLE_C);
+        assert_eq!(calls(&e, DELETE_CRITICAL_SECTION), vec![vec![this + 0x10]]);
+        assert_eq!(calls(&e, OPERATOR_DELETE), vec![vec![this]]);
+        e.call(0x009f_b1c0, &args![this]);
+        assert_eq!(calls(&e, OPERATOR_DELETE).len(), 1);
+    }
+
+    #[test]
+    fn outer_thunks_009fb230_009fb250_009fb270() {
+        let mut e = rig();
+        let outer = object(&mut e, OBJ, 8);
+        e.register(OBJ, |_, _| ret(0x10));
+        e.register(OBJ + 4, |_, _| ret(0x14));
+        e.register(OBJ + 8, |_, _| ret(0x18));
+        let this = e.mem.alloc(0x10) + 8;
+        e.mem.set_u32(this - 8, outer);
+        assert_eq!(e.call(0x009f_b230, &args![this, 1u32, 2u32]).u32(), 0x10);
+        assert_eq!(calls(&e, OBJ), vec![vec![outer, 1, 2]]);
+        assert_eq!(e.call(0x009f_b250, &args![this]).u32(), 0x14);
+        assert_eq!(e.call(0x009f_b270, &args![this]).u32(), 0x18);
+        assert_eq!(calls(&e, OBJ + 8), vec![vec![outer]]);
+    }
+
+    /// A setup block with one pin holding two type pairs; returns it.
+    fn setup_block(e: &mut Engine) -> u32 {
+        let class = e.mem.alloc(0x10);
+        for i in 0..4 {
+            e.mem.set_u32(class + 4 * i, 0xc0 + i);
+        }
+        let connects = e.mem.alloc(0x10);
+        for i in 0..4 {
+            e.mem.set_u32(connects + 4 * i, 0xd0 + i);
+        }
+        let major = e.mem.alloc(0x10);
+        let minor = e.mem.alloc(0x10);
+        for i in 0..4 {
+            e.mem.set_u32(major + 4 * i, 0xe0 + i);
+            e.mem.set_u32(minor + 4 * i, 0xf0 + i);
+        }
+        let types = e.mem.alloc(0x10);
+        for i in 0..2 {
+            e.mem.set_u32(types + 8 * i, major);
+            e.mem.set_u32(types + 8 * i + 4, minor);
+        }
+        let pin = e.mem.alloc(0x24);
+        for (at, v) in [(0x0u32, 0x501u32), (0x4, 1), (0x8, 2), (0xc, 3), (0x10, 4)] {
+            e.mem.set_u32(pin + at, v);
+        }
+        e.mem.set_u32(pin + 0x14, connects);
+        e.mem.set_u32(pin + 0x18, 0x502);
+        e.mem.set_u32(pin + 0x1c, 2);
+        e.mem.set_u32(pin + 0x20, types);
+        let setup = e.mem.alloc(0x14);
+        for (at, v) in [
+            (0x0u32, class),
+            (0x4, 0x503),
+            (0x8, 0x600),
+            (0xc, 1),
+            (0x10, pin),
+        ] {
+            e.mem.set_u32(setup + at, v);
+        }
+        setup
+    }
+
+    #[test]
+    fn register_009fb290_walks_pins_and_types() {
+        let mut e = rig();
+        let mapper = object(&mut e, OBJ, 8);
+        for slot in [0xcu32, 0x14, 0x18] {
+            e.register(OBJ + slot, |_, _| ret(0));
+        }
+        e.register(OBJ + 0x1c, |_, _| ret(HRESULT_FILE_NOT_FOUND));
+        assert_eq!(e.call(0x009f_b290, &args![0u32, mapper, 1u32]).u32(), 1);
+        let setup = setup_block(&mut e);
+        // Unregister only: the drop's 0x80070002 becomes 0.
+        assert_eq!(e.call(0x009f_b290, &args![setup, mapper, 0u32]).u32(), 0);
+        assert_eq!(
+            calls(&e, OBJ + 0x1c),
+            vec![vec![mapper, 0xc0, 0xc1, 0xc2, 0xc3]]
+        );
+        assert_eq!(e.call(0x009f_b290, &args![setup, mapper, 1u32]).u32(), 0);
+        assert_eq!(
+            calls(&e, OBJ + 0xc),
+            vec![vec![mapper, 0xc0, 0xc1, 0xc2, 0xc3, 0x503, 0x600]]
+        );
+        assert_eq!(
+            calls(&e, OBJ + 0x14),
+            vec![vec![
+                mapper, 0xc0, 0xc1, 0xc2, 0xc3, 0x501, 1, 2, 3, 4, 0xd0, 0xd1, 0xd2, 0xd3, 0x502
+            ]]
+        );
+        let types = calls(&e, OBJ + 0x18);
+        assert_eq!(types.len(), 2);
+        assert_eq!(
+            types[0],
+            vec![
+                mapper, 0xc0, 0xc1, 0xc2, 0xc3, 0x501, 0xe0, 0xe1, 0xe2, 0xe3, 0xf0, 0xf1, 0xf2,
+                0xf3
+            ]
+        );
+        // A failing type registration stops and is returned.
+        e.register(OBJ + 0x18, |_, _| ret(E_FAIL));
+        assert_eq!(
+            e.call(0x009f_b290, &args![setup, mapper, 1u32]).u32(),
+            E_FAIL
+        );
+        assert_eq!(calls(&e, OBJ + 0x18).len(), 3);
+        // A failing add stops before the pins.
+        e.register(OBJ + 0xc, |_, _| ret(E_UNEXPECTED));
+        assert_eq!(
+            e.call(0x009f_b290, &args![setup, mapper, 1u32]).u32(),
+            E_UNEXPECTED
+        );
+        assert_eq!(calls(&e, OBJ + 0x14).len(), 2);
+    }
+
+    #[test]
+    fn reference_clock_009fb650() {
+        let mut e = rig();
+        let this = e.mem.alloc(0x30);
+        e.mem.set_u32(this + 0x2c, 0x66);
+        let out = e.mem.alloc(4);
+        assert_eq!(e.call(0x009f_b650, &args![this, 0u32]).u32(), E_POINTER);
+        e.mem.set_u32(out, 9);
+        assert_eq!(e.call(0x009f_b650, &args![this, out]).u32(), 0);
+        assert_eq!(e.mem.u32(out), 0);
+        let clock = object(&mut e, OBJ, 8);
+        e.register(OBJ + 4, noop);
+        e.mem.set_u32(this + 0xc, clock);
+        assert_eq!(e.call(0x009f_b650, &args![this, out]).u32(), 0);
+        assert_eq!(e.mem.u32(out), clock);
+        assert_eq!(calls(&e, OBJ + 4), vec![vec![clock]]);
+        assert_eq!(calls(&e, ENTER_CRITICAL_SECTION), vec![vec![0x66]; 2]);
+    }
+
+    #[test]
+    fn find_pin_009fb960_by_name() {
+        let mut e = rig();
+        let filter = object(&mut e, OBJ, 0x40);
+        let this = filter + 0xc;
+        e.mem.set_u32(this + 0x2c, 0x66);
+        let pins = [object(&mut e, OBJ2, 0x40), object(&mut e, OBJ2, 0x40)];
+        let names = [wide(&mut e, "In"), wide(&mut e, "Out")];
+        for i in 0..2 {
+            e.mem.set_u32(pins[i] + 0x14, names[i]);
+            let vt = e.mem.alloc(8);
+            e.mem.set_u32(vt + 4, OBJ3 + 4);
+            e.mem.set_u32(pins[i] + 0xc, vt);
+        }
+        e.register(OBJ3 + 4, noop);
+        e.register(OBJ + 0x18, |_, _| ret(2));
+        let list = pins;
+        e.register_double(OBJ + 0x1c, move |_, a| ret(list[a[1] as usize]));
+        let out = e.mem.alloc(4);
+        assert_eq!(
+            e.call(0x009f_b960, &args![this, 0u32, 0u32]).u32(),
+            E_POINTER
+        );
+        let wanted = wide(&mut e, "Out");
+        assert_eq!(e.call(0x009f_b960, &args![this, wanted, out]).u32(), 0);
+        assert_eq!(e.mem.u32(out), pins[1] + 0xc);
+        assert_eq!(calls(&e, OBJ3 + 4), vec![vec![pins[1] + 0xc]]);
+        let missing = wide(&mut e, "Other");
+        assert_eq!(
+            e.call(0x009f_b960, &args![this, missing, out]).u32(),
+            VFW_E_NOT_FOUND
+        );
+        assert_eq!(e.mem.u32(out), 0);
+        assert_eq!(calls(&e, LEAVE_CRITICAL_SECTION), vec![vec![0x66]; 2]);
+    }
+
+    fn reader_for_registration(e: &mut Engine, setup: u32) -> u32 {
+        let reader = object(e, OBJ, 0x40);
+        e.register_double(OBJ + 0x20, move |_, _| ret(setup));
+        reader + 0x10
+    }
+
+    #[test]
+    fn register_009fba40_runs_the_mapper_with_one() {
+        let mut e = rig();
+        let this = reader_for_registration(&mut e, 0);
+        assert_eq!(e.call(0x009f_ba40, &args![this]).u32(), 1);
+        assert!(calls(&e, CO_INITIALIZE).is_empty());
+        let setup = setup_block(&mut e);
+        let this = reader_for_registration(&mut e, setup);
+        let mapper = object(&mut e, OBJ2, 8);
+        for slot in [0x8u32, 0xc, 0x14, 0x18, 0x1c] {
+            e.register(OBJ2 + slot, |_, _| ret(0));
+        }
+        e.register_double(CO_CREATE_INSTANCE, move |e, a| {
+            e.mem.set_u32(a[4], mapper);
+            ret(0)
+        });
+        assert_eq!(e.call(0x009f_ba40, &args![this]).u32(), 0);
+        let create = calls(&e, CO_CREATE_INSTANCE);
+        assert_eq!(
+            create[0][..4],
+            [CLASS_ID_0107CB08, 0, 1, INTERFACE_ID_01093B8C]
+        );
+        assert_eq!(calls(&e, OBJ2 + 0xc).len(), 1);
+        assert_eq!(calls(&e, OBJ2 + 8), vec![vec![mapper]]);
+        assert_eq!(calls(&e, CO_UNINITIALIZE).len(), 1);
+        // A failed create: still 0, nothing registered.
+        e.register(CO_CREATE_INSTANCE, |_, _| ret(E_FAIL));
+        assert_eq!(e.call(0x009f_ba40, &args![this]).u32(), 0);
+        assert_eq!(calls(&e, OBJ2 + 0xc).len(), 1);
+    }
+
+    #[test]
+    fn unregister_009fbab0_returns_the_result() {
+        let mut e = rig();
+        let this = reader_for_registration(&mut e, 0);
+        assert_eq!(e.call(0x009f_bab0, &args![this]).u32(), 1);
+        let setup = setup_block(&mut e);
+        let this = reader_for_registration(&mut e, setup);
+        let mapper = object(&mut e, OBJ2, 8);
+        e.register(OBJ2 + 8, noop);
+        e.register(OBJ2 + 0x1c, |_, _| ret(E_UNEXPECTED));
+        e.register_double(CO_CREATE_INSTANCE, move |e, a| {
+            e.mem.set_u32(a[4], mapper);
+            ret(0)
+        });
+        assert_eq!(e.call(0x009f_bab0, &args![this]).u32(), E_UNEXPECTED);
+        e.register(OBJ2 + 0x1c, |_, _| ret(HRESULT_FILE_NOT_FOUND));
+        assert_eq!(e.call(0x009f_bab0, &args![this]).u32(), 0);
+        e.register(CO_CREATE_INSTANCE, |_, _| ret(HRESULT_FILE_NOT_FOUND));
+        assert_eq!(e.call(0x009f_bab0, &args![this]).u32(), 0);
+        e.register(CO_CREATE_INSTANCE, |_, _| ret(E_FAIL));
+        assert_eq!(e.call(0x009f_bab0, &args![this]).u32(), E_FAIL);
+    }
+
+    #[test]
+    fn enum_pins_skip_009fbc50() {
+        let mut e = rig();
+        let this = enum_pins(&mut e);
+        e.mem.set_u32(this + 0x10, 0x33);
+        e.mem.set_u32(this + 0x8, 6);
+        assert_eq!(e.call(0x009f_bc50, &args![this, 4u32]).u32(), 0);
+        assert_eq!(e.mem.u32(this + 4), 6);
+        assert_eq!(e.call(0x009f_bc50, &args![this, 1u32]).u32(), 1);
+        e.mem.set_u32(this + 0x10, 0x34);
+        assert_eq!(
+            e.call(0x009f_bc50, &args![this, 0u32]).u32(),
+            VFW_E_ENUM_OUT_OF_SYNC
+        );
+    }
+
+    #[test]
+    fn enum_media_types_skip_009fbe40() {
+        let mut e = rig();
+        let pin = object(&mut e, OBJ, 0x80);
+        e.register(OBJ + 0x10, |_, _| ret(0x44));
+        e.register(OBJ + 0x34, |_, a| ret(u32::from(a[1] > 2)));
+        let this = e.mem.alloc(0x14);
+        e.mem.set_u32(this + 0x8, pin);
+        e.mem.set_u32(this + 0xc, 0x44);
+        assert_eq!(e.call(0x009f_be40, &args![this, 0u32]).u32(), 0);
+        assert!(calls(&e, OBJ + 0x10).is_empty());
+        assert_eq!(e.call(0x009f_be40, &args![this, 2u32]).u32(), 0);
+        assert_eq!(e.mem.u32(this + 4), 2);
+        assert_eq!(calls(&e, OBJ + 0x34)[0][1], 1);
+        assert_eq!(e.call(0x009f_be40, &args![this, 2u32]).u32(), 1);
+        e.mem.set_u32(this + 0xc, 0x45);
+        assert_eq!(
+            e.call(0x009f_be40, &args![this, 1u32]).u32(),
+            VFW_E_ENUM_OUT_OF_SYNC
+        );
+    }
+
+    /// A pin object (vtable at `OBJ`) with its interface at +0xc, its
+    /// filter (state 0) and lock; returns the interface.
+    fn receiving_pin(e: &mut Engine) -> u32 {
+        let pin = object(e, OBJ, 0xb0);
+        let this = pin + 0xc;
+        let filter = e.mem.alloc(0x20);
+        e.mem.set_u32(this + 0x1c, filter);
+        e.mem.set_u32(this + 0x14, 0x66);
+        for slot in [0x20u32, 0x24, 0x28, 0x2c, 0x30] {
+            e.register(OBJ + slot, |_, _| ret(0));
+        }
+        this
+    }
+
+    #[test]
+    fn receive_connection_009fc190() {
+        let mut e = rig();
+        let this = receiving_pin(&mut e);
+        let pin = this - 0xc;
+        let connector = object(&mut e, OBJ2, 8);
+        e.register(OBJ2 + 4, noop);
+        e.register(OBJ2 + 8, noop);
+        let media_type = e.mem.alloc(0x48);
+        assert_eq!(
+            e.call(0x009f_c190, &args![this, 0u32, media_type]).u32(),
+            E_POINTER
+        );
+        assert_eq!(
+            e.call(0x009f_c190, &args![this, connector, 0u32]).u32(),
+            E_POINTER
+        );
+        assert_eq!(
+            e.call(0x009f_c190, &args![this, connector, media_type])
+                .u32(),
+            0
+        );
+        assert_eq!(e.mem.u32(this + 0xc), connector);
+        assert_eq!(calls(&e, OBJ2 + 4), vec![vec![connector]]);
+        assert_eq!(calls(&e, OBJ + 0x30), vec![vec![pin, connector]]);
+        assert_eq!(
+            e.call(0x009f_c190, &args![this, connector, media_type])
+                .u32(),
+            VFW_E_ALREADY_CONNECTED
+        );
+        e.mem.set_u32(this + 0xc, 0);
+        // A running filter.
+        let filter = e.mem.u32(this + 0x1c);
+        e.mem.set_u32(filter + 0x14, 1);
+        assert_eq!(
+            e.call(0x009f_c190, &args![this, connector, media_type])
+                .u32(),
+            VFW_E_NOT_STOPPED
+        );
+        e.mem.set_u8(this + 0x19, 1);
+        // A refused type (S_FALSE and E_FAIL become the type error).
+        for answer in [1u32, E_FAIL, E_OUTOFMEMORY] {
+            e.register_double(OBJ + 0x20, move |_, _| ret(answer));
+            let expected = if answer == E_OUTOFMEMORY {
+                E_OUTOFMEMORY
+            } else {
+                VFW_E_TYPE_NOT_ACCEPTED
+            };
+            assert_eq!(
+                e.call(0x009f_c190, &args![this, connector, media_type])
+                    .u32(),
+                expected
+            );
+        }
+        e.register(OBJ + 0x20, |_, _| ret(0));
+        // A failed connector check.
+        e.register(OBJ + 0x28, |_, _| ret(E_UNEXPECTED));
+        assert_eq!(
+            e.call(0x009f_c190, &args![this, connector, media_type])
+                .u32(),
+            E_UNEXPECTED
+        );
+        e.register(OBJ + 0x28, |_, _| ret(0));
+        // A failed completion releases the connector again.
+        e.register(OBJ + 0x30, |_, _| ret(E_FAIL));
+        assert_eq!(
+            e.call(0x009f_c190, &args![this, connector, media_type])
+                .u32(),
+            E_FAIL
+        );
+        assert_eq!(e.mem.u32(this + 0xc), 0);
+        assert_eq!(calls(&e, OBJ2 + 8), vec![vec![connector]]);
+        assert_eq!(calls(&e, OBJ + 0x2c).len(), 5);
+        assert_eq!(
+            calls(&e, ENTER_CRITICAL_SECTION).len(),
+            calls(&e, LEAVE_CRITICAL_SECTION).len()
+        );
+    }
+
+    #[test]
+    fn connection_media_type_009fc390() {
+        let mut e = rig();
+        let this = e.mem.alloc(0x70);
+        e.mem.set_u32(this + 0x14, 0x66);
+        e.mem.set_u32(this + 0x28 + 0x10, 0x31);
+        let out = e.mem.alloc(0x48);
+        assert_eq!(e.call(0x009f_c390, &args![this, 0u32]).u32(), E_POINTER);
+        e.mem.set_u32(out + 0x10, 0x99);
+        assert_eq!(
+            e.call(0x009f_c390, &args![this, out]).u32(),
+            VFW_E_NOT_CONNECTED
+        );
+        assert_eq!(e.mem.u32(out + 0x10), 0);
+        assert_eq!(e.mem.u32(out + 0x28), 1);
+        e.mem.set_u32(this + 0xc, 1);
+        assert_eq!(e.call(0x009f_c390, &args![this, out]).u32(), 0);
+        assert_eq!(e.mem.u32(out + 0x10), 0x31);
+    }
+
+    #[test]
+    fn release_buffer_009fc480() {
+        let mut e = rig();
+        let this = allocator(&mut e);
+        e.register(OBJ3 + 0x10, noop);
+        e.register(OBJ2 + 8, noop);
+        let sample = e.mem.alloc(0x48);
+        assert_eq!(e.call(0x009f_c480, &args![this, 0u32]).u32(), E_POINTER);
+        e.mem.set_u32(this + 0x1c, 0x1234);
+        e.mem.set_u32(this + 0x30, 2);
+        assert_eq!(e.call(0x009f_c480, &args![this, sample]).u32(), 0);
+        assert_eq!(e.mem.u32(this + 0x1c), sample);
+        assert_eq!(e.mem.u32(sample + 0x1c), 0x1234);
+        assert_eq!(e.mem.u32(this + 0x20), 1);
+        assert!(calls(&e, OBJ3 + 0x10).is_empty());
+        // The last one back with a decommit pending, waiters and a notify.
+        let notify = object(&mut e, OBJ, 8);
+        e.register(OBJ + 0xc, noop);
+        e.mem.set_u32(this + 0x4c, notify);
+        e.mem.set_u32(this + 0x48, 1);
+        e.mem.set_u32(this + 0x28, 1);
+        e.mem.set_u32(this + 0x24, 0x77);
+        e.mem.set_u32(this + 0x28, 2);
+        let other = e.mem.alloc(0x48);
+        assert_eq!(e.call(0x009f_c480, &args![this, other]).u32(), 0);
+        assert_eq!(calls(&e, RELEASE_SEMAPHORE), vec![vec![0x77, 2, 0]]);
+        assert_eq!(calls(&e, OBJ3 + 0x10), vec![vec![this - 0xc]]);
+        assert_eq!(e.mem.u32(this + 0x48), 0);
+        assert_eq!(calls(&e, OBJ + 0xc), vec![vec![notify]]);
+        assert_eq!(calls(&e, OBJ2 + 8), vec![vec![this]]);
+    }
+
+    #[test]
+    fn enum_pins_clone_009fc6d0() {
+        let mut e = rig();
+        let this = enum_pins(&mut e);
+        e.register(OBJ + 4, noop);
+        e.mem.set_u32(this + 0x10, 0x33);
+        e.mem.set_u32(this + 0x8, 6);
+        let filter = e.mem.u32(this + 0xc);
+        let vt = e.mem.alloc(8);
+        e.mem.set_u32(vt + 4, OBJ + 4);
+        e.mem.set_u32(filter + 0xc, vt);
+        let out = e.mem.alloc(4);
+        assert_eq!(e.call(0x009f_c6d0, &args![this, 0u32]).u32(), E_POINTER);
+        assert_eq!(e.call(0x009f_c6d0, &args![this, out]).u32(), 0);
+        let copy = e.mem.u32(out);
+        assert_eq!(e.mem.u32(copy), ENUM_PINS_VTABLE);
+        assert_eq!(e.mem.u32(copy + 4), 2);
+        assert_eq!(e.mem.u32(copy + 0xc), filter);
+        e.register(OPERATOR_NEW, |_, _| ret(0));
+        assert_eq!(e.call(0x009f_c6d0, &args![this, out]).u32(), E_OUTOFMEMORY);
+        assert_eq!(e.mem.u32(out), 0);
+        e.mem.set_u32(this + 0x10, 0x34);
+        e.mem.set_u32(out, 5);
+        assert_eq!(
+            e.call(0x009f_c6d0, &args![this, out]).u32(),
+            VFW_E_ENUM_OUT_OF_SYNC
+        );
+        assert_eq!(e.mem.u32(out), 0);
+    }
+
+    #[test]
+    fn enum_media_types_clone_009fc7e0() {
+        let mut e = rig();
+        let pin = object(&mut e, OBJ, 0x40);
+        e.register(OBJ + 0x10, |_, _| ret(0x44));
+        let vt = e.mem.alloc(8);
+        e.mem.set_u32(vt + 4, OBJ2 + 4);
+        e.mem.set_u32(pin + 0xc, vt);
+        e.register(OBJ2 + 4, noop);
+        let this = e.mem.alloc(0x14);
+        e.mem.set_u32(this + 0x8, pin);
+        e.mem.set_u32(this + 0xc, 0x44);
+        e.mem.set_u32(this + 0x4, 3);
+        let out = e.mem.alloc(4);
+        assert_eq!(e.call(0x009f_c7e0, &args![this, 0u32]).u32(), E_POINTER);
+        assert_eq!(e.call(0x009f_c7e0, &args![this, out]).u32(), 0);
+        let copy = e.mem.u32(out);
+        assert_eq!(e.mem.u32(copy), ENUM_MEDIA_TYPES_VTABLE);
+        assert_eq!(e.mem.u32(copy + 4), 3);
+        e.register(OPERATOR_NEW, |_, _| ret(0));
+        assert_eq!(e.call(0x009f_c7e0, &args![this, out]).u32(), E_OUTOFMEMORY);
+        e.mem.set_u32(this + 0xc, 0x45);
+        assert_eq!(
+            e.call(0x009f_c7e0, &args![this, out]).u32(),
+            VFW_E_ENUM_OUT_OF_SYNC
+        );
+        assert_eq!(e.mem.u32(out), 0);
+    }
+
+    #[test]
+    fn sample_constructor_009fcb50() {
+        let mut e = rig();
+        let this = e.mem.alloc(0x48);
+        for at in (0..0x48).step_by(4) {
+            e.mem.set_u32(this + at, 0xeeee_eeee);
+        }
+        let made = e
+            .call(
+                0x009f_cb50,
+                &args![this, 1u32, 0x2000u32, 3u32, 0x3000u32, 0x80u32],
+            )
+            .u32();
+        assert_eq!(made, this);
+        for (at, v) in [
+            (0x0u32, MEDIA_SAMPLE_VTABLE),
+            (0x4, 0),
+            (0x8, 0),
+            (0xc, 0x3000),
+            (0x10, 0x80),
+            (0x14, 0x80),
+            (0x18, 0x2000),
+            (0x3c, 0),
+            (0x40, 0),
+            (0x44, 0),
+        ] {
+            assert_eq!(e.mem.u32(this + at), v, "+{at:#x}");
+        }
+        assert_eq!(e.mem.u32(this + 0x1c), 0xeeee_eeee);
+    }
+
+    #[test]
+    fn allocator_constructors_009fcb90_and_009fcc20() {
+        let mut e = rig();
+        e.register(CREATE_SEMAPHORE_A, |_, _| ret(0x5e));
+        let status = e.mem.alloc(4);
+        let this = e.mem.alloc(0x64);
+        for at in (0..0x64).step_by(4) {
+            e.mem.set_u32(this + at, 0xeeee_eeee);
+        }
+        assert_eq!(
+            e.call(0x009f_cc20, &args![this, 0u32, 0u32, status]).u32(),
+            this
+        );
+        assert_eq!(e.mem.u32(this), MEM_ALLOCATOR_VTABLE);
+        assert_eq!(e.mem.u32(this + 0xc), MEM_ALLOCATOR_VTABLE_C);
+        assert_eq!(e.mem.u32(this + 0x30), 0x5e);
+        assert_eq!(e.mem.u32(this + 0x5c), 1);
+        assert_eq!(e.mem.u32(this + 0x60), 0);
+        assert_eq!(e.mem.u32(this + 0x2c), 0);
+        assert_eq!(e.mem.u32(this + 0x58), 0);
+        assert_eq!(
+            calls(&e, INITIALIZE_CRITICAL_SECTION),
+            vec![vec![this + 0x10]]
+        );
+        assert_eq!(
+            calls(&e, CREATE_SEMAPHORE_A),
+            vec![vec![0, 0, 0x7fff_ffff, 0]]
+        );
+        assert_eq!(e.mem.u32(status), 0);
+        // No semaphore wanted; a failed one sets the status.
+        e.call(0x009f_cb90, &args![this, 0u32, 0u32, status, 0u32, 7u32]);
+        assert_eq!(calls(&e, CREATE_SEMAPHORE_A).len(), 1);
+        assert_eq!(e.mem.u32(this + 0x30), 0);
+        assert_eq!(e.mem.u32(this + 0x5c), 7);
+        e.register(CREATE_SEMAPHORE_A, |_, _| ret(0));
+        e.call(0x009f_cb90, &args![this, 0u32, 0u32, status, 1u32, 0u32]);
+        assert_eq!(e.mem.u32(status), E_OUTOFMEMORY);
+    }
+
+    #[test]
+    fn allocator_alloc_009fcc60_makes_the_samples() {
+        let mut e = rig();
+        let this = e.mem.alloc(0x64);
+        assert_eq!(e.call(0x009f_cc60, &args![this]).u32(), VFW_E_SIZENOTSET);
+        for (at, v) in [(0x38u32, 3u32), (0x40, 0x10), (0x44, 8), (0x48, 4)] {
+            e.mem.set_u32(this + at, v);
+        }
+        e.mem.set_u32(this + 0x4c, 1);
+        assert_eq!(e.call(0x009f_cc60, &args![this]).u32(), 0);
+        // 0x10 + 4 rounded up to 0x18; three of them.
+        assert_eq!(calls(&e, VIRTUAL_ALLOC), vec![vec![0, 0x48, 0x1000, 4]]);
+        let block = e.mem.u32(this + 0x60);
+        assert_eq!(e.mem.u32(this + 0x3c), 3);
+        assert_eq!(e.mem.u32(this + 0x2c), 3);
+        assert_eq!(e.mem.u32(this + 0x4c), 0);
+        let last = e.mem.u32(this + 0x28);
+        assert_eq!(e.mem.u32(last + 0xc), block + 0x30 + 4);
+        assert_eq!(e.mem.u32(last + 0x10), 0x10);
+        assert_eq!(e.mem.u32(last + 0x18), this);
+        // Nothing changed since (+0x4c clear): 0 at once.
+        assert_eq!(e.call(0x009f_cc60, &args![this]).u32(), 0);
+        assert_eq!(calls(&e, VIRTUAL_ALLOC).len(), 1);
+        // A failed reservation.
+        e.mem.set_u32(this + 0x4c, 1);
+        e.mem.set_u32(this + 0x3c, 0);
+        e.mem.set_u32(this + 0x28, 0);
+        e.register(VIRTUAL_ALLOC, |_, _| ret(0));
+        assert_eq!(e.call(0x009f_cc60, &args![this]).u32(), E_OUTOFMEMORY);
+        assert_eq!(calls(&e, VIRTUAL_FREE).len(), 1);
+        assert_eq!(
+            calls(&e, ENTER_CRITICAL_SECTION).len(),
+            calls(&e, LEAVE_CRITICAL_SECTION).len()
+        );
+    }
+
+    #[test]
+    fn wide_compare_009fd030() {
+        let mut e = rig();
+        let a = wide(&mut e, "Pin");
+        let b = wide(&mut e, "Pin");
+        let c = wide(&mut e, "Pit");
+        let d = wide(&mut e, "Pi");
+        assert_eq!(e.call(0x009f_d030, &args![a, b]).i32(), 0);
+        assert_eq!(
+            e.call(0x009f_d030, &args![a, c]).i32(),
+            i32::from(b'n') - i32::from(b't')
+        );
+        assert_eq!(e.call(0x009f_d030, &args![a, d]).i32(), i32::from(b'n'));
+    }
+
+    #[test]
+    fn list_steps_009fd180_and_009fd1a0() {
+        let mut e = rig();
+        let node = e.mem.alloc(0xc);
+        e.mem.set_u32(node + 4, 0x4444);
+        e.mem.set_u32(node + 8, 0x8888);
+        let position = e.mem.alloc(4);
+        assert_eq!(e.call(0x009f_d180, &args![position]).u32(), 0);
+        e.mem.set_u32(position, node);
+        assert_eq!(e.call(0x009f_d180, &args![position]).u32(), 0x8888);
+        assert_eq!(e.mem.u32(position), 0x4444);
+        assert_eq!(e.call(0x009f_d1a0, &args![node]).u32(), 0x8888);
+        assert_eq!(e.call(0x009f_d1a0, &args![0u32]).u32(), 0);
+    }
+
+    #[test]
+    fn list_append_009fd2d0() {
+        let mut e = rig();
+        let this = e.mem.alloc(0x18);
+        let other = e.mem.alloc(0x18);
+        assert_eq!(e.call(0x009f_d2d0, &args![this, other]).u32(), 1);
+        let second = e.mem.alloc(0xc);
+        e.mem.set_u32(second + 8, 0x22);
+        let first = e.mem.alloc(0xc);
+        e.mem.set_u32(first + 4, second);
+        e.mem.set_u32(first + 8, 0x11);
+        e.mem.set_u32(other, first);
+        assert_eq!(e.call(0x009f_d2d0, &args![this, other]).u32(), 1);
+        assert_eq!(e.mem.u32(this + 8), 2);
+        let head = e.mem.u32(this);
+        assert_eq!(e.mem.u32(head + 8), 0x11);
+        let tail = e.mem.u32(this + 4);
+        assert_eq!(e.mem.u32(tail + 8), 0x22);
+        e.register(OPERATOR_NEW, |_, _| ret(0));
+        assert_eq!(e.call(0x009f_d2d0, &args![this, other]).u32(), 0);
+    }
+
+    #[test]
+    fn allocator_factory_009fd5a0() {
+        let mut e = rig();
+        e.register(CREATE_SEMAPHORE_A, |_, _| ret(0x5e));
+        assert_eq!(e.call(0x009f_d5a0, &args![0u32]).u32(), E_POINTER);
+        let out = e.mem.alloc(4);
+        // The interface query goes through the real vtable's thunk 009fb230;
+        // double it.
+        e.register(0x009f_b230, |e, a| {
+            e.mem.set_u32(a[2], a[0]);
+            ret(0)
+        });
+        e.mem.set_u32(MEM_ALLOCATOR_VTABLE_C, 0x009f_b230);
+        e.mem.set_u32(MEM_ALLOCATOR_VTABLE + 0xc, 0x009f_c580);
+        assert_eq!(e.call(0x009f_d5a0, &args![out]).u32(), 0);
+        let interface = e.mem.u32(out);
+        assert_eq!(e.mem.u32(interface - 0xc), MEM_ALLOCATOR_VTABLE);
+        let query = calls(&e, 0x009f_b230);
+        assert_eq!(query[0][1], INTERFACE_ID_01093BBC);
+        // A refused query deletes it.
+        e.register(0x009f_b230, |_, _| ret(E_NOINTERFACE));
+        assert_eq!(e.call(0x009f_d5a0, &args![out]).u32(), E_NOINTERFACE);
+        assert_eq!(calls(&e, OPERATOR_DELETE).len(), 1);
+        // A failed semaphore status deletes it and is returned.
+        e.register(CREATE_SEMAPHORE_A, |_, _| ret(0));
+        assert_eq!(e.call(0x009f_d5a0, &args![out]).u32(), E_OUTOFMEMORY);
+        assert_eq!(calls(&e, OPERATOR_DELETE).len(), 2);
+        // No memory.
+        e.register(OPERATOR_NEW, |_, _| ret(0));
+        assert_eq!(e.call(0x009f_d5a0, &args![out]).u32(), E_OUTOFMEMORY);
+        assert_eq!(e.mem.u32(out), 0);
+    }
+
+    /// A pin whose reader (+0xa4) has a file (vtable at `OBJ2`: total at
+    /// +0xc, alignment at +0x10) and a running thread, and a sample (vtable
+    /// at `OBJ`) whose times are 2 s to 5 s.
+    fn request_rig(e: &mut Engine) -> (u32, u32, u32) {
+        let this = e.mem.alloc(0xb0);
+        let reader = reader(e);
+        e.mem.set_u32(reader + 0x80, 1);
+        e.mem.set_u32(this + 0xa4, reader);
+        let file = object(e, OBJ2, 8);
+        e.mem.set_u32(reader + 0x18, file);
+        let sample = object(e, OBJ, 0x48);
+        e.register(OBJ + 0x14, |e, a| {
+            e.mem.set_u64(a[1], 20_000_000);
+            e.mem.set_u64(a[2], 50_000_000);
+            ret(0)
+        });
+        e.register(OBJ + 0x18, noop);
+        e.register(OBJ + 0xc, |e, a| {
+            e.mem.set_u32(a[1], 0xb000);
+            ret(0)
+        });
+        e.register(ALLDIV, |_, a| {
+            let n = (u64::from(a[1]) << 32 | u64::from(a[0])) as i64;
+            let d = (u64::from(a[3]) << 32 | u64::from(a[2])) as i64;
+            let q = (n / d) as u64;
+            Ret {
+                eax: q as u32,
+                edx: (q >> 32) as u32,
+                ..Ret::default()
+            }
+        });
+        e.register(ALLMUL, |_, a| {
+            let n = u64::from(a[1]) << 32 | u64::from(a[0]);
+            let m = u64::from(a[3]) << 32 | u64::from(a[2]);
+            let p = n.wrapping_mul(m);
+            Ret {
+                eax: p as u32,
+                edx: (p >> 32) as u32,
+                ..Ret::default()
+            }
+        });
+        (this, reader, sample)
+    }
+
+    /// The request the reader queued last (its +0x38 list's tail).
+    fn queued(e: &Engine, reader: u32) -> u32 {
+        let node = e.mem.u32(reader + 0x38 + 4);
+        e.mem.u32(node + 8)
+    }
+
+    #[test]
+    fn request_009fd7f0_clips_to_the_total_and_queues() {
+        let mut e = rig();
+        let (this, reader, sample) = request_rig(&mut e);
+        // Total 4 s, alignment 2.
+        e.register(OBJ2 + 0xc, |_, _| ret(4));
+        e.register(OBJ2 + 0x10, |_, _| ret(2));
+        assert_eq!(
+            e.call(0x009f_d7f0, &args![this, 0u32, 9u32]).u32(),
+            E_POINTER
+        );
+        assert_eq!(e.call(0x009f_d7f0, &args![this, sample, 9u32]).u32(), 0);
+        // Start 2 s, length 3 s: past the total 4, rounded to 4: length 2,
+        // end time 4 * 10^7 set on the sample.
+        assert_eq!(calls(&e, OBJ + 0x18).len(), 1);
+        assert_eq!(calls(&e, ALLMUL)[0][..3], [4, 0, TIME_UNITS]);
+        let request = queued(&e, reader);
+        let words: Vec<u32> = (0..10).map(|i| e.mem.u32(request + 4 * i)).collect();
+        assert_eq!(
+            words,
+            vec![
+                reader,
+                e.mem.u32(reader + 0x18),
+                2,
+                0,
+                1,
+                2,
+                0xb000,
+                sample,
+                9,
+                VFW_E_TIMEOUT
+            ]
+        );
+        // Within a total of 10 (alignment 1): nothing clipped.
+        e.register(OBJ2 + 0xc, |_, _| ret(10));
+        e.register(OBJ2 + 0x10, |_, _| ret(1));
+        assert_eq!(e.call(0x009f_d7f0, &args![this, sample, 9u32]).u32(), 0);
+        assert_eq!(calls(&e, OBJ + 0x18).len(), 1);
+        assert_eq!(e.mem.u32(queued(&e, reader) + 0x14), 3);
+        // A failed buffer read, a failed time read.
+        e.register(OBJ + 0xc, |_, _| ret(E_UNEXPECTED));
+        assert_eq!(
+            e.call(0x009f_d7f0, &args![this, sample, 9u32]).u32(),
+            E_UNEXPECTED
+        );
+        e.register(OBJ + 0x14, |_, _| ret(E_FAIL));
+        assert_eq!(
+            e.call(0x009f_d7f0, &args![this, sample, 9u32]).u32(),
+            E_FAIL
+        );
+    }
+
+    #[test]
+    fn adjustor_thunks_009fdcf0_to_009fdd60() {
+        let mut e = rig();
+        let pin = e.mem.alloc(0xb0);
+        let held = object(&mut e, OBJ, 8);
+        e.register(OBJ, |_, _| ret(0x40));
+        e.register(OBJ + 4, |_, _| ret(0x44));
+        e.register(OBJ + 8, |_, _| ret(0x48));
+        e.mem.set_u32(pin + 0xc, held);
+        assert_eq!(
+            e.call(0x009f_dcf0, &args![pin + 0x18, 1u32, 2u32]).u32(),
+            0x40
+        );
+        assert_eq!(calls(&e, OBJ), vec![vec![held, 1, 2]]);
+        assert_eq!(e.call(0x009f_dd60, &args![pin + 0x18]).u32(), 0x44);
+        assert_eq!(e.call(0x009f_dd20, &args![pin + 0x18]).u32(), 0x48);
+        assert_eq!(calls(&e, OBJ + 8), vec![vec![held]]);
+        // The two at -0x14 reach the reader at +0xa4.
+        let reader = reader(&mut e);
+        e.mem.set_u32(pin + 0xa4, reader);
+        e.mem.set_u32(reader + 0x34, 5);
+        assert_eq!(e.call(0x009f_dd00, &args![pin + 0x14]).u32(), 0);
+        assert_eq!(e.mem.u32(reader + 0x34), 0);
+        assert_eq!(calls(&e, RESET_EVENT), vec![vec![0x6c6c]]);
+        assert_eq!(e.call(0x009f_dd30, &args![pin + 0x14]).u32(), 0);
+        assert_eq!(e.mem.u32(reader + 0x34), 1);
+        assert_eq!(calls(&e, SET_EVENT), vec![vec![0x6c6c]]);
+    }
+
+    #[test]
+    fn deleting_destructors_009fddd0_and_009fdeb0() {
+        let mut e = rig();
+        let pin = e.mem.alloc(0x100);
+        assert_eq!(e.call(0x009f_ddd0, &args![pin, 1u32]).u32(), pin);
+        assert_eq!(e.mem.u32(pin), ASYNC_OUTPUT_PIN_VTABLE);
+        assert_eq!(calls(&e, OPERATOR_DELETE).last(), Some(&vec![pin]));
+        let reader = e.mem.alloc(0x200);
+        let deletes = calls(&e, OPERATOR_DELETE).len();
+        assert_eq!(e.call(0x009f_deb0, &args![reader, 0u32]).u32(), reader);
+        assert_eq!(e.mem.u32(reader), ASYNC_READER_VTABLE);
+        assert!(!calls(&e, OPERATOR_DELETE)[deletes..].contains(&vec![reader]));
+        assert_eq!(e.call(0x009f_deb0, &args![reader, 3u32]).u32(), reader);
+        assert_eq!(calls(&e, OPERATOR_DELETE).last(), Some(&vec![reader]));
+    }
+
+    /// A reader object with its lists and events.
+    fn reader(e: &mut Engine) -> u32 {
+        let this = e.mem.alloc(0x90);
+        e.mem.set_u32(this + 0x6c, 0x6c6c);
+        e.mem.set_u32(this + 0x68, 0x6868);
+        e.mem.set_u32(this + 0x78, 0x7878);
+        e.mem.set_u32(this + 0x7c, 0x7c7c);
+        this
+    }
+
+    #[test]
+    fn finished_queue_009fe3f0() {
+        let mut e = rig();
+        let this = reader(&mut e);
+        assert_eq!(e.call(0x009f_e3f0, &args![this, 0x55u32]).u32(), 0);
+        let node = e.mem.u32(this + 0x50);
+        assert_eq!(e.mem.u32(node + 8), 0x55);
+        assert_eq!(calls(&e, SET_EVENT), vec![vec![0x6c6c]]);
+        e.register(OPERATOR_NEW, |_, _| ret(0));
+        assert_eq!(
+            e.call(0x009f_e3f0, &args![this, 0x56u32]).u32(),
+            E_OUTOFMEMORY
+        );
+    }
+
+    #[test]
+    fn request_loop_009fe420_runs_each_request() {
+        let mut e = rig();
+        let this = reader(&mut e);
+        e.mem.set_u32(this + 0x74, 1);
+        // Two queued requests on a file whose read answers 1 (no second
+        // step).
+        let file = object(&mut e, OBJ, 8);
+        for slot in [0x14u32, 0x18] {
+            e.register(OBJ + slot, noop);
+        }
+        e.register(OBJ + 4, |_, _| ret(1));
+        let requests = [e.mem.alloc(0x28), e.mem.alloc(0x28)];
+        for (i, &r) in requests.iter().enumerate() {
+            e.mem.set_u32(r + 4, file);
+            e.mem.set_u32(r + 8, 0x100 + i as u32);
+            e.call(0x009f_d270, &args![this + 0x38, r]);
+        }
+        e.call(0x009f_e420, &args![this]);
+        let reads: Vec<u32> = calls(&e, OBJ + 4).iter().map(|c| c[1]).collect();
+        assert_eq!(reads, vec![0x100, 0x101]);
+        assert_eq!(e.mem.u32(this + 0x70), 0);
+        assert_eq!(e.mem.u32(this + 0x40), 0);
+        assert_eq!(e.mem.u32(this + 0x58), 2);
+        let finished = e.mem.u32(this + 0x50);
+        assert_eq!(e.mem.u32(finished + 8), requests[0]);
+        // The finished signal (+0x6c) twice and the idle signal (+0x78) twice.
+        assert_eq!(
+            calls(&e, SET_EVENT)
+                .iter()
+                .filter(|c| c[0] == 0x7878)
+                .count(),
+            2
+        );
+        assert_eq!(
+            calls(&e, ENTER_CRITICAL_SECTION).len(),
+            calls(&e, LEAVE_CRITICAL_SECTION).len()
+        );
+    }
+
+    #[test]
+    fn thread_body_009fe500_and_routine_009fe560() {
+        let mut e = rig();
+        let this = reader(&mut e);
+        let round = Rc::new(Cell::new(0u32));
+        let r = round.clone();
+        e.register_double(WAIT_FOR_MULTIPLE_OBJECTS, move |e, a| {
+            assert_eq!(e.mem.u32(a[1]), 0x7c7c);
+            assert_eq!(e.mem.u32(a[1] + 4), 0x6868);
+            let n = r.get();
+            r.set(n + 1);
+            ret(if n < 2 { 1 } else { 0 })
+        });
+        assert_eq!(e.call(0x009f_e560, &args![this]).u32(), 0);
+        assert_eq!(round.get(), 3);
+        // Each request loop finds the queue empty (its event reset once).
+        assert_eq!(calls(&e, RESET_EVENT), vec![vec![0x6868]; 2]);
+        assert_eq!(calls(&e, WAIT_FOR_MULTIPLE_OBJECTS)[0][0], 2);
+    }
+
+    #[test]
+    fn thread_start_009fe780() {
+        let mut e = rig();
+        let this = reader(&mut e);
+        e.register(CREATE_THREAD, |_, _| ret(0x7777));
+        assert_eq!(e.call(0x009f_e780, &args![this]).u32(), 0);
+        assert_eq!(e.mem.u32(this + 0x80), 0x7777);
+        let start = calls(&e, CREATE_THREAD);
+        assert_eq!(start[0][..5], [0, 0, THREAD_ROUTINE, this, 0]);
+        assert_eq!(calls(&e, RESET_EVENT), vec![vec![0x7c7c]]);
+        // Running already: nothing.
+        assert_eq!(e.call(0x009f_e780, &args![this]).u32(), 0);
+        assert_eq!(calls(&e, CREATE_THREAD).len(), 1);
+        // A failed start.
+        e.mem.set_u32(this + 0x80, 0);
+        e.register(CREATE_THREAD, |_, _| ret(0));
+        e.register(GET_LAST_ERROR, |_, _| ret(0x1_0008));
+        assert_eq!(e.call(0x009f_e780, &args![this]).u32(), 0x8007_0008);
+        e.register(GET_LAST_ERROR, |_, _| ret(0));
+        assert_eq!(e.call(0x009f_e780, &args![this]).u32(), 0);
+    }
+
+    #[test]
+    fn request_queue_009fe7e0() {
+        let mut e = rig();
+        let this = reader(&mut e);
+        e.mem.set_u32(this + 0x80, 1);
+        assert_eq!(e.call(0x009f_e7e0, &args![this, 0x44u32]).u32(), 0);
+        let node = e.mem.u32(this + 0x38);
+        assert_eq!(e.mem.u32(node + 8), 0x44);
+        assert_eq!(calls(&e, SET_EVENT), vec![vec![0x6868]]);
+        e.mem.set_u32(this + 0x34, 1);
+        assert_eq!(
+            e.call(0x009f_e7e0, &args![this, 0x45u32]).u32(),
+            VFW_E_WRONG_STATE
+        );
+        e.mem.set_u32(this + 0x34, 0);
+        e.register(OPERATOR_NEW, |_, _| ret(0));
+        assert_eq!(
+            e.call(0x009f_e7e0, &args![this, 0x46u32]).u32(),
+            E_OUTOFMEMORY
+        );
+    }
+
+    #[test]
+    fn request_009fe960_checks_alignment_and_deletes_on_failure() {
+        let mut e = rig();
+        let this = reader(&mut e);
+        let file = object(&mut e, OBJ, 8);
+        e.register(OBJ + 0x10, |_, _| ret(0x10));
+        e.mem.set_u32(this + 0x18, file);
+        // A thread is running: the queue add answers 0.
+        e.mem.set_u32(this + 0x80, 1);
+        for (position, length, buffer) in [
+            (0x8u32, 0x10u32, 0x20u32),
+            (0x10, 0x8, 0x20),
+            (0x10, 0x10, 0x28),
+        ] {
+            assert_eq!(
+                e.call(
+                    0x009f_e960,
+                    &args![this, position, 0u32, length, 1u32, buffer, 0x51u32, 0x52u32]
+                )
+                .u32(),
+                VFW_E_BADALIGN
+            );
+        }
+        assert_eq!(calls(&e, OBJ + 0x10).len(), 6);
+        // Not aligned: no test.
+        assert_eq!(
+            e.call(
+                0x009f_e960,
+                &args![this, 0x8u32, 1u32, 0x8u32, 0u32, 0x28u32, 0x51u32, 0x52u32]
+            )
+            .u32(),
+            0
+        );
+        let node = e.mem.u32(this + 0x38);
+        let request = e.mem.u32(node + 8);
+        let words: Vec<u32> = (0..10).map(|i| e.mem.u32(request + 4 * i)).collect();
+        assert_eq!(
+            words,
+            vec![this, file, 0x8, 1, 0, 0x8, 0x28, 0x51, 0x52, VFW_E_TIMEOUT]
+        );
+        assert!(calls(&e, OPERATOR_DELETE).is_empty());
+        // A stopped reader refuses: the request is deleted.
+        e.mem.set_u32(this + 0x34, 1);
+        assert_eq!(
+            e.call(
+                0x009f_e960,
+                &args![this, 0x10u32, 0u32, 0x10u32, 1u32, 0x20u32, 0x51u32, 0x52u32]
+            )
+            .u32(),
+            VFW_E_WRONG_STATE
+        );
+        assert_eq!(calls(&e, OPERATOR_DELETE).len(), 1);
+        e.register(OPERATOR_NEW, |_, _| ret(0));
+        assert_eq!(
+            e.call(
+                0x009f_e960,
+                &args![this, 0x10u32, 0u32, 0x10u32, 0u32, 0x20u32, 0x51u32, 0x52u32]
+            )
+            .u32(),
+            E_OUTOFMEMORY
+        );
+    }
+
+    #[test]
+    fn stub_009fea24_returns_the_first_cell() {
+        let mut e = rig();
+        e.map(0x011a_6000, 0x1000);
+        e.set_global(LIBRARY_FIRST_CELL, 0xffff_fffdu32);
+        assert_eq!(e.call(0x009f_ea24, &args![]).u32(), 0xffff_fffd);
     }
 }

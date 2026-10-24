@@ -54,7 +54,64 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
         entry!(0x00d2_c8a0, fn_00d2c8a0() -> u32),
         entry!(0x00d2_c7e0, fn_00d2c7e0(Ptr, u32) -> Ptr),
+        entry!(0x00d2_c7d0, fn_00d2c7d0(Ptr) -> u32),
+        entry!(0x00d2_c840, fn_00d2c840(Ptr, u32)),
     ]
+}
+
+/// The vtable `00d2c840` installs after the constructor (`010ce740`, the address
+/// `fn_00d2c8a0` answers).
+const VTABLE_010CE740: u32 = 0x010c_e740;
+
+// Translated from 00d2c7d0 (PC disassembly, FalloutNV.exe 1.4.0.525)
+/// No function in the Ghidra project (bytes disassembled; referenced as data from
+/// `00fbeb19`): cdecl, one word: calls the object's vtable slot +0 with 0 (the deleting
+/// destructor's shape, without freeing) and passes on its `EAX`.
+pub fn fn_00d2c7d0(e: &mut Engine, object: Ptr) -> u32 {
+    e.vcall(object.addr(), 0x0, &args![0u32]).u32()
+}
+
+// Translated from 00d2c840 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 00d2c840 - the C++ exception-unwinding frame (FS:[0] chain, handler at 00f348a1, state variable) is not translated
+/// Unnamed in the engine map (cdecl, two words; referenced as data from `00fbeb0f`): when
+/// `block` is not null, constructs it in place (`00d2c7e0` with `argument`) and sets the
+/// vtable `010ce740`. Nothing is answered (`EAX` is meaningless on the null path).
+pub fn fn_00d2c840(e: &mut Engine, block: Ptr, argument: u32) {
+    if block.addr() != 0 {
+        fn_00d2c7e0(e, block, argument);
+        e.mem.set_u32(block.addr(), VTABLE_010CE740);
+    }
+}
+
+#[cfg(test)]
+mod n081_tests {
+    use super::*;
+
+    #[test]
+    fn fn_00d2c7d0_calls_slot_0_with_zero_and_passes_on_eax() {
+        let mut e = Engine::new();
+        let vtable = e.mem.alloc(4);
+        e.mem.set_u32(vtable, 0x0079_0000);
+        e.register(0x0079_0000, |_, a| (a[0] + a[1] + 1).into_ret());
+        let object = e.mem.alloc(4);
+        e.mem.set_u32(object, vtable);
+        assert_eq!(e.call(0x00d2_c7d0, &args![object]).u32(), object + 1);
+    }
+
+    #[test]
+    fn fn_00d2c840_builds_only_a_real_block() {
+        let mut e = Engine::new();
+        e.register(STRING_POINTER_INIT, |_, _| Ret::default());
+        e.call_log = Some(vec![]);
+        e.call(0x00d2_c840, &args![0u32, 5u32]);
+        assert_eq!(e.call_log.take().unwrap().len(), 1);
+        let block = e.mem.alloc(0x38);
+        e.call_log = Some(vec![]);
+        e.call(0x00d2_c840, &args![block, 5u32]);
+        assert_eq!(e.mem.u32(block), VTABLE_010CE740);
+        let log = e.call_log.take().unwrap();
+        assert_eq!(log[1], (STRING_POINTER_INIT, vec![block + 0x14, 5]));
+    }
 }
 
 #[cfg(test)]

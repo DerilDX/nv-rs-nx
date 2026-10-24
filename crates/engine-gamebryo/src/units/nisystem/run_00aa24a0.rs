@@ -29,11 +29,37 @@ pub fn fn_00aa24f0(e: &mut Engine, this: Ptr) {
     e.mem.set_u32(this.addr(), NI_SEARCH_PATH_VTABLE);
 }
 
+/// The `NiAllocator` vtable (`010a24d0`; its RTTI type descriptor reads
+/// `.?AVNiAllocator@@`).
+const NI_ALLOCATOR_VTABLE: u32 = 0x010a_24d0;
+/// The memory manager object (`011f6238`), the `this` of its deallocate.
+const MEMORY_MANAGER_OBJECT: u32 = 0x011f_6238;
+/// `00aa4060` (`thiscall` on the memory manager, one word): its deallocate.
+const MEMORY_MANAGER_DEALLOCATE: u32 = 0x00aa_4060;
+
+// Translated from 00aa24a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`run_00aa24a0`): the `NiAllocator` scalar
+/// deleting destructor (the vtable `010a24d0` is `NiAllocator`'s by its
+/// RTTI), `thiscall`, `RET 4` (the flags). Stores the vtable and, with bit 0
+/// of the flags, gives `this` back to the memory manager (`00aa4060`).
+/// Answers `this`.
+pub fn fn_00aa24a0(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    e.mem.set_u32(this.addr(), NI_ALLOCATOR_VTABLE);
+    if flags & 1 != 0 {
+        e.call(
+            MEMORY_MANAGER_DEALLOCATE,
+            &args![MEMORY_MANAGER_OBJECT, this],
+        );
+    }
+    this
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
         entry!(0x00aa_24d0, fn_00aa24d0(Ptr) -> Ptr),
         entry!(0x00aa_24f0, fn_00aa24f0(Ptr)),
+        entry!(0x00aa_24a0, fn_00aa24a0(Ptr, u32) -> Ptr),
     ]
 }
 
@@ -66,5 +92,30 @@ mod tests {
         e.call(0x00aa_24f0, &args![this]);
         assert_eq!(e.mem.u32(this), NI_SEARCH_PATH_VTABLE);
         assert_eq!(e.mem.u32(this + 4), 7);
+    }
+}
+
+#[cfg(test)]
+mod tests_n084 {
+    use super::*;
+
+    #[test]
+    fn fn_00aa24a0_frees_only_with_bit_0() {
+        let mut e = Engine::new();
+        e.register(MEMORY_MANAGER_DEALLOCATE, |_, _| Ret::default());
+        let this = e.mem.alloc(4);
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x00aa_24a0, &args![this, 0u32]).u32(), this);
+        assert_eq!(e.mem.u32(this), NI_ALLOCATOR_VTABLE);
+        assert_eq!(e.call(0x00aa_24a0, &args![this, 3u32]).u32(), this);
+        let frees: Vec<_> = e
+            .call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|c| c.0 == MEMORY_MANAGER_DEALLOCATE)
+            .map(|c| c.1.clone())
+            .collect();
+        assert_eq!(frees, vec![vec![MEMORY_MANAGER_OBJECT, this]]);
     }
 }

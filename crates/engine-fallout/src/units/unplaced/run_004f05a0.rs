@@ -166,9 +166,74 @@ pub fn fn_004f08c0(e: &mut Engine, this: Ptr) {
     e.call(0x0048_3630, &args![this]);
 }
 
+// Translated from 004f06d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The other visitor [`fn_004f05c0`] runs (the engine map has no name; `ECX` and one stack
+/// word, `RET 4`): like [`fn_004f0640`] with `00a35910` for the 16-bit index and
+/// `00a35fc0(index, 0)` for the hand-over, then the children of the node vtable slot +0xc
+/// answers (asked even for a null object, as the exe does), each visited recursively.
+pub fn fn_004f06d0(e: &mut Engine, this: Ptr, object: u32) {
+    if object != 0 {
+        let index = e.call(0x00a3_5910, &args![this, object]).u16();
+        if index != e.global::<u16>(INVALID_INDEX) {
+            e.call(0x00a3_5fc0, &args![this, u32::from(index), 0u32]);
+        }
+    }
+    let node = e.vcall(object, 0xc, &args![]).u32();
+    if node == 0 {
+        return;
+    }
+    let mut child = 0u32;
+    while child < e.call(0x0043_b480, &args![node]).u32() {
+        let item = e.call(0x0043_b4a0, &args![node, child]).u32();
+        fn_004f06d0(e, this, item);
+        child = child.wrapping_add(1);
+    }
+}
+
+/// The chunk code `WNAM` (the four characters, first byte lowest).
+const CHUNK_WNAM: u32 = 0x4d41_4e57;
+/// The list helpers: whether a node is empty (`008256d0`, `AL`), its item word's address
+/// (`006815c0`) and the next node (`00726070`).
+const NODE_EMPTY: u32 = 0x0082_56d0;
+const NODE_ITEM: u32 = 0x0068_15c0;
+const NODE_NEXT: u32 = 0x0072_6070;
+
+// Translated from 004f0a40 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TESRegion`'s form-save slot (+0x2c of its vtable `0102397c`; the engine map's names for
+/// the getters come from folded code; `ECX`, plain `RET`): `TESForm::StartForm`; a
+/// `WNAM` chunk (`00485910`) with the `0084e3a0` word of the form `007af430` answers, when
+/// there is one; each item of the list `00441110` answers through `004f77c0`; each item of
+/// the list `009611e0` answers through its own vtable slot +4; then
+/// `TESForm::CloseForm`.
+pub fn fn_004f0a40(e: &mut Engine, this: Ptr) {
+    e.call(0x0048_55a0, &args![this]);
+    let form = e.call(0x007a_f430, &args![this]).u32();
+    if form != 0 {
+        let word = e.call(0x0084_e3a0, &args![form]).u32();
+        e.call(0x0048_5910, &args![CHUNK_WNAM, word]);
+    }
+    let mut node = e.call(0x0044_1110, &args![this]).u32();
+    while node != 0 && e.call(NODE_EMPTY, &args![node]).u8() == 0 {
+        let item_address = e.call(NODE_ITEM, &args![node]).u32();
+        let item = e.mem.u32(item_address);
+        e.call(0x004f_77c0, &args![item]);
+        node = e.call(NODE_NEXT, &args![node]).u32();
+    }
+    let mut node = e.call(0x0096_11e0, &args![this]).u32();
+    while node != 0 && e.call(NODE_EMPTY, &args![node]).u8() == 0 {
+        let item_address = e.call(NODE_ITEM, &args![node]).u32();
+        let item = e.mem.u32(item_address);
+        e.vcall(item, 4, &args![]);
+        node = e.call(NODE_NEXT, &args![node]).u32();
+    }
+    e.call(0x0048_5680, &args![this]);
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x004f_06d0, fn_004f06d0(Ptr, u32)),
+        entry!(0x004f_0a40, fn_004f0a40(Ptr)),
         entry!(0x004f_0770, fn_004f0770(Ptr) -> Ptr),
         entry!(0x004f_0890, fn_004f0890(Ptr, u32) -> Ptr),
         entry!(0x004f_09e0, fn_004f09e0(Ptr, u32) -> Ptr),
@@ -434,5 +499,101 @@ mod tests {
         e.call_log = Some(vec![]);
         e.call(0x004f_08c0, &args![bare]);
         assert_eq!(e.call_log.take().unwrap().len(), 2);
+    }
+}
+
+#[cfg(test)]
+mod n075_tests {
+    use super::*;
+
+    type Log = Vec<(u32, Vec<u32>)>;
+
+    fn calls(log: &Log, callee: u32) -> Vec<Vec<u32>> {
+        log.iter()
+            .filter(|(a, _)| *a == callee)
+            .map(|(_, w)| w.clone())
+            .collect()
+    }
+
+    #[test]
+    fn fn_004f06d0_visits_the_object_and_its_children() {
+        let mut e = Engine::new();
+        e.map(0x0109_6000, 0x1000);
+        e.set_global(INVALID_INDEX, 0xffffu16);
+        // Objects: vtable slot +0xc answers the node (the object itself for the parent,
+        // null for the leaves); the parent node has two children.
+        e.register(0x0060_000c, |_, a| a[0].into_ret());
+        e.register(0x0060_100c, |_, _| 0u32.into_ret());
+        e.put_vtable(0x0070_0000, &[0, 0, 0, 0x0060_000c]);
+        e.put_vtable(0x0070_1000, &[0, 0, 0, 0x0060_100c]);
+        let parent = e.mem.alloc(8);
+        e.mem.set_u32(parent, 0x0070_0000);
+        let leaf = e.mem.alloc(8);
+        e.mem.set_u32(leaf, 0x0070_1000);
+        let other_leaf = e.mem.alloc(8);
+        e.mem.set_u32(other_leaf, 0x0070_1000);
+        e.register(0x0043_b480, |_, _| 2u32.into_ret());
+        e.register_double(0x0043_b4a0, move |_, a| {
+            if a[1] == 0 { leaf } else { other_leaf }.into_ret()
+        });
+        e.register_double(0x00a3_5910, move |_, a| {
+            (if a[1] == leaf { 0xffff } else { 7u32 }).into_ret()
+        });
+        e.register(0x00a3_5fc0, |_, _| Ret::default());
+        e.call_log = Some(vec![]);
+        e.call(0x004f_06d0, &args![0x9000u32, parent]);
+        let log = e.call_log.take().unwrap();
+        assert_eq!(
+            calls(&log, 0x00a3_5fc0),
+            vec![vec![0x9000, 7, 0], vec![0x9000, 7, 0]]
+        );
+        assert_eq!(calls(&log, 0x00a3_5910).len(), 3);
+        assert_eq!(calls(&log, 0x004f_06d0).len(), 1);
+    }
+
+    #[test]
+    fn fn_004f0a40_saves_the_region() {
+        let mut e = Engine::new();
+        for callee in [
+            0x0048_55a0u32,
+            0x0048_5680,
+            0x0048_5910,
+            0x004f_77c0,
+            0x0060_0004,
+        ] {
+            e.register(callee, |_, _| Ret::default());
+        }
+        e.register(0x007a_f430, |_, _| 0x5000u32.into_ret());
+        e.register(0x0084_e3a0, |_, a| (a[0] + 1).into_ret());
+        // Lists: nodes [item, next]; empty when the item is 0.
+        let item = e.mem.alloc(4);
+        e.put_vtable(0x0070_0000, &[0, 0x0060_0004]);
+        e.mem.set_u32(item, 0x0070_0000);
+        let first = e.mem.alloc(8);
+        let second = e.mem.alloc(8);
+        e.mem.set_u32(first, 0x6100);
+        e.mem.set_u32(first + 4, second);
+        e.mem.set_u32(second, 0x6200);
+        let other = e.mem.alloc(8);
+        e.mem.set_u32(other, item);
+        e.register_double(0x0044_1110, move |_, _| first.into_ret());
+        e.register_double(0x0096_11e0, move |_, _| other.into_ret());
+        e.register(NODE_EMPTY, |e, a| {
+            u32::from(e.mem.u32(a[0]) == 0).into_ret()
+        });
+        e.register(NODE_ITEM, |_, a| a[0].into_ret());
+        e.register(NODE_NEXT, |e, a| e.mem.u32(a[0] + 4).into_ret());
+        e.call_log = Some(vec![]);
+        e.call(0x004f_0a40, &args![0x9000u32]);
+        let log = e.call_log.take().unwrap();
+        assert_eq!(calls(&log, 0x0048_5910), vec![vec![CHUNK_WNAM, 0x5001]]);
+        assert_eq!(calls(&log, 0x004f_77c0), vec![vec![0x6100], vec![0x6200]]);
+        assert_eq!(calls(&log, 0x0060_0004), vec![vec![item]]);
+        assert_eq!(log.last().unwrap(), &(0x0048_5680, vec![0x9000]));
+        // Without a form there is no `WNAM` chunk.
+        e.register(0x007a_f430, |_, _| 0u32.into_ret());
+        e.call_log = Some(vec![]);
+        e.call(0x004f_0a40, &args![0x9000u32]);
+        assert!(calls(&e.call_log.take().unwrap(), 0x0048_5910).is_empty());
     }
 }

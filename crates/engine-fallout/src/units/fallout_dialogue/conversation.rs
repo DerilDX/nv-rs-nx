@@ -222,6 +222,9 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x0083c270, conversation_save_game(Ptr, u32)),
         entry!(0x0083c470, conversation_precache_sounds(Ptr)),
     ]
+    .into_iter()
+    .chain(funcs_n086())
+    .collect()
 }
 
 #[cfg(test)]
@@ -416,5 +419,730 @@ mod la1_tests {
         e.call_log = Some(vec![]);
         assert!(!e.call(0x0083_b9f0, &args![this]).bool());
         assert_eq!(e.call_log.take().unwrap().len(), 1);
+    }
+}
+
+/// The message `GetDialogueItemByIndex` prints when the index is past the
+/// list (`0107daa0`).
+const INDEX_TOO_LARGE_MESSAGE: u32 = 0x0107_daa0;
+/// The save/load game object (`011de45c`) and the calls on it (`thiscall`):
+/// whether block headers are written (`00862110`, a byte), the buffer
+/// position (`00825c00`), writing (`008579b0`) and reading (`008579e0`)
+/// bytes (two words: the data's address, the size), the form being saved
+/// (`004fd3e0`) or loaded (`004fd3c0`), and a byte for the load messages
+/// (`008df040`).
+const SAVE_LOAD_GAME_011DE45C: u32 = 0x011d_e45c;
+const SAVE_LOAD_HAS_BLOCK_HEADERS: u32 = 0x0086_2110;
+const SAVE_LOAD_POSITION: u32 = 0x0082_5c00;
+const SAVE_LOAD_WRITE: u32 = 0x0085_79b0;
+const SAVE_LOAD_READ: u32 = 0x0085_79e0;
+const SAVE_LOAD_SAVED_FORM: u32 = 0x004f_d3e0;
+const SAVE_LOAD_LOADED_FORM: u32 = 0x004f_d3c0;
+const SAVE_LOAD_BYTE_008DF040: u32 = 0x008d_f040;
+/// The setting (`011de4e8`) whose byte (`00408d60` answers its address)
+/// turns on the save size traces.
+const TRACE_SETTING_011DE4E8: u32 = 0x011d_e4e8;
+const SETTING_BYTE_ADDRESS: u32 = 0x0040_8d60;
+/// The form lookup by id (`004839c0`, `cdecl`).
+const LOOKUP_FORM: u32 = 0x0048_39c0;
+/// The trace print (`0040fbe0`, `cdecl`, a format and its words).
+const TRACE_PRINT: u32 = 0x0040_fbe0;
+/// The block header word `"KOLB"` (`0x424c4f4b`).
+const BLOCK_HEADER: u32 = 0x424c_4f4b;
+/// This file's name (`0107db20`) and the trace and load messages
+/// (`.rdata` texts: `GetSaveSize()` with and without the form, `SaveGame()`
+/// with and without the form, the block too large for a short, the wrong
+/// block header with and without the form, the buffer overrun and underrun
+/// with and without the form).
+const SOURCE_FILE_0107DB20: u32 = 0x0107_db20;
+const TEXT_SAVE_SIZE_FORM: u32 = 0x0101_2cb0;
+const TEXT_SAVE_SIZE: u32 = 0x0101_2c78;
+const TEXT_SAVE_GAME_FORM: u32 = 0x0101_53a0;
+const TEXT_SAVE_GAME: u32 = 0x0101_536c;
+const TEXT_BLOCK_TOO_LARGE: u32 = 0x0101_5318;
+const TEXT_BAD_HEADER_FORM: u32 = 0x0101_5718;
+const TEXT_BAD_HEADER: u32 = 0x0101_56a8;
+const TEXT_OVERRUN_FORM: u32 = 0x0101_5588;
+const TEXT_UNDERRUN_FORM: u32 = 0x0101_5500;
+const TEXT_OVERRUN: u32 = 0x0101_54a0;
+const TEXT_UNDERRUN: u32 = 0x0101_5440;
+/// The `DialogueItem` calls (`thiscall`): its save size (`0083c9e0`, 16
+/// bits), its save (`0083ca90`), the call `0083c220` makes (`0083cdf0`),
+/// its constructor (`0083c4d0`, 0x1c bytes), its loads (`0083cc10`, and
+/// `0083cf40` with a buffer) and the one `0083c420` makes (`0083d0d0`, one
+/// word).
+const ITEM_SAVE_SIZE: u32 = 0x0083_c9e0;
+const ITEM_SAVE: u32 = 0x0083_ca90;
+const ITEM_0083CDF0: u32 = 0x0083_cdf0;
+const ITEM_CONSTRUCT: u32 = 0x0083_c4d0;
+const ITEM_LOAD: u32 = 0x0083_cc10;
+const ITEM_LOAD_FROM: u32 = 0x0083_cf40;
+const ITEM_0083D0D0: u32 = 0x0083_d0d0;
+/// `00905820` (`thiscall`, one word: the address of the item): adds an item
+/// to the list; `0083c8a0` (`thiscall`, one word) makes an item current.
+const LIST_ADD: u32 = 0x0090_5820;
+const SET_CURRENT_ITEM: u32 = 0x0083_c8a0;
+/// `00401000` (`cdecl`, one word): allocates a block.
+const ALLOCATE: u32 = 0x0040_1000;
+/// The load buffer's count (`00864a60`, `thiscall`) and read (`00864980`,
+/// `thiscall`, two words: address, size).
+const BUFFER_COUNT: u32 = 0x0086_4a60;
+const BUFFER_READ: u32 = 0x0086_4980;
+
+/// The save/load game object.
+fn save_load(e: &Engine) -> u32 {
+    e.mem.u32(SAVE_LOAD_GAME_011DE45C)
+}
+
+/// Whether the save/load game object writes block headers.
+fn has_block_headers(e: &mut Engine) -> bool {
+    let game = save_load(e);
+    e.call(SAVE_LOAD_HAS_BLOCK_HEADERS, &args![game]).u32() & 0xff != 0
+}
+
+/// The save/load game object's buffer position.
+fn position(e: &mut Engine) -> u32 {
+    let game = save_load(e);
+    e.call(SAVE_LOAD_POSITION, &args![game]).u32()
+}
+
+/// Whether the trace setting's byte is set.
+fn tracing(e: &mut Engine) -> bool {
+    let at = e
+        .call(SETTING_BYTE_ADDRESS, &args![TRACE_SETTING_011DE4E8])
+        .u32();
+    e.mem.u8(at) != 0
+}
+
+/// The form id at `info`, its form's name (virtual slot `+0x130`, no
+/// words) and the word at `info + 5`: the words the traces print.
+fn form_words(e: &mut Engine, info: u32) -> (u32, u32, u32) {
+    let id = e.mem.u32(info);
+    let form = e.call(LOOKUP_FORM, &args![id]).u32();
+    let flags = e.mem.u32(info.wrapping_add(5));
+    let name = e.vcall(form, 0x130, &[]).u32();
+    (e.mem.u32(info), name, flags)
+}
+
+// Translated from 0083b830 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Conversation::Conversation` (engine map; `thiscall`, plain `RET`): the
+/// item list constructed (`0096a2d0`) and `pCurrentItem` cleared. Returns
+/// `this`.
+pub fn conversation_conversation(e: &mut Engine, this: Ptr) -> Ptr {
+    e.call(LIST_CONSTRUCT, &args![this]);
+    e.mem.set_u32(this.addr() + CURRENT_ITEM, 0);
+    this
+}
+
+// Translated from 0083bac0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Conversation::GetDialogueItemByIndex` (engine map; `thiscall`, `RET 4`):
+/// the item of node `index` (both compared as signed 16-bit numbers),
+/// counting until an empty node; past the list the message at `0107daa0`
+/// and null.
+pub fn conversation_get_dialogue_item_by_index(e: &mut Engine, this: Ptr, index: u32) -> u32 {
+    let mut at = 0i16;
+    let mut node = this.addr();
+    while node != 0 && !node_is_empty(e, node) {
+        if at == index as i16 {
+            return node_item(e, node);
+        }
+        at = at.wrapping_add(1);
+        node = e.call(LIST_NODE_NEXT, &args![node]).u32();
+    }
+    e.call(PRINT_MESSAGE, &args![INDEX_TOO_LARGE_MESSAGE]);
+    0
+}
+
+// Translated from 0083bb30 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The conversation's save size (unnamed in the engine map; its trace says
+/// `GetSaveSize()`; `thiscall`, plain `RET`, 16 bits in `AX`): 6 more with
+/// block headers, 2, each item's size (`0083c9e0`) until an empty node, and
+/// 2. With the trace setting (`011de4e8`) on, prints the size (`0040fbe0`)
+/// with the saved form's id, name and flags when there is one.
+pub fn fn_0083bb30(e: &mut Engine, this: Ptr) -> u16 {
+    let mut size = 0u16;
+    let start = size;
+    if has_block_headers(e) {
+        size = size.wrapping_add(4);
+        size = size.wrapping_add(2);
+    }
+    size = size.wrapping_add(2);
+    let mut node = this.addr();
+    while node != 0 && !node_is_empty(e, node) {
+        let item = node_item(e, node);
+        let item_size = e.call(ITEM_SAVE_SIZE, &args![item]).u32() as u16;
+        size = size.wrapping_add(item_size);
+        node = e.call(LIST_NODE_NEXT, &args![node]).u32();
+    }
+    size = size.wrapping_add(2);
+    if tracing(e) {
+        let game = save_load(e);
+        let info = e.call(SAVE_LOAD_SAVED_FORM, &args![game]).u32();
+        let length = u32::from(size).wrapping_sub(u32::from(start));
+        if info != 0 {
+            let (id, name, flags) = form_words(e, info);
+            e.call(
+                TRACE_PRINT,
+                &args![
+                    TEXT_SAVE_SIZE_FORM,
+                    length,
+                    id,
+                    name,
+                    flags,
+                    0xc0u32,
+                    SOURCE_FILE_0107DB20
+                ],
+            );
+        } else {
+            e.call(
+                TRACE_PRINT,
+                &args![TEXT_SAVE_SIZE, length, 0xc0u32, SOURCE_FILE_0107DB20],
+            );
+        }
+    }
+    size
+}
+
+// Translated from 0083bc80 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The conversation's save (unnamed in the engine map; its trace says
+/// `SaveGame()`; `thiscall`, plain `RET`), through the save/load game object
+/// (`011de45c`): with block headers the header `"KOLB"` and a 16-bit block
+/// size (0 for now, its place kept); the 16-bit item count (written over
+/// its place when the items, until an empty node, are saved: `0083ca90`);
+/// the current item's index (`GetDialogueItemIndex`, -1 without one). The
+/// trace setting prints the bytes written (from the position before the
+/// block); with block headers the block size goes into its place (a
+/// message when it is over 0xffff).
+pub fn fn_0083bc80(e: &mut Engine, this: Ptr) {
+    e.with_stack(0x20, |e, locals| {
+        let l = locals.addr();
+        let header = l;
+        let count = l + 4;
+        let index = l + 8;
+        let block_size = l + 0xc;
+        e.mem.set_u16(block_size, 0);
+        let mut size_place = 0u32;
+        let mut start = position(e);
+        if tracing(e) {
+            start = position(e);
+        }
+        if has_block_headers(e) {
+            e.mem.set_u32(header, BLOCK_HEADER);
+            let game = save_load(e);
+            e.call(SAVE_LOAD_WRITE, &args![game, header, 4u32]);
+            size_place = position(e);
+            let game = save_load(e);
+            e.call(SAVE_LOAD_WRITE, &args![game, block_size, 2u32]);
+        }
+        e.mem.set_u16(count, 0);
+        let count_place = position(e);
+        let game = save_load(e);
+        e.call(SAVE_LOAD_WRITE, &args![game, count, 2u32]);
+        let mut node = this.addr();
+        while node != 0 && !node_is_empty(e, node) {
+            let item = node_item(e, node);
+            e.call(ITEM_SAVE, &args![item]);
+            let n = e.mem.u16(count).wrapping_add(1);
+            e.mem.set_u16(count, n);
+            node = e.call(LIST_NODE_NEXT, &args![node]).u32();
+        }
+        let n = e.mem.u16(count);
+        e.mem.set_u16(count_place, n);
+        e.mem.set_u16(index, 0xffff);
+        if e.mem.u32(this.addr() + CURRENT_ITEM) != 0 {
+            let current = e.mem.u32(this.addr() + CURRENT_ITEM);
+            let item = node_item(e, current);
+            let at = conversation_get_dialogue_item_index(e, this, item);
+            e.mem.set_u16(index, at);
+        }
+        let game = save_load(e);
+        e.call(SAVE_LOAD_WRITE, &args![game, index, 2u32]);
+        if tracing(e) {
+            let end = position(e);
+            let game = save_load(e);
+            let info = e.call(SAVE_LOAD_SAVED_FORM, &args![game]).u32();
+            let length = end.wrapping_sub(start);
+            if info != 0 {
+                let (id, name, flags) = form_words(e, info);
+                e.call(
+                    TRACE_PRINT,
+                    &args![
+                        TEXT_SAVE_GAME_FORM,
+                        length,
+                        id,
+                        name,
+                        flags,
+                        0xe1u32,
+                        SOURCE_FILE_0107DB20
+                    ],
+                );
+            } else {
+                e.call(
+                    TRACE_PRINT,
+                    &args![TEXT_SAVE_GAME, length, 0xe1u32, SOURCE_FILE_0107DB20],
+                );
+            }
+        }
+        if has_block_headers(e) {
+            let end = position(e);
+            if end > size_place.wrapping_add(0xffff) {
+                e.call(
+                    PRINT_MESSAGE,
+                    &args![TEXT_BLOCK_TOO_LARGE, SOURCE_FILE_0107DB20, 0xe1u32],
+                );
+            }
+            e.mem
+                .set_u16(size_place, end.wrapping_sub(size_place) as u16);
+        }
+    });
+}
+
+/// Reads `items` dialogue items: each a new 0x1c-byte `DialogueItem`
+/// (`0083c4d0`; null when the allocation fails) loaded by `load` and added
+/// to the list (`00905820`, through a stack word holding it).
+fn load_items(e: &mut Engine, this: Ptr, items: u32, slot: u32, load: &dyn Fn(&mut Engine, u32)) {
+    for _ in 0..items {
+        let block = e.call(ALLOCATE, &args![0x1cu32]).u32();
+        let item = if block != 0 {
+            e.call(ITEM_CONSTRUCT, &args![block]).u32()
+        } else {
+            0
+        };
+        e.mem.set_u32(slot, item);
+        load(e, item);
+        e.call(LIST_ADD, &args![this, slot]);
+    }
+}
+
+// Translated from 0083bec0 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 0083bec0 - the C++ exception-unwinding frame (FS:[0]) is not translated.
+/// `Conversation::LoadGame` (engine map; `thiscall`, plain `RET`), through
+/// the save/load game object (`011de45c`): with block headers the 4-byte
+/// header (a message when it is not `"KOLB"`, with the loaded form's id,
+/// name, byte `+9` and word `+5`, or the byte `008df040`), then the 16-bit
+/// block size (its position kept); the 16-bit item count and that many
+/// items (`0083cc10`); the 16-bit current index (`GetDialogueItemByIndex`
+/// and `0083c8a0`, or `pCurrentItem` cleared for -1). With block headers,
+/// a message when the position is past or short of the block's end.
+pub fn conversation_load_game(e: &mut Engine, this: Ptr) {
+    e.with_stack(0x20, |e, locals| {
+        let l = locals.addr();
+        let header = l;
+        let block_size = l + 4;
+        let count = l + 8;
+        let index = l + 0xc;
+        let slot = l + 0x10;
+        e.mem.set_u16(block_size, 0);
+        let mut start = 0u32;
+        if has_block_headers(e) {
+            let game = save_load(e);
+            e.call(SAVE_LOAD_READ, &args![game, header, 4u32]);
+            if e.mem.u32(header) != BLOCK_HEADER {
+                let game = save_load(e);
+                let info = e.call(SAVE_LOAD_LOADED_FORM, &args![game]).u32();
+                if info != 0 {
+                    let id = e.mem.u32(info);
+                    let form = e.call(LOOKUP_FORM, &args![id]).u32();
+                    let word = e.mem.u32(info.wrapping_add(5));
+                    let byte = u32::from(e.mem.u8(info.wrapping_add(9)));
+                    let name = e.vcall(form, 0x130, &[]).u32();
+                    let id = e.mem.u32(info);
+                    e.call(
+                        PRINT_MESSAGE,
+                        &args![
+                            TEXT_BAD_HEADER_FORM,
+                            SOURCE_FILE_0107DB20,
+                            0xe7u32,
+                            id,
+                            name,
+                            byte,
+                            word
+                        ],
+                    );
+                } else {
+                    let game = save_load(e);
+                    let byte = e.call(SAVE_LOAD_BYTE_008DF040, &args![game]).u32() & 0xff;
+                    e.call(
+                        PRINT_MESSAGE,
+                        &args![TEXT_BAD_HEADER, SOURCE_FILE_0107DB20, 0xe7u32, byte],
+                    );
+                }
+            }
+            start = position(e);
+            let game = save_load(e);
+            e.call(SAVE_LOAD_READ, &args![game, block_size, 2u32]);
+        }
+        let game = save_load(e);
+        e.call(SAVE_LOAD_READ, &args![game, count, 2u32]);
+        let items = u32::from(e.mem.u16(count));
+        load_items(e, this, items, slot, &|e, item| {
+            e.call(ITEM_LOAD, &args![item]);
+        });
+        let game = save_load(e);
+        e.call(SAVE_LOAD_READ, &args![game, index, 2u32]);
+        if e.mem.u16(index) as i16 != -1 {
+            let at = u32::from(e.mem.u16(index));
+            let item = conversation_get_dialogue_item_by_index(e, this, at);
+            e.call(SET_CURRENT_ITEM, &args![this, item]);
+        } else {
+            e.mem.set_u32(this.addr() + CURRENT_ITEM, 0);
+        }
+        if !has_block_headers(e) {
+            return;
+        }
+        let end = position(e);
+        let game = save_load(e);
+        let info = e.call(SAVE_LOAD_LOADED_FORM, &args![game]).u32();
+        let expected = u32::from(e.mem.u16(block_size)).wrapping_add(start);
+        if info != 0 {
+            let id = e.mem.u32(info);
+            let form = e.call(LOOKUP_FORM, &args![id]).u32();
+            let (text, amount) = if end > expected {
+                (TEXT_OVERRUN_FORM, end.wrapping_sub(expected))
+            } else if end < expected {
+                (TEXT_UNDERRUN_FORM, expected.wrapping_sub(end))
+            } else {
+                return;
+            };
+            let word = e.mem.u32(info.wrapping_add(5));
+            let byte = u32::from(e.mem.u8(info.wrapping_add(9)));
+            let name = e.vcall(form, 0x130, &[]).u32();
+            let id = e.mem.u32(info);
+            e.call(
+                PRINT_MESSAGE,
+                &args![
+                    text,
+                    amount,
+                    SOURCE_FILE_0107DB20,
+                    0xfdu32,
+                    id,
+                    name,
+                    byte,
+                    word
+                ],
+            );
+        } else {
+            let (text, amount) = if end > expected {
+                (TEXT_OVERRUN, end.wrapping_sub(expected))
+            } else if end < expected {
+                (TEXT_UNDERRUN, expected.wrapping_sub(end))
+            } else {
+                return;
+            };
+            let game = save_load(e);
+            let byte = e.call(SAVE_LOAD_BYTE_008DF040, &args![game]).u32() & 0xff;
+            e.call(
+                PRINT_MESSAGE,
+                &args![text, amount, SOURCE_FILE_0107DB20, 0xfdu32, byte],
+            );
+        }
+    });
+}
+
+// Translated from 0083c220 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`thiscall`, plain `RET`): `0083cdf0` on each
+/// item until an empty node.
+pub fn fn_0083c220(e: &mut Engine, this: Ptr) {
+    let mut node = this.addr();
+    while node != 0 && !node_is_empty(e, node) {
+        let item = node_item(e, node);
+        e.call(ITEM_0083CDF0, &args![item]);
+        node = e.call(LIST_NODE_NEXT, &args![node]).u32();
+    }
+}
+
+// Translated from 0083c330 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 0083c330 - the C++ exception-unwinding frame (FS:[0]) is not translated.
+/// `Conversation::LoadGame_ov2` (engine map; `thiscall`, `RET 4`: the load
+/// buffer): the buffer's count (`00864a60`) of items, each a new
+/// `DialogueItem` loaded from the buffer (`0083cf40`) and added; then the
+/// 16-bit current index read (`00864980`), made current when it is not -1.
+pub fn conversation_load_game_ov2(e: &mut Engine, this: Ptr, buffer: u32) {
+    e.with_stack(8, |e, locals| {
+        let slot = locals.addr();
+        let index = locals.addr() + 4;
+        let items = e.call(BUFFER_COUNT, &args![buffer]).u32();
+        load_items(e, this, items, slot, &|e, item| {
+            e.call(ITEM_LOAD_FROM, &args![item, buffer]);
+        });
+        e.mem.set_u16(index, 0xffff);
+        e.call(BUFFER_READ, &args![buffer, index, 2u32]);
+        if e.mem.u16(index) as i16 != -1 {
+            let at = u32::from(e.mem.u16(index));
+            let item = conversation_get_dialogue_item_by_index(e, this, at);
+            e.call(SET_CURRENT_ITEM, &args![this, item]);
+        }
+    });
+}
+
+// Translated from 0083c420 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`thiscall`, `RET 4`): `0083d0d0` with `value`
+/// on every item of the list (every node, empty or not, whose item is
+/// set).
+pub fn fn_0083c420(e: &mut Engine, this: Ptr, value: u32) {
+    let mut node = this.addr();
+    while node != 0 {
+        let item = node_item(e, node);
+        if item != 0 {
+            e.call(ITEM_0083D0D0, &args![item, value]);
+        }
+        node = e.call(LIST_NODE_NEXT, &args![node]).u32();
+    }
+}
+
+/// This unit's n086 translations, by exe address.
+fn funcs_n086() -> Vec<(u32, AbiFn)> {
+    vec![
+        entry!(0x0083_b830, conversation_conversation(Ptr) -> Ptr),
+        entry!(
+            0x0083_bac0,
+            conversation_get_dialogue_item_by_index(Ptr, u32) -> u32
+        ),
+        entry!(0x0083_bb30, fn_0083bb30(Ptr) -> u16),
+        entry!(0x0083_bc80, fn_0083bc80(Ptr)),
+        entry!(0x0083_bec0, conversation_load_game(Ptr)),
+        entry!(0x0083_c220, fn_0083c220(Ptr)),
+        entry!(0x0083_c330, conversation_load_game_ov2(Ptr, u32)),
+        entry!(0x0083_c420, fn_0083c420(Ptr, u32)),
+    ]
+}
+
+#[cfg(test)]
+mod n086_tests {
+    use super::*;
+
+    fn calls(e: &Engine, addr: u32) -> Vec<Vec<u32>> {
+        e.call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|c| c.0 == addr)
+            .map(|c| c.1.clone())
+            .collect()
+    }
+
+    /// A list of nodes (item +0, next +4) holding `items`, the last node
+    /// empty when `trailing_empty`.
+    fn list(e: &mut Engine, items: &[u32], trailing_empty: bool) -> u32 {
+        let count = items.len() + usize::from(trailing_empty);
+        let nodes: Vec<u32> = (0..count).map(|_| e.mem.alloc(0xc)).collect();
+        for (i, &node) in nodes.iter().enumerate() {
+            e.mem.set_u32(node, items.get(i).copied().unwrap_or(0));
+            e.mem
+                .set_u32(node + 4, nodes.get(i + 1).copied().unwrap_or(0));
+        }
+        nodes[0]
+    }
+
+    fn list_walking(e: &mut Engine) {
+        e.register(LIST_NODE_ITEM, |_, a| a[0].into_ret());
+        e.register(LIST_NODE_NEXT, |e, a| e.mem.u32(a[0] + 4).into_ret());
+        e.register(LIST_NODE_IS_EMPTY, |e, a| {
+            u32::from(e.mem.u32(a[0]) == 0 && e.mem.u32(a[0] + 4) == 0).into_ret()
+        });
+        e.register(PRINT_MESSAGE, |_, _| Ret::default());
+        e.register(TRACE_PRINT, |_, _| Ret::default());
+    }
+
+    /// The save/load game object with block headers `headers`, a position
+    /// counter that each write and read advances, and the trace byte.
+    fn save_load_game(e: &mut Engine, headers: bool, trace: bool) -> u32 {
+        let game = e.mem.alloc(0x10);
+        e.map(SAVE_LOAD_GAME_011DE45C, 4);
+        e.mem.set_u32(SAVE_LOAD_GAME_011DE45C, game);
+        e.mem.set_u32(game + 4, u32::from(headers));
+        e.register(SAVE_LOAD_HAS_BLOCK_HEADERS, |e, a| {
+            e.mem.u32(a[0] + 4).into_ret()
+        });
+        e.register(SAVE_LOAD_POSITION, |e, a| e.mem.u32(a[0]).into_ret());
+        let advance = |e: &mut Engine, a: &[u32]| {
+            let p = e.mem.u32(a[0]) + a[2];
+            e.mem.set_u32(a[0], p);
+            Ret::default()
+        };
+        e.register(SAVE_LOAD_WRITE, advance);
+        e.register(SAVE_LOAD_READ, |e, a| {
+            // Reads come from the queue at game +8 (two words).
+            let p = e.mem.u32(a[0]) + a[2];
+            e.mem.set_u32(a[0], p);
+            let queue = e.mem.u32(a[0] + 8);
+            let value = e.mem.u32(queue);
+            e.mem.set_u32(a[0] + 8, queue + 4);
+            if a[2] == 4 {
+                e.mem.set_u32(a[1], value);
+            } else {
+                e.mem.set_u16(a[1], value as u16);
+            }
+            Ret::default()
+        });
+        let flag = e.mem.alloc(4);
+        e.mem.set_u8(flag, u8::from(trace));
+        e.register_double(SETTING_BYTE_ADDRESS, move |_, _| flag.into_ret());
+        e.register(SAVE_LOAD_SAVED_FORM, |_, _| 0u32.into_ret());
+        e.register(SAVE_LOAD_LOADED_FORM, |_, _| 0u32.into_ret());
+        e.register(SAVE_LOAD_BYTE_008DF040, |_, _| 0x1207u32.into_ret());
+        game
+    }
+
+    #[test]
+    fn constructor_and_item_by_index() {
+        let mut e = Engine::new();
+        list_walking(&mut e);
+        e.register(LIST_CONSTRUCT, |_, _| Ret::default());
+        let this = e.mem.alloc(0xc);
+        e.mem.set_u32(this + 8, 5);
+        assert_eq!(e.call(0x0083_b830, &args![this]).u32(), this);
+        assert_eq!(e.mem.u32(this + 8), 0);
+        let head = list(&mut e, &[0xa1, 0xa2], true);
+        assert_eq!(e.call(0x0083_bac0, &args![head, 1u32]).u32(), 0xa2);
+        assert_eq!(e.call(0x0083_bac0, &args![head, 0x1_0000u32]).u32(), 0xa1);
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x0083_bac0, &args![head, 2u32]).u32(), 0);
+        assert_eq!(
+            calls(&e, PRINT_MESSAGE),
+            vec![vec![INDEX_TOO_LARGE_MESSAGE]]
+        );
+    }
+
+    #[test]
+    fn save_size_counts_the_items() {
+        let mut e = Engine::new();
+        list_walking(&mut e);
+        save_load_game(&mut e, true, true);
+        e.register(ITEM_SAVE_SIZE, |_, a| (0xffff_0000 | a[0]).into_ret());
+        let head = list(&mut e, &[0x10, 0x20], true);
+        e.call_log = Some(vec![]);
+        assert_eq!(
+            e.call(0x0083_bb30, &args![head]).u32() & 0xffff,
+            6 + 2 + 0x30 + 2
+        );
+        assert_eq!(
+            calls(&e, TRACE_PRINT),
+            vec![vec![TEXT_SAVE_SIZE, 0x3a, 0xc0, SOURCE_FILE_0107DB20]]
+        );
+        save_load_game(&mut e, false, false);
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x0083_bb30, &args![head]).u32() & 0xffff, 0x34);
+        assert!(calls(&e, TRACE_PRINT).is_empty());
+    }
+
+    #[test]
+    fn save_writes_header_count_and_index() {
+        let mut e = Engine::new();
+        list_walking(&mut e);
+        let game = save_load_game(&mut e, true, false);
+        e.register(ITEM_SAVE, |_, _| Ret::default());
+        let head = list(&mut e, &[0x10, 0x20], true);
+        let this = head;
+        // The buffer positions are addresses the count and size go into.
+        let buffer = e.mem.alloc(0x20);
+        e.mem.set_u32(game, buffer);
+        e.mem.set_u32(this + 8, 0);
+        e.call_log = Some(vec![]);
+        e.call(0x0083_bc80, &args![this]);
+        let writes = calls(&e, SAVE_LOAD_WRITE);
+        assert_eq!(writes.len(), 4);
+        assert_eq!(
+            writes.iter().map(|w| w[2]).collect::<Vec<_>>(),
+            vec![4, 2, 2, 2]
+        );
+        assert_eq!(calls(&e, ITEM_SAVE), vec![vec![0x10], vec![0x20]]);
+        // The count over its place (after header and size), the block size
+        // from its place to the end.
+        assert_eq!(e.mem.u16(buffer + 6), 2);
+        assert_eq!(e.mem.u16(buffer + 4), 6);
+    }
+
+    #[test]
+    fn load_game_reads_the_items_and_the_index() {
+        let mut e = Engine::new();
+        list_walking(&mut e);
+        let game = save_load_game(&mut e, true, false);
+        e.register(ALLOCATE, |_, _| 0x9000u32.into_ret());
+        e.register(ITEM_CONSTRUCT, |_, a| (a[0] + 1).into_ret());
+        e.register(ITEM_LOAD, |_, _| Ret::default());
+        e.register(LIST_ADD, |_, _| Ret::default());
+        e.register(SET_CURRENT_ITEM, |_, _| Ret::default());
+        let queue = e.mem.alloc(0x20);
+        // Header, block size, count, index.
+        for (i, v) in (0u32..).zip([BLOCK_HEADER, 6, 2, 0xffff]) {
+            e.mem.set_u32(queue + i * 4, v);
+        }
+        e.mem.set_u32(game + 8, queue);
+        let this = e.mem.alloc(0xc);
+        e.mem.set_u32(this + 8, 0x77);
+        e.call_log = Some(vec![]);
+        e.call(0x0083_bec0, &args![this]);
+        assert!(calls(&e, PRINT_MESSAGE).is_empty());
+        assert_eq!(calls(&e, ITEM_LOAD), vec![vec![0x9001], vec![0x9001]]);
+        assert_eq!(calls(&e, LIST_ADD).len(), 2);
+        assert_eq!(e.mem.u32(this + 8), 0);
+
+        // A wrong header and an overrun.
+        e.mem.set_u32(game, 0);
+        for (i, v) in (0u32..).zip([0x1234, 1, 0, 0]) {
+            e.mem.set_u32(queue + i * 4, v);
+        }
+        e.mem.set_u32(game + 8, queue);
+        e.mem.set_u32(this, 0);
+        e.mem.set_u32(this + 4, 0);
+        e.call_log = Some(vec![]);
+        e.call(0x0083_bec0, &args![this]);
+        let messages = calls(&e, PRINT_MESSAGE);
+        assert_eq!(
+            messages[0],
+            vec![TEXT_BAD_HEADER, SOURCE_FILE_0107DB20, 0xe7, 0x07]
+        );
+        // Index 0 of an empty list: the not-found message, then made current.
+        assert_eq!(messages[1], vec![INDEX_TOO_LARGE_MESSAGE]);
+        assert_eq!(calls(&e, SET_CURRENT_ITEM), vec![vec![this, 0]]);
+        // Start 4, size 1: the end (10) is 5 past.
+        assert_eq!(
+            messages[2],
+            vec![TEXT_OVERRUN, 5, SOURCE_FILE_0107DB20, 0xfd, 0x07]
+        );
+    }
+
+    #[test]
+    fn load_game_ov2_reads_from_the_buffer() {
+        let mut e = Engine::new();
+        list_walking(&mut e);
+        e.register(BUFFER_COUNT, |_, _| 3u32.into_ret());
+        e.register(ALLOCATE, |_, _| 0u32.into_ret());
+        e.register(ITEM_LOAD_FROM, |_, _| Ret::default());
+        e.register(LIST_ADD, |_, _| Ret::default());
+        e.register(SET_CURRENT_ITEM, |_, _| Ret::default());
+        e.register(BUFFER_READ, |e, a| {
+            e.mem.set_u16(a[1], 1);
+            Ret::default()
+        });
+        let this = list(&mut e, &[0xa1, 0xa2], false);
+        e.call_log = Some(vec![]);
+        e.call(0x0083_c330, &args![this, 0x4400u32]);
+        assert_eq!(calls(&e, ITEM_LOAD_FROM), vec![vec![0, 0x4400]; 3]);
+        assert!(calls(&e, ITEM_CONSTRUCT).is_empty());
+        assert_eq!(calls(&e, SET_CURRENT_ITEM), vec![vec![this, 0xa2]]);
+        e.register(BUFFER_READ, |_, _| Ret::default());
+        e.call_log = Some(vec![]);
+        e.call(0x0083_c330, &args![this, 0x4400u32]);
+        assert!(calls(&e, SET_CURRENT_ITEM).is_empty());
+    }
+
+    #[test]
+    fn item_walks() {
+        let mut e = Engine::new();
+        list_walking(&mut e);
+        e.register(ITEM_0083CDF0, |_, _| Ret::default());
+        e.register(ITEM_0083D0D0, |_, _| Ret::default());
+        let head = list(&mut e, &[0x10, 0, 0x30], false);
+        e.call_log = Some(vec![]);
+        e.call(0x0083_c220, &args![head]);
+        // A node without an item but with a next one is not empty.
+        assert_eq!(
+            calls(&e, ITEM_0083CDF0),
+            vec![vec![0x10], vec![0], vec![0x30]]
+        );
+        e.call(0x0083_c420, &args![head, 9u32]);
+        assert_eq!(calls(&e, ITEM_0083D0D0), vec![vec![0x10, 9], vec![0x30, 9]]);
     }
 }
