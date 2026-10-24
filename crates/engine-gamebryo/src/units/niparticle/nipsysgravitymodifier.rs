@@ -628,9 +628,204 @@ pub fn ni_p_sys_gravity_modifier_load_binary(
     });
 }
 
+use crate::units::niparticle::nipsysmodifier::{
+    add_class_name, add_labelled, add_viewer_string, stream_write, NI_GET_VIEWER_STRING_BOOL,
+    NI_GET_VIEWER_STRING_FIXED, NI_GET_VIEWER_STRING_FLOAT, STREAM_SAVE_LINK_ID,
+};
+
+/// `NiPSysModifier::IsEqual` (`00c31830`), `SaveBinary` (`00c31950`) and
+/// `GetViewerStrings` (`00c319e0`): `thiscall`, one word.
+const MODIFIER_IS_EQUAL: u32 = 0x00c3_1830;
+const MODIFIER_SAVE_BINARY: u32 = 0x00c3_1950;
+const MODIFIER_GET_VIEWER_STRINGS: u32 = 0x00c3_19e0;
+/// The point helpers the code calls on the axis (`thiscall`, one word):
+/// `00a69780` writes its three floats to a stream (the engine map names it
+/// after `NiColor`, whose body it shares), `00439090` answers whether it
+/// differs from another point, `00a59af0` (`NiPoint3::GetViewerString`)
+/// makes its viewer string with a label.
+const POINT_SAVE_BINARY: u32 = 0x00a6_9780;
+const POINT_NOT_EQUAL: u32 = 0x0043_9090;
+const POINT_GET_VIEWER_STRING: u32 = 0x00a5_9af0;
+/// The `NiRTTI` record of `NiPSysGravityModifier` (`01202548`).
+const RTTI: u32 = 0x0120_2548;
+/// Labels: `"Gravity Object"`, `"Gravity Axis"`, `"Decay"`, `"Strength"`,
+/// `"Turbulence"`, `"TurbulenceScale"`, `"Force Type"`, `"WorldAligned"`;
+/// the force type names `"FORCE_PLANAR"` (0), `"FORCE_SPHERICAL"` (1),
+/// `"Unknown"`; and `"None"` (the object's name when there is none).
+const LABEL_GRAVITY_OBJECT: u32 = 0x010b_e108;
+const LABEL_GRAVITY_AXIS: u32 = 0x010b_e0f8;
+const LABEL_DECAY: u32 = 0x010b_e0f0;
+const LABEL_STRENGTH: u32 = 0x0106_78ac;
+const LABEL_TURBULENCE: u32 = 0x010b_e0e4;
+const LABEL_TURBULENCE_SCALE: u32 = 0x010b_e0d4;
+const LABEL_FORCE_TYPE: u32 = 0x010b_e0a8;
+const LABEL_WORLD_ALIGNED: u32 = 0x010b_e098;
+const TEXT_FORCE_PLANAR: u32 = 0x010b_e0c4;
+const TEXT_FORCE_SPHERICAL: u32 = 0x010b_e0b4;
+const TEXT_UNKNOWN: u32 = 0x0106_f148;
+const TEXT_NONE: u32 = 0x0102_909c;
+
+// Translated from 00c235f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiPSysGravityModifier::IsEqual` (Xbox PDB): `NiPSysModifier::IsEqual`;
+/// both or neither must have a gravity object, two objects must be equal
+/// (the first's `IsEqual`, slot +0x5c); the axes must not differ
+/// (`00439090` on the other's axis with this one's); then equal decays and
+/// strengths (`FUCOMPP`: a NaN is unequal), the same force type, equal
+/// turbulences and scales, and the same world-aligned byte.
+pub fn ni_p_sys_gravity_modifier_is_equal(
+    e: &mut Engine,
+    this: Ptr<NiPSysGravityModifier>,
+    other: Ptr<NiPSysGravityModifier>,
+) -> bool {
+    if !e.call(MODIFIER_IS_EQUAL, &args![this, other]).bool() {
+        return false;
+    }
+    let mine = e.get(this, NiPSysGravityModifier::m_pkGravityObj);
+    let theirs = e.get(other, NiPSysGravityModifier::m_pkGravityObj);
+    if (mine != 0) != (theirs != 0) {
+        return false;
+    }
+    if mine != 0 && !e.vcall(mine, 0x5c, &args![theirs]).bool() {
+        return false;
+    }
+    let axis = NiPSysGravityModifier::m_kGravityAxis.off;
+    if e.call(
+        POINT_NOT_EQUAL,
+        &args![other.addr() + axis, this.addr() + axis],
+    )
+    .bool()
+    {
+        return false;
+    }
+    let same_float =
+        |e: &Engine, field| x87_load32(e.get(other, field)) == x87_load32(e.get(this, field));
+    same_float(e, NiPSysGravityModifier::m_fDecay)
+        && same_float(e, NiPSysGravityModifier::m_fStrength)
+        && e.get(other, NiPSysGravityModifier::m_eType)
+            == e.get(this, NiPSysGravityModifier::m_eType)
+        && same_float(e, NiPSysGravityModifier::m_fTurbulence)
+        && same_float(e, NiPSysGravityModifier::m_fScale)
+        && e.get(other, NiPSysGravityModifier::m_bWorldAligned)
+            == e.get(this, NiPSysGravityModifier::m_bWorldAligned)
+}
+
+// Translated from 00c237c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiPSysGravityModifier::SaveBinary` (Xbox PDB): `NiPSysModifier`'s
+/// `SaveBinary`, the gravity object's link id (stream slot +0x30), the axis
+/// (`00a69780`), then decay, strength, force type, turbulence and scale (4
+/// bytes each) and the world-aligned byte; every component size is kept in
+/// the stack word that held the stream argument.
+pub fn ni_p_sys_gravity_modifier_save_binary(
+    e: &mut Engine,
+    this: Ptr<NiPSysGravityModifier>,
+    stream: Ptr,
+) {
+    let s = stream.addr();
+    e.call(MODIFIER_SAVE_BINARY, &args![this, s]);
+    let object = e.get(this, NiPSysGravityModifier::m_pkGravityObj);
+    e.vcall(s, STREAM_SAVE_LINK_ID, &args![object]);
+    let axis = this.addr() + NiPSysGravityModifier::m_kGravityAxis.off;
+    e.call(POINT_SAVE_BINARY, &args![axis, s]);
+    e.with_stack(4, |e, argument_slot| {
+        e.mem.set_u32(argument_slot.addr(), s);
+        for field in [
+            NiPSysGravityModifier::m_fDecay,
+            NiPSysGravityModifier::m_fStrength,
+            NiPSysGravityModifier::m_eType,
+            NiPSysGravityModifier::m_fTurbulence,
+            NiPSysGravityModifier::m_fScale,
+        ] {
+            stream_write(e, s, this.addr() + field.off, 4, 4, argument_slot.addr());
+        }
+        let aligned = this.addr() + NiPSysGravityModifier::m_bWorldAligned.off;
+        stream_write(e, s, aligned, 1, 1, argument_slot.addr());
+    });
+}
+
+// Translated from 00c238c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiPSysGravityModifier::GetViewerStrings` (Xbox PDB):
+/// `NiPSysModifier::GetViewerStrings`, then the class name (`NiRTTI`
+/// `01202548`), `"Gravity Object"` (the object's name handle, or `"None"`),
+/// the axis's string with `"Gravity Axis"` (`NiPoint3::GetViewerString`),
+/// `"Decay"`, `"Strength"`, `"Turbulence"`, `"TurbulenceScale"` (the scale),
+/// `"Force Type"` (`"FORCE_PLANAR"` for 0, `"FORCE_SPHERICAL"` for 1, else
+/// `"Unknown"`) and `"WorldAligned"` appended (the floats pushed through
+/// `FLD`/`FSTP`).
+pub fn ni_p_sys_gravity_modifier_get_viewer_strings(
+    e: &mut Engine,
+    this: Ptr<NiPSysGravityModifier>,
+    strings: Ptr,
+) {
+    e.call(MODIFIER_GET_VIEWER_STRINGS, &args![this, strings]);
+    let strings = strings.addr();
+    add_class_name(e, strings, RTTI);
+    let object = e.get(this, NiPSysGravityModifier::m_pkGravityObj);
+    let name = if object == 0 {
+        TEXT_NONE
+    } else {
+        e.mem.u32(object + 8)
+    };
+    add_labelled(
+        e,
+        strings,
+        NI_GET_VIEWER_STRING_FIXED,
+        LABEL_GRAVITY_OBJECT,
+        name,
+    );
+    let axis = this.addr() + NiPSysGravityModifier::m_kGravityAxis.off;
+    let text = e
+        .call(POINT_GET_VIEWER_STRING, &args![axis, LABEL_GRAVITY_AXIS])
+        .u32();
+    add_viewer_string(e, strings, text);
+    for (field, label) in [
+        (NiPSysGravityModifier::m_fDecay, LABEL_DECAY),
+        (NiPSysGravityModifier::m_fStrength, LABEL_STRENGTH),
+        (NiPSysGravityModifier::m_fTurbulence, LABEL_TURBULENCE),
+        (NiPSysGravityModifier::m_fScale, LABEL_TURBULENCE_SCALE),
+    ] {
+        let value = x87_quiet_bits(e.get(this, field));
+        add_labelled(e, strings, NI_GET_VIEWER_STRING_FLOAT, label, value);
+    }
+    let force = match e.get(this, NiPSysGravityModifier::m_eType) {
+        0 => TEXT_FORCE_PLANAR,
+        1 => TEXT_FORCE_SPHERICAL,
+        _ => TEXT_UNKNOWN,
+    };
+    add_labelled(
+        e,
+        strings,
+        NI_GET_VIEWER_STRING_FIXED,
+        LABEL_FORCE_TYPE,
+        force,
+    );
+    let aligned = u32::from(e.get(this, NiPSysGravityModifier::m_bWorldAligned));
+    add_labelled(
+        e,
+        strings,
+        NI_GET_VIEWER_STRING_BOOL,
+        LABEL_WORLD_ALIGNED,
+        aligned,
+    );
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(
+            0x00c2_35f0,
+            ni_p_sys_gravity_modifier_is_equal(
+                Ptr<NiPSysGravityModifier>,
+                Ptr<NiPSysGravityModifier>,
+            ) -> bool
+        ),
+        entry!(
+            0x00c2_37c0,
+            ni_p_sys_gravity_modifier_save_binary(Ptr<NiPSysGravityModifier>, Ptr)
+        ),
+        entry!(
+            0x00c2_38c0,
+            ni_p_sys_gravity_modifier_get_viewer_strings(Ptr<NiPSysGravityModifier>, Ptr)
+        ),
         entry!(
             0x00c2_2a80,
             fn_00c22a80(Ptr<NiPSysGravityModifier>) -> Ptr<NiPSysGravityModifier>
@@ -1009,6 +1204,168 @@ mod tests {
                 aligned as u8
             );
             assert_eq!(test_stream::position(&e, stream), bytes.len() as u32);
+        }
+    }
+}
+
+#[cfg(test)]
+mod stream_tests {
+    use super::*;
+    use crate::units::niparticle::nipsysmodifier::test_stream;
+    use crate::units::niparticle::nipsysmodifier::test_stream::calls_to;
+
+    fn gravity(e: &mut Engine) -> Ptr<NiPSysGravityModifier> {
+        let g = e.new_object::<NiPSysGravityModifier>();
+        e.set(g, NiPSysGravityModifier::m_fDecay, 0.5f32.to_bits());
+        e.set(g, NiPSysGravityModifier::m_fStrength, 2.0f32.to_bits());
+        e.set(g, NiPSysGravityModifier::m_eType, 1);
+        e.set(g, NiPSysGravityModifier::m_fTurbulence, 3.0f32.to_bits());
+        e.set(g, NiPSysGravityModifier::m_fScale, 4.0f32.to_bits());
+        e.set(g, NiPSysGravityModifier::m_bWorldAligned, 1);
+        g
+    }
+
+    #[test]
+    fn is_equal_checks_object_axis_and_fields() {
+        const OBJECT_IS_EQUAL: u32 = 0x0f60_0000;
+        let mut e = Engine::new();
+        e.register(MODIFIER_IS_EQUAL, |_, _| Ret {
+            eax: 1,
+            ..Ret::default()
+        });
+        e.register(POINT_NOT_EQUAL, |_, _| Ret::default());
+        e.register(OBJECT_IS_EQUAL, |e, a| Ret {
+            eax: u32::from(e.mem.u32(a[0] + 4) == e.mem.u32(a[1] + 4)),
+            ..Ret::default()
+        });
+        let vtable = e.mem.alloc(0x60);
+        e.mem.set_u32(vtable + 0x5c, OBJECT_IS_EQUAL);
+        let a = gravity(&mut e);
+        let b = gravity(&mut e);
+        e.call_log = Some(vec![]);
+        assert!(e.call(0x00c2_35f0, &args![a, b]).bool());
+        assert_eq!(
+            calls_to(&e, POINT_NOT_EQUAL),
+            vec![vec![b.addr() + 0x1c, a.addr() + 0x1c]]
+        );
+        let object = e.mem.alloc(8);
+        e.mem.set_u32(object, vtable);
+        e.set(a, NiPSysGravityModifier::m_pkGravityObj, object);
+        assert!(!e.call(0x00c2_35f0, &args![a, b]).bool());
+        e.set(b, NiPSysGravityModifier::m_pkGravityObj, object);
+        assert!(e.call(0x00c2_35f0, &args![a, b]).bool());
+        for (off, word) in [
+            (0x28u32, 0x7fc0_0000u32),
+            (0x2c, 1.0f32.to_bits()),
+            (0x30, 0),
+            (0x34, 1.0f32.to_bits()),
+            (0x38, 1.0f32.to_bits()),
+        ] {
+            let c = gravity(&mut e);
+            e.set(c, NiPSysGravityModifier::m_pkGravityObj, object);
+            e.mem.set_u32(c.addr() + off, word);
+            assert!(!e.call(0x00c2_35f0, &args![a, c]).bool(), "{off:#x}");
+        }
+        let c = gravity(&mut e);
+        e.set(c, NiPSysGravityModifier::m_pkGravityObj, object);
+        e.set(c, NiPSysGravityModifier::m_bWorldAligned, 0);
+        assert!(!e.call(0x00c2_35f0, &args![a, c]).bool());
+        e.register(POINT_NOT_EQUAL, |_, _| Ret {
+            eax: 1,
+            ..Ret::default()
+        });
+        assert!(!e.call(0x00c2_35f0, &args![a, b]).bool());
+        e.register(MODIFIER_IS_EQUAL, |_, _| Ret::default());
+        assert!(!e.call(0x00c2_35f0, &args![a, b]).bool());
+    }
+
+    #[test]
+    fn save_binary_writes_link_axis_and_fields() {
+        const SAVE_LINK: u32 = 0x0f60_0010;
+        let mut e = Engine::new();
+        e.register(MODIFIER_SAVE_BINARY, |_, _| Ret::default());
+        e.register(SAVE_LINK, |_, _| Ret::default());
+        e.register(POINT_SAVE_BINARY, |_, _| Ret::default());
+        let writes = test_stream::writes(&mut e);
+        let stream = test_stream::new_output(&mut e);
+        let vtable = e.mem.alloc(0x40);
+        e.mem.set_u32(stream, vtable);
+        e.mem.set_u32(vtable + STREAM_SAVE_LINK_ID, SAVE_LINK);
+        let this = gravity(&mut e);
+        e.set(this, NiPSysGravityModifier::m_pkGravityObj, 0x7700);
+        e.call_log = Some(vec![]);
+        e.call(0x00c2_37c0, &args![this, stream]);
+        assert_eq!(calls_to(&e, SAVE_LINK), vec![vec![stream, 0x7700]]);
+        assert_eq!(
+            calls_to(&e, POINT_SAVE_BINARY),
+            vec![vec![this.addr() + 0x1c, stream]]
+        );
+        assert_eq!(
+            *writes.borrow(),
+            vec![
+                (0.5f32.to_le_bytes().to_vec(), 4),
+                (2.0f32.to_le_bytes().to_vec(), 4),
+                (vec![1, 0, 0, 0], 4),
+                (3.0f32.to_le_bytes().to_vec(), 4),
+                (4.0f32.to_le_bytes().to_vec(), 4),
+                (vec![1], 1),
+            ]
+        );
+    }
+
+    #[test]
+    fn get_viewer_strings_names_the_force_type() {
+        for (force, text) in [
+            (0u32, TEXT_FORCE_PLANAR),
+            (1, TEXT_FORCE_SPHERICAL),
+            (2, TEXT_UNKNOWN),
+        ] {
+            let mut e = Engine::new();
+            test_stream::global_word(&mut e, RTTI, 0x0abc_000a);
+            e.register(MODIFIER_GET_VIEWER_STRINGS, |_, _| Ret::default());
+            e.register(POINT_GET_VIEWER_STRING, |_, _| Ret {
+                eax: 0x4444,
+                ..Ret::default()
+            });
+            let stored = test_stream::viewer_strings(&mut e);
+            let strings = test_stream::strings(&mut e);
+            let this = gravity(&mut e);
+            e.set(this, NiPSysGravityModifier::m_eType, force);
+            e.call_log = Some(vec![]);
+            e.call(0x00c2_38c0, &args![this, strings]);
+            assert_eq!(
+                *stored.borrow(),
+                vec![
+                    0x0abc_000a,
+                    LABEL_GRAVITY_OBJECT,
+                    0x4444,
+                    LABEL_DECAY,
+                    LABEL_STRENGTH,
+                    LABEL_TURBULENCE,
+                    LABEL_TURBULENCE_SCALE,
+                    LABEL_FORCE_TYPE,
+                    LABEL_WORLD_ALIGNED
+                ]
+            );
+            assert_eq!(
+                calls_to(&e, NI_GET_VIEWER_STRING_FIXED),
+                vec![
+                    vec![LABEL_GRAVITY_OBJECT, TEXT_NONE],
+                    vec![LABEL_FORCE_TYPE, text]
+                ]
+            );
+            assert_eq!(
+                calls_to(&e, POINT_GET_VIEWER_STRING),
+                vec![vec![this.addr() + 0x1c, LABEL_GRAVITY_AXIS]]
+            );
+            assert_eq!(
+                calls_to(&e, NI_GET_VIEWER_STRING_FLOAT)[3],
+                vec![LABEL_TURBULENCE_SCALE, 4.0f32.to_bits()]
+            );
+            assert_eq!(
+                calls_to(&e, NI_GET_VIEWER_STRING_BOOL),
+                vec![vec![LABEL_WORLD_ALIGNED, 1]]
+            );
         }
     }
 }

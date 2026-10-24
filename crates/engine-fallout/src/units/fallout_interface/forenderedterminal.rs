@@ -545,6 +545,309 @@ pub fn fo_rendered_terminal_play_shutdown_sound(e: &mut Engine) {
     });
 }
 
+// ---------------------------------------------------------------------------
+// Batch n059x: `FORenderedTerminal::Initialize`.
+
+/// `007f9050` (`RET 8`: a word and a `float`; the setting `011db674`), the model loader
+/// (`ModelLoader::LoadFile`, `00447080`, `RET 0x18`) and `SwapPlatformLanguageTextures`
+/// (`004b7660`, cdecl).
+const MENU_007F9050: u32 = 0x007f_9050;
+const SETTING_011DB674: u32 = 0x011d_b674;
+const MODEL_LOAD_FILE: u32 = 0x0044_7080;
+const SWAP_LANGUAGE_TEXTURES: u32 = 0x004b_7660;
+/// The fixed-string constructor (`00438170`, `RET 4`) and destructor (`004381b0`),
+/// `"screen"` (`01078bc0`) and `"PowerButton"` (`01078bb4`); the child node getter
+/// (`0043b4a0`, `RET 4`).
+const FIXED_STRING_CONSTRUCT: u32 = 0x0043_8170;
+const FIXED_STRING_DESTRUCT: u32 = 0x0043_81b0;
+const SCREEN_NAME: u32 = 0x0107_8bc0;
+const POWER_BUTTON_NAME: u32 = 0x0107_8bb4;
+const CHILD_NODE_0043B4A0: u32 = 0x0043_b4a0;
+/// The model's rotation: `NiMatrix3::MakeYRotation` (`0043f850`, `RET 4`), `004a0c90`
+/// (`RET 4`), `NiMatrix3::operator*` (`0043f8d0`, `RET 8`) and the rotation setter
+/// (`0043fa80`, `RET 4`) with 1.57 (`010559cc`).
+const MAKE_Y_ROTATION: u32 = 0x0043_f850;
+const MATRIX_004A0C90: u32 = 0x004a_0c90;
+const MATRIX_MULTIPLY: u32 = 0x0043_f8d0;
+const SET_ROTATE_0043FA80: u32 = 0x0043_fa80;
+const TERMINAL_ANGLE_010559CC: u32 = 0x0105_59cc;
+/// The model's position settings (`011db65c`, `011db614`, `011db62c`), `00707b50` and
+/// the byte `011f9426`, and 0.75 (`0101de30`, `double`).
+const SETTING_011DB65C: u32 = 0x011d_b65c;
+const SETTING_011DB614: u32 = 0x011d_b614;
+const SETTING_011DB62C: u32 = 0x011d_b62c;
+const INTERFACE_00707B50: u32 = 0x0070_7b50;
+const FLAG_011F9426: u32 = 0x011f_9426;
+const THREE_QUARTERS_DOUBLE: u32 = 0x0101_de30;
+/// The camera: the allocator (`00aa13e0`, cdecl), `NiCamera`'s constructor (`00a712f0`),
+/// the four-float set (`00414430`, `RET 0x10`), `00712e60` (`RET 4`), the matrix row
+/// set (`007133b0`, `RET 0x10`), the rotation `011a9448`, `00733fd0` (`RET 4`),
+/// `NiFrustum::NiFrustum` (`00a71b70`, `RET 4`), `0045c670` and its slot +0x100
+/// (`ST0`), the setting `01203144`, `00507700` (`RET 4`), the screen width (the word
+/// `011f9434` with the flag, else `004dc200`) and height (`004dc1f0`), 0.75
+/// (`01016264`), the settings `01203150` and `011db5ec`, pi/180 (`01023128`,
+/// `double`), `0057dd70` (cdecl, a `float`, `ST0`) and `NiCamera::SetViewFrustum`
+/// (`00a6faf0`, `RET 4`).
+const ALLOCATE_00AA13E0: u32 = 0x00aa_13e0;
+const CAMERA_CONSTRUCT_00A712F0: u32 = 0x00a7_12f0;
+const FOUR_FLOATS_00414430: u32 = 0x0041_4430;
+const CAMERA_00712E60: u32 = 0x0071_2e60;
+const MATRIX_ROW_007133B0: u32 = 0x0071_33b0;
+const CAMERA_ROTATION_011A9448: u32 = 0x011a_9448;
+const CAMERA_00733FD0: u32 = 0x0073_3fd0;
+const FRUSTUM_CONSTRUCT: u32 = 0x00a7_1b70;
+const SETTING_01203144: u32 = 0x0120_3144;
+const CAMERA_00507700: u32 = 0x0050_7700;
+const SCREEN_WIDTH_011F9434: u32 = 0x011f_9434;
+const SCREEN_WIDTH_004DC200: u32 = 0x004d_c200;
+const SCREEN_HEIGHT_004DC1F0: u32 = 0x004d_c1f0;
+const FRUSTUM_SCALE_01016264: u32 = 0x0101_6264;
+const SETTING_01203150: u32 = 0x0120_3150;
+const SETTING_011DB5EC: u32 = 0x011d_b5ec;
+const DEGREES_TO_RADIANS: u32 = 0x0102_3128;
+const ANGLE_0057DD70: u32 = 0x0057_dd70;
+const SET_VIEW_FRUSTUM: u32 = 0x00a6_faf0;
+/// `FORenderedMenu::PrepareGeometry` (`007fc2d0`, `RET 4`), `007f9010` (`RET 4`),
+/// `004dc540` (`RET 4`), `0040df90`, `NiAVObject::RemoveProperty` (`00a5b230`, `RET
+/// 4`), the property's constructor (`004391c0`, 0x1c bytes),
+/// `NiAVObject::AttachProperty` (`00439410`, `RET 4`), `007fd620` (`RET 4`),
+/// `FORenderedMenu::Initialize` (`007fc150`), the root's translation (`0043c490`).
+const PREPARE_GEOMETRY: u32 = 0x007f_c2d0;
+const MENU_007F9010: u32 = 0x007f_9010;
+const MENU_004DC540: u32 = 0x004d_c540;
+const PROPERTY_0040DF90: u32 = 0x0040_df90;
+const REMOVE_PROPERTY: u32 = 0x00a5_b230;
+const PROPERTY_CONSTRUCT_004391C0: u32 = 0x0043_91c0;
+const ATTACH_PROPERTY: u32 = 0x0043_9410;
+const MENU_007FD620: u32 = 0x007f_d620;
+const RENDERED_MENU_INITIALIZE: u32 = 0x007f_c150;
+const TRANSLATE_0043C490: u32 = 0x0043_c490;
+/// `NiAVObject::GetWorldBound` (`0043d450`), the bound's radius (`0084d030`, `ST0`), 3.0
+/// (`01021928`, `double`), `ShadowSceneNode::AddAllLightsFromNode_Recurse`
+/// (`00b5ca70`, `RET 8`).
+const GET_WORLD_BOUND: u32 = 0x0043_d450;
+const BOUND_RADIUS_0084D030: u32 = 0x0084_d030;
+const THREE_DOUBLE: u32 = 0x0102_1928;
+const ADD_ALL_LIGHTS: u32 = 0x00b5_ca70;
+/// `FORenderedMenu::SetScreenTexture` (`007fae70`, `RET 4`), `00810530` (`RET 4`),
+/// `BSFadeNode::SetLODMultType` (`00b4dec0`, `RET 4`), `SystemColorManager::GetInstance`
+/// (`00718b60`), `SystemColorManager::GetColor` (`00719060`, `RET 8`) and `007f7fb0`
+/// (`RET 4`).
+const SET_SCREEN_TEXTURE: u32 = 0x007f_ae70;
+const MENU_00810530: u32 = 0x0081_0530;
+const SET_LOD_MULT_TYPE: u32 = 0x00b4_dec0;
+const SYSTEM_COLOR_MANAGER: u32 = 0x0071_8b60;
+const SYSTEM_COLOR_GET: u32 = 0x0071_9060;
+const MENU_007F7FB0: u32 = 0x007f_7fb0;
+
+/// A setting's `float` (`00403e20`, then `FLD`).
+fn setting_float(e: &mut Engine, setting: u32) -> u32 {
+    let value = e.call(SETTING_FLOAT_VALUE, &args![setting]).u32();
+    x87_quiet_bits(e.mem.u32(value))
+}
+
+/// A named object of `model`: its slot +0x9c with a fixed string built (and destroyed
+/// after) in the local at `local`.
+fn named_object(e: &mut Engine, model: u32, name: u32, local: u32) -> u32 {
+    let fixed = e.call(FIXED_STRING_CONSTRUCT, &args![local, name]).u32();
+    let object = e.vcall(model, 0x9c, &args![fixed]).u32();
+    e.call(FIXED_STRING_DESTRUCT, &args![local]);
+    object
+}
+
+// Translated from 007feeb0 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 007feeb0 - the C++ exception-unwinding frame (FS:[0] around the fixed strings and the allocations) is not translated.
+/// `FORenderedTerminal::Initialize` (Xbox PDB, `thiscall`): `007f9050(1, setting
+/// 011db674)`; the terminal model (the static holder `011db63c`, loaded and its textures
+/// swapped when empty); its `"screen"` geometry (or the first child's) and its
+/// `"PowerButton"` (or its first child) as the exit button (+0xe4); the model rotated
+/// (1.57 about y), placed at the settings `011db65c` (times 0.75 unless `00707b50` or
+/// the byte `011f9426`), `011db614` and `011db62c`, and updated; a new camera (0x114
+/// bytes) set up with its frustum (near the setting `01203144`, far the slot +0x100 of
+/// `0045c670()`, the sides from `0057dd70` of the settings `01203150` times `011db5ec`
+/// in degrees, scaled by 0.75 and the screen's aspect); the geometry prepared and given
+/// a new property (0x1c bytes, `004391c0`) for the one `0040df90` names; the rendered
+/// menu initialised, the root's translation kept (+0xd8) and its x set (`01078bb0`); the
+/// model's lights added to the shadow scene node (within three times its bound's
+/// radius; without any, `InitLight`); the screen texture cleared, the fade node's LOD
+/// type 8, the system color 3 applied when set (`007f7fb0`); the fade 1.0 (+0xe8).
+pub fn fo_rendered_terminal_initialize(e: &mut Engine, this: Ptr<FORenderedTerminal>) {
+    let base = this.addr();
+    let value = setting_float(e, SETTING_011DB674);
+    e.call(MENU_007F9050, &args![this, 1u32, value]);
+    // The frame below `EBP`: `local(n)` is `EBP - n`.
+    e.with_stack(0x180, |e, frame| {
+        let ebp = frame.addr() + 0x180;
+        let local = |offset: u32| ebp - offset;
+        let model = if terminal_geometry(e) == 0 {
+            let path = e.global::<u32>(TERMINAL_MODEL_PATH_011A0BB0);
+            let loader = e.global::<u32>(MODEL_LOADER_011C3B3C);
+            let model = e
+                .call(
+                    MODEL_LOAD_FILE,
+                    &args![loader, path, 0u32, 1u32, 0u32, 0u32, 0u32],
+                )
+                .u32();
+            e.call(HOLDER_SET_0066B0D0, &args![HOLDER_011DB63C, model]);
+            e.call(SWAP_LANGUAGE_TEXTURES, &args![model]);
+            model
+        } else {
+            terminal_geometry(e)
+        };
+        let screen = named_object(e, model, SCREEN_NAME, local(0x100));
+        let mut geometry = e.vcall(screen, 0x18, &args![]).u32();
+        if geometry == 0 {
+            let node = e.vcall(screen, 0xc, &args![]).u32();
+            let child = e.call(CHILD_NODE_0043B4A0, &args![node, 0u32]).u32();
+            geometry = e.vcall(child, 0x18, &args![]).u32();
+        }
+        let button = named_object(e, model, POWER_BUTTON_NAME, local(0x104));
+        if e.vcall(button, 0x18, &args![]).u32() != 0 {
+            e.call(HOLDER_SET_0066B0D0, &args![base + 0xe4, button]);
+        } else {
+            let node = e.vcall(button, 0xc, &args![]).u32();
+            let child = e.call(CHILD_NODE_0043B4A0, &args![node, 0u32]).u32();
+            e.call(HOLDER_SET_0066B0D0, &args![base + 0xe4, child]);
+        }
+        let (turn, tilt, product) = (local(0x58), local(0xf8), local(0x128));
+        e.call(POINT_INIT_006815C0, &args![turn]);
+        e.call(POINT_INIT_006815C0, &args![tilt]);
+        let angle = x87_quiet_bits(e.global::<u32>(TERMINAL_ANGLE_010559CC));
+        e.call(MAKE_Y_ROTATION, &args![turn, angle]);
+        e.call(MATRIX_004A0C90, &args![tilt, angle]);
+        let rotation = e.call(MATRIX_MULTIPLY, &args![tilt, product, turn]).u32();
+        e.call(SET_ROTATE_0043FA80, &args![model, rotation]);
+        let mut x = setting_float(e, SETTING_011DB65C);
+        if !e.call(INTERFACE_00707B50, &args![]).bool() && e.mem.u8(FLAG_011F9426) == 0 {
+            let scale: f64 = e.global(THREE_QUARTERS_DOUBLE);
+            x = x87_store32(x87_mul(x87_load32(x), scale));
+        }
+        let z = setting_float(e, SETTING_011DB62C);
+        let y = setting_float(e, SETTING_011DB614);
+        e.call(
+            SET_TRANSLATE_004BC1F0,
+            &args![model, x87_quiet_bits(x), y, z],
+        );
+        e.call(
+            UPDATE_DATA_INIT_0043D410,
+            &args![local(0x24), x87_store32(0.0), 0u32, 0u32],
+        );
+        e.call(UPDATE_00A59C60, &args![model, local(0x24)]);
+        let block = e.call(ALLOCATE_00AA13E0, &args![0x114u32]).u32();
+        let camera = if block != 0 {
+            e.call(CAMERA_CONSTRUCT_00A712F0, &args![block]).u32()
+        } else {
+            0
+        };
+        let (zero, one) = (x87_store32(0.0), x87_store32(1.0));
+        let viewport = local(0x34);
+        e.call(FOUR_FLOATS_00414430, &args![viewport, zero, one, one, zero]);
+        e.call(CAMERA_00712E60, &args![camera, viewport]);
+        let rows = local(0xa4);
+        e.call(POINT_INIT_006815C0, &args![rows]);
+        e.call(MATRIX_ROW_007133B0, &args![rows, 0u32, zero, zero, one]);
+        e.call(MATRIX_ROW_007133B0, &args![rows, 1u32, one, zero, zero]);
+        e.call(MATRIX_ROW_007133B0, &args![rows, 2u32, zero, one, zero]);
+        e.call(
+            SET_ROTATE_0043FA80,
+            &args![camera, CAMERA_ROTATION_011A9448],
+        );
+        e.call(CAMERA_00733FD0, &args![camera, one]);
+        // The frustum at `EBP - 0xc4`: left, right, top, bottom, near (-0xb4), far
+        // (-0xb0) and the orthographic byte (-0xac).
+        let frustum = local(0xc4);
+        e.call(FRUSTUM_CONSTRUCT, &args![frustum, 0u32]);
+        let object = e.call(GETTER_0045C670, &args![]).u32();
+        let far = e.vcall(object, 0x100, &args![]).f64();
+        e.mem.set_u32(local(0xb0), x87_store32(far));
+        let near = setting_float(e, SETTING_01203144);
+        e.mem.set_u32(local(0xb4), near);
+        let ratio = x87_store32(x87_div(
+            x87_load32(e.mem.u32(local(0xb0))),
+            x87_m32(e.mem.u32(local(0xb4))),
+        ));
+        e.call(CAMERA_00507700, &args![camera, x87_quiet_bits(ratio)]);
+        let width = if e.mem.u8(FLAG_011F9426) != 0 {
+            e.global::<i32>(SCREEN_WIDTH_011F9434)
+        } else {
+            e.call(SCREEN_WIDTH_004DC200, &args![]).i32()
+        };
+        let height = e.call(SCREEN_HEIGHT_004DC1F0, &args![]).i32();
+        let aspect = x87_store32(x87_div(f64::from(width), f64::from(height)));
+        let scale = x87_quiet_bits(e.global::<u32>(FRUSTUM_SCALE_01016264));
+        let degrees = setting_float(e, SETTING_01203150);
+        let radians = x87_mul(x87_load32(degrees), e.global::<f64>(DEGREES_TO_RADIANS));
+        let factor = setting_float(e, SETTING_011DB5EC);
+        let angle = x87_store32(x87_mul(x87_load32(factor), radians));
+        let side = |e: &mut Engine| e.call(ANGLE_0057DD70, &args![x87_quiet_bits(angle)]).f64();
+        let left = -side(e);
+        e.mem
+            .set_u32(frustum, x87_store32(x87_mul(left, x87_m32(scale))));
+        let right = side(e);
+        e.mem
+            .set_u32(frustum + 4, x87_store32(x87_mul(right, x87_m32(scale))));
+        let bottom = -side(e);
+        let bottom = x87_mul(x87_mul(bottom, x87_m32(aspect)), x87_m32(scale));
+        e.mem.set_u32(frustum + 0xc, x87_store32(bottom));
+        let top = side(e);
+        let top = x87_mul(x87_mul(top, x87_m32(aspect)), x87_m32(scale));
+        e.mem.set_u32(frustum + 8, x87_store32(top));
+        e.mem.set_u8(local(0xac), 0);
+        e.call(SET_VIEW_FRUSTUM, &args![camera, frustum]);
+        e.call(
+            UPDATE_DATA_INIT_0043D410,
+            &args![local(0x18), x87_store32(0.0), 0u32, 0u32],
+        );
+        e.call(UPDATE_00A59C60, &args![camera, local(0x18)]);
+        e.call(PREPARE_GEOMETRY, &args![this, geometry]);
+        e.call(MENU_007F9010, &args![this, geometry]);
+        e.call(MENU_004DC540, &args![this, model]);
+        let removed = e.call(PROPERTY_0040DF90, &args![]).u32();
+        e.call(REMOVE_PROPERTY, &args![geometry, removed]);
+        let block = e.call(ALLOCATE_00AA13E0, &args![0x1cu32]).u32();
+        let property = if block != 0 {
+            e.call(PROPERTY_CONSTRUCT_004391C0, &args![block]).u32()
+        } else {
+            0
+        };
+        e.call(ATTACH_PROPERTY, &args![geometry, property]);
+        e.call(MENU_007FD620, &args![this, camera]);
+        e.call(RENDERED_MENU_INITIALIZE, &args![this]);
+        let root = e.call(MENU_ROOT_0063D040, &args![this]).u32();
+        let position = e.call(TRANSLATE_0043C490, &args![root]).u32();
+        for i in 0..3 {
+            let word = e.mem.u32(position + 4 * i);
+            e.mem.set_u32(base + 0xd8 + 4 * i, word);
+        }
+        let offset = x87_quiet_bits(e.global::<u32>(ROOT_OFFSET_01078BB0));
+        let root = e.call(MENU_ROOT_0063D040, &args![this]).u32();
+        e.call(SET_TRANSLATE_004BC1F0, &args![root, offset, zero, zero]);
+        let bound = e.call(GET_WORLD_BOUND, &args![model]).u32();
+        let radius = e.call(BOUND_RADIUS_0084D030, &args![bound]).f64();
+        let reach = x87_store32(x87_mul(radius, e.global::<f64>(THREE_DOUBLE)));
+        let scene = e.call(TES_00450B80, &args![1u32]).u32();
+        let lights = e
+            .call(ADD_ALL_LIGHTS, &args![scene, model, x87_quiet_bits(reach)])
+            .u32();
+        if lights == 0 {
+            fo_rendered_terminal_init_light(e, this);
+        }
+        e.call(SET_SCREEN_TEXTURE, &args![this, 0u32]);
+        e.call(MENU_00810530, &args![this, 0u32]);
+        let fade = terminal_geometry(e);
+        e.call(SET_LOD_MULT_TYPE, &args![fade, 8u32]);
+        let color = local(0x80);
+        e.call(FOUR_FLOATS_00414430, &args![color, zero, zero, zero, zero]);
+        let manager = e.call(SYSTEM_COLOR_MANAGER, &args![]).u32();
+        if e.call(SYSTEM_COLOR_GET, &args![manager, 3u32, color])
+            .bool()
+        {
+            e.call(MENU_007F7FB0, &args![this, color]);
+        }
+    });
+    e.set(this, FORenderedTerminal::fLastFadePercent, 1.0);
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -583,6 +886,10 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x007f_fd50, fn_007ffd50(Ptr<FORenderedTerminal>)),
         entry!(0x007f_fdb0, fn_007ffdb0(Ptr<FORenderedTerminal>)),
         entry!(0x007f_fe40, fo_rendered_terminal_play_shutdown_sound()),
+        entry!(
+            0x007f_eeb0,
+            fo_rendered_terminal_initialize(Ptr<FORenderedTerminal>)
+        ),
     ]
 }
 
@@ -1035,5 +1342,205 @@ mod n051_tests {
             calls_to(&e, SETTING_SET_0045CE80),
             vec![vec![SETTING_011F9148, 5]]
         );
+    }
+}
+
+#[cfg(test)]
+mod n059_tests {
+    use super::*;
+
+    const VTABLE: u32 = 0x0f00_0000;
+    fn slot(offset: u32) -> u32 {
+        0x0e00_0000 + offset
+    }
+
+    const STUBBED: &[u32] = &[
+        MENU_007F9050,
+        MODEL_LOAD_FILE,
+        HOLDER_SET_0066B0D0,
+        SWAP_LANGUAGE_TEXTURES,
+        FIXED_STRING_CONSTRUCT,
+        FIXED_STRING_DESTRUCT,
+        CHILD_NODE_0043B4A0,
+        POINT_INIT_006815C0,
+        MAKE_Y_ROTATION,
+        MATRIX_004A0C90,
+        MATRIX_MULTIPLY,
+        SET_ROTATE_0043FA80,
+        INTERFACE_00707B50,
+        SET_TRANSLATE_004BC1F0,
+        UPDATE_DATA_INIT_0043D410,
+        UPDATE_00A59C60,
+        ALLOCATE_00AA13E0,
+        CAMERA_CONSTRUCT_00A712F0,
+        FOUR_FLOATS_00414430,
+        CAMERA_00712E60,
+        MATRIX_ROW_007133B0,
+        CAMERA_00733FD0,
+        FRUSTUM_CONSTRUCT,
+        GETTER_0045C670,
+        CAMERA_00507700,
+        SCREEN_WIDTH_004DC200,
+        SCREEN_HEIGHT_004DC1F0,
+        ANGLE_0057DD70,
+        SET_VIEW_FRUSTUM,
+        PREPARE_GEOMETRY,
+        MENU_007F9010,
+        MENU_004DC540,
+        PROPERTY_0040DF90,
+        REMOVE_PROPERTY,
+        PROPERTY_CONSTRUCT_004391C0,
+        ATTACH_PROPERTY,
+        MENU_007FD620,
+        RENDERED_MENU_INITIALIZE,
+        MENU_ROOT_0063D040,
+        TRANSLATE_0043C490,
+        GET_WORLD_BOUND,
+        BOUND_RADIUS_0084D030,
+        TES_00450B80,
+        ADD_ALL_LIGHTS,
+        SET_SCREEN_TEXTURE,
+        MENU_00810530,
+        SET_LOD_MULT_TYPE,
+        SYSTEM_COLOR_MANAGER,
+        SYSTEM_COLOR_GET,
+        MENU_007F7FB0,
+        CREATE_MENU_LIGHT,
+        PRINT_MESSAGE,
+    ];
+
+    fn calls_to(e: &Engine, callee: u32) -> Vec<Vec<u32>> {
+        e.call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|(address, _)| *address == callee)
+            .map(|(_, words)| words.clone())
+            .collect()
+    }
+
+    fn answer(e: &mut Engine, addr: u32, value: u32) {
+        e.register_double(addr, move |_, _| value.into_ret());
+    }
+
+    fn st0(e: &mut Engine, addr: u32, value: f64) {
+        e.register_double(addr, move |_, _| Ret {
+            st0: value,
+            ..Ret::default()
+        });
+    }
+
+    #[test]
+    fn initialize_loads_the_model_and_sets_up_the_camera() {
+        let mut e = Engine::new();
+        for page in [
+            0x011d_b000,
+            0x011a_0000,
+            0x011c_3000,
+            0x011f_9000,
+            0x0120_3000,
+            0x0101_6000,
+            0x0101_d000,
+            0x0102_1000,
+            0x0102_3000,
+            0x0105_5000,
+            0x0107_8000,
+        ] {
+            e.map(page, 0x1000);
+        }
+        for &addr in STUBBED {
+            e.register(addr, |_, _| Ret::default());
+        }
+        let slots: Vec<u32> = (0..0x48).map(|i| slot(4 * i)).collect();
+        for &s in &slots {
+            e.register(s, |_, _| Ret::default());
+        }
+        e.put_vtable(VTABLE, &slots);
+        e.register(HOLDER_GET_00559450, |e, a| e.mem.u32(a[0]).into_ret());
+        e.register(HOLDER_SET_0066B0D0, |e, a| {
+            e.mem.set_u32(a[0], a[1]);
+            Ret::default()
+        });
+        // Every setting's value is its own address plus 0x800.
+        e.register(SETTING_FLOAT_VALUE, |_, a| (a[0] + 0x800).into_ret());
+        for (setting, value) in [
+            (SETTING_011DB674, 2.0f32),
+            (SETTING_011DB65C, 8.0),
+            (SETTING_011DB614, 3.0),
+            (SETTING_011DB62C, 4.0),
+            (SETTING_01203144, 5.0),
+            (SETTING_01203150, 90.0),
+            (SETTING_011DB5EC, 0.5),
+        ] {
+            e.set_global(setting + 0x800, value);
+        }
+        e.set_global(TERMINAL_ANGLE_010559CC, 1.57f32);
+        e.set_global(THREE_QUARTERS_DOUBLE, 0.75f64);
+        e.set_global(FRUSTUM_SCALE_01016264, 0.75f32);
+        e.set_global(DEGREES_TO_RADIANS, std::f64::consts::PI / 180.0);
+        e.set_global(THREE_DOUBLE, 3.0f64);
+        e.set_global(ROOT_OFFSET_01078BB0, 30_490.0f32);
+        let model = e.mem.alloc(0x10);
+        e.mem.set_u32(model, VTABLE);
+        answer(&mut e, MODEL_LOAD_FILE, model);
+        // The model's named objects are geometry (slot +0x18 answers non-zero).
+        let named = e.mem.alloc(0x10);
+        e.mem.set_u32(named, VTABLE);
+        answer(&mut e, slot(0x9c), named);
+        answer(&mut e, slot(0x18), 0x6600);
+        let camera = e.mem.alloc(0x114);
+        answer(&mut e, ALLOCATE_00AA13E0, camera);
+        e.register(CAMERA_CONSTRUCT_00A712F0, |_, a| a[0].into_ret());
+        let getter = e.mem.alloc(0x10);
+        e.mem.set_u32(getter, VTABLE);
+        answer(&mut e, GETTER_0045C670, getter);
+        st0(&mut e, slot(0x100), 1000.0);
+        answer(&mut e, SCREEN_WIDTH_004DC200, 1600);
+        answer(&mut e, SCREEN_HEIGHT_004DC1F0, 800);
+        st0(&mut e, ANGLE_0057DD70, 2.0);
+        let position = e.mem.alloc(0xc);
+        e.mem.set_f32(position, 7.0);
+        answer(&mut e, TRANSLATE_0043C490, position);
+        answer(&mut e, MENU_ROOT_0063D040, 0x5500);
+        st0(&mut e, BOUND_RADIUS_0084D030, 10.0);
+        answer(&mut e, ADD_ALL_LIGHTS, 1);
+        let this = Ptr::new(e.mem.alloc(0xf0));
+        e.mem.set_u32(this.addr(), VTABLE);
+        e.call_log = Some(vec![]);
+        e.call(0x007f_eeb0, &args![this]);
+        assert_eq!(
+            calls_to(&e, MENU_007F9050),
+            vec![vec![this.addr(), 1, 2.0f32.to_bits()]]
+        );
+        assert_eq!(e.mem.u32(HOLDER_011DB63C), model);
+        assert_eq!(calls_to(&e, SWAP_LANGUAGE_TEXTURES), vec![vec![model]]);
+        assert_eq!(e.mem.u32(this.addr() + 0xe4), named);
+        // x scaled by 0.75 (no `00707b50`, no flag), y and z from the settings.
+        assert_eq!(
+            calls_to(&e, SET_TRANSLATE_004BC1F0)[0],
+            vec![model, 6.0f32.to_bits(), 3.0f32.to_bits(), 4.0f32.to_bits()]
+        );
+        assert_eq!(
+            calls_to(&e, CAMERA_00507700),
+            vec![vec![camera, 200.0f32.to_bits()]]
+        );
+        // The frustum: the sides from 2.0, scaled by 0.75 and the 2.0 aspect.
+        let frustum = calls_to(&e, SET_VIEW_FRUSTUM)[0][1];
+        let side = |offset: u32| e.mem.f32(frustum + offset);
+        assert_eq!(
+            [side(0), side(4), side(8), side(0xc)],
+            [-1.5, 1.5, 3.0, -3.0]
+        );
+        assert_eq!([side(0x10), side(0x14)], [5.0, 1000.0]);
+        assert_eq!(e.mem.f32(this.addr() + 0xd8), 7.0);
+        assert_eq!(
+            calls_to(&e, SET_TRANSLATE_004BC1F0)[1],
+            vec![0x5500, 30_490.0f32.to_bits(), 0, 0]
+        );
+        assert_eq!(calls_to(&e, ADD_ALL_LIGHTS)[0][2], 30.0f32.to_bits());
+        assert!(calls_to(&e, CREATE_MENU_LIGHT).is_empty());
+        assert_eq!(calls_to(&e, SET_LOD_MULT_TYPE), vec![vec![model, 8]]);
+        assert!(calls_to(&e, MENU_007F7FB0).is_empty());
+        assert_eq!(e.get(this, FORenderedTerminal::fLastFadePercent), 1.0);
     }
 }

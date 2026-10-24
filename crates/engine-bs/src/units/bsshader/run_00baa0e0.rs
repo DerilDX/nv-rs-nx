@@ -212,9 +212,89 @@ pub fn fn_00baa430(e: &mut Engine, _this: Ptr, _unused_0: u32) {
     }
 }
 
+/// The sized free `00aa1460` (`cdecl`: block, size).
+const FREE_SIZED_00AA1460: u32 = 0x00aa_1460;
+
+// Translated from 00baa140 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`run_00baa0e0`): the shader property's scalar deleting
+/// destructor, `thiscall`, one word: `00baa0e0`, then the 0x60-byte free (`00aa1460`) when bit
+/// 0 of `flags` is set. Answers `this`.
+pub fn fn_00baa140(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    fn_00baa0e0(e, this);
+    if flags as u8 & 1 != 0 {
+        e.call(FREE_SIZED_00AA1460, &args![this, 0x60u32]);
+    }
+    this
+}
+
+// Translated from 00baa210 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed (Ghidra made no function of it): slot 6 of the vtable `010b895c`, `thiscall`, no
+/// stack words: a tail jump to slot 6 (+0x18) of effect 0 of the array at +0xc (what it
+/// answers in EAX, EDX and ST0 is this function's result).
+pub fn fn_00baa210(e: &mut Engine, this: Ptr) -> Ret {
+    let effect = e.mem.u32(e.mem.u32(this.addr() + 0xc));
+    e.vcall(effect, 0x18, &args![])
+}
+
+/// The uniform-form entry of [`fn_00baa210`]: `this`; the tail call's registers pass through.
+fn fn_00baa210_entry(e: &mut Engine, a: &[u32]) -> Ret {
+    fn_00baa210(e, Ptr::new(a[0]))
+}
+
+/// `ImageSpaceTexture::GetTexture` (engine map, `00ba3780`; `thiscall`, no stack words) and
+/// 2^32 as a `float` (`01099378`).
+const GET_TEXTURE_00BA3780: u32 = 0x00ba_3780;
+const TWO_TO_32_01099378: u32 = 0x0109_9378;
+
+/// `1 / size`, the size read unsigned (`FILD`, plus 2^32 when negative), stored as a `float`.
+fn reciprocal_size(e: &Engine, size: u32) -> u32 {
+    let mut value = f64::from(size as i32);
+    if (size as i32) < 0 {
+        value = x87_add(value, x87_m32(e.global::<u32>(TWO_TO_32_01099378)));
+    }
+    x87_quiet_bits(x87_store32(x87_div(1.0, value)))
+}
+
+// Translated from 00baa330 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed (Ghidra made no function of it): slot 7 of the vtable `010b895c` (its
+/// `UpdateParams`), `thiscall`, one word it does not read. With T the texture of `pTextures[1]`
+/// (+0x2c; `GetTexture`): effect parameter 0 takes pixel constant 0 = (1 / T's slot +0x94,
+/// 1 / T's slot +0x98, 0, 0), the slots asked +0x98 first and their answers read unsigned. The
+/// two zeros and the first reciprocal are pushed before the calls they outlive. Answers true.
+pub fn fn_00baa330(e: &mut Engine, this: Ptr, _unused_0: u32) -> bool {
+    let base = this.addr();
+    let param = e.mem.u32(e.mem.u32(base + 0x1c));
+    let holder = e.mem.u32(e.mem.u32(base + 0x2c) + 4);
+    let texture = e.call(GET_TEXTURE_00BA3780, &args![holder]).u32();
+    let second = e.vcall(texture, 0x98, &args![]).u32();
+    let second = reciprocal_size(e, second);
+    let first = e.vcall(texture, 0x94, &args![]).u32();
+    let first = reciprocal_size(e, first);
+    e.call(
+        PARAM_SET_PIXEL_CONSTANT_00B8A790,
+        &args![param, 0u32, first, second, 0u32, 0u32],
+    );
+    true
+}
+
+// Translated from 00baa3c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`run_00baa0e0`), `thiscall`, no stack words: gives each of the
+/// 0x2c passes at +0x6c to +0x118 to `this`'s vtable slot +0x128.
+pub fn fn_00baa3c0(e: &mut Engine, this: Ptr) {
+    let base = this.addr();
+    for index in 0..0x2cu32 {
+        let pass = e.mem.u32(base + 0x6c + 4 * index);
+        e.vcall(base, 0x128, &args![pass]);
+    }
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x00ba_a140, fn_00baa140(Ptr, u32) -> Ptr),
+        (0x00ba_a210, fn_00baa210_entry as AbiFn),
+        entry!(0x00ba_a330, fn_00baa330(Ptr, u32) -> bool),
+        entry!(0x00ba_a3c0, fn_00baa3c0(Ptr)),
         entry!(0x00ba_a160, fn_00baa160(Ptr) -> Ptr),
         entry!(0x00ba_a0e0, fn_00baa0e0(Ptr)),
         entry!(0x00ba_a180, fn_00baa180(Ptr)),
@@ -434,5 +514,124 @@ mod effect_tests {
                 0x7f80_0013
             ]
         );
+    }
+}
+
+#[cfg(test)]
+mod n070_tests {
+    use super::*;
+
+    fn calls(e: &Engine, addr: u32) -> Vec<Vec<u32>> {
+        e.call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|(a, _)| *a == addr)
+            .map(|(_, w)| w.clone())
+            .collect()
+    }
+
+    /// Slot doubles: `SLOTS + offset`.
+    const SLOTS: u32 = 0x0ea0_0000;
+
+    fn object(e: &mut Engine, size: u32) -> u32 {
+        let vtable = e.mem.alloc(0x130);
+        for offset in (0..0x130u32).step_by(4) {
+            e.mem.set_u32(vtable + offset, SLOTS + offset);
+        }
+        let object = e.mem.alloc(size);
+        e.mem.set_u32(object, vtable);
+        object
+    }
+
+    fn rig() -> Engine {
+        let mut e = Engine::new();
+        for offset in (0..0x130u32).step_by(4) {
+            e.register(SLOTS + offset, |_, _| Ret::default());
+        }
+        e.call_log = Some(vec![]);
+        e
+    }
+
+    #[test]
+    fn fn_00baa140_destroys_and_maybe_frees() {
+        let mut e = rig();
+        e.register(FREE_RENDER_PASSES_00BAA000, |_, _| Ret::default());
+        e.register(BASE_DESTRUCT_00A5C240, |_, _| Ret::default());
+        e.register(FREE_SIZED_00AA1460, |_, _| Ret::default());
+        let this = e.mem.alloc(0x60);
+        assert_eq!(e.call(0x00ba_a140, &args![this, 0u32]).u32(), this);
+        assert_eq!(e.mem.u32(this), VTABLE_010B8488);
+        assert!(calls(&e, FREE_SIZED_00AA1460).is_empty());
+        e.call(0x00ba_a140, &args![this, 1u32]);
+        assert_eq!(calls(&e, FREE_SIZED_00AA1460), vec![vec![this, 0x60]]);
+    }
+
+    #[test]
+    fn fn_00baa210_forwards_to_effect_0() {
+        let mut e = rig();
+        e.register(SLOTS + 0x18, |_, _| Ret {
+            eax: 1,
+            ..Ret::default()
+        });
+        let effect = object(&mut e, 8);
+        let list = e.mem.alloc(4);
+        e.mem.set_u32(list, effect);
+        let this = e.mem.alloc(0x30);
+        e.mem.set_u32(this + 0xc, list);
+        assert_eq!(e.call(0x00ba_a210, &args![this]).u32(), 1);
+        assert_eq!(calls(&e, SLOTS + 0x18), vec![vec![effect]]);
+    }
+
+    #[test]
+    fn fn_00baa330_sets_the_reciprocal_sizes() {
+        let mut e = rig();
+        e.map(0x0109_9000, 0x1000);
+        e.set_global(TWO_TO_32_01099378, 4_294_967_296.0f32);
+        e.register(SLOTS + 0x94, |_, _| 4u32.into_ret());
+        e.register(SLOTS + 0x98, |_, _| 0x8000_0000u32.into_ret());
+        e.register(PARAM_SET_PIXEL_CONSTANT_00B8A790, |_, _| Ret::default());
+        let texture = object(&mut e, 8);
+        e.register(GET_TEXTURE_00BA3780, |e, a| e.mem.u32(a[0]).into_ret());
+        let holder = e.mem.alloc(4);
+        e.mem.set_u32(holder, texture);
+        let textures = e.mem.alloc(8);
+        e.mem.set_u32(textures + 4, holder);
+        let params = e.mem.alloc(4);
+        e.mem.set_u32(params, 0x700);
+        let this = e.mem.alloc(0x30);
+        e.mem.set_u32(this + 0x1c, params);
+        e.mem.set_u32(this + 0x2c, textures);
+        assert!(e.call(0x00ba_a330, &args![this, 0u32]).bool());
+        let log = e.call_log.as_ref().unwrap();
+        let order: Vec<u32> = log
+            .iter()
+            .map(|(a, _)| *a)
+            .filter(|a| *a == SLOTS + 0x94 || *a == SLOTS + 0x98)
+            .collect();
+        assert_eq!(order, vec![SLOTS + 0x98, SLOTS + 0x94]);
+        assert_eq!(
+            calls(&e, PARAM_SET_PIXEL_CONSTANT_00B8A790),
+            vec![vec![
+                0x700,
+                0,
+                0.25f32.to_bits(),
+                (1.0f32 / 2_147_483_648.0).to_bits(),
+                0,
+                0
+            ]]
+        );
+    }
+
+    #[test]
+    fn fn_00baa3c0_gives_every_pass_to_slot_0x128() {
+        let mut e = rig();
+        let this = object(&mut e, 0x11c);
+        for index in 0..0x2cu32 {
+            e.mem.set_u32(this + 0x6c + 4 * index, 0x100 + index);
+        }
+        e.call(0x00ba_a3c0, &args![this]);
+        let given: Vec<u32> = calls(&e, SLOTS + 0x128).iter().map(|a| a[1]).collect();
+        assert_eq!(given, (0x100..0x12c).collect::<Vec<u32>>());
     }
 }

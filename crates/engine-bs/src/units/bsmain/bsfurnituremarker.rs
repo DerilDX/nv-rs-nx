@@ -532,9 +532,223 @@ pub fn fn_00c54760(e: &mut Engine) {
     e.set_global::<u32>(FURNITURE_MARKER_NAME, 0);
 }
 
+/// `NiExtraData::SaveBinary` (`00a7b2c0`), `IsEqual` (`00a7b3d0`) and
+/// `GetViewerStrings` (`00a7b580`): `thiscall`, one word each.
+const EXTRA_DATA_SAVE_BINARY: u32 = 0x00a7_b2c0;
+const EXTRA_DATA_IS_EQUAL: u32 = 0x00a7_b3d0;
+const EXTRA_DATA_GET_VIEWER_STRINGS: u32 = 0x00a7_b580;
+/// `0044adf0` (unnamed, `cdecl`, `(stream, &value)`): writes a 32-bit
+/// count; `NiStreamSaveBinary<unsigned char>` (`00a29550`, `cdecl`,
+/// `(stream, &value)`); `NiColor::SaveBinary` (`00a69780`, `thiscall` on
+/// three floats, the stream).
+const SAVE_COUNT: u32 = 0x0044_adf0;
+const SAVE_BYTE: u32 = 0x00a2_9550;
+const THREE_FLOATS_SAVE_BINARY: u32 = 0x00a6_9780;
+/// `NiGetViewerString` (`00a7d330`, the class name) and its integer
+/// (`00a7d510`) and `float` (`00a7d550`) overloads (`cdecl`, `(name,
+/// value)`), `NiPoint3::GetViewerString` (`00a59af0`, `thiscall` on the
+/// point, the name) and the viewer-string array's `Add` (`0096a610`,
+/// `thiscall` on the array, the string's address).
+const NI_GET_VIEWER_STRING: u32 = 0x00a7_d330;
+const NI_GET_VIEWER_STRING_INT: u32 = 0x00a7_d510;
+const NI_GET_VIEWER_STRING_FLOAT: u32 = 0x00a7_d550;
+const POINT_GET_VIEWER_STRING: u32 = 0x00a5_9af0;
+const STRINGS_ADD: u32 = 0x0096_a610;
+/// The viewer-string names: "iMarks" (`010c2b54`), "Mark" (`010c2b4c`), "
+/// Number" (`010c2b44`), " Pos" (`010c2b3c`) and " Heading" (`010c2b30`).
+const NAME_MARKS: u32 = 0x010c_2b54;
+const NAME_MARK: u32 = 0x010c_2b4c;
+const NAME_NUMBER: u32 = 0x010c_2b44;
+const NAME_POSITION: u32 = 0x010c_2b3c;
+const NAME_HEADING: u32 = 0x010c_2b30;
+/// `BSFurnitureMarker`'s mark array (`NiTObjectArray<FurnitureMark>` at
+/// +0xC): its elements (+0x10, 16 bytes each) and its 16-bit element count
+/// (+0x18).
+const MARKS: u32 = 0x0c;
+const MARK_DATA: u32 = 0x10;
+const MARK_COUNT: u32 = 0x18;
+/// `NiStream`'s output stream (+0x250); its write function is at +0xC
+/// (`cdecl (stream, source, size, &count, 1)`), its position at +4.
+const STREAM_OUTPUT: u32 = 0x250;
+
+// Translated from 00a303a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiStreamSaveBinary<unsigned short>` (engine map; `cdecl`, `(stream,
+/// &value)`): two bytes from `value` through the stream's output (the write
+/// function at +0xC, the count word in the stream argument's slot set to
+/// 2), the result added to the output's position.
+pub fn ni_stream_save_binary_unsigned_short(e: &mut Engine, stream: Ptr, value: Ptr) {
+    let output = e.mem.u32(stream.addr() + STREAM_OUTPUT);
+    let write = e.mem.u32(output + 0xc);
+    e.with_stack(4, |e, count| {
+        e.mem.set_u32(count.addr(), 2);
+        let put = e
+            .call(write, &args![output, value, 2u32, count, 1u32])
+            .u32();
+        let position = e.mem.u32(output + 4);
+        e.mem.set_u32(output + 4, position.wrapping_add(put));
+    });
+}
+
+// Translated from 00c54170 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSFurnitureMarker::SaveBinary` (Xbox PDB): `NiExtraData`'s
+/// (`00a7b2c0`), the mark count (the array's 16-bit count widened, through
+/// `0044adf0` from a local), then each mark's `SaveBinary` (`00c54660`).
+pub fn bs_furniture_marker_save_binary(e: &mut Engine, this: Ptr, stream: Ptr) {
+    e.call(EXTRA_DATA_SAVE_BINARY, &args![this, stream]);
+    let count = u32::from(e.mem.u16(this.addr() + MARK_COUNT));
+    e.with_stack(4, |e, local| {
+        e.mem.set_u32(local.addr(), count);
+        e.call(SAVE_COUNT, &args![stream, local]);
+    });
+    for index in 0..count {
+        let mark = (index << 4).wrapping_add(e.mem.u32(this.addr() + MARK_DATA));
+        furniture_mark_save_binary(e, Ptr::new(mark), stream);
+    }
+}
+
+// Translated from 00c541e0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSFurnitureMarker::IsEqual` (Xbox PDB): answers `NiExtraData::IsEqual`
+/// (`00a7b3d0`): its AL as it is.
+pub fn bs_furniture_marker_is_equal(e: &mut Engine, this: Ptr, other: Ptr) -> u8 {
+    e.call(EXTRA_DATA_IS_EQUAL, &args![this, other]).u8()
+}
+
+// Translated from 00c542a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSFurnitureMarker::GetViewerStrings` (Xbox PDB): `NiExtraData`'s
+/// (`00a7b580`), the class name, "iMarks" with the count, then for each
+/// mark "Mark" with its index, " Number" with its number byte, " Pos" with
+/// its offset (`NiPoint3::GetViewerString`) and " Heading" with the heading
+/// (`FILD` of the 16-bit value, `FDIV` by the `double` 1000.0, stored as a
+/// float). Each string is added through `0096a610` with its local's address.
+pub fn bs_furniture_marker_get_viewer_strings(e: &mut Engine, this: Ptr, strings: Ptr) {
+    e.call(EXTRA_DATA_GET_VIEWER_STRINGS, &args![this, strings]);
+    let add = |e: &mut Engine, text: u32| {
+        e.with_stack(4, |e, slot| {
+            e.mem.set_u32(slot.addr(), text);
+            e.call(STRINGS_ADD, &args![strings, slot]);
+        });
+    };
+    let class_name = e.global::<u32>(FURNITURE_MARKER_RTTI);
+    let text = e.call(NI_GET_VIEWER_STRING, &args![class_name]).u32();
+    add(e, text);
+    let count = u32::from(e.mem.u16(this.addr() + MARK_COUNT));
+    let text = e
+        .call(NI_GET_VIEWER_STRING_INT, &args![NAME_MARKS, count])
+        .u32();
+    add(e, text);
+    for index in 0..count {
+        let text = e
+            .call(NI_GET_VIEWER_STRING_INT, &args![NAME_MARK, index])
+            .u32();
+        add(e, text);
+        let mark = (index << 4).wrapping_add(e.mem.u32(this.addr() + MARK_DATA));
+        let number = u32::from(e.mem.u8(mark + 0xe));
+        let text = e
+            .call(NI_GET_VIEWER_STRING_INT, &args![NAME_NUMBER, number])
+            .u32();
+        add(e, text);
+        let text = e
+            .call(POINT_GET_VIEWER_STRING, &args![mark, NAME_POSITION])
+            .u32();
+        add(e, text);
+        let scale: f64 = e.global(HEADING_SCALE);
+        let heading = f64::from(i32::from(e.mem.u16(mark + 0xc)));
+        let heading = x87_store32(x87_div(heading, scale));
+        let text = e
+            .call(NI_GET_VIEWER_STRING_FLOAT, &args![NAME_HEADING, heading])
+            .u32();
+        add(e, text);
+    }
+}
+
+// Translated from 00c54490 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`thiscall` on the marker, one word: a mark):
+/// inserts `mark` into the mark array (+0xC) keeping the number bytes in
+/// order: the position is the first mark whose number is above the new
+/// one's; the mark is appended (`Add`, `00c54b70`), and when the position is
+/// inside the old count every mark from it on moves up one (`SetAt`,
+/// `00c54a30`, from the last) and the new one is set at the position.
+pub fn fn_00c54490(e: &mut Engine, this: Ptr, mark: Ptr) {
+    let t = this.addr();
+    let mut count = u32::from(e.mem.u16(t + MARK_COUNT));
+    let number = e.mem.u8(mark.addr() + 0xe);
+    let mut position = 0u32;
+    while position < count {
+        let existing = (position << 4).wrapping_add(e.mem.u32(t + MARK_DATA));
+        if number < e.mem.u8(existing + 0xe) {
+            break;
+        }
+        position += 1;
+    }
+    let array = Ptr::new(t + MARKS);
+    ni_t_array_furniture_mark_add(e, array, mark);
+    if position < count {
+        while count > position {
+            let previous = ((count - 1) << 4).wrapping_add(e.mem.u32(t + MARK_DATA));
+            ni_t_array_furniture_mark_set_at(e, array, count, Ptr::new(previous));
+            count -= 1;
+        }
+        ni_t_array_furniture_mark_set_at(e, array, position, mark);
+    }
+}
+
+// Translated from 00c54660 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `FurnitureMark::SaveBinary` (engine map): the offset (`NiColor::SaveBinary`,
+/// three floats), the heading (`00a303a0`), then the number byte twice
+/// (`00a29550` both times with +0xE, as the exe has it).
+pub fn furniture_mark_save_binary(e: &mut Engine, this: Ptr, stream: Ptr) {
+    e.call(THREE_FLOATS_SAVE_BINARY, &args![this, stream]);
+    ni_stream_save_binary_unsigned_short(e, stream, Ptr::new(this.addr() + 0xc));
+    e.call(SAVE_BYTE, &args![stream, this.addr() + 0xe]);
+    e.call(SAVE_BYTE, &args![stream, this.addr() + 0xe]);
+}
+
+// Translated from 00c54810 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`thiscall`, no words): the
+/// `NiTArray<FurnitureMark>` destructor body: its vtable (`010c2b2c`), then
+/// the element block (+4) freed through the memory manager (`00aa4060`).
+pub fn fn_00c54810(e: &mut Engine, this: Ptr) {
+    e.mem.set_u32(this.addr(), VTABLE_TARRAY);
+    let block = e.mem.u32(this.addr() + 4);
+    e.call(DEALLOCATE, &args![MEMORY_MANAGER, block]);
+}
+
+// Translated from 00c54d70 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiTObjectArray<FurnitureMark>::_scalar_deleting_destructor_` (Xbox PDB):
+/// the `NiTArray` vtable, the element block freed through the memory
+/// manager, and with bit 0 of `flags` the array itself freed the same way.
+/// Answers `this`.
+pub fn ni_t_object_array_furniture_mark_scalar_deleting_destructor(
+    e: &mut Engine,
+    this: Ptr,
+    flags: u32,
+) -> Ptr {
+    e.mem.set_u32(this.addr(), VTABLE_TARRAY);
+    let block = e.mem.u32(this.addr() + 4);
+    e.call(DEALLOCATE, &args![MEMORY_MANAGER, block]);
+    if flags & 1 != 0 {
+        e.call(DEALLOCATE, &args![MEMORY_MANAGER, this]);
+    }
+    this
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x00a3_03a0, ni_stream_save_binary_unsigned_short(Ptr, Ptr)),
+        entry!(0x00c5_4170, bs_furniture_marker_save_binary(Ptr, Ptr)),
+        entry!(0x00c5_41e0, bs_furniture_marker_is_equal(Ptr, Ptr) -> u8),
+        entry!(
+            0x00c5_42a0,
+            bs_furniture_marker_get_viewer_strings(Ptr, Ptr)
+        ),
+        entry!(0x00c5_4490, fn_00c54490(Ptr, Ptr)),
+        entry!(0x00c5_4660, furniture_mark_save_binary(Ptr, Ptr)),
+        entry!(0x00c5_4810, fn_00c54810(Ptr)),
+        entry!(
+            0x00c5_4d70,
+            ni_t_object_array_furniture_mark_scalar_deleting_destructor(Ptr, u32) -> Ptr
+        ),
         entry!(0x00c5_4d60, fn_00c54d60(Ptr) -> u32),
         entry!(0x00c5_4130, fn_00c54130(Ptr, Ptr)),
         entry!(0x00c5_4150, bs_furniture_marker_register_streamables(Ptr, Ptr) -> bool),
@@ -1046,5 +1260,190 @@ mod b004_tests {
             ]
         );
         assert_eq!(e.mem.u32(FURNITURE_MARKER_NAME), 0);
+    }
+}
+
+#[cfg(test)]
+mod n066_tests {
+    use super::*;
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    fn calls_to(e: &Engine, callee: u32) -> Vec<Vec<u32>> {
+        e.call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|(address, _)| *address == callee)
+            .map(|(_, words)| words.clone())
+            .collect()
+    }
+
+    fn word(eax: u32) -> Ret {
+        Ret {
+            eax,
+            ..Ret::default()
+        }
+    }
+
+    /// A marker whose mark array holds `numbers` (mark i at offset (i, 0, 0),
+    /// heading 1500 + i), with room for eight.
+    fn marker(e: &mut Engine, numbers: &[u8]) -> u32 {
+        let this = e.mem.alloc(0x20);
+        let data = e.mem.alloc(8 * 16);
+        for (i, number) in numbers.iter().enumerate() {
+            let mark = data + 16 * i as u32;
+            e.mem.set_f32(mark, i as f32);
+            e.mem.set_u16(mark + 0xc, 1500 + i as u16);
+            e.mem.set_u8(mark + 0xe, *number);
+        }
+        e.mem.set_u32(this + MARK_DATA, data);
+        e.mem.set_u16(this + MARKS + 8, 8);
+        e.mem.set_u16(this + MARKS + 0xa, numbers.len() as u16);
+        e.mem.set_u16(this + MARK_COUNT, numbers.len() as u16);
+        this
+    }
+
+    #[test]
+    fn ni_stream_save_binary_unsigned_short_writes_two_bytes() {
+        const WRITE: u32 = 0x0100_0040;
+        let mut e = Engine::new();
+        e.register(WRITE, |e, a| {
+            assert_eq!(e.mem.u32(a[3]), 2);
+            word(a[2])
+        });
+        let output = e.mem.alloc(0x10);
+        e.mem.set_u32(output + 4, 0x10);
+        e.mem.set_u32(output + 0xc, WRITE);
+        let stream = e.mem.alloc(0x260);
+        e.mem.set_u32(stream + STREAM_OUTPUT, output);
+        e.call_log = Some(vec![]);
+        e.call(0x00a3_03a0, &args![stream, 0x5000u32]);
+        assert_eq!(calls_to(&e, WRITE)[0][..3], [output, 0x5000, 2]);
+        assert_eq!(e.mem.u32(output + 4), 0x12);
+    }
+
+    #[test]
+    fn save_binary_writes_the_count_and_every_mark() {
+        const WRITE: u32 = 0x0100_0040;
+        let mut e = Engine::new();
+        e.register(EXTRA_DATA_SAVE_BINARY, |_, _| Ret::default());
+        e.register(SAVE_COUNT, |e, a| word(e.mem.u32(a[1])));
+        e.register(THREE_FLOATS_SAVE_BINARY, |_, _| Ret::default());
+        e.register(SAVE_BYTE, |_, _| Ret::default());
+        e.register(WRITE, |_, a| word(a[2]));
+        let output = e.mem.alloc(0x10);
+        e.mem.set_u32(output + 0xc, WRITE);
+        let stream = e.mem.alloc(0x260);
+        e.mem.set_u32(stream + STREAM_OUTPUT, output);
+        let this = marker(&mut e, &[4, 9]);
+        let data = e.mem.u32(this + MARK_DATA);
+        e.call_log = Some(vec![]);
+        e.call(0x00c5_4170, &args![this, stream]);
+        let counts: Vec<u32> = e
+            .call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|c| c.0 == SAVE_COUNT)
+            .map(|c| c.1[0])
+            .collect();
+        assert_eq!(counts, [stream]);
+        assert_eq!(
+            calls_to(&e, THREE_FLOATS_SAVE_BINARY),
+            vec![vec![data, stream], vec![data + 16, stream]]
+        );
+        assert_eq!(
+            calls_to(&e, SAVE_BYTE),
+            vec![
+                vec![stream, data + 0xe],
+                vec![stream, data + 0xe],
+                vec![stream, data + 0x1e],
+                vec![stream, data + 0x1e]
+            ]
+        );
+        assert_eq!(e.mem.u32(output + 4), 4);
+    }
+
+    #[test]
+    fn is_equal_passes_on_the_extra_data_answer() {
+        let mut e = Engine::new();
+        e.register(EXTRA_DATA_IS_EQUAL, |_, a| word(a[1] & 0xff));
+        assert_eq!(e.call(0x00c5_41e0, &args![0x1000u32, 0x2002u32]).u32(), 2);
+    }
+
+    #[test]
+    fn get_viewer_strings_lists_every_mark() {
+        let mut e = Engine::new();
+        e.map(FURNITURE_MARKER_RTTI, 4);
+        e.set_global(FURNITURE_MARKER_RTTI, 0x0555_0000u32);
+        e.map(HEADING_SCALE, 8);
+        e.set_global(HEADING_SCALE, 1000.0f64);
+        e.register(EXTRA_DATA_GET_VIEWER_STRINGS, |_, _| Ret::default());
+        e.register(NI_GET_VIEWER_STRING, |_, _| word(0x7000_0001));
+        e.register(NI_GET_VIEWER_STRING_INT, |_, a| word(0x6000_0000 | a[1]));
+        e.register(NI_GET_VIEWER_STRING_FLOAT, |_, a| word(a[1]));
+        e.register(POINT_GET_VIEWER_STRING, |_, a| word(a[0]));
+        let added = Rc::new(RefCell::new(vec![]));
+        let seen = added.clone();
+        e.register_double(STRINGS_ADD, move |e, a| {
+            seen.borrow_mut().push(e.mem.u32(a[1]));
+            Ret::default()
+        });
+        let this = marker(&mut e, &[4]);
+        let data = e.mem.u32(this + MARK_DATA);
+        e.call(0x00c5_42a0, &args![this, 0x2000u32]);
+        assert_eq!(
+            *added.borrow(),
+            vec![
+                0x7000_0001,
+                0x6000_0001,
+                0x6000_0000,
+                0x6000_0004,
+                data,
+                1.5f32.to_bits()
+            ]
+        );
+    }
+
+    #[test]
+    fn fn_00c54490_inserts_by_number() {
+        let mut e = Engine::new();
+        e.map(EMPTY_MARK, 0x14);
+        let this = marker(&mut e, &[1, 5, 9]);
+        let mark = e.mem.alloc(16);
+        e.mem.set_f32(mark, 42.0);
+        e.mem.set_u8(mark + 0xe, 5);
+        e.call(0x00c5_4490, &args![this, mark]);
+        let data = e.mem.u32(this + MARK_DATA);
+        let numbers: Vec<u8> = (0..4).map(|i| e.mem.u8(data + 16 * i + 0xe)).collect();
+        assert_eq!(numbers, [1, 5, 5, 9]);
+        assert_eq!(e.mem.f32(data + 32), 42.0);
+        assert_eq!(e.mem.f32(data + 48), 2.0);
+        // A number above every mark's is only appended.
+        e.mem.set_u8(mark + 0xe, 200);
+        e.call(0x00c5_4490, &args![this, mark]);
+        assert_eq!(e.mem.u8(data + 16 * 4 + 0xe), 200);
+    }
+
+    #[test]
+    fn array_destructors_free_the_block_and_maybe_the_array() {
+        let mut e = Engine::new();
+        e.register(DEALLOCATE, |_, _| Ret::default());
+        let array = e.mem.alloc(0x10);
+        e.mem.set_u32(array + 4, 0x7777);
+        e.call_log = Some(vec![]);
+        e.call(0x00c5_4810, &args![array]);
+        assert_eq!(e.mem.u32(array), VTABLE_TARRAY);
+        assert_eq!(calls_to(&e, DEALLOCATE), vec![vec![MEMORY_MANAGER, 0x7777]]);
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x00c5_4d70, &args![array, 1u32]).u32(), array);
+        assert_eq!(
+            calls_to(&e, DEALLOCATE),
+            vec![vec![MEMORY_MANAGER, 0x7777], vec![MEMORY_MANAGER, array]]
+        );
+        e.call_log = Some(vec![]);
+        e.call(0x00c5_4d70, &args![array, 0u32]);
+        assert_eq!(calls_to(&e, DEALLOCATE).len(), 1);
     }
 }

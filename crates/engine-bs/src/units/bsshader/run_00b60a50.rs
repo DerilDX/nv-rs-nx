@@ -1723,9 +1723,116 @@ pub fn fn_00b62de0(
     e.mem.set_u32(tls + TLS_ALLOCATION_CONTEXT, saved);
 }
 
+/// `00b702b0` (unnamed; `thiscall`, two words): the base class's copy `00b60a50` runs first.
+const BASE_COPY_00B702B0: u32 = 0x00b7_02b0;
+
+/// The `NiPointer` at `from + offset` copied to `to + offset` when they differ: the old one
+/// released (count at +4, slot +4 at 0), the new one's count at +4 incremented.
+fn copy_pointer(e: &mut Engine, from: u32, to: u32, offset: u32) {
+    let old = e.mem.u32(to + offset);
+    if old == e.mem.u32(from + offset) {
+        return;
+    }
+    if old != 0 {
+        release(e, old);
+    }
+    let new = e.mem.u32(from + offset);
+    e.mem.set_u32(to + offset, new);
+    if new != 0 {
+        e.call(INTERLOCKED_INCREMENT, &args![new + 4]);
+    }
+}
+
+// Translated from 00b60a50 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed (`thiscall`, two words): copies the `010adea8` object `this` into `clone`: the
+/// base's `00b702b0(clone, cloning)`, the `NiPointer`s +0x80 and +0x84 (reference counts kept),
+/// then the words +0x90, +0x94 and +0x7c.
+pub fn fn_00b60a50(e: &mut Engine, this: Ptr, clone: Ptr, cloning: u32) {
+    e.call(BASE_COPY_00B702B0, &args![this, clone, cloning]);
+    let from = this.addr();
+    let to = clone.addr();
+    copy_pointer(e, from, to, 0x80);
+    copy_pointer(e, from, to, 0x84);
+    for offset in [0x90u32, 0x94, 0x7c] {
+        let word = e.mem.u32(from + offset);
+        e.mem.set_u32(to + offset, word);
+    }
+}
+
+// Translated from 00b60c70 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed: a hash map's scalar deleting destructor (`thiscall`, one word): the map destructor
+/// body `00b60360`, then the memory manager's `Deallocate` when bit 0 of `flags` is set.
+/// Returns `this`.
+pub fn fn_00b60c70(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    e.call(MAP_DESTRUCTOR, &args![this]);
+    if flags as u8 & 1 != 0 {
+        e.call(MEMORY_DEALLOCATE, &args![MEMORY_MANAGER, this]);
+    }
+    this
+}
+
+/// What `00b60d60` answers: the address `011f9f00` (no RTTI locator for the vtable; the word
+/// is the class's `NiRTTI` by its place in the vtable, unconfirmed).
+const RECORD_011F9F00: u32 = 0x011f_9f00;
+
+// Translated from 00b60d60 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed (Ghidra made no function of it): slot 2 of the vtable `010adea8`, `thiscall`
+/// without reading `this`: answers the address `011f9f00`.
+pub fn fn_00b60d60(_e: &mut Engine, _this: Ptr) -> u32 {
+    RECORD_011F9F00
+}
+
+// Translated from 00b60d70 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed (Ghidra made no function of it): slot 54 of the vtable `010adea8`, `thiscall`, one
+/// word: stores it at +0x90.
+pub fn fn_00b60d70(e: &mut Engine, this: Ptr, value: u32) {
+    e.mem.set_u32(this.addr() + 0x90, value);
+}
+
+// Translated from 00b60e80 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 00b60e80 - the C++ exception-unwinding frame (FS:[0] chain, handler 00f27c7a, state variable) and the security-cookie bookkeeping are not translated.
+/// Unnamed (`thiscall`, one word): the `010adea8` object's clone. With the thread's allocation
+/// context (+0x2b4) set to 0x1c, a 0x98-byte block from `00aa13e0` is constructed (`00b60cb0`;
+/// null when the allocation fails) and `this` copied into it (`00b60a50` with `cloning`); the
+/// context is restored and the clone answered.
+pub fn fn_00b60e80(e: &mut Engine, this: Ptr, cloning: u32) -> u32 {
+    let tls = e.tls();
+    let saved = e.mem.u32(tls + TLS_ALLOCATION_CONTEXT);
+    e.mem.set_u32(tls + TLS_ALLOCATION_CONTEXT, 0x1c);
+    let block = e.call(NI_NEW, &args![0x98u32]).u32();
+    let clone = if block != 0 {
+        fn_00b60cb0(e, Ptr::new(block)).addr()
+    } else {
+        0
+    };
+    fn_00b60a50(e, this, Ptr::new(clone), cloning);
+    e.mem.set_u32(tls + TLS_ALLOCATION_CONTEXT, saved);
+    clone
+}
+
+// Translated from 00b63070 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed (`thiscall`, no stack words): calls `this`'s vtable slot +0xa8, then jumps to its
+/// slot +0xac (a tail call: what that slot answers in EAX, EDX and ST0 is this function's
+/// result).
+pub fn fn_00b63070(e: &mut Engine, this: Ptr) -> Ret {
+    e.vcall(this.addr(), 0xa8, &args![]);
+    e.vcall(this.addr(), 0xac, &args![])
+}
+
+/// The uniform-form entry of [`fn_00b63070`]: `this`; the tail call's registers pass through.
+fn fn_00b63070_entry(e: &mut Engine, a: &[u32]) -> Ret {
+    fn_00b63070(e, Ptr::new(a[0]))
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x00b6_0a50, fn_00b60a50(Ptr, Ptr, u32)),
+        entry!(0x00b6_0c70, fn_00b60c70(Ptr, u32) -> Ptr),
+        entry!(0x00b6_0d60, fn_00b60d60(Ptr) -> u32),
+        entry!(0x00b6_0d70, fn_00b60d70(Ptr, u32)),
+        entry!(0x00b6_0e80, fn_00b60e80(Ptr, u32) -> u32),
+        (0x00b6_3070, fn_00b63070_entry as AbiFn),
         entry!(0x00b6_0b10, fn_00b60b10(Ptr) -> Ptr),
         entry!(0x00b6_0b50, fn_00b60b50(Ptr)),
         entry!(0x00b6_0c90, fn_00b60c90(Ptr, u32) -> Ptr),
@@ -2559,5 +2666,179 @@ mod tests {
         // The arrays copied per instance.
         assert_eq!(e.mem.u32(strips[2] + 0x24), 0x2000);
         assert_eq!(e.mem.u32(strips[4] + 0x30), 0x2800);
+    }
+}
+
+#[cfg(test)]
+mod n070_tests {
+    use super::*;
+
+    fn calls(e: &Engine, addr: u32) -> Vec<Vec<u32>> {
+        e.call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|(a, _)| *a == addr)
+            .map(|(_, w)| w.clone())
+            .collect()
+    }
+
+    const DELETE_SLOT: u32 = 0x0e30_0000;
+
+    /// A reference-counted object (vtable slot +4 `DELETE_SLOT`) with count `count`.
+    fn counted(e: &mut Engine, count: u32) -> u32 {
+        let vtable = e.mem.alloc(8);
+        e.mem.set_u32(vtable + 4, DELETE_SLOT);
+        let object = e.mem.alloc(8);
+        e.mem.set_u32(object, vtable);
+        e.mem.set_u32(object + 4, count);
+        object
+    }
+
+    fn rig() -> Engine {
+        let mut e = Engine::new();
+        e.register(INTERLOCKED_INCREMENT, |e, a| {
+            let v = e.mem.u32(a[0]).wrapping_add(1);
+            e.mem.set_u32(a[0], v);
+            v.into_ret()
+        });
+        e.register(INTERLOCKED_DECREMENT, |e, a| {
+            let v = e.mem.u32(a[0]).wrapping_sub(1);
+            e.mem.set_u32(a[0], v);
+            v.into_ret()
+        });
+        for target in [
+            BASE_COPY_00B702B0,
+            DELETE_SLOT,
+            MAP_DESTRUCTOR,
+            MEMORY_DEALLOCATE,
+        ] {
+            e.register(target, |_, _| Ret::default());
+        }
+        e.call_log = Some(vec![]);
+        e
+    }
+
+    #[test]
+    fn fn_00b60a50_copies_pointers_and_words() {
+        let mut e = rig();
+        let this = e.mem.alloc(0x98);
+        let clone = e.mem.alloc(0x98);
+        let shared = counted(&mut e, 2);
+        let old = counted(&mut e, 1);
+        let new = counted(&mut e, 1);
+        // +0x80: the same pointer on both sides (untouched); +0x84: old replaced by new.
+        e.mem.set_u32(this + 0x80, shared);
+        e.mem.set_u32(clone + 0x80, shared);
+        e.mem.set_u32(this + 0x84, new);
+        e.mem.set_u32(clone + 0x84, old);
+        for (offset, word) in [(0x90u32, 9u32), (0x94, 10), (0x7c, 11)] {
+            e.mem.set_u32(this + offset, word);
+        }
+        e.call(0x00b6_0a50, &args![this, clone, 1u32]);
+        assert_eq!(calls(&e, BASE_COPY_00B702B0), vec![vec![this, clone, 1]]);
+        assert_eq!(e.mem.u32(shared + 4), 2);
+        assert_eq!(e.mem.u32(old + 4), 0);
+        assert_eq!(calls(&e, DELETE_SLOT), vec![vec![old]]);
+        assert_eq!(e.mem.u32(clone + 0x84), new);
+        assert_eq!(e.mem.u32(new + 4), 2);
+        assert_eq!(e.mem.u32(clone + 0x90), 9);
+        assert_eq!(e.mem.u32(clone + 0x94), 10);
+        assert_eq!(e.mem.u32(clone + 0x7c), 11);
+    }
+
+    #[test]
+    fn fn_00b60a50_clears_to_a_null_pointer() {
+        let mut e = rig();
+        let this = e.mem.alloc(0x98);
+        let clone = e.mem.alloc(0x98);
+        let old = counted(&mut e, 3);
+        e.mem.set_u32(clone + 0x80, old);
+        e.call(0x00b6_0a50, &args![this, clone, 0u32]);
+        assert_eq!(e.mem.u32(old + 4), 2);
+        assert!(calls(&e, DELETE_SLOT).is_empty());
+        assert_eq!(e.mem.u32(clone + 0x80), 0);
+        assert!(calls(&e, INTERLOCKED_INCREMENT).is_empty());
+    }
+
+    #[test]
+    fn fn_00b60c70_frees_only_with_bit_0() {
+        let mut e = rig();
+        let map = e.mem.alloc(0x10);
+        assert_eq!(e.call(0x00b6_0c70, &args![map, 0x100u32]).u32(), map);
+        assert!(calls(&e, MEMORY_DEALLOCATE).is_empty());
+        e.call(0x00b6_0c70, &args![map, 1u32]);
+        assert_eq!(calls(&e, MAP_DESTRUCTOR), vec![vec![map], vec![map]]);
+        assert_eq!(
+            calls(&e, MEMORY_DEALLOCATE),
+            vec![vec![MEMORY_MANAGER, map]]
+        );
+    }
+
+    #[test]
+    fn fn_00b60d60_and_00b60d70() {
+        let mut e = rig();
+        let this = e.mem.alloc(0x98);
+        assert_eq!(e.call(0x00b6_0d60, &args![this]).u32(), 0x011f_9f00);
+        e.call(0x00b6_0d70, &args![this, 0x55u32]);
+        assert_eq!(e.mem.u32(this + 0x90), 0x55);
+    }
+
+    #[test]
+    fn fn_00b60e80_clones_under_the_allocation_context() {
+        let mut e = rig();
+        e.register(LIGHTING_CONSTRUCTOR, |_, _| Ret::default());
+        e.map(0x0e33_0000, 0x10);
+        e.register(NI_NEW, |e, a| {
+            let tls = e.tls();
+            let context = e.mem.u32(tls + TLS_ALLOCATION_CONTEXT);
+            e.mem.set_u32(0x0e33_0000, context);
+            e.mem.alloc(a[0]).into_ret()
+        });
+        let tls = e.tls();
+        e.mem.set_u32(tls + TLS_ALLOCATION_CONTEXT, 7);
+        let this = e.mem.alloc(0x98);
+        e.mem.set_u32(this + 0x94, 0x66);
+        let clone = e.call(0x00b6_0e80, &args![this, 1u32]).u32();
+        assert_ne!(clone, 0);
+        assert_eq!(e.mem.u32(clone), VTABLE_010ADEA8);
+        assert_eq!(e.mem.u32(clone + 0x94), 0x66);
+        assert_eq!(calls(&e, BASE_COPY_00B702B0), vec![vec![this, clone, 1]]);
+        assert_eq!(e.mem.u32(tls + TLS_ALLOCATION_CONTEXT), 7);
+        // The block was asked for under context 0x1c.
+        assert_eq!(e.mem.u32(0x0e33_0000), 0x1c);
+        assert_eq!(calls(&e, NI_NEW), vec![vec![0x98]]);
+    }
+
+    #[test]
+    fn fn_00b60e80_copies_into_null_when_the_allocation_fails() {
+        let mut e = rig();
+        e.register(NI_NEW, |_, _| 0u32.into_ret());
+        let this = e.mem.alloc(0x98);
+        e.register(BASE_COPY_00B702B0, |_, _| Ret::default());
+        // The copy into null reads the clone's pointer at +0x80: map page 0.
+        e.map(0, 0x1000);
+        assert_eq!(e.call(0x00b6_0e80, &args![this, 0u32]).u32(), 0);
+        assert_eq!(calls(&e, BASE_COPY_00B702B0), vec![vec![this, 0, 0]]);
+    }
+
+    #[test]
+    fn fn_00b63070_calls_two_slots_and_passes_the_second_result() {
+        let mut e = rig();
+        e.register(0x0e31_0000, |_, _| Ret::default());
+        e.register(0x0e32_0000, |_, _| Ret {
+            eax: 0x1234,
+            edx: 5,
+            st0: 2.5,
+        });
+        let vtable = e.mem.alloc(0xb0);
+        e.mem.set_u32(vtable + 0xa8, 0x0e31_0000);
+        e.mem.set_u32(vtable + 0xac, 0x0e32_0000);
+        let this = e.mem.alloc(4);
+        e.mem.set_u32(this, vtable);
+        let r = e.call(0x00b6_3070, &args![this]);
+        assert_eq!((r.eax, r.edx, r.st0), (0x1234, 5, 2.5));
+        assert_eq!(calls(&e, 0x0e31_0000), vec![vec![this]]);
+        assert_eq!(calls(&e, 0x0e32_0000), vec![vec![this]]);
     }
 }

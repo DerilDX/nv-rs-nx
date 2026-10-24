@@ -1675,10 +1675,52 @@ pub fn bs_face_gen_model_apply_coordinate_texturing_to_mesh(
     done(e, true)
 }
 
+/// `00406d30` (cdecl: buffer, size, source): `strcpy_s` by its body.
+const STRCPY_S_00406D30: u32 = 0x0040_6d30;
+/// `00406d50` (cdecl: buffer, size, source): `strcat_s` by its body.
+const STRCAT_S_00406D50: u32 = 0x0040_6d50;
+/// `strrchr` (`0040ab30`, cdecl: string, character).
+const STRRCHR: u32 = 0x0040_ab30;
+/// `006505d0` (thiscall on the model): 0 without mesh data (+8), else a string by its
+/// use here (it calls `00559450`).
+const MESH_NAME_006505D0: u32 = 0x0065_05d0;
+/// `0065c2c0` (thiscall on the model; unnamed, `bsfacegenmodel.cpp` by its timer's file).
+const TEXTURE_LOAD_0065C2C0: u32 = 0x0065_c2c0;
+/// `".egt"`.
+const EGT_EXTENSION: u32 = 0x0106_5b90;
+
+// Translated from 0065a840 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 0065a840 - the /GS stack cookie check (00ec408c) is not translated.
+/// Unnamed in the engine map (`thiscall`, no arguments): without texture data (+0xc),
+/// takes the name `006505d0` gives (when there is one) into a 0x104-byte stack buffer
+/// (`strcpy_s`), and when it has a `.`, replaces the last one and what follows with
+/// `".egt"` (`strcat_s`), sets that as the EGT name (`fn_0065a760`) and calls `0065c2c0`.
+pub fn fn_0065a840(e: &mut Engine, this: Ptr<BSFaceGenModel>) {
+    if e.get(this, BSFaceGenModel::pTextureData) != 0 {
+        return;
+    }
+    let name = e.call(MESH_NAME_006505D0, &args![this]).u32();
+    if name == 0 {
+        return;
+    }
+    e.with_stack(0x104, |e, buffer| {
+        let buffer = buffer.addr();
+        e.call(STRCPY_S_00406D30, &args![buffer, 0x104u32, name]);
+        let dot = e.call(STRRCHR, &args![buffer, 0x2eu32]).u32();
+        if dot != 0 {
+            e.mem.set_u8(dot, 0);
+            e.call(STRCAT_S_00406D50, &args![buffer, 0x104u32, EGT_EXTENSION]);
+            fn_0065a760(e, this, buffer);
+            e.call(TEXTURE_LOAD_0065C2C0, &args![this]);
+        }
+    });
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
         entry!(0x0065_9b20, bs_face_gen_model_scalar_deleting_destructor(Ptr, u32) -> Ptr),
+        entry!(0x0065_a840, fn_0065a840(Ptr<BSFaceGenModel>)),
         entry!(
             0x0065_9800,
             fn_00659800(Ptr<BSFaceGenModelMeshData>) -> Ptr<BSFaceGenModelMeshData>
@@ -2667,5 +2709,64 @@ mod tests {
             .bool());
         assert_eq!(calls(&e, PRINT_MESSAGE), vec![vec![TEXTURE_COUNT_MESSAGE]]);
         assert_eq!(calls(&e, FACE_GEN_UNLOCK).len(), 1);
+    }
+
+    #[test]
+    fn egt_name_from_the_mesh_name() {
+        let mut e = Engine::new();
+        let model = Ptr::<BSFaceGenModel>::new(e.mem.alloc(0x10));
+        let name = e.mem.alloc(16);
+        e.mem.set_cstr(name, b"head.nif");
+        e.map(EGT_EXTENSION, 8);
+        e.mem.set_cstr(EGT_EXTENSION, b".egt");
+        e.register_double(MESH_NAME_006505D0, move |_, _| name.into_ret());
+        e.register(STRCPY_S_00406D30, |e, a| {
+            let s = e.mem.cstr(a[2]);
+            e.mem.set_cstr(a[0], &s);
+            Ret::default()
+        });
+        e.register(STRRCHR, |e, a| {
+            let s = e.mem.cstr(a[0]);
+            let found = s.iter().rposition(|&c| u32::from(c) == a[1]);
+            found.map_or(0, |i| a[0] + i as u32).into_ret()
+        });
+        e.register(STRCAT_S_00406D50, |e, a| {
+            let mut s = e.mem.cstr(a[0]);
+            s.extend(e.mem.cstr(a[2]));
+            e.mem.set_cstr(a[0], &s);
+            Ret::default()
+        });
+        for addr in [
+            TIMER_SCOPE_CONSTRUCT,
+            TIMER_SCOPE_DESTROY,
+            TEXTURE_LOAD_0065C2C0,
+            OPERATOR_NEW,
+        ] {
+            e.register(addr, |_, _| Ret::default());
+        }
+        // The name the texture data takes.
+        e.register(STRING_SET, |e, a| {
+            assert_eq!(e.mem.cstr(a[1]), b"head.egt");
+            Ret::default()
+        });
+        e.call_log = Some(vec![]);
+        e.call(0x0065_a840, &args![model]);
+        assert_eq!(calls(&e, STRING_SET).len(), 1);
+        assert_eq!(calls(&e, TEXTURE_LOAD_0065C2C0), vec![vec![model.addr()]]);
+        // No dot: nothing more after strrchr.
+        e.mem.set_cstr(name, b"head");
+        e.call_log = Some(vec![]);
+        e.call(0x0065_a840, &args![model]);
+        assert_eq!(calls(&e, STRRCHR).len(), 1);
+        assert!(calls(&e, TEXTURE_LOAD_0065C2C0).is_empty());
+        // No name, or texture data already: nothing.
+        e.register(MESH_NAME_006505D0, |_, _| Ret::default());
+        e.call_log = Some(vec![]);
+        e.call(0x0065_a840, &args![model]);
+        assert!(calls(&e, STRCPY_S_00406D30).is_empty());
+        e.set(model, BSFaceGenModel::pTextureData, 0x100);
+        e.call_log = Some(vec![]);
+        e.call(0x0065_a840, &args![model]);
+        assert!(calls(&e, MESH_NAME_006505D0).is_empty());
     }
 }

@@ -66,9 +66,37 @@ pub fn ni_p_sys_emitter_speed_ctlr_create_clone(e: &mut Engine, this: Ptr, proce
     clone
 }
 
+use crate::units::niparticle::nipsysmodifierfloatctlr::{get_target_float, set_target_float};
+
+/// `NiPSysEmitter::m_fSpeed` (Xbox PDB), +0x18 in the controller's
+/// modifier.
+const SPEED: u32 = 0x18;
+
+// Translated from 00c29fa0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiPSysEmitterSpeedCtlr::SetTargetFloatValue` (Xbox PDB): `value` into
+/// the modifier's `float` at +0x18 (the emitter speed).
+pub fn ni_p_sys_emitter_speed_ctlr_set_target_float_value(e: &mut Engine, this: Ptr, value: f32) {
+    set_target_float(e, this, SPEED, value);
+}
+
+// Translated from 00c2b370 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiPSysEmitterSpeedCtlr::GetTargetFloatValue` (Xbox PDB): the modifier's
+/// `float` at +0x18 (the emitter speed) into `value`.
+pub fn ni_p_sys_emitter_speed_ctlr_get_target_float_value(e: &mut Engine, this: Ptr, value: Ptr) {
+    get_target_float(e, this, SPEED, value);
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(
+            0x00c2_9fa0,
+            ni_p_sys_emitter_speed_ctlr_set_target_float_value(Ptr, f32)
+        ),
+        entry!(
+            0x00c2_b370,
+            ni_p_sys_emitter_speed_ctlr_get_target_float_value(Ptr, Ptr)
+        ),
         entry!(0x00c2b360, ni_p_sys_emitter_speed_ctlr_get_r_t_t_i() -> u32),
         entry!(
             0x00c2b3d0,
@@ -188,5 +216,21 @@ mod tests {
             calls_to(&e, BASE_COPY_MEMBERS),
             vec![vec![0x5000, 0, 0x6000]]
         );
+    }
+}
+
+#[cfg(test)]
+mod value_tests {
+    use super::*;
+    use crate::units::niparticle::nipsysmodifierfloatctlr::subclass_checks;
+
+    #[test]
+    fn set_target_float_value_writes_the_speed() {
+        subclass_checks::set_value(0x00c2_9fa0, SPEED);
+    }
+
+    #[test]
+    fn get_target_float_value_reads_the_speed() {
+        subclass_checks::get_value(0x00c2_b370, SPEED);
     }
 }

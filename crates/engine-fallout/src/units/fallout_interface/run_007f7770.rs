@@ -200,6 +200,144 @@ pub fn fn_007f7e00(e: &mut Engine, this: Ptr) {
     e.call(RENDERED_MENU_CLEAN_UP, &args![this]);
 }
 
+/// Two float statics (`012007d0`, `012007d4`) and the byte static marking them set
+/// (`011ae5d4`), the float pair `011f4980` copied as two words, the wave function
+/// `004e44d0` (cdecl, a `float`, `ST0`).
+const OFFSET_X_012007D0: u32 = 0x0120_07d0;
+const OFFSET_Y_012007D4: u32 = 0x0120_07d4;
+const OFFSET_SET_011AE5D4: u32 = 0x011a_e5d4;
+const PAIR_011F4980: u32 = 0x011f_4980;
+const WAVE_004E44D0: u32 = 0x004e_44d0;
+/// `FORenderedMenu::OnIdle` (`007faf10`), `007f8320` (`RET 4`, a `float`) and
+/// `007fa220` (`fopipboymanager.cpp`).
+const RENDERED_MENU_ON_IDLE: u32 = 0x007f_af10;
+const PIPBOY_007F8320: u32 = 0x007f_8320;
+const PIPBOY_007FA220: u32 = 0x007f_a220;
+
+/// The game time in milliseconds as a `float` (`FILD qword` of the zero-extended word,
+/// `FSTP dword`).
+fn milliseconds_as_float(e: &mut Engine) -> u32 {
+    let now = e.call(GET_MILLISECONDS, &args![TIME_GLOBALS]).u32();
+    x87_store32(f64::from(now))
+}
+
+// Translated from 007f7880 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed (`thiscall`, `RET 0xc`: three `float`s; starts the timed wave of `007f7970`):
+/// marks it running (+0x28), both durations (+0x30, +0x34) the first float, the first
+/// amplitude (+0x38) the second, the first frequency (+0x40) the third; the start
+/// (+0x2c) the game time in milliseconds, the first output (+0x48) and the second
+/// amplitude (+0x3c) 0.0.
+pub fn fn_007f7880(e: &mut Engine, this: Ptr, duration: f32, amplitude: f32, frequency: f32) {
+    let base = this.addr();
+    e.mem.set_u8(base + 0x28, 1);
+    let duration = x87_quiet_bits(duration.to_bits());
+    e.mem.set_u32(base + 0x30, duration);
+    e.mem.set_u32(base + 0x34, duration);
+    e.mem
+        .set_u32(base + 0x38, x87_quiet_bits(amplitude.to_bits()));
+    e.mem
+        .set_u32(base + 0x40, x87_quiet_bits(frequency.to_bits()));
+    let start = milliseconds_as_float(e);
+    e.mem.set_u32(base + 0x2c, start);
+    e.mem.set_u32(base + 0x48, x87_store32(0.0));
+    e.mem.set_u32(base + 0x3c, x87_store32(0.0));
+}
+
+// Translated from 007f78f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed (`thiscall`, `RET 0xc`: three pointers to float pairs): marks the wave
+/// running (+0x28); the durations (+0x30), amplitudes (+0x38) and frequencies (+0x40)
+/// copied from the pairs (as words), the start (+0x2c) the game time in milliseconds,
+/// and the outputs (+0x48) the pair at `011f4980`.
+pub fn fn_007f78f0(e: &mut Engine, this: Ptr, durations: u32, amplitudes: u32, frequencies: u32) {
+    let base = this.addr();
+    e.mem.set_u8(base + 0x28, 1);
+    for (source, offset) in [
+        (durations, 0x30u32),
+        (amplitudes, 0x38),
+        (frequencies, 0x40),
+    ] {
+        let first = e.mem.u32(source);
+        let second = e.mem.u32(source + 4);
+        e.mem.set_u32(base + offset, first);
+        e.mem.set_u32(base + offset + 4, second);
+    }
+    let start = milliseconds_as_float(e);
+    e.mem.set_u32(base + 0x2c, start);
+    let first = e.global::<u32>(PAIR_011F4980);
+    e.mem.set_u32(base + 0x48, first);
+    let second = e.global::<u32>(PAIR_011F4980 + 4);
+    e.mem.set_u32(base + 0x4c, second);
+}
+
+// Translated from 007f7970 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed (`thiscall`, `RET 4`: the time in milliseconds as a `float`): the elapsed
+/// time since the start (+0x2c). Past both durations (+0x30, +0x34) the wave stops
+/// (+0x28 cleared, `007f7a50(0, 0)`). Otherwise each output (+0x48, +0x4c) is the wave
+/// `004e44d0(elapsed * frequency)` times the amplitude times what is left of the
+/// duration (`1 - elapsed / duration`).
+pub fn fn_007f7970(e: &mut Engine, this: Ptr, now: f32) {
+    let base = this.addr();
+    let elapsed = x87_store32(x87_sub(
+        x87_load32(now.to_bits()),
+        x87_m32(e.mem.u32(base + 0x2c)),
+    ));
+    // FCOMPP of each duration against the elapsed time; TEST AH,5: done only when
+    // both are below it.
+    let done = x87_load32(e.mem.u32(base + 0x30)) < x87_load32(elapsed)
+        && x87_load32(e.mem.u32(base + 0x34)) < x87_load32(elapsed);
+    if done {
+        e.mem.set_u8(base + 0x28, 0);
+        let zero = x87_store32(0.0);
+        fn_007f7a50(e, f32::from_bits(zero), f32::from_bits(zero));
+        return;
+    }
+    // The fractions left at `EBP - 0xc` and `EBP - 8`.
+    let left = |e: &Engine, duration: u32| {
+        let quotient = x87_div(x87_load32(elapsed), x87_m32(e.mem.u32(base + duration)));
+        x87_store32(x87_sub(1.0, quotient))
+    };
+    let first_left = left(e, 0x30);
+    let second_left = left(e, 0x34);
+    for (frequency, amplitude, fraction, output) in [
+        (0x40u32, 0x38u32, first_left, 0x48u32),
+        (0x44, 0x3c, second_left, 0x4c),
+    ] {
+        let phase = x87_store32(x87_mul(
+            x87_load32(elapsed),
+            x87_m32(e.mem.u32(base + frequency)),
+        ));
+        let wave = e.call(WAVE_004E44D0, &args![x87_quiet_bits(phase)]).f64();
+        let value = x87_mul(
+            x87_mul(wave, x87_m32(e.mem.u32(base + amplitude))),
+            x87_m32(fraction),
+        );
+        e.mem.set_u32(base + output, x87_store32(value));
+    }
+}
+
+// Translated from 007f7a50 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed (cdecl, two `float`s): stores them in `012007d0` and `012007d4` and sets the
+/// byte `011ae5d4`.
+pub fn fn_007f7a50(e: &mut Engine, x: f32, y: f32) {
+    e.set_global(OFFSET_X_012007D0, x87_quiet_bits(x.to_bits()));
+    e.set_global(OFFSET_Y_012007D4, x87_quiet_bits(y.to_bits()));
+    e.set_global(OFFSET_SET_011AE5D4, 1u8);
+}
+
+// Translated from 007f7ee0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed (`thiscall`; an idle step): false when `FORenderedMenu::OnIdle` answers
+/// false; otherwise `007f8320` with the game time in milliseconds as a `float`, then
+/// `007fa220`, and true.
+pub fn fn_007f7ee0(e: &mut Engine, this: Ptr) -> bool {
+    if !e.call(RENDERED_MENU_ON_IDLE, &args![this]).bool() {
+        return false;
+    }
+    let now = milliseconds_as_float(e);
+    e.call(PIPBOY_007F8320, &args![this, x87_quiet_bits(now)]);
+    e.call(PIPBOY_007FA220, &args![this]);
+    true
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -211,6 +349,11 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x007f_7cb0, fn_007f7cb0(Ptr, u32) -> Ptr),
         entry!(0x007f_7ce0, fn_007f7ce0(Ptr)),
         entry!(0x007f_7e00, fn_007f7e00(Ptr)),
+        entry!(0x007f_7880, fn_007f7880(Ptr, f32, f32, f32)),
+        entry!(0x007f_78f0, fn_007f78f0(Ptr, u32, u32, u32)),
+        entry!(0x007f_7970, fn_007f7970(Ptr, f32)),
+        entry!(0x007f_7a50, fn_007f7a50(f32, f32)),
+        entry!(0x007f_7ee0, fn_007f7ee0(Ptr) -> bool),
     ]
 }
 
@@ -411,5 +554,96 @@ mod pipboy_tests {
         assert_eq!(dropped[12], 0xe0);
         assert_eq!(e.mem.f32(this + KNOB_POSITIONS), 0.0);
         assert_eq!(calls_to(&e, RENDERED_MENU_CLEAN_UP), vec![vec![this]]);
+    }
+}
+
+#[cfg(test)]
+mod n059_tests {
+    use super::*;
+
+    fn engine() -> Engine {
+        let mut e = Engine::new();
+        e.map(0x011f_4000, 0x1000);
+        e.map(0x0120_0000, 0x1000);
+        e.map(0x011a_e000, 0x1000);
+        e.register(GET_MILLISECONDS, |_, _| 1500u32.into_ret());
+        e
+    }
+
+    #[test]
+    fn starts_the_wave() {
+        let mut e = engine();
+        let this = e.mem.alloc(0x50);
+        e.mem.set_f32(this + 0x48, 9.0);
+        e.call(
+            0x007f_7880,
+            &args![this, 2.0f32.to_bits(), 3.0f32.to_bits(), 4.0f32.to_bits()],
+        );
+        assert_eq!(e.mem.u8(this + 0x28), 1);
+        assert_eq!(
+            [0x2c, 0x30, 0x34, 0x38, 0x3c, 0x40, 0x48].map(|o| e.mem.f32(this + o)),
+            [1500.0, 2.0, 2.0, 3.0, 0.0, 4.0, 0.0]
+        );
+        let pairs = e.mem.alloc(0x18);
+        for i in 0..6 {
+            e.mem.set_f32(pairs + 4 * i, i as f32);
+        }
+        e.set_global(PAIR_011F4980, 7.0f32);
+        e.set_global(PAIR_011F4980 + 4, 8.0f32);
+        e.call(0x007f_78f0, &args![this, pairs, pairs + 8, pairs + 0x10]);
+        assert_eq!(
+            [0x30, 0x34, 0x38, 0x3c, 0x40, 0x44, 0x48, 0x4c].map(|o| e.mem.f32(this + o)),
+            [0.0, 1.0, 2.0, 3.0, 4.0, 5.0, 7.0, 8.0]
+        );
+    }
+
+    #[test]
+    fn steps_and_stops_the_wave() {
+        let mut e = engine();
+        e.register(WAVE_004E44D0, |_, a| Ret {
+            st0: f64::from(f32::from_bits(a[0])),
+            ..Ret::default()
+        });
+        let this = e.mem.alloc(0x50);
+        for (offset, value) in [
+            (0x2c, 100.0f32),
+            (0x30, 400.0),
+            (0x34, 200.0),
+            (0x38, 2.0),
+            (0x3c, 3.0),
+            (0x40, 0.5),
+            (0x44, 0.25),
+        ] {
+            e.mem.set_f32(this + offset, value);
+        }
+        e.mem.set_u8(this + 0x28, 1);
+        // 100 elapsed: the first output 50 * 2 * 0.75, the second 25 * 3 * 0.5.
+        e.call(0x007f_7970, &args![this, 200.0f32.to_bits()]);
+        assert_eq!(e.mem.f32(this + 0x48), 75.0);
+        assert_eq!(e.mem.f32(this + 0x4c), 37.5);
+        // 300 elapsed: past only the second duration, so still running.
+        e.call(0x007f_7970, &args![this, 400.0f32.to_bits()]);
+        assert_eq!(e.mem.u8(this + 0x28), 1);
+        e.call(0x007f_7970, &args![this, 600.0f32.to_bits()]);
+        assert_eq!(e.mem.u8(this + 0x28), 0);
+        assert_eq!(e.global::<u8>(OFFSET_SET_011AE5D4), 1);
+        assert_eq!(e.global::<f32>(OFFSET_X_012007D0), 0.0);
+    }
+
+    #[test]
+    fn idle_step_runs_after_the_menu() {
+        let mut e = engine();
+        e.register(RENDERED_MENU_ON_IDLE, |_, a| {
+            u32::from(a[0] == 0x5000).into_ret()
+        });
+        e.register(PIPBOY_007F8320, |_, _| Ret::default());
+        e.register(PIPBOY_007FA220, |_, _| Ret::default());
+        e.call_log = Some(vec![]);
+        assert!(!e.call(0x007f_7ee0, &args![0x6000u32]).bool());
+        assert!(e.call(0x007f_7ee0, &args![0x5000u32]).bool());
+        let log = e.call_log.unwrap();
+        assert!(log.contains(&(PIPBOY_007F8320, vec![0x5000, 1500.0f32.to_bits()])));
+        assert!(log.contains(&(PIPBOY_007FA220, vec![0x5000])));
+        assert!(!log.contains(&(PIPBOY_007FA220, vec![0x6000])));
     }
 }

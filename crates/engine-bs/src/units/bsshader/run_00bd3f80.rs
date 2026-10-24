@@ -900,9 +900,41 @@ pub fn fn_00bd3280(e: &mut Engine, this: Ptr) {
     });
 }
 
+// Translated from 00bd3f80 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (vtable entry at `010bc190`), `thiscall`, no stack words: calls the
+/// vtable +0x144 and +0x15c, then, from shader model 2 on (`011f91c0`, signed), jumps through the
+/// vtable +0x160.
+pub fn fn_00bd3f80(e: &mut Engine, this: Ptr) {
+    let base = this.addr();
+    e.vcall(base, 0x144, &args![]);
+    e.vcall(base, 0x15c, &args![]);
+    if e.global::<i32>(SHADER_MODEL_011F91C0) >= 2 {
+        e.vcall(base, 0x160, &args![]);
+    }
+}
+
+// Translated from 00bd4000 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (vtable entry at `010bc194`), `thiscall`, no stack words: calls the
+/// shader's vtable +0x128 with every word of the table `01202350`..`012023c8` (the loop tests
+/// after each call, signed).
+pub fn fn_00bd4000(e: &mut Engine, this: Ptr) {
+    let base = this.addr();
+    let mut slot = PASSES_01202350;
+    loop {
+        let pass = e.mem.u32(slot);
+        e.vcall(base, 0x128, &args![pass]);
+        slot += 4;
+        if (slot as i32) >= (PASSES_END_012023C8 as i32) {
+            break;
+        }
+    }
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x00bd_3f80, fn_00bd3f80(Ptr)),
+        entry!(0x00bd_4000, fn_00bd4000(Ptr)),
         entry!(0x00bd_44c0, fn_00bd44c0(Ptr, Ptr) -> Ptr),
         entry!(0x00bd_4750, fn_00bd4750() -> Ptr),
         entry!(0x00bd_3270, fn_00bd3270(Ptr, u32) -> u32),
@@ -1294,5 +1326,47 @@ mod shader_four_tests {
             calls(&e, RENDERED_TEXTURE_GET_TEXTURE),
             vec![vec![0x4000, 0]]
         );
+    }
+}
+
+#[cfg(test)]
+mod n071_tests {
+    use super::*;
+    use crate::units::bsshader::shadowlightshader::n071_rig::{
+        calls, engine, order, slot_target, vobject,
+    };
+
+    #[test]
+    fn fn_00bd3f80_by_shader_model() {
+        let mut e = engine(&[]);
+        e.map(0x011f_9000, 0x1000);
+        let this = vobject(&mut e, 8, &[]);
+        e.set_global(SHADER_MODEL_011F91C0, 1i32);
+        e.call(0x00bd_3f80, &args![this]);
+        assert_eq!(
+            order(&e),
+            vec![
+                0x00bd_3f80,
+                slot_target(&e, this, 0x144),
+                slot_target(&e, this, 0x15c)
+            ]
+        );
+        e.set_global(SHADER_MODEL_011F91C0, 2i32);
+        e.call_log = Some(vec![]);
+        e.call(0x00bd_3f80, &args![this]);
+        assert_eq!(order(&e)[3], slot_target(&e, this, 0x160));
+    }
+
+    #[test]
+    fn fn_00bd4000_releases_the_table() {
+        let mut e = engine(&[]);
+        e.map(0x0120_2000, 0x1000);
+        let this = vobject(&mut e, 8, &[]);
+        e.set_global(PASSES_01202350, 5u32);
+        e.set_global(PASSES_END_012023C8 - 4, 6u32);
+        e.call(0x00bd_4000, &args![this]);
+        let seen = calls(&e, slot_target(&e, this, 0x128));
+        assert_eq!(seen.len(), 0x1e);
+        assert_eq!((seen[0][1], seen[0x1d][1]), (5, 6));
     }
 }

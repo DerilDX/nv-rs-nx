@@ -67,9 +67,73 @@ pub fn ni_p_sys_modifier_active_ctlr_create_clone(e: &mut Engine, this: Ptr, pro
     clone
 }
 
+use crate::units::niparticle::nipsysmodifier::add_class_name;
+use crate::units::niparticle::nipsysmodifierctlr::{
+    INTERP_TARGET_IS_CORRECT_TYPE, SYSTEM_FIND_MODIFIER,
+};
+
+/// The `NiRTTI` record of `NiPSysModifierActiveCtlr` (`012026d0`).
+const RTTI: u32 = 0x0120_26d0;
+/// `NiPSysModifierBoolCtlr::GetViewerStrings` (`00c32d30`, `thiscall`, one
+/// word).
+const BOOL_CTLR_GET_VIEWER_STRINGS: u32 = 0x00c3_2d30;
+/// `NiPSysModifierCtlr::m_kModifierName` (Xbox PDB), +0x38.
+const MODIFIER_NAME: u32 = 0x38;
+
+// Translated from 00c29d50 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiPSysModifierActiveCtlr::GetTargetBoolValue` (Xbox PDB): the
+/// modifier's active byte (`NiPSysModifier::m_bActive`, +0x14) into the byte
+/// at `value`.
+pub fn ni_p_sys_modifier_active_ctlr_get_target_bool_value(e: &mut Engine, this: Ptr, value: Ptr) {
+    let modifier = e.mem.u32(this.addr() + MODIFIER);
+    let active = e.mem.u8(modifier.wrapping_add(MODIFIER_ACTIVE));
+    e.mem.set_u8(value.addr(), active);
+}
+
+// Translated from 00c29dd0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiPSysModifierActiveCtlr::InterpTargetIsCorrectType` (Xbox PDB):
+/// `NiPSysModifierCtlr::InterpTargetIsCorrectType` (`00c31530`) on
+/// `target`; then whether `target` has a modifier with this controller's
+/// modifier name (`00c1b0f0`).
+pub fn ni_p_sys_modifier_active_ctlr_interp_target_is_correct_type(
+    e: &mut Engine,
+    this: Ptr,
+    target: Ptr,
+) -> bool {
+    if !e
+        .call(INTERP_TARGET_IS_CORRECT_TYPE, &args![this, target])
+        .bool()
+    {
+        return false;
+    }
+    let name = this.addr() + MODIFIER_NAME;
+    e.call(SYSTEM_FIND_MODIFIER, &args![target, name]).u32() != 0
+}
+
+// Translated from 00c29e00 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiPSysModifierActiveCtlr::GetViewerStrings` (Xbox PDB):
+/// `NiPSysModifierBoolCtlr::GetViewerStrings` (`00c32d30`), then the class
+/// name (`NiRTTI` `012026d0`) appended.
+pub fn ni_p_sys_modifier_active_ctlr_get_viewer_strings(e: &mut Engine, this: Ptr, strings: Ptr) {
+    e.call(BOOL_CTLR_GET_VIEWER_STRINGS, &args![this, strings]);
+    add_class_name(e, strings.addr(), RTTI);
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(
+            0x00c2_9d50,
+            ni_p_sys_modifier_active_ctlr_get_target_bool_value(Ptr, Ptr)
+        ),
+        entry!(
+            0x00c2_9dd0,
+            ni_p_sys_modifier_active_ctlr_interp_target_is_correct_type(Ptr, Ptr) -> bool
+        ),
+        entry!(
+            0x00c2_9e00,
+            ni_p_sys_modifier_active_ctlr_get_viewer_strings(Ptr, Ptr)
+        ),
         entry!(0x00c29d40, ni_p_sys_modifier_active_ctlr_get_r_t_t_i() -> u32),
         entry!(
             0x00c2_9d30,
@@ -176,5 +240,70 @@ mod tests {
             calls_to(&e, BASE_COPY_MEMBERS),
             vec![vec![0x5000, 0, 0x6000]]
         );
+    }
+}
+
+#[cfg(test)]
+mod active_tests {
+    use super::*;
+    use crate::units::niparticle::nipsysmodifier::test_stream;
+    use crate::units::niparticle::nipsysmodifier::test_stream::calls_to;
+
+    #[test]
+    fn get_target_bool_value_copies_the_active_byte() {
+        let mut e = Engine::new();
+        let modifier = e.mem.alloc(0x18);
+        let this = e.mem.alloc(0x40);
+        e.mem.set_u32(this + MODIFIER, modifier);
+        e.mem.set_u8(modifier + MODIFIER_ACTIVE, 7);
+        let value = e.mem.alloc(4);
+        e.mem.set_u32(value, 0xaabb_cc00);
+        e.call(0x00c2_9d50, &args![this, value]);
+        assert_eq!(e.mem.u32(value), 0xaabb_cc07);
+    }
+
+    #[test]
+    fn interp_target_needs_a_named_modifier() {
+        let mut e = Engine::new();
+        e.register(INTERP_TARGET_IS_CORRECT_TYPE, |_, _| Ret {
+            eax: 1,
+            ..Ret::default()
+        });
+        e.register(SYSTEM_FIND_MODIFIER, |_, _| Ret {
+            eax: 0x6000,
+            ..Ret::default()
+        });
+        e.call_log = Some(vec![]);
+        assert!(e.call(0x00c2_9dd0, &args![0x5000u32, 0x7000u32]).bool());
+        assert_eq!(
+            calls_to(&e, INTERP_TARGET_IS_CORRECT_TYPE),
+            vec![vec![0x5000, 0x7000]]
+        );
+        assert_eq!(
+            calls_to(&e, SYSTEM_FIND_MODIFIER),
+            vec![vec![0x7000, 0x5038]]
+        );
+        e.register(SYSTEM_FIND_MODIFIER, |_, _| Ret::default());
+        assert!(!e.call(0x00c2_9dd0, &args![0x5000u32, 0x7000u32]).bool());
+        e.register(INTERP_TARGET_IS_CORRECT_TYPE, |_, _| Ret::default());
+        e.call_log = Some(vec![]);
+        assert!(!e.call(0x00c2_9dd0, &args![0x5000u32, 0x7000u32]).bool());
+        assert!(calls_to(&e, SYSTEM_FIND_MODIFIER).is_empty());
+    }
+
+    #[test]
+    fn get_viewer_strings_appends_the_class_name() {
+        let mut e = Engine::new();
+        test_stream::global_word(&mut e, RTTI, 0x0abc_0004);
+        e.register(BOOL_CTLR_GET_VIEWER_STRINGS, |_, _| Ret::default());
+        let stored = test_stream::viewer_strings(&mut e);
+        let strings = test_stream::strings(&mut e);
+        e.call_log = Some(vec![]);
+        e.call(0x00c2_9e00, &args![0x5000u32, strings]);
+        assert_eq!(
+            calls_to(&e, BOOL_CTLR_GET_VIEWER_STRINGS),
+            vec![vec![0x5000, strings]]
+        );
+        assert_eq!(*stored.borrow(), vec![0x0abc_0004]);
     }
 }

@@ -576,9 +576,261 @@ pub fn speed_tree_leaf_shader_create_constant_maps(e: &mut Engine, this: Ptr) {
     );
 }
 
+/// The record `00bb1d30` answers (`01200610`).
+const RECORD_01200610: u32 = 0x0120_0610;
+
+// Translated from 00bb1d30 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (not a Ghidra function; vtable entry at `010b9198`, `ECX`
+/// unread): answers the address `01200610`.
+pub fn fn_00bb1d30(_e: &mut Engine, _this: Ptr) -> Ptr {
+    Ptr::new(RECORD_01200610)
+}
+
+/// `BSShaderManager::GetFogProperty` (`00b55520`, `cdecl`, a byte) of the fog index byte
+/// (`011f91c4`); the eye position (`011fa2a0`); the CRT square root (`00ec6040`, value and
+/// result in `ST0`); the fog constants written (`011fa280` far, far - near, 0, 0; `011fa290`
+/// the colour and 0); `BSShaderLightingProperty::GetNumberofActiveLights` (`00b70790`,
+/// `thiscall`), the pass's vertex and pixel shader setters (`00b79950`, `00b80600`, unnamed,
+/// `thiscall` on the pass, one word); the render-state flags byte (`011f941c`).
+const GET_FOG_PROPERTY: u32 = 0x00b5_5520;
+const FOG_INDEX_011F91C4: u32 = 0x011f_91c4;
+const EYE_011FA2A0: u32 = 0x011f_a2a0;
+const CRT_SQRT_00EC6040: u32 = 0x00ec_6040;
+const GET_NUMBER_OF_ACTIVE_LIGHTS: u32 = 0x00b7_0790;
+const PASS_SET_VERTEX_SHADER_00B79950: u32 = 0x00b7_9950;
+const PASS_SET_PIXEL_SHADER_00B80600: u32 = 0x00b8_0600;
+const RENDER_FLAGS_011F941C: u32 = 0x011f_941c;
+
+// Translated from 00bb1f60 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 00bb1f60 - the C++ exception frame (FS:[0] chain, unwind state 0 for the stage reference) is not translated.
+/// `SpeedTreeLeafShader::UpdatePipelineForInstance` (Xbox PDB), `thiscall` with seven words:
+/// an object with a position at +0x8c, two unread words, the instance block (its first word,
+/// its +0xc the leaf object), two unread words and a block whose `float` +0xc widens the fog
+/// test. Calls the vtable +0xc of the shader's +0x1c object with the instance's first word.
+/// With a fog property whose near distance (+0x2c) is below the distance from the eye
+/// (`011fa2a0`) to the position, or below that distance plus the block's +0xc, the fog
+/// constants become far, far - near, 0, 0 and the fog colour, 0 (and the fog counts as on).
+/// With the byte `011f91a7`: 1.0 in the four floats at `011fa0c0` and in `011fa0d0` 0, the
+/// `float` `010231a8`, 0, 0 when the word `011f91b8` is 9, four 0.0 otherwise. The leaf object
+/// is the instance's +0xc when its +0x1c is 6 (else null, used as it is): its vtable +0x100
+/// answer (0x300 bytes) goes to the shader's +0x6c, and from its +0xfc answer (asked each
+/// time) +0x18 times `01200608` into `0120065c`, +0x1c times `0120060c` into `0120066c`, +0x14
+/// into `01200660`, +0x10 into `01200670`, four 0.0 at `01200678` and +0xc into `0120067c`.
+/// The first stage of the pass (+0x384) is held (+0x60) and gets the object's +0xb4 answer
+/// (+8). With `011f91a7` the pass takes the shaders +0x36c and +0x37c; without, by the active
+/// light count and the fog: vertex +0x36c / +0x370 (no lights, without / with fog) or +0x374 /
+/// +0x378, pixel +0x37c without fog and +0x380 with it. Then the render states (each on the
+/// pass's +0x30 block, made when null): with `011f91b8` 6 the states 0x34, 0x38, 0x37, 0x35,
+/// 0x36 with 1, 8, 7, 1, 1, else 0x34 with 0; 0xa8 with 0 when bit 0 of `011f941c` is set,
+/// else 7; 0x1c with 0. Last the stage reference is dropped (`00e7ecd0` at 0).
+pub fn speed_tree_leaf_shader_update_pipeline_for_instance(
+    e: &mut Engine,
+    this: Ptr,
+    positioned: u32,
+    _unused_1: u32,
+    _unused_2: u32,
+    instance: u32,
+    _unused_4: u32,
+    _unused_5: u32,
+    widening: u32,
+) {
+    let base = this.addr();
+    let first = e.mem.u32(instance);
+    let target = e.mem.u32(base + 0x1c);
+    e.vcall(target, 0xc, &args![first]);
+    let mut fog_on = false;
+    let index = u32::from(e.global::<u8>(FOG_INDEX_011F91C4));
+    let fog = e.call(GET_FOG_PROPERTY, &args![index]).u32();
+    if fog != 0 {
+        let near = x87_quiet_bits(e.mem.u32(fog + 0x2c));
+        let far = x87_quiet_bits(e.mem.u32(fog + 0x30));
+        let eye: Vec<u32> = (0..3)
+            .map(|i| x87_quiet_bits(e.global::<u32>(EYE_011FA2A0 + 4 * i)))
+            .collect();
+        let delta: Vec<u32> = (0..3u32)
+            .map(|i| {
+                let position = x87_load32(e.mem.u32(positioned + 0x8c + 4 * i));
+                x87_store32(x87_sub(position, x87_m32(eye[i as usize])))
+            })
+            .collect();
+        let dx = x87_load32(delta[0]);
+        let dy = x87_load32(delta[1]);
+        let dz = x87_load32(delta[2]);
+        let squares = x87_add(x87_mul(dx, dx), x87_mul(dy, dy));
+        let total = x87_store32(x87_add(squares, x87_mul(dz, dz)));
+        let root = e.call(CRT_SQRT_00EC6040, &args![x87_load32(total)]).f64();
+        let distance = x87_load32(x87_store32(root));
+        let near_value = x87_load32(near);
+        // `FCOM`, `TEST AH,5`, `JNP`: taken when near is below (ordered).
+        let mut inside = near_value < distance;
+        if !inside {
+            let extra = x87_load32(x87_quiet_bits(e.mem.u32(widening + 0xc)));
+            inside = near_value < x87_add(distance, extra);
+        }
+        if inside {
+            let colour: Vec<u32> = (0..3)
+                .map(|i| x87_quiet_bits(e.mem.u32(fog + 0x20 + 4 * i)))
+                .collect();
+            let range = x87_store32(x87_sub(x87_load32(far), near_value));
+            fog_on = true;
+            e.set_global::<u32>(FOG_PARAM_011FA280, far);
+            e.set_global::<u32>(FOG_PARAM_011FA280 + 4, range);
+            e.set_global::<u32>(FOG_PARAM_011FA280 + 8, 0);
+            e.set_global::<u32>(FOG_PARAM_011FA280 + 0xc, 0);
+            for (word, value) in colour.iter().enumerate() {
+                e.set_global::<u32>(FOG_COLOR_011FA290 + 4 * word as u32, *value);
+            }
+            e.set_global::<u32>(FOG_COLOR_011FA290 + 0xc, 0);
+        }
+    }
+    if e.global::<u8>(FULL_BRIGHT_011F91A7) != 0 {
+        let nine = e.global::<u32>(MODE_011F91B8) == 9;
+        for word in 0..4u32 {
+            e.set_global::<u32>(AMBIENT_011FA0C0 + 4 * word, ONE_BITS);
+        }
+        if nine {
+            let value = x87_quiet_bits(e.global::<u32>(DIFFUSE_VALUE_010231A8));
+            e.set_global::<u32>(DIFFUSE_011FA0D0, 0);
+            e.set_global::<u32>(DIFFUSE_011FA0D0 + 4, value);
+            e.set_global::<u32>(DIFFUSE_011FA0D0 + 8, 0);
+            e.set_global::<u32>(DIFFUSE_011FA0D0 + 0xc, 0);
+        } else {
+            for word in 0..4u32 {
+                e.set_global::<u32>(DIFFUSE_011FA0D0 + 4 * word, 0);
+            }
+        }
+    }
+    let candidate = e.mem.u32(instance + 0xc);
+    let object = if candidate != 0 && e.mem.u32(candidate + 0x1c) == 6 {
+        candidate
+    } else {
+        0
+    };
+    let leaves = e.vcall(object, 0x100, &args![]).u32();
+    e.call(MEMCPY, &args![base + 0x6c, leaves, 0x300u32]);
+    let data = e.vcall(object, 0xfc, &args![]).u32();
+    let value = x87_mul(
+        x87_load32(x87_quiet_bits(e.mem.u32(data + 0x18))),
+        x87_m32(e.global::<u32>(SCALE_01200608)),
+    );
+    e.set_global::<u32>(LEAF_0120065C, x87_store32(value));
+    let data = e.vcall(object, 0xfc, &args![]).u32();
+    let value = x87_mul(
+        x87_load32(x87_quiet_bits(e.mem.u32(data + 0x1c))),
+        x87_m32(e.global::<u32>(SCALE_0120060C)),
+    );
+    e.set_global::<u32>(LEAF_0120066C, x87_store32(value));
+    let data = e.vcall(object, 0xfc, &args![]).u32();
+    let value = x87_quiet_bits(e.mem.u32(data + 0x14));
+    e.set_global::<u32>(LEAF_01200660, value);
+    let data = e.vcall(object, 0xfc, &args![]).u32();
+    let value = x87_quiet_bits(e.mem.u32(data + 0x10));
+    e.set_global::<u32>(LEAF_01200670, value);
+    for word in 0..4u32 {
+        e.set_global::<u32>(TREE_DATA_01200678 + 4 * word, 0);
+    }
+    let data = e.vcall(object, 0xfc, &args![]).u32();
+    let value = x87_quiet_bits(e.mem.u32(data + 0xc));
+    e.set_global::<u32>(TREE_DATA_01200678 + 4, value);
+    let pass = e.mem.u32(base + 0x384);
+    let stages = e.mem.u32(pass + 0x24);
+    let stage = e.mem.u32(stages);
+    if stage != 0 {
+        let count = e.mem.u32(stage + 0x60).wrapping_add(1);
+        e.mem.set_u32(stage + 0x60, count);
+    }
+    let texture = e.vcall(object, 0xb4, &args![]).u32();
+    e.mem.set_u32(stage.wrapping_add(8), texture);
+    if e.global::<u8>(FULL_BRIGHT_011F91A7) != 0 {
+        let pass = e.mem.u32(base + 0x384);
+        let shader = e.mem.u32(base + 0x36c);
+        ni_pointer_assign(e, pass + 0x5c, shader);
+        let pass = e.mem.u32(base + 0x384);
+        let shader = e.mem.u32(base + 0x37c);
+        ni_pointer_assign(e, pass + 0x44, shader);
+    } else {
+        let lights = e.call(GET_NUMBER_OF_ACTIVE_LIGHTS, &args![object]).u16();
+        let pass = e.mem.u32(base + 0x384);
+        let (vertex, pixel) = match (lights == 0, fog_on) {
+            (true, false) => (0x36cu32, 0x37cu32),
+            (true, true) => (0x370, 0x380),
+            (false, true) => (0x378, 0x380),
+            (false, false) => (0x374, 0x37c),
+        };
+        let shader = e.mem.u32(base + vertex);
+        e.call(PASS_SET_VERTEX_SHADER_00B79950, &args![pass, shader]);
+        let pixel_shader = e.mem.u32(base + pixel);
+        let pass = e.mem.u32(base + 0x384);
+        e.call(PASS_SET_PIXEL_SHADER_00B80600, &args![pass, pixel_shader]);
+    }
+    let states: &[(u32, u32)] = if e.global::<u32>(MODE_011F91B8) == 6 {
+        &[(0x34, 1), (0x38, 8), (0x37, 7), (0x35, 1), (0x36, 1)]
+    } else {
+        &[(0x34, 0)]
+    };
+    for &(state, value) in states {
+        let pass = e.mem.u32(base + 0x384);
+        pass_render_state(e, pass, state, value);
+    }
+    let flagged = e.global::<u8>(RENDER_FLAGS_011F941C) & 1 != 0;
+    let pass = e.mem.u32(base + 0x384);
+    pass_render_state(e, pass, 0xa8, if flagged { 0 } else { 7 });
+    let pass = e.mem.u32(base + 0x384);
+    pass_render_state(e, pass, 0x1c, 0);
+    let left = e.mem.u32(stage + 0x60).wrapping_sub(1);
+    e.mem.set_u32(stage + 0x60, left);
+    if left == 0 {
+        e.call(STAGE_DELETE_00E7ECD0, &args![stage]);
+    }
+}
+
+// Translated from 00bb2580 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (vtable entry at `010b91e8`), `thiscall` with seven words: calls
+/// the shader's vtable +0xec, then `UpdatePipelineForInstance` with the same seven words, and
+/// makes the pass +0x384 the current pass (`0126f74c`). Answers 0.
+pub fn fn_00bb2580(
+    e: &mut Engine,
+    this: Ptr,
+    first: u32,
+    second: u32,
+    third: u32,
+    fourth: u32,
+    fifth: u32,
+    sixth: u32,
+    seventh: u32,
+) -> u32 {
+    e.vcall(this.addr(), 0xec, &args![]);
+    speed_tree_leaf_shader_update_pipeline_for_instance(
+        e, this, first, second, third, fourth, fifth, sixth, seventh,
+    );
+    let pass = e.mem.u32(this.addr() + 0x384);
+    e.set_global(PASS_STATE_0126F74C, pass);
+    0
+}
+
+// Translated from 00bb2be0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (vtable entry at `010b92b0`), `thiscall`, no stack words: calls
+/// the shader's vtable +0x13c, then (a tail jump) `00bb1d40`, the stages and passes.
+pub fn fn_00bb2be0(e: &mut Engine, this: Ptr) {
+    e.vcall(this.addr(), 0x13c, &args![]);
+    fn_00bb1d40(e, this);
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x00bb_1d30, fn_00bb1d30(Ptr) -> Ptr),
+        entry!(
+            0x00bb_1f60,
+            speed_tree_leaf_shader_update_pipeline_for_instance(
+                Ptr, u32, u32, u32, u32, u32, u32, u32
+            )
+        ),
+        entry!(
+            0x00bb_2580,
+            fn_00bb2580(Ptr, u32, u32, u32, u32, u32, u32, u32) -> u32
+        ),
+        entry!(0x00bb_2be0, fn_00bb2be0(Ptr)),
         entry!(0x00bb_1d40, fn_00bb1d40(Ptr)),
         entry!(0x00bb_2a00, fn_00bb2a00(Ptr) -> Ptr),
         entry!(0x00bb_2c00, fn_00bb2c00() -> Ptr),
@@ -1074,5 +1326,330 @@ mod leaf_function_tests {
             e.call(0x00bb_2d10, &args![this]);
             assert!(calls(&e, MAP_SLOTS + 8).is_empty());
         }
+    }
+}
+
+#[cfg(test)]
+mod n071_tests {
+    use super::*;
+    use crate::units::bsshader::geometrydecalshader::shader_test_rig::{object, pass_rig, rig};
+    use crate::units::bsshader::shadowlightshader::n071_rig::{calls, order, slot_target, vobject};
+
+    struct Leaf {
+        e: Engine,
+        this: u32,
+        positioned: u32,
+        instance: u32,
+        widening: u32,
+        fog: u32,
+        leaf: u32,
+        stage: u32,
+        pass: u32,
+    }
+
+    /// A leaf shader with a pass (+0x384, a stage holding one count) and its six shaders, an
+    /// instance whose leaf object (type 6) answers its leaf data, a fog 100..600 and the
+    /// position 30 units from the eye.
+    fn leaf_rig() -> Leaf {
+        let mut e = rig();
+        for page in [0x0102_3000u32, 0x011f_9000, 0x011f_a000, 0x0120_0000] {
+            e.map(page, 0x1000);
+        }
+        for target in [
+            MEMCPY,
+            SET_RENDER_STATE_00E7F430,
+            PASS_SET_VERTEX_SHADER_00B79950,
+            PASS_SET_PIXEL_SHADER_00B80600,
+        ] {
+            e.register(target, |_, _| Ret::default());
+        }
+        e.register(NEW_RENDER_STATES_00E7F5D0, |_, _| 0x0e5f_0000u32.into_ret());
+        e.register(CRT_SQRT_00EC6040, |_, a| Ret {
+            st0: f64::from_bits(u64::from(a[0]) | u64::from(a[1]) << 32).sqrt(),
+            ..Ret::default()
+        });
+        let fog = e.mem.alloc(0x70);
+        for (offset, value) in [
+            (0x20u32, 0.25f32),
+            (0x24, 0.5),
+            (0x28, 0.75),
+            (0x2c, 100.0),
+            (0x30, 600.0),
+        ] {
+            e.mem.set_f32(fog + offset, value);
+        }
+        e.register_double(GET_FOG_PROPERTY, move |_, _| fog.into_ret());
+        let data = e.mem.alloc(0x20);
+        for (offset, value) in [
+            (0xcu32, 1.0f32),
+            (0x10, 2.0),
+            (0x14, 3.0),
+            (0x18, 4.0),
+            (0x1c, 5.0),
+        ] {
+            e.mem.set_f32(data + offset, value);
+        }
+        let leaf = vobject(
+            &mut e,
+            0x20,
+            &[(0x100, 0x0e10_0000), (0xfc, data), (0xb4, 0xb4b4)],
+        );
+        e.mem.set_u32(leaf + 0x1c, 6);
+        let instance = e.mem.alloc(0x10);
+        e.mem.set_u32(instance, 0x1234);
+        e.mem.set_u32(instance + 0xc, leaf);
+        let positioned = e.mem.alloc(0xa0);
+        e.mem.set_f32(positioned + 0x8c, 10.0);
+        e.mem.set_f32(positioned + 0x90, 20.0);
+        e.mem.set_f32(positioned + 0x94, 20.0);
+        e.set_global(EYE_011FA2A0, 0.0f32);
+        let widening = e.mem.alloc(0x10);
+        let this = vobject(&mut e, 0x38c, &[]);
+        let target = vobject(&mut e, 0x10, &[]);
+        e.mem.set_u32(this + 0x1c, target);
+        for offset in (0x36cu32..=0x380).step_by(4) {
+            let shader = object(&mut e, 1);
+            e.mem.set_u32(this + offset, shader);
+        }
+        let stage = e.mem.alloc(0x70);
+        e.mem.set_u32(stage + 0x60, 1);
+        let stages = e.mem.alloc(4);
+        e.mem.set_u32(stages, stage);
+        let pass = e.mem.alloc(0x70);
+        e.mem.set_u32(pass + 0x24, stages);
+        e.mem.set_u32(this + 0x384, pass);
+        e.set_global(SCALE_01200608, 0.5f32);
+        e.set_global(SCALE_0120060C, 2.0f32);
+        e.set_global(DIFFUSE_VALUE_010231A8, 0.4f32);
+        Leaf {
+            e,
+            this,
+            positioned,
+            instance,
+            widening,
+            fog,
+            leaf,
+            stage,
+            pass,
+        }
+    }
+
+    fn update(leaf: &mut Leaf) {
+        let args = args![
+            leaf.this,
+            leaf.positioned,
+            0u32,
+            0u32,
+            leaf.instance,
+            0u32,
+            0u32,
+            leaf.widening
+        ];
+        leaf.e.call(0x00bb_1f60, &args);
+    }
+
+    fn states(e: &Engine) -> Vec<(u32, u32)> {
+        calls(e, SET_RENDER_STATE_00E7F430)
+            .iter()
+            .map(|a| (a[1], a[2]))
+            .collect()
+    }
+
+    #[test]
+    fn fn_00bb1d30_answers_its_record() {
+        let mut e = rig();
+        assert_eq!(e.call(0x00bb_1d30, &args![0u32]).u32(), RECORD_01200610);
+    }
+
+    #[test]
+    fn update_pipeline_with_fog_and_lights() {
+        let mut leaf = leaf_rig();
+        leaf.e
+            .register(GET_NUMBER_OF_ACTIVE_LIGHTS, |_, _| 2u32.into_ret());
+        // The distance is 30, the near distance 100: out of the fog.
+        update(&mut leaf);
+        let e = &leaf.e;
+        let target = e.mem.u32(leaf.this + 0x1c);
+        assert_eq!(
+            calls(e, slot_target(e, target, 0xc)),
+            vec![vec![target, 0x1234]]
+        );
+        assert_eq!(e.global::<f32>(FOG_PARAM_011FA280), 0.0);
+        assert_eq!(
+            calls(e, MEMCPY),
+            vec![vec![leaf.this + 0x6c, 0x0e10_0000, 0x300]]
+        );
+        assert_eq!(e.global::<f32>(LEAF_0120065C), 2.0);
+        assert_eq!(e.global::<f32>(LEAF_0120066C), 10.0);
+        assert_eq!(e.global::<f32>(LEAF_01200660), 3.0);
+        assert_eq!(e.global::<f32>(LEAF_01200670), 2.0);
+        assert_eq!(e.global::<f32>(TREE_DATA_01200678 + 4), 1.0);
+        assert_eq!(e.mem.u32(leaf.stage + 8), 0xb4b4);
+        // Held and dropped again: still one count, no delete.
+        assert_eq!(e.mem.u32(leaf.stage + 0x60), 1);
+        assert!(calls(e, STAGE_DELETE_00E7ECD0).is_empty());
+        assert_eq!(calls(e, GET_NUMBER_OF_ACTIVE_LIGHTS), vec![vec![leaf.leaf]]);
+        let vertex = e.mem.u32(leaf.this + 0x374);
+        let pixel = e.mem.u32(leaf.this + 0x37c);
+        assert_eq!(
+            calls(e, PASS_SET_VERTEX_SHADER_00B79950),
+            vec![vec![leaf.pass, vertex]]
+        );
+        assert_eq!(
+            calls(e, PASS_SET_PIXEL_SHADER_00B80600),
+            vec![vec![leaf.pass, pixel]]
+        );
+        assert_eq!(states(e), vec![(0x34, 0), (0xa8, 7), (0x1c, 0)]);
+        assert_eq!(e.mem.u32(leaf.pass + 0x30), 0x0e5f_0000);
+        // Widened by 80, the near distance is below 110: the fog is on.
+        leaf.e.mem.set_f32(leaf.widening + 0xc, 80.0);
+        leaf.e.call_log = Some(vec![]);
+        update(&mut leaf);
+        let e = &leaf.e;
+        let fog: Vec<f32> = (0..8)
+            .map(|i| e.global::<f32>(FOG_PARAM_011FA280 + 4 * i))
+            .collect();
+        assert_eq!(fog, vec![600.0, 500.0, 0.0, 0.0, 0.25, 0.5, 0.75, 0.0]);
+        let vertex = e.mem.u32(leaf.this + 0x378);
+        let pixel = e.mem.u32(leaf.this + 0x380);
+        assert_eq!(
+            calls(e, PASS_SET_VERTEX_SHADER_00B79950),
+            vec![vec![leaf.pass, vertex]]
+        );
+        assert_eq!(
+            calls(e, PASS_SET_PIXEL_SHADER_00B80600),
+            vec![vec![leaf.pass, pixel]]
+        );
+        // A near distance of 20 is below the distance itself; no lights now.
+        leaf.e.mem.set_f32(leaf.fog + 0x2c, 20.0);
+        leaf.e.mem.set_f32(leaf.widening + 0xc, 0.0);
+        leaf.e.register(GET_NUMBER_OF_ACTIVE_LIGHTS, |_, _| {
+            0x0001_0000u32.into_ret()
+        });
+        leaf.e.call_log = Some(vec![]);
+        update(&mut leaf);
+        let e = &leaf.e;
+        assert_eq!(e.global::<f32>(FOG_PARAM_011FA280 + 4), 580.0);
+        let vertex = e.mem.u32(leaf.this + 0x370);
+        assert_eq!(
+            calls(e, PASS_SET_VERTEX_SHADER_00B79950),
+            vec![vec![leaf.pass, vertex]]
+        );
+        // No fog property, no lights.
+        leaf.e.register(GET_FOG_PROPERTY, |_, _| 0u32.into_ret());
+        leaf.e.call_log = Some(vec![]);
+        update(&mut leaf);
+        let e = &leaf.e;
+        let vertex = e.mem.u32(leaf.this + 0x36c);
+        let pixel = e.mem.u32(leaf.this + 0x37c);
+        assert_eq!(
+            calls(e, PASS_SET_VERTEX_SHADER_00B79950),
+            vec![vec![leaf.pass, vertex]]
+        );
+        assert_eq!(
+            calls(e, PASS_SET_PIXEL_SHADER_00B80600),
+            vec![vec![leaf.pass, pixel]]
+        );
+    }
+
+    #[test]
+    fn update_pipeline_full_bright_and_mode_6() {
+        let mut leaf = leaf_rig();
+        leaf.e.set_global(FULL_BRIGHT_011F91A7, 1u8);
+        leaf.e.set_global(MODE_011F91B8, 9u32);
+        leaf.e.set_global(RENDER_FLAGS_011F941C, 1u8);
+        update(&mut leaf);
+        let e = &leaf.e;
+        let ambient: Vec<f32> = (0..4)
+            .map(|i| e.global::<f32>(AMBIENT_011FA0C0 + 4 * i))
+            .collect();
+        assert_eq!(ambient, vec![1.0; 4]);
+        let diffuse: Vec<f32> = (0..4)
+            .map(|i| e.global::<f32>(DIFFUSE_011FA0D0 + 4 * i))
+            .collect();
+        assert_eq!(diffuse, vec![0.0, 0.4, 0.0, 0.0]);
+        assert!(calls(e, GET_NUMBER_OF_ACTIVE_LIGHTS).is_empty());
+        let vertex = e.mem.u32(leaf.this + 0x36c);
+        let pixel = e.mem.u32(leaf.this + 0x37c);
+        assert_eq!(e.mem.u32(leaf.pass + 0x5c), vertex);
+        assert_eq!(e.mem.u32(leaf.pass + 0x44), pixel);
+        assert_eq!(e.mem.u32(vertex + 4), 2);
+        assert_eq!(states(e), vec![(0x34, 0), (0xa8, 0), (0x1c, 0)]);
+        leaf.e.set_global(MODE_011F91B8, 6u32);
+        leaf.e.call_log = Some(vec![]);
+        update(&mut leaf);
+        let e = &leaf.e;
+        let diffuse: Vec<f32> = (0..4)
+            .map(|i| e.global::<f32>(DIFFUSE_011FA0D0 + 4 * i))
+            .collect();
+        assert_eq!(diffuse, vec![0.0; 4]);
+        assert_eq!(
+            states(e),
+            vec![
+                (0x34, 1),
+                (0x38, 8),
+                (0x37, 7),
+                (0x35, 1),
+                (0x36, 1),
+                (0xa8, 0),
+                (0x1c, 0)
+            ]
+        );
+    }
+
+    #[test]
+    fn update_pipeline_drops_the_last_stage_count() {
+        let mut leaf = leaf_rig();
+        leaf.e
+            .register(GET_NUMBER_OF_ACTIVE_LIGHTS, |_, _| 0u32.into_ret());
+        leaf.e
+            .register(STAGE_DELETE_00E7ECD0, |_, _| Ret::default());
+        leaf.e.mem.set_u32(leaf.stage + 0x60, 0);
+        update(&mut leaf);
+        assert_eq!(leaf.e.mem.u32(leaf.stage + 0x60), 0);
+        assert_eq!(
+            calls(&leaf.e, STAGE_DELETE_00E7ECD0),
+            vec![vec![leaf.stage]]
+        );
+    }
+
+    #[test]
+    fn fn_00bb2580_runs_the_update_and_sets_the_pass() {
+        let mut leaf = leaf_rig();
+        leaf.e
+            .register(GET_NUMBER_OF_ACTIVE_LIGHTS, |_, _| 0u32.into_ret());
+        leaf.e.map(0x0126_f000, 0x1000);
+        let args = args![
+            leaf.this,
+            leaf.positioned,
+            0u32,
+            0u32,
+            leaf.instance,
+            0u32,
+            0u32,
+            leaf.widening
+        ];
+        assert_eq!(leaf.e.call(0x00bb_2580, &args).u32(), 0);
+        let e = &leaf.e;
+        let log = order(e);
+        let first = log
+            .iter()
+            .position(|a| *a == slot_target(e, leaf.this, 0xec));
+        let target = e.mem.u32(leaf.this + 0x1c);
+        let update = log.iter().position(|a| *a == slot_target(e, target, 0xc));
+        assert!(first.unwrap() < update.unwrap());
+        assert_eq!(e.global::<u32>(PASS_STATE_0126F74C), leaf.pass);
+    }
+
+    #[test]
+    fn fn_00bb2be0_then_builds_the_passes() {
+        let mut e = pass_rig();
+        e.register(RELEASE_RENDER_STATES_00E7F6B0, |_, _| Ret::default());
+        let this = vobject(&mut e, 0x38c, &[]);
+        e.call(0x00bb_2be0, &args![this]);
+        let log = order(&e);
+        assert_eq!(log[1], slot_target(&e, this, 0x13c));
+        assert_eq!(log[2], NEW_PASS_00E804D0);
+        assert_eq!(calls(&e, NEW_PASS_00E804D0).len(), 2);
     }
 }

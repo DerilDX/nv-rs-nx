@@ -229,6 +229,88 @@ pub fn ni_p_sys_cylinder_emitter_load_binary(
     });
 }
 
+use crate::units::niparticle::nipsysdata::{add_viewer_string, stream_write};
+
+/// `NiPSysVolumeEmitter`'s `IsEqual` (`00c31b80`), `SaveBinary`
+/// (`00c31b60`) and `GetViewerStrings` (`00c31db0`) (Xbox PDB names;
+/// `thiscall`, one word).
+const VOLUME_EMITTER_IS_EQUAL: u32 = 0x00c3_1b80;
+const VOLUME_EMITTER_SAVE_BINARY: u32 = 0x00c3_1b60;
+const VOLUME_EMITTER_GET_VIEWER_STRINGS: u32 = 0x00c3_1db0;
+/// `NiGetViewerString` (`00a7d330`, the text) and `NiGetViewerString_ov9`
+/// (`00a7d550`: a label and a `float`) (Xbox PDB names; `cdecl`).
+const VIEWER_STRING: u32 = 0x00a7_d330;
+const VIEWER_STRING_FLOAT: u32 = 0x00a7_d550;
+/// `NiPSysCylinderEmitter::ms_RTTI` (its name is the first word).
+const RTTI: u32 = 0x0120_2508;
+/// The labels "Radius" (`01015a9c`) and "Height" (`0109dc84`).
+const LABEL_RADIUS: u32 = 0x0101_5a9c;
+const LABEL_HEIGHT: u32 = 0x0109_dc84;
+
+// Translated from 00c1f9e0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiPSysCylinderEmitter::IsEqual` (Xbox PDB): `NiPSysVolumeEmitter`'s,
+/// then equal radii and heights (`FUCOMPP`: a NaN is unequal).
+pub fn ni_p_sys_cylinder_emitter_is_equal(
+    e: &mut Engine,
+    this: Ptr<NiPSysCylinderEmitter>,
+    other: Ptr<NiPSysCylinderEmitter>,
+) -> bool {
+    if !e.call(VOLUME_EMITTER_IS_EQUAL, &args![this, other]).bool() {
+        return false;
+    }
+    let ours = x87_m32(e.get(this, NiPSysCylinderEmitter::m_fEmitterRadius));
+    let theirs = x87_m32(e.get(other, NiPSysCylinderEmitter::m_fEmitterRadius));
+    if theirs != ours {
+        return false;
+    }
+    let ours = x87_m32(e.get(this, NiPSysCylinderEmitter::m_fEmitterHeight));
+    let theirs = x87_m32(e.get(other, NiPSysCylinderEmitter::m_fEmitterHeight));
+    theirs == ours
+}
+
+// Translated from 00c1fca0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiPSysCylinderEmitter::SaveBinary` (Xbox PDB): `NiPSysVolumeEmitter`'s,
+/// then the radius and the height (4 bytes each).
+pub fn ni_p_sys_cylinder_emitter_save_binary(
+    e: &mut Engine,
+    this: Ptr<NiPSysCylinderEmitter>,
+    stream: Ptr,
+) {
+    e.call(VOLUME_EMITTER_SAVE_BINARY, &args![this, stream]);
+    e.with_stack(4, |e, slot| {
+        let radius = this.addr() + NiPSysCylinderEmitter::m_fEmitterRadius.off;
+        stream_write(e, stream.addr(), radius, 4, 4, slot.addr());
+        let height = this.addr() + NiPSysCylinderEmitter::m_fEmitterHeight.off;
+        stream_write(e, stream.addr(), height, 4, 4, slot.addr());
+    });
+}
+
+// Translated from 00c1fd00 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiPSysCylinderEmitter::GetViewerStrings` (Xbox PDB):
+/// `NiPSysVolumeEmitter`'s strings, the class name, the radius and the
+/// height.
+pub fn ni_p_sys_cylinder_emitter_get_viewer_strings(
+    e: &mut Engine,
+    this: Ptr<NiPSysCylinderEmitter>,
+    strings: Ptr,
+) {
+    let strings = strings.addr();
+    e.call(VOLUME_EMITTER_GET_VIEWER_STRINGS, &args![this, strings]);
+    let name = e.global::<u32>(RTTI);
+    let string = e.call(VIEWER_STRING, &args![name]).u32();
+    add_viewer_string(e, strings, string);
+    let radius = x87_quiet_bits(e.get(this, NiPSysCylinderEmitter::m_fEmitterRadius));
+    let string = e
+        .call(VIEWER_STRING_FLOAT, &args![LABEL_RADIUS, radius])
+        .u32();
+    add_viewer_string(e, strings, string);
+    let height = x87_quiet_bits(e.get(this, NiPSysCylinderEmitter::m_fEmitterHeight));
+    let string = e
+        .call(VIEWER_STRING_FLOAT, &args![LABEL_HEIGHT, height])
+        .u32();
+    add_viewer_string(e, strings, string);
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -259,6 +341,21 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         ),
         entry!(0x00c1fa40, ni_p_sys_cylinder_emitter_get_r_t_t_i() -> u32),
         entry!(0x00c1fc20, ni_p_sys_cylinder_emitter_scalar_deleting_destructor(Ptr, u32) -> Ptr),
+        entry!(
+            0x00c1_f9e0,
+            ni_p_sys_cylinder_emitter_is_equal(
+                Ptr<NiPSysCylinderEmitter>,
+                Ptr<NiPSysCylinderEmitter>,
+            ) -> bool
+        ),
+        entry!(
+            0x00c1_fca0,
+            ni_p_sys_cylinder_emitter_save_binary(Ptr<NiPSysCylinderEmitter>, Ptr)
+        ),
+        entry!(
+            0x00c1_fd00,
+            ni_p_sys_cylinder_emitter_get_viewer_strings(Ptr<NiPSysCylinderEmitter>, Ptr)
+        ),
     ]
 }
 
@@ -445,6 +542,90 @@ mod tests {
         assert_eq!(
             e.get(this, NiPSysCylinderEmitter::m_fEmitterHeight),
             4.0f32.to_bits()
+        );
+    }
+}
+
+#[cfg(test)]
+mod n064_tests {
+    use super::*;
+    use crate::units::niparticle::nipsysdata::viewer_test::{self, answer, calls_to};
+
+    fn emitter(e: &mut Engine, radius: f32, height: f32) -> Ptr<NiPSysCylinderEmitter> {
+        let this = e.new_object::<NiPSysCylinderEmitter>();
+        e.set(
+            this,
+            NiPSysCylinderEmitter::m_fEmitterRadius,
+            radius.to_bits(),
+        );
+        e.set(
+            this,
+            NiPSysCylinderEmitter::m_fEmitterHeight,
+            height.to_bits(),
+        );
+        this
+    }
+
+    #[test]
+    fn is_equal_compares_radius_and_height() {
+        let mut e = Engine::new();
+        e.register(VOLUME_EMITTER_IS_EQUAL, |_, _| answer(1));
+        let this = emitter(&mut e, 1.0, 2.0);
+        let check = |e: &mut Engine, other| e.call(0x00c1_f9e0, &args![this, other]).bool();
+        let same = emitter(&mut e, 1.0, 2.0);
+        assert!(check(&mut e, same));
+        let radius = emitter(&mut e, 1.5, 2.0);
+        assert!(!check(&mut e, radius));
+        let height = emitter(&mut e, 1.0, 2.5);
+        assert!(!check(&mut e, height));
+        let nan = emitter(&mut e, 1.0, f32::NAN);
+        e.set(
+            this,
+            NiPSysCylinderEmitter::m_fEmitterHeight,
+            f32::NAN.to_bits(),
+        );
+        assert!(!check(&mut e, nan));
+        e.register(VOLUME_EMITTER_IS_EQUAL, |_, _| answer(0));
+        assert!(!check(&mut e, same));
+    }
+
+    #[test]
+    fn save_binary_writes_radius_then_height() {
+        let mut e = Engine::new();
+        e.register(VOLUME_EMITTER_SAVE_BINARY, |_, _| Ret::default());
+        let stream = viewer_test::out_stream(&mut e);
+        let this = emitter(&mut e, 1.0, 2.0);
+        e.call_log = Some(vec![]);
+        e.call(0x00c1_fca0, &args![this, stream]);
+        assert_eq!(
+            calls_to(&e, VOLUME_EMITTER_SAVE_BINARY),
+            vec![vec![this.addr(), stream]]
+        );
+        let mut bytes = 1.0f32.to_le_bytes().to_vec();
+        bytes.extend(2.0f32.to_le_bytes());
+        assert_eq!(viewer_test::written(&e, stream), (bytes, 8));
+    }
+
+    #[test]
+    fn viewer_strings_add_the_name_radius_and_height() {
+        let mut e = Engine::new();
+        e.register(VOLUME_EMITTER_GET_VIEWER_STRINGS, |_, _| Ret::default());
+        viewer_test::counting(&mut e, &[VIEWER_STRING, VIEWER_STRING_FLOAT]);
+        e.map(RTTI, 4);
+        e.set_global::<u32>(RTTI, 0x0100_0050);
+        let strings = viewer_test::strings(&mut e, 8);
+        let this = emitter(&mut e, 1.0, 2.0);
+        e.set(this, NiPSysCylinderEmitter::m_fEmitterHeight, 0x7f80_0001);
+        e.call_log = Some(vec![]);
+        e.call(0x00c1_fd00, &args![this, strings]);
+        assert_eq!(viewer_test::collected(&e, strings), vec![1, 2, 3]);
+        assert_eq!(calls_to(&e, VIEWER_STRING), vec![vec![0x0100_0050]]);
+        assert_eq!(
+            calls_to(&e, VIEWER_STRING_FLOAT),
+            vec![
+                vec![LABEL_RADIUS, 1.0f32.to_bits()],
+                vec![LABEL_HEIGHT, 0x7fc0_0001]
+            ]
         );
     }
 }

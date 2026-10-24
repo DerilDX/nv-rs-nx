@@ -98,6 +98,28 @@ pub fn fn_00c3bc80(e: &mut Engine, name: Ptr) {
     build_path(e, PATH_938, name);
 }
 
+// Translated from 00c3bc70 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Returns the path buffer at `01202938` (no arguments, plain `RET`; nothing in the exe
+/// refers to it).
+pub fn fn_00c3bc70(_e: &mut Engine) -> u32 {
+    PATH_938
+}
+
+// Translated from 00c3bcc0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// An empty function (`PUSH EBP; MOV EBP,ESP; POP EBP; RET`; nothing in the exe refers to
+/// it, so no caller shows arguments).
+pub fn fn_00c3bcc0(_e: &mut Engine) {}
+
+// Translated from 00c3bcd0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Answers 0 (`XOR EAX,EAX`; plain `RET`, nothing in the exe refers to it).
+pub fn fn_00c3bcd0(_e: &mut Engine) -> u32 {
+    0
+}
+
+// Translated from 00c3bce0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// An empty function (plain `RET`; nothing in the exe refers to it).
+pub fn fn_00c3bce0(_e: &mut Engine) {}
+
 // Translated from 00c3bd30 (decompiled, FalloutNV.exe 1.4.0.525)
 /// Start-up of this unit's state: makes the message handler (`00c3c460`), stores the low
 /// bytes of the first four words in the bytes at `011af49c`..`011af49f` and the fifth word at
@@ -141,6 +163,10 @@ pub fn fn_00c3bda0(e: &mut Engine, this: Ptr) {
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x00c3_bc70, fn_00c3bc70() -> u32),
+        entry!(0x00c3_bcc0, fn_00c3bcc0()),
+        entry!(0x00c3_bcd0, fn_00c3bcd0() -> u32),
+        entry!(0x00c3_bce0, fn_00c3bce0()),
         entry!(0x00c3_bcf0, fn_00c3bcf0(Ptr, u8) -> Ptr),
         entry!(0x00c3_bb80, fn_00c3bb80() -> u32),
         entry!(0x00c3_bb90, fn_00c3bb90(Ptr)),
@@ -302,5 +328,21 @@ mod b004_tests {
                 if instance { 0 } else { 0x1234 }
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod n069_tests {
+    use super::*;
+
+    #[test]
+    fn the_last_path_getter_and_the_stubs() {
+        let mut e = Engine::new();
+        assert_eq!(e.call(0x00c3_bc70, &args![]).u32(), PATH_938);
+        assert_eq!(e.call(0x00c3_bcd0, &args![]).u32(), 0);
+        e.call_log = Some(vec![]);
+        e.call(0x00c3_bcc0, &args![]);
+        e.call(0x00c3_bce0, &args![]);
+        assert_eq!(e.call_log.take().unwrap().len(), 2);
     }
 }

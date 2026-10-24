@@ -723,9 +723,171 @@ pub fn fn_00c3d980(e: &mut Engine, this: u32, free_buffer: u32) {
     e.mem.set_u32(this + SIZE, 0);
 }
 
+/// `sprintf_s` (`00406d00`, `cdecl`: buffer, size, format, arguments) and `strcat_s`
+/// (`00ec6bd2`, `cdecl`: destination, size, source).
+const SPRINTF_S: u32 = 0x0040_6d00;
+const STRCAT_S: u32 = 0x00ec_6bd2;
+/// The description formats: `"Queued %s %s with file entry offset %i and size %i"`
+/// (`010c15cc`), `"Queued %s with file entry offset %i and size %i"` (`010c159c`) and
+/// `"Queued %s %s"` (`010c158c`), and the separator before a child's description
+/// (`010c1584`, a line break then `" * "`).
+const DESCRIPTION_WITH_NAME: u32 = 0x010c_15cc;
+const DESCRIPTION_WITHOUT_NAME: u32 = 0x010c_159c;
+const DESCRIPTION_NAME_ONLY: u32 = 0x010c_158c;
+const CHILD_SEPARATOR: u32 = 0x010c_1584;
+/// The size of the stack buffer a child's description is written into.
+const CHILD_DESCRIPTION_SIZE: u32 = 0x32c8;
+/// The archive entry's words the description prints: the offset (+0xC, low 31 bits) and the
+/// size (+8, low 30 bits).
+const ENTRY_OFFSET: u32 = 0xc;
+const ENTRY_SIZE: u32 = 0x8;
+
+// Translated from 00c3d0e0 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 00c3d0e0 - the /GS stack cookie check (00ec408c) is not translated
+/// `QueuedFileEntry::GetDescription` (engine map; `thiscall`, `RET 0xC`: buffer, size, a
+/// text the formats print first). With an archive entry and a file name: `"Queued %s %s with
+/// file entry offset %i and size %i"`; with the entry only: `"Queued %s with file entry
+/// offset %i and size %i"`; otherwise `"Queued %s %s"` with the name (`sprintf_s`). Then for
+/// each non-null child of the children array (+0x20) whose description (virtual `+0x10`,
+/// given a 0x32C8-byte stack buffer and its size) answers true, the separator and that
+/// description are appended (`strcat_s`). The exe's 0x331C-byte frame goes through the stack
+/// probe (`_alloca_probe`, platform). Answers true.
+pub fn queued_file_entry_get_description(
+    e: &mut Engine,
+    this: u32,
+    buffer: u32,
+    size: u32,
+    text: u32,
+) -> bool {
+    let entry = e.mem.u32(this + FILE_ENTRY);
+    let name = e.mem.u32(this + FILE_NAME);
+    if entry != 0 && name != 0 {
+        let offset = e.mem.u32(entry + ENTRY_OFFSET) & 0x7fff_ffff;
+        let length = e.mem.u32(entry + ENTRY_SIZE) & 0x3fff_ffff;
+        e.call(
+            SPRINTF_S,
+            &args![
+                buffer,
+                size,
+                DESCRIPTION_WITH_NAME,
+                text,
+                name,
+                offset,
+                length
+            ],
+        );
+    } else if entry != 0 {
+        let length = e.mem.u32(entry + ENTRY_SIZE) & 0x3fff_ffff;
+        let offset = e.mem.u32(entry + ENTRY_OFFSET) & 0x7fff_ffff;
+        e.call(
+            SPRINTF_S,
+            &args![buffer, size, DESCRIPTION_WITHOUT_NAME, text, offset, length],
+        );
+    } else {
+        e.call(
+            SPRINTF_S,
+            &args![buffer, size, DESCRIPTION_NAME_ONLY, text, name],
+        );
+    }
+    if e.mem.u32(this + CHILDREN) == 0 {
+        return true;
+    }
+    e.with_stack(CHILD_DESCRIPTION_SIZE, |e, child_text| {
+        let mut index = 0u32;
+        while index < e.mem.u32(e.mem.u32(this + CHILDREN) + SIZE) {
+            let children = e.mem.u32(this + CHILDREN);
+            let slot = e
+                .mem
+                .u32(children + BUFFER)
+                .wrapping_add(index.wrapping_mul(4));
+            let child = e.mem.u32(slot);
+            if child != 0
+                && e.vcall(child, 0x10, &args![child_text, CHILD_DESCRIPTION_SIZE])
+                    .u8()
+                    != 0
+            {
+                e.call(STRCAT_S, &args![buffer, size, CHILD_SEPARATOR]);
+                e.call(STRCAT_S, &args![buffer, size, child_text]);
+            }
+            index = index.wrapping_add(1);
+        }
+    });
+    true
+}
+
+// Translated from 00c3d410 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `QueuedFileEntry::_scalar_deleting_destructor_` (engine map; `thiscall`, `RET 4`): the
+/// destructor ([`fn_00c3cea0`]) and, when bit 0 of `flags` is set, `this` given back to the
+/// memory manager. Answers `this`.
+pub fn queued_file_entry_scalar_deleting_destructor(e: &mut Engine, this: u32, flags: u32) -> u32 {
+    fn_00c3cea0(e, this);
+    if flags & 1 != 0 {
+        e.call(MEMORY_DEALLOCATE, &args![MEMORY_MANAGER, this]);
+    }
+    this
+}
+
+// Translated from 00c3d5e0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSSimpleArray<NiPointer<QueuedFile>>`'s removal of `count` elements at `index` (unnamed
+/// in the engine map; `thiscall`, `RET 8`). Each removed non-null pointer is released
+/// (`0044dd60`; the element destructor's delete, `XOR EDX,EDX; AND EDX,1`, is folded away and
+/// never runs). Then the last `min(size - index - count, count)` elements are moved into the
+/// gap (`0042fb60`: destination, source, count) and the size drops by `count`.
+pub fn fn_00c3d5e0(e: &mut Engine, this: u32, index: u32, count: u32) {
+    let tail = e
+        .mem
+        .u32(this + SIZE)
+        .wrapping_sub(index)
+        .wrapping_sub(count);
+    let moved = tail.min(count);
+    let gap = e.mem.u32(this + BUFFER).wrapping_add(index.wrapping_mul(4));
+    let mut i = 0u32;
+    while i < count {
+        let slot = gap.wrapping_add(i.wrapping_mul(4));
+        let object = e.mem.u32(slot);
+        if object != 0 {
+            e.call(POINTER_RELEASE, &args![object]);
+        }
+        i = i.wrapping_add(1);
+    }
+    let buffer = e.mem.u32(this + BUFFER);
+    let source = buffer
+        .wrapping_add(e.mem.u32(this + SIZE).wrapping_mul(4))
+        .wrapping_sub(moved.wrapping_mul(4));
+    let destination = buffer.wrapping_add(index.wrapping_mul(4));
+    e.call(SIMPLE_ARRAY_COPY, &args![this, destination, source, moved]);
+    let size = e.mem.u32(this + SIZE).wrapping_sub(count);
+    e.mem.set_u32(this + SIZE, size);
+}
+
+// Translated from 00c3d950 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSSimpleArray<NiPointer<QueuedFile>,1024>::_scalar_deleting_destructor_` (engine map;
+/// `thiscall`, `RET 4`): the destructor ([`fn_00c3d930`]) and, when bit 0 of `flags` is set,
+/// `this` given back to the memory manager. Answers `this`.
+pub fn bs_simple_array_scalar_deleting_destructor(e: &mut Engine, this: u32, flags: u32) -> u32 {
+    fn_00c3d930(e, this);
+    if flags & 1 != 0 {
+        e.call(MEMORY_DEALLOCATE, &args![MEMORY_MANAGER, this]);
+    }
+    this
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(
+            0x00c3_d0e0,
+            queued_file_entry_get_description(u32, u32, u32, u32) -> bool
+        ),
+        entry!(
+            0x00c3_d410,
+            queued_file_entry_scalar_deleting_destructor(u32, u32) -> u32
+        ),
+        entry!(0x00c3_d5e0, fn_00c3d5e0(u32, u32, u32)),
+        entry!(
+            0x00c3_d950,
+            bs_simple_array_scalar_deleting_destructor(u32, u32) -> u32
+        ),
         entry!(0x00c3_c570, fn_00c3c570(Ptr)),
         entry!(0x00c3_c520, fn_00c3c520(Ptr)),
         entry!(0x00c3_c590, queued_file_queued_file(u32, u32) -> u32),
@@ -1197,5 +1359,173 @@ mod tests {
             0x010c_1510,
             "the vtable was stored before the call"
         );
+    }
+}
+
+#[cfg(test)]
+mod n069_tests {
+    use super::*;
+
+    /// Runs the description of an entry with the given file entry and name; answers the
+    /// `sprintf_s` arguments and the `strcat_s` sources (as text).
+    fn describe(entry: bool, name: bool, children: &[(u32, bool)]) -> (Vec<u32>, Vec<Vec<u8>>) {
+        let mut e = Engine::new();
+        let printed = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let inner = printed.clone();
+        e.register_double(SPRINTF_S, move |_, a| {
+            inner.borrow_mut().extend_from_slice(a);
+            0u32.into_ret()
+        });
+        let appended = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let inner = appended.clone();
+        e.register_double(STRCAT_S, move |e, a| {
+            assert_eq!((a[0], a[1]), (0x900, 0x40));
+            inner.borrow_mut().push(e.mem.cstr(a[2]));
+            0u32.into_ret()
+        });
+        e.map(CHILD_SEPARATOR, 8);
+        e.mem.set_cstr(CHILD_SEPARATOR, b"\n * ");
+        let child_vtable = 0x0300_4000;
+        e.put_vtable(child_vtable, &[0, 0, 0, 0, 0x00ee_8000]);
+        e.register(0x00ee_8000, |e, a| {
+            assert_eq!(a[2], CHILD_DESCRIPTION_SIZE);
+            let tag = e.mem.u32(a[0] + 4);
+            e.mem
+                .set_cstr(a[1], format!("child {}", tag & 0xff).as_bytes());
+            (tag >> 8).into_ret()
+        });
+        let this = e.mem.alloc(0x30);
+        if entry {
+            let record = e.mem.alloc(0x10);
+            e.mem.set_u32(record + 8, 0xc000_0010);
+            e.mem.set_u32(record + 0xc, 0x8000_0020);
+            e.mem.set_u32(this + FILE_ENTRY, record);
+        }
+        if name {
+            e.mem.set_u32(this + FILE_NAME, 0x0600_0000);
+        }
+        if !children.is_empty() {
+            let array = e.mem.alloc(0x10);
+            let buffer = e.mem.alloc(4 * children.len() as u32);
+            for (i, (tag, present)) in children.iter().enumerate() {
+                if *present {
+                    let child = e.mem.alloc(8);
+                    e.mem.set_u32(child, child_vtable);
+                    e.mem.set_u32(child + 4, *tag);
+                    e.mem.set_u32(buffer + 4 * i as u32, child);
+                }
+            }
+            e.mem.set_u32(array + BUFFER, buffer);
+            e.mem.set_u32(array + SIZE, children.len() as u32);
+            e.mem.set_u32(this + CHILDREN, array);
+        }
+        assert!(e
+            .call(0x00c3_d0e0, &args![this, 0x900u32, 0x40u32, 0x0700_0000u32])
+            .bool());
+        let printed = printed.borrow().clone();
+        let appended = appended.borrow().clone();
+        (printed, appended)
+    }
+
+    #[test]
+    fn the_description_format_follows_entry_and_name() {
+        assert_eq!(
+            describe(true, true, &[]).0,
+            vec![
+                0x900,
+                0x40,
+                DESCRIPTION_WITH_NAME,
+                0x0700_0000,
+                0x0600_0000,
+                0x20,
+                0x10
+            ]
+        );
+        assert_eq!(
+            describe(true, false, &[]).0,
+            vec![
+                0x900,
+                0x40,
+                DESCRIPTION_WITHOUT_NAME,
+                0x0700_0000,
+                0x20,
+                0x10
+            ]
+        );
+        assert_eq!(
+            describe(false, true, &[]).0,
+            vec![0x900, 0x40, DESCRIPTION_NAME_ONLY, 0x0700_0000, 0x0600_0000]
+        );
+    }
+
+    #[test]
+    fn described_children_are_appended() {
+        let (_, appended) = describe(false, true, &[(0x101, true), (0x2, false), (0x3, true)]);
+        assert_eq!(appended, vec![b"\n * ".to_vec(), b"child 1".to_vec()]);
+    }
+
+    #[test]
+    fn entry_deleting_destructor() {
+        let mut e = Engine::new();
+        e.register(MEMORY_DEALLOCATE, |_, _| Ret::default());
+        let this = e.mem.alloc(0x30);
+        e.mem.set_u32(this + FILE_NAME, 0x55);
+        e.register(INTERLOCKED_DECREMENT, |_, _| Ret::default());
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x00c3_d410, &args![this, 0u32]).u32(), this);
+        let log = e.call_log.take().unwrap();
+        // The destructor chain ends at the `BSTask` table.
+        assert_eq!(e.mem.u32(this), BS_TASK_VTABLE);
+        assert!(log.contains(&(MEMORY_DEALLOCATE, vec![MEMORY_MANAGER, 0x55])));
+        assert!(!log.contains(&(MEMORY_DEALLOCATE, vec![MEMORY_MANAGER, this])));
+        e.call_log = Some(vec![]);
+        e.call(0x00c3_d410, &args![this, 1u32]);
+        let log = e.call_log.take().unwrap();
+        assert!(log.contains(&(MEMORY_DEALLOCATE, vec![MEMORY_MANAGER, this])));
+    }
+
+    #[test]
+    fn remove_at_releases_and_moves_the_tail() {
+        let mut e = Engine::new();
+        e.register(POINTER_RELEASE, |_, _| Ret::default());
+        e.register(SIMPLE_ARRAY_COPY, |_, _| Ret::default());
+        let this = e.mem.alloc(0x10);
+        let buffer = e.mem.alloc(4 * 6);
+        for (i, word) in [1u32, 2, 0, 4, 5, 6].iter().enumerate() {
+            e.mem.set_u32(buffer + 4 * i as u32, *word);
+        }
+        e.mem.set_u32(this + BUFFER, buffer);
+        e.mem.set_u32(this + SIZE, 6);
+        e.call_log = Some(vec![]);
+        e.call(0x00c3_d5e0, &args![this, 1u32, 2u32]);
+        let log = e.call_log.take().unwrap();
+        let released: Vec<_> = log.iter().filter(|c| c.0 == POINTER_RELEASE).collect();
+        assert_eq!(released.len(), 1);
+        assert_eq!(released[0].1, vec![2]);
+        // Three elements follow the gap, but only two (the count) are moved: the last two.
+        assert!(log.contains(&(SIMPLE_ARRAY_COPY, vec![this, buffer + 4, buffer + 16, 2])));
+        assert_eq!(e.mem.u32(this + SIZE), 4);
+        // At the end only the one element after the gap moves.
+        e.call_log = Some(vec![]);
+        e.call(0x00c3_d5e0, &args![this, 1u32, 2u32]);
+        let log = e.call_log.take().unwrap();
+        assert!(log.contains(&(SIMPLE_ARRAY_COPY, vec![this, buffer + 4, buffer + 12, 1])));
+        assert_eq!(e.mem.u32(this + SIZE), 2);
+    }
+
+    #[test]
+    fn array_deleting_destructor() {
+        let mut e = Engine::new();
+        e.register(MEMORY_DEALLOCATE, |_, _| Ret::default());
+        let this = e.mem.alloc(0x10);
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x00c3_d950, &args![this, 3u32]).u32(), this);
+        let log = e.call_log.take().unwrap();
+        assert_eq!(e.mem.u32(this), SIMPLE_ARRAY_VTABLE);
+        assert!(log.contains(&(MEMORY_DEALLOCATE, vec![MEMORY_MANAGER, this])));
+        e.call_log = Some(vec![]);
+        e.call(0x00c3_d950, &args![this, 2u32]);
+        let log = e.call_log.take().unwrap();
+        assert!(!log.iter().any(|c| c.0 == MEMORY_DEALLOCATE));
     }
 }

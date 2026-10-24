@@ -1365,9 +1365,160 @@ pub fn geometry_decal_shader_create_constant_maps(e: &mut Engine, this: Ptr) {
     );
 }
 
+// Translated from 00bcbc70 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (unit `geometrydecalshader.cpp`), `thiscall`, no stack words:
+/// `GeometryDecalShader::LoadShaders`, then a tail jump to `this`'s slot +0x13c (what it
+/// answers in EAX, EDX and ST0 is this function's result).
+pub fn fn_00bcbc70(e: &mut Engine, this: Ptr) -> Ret {
+    geometry_decal_shader_load_shaders(e, this);
+    e.vcall(this.addr(), 0x13c, &args![])
+}
+
+/// The uniform-form entry of [`fn_00bcbc70`]: `this`; the tail call's registers pass through.
+fn fn_00bcbc70_entry(e: &mut Engine, a: &[u32]) -> Ret {
+    fn_00bcbc70(e, Ptr::new(a[0]))
+}
+
+// Translated from 00bcbc90 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed (Ghidra made no function of it): slot 70 of the vtable `010bb588`, `thiscall`, two
+/// words (a geometry, one not read): the declaration `012021e4` when the geometry's +0xbc is
+/// set, else `012021e0`.
+pub fn fn_00bcbc90(e: &mut Engine, _this: Ptr, geometry: Ptr, _unused_1: u32) -> u32 {
+    if e.mem.u32(geometry.addr() + 0xbc) != 0 {
+        e.global::<u32>(DECLARATION_POINTER_012021E4)
+    } else {
+        e.global::<u32>(DECLARATION_POINTER_012021E0)
+    }
+}
+
+/// The current pass (`0126f74c`) and the stage function `00e7eb00` (unnamed; `thiscall` on a
+/// stage, one word).
+const CURRENT_PASS_0126F74C: u32 = 0x0126_f74c;
+const STAGE_SET_00E7EB00: u32 = 0x00e7_eb00;
+
+// Translated from 00bcbcb0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed (Ghidra made no function of it): slot 30 of the vtable `010bb588`, `thiscall`, one
+/// word (a geometry): the current pass's (`0126f74c`) stage 1 takes the shader property's
+/// (+0xc) texture +0x7c at +8; then a tail jump to `00e7eb00` on the stage with 0 put in the
+/// argument's place (its registers are this function's result).
+pub fn fn_00bcbcb0(e: &mut Engine, _this: Ptr, geometry: Ptr) -> Ret {
+    let pass = e.global::<u32>(CURRENT_PASS_0126F74C);
+    let property = e.mem.u32(geometry.addr() + 0xc);
+    let stage = e.mem.u32(e.mem.u32(pass + 0x24) + 4);
+    let texture = e.mem.u32(property + 0x7c);
+    e.mem.set_u32(stage + 8, texture);
+    e.call(STAGE_SET_00E7EB00, &args![stage, 0u32])
+}
+
+/// The uniform-form entry of [`fn_00bcbcb0`]: `this`, the geometry; the tail call's registers
+/// pass through.
+fn fn_00bcbcb0_entry(e: &mut Engine, a: &[u32]) -> Ret {
+    fn_00bcbcb0(e, Ptr::new(a[0]), Ptr::new(a[1]))
+}
+
+/// What `00bcbce0` reads and writes: the accumulator holder (`011f91e0`), the fallback object
+/// `011f4288`, `00e6fbb0` (unnamed; `thiscall` on the shader's +0x18, two words), the `float`
+/// 0.5 (`01016248`), the decal constants `012021d0` to `012021dc`, the fade `012021c0` and
+/// `012021c4`.
+const ACCUMULATOR_011F91E0: u32 = 0x011f_91e0;
+const FALLBACK_011F4288: u32 = 0x011f_4288;
+const FN_00E6FBB0: u32 = 0x00e6_fbb0;
+const HALF_01016248: u32 = 0x0101_6248;
+const DECAL_MODE_012021D0: u32 = 0x0120_21d0;
+const DECAL_ALPHA_012021C4: u32 = 0x0120_21c4;
+
+// Translated from 00bcbce0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (unit `geometrydecalshader.cpp`), `thiscall`, one word (the
+/// geometry; its shader property P at +0xc). With A the accumulator (`*011f91e0`):
+/// `00e6fbb0` on the shader's +0x18 with A + 0x68 and 0. P's byte +0xc0 picks the constants
+/// `012021d0` to `012021dc` (0: (0, h, 0, h); 1: (h, h, 0, h); 2: (0, h, h, h); 3: all h, h
+/// = 0.5 from `01016248`; any other value leaves them; the compiler's jump table as `match`
+/// arms). `012021c0` = 1 - P[+0xbc]^10 (the power by squaring, x87 through `float`s),
+/// `012021c4` = P[+0x28]. Then each constant map (+0x30 with the current pass's +0x44, +0x34
+/// with its +0x5c), when both are set, gets its slot +0x78 with (that word, A, A[+0xbc], 0,
+/// A[+0xb8][+0x34], the geometry, 0, A + 0x68, A[+0x20] or `011f4288` when null, 0, 1).
+pub fn fn_00bcbce0(e: &mut Engine, this: Ptr, geometry: Ptr) {
+    let base = this.addr();
+    let accumulator = e.mem.u32(e.global::<u32>(ACCUMULATOR_011F91E0));
+    let mut object = e.mem.u32(accumulator + 0x20);
+    let space = accumulator + 0x68;
+    if object == 0 {
+        object = FALLBACK_011F4288;
+    }
+    let word_34 = e.mem.u32(e.mem.u32(accumulator + 0xb8) + 0x34);
+    let word_bc = e.mem.u32(accumulator + 0xbc);
+    let property = e.mem.u32(geometry.addr() + 0xc);
+    let member = e.mem.u32(base + 0x18);
+    e.call(FN_00E6FBB0, &args![member, space, 0u32]);
+    let half = x87_quiet_bits(e.global::<u32>(HALF_01016248));
+    let zero = x87_store32(0.0);
+    let words = match e.mem.u8(property + 0xc0) {
+        0 => Some([zero, half, zero, half]),
+        1 => Some([half, half, zero, half]),
+        2 => Some([zero, half, half, half]),
+        3 => Some([half, half, half, half]),
+        _ => None,
+    };
+    if let Some(words) = words {
+        for (index, word) in words.iter().enumerate() {
+            e.set_global(DECAL_MODE_012021D0 + 4 * index as u32, *word);
+        }
+    }
+    let mut base_bits = x87_quiet_bits(e.mem.u32(property + 0xbc));
+    let mut result_bits = x87_store32(1.0);
+    let mut exponent = 10u32;
+    loop {
+        let value = x87_load32(base_bits);
+        if exponent & 1 != 0 {
+            result_bits = x87_store32(x87_mul(x87_load32(result_bits), value));
+        }
+        exponent >>= 1;
+        if exponent == 0 {
+            break;
+        }
+        base_bits = x87_store32(x87_mul(value, value));
+    }
+    let power = x87_load32(x87_quiet_bits(result_bits));
+    e.set_global(DECAL_FADE_012021C0, x87_store32(x87_sub(1.0, power)));
+    let alpha = x87_quiet_bits(e.mem.u32(property + 0x28));
+    e.set_global(DECAL_ALPHA_012021C4, alpha);
+    for (map_offset, pass_offset) in [(0x30u32, 0x44u32), (0x34, 0x5c)] {
+        let map = e.mem.u32(base + map_offset);
+        if map == 0 {
+            continue;
+        }
+        let pass = e.global::<u32>(CURRENT_PASS_0126F74C);
+        let shader = e.mem.u32(pass + pass_offset);
+        if shader == 0 {
+            continue;
+        }
+        e.vcall(
+            map,
+            0x78,
+            &args![
+                shader,
+                accumulator,
+                word_bc,
+                0u32,
+                word_34,
+                geometry,
+                0u32,
+                space,
+                object,
+                0u32,
+                1u32
+            ],
+        );
+    }
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        (0x00bc_bc70, fn_00bcbc70_entry as AbiFn),
+        entry!(0x00bc_bc90, fn_00bcbc90(Ptr, Ptr, u32) -> u32),
+        (0x00bc_bcb0, fn_00bcbcb0_entry as AbiFn),
+        entry!(0x00bc_bce0, fn_00bcbce0(Ptr, Ptr)),
         entry!(0x00bc_bf00, geometry_decal_shader_geometry_decal_shader(Ptr) -> Ptr),
         entry!(0x00bc_b4d0, geometry_decal_shader_load_shaders(Ptr)),
         entry!(0x00e8_04d0, fn_00e804d0(Ptr)),
@@ -1936,6 +2087,149 @@ mod decal_function_tests {
             let entry = e.mem.u32(this + offset);
             assert_ne!(entry, 0);
             assert_eq!(e.mem.u32(entry + 4), 1);
+        }
+    }
+}
+
+#[cfg(test)]
+mod n070_tests {
+    use super::*;
+
+    fn calls(e: &Engine, addr: u32) -> Vec<Vec<u32>> {
+        e.call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|(a, _)| *a == addr)
+            .map(|(_, w)| w.clone())
+            .collect()
+    }
+
+    const SLOTS: u32 = 0x0f00_0000;
+
+    fn object(e: &mut Engine, size: u32) -> u32 {
+        let vtable = e.mem.alloc(0x140);
+        for offset in (0..0x140u32).step_by(4) {
+            e.mem.set_u32(vtable + offset, SLOTS + offset);
+        }
+        let object = e.mem.alloc(size);
+        e.mem.set_u32(object, vtable);
+        object
+    }
+
+    fn rig() -> Engine {
+        let mut e = Engine::new();
+        for page in [0x0120_2000u32, 0x0126_f000, 0x011f_9000, 0x0101_6000] {
+            e.map(page, 0x1000);
+        }
+        for offset in (0..0x140u32).step_by(4) {
+            e.register(SLOTS + offset, |_, _| Ret::default());
+        }
+        e.call_log = Some(vec![]);
+        e
+    }
+
+    #[test]
+    fn fn_00bcbc70_loads_then_calls_slot_0x13c() {
+        use super::shader_test_rig::loader_rig;
+        let mut e = loader_rig();
+        e.register(DECAL_PIXEL_PROFILE_00B4F380, |_, _| {
+            0x0f20_0000u32.into_ret()
+        });
+        for offset in (0..0x140u32).step_by(4) {
+            e.register(SLOTS + offset, |_, _| Ret::default());
+        }
+        e.register(SLOTS + 0x13c, |_, _| 1u32.into_ret());
+        let this = object(&mut e, 0x90);
+        assert_eq!(e.call(0x00bc_bc70, &args![this]).u32(), 1);
+        assert!(!calls(&e, shader_inline::COMPILE_VERTEX_SHADER).is_empty());
+        assert_eq!(calls(&e, SLOTS + 0x13c), vec![vec![this]]);
+    }
+
+    #[test]
+    fn fn_00bcbc90_picks_the_declaration() {
+        let mut e = rig();
+        e.set_global(DECLARATION_POINTER_012021E0, 0xe0u32);
+        e.set_global(DECLARATION_POINTER_012021E4, 0xe4u32);
+        let geometry = e.mem.alloc(0xc0);
+        assert_eq!(
+            e.call(0x00bc_bc90, &args![0u32, geometry, 0u32]).u32(),
+            0xe0
+        );
+        e.mem.set_u32(geometry + 0xbc, 1);
+        assert_eq!(
+            e.call(0x00bc_bc90, &args![0u32, geometry, 0u32]).u32(),
+            0xe4
+        );
+    }
+
+    #[test]
+    fn fn_00bcbcb0_sets_stage_1() {
+        let mut e = rig();
+        e.register(STAGE_SET_00E7EB00, |_, _| 4u32.into_ret());
+        let stage = e.mem.alloc(0x10);
+        let stages = e.mem.alloc(8);
+        e.mem.set_u32(stages + 4, stage);
+        let pass = e.mem.alloc(0x28);
+        e.mem.set_u32(pass + 0x24, stages);
+        e.set_global(CURRENT_PASS_0126F74C, pass);
+        let property = e.mem.alloc(0x80);
+        e.mem.set_u32(property + 0x7c, 0x7c7c);
+        let geometry = e.mem.alloc(0x10);
+        e.mem.set_u32(geometry + 0xc, property);
+        assert_eq!(e.call(0x00bc_bcb0, &args![0u32, geometry]).u32(), 4);
+        assert_eq!(e.mem.u32(stage + 8), 0x7c7c);
+        assert_eq!(calls(&e, STAGE_SET_00E7EB00), vec![vec![stage, 0]]);
+    }
+
+    #[test]
+    fn fn_00bcbce0_sets_the_decal_constants() {
+        let mut e = rig();
+        e.set_global(HALF_01016248, 0.5f32);
+        let accumulator = e.mem.alloc(0xc0);
+        let inner = e.mem.alloc(0x40);
+        e.mem.set_u32(inner + 0x34, 0x3434);
+        e.mem.set_u32(accumulator + 0xb8, inner);
+        e.mem.set_u32(accumulator + 0xbc, 0xbcbc);
+        let holder = e.mem.alloc(4);
+        e.mem.set_u32(holder, accumulator);
+        e.set_global(ACCUMULATOR_011F91E0, holder);
+        let pass = e.mem.alloc(0x60);
+        e.mem.set_u32(pass + 0x44, 0x4444);
+        e.set_global(CURRENT_PASS_0126F74C, pass);
+        e.register(FN_00E6FBB0, |_, _| Ret::default());
+        let this = object(&mut e, 0x40);
+        let pixel = object(&mut e, 4);
+        e.mem.set_u32(this + 0x30, pixel);
+        let property = e.mem.alloc(0xc4);
+        e.mem.set_f32(property + 0xbc, 0.5);
+        e.mem.set_f32(property + 0x28, 0.75);
+        e.mem.set_u8(property + 0xc0, 1);
+        let geometry = e.mem.alloc(0x10);
+        e.mem.set_u32(geometry + 0xc, property);
+        e.call(0x00bc_bce0, &args![this, geometry]);
+        let words: Vec<f32> = (0..4)
+            .map(|i| e.global::<f32>(DECAL_MODE_012021D0 + 4 * i))
+            .collect();
+        assert_eq!(words, vec![0.5, 0.5, 0.0, 0.5]);
+        assert_eq!(e.global::<f32>(DECAL_FADE_012021C0), 1.0 - 1.0 / 1024.0);
+        assert_eq!(e.global::<f32>(DECAL_ALPHA_012021C4), 0.75);
+        let fed = calls(&e, SLOTS + 0x78);
+        assert_eq!(fed.len(), 1);
+        assert_eq!(fed[0][..2], [pixel, 0x4444]);
+        assert_eq!(fed[0][9], FALLBACK_011F4288);
+        for (mode, want) in [
+            (0u8, [0.0f32, 0.5, 0.0, 0.5]),
+            (2, [0.0, 0.5, 0.5, 0.5]),
+            (3, [0.5, 0.5, 0.5, 0.5]),
+            (9, [0.5, 0.5, 0.5, 0.5]),
+        ] {
+            e.mem.set_u8(property + 0xc0, mode);
+            e.call(0x00bc_bce0, &args![this, geometry]);
+            let words: Vec<f32> = (0..4)
+                .map(|i| e.global::<f32>(DECAL_MODE_012021D0 + 4 * i))
+                .collect();
+            assert_eq!(words, want.to_vec());
         }
     }
 }

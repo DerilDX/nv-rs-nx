@@ -1132,6 +1132,9 @@ address	cc	params	ret	unit	callees	consts	buffers	computed_reads
 0065cc50	thiscall	ptr	u32	crates/engine-fallout/src/units/unplaced/run_0065cc30.rs			0:48:0:12.4;16.4	0
 0065cea0	thiscall	ptr	i32	crates/engine-fallout/src/units/unplaced/run_0065cc30.rs		i88	0:48:0:12.4;16.4	0
 0065de30	thiscall	ptr,u32	ptr	crates/engine-fallout/src/units/unplaced/run_0065cfb0.rs			0:32:0:	0
+0065f2e0	thiscall	ptr	u32	crates/engine-fallout/src/units/fallout_shared_facegen/run_0065f2b0.rs		i0,i6	0:48:0:12.4;20.4	0
+0065f4b0	thiscall	ptr	u32	crates/engine-fallout/src/units/fallout_shared_facegen/run_0065f2b0.rs		i0	0:48:0:12.4;20.4	0
+0065f7c0	thiscall	ptr	u32	crates/engine-fallout/src/units/fallout_shared_facegen/run_0065f2b0.rs		i0,i1	0:32:0:	0
 0065f7f0	thiscall	ptr	u32	crates/engine-fallout/src/units/fallout_shared_facegen/run_0065f2b0.rs		i-1,i0,i1	0:32:0:	0
 0065fd70	cdecl	u32,u32,u32	u32	crates/engine-fallout/src/units/fallout_shared_facegen/run_0065f2b0.rs				0
 00660940	cdecl	u16,u32	u32	crates/engine-fallout/src/units/fallout_shared_facegen/bsfacegenmorph.rs				0
@@ -1143,6 +1146,8 @@ address	cc	params	ret	unit	callees	consts	buffers	computed_reads
 00662820	thiscall	ptr	i32	crates/engine-fallout/src/units/fallout_shared_facegen/run_00662760.rs		i2	0:48:0:12.4;16.4	0
 00662840	thiscall	ptr	i32	crates/engine-fallout/src/units/fallout_shared_facegen/run_00662760.rs		i52	0:48:0:12.4;16.4	0
 006629e0	thiscall	ptr	u32	crates/engine-fallout/src/units/fallout_shared_facegen/bsfacegenninode.rs			0:32:0:	0
+00662a40	thiscall	ptr	u8	crates/engine-fallout/src/units/fallout_shared_facegen/bsfacegenninode.rs			0:240:0:214.1	0
+00662a80	thiscall	ptr	u8	crates/engine-fallout/src/units/fallout_shared_facegen/bsfacegenninode.rs			0:240:0:216.1	0
 006633f0	cdecl		u32	crates/engine-fallout/src/units/fallout_shared_facegen/bsfacegenninode.rs	0045bb80	i0,i140		0
 006639f0	thiscall	ptr	u8	crates/engine-fallout/src/units/fallout_shared_facegen/bsfacegenninode.rs			0:416:0:393.1	0
 00663a50	thiscall	ptr	u8	crates/engine-fallout/src/units/fallout_shared_facegen/bsfacegenninode.rs			0:48:0:29.1	0
@@ -1436,6 +1441,9 @@ address	cc	params	ret	unit	callees	consts	buffers	computed_reads
 00720df0	cdecl		u32	crates/engine-fallout/src/units/fallout_interface/menumanager.rs		i1023		0
 007242c0	thiscall	ptr,u32	bool	crates/engine-fallout/src/units/fallout_interface/menumanager.rs		i1	0:64:0:44.2	0
 00726070	thiscall	ptr	u32	crates/engine-fallout/src/units/fallout_interface/menumanager.rs			0:32:0:4.4	0
+00726f00	thiscall	ptr	u32	crates/engine-fallout/src/units/fallout_interface/recipemenu.rs		i1077	0:32:0:	0
+00726f10	cdecl		u32	crates/engine-fallout/src/units/fallout_interface/recipemenu.rs				0
+007273e0	cdecl		u32	crates/engine-fallout/src/units/fallout_interface/recipemenu.rs		i1077		0
 0072d030	thiscall	ptr	u32	crates/engine-fallout/src/units/fallout_interface/bartermenu.rs		i1053	0:32:0:	0
 0072d6c0	cdecl		u32	crates/engine-fallout/src/units/fallout_interface/bartermenu.rs		i1053		0
 00731790	thiscall	ptr	u32	crates/engine-fallout/src/units/fallout_interface/blackjackmenu.rs		i1081	0:32:0:	0
@@ -1447,8 +1455,18 @@ address	cc	params	ret	unit	callees	consts	buffers	computed_reads
 0073acf0	thiscall	ptr	u32	crates/engine-fallout/src/units/fallout_interface/bookmenu.rs		i1026	0:32:0:	0
 0073af60	thiscall	ptr	bool	crates/engine-fallout/src/units/fallout_interface/bookmenu.rs		i0,i1	0:64:0:40.4;44.4	0
 0073b020	thiscall	ptr	u64	crates/engine-fallout/src/units/fallout_interface/bookmenu.rs	004dc1f0,004dc200,00715da0,00ec62c0	d4000000000000000,i5,d4094000000000000,f44700000,i0	0:32:0:	0
+0073bb30	thiscall	ptr	u32	crates/engine-fallout/src/units/fallout_interface/caravanmenu.rs		i1083	0:32:0:	0
 0073cb80	thiscall	ptr	u8	crates/engine-fallout/src/units/fallout_interface/caravanmenu.rs			0:176:0:152.1	0
+0073cba0	thiscall	ptr	u32	crates/engine-fallout/src/units/fallout_interface/caravanmenu.rs			0:1584:0:1556.4	0
+0073cbc0	thiscall	ptr	u32	crates/engine-fallout/src/units/fallout_interface/caravanmenu.rs			0:1584:0:1560.4	0
+0073cbe0	cdecl		u32	crates/engine-fallout/src/units/fallout_interface/caravanmenu.rs		i1083		0
+00740900	thiscall	ptr	u32	crates/engine-fallout/src/units/fallout_interface/caravanmenu.rs			0:1584:0:1564.4	0
+00740920	thiscall	ptr	u32	crates/engine-fallout/src/units/fallout_interface/caravanmenu.rs			0:1600:0:1568.4	0
 00740940	thiscall	ptr	u32	crates/engine-fallout/src/units/fallout_interface/caravanmenu.rs			0:1600:0:1572.4	0
+00740960	thiscall	ptr	u32	crates/engine-fallout/src/units/fallout_interface/caravanmenu.rs			0:1600:0:1576.4	0
+00740e50	thiscall	ptr	u32	crates/engine-fallout/src/units/fallout_interface/caravanmenu.rs			0:1600:0:1580.4	0
+00740f10	thiscall	ptr,u32	bool	crates/engine-fallout/src/units/fallout_interface/caravanmenu.rs			0:3728:0:3700.4	0
+00752df0	thiscall	ptr,i32	i32	crates/engine-fallout/src/units/fallout_interface/caravanmenu.rs		i21,i-1,i26,i1	0:32:0:	0
 00753340	thiscall	ptr	u32	crates/engine-fallout/src/units/fallout_interface/chargenmenu.rs		i1048	0:32:0:	0
 00753760	cdecl		u32	crates/engine-fallout/src/units/fallout_interface/chargenmenu.rs		i1048		0
 00757a10	thiscall	ptr	u32	crates/engine-fallout/src/units/fallout_interface/computersmenu.rs		i1057	0:32:0:	0
@@ -1498,12 +1516,21 @@ address	cc	params	ret	unit	callees	consts	buffers	computed_reads
 00791740	cdecl		u32	crates/engine-fallout/src/units/fallout_interface/lovetestermenu.rs		i1074		0
 00792760	thiscall	ptr	f64	crates/engine-fallout/src/units/fallout_interface/lovetestermenu.rs			0:96:0:64.4	0
 00796a40	thiscall	ptr	u32	crates/engine-fallout/src/units/fallout_interface/mapmenu.rs		i1023	0:32:0:	0
+007983c0	thiscall	ptr	f32	crates/engine-fallout/src/units/fallout_interface/mapmenu.rs	004dc200	d408e000000000000	0:1232:0:1200.4	0
+00798400	thiscall	ptr	u32	crates/engine-fallout/src/units/fallout_interface/mapmenu.rs			0:1808:0:1780.4	0
+00798420	thiscall	ptr	u8	crates/engine-fallout/src/units/fallout_interface/mapmenu.rs			0:144:0:125.1	0
+00798440	cdecl		u8	crates/engine-fallout/src/units/fallout_interface/mapmenu.rs				0
+0079b800	thiscall	ptr	bool	crates/engine-fallout/src/units/fallout_interface/mapmenu.rs		i4	0:112:0:92.2	0
 0079bc30	thiscall	ptr	u32	crates/engine-fallout/src/units/fallout_interface/mapmenu.rs		i1724	0:32:0:	0
+0079c070	cdecl		u32	crates/engine-fallout/src/units/fallout_interface/mapmenu.rs				0
+0079c080	cdecl		u32	crates/engine-fallout/src/units/fallout_interface/mapmenu.rs				0
+0079f620	thiscall	ptr	u32	crates/engine-fallout/src/units/fallout_interface/mapmenu.rs		i1784	0:32:0:	0
 007a1480	cdecl		u32	crates/engine-fallout/src/units/fallout_interface/mapmenu.rs				0
 007a8aa0	thiscall	ptr	u32	crates/engine-fallout/src/units/fallout_interface/messagemenu.rs		i1001	0:32:0:	0
 007a8de0	cdecl		u32	crates/engine-fallout/src/units/fallout_interface/messagemenu.rs		i1001		0
 007a9280	thiscall	ptr	u8	crates/engine-fallout/src/units/fallout_interface/messagemenu.rs			0:80:0:56.1	0
 007ab230	thiscall	u32,u32	u32	crates/engine-fallout/src/units/fallout_interface/messagemenu.rs	0065de30			0
+007abda0	cdecl		u32	crates/engine-fallout/src/units/fallout_interface/quantitymenu.rs		i1016		0
 007ac4f0	thiscall	ptr	u32	crates/engine-fallout/src/units/fallout_interface/racesexmenu.rs		i1036	0:32:0:	0
 007ac9c0	cdecl		u32	crates/engine-fallout/src/units/fallout_interface/racesexmenu.rs		i1036		0
 007adc30	thiscall	ptr,u32	bool	crates/engine-fallout/src/units/fallout_interface/racesexmenu.rs		i1	0:256:0:236.4	0
@@ -1513,6 +1540,13 @@ address	cc	params	ret	unit	callees	consts	buffers	computed_reads
 007b5370	thiscall	ptr	u32	crates/engine-fallout/src/units/unplaced/run_007b5370.rs		i8	0:32:0:4.4	0
 007b54b0	thiscall	ptr	u32	crates/engine-fallout/src/units/fallout_interface/repairmenu.rs		i1035	0:32:0:	0
 007b5720	cdecl		u32	crates/engine-fallout/src/units/fallout_interface/repairmenu.rs		i1035		0
+007b74c0	thiscall	ptr	u32	crates/engine-fallout/src/units/fallout_interface/repairservicesmenu.rs		i1058	0:32:0:	0
+007b7890	cdecl		u32	crates/engine-fallout/src/units/fallout_interface/repairservicesmenu.rs		i1058		0
+007b8f10	thiscall	ptr	u32	crates/engine-fallout/src/units/fallout_interface/run_007b8d30.rs			0:1616:0:1584.4	0
+007b8f30	thiscall	ptr	u32	crates/engine-fallout/src/units/fallout_interface/roulettemenu.rs		i1082	0:32:0:	0
+007bc820	cdecl		u32	crates/engine-fallout/src/units/fallout_interface/roulettemenu.rs		i1082		0
+007c0800	thiscall	ptr	u32	crates/engine-fallout/src/units/fallout_interface/slotmachinemenu.rs		i1080	0:32:0:	0
+007c1440	cdecl		u32	crates/engine-fallout/src/units/fallout_interface/slotmachinemenu.rs		i1080		0
 007cb4d0	thiscall	ptr	u32	crates/engine-fallout/src/units/fallout_interface/startmenu.rs		i1013	0:32:0:	0
 007cc5d0	thiscall	ptr,u32	bool	crates/engine-fallout/src/units/fallout_interface/startmenu.rs			0:32:0:12.4	0
 007cc5f0	cdecl	u32	bool	crates/engine-fallout/src/units/fallout_interface/startmenu.rs		i1008,i76,i1		0
@@ -1535,10 +1569,17 @@ address	cc	params	ret	unit	callees	consts	buffers	computed_reads
 007ddef0	cdecl		f32	crates/engine-fallout/src/units/fallout_interface/statsmenu.rs		f447a0000		0
 007df1f0	thiscall	ptr	f32	crates/engine-fallout/src/units/fallout_interface/statsmenu.rs			0:64:0:32.4	0
 007df210	thiscall	ptr	u32	crates/engine-fallout/src/units/fallout_interface/statsmenu.rs		i128	0:48:0:24.4	0
+007df9c0	cdecl	u32	u32	crates/engine-fallout/src/units/fallout_interface/statsmenu.rs		i5,i25,i28,i26,i27,i30,i29,i-1		0
 007dfdf0	thiscall	ptr,u32	u32	crates/engine-fallout/src/units/fallout_interface/statsmenu.rs		i12,i16,i24,i4105,i4106,i4107	0:32:0:	0
+007e1970	cdecl		u32	crates/engine-fallout/src/units/fallout_interface/surgerymenu.rs		i1054		0
+007e4fc0	thiscall	ptr,u32	u32	crates/engine-fallout/src/units/fallout_interface/surgerymenu.rs		i20	0:48:0:24.4	0
+007e5540	thiscall	ptr,i32	u32	crates/engine-fallout/src/units/fallout_interface/surgerymenu.rs		i100,i75,i1,i50,i2,i25,i3,i4	0:32:0:	0
+007e5e30	thiscall	ptr,i32	u32	crates/engine-fallout/src/units/fallout_interface/surgerymenu.rs		i1,i31,i2,i3,i4,i5,i6	0:32:0:	0
 007e65a0	cdecl		u32	crates/engine-fallout/src/units/fallout_interface/run_007e6320.rs		i1051		0
 007e68a0	thiscall	ptr	u32	crates/engine-fallout/src/units/fallout_interface/traitmenu.rs		i1084	0:32:0:	0
 007e6dc0	cdecl		u32	crates/engine-fallout/src/units/fallout_interface/traitmenu.rs		i1084		0
+007e7ac0	thiscall	ptr	u32	crates/engine-fallout/src/units/fallout_interface/traitselectmenu.rs		i1076	0:32:0:	0
+007e7d90	cdecl		u32	crates/engine-fallout/src/units/fallout_interface/traitselectmenu.rs		i1076		0
 007e8e60	thiscall	ptr,u32,u32	bool	crates/engine-fallout/src/units/fallout_interface/tutorialmenu.rs		i0	0:32:0:	0
 007eb8c0	cdecl		u32	crates/engine-fallout/src/units/fallout_interface/vatsmenu.rs		i1056		0
 007faef0	thiscall	ptr	u8	crates/engine-fallout/src/units/fallout_interface/forenderedmenu.rs			0:208:0:185.1	0
@@ -2059,6 +2100,7 @@ address	cc	params	ret	unit	callees	consts	buffers	computed_reads
 00996840	thiscall	ptr,u32	u32	crates/engine-fallout/src/units/fallout_ai/combatplanner.rs		i2039	0:32:0:	0
 009990c0	thiscall	ptr	bool	crates/engine-fallout/src/units/fallout_ai/combatstate.rs		i5,i1,i0,d0000000000000000	0:32:0:4.4	0
 0099e040	thiscall	ptr	f32	crates/engine-fallout/src/units/fallout_ai/combatstate.rs			0:208:0:188.4	0
+009a0240	thiscall	ptr	u8	crates/engine-fallout/src/units/fallout_shared_facegen/bsfacegenninode.rs			0:240:0:213.1	0
 009a0600	thiscall	ptr,u32	bool	crates/engine-fallout/src/units/fallout_ai/combatstate.rs		i0,i1	0:256:0:228.4;232.4	0
 009a1260	thiscall	ptr	f32	crates/engine-fallout/src/units/fallout_ai/combatstate.rs			0:224:0:200.4	0
 009a3830	cdecl	ptr,ptr	bool	crates/engine-fallout/src/units/fallout_ai/combatstate.rs			0:32:0:0.4|1:32:0:0.4	0
@@ -2236,9 +2278,18 @@ address	cc	params	ret	unit	callees	consts	buffers	computed_reads
 00aa75f0	thiscall	ptr,u32	bool	crates/engine-bs/src/units/bscore/zerooverheadheap.rs		i1,i0	0:32:0:4.4;12.4	0
 00aa7e70	thiscall	ptr,u32	bool	crates/engine-bs/src/units/bscore/run_00aa7810.rs		i1,i0	0:80:0:20.4;48.4	0
 00aaa650	thiscall	ptr,u32,u32,u32	u32	crates/engine-fallout/src/units/unplaced/run_00aa9d00.rs			0:32:0:	0
+00ac63f0	cdecl		bool	crates/engine-fallout/src/units/facegen/run_00ac6220.rs		i0		0
+00ac6900	cdecl	u32	u32	crates/engine-fallout/src/units/facegen/run_00ac68e0.rs	005b5e40,00aafb90	i0,i39,i1		0
+00ac6950	cdecl	u32	u32	crates/engine-fallout/src/units/facegen/run_00ac68e0.rs	005b5e40,00aafb90,00ac6900	i1,i0,i39		0
+00ac7990	cdecl	i32,i32	u32	crates/engine-fallout/src/units/facegen/run_00ac68e0.rs	00ec62c0	i65,i5,dc1e0000000000000,d41dfffffffc00000,i0		0
+00aca1e0	thiscall	ptr	u32	crates/engine-fallout/src/units/facegen/algs.rs		i12,i16,i4	0:64:0:16.4;36.4	0
+00acb7d0	thiscall	ptr,u32	u32	crates/engine-fallout/src/units/facegen/algs.rs		i-1	0:32:0:	0
 00acb7e0	thiscall	ptr	u32	crates/engine-fallout/src/units/facegen/algs.rs		i-1	0:32:0:	0
+00acbb60	thiscall	ptr,u32,u32	ptr	crates/engine-fallout/src/units/facegen/algs.rs			0:32:0:	0
 00acbb70	thiscall	ptr	u32	crates/engine-fallout/src/units/facegen/algs.rs			0:32:0:	0
 00ad4000	thiscall	ptr,u32	u8	crates/engine-fallout/src/units/facegen/algs.rs			0:32:0:	0
+00ad4080	thiscall	ptr,u32,u32	u8	crates/engine-fallout/src/units/facegen/algs.rs			0:32:0:	0
+00ad5700	thiscall	ptr,u32,u32,u32,u32	u32	crates/engine-fallout/src/units/facegen/algs.rs			0:32:0:	0
 00ad87c0	thiscall	ptr	u32	crates/engine-bs/src/units/bsaudio/run_00ad8790.rs			0:32:0:	0
 00adb960	thiscall	ptr,u32,u32	bool	crates/engine-bs/src/units/bsaudio/bsaudiomanager.rs			0:32:0:	0
 00adbf40	thiscall	ptr,u32,u32,u32,u32	bool	crates/engine-bs/src/units/bsaudio/bsaudiomanager.rs			0:32:0:	0
@@ -2301,6 +2352,7 @@ address	cc	params	ret	unit	callees	consts	buffers	computed_reads
 00b7faf0	cdecl		u32	crates/engine-bs/src/units/bsshader/run_00b7fa40.rs		i6,i1,i2,i5,i8,i12,i4,i10,i3,i16,i7,i14,i18,i9		0
 00b8bd90	cdecl		u32	crates/engine-bs/src/units/bsshader/imagespacemanager.rs				0
 00ba3770	thiscall	ptr	u32	crates/engine-bs/src/units/bsshader/imagespacetexture.rs		i0	0:32:0:1.1;4.4	0
+00ba5060	cdecl	u32	u32	crates/engine-bs/src/units/bsshader/run_00ba3e30.rs		i1,i0,i2,i3,i6,i7,i8,i9,i4,i5,i10		1
 00bc7720	thiscall	ptr,u32,ptr	u32	crates/engine-bs/src/units/bsshader/bsshadernolighting.rs		i2,i64,i32,i0	0:464:0:388.4;392.4;396.4;400.4;404.4;408.4;412.4;416.4;420.4;424.4;428.4;432.4|2:128:0:32.4;36.1;96.4	0
 00be0aa0	thiscall	ptr	u32	crates/engine-gamebryo/src/units/nixenonrenderer/nid3dshaderprogramcreatorhlsl.rs			0:48:0:24.4	0
 00be0ad0	thiscall	ptr	u32	crates/engine-gamebryo/src/units/nixenonrenderer/nid3dshaderprogramcreatorhlsl.rs			0:48:0:28.4	0
@@ -2326,6 +2378,7 @@ address	cc	params	ret	unit	callees	consts	buffers	computed_reads
 00c24e90	cdecl		u32	crates/engine-gamebryo/src/units/niparticle/nipsysdata.rs				0
 00c257c0	cdecl		u32	crates/engine-gamebryo/src/units/niparticle/bsstripparticlesystem.rs				0
 00c25870	cdecl		u32	crates/engine-gamebryo/src/units/niparticle/nipsysupdatetask.rs				0
+00c25dd0	thiscall	ptr	u16	crates/engine-gamebryo/src/units/niparticle/bsstrippsysdata.rs			0:160:0:128.2	0
 00c25ee0	cdecl		u32	crates/engine-gamebryo/src/units/niparticle/bsstrippsysdata.rs				0
 00c26810	cdecl		u32	crates/engine-gamebryo/src/units/niparticle/nipsysvortexfieldmodifier.rs				0
 00c27130	cdecl		u32	crates/engine-gamebryo/src/units/niparticle/nipsysupdatectlr.rs				0
@@ -2369,11 +2422,13 @@ address	cc	params	ret	unit	callees	consts	buffers	computed_reads
 00c31290	cdecl		u32	crates/engine-gamebryo/src/units/niparticle/nipsysmodifierctlr.rs				0
 00c31710	cdecl		u32	crates/engine-gamebryo/src/units/niparticle/nipsysmodifier.rs				0
 00c31bc0	cdecl		u32	crates/engine-gamebryo/src/units/niparticle/nipsysvolumeemitter.rs				0
+00c31e90	thiscall	ptr,ptr	bool	crates/engine-gamebryo/src/units/niparticle/niparticleinfo.rs		i68,i1	0:48:0:0.4;4.4;8.4;12.4;16.4;20.4;24.2;26.2|1:48:0:0.4;4.4;8.4;12.4;16.4;20.4;24.2;26.2	0
 00c320f0	cdecl		u32	crates/engine-gamebryo/src/units/niparticle/nipsysfieldmodifier.rs				0
 00c327e0	cdecl		u32	crates/engine-gamebryo/src/units/niparticle/nipsyscollider.rs				0
 00c32be0	cdecl		u32	crates/engine-gamebryo/src/units/niparticle/nipsysmodifierboolctlr.rs				0
 00c32e00	cdecl		u32	crates/engine-gamebryo/src/units/niparticle/nipsysmodifierfloatctlr.rs				0
 00c36300	thiscall	ptr	u32	crates/engine-bs/src/units/bsmain/bsmultibound.rs			0:32:0:	0
+00c365e0	thiscall	ptr	u32	crates/engine-bs/src/units/bsmain/bsmultiboundobb.rs		i2	0:32:0:	0
 00c382a0	thiscall	ptr	bool	crates/engine-bs/src/units/bsmain/bsmultiboundaabb.rs		i1	0:32:0:	0
 00c3a610	thiscall	ptr	u32	crates/engine-bs/src/units/bsmain/bsmultiboundroom.rs			0:32:0:	0
 00c3b9e0	thiscall	ptr	u32	crates/engine-bs/src/units/bsmain/bsstream.rs			0:32:0:	0
@@ -2381,7 +2436,11 @@ address	cc	params	ret	unit	callees	consts	buffers	computed_reads
 00c3bb80	cdecl		u32	crates/engine-bs/src/units/bsmain/run_00c3bb80.rs				0
 00c3bbd0	cdecl		u32	crates/engine-bs/src/units/bsmain/run_00c3bb80.rs				0
 00c3bc20	cdecl		u32	crates/engine-bs/src/units/bsmain/run_00c3bb80.rs				0
+00c3bc70	cdecl		u32	crates/engine-bs/src/units/bsmain/run_00c3bb80.rs				0
+00c3bcd0	cdecl		u32	crates/engine-bs/src/units/bsmain/run_00c3bb80.rs				0
+00c3c230	cdecl		bool	crates/engine-bs/src/units/bsmain/run_00c3c230.rs				0
 00c3e3a0	thiscall	ptr,u32,u32	i32	crates/engine-bs/src/units/bsmain/iomanager.rs	00ec77e0	i16,i56,i4,i20,i64,i32,i31	0:32:0:	0
+00c3f650	thiscall	ptr,u32,u32	u32	crates/engine-bs/src/units/bsmain/run_00c3f160.rs			0:32:0:8.4	0
 00c3f670	thiscall	ptr,u32,u32	u64	crates/engine-bs/src/units/bsmain/run_00c3f160.rs			0:32:0:	0
 00c3f6b0	thiscall	ptr,u32,u32,u32,u32	bool	crates/engine-bs/src/units/bsmain/run_00c3f160.rs		i1,i0	0:32:0:	0
 00c430a0	thiscall	ptr,u32	ptr	crates/engine-bs/src/units/bsmain/bsxflags.rs			0:32:0:	0
@@ -2395,8 +2454,10 @@ address	cc	params	ret	unit	callees	consts	buffers	computed_reads
 00c4ac90	thiscall	ptr	u32	crates/engine-bs/src/units/bsmain/bsblastnode.rs			0:32:0:	0
 00c4aef0	thiscall	ptr	u32	crates/engine-bs/src/units/bsmain/bsdebrisnode.rs			0:32:0:	0
 00c4b210	thiscall	ptr	u32	crates/engine-bs/src/units/bsmain/bsdamagestage1.rs			0:32:0:	0
+00c4dcf0	thiscall	ptr,f32,f32,f32,f32,f32,f32,f32,f32,f32	i32	crates/engine-bs/src/units/bsmain/run_00c4c2d0.rs		i5,i1,i65,i-1,d0000000000000000	0:32:0:	0
 00c4f8d0	thiscall	ptr	u32	crates/engine-bs/src/units/bsmain/bsportal.rs			0:32:0:	0
 00c4f9a0	thiscall	ptr,u32	ptr	crates/engine-bs/src/units/bsmain/bsmultiboundshape.rs			0:32:0:	0
+00c4fec0	thiscall	ptr	u32	crates/engine-bs/src/units/bsmain/bsmultiboundsphere.rs		i3	0:32:0:	0
 00c516f0	thiscall	ptr	u32	crates/engine-bs/src/units/bsmain/bsparticlesystemmanager.rs			0:32:0:	0
 00c52870	thiscall	ptr	u32	crates/engine-bs/src/units/bsmain/bsscenegraph.rs			0:32:0:	0
 00c53e00	thiscall	ptr	u32	crates/engine-bs/src/units/bsmain/nibsbonelodcontroller.rs			0:32:0:	0
@@ -2415,12 +2476,18 @@ address	cc	params	ret	unit	callees	consts	buffers	computed_reads
 00c5fc60	thiscall	ptr	u32	crates/engine-bs/src/units/bsmain/bsninode.rs			0:32:0:	0
 00c600f0	thiscall	ptr	u32	crates/engine-bs/src/units/bsmain/bspsysstripupdatemodifier.rs			0:32:0:	0
 00c60d40	thiscall	ptr	u32	crates/engine-bs/src/units/bsmain/bspsyssimplecolormodifier.rs			0:32:0:	0
+00c611d0	thiscall	ptr	u32	crates/engine-bs/src/units/bsmain/bsmultiboundcapsule.rs		i4	0:32:0:	0
+00c611e0	thiscall	ptr,ptr	u32	crates/engine-bs/src/units/bsmain/bsmultiboundcapsule.rs			0:32:0:|1:32:0:	0
+00c61230	thiscall	ptr,ptr	bool	crates/engine-bs/src/units/bsmain/bsmultiboundcapsule.rs			0:32:0:|1:32:0:	0
+00c61240	thiscall	ptr,ptr	bool	crates/engine-bs/src/units/bsmain/bsmultiboundcapsule.rs			0:32:0:|1:32:0:	0
 00c61270	thiscall	ptr	u32	crates/engine-bs/src/units/bsmain/bsmultiboundcapsule.rs			0:32:0:	0
+00c61420	thiscall	ptr,u32	ptr	crates/engine-bs/src/units/bsmain/run_00c612b0.rs			0:32:0:	0
 00c61820	thiscall	ptr,u32	ptr	crates/engine-bs/src/units/bsmain/run_00c61610.rs			0:32:0:	0
 00c632e0	thiscall	ptr	u32	crates/engine-bs/src/units/bsmain/bspsysarrayemitter.rs			0:32:0:	0
 00c63320	thiscall	ptr	u32	crates/engine-bs/src/units/bsmain/bspsysarrayemitter.rs			0:32:0:	0
 00c63aa0	thiscall	ptr	u32	crates/engine-bs/src/units/bsmain/bsparentvelocitymodifier.rs			0:32:0:	0
 00c64600	thiscall	ptr	u32	crates/engine-bs/src/units/bsmain/bsdecalpvextradata.rs			0:32:0:	0
+00c64940	thiscall	ptr,u32	bool	crates/engine-bs/src/units/bsmain/bsreference.rs		i1	0:32:0:	0
 00c657e0	thiscall	ptr	u32	crates/engine-fallout/src/units/unplaced/run_00c64c30.rs			0:32:0:	0
 00c69220	cdecl	ptr	u32	crates/engine-havok/src/units/bshavok/bhkworld.rs			0:32:0:	0
 00c69230	cdecl	ptr	u32	crates/engine-havok/src/units/bshavok/bhkworld.rs		i240	0:32:0:	0

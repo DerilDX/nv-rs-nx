@@ -567,9 +567,482 @@ pub fn fn_00bd71e0(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
     this
 }
 
+use crate::units::bsshader::geometrydecalshader::shader_inline::{
+    allocate_array, ni_pointer_assign, IMPORT_INTERLOCKED_DECREMENT, IMPORT_INTERLOCKED_INCREMENT,
+};
+
+// Translated from 00bd5d70 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map, `thiscall` with two words: a 16-byte entry and a word. When the
+/// count (`u16` +0xe) is below the capacity (`u16` +0xc) and the entry is not null, copies the
+/// entry into the entry array (+0x10) at the count, stores the word in the word array (+0x14) at
+/// the count, counts one more and answers 1. Otherwise answers the count with its low byte
+/// cleared (`XOR AL,AL` on the zero-extended count).
+pub fn fn_00bd5d70(e: &mut Engine, this: Ptr, entry: u32, word: u32) -> u32 {
+    let base = this.addr();
+    let count = e.mem.u16(base + 0xe);
+    if count == e.mem.u16(base + 0xc) || entry == 0 {
+        return u32::from(count) & 0xff00;
+    }
+    let target = (u32::from(count) << 4).wrapping_add(e.mem.u32(base + 0x10));
+    for offset in [0u32, 4, 8, 0xc] {
+        let value = e.mem.u32(entry + offset);
+        e.mem.set_u32(target + offset, value);
+    }
+    let count = u32::from(e.mem.u16(base + 0xe));
+    let words = e.mem.u32(base + 0x14);
+    e.mem.set_u32(words.wrapping_add(4 * count), word);
+    let count = e.mem.u16(base + 0xe).wrapping_add(1);
+    e.mem.set_u16(base + 0xe, count);
+    1
+}
+
+// Translated from 00bd5dd0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map, `thiscall` with one word, a pointer to three words: copies them to
+/// +0x18 when it is not null; then on the object +8, for each of the bits 0x400, 0x800 and
+/// 0x1000 of its +0x24: clears its +0x38 when the bit is set, and clears the bit.
+pub fn fn_00bd5dd0(e: &mut Engine, this: Ptr, words: u32) {
+    let base = this.addr();
+    if words != 0 {
+        for offset in [0u32, 4, 8] {
+            let value = e.mem.u32(words + offset);
+            e.mem.set_u32(base + 0x18 + offset, value);
+        }
+    }
+    for bit in [0x400u32, 0x800, 0x1000] {
+        let object = e.mem.u32(base + 8);
+        let flags = e.mem.u32(object + 0x24);
+        if flags & bit != 0 {
+            e.mem.set_u32(object + 0x38, 0);
+        }
+        let flags = e.mem.u32(object + 0x24);
+        e.mem.set_u32(object + 0x24, flags & !bit);
+    }
+}
+
+/// `00bd5e40`'s start value (`010bc3ec`), the height below which an entry is left out
+/// (`01094cf4`), the half (`01011588`, a `double`), the RTTI record the object's chain is checked
+/// for (`012024c0`) and the one `00653290` is asked for (`012024b8`; unnamed, `thiscall`, one
+/// word).
+const START_010BC3EC: u32 = 0x010b_c3ec;
+const LOWEST_01094CF4: u32 = 0x0109_4cf4;
+const HALF_01011588: u32 = 0x0101_1588;
+const RTTI_012024C0: u32 = 0x0120_24c0;
+const RTTI_012024B8: u32 = 0x0120_24b8;
+const FIND_00653290: u32 = 0x0065_3290;
+/// The CRT square root (`00ec6040`, value and result in `ST0`).
+const CRT_SQRT_00EC6040: u32 = 0x00ec_6040;
+
+/// `min` after `FLD min; FLD v; FCOM; TEST AH,0x41; JZ`: replaced unless `v` is above it.
+fn keep_lower(min: u32, value: u32) -> u32 {
+    if x87_load32(value) > x87_load32(min) {
+        min
+    } else {
+        value
+    }
+}
+
+/// `max` after `FLD max; FLD v; FCOM; TEST AH,5; JNP`: replaced unless `v` is below it.
+fn keep_higher(max: u32, value: u32) -> u32 {
+    if x87_load32(value) < x87_load32(max) {
+        max
+    } else {
+        value
+    }
+}
+
+// Translated from 00bd5e40 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map, `thiscall`, no stack words. The bounds of the entries (16 bytes
+/// each at +0x10, `u16` count +0xe) whose `float` +8 is above `01094cf4`: minimum and maximum
+/// start at `010bc3ec` and its negation (0.0 without entries), each axis compared as the x87
+/// does (a NaN replaces). With the objects +4 and +0 set: the centre is min + (max - min) *
+/// 0.5, the radius the distance from the centre to the maximum plus the `float` +0x28 of the
+/// object +4. When the object +0 has `012024c0` in its RTTI chain (vtable +8, bases at +4), or
+/// else when `00653290(012024b8)` on it answers an object, that object's vtable +0xfc gets the
+/// bound (centre and radius, four words) and +0x100 the count.
+pub fn fn_00bd5e40(e: &mut Engine, this: Ptr) {
+    let base = this.addr();
+    let start = if e.mem.u16(base + 0xe) == 0 {
+        0.0f32.to_bits()
+    } else {
+        x87_quiet_bits(e.global::<u32>(START_010BC3EC))
+    };
+    let negated = x87_store32(-x87_load32(start));
+    let mut min = [start; 3];
+    let mut max = [negated; 3];
+    let count = u32::from(e.mem.u16(base + 0xe));
+    if count > 0 {
+        let lowest = x87_load32(e.global::<u32>(LOWEST_01094CF4));
+        let mut entry = e.mem.u32(base + 0x10);
+        for _ in 0..count {
+            // `FCOM`, `TEST AH,5`, `JP`: only an entry whose height is above `lowest`.
+            if lowest < x87_m32(e.mem.u32(entry + 8)) {
+                for axis in 0..3 {
+                    let value = x87_quiet_bits(e.mem.u32(entry + 4 * axis as u32));
+                    min[axis] = keep_lower(min[axis], value);
+                    max[axis] = keep_higher(max[axis], value);
+                }
+            }
+            entry = entry.wrapping_add(0x10);
+        }
+    }
+    let holder = e.mem.u32(base + 4);
+    if holder == 0 {
+        return;
+    }
+    let object = e.mem.u32(base);
+    if object == 0 {
+        return;
+    }
+    let mut size = [0u32; 3];
+    for axis in 0..3 {
+        size[axis] = x87_store32(x87_sub(x87_load32(max[axis]), x87_load32(min[axis])));
+    }
+    let half = f64::from_bits(e.global::<u64>(HALF_01011588));
+    let halves = [
+        x87_store32(x87_mul(x87_load32(size[0]), half)),
+        x87_store32(x87_mul(x87_load32(size[1]), half)),
+        x87_store32(x87_mul(half, x87_m32(size[2]))),
+    ];
+    let mut centre = [0u32; 3];
+    let mut extent = [0u32; 3];
+    for axis in 0..3 {
+        centre[axis] = x87_store32(x87_add(x87_load32(min[axis]), x87_load32(halves[axis])));
+    }
+    for axis in 0..2 {
+        extent[axis] = x87_store32(x87_sub(x87_load32(max[axis]), x87_load32(centre[axis])));
+    }
+    extent[2] = x87_store32(x87_sub(x87_load32(max[2]), x87_m32(centre[2])));
+    let ex = x87_load32(extent[0]);
+    let ey = x87_load32(extent[1]);
+    let ez = x87_load32(extent[2]);
+    let squares = x87_add(x87_mul(ey, ey), x87_mul(ex, ex));
+    let total = x87_store32(x87_add(squares, x87_mul(ez, ez)));
+    let root = e.call(CRT_SQRT_00EC6040, &args![x87_load32(total)]).f64();
+    let length = x87_load32(x87_store32(root));
+    let radius = x87_store32(x87_add(length, x87_m32(e.mem.u32(holder + 0x28))));
+    let mut record = e.vcall(object, 8, &args![]).u32();
+    let mut found = false;
+    while record != 0 {
+        if record == RTTI_012024C0 {
+            found = true;
+            break;
+        }
+        record = e.mem.u32(record + 4);
+    }
+    let target = if found {
+        object
+    } else {
+        let object = e.mem.u32(base);
+        if object == 0 {
+            return;
+        }
+        let target = e.call(FIND_00653290, &args![object, RTTI_012024B8]).u32();
+        if target == 0 {
+            return;
+        }
+        target
+    };
+    e.vcall(
+        target,
+        0xfc,
+        &args![centre[0], centre[1], centre[2], radius],
+    );
+    let count = u32::from(e.mem.u16(base + 0xe));
+    e.vcall(target, 0x100, &args![count]);
+}
+
+// Translated from 00bd6150 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map, `thiscall`, no stack words: for each of the `u16` +0xe entries,
+/// clears the `float`s +8 and +0xc of its 16-byte entry (+0x10) and its word (+0x14); then sets
+/// the count to 0 and jumps to `00bd5e40`.
+pub fn fn_00bd6150(e: &mut Engine, this: Ptr) {
+    let base = this.addr();
+    let mut index = 0u32;
+    while index < u32::from(e.mem.u16(base + 0xe)) {
+        let entries = e.mem.u32(base + 0x10);
+        e.mem.set_f32(entries.wrapping_add(16 * index + 8), 0.0);
+        let entries = e.mem.u32(base + 0x10);
+        e.mem.set_f32(entries.wrapping_add(16 * index + 0xc), 0.0);
+        let words = e.mem.u32(base + 0x14);
+        e.mem.set_u32(words.wrapping_add(4 * index), 0);
+        index += 1;
+    }
+    e.mem.set_u16(base + 0xe, 0);
+    fn_00bd5e40(e, this);
+}
+
+/// The calls of `00bd6190`: the member constructor `00b57e70` (`thiscall`), the Ni allocation
+/// `00aa13e0`, the geometry constructors `00c1a480` and `00c1a660` (`thiscall`, one word),
+/// `NiAVObject::AttachProperty` (`00439410`, `thiscall`, one word), the property constructor
+/// `00b57f90`, `BSShaderManager::PrepareObject` (`00b57e30`, `cdecl`, three words),
+/// `NiAdditionalGeometryData`'s constructor (`00ba63e0`, two words), `SetDataBlockCount`
+/// (`00a72ca0`), `SetDataBlock` (`00a72bb0`), `SetDataStream` (`00a726a0`) and the geometry
+/// data's `00a67260` (one word).
+const MEMBER_CONSTRUCT_00B57E70: u32 = 0x00b5_7e70;
+const NI_ALLOCATE_00AA13E0: u32 = 0x00aa_13e0;
+const GEOMETRY_CONSTRUCT_00C1A480: u32 = 0x00c1_a480;
+const GEOMETRY_CONSTRUCT_00C1A660: u32 = 0x00c1_a660;
+const ATTACH_PROPERTY: u32 = 0x0043_9410;
+const PROPERTY_CONSTRUCT_00B57F90: u32 = 0x00b5_7f90;
+const PREPARE_OBJECT: u32 = 0x00b5_7e30;
+const ADDITIONAL_DATA_CONSTRUCT: u32 = 0x00ba_63e0;
+const ADDITIONAL_DATA_SET_BLOCK_COUNT: u32 = 0x00a7_2ca0;
+const ADDITIONAL_DATA_SET_BLOCK: u32 = 0x00a7_2bb0;
+const ADDITIONAL_DATA_SET_STREAM: u32 = 0x00a7_26a0;
+const GEOMETRY_DATA_00A67260: u32 = 0x00a6_7260;
+/// The shader model (`011f91c0`).
+const SHADER_MODEL_011F91C0: u32 = 0x011f_91c0;
+
+/// An `NiPointer` released when set (count at +4, deleted through the vtable +4 at 0).
+fn release_held(e: &mut Engine, object: u32) {
+    let left = e
+        .call(IMPORT_INTERLOCKED_DECREMENT, &args![object.wrapping_add(4)])
+        .u32();
+    if left == 0 {
+        e.vcall(object, 4, &args![]);
+    }
+}
+
+/// An `NiPointer` assignment whose new object's count goes up without a null test (as the exe
+/// writes it when the object cannot be null).
+fn assign_counted(e: &mut Engine, slot: u32, object: u32) {
+    let old = e.mem.u32(slot);
+    if old == object {
+        return;
+    }
+    if old != 0 {
+        release_held(e, old);
+    }
+    e.mem.set_u32(slot, object);
+    e.call(IMPORT_INTERLOCKED_INCREMENT, &args![object.wrapping_add(4)]);
+}
+
+/// A bit of the `u32` at `flags` set or cleared, with the property's +0x38 cleared when the bit
+/// changes.
+fn set_flag(e: &mut Engine, property: u32, flags: u32, bit: u32, on: bool) {
+    let was = e.mem.u32(property + flags) & bit != 0;
+    if was != on {
+        e.mem.set_u32(property + 0x38, 0);
+    }
+    let value = e.mem.u32(property + flags);
+    e.mem.set_u32(
+        property + flags,
+        if on { value | bit } else { value & !bit },
+    );
+}
+
+// Translated from 00bd6190 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 00bd6190 - the C++ exception frame (FS:[0] chain, unwind states 2 to 6) is not translated.
+/// Unnamed in the engine map: a constructor, `thiscall` with three words (a source block, a
+/// word, a flag byte). Clears +0, +4, +8, constructs the member at +0x18 (`00b57e70`), takes the
+/// source's `u16` +0x2c as the capacity +0xc, holds the source at +4 (its count raised without a
+/// null test), stores the word at +0x24, allocates the entry (16 bytes each) and word arrays
+/// (`MemoryManager::Allocate`, all ones on overflow) and clears them, empties them again (the
+/// inlined `00bd6150`, with `00bd5e40`). Then makes the geometry +0: drops the old one, 0xd8 bytes
+/// constructed by `00c1a480` (source byte +0xc 1) or `00c1a660` with the source's +8; attaches
+/// the source's property +0x1c (shader model 2 or more) or +0x20 and its +0x24 when set; makes a
+/// property (0x8c bytes, `00b57f90`) holding the source's +0x18 at +0x80 and `this` at +0x7c,
+/// sets its bit 2 of +0x20 by the flag and bit 13 of +0x24 by the source byte +0x30 (clearing
+/// +0x38 when a bit changes), attaches it and holds it at +8. `PrepareObject(geometry, 0, 0)`;
+/// when the geometry's +0xb8 data has no +0x30, an `NiAdditionalGeometryData` of the source's
+/// +0x14 times +0x2c floats with one block (the source's +0x10) and one stream goes to the data's
+/// `00a67260`. Answers `this`.
+pub fn fn_00bd6190(e: &mut Engine, this: Ptr, source: u32, word: u32, flag: u32) -> Ptr {
+    let base = this.addr();
+    for offset in [0u32, 4, 8] {
+        e.mem.set_u32(base + offset, 0);
+    }
+    e.call(MEMBER_CONSTRUCT_00B57E70, &args![base + 0x18]);
+    let capacity = e.mem.u16(source + 0x2c);
+    e.mem.set_u16(base + 0xc, capacity);
+    assign_counted(e, base + 4, source);
+    e.mem.set_u32(base + 0x24, word);
+    let capacity = u32::from(e.mem.u16(base + 0xc));
+    let entries = allocate_array(e, capacity, 0x10);
+    e.mem.set_u32(base + 0x10, entries);
+    let capacity = u32::from(e.mem.u16(base + 0xc));
+    let words = allocate_array(e, capacity, 4);
+    e.mem.set_u32(base + 0x14, words);
+    let mut index = 0u32;
+    while index < u32::from(e.mem.u16(base + 0xc)) {
+        for offset in [0u32, 4, 8, 0xc] {
+            let entries = e.mem.u32(base + 0x10);
+            e.mem
+                .set_f32(entries.wrapping_add(16 * index + offset), 0.0);
+        }
+        let words = e.mem.u32(base + 0x14);
+        e.mem.set_u32(words.wrapping_add(4 * index), 0);
+        index += 1;
+    }
+    let capacity = e.mem.u16(base + 0xc);
+    e.mem.set_u16(base + 0xe, capacity);
+    let mut index = 0u32;
+    while index < u32::from(e.mem.u16(base + 0xe)) {
+        for offset in [8u32, 0xc] {
+            let entries = e.mem.u32(base + 0x10);
+            e.mem
+                .set_f32(entries.wrapping_add(16 * index + offset), 0.0);
+        }
+        let words = e.mem.u32(base + 0x14);
+        e.mem.set_u32(words.wrapping_add(4 * index), 0);
+        index += 1;
+    }
+    e.mem.set_u16(base + 0xe, 0);
+    fn_00bd5e40(e, this);
+    let old = e.mem.u32(base);
+    if old != 0 {
+        release_held(e, old);
+        e.mem.set_u32(base, 0);
+    }
+    let first = e.mem.u32(source + 8);
+    let constructor = if e.mem.u8(source + 0xc) == 1 {
+        GEOMETRY_CONSTRUCT_00C1A480
+    } else {
+        GEOMETRY_CONSTRUCT_00C1A660
+    };
+    let block = e.call(NI_ALLOCATE_00AA13E0, &args![0xd8u32]).u32();
+    let geometry = if block != 0 {
+        e.call(constructor, &args![block, first]).u32()
+    } else {
+        0
+    };
+    ni_pointer_assign(e, base, geometry);
+    let property = if e.global::<i32>(SHADER_MODEL_011F91C0) >= 2 {
+        e.mem.u32(source + 0x1c)
+    } else {
+        e.mem.u32(source + 0x20)
+    };
+    if property != 0 {
+        let geometry = e.mem.u32(base);
+        e.call(ATTACH_PROPERTY, &args![geometry, property]);
+    }
+    let property = e.mem.u32(source + 0x24);
+    if property != 0 {
+        let geometry = e.mem.u32(base);
+        e.call(ATTACH_PROPERTY, &args![geometry, property]);
+    }
+    let block = e.call(NI_ALLOCATE_00AA13E0, &args![0x8cu32]).u32();
+    let made = if block != 0 {
+        e.call(PROPERTY_CONSTRUCT_00B57F90, &args![block]).u32()
+    } else {
+        0
+    };
+    let texture = e.mem.u32(source + 0x18);
+    if e.mem.u32(made.wrapping_add(0x80)) != texture {
+        let old = e.mem.u32(made.wrapping_add(0x80));
+        if old != 0 {
+            release_held(e, old);
+        }
+        let texture = e.mem.u32(source + 0x18);
+        e.mem.set_u32(made.wrapping_add(0x80), texture);
+        if texture != 0 {
+            e.call(IMPORT_INTERLOCKED_INCREMENT, &args![texture + 4]);
+        }
+    }
+    e.mem.set_u32(made.wrapping_add(0x7c), base);
+    set_flag(e, made, 0x20, 4, flag as u8 != 0);
+    set_flag(e, made, 0x24, 0x2000, e.mem.u8(source + 0x30) != 0);
+    let geometry = e.mem.u32(base);
+    e.call(ATTACH_PROPERTY, &args![geometry, made]);
+    assign_counted(e, base + 8, made);
+    let geometry = e.mem.u32(base);
+    e.call(PREPARE_OBJECT, &args![geometry, 0u32, 0u32]);
+    let geometry = e.mem.u32(base);
+    let data = e.mem.u32(geometry + 0xb8);
+    if data == 0 || e.mem.u32(data + 0x30) == 0 {
+        let floats = e
+            .mem
+            .u32(source + 0x14)
+            .wrapping_mul(e.mem.u32(source + 0x2c));
+        let block = e.call(NI_ALLOCATE_00AA13E0, &args![0x2cu32]).u32();
+        let additional = if block != 0 {
+            e.call(ADDITIONAL_DATA_CONSTRUCT, &args![block, floats, 1u32])
+                .u32()
+        } else {
+            0
+        };
+        e.call(ADDITIONAL_DATA_SET_BLOCK_COUNT, &args![additional, 1u32]);
+        let values = e.mem.u32(source + 0x10);
+        e.call(
+            ADDITIONAL_DATA_SET_BLOCK,
+            &args![additional, 0u32, values, floats.wrapping_mul(4), 0u32],
+        );
+        e.call(
+            ADDITIONAL_DATA_SET_STREAM,
+            &args![additional, 0u32, 0u32, 0u32, 1u32, floats, 4u32, 4u32],
+        );
+        let geometry = e.mem.u32(base);
+        let data = e.mem.u32(geometry + 0xb8);
+        e.call(GEOMETRY_DATA_00A67260, &args![data, additional]);
+    }
+    this
+}
+
+// Translated from 00bd6570 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 00bd6570 - the C++ exception frame (FS:[0] chain, unwind states 2 to 0 for the members) is not translated.
+/// Unnamed in the engine map: the destructor of `00bd6190`'s object, `thiscall`. Releases and
+/// clears +8 and +4; calls the vtable +0xe8 of the geometry's (+0) +0x18 object with the
+/// geometry when it is set; releases and clears the geometry; empties the entries (`00bd6150`);
+/// frees the entry array when set and the word array (`MemoryManager::Deallocate`), clearing
+/// both; then the members' own destructors release +8, +4 and +0 when still set.
+pub fn fn_00bd6570(e: &mut Engine, this: Ptr) {
+    let base = this.addr();
+    for offset in [8u32, 4] {
+        let held = e.mem.u32(base + offset);
+        if held != 0 {
+            release_held(e, held);
+            e.mem.set_u32(base + offset, 0);
+        }
+    }
+    let geometry = e.mem.u32(base);
+    let owner = e.mem.u32(geometry + 0x18);
+    if owner != 0 {
+        e.vcall(owner, 0xe8, &args![geometry]);
+    }
+    let geometry = e.mem.u32(base);
+    if geometry != 0 {
+        release_held(e, geometry);
+        e.mem.set_u32(base, 0);
+    }
+    fn_00bd6150(e, this);
+    let entries = e.mem.u32(base + 0x10);
+    if entries != 0 {
+        e.call(MEMORY_DEALLOCATE, &args![MEMORY_MANAGER, entries]);
+        e.mem.set_u32(base + 0x10, 0);
+    }
+    let words = e.mem.u32(base + 0x14);
+    e.call(MEMORY_DEALLOCATE, &args![MEMORY_MANAGER, words]);
+    e.mem.set_u32(base + 0x14, 0);
+    for offset in [8u32, 4, 0] {
+        let held = e.mem.u32(base + offset);
+        if held != 0 {
+            release_held(e, held);
+        }
+    }
+}
+
+// Translated from 00bd6fa0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map: the scalar deleting destructor (vtable entry at `010bc3f0`),
+/// `thiscall`, `RET 4`. Runs `00bd6f30` and, with bit 0 of the flags, frees `this` through the
+/// memory manager (`00aa4060`). Answers `this`.
+pub fn fn_00bd6fa0(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    fn_00bd6f30(e, this);
+    if flags & 1 != 0 {
+        e.call(MEMORY_DEALLOCATE, &args![MEMORY_MANAGER, this]);
+    }
+    this
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x00bd_5d70, fn_00bd5d70(Ptr, u32, u32) -> u32),
+        entry!(0x00bd_5dd0, fn_00bd5dd0(Ptr, u32)),
+        entry!(0x00bd_5e40, fn_00bd5e40(Ptr)),
+        entry!(0x00bd_6150, fn_00bd6150(Ptr)),
+        entry!(0x00bd_6190, fn_00bd6190(Ptr, u32, u32, u32) -> Ptr),
+        entry!(0x00bd_6570, fn_00bd6570(Ptr)),
+        entry!(0x00bd_6fa0, fn_00bd6fa0(Ptr, u32) -> Ptr),
         entry!(0x00bd_7120, fn_00bd7120(Ptr) -> Ptr),
         entry!(0x00bd_6ae0, fn_00bd6ae0(Ptr, u32)),
         entry!(0x00bd_6ec0, fn_00bd6ec0(Ptr) -> Ptr),
@@ -1037,5 +1510,317 @@ mod b056_tests {
         );
         e.call(0x00bd_71e0, &args![this, 0u32]);
         assert_eq!(calls(&e, MEMORY_DEALLOCATE).len(), 1);
+    }
+}
+
+#[cfg(test)]
+mod n071_tests {
+    use super::*;
+    use crate::units::bsshader::geometrydecalshader::shader_test_rig::{
+        object, rig, REFERENCE_DELETE, REFERENCE_VTABLE,
+    };
+    use crate::units::bsshader::shadowlightshader::n071_rig::{calls, slot_target, vobject};
+
+    /// An object with room for `capacity` entries (+0x10, 16 bytes each) and words (+0x14).
+    fn holder(e: &mut Engine, capacity: u16) -> u32 {
+        let this = e.mem.alloc(0x28);
+        let entries = e.mem.alloc(16 * u32::from(capacity) + 16);
+        let words = e.mem.alloc(4 * u32::from(capacity) + 4);
+        e.mem.set_u16(this + 0xc, capacity);
+        e.mem.set_u32(this + 0x10, entries);
+        e.mem.set_u32(this + 0x14, words);
+        this
+    }
+
+    #[test]
+    fn fn_00bd5d70_adds_until_full() {
+        let mut e = rig();
+        let this = holder(&mut e, 1);
+        let entry = e.mem.alloc(16);
+        for i in 0..4 {
+            e.mem.set_u32(entry + 4 * i, 0x10 + i);
+        }
+        assert_eq!(e.call(0x00bd_5d70, &args![this, 0u32, 5u32]).u32(), 0);
+        assert_eq!(e.call(0x00bd_5d70, &args![this, entry, 5u32]).u32(), 1);
+        let entries = e.mem.u32(this + 0x10);
+        assert_eq!(e.mem.u32(entries + 0xc), 0x13);
+        assert_eq!(e.mem.u32(e.mem.u32(this + 0x14)), 5);
+        assert_eq!(e.mem.u16(this + 0xe), 1);
+        // Full: the count with its low byte cleared (0x0101 -> 0x0100).
+        e.mem.set_u16(this + 0xc, 0x101);
+        e.mem.set_u16(this + 0xe, 0x101);
+        assert_eq!(e.call(0x00bd_5d70, &args![this, entry, 5u32]).u32(), 0x100);
+    }
+
+    #[test]
+    fn fn_00bd5dd0_copies_and_clears_the_bits() {
+        let mut e = rig();
+        let this = e.mem.alloc(0x28);
+        let object = e.mem.alloc(0x40);
+        e.mem.set_u32(this + 8, object);
+        e.mem.set_u32(object + 0x24, 0x1c00 | 0x1);
+        e.mem.set_u32(object + 0x38, 9);
+        let words = e.mem.alloc(12);
+        e.mem.set_u32(words + 8, 0x88);
+        e.call(0x00bd_5dd0, &args![this, words]);
+        assert_eq!(e.mem.u32(this + 0x20), 0x88);
+        assert_eq!(e.mem.u32(object + 0x24), 1);
+        assert_eq!(e.mem.u32(object + 0x38), 0);
+        e.mem.set_u32(object + 0x38, 9);
+        e.call(0x00bd_5dd0, &args![this, 0u32]);
+        assert_eq!(e.mem.u32(object + 0x38), 9);
+    }
+
+    /// A holder of two entries (one below the lowest height), its +4 object with radius extra
+    /// 1.0 and a +0 object whose RTTI chain holds `012024c0` when `kind` says so.
+    fn bound_rig(found: bool) -> (Engine, u32, u32) {
+        let mut e = rig();
+        for page in [0x0101_1000u32, 0x0109_4000, 0x010b_c000, 0x0120_2000] {
+            e.map(page, 0x1000);
+        }
+        e.set_global(START_010BC3EC, 5.0e9f32);
+        e.set_global(LOWEST_01094CF4, -2.0e9f32);
+        e.set_global(HALF_01011588, 0.5f64);
+        e.register(CRT_SQRT_00EC6040, |_, a| Ret {
+            st0: f64::from_bits(u64::from(a[0]) | u64::from(a[1]) << 32).sqrt(),
+            ..Ret::default()
+        });
+        let this = holder(&mut e, 4);
+        let entries = e.mem.u32(this + 0x10);
+        for (i, point) in [[0.0f32, 0.0, 0.0], [6.0, 8.0, 0.0], [100.0, 100.0, -3.0e9]]
+            .iter()
+            .enumerate()
+        {
+            for (axis, value) in point.iter().enumerate() {
+                e.mem
+                    .set_f32(entries + 16 * i as u32 + 4 * axis as u32, *value);
+            }
+        }
+        e.mem.set_u16(this + 0xe, 3);
+        let extra = e.mem.alloc(0x30);
+        e.mem.set_f32(extra + 0x28, 1.0);
+        e.mem.set_u32(this + 4, extra);
+        let base_record = e.mem.alloc(8);
+        let record = e.mem.alloc(8);
+        e.mem.set_u32(record + 4, base_record);
+        if found {
+            e.mem.set_u32(base_record + 4, RTTI_012024C0);
+        }
+        let target = vobject(&mut e, 8, &[(8, record)]);
+        e.mem.set_u32(this, target);
+        (e, this, target)
+    }
+
+    #[test]
+    fn fn_00bd5e40_hands_the_bound_to_the_object() {
+        let (mut e, this, target) = bound_rig(true);
+        e.call(0x00bd_5e40, &args![this]);
+        // Centre (3, 4, 0), radius 5 + 1.
+        assert_eq!(
+            calls(&e, slot_target(&e, target, 0xfc)),
+            vec![vec![
+                target,
+                3.0f32.to_bits(),
+                4.0f32.to_bits(),
+                0,
+                6.0f32.to_bits()
+            ]]
+        );
+        assert_eq!(
+            calls(&e, slot_target(&e, target, 0x100)),
+            vec![vec![target, 3]]
+        );
+        assert!(calls(&e, FIND_00653290).is_empty());
+    }
+
+    #[test]
+    fn fn_00bd5e40_asks_00653290_without_the_record() {
+        let (mut e, this, target) = bound_rig(false);
+        let other = vobject(&mut e, 8, &[]);
+        e.register_double(FIND_00653290, move |_, _| other.into_ret());
+        e.call(0x00bd_5e40, &args![this]);
+        assert_eq!(calls(&e, FIND_00653290), vec![vec![target, RTTI_012024B8]]);
+        assert_eq!(calls(&e, slot_target(&e, other, 0xfc)).len(), 1);
+        assert!(calls(&e, slot_target(&e, target, 0xfc)).is_empty());
+        // Nothing found: nothing more.
+        e.register(FIND_00653290, |_, _| 0u32.into_ret());
+        e.call_log = Some(vec![]);
+        e.call(0x00bd_5e40, &args![this]);
+        assert!(calls(&e, slot_target(&e, other, 0x100)).is_empty());
+        // Without the +4 object nothing is asked.
+        e.mem.set_u32(this + 4, 0);
+        e.call_log = Some(vec![]);
+        e.call(0x00bd_5e40, &args![this]);
+        assert!(calls(&e, CRT_SQRT_00EC6040).is_empty());
+    }
+
+    #[test]
+    fn fn_00bd6150_empties_then_bounds() {
+        let (mut e, this, target) = bound_rig(true);
+        let entries = e.mem.u32(this + 0x10);
+        e.mem.set_f32(entries + 0x18, 7.0);
+        e.mem.set_u32(e.mem.u32(this + 0x14) + 4, 9);
+        e.call(0x00bd_6150, &args![this]);
+        assert_eq!(e.mem.f32(entries + 0x18), 0.0);
+        assert_eq!(e.mem.f32(entries + 0x10), 6.0);
+        assert_eq!(e.mem.u32(e.mem.u32(this + 0x14) + 4), 0);
+        assert_eq!(e.mem.u16(this + 0xe), 0);
+        // No entries: the bound is 0 at 0 with radius 1.
+        assert_eq!(
+            calls(&e, slot_target(&e, target, 0xfc)),
+            vec![vec![target, 0, 0, 0, 1.0f32.to_bits()]]
+        );
+    }
+
+    #[test]
+    fn fn_00bd6190_builds_the_geometry() {
+        let mut e = rig();
+        for page in [
+            0x0101_1000u32,
+            0x0109_4000,
+            0x010b_c000,
+            0x011f_9000,
+            0x0120_2000,
+        ] {
+            e.map(page, 0x1000);
+        }
+        e.set_global(SHADER_MODEL_011F91C0, 2i32);
+        for target in [
+            MEMBER_CONSTRUCT_00B57E70,
+            ATTACH_PROPERTY,
+            PREPARE_OBJECT,
+            ADDITIONAL_DATA_SET_BLOCK_COUNT,
+            ADDITIONAL_DATA_SET_BLOCK,
+            ADDITIONAL_DATA_SET_STREAM,
+            GEOMETRY_DATA_00A67260,
+        ] {
+            e.register(target, |_, _| Ret::default());
+        }
+        e.register(NI_ALLOCATE_00AA13E0, |e, a| e.mem.alloc(a[0]).into_ret());
+        e.register(GEOMETRY_CONSTRUCT_00C1A660, |e, a| {
+            e.mem.set_u32(a[0], REFERENCE_VTABLE);
+            let data = e.mem.alloc(0x40);
+            e.mem.set_u32(a[0] + 0xb8, data);
+            a[0].into_ret()
+        });
+        e.register(PROPERTY_CONSTRUCT_00B57F90, |e, a| {
+            e.mem.set_u32(a[0], REFERENCE_VTABLE);
+            e.mem.set_u32(a[0] + 0x20, 4);
+            a[0].into_ret()
+        });
+        e.register(ADDITIONAL_DATA_CONSTRUCT, |_, a| a[0].into_ret());
+        let source = object(&mut e, 0);
+        e.mem.set_u32(source + 8, 0x88);
+        e.mem.set_u32(source + 0x10, 0x1010);
+        e.mem.set_u32(source + 0x14, 3);
+        let texture = object(&mut e, 0);
+        e.mem.set_u32(source + 0x18, texture);
+        e.mem.set_u32(source + 0x1c, 0x1c1c);
+        e.mem.set_u32(source + 0x24, 0x2424);
+        e.mem.set_u16(source + 0x2c, 2);
+        e.mem.set_u8(source + 0x30, 1);
+        let this = e.mem.alloc(0x28);
+        assert_eq!(
+            e.call(0x00bd_6190, &args![this, source, 7u32, 0u32]).u32(),
+            this
+        );
+        assert_eq!(
+            calls(&e, MEMBER_CONSTRUCT_00B57E70),
+            vec![vec![this + 0x18]]
+        );
+        assert_eq!(e.mem.u16(this + 0xc), 2);
+        assert_eq!(e.mem.u16(this + 0xe), 0);
+        assert_eq!(e.mem.u32(this + 4), source);
+        assert_eq!(e.mem.u32(source + 4), 1);
+        assert_eq!(e.mem.u32(this + 0x24), 7);
+        let geometry = e.mem.u32(this);
+        assert_eq!(
+            calls(&e, GEOMETRY_CONSTRUCT_00C1A660),
+            vec![vec![geometry, 0x88]]
+        );
+        assert_eq!(e.mem.u32(geometry + 4), 1);
+        let property = e.mem.u32(this + 8);
+        assert_eq!(e.mem.u32(property + 0x80), texture);
+        assert_eq!(e.mem.u32(texture + 4), 1);
+        assert_eq!(e.mem.u32(property + 0x7c), this);
+        // Flag 0 clears bit 2 (and +0x38), the source byte sets bit 13.
+        assert_eq!(e.mem.u32(property + 0x20), 0);
+        assert_eq!(e.mem.u32(property + 0x24), 0x2000);
+        assert_eq!(
+            calls(&e, ATTACH_PROPERTY),
+            vec![
+                vec![geometry, 0x1c1c],
+                vec![geometry, 0x2424],
+                vec![geometry, property]
+            ]
+        );
+        assert_eq!(calls(&e, PREPARE_OBJECT), vec![vec![geometry, 0, 0]]);
+        let additional = calls(&e, ADDITIONAL_DATA_CONSTRUCT)[0][0];
+        assert_eq!(
+            calls(&e, ADDITIONAL_DATA_CONSTRUCT)[0][1..].to_vec(),
+            vec![6, 1]
+        );
+        assert_eq!(
+            calls(&e, ADDITIONAL_DATA_SET_BLOCK),
+            vec![vec![additional, 0, 0x1010, 24, 0]]
+        );
+        assert_eq!(
+            calls(&e, ADDITIONAL_DATA_SET_STREAM),
+            vec![vec![additional, 0, 0, 0, 1, 6, 4, 4]]
+        );
+        let data = e.mem.u32(geometry + 0xb8);
+        assert_eq!(
+            calls(&e, GEOMETRY_DATA_00A67260),
+            vec![vec![data, additional]]
+        );
+    }
+
+    #[test]
+    fn fn_00bd6570_releases_everything() {
+        let mut e = rig();
+        e.register(MEMORY_DEALLOCATE, |_, _| Ret::default());
+        let this = e.mem.alloc(0x28);
+        let owner = vobject(&mut e, 8, &[]);
+        let geometry = object(&mut e, 1);
+        e.mem.set_u32(geometry + 0x18, owner);
+        let held: Vec<u32> = (0..2).map(|_| object(&mut e, 1)).collect();
+        e.mem.set_u32(this, geometry);
+        e.mem.set_u32(this + 4, held[0]);
+        e.mem.set_u32(this + 8, held[1]);
+        e.mem.set_u32(this + 0x14, 0x1414);
+        // No entries, so 00bd6150 runs 00bd5e40 with the +4 object gone: nothing more.
+        e.call(0x00bd_6570, &args![this]);
+        assert_eq!(
+            calls(&e, slot_target(&e, owner, 0xe8)),
+            vec![vec![owner, geometry]]
+        );
+        assert_eq!(calls(&e, REFERENCE_DELETE).len(), 3);
+        for offset in [0u32, 4, 8, 0x10, 0x14] {
+            assert_eq!(e.mem.u32(this + offset), 0);
+        }
+        assert_eq!(
+            calls(&e, MEMORY_DEALLOCATE),
+            vec![vec![MEMORY_MANAGER, 0x1414]]
+        );
+    }
+
+    #[test]
+    fn fn_00bd6fa0_destroys_and_frees() {
+        let mut e = rig();
+        e.register(MEMORY_DEALLOCATE, |_, _| Ret::default());
+        e.register(NI_FREE_00AA10F0, |_, _| Ret::default());
+        e.register(EFFECT_DESTRUCT_00BA3D30, |_, _| Ret::default());
+        let this = e.mem.alloc(0x60);
+        assert_eq!(e.call(0x00bd_6fa0, &args![this, 0u32]).u32(), this);
+        assert!(calls(&e, MEMORY_DEALLOCATE).is_empty());
+        e.call(0x00bd_6fa0, &args![this, 1u32]);
+        assert_eq!(
+            calls(&e, MEMORY_DEALLOCATE),
+            vec![vec![MEMORY_MANAGER, this]]
+        );
+        assert_eq!(
+            calls(&e, EFFECT_DESTRUCT_00BA3D30),
+            vec![vec![this], vec![this]]
+        );
     }
 }

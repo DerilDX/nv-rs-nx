@@ -127,9 +127,81 @@ pub fn bs_damage_stage_update_selected_downward_pass(
     }
 }
 
+/// `BSRangeNode::GetViewerStrings` (`00c454c0`), `00c452c0` (unnamed,
+/// `BSMain/bsrangenode.obj`) and `BSRangeNode::IsEqual` (`00c45380`):
+/// `thiscall`, one word each.
+const RANGE_NODE_GET_VIEWER_STRINGS: u32 = 0x00c4_54c0;
+const RANGE_NODE_REGISTER_STREAMABLES: u32 = 0x00c4_52c0;
+const RANGE_NODE_IS_EQUAL: u32 = 0x00c4_5380;
+/// `NiNode::UpdateRigidDownwardPass` (`00a5e1f0`, `thiscall`, two words).
+const NI_NODE_UPDATE_RIGID_DOWNWARD_PASS: u32 = 0x00a5_e1f0;
+/// `NiGetViewerString` (`00a7d330`, `cdecl`, the class name) and the
+/// viewer-string array's `Add` (`0096a610`, `thiscall` on the array, the
+/// string's address; the engine map places it in a folded unit).
+const NI_GET_VIEWER_STRING: u32 = 0x00a7_d330;
+const STRINGS_ADD: u32 = 0x0096_a610;
+/// `BSDamageStage`'s `NiRTTI` record (its first word is the class name).
+const BS_DAMAGE_STAGE_RTTI: u32 = 0x0120_2e8c;
+
+// Translated from 00c4afc0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSDamageStage::GetViewerStrings` (Xbox PDB): the range-node strings
+/// (`00c454c0`), then the class name added through `0096a610` with the
+/// address of the local holding it.
+pub fn bs_damage_stage_get_viewer_strings(e: &mut Engine, this: Ptr, strings: Ptr) {
+    e.call(RANGE_NODE_GET_VIEWER_STRINGS, &args![this, strings]);
+    let class_name = e.global::<u32>(BS_DAMAGE_STAGE_RTTI);
+    let text = e.call(NI_GET_VIEWER_STRING, &args![class_name]).u32();
+    e.with_stack(4, |e, slot| {
+        e.mem.set_u32(slot.addr(), text);
+        e.call(STRINGS_ADD, &args![strings, slot]);
+    });
+}
+
+// Translated from 00c4b040 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map: the `BSDamageStage` vtable's
+/// `RegisterStreamables` slot (word `010c2128`). Answers whether `00c452c0`
+/// (the range node's, `thiscall`, the stream) answered nonzero in AL.
+pub fn fn_00c4b040(e: &mut Engine, this: Ptr, stream: Ptr) -> bool {
+    e.call(RANGE_NODE_REGISTER_STREAMABLES, &args![this, stream])
+        .u8()
+        != 0
+}
+
+// Translated from 00c4b090 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map: the `BSDamageStage` vtable's `IsEqual` slot
+/// (word `010c2130`). Answers `BSRangeNode::IsEqual` (`00c45380`): its AL as it is.
+pub fn fn_00c4b090(e: &mut Engine, this: Ptr, other: Ptr) -> u8 {
+    e.call(RANGE_NODE_IS_EQUAL, &args![this, other]).u8()
+}
+
+// Translated from 00c4b1d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSDamageStage::UpdateRigidDownwardPass` (Xbox PDB):
+/// `NiNode::UpdateRigidDownwardPass` with the same two words unless bit 0
+/// of the flags (`NiAVObject::m_uFlags`, +0x30) is set.
+pub fn bs_damage_stage_update_rigid_downward_pass(
+    e: &mut Engine,
+    this: Ptr,
+    first: u32,
+    second: u32,
+) {
+    if e.mem.u32(this.addr() + 0x30) & 1 == 0 {
+        e.call(
+            NI_NODE_UPDATE_RIGID_DOWNWARD_PASS,
+            &args![this, first, second],
+        );
+    }
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x00c4_afc0, bs_damage_stage_get_viewer_strings(Ptr, Ptr)),
+        entry!(0x00c4_b040, fn_00c4b040(Ptr, Ptr) -> bool),
+        entry!(0x00c4_b090, fn_00c4b090(Ptr, Ptr) -> u8),
+        entry!(
+            0x00c4_b1d0,
+            bs_damage_stage_update_rigid_downward_pass(Ptr, u32, u32)
+        ),
         entry!(0x00c4_b210, fn_00c4b210(Ptr) -> u32),
         entry!(0x00c4_b000, fn_00c4b000(Ptr, Ptr)),
         entry!(0x00c4_b020, fn_00c4b020(Ptr, Ptr)),
@@ -271,5 +343,84 @@ mod constant_getter_tests {
                 (NI_NODE_UPDATE_SELECTED_DOWNWARD_PASS, vec![this, 7, 8])
             ]
         );
+    }
+}
+
+#[cfg(test)]
+mod n066_tests {
+    use super::*;
+
+    fn calls_to(e: &Engine, callee: u32) -> Vec<Vec<u32>> {
+        e.call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|(address, _)| *address == callee)
+            .map(|(_, words)| words.clone())
+            .collect()
+    }
+
+    fn word(eax: u32) -> Ret {
+        Ret {
+            eax,
+            ..Ret::default()
+        }
+    }
+
+    #[test]
+    fn get_viewer_strings_adds_the_class_name() {
+        let mut e = Engine::new();
+        e.map(BS_DAMAGE_STAGE_RTTI, 4);
+        e.set_global(BS_DAMAGE_STAGE_RTTI, 0x0555_0000u32);
+        e.register(RANGE_NODE_GET_VIEWER_STRINGS, |_, _| Ret::default());
+        e.register(NI_GET_VIEWER_STRING, |_, _| word(0x7000_0001));
+        e.register(STRINGS_ADD, |e, a| {
+            assert_eq!(e.mem.u32(a[1]), 0x7000_0001);
+            Ret::default()
+        });
+        e.call_log = Some(vec![]);
+        e.call(0x00c4_afc0, &args![0x1000u32, 0x2000u32]);
+        assert_eq!(
+            calls_to(&e, RANGE_NODE_GET_VIEWER_STRINGS),
+            vec![vec![0x1000, 0x2000]]
+        );
+        assert_eq!(calls_to(&e, NI_GET_VIEWER_STRING), vec![vec![0x0555_0000]]);
+        assert_eq!(calls_to(&e, STRINGS_ADD)[0][0], 0x2000);
+    }
+
+    #[test]
+    fn register_streamables_answers_whether_the_base_answered_nonzero() {
+        let mut e = Engine::new();
+        e.register(RANGE_NODE_REGISTER_STREAMABLES, |_, _| word(0x1234_5600));
+        assert_eq!(e.call(0x00c4_b040, &args![0x1000u32, 0x2000u32]).u32(), 0);
+        e.register(RANGE_NODE_REGISTER_STREAMABLES, |_, _| word(0x4));
+        assert_eq!(e.call(0x00c4_b040, &args![0x1000u32, 0x2000u32]).u32(), 1);
+    }
+
+    #[test]
+    fn is_equal_passes_on_the_range_node_answer() {
+        let mut e = Engine::new();
+        e.register(RANGE_NODE_IS_EQUAL, |_, a| word(a[1] & 0xff));
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x00c4_b090, &args![0x1000u32, 0x2001u32]).u32(), 1);
+        assert_eq!(e.call(0x00c4_b090, &args![0x1000u32, 0x2000u32]).u32(), 0);
+        assert_eq!(calls_to(&e, RANGE_NODE_IS_EQUAL)[0], vec![0x1000, 0x2001]);
+    }
+
+    #[test]
+    fn update_rigid_downward_pass_skips_flagged_nodes() {
+        let mut e = Engine::new();
+        e.register(NI_NODE_UPDATE_RIGID_DOWNWARD_PASS, |_, _| Ret::default());
+        let this = e.mem.alloc(0x40);
+        e.call_log = Some(vec![]);
+        e.call(0x00c4_b1d0, &args![this, 7u32, 8u32]);
+        assert_eq!(
+            calls_to(&e, NI_NODE_UPDATE_RIGID_DOWNWARD_PASS),
+            vec![vec![this, 7, 8]]
+        );
+        e.mem.set_u32(this + 0x30, 0xffff_ff01);
+        e.call_log = Some(vec![]);
+        e.call(0x00c4_b1d0, &args![this, 7u32, 8u32]);
+        assert!(calls_to(&e, NI_NODE_UPDATE_RIGID_DOWNWARD_PASS).is_empty());
     }
 }

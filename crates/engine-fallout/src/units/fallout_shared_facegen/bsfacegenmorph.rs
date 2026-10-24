@@ -279,11 +279,23 @@ pub fn bs_face_gen_morph_statistical_apply_morph(
     });
 }
 
+// Translated from 006606b0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSFaceGenMorph::_scalar_deleting_destructor_` (Xbox PDB, `RET 4`): the destructor
+/// body (`fn_006606e0`), then `operator delete` with bit 0 of `flags`. Returns `this`.
+pub fn bs_face_gen_morph_scalar_deleting_destructor(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    fn_006606e0(e, this);
+    if flags & 1 != 0 {
+        e.call(OPERATOR_DELETE, &args![this]);
+    }
+    this
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
         entry!(0x0066_0690, fn_00660690(Ptr) -> Ptr),
         entry!(0x0066_06e0, fn_006606e0(Ptr)),
+        entry!(0x0066_06b0, bs_face_gen_morph_scalar_deleting_destructor(Ptr, u32) -> Ptr),
         entry!(0x0066_0700, fn_00660700(Ptr, u32) -> Ptr),
         entry!(
             0x0066_07f0,
@@ -535,5 +547,18 @@ mod tests {
         e.call_log = Some(vec![]);
         bs_face_gen_morph_statistical_apply_morph(&mut e, Ptr::new(morph), 0x900, base, 0.5);
         assert!(calls_to(&e, OBJECT_GEOMETRY).is_empty());
+    }
+
+    #[test]
+    fn morph_scalar_deleting_destructor() {
+        let mut e = Engine::new();
+        let morph = e.mem.alloc(8);
+        e.register(OPERATOR_DELETE, |_, _| Ret::default());
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x0066_06b0, &args![morph, 2u32]).u32(), morph);
+        assert_eq!(e.mem.u32(morph), MORPH_VTABLE);
+        assert!(calls_to(&e, OPERATOR_DELETE).is_empty());
+        e.call(0x0066_06b0, &args![morph, 1u32]);
+        assert_eq!(calls_to(&e, OPERATOR_DELETE), vec![vec![morph]]);
     }
 }

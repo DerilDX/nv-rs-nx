@@ -191,9 +191,209 @@ pub fn fn_00c43cb0(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
     this
 }
 
+/// `00c5f680` (`thiscall`, `(node, 0)`): the `BSNiNode` constructor from an existing node.
+const BS_NI_NODE_CONSTRUCT_FROM: u32 = 0x00c5_f680;
+/// `NiBillboardNode::ms_RTTI` (as other units name it).
+const NI_BILLBOARD_NODE_RTTI: u32 = 0x011f_4aa0;
+/// `NiNode::RegisterStreamables` (`00a5e5b0`), `NiNode::SaveBinary` (`00a5e880`),
+/// `NiNode::IsEqual` (`00a5e600`) and `NiNode::GetViewerStrings` (`00a5ea70`), each
+/// `thiscall` with one word.
+const NI_NODE_REGISTER_STREAMABLES: u32 = 0x00a5_e5b0;
+const NI_NODE_SAVE_BINARY: u32 = 0x00a5_e880;
+const NI_NODE_IS_EQUAL: u32 = 0x00a5_e600;
+const NI_NODE_GET_VIEWER_STRINGS: u32 = 0x00a5_ea70;
+/// `NiStreamSaveBinary<float>` (`00a3da50`, `cdecl`, `(stream, &word)`).
+const STREAM_SAVE_WORD: u32 = 0x00a3_da50;
+/// `NiGetViewerString` (`00a7d330`, `(name)`), its `(format, int)` form `00a7d4d0` and its
+/// `(label, text)` form `00a7d5e0` (all `cdecl`), and the viewer-string array's add
+/// (`0096a610`, `thiscall`, `(&string)`).
+const NI_GET_VIEWER_STRING: u32 = 0x00a7_d330;
+const NI_GET_VIEWER_STRING_INT: u32 = 0x00a7_d4d0;
+const NI_GET_VIEWER_STRING_TEXT: u32 = 0x00a7_d5e0;
+const VIEWER_STRINGS_ADD: u32 = 0x0096_a610;
+/// `BSValueNode::ms_RTTI` (its first word is the class name), and the strings `"Value"`,
+/// `"Billboard"`, `"true"` and `"false"`.
+const BS_VALUE_NODE_RTTI: u32 = 0x0120_2de8;
+const VALUE_LABEL: u32 = 0x0104_4adc;
+const BILLBOARD_LABEL: u32 = 0x010c_1a64;
+const TRUE_TEXT: u32 = 0x0102_fd2c;
+const FALSE_TEXT: u32 = 0x0102_fd24;
+/// `strlen` and `atol` (CRT, `cdecl`).
+const STRLEN: u32 = 0x00ec_6130;
+const ATOL: u32 = 0x00ec_a6d3;
+
+// Translated from 00a29550 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiStreamSaveBinary<unsigned char>` (engine map; `cdecl`, two stack words): writes the
+/// byte at `source` to the stream's output stream (`m_pkOstr`): its write function as
+/// `function(output, source, 1, &count, 1)` with `count` (the caller's first argument
+/// slot) set to 1, and the byte count it returns added to the output's position.
+pub fn ni_stream_save_binary_unsigned_char(e: &mut Engine, stream: Ptr<NiStream>, source: Ptr) {
+    let output = Ptr::<NiBinaryStream>::new(e.get(stream, NiStream::m_pkOstr));
+    let function = e.get(output, NiBinaryStream::m_pfnWrite);
+    let done = e.with_stack(4, |e, count| {
+        e.mem.set_u32(count.addr(), 1);
+        e.call(function, &args![output, source, 1u32, count, 1u32])
+            .u32()
+    });
+    let position = e.get(output, NiBinaryStream::m_uiAbsoluteCurrentPos);
+    e.set(
+        output,
+        NiBinaryStream::m_uiAbsoluteCurrentPos,
+        position.wrapping_add(done),
+    );
+}
+
+// Translated from 00c436a0 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 00c436a0 - the C++ exception-unwinding frame (FS:[0] chain, handler at 00f2e418, state variable) is not translated
+/// Unnamed in the engine map (`thiscall`, `(node)`): a `BSValueNode` made from `node`:
+/// `BSNiNode`'s constructor from a node (`00c5f680` with `node` and 0), the vtable, and,
+/// when `node` is an `NiBillboardNode` (its RTTI chain) whose word at +0xAC has 5 in its low
+/// three bits, bit 0 of the flags byte set. Returns `this`.
+pub fn fn_00c436a0(e: &mut Engine, this: Ptr, node: u32) -> Ptr {
+    e.call(BS_NI_NODE_CONSTRUCT_FROM, &args![this, node, 0u32]);
+    let me = this.addr();
+    e.mem.set_u32(me, BS_VALUE_NODE_VTABLE);
+    let billboard = if node == 0 {
+        false
+    } else {
+        let mut rtti = e.vcall(node, 8, &[]).u32();
+        loop {
+            if rtti == 0 {
+                break false;
+            }
+            if rtti == NI_BILLBOARD_NODE_RTTI {
+                break true;
+            }
+            rtti = e.mem.u32(rtti.wrapping_add(4));
+        }
+    };
+    if billboard && e.mem.u16(node.wrapping_add(0xac)) & 7 == 5 {
+        // The code sets or clears the bit on a constant 1 (`MOV EDX,1; TEST EDX,EDX`):
+        // only the set branch can run; the clear branch is kept as the code has it.
+        let set = 1u32;
+        let flags = e.mem.u8(me.wrapping_add(VALUE_NODE_FLAGS));
+        let flags = if set != 0 { flags | 1 } else { flags & !1 };
+        e.mem.set_u8(me.wrapping_add(VALUE_NODE_FLAGS), flags);
+    }
+    this
+}
+
+// Translated from 00c43920 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (the `BSValueNode` vtable's `RegisterStreamables` place):
+/// whether `NiNode::RegisterStreamables` succeeded.
+pub fn fn_00c43920(e: &mut Engine, this: Ptr, stream: Ptr) -> bool {
+    e.call(NI_NODE_REGISTER_STREAMABLES, &args![this, stream])
+        .u8()
+        != 0
+}
+
+// Translated from 00c43950 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSValueNode::SaveBinary` (Xbox PDB, engine map): `NiNode::SaveBinary`, the value (4
+/// bytes through `00a3da50` from a local copy) and the flags byte
+/// (`NiStreamSaveBinary<unsigned char>`).
+pub fn bs_value_node_save_binary(e: &mut Engine, this: Ptr, stream: Ptr) {
+    e.call(NI_NODE_SAVE_BINARY, &args![this, stream]);
+    let value = e.mem.u32(this.addr().wrapping_add(VALUE));
+    e.with_stack(4, |e, local| {
+        e.mem.set_u32(local.addr(), value);
+        e.call(STREAM_SAVE_WORD, &args![stream, local]);
+    });
+    ni_stream_save_binary_unsigned_char(
+        e,
+        Ptr::new(stream.addr()),
+        Ptr::new(this.addr().wrapping_add(VALUE_NODE_FLAGS)),
+    );
+}
+
+// Translated from 00c439b0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSValueNode::IsEqual` (Xbox PDB, engine map): `NiNode::IsEqual`, and when that holds,
+/// whether the values and the flags bytes are equal.
+pub fn bs_value_node_is_equal(e: &mut Engine, this: Ptr, other: Ptr) -> bool {
+    let equal = e.call(NI_NODE_IS_EQUAL, &args![this, other]).u8();
+    if equal == 0 {
+        return false;
+    }
+    let mine = this.addr();
+    let theirs = other.addr();
+    e.mem.u32(mine.wrapping_add(VALUE)) == e.mem.u32(theirs.wrapping_add(VALUE))
+        && e.mem.u8(mine.wrapping_add(VALUE_NODE_FLAGS))
+            == e.mem.u8(theirs.wrapping_add(VALUE_NODE_FLAGS))
+}
+
+// Translated from 00c43ab0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSValueNode::GetViewerStrings` (Xbox PDB, engine map): `NiNode::GetViewerStrings`, then
+/// the class name (`NiGetViewerString` of `BSValueNode::ms_RTTI`'s name), `"Value"` with
+/// the value, and, with bit 0 of the flags byte, `"Billboard"` with `"true"` (`"false"`
+/// when the bit, tested again, is clear) added to the list.
+pub fn bs_value_node_get_viewer_strings(e: &mut Engine, this: Ptr, strings: Ptr) {
+    e.call(NI_NODE_GET_VIEWER_STRINGS, &args![this, strings]);
+    let me = this.addr();
+    e.with_stack(0xc, |e, slots| {
+        let name = e.global::<u32>(BS_VALUE_NODE_RTTI);
+        let text = e.call(NI_GET_VIEWER_STRING, &args![name]).u32();
+        let slot = slots.addr().wrapping_add(8);
+        e.mem.set_u32(slot, text);
+        e.call(VIEWER_STRINGS_ADD, &args![strings, slot]);
+        let value = e.mem.u32(me.wrapping_add(VALUE));
+        let text = e
+            .call(NI_GET_VIEWER_STRING_INT, &args![VALUE_LABEL, value])
+            .u32();
+        let slot = slots.addr().wrapping_add(4);
+        e.mem.set_u32(slot, text);
+        e.call(VIEWER_STRINGS_ADD, &args![strings, slot]);
+        if e.mem.u8(me.wrapping_add(VALUE_NODE_FLAGS)) & 1 != 0 {
+            let state = if e.mem.u8(me.wrapping_add(VALUE_NODE_FLAGS)) & 1 != 0 {
+                TRUE_TEXT
+            } else {
+                FALSE_TEXT
+            };
+            let text = e
+                .call(NI_GET_VIEWER_STRING_TEXT, &args![BILLBOARD_LABEL, state])
+                .u32();
+            let slot = slots.addr();
+            e.mem.set_u32(slot, text);
+            e.call(VIEWER_STRINGS_ADD, &args![strings, slot]);
+        }
+    });
+}
+
+// Translated from 00c43be0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSValueNode::ParseNameForValue` (Xbox PDB, engine map): scans the name (+8) back from
+/// its end over digits, `#` and `@` (the character before the name's start is read when
+/// the whole name is such characters), stores `atol` of the rest after them as the value
+/// and answers whether that rest was not empty.
+pub fn bs_value_node_parse_name_for_value(e: &mut Engine, this: Ptr) -> bool {
+    let name = e.mem.u32(this.addr().wrapping_add(8));
+    let length = e.call(STRLEN, &args![name]).u32();
+    let mut back = 1u32;
+    loop {
+        let c = e.mem.i8(name.wrapping_add(length.wrapping_sub(back)));
+        let marker = (0x30..=0x39).contains(&c) || c == 0x23 || c == 0x40;
+        if !marker || back > length {
+            break;
+        }
+        back = back.wrapping_add(1);
+    }
+    let rest = name.wrapping_add(length.wrapping_sub(back)).wrapping_add(1);
+    let found = e.mem.u8(rest) != 0;
+    let value = e.call(ATOL, &args![rest]).u32();
+    e.mem.set_u32(this.addr().wrapping_add(VALUE), value);
+    found
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(
+            0x00a2_9550,
+            ni_stream_save_binary_unsigned_char(Ptr<NiStream>, Ptr)
+        ),
+        entry!(0x00c4_36a0, fn_00c436a0(Ptr, u32) -> Ptr),
+        entry!(0x00c4_3920, fn_00c43920(Ptr, Ptr) -> bool),
+        entry!(0x00c4_3950, bs_value_node_save_binary(Ptr, Ptr)),
+        entry!(0x00c4_39b0, bs_value_node_is_equal(Ptr, Ptr) -> bool),
+        entry!(0x00c4_3ab0, bs_value_node_get_viewer_strings(Ptr, Ptr)),
+        entry!(0x00c4_3be0, bs_value_node_parse_name_for_value(Ptr) -> bool),
         entry!(0x00c4_3cf0, fn_00c43cf0(Ptr) -> u32),
         entry!(
             0x00a6_43b0,
@@ -404,5 +604,225 @@ mod constant_getter_tests {
                 (BS_NI_NODE_DESTRUCT, vec![0x5000]),
             ]
         );
+    }
+}
+
+#[cfg(test)]
+mod n068_tests {
+    use super::*;
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    type Log = Rc<RefCell<Vec<(u32, Vec<u32>)>>>;
+
+    fn logged(e: &mut Engine, log: &Log, address: u32, eax: u32) {
+        let log = log.clone();
+        e.register_double(address, move |_, a| {
+            log.borrow_mut().push((address, a.to_vec()));
+            eax.into_ret()
+        });
+    }
+
+    fn calls(log: &Log, address: u32) -> Vec<Vec<u32>> {
+        log.borrow()
+            .iter()
+            .filter(|c| c.0 == address)
+            .map(|c| c.1.clone())
+            .collect()
+    }
+
+    #[test]
+    fn save_binary_unsigned_char_writes_one_byte_through_the_output_stream() {
+        const WRITE: u32 = 0x00aa_2f00;
+        let mut e = Engine::new();
+        let stream = e.mem.alloc(0x300);
+        let output = e.mem.alloc(0x10);
+        e.mem.set_u32(stream + 0x250, output);
+        e.mem.set_u32(output + 4, 10);
+        e.mem.set_u32(output + 0xc, WRITE);
+        let source = e.mem.alloc(4);
+        e.register(WRITE, |e, a| {
+            assert_eq!((a[2], a[4]), (1, 1));
+            assert_eq!(e.mem.u32(a[3]), 1);
+            1u32.into_ret()
+        });
+        e.call_log = Some(vec![]);
+        e.call(0x00a2_9550, &args![stream, source]);
+        let log = e.call_log.take().unwrap();
+        let writes: Vec<_> = log.iter().filter(|c| c.0 == WRITE).collect();
+        assert_eq!(writes.len(), 1);
+        assert_eq!(writes[0].1[..2], [output, source]);
+        assert_eq!(e.mem.u32(output + 4), 11);
+    }
+
+    fn node_with_rtti(e: &mut Engine, rtti: u32, mode: u16) -> u32 {
+        e.register(0x0040_5008, |e, a| e.mem.u32(a[0] + 0x10).into_ret());
+        let vtable = e.mem.alloc(0x10);
+        e.mem.set_u32(vtable + 8, 0x0040_5008);
+        let node = e.mem.alloc(0xb8);
+        e.mem.set_u32(node, vtable);
+        e.mem.set_u32(node + 0x10, rtti);
+        e.mem.set_u16(node + 0xac, mode);
+        node
+    }
+
+    #[test]
+    fn construct_from_a_billboard_node_in_mode_5_sets_the_flag() {
+        let mut e = Engine::new();
+        let log = Log::default();
+        logged(&mut e, &log, BS_NI_NODE_CONSTRUCT_FROM, 0);
+        let parent = e.mem.alloc(8);
+        e.mem.set_u32(parent + 4, NI_BILLBOARD_NODE_RTTI);
+        let billboard = node_with_rtti(&mut e, parent, 0xfd);
+        let this = e.mem.alloc(0xb8);
+        e.mem.set_u8(this + VALUE_NODE_FLAGS, 0x10);
+        assert_eq!(e.call(0x00c4_36a0, &args![this, billboard]).u32(), this);
+        assert_eq!(e.mem.u32(this), BS_VALUE_NODE_VTABLE);
+        assert_eq!(e.mem.u8(this + VALUE_NODE_FLAGS), 0x11);
+        assert_eq!(
+            calls(&log, BS_NI_NODE_CONSTRUCT_FROM),
+            vec![vec![this, billboard, 0]]
+        );
+        // Another mode, another class or no node: the flag stays.
+        for node in [
+            node_with_rtti(&mut e, parent, 4),
+            node_with_rtti(&mut e, 0, 5),
+            0,
+        ] {
+            e.mem.set_u8(this + VALUE_NODE_FLAGS, 0x10);
+            e.call(0x00c4_36a0, &args![this, node]);
+            assert_eq!(e.mem.u8(this + VALUE_NODE_FLAGS), 0x10);
+        }
+    }
+
+    #[test]
+    fn register_streamables_answers_the_node_result() {
+        let mut e = Engine::new();
+        let log = Log::default();
+        logged(&mut e, &log, NI_NODE_REGISTER_STREAMABLES, 0x100);
+        assert!(!e.call(0x00c4_3920, &args![0x1000u32, 0x2000u32]).bool());
+        logged(&mut e, &log, NI_NODE_REGISTER_STREAMABLES, 1);
+        assert!(e.call(0x00c4_3920, &args![0x1000u32, 0x2000u32]).bool());
+        assert_eq!(
+            calls(&log, NI_NODE_REGISTER_STREAMABLES)[0],
+            vec![0x1000, 0x2000]
+        );
+    }
+
+    #[test]
+    fn save_binary_writes_the_value_and_the_flags() {
+        let mut e = Engine::new();
+        let log = Log::default();
+        logged(&mut e, &log, NI_NODE_SAVE_BINARY, 0);
+        e.register(STREAM_SAVE_WORD, |e, a| {
+            assert_eq!(e.mem.u32(a[1]), 0x1234);
+            Ret::default()
+        });
+        let stream = e.mem.alloc(0x300);
+        let output = e.mem.alloc(0x10);
+        e.mem.set_u32(stream + 0x250, output);
+        e.mem.set_u32(output + 0xc, 0x00aa_2f10);
+        e.register(0x00aa_2f10, |e, a| {
+            assert_eq!(e.mem.u8(a[1]), 3);
+            1u32.into_ret()
+        });
+        let this = e.mem.alloc(0xb8);
+        e.mem.set_u32(this + VALUE, 0x1234);
+        e.mem.set_u8(this + VALUE_NODE_FLAGS, 3);
+        e.call_log = Some(vec![]);
+        e.call(0x00c4_3950, &args![this, stream]);
+        let order: Vec<u32> = e.call_log.take().unwrap().iter().map(|c| c.0).collect();
+        assert_eq!(
+            order,
+            vec![
+                0x00c4_3950,
+                NI_NODE_SAVE_BINARY,
+                STREAM_SAVE_WORD,
+                0x00aa_2f10
+            ]
+        );
+        assert_eq!(e.mem.u32(output + 4), 1);
+    }
+
+    #[test]
+    fn is_equal_compares_value_and_flags_after_the_node() {
+        let mut e = Engine::new();
+        let log = Log::default();
+        logged(&mut e, &log, NI_NODE_IS_EQUAL, 1);
+        let this = e.mem.alloc(0xb8);
+        let other = e.mem.alloc(0xb8);
+        e.mem.set_u32(this + VALUE, 5);
+        e.mem.set_u32(other + VALUE, 5);
+        assert!(e.call(0x00c4_39b0, &args![this, other]).bool());
+        e.mem.set_u8(other + VALUE_NODE_FLAGS, 1);
+        assert!(!e.call(0x00c4_39b0, &args![this, other]).bool());
+        e.mem.set_u8(this + VALUE_NODE_FLAGS, 1);
+        e.mem.set_u32(other + VALUE, 6);
+        assert!(!e.call(0x00c4_39b0, &args![this, other]).bool());
+        e.mem.set_u32(other + VALUE, 5);
+        logged(&mut e, &log, NI_NODE_IS_EQUAL, 0);
+        assert!(!e.call(0x00c4_39b0, &args![this, other]).bool());
+    }
+
+    #[test]
+    fn viewer_strings_add_name_value_and_billboard() {
+        let mut e = Engine::new();
+        let log = Log::default();
+        logged(&mut e, &log, NI_NODE_GET_VIEWER_STRINGS, 0);
+        e.map(BS_VALUE_NODE_RTTI, 4);
+        e.set_global::<u32>(BS_VALUE_NODE_RTTI, 0x0101_0000);
+        logged(&mut e, &log, NI_GET_VIEWER_STRING, 0x7001);
+        logged(&mut e, &log, NI_GET_VIEWER_STRING_INT, 0x7002);
+        logged(&mut e, &log, NI_GET_VIEWER_STRING_TEXT, 0x7003);
+        let l = log.clone();
+        e.register_double(VIEWER_STRINGS_ADD, move |e, a| {
+            l.borrow_mut().push((0, vec![a[0], e.mem.u32(a[1])]));
+            Ret::default()
+        });
+        let this = e.mem.alloc(0xb8);
+        e.mem.set_u32(this + VALUE, 42);
+        e.call(0x00c4_3ab0, &args![this, 0x6000u32]);
+        assert_eq!(
+            calls(&log, 0),
+            vec![vec![0x6000, 0x7001], vec![0x6000, 0x7002]]
+        );
+        assert_eq!(calls(&log, NI_GET_VIEWER_STRING), vec![vec![0x0101_0000]]);
+        assert_eq!(
+            calls(&log, NI_GET_VIEWER_STRING_INT),
+            vec![vec![VALUE_LABEL, 42]]
+        );
+        log.borrow_mut().clear();
+        e.mem.set_u8(this + VALUE_NODE_FLAGS, 1);
+        e.call(0x00c4_3ab0, &args![this, 0x6000u32]);
+        assert_eq!(calls(&log, 0)[2], vec![0x6000, 0x7003]);
+        assert_eq!(
+            calls(&log, NI_GET_VIEWER_STRING_TEXT),
+            vec![vec![BILLBOARD_LABEL, TRUE_TEXT]]
+        );
+        assert_eq!(
+            calls(&log, NI_NODE_GET_VIEWER_STRINGS)[0],
+            vec![this, 0x6000]
+        );
+    }
+
+    fn parse(e: &mut Engine, text: &[u8]) -> (bool, u32) {
+        let block = e.mem.alloc(0x40);
+        // The byte before the name is read when the whole name is digits.
+        e.mem.set_u8(block, b'x');
+        e.mem.set_cstr(block + 1, text);
+        let this = e.mem.alloc(0xb8);
+        e.mem.set_u32(this + 8, block + 1);
+        let found = e.call(0x00c4_3be0, &args![this]).bool();
+        (found, e.mem.u32(this + VALUE))
+    }
+
+    #[test]
+    fn parse_name_for_value_reads_the_trailing_number() {
+        let mut e = Engine::new();
+        assert_eq!(parse(&mut e, b"Node42"), (true, 42));
+        assert_eq!(parse(&mut e, b"Node#7"), (true, 0));
+        assert_eq!(parse(&mut e, b"A@12"), (true, 0));
+        assert_eq!(parse(&mut e, b"Node"), (false, 0));
+        assert_eq!(parse(&mut e, b"123"), (true, 123));
     }
 }

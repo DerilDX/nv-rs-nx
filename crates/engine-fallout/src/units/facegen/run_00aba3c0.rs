@@ -1567,6 +1567,1765 @@ pub fn fn_00ac3df0(e: &mut Engine, this: Ptr, file_id: StringArg) -> Ptr {
     this
 }
 
+/// `std::string::assign(other, 0, npos)` (`0044a580`) of the string at `to` from `from`.
+fn assign_string(e: &mut Engine, to: u32, from: u32) {
+    let npos: u32 = e.global(STRING_NPOS);
+    e.call(STRING_ASSIGN, &args![to, from, 0u32, npos]);
+}
+
+/// Copies `count` words from `from` to `to` (`MOV`s).
+fn copy_words(e: &mut Engine, to: u32, from: u32, count: u32) {
+    for i in 0..count {
+        let word = e.mem.u32(from.wrapping_add(4 * i));
+        e.mem.set_u32(to.wrapping_add(4 * i), word);
+    }
+}
+
+// Translated from 00aba3c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map: a 12-byte-element vector's `insert(where, value)` (`thiscall`,
+/// four words: the result, the iterator's proxy and pointer, the value's address). The
+/// iterator's offset from the begin iterator (0 for an empty vector; otherwise its proxy must be
+/// set and equal to the begin iterator's, and the offset is the signed element count), then one
+/// copy inserted (`00abca90`), and the result is the new begin iterator advanced by the offset
+/// (`00ac0dc0`). Returns `result`.
+pub fn fn_00aba3c0(
+    e: &mut Engine,
+    this: Ptr,
+    result: Ptr,
+    where_proxy: u32,
+    at: u32,
+    value: u32,
+) -> Ptr {
+    let vector = this.addr();
+    let offset = if vector_size(e, vector, ElementSize::Divide(0xc)) == 0 {
+        0
+    } else {
+        let first = e.mem.u32(vector + VECTOR_FIRST);
+        let begin_proxy = checked_iterator(e, vector, first);
+        check(e, where_proxy != 0 && where_proxy == begin_proxy);
+        ElementSize::Divide(0xc).count(at.wrapping_sub(first))
+    };
+    fn_00abca90(e, this, where_proxy, at, 1, value);
+    let first = e.mem.u32(vector + VECTOR_FIRST);
+    let proxy = checked_iterator(e, vector, first);
+    e.with_stack(8, |e, iterator| {
+        e.mem.set_u32(iterator.addr(), proxy);
+        e.mem.set_u32(iterator.addr() + 4, first);
+        fn_00ac0dc0(e, iterator, offset);
+        let proxy = e.mem.u32(iterator.addr());
+        let pointer = e.mem.u32(iterator.addr() + 4);
+        e.mem.set_u32(result.addr(), proxy);
+        e.mem.set_u32(result.addr() + 4, pointer);
+    });
+    result
+}
+
+/// The `erase(first, last)` template: both iterators are checked and remade on this vector's
+/// proxy; when they differ (`00ac0460`), `finish` moves the tail down and ends the vector. The
+/// result is the first iterator; returns `result`.
+fn erase_range(
+    e: &mut Engine,
+    this: Ptr,
+    result: Ptr,
+    first: u32,
+    last: u32,
+    finish: impl FnOnce(&mut Engine, u32),
+) -> Ptr {
+    let vector = this.addr();
+    let first_proxy = checked_iterator(e, vector, first);
+    let last_proxy = checked_iterator(e, vector, last);
+    e.with_stack(0x10, |e, iterators| {
+        let begin = iterators.addr();
+        let end = iterators.addr() + 8;
+        e.mem.set_u32(begin, first_proxy);
+        e.mem.set_u32(begin + 4, first);
+        e.mem.set_u32(end, last_proxy);
+        e.mem.set_u32(end + 4, last);
+        if fn_00ac0460(e, Ptr::new(begin), Ptr::new(end)) != 0 {
+            finish(e, vector);
+        }
+    });
+    e.mem.set_u32(result.addr(), first_proxy);
+    e.mem.set_u32(result.addr() + 4, first);
+    result
+}
+
+/// The plain elements' erase tail: the elements from `last` to the end move down to `first`
+/// (`mover`: first, last, destination), an empty walk over the freed elements, and the last
+/// pointer becomes the end of the moved block.
+fn erase_plain_tail(
+    e: &mut Engine,
+    vector: u32,
+    first: u32,
+    last: u32,
+    bytes: u32,
+    mover: fn(&mut Engine, u32, u32, u32) -> u32,
+) {
+    let old_last = e.mem.u32(vector + VECTOR_LAST);
+    let moved = mover(e, last, old_last, first);
+    let end = e.mem.u32(vector + VECTOR_LAST);
+    let mut element = moved;
+    while element != end {
+        element = element.wrapping_add(bytes);
+    }
+    e.mem.set_u32(vector + VECTOR_LAST, moved);
+}
+
+/// The 6-word movers of the string elements (first, last, destination and three tags).
+type MoverFn = fn(&mut Engine, u32, u32, u32, u32, u32, u32) -> u32;
+
+/// The string elements' erase tail: the elements from `last` to the end are assigned down to
+/// `first` (`mover`), the leftover ones destroyed (`destroy_range`, `thiscall`: from, to) and the
+/// last pointer becomes the end of the moved block.
+fn erase_strings_tail(
+    e: &mut Engine,
+    vector: u32,
+    first: u32,
+    last: u32,
+    mover: MoverFn,
+    destroy_range: u32,
+) {
+    let old_last = e.mem.u32(vector + VECTOR_LAST);
+    let moved = mover(e, last, old_last, first, 0, 0, 0);
+    let end = e.mem.u32(vector + VECTOR_LAST);
+    e.call(destroy_range, &args![vector, moved, end]);
+    e.mem.set_u32(vector + VECTOR_LAST, moved);
+}
+
+/// The 0x34- and 0x38-byte elements' erase tail: as [`erase_strings_tail`], but each leftover
+/// element is destroyed (`destruct`, `thiscall`). The free of each element that follows is
+/// guarded by a mask the compiler folded to 0 (`XOR EAX,EAX; AND EAX,1`), so it never runs and
+/// is left out.
+fn erase_objects_tail(
+    e: &mut Engine,
+    vector: u32,
+    first: u32,
+    last: u32,
+    bytes: u32,
+    mover: MoverFn,
+    destruct: u32,
+) {
+    let old_last = e.mem.u32(vector + VECTOR_LAST);
+    let moved = mover(e, last, old_last, first, 0, 0, 0);
+    let end = e.mem.u32(vector + VECTOR_LAST);
+    let mut element = moved;
+    while element != end {
+        e.call(destruct, &args![element]);
+        element = element.wrapping_add(bytes);
+    }
+    e.mem.set_u32(vector + VECTOR_LAST, moved);
+}
+
+// Translated from 00aba9a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map: a 12-byte-element vector's `erase(first, last)` (`thiscall`, five
+/// words: the result and the two iterators), the tail moved by `00ac1170`. Returns `result`.
+#[allow(clippy::too_many_arguments)]
+pub fn fn_00aba9a0(
+    e: &mut Engine,
+    this: Ptr,
+    result: Ptr,
+    _first_proxy: u32,
+    first: u32,
+    _last_proxy: u32,
+    last: u32,
+) -> Ptr {
+    erase_range(e, this, result, first, last, |e, vector| {
+        erase_plain_tail(e, vector, first, last, 0xc, fn_00ac1170)
+    })
+}
+
+// Translated from 00abac80 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map: a 16-byte-element vector's `erase(first, last)`, as `00aba9a0`
+/// with the mover `00ac1220`. Returns `result`.
+#[allow(clippy::too_many_arguments)]
+pub fn fn_00abac80(
+    e: &mut Engine,
+    this: Ptr,
+    result: Ptr,
+    _first_proxy: u32,
+    first: u32,
+    _last_proxy: u32,
+    last: u32,
+) -> Ptr {
+    erase_range(e, this, result, first, last, |e, vector| {
+        erase_plain_tail(e, vector, first, last, 0x10, fn_00ac1220)
+    })
+}
+
+// Translated from 00abaf60 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map: an 8-byte-element vector's `erase(first, last)`, as `00aba9a0`
+/// with the mover `00ac12d0`. Returns `result`.
+#[allow(clippy::too_many_arguments)]
+pub fn fn_00abaf60(
+    e: &mut Engine,
+    this: Ptr,
+    result: Ptr,
+    _first_proxy: u32,
+    first: u32,
+    _last_proxy: u32,
+    last: u32,
+) -> Ptr {
+    erase_range(e, this, result, first, last, |e, vector| {
+        erase_plain_tail(e, vector, first, last, 8, fn_00ac12d0)
+    })
+}
+
+/// The range destructions of the 0x20- and 0x2C-byte elements (`0065dc60`, `0065dd90`;
+/// `thiscall` on the vector: from, to).
+const DESTROY_RANGE_20: u32 = 0x0065_dc60;
+const DESTROY_RANGE_2C: u32 = 0x0065_dd90;
+
+// Translated from 00abb280 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map: a 0x20-byte-element (a word and a string) vector's
+/// `erase(first, last)`: the tail assigned down by `00ac1780` (given two tag words the code
+/// copies from uninitialized stack bytes and a 0; the mover does not read them), the leftover
+/// elements destroyed by `0065dc60`. Returns `result`.
+#[allow(clippy::too_many_arguments)]
+pub fn fn_00abb280(
+    e: &mut Engine,
+    this: Ptr,
+    result: Ptr,
+    _first_proxy: u32,
+    first: u32,
+    _last_proxy: u32,
+    last: u32,
+) -> Ptr {
+    erase_range(e, this, result, first, last, |e, vector| {
+        erase_strings_tail(e, vector, first, last, fn_00ac1780, DESTROY_RANGE_20)
+    })
+}
+
+// Translated from 00abb5f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map: a 0x2C-byte-element (four words and a string) vector's
+/// `erase(first, last)`, as `00abb280` with the mover `00ac1810` and the range destruction
+/// `0065dd90`. Returns `result`.
+#[allow(clippy::too_many_arguments)]
+pub fn fn_00abb5f0(
+    e: &mut Engine,
+    this: Ptr,
+    result: Ptr,
+    _first_proxy: u32,
+    first: u32,
+    _last_proxy: u32,
+    last: u32,
+) -> Ptr {
+    erase_range(e, this, result, first, last, |e, vector| {
+        erase_strings_tail(e, vector, first, last, fn_00ac1810, DESTROY_RANGE_2C)
+    })
+}
+
+// Translated from 00abb930 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map: a 0x34-byte-element vector's `erase(first, last)`: the tail
+/// assigned down by `00ac18c0`, each leftover element destroyed (`0065ed70`). Returns
+/// `result`.
+#[allow(clippy::too_many_arguments)]
+pub fn fn_00abb930(
+    e: &mut Engine,
+    this: Ptr,
+    result: Ptr,
+    _first_proxy: u32,
+    first: u32,
+    _last_proxy: u32,
+    last: u32,
+) -> Ptr {
+    erase_range(e, this, result, first, last, |e, vector| {
+        erase_objects_tail(e, vector, first, last, 0x34, fn_00ac18c0, VALUE_34_DESTRUCT)
+    })
+}
+
+// Translated from 00abbd10 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map: a 0x38-byte-element vector's `erase(first, last)`, as `00abb930`
+/// with the mover `00ac1980` and the destructor `0065edd0`. Returns `result`.
+#[allow(clippy::too_many_arguments)]
+pub fn fn_00abbd10(
+    e: &mut Engine,
+    this: Ptr,
+    result: Ptr,
+    _first_proxy: u32,
+    first: u32,
+    _last_proxy: u32,
+    last: u32,
+) -> Ptr {
+    erase_range(e, this, result, first, last, |e, vector| {
+        erase_objects_tail(e, vector, first, last, 0x38, fn_00ac1980, VALUE_38_DESTRUCT)
+    })
+}
+
+// Translated from 00abbeb0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map: a checked iterator's constructor (`thiscall`: the pointer and the
+/// vector): the proxy cleared, then (the pointer must lie within the vector, else
+/// `_invalid_parameter_noinfo`) the vector's proxy and the pointer. Returns `this`.
+pub fn fn_00abbeb0(e: &mut Engine, this: Ptr, pointer: u32, vector: u32) -> Ptr {
+    e.mem.set_u32(this.addr(), 0);
+    let ok = vector != 0
+        && e.mem.u32(vector + VECTOR_FIRST) <= pointer
+        && pointer <= e.mem.u32(vector + VECTOR_LAST);
+    check(e, ok);
+    let proxy = e.mem.u32(vector + VECTOR_PROXY);
+    e.mem.set_u32(this.addr(), proxy);
+    e.mem.set_u32(this.addr() + 4, pointer);
+    this
+}
+
+// Translated from 00abbf00 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map: a checked iterator's `operator==` (`thiscall`, the other): both
+/// must belong to the same container (a proxy that is set and equal, else
+/// `_invalid_parameter_noinfo`); whether the pointers are equal.
+pub fn fn_00abbf00(e: &mut Engine, this: Ptr, other: Ptr) -> bool {
+    let proxy = e.mem.u32(this.addr());
+    if proxy == 0 || proxy != e.mem.u32(other.addr()) {
+        e.call(INVALID_PARAMETER, &[]);
+    }
+    e.mem.u32(this.addr() + 4) == e.mem.u32(other.addr() + 4)
+}
+
+// Translated from 00abbf50 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map: a checked iterator's `operator*` (`thiscall`): the proxy must be
+/// set and the pointer below the container's last pointer (else `_invalid_parameter_noinfo`;
+/// without a proxy the code reads the container's fields at address 0). Returns the pointer.
+pub fn fn_00abbf50(e: &mut Engine, this: Ptr) -> u32 {
+    let iterator = this.addr();
+    check(e, e.mem.u32(iterator) != 0);
+    let proxy = e.mem.u32(iterator);
+    let container = if proxy != 0 { e.mem.u32(proxy) } else { 0 };
+    if e.mem.u32(iterator + 4) >= e.mem.u32(container.wrapping_add(VECTOR_LAST)) {
+        e.call(INVALID_PARAMETER, &[]);
+    }
+    e.mem.u32(iterator + 4)
+}
+
+// Translated from 00ac04c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map: the 0x2C-byte element's copy constructor (`thiscall`, the
+/// source): its first four words, then the string at +0x10 made empty and assigned the
+/// source's. Returns `this`.
+pub fn fn_00ac04c0(e: &mut Engine, this: Ptr, source: Ptr) -> Ptr {
+    copy_words(e, this.addr(), source.addr(), 4);
+    let string = this.addr() + 0x10;
+    e.call(STRING_TIDY, &args![string, 0u32, 0u32]);
+    assign_string(e, string, source.addr() + 0x10);
+    this
+}
+
+// Translated from 00ac0ab0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`thiscall`, `this` not read; three words: destination, count, the
+/// value's address): sets `count` words to the value (`00ac3450`); returns the destination's
+/// end.
+pub fn fn_00ac0ab0(e: &mut Engine, _this: u32, destination: u32, count: u32, value: u32) -> u32 {
+    fn_00ac3450(e, destination, count, value);
+    destination.wrapping_add(count.wrapping_mul(4))
+}
+
+/// `"vector<T> too long"`, the `std::string` constructor from text (`0044a4c0`), the
+/// `std::runtime_error`-style constructor of the exception (`0044a310`, `thiscall`: the
+/// string's address), the vtable it then gets (`010173dc`) and the throw information
+/// (`01140cb0`).
+const TOO_LONG_TEXT: u32 = 0x0101_73c4;
+const STRING_FROM_TEXT: u32 = 0x0044_a4c0;
+const LENGTH_ERROR_CONSTRUCT: u32 = 0x0044_a310;
+const LENGTH_ERROR_VTABLE: u32 = 0x0101_73dc;
+const LENGTH_ERROR_THROW_INFO: u32 = 0x0114_0cb0;
+
+// Translated from 00ac0b00 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 00ac0b00 - the compiler's exception frame (FS:[0] chain, cookie 011c16bc) is not translated
+/// Unnamed in the engine map (no arguments): throws the vectors' length error: a string of
+/// `"vector<T> too long"` (`0044a4c0`), the exception made from it (`0044a310`) with the vtable
+/// `010173dc`, and `_CxxThrowException` with `01140cb0` (it does not return in the game).
+pub fn fn_00ac0b00(e: &mut Engine) {
+    e.with_stack(0x50, |e, locals| {
+        let text = locals.addr();
+        let exception = locals.addr() + 0x1c;
+        e.call(STRING_FROM_TEXT, &args![text, TOO_LONG_TEXT]);
+        e.call(LENGTH_ERROR_CONSTRUCT, &args![exception, text]);
+        e.mem.set_u32(exception, LENGTH_ERROR_VTABLE);
+        e.call(
+            CXX_THROW_EXCEPTION,
+            &args![exception, LENGTH_ERROR_THROW_INFO],
+        );
+    });
+}
+
+/// A checked iterator's `operator+=` over `bytes`-sized elements, as `00ac1000` does it for 4:
+/// the proxy must be set; the moved pointer must neither pass the container's last pointer nor
+/// fall below its first (without a proxy the code reads them at address 0). Returns `this`.
+fn advance_iterator(e: &mut Engine, this: Ptr, count: u32, bytes: u32) -> Ptr {
+    let iterator = this.addr();
+    check(e, e.mem.u32(iterator) != 0);
+    let container = |e: &Engine| {
+        let proxy = e.mem.u32(iterator);
+        if proxy != 0 {
+            e.mem.u32(proxy)
+        } else {
+            0
+        }
+    };
+    let moved = |e: &Engine| {
+        count
+            .wrapping_mul(bytes)
+            .wrapping_add(e.mem.u32(iterator + 4))
+    };
+    let owner = container(e);
+    if moved(e) > e.mem.u32(owner.wrapping_add(VECTOR_LAST)) {
+        e.call(INVALID_PARAMETER, &[]);
+    } else {
+        let owner = container(e);
+        if moved(e) < e.mem.u32(owner.wrapping_add(VECTOR_FIRST)) {
+            e.call(INVALID_PARAMETER, &[]);
+        }
+    }
+    let pointer = moved(e);
+    e.mem.set_u32(iterator + 4, pointer);
+    this
+}
+
+// Translated from 00ac0b80 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map: a checked 0x20-byte-element iterator's `operator+=` (`thiscall`,
+/// the count). Returns `this`.
+pub fn fn_00ac0b80(e: &mut Engine, this: Ptr, count: u32) -> Ptr {
+    advance_iterator(e, this, count, 0x20)
+}
+
+// Translated from 00ac0c40 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map: a checked 0x2C-byte-element iterator's `operator+=`. Returns
+/// `this`.
+pub fn fn_00ac0c40(e: &mut Engine, this: Ptr, count: u32) -> Ptr {
+    advance_iterator(e, this, count, 0x2c)
+}
+
+// Translated from 00ac0d00 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map: a checked 0x34-byte-element iterator's `operator+=`. Returns
+/// `this`.
+pub fn fn_00ac0d00(e: &mut Engine, this: Ptr, count: u32) -> Ptr {
+    advance_iterator(e, this, count, 0x34)
+}
+
+// Translated from 00ac0dc0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map: a checked 12-byte-element iterator's `operator+=`. Returns
+/// `this`.
+pub fn fn_00ac0dc0(e: &mut Engine, this: Ptr, count: u32) -> Ptr {
+    advance_iterator(e, this, count, 0xc)
+}
+
+// Translated from 00ac0e80 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map: a checked 16-byte-element iterator's `operator+=`. Returns
+/// `this`.
+pub fn fn_00ac0e80(e: &mut Engine, this: Ptr, count: u32) -> Ptr {
+    advance_iterator(e, this, count, 0x10)
+}
+
+// Translated from 00ac0f40 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map: a checked 8-byte-element iterator's `operator+=`. Returns
+/// `this`.
+pub fn fn_00ac0f40(e: &mut Engine, this: Ptr, count: u32) -> Ptr {
+    advance_iterator(e, this, count, 8)
+}
+
+// Translated from 00ac10c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map: an `NiPoint3` sum (`thiscall`: the result, the other point):
+/// each coordinate `other + this` (`FLD`, `FADD`), stored as `float`s and copied to the
+/// result. Returns `result`.
+pub fn fn_00ac10c0(e: &mut Engine, this: Ptr, result: Ptr, other: Ptr) -> Ptr {
+    let mut sum = [0u32; 3];
+    for (i, word) in sum.iter_mut().enumerate() {
+        let at = 4 * i as u32;
+        let a = x87_load32(e.mem.u32(other.addr() + at));
+        let b = x87_m32(e.mem.u32(this.addr() + at));
+        *word = x87_store32(x87_add(a, b));
+    }
+    for (i, word) in sum.iter().enumerate() {
+        e.mem
+            .set_u32(result.addr() + 4 * i as u32, x87_quiet_bits(*word));
+    }
+    result
+}
+
+// Translated from 00ac1120 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map: an `NiPoint3` scaled by a `float` (`thiscall`: the result, the
+/// scale): each coordinate `scale * this` (`FLD`, `FMUL`), stored as `float`s and copied to the
+/// result. Returns `result`.
+pub fn fn_00ac1120(e: &mut Engine, this: Ptr, result: Ptr, scale: f32) -> Ptr {
+    let mut product = [0u32; 3];
+    for (i, word) in product.iter_mut().enumerate() {
+        let a = x87_load32(scale.to_bits());
+        let b = x87_m32(e.mem.u32(this.addr() + 4 * i as u32));
+        *word = x87_store32(x87_mul(a, b));
+    }
+    for (i, word) in product.iter().enumerate() {
+        e.mem
+            .set_u32(result.addr() + 4 * i as u32, x87_quiet_bits(*word));
+    }
+    result
+}
+
+/// The forward copy of elements by `MOV`s from first to last to the destination;
+/// returns `destination + count * size` (the count a signed division by the size).
+fn copy_forward(e: &mut Engine, first: u32, last: u32, destination: u32, size: ElementSize) -> u32 {
+    let bytes = size.bytes();
+    let end = size
+        .count(last.wrapping_sub(first))
+        .wrapping_mul(bytes)
+        .wrapping_add(destination);
+    let mut to = destination;
+    let mut from = first;
+    while from != last {
+        copy_words(e, to, from, bytes / 4);
+        to = to.wrapping_add(bytes);
+        from = from.wrapping_add(bytes);
+    }
+    end
+}
+
+/// The backward copy of elements by `MOV`s from last down to first, ending at the
+/// destination; returns `destination - count * size`.
+fn copy_backward(
+    e: &mut Engine,
+    first: u32,
+    last: u32,
+    destination: u32,
+    size: ElementSize,
+) -> u32 {
+    let bytes = size.bytes();
+    let start = destination.wrapping_sub(size.count(last.wrapping_sub(first)).wrapping_mul(bytes));
+    let mut to = destination;
+    let mut from = last;
+    while first != from {
+        from = from.wrapping_sub(bytes);
+        to = to.wrapping_sub(bytes);
+        copy_words(e, to, from, bytes / 4);
+    }
+    start
+}
+
+// Translated from 00ac1170 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`cdecl`: first, last, destination): copies the 12-byte elements
+/// forward; returns the destination's end.
+pub fn fn_00ac1170(e: &mut Engine, first: u32, last: u32, destination: u32) -> u32 {
+    copy_forward(e, first, last, destination, ElementSize::Divide(0xc))
+}
+
+// Translated from 00ac1220 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`cdecl`: first, last, destination): copies the 16-byte elements
+/// forward; returns the destination's end.
+pub fn fn_00ac1220(e: &mut Engine, first: u32, last: u32, destination: u32) -> u32 {
+    copy_forward(e, first, last, destination, ElementSize::Shift(4))
+}
+
+// Translated from 00ac12d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`cdecl`: first, last, destination): copies the 8-byte elements
+/// forward (as words); returns the destination's end.
+pub fn fn_00ac12d0(e: &mut Engine, first: u32, last: u32, destination: u32) -> u32 {
+    copy_forward(e, first, last, destination, ElementSize::Shift(3))
+}
+
+// Translated from 00ac1370 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`cdecl`: first, last, destination end): the 12-byte elements'
+/// backward copy through `00ac1a50` (with two tag words the code copies from uninitialized stack
+/// bytes and a 0; the callee does not read them). Returns its result.
+pub fn fn_00ac1370(e: &mut Engine, first: u32, last: u32, destination: u32) -> u32 {
+    fn_00ac1a50(e, first, last, destination, 0, 0, 0)
+}
+
+// Translated from 00ac1440 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`cdecl`: first, last, destination end): moves the 4-byte elements
+/// from first to last so they end at the destination (`memmove_s`, when the signed count is
+/// above 0); returns the moved block's start.
+pub fn fn_00ac1440(e: &mut Engine, first: u32, last: u32, destination: u32) -> u32 {
+    let count = (last.wrapping_sub(first) as i32) >> 2;
+    let start = destination.wrapping_sub((count as u32).wrapping_mul(4));
+    if count > 0 {
+        let bytes = (count as u32).wrapping_shl(2);
+        e.call(MEMMOVE_S, &args![start, bytes, first, bytes]);
+    }
+    start
+}
+
+// Translated from 00ac14e0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`cdecl`, three words): the 16-byte elements' backward copy through
+/// `00ac1bf0`. Returns its result.
+pub fn fn_00ac14e0(e: &mut Engine, first: u32, last: u32, destination: u32) -> u32 {
+    fn_00ac1bf0(e, first, last, destination, 0, 0, 0)
+}
+
+// Translated from 00ac1530 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`cdecl`, three words): the 8-byte elements' backward copy through
+/// `00ac1d10`. Returns its result.
+pub fn fn_00ac1530(e: &mut Engine, first: u32, last: u32, destination: u32) -> u32 {
+    fn_00ac1d10(e, first, last, destination, 0, 0, 0)
+}
+
+// Translated from 00ac1580 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`cdecl`, three words): the 0x20-byte elements' backward
+/// assignment through `00ac3030`. Returns its result.
+pub fn fn_00ac1580(e: &mut Engine, first: u32, last: u32, destination: u32) -> u32 {
+    fn_00ac3030(e, first, last, destination, 0, 0, 0)
+}
+
+// Translated from 00ac1600 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`cdecl`: first, last, the value's address): assigns the
+/// 0x2C-byte value to each element from first to last (four words and the string at +0x10).
+pub fn fn_00ac1600(e: &mut Engine, first: u32, last: u32, value: u32) {
+    let mut element = first;
+    while element != last {
+        copy_words(e, element, value, 4);
+        assign_string(e, element + 0x10, value + 0x10);
+        element = element.wrapping_add(0x2c);
+    }
+}
+
+// Translated from 00ac1670 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`cdecl`: first, last, the value's address): assigns the
+/// 0x34-byte value to each element from first to last (the string, then the vector at +0x1C,
+/// `00ac27c0`).
+pub fn fn_00ac1670(e: &mut Engine, first: u32, last: u32, value: u32) {
+    let mut element = first;
+    while element != last {
+        assign_string(e, element, value);
+        fn_00ac27c0(e, Ptr::new(element + 0x1c), Ptr::new(value + 0x1c));
+        element = element.wrapping_add(0x34);
+    }
+}
+
+/// A forward assignment of string elements from first to last to the destination: `assign`
+/// for each pair (destination, source); returns the destination's end (`destination + count
+/// * bytes`, the count a signed division).
+fn assign_forward(
+    e: &mut Engine,
+    first: u32,
+    last: u32,
+    destination: u32,
+    size: ElementSize,
+    assign: impl Fn(&mut Engine, u32, u32),
+) -> u32 {
+    let bytes = size.bytes();
+    let end = size
+        .count(last.wrapping_sub(first))
+        .wrapping_mul(bytes)
+        .wrapping_add(destination);
+    let mut to = destination;
+    let mut from = first;
+    while from != last {
+        assign(e, to, from);
+        to = to.wrapping_add(bytes);
+        from = from.wrapping_add(bytes);
+    }
+    end
+}
+
+/// A backward assignment of string elements from last down to first, ending at the
+/// destination: `assign` for each pair; returns `destination - count * bytes`.
+fn assign_backward(
+    e: &mut Engine,
+    first: u32,
+    last: u32,
+    destination: u32,
+    size: ElementSize,
+    assign: impl Fn(&mut Engine, u32, u32),
+) -> u32 {
+    let bytes = size.bytes();
+    let start = destination.wrapping_sub(size.count(last.wrapping_sub(first)).wrapping_mul(bytes));
+    let mut to = destination;
+    let mut from = last;
+    while first != from {
+        to = to.wrapping_sub(bytes);
+        from = from.wrapping_sub(bytes);
+        assign(e, to, from);
+    }
+    start
+}
+
+/// The 0x20-byte element's assignment: the word, then the string at +4.
+fn assign_20(e: &mut Engine, to: u32, from: u32) {
+    let word = e.mem.u32(from);
+    e.mem.set_u32(to, word);
+    assign_string(e, to + 4, from + 4);
+}
+
+/// The 0x2C-byte element's assignment: four words, then the string at +0x10.
+fn assign_2c(e: &mut Engine, to: u32, from: u32) {
+    copy_words(e, to, from, 4);
+    assign_string(e, to + 0x10, from + 0x10);
+}
+
+/// The 0x34-byte element's assignment: the string, then the vector at +0x1C (`00ac27c0`).
+fn assign_34(e: &mut Engine, to: u32, from: u32) {
+    assign_string(e, to, from);
+    fn_00ac27c0(e, Ptr::new(to + 0x1c), Ptr::new(from + 0x1c));
+}
+
+/// The 0x38-byte element's assignment: the string, the word at +0x1C, then the vector at +0x20
+/// (`00ac2ca0`).
+fn assign_38(e: &mut Engine, to: u32, from: u32) {
+    assign_string(e, to, from);
+    let word = e.mem.u32(from + 0x1c);
+    e.mem.set_u32(to + 0x1c, word);
+    fn_00ac2ca0(e, Ptr::new(to + 0x20), Ptr::new(from + 0x20));
+}
+
+// Translated from 00ac1780 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`cdecl`, six words: first, last, destination and three tags it
+/// does not read): assigns the 0x20-byte elements forward; returns the destination's end.
+#[allow(clippy::too_many_arguments)]
+pub fn fn_00ac1780(
+    e: &mut Engine,
+    first: u32,
+    last: u32,
+    destination: u32,
+    _unused_4: u32,
+    _unused_5: u32,
+    _unused_6: u32,
+) -> u32 {
+    assign_forward(
+        e,
+        first,
+        last,
+        destination,
+        ElementSize::Shift(5),
+        assign_20,
+    )
+}
+
+// Translated from 00ac1810 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`cdecl`, six words): assigns the 0x2C-byte elements forward;
+/// returns the destination's end.
+#[allow(clippy::too_many_arguments)]
+pub fn fn_00ac1810(
+    e: &mut Engine,
+    first: u32,
+    last: u32,
+    destination: u32,
+    _unused_4: u32,
+    _unused_5: u32,
+    _unused_6: u32,
+) -> u32 {
+    assign_forward(
+        e,
+        first,
+        last,
+        destination,
+        ElementSize::Divide(0x2c),
+        assign_2c,
+    )
+}
+
+// Translated from 00ac18c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`cdecl`, six words): assigns the 0x34-byte elements forward;
+/// returns the destination's end.
+#[allow(clippy::too_many_arguments)]
+pub fn fn_00ac18c0(
+    e: &mut Engine,
+    first: u32,
+    last: u32,
+    destination: u32,
+    _unused_4: u32,
+    _unused_5: u32,
+    _unused_6: u32,
+) -> u32 {
+    assign_forward(
+        e,
+        first,
+        last,
+        destination,
+        ElementSize::Divide(0x34),
+        assign_34,
+    )
+}
+
+// Translated from 00ac1980 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`cdecl`, six words): assigns the 0x38-byte elements forward;
+/// returns the destination's end.
+#[allow(clippy::too_many_arguments)]
+pub fn fn_00ac1980(
+    e: &mut Engine,
+    first: u32,
+    last: u32,
+    destination: u32,
+    _unused_4: u32,
+    _unused_5: u32,
+    _unused_6: u32,
+) -> u32 {
+    assign_forward(
+        e,
+        first,
+        last,
+        destination,
+        ElementSize::Divide(0x38),
+        assign_38,
+    )
+}
+
+// Translated from 00ac1a50 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`cdecl`, six words: first, last, destination end and three tags it
+/// does not read): copies the 12-byte elements backward; returns the block's new start.
+#[allow(clippy::too_many_arguments)]
+pub fn fn_00ac1a50(
+    e: &mut Engine,
+    first: u32,
+    last: u32,
+    destination: u32,
+    _unused_4: u32,
+    _unused_5: u32,
+    _unused_6: u32,
+) -> u32 {
+    copy_backward(e, first, last, destination, ElementSize::Divide(0xc))
+}
+
+// Translated from 00ac1af0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`cdecl`, four words: first, last, destination, allocator): the
+/// 12-byte elements' copy through `00ac3370`. Returns the destination's end.
+pub fn fn_00ac1af0(e: &mut Engine, first: u32, last: u32, destination: u32, allocator: u32) -> u32 {
+    fn_00ac3370(e, first, last, destination, allocator, 0, 0)
+}
+
+// Translated from 00ac1b70 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`cdecl`, four words): the 16-byte elements' copy through
+/// `00ac3820`. Returns the destination's end.
+pub fn fn_00ac1b70(e: &mut Engine, first: u32, last: u32, destination: u32, allocator: u32) -> u32 {
+    fn_00ac3820(e, first, last, destination, allocator, 0, 0)
+}
+
+// Translated from 00ac1bf0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`cdecl`, six words): copies the 16-byte elements backward;
+/// returns the block's new start.
+#[allow(clippy::too_many_arguments)]
+pub fn fn_00ac1bf0(
+    e: &mut Engine,
+    first: u32,
+    last: u32,
+    destination: u32,
+    _unused_4: u32,
+    _unused_5: u32,
+    _unused_6: u32,
+) -> u32 {
+    copy_backward(e, first, last, destination, ElementSize::Shift(4))
+}
+
+// Translated from 00ac1c90 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`cdecl`, four words): the float pairs' copy through `00ac3900`.
+/// Returns the destination's end.
+pub fn fn_00ac1c90(e: &mut Engine, first: u32, last: u32, destination: u32, allocator: u32) -> u32 {
+    fn_00ac3900(e, first, last, destination, allocator, 0, 0)
+}
+
+// Translated from 00ac1d10 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`cdecl`, six words): copies the 8-byte elements backward (as
+/// words); returns the block's new start.
+#[allow(clippy::too_many_arguments)]
+pub fn fn_00ac1d10(
+    e: &mut Engine,
+    first: u32,
+    last: u32,
+    destination: u32,
+    _unused_4: u32,
+    _unused_5: u32,
+    _unused_6: u32,
+) -> u32 {
+    copy_backward(e, first, last, destination, ElementSize::Shift(3))
+}
+
+// Translated from 00ac1da0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`cdecl`, four words): the 0x20-byte elements' copy construction
+/// through `00ac39e0`. Returns the destination's end.
+pub fn fn_00ac1da0(e: &mut Engine, first: u32, last: u32, destination: u32, allocator: u32) -> u32 {
+    fn_00ac39e0(e, first, last, destination, allocator, 0, 0)
+}
+
+// Translated from 00ac1e20 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`cdecl`, four words): the 0x2C-byte elements' copy construction
+/// through `00ac3ac0`. Returns the destination's end.
+pub fn fn_00ac1e20(e: &mut Engine, first: u32, last: u32, destination: u32, allocator: u32) -> u32 {
+    fn_00ac3ac0(e, first, last, destination, allocator, 0, 0)
+}
+
+// Translated from 00ac1ea0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`cdecl`, six words: first, last, destination end, a byte tag
+/// passed on zero-extended and two words it does not read): the 0x2C-byte elements' backward assignment through `00ac30c0`.
+/// Returns its result.
+#[allow(clippy::too_many_arguments)]
+pub fn fn_00ac1ea0(
+    e: &mut Engine,
+    first: u32,
+    last: u32,
+    destination: u32,
+    tag: u8,
+    _unused_5: u32,
+    _unused_6: u32,
+) -> u32 {
+    fn_00ac30c0(e, first, last, destination, u32::from(tag), 0, 0)
+}
+
+// Translated from 00ac1f60 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`cdecl`, six words): the 0x34-byte elements' backward
+/// assignment through `00ac3170`. Returns its result.
+#[allow(clippy::too_many_arguments)]
+pub fn fn_00ac1f60(
+    e: &mut Engine,
+    first: u32,
+    last: u32,
+    destination: u32,
+    tag: u8,
+    _unused_5: u32,
+    _unused_6: u32,
+) -> u32 {
+    fn_00ac3170(e, first, last, destination, u32::from(tag), 0, 0)
+}
+
+// Translated from 00ac2020 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`cdecl`, six words): the 0x38-byte elements' backward
+/// assignment through `00ac3230`. Returns its result.
+#[allow(clippy::too_many_arguments)]
+pub fn fn_00ac2020(
+    e: &mut Engine,
+    first: u32,
+    last: u32,
+    destination: u32,
+    tag: u8,
+    _unused_5: u32,
+    _unused_6: u32,
+) -> u32 {
+    fn_00ac3230(e, first, last, destination, u32::from(tag), 0, 0)
+}
+
+// Translated from 00ac2060 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`cdecl`, six words: the first iterator's proxy and pointer, the
+/// last iterator's, the destination and the allocator): moves the 4-byte elements between the
+/// two pointers to the destination (`memmove_s`, when the count is not 0) and returns the
+/// destination's end.
+#[allow(clippy::too_many_arguments)]
+pub fn fn_00ac2060(
+    e: &mut Engine,
+    _first_proxy: u32,
+    first: u32,
+    _last_proxy: u32,
+    last: u32,
+    destination: u32,
+    _unused_6: u32,
+) -> u32 {
+    let count = ((last.wrapping_sub(first) as i32) >> 2) as u32;
+    let end = destination.wrapping_add(count.wrapping_mul(4));
+    if count != 0 {
+        let bytes = count.wrapping_shl(2);
+        e.call(MEMMOVE_S, &args![destination, bytes, first, bytes]);
+    }
+    end
+}
+
+// Translated from 00ac21b0 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 00ac21b0 - the compiler's exception frame (FS:[0] chain, cookie 011c16bc) is not translated
+/// Unnamed in the engine map (`cdecl`, six words: destination, count, the value's address, the
+/// allocator and two tags): constructs `count` 16-byte copies of the value (each slot that is
+/// not null gets the four words).
+#[allow(clippy::too_many_arguments)]
+pub fn fn_00ac21b0(
+    e: &mut Engine,
+    destination: u32,
+    count: u32,
+    value: u32,
+    _unused_4: u32,
+    _unused_5: u32,
+    _unused_6: u32,
+) {
+    let mut destination = destination;
+    let mut count = count;
+    while count > 0 {
+        if destination != 0 {
+            copy_words(e, destination, value, 4);
+        }
+        count -= 1;
+        destination = destination.wrapping_add(0x10);
+    }
+}
+
+// Translated from 00ac2370 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 00ac2370 - the compiler's exception frame (FS:[0] chain, cookie 011c16bc) is not translated
+/// Unnamed in the engine map (`cdecl`, six words): constructs `count` 0x20-byte copies of the
+/// value (`00ac34c0`, which skips a null slot).
+#[allow(clippy::too_many_arguments)]
+pub fn fn_00ac2370(
+    e: &mut Engine,
+    destination: u32,
+    count: u32,
+    value: u32,
+    _unused_4: u32,
+    _unused_5: u32,
+    _unused_6: u32,
+) {
+    let mut destination = destination;
+    let mut count = count;
+    while count > 0 {
+        fn_00ac34c0(e, destination, value);
+        count -= 1;
+        destination = destination.wrapping_add(0x20);
+    }
+}
+
+// Translated from 00ac2440 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 00ac2440 - the compiler's exception frame (FS:[0] chain, cookie 011c16bc) is not translated
+/// Unnamed in the engine map (`cdecl`, six words): copy-constructs (`00ac04c0`) `count`
+/// 0x2C-byte elements from the value at the destination, skipping null slots.
+#[allow(clippy::too_many_arguments)]
+pub fn fn_00ac2440(
+    e: &mut Engine,
+    destination: u32,
+    count: u32,
+    value: u32,
+    _unused_4: u32,
+    _unused_5: u32,
+    _unused_6: u32,
+) {
+    let mut destination = destination;
+    let mut count = count;
+    while count > 0 {
+        if destination != 0 {
+            fn_00ac04c0(e, Ptr::new(destination), Ptr::new(value));
+        }
+        count -= 1;
+        destination = destination.wrapping_add(0x2c);
+    }
+}
+
+// Translated from 00ac2760 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map: the 0x38-byte element's `operator=` (`thiscall`, the other): the
+/// string, the word at +0x1C, the vector at +0x20 (`00ac2ca0`). Returns `this`.
+pub fn fn_00ac2760(e: &mut Engine, this: Ptr, other: Ptr) -> Ptr {
+    assign_38(e, this.addr(), other.addr());
+    this
+}
+
+// Translated from 00ac2c20 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`cdecl`, six words: first, last, destination and three tags it
+/// does not read): copies the 12-byte elements forward; returns the destination's end.
+#[allow(clippy::too_many_arguments)]
+pub fn fn_00ac2c20(
+    e: &mut Engine,
+    first: u32,
+    last: u32,
+    destination: u32,
+    _unused_4: u32,
+    _unused_5: u32,
+    _unused_6: u32,
+) -> u32 {
+    copy_forward(e, first, last, destination, ElementSize::Divide(0xc))
+}
+
+// Translated from 00ac3030 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`cdecl`, six words: first, last, destination end and three tags it
+/// does not read): assigns the 0x20-byte elements backward; returns the block's new start.
+#[allow(clippy::too_many_arguments)]
+pub fn fn_00ac3030(
+    e: &mut Engine,
+    first: u32,
+    last: u32,
+    destination: u32,
+    _unused_4: u32,
+    _unused_5: u32,
+    _unused_6: u32,
+) -> u32 {
+    assign_backward(
+        e,
+        first,
+        last,
+        destination,
+        ElementSize::Shift(5),
+        assign_20,
+    )
+}
+
+// Translated from 00ac30c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`cdecl`, six words): assigns the 0x2C-byte elements backward;
+/// returns the block's new start.
+#[allow(clippy::too_many_arguments)]
+pub fn fn_00ac30c0(
+    e: &mut Engine,
+    first: u32,
+    last: u32,
+    destination: u32,
+    _unused_4: u32,
+    _unused_5: u32,
+    _unused_6: u32,
+) -> u32 {
+    assign_backward(
+        e,
+        first,
+        last,
+        destination,
+        ElementSize::Divide(0x2c),
+        assign_2c,
+    )
+}
+
+// Translated from 00ac3170 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`cdecl`, six words): assigns the 0x34-byte elements backward;
+/// returns the block's new start.
+#[allow(clippy::too_many_arguments)]
+pub fn fn_00ac3170(
+    e: &mut Engine,
+    first: u32,
+    last: u32,
+    destination: u32,
+    _unused_4: u32,
+    _unused_5: u32,
+    _unused_6: u32,
+) -> u32 {
+    assign_backward(
+        e,
+        first,
+        last,
+        destination,
+        ElementSize::Divide(0x34),
+        assign_34,
+    )
+}
+
+// Translated from 00ac3230 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`cdecl`, six words): assigns the 0x38-byte elements backward;
+/// returns the block's new start.
+#[allow(clippy::too_many_arguments)]
+pub fn fn_00ac3230(
+    e: &mut Engine,
+    first: u32,
+    last: u32,
+    destination: u32,
+    _unused_4: u32,
+    _unused_5: u32,
+    _unused_6: u32,
+) -> u32 {
+    assign_backward(
+        e,
+        first,
+        last,
+        destination,
+        ElementSize::Divide(0x38),
+        assign_38,
+    )
+}
+
+// Translated from 00ac34c0 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 00ac34c0 - the compiler's exception frame (FS:[0] chain, cookie 011c16bc) is not translated
+/// Unnamed in the engine map (`cdecl`: destination, source): constructs a 0x20-byte element
+/// at a destination that is not null: the word, then the string at +4 made empty and assigned
+/// the source's.
+pub fn fn_00ac34c0(e: &mut Engine, destination: u32, source: u32) {
+    if destination == 0 {
+        return;
+    }
+    let word = e.mem.u32(source);
+    e.mem.set_u32(destination, word);
+    let string = destination + 4;
+    e.call(STRING_TIDY, &args![string, 0u32, 0u32]);
+    assign_string(e, string, source + 4);
+}
+
+// Translated from 00ac3640 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`cdecl`, four words): the 16-byte elements' copy through
+/// `00ac3820`. Returns the destination's end.
+pub fn fn_00ac3640(e: &mut Engine, first: u32, last: u32, destination: u32, allocator: u32) -> u32 {
+    fn_00ac3820(e, first, last, destination, allocator, 0, 0)
+}
+
+// Translated from 00ac36e0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`cdecl`, four words): the 0x20-byte elements' copy construction
+/// through `00ac39e0`. Returns the destination's end.
+pub fn fn_00ac36e0(e: &mut Engine, first: u32, last: u32, destination: u32, allocator: u32) -> u32 {
+    fn_00ac39e0(e, first, last, destination, allocator, 0, 0)
+}
+
+// Translated from 00ac3730 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`cdecl`, four words): the 0x2C-byte elements' copy construction
+/// through `00ac3ac0`. Returns the destination's end.
+pub fn fn_00ac3730(e: &mut Engine, first: u32, last: u32, destination: u32, allocator: u32) -> u32 {
+    fn_00ac3ac0(e, first, last, destination, allocator, 0, 0)
+}
+
+// Translated from 00ac3820 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 00ac3820 - the compiler's exception frame (FS:[0] chain, cookie 011c16bc) is not translated
+/// Unnamed in the engine map (`cdecl`, six words: first, last, destination, allocator, two
+/// tags): copies the 16-byte elements from first to last to the destination, skipping null
+/// slots. Returns the destination's end.
+#[allow(clippy::too_many_arguments)]
+pub fn fn_00ac3820(
+    e: &mut Engine,
+    first: u32,
+    last: u32,
+    destination: u32,
+    _unused_4: u32,
+    _unused_5: u32,
+    _unused_6: u32,
+) -> u32 {
+    let mut first = first;
+    let mut destination = destination;
+    while first != last {
+        if destination != 0 {
+            copy_words(e, destination, first, 4);
+        }
+        destination = destination.wrapping_add(0x10);
+        first = first.wrapping_add(0x10);
+    }
+    destination
+}
+
+// Translated from 00ac39e0 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 00ac39e0 - the compiler's exception frame (FS:[0] chain, cookie 011c16bc) is not translated
+/// Unnamed in the engine map (`cdecl`, six words): constructs (`00ac34c0`) the 0x20-byte
+/// elements from first to last at the destination. Returns the destination's end.
+#[allow(clippy::too_many_arguments)]
+pub fn fn_00ac39e0(
+    e: &mut Engine,
+    first: u32,
+    last: u32,
+    destination: u32,
+    _unused_4: u32,
+    _unused_5: u32,
+    _unused_6: u32,
+) -> u32 {
+    let mut first = first;
+    let mut destination = destination;
+    while first != last {
+        fn_00ac34c0(e, destination, first);
+        destination = destination.wrapping_add(0x20);
+        first = first.wrapping_add(0x20);
+    }
+    destination
+}
+
+// Translated from 00ac3ac0 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 00ac3ac0 - the compiler's exception frame (FS:[0] chain, cookie 011c16bc) is not translated
+/// Unnamed in the engine map (`cdecl`, six words): copy-constructs (`00ac04c0`) the 0x2C-byte
+/// elements from first to last at the destination, skipping null slots. Returns the
+/// destination's end.
+#[allow(clippy::too_many_arguments)]
+pub fn fn_00ac3ac0(
+    e: &mut Engine,
+    first: u32,
+    last: u32,
+    destination: u32,
+    _unused_4: u32,
+    _unused_5: u32,
+    _unused_6: u32,
+) -> u32 {
+    let mut first = first;
+    let mut destination = destination;
+    while first != last {
+        if destination != 0 {
+            fn_00ac04c0(e, Ptr::new(destination), Ptr::new(first));
+        }
+        destination = destination.wrapping_add(0x2c);
+        first = first.wrapping_add(0x2c);
+    }
+    destination
+}
+
+// Translated from 00abd2e0 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 00abd2e0 - the compiler's exception frame (FS:[0] chain, cookie 011c16bc) is not translated
+/// Unnamed in the engine map: a 16-byte-element vector's `_Insert_n(where, count, value)`, as
+/// `00abc320` with the maximum 0xFFFFFFF (`0065f640` throws), the allocation `0064e430`, the
+/// copies `00ac3640`, the fills `00ac21b0`, the tail copy `00ac1b70` and the move `00ac14e0`;
+/// the value is read as four words, and the reallocation walks the old elements first.
+pub fn fn_00abd2e0(e: &mut Engine, this: Ptr, _unused_1: u32, at: u32, count: u32, value: u32) {
+    let shape = PlainInsertShape {
+        size: ElementSize::Shift(4),
+        maximum: 0x0fff_ffff,
+        throw_length: THROW_LENGTH_0065F640,
+        allocate: |e, count| e.call(0x0064_e430, &args![count, 0u32]).u32(),
+        copy: fn_00ac3640,
+        fill: |e, vector, destination, count, value| {
+            fn_00ac21b0(
+                e,
+                destination,
+                count,
+                value,
+                vector + VECTOR_ALLOCATOR,
+                0,
+                0,
+            )
+        },
+        fill_tail: |e, vector, destination, count, value| {
+            fn_00ac21b0(
+                e,
+                destination,
+                count,
+                value,
+                vector + VECTOR_ALLOCATOR,
+                0,
+                0,
+            )
+        },
+        copy_tail: fn_00ac1b70,
+        move_backward: 0x00ac_14e0,
+        load: load_words::<4>,
+        walks_old: true,
+    };
+    insert_plain(e, this, at, count, value, &shape);
+}
+
+/// The 6-word fills (destination, count, value address, allocator and two tags).
+type Fill6Fn = fn(&mut Engine, u32, u32, u32, u32, u32, u32);
+
+/// The parts of the insert-n instances over the 0x20- and 0x2C-byte elements (words and a
+/// string) that differ.
+struct StringInsertShape {
+    size: ElementSize,
+    maximum: u32,
+    allocate: u32,
+    /// The copy construction (first, last, destination, allocator) of the elements before
+    /// `where` into a new block and of the moved-up elements; the one of the rest into a new
+    /// block; the one past the old end.
+    copy: CopyFn,
+    copy_rest: CopyFn,
+    copy_tail: CopyFn,
+    fill: Fill6Fn,
+    /// The range destruction of the old elements (`thiscall` on the vector: from, to).
+    destroy_range: u32,
+    /// The backward assignment (first, last, end).
+    move_backward: fn(&mut Engine, u32, u32, u32),
+    /// The temporary copy of the value: its construction (temporary, value), the assignment
+    /// of a range from it (first, last, temporary) and its destruction.
+    make_temp: fn(&mut Engine, u32, u32),
+    assign_range: fn(&mut Engine, u32, u32, u32),
+    destroy_temp: fn(&mut Engine, u32),
+}
+
+/// The insert-n template over the string elements: as [`insert_objects`], but the old
+/// elements of a reallocation are destroyed as a range, and the value's temporary is made,
+/// assigned from and destroyed by the shape's own steps.
+fn insert_strings(
+    e: &mut Engine,
+    this: Ptr,
+    at: u32,
+    count: u32,
+    value: u32,
+    shape: &StringInsertShape,
+) {
+    let vector = this.addr();
+    let size = shape.size;
+    let bytes = size.bytes();
+    let allocator = vector + VECTOR_ALLOCATOR;
+    let capacity = vector_capacity(e, vector, size);
+    if count == 0 {
+        return;
+    }
+    let maximum = max_or_one(shape.maximum);
+    if maximum.wrapping_sub(vector_size(e, vector, size)) < count {
+        e.call(THROW_LENGTH_0065F640, &[]);
+        return;
+    }
+    if capacity < vector_size(e, vector, size).wrapping_add(count) {
+        let needed = vector_size(e, vector, size).wrapping_add(count);
+        let new_capacity = grown_capacity(capacity, shape.maximum, needed);
+        let block = e.call(shape.allocate, &args![new_capacity, 0u32]).u32();
+        let first = e.mem.u32(vector + VECTOR_FIRST);
+        let mut cursor = (shape.copy)(e, first, at, block, allocator);
+        (shape.fill)(e, cursor, count, value, allocator, 0, 0);
+        cursor = count.wrapping_mul(bytes).wrapping_add(cursor);
+        let last = e.mem.u32(vector + VECTOR_LAST);
+        (shape.copy_rest)(e, at, last, cursor, allocator);
+        let new_size = vector_size(e, vector, size).wrapping_add(count);
+        if e.mem.u32(vector + VECTOR_FIRST) != 0 {
+            let first = e.mem.u32(vector + VECTOR_FIRST);
+            let last = e.mem.u32(vector + VECTOR_LAST);
+            e.call(shape.destroy_range, &args![vector, first, last]);
+            let first = e.mem.u32(vector + VECTOR_FIRST);
+            e.call(MEMORY_MANAGER_FREE, &args![MEMORY_MANAGER_OBJECT, first]);
+        }
+        e.mem.set_u32(
+            vector + VECTOR_END,
+            new_capacity.wrapping_mul(bytes).wrapping_add(block),
+        );
+        e.mem.set_u32(
+            vector + VECTOR_LAST,
+            new_size.wrapping_mul(bytes).wrapping_add(block),
+        );
+        e.mem.set_u32(vector + VECTOR_FIRST, block);
+        return;
+    }
+    let after = size.count(e.mem.u32(vector + VECTOR_LAST).wrapping_sub(at));
+    e.with_stack(bytes, |e, temporary| {
+        let temporary = temporary.addr();
+        (shape.make_temp)(e, temporary, value);
+        if after < count {
+            let last = e.mem.u32(vector + VECTOR_LAST);
+            (shape.copy)(
+                e,
+                at,
+                last,
+                count.wrapping_mul(bytes).wrapping_add(at),
+                allocator,
+            );
+            let last = e.mem.u32(vector + VECTOR_LAST);
+            let missing = count.wrapping_sub(size.count(last.wrapping_sub(at)));
+            (shape.fill)(e, last, missing, temporary, allocator, 0, 0);
+            let last = count
+                .wrapping_mul(bytes)
+                .wrapping_add(e.mem.u32(vector + VECTOR_LAST));
+            e.mem.set_u32(vector + VECTOR_LAST, last);
+            let end = last.wrapping_sub(count.wrapping_mul(bytes));
+            (shape.assign_range)(e, at, end, temporary);
+        } else {
+            let old_last = e.mem.u32(vector + VECTOR_LAST);
+            let last = e.mem.u32(vector + VECTOR_LAST);
+            let tail = old_last.wrapping_sub(count.wrapping_mul(bytes));
+            let new_last = (shape.copy_tail)(e, tail, old_last, last, allocator);
+            e.mem.set_u32(vector + VECTOR_LAST, new_last);
+            (shape.move_backward)(e, at, tail, old_last);
+            let end = count.wrapping_mul(bytes).wrapping_add(at);
+            (shape.assign_range)(e, at, end, temporary);
+        }
+        (shape.destroy_temp)(e, temporary);
+    });
+}
+
+// Translated from 00abe310 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 00abe310 - the compiler's exception frame (FS:[0] chain) and the /GS cookie check (00ec408c) are not translated
+/// Unnamed in the engine map: a 0x20-byte-element (a word and a string) vector's
+/// `_Insert_n(where, count, value)` (`thiscall`, four words), the string template with the
+/// maximum 0x7FFFFFF (`0065f640` throws), the allocation `0065e430`, the copies `00ac36e0`
+/// (into new, up and past the end) and `00ac1da0` (the rest), the fill `00ac2370`, the range
+/// destruction `0065dc60` and the backward assignment `00ac1580`; the temporary is the value's
+/// word and a copy of its string (made empty, assigned), the range assignment an inline loop
+/// (the word, then the string's `assign`), and the temporary's string is destroyed
+/// (`0044a730(1, 0)`).
+pub fn fn_00abe310(e: &mut Engine, this: Ptr, _unused_1: u32, at: u32, count: u32, value: u32) {
+    let shape = StringInsertShape {
+        size: ElementSize::Shift(5),
+        maximum: 0x07ff_ffff,
+        allocate: 0x0065_e430,
+        copy: fn_00ac36e0,
+        copy_rest: fn_00ac1da0,
+        copy_tail: fn_00ac36e0,
+        fill: fn_00ac2370,
+        destroy_range: DESTROY_RANGE_20,
+        move_backward: |e, first, last, end| {
+            fn_00ac1580(e, first, last, end);
+        },
+        make_temp: |e, temporary, value| {
+            let word = e.mem.u32(value);
+            e.mem.set_u32(temporary, word);
+            e.call(STRING_TIDY, &args![temporary + 4, 0u32, 0u32]);
+            assign_string(e, temporary + 4, value + 4);
+        },
+        assign_range: |e, first, last, temporary| {
+            let mut element = first;
+            while element != last {
+                let word = e.mem.u32(temporary);
+                e.mem.set_u32(element, word);
+                assign_string(e, element + 4, temporary + 4);
+                element = element.wrapping_add(0x20);
+            }
+        },
+        destroy_temp: |e, temporary| {
+            e.call(STRING_TIDY, &args![temporary + 4, 1u32, 0u32]);
+        },
+    };
+    insert_strings(e, this, at, count, value, &shape);
+}
+
+// Translated from 00abeb00 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 00abeb00 - the compiler's exception frame (FS:[0] chain) and the /GS cookie check (00ec408c) are not translated
+/// Unnamed in the engine map: a 0x2C-byte-element (four words and a string) vector's
+/// `_Insert_n(where, count, value)`, the string template with the maximum 0x5D1745D, the
+/// allocation `0065e4c0`, the copies `00ac3730` (into new and up) and `00ac1e20` (the rest and
+/// past the end), the fill `00ac2440`, the range destruction `0065dd90` and the backward
+/// assignment `00ac1ea0` (given tag words the code copies from uninitialized stack bytes; the
+/// callees do not read them); the temporary is copy-constructed (`00ac04c0`), the range
+/// assigned from it with `00ac1600`, and its string (+0x10) destroyed (`0044a730(1, 0)`).
+pub fn fn_00abeb00(e: &mut Engine, this: Ptr, _unused_1: u32, at: u32, count: u32, value: u32) {
+    let shape = StringInsertShape {
+        size: ElementSize::Divide(0x2c),
+        maximum: 0x05d1_745d,
+        allocate: 0x0065_e4c0,
+        copy: fn_00ac3730,
+        copy_rest: fn_00ac1e20,
+        copy_tail: fn_00ac1e20,
+        fill: fn_00ac2440,
+        destroy_range: DESTROY_RANGE_2C,
+        move_backward: |e, first, last, end| {
+            fn_00ac1ea0(e, first, last, end, 0, 0, 0);
+        },
+        make_temp: |e, temporary, value| {
+            fn_00ac04c0(e, Ptr::new(temporary), Ptr::new(value));
+        },
+        assign_range: fn_00ac1600,
+        destroy_temp: |e, temporary| {
+            e.call(STRING_TIDY, &args![temporary + 0x10, 1u32, 0u32]);
+        },
+    };
+    insert_strings(e, this, at, count, value, &shape);
+}
+
+/// A 12-byte-element vector's clear (`00ab9cd0`, `thiscall`) and buy (`0065cfd0`, `thiscall`:
+/// the count; answers `AL`).
+const CLEAR_12: u32 = 0x00ab_9cd0;
+const BUY_12: u32 = 0x0065_cfd0;
+
+// Translated from 00ac27c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map: a 12-byte-element vector's `operator=` (`thiscall`, the other).
+/// Nothing for itself; an empty other clears it (`00ab9cd0`). When the other is not larger,
+/// its elements are copied over the first ones (`00ac2c20`, an empty walk over the rest) and
+/// the last pointer set; when it fits the capacity, the first ones are copied (`00ac1170`) and
+/// the rest constructed after them (`00ac3370`); otherwise the old block is freed (after an
+/// empty walk), room bought (`0065cfd0`) and, when that succeeds, the elements constructed
+/// (`00ac3370`). Returns `this`.
+pub fn fn_00ac27c0(e: &mut Engine, this: Ptr, other: Ptr) -> Ptr {
+    let vector = this.addr();
+    let source = other.addr();
+    let size = ElementSize::Divide(0xc);
+    if vector == source {
+        return this;
+    }
+    if vector_size(e, source, size) == 0 {
+        e.call(CLEAR_12, &args![vector]);
+        return this;
+    }
+    let wanted = vector_size(e, source, size);
+    if wanted <= vector_size(e, vector, size) {
+        let first = e.mem.u32(vector + VECTOR_FIRST);
+        let source_last = e.mem.u32(source + VECTOR_LAST);
+        let source_first = e.mem.u32(source + VECTOR_FIRST);
+        let moved = fn_00ac2c20(e, source_first, source_last, first, 0, 0, 0);
+        let end = e.mem.u32(vector + VECTOR_LAST);
+        let mut element = moved;
+        while element != end {
+            element = element.wrapping_add(0xc);
+        }
+        let last = vector_size(e, source, size)
+            .wrapping_mul(0xc)
+            .wrapping_add(e.mem.u32(vector + VECTOR_FIRST));
+        e.mem.set_u32(vector + VECTOR_LAST, last);
+        return this;
+    }
+    let wanted = vector_size(e, source, size);
+    if wanted <= vector_capacity(e, vector, size) {
+        let middle = vector_size(e, vector, size)
+            .wrapping_mul(0xc)
+            .wrapping_add(e.mem.u32(source + VECTOR_FIRST));
+        let first = e.mem.u32(vector + VECTOR_FIRST);
+        let source_first = e.mem.u32(source + VECTOR_FIRST);
+        fn_00ac1170(e, source_first, middle, first);
+        let last = e.mem.u32(vector + VECTOR_LAST);
+        let source_last = e.mem.u32(source + VECTOR_LAST);
+        let end = fn_00ac3370(
+            e,
+            middle,
+            source_last,
+            last,
+            vector + VECTOR_ALLOCATOR,
+            0,
+            0,
+        );
+        e.mem.set_u32(vector + VECTOR_LAST, end);
+        return this;
+    }
+    if e.mem.u32(vector + VECTOR_FIRST) != 0 {
+        let last = e.mem.u32(vector + VECTOR_LAST);
+        let mut element = e.mem.u32(vector + VECTOR_FIRST);
+        while element != last {
+            element = element.wrapping_add(0xc);
+        }
+        let first = e.mem.u32(vector + VECTOR_FIRST);
+        e.call(MEMORY_MANAGER_FREE, &args![MEMORY_MANAGER_OBJECT, first]);
+    }
+    let wanted = vector_size(e, source, size);
+    if e.call(BUY_12, &args![vector, wanted]).u8() == 0 {
+        return this;
+    }
+    let first = e.mem.u32(vector + VECTOR_FIRST);
+    let source_last = e.mem.u32(source + VECTOR_LAST);
+    let source_first = e.mem.u32(source + VECTOR_FIRST);
+    let end = fn_00ac3370(
+        e,
+        source_first,
+        source_last,
+        first,
+        vector + VECTOR_ALLOCATOR,
+        0,
+        0,
+    );
+    e.mem.set_u32(vector + VECTOR_LAST, end);
+    this
+}
+
+// Translated from 00ac2ca0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map: a 4-byte-element vector's `operator=` (`thiscall`, the other), as
+/// `00ac27c0` with the clear `00ac2f70`, the moves `00ac13c0` (over the first elements) and
+/// `00ac35d0` (after them), the buy `00abc260`, and no walks. Returns `this`.
+pub fn fn_00ac2ca0(e: &mut Engine, this: Ptr, other: Ptr) -> Ptr {
+    let vector = this.addr();
+    let source = other.addr();
+    let size = ElementSize::Shift(2);
+    if vector == source {
+        return this;
+    }
+    if vector_size(e, source, size) == 0 {
+        fn_00ac2f70(e, this);
+        return this;
+    }
+    let wanted = vector_size(e, source, size);
+    if wanted <= vector_size(e, vector, size) {
+        let first = e.mem.u32(vector + VECTOR_FIRST);
+        let source_last = e.mem.u32(source + VECTOR_LAST);
+        let source_first = e.mem.u32(source + VECTOR_FIRST);
+        fn_00ac13c0(e, source_first, source_last, first);
+        let last = vector_size(e, source, size)
+            .wrapping_mul(4)
+            .wrapping_add(e.mem.u32(vector + VECTOR_FIRST));
+        e.mem.set_u32(vector + VECTOR_LAST, last);
+        return this;
+    }
+    let wanted = vector_size(e, source, size);
+    if wanted <= vector_capacity(e, vector, size) {
+        let middle = vector_size(e, vector, size)
+            .wrapping_mul(4)
+            .wrapping_add(e.mem.u32(source + VECTOR_FIRST));
+        let first = e.mem.u32(vector + VECTOR_FIRST);
+        let source_first = e.mem.u32(source + VECTOR_FIRST);
+        fn_00ac13c0(e, source_first, middle, first);
+        let last = e.mem.u32(vector + VECTOR_LAST);
+        let source_last = e.mem.u32(source + VECTOR_LAST);
+        let end = fn_00ac35d0(e, middle, source_last, last, vector + VECTOR_ALLOCATOR);
+        e.mem.set_u32(vector + VECTOR_LAST, end);
+        return this;
+    }
+    if e.mem.u32(vector + VECTOR_FIRST) != 0 {
+        let first = e.mem.u32(vector + VECTOR_FIRST);
+        e.call(MEMORY_MANAGER_FREE, &args![MEMORY_MANAGER_OBJECT, first]);
+    }
+    let wanted = vector_size(e, source, size);
+    if !fn_00abc260(e, this, wanted) {
+        return this;
+    }
+    let first = e.mem.u32(vector + VECTOR_FIRST);
+    let source_last = e.mem.u32(source + VECTOR_LAST);
+    let source_first = e.mem.u32(source + VECTOR_FIRST);
+    let end = fn_00ac35d0(
+        e,
+        source_first,
+        source_last,
+        first,
+        vector + VECTOR_ALLOCATOR,
+    );
+    e.mem.set_u32(vector + VECTOR_LAST, end);
+    this
+}
+
+// Translated from 00ac3f40 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map: sets a `FutBinaryFileC`'s file id (`thiscall`, the address of a
+/// string): asserts the id's length is 8 (`fr2Assert(binaryFile.cpp, 0x30)`) and that no file
+/// is open (+0x3C, line 0x31), assigns the id (+0x20), and sets its character 5 (the version)
+/// to `'0'` after the library's length check.
+pub fn fn_00ac3f40(e: &mut Engine, this: Ptr, file_id: u32) {
+    let base = this.addr();
+    if e.mem.u32(file_id + STRING_LENGTH) != 8 {
+        e.call(FR2_ASSERT, &args![BINARY_FILE_SOURCE, 0x30u32]);
+    }
+    if e.mem.u32(base + 0x3c) != 0 {
+        e.call(FR2_ASSERT, &args![BINARY_FILE_SOURCE, 0x31u32]);
+    }
+    assign_string(e, base + 0x20, file_id);
+    check(e, e.mem.u32(base + 0x20 + STRING_LENGTH) >= 5);
+    let chars = string_chars(e, base + 0x20);
+    e.mem.set_u8(chars.wrapping_add(5), b'0');
+}
+
+/// `fopen` (`00ec9a47`, cdecl: name, mode), `"rb"`, `fread` (`00ecb3a8`, cdecl: buffer, size,
+/// count, file), `fclose` (`00ec9907`, cdecl), `strlen` (`00ec6130`, cdecl).
+const FOPEN: u32 = 0x00ec_9a47;
+const READ_BINARY_MODE: u32 = 0x0106_e79c;
+const FREAD: u32 = 0x00ec_b3a8;
+const FCLOSE: u32 = 0x00ec_9907;
+const STRLEN: u32 = 0x00ec_6130;
+/// The byte vector's construct-with-size (`00aba0d0`, `thiscall`: the count), `futSetLastError`
+/// (`00ac6430`, cdecl: the code and a string by value) and the string compare (`00ac6100`,
+/// `thiscall` on a string: position, count, text, text count; 0 when equal).
+const BYTE_VECTOR_CONSTRUCT: u32 = 0x00ab_a0d0;
+const SET_LAST_ERROR: u32 = 0x00ac_6430;
+const STRING_COMPARE: u32 = 0x00ac_6100;
+
+// Translated from 00ac3fe0 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 00ac3fe0 - the compiler's exception frame (FS:[0] chain, cookie 011c16bc) is not translated
+/// Unnamed in the engine map: whether the file named by a string (`thiscall`, its address)
+/// starts with this `FutBinaryFileC`'s id. Opens it (`fopen` `"rb"`; failing: `futSetLastError`
+/// 4 with a copy of the name, false), reads the id's length of bytes (+0x34) into a byte vector
+/// one longer (`00aba0d0`; a short read: closes, `futSetLastError` 1, frees the vector, false),
+/// ends them with 0, closes the file, copies the id's version character (5) over the read one
+/// and compares the id with them (`00ac6100`, the read text's `strlen`): true when equal. The
+/// vector is freed on every path (its tidy `00abc0a0`, then its proxy through the memory
+/// manager), and the file closed again on each path when still open (never, as the code clears
+/// the pointer after closing). The library's checks call `_invalid_parameter_noinfo`.
+pub fn fn_00ac3fe0(e: &mut Engine, this: Ptr, name: u32) -> bool {
+    let base = this.addr();
+    let path = string_chars(e, name);
+    let mut file = e.call(FOPEN, &args![path, READ_BINARY_MODE]).u32();
+    let close_if_open = |e: &mut Engine, file: u32| {
+        if file != 0 {
+            e.call(FCLOSE, &args![file]);
+        }
+    };
+    if file == 0 {
+        let copy = crate::units::facegen::binaryfile::string_copy_arg(e, name);
+        e.call(SET_LAST_ERROR, &args![4u32, copy]);
+        close_if_open(e, file);
+        return false;
+    }
+    e.with_stack(0x18, |e, buffer| {
+        let buffer = buffer.addr();
+        let length = e.mem.u32(base + 0x34);
+        e.call(
+            BYTE_VECTOR_CONSTRUCT,
+            &args![buffer, length.wrapping_add(1)],
+        );
+        let data_size = |e: &Engine| {
+            e.mem
+                .u32(buffer + VECTOR_LAST)
+                .wrapping_sub(e.mem.u32(buffer + VECTOR_FIRST))
+        };
+        let length = e.mem.u32(base + 0x34);
+        check(e, data_size(e) != 0);
+        let data = e.mem.u32(buffer + VECTOR_FIRST);
+        let read = e.call(FREAD, &args![data, length, 1u32, file]).u32();
+        if read != 1 {
+            close_if_open(e, file);
+            file = 0;
+            let copy = crate::units::facegen::binaryfile::string_copy_arg(e, name);
+            e.call(SET_LAST_ERROR, &args![1u32, copy]);
+            fn_00abc0a0(e, Ptr::new(buffer));
+            fn_00abc120(e, Ptr::new(buffer));
+            close_if_open(e, file);
+            return false;
+        }
+        let length = e.mem.u32(base + 0x34);
+        check(e, length < data_size(e));
+        let data = e.mem.u32(buffer + VECTOR_FIRST);
+        e.mem.set_u8(data.wrapping_add(length), 0);
+        close_if_open(e, file);
+        file = 0;
+        let id = base + 0x20;
+        check(e, e.mem.u32(id + STRING_LENGTH) >= 5);
+        let chars = string_chars(e, id);
+        check(e, data_size(e) > 5);
+        let data = e.mem.u32(buffer + VECTOR_FIRST);
+        let version = e.mem.u8(chars.wrapping_add(5));
+        e.mem.set_u8(data.wrapping_add(5), version);
+        check(e, data_size(e) != 0);
+        let text = e.mem.u32(buffer + VECTOR_FIRST);
+        let text_length = e.call(STRLEN, &args![text]).u32();
+        let id_length = e.mem.u32(id + STRING_LENGTH);
+        let compared = e
+            .call(
+                STRING_COMPARE,
+                &args![id, 0u32, id_length, text, text_length],
+            )
+            .u32();
+        let same = compared == 0;
+        fn_00abc0a0(e, Ptr::new(buffer));
+        if same {
+            let proxy = e.mem.u32(buffer + VECTOR_PROXY);
+            e.call(MEMORY_MANAGER_FREE, &args![MEMORY_MANAGER_OBJECT, proxy]);
+        } else {
+            fn_00abc120(e, Ptr::new(buffer));
+        }
+        close_if_open(e, file);
+        same
+    })
+}
+
 /// Several words passed by value (a vector element), in memory order.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct WordsArg<const N: usize>(pub [u32; N]);
@@ -1605,6 +3364,77 @@ fn resize_56(e: &mut Engine, this: Ptr, count: u32, value: WordsArg<14>) {
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x00ab_a3c0, fn_00aba3c0(Ptr, Ptr, u32, u32, u32) -> Ptr),
+        entry!(0x00ab_a9a0, fn_00aba9a0(Ptr, Ptr, u32, u32, u32, u32) -> Ptr),
+        entry!(0x00ab_ac80, fn_00abac80(Ptr, Ptr, u32, u32, u32, u32) -> Ptr),
+        entry!(0x00ab_af60, fn_00abaf60(Ptr, Ptr, u32, u32, u32, u32) -> Ptr),
+        entry!(0x00ab_b280, fn_00abb280(Ptr, Ptr, u32, u32, u32, u32) -> Ptr),
+        entry!(0x00ab_b5f0, fn_00abb5f0(Ptr, Ptr, u32, u32, u32, u32) -> Ptr),
+        entry!(0x00ab_b930, fn_00abb930(Ptr, Ptr, u32, u32, u32, u32) -> Ptr),
+        entry!(0x00ab_bd10, fn_00abbd10(Ptr, Ptr, u32, u32, u32, u32) -> Ptr),
+        entry!(0x00ab_beb0, fn_00abbeb0(Ptr, u32, u32) -> Ptr),
+        entry!(0x00ab_bf00, fn_00abbf00(Ptr, Ptr) -> bool),
+        entry!(0x00ab_bf50, fn_00abbf50(Ptr) -> u32),
+        entry!(0x00ab_d2e0, fn_00abd2e0(Ptr, u32, u32, u32, u32)),
+        entry!(0x00ab_e310, fn_00abe310(Ptr, u32, u32, u32, u32)),
+        entry!(0x00ab_eb00, fn_00abeb00(Ptr, u32, u32, u32, u32)),
+        entry!(0x00ac_04c0, fn_00ac04c0(Ptr, Ptr) -> Ptr),
+        entry!(0x00ac_0ab0, fn_00ac0ab0(u32, u32, u32, u32) -> u32),
+        entry!(0x00ac_0b00, fn_00ac0b00()),
+        entry!(0x00ac_0b80, fn_00ac0b80(Ptr, u32) -> Ptr),
+        entry!(0x00ac_0c40, fn_00ac0c40(Ptr, u32) -> Ptr),
+        entry!(0x00ac_0d00, fn_00ac0d00(Ptr, u32) -> Ptr),
+        entry!(0x00ac_0dc0, fn_00ac0dc0(Ptr, u32) -> Ptr),
+        entry!(0x00ac_0e80, fn_00ac0e80(Ptr, u32) -> Ptr),
+        entry!(0x00ac_0f40, fn_00ac0f40(Ptr, u32) -> Ptr),
+        entry!(0x00ac_10c0, fn_00ac10c0(Ptr, Ptr, Ptr) -> Ptr),
+        entry!(0x00ac_1120, fn_00ac1120(Ptr, Ptr, f32) -> Ptr),
+        entry!(0x00ac_1170, fn_00ac1170(u32, u32, u32) -> u32),
+        entry!(0x00ac_1220, fn_00ac1220(u32, u32, u32) -> u32),
+        entry!(0x00ac_12d0, fn_00ac12d0(u32, u32, u32) -> u32),
+        entry!(0x00ac_1370, fn_00ac1370(u32, u32, u32) -> u32),
+        entry!(0x00ac_1440, fn_00ac1440(u32, u32, u32) -> u32),
+        entry!(0x00ac_14e0, fn_00ac14e0(u32, u32, u32) -> u32),
+        entry!(0x00ac_1530, fn_00ac1530(u32, u32, u32) -> u32),
+        entry!(0x00ac_1580, fn_00ac1580(u32, u32, u32) -> u32),
+        entry!(0x00ac_1600, fn_00ac1600(u32, u32, u32)),
+        entry!(0x00ac_1670, fn_00ac1670(u32, u32, u32)),
+        entry!(0x00ac_1780, fn_00ac1780(u32, u32, u32, u32, u32, u32) -> u32),
+        entry!(0x00ac_1810, fn_00ac1810(u32, u32, u32, u32, u32, u32) -> u32),
+        entry!(0x00ac_18c0, fn_00ac18c0(u32, u32, u32, u32, u32, u32) -> u32),
+        entry!(0x00ac_1980, fn_00ac1980(u32, u32, u32, u32, u32, u32) -> u32),
+        entry!(0x00ac_1a50, fn_00ac1a50(u32, u32, u32, u32, u32, u32) -> u32),
+        entry!(0x00ac_1af0, fn_00ac1af0(u32, u32, u32, u32) -> u32),
+        entry!(0x00ac_1b70, fn_00ac1b70(u32, u32, u32, u32) -> u32),
+        entry!(0x00ac_1bf0, fn_00ac1bf0(u32, u32, u32, u32, u32, u32) -> u32),
+        entry!(0x00ac_1c90, fn_00ac1c90(u32, u32, u32, u32) -> u32),
+        entry!(0x00ac_1d10, fn_00ac1d10(u32, u32, u32, u32, u32, u32) -> u32),
+        entry!(0x00ac_1da0, fn_00ac1da0(u32, u32, u32, u32) -> u32),
+        entry!(0x00ac_1e20, fn_00ac1e20(u32, u32, u32, u32) -> u32),
+        entry!(0x00ac_1ea0, fn_00ac1ea0(u32, u32, u32, u8, u32, u32) -> u32),
+        entry!(0x00ac_1f60, fn_00ac1f60(u32, u32, u32, u8, u32, u32) -> u32),
+        entry!(0x00ac_2020, fn_00ac2020(u32, u32, u32, u8, u32, u32) -> u32),
+        entry!(0x00ac_2060, fn_00ac2060(u32, u32, u32, u32, u32, u32) -> u32),
+        entry!(0x00ac_21b0, fn_00ac21b0(u32, u32, u32, u32, u32, u32)),
+        entry!(0x00ac_2370, fn_00ac2370(u32, u32, u32, u32, u32, u32)),
+        entry!(0x00ac_2440, fn_00ac2440(u32, u32, u32, u32, u32, u32)),
+        entry!(0x00ac_2760, fn_00ac2760(Ptr, Ptr) -> Ptr),
+        entry!(0x00ac_27c0, fn_00ac27c0(Ptr, Ptr) -> Ptr),
+        entry!(0x00ac_2c20, fn_00ac2c20(u32, u32, u32, u32, u32, u32) -> u32),
+        entry!(0x00ac_2ca0, fn_00ac2ca0(Ptr, Ptr) -> Ptr),
+        entry!(0x00ac_3030, fn_00ac3030(u32, u32, u32, u32, u32, u32) -> u32),
+        entry!(0x00ac_30c0, fn_00ac30c0(u32, u32, u32, u32, u32, u32) -> u32),
+        entry!(0x00ac_3170, fn_00ac3170(u32, u32, u32, u32, u32, u32) -> u32),
+        entry!(0x00ac_3230, fn_00ac3230(u32, u32, u32, u32, u32, u32) -> u32),
+        entry!(0x00ac_34c0, fn_00ac34c0(u32, u32)),
+        entry!(0x00ac_3640, fn_00ac3640(u32, u32, u32, u32) -> u32),
+        entry!(0x00ac_36e0, fn_00ac36e0(u32, u32, u32, u32) -> u32),
+        entry!(0x00ac_3730, fn_00ac3730(u32, u32, u32, u32) -> u32),
+        entry!(0x00ac_3820, fn_00ac3820(u32, u32, u32, u32, u32, u32) -> u32),
+        entry!(0x00ac_39e0, fn_00ac39e0(u32, u32, u32, u32, u32, u32) -> u32),
+        entry!(0x00ac_3ac0, fn_00ac3ac0(u32, u32, u32, u32, u32, u32) -> u32),
+        entry!(0x00ac_3f40, fn_00ac3f40(Ptr, u32)),
+        entry!(0x00ac_3fe0, fn_00ac3fe0(Ptr, u32) -> bool),
         entry!(0x00ab_a4f0, fn_00aba4f0(Ptr) -> Ptr),
         entry!(0x00ab_a5d0, fn_00aba5d0(Ptr, u32, u32)),
         entry!(0x00ab_a7b0, fn_00aba7b0(Ptr, u32, u32, u32, u32)),
@@ -2412,5 +4242,968 @@ mod tests {
         e.call_log = Some(vec![]);
         e.call(0x00ac_08b0, &args![copy, empty]);
         assert!(calls_to(&e.call_log.take().unwrap(), 0x00ac_2060).is_empty());
+    }
+}
+
+#[cfg(test)]
+mod n062_tests {
+    use super::*;
+
+    type Calls = Vec<Vec<u32>>;
+
+    fn calls(e: &Engine, addr: u32) -> Calls {
+        e.call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|c| c.0 == addr)
+            .map(|c| c.1.clone())
+            .collect()
+    }
+
+    fn quiet(e: &mut Engine, addrs: &[u32]) {
+        for addr in addrs {
+            e.register(*addr, |_, _| Ret::default());
+        }
+    }
+
+    /// The allocators, `memmove_s` (a real move), strings as seven plain words (the assign
+    /// copies them, the tidy leaves them), quiet checks and throws, and a call log.
+    fn engine() -> Engine {
+        let mut e = Engine::new();
+        e.map(0x0101_7000, 0x1000);
+        e.set_global(STRING_NPOS, u32::MAX);
+        e.register(MEMORY_MANAGER_ALLOCATE, |e, a| {
+            e.mem.alloc(a[1].max(4)).into_ret()
+        });
+        e.register(MEMMOVE_S, |e, a| {
+            let bytes = e.mem.bytes(a[2], a[3]);
+            e.mem.write(a[0], &bytes);
+            Ret::default()
+        });
+        e.register(STRING_ASSIGN, |e, a| {
+            for i in 0..7 {
+                let word = e.mem.u32(a[1] + 4 * i);
+                e.mem.set_u32(a[0] + 4 * i, word);
+            }
+            Ret::default()
+        });
+        quiet(
+            &mut e,
+            &[
+                STRING_TIDY,
+                MEMORY_MANAGER_FREE,
+                INVALID_PARAMETER,
+                THROW_LENGTH_0065F640,
+                CXX_THROW_EXCEPTION,
+            ],
+        );
+        e.call_log = Some(vec![]);
+        e
+    }
+
+    /// A vector (0x18 bytes, its proxy pointing back at it) of `bytes`-sized elements holding
+    /// `words`, with room for `capacity` elements.
+    fn vector(e: &mut Engine, bytes: u32, words: &[u32], capacity: u32) -> u32 {
+        let vector = e.mem.alloc(0x18);
+        let proxy = e.mem.alloc(8);
+        e.mem.set_u32(proxy, vector);
+        e.mem.set_u32(vector + VECTOR_PROXY, proxy);
+        let block = e.mem.alloc((bytes * capacity).max(4));
+        for (i, w) in words.iter().enumerate() {
+            e.mem.set_u32(block + 4 * i as u32, *w);
+        }
+        e.mem.set_u32(vector + VECTOR_FIRST, block);
+        e.mem
+            .set_u32(vector + VECTOR_LAST, block + 4 * words.len() as u32);
+        e.mem.set_u32(vector + VECTOR_END, block + bytes * capacity);
+        vector
+    }
+
+    fn contents(e: &Engine, vector: u32) -> Vec<u32> {
+        let first = e.mem.u32(vector + VECTOR_FIRST);
+        let last = e.mem.u32(vector + VECTOR_LAST);
+        (first..last).step_by(4).map(|a| e.mem.u32(a)).collect()
+    }
+
+    fn block(e: &mut Engine, words: &[u32]) -> u32 {
+        let block = e.mem.alloc(4 * words.len().max(1) as u32);
+        for (i, w) in words.iter().enumerate() {
+            e.mem.set_u32(block + 4 * i as u32, *w);
+        }
+        block
+    }
+
+    fn read(e: &Engine, at: u32, count: u32) -> Vec<u32> {
+        (0..count).map(|i| e.mem.u32(at + 4 * i)).collect()
+    }
+
+    /// `words` numbered from `start`.
+    fn numbers(start: u32, count: u32) -> Vec<u32> {
+        (start..start + count).collect()
+    }
+
+    fn invalid(e: &Engine) -> usize {
+        calls(e, INVALID_PARAMETER).len()
+    }
+
+    #[test]
+    fn insert_one_twelve_byte_element_answers_its_iterator() {
+        let mut e = engine();
+        let v = vector(&mut e, 0xc, &numbers(1, 6), 4);
+        let proxy = e.mem.u32(v);
+        let first = e.mem.u32(v + VECTOR_FIRST);
+        let value = block(&mut e, &[7, 8, 9]);
+        let result = e.mem.alloc(8);
+        let r = e.call(0x00ab_a3c0, &args![v, result, proxy, first + 0xc, value]);
+        assert_eq!(r.u32(), result);
+        assert_eq!(contents(&e, v), vec![1, 2, 3, 7, 8, 9, 4, 5, 6]);
+        assert_eq!(e.mem.u32(result), proxy);
+        assert_eq!(e.mem.u32(result + 4), e.mem.u32(v + VECTOR_FIRST) + 0xc);
+        assert_eq!(invalid(&e), 0);
+        // A wrong proxy is reported.
+        e.call(0x00ab_a3c0, &args![v, result, 0u32, first, value]);
+        assert_eq!(invalid(&e), 1);
+    }
+
+    /// Erases elements 1..2 of a three-element vector of `bytes` and answers the result.
+    fn erase_middle(e: &mut Engine, addr: u32, bytes: u32) -> (u32, u32) {
+        let words = numbers(1, 3 * bytes / 4);
+        let v = vector(e, bytes, &words, 3);
+        let proxy = e.mem.u32(v);
+        let first = e.mem.u32(v + VECTOR_FIRST);
+        let result = e.mem.alloc(8);
+        let r = e.call(
+            addr,
+            &args![v, result, proxy, first + bytes, proxy, first + 2 * bytes],
+        );
+        assert_eq!(r.u32(), result);
+        assert_eq!(read(e, result, 2), vec![proxy, first + bytes]);
+        assert_eq!(e.mem.u32(v + VECTOR_LAST), first + 2 * bytes);
+        // An empty range changes nothing.
+        e.call(
+            addr,
+            &args![v, result, proxy, first + bytes, proxy, first + bytes],
+        );
+        assert_eq!(e.mem.u32(v + VECTOR_LAST), first + 2 * bytes);
+        (v, first)
+    }
+
+    #[test]
+    fn erase_twelve_byte_elements() {
+        let mut e = engine();
+        let (v, _) = erase_middle(&mut e, 0x00ab_a9a0, 0xc);
+        assert_eq!(contents(&e, v), vec![1, 2, 3, 7, 8, 9]);
+    }
+
+    #[test]
+    fn erase_sixteen_byte_elements() {
+        let mut e = engine();
+        let (v, _) = erase_middle(&mut e, 0x00ab_ac80, 0x10);
+        assert_eq!(contents(&e, v), vec![1, 2, 3, 4, 9, 10, 11, 12]);
+    }
+
+    #[test]
+    fn erase_eight_byte_elements() {
+        let mut e = engine();
+        let (v, _) = erase_middle(&mut e, 0x00ab_af60, 8);
+        assert_eq!(contents(&e, v), vec![1, 2, 5, 6]);
+    }
+
+    #[test]
+    fn erase_word_and_string_elements_destroys_the_rest() {
+        let mut e = engine();
+        quiet(&mut e, &[DESTROY_RANGE_20]);
+        let (v, first) = erase_middle(&mut e, 0x00ab_b280, 0x20);
+        assert_eq!(contents(&e, v), [numbers(1, 8), numbers(17, 8)].concat());
+        assert_eq!(
+            calls(&e, DESTROY_RANGE_20),
+            vec![vec![v, first + 0x40, first + 0x60]]
+        );
+    }
+
+    #[test]
+    fn erase_four_words_and_string_elements_destroys_the_rest() {
+        let mut e = engine();
+        quiet(&mut e, &[DESTROY_RANGE_2C]);
+        let (v, first) = erase_middle(&mut e, 0x00ab_b5f0, 0x2c);
+        assert_eq!(contents(&e, v), [numbers(1, 11), numbers(23, 11)].concat());
+        assert_eq!(
+            calls(&e, DESTROY_RANGE_2C),
+            vec![vec![v, first + 0x58, first + 0x84]]
+        );
+    }
+
+    #[test]
+    fn erase_0x34_elements_destroys_each_one_left() {
+        let mut e = engine();
+        quiet(&mut e, &[VALUE_34_DESTRUCT, CLEAR_12]);
+        let (_, first) = erase_middle(&mut e, 0x00ab_b930, 0x34);
+        assert_eq!(calls(&e, VALUE_34_DESTRUCT), vec![vec![first + 0x68]]);
+        // The string moved down, then the vector assigned (an empty source clears).
+        assert_eq!(read(&e, first + 0x34, 7), numbers(27, 7));
+        assert_eq!(calls(&e, CLEAR_12), vec![vec![first + 0x34 + 0x1c]]);
+    }
+
+    #[test]
+    fn erase_0x38_elements_destroys_each_one_left() {
+        let mut e = engine();
+        quiet(&mut e, &[VALUE_38_DESTRUCT]);
+        let (_, first) = erase_middle(&mut e, 0x00ab_bd10, 0x38);
+        assert_eq!(calls(&e, VALUE_38_DESTRUCT), vec![vec![first + 0x70]]);
+        // The string and the word moved down (the inner vector, its source empty, cleared).
+        assert_eq!(read(&e, first + 0x38, 8), numbers(29, 8));
+    }
+
+    #[test]
+    fn iterator_constructor_checks_its_vector() {
+        let mut e = engine();
+        let v = vector(&mut e, 4, &[1, 2], 2);
+        let first = e.mem.u32(v + VECTOR_FIRST);
+        let iterator = e.mem.alloc(8);
+        assert_eq!(
+            e.call(0x00ab_beb0, &args![iterator, first + 4, v]).u32(),
+            iterator
+        );
+        assert_eq!(read(&e, iterator, 2), vec![e.mem.u32(v), first + 4]);
+        assert_eq!(invalid(&e), 0);
+        e.call(0x00ab_beb0, &args![iterator, first + 12, v]);
+        assert_eq!(invalid(&e), 1);
+    }
+
+    #[test]
+    fn iterator_equality_checks_its_container() {
+        let mut e = engine();
+        let a = block(&mut e, &[0x40, 0x100]);
+        let b = block(&mut e, &[0x40, 0x100]);
+        assert!(e.call(0x00ab_bf00, &args![a, b]).bool());
+        e.mem.set_u32(b + 4, 0x104);
+        assert!(!e.call(0x00ab_bf00, &args![a, b]).bool());
+        assert_eq!(invalid(&e), 0);
+        e.mem.set_u32(b, 0x44);
+        e.call(0x00ab_bf00, &args![a, b]);
+        assert_eq!(invalid(&e), 1);
+    }
+
+    #[test]
+    fn iterator_dereference_checks_the_end() {
+        let mut e = engine();
+        let v = vector(&mut e, 4, &[1, 2], 2);
+        let first = e.mem.u32(v + VECTOR_FIRST);
+        let proxy = e.mem.u32(v);
+        let iterator = block(&mut e, &[proxy, first + 4]);
+        assert_eq!(e.call(0x00ab_bf50, &args![iterator]).u32(), first + 4);
+        assert_eq!(invalid(&e), 0);
+        e.mem.set_u32(iterator + 4, first + 8);
+        assert_eq!(e.call(0x00ab_bf50, &args![iterator]).u32(), first + 8);
+        assert_eq!(invalid(&e), 1);
+    }
+
+    #[test]
+    fn insert_n_sixteen_byte_elements() {
+        let mut e = engine();
+        e.register(0x0064_e430, |e, a| e.mem.alloc(16 * a[0]).into_ret());
+        let v = vector(&mut e, 0x10, &numbers(1, 8), 3);
+        let first = e.mem.u32(v + VECTOR_FIRST);
+        let value = block(&mut e, &[9, 9, 9, 9]);
+        // In place, one following: it is copied past the end and the value stored.
+        e.call(0x00ab_d2e0, &args![v, 0u32, first + 0x10, 1u32, value]);
+        assert_eq!(
+            contents(&e, v),
+            [numbers(1, 4), vec![9; 4], numbers(5, 4)].concat()
+        );
+        // Past the capacity: a new block of half as much again.
+        e.call(0x00ab_d2e0, &args![v, 0u32, first, 1u32, value]);
+        assert_eq!(
+            e.mem.u32(v + VECTOR_LAST) - e.mem.u32(v + VECTOR_FIRST),
+            0x40
+        );
+        assert_eq!(calls(&e, 0x0064_e430), vec![vec![4, 0]]);
+        assert_eq!(contents(&e, v)[..4], [9; 4]);
+        // Too many: the length throw.
+        e.call(0x00ab_d2e0, &args![v, 0u32, first, 0x1000_0000u32, value]);
+        assert_eq!(calls(&e, THROW_LENGTH_0065F640).len(), 1);
+    }
+
+    #[test]
+    fn insert_n_word_and_string_elements() {
+        let mut e = engine();
+        quiet(&mut e, &[DESTROY_RANGE_20]);
+        e.register(0x0065_e430, |e, a| e.mem.alloc(0x20 * a[0]).into_ret());
+        let v = vector(&mut e, 0x20, &numbers(1, 16), 3);
+        let first = e.mem.u32(v + VECTOR_FIRST);
+        let value = block(&mut e, &numbers(100, 8));
+        // In place with more following: the tail copied past the end, the rest moved up.
+        e.call(0x00ab_e310, &args![v, 0u32, first, 1u32, value]);
+        assert_eq!(contents(&e, v), [numbers(100, 8), numbers(1, 16)].concat());
+        // Growing: the old elements destroyed as a range and freed.
+        e.call(0x00ab_e310, &args![v, 0u32, first + 0x60, 1u32, value]);
+        assert_eq!(
+            calls(&e, DESTROY_RANGE_20),
+            vec![vec![v, first, first + 0x60]]
+        );
+        assert_eq!(
+            calls(&e, MEMORY_MANAGER_FREE),
+            vec![vec![MEMORY_MANAGER_OBJECT, first]]
+        );
+        assert_eq!(contents(&e, v).len(), 32);
+        // The temporary's string destroyed with (1, 0).
+        assert!(calls(&e, STRING_TIDY).iter().any(|c| c[1..] == [1, 0]));
+        // Nothing for 0.
+        e.call_log = Some(vec![]);
+        e.call(0x00ab_e310, &args![v, 0u32, first, 0u32, value]);
+        assert_eq!(calls(&e, STRING_TIDY).len(), 0);
+    }
+
+    #[test]
+    fn insert_n_four_words_and_string_elements() {
+        let mut e = engine();
+        quiet(&mut e, &[DESTROY_RANGE_2C]);
+        e.register(0x0065_e4c0, |e, a| e.mem.alloc(0x2c * a[0]).into_ret());
+        let v = vector(&mut e, 0x2c, &numbers(1, 11), 3);
+        let first = e.mem.u32(v + VECTOR_FIRST);
+        let value = block(&mut e, &numbers(100, 11));
+        // In place at the end: the gap filled from the temporary.
+        e.call(0x00ab_eb00, &args![v, 0u32, first + 0x2c, 2u32, value]);
+        assert_eq!(
+            contents(&e, v),
+            [numbers(1, 11), numbers(100, 11), numbers(100, 11)].concat()
+        );
+        // In place before the last one: moved up and assigned.
+        e.mem.set_u32(v + VECTOR_LAST, first + 0x58);
+        e.call(0x00ab_eb00, &args![v, 0u32, first, 1u32, value]);
+        assert_eq!(
+            contents(&e, v),
+            [numbers(100, 11), numbers(1, 11), numbers(100, 11)].concat()
+        );
+        // Too many: the length throw.
+        e.call(0x00ab_eb00, &args![v, 0u32, first, 0x0600_0000u32, value]);
+        assert_eq!(calls(&e, THROW_LENGTH_0065F640).len(), 1);
+    }
+
+    #[test]
+    fn four_words_and_string_copy_constructor() {
+        let mut e = engine();
+        let source = block(&mut e, &numbers(1, 11));
+        let this = e.mem.alloc(0x2c);
+        assert_eq!(e.call(0x00ac_04c0, &args![this, source]).u32(), this);
+        assert_eq!(read(&e, this, 11), numbers(1, 11));
+        assert_eq!(calls(&e, STRING_TIDY), vec![vec![this + 0x10, 0, 0]]);
+    }
+
+    #[test]
+    fn word_fill_answers_its_end() {
+        let mut e = engine();
+        let value = block(&mut e, &[7]);
+        let to = e.mem.alloc(12);
+        assert_eq!(
+            e.call(0x00ac_0ab0, &args![0u32, to, 3u32, value]).u32(),
+            to + 12
+        );
+        assert_eq!(read(&e, to, 3), vec![7; 3]);
+    }
+
+    #[test]
+    fn length_error_is_thrown() {
+        let mut e = engine();
+        quiet(&mut e, &[STRING_FROM_TEXT, LENGTH_ERROR_CONSTRUCT]);
+        e.call(0x00ac_0b00, &[]);
+        let text = calls(&e, STRING_FROM_TEXT);
+        assert_eq!(text[0][1], TOO_LONG_TEXT);
+        let thrown = calls(&e, CXX_THROW_EXCEPTION);
+        assert_eq!(thrown[0][1], LENGTH_ERROR_THROW_INFO);
+        assert_eq!(
+            calls(&e, LENGTH_ERROR_CONSTRUCT),
+            vec![vec![thrown[0][0], text[0][0]]]
+        );
+    }
+
+    /// An iterator over a three-element vector of `bytes`, advanced by 2 (inside) then by 2
+    /// more (past the end, reported).
+    fn advance(addr: u32, bytes: u32) {
+        let mut e = engine();
+        let v = vector(&mut e, bytes, &vec![0; 3 * bytes as usize / 4], 3);
+        let first = e.mem.u32(v + VECTOR_FIRST);
+        let proxy = e.mem.u32(v);
+        let iterator = block(&mut e, &[proxy, first]);
+        assert_eq!(e.call(addr, &args![iterator, 2u32]).u32(), iterator);
+        assert_eq!(e.mem.u32(iterator + 4), first + 2 * bytes);
+        assert_eq!(invalid(&e), 0);
+        e.call(addr, &args![iterator, 2u32]);
+        assert_eq!(invalid(&e), 1);
+        assert_eq!(e.mem.u32(iterator + 4), first + 4 * bytes);
+        // Below the first: reported too.
+        e.call(addr, &args![iterator, u32::MAX.wrapping_mul(5)]);
+        assert_eq!(invalid(&e), 2);
+    }
+
+    #[test]
+    fn advance_0x20() {
+        advance(0x00ac_0b80, 0x20);
+    }
+
+    #[test]
+    fn advance_0x2c() {
+        advance(0x00ac_0c40, 0x2c);
+    }
+
+    #[test]
+    fn advance_0x34() {
+        advance(0x00ac_0d00, 0x34);
+    }
+
+    #[test]
+    fn advance_0xc() {
+        advance(0x00ac_0dc0, 0xc);
+    }
+
+    #[test]
+    fn advance_0x10() {
+        advance(0x00ac_0e80, 0x10);
+    }
+
+    #[test]
+    fn advance_8() {
+        advance(0x00ac_0f40, 8);
+    }
+
+    #[test]
+    fn point_sum_and_scale() {
+        let mut e = engine();
+        let a = block(&mut e, &[1.5f32.to_bits(), 2.0f32.to_bits(), 0x7f80_0001]);
+        let b = block(
+            &mut e,
+            &[0.25f32.to_bits(), (-2.0f32).to_bits(), 1.0f32.to_bits()],
+        );
+        let result = e.mem.alloc(12);
+        assert_eq!(e.call(0x00ac_10c0, &args![a, result, b]).u32(), result);
+        assert_eq!(e.mem.f32(result), 1.75);
+        assert_eq!(e.mem.f32(result + 4), 0.0);
+        assert_eq!(e.mem.u32(result + 8), 0x7fc0_0001);
+        assert_eq!(e.call(0x00ac_1120, &args![a, result, 2.0f32]).u32(), result);
+        assert_eq!(
+            read(&e, result, 2),
+            vec![3.0f32.to_bits(), 4.0f32.to_bits()]
+        );
+        assert_eq!(e.mem.u32(result + 8), 0x7fc0_0001);
+    }
+
+    /// A forward copy of three `bytes` elements answers the destination's end.
+    fn forward(addr: u32, bytes: u32, extra: usize) {
+        let mut e = engine();
+        let words = numbers(1, 3 * bytes / 4);
+        let from = block(&mut e, &words);
+        let to = e.mem.alloc(3 * bytes);
+        let mut a = vec![from, from + 3 * bytes, to];
+        a.resize(3 + extra, 0);
+        assert_eq!(e.call(addr, &a).u32(), to + 3 * bytes);
+        assert_eq!(read(&e, to, 3 * bytes / 4), words);
+    }
+
+    #[test]
+    fn forward_copy_12() {
+        forward(0x00ac_1170, 0xc, 0);
+    }
+
+    #[test]
+    fn forward_copy_16() {
+        forward(0x00ac_1220, 0x10, 0);
+    }
+
+    #[test]
+    fn forward_copy_8() {
+        forward(0x00ac_12d0, 8, 0);
+    }
+
+    #[test]
+    fn forward_copy_12_with_tags() {
+        forward(0x00ac_2c20, 0xc, 3);
+    }
+
+    /// A backward copy of two `bytes` elements one element up answers the new start.
+    fn backward(addr: u32, bytes: u32, extra: usize) {
+        let mut e = engine();
+        let words = numbers(1, 3 * bytes / 4);
+        let at = block(&mut e, &words);
+        let mut a = vec![at, at + 2 * bytes, at + 3 * bytes];
+        a.resize(3 + extra, 0);
+        assert_eq!(e.call(addr, &a).u32(), at + bytes);
+        let n = bytes / 4;
+        assert_eq!(
+            read(&e, at, 3 * n),
+            [numbers(1, n), numbers(1, 2 * n)].concat()
+        );
+    }
+
+    #[test]
+    fn backward_copy_12() {
+        backward(0x00ac_1370, 0xc, 0);
+    }
+
+    #[test]
+    fn backward_copy_12_with_tags() {
+        backward(0x00ac_1a50, 0xc, 3);
+    }
+
+    #[test]
+    fn backward_copy_16() {
+        backward(0x00ac_14e0, 0x10, 0);
+    }
+
+    #[test]
+    fn backward_copy_16_with_tags() {
+        backward(0x00ac_1bf0, 0x10, 3);
+    }
+
+    #[test]
+    fn backward_copy_8() {
+        backward(0x00ac_1530, 8, 0);
+    }
+
+    #[test]
+    fn backward_copy_8_with_tags() {
+        backward(0x00ac_1d10, 8, 3);
+    }
+
+    #[test]
+    fn backward_assign_0x20() {
+        backward(0x00ac_1580, 0x20, 0);
+    }
+
+    #[test]
+    fn backward_assign_0x20_with_tags() {
+        backward(0x00ac_3030, 0x20, 3);
+    }
+
+    #[test]
+    fn backward_assign_0x2c() {
+        backward(0x00ac_30c0, 0x2c, 3);
+    }
+
+    #[test]
+    fn backward_assign_0x2c_with_a_byte_tag() {
+        backward(0x00ac_1ea0, 0x2c, 3);
+    }
+
+    #[test]
+    fn word_moves_up_to_an_end() {
+        let mut e = engine();
+        let at = block(&mut e, &[1, 2, 3, 4]);
+        e.call_log = Some(vec![]);
+        assert_eq!(
+            e.call(0x00ac_1440, &args![at, at + 8, at + 16]).u32(),
+            at + 8
+        );
+        assert_eq!(read(&e, at, 4), vec![1, 2, 1, 2]);
+        assert_eq!(calls(&e, MEMMOVE_S), vec![vec![at + 8, 8, at, 8]]);
+        // Nothing to move: no call.
+        assert_eq!(e.call(0x00ac_1440, &args![at, at, at + 16]).u32(), at + 16);
+        assert_eq!(calls(&e, MEMMOVE_S).len(), 1);
+    }
+
+    #[test]
+    fn range_assign_0x2c() {
+        let mut e = engine();
+        let value = block(&mut e, &numbers(50, 11));
+        let at = e.mem.alloc(0x58);
+        e.call(0x00ac_1600, &args![at, at + 0x58, value]);
+        assert_eq!(
+            read(&e, at, 22),
+            [numbers(50, 11), numbers(50, 11)].concat()
+        );
+        assert_eq!(calls(&e, STRING_ASSIGN).len(), 2);
+    }
+
+    #[test]
+    fn range_assign_0x34() {
+        let mut e = engine();
+        quiet(&mut e, &[CLEAR_12]);
+        let value = e.mem.alloc(0x34);
+        e.mem.set_u32(value, 0x51);
+        let at = e.mem.alloc(0x68);
+        e.call(0x00ac_1670, &args![at, at + 0x68, value]);
+        assert_eq!((e.mem.u32(at), e.mem.u32(at + 0x34)), (0x51, 0x51));
+        assert_eq!(calls(&e, CLEAR_12), vec![vec![at + 0x1c], vec![at + 0x50]]);
+    }
+
+    #[test]
+    fn forward_assign_0x20() {
+        forward(0x00ac_1780, 0x20, 3);
+    }
+
+    #[test]
+    fn forward_assign_0x2c() {
+        forward(0x00ac_1810, 0x2c, 3);
+    }
+
+    #[test]
+    fn forward_assign_0x34() {
+        let mut e = engine();
+        quiet(&mut e, &[CLEAR_12]);
+        let from = e.mem.alloc(0x68);
+        e.mem.set_u32(from + 0x34, 0x77);
+        let to = e.mem.alloc(0x68);
+        let r = e.call(0x00ac_18c0, &args![from, from + 0x68, to, 0u32, 0u32, 0u32]);
+        assert_eq!(r.u32(), to + 0x68);
+        assert_eq!(e.mem.u32(to + 0x34), 0x77);
+        assert_eq!(calls(&e, CLEAR_12), vec![vec![to + 0x1c], vec![to + 0x50]]);
+    }
+
+    #[test]
+    fn forward_assign_0x38() {
+        let mut e = engine();
+        let from = e.mem.alloc(0x38);
+        e.mem.set_u32(from, 0x66);
+        e.mem.set_u32(from + 0x1c, 0x67);
+        let to = e.mem.alloc(0x38);
+        let r = e.call(0x00ac_1980, &args![from, from + 0x38, to, 0u32, 0u32, 0u32]);
+        assert_eq!(r.u32(), to + 0x38);
+        assert_eq!((e.mem.u32(to), e.mem.u32(to + 0x1c)), (0x66, 0x67));
+        // The inner vectors are empty: only the string is assigned.
+        assert_eq!(calls(&e, STRING_ASSIGN).len(), 1);
+    }
+
+    /// A four-word copy through a forwarding function answers the destination's end.
+    fn forwarded(addr: u32, bytes: u32) {
+        let mut e = engine();
+        let words = numbers(1, 2 * bytes / 4);
+        let from = block(&mut e, &words);
+        let to = e.mem.alloc(2 * bytes);
+        let r = e.call(addr, &args![from, from + 2 * bytes, to, 0u32]);
+        assert_eq!(r.u32(), to + 2 * bytes);
+        assert_eq!(read(&e, to, 2 * bytes / 4), words);
+    }
+
+    #[test]
+    fn forwarded_copy_12() {
+        forwarded(0x00ac_1af0, 0xc);
+    }
+
+    #[test]
+    fn forwarded_copy_16() {
+        forwarded(0x00ac_1b70, 0x10);
+    }
+
+    #[test]
+    fn forwarded_copy_float_pairs() {
+        forwarded(0x00ac_1c90, 8);
+    }
+
+    #[test]
+    fn forwarded_construct_0x20() {
+        forwarded(0x00ac_1da0, 0x20);
+    }
+
+    #[test]
+    fn forwarded_construct_0x2c() {
+        forwarded(0x00ac_1e20, 0x2c);
+    }
+
+    #[test]
+    fn forwarded_copy_16_again() {
+        forwarded(0x00ac_3640, 0x10);
+    }
+
+    #[test]
+    fn forwarded_construct_0x20_again() {
+        forwarded(0x00ac_36e0, 0x20);
+    }
+
+    #[test]
+    fn forwarded_construct_0x2c_again() {
+        forwarded(0x00ac_3730, 0x2c);
+    }
+
+    #[test]
+    fn copy_16_skips_null_slots() {
+        forward(0x00ac_3820, 0x10, 3);
+        let mut e = engine();
+        let from = block(&mut e, &numbers(1, 4));
+        assert_eq!(
+            e.call(0x00ac_3820, &args![from, from + 16, 0u32, 0u32, 0u32, 0u32])
+                .u32(),
+            16
+        );
+    }
+
+    #[test]
+    fn construct_0x20_elements() {
+        forward(0x00ac_39e0, 0x20, 3);
+    }
+
+    #[test]
+    fn construct_0x2c_elements_skips_null_slots() {
+        forward(0x00ac_3ac0, 0x2c, 3);
+        let mut e = engine();
+        let from = block(&mut e, &numbers(1, 11));
+        e.call(
+            0x00ac_3ac0,
+            &args![from, from + 0x2c, 0u32, 0u32, 0u32, 0u32],
+        );
+        assert!(calls(&e, STRING_TIDY).is_empty());
+    }
+
+    #[test]
+    fn backward_assign_0x34() {
+        let mut e = engine();
+        quiet(&mut e, &[CLEAR_12]);
+        let at = e.mem.alloc(0x68);
+        e.mem.set_u32(at, 0x31);
+        let r = e.call(
+            0x00ac_1f60,
+            &args![at, at + 0x34, at + 0x68, 0u32, 0u32, 0u32],
+        );
+        assert_eq!(r.u32(), at + 0x34);
+        assert_eq!(e.mem.u32(at + 0x34), 0x31);
+        assert_eq!(calls(&e, CLEAR_12), vec![vec![at + 0x50]]);
+    }
+
+    #[test]
+    fn backward_assign_0x34_without_forwarding() {
+        let mut e = engine();
+        quiet(&mut e, &[CLEAR_12]);
+        let at = e.mem.alloc(0x68);
+        e.mem.set_u32(at, 0x32);
+        e.call(
+            0x00ac_3170,
+            &args![at, at + 0x34, at + 0x68, 0u32, 0u32, 0u32],
+        );
+        assert_eq!(e.mem.u32(at + 0x34), 0x32);
+    }
+
+    #[test]
+    fn backward_assign_0x38() {
+        let mut e = engine();
+        let at = e.mem.alloc(0x70);
+        e.mem.set_u32(at + 0x1c, 0x41);
+        let r = e.call(
+            0x00ac_2020,
+            &args![at, at + 0x38, at + 0x70, 0u32, 0u32, 0u32],
+        );
+        assert_eq!(r.u32(), at + 0x38);
+        assert_eq!(e.mem.u32(at + 0x38 + 0x1c), 0x41);
+    }
+
+    #[test]
+    fn backward_assign_0x38_without_forwarding() {
+        let mut e = engine();
+        let at = e.mem.alloc(0x70);
+        e.mem.set_u32(at + 0x1c, 0x42);
+        e.call(
+            0x00ac_3230,
+            &args![at, at + 0x38, at + 0x70, 0u32, 0u32, 0u32],
+        );
+        assert_eq!(e.mem.u32(at + 0x38 + 0x1c), 0x42);
+    }
+
+    #[test]
+    fn iterator_word_move() {
+        let mut e = engine();
+        let from = block(&mut e, &[1, 2, 3]);
+        let to = e.mem.alloc(12);
+        let r = e.call(0x00ac_2060, &args![0u32, from, 0u32, from + 12, to, 0u32]);
+        assert_eq!(r.u32(), to + 12);
+        assert_eq!(read(&e, to, 3), vec![1, 2, 3]);
+        assert_eq!(
+            e.call(0x00ac_2060, &args![0u32, from, 0u32, from, to, 0u32])
+                .u32(),
+            to
+        );
+        assert_eq!(calls(&e, MEMMOVE_S).len(), 1);
+    }
+
+    /// A fill of two elements of `bytes` at a destination (and none at a null one).
+    fn fill(addr: u32, bytes: u32) {
+        let mut e = engine();
+        let value = block(&mut e, &numbers(1, bytes / 4));
+        let to = e.mem.alloc(2 * bytes);
+        e.call(addr, &args![to, 2u32, value, 0u32, 0u32, 0u32]);
+        assert_eq!(
+            read(&e, to, 2 * bytes / 4),
+            [numbers(1, bytes / 4), numbers(1, bytes / 4)].concat()
+        );
+        e.call_log = Some(vec![]);
+        e.call(addr, &args![0u32, 1u32, value, 0u32, 0u32, 0u32]);
+        assert!(calls(&e, STRING_TIDY).is_empty());
+    }
+
+    #[test]
+    fn fill_16() {
+        fill(0x00ac_21b0, 0x10);
+    }
+
+    #[test]
+    fn fill_0x20() {
+        fill(0x00ac_2370, 0x20);
+    }
+
+    #[test]
+    fn fill_0x2c() {
+        fill(0x00ac_2440, 0x2c);
+    }
+
+    #[test]
+    fn construct_0x20_element() {
+        let mut e = engine();
+        let source = block(&mut e, &numbers(1, 8));
+        let to = e.mem.alloc(0x20);
+        e.call(0x00ac_34c0, &args![to, source]);
+        assert_eq!(read(&e, to, 8), numbers(1, 8));
+        assert_eq!(calls(&e, STRING_TIDY), vec![vec![to + 4, 0, 0]]);
+        e.call(0x00ac_34c0, &args![0u32, source]);
+        assert_eq!(calls(&e, STRING_TIDY).len(), 1);
+    }
+
+    #[test]
+    fn assign_0x38_element() {
+        let mut e = engine();
+        let other = e.mem.alloc(0x38);
+        e.mem.set_u32(other, 0x11);
+        e.mem.set_u32(other + 0x1c, 0x22);
+        let this = e.mem.alloc(0x38);
+        assert_eq!(e.call(0x00ac_2760, &args![this, other]).u32(), this);
+        assert_eq!((e.mem.u32(this), e.mem.u32(this + 0x1c)), (0x11, 0x22));
+    }
+
+    #[test]
+    fn assign_twelve_byte_vectors() {
+        let mut e = engine();
+        quiet(&mut e, &[CLEAR_12]);
+        e.register(BUY_12, |e, a| {
+            let block = e.mem.alloc(12 * a[1]);
+            e.mem.set_u32(a[0] + VECTOR_FIRST, block);
+            e.mem.set_u32(a[0] + VECTOR_LAST, block);
+            e.mem.set_u32(a[0] + VECTOR_END, block + 12 * a[1]);
+            1u32.into_ret()
+        });
+        let this = vector(&mut e, 0xc, &numbers(1, 6), 3);
+        // Smaller: copied over the first ones.
+        let other = vector(&mut e, 0xc, &numbers(10, 3), 1);
+        assert_eq!(e.call(0x00ac_27c0, &args![this, other]).u32(), this);
+        assert_eq!(contents(&e, this), numbers(10, 3));
+        // Within the capacity: copied and constructed.
+        let other = vector(&mut e, 0xc, &numbers(20, 9), 3);
+        e.call(0x00ac_27c0, &args![this, other]);
+        assert_eq!(contents(&e, this), numbers(20, 9));
+        // Larger: freed, bought, constructed.
+        let first = e.mem.u32(this + VECTOR_FIRST);
+        let other = vector(&mut e, 0xc, &numbers(30, 12), 4);
+        e.call(0x00ac_27c0, &args![this, other]);
+        assert_eq!(contents(&e, this), numbers(30, 12));
+        assert_eq!(
+            calls(&e, MEMORY_MANAGER_FREE),
+            vec![vec![MEMORY_MANAGER_OBJECT, first]]
+        );
+        // Empty: cleared; itself: nothing.
+        let other = vector(&mut e, 0xc, &[], 1);
+        e.call(0x00ac_27c0, &args![this, other]);
+        e.call(0x00ac_27c0, &args![this, this]);
+        assert_eq!(calls(&e, CLEAR_12), vec![vec![this]]);
+    }
+
+    #[test]
+    fn assign_word_vectors() {
+        let mut e = engine();
+        let this = vector(&mut e, 4, &[1, 2, 3], 4);
+        let other = vector(&mut e, 4, &[7, 8], 2);
+        assert_eq!(e.call(0x00ac_2ca0, &args![this, other]).u32(), this);
+        assert_eq!(contents(&e, this), vec![7, 8]);
+        let other = vector(&mut e, 4, &[4, 5, 6, 7], 4);
+        e.call(0x00ac_2ca0, &args![this, other]);
+        assert_eq!(contents(&e, this), vec![4, 5, 6, 7]);
+        let first = e.mem.u32(this + VECTOR_FIRST);
+        let other = vector(&mut e, 4, &numbers(1, 6), 6);
+        e.call(0x00ac_2ca0, &args![this, other]);
+        assert_eq!(contents(&e, this), numbers(1, 6));
+        assert_eq!(
+            calls(&e, MEMORY_MANAGER_FREE),
+            vec![vec![MEMORY_MANAGER_OBJECT, first]]
+        );
+        let other = vector(&mut e, 4, &[], 1);
+        e.call(0x00ac_2ca0, &args![this, other]);
+        assert!(contents(&e, this).is_empty());
+    }
+
+    #[test]
+    fn set_file_id_asserts_and_sets_the_version() {
+        let mut e = engine();
+        quiet(&mut e, &[FR2_ASSERT]);
+        let this = e.mem.alloc(0x48);
+        let id = e.mem.alloc(0x1c);
+        e.mem.write(id + 4, b"FRTRI103\0");
+        e.mem.set_u32(id + STRING_LENGTH, 8);
+        e.mem.set_u32(id + 0x18, 0xf);
+        e.call(0x00ac_3f40, &args![this, id]);
+        assert!(calls(&e, FR2_ASSERT).is_empty());
+        assert_eq!(e.mem.bytes(this + 0x24, 8), b"FRTRI003".to_vec());
+        e.mem.set_u32(id + STRING_LENGTH, 4);
+        e.mem.set_u32(this + 0x3c, 1);
+        e.call(0x00ac_3f40, &args![this, id]);
+        assert_eq!(
+            calls(&e, FR2_ASSERT),
+            vec![
+                vec![BINARY_FILE_SOURCE, 0x30],
+                vec![BINARY_FILE_SOURCE, 0x31]
+            ]
+        );
+        assert_eq!(invalid(&e), 1);
+    }
+
+    /// A `FutBinaryFileC` whose id is `"FRTRI003"`, and a name string.
+    fn id_check_engine() -> (Engine, u32, u32) {
+        let mut e = engine();
+        let this = e.mem.alloc(0x48);
+        e.mem.write(this + 0x24, b"FRTRI003\0");
+        e.mem.set_u32(this + 0x34, 8);
+        e.mem.set_u32(this + 0x38, 0xf);
+        let name = e.mem.alloc(0x1c);
+        e.mem.set_u32(name + 0x18, 0xf);
+        e.register(BYTE_VECTOR_CONSTRUCT, |e, a| {
+            let block = e.mem.alloc(a[1]);
+            e.mem.set_u32(a[0] + VECTOR_FIRST, block);
+            e.mem.set_u32(a[0] + VECTOR_LAST, block + a[1]);
+            Ret::default()
+        });
+        e.register(STRLEN, |e, a| (e.mem.cstr(a[0]).len() as u32).into_ret());
+        e.register(STRING_COMPARE, |e, a| {
+            let id = e.mem.bytes(a[0] + 4, a[2]);
+            let text = e.mem.bytes(a[3], a[4]);
+            u32::from(id != text).into_ret()
+        });
+        quiet(&mut e, &[FCLOSE, SET_LAST_ERROR]);
+        (e, this, name)
+    }
+
+    #[test]
+    fn file_id_check_reads_and_compares() {
+        let (mut e, this, name) = id_check_engine();
+        e.register(FOPEN, |_, _| 0x5000u32.into_ret());
+        e.register(FREAD, |e, a| {
+            e.mem.write(a[0], b"FRTRI103");
+            1u32.into_ret()
+        });
+        // The version character comes from the id: equal.
+        assert!(e.call(0x00ac_3fe0, &args![this, name]).bool());
+        assert_eq!(calls(&e, FOPEN), vec![vec![name + 4, READ_BINARY_MODE]]);
+        assert_eq!(calls(&e, FCLOSE), vec![vec![0x5000]]);
+        assert_eq!(calls(&e, MEMORY_MANAGER_FREE).len(), 2);
+        // Another id: not equal.
+        e.register(FREAD, |e, a| {
+            e.mem.write(a[0], b"FRTRX003");
+            1u32.into_ret()
+        });
+        assert!(!e.call(0x00ac_3fe0, &args![this, name]).bool());
+        // A short read: closed, error 1.
+        e.call_log = Some(vec![]);
+        e.register(FREAD, |_, _| Ret::default());
+        assert!(!e.call(0x00ac_3fe0, &args![this, name]).bool());
+        assert_eq!(calls(&e, FCLOSE).len(), 1);
+        assert_eq!(calls(&e, SET_LAST_ERROR)[0][0], 1);
+        // No file: error 4.
+        e.call_log = Some(vec![]);
+        e.register(FOPEN, |_, _| Ret::default());
+        assert!(!e.call(0x00ac_3fe0, &args![this, name]).bool());
+        assert_eq!(calls(&e, SET_LAST_ERROR)[0][0], 4);
+        assert!(calls(&e, FCLOSE).is_empty());
     }
 }

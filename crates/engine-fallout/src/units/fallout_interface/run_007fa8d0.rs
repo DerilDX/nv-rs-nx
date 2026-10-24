@@ -180,6 +180,37 @@ pub fn fn_007fadf0(e: &mut Engine, this: Ptr) {
     e.mem.set_u8(t + 0x28, 0);
 }
 
+/// The app-culled setter (`00450f90`, `RET 4`) and `MemoryManager` free (`00401030`,
+/// cdecl).
+const SET_APP_CULLED: u32 = 0x0045_0f90;
+const FREE: u32 = 0x0040_1030;
+
+// Translated from 007fa8d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed (`thiscall` on an `FORenderedMenu`, `RET 4`: a `bool`): with both the screen
+/// parent (+4, `007fa950`) and the object at +0xe0 (`007fa970`), hides both (app-culled
+/// 1) when `hide` is set, else shows both (0).
+pub fn fn_007fa8d0(e: &mut Engine, this: Ptr, hide: u8) {
+    if fn_007fa950(e, this) == 0 || fn_007fa970(e, this) == 0 {
+        return;
+    }
+    let culled = u32::from(hide != 0);
+    let object = fn_007fa950(e, this);
+    e.call(SET_APP_CULLED, &args![object, culled]);
+    let object = fn_007fa970(e, this);
+    e.call(SET_APP_CULLED, &args![object, culled]);
+}
+
+// Translated from 007face0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `FORenderedMenu`'s scalar deleting destructor (`thiscall`, `RET 4`): the destructor
+/// (`007fad10`), then the block freed when bit 0 of `flags` is set. Answers `this`.
+pub fn fn_007face0(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    fn_007fad10(e, this);
+    if flags & 1 != 0 {
+        e.call(FREE, &args![this]);
+    }
+    this
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -189,6 +220,8 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x007f_aa20, fn_007faa20(Ptr) -> Ptr),
         entry!(0x007f_ad10, fn_007fad10(Ptr)),
         entry!(0x007f_adf0, fn_007fadf0(Ptr)),
+        entry!(0x007f_a8d0, fn_007fa8d0(Ptr, u8)),
+        entry!(0x007f_ace0, fn_007face0(Ptr, u32) -> Ptr),
     ]
 }
 
@@ -399,5 +432,71 @@ mod rendered_menu_tests {
             destroyed,
             vec![0xd4, 0xbc, 0x24, 0x1c, 0x14, 0x10, 0xc, 8, 4]
         );
+    }
+}
+
+#[cfg(test)]
+mod n059_tests {
+    use super::*;
+
+    #[test]
+    fn hides_or_shows_both_screens() {
+        let mut e = Engine::new();
+        e.register(CALLEE_00559450, |e, a| e.mem.u32(a[0]).into_ret());
+        e.register(SET_APP_CULLED, |_, _| Ret::default());
+        let this = e.mem.alloc(0xe4);
+        e.mem.set_u32(this + 4, 0x4000);
+        e.call_log = Some(vec![]);
+        e.call(0x007f_a8d0, &args![this, 1u32]);
+        assert!(!e
+            .call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .any(|(a, _)| *a == SET_APP_CULLED));
+        e.mem.set_u32(this + 0xe0, 0x5000);
+        e.call(0x007f_a8d0, &args![this, 1u32]);
+        e.call(0x007f_a8d0, &args![this, 0u32]);
+        let culls: Vec<_> = e
+            .call_log
+            .unwrap()
+            .into_iter()
+            .filter(|(a, _)| *a == SET_APP_CULLED)
+            .map(|(_, w)| w)
+            .collect();
+        assert_eq!(
+            culls,
+            vec![
+                vec![0x4000, 1],
+                vec![0x5000, 1],
+                vec![0x4000, 0],
+                vec![0x5000, 0]
+            ]
+        );
+    }
+
+    #[test]
+    fn deleting_destructor_frees_on_bit_zero() {
+        let mut e = Engine::new();
+        for address in [
+            FREE,
+            CLEAR_MENU_LIGHT,
+            NI_POINTER_ASSIGN,
+            NI_POINTER_DESTRUCT,
+        ] {
+            e.register(address, |_, _| Ret::default());
+        }
+        let (first, second) = (e.mem.alloc(0xe4), e.mem.alloc(0xe4));
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x007f_ace0, &args![first, 1u32]).u32(), first);
+        e.call(0x007f_ace0, &args![second, 0u32]);
+        assert_eq!(e.mem.u32(first), FO_RENDERED_MENU_VTABLE);
+        let frees: Vec<_> = e
+            .call_log
+            .unwrap()
+            .into_iter()
+            .filter(|(a, _)| *a == FREE)
+            .collect();
+        assert_eq!(frees, vec![(FREE, vec![first])]);
     }
 }

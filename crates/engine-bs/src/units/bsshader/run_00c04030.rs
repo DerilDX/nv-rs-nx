@@ -358,9 +358,31 @@ pub fn fn_00c04710(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
     this
 }
 
+/// The shader parameter's `SetPixelConstant` (`00b8a790`, unnamed in the engine map;
+/// `thiscall`, five words).
+const PARAM_SET_PIXEL_CONSTANT_00B8A790: u32 = 0x00b8_a790;
+
+// Translated from 00c046e0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (not a Ghidra function; vtable entry at `010bca80`), `thiscall`
+/// with one unread word; answers true. The first shader parameter of the array at +0x18
+/// (elements at +0x1c) gets pixel constant 0 (the `float` +0x5c through `FLD`/`FSTP`, then
+/// 0.0, 0.0, 0.0).
+pub fn fn_00c046e0(e: &mut Engine, this: Ptr, _unused_0: u32) -> bool {
+    let base = this.addr();
+    let parameters = e.mem.u32(base + 0x1c);
+    let value = x87_quiet_bits(e.mem.u32(base + 0x5c));
+    let parameter = e.mem.u32(parameters);
+    e.call(
+        PARAM_SET_PIXEL_CONSTANT_00B8A790,
+        &args![parameter, 0u32, value, 0u32, 0u32, 0u32],
+    );
+    true
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x00c0_46e0, fn_00c046e0(Ptr, u32) -> bool),
         entry!(0x00c0_4600, fn_00c04600(Ptr) -> Ptr),
         entry!(0x00c0_4570, fn_00c04570(Ptr) -> Ptr),
         entry!(0x00c0_4030, fn_00c04030(Ptr)),
@@ -818,6 +840,27 @@ mod pass_tests {
         assert_eq!(
             calls(&e, MEMORY_DEALLOCATE_00AA4060),
             vec![vec![MEMORY_MANAGER, this]]
+        );
+    }
+}
+
+#[cfg(test)]
+mod n071_tests {
+    use super::*;
+    use crate::units::bsshader::shadowlightshader::n071_rig::{calls, engine};
+
+    #[test]
+    fn fn_00c046e0_sets_constant_0() {
+        let mut e = engine(&[PARAM_SET_PIXEL_CONSTANT_00B8A790]);
+        let this = e.mem.alloc(0x60);
+        let parameters = e.mem.alloc(8);
+        e.mem.set_u32(parameters, 0x88);
+        e.mem.set_u32(this + 0x1c, parameters);
+        e.mem.set_u32(this + 0x5c, 0x7f80_0001);
+        assert!(e.call(0x00c0_46e0, &args![this, 0u32]).bool());
+        assert_eq!(
+            calls(&e, PARAM_SET_PIXEL_CONSTANT_00B8A790),
+            vec![vec![0x88, 0, 0x7fc0_0001, 0, 0, 0]]
         );
     }
 }

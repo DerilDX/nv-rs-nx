@@ -167,9 +167,116 @@ pub fn fn_00c3f6b0(
     a_low >= b_low
 }
 
+/// `00c3fe80` (unit `iomanager.obj`, `thiscall` on the map pointer, `RET 0x10`: bucket, key
+/// low, key high, value) and `00c40680` (unit `iomanager.obj`, `thiscall` on the map pointer,
+/// `RET 8`: key, address of a counted pointer); both answer a byte.
+const MAP_OPERATION_00C3FE80: u32 = 0x00c3_fe80;
+const MAP_OPERATION_00C40680: u32 = 0x00c4_0680;
+/// `0044dd60` (`thiscall` on the object): releases one reference of a counted object.
+const POINTER_RELEASE: u32 = 0x0044_dd60;
+
+// Translated from 00c3f160 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (unit `run_00c3f160`; `thiscall`, `RET 0xC`): under the
+/// object's lock (+0x20), finds the bucket of the 64-bit key (the map's slot `0x24`) and runs
+/// `00c3fe80` with it, the key and `value`; answers that call's byte.
+pub fn fn_00c3f160(e: &mut Engine, this: Ptr, key_low: u32, key_high: u32, value: u32) -> bool {
+    let this = this.addr();
+    let (map, bucket) = bucket(e, this, key_low, key_high);
+    let result = e
+        .call(
+            MAP_OPERATION_00C3FE80,
+            &args![map, bucket, key_low, key_high, value],
+        )
+        .u8();
+    lock_leave(e, this);
+    result != 0
+}
+
+// Translated from 00c3f360 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 00c3f360 - the C++ exception-unwinding frame (FS:[0] chain, handler at 00f2dec8, state variable) is not translated
+/// Unnamed in the engine map (unit `run_00c3f160`; `thiscall`, `RET 8`: key, counted
+/// pointer passed by value). Under the object's lock (+0x20), runs `00c40680` on the map
+/// (`00c3f750`) with the key and the address of the pointer argument; after the lock is
+/// released, the pointer argument (as the call left it) drops its reference (`0044dd60`)
+/// when it is not null. Answers the call's byte.
+pub fn fn_00c3f360(e: &mut Engine, this: Ptr, key: u32, object: u32) -> bool {
+    let this = this.addr();
+    e.with_stack(4, |e, argument| {
+        e.mem.set_u32(argument.addr(), object);
+        e.call(LOCK_ENTER, &args![this.wrapping_add(LOCK), 0u32]);
+        let map = e.call(GET_MAP, &args![this]).u32();
+        let result = e
+            .call(MAP_OPERATION_00C40680, &args![map, key, argument])
+            .u8();
+        lock_leave(e, this);
+        let held = e.mem.u32(argument.addr());
+        if held != 0 {
+            e.call(POINTER_RELEASE, &args![held]);
+        }
+        result != 0
+    })
+}
+
+// Translated from 00c3f430 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (unit `run_00c3f160`; `thiscall`, `RET 0x14`): under the
+/// object's lock (+0x20), runs `00c3ffb0` on the map (`00c3f750`) with its four words and the
+/// low byte of `flag`; answers that call's byte.
+pub fn fn_00c3f430(
+    e: &mut Engine,
+    this: Ptr,
+    bucket: u32,
+    key_low: u32,
+    key_high: u32,
+    value: u32,
+    flag: u32,
+) -> bool {
+    let this = this.addr();
+    e.call(LOCK_ENTER, &args![this.wrapping_add(LOCK), 0u32]);
+    let map = e.call(GET_MAP, &args![this]).u32();
+    let result = e
+        .call(
+            MAP_INSERT,
+            &args![map, bucket, key_low, key_high, value, flag & 0xff],
+        )
+        .u8();
+    lock_leave(e, this);
+    result != 0
+}
+
+// Translated from 00c3f4c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (unit `run_00c3f160`; `thiscall`, `RET 0xC`): as
+/// [`fn_00c3f160`] without the lock: the bucket of the 64-bit key (the map's slot `0x24`),
+/// then `00c3fe80` with it, the key and `value`; answers that call's byte.
+pub fn fn_00c3f4c0(e: &mut Engine, this: Ptr, key_low: u32, key_high: u32, value: u32) -> bool {
+    let map = e.call(GET_MAP, &args![this]).u32();
+    let object = e.mem.u32(map);
+    let bucket = e
+        .vcall(object, SLOT_BUCKET, &args![key_low, key_high])
+        .u32();
+    e.call(
+        MAP_OPERATION_00C3FE80,
+        &args![map, bucket, key_low, key_high, value],
+    )
+    .u8()
+        != 0
+}
+
+// Translated from 00c3f650 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (unit `run_00c3f160`; `thiscall`, `RET 8`): the bucket of a
+/// 64-bit key, its low word modulo the bucket count at +8 (unsigned `DIV`; a count of 0
+/// faults, as in the exe). The high word is not read.
+pub fn fn_00c3f650(e: &mut Engine, this: Ptr, key_low: u32, _unused_high: u32) -> u32 {
+    key_low % e.mem.u32(this.addr().wrapping_add(8))
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x00c3_f160, fn_00c3f160(Ptr, u32, u32, u32) -> bool),
+        entry!(0x00c3_f360, fn_00c3f360(Ptr, u32, u32) -> bool),
+        entry!(0x00c3_f430, fn_00c3f430(Ptr, u32, u32, u32, u32, u32) -> bool),
+        entry!(0x00c3_f4c0, fn_00c3f4c0(Ptr, u32, u32, u32) -> bool),
+        entry!(0x00c3_f650, fn_00c3f650(Ptr, u32, u32) -> u32),
         entry!(0x00c3_f1f0, fn_00c3f1f0(Ptr, u32, u32, u32, u32) -> bool),
         entry!(0x00c3_f2b0, fn_00c3f2b0(Ptr, u32, u32) -> bool),
         entry!(0x00c3_f530, fn_00c3f530(Ptr, u32) -> u32),
@@ -320,5 +427,114 @@ mod tests {
                 .bool();
             assert_eq!(result, expected, "{a} >= {b}");
         }
+    }
+}
+
+#[cfg(test)]
+mod n069_tests {
+    use super::*;
+
+    const MAP_VTABLE: u32 = 0x0300_5000;
+    const BUCKET_OF: u32 = 0x00ee_9000;
+
+    /// An object whose map (`00c3f750`) answers `map`; the map's object (at `map`) has a
+    /// bucket slot answering `0x40 + key_low`. The lock count starts at 1.
+    fn engine() -> (Engine, u32, u32) {
+        let mut e = Engine::new();
+        let this = e.mem.alloc(0x28);
+        e.mem.set_u32(this + LOCK_COUNT, 1);
+        let map = e.mem.alloc(4);
+        let object = e.mem.alloc(4);
+        e.mem.set_u32(map, object);
+        e.mem.set_u32(object, MAP_VTABLE);
+        e.put_vtable(MAP_VTABLE, &[0; 10]);
+        e.mem.set_u32(MAP_VTABLE + SLOT_BUCKET, BUCKET_OF);
+        e.register(BUCKET_OF, |_, a| (0x40 + a[1]).into_ret());
+        e.register(LOCK_ENTER, |e, a| {
+            let count = e.mem.u32(a[0] + 4) + 1;
+            e.mem.set_u32(a[0] + 4, count);
+            Ret::default()
+        });
+        e.register_double(GET_MAP, move |_, _| map.into_ret());
+        (e, this, map)
+    }
+
+    fn calls(e: &mut Engine, address: u32) -> Vec<Vec<u32>> {
+        e.call_log
+            .take()
+            .unwrap()
+            .into_iter()
+            .filter(|c| c.0 == address)
+            .map(|c| c.1)
+            .collect()
+    }
+
+    #[test]
+    fn locked_and_unlocked_bucket_operations() {
+        let (mut e, this, map) = engine();
+        e.register(MAP_OPERATION_00C3FE80, |_, a| {
+            (0x100 | (a[4] & 1)).into_ret()
+        });
+        e.call_log = Some(vec![]);
+        assert!(e.call(0x00c3_f160, &args![this, 3u32, 4u32, 5u32]).bool());
+        assert_eq!(
+            calls(&mut e, MAP_OPERATION_00C3FE80),
+            vec![vec![map, 0x43, 3, 4, 5]]
+        );
+        // The lock count went up and back down to 1 (the owner word stays).
+        assert_eq!(e.mem.u32(this + LOCK_COUNT), 1);
+        e.call_log = Some(vec![]);
+        assert!(!e.call(0x00c3_f4c0, &args![this, 7u32, 8u32, 6u32]).bool());
+        assert_eq!(
+            calls(&mut e, MAP_OPERATION_00C3FE80),
+            vec![vec![map, 0x47, 7, 8, 6]]
+        );
+        assert_eq!(e.mem.u32(this + LOCK_COUNT), 1);
+    }
+
+    #[test]
+    fn the_lock_is_released_to_zero() {
+        let (mut e, this, map) = engine();
+        e.mem.set_u32(this + LOCK_COUNT, 0);
+        e.mem.set_u32(this + LOCK, 0x99);
+        e.register(MAP_INSERT, |_, _| 1u32.into_ret());
+        e.call_log = Some(vec![]);
+        assert!(e
+            .call(0x00c3_f430, &args![this, 1u32, 2u32, 3u32, 4u32, 0x1ffu32])
+            .bool());
+        assert_eq!(calls(&mut e, MAP_INSERT), vec![vec![map, 1, 2, 3, 4, 0xff]]);
+        assert_eq!(e.mem.u32(this + LOCK_COUNT), 0);
+        assert_eq!(e.mem.u32(this + LOCK), 0);
+    }
+
+    #[test]
+    fn the_pointer_argument_is_released_after_the_call() {
+        let (mut e, this, map) = engine();
+        e.register(POINTER_RELEASE, |_, _| Ret::default());
+        // The operation replaces the pointer argument.
+        e.register(MAP_OPERATION_00C40680, |e, a| {
+            e.mem.set_u32(a[2], 0x77);
+            1u32.into_ret()
+        });
+        e.call_log = Some(vec![]);
+        assert!(e.call(0x00c3_f360, &args![this, 9u32, 0x55u32]).bool());
+        let log = e.call_log.take().unwrap();
+        assert!(log
+            .iter()
+            .any(|c| c.0 == MAP_OPERATION_00C40680 && c.1[..2] == [map, 9]));
+        assert!(log.contains(&(POINTER_RELEASE, vec![0x77])));
+        // A null pointer is not released.
+        e.register(MAP_OPERATION_00C40680, |_, _| 0u32.into_ret());
+        e.call_log = Some(vec![]);
+        assert!(!e.call(0x00c3_f360, &args![this, 9u32, 0u32]).bool());
+        assert!(calls(&mut e, POINTER_RELEASE).is_empty());
+    }
+
+    #[test]
+    fn the_bucket_is_the_low_word_modulo_the_count() {
+        let mut e = Engine::new();
+        let this = e.mem.alloc(0xc);
+        e.mem.set_u32(this + 8, 7);
+        assert_eq!(e.call(0x00c3_f650, &args![this, 23u32, 0xffffu32]).u32(), 2);
     }
 }

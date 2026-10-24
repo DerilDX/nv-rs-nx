@@ -186,9 +186,127 @@ pub fn ni_p_sys_modifier_bool_ctlr_update(
     });
 }
 
+use crate::units::niparticle::nipsysmodifier::add_class_name;
+
+/// `NiBoolInterpolator::NiBoolInterpolator` (`00a532d0`, `thiscall`, the
+/// pose value word) and `NiBoolInterpolator::SetPoseValue` (`00a531a0`,
+/// `thiscall`, one word).
+const BOOL_INTERPOLATOR_POSE_CONSTRUCTOR: u32 = 0x00a5_32d0;
+const BOOL_INTERPOLATOR_SET_POSE_VALUE: u32 = 0x00a5_31a0;
+/// `00653290` (unnamed): `this` when it is of kind of the `NiRTTI` record it
+/// is given, else 0 (`thiscall`, one word).
+const DYNAMIC_CAST: u32 = 0x0065_3290;
+/// The `NiRTTI` records of `NiBoolInterpolator` (`011f404c`) and of
+/// `NiPSysModifierBoolCtlr` (`012027f0`).
+const BOOL_INTERPOLATOR_RTTI: u32 = 0x011f_404c;
+const RTTI: u32 = 0x0120_27f0;
+/// `NiPSysModifierCtlr::GetViewerStrings` (`00c315b0`, `thiscall`, one
+/// word).
+const MODIFIER_CTLR_GET_VIEWER_STRINGS: u32 = 0x00c3_15b0;
+/// Interpolator vtable slot +0xa4: the bool-interpolator test (no stack
+/// words).
+const INTERPOLATOR_IS_BOOL: u32 = 0xa4;
+/// `NiPSysModifierBoolCtlr::GetTargetBoolValue` (Xbox PDB vtable slot
+/// +0xf0, the address of the value).
+const GET_TARGET_BOOL_VALUE: u32 = 0xf0;
+
+// Translated from 00c32b80 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiPSysModifierBoolCtlr::CreatePoseInterpolator` (Xbox PDB; `RET 4`,
+/// the index word is not read): the target's value (`GetTargetBoolValue`,
+/// slot +0xf0, into a stack word that starts as `this`, the pushed `ECX`),
+/// then a 0x18-byte `NiBoolInterpolator` constructed with that whole word;
+/// 0 when the allocation fails. Returns the constructor's `EAX`.
+pub fn ni_p_sys_modifier_bool_ctlr_create_pose_interpolator(
+    e: &mut Engine,
+    this: Ptr,
+    _unused_1: u32,
+) -> u32 {
+    e.with_stack(4, |e, value| {
+        e.mem.set_u32(value.addr(), this.addr());
+        e.vcall(this.addr(), GET_TARGET_BOOL_VALUE, &args![value]);
+        let block = e.call(NI_NEW, &args![0x18u32]).u32();
+        if block == 0 {
+            return 0;
+        }
+        let word = e.mem.u32(value.addr());
+        e.call(BOOL_INTERPOLATOR_POSE_CONSTRUCTOR, &args![block, word])
+            .u32()
+    })
+}
+
+// Translated from 00c32bc0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiPSysModifierBoolCtlr::InterpolatorIsCorrectType` (Xbox PDB;
+/// `thiscall`, `RET 8`): the interpolator's bool test (its slot +0xa4);
+/// `this` and the index word are not read. Returns `EAX` as the slot leaves
+/// it.
+pub fn ni_p_sys_modifier_bool_ctlr_interpolator_is_correct_type(
+    e: &mut Engine,
+    _this: Ptr,
+    interpolator: Ptr,
+    _unused_2: u32,
+) -> u32 {
+    e.vcall(interpolator.addr(), INTERPOLATOR_IS_BOOL, &args![])
+        .u32()
+}
+
+// Translated from 00c32c70 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiPSysModifierBoolCtlr::SynchronizePoseInterpolator` (Xbox PDB;
+/// `RET 8`, the index word is not read): the interpolator as an
+/// `NiBoolInterpolator` (`00653290` with `011f404c`; 0 for a null one), the
+/// target's value (slot +0xf0, into the stack word that held the
+/// interpolator argument), then `NiBoolInterpolator::SetPoseValue` on the
+/// cast (null included) with that whole word.
+pub fn ni_p_sys_modifier_bool_ctlr_synchronize_pose_interpolator(
+    e: &mut Engine,
+    this: Ptr,
+    interpolator: Ptr,
+    _unused_2: u32,
+) {
+    let bool_interpolator = if interpolator.is_null() {
+        0
+    } else {
+        e.call(DYNAMIC_CAST, &args![interpolator, BOOL_INTERPOLATOR_RTTI])
+            .u32()
+    };
+    e.with_stack(4, |e, value| {
+        e.mem.set_u32(value.addr(), interpolator.addr());
+        e.vcall(this.addr(), GET_TARGET_BOOL_VALUE, &args![value]);
+        let word = e.mem.u32(value.addr());
+        e.call(
+            BOOL_INTERPOLATOR_SET_POSE_VALUE,
+            &args![bool_interpolator, word],
+        );
+    });
+}
+
+// Translated from 00c32d30 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiPSysModifierBoolCtlr::GetViewerStrings` (Xbox PDB):
+/// `NiPSysModifierCtlr::GetViewerStrings` (`00c315b0`), then the class name
+/// (`NiRTTI` `012027f0`) appended.
+pub fn ni_p_sys_modifier_bool_ctlr_get_viewer_strings(e: &mut Engine, this: Ptr, strings: Ptr) {
+    e.call(MODIFIER_CTLR_GET_VIEWER_STRINGS, &args![this, strings]);
+    add_class_name(e, strings.addr(), RTTI);
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(
+            0x00c3_2b80,
+            ni_p_sys_modifier_bool_ctlr_create_pose_interpolator(Ptr, u32) -> u32
+        ),
+        entry!(
+            0x00c3_2bc0,
+            ni_p_sys_modifier_bool_ctlr_interpolator_is_correct_type(Ptr, Ptr, u32) -> u32
+        ),
+        entry!(
+            0x00c3_2c70,
+            ni_p_sys_modifier_bool_ctlr_synchronize_pose_interpolator(Ptr, Ptr, u32)
+        ),
+        entry!(
+            0x00c3_2d30,
+            ni_p_sys_modifier_bool_ctlr_get_viewer_strings(Ptr, Ptr)
+        ),
         entry!(
             0x00a4_fbd0,
             ni_p_sys_modifier_bool_ctlr_load_binary(Ptr, Ptr)
@@ -462,5 +580,120 @@ mod tests {
         e.call_log = Some(vec![]);
         e.call(0x00c3_2cb0, &args![this, time]);
         assert!(calls_to(&e, INTERP_UPDATE_FN).is_empty());
+    }
+}
+
+#[cfg(test)]
+mod pose_tests {
+    use super::*;
+    use crate::units::niparticle::nipsysmodifier::test_stream;
+    use crate::units::niparticle::nipsysmodifier::test_stream::calls_to;
+
+    const GET_VALUE_FN: u32 = 0x0f21_0000;
+    const INTERP_BOOL_FN: u32 = 0x0f21_0010;
+
+    /// A controller whose `GetTargetBoolValue` writes 1 into the value's low
+    /// byte, and an interpolator with the bool-test slot.
+    fn controller(e: &mut Engine) -> (u32, u32) {
+        let this = e.mem.alloc(0x40);
+        let vtable = e.mem.alloc(0x100);
+        e.mem.set_u32(this, vtable);
+        e.mem.set_u32(vtable + GET_TARGET_BOOL_VALUE, GET_VALUE_FN);
+        e.register(GET_VALUE_FN, |e, a| {
+            e.mem.set_u8(a[1], 1);
+            Ret::default()
+        });
+        let interpolator = e.mem.alloc(8);
+        let ivtable = e.mem.alloc(0x100);
+        e.mem.set_u32(interpolator, ivtable);
+        e.mem
+            .set_u32(ivtable + INTERPOLATOR_IS_BOOL, INTERP_BOOL_FN);
+        (this, interpolator)
+    }
+
+    #[test]
+    fn create_pose_interpolator_passes_the_whole_value_word() {
+        let mut e = Engine::new();
+        let (this, _) = controller(&mut e);
+        e.register(NI_NEW, |e, a| Ret {
+            eax: e.mem.alloc(a[0]),
+            ..Ret::default()
+        });
+        e.register(BOOL_INTERPOLATOR_POSE_CONSTRUCTOR, |_, a| Ret {
+            eax: a[0],
+            ..Ret::default()
+        });
+        e.call_log = Some(vec![]);
+        let made = e.call(0x00c3_2b80, &args![this, 0u32]).u32();
+        assert_ne!(made, 0);
+        assert_eq!(calls_to(&e, NI_NEW), vec![vec![0x18]]);
+        assert_eq!(
+            calls_to(&e, BOOL_INTERPOLATOR_POSE_CONSTRUCTOR),
+            vec![vec![made, (this & !0xff) | 1]]
+        );
+        e.register(NI_NEW, |_, _| Ret::default());
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x00c3_2b80, &args![this, 0u32]).u32(), 0);
+        assert!(calls_to(&e, BOOL_INTERPOLATOR_POSE_CONSTRUCTOR).is_empty());
+    }
+
+    #[test]
+    fn interpolator_is_correct_type_answers_the_bool_test() {
+        let mut e = Engine::new();
+        let (this, interpolator) = controller(&mut e);
+        e.register(INTERP_BOOL_FN, |_, _| Ret {
+            eax: 0x5600,
+            ..Ret::default()
+        });
+        e.call_log = Some(vec![]);
+        assert_eq!(
+            e.call(0x00c3_2bc0, &args![this, interpolator, 1u32]).u32(),
+            0x5600
+        );
+        assert_eq!(calls_to(&e, INTERP_BOOL_FN), vec![vec![interpolator]]);
+    }
+
+    #[test]
+    fn synchronize_pose_interpolator_sets_the_cast_pose_value() {
+        let mut e = Engine::new();
+        let (this, interpolator) = controller(&mut e);
+        e.register(DYNAMIC_CAST, |_, a| Ret {
+            eax: a[0] + 0x100,
+            ..Ret::default()
+        });
+        e.register(BOOL_INTERPOLATOR_SET_POSE_VALUE, |_, _| Ret::default());
+        e.call_log = Some(vec![]);
+        e.call(0x00c3_2c70, &args![this, interpolator, 0u32]);
+        assert_eq!(
+            calls_to(&e, DYNAMIC_CAST),
+            vec![vec![interpolator, BOOL_INTERPOLATOR_RTTI]]
+        );
+        assert_eq!(
+            calls_to(&e, BOOL_INTERPOLATOR_SET_POSE_VALUE),
+            vec![vec![interpolator + 0x100, (interpolator & !0xff) | 1]]
+        );
+        e.call_log = Some(vec![]);
+        e.call(0x00c3_2c70, &args![this, 0u32, 0u32]);
+        assert!(calls_to(&e, DYNAMIC_CAST).is_empty());
+        assert_eq!(
+            calls_to(&e, BOOL_INTERPOLATOR_SET_POSE_VALUE),
+            vec![vec![0, 1]]
+        );
+    }
+
+    #[test]
+    fn get_viewer_strings_appends_the_class_name() {
+        let mut e = Engine::new();
+        test_stream::global_word(&mut e, RTTI, 0x0abc_0003);
+        e.register(MODIFIER_CTLR_GET_VIEWER_STRINGS, |_, _| Ret::default());
+        let stored = test_stream::viewer_strings(&mut e);
+        let strings = test_stream::strings(&mut e);
+        e.call_log = Some(vec![]);
+        e.call(0x00c3_2d30, &args![0x5000u32, strings]);
+        assert_eq!(
+            calls_to(&e, MODIFIER_CTLR_GET_VIEWER_STRINGS),
+            vec![vec![0x5000, strings]]
+        );
+        assert_eq!(*stored.borrow(), vec![0x0abc_0003]);
     }
 }

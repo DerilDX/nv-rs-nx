@@ -523,9 +523,472 @@ pub fn fn_00b595b0(e: &mut Engine, this: Ptr) {
     e.call(LIST_REMOVE_ALL_00B71300, &args![base + 0xc]);
 }
 
+/// What `00b596a0` and `00b59ae0` call: `DistantLODShaderProperty::GetCachedGeometry`
+/// (engine map, `00b587c0`, `cdecl`, one word), the first map's find `00a53c30` (unnamed;
+/// `thiscall`: the key and the address of the value; a `bool` in AL) and insert `00b57ea0`
+/// (unnamed; `thiscall`: key, value), `00a5f860` (unnamed; `thiscall` on the value's +0x18,
+/// one word), and the batch functions `00bd6190` (unnamed constructor; `thiscall`: three
+/// words), `00bd5dd0` (`thiscall`, one word), `00b58570` (`thiscall` on the value's list at
+/// +0xc, one word), `00bd5d70` (`thiscall`: two words), `00bd5e40` (`thiscall`, no stack
+/// words) and `00b584e0` (`thiscall` on a value's list at +0x1c, one word).
+const CACHED_GEOMETRY_00B587C0: u32 = 0x00b5_87c0;
+const MAP_FIND_00A53C30: u32 = 0x00a5_3c30;
+const MAP_INSERT_00B57EA0: u32 = 0x00b5_7ea0;
+const VALUE_SET_00A5F860: u32 = 0x00a5_f860;
+const BATCH_CONSTRUCT_00BD6190: u32 = 0x00bd_6190;
+const BATCH_ATTACH_00BD5DD0: u32 = 0x00bd_5dd0;
+const LIST_ADD_00B58570: u32 = 0x00b5_8570;
+const BATCH_ADD_00BD5D70: u32 = 0x00bd_5d70;
+const BATCH_FINISH_00BD5E40: u32 = 0x00bd_5e40;
+const LIST_ADD_00B584E0: u32 = 0x00b5_84e0;
+/// The grid size `00b596a0` rounds positions to (`011f9654`, a signed word) and the object
+/// whose slot +0xdc it calls on a new batch (`011f9644`).
+const GRID_SIZE_011F9654: u32 = 0x011f_9654;
+const RENDERER_011F9644: u32 = 0x011f_9644;
+
+// Translated from 00b596a0 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 00b596a0 - the C++ exception frame (FS:[0] chain, unwind state 0 for the batch allocation) is not translated.
+/// Unnamed in the engine map (`run_00b595b0`), `cdecl`, four words (its one caller `00b59ae0`
+/// pushes a fourth it does not read). `position` holds two signed 16-bit halves; with the grid
+/// size `011f9654` above 1 each half is moved to the middle of its cell (`half - h % size + h`,
+/// low half kept to 16 bits, high half shifted back), else the cell is the grid size itself.
+/// Clears `*out`; with no cached geometry for `key` (`00b587c0`) answers 0. Otherwise finds the
+/// first map's value for the key's word +8 (`00a53c30`), or makes one (0x28 bytes, cleared;
+/// `00a5f860` on its +0x18 with the geometry; the key's three words copied in; inserted with
+/// `00b57ea0`). Walks the value's list at +0xc (node: next +0, item +8) for an item whose
+/// 16-bit words +0xc and +0xe differ and whose word +0x24 is the cell, stored to `*out`. With
+/// no such item (or a full one), makes a batch (0x28 bytes; `00bd6190(geometry, cell, 0)` on
+/// it, null when the allocation failed) into `*out`, counts it in `011f963c`, runs
+/// `00bd5dd0(key)` on it, adds `out` to the list (`00b58570`) and calls slot +0xdc of
+/// `011f9644` with the batch's first word and 1. Answers `*out`'s 16-bit +0xc minus +0xe.
+pub fn fn_00b596a0(e: &mut Engine, key: Ptr, position: u32, out: Ptr, _unused_3: u32) -> u32 {
+    let grid = e.global::<u32>(GRID_SIZE_011F9654);
+    let size = grid as i32;
+    let cell = if size > 1 {
+        let half = size / 2;
+        let high = (position >> 16) as u16 as i16 as i32;
+        let low = position as u16 as i16 as i32;
+        let high_cell = (position >> 16).wrapping_add(half.wrapping_sub(high % size) as u32);
+        let low_cell = half.wrapping_sub(low % size).wrapping_add(position as i32) as u32;
+        (low_cell & 0xffff) | ((high_cell & 0xffff) << 16)
+    } else {
+        grid
+    };
+    let out = out.addr();
+    e.mem.set_u32(out, 0);
+    let geometry = e.call(CACHED_GEOMETRY_00B587C0, &args![key]).u32();
+    if geometry == 0 {
+        return 0;
+    }
+    let map_key = e.mem.u32(key.addr() + 8);
+    let value = e.with_stack(4, |e, slot| {
+        e.mem.set_u32(slot.addr(), 0);
+        let map = e.call(FIRST_MAP_00B585C0, &args![]).u32();
+        let found = e.call(MAP_FIND_00A53C30, &args![map, map_key, slot]).u8() != 0;
+        if found {
+            return e.mem.u32(slot.addr());
+        }
+        let block = e
+            .call(MEMORY_ALLOCATE, &args![MEMORY_MANAGER, 0x28u32])
+            .u32();
+        if block != 0 {
+            for offset in [8u32, 4, 0, 0x14, 0xc, 0x10, 0x18, 0x24, 0x1c, 0x20] {
+                e.mem.set_u32(block + offset, 0);
+            }
+        }
+        e.call(
+            VALUE_SET_00A5F860,
+            &args![block.wrapping_add(0x18), geometry],
+        );
+        for offset in [0u32, 4, 8] {
+            let word = e.mem.u32(key.addr() + offset);
+            e.mem.set_u32(block.wrapping_add(offset), word);
+        }
+        let map_key = e.mem.u32(key.addr() + 8);
+        let map = e.call(FIRST_MAP_00B585C0, &args![]).u32();
+        e.call(MAP_INSERT_00B57EA0, &args![map, map_key, block]);
+        block
+    });
+    let list = value.wrapping_add(0xc);
+    let mut current = e.mem.u32(out);
+    if current == 0 {
+        let mut node = e.mem.u32(list);
+        while node != 0 {
+            let item = e.mem.u32(node + 8);
+            node = e.mem.u32(node);
+            if e.mem.u16(item + 0xe) != e.mem.u16(item + 0xc) && cell == e.mem.u32(item + 0x24) {
+                e.mem.set_u32(out, item);
+                break;
+            }
+            if e.mem.u32(out) != 0 {
+                break;
+            }
+        }
+        current = e.mem.u32(out);
+    }
+    if current == 0 || e.mem.u16(current + 0xc) == e.mem.u16(current + 0xe) {
+        let block = e
+            .call(MEMORY_ALLOCATE, &args![MEMORY_MANAGER, 0x28u32])
+            .u32();
+        let batch = if block != 0 {
+            e.call(
+                BATCH_CONSTRUCT_00BD6190,
+                &args![block, geometry, cell, 0u32],
+            )
+            .u32()
+        } else {
+            0
+        };
+        e.mem.set_u32(out, batch);
+        let made: u32 = e.global(CLEARED_011F963C);
+        e.set_global(CLEARED_011F963C, made.wrapping_add(1));
+        let batch = e.mem.u32(out);
+        e.call(BATCH_ATTACH_00BD5DD0, &args![batch, key]);
+        e.call(LIST_ADD_00B58570, &args![list, out]);
+        let renderer = e.global::<u32>(RENDERER_011F9644);
+        let first = e.mem.u32(e.mem.u32(out));
+        e.vcall(renderer, 0xdc, &args![first, 1u32]);
+    }
+    let batch = e.mem.u32(out);
+    u32::from(e.mem.u16(batch + 0xc)).wrapping_sub(u32::from(e.mem.u16(batch + 0xe)))
+}
+
+// Translated from 00b59ae0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`run_00b595b0`), `cdecl`, seven words. Adds the 16-bit `count`
+/// to `011f9640`. While the 16-bit count left is not 0: gets a batch with room for the
+/// position (`00b596a0(key, position, &batch, object)`; returns when there is none) and adds
+/// up to as many points as it has room for (and as are left), each the three `float`s of
+/// `points` (12 bytes apart) and the `float` of `values` (4 apart) at the running index,
+/// copied through the FPU (signalling NaNs quieted) into a local passed to `00bd5d70` with
+/// `item`; then `00bd5e40` on the batch. Last: `object`'s slot +0xbc; the first map's value for
+/// `key`'s word +8 (`00a53c30`); when `item` is not in the value's list at +0x1c (node: next
+/// +0, item +8), `00b584e0` adds it (the address of the `item` word).
+pub fn fn_00b59ae0(
+    e: &mut Engine,
+    position: u32,
+    item: u32,
+    object: u32,
+    key: Ptr,
+    points: u32,
+    values: u32,
+    count: u32,
+) {
+    let added: u32 = e.global(CLEARED_011F9640);
+    e.set_global(CLEARED_011F9640, added.wrapping_add(count & 0xffff));
+    let mut left = count;
+    let mut index = 0u32;
+    while left as u16 != 0 {
+        let (room, batch) = e.with_stack(4, |e, slot| {
+            e.mem.set_u32(slot.addr(), 0);
+            let room = fn_00b596a0(e, key, position, slot, object);
+            (room & 0xffff, e.mem.u32(slot.addr()))
+        });
+        if batch == 0 {
+            return;
+        }
+        if room as i32 > 0 {
+            let mut done = 0u32;
+            let mut point = points.wrapping_add(index.wrapping_mul(12)).wrapping_add(8);
+            while left as u16 != 0 {
+                let words = [
+                    x87_quiet_bits(e.mem.u32(point.wrapping_sub(8))),
+                    x87_quiet_bits(e.mem.u32(point.wrapping_sub(4))),
+                    x87_quiet_bits(e.mem.u32(point)),
+                    x87_quiet_bits(e.mem.u32(values.wrapping_add(index.wrapping_mul(4)))),
+                ];
+                e.with_stack(0x10, |e, local| {
+                    for (i, word) in words.iter().enumerate() {
+                        e.mem.set_u32(local.addr() + 4 * i as u32, *word);
+                    }
+                    e.call(BATCH_ADD_00BD5D70, &args![batch, local, item]);
+                });
+                done += 1;
+                left = left.wrapping_add(0xffff);
+                index = index.wrapping_add(1);
+                point = point.wrapping_add(12);
+                if done as i32 >= room as i32 {
+                    break;
+                }
+            }
+        }
+        e.call(BATCH_FINISH_00BD5E40, &args![batch]);
+    }
+    e.vcall(object, 0xbc, &args![]);
+    let map_key = e.mem.u32(key.addr() + 8);
+    let value = e.with_stack(4, |e, slot| {
+        e.mem.set_u32(slot.addr(), 0);
+        let map = e.call(FIRST_MAP_00B585C0, &args![]).u32();
+        e.call(MAP_FIND_00A53C30, &args![map, map_key, slot]);
+        e.mem.u32(slot.addr())
+    });
+    let list = value.wrapping_add(0x1c);
+    let mut node = e.mem.u32(list);
+    while node != 0 {
+        if item == e.mem.u32(node + 8) {
+            return;
+        }
+        node = e.mem.u32(node);
+    }
+    e.with_stack(4, |e, word| {
+        e.mem.set_u32(word.addr(), item);
+        e.call(LIST_ADD_00B584E0, &args![list, word]);
+    });
+}
+
+/// What `00b59d30` reads: the object at `011f9684` (its 4x4 `float` matrix at +0x9c, copied
+/// with `memcpy` `00ec44d0`, and four `float`s at +0x100 to +0x10c), the `float`s -1.0
+/// (`01012054`), 0.5 (`01016248`) and 0.3 (`01017870`), the `double` 0.5 (`01011588`) and the
+/// CRT square root `00ec6040` (argument and result in ST0).
+const VIEW_011F9684: u32 = 0x011f_9684;
+const MEMCPY_00EC44D0: u32 = 0x00ec_44d0;
+const MINUS_ONE_01012054: u32 = 0x0101_2054;
+const HALF_DOUBLE_01011588: u32 = 0x0101_1588;
+const SCALE_01017870: u32 = 0x0101_7870;
+const SQRT_00EC6040: u32 = 0x00ec_6040;
+
+// Translated from 00b59d30 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`run_00b595b0`), `cdecl`, three words: projects the point
+/// `point` (x, y, z, and a fourth `float` w) with the matrix of `011f9684` (rows of four at
+/// +0x9c: s = (row 0 . p) / |row 3 . p|, t = (row 1 . p) / |row 3 . p|; the x87 operations in
+/// the exe's order, stores to `float` where it stores). When (s, t) is inside [-1, 1] on both
+/// axes (false for NaN), or the depth (row 3 . p) is not below 0, projects the point moved by w
+/// along z as well and stores half the distance between the two projections (s, 1 - t), at
+/// most 0.5, to `*scale`; else stores 0.3 there. `out` gets
+/// `((a + b) / 2 + s (b - a) / 2, 1 - ((c + d) / 2 + t (c - d) / 2))` with a to d the four
+/// `float`s at +0x100, each clamped to [0, 1]; with the depth below 0 the first is 0 when it is
+/// at most 0 and 1 when above 0.
+pub fn fn_00b59d30(e: &mut Engine, point: Ptr, out: Ptr, scale: Ptr) {
+    let p = point.addr();
+    let x_bits = e.mem.u32(p);
+    let y_bits = e.mem.u32(p + 4);
+    let z_bits = e.mem.u32(p + 8);
+    let view = e.global::<u32>(VIEW_011F9684);
+    let a_bits = e.mem.u32(view + 0x100);
+    let b_bits = e.mem.u32(view + 0x104);
+    let c_bits = e.mem.u32(view + 0x108);
+    let d_bits = e.mem.u32(view + 0x10c);
+    let m: Vec<u32> = e.with_stack(0x40, |e, local| {
+        e.call(MEMCPY_00EC44D0, &args![local, view + 0x9c, 0x40u32]);
+        (0..16).map(|i| e.mem.u32(local.addr() + 4 * i)).collect()
+    });
+    let ld = x87_load32;
+    let y = ld(y_bits);
+    let m13y = x87_mul(ld(m[13]), y);
+    let x = ld(x_bits);
+    let m12x = x87_mul(ld(m[12]), x);
+    let depth_xy = x87_add(m12x, m13y);
+    let z = ld(z_bits);
+    let m14z = x87_mul(ld(m[14]), z);
+    let depth = x87_add(x87_add(depth_xy, m14z), ld(m[15]));
+    let depth_bits = x87_store32(depth);
+    let below = ld(depth_bits) < 0.0;
+    let abs_bits = x87_store32(ld(depth_bits).abs());
+    let inverse_bits = x87_store32(x87_div(1.0, ld(abs_bits)));
+    let inverse = ld(inverse_bits);
+    let row0_xy = x87_add(x87_mul(ld(m[1]), y), x87_mul(ld(m[0]), x));
+    let row0 = x87_add(x87_add(x87_mul(ld(m[2]), z), row0_xy), x87_m32(m[3]));
+    let row0_bits = x87_store32(row0);
+    let s_bits = x87_store32(x87_mul(ld(row0_bits), inverse));
+    let m5y = x87_mul(y, ld(m[5]));
+    let m4x = x87_mul(x, ld(m[4]));
+    let row1_xy = x87_add(m4x, m5y);
+    let row1 = x87_add(x87_add(x87_mul(ld(m[6]), z), row1_xy), x87_m32(m[7]));
+    let row1_bits = x87_store32(row1);
+    let t_bits = x87_store32(x87_mul(inverse, ld(row1_bits)));
+    let minus_one = ld(e.global::<u32>(MINUS_ONE_01012054));
+    let s = ld(s_bits);
+    let t = ld(t_bits);
+    let half = x87_load64(e.global::<u64>(HALF_DOUBLE_01011588));
+    let inside = s >= minus_one && 1.0 >= s && minus_one <= t && 1.0 >= t;
+    if inside || !below {
+        let z2_bits = x87_store32(x87_add(z, ld(e.mem.u32(p + 0xc))));
+        let z2 = ld(z2_bits);
+        let depth2 = x87_add(x87_mul(ld(m[14]), z2), depth_xy);
+        let depth2_bits = x87_store32(x87_add(depth2, x87_m32(m[15])));
+        let q_bits = x87_store32(x87_sub(1.0, t));
+        let row0_2 = x87_add(row0_xy, x87_mul(ld(m[2]), z2));
+        let row0_2_bits = x87_store32(x87_add(row0_2, ld(m[3])));
+        let depth2 = ld(depth2_bits);
+        let s2_bits = x87_store32(x87_div(ld(row0_2_bits), depth2));
+        let row1_2 = x87_add(row1_xy, x87_mul(z2, ld(m[6])));
+        let row1_2_bits = x87_store32(x87_add(row1_2, ld(m[7])));
+        let t2_bits = x87_store32(x87_div(ld(row1_2_bits), depth2));
+        let q2_bits = x87_store32(x87_sub(1.0, ld(t2_bits)));
+        let ds_bits = x87_store32(x87_sub(s, x87_m32(s2_bits)));
+        let dq_bits = x87_store32(x87_sub(ld(q_bits), x87_m32(q2_bits)));
+        let dq = ld(dq_bits);
+        let ds = ld(ds_bits);
+        let sum_bits = x87_store32(x87_add(x87_mul(dq, dq), x87_mul(ds, ds)));
+        let root = e.call(SQRT_00EC6040, &args![ld(sum_bits)]).f64();
+        let root_bits = x87_store32(root);
+        let scaled_bits = x87_store32(x87_mul(ld(root_bits), half));
+        let scaled = ld(scaled_bits);
+        e.mem.set_u32(scale.addr(), x87_store32(scaled));
+        let limit = ld(e.global::<u32>(HALF_01016248));
+        if limit < scaled {
+            e.mem.set_u32(scale.addr(), x87_store32(limit));
+        }
+    } else {
+        let fallback = ld(e.global::<u32>(SCALE_01017870));
+        e.mem.set_u32(scale.addr(), x87_store32(fallback));
+    }
+    let a = ld(a_bits);
+    let b = ld(b_bits);
+    let x1_bits = x87_store32(x87_mul(s, x87_mul(x87_sub(b, a), half)));
+    let u = x87_add(ld(x1_bits), x87_mul(x87_add(b, a), half));
+    let mut u_bits = x87_store32(u);
+    let c = ld(c_bits);
+    let d = ld(d_bits);
+    let y1_bits = x87_store32(x87_mul(t, x87_mul(x87_sub(c, d), half)));
+    let v = x87_add(x87_mul(half, x87_add(c, d)), ld(y1_bits));
+    let v_bits = x87_store32(v);
+    let mut q_bits = x87_store32(x87_sub(1.0, x87_m32(v_bits)));
+    let u = ld(u_bits);
+    let clamped_u = if u > 1.0 {
+        u_bits = x87_store32(1.0);
+        1.0
+    } else if 0.0 > u {
+        u_bits = x87_store32(0.0);
+        0.0
+    } else {
+        u
+    };
+    let q = ld(q_bits);
+    if q > 1.0 {
+        q_bits = x87_store32(1.0);
+    } else if q < 0.0 {
+        q_bits = x87_store32(0.0);
+    }
+    let first = if below {
+        if clamped_u <= 0.0 {
+            x87_store32(0.0)
+        } else if clamped_u > 0.0 {
+            x87_store32(1.0)
+        } else {
+            u_bits
+        }
+    } else {
+        u_bits
+    };
+    e.mem.set_u32(out.addr(), first);
+    e.mem.set_u32(out.addr() + 4, q_bits);
+}
+
+/// `ImageSpaceShaderParam::SetPixelConstant`'s callers here pass the floats of `011f917c`
+/// (+0xec, +0xf0: two `float`s of the object there).
+const CAMERA_011F917C: u32 = 0x011f_917c;
+
+/// `ImageSpaceShaderParam::SetPixelConstant(index, ...)` on `param` with the four `float`s at
+/// `object + offsets` (each through `FLD`/`FSTP`, a signalling NaN quieted).
+fn set_constant_from(e: &mut Engine, param: u32, index: u32, object: u32, offsets: [u32; 4]) {
+    let words = offsets.map(|offset| x87_quiet_bits(e.mem.u32(object + offset)));
+    e.call(
+        PARAM_SET_PIXEL_CONSTANT_00B8A790,
+        &args![param, index, words[0], words[1], words[2], words[3]],
+    );
+}
+
+// Translated from 00b5a220 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`run_00b595b0`): the `UpdateParams` slot of the effect
+/// `00b5a590` builds, `thiscall`, one word it does not read. With n and f the `float`s +0xec
+/// and +0xf0 of the object at `011f917c`, stores n to +0x60, f - n to +0x64 and n * f to
+/// +0x68; effect parameter 1 takes pixel constants 0 (+0x7c to +0x88), 1 (+0x6c to +0x78) and 2
+/// (+0x5c to +0x68); parameter 0 takes constant 0 (+0x8c, +0x90, +0x94, 0.0) and constant 1
+/// (0.5, 0.5, 0.0, 0.0; the 0.5 from `01016248`). Answers true.
+pub fn fn_00b5a220(e: &mut Engine, this: Ptr, _unused_0: u32) -> bool {
+    let base = this.addr();
+    let second = e.mem.u32(e.mem.u32(base + 0x1c) + 4);
+    let camera = e.global::<u32>(CAMERA_011F917C);
+    let near_bits = x87_quiet_bits(e.mem.u32(camera + 0xec));
+    let far_bits = x87_quiet_bits(e.mem.u32(camera + 0xf0));
+    let near = x87_load32(near_bits);
+    let far = x87_load32(far_bits);
+    e.mem.set_u32(base + 0x60, x87_store32(near));
+    e.mem.set_u32(base + 0x64, x87_store32(x87_sub(far, near)));
+    e.mem.set_u32(base + 0x68, x87_store32(x87_mul(near, far)));
+    set_constant_from(e, second, 0, base, [0x7c, 0x80, 0x84, 0x88]);
+    set_constant_from(e, second, 1, base, [0x6c, 0x70, 0x74, 0x78]);
+    set_constant_from(e, second, 2, base, [0x5c, 0x60, 0x64, 0x68]);
+    let first = e.mem.u32(e.mem.u32(base + 0x1c));
+    let words = [0x8cu32, 0x90, 0x94].map(|offset| x87_quiet_bits(e.mem.u32(base + offset)));
+    e.call(
+        PARAM_SET_PIXEL_CONSTANT_00B8A790,
+        &args![first, 0u32, words[0], words[1], words[2], 0u32],
+    );
+    let half = x87_quiet_bits(e.global::<u32>(HALF_01016248));
+    e.call(
+        PARAM_SET_PIXEL_CONSTANT_00B8A790,
+        &args![first, 1u32, half, half, 0u32, 0u32],
+    );
+    true
+}
+
+/// `ImageSpaceTexture::BorrowRenderedTexture` (engine map, `00ba3840`; `thiscall`, one word),
+/// `ImageSpaceTexture::ReturnRenderedTexture` (engine map, `00ba39a0`; `thiscall`, no stack
+/// words), the texture setter `00ba37f0` (unit `imagespacetexture.cpp`, unnamed; `thiscall`,
+/// one word) and `00b54090` (unit `bsshadermanager.cpp`, unnamed, no arguments: a texture of
+/// the shader manager).
+const BORROW_RENDERED_TEXTURE_00BA3840: u32 = 0x00ba_3840;
+const RETURN_RENDERED_TEXTURE_00BA39A0: u32 = 0x00ba_39a0;
+const TEXTURE_SET_00BA37F0: u32 = 0x00ba_37f0;
+const MANAGER_TEXTURE_00B54090: u32 = 0x00b5_4090;
+
+// Translated from 00b5a340 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`run_00b595b0`; Ghidra made no function of it): slot 4 of the
+/// vtable `010adc68` (the effect `00b5a590` builds), `thiscall`, one word it does not read.
+/// Borrows a rendered texture of kind 0x28 into the texture at +0xb4 (`00ba3840`) and makes it
+/// texture 2 of the array at +0x28; sets the texture at +0xc4 from `00b54090` (`00ba37f0`) and
+/// makes it texture 3.
+pub fn fn_00b5a340(e: &mut Engine, this: Ptr, _unused_0: u32) {
+    let base = this.addr();
+    e.call(
+        BORROW_RENDERED_TEXTURE_00BA3840,
+        &args![base + 0xb4, 0x28u32],
+    );
+    set_at(e, base + 0x28, 2, base + 0xb4);
+    let texture = e.call(MANAGER_TEXTURE_00B54090, &args![]).u32();
+    e.call(TEXTURE_SET_00BA37F0, &args![base + 0xc4, texture]);
+    set_at(e, base + 0x28, 3, base + 0xc4);
+}
+
+// Translated from 00b5a3a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`run_00b595b0`; Ghidra made no function of it): slot 5 of the
+/// vtable `010adc68`, `thiscall`, no stack words. Returns texture 2 of `pTextures` (+0x2c
+/// elements) (`00ba39a0`) and sets textures 2 and 3 of the array at +0x28 to null.
+pub fn fn_00b5a3a0(e: &mut Engine, this: Ptr) {
+    let base = this.addr();
+    let texture = e.mem.u32(e.mem.u32(base + 0x2c) + 8);
+    e.call(RETURN_RENDERED_TEXTURE_00BA39A0, &args![texture]);
+    set_at(e, base + 0x28, 2, 0);
+    set_at(e, base + 0x28, 3, 0);
+}
+
+// Translated from 00b5a8c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`run_00b595b0`): an empty `thiscall` (`RET 0x18`) with six stack
+/// words it does not read, in the vtables at `010ec018`, `010ec0f8`, `010ec188` and `010cc8a8`
+/// and called from `005bb8c0`.
+pub fn fn_00b5a8c0(
+    _e: &mut Engine,
+    _this: Ptr,
+    _unused_0: u32,
+    _unused_1: u32,
+    _unused_2: u32,
+    _unused_3: u32,
+    _unused_4: u32,
+    _unused_5: u32,
+) {
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x00b5_96a0, fn_00b596a0(Ptr, u32, Ptr, u32) -> u32),
+        entry!(0x00b5_9ae0, fn_00b59ae0(u32, u32, u32, Ptr, u32, u32, u32)),
+        entry!(0x00b5_9d30, fn_00b59d30(Ptr, Ptr, Ptr)),
+        entry!(0x00b5_a220, fn_00b5a220(Ptr, u32) -> bool),
+        entry!(0x00b5_a340, fn_00b5a340(Ptr, u32)),
+        entry!(0x00b5_a3a0, fn_00b5a3a0(Ptr)),
+        entry!(0x00b5_a8c0, fn_00b5a8c0(Ptr, u32, u32, u32, u32, u32, u32)),
         entry!(0x00b5_a410, fn_00b5a410(Ptr) -> Ptr),
         entry!(0x00b5_a590, fn_00b5a590(Ptr) -> Ptr),
         entry!(0x00b5_9890, fn_00b59890()),
@@ -1060,5 +1523,462 @@ mod map_tests {
         assert_eq!(e.mem.u32(later + 4), 1);
         assert_eq!(e.mem.u32(this + 0x18), later);
         assert!(calls(&e, REFERENCE_DELETE).is_empty());
+    }
+}
+
+#[cfg(test)]
+mod n070_tests {
+    use super::*;
+
+    fn calls(e: &Engine, addr: u32) -> Vec<Vec<u32>> {
+        e.call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|(a, _)| *a == addr)
+            .map(|(_, w)| w.clone())
+            .collect()
+    }
+
+    const MAP: u32 = 0x0e10_0000;
+    const RENDERER_VTABLE: u32 = 0x0e11_0000;
+    const RENDERER_SLOT: u32 = 0x0e12_0000;
+    const OBJECT_SLOT: u32 = 0x0e13_0000;
+
+    /// Doubles for every callee of `00b596a0`: the cached geometry is `geometry`, the map finds
+    /// nothing, new batches have room 3 (+0xc 3, +0xe 0) and first word 0x77.
+    fn batch_rig(geometry: u32, grid: u32) -> Engine {
+        let mut e = Engine::new();
+        e.map(0x011f_9000, 0x1000);
+        e.set_global(GRID_SIZE_011F9654, grid);
+        e.mem.map(MAP, 0x100);
+        e.register_double(CACHED_GEOMETRY_00B587C0, move |_, _| geometry.into_ret());
+        e.register(FIRST_MAP_00B585C0, |_, _| MAP.into_ret());
+        e.register(MAP_FIND_00A53C30, |_, _| 0u32.into_ret());
+        e.register(MEMORY_ALLOCATE, |e, a| e.mem.alloc(a[1]).into_ret());
+        for target in [
+            VALUE_SET_00A5F860,
+            MAP_INSERT_00B57EA0,
+            BATCH_ATTACH_00BD5DD0,
+            LIST_ADD_00B58570,
+            RENDERER_SLOT,
+        ] {
+            e.register(target, |_, _| Ret::default());
+        }
+        e.register(BATCH_CONSTRUCT_00BD6190, |e, a| {
+            e.mem.set_u32(a[0], 0x77);
+            e.mem.set_u16(a[0] + 0xc, 3);
+            e.mem.set_u16(a[0] + 0xe, 0);
+            a[0].into_ret()
+        });
+        let renderer = e.mem.alloc(4);
+        e.mem.set_u32(renderer, RENDERER_VTABLE);
+        e.mem.map(RENDERER_VTABLE, 0x100);
+        e.mem.set_u32(RENDERER_VTABLE + 0xdc, RENDERER_SLOT);
+        e.set_global(RENDERER_011F9644, renderer);
+        e.call_log = Some(vec![]);
+        e
+    }
+
+    /// The map finds `value`.
+    fn finds(e: &mut Engine, value: u32) {
+        e.register_double(MAP_FIND_00A53C30, move |e, a| {
+            e.mem.set_u32(a[2], value);
+            1u32.into_ret()
+        });
+    }
+
+    fn key(e: &mut Engine) -> u32 {
+        let key = e.mem.alloc(0xc);
+        for (i, word) in [0x11u32, 0x22, 0x33].iter().enumerate() {
+            e.mem.set_u32(key + 4 * i as u32, *word);
+        }
+        key
+    }
+
+    /// A batch of `cell` with the 16-bit words +0xc and +0xe.
+    fn batch(e: &mut Engine, cell: u32, size: u16, used: u16) -> u32 {
+        let batch = e.mem.alloc(0x28);
+        e.mem.set_u16(batch + 0xc, size);
+        e.mem.set_u16(batch + 0xe, used);
+        e.mem.set_u32(batch + 0x24, cell);
+        batch
+    }
+
+    /// A list (node: next +0, item +8) of `items` at `slot`.
+    fn list(e: &mut Engine, slot: u32, items: &[u32]) {
+        let mut next = 0;
+        for item in items.iter().rev() {
+            let node = e.mem.alloc(0xc);
+            e.mem.set_u32(node, next);
+            e.mem.set_u32(node + 8, *item);
+            next = node;
+        }
+        e.mem.set_u32(slot, next);
+    }
+
+    #[test]
+    fn fn_00b596a0_without_geometry_answers_zero() {
+        let mut e = batch_rig(0, 4);
+        let key = key(&mut e);
+        let out = e.mem.alloc(4);
+        e.mem.set_u32(out, 0x1234);
+        assert_eq!(e.call(0x00b5_96a0, &args![key, 0u32, out, 0u32]).u32(), 0);
+        assert_eq!(e.mem.u32(out), 0);
+        assert!(calls(&e, FIRST_MAP_00B585C0).is_empty());
+    }
+
+    #[test]
+    fn fn_00b596a0_reuses_an_item_of_the_cell() {
+        let mut e = batch_rig(0x500, 4);
+        // Grid 4, position (high 5, low -3): cell (6, 2).
+        let cell = 0x0006_0002u32;
+        let full = batch(&mut e, cell, 2, 2);
+        let other = batch(&mut e, 0x0006_0006, 5, 1);
+        let roomy = batch(&mut e, cell, 5, 1);
+        let value = e.mem.alloc(0x28);
+        list(&mut e, value + 0xc, &[full, other, roomy]);
+        finds(&mut e, value);
+        let key = key(&mut e);
+        let out = e.mem.alloc(4);
+        let position = 0x0005_fffdu32;
+        assert_eq!(
+            e.call(0x00b5_96a0, &args![key, position, out, 0u32]).u32(),
+            4
+        );
+        assert_eq!(e.mem.u32(out), roomy);
+        assert_eq!(calls(&e, MAP_FIND_00A53C30)[0][1], 0x33);
+        assert!(calls(&e, MEMORY_ALLOCATE).is_empty());
+        assert!(calls(&e, RENDERER_SLOT).is_empty());
+    }
+
+    #[test]
+    fn fn_00b596a0_makes_the_value_and_a_batch() {
+        // Grid 1: the cell is the grid word itself.
+        let mut e = batch_rig(0x500, 1);
+        let key = key(&mut e);
+        let out = e.mem.alloc(4);
+        e.set_global(CLEARED_011F963C, 7u32);
+        assert_eq!(
+            e.call(0x00b5_96a0, &args![key, 0x0009_0009u32, out, 0u32])
+                .u32(),
+            3
+        );
+        assert_eq!(calls(&e, MEMORY_ALLOCATE).len(), 2);
+        let insert = &calls(&e, MAP_INSERT_00B57EA0)[0];
+        let value = insert[2];
+        assert_eq!(insert[1], 0x33);
+        assert_eq!(e.mem.u32(value), 0x11);
+        assert_eq!(e.mem.u32(value + 8), 0x33);
+        assert_eq!(
+            calls(&e, VALUE_SET_00A5F860),
+            vec![vec![value + 0x18, 0x500]]
+        );
+        let batch = e.mem.u32(out);
+        assert_eq!(
+            calls(&e, BATCH_CONSTRUCT_00BD6190),
+            vec![vec![batch, 0x500, 1, 0]]
+        );
+        assert_eq!(e.global::<u32>(CLEARED_011F963C), 8);
+        assert_eq!(calls(&e, BATCH_ATTACH_00BD5DD0), vec![vec![batch, key]]);
+        assert_eq!(calls(&e, LIST_ADD_00B58570), vec![vec![value + 0xc, out]]);
+        assert_eq!(calls(&e, RENDERER_SLOT)[0][1..], [0x77, 1]);
+    }
+
+    #[test]
+    fn fn_00b596a0_replaces_a_full_batch() {
+        let mut e = batch_rig(0x500, 1);
+        let full = batch(&mut e, 1, 4, 4);
+        let value = e.mem.alloc(0x28);
+        list(&mut e, value + 0xc, &[full]);
+        finds(&mut e, value);
+        let key = key(&mut e);
+        let out = e.mem.alloc(4);
+        assert_eq!(e.call(0x00b5_96a0, &args![key, 0u32, out, 0u32]).u32(), 3);
+        assert_ne!(e.mem.u32(out), full);
+        assert_eq!(calls(&e, MEMORY_ALLOCATE).len(), 1);
+    }
+
+    /// `00b59ae0`'s rig: the map finds a value whose list holds one batch of cell 1 with room
+    /// `room`; the object's slot +0xbc is `OBJECT_SLOT`.
+    fn points_rig(room: u16) -> (Engine, u32, u32, u32) {
+        let mut e = batch_rig(0x500, 1);
+        let batch = batch(&mut e, 1, room, 0);
+        let value = e.mem.alloc(0x28);
+        list(&mut e, value + 0xc, &[batch]);
+        finds(&mut e, value);
+        for target in [
+            BATCH_ADD_00BD5D70,
+            BATCH_FINISH_00BD5E40,
+            LIST_ADD_00B584E0,
+            OBJECT_SLOT,
+        ] {
+            e.register(target, |_, _| Ret::default());
+        }
+        let vtable = e.mem.alloc(0x100);
+        e.mem.set_u32(vtable + 0xbc, OBJECT_SLOT);
+        let object = e.mem.alloc(4);
+        e.mem.set_u32(object, vtable);
+        (e, value, batch, object)
+    }
+
+    #[test]
+    fn fn_00b59ae0_adds_points_and_the_item() {
+        let (mut e, value, batch, object) = points_rig(5);
+        let key = key(&mut e);
+        let points = e.mem.alloc(24);
+        for (i, v) in [1.0f32, 2.0, 3.0, 4.0, 5.0, 6.0].iter().enumerate() {
+            e.mem.set_f32(points + 4 * i as u32, *v);
+        }
+        let values = e.mem.alloc(8);
+        e.mem.set_f32(values, 7.0);
+        e.mem.set_f32(values + 4, 8.0);
+        e.register_double(BATCH_ADD_00BD5D70, |e, a| {
+            let first = e.mem.u32(a[1]);
+            let last = e.mem.u32(a[1] + 12);
+            e.mem.set_u32(0x011f_9f00, first);
+            e.mem.set_u32(0x011f_9f04, last);
+            Ret::default()
+        });
+        e.set_global(CLEARED_011F9640, 1u32);
+        e.call(
+            0x00b5_9ae0,
+            &args![0u32, 0x99u32, object, key, points, values, 0x0001_0002u32],
+        );
+        assert_eq!(e.global::<u32>(CLEARED_011F9640), 3);
+        let adds = calls(&e, BATCH_ADD_00BD5D70);
+        assert_eq!(adds.len(), 2);
+        assert!(adds.iter().all(|a| a[0] == batch && a[2] == 0x99));
+        // The last point added: x of point 1 and value 1.
+        assert_eq!(e.mem.f32(0x011f_9f00), 4.0);
+        assert_eq!(e.mem.f32(0x011f_9f04), 8.0);
+        assert_eq!(calls(&e, BATCH_FINISH_00BD5E40), vec![vec![batch]]);
+        assert_eq!(calls(&e, OBJECT_SLOT), vec![vec![object]]);
+        // The item is not in the value's list at +0x1c: added.
+        assert_eq!(calls(&e, LIST_ADD_00B584E0)[0][0], value + 0x1c);
+    }
+
+    #[test]
+    fn fn_00b59ae0_quiets_values_and_skips_a_listed_item() {
+        let (mut e, value, _, object) = points_rig(5);
+        let key = key(&mut e);
+        let points = e.mem.alloc(12);
+        let values = e.mem.alloc(4);
+        e.mem.set_u32(values, 0x7f80_0001);
+        e.register_double(BATCH_ADD_00BD5D70, |e, a| {
+            let word = e.mem.u32(a[1] + 12);
+            e.mem.set_u32(0x011f_9f04, word);
+            Ret::default()
+        });
+        list(&mut e, value + 0x1c, &[0x98, 0x99]);
+        e.call(
+            0x00b5_9ae0,
+            &args![0u32, 0x99u32, object, key, points, values, 1u32],
+        );
+        assert_eq!(e.mem.u32(0x011f_9f04), 0x7fc0_0001);
+        assert!(calls(&e, LIST_ADD_00B584E0).is_empty());
+    }
+
+    #[test]
+    fn fn_00b59ae0_stops_without_a_batch() {
+        let mut e = batch_rig(0, 1);
+        let key = key(&mut e);
+        e.call(0x00b5_9ae0, &args![0u32, 0u32, 0u32, key, 0u32, 0u32, 3u32]);
+        assert!(calls(&e, BATCH_FINISH_00BD5E40).is_empty());
+        assert_eq!(e.global::<u32>(CLEARED_011F9640), 3);
+    }
+
+    /// A view at `011f9684` with the identity matrix but row 3 = (0, 0, 0, depth), the four
+    /// `float`s and the constants; `memcpy` and the square root doubled.
+    fn view_rig(depth: f32, corners: [f32; 4]) -> Engine {
+        let mut e = Engine::new();
+        for page in [
+            0x011f_9000u32,
+            0x0101_1000,
+            0x0101_2000,
+            0x0101_6000,
+            0x0101_7000,
+        ] {
+            e.map(page, 0x1000);
+        }
+        e.set_global(MINUS_ONE_01012054, -1.0f32);
+        e.set_global(HALF_DOUBLE_01011588, 0.5f64);
+        e.set_global(HALF_01016248, 0.5f32);
+        e.set_global(SCALE_01017870, 0.3f32);
+        let view = e.mem.alloc(0x110);
+        let matrix = [
+            1.0f32, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, depth,
+        ];
+        for (i, v) in matrix.iter().enumerate() {
+            e.mem.set_f32(view + 0x9c + 4 * i as u32, *v);
+        }
+        for (i, v) in corners.iter().enumerate() {
+            e.mem.set_f32(view + 0x100 + 4 * i as u32, *v);
+        }
+        e.set_global(VIEW_011F9684, view);
+        e.register(MEMCPY_00EC44D0, |e, a| {
+            let bytes = e.mem.bytes(a[1], a[2]);
+            e.mem.write(a[0], &bytes);
+            a[0].into_ret()
+        });
+        e.register(SQRT_00EC6040, |_, a| Ret {
+            st0: f64::from_bits(u64::from(a[0]) | u64::from(a[1]) << 32).sqrt(),
+            ..Ret::default()
+        });
+        e
+    }
+
+    fn project(e: &mut Engine, point: [f32; 4]) -> (f32, f32, f32) {
+        let p = e.mem.alloc(16);
+        for (i, v) in point.iter().enumerate() {
+            e.mem.set_f32(p + 4 * i as u32, *v);
+        }
+        let out = e.mem.alloc(8);
+        let scale = e.mem.alloc(4);
+        e.call(0x00b5_9d30, &args![p, out, scale]);
+        (e.mem.f32(out), e.mem.f32(out + 4), e.mem.f32(scale))
+    }
+
+    #[test]
+    fn fn_00b59d30_projects_inside_the_view() {
+        // a, b = 0, 1 and c, d = 1, 0: u = (1 + s) / 2 and v = 1 - (1 + t) / 2.
+        let mut e = view_rig(1.0, [0.0, 1.0, 1.0, 0.0]);
+        // Depth 1: s = 0.5, t = -0.5; the second point (z + 0.5) projects the same.
+        let (u, v, scale) = project(&mut e, [0.5, -0.5, 0.0, 0.5]);
+        assert_eq!(u, 0.75);
+        assert_eq!(v, 0.75);
+        assert_eq!(scale, 0.0);
+        // With z in row 0 (m[2] = 1) the second projection moves by w.
+        let view = e.global::<u32>(VIEW_011F9684);
+        e.mem.set_f32(view + 0x9c + 8, 1.0);
+        let (_, _, scale) = project(&mut e, [0.0, 0.0, 0.0, 0.5]);
+        assert_eq!(scale, 0.25);
+        // A large move is capped at 0.5.
+        let (_, _, scale) = project(&mut e, [0.0, 0.0, 0.0, 4.0]);
+        assert_eq!(scale, 0.5);
+    }
+
+    #[test]
+    fn fn_00b59d30_behind_and_outside_uses_point_three_and_snaps() {
+        let mut e = view_rig(-1.0, [0.0, 1.0, 1.0, 0.0]);
+        // Depth -1, s = 2 (outside): 0.3; u (1.5, clamped to 1) is above 0: 1.
+        let (u, v, scale) = project(&mut e, [2.0, 0.0, 0.0, 0.0]);
+        assert_eq!(scale, 0.3);
+        assert_eq!(u, 1.0);
+        assert_eq!(v, 0.5);
+        // s = -3: u = -1, clamped to 0, at most 0: 0.
+        let (u, _, _) = project(&mut e, [-3.0, 0.0, 0.0, 0.0]);
+        assert_eq!(u, 0.0);
+        // Behind but inside: the second projection divides by the signed depth (-1), so
+        // s2 = -0.5 and the scale is half of 1.
+        let (u, _, scale) = project(&mut e, [0.5, 0.0, 0.0, 0.0]);
+        assert_eq!(u, 1.0);
+        assert_eq!(scale, 0.5);
+    }
+
+    #[test]
+    fn fn_00b59d30_clamps_in_front() {
+        let mut e = view_rig(1.0, [0.0, 1.0, 1.0, 0.0]);
+        // s = 3, t = -3: outside but in front: u clamped to 1, v to 1.
+        let (u, v, _) = project(&mut e, [3.0, -3.0, 0.0, 0.0]);
+        assert_eq!(u, 1.0);
+        assert_eq!(v, 1.0);
+        let (u, v, _) = project(&mut e, [-3.0, 3.0, 0.0, 0.0]);
+        assert_eq!(u, 0.0);
+        assert_eq!(v, 0.0);
+    }
+
+    #[test]
+    fn fn_00b5a220_sets_the_constants() {
+        let mut e = Engine::new();
+        e.map(0x011f_9000, 0x1000);
+        e.map(0x0101_6000, 0x1000);
+        e.set_global(HALF_01016248, 0.5f32);
+        let camera = e.mem.alloc(0x100);
+        e.mem.set_f32(camera + 0xec, 2.0);
+        e.mem.set_f32(camera + 0xf0, 10.0);
+        e.set_global(CAMERA_011F917C, camera);
+        let this = e.mem.alloc(0xa0);
+        let params = e.mem.alloc(8);
+        e.mem.set_u32(params, 0x100);
+        e.mem.set_u32(params + 4, 0x200);
+        e.mem.set_u32(this + 0x1c, params);
+        for i in 0..16u32 {
+            e.mem.set_f32(this + 0x5c + 4 * i, i as f32);
+        }
+        e.mem.set_u32(this + 0x8c, 0x7f80_0001);
+        e.register(PARAM_SET_PIXEL_CONSTANT_00B8A790, |_, _| Ret::default());
+        e.call_log = Some(vec![]);
+        assert!(e.call(0x00b5_a220, &args![this, 0u32]).bool());
+        assert_eq!(e.mem.f32(this + 0x60), 2.0);
+        assert_eq!(e.mem.f32(this + 0x64), 8.0);
+        assert_eq!(e.mem.f32(this + 0x68), 20.0);
+        let f = |v: f32| v.to_bits();
+        assert_eq!(
+            calls(&e, PARAM_SET_PIXEL_CONSTANT_00B8A790),
+            vec![
+                vec![0x200, 0, f(8.0), f(9.0), f(10.0), f(11.0)],
+                vec![0x200, 1, f(4.0), f(5.0), f(6.0), f(7.0)],
+                vec![0x200, 2, f(0.0), f(2.0), f(8.0), f(20.0)],
+                vec![0x100, 0, 0x7fc0_0001, f(13.0), f(14.0), 0],
+                vec![0x100, 1, f(0.5), f(0.5), 0, 0],
+            ]
+        );
+    }
+
+    #[test]
+    fn fn_00b5a340_and_00b5a3a0_borrow_and_return_textures() {
+        let mut e = Engine::new();
+        let this = e.mem.alloc(0xd4);
+        let textures = e.mem.alloc(0x10);
+        e.mem.set_u32(textures + 8, 0x4242);
+        e.mem.set_u32(this + 0x2c, textures);
+        for target in [
+            BORROW_RENDERED_TEXTURE_00BA3840,
+            RETURN_RENDERED_TEXTURE_00BA39A0,
+            TEXTURE_SET_00BA37F0,
+        ] {
+            e.register(target, |_, _| Ret::default());
+        }
+        e.register(MANAGER_TEXTURE_00B54090, |_, _| 0x5150u32.into_ret());
+        e.mem.map(0x0e20_0000, 0x10);
+        e.register(ARRAY_SET_AT_00BA3AA0, |e, a| {
+            let word = e.mem.u32(a[2]);
+            e.mem.set_u32(0x0e20_0000 + 4 * a[1], word);
+            Ret::default()
+        });
+        e.call_log = Some(vec![]);
+        e.call(0x00b5_a340, &args![this, 0u32]);
+        assert_eq!(
+            calls(&e, BORROW_RENDERED_TEXTURE_00BA3840),
+            vec![vec![this + 0xb4, 0x28]]
+        );
+        assert_eq!(
+            calls(&e, TEXTURE_SET_00BA37F0),
+            vec![vec![this + 0xc4, 0x5150]]
+        );
+        assert_eq!(e.mem.u32(0x0e20_0008), this + 0xb4);
+        assert_eq!(e.mem.u32(0x0e20_000c), this + 0xc4);
+        e.call(0x00b5_a3a0, &args![this]);
+        assert_eq!(
+            calls(&e, RETURN_RENDERED_TEXTURE_00BA39A0),
+            vec![vec![0x4242]]
+        );
+        assert_eq!(e.mem.u32(0x0e20_0008), 0);
+        assert_eq!(e.mem.u32(0x0e20_000c), 0);
+        let sets = calls(&e, ARRAY_SET_AT_00BA3AA0);
+        assert_eq!(sets.len(), 4);
+        assert!(sets.iter().all(|a| a[0] == this + 0x28));
+    }
+
+    #[test]
+    fn fn_00b5a8c0_does_nothing() {
+        let mut e = Engine::new();
+        e.call_log = Some(vec![]);
+        e.call(
+            0x00b5_a8c0,
+            &args![0u32, 1u32, 2u32, 3u32, 4u32, 5u32, 6u32],
+        );
+        assert_eq!(e.call_log.take().unwrap().len(), 1);
     }
 }

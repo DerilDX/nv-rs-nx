@@ -2321,6 +2321,1585 @@ fn update_effect(e: &mut Engine, this: Ptr, effect: u32, stages: [u32; 4]) {
     }
 }
 
+/// `Tile::IsTrue` (`00a01230`, `RET 4`), `Tile::TextToTrait` (`00a01860`, `cdecl`),
+/// `Tile::UpdateTile` (`00a04640`, `RET 4`), `Tile::Poke` (`00a01290`, `RET 8`),
+/// `Tile::GetChildByName` (`00a03da0`, `RET 4`), `Tile::PlayTileSound` (`00a0b110`, `RET 4`)
+/// and `Tile::IsVisible` (`00a040a0`).
+const TILE_IS_TRUE: u32 = 0x00a0_1230;
+const TILE_TEXT_TO_TRAIT: u32 = 0x00a0_1860;
+const TILE_UPDATE_TILE: u32 = 0x00a0_4640;
+const TILE_POKE: u32 = 0x00a0_1290;
+const TILE_GET_CHILD_BY_NAME: u32 = 0x00a0_3da0;
+const TILE_PLAY_TILE_SOUND: u32 = 0x00a0_b110;
+const TILE_IS_VISIBLE: u32 = 0x00a0_40a0;
+/// A menu sound by name: `BSAudio::QInstance` (`00453a70`), `BSAudio::GetSoundHandleByName`
+/// (`00ad7550`, `RET 0xc`, the handle returned through its first word),
+/// `BSSoundHandle::Play` (`00ad8830`, `RET 4`) and the handle's destructor (`00483710`);
+/// the two sounds this unit plays (`01074f40`, `0106f380`).
+const AUDIO_INSTANCE: u32 = 0x0045_3a70;
+const GET_SOUND_HANDLE_BY_NAME: u32 = 0x00ad_7550;
+const SOUND_HANDLE_PLAY: u32 = 0x00ad_8830;
+const SOUND_HANDLE_DESTROY: u32 = 0x0048_3710;
+const SOUND_01074F40: u32 = 0x0107_4f40;
+const SOUND_0106F380: u32 = 0x0106_f380;
+/// `InterfaceManager::PlayMenuSound` (`00717280`, `cdecl`), `Interface::SetMapMenuVisible`
+/// (`00704170`, `cdecl`, two words) and `Interface::SetInventoryMenuVisible` (`007048f0`,
+/// `cdecl`, three words).
+const PLAY_MENU_SOUND: u32 = 0x0071_7280;
+const SET_MAP_MENU_VISIBLE: u32 = 0x0070_4170;
+const SET_INVENTORY_MENU_VISIBLE: u32 = 0x0070_48f0;
+/// `FOPipboyManager::SetTabKnobPosition` (`007fa0f0`, `RET 8`) and
+/// `FOPipboyManager::MoveKnob` (`007f8610`, `RET 0x10`), with the two game settings the knob
+/// moves by.
+const PIPBOY_SET_TAB_KNOB_POSITION: u32 = 0x007f_a0f0;
+const PIPBOY_MOVE_KNOB: u32 = 0x007f_8610;
+const KNOB_SETTING_011DB358: u32 = 0x011d_b358;
+const KNOB_SETTING_011DB2F0: u32 = 0x011d_b2f0;
+/// The words `MoveKnob` keeps each page's last knob step in (`011dad60` to `011dad70`).
+const KNOB_STEP_011DAD60: u32 = 0x011d_ad60;
+const KNOB_STEP_011DAD64: u32 = 0x011d_ad64;
+const KNOB_STEP_011DAD68: u32 = 0x011d_ad68;
+const KNOB_STEP_011DAD6C: u32 = 0x011d_ad6c;
+const KNOB_STEP_011DAD70: u32 = 0x011d_ad70;
+/// `005f65d0` (`thiscall` on a list, `RET 4`: whether it holds the pointed-to word),
+/// `00501c10` (`thiscall`, `RET 4`), `00406db0` and `0071f540` (`thiscall` constructors of
+/// the stage entry's two lists), `0070ed80` (no arguments, `AL`), `00495460` (`thiscall`, an
+/// effect's magnitude in `ST0`).
+const LIST_CONTAINS_005F65D0: u32 = 0x005f_65d0;
+const FIELD_SET_00501C10: u32 = 0x0050_1c10;
+const LIST_CONSTRUCT_00406DB0: u32 = 0x0040_6db0;
+const LIST_CONSTRUCT_0071F540: u32 = 0x0071_f540;
+const FLAG_0070ED80: u32 = 0x0070_ed80;
+const MAGNITUDE_00495460: u32 = 0x0049_5460;
+/// The reputation's icon (`006166e0`) and `TESReputation::GetReputationTitle` (`00616710`),
+/// both `thiscall`; `006155c0` (`thiscall`, `RET 4`, a value in `ST0`).
+const REPUTATION_ICON_006166E0: u32 = 0x0061_66e0;
+const REPUTATION_GET_TITLE: u32 = 0x0061_6710;
+const REPUTATION_VALUE_006155C0: u32 = 0x0061_55c0;
+/// The reputation list (`009c1a50`, `thiscall` on the object at `011c3f2c`).
+const REPUTATION_LIST_009C1A50: u32 = 0x009c_1a50;
+const REPUTATIONS_011C3F2C: u32 = 0x011c_3f2c;
+/// `ActorValue::GetActorValueIcon` (`0066e9f0`), `ActorValue::GetActorValueDesc` (`0066e9b0`)
+/// and `ActorValue::GetItemWeaponTypeBadge` (`0066ea20`), all `cdecl`.
+const AV_GET_ICON: u32 = 0x0066_e9f0;
+const AV_GET_DESCRIPTION: u32 = 0x0066_e9b0;
+const AV_GET_BADGE: u32 = 0x0066_ea20;
+/// `0073ac90` and `007b5370` (`thiscall` on the description box at +0xf8, plus 4: the slots
+/// of its text tile and its scroll tile), `004e4430` (`cdecl`, a `float`, `ST0`).
+const TEXT_TILE_SLOT_0073AC90: u32 = 0x0073_ac90;
+const SCROLL_TILE_SLOT_007B5370: u32 = 0x007b_5370;
+const SCROLL_VALUE_004E4430: u32 = 0x004e_4430;
+/// The trait names the description scroll uses.
+const SCROLL_TRAIT_NAME_01074EB8: u32 = 0x0107_4eb8;
+const SCROLL_TRAIT_NAME_0106F8F8: u32 = 0x0106_f8f8;
+const SCROLL_TRAIT_NAME_010702D8: u32 = 0x0107_02d8;
+const SCROLL_TRAIT_NAME_01070250: u32 = 0x0107_0250;
+/// `00408b20` (`cdecl`, two strings), the setting it reads (`011c3cb4`) and the text it is
+/// compared with (`01018348`).
+const COMPARE_00408B20: u32 = 0x0040_8b20;
+const SETTING_011C3CB4: u32 = 0x011c_3cb4;
+const COMPARED_STRING_01018348: u32 = 0x0101_8348;
+/// `Actor::QueueEquipObject` (`0088c650`, `RET 0x18`) and the RTTI types the healing item's
+/// effect list is cast with.
+const ACTOR_QUEUE_EQUIP_OBJECT: u32 = 0x0088_c650;
+const TYPE_01183108: u32 = 0x0118_3108;
+const TYPE_01183194: u32 = 0x0118_3194;
+/// `00709d40` (no arguments, `AL`), the input object (`011dea0c`, `00877720`), its stick
+/// value (`00a23390`, `RET 8`), `00408820` (`cdecl`, a `float`, `ST0`), the dead zone
+/// (`010745f8`, a `double`) and the time the scroll repeats at (`011dad5c`).
+const FLAG_00709D40: u32 = 0x0070_9d40;
+const INPUT_011DEA0C: u32 = 0x011d_ea0c;
+const INPUT_00877720: u32 = 0x0087_7720;
+const STICK_00A23390: u32 = 0x00a2_3390;
+const ABS_00408820: u32 = 0x0040_8820;
+const DEAD_ZONE_DOUBLE: u32 = 0x0107_45f8;
+const SCROLL_REPEAT_011DAD5C: u32 = 0x011d_ad5c;
+/// `ToggleGenRepMode`'s function-local statics (the guard word and the two trait ids), the
+/// mode byte (`011a0ae0`), the second trait's name and the two game settings it shows.
+const GEN_REP_GUARD_011DAD8C: u32 = 0x011d_ad8c;
+const GEN_REP_TRAIT_011DAD88: u32 = 0x011d_ad88;
+const GEN_REP_TRAIT_011DAD84: u32 = 0x011d_ad84;
+const GEN_REP_TRAIT_NAME_01077564: u32 = 0x0107_7564;
+const GEN_REP_MODE_011A0AE0: u32 = 0x011a_0ae0;
+const SETTING_011D4EF4: u32 = 0x011d_4ef4;
+const SETTING_011D4144: u32 = 0x011d_4144;
+/// The `BSStringT` helpers `operator+=` uses: `004039a0` (capacity), `004037f0` (`RET 8`,
+/// grow), `004f4280` (`thiscall` on the source: its length as the copy takes it),
+/// `00401460` (`cdecl`, three words: the copy), `004039c0` (`RET 4`, the new length) and
+/// `BSStringT<char>::Set` (`00438470`, `RET 4`).
+const STRING_CAPACITY_004039A0: u32 = 0x0040_39a0;
+const STRING_GROW_004037F0: u32 = 0x0040_37f0;
+const STRING_COPY_LENGTH_004F4280: u32 = 0x004f_4280;
+const COPY_00401460: u32 = 0x0040_1460;
+const STRING_SET_LENGTH_004039C0: u32 = 0x0040_39c0;
+const STRING_SET: u32 = 0x0043_8470;
+/// The status effect and reputation list instances' `Synchronize` and
+/// `SetTotalListHeight` (`menumanager.cpp`).
+const STATUS_EFFECT_SYNCHRONIZE_007254D0: u32 = 0x0072_54d0;
+const STATUS_EFFECT_SET_TOTAL_LIST_HEIGHT: u32 = 0x0072_5970;
+const REPUTATION_SYNCHRONIZE: u32 = 0x0072_5aa0;
+const REPUTATION_SET_TOTAL_LIST_HEIGHT: u32 = 0x0072_5f40;
+/// `007242f0` (`thiscall` on a list box, `RET 4`: whether a tile is one of its items).
+const LIST_BOX_HAS_TILE_007242F0: u32 = 0x0072_42f0;
+
+/// Plays a menu sound by name (`QInstance`, `GetSoundHandleByName(&handle, name, 0x121)`,
+/// `Play(0)`, the handle destroyed).
+fn play_sound(e: &mut Engine, name: u32) {
+    e.with_stack(0xc, |e, handle| {
+        let audio = e.call(AUDIO_INSTANCE, &args![]).u32();
+        let found = e
+            .call(
+                GET_SOUND_HANDLE_BY_NAME,
+                &args![audio, handle, name, 0x121u32],
+            )
+            .u32();
+        e.call(SOUND_HANDLE_PLAY, &args![found, 0u32]);
+        e.call(SOUND_HANDLE_DESTROY, &args![handle]);
+    });
+}
+
+/// The Pip-Boy manager (`InterfaceManager` +0x174).
+fn pipboy_manager(e: &mut Engine) -> u32 {
+    let interface = e.call(INTERFACE_MANAGER_004B7210, &args![]).u32();
+    e.call(WORD_AT_174_00704370, &args![interface]).u32()
+}
+
+/// A game setting's `float`, as `FLD dword` loads it (the value's address from `00403e20`).
+fn setting_float(e: &mut Engine, setting: u32) -> u32 {
+    let value = e.call(SETTING_VALUE_00403E20, &args![setting]).u32();
+    x87_quiet_bits(e.mem.u32(value))
+}
+
+/// A game setting's string (`00403df0`).
+fn setting_string(e: &mut Engine, setting: u32) -> u32 {
+    e.call(SETTING_STRING_00403DF0, &args![setting]).u32()
+}
+
+/// The menu's virtual slot +0xc with an id and 0 (the call the menu makes for a button).
+fn menu_click(e: &mut Engine, this: Ptr, id: u32) {
+    e.vcall(this.addr(), 0xc, &args![id, 0u32]);
+}
+
+/// The fade object (`007db1c0`).
+fn fade(e: &mut Engine) -> Ptr {
+    Ptr::new(fn_007db1c0(e))
+}
+
+/// The tile the description box keeps in a slot (`0073ac90` or `007b5370` on +0xf8, plus 4).
+fn description_tile(e: &mut Engine, this: Ptr, slot_fn: u32) -> u32 {
+    let box_tile = e.mem.u32(this.addr() + 0xf8);
+    let slot = e.call(slot_fn, &args![box_tile.wrapping_add(4)]).u32();
+    e.mem.u32(slot)
+}
+
+/// The tail `SetIconAndDescription` and `007dc9b0` share: the text tile is updated, the
+/// scroll range is its height minus its child's (`0xfb0`), kept at least 0 (`00404010`),
+/// divided by the scroll tile's scale and passed through `004e4430`; that plus 1.0 becomes
+/// the scroll tile's first trait, the second is set to 0.0 and the third poked with 1.0.
+fn update_description_scroll(e: &mut Engine, text_tile: u32, scroll_tile: u32, scale: u32) {
+    e.call(TILE_UPDATE_TILE, &args![text_tile, 0u32]);
+    let height = e.call(TILE_GET_FLOAT, &args![text_tile, 0xfb0u32]).f64();
+    let child = e.call(WORD_AT_28_0045CD60, &args![text_tile]).u32();
+    let child_height = e.call(TILE_GET_FLOAT, &args![child, 0xfb0u32]).f64();
+    // `FSUBR double [height]`: the height minus the child's.
+    let range = x87_store32(x87_sub(height, child_height));
+    let range = x87_store32(
+        e.call(FLOAT_PAIR_00404010, &args![0.0f32.to_bits(), range])
+            .f64(),
+    );
+    let ratio = x87_store32(x87_div(x87_load32(range), x87_m32(scale)));
+    let value = e.call(SCROLL_VALUE_004E4430, &args![ratio]).f64();
+    let one: f64 = e.global(ONE_DOUBLE);
+    let value = x87_store32(x87_add(value, one));
+    let first = e
+        .call(TILE_TEXT_TO_TRAIT, &args![SCROLL_TRAIT_NAME_0106F8F8])
+        .u32();
+    e.call(TILE_SET_FLOAT, &args![scroll_tile, first, value, 1u32]);
+    let second = e
+        .call(TILE_TEXT_TO_TRAIT, &args![SCROLL_TRAIT_NAME_010702D8])
+        .u32();
+    e.call(
+        TILE_SET_FLOAT,
+        &args![scroll_tile, second, 0.0f32.to_bits(), 0u32],
+    );
+    let third = e
+        .call(TILE_TEXT_TO_TRAIT, &args![SCROLL_TRAIT_NAME_01070250])
+        .u32();
+    e.call(TILE_POKE, &args![scroll_tile, third, 1.0f32.to_bits()]);
+}
+
+// Translated from 00704390 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `StatsMenu::ToggleHealingMode` (Xbox PDB; no arguments): with an open stats menu in
+/// limb mode (+0x2a0), `007e0230` on it.
+pub fn stats_menu_toggle_healing_mode(e: &mut Engine) {
+    let menu = open_menu(e);
+    if menu != 0 && e.mem.u8(menu + 0x2a0) != 0 {
+        fn_007e0230(e, Ptr::new(menu));
+    }
+}
+
+// Translated from 007db380 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `StatsMenu::DoClick` (engine map, vtable; `RET 8`: a tile id and a tile). Without a tile, an id 0 to 0x3b takes `pTiles[id]` (+0x90). When
+/// `004b71d0` holds and the tile's `0xfaf` is not true, nothing happens. A page button
+/// (`007e00e0`) sets the page; a status page button (`007e0160`) goes to it (`007e0060`); id
+/// 9, or 5 in limb mode, toggles limb mode (`007e0230`); 0x31 toggles the general and
+/// reputation lists (`007e02b0`). One of the four healing options (records at +0x2c, 16
+/// bytes apart: the tile, then the entry at +0x30) whose tile it is and that has an entry
+/// queues its item for equipping on the player (`Actor::QueueEquipObject(item form, count,
+/// first extra list, 0, 0, 1)`), updates the actor value of each of the item's effects
+/// (`007dd090`), the healing options (`007df230`) and the active effects (`007ddf00`, after
+/// clearing +0x2a1). Then, in limb mode without `004b71d0`, a tile in a fade group
+/// (`007db630`) clicks button 0x3b in hardcore mode or 0xa otherwise (vtable +0xc).
+pub fn stats_menu_do_click(e: &mut Engine, this: Ptr, id: i32, tile: u32) {
+    let base = this.addr();
+    let mut tile = tile;
+    if tile == 0 && (0..0x3c).contains(&id) {
+        tile = e.mem.u32(base + 0x90 + 4 * id as u32);
+    }
+    if e.call(FLAG_004B71D0, &args![]).bool()
+        && !e.call(TILE_IS_TRUE, &args![tile, 0xfafu32]).bool()
+    {
+        return;
+    }
+    let page = e.with_stack(4, |e, slot| {
+        stats_menu_get_page_for(e, this, id as u32, slot).then(|| e.mem.u32(slot.addr()))
+    });
+    if let Some(page) = page {
+        stats_menu_set_current_page(e, this, page as i32);
+        return;
+    }
+    let status = e.with_stack(4, |e, slot| {
+        fn_007e0160(e, this, id as u32, slot).then(|| e.mem.u32(slot.addr()))
+    });
+    if let Some(status) = status {
+        fn_007e0060(e, this, status as i32);
+        return;
+    }
+    if id == 9 || (e.mem.u8(base + 0x2a0) != 0 && id == 5) {
+        fn_007e0230(e, this);
+        return;
+    }
+    if id == 0x31 {
+        stats_menu_toggle_gen_rep_mode(e, this);
+        return;
+    }
+    let mut index = 0u32;
+    while index < 4 {
+        let record = base + index * 0x10;
+        if tile == e.mem.u32(record + 0x2c) && e.mem.u32(record + 0x30) != 0 {
+            let entry = e.mem.u32(record + 0x30);
+            let extra_lists = e.call(STRING_CHARS_00559450, &args![entry]).u32();
+            let extra_list = if extra_lists != 0 {
+                let entry = e.mem.u32(record + 0x30);
+                let lists = e.call(STRING_CHARS_00559450, &args![entry]).u32();
+                node_item(e, lists)
+            } else {
+                0
+            };
+            let entry = e.mem.u32(record + 0x30);
+            let count = e.call(WORD_AT_4_00726070, &args![entry]).u32();
+            let entry = e.mem.u32(record + 0x30);
+            let form = e.call(EFFECT_TARGET_0044DDC0, &args![entry]).u32();
+            e.call(
+                ACTOR_QUEUE_EQUIP_OBJECT,
+                &args![player(e), form, count, extra_list, 0u32, 0u32, 1u32],
+            );
+            let entry = e.mem.u32(record + 0x30);
+            let form = e.call(EFFECT_TARGET_0044DDC0, &args![entry]).u32();
+            let mut node = e
+                .call(
+                    RT_DYNAMIC_CAST,
+                    &args![form, 0u32, TYPE_01183108, TYPE_01183194, 0u32],
+                )
+                .u32();
+            while node != 0 && node_item(e, node) != 0 {
+                let effect = node_item(e, node);
+                let value = e.call(EFFECT_KEY_00403EA0, &args![effect]).u32();
+                stats_menu_update_actor_value(e, this, value);
+                node = node_next(e, node);
+            }
+            stats_menu_update_healing_options(e, this, index);
+            e.mem.set_u8(base + 0x2a1, 0);
+            stats_menu_update_active_effects(e, this);
+            index = 4;
+        }
+        index += 1;
+    }
+    if e.mem.u8(base + 0x2a0) != 0 && !e.call(FLAG_004B71D0, &args![]).bool() {
+        let object = fade(e);
+        if fn_007db630(e, object, tile) != 6 {
+            if e.call(HARDCORE_004D1360, &args![player(e)]).bool() {
+                menu_click(e, this, 0x3b);
+            } else {
+                menu_click(e, this, 0xa);
+            }
+        }
+    }
+}
+
+// Translated from 007db630 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed (`thiscall` on the fade object, `RET 4`, a tile): the first of the six groups
+/// whose list holds the tile (`005f65d0` given the address of the argument slot), or 6. The
+/// count goes up through `007dc0a0`.
+pub fn fn_007db630(e: &mut Engine, this: Ptr, tile: u32) -> u32 {
+    e.with_stack(4, |e, slot| {
+        e.mem.set_u32(slot.addr(), tile);
+        let mut group = 0u32;
+        while group < 6 {
+            let list = this.addr().wrapping_add(group * 8).wrapping_add(4);
+            if e.call(LIST_CONTAINS_005F65D0, &args![list, slot]).bool() {
+                return group;
+            }
+            group += 1;
+        }
+        6
+    })
+}
+
+// Translated from 007db680 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 007db680 - the C++ exception frame (FS:[0] chain, unwind states 0 to 2 around the sound handles) is not translated.
+/// `StatsMenu::DoGamepad` (engine map, vtable; `RET 8`: a key and a `float`). Only with the stats menu on top (`0x3eb`) and the Pip-Boy up;
+/// returns whether the key was taken. In limb mode keys 1 to 4 pick a fade group (1, 2, 4, 3
+/// give 0, 1, 2, 3; `007dc010` of the current group), which, when below 6, is faded in
+/// (`007dbfa0`), the healing options' tiles updated and sound `01074f40` played. Keys 0xd
+/// and 0xe with the value at least 1.0 play menu sound 0x24 and open the map
+/// (`SetMapMenuVisible(1, 0)`) or the inventory (`SetInventoryMenuVisible(1, 0, 1)`). Keys
+/// 4 and 3 step the page down and up (wrapping between 0 and 4) and play the tile sound
+/// `0xfcb` of the first page button. On page 4 key 0xb clicks 0x31. On page 0: keys 1 and 2
+/// step the SPECIAL/skill/status sub page (`007e0060`), play the matching button's tile
+/// sound and move the knob (`MoveKnob(0, step * setting, setting, 1)`); key 9 clicks 0xa or
+/// 0xb by sub page; keys 0xb and 0xc on sub page 0 click 9 (when not in limb mode) or 0x3b
+/// when the button +0xb4 is enabled (with sound `0106f380`), on sub page 1 click 0x1f. Any
+/// other key (or a sub page step that fails) scrolls the description or the list with the
+/// right stick (`00a23390`, its magnitude through `00408820` above the dead zone at
+/// `010745f8`): once the repeat time (`011dad5c`) has passed, the scroll trait moves by one,
+/// the third scroll trait is poked when the value changed, and the next repeat time is the
+/// time plus trait `0x1004` (repeating) or `0x1005` (first) of tile +0x114. Without stick
+/// input the repeat time is cleared.
+pub fn stats_menu_do_gamepad(e: &mut Engine, this: Ptr, key: u32, value: u32) -> bool {
+    let base = this.addr();
+    if !e.call(INTERFACE_IS_TOP_MENU_ID, &args![0x3ebu32]).bool() {
+        return false;
+    }
+    let pipboy = e.call(INTERFACE_GET_PIPBOY, &args![]).u32();
+    if !e.call(BYTE_AT_28_00974D90, &args![pipboy]).bool() {
+        return false;
+    }
+    if !e.call(INTERFACE_IS_TOP_MENU_ID, &args![0x3ebu32]).bool() {
+        return false;
+    }
+    if e.mem.u8(base + 0x2a0) != 0 && (key == 1 || key == 2 || key == 4 || key == 3) {
+        let group = match key {
+            1 => 0,
+            2 => 1,
+            3 => 3,
+            4 => 2,
+            _ => return false,
+        };
+        let object = fade(e);
+        let current = e.call(STRING_CHARS_00559450, &args![object]).u32();
+        let object = fade(e);
+        let picked = fn_007dc010(e, object, current, group);
+        if (picked as i32) < 6 {
+            let object = fade(e);
+            fn_007dbfa0(e, object, picked, 1);
+            let first = fn_007e05f0(e, Ptr::new(base + 0x28));
+            let tile = e.mem.u32(base + 0x2c);
+            set_int(e, tile, 0xfaf, u32::from(first));
+            let second = fn_007e06f0(e, Ptr::new(base + 0x58));
+            let tile = e.mem.u32(base + 0x5c);
+            set_int(e, tile, 0xfaf, u32::from(second));
+            play_sound(e, SOUND_01074F40);
+        }
+        return true;
+    }
+    if (key == 0xd || key == 0xe) && x87_load32(value) >= 1.0 {
+        e.call(PLAY_MENU_SOUND, &args![0x24u32]);
+        if key == 0xd {
+            e.call(SET_MAP_MENU_VISIBLE, &args![1u32, 0u32]);
+        } else {
+            e.call(SET_INVENTORY_MENU_VISIBLE, &args![1u32, 0u32, 1u32]);
+        }
+        return true;
+    }
+    if key == 4 {
+        let page = fn_007dcc00(e, this);
+        let page = if page == 0 { 4 } else { page - 1 };
+        stats_menu_set_current_page(e, this, page);
+        let tile = e.mem.u32(base + 0x90);
+        e.call(TILE_PLAY_TILE_SOUND, &args![tile, 0xfcbu32]);
+        return true;
+    }
+    if key == 3 {
+        let page = fn_007dcc00(e, this);
+        let page = if page == 4 { 0 } else { page + 1 };
+        stats_menu_set_current_page(e, this, page);
+        let tile = e.mem.u32(base + 0x90);
+        e.call(TILE_PLAY_TILE_SOUND, &args![tile, 0xfcbu32]);
+        return true;
+    }
+    if fn_007dcc00(e, this) == 4 {
+        if key == 0xb {
+            menu_click(e, this, 0x31);
+            return true;
+        }
+    } else if fn_007dcc00(e, this) == 0 {
+        if key == 1 || key == 2 {
+            let step: i32 = if key != 1 { 1 } else { -1 };
+            let target = fn_007dcc40(e, this).wrapping_add(step);
+            if fn_007e0060(e, this, target) {
+                e.with_stack(4, |e, status| {
+                    e.mem.set_u32(status.addr(), 6);
+                    for (id, offset) in [
+                        (0x1cu32, 0x100u32),
+                        (0x1d, 0x104),
+                        (0x1e, 0x108),
+                        (0x35, 0x164),
+                        (0x37, 0x16c),
+                        (0x39, 0x174),
+                    ] {
+                        if fn_007e0160(e, this, id, status)
+                            && e.mem.u32(status.addr()) as i32 == target
+                        {
+                            let tile = e.mem.u32(base + offset);
+                            e.call(TILE_PLAY_TILE_SOUND, &args![tile, 0xfcbu32]);
+                            break;
+                        }
+                    }
+                });
+                let speed = setting_float(e, KNOB_SETTING_011DB358);
+                let distance = e
+                    .call(SETTING_VALUE_00403E20, &args![KNOB_SETTING_011DB2F0])
+                    .u32();
+                let distance = e.mem.u32(distance);
+                let moved = x87_store32(x87_mul(f64::from(step), x87_m32(distance)));
+                let manager = pipboy_manager(e);
+                e.call(PIPBOY_MOVE_KNOB, &args![manager, 0u32, moved, speed, 1u32]);
+                return true;
+            }
+        } else if key == 9 {
+            return match fn_007dcc40(e, this) {
+                0 => {
+                    menu_click(e, this, 0xa);
+                    true
+                }
+                1 => {
+                    menu_click(e, this, 0xb);
+                    true
+                }
+                _ => false,
+            };
+        } else if key == 0xb {
+            return match fn_007dcc40(e, this) {
+                0 => {
+                    let button = e.mem.u32(base + 0xb4);
+                    if e.mem.u8(base + 0x2a0) == 0
+                        && e.call(TILE_IS_TRUE, &args![button, 0xfafu32]).bool()
+                    {
+                        menu_click(e, this, 9);
+                        play_sound(e, SOUND_0106F380);
+                        true
+                    } else {
+                        false
+                    }
+                }
+                1 => {
+                    menu_click(e, this, 0x1f);
+                    true
+                }
+                _ => false,
+            };
+        } else if key == 0xc {
+            return match fn_007dcc40(e, this) {
+                0 => {
+                    let button = e.mem.u32(base + 0xb4);
+                    if e.call(TILE_IS_TRUE, &args![button, 0xfafu32]).bool() {
+                        menu_click(e, this, 0x3b);
+                        play_sound(e, SOUND_0106F380);
+                        true
+                    } else {
+                        false
+                    }
+                }
+                1 => {
+                    menu_click(e, this, 0x1f);
+                    true
+                }
+                _ => false,
+            };
+        }
+    }
+    scroll_with_the_stick(e, this);
+    false
+}
+
+/// The stick scrolling at the end of `DoGamepad` (see there).
+fn scroll_with_the_stick(e: &mut Engine, this: Ptr) {
+    let base = this.addr();
+    if !e.call(FLAG_00709D40, &args![]).bool() {
+        return;
+    }
+    let list = e.call(WORD_AT_14_00825C00, &args![base + 0x240]).u32();
+    if !e.call(TILE_IS_VISIBLE, &args![list]).bool() {
+        let scroll = description_tile(e, this, SCROLL_TILE_SLOT_007B5370);
+        if !e.call(TILE_IS_TRUE, &args![scroll, 0xfa3u32]).bool() {
+            return;
+        }
+    }
+    let input = e.global::<u32>(INPUT_011DEA0C);
+    let input = e.call(INPUT_00877720, &args![input]).u32();
+    let mut stick = e.call(STICK_00A23390, &args![input, 0u32, 0xau32]).i32();
+    let magnitude = x87_store32(f64::from(stick));
+    let magnitude = e.call(ABS_00408820, &args![magnitude]).f64();
+    let dead_zone: f64 = e.global(DEAD_ZONE_DOUBLE);
+    // `FCOMP; TEST AH,0x41; JP`: cleared when below or equal (ordered).
+    if magnitude <= dead_zone {
+        stick = 0;
+    }
+    let mut step = 0i32;
+    if stick != 0 {
+        step = if stick < 0 { 1 } else { -1 };
+    }
+    if step != 0 && e.call(TIME_00457FE0, &args![]).u32() > e.global::<u32>(SCROLL_REPEAT_011DAD5C)
+    {
+        let tile = if fn_007dcc00(e, this) == 0 {
+            e.call(WORD_AT_14_00825C00, &args![base + 0x240]).u32()
+        } else {
+            description_tile(e, this, SCROLL_TILE_SLOT_007B5370)
+        };
+        let scroll = e
+            .call(TILE_TEXT_TO_TRAIT, &args![SCROLL_TRAIT_NAME_010702D8])
+            .u32();
+        let current = e.call(TILE_GET_FLOAT, &args![tile, scroll]).f64();
+        let current = e.call(FTOL2, &args![current]).i32();
+        let moved = x87_store32(f64::from(current.wrapping_add(step)));
+        e.call(TILE_SET_FLOAT, &args![tile, scroll, moved, 0u32]);
+        let now = e.call(TILE_GET_FLOAT, &args![tile, scroll]).f64();
+        // `FUCOMPP; TEST AH,0x44; JNP`: poked unless equal (ordered).
+        if f64::from(current) != now {
+            let poke = e
+                .call(TILE_TEXT_TO_TRAIT, &args![SCROLL_TRAIT_NAME_01070250])
+                .u32();
+            e.call(TILE_POKE, &args![tile, poke, 1.0f32.to_bits()]);
+        }
+        let timing = e.mem.u32(base + 0x114);
+        let delay = if e.global::<u32>(SCROLL_REPEAT_011DAD5C) != 0 {
+            let value = e.call(TILE_GET_FLOAT, &args![timing, 0x1004u32]).f64();
+            e.call(FTOL2, &args![value]).u32()
+        } else {
+            let value = e.call(TILE_GET_FLOAT, &args![timing, 0x1005u32]).f64();
+            e.call(FTOL2, &args![value]).u32()
+        };
+        let time = e.call(TIME_00457FE0, &args![]).u32();
+        e.set_global(SCROLL_REPEAT_011DAD5C, time.wrapping_add(delay));
+    } else if step == 0 {
+        e.set_global(SCROLL_REPEAT_011DAD5C, 0u32);
+    }
+}
+
+// Translated from 007dbfa0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed (`thiscall` on the fade object, `RET 8`: a group and a flag byte): with the
+/// flag, the current group's fade is stopped (`007dbfe0(0)`) before the group becomes
+/// current and started after (`007dbfe0(1)`); without it the group is only stored.
+pub fn fn_007dbfa0(e: &mut Engine, this: Ptr, group: u32, flag: u8) {
+    if flag != 0 {
+        fn_007dbfe0(e, this, 0);
+    }
+    e.mem.set_u32(this.addr(), group);
+    if flag != 0 {
+        fn_007dbfe0(e, this, 1);
+    }
+}
+
+// Translated from 007dc010 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed (`thiscall` on the fade object, `RET 8`: a group and a byte index): byte `index`
+/// of the group's word at +0x34 (the shifts by `CL`, so modulo 32).
+pub fn fn_007dc010(e: &mut Engine, this: Ptr, group: u32, index: u32) -> u32 {
+    let shift = index.wrapping_shl(3);
+    let field = this
+        .addr()
+        .wrapping_add(group.wrapping_mul(4))
+        .wrapping_add(0x34);
+    (0xffu32.wrapping_shl(shift) & e.mem.u32(field)).wrapping_shr(shift)
+}
+
+// Translated from 007dc0c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed (`cdecl`, a pointer): decrements the word it points to and returns the pointer.
+pub fn fn_007dc0c0(e: &mut Engine, value: Ptr) -> Ptr {
+    let word = e.mem.u32(value.addr()).wrapping_sub(1);
+    e.mem.set_u32(value.addr(), word);
+    value
+}
+
+// Translated from 007dc0e0 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 007dc0e0 - the C++ exception frame (FS:[0] chain, unwind state 0 around the sound handle) is not translated.
+/// `StatsMenu::DoGamepadUpEvent` (engine map, vtable; `RET 8`, a key and an unread word): in limb mode,
+/// key 10 with the button +0xb4 enabled (`0xfaf`) clicks 9 (vtable +0xc), plays sound
+/// `0106f380` and answers true; anything else false.
+pub fn stats_menu_do_gamepad_up_event(e: &mut Engine, this: Ptr, key: u32, _unused_2: u32) -> bool {
+    if e.mem.u8(this.addr() + 0x2a0) == 0 || key != 0xa {
+        return false;
+    }
+    let button = e.mem.u32(this.addr() + 0xb4);
+    if !e.call(TILE_IS_TRUE, &args![button, 0xfafu32]).bool() {
+        return false;
+    }
+    menu_click(e, this, 9);
+    play_sound(e, SOUND_0106F380);
+    true
+}
+
+// Translated from 007dc1b0 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 007dc1b0 - the C++ exception frame (FS:[0] chain, unwind state 0 around the sound handle) is not translated.
+/// `StatsMenu::DoEnter` (engine map, vtable; `RET 8`: a
+/// tile id and a tile; without a tile an id 0 to 0x3b takes `pTiles[id]`). By page
+/// (`007dcc00`): page 0 moves the knob for a tile with `0xfac` above 0.0 (`007dfd20` with
+/// the step at `011dad60`); then, without `004b71d0` and with the healing option record's
+/// tile (+0x60 in hardcore mode, else +0x30), a tile in a fade group (`007db630`) fades that
+/// group in (`007dbfa0`), plays sound `01074f40` and turns limb mode on (`007e0230`) when it
+/// is off. Pages 1 to 3: an item tile of the SPECIAL (+0x180), skill (+0x1b0) or perk
+/// (+0x1e0) list (`007242f0`) moves the knob (steps `011dad64`, `011dad68`, `011dad6c`) and
+/// shows the item's icon and description (`SetIconAndDescription`, `007dc9b0` for perks).
+/// Page 4: an item of the general list (+0x210) moves the knob; an item of the reputation
+/// list (+0x270) shows the reputation (`007dcb40`) and moves the knob (both with the step
+/// at `011dad70`).
+pub fn stats_menu_do_enter(e: &mut Engine, this: Ptr, id: i32, tile: u32) {
+    let base = this.addr();
+    let mut tile = tile;
+    if tile == 0 && (0..0x3c).contains(&id) {
+        tile = e.mem.u32(base + 0x90 + 4 * id as u32);
+    }
+    match fn_007dcc00(e, this) as u32 {
+        0 => {
+            let value = e.call(TILE_GET_FLOAT, &args![tile, 0xfacu32]).f64();
+            let zero: f64 = e.global(ZERO_DOUBLE);
+            if above(value, zero) {
+                stats_menu_move_knob(e, this, tile, Ptr::new(KNOB_STEP_011DAD60));
+            }
+            if e.call(FLAG_004B71D0, &args![]).bool() {
+                return;
+            }
+            let record = if player(e) != 0 && e.call(HARDCORE_004D1360, &args![player(e)]).bool() {
+                e.mem.u32(base + 0x60)
+            } else {
+                e.mem.u32(base + 0x30)
+            };
+            if record == 0 {
+                return;
+            }
+            let object = fade(e);
+            let group = fn_007db630(e, object, tile);
+            if group == 6 {
+                return;
+            }
+            let object = fade(e);
+            fn_007dbfa0(e, object, group, 1);
+            play_sound(e, SOUND_01074F40);
+            if e.mem.u8(base + 0x2a0) == 0 {
+                fn_007e0230(e, this);
+            }
+        }
+        1 => {
+            if e.call(LIST_BOX_HAS_TILE_007242F0, &args![base + 0x180, tile])
+                .bool()
+            {
+                stats_menu_move_knob(e, this, tile, Ptr::new(KNOB_STEP_011DAD64));
+                let value = fn_007e1110(e, Ptr::new(base + 0x180), tile);
+                fn_007dc7e0(e, this, value);
+            }
+        }
+        2 => {
+            if e.call(LIST_BOX_HAS_TILE_007242F0, &args![base + 0x1b0, tile])
+                .bool()
+            {
+                stats_menu_move_knob(e, this, tile, Ptr::new(KNOB_STEP_011DAD68));
+                let value = fn_007e1110(e, Ptr::new(base + 0x1b0), tile);
+                fn_007dc7e0(e, this, value);
+            }
+        }
+        3 => {
+            if e.call(LIST_BOX_HAS_TILE_007242F0, &args![base + 0x1e0, tile])
+                .bool()
+            {
+                stats_menu_move_knob(e, this, tile, Ptr::new(KNOB_STEP_011DAD6C));
+                let perk = fn_007e1110(e, Ptr::new(base + 0x1e0), tile);
+                fn_007dc9b0(e, this, Ptr::new(perk));
+            }
+        }
+        4 => {
+            if e.call(LIST_BOX_HAS_TILE_007242F0, &args![base + 0x210, tile])
+                .bool()
+            {
+                stats_menu_move_knob(e, this, tile, Ptr::new(KNOB_STEP_011DAD70));
+            }
+            if e.call(LIST_BOX_HAS_TILE_007242F0, &args![base + 0x270, tile])
+                .bool()
+            {
+                let reputation = fn_007e1110(e, Ptr::new(base + 0x270), tile);
+                fn_007dcb40(e, this, reputation);
+                stats_menu_move_knob(e, this, tile, Ptr::new(KNOB_STEP_011DAD70));
+            }
+        }
+        _ => {}
+    }
+}
+
+// Translated from 007dc490 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `StatsMenu::DoLeave` (engine map, vtable; `RET 8`: an unread tile id and a tile): in limb mode without `004b71d0`, leaving
+/// a tile of a fade group (`007db630`) turns limb mode off (`007e0230`); the badge tile
+/// (+0x160) is hidden.
+pub fn stats_menu_do_leave(e: &mut Engine, this: Ptr, _unused_1: u32, tile: u32) {
+    if e.mem.u8(this.addr() + 0x2a0) != 0 && !e.call(FLAG_004B71D0, &args![]).bool() {
+        let object = fade(e);
+        if fn_007db630(e, object, tile) != 6 {
+            fn_007e0230(e, this);
+        }
+    }
+    let badge = e.mem.u32(this.addr() + 0x160);
+    set_int(e, badge, 0xfa3, 0);
+}
+
+// Translated from 007dc7e0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `StatsMenu::SetIconAndDescription` (Xbox PDB; `RET 4`, an actor value): the icon tile
+/// (+0xf4) is shown with the value's icon (`0xfcc`), the description box's text tile its
+/// description (`0xfc4`); a value with a weapon type badge shows it on tile +0x160
+/// (`0xfa3` set, the badge as `0xfcc`), else that tile is hidden. Then the description
+/// scroll is set up (see `update_description_scroll`) with the scroll tile's scale trait.
+pub fn fn_007dc7e0(e: &mut Engine, this: Ptr, value: u32) {
+    let base = this.addr();
+    let text_tile = description_tile(e, this, TEXT_TILE_SLOT_0073AC90);
+    let scroll_tile = description_tile(e, this, SCROLL_TILE_SLOT_007B5370);
+    let trait_id = e
+        .call(TILE_TEXT_TO_TRAIT, &args![SCROLL_TRAIT_NAME_01074EB8])
+        .u32();
+    let scale = x87_store32(e.call(TILE_GET_FLOAT, &args![scroll_tile, trait_id]).f64());
+    let icon_tile = e.mem.u32(base + 0xf4);
+    set_int(e, icon_tile, 0xfa3, 1);
+    let icon = e.call(AV_GET_ICON, &args![value]).u32();
+    let icon_tile = e.mem.u32(base + 0xf4);
+    set_string(e, icon_tile, 0xfcc, icon);
+    let description = e.call(AV_GET_DESCRIPTION, &args![value]).u32();
+    set_string(e, text_tile, 0xfc4, description);
+    let badge = e.call(AV_GET_BADGE, &args![value]).u32();
+    let badge_tile = e.mem.u32(base + 0x160);
+    if badge != 0 {
+        set_int(e, badge_tile, 0xfa3, 1);
+        let badge_tile = e.mem.u32(base + 0x160);
+        set_string(e, badge_tile, 0xfcc, badge);
+    } else {
+        set_int(e, badge_tile, 0xfa3, 0);
+    }
+    update_description_scroll(e, text_tile, scroll_tile, scale);
+}
+
+// Translated from 007dc9b0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed (`thiscall` on the stats menu, `RET 4`, a perk list item's data: the perk at
+/// +0): as `SetIconAndDescription` for a perk: the icon tile shows the perk's icon (the
+/// string at perk +0x2c), the text tile the description (vtable +0x10 of the perk's
+/// description at +0x24, given 0 and `'CSED'`); no badge. Then the description scroll.
+pub fn fn_007dc9b0(e: &mut Engine, this: Ptr, data: Ptr) {
+    let base = this.addr();
+    let text_tile = description_tile(e, this, TEXT_TILE_SLOT_0073AC90);
+    let scroll_tile = description_tile(e, this, SCROLL_TILE_SLOT_007B5370);
+    let trait_id = e
+        .call(TILE_TEXT_TO_TRAIT, &args![SCROLL_TRAIT_NAME_01074EB8])
+        .u32();
+    let scale = x87_store32(e.call(TILE_GET_FLOAT, &args![scroll_tile, trait_id]).f64());
+    let icon_tile = e.mem.u32(base + 0xf4);
+    set_int(e, icon_tile, 0xfa3, 1);
+    let perk = e.mem.u32(data.addr());
+    let icon = e
+        .call(STRING_CHARS_00408DA0, &args![perk.wrapping_add(0x2c)])
+        .u32();
+    let icon_tile = e.mem.u32(base + 0xf4);
+    set_string(e, icon_tile, 0xfcc, icon);
+    let perk = e.mem.u32(data.addr());
+    let description = e
+        .vcall(perk.wrapping_add(0x24), 0x10, &args![0u32, 0x4353_4544u32])
+        .u32();
+    set_string(e, text_tile, 0xfc4, description);
+    update_description_scroll(e, text_tile, scroll_tile, scale);
+}
+
+// Translated from 007dcb40 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed (`thiscall` on the stats menu, `RET 4`, a reputation): a non-null reputation
+/// shows its icon (`006166e0`) on tile +0x14c, the tiles +0x14c, +0x150 and +0x15c, its name
+/// (the string at +0x18) on +0x15c and its title (`GetReputationTitle`) on +0x150.
+pub fn fn_007dcb40(e: &mut Engine, this: Ptr, reputation: u32) {
+    if reputation == 0 {
+        return;
+    }
+    let base = this.addr();
+    let icon = e.call(REPUTATION_ICON_006166E0, &args![reputation]).u32();
+    let tile = e.mem.u32(base + 0x14c);
+    set_string(e, tile, 0xfcc, icon);
+    for offset in [0x14cu32, 0x150, 0x15c] {
+        let tile = e.mem.u32(base + offset);
+        set_int(e, tile, 0xfa3, 1);
+    }
+    let name = e
+        .call(STRING_CHARS_00408DA0, &args![reputation.wrapping_add(0x18)])
+        .u32();
+    let tile = e.mem.u32(base + 0x15c);
+    set_string(e, tile, 0xfc4, name);
+    let title = e.call(REPUTATION_GET_TITLE, &args![reputation]).u32();
+    let tile = e.mem.u32(base + 0x150);
+    set_string(e, tile, 0xfc4, title);
+}
+
+/// `UpdateAll`'s labels: the tile offsets on the menu and the game settings they show.
+const UPDATE_ALL_LABELS: [(u32, u32); 10] = [
+    (0x90, 0x011d_2f88),
+    (0x94, 0x011d_2994),
+    (0x98, 0x011d_3b08),
+    (0x9c, 0x011d_4bd0),
+    (0xa0, 0x011d_4ef4),
+    (0x100, 0x011d_48d0),
+    (0x104, 0x011d_3e74),
+    (0x164, 0x011d_1f08),
+    (0x174, 0x011d_246c),
+    (0x16c, 0x011d_37c8),
+];
+/// `UpdateAll`'s named children of the menu tile, the game setting each shows and whether
+/// it goes to `"_Title"` (else `0xfc4`).
+const UPDATE_ALL_CHILDREN: [(u32, u32, bool); 7] = [
+    (0x0107_7398, 0x011d_3fdc, false),
+    (0x0107_7388, 0x011d_1f5c, true),
+    (0x0107_7378, 0x011d_50b0, true),
+    (0x0107_7368, 0x011d_44a4, true),
+    (0x0107_7358, 0x011d_3bd4, true),
+    (0x0107_7340, 0x011d_47ec, false),
+    (0x0107_732c, 0x011d_2ebc, false),
+];
+
+// Translated from 007dcc80 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `StatsMenu::UpdateAll` (Xbox PDB; `thiscall`): the actor values (`007dcfc0`), the general
+/// list (`007ddaa0`), the reputations (`007dd8c0`), the healing options (`007df230(4)`) and
+/// the fade group (`007df920`). When the setting at `011c3cb4` differs from `01018348`
+/// (`00408b20`), the labels are set again from the game settings: ten tiles' `0xfc4`, the
+/// menu tile's `0x100d` and `0x100e`, and seven named children (`GetChildByName`) on
+/// `0xfc4` or `"_Title"`.
+pub fn stats_menu_update_all(e: &mut Engine, this: Ptr) {
+    stats_menu_update_all_actor_values(e, this);
+    fn_007ddaa0(e, this);
+    fn_007dd8c0(e, this);
+    stats_menu_update_healing_options(e, this, 4);
+    fn_007df920(e, this);
+    let setting = setting_string(e, SETTING_011C3CB4);
+    if e.call(COMPARE_00408B20, &args![setting, COMPARED_STRING_01018348])
+        .u32()
+        == 0
+    {
+        return;
+    }
+    for (offset, setting) in UPDATE_ALL_LABELS {
+        let text = setting_string(e, setting);
+        let tile = e.mem.u32(this.addr() + offset);
+        set_string(e, tile, 0xfc4, text);
+    }
+    for (trait_id, setting) in [(0x100du32, 0x011d_2e80u32), (0x100e, 0x011d_41bc)] {
+        let text = setting_string(e, setting);
+        let root = e.call(WORD_AT_4_00726070, &args![this]).u32();
+        set_string(e, root, trait_id, text);
+    }
+    for (name, setting, title) in UPDATE_ALL_CHILDREN {
+        let text = setting_string(e, setting);
+        let trait_id = if title {
+            e.call(TILE_TEXT_TO_TRAIT, &args![TITLE_TEXT]).u32()
+        } else {
+            0xfc4
+        };
+        let root = e.call(WORD_AT_4_00726070, &args![this]).u32();
+        let child = e.call(TILE_GET_CHILD_BY_NAME, &args![root, name]).u32();
+        set_string(e, child, trait_id, text);
+    }
+}
+
+// Translated from 007dd8c0 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 007dd8c0 - the C++ exception frame (FS:[0] chain, unwind state 0 for the string local) is not translated.
+/// Unnamed (`thiscall` on the stats menu): the reputation list. With an open menu whose
+/// reputation page tile (+0x148) exists: the reputation tiles (+0x14c, +0x15c, +0x150) are
+/// hidden, the open menu's list (+0x270) cleared (vtable +0x1c), and each reputation of
+/// the list at `011c3f2c` (`009c1a50`) with either value (`006155c0(1)`, `006155c0(0)`)
+/// above 0.0 is added (`007e16d0`, sorted by `007e0510`) with its name formatted
+/// (`01019f08`).
+pub fn fn_007dd8c0(e: &mut Engine, this: Ptr) {
+    let menu = open_menu(e);
+    if menu == 0 || e.mem.u32(menu + 0x148) == 0 {
+        return;
+    }
+    let base = this.addr();
+    for offset in [0x14cu32, 0x15c, 0x150] {
+        let tile = e.mem.u32(base + offset);
+        set_int(e, tile, 0xfa3, 0);
+    }
+    let menu = open_menu(e);
+    e.vcall(menu + 0x270, 0x1c, &args![]);
+    let reputations = e.global::<u32>(REPUTATIONS_011C3F2C);
+    let mut node = e.call(REPUTATION_LIST_009C1A50, &args![reputations]).u32();
+    while node != 0 && node_item(e, node) != 0 {
+        let reputation = node_item(e, node);
+        if reputation != 0 {
+            let zero: f64 = e.global(ZERO_DOUBLE);
+            let first = e
+                .call(REPUTATION_VALUE_006155C0, &args![reputation, 1u32])
+                .f64();
+            // `TEST AH,0x41; JZ`: added when above 0.0; else the second value decides.
+            let shown = above(first, zero) || {
+                let second = e
+                    .call(REPUTATION_VALUE_006155C0, &args![reputation, 0u32])
+                    .f64();
+                above(second, zero)
+            };
+            if shown {
+                e.with_stack(8, |e, text| {
+                    e.call(STRING_CONSTRUCT, &args![text]);
+                    let name = e
+                        .call(STRING_CHARS_00408DA0, &args![reputation.wrapping_add(0x18)])
+                        .u32();
+                    e.call(STRING_FORMAT, &args![text, ONE_STRING_FORMAT, name]);
+                    let chars = e.call(STRING_CHARS_00559450, &args![text]).u32();
+                    let menu = open_menu(e);
+                    fn_007e16d0(e, Ptr::new(menu + 0x270), reputation, chars, 0x007e_0510, 0);
+                    e.call(STRING_DESTROY, &args![text]);
+                });
+            }
+        }
+        node = node_next(e, node);
+    }
+}
+
+// Translated from 007dda60 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed (no arguments): with an open stats menu whose +0x118 is set, its perk list
+/// (+0x1e0) is cleared (vtable +0x1c).
+pub fn fn_007dda60(e: &mut Engine) {
+    let menu = open_menu(e);
+    if menu != 0 && e.mem.u32(menu + 0x118) != 0 {
+        let menu = open_menu(e);
+        e.vcall(menu + 0x1e0, 0x1c, &args![]);
+    }
+}
+
+// Translated from 007ddaa0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed (`thiscall` on the stats menu): the general list's (+0x210) items each get their
+/// misc stat's value (`007314c0` with `007dfc60`, 0 and `0x7fffffff`).
+pub fn fn_007ddaa0(e: &mut Engine, this: Ptr) {
+    e.call(
+        ITEM_CHANGE_007314C0,
+        &args![this.addr() + 0x210, 0x007d_fc60u32, 0u32, 0x7fff_ffffu32],
+    );
+}
+
+/// The three hardcore meters (`007ddc20`, `007ddd10`, `007dde00`): with `a` the menu tile's
+/// trait `0x1008` times 1000 and `b = -a / 2`, `c = 005c5420() * a + b`; `d` is
+/// `00404010(0.0, value)` of the player's actor value; `pi/2 - (d + c) / 1000 * pi` is
+/// computed and stored but not used. A `d` strictly between 0 and 1 becomes 1, any other
+/// `004bd510(d, 1.0)`; it goes to the trait of tile +4.
+fn hardcore_meter(e: &mut Engine, this: Ptr, value: u32, trait_id: u32) {
+    let root = e.call(WORD_AT_4_00726070, &args![this]).u32();
+    let range = e.call(TILE_GET_FLOAT, &args![root, 0x1008u32]).f64();
+    let thousand: f64 = e.global(THOUSAND_DOUBLE);
+    let two: f64 = e.global(TWO_DOUBLE);
+    let a = x87_store32(x87_mul(range, thousand));
+    // `FLD a; FCHS; FDIV 2.0; FSTP double`.
+    let b = x87_div(-x87_load32(a), two);
+    let scale = e.call(VALUE_005C5420, &args![]).f64();
+    let c = x87_store32(x87_add(x87_mul(scale, x87_m32(a)), b));
+    let current = x87_store32(e.vcall(actor_values(e), AV_FLOAT, &args![value]).f64());
+    let d = x87_store32(
+        e.call(FLOAT_PAIR_00404010, &args![0.0f32.to_bits(), current])
+            .f64(),
+    );
+    let pi: f64 = e.global(PI_DOUBLE);
+    let half_pi: f64 = e.global(HALF_PI_DOUBLE);
+    let sum = x87_add(x87_load32(d), x87_m32(c));
+    let _angle = x87_store32(x87_sub(half_pi, x87_mul(x87_div(sum, thousand), pi)));
+    let zero: f64 = e.global(ZERO_DOUBLE);
+    let one: f64 = e.global(ONE_DOUBLE);
+    // `TEST AH,0x41; JNZ` then `TEST AH,5; JP`: 1.0 only when strictly between 0 and 1.
+    let d = if above(x87_load32(d), zero) && x87_load32(d) < one {
+        1.0f32.to_bits()
+    } else {
+        x87_store32(
+            e.call(
+                FLOAT_PAIR_004BD510,
+                &args![x87_quiet_bits(d), 1.0f32.to_bits()],
+            )
+            .f64(),
+        )
+    };
+    let tile = e.mem.u32(this.addr() + 4);
+    e.call(
+        TILE_SET_FLOAT,
+        &args![tile, trait_id, x87_quiet_bits(d), 1u32],
+    );
+}
+
+// Translated from 007ddc20 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed (`thiscall` on the stats menu): the hardcore meter of actor value 0x49 on trait
+/// `0x100f` (see `hardcore_meter`).
+pub fn fn_007ddc20(e: &mut Engine, this: Ptr) {
+    hardcore_meter(e, this, 0x49, 0x100f);
+}
+
+// Translated from 007ddd10 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed (`thiscall` on the stats menu): the hardcore meter of actor value 0x4a on trait
+/// `0x1010` (see `hardcore_meter`).
+pub fn fn_007ddd10(e: &mut Engine, this: Ptr) {
+    hardcore_meter(e, this, 0x4a, 0x1010);
+}
+
+// Translated from 007dde00 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed (`thiscall` on the stats menu): the hardcore meter of actor value 0x4b on trait
+/// `0x1011` (see `hardcore_meter`).
+pub fn fn_007dde00(e: &mut Engine, this: Ptr) {
+    hardcore_meter(e, this, 0x4b, 0x1011);
+}
+
+// Translated from 007df120 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed (`thiscall`, `RET 4`): `00501c10` on `this + 0x20` with the word.
+pub fn fn_007df120(e: &mut Engine, this: Ptr, value: u32) {
+    e.call(FIELD_SET_00501C10, &args![this.addr() + 0x20, value]);
+}
+
+// Translated from 007df140 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 007df140 - the C++ exception frame (FS:[0] chain, unwind state 0 after the first list) is not translated.
+/// Unnamed (`thiscall`, `RET 4`: the 0x1c-byte status effect entry's constructor): the
+/// lists at +4 (`00406db0`) and +0x10 (`0071f540`) built, the word stored at +0. Returns
+/// `this`.
+pub fn fn_007df140(e: &mut Engine, this: Ptr, value: u32) -> Ptr {
+    e.call(LIST_CONSTRUCT_00406DB0, &args![this.addr() + 4]);
+    e.call(LIST_CONSTRUCT_0071F540, &args![this.addr() + 0x10]);
+    e.mem.set_u32(this.addr(), value);
+    this
+}
+
+// Translated from 007df920 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed (`thiscall` on the stats menu): the limb with the lowest condition. Over the six
+/// limb groups (`007df9c0`'s actor values, read as `float`s), the first strictly below the
+/// lowest so far (starting from the largest `float`, `01016970`) wins (6 when none); the
+/// fade object makes it current (`007dbfa0`), fading when limb mode (+0x2a0) is on.
+pub fn fn_007df920(e: &mut Engine, this: Ptr) {
+    let mut best_group = 6u32;
+    let mut best = x87_quiet_bits(e.global::<u32>(FLOAT_MAX_01016970));
+    let mut group = 0u32;
+    while (group as i32) < 6 {
+        let value = fn_007df9c0(e, group);
+        let value = x87_store32(e.vcall(actor_values(e), AV_FLOAT, &args![value]).f64());
+        // `FLD value; FLD best; FCOMPP; TEST AH,0x41; JNZ`: taken when best is above it.
+        if above(x87_load32(best), x87_load32(value)) {
+            best = value;
+            best_group = group;
+        }
+        group += 1;
+    }
+    let flag = e.mem.u8(this.addr() + 0x2a0);
+    let object = fade(e);
+    fn_007dbfa0(e, object, best_group, flag);
+}
+
+// Translated from 007df9c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed (`cdecl`, a limb group 0 to 5): its actor value (0x19, 0x1c, 0x1a, 0x1b, 0x1e,
+/// 0x1d), or -1 for any other.
+pub fn fn_007df9c0(_e: &mut Engine, group: u32) -> u32 {
+    match group {
+        0 => 0x19,
+        1 => 0x1c,
+        2 => 0x1a,
+        3 => 0x1b,
+        4 => 0x1e,
+        5 => 0x1d,
+        _ => 0xffff_ffff,
+    }
+}
+
+// Translated from 007dfc90 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `StatsMenu::SetKnobPosition` (Xbox PDB; `cdecl`, a byte): with an open stats menu, the
+/// Pip-Boy's tab knob goes to its page (`FOPipboyManager::SetTabKnobPosition(page, byte)`).
+pub fn stats_menu_set_knob_position(e: &mut Engine, flag: u8) {
+    let menu = open_menu(e);
+    if menu == 0 {
+        return;
+    }
+    let page = fn_007dcc00(e, Ptr::new(menu));
+    let manager = pipboy_manager(e);
+    e.call(
+        PIPBOY_SET_TAB_KNOB_POSITION,
+        &args![manager, page as u32, u32::from(flag)],
+    );
+}
+
+// Translated from 007dfd00 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `StatsMenu::SetCurrentStatsPage` (Xbox PDB; `cdecl`, a byte): `SetCurrentPage` of the
+/// open stats menu, if any.
+pub fn stats_menu_set_current_stats_page(e: &mut Engine, page: u8) {
+    let menu = open_menu(e);
+    if menu != 0 {
+        stats_menu_set_current_page(e, Ptr::new(menu), i32::from(page));
+    }
+}
+
+// Translated from 007dfd20 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `StatsMenu::MoveKnob` (Xbox PDB; `RET 8`: a tile and the address of the last step): the
+/// tile's `0xfac` truncated (`FISTP qword` with the rounding mode set to chop; its low
+/// word). Above the last step (unsigned) the Pip-Boy's knob moves forward
+/// (`MoveKnob(0, distance, speed, 1)` with the game settings at `011db2f0` and `011db358`),
+/// below it backward (the distance negated); the step is kept.
+pub fn stats_menu_move_knob(e: &mut Engine, _this: Ptr, tile: u32, last: Ptr) {
+    let value = e.call(TILE_GET_FLOAT, &args![tile, 0xfacu32]).f64();
+    let step = x87_fistp64_chop(X87Ext::load64(value)) as u32;
+    let previous = e.mem.u32(last.addr());
+    if previous < step {
+        let speed = setting_float(e, KNOB_SETTING_011DB358);
+        let distance = setting_float(e, KNOB_SETTING_011DB2F0);
+        let manager = pipboy_manager(e);
+        e.call(
+            PIPBOY_MOVE_KNOB,
+            &args![manager, 0u32, distance, speed, 1u32],
+        );
+    } else if previous > step {
+        let speed = setting_float(e, KNOB_SETTING_011DB358);
+        // `FLD; FCHS`: the loaded value with its sign flipped.
+        let distance = setting_float(e, KNOB_SETTING_011DB2F0) ^ 0x8000_0000;
+        let manager = pipboy_manager(e);
+        e.call(
+            PIPBOY_MOVE_KNOB,
+            &args![manager, 0u32, distance, speed, 1u32],
+        );
+    }
+    e.mem.set_u32(last.addr(), step);
+}
+
+// Translated from 007e0060 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed (`thiscall` on the stats menu, `RET 4`, a sub page): a sub page from 0 to 2 (5 in
+/// hardcore mode) other than the current one (`007dcc40`) becomes current: limb mode ends
+/// (`007e0230`) and tile +0xa4's `0x1004` is set to it; true. Otherwise false.
+pub fn fn_007e0060(e: &mut Engine, this: Ptr, page: i32) -> bool {
+    if page < 0 {
+        return false;
+    }
+    let last = if e.call(HARDCORE_004D1360, &args![player(e)]).bool() {
+        5
+    } else {
+        2
+    };
+    if page > last || fn_007dcc40(e, this) == page {
+        return false;
+    }
+    if e.mem.u8(this.addr() + 0x2a0) != 0 {
+        fn_007e0230(e, this);
+    }
+    let tile = e.mem.u32(this.addr() + 0xa4);
+    set_int(e, tile, 0x1004, page as u32);
+    true
+}
+
+// Translated from 007e00e0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `StatsMenu::GetPageFor` (Xbox PDB; `RET 8`: a tile id and the page's address): ids 0 to
+/// 4 are the page buttons: the page is stored and true returned; any other id false.
+pub fn stats_menu_get_page_for(e: &mut Engine, _this: Ptr, id: u32, page: Ptr) -> bool {
+    if id > 4 {
+        return false;
+    }
+    e.mem.set_u32(page.addr(), id);
+    true
+}
+
+// Translated from 007e0160 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed here (the engine map names it `StatsMenu::SetStatusPage`, but the body only looks
+/// the id up; `RET 8`: a tile id and the
+/// sub page's address): ids 0x1c, 0x1d, 0x1e, 0x35, 0x37 and 0x39 are the status sub page
+/// buttons 0 to 5: the sub page is stored and true returned; any other id false.
+pub fn fn_007e0160(e: &mut Engine, _this: Ptr, id: u32, page: Ptr) -> bool {
+    let value = match id.wrapping_sub(0x1c) {
+        0 => 0,
+        1 => 1,
+        2 => 2,
+        0x19 => 3,
+        0x1b => 4,
+        0x1d => 5,
+        _ => return false,
+    };
+    e.mem.set_u32(page.addr(), value);
+    true
+}
+
+// Translated from 007e0230 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed (`thiscall` on the stats menu): toggles limb mode (+0x2a0), updates the two
+/// healing options' tiles (`0xfaf` of +0x2c from `007e05f0(this + 0x28)`, of +0x5c from
+/// `007e06f0(this + 0x58)`) and the healing mode (`007df620`).
+pub fn fn_007e0230(e: &mut Engine, this: Ptr) {
+    let base = this.addr();
+    let mode = u8::from(e.mem.u8(base + 0x2a0) == 0);
+    e.mem.set_u8(base + 0x2a0, mode);
+    let first = fn_007e05f0(e, Ptr::new(base + 0x28));
+    let tile = e.mem.u32(base + 0x2c);
+    set_int(e, tile, 0xfaf, u32::from(first));
+    let second = fn_007e06f0(e, Ptr::new(base + 0x58));
+    let tile = e.mem.u32(base + 0x5c);
+    set_int(e, tile, 0xfaf, u32::from(second));
+    stats_menu_update_healing_mode(e, this);
+}
+
+// Translated from 007e02b0 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 007e02b0 - the C++ exception frame (FS:[0] chain, unwind states 0 and 1 around the statics' initialisers) is not translated.
+/// `StatsMenu::ToggleGenRepMode` (Xbox PDB; `thiscall`): the function-local trait ids
+/// (`"_enabled"` and `01077564`, `Tile::AddUserTrait` once each, guard bits 1 and 2 at
+/// `011dad8c`); the mode byte (`011a0ae0`) toggled; the open menu's reputation tile (+0x148)
+/// gets the first trait and `0xfa3` set to the mode, the general tile (+0xb0) both set to
+/// the opposite; the title tile (+0x154) shows the game setting `011d4ef4` (reputations) or
+/// `011d4144` (general) and tile +0x158's `0x1004` is 1 or 0.
+pub fn stats_menu_toggle_gen_rep_mode(e: &mut Engine, _this: Ptr) {
+    let guard = e.global::<u32>(GEN_REP_GUARD_011DAD8C);
+    if guard & 1 == 0 {
+        e.set_global(GEN_REP_GUARD_011DAD8C, guard | 1);
+        let trait_id = e
+            .call(ADD_USER_TRAIT, &args![ENABLED_TEXT, 0xffff_ffffu32])
+            .u32();
+        e.set_global(GEN_REP_TRAIT_011DAD88, trait_id);
+    }
+    let guard = e.global::<u32>(GEN_REP_GUARD_011DAD8C);
+    if guard & 2 == 0 {
+        e.set_global(GEN_REP_GUARD_011DAD8C, guard | 2);
+        let trait_id = e
+            .call(
+                ADD_USER_TRAIT,
+                &args![GEN_REP_TRAIT_NAME_01077564, 0xffff_ffffu32],
+            )
+            .u32();
+        e.set_global(GEN_REP_TRAIT_011DAD84, trait_id);
+    }
+    let mode = u8::from(e.global::<u8>(GEN_REP_MODE_011A0AE0) == 0);
+    e.set_global(GEN_REP_MODE_011A0AE0, mode);
+    let enabled = e.global::<u32>(GEN_REP_TRAIT_011DAD88);
+    let mode = u32::from(e.global::<u8>(GEN_REP_MODE_011A0AE0));
+    let tile = e.mem.u32(open_menu(e) + 0x148);
+    set_int(e, tile, enabled, mode);
+    let mode = u32::from(e.global::<u8>(GEN_REP_MODE_011A0AE0));
+    let tile = e.mem.u32(open_menu(e) + 0x148);
+    set_int(e, tile, 0xfa3, mode);
+    let other = u32::from(e.global::<u8>(GEN_REP_MODE_011A0AE0) == 0);
+    let enabled = e.global::<u32>(GEN_REP_TRAIT_011DAD88);
+    let tile = e.mem.u32(open_menu(e) + 0xb0);
+    set_int(e, tile, enabled, other);
+    let other = u32::from(e.global::<u8>(GEN_REP_MODE_011A0AE0) == 0);
+    let tile = e.mem.u32(open_menu(e) + 0xb0);
+    set_int(e, tile, 0xfa3, other);
+    if e.global::<u8>(GEN_REP_MODE_011A0AE0) != 0 {
+        let text = setting_string(e, SETTING_011D4EF4);
+        let tile = e.mem.u32(open_menu(e) + 0x154);
+        set_string(e, tile, 0xfc4, text);
+        let tile = e.mem.u32(open_menu(e) + 0x158);
+        set_int(e, tile, 0x1004, 1);
+    } else {
+        let text = setting_string(e, SETTING_011D4144);
+        let tile = e.mem.u32(open_menu(e) + 0x154);
+        set_string(e, tile, 0xfc4, text);
+        let tile = e.mem.u32(open_menu(e) + 0x158);
+        set_int(e, tile, 0x1004, 0);
+    }
+}
+
+// Translated from 007e0480 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed (`cdecl`, two status effect entries: the effect list's sort): `00404dc0` of the
+/// names (`00408da0` of each entry's first word cast by `__RTDynamicCast` from `01183028`
+/// to `01183158`), the second's looked up first.
+pub fn fn_007e0480(e: &mut Engine, first: u32, second: u32) -> i32 {
+    let object = e.mem.u32(second);
+    let named = e
+        .call(
+            RT_DYNAMIC_CAST,
+            &args![object, 0u32, TYPE_FORM_01183028, TYPE_NAMED_01183158, 0u32],
+        )
+        .u32();
+    let second_name = e.call(STRING_CHARS_00408DA0, &args![named]).u32();
+    let object = e.mem.u32(first);
+    let named = e
+        .call(
+            RT_DYNAMIC_CAST,
+            &args![object, 0u32, TYPE_FORM_01183028, TYPE_NAMED_01183158, 0u32],
+        )
+        .u32();
+    let first_name = e.call(STRING_CHARS_00408DA0, &args![named]).u32();
+    e.call(COMPARE_00404DC0, &args![first_name, second_name])
+        .i32()
+}
+
+// Translated from 007e0510 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed (`cdecl`, two list items: the reputation list's sort): `00404dc0` of the names
+/// (the string at +0x18 of each item's data at +4), the second's looked up first.
+pub fn fn_007e0510(e: &mut Engine, first: u32, second: u32) -> i32 {
+    let data = e.mem.u32(second.wrapping_add(4));
+    let second_name = e
+        .call(STRING_CHARS_00408DA0, &args![data.wrapping_add(0x18)])
+        .u32();
+    let data = e.mem.u32(first.wrapping_add(4));
+    let first_name = e
+        .call(STRING_CHARS_00408DA0, &args![data.wrapping_add(0x18)])
+        .u32();
+    e.call(COMPARE_00404DC0, &args![first_name, second_name])
+        .i32()
+}
+
+// Translated from 007e0540 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 007e0540 - the C++ exception frame (FS:[0] chain, unwind states 0 and 1 for the two string locals) is not translated.
+/// Unnamed (`cdecl`, two stage effects: the stage list's sort): each gives a string
+/// (`004046b0` into a local, the second's first), and `00404dc0` compares their texts
+/// (first, second); the locals are destroyed (the first's, then the second's).
+pub fn fn_007e0540(e: &mut Engine, first: u32, second: u32) -> i32 {
+    e.with_stack(8, |e, second_text| {
+        let made = e
+            .call(ENTRY_STRING_004046B0, &args![second, second_text])
+            .u32();
+        let second_chars = e.call(STRING_CHARS_00559450, &args![made]).u32();
+        e.with_stack(8, |e, first_text| {
+            let made = e
+                .call(ENTRY_STRING_004046B0, &args![first, first_text])
+                .u32();
+            let first_chars = e.call(STRING_CHARS_00559450, &args![made]).u32();
+            let result = e
+                .call(COMPARE_00404DC0, &args![first_chars, second_chars])
+                .i32();
+            e.call(STRING_DESTROY, &args![first_text]);
+            e.call(STRING_DESTROY, &args![second_text]);
+            result
+        })
+    })
+}
+
+// Translated from 007e06b0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed (no arguments): with `0070ed80`, the actor value of the fade object's current
+/// group (`007df9c0` of its first word, through `00559450`); otherwise -1.
+pub fn fn_007e06b0(e: &mut Engine) -> u32 {
+    if !e.call(FLAG_0070ED80, &args![]).bool() {
+        return 0xffff_ffff;
+    }
+    let object = fn_007db1c0(e);
+    let group = e.call(STRING_CHARS_00559450, &args![object]).u32();
+    fn_007df9c0(e, group)
+}
+
+// Translated from 007e06f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed (`cdecl`, a healing option record: the limb option's availability callback):
+/// false without an inventory entry (+8), and outside hardcore mode with a limb picked
+/// (`007e06b0` not -1). Otherwise true when any limb (actor values 0x19 to 0x1e) is below
+/// its base (slot +8 against +0x1c).
+pub fn fn_007e06f0(e: &mut Engine, record: Ptr) -> bool {
+    let hardcore = e.call(HARDCORE_004D1360, &args![player(e)]).bool();
+    if e.mem.u32(record.addr() + 8) == 0 {
+        return false;
+    }
+    let limb = fn_007e06b0(e);
+    if !hardcore && limb != 0xffff_ffff {
+        return false;
+    }
+    for value in 0x19u32..0x1f {
+        let current = e.vcall(actor_values(e), AV_VALUE, &args![value]).i32();
+        let base = e.vcall(actor_values(e), AV_BASE, &args![value]).i32();
+        if current < base {
+            return true;
+        }
+    }
+    false
+}
+
+// Translated from 007e08a0 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 007e08a0 - the C++ exception frame (FS:[0] chain, unwind state 0 around the entry's construction) is not translated.
+/// `StatsMenu::StatusEffectList::Register` (Xbox PDB; `RET 4`, an active effect): the
+/// effect's target (`0044ddc0`) cast from `01183140` to `01183028`; the entry for its key
+/// (`0084e3a0`, `007e0c50`) is found or made (0x1c bytes, `007df140`) and inserted sorted
+/// (`007e0480`). An effect whose setting has flag `0x2000` goes to the entry's stage list
+/// (+0x10, `007e09d0`), any other to its data list (+4, `007e0a20`).
+pub fn stats_menu_status_effect_list_register(e: &mut Engine, this: Ptr, effect: u32) {
+    let target = e.call(EFFECT_TARGET_0044DDC0, &args![effect]).u32();
+    let form = e
+        .call(
+            RT_DYNAMIC_CAST,
+            &args![target, 0u32, TYPE_TARGET_01183140, TYPE_FORM_01183028, 0u32],
+        )
+        .u32();
+    let key = e.call(EFFECT_ITEM_0084E3A0, &args![form]).u32();
+    let mut entry = fn_007e0c50(e, this, key);
+    if entry == 0 {
+        let block = e.call(ALLOCATE, &args![0x1cu32]).u32();
+        let made = if block != 0 {
+            fn_007df140(e, Ptr::new(block), form).addr()
+        } else {
+            0
+        };
+        entry = made;
+        e.call(
+            LIST_INSERT_SORTED,
+            &args![this.addr() + 4, entry, 0x007e_0480u32],
+        );
+    }
+    let setting = fn_007df1d0(e, Ptr::new(effect));
+    if e.call(FLAG_TEST_00403E60, &args![setting, 0x2000u32])
+        .bool()
+    {
+        fn_007e09d0(e, Ptr::new(entry.wrapping_add(0x10)), effect);
+    } else {
+        fn_007e0a20(e, Ptr::new(entry.wrapping_add(4)), effect);
+    }
+}
+
+// Translated from 007e09d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed (`thiscall` on a stage list, `RET 4`, an active effect): the effect's setting
+/// (`007df1d0`) is inserted (sorted by `007e0540`) unless the list (+4) holds it already
+/// (`005f65d0`).
+pub fn fn_007e09d0(e: &mut Engine, this: Ptr, effect: u32) {
+    let list = this.addr() + 4;
+    let setting = fn_007df1d0(e, Ptr::new(effect));
+    let present = e.with_stack(4, |e, slot| {
+        e.mem.set_u32(slot.addr(), setting);
+        e.call(LIST_CONTAINS_005F65D0, &args![list, slot]).bool()
+    });
+    if !present {
+        let setting = fn_007df1d0(e, Ptr::new(effect));
+        e.call(LIST_INSERT_SORTED, &args![list, setting, 0x007e_0540u32]);
+    }
+}
+
+// Translated from 007e0a20 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 007e0a20 - the C++ exception frame (FS:[0] chain, unwind state 0 around the entry's construction) is not translated.
+/// Unnamed (`thiscall` on a status data list, `RET 4`, an active effect): as `Register` of
+/// the status data list for an active effect: the key is `00403ea0` of its effect item
+/// (`0084e3a0`), the magnitude `_ftol2` of `00495460`. An entry with the key gains the
+/// magnitude; otherwise a new 0x14-byte entry (`00403ba0`) takes key and magnitude and is
+/// appended (+4).
+pub fn fn_007e0a20(e: &mut Engine, this: Ptr, effect: u32) {
+    if effect == 0 {
+        return;
+    }
+    let item = e.call(EFFECT_ITEM_0084E3A0, &args![effect]).u32();
+    let key = e.call(EFFECT_KEY_00403EA0, &args![item]).u32();
+    let found = fn_007e0ce0(e, this, key);
+    if found != 0 {
+        let magnitude = e.call(MAGNITUDE_00495460, &args![effect]).f64();
+        let magnitude = e.call(FTOL2, &args![magnitude]).u32();
+        let total = magnitude.wrapping_add(e.mem.u32(found));
+        e.mem.set_u32(found, total);
+        return;
+    }
+    let block = e.call(ALLOCATE, &args![0x14u32]).u32();
+    let entry = if block != 0 {
+        e.call(ENTRY_CONSTRUCT_00403BA0, &args![block]).u32()
+    } else {
+        0
+    };
+    let item = e.call(EFFECT_ITEM_0084E3A0, &args![effect]).u32();
+    let key = e.call(EFFECT_KEY_00403EA0, &args![item]).u32();
+    e.mem.set_u32(entry.wrapping_add(0x10), key);
+    let magnitude = e.call(MAGNITUDE_00495460, &args![effect]).f64();
+    let magnitude = e.call(FTOL2, &args![magnitude]).u32();
+    e.mem.set_u32(entry, magnitude);
+    e.with_stack(4, |e, slot| {
+        e.mem.set_u32(slot.addr(), entry);
+        e.call(LIST_APPEND, &args![this.addr() + 4, slot]);
+    });
+}
+
+// Translated from 007e0c50 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed (`thiscall` on a status effect list, `RET 4`, a key): the first entry whose first
+/// word's `0084e3a0` is the key, or 0 (the walk advances once more past a match before it
+/// stops).
+pub fn fn_007e0c50(e: &mut Engine, this: Ptr, key: u32) -> u32 {
+    let mut found = 0u32;
+    let mut node = if this.is_null() { 0 } else { this.addr() + 4 };
+    while found == 0 && node != 0 && node_item(e, node) != 0 {
+        let entry = node_item(e, node);
+        let form = e.mem.u32(entry);
+        if e.call(EFFECT_ITEM_0084E3A0, &args![form]).u32() == key {
+            found = node_item(e, node);
+        }
+        node = node_next(e, node);
+    }
+    found
+}
+
+// Translated from 007e0d60 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `StatsMenu::DoControllerSwitch` (engine map, vtable; `RET 4`, an unread word): the
+/// healing mode is shown again (`007df620`).
+pub fn stats_menu_do_controller_switch(e: &mut Engine, this: Ptr, _unused_1: u32) {
+    stats_menu_update_healing_mode(e, this);
+}
+
+// Translated from 007e0d80 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSStringT<char>::operator+=` with another string (engine map `operator+=` (ov2); `RET
+/// 4`): a source with text is appended to a string with text (grown with `004037f0` when
+/// the summed length (`004048e0`) passes the capacity (`004039a0`), copied by `00401460`
+/// to the end, the length set by `004039c0`); a string without text takes the source
+/// (`BSStringT::Set`). Returns `this`.
+pub fn bs_string_operator_add_assign_ov2(e: &mut Engine, this: Ptr, source: u32) -> Ptr {
+    if e.call(STRING_CHARS_00559450, &args![source]).u32() == 0 {
+        return this;
+    }
+    if e.call(STRING_CHARS_00559450, &args![this]).u32() == 0 {
+        e.call(STRING_SET, &args![this, source]);
+        return this;
+    }
+    let own = e.call(STRING_LENGTH_004048E0, &args![this]).u32();
+    let added = e.call(STRING_LENGTH_004048E0, &args![source]).u32();
+    let length = own.wrapping_add(added);
+    if length > e.call(STRING_CAPACITY_004039A0, &args![this]).u32() {
+        let chars = e.call(STRING_CHARS_00559450, &args![this]).u32();
+        e.call(STRING_GROW_004037F0, &args![this, chars, length]);
+    }
+    let count = e.call(STRING_COPY_LENGTH_004F4280, &args![source]).u32();
+    let from = e.call(STRING_CHARS_00559450, &args![source]).u32();
+    let own = e.call(STRING_LENGTH_004048E0, &args![this]).u32();
+    let to = own.wrapping_add(e.mem.u32(this.addr()));
+    e.call(COPY_00401460, &args![to, from, count]);
+    e.call(STRING_SET_LENGTH_004039C0, &args![this, length]);
+    this
+}
+
+// Translated from 007e1430 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 007e1430 - the C++ exception frame (FS:[0] chain, unwind states 0 and 1 around the item allocations) is not translated.
+/// `ListBox<StatsMenu::StatusEffect_P>::AddItem` (engine map; `RET 0x10`; its
+/// `Synchronize` `007254d0` and `SetTotalListHeight` `00725970` are in `menumanager.cpp`):
+/// as `ListBox<BGSPerk_P>::AddItem` of `levelupmenu.cpp`.
+pub fn list_box_status_effect_add_item(
+    e: &mut Engine,
+    this: Ptr,
+    data: u32,
+    text: u32,
+    compare: u32,
+    template: u32,
+) -> u32 {
+    list_box_add_item(
+        e,
+        this,
+        (data, text, compare, template),
+        (
+            STATUS_EFFECT_SYNCHRONIZE_007254D0,
+            STATUS_EFFECT_SET_TOTAL_LIST_HEIGHT,
+        ),
+    )
+}
+
+// Translated from 007e16d0 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 007e16d0 - the C++ exception frame (FS:[0] chain, unwind states 0 and 1 around the item allocations) is not translated.
+/// Unnamed in the engine map (`RET 0x10`): the `ListBox` `AddItem` instance whose
+/// `Synchronize` and `SetTotalListHeight` are `ListBox<TESReputation_P>`'s (`00725aa0`,
+/// `00725f40`, `menumanager.cpp`); the reputation list (+0x270) adds through it. As
+/// `ListBox<BGSPerk_P>::AddItem` of `levelupmenu.cpp`.
+pub fn fn_007e16d0(
+    e: &mut Engine,
+    this: Ptr,
+    data: u32,
+    text: u32,
+    compare: u32,
+    template: u32,
+) -> u32 {
+    list_box_add_item(
+        e,
+        this,
+        (data, text, compare, template),
+        (REPUTATION_SYNCHRONIZE, REPUTATION_SET_TOTAL_LIST_HEIGHT),
+    )
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -2375,6 +3954,54 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
             0x007e_1190,
             list_box_misc_stat_id_add_item(Ptr, u32, u32, u32, u32) -> u32
         ),
+        entry!(0x0070_4390, stats_menu_toggle_healing_mode()),
+        entry!(0x007d_b380, stats_menu_do_click(Ptr, i32, u32)),
+        entry!(0x007d_b630, fn_007db630(Ptr, u32) -> u32),
+        entry!(0x007d_b680, stats_menu_do_gamepad(Ptr, u32, u32) -> bool),
+        entry!(0x007d_bfa0, fn_007dbfa0(Ptr, u32, u8)),
+        entry!(0x007d_c010, fn_007dc010(Ptr, u32, u32) -> u32),
+        entry!(0x007d_c0c0, fn_007dc0c0(Ptr) -> Ptr),
+        entry!(0x007d_c0e0, stats_menu_do_gamepad_up_event(Ptr, u32, u32) -> bool),
+        entry!(0x007d_c1b0, stats_menu_do_enter(Ptr, i32, u32)),
+        entry!(0x007d_c490, stats_menu_do_leave(Ptr, u32, u32)),
+        entry!(0x007d_c7e0, fn_007dc7e0(Ptr, u32)),
+        entry!(0x007d_c9b0, fn_007dc9b0(Ptr, Ptr)),
+        entry!(0x007d_cb40, fn_007dcb40(Ptr, u32)),
+        entry!(0x007d_cc80, stats_menu_update_all(Ptr)),
+        entry!(0x007d_d8c0, fn_007dd8c0(Ptr)),
+        entry!(0x007d_da60, fn_007dda60()),
+        entry!(0x007d_daa0, fn_007ddaa0(Ptr)),
+        entry!(0x007d_dc20, fn_007ddc20(Ptr)),
+        entry!(0x007d_dd10, fn_007ddd10(Ptr)),
+        entry!(0x007d_de00, fn_007dde00(Ptr)),
+        entry!(0x007d_f120, fn_007df120(Ptr, u32)),
+        entry!(0x007d_f140, fn_007df140(Ptr, u32) -> Ptr),
+        entry!(0x007d_f920, fn_007df920(Ptr)),
+        entry!(0x007d_f9c0, fn_007df9c0(u32) -> u32),
+        entry!(0x007d_fc90, stats_menu_set_knob_position(u8)),
+        entry!(0x007d_fd00, stats_menu_set_current_stats_page(u8)),
+        entry!(0x007d_fd20, stats_menu_move_knob(Ptr, u32, Ptr)),
+        entry!(0x007e_0060, fn_007e0060(Ptr, i32) -> bool),
+        entry!(0x007e_00e0, stats_menu_get_page_for(Ptr, u32, Ptr) -> bool),
+        entry!(0x007e_0160, fn_007e0160(Ptr, u32, Ptr) -> bool),
+        entry!(0x007e_0230, fn_007e0230(Ptr)),
+        entry!(0x007e_02b0, stats_menu_toggle_gen_rep_mode(Ptr)),
+        entry!(0x007e_0480, fn_007e0480(u32, u32) -> i32),
+        entry!(0x007e_0510, fn_007e0510(u32, u32) -> i32),
+        entry!(0x007e_0540, fn_007e0540(u32, u32) -> i32),
+        entry!(0x007e_06b0, fn_007e06b0() -> u32),
+        entry!(0x007e_06f0, fn_007e06f0(Ptr) -> bool),
+        entry!(
+            0x007e_08a0,
+            stats_menu_status_effect_list_register(Ptr, u32)
+        ),
+        entry!(0x007e_09d0, fn_007e09d0(Ptr, u32)),
+        entry!(0x007e_0a20, fn_007e0a20(Ptr, u32)),
+        entry!(0x007e_0c50, fn_007e0c50(Ptr, u32) -> u32),
+        entry!(0x007e_0d60, stats_menu_do_controller_switch(Ptr, u32)),
+        entry!(0x007e_0d80, bs_string_operator_add_assign_ov2(Ptr, u32) -> Ptr),
+        entry!(0x007e_1430, list_box_status_effect_add_item(Ptr, u32, u32, u32, u32) -> u32),
+        entry!(0x007e_16d0, fn_007e16d0(Ptr, u32, u32, u32, u32) -> u32),
     ]
 }
 
@@ -3524,5 +5151,1391 @@ mod b069_tests {
         assert_eq!(calls_to(&e, METER_LABEL_007B52A0).len(), 4);
         let fade = e.global::<u32>(FADE_OBJECT_011DACE4);
         assert_eq!(e.mem.u32(fade + 0x34), 0x0301_0200);
+    }
+}
+
+#[cfg(test)]
+mod n058_tests {
+    use super::*;
+
+    fn calls_to(e: &Engine, addr: u32) -> Vec<Vec<u32>> {
+        e.call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|(a, _)| *a == addr)
+            .map(|(_, words)| words.clone())
+            .collect()
+    }
+
+    fn st0(value: f64) -> Ret {
+        Ret {
+            st0: value,
+            ..Ret::default()
+        }
+    }
+
+    /// The target of slot `slot` of fake vtable `index` (each slot its own double).
+    fn slot(index: u32, slot: u32) -> u32 {
+        0x0e00_0000 + index * 0x1000 + slot
+    }
+
+    fn fake_vtable(e: &mut Engine, index: u32) -> u32 {
+        let vtable = e.mem.alloc(0x700);
+        for offset in (0..0x700).step_by(4) {
+            let target = slot(index, offset);
+            e.mem.set_u32(vtable + offset, target);
+            e.register(target, |_, _| Ret::default());
+        }
+        vtable
+    }
+
+    fn fake_object(e: &mut Engine, index: u32) -> u32 {
+        let vtable = fake_vtable(e, index);
+        let object = e.mem.alloc(0x300);
+        e.mem.set_u32(object, vtable);
+        object
+    }
+
+    /// Every callee outside this file, doubled (0 or nothing); the list helpers act on the
+    /// node words; the pages of the statics and constants are mapped.
+    fn engine() -> Engine {
+        let mut e = Engine::new();
+        for page in [
+            0x011d_a000,
+            0x011a_0000,
+            0x011d_e000,
+            0x011d_0000,
+            0x011d_1000,
+            0x011d_2000,
+            0x011d_3000,
+            0x011d_4000,
+            0x011d_5000,
+            0x011d_b000,
+            0x0101_1000,
+            0x0101_2000,
+            0x0101_3000,
+            0x0101_6000,
+            0x0101_7000,
+            0x0101_f000,
+            0x0102_0000,
+            0x0102_3000,
+            0x0106_4000,
+            0x0107_0000,
+            0x0107_8000,
+        ] {
+            e.map(page, 0x1000);
+        }
+        e.set_global(ZERO_DOUBLE, 0.0f64);
+        e.set_global(ONE_DOUBLE, 1.0f64);
+        e.set_global(THOUSAND_DOUBLE, 1000.0f64);
+        e.set_global(TWO_DOUBLE, 2.0f64);
+        e.set_global(PI_DOUBLE, std::f64::consts::PI);
+        e.set_global(HALF_PI_DOUBLE, std::f64::consts::FRAC_PI_2);
+        e.set_global(FIVE_DOUBLE, 5.0f64);
+        e.set_global(HUNDRED_DOUBLE, 100.0f64);
+        e.set_global(VALUE_6006_DOUBLE, 6006.0f64);
+        e.set_global(VALUE_102_DOUBLE, 102.0f64);
+        for addr in [
+            FREE,
+            VECTOR_CONSTRUCT,
+            LIST_CONSTRUCT,
+            LIST_DESTRUCT,
+            FILL_00403D30,
+            LIST_APPEND,
+            LIST_REMOVE_FIRST_0063F7B0,
+            LIST_FREE_NODES_00470470,
+            STATUS_EFFECT_DELETE,
+            TILE_ADD_FADE_CONTROL,
+            TILE_REMOVE_FADE_CONTROL,
+            TILE_SET_INT,
+            TILE_GET_FLOAT,
+            TILE_SET_FLOAT,
+            TILE_SET_STRING,
+            TILE_GET_STRING,
+            ADD_USER_TRAIT,
+            WORD_AT_98_00810FD0,
+            FLAG_TEST_00403C80,
+            LIST_BOX_GET_TILE_FOR,
+            MISC_STAT_VALUE_005A3370,
+            GET_CLAMPED_ACTOR_VALUE,
+            AV_DERIVE_SKILL,
+            ROUND_00406D90,
+            EFFECT_KIND_0055B980,
+            EFFECT_ACTIVE_00833C20,
+            HARDCORE_004D1360,
+            STATS_007E06B0,
+            FLAG_004B71D0,
+            INTERFACE_MANAGER_004B7210,
+            WORD_AT_174_00704370,
+            PIPBOY_007F86F0,
+            BYTE_AT_28_00974D90,
+            VALUE_005C5420,
+            FLOAT_PAIR_00404010,
+            FLOAT_PAIR_004BD510,
+            STRING_CHARS_00408DA0,
+            COMPARE_00404DC0,
+            EFFECT_KEY_00403EA0,
+            EFFECT_GET_MAGNITUDE,
+            EFFECT_GET_DURATION,
+            FLAG_TEST_00403E60,
+            ENTRY_CONSTRUCT_00403BA0,
+            STRING_CONSTRUCT,
+            STRING_DESTROY,
+            STRING_FORMAT,
+            STRING_ASSIGN_00438390,
+            SETTING_STRING_00403DF0,
+            PLAYER_LEVEL_0087F9F0,
+            REFERENCE_NAME_0055D520,
+            GET_KARMIC_TITLE,
+            GET_INVENTORY_ITEM,
+            GET_ITEM_COUNT_IN_CONTAINER,
+            INVENTORY_ENTRY_DELETE,
+            STATS_007E0230,
+            PERK_RANK_SYNCHRONIZE,
+            PERK_RANK_SET_TOTAL_LIST_HEIGHT,
+            MISC_STAT_SYNCHRONIZE,
+            MISC_STAT_SET_TOTAL_LIST_HEIGHT,
+            TILE_GET_MENU,
+            MENU_RENDER_TEMPLATE,
+            TILE_GET_VALUE,
+            ITEM_CONSTRUCT,
+            LIST_INSERT_SORTED,
+            LIST_APPEND_00905820,
+            LIST_BOX_HAS_FLAG,
+            INIT_TILE_POSITION,
+            LIST_BOX_COUNT_00726C40,
+            TILE_GET_VALUE_Q,
+            VALUE_CLEAR_ACTIONS,
+            VALUE_ADD_ACTION_TILE,
+            VALUE_ADD_ACTION_FLOAT,
+            VALUE_CALCULATE,
+            REQUIRED_EXPERIENCE,
+            ALIGNMENT_FOR_KARMA,
+            VALUE_14_004A8F20,
+            MENU_CLASS_004D5E00,
+            TILE_GET_MENU_BY_CLASS,
+            TILE_GET_MAXIMUM_DEPTH,
+            WORD_AT_9C_00586150,
+            TILE_READ_FILE,
+            MENU_REMOVE_FROM_XML_ARCHIVE,
+            MENU_00867A20,
+            MENU_SET_MENU_TILE,
+            DEBUG_MESSAGE,
+            TUTORIAL_SHOW_MESSAGE,
+            FIND_STAGE_FOR_RAD_LEVEL,
+            WORD_AT_18_009611E0,
+            TILE_SET_INTEGER_VALUE,
+            LIST_BOX_INITIALIZE,
+            AV_SECTION_COUNT,
+            AV_TO_ACTOR_VALUE,
+            AV_FLAG_TEST_00406D70,
+            AV_LIST_BOX_ADD_ITEM,
+            AV_NAME,
+            TILE_SET_NAME_00707E10,
+            MISC_STAT_NAME_0078A260,
+            GET_DEFAULT_OBJECT,
+            RT_DYNAMIC_CAST,
+            METER_LABEL_007B52A0,
+            MENU_PREP_FOR_VISIBILITY,
+            DEHYDRATION_STAGE_004018B0,
+            SLEEP_STAGE_00402760,
+            HUNGER_STAGE_00402030,
+            EFFECT_ITEM_0084E3A0,
+            IS_USAGE_MONITOR_EFFECT,
+            EFFECT_TARGET_0044DDC0,
+            STAGE_GET_WORLDSPACE,
+            STAGE_EFFECT_CONSTRUCT_007DF140,
+            STAGE_EFFECT_ADD_007E0A20,
+            EFFECT_FLAG_00403EE0,
+            AV_ABBREVIATION,
+            STATUS_EFFECT_LIST_REGISTER,
+            TILE_DELETE_CHILDREN,
+            STRING_APPEND_00404820,
+            TILE_NAME_FROM_STRING_007DF120,
+            STATUS_EFFECT_ADD_ITEM,
+            ENTRY_STRING_004046B0,
+            STRING_APPEND_STRING_007E0D80,
+            STRING_LENGTH_004048E0,
+            VATS_GET_COUNT,
+            MIN_0042F5A0,
+            STATUS_EFFECT_SYNCHRONIZE,
+            INTERFACE_GET_PIPBOY,
+            INTERFACE_MANAGER_IS_IN_PIPBOY_MENU,
+            TIME_00457FE0,
+            INTERFACE_IS_TOP_MENU_ID,
+            STATS_007DDC20,
+            STATS_007DDD10,
+            STATS_007DDE00,
+            STATS_007E0060,
+            FO_RENDERED_MENU_TRIGGER_BURST,
+            STATS_MENU_SET_KNOB_POSITION,
+            STATS_MENU_SET_ICON_AND_DESCRIPTION,
+            PERK_RANK_NUM_UNFILTERED,
+            LIST_BOX_DATA_AT_007D86C0,
+            STATS_007DC9B0,
+            ITEM_CHANGE_007314C0,
+        ] {
+            e.register(addr, |_, _| Ret::default());
+        }
+        e.register(ALLOCATE, |e, a| e.mem.alloc(a[0]).into_ret());
+        e.register(0x00ab_0034, |_, _| Ret::default());
+        e.register(LIST_IS_EMPTY_008256D0, |_, _| 1u32.into_ret());
+        e.register(NODE_SELF, |_, a| a[0].into_ret());
+        e.register(WORD_AT_4_00726070, |e, a| e.mem.u32(a[0] + 4).into_ret());
+        e.register(WORD_AT_14_00825C00, |e, a| {
+            e.mem.u32(a[0] + 0x14).into_ret()
+        });
+        e.register(WORD_AT_28_0045CD60, |e, a| {
+            e.mem.u32(a[0] + 0x28).into_ret()
+        });
+        e.register(STRING_CHARS_00559450, |e, a| e.mem.u32(a[0]).into_ret());
+        e.register(SETTING_VALUE_00403E20, |_, a| (a[0] + 0x100).into_ret());
+        e.register(LEVEL_CAP_0043D4D0, |_, _| 0x011d_af00u32.into_ret());
+        e.register(FTOL2, |_, a| {
+            (f64::from_bits(u64::from(a[0]) | u64::from(a[1]) << 32) as i32 as u32).into_ret()
+        });
+        e
+    }
+
+    /// The player: a fake object (index 1) whose actor values (+0xa4) and active effects
+    /// (+0x94) have fake vtables (indices 2 and 3).
+    fn with_player(e: &mut Engine) -> u32 {
+        let player = fake_object(e, 1);
+        let values = fake_vtable(e, 2);
+        e.mem.set_u32(player + 0xa4, values);
+        let effects = fake_vtable(e, 3);
+        e.mem.set_u32(player + 0x94, effects);
+        e.set_global(PLAYER_011DEA3C, player);
+        player
+    }
+
+    fn menu(e: &mut Engine) -> u32 {
+        let menu = fake_object(e, 4);
+        for index in 0..0x3cu32 {
+            e.mem.set_u32(menu + 0x90 + 4 * index, 0x7000 + 4 * index);
+        }
+        e.mem.set_u32(menu + 4, 0x6100);
+        for record in [0x34u32, 0x44, 0x54, 0x64] {
+            e.mem.set_u32(menu + record, 0x00ab_0034);
+        }
+        let lists = fake_vtable(e, 8);
+        for list in [0x180u32, 0x1b0, 0x1e0, 0x240] {
+            e.mem.set_u32(menu + list, lists);
+        }
+        menu
+    }
+
+    /// Every callee of this batch outside the file, doubled (0 or nothing), on top of
+    /// `engine`'s; the batch's statics mapped.
+    fn batch_engine() -> Engine {
+        let mut e = engine();
+        for page in [0x011c_3000, 0x0107_4000, 0x0101_8000] {
+            e.map(page, 0x1000);
+        }
+        e.set_global(DEAD_ZONE_DOUBLE, 8689.0f64);
+        e.set_global(FLOAT_MAX_01016970, f32::MAX);
+        for addr in [
+            TILE_IS_TRUE,
+            TILE_UPDATE_TILE,
+            TILE_POKE,
+            TILE_GET_CHILD_BY_NAME,
+            TILE_PLAY_TILE_SOUND,
+            TILE_IS_VISIBLE,
+            AUDIO_INSTANCE,
+            GET_SOUND_HANDLE_BY_NAME,
+            SOUND_HANDLE_PLAY,
+            SOUND_HANDLE_DESTROY,
+            PLAY_MENU_SOUND,
+            SET_MAP_MENU_VISIBLE,
+            SET_INVENTORY_MENU_VISIBLE,
+            PIPBOY_SET_TAB_KNOB_POSITION,
+            PIPBOY_MOVE_KNOB,
+            LIST_CONTAINS_005F65D0,
+            FIELD_SET_00501C10,
+            LIST_CONSTRUCT_00406DB0,
+            LIST_CONSTRUCT_0071F540,
+            FLAG_0070ED80,
+            MAGNITUDE_00495460,
+            REPUTATION_ICON_006166E0,
+            REPUTATION_GET_TITLE,
+            REPUTATION_VALUE_006155C0,
+            REPUTATION_LIST_009C1A50,
+            AV_GET_ICON,
+            AV_GET_DESCRIPTION,
+            AV_GET_BADGE,
+            SCROLL_VALUE_004E4430,
+            COMPARE_00408B20,
+            ACTOR_QUEUE_EQUIP_OBJECT,
+            FLAG_00709D40,
+            INPUT_00877720,
+            STICK_00A23390,
+            ABS_00408820,
+            STRING_CAPACITY_004039A0,
+            STRING_GROW_004037F0,
+            STRING_COPY_LENGTH_004F4280,
+            COPY_00401460,
+            STRING_SET_LENGTH_004039C0,
+            STRING_SET,
+            LIST_BOX_HAS_TILE_007242F0,
+            STATUS_EFFECT_SYNCHRONIZE_007254D0,
+            STATUS_EFFECT_SET_TOTAL_LIST_HEIGHT,
+            REPUTATION_SYNCHRONIZE,
+            REPUTATION_SET_TOTAL_LIST_HEIGHT,
+            TILE_TEXT_TO_TRAIT,
+        ] {
+            e.register(addr, |_, _| Ret::default());
+        }
+        // The description box's slots: +4 of the box is the slot itself.
+        e.register(TEXT_TILE_SLOT_0073AC90, |_, a| a[0].into_ret());
+        e.register(SCROLL_TILE_SLOT_007B5370, |_, a| (a[0] + 4).into_ret());
+        // This file's own functions, over the doubles `engine` gives some of them.
+        for (addr, f) in funcs() {
+            e.register(addr, f);
+        }
+        e
+    }
+
+    /// `Tile::GetFloat` answering from a table of (tile, trait) pairs, 0.0 for the rest.
+    fn tile_floats(e: &mut Engine, values: Vec<((u32, u32), f64)>) {
+        e.register_double(TILE_GET_FLOAT, move |_, a| {
+            let value = values
+                .iter()
+                .find(|(key, _)| *key == (a[0], a[1]))
+                .map_or(0.0, |(_, value)| *value);
+            st0(value)
+        });
+    }
+
+    fn set_ints(e: &Engine, tile: u32) -> Vec<Vec<u32>> {
+        calls_to(e, TILE_SET_INT)
+            .into_iter()
+            .filter(|words| words[0] == tile)
+            .collect()
+    }
+
+    #[test]
+    fn toggle_healing_mode_needs_an_open_menu_in_limb_mode() {
+        let mut e = batch_engine();
+        with_player(&mut e);
+        e.call_log = Some(vec![]);
+        e.call(0x0070_4390, &args![]);
+        assert_eq!(e.call_log.as_ref().unwrap().len(), 1);
+        let menu = menu(&mut e);
+        e.set_global(OPEN_MENU_011DACE0, menu);
+        e.call(0x0070_4390, &args![]);
+        assert!(calls_to(&e, TILE_SET_INT).is_empty());
+        e.mem.set_u8(menu + 0x2a0, 1);
+        e.call(0x0070_4390, &args![]);
+        assert_eq!(e.mem.u8(menu + 0x2a0), 0);
+    }
+
+    #[test]
+    fn toggle_limb_mode_updates_both_healing_tiles() {
+        let mut e = batch_engine();
+        let player = with_player(&mut e);
+        let values = e.mem.u32(player + 0xa4);
+        // Actor value 0x1b is below its base.
+        e.register(e.mem.u32(values + 8), |_, a| {
+            u32::from(a[1] == 0x1b).wrapping_neg().into_ret()
+        });
+        e.register(FLAG_0070ED80, |_, _| 0u32.into_ret());
+        let menu = menu(&mut e);
+        e.mem.set_u32(menu + 0x2c, 0x5100);
+        e.mem.set_u32(menu + 0x5c, 0x5200);
+        e.mem.set_u32(menu + 0x60, 1);
+        e.call_log = Some(vec![]);
+        e.call(0x007e_0230, &args![menu]);
+        assert_eq!(e.mem.u8(menu + 0x2a0), 1);
+        assert_eq!(set_ints(&e, 0x5100), vec![vec![0x5100, 0xfaf, 0]]);
+        assert_eq!(set_ints(&e, 0x5200), vec![vec![0x5200, 0xfaf, 1]]);
+        e.call(0x007e_0230, &args![menu]);
+        assert_eq!(e.mem.u8(menu + 0x2a0), 0);
+    }
+
+    #[test]
+    fn the_limb_option_needs_an_entry_and_a_hurt_limb() {
+        let mut e = batch_engine();
+        let player = with_player(&mut e);
+        let values = e.mem.u32(player + 0xa4);
+        let record = e.mem.alloc(0x10);
+        assert!(!fn_007e06f0(&mut e, Ptr::new(record)));
+        e.mem.set_u32(record + 8, 1);
+        assert!(!fn_007e06f0(&mut e, Ptr::new(record)));
+        e.register(e.mem.u32(values + 8), |_, a| {
+            u32::from(a[1] == 0x1e).wrapping_neg().into_ret()
+        });
+        assert!(fn_007e06f0(&mut e, Ptr::new(record)));
+        // Outside hardcore mode a picked limb answers false.
+        e.register(FLAG_0070ED80, |_, _| 1u32.into_ret());
+        e.register(STRING_CHARS_00559450, |_, _| 2u32.into_ret());
+        assert!(!fn_007e06f0(&mut e, Ptr::new(record)));
+        assert_eq!(fn_007e06b0(&mut e), 0x1a);
+        e.register(FLAG_0070ED80, |_, _| 0u32.into_ret());
+        assert_eq!(fn_007e06b0(&mut e), 0xffff_ffff);
+    }
+
+    #[test]
+    fn the_limb_groups_and_their_actor_values() {
+        let mut e = batch_engine();
+        let values: Vec<u32> = (0..7).map(|group| fn_007df9c0(&mut e, group)).collect();
+        assert_eq!(
+            values,
+            vec![0x19, 0x1c, 0x1a, 0x1b, 0x1e, 0x1d, 0xffff_ffff]
+        );
+    }
+
+    #[test]
+    fn the_lowest_limb_becomes_the_fade_group() {
+        let mut e = batch_engine();
+        let player = with_player(&mut e);
+        let values = e.mem.u32(player + 0xa4);
+        // Limb values: 0x1a (group 2) and 0x1d (group 5) tie at 20; the first wins.
+        e.register(e.mem.u32(values + 0xc), |_, a| {
+            st0(match a[1] {
+                0x1a | 0x1d => 20.0,
+                _ => 80.0,
+            })
+        });
+        let menu = menu(&mut e);
+        e.call(0x007d_f920, &args![menu]);
+        let object = fn_007db1c0(&mut e);
+        assert_eq!(e.mem.u32(object), 2);
+        // A NaN never wins.
+        e.register(e.mem.u32(values + 0xc), |_, _| st0(f64::NAN));
+        e.call(0x007d_f920, &args![menu]);
+        assert_eq!(e.mem.u32(object), 6);
+    }
+
+    #[test]
+    fn the_fade_group_helpers() {
+        let mut e = batch_engine();
+        let object = fn_007db1c0(&mut e);
+        e.mem.set_u32(object + 0x38, 0x4433_2211);
+        assert_eq!(e.call(0x007d_c010, &args![object, 1u32, 2u32]).u32(), 0x33);
+        // The shift is taken modulo 32: index 4 is index 0.
+        assert_eq!(e.call(0x007d_c010, &args![object, 1u32, 4u32]).u32(), 0x11);
+        let word = e.mem.alloc(4);
+        e.mem.set_u32(word, 5);
+        assert_eq!(e.call(0x007d_c0c0, &args![word]).u32(), word);
+        assert_eq!(e.mem.u32(word), 4);
+        e.call_log = Some(vec![]);
+        e.call(0x007d_bfa0, &args![object, 3u32, 0u32]);
+        assert_eq!(e.mem.u32(object), 3);
+        e.call(0x007d_bfa0, &args![object, 1u32, 1u32]);
+        assert_eq!(e.mem.u32(object), 1);
+        // Group 1's list holds tile 0x7777: found through `005f65d0`.
+        e.register(LIST_CONTAINS_005F65D0, |e, a| {
+            u32::from(
+                a[0] == e.global::<u32>(FADE_OBJECT_011DACE4) + 0xc && e.mem.u32(a[1]) == 0x7777,
+            )
+            .into_ret()
+        });
+        assert_eq!(e.call(0x007d_b630, &args![object, 0x7777u32]).u32(), 1);
+        assert_eq!(e.call(0x007d_b630, &args![object, 0x7778u32]).u32(), 6);
+    }
+
+    #[test]
+    fn do_click_pages_status_pages_limb_mode_and_the_lists() {
+        let mut e = batch_engine();
+        e.register(STATS_MENU_SET_ICON_AND_DESCRIPTION, |_, _| Ret::default());
+        with_player(&mut e);
+        let menu = menu(&mut e);
+        e.set_global(OPEN_MENU_011DACE0, menu);
+        e.mem.set_u32(menu + 0xa4, 0x5a00);
+        // Disabled tile: nothing happens.
+        e.register(FLAG_004B71D0, |_, _| 1u32.into_ret());
+        e.call_log = Some(vec![]);
+        e.call(0x007d_b380, &args![menu, 2u32, 0u32]);
+        assert_eq!(calls_to(&e, TILE_IS_TRUE), vec![vec![0x7008, 0xfaf]]);
+        assert!(calls_to(&e, TILE_SET_INT).is_empty());
+        e.register(FLAG_004B71D0, |_, _| 0u32.into_ret());
+        // A page button.
+        e.call_log = Some(vec![]);
+        e.call(0x007d_b380, &args![menu, 2u32, 0u32]);
+        assert!(set_ints(&e, 0x6100).contains(&vec![0x6100, 0x1004, 2]));
+        // A status page button (0x37 is sub page 4: past 2 outside hardcore mode).
+        e.call_log = Some(vec![]);
+        e.call(0x007d_b380, &args![menu, 0x1du32, 0u32]);
+        assert_eq!(set_ints(&e, 0x5a00), vec![vec![0x5a00, 0x1004, 1]]);
+        e.call_log = Some(vec![]);
+        e.call(0x007d_b380, &args![menu, 0x37u32, 0u32]);
+        assert!(set_ints(&e, 0x5a00).is_empty());
+        // Id 9 toggles limb mode.
+        e.call(0x007d_b380, &args![menu, 9u32, 0u32]);
+        assert_eq!(e.mem.u8(menu + 0x2a0), 1);
+        e.call(0x007d_b380, &args![menu, 5u32, 0u32]);
+        assert_eq!(e.mem.u8(menu + 0x2a0), 0);
+        // Id 0x31 toggles the general and reputation lists.
+        e.call(0x007d_b380, &args![menu, 0x31u32, 0u32]);
+        assert_eq!(e.global::<u8>(GEN_REP_MODE_011A0AE0), 1);
+    }
+
+    #[test]
+    fn do_click_on_a_healing_option_equips_its_item() {
+        let mut e = batch_engine();
+        let player = with_player(&mut e);
+        let menu = menu(&mut e);
+        e.set_global(OPEN_MENU_011DACE0, menu);
+        // Option 1: tile 0x5500, entry 0x00ab_1000 whose extra lists start at node 0x00ab_1100.
+        e.map(0x00ab_1000, 0x1000);
+        e.mem.set_u32(menu + 0x3c, 0x5500);
+        e.mem.set_u32(menu + 0x40, 0x00ab_1000);
+        e.mem.set_u32(0x00ab_1000, 0x00ab_1100);
+        e.mem.set_u32(0x00ab_1100, 0x00ab_1200);
+        e.mem.set_u32(0x00ab_1004, 3);
+        e.register(STRING_CHARS_00559450, |e, a| e.mem.u32(a[0]).into_ret());
+        e.register(EFFECT_TARGET_0044DDC0, |_, _| 0x00ab_1300u32.into_ret());
+        // The cast effect list: one node with effect 0x00ab_1400.
+        e.register(RT_DYNAMIC_CAST, |_, _| 0x00ab_1500u32.into_ret());
+        e.mem.set_u32(0x00ab_1500, 0x00ab_1400);
+        e.register(EFFECT_KEY_00403EA0, |_, _| 0x30u32.into_ret());
+        e.call_log = Some(vec![]);
+        e.call(0x007d_b380, &args![menu, 0x7fu32, 0x5500u32]);
+        assert_eq!(
+            calls_to(&e, ACTOR_QUEUE_EQUIP_OBJECT),
+            vec![vec![player, 0x00ab_1300, 3, 0x00ab_1200, 0, 0, 1]]
+        );
+        assert_eq!(
+            calls_to(&e, RT_DYNAMIC_CAST)[0],
+            vec![0x00ab_1300, 0, TYPE_01183108, TYPE_01183194, 0]
+        );
+        assert_eq!(calls_to(&e, EFFECT_KEY_00403EA0), vec![vec![0x00ab_1400]]);
+        // In limb mode a tile of a fade group clicks 0xa (0x3b in hardcore mode).
+        e.mem.set_u8(menu + 0x2a0, 1);
+        e.register(LIST_CONTAINS_005F65D0, |_, _| 1u32.into_ret());
+        let click = e.mem.u32(e.mem.u32(menu) + 0xc);
+        e.call_log = Some(vec![]);
+        e.call(0x007d_b380, &args![menu, 0x7fu32, 0x5501u32]);
+        assert_eq!(calls_to(&e, click), vec![vec![menu, 0xa, 0]]);
+        e.register(HARDCORE_004D1360, |_, _| 1u32.into_ret());
+        e.call_log = Some(vec![]);
+        e.call(0x007d_b380, &args![menu, 0x7fu32, 0x5501u32]);
+        assert_eq!(calls_to(&e, click), vec![vec![menu, 0x3b, 0]]);
+    }
+
+    #[test]
+    fn do_gamepad_limb_groups_menus_and_pages() {
+        let mut e = batch_engine();
+        with_player(&mut e);
+        let menu = menu(&mut e);
+        e.set_global(OPEN_MENU_011DACE0, menu);
+        // Not on top: false.
+        assert!(!e.call(0x007d_b680, &args![menu, 4u32, 0u32]).bool());
+        e.register(INTERFACE_IS_TOP_MENU_ID, |_, _| 1u32.into_ret());
+        assert!(!e.call(0x007d_b680, &args![menu, 4u32, 0u32]).bool());
+        e.register(BYTE_AT_28_00974D90, |_, _| 1u32.into_ret());
+        // Limb mode, key 4: group 2 of the current group's word.
+        e.mem.set_u8(menu + 0x2a0, 1);
+        let object = fn_007db1c0(&mut e);
+        e.mem.set_u32(object + 0x34, 0x0003_0000);
+        e.register(STRING_CHARS_00559450, |e, a| e.mem.u32(a[0]).into_ret());
+        e.call_log = Some(vec![]);
+        assert!(e.call(0x007d_b680, &args![menu, 4u32, 0u32]).bool());
+        assert_eq!(e.mem.u32(object), 3);
+        assert_eq!(
+            calls_to(&e, GET_SOUND_HANDLE_BY_NAME)[0][2..],
+            [SOUND_01074F40, 0x121]
+        );
+        e.mem.set_u8(menu + 0x2a0, 0);
+        // Key 0xd at 1.0 opens the map; at 0.5 it falls through to the stick.
+        e.call_log = Some(vec![]);
+        assert!(e
+            .call(0x007d_b680, &args![menu, 0xdu32, 1.0f32.to_bits()])
+            .bool());
+        assert_eq!(calls_to(&e, SET_MAP_MENU_VISIBLE), vec![vec![1, 0]]);
+        assert_eq!(calls_to(&e, PLAY_MENU_SOUND), vec![vec![0x24]]);
+        e.call_log = Some(vec![]);
+        assert!(e
+            .call(0x007d_b680, &args![menu, 0xeu32, 2.0f32.to_bits()])
+            .bool());
+        assert_eq!(
+            calls_to(&e, SET_INVENTORY_MENU_VISIBLE),
+            vec![vec![1, 0, 1]]
+        );
+        e.call_log = Some(vec![]);
+        assert!(!e
+            .call(0x007d_b680, &args![menu, 0xdu32, 0.5f32.to_bits()])
+            .bool());
+        assert!(calls_to(&e, SET_MAP_MENU_VISIBLE).is_empty());
+        // Keys 4 and 3 wrap the page.
+        e.call_log = Some(vec![]);
+        assert!(e.call(0x007d_b680, &args![menu, 4u32, 0u32]).bool());
+        assert!(set_ints(&e, 0x6100).contains(&vec![0x6100, 0x1004, 4]));
+        assert_eq!(
+            calls_to(&e, TILE_PLAY_TILE_SOUND),
+            vec![vec![0x7000, 0xfcb]]
+        );
+        tile_floats(&mut e, vec![((0x6100, 0x1004), 4.0)]);
+        e.call_log = Some(vec![]);
+        assert!(e.call(0x007d_b680, &args![menu, 3u32, 0u32]).bool());
+        assert!(set_ints(&e, 0x6100).contains(&vec![0x6100, 0x1004, 0]));
+        // Page 4, key 0xb: click 0x31.
+        let click = e.mem.u32(e.mem.u32(menu) + 0xc);
+        e.call_log = Some(vec![]);
+        assert!(e.call(0x007d_b680, &args![menu, 0xbu32, 0u32]).bool());
+        assert_eq!(calls_to(&e, click), vec![vec![menu, 0x31, 0]]);
+    }
+
+    #[test]
+    fn do_gamepad_on_the_first_page() {
+        let mut e = batch_engine();
+        with_player(&mut e);
+        let menu = menu(&mut e);
+        e.register(INTERFACE_IS_TOP_MENU_ID, |_, _| 1u32.into_ret());
+        e.register(BYTE_AT_28_00974D90, |_, _| 1u32.into_ret());
+        e.mem.set_u32(menu + 0xa4, 0x5a00);
+        e.mem.set_u32(menu + 0x104, 0x5104);
+        e.mem.set_u32(menu + 0xb4, 0x50b4);
+        e.set_global(KNOB_SETTING_011DB358 + 0x100, 0.25f32);
+        e.set_global(KNOB_SETTING_011DB2F0 + 0x100, 3.0f32);
+        let click = e.mem.u32(e.mem.u32(menu) + 0xc);
+        // Key 2 steps sub page 0 to 1: its button sounds and the knob moves forward.
+        e.call_log = Some(vec![]);
+        assert!(e.call(0x007d_b680, &args![menu, 2u32, 0u32]).bool());
+        assert_eq!(
+            calls_to(&e, TILE_PLAY_TILE_SOUND),
+            vec![vec![0x5104, 0xfcb]]
+        );
+        assert_eq!(
+            calls_to(&e, PIPBOY_MOVE_KNOB)[0][1..],
+            [0, 3.0f32.to_bits(), 0.25f32.to_bits(), 1]
+        );
+        // Key 1 would go to -1: refused, so the stick runs (no input: the repeat clears).
+        e.set_global(SCROLL_REPEAT_011DAD5C, 9u32);
+        e.register(FLAG_00709D40, |_, _| 1u32.into_ret());
+        e.register(TILE_IS_VISIBLE, |_, _| 1u32.into_ret());
+        assert!(!e.call(0x007d_b680, &args![menu, 1u32, 0u32]).bool());
+        assert_eq!(e.global::<u32>(SCROLL_REPEAT_011DAD5C), 0);
+        // Key 9 by sub page; keys 0xb and 0xc on sub page 0 with the button enabled.
+        e.call_log = Some(vec![]);
+        assert!(e.call(0x007d_b680, &args![menu, 9u32, 0u32]).bool());
+        assert!(!e.call(0x007d_b680, &args![menu, 0xbu32, 0u32]).bool());
+        e.register(TILE_IS_TRUE, |_, _| 1u32.into_ret());
+        assert!(e.call(0x007d_b680, &args![menu, 0xbu32, 0u32]).bool());
+        assert!(e.call(0x007d_b680, &args![menu, 0xcu32, 0u32]).bool());
+        assert_eq!(
+            calls_to(&e, click),
+            vec![vec![menu, 0xa, 0], vec![menu, 9, 0], vec![menu, 0x3b, 0]]
+        );
+        tile_floats(&mut e, vec![((0x5a00, 0x1004), 1.0)]);
+        e.call_log = Some(vec![]);
+        assert!(e.call(0x007d_b680, &args![menu, 0xcu32, 0u32]).bool());
+        assert!(e.call(0x007d_b680, &args![menu, 9u32, 0u32]).bool());
+        assert_eq!(
+            calls_to(&e, click),
+            vec![vec![menu, 0x1f, 0], vec![menu, 0xb, 0]]
+        );
+    }
+
+    #[test]
+    fn do_gamepad_scrolls_with_the_stick() {
+        let mut e = batch_engine();
+        with_player(&mut e);
+        let menu = menu(&mut e);
+        e.register(INTERFACE_IS_TOP_MENU_ID, |_, _| 1u32.into_ret());
+        e.register(BYTE_AT_28_00974D90, |_, _| 1u32.into_ret());
+        e.register(FLAG_00709D40, |_, _| 1u32.into_ret());
+        e.register(TILE_IS_VISIBLE, |_, _| 1u32.into_ret());
+        e.register(WORD_AT_14_00825C00, |_, _| 0x5800u32.into_ret());
+        e.register(TILE_TEXT_TO_TRAIT, |_, _| 0x7777u32.into_ret());
+        e.register(ABS_00408820, |_, a| {
+            st0(f64::from(f32::from_bits(a[0]).abs()))
+        });
+        e.register(TIME_00457FE0, |_, _| 1000u32.into_ret());
+        e.mem.set_u32(menu + 0x114, 0x5114);
+        // The scroll trait reads 3.0, then 4.0 once it has been set.
+        e.register_double(TILE_GET_FLOAT, |e, a| {
+            st0(match (a[0], a[1]) {
+                (0x5800, 0x7777) if calls_to(e, TILE_SET_FLOAT).is_empty() => 3.0,
+                (0x5800, 0x7777) => 4.0,
+                (0x5114, 0x1004) => 100.0,
+                (0x5114, 0x1005) => 250.0,
+                _ => 0.0,
+            })
+        });
+        // Inside the dead zone: nothing moves and the repeat time clears.
+        e.register(STICK_00A23390, |_, _| 8689u32.into_ret());
+        e.set_global(SCROLL_REPEAT_011DAD5C, 5u32);
+        e.call_log = Some(vec![]);
+        assert!(!e.call(0x007d_b680, &args![menu, 0x20u32, 0u32]).bool());
+        assert!(calls_to(&e, TILE_SET_FLOAT).is_empty());
+        assert_eq!(e.global::<u32>(SCROLL_REPEAT_011DAD5C), 0);
+        // Stick down (negative): one step forward, poked (the value read back stays 3.0).
+        e.register(STICK_00A23390, |_, _| (-9000i32 as u32).into_ret());
+        e.call_log = Some(vec![]);
+        e.call(0x007d_b680, &args![menu, 0x20u32, 0u32]);
+        assert_eq!(
+            calls_to(&e, TILE_SET_FLOAT),
+            vec![vec![0x5800, 0x7777, 4.0f32.to_bits(), 0]]
+        );
+        assert_eq!(
+            calls_to(&e, TILE_POKE),
+            vec![vec![0x5800, 0x7777, 1.0f32.to_bits()]]
+        );
+        assert_eq!(e.global::<u32>(SCROLL_REPEAT_011DAD5C), 1250);
+        // Before the repeat time nothing moves.
+        e.call_log = Some(vec![]);
+        e.call(0x007d_b680, &args![menu, 0x20u32, 0u32]);
+        assert!(calls_to(&e, TILE_SET_FLOAT).is_empty());
+        assert_eq!(e.global::<u32>(SCROLL_REPEAT_011DAD5C), 1250);
+    }
+
+    #[test]
+    fn do_gamepad_up_event_clicks_nine_in_limb_mode() {
+        let mut e = batch_engine();
+        let menu = menu(&mut e);
+        e.mem.set_u32(menu + 0xb4, 0x50b4);
+        let click = e.mem.u32(e.mem.u32(menu) + 0xc);
+        assert!(!e.call(0x007d_c0e0, &args![menu, 0xau32, 0u32]).bool());
+        e.mem.set_u8(menu + 0x2a0, 1);
+        assert!(!e.call(0x007d_c0e0, &args![menu, 0xau32, 0u32]).bool());
+        e.register(TILE_IS_TRUE, |_, _| 1u32.into_ret());
+        assert!(!e.call(0x007d_c0e0, &args![menu, 0xbu32, 0u32]).bool());
+        e.call_log = Some(vec![]);
+        assert!(e.call(0x007d_c0e0, &args![menu, 0xau32, 0u32]).bool());
+        assert_eq!(calls_to(&e, click), vec![vec![menu, 9, 0]]);
+        assert_eq!(calls_to(&e, SOUND_HANDLE_PLAY).len(), 1);
+    }
+
+    #[test]
+    fn do_enter_by_page() {
+        let mut e = batch_engine();
+        with_player(&mut e);
+        let menu = menu(&mut e);
+        e.mem.set_u32(menu + 0x30, 1);
+        e.register(LIST_CONTAINS_005F65D0, |_, _| 1u32.into_ret());
+        // Page 0: the knob moves for tile 0x7004 (`0xfac` 2.0) and the group fades in.
+        tile_floats(&mut e, vec![((0x7004, 0xfac), 2.0)]);
+        e.call_log = Some(vec![]);
+        e.call(0x007d_c1b0, &args![menu, 1u32, 0u32]);
+        assert_eq!(e.global::<u32>(KNOB_STEP_011DAD60), 2);
+        assert_eq!(e.mem.u8(menu + 0x2a0), 1);
+        assert_eq!(calls_to(&e, SOUND_HANDLE_PLAY).len(), 1);
+        // In hardcore mode the record at +0x60 decides: none, so nothing fades.
+        e.register(HARDCORE_004D1360, |_, _| 1u32.into_ret());
+        e.call_log = Some(vec![]);
+        e.call(0x007d_c1b0, &args![menu, 1u32, 0u32]);
+        assert!(calls_to(&e, SOUND_HANDLE_PLAY).is_empty());
+        // Page 2: an item of the skill list shows its description.
+        e.mem.set_u32(menu + 0xf8, 0x00ac_0000);
+        e.map(0x00ac_0000, 0x1000);
+        e.mem.set_u32(0x00ac_0004, 0x5c00);
+        e.mem.set_u32(0x00ac_0008, 0x5d00);
+        e.register(WORD_AT_28_0045CD60, |_, _| 0u32.into_ret());
+        tile_floats(&mut e, vec![((0x6100, 0x1004), 2.0)]);
+        e.register(LIST_BOX_HAS_TILE_007242F0, |_, a| {
+            u32::from(a[1] == 0x5e00).into_ret()
+        });
+        e.call_log = Some(vec![]);
+        e.call(0x007d_c1b0, &args![menu, 0x7fu32, 0x5e00u32]);
+        assert_eq!(
+            calls_to(&e, LIST_BOX_HAS_TILE_007242F0),
+            vec![vec![menu + 0x1b0, 0x5e00]]
+        );
+        assert_eq!(calls_to(&e, AV_GET_DESCRIPTION).len(), 1);
+        // Page 4: the reputation list's tile shows the reputation.
+        tile_floats(&mut e, vec![((0x6100, 0x1004), 4.0)]);
+        e.call_log = Some(vec![]);
+        e.call(0x007d_c1b0, &args![menu, 0x7fu32, 0x5e00u32]);
+        assert_eq!(
+            calls_to(&e, LIST_BOX_HAS_TILE_007242F0),
+            vec![vec![menu + 0x210, 0x5e00], vec![menu + 0x270, 0x5e00]]
+        );
+    }
+
+    #[test]
+    fn do_leave_hides_the_badge_and_ends_limb_mode() {
+        let mut e = batch_engine();
+        with_player(&mut e);
+        let menu = menu(&mut e);
+        e.mem.set_u32(menu + 0x160, 0x5160);
+        e.call_log = Some(vec![]);
+        e.call(0x007d_c490, &args![menu, 0u32, 0x7000u32]);
+        assert_eq!(set_ints(&e, 0x5160), vec![vec![0x5160, 0xfa3, 0]]);
+        e.mem.set_u8(menu + 0x2a0, 1);
+        e.call(0x007d_c490, &args![menu, 0u32, 0x7000u32]);
+        assert_eq!(e.mem.u8(menu + 0x2a0), 1);
+        e.register(LIST_CONTAINS_005F65D0, |_, _| 1u32.into_ret());
+        e.call(0x007d_c490, &args![menu, 0u32, 0x7000u32]);
+        assert_eq!(e.mem.u8(menu + 0x2a0), 0);
+    }
+
+    /// A menu whose description box (+0xf8) has text tile 0x5c00 and scroll tile 0x5d00.
+    fn description_menu(e: &mut Engine) -> u32 {
+        let menu = menu(e);
+        let description = e.mem.alloc(0x10);
+        e.mem.set_u32(menu + 0xf8, description);
+        e.mem.set_u32(description + 4, 0x5c00);
+        e.mem.set_u32(description + 8, 0x5d00);
+        e.mem.set_u32(menu + 0xf4, 0x50f4);
+        e.mem.set_u32(menu + 0x160, 0x5160);
+        e.register(TILE_TEXT_TO_TRAIT, |_, a| (a[0] & 0xffff).into_ret());
+        e.register(WORD_AT_28_0045CD60, |_, _| 0x5c28u32.into_ret());
+        e.register(FLOAT_PAIR_00404010, |_, a| {
+            st0(f64::from(f32::from_bits(a[0]).max(f32::from_bits(a[1]))))
+        });
+        e.register(SCROLL_VALUE_004E4430, |_, a| {
+            st0(f64::from(f32::from_bits(a[0])))
+        });
+        tile_floats(
+            e,
+            vec![
+                ((0x5d00, 0x4eb8), 2.0),
+                ((0x5c00, 0xfb0), 30.0),
+                ((0x5c28, 0xfb0), 10.0),
+            ],
+        );
+        menu
+    }
+
+    #[test]
+    fn set_icon_and_description_shows_the_badge_and_the_scroll() {
+        let mut e = batch_engine();
+        let menu = description_menu(&mut e);
+        e.register(AV_GET_ICON, |_, _| 0x00ad_0001u32.into_ret());
+        e.register(AV_GET_DESCRIPTION, |_, _| 0x00ad_0002u32.into_ret());
+        e.register(AV_GET_BADGE, |_, _| 0x00ad_0003u32.into_ret());
+        e.call_log = Some(vec![]);
+        e.call(0x007d_c7e0, &args![menu, 0x20u32]);
+        assert_eq!(calls_to(&e, AV_GET_ICON), vec![vec![0x20]]);
+        assert_eq!(
+            calls_to(&e, TILE_SET_STRING),
+            vec![
+                vec![0x50f4, 0xfcc, 0x00ad_0001, 1],
+                vec![0x5c00, 0xfc4, 0x00ad_0002, 1],
+                vec![0x5160, 0xfcc, 0x00ad_0003, 1],
+            ]
+        );
+        assert_eq!(set_ints(&e, 0x5160), vec![vec![0x5160, 0xfa3, 1]]);
+        assert_eq!(calls_to(&e, TILE_UPDATE_TILE), vec![vec![0x5c00, 0]]);
+        // (30 - 10) / 2 + 1 = 11.
+        assert_eq!(
+            calls_to(&e, TILE_SET_FLOAT),
+            vec![
+                vec![0x5d00, 0xf8f8, 11.0f32.to_bits(), 1],
+                vec![0x5d00, 0x02d8, 0, 0],
+            ]
+        );
+        assert_eq!(
+            calls_to(&e, TILE_POKE),
+            vec![vec![0x5d00, 0x0250, 1.0f32.to_bits()]]
+        );
+        e.register(AV_GET_BADGE, |_, _| 0u32.into_ret());
+        e.call_log = Some(vec![]);
+        e.call(0x007d_c7e0, &args![menu, 0x20u32]);
+        assert_eq!(set_ints(&e, 0x5160), vec![vec![0x5160, 0xfa3, 0]]);
+    }
+
+    #[test]
+    fn the_perk_description_uses_the_perk_strings() {
+        let mut e = batch_engine();
+        let menu = description_menu(&mut e);
+        let perk = fake_object(&mut e, 9);
+        let description_vtable = fake_vtable(&mut e, 10);
+        e.mem.set_u32(perk + 0x24, description_vtable);
+        e.register(slot(10, 0x10), |_, _| 0x00ad_0005u32.into_ret());
+        e.register(STRING_CHARS_00408DA0, |_, a| a[0].into_ret());
+        let data = e.mem.alloc(4);
+        e.mem.set_u32(data, perk);
+        e.call_log = Some(vec![]);
+        e.call(0x007d_c9b0, &args![menu, data]);
+        assert_eq!(
+            calls_to(&e, slot(10, 0x10)),
+            vec![vec![perk + 0x24, 0, 0x4353_4544]]
+        );
+        assert_eq!(
+            calls_to(&e, TILE_SET_STRING),
+            vec![
+                vec![0x50f4, 0xfcc, perk + 0x2c, 1],
+                vec![0x5c00, 0xfc4, 0x00ad_0005, 1],
+            ]
+        );
+        assert_eq!(calls_to(&e, TILE_POKE).len(), 1);
+    }
+
+    #[test]
+    fn the_reputation_tiles() {
+        let mut e = batch_engine();
+        let menu = menu(&mut e);
+        for (offset, tile) in [(0x14cu32, 0x514cu32), (0x150, 0x5150), (0x15c, 0x515c)] {
+            e.mem.set_u32(menu + offset, tile);
+        }
+        e.call_log = Some(vec![]);
+        e.call(0x007d_cb40, &args![menu, 0u32]);
+        assert_eq!(e.call_log.as_ref().unwrap().len(), 1);
+        e.register(REPUTATION_ICON_006166E0, |_, _| 0x00ad_0001u32.into_ret());
+        e.register(REPUTATION_GET_TITLE, |_, _| 0x00ad_0002u32.into_ret());
+        e.register(STRING_CHARS_00408DA0, |_, a| a[0].into_ret());
+        e.call(0x007d_cb40, &args![menu, 0x00ab_0000u32]);
+        assert_eq!(
+            calls_to(&e, TILE_SET_STRING),
+            vec![
+                vec![0x514c, 0xfcc, 0x00ad_0001, 1],
+                vec![0x515c, 0xfc4, 0x00ab_0018, 1],
+                vec![0x5150, 0xfc4, 0x00ad_0002, 1],
+            ]
+        );
+        assert_eq!(calls_to(&e, TILE_SET_INT).len(), 3);
+    }
+
+    #[test]
+    fn update_all_sets_the_labels_only_for_another_language() {
+        let mut e = batch_engine();
+        with_player(&mut e);
+        let menu = menu(&mut e);
+        e.call_log = Some(vec![]);
+        e.call(0x007d_cc80, &args![menu]);
+        assert!(calls_to(&e, ITEM_CHANGE_007314C0).contains(&vec![
+            menu + 0x210,
+            0x007d_fc60,
+            0,
+            0x7fff_ffff
+        ]));
+        assert!(calls_to(&e, TILE_GET_CHILD_BY_NAME).is_empty());
+        e.register(COMPARE_00408B20, |_, _| 1u32.into_ret());
+        e.register(SETTING_STRING_00403DF0, |_, a| a[0].into_ret());
+        e.register(TILE_GET_CHILD_BY_NAME, |_, a| (a[1] & 0xffff).into_ret());
+        e.register(TILE_TEXT_TO_TRAIT, |_, _| 0x1234u32.into_ret());
+        e.call_log = Some(vec![]);
+        e.call(0x007d_cc80, &args![menu]);
+        let strings = calls_to(&e, TILE_SET_STRING);
+        assert!(strings.contains(&vec![0x7000, 0xfc4, 0x011d_2f88, 1]));
+        assert!(strings.contains(&vec![0x6100, 0x100e, 0x011d_41bc, 1]));
+        assert!(strings.contains(&vec![0x7398, 0xfc4, 0x011d_3fdc, 1]));
+        assert!(strings.contains(&vec![0x7388, 0x1234, 0x011d_1f5c, 1]));
+        assert!(strings.contains(&vec![0x732c, 0xfc4, 0x011d_2ebc, 1]));
+    }
+
+    #[test]
+    fn the_reputation_list_takes_known_reputations() {
+        let mut e = batch_engine();
+        let menu = menu(&mut e);
+        e.set_global(OPEN_MENU_011DACE0, menu);
+        e.mem.set_u32(menu + 0x148, 0x5148);
+        let list_vtable = fake_vtable(&mut e, 11);
+        e.mem.set_u32(menu + 0x270, list_vtable);
+        // Two nodes: reputation 0x00ab_0100 (0.0 and 2.0) and 0x00ab_0200 (0.0 and NaN).
+        e.map(0x00ab_0000, 0x1000);
+        e.mem.set_u32(0x00ab_0000, 0x00ab_0100);
+        e.mem.set_u32(0x00ab_0004, 0x00ab_0010);
+        e.mem.set_u32(0x00ab_0010, 0x00ab_0200);
+        e.register(REPUTATION_LIST_009C1A50, |_, _| 0x00ab_0000u32.into_ret());
+        e.register(REPUTATION_VALUE_006155C0, |_, a| {
+            st0(match (a[0], a[1]) {
+                (0x00ab_0100, 0) => 2.0,
+                (0x00ab_0200, 0) => f64::NAN,
+                _ => 0.0,
+            })
+        });
+        e.register(STRING_CHARS_00559450, |_, _| 0x00ad_0009u32.into_ret());
+        e.register(STRING_CHARS_00408DA0, |_, a| a[0].into_ret());
+        e.register(TILE_GET_MENU, |_, _| 0u32.into_ret());
+        e.call_log = Some(vec![]);
+        e.call(0x007d_d8c0, &args![menu]);
+        assert_eq!(calls_to(&e, slot(11, 0x1c)), vec![vec![menu + 0x270]]);
+        assert_eq!(
+            calls_to(&e, STRING_FORMAT)
+                .iter()
+                .map(|w| w[2])
+                .collect::<Vec<_>>(),
+            vec![0x00ab_0118]
+        );
+        // The list box (no container at +0xc) adds nothing but was asked.
+        assert_eq!(calls_to(&e, STRING_DESTROY).len(), 1);
+        // Without the reputation tile nothing happens.
+        e.mem.set_u32(menu + 0x148, 0);
+        e.call_log = Some(vec![]);
+        e.call(0x007d_d8c0, &args![menu]);
+        assert_eq!(e.call_log.as_ref().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn the_perk_list_clear_and_the_general_list_walk() {
+        let mut e = batch_engine();
+        let menu = menu(&mut e);
+        e.set_global(OPEN_MENU_011DACE0, menu);
+        let list_vtable = fake_vtable(&mut e, 12);
+        e.mem.set_u32(menu + 0x1e0, list_vtable);
+        e.mem.set_u32(menu + 0x118, 0);
+        e.call_log = Some(vec![]);
+        e.call(0x007d_da60, &args![]);
+        assert!(calls_to(&e, slot(12, 0x1c)).is_empty());
+        e.mem.set_u32(menu + 0x118, 1);
+        e.call(0x007d_da60, &args![]);
+        assert_eq!(calls_to(&e, slot(12, 0x1c)), vec![vec![menu + 0x1e0]]);
+        e.call(0x007d_daa0, &args![menu]);
+        assert_eq!(
+            calls_to(&e, ITEM_CHANGE_007314C0),
+            vec![vec![menu + 0x210, 0x007d_fc60, 0, 0x7fff_ffff]]
+        );
+    }
+
+    #[test]
+    fn the_hardcore_meters() {
+        let mut e = batch_engine();
+        let player = with_player(&mut e);
+        let values = e.mem.u32(player + 0xa4);
+        let menu = menu(&mut e);
+        tile_floats(&mut e, vec![((0x6100, 0x1008), 0.5)]);
+        e.register(VALUE_005C5420, |_, _| st0(0.25));
+        e.register(e.mem.u32(values + 0xc), |_, a| st0(f64::from(a[1]) / 200.0));
+        e.register(FLOAT_PAIR_00404010, |_, a| {
+            st0(f64::from(f32::from_bits(a[0]).max(f32::from_bits(a[1]))))
+        });
+        e.register(FLOAT_PAIR_004BD510, |_, _| st0(7.0));
+        e.call_log = Some(vec![]);
+        for addr in [0x007d_dc20u32, 0x007d_dd10, 0x007d_de00] {
+            e.call(addr, &args![menu]);
+        }
+        // Values 0x49 to 0x4b over 200 lie between 0 and 1: each meter shows 1.0.
+        assert_eq!(
+            calls_to(&e, TILE_SET_FLOAT),
+            vec![
+                vec![0x6100, 0x100f, 1.0f32.to_bits(), 1],
+                vec![0x6100, 0x1010, 1.0f32.to_bits(), 1],
+                vec![0x6100, 0x1011, 1.0f32.to_bits(), 1],
+            ]
+        );
+        e.register(e.mem.u32(values + 0xc), |_, _| st0(0.0));
+        e.call_log = Some(vec![]);
+        e.call(0x007d_dc20, &args![menu]);
+        assert_eq!(
+            calls_to(&e, FLOAT_PAIR_004BD510),
+            vec![vec![0, 1.0f32.to_bits()]]
+        );
+        assert_eq!(
+            calls_to(&e, TILE_SET_FLOAT),
+            vec![vec![0x6100, 0x100f, 7.0f32.to_bits(), 1]]
+        );
+    }
+
+    #[test]
+    fn the_status_effect_entry_constructor_and_setter() {
+        let mut e = batch_engine();
+        let entry = e.mem.alloc(0x40);
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x007d_f140, &args![entry, 0x99u32]).u32(), entry);
+        assert_eq!(e.mem.u32(entry), 0x99);
+        assert_eq!(calls_to(&e, LIST_CONSTRUCT_00406DB0), vec![vec![entry + 4]]);
+        assert_eq!(
+            calls_to(&e, LIST_CONSTRUCT_0071F540),
+            vec![vec![entry + 0x10]]
+        );
+        e.call(0x007d_f120, &args![entry, 7u32]);
+        assert_eq!(
+            calls_to(&e, FIELD_SET_00501C10),
+            vec![vec![entry + 0x20, 7]]
+        );
+    }
+
+    #[test]
+    fn knob_position_and_stats_page_need_an_open_menu() {
+        let mut e = batch_engine();
+        e.register(STATS_MENU_SET_ICON_AND_DESCRIPTION, |_, _| Ret::default());
+        with_player(&mut e);
+        e.register(INTERFACE_MANAGER_004B7210, |_, _| 0x00ab_0000u32.into_ret());
+        e.register(WORD_AT_174_00704370, |_, _| 0x00ab_0174u32.into_ret());
+        e.call_log = Some(vec![]);
+        e.call(0x007d_fc90, &args![1u32]);
+        e.call(0x007d_fd00, &args![2u32]);
+        assert!(calls_to(&e, PIPBOY_SET_TAB_KNOB_POSITION).is_empty());
+        assert!(calls_to(&e, TILE_SET_INT).is_empty());
+        let menu = menu(&mut e);
+        e.set_global(OPEN_MENU_011DACE0, menu);
+        tile_floats(&mut e, vec![((0x6100, 0x1004), 3.0)]);
+        e.call(0x007d_fc90, &args![0x101u32]);
+        assert_eq!(
+            calls_to(&e, PIPBOY_SET_TAB_KNOB_POSITION),
+            vec![vec![0x00ab_0174, 3, 1]]
+        );
+        e.call(0x007d_fd00, &args![0x102u32]);
+        assert!(set_ints(&e, 0x6100).contains(&vec![0x6100, 0x1004, 2]));
+    }
+
+    #[test]
+    fn move_knob_steps_forward_and_back() {
+        let mut e = batch_engine();
+        e.set_global(KNOB_SETTING_011DB358 + 0x100, 0.25f32);
+        e.set_global(KNOB_SETTING_011DB2F0 + 0x100, 3.0f32);
+        let last = e.mem.alloc(4);
+        e.mem.set_u32(last, 2);
+        tile_floats(&mut e, vec![((0x5000, 0xfac), 4.9), ((0x5001, 0xfac), 1.2)]);
+        e.call_log = Some(vec![]);
+        e.call(0x007d_fd20, &args![0u32, 0x5000u32, last]);
+        assert_eq!(e.mem.u32(last), 4);
+        e.call(0x007d_fd20, &args![0u32, 0x5000u32, last]);
+        e.call(0x007d_fd20, &args![0u32, 0x5001u32, last]);
+        assert_eq!(e.mem.u32(last), 1);
+        let moves: Vec<_> = calls_to(&e, PIPBOY_MOVE_KNOB)
+            .into_iter()
+            .map(|w| w[1..].to_vec())
+            .collect();
+        assert_eq!(
+            moves,
+            vec![
+                vec![0, 3.0f32.to_bits(), 0.25f32.to_bits(), 1],
+                vec![0, (-3.0f32).to_bits(), 0.25f32.to_bits(), 1],
+            ]
+        );
+    }
+
+    #[test]
+    fn sub_pages_and_page_lookups() {
+        let mut e = batch_engine();
+        with_player(&mut e);
+        let menu = menu(&mut e);
+        e.mem.set_u32(menu + 0xa4, 0x5a00);
+        assert!(!e.call(0x007e_0060, &args![menu, 0xffff_ffffu32]).bool());
+        assert!(!e.call(0x007e_0060, &args![menu, 3u32]).bool());
+        assert!(!e.call(0x007e_0060, &args![menu, 0u32]).bool());
+        e.mem.set_u8(menu + 0x2a0, 1);
+        e.call_log = Some(vec![]);
+        assert!(e.call(0x007e_0060, &args![menu, 2u32]).bool());
+        assert_eq!(e.mem.u8(menu + 0x2a0), 0);
+        assert_eq!(set_ints(&e, 0x5a00), vec![vec![0x5a00, 0x1004, 2]]);
+        e.register(HARDCORE_004D1360, |_, _| 1u32.into_ret());
+        assert!(e.call(0x007e_0060, &args![menu, 5u32]).bool());
+        assert!(!e.call(0x007e_0060, &args![menu, 6u32]).bool());
+        let out = e.mem.alloc(4);
+        for id in 0..5u32 {
+            assert!(e.call(0x007e_00e0, &args![menu, id, out]).bool());
+            assert_eq!(e.mem.u32(out), id);
+        }
+        assert!(!e.call(0x007e_00e0, &args![menu, 5u32, out]).bool());
+        for (id, page) in [
+            (0x1cu32, 0u32),
+            (0x1d, 1),
+            (0x1e, 2),
+            (0x35, 3),
+            (0x37, 4),
+            (0x39, 5),
+        ] {
+            assert!(e.call(0x007e_0160, &args![menu, id, out]).bool());
+            assert_eq!(e.mem.u32(out), page);
+        }
+        e.mem.set_u32(out, 9);
+        for id in [0x1bu32, 0x1f, 0x36, 0x38, 0x3a] {
+            assert!(!e.call(0x007e_0160, &args![menu, id, out]).bool());
+        }
+        assert_eq!(e.mem.u32(out), 9);
+    }
+
+    #[test]
+    fn toggle_gen_rep_mode_switches_the_tiles() {
+        let mut e = batch_engine();
+        let menu = menu(&mut e);
+        e.set_global(OPEN_MENU_011DACE0, menu);
+        for (offset, tile) in [
+            (0x148u32, 0x5148u32),
+            (0xb0, 0x50b0),
+            (0x154, 0x5154),
+            (0x158, 0x5158),
+        ] {
+            e.mem.set_u32(menu + offset, tile);
+        }
+        e.register(ADD_USER_TRAIT, |_, a| (a[0] & 0xffff).into_ret());
+        e.register(SETTING_STRING_00403DF0, |_, a| a[0].into_ret());
+        e.call_log = Some(vec![]);
+        e.call(0x007e_02b0, &args![menu]);
+        assert_eq!(e.global::<u32>(GEN_REP_TRAIT_011DAD88), 0x0244);
+        assert_eq!(e.global::<u32>(GEN_REP_TRAIT_011DAD84), 0x7564);
+        assert_eq!(
+            set_ints(&e, 0x5148),
+            vec![vec![0x5148, 0x0244, 1], vec![0x5148, 0xfa3, 1]]
+        );
+        assert_eq!(
+            set_ints(&e, 0x50b0),
+            vec![vec![0x50b0, 0x0244, 0], vec![0x50b0, 0xfa3, 0]]
+        );
+        assert_eq!(
+            calls_to(&e, TILE_SET_STRING),
+            vec![vec![0x5154, 0xfc4, SETTING_011D4EF4, 1]]
+        );
+        assert_eq!(set_ints(&e, 0x5158), vec![vec![0x5158, 0x1004, 1]]);
+        e.call_log = Some(vec![]);
+        e.call(0x007e_02b0, &args![menu]);
+        assert_eq!(calls_to(&e, ADD_USER_TRAIT).len(), 0);
+        assert_eq!(
+            calls_to(&e, TILE_SET_STRING),
+            vec![vec![0x5154, 0xfc4, SETTING_011D4144, 1]]
+        );
+        assert_eq!(set_ints(&e, 0x5158), vec![vec![0x5158, 0x1004, 0]]);
+    }
+
+    #[test]
+    fn the_three_sorts_compare_the_names() {
+        let mut e = batch_engine();
+        e.register(RT_DYNAMIC_CAST, |_, a| (a[0] + 1).into_ret());
+        e.register(STRING_CHARS_00408DA0, |_, a| (a[0] + 2).into_ret());
+        e.register(COMPARE_00404DC0, |_, a| a[0].wrapping_sub(a[1]).into_ret());
+        let first = e.mem.alloc(8);
+        let second = e.mem.alloc(8);
+        e.mem.set_u32(first, 0x100);
+        e.mem.set_u32(second, 0x200);
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x007e_0480, &args![first, second]).i32(), -0x100);
+        assert_eq!(
+            calls_to(&e, RT_DYNAMIC_CAST),
+            vec![
+                vec![0x200, 0, TYPE_FORM_01183028, TYPE_NAMED_01183158, 0],
+                vec![0x100, 0, TYPE_FORM_01183028, TYPE_NAMED_01183158, 0],
+            ]
+        );
+        e.mem.set_u32(first + 4, 0x1000);
+        e.mem.set_u32(second + 4, 0x3000);
+        assert_eq!(e.call(0x007e_0510, &args![first, second]).i32(), -0x2000);
+        // The stage sort: each makes its string into a local, the second first.
+        e.register(ENTRY_STRING_004046B0, |_, a| a[1].into_ret());
+        e.register(STRING_CHARS_00559450, |_, a| (a[0] & 0xff).into_ret());
+        e.call_log = Some(vec![]);
+        e.call(0x007e_0540, &args![first, second]);
+        let made = calls_to(&e, ENTRY_STRING_004046B0);
+        assert_eq!(
+            made.iter().map(|w| w[0]).collect::<Vec<_>>(),
+            vec![second, first]
+        );
+        let destroyed = calls_to(&e, STRING_DESTROY);
+        assert_eq!(destroyed, vec![vec![made[1][1]], vec![made[0][1]]]);
+    }
+
+    #[test]
+    fn the_status_effect_list_registers_by_kind() {
+        let mut e = batch_engine();
+        e.register(EFFECT_TARGET_0044DDC0, |_, a| (a[0] + 0x10).into_ret());
+        e.register(RT_DYNAMIC_CAST, |_, a| (a[0] + 0x20).into_ret());
+        e.register(EFFECT_ITEM_0084E3A0, |_, _| 0x77u32.into_ret());
+        e.register(WORD_AT_14_00825C00, |_, _| 0u32.into_ret());
+        e.register(ENTRY_CONSTRUCT_00403BA0, |_, a| a[0].into_ret());
+        let list = e.mem.alloc(0x10);
+        // Not found: a new entry is made and inserted sorted; flag 0x2000 off.
+        e.call_log = Some(vec![]);
+        let effect = e.mem.alloc(0x20);
+        e.call(0x007e_08a0, &args![list, effect]);
+        let inserted = calls_to(&e, LIST_INSERT_SORTED);
+        assert_eq!(inserted[0][0], list + 4);
+        assert_eq!(inserted[0][2], 0x007e_0480);
+        let entry = inserted[0][1];
+        assert_eq!(e.mem.u32(entry), effect + 0x30);
+        // `007e0a20` on the entry's data list (+4): a new 0x14-byte entry.
+        assert_eq!(calls_to(&e, ENTRY_CONSTRUCT_00403BA0).len(), 1);
+        // Flag 0x2000: the stage list (+0x10) takes the setting unless it has it.
+        e.register(FLAG_TEST_00403E60, |_, _| 1u32.into_ret());
+        e.call_log = Some(vec![]);
+        e.call(0x007e_08a0, &args![list, effect]);
+        let inserted = calls_to(&e, LIST_INSERT_SORTED);
+        assert_eq!(inserted.len(), 2);
+        assert_eq!(inserted[1][0], inserted[0][1] + 0x14);
+        assert_eq!(inserted[1][2], 0x007e_0540);
+        e.register(LIST_CONTAINS_005F65D0, |_, _| 1u32.into_ret());
+        e.call_log = Some(vec![]);
+        fn_007e09d0(&mut e, Ptr::new(0x0e10_0000), effect);
+        assert!(calls_to(&e, LIST_INSERT_SORTED).is_empty());
+    }
+
+    #[test]
+    fn the_status_data_entries_sum_magnitudes() {
+        let mut e = batch_engine();
+        e.register(EFFECT_ITEM_0084E3A0, |_, a| a[0].into_ret());
+        e.register(EFFECT_KEY_00403EA0, |_, a| (a[0] & 0xf).into_ret());
+        e.register(MAGNITUDE_00495460, |_, _| st0(2.75));
+        e.register(ENTRY_CONSTRUCT_00403BA0, |_, a| a[0].into_ret());
+        // Appending puts the entry first in the embedded list.
+        e.register(LIST_APPEND, |e, a| {
+            let entry = e.mem.u32(a[1]);
+            e.mem.set_u32(a[0], entry);
+            Ret::default()
+        });
+        let list = e.mem.alloc(0x10);
+        e.call_log = Some(vec![]);
+        e.call(0x007e_0a20, &args![list, 0u32]);
+        assert_eq!(e.call_log.as_ref().unwrap().len(), 1);
+        e.call(0x007e_0a20, &args![list, 0x0010_0003u32]);
+        assert_eq!(calls_to(&e, LIST_APPEND)[0][0], list + 4);
+        let entry = e.mem.u32(list + 4);
+        assert_eq!(e.mem.u32(entry + 0x10), 3);
+        assert_eq!(e.mem.u32(entry), 2);
+        // Found by key: the magnitude is added.
+        e.call(0x007e_0a20, &args![list, 0x0020_0003u32]);
+        assert_eq!(e.mem.u32(entry), 4);
+        // The status effect list finds its entries by the first word's item.
+        let found = e.mem.alloc(4);
+        e.mem.set_u32(found, 0x55);
+        e.mem.set_u32(list + 4, found);
+        assert_eq!(e.call(0x007e_0c50, &args![list, 0x55u32]).u32(), found);
+        assert_eq!(e.call(0x007e_0c50, &args![list, 0x56u32]).u32(), 0);
+        assert_eq!(e.call(0x007e_0c50, &args![0u32, 0x55u32]).u32(), 0);
+    }
+
+    #[test]
+    fn controller_switch_shows_the_healing_mode() {
+        let mut e = batch_engine();
+        let menu = menu(&mut e);
+        e.call_log = Some(vec![]);
+        e.call(0x007e_0d60, &args![menu, 0u32]);
+        assert_eq!(calls_to(&e, ADD_USER_TRAIT).len(), 2);
+    }
+
+    #[test]
+    fn string_append_grows_copies_or_sets() {
+        let mut e = batch_engine();
+        let text = e.mem.alloc(8);
+        let source = e.mem.alloc(8);
+        e.mem.set_u32(text, 0x00ab_0000);
+        e.register(STRING_CHARS_00559450, |e, a| e.mem.u32(a[0]).into_ret());
+        e.register(STRING_LENGTH_004048E0, |_, a| (a[0] & 0xf).into_ret());
+        e.register(STRING_CAPACITY_004039A0, |_, _| 4u32.into_ret());
+        e.register(STRING_COPY_LENGTH_004F4280, |_, _| 9u32.into_ret());
+        // Without source text: nothing.
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x007e_0d80, &args![text, source]).u32(), text);
+        assert_eq!(e.call_log.as_ref().unwrap().len(), 2);
+        e.mem.set_u32(source, 0x00ac_0000);
+        e.call_log = Some(vec![]);
+        e.call(0x007e_0d80, &args![text, source]);
+        let own = text & 0xf;
+        let added = source & 0xf;
+        let grown = calls_to(&e, STRING_GROW_004037F0);
+        assert_eq!(grown.len(), usize::from(own + added > 4));
+        assert_eq!(
+            calls_to(&e, COPY_00401460),
+            vec![vec![own + 0x00ab_0000, 0x00ac_0000, 9]]
+        );
+        assert_eq!(
+            calls_to(&e, STRING_SET_LENGTH_004039C0),
+            vec![vec![text, own + added]]
+        );
+        // A string without text takes the source.
+        e.mem.set_u32(text, 0);
+        e.call_log = Some(vec![]);
+        e.call(0x007e_0d80, &args![text, source]);
+        assert_eq!(calls_to(&e, STRING_SET), vec![vec![text, source]]);
+        assert!(calls_to(&e, COPY_00401460).is_empty());
+    }
+
+    #[test]
+    fn the_two_list_box_instances_use_their_own_helpers() {
+        let mut e = batch_engine();
+        e.register(TILE_GET_MENU, |_, _| 0x00ab_0000u32.into_ret());
+        e.register(MENU_RENDER_TEMPLATE, |_, _| 0x5900u32.into_ret());
+        e.register(LIST_BOX_HAS_FLAG, |_, _| 1u32.into_ret());
+        let list = e.mem.alloc(0x30);
+        e.mem.set_u32(list + 0xc, 0x5800);
+        e.call_log = Some(vec![]);
+        assert_eq!(
+            e.call(0x007e_1430, &args![list, 1u32, 0u32, 0x99u32, 0x1234u32])
+                .u32(),
+            0x5900
+        );
+        assert_eq!(
+            calls_to(&e, STATUS_EFFECT_SYNCHRONIZE_007254D0),
+            vec![vec![list]]
+        );
+        e.call(0x007e_16d0, &args![list, 1u32, 0u32, 0u32, 0x1234u32]);
+        assert_eq!(
+            calls_to(&e, REPUTATION_SET_TOTAL_LIST_HEIGHT),
+            vec![vec![list]]
+        );
+        assert!(calls_to(&e, REPUTATION_SYNCHRONIZE).is_empty());
     }
 }

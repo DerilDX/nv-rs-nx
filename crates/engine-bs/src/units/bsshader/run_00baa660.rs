@@ -40,9 +40,43 @@ pub fn fn_00baa660(e: &mut Engine, this: Ptr) -> bool {
     })
 }
 
+// Translated from 00baa640 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed (Ghidra made no function of it): slot 78 of the vtable `010b8980`, `thiscall`, two
+/// words: stores the first at +0x120 and the second's low byte at +0x124.
+pub fn fn_00baa640(e: &mut Engine, this: Ptr, value: u32, flag: u8) {
+    e.mem.set_u32(this.addr() + 0x120, value);
+    e.mem.set_u8(this.addr() + 0x124, flag);
+}
+
+// Translated from 00baa700 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed (Ghidra made no function of it): slot 21 of the vtable `010b8980`, `thiscall`, seven
+/// words of which only the fourth is read: the object at +0x1c gets its slot +0x24 with that
+/// word's +0x10. Answers 0.
+pub fn fn_00baa700(
+    e: &mut Engine,
+    this: Ptr,
+    _unused_0: u32,
+    _unused_1: u32,
+    _unused_2: u32,
+    holder: Ptr,
+    _unused_4: u32,
+    _unused_5: u32,
+    _unused_6: u32,
+) -> u32 {
+    let object = e.mem.u32(this.addr() + 0x1c);
+    let word = e.mem.u32(holder.addr() + 0x10);
+    e.vcall(object, 0x24, &args![word]);
+    0
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x00ba_a640, fn_00baa640(Ptr, u32, u8)),
+        entry!(
+            0x00ba_a700,
+            fn_00baa700(Ptr, u32, u32, u32, Ptr, u32, u32, u32) -> u32
+        ),
         entry!(0x00ba_a630, fn_00baa630() -> Ptr),
         entry!(0x00ba_a660, fn_00baa660(Ptr) -> bool),
     ]
@@ -101,5 +135,44 @@ mod tests {
         assert_eq!(log.len(), 2);
         let tls = e.tls();
         assert_eq!(e.mem.u32(tls + 0x2b4), 0x55);
+    }
+}
+
+#[cfg(test)]
+mod n070_tests {
+    use super::*;
+
+    #[test]
+    fn fn_00baa640_stores_the_word_and_the_byte() {
+        let mut e = Engine::new();
+        let this = e.mem.alloc(0x128);
+        e.mem.set_u32(this + 0x124, 0xffff_ffff);
+        e.call(0x00ba_a640, &args![this, 0x1234u32, 0x5601u32]);
+        assert_eq!(e.mem.u32(this + 0x120), 0x1234);
+        assert_eq!(e.mem.u32(this + 0x124), 0xffff_ff01);
+    }
+
+    #[test]
+    fn fn_00baa700_passes_the_fourth_word_s_field() {
+        let mut e = Engine::new();
+        e.register(0x0eb0_0000, |_, _| Ret::default());
+        let vtable = e.mem.alloc(0x28);
+        e.mem.set_u32(vtable + 0x24, 0x0eb0_0000);
+        let object = e.mem.alloc(4);
+        e.mem.set_u32(object, vtable);
+        let this = e.mem.alloc(0x20);
+        e.mem.set_u32(this + 0x1c, object);
+        let holder = e.mem.alloc(0x14);
+        e.mem.set_u32(holder + 0x10, 0x77);
+        e.call_log = Some(vec![]);
+        let answer = e
+            .call(
+                0x00ba_a700,
+                &args![this, 1u32, 2u32, 3u32, holder, 5u32, 6u32, 7u32],
+            )
+            .u32();
+        assert_eq!(answer, 0);
+        let log = e.call_log.take().unwrap();
+        assert_eq!(log[1], (0x0eb0_0000, vec![object, 0x77]));
     }
 }

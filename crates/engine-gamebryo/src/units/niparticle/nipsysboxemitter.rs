@@ -258,6 +258,92 @@ pub fn ni_p_sys_box_emitter_load_binary(e: &mut Engine, this: Ptr<NiPSysBoxEmitt
     });
 }
 
+use crate::units::niparticle::nipsysdata::{add_viewer_string, stream_write};
+
+/// `NiPSysVolumeEmitter`'s `IsEqual` (`00c31b80`), `SaveBinary`
+/// (`00c31b60`) and `GetViewerStrings` (`00c31db0`) (Xbox PDB names;
+/// `thiscall`, one word).
+const VOLUME_EMITTER_IS_EQUAL: u32 = 0x00c3_1b80;
+const VOLUME_EMITTER_SAVE_BINARY: u32 = 0x00c3_1b60;
+const VOLUME_EMITTER_GET_VIEWER_STRINGS: u32 = 0x00c3_1db0;
+/// `NiGetViewerString` (`00a7d330`, the text) and `NiGetViewerString_ov9`
+/// (`00a7d550`: a label and a `float`) (Xbox PDB names; `cdecl`).
+const VIEWER_STRING: u32 = 0x00a7_d330;
+const VIEWER_STRING_FLOAT: u32 = 0x00a7_d550;
+/// `NiPSysBoxEmitter::ms_RTTI` (its name is the first word).
+const RTTI: u32 = 0x0120_2518;
+/// The labels "Width" (`0109dc8c`), "Height" (`0109dc84`) and "Depth"
+/// (`010a0eb4`).
+const LABEL_WIDTH: u32 = 0x0109_dc8c;
+const LABEL_HEIGHT: u32 = 0x0109_dc84;
+const LABEL_DEPTH: u32 = 0x010a_0eb4;
+
+// Translated from 00c20170 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiPSysBoxEmitter::IsEqual` (Xbox PDB): `NiPSysVolumeEmitter`'s, then
+/// equal width, height and depth (`FUCOMPP`: a NaN is unequal).
+pub fn ni_p_sys_box_emitter_is_equal(
+    e: &mut Engine,
+    this: Ptr<NiPSysBoxEmitter>,
+    other: Ptr<NiPSysBoxEmitter>,
+) -> bool {
+    if !e.call(VOLUME_EMITTER_IS_EQUAL, &args![this, other]).bool() {
+        return false;
+    }
+    for field in [
+        NiPSysBoxEmitter::m_fEmitterWidth,
+        NiPSysBoxEmitter::m_fEmitterHeight,
+        NiPSysBoxEmitter::m_fEmitterDepth,
+    ] {
+        let ours = x87_m32(e.get(this, field));
+        let theirs = x87_m32(e.get(other, field));
+        if theirs != ours {
+            return false;
+        }
+    }
+    true
+}
+
+// Translated from 00c20440 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiPSysBoxEmitter::SaveBinary` (Xbox PDB): `NiPSysVolumeEmitter`'s, then
+/// the width, height and depth (4 bytes each).
+pub fn ni_p_sys_box_emitter_save_binary(e: &mut Engine, this: Ptr<NiPSysBoxEmitter>, stream: Ptr) {
+    e.call(VOLUME_EMITTER_SAVE_BINARY, &args![this, stream]);
+    e.with_stack(4, |e, slot| {
+        for field in [
+            NiPSysBoxEmitter::m_fEmitterWidth,
+            NiPSysBoxEmitter::m_fEmitterHeight,
+            NiPSysBoxEmitter::m_fEmitterDepth,
+        ] {
+            let value = this.addr() + field.off;
+            stream_write(e, stream.addr(), value, 4, 4, slot.addr());
+        }
+    });
+}
+
+// Translated from 00c204d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiPSysBoxEmitter::GetViewerStrings` (Xbox PDB): `NiPSysVolumeEmitter`'s
+/// strings, the class name, then the width, height and depth.
+pub fn ni_p_sys_box_emitter_get_viewer_strings(
+    e: &mut Engine,
+    this: Ptr<NiPSysBoxEmitter>,
+    strings: Ptr,
+) {
+    let strings = strings.addr();
+    e.call(VOLUME_EMITTER_GET_VIEWER_STRINGS, &args![this, strings]);
+    let name = e.global::<u32>(RTTI);
+    let string = e.call(VIEWER_STRING, &args![name]).u32();
+    add_viewer_string(e, strings, string);
+    for (label, field) in [
+        (LABEL_WIDTH, NiPSysBoxEmitter::m_fEmitterWidth),
+        (LABEL_HEIGHT, NiPSysBoxEmitter::m_fEmitterHeight),
+        (LABEL_DEPTH, NiPSysBoxEmitter::m_fEmitterDepth),
+    ] {
+        let value = x87_quiet_bits(e.get(this, field));
+        let string = e.call(VIEWER_STRING_FLOAT, &args![label, value]).u32();
+        add_viewer_string(e, strings, string);
+    }
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -284,6 +370,18 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00c1_fdd0, ni_p_sys_box_emitter_register_streamables(Ptr, Ptr) -> bool),
         entry!(0x00c2_0150, ni_p_sys_box_emitter_process_clone(Ptr, Ptr)),
         entry!(0x00c2_0160, ni_p_sys_box_emitter_link_object(Ptr, Ptr)),
+        entry!(
+            0x00c2_0170,
+            ni_p_sys_box_emitter_is_equal(Ptr<NiPSysBoxEmitter>, Ptr<NiPSysBoxEmitter>) -> bool
+        ),
+        entry!(
+            0x00c2_0440,
+            ni_p_sys_box_emitter_save_binary(Ptr<NiPSysBoxEmitter>, Ptr)
+        ),
+        entry!(
+            0x00c2_04d0,
+            ni_p_sys_box_emitter_get_viewer_strings(Ptr<NiPSysBoxEmitter>, Ptr)
+        ),
     ]
 }
 
@@ -491,5 +589,85 @@ mod emitter_tests {
         );
         assert_eq!(e.mem.u32(file + 4), 12);
         assert_eq!(floats(&e, this.addr() + 0x58), [1.25; 3]);
+    }
+}
+
+#[cfg(test)]
+mod n064_tests {
+    use super::*;
+    use crate::units::niparticle::nipsysdata::viewer_test::{self, answer, calls_to};
+
+    fn emitter(e: &mut Engine, size: [f32; 3]) -> Ptr<NiPSysBoxEmitter> {
+        let this = e.new_object::<NiPSysBoxEmitter>();
+        e.set(this, NiPSysBoxEmitter::m_fEmitterWidth, size[0].to_bits());
+        e.set(this, NiPSysBoxEmitter::m_fEmitterHeight, size[1].to_bits());
+        e.set(this, NiPSysBoxEmitter::m_fEmitterDepth, size[2].to_bits());
+        this
+    }
+
+    #[test]
+    fn is_equal_compares_the_box() {
+        let mut e = Engine::new();
+        e.register(VOLUME_EMITTER_IS_EQUAL, |_, _| answer(1));
+        let this = emitter(&mut e, [1.0, 2.0, 3.0]);
+        let check = |e: &mut Engine, other| e.call(0x00c2_0170, &args![this, other]).bool();
+        let same = emitter(&mut e, [1.0, 2.0, 3.0]);
+        assert!(check(&mut e, same));
+        for size in [[0.0, 2.0, 3.0], [1.0, 0.0, 3.0], [1.0, 2.0, 0.0]] {
+            let other = emitter(&mut e, size);
+            assert!(!check(&mut e, other));
+        }
+        e.set(this, NiPSysBoxEmitter::m_fEmitterDepth, f32::NAN.to_bits());
+        let nan = emitter(&mut e, [1.0, 2.0, f32::NAN]);
+        assert!(!check(&mut e, nan));
+        e.register(VOLUME_EMITTER_IS_EQUAL, |_, _| answer(0));
+        assert!(!check(&mut e, same));
+    }
+
+    #[test]
+    fn save_binary_writes_the_box() {
+        let mut e = Engine::new();
+        e.register(VOLUME_EMITTER_SAVE_BINARY, |_, _| Ret::default());
+        let stream = viewer_test::out_stream(&mut e);
+        let this = emitter(&mut e, [1.0, 2.0, 3.0]);
+        e.call_log = Some(vec![]);
+        e.call(0x00c2_0440, &args![this, stream]);
+        assert_eq!(
+            calls_to(&e, VOLUME_EMITTER_SAVE_BINARY),
+            vec![vec![this.addr(), stream]]
+        );
+        let bytes: Vec<u8> = [1.0f32, 2.0, 3.0]
+            .iter()
+            .flat_map(|v| v.to_le_bytes())
+            .collect();
+        assert_eq!(viewer_test::written(&e, stream), (bytes, 12));
+    }
+
+    #[test]
+    fn viewer_strings_add_the_name_and_the_box() {
+        let mut e = Engine::new();
+        e.register(VOLUME_EMITTER_GET_VIEWER_STRINGS, |_, _| Ret::default());
+        viewer_test::counting(&mut e, &[VIEWER_STRING, VIEWER_STRING_FLOAT]);
+        e.map(RTTI, 4);
+        e.set_global::<u32>(RTTI, 0x0100_0060);
+        let strings = viewer_test::strings(&mut e, 2);
+        let this = emitter(&mut e, [1.0, 2.0, 3.0]);
+        e.set(this, NiPSysBoxEmitter::m_fEmitterWidth, 0xff80_0001);
+        e.call_log = Some(vec![]);
+        e.call(0x00c2_04d0, &args![this, strings]);
+        assert_eq!(viewer_test::collected(&e, strings), vec![1, 2, 3, 4]);
+        assert_eq!(
+            calls_to(&e, VOLUME_EMITTER_GET_VIEWER_STRINGS),
+            vec![vec![this.addr(), strings]]
+        );
+        assert_eq!(calls_to(&e, VIEWER_STRING), vec![vec![0x0100_0060]]);
+        assert_eq!(
+            calls_to(&e, VIEWER_STRING_FLOAT),
+            vec![
+                vec![LABEL_WIDTH, 0xffc0_0001],
+                vec![LABEL_HEIGHT, 2.0f32.to_bits()],
+                vec![LABEL_DEPTH, 3.0f32.to_bits()]
+            ]
+        );
     }
 }

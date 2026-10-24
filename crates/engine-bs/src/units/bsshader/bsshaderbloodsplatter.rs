@@ -512,9 +512,205 @@ pub fn bs_shader_blood_splatter_create_constant_maps(e: &mut Engine, this: Ptr) 
     }
 }
 
+// Translated from 00b80380 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (unit `bsshaderbloodsplatter.cpp`), `thiscall`, no stack words:
+/// gives each of the two passes at +0x6c and +0x70 to `this`'s vtable slot +0x128.
+pub fn fn_00b80380(e: &mut Engine, this: Ptr) {
+    let base = this.addr();
+    for offset in [0x6cu32, 0x70] {
+        let pass = e.mem.u32(base + offset);
+        e.vcall(base, 0x128, &args![pass]);
+    }
+}
+
+/// The current pass word (`0126f74c`) and the pass kind being set up (`011f91e4`; 0x2f0 and
+/// 0x2f1 are the blood splatter's two).
+const CURRENT_PASS_0126F74C: u32 = 0x0126_f74c;
+const PASS_KIND_011F91E4: u32 = 0x011f_91e4;
+
+// Translated from 00b805d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed (Ghidra made no function of it): slot 60 of the vtable `010af760`, `thiscall`, one
+/// word (the pass kind): kind 0x2f0 makes the pass at +0x70 current (`0126f74c`), kind 0x2f1
+/// the pass at +0x6c; any other kind changes nothing.
+pub fn fn_00b805d0(e: &mut Engine, this: Ptr, kind: u32) {
+    let base = this.addr();
+    match kind {
+        0x2f0 => {
+            let pass = e.mem.u32(base + 0x70);
+            e.set_global(CURRENT_PASS_0126F74C, pass);
+        }
+        0x2f1 => {
+            let pass = e.mem.u32(base + 0x6c);
+            e.set_global(CURRENT_PASS_0126F74C, pass);
+        }
+        _ => {}
+    }
+}
+
+/// What `00b807b0` answers: the address `011fedc8` (no RTTI locator for the vtable; the word
+/// is the class's `NiRTTI` by its place in the vtable, unconfirmed).
+const RECORD_011FEDC8: u32 = 0x011f_edc8;
+
+// Translated from 00b807b0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed (Ghidra made no function of it): slot 2 of the vtable `010af760`, `thiscall`
+/// without reading `this`: answers the address `011fedc8`.
+pub fn fn_00b807b0(_e: &mut Engine, _this: Ptr) -> u32 {
+    RECORD_011FEDC8
+}
+
+// Translated from 00b80b20 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSShaderBloodSplatter::ReloadShaders` (Xbox PDB), `thiscall`, no stack words:
+/// `LoadShaders`, then `LoadStagesAndPasses` (a tail jump: its answer is this function's).
+pub fn bs_shader_blood_splatter_reload_shaders(e: &mut Engine, this: Ptr) -> bool {
+    bs_shader_blood_splatter_load_shaders(e, this);
+    bs_shader_blood_splatter_load_stages_and_passes(e, this)
+}
+
+/// The stage texture setter `00e7de90` (unnamed; `thiscall` on a stage, one word),
+/// `ImageSpaceTexture::GetTexture` (engine map, `00ba3780`; `thiscall`, no stack words) on the
+/// image-space texture at `012005a4`.
+const STAGE_SET_00E7DE90: u32 = 0x00e7_de90;
+const GET_TEXTURE_00BA3780: u32 = 0x00ba_3780;
+const IMAGE_SPACE_TEXTURE_012005A4: u32 = 0x0120_05a4;
+
+/// The stage's texture word (+8) set to `texture`, then `00e7de90` on the stage with what the
+/// shader property's slot +0xcc answers.
+fn set_stage_texture(e: &mut Engine, stage: u32, texture: u32, property: u32) {
+    e.mem.set_u32(stage + 8, texture);
+    let value = e.vcall(property, 0xcc, &args![]).u32();
+    e.call(STAGE_SET_00E7DE90, &args![stage, value]);
+}
+
+// Translated from 00b80b30 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (unit `bsshaderbloodsplatter.cpp`), `thiscall`, one word (the
+/// geometry; its shader property at +0xc). For pass kind 0x2f1 (`011f91e4`) the two stages of
+/// the pass at +0x6c (its stage array at +0x24) take the property's textures +0x60 and +0x64;
+/// for kind 0x2f0 the first stage of the pass at +0x70 takes +0x60 and the second the
+/// image-space texture at `012005a4` (`GetTexture`, asked twice) or, when it has none, the
+/// texture at `011fedc4`. Each stage then gets `00e7de90` with the property's slot +0xcc. Last
+/// `this`'s slot +0x108.
+pub fn fn_00b80b30(e: &mut Engine, this: Ptr, geometry: Ptr) {
+    let base = this.addr();
+    let property = e.mem.u32(geometry.addr() + 0xc);
+    let kind = e.global::<u32>(PASS_KIND_011F91E4);
+    if kind == 0x2f1 {
+        let pass = e.mem.u32(base + 0x6c);
+        for index in 0..2u32 {
+            let stages = e.mem.u32(pass + 0x24);
+            let stage = e.mem.u32(stages + 4 * index);
+            let texture = e.mem.u32(property + 0x60 + 4 * index);
+            set_stage_texture(e, stage, texture, property);
+        }
+    } else if kind == 0x2f0 {
+        let pass = e.mem.u32(base + 0x70);
+        let stage = e.mem.u32(e.mem.u32(pass + 0x24));
+        let texture = e.mem.u32(property + 0x60);
+        set_stage_texture(e, stage, texture, property);
+        let second = e.mem.u32(e.mem.u32(pass + 0x24) + 4);
+        let image = e
+            .call(GET_TEXTURE_00BA3780, &args![IMAGE_SPACE_TEXTURE_012005A4])
+            .u32();
+        let texture = if image != 0 {
+            e.call(GET_TEXTURE_00BA3780, &args![IMAGE_SPACE_TEXTURE_012005A4])
+                .u32()
+        } else {
+            e.global::<u32>(TEXTURE_POINTER_011FEDC4)
+        };
+        set_stage_texture(e, second, texture, property);
+    }
+    e.vcall(base, 0x108, &args![]);
+}
+
+/// What `00b80c20` reads: the accumulator holder (`011f91e0`, its first word), the fallback
+/// object `011f4288` for a null +0x20, `00e6fbb0` (unnamed; `thiscall` on the shader's +0x18,
+/// two words) and the `float`s `011ad878` and `011ad874`; it writes the `float` at `011fedb4`
+/// (the `"alpha"` constant).
+const ACCUMULATOR_011F91E0: u32 = 0x011f_91e0;
+const FALLBACK_011F4288: u32 = 0x011f_4288;
+const FN_00E6FBB0: u32 = 0x00e6_fbb0;
+const SCALE_011AD878: u32 = 0x011a_d878;
+const SCALE_011AD874: u32 = 0x011a_d874;
+
+// Translated from 00b80c20 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (unit `bsshaderbloodsplatter.cpp`), `thiscall`, one word (the
+/// geometry; its shader property at +0xc). With A the accumulator (`*011f91e0`): `00e6fbb0`
+/// on the shader's +0x18 with A + 0x68 and 0; the alpha constant `011fedb4` becomes
+/// `*property[+0x6c] * property[+0x28] * 011ad878` (x87, stored to `float` after the first
+/// product), times `011ad874 * 011fed90` for pass kind 0x2f0. Then each constant map (+0x30
+/// with the current pass's +0x44, +0x34 with its +0x5c), when both are set, is given its slot
+/// +0x78 with (that word, A, A[+0xbc], 0, A[+0xb8][+0x34], the geometry, 0, A + 0x68, A[+0x20]
+/// or `011f4288` when null, 0, 1).
+pub fn fn_00b80c20(e: &mut Engine, this: Ptr, geometry: Ptr) {
+    let base = this.addr();
+    let accumulator = e.mem.u32(e.global::<u32>(ACCUMULATOR_011F91E0));
+    let mut object = e.mem.u32(accumulator + 0x20);
+    let list = accumulator + 0x68;
+    if object == 0 {
+        object = FALLBACK_011F4288;
+    }
+    let word_34 = e.mem.u32(e.mem.u32(accumulator + 0xb8) + 0x34);
+    let word_bc = e.mem.u32(accumulator + 0xbc);
+    let member = e.mem.u32(base + 0x18);
+    e.call(FN_00E6FBB0, &args![member, list, 0u32]);
+    let kind = e.global::<u32>(PASS_KIND_011F91E4);
+    let property = e.mem.u32(geometry.addr() + 0xc);
+    let value = e.mem.u32(e.mem.u32(property + 0x6c));
+    let product = x87_store32(x87_mul(
+        x87_load32(value),
+        x87_m32(e.mem.u32(property + 0x28)),
+    ));
+    let alpha = x87_mul(
+        x87_load32(product),
+        x87_m32(e.global::<u32>(SCALE_011AD878)),
+    );
+    e.set_global(PIXEL_DATA_011FEDB4, x87_store32(alpha));
+    if kind == 0x2f0 {
+        let scaled = x87_mul(
+            x87_load32(e.global::<u32>(SCALE_011AD874)),
+            x87_m32(e.global::<u32>(DOT_011FED90)),
+        );
+        let alpha = x87_mul(scaled, x87_m32(e.global::<u32>(PIXEL_DATA_011FEDB4)));
+        e.set_global(PIXEL_DATA_011FEDB4, x87_store32(alpha));
+    }
+    for (map_offset, pass_offset) in [(0x30u32, 0x44u32), (0x34, 0x5c)] {
+        let map = e.mem.u32(base + map_offset);
+        if map == 0 {
+            continue;
+        }
+        let pass = e.global::<u32>(CURRENT_PASS_0126F74C);
+        let shader = e.mem.u32(pass + pass_offset);
+        if shader == 0 {
+            continue;
+        }
+        e.vcall(
+            map,
+            0x78,
+            &args![
+                shader,
+                accumulator,
+                word_bc,
+                0u32,
+                word_34,
+                geometry,
+                0u32,
+                list,
+                object,
+                0u32,
+                1u32
+            ],
+        );
+    }
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x00b8_0380, fn_00b80380(Ptr)),
+        entry!(0x00b8_05d0, fn_00b805d0(Ptr, u32)),
+        entry!(0x00b8_07b0, fn_00b807b0(Ptr) -> u32),
+        entry!(0x00b8_0b20, bs_shader_blood_splatter_reload_shaders(Ptr) -> bool),
+        entry!(0x00b8_0b30, fn_00b80b30(Ptr, Ptr)),
+        entry!(0x00b8_0c20, fn_00b80c20(Ptr, Ptr)),
         entry!(0x00b8_0d30, bs_shader_blood_splatter_bs_shader_blood_splatter(Ptr) -> Ptr),
         entry!(0x00b8_0090, bs_shader_blood_splatter_load_shaders(Ptr)),
         entry!(0x00b8_07d0, bs_shader_blood_splatter_load_stages_and_passes(Ptr) -> bool),
@@ -925,5 +1121,263 @@ mod splatter_function_tests {
         let maps = calls(&e, CONSTANT_MAP_CONSTRUCT_00B7E330);
         assert_eq!(maps[0][2], 2);
         assert_eq!(maps[1][2], 0);
+    }
+}
+
+#[cfg(test)]
+mod n070_tests {
+    use super::*;
+
+    fn calls(e: &Engine, addr: u32) -> Vec<Vec<u32>> {
+        e.call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|(a, _)| *a == addr)
+            .map(|(_, w)| w.clone())
+            .collect()
+    }
+
+    /// Slot doubles: each `SLOTS + offset` is a no-op answering `0x900 + offset`.
+    const SLOTS: u32 = 0x0e50_0000;
+
+    fn object(e: &mut Engine) -> u32 {
+        let vtable = e.mem.alloc(0x200);
+        for offset in (0..0x200u32).step_by(4) {
+            e.mem.set_u32(vtable + offset, SLOTS + offset);
+        }
+        let object = e.mem.alloc(0x84);
+        e.mem.set_u32(object, vtable);
+        object
+    }
+
+    fn rig() -> Engine {
+        let mut e = Engine::new();
+        for page in [0x011f_9000u32, 0x011f_e000, 0x0126_f000, 0x011a_d000] {
+            e.map(page, 0x1000);
+        }
+        for offset in (0..0x200u32).step_by(4) {
+            e.register(SLOTS + offset, |_, _| Ret::default());
+        }
+        e.register(SLOTS + 0xcc, |_, _| 0x9ccu32.into_ret());
+        e.register(STAGE_SET_00E7DE90, |_, _| Ret::default());
+        e.call_log = Some(vec![]);
+        e
+    }
+
+    #[test]
+    fn fn_00b80380_gives_both_passes_to_slot_0x128() {
+        let mut e = rig();
+        let this = object(&mut e);
+        e.mem.set_u32(this + 0x6c, 0x61);
+        e.mem.set_u32(this + 0x70, 0x62);
+        e.call(0x00b8_0380, &args![this]);
+        assert_eq!(
+            calls(&e, SLOTS + 0x128),
+            vec![vec![this, 0x61], vec![this, 0x62]]
+        );
+    }
+
+    #[test]
+    fn fn_00b805d0_picks_the_pass_of_the_kind() {
+        let mut e = rig();
+        let this = object(&mut e);
+        e.mem.set_u32(this + 0x6c, 0x61);
+        e.mem.set_u32(this + 0x70, 0x62);
+        e.call(0x00b8_05d0, &args![this, 0x2f0u32]);
+        assert_eq!(e.global::<u32>(CURRENT_PASS_0126F74C), 0x62);
+        e.call(0x00b8_05d0, &args![this, 0x2f1u32]);
+        assert_eq!(e.global::<u32>(CURRENT_PASS_0126F74C), 0x61);
+        e.call(0x00b8_05d0, &args![this, 0x2f2u32]);
+        assert_eq!(e.global::<u32>(CURRENT_PASS_0126F74C), 0x61);
+        assert_eq!(e.call(0x00b8_07b0, &args![this]).u32(), 0x011f_edc8);
+    }
+
+    #[test]
+    fn fn_00b80b20_loads_shaders_then_passes() {
+        use crate::units::bsshader::geometrydecalshader::shader_test_rig::pass_rig;
+        let mut e = pass_rig();
+        let this = e.mem.alloc(0x84);
+        assert!(e.call(0x00b8_0b20, &args![this]).bool());
+        assert_eq!(calls(&e, COMPILE_VERTEX_SHADER).len(), 2);
+        assert_eq!(calls(&e, COMPILE_PIXEL_SHADER).len(), 2);
+        // The passes get the shaders just compiled.
+        assert_eq!(
+            calls(&e, NEW_PASS_00E804D0),
+            vec![vec![this + 0x6c], vec![this + 0x70]]
+        );
+        let pass = e.mem.u32(this + 0x6c);
+        assert_eq!(e.mem.u32(pass + 0x5c), e.mem.u32(this + 0x74));
+        let log = e.call_log.as_ref().unwrap();
+        let last_compile = log
+            .iter()
+            .rposition(|(a, _)| *a == COMPILE_PIXEL_SHADER)
+            .unwrap();
+        let first_pass = log
+            .iter()
+            .position(|(a, _)| *a == NEW_PASS_00E804D0)
+            .unwrap();
+        assert!(last_compile < first_pass);
+    }
+
+    /// A stage array of two stages at the pass's +0x24.
+    fn pass(e: &mut Engine) -> (u32, [u32; 2]) {
+        let pass = e.mem.alloc(0x28);
+        let stages = e.mem.alloc(8);
+        let first = e.mem.alloc(0x10);
+        let second = e.mem.alloc(0x10);
+        e.mem.set_u32(stages, first);
+        e.mem.set_u32(stages + 4, second);
+        e.mem.set_u32(pass + 0x24, stages);
+        (pass, [first, second])
+    }
+
+    fn geometry(e: &mut Engine) -> (u32, u32) {
+        let property = object(e);
+        e.mem.set_u32(property + 0x60, 0x160);
+        e.mem.set_u32(property + 0x64, 0x164);
+        let geometry = e.mem.alloc(0x10);
+        e.mem.set_u32(geometry + 0xc, property);
+        (geometry, property)
+    }
+
+    #[test]
+    fn fn_00b80b30_kind_0x2f1_sets_both_stages() {
+        let mut e = rig();
+        let this = object(&mut e);
+        let (pass, stages) = pass(&mut e);
+        e.mem.set_u32(this + 0x6c, pass);
+        let (geometry, property) = geometry(&mut e);
+        e.set_global(PASS_KIND_011F91E4, 0x2f1u32);
+        e.call(0x00b8_0b30, &args![this, geometry]);
+        assert_eq!(e.mem.u32(stages[0] + 8), 0x160);
+        assert_eq!(e.mem.u32(stages[1] + 8), 0x164);
+        assert_eq!(
+            calls(&e, STAGE_SET_00E7DE90),
+            vec![vec![stages[0], 0x9cc], vec![stages[1], 0x9cc]]
+        );
+        assert_eq!(calls(&e, SLOTS + 0xcc), vec![vec![property]; 2]);
+        assert_eq!(calls(&e, SLOTS + 0x108), vec![vec![this]]);
+    }
+
+    #[test]
+    fn fn_00b80b30_kind_0x2f0_uses_the_image_space_texture() {
+        for image in [0u32, 0x7777] {
+            let mut e = rig();
+            e.map(0x0120_0000, 0x1000);
+            let this = object(&mut e);
+            let (pass, stages) = pass(&mut e);
+            e.mem.set_u32(this + 0x70, pass);
+            let (geometry, _) = geometry(&mut e);
+            e.set_global(PASS_KIND_011F91E4, 0x2f0u32);
+            e.set_global(TEXTURE_POINTER_011FEDC4, 0x8888u32);
+            e.register_double(GET_TEXTURE_00BA3780, move |_, _| image.into_ret());
+            e.call(0x00b8_0b30, &args![this, geometry]);
+            assert_eq!(e.mem.u32(stages[0] + 8), 0x160);
+            let want = if image != 0 { image } else { 0x8888 };
+            assert_eq!(e.mem.u32(stages[1] + 8), want);
+            let asked = calls(&e, GET_TEXTURE_00BA3780);
+            assert_eq!(asked.len(), if image != 0 { 2 } else { 1 });
+            assert!(asked.iter().all(|a| a[0] == IMAGE_SPACE_TEXTURE_012005A4));
+            assert_eq!(calls(&e, STAGE_SET_00E7DE90).len(), 2);
+        }
+    }
+
+    #[test]
+    fn fn_00b80b30_other_kinds_only_call_slot_0x108() {
+        let mut e = rig();
+        let this = object(&mut e);
+        let (geometry, _) = geometry(&mut e);
+        e.set_global(PASS_KIND_011F91E4, 5u32);
+        e.call(0x00b8_0b30, &args![this, geometry]);
+        assert!(calls(&e, STAGE_SET_00E7DE90).is_empty());
+        assert_eq!(calls(&e, SLOTS + 0x108), vec![vec![this]]);
+    }
+
+    /// `00b80c20`'s rig: the accumulator, a property (+0x28 2.0, `*+0x6c` 3.0), the current
+    /// pass with shaders at +0x44 and +0x5c, the scales.
+    fn constants_rig(kind: u32, fallback: bool) -> (Engine, u32, u32, u32) {
+        let mut e = rig();
+        let accumulator = e.mem.alloc(0xc0);
+        let holder = e.mem.alloc(4);
+        e.mem.set_u32(holder, accumulator);
+        e.set_global(ACCUMULATOR_011F91E0, holder);
+        if !fallback {
+            e.mem.set_u32(accumulator + 0x20, 0x2020);
+        }
+        let inner = e.mem.alloc(0x40);
+        e.mem.set_u32(inner + 0x34, 0x3434);
+        e.mem.set_u32(accumulator + 0xb8, inner);
+        e.mem.set_u32(accumulator + 0xbc, 0xbcbc);
+        let (geometry, property) = geometry(&mut e);
+        e.mem.set_f32(property + 0x28, 2.0);
+        let value = e.mem.alloc(4);
+        e.mem.set_f32(value, 3.0);
+        e.mem.set_u32(property + 0x6c, value);
+        let pass = e.mem.alloc(0x60);
+        e.mem.set_u32(pass + 0x44, 0x4444);
+        e.mem.set_u32(pass + 0x5c, 0x5c5c);
+        e.set_global(CURRENT_PASS_0126F74C, pass);
+        e.set_global(SCALE_011AD878, 0.5f32);
+        e.set_global(SCALE_011AD874, 4.0f32);
+        e.set_global(DOT_011FED90, 0.25f32);
+        e.set_global(PASS_KIND_011F91E4, kind);
+        e.register(FN_00E6FBB0, |_, _| Ret::default());
+        let this = object(&mut e);
+        e.mem.set_u32(this + 0x18, 0x1818);
+        (e, this, geometry, accumulator)
+    }
+
+    #[test]
+    fn fn_00b80c20_sets_alpha_and_feeds_both_maps() {
+        let (mut e, this, geometry, accumulator) = constants_rig(0x2f1, false);
+        let pixel = object(&mut e);
+        let vertex = object(&mut e);
+        e.mem.set_u32(this + 0x30, pixel);
+        e.mem.set_u32(this + 0x34, vertex);
+        e.call(0x00b8_0c20, &args![this, geometry]);
+        assert_eq!(
+            calls(&e, FN_00E6FBB0),
+            vec![vec![0x1818, accumulator + 0x68, 0]]
+        );
+        assert_eq!(e.global::<f32>(PIXEL_DATA_011FEDB4), 3.0);
+        let fed = calls(&e, SLOTS + 0x78);
+        let tail = |shader: u32| {
+            vec![
+                shader,
+                accumulator,
+                0xbcbc,
+                0,
+                0x3434,
+                geometry,
+                0,
+                accumulator + 0x68,
+                0x2020,
+                0,
+                1,
+            ]
+        };
+        assert_eq!(fed.len(), 2);
+        assert_eq!(fed[0][0], pixel);
+        assert_eq!(fed[0][1..], tail(0x4444)[..]);
+        assert_eq!(fed[1][0], vertex);
+        assert_eq!(fed[1][1..], tail(0x5c5c)[..]);
+    }
+
+    #[test]
+    fn fn_00b80c20_kind_0x2f0_scales_and_skips_missing_maps() {
+        let (mut e, this, geometry, _) = constants_rig(0x2f0, true);
+        let vertex = object(&mut e);
+        e.mem.set_u32(this + 0x34, vertex);
+        let pass = e.global::<u32>(CURRENT_PASS_0126F74C);
+        e.mem.set_u32(pass + 0x5c, 0);
+        e.call(0x00b8_0c20, &args![this, geometry]);
+        // 3 * 4 * 0.25 = 3.
+        assert_eq!(e.global::<f32>(PIXEL_DATA_011FEDB4), 3.0);
+        assert!(calls(&e, SLOTS + 0x78).is_empty());
+        // With the vertex shader there: the fallback object for a null +0x20.
+        e.mem.set_u32(pass + 0x5c, 0x5c5c);
+        e.call(0x00b8_0c20, &args![this, geometry]);
+        assert_eq!(calls(&e, SLOTS + 0x78)[0][9], FALLBACK_011F4288);
     }
 }

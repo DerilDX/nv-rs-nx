@@ -1008,9 +1008,162 @@ pub fn fn_00ba53c0(e: &mut Engine, this: Ptr, source: Ptr) -> Ptr {
     this
 }
 
+/// The free `00aa10f0` (unnamed; `cdecl`, one word).
+const FREE_00AA10F0: u32 = 0x00aa_10f0;
+
+// Translated from 00ba4050 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`run_00ba3e30`): the scalar deleting destructor of the array
+/// with the vtable `010b9d24`, `thiscall`, one word: the vtable stored, its buffer (+4) freed
+/// (`00aa10f0`), then the memory manager's `Deallocate` when bit 0 of `flags` is set. Answers
+/// `this`.
+pub fn fn_00ba4050(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    let base = this.addr();
+    let buffer = e.mem.u32(base + 4);
+    e.mem.set_u32(base, ARRAY_VTABLE_010B9D24);
+    e.call(FREE_00AA10F0, &args![buffer]);
+    if flags as u8 & 1 != 0 {
+        e.call(MEMORY_FREE, &args![MEMORY_MANAGER, this]);
+    }
+    this
+}
+
+// Translated from 00ba4170 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`run_00ba3e30`): `ImageSpaceEffect`'s scalar deleting
+/// destructor, `thiscall`, one word: `ImageSpaceEffect::~ImageSpaceEffect` (`00ba3d30`), then
+/// the memory manager's `Deallocate` when bit 0 of `flags` is set. Answers `this`.
+pub fn fn_00ba4170(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    e.call(EFFECT_DESTRUCT_00BA3D30, &args![this]);
+    if flags as u8 & 1 != 0 {
+        e.call(MEMORY_FREE, &args![MEMORY_MANAGER, this]);
+    }
+    this
+}
+
+// Translated from 00ba5060 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`run_00ba3e30`), `cdecl`, one word: builds the eleven words 1,
+/// 0, 2, 3, 6, 7, 8, 9, 4, 5, 10 in a stack local and answers the one at `index - 1`. The exe
+/// does not check `index`: an index outside 1 to 11 reads the stack beside the local (here
+/// the memory beside it).
+pub fn fn_00ba5060(e: &mut Engine, index: u32) -> u32 {
+    e.with_stack(0x2c, |e, local| {
+        for (i, word) in [1u32, 0, 2, 3, 6, 7, 8, 9, 4, 5, 10].iter().enumerate() {
+            e.mem.set_u32(local.addr() + 4 * i as u32, *word);
+        }
+        e.mem.u32(
+            local
+                .addr()
+                .wrapping_add(index.wrapping_mul(4))
+                .wrapping_sub(4),
+        )
+    })
+}
+
+/// `00e814b0` (unnamed; `thiscall`, no stack words): the base the particle shader's
+/// `00ba5100` jumps to.
+const BASE_00E814B0: u32 = 0x00e8_14b0;
+
+// Translated from 00ba5100 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`run_00ba3e30`), `thiscall`, no stack words: with +0x28 set,
+/// the object at +0x7c's slot +0xa0 and the object at +0x80's slot +0x88; then a tail jump to
+/// `00e814b0` (what it answers in EAX, EDX and ST0 is this function's result).
+pub fn fn_00ba5100(e: &mut Engine, this: Ptr) -> Ret {
+    let base = this.addr();
+    if e.mem.u32(base + 0x28) != 0 {
+        let first = e.mem.u32(base + 0x7c);
+        e.vcall(first, 0xa0, &args![]);
+        let second = e.mem.u32(base + 0x80);
+        e.vcall(second, 0x88, &args![]);
+    }
+    e.call(BASE_00E814B0, &args![this])
+}
+
+/// The uniform-form entry of [`fn_00ba5100`]: `this`; the tail call's registers pass through.
+fn fn_00ba5100_entry(e: &mut Engine, a: &[u32]) -> Ret {
+    fn_00ba5100(e, Ptr::new(a[0]))
+}
+
+/// The current pass word (`0126f74c`).
+const CURRENT_PASS_0126F74C: u32 = 0x0126_f74c;
+
+// Translated from 00ba52b0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed (Ghidra made no function of it): slot 60 of the vtable `010b80a8`, `thiscall`, one
+/// word (the pass kind): kind 0x41 makes the pass at +0x78 current (`0126f74c`), any other the
+/// pass at +0x74.
+pub fn fn_00ba52b0(e: &mut Engine, this: Ptr, kind: u32) {
+    let offset = if kind == 0x41 { 0x78 } else { 0x74 };
+    let pass = e.mem.u32(this.addr() + offset);
+    e.set_global(CURRENT_PASS_0126F74C, pass);
+}
+
+// Translated from 00ba52f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`run_00ba3e30`), `thiscall`, no stack words: gives each of the
+/// two passes at +0x74 and +0x78 to `this`'s vtable slot +0x128.
+pub fn fn_00ba52f0(e: &mut Engine, this: Ptr) {
+    let base = this.addr();
+    for offset in [0x74u32, 0x78] {
+        let pass = e.mem.u32(base + offset);
+        e.vcall(base, 0x128, &args![pass]);
+    }
+}
+
+/// The renderer (`011f4748`) and the four `float`s `00ba5320` writes after the one it reads
+/// (`011adcc8`: a scale; `011adccc` its reciprocal, `011adcd0` that times the target's aspect,
+/// `011adcd4` and `011adcd8` 1.0).
+const RENDERER_011F4748: u32 = 0x011f_4748;
+const SCALE_011ADCC8: u32 = 0x011a_dcc8;
+const INVERSE_011ADCCC: u32 = 0x011a_dccc;
+const ASPECT_011ADCD0: u32 = 0x011a_dcd0;
+const ONE_011ADCD4: u32 = 0x011a_dcd4;
+const ONE_011ADCD8: u32 = 0x011a_dcd8;
+
+// Translated from 00ba5320 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`run_00ba3e30`), no arguments: with the renderer's (`011f4748`)
+/// current render-target group (slot +0xc8) asked for its width (slot +0x8c with 0) and,
+/// asked again, its height (slot +0x90 with 0), both read unsigned (`FILD`, plus 2^32 when
+/// negative): `011adccc` = 1 / `[011adcc8]`, `011adcd0` = that times width / height (the
+/// width stored as a `float`, the ratio too), `011adcd4` and `011adcd8` = 1.0.
+pub fn fn_00ba5320(e: &mut Engine) {
+    let renderer = e.global::<u32>(RENDERER_011F4748);
+    let group = e.vcall(renderer, 0xc8, &args![]).u32();
+    let width = e.vcall(group, 0x8c, &args![0u32]).u32();
+    let width_bits = x87_store32(unsigned_size(e, width));
+    let renderer = e.global::<u32>(RENDERER_011F4748);
+    let group = e.vcall(renderer, 0xc8, &args![]).u32();
+    let width = x87_load32(width_bits);
+    let height = e.vcall(group, 0x90, &args![0u32]).u32();
+    let height = unsigned_size(e, height);
+    let aspect_bits = x87_store32(x87_div(width, height));
+    let scale = x87_load32(e.global::<u32>(SCALE_011ADCC8));
+    let inverse = x87_div(1.0, scale);
+    e.set_global(INVERSE_011ADCCC, x87_store32(inverse));
+    let product = x87_mul(inverse, x87_m32(aspect_bits));
+    e.set_global(ASPECT_011ADCD0, x87_store32(product));
+    e.set_global(ONE_011ADCD4, x87_store32(1.0));
+    e.set_global(ONE_011ADCD8, x87_store32(1.0));
+}
+
+/// What `00ba5730` answers: the address `012003f8` (no RTTI locator for the vtable; the word
+/// is the class's `NiRTTI` by its place in the vtable, unconfirmed).
+const RECORD_012003F8: u32 = 0x0120_03f8;
+
+// Translated from 00ba5730 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed (Ghidra made no function of it): slot 2 of the vtable `010b80a8`, `thiscall`
+/// without reading `this`: answers the address `012003f8`.
+pub fn fn_00ba5730(_e: &mut Engine, _this: Ptr) -> u32 {
+    RECORD_012003F8
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x00ba_4050, fn_00ba4050(Ptr, u32) -> Ptr),
+        entry!(0x00ba_4170, fn_00ba4170(Ptr, u32) -> Ptr),
+        entry!(0x00ba_5060, fn_00ba5060(u32) -> u32),
+        (0x00ba_5100, fn_00ba5100_entry as AbiFn),
+        entry!(0x00ba_52b0, fn_00ba52b0(Ptr, u32)),
+        entry!(0x00ba_52f0, fn_00ba52f0(Ptr)),
+        entry!(0x00ba_5320, fn_00ba5320()),
+        entry!(0x00ba_5730, fn_00ba5730(Ptr) -> u32),
         entry!(0x00ba_53f0, fn_00ba53f0(Ptr, Ptr) -> Ptr),
         entry!(0x00ba_4640, fn_00ba4640(Ptr) -> Ptr),
         entry!(0x00ba_4880, fn_00ba4880(Ptr) -> Ptr),
@@ -1960,5 +2113,149 @@ mod b054_tests {
         // The same pass: nothing changes.
         e.call(0x00ba_53c0, &args![slot, source]);
         assert_eq!(e.mem.u32(new + 0x64), 2);
+    }
+}
+
+#[cfg(test)]
+mod n070_tests {
+    use super::*;
+
+    fn calls(e: &Engine, addr: u32) -> Vec<Vec<u32>> {
+        e.call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|(a, _)| *a == addr)
+            .map(|(_, w)| w.clone())
+            .collect()
+    }
+
+    fn rig() -> Engine {
+        let mut e = Engine::new();
+        for target in [FREE_00AA10F0, MEMORY_FREE, EFFECT_DESTRUCT_00BA3D30] {
+            e.register(target, |_, _| Ret::default());
+        }
+        e.call_log = Some(vec![]);
+        e
+    }
+
+    #[test]
+    fn fn_00ba4050_frees_the_buffer_and_maybe_itself() {
+        let mut e = rig();
+        let array = e.mem.alloc(0x10);
+        e.mem.set_u32(array + 4, 0x4444);
+        assert_eq!(e.call(0x00ba_4050, &args![array, 0x100u32]).u32(), array);
+        assert_eq!(e.mem.u32(array), ARRAY_VTABLE_010B9D24);
+        assert_eq!(calls(&e, FREE_00AA10F0), vec![vec![0x4444]]);
+        assert!(calls(&e, MEMORY_FREE).is_empty());
+        e.call(0x00ba_4050, &args![array, 1u32]);
+        assert_eq!(calls(&e, MEMORY_FREE), vec![vec![MEMORY_MANAGER, array]]);
+    }
+
+    #[test]
+    fn fn_00ba4170_destroys_the_effect_and_maybe_frees_it() {
+        let mut e = rig();
+        let effect = e.mem.alloc(0x40);
+        assert_eq!(e.call(0x00ba_4170, &args![effect, 0u32]).u32(), effect);
+        assert_eq!(calls(&e, EFFECT_DESTRUCT_00BA3D30), vec![vec![effect]]);
+        assert!(calls(&e, MEMORY_FREE).is_empty());
+        e.call(0x00ba_4170, &args![effect, 3u32]);
+        assert_eq!(calls(&e, MEMORY_FREE), vec![vec![MEMORY_MANAGER, effect]]);
+    }
+
+    #[test]
+    fn fn_00ba5060_maps_one_based_indices() {
+        let mut e = rig();
+        let got: Vec<u32> = (1..=11)
+            .map(|i| e.call(0x00ba_5060, &args![i as u32]).u32())
+            .collect();
+        assert_eq!(got, vec![1, 0, 2, 3, 6, 7, 8, 9, 4, 5, 10]);
+    }
+
+    #[test]
+    fn fn_00ba5100_restores_then_jumps_to_the_base() {
+        let mut e = rig();
+        e.register(0x0e90_0000, |_, _| Ret::default());
+        e.register(0x0e90_0004, |_, _| Ret::default());
+        e.register(BASE_00E814B0, |_, _| Ret {
+            eax: 9,
+            ..Ret::default()
+        });
+        let first_vtable = e.mem.alloc(0xa4);
+        e.mem.set_u32(first_vtable + 0xa0, 0x0e90_0000);
+        let first = e.mem.alloc(4);
+        e.mem.set_u32(first, first_vtable);
+        let second_vtable = e.mem.alloc(0x8c);
+        e.mem.set_u32(second_vtable + 0x88, 0x0e90_0004);
+        let second = e.mem.alloc(4);
+        e.mem.set_u32(second, second_vtable);
+        let this = e.mem.alloc(0x84);
+        e.mem.set_u32(this + 0x7c, first);
+        e.mem.set_u32(this + 0x80, second);
+        assert_eq!(e.call(0x00ba_5100, &args![this]).u32(), 9);
+        assert!(calls(&e, 0x0e90_0000).is_empty());
+        e.mem.set_u32(this + 0x28, 1);
+        assert_eq!(e.call(0x00ba_5100, &args![this]).u32(), 9);
+        assert_eq!(calls(&e, 0x0e90_0000), vec![vec![first]]);
+        assert_eq!(calls(&e, 0x0e90_0004), vec![vec![second]]);
+        assert_eq!(calls(&e, BASE_00E814B0).len(), 2);
+    }
+
+    #[test]
+    fn fn_00ba52b0_52f0_and_5730() {
+        let mut e = rig();
+        e.map(0x0126_f000, 0x1000);
+        e.register(0x0e90_0008, |_, _| Ret::default());
+        let vtable = e.mem.alloc(0x130);
+        e.mem.set_u32(vtable + 0x128, 0x0e90_0008);
+        let this = e.mem.alloc(0x80);
+        e.mem.set_u32(this, vtable);
+        e.mem.set_u32(this + 0x74, 0x74);
+        e.mem.set_u32(this + 0x78, 0x78);
+        e.call(0x00ba_52b0, &args![this, 0x41u32]);
+        assert_eq!(e.global::<u32>(CURRENT_PASS_0126F74C), 0x78);
+        e.call(0x00ba_52b0, &args![this, 0x40u32]);
+        assert_eq!(e.global::<u32>(CURRENT_PASS_0126F74C), 0x74);
+        e.call(0x00ba_52f0, &args![this]);
+        assert_eq!(
+            calls(&e, 0x0e90_0008),
+            vec![vec![this, 0x74], vec![this, 0x78]]
+        );
+        assert_eq!(e.call(0x00ba_5730, &args![this]).u32(), 0x0120_03f8);
+    }
+
+    #[test]
+    fn fn_00ba5320_sets_the_aspect_constants() {
+        let mut e = rig();
+        e.map(0x011f_4000, 0x1000);
+        e.map(0x011a_d000, 0x1000);
+        e.map(0x0109_9000, 0x1000);
+        e.set_global(TWO_TO_32_01099378, 4_294_967_296.0f32);
+        e.set_global(SCALE_011ADCC8, 2.0f32);
+        e.register(0x0e90_0010, |e, _| e.mem.u32(0x011f_4f00).into_ret());
+        e.register(0x0e90_0014, |_, _| 1600u32.into_ret());
+        e.register(0x0e90_0018, |_, _| 800u32.into_ret());
+        let renderer_vtable = e.mem.alloc(0xcc);
+        e.mem.set_u32(renderer_vtable + 0xc8, 0x0e90_0010);
+        let renderer = e.mem.alloc(4);
+        e.mem.set_u32(renderer, renderer_vtable);
+        e.set_global(RENDERER_011F4748, renderer);
+        let group_vtable = e.mem.alloc(0x94);
+        e.mem.set_u32(group_vtable + 0x8c, 0x0e90_0014);
+        e.mem.set_u32(group_vtable + 0x90, 0x0e90_0018);
+        let group = e.mem.alloc(4);
+        e.mem.set_u32(group, group_vtable);
+        e.set_global(0x011f_4f00, group);
+        e.call(0x00ba_5320, &args![]);
+        assert_eq!(e.global::<f32>(INVERSE_011ADCCC), 0.5);
+        assert_eq!(e.global::<f32>(ASPECT_011ADCD0), 1.0);
+        assert_eq!(e.global::<f32>(ONE_011ADCD4), 1.0);
+        assert_eq!(e.global::<f32>(ONE_011ADCD8), 1.0);
+        assert_eq!(calls(&e, 0x0e90_0014), vec![vec![group, 0]]);
+        // A width with the top bit set reads as unsigned.
+        e.register(0x0e90_0014, |_, _| 0x8000_0000u32.into_ret());
+        e.register(0x0e90_0018, |_, _| 0x4000_0000u32.into_ret());
+        e.call(0x00ba_5320, &args![]);
+        assert_eq!(e.global::<f32>(ASPECT_011ADCD0), 1.0);
     }
 }

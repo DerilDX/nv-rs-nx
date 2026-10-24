@@ -211,9 +211,149 @@ pub fn ni_p_sys_grow_fade_modifier_load_binary(
     });
 }
 
+use crate::units::niparticle::nipsysmodifier::{
+    add_class_name, add_labelled, stream_write, NI_GET_VIEWER_STRING_FLOAT,
+    NI_GET_VIEWER_STRING_U16,
+};
+
+/// `NiPSysModifier::IsEqual` (`00c31830`), `SaveBinary` (`00c31950`) and
+/// `GetViewerStrings` (`00c319e0`): `thiscall`, one word.
+const MODIFIER_IS_EQUAL: u32 = 0x00c3_1830;
+const MODIFIER_SAVE_BINARY: u32 = 0x00c3_1950;
+const MODIFIER_GET_VIEWER_STRINGS: u32 = 0x00c3_19e0;
+/// The `NiRTTI` record of `NiPSysGrowFadeModifier` (`012026f8`).
+const RTTI: u32 = 0x0120_26f8;
+/// Labels: `"Grow Time"`, `"Grow Generation"`, `"Fade Time"`,
+/// `"Fade Generation"`, `"Base Scale"`.
+const LABEL_GROW_TIME: u32 = 0x010b_f198;
+const LABEL_GROW_GENERATION: u32 = 0x010b_f188;
+const LABEL_FADE_TIME: u32 = 0x010b_f17c;
+const LABEL_FADE_GENERATION: u32 = 0x010b_f16c;
+const LABEL_BASE_SCALE: u32 = 0x010b_f160;
+
+// Translated from 00c2a2f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiPSysGrowFadeModifier::IsEqual` (Xbox PDB): `NiPSysModifier::IsEqual`,
+/// then equal grow times (`FUCOMPP`: a NaN is unequal), grow generations,
+/// fade times, base scales and fade generations, in that order.
+pub fn ni_p_sys_grow_fade_modifier_is_equal(
+    e: &mut Engine,
+    this: Ptr<NiPSysGrowFadeModifier>,
+    other: Ptr<NiPSysGrowFadeModifier>,
+) -> bool {
+    if !e.call(MODIFIER_IS_EQUAL, &args![this, other]).bool() {
+        return false;
+    }
+    let same_float =
+        |e: &Engine, field| x87_load32(e.get(this, field)) == x87_load32(e.get(other, field));
+    same_float(e, NiPSysGrowFadeModifier::m_fGrowTime)
+        && e.get(this, NiPSysGrowFadeModifier::m_usGrowGeneration)
+            == e.get(other, NiPSysGrowFadeModifier::m_usGrowGeneration)
+        && same_float(e, NiPSysGrowFadeModifier::m_fFadeTime)
+        && same_float(e, NiPSysGrowFadeModifier::m_fBaseScale)
+        && e.get(this, NiPSysGrowFadeModifier::m_usFadeGeneration)
+            == e.get(other, NiPSysGrowFadeModifier::m_usFadeGeneration)
+}
+
+// Translated from 00c2a610 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiPSysGrowFadeModifier::SaveBinary` (Xbox PDB): `NiPSysModifier`'s
+/// `SaveBinary`, then the grow time (4 bytes), grow generation (2), fade
+/// time (4), fade generation (2) and base scale (4), each write's component
+/// size kept in the stack word that held the stream argument.
+pub fn ni_p_sys_grow_fade_modifier_save_binary(
+    e: &mut Engine,
+    this: Ptr<NiPSysGrowFadeModifier>,
+    stream: Ptr,
+) {
+    let s = stream.addr();
+    e.call(MODIFIER_SAVE_BINARY, &args![this, s]);
+    e.with_stack(4, |e, argument_slot| {
+        e.mem.set_u32(argument_slot.addr(), s);
+        for (off, size) in [
+            (NiPSysGrowFadeModifier::m_fGrowTime.off, 4),
+            (NiPSysGrowFadeModifier::m_usGrowGeneration.off, 2),
+            (NiPSysGrowFadeModifier::m_fFadeTime.off, 4),
+            (NiPSysGrowFadeModifier::m_usFadeGeneration.off, 2),
+            (NiPSysGrowFadeModifier::m_fBaseScale.off, 4),
+        ] {
+            stream_write(e, s, this.addr() + off, size, size, argument_slot.addr());
+        }
+    });
+}
+
+// Translated from 00c2a6e0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiPSysGrowFadeModifier::GetViewerStrings` (Xbox PDB):
+/// `NiPSysModifier::GetViewerStrings`, then the class name (`NiRTTI`
+/// `012026f8`), `"Grow Time"`, `"Grow Generation"`, `"Fade Time"`,
+/// `"Fade Generation"` and `"Base Scale"` appended (the floats pushed
+/// through `FLD`/`FSTP`, the generations zero-extended).
+pub fn ni_p_sys_grow_fade_modifier_get_viewer_strings(
+    e: &mut Engine,
+    this: Ptr<NiPSysGrowFadeModifier>,
+    strings: Ptr,
+) {
+    e.call(MODIFIER_GET_VIEWER_STRINGS, &args![this, strings]);
+    let strings = strings.addr();
+    add_class_name(e, strings, RTTI);
+    let grow_time = x87_quiet_bits(e.get(this, NiPSysGrowFadeModifier::m_fGrowTime));
+    add_labelled(
+        e,
+        strings,
+        NI_GET_VIEWER_STRING_FLOAT,
+        LABEL_GROW_TIME,
+        grow_time,
+    );
+    let grow_generation = u32::from(e.get(this, NiPSysGrowFadeModifier::m_usGrowGeneration));
+    add_labelled(
+        e,
+        strings,
+        NI_GET_VIEWER_STRING_U16,
+        LABEL_GROW_GENERATION,
+        grow_generation,
+    );
+    let fade_time = x87_quiet_bits(e.get(this, NiPSysGrowFadeModifier::m_fFadeTime));
+    add_labelled(
+        e,
+        strings,
+        NI_GET_VIEWER_STRING_FLOAT,
+        LABEL_FADE_TIME,
+        fade_time,
+    );
+    let fade_generation = u32::from(e.get(this, NiPSysGrowFadeModifier::m_usFadeGeneration));
+    add_labelled(
+        e,
+        strings,
+        NI_GET_VIEWER_STRING_U16,
+        LABEL_FADE_GENERATION,
+        fade_generation,
+    );
+    let base_scale = x87_quiet_bits(e.get(this, NiPSysGrowFadeModifier::m_fBaseScale));
+    add_labelled(
+        e,
+        strings,
+        NI_GET_VIEWER_STRING_FLOAT,
+        LABEL_BASE_SCALE,
+        base_scale,
+    );
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(
+            0x00c2_a2f0,
+            ni_p_sys_grow_fade_modifier_is_equal(
+                Ptr<NiPSysGrowFadeModifier>,
+                Ptr<NiPSysGrowFadeModifier>,
+            ) -> bool
+        ),
+        entry!(
+            0x00c2_a610,
+            ni_p_sys_grow_fade_modifier_save_binary(Ptr<NiPSysGrowFadeModifier>, Ptr)
+        ),
+        entry!(
+            0x00c2_a6e0,
+            ni_p_sys_grow_fade_modifier_get_viewer_strings(Ptr<NiPSysGrowFadeModifier>, Ptr)
+        ),
         entry!(
             0x00c2_a390,
             ni_p_sys_grow_fade_modifier_update(Ptr<NiPSysGrowFadeModifier>, f32, Ptr<NiPSysData>)
@@ -374,5 +514,128 @@ mod tests {
                 expected
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod stream_tests {
+    use super::*;
+    use crate::units::niparticle::nipsysmodifier::test_stream;
+    use crate::units::niparticle::nipsysmodifier::test_stream::calls_to;
+
+    fn modifier(e: &mut Engine) -> Ptr<NiPSysGrowFadeModifier> {
+        let m = e.new_object::<NiPSysGrowFadeModifier>();
+        e.set(m, NiPSysGrowFadeModifier::m_fGrowTime, 1.5f32.to_bits());
+        e.set(m, NiPSysGrowFadeModifier::m_usGrowGeneration, 2);
+        e.set(m, NiPSysGrowFadeModifier::m_fFadeTime, 2.5f32.to_bits());
+        e.set(m, NiPSysGrowFadeModifier::m_usFadeGeneration, 3);
+        e.set(m, NiPSysGrowFadeModifier::m_fBaseScale, 0.5f32.to_bits());
+        m
+    }
+
+    #[test]
+    fn is_equal_compares_every_field_after_the_base() {
+        let mut e = Engine::new();
+        e.register(MODIFIER_IS_EQUAL, |_, _| Ret {
+            eax: 1,
+            ..Ret::default()
+        });
+        let a = modifier(&mut e);
+        let b = modifier(&mut e);
+        assert!(e.call(0x00c2_a2f0, &args![a, b]).bool());
+        for (off, value) in [
+            (0x18u32, 1.25f32.to_bits()),
+            (0x1c, 9),
+            (0x20, 1.25f32.to_bits()),
+            (0x24, 9),
+            (0x28, 1.25f32.to_bits()),
+        ] {
+            let c = modifier(&mut e);
+            if off == 0x1c || off == 0x24 {
+                e.mem.set_u16(c.addr() + off, value as u16);
+            } else {
+                e.mem.set_u32(c.addr() + off, value);
+            }
+            assert!(!e.call(0x00c2_a2f0, &args![a, c]).bool(), "{off:#x}");
+        }
+        // A NaN grow time is unequal to itself.
+        e.set(a, NiPSysGrowFadeModifier::m_fGrowTime, 0x7fc0_0000);
+        e.set(b, NiPSysGrowFadeModifier::m_fGrowTime, 0x7fc0_0000);
+        assert!(!e.call(0x00c2_a2f0, &args![a, b]).bool());
+        // -0 equals +0.
+        e.set(a, NiPSysGrowFadeModifier::m_fGrowTime, 0x8000_0000);
+        e.set(b, NiPSysGrowFadeModifier::m_fGrowTime, 0);
+        assert!(e.call(0x00c2_a2f0, &args![a, b]).bool());
+        e.register(MODIFIER_IS_EQUAL, |_, _| Ret::default());
+        assert!(!e.call(0x00c2_a2f0, &args![a, b]).bool());
+    }
+
+    #[test]
+    fn save_binary_writes_the_five_fields() {
+        let mut e = Engine::new();
+        e.register(MODIFIER_SAVE_BINARY, |_, _| Ret::default());
+        let writes = test_stream::writes(&mut e);
+        let stream = test_stream::new_output(&mut e);
+        let this = modifier(&mut e);
+        e.call_log = Some(vec![]);
+        e.call(0x00c2_a610, &args![this, stream]);
+        assert_eq!(
+            calls_to(&e, MODIFIER_SAVE_BINARY),
+            vec![vec![this.addr(), stream]]
+        );
+        assert_eq!(
+            *writes.borrow(),
+            vec![
+                (1.5f32.to_le_bytes().to_vec(), 4),
+                (vec![2, 0], 2),
+                (2.5f32.to_le_bytes().to_vec(), 4),
+                (vec![3, 0], 2),
+                (0.5f32.to_le_bytes().to_vec(), 4),
+            ]
+        );
+        assert_eq!(test_stream::output_position(&e, stream), 16);
+    }
+
+    #[test]
+    fn get_viewer_strings_appends_the_fields() {
+        let mut e = Engine::new();
+        test_stream::global_word(&mut e, RTTI, 0x0abc_0005);
+        e.register(MODIFIER_GET_VIEWER_STRINGS, |_, _| Ret::default());
+        let stored = test_stream::viewer_strings(&mut e);
+        let strings = test_stream::strings(&mut e);
+        let this = modifier(&mut e);
+        e.set(this, NiPSysGrowFadeModifier::m_fBaseScale, 0x7f80_0001);
+        e.call_log = Some(vec![]);
+        e.call(0x00c2_a6e0, &args![this, strings]);
+        assert_eq!(
+            calls_to(&e, MODIFIER_GET_VIEWER_STRINGS),
+            vec![vec![this.addr(), strings]]
+        );
+        assert_eq!(
+            *stored.borrow(),
+            vec![
+                0x0abc_0005,
+                LABEL_GROW_TIME,
+                LABEL_GROW_GENERATION,
+                LABEL_FADE_TIME,
+                LABEL_FADE_GENERATION,
+                LABEL_BASE_SCALE
+            ]
+        );
+        assert_eq!(
+            calls_to(&e, NI_GET_VIEWER_STRING_FLOAT),
+            vec![
+                vec![LABEL_GROW_TIME, 1.5f32.to_bits()],
+                vec![LABEL_FADE_TIME, 2.5f32.to_bits()],
+                vec![LABEL_BASE_SCALE, 0x7fc0_0001],
+            ]
+        );
+        assert_eq!(
+            calls_to(&e, NI_GET_VIEWER_STRING_U16),
+            vec![
+                vec![LABEL_GROW_GENERATION, 2],
+                vec![LABEL_FADE_GENERATION, 3]
+            ]
+        );
     }
 }

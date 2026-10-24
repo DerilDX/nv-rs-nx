@@ -799,9 +799,379 @@ pub fn fn_00bb13d0(e: &mut Engine, this: Ptr) {
     });
 }
 
+// Translated from 00bb0490 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (not a Ghidra function; vtable entry at
+/// `010b8fa4`), `thiscall`, no stack words: calls the shader's own vtable +0x128 with its pass
+/// (`012005e0`).
+pub fn fn_00bb0490(e: &mut Engine, this: Ptr) {
+    let pass = e.global::<u32>(PASS_012005E0);
+    e.vcall(this.addr(), 0x128, &args![pass]);
+}
+
+/// The record `00bb0540` answers (`012005c0`).
+const RECORD_012005C0: u32 = 0x0120_05c0;
+
+// Translated from 00bb0540 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (not a Ghidra function; vtable entry at `010b8e88`, `ECX` unread):
+/// answers the address `012005c0`.
+pub fn fn_00bb0540(_e: &mut Engine, _this: Ptr) -> Ptr {
+    Ptr::new(RECORD_012005C0)
+}
+
+// Translated from 00bb0cf0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (not a Ghidra function; vtable entry at `010b90d0`), `thiscall`
+/// with one word: +0x94 becomes 0 when the word is 3, else 3 (`SUB 3`, `NEG`, `SBB`, `AND 3`).
+pub fn fn_00bb0cf0(e: &mut Engine, this: Ptr, value: u32) {
+    let result = if value.wrapping_sub(3) != 0 { 3 } else { 0 };
+    e.mem.set_u32(this.addr() + 0x94, result);
+}
+
+/// The record `00bb0d10` answers (`012005fc`, the property's RTTI record).
+const RTTI_012005FC: u32 = 0x0120_05fc;
+
+// Translated from 00bb0d10 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (not a Ghidra function; vtable entry at `010b9010`, `ECX` unread):
+/// answers the address `012005fc`.
+pub fn fn_00bb0d10(_e: &mut Engine, _this: Ptr) -> Ptr {
+    Ptr::new(RTTI_012005FC)
+}
+
+// Translated from 00bb0d20 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (not a Ghidra function; vtable entry at `010b90d4`), `thiscall`:
+/// answers the word +0x94.
+pub fn fn_00bb0d20(e: &mut Engine, this: Ptr) -> u32 {
+    e.mem.u32(this.addr() + 0x94)
+}
+
+// Translated from 00bb0d30 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (not a Ghidra function; vtable entry at `010b90d8`), `thiscall`
+/// with one word: stores it at +0x94.
+pub fn fn_00bb0d30(e: &mut Engine, this: Ptr, value: u32) {
+    e.mem.set_u32(this.addr() + 0x94, value);
+}
+
+/// `BSShaderProperty::BSShaderProperty` (`00ba8e50`), its destructor (`00baa0e0`, unnamed,
+/// `thiscall`) and its copy step `00ba8b10` (`thiscall`, two words), and this property's vtable
+/// (`010b9008`).
+const SHADER_PROPERTY_CONSTRUCT: u32 = 0x00ba_8e50;
+const SHADER_PROPERTY_DESTRUCT_00BAA0E0: u32 = 0x00ba_a0e0;
+const SHADER_PROPERTY_COPY_00BA8B10: u32 = 0x00ba_8b10;
+const PROPERTY_VTABLE_010B9008: u32 = 0x010b_9008;
+
+/// Three words copied from `source` to `target`.
+fn copy_three(e: &mut Engine, target: u32, source: u32) {
+    for index in 0..3 {
+        let word = e.mem.u32(source + 4 * index);
+        e.mem.set_u32(target + 4 * index, word);
+    }
+}
+
+// Translated from 00bb0d40 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map: the property constructor (vtable `010b9008`), `thiscall` with
+/// seven words. Runs `BSShaderProperty::BSShaderProperty`, stores the float (through
+/// `FLD`/`FSTP`) at +0x68 and the first word at +0x60, copies three words from each of the
+/// pointers: the fourth word's to +0x6c, the fifth's to +0x78, the third's to +0x84; clears
+/// +0x90 and +0x94, stores the sixth word at +0x9c and whether the seventh is non-zero at
+/// +0x98. Answers `this`.
+pub fn fn_00bb0d40(
+    e: &mut Engine,
+    this: Ptr,
+    first: u32,
+    value: u32,
+    third: u32,
+    fourth: u32,
+    fifth: u32,
+    sixth: u32,
+    seventh: u32,
+) -> Ptr {
+    let base = this.addr();
+    e.call(SHADER_PROPERTY_CONSTRUCT, &args![base]);
+    e.mem.set_u32(base + 0x68, x87_quiet_bits(value));
+    e.mem.set_u32(base + 0x60, first);
+    e.mem.set_u32(base, PROPERTY_VTABLE_010B9008);
+    copy_three(e, base + 0x6c, fourth);
+    copy_three(e, base + 0x78, fifth);
+    copy_three(e, base + 0x84, third);
+    e.mem.set_u32(base + 0x90, 0);
+    e.mem.set_u32(base + 0x94, 0);
+    e.mem.set_u32(base + 0x9c, sixth);
+    e.mem.set_u32(base + 0x98, u32::from(seventh != 0));
+    this
+}
+
+// Translated from 00bb0de0 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 00bb0de0 - the C++ exception frame (FS:[0] chain, unwind states 1 to 0) is not translated.
+/// Unnamed in the engine map: the property destructor, `thiscall`. Stores the vtable
+/// `010b9008`, clears +0x60, releases the reference at +0x90 and clears it, then releases
+/// +0x90 again when it is still set (the member's own destructor), and runs the
+/// `BSShaderProperty` destructor (`00baa0e0`).
+pub fn fn_00bb0de0(e: &mut Engine, this: Ptr) {
+    let base = this.addr();
+    e.mem.set_u32(base, PROPERTY_VTABLE_010B9008);
+    e.mem.set_u32(base + 0x60, 0);
+    let held = e.mem.u32(base + 0x90);
+    if held != 0 {
+        release_reference(e, held);
+        e.mem.set_u32(base + 0x90, 0);
+    }
+    let held = e.mem.u32(base + 0x90);
+    if held != 0 {
+        release_reference(e, held);
+    }
+    e.call(SHADER_PROPERTY_DESTRUCT_00BAA0E0, &args![base]);
+}
+
+// Translated from 00bb0e90 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (not a Ghidra function; vtable entries at `010adf7c` and
+/// `010b90bc`), `thiscall`: answers the word +0x90.
+pub fn fn_00bb0e90(e: &mut Engine, this: Ptr) -> u32 {
+    e.mem.u32(this.addr() + 0x90)
+}
+
+// Translated from 00bb0ea0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map: the property's scalar deleting destructor (vtable `010b9008`
+/// slot +0), `thiscall`, `RET 4`. Runs `00bb0de0` and, with bit 0 of the flags, frees the 0xa0
+/// bytes (`00aa1460`). Answers `this`.
+pub fn fn_00bb0ea0(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    fn_00bb0de0(e, this);
+    if flags & 1 != 0 {
+        e.call(NI_FREE_00AA1460, &args![this, 0xa0u32]);
+    }
+    this
+}
+
+// Translated from 00bb0ed0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map: the property's copy into `target`, `thiscall` with two words
+/// (the target, a word passed on). Runs `00ba8b10(target, word)` on `this`, copies +0x60 and
+/// +0x6c..+0x8c, then the reference at +0x90 (when it differs: the target's old one released,
+/// the source's taken with a count when not null) and the word +0x94.
+pub fn fn_00bb0ed0(e: &mut Engine, this: Ptr, target: u32, word: u32) {
+    let base = this.addr();
+    e.call(SHADER_PROPERTY_COPY_00BA8B10, &args![base, target, word]);
+    let value = e.mem.u32(base + 0x60);
+    e.mem.set_u32(target + 0x60, value);
+    for offset in (0x6cu32..=0x8c).step_by(4) {
+        let value = e.mem.u32(base + offset);
+        e.mem.set_u32(target + offset, value);
+    }
+    let old = e.mem.u32(target + 0x90);
+    if old != e.mem.u32(base + 0x90) {
+        if old != 0 {
+            release_reference(e, old);
+        }
+        let new = e.mem.u32(base + 0x90);
+        e.mem.set_u32(target + 0x90, new);
+        if new != 0 {
+            e.call(IMPORT_INTERLOCKED_INCREMENT, &args![new + 4]);
+        }
+    }
+    let value = e.mem.u32(base + 0x94);
+    e.mem.set_u32(target + 0x94, value);
+}
+
+/// `BSShaderProperty::CheckCreateRenderPassArray` (`00ba95e0`, one word) and
+/// `BSShaderProperty::RenderPassArray::Add` (`00ba9ee0`, eight words).
+const CHECK_CREATE_RENDER_PASS_ARRAY: u32 = 0x00ba_95e0;
+const RENDER_PASS_ARRAY_ADD: u32 = 0x00ba_9ee0;
+
+// Translated from 00bb0fc0 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 00bb0fc0 - the C++ exception frame (FS:[0] chain, unwind state 0) is not translated.
+/// Unnamed in the engine map (vtable entry at `010b90a8`), `thiscall` with six words (a
+/// geometry, a key, an unread word, a high key, two unread words). With the thread's allocation
+/// context (+0x2b4) at 0x29: when the key differs from the word +0x38, makes the render-pass
+/// array (`CheckCreateRenderPassArray(1)`), empties it (+0x10 of +0x3c), adds pass 0x2cf for
+/// the geometry (`Add(geometry, 0x2cf, 1, 0, 0, 0, 0, 0)`) and stores `high << 8 | key` at
+/// +0x38. Answers the array (+0x3c).
+pub fn fn_00bb0fc0(
+    e: &mut Engine,
+    this: Ptr,
+    geometry: u32,
+    key: u32,
+    _unused_2: u32,
+    high: u32,
+    _unused_4: u32,
+    _unused_5: u32,
+) -> u32 {
+    let base = this.addr();
+    with_allocation_context(e, 0x29, |e| {
+        if e.mem.u32(base + 0x38) != key {
+            e.call(CHECK_CREATE_RENDER_PASS_ARRAY, &args![base, 1u32]);
+            let array = e.mem.u32(base + 0x3c);
+            e.mem.set_u32(array + 0x10, 0);
+            let array = e.mem.u32(base + 0x3c);
+            e.call(
+                RENDER_PASS_ARRAY_ADD,
+                &args![array, geometry, 0x2cfu32, 1u32, 0u32, 0u32, 0u32, 0u32, 0u32],
+            );
+            e.mem.set_u32(base + 0x38, (high << 8) | key);
+        }
+        e.mem.u32(base + 0x3c)
+    })
+}
+
+// Translated from 00bb1080 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 00bb1080 - the C++ exception frame (FS:[0] chain, unwind states 0 and 1) is not translated.
+/// Unnamed in the engine map (vtable entry at `010b9050`), `thiscall` with one word: the
+/// property's clone. With the thread's allocation context at 0x29, allocates 0xa0 bytes
+/// (`00aa13e0`); when it succeeds, runs `BSShaderProperty::BSShaderProperty` on them, stores 0.0
+/// at +0x68, the vtable `010b9008`, clears +0x60, +0x90, +0x9c, sets +0x98 to 1 and +0x1c to
+/// 0x12. Then `00bb0ed0` copies `this` into it (with the word; a null block is passed as it
+/// is). Answers the new property.
+pub fn fn_00bb1080(e: &mut Engine, this: Ptr, word: u32) -> u32 {
+    with_allocation_context(e, 0x29, |e| {
+        let block = e.call(NI_ALLOCATE, &args![0xa0u32]).u32();
+        if block != 0 {
+            e.call(SHADER_PROPERTY_CONSTRUCT, &args![block]);
+            e.mem.set_f32(block + 0x68, 0.0);
+            e.mem.set_u32(block, PROPERTY_VTABLE_010B9008);
+            e.mem.set_u32(block + 0x60, 0);
+            e.mem.set_u32(block + 0x90, 0);
+            e.mem.set_u32(block + 0x98, 1);
+            e.mem.set_u32(block + 0x9c, 0);
+            e.mem.set_u32(block + 0x1c, 0x12);
+        }
+        fn_00bb0ed0(e, this, block, word);
+        block
+    })
+}
+
+use crate::units::bsshader::bsshaderproperty::{
+    viewer_strings_add, VIEWER_STRING, VIEWER_STRING_FLAG, VIEWER_STRING_INT, VIEWER_STRING_TEXT,
+};
+
+/// `BSShaderProperty::GetViewerStrings` (`00ba9890`, `thiscall`, one word), the viewer-string
+/// makers `00c4bb40` (`cdecl`, one word) and `00a7d5a0` and `00a7db60` (`cdecl`, two words),
+/// and the labels: `010b90ec`, `010ae79c`, `010ae344`, `010b90dc`.
+const SHADER_PROPERTY_VIEWER_STRINGS: u32 = 0x00ba_9890;
+const TEXTURE_NAME_00C4BB40: u32 = 0x00c4_bb40;
+const VIEWER_STRING_POINTER_00A7D5A0: u32 = 0x00a7_d5a0;
+const VIEWER_STRING_00A7DB60: u32 = 0x00a7_db60;
+const LABEL_010B90EC: u32 = 0x010b_90ec;
+const LABEL_010AE79C: u32 = 0x010a_e79c;
+const LABEL_010AE344: u32 = 0x010a_e344;
+const LABEL_010B90DC: u32 = 0x010b_90dc;
+
+// Translated from 00bb1160 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (not a Ghidra function; vtable entry at `010b9068`): the
+/// property's `GetViewerStrings`, `thiscall` with one word, the string array. Runs
+/// `BSShaderProperty::GetViewerStrings`, then adds (the inlined `NiTArray` add): the class
+/// name (`00a7d330` of `012005fc`), `00a7d4d0(010b90ec, +0x60)`; with a reference at +0x90,
+/// `00a7d5e0(010ae79c, name)` with the name `00c4bb40` gives it, or `00a7d5a0(010ae79c,
+/// reference)` without; when the vtable +0xcc answers 0, `00a7d370(010ae344, 1)`; and
+/// `00a7db60(010b90dc, +0x98)`.
+pub fn fn_00bb1160(e: &mut Engine, this: Ptr, strings: u32) {
+    let base = this.addr();
+    e.call(SHADER_PROPERTY_VIEWER_STRINGS, &args![base, strings]);
+    let rtti = e.global::<u32>(RTTI_012005FC);
+    let string = e.call(VIEWER_STRING, &args![rtti]).u32();
+    viewer_strings_add(e, strings, string);
+    let value = e.mem.u32(base + 0x60);
+    let string = e
+        .call(VIEWER_STRING_INT, &args![LABEL_010B90EC, value])
+        .u32();
+    viewer_strings_add(e, strings, string);
+    let reference = e.mem.u32(base + 0x90);
+    if reference != 0 {
+        let name = e.call(TEXTURE_NAME_00C4BB40, &args![reference]).u32();
+        let string = if name != 0 {
+            e.call(VIEWER_STRING_TEXT, &args![LABEL_010AE79C, name])
+                .u32()
+        } else {
+            let reference = e.mem.u32(base + 0x90);
+            e.call(
+                VIEWER_STRING_POINTER_00A7D5A0,
+                &args![LABEL_010AE79C, reference],
+            )
+            .u32()
+        };
+        viewer_strings_add(e, strings, string);
+    }
+    if e.vcall(base, 0xcc, &args![]).u32() == 0 {
+        let string = e
+            .call(VIEWER_STRING_FLAG, &args![LABEL_010AE344, 1u32])
+            .u32();
+        viewer_strings_add(e, strings, string);
+    }
+    let value = e.mem.u32(base + 0x98);
+    let string = e
+        .call(VIEWER_STRING_00A7DB60, &args![LABEL_010B90DC, value])
+        .u32();
+    viewer_strings_add(e, strings, string);
+}
+
+/// `NiAVObject::UpdateProperties` (engine map, `00a5a040`, `thiscall`) and `00654640`
+/// (unnamed, `thiscall` with one word).
+const NI_AV_OBJECT_UPDATE_PROPERTIES: u32 = 0x00a5_a040;
+const GEOMETRY_CALL_00654640: u32 = 0x0065_4640;
+
+// Translated from 00bb12e0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (not a Ghidra function; vtable entry at `010b90a4`), `thiscall`
+/// with one word, a geometry. The block is the geometry's +0x9c (the exe calls
+/// `NiAVObject::UpdateProperties` on the geometry when that address is null, then reads +0x14
+/// of it as it is); its +0x14 object (null: answers false). The property's reference at +0x90
+/// takes the texture (+8) of the first entry of that object's +0x20 array (null when there is
+/// none); the vtable +0xd0 gets bits 12..13 of that entry's `u16` +4 (3 without an entry);
+/// `00654640(geometry, object)`. Answers true.
+pub fn fn_00bb12e0(e: &mut Engine, this: Ptr, geometry: u32) -> bool {
+    let base = this.addr();
+    let block = geometry.wrapping_add(0x9c);
+    if block == 0 {
+        e.call(NI_AV_OBJECT_UPDATE_PROPERTIES, &args![geometry]);
+    }
+    let object = e.mem.u32(block.wrapping_add(0x14));
+    if object == 0 {
+        return false;
+    }
+    let entries = e.mem.u32(object + 0x20);
+    let entry = e.mem.u32(entries);
+    let texture = if entry != 0 { e.mem.u32(entry + 8) } else { 0 };
+    ni_pointer_assign(e, base + 0x90, texture);
+    let entries = e.mem.u32(object + 0x20);
+    let entry = e.mem.u32(entries);
+    let mode = if entry != 0 {
+        (u32::from(e.mem.u16(entry + 4)) >> 12) & 3
+    } else {
+        3
+    };
+    e.vcall(base, 0xd0, &args![mode]);
+    e.call(GEOMETRY_CALL_00654640, &args![geometry, object]);
+    true
+}
+
+// Translated from 00bb1a70 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (not a Ghidra function; vtable entry at `010b92b4`), `thiscall`,
+/// no stack words: calls the shader's own vtable +0x128 with its word +0x384.
+pub fn fn_00bb1a70(e: &mut Engine, this: Ptr) {
+    let base = this.addr();
+    let pass = e.mem.u32(base + 0x384);
+    e.vcall(base, 0x128, &args![pass]);
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x00bb_0490, fn_00bb0490(Ptr)),
+        entry!(0x00bb_0540, fn_00bb0540(Ptr) -> Ptr),
+        entry!(0x00bb_0cf0, fn_00bb0cf0(Ptr, u32)),
+        entry!(0x00bb_0d10, fn_00bb0d10(Ptr) -> Ptr),
+        entry!(0x00bb_0d20, fn_00bb0d20(Ptr) -> u32),
+        entry!(0x00bb_0d30, fn_00bb0d30(Ptr, u32)),
+        entry!(
+            0x00bb_0d40,
+            fn_00bb0d40(Ptr, u32, u32, u32, u32, u32, u32, u32) -> Ptr
+        ),
+        entry!(0x00bb_0de0, fn_00bb0de0(Ptr)),
+        entry!(0x00bb_0e90, fn_00bb0e90(Ptr) -> u32),
+        entry!(0x00bb_0ea0, fn_00bb0ea0(Ptr, u32) -> Ptr),
+        entry!(0x00bb_0ed0, fn_00bb0ed0(Ptr, u32, u32)),
+        entry!(
+            0x00bb_0fc0,
+            fn_00bb0fc0(Ptr, u32, u32, u32, u32, u32, u32) -> u32
+        ),
+        entry!(0x00bb_1080, fn_00bb1080(Ptr, u32) -> u32),
+        entry!(0x00bb_1160, fn_00bb1160(Ptr, u32)),
+        entry!(0x00bb_12e0, fn_00bb12e0(Ptr, u32) -> bool),
+        entry!(0x00bb_1a70, fn_00bb1a70(Ptr)),
         entry!(0x00bb_04b0, fn_00bb04b0(Ptr) -> Ptr),
         entry!(0x00bb_0660, fn_00bb0660() -> Ptr),
         entry!(0x00bb_01c0, fn_00bb01c0(Ptr)),
@@ -1299,5 +1669,296 @@ mod precipitation_tests {
         e.set_global(FOG_PARAM_011FA280, 9.0f32);
         e.call(0x00bb_1b50, &args![0u32, 0u32]);
         assert_eq!(e.global::<f32>(FOG_PARAM_011FA280), 9.0);
+    }
+}
+
+#[cfg(test)]
+mod n071_tests {
+    use super::*;
+    use crate::units::bsshader::bsshaderproperty::{STRINGS_SET_AT, STRINGS_SET_SIZE};
+    use crate::units::bsshader::geometrydecalshader::shader_test_rig::{object, rig};
+    use crate::units::bsshader::shadowlightshader::n071_rig::{calls, order, slot_target, vobject};
+
+    #[test]
+    fn fn_00bb0490_and_00bb1a70_hand_their_pass_to_the_shader() {
+        let mut e = rig();
+        e.map(0x0120_0000, 0x1000);
+        e.set_global(PASS_012005E0, 0x5e0u32);
+        let shader = vobject(&mut e, 0x400, &[]);
+        e.mem.set_u32(shader + 0x384, 0x384);
+        e.call(0x00bb_0490, &args![shader]);
+        e.call(0x00bb_1a70, &args![shader]);
+        assert_eq!(
+            calls(&e, slot_target(&e, shader, 0x128)),
+            vec![vec![shader, 0x5e0], vec![shader, 0x384]]
+        );
+    }
+
+    #[test]
+    fn the_small_accessors() {
+        let mut e = rig();
+        let this = e.mem.alloc(0xa0);
+        assert_eq!(e.call(0x00bb_0540, &args![this]).u32(), RECORD_012005C0);
+        assert_eq!(e.call(0x00bb_0d10, &args![this]).u32(), RTTI_012005FC);
+        e.call(0x00bb_0cf0, &args![this, 3u32]);
+        assert_eq!(e.call(0x00bb_0d20, &args![this]).u32(), 0);
+        e.call(0x00bb_0cf0, &args![this, 7u32]);
+        assert_eq!(e.call(0x00bb_0d20, &args![this]).u32(), 3);
+        e.call(0x00bb_0d30, &args![this, 0x55u32]);
+        assert_eq!(e.mem.u32(this + 0x94), 0x55);
+        e.mem.set_u32(this + 0x90, 0x90);
+        assert_eq!(e.call(0x00bb_0e90, &args![this]).u32(), 0x90);
+    }
+
+    #[test]
+    fn fn_00bb0d40_constructs_the_property() {
+        let mut e = rig();
+        e.register(SHADER_PROPERTY_CONSTRUCT, |_, a| a[0].into_ret());
+        let this = e.mem.alloc(0xa0);
+        let vectors: Vec<u32> = (0..3)
+            .map(|v| {
+                let p = e.mem.alloc(0xc);
+                for i in 0..3 {
+                    e.mem.set_u32(p + 4 * i, 0x10 * (v + 1) + i);
+                }
+                p
+            })
+            .collect();
+        let result = e
+            .call(
+                0x00bb_0d40,
+                &args![
+                    this,
+                    7u32,
+                    0x7fa0_0000u32,
+                    vectors[0],
+                    vectors[1],
+                    vectors[2],
+                    0x66u32,
+                    5u32
+                ],
+            )
+            .u32();
+        assert_eq!(result, this);
+        assert_eq!(calls(&e, SHADER_PROPERTY_CONSTRUCT), vec![vec![this]]);
+        assert_eq!(e.mem.u32(this), PROPERTY_VTABLE_010B9008);
+        assert_eq!(e.mem.u32(this + 0x60), 7);
+        assert_eq!(e.mem.u32(this + 0x68), 0x7fe0_0000);
+        assert_eq!(e.mem.u32(this + 0x6c), 0x20);
+        assert_eq!(e.mem.u32(this + 0x80), 0x32);
+        assert_eq!(e.mem.u32(this + 0x84), 0x10);
+        assert_eq!(e.mem.u32(this + 0x9c), 0x66);
+        assert_eq!(e.mem.u32(this + 0x98), 1);
+        e.call(
+            0x00bb_0d40,
+            &args![this, 7u32, 0u32, vectors[0], vectors[1], vectors[2], 0x66u32, 0u32],
+        );
+        assert_eq!(e.mem.u32(this + 0x98), 0);
+    }
+
+    #[test]
+    fn fn_00bb0ea0_destroys_and_frees_with_bit_0() {
+        let mut e = rig();
+        e.register(SHADER_PROPERTY_DESTRUCT_00BAA0E0, |_, _| Ret::default());
+        e.register(NI_FREE_00AA1460, |_, _| Ret::default());
+        let this = e.mem.alloc(0xa0);
+        let held = object(&mut e, 1);
+        e.mem.set_u32(this + 0x90, held);
+        e.mem.set_u32(this + 0x60, 9);
+        assert_eq!(e.call(0x00bb_0ea0, &args![this, 0u32]).u32(), this);
+        assert_eq!(e.mem.u32(this), PROPERTY_VTABLE_010B9008);
+        assert_eq!((e.mem.u32(this + 0x60), e.mem.u32(this + 0x90)), (0, 0));
+        assert_eq!(e.mem.u32(held + 4), 0);
+        assert_eq!(
+            calls(&e, SHADER_PROPERTY_DESTRUCT_00BAA0E0),
+            vec![vec![this]]
+        );
+        assert!(calls(&e, NI_FREE_00AA1460).is_empty());
+        e.call(0x00bb_0ea0, &args![this, 1u32]);
+        assert_eq!(calls(&e, NI_FREE_00AA1460), vec![vec![this, 0xa0]]);
+        // Only one release for the one reference.
+        assert_eq!(calls(&e, IMPORT_INTERLOCKED_DECREMENT).len(), 1);
+    }
+
+    #[test]
+    fn fn_00bb0ed0_copies_the_fields_and_the_reference() {
+        let mut e = rig();
+        e.register(SHADER_PROPERTY_COPY_00BA8B10, |_, _| Ret::default());
+        let source = e.mem.alloc(0xa0);
+        let target = e.mem.alloc(0xa0);
+        for offset in (0x60u32..=0x8c).step_by(4) {
+            e.mem.set_u32(source + offset, offset);
+        }
+        e.mem.set_u32(source + 0x94, 0x94);
+        let new = object(&mut e, 1);
+        let old = object(&mut e, 1);
+        e.mem.set_u32(source + 0x90, new);
+        e.mem.set_u32(target + 0x90, old);
+        e.call(0x00bb_0ed0, &args![source, target, 3u32]);
+        assert_eq!(
+            calls(&e, SHADER_PROPERTY_COPY_00BA8B10),
+            vec![vec![source, target, 3]]
+        );
+        assert_eq!(e.mem.u32(target + 0x60), 0x60);
+        assert_eq!(e.mem.u32(target + 0x64), 0);
+        assert_eq!(e.mem.u32(target + 0x8c), 0x8c);
+        assert_eq!(e.mem.u32(target + 0x90), new);
+        assert_eq!((e.mem.u32(new + 4), e.mem.u32(old + 4)), (2, 0));
+        assert_eq!(e.mem.u32(target + 0x94), 0x94);
+        // The same reference: no count changes.
+        e.call(0x00bb_0ed0, &args![source, target, 3u32]);
+        assert_eq!(e.mem.u32(new + 4), 2);
+    }
+
+    #[test]
+    fn fn_00bb0fc0_rebuilds_the_array_for_a_new_key() {
+        let mut e = rig();
+        e.register(CHECK_CREATE_RENDER_PASS_ARRAY, |_, _| Ret::default());
+        e.register(RENDER_PASS_ARRAY_ADD, |e, _| {
+            let tls = e.tls();
+            assert_eq!(e.mem.u32(tls + 0x2b4), 0x29);
+            Ret::default()
+        });
+        let this = e.mem.alloc(0x40);
+        let array = e.mem.alloc(0x20);
+        e.mem.set_u32(array + 0x10, 5);
+        e.mem.set_u32(this + 0x3c, array);
+        e.mem.set_u32(this + 0x38, 4);
+        let tls = e.tls();
+        e.mem.set_u32(tls + 0x2b4, 7);
+        let args = args![this, 0x900u32, 4u32, 0u32, 2u32, 0u32, 0u32];
+        assert_eq!(e.call(0x00bb_0fc0, &args).u32(), array);
+        assert!(calls(&e, RENDER_PASS_ARRAY_ADD).is_empty());
+        let args = args![this, 0x900u32, 6u32, 0u32, 2u32, 0u32, 0u32];
+        assert_eq!(e.call(0x00bb_0fc0, &args).u32(), array);
+        assert_eq!(
+            calls(&e, CHECK_CREATE_RENDER_PASS_ARRAY),
+            vec![vec![this, 1]]
+        );
+        assert_eq!(e.mem.u32(array + 0x10), 0);
+        assert_eq!(
+            calls(&e, RENDER_PASS_ARRAY_ADD),
+            vec![vec![array, 0x900, 0x2cf, 1, 0, 0, 0, 0, 0]]
+        );
+        assert_eq!(e.mem.u32(this + 0x38), 0x206);
+        assert_eq!(e.mem.u32(tls + 0x2b4), 7);
+    }
+
+    #[test]
+    fn fn_00bb1080_clones_into_a_new_property() {
+        let mut e = rig();
+        e.register(NI_ALLOCATE, |e, a| e.mem.alloc(a[0]).into_ret());
+        e.register(SHADER_PROPERTY_CONSTRUCT, |_, a| a[0].into_ret());
+        e.register(SHADER_PROPERTY_COPY_00BA8B10, |_, _| Ret::default());
+        let source = e.mem.alloc(0xa0);
+        e.mem.set_u32(source + 0x94, 0x94);
+        let made = e.call(0x00bb_1080, &args![source, 2u32]).u32();
+        assert_eq!(calls(&e, NI_ALLOCATE), vec![vec![0xa0]]);
+        assert_eq!(e.mem.u32(made), PROPERTY_VTABLE_010B9008);
+        assert_eq!(e.mem.u32(made + 0x98), 1);
+        assert_eq!(e.mem.u32(made + 0x1c), 0x12);
+        assert_eq!(e.mem.u32(made + 0x94), 0x94);
+        assert_eq!(
+            calls(&e, SHADER_PROPERTY_COPY_00BA8B10),
+            vec![vec![source, made, 2]]
+        );
+    }
+
+    #[test]
+    fn fn_00bb1160_adds_the_viewer_strings() {
+        let mut e = rig();
+        e.map(0x0120_0000, 0x1000);
+        e.set_global(RTTI_012005FC, 0x5fcu32);
+        for (target, answer) in [
+            (SHADER_PROPERTY_VIEWER_STRINGS, 0u32),
+            (VIEWER_STRING, 0x1001),
+            (VIEWER_STRING_INT, 0x1002),
+            (VIEWER_STRING_TEXT, 0x1003),
+            (VIEWER_STRING_POINTER_00A7D5A0, 0x1004),
+            (VIEWER_STRING_FLAG, 0x1005),
+            (VIEWER_STRING_00A7DB60, 0x1006),
+            (STRINGS_SET_SIZE, 0),
+        ] {
+            e.register_double(target, move |_, _| answer.into_ret());
+        }
+        e.register(STRINGS_SET_AT, |e, a| {
+            let size = e.mem.u16(a[0] + 0xa);
+            e.mem.set_u16(a[0] + 0xa, size + 1);
+            let word = e.mem.u32(a[2]);
+            e.mem.set_u32(a[0] + 0x40 + 4 * a[1], word);
+            Ret::default()
+        });
+        let strings = e.mem.alloc(0x80);
+        e.mem.set_u16(strings + 8, 2);
+        e.mem.set_u16(strings + 0xe, 4);
+        let this = vobject(&mut e, 0xa0, &[(0xcc, 1)]);
+        e.mem.set_u32(this + 0x60, 0x60);
+        e.mem.set_u32(this + 0x98, 0x98);
+        e.call(0x00bb_1160, &args![this, strings]);
+        let added: Vec<u32> = (0..3).map(|i| e.mem.u32(strings + 0x40 + 4 * i)).collect();
+        assert_eq!(added, vec![0x1001, 0x1002, 0x1006]);
+        assert_eq!(
+            calls(&e, SHADER_PROPERTY_VIEWER_STRINGS),
+            vec![vec![this, strings]]
+        );
+        assert_eq!(calls(&e, VIEWER_STRING), vec![vec![0x5fc]]);
+        assert_eq!(
+            calls(&e, VIEWER_STRING_INT),
+            vec![vec![LABEL_010B90EC, 0x60]]
+        );
+        assert_eq!(
+            calls(&e, VIEWER_STRING_00A7DB60),
+            vec![vec![LABEL_010B90DC, 0x98]]
+        );
+        assert_eq!(calls(&e, STRINGS_SET_SIZE), vec![vec![strings, 6]]);
+        // With a reference and the +0xcc answer 0: the reference line and the flag.
+        let this = vobject(&mut e, 0xa0, &[]);
+        e.mem.set_u32(this + 0x90, 0x9090);
+        e.register(TEXTURE_NAME_00C4BB40, |_, _| 0u32.into_ret());
+        e.call_log = Some(vec![]);
+        e.call(0x00bb_1160, &args![this, strings]);
+        assert_eq!(
+            calls(&e, VIEWER_STRING_POINTER_00A7D5A0),
+            vec![vec![LABEL_010AE79C, 0x9090]]
+        );
+        assert_eq!(calls(&e, VIEWER_STRING_FLAG), vec![vec![LABEL_010AE344, 1]]);
+        e.register(TEXTURE_NAME_00C4BB40, |_, _| 0x4bb4u32.into_ret());
+        e.call_log = Some(vec![]);
+        e.call(0x00bb_1160, &args![this, strings]);
+        assert_eq!(
+            calls(&e, VIEWER_STRING_TEXT),
+            vec![vec![LABEL_010AE79C, 0x4bb4]]
+        );
+        assert!(order(&e).contains(&TEXTURE_NAME_00C4BB40));
+    }
+
+    #[test]
+    fn fn_00bb12e0_takes_the_texture_of_the_geometry() {
+        let mut e = rig();
+        e.register(GEOMETRY_CALL_00654640, |_, _| Ret::default());
+        let this = vobject(&mut e, 0xa0, &[]);
+        let geometry = e.mem.alloc(0xc0);
+        assert!(!e.call(0x00bb_12e0, &args![this, geometry]).bool());
+        let holder = e.mem.alloc(0x30);
+        e.mem.set_u32(geometry + 0xb0, holder);
+        let entries = e.mem.alloc(8);
+        e.mem.set_u32(holder + 0x20, entries);
+        // No entry: no texture and mode 3.
+        assert!(e.call(0x00bb_12e0, &args![this, geometry]).bool());
+        assert_eq!(calls(&e, slot_target(&e, this, 0xd0)), vec![vec![this, 3]]);
+        assert_eq!(
+            calls(&e, GEOMETRY_CALL_00654640),
+            vec![vec![geometry, holder]]
+        );
+        let texture = object(&mut e, 0);
+        let entry = e.mem.alloc(0x10);
+        e.mem.set_u16(entry + 4, 0x2fff);
+        e.mem.set_u32(entry + 8, texture);
+        e.mem.set_u32(entries, entry);
+        e.call_log = Some(vec![]);
+        assert!(e.call(0x00bb_12e0, &args![this, geometry]).bool());
+        assert_eq!(e.mem.u32(this + 0x90), texture);
+        assert_eq!(e.mem.u32(texture + 4), 1);
+        assert_eq!(calls(&e, slot_target(&e, this, 0xd0)), vec![vec![this, 2]]);
     }
 }

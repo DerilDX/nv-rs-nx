@@ -1200,6 +1200,446 @@ pub fn fn_00c1c5e0(e: &mut Engine) -> Ptr<NiPSysEmitterCtlr> {
     this
 }
 
+use crate::units::niparticle::nipsysdata::add_viewer_string;
+use crate::units::niparticle::nipsysmodifier::fixed_string_release;
+
+/// `NiTimeController::Stop` (`00a6cd30`, Xbox PDB name; `thiscall`).
+const TIME_CONTROLLER_STOP: u32 = 0x00a6_cd30;
+/// The `NiFloatInterpolator` (`00a3c390`, a `float`) and
+/// `NiBoolInterpolator` (`00a532d0`, one word) constructors with a value
+/// (Xbox PDB names; `thiscall`).
+const FLOAT_INTERPOLATOR_WITH_VALUE: u32 = 0x00a3_c390;
+const BOOL_INTERPOLATOR_WITH_VALUE: u32 = 0x00a5_32d0;
+/// `NiSingleInterpController::GuaranteeTimeRange` (`00a38e90`, two
+/// `float`s) and `TargetIsRequiredType` (`00a38df0`, no words) (Xbox PDB
+/// names; `thiscall`).
+const SINGLE_GUARANTEE_TIME_RANGE: u32 = 0x00a3_8e90;
+const SINGLE_TARGET_IS_REQUIRED_TYPE: u32 = 0x00a3_8df0;
+/// The interpolator slots `+0xC0` (two out `float` pointers;
+/// `GetActiveTimeRange` in the Xbox PDB) and `+0xC4` (two `float`s;
+/// `GuaranteeTimeRange` in the Xbox PDB).
+const INTERPOLATOR_ACTIVE_TIME_RANGE_SLOT: u32 = 0xc0;
+const INTERPOLATOR_GUARANTEE_TIME_RANGE_SLOT: u32 = 0xc4;
+/// `NiObject`'s `GetRTTI` (`+8`), `RegisterStreamables` (`+0x54`),
+/// `IsEqual` (`+0x5C`) and `GetViewerStrings` (`+0x60`) slots, and
+/// `NiStream::SaveLinkID` (`+0x30`) (Xbox PDB).
+const GET_RTTI_SLOT: u32 = 0x8;
+const REGISTER_STREAMABLES_SLOT: u32 = 0x54;
+const IS_EQUAL_SLOT: u32 = 0x5c;
+const GET_VIEWER_STRINGS_SLOT: u32 = 0x60;
+const STREAM_SAVE_LINK_ID_SLOT: u32 = 0x30;
+/// `NiPSysModifierCtlr`'s `RegisterStreamables` (`00a57780`), `SaveBinary`
+/// (`00a57130`), `IsEqual` (`00c313a0`), `GetViewerStrings` (`00c315b0`)
+/// and `InterpTargetIsCorrectType` (`00c31530`) (Xbox PDB names; `thiscall`,
+/// one word), and its constructor with a name (`00c31440`, `thiscall`: the
+/// address of an `NiFixedString`).
+const MODIFIER_CTLR_REGISTER_STREAMABLES: u32 = 0x00a5_7780;
+const MODIFIER_CTLR_SAVE_BINARY: u32 = 0x00a5_7130;
+const MODIFIER_CTLR_IS_EQUAL: u32 = 0x00c3_13a0;
+const MODIFIER_CTLR_GET_VIEWER_STRINGS: u32 = 0x00c3_15b0;
+const MODIFIER_CTLR_INTERP_TARGET_IS_CORRECT_TYPE: u32 = 0x00c3_1530;
+const MODIFIER_CTLR_NAMED_CONSTRUCTOR: u32 = 0x00c3_1440;
+/// `00c1b0f0` (unnamed; `thiscall` on a particle system, the address of a
+/// modifier name; returns a modifier or null).
+const FIND_MODIFIER: u32 = 0x00c1_b0f0;
+/// `00a5b690` (unnamed, `cdecl`, a C string): the `NiFixedString` handle
+/// for a C string.
+const FIXED_STRING_FROM_TEXT: u32 = 0x00a5_b690;
+/// The null `NiFixedString` handle's global (`0109b220`).
+const NULL_FIXED_STRING: u32 = 0x0109_b220;
+/// `NiObject::NiObject` (`00a5d3a0`, `thiscall`).
+const OBJECT_CONSTRUCTOR: u32 = 0x00a5_d3a0;
+/// `NiBoolData::ReplaceAnim` (`00a538b0`, Xbox PDB name; `thiscall`: keys,
+/// count, key type).
+const BOOL_DATA_REPLACE_ANIM: u32 = 0x00a5_38b0;
+/// The size `NiNew` is asked for an `NiBoolData`, an `NiFloatInterpolator`
+/// and an `NiBoolInterpolator`.
+const DATA_SIZE: u32 = 0x18;
+/// The `NiRTTI` records the type tests look for: `NiPSysEmitter`
+/// (`01202540`), `NiFloatInterpolator` (`011f3738`), `NiBoolInterpolator`
+/// (`011f404c`) and `NiBlendBoolInterpolator` (`011f407c`) (each the
+/// address its class's `GetRTTI` returns); `NiBlendFloatInterpolator`'s
+/// is `BIRTH_RATE_BLEND_RTTI` (`011f3e58`).
+const NI_P_SYS_EMITTER_RTTI: u32 = 0x0120_2540;
+const NI_FLOAT_INTERPOLATOR_RTTI: u32 = 0x011f_3738;
+const NI_BOOL_INTERPOLATOR_RTTI: u32 = 0x011f_404c;
+const NI_BLEND_BOOL_INTERPOLATOR_RTTI: u32 = 0x011f_407c;
+/// `NiGetViewerString` (`00a7d330`, Xbox PDB name; `cdecl`, the text).
+const VIEWER_STRING: u32 = 0x00a7_d330;
+
+/// Whether the `NiRTTI` chain from `rtti` (each record's base at +4)
+/// reaches `wanted`.
+fn rtti_chain_has(e: &Engine, mut rtti: u32, wanted: u32) -> bool {
+    while rtti != 0 {
+        if rtti == wanted {
+            return true;
+        }
+        rtti = e.mem.u32(rtti + 4);
+    }
+    false
+}
+
+// Translated from 00c1ba30 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiPSysEmitterCtlr::Stop` (Xbox PDB): no last scaled time (`-FLT_MAX`
+/// from `01015f5c`), then `NiTimeController::Stop` (a tail jump).
+pub fn ni_p_sys_emitter_ctlr_stop(e: &mut Engine, this: Ptr<NiPSysEmitterCtlr>) {
+    let no_time = x87_quiet_bits(e.global::<u32>(NO_TIME));
+    e.set(this, NiPSysEmitterCtlr::m_fLastScaledTime, no_time);
+    e.call(TIME_CONTROLLER_STOP, &args![this]);
+}
+
+// Translated from 00c1ba50 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiPSysEmitterCtlr::GetInterpolatorID` (Xbox PDB): the name in the word
+/// at `011ae754` for index 0, the one at `011ae758` for 1, else null.
+pub fn ni_p_sys_emitter_ctlr_get_interpolator_id(
+    e: &mut Engine,
+    _this: Ptr<NiPSysEmitterCtlr>,
+    index: u16,
+) -> u32 {
+    if index == 0 {
+        return e.global::<u32>(BIRTH_RATE_NAME);
+    }
+    let mask = u32::from(index != 1).wrapping_sub(1);
+    mask & e.global::<u32>(EMITTER_ACTIVE_NAME)
+}
+
+// Translated from 00c1bad0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiPSysEmitterCtlr::CreatePoseInterpolator` (Xbox PDB): a new 0x18-byte
+/// `NiFloatInterpolator` with 0.0 for index 0 or `NiBoolInterpolator` with
+/// 0 for index 1 (the constructor's answer comes back); null for other
+/// indices or when the allocation fails.
+pub fn ni_p_sys_emitter_ctlr_create_pose_interpolator(
+    e: &mut Engine,
+    _this: Ptr<NiPSysEmitterCtlr>,
+    index: u16,
+) -> Ptr {
+    if index == 0 {
+        let block = e.call(NI_NEW, &args![DATA_SIZE]).u32();
+        if block == 0 {
+            return Ptr::NULL;
+        }
+        return e
+            .call(
+                FLOAT_INTERPOLATOR_WITH_VALUE,
+                &args![block, 0.0f32.to_bits()],
+            )
+            .ptr();
+    }
+    if index != 1 {
+        return Ptr::NULL;
+    }
+    let block = e.call(NI_NEW, &args![DATA_SIZE]).u32();
+    if block == 0 {
+        return Ptr::NULL;
+    }
+    e.call(BOOL_INTERPOLATOR_WITH_VALUE, &args![block, 0u32])
+        .ptr()
+}
+
+// Translated from 00c1bbc0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiPSysEmitterCtlr::GuaranteeTimeRange` (Xbox PDB):
+/// `NiSingleInterpController`'s, then the emitter-active interpolator's
+/// (slot `+0xC4`) when there is one, both with `start` and `end`.
+pub fn ni_p_sys_emitter_ctlr_guarantee_time_range(
+    e: &mut Engine,
+    this: Ptr<NiPSysEmitterCtlr>,
+    start: f32,
+    end: f32,
+) {
+    let start = x87_quiet_bits(start.to_bits());
+    let end = x87_quiet_bits(end.to_bits());
+    e.call(SINGLE_GUARANTEE_TIME_RANGE, &args![this, start, end]);
+    let active = e.get(this, NiPSysEmitterCtlr::m_spEmitterActiveInterpolator);
+    if active != 0 {
+        e.vcall(
+            active,
+            INTERPOLATOR_GUARANTEE_TIME_RANGE_SLOT,
+            &args![start, end],
+        );
+    }
+}
+
+// Translated from 00c1bc10 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiPSysEmitterCtlr::ResetTimeExtrema` (Xbox PDB): unless flag `0x20` of
+/// `m_uFlags` is set, the birth-rate interpolator's time range (slot
+/// `+0xC0`) into the low and high key times, then the emitter-active
+/// interpolator's into two locals, which widen the range: the low time
+/// takes the second start when it is above it, the high time the second
+/// end when it is below it (a NaN changes nothing).
+pub fn ni_p_sys_emitter_ctlr_reset_time_extrema(e: &mut Engine, this: Ptr<NiPSysEmitterCtlr>) {
+    let controller: Ptr<NiTimeController> = this.cast();
+    if e.mem.u8(this.addr() + 8) & 0x20 != 0 {
+        return;
+    }
+    let low = this.addr() + NiTimeController::m_fLoKeyTime.off;
+    let high = this.addr() + NiTimeController::m_fHiKeyTime.off;
+    let birth_rate = e.get(this, NiPSysEmitterCtlr::m_spInterpolator);
+    e.vcall(
+        birth_rate,
+        INTERPOLATOR_ACTIVE_TIME_RANGE_SLOT,
+        &args![low, high],
+    );
+    let active = e.get(this, NiPSysEmitterCtlr::m_spEmitterActiveInterpolator);
+    e.with_stack(8, |e, locals| {
+        let (start, end) = (locals.addr(), locals.addr() + 4);
+        e.vcall(
+            active,
+            INTERPOLATOR_ACTIVE_TIME_RANGE_SLOT,
+            &args![start, end],
+        );
+        let second_start = e.mem.u32(start);
+        if x87_m32(e.get(controller, NiTimeController::m_fLoKeyTime)) > x87_m32(second_start) {
+            e.set(
+                controller,
+                NiTimeController::m_fLoKeyTime,
+                x87_quiet_bits(second_start),
+            );
+        }
+        let second_end = e.mem.u32(end);
+        if x87_m32(e.get(controller, NiTimeController::m_fHiKeyTime)) < x87_m32(second_end) {
+            e.set(
+                controller,
+                NiTimeController::m_fHiKeyTime,
+                x87_quiet_bits(second_end),
+            );
+        }
+    });
+}
+
+// Translated from 00c1be10 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiPSysEmitterCtlr::RegisterStreamables` (Xbox PDB):
+/// `NiPSysModifierCtlr`'s; when that succeeds the emitter-active
+/// interpolator's (slot `+0x54`, its answer not read) and true.
+pub fn ni_p_sys_emitter_ctlr_register_streamables(
+    e: &mut Engine,
+    this: Ptr<NiPSysEmitterCtlr>,
+    stream: Ptr,
+) -> bool {
+    if !e
+        .call(MODIFIER_CTLR_REGISTER_STREAMABLES, &args![this, stream])
+        .bool()
+    {
+        return false;
+    }
+    let active = e.get(this, NiPSysEmitterCtlr::m_spEmitterActiveInterpolator);
+    if active != 0 {
+        e.vcall(active, REGISTER_STREAMABLES_SLOT, &args![stream]);
+    }
+    true
+}
+
+// Translated from 00c1be40 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiPSysEmitterCtlr::SaveBinary` (Xbox PDB): `NiPSysModifierCtlr`'s, then
+/// the emitter-active interpolator's link id (`NiStream::SaveLinkID`, slot
+/// `+0x30`).
+pub fn ni_p_sys_emitter_ctlr_save_binary(
+    e: &mut Engine,
+    this: Ptr<NiPSysEmitterCtlr>,
+    stream: Ptr,
+) {
+    e.call(MODIFIER_CTLR_SAVE_BINARY, &args![this, stream]);
+    let active = e.get(this, NiPSysEmitterCtlr::m_spEmitterActiveInterpolator);
+    e.vcall(stream.addr(), STREAM_SAVE_LINK_ID_SLOT, &args![active]);
+}
+
+// Translated from 00c1be60 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiPSysEmitterCtlr::IsEqual` (Xbox PDB): `NiPSysModifierCtlr`'s, then
+/// both or neither must have an emitter-active interpolator, and two must
+/// be equal (the other's `IsEqual`, slot `+0x5C`, given this one's).
+pub fn ni_p_sys_emitter_ctlr_is_equal(
+    e: &mut Engine,
+    this: Ptr<NiPSysEmitterCtlr>,
+    other: Ptr<NiPSysEmitterCtlr>,
+) -> bool {
+    if !e.call(MODIFIER_CTLR_IS_EQUAL, &args![this, other]).bool() {
+        return false;
+    }
+    let theirs = e.get(other, NiPSysEmitterCtlr::m_spEmitterActiveInterpolator);
+    let ours = e.get(this, NiPSysEmitterCtlr::m_spEmitterActiveInterpolator);
+    if theirs == 0 {
+        return ours == 0;
+    }
+    if ours == 0 {
+        return false;
+    }
+    e.vcall(theirs, IS_EQUAL_SLOT, &args![ours]).bool()
+}
+
+// Translated from 00c1bf10 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiBoolInterpolator::ReplaceKeys` (Xbox PDB), emitted in this unit: with
+/// keys (`count` not 0), makes the interpolator's `NiBoolData` (+0x10) when
+/// it has none (a new 0x18-byte `NiBoolData`: `NiObject`'s constructor, its
+/// vtable, no keys; null when the allocation fails; assigned through
+/// `00a5f860`), hands it the keys (`ReplaceAnim` with keys, count, type) and
+/// clears +0x14; without keys, empties the data it has (`ReplaceAnim` with
+/// zeros).
+pub fn ni_bool_interpolator_replace_keys(
+    e: &mut Engine,
+    this: Ptr,
+    keys: u32,
+    key_type: u32,
+    count: u32,
+) {
+    let slot = this.addr() + 0x10;
+    if count == 0 {
+        let data = e.mem.u32(slot);
+        if data != 0 {
+            e.call(BOOL_DATA_REPLACE_ANIM, &args![data, 0u32, 0u32, 0u32]);
+        }
+        return;
+    }
+    if e.mem.u32(slot) == 0 {
+        let data = e.call(NI_NEW, &args![DATA_SIZE]).u32();
+        if data != 0 {
+            e.call(OBJECT_CONSTRUCTOR, &args![data]);
+            e.mem.set_u32(data, NI_BOOL_DATA_VTABLE);
+            e.mem.set_u32(data + 0x8, 0);
+            e.mem.set_u32(data + 0xc, 0);
+            e.mem.set_u32(data + 0x10, 0);
+            e.mem.set_u8(data + 0x14, 0);
+        }
+        e.call(POINTER_ASSIGN, &args![slot, data]);
+    }
+    let data = e.mem.u32(slot);
+    e.call(BOOL_DATA_REPLACE_ANIM, &args![data, keys, count, key_type]);
+    e.mem.set_u32(this.addr() + 0x14, 0);
+}
+
+// Translated from 00c1bff0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiPSysEmitterCtlr::TargetIsRequiredType` (Xbox PDB):
+/// `NiSingleInterpController`'s test, then the target's modifier of this
+/// controller's name (`00c1b0f0`) must exist and be an `NiPSysEmitter`
+/// (its `NiRTTI` chain).
+pub fn ni_p_sys_emitter_ctlr_target_is_required_type(
+    e: &mut Engine,
+    this: Ptr<NiPSysEmitterCtlr>,
+) -> bool {
+    if !e.call(SINGLE_TARGET_IS_REQUIRED_TYPE, &args![this]).bool() {
+        return false;
+    }
+    let target = e.mem.u32(this.addr() + NiTimeController::m_pkTarget.off);
+    let name = this.addr() + NiPSysEmitterCtlr::m_kModifierName.off;
+    let modifier = e.call(FIND_MODIFIER, &args![target, name]).u32();
+    if modifier == 0 {
+        return false;
+    }
+    let rtti = e.vcall(modifier, GET_RTTI_SLOT, &args![]).u32();
+    rtti_chain_has(e, rtti, NI_P_SYS_EMITTER_RTTI)
+}
+
+// Translated from 00c1c040 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiPSysEmitterCtlr::InterpolatorIsCorrectType` (Xbox PDB): for index 0 a
+/// non-null `NiFloatInterpolator` or `NiBlendFloatInterpolator` (two walks
+/// of its `NiRTTI` chain, `GetRTTI` asked each time); for index 1 an
+/// `NiBoolInterpolator` (null skips that walk) or, by the type test
+/// `0043b300`, an `NiBlendBoolInterpolator`; false otherwise.
+pub fn ni_p_sys_emitter_ctlr_interpolator_is_correct_type(
+    e: &mut Engine,
+    _this: Ptr<NiPSysEmitterCtlr>,
+    interpolator: Ptr,
+    index: u16,
+) -> bool {
+    let interpolator = interpolator.addr();
+    match index {
+        0 => {
+            if interpolator == 0 {
+                return false;
+            }
+            let rtti = e.vcall(interpolator, GET_RTTI_SLOT, &args![]).u32();
+            if rtti_chain_has(e, rtti, NI_FLOAT_INTERPOLATOR_RTTI) {
+                return true;
+            }
+            let rtti = e.vcall(interpolator, GET_RTTI_SLOT, &args![]).u32();
+            rtti_chain_has(e, rtti, BIRTH_RATE_BLEND_RTTI)
+        }
+        1 => {
+            if interpolator != 0 {
+                let rtti = e.vcall(interpolator, GET_RTTI_SLOT, &args![]).u32();
+                if rtti_chain_has(e, rtti, NI_BOOL_INTERPOLATOR_RTTI) {
+                    return true;
+                }
+            }
+            e.call(
+                IS_KIND_OF,
+                &args![NI_BLEND_BOOL_INTERPOLATOR_RTTI, interpolator],
+            )
+            .bool()
+        }
+        _ => false,
+    }
+}
+
+// Translated from 00c1c280 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The `NiPSysEmitterCtlr` constructor with a modifier name (no PDB name):
+/// the name's `NiFixedString` (the null handle for a null name, else
+/// `00a5b690`) in a local, `NiPSysModifierCtlr`'s constructor with it
+/// (`00c31440`), the local released, then the members. Returns `this`.
+pub fn fn_00c1c280(
+    e: &mut Engine,
+    this: Ptr<NiPSysEmitterCtlr>,
+    name: u32,
+) -> Ptr<NiPSysEmitterCtlr> {
+    let handle = if name == 0 {
+        e.global::<u32>(NULL_FIXED_STRING)
+    } else {
+        e.call(FIXED_STRING_FROM_TEXT, &args![name]).u32()
+    };
+    e.with_stack(4, |e, local| {
+        e.mem.set_u32(local.addr(), handle);
+        e.call(MODIFIER_CTLR_NAMED_CONSTRUCTOR, &args![this, local]);
+        fixed_string_release(e, local.addr());
+    });
+    construct_members(e, this);
+    this
+}
+
+// Translated from 00c1ce70 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiPSysEmitterCtlr::GetViewerStrings` (Xbox PDB): `NiPSysModifierCtlr`'s
+/// strings, the class name (the word at `012024e8`), then the
+/// emitter-active interpolator's strings (slot `+0x60`) when there is one.
+pub fn ni_p_sys_emitter_ctlr_get_viewer_strings(
+    e: &mut Engine,
+    this: Ptr<NiPSysEmitterCtlr>,
+    strings: Ptr,
+) {
+    e.call(MODIFIER_CTLR_GET_VIEWER_STRINGS, &args![this, strings]);
+    let name = e.global::<u32>(NI_P_SYS_EMITTER_CTLR_RTTI);
+    let string = e.call(VIEWER_STRING, &args![name]).u32();
+    add_viewer_string(e, strings.addr(), string);
+    let active = e.get(this, NiPSysEmitterCtlr::m_spEmitterActiveInterpolator);
+    if active != 0 {
+        e.vcall(active, GET_VIEWER_STRINGS_SLOT, &args![strings]);
+    }
+}
+
+// Translated from 00c2b7d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiPSysEmitterCtlr::InterpTargetIsCorrectType` (Xbox PDB), emitted with
+/// the float controllers: `NiPSysModifierCtlr`'s test, then `target`'s
+/// modifier of this controller's name (`00c1b0f0`) must exist and be an
+/// `NiPSysEmitter` (its `NiRTTI` chain).
+pub fn ni_p_sys_emitter_ctlr_interp_target_is_correct_type(
+    e: &mut Engine,
+    this: Ptr<NiPSysEmitterCtlr>,
+    target: Ptr,
+) -> bool {
+    if !e
+        .call(
+            MODIFIER_CTLR_INTERP_TARGET_IS_CORRECT_TYPE,
+            &args![this, target],
+        )
+        .bool()
+    {
+        return false;
+    }
+    let name = this.addr() + NiPSysEmitterCtlr::m_kModifierName.off;
+    let modifier = e.call(FIND_MODIFIER, &args![target, name]).u32();
+    if modifier == 0 {
+        return false;
+    }
+    let rtti = e.vcall(modifier, GET_RTTI_SLOT, &args![]).u32();
+    rtti_chain_has(e, rtti, NI_P_SYS_EMITTER_RTTI)
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -1294,6 +1734,69 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(
             0x00c1_c630,
             ni_p_sys_emitter_ctlr_update(Ptr<NiPSysEmitterCtlr>, Ptr)
+        ),
+        entry!(
+            0x00c1_ba30,
+            ni_p_sys_emitter_ctlr_stop(Ptr<NiPSysEmitterCtlr>)
+        ),
+        entry!(
+            0x00c1_ba50,
+            ni_p_sys_emitter_ctlr_get_interpolator_id(Ptr<NiPSysEmitterCtlr>, u16) -> u32
+        ),
+        entry!(
+            0x00c1_bad0,
+            ni_p_sys_emitter_ctlr_create_pose_interpolator(Ptr<NiPSysEmitterCtlr>, u16) -> Ptr
+        ),
+        entry!(
+            0x00c1_bbc0,
+            ni_p_sys_emitter_ctlr_guarantee_time_range(Ptr<NiPSysEmitterCtlr>, f32, f32)
+        ),
+        entry!(
+            0x00c1_bc10,
+            ni_p_sys_emitter_ctlr_reset_time_extrema(Ptr<NiPSysEmitterCtlr>)
+        ),
+        entry!(
+            0x00c1_be10,
+            ni_p_sys_emitter_ctlr_register_streamables(Ptr<NiPSysEmitterCtlr>, Ptr) -> bool
+        ),
+        entry!(
+            0x00c1_be40,
+            ni_p_sys_emitter_ctlr_save_binary(Ptr<NiPSysEmitterCtlr>, Ptr)
+        ),
+        entry!(
+            0x00c1_be60,
+            ni_p_sys_emitter_ctlr_is_equal(Ptr<NiPSysEmitterCtlr>, Ptr<NiPSysEmitterCtlr>) -> bool
+        ),
+        entry!(
+            0x00c1_bf10,
+            ni_bool_interpolator_replace_keys(Ptr, u32, u32, u32)
+        ),
+        entry!(
+            0x00c1_bff0,
+            ni_p_sys_emitter_ctlr_target_is_required_type(Ptr<NiPSysEmitterCtlr>) -> bool
+        ),
+        entry!(
+            0x00c1_c040,
+            ni_p_sys_emitter_ctlr_interpolator_is_correct_type(
+                Ptr<NiPSysEmitterCtlr>,
+                Ptr,
+                u16,
+            ) -> bool
+        ),
+        entry!(
+            0x00c1_c280,
+            fn_00c1c280(Ptr<NiPSysEmitterCtlr>, u32) -> Ptr<NiPSysEmitterCtlr>
+        ),
+        entry!(
+            0x00c1_ce70,
+            ni_p_sys_emitter_ctlr_get_viewer_strings(Ptr<NiPSysEmitterCtlr>, Ptr)
+        ),
+        entry!(
+            0x00c2_b7d0,
+            ni_p_sys_emitter_ctlr_interp_target_is_correct_type(
+                Ptr<NiPSysEmitterCtlr>,
+                Ptr,
+            ) -> bool
         ),
     ]
 }
@@ -2237,5 +2740,519 @@ mod emitter_tests {
         assert_eq!(log[0][1], 4);
         assert_eq!(log[0][0], bits(100.0 + 4.0 - 0.5));
         assert_eq!(e.get(this, NiPSysEmitterCtlr::m_fLastScaledTime), bits(4.0));
+    }
+}
+
+#[cfg(test)]
+mod n064_tests {
+    use super::*;
+    use crate::units::niparticle::nipsysdata::viewer_test;
+    use crate::units::niparticle::nipsysmodifier::{test_stream, INTERLOCKED_DECREMENT};
+
+    fn calls_to(e: &Engine, callee: u32) -> Vec<Vec<u32>> {
+        e.call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|(address, _)| *address == callee)
+            .map(|(_, words)| words.clone())
+            .collect()
+    }
+
+    fn answer(value: u32) -> Ret {
+        Ret {
+            eax: value,
+            ..Ret::default()
+        }
+    }
+
+    /// An object whose vtable (0x100 bytes of its own) has `slots` pointing
+    /// at the given addresses.
+    fn object(e: &mut Engine, slots: &[(u32, u32)]) -> u32 {
+        let object = e.mem.alloc(0x60);
+        let vtable = e.mem.alloc(0x100);
+        e.mem.set_u32(object, vtable);
+        for &(slot, target) in slots {
+            e.mem.set_u32(vtable + slot, target);
+        }
+        object
+    }
+
+    /// An `NiRTTI` chain: a record at each address of `records`, in order,
+    /// ending in a record whose base is null; returns the first record.
+    fn rtti_chain(e: &mut Engine, records: &[u32]) -> u32 {
+        let mut base = 0;
+        for &record in records.iter().rev() {
+            e.map(record, 8);
+            e.mem.set_u32(record + 4, base);
+            base = record;
+        }
+        base
+    }
+
+    fn controller(e: &mut Engine) -> Ptr<NiPSysEmitterCtlr> {
+        e.new_object::<NiPSysEmitterCtlr>()
+    }
+
+    #[test]
+    fn stop_clears_the_last_scaled_time_and_stops_the_controller() {
+        let mut e = Engine::new();
+        e.map(NO_TIME, 4);
+        e.set_global::<u32>(NO_TIME, 0xff7f_ffff);
+        e.register(TIME_CONTROLLER_STOP, |_, _| Ret::default());
+        let this = controller(&mut e);
+        e.call_log = Some(vec![]);
+        e.call(0x00c1_ba30, &args![this]);
+        assert_eq!(
+            e.get(this, NiPSysEmitterCtlr::m_fLastScaledTime),
+            0xff7f_ffff
+        );
+        assert_eq!(calls_to(&e, TIME_CONTROLLER_STOP), vec![vec![this.addr()]]);
+    }
+
+    #[test]
+    fn interpolator_ids_are_the_two_names() {
+        let mut e = Engine::new();
+        e.map(BIRTH_RATE_NAME, 8);
+        e.set_global::<u32>(BIRTH_RATE_NAME, 0x0100_0010);
+        e.set_global::<u32>(EMITTER_ACTIVE_NAME, 0x0100_0020);
+        let id = |e: &mut Engine, index: u32| e.call(0x00c1_ba50, &args![0u32, index]).u32();
+        assert_eq!(id(&mut e, 0), 0x0100_0010);
+        assert_eq!(id(&mut e, 1), 0x0100_0020);
+        assert_eq!(id(&mut e, 2), 0);
+        // Only the low 16 bits of the index word count.
+        assert_eq!(id(&mut e, 0x0001_0001), 0x0100_0020);
+    }
+
+    #[test]
+    fn pose_interpolators_are_made_for_the_two_indices() {
+        let mut e = Engine::new();
+        e.register(NI_NEW, |e, a| answer(e.mem.alloc(a[0])));
+        e.register(FLOAT_INTERPOLATOR_WITH_VALUE, |_, a| answer(a[0] + 1));
+        e.register(BOOL_INTERPOLATOR_WITH_VALUE, |_, a| answer(a[0] + 2));
+        e.call_log = Some(vec![]);
+        let made = e.call(0x00c1_bad0, &args![0u32, 0u32]).u32();
+        let float = calls_to(&e, FLOAT_INTERPOLATOR_WITH_VALUE);
+        assert_eq!(float, vec![vec![made - 1, 0]]);
+        let made = e.call(0x00c1_bad0, &args![0u32, 1u32]).u32();
+        assert_eq!(
+            calls_to(&e, BOOL_INTERPOLATOR_WITH_VALUE),
+            vec![vec![made - 2, 0]]
+        );
+        assert_eq!(calls_to(&e, NI_NEW), vec![vec![0x18], vec![0x18]]);
+        assert_eq!(e.call(0x00c1_bad0, &args![0u32, 2u32]).u32(), 0);
+        assert_eq!(calls_to(&e, NI_NEW).len(), 2);
+        e.register(NI_NEW, |_, _| Ret::default());
+        assert_eq!(e.call(0x00c1_bad0, &args![0u32, 0u32]).u32(), 0);
+        assert_eq!(e.call(0x00c1_bad0, &args![0u32, 1u32]).u32(), 0);
+        assert_eq!(calls_to(&e, FLOAT_INTERPOLATOR_WITH_VALUE).len(), 1);
+        assert_eq!(calls_to(&e, BOOL_INTERPOLATOR_WITH_VALUE).len(), 1);
+    }
+
+    #[test]
+    fn guarantee_time_range_reaches_the_emitter_active_interpolator() {
+        const GUARANTEE: u32 = 0x0000_20c4;
+        let mut e = Engine::new();
+        e.register(SINGLE_GUARANTEE_TIME_RANGE, |_, _| Ret::default());
+        e.register(GUARANTEE, |_, _| Ret::default());
+        let this = controller(&mut e);
+        e.call_log = Some(vec![]);
+        // A signalling NaN start comes through the x87 stack quiet.
+        e.call(0x00c1_bbc0, &args![this, 0x7f80_0001u32, 2.0f32]);
+        assert_eq!(
+            calls_to(&e, SINGLE_GUARANTEE_TIME_RANGE),
+            vec![vec![this.addr(), 0x7fc0_0001, 2.0f32.to_bits()]]
+        );
+        assert!(calls_to(&e, GUARANTEE).is_empty());
+        let active = object(&mut e, &[(0xc4, GUARANTEE)]);
+        e.set(
+            this,
+            NiPSysEmitterCtlr::m_spEmitterActiveInterpolator,
+            active,
+        );
+        e.call(0x00c1_bbc0, &args![this, 1.0f32, 2.0f32]);
+        assert_eq!(
+            calls_to(&e, GUARANTEE),
+            vec![vec![active, 1.0f32.to_bits(), 2.0f32.to_bits()]]
+        );
+    }
+
+    #[test]
+    fn reset_time_extrema_widens_the_range_with_the_active_interpolator() {
+        const BIRTH_RANGE: u32 = 0x0000_30c0;
+        const ACTIVE_RANGE: u32 = 0x0000_31c0;
+        let mut e = Engine::new();
+        e.register(BIRTH_RANGE, |e, a| {
+            e.mem.set_f32(a[1], 1.0);
+            e.mem.set_f32(a[2], 2.0);
+            Ret::default()
+        });
+        // The active range comes from the words at 0x0f00_0000.
+        e.map(0x0f00_0000, 8);
+        e.register(ACTIVE_RANGE, |e, a| {
+            let (start, end) = (e.mem.u32(0x0f00_0000), e.mem.u32(0x0f00_0004));
+            e.mem.set_u32(a[1], start);
+            e.mem.set_u32(a[2], end);
+            Ret::default()
+        });
+        let this = controller(&mut e);
+        let birth = object(&mut e, &[(0xc0, BIRTH_RANGE)]);
+        let active = object(&mut e, &[(0xc0, ACTIVE_RANGE)]);
+        e.set(this, NiPSysEmitterCtlr::m_spInterpolator, birth);
+        e.set(
+            this,
+            NiPSysEmitterCtlr::m_spEmitterActiveInterpolator,
+            active,
+        );
+        let range = |e: &mut Engine, start: u32, end: u32| {
+            e.mem.set_u32(0x0f00_0000, start);
+            e.mem.set_u32(0x0f00_0004, end);
+            e.call(0x00c1_bc10, &args![this]);
+            let lo = e.mem.u32(this.addr() + 0x14);
+            let hi = e.mem.u32(this.addr() + 0x18);
+            (lo, hi)
+        };
+        let (one, two) = (1.0f32.to_bits(), 2.0f32.to_bits());
+        assert_eq!(
+            range(&mut e, 0.5f32.to_bits(), 3.0f32.to_bits()),
+            (0.5f32.to_bits(), 3.0f32.to_bits())
+        );
+        assert_eq!(
+            range(&mut e, 1.5f32.to_bits(), 1.0f32.to_bits()),
+            (one, two)
+        );
+        assert_eq!(range(&mut e, 0x7fc0_0000, 0xffc0_0000), (one, two));
+        // Flag 0x20 skips everything.
+        e.set(this, NiPSysEmitterCtlr::m_fLastScaledTime, 0);
+        e.mem.set_u8(this.addr() + 8, 0x20);
+        e.mem.set_u32(this.addr() + 0x14, 0);
+        e.call_log = Some(vec![]);
+        e.call(0x00c1_bc10, &args![this]);
+        assert!(calls_to(&e, BIRTH_RANGE).is_empty());
+        assert_eq!(e.mem.u32(this.addr() + 0x14), 0);
+    }
+
+    #[test]
+    fn register_streamables_adds_the_emitter_active_interpolator() {
+        const REGISTER: u32 = 0x0000_4054;
+        let mut e = Engine::new();
+        e.register(MODIFIER_CTLR_REGISTER_STREAMABLES, |_, _| answer(0));
+        e.register(REGISTER, |_, _| answer(0));
+        let this = controller(&mut e);
+        let active = object(&mut e, &[(0x54, REGISTER)]);
+        e.set(
+            this,
+            NiPSysEmitterCtlr::m_spEmitterActiveInterpolator,
+            active,
+        );
+        e.call_log = Some(vec![]);
+        assert!(!e.call(0x00c1_be10, &args![this, 0x500u32]).bool());
+        assert!(calls_to(&e, REGISTER).is_empty());
+        e.register(MODIFIER_CTLR_REGISTER_STREAMABLES, |_, _| answer(1));
+        assert!(e.call(0x00c1_be10, &args![this, 0x500u32]).bool());
+        assert_eq!(calls_to(&e, REGISTER), vec![vec![active, 0x500]]);
+        e.set(this, NiPSysEmitterCtlr::m_spEmitterActiveInterpolator, 0);
+        assert!(e.call(0x00c1_be10, &args![this, 0x500u32]).bool());
+        assert_eq!(calls_to(&e, REGISTER).len(), 1);
+    }
+
+    #[test]
+    fn save_binary_saves_the_emitter_active_link() {
+        const SAVE_LINK: u32 = 0x0000_5030;
+        let mut e = Engine::new();
+        e.register(MODIFIER_CTLR_SAVE_BINARY, |_, _| Ret::default());
+        e.register(SAVE_LINK, |_, _| Ret::default());
+        let this = controller(&mut e);
+        e.set(
+            this,
+            NiPSysEmitterCtlr::m_spEmitterActiveInterpolator,
+            0x777,
+        );
+        let stream = object(&mut e, &[(0x30, SAVE_LINK)]);
+        e.call_log = Some(vec![]);
+        e.call(0x00c1_be40, &args![this, stream]);
+        assert_eq!(
+            calls_to(&e, MODIFIER_CTLR_SAVE_BINARY),
+            vec![vec![this.addr(), stream]]
+        );
+        assert_eq!(calls_to(&e, SAVE_LINK), vec![vec![stream, 0x777]]);
+    }
+
+    #[test]
+    fn is_equal_compares_the_emitter_active_interpolators() {
+        const EQUAL: u32 = 0x0000_605c;
+        let mut e = Engine::new();
+        e.register(MODIFIER_CTLR_IS_EQUAL, |_, _| answer(1));
+        e.register(EQUAL, |_, a| answer(u32::from(a[1] == 0x999)));
+        let this = controller(&mut e);
+        let other = controller(&mut e);
+        let call = |e: &mut Engine| e.call(0x00c1_be60, &args![this, other]).bool();
+        assert!(call(&mut e));
+        e.set(
+            this,
+            NiPSysEmitterCtlr::m_spEmitterActiveInterpolator,
+            0x999,
+        );
+        assert!(!call(&mut e));
+        let theirs = object(&mut e, &[(0x5c, EQUAL)]);
+        e.set(
+            other,
+            NiPSysEmitterCtlr::m_spEmitterActiveInterpolator,
+            theirs,
+        );
+        e.call_log = Some(vec![]);
+        assert!(call(&mut e));
+        assert_eq!(calls_to(&e, EQUAL), vec![vec![theirs, 0x999]]);
+        e.set(
+            this,
+            NiPSysEmitterCtlr::m_spEmitterActiveInterpolator,
+            0x998,
+        );
+        assert!(!call(&mut e));
+        e.set(this, NiPSysEmitterCtlr::m_spEmitterActiveInterpolator, 0);
+        assert!(!call(&mut e));
+        e.register(MODIFIER_CTLR_IS_EQUAL, |_, _| answer(0));
+        e.set(other, NiPSysEmitterCtlr::m_spEmitterActiveInterpolator, 0);
+        assert!(!call(&mut e));
+    }
+
+    #[test]
+    fn replace_keys_makes_bool_data_when_needed() {
+        let mut e = Engine::new();
+        e.register(NI_NEW, |e, a| answer(e.mem.alloc(a[0])));
+        e.register(OBJECT_CONSTRUCTOR, |_, _| Ret::default());
+        e.register(BOOL_DATA_REPLACE_ANIM, |_, _| Ret::default());
+        e.register(POINTER_ASSIGN, |e, a| {
+            e.mem.set_u32(a[0], a[1]);
+            Ret::default()
+        });
+        let this: Ptr = Ptr::new(e.mem.alloc(0x18));
+        e.mem.set_u32(this.addr() + 0x14, 0x55);
+        e.call_log = Some(vec![]);
+        // No keys and no data: nothing.
+        e.call(0x00c1_bf10, &args![this, 0x100u32, 2u32, 0u32]);
+        assert!(calls_to(&e, BOOL_DATA_REPLACE_ANIM).is_empty());
+        e.call(0x00c1_bf10, &args![this, 0x100u32, 2u32, 3u32]);
+        let data = e.mem.u32(this.addr() + 0x10);
+        assert_eq!(calls_to(&e, NI_NEW), vec![vec![0x18]]);
+        assert_eq!(calls_to(&e, OBJECT_CONSTRUCTOR), vec![vec![data]]);
+        assert_eq!(e.mem.u32(data), NI_BOOL_DATA_VTABLE);
+        assert_eq!(
+            calls_to(&e, POINTER_ASSIGN),
+            vec![vec![this.addr() + 0x10, data]]
+        );
+        assert_eq!(
+            calls_to(&e, BOOL_DATA_REPLACE_ANIM),
+            vec![vec![data, 0x100, 3, 2]]
+        );
+        assert_eq!(e.mem.u32(this.addr() + 0x14), 0);
+        // Data already there: no new one. Then no keys empties it.
+        e.call(0x00c1_bf10, &args![this, 0x200u32, 1u32, 4u32]);
+        assert_eq!(calls_to(&e, NI_NEW).len(), 1);
+        e.call(0x00c1_bf10, &args![this, 0x200u32, 1u32, 0u32]);
+        let replaced = calls_to(&e, BOOL_DATA_REPLACE_ANIM);
+        assert_eq!(replaced[1], vec![data, 0x200, 4, 1]);
+        assert_eq!(replaced[2], vec![data, 0, 0, 0]);
+    }
+
+    #[test]
+    fn replace_keys_assigns_null_when_the_allocation_fails() {
+        let mut e = Engine::new();
+        e.register(NI_NEW, |_, _| Ret::default());
+        e.register(BOOL_DATA_REPLACE_ANIM, |_, _| Ret::default());
+        e.register(POINTER_ASSIGN, |_, _| Ret::default());
+        let this: Ptr = Ptr::new(e.mem.alloc(0x18));
+        e.call_log = Some(vec![]);
+        e.call(0x00c1_bf10, &args![this, 0x100u32, 2u32, 3u32]);
+        assert_eq!(
+            calls_to(&e, POINTER_ASSIGN),
+            vec![vec![this.addr() + 0x10, 0]]
+        );
+        assert_eq!(
+            calls_to(&e, BOOL_DATA_REPLACE_ANIM),
+            vec![vec![0, 0x100, 3, 2]]
+        );
+    }
+
+    /// A target whose modifier lookup (`00c1b0f0`) answers a modifier with
+    /// `rtti` (null for 0); the RTTI and the answer live at `0f100000` and
+    /// `0f100004` for the tests to change.
+    fn modifier_target(e: &mut Engine, rtti: u32) -> u32 {
+        const GET_RTTI: u32 = 0x0000_7008;
+        e.map(0x0f10_0000, 4);
+        e.mem.set_u32(0x0f10_0000, rtti);
+        e.register(GET_RTTI, |e, _| answer(e.mem.u32(0x0f10_0000)));
+        let modifier = object(e, &[(0x8, GET_RTTI)]);
+        e.map(0x0f10_0004, 4);
+        e.mem
+            .set_u32(0x0f10_0004, if rtti == 0 { 0 } else { modifier });
+        e.register(FIND_MODIFIER, |e, _| answer(e.mem.u32(0x0f10_0004)));
+        e.mem.alloc(0x10)
+    }
+
+    #[test]
+    fn target_is_required_type_needs_an_emitter_modifier() {
+        let mut e = Engine::new();
+        e.register(SINGLE_TARGET_IS_REQUIRED_TYPE, |_, _| answer(1));
+        let chain = rtti_chain(&mut e, &[0x0f20_0000, NI_P_SYS_EMITTER_RTTI, 0x0f20_0010]);
+        let target = modifier_target(&mut e, chain);
+        let this = controller(&mut e);
+        e.mem.set_u32(this.addr() + 0x2c, target);
+        e.call_log = Some(vec![]);
+        assert!(e.call(0x00c1_bff0, &args![this]).bool());
+        assert_eq!(
+            calls_to(&e, FIND_MODIFIER),
+            vec![vec![target, this.addr() + 0x38]]
+        );
+        e.mem.set_u32(0x0f10_0000, 0x0f20_0010);
+        assert!(!e.call(0x00c1_bff0, &args![this]).bool());
+        e.mem.set_u32(0x0f10_0000, chain);
+        e.mem.set_u32(0x0f10_0004, 0);
+        assert!(!e.call(0x00c1_bff0, &args![this]).bool());
+        e.register(SINGLE_TARGET_IS_REQUIRED_TYPE, |_, _| answer(0));
+        assert!(!e.call(0x00c1_bff0, &args![this]).bool());
+        assert_eq!(calls_to(&e, FIND_MODIFIER).len(), 3);
+    }
+
+    #[test]
+    fn interp_target_is_correct_type_needs_an_emitter_modifier() {
+        let mut e = Engine::new();
+        e.register(MODIFIER_CTLR_INTERP_TARGET_IS_CORRECT_TYPE, |_, _| {
+            answer(1)
+        });
+        let chain = rtti_chain(&mut e, &[0x0f20_0000, NI_P_SYS_EMITTER_RTTI]);
+        let target = modifier_target(&mut e, chain);
+        let this = controller(&mut e);
+        e.call_log = Some(vec![]);
+        assert!(e.call(0x00c2_b7d0, &args![this, target]).bool());
+        assert_eq!(
+            calls_to(&e, MODIFIER_CTLR_INTERP_TARGET_IS_CORRECT_TYPE),
+            vec![vec![this.addr(), target]]
+        );
+        assert_eq!(
+            calls_to(&e, FIND_MODIFIER),
+            vec![vec![target, this.addr() + 0x38]]
+        );
+        e.mem.set_u32(0x0f10_0000, 0x0f20_0000 + 0x100);
+        e.map(0x0f20_0100, 8);
+        assert!(!e.call(0x00c2_b7d0, &args![this, target]).bool());
+        e.mem.set_u32(0x0f10_0004, 0);
+        assert!(!e.call(0x00c2_b7d0, &args![this, target]).bool());
+        e.register(MODIFIER_CTLR_INTERP_TARGET_IS_CORRECT_TYPE, |_, _| {
+            answer(0)
+        });
+        assert!(!e.call(0x00c2_b7d0, &args![this, target]).bool());
+        assert_eq!(calls_to(&e, FIND_MODIFIER).len(), 3);
+    }
+
+    #[test]
+    fn interpolator_types_follow_the_index() {
+        const GET_RTTI: u32 = 0x0000_8008;
+        let mut e = Engine::new();
+        e.map(0x0f30_0000, 4);
+        e.register(GET_RTTI, |e, _| answer(e.mem.u32(0x0f30_0000)));
+        e.register(IS_KIND_OF, |_, _| answer(0));
+        let interpolator = object(&mut e, &[(0x8, GET_RTTI)]);
+        let float = rtti_chain(&mut e, &[0x0f40_0000, NI_FLOAT_INTERPOLATOR_RTTI]);
+        let blend = rtti_chain(&mut e, &[0x0f40_0100, BIRTH_RATE_BLEND_RTTI]);
+        let boolean = rtti_chain(&mut e, &[NI_BOOL_INTERPOLATOR_RTTI]);
+        let other = rtti_chain(&mut e, &[0x0f40_0200]);
+        let check = |e: &mut Engine, rtti: u32, object: u32, index: u32| {
+            e.mem.set_u32(0x0f30_0000, rtti);
+            e.call(0x00c1_c040, &args![0u32, object, index]).bool()
+        };
+        assert!(check(&mut e, float, interpolator, 0));
+        assert!(check(&mut e, blend, interpolator, 0));
+        assert!(!check(&mut e, other, interpolator, 0));
+        assert!(!check(&mut e, boolean, interpolator, 0));
+        assert!(!check(&mut e, float, 0, 0));
+        assert!(check(&mut e, boolean, interpolator, 1));
+        assert!(!check(&mut e, float, interpolator, 1));
+        assert!(!check(&mut e, float, interpolator, 2));
+        e.call_log = Some(vec![]);
+        assert!(!check(&mut e, float, 0, 1));
+        assert_eq!(
+            calls_to(&e, IS_KIND_OF),
+            vec![vec![NI_BLEND_BOOL_INTERPOLATOR_RTTI, 0]]
+        );
+        e.register(IS_KIND_OF, |_, _| answer(1));
+        assert!(check(&mut e, float, interpolator, 1));
+        // A null GetRTTI answer ends a walk.
+        assert!(!check(&mut e, 0, interpolator, 0));
+    }
+
+    #[test]
+    fn named_constructor_makes_and_releases_the_name() {
+        let mut e = Engine::new();
+        test_stream::interlocked(&mut e);
+        e.map(NULL_FIXED_STRING, 4);
+        e.map(NO_TIME, 4);
+        e.set_global::<u32>(NO_TIME, 0xff7f_ffff);
+        let handle = e.mem.alloc(0x10) + 8;
+        e.mem.set_u32(handle - 8, 2);
+        e.map(0x0f50_0000, 4);
+        e.mem.set_u32(0x0f50_0000, handle);
+        e.register(FIXED_STRING_FROM_TEXT, |e, _| {
+            answer(e.mem.u32(0x0f50_0000))
+        });
+        e.map(0x0f50_0004, 4);
+        e.register(MODIFIER_CTLR_NAMED_CONSTRUCTOR, |e, a| {
+            let name = e.mem.u32(a[1]);
+            e.mem.set_u32(0x0f50_0004, name);
+            Ret::default()
+        });
+        let this = controller(&mut e);
+        e.set(this, NiPSysEmitterCtlr::m_kParticleAgesSize, 9);
+        e.call_log = Some(vec![]);
+        let made = e.call(0x00c1_c280, &args![this, 0x0100_0000u32]).u32();
+        assert_eq!(made, this.addr());
+        assert_eq!(
+            calls_to(&e, FIXED_STRING_FROM_TEXT),
+            vec![vec![0x0100_0000]]
+        );
+        assert_eq!(e.mem.u32(0x0f50_0004), handle);
+        assert_eq!(e.mem.u32(handle - 8), 1);
+        assert_eq!(e.mem.u32(this.addr()), NI_P_SYS_EMITTER_CTLR_VTABLE);
+        assert_eq!(
+            e.get(this, NiPSysEmitterCtlr::m_fLastScaledTime),
+            0xff7f_ffff
+        );
+        assert_eq!(e.get(this, NiPSysEmitterCtlr::m_kParticleAgesSize), 0);
+        // A null name passes the null handle, which is not released.
+        e.set_global::<u32>(NULL_FIXED_STRING, 0x0f50_0100);
+        e.call(0x00c1_c280, &args![this, 0u32]);
+        assert_eq!(calls_to(&e, FIXED_STRING_FROM_TEXT).len(), 1);
+        assert_eq!(e.mem.u32(0x0f50_0004), 0x0f50_0100);
+        assert_eq!(calls_to(&e, INTERLOCKED_DECREMENT).len(), 1);
+    }
+
+    #[test]
+    fn viewer_strings_add_the_name_and_the_active_interpolator() {
+        const STRINGS: u32 = 0x0000_9060;
+        let mut e = Engine::new();
+        e.register(MODIFIER_CTLR_GET_VIEWER_STRINGS, |_, _| Ret::default());
+        e.register(STRINGS, |_, _| Ret::default());
+        viewer_test::counting(&mut e, &[VIEWER_STRING]);
+        e.map(NI_P_SYS_EMITTER_CTLR_RTTI, 4);
+        e.set_global::<u32>(NI_P_SYS_EMITTER_CTLR_RTTI, 0x0100_0040);
+        let strings = viewer_test::strings(&mut e, 8);
+        let this = controller(&mut e);
+        e.call_log = Some(vec![]);
+        e.call(0x00c1_ce70, &args![this, strings]);
+        assert_eq!(viewer_test::collected(&e, strings), vec![1]);
+        assert_eq!(calls_to(&e, VIEWER_STRING), vec![vec![0x0100_0040]]);
+        assert!(calls_to(&e, STRINGS).is_empty());
+        let active = object(&mut e, &[(0x60, STRINGS)]);
+        e.set(
+            this,
+            NiPSysEmitterCtlr::m_spEmitterActiveInterpolator,
+            active,
+        );
+        e.call(0x00c1_ce70, &args![this, strings]);
+        assert_eq!(calls_to(&e, STRINGS), vec![vec![active, strings]]);
+        assert_eq!(
+            calls_to(&e, MODIFIER_CTLR_GET_VIEWER_STRINGS),
+            vec![vec![this.addr(), strings], vec![this.addr(), strings]]
+        );
     }
 }

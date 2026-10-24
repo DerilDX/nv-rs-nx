@@ -2238,9 +2238,202 @@ pub fn bs_shader_pp_lighting_property_get_render_passes_2x(
     });
 }
 
+/// A pass of `kind` added to the array at `array` (`RenderPassArray::Add`: geometry, kind,
+/// then six words).
+fn add_pass_to(e: &mut Engine, array: u32, geometry: u32, kind: u32, words: [u32; 6]) {
+    e.call(
+        RENDER_PASS_ARRAY_ADD,
+        &args![array, geometry, kind, words[0], words[1], words[2], words[3], words[4], words[5]],
+    );
+}
+
+// Translated from 00bdc030 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (unit `bsshaderpplightingproperty_passes_2x.cpp`), `thiscall`,
+/// five words (a geometry, a u16 counter, a byte, a byte flag by address, a byte): with the
+/// third word's byte 1 a pass 0x251 (0x250 when the fifth's byte is clear) is added to the
+/// passes (+0x3c) with the flag byte, else the counter goes up; the flag byte is cleared.
+/// Answers 0.
+pub fn fn_00bdc030(
+    e: &mut Engine,
+    this: Ptr,
+    geometry: u32,
+    counter: Ptr,
+    add: u8,
+    flag: Ptr,
+    second: u8,
+) -> u32 {
+    let kind = if second != 0 { 0x251 } else { 0x250 };
+    if add == 1 {
+        let byte = u32::from(e.mem.u8(flag.addr()));
+        let array = e.mem.u32(this.addr() + PASSES);
+        add_pass_to(e, array, geometry, kind, [byte, 0, 0, 0, 0, 0]);
+    } else {
+        let count = e.mem.u16(counter.addr()).wrapping_add(1);
+        e.mem.set_u16(counter.addr(), count);
+    }
+    e.mem.set_u8(flag.addr(), 0);
+    0
+}
+
+// Translated from 00bdc0d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (unit `bsshaderpplightingproperty_passes_2x.cpp`), `thiscall`,
+/// thirteen words: a geometry, two words passed on, a u16 counter, a byte, a byte flag by
+/// address and seven bytes (the tenth word not read). The seventh, eighth, ninth, eleventh,
+/// twelfth and thirteenth bytes pick a pass kind 0xd7 to 0xe8 (some combinations add none and
+/// leave the counter); with the fifth byte 1 that pass is added to the passes (+0x3c) with
+/// (1, 2, the two words, 0, 0), else the counter goes up. The flag byte is cleared. Answers 0.
+pub fn fn_00bdc0d0(
+    e: &mut Engine,
+    this: Ptr,
+    geometry: u32,
+    first: u32,
+    second: u32,
+    counter: Ptr,
+    add: u8,
+    flag: Ptr,
+    a: u8,
+    b: u8,
+    c: u8,
+    _unused_9: u32,
+    d: u8,
+    f: u8,
+    g: u8,
+) -> u32 {
+    let pick = |yes: u32, no: u32, test: u8| if test == 0 { yes } else { no };
+    let kind = if a == 0 {
+        if b == 0 {
+            if c == 0 {
+                if f == 0 {
+                    Some(if d == 0 {
+                        pick(0xd7, 0xdf, g)
+                    } else {
+                        pick(0xe0, 0xe8, g)
+                    })
+                } else {
+                    Some(pick(0xd9, 0xe2, d))
+                }
+            } else {
+                Some(pick(0xdb, 0xe4, d))
+            }
+        } else if c != 0 {
+            None
+        } else {
+            Some(pick(0xd8, 0xe1, d))
+        }
+    } else if b == 0 {
+        if c == 0 {
+            if f != 0 {
+                None
+            } else {
+                Some(pick(0xdc, 0xe5, d))
+            }
+        } else {
+            Some(pick(0xde, 0xe7, d))
+        }
+    } else if c != 0 {
+        None
+    } else {
+        Some(pick(0xdd, 0xe6, d))
+    };
+    if let Some(kind) = kind {
+        if add == 1 {
+            let array = e.mem.u32(this.addr() + PASSES);
+            add_pass_to(e, array, geometry, kind, [1, 2, first, second, 0, 0]);
+            e.mem.set_u8(flag.addr(), 0);
+            return 0;
+        }
+        let count = e.mem.u16(counter.addr()).wrapping_add(1);
+        e.mem.set_u16(counter.addr(), count);
+    }
+    e.mem.set_u8(flag.addr(), 0);
+    0
+}
+
+// Translated from 00bde170 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSShaderPPLightingProperty::AddLocalMapPass_2x` (Xbox PDB), `thiscall`, three words (a
+/// geometry, two bytes): when the array at +0x48 has no passes (+0x10), adds a pass 0x1ee
+/// (third byte set), 0x1ec (second clear) or 0x1ed to it with (1, 0, 0, 0, 0, 0).
+pub fn bs_shader_pp_lighting_property_add_local_map_pass_2x(
+    e: &mut Engine,
+    this: Ptr,
+    geometry: u32,
+    second: u8,
+    third: u8,
+) {
+    let array = e.mem.u32(this.addr() + 0x48);
+    if e.mem.u32(array + 0x10) != 0 {
+        return;
+    }
+    let kind = if third != 0 {
+        0x1ee
+    } else if second == 0 {
+        0x1ec
+    } else {
+        0x1ed
+    };
+    add_pass_to(e, array, geometry, kind, [1, 0, 0, 0, 0, 0]);
+}
+
+// Translated from 00bdf6c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (unit `bsshaderpplightingproperty_passes_2x.cpp`), `thiscall`,
+/// two words (a geometry, a byte): adds to the array at +0x54 a pass 0x22f (flag 0x4000 of
+/// +0x20), 0x61 (bit 1 of +0x24), or without the byte 0x63 when the geometry's +0x9c has bit 9
+/// of its u16 +0x18 set and else 0x62 (with the byte, none); then with passes in that array
+/// (+0x10) its first pass's byte +6 becomes 10 (bit 1 or 2 of +0x24), 1 or 4 (flag 0x4000000
+/// of +0x20, by bit 21 of +0x24) or 0.
+pub fn fn_00bdf6c0(e: &mut Engine, this: Ptr, geometry: u32, skip: u8) {
+    let base = this.addr();
+    let kind = if e.mem.u32(base + 0x20) & 0x4000 != 0 {
+        Some(0x22f)
+    } else if e.mem.u8(base + 0x24) & 2 != 0 {
+        Some(0x61)
+    } else if skip != 0 {
+        None
+    } else {
+        let data = e.mem.u32(geometry + 0x9c);
+        if data != 0 && (e.mem.u16(data + 0x18) >> 9) & 1 != 0 {
+            Some(0x63)
+        } else {
+            Some(0x62)
+        }
+    };
+    if let Some(kind) = kind {
+        let array = e.mem.u32(base + 0x54);
+        add_pass_to(e, array, geometry, kind, [1, 0, 0, 0, 0, 0]);
+    }
+    let array = e.mem.u32(base + 0x54);
+    if e.mem.u32(array + 0x10) == 0 {
+        return;
+    }
+    let pass = e.mem.u32(e.mem.u32(array + 4));
+    let flags = e.mem.u32(base + 0x24);
+    let hint = if flags & 2 != 0 || flags & 4 != 0 {
+        10
+    } else if e.mem.u32(base + 0x20) & 0x400_0000 != 0 {
+        if flags & 0x20_0000 != 0 {
+            1
+        } else {
+            4
+        }
+    } else {
+        0
+    };
+    e.mem.set_u8(pass + 6, hint);
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x00bd_c030, fn_00bdc030(Ptr, u32, Ptr, u8, Ptr, u8) -> u32),
+        entry!(
+            0x00bd_c0d0,
+            fn_00bdc0d0(Ptr, u32, u32, u32, Ptr, u8, Ptr, u8, u8, u8, u32, u8, u8, u8) -> u32
+        ),
+        entry!(
+            0x00bd_e170,
+            bs_shader_pp_lighting_property_add_local_map_pass_2x(Ptr, u32, u8, u8)
+        ),
+        entry!(0x00bd_f6c0, fn_00bdf6c0(Ptr, u32, u8)),
         entry!(
             0x00bd_bf60,
             bs_shader_pp_lighting_property_add_envmap_pass_2x(
@@ -2971,5 +3164,171 @@ mod tests {
             &args![this, geometry, 6u32, count, 0u32, accumulator, 1u32],
         );
         assert_eq!(pass_enums(&e, this), vec![(0x9840, 0, 0), (0x153, 0, 1)]);
+    }
+}
+
+#[cfg(test)]
+mod n070_tests {
+    use super::*;
+
+    fn adds(e: &Engine) -> Vec<Vec<u32>> {
+        e.call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|(a, _)| *a == RENDER_PASS_ARRAY_ADD)
+            .map(|(_, w)| w.clone())
+            .collect()
+    }
+
+    fn rig() -> (Engine, u32) {
+        let mut e = Engine::new();
+        e.register(RENDER_PASS_ARRAY_ADD, |_, _| Ret::default());
+        let this = e.mem.alloc(0x60);
+        for (offset, array) in [(PASSES, 0x3c00u32), (0x48, 0), (0x54, 0)] {
+            let value = if array != 0 { array } else { e.mem.alloc(0x14) };
+            e.mem.set_u32(this + offset, value);
+        }
+        e.call_log = Some(vec![]);
+        (e, this)
+    }
+
+    #[test]
+    fn fn_00bdc030_adds_or_counts() {
+        let (mut e, this) = rig();
+        let counter = e.mem.alloc(4);
+        let flag = e.mem.alloc(4);
+        e.mem.set_u8(flag, 3);
+        e.call(
+            0x00bd_c030,
+            &args![this, 0x77u32, counter, 1u32, flag, 1u32],
+        );
+        assert_eq!(adds(&e), vec![vec![0x3c00, 0x77, 0x251, 3, 0, 0, 0, 0, 0]]);
+        assert_eq!(e.mem.u8(flag), 0);
+        e.call(
+            0x00bd_c030,
+            &args![this, 0x77u32, counter, 1u32, flag, 0u32],
+        );
+        assert_eq!(adds(&e)[1][2], 0x250);
+        e.call(
+            0x00bd_c030,
+            &args![this, 0x77u32, counter, 0u32, flag, 0u32],
+        );
+        assert_eq!(e.mem.u16(counter), 1);
+        assert_eq!(adds(&e).len(), 2);
+    }
+
+    #[test]
+    fn fn_00bdc0d0_picks_the_kind() {
+        let (mut e, this) = rig();
+        let counter = e.mem.alloc(4);
+        let flag = e.mem.alloc(4);
+        // (a, b, c, d, f, g) -> kind (0 = none).
+        let cases: [([u32; 6], u32); 14] = [
+            ([0, 0, 0, 0, 0, 0], 0xd7),
+            ([0, 0, 0, 0, 0, 1], 0xdf),
+            ([0, 0, 0, 1, 0, 0], 0xe0),
+            ([0, 0, 0, 1, 0, 1], 0xe8),
+            ([0, 0, 0, 0, 1, 0], 0xd9),
+            ([0, 0, 0, 1, 1, 0], 0xe2),
+            ([0, 0, 1, 0, 0, 0], 0xdb),
+            ([0, 0, 1, 1, 0, 0], 0xe4),
+            ([0, 1, 0, 1, 0, 0], 0xe1),
+            ([0, 1, 1, 0, 0, 0], 0),
+            ([1, 0, 0, 0, 0, 0], 0xdc),
+            ([1, 0, 0, 0, 1, 0], 0),
+            ([1, 0, 1, 1, 0, 0], 0xe7),
+            ([1, 1, 0, 1, 0, 0], 0xe6),
+        ];
+        for ([a, b, c, d, f, g], kind) in cases {
+            e.call_log = Some(vec![]);
+            e.mem.set_u8(flag, 1);
+            e.call(
+                0x00bd_c0d0,
+                &args![
+                    this, 0x77u32, 0x11u32, 0x22u32, counter, 1u32, flag, a, b, c, 0u32, d, f, g
+                ],
+            );
+            let added = adds(&e);
+            if kind == 0 {
+                assert!(added.is_empty());
+            } else {
+                assert_eq!(
+                    added,
+                    vec![vec![0x3c00, 0x77, kind, 1, 2, 0x11, 0x22, 0, 0]]
+                );
+            }
+            assert_eq!(e.mem.u8(flag), 0);
+        }
+        // Without the add byte: the counter, but not for a combination without a kind.
+        e.call(
+            0x00bd_c0d0,
+            &args![
+                this, 0u32, 0u32, 0u32, counter, 0u32, flag, 0u32, 0u32, 0u32, 0u32, 0u32, 0u32,
+                0u32
+            ],
+        );
+        e.call(
+            0x00bd_c0d0,
+            &args![
+                this, 0u32, 0u32, 0u32, counter, 0u32, flag, 0u32, 1u32, 1u32, 0u32, 0u32, 0u32,
+                0u32
+            ],
+        );
+        assert_eq!(e.mem.u16(counter), 1);
+    }
+
+    #[test]
+    fn add_local_map_pass_2x_only_into_an_empty_array() {
+        let (mut e, this) = rig();
+        let array = e.mem.u32(this + 0x48);
+        for ((second, third), kind) in [((0u32, 1u32), 0x1ee), ((0, 0), 0x1ec), ((1, 0), 0x1ed)] {
+            e.call(0x00bd_e170, &args![this, 0x77u32, second, third]);
+            assert_eq!(
+                adds(&e).last().unwrap(),
+                &vec![array, 0x77, kind, 1, 0, 0, 0, 0, 0]
+            );
+        }
+        e.mem.set_u32(array + 0x10, 1);
+        e.call(0x00bd_e170, &args![this, 0x77u32, 0u32, 0u32]);
+        assert_eq!(adds(&e).len(), 3);
+    }
+
+    #[test]
+    fn fn_00bdf6c0_adds_and_sets_the_hint() {
+        let (mut e, this) = rig();
+        let array = e.mem.u32(this + 0x54);
+        let pass = e.mem.alloc(8);
+        let passes = e.mem.alloc(4);
+        e.mem.set_u32(passes, pass);
+        e.mem.set_u32(array + 4, passes);
+        let geometry = e.mem.alloc(0xa0);
+        let data = e.mem.alloc(0x1c);
+        e.mem.set_u16(data + 0x18, 0x200);
+        e.mem.set_u32(geometry + 0x9c, data);
+        e.call(0x00bd_f6c0, &args![this, geometry, 0u32]);
+        assert_eq!(adds(&e)[0][2], 0x63);
+        // No passes in the array: the hint stays.
+        assert_eq!(e.mem.u8(pass + 6), 0);
+        e.mem.set_u32(array + 0x10, 1);
+        e.mem.set_u16(data + 0x18, 0);
+        e.mem.set_u32(this + 0x20, 0x400_0000);
+        e.mem.set_u32(this + 0x24, 0x20_0000);
+        e.call(0x00bd_f6c0, &args![this, geometry, 0u32]);
+        assert_eq!(adds(&e)[1][2], 0x62);
+        assert_eq!(e.mem.u8(pass + 6), 1);
+        e.mem.set_u32(this + 0x24, 0);
+        e.call(0x00bd_f6c0, &args![this, geometry, 1u32]);
+        assert_eq!(adds(&e).len(), 2);
+        assert_eq!(e.mem.u8(pass + 6), 4);
+        e.mem.set_u32(this + 0x24, 2);
+        e.call(0x00bd_f6c0, &args![this, geometry, 1u32]);
+        assert_eq!(adds(&e)[2][2], 0x61);
+        assert_eq!(e.mem.u8(pass + 6), 10);
+        e.mem.set_u32(this + 0x20, 0x4000);
+        e.mem.set_u32(this + 0x24, 0);
+        e.call(0x00bd_f6c0, &args![this, geometry, 1u32]);
+        assert_eq!(adds(&e)[3][2], 0x22f);
+        assert_eq!(e.mem.u8(pass + 6), 0);
     }
 }

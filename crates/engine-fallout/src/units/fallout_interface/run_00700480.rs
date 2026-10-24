@@ -99,6 +99,33 @@ pub fn fn_00700650(e: &mut Engine, _unused_this: Ptr) {
     clear_records(e);
 }
 
+/// `MemoryManager` free (`00401030`, cdecl).
+const FREE: u32 = 0x0040_1030;
+
+// Translated from 007004b0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The `NiTPrimitiveArray<BGSMenuPacker::PackedMenu *>` scalar deleting destructor
+/// (`thiscall`, `RET 4`): the destructor (`007004e0`), then the block freed (`00401030`)
+/// when bit 0 of `flags` is set. Answers `this`.
+pub fn fn_007004b0(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    fn_007004e0(e, this);
+    if flags & 1 != 0 {
+        e.call(FREE, &args![this]);
+    }
+    this
+}
+
+// Translated from 00700530 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The `NiTArray<BGSMenuPacker::PackedMenu *, ...>` scalar deleting destructor
+/// (`thiscall`, `RET 4`): the destructor body (`00700500`), then the block freed when bit
+/// 0 of `flags` is set. Answers `this`.
+pub fn fn_00700530(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    fn_00700500(e, this);
+    if flags & 1 != 0 {
+        e.call(FREE, &args![this]);
+    }
+    this
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -108,6 +135,8 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x0070_0560, fn_00700560(Ptr, u16, u16) -> Ptr),
         entry!(0x0070_05d0, fn_007005d0(Ptr) -> Ptr),
         entry!(0x0070_0650, fn_00700650(Ptr)),
+        entry!(0x0070_04b0, fn_007004b0(Ptr, u32) -> Ptr),
+        entry!(0x0070_0530, fn_00700530(Ptr, u32) -> Ptr),
     ]
 }
 
@@ -237,5 +266,28 @@ mod b049_tests {
         e.call_log = Some(vec![]);
         e.call(0x0070_0650, &args![0u32]);
         check_records(&e);
+    }
+}
+
+#[cfg(test)]
+mod n059_tests {
+    use super::*;
+
+    #[test]
+    fn deleting_destructors_free_on_bit_zero() {
+        let mut e = Engine::new();
+        e.register(FREE, |_, _| Ret::default());
+        e.register(FREE_BLOCK, |_, _| Ret::default());
+        let this = e.mem.alloc(0x10);
+        e.mem.set_u32(this + 4, 0x4444);
+        for (address, frees) in [(0x0070_04b0u32, 1u32), (0x0070_0530, 0)] {
+            e.call_log = Some(vec![]);
+            assert_eq!(e.call(address, &args![this, frees]).u32(), this);
+            assert_eq!(e.mem.u32(this), ARRAY_VTABLE);
+            let log = e.call_log.take().unwrap();
+            let freed: Vec<_> = log.iter().filter(|(a, _)| *a == FREE).collect();
+            assert_eq!(freed.len(), frees as usize);
+            assert!(log.iter().any(|(a, w)| *a == FREE_BLOCK && w[0] == 0x4444));
+        }
     }
 }

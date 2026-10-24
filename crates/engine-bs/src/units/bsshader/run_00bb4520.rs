@@ -1003,9 +1003,146 @@ pub fn fn_00bb4520(e: &mut Engine, this: Ptr) -> Ptr {
     this
 }
 
+/// The `BSShaderPPLightingProperty` methods the jumps of this class reach: `00b68dc0`
+/// (unnamed, one word), `00b667e0` (unnamed, one word, answers a bool) and
+/// `BSShaderPPLightingProperty::PostLinkObject` (`00b68fe0`, one word), and
+/// `BSShaderPPLightingProperty::GetViewerStrings` (`00b690d0`, one word).
+const PP_LIGHTING_00B68DC0: u32 = 0x00b6_8dc0;
+const PP_LIGHTING_00B667E0: u32 = 0x00b6_67e0;
+const PP_LIGHTING_POST_LINK_OBJECT: u32 = 0x00b6_8fe0;
+const PP_LIGHTING_VIEWER_STRINGS: u32 = 0x00b6_90d0;
+
+// Translated from 00bb44f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (not a Ghidra function; vtable entries at `010b837c`, `010b995c`,
+/// `010bac44`, `010bcbac`): a jump to `00b68dc0` with the same `this` and word.
+pub fn fn_00bb44f0(e: &mut Engine, this: Ptr, word: u32) {
+    e.call(PP_LIGHTING_00B68DC0, &args![this, word]);
+}
+
+// Translated from 00bb4500 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (not a Ghidra function; vtable entries at `010b8384`, `010b9964`,
+/// `010bac4c`, `010bcbb4`): a jump to `00b667e0` with the same `this` and word; answers its
+/// bool.
+pub fn fn_00bb4500(e: &mut Engine, this: Ptr, word: u32) -> bool {
+    e.call(PP_LIGHTING_00B667E0, &args![this, word]).bool()
+}
+
+// Translated from 00bb4510 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (not a Ghidra function; vtable entries at `010b997c`,
+/// `010bcbcc`): a jump to `BSShaderPPLightingProperty::PostLinkObject` with the same `this`
+/// and word.
+pub fn fn_00bb4510(e: &mut Engine, this: Ptr, word: u32) {
+    e.call(PP_LIGHTING_POST_LINK_OBJECT, &args![this, word]);
+}
+
+// Translated from 00bb45b0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map: the `010b9910` class's destructor, `thiscall`. Stores the vtable
+/// and jumps to the `BSShaderPPLightingProperty` destructor (`00b67380`).
+pub fn fn_00bb45b0(e: &mut Engine, this: Ptr) {
+    e.mem.set_u32(this.addr(), VTABLE_010B9910);
+    e.call(PP_LIGHTING_DESTRUCTOR, &args![this]);
+}
+
+/// The class's RTTI record (`012007b0`), answered by `00bb45c0`.
+const RTTI_012007B0: u32 = 0x0120_07b0;
+
+// Translated from 00bb45c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (not a Ghidra function; vtable entries at `010b9918`,
+/// `010bcb68`; `ECX` unread): answers the address `012007b0`.
+pub fn fn_00bb45c0(_e: &mut Engine, _this: Ptr) -> Ptr {
+    Ptr::new(RTTI_012007B0)
+}
+
+// Translated from 00bb45d0 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 00bb45d0 - the C++ exception frame (FS:[0] chain, unwind state 0 for the allocation) is not translated.
+/// Unnamed in the engine map: the creator `RegisterStreamables` registers for this class
+/// (`Lighting30ShaderProperty` and `NoFaderShaderProperty`), no arguments. Allocates 0x108 bytes
+/// (`00aa13e0`); when that succeeds, the `00bb4520` constructor's body (inlined in the exe)
+/// runs on them. Answers the block or null.
+pub fn fn_00bb45d0(e: &mut Engine) -> u32 {
+    let block = e.call(NI_NEW, &args![0x108u32]).u32();
+    if block == 0 {
+        return 0;
+    }
+    fn_00bb4520(e, Ptr::new(block));
+    block
+}
+
+/// `BSShaderProperty::CheckCreateRenderPassArray`-like `00ba97b0` (unnamed, `thiscall`, one
+/// word) and the pass list at +0x50 it makes.
+const CHECK_CREATE_PASSES_50: u32 = 0x00ba_97b0;
+const PASSES_50: u32 = 0x50;
+
+// Translated from 00bb5c90 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (vtable entries at `010b99c8`, `010bcc18`), `thiscall` with one
+/// word, a geometry. Answers 0 when 0.0 is below the `float` +0xe0 (`FCOMP`, `TEST AH,5`, `JP`;
+/// a NaN goes on). Else makes the pass list +0x50 (`00ba97b0(1)`); when it is empty (+0x10),
+/// adds one pass for the geometry (`Add(geometry, pass, 1, 0, 0, 0, 0, 0)`): by whether the
+/// geometry's +0xb8 block has +0x28 set, bit 9 of the `u16` +0x18 of its +0x9c block (false
+/// without one) and bit 1 of the byte +0x20: 0x2ec/0x2ed, 0x2e6/0x2e7 with +0x28; 0x2e0/0x2e1,
+/// 0x2da/0x2db without (the second of each pair with bit 1, the first pair of each with bit 9).
+/// Answers the pass list.
+pub fn fn_00bb5c90(e: &mut Engine, this: Ptr, geometry: u32) -> u32 {
+    let base = this.addr();
+    let value = x87_m32(e.mem.u32(base + 0xe0));
+    if 0.0 < value {
+        return 0;
+    }
+    let block = e.mem.u32(geometry + 0x9c);
+    let mut bit9 = false;
+    if block != 0 {
+        bit9 = (e.mem.u16(block + 0x18) >> 9) & 1 != 0;
+    }
+    let data = e.mem.u32(geometry + 0xb8);
+    let set = e.mem.u32(data + 0x28) != 0;
+    e.call(CHECK_CREATE_PASSES_50, &args![base, 1u32]);
+    let list = e.mem.u32(base + PASSES_50);
+    if e.mem.u32(list + 0x10) != 0 {
+        return e.mem.u32(base + PASSES_50);
+    }
+    let bit1 = e.mem.u8(base + FLAGS0) & 2 != 0;
+    let pass: u32 = match (set, bit9, bit1) {
+        (true, true, true) => 0x2ed,
+        (true, true, false) => 0x2ec,
+        (true, false, true) => 0x2e7,
+        (true, false, false) => 0x2e6,
+        (false, true, true) => 0x2e1,
+        (false, true, false) => 0x2e0,
+        (false, false, true) => 0x2db,
+        (false, false, false) => 0x2da,
+    };
+    e.call(
+        RENDER_PASS_ARRAY_ADD,
+        &args![list, geometry, pass, 1u32, 0u32, 0u32, 0u32, 0u32, 0u32],
+    );
+    e.mem.u32(base + PASSES_50)
+}
+
+use crate::units::bsshader::bsshaderproperty::{viewer_strings_add, VIEWER_STRING};
+
+// Translated from 00bb5fa0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (vtable entries at `010b9970`, `010bcbc0`): the class's
+/// `GetViewerStrings`, `thiscall` with one word, the string array (`this` only passed on in
+/// `ECX`). Runs `BSShaderPPLightingProperty::GetViewerStrings` and adds the class name
+/// (`00a7d330` of `012007b0`; the inlined `NiTArray` add).
+pub fn fn_00bb5fa0(e: &mut Engine, this: Ptr, strings: u32) {
+    e.call(PP_LIGHTING_VIEWER_STRINGS, &args![this, strings]);
+    let rtti = e.global::<u32>(RTTI_012007B0);
+    let string = e.call(VIEWER_STRING, &args![rtti]).u32();
+    viewer_strings_add(e, strings, string);
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x00bb_44f0, fn_00bb44f0(Ptr, u32)),
+        entry!(0x00bb_4500, fn_00bb4500(Ptr, u32) -> bool),
+        entry!(0x00bb_4510, fn_00bb4510(Ptr, u32)),
+        entry!(0x00bb_45b0, fn_00bb45b0(Ptr)),
+        entry!(0x00bb_45c0, fn_00bb45c0(Ptr) -> Ptr),
+        entry!(0x00bb_45d0, fn_00bb45d0() -> u32),
+        entry!(0x00bb_5c90, fn_00bb5c90(Ptr, u32) -> u32),
+        entry!(0x00bb_5fa0, fn_00bb5fa0(Ptr, u32)),
         entry!(0x00bb_4520, fn_00bb4520(Ptr) -> Ptr),
         entry!(0x00bb_4540, fn_00bb4540(Ptr, u32) -> Ptr),
         entry!(0x00bb_4650, fn_00bb4650(Ptr, u32) -> Ptr),
@@ -1551,5 +1688,122 @@ mod tests {
         assert_eq!(calls_to(&e, PP_LIGHTING_CONSTRUCTOR), vec![vec![this]]);
         assert_eq!(e.mem.u32(this), VTABLE_010B9910);
         assert_eq!(e.mem.u32(this + OWN_PASS), 0);
+    }
+}
+
+#[cfg(test)]
+mod n071_tests {
+    use super::*;
+    use crate::units::bsshader::bsshaderproperty::{STRINGS_SET_AT, STRINGS_SET_SIZE};
+    use crate::units::bsshader::geometrydecalshader::shader_test_rig::rig;
+    use crate::units::bsshader::shadowlightshader::n071_rig::calls;
+
+    #[test]
+    fn the_jumps_pass_this_and_the_word_on() {
+        let mut e = rig();
+        e.register(PP_LIGHTING_00B68DC0, |_, _| Ret::default());
+        e.register(PP_LIGHTING_00B667E0, |_, a| (a[1] != 0).into_ret());
+        e.register(PP_LIGHTING_POST_LINK_OBJECT, |_, _| Ret::default());
+        e.call(0x00bb_44f0, &args![1u32, 2u32]);
+        assert!(e.call(0x00bb_4500, &args![3u32, 4u32]).bool());
+        assert!(!e.call(0x00bb_4500, &args![3u32, 0u32]).bool());
+        e.call(0x00bb_4510, &args![5u32, 6u32]);
+        assert_eq!(calls(&e, PP_LIGHTING_00B68DC0), vec![vec![1, 2]]);
+        assert_eq!(
+            calls(&e, PP_LIGHTING_00B667E0),
+            vec![vec![3, 4], vec![3, 0]]
+        );
+        assert_eq!(calls(&e, PP_LIGHTING_POST_LINK_OBJECT), vec![vec![5, 6]]);
+        assert_eq!(e.call(0x00bb_45c0, &args![0u32]).u32(), RTTI_012007B0);
+    }
+
+    #[test]
+    fn fn_00bb45b0_and_00bb45d0_destroy_and_create() {
+        let mut e = rig();
+        e.register(PP_LIGHTING_DESTRUCTOR, |_, _| Ret::default());
+        e.register(PP_LIGHTING_CONSTRUCTOR, |_, a| a[0].into_ret());
+        e.register(NI_NEW, |e, a| e.mem.alloc(a[0]).into_ret());
+        let made = e.call(0x00bb_45d0, &args![]).u32();
+        assert_eq!(calls(&e, NI_NEW), vec![vec![0x108]]);
+        assert_eq!(calls(&e, PP_LIGHTING_CONSTRUCTOR), vec![vec![made]]);
+        assert_eq!(e.mem.u32(made), VTABLE_010B9910);
+        assert_eq!(e.mem.u32(made + OWN_PASS), 0);
+        e.mem.set_u32(made, 0);
+        e.call(0x00bb_45b0, &args![made]);
+        assert_eq!(e.mem.u32(made), VTABLE_010B9910);
+        assert_eq!(calls(&e, PP_LIGHTING_DESTRUCTOR), vec![vec![made]]);
+        e.register(NI_NEW, |_, _| 0u32.into_ret());
+        assert_eq!(e.call(0x00bb_45d0, &args![]).u32(), 0);
+    }
+
+    #[test]
+    fn fn_00bb5c90_picks_the_pass() {
+        let mut e = rig();
+        e.register(RENDER_PASS_ARRAY_ADD, |_, _| Ret::default());
+        e.register(CHECK_CREATE_PASSES_50, |_, _| Ret::default());
+        let this = e.mem.alloc(0x108);
+        let list = e.mem.alloc(0x20);
+        e.mem.set_u32(this + PASSES_50, list);
+        let geometry = e.mem.alloc(0xc0);
+        let data = e.mem.alloc(0x30);
+        e.mem.set_u32(geometry + 0xb8, data);
+        // A positive +0xe0 answers 0.
+        e.mem.set_f32(this + 0xe0, 1.0);
+        assert_eq!(e.call(0x00bb_5c90, &args![this, geometry]).u32(), 0);
+        assert!(calls(&e, CHECK_CREATE_PASSES_50).is_empty());
+        e.mem.set_f32(this + 0xe0, 0.0);
+        assert_eq!(e.call(0x00bb_5c90, &args![this, geometry]).u32(), list);
+        assert_eq!(calls(&e, CHECK_CREATE_PASSES_50), vec![vec![this, 1]]);
+        let block = e.mem.alloc(0x20);
+        e.mem.set_u32(geometry + 0x9c, block);
+        e.mem.set_u16(block + 0x18, 0x200);
+        e.mem.set_u32(data + 0x28, 1);
+        e.mem.set_u8(this + FLAGS0, 2);
+        e.call(0x00bb_5c90, &args![this, geometry]);
+        e.mem.set_u16(block + 0x18, 0);
+        e.mem.set_u8(this + FLAGS0, 0);
+        e.call(0x00bb_5c90, &args![this, geometry]);
+        e.mem.set_u32(this + 0xe0, 0x7fc0_0000);
+        e.mem.set_u32(data + 0x28, 0);
+        e.mem.set_u16(block + 0x18, 0x200);
+        e.call(0x00bb_5c90, &args![this, geometry]);
+        let passes: Vec<u32> = calls(&e, RENDER_PASS_ARRAY_ADD)
+            .iter()
+            .map(|a| a[2])
+            .collect();
+        assert_eq!(passes, vec![0x2da, 0x2ed, 0x2e6, 0x2e0]);
+        assert_eq!(
+            calls(&e, RENDER_PASS_ARRAY_ADD)[0],
+            vec![list, geometry, 0x2da, 1, 0, 0, 0, 0, 0]
+        );
+        // A list with passes is answered as it is.
+        e.mem.set_u32(list + 0x10, 1);
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x00bb_5c90, &args![this, geometry]).u32(), list);
+        assert!(calls(&e, RENDER_PASS_ARRAY_ADD).is_empty());
+    }
+
+    #[test]
+    fn fn_00bb5fa0_adds_the_class_name() {
+        let mut e = rig();
+        e.map(0x0120_0000, 0x1000);
+        e.set_global(RTTI_012007B0, 0x7b0u32);
+        e.register(PP_LIGHTING_VIEWER_STRINGS, |_, _| Ret::default());
+        e.register(VIEWER_STRING, |_, _| 0x5150u32.into_ret());
+        e.register(STRINGS_SET_SIZE, |_, _| Ret::default());
+        e.register(STRINGS_SET_AT, |e, a| {
+            let word = e.mem.u32(a[2]);
+            e.mem.set_u32(a[0] + 0x20, word);
+            Ret::default()
+        });
+        let strings = e.mem.alloc(0x40);
+        e.call(0x00bb_5fa0, &args![0x1234u32, strings]);
+        assert_eq!(
+            calls(&e, PP_LIGHTING_VIEWER_STRINGS),
+            vec![vec![0x1234, strings]]
+        );
+        assert_eq!(calls(&e, VIEWER_STRING), vec![vec![0x7b0]]);
+        assert_eq!(calls(&e, STRINGS_SET_SIZE), vec![vec![strings, 0]]);
+        assert_eq!(e.mem.u32(strings + 0x20), 0x5150);
     }
 }

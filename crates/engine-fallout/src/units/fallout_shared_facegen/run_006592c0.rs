@@ -244,6 +244,57 @@ pub fn fn_00659780(e: &mut Engine, name: u32) -> Ptr {
     fn_00659670(e, block, name)
 }
 
+/// `00658d30` (`thiscall`, no stack words): the destructor `006592c0` runs.
+const DESTRUCT_00658D30: u32 = 0x0065_8d30;
+
+// Translated from 006592c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map: a scalar deleting destructor (`thiscall`, one word: the
+/// flags): `00658d30`, then `operator delete` when bit 0 of `flags` is set. Answers `this`.
+pub fn fn_006592c0(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    e.call(DESTRUCT_00658D30, &args![this]);
+    if flags & 1 != 0 {
+        e.call(OPERATOR_DELETE, &args![this]);
+    }
+    this
+}
+
+// Translated from 00659310 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map: a destroy callback (`thiscall`, one word: the element; `this`
+/// is not read): [`fn_00659370`] on the element.
+pub fn fn_00659310(e: &mut Engine, _this: Ptr, element: Ptr) {
+    fn_00659370(e, element);
+}
+
+// Translated from 00659370 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`cdecl`, one word): [`fn_006593b0`] on `element` with flags 0
+/// (destroys without freeing).
+pub fn fn_00659370(e: &mut Engine, element: Ptr) {
+    fn_006593b0(e, element, 0);
+}
+
+// Translated from 006593b0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map: a scalar deleting destructor (`thiscall`, one word: the
+/// flags): [`fn_00659440`], then `operator delete` when bit 0 of `flags` is set. Answers
+/// `this`.
+pub fn fn_006593b0(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    fn_00659440(e, this);
+    if flags & 1 != 0 {
+        e.call(OPERATOR_DELETE, &args![this]);
+    }
+    this
+}
+
+// Translated from 00659440 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (Ghidra's library match, `SubAllocator::~SubAllocator`, is
+/// not this body): destroys the four 0x20-byte elements at `+8`
+/// (`_eh_vector_destructor_iterator_` with `00449680`).
+pub fn fn_00659440(e: &mut Engine, this: Ptr) {
+    e.call(
+        VECTOR_DESTRUCTOR_ITERATOR,
+        &args![this.addr() + 8, 0x20u32, 4u32, BASE_DESTRUCT_00449680],
+    );
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -261,6 +312,11 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x0065_9670, fn_00659670(Ptr, u32) -> Ptr),
         entry!(0x0065_9710, fn_00659710(Ptr)),
         entry!(0x0065_9780, fn_00659780(u32) -> Ptr),
+        entry!(0x0065_92c0, fn_006592c0(Ptr, u32) -> Ptr),
+        entry!(0x0065_9310, fn_00659310(Ptr, Ptr)),
+        entry!(0x0065_9370, fn_00659370(Ptr)),
+        entry!(0x0065_93b0, fn_006593b0(Ptr, u32) -> Ptr),
+        entry!(0x0065_9440, fn_00659440(Ptr)),
     ]
 }
 
@@ -508,5 +564,59 @@ mod tests {
         assert_eq!(e.call(0x0065_9780, &args![0x0100_0000u32]).u32(), 0);
         let log = e.call_log.take().unwrap();
         assert!(calls_to(&log, VECTOR_CONSTRUCTOR_ITERATOR).is_empty());
+    }
+}
+
+#[cfg(test)]
+mod n063_tests {
+    use super::*;
+
+    fn calls(e: &Engine, addr: u32) -> Vec<Vec<u32>> {
+        e.call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|(a, _)| *a == addr)
+            .map(|(_, w)| w.clone())
+            .collect()
+    }
+
+    #[test]
+    fn deleting_destructor_006592c0_frees_on_bit_0() {
+        let mut e = Engine::new();
+        e.register(DESTRUCT_00658D30, |_, _| Ret::default());
+        e.register(OPERATOR_DELETE, |_, _| Ret::default());
+        for (flags, freed) in [(1u32, 1usize), (2, 0)] {
+            e.call_log = Some(vec![]);
+            assert_eq!(e.call(0x0065_92c0, &args![0x5000u32, flags]).u32(), 0x5000);
+            assert_eq!(calls(&e, DESTRUCT_00658D30), vec![vec![0x5000]]);
+            assert_eq!(calls(&e, OPERATOR_DELETE).len(), freed);
+        }
+    }
+
+    #[test]
+    fn element_destructors_destroy_the_four_entries() {
+        let mut e = Engine::new();
+        e.register(VECTOR_DESTRUCTOR_ITERATOR, |_, _| Ret::default());
+        e.register(OPERATOR_DELETE, |_, _| Ret::default());
+        // The callback and its cdecl forwarder never free.
+        e.call_log = Some(vec![]);
+        e.call(0x0065_9310, &args![0x1234u32, 0x6000u32]);
+        e.call(0x0065_9370, &args![0x7000u32]);
+        assert_eq!(
+            calls(&e, VECTOR_DESTRUCTOR_ITERATOR),
+            vec![
+                vec![0x6008, 0x20, 4, BASE_DESTRUCT_00449680],
+                vec![0x7008, 0x20, 4, BASE_DESTRUCT_00449680]
+            ]
+        );
+        assert!(calls(&e, OPERATOR_DELETE).is_empty());
+        // The deleting form frees with bit 0.
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x0065_93b0, &args![0x8000u32, 1u32]).u32(), 0x8000);
+        assert_eq!(calls(&e, OPERATOR_DELETE), vec![vec![0x8000]]);
+        e.call_log = Some(vec![]);
+        e.call(0x0065_9440, &args![0x9000u32]);
+        assert_eq!(calls(&e, VECTOR_DESTRUCTOR_ITERATOR)[0][0], 0x9008);
     }
 }

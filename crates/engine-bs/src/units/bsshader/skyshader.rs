@@ -1119,9 +1119,126 @@ pub fn fn_00b8a360(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
     this
 }
 
+// Translated from 00b884b0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`skyshader.cpp`), `thiscall`, no stack words: calls the shader's
+/// vtable +0x128 with each of the eleven pass pointers from +0x6c, in order.
+pub fn fn_00b884b0(e: &mut Engine, this: Ptr) {
+    let base = this.addr();
+    for index in 0..0xb {
+        let pass = e.mem.u32(base + 0x6c + 4 * index);
+        e.vcall(base, 0x128, &args![pass]);
+    }
+}
+
+// Translated from 00b89960 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `SkyShader::ReloadShaders` (Xbox PDB), `thiscall`, no stack words: `LoadShaders`, then
+/// `LoadStagesAndPasses` (a tail jump; the Xbox PDB declares the method `void`).
+pub fn sky_shader_reload_shaders(e: &mut Engine, this: Ptr) {
+    sky_shader_load_shaders(e, this);
+    sky_shader_load_stages_and_passes(e, this);
+}
+
+/// The quad `00b899a0` builds: the corner coordinates (-1.0 at `01012054`, 0.99999899 at
+/// `010aff54`, 1.0 from `FLD1`; through `FST`), the colour copied into its four colours
+/// (`011a9bd0`, `COLOR_011A9BD0`) and the bound's radius (`01013974`).
+const MINUS_ONE_01012054: u32 = 0x0101_2054;
+const NEAR_ONE_010AFF54: u32 = 0x010a_ff54;
+const RADIUS_01013974: u32 = 0x0101_3974;
+/// `vector constructor iterator` (`00401050`, `stdcall`: array, size, count, constructor) and
+/// the `NiColorA` constructor it runs (`004a7800`).
+const ARRAY_CONSTRUCT_00401050: u32 = 0x0040_1050;
+const COLOR_CONSTRUCT_004A7800: u32 = 0x004a_7800;
+/// `NiTriShape::NiTriShape` (engine map, `00a74410`, `thiscall` with nine words).
+const NI_TRI_SHAPE_CONSTRUCT: u32 = 0x00a7_4410;
+/// `BSShaderData::BSShaderData` (`00baf3c0`) and `BSShaderData::Convert` (`00bb0180`).
+const SHADER_DATA_CONSTRUCT: u32 = 0x00ba_f3c0;
+const SHADER_DATA_CONVERT: u32 = 0x00bb_0180;
+/// The `BSShaderData` local's size on the stack (up to the cookie).
+const SHADER_DATA_BYTES: u32 = 0xb8;
+
+// Translated from 00b899a0 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 00b899a0 - the C++ exception frame (FS:[0] chain, unwind states 0 to 2) and the /GS cookie check (00ec408c) are not translated.
+/// Unnamed in the engine map (`skyshader.cpp`), `cdecl` with one word, an `NiPointer` slot.
+/// Allocates (`MemoryManager::Allocate`) four corners (0x30 bytes: (-1, -1, n), (1, -1, n),
+/// (1, 1, n), (-1, 1, n) with n = 0.99999899), six triangle indices (0, 1, 2, 3, 0, 2) and
+/// four colours (built with `00401050`/`004a7800`, a null block used as it is) copied from
+/// `011a9bd0`; makes an `NiTriShape` of 0xc4 bytes (`00aa13e0`; null when the allocation
+/// fails) of 4 vertices and 2 triangles and takes a reference. Its bound (+0xb8) gets centre
+/// 0.0 and the radius at `01013974`. A local `BSShaderData` (`00baf3c0`, its +0 set to 6 and
+/// +0x90 to 4) converts it (`Convert(shape, 1)`); the slot takes the shape and the local
+/// reference is released.
+pub fn fn_00b899a0(e: &mut Engine, slot: u32) {
+    let corners = e
+        .call(MEMORY_ALLOCATE, &args![MEMORY_MANAGER, 0x30u32])
+        .u32();
+    let minus = x87_quiet_bits(e.global::<u32>(MINUS_ONE_01012054));
+    let near = x87_quiet_bits(e.global::<u32>(NEAR_ONE_010AFF54));
+    let one = 1.0f32.to_bits();
+    for (index, word) in [
+        minus, minus, near, one, minus, near, one, one, near, minus, one, near,
+    ]
+    .iter()
+    .enumerate()
+    {
+        e.mem.set_u32(corners + 4 * index as u32, *word);
+    }
+    let indices = e
+        .call(MEMORY_ALLOCATE, &args![MEMORY_MANAGER, 0xcu32])
+        .u32();
+    for (index, value) in [0u16, 1, 2, 3, 0, 2].iter().enumerate() {
+        e.mem.set_u16(indices + 2 * index as u32, *value);
+    }
+    let colours = e
+        .call(MEMORY_ALLOCATE, &args![MEMORY_MANAGER, 0x40u32])
+        .u32();
+    if colours != 0 {
+        e.call(
+            ARRAY_CONSTRUCT_00401050,
+            &args![colours, 0x10u32, 4u32, COLOR_CONSTRUCT_004A7800],
+        );
+    }
+    for colour in 0..4 {
+        for word in 0..4 {
+            let value = e.global::<u32>(COLOR_011A9BD0 + 4 * word);
+            e.mem.set_u32(colours + 0x10 * colour + 4 * word, value);
+        }
+    }
+    let block = e.call(NI_ALLOCATE, &args![0xc4u32]).u32();
+    let shape = if block != 0 {
+        e.call(
+            NI_TRI_SHAPE_CONSTRUCT,
+            &args![block, 4u32, corners, 0u32, colours, 0u32, 0u32, 0u32, 2u32, indices],
+        )
+        .u32()
+    } else {
+        0
+    };
+    if shape != 0 {
+        e.call(IMPORT_INTERLOCKED_INCREMENT, &args![shape + 4]);
+    }
+    let bound = e.mem.u32(shape.wrapping_add(0xb8));
+    for offset in [0x10u32, 0x14, 0x18] {
+        e.mem.set_f32(bound + offset, 0.0);
+    }
+    let radius = x87_quiet_bits(e.global::<u32>(RADIUS_01013974));
+    e.mem.set_u32(bound + 0x1c, radius);
+    e.with_stack(SHADER_DATA_BYTES, |e, data| {
+        let data = data.addr();
+        e.call(SHADER_DATA_CONSTRUCT, &args![data]);
+        e.mem.set_u32(data, 6);
+        e.mem.set_u32(data + 0x90, 4);
+        e.call(SHADER_DATA_CONVERT, &args![data, shape, 1u32]);
+    });
+    ni_pointer_assign(e, slot, shape);
+    release_reference(e, shape);
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x00b8_84b0, fn_00b884b0(Ptr)),
+        entry!(0x00b8_9960, sky_shader_reload_shaders(Ptr)),
+        entry!(0x00b8_99a0, fn_00b899a0(u32)),
         entry!(0x00b8_8670, fn_00b88670(Ptr)),
         entry!(0x00b8_87b0, fn_00b887b0() -> Ptr),
         entry!(0x00b8_9970, fn_00b89970(Ptr) -> bool),
@@ -1623,5 +1740,112 @@ mod sky_function_tests {
         e.call_log = Some(vec![]);
         e.call(0x00b8_a1a0, &args![0u32, state]);
         assert_eq!(e.call_log.as_ref().unwrap().len(), 1);
+    }
+}
+
+#[cfg(test)]
+mod n071_tests {
+    use super::*;
+    use crate::units::bsshader::geometrydecalshader::shader_test_rig::*;
+    use crate::units::bsshader::shadowlightshader::n071_rig::{order, slot_target, vobject};
+
+    #[test]
+    fn fn_00b884b0_hands_each_pass_to_the_shader() {
+        let mut e = rig();
+        let this = vobject(&mut e, 0xe4, &[]);
+        for index in 0..0xb {
+            e.mem.set_u32(this + 0x6c + 4 * index, 0x100 + index);
+        }
+        e.call(0x00b8_84b0, &args![this]);
+        let seen = calls(&e, slot_target(&e, this, 0x128));
+        let expected: Vec<Vec<u32>> = (0..0xb).map(|i| vec![this, 0x100 + i]).collect();
+        assert_eq!(seen, expected);
+    }
+
+    #[test]
+    fn sky_shader_reload_shaders_loads_then_builds_the_passes() {
+        let mut e = pass_rig();
+        e.register(VERTEX_PROFILE_00B4F3E0, |_, _| 0x0f40_0000u32.into_ret());
+        e.register(SKY_PIXEL_PROFILE_00B4F380, |_, _| 0x0f40_0010u32.into_ret());
+        e.register(GCVT, |_, _| Ret::default());
+        e.map(0x011f_f000, 0x1000);
+        let this = e.mem.alloc(0xe4);
+        e.call(0x00b8_9960, &args![this]);
+        let log = order(&e);
+        let compiles = log
+            .iter()
+            .filter(|a| **a == COMPILE_VERTEX_SHADER || **a == COMPILE_PIXEL_SHADER)
+            .count();
+        assert_eq!(compiles, 18);
+        let last_compile = log
+            .iter()
+            .rposition(|a| *a == COMPILE_VERTEX_SHADER || *a == COMPILE_PIXEL_SHADER)
+            .unwrap();
+        let first_pass = log.iter().position(|a| *a == NEW_PASS_00E804D0).unwrap();
+        assert!(last_compile < first_pass);
+        assert_eq!(calls(&e, NEW_PASS_00E804D0).len(), 11);
+    }
+
+    #[test]
+    fn fn_00b899a0_builds_the_quad_and_stores_it() {
+        let mut e = rig();
+        for page in [0x0101_2000u32, 0x0101_3000, 0x010a_f000, 0x011a_9000] {
+            e.map(page, 0x1000);
+        }
+        e.set_global(MINUS_ONE_01012054, -1.0f32);
+        e.set_global(NEAR_ONE_010AFF54, 0.999_999f32);
+        e.set_global(RADIUS_01013974, 1000.0f32);
+        for word in 0..4u32 {
+            e.set_global(COLOR_011A9BD0 + 4 * word, 0x30 + word);
+        }
+        e.register(ARRAY_CONSTRUCT_00401050, |_, _| Ret::default());
+        e.register(NI_ALLOCATE, |e, a| e.mem.alloc(a[0]).into_ret());
+        e.register(NI_TRI_SHAPE_CONSTRUCT, |e, a| {
+            let bound = e.mem.alloc(0x20);
+            e.mem.set_u32(a[0], REFERENCE_VTABLE);
+            e.mem.set_u32(a[0] + 0xb8, bound);
+            a[0].into_ret()
+        });
+        e.register(SHADER_DATA_CONSTRUCT, |_, _| Ret::default());
+        e.register(SHADER_DATA_CONVERT, |e, a| {
+            assert_eq!((e.mem.u32(a[0]), e.mem.u32(a[0] + 0x90)), (6, 4));
+            Ret::default()
+        });
+        let old = object(&mut e, 1);
+        let slot = e.mem.alloc(4);
+        e.mem.set_u32(slot, old);
+        e.call(0x00b8_99a0, &args![slot]);
+        let shape = e.mem.u32(slot);
+        let made = calls(&e, NI_TRI_SHAPE_CONSTRUCT);
+        assert_eq!(made.len(), 1);
+        let words = &made[0];
+        assert_eq!(words[0], shape);
+        assert_eq!(
+            (words[1], words[3], words[5], words[6], words[7], words[8]),
+            (4, 0, 0, 0, 0, 2)
+        );
+        let corners: Vec<f32> = (0..12).map(|i| e.mem.f32(words[2] + 4 * i)).collect();
+        let n = 0.999_999f32;
+        assert_eq!(
+            corners,
+            vec![-1.0, -1.0, n, 1.0, -1.0, n, 1.0, 1.0, n, -1.0, 1.0, n]
+        );
+        let indices: Vec<u16> = (0..6).map(|i| e.mem.u16(words[9] + 2 * i)).collect();
+        assert_eq!(indices, vec![0, 1, 2, 3, 0, 2]);
+        assert_eq!(e.mem.u32(words[4] + 0x34), 0x31);
+        assert_eq!(
+            calls(&e, ARRAY_CONSTRUCT_00401050),
+            vec![vec![words[4], 0x10, 4, COLOR_CONSTRUCT_004A7800]]
+        );
+        let bound = e.mem.u32(shape + 0xb8);
+        assert_eq!(e.mem.f32(bound + 0x1c), 1000.0);
+        assert_eq!(
+            calls(&e, SHADER_DATA_CONVERT)[0][1..].to_vec(),
+            vec![shape, 1]
+        );
+        // The slot holds the one reference left; the old object was released.
+        assert_eq!(e.mem.u32(shape + 4), 1);
+        assert_eq!(e.mem.u32(old + 4), 0);
+        assert_eq!(calls(&e, REFERENCE_DELETE), vec![vec![old]]);
     }
 }

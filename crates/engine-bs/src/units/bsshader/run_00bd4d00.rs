@@ -445,9 +445,66 @@ pub fn fn_00bd5a40(e: &mut Engine, this: Ptr) -> bool {
     true
 }
 
+/// `00e814b0` (unnamed, `thiscall`, no stack words).
+const RENDERER_CALL_00E814B0: u32 = 0x00e8_14b0;
+
+// Translated from 00bd4ed0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (vtable entry at `010bc330`), `thiscall`, no stack words. With the
+/// word +0x28 set, calls the vtable +0xa0 of each of the four objects from +0x7c that is set;
+/// then the vtable +0x88 of each of the two from +0x8c that is set; then jumps to `00e814b0`.
+pub fn fn_00bd4ed0(e: &mut Engine, this: Ptr) {
+    let base = this.addr();
+    if e.mem.u32(base + 0x28) != 0 {
+        for index in 0..4 {
+            let object = e.mem.u32(base + 0x7c + 4 * index);
+            if object != 0 {
+                e.vcall(object, 0xa0, &args![]);
+            }
+        }
+    }
+    for index in 0..2 {
+        let object = e.mem.u32(base + 0x8c + 4 * index);
+        if object != 0 {
+            e.vcall(object, 0x88, &args![]);
+        }
+    }
+    e.call(RENDERER_CALL_00E814B0, &args![base]);
+}
+
+// Translated from 00bd5320 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (not a Ghidra function; vtable entry at `010bc384`), `thiscall`,
+/// no stack words: calls the shader's vtable +0x128 with its word +0x6c.
+pub fn fn_00bd5320(e: &mut Engine, this: Ptr) {
+    let base = this.addr();
+    let pass = e.mem.u32(base + 0x6c);
+    e.vcall(base, 0x128, &args![pass]);
+}
+
+/// The record `00bd5460` answers (`012023c8`).
+const RECORD_012023C8: u32 = 0x0120_23c8;
+
+// Translated from 00bd5460 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (not a Ghidra function; vtable entry at `010bc268`, `ECX` unread):
+/// answers the address `012023c8`.
+pub fn fn_00bd5460(_e: &mut Engine, _this: Ptr) -> Ptr {
+    Ptr::new(RECORD_012023C8)
+}
+
+// Translated from 00bd5470 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (not a Ghidra function; vtable entry at `010bc398`), `thiscall`
+/// with two words: stores the first at +0x74 and the low byte of the second at +0x78.
+pub fn fn_00bd5470(e: &mut Engine, this: Ptr, word: u32, flag: u32) {
+    e.mem.set_u32(this.addr() + 0x74, word);
+    e.mem.set_u8(this.addr() + 0x78, flag as u8);
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x00bd_4ed0, fn_00bd4ed0(Ptr)),
+        entry!(0x00bd_5320, fn_00bd5320(Ptr)),
+        entry!(0x00bd_5460, fn_00bd5460(Ptr) -> Ptr),
+        entry!(0x00bd_5470, fn_00bd5470(Ptr, u32, u32)),
         entry!(0x00bd_5670, fn_00bd5670(Ptr, Ptr) -> Ptr),
         entry!(0x00bd_5920, fn_00bd5920() -> Ptr),
         entry!(0x00bd_4d00, fn_00bd4d00(Ptr, u32) -> Ptr),
@@ -808,5 +865,60 @@ mod distant_lod_tests {
         e.map(0x011f_9000, 0x1000);
         let this = e.mem.alloc(0x100);
         assert!(e.call(0x00bd_5a40, &args![this]).bool());
+    }
+}
+
+#[cfg(test)]
+mod n071_tests {
+    use super::*;
+    use crate::units::bsshader::shadowlightshader::n071_rig::{
+        calls, engine, order, slot_target, vobject,
+    };
+
+    #[test]
+    fn fn_00bd4ed0_updates_the_set_objects() {
+        let mut e = engine(&[RENDERER_CALL_00E814B0]);
+        let this = e.mem.alloc(0x98);
+        let a = vobject(&mut e, 8, &[]);
+        let b = vobject(&mut e, 8, &[]);
+        e.mem.set_u32(this + 0x88, a);
+        e.mem.set_u32(this + 0x90, b);
+        e.call(0x00bd_4ed0, &args![this]);
+        assert_eq!(
+            order(&e),
+            vec![
+                0x00bd_4ed0,
+                slot_target(&e, b, 0x88),
+                RENDERER_CALL_00E814B0
+            ]
+        );
+        e.mem.set_u32(this + 0x28, 1);
+        e.call_log = Some(vec![]);
+        e.call(0x00bd_4ed0, &args![this]);
+        assert_eq!(
+            order(&e),
+            vec![
+                0x00bd_4ed0,
+                slot_target(&e, a, 0xa0),
+                slot_target(&e, b, 0x88),
+                RENDERER_CALL_00E814B0
+            ]
+        );
+    }
+
+    #[test]
+    fn the_small_slot_functions() {
+        let mut e = engine(&[]);
+        let this = vobject(&mut e, 0x80, &[]);
+        e.mem.set_u32(this + 0x6c, 0x6c);
+        e.call(0x00bd_5320, &args![this]);
+        assert_eq!(
+            calls(&e, slot_target(&e, this, 0x128)),
+            vec![vec![this, 0x6c]]
+        );
+        assert_eq!(e.call(0x00bd_5460, &args![this]).u32(), RECORD_012023C8);
+        e.call(0x00bd_5470, &args![this, 0x1234u32, 0x0201u32]);
+        assert_eq!(e.mem.u32(this + 0x74), 0x1234);
+        assert_eq!(e.mem.u8(this + 0x78), 1);
     }
 }

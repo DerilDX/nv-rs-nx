@@ -40,9 +40,61 @@ pub fn ni_p_sys_field_max_distance_ctlr_get_r_t_t_i(_e: &mut Engine) -> u32 {
     0x0120_2710
 }
 
+use crate::units::niparticle::nipsysmodifierfloatctlr::create_clone;
+
+/// `NiPSysFieldModifier::m_fMaxDistance` (+0x28) and `m_fMaxDistanceSqr`
+/// (+0x2c) (Xbox PDB), in the controller's modifier (`m_pkModifier`,
+/// +0x3c).
+const MODIFIER: u32 = 0x3c;
+const MAX_DISTANCE: u32 = 0x28;
+const MAX_DISTANCE_SQUARED: u32 = 0x2c;
+/// The vtable of `NiPSysFieldMaxDistanceCtlr` (RTTI
+/// `.?AVNiPSysFieldMaxDistanceCtlr@@`).
+const VTABLE: u32 = 0x010b_f354;
+
+// Translated from 00c2b050 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiPSysFieldMaxDistanceCtlr::SetTargetFloatValue` (Xbox PDB): `value`
+/// into the modifier's maximum distance (+0x28, `FST`) and its square
+/// (`FMUL ST0`) into +0x2c.
+pub fn ni_p_sys_field_max_distance_ctlr_set_target_float_value(
+    e: &mut Engine,
+    this: Ptr,
+    value: f32,
+) {
+    let modifier = e.mem.u32(this.addr() + MODIFIER);
+    let distance = x87_load32(value.to_bits());
+    e.mem
+        .set_u32(modifier.wrapping_add(MAX_DISTANCE), x87_store32(distance));
+    e.mem.set_u32(
+        modifier.wrapping_add(MAX_DISTANCE_SQUARED),
+        x87_store32(x87_mul(distance, distance)),
+    );
+}
+
+// Translated from 00c2b070 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiPSysFieldMaxDistanceCtlr::CreateClone` (Xbox PDB): a 0x40-byte object
+/// through the `NiPSysModifierFloatCtlr` constructor and this class's vtable
+/// (0 when the allocation fails), then the member copy into it (which still
+/// runs for a null clone). Returns the clone.
+pub fn ni_p_sys_field_max_distance_ctlr_create_clone(
+    e: &mut Engine,
+    this: Ptr,
+    process: Ptr,
+) -> Ptr {
+    create_clone(e, this, process, VTABLE)
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(
+            0x00c2_b050,
+            ni_p_sys_field_max_distance_ctlr_set_target_float_value(Ptr, f32)
+        ),
+        entry!(
+            0x00c2_b070,
+            ni_p_sys_field_max_distance_ctlr_create_clone(Ptr, Ptr) -> Ptr
+        ),
         entry!(0x00c2b040, ni_p_sys_field_max_distance_ctlr_get_r_t_t_i() -> u32),
         entry!(
             0x00c2b0c0,
@@ -113,5 +165,37 @@ mod tests {
     fn ni_p_sys_field_max_distance_ctlr_get_r_t_t_i_returns_the_constant() {
         let mut e = Engine::new();
         assert_eq!(e.call(0x00c2_b040, &args![]).u32(), 0x0120_2710);
+    }
+}
+
+#[cfg(test)]
+mod value_tests {
+    use super::*;
+    use crate::units::niparticle::nipsysmodifierfloatctlr::subclass_checks;
+
+    #[test]
+    fn set_target_float_value_writes_the_distance_and_its_square() {
+        let mut e = Engine::new();
+        let modifier = e.mem.alloc(0x40);
+        let this = e.mem.alloc(0x40);
+        e.mem.set_u32(this + MODIFIER, modifier);
+        e.call(0x00c2_b050, &args![this, 3.0f32]);
+        assert_eq!(e.mem.u32(modifier + MAX_DISTANCE), 3.0f32.to_bits());
+        assert_eq!(e.mem.u32(modifier + MAX_DISTANCE_SQUARED), 9.0f32.to_bits());
+        // The square rounds to a float; a signalling NaN is quieted.
+        e.call(0x00c2_b050, &args![this, 1.000_000_1f32]);
+        let x = 1.000_000_1f32 as f64;
+        assert_eq!(
+            e.mem.u32(modifier + MAX_DISTANCE_SQUARED),
+            ((x * x) as f32).to_bits()
+        );
+        e.call(0x00c2_b050, &args![this, 0x7f80_0001u32]);
+        assert_eq!(e.mem.u32(modifier + MAX_DISTANCE), 0x7fc0_0001);
+        assert_eq!(e.mem.u32(modifier + MAX_DISTANCE_SQUARED), 0x7fc0_0001);
+    }
+
+    #[test]
+    fn create_clone_uses_this_class_vtable() {
+        subclass_checks::create_clone(0x00c2_b070, VTABLE);
     }
 }

@@ -630,6 +630,166 @@ pub fn fn_0064e9c0(
     target
 }
 
+// Translated from 0064e4b0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map: `std::fill(first, last, value)` of the checked library
+/// (`cdecl`, three words: the range and the value's address): the unchecked pointers of
+/// `last` and `first` (`0065fe40` on the argument slots), then [`fn_0064e680`].
+pub fn fn_0064e4b0(e: &mut Engine, first: u32, last: u32, value: u32) {
+    e.with_stack(8, |e, frame| {
+        let frame = frame.addr();
+        let (first_slot, last_slot) = (frame, frame + 4);
+        e.mem.set_u32(first_slot, first);
+        e.mem.set_u32(last_slot, last);
+        let last = e.call(UNCHECKED_0065FE40, &args![last_slot]).u32();
+        let first = e.call(UNCHECKED_0065FE40, &args![first_slot]).u32();
+        fn_0064e680(e, first, last, value);
+    });
+}
+
+// Translated from 0064e4e0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map: `std::copy_backward(first, last, dest)` of the checked
+/// library (`cdecl`, three words). Takes the pointer category tag (`0065e750`, registered
+/// with the caller's `ECX` first: here the address of the `dest` word, which is also the one
+/// word pushed; the next stack word is the frame's local word) and the iterator category
+/// (`0065fd70`) of `first` and `dest`, the unchecked pointers of `last` and `first`
+/// (`0065fe40`), and passes them with `dest`, the category, the tag and the range-checked
+/// tag 0 to [`fn_0064e6c0`].
+pub fn fn_0064e4e0(e: &mut Engine, first: u32, last: u32, dest: u32) {
+    e.with_stack(0x10, |e, frame| {
+        // The local word at EBP-4 holds the bytes at EBP-3 (category), EBP-2 (tag) and EBP-1
+        // (the range-checked tag); the argument words follow it.
+        let local = frame.addr();
+        let (category, tag, checked) = (local + 1, local + 2, local + 3);
+        let (first_slot, last_slot, dest_slot) = (local + 4, local + 8, local + 0xc);
+        e.mem.set_u32(first_slot, first);
+        e.mem.set_u32(last_slot, last);
+        e.mem.set_u32(dest_slot, dest);
+        e.mem.set_u8(checked, 0);
+        let word = e.mem.u32(local);
+        let pointer_tag = e
+            .call(
+                POINTER_CATEGORY_0065E750,
+                &args![dest_slot, dest_slot, word],
+            )
+            .u32() as u8;
+        e.mem.set_u8(tag, pointer_tag);
+        let at = e
+            .call(
+                ITERATOR_CATEGORY_0065FD70,
+                &args![category, first_slot, dest_slot],
+            )
+            .u32();
+        let iterator_tag = e.mem.u8(at);
+        let dest = e.mem.u32(dest_slot);
+        let last = e.call(UNCHECKED_0065FE40, &args![last_slot]).u32();
+        let first = e.call(UNCHECKED_0065FE40, &args![first_slot]).u32();
+        let checked = e.mem.u8(checked);
+        fn_0064e6c0(
+            e,
+            first,
+            last,
+            dest,
+            u32::from(iterator_tag),
+            u32::from(pointer_tag),
+            u32::from(checked),
+        );
+    });
+}
+
+// Translated from 0064e680 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map: the fill loop (`cdecl`, three words): copies the 16-byte value
+/// at `value` into each element from `first` up to `last`.
+pub fn fn_0064e680(e: &mut Engine, first: u32, last: u32, value: u32) {
+    let mut at = first;
+    while at != last {
+        copy_element(e, at, value);
+        at = at.wrapping_add(0x10);
+    }
+}
+
+// Translated from 0064e6c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map: the backward copy's dispatch (`cdecl`, six words: first, last,
+/// dest, the iterator category byte and two tag words that are not read): the pointer
+/// category tag (`0065e750` with `ECX` the address of the `dest` word and the addresses of the
+/// `first` and `dest` words pushed), then
+/// [`fn_0064e860`] with the first three, the category byte, the tag and the range-checked
+/// tag 0.
+pub fn fn_0064e6c0(
+    e: &mut Engine,
+    first: u32,
+    last: u32,
+    dest: u32,
+    category: u32,
+    _unused_4: u32,
+    _unused_5: u32,
+) {
+    e.with_stack(0xc, |e, frame| {
+        let frame = frame.addr();
+        let (first_slot, dest_slot) = (frame, frame + 4);
+        e.mem.set_u32(first_slot, first);
+        e.mem.set_u32(dest_slot, dest);
+        let tag = e
+            .call(
+                POINTER_CATEGORY_0065E750,
+                &args![dest_slot, first_slot, dest_slot],
+            )
+            .u32() as u8;
+        let (first, dest) = (e.mem.u32(first_slot), e.mem.u32(dest_slot));
+        fn_0064e860(e, first, last, dest, category & 0xff, u32::from(tag), 0);
+    });
+}
+
+// Translated from 0064e860 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map: the backward copy's random-access, non-scalar form (`cdecl`,
+/// six words: first, last, dest and three tag words that are not read): copies the
+/// elements backward ([`fn_0064e980`] with the destination's unchecked pointer, `0065fe40`)
+/// and answers `dest - (last - first)`, rounded down to whole elements. The exe passes on a
+/// tag byte of its own frame that it never sets (not read by the copy); here the frame
+/// starts zeroed.
+pub fn fn_0064e860(
+    e: &mut Engine,
+    first: u32,
+    last: u32,
+    dest: u32,
+    _unused_3: u32,
+    _unused_4: u32,
+    _unused_5: u32,
+) -> u32 {
+    let start = dest.wrapping_sub(elements(first, last) << 4);
+    e.with_stack(8, |e, frame| {
+        let frame = frame.addr();
+        let dest_slot = frame;
+        let unset_tag = frame + 4;
+        e.mem.set_u32(dest_slot, dest);
+        let unset = u32::from(e.mem.u8(unset_tag));
+        let target = e.call(UNCHECKED_0065FE40, &args![dest_slot]).u32();
+        fn_0064e980(e, first, last, target, unset, 0, 0);
+    });
+    start
+}
+
+// Translated from 0064e980 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map: the backward element copy loop (`cdecl`, six words; the three
+/// tags are not read): copies each 16-byte element from `last` down to `first` to before
+/// `dest`; answers the start of the destination.
+pub fn fn_0064e980(
+    e: &mut Engine,
+    first: u32,
+    last: u32,
+    dest: u32,
+    _unused_3: u32,
+    _unused_4: u32,
+    _unused_5: u32,
+) -> u32 {
+    let (mut source, mut target) = (last, dest);
+    while first != source {
+        source = source.wrapping_sub(0x10);
+        target = target.wrapping_sub(0x10);
+        copy_element(e, target, source);
+    }
+    target
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -662,6 +822,12 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
             fn_0064e5a0(u32, u32, u32, u32, u32, u32) -> u32
         ),
         entry!(0x0064_e600, fn_0064e600(u32, u32, u32, u32)),
+        entry!(0x0064_e4b0, fn_0064e4b0(u32, u32, u32)),
+        entry!(0x0064_e4e0, fn_0064e4e0(u32, u32, u32)),
+        entry!(0x0064_e680, fn_0064e680(u32, u32, u32)),
+        entry!(0x0064_e6c0, fn_0064e6c0(u32, u32, u32, u32, u32, u32)),
+        entry!(0x0064_e860, fn_0064e860(u32, u32, u32, u32, u32, u32) -> u32),
+        entry!(0x0064_e980, fn_0064e980(u32, u32, u32, u32, u32, u32) -> u32),
         entry!(0x0064_e630, fn_0064e630(u32, u32, u32, u32) -> u32),
         entry!(0x0064_e710, fn_0064e710(u32, u32, u32, u32, u32, u32)),
         entry!(0x0064_e7d0, fn_0064e7d0(Ptr, u32, u32) -> u32),
@@ -1002,5 +1168,143 @@ mod vector_tests {
         // The placement construction skips a null place.
         e.register(PLACEMENT_NEW_006E6DA0, |_, _| Ret::default());
         assert_eq!(e.call(0x0064_e8c0, &args![other, value]).u32(), 0);
+    }
+}
+
+#[cfg(test)]
+mod n063_tests {
+    use super::*;
+
+    fn calls(e: &Engine, addr: u32) -> Vec<Vec<u32>> {
+        e.call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|(a, _)| *a == addr)
+            .map(|(_, w)| w.clone())
+            .collect()
+    }
+
+    /// `count` 16-byte elements whose words are `base + 4 * index`.
+    fn block(e: &mut Engine, count: u32, base: u32) -> u32 {
+        let at = e.mem.alloc(0x10 * count);
+        for word in 0..4 * count {
+            e.mem.set_u32(at + 4 * word, base + word);
+        }
+        at
+    }
+
+    /// The tags answer 0x100 (byte 0), the category writes 7, the unchecked pointer reads
+    /// its slot.
+    fn rig() -> Engine {
+        let mut e = Engine::new();
+        e.register(POINTER_CATEGORY_0065E750, |_, _| 0x100u32.into_ret());
+        e.register(ITERATOR_CATEGORY_0065FD70, |e, a| {
+            e.mem.set_u8(a[0], 7);
+            a[0].into_ret()
+        });
+        e.register(UNCHECKED_0065FE40, |e, a| e.mem.u32(a[0]).into_ret());
+        e
+    }
+
+    #[test]
+    fn fill_0064e4b0_fills_through_the_unchecked_pointers() {
+        let mut e = rig();
+        let range = block(&mut e, 3, 0);
+        let value = block(&mut e, 1, 0x70);
+        e.call_log = Some(vec![]);
+        e.call(0x0064_e4b0, &args![range, range + 0x20, value]);
+        let unchecked = calls(&e, UNCHECKED_0065FE40);
+        assert_eq!(unchecked.len(), 2);
+        // `last` first, then `first`, each through its argument slot.
+        assert_eq!(e.mem.u32(unchecked[0][0]), range + 0x20);
+        assert_eq!(e.mem.u32(unchecked[1][0]), range);
+        for element in 0..2 {
+            for word in 0..4 {
+                assert_eq!(e.mem.u32(range + 0x10 * element + 4 * word), 0x70 + word);
+            }
+        }
+        assert_eq!(e.mem.u32(range + 0x20), 8);
+    }
+
+    #[test]
+    fn fill_loop_0064e680_copies_the_value_until_last() {
+        let mut e = rig();
+        let range = block(&mut e, 2, 0);
+        let value = block(&mut e, 1, 0x50);
+        e.call(0x0064_e680, &args![range, range + 0x20, value]);
+        assert_eq!(e.mem.u32(range + 0x1c), 0x53);
+        // An empty range writes nothing.
+        let other = block(&mut e, 1, 0x90);
+        e.call(0x0064_e680, &args![range, range, other]);
+        assert_eq!(e.mem.u32(range), 0x50);
+    }
+
+    #[test]
+    fn copy_backward_0064e4e0_moves_the_range_up() {
+        let mut e = rig();
+        // Elements 0..2 move up by one element (overlapping).
+        let range = block(&mut e, 3, 0);
+        e.call_log = Some(vec![]);
+        e.call(0x0064_e4e0, &args![range, range + 0x20, range + 0x30]);
+        let expected = [0, 1, 2, 3, 0, 1, 2, 3, 4, 5, 6, 7];
+        for (word, value) in expected.iter().enumerate() {
+            assert_eq!(e.mem.u32(range + 4 * word as u32), *value);
+        }
+        // The tags: ECX and the one push the destination's slot, then (in the dispatch)
+        // ECX the destination's slot with the first's and the destination's pushed.
+        let tags = calls(&e, POINTER_CATEGORY_0065E750);
+        assert_eq!(tags[0].len(), 3);
+        assert_eq!(e.mem.u32(tags[0][0]), range + 0x30);
+        assert_eq!(tags[0][1], tags[0][0]);
+        assert_eq!(e.mem.u32(tags[1][1]), range);
+        assert_eq!(calls(&e, ITERATOR_CATEGORY_0065FD70).len(), 1);
+    }
+
+    #[test]
+    fn copy_backward_dispatch_0064e6c0_passes_the_category_byte() {
+        let mut e = rig();
+        let range = block(&mut e, 2, 0x20);
+        let dest = e.mem.alloc(0x20);
+        e.call_log = Some(vec![]);
+        e.call(
+            0x0064_e6c0,
+            &args![range, range + 0x20, dest + 0x20, 0x1207u32, 9u32, 9u32],
+        );
+        assert_eq!(e.mem.u32(dest + 0x1c), 0x27);
+        let tags = calls(&e, POINTER_CATEGORY_0065E750);
+        assert_eq!(e.mem.u32(tags[0][0]), dest + 0x20);
+        assert_eq!(e.mem.u32(tags[0][1]), range);
+        assert_eq!(e.mem.u32(tags[0][2]), dest + 0x20);
+    }
+
+    #[test]
+    fn copy_backward_0064e860_answers_the_start_and_0064e980_copies() {
+        let mut e = rig();
+        let range = block(&mut e, 2, 0x40);
+        let dest = e.mem.alloc(0x40);
+        let start = e
+            .call(
+                0x0064_e860,
+                &args![range, range + 0x20, dest + 0x40, 0u32, 0u32, 0u32],
+            )
+            .u32();
+        assert_eq!(start, dest + 0x20);
+        assert_eq!(e.mem.u32(dest + 0x20), 0x40);
+        assert_eq!(e.mem.u32(dest + 0x3c), 0x47);
+        // The loop alone answers the destination's start; an empty range answers dest.
+        let other = e.mem.alloc(0x10);
+        let answer = e
+            .call(
+                0x0064_e980,
+                &args![range, range + 0x10, other + 0x10, 0u32, 0u32, 0u32],
+            )
+            .u32();
+        assert_eq!(answer, other);
+        assert_eq!(e.mem.u32(other + 8), 0x42);
+        let answer = e
+            .call(0x0064_e980, &args![range, range, other, 0u32, 0u32, 0u32])
+            .u32();
+        assert_eq!(answer, other);
     }
 }

@@ -192,12 +192,128 @@ pub fn fn_00719ef0(
     e.call(LIST_SET_007A1950, &args![this, 0u32, u32::from(kept)]);
 }
 
+/// `ItemChange::GetFullName` (`004be2d0`, `thiscall`), the name comparison `00469880`
+/// (cdecl, two names), the form's type byte (`00401170`, `thiscall`: the byte at +4) and
+/// the `TESHealthForm` type descriptor (`01186c3c`) the cast targets.
+const ITEM_FULL_NAME: u32 = 0x004b_e2d0;
+const COMPARE_NAMES_00469880: u32 = 0x0046_9880;
+const FORM_TYPE_00401170: u32 = 0x0040_1170;
+const HEALTH_FORM_TYPE_01186C3C: u32 = 0x0118_6c3c;
+
+// Translated from 00719c80 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed (cdecl, two items; a list sort's comparison): `00469880` of the two items'
+/// full names (`ItemChange::GetFullName`, the second item asked first).
+pub fn fn_00719c80(e: &mut Engine, first: u32, second: u32) -> i32 {
+    let second_name = e.call(ITEM_FULL_NAME, &args![second]).u32();
+    let first_name = e.call(ITEM_FULL_NAME, &args![first]).u32();
+    e.call(COMPARE_NAMES_00469880, &args![first_name, second_name])
+        .i32()
+}
+
+// Translated from 00719ca0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed (cdecl, two items; a list sort's comparison): -1, 1 or 0 as the first item's
+/// count (`00726070`) is below, above or equal to the second's.
+pub fn fn_00719ca0(e: &mut Engine, first: u32, second: u32) -> i32 {
+    let a = e.call(ITEM_COUNT_00726070, &args![first]).i32();
+    let b = e.call(ITEM_COUNT_00726070, &args![second]).i32();
+    if a < b {
+        return -1;
+    }
+    let a = e.call(ITEM_COUNT_00726070, &args![first]).i32();
+    let b = e.call(ITEM_COUNT_00726070, &args![second]).i32();
+    if a > b {
+        1
+    } else {
+        0
+    }
+}
+
+/// The item's form cast to `TESHealthForm` (`__RTDynamicCast(form, 0, 01183108,
+/// 01186c3c, 0)`).
+fn health_form(e: &mut Engine, item: u32) -> u32 {
+    let form = e.call(ITEM_FORM_0044DDC0, &args![item]).u32();
+    e.call(
+        DYNAMIC_CAST,
+        &args![
+            form,
+            0u32,
+            CAST_SOURCE_01183108,
+            HEALTH_FORM_TYPE_01186C3C,
+            0u32
+        ],
+    )
+    .u32()
+}
+
+// Translated from 00719cf0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed (cdecl, two items; a list sort's comparison): -1, 1 or 0 as the first item's
+/// health (its form as a `TESHealthForm`, slot +0x10) is below, above or equal to the
+/// second's, compared unsigned.
+pub fn fn_00719cf0(e: &mut Engine, first: u32, second: u32) -> i32 {
+    let first = health_form(e, first);
+    let second = health_form(e, second);
+    let a = e.vcall(first, 0x10, &args![]).u32();
+    let b = e.vcall(second, 0x10, &args![]).u32();
+    if a < b {
+        return -1;
+    }
+    let a = e.vcall(first, 0x10, &args![]).u32();
+    let b = e.vcall(second, 0x10, &args![]).u32();
+    if a > b {
+        1
+    } else {
+        0
+    }
+}
+
+/// Whether the item's form type (`00401170` of `0044ddc0`) is one of `types`, asked once
+/// per type in order until one matches; false without an item.
+fn item_form_type_is(e: &mut Engine, item: u32, types: &[u32]) -> bool {
+    if item == 0 {
+        return false;
+    }
+    for &kind in types {
+        let form = e.call(ITEM_FORM_0044DDC0, &args![item]).u32();
+        if e.call(FORM_TYPE_00401170, &args![form]).u32() == kind {
+            return true;
+        }
+    }
+    false
+}
+
+// Translated from 00719da0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed (cdecl, one item; a list filter): whether there is an item and its form type
+/// is 0x28.
+pub fn fn_00719da0(e: &mut Engine, item: u32) -> bool {
+    item_form_type_is(e, item, &[0x28])
+}
+
+// Translated from 00719de0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed (cdecl, one item; a list filter): whether there is an item and its form type
+/// is 0x1a or 0x18.
+pub fn fn_00719de0(e: &mut Engine, item: u32) -> bool {
+    item_form_type_is(e, item, &[0x1a, 0x18])
+}
+
+// Translated from 00719e30 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed (cdecl, one item; a list filter): whether there is an item and its form type
+/// is one of 0x1f, 0x29, 0x67, 0x32, 0x6c, 0x74, 0x73.
+pub fn fn_00719e30(e: &mut Engine, item: u32) -> bool {
+    item_form_type_is(e, item, &[0x1f, 0x29, 0x67, 0x32, 0x6c, 0x74, 0x73])
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
         entry!(0x00719c00, fn_00719c00(Ptr, u32, u32) -> Ptr),
         entry!(0x0071_9be0, fn_00719be0(Ptr)),
         entry!(0x0071_9ef0, fn_00719ef0(Ptr, u32, u32, u32, u32, u8, u8)),
+        entry!(0x0071_9c80, fn_00719c80(u32, u32) -> i32),
+        entry!(0x0071_9ca0, fn_00719ca0(u32, u32) -> i32),
+        entry!(0x0071_9cf0, fn_00719cf0(u32, u32) -> i32),
+        entry!(0x0071_9da0, fn_00719da0(u32) -> bool),
+        entry!(0x0071_9de0, fn_00719de0(u32) -> bool),
+        entry!(0x0071_9e30, fn_00719e30(u32) -> bool),
     ]
 }
 
@@ -360,5 +476,76 @@ mod tests {
         e.call(0x00719c00, &[s, 0x40, 0x1234]);
         assert_eq!(e.mem.u32(s), SETTING_VTABLE);
         assert_eq!(e.mem.u32(s + 4), 0x1234);
+    }
+}
+
+#[cfg(test)]
+mod n059_tests {
+    use super::*;
+
+    const VTABLE: u32 = 0x0f00_0000;
+
+    #[test]
+    fn comparisons_order_by_name_count_and_health() {
+        let mut e = Engine::new();
+        e.register(ITEM_FULL_NAME, |_, a| (a[0] + 1).into_ret());
+        e.register(COMPARE_NAMES_00469880, |_, a| {
+            (a[0] as i32 - a[1] as i32).into_ret()
+        });
+        assert_eq!(e.call(0x0071_9c80, &args![0x10u32, 0x30u32]).i32(), -0x20);
+        e.register(ITEM_COUNT_00726070, |e, a| e.mem.u32(a[0] + 4).into_ret());
+        let item = |e: &mut Engine, count: u32| {
+            let block = e.mem.alloc(0xc);
+            e.mem.set_u32(block + 4, count);
+            block
+        };
+        let (two, five) = (item(&mut e, 2), item(&mut e, 5));
+        let compare = |e: &mut Engine, f: u32, a: u32, b: u32| e.call(f, &args![a, b]).i32();
+        assert_eq!(compare(&mut e, 0x0071_9ca0, two, five), -1);
+        assert_eq!(compare(&mut e, 0x0071_9ca0, five, two), 1);
+        assert_eq!(compare(&mut e, 0x0071_9ca0, two, two), 0);
+        // Health: the form (+8) is its own health form; slot +0x10 answers the word
+        // after the vtable (unsigned: 0xffffffff is the highest).
+        e.register(ITEM_FORM_0044DDC0, |e, a| e.mem.u32(a[0] + 8).into_ret());
+        e.register(DYNAMIC_CAST, |_, a| a[0].into_ret());
+        e.register(0x0e00_0010, |e, a| e.mem.u32(a[0] + 4).into_ret());
+        e.put_vtable(VTABLE, &[0, 0, 0, 0, 0x0e00_0010]);
+        let health = |e: &mut Engine, value: u32| {
+            let form = e.mem.alloc(8);
+            e.mem.set_u32(form, VTABLE);
+            e.mem.set_u32(form + 4, value);
+            let block = e.mem.alloc(0xc);
+            e.mem.set_u32(block + 8, form);
+            block
+        };
+        let (low, high) = (health(&mut e, 3), health(&mut e, 0xffff_ffff));
+        assert_eq!(compare(&mut e, 0x0071_9cf0, low, high), -1);
+        assert_eq!(compare(&mut e, 0x0071_9cf0, high, low), 1);
+        assert_eq!(compare(&mut e, 0x0071_9cf0, low, low), 0);
+    }
+
+    #[test]
+    fn filters_test_the_form_type() {
+        let mut e = Engine::new();
+        e.register(ITEM_FORM_0044DDC0, |e, a| e.mem.u32(a[0] + 8).into_ret());
+        e.register(FORM_TYPE_00401170, |_, a| a[0].into_ret());
+        let item = |e: &mut Engine, kind: u32| {
+            let block = e.mem.alloc(0xc);
+            e.mem.set_u32(block + 8, kind);
+            block
+        };
+        let filter = |e: &mut Engine, f: u32, item: u32| e.call(f, &args![item]).bool();
+        assert!(!filter(&mut e, 0x0071_9da0, 0));
+        let weapon = item(&mut e, 0x28);
+        assert!(filter(&mut e, 0x0071_9da0, weapon));
+        assert!(!filter(&mut e, 0x0071_9de0, weapon));
+        let armor = item(&mut e, 0x18);
+        assert!(filter(&mut e, 0x0071_9de0, armor));
+        assert!(!filter(&mut e, 0x0071_9e30, armor));
+        for kind in [0x1f, 0x29, 0x67, 0x32, 0x6c, 0x74, 0x73] {
+            let thing = item(&mut e, kind);
+            assert!(filter(&mut e, 0x0071_9e30, thing));
+        }
+        assert!(!filter(&mut e, 0x0071_9e30, 0));
     }
 }

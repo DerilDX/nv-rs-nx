@@ -376,6 +376,355 @@ pub fn ni_p_sys_bound_update_modifier_load_binary(
     fn_00c2d720(e, this, skip);
 }
 
+use crate::units::niparticle::nipsysdata::{add_viewer_string, stream_write};
+
+/// `NiPSysModifier`'s `IsEqual` (`00c31830`), `SaveBinary` (`00c31950`)
+/// and `GetViewerStrings` (`00c319e0`) (Xbox PDB names; `thiscall`, one
+/// word).
+const MODIFIER_IS_EQUAL: u32 = 0x00c3_1830;
+const MODIFIER_SAVE_BINARY: u32 = 0x00c3_1950;
+const MODIFIER_GET_VIEWER_STRINGS: u32 = 0x00c3_19e0;
+/// The strip data's accessors (`NiParticle/bsstrippsysdata.cpp`, unnamed;
+/// `thiscall` on the data): the number of points of particle `i`
+/// (`00c25db0`, one word; a `u16`), the address of point `j` of particle
+/// `i` (`00c25e00`, `(i, j)`) and the `float`s at +0x7C (`00c25e20`) and
+/// +0x80 (`00c25e40`) of that point's 0x84-byte entry (`(i, j)`, in
+/// `ST0`).
+const STRIP_POINT_COUNT: u32 = 0x00c2_5db0;
+const STRIP_POINT: u32 = 0x00c2_5e00;
+const STRIP_POINT_FACTOR_7C: u32 = 0x00c2_5e20;
+const STRIP_POINT_FACTOR_80: u32 = 0x00c2_5e40;
+/// The bound that stands in for a mesh particle without one (`011f4288`,
+/// four words).
+const EMPTY_BOUND: u32 = 0x011f_4288;
+/// The mesh particle data's object at +0x7C, its child array at +0xA0 and
+/// each child's bound pointer at +0x20 (PC offsets, as the code reads
+/// them).
+const MESH_DATA_ROOT: u32 = 0x7c;
+const ROOT_CHILDREN: u32 = 0xa0;
+const CHILD_BOUND: u32 = 0x20;
+/// `NiGetViewerString` (`00a7d330`, the text) and `_ov5` (`00a7d450`: a
+/// label and a 16-bit value) (Xbox PDB names; `cdecl`).
+const VIEWER_STRING: u32 = 0x00a7_d330;
+const VIEWER_STRING_SHORT: u32 = 0x00a7_d450;
+/// `NiPSysBoundUpdateModifier::ms_RTTI` (its name is the first word).
+const RTTI: u32 = 0x0120_2788;
+/// The label "Update Skip" (`010c01d8`).
+const LABEL_UPDATE_SKIP: u32 = 0x010c_01d8;
+
+/// The number of bounds an update merges: the update skip, at most
+/// `active / divisor + 1`, at least 1.
+fn bound_step(skip: i16, active: u32, divisor: u32) -> i32 {
+    let limit = (active / divisor) as i32 + 1;
+    let step = if i32::from(skip) < limit {
+        i32::from(skip)
+    } else {
+        limit
+    };
+    if step > 1 {
+        step
+    } else {
+        1
+    }
+}
+
+/// `count + 1` as the update count, back to 0 once it reaches `step`.
+fn advance_update_count(e: &mut Engine, this: Ptr<NiPSysBoundUpdateModifier>, step: i32) {
+    let count = e
+        .get(this, NiPSysBoundUpdateModifier::m_usUpdateCount)
+        .wrapping_add(1);
+    e.set(this, NiPSysBoundUpdateModifier::m_usUpdateCount, count);
+    if i32::from(count) >= step {
+        e.set(this, NiPSysBoundUpdateModifier::m_usUpdateCount, 0);
+    }
+}
+
+/// The first particle's size times its radius (`m_pfSizes[0] *
+/// m_pfRadii[0]`), the radius a bound of radius 0.0 gets.
+fn first_particle_radius(e: &Engine, data: Ptr<NiPSysData>) -> u32 {
+    let size = x87_load32(e.mem.u32(e.get(data, NiPSysData::m_pfSizes)));
+    let radius = x87_m32(e.mem.u32(e.get(data, NiPSysData::m_pfRadii)));
+    x87_store32(x87_mul(size, radius))
+}
+
+/// The bound pointer of child `index` of the mesh data's object, or the
+/// empty bound.
+fn child_bound(e: &Engine, root: u32, index: u32) -> u32 {
+    let children = e.mem.u32(root + ROOT_CHILDREN);
+    let child = e.mem.u32(children.wrapping_add(4 * index));
+    let bound = e.mem.u32(child + CHILD_BOUND);
+    if bound == 0 {
+        EMPTY_BOUND
+    } else {
+        bound
+    }
+}
+
+// Translated from 00c2d6e0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiPSysBoundUpdateModifier::IsEqual` (Xbox PDB): `NiPSysModifier`'s, then
+/// the same update skip.
+pub fn ni_p_sys_bound_update_modifier_is_equal(
+    e: &mut Engine,
+    this: Ptr<NiPSysBoundUpdateModifier>,
+    other: Ptr<NiPSysBoundUpdateModifier>,
+) -> bool {
+    if !e.call(MODIFIER_IS_EQUAL, &args![this, other]).bool() {
+        return false;
+    }
+    e.get(other, NiPSysBoundUpdateModifier::m_sUpdateSkip)
+        == e.get(this, NiPSysBoundUpdateModifier::m_sUpdateSkip)
+}
+
+// Translated from 00c2d880 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map: the bound update for strip particle data
+/// (`BSStripPSysData`). An update skip of -1 is first set to the capacity
+/// / 10 + 1 (`00c2d720`); the step is the skip, at most active / 10 + 1, at
+/// least 1. From the first vertex, the box around every point of the
+/// particles `count, count + step, ...` (each point widened by its two
+/// factors' product) gives bound `count` (centre: the box's middle, radius:
+/// half its diagonal). The bounds from the step on are cleared, bounds 1
+/// to `step - 1` merged into a copy of bound `count`, which becomes the
+/// data's bound (a radius of 0.0 is replaced by the first particle's size
+/// times its radius); the count advances, back to 0 at the step. The time
+/// is not read. The x87 arithmetic is done instruction by instruction in
+/// the exe's order.
+pub fn fn_00c2d880(
+    e: &mut Engine,
+    this: Ptr<NiPSysBoundUpdateModifier>,
+    _time: f32,
+    data: Ptr<NiPSysData>,
+) {
+    type B = NiPSysBoundUpdateModifier;
+    let active = u32::from(e.get(data, NiPSysData::m_usActive));
+    if e.get(this, B::m_sUpdateSkip) == -1 {
+        let vertices = u32::from(e.get(data, NiPSysData::m_usVertices));
+        fn_00c2d720(e, this, vertices / 10 + 1);
+    }
+    let step = bound_step(e.get(this, B::m_sUpdateSkip), active, 10);
+    let first = e.get(data, NiPSysData::m_pkVertex);
+    let mut low = [
+        x87_quiet_bits(e.mem.u32(first)),
+        x87_quiet_bits(e.mem.u32(first + 4)),
+        x87_quiet_bits(e.mem.u32(first + 8)),
+    ];
+    let mut high = low;
+    let mut index = i32::from(e.get(this, B::m_usUpdateCount));
+    while index < active as i32 {
+        let particle = index as u32 & 0xffff;
+        let count = e.call(STRIP_POINT_COUNT, &args![data, particle]).u32() as u16;
+        let mut point_index: u16 = 0;
+        while point_index < count {
+            let j = u32::from(point_index);
+            let point = e.call(STRIP_POINT, &args![data, particle, j]).u32();
+            let factor = e.call(STRIP_POINT_FACTOR_80, &args![data, particle, j]).st0;
+            let other = e.call(STRIP_POINT_FACTOR_7C, &args![data, particle, j]).st0;
+            let reach = x87_load32(x87_store32(x87_mul(other, factor)));
+            let x = x87_load32(e.mem.u32(point));
+            let t = x87_store32(x87_sub(x, reach));
+            if !(x87_load32(t) > x87_load32(low[0])) {
+                low[0] = t;
+            }
+            let t = x87_store32(x87_add(x87_load32(e.mem.u32(point)), reach));
+            if !(x87_load32(t) < x87_load32(high[0])) {
+                high[0] = t;
+            }
+            let t = x87_store32(x87_sub(x87_load32(e.mem.u32(point + 4)), reach));
+            if !(x87_load32(t) > x87_load32(low[1])) {
+                low[1] = t;
+            }
+            let t = x87_store32(x87_add(reach, x87_m32(e.mem.u32(point + 4))));
+            if !(x87_load32(t) < x87_load32(high[1])) {
+                high[1] = t;
+            }
+            let t = x87_store32(x87_sub(x87_load32(e.mem.u32(point + 8)), reach));
+            if !(x87_load32(t) > x87_load32(low[2])) {
+                low[2] = t;
+            }
+            let t = x87_store32(x87_add(reach, x87_m32(e.mem.u32(point + 8))));
+            if !(x87_load32(t) < x87_load32(high[2])) {
+                high[2] = t;
+            }
+            point_index = point_index.wrapping_add(1);
+        }
+        index = index.wrapping_add(step);
+    }
+    let low = low.map(x87_load32);
+    let high = high.map(x87_load32);
+    let slot_index = u32::from(e.get(this, B::m_usUpdateCount));
+    let slot = e
+        .get(this, B::m_pkSkipBounds)
+        .wrapping_add(slot_index * 0x10);
+    let sum: [u32; 3] = std::array::from_fn(|i| x87_store32(x87_add(high[i], low[i])));
+    let half = e.global::<f64>(HALF);
+    let center = [
+        x87_store32(x87_mul(x87_load32(sum[0]), half)),
+        x87_store32(x87_mul(x87_load32(sum[1]), half)),
+        x87_store32(x87_mul(half, x87_m32(sum[2]))),
+    ];
+    for (i, word) in center.into_iter().enumerate() {
+        e.mem.set_u32(slot + 4 * i as u32, word);
+    }
+    let extent: [u32; 3] = std::array::from_fn(|i| x87_store32(x87_sub(high[i], low[i])));
+    let extent = extent.map(x87_load32);
+    let xx = x87_mul(extent[0], extent[0]);
+    let yy = x87_mul(extent[1], extent[1]);
+    let zz = x87_mul(extent[2], extent[2]);
+    let squared = x87_store32(x87_add(x87_add(yy, xx), zz));
+    let root = e.call(SQRT, &args![x87_load32(squared)]).st0;
+    let radius = x87_store32(x87_mul(x87_load32(x87_store32(root)), half));
+    let slot_index = u32::from(e.get(this, B::m_usUpdateCount));
+    let slot = e
+        .get(this, B::m_pkSkipBounds)
+        .wrapping_add(slot_index * 0x10);
+    e.mem.set_u32(slot + 0xc, radius);
+    e.with_stack(0x10, |e, bound| {
+        let bound = bound.addr();
+        let mut index = step;
+        while index < i32::from(e.get(this, B::m_sUpdateSkip)) {
+            clear_bound(e, this, index as u32);
+            index += 1;
+        }
+        let slot_index = u32::from(e.get(this, B::m_usUpdateCount));
+        let slot = e
+            .get(this, B::m_pkSkipBounds)
+            .wrapping_add(slot_index * 0x10);
+        let words = e.mem.bytes(slot, 12);
+        e.mem.write(bound, &words);
+        e.mem
+            .set_u32(bound + 0xc, x87_quiet_bits(e.mem.u32(slot + 0xc)));
+        merge_bounds(e, this, step, bound);
+        let radius = x87_quiet_bits(e.mem.u32(bound + 0xc));
+        e.set(data, NiPSysData::m_kBoundRadius, radius);
+        e.set(data, NiPSysData::m_kBound, e.mem.u32(bound));
+        e.set(data, NiPSysData::m_kBoundCenterY, e.mem.u32(bound + 4));
+        e.set(data, NiPSysData::m_kBoundCenterZ, e.mem.u32(bound + 8));
+        if 0.0 == x87_load32(radius) {
+            let radius = first_particle_radius(e, data);
+            e.set(data, NiPSysData::m_kBoundRadius, radius);
+        }
+    });
+    advance_update_count(e, this, step);
+}
+
+/// Bounds 1 to `step - 1` with a radius other than 0.0 (a NaN counts)
+/// merged into the bound at `bound` (`NiBound::Merge`).
+fn merge_bounds(e: &mut Engine, this: Ptr<NiPSysBoundUpdateModifier>, step: i32, bound: u32) {
+    if step <= 1 {
+        return;
+    }
+    for index in 1..step as u32 {
+        let bounds = e.get(this, NiPSysBoundUpdateModifier::m_pkSkipBounds);
+        let other = bounds.wrapping_add(0x10 * index);
+        if !(0.0 == x87_m32(e.mem.u32(other + 0xc))) {
+            e.call(BOUND_MERGE, &args![bound, other]);
+        }
+    }
+}
+
+// Translated from 00c2dce0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map: the bound update for mesh particle data
+/// (`NiMeshPSysData`). An update skip of -1 is first set to the capacity
+/// / 20 + 1 (`00c2d720`); the step is the skip, at most active / 20 + 1, at
+/// least 1. The bound of the data's object's first child (+0x7C, children
+/// at +0xA0, bound pointer at +0x20; the empty bound at `011f4288` for
+/// none), merged with the bounds of children `count, count + step, ...`,
+/// becomes bound `count`. The bounds from the step on are cleared, bounds 1
+/// to `step - 1` merged in; a radius of 0.0 is replaced by the first
+/// particle's size times its radius, and the result is written to the
+/// bound the object's +0x20 points at. The count advances, back to 0 at
+/// the step. The time is not read.
+pub fn fn_00c2dce0(
+    e: &mut Engine,
+    this: Ptr<NiPSysBoundUpdateModifier>,
+    _time: f32,
+    data: Ptr<NiPSysData>,
+) {
+    type B = NiPSysBoundUpdateModifier;
+    let active = u32::from(e.get(data, NiPSysData::m_usActive));
+    let root = e.mem.u32(data.addr() + MESH_DATA_ROOT);
+    if e.get(this, B::m_sUpdateSkip) == -1 {
+        let vertices = u32::from(e.get(data, NiPSysData::m_usVertices));
+        fn_00c2d720(e, this, vertices / 20 + 1);
+    }
+    let step = bound_step(e.get(this, B::m_sUpdateSkip), active, 20);
+    e.with_stack(0x10, |e, bound| {
+        let bound = bound.addr();
+        let first = child_bound(e, root, 0);
+        let words = e.mem.bytes(first, 16);
+        e.mem.write(bound, &words);
+        let mut index = i32::from(e.get(this, B::m_usUpdateCount));
+        while index < active as i32 {
+            let other = child_bound(e, root, index as u32);
+            e.call(BOUND_MERGE, &args![bound, other]);
+            index = index.wrapping_add(step);
+        }
+        let slot_index = u32::from(e.get(this, B::m_usUpdateCount));
+        let slot = e
+            .get(this, B::m_pkSkipBounds)
+            .wrapping_add(slot_index * 0x10);
+        let words = e.mem.bytes(bound, 12);
+        e.mem.write(slot, &words);
+        let slot_index = u32::from(e.get(this, B::m_usUpdateCount));
+        let slot = e
+            .get(this, B::m_pkSkipBounds)
+            .wrapping_add(slot_index * 0x10);
+        e.mem
+            .set_u32(slot + 0xc, x87_quiet_bits(e.mem.u32(bound + 0xc)));
+        let mut index = step;
+        while index < i32::from(e.get(this, B::m_sUpdateSkip)) {
+            clear_bound(e, this, index as u32);
+            index += 1;
+        }
+        merge_bounds(e, this, step, bound);
+        if 0.0 == x87_m32(e.mem.u32(bound + 0xc)) {
+            let radius = first_particle_radius(e, data);
+            e.mem.set_u32(bound + 0xc, radius);
+        }
+        let radius = x87_quiet_bits(e.mem.u32(bound + 0xc));
+        let target = e.mem.u32(root + CHILD_BOUND);
+        e.mem.set_u32(target, e.mem.u32(bound));
+        e.mem.set_u32(target + 4, e.mem.u32(bound + 4));
+        e.mem.set_u32(target + 0xc, x87_quiet_bits(radius));
+        e.mem.set_u32(target + 8, e.mem.u32(bound + 8));
+    });
+    advance_update_count(e, this, step);
+}
+
+// Translated from 00c2e3f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiPSysBoundUpdateModifier::SaveBinary` (Xbox PDB): `NiPSysModifier`'s,
+/// then the update skip (2 bytes).
+pub fn ni_p_sys_bound_update_modifier_save_binary(
+    e: &mut Engine,
+    this: Ptr<NiPSysBoundUpdateModifier>,
+    stream: Ptr,
+) {
+    e.call(MODIFIER_SAVE_BINARY, &args![this, stream]);
+    e.with_stack(4, |e, slot| {
+        let skip = this.addr() + NiPSysBoundUpdateModifier::m_sUpdateSkip.off;
+        stream_write(e, stream.addr(), skip, 2, 2, slot.addr());
+    });
+}
+
+// Translated from 00c2e430 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiPSysBoundUpdateModifier::GetViewerStrings` (Xbox PDB):
+/// `NiPSysModifier`'s strings, the class name and the update skip.
+pub fn ni_p_sys_bound_update_modifier_get_viewer_strings(
+    e: &mut Engine,
+    this: Ptr<NiPSysBoundUpdateModifier>,
+    strings: Ptr,
+) {
+    let strings = strings.addr();
+    e.call(MODIFIER_GET_VIEWER_STRINGS, &args![this, strings]);
+    let name = e.global::<u32>(RTTI);
+    let string = e.call(VIEWER_STRING, &args![name]).u32();
+    add_viewer_string(e, strings, string);
+    let skip = u32::from(e.get(this, NiPSysBoundUpdateModifier::m_sUpdateSkip) as u16);
+    let string = e
+        .call(VIEWER_STRING_SHORT, &args![LABEL_UPDATE_SKIP, skip])
+        .u32();
+    add_viewer_string(e, strings, string);
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -420,6 +769,29 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(
             0x00c2_d6d0,
             ni_p_sys_bound_update_modifier_link_object(Ptr, Ptr)
+        ),
+        entry!(
+            0x00c2_d6e0,
+            ni_p_sys_bound_update_modifier_is_equal(
+                Ptr<NiPSysBoundUpdateModifier>,
+                Ptr<NiPSysBoundUpdateModifier>,
+            ) -> bool
+        ),
+        entry!(
+            0x00c2_d880,
+            fn_00c2d880(Ptr<NiPSysBoundUpdateModifier>, f32, Ptr<NiPSysData>)
+        ),
+        entry!(
+            0x00c2_dce0,
+            fn_00c2dce0(Ptr<NiPSysBoundUpdateModifier>, f32, Ptr<NiPSysData>)
+        ),
+        entry!(
+            0x00c2_e3f0,
+            ni_p_sys_bound_update_modifier_save_binary(Ptr<NiPSysBoundUpdateModifier>, Ptr)
+        ),
+        entry!(
+            0x00c2_e430,
+            ni_p_sys_bound_update_modifier_get_viewer_strings(Ptr<NiPSysBoundUpdateModifier>, Ptr)
         ),
     ]
 }
@@ -685,5 +1057,238 @@ mod tests {
             assert_eq!(e.get(this, NiPSysBoundUpdateModifier::m_sUpdateSkip), 3);
             assert_eq!(log_of(&e, ALLOCATE), vec![vec![MEMORY_MANAGER, 0x30]]);
         }
+    }
+}
+
+#[cfg(test)]
+mod n064_tests {
+    use super::*;
+    use crate::units::niparticle::nipsysdata::viewer_test::{self, answer, calls_to, quiet};
+
+    type B = NiPSysBoundUpdateModifier;
+
+    fn modifier(e: &mut Engine, skip: i16) -> Ptr<B> {
+        let this = e.new_object::<B>();
+        e.set(this, B::m_sUpdateSkip, skip);
+        let bounds = e.mem.alloc(0x10 * 4);
+        e.set(this, B::m_pkSkipBounds, bounds);
+        this
+    }
+
+    /// Particle data with `active` particles, the first vertex at the
+    /// origin and the first particle's size 2.0 and radius 3.0.
+    fn data(e: &mut Engine, active: u16) -> Ptr<NiPSysData> {
+        let data = e.new_object::<NiPSysData>();
+        e.set(data, NiPSysData::m_usActive, active);
+        e.set(data, NiPSysData::m_usVertices, 100);
+        let vertices = e.mem.alloc(12);
+        e.set(data, NiPSysData::m_pkVertex, vertices);
+        let sizes = e.mem.alloc(4);
+        e.mem.set_f32(sizes, 2.0);
+        e.set(data, NiPSysData::m_pfSizes, sizes);
+        let radii = e.mem.alloc(4);
+        e.mem.set_f32(radii, 3.0);
+        e.set(data, NiPSysData::m_pfRadii, radii);
+        data
+    }
+
+    fn bound(e: &Engine, addr: u32) -> Vec<f32> {
+        (0..4).map(|i| e.mem.f32(addr + 4 * i)).collect()
+    }
+
+    #[test]
+    fn is_equal_compares_the_update_skip() {
+        let mut e = Engine::new();
+        e.register(MODIFIER_IS_EQUAL, |_, _| answer(1));
+        let this = modifier(&mut e, 3);
+        let other = modifier(&mut e, 3);
+        assert!(e.call(0x00c2_d6e0, &args![this, other]).bool());
+        e.set(other, B::m_sUpdateSkip, -3);
+        assert!(!e.call(0x00c2_d6e0, &args![this, other]).bool());
+        e.register(MODIFIER_IS_EQUAL, |_, _| answer(0));
+        e.set(other, B::m_sUpdateSkip, 3);
+        assert!(!e.call(0x00c2_d6e0, &args![this, other]).bool());
+    }
+
+    /// Strip doubles: one point per particle, particle `i`'s point at
+    /// `(i, 0, 0)` (from a table at `0fa00000`), factors 1.0 and 0.5.
+    fn strip(e: &mut Engine) {
+        e.map(0x0fa0_0000, 12 * 40);
+        for i in 0..40u32 {
+            e.mem.set_f32(0x0fa0_0000 + 12 * i, i as f32);
+        }
+        e.register(STRIP_POINT_COUNT, |_, _| answer(1));
+        e.register(STRIP_POINT, |_, a| answer(0x0fa0_0000 + 12 * a[1]));
+        e.register(STRIP_POINT_FACTOR_7C, |_, _| Ret {
+            st0: 1.0,
+            ..Ret::default()
+        });
+        e.register(STRIP_POINT_FACTOR_80, |_, _| Ret {
+            st0: 0.5,
+            ..Ret::default()
+        });
+        e.register(SQRT, |_, a| Ret {
+            st0: f64::from_bits(u64::from(a[0]) | (u64::from(a[1]) << 32)).sqrt(),
+            ..Ret::default()
+        });
+        e.map(HALF, 8);
+        e.set_global::<f64>(HALF, 0.5);
+        quiet(e, &[BOUND_MERGE]);
+    }
+
+    #[test]
+    fn strip_update_bounds_every_step_th_particle() {
+        let mut e = Engine::new();
+        strip(&mut e);
+        let this = modifier(&mut e, 2);
+        let data = data(&mut e, 30);
+        let bounds = e.get(this, B::m_pkSkipBounds);
+        e.mem.set_f32(bounds + 0x10 + 0xc, 0.0);
+        e.call_log = Some(vec![]);
+        e.call(0x00c2_d880, &args![this, 0.0f32, data]);
+        // Particles 0, 2, .., 28 (step 2): x from -0.5 to 28.5.
+        let points = calls_to(&e, STRIP_POINT);
+        assert_eq!(points.len(), 15);
+        assert_eq!(points[1], vec![data.addr(), 2, 0]);
+        let radius = (843.0f64.sqrt() as f32) * 0.5;
+        assert_eq!(bound(&e, bounds), vec![14.0, 0.0, 0.0, radius]);
+        assert_eq!(e.get(data, NiPSysData::m_kBound), 14.0f32.to_bits());
+        assert_eq!(e.get(data, NiPSysData::m_kBoundRadius), radius.to_bits());
+        // Bound 1 had no radius: not merged.
+        assert!(calls_to(&e, BOUND_MERGE).is_empty());
+        assert_eq!(e.get(this, B::m_usUpdateCount), 1);
+        // The next update starts at particle 1, merges bound 0 into bound
+        // 1, and the count wraps.
+        e.call_log = Some(vec![]);
+        e.call(0x00c2_d880, &args![this, 0.0f32, data]);
+        assert_eq!(calls_to(&e, STRIP_POINT)[0], vec![data.addr(), 1, 0]);
+        assert_eq!(calls_to(&e, BOUND_MERGE).len(), 1);
+        assert_eq!(calls_to(&e, BOUND_MERGE)[0][1], bounds + 0x10);
+        assert_eq!(e.get(this, B::m_usUpdateCount), 0);
+    }
+
+    #[test]
+    fn strip_update_sets_an_unset_skip_and_clears_the_spare_bounds() {
+        let mut e = Engine::new();
+        strip(&mut e);
+        let blocks = e.mem.alloc(0x10 * 16);
+        e.map(0x0fb0_0000, 4);
+        e.mem.set_u32(0x0fb0_0000, blocks);
+        e.register(ALLOCATE, |e, _| answer(e.mem.u32(0x0fb0_0000)));
+        quiet(&mut e, &[DEALLOCATE]);
+        e.map(POINT_ZERO, 12);
+        let this = modifier(&mut e, -1);
+        // Capacity 100: skip 11; active 5: step 1.
+        let data = data(&mut e, 5);
+        e.mem.set_f32(blocks + 0x30 + 0xc, 7.0);
+        e.call(0x00c2_d880, &args![this, 0.0f32, data]);
+        assert_eq!(e.get(this, B::m_sUpdateSkip), 11);
+        assert_eq!(e.mem.f32(blocks + 0x30 + 0xc), 0.0);
+        assert_eq!(e.get(this, B::m_usUpdateCount), 0);
+    }
+
+    #[test]
+    fn strip_update_with_a_zero_radius_takes_the_first_particle_size() {
+        let mut e = Engine::new();
+        strip(&mut e);
+        e.register(STRIP_POINT_COUNT, |_, _| answer(0));
+        let this = modifier(&mut e, 1);
+        let data = data(&mut e, 1);
+        e.call(0x00c2_d880, &args![this, 0.0f32, data]);
+        assert_eq!(e.get(data, NiPSysData::m_kBoundRadius), 6.0f32.to_bits());
+        let bounds = e.get(this, B::m_pkSkipBounds);
+        assert_eq!(bound(&e, bounds), vec![0.0; 4]);
+    }
+
+    /// A mesh data object whose children have bounds at `bounds[i]`
+    /// (0: none) and whose own bound pointer points at a fresh bound.
+    fn mesh(e: &mut Engine, data: Ptr<NiPSysData>, bounds: &[u32]) -> u32 {
+        let root = e.mem.alloc(0x100);
+        let children = e.mem.alloc(4 * bounds.len() as u32);
+        for (i, &bound) in bounds.iter().enumerate() {
+            let child = e.mem.alloc(0x40);
+            e.mem.set_u32(child + CHILD_BOUND, bound);
+            e.mem.set_u32(children + 4 * i as u32, child);
+        }
+        e.mem.set_u32(root + ROOT_CHILDREN, children);
+        let target = e.mem.alloc(0x10);
+        e.mem.set_u32(root + CHILD_BOUND, target);
+        e.mem.set_u32(data.addr() + MESH_DATA_ROOT, root);
+        target
+    }
+
+    #[test]
+    fn mesh_update_merges_the_children_bounds() {
+        let mut e = Engine::new();
+        e.map(EMPTY_BOUND, 16);
+        // The merge double adds the other bound's radius.
+        e.register(BOUND_MERGE, |e, a| {
+            let sum = e.mem.f32(a[0] + 0xc) + e.mem.f32(a[1] + 0xc);
+            e.mem.set_f32(a[0] + 0xc, sum);
+            Ret::default()
+        });
+        let this = modifier(&mut e, 1);
+        let data = data(&mut e, 3);
+        let first = e.mem.alloc(0x10);
+        for (i, value) in [1.0f32, 2.0, 3.0, 4.0].iter().enumerate() {
+            e.mem.set_f32(first + 4 * i as u32, *value);
+        }
+        let second = e.mem.alloc(0x10);
+        e.mem.set_f32(second + 0xc, 0.5);
+        let target = mesh(&mut e, data, &[first, second, 0]);
+        e.call_log = Some(vec![]);
+        e.call(0x00c2_dce0, &args![this, 0.0f32, data]);
+        // Children 0, 1 and 2 (the empty bound) merged into a copy of 0.
+        let merged = calls_to(&e, BOUND_MERGE);
+        assert_eq!(merged.len(), 3);
+        assert_eq!(merged[2][1], EMPTY_BOUND);
+        assert_eq!(bound(&e, target), vec![1.0, 2.0, 3.0, 8.5]);
+        let bounds = e.get(this, B::m_pkSkipBounds);
+        assert_eq!(bound(&e, bounds), vec![1.0, 2.0, 3.0, 8.5]);
+        assert_eq!(e.get(this, B::m_usUpdateCount), 0);
+    }
+
+    #[test]
+    fn mesh_update_with_a_zero_radius_takes_the_first_particle_size() {
+        let mut e = Engine::new();
+        e.map(EMPTY_BOUND, 16);
+        e.map(POINT_ZERO, 12);
+        quiet(&mut e, &[BOUND_MERGE]);
+        let this = modifier(&mut e, 2);
+        let data = data(&mut e, 1);
+        let target = mesh(&mut e, data, &[0]);
+        e.call(0x00c2_dce0, &args![this, 0.0f32, data]);
+        assert_eq!(bound(&e, target), vec![0.0, 0.0, 0.0, 6.0]);
+        // The slot keeps the radius before that replacement.
+        let bounds = e.get(this, B::m_pkSkipBounds);
+        assert_eq!(e.mem.f32(bounds + 0xc), 0.0);
+    }
+
+    #[test]
+    fn save_binary_writes_the_update_skip() {
+        let mut e = Engine::new();
+        quiet(&mut e, &[MODIFIER_SAVE_BINARY]);
+        let stream = viewer_test::out_stream(&mut e);
+        let this = modifier(&mut e, -2);
+        e.call(0x00c2_e3f0, &args![this, stream]);
+        assert_eq!(viewer_test::written(&e, stream), (vec![0xfe, 0xff], 2));
+    }
+
+    #[test]
+    fn viewer_strings_add_the_name_and_the_update_skip() {
+        let mut e = Engine::new();
+        quiet(&mut e, &[MODIFIER_GET_VIEWER_STRINGS]);
+        viewer_test::counting(&mut e, &[VIEWER_STRING, VIEWER_STRING_SHORT]);
+        e.map(RTTI, 4);
+        e.set_global::<u32>(RTTI, 0x0100_00f0);
+        let this = modifier(&mut e, -2);
+        let strings = viewer_test::strings(&mut e, 8);
+        e.call_log = Some(vec![]);
+        e.call(0x00c2_e430, &args![this, strings]);
+        assert_eq!(viewer_test::collected(&e, strings), vec![1, 2]);
+        assert_eq!(
+            calls_to(&e, VIEWER_STRING_SHORT),
+            vec![vec![LABEL_UPDATE_SKIP, 0xfffe]]
+        );
     }
 }

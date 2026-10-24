@@ -1053,9 +1053,111 @@ pub fn fn_00be21b0(e: &mut Engine) {
     }
 }
 
+// Translated from 00be0ce0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed (Ghidra made no function of it; in many shader vtables, the first at `010b00e4`
+/// slot 73): `thiscall`, no stack words: `this`'s slot +0x128 with the pass at +0x5c; what it
+/// answers in EAX, EDX and ST0 is this function's result.
+pub fn fn_00be0ce0(e: &mut Engine, this: Ptr) -> Ret {
+    let pass = e.mem.u32(this.addr() + 0x5c);
+    e.vcall(this.addr(), 0x128, &args![pass])
+}
+
+/// The uniform-form entry of [`fn_00be0ce0`]: `this`; the call's registers pass through.
+fn fn_00be0ce0_entry(e: &mut Engine, a: &[u32]) -> Ret {
+    fn_00be0ce0(e, Ptr::new(a[0]))
+}
+
+// Translated from 00be0e30 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed (Ghidra made no function of it): slot 1 of the include handler vtable `010bc610`
+/// (`stdcall`, `this` and the data): `Close`, the data given back to the memory manager
+/// (`Deallocate`). Answers 0 (`S_OK`).
+pub fn fn_00be0e30(e: &mut Engine, _this: u32, data: u32) -> u32 {
+    e.call(MEMORY_DEALLOCATE, &args![MEMORY_MANAGER, data]);
+    0
+}
+
+// Translated from 00be0fb0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed (Ghidra made no function of it; in many shader vtables, the first at `010af420`
+/// slot 74): `thiscall` (`this` not read), one word (a pass): clears the texture word (+8) of
+/// each of the pass's stages (count +0x18, signed; array +0x24) whose +0xc is not 1.
+pub fn fn_00be0fb0(e: &mut Engine, _this: Ptr, pass: u32) {
+    if pass == 0 {
+        return;
+    }
+    let count = e.mem.u32(pass + 0x18) as i32;
+    let mut index = 0i32;
+    while index < count {
+        let stage = e
+            .mem
+            .u32(e.mem.u32(pass + 0x24).wrapping_add(4 * index as u32));
+        if e.mem.u32(stage + 0xc) != 1 {
+            e.mem.set_u32(stage + 8, 0);
+        }
+        index += 1;
+    }
+}
+
+/// The include handler's path maker `00afe830` (unnamed; `cdecl`: base path, file name, out
+/// buffer).
+const INCLUDE_PATH_00AFE830: u32 = 0x00af_e830;
+
+// Translated from 00be1eb0 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 00be1eb0 - the /GS stack cookie check (00ec408c) is not translated.
+/// Unnamed (Ghidra made no function of it): slot 0 of the include handler vtable `010bc610`
+/// (`stdcall`, six words: `this`, the include type, the file name, the parent data, the data
+/// and size outputs): `Open`. The path is made from `this`'s base path (+4) and the file name
+/// (`00afe830`, a 0x104-byte buffer) and opened (`FileFinder::GetFile(path, 0, 0x4000,
+/// 0x20)`); with no file, or one not open (byte +0x2c clear; then deleted through slot 0 with
+/// 1), answers `E_FAIL` (0x80004005). Otherwise a block of the file's size (slot +0x28) from
+/// the memory manager goes to `*data`, the file's read function (+8, `cdecl`: file, block,
+/// size, the address of a 1, 1) fills it, its position (+4) moves on and `*size` gets the bytes
+/// read; the file is deleted and 0 (`S_OK`) answered.
+pub fn fn_00be1eb0(
+    e: &mut Engine,
+    this: u32,
+    _unused_1: u32,
+    file_name: u32,
+    _unused_3: u32,
+    data: Ptr,
+    size: Ptr,
+) -> u32 {
+    let base_path = e.mem.u32(this + 4);
+    e.with_stack(0x108, |e, frame| {
+        let flag = frame.addr();
+        let path = flag + 4;
+        e.call(INCLUDE_PATH_00AFE830, &args![base_path, file_name, path]);
+        let file = get_file(e, path);
+        if file == 0 {
+            return 0x8000_4005;
+        }
+        if e.mem.u8(file + 0x2c) == 0 {
+            e.vcall(file, 0, &args![1u32]);
+            return 0x8000_4005;
+        }
+        let bytes = e.vcall(file, 0x28, &args![]).u32();
+        let block = e.call(MEMORY_ALLOCATE, &args![MEMORY_MANAGER, bytes]).u32();
+        e.mem.set_u32(data.addr(), block);
+        let read = e.mem.u32(file + 8);
+        e.mem.set_u32(flag, 1);
+        let got = e.call(read, &args![file, block, bytes, flag, 1u32]).u32();
+        let position = e.mem.u32(file + 4).wrapping_add(got);
+        e.mem.set_u32(file + 4, position);
+        e.mem.set_u32(size.addr(), got);
+        e.vcall(file, 0, &args![1u32]);
+        0
+    })
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        (0x00be_0ce0, fn_00be0ce0_entry as AbiFn),
+        entry!(0x00be_0e30, fn_00be0e30(u32, u32) -> u32),
+        entry!(0x00be_0fb0, fn_00be0fb0(Ptr, u32)),
+        entry!(
+            0x00be_1eb0,
+            fn_00be1eb0(u32, u32, u32, u32, Ptr, Ptr) -> u32
+        ),
         entry!(0x00be_0c00, bs_shader_make_path(Ptr, Ptr)),
         entry!(0x00be_2200, bs_shader_bs_shader(Ptr) -> Ptr),
         entry!(
@@ -2090,5 +2192,128 @@ mod b054_tests {
             calls(&e, PASS_ELEMENT_00E7EB00),
             vec![vec![made[0], 0], vec![made[3], 0]]
         );
+    }
+}
+
+#[cfg(test)]
+mod n070_tests {
+    use super::*;
+
+    fn calls(e: &Engine, addr: u32) -> Vec<Vec<u32>> {
+        e.call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|(a, _)| *a == addr)
+            .map(|(_, w)| w.clone())
+            .collect()
+    }
+
+    const SLOTS: u32 = 0x0f40_0000;
+
+    fn object(e: &mut Engine, size: u32) -> u32 {
+        let vtable = e.mem.alloc(0x130);
+        for offset in (0..0x130u32).step_by(4) {
+            e.mem.set_u32(vtable + offset, SLOTS + offset);
+        }
+        let object = e.mem.alloc(size);
+        e.mem.set_u32(object, vtable);
+        object
+    }
+
+    fn rig() -> Engine {
+        let mut e = Engine::new();
+        for offset in (0..0x130u32).step_by(4) {
+            e.register(SLOTS + offset, |_, _| Ret::default());
+        }
+        e.register(MEMORY_DEALLOCATE, |_, _| Ret::default());
+        e.register(MEMORY_ALLOCATE, |e, a| e.mem.alloc(a[1]).into_ret());
+        e.call_log = Some(vec![]);
+        e
+    }
+
+    #[test]
+    fn fn_00be0ce0_and_00be0e30() {
+        let mut e = rig();
+        e.register(SLOTS + 0x128, |_, _| 6u32.into_ret());
+        let this = object(&mut e, 0x60);
+        e.mem.set_u32(this + 0x5c, 0x5c5c);
+        assert_eq!(e.call(0x00be_0ce0, &args![this]).u32(), 6);
+        assert_eq!(calls(&e, SLOTS + 0x128), vec![vec![this, 0x5c5c]]);
+        assert_eq!(e.call(0x00be_0e30, &args![this, 0x9999u32]).u32(), 0);
+        assert_eq!(
+            calls(&e, MEMORY_DEALLOCATE),
+            vec![vec![MEMORY_MANAGER, 0x9999]]
+        );
+    }
+
+    #[test]
+    fn fn_00be0fb0_clears_stages_not_marked_1() {
+        let mut e = rig();
+        let stages: Vec<u32> = (0..3)
+            .map(|i| {
+                let stage = e.mem.alloc(0x10);
+                e.mem.set_u32(stage + 8, 0x88);
+                e.mem.set_u32(stage + 0xc, i);
+                stage
+            })
+            .collect();
+        let array = e.mem.alloc(12);
+        for (i, stage) in stages.iter().enumerate() {
+            e.mem.set_u32(array + 4 * i as u32, *stage);
+        }
+        let pass = e.mem.alloc(0x28);
+        e.mem.set_u32(pass + 0x18, 3);
+        e.mem.set_u32(pass + 0x24, array);
+        e.call(0x00be_0fb0, &args![0u32, pass]);
+        let words: Vec<u32> = stages.iter().map(|s| e.mem.u32(s + 8)).collect();
+        assert_eq!(words, vec![0, 0x88, 0]);
+        e.call(0x00be_0fb0, &args![0u32, 0u32]);
+    }
+
+    #[test]
+    fn fn_00be1eb0_reads_the_include() {
+        let mut e = rig();
+        e.register(INCLUDE_PATH_00AFE830, |_, _| Ret::default());
+        e.register(0x0f41_0000, |e, a| {
+            assert_eq!(e.mem.u32(a[3]), 1);
+            e.mem.set_u8(a[1], 0x41);
+            a[2].into_ret()
+        });
+        e.register(SLOTS + 0x28, |_, _| 0x20u32.into_ret());
+        let file = object(&mut e, 0x30);
+        e.mem.set_u32(file + 4, 0x100);
+        e.mem.set_u32(file + 8, 0x0f41_0000);
+        e.mem.set_u8(file + 0x2c, 1);
+        e.map(0x0f42_0000, 0x10);
+        e.set_global(0x0f42_0000, file);
+        e.register(GET_FILE, |e, _| e.mem.u32(0x0f42_0000).into_ret());
+        let this = e.mem.alloc(8);
+        e.mem.set_u32(this + 4, 0x4444);
+        let data = e.mem.alloc(4);
+        let size = e.mem.alloc(4);
+        let answer = e
+            .call(0x00be_1eb0, &args![this, 0u32, 0x5555u32, 0u32, data, size])
+            .u32();
+        assert_eq!(answer, 0);
+        let block = e.mem.u32(data);
+        assert_eq!(e.mem.u8(block), 0x41);
+        assert_eq!(e.mem.u32(size), 0x20);
+        assert_eq!(e.mem.u32(file + 4), 0x120);
+        assert_eq!(calls(&e, SLOTS), vec![vec![file, 1]]);
+        let path = &calls(&e, INCLUDE_PATH_00AFE830)[0];
+        assert_eq!(path[..2], [0x4444, 0x5555]);
+        // A file not open: deleted, E_FAIL; no file: E_FAIL.
+        e.mem.set_u8(file + 0x2c, 0);
+        let answer = e
+            .call(0x00be_1eb0, &args![this, 0u32, 0x5555u32, 0u32, data, size])
+            .u32();
+        assert_eq!(answer, 0x8000_4005);
+        assert_eq!(calls(&e, SLOTS).len(), 2);
+        e.set_global(0x0f42_0000, 0u32);
+        let answer = e
+            .call(0x00be_1eb0, &args![this, 0u32, 0x5555u32, 0u32, data, size])
+            .u32();
+        assert_eq!(answer, 0x8000_4005);
     }
 }

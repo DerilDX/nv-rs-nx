@@ -226,6 +226,146 @@ pub fn ni_p_sys_age_death_modifier_load_binary(
     e.call(READ_LINK_ID, &args![s]);
 }
 
+/// `NiPSysModifier`'s `IsEqual` (`00c31830`), `SaveBinary` (`00c31950`) and
+/// `GetViewerStrings` (`00c319e0`), `thiscall` with one word each.
+const MODIFIER_IS_EQUAL: u32 = 0x00c3_1830;
+const MODIFIER_SAVE_BINARY: u32 = 0x00c3_1950;
+const MODIFIER_GET_VIEWER_STRINGS: u32 = 0x00c3_19e0;
+/// The stream's output binary stream (+0x250) and its write function (word +0xc, `cdecl`:
+/// the object, the buffer, the count, the address of the component size and the component
+/// count); the bytes written are added to the object's word +4.
+const STREAM_OUTPUT_BINARY_STREAM: u32 = 0x250;
+/// The class's RTTI record (its first word the class name), the viewer string makers
+/// (`cdecl`: `NiGetViewerString` `00a7d330`, of a byte `00a7d370`, of a string `00a7d5e0`),
+/// the string array's grow (`0096ad30`) and set-at (`0096ae90`), and the names
+/// (`Spawn on Death`, `Spawn Modifier`, `None`).
+const AGE_DEATH_MODIFIER_RTTI: u32 = 0x0120_2798;
+const NI_GET_VIEWER_STRING: u32 = 0x00a7_d330;
+const VIEWER_STRING_BOOL_00A7D370: u32 = 0x00a7_d370;
+const VIEWER_STRING_TEXT_00A7D5E0: u32 = 0x00a7_d5e0;
+const STRINGS_GROW: u32 = 0x0096_ad30;
+const STRINGS_SET_AT: u32 = 0x0096_ae90;
+const SPAWN_ON_DEATH_NAME: u32 = 0x010c_03b8;
+const SPAWN_MODIFIER_NAME: u32 = 0x010c_03a8;
+const NONE_TEXT: u32 = 0x0102_909c;
+
+// Translated from 00c2ef80 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiPSysAgeDeathModifier::IsEqual` (Xbox PDB, `thiscall`, one word: the other modifier):
+/// `NiPSysModifier::IsEqual`, the same `m_bSpawnOnDeath`, and either no spawn modifier on
+/// both or both set with the other's spawn modifier's virtual slot +0x5c (with this one's)
+/// answering non-zero.
+pub fn ni_p_sys_age_death_modifier_is_equal(
+    e: &mut Engine,
+    this: Ptr<NiPSysAgeDeathModifier>,
+    other: Ptr<NiPSysAgeDeathModifier>,
+) -> bool {
+    if !e.call(MODIFIER_IS_EQUAL, &args![this, other]).bool() {
+        return false;
+    }
+    if e.get(other, NiPSysAgeDeathModifier::m_bSpawnOnDeath)
+        != e.get(this, NiPSysAgeDeathModifier::m_bSpawnOnDeath)
+    {
+        return false;
+    }
+    let theirs = e.get(other, NiPSysAgeDeathModifier::m_pkSpawnModifier);
+    let mine_set = e.get(this, NiPSysAgeDeathModifier::m_pkSpawnModifier) != 0;
+    if (theirs != 0) != mine_set {
+        return false;
+    }
+    if theirs == 0 {
+        return true;
+    }
+    let mine = e.get(this, NiPSysAgeDeathModifier::m_pkSpawnModifier);
+    // Reached only with both set, so this test always passes.
+    if mine == 0 {
+        return true;
+    }
+    e.vcall(theirs, 0x5c, &args![mine]).bool()
+}
+
+// Translated from 00c2f260 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiPSysAgeDeathModifier::SaveBinary` (Xbox PDB, `thiscall`, one word: the stream):
+/// `NiPSysModifier::SaveBinary`, `m_bSpawnOnDeath` (one byte, written from the low byte of the
+/// argument's stack word; the component size in the frame's local word) through the stream's
+/// output binary stream, then the spawn modifier's link ID (the stream's virtual slot +0x30).
+pub fn ni_p_sys_age_death_modifier_save_binary(
+    e: &mut Engine,
+    this: Ptr<NiPSysAgeDeathModifier>,
+    stream: Ptr,
+) {
+    e.call(MODIFIER_SAVE_BINARY, &args![this, stream]);
+    e.with_stack(8, |e, frame| {
+        let (size_slot, argument_slot) = (frame.addr(), frame.addr() + 4);
+        let flag = e.get(this, NiPSysAgeDeathModifier::m_bSpawnOnDeath);
+        let binary = e.mem.u32(stream.addr() + STREAM_OUTPUT_BINARY_STREAM);
+        e.mem.set_u32(argument_slot, stream.addr());
+        e.mem.set_u8(argument_slot, flag);
+        e.mem.set_u32(size_slot, 1);
+        let write = e.mem.u32(binary + 0xc);
+        let written = e
+            .call(write, &args![binary, argument_slot, 1u32, size_slot, 1u32])
+            .u32();
+        let total = e.mem.u32(binary + 4).wrapping_add(written);
+        e.mem.set_u32(binary + 4, total);
+    });
+    let spawn = e.get(this, NiPSysAgeDeathModifier::m_pkSpawnModifier);
+    e.vcall(stream.addr(), 0x30, &args![spawn]);
+}
+
+/// Adds the string at `slot` to the viewer string array (grown to growth + size when full).
+fn add_viewer_string(e: &mut Engine, strings: u32, slot: u32) {
+    let size = u32::from(e.mem.u16(strings + 0xa));
+    if size >= u32::from(e.mem.u16(strings + 8)) {
+        let step = u32::from(e.mem.u16(strings + 0xe));
+        e.call(STRINGS_GROW, &args![strings, step.wrapping_add(size)]);
+    }
+    e.call(STRINGS_SET_AT, &args![strings, size, slot]);
+}
+
+// Translated from 00c2f2c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiPSysAgeDeathModifier::GetViewerStrings` (Xbox PDB, `thiscall`, one word: the string
+/// array): `NiPSysModifier::GetViewerStrings`, then the class name (RTTI `01202798`),
+/// `Spawn on Death` and `Spawn Modifier` (the spawn modifier's name, its word +8, or `None`),
+/// each added to the array (the string kept in the argument's stack word).
+pub fn ni_p_sys_age_death_modifier_get_viewer_strings(
+    e: &mut Engine,
+    this: Ptr<NiPSysAgeDeathModifier>,
+    strings: Ptr,
+) {
+    e.call(MODIFIER_GET_VIEWER_STRINGS, &args![this, strings]);
+    let strings = strings.addr();
+    e.with_stack(4, |e, slot| {
+        let slot = slot.addr();
+        let name = e.global::<u32>(AGE_DEATH_MODIFIER_RTTI);
+        let text = e.call(NI_GET_VIEWER_STRING, &args![name]).u32();
+        e.mem.set_u32(slot, text);
+        add_viewer_string(e, strings, slot);
+        let flag = u32::from(e.get(this, NiPSysAgeDeathModifier::m_bSpawnOnDeath));
+        let text = e
+            .call(
+                VIEWER_STRING_BOOL_00A7D370,
+                &args![SPAWN_ON_DEATH_NAME, flag],
+            )
+            .u32();
+        e.mem.set_u32(slot, text);
+        add_viewer_string(e, strings, slot);
+        let spawn = e.get(this, NiPSysAgeDeathModifier::m_pkSpawnModifier);
+        let spawn_name = if spawn != 0 {
+            e.mem.u32(spawn + 8)
+        } else {
+            NONE_TEXT
+        };
+        let text = e
+            .call(
+                VIEWER_STRING_TEXT_00A7D5E0,
+                &args![SPAWN_MODIFIER_NAME, spawn_name],
+            )
+            .u32();
+        e.mem.set_u32(slot, text);
+        add_viewer_string(e, strings, slot);
+    });
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -262,6 +402,21 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         ),
         entry!(0x00c2efe0, ni_p_sys_age_death_modifier_get_r_t_t_i() -> u32),
         entry!(0x00c2_8b60, ni_p_sys_age_death_modifier_register_streamables(Ptr, Ptr) -> bool),
+        entry!(
+            0x00c2_ef80,
+            ni_p_sys_age_death_modifier_is_equal(
+                Ptr<NiPSysAgeDeathModifier>,
+                Ptr<NiPSysAgeDeathModifier>,
+            ) -> bool
+        ),
+        entry!(
+            0x00c2_f260,
+            ni_p_sys_age_death_modifier_save_binary(Ptr<NiPSysAgeDeathModifier>, Ptr)
+        ),
+        entry!(
+            0x00c2_f2c0,
+            ni_p_sys_age_death_modifier_get_viewer_strings(Ptr<NiPSysAgeDeathModifier>, Ptr)
+        ),
     ]
 }
 
@@ -495,5 +650,131 @@ mod tests {
         e.call(0x00c2_f200, &args![this, stream]);
         assert_eq!(e.get(this, NiPSysAgeDeathModifier::m_bSpawnOnDeath), 1);
         assert_eq!(log_of(&e, READ_LINK_ID), vec![vec![stream]]);
+    }
+}
+
+#[cfg(test)]
+mod n063_tests {
+    use super::*;
+
+    fn calls(e: &Engine, addr: u32) -> Vec<Vec<u32>> {
+        e.call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|c| c.0 == addr)
+            .map(|c| c.1.clone())
+            .collect()
+    }
+
+    /// An object of `size` bytes whose vtable slot `o` calls `0x0e10_0000 + o`.
+    fn object_with_slots(e: &mut Engine, size: u32) -> u32 {
+        let vtable = e.mem.alloc(0x100);
+        for slot in 0..0x40u32 {
+            e.mem.set_u32(vtable + 4 * slot, 0x0e10_0000 + 4 * slot);
+        }
+        let object = e.mem.alloc(size);
+        e.mem.set_u32(object, vtable);
+        object
+    }
+
+    #[test]
+    fn is_equal_compares_flag_and_spawn_modifiers() {
+        let mut e = Engine::new();
+        e.register(MODIFIER_IS_EQUAL, |_, _| 1u32.into_ret());
+        e.register(0x0e10_005c, |_, _| 1u32.into_ret());
+        let this: Ptr<NiPSysAgeDeathModifier> = e.new_object();
+        let other: Ptr<NiPSysAgeDeathModifier> = e.new_object();
+        // Neither has a spawn modifier.
+        assert!(e.call(0x00c2_ef80, &args![this, other]).bool());
+        // Only one has one.
+        let theirs = object_with_slots(&mut e, 0x20);
+        e.set(other, NiPSysAgeDeathModifier::m_pkSpawnModifier, theirs);
+        assert!(!e.call(0x00c2_ef80, &args![this, other]).bool());
+        // Both: the other's spawn modifier compares itself with this one's.
+        let mine = object_with_slots(&mut e, 0x20);
+        e.set(this, NiPSysAgeDeathModifier::m_pkSpawnModifier, mine);
+        e.call_log = Some(vec![]);
+        assert!(e.call(0x00c2_ef80, &args![this, other]).bool());
+        assert_eq!(calls(&e, 0x0e10_005c), vec![vec![theirs, mine]]);
+        e.register(0x0e10_005c, |_, _| 0x100u32.into_ret());
+        assert!(!e.call(0x00c2_ef80, &args![this, other]).bool());
+        e.set(this, NiPSysAgeDeathModifier::m_bSpawnOnDeath, 1);
+        e.register(0x0e10_005c, |_, _| 1u32.into_ret());
+        assert!(!e.call(0x00c2_ef80, &args![this, other]).bool());
+        e.set(other, NiPSysAgeDeathModifier::m_bSpawnOnDeath, 1);
+        e.register(MODIFIER_IS_EQUAL, |_, _| 0u32.into_ret());
+        assert!(!e.call(0x00c2_ef80, &args![this, other]).bool());
+    }
+
+    #[test]
+    fn save_binary_writes_the_flag_and_link() {
+        let mut e = Engine::new();
+        e.register(MODIFIER_SAVE_BINARY, |_, _| Ret::default());
+        e.register(0x0e10_0030, |_, _| Ret::default());
+        e.register(0x0e20_0000, |e, a| {
+            assert_eq!(e.mem.u32(a[3]), 1);
+            u32::from(e.mem.u8(a[1])).into_ret()
+        });
+        let this: Ptr<NiPSysAgeDeathModifier> = e.new_object();
+        e.set(this, NiPSysAgeDeathModifier::m_bSpawnOnDeath, 1);
+        e.set(this, NiPSysAgeDeathModifier::m_pkSpawnModifier, 0x77);
+        let stream = object_with_slots(&mut e, 0x260);
+        let binary = e.mem.alloc(0x10);
+        e.mem.set_u32(binary + 0xc, 0x0e20_0000);
+        e.mem.set_u32(stream + STREAM_OUTPUT_BINARY_STREAM, binary);
+        e.call_log = Some(vec![]);
+        e.call(0x00c2_f260, &args![this, stream]);
+        assert_eq!(
+            calls(&e, MODIFIER_SAVE_BINARY),
+            vec![vec![this.addr(), stream]]
+        );
+        assert_eq!(e.mem.u32(binary + 4), 1);
+        assert_eq!(calls(&e, 0x0e20_0000)[0][2], 1);
+        assert_eq!(calls(&e, 0x0e10_0030), vec![vec![stream, 0x77]]);
+    }
+
+    #[test]
+    fn viewer_strings_name_the_spawn_modifier_or_none() {
+        let mut e = Engine::new();
+        e.map(0x0120_2000, 0x1000);
+        e.set_global(AGE_DEATH_MODIFIER_RTTI, 0x0abc_0000u32);
+        for addr in [MODIFIER_GET_VIEWER_STRINGS, STRINGS_GROW, STRINGS_SET_AT] {
+            e.register(addr, |_, _| Ret::default());
+        }
+        for addr in [
+            NI_GET_VIEWER_STRING,
+            VIEWER_STRING_BOOL_00A7D370,
+            VIEWER_STRING_TEXT_00A7D5E0,
+        ] {
+            e.register(addr, |_, a| a[a.len() - 1].into_ret());
+        }
+        let this: Ptr<NiPSysAgeDeathModifier> = e.new_object();
+        let strings = e.mem.alloc(0x10);
+        e.call_log = Some(vec![]);
+        e.call(0x00c2_f2c0, &args![this, strings]);
+        assert_eq!(
+            calls(&e, VIEWER_STRING_TEXT_00A7D5E0),
+            vec![vec![SPAWN_MODIFIER_NAME, NONE_TEXT]]
+        );
+        // Full at size 0: each add grows the array first.
+        assert_eq!(calls(&e, STRINGS_GROW).len(), 3);
+        assert_eq!(calls(&e, STRINGS_SET_AT).len(), 3);
+        let spawn = e.mem.alloc(0x20);
+        e.mem.set_u32(spawn + 8, 0x4242);
+        e.set(this, NiPSysAgeDeathModifier::m_pkSpawnModifier, spawn);
+        e.set(this, NiPSysAgeDeathModifier::m_bSpawnOnDeath, 1);
+        e.call_log = Some(vec![]);
+        e.call(0x00c2_f2c0, &args![this, strings]);
+        assert_eq!(
+            calls(&e, VIEWER_STRING_BOOL_00A7D370),
+            vec![vec![SPAWN_ON_DEATH_NAME, 1]]
+        );
+        assert_eq!(
+            calls(&e, VIEWER_STRING_TEXT_00A7D5E0),
+            vec![vec![SPAWN_MODIFIER_NAME, 0x4242]]
+        );
+        let slot = calls(&e, STRINGS_SET_AT)[2][2];
+        assert_eq!(e.mem.u32(slot), 0x4242);
     }
 }

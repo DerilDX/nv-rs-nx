@@ -626,9 +626,157 @@ pub fn fn_00c038b0(e: &mut Engine, this: Ptr, manager: u32, _unused_1: u32) {
     e.call(SET_EFFECT_00BA3C70, &args![base, 3u32, effect, param, 0u32]);
 }
 
+/// The renderer (`011f9508`) and the `float` 2^32 added to a negative `FILD` (`01099378`).
+const RENDERER_011F9508: u32 = 0x011f_9508;
+const TWO_TO_32_01099378: u32 = 0x0109_9378;
+
+// Translated from 00c02d40 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map, `thiscall`, no stack words; answers a `float` (`ST0`). The
+/// renderer's (`011f9508`) vtable +0xc8 gives an object whose vtable +0x90 (with 0) gives a
+/// count; answers the `float` +0x5c (widened to a `double`) divided by the count (`FILD`, 2^32
+/// added when negative, `FDIVR`), rounded to a `float`.
+pub fn fn_00c02d40(e: &mut Engine, this: Ptr) -> f32 {
+    let renderer = e.global::<u32>(RENDERER_011F9508);
+    let object = e.vcall(renderer, 0xc8, &args![]).u32();
+    let value = x87_load32(e.mem.u32(this.addr() + 0x5c));
+    let count = e.vcall(object, 0x90, &args![0u32]).u32();
+    let mut divisor = f64::from(count as i32);
+    if (count as i32) < 0 {
+        divisor = x87_add(divisor, x87_m32(e.global::<u32>(TWO_TO_32_01099378)));
+    }
+    f32::from_bits(x87_store32(x87_div(value, divisor)))
+}
+
+/// The current pass (`0126f74c`, stages at +0x24), the stage call `00e7de90` and
+/// `NiD3DTextureStage::SetFilterMode` (`00e7def0`) (unnamed / engine map; `thiscall`, one word),
+/// the pass type (`011f91e4`), the rendering record (`011f91e0`), `BSShaderLightingProperty`'s
+/// `00b704b0` (`thiscall`, answers a `u16`) and `BSRenderedTexture::GetTexture` (`004bc320`,
+/// `thiscall`, one word).
+const CURRENT_PASS_0126F74C: u32 = 0x0126_f74c;
+const STAGE_CALL_00E7DE90: u32 = 0x00e7_de90;
+const SET_FILTER_MODE_00E7DEF0: u32 = 0x00e7_def0;
+const PASS_TYPE_011F91E4: u32 = 0x011f_91e4;
+const RENDERING_011F91E0: u32 = 0x011f_91e0;
+const LIGHT_COUNT_00B704B0: u32 = 0x00b7_04b0;
+const RENDERED_TEXTURE_GET_TEXTURE: u32 = 0x004b_c320;
+
+// Translated from 00c02e20 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (vtable entries at `010af434`, `010bb8e4`, `010bbabc`,
+/// `010bbc8c`, `010bc1ac`), `thiscall` with two words: a pass type and a shader property. Does
+/// nothing for the types 0x1bd..0x1e1 other than 0x1c4..0x1cb, nor for 0x2d8..0x2ef. Otherwise
+/// the current pass's (`0126f74c`, read at the start) first stage gets the property's first
+/// texture (`[+0xac][0]`) and its second stage, when there is one, the first texture of
+/// `[+0xb0]` (`011f9510` when null), each with the property's mode (vtable +0xe0, `00e7de90`).
+/// For the pass types (`011f91e4`) 0x1c4..0x1c7 with lights (`00b704b0`), a rendering record
+/// (`011f91e0`) whose object (`[+0xc][0]`) has the byte +0xec and a rendered texture +0x10c,
+/// and a non-zero byte +9: the third stage gets that texture (`GetTexture(0)`), filter mode 1
+/// and `00e7de90(0)`.
+pub fn fn_00c02e20(e: &mut Engine, _this: Ptr, pass_type: u32, property: u32) {
+    let pass = e.global::<u32>(CURRENT_PASS_0126F74C);
+    if pass_type.wrapping_sub(0x1bd) <= 0x24
+        && !(0x1c4..=0x1c7).contains(&pass_type)
+        && pass_type.wrapping_sub(0x1c8) > 3
+    {
+        return;
+    }
+    if (0x2d8..=0x2ef).contains(&pass_type) {
+        return;
+    }
+    let stages = e.mem.u32(pass + 0x24);
+    let textures = e.mem.u32(property + 0xac);
+    let texture = e.mem.u32(textures);
+    let first = e.mem.u32(stages);
+    e.mem.set_u32(first + 8, texture);
+    let mode = e.vcall(property, 0xe0, &args![]).u32();
+    e.call(STAGE_CALL_00E7DE90, &args![first, mode]);
+    let stages = e.mem.u32(pass + 0x24);
+    let second = e.mem.u32(stages + 4);
+    if second != 0 {
+        let textures = e.mem.u32(property + 0xb0);
+        let mut texture = e.mem.u32(textures);
+        if texture == 0 {
+            texture = e.global::<u32>(TEXTURE_011F9510);
+        }
+        e.mem.set_u32(second + 8, texture);
+        let mode = e.vcall(property, 0xe0, &args![]).u32();
+        e.call(STAGE_CALL_00E7DE90, &args![second, mode]);
+    }
+    if e.global::<u32>(PASS_TYPE_011F91E4).wrapping_sub(0x1c4) > 3 {
+        return;
+    }
+    let lights = e.call(LIGHT_COUNT_00B704B0, &args![property]).u16();
+    if lights == 0 {
+        return;
+    }
+    let rendering = e.global::<u32>(RENDERING_011F91E0);
+    let holder = e.mem.u32(rendering + 0xc);
+    let object = e.mem.u32(holder);
+    if e.mem.u8(object + 0xec) == 0 {
+        return;
+    }
+    let rendered = e.mem.u32(object + 0x10c);
+    if rendered == 0 || e.mem.u8(rendering + 9) == 0 {
+        return;
+    }
+    let stages = e.mem.u32(pass + 0x24);
+    let third = e.mem.u32(stages + 8);
+    let texture = e
+        .call(RENDERED_TEXTURE_GET_TEXTURE, &args![rendered, 0u32])
+        .u32();
+    e.mem.set_u32(third + 8, texture);
+    e.call(SET_FILTER_MODE_00E7DEF0, &args![third, 1u32]);
+    e.call(STAGE_CALL_00E7DE90, &args![third, 0u32]);
+}
+
+/// `00ba39a0` (unnamed, `thiscall`, no stack words), on the rendered-texture member at +0x58.
+const TEXTURE_RETURN_00BA39A0: u32 = 0x00ba_39a0;
+
+// Translated from 00c03260 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (not a Ghidra function; vtable entry at `010bc8b8`), `thiscall`,
+/// no stack words: a jump to `00ba39a0` on the member at +0x58.
+pub fn fn_00c03260(e: &mut Engine, this: Ptr) {
+    e.call(TEXTURE_RETURN_00BA39A0, &args![this.addr() + 0x58]);
+}
+
+// Translated from 00c03350 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (not a Ghidra function; vtable entry at `010bc8c0`), `thiscall`
+/// with one unread word; answers false. The second shader parameter of the array at +0x18
+/// (elements at +0x1c) gets pixel constant 0 (`012023f4`, `012023f8` through `FLD`/`FSTP`, 0.0,
+/// 0.0), and the word `011ae680` becomes 0x80.
+pub fn fn_00c03350(e: &mut Engine, this: Ptr, _unused_0: u32) -> bool {
+    let parameters = e.mem.u32(this.addr() + 0x1c);
+    let parameter = e.mem.u32(parameters + 4);
+    let first = x87_quiet_bits(e.global::<u32>(CONSTANT_012023F4));
+    let second = x87_quiet_bits(e.global::<u32>(CONSTANT_012023F8));
+    e.call(
+        PARAM_SET_PIXEL_CONSTANT_00B8A790,
+        &args![parameter, 0u32, first, second, 0u32, 0u32],
+    );
+    e.set_global(STATE_VALUE_011AE680, 0x80u32);
+    false
+}
+
+/// The word `00c03350` sets (`011ae680`).
+const STATE_VALUE_011AE680: u32 = 0x011a_e680;
+
+// Translated from 00c03390 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (not a Ghidra function; vtable entry at `010bc8b4`), `thiscall`
+/// with one unread word: runs `00ba3840(3)` on the member at +0x58 and makes the member's
+/// address element 2 of the array at +0x28 (`00ba3aa0`, through a stack word).
+pub fn fn_00c03390(e: &mut Engine, this: Ptr, _unused_0: u32) {
+    let base = this.addr();
+    e.call(TEXTURE_BORROW_00BA3840, &args![base + 0x58, 3u32]);
+    set_at(e, base + 0x28, 2, base + 0x58);
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x00c0_2d40, fn_00c02d40(Ptr) -> f32),
+        entry!(0x00c0_2e20, fn_00c02e20(Ptr, u32, u32)),
+        entry!(0x00c0_3260, fn_00c03260(Ptr)),
+        entry!(0x00c0_3350, fn_00c03350(Ptr, u32) -> bool),
+        entry!(0x00c0_3390, fn_00c03390(Ptr, u32)),
         entry!(0x00c0_33c0, fn_00c033c0(Ptr) -> Ptr),
         entry!(0x00c0_3810, fn_00c03810(Ptr) -> Ptr),
         entry!(0x00c0_2ce0, fn_00c02ce0(u32)),
@@ -1229,5 +1377,145 @@ mod pass_flag_tests {
             ]
         );
         assert_eq!(e.global::<u32>(LEVEL_012003C4), 0x7fc0_0006);
+    }
+}
+
+#[cfg(test)]
+mod n071_tests {
+    use super::*;
+    use crate::units::bsshader::shadowlightshader::n071_rig::{calls, engine, vobject};
+
+    #[test]
+    fn fn_00c02d40_divides_by_the_count() {
+        let mut e = engine(&[]);
+        e.map(0x011f_9000, 0x1000);
+        e.map(0x0109_9000, 0x1000);
+        e.set_global(TWO_TO_32_01099378, 4_294_967_296.0f32);
+        let counter = vobject(&mut e, 8, &[(0x90, 4)]);
+        let renderer = vobject(&mut e, 8, &[(0xc8, counter)]);
+        e.set_global(RENDERER_011F9508, renderer);
+        let this = e.mem.alloc(0x60);
+        e.mem.set_f32(this + 0x5c, 10.0);
+        assert_eq!(e.call(0x00c0_2d40, &args![this]).f32(), 2.5);
+        let counter = vobject(&mut e, 8, &[(0x90, 0x8000_0000)]);
+        let renderer = vobject(&mut e, 8, &[(0xc8, counter)]);
+        e.set_global(RENDERER_011F9508, renderer);
+        e.mem.set_f32(this + 0x5c, 2_147_483_648.0);
+        assert_eq!(e.call(0x00c0_2d40, &args![this]).f32(), 1.0);
+    }
+
+    /// A current pass with three stages, a property (mode 9) with textures at +0xac and +0xb0.
+    fn stage_rig() -> (Engine, Vec<u32>, u32) {
+        let mut e = engine(&[STAGE_CALL_00E7DE90, SET_FILTER_MODE_00E7DEF0]);
+        for page in [0x011f_9000u32, 0x0126_f000] {
+            e.map(page, 0x1000);
+        }
+        let stages: Vec<u32> = (0..3).map(|_| e.mem.alloc(0x10)).collect();
+        let array = e.mem.alloc(0xc);
+        for (i, s) in stages.iter().enumerate() {
+            e.mem.set_u32(array + 4 * i as u32, *s);
+        }
+        let pass = e.mem.alloc(0x30);
+        e.mem.set_u32(pass + 0x24, array);
+        e.set_global(CURRENT_PASS_0126F74C, pass);
+        let property = vobject(&mut e, 0xb8, &[(0xe0, 9)]);
+        for offset in [0xacu32, 0xb0] {
+            let textures = e.mem.alloc(4);
+            e.mem.set_u32(property + offset, textures);
+        }
+        let first = e.mem.u32(property + 0xac);
+        e.mem.set_u32(first, 0xac00);
+        e.set_global(TEXTURE_011F9510, 0x9510u32);
+        (e, stages, property)
+    }
+
+    #[test]
+    fn fn_00c02e20_skips_the_excluded_types() {
+        let (mut e, _, property) = stage_rig();
+        for pass_type in [0x1bdu32, 0x1c3, 0x1cc, 0x1e1, 0x2d8, 0x2ef] {
+            e.call(0x00c0_2e20, &args![0u32, pass_type, property]);
+        }
+        assert!(calls(&e, STAGE_CALL_00E7DE90).is_empty());
+    }
+
+    #[test]
+    fn fn_00c02e20_sets_the_stages() {
+        let (mut e, stages, property) = stage_rig();
+        e.call(0x00c0_2e20, &args![0u32, 0x1c5u32, property]);
+        assert_eq!(e.mem.u32(stages[0] + 8), 0xac00);
+        assert_eq!(e.mem.u32(stages[1] + 8), 0x9510);
+        assert_eq!(
+            calls(&e, STAGE_CALL_00E7DE90),
+            vec![vec![stages[0], 9], vec![stages[1], 9]]
+        );
+        // Pass type 0x1c4 with lights and a rendered texture: the third stage too.
+        e.set_global(PASS_TYPE_011F91E4, 0x1c4u32);
+        e.register(LIGHT_COUNT_00B704B0, |_, _| 0x0001_0002u32.into_ret());
+        e.register(RENDERED_TEXTURE_GET_TEXTURE, |_, _| 0x5555u32.into_ret());
+        let object = e.mem.alloc(0x110);
+        e.mem.set_u8(object + 0xec, 1);
+        e.mem.set_u32(object + 0x10c, 0x10c0);
+        let holder = e.mem.alloc(4);
+        e.mem.set_u32(holder, object);
+        let rendering = e.mem.alloc(0x10);
+        e.mem.set_u32(rendering + 0xc, holder);
+        e.mem.set_u8(rendering + 9, 1);
+        e.set_global(RENDERING_011F91E0, rendering);
+        e.call_log = Some(vec![]);
+        e.call(0x00c0_2e20, &args![0u32, 0x100u32, property]);
+        assert_eq!(
+            calls(&e, RENDERED_TEXTURE_GET_TEXTURE),
+            vec![vec![0x10c0, 0]]
+        );
+        assert_eq!(e.mem.u32(stages[2] + 8), 0x5555);
+        assert_eq!(
+            calls(&e, SET_FILTER_MODE_00E7DEF0),
+            vec![vec![stages[2], 1]]
+        );
+        assert_eq!(calls(&e, STAGE_CALL_00E7DE90)[2], vec![stages[2], 0]);
+        // No lights: no third stage.
+        e.register(LIGHT_COUNT_00B704B0, |_, _| 0u32.into_ret());
+        e.call_log = Some(vec![]);
+        e.call(0x00c0_2e20, &args![0u32, 0x100u32, property]);
+        assert!(calls(&e, SET_FILTER_MODE_00E7DEF0).is_empty());
+    }
+
+    #[test]
+    fn the_rendered_texture_slots() {
+        let mut e = engine(&[
+            TEXTURE_RETURN_00BA39A0,
+            TEXTURE_BORROW_00BA3840,
+            PARAM_SET_PIXEL_CONSTANT_00B8A790,
+        ]);
+        e.map(0x0120_2000, 0x1000);
+        e.map(0x011a_e000, 0x1000);
+        e.register(ARRAY_SET_AT_00BA3AA0, |e, a| {
+            let value = e.mem.u32(a[2]);
+            e.mem.set_u32(a[0] + 0x40, value);
+            Ret::default()
+        });
+        let this = e.mem.alloc(0x80);
+        e.call(0x00c0_3260, &args![this]);
+        assert_eq!(calls(&e, TEXTURE_RETURN_00BA39A0), vec![vec![this + 0x58]]);
+        e.call(0x00c0_3390, &args![this, 0u32]);
+        assert_eq!(
+            calls(&e, TEXTURE_BORROW_00BA3840),
+            vec![vec![this + 0x58, 3]]
+        );
+        assert_eq!(
+            calls(&e, ARRAY_SET_AT_00BA3AA0)[0][..2].to_vec(),
+            vec![this + 0x28, 2]
+        );
+        assert_eq!(e.mem.u32(this + 0x68), this + 0x58);
+        let parameters = e.mem.alloc(8);
+        e.mem.set_u32(parameters + 4, 0x44);
+        e.mem.set_u32(this + 0x1c, parameters);
+        e.set_global(CONSTANT_012023F4, 1.5f32);
+        assert!(!e.call(0x00c0_3350, &args![this, 0u32]).bool());
+        assert_eq!(
+            calls(&e, PARAM_SET_PIXEL_CONSTANT_00B8A790),
+            vec![vec![0x44, 0, 1.5f32.to_bits(), 0, 0, 0]]
+        );
+        assert_eq!(e.global::<u32>(STATE_VALUE_011AE680), 0x80);
     }
 }

@@ -654,9 +654,200 @@ pub fn bs_face_gen_keyframe_multiple_reset_quantity_array(
     }
 }
 
+// Translated from 0064eab0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSFaceGenKeyframe`'s scalar deleting destructor (Xbox PDB, `RET 4`): the destructor
+/// body (`fn_0064eae0`), then `operator delete` when bit 0 of `flags` is set. Returns `this`.
+pub fn bs_face_gen_keyframe_scalar_deleting_destructor(
+    e: &mut Engine,
+    this: Ptr,
+    flags: u32,
+) -> Ptr {
+    fn_0064eae0(e, this);
+    if flags & 1 != 0 {
+        e.call(OPERATOR_DELETE, &args![this]);
+    }
+    this
+}
+
+/// A new copy of the multiple keyframe `source` (0x14 bytes, `fn_0064ec10`), or null when
+/// the allocation fails.
+fn new_copy(e: &mut Engine, source: u32) -> u32 {
+    let block = e.call(OPERATOR_NEW, &args![0x14u32]).u32();
+    if block == 0 {
+        0
+    } else {
+        fn_0064ec10(e, Ptr::new(block), source).addr()
+    }
+}
+
+// Translated from 0064f0b0 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 0064f0b0 - the exception-unwinding frame (FS:[0]) is not translated.
+/// `BSFaceGenKeyframeMultiple::MergeMorphDataFrom_ov2` (Xbox PDB, `RET 0xc`): makes this
+/// keyframe a blend of the multiple keyframes `first` and `second` (of one type, not the
+/// same one; a copy stands in for either when it is this one, destroyed afterwards through
+/// slot 0 with 1): this keyframe takes `first`'s type, then for each of its quantities
+/// (slot +0x4c on the sources: whether valid) `first`'s when `weight` (clamped to 0..1) is
+/// 0 or `second`'s is not valid, `second`'s when it is 1 or `first`'s is not valid, else
+/// `first * (1 - w) + second * w`. The quantity counts of both are read (`0044edb0`) but
+/// not used. Returns whether the last quantity set changed (false when refused).
+pub fn bs_face_gen_keyframe_multiple_merge_morph_data_from_ov2(
+    e: &mut Engine,
+    this: Ptr<BSFaceGenKeyframeMultiple>,
+    first: u32,
+    second: u32,
+    weight: f32,
+) -> bool {
+    let base = this.addr();
+    let mut from_first = as_multiple(e, first);
+    let mut from_second = as_multiple(e, second);
+    let mut first_copied = false;
+    let mut second_copied = false;
+    let mut changed = 0u8;
+    if from_first == 0 || from_second == 0 || from_first == from_second {
+        return false;
+    }
+    let first_kind = e.vcall(from_first, SLOT_GET_TYPE, &[]).u32();
+    let second_kind = e.vcall(from_second, SLOT_GET_TYPE, &[]).u32();
+    if first_kind != second_kind {
+        return false;
+    }
+    if from_first == base {
+        from_first = new_copy(e, base);
+        first_copied = true;
+    } else if from_second == base {
+        from_second = new_copy(e, base);
+        second_copied = true;
+    }
+    let zero: f64 = e.global(ZERO);
+    let one: f64 = e.global(ONE);
+    let w = x87_load32(weight.to_bits());
+    // FCOMP 0; TEST AH,5; JP: 0 only below zero. FCOMP 1; TEST AH,0x41; JNZ: the
+    // weight itself unless above one.
+    let clamped = if w < zero {
+        x87_store32(0.0)
+    } else if !(w > one) {
+        x87_quiet_bits(weight.to_bits())
+    } else {
+        x87_store32(1.0)
+    };
+    // The smaller of the two counts is computed and kept in a local nobody reads.
+    let first_count = quantity_count(e, from_first);
+    let second_count = quantity_count(e, from_second);
+    if first_count < second_count {
+        quantity_count(e, from_first);
+    } else {
+        quantity_count(e, from_second);
+    }
+    let kind = e.vcall(from_first, SLOT_GET_TYPE, &[]).u32();
+    e.vcall(base, SLOT_SET_TYPE, &args![kind]);
+    let w = x87_load32(clamped);
+    let mut i = 0u32;
+    while i < e.get(this, BSFaceGenKeyframeMultiple::iNumQuantities) {
+        // FCOMP; TEST AH,0x44; JNP: taken when equal.
+        let use_first = w == zero
+            || !e
+                .vcall(from_second, SLOT_IS_VALID_QUANTITY, &args![i])
+                .bool();
+        if use_first {
+            if e.vcall(from_first, SLOT_IS_VALID_QUANTITY, &args![i])
+                .bool()
+            {
+                let value = x87_store32(quantity(e, from_first, i));
+                changed = set_quantity(e, base, i, value);
+            }
+        } else if w == one
+            || !e
+                .vcall(from_first, SLOT_IS_VALID_QUANTITY, &args![i])
+                .bool()
+        {
+            if e.vcall(from_second, SLOT_IS_VALID_QUANTITY, &args![i])
+                .bool()
+            {
+                let value = x87_store32(quantity(e, from_second, i));
+                changed = set_quantity(e, base, i, value);
+            }
+        } else if e
+            .vcall(from_first, SLOT_IS_VALID_QUANTITY, &args![i])
+            .bool()
+            && e.vcall(from_second, SLOT_IS_VALID_QUANTITY, &args![i])
+                .bool()
+        {
+            let kept = quantity(e, from_first, i);
+            let rest = x87_sub(1.0, x87_load32(clamped));
+            // FSTP double: the x87 value as a double.
+            let kept = x87_mul(kept, rest);
+            let other = quantity(e, from_second, i);
+            let blended = x87_add(x87_mul(other, x87_m32(clamped)), kept);
+            let value = x87_quiet_bits(x87_store32(blended));
+            changed = set_quantity(e, base, i, value);
+        }
+        i += 1;
+    }
+    if first_copied && from_first != 0 {
+        e.vcall(from_first, 0, &args![1u32]);
+    }
+    if second_copied && from_second != 0 {
+        e.vcall(from_second, 0, &args![1u32]);
+    }
+    changed != 0
+}
+
+// Translated from 0064f530 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 0064f530 - the exception-unwinding frame (FS:[0]) is not translated.
+/// `BSFaceGenKeyframeMultiple::CreateCopy` (Xbox PDB): a new copy of this keyframe (0x14
+/// bytes, `fn_0064ec10`), or null when the allocation fails.
+pub fn bs_face_gen_keyframe_multiple_create_copy(
+    e: &mut Engine,
+    this: Ptr<BSFaceGenKeyframeMultiple>,
+) -> u32 {
+    new_copy(e, this.addr())
+}
+
+// Translated from 0064f7e0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSFaceGenKeyframeMultiple::IsEmpty` (Xbox PDB): false when any valid quantity (slot
+/// +0x4c) is above 0, else true.
+pub fn bs_face_gen_keyframe_multiple_is_empty(
+    e: &mut Engine,
+    this: Ptr<BSFaceGenKeyframeMultiple>,
+) -> bool {
+    let base = this.addr();
+    let zero: f64 = e.global(ZERO);
+    let mut i = 0u32;
+    while i < e.get(this, BSFaceGenKeyframeMultiple::iNumQuantities) {
+        if e.vcall(base, SLOT_IS_VALID_QUANTITY, &args![i]).bool() {
+            let array = e.get(this, BSFaceGenKeyframeMultiple::pQuantities);
+            let value = x87_load32(e.mem.u32(array.wrapping_add(i.wrapping_mul(4))));
+            // FCOMP 0; TEST AH,0x41; JNZ: not empty only above zero.
+            if value > zero {
+                return false;
+            }
+        }
+        i += 1;
+    }
+    true
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x0064_eab0, bs_face_gen_keyframe_scalar_deleting_destructor(Ptr, u32) -> Ptr),
+        entry!(
+            0x0064_f0b0,
+            bs_face_gen_keyframe_multiple_merge_morph_data_from_ov2(
+                Ptr<BSFaceGenKeyframeMultiple>,
+                u32,
+                u32,
+                f32,
+            ) -> bool
+        ),
+        entry!(
+            0x0064_f530,
+            bs_face_gen_keyframe_multiple_create_copy(Ptr<BSFaceGenKeyframeMultiple>) -> u32
+        ),
+        entry!(
+            0x0064_f7e0,
+            bs_face_gen_keyframe_multiple_is_empty(Ptr<BSFaceGenKeyframeMultiple>) -> bool
+        ),
         entry!(0x0048_8d50, bs_face_gen_keyframe_get_time(Ptr) -> f64),
         entry!(0x0064_ea80, fn_0064ea80(Ptr, u32) -> Ptr),
         entry!(0x0064_eae0, fn_0064eae0(Ptr)),
@@ -1106,5 +1297,104 @@ mod tests {
         assert!(!e.call(0x0064_f900, &args![this, 1.0f32, same]).bool());
         let typed = keyframe(&mut e, vtable, 6, &[1.0, 0.0, 0.625, 0.0]);
         assert!(!e.call(0x0064_f900, &args![this, 1.0f32, typed]).bool());
+    }
+
+    #[test]
+    fn keyframe_scalar_deleting_destructor() {
+        let (mut e, _) = engine();
+        let this = e.mem.alloc(0xc);
+        assert_eq!(e.call(0x0064_eab0, &args![this, 0u32]).u32(), this);
+        assert_eq!(e.mem.u32(this), KEYFRAME_VTABLE);
+        assert!(calls(&e, OPERATOR_DELETE).is_empty());
+        e.call(0x0064_eab0, &args![this, 1u32]);
+        assert_eq!(calls(&e, OPERATOR_DELETE), vec![vec![this]]);
+    }
+
+    /// Gives the exe's multiple-keyframe vtable the test slots, and `operator new` a block
+    /// with the multiple flag at +0x14.
+    fn copies_work(e: &mut Engine, vtable: u32) {
+        e.map(MULTIPLE_VTABLE, 0x60);
+        for slot in (0..0x60).step_by(4) {
+            let target = e.mem.u32(vtable + slot);
+            e.mem.set_u32(MULTIPLE_VTABLE + slot, target);
+        }
+        e.mem.set_u32(MULTIPLE_VTABLE, 0x0064_ebe0);
+        e.register(OPERATOR_NEW, |e, a| {
+            let block = e.mem.alloc(a[0].max(0x18));
+            e.mem.set_u32(block + 0x14, 1);
+            block.into_ret()
+        });
+    }
+
+    #[test]
+    fn merge_from_two_blends_valid_quantities() {
+        let (mut e, vtable) = engine();
+        copies_work(&mut e, vtable);
+        let this = keyframe(&mut e, vtable, 5, &[0.0, 0.0, 0.0, 0.0]);
+        e.mem.set_u32(this.addr() + 4, 7);
+        let first = keyframe(&mut e, vtable, 5, &[0.5, 2.0, 0.25, 2.0]);
+        let second = keyframe(&mut e, vtable, 5, &[1.0, 0.75, 2.0, 2.0]);
+        assert!(e
+            .call(0x0064_f0b0, &args![this, first, second, 0.5f32])
+            .bool());
+        // Takes first's type; blends 0, second's 1, first's 2, leaves 3.
+        assert_eq!(e.get(this, BSFaceGenKeyframeMultiple::eType), 5);
+        assert_eq!(values(&e, this), vec![0.75, 0.75, 0.25, 0.0]);
+        // Weight 0 (clamped from below): first's where valid; the last set unchanged.
+        assert!(!e
+            .call(0x0064_f0b0, &args![this, first, second, -1.0f32])
+            .bool());
+        assert_eq!(values(&e, this), vec![0.5, 0.75, 0.25, 0.0]);
+        // Weight 1 (clamped from above): second's where valid, else first's.
+        e.call(0x0064_f0b0, &args![this, first, second, 3.0f32]);
+        assert_eq!(values(&e, this), vec![1.0, 0.75, 0.25, 0.0]);
+        // Refused: the same source twice, a null one, or another type.
+        assert!(!e
+            .call(0x0064_f0b0, &args![this, first, first, 0.5f32])
+            .bool());
+        assert!(!e
+            .call(0x0064_f0b0, &args![this, 0u32, first, 0.5f32])
+            .bool());
+        let typed = keyframe(&mut e, vtable, 6, &[0.0; 4]);
+        assert!(!e
+            .call(0x0064_f0b0, &args![this, first, typed, 0.5f32])
+            .bool());
+    }
+
+    #[test]
+    fn merge_from_two_copies_this_and_destroys_the_copy() {
+        let (mut e, vtable) = engine();
+        copies_work(&mut e, vtable);
+        let this = keyframe(&mut e, vtable, 5, &[0.5, 0.5]);
+        let second = keyframe(&mut e, vtable, 5, &[1.0, 0.0]);
+        e.call_log = Some(vec![]);
+        assert!(e
+            .call(0x0064_f0b0, &args![this, this, second, 0.5f32])
+            .bool());
+        assert_eq!(values(&e, this), vec![0.75, 0.25]);
+        assert_eq!(calls(&e, OPERATOR_NEW)[0], vec![0x14]);
+        // The copy was destroyed and freed (its array, then itself).
+        assert_eq!(calls(&e, OPERATOR_DELETE).len(), 2);
+        // As the second source too.
+        e.call_log = Some(vec![]);
+        e.call(0x0064_f0b0, &args![this, second, this, 0.5f32]);
+        assert_eq!(values(&e, this), vec![0.875, 0.125]);
+        assert_eq!(calls(&e, OPERATOR_DELETE).len(), 2);
+    }
+
+    #[test]
+    fn create_copy_and_is_empty() {
+        let (mut e, vtable) = engine();
+        copies_work(&mut e, vtable);
+        let this = keyframe(&mut e, vtable, 5, &[0.0, 0.25]);
+        let copy = Ptr::<BSFaceGenKeyframeMultiple>::new(e.call(0x0064_f530, &args![this]).u32());
+        assert_eq!(e.mem.u32(copy.addr()), MULTIPLE_VTABLE);
+        assert_eq!(values(&e, copy), vec![0.0, 0.25]);
+        answer(&mut e, OPERATOR_NEW, 0);
+        assert_eq!(e.call(0x0064_f530, &args![this]).u32(), 0);
+        // Not empty: a valid quantity above 0. Empty: zero, invalid (2.0) or NaN.
+        assert!(!e.call(0x0064_f7e0, &args![this]).bool());
+        let empty = keyframe(&mut e, vtable, 5, &[0.0, 2.0, f32::from_bits(0x7fc0_0000)]);
+        assert!(e.call(0x0064_f7e0, &args![empty]).bool());
     }
 }

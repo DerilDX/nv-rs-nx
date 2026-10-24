@@ -154,9 +154,92 @@ pub fn ni_p_sys_update_ctlr_update(e: &mut Engine, this: Ptr<NiTimeController>, 
     }
 }
 
+/// `NiTimeController::SetTarget` (`00a6d450`, `thiscall`, one word) and
+/// `GetViewerStrings` (`00a6d830`, `thiscall`, one word).
+const TIME_CONTROLLER_SET_TARGET: u32 = 0x00a6_d450;
+const TIME_CONTROLLER_GET_VIEWER_STRINGS: u32 = 0x00a6_d830;
+/// `NiTimeController::m_pkTarget` (Xbox PDB) +0x2C.
+const CONTROLLER_TARGET: u32 = 0x2c;
+/// `00a67260` (unnamed, `thiscall` on a controller, one word): sets its
+/// next controller (a reference-counted assignment at +0x30); `00a5c000`
+/// (unnamed, `NiMain/niobjectnet.cpp`, `thiscall` on an object, one word):
+/// sets its controller list (a reference-counted assignment at +0xC).
+const CONTROLLER_SET_NEXT: u32 = 0x00a6_7260;
+const OBJECT_SET_CONTROLLERS: u32 = 0x00a5_c000;
+/// Imported `InterlockedDecrement` (import slot).
+const INTERLOCKED_DECREMENT: u32 = 0x00fd_f1c4;
+/// `NiGetViewerString` (`00a7d330`, `cdecl`, the class name), the
+/// viewer-string array's grow (`0096ad30`) and store (`0096ae90`), and the
+/// class's `NiRTTI` record.
+const NI_GET_VIEWER_STRING: u32 = 0x00a7_d330;
+const STRINGS_GROW: u32 = 0x0096_ad30;
+const STRINGS_SET_AT: u32 = 0x0096_ae90;
+const UPDATE_CTLR_RTTI: u32 = 0x0120_2690;
+
+// Translated from 00c27290 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiPSysUpdateCtlr::SetTarget` (Xbox PDB): `NiTimeController::SetTarget`,
+/// then, with a target, moves this controller to the end of the target's
+/// controller list: unless it already is the last one (the list walked
+/// from the target's +0xC along +0x30), the last controller's next becomes
+/// this one (`00a67260`), the target's list starts at this controller's
+/// next (`00a5c000`), and this controller's next is released and cleared.
+pub fn ni_p_sys_update_ctlr_set_target(e: &mut Engine, this: Ptr, target: Ptr) {
+    e.call(TIME_CONTROLLER_SET_TARGET, &args![this, target]);
+    let t = this.addr();
+    let owner = e.mem.u32(t + CONTROLLER_TARGET);
+    if owner == 0 {
+        return;
+    }
+    let mut last = e.mem.u32(owner + TARGET_CONTROLLERS);
+    loop {
+        let next = e.mem.u32(last + CONTROLLER_NEXT);
+        if next == 0 {
+            break;
+        }
+        last = next;
+    }
+    if last == t {
+        return;
+    }
+    e.call(CONTROLLER_SET_NEXT, &args![last, t]);
+    let next = e.mem.u32(t + CONTROLLER_NEXT);
+    let owner = e.mem.u32(t + CONTROLLER_TARGET);
+    e.call(OBJECT_SET_CONTROLLERS, &args![owner, next]);
+    let next = e.mem.u32(t + CONTROLLER_NEXT);
+    if next != 0 {
+        if e.call(INTERLOCKED_DECREMENT, &args![next + 4]).u32() == 0 {
+            e.vcall(next, 4, &args![]);
+        }
+        e.mem.set_u32(t + CONTROLLER_NEXT, 0);
+    }
+}
+
+// Translated from 00c27300 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiPSysUpdateCtlr::GetViewerStrings` (Xbox PDB): the time-controller
+/// strings (`00a6d830`, `this` passed on in ECX), then the class name.
+pub fn ni_p_sys_update_ctlr_get_viewer_strings(e: &mut Engine, this: Ptr, strings: Ptr) {
+    e.call(TIME_CONTROLLER_GET_VIEWER_STRINGS, &args![this, strings]);
+    let class_name = e.global::<u32>(UPDATE_CTLR_RTTI);
+    let text = e.call(NI_GET_VIEWER_STRING, &args![class_name]).u32();
+    let size = u32::from(e.mem.u16(strings.addr() + 0xa));
+    if size >= u32::from(e.mem.u16(strings.addr() + 8)) {
+        let step = u32::from(e.mem.u16(strings.addr() + 0xe));
+        e.call(STRINGS_GROW, &args![strings, step + size]);
+    }
+    e.with_stack(4, |e, slot| {
+        e.mem.set_u32(slot.addr(), text);
+        e.call(STRINGS_SET_AT, &args![strings, size, slot]);
+    });
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x00c2_7290, ni_p_sys_update_ctlr_set_target(Ptr, Ptr)),
+        entry!(
+            0x00c2_7300,
+            ni_p_sys_update_ctlr_get_viewer_strings(Ptr, Ptr)
+        ),
         entry!(0x00c27130, ni_p_sys_update_ctlr_get_r_t_t_i() -> u32),
         entry!(0x00c27140, fn_00c27140(Ptr, u32) -> Ptr),
         entry!(0x00c2_7160, ni_p_sys_update_ctlr_create_clone(Ptr, Ptr) -> Ptr),
@@ -359,5 +442,100 @@ mod tests {
         e.call(0x00c2_71c0, &args![this, time]);
         assert!(calls_to(&e, 0x0040_2020).is_empty());
         assert_eq!(e.get(this, NiTimeController::m_fLoKeyTime), 0);
+    }
+}
+
+#[cfg(test)]
+mod n066_tests {
+    use super::*;
+
+    const DELETE_THIS: u32 = 0x0100_0070;
+
+    fn calls_to(e: &Engine, callee: u32) -> Vec<Vec<u32>> {
+        e.call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|(address, _)| *address == callee)
+            .map(|(_, words)| words.clone())
+            .collect()
+    }
+
+    fn word(eax: u32) -> Ret {
+        Ret {
+            eax,
+            ..Ret::default()
+        }
+    }
+
+    #[test]
+    fn set_target_moves_the_controller_to_the_end_of_the_list() {
+        let mut e = Engine::new();
+        e.register(TIME_CONTROLLER_SET_TARGET, |e, a| {
+            e.mem.set_u32(a[0] + CONTROLLER_TARGET, a[1]);
+            Ret::default()
+        });
+        e.register(CONTROLLER_SET_NEXT, |_, _| Ret::default());
+        e.register(OBJECT_SET_CONTROLLERS, |_, _| Ret::default());
+        e.register(INTERLOCKED_DECREMENT, |e, a| {
+            let v = e.mem.u32(a[0]) - 1;
+            e.mem.set_u32(a[0], v);
+            word(v)
+        });
+        e.register(DELETE_THIS, |_, _| Ret::default());
+        let vtable = e.mem.alloc(0x100);
+        e.mem.set_u32(vtable + 4, DELETE_THIS);
+        // The target's list: this -> other (the last).
+        let this = e.mem.alloc(0x34);
+        let other = e.mem.alloc(0x34);
+        e.mem.set_u32(other, vtable);
+        e.mem.set_u32(other + 4, 1);
+        e.mem.set_u32(this + CONTROLLER_NEXT, other);
+        let target = e.mem.alloc(0x40);
+        e.mem.set_u32(target + TARGET_CONTROLLERS, this);
+        e.call_log = Some(vec![]);
+        e.call(0x00c2_7290, &args![this, target]);
+        assert_eq!(calls_to(&e, CONTROLLER_SET_NEXT), vec![vec![other, this]]);
+        assert_eq!(
+            calls_to(&e, OBJECT_SET_CONTROLLERS),
+            vec![vec![target, other]]
+        );
+        assert_eq!(calls_to(&e, DELETE_THIS), vec![vec![other]]);
+        assert_eq!(e.mem.u32(this + CONTROLLER_NEXT), 0);
+        // Already last: nothing more than the base call.
+        e.mem.set_u32(target + TARGET_CONTROLLERS, this);
+        e.call_log = Some(vec![]);
+        e.call(0x00c2_7290, &args![this, target]);
+        assert_eq!(e.call_log.as_ref().unwrap().len(), 2);
+        // No target: only the base call.
+        e.call_log = Some(vec![]);
+        e.call(0x00c2_7290, &args![this, 0u32]);
+        assert_eq!(e.call_log.as_ref().unwrap().len(), 2);
+    }
+
+    #[test]
+    fn get_viewer_strings_appends_the_class_name() {
+        let mut e = Engine::new();
+        e.map(UPDATE_CTLR_RTTI, 4);
+        e.set_global(UPDATE_CTLR_RTTI, 0x0555_0000u32);
+        e.register(TIME_CONTROLLER_GET_VIEWER_STRINGS, |_, _| Ret::default());
+        e.register(NI_GET_VIEWER_STRING, |_, _| word(0x7000_0001));
+        e.register(STRINGS_GROW, |_, _| Ret::default());
+        e.register(STRINGS_SET_AT, |e, a| {
+            assert_eq!(e.mem.u32(a[2]), 0x7000_0001);
+            Ret::default()
+        });
+        let strings = e.mem.alloc(0x10);
+        e.mem.set_u16(strings + 0xa, 3);
+        e.mem.set_u16(strings + 8, 3);
+        e.mem.set_u16(strings + 0xe, 2);
+        e.call_log = Some(vec![]);
+        e.call(0x00c2_7300, &args![0x4000u32, strings]);
+        assert_eq!(
+            calls_to(&e, TIME_CONTROLLER_GET_VIEWER_STRINGS),
+            vec![vec![0x4000, strings]]
+        );
+        assert_eq!(calls_to(&e, STRINGS_GROW), vec![vec![strings, 5]]);
+        assert_eq!(calls_to(&e, STRINGS_SET_AT)[0][..2], [strings, 3]);
     }
 }

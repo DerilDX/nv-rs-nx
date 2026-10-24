@@ -934,6 +934,137 @@ fn subtract_previous(e: &mut Engine, previous_spell: u32, data: u32) {
     }
 }
 
+/// `Tile::PlayTileSound` (`00a0b110`, `RET 4`), `00709d40` (no words; whether the
+/// gamepad is in use, by its use here), the input object (`011dea0c`) with its device
+/// (`00877720`) and that device's axis (`00a23390`, `RET 8`: 0 and 0xa), the magnitude
+/// (`00408820`, cdecl, a `float`, `ST0`) and its dead zone (`010745f8`, a `double`),
+/// the clock (`00457fe0`) and the next repeat time (`011db004`), `_ftol2` (`00ec62c0`).
+const TILE_PLAY_TILE_SOUND: u32 = 0x00a0_b110;
+const GAMEPAD_IN_USE_00709D40: u32 = 0x0070_9d40;
+const INPUT_011DEA0C: u32 = 0x011d_ea0c;
+const INPUT_DEVICE_00877720: u32 = 0x0087_7720;
+const DEVICE_AXIS_00A23390: u32 = 0x00a2_3390;
+const MAGNITUDE_00408820: u32 = 0x0040_8820;
+const AXIS_DEAD_ZONE: u32 = 0x0107_45f8;
+const CLOCK_00457FE0: u32 = 0x0045_7fe0;
+const NEXT_REPEAT_011DB004: u32 = 0x011d_b004;
+const FTOL2: u32 = 0x00ec_62c0;
+
+// Translated from 007e73f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TraitMenu::DoGamepad` (Xbox PDB; `thiscall`, `RET 8`: the button and a word not
+/// read). Button 9 with a list box selection (`lbPerksList` slot +4): its tile plays
+/// sound 0xfcb and the menu clicks it (slot +0xc with 10 and the tile); handled. Then,
+/// with the gamepad in use and tile +0x48 shown (`Tile::IsTrue` 0xfa3): the axis
+/// outside the dead zone steps tile +0x48's `"_current_value"` by one (up for a
+/// negative axis), at most every 500 ms at first and 50 ms while held (`011db004`),
+/// poking `"_SetInCode"` when the value read back changed; a centred axis clears the repeat
+/// time. Answers whether the button was handled.
+pub fn trait_menu_do_gamepad(e: &mut Engine, this: Ptr, button: u32, _unused_2: u32) -> bool {
+    let base = this.addr();
+    let mut handled = false;
+    let list_box = base + PERKS_LIST;
+    if button == 9 && e.vcall(list_box, 4, &args![]).u32() != 0 {
+        let tile = e.vcall(list_box, 4, &args![]).u32();
+        e.call(TILE_PLAY_TILE_SOUND, &args![tile, 0xfcbu32]);
+        let tile = e.vcall(list_box, 4, &args![]).u32();
+        e.vcall(base, 0xc, &args![0xau32, tile]);
+        handled = true;
+    }
+    if !e.call(GAMEPAD_IN_USE_00709D40, &args![]).bool() {
+        return handled;
+    }
+    let slider = e.mem.u32(base + 0x48);
+    if !e.call(TILE_IS_TRUE, &args![slider, 0xfa3u32]).bool() {
+        return handled;
+    }
+    let input = e.global::<u32>(INPUT_011DEA0C);
+    let device = e.call(INPUT_DEVICE_00877720, &args![input]).u32();
+    let mut axis = e
+        .call(DEVICE_AXIS_00A23390, &args![device, 0u32, 0xau32])
+        .i32();
+    let magnitude = e
+        .call(MAGNITUDE_00408820, &args![x87_store32(f64::from(axis))])
+        .f64();
+    // FCOMP with the dead zone; TEST AH,0x41: inside (or on) it the axis is 0.
+    if magnitude <= e.global::<f64>(AXIS_DEAD_ZONE) {
+        axis = 0;
+    }
+    let step = if axis != 0 {
+        if axis < 0 {
+            1
+        } else {
+            -1
+        }
+    } else {
+        0
+    };
+    if step != 0 {
+        let now = e.call(CLOCK_00457FE0, &args![]).u32();
+        if now > e.global::<u32>(NEXT_REPEAT_011DB004) {
+            let slider = e.mem.u32(base + 0x48);
+            let current = e.call(TILE_TEXT_TO_TRAIT, &args![ENTER_TRAIT_A]).u32();
+            let value = e.call(TILE_GET_FLOAT, &args![slider, current]).f64();
+            let value = e.call(FTOL2, &args![value]).i32();
+            let stepped = x87_store32(f64::from(value.wrapping_add(step)));
+            e.call(TILE_SET_FLOAT, &args![slider, current, stepped, 0u32]);
+            let before = f64::from(value);
+            let now_value = e.call(TILE_GET_FLOAT, &args![slider, current]).f64();
+            // FUCOMPP; TEST AH,0x44; JNP: poked when the value read back differs.
+            if before != now_value {
+                let set_in_code = e.call(TILE_TEXT_TO_TRAIT, &args![ENTER_TRAIT_B]).u32();
+                e.call(TILE_POKE, &args![slider, set_in_code, x87_store32(1.0)]);
+            }
+            let now = e.call(CLOCK_00457FE0, &args![]).u32();
+            let delay = if e.global::<u32>(NEXT_REPEAT_011DB004) != 0 {
+                0x32
+            } else {
+                0x1f4
+            };
+            e.set_global(NEXT_REPEAT_011DB004, now.wrapping_add(delay));
+        }
+    } else {
+        e.set_global(NEXT_REPEAT_011DB004, 0u32);
+    }
+    handled
+}
+
+// Translated from 007e75d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TraitMenu::DoGamepadUpEvent` (Xbox PDB; `thiscall`, `RET 8`: the button and a word
+/// not read): button 11 with tile +0x40 enabled (`Tile::IsTrue` 0xfaf) plays menu sound
+/// 1 and clicks id 6 (slot +0xc with 6 and 0); handled. Answers whether it was handled.
+pub fn trait_menu_do_gamepad_up_event(
+    e: &mut Engine,
+    this: Ptr,
+    button: u32,
+    _unused_2: u32,
+) -> bool {
+    if button != 0xb {
+        return false;
+    }
+    let tile = e.mem.u32(this.addr() + 0x40);
+    if !e.call(TILE_IS_TRUE, &args![tile, 0xfafu32]).bool() {
+        return false;
+    }
+    e.call(PLAY_MENU_SOUND, &args![1u32]);
+    e.vcall(this.addr(), 0xc, &args![6u32, 0u32]);
+    true
+}
+
+// Translated from 007e7630 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TraitMenu::ResetPerksFunc` (Xbox PDB; cdecl, a tile; the list box callback): when
+/// the tile's user trait `011daf5c` is true, sets it to 0 and applies the perk effects of
+/// the open menu for the tile (`007e7850`).
+pub fn trait_menu_reset_perks_func(e: &mut Engine, tile: u32) {
+    let which = e.global::<u32>(USER_TRAIT_011DAF5C);
+    if !e.call(TILE_IS_TRUE, &args![tile, which]).bool() {
+        return;
+    }
+    let which = e.global::<u32>(USER_TRAIT_011DAF5C);
+    e.call(TILE_SET_VALUE, &args![tile, which, 0u32]);
+    let me = e.global::<u32>(TRAIT_MENU_ME);
+    trait_menu_apply_perk_effects(e, Ptr::new(me), tile);
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -957,6 +1088,15 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x007e76e0, fn_007e76e0(u32, u32)),
         entry!(0x007e7740, fn_007e7740(u32, u32) -> i32),
         entry!(0x007e7850, trait_menu_apply_perk_effects(Ptr, u32)),
+        entry!(
+            0x007e_73f0,
+            trait_menu_do_gamepad(Ptr, u32, u32) -> bool
+        ),
+        entry!(
+            0x007e_75d0,
+            trait_menu_do_gamepad_up_event(Ptr, u32, u32) -> bool
+        ),
+        entry!(0x007e_7630, trait_menu_reset_perks_func(u32)),
     ]
 }
 
@@ -1574,5 +1714,131 @@ mod tests {
         e.call_log = Some(vec![]);
         e.call(0x007e_7850, &args![menu, 0x8888u32]);
         assert!(calls(&e, EFFECT_ARRAY_CLEAR).is_empty());
+    }
+}
+
+#[cfg(test)]
+mod n059_tests {
+    use super::*;
+
+    const VTABLE: u32 = 0x0f00_0000;
+    fn slot(offset: u32) -> u32 {
+        0x0e00_0000 + offset
+    }
+
+    fn calls(e: &Engine, callee: u32) -> Vec<Vec<u32>> {
+        e.call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|(address, _)| *address == callee)
+            .map(|(_, words)| words.clone())
+            .collect()
+    }
+
+    fn engine() -> Engine {
+        let mut e = Engine::new();
+        e.map(0x011d_a000, 0x1000);
+        e.map(0x011d_b000, 0x1000);
+        e.map(0x011d_e000, 0x1000);
+        e.map(0x0107_4000, 0x1000);
+        e.set_global(AXIS_DEAD_ZONE, 8689.0f64);
+        for address in [
+            TILE_PLAY_TILE_SOUND,
+            TILE_SET_FLOAT,
+            TILE_POKE,
+            PLAY_MENU_SOUND,
+            TILE_SET_VALUE,
+            INPUT_DEVICE_00877720,
+        ] {
+            e.register(address, |_, _| Ret::default());
+        }
+        let slots: Vec<u32> = (0..8).map(|i| slot(4 * i)).collect();
+        for &s in &slots {
+            e.register(s, |_, _| Ret::default());
+        }
+        e.put_vtable(VTABLE, &slots);
+        e.register(TILE_TEXT_TO_TRAIT, |_, a| (a[0] & 0xffff).into_ret());
+        e.register(FTOL2, |_, a| {
+            (f64::from_bits(u64::from(a[0]) | u64::from(a[1]) << 32) as i32).into_ret()
+        });
+        e
+    }
+
+    fn menu(e: &mut Engine) -> u32 {
+        let this = e.mem.alloc(0x8c);
+        e.mem.set_u32(this, VTABLE);
+        e.mem.set_u32(this + PERKS_LIST, VTABLE);
+        e.mem.set_u32(this + 0x48, 0x4800);
+        e.mem.set_u32(this + 0x40, 0x4000);
+        this
+    }
+
+    #[test]
+    fn gamepad_clicks_the_selection_and_steps_the_slider() {
+        let mut e = engine();
+        let this = menu(&mut e);
+        e.register(slot(4), |_, _| 0x7700u32.into_ret());
+        e.register(GAMEPAD_IN_USE_00709D40, |_, _| 1u32.into_ret());
+        e.register(TILE_IS_TRUE, |_, _| 1u32.into_ret());
+        e.register(DEVICE_AXIS_00A23390, |_, _| (-20000i32).into_ret());
+        e.register(MAGNITUDE_00408820, |_, a| Ret {
+            st0: f64::from(f32::from_bits(a[0])).abs(),
+            ..Ret::default()
+        });
+        e.register(CLOCK_00457FE0, |_, _| 1000u32.into_ret());
+        // The value reads 3 before the set and 4 after it.
+        let mut reads = 0;
+        e.register_double(TILE_GET_FLOAT, move |_, _| {
+            reads += 1;
+            Ret {
+                st0: if reads % 2 == 1 { 3.0 } else { 4.0 },
+                ..Ret::default()
+            }
+        });
+        e.call_log = Some(vec![]);
+        assert!(e.call(0x007e_73f0, &args![this, 9u32, 0u32]).bool());
+        assert_eq!(calls(&e, TILE_PLAY_TILE_SOUND), vec![vec![0x7700, 0xfcb]]);
+        assert_eq!(calls(&e, slot(0xc)), vec![vec![this, 0xa, 0x7700]]);
+        // The axis is negative: the value 3 goes to 4, which reads back changed: poked.
+        assert_eq!(
+            calls(&e, TILE_SET_FLOAT),
+            vec![vec![0x4800, 0x02d8, 4.0f32.to_bits(), 0]]
+        );
+        assert_eq!(
+            calls(&e, TILE_POKE),
+            vec![vec![0x4800, 0x0250, 1.0f32.to_bits()]]
+        );
+        assert_eq!(e.global::<u32>(NEXT_REPEAT_011DB004), 1500);
+        // Held: not before the repeat time, then every 50 ms.
+        e.call_log = Some(vec![]);
+        assert!(!e.call(0x007e_73f0, &args![this, 1u32, 0u32]).bool());
+        assert!(calls(&e, TILE_SET_FLOAT).is_empty());
+        e.register(CLOCK_00457FE0, |_, _| 1600u32.into_ret());
+        e.call(0x007e_73f0, &args![this, 1u32, 0u32]);
+        assert_eq!(e.global::<u32>(NEXT_REPEAT_011DB004), 1650);
+        // Inside the dead zone the repeat time clears.
+        e.register(DEVICE_AXIS_00A23390, |_, _| 100u32.into_ret());
+        e.call(0x007e_73f0, &args![this, 1u32, 0u32]);
+        assert_eq!(e.global::<u32>(NEXT_REPEAT_011DB004), 0);
+    }
+
+    #[test]
+    fn gamepad_up_event_and_the_reset_callback() {
+        let mut e = engine();
+        let this = menu(&mut e);
+        e.register(TILE_IS_TRUE, |_, a| u32::from(a[0] == 0x4000).into_ret());
+        e.call_log = Some(vec![]);
+        assert!(!e.call(0x007e_75d0, &args![this, 0xau32, 0u32]).bool());
+        assert!(e.call(0x007e_75d0, &args![this, 0xbu32, 0u32]).bool());
+        assert_eq!(calls(&e, PLAY_MENU_SOUND), vec![vec![1]]);
+        assert_eq!(calls(&e, slot(0xc)), vec![vec![this, 6, 0]]);
+        e.mem.set_u32(this + 0x40, 0x4100);
+        assert!(!e.call(0x007e_75d0, &args![this, 0xbu32, 0u32]).bool());
+        // The reset callback: a tile whose trait is false is left alone.
+        e.set_global(USER_TRAIT_011DAF5C, 0x55u32);
+        e.call_log = Some(vec![]);
+        e.call(0x007e_7630, &args![0x4100u32]);
+        assert!(calls(&e, TILE_SET_VALUE).is_empty());
     }
 }

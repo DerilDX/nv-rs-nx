@@ -1052,6 +1052,255 @@ pub fn fn_00754a00(e: &mut Engine, this: Ptr, tile: u32, mode: i32) -> bool {
     true
 }
 
+/// `double` 1.0, subtracted from an attribute's value when its points are
+/// reset.
+const ONE_DOUBLE: u32 = 0x0101_2070;
+/// The attribute list's item template name.
+const ATTRIBUTE_TEMPLATE_NAME: u32 = 0x0107_1c88;
+/// The float written to the attribute list container's trait `0xfa2`.
+const ATTRIBUTE_LIST_TRAIT_VALUE: u32 = 0x0107_1c84;
+/// `Tile::GetChildByID` (`this`, id).
+const TILE_GET_CHILD_BY_ID: u32 = 0x00a0_3eb0;
+/// `Tile::PlayTileSound` (`this`, trait).
+const TILE_PLAY_TILE_SOUND: u32 = 0x00a0_b110;
+/// The player's method `0093a850` (`this`, actor value, float), called with
+/// an attribute's new value unless values are only added.
+const PLAYER_SET_VALUE_0093A850: u32 = 0x0093_a850;
+
+// Translated from 007539a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `CharGenMenu::InitAttributeList` (Xbox PDB): clears the spent points
+/// (and, unless only values may be added, takes 7 off `iMaxPoints`), sets
+/// up the item list on the tile at +0x30 (template at `01071c88`, the
+/// container's trait `0xfa2` set to the float at `01071c84`), shows
+/// tutorial message `0xc` for the menu's class (time 500) and adds every
+/// actor value of section 0 with its name: id trait `0xfaa` 8, the player's
+/// value (slot +0x1c of the player's object at +0xa4) as the base-value
+/// trait, added value 0.0, its display string; unless only values may be
+/// added the value less one counts as spent points.
+pub fn char_gen_menu_init_attribute_list(e: &mut Engine, this: Ptr<CharGenMenu>) {
+    let menu = this.addr();
+    e.set(this, CharGenMenu::iCurrPoints, 0);
+    if e.get(this, CharGenMenu::bOnlyAddValues) == 0 {
+        let maximum = e.get(this, CharGenMenu::iMaxPoints);
+        e.set(this, CharGenMenu::iMaxPoints, maximum.wrapping_sub(7));
+    }
+    let container = tile_at(e, menu, 0x30);
+    e.call(
+        LIST_BOX_INITIALIZE,
+        &args![menu + ITEM_LIST, container, ATTRIBUTE_TEMPLATE_NAME],
+    );
+    let value = x87_quiet_bits(e.global::<u32>(ATTRIBUTE_LIST_TRAIT_VALUE));
+    let container = tile_at(e, menu, 0x30);
+    set_float_bits(e, container, TRAIT_0XFA2, value);
+    let class = e.vcall(menu, 0x34, &args![]).u32();
+    let interface = e.call(INTERFACE_SINGLETON, &args![]).u32();
+    e.call(
+        SHOW_TUTORIAL,
+        &args![interface.wrapping_add(0x4d4), 0xcu32, class, 0x1f4u32],
+    );
+    let mut index = 0u32;
+    while index < e.call(ACTOR_VALUE_SECTION_COUNT, &args![0u32]).u32() {
+        let value = e
+            .call(ACTOR_VALUE_FROM_SECTION, &args![0u32, index & 0xff])
+            .u32();
+        let name = e.call(ACTOR_VALUE_NAME, &args![value]).u32();
+        let tile = list_box_actor_value_add_item(e, Ptr::new(menu + ITEM_LIST), value, name, 0, 0);
+        let player = e.global::<u32>(PLAYER);
+        // The player's object at +0xa4, slot +0x1c, asked for `value` (an
+        // integer value of the actor value; the slot's name is not confirmed).
+        let points = e
+            .vcall(player.wrapping_add(0xa4), 0x1c, &args![value])
+            .i32();
+        set_trait_from_int(e, tile, TRAIT_ID, 8);
+        let base_trait = e.global::<i32>(TRAIT_BASE_VALUE);
+        set_trait_from_int(e, tile, base_trait, points);
+        let added = e.global::<u32>(TRAIT_ADDED_VALUE);
+        set_float_bits(e, tile, added, 0);
+        char_gen_menu_set_display_string(e, this, tile);
+        if e.get(this, CharGenMenu::bOnlyAddValues) == 0 {
+            let spent = e.get(this, CharGenMenu::iCurrPoints);
+            e.set(
+                this,
+                CharGenMenu::iCurrPoints,
+                points.wrapping_add(spent).wrapping_sub(1),
+            );
+        }
+        index = index.wrapping_add(1);
+    }
+}
+
+// Translated from 00754150 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `CharGenMenu::DoGamepad` (Xbox PDB): by button (the switch covers 3 to
+/// 10; the float word is not read):
+/// - 3 and 4, attributes with a highlighted tile (item list slot +4): the
+///   child of id 10 (button 4) or 11 (button 3) of that tile, when it is
+///   there and visible (`0xfa3`), plays its sound (`0xfcb`) and is clicked
+///   (`this` slot +0xc); handled either way;
+/// - 9: skills with a highlighted tile: clicks it as id 9 (handled);
+///   attributes: the result of button 3 (`this` slot +0x38, value 1.0);
+/// - 10: attributes: the result of button 4 the same way;
+/// - others (and the cases whose test fails): not handled.
+pub fn char_gen_menu_do_gamepad(
+    e: &mut Engine,
+    this: Ptr<CharGenMenu>,
+    button: i32,
+    _unused_2: u32,
+) -> bool {
+    let menu = this.addr();
+    let list = menu + ITEM_LIST;
+    let one = 1.0f32.to_bits();
+    match button {
+        3 | 4 => {
+            if e.get(this, CharGenMenu::eItemType) != 0 || e.vcall(list, 4, &args![]).u32() == 0 {
+                return false;
+            }
+            let id = 0xa + u32::from(button != 4);
+            let highlighted = e.vcall(list, 4, &args![]).u32();
+            let child = e.call(TILE_GET_CHILD_BY_ID, &args![highlighted, id]).u32();
+            if child != 0 && e.call(TILE_IS_TRUE, &args![child, TRAIT_VISIBLE]).bool() {
+                e.call(TILE_PLAY_TILE_SOUND, &args![child, 0xfcbu32]);
+                e.vcall(menu, 0xc, &args![id, child]);
+            }
+            true
+        }
+        9 => {
+            if e.get(this, CharGenMenu::eItemType) == 1 && e.vcall(list, 4, &args![]).u32() != 0 {
+                let highlighted = e.vcall(list, 4, &args![]).u32();
+                e.vcall(menu, 0xc, &args![9u32, highlighted]);
+                true
+            } else if e.get(this, CharGenMenu::eItemType) == 0 {
+                e.vcall(menu, 0x38, &args![3u32, one]).bool()
+            } else {
+                false
+            }
+        }
+        10 => {
+            if e.get(this, CharGenMenu::eItemType) == 0 {
+                e.vcall(menu, 0x38, &args![4u32, one]).bool()
+            } else {
+                false
+            }
+        }
+        _ => false,
+    }
+}
+
+// Translated from 007542d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `CharGenMenu::DoGamepadUpEvent` (Xbox PDB): button 11 with the tile at
+/// +0x44's trait `0xfaf` true plays menu sound 1 and clicks id 6 (tile 0;
+/// `this` slot +0xc). Answers whether it was handled; the second word is
+/// not read.
+pub fn char_gen_menu_do_gamepad_up_event(
+    e: &mut Engine,
+    this: Ptr<CharGenMenu>,
+    button: i32,
+    _unused_2: u32,
+) -> bool {
+    if button != 0xb {
+        return false;
+    }
+    let tile = tile_at(e, this.addr(), 0x44);
+    if !e.call(TILE_IS_TRUE, &args![tile, 0xfafu32]).bool() {
+        return false;
+    }
+    e.call(PLAY_MENU_SOUND, &args![1u32]);
+    e.vcall(this.addr(), 0xc, &args![6u32, 0u32]);
+    true
+}
+
+// Translated from 00754330 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The attribute reset callback of `DoClick` (no Xbox PDB name; cdecl
+/// list-walk callback, the value word not read): with a menu open and
+/// values not only added, adds the item's base plus second value less 1.0
+/// (truncated, `_ftol2`) to the spent points; then clears the added value
+/// and rebuilds the display string. Nothing without a menu.
+pub fn fn_00754330(e: &mut Engine, tile: u32, _unused_1: u32) {
+    if me(e) == 0 {
+        return;
+    }
+    let menu = Ptr::<CharGenMenu>::new(me(e));
+    if e.get(menu, CharGenMenu::bOnlyAddValues) == 0 {
+        let base_trait = e.global::<u32>(TRAIT_BASE_VALUE);
+        let base = float_trait(e, tile, base_trait);
+        let second_trait = e.global::<u32>(TRAIT_SECOND_VALUE);
+        let second = float_trait(e, tile, second_trait);
+        let sum = x87_add(second, base);
+        let value = x87_sub(sum, e.global::<f64>(ONE_DOUBLE));
+        let points = e.call(FTOL, &args![value]).i32();
+        let menu = Ptr::<CharGenMenu>::new(me(e));
+        let spent = e.get(menu, CharGenMenu::iCurrPoints);
+        e.set(menu, CharGenMenu::iCurrPoints, points.wrapping_add(spent));
+    }
+    let added = e.global::<u32>(TRAIT_ADDED_VALUE);
+    set_float_bits(e, tile, added, 0);
+    let menu = Ptr::<CharGenMenu>::new(me(e));
+    char_gen_menu_set_display_string(e, menu, tile);
+}
+
+// Translated from 007543c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `CharGenMenu::ResetSkillsFunc` (Xbox PDB, cdecl list-walk callback): a
+/// tagged item (the tag trait true) loses its tag and added value, unless
+/// only values may be added and the player's class tags the skill (then,
+/// when values are not only added, it counts as a spent point: that
+/// increment cannot run, as it needs the flag both set and clear). The
+/// display string is rebuilt for every item.
+pub fn char_gen_menu_reset_skills_func(e: &mut Engine, tile: u32, value: u32) {
+    let tagged = e.global::<u32>(TRAIT_TAGGED);
+    if e.call(TILE_IS_TRUE, &args![tile, tagged]).bool() {
+        let menu = Ptr::<CharGenMenu>::new(me(e));
+        let keeps = e.get(menu, CharGenMenu::bOnlyAddValues) != 0 && {
+            let class = player_class(e);
+            e.call(CLASS_TAGS_SKILL, &args![class, value]).bool()
+        };
+        if !keeps {
+            let tagged = e.global::<i32>(TRAIT_TAGGED);
+            set_trait_from_int(e, tile, tagged, 0);
+            let added = e.global::<u32>(TRAIT_ADDED_VALUE);
+            set_float_bits(e, tile, added, 0);
+        } else {
+            let menu = Ptr::<CharGenMenu>::new(me(e));
+            if e.get(menu, CharGenMenu::bOnlyAddValues) == 0 {
+                let spent = e.get(menu, CharGenMenu::iCurrPoints);
+                e.set(menu, CharGenMenu::iCurrPoints, spent.wrapping_add(1));
+            }
+        }
+    }
+    let menu = Ptr::<CharGenMenu>::new(me(e));
+    char_gen_menu_set_display_string(e, menu, tile);
+}
+
+// Translated from 00754460 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The callback `Close` writes the attributes with (no Xbox PDB name; cdecl
+/// list-walk callback): with a menu open, values only added and attributes
+/// listed, the player's current value (slot 0 of its object at +0xa4) plus
+/// the item's added value goes through the player's slot +0x394; otherwise
+/// the base plus added value goes through `0093a850`.
+pub fn fn_00754460(e: &mut Engine, tile: u32, value: u32) {
+    let adds_only = me(e) != 0 && {
+        let menu = Ptr::<CharGenMenu>::new(me(e));
+        e.get(menu, CharGenMenu::bOnlyAddValues) != 0 && e.get(menu, CharGenMenu::eItemType) == 0
+    };
+    if adds_only {
+        let player = e.global::<u32>(PLAYER);
+        // The player's object at +0xa4, slot 0, asked for `value` (an
+        // integer; the slot's name is not confirmed).
+        let current = e.vcall(player.wrapping_add(0xa4), 0, &args![value]).i32();
+        let added_trait = e.global::<u32>(TRAIT_ADDED_VALUE);
+        let added = float_trait(e, tile, added_trait);
+        let sum = x87_quiet_bits(x87_store32(x87_add(added, f64::from(current))));
+        let player = e.global::<u32>(PLAYER);
+        e.vcall(player, 0x394, &args![value, sum]);
+    } else {
+        let base_trait = e.global::<u32>(TRAIT_BASE_VALUE);
+        let base = float_trait(e, tile, base_trait);
+        let added_trait = e.global::<u32>(TRAIT_ADDED_VALUE);
+        let added = float_trait(e, tile, added_trait);
+        let sum = x87_quiet_bits(x87_store32(x87_add(added, base)));
+        let player = e.global::<u32>(PLAYER);
+        e.call(PLAYER_SET_VALUE_0093A850, &args![player, value, sum]);
+    }
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -1094,6 +1343,21 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x0075_4930, fn_00754930(Ptr, u32)),
         entry!(0x0075_4950, list_box_actor_value_is_selected(Ptr, u32) -> bool),
         entry!(0x0075_4a00, fn_00754a00(Ptr, u32, i32) -> bool),
+        entry!(
+            0x0075_39a0,
+            char_gen_menu_init_attribute_list(Ptr<CharGenMenu>)
+        ),
+        entry!(
+            0x0075_4150,
+            char_gen_menu_do_gamepad(Ptr<CharGenMenu>, i32, u32) -> bool
+        ),
+        entry!(
+            0x0075_42d0,
+            char_gen_menu_do_gamepad_up_event(Ptr<CharGenMenu>, i32, u32) -> bool
+        ),
+        entry!(0x0075_4330, fn_00754330(u32, u32)),
+        entry!(0x0075_43c0, char_gen_menu_reset_skills_func(u32, u32)),
+        entry!(0x0075_4460, fn_00754460(u32, u32)),
     ]
 }
 
@@ -1941,5 +2205,336 @@ mod tests {
         );
         assert_eq!(calls_to(&e, TILE_ADD_USER_TRAIT).len(), 1);
         assert!(!e.call(0x0075_4a00, &args![0x100u32, 0u32, 2i32]).bool());
+    }
+}
+
+#[cfg(test)]
+mod n052_tests {
+    use super::*;
+
+    fn calls_to(e: &Engine, callee: u32) -> Vec<Vec<u32>> {
+        e.call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|(address, _)| *address == callee)
+            .map(|(_, words)| words.clone())
+            .collect()
+    }
+
+    fn stub(e: &mut Engine, addresses: &[u32]) {
+        for &address in addresses {
+            e.register(address, |_, _| Ret::default());
+        }
+    }
+
+    fn answer(e: &mut Engine, address: u32, eax: u32) {
+        e.register_double(address, move |_, _| Ret {
+            eax,
+            ..Ret::default()
+        });
+    }
+
+    /// A menu as the singleton, the trait-id statics mapped and numbered,
+    /// and a player whose object at +0xa4 has a vtable.
+    fn setup(e: &mut Engine) -> (Ptr<CharGenMenu>, u32, u32) {
+        let this = e.new_object::<CharGenMenu>();
+        e.map(CHAR_GEN_MENU & !0xfff, 0x1000);
+        e.set_global(CHAR_GEN_MENU, this.addr());
+        e.set_global(TRAIT_BASE_VALUE, 0x61u32);
+        e.set_global(TRAIT_SECOND_VALUE, 0x62u32);
+        e.set_global(TRAIT_TAGGED, 0x63u32);
+        e.set_global(TRAIT_ADDED_VALUE, 0x64u32);
+        e.map(PLAYER & !0xfff, 0x1000);
+        let player = e.mem.alloc(0x100);
+        e.set_global(PLAYER, player);
+        let player_vtable = e.mem.alloc(0x400);
+        e.mem.set_u32(player, player_vtable);
+        let owner_vtable = e.mem.alloc(0x40);
+        e.mem.set_u32(player + 0xa4, owner_vtable);
+        (this, player, owner_vtable)
+    }
+
+    /// Float traits by trait id (0x61 base 5.0, 0x62 second 2.0, 0x64
+    /// added 3.0); the display string's callees answer zero.
+    fn traits(e: &mut Engine) {
+        e.register(GET_FLOAT_TRAIT, |_, a| Ret {
+            st0: match a[1] {
+                0x61 => 5.0,
+                0x62 => 2.0,
+                0x64 => 3.0,
+                _ => 0.0,
+            },
+            ..Ret::default()
+        });
+        stub(
+            e,
+            &[
+                SET_FLOAT_TRAIT,
+                SET_TRAIT_FROM_INT,
+                FTOL,
+                MAX_OF,
+                MIN_OF,
+                PRINT_BOUNDED,
+                TILE_ADD_USER_TRAIT,
+                SET_STRING_TRAIT,
+            ],
+        );
+    }
+
+    #[test]
+    fn init_attribute_list_adds_section_0_and_counts_points() {
+        let mut e = Engine::new();
+        let (this, _, owner_vtable) = setup(&mut e);
+        let vtable = e.mem.alloc(0x40);
+        e.mem.set_u32(this.addr(), vtable);
+        e.mem.set_u32(vtable + 0x34, 0x0075_3340);
+        e.mem.set_u32(this.addr() + 0x30, 0x330);
+        // The list box: a container and a template so AddItem renders.
+        e.mem.set_u32(this.addr() + ITEM_LIST + 0xc, 0x440);
+        e.mem.set_u32(this.addr() + ITEM_LIST + 0x18, 0x441);
+        e.set(this, CharGenMenu::iMaxPoints, 40);
+        e.map(0x0107_1000, 0x1000);
+        e.set_global(ATTRIBUTE_LIST_TRAIT_VALUE, 105.0f32.to_bits());
+        e.mem.set_u32(owner_vtable + 0x1c, 0x00c0_001c);
+        e.register(0x00c0_001c, |_, a| Ret {
+            eax: a[1] - 0x10,
+            ..Ret::default()
+        });
+        answer(&mut e, ACTOR_VALUE_SECTION_COUNT, 2);
+        e.register(ACTOR_VALUE_FROM_SECTION, |_, a| Ret {
+            eax: 0x15 + a[1],
+            ..Ret::default()
+        });
+        answer(&mut e, MENU_RENDER_TEMPLATE, 0x777);
+        answer(&mut e, LIST_BOX_COUNT, 2);
+        answer(&mut e, OPERATOR_NEW, 0);
+        traits(&mut e);
+        stub(
+            &mut e,
+            &[
+                LIST_BOX_INITIALIZE,
+                INTERFACE_SINGLETON,
+                SHOW_TUTORIAL,
+                ACTOR_VALUE_NAME,
+                TILE_GET_MENU,
+                TILE_GET_VALUE,
+                LIST_BOX_FLAG,
+                LIST_ADD_HEAD,
+            ],
+        );
+        e.call_log = Some(vec![]);
+        e.call(0x0075_39a0, &args![this]);
+        assert_eq!(e.get(this, CharGenMenu::iMaxPoints), 33);
+        // Values 5 and 6: (5 - 1) + (6 - 1).
+        assert_eq!(e.get(this, CharGenMenu::iCurrPoints), 9);
+        assert_eq!(
+            calls_to(&e, LIST_BOX_INITIALIZE),
+            vec![vec![this.addr() + 0x58, 0x330, ATTRIBUTE_TEMPLATE_NAME]]
+        );
+        assert_eq!(
+            calls_to(&e, SHOW_TUTORIAL),
+            vec![vec![0x4d4, 0xc, 0x418, 0x1f4]]
+        );
+        assert_eq!(
+            calls_to(&e, ACTOR_VALUE_FROM_SECTION),
+            vec![vec![0, 0], vec![0, 1]]
+        );
+        let ints = calls_to(&e, SET_TRAIT_FROM_INT);
+        assert!(ints.contains(&vec![0x777, 0xfaa, 8]));
+        assert!(ints.contains(&vec![0x777, 0x61, 5]));
+        assert!(ints.contains(&vec![0x777, 0x61, 6]));
+        assert!(calls_to(&e, SET_FLOAT_TRAIT).contains(&vec![0x330, 0xfa2, 105.0f32.to_bits(), 1]));
+
+        // Only adding values: the maximum and the points stay.
+        let (this, _, owner_vtable) = setup(&mut e);
+        e.mem.set_u32(this.addr(), vtable);
+        e.mem.set_u32(this.addr() + ITEM_LIST + 0xc, 0x440);
+        e.mem.set_u32(this.addr() + ITEM_LIST + 0x18, 0x441);
+        e.mem.set_u32(owner_vtable + 0x1c, 0x00c0_001c);
+        e.set(this, CharGenMenu::iMaxPoints, 40);
+        e.set(this, CharGenMenu::iCurrPoints, 12);
+        e.set(this, CharGenMenu::bOnlyAddValues, 1);
+        e.call(0x0075_39a0, &args![this]);
+        assert_eq!(e.get(this, CharGenMenu::iMaxPoints), 40);
+        assert_eq!(e.get(this, CharGenMenu::iCurrPoints), 0);
+    }
+
+    #[test]
+    fn do_gamepad_clicks_by_button_and_item_type() {
+        let mut e = Engine::new();
+        let (this, _, _) = setup(&mut e);
+        let vtable = e.mem.alloc(0x40);
+        e.mem.set_u32(this.addr(), vtable);
+        e.mem.set_u32(vtable + 0xc, 0x00c0_000c);
+        e.mem.set_u32(vtable + 0x38, 0x0075_4150);
+        let list_vtable = e.mem.alloc(0x40);
+        e.mem.set_u32(this.addr() + 0x58, list_vtable);
+        e.mem.set_u32(list_vtable + 4, 0x00c0_0004);
+        answer(&mut e, 0x00c0_0004, 0x900);
+        e.register(TILE_GET_CHILD_BY_ID, |_, a| Ret {
+            eax: 0x1000 + a[1],
+            ..Ret::default()
+        });
+        answer(&mut e, TILE_IS_TRUE, 1);
+        stub(&mut e, &[TILE_PLAY_TILE_SOUND, 0x00c0_000c]);
+        let one = 1.0f32.to_bits();
+
+        e.call_log = Some(vec![]);
+        assert!(e.call(0x0075_4150, &args![this, 3i32, one]).bool());
+        assert_eq!(calls_to(&e, TILE_GET_CHILD_BY_ID), vec![vec![0x900, 11]]);
+        assert_eq!(
+            calls_to(&e, TILE_PLAY_TILE_SOUND),
+            vec![vec![0x100b, 0xfcb]]
+        );
+        assert_eq!(
+            calls_to(&e, 0x00c0_000c),
+            vec![vec![this.addr(), 11, 0x100b]]
+        );
+
+        // Button 10 on attributes goes through button 4 (id 10).
+        e.call_log = Some(vec![]);
+        assert!(e.call(0x0075_4150, &args![this, 10i32, one]).bool());
+        assert_eq!(
+            calls_to(&e, 0x00c0_000c),
+            vec![vec![this.addr(), 10, 0x100a]]
+        );
+
+        // An invisible child: handled, nothing clicked.
+        answer(&mut e, TILE_IS_TRUE, 0);
+        e.call_log = Some(vec![]);
+        assert!(e.call(0x0075_4150, &args![this, 4i32, one]).bool());
+        assert!(calls_to(&e, 0x00c0_000c).is_empty());
+
+        // Skills: button 9 clicks the highlighted tile; 3 and 10 do nothing.
+        e.set(this, CharGenMenu::eItemType, 1);
+        e.call_log = Some(vec![]);
+        assert!(e.call(0x0075_4150, &args![this, 9i32, one]).bool());
+        assert_eq!(calls_to(&e, 0x00c0_000c), vec![vec![this.addr(), 9, 0x900]]);
+        assert!(!e.call(0x0075_4150, &args![this, 3i32, one]).bool());
+        assert!(!e.call(0x0075_4150, &args![this, 10i32, one]).bool());
+        // No highlighted tile: 9 is not handled.
+        answer(&mut e, 0x00c0_0004, 0);
+        assert!(!e.call(0x0075_4150, &args![this, 9i32, one]).bool());
+        // Buttons outside the switch.
+        assert!(!e.call(0x0075_4150, &args![this, 5i32, one]).bool());
+        assert!(!e.call(0x0075_4150, &args![this, 2i32, one]).bool());
+        assert!(!e.call(0x0075_4150, &args![this, 11i32, one]).bool());
+    }
+
+    #[test]
+    fn do_gamepad_up_event_closes_on_button_11() {
+        let mut e = Engine::new();
+        let (this, _, _) = setup(&mut e);
+        let vtable = e.mem.alloc(0x40);
+        e.mem.set_u32(this.addr(), vtable);
+        e.mem.set_u32(vtable + 0xc, 0x00c0_000c);
+        e.mem.set_u32(this.addr() + 0x44, 0x444);
+        answer(&mut e, TILE_IS_TRUE, 1);
+        stub(&mut e, &[PLAY_MENU_SOUND, 0x00c0_000c]);
+        e.call_log = Some(vec![]);
+        assert!(e.call(0x0075_42d0, &args![this, 11i32, 0u32]).bool());
+        assert_eq!(calls_to(&e, TILE_IS_TRUE), vec![vec![0x444, 0xfaf]]);
+        assert_eq!(calls_to(&e, PLAY_MENU_SOUND), vec![vec![1]]);
+        assert_eq!(calls_to(&e, 0x00c0_000c), vec![vec![this.addr(), 6, 0]]);
+        assert!(!e.call(0x0075_42d0, &args![this, 10i32, 0u32]).bool());
+        answer(&mut e, TILE_IS_TRUE, 0);
+        e.call_log = Some(vec![]);
+        assert!(!e.call(0x0075_42d0, &args![this, 11i32, 0u32]).bool());
+        assert!(calls_to(&e, PLAY_MENU_SOUND).is_empty());
+    }
+
+    #[test]
+    fn reset_attributes_counts_the_value_less_one() {
+        let mut e = Engine::new();
+        let (this, _, _) = setup(&mut e);
+        e.map(0x0101_2000, 0x1000);
+        e.set_global(ONE_DOUBLE, 1.0f64);
+        traits(&mut e);
+        e.register(FTOL, |_, a| Ret {
+            eax: f64::from_bits(u64::from(a[0]) | u64::from(a[1]) << 32) as i32 as u32,
+            ..Ret::default()
+        });
+        e.set(this, CharGenMenu::iCurrPoints, 10);
+        e.call_log = Some(vec![]);
+        e.call(0x0075_4330, &args![0x500u32, 0x20u32]);
+        // 5.0 + 2.0 - 1.0 = 6.
+        assert_eq!(e.get(this, CharGenMenu::iCurrPoints), 16);
+        assert!(calls_to(&e, SET_FLOAT_TRAIT).contains(&vec![0x500, 0x64, 0, 1]));
+        assert_eq!(calls_to(&e, TILE_ADD_USER_TRAIT).len(), 1);
+        // Only adding values: the points stay.
+        e.set(this, CharGenMenu::bOnlyAddValues, 1);
+        e.call(0x0075_4330, &args![0x500u32, 0x20u32]);
+        assert_eq!(e.get(this, CharGenMenu::iCurrPoints), 16);
+        // No menu: nothing.
+        e.set_global(CHAR_GEN_MENU, 0u32);
+        e.call_log = Some(vec![]);
+        e.call(0x0075_4330, &args![0x500u32, 0x20u32]);
+        assert_eq!(e.call_log.as_ref().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn reset_skills_untags_unless_the_class_tags_it() {
+        let mut e = Engine::new();
+        let (this, _, _) = setup(&mut e);
+        traits(&mut e);
+        answer(&mut e, TILE_IS_TRUE, 1);
+        answer(&mut e, CLASS_TAGS_SKILL, 1);
+        stub(&mut e, &[ACTOR_GET_CLASS]);
+        e.call_log = Some(vec![]);
+        e.call(0x0075_43c0, &args![0x500u32, 0x21u32]);
+        assert_eq!(calls_to(&e, SET_TRAIT_FROM_INT), vec![vec![0x500, 0x63, 0]]);
+        assert!(calls_to(&e, CLASS_TAGS_SKILL).is_empty());
+        // Only adding values and a class skill: kept.
+        e.set(this, CharGenMenu::bOnlyAddValues, 1);
+        e.call_log = Some(vec![]);
+        e.call(0x0075_43c0, &args![0x500u32, 0x21u32]);
+        assert!(calls_to(&e, SET_TRAIT_FROM_INT).is_empty());
+        assert_eq!(calls_to(&e, CLASS_TAGS_SKILL), vec![vec![0, 0x21]]);
+        assert_eq!(e.get(this, CharGenMenu::iCurrPoints), 0);
+        // Not a class skill: untagged.
+        answer(&mut e, CLASS_TAGS_SKILL, 0);
+        e.call_log = Some(vec![]);
+        e.call(0x0075_43c0, &args![0x500u32, 0x21u32]);
+        assert_eq!(calls_to(&e, SET_TRAIT_FROM_INT), vec![vec![0x500, 0x63, 0]]);
+        // Not tagged: only the display string.
+        answer(&mut e, TILE_IS_TRUE, 0);
+        e.call_log = Some(vec![]);
+        e.call(0x0075_43c0, &args![0x500u32, 0x21u32]);
+        assert!(calls_to(&e, SET_TRAIT_FROM_INT).is_empty());
+        assert_eq!(calls_to(&e, TILE_ADD_USER_TRAIT).len(), 1);
+    }
+
+    #[test]
+    fn apply_values_writes_the_sum_to_the_player() {
+        let mut e = Engine::new();
+        let (this, player, owner_vtable) = setup(&mut e);
+        traits(&mut e);
+        stub(&mut e, &[PLAYER_SET_VALUE_0093A850, 0x00c0_0394]);
+        e.call_log = Some(vec![]);
+        e.call(0x0075_4460, &args![0x500u32, 0x05u32]);
+        assert_eq!(
+            calls_to(&e, PLAYER_SET_VALUE_0093A850),
+            vec![vec![player, 5, 8.0f32.to_bits()]]
+        );
+        // Only adding attribute values: current value 7 + added 3.0.
+        e.set(this, CharGenMenu::bOnlyAddValues, 1);
+        e.mem.set_u32(owner_vtable, 0x00c0_0000);
+        answer(&mut e, 0x00c0_0000, 7);
+        let player_vtable = e.mem.u32(player);
+        e.mem.set_u32(player_vtable + 0x394, 0x00c0_0394);
+        e.call_log = Some(vec![]);
+        e.call(0x0075_4460, &args![0x500u32, 0x05u32]);
+        assert_eq!(calls_to(&e, 0x00c0_0000), vec![vec![player + 0xa4, 5]]);
+        assert_eq!(
+            calls_to(&e, 0x00c0_0394),
+            vec![vec![player, 5, 10.0f32.to_bits()]]
+        );
+        assert!(calls_to(&e, PLAYER_SET_VALUE_0093A850).is_empty());
+        // Skills: the base path again.
+        e.set(this, CharGenMenu::eItemType, 1);
+        e.call_log = Some(vec![]);
+        e.call(0x0075_4460, &args![0x500u32, 0x05u32]);
+        assert_eq!(calls_to(&e, PLAYER_SET_VALUE_0093A850).len(), 1);
     }
 }

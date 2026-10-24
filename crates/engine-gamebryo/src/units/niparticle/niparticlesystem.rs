@@ -785,6 +785,316 @@ pub fn ni_particle_system_create_clone(
     clone
 }
 
+/// `NiLines::RegisterStreamables` (decompiler name, `00a9b190`, `thiscall`, `RET 4`; result
+/// in `AL`), `NiLines::IsEqual` (decompiler name, `00a89770`, the same shape) and
+/// `NiLines::SaveBinary` (decompiler name, `00a9b1a0`, `RET 4`).
+const LINES_REGISTER_STREAMABLES_00A9B190: u32 = 0x00a9_b190;
+const LINES_IS_EQUAL_00A89770: u32 = 0x00a8_9770;
+const LINES_SAVE_BINARY_00A9B1A0: u32 = 0x00a9_b1a0;
+/// The stream's output binary stream (+0x250) and that object's write function (its word
+/// +0xc, called `cdecl` with the object, the buffer, the count, the address of the component
+/// size and the component count); the bytes written are added to its word +4.
+const STREAM_OUTPUT_BINARY_STREAM: u32 = 0x250;
+/// The RTTI record `PerformSystemReset` looks for in each controller's RTTI chain
+/// (`012027c8`).
+const RESET_CONTROLLER_RTTI_012027C8: u32 = 0x0120_27c8;
+/// `NiParticles::GetViewerStrings` (decompiler name, `00a9b2e0`, `RET 4`), the viewer string
+/// makers (`cdecl`): `NiGetViewerString` (`00a7d330`, one word), of a byte (`00a7d370`), of
+/// an unsigned word (`00a7d510`) and of a 16-bit word (`00a7d490`), each with a name; the
+/// string array's grow (`0096ad30`, `thiscall`, one word) and set-at (`0096ae90`, `thiscall`,
+/// two words: the index and the address of the string).
+const PARTICLES_GET_VIEWER_STRINGS_00A9B2E0: u32 = 0x00a9_b2e0;
+const NI_GET_VIEWER_STRING: u32 = 0x00a7_d330;
+const VIEWER_STRING_BOOL_00A7D370: u32 = 0x00a7_d370;
+const VIEWER_STRING_UNSIGNED_00A7D510: u32 = 0x00a7_d510;
+const VIEWER_STRING_SHORT_00A7D490: u32 = 0x00a7_d490;
+const STRINGS_GROW: u32 = 0x0096_ad30;
+const STRINGS_SET_AT: u32 = 0x0096_ae90;
+/// `NiParticleSystem`'s class name pointer (`012024e0`) and the viewer string names
+/// (`World Space`, `NumMods`, `NumParticles`, `MaxParticles`).
+const CLASS_NAME_012024E0: u32 = 0x0120_24e0;
+const WORLD_SPACE_NAME: u32 = 0x0101_fe88;
+const NUM_MODS_NAME: u32 = 0x010b_d564;
+const NUM_PARTICLES_NAME: u32 = 0x010b_d554;
+const MAX_PARTICLES_NAME: u32 = 0x010b_d544;
+
+/// The modifier list's count (`m_kModifierList.m_uiCount`, +0xd0).
+const MODIFIER_COUNT: u32 = 0xd0;
+
+// Translated from 00c1b0b0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiParticleSystem::RegisterStreamables` (Xbox PDB, `thiscall`, one word: the stream):
+/// `NiLines::RegisterStreamables` first (answers 0 when that fails), then each modifier's
+/// virtual slot +0x54 with the stream. Answers 1.
+pub fn ni_particle_system_register_streamables(
+    e: &mut Engine,
+    this: Ptr<NiParticleSystem>,
+    stream: Ptr,
+) -> bool {
+    if !e
+        .call(LINES_REGISTER_STREAMABLES_00A9B190, &args![this, stream])
+        .bool()
+    {
+        return false;
+    }
+    for_each_modifier(e, this, |e, modifier| {
+        e.vcall(modifier, 0x54, &args![stream]);
+    });
+    true
+}
+
+// Translated from 00c1b0f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (unit `NiParticle/niparticlesystem.cpp`, `thiscall`, one word:
+/// the address of a name word): the first modifier whose word +8 (its name) equals the word
+/// at `name`, or 0.
+pub fn fn_00c1b0f0(e: &mut Engine, this: Ptr<NiParticleSystem>, name: Ptr) -> u32 {
+    let mut item = e.mem.u32(this.addr() + 0xc8);
+    while item != 0 {
+        let modifier = e.mem.u32(item + 8);
+        item = e.mem.u32(item);
+        if modifier != 0 && e.mem.u32(modifier + 8) == e.mem.u32(name.addr()) {
+            return modifier;
+        }
+    }
+    0
+}
+
+// Translated from 00c1b120 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiParticleSystem::PerformSystemReset` (decompiler name, `thiscall`): the particle data's
+/// virtual slot +0x8c with 0, its 16-bit words +0x78 and +0x7a cleared, `m_fLastTime` set to
+/// the `float` at `01015f5c`; each modifier's virtual slot +0x94; then each controller (from
+/// `m_spControllers` at +0xc, the next at +0x30) whose RTTI chain (virtual slot +8, the base
+/// at +4) holds the record at `012027c8` gets its virtual slot +0xec.
+pub fn ni_particle_system_perform_system_reset(e: &mut Engine, this: Ptr<NiParticleSystem>) {
+    let data = e.get(this, NiParticleSystem::m_spModelData);
+    e.vcall(data, 0x8c, &args![0u32]);
+    let start = x87_quiet_bits(e.global::<u32>(INITIAL_TIME_01015F5C));
+    e.mem.set_u16(data + 0x78, 0);
+    e.mem.set_u16(data + 0x7a, 0);
+    e.set(this, NiParticleSystem::m_fLastTime, start);
+    for_each_modifier(e, this, |e, modifier| {
+        e.vcall(modifier, 0x94, &args![]);
+    });
+    let mut controller = e.mem.u32(this.addr() + 0xc);
+    while controller != 0 {
+        let mut rtti = e.vcall(controller, 8, &args![]).u32();
+        let mut matches = false;
+        while rtti != 0 {
+            if rtti == RESET_CONTROLLER_RTTI_012027C8 {
+                matches = true;
+                break;
+            }
+            rtti = e.mem.u32(rtti + 4);
+        }
+        if matches {
+            e.vcall(controller, 0xec, &args![]);
+        }
+        controller = e.mem.u32(controller + 0x30);
+    }
+}
+
+// Translated from 00c1b1d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiParticleSystem::IsEqual` (Xbox PDB, `thiscall`, one word: the other system):
+/// `NiLines::IsEqual`, the same `m_bWorldSpace` and `m_bDynamicBounds`, then for each
+/// modifier its virtual slot +0x5c with the other system's modifier of the same name (word
+/// +8; 0 when there is none) must answer non-zero.
+pub fn ni_particle_system_is_equal(
+    e: &mut Engine,
+    this: Ptr<NiParticleSystem>,
+    other: Ptr<NiParticleSystem>,
+) -> bool {
+    if !e.call(LINES_IS_EQUAL_00A89770, &args![this, other]).bool() {
+        return false;
+    }
+    if e.mem.u8(this.addr() + 0xc4) != e.mem.u8(other.addr() + 0xc4)
+        || e.mem.u8(this.addr() + 0xd9) != e.mem.u8(other.addr() + 0xd9)
+    {
+        return false;
+    }
+    let mut item = e.mem.u32(this.addr() + 0xc8);
+    while item != 0 {
+        let modifier = e.mem.u32(item + 8);
+        item = e.mem.u32(item);
+        let mut theirs = e.mem.u32(other.addr() + 0xc8);
+        let mut found = 0;
+        while theirs != 0 {
+            let candidate = e.mem.u32(theirs + 8);
+            theirs = e.mem.u32(theirs);
+            if candidate != 0 && e.mem.u32(candidate + 8) == e.mem.u32(modifier + 8) {
+                found = candidate;
+                break;
+            }
+        }
+        if !e.vcall(modifier, 0x5c, &args![found]).bool() {
+            return false;
+        }
+    }
+    true
+}
+
+/// Writes `count` bytes from `buffer` through the stream's output binary stream (+0x250):
+/// its write function (word +0xc) with the object, the buffer, the count, the address of the
+/// component size (`size_slot`, set to `count`) and one component; the result is added to the
+/// object's word +4.
+fn write_binary(e: &mut Engine, stream: u32, buffer: u32, count: u32, size_slot: u32) {
+    let binary = e.mem.u32(stream + STREAM_OUTPUT_BINARY_STREAM);
+    e.mem.set_u32(size_slot, count);
+    let write = e.mem.u32(binary + 0xc);
+    let written = e
+        .call(write, &args![binary, buffer, count, size_slot, 1u32])
+        .u32();
+    let total = e.mem.u32(binary + 4).wrapping_add(written);
+    e.mem.set_u32(binary + 4, total);
+}
+
+// Translated from 00c1b400 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiParticleSystem::SaveBinary` (Xbox PDB, `thiscall`, one word: the stream):
+/// `NiLines::SaveBinary`, then `m_bWorldSpace` (one byte, written from the low byte of the
+/// argument's stack word) and the modifier count (`+0xd0`, four bytes) through the stream's
+/// output binary stream, then each modifier's link ID (the stream's virtual slot +0x30).
+pub fn ni_particle_system_save_binary(e: &mut Engine, this: Ptr<NiParticleSystem>, stream: Ptr) {
+    e.call(LINES_SAVE_BINARY_00A9B1A0, &args![this, stream]);
+    e.with_stack(0xc, |e, frame| {
+        // The component size word, the count word and the argument's stack word.
+        let (size_slot, word_slot, argument_slot) =
+            (frame.addr(), frame.addr() + 4, frame.addr() + 8);
+        e.mem.set_u32(argument_slot, stream.addr());
+        let world_space = e.mem.u8(this.addr() + 0xc4);
+        e.mem.set_u8(argument_slot, world_space);
+        write_binary(e, stream.addr(), argument_slot, 1, size_slot);
+        let count = e.mem.u32(this.addr() + MODIFIER_COUNT);
+        e.mem.set_u32(word_slot, count);
+        write_binary(e, stream.addr(), word_slot, 4, size_slot);
+    });
+    for_each_modifier(e, this, |e, modifier| {
+        e.vcall(stream.addr(), 0x30, &args![modifier]);
+    });
+}
+
+// Translated from 00c1b520 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (unit `NiParticle/niparticlesystem.cpp`): inserts an `NiPointer`
+/// element before an item of an `NiTPointerList` (`thiscall`, `RET 8`: the item and the
+/// address of the `NiPointer`). Takes an item from `0043a010` (on the list's +8); when its
+/// element differs from the pointer's object, the old one is released (reference count at +4
+/// through `InterlockedDecrement`, deleted through vtable slot +4 at 0) when not null, and the
+/// new one stored and, when not null, held (`InterlockedIncrement` on its +4). The new item's
+/// next link is `before` and its previous link `before`'s; that previous item's next link (or,
+/// without one, the head) takes the new item, as does `before`'s previous link; the count goes
+/// up by one. Answers the new item.
+pub fn fn_00c1b520(
+    e: &mut Engine,
+    this: Ptr<NiTPointerList>,
+    before: Ptr<NiTListItem>,
+    element: Ptr,
+) -> Ptr<NiTListItem> {
+    let count = this.addr().wrapping_add(8);
+    let item = Ptr::<NiTListItem>::new(e.call(LIST_NEW_ITEM_0043A010, &args![count]).u32());
+    let held = e.get(item, NiTListItem::m_element);
+    if held != e.mem.u32(element.addr()) {
+        if held != 0 {
+            let left = e
+                .call(IMPORT_INTERLOCKED_DECREMENT, &args![held.wrapping_add(4)])
+                .u32();
+            if left == 0 {
+                e.vcall(held, 4, &args![]);
+            }
+        }
+        let object = e.mem.u32(element.addr());
+        e.set(item, NiTListItem::m_element, object);
+        if object != 0 {
+            e.call(IMPORT_INTERLOCKED_INCREMENT, &args![object.wrapping_add(4)]);
+        }
+    }
+    e.set(item, NiTListItem::m_pkNext, before.addr());
+    let previous = e.get(before, NiTListItem::m_pkPrev);
+    e.set(item, NiTListItem::m_pkPrev, previous);
+    let previous = e.get(before, NiTListItem::m_pkPrev);
+    if previous != 0 {
+        e.set(
+            Ptr::<NiTListItem>::new(previous),
+            NiTListItem::m_pkNext,
+            item.addr(),
+        );
+    } else {
+        e.set(this, NiTPointerList::m_pkHead, item.addr());
+    }
+    e.set(before, NiTListItem::m_pkPrev, item.addr());
+    let n = e.get(this, NiTPointerList::m_uiCount).wrapping_add(1);
+    e.set(this, NiTPointerList::m_uiCount, n);
+    item
+}
+
+/// Adds the string at `slot` to the viewer string array (`NiTPrimitiveArray`: capacity +8,
+/// size +0xa, growth +0xe, 16-bit words): grows it (`0096ad30`) to growth + size when full,
+/// then sets it at the old size (`0096ae90`).
+fn add_viewer_string(e: &mut Engine, strings: u32, slot: u32) {
+    let size = u32::from(e.mem.u16(strings + 0xa));
+    if size >= u32::from(e.mem.u16(strings + 8)) {
+        let step = u32::from(e.mem.u16(strings + 0xe));
+        e.call(STRINGS_GROW, &args![strings, step.wrapping_add(size)]);
+    }
+    e.call(STRINGS_SET_AT, &args![strings, size, slot]);
+}
+
+// Translated from 00c1b850 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiParticleSystem::GetViewerStrings` (Xbox PDB, `thiscall`, one word: the string array):
+/// `NiParticles::GetViewerStrings`, then the class name (`012024e0`), `World Space`
+/// (`m_bWorldSpace`), `NumMods` (the modifier count, +0xd0), `NumParticles` and
+/// `MaxParticles` (the particle data's 16-bit words +0x50 and +8), each added to the array
+/// (the string kept in the argument's stack word).
+pub fn ni_particle_system_get_viewer_strings(
+    e: &mut Engine,
+    this: Ptr<NiParticleSystem>,
+    strings: Ptr,
+) {
+    e.call(PARTICLES_GET_VIEWER_STRINGS_00A9B2E0, &args![this, strings]);
+    let strings = strings.addr();
+    e.with_stack(4, |e, slot| {
+        let slot = slot.addr();
+        let name = e.global::<u32>(CLASS_NAME_012024E0);
+        let text = e.call(NI_GET_VIEWER_STRING, &args![name]).u32();
+        e.mem.set_u32(slot, text);
+        add_viewer_string(e, strings, slot);
+        let world_space = u32::from(e.mem.u8(this.addr() + 0xc4));
+        let text = e
+            .call(
+                VIEWER_STRING_BOOL_00A7D370,
+                &args![WORLD_SPACE_NAME, world_space],
+            )
+            .u32();
+        e.mem.set_u32(slot, text);
+        add_viewer_string(e, strings, slot);
+        let count = e.mem.u32(this.addr() + MODIFIER_COUNT);
+        let text = e
+            .call(
+                VIEWER_STRING_UNSIGNED_00A7D510,
+                &args![NUM_MODS_NAME, count],
+            )
+            .u32();
+        e.mem.set_u32(slot, text);
+        add_viewer_string(e, strings, slot);
+        let data = e.get(this, NiParticleSystem::m_spModelData);
+        let particles = u32::from(e.mem.u16(data + 0x50));
+        let text = e
+            .call(
+                VIEWER_STRING_SHORT_00A7D490,
+                &args![NUM_PARTICLES_NAME, particles],
+            )
+            .u32();
+        e.mem.set_u32(slot, text);
+        add_viewer_string(e, strings, slot);
+        let data = e.get(this, NiParticleSystem::m_spModelData);
+        let maximum = u32::from(e.mem.u16(data + 8));
+        let text = e
+            .call(
+                VIEWER_STRING_SHORT_00A7D490,
+                &args![MAX_PARTICLES_NAME, maximum],
+            )
+            .u32();
+        e.mem.set_u32(slot, text);
+        add_viewer_string(e, strings, slot);
+    });
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -853,6 +1163,31 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(
             0x00e7_4d40,
             ni_t_pointer_list_base_remove_all(Ptr<NiTPointerList>)
+        ),
+        entry!(
+            0x00c1_b0b0,
+            ni_particle_system_register_streamables(Ptr<NiParticleSystem>, Ptr) -> bool
+        ),
+        entry!(0x00c1_b0f0, fn_00c1b0f0(Ptr<NiParticleSystem>, Ptr) -> u32),
+        entry!(
+            0x00c1_b120,
+            ni_particle_system_perform_system_reset(Ptr<NiParticleSystem>)
+        ),
+        entry!(
+            0x00c1_b1d0,
+            ni_particle_system_is_equal(Ptr<NiParticleSystem>, Ptr<NiParticleSystem>) -> bool
+        ),
+        entry!(
+            0x00c1_b400,
+            ni_particle_system_save_binary(Ptr<NiParticleSystem>, Ptr)
+        ),
+        entry!(
+            0x00c1_b520,
+            fn_00c1b520(Ptr<NiTPointerList>, Ptr<NiTListItem>, Ptr) -> Ptr<NiTListItem>
+        ),
+        entry!(
+            0x00c1_b850,
+            ni_particle_system_get_viewer_strings(Ptr<NiParticleSystem>, Ptr)
         ),
     ]
 }
@@ -1806,5 +2141,264 @@ mod system_tests {
         });
         e.map(0, 0x1000);
         assert_eq!(e.call(0x00c1_b9e0, &args![this, 0x99u32]).u32(), 0);
+    }
+
+    /// A modifier with the modifier vtable and name word `name` at +8.
+    fn named_modifier(e: &mut Engine, name: u32) -> u32 {
+        let modifier = object(e, MODIFIER_VTABLE, 1);
+        e.mem.set_u32(modifier + 8, name);
+        modifier
+    }
+
+    #[test]
+    fn n063_register_streamables_runs_the_lines_then_each_modifier() {
+        let mut e = rig();
+        let this = system(&mut e);
+        let modifiers = [named_modifier(&mut e, 1), named_modifier(&mut e, 2)];
+        set_modifiers(&mut e, this, &modifiers);
+        noop(&mut e, &[MODIFIER_SLOTS + 0x54]);
+        e.register(LINES_REGISTER_STREAMABLES_00A9B190, |_, _| {
+            0x101u32.into_ret()
+        });
+        e.call_log = Some(vec![]);
+        assert!(e.call(0x00c1_b0b0, &args![this, 0x77u32]).bool());
+        assert_eq!(
+            calls(&e, MODIFIER_SLOTS + 0x54),
+            vec![vec![modifiers[0], 0x77], vec![modifiers[1], 0x77]]
+        );
+        e.register(LINES_REGISTER_STREAMABLES_00A9B190, |_, _| {
+            0x100u32.into_ret()
+        });
+        e.call_log = Some(vec![]);
+        assert!(!e.call(0x00c1_b0b0, &args![this, 0x77u32]).bool());
+        assert!(calls(&e, MODIFIER_SLOTS + 0x54).is_empty());
+    }
+
+    #[test]
+    fn n063_modifier_by_name_skips_empty_items() {
+        let mut e = rig();
+        let this = system(&mut e);
+        let wanted = named_modifier(&mut e, 0x55);
+        let other = named_modifier(&mut e, 0x44);
+        set_modifiers(&mut e, this, &[0, other, wanted]);
+        let name = e.mem.alloc(4);
+        e.mem.set_u32(name, 0x55);
+        assert_eq!(e.call(0x00c1_b0f0, &args![this, name]).u32(), wanted);
+        e.mem.set_u32(name, 0x66);
+        assert_eq!(e.call(0x00c1_b0f0, &args![this, name]).u32(), 0);
+    }
+
+    #[test]
+    fn n063_perform_system_reset_resets_data_modifiers_and_matching_controllers() {
+        let mut e = rig();
+        e.map(0x0101_5000, 0x1000);
+        e.set_global(INITIAL_TIME_01015F5C, 0xff7f_ffffu32);
+        let this = system(&mut e);
+        let data = object(&mut e, DATA_VTABLE, 1);
+        e.mem.set_u32(data + 0x78, 0x0005_0006);
+        e.set(this, NiParticleSystem::m_spModelData, data);
+        let modifier = named_modifier(&mut e, 1);
+        set_modifiers(&mut e, this, &[modifier]);
+        // Two controllers: the first's RTTI chain reaches the reset record, the second's not.
+        let base = e.mem.alloc(8);
+        e.mem.set_u32(base + 4, RESET_CONTROLLER_RTTI_012027C8);
+        let first = object(&mut e, OTHER_VTABLE, 1);
+        let second = object(&mut e, OTHER_VTABLE, 1);
+        e.mem.set_u32(this.addr() + 0xc, first);
+        e.mem.set_u32(first + 0x30, second);
+        e.register_double(OTHER_SLOTS + 8, move |_, a| {
+            if a[0] == first {
+                base.into_ret()
+            } else {
+                0x0e70_0000u32.into_ret()
+            }
+        });
+        e.map(0x0e70_0000, 8);
+        noop(
+            &mut e,
+            &[DATA_SLOTS + 0x8c, MODIFIER_SLOTS + 0x94, OTHER_SLOTS + 0xec],
+        );
+        e.call_log = Some(vec![]);
+        e.call(0x00c1_b120, &args![this]);
+        assert_eq!(calls(&e, DATA_SLOTS + 0x8c), vec![vec![data, 0]]);
+        assert_eq!(e.mem.u32(data + 0x78), 0);
+        assert_eq!(e.get(this, NiParticleSystem::m_fLastTime), 0xff7f_ffff);
+        assert_eq!(calls(&e, MODIFIER_SLOTS + 0x94), vec![vec![modifier]]);
+        assert_eq!(calls(&e, OTHER_SLOTS + 0xec), vec![vec![first]]);
+    }
+
+    #[test]
+    fn n063_is_equal_compares_flags_and_each_named_modifier() {
+        let mut e = rig();
+        let this = system(&mut e);
+        let other = system(&mut e);
+        let mine = named_modifier(&mut e, 7);
+        let theirs = named_modifier(&mut e, 7);
+        set_modifiers(&mut e, this, &[mine]);
+        let unrelated = named_modifier(&mut e, 8);
+        set_modifiers(&mut e, other, &[unrelated, theirs]);
+        e.register(LINES_IS_EQUAL_00A89770, |_, _| 1u32.into_ret());
+        e.register(MODIFIER_SLOTS + 0x5c, |_, _| 1u32.into_ret());
+        e.call_log = Some(vec![]);
+        assert!(e.call(0x00c1_b1d0, &args![this, other]).bool());
+        assert_eq!(calls(&e, MODIFIER_SLOTS + 0x5c), vec![vec![mine, theirs]]);
+        // A modifier without a match is compared with 0; its answer decides.
+        e.mem.set_u32(theirs + 8, 9);
+        e.register(MODIFIER_SLOTS + 0x5c, |_, a| {
+            u32::from(a[1] != 0).into_ret()
+        });
+        e.call_log = Some(vec![]);
+        assert!(!e.call(0x00c1_b1d0, &args![this, other]).bool());
+        assert_eq!(calls(&e, MODIFIER_SLOTS + 0x5c), vec![vec![mine, 0]]);
+        // Different flags stop before the modifiers.
+        e.mem.set_u8(other.addr() + 0xd9, 1);
+        e.call_log = Some(vec![]);
+        assert!(!e.call(0x00c1_b1d0, &args![this, other]).bool());
+        assert!(calls(&e, MODIFIER_SLOTS + 0x5c).is_empty());
+        e.mem.set_u8(other.addr() + 0xd9, 0);
+        e.register(LINES_IS_EQUAL_00A89770, |_, _| 0x100u32.into_ret());
+        assert!(!e.call(0x00c1_b1d0, &args![this, other]).bool());
+    }
+
+    #[test]
+    fn n063_save_binary_writes_world_space_count_and_link_ids() {
+        let mut e = rig();
+        let this = system(&mut e);
+        let modifiers = [named_modifier(&mut e, 1), named_modifier(&mut e, 2)];
+        set_modifiers(&mut e, this, &modifiers);
+        e.mem.set_u8(this.addr() + 0xc4, 1);
+        let stream = e.mem.alloc(0x260);
+        e.mem.set_u32(stream, OTHER_VTABLE);
+        let binary = e.mem.alloc(0x10);
+        e.mem.set_u32(binary + 4, 100);
+        e.mem.set_u32(binary + 0xc, 0x0e60_0000);
+        e.mem.set_u32(stream + STREAM_OUTPUT_BINARY_STREAM, binary);
+        // The write function records the bytes and answers the count.
+        e.register(0x0e60_0000, |e, a| {
+            let size = e.mem.u32(a[3]);
+            let value = if a[2] == 1 {
+                u32::from(e.mem.u8(a[1]))
+            } else {
+                e.mem.u32(a[1])
+            };
+            e.mem.set_u32(0x0e61_0000 + 4 * size, value);
+            a[2].into_ret()
+        });
+        e.map(0x0e61_0000, 0x20);
+        noop(&mut e, &[LINES_SAVE_BINARY_00A9B1A0, OTHER_SLOTS + 0x30]);
+        e.call_log = Some(vec![]);
+        e.call(0x00c1_b400, &args![this, stream]);
+        assert_eq!(e.mem.u32(0x0e61_0004), 1);
+        assert_eq!(e.mem.u32(0x0e61_0010), 2);
+        assert_eq!(e.mem.u32(binary + 4), 105);
+        assert_eq!(calls(&e, 0x0e60_0000)[0][4], 1);
+        assert_eq!(
+            calls(&e, OTHER_SLOTS + 0x30),
+            vec![vec![stream, modifiers[0]], vec![stream, modifiers[1]]]
+        );
+    }
+
+    #[test]
+    fn n063_insert_before_links_the_new_item_and_holds_the_element() {
+        let mut e = rig();
+        let list = e.mem.alloc(0xc);
+        let first = e.mem.alloc(0xc);
+        let second = e.mem.alloc(0xc);
+        e.mem.set_u32(list, first);
+        e.mem.set_u32(list + 4, second);
+        e.mem.set_u32(list + 8, 2);
+        e.mem.set_u32(first, second);
+        e.mem.set_u32(second + 4, first);
+        let fresh = e.mem.alloc(0xc);
+        let old = object(&mut e, OTHER_VTABLE, 1);
+        e.mem.set_u32(fresh + 8, old);
+        e.register_double(LIST_NEW_ITEM_0043A010, move |_, _| fresh.into_ret());
+        noop(&mut e, &[OTHER_SLOTS + 4]);
+        let element = object(&mut e, MODIFIER_VTABLE, 3);
+        let pointer = e.mem.alloc(4);
+        e.mem.set_u32(pointer, element);
+        e.call_log = Some(vec![]);
+        // Before the second item: between the two.
+        assert_eq!(
+            e.call(0x00c1_b520, &args![list, second, pointer]).u32(),
+            fresh
+        );
+        assert_eq!(calls(&e, OTHER_SLOTS + 4), vec![vec![old]]);
+        assert_eq!(e.mem.u32(element + 4), 4);
+        assert_eq!(e.mem.u32(fresh + 8), element);
+        assert_eq!((e.mem.u32(fresh), e.mem.u32(fresh + 4)), (second, first));
+        assert_eq!(e.mem.u32(first), fresh);
+        assert_eq!(e.mem.u32(second + 4), fresh);
+        assert_eq!(e.mem.u32(list + 8), 3);
+        // Before the head: the new item becomes the head.
+        let head = e.mem.alloc(0xc);
+        e.mem.set_u32(head + 8, element);
+        e.register_double(LIST_NEW_ITEM_0043A010, move |_, _| head.into_ret());
+        assert_eq!(
+            e.call(0x00c1_b520, &args![list, first, pointer]).u32(),
+            head
+        );
+        assert_eq!(e.mem.u32(list), head);
+        assert_eq!(e.mem.u32(first + 4), head);
+        assert_eq!(e.mem.u32(head + 4), 0);
+        assert_eq!(e.mem.u32(element + 4), 4);
+        assert_eq!(e.mem.u32(list + 8), 4);
+    }
+
+    #[test]
+    fn n063_get_viewer_strings_adds_five_strings() {
+        let mut e = rig();
+        e.map(0x0120_2000, 0x1000);
+        e.set_global(CLASS_NAME_012024E0, 0x0123_0000u32);
+        let this = system(&mut e);
+        let data = e.mem.alloc(0x60);
+        e.mem.set_u32(data, DATA_VTABLE);
+        e.mem.set_u16(data + 0x50, 12);
+        e.mem.set_u16(data + 8, 40);
+        e.set(this, NiParticleSystem::m_spModelData, data);
+        e.mem.set_u8(this.addr() + 0xc4, 1);
+        e.mem.set_u32(this.addr() + MODIFIER_COUNT, 3);
+        let strings = e.mem.alloc(0x10);
+        e.mem.set_u16(strings + 8, 3);
+        e.mem.set_u16(strings + 0xa, 2);
+        e.mem.set_u16(strings + 0xe, 4);
+        e.register(STRINGS_SET_AT, |e, a| {
+            let size = e.mem.u16(a[0] + 0xa) + 1;
+            e.mem.set_u16(a[0] + 0xa, size);
+            Ret::default()
+        });
+        e.register(STRINGS_GROW, |e, a| {
+            e.mem.set_u16(a[0] + 8, a[1] as u16);
+            Ret::default()
+        });
+        noop(&mut e, &[PARTICLES_GET_VIEWER_STRINGS_00A9B2E0]);
+        for (address, base) in [
+            (NI_GET_VIEWER_STRING, 0x1000u32),
+            (VIEWER_STRING_BOOL_00A7D370, 0x2000),
+            (VIEWER_STRING_UNSIGNED_00A7D510, 0x3000),
+            (VIEWER_STRING_SHORT_00A7D490, 0x4000),
+        ] {
+            e.register_double(address, move |_, a| (base + a[a.len() - 1]).into_ret());
+        }
+        e.call_log = Some(vec![]);
+        e.call(0x00c1_b850, &args![this, strings]);
+        assert_eq!(
+            calls(&e, VIEWER_STRING_BOOL_00A7D370),
+            vec![vec![WORLD_SPACE_NAME, 1]]
+        );
+        assert_eq!(
+            calls(&e, VIEWER_STRING_UNSIGNED_00A7D510),
+            vec![vec![NUM_MODS_NAME, 3]]
+        );
+        assert_eq!(
+            calls(&e, VIEWER_STRING_SHORT_00A7D490),
+            vec![vec![NUM_PARTICLES_NAME, 12], vec![MAX_PARTICLES_NAME, 40]]
+        );
+        let set: Vec<u32> = calls(&e, STRINGS_SET_AT).iter().map(|c| c[1]).collect();
+        assert_eq!(set, vec![2, 3, 4, 5, 6]);
+        // Full at 3, grown to 4 + 3; full again at 7.
+        assert_eq!(calls(&e, STRINGS_GROW), vec![vec![strings, 7]]);
+        let slot = calls(&e, STRINGS_SET_AT)[4][2];
+        assert_eq!(e.mem.u32(slot), 0x4000 + 40);
     }
 }

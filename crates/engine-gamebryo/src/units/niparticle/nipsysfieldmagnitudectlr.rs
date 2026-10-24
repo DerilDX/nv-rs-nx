@@ -36,9 +36,55 @@ pub fn ni_p_sys_field_magnitude_ctlr_get_r_t_t_i(_e: &mut Engine) -> u32 {
     0x0120_2718
 }
 
+use crate::units::niparticle::nipsysmodifierfloatctlr::{
+    create_clone, get_target_float, set_target_float,
+};
+
+/// `NiPSysFieldModifier::m_fMagnitude` (Xbox PDB), +0x1c in the controller's
+/// modifier.
+const MAGNITUDE: u32 = 0x1c;
+/// The vtable of `NiPSysFieldMagnitudeCtlr` (RTTI
+/// `.?AVNiPSysFieldMagnitudeCtlr@@`).
+const VTABLE: u32 = 0x010b_f454;
+
+// Translated from 00c29ea0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiPSysFieldMagnitudeCtlr::GetTargetFloatValue` (Xbox PDB): the
+/// modifier's `float` at +0x1c (the field magnitude) into `value`.
+pub fn ni_p_sys_field_magnitude_ctlr_get_target_float_value(e: &mut Engine, this: Ptr, value: Ptr) {
+    get_target_float(e, this, MAGNITUDE, value);
+}
+
+// Translated from 00c2b150 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiPSysFieldMagnitudeCtlr::SetTargetFloatValue` (Xbox PDB): `value` into
+/// the modifier's `float` at +0x1c (the field magnitude).
+pub fn ni_p_sys_field_magnitude_ctlr_set_target_float_value(e: &mut Engine, this: Ptr, value: f32) {
+    set_target_float(e, this, MAGNITUDE, value);
+}
+
+// Translated from 00c2b160 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiPSysFieldMagnitudeCtlr::CreateClone` (Xbox PDB): a 0x40-byte object
+/// through the `NiPSysModifierFloatCtlr` constructor and this class's vtable
+/// (0 when the allocation fails), then the member copy into it (which still
+/// runs for a null clone). Returns the clone.
+pub fn ni_p_sys_field_magnitude_ctlr_create_clone(e: &mut Engine, this: Ptr, process: Ptr) -> Ptr {
+    create_clone(e, this, process, VTABLE)
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(
+            0x00c2_9ea0,
+            ni_p_sys_field_magnitude_ctlr_get_target_float_value(Ptr, Ptr)
+        ),
+        entry!(
+            0x00c2_b150,
+            ni_p_sys_field_magnitude_ctlr_set_target_float_value(Ptr, f32)
+        ),
+        entry!(
+            0x00c2_b160,
+            ni_p_sys_field_magnitude_ctlr_create_clone(Ptr, Ptr) -> Ptr
+        ),
         entry!(0x00c2b140, ni_p_sys_field_magnitude_ctlr_get_r_t_t_i() -> u32),
         entry!(
             0x00c2b1b0,
@@ -109,5 +155,26 @@ mod tests {
     fn ni_p_sys_field_magnitude_ctlr_get_r_t_t_i_returns_the_constant() {
         let mut e = Engine::new();
         assert_eq!(e.call(0x00c2_b140, &args![]).u32(), 0x0120_2718);
+    }
+}
+
+#[cfg(test)]
+mod value_tests {
+    use super::*;
+    use crate::units::niparticle::nipsysmodifierfloatctlr::subclass_checks;
+
+    #[test]
+    fn get_target_float_value_reads_the_magnitude() {
+        subclass_checks::get_value(0x00c2_9ea0, MAGNITUDE);
+    }
+
+    #[test]
+    fn set_target_float_value_writes_the_magnitude() {
+        subclass_checks::set_value(0x00c2_b150, MAGNITUDE);
+    }
+
+    #[test]
+    fn create_clone_uses_this_class_vtable() {
+        subclass_checks::create_clone(0x00c2_b160, VTABLE);
     }
 }

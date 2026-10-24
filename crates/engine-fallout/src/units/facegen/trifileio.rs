@@ -621,12 +621,486 @@ pub fn fff_read_tri_file(e: &mut Engine, name: Ptr, mesh: u32) -> bool {
     })
 }
 
+/// `_invalid_parameter_noinfo` (`00ec7c56`): the library's debug checks.
+fn check(e: &mut Engine, ok: bool) {
+    if !ok {
+        e.call(INVALID_INDEX, &[]);
+    }
+}
+
+/// The checked iterator's proxy for `pointer` in the vector at `vector` (first +0xC, last
+/// +0x10): `pointer` must lie within it.
+fn checked_proxy(e: &mut Engine, vector: u32, pointer: u32) -> u32 {
+    let ok = vector != 0
+        && e.mem.u32(vector.wrapping_add(0xc)) <= pointer
+        && pointer <= e.mem.u32(vector.wrapping_add(0x10));
+    check(e, ok);
+    e.mem.u32(vector)
+}
+
+/// The 16-byte-element vector's `erase(first, last)` (`00abac80`, `thiscall`: the result and
+/// the two iterators' words).
+const ERASE_ROWS: u32 = 0x00ab_ac80;
+
+// Translated from 00ab9dc0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map: a 16-byte-element vector's `clear()` (`thiscall`): erases
+/// (`00abac80`) from the checked begin iterator to the checked end iterator.
+pub fn fn_00ab9dc0(e: &mut Engine, this: Ptr) {
+    let vector = this.addr();
+    let last = e.mem.u32(vector.wrapping_add(0x10));
+    let end_proxy = checked_proxy(e, vector, last);
+    let first = e.mem.u32(vector.wrapping_add(0xc));
+    let begin_proxy = checked_proxy(e, vector, first);
+    e.with_stack(8, |e, result| {
+        e.call(
+            ERASE_ROWS,
+            &args![this, result, begin_proxy, first, end_proxy, last],
+        );
+    });
+}
+
+/// `FutBinaryFileC`'s constructor (`00ac3df0`, `thiscall`: the file id string by value) and
+/// `FutBinaryFileC::openForOverwrite` (Xbox PDB, `00ac4910`, `thiscall`: the name string by
+/// value; answers `AL`).
+const FUT_FILE_CONSTRUCT: u32 = 0x00ac_3df0;
+const FUT_FILE_OPEN_FOR_OVERWRITE: u32 = 0x00ac_4910;
+
+// Translated from 00ab7e30 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 00ab7e30 - the compiler's exception frame (FS:[0] chain) and the /GS cookie check (00ec408c) are not translated
+/// `fffWriteTriFile` (Xbox PDB, cdecl: file name `std::string *`, mesh): a `FutBinaryFileC`
+/// on the stack with the id `"FRTRI003"` (`00ac3df0`, given a string made from the text),
+/// opened for overwriting (`openForOverwrite`, given a copy of the name); when that works, the
+/// mesh is written (`fffWriteTriFile_ov2`, `00ab7f40`). The file is destroyed (`00aaaa80`)
+/// either way. Returns whether it was opened and written.
+pub fn fff_write_tri_file(e: &mut Engine, name: Ptr, mesh: u32) -> bool {
+    e.with_stack(0x48, |e, file| {
+        let magic = e.with_stack(0x1c, |e, text| {
+            e.call(STRING_FROM_TEXT, &args![text, TEXT_MAGIC]);
+            words_of(e, text, 0x1c)
+        });
+        let mut words = vec![file.addr()];
+        words.extend(magic);
+        e.call(FUT_FILE_CONSTRUCT, &words);
+        let path = e.with_stack(0x1c, |e, text| {
+            e.call(STRING_TIDY, &args![text, 0u32, 0u32]);
+            let npos = e.global::<u32>(NPOS);
+            e.call(STRING_ASSIGN, &args![text, name, 0u32, npos]);
+            words_of(e, text, 0x1c)
+        });
+        let mut words = vec![file.addr()];
+        words.extend(path);
+        if e.call(FUT_FILE_OPEN_FOR_OVERWRITE, &words).u8() == 0 {
+            e.call(FILE_DESTRUCT_BASE, &args![file]);
+            return false;
+        }
+        let written = fff_write_tri_file_ov2(e, file, mesh);
+        e.call(FILE_DESTRUCT_BASE, &args![file]);
+        written
+    })
+}
+
+/// `FffTriFileDataS::numModelVtx` (Xbox PDB, `0065a5a0`, `thiscall` on the mesh),
+/// `FutBinaryFileC::writeHeader` (Xbox PDB, `00ac5220`, `thiscall`: buffer, size, count;
+/// answers `AL`) and the file's write (its slot +0xc, `thiscall`: buffer, size, count; answers
+/// `AL`).
+const NUM_MODEL_VERTICES: u32 = 0x0065_a5a0;
+const FILE_WRITE_HEADER: u32 = 0x00ac_5220;
+const SLOT_WRITE: u32 = 0xc;
+/// `_fabs` (`00ec6cde`, cdecl: a `double`) and `00ec6940` (cdecl: a `double`; its library match
+/// is unclear), both answering in `ST0`, and `_ftol2` (`00ec62c0`, the value in `ST0`).
+const FABS: u32 = 0x00ec_6cde;
+const ROUND_00EC6940: u32 = 0x00ec_6940;
+const FTOL2: u32 = 0x00ec_62c0;
+/// `32767.0` and `0.5` (`double`s): the offsets' scale and rounding.
+const OFFSET_RANGE: u32 = 0x0102_9790;
+const HALF: u32 = 0x0101_1588;
+/// The memory manager's free (`00aa4060`, `thiscall` on `011f6238`: the block).
+const MEMORY_MANAGER_FREE: u32 = 0x00aa_4060;
+const MEMORY_MANAGER: u32 = 0x011f_6238;
+/// `"Invalid morph data during TRI file save."`.
+const TEXT_INVALID_MORPHS: u32 = 0x010a_2d60;
+
+/// The file's write (slot +0xc); whether it worked.
+fn write(e: &mut Engine, file: Ptr, buffer: u32, size: u32, count: u32) -> bool {
+    e.vcall(file.addr(), SLOT_WRITE, &args![buffer, size, count])
+        .u8()
+        != 0
+}
+
+/// A `double` as its two argument words, low first.
+fn double_words(value: f64) -> [u32; 2] {
+    let bits = value.to_bits();
+    [bits as u32, (bits >> 32) as u32]
+}
+
+/// Writes a name: its characters (from the string `string` bytes into the entry `element`
+/// gives, the entry's check made again for each character) into the byte vector `buffer`
+/// constructed with `length` bytes (`00aba0d0`), a 0 at `length - 1`, then the bytes
+/// (`write`, size 1, count `length`). Answers whether the write worked; the vector is left
+/// for the caller.
+fn write_name(
+    e: &mut Engine,
+    file: Ptr,
+    buffer: Ptr,
+    length: u32,
+    string: u32,
+    element: &dyn Fn(&mut Engine) -> u32,
+) -> bool {
+    e.call(BUFFER_CONSTRUCT, &args![buffer, length]);
+    let size = |e: &Engine| {
+        e.mem
+            .u32(buffer.addr() + 0x10)
+            .wrapping_sub(e.mem.u32(buffer.addr() + 0xc))
+    };
+    let mut k = 0u32;
+    while k < length.wrapping_sub(1) {
+        let text = element(e).wrapping_add(string);
+        if k > e.mem.u32(text.wrapping_add(0x14)) {
+            e.call(INVALID_INDEX, &[]);
+        }
+        let chars = if e.mem.u32(text.wrapping_add(0x18)) < 0x10 {
+            text.wrapping_add(4)
+        } else {
+            e.mem.u32(text.wrapping_add(4))
+        };
+        if k >= size(e) {
+            e.call(INVALID_INDEX, &[]);
+        }
+        let c = e.mem.u8(chars.wrapping_add(k));
+        let data = e.mem.u32(buffer.addr() + 0xc);
+        e.mem.set_u8(data.wrapping_add(k), c);
+        k += 1;
+    }
+    let last = length.wrapping_sub(1);
+    if last >= size(e) {
+        e.call(INVALID_INDEX, &[]);
+    }
+    let data = e.mem.u32(buffer.addr() + 0xc);
+    e.mem.set_u8(data.wrapping_add(last), 0);
+    if size(e) == 0 {
+        e.call(INVALID_INDEX, &[]);
+    }
+    let data = e.mem.u32(buffer.addr() + 0xc);
+    write(e, file, data, 1, length)
+}
+
+/// The byte vector's release as the morph loops do it: its tidy (`00abc0a0`), then the
+/// memory manager's free of its proxy (inline).
+fn release_inline(e: &mut Engine, buffer: Ptr) {
+    e.call(BUFFER_RELEASE, &args![buffer]);
+    let proxy = e.mem.u32(buffer.addr());
+    e.call(MEMORY_MANAGER_FREE, &args![MEMORY_MANAGER, proxy]);
+}
+
+/// Writes the first `count` elements of `size` bytes of the vector at `vector` (after the
+/// non-empty check with the count `elements` gives); whether it worked.
+fn write_elements(
+    e: &mut Engine,
+    file: Ptr,
+    vector: u32,
+    elements: u32,
+    size: u32,
+    count: u32,
+) -> bool {
+    let first = first_element(e, vector, elements);
+    write(e, file, first, size, count)
+}
+
+// Translated from 00ab7f40 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 00ab7f40 - the compiler's exception frame (FS:[0] chain) and the /GS cookie check (00ec408c) are not translated
+/// `fffWriteTriFile_ov2` (Xbox PDB, cdecl: the open `FutBinaryFileC`, the mesh): writes a
+/// FaceGen `.tri` file. The header (0x38 bytes, `writeHeader`): the model vertex count
+/// (`numModelVtx`), the triangle, quad, named-entry, modifier, differential and statistical
+/// morph counts, the UV count and flag 1 (set with no UV data, or with UV pairs for the model
+/// vertices, or with all three UV vectors matching the vertex, triangle and quad counts, the
+/// UV count then the pairs'), and the extra vertex count. Then the vertices, triangles,
+/// quads, the named entries (a word, the name), the modifiers (a word, a point, the name),
+/// the UV data, each differential morph (its name, the largest coordinate magnitude over the
+/// model vertices / 32767 as the scale, then each coordinate `* (1 / scale) + 0.5` through
+/// `00ec6940` and `_ftol2` as three `short`s) and each statistical morph (its name, its index
+/// count and indices). The statistical index counts must add up to the extra vertex count,
+/// else `futSetLastError(0xb, "Invalid morph data during TRI file save.")`. Every write
+/// (slot +0xc) that fails answers false; the name vectors are freed on every path.
+pub fn fff_write_tri_file_ov2(e: &mut Engine, file: Ptr, mesh: u32) -> bool {
+    e.with_stack(0x100, |e, frame| {
+        let header = frame.addr();
+        let length = frame.addr() + 0x38;
+        let shorts = frame.addr() + 0x3c;
+        let scale_slot = frame.addr() + 0x44;
+        let buffer = Ptr::<()>::new(frame.addr() + 0x48);
+        let h = |e: &Engine, offset: u32| e.mem.u32(header + offset);
+        e.call(MEMSET, &args![header, 0u32, 0x38u32]);
+        let model = e.call(NUM_MODEL_VERTICES, &args![mesh]).u32();
+        e.mem.set_u32(header, model);
+        let counts = [
+            (4u32, count_div(e, mesh + 0x18, 0xc)),
+            (8, count_sar(e, mesh + 0x30, 4)),
+            (0xc, count_sar(e, mesh + 0x90, 5)),
+            (0x10, count_div(e, mesh + 0xa8, 0x2c)),
+            (0x1c, count_div(e, mesh + 0xc0, 0x34)),
+            (0x20, count_div(e, mesh + 0xd8, 0x38)),
+        ];
+        for (offset, count) in counts {
+            e.mem.set_u32(header + offset, count);
+        }
+        let vertices = count_div(e, mesh, 0xc);
+        let model = e.call(NUM_MODEL_VERTICES, &args![mesh]).u32();
+        e.mem.set_u32(header + 0x24, vertices.wrapping_sub(model));
+        let flags = h(e, 0x18);
+        if count_sar(e, mesh + 0x48, 3) == h(e, 0)
+            && count_div(e, mesh + 0x60, 0xc) == 0
+            && count_sar(e, mesh + 0x78, 4) == 0
+        {
+            e.mem.set_u32(header + 0x18, flags | 1);
+            e.mem.set_u32(header + 0x14, 0);
+        } else if count_sar(e, mesh + 0x48, 3) != 0
+            && count_div(e, mesh + 0x60, 0xc) == h(e, 4)
+            && count_sar(e, mesh + 0x78, 4) == h(e, 8)
+        {
+            e.mem.set_u32(header + 0x18, flags | 1);
+            let pairs = count_sar(e, mesh + 0x48, 3);
+            e.mem.set_u32(header + 0x14, pairs);
+        } else {
+            e.mem.set_u32(header + 0x18, flags & 0xffff_fffe);
+            e.mem.set_u32(header + 0x14, 0);
+        }
+        if e.call(FILE_WRITE_HEADER, &args![file, header, 0x38u32, 1u32])
+            .u8()
+            == 0
+        {
+            return false;
+        }
+        let all = h(e, 0).wrapping_add(h(e, 0x24));
+        if all != 0 {
+            let count = count_div(e, mesh, 0xc);
+            if !write_elements(e, file, mesh, count, 0xc, all) {
+                return false;
+            }
+        }
+        if h(e, 4) != 0 {
+            let count = count_div(e, mesh + 0x18, 0xc);
+            if !write_elements(e, file, mesh + 0x18, count, 0xc, h(e, 4)) {
+                return false;
+            }
+        }
+        if h(e, 8) != 0 {
+            let count = count_sar(e, mesh + 0x30, 4);
+            if !write_elements(e, file, mesh + 0x30, count, 0x10, h(e, 8)) {
+                return false;
+            }
+        }
+        // The named entries (+0x90, 0x20 bytes: a word, then the name at +4).
+        let mut i = 0u32;
+        while i < h(e, 0xc) {
+            let named = move |e: &mut Engine| {
+                let count = count_sar(e, mesh + 0x90, 5);
+                element(e, mesh + 0x90, i, count, 0x20)
+            };
+            let entry = named(e);
+            if !write(e, file, entry, 4, 1) {
+                return false;
+            }
+            let entry = named(e);
+            let n = e.mem.u32(entry + 0x18).wrapping_add(1);
+            e.mem.set_u32(length, n);
+            if !write(e, file, length, 4, 1) {
+                return false;
+            }
+            let n = e.mem.u32(length);
+            let written = write_name(e, file, buffer, n, 4, &named);
+            release_buffer(e, buffer);
+            if !written {
+                return false;
+            }
+            i += 1;
+        }
+        // The modifiers (+0xA8, 0x2C bytes: a word, a point, then the name at +0x10).
+        let mut i = 0u32;
+        while i < h(e, 0x10) {
+            let modifier = move |e: &mut Engine| {
+                let count = count_div(e, mesh + 0xa8, 0x2c);
+                element(e, mesh + 0xa8, i, count, 0x2c)
+            };
+            let entry = modifier(e);
+            if !write(e, file, entry, 4, 1) {
+                return false;
+            }
+            let entry = modifier(e);
+            if !write(e, file, entry + 4, 0xc, 1) {
+                return false;
+            }
+            let entry = modifier(e);
+            let n = e.mem.u32(entry + 0x24).wrapping_add(1);
+            e.mem.set_u32(length, n);
+            if !write(e, file, length, 4, 1) {
+                return false;
+            }
+            let n = e.mem.u32(length);
+            let written = write_name(e, file, buffer, n, 0x10, &modifier);
+            release_buffer(e, buffer);
+            if !written {
+                return false;
+            }
+            i += 1;
+        }
+        if h(e, 0x18) & 1 != 0 {
+            if h(e, 0x14) == 0 {
+                let count = count_sar(e, mesh + 0x48, 3);
+                if !write_elements(e, file, mesh + 0x48, count, 8, h(e, 0)) {
+                    return false;
+                }
+            } else {
+                let count = count_sar(e, mesh + 0x48, 3);
+                if !write_elements(e, file, mesh + 0x48, count, 8, h(e, 0x14)) {
+                    return false;
+                }
+                let count = count_div(e, mesh + 0x60, 0xc);
+                if !write_elements(e, file, mesh + 0x60, count, 0xc, h(e, 4)) {
+                    return false;
+                }
+                let count = count_sar(e, mesh + 0x78, 4);
+                if !write_elements(e, file, mesh + 0x78, count, 0x10, h(e, 8)) {
+                    return false;
+                }
+            }
+        }
+        // The differential morphs (+0xC0, 0x34 bytes: the name, then the points at +0x1C).
+        let range: f64 = e.global(OFFSET_RANGE);
+        let half: f64 = e.global(HALF);
+        let mut i = 0u32;
+        while i < h(e, 0x1c) {
+            let morph = move |e: &mut Engine| {
+                let count = count_div(e, mesh + 0xc0, 0x34);
+                element(e, mesh + 0xc0, i, count, 0x34)
+            };
+            let entry = morph(e);
+            let n = e.mem.u32(entry + 0x14).wrapping_add(1);
+            e.mem.set_u32(length, n);
+            if !write(e, file, length, 4, 1) {
+                return false;
+            }
+            let n = e.mem.u32(length);
+            if !write_name(e, file, buffer, n, 0, &morph) {
+                release_buffer(e, buffer);
+                return false;
+            }
+            let point = |e: &mut Engine, v: u32| {
+                let points = morph(e) + 0x1c;
+                let count = count_div(e, points, 0xc);
+                element(e, points, v, count, 0xc)
+            };
+            let magnitude = |e: &mut Engine, v: u32, at: u32| {
+                let p = point(e, v);
+                let value = x87_load32(e.mem.u32(p + at));
+                let absolute = e.call(FABS, &double_words(value)).f64();
+                x87_quiet_bits(x87_store32(absolute))
+            };
+            let mut scale = x87_store32(0.0);
+            let mut v = 0u32;
+            while v < h(e, 0) {
+                for at in [0u32, 4, 8] {
+                    let candidate = magnitude(e, v, at);
+                    // FLD scale; FLD candidate; FCOMPP; TEST AH,0x41; JNZ: only a larger one.
+                    if x87_load32(candidate) > x87_load32(scale) {
+                        scale = magnitude(e, v, at);
+                    }
+                }
+                v += 1;
+            }
+            scale = x87_store32(x87_div(x87_load32(scale), range));
+            e.mem.set_u32(scale_slot, scale);
+            if !write(e, file, scale_slot, 4, 1) {
+                release_inline(e, Ptr::new(buffer.addr()));
+                return false;
+            }
+            let scale = x87_store32(x87_div(1.0, x87_load32(e.mem.u32(scale_slot))));
+            e.mem.set_u32(scale_slot, scale);
+            let mut v = 0u32;
+            while v < h(e, 0) {
+                for (k, at) in [0u32, 4, 8].into_iter().enumerate() {
+                    let p = point(e, v);
+                    let value = x87_add(
+                        x87_mul(
+                            x87_load32(e.mem.u32(p + at)),
+                            x87_m32(e.mem.u32(scale_slot)),
+                        ),
+                        half,
+                    );
+                    let rounded = e.call(ROUND_00EC6940, &double_words(value)).f64();
+                    let whole = e.call(FTOL2, &double_words(rounded)).u32();
+                    e.mem.set_u16(shorts + 2 * k as u32, whole as u16);
+                }
+                if !write(e, file, shorts, 2, 3) {
+                    release_inline(e, Ptr::new(buffer.addr()));
+                    return false;
+                }
+                v += 1;
+            }
+            release_inline(e, Ptr::new(buffer.addr()));
+            i += 1;
+        }
+        // The statistical morphs (+0xD8, 0x38 bytes: the name, then the indices at +0x20).
+        let mut total = 0u32;
+        let mut i = 0u32;
+        while i < h(e, 0x20) {
+            let morph = move |e: &mut Engine| {
+                let count = count_div(e, mesh + 0xd8, 0x38);
+                element(e, mesh + 0xd8, i, count, 0x38)
+            };
+            let entry = morph(e);
+            let n = e.mem.u32(entry + 0x14).wrapping_add(1);
+            e.mem.set_u32(length, n);
+            if !write(e, file, length, 4, 1) {
+                return false;
+            }
+            let n = e.mem.u32(length);
+            if !write_name(e, file, buffer, n, 0, &morph) {
+                release_buffer(e, buffer);
+                return false;
+            }
+            let indices = morph(e) + 0x20;
+            let count = count_sar(e, indices, 2);
+            e.mem.set_u32(length, count);
+            if !write(e, file, length, 4, 1) {
+                release_inline(e, Ptr::new(buffer.addr()));
+                return false;
+            }
+            let count = e.mem.u32(length);
+            if count != 0 {
+                let indices = morph(e) + 0x20;
+                let elements = count_sar(e, indices, 2);
+                if !write_elements(e, file, indices, elements, 4, count) {
+                    release_inline(e, Ptr::new(buffer.addr()));
+                    return false;
+                }
+            }
+            total = total.wrapping_add(e.mem.u32(length));
+            release_inline(e, Ptr::new(buffer.addr()));
+            i += 1;
+        }
+        if total != h(e, 0x24) {
+            let text = e.with_stack(0x1c, |e, text| {
+                e.call(STRING_FROM_TEXT, &args![text, TEXT_INVALID_MORPHS]);
+                words_of(e, text, 0x1c)
+            });
+            let mut words = vec![0xbu32];
+            words.extend(text);
+            e.call(SET_LAST_ERROR, &words);
+            return false;
+        }
+        true
+    })
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
         entry!(0x00ab_46e0, fn_00ab46e0(Ptr)),
         entry!(0x00ab_a370, fn_00aba370(Ptr, u32, u8)),
         entry!(0x00ab_5ec0, fff_read_tri_file(Ptr, u32) -> bool),
+        entry!(0x00ab_9dc0, fn_00ab9dc0(Ptr)),
+        entry!(0x00ab_7e30, fff_write_tri_file(Ptr, u32) -> bool),
+        entry!(0x00ab_7f40, fff_write_tri_file_ov2(Ptr, u32) -> bool),
     ]
 }
 
@@ -841,5 +1315,272 @@ mod tests {
         assert_eq!(error[0][0], 1);
         assert_eq!(error[0].len(), 8);
         assert_eq!(calls_to(&e, FILE_DESTRUCT).len(), 1);
+    }
+}
+
+#[cfg(test)]
+mod n062_tests {
+    use super::*;
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    type Writes = Rc<RefCell<Vec<(u32, u32, Vec<u8>)>>>;
+
+    fn calls(e: &Engine, addr: u32) -> Vec<Vec<u32>> {
+        e.call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|c| c.0 == addr)
+            .map(|c| c.1.clone())
+            .collect()
+    }
+
+    fn quiet(e: &mut Engine, addrs: &[u32]) {
+        for addr in addrs {
+            e.register(*addr, |_, _| Ret::default());
+        }
+    }
+
+    #[test]
+    fn clear_erases_everything() {
+        let mut e = Engine::new();
+        quiet(&mut e, &[ERASE_ROWS, INVALID_INDEX]);
+        let vector = e.mem.alloc(0x18);
+        e.mem.set_u32(vector, 0x77);
+        e.mem.set_u32(vector + 0xc, 0x1000);
+        e.mem.set_u32(vector + 0x10, 0x1020);
+        e.call_log = Some(vec![]);
+        e.call(0x00ab_9dc0, &args![vector]);
+        let erase = calls(&e, ERASE_ROWS);
+        assert_eq!(erase.len(), 1);
+        assert_eq!(erase[0][0], vector);
+        assert_eq!(erase[0][2..], [0x77, 0x1000, 0x77, 0x1020]);
+        assert!(calls(&e, INVALID_INDEX).is_empty());
+    }
+
+    /// A vector (first +0xC, last +0x10) at `at` over `words`.
+    fn fill_vector(e: &mut Engine, at: u32, words: &[u32]) {
+        let block = e.mem.alloc(4 * words.len() as u32 + 4);
+        for (i, w) in words.iter().enumerate() {
+            e.mem.set_u32(block + 4 * i as u32, *w);
+        }
+        e.mem.set_u32(at + 0xc, block);
+        e.mem.set_u32(at + 0x10, block + 4 * words.len() as u32);
+    }
+
+    /// An inline string at `at`.
+    fn set_string(e: &mut Engine, at: u32, text: &[u8]) {
+        e.mem.write(at + 4, text);
+        e.mem.set_u32(at + 0x14, text.len() as u32);
+        e.mem.set_u32(at + 0x18, 0xf);
+    }
+
+    fn bits(values: &[f32]) -> Vec<u32> {
+        values.iter().map(|v| v.to_bits()).collect()
+    }
+
+    /// A mesh of 2 model vertices and 1 extra, a triangle, a named entry `"ab"`, UV pairs for
+    /// the model vertices, a differential morph `"m"` and a statistical morph `"s"` of one
+    /// index; a file whose writes are recorded (failing from write `fail_at` on).
+    fn writer(fail_at: usize) -> (Engine, u32, u32, Writes) {
+        let mut e = Engine::new();
+        e.map(0x0101_1000, 0x1000);
+        e.map(0x0102_9000, 0x1000);
+        e.mem.set_f64(OFFSET_RANGE, 32767.0);
+        e.mem.set_f64(HALF, 0.5);
+        let mesh = e.mem.alloc(0xf0);
+        fill_vector(
+            &mut e,
+            mesh,
+            &bits(&[0.0, 0.0, 0.0, 1.0, 1.0, 1.0, 2.0, 2.0, 2.0]),
+        );
+        fill_vector(&mut e, mesh + 0x18, &[0, 1, 2]);
+        let named = e.mem.alloc(0x20);
+        e.mem.set_u32(named, 0x55);
+        set_string(&mut e, named + 4, b"ab");
+        e.mem.set_u32(mesh + 0x90 + 0xc, named);
+        e.mem.set_u32(mesh + 0x90 + 0x10, named + 0x20);
+        fill_vector(&mut e, mesh + 0x48, &[1, 2, 3, 4]);
+        let diff = e.mem.alloc(0x34);
+        set_string(&mut e, diff, b"m");
+        fill_vector(
+            &mut e,
+            diff + 0x1c,
+            &bits(&[1.0, -2.0, 0.5, 0.25, 0.0, 0.0]),
+        );
+        e.mem.set_u32(mesh + 0xc0 + 0xc, diff);
+        e.mem.set_u32(mesh + 0xc0 + 0x10, diff + 0x34);
+        let stat = e.mem.alloc(0x38);
+        set_string(&mut e, stat, b"s");
+        fill_vector(&mut e, stat + 0x20, &[7]);
+        e.mem.set_u32(mesh + 0xd8 + 0xc, stat);
+        e.mem.set_u32(mesh + 0xd8 + 0x10, stat + 0x38);
+        e.register(NUM_MODEL_VERTICES, |_, _| 2u32.into_ret());
+        e.register(MEMSET, |e, a| {
+            e.mem.write(a[0], &vec![0u8; a[2] as usize]);
+            Ret::default()
+        });
+        e.register(FILE_WRITE_HEADER, |_, _| 1u32.into_ret());
+        e.register(BUFFER_CONSTRUCT, |e, a| {
+            let block = e.mem.alloc(a[1].max(1));
+            e.mem.set_u32(a[0] + 0xc, block);
+            e.mem.set_u32(a[0] + 0x10, block + a[1]);
+            Ret::default()
+        });
+        e.register(FABS, |_, a| Ret {
+            st0: f64::from_bits(u64::from(a[0]) | (u64::from(a[1]) << 32)).abs(),
+            ..Ret::default()
+        });
+        e.register(ROUND_00EC6940, |_, a| Ret {
+            st0: f64::from_bits(u64::from(a[0]) | (u64::from(a[1]) << 32)).floor(),
+            ..Ret::default()
+        });
+        e.register(FTOL2, |_, a| {
+            let value = f64::from_bits(u64::from(a[0]) | (u64::from(a[1]) << 32));
+            (value as i32 as u32).into_ret()
+        });
+        quiet(
+            &mut e,
+            &[
+                BUFFER_RELEASE,
+                BUFFER_DESTRUCT,
+                MEMORY_MANAGER_FREE,
+                INVALID_INDEX,
+                SET_LAST_ERROR,
+                STRING_FROM_TEXT,
+            ],
+        );
+        let file = e.mem.alloc(8);
+        let vtable = e.mem.alloc(0x20);
+        e.mem.set_u32(file, vtable);
+        e.mem.set_u32(vtable + SLOT_WRITE, 0x0350_0000);
+        let writes: Writes = Rc::new(RefCell::new(vec![]));
+        let log = writes.clone();
+        e.register_double(0x0350_0000, move |e, a| {
+            let bytes = e.mem.bytes(a[1], a[2] * a[3]);
+            let mut log = log.borrow_mut();
+            log.push((a[2], a[3], bytes));
+            u32::from(log.len() < fail_at).into_ret()
+        });
+        e.call_log = Some(vec![]);
+        (e, file, mesh, writes)
+    }
+
+    #[test]
+    fn writer_writes_every_part() {
+        let (mut e, file, mesh, writes) = writer(usize::MAX);
+        let header = Rc::new(RefCell::new(vec![]));
+        let seen = header.clone();
+        e.register_double(FILE_WRITE_HEADER, move |e, a| {
+            *seen.borrow_mut() = (0..14).map(|i| e.mem.u32(a[1] + 4 * i)).collect();
+            1u32.into_ret()
+        });
+        assert!(e.call(0x00ab_7f40, &args![file, mesh]).bool());
+        assert_eq!(
+            *header.borrow(),
+            vec![2, 1, 0, 1, 0, 0, 1, 1, 1, 1, 0, 0, 0, 0]
+        );
+        let writes = writes.borrow();
+        let shapes: Vec<(u32, u32)> = writes.iter().map(|w| (w.0, w.1)).collect();
+        assert_eq!(
+            shapes,
+            vec![
+                (0xc, 3),
+                (0xc, 1),
+                (4, 1),
+                (4, 1),
+                (1, 3),
+                (8, 2),
+                (4, 1),
+                (1, 2),
+                (4, 1),
+                (2, 3),
+                (2, 3),
+                (4, 1),
+                (1, 2),
+                (4, 1),
+                (4, 1),
+            ]
+        );
+        assert_eq!(writes[4].2, b"ab\0".to_vec());
+        assert_eq!(writes[7].2, b"m\0".to_vec());
+        // The scale: the largest magnitude over 32767.
+        let scale = (2.0f64 / 32767.0) as f32;
+        assert_eq!(writes[8].2, scale.to_le_bytes().to_vec());
+        let inverse = (1.0f64 / f64::from(scale)) as f32;
+        let offset = |v: f32| (f64::from(v) * f64::from(inverse) + 0.5).floor() as i32 as i16;
+        let first: Vec<u8> = [offset(1.0), offset(-2.0), offset(0.5)]
+            .iter()
+            .flat_map(|s| s.to_le_bytes())
+            .collect();
+        assert_eq!(writes[9].2, first);
+        assert_eq!(writes[13].2, 1u32.to_le_bytes().to_vec());
+        assert_eq!(writes[14].2, 7u32.to_le_bytes().to_vec());
+        assert!(calls(&e, SET_LAST_ERROR).is_empty());
+        assert!(calls(&e, INVALID_INDEX).is_empty());
+        // The named entry's vector freed through the destructor, the morphs' inline.
+        assert_eq!(calls(&e, BUFFER_DESTRUCT).len(), 1);
+        assert_eq!(calls(&e, MEMORY_MANAGER_FREE).len(), 2);
+    }
+
+    #[test]
+    fn writer_stops_on_a_failed_write_or_bad_morphs() {
+        // The named entry's name write fails: its vector is freed, false.
+        let (mut e, file, mesh, writes) = writer(5);
+        assert!(!e.call(0x00ab_7f40, &args![file, mesh]).bool());
+        assert_eq!(writes.borrow().len(), 5);
+        assert_eq!(calls(&e, BUFFER_RELEASE).len(), 1);
+        assert_eq!(calls(&e, BUFFER_DESTRUCT).len(), 1);
+        // The morph's scale write fails: freed inline.
+        let (mut e, file, mesh, _) = writer(9);
+        assert!(!e.call(0x00ab_7f40, &args![file, mesh]).bool());
+        assert_eq!(calls(&e, MEMORY_MANAGER_FREE).len(), 1);
+        // The header fails: nothing written.
+        let (mut e, file, mesh, writes) = writer(usize::MAX);
+        e.register(FILE_WRITE_HEADER, |_, _| Ret::default());
+        assert!(!e.call(0x00ab_7f40, &args![file, mesh]).bool());
+        assert!(writes.borrow().is_empty());
+        // Statistical indices not adding up to the extra vertices: error 0xb.
+        let (mut e, file, mesh, _) = writer(usize::MAX);
+        e.register(NUM_MODEL_VERTICES, |_, _| 1u32.into_ret());
+        let diff = e.mem.u32(mesh + 0xc0 + 0xc);
+        e.mem.set_u32(mesh + 0xc0 + 0x10, diff);
+        assert!(!e.call(0x00ab_7f40, &args![file, mesh]).bool());
+        let error = calls(&e, SET_LAST_ERROR);
+        assert_eq!(error.len(), 1);
+        assert_eq!(error[0][0], 0xb);
+        assert_eq!(calls(&e, STRING_FROM_TEXT)[0][1], TEXT_INVALID_MORPHS);
+    }
+
+    #[test]
+    fn write_tri_file_opens_and_destroys_the_file() {
+        let (mut e, _, mesh, _) = writer(usize::MAX);
+        e.map(0x0101_7000, 0x1000);
+        e.set_global(NPOS, u32::MAX);
+        quiet(
+            &mut e,
+            &[
+                FUT_FILE_CONSTRUCT,
+                FILE_DESTRUCT_BASE,
+                STRING_TIDY,
+                STRING_ASSIGN,
+            ],
+        );
+        e.register(FILE_WRITE_HEADER, |_, _| Ret::default());
+        e.register(FUT_FILE_OPEN_FOR_OVERWRITE, |_, _| Ret::default());
+        let name = e.mem.alloc(0x1c);
+        assert!(!e.call(0x00ab_7e30, &args![name, mesh]).bool());
+        let file = calls(&e, FUT_FILE_CONSTRUCT)[0][0];
+        assert_eq!(calls(&e, STRING_FROM_TEXT)[0][1], TEXT_MAGIC);
+        assert_eq!(calls(&e, STRING_ASSIGN)[0][1..3], [name, 0]);
+        assert_eq!(calls(&e, FILE_DESTRUCT_BASE), vec![vec![file]]);
+        assert!(calls(&e, FILE_WRITE_HEADER).is_empty());
+        // Opened: the mesh is written (the header fails here), the file destroyed.
+        e.register(FUT_FILE_OPEN_FOR_OVERWRITE, |_, _| 1u32.into_ret());
+        e.call_log = Some(vec![]);
+        assert!(!e.call(0x00ab_7e30, &args![name, mesh]).bool());
+        assert_eq!(calls(&e, FILE_WRITE_HEADER).len(), 1);
+        assert_eq!(calls(&e, FILE_DESTRUCT_BASE).len(), 1);
     }
 }

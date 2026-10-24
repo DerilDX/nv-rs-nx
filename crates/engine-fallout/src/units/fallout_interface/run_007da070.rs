@@ -98,6 +98,55 @@ pub fn fn_007da270(e: &mut Engine, first: u32, second: u32) -> i32 {
         .i32()
 }
 
+/// `MemoryManager` free (`00401030`, cdecl), the placement step (`006e6da0`, cdecl: the
+/// size and the address) and `BSString`'s constructor (`004037b0`).
+const FREE: u32 = 0x0040_1030;
+const PLACE_006E6DA0: u32 = 0x006e_6da0;
+const STRING_CONSTRUCT: u32 = 0x0040_37b0;
+
+// Translated from 007da0c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The scalar deleting destructor of the `BSSimpleArray<StartMenu::VideoRes>` instance
+/// (`thiscall`, `RET 4`): the destructor (`007da0f0`), then the block freed when bit 0
+/// of `flags` is set. Answers `this`.
+pub fn fn_007da0c0(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    fn_007da0f0(e, this);
+    if flags & 1 != 0 {
+        e.call(FREE, &args![this]);
+    }
+    this
+}
+
+// Translated from 007da1a0 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 007da1a0 - the C++ exception-unwinding frame (FS:[0] around each construction) is not translated.
+/// Unnamed (`thiscall` on the array, `RET 8`: a place and a count; `this` is not read):
+/// constructs `count` 12-byte `StartMenu::VideoRes` elements from `place`
+/// (`006e6da0(0xc, element)`, then `007da240` on what it answers when non-zero).
+pub fn fn_007da1a0(e: &mut Engine, _this: Ptr, place: u32, count: u32) {
+    let mut i = 0u32;
+    while i < count {
+        let element = e
+            .call(
+                PLACE_006E6DA0,
+                &args![0xcu32, i.wrapping_mul(0xc).wrapping_add(place)],
+            )
+            .u32();
+        if element != 0 {
+            fn_007da240(e, Ptr::new(element));
+        }
+        i += 1;
+    }
+}
+
+// Translated from 007da240 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed (`thiscall`; the `StartMenu::VideoRes` constructor by its array): the
+/// `BSString` at +0 constructed, the 16-bit words at +8 and +0xa cleared. Answers `this`.
+pub fn fn_007da240(e: &mut Engine, this: Ptr) -> Ptr {
+    e.call(STRING_CONSTRUCT, &args![this]);
+    e.mem.set_u16(this.addr() + 8, 0);
+    e.mem.set_u16(this.addr() + 0xa, 0);
+    this
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -106,6 +155,9 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x007d_a070, fn_007da070(Ptr)),
         entry!(0x007d_a110, fn_007da110(Ptr<BSSimpleArray>, u32, u32)),
         entry!(0x007d_a270, fn_007da270(u32, u32) -> i32),
+        entry!(0x007d_a0c0, fn_007da0c0(Ptr, u32) -> Ptr),
+        entry!(0x007d_a1a0, fn_007da1a0(Ptr, u32, u32)),
+        entry!(0x007d_a240, fn_007da240(Ptr) -> Ptr),
     ]
 }
 
@@ -242,5 +294,46 @@ mod start_menu_array_tests {
             calls_to(&e, COMPARE_NAMES_00408B20),
             vec![vec![0x9003, 0x9007]]
         );
+    }
+}
+
+#[cfg(test)]
+mod n059_tests {
+    use super::*;
+
+    #[test]
+    fn video_res_array_destruction_and_elements() {
+        let mut e = Engine::new();
+        for address in [FREE, ARRAY_RELEASE_007D8E20, STRING_CONSTRUCT] {
+            e.register(address, |_, _| Ret::default());
+        }
+        let array = e.mem.alloc(0x10);
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x007d_a0c0, &args![array, 1u32]).u32(), array);
+        assert_eq!(e.mem.u32(array), ARRAY_VTABLE_01077200);
+        let log = e.call_log.take().unwrap();
+        assert!(log.contains(&(ARRAY_RELEASE_007D8E20, vec![array, 1])));
+        assert!(log.contains(&(FREE, vec![array])));
+        let elements = e.mem.alloc(0x24);
+        for i in 0..0x24 {
+            e.mem.set_u8(elements + i, 0xff);
+        }
+        // The middle element gets no place.
+        e.register_double(PLACE_006E6DA0, move |_, a| {
+            if a[1] == elements + 0xc { 0 } else { a[1] }.into_ret()
+        });
+        e.call_log = Some(vec![]);
+        e.call(0x007d_a1a0, &args![array, elements, 3u32]);
+        assert_eq!(e.mem.u32(elements + 8), 0);
+        assert_eq!(e.mem.u32(elements + 0x14), 0xffff_ffff);
+        assert_eq!(e.mem.u32(elements + 0x20), 0);
+        let built: Vec<_> = e
+            .call_log
+            .unwrap()
+            .into_iter()
+            .filter(|(a, _)| *a == STRING_CONSTRUCT)
+            .map(|(_, w)| w[0])
+            .collect();
+        assert_eq!(built, vec![elements, elements + 0x18]);
     }
 }

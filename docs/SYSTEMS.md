@@ -25,7 +25,7 @@ build. Game threads are stepped on the main thread behind one seam in
 ## Coverage by code group
 
 "Covered" counts translated, partial and table-run static initializer
-functions (ledger of 2026-10-23). Regenerate the numbers before relying on them.
+functions (ledger of 2026-10-24). Regenerate the numbers before relying on them.
 
 | Code group | Functions | Covered | % | System(s) | Phase |
 |---|---:|---:|---:|---|---|
@@ -33,21 +33,21 @@ functions (ledger of 2026-10-23). Regenerate the numbers before relying on them.
 | (unplaced: no unit in the map) | 2,430 | 1,626 | 67 | Spread across every system; assign by caller | all |
 | fallout shared (forms, references, world data) | 10,479 | 10,393 | 99 | Forms, records, references, cells, extra data | C |
 | fallout/ai | 4,849 | 4,849 | 100 | AI, processes, movement, combat AI | A (movement), C |
-| fallout/interface | 2,645 | 2,059 | 78 | Menus, HUD, interface manager | C |
+| fallout/interface | 2,645 | 2,559 | 97 | Menus, HUD, interface manager | C |
 | Havok SDK | 7,377 | 7,377 | 100 | Physics engine (739 functions keep a marked part, mostly C++ exception frames) | A |
 | BSHavok | 1,634 | 1,634 | 100 | Bethesda's Havok layer: character controller, ragdolls, constraints | A |
 | NiCollision | 238 | 235 | 99 | Gamebryo collision | A |
 | fallout shared/havok | 478 | 454 | 95 | Game-side physics: water, camera caster, listeners | A |
 | fallout shared/pathfinding | 1,788 | 1,788 | 100 | Navmesh, pathfinding | C |
 | NiAnimation | 1,413 | 1,412 | 100 | Animation: controllers, blending, keyframes | A |
-| FaceGen + fallout shared/facegen | 907 | 477 | 53 | Faces, head morphs, lip sync | A |
+| FaceGen + fallout shared/facegen | 907 | 880 | 97 | Faces, head morphs, lip sync | A |
 | BSAudio + fallout/audio | 494 | 442 | 89 | Audio | A |
 | NiMain | 1,722 | 1,720 | 100 | Scene graph, cameras, properties | B |
-| BSShader | 1,987 | 1,768 | 89 | Shaders, passes, accumulators, image space (game code, ADR-0007) | B |
+| BSShader | 1,987 | 1,983 | 100 | Shaders, passes, accumulators, image space (game code, ADR-0007) | B |
 | NiXenonRenderer + d3d9/d3dx9 | 992 | 875 | 88 | Gamebryo Direct3D 9 renderer, translated onto our own Direct3D 9 layer (ADR-0007) | B |
-| NiParticle | 704 | 327 | 46 | Particles, effects | B |
+| NiParticle | 704 | 704 | 100 | Particles, effects | B |
 | SpeedTree + fallout shared/speedtree | 847 | 821 | 97 | Trees | B |
-| BSMain | 991 | 599 | 60 | Scene helpers, culling, debris, scene graph | B |
+| BSMain | 991 | 939 | 95 | Scene helpers, culling, debris, scene graph | B |
 | fallout shared/sky | 164 | 149 | 91 | Sky, weather, sun, clouds | B |
 | fallout shared/distant terrain system | 204 | 153 | 75 | Distant land, LOD | B |
 | fallout shared/tempeffects | 149 | 102 | 68 | Temporary effects: decals, blood, shaders on actors | B |

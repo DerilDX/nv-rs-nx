@@ -154,6 +154,162 @@ pub fn ni_p_sys_collider_manager_scalar_deleting_destructor(
     this
 }
 
+use crate::units::niparticle::nipsysdata::add_viewer_string;
+
+/// `NiPSysModifier`'s `RegisterStreamables` (`00c31670`), `SaveBinary`
+/// (`00c31950`), `IsEqual` (`00c31830`) and `GetViewerStrings` (`00c319e0`)
+/// (Xbox PDB names; `thiscall`, one word).
+const MODIFIER_REGISTER_STREAMABLES: u32 = 0x00c3_1670;
+const MODIFIER_SAVE_BINARY: u32 = 0x00c3_1950;
+const MODIFIER_IS_EQUAL: u32 = 0x00c3_1830;
+const MODIFIER_GET_VIEWER_STRINGS: u32 = 0x00c3_19e0;
+/// `NiPSysCollider`'s `Resolve` (`+0x8C`: start time, address of the
+/// collision time, particle data, index; the collider hit or null),
+/// `Update` (`+0x90`: time, particle data, index) and
+/// `SetResolveConstants` (`+0x94`, no words) slots (Xbox PDB names).
+const COLLIDER_RESOLVE_SLOT: u32 = 0x8c;
+const COLLIDER_UPDATE_SLOT: u32 = 0x90;
+const COLLIDER_SET_RESOLVE_CONSTANTS_SLOT: u32 = 0x94;
+/// `NiObject`'s `RegisterStreamables` (`+0x54`), `IsEqual` (`+0x5C`) and
+/// `GetViewerStrings` (`+0x60`) slots and `NiStream::SaveLinkID` (`+0x30`)
+/// (Xbox PDB).
+const REGISTER_STREAMABLES_SLOT: u32 = 0x54;
+const IS_EQUAL_SLOT: u32 = 0x5c;
+const GET_VIEWER_STRINGS_SLOT: u32 = 0x60;
+const STREAM_SAVE_LINK_ID_SLOT: u32 = 0x30;
+/// `NiPSysModifier::m_pkTarget` (Xbox PDB, +0x10), and the float the update
+/// starts each particle's resolve at: +0xD4 of that particle system.
+const TARGET: u32 = 0x10;
+const SYSTEM_START_TIME: u32 = 0xd4;
+/// The particle data (`NiPSysData`) fields the update reads: the active
+/// count (+0x50) and the particle infos (+0x70, 0x1c bytes each; the last
+/// update time at +0x14).
+const DATA_ACTIVE: u32 = 0x50;
+const DATA_INFOS: u32 = 0x70;
+const INFO_SIZE: u32 = 0x1c;
+const INFO_LAST_UPDATE: u32 = 0x14;
+/// `NiGetViewerString` (`00a7d330`, Xbox PDB name; `cdecl`, the text).
+const VIEWER_STRING: u32 = 0x00a7_d330;
+/// `NiPSysColliderManager::ms_RTTI` (its name is the first word).
+const RTTI: u32 = 0x0120_2780;
+
+// Translated from 00c2d300 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiPSysColliderManager::Update` (Xbox PDB): with colliders and active
+/// particles, the colliders' `SetResolveConstants` first. Then for each
+/// active particle: the collision time starts as `time`; with colliders,
+/// their `Resolve` from the system's float at +0xD4 (which may write the
+/// collision time) and, when it answers a collider, that collider's
+/// `Update` at `time`; otherwise (no colliders or no hit) the collision
+/// time is the system's float. The particle's last update time becomes
+/// the collision time.
+pub fn ni_p_sys_collider_manager_update(e: &mut Engine, this: Ptr, time: f32, data: Ptr) {
+    let data = data.addr();
+    let colliders = e.mem.u32(this.addr() + COLLIDERS);
+    if colliders != 0 && e.mem.u16(data + DATA_ACTIVE) != 0 {
+        e.vcall(colliders, COLLIDER_SET_RESOLVE_CONSTANTS_SLOT, &args![]);
+    }
+    let time = x87_quiet_bits(time.to_bits());
+    e.with_stack(4, |e, slot| {
+        let slot = slot.addr();
+        let mut index: u16 = 0;
+        while index < e.mem.u16(data + DATA_ACTIVE) {
+            let system = e.mem.u32(this.addr() + TARGET);
+            let start = x87_quiet_bits(e.mem.u32(system + SYSTEM_START_TIME));
+            let colliders = e.mem.u32(this.addr() + COLLIDERS);
+            e.mem.set_u32(slot, time);
+            let mut hit = 0;
+            if colliders != 0 {
+                hit = e
+                    .vcall(
+                        colliders,
+                        COLLIDER_RESOLVE_SLOT,
+                        &args![start, slot, data, u32::from(index)],
+                    )
+                    .u32();
+                if hit != 0 {
+                    e.vcall(
+                        hit,
+                        COLLIDER_UPDATE_SLOT,
+                        &args![time, data, u32::from(index)],
+                    );
+                }
+            }
+            if hit == 0 {
+                e.mem.set_u32(slot, start);
+            }
+            let info = e
+                .mem
+                .u32(data + DATA_INFOS)
+                .wrapping_add(u32::from(index) * INFO_SIZE);
+            let collision = x87_quiet_bits(e.mem.u32(slot));
+            e.mem.set_u32(info + INFO_LAST_UPDATE, collision);
+            index = index.wrapping_add(1);
+        }
+    });
+}
+
+// Translated from 00c2d4a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiPSysColliderManager::RegisterStreamables` (Xbox PDB):
+/// `NiPSysModifier`'s; when that succeeds the colliders' (slot `+0x54`,
+/// its answer not read) and true.
+pub fn ni_p_sys_collider_manager_register_streamables(
+    e: &mut Engine,
+    this: Ptr,
+    stream: Ptr,
+) -> bool {
+    if !e
+        .call(MODIFIER_REGISTER_STREAMABLES, &args![this, stream])
+        .bool()
+    {
+        return false;
+    }
+    let colliders = e.mem.u32(this.addr() + COLLIDERS);
+    if colliders != 0 {
+        e.vcall(colliders, REGISTER_STREAMABLES_SLOT, &args![stream]);
+    }
+    true
+}
+
+// Translated from 00c2d4d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiPSysColliderManager::SaveBinary` (Xbox PDB): `NiPSysModifier`'s, then
+/// the colliders' link id (`NiStream::SaveLinkID`).
+pub fn ni_p_sys_collider_manager_save_binary(e: &mut Engine, this: Ptr, stream: Ptr) {
+    e.call(MODIFIER_SAVE_BINARY, &args![this, stream]);
+    let colliders = e.mem.u32(this.addr() + COLLIDERS);
+    e.vcall(stream.addr(), STREAM_SAVE_LINK_ID_SLOT, &args![colliders]);
+}
+
+// Translated from 00c2d4f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiPSysColliderManager::IsEqual` (Xbox PDB): `NiPSysModifier`'s; both or
+/// neither must have colliders, and two must be equal (this one's
+/// `IsEqual`, slot `+0x5C`, given the other's).
+pub fn ni_p_sys_collider_manager_is_equal(e: &mut Engine, this: Ptr, other: Ptr) -> bool {
+    if !e.call(MODIFIER_IS_EQUAL, &args![this, other]).bool() {
+        return false;
+    }
+    let ours = e.mem.u32(this.addr() + COLLIDERS);
+    let theirs = e.mem.u32(other.addr() + COLLIDERS);
+    if ours != 0 {
+        if theirs == 0 {
+            return false;
+        }
+        return e.vcall(ours, IS_EQUAL_SLOT, &args![theirs]).bool();
+    }
+    theirs == 0
+}
+
+// Translated from 00c2d630 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiPSysColliderManager::GetViewerStrings` (Xbox PDB): `NiPSysModifier`'s
+/// strings, the class name, then the colliders' strings (slot `+0x60`).
+pub fn ni_p_sys_collider_manager_get_viewer_strings(e: &mut Engine, this: Ptr, strings: Ptr) {
+    e.call(MODIFIER_GET_VIEWER_STRINGS, &args![this, strings]);
+    let name = e.global::<u32>(RTTI);
+    let string = e.call(VIEWER_STRING, &args![name]).u32();
+    add_viewer_string(e, strings.addr(), string);
+    let colliders = e.mem.u32(this.addr() + COLLIDERS);
+    e.vcall(colliders, GET_VIEWER_STRINGS_SLOT, &args![strings]);
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -170,6 +326,17 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(
             0x00c2_d5e0,
             ni_p_sys_collider_manager_scalar_deleting_destructor(Ptr, u32) -> Ptr
+        ),
+        entry!(0x00c2_d300, ni_p_sys_collider_manager_update(Ptr, f32, Ptr)),
+        entry!(
+            0x00c2_d4a0,
+            ni_p_sys_collider_manager_register_streamables(Ptr, Ptr) -> bool
+        ),
+        entry!(0x00c2_d4d0, ni_p_sys_collider_manager_save_binary(Ptr, Ptr)),
+        entry!(0x00c2_d4f0, ni_p_sys_collider_manager_is_equal(Ptr, Ptr) -> bool),
+        entry!(
+            0x00c2_d630,
+            ni_p_sys_collider_manager_get_viewer_strings(Ptr, Ptr)
         ),
     ]
 }
@@ -351,5 +518,161 @@ mod manager_tests {
         e.mem.set_u32(this + COLLIDERS, 0);
         e.call(0x00c2_d5e0, &args![this, 0u32]);
         assert_eq!(calls_to(&e, NI_SIZED_DELETE).len(), 1);
+    }
+}
+
+#[cfg(test)]
+mod n064_tests {
+    use super::*;
+    use crate::units::niparticle::nipsysdata::viewer_test::{self, answer, calls_to, quiet};
+
+    const SET_CONSTANTS: u32 = 0x0000_d094;
+    const RESOLVE: u32 = 0x0000_d08c;
+    const UPDATE: u32 = 0x0000_d090;
+    const HIT_UPDATE: u32 = 0x0000_d190;
+
+    /// A manager whose system's start time is 0.5 and two particles; the
+    /// colliders' `Resolve` writes 0.75 as the collision time and answers
+    /// the collider in the word at `0f900000` for particle 0 only.
+    fn scene(e: &mut Engine) -> (Ptr, u32, u32, u32, u32) {
+        let this: Ptr = Ptr::new(e.mem.alloc(0x1c));
+        let system = e.mem.alloc(0x100);
+        e.mem.set_f32(system + SYSTEM_START_TIME, 0.5);
+        e.mem.set_u32(this.addr() + TARGET, system);
+        let colliders =
+            viewer_test::object(e, &[(0x94, SET_CONSTANTS), (0x8c, RESOLVE), (0x90, UPDATE)]);
+        let hit = viewer_test::object(e, &[(0x90, HIT_UPDATE)]);
+        e.map(0x0f90_0000, 4);
+        e.mem.set_u32(0x0f90_0000, hit);
+        quiet(e, &[SET_CONSTANTS, UPDATE, HIT_UPDATE]);
+        e.register(RESOLVE, |e, a| {
+            e.mem.set_f32(a[2], 0.75);
+            answer(if a[4] == 0 { e.mem.u32(0x0f90_0000) } else { 0 })
+        });
+        let data = e.mem.alloc(0x80);
+        e.mem.set_u16(data + DATA_ACTIVE, 2);
+        let infos = e.mem.alloc(2 * INFO_SIZE);
+        e.mem.set_u32(data + DATA_INFOS, infos);
+        (this, colliders, hit, data, infos)
+    }
+
+    #[test]
+    fn update_resolves_each_particle_through_the_colliders() {
+        let mut e = Engine::new();
+        let (this, colliders, hit, data, infos) = scene(&mut e);
+        e.mem.set_u32(this.addr() + COLLIDERS, colliders);
+        e.call_log = Some(vec![]);
+        e.call(0x00c2_d300, &args![this, 2.0f32, data]);
+        assert_eq!(calls_to(&e, SET_CONSTANTS), vec![vec![colliders]]);
+        let resolves = calls_to(&e, RESOLVE);
+        assert_eq!(resolves.len(), 2);
+        assert_eq!(resolves[0][1], 0.5f32.to_bits());
+        assert_eq!((resolves[0][3], resolves[0][4]), (data, 0));
+        assert_eq!((resolves[1][3], resolves[1][4]), (data, 1));
+        assert_eq!(
+            calls_to(&e, HIT_UPDATE),
+            vec![vec![hit, 2.0f32.to_bits(), data, 0]]
+        );
+        // A hit keeps the resolved time; no hit takes the start time.
+        assert_eq!(e.mem.f32(infos + INFO_LAST_UPDATE), 0.75);
+        assert_eq!(e.mem.f32(infos + INFO_SIZE + INFO_LAST_UPDATE), 0.5);
+    }
+
+    #[test]
+    fn update_without_colliders_takes_the_start_time() {
+        let mut e = Engine::new();
+        let (this, _, _, data, infos) = scene(&mut e);
+        e.call_log = Some(vec![]);
+        e.call(0x00c2_d300, &args![this, 2.0f32, data]);
+        assert!(calls_to(&e, SET_CONSTANTS).is_empty());
+        assert_eq!(e.mem.f32(infos + INFO_LAST_UPDATE), 0.5);
+        assert_eq!(e.mem.f32(infos + INFO_SIZE + INFO_LAST_UPDATE), 0.5);
+        // No particles: no resolve constants either.
+        let (this, colliders, _, data, _) = scene(&mut e);
+        e.mem.set_u32(this.addr() + COLLIDERS, colliders);
+        e.mem.set_u16(data + DATA_ACTIVE, 0);
+        e.call(0x00c2_d300, &args![this, 2.0f32, data]);
+        assert!(calls_to(&e, SET_CONSTANTS).is_empty());
+    }
+
+    #[test]
+    fn register_streamables_adds_the_colliders() {
+        const REGISTER: u32 = 0x0000_d054;
+        let mut e = Engine::new();
+        e.register(MODIFIER_REGISTER_STREAMABLES, |_, _| answer(0));
+        quiet(&mut e, &[REGISTER]);
+        let this: Ptr = Ptr::new(e.mem.alloc(0x1c));
+        let colliders = viewer_test::object(&mut e, &[(0x54, REGISTER)]);
+        e.mem.set_u32(this.addr() + COLLIDERS, colliders);
+        e.call_log = Some(vec![]);
+        assert!(!e.call(0x00c2_d4a0, &args![this, 0x500u32]).bool());
+        assert!(calls_to(&e, REGISTER).is_empty());
+        e.register(MODIFIER_REGISTER_STREAMABLES, |_, _| answer(1));
+        assert!(e.call(0x00c2_d4a0, &args![this, 0x500u32]).bool());
+        assert_eq!(calls_to(&e, REGISTER), vec![vec![colliders, 0x500]]);
+        e.mem.set_u32(this.addr() + COLLIDERS, 0);
+        assert!(e.call(0x00c2_d4a0, &args![this, 0x500u32]).bool());
+    }
+
+    #[test]
+    fn save_binary_saves_the_colliders_link() {
+        const SAVE_LINK: u32 = 0x0000_d130;
+        let mut e = Engine::new();
+        quiet(&mut e, &[MODIFIER_SAVE_BINARY, SAVE_LINK]);
+        let this: Ptr = Ptr::new(e.mem.alloc(0x1c));
+        e.mem.set_u32(this.addr() + COLLIDERS, 0x777);
+        let stream = viewer_test::object(&mut e, &[(0x30, SAVE_LINK)]);
+        e.call_log = Some(vec![]);
+        e.call(0x00c2_d4d0, &args![this, stream]);
+        assert_eq!(
+            calls_to(&e, MODIFIER_SAVE_BINARY),
+            vec![vec![this.addr(), stream]]
+        );
+        assert_eq!(calls_to(&e, SAVE_LINK), vec![vec![stream, 0x777]]);
+    }
+
+    #[test]
+    fn is_equal_compares_the_colliders() {
+        const EQUAL: u32 = 0x0000_d05c;
+        let mut e = Engine::new();
+        e.register(MODIFIER_IS_EQUAL, |_, _| answer(1));
+        e.register(EQUAL, |_, a| answer(u32::from(a[1] == 0x888)));
+        let this: Ptr = Ptr::new(e.mem.alloc(0x1c));
+        let other: Ptr = Ptr::new(e.mem.alloc(0x1c));
+        let check = |e: &mut Engine| e.call(0x00c2_d4f0, &args![this, other]).bool();
+        assert!(check(&mut e));
+        e.mem.set_u32(other.addr() + COLLIDERS, 0x888);
+        assert!(!check(&mut e));
+        let ours = viewer_test::object(&mut e, &[(0x5c, EQUAL)]);
+        e.mem.set_u32(this.addr() + COLLIDERS, ours);
+        e.call_log = Some(vec![]);
+        assert!(check(&mut e));
+        assert_eq!(calls_to(&e, EQUAL), vec![vec![ours, 0x888]]);
+        e.mem.set_u32(other.addr() + COLLIDERS, 0x889);
+        assert!(!check(&mut e));
+        e.mem.set_u32(other.addr() + COLLIDERS, 0);
+        assert!(!check(&mut e));
+        e.register(MODIFIER_IS_EQUAL, |_, _| answer(0));
+        e.mem.set_u32(this.addr() + COLLIDERS, 0);
+        assert!(!check(&mut e));
+    }
+
+    #[test]
+    fn viewer_strings_add_the_name_and_the_colliders() {
+        const STRINGS: u32 = 0x0000_d060;
+        let mut e = Engine::new();
+        quiet(&mut e, &[MODIFIER_GET_VIEWER_STRINGS, STRINGS]);
+        viewer_test::counting(&mut e, &[VIEWER_STRING]);
+        e.map(RTTI, 4);
+        e.set_global::<u32>(RTTI, 0x0100_00e0);
+        let this: Ptr = Ptr::new(e.mem.alloc(0x1c));
+        let colliders = viewer_test::object(&mut e, &[(0x60, STRINGS)]);
+        e.mem.set_u32(this.addr() + COLLIDERS, colliders);
+        let strings = viewer_test::strings(&mut e, 8);
+        e.call_log = Some(vec![]);
+        e.call(0x00c2_d630, &args![this, strings]);
+        assert_eq!(viewer_test::collected(&e, strings), vec![1]);
+        assert_eq!(calls_to(&e, VIEWER_STRING), vec![vec![0x0100_00e0]]);
+        assert_eq!(calls_to(&e, STRINGS), vec![vec![colliders, strings]]);
     }
 }

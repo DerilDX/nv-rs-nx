@@ -165,9 +165,197 @@ pub fn ni_p_sys_volume_emitter_compute_initial_position_and_velocity(
     });
 }
 
+/// `NiPSysEmitter`'s constructor (`00c21fe0`, `thiscall`, `RET 0x40`),
+/// `SaveBinary` (`00c22530`), `IsEqual` (`00c226a0`) and
+/// `GetViewerStrings` (`00c22780`), `thiscall`, one word each.
+const EMITTER_CONSTRUCTOR: u32 = 0x00c2_1fe0;
+const EMITTER_SAVE_BINARY: u32 = 0x00c2_2530;
+const EMITTER_IS_EQUAL: u32 = 0x00c2_26a0;
+const EMITTER_GET_VIEWER_STRINGS: u32 = 0x00c2_2780;
+/// The order the constructor passes on in place of its second word (1000).
+const EMITTER_ORDER: u32 = 0x3e8;
+/// The `NiPSysVolumeEmitter` vtable (RTTI `.?AVNiPSysVolumeEmitter@@`) and
+/// the class's `NiRTTI` record.
+const VOLUME_EMITTER_VTABLE: u32 = 0x010c_0a8c;
+const VOLUME_EMITTER_RTTI: u32 = 0x0120_27d8;
+/// The stream's `SaveLinkID` slot (+0x30); an `NiAVObject`'s `m_kName`
+/// (+8, the fixed string's handle).
+const SAVE_LINK_ID_SLOT: u32 = 0x30;
+const OBJECT_NAME: u32 = 0x08;
+/// `NiGetViewerString` (`00a7d330`) and its `const char*` overload
+/// (`00a7d5e0`), the viewer-string array's grow (`0096ad30`) and store
+/// (`0096ae90`), and "Emitter Object" (`010bd7e0`).
+const NI_GET_VIEWER_STRING: u32 = 0x00a7_d330;
+const NI_GET_VIEWER_STRING_TEXT: u32 = 0x00a7_d5e0;
+const STRINGS_GROW: u32 = 0x0096_ad30;
+const STRINGS_SET_AT: u32 = 0x0096_ae90;
+const EMITTER_OBJECT_NAME: u32 = 0x010b_d7e0;
+
+/// Appends `text` to the viewer-string array (the inlined `Add`).
+fn push_viewer_string(e: &mut Engine, strings: Ptr, text: u32) {
+    let size = u32::from(e.mem.u16(strings.addr() + 0xa));
+    if size >= u32::from(e.mem.u16(strings.addr() + 8)) {
+        let step = u32::from(e.mem.u16(strings.addr() + 0xe));
+        e.call(STRINGS_GROW, &args![strings, step + size]);
+    }
+    e.with_stack(4, |e, slot| {
+        e.mem.set_u32(slot.addr(), text);
+        e.call(STRINGS_SET_AT, &args![strings, size, slot]);
+    });
+}
+
+// Translated from 00c31b60 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiPSysVolumeEmitter::SaveBinary` (Xbox PDB): the emitter part
+/// (`00c22530`), then the emitter object's link id (the stream's slot
+/// +0x30).
+pub fn ni_p_sys_volume_emitter_save_binary(
+    e: &mut Engine,
+    this: Ptr<NiPSysVolumeEmitter>,
+    stream: Ptr,
+) {
+    e.call(EMITTER_SAVE_BINARY, &args![this, stream]);
+    let object = e.get(this, NiPSysVolumeEmitter::m_pkEmitterObj);
+    e.vcall(stream.addr(), SAVE_LINK_ID_SLOT, &args![object]);
+}
+
+// Translated from 00c31b80 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiPSysVolumeEmitter::IsEqual` (Xbox PDB): the emitter comparison
+/// (`00c226a0`), then both emitter objects null or both set (the objects
+/// themselves are not compared).
+pub fn ni_p_sys_volume_emitter_is_equal(
+    e: &mut Engine,
+    this: Ptr<NiPSysVolumeEmitter>,
+    other: Ptr<NiPSysVolumeEmitter>,
+) -> bool {
+    if !e.call(EMITTER_IS_EQUAL, &args![this, other]).bool() {
+        return false;
+    }
+    let mine = e.get(this, NiPSysVolumeEmitter::m_pkEmitterObj);
+    let theirs = e.get(other, NiPSysVolumeEmitter::m_pkEmitterObj);
+    (mine != 0) == (theirs != 0)
+}
+
+// Translated from 00c31bd0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map: the `NiPSysVolumeEmitter` constructor
+/// (`thiscall`, `RET 0x40`: the name, the emitter object, speed, speed
+/// variation, declination, its variation, planar angle, its variation (as
+/// `float` bits), the initial colour (four words), radius, radius variation,
+/// life span and its variation). The `NiPSysEmitter` constructor
+/// (`00c21fe0`) gets the name, the order 1000 in place of the emitter object,
+/// the floats re-stored by `FLD`/`FSTP` (quieting a signalling NaN) and the
+/// colour words as they are; then the vtable and `m_pkEmitterObj` (+0x54).
+/// Answers `this`.
+pub fn fn_00c31bd0(
+    e: &mut Engine,
+    this: Ptr<NiPSysVolumeEmitter>,
+    name: u32,
+    emitter_object: u32,
+    speed: u32,
+    speed_variation: u32,
+    declination: u32,
+    declination_variation: u32,
+    planar_angle: u32,
+    planar_angle_variation: u32,
+    red: u32,
+    green: u32,
+    blue: u32,
+    alpha: u32,
+    radius: u32,
+    radius_variation: u32,
+    life_span: u32,
+    life_span_variation: u32,
+) -> Ptr<NiPSysVolumeEmitter> {
+    let q = x87_quiet_bits;
+    e.call(
+        EMITTER_CONSTRUCTOR,
+        &args![
+            this,
+            name,
+            EMITTER_ORDER,
+            q(speed),
+            q(speed_variation),
+            q(declination),
+            q(declination_variation),
+            q(planar_angle),
+            q(planar_angle_variation),
+            red,
+            green,
+            blue,
+            alpha,
+            q(radius),
+            q(radius_variation),
+            q(life_span),
+            q(life_span_variation)
+        ],
+    );
+    e.mem.set_u32(this.addr(), VOLUME_EMITTER_VTABLE);
+    e.set(this, NiPSysVolumeEmitter::m_pkEmitterObj, emitter_object);
+    this
+}
+
+// Translated from 00c31db0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiPSysVolumeEmitter::GetViewerStrings` (Xbox PDB): the emitter strings
+/// (`00c22780`), the class name and, with an emitter object, "Emitter
+/// Object" with the object's name (its fixed string at +8).
+pub fn ni_p_sys_volume_emitter_get_viewer_strings(
+    e: &mut Engine,
+    this: Ptr<NiPSysVolumeEmitter>,
+    strings: Ptr,
+) {
+    e.call(EMITTER_GET_VIEWER_STRINGS, &args![this, strings]);
+    let class_name = e.global::<u32>(VOLUME_EMITTER_RTTI);
+    let text = e.call(NI_GET_VIEWER_STRING, &args![class_name]).u32();
+    push_viewer_string(e, strings, text);
+    let object = e.get(this, NiPSysVolumeEmitter::m_pkEmitterObj);
+    if object != 0 {
+        let name = e.mem.u32(object + OBJECT_NAME);
+        let text = e
+            .call(NI_GET_VIEWER_STRING_TEXT, &args![EMITTER_OBJECT_NAME, name])
+            .u32();
+        push_viewer_string(e, strings, text);
+    }
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(
+            0x00c3_1b60,
+            ni_p_sys_volume_emitter_save_binary(Ptr<NiPSysVolumeEmitter>, Ptr)
+        ),
+        entry!(
+            0x00c3_1b80,
+            ni_p_sys_volume_emitter_is_equal(
+                Ptr<NiPSysVolumeEmitter>,
+                Ptr<NiPSysVolumeEmitter>,
+            ) -> bool
+        ),
+        entry!(
+            0x00c3_1bd0,
+            fn_00c31bd0(
+                Ptr<NiPSysVolumeEmitter>,
+                u32,
+                u32,
+                u32,
+                u32,
+                u32,
+                u32,
+                u32,
+                u32,
+                u32,
+                u32,
+                u32,
+                u32,
+                u32,
+                u32,
+                u32,
+                u32,
+            ) -> Ptr<NiPSysVolumeEmitter>
+        ),
+        entry!(
+            0x00c3_1db0,
+            ni_p_sys_volume_emitter_get_viewer_strings(Ptr<NiPSysVolumeEmitter>, Ptr)
+        ),
         entry!(
             0x00c3_1b20,
             ni_p_sys_volume_emitter_load_binary(Ptr<NiPSysVolumeEmitter>, Ptr)
@@ -373,6 +561,119 @@ mod tests {
         assert_eq!(
             log_of(&e, TRANSFORM_MULTIPLY),
             vec![vec![result + 0x68, result, result + 0x34]]
+        );
+    }
+}
+
+#[cfg(test)]
+mod n066_tests {
+    use super::*;
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    fn calls_to(e: &Engine, callee: u32) -> Vec<Vec<u32>> {
+        e.call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|(address, _)| *address == callee)
+            .map(|(_, words)| words.clone())
+            .collect()
+    }
+
+    fn word(eax: u32) -> Ret {
+        Ret {
+            eax,
+            ..Ret::default()
+        }
+    }
+
+    #[test]
+    fn save_binary_writes_the_emitter_object_link() {
+        const SAVE_LINK: u32 = 0x0100_00c0;
+        let mut e = Engine::new();
+        e.register(EMITTER_SAVE_BINARY, |_, _| Ret::default());
+        e.register(SAVE_LINK, |_, _| Ret::default());
+        let vtable = e.mem.alloc(0x100);
+        e.mem.set_u32(vtable + SAVE_LINK_ID_SLOT, SAVE_LINK);
+        let stream = e.mem.alloc(0x10);
+        e.mem.set_u32(stream, vtable);
+        let this = e.mem.alloc(0x58);
+        e.mem.set_u32(this + 0x54, 0x4444);
+        e.call_log = Some(vec![]);
+        e.call(0x00c3_1b60, &args![this, stream]);
+        assert_eq!(calls_to(&e, EMITTER_SAVE_BINARY), vec![vec![this, stream]]);
+        assert_eq!(calls_to(&e, SAVE_LINK), vec![vec![stream, 0x4444]]);
+    }
+
+    #[test]
+    fn is_equal_needs_both_or_neither_emitter_object() {
+        let mut e = Engine::new();
+        e.register(EMITTER_IS_EQUAL, |_, _| word(1));
+        let this = e.mem.alloc(0x58);
+        let other = e.mem.alloc(0x58);
+        assert!(e.call(0x00c3_1b80, &args![this, other]).bool());
+        e.mem.set_u32(this + 0x54, 0x10);
+        assert!(!e.call(0x00c3_1b80, &args![this, other]).bool());
+        e.mem.set_u32(other + 0x54, 0x20);
+        assert!(e.call(0x00c3_1b80, &args![this, other]).bool());
+        e.mem.set_u32(this + 0x54, 0);
+        assert!(!e.call(0x00c3_1b80, &args![this, other]).bool());
+        e.register(EMITTER_IS_EQUAL, |_, _| word(0));
+        assert!(!e.call(0x00c3_1b80, &args![this, this]).bool());
+    }
+
+    #[test]
+    fn fn_00c31bd0_passes_the_order_and_keeps_the_emitter_object() {
+        let mut e = Engine::new();
+        e.register(EMITTER_CONSTRUCTOR, |_, _| Ret::default());
+        let this = e.mem.alloc(0x58);
+        let words: Vec<u32> = (0..16u32).map(|i| 0x100 + i).collect();
+        let mut call = vec![this];
+        call.extend(&words);
+        call[3] = 0x7f80_0001;
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x00c3_1bd0, &call).u32(), this);
+        let mut expected = call.clone();
+        expected[2] = EMITTER_ORDER;
+        expected[3] = 0x7fc0_0001;
+        assert_eq!(calls_to(&e, EMITTER_CONSTRUCTOR), vec![expected]);
+        assert_eq!(e.mem.u32(this), VOLUME_EMITTER_VTABLE);
+        assert_eq!(e.mem.u32(this + 0x54), 0x101);
+    }
+
+    #[test]
+    fn get_viewer_strings_names_the_emitter_object_when_set() {
+        let mut e = Engine::new();
+        e.map(VOLUME_EMITTER_RTTI, 4);
+        e.set_global(VOLUME_EMITTER_RTTI, 0x0555_0000u32);
+        e.register(EMITTER_GET_VIEWER_STRINGS, |_, _| Ret::default());
+        e.register(NI_GET_VIEWER_STRING, |_, _| word(0x7000_0001));
+        e.register(NI_GET_VIEWER_STRING_TEXT, |_, a| word(a[1]));
+        e.register(STRINGS_GROW, |e, a| {
+            e.mem.set_u16(a[0] + 8, a[1] as u16);
+            Ret::default()
+        });
+        let stored = Rc::new(RefCell::new(vec![]));
+        let seen = stored.clone();
+        e.register_double(STRINGS_SET_AT, move |e, a| {
+            seen.borrow_mut().push(e.mem.u32(a[2]));
+            e.mem.set_u16(a[0] + 0xa, a[1] as u16 + 1);
+            Ret::default()
+        });
+        let this = e.mem.alloc(0x58);
+        let strings = e.mem.alloc(0x10);
+        e.mem.set_u16(strings + 0xe, 1);
+        e.call(0x00c3_1db0, &args![this, strings]);
+        let object = e.mem.alloc(0x10);
+        e.mem.set_u32(object + OBJECT_NAME, 0x3333);
+        e.mem.set_u32(this + 0x54, object);
+        e.call_log = Some(vec![]);
+        e.call(0x00c3_1db0, &args![this, strings]);
+        assert_eq!(*stored.borrow(), vec![0x7000_0001, 0x7000_0001, 0x3333]);
+        assert_eq!(
+            calls_to(&e, NI_GET_VIEWER_STRING_TEXT),
+            vec![vec![EMITTER_OBJECT_NAME, 0x3333]]
         );
     }
 }

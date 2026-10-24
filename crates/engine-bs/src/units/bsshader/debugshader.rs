@@ -575,9 +575,124 @@ pub fn debug_shader_initialize(e: &mut Engine, this: Ptr) -> bool {
     result
 }
 
+// Translated from 00bd1940 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed (Ghidra made no function of it): slot 72 of the vtable `010bbd08`, `thiscall`, no
+/// stack words: a jump to `DebugShader::LoadShaders`.
+pub fn fn_00bd1940(e: &mut Engine, this: Ptr) {
+    debug_shader_load_shaders(e, this);
+}
+
+/// The current pass (`0126f74c`) and the texture index (`01202338`) `00bd1c50` reads.
+const CURRENT_PASS_0126F74C: u32 = 0x0126_f74c;
+const TEXTURE_INDEX_01202338: u32 = 0x0120_2338;
+
+// Translated from 00bd1c50 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (unit `debugshader.cpp`), `thiscall`, seven words it does not
+/// read: `this`'s slot +0xec; the pass at +0x5c gets the texture `this[0x6c + 4 * this[+0xbc]]`
+/// on its first stage (+8) and the `NiPointer` `this[0xb4 + 4 * [01202338]]` at +0x44 (old one
+/// released, new one held when they differ), and becomes current (`0126f74c`). Answers 0.
+pub fn fn_00bd1c50(
+    e: &mut Engine,
+    this: Ptr,
+    _unused_0: u32,
+    _unused_1: u32,
+    _unused_2: u32,
+    _unused_3: u32,
+    _unused_4: u32,
+    _unused_5: u32,
+    _unused_6: u32,
+) -> u32 {
+    let base = this.addr();
+    e.vcall(base, 0xec, &args![]);
+    let pass = e.mem.u32(base + 0x5c);
+    let stage = e.mem.u32(e.mem.u32(pass + 0x24));
+    let selected = e.mem.u32(base + 0xbc);
+    let texture = e.mem.u32(
+        base.wrapping_add(selected.wrapping_mul(4))
+            .wrapping_add(0x6c),
+    );
+    e.mem.set_u32(stage + 8, texture);
+    let pass = e.mem.u32(base + 0x5c);
+    let index = e.global::<u32>(TEXTURE_INDEX_01202338);
+    let new = e
+        .mem
+        .u32(base.wrapping_add(index.wrapping_mul(4)).wrapping_add(0xb4));
+    let old = e.mem.u32(pass + 0x44);
+    if old != new {
+        if old != 0 {
+            let left = e.call(IMPORT_INTERLOCKED_DECREMENT, &args![old + 4]).u32();
+            if left == 0 {
+                e.vcall(old, 4, &args![]);
+            }
+        }
+        e.mem.set_u32(pass + 0x44, new);
+        if new != 0 {
+            e.call(IMPORT_INTERLOCKED_INCREMENT, &args![new + 4]);
+        }
+    }
+    let pass = e.mem.u32(base + 0x5c);
+    e.set_global(CURRENT_PASS_0126F74C, pass);
+    0
+}
+
+/// The two RTTI records `SetTextureToRender` looks for in the texture's chain (`011f444c`,
+/// `011f4ac4`; by their place, unconfirmed which classes).
+const RTTI_011F444C: u32 = 0x011f_444c;
+const RTTI_011F4AC4: u32 = 0x011f_4ac4;
+
+/// Whether `rtti` is in the RTTI chain the texture's slot +8 answers (base at +4).
+fn has_rtti(e: &mut Engine, texture: u32, rtti: u32) -> bool {
+    let mut at = e.vcall(texture, 8, &args![]).u32();
+    while at != 0 {
+        if at == rtti {
+            return true;
+        }
+        at = e.mem.u32(at + 4);
+    }
+    false
+}
+
+// Translated from 00bd22c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `DebugShader::SetTextureToRender` (Xbox PDB), `thiscall`, one word (a texture): finds the
+/// first empty slot of the 16 texture `NiPointer`s at +0x6c (nothing without one); with a
+/// texture whose RTTI chain (slot +8, base +4) has `011f444c`, or else `011f4ac4`, puts it in
+/// that slot (old one released, new one held; nothing when it is already there).
+pub fn debug_shader_set_texture_to_render(e: &mut Engine, this: Ptr, texture: Ptr) {
+    let base = this.addr();
+    let Some(slot) = (0..0x10u32).find(|index| e.mem.u32(base + 0x6c + 4 * index) == 0) else {
+        return;
+    };
+    let texture = texture.addr();
+    if texture == 0 {
+        return;
+    }
+    if !has_rtti(e, texture, RTTI_011F444C) && !has_rtti(e, texture, RTTI_011F4AC4) {
+        return;
+    }
+    let at = base + 0x6c + 4 * slot;
+    let old = e.mem.u32(at);
+    if old == texture {
+        return;
+    }
+    if old != 0 {
+        let left = e.call(IMPORT_INTERLOCKED_DECREMENT, &args![old + 4]).u32();
+        if left == 0 {
+            e.vcall(old, 4, &args![]);
+        }
+    }
+    e.mem.set_u32(at, texture);
+    e.call(IMPORT_INTERLOCKED_INCREMENT, &args![texture + 4]);
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x00bd_1940, fn_00bd1940(Ptr)),
+        entry!(
+            0x00bd_1c50,
+            fn_00bd1c50(Ptr, u32, u32, u32, u32, u32, u32, u32) -> u32
+        ),
+        entry!(0x00bd_22c0, debug_shader_set_texture_to_render(Ptr, Ptr)),
         entry!(0x00bd_1950, debug_shader_debug_shader(Ptr) -> Ptr),
         entry!(0x00bd_16f0, debug_shader_load_shaders(Ptr)),
         entry!(0x00bd_20e0, debug_shader_load_stages_and_passes(Ptr) -> bool),
@@ -1029,5 +1144,124 @@ mod debug_function_tests {
         assert!(!e.call(0x00bd_24c0, &args![this]).bool());
         assert!(calls(&e, SCREEN_ELEMENTS_DATA_CONSTRUCT).is_empty());
         assert!(calls(&e, CONSTANT_MAP_CONSTRUCT_00B7E330).is_empty());
+    }
+}
+
+#[cfg(test)]
+mod n070_tests {
+    use super::*;
+
+    fn calls(e: &Engine, addr: u32) -> Vec<Vec<u32>> {
+        e.call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|(a, _)| *a == addr)
+            .map(|(_, w)| w.clone())
+            .collect()
+    }
+
+    const SLOTS: u32 = 0x0f10_0000;
+
+    fn object(e: &mut Engine, size: u32) -> u32 {
+        let vtable = e.mem.alloc(0x100);
+        for offset in (0..0x100u32).step_by(4) {
+            e.mem.set_u32(vtable + offset, SLOTS + offset);
+        }
+        let object = e.mem.alloc(size);
+        e.mem.set_u32(object, vtable);
+        object
+    }
+
+    fn rig() -> Engine {
+        let mut e = Engine::new();
+        e.map(0x0120_2000, 0x1000);
+        e.map(0x0126_f000, 0x1000);
+        for offset in (0..0x100u32).step_by(4) {
+            e.register(SLOTS + offset, |_, _| Ret::default());
+        }
+        e.register(IMPORT_INTERLOCKED_INCREMENT, |e, a| {
+            let v = e.mem.u32(a[0]).wrapping_add(1);
+            e.mem.set_u32(a[0], v);
+            v.into_ret()
+        });
+        e.register(IMPORT_INTERLOCKED_DECREMENT, |e, a| {
+            let v = e.mem.u32(a[0]).wrapping_sub(1);
+            e.mem.set_u32(a[0], v);
+            v.into_ret()
+        });
+        e.call_log = Some(vec![]);
+        e
+    }
+
+    #[test]
+    fn fn_00bd1940_runs_load_shaders() {
+        use crate::units::bsshader::geometrydecalshader::shader_test_rig::loader_rig;
+        let mut e = loader_rig();
+        e.register(PIXEL_PROFILE_00B4F380, |_, _| 0x0f20_0000u32.into_ret());
+        let this = e.mem.alloc(0xd0);
+        e.call(0x00bd_1940, &args![this]);
+        assert!(!calls(&e, COMPILE_VERTEX_SHADER).is_empty());
+    }
+
+    #[test]
+    fn fn_00bd1c50_sets_the_texture_and_pixel_shader() {
+        let mut e = rig();
+        let this = object(&mut e, 0xc0);
+        let stage = e.mem.alloc(0x10);
+        let stages = e.mem.alloc(4);
+        e.mem.set_u32(stages, stage);
+        let pass = e.mem.alloc(0x48);
+        e.mem.set_u32(pass + 0x24, stages);
+        e.mem.set_u32(this + 0x5c, pass);
+        e.mem.set_u32(this + 0xbc, 2);
+        e.mem.set_u32(this + 0x6c + 8, 0x7878);
+        let old = object(&mut e, 8);
+        e.mem.set_u32(old + 4, 1);
+        e.mem.set_u32(pass + 0x44, old);
+        let new = object(&mut e, 8);
+        e.set_global(TEXTURE_INDEX_01202338, 1u32);
+        e.mem.set_u32(this + 0xb8, new);
+        let answer = e
+            .call(
+                0x00bd_1c50,
+                &args![this, 0u32, 0u32, 0u32, 0u32, 0u32, 0u32, 0u32],
+            )
+            .u32();
+        assert_eq!(answer, 0);
+        assert_eq!(calls(&e, SLOTS + 0xec), vec![vec![this]]);
+        assert_eq!(e.mem.u32(stage + 8), 0x7878);
+        assert_eq!(e.mem.u32(pass + 0x44), new);
+        assert_eq!(e.mem.u32(new + 4), 1);
+        assert_eq!(calls(&e, SLOTS + 4), vec![vec![old]]);
+        assert_eq!(e.global::<u32>(CURRENT_PASS_0126F74C), pass);
+    }
+
+    #[test]
+    fn set_texture_to_render_fills_the_first_empty_slot() {
+        let mut e = rig();
+        let this = e.mem.alloc(0xb0);
+        e.mem.set_u32(this + 0x6c, 1);
+        let base_rtti = e.mem.alloc(8);
+        e.mem.set_u32(base_rtti + 4, RTTI_011F4AC4);
+        e.map(0x011f_4000, 0x1000);
+        e.set_global(0x011f_4f00, base_rtti);
+        e.register(SLOTS + 8, |e, _| e.mem.u32(0x011f_4f00).into_ret());
+        let texture = object(&mut e, 8);
+        e.call(0x00bd_22c0, &args![this, texture]);
+        assert_eq!(e.mem.u32(this + 0x70), texture);
+        assert_eq!(e.mem.u32(texture + 4), 1);
+        // A texture of another kind is not taken.
+        e.mem.set_u32(base_rtti + 4, 0);
+        let other = object(&mut e, 8);
+        e.call(0x00bd_22c0, &args![this, other]);
+        assert_eq!(e.mem.u32(this + 0x74), 0);
+        // All slots full: nothing.
+        e.mem.set_u32(base_rtti + 4, RTTI_011F444C);
+        for index in 0..16u32 {
+            e.mem.set_u32(this + 0x6c + 4 * index, 9);
+        }
+        e.call(0x00bd_22c0, &args![this, other]);
+        assert_eq!(e.mem.u32(other + 4), 0);
     }
 }

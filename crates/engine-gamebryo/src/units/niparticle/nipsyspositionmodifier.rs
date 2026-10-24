@@ -133,9 +133,29 @@ pub fn ni_p_sys_position_modifier_create_clone(e: &mut Engine, this: Ptr, proces
     clone
 }
 
+use crate::units::niparticle::nipsysmodifier::add_class_name;
+
+/// `NiPSysModifier::GetViewerStrings` (`00c319e0`, `thiscall`, one word).
+const MODIFIER_GET_VIEWER_STRINGS: u32 = 0x00c3_19e0;
+/// The `NiRTTI` record of `NiPSysPositionModifier` (`012026b8`).
+const RTTI: u32 = 0x0120_26b8;
+
+// Translated from 00c28cb0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiPSysPositionModifier::GetViewerStrings` (Xbox PDB):
+/// `NiPSysModifier::GetViewerStrings`, then the class name (`NiRTTI`
+/// `012026b8`) appended.
+pub fn ni_p_sys_position_modifier_get_viewer_strings(e: &mut Engine, this: Ptr, strings: Ptr) {
+    e.call(MODIFIER_GET_VIEWER_STRINGS, &args![this, strings]);
+    add_class_name(e, strings.addr(), RTTI);
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(
+            0x00c2_8cb0,
+            ni_p_sys_position_modifier_get_viewer_strings(Ptr, Ptr)
+        ),
         entry!(0x00c28b90, ni_p_sys_position_modifier_get_r_t_t_i() -> u32),
         entry!(
             0x00c2_8b50,
@@ -321,5 +341,28 @@ mod tests {
             calls_to(&e, MODIFIER_COPY_MEMBERS),
             vec![vec![0x5000, 0, 0x6000]]
         );
+    }
+}
+
+#[cfg(test)]
+mod viewer_tests {
+    use super::*;
+    use crate::units::niparticle::nipsysmodifier::test_stream;
+    use crate::units::niparticle::nipsysmodifier::test_stream::calls_to;
+
+    #[test]
+    fn get_viewer_strings_appends_the_class_name() {
+        let mut e = Engine::new();
+        test_stream::global_word(&mut e, RTTI, 0x0abc_0006);
+        e.register(MODIFIER_GET_VIEWER_STRINGS, |_, _| Ret::default());
+        let stored = test_stream::viewer_strings(&mut e);
+        let strings = test_stream::strings(&mut e);
+        e.call_log = Some(vec![]);
+        e.call(0x00c2_8cb0, &args![0x5000u32, strings]);
+        assert_eq!(
+            calls_to(&e, MODIFIER_GET_VIEWER_STRINGS),
+            vec![vec![0x5000, strings]]
+        );
+        assert_eq!(*stored.borrow(), vec![0x0abc_0006]);
     }
 }

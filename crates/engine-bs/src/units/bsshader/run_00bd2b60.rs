@@ -316,9 +316,39 @@ pub fn fn_00bd2fd0(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
     this
 }
 
+// Translated from 00bd2720 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (not a Ghidra function; vtable entries at `010bb530`, `010bbfd8`,
+/// `010bc380`), `thiscall`, no stack words (the same vtable position as `00bc0920`, whose slot
+/// takes none): a jump through the shader's vtable +0x13c.
+pub fn fn_00bd2720(e: &mut Engine, this: Ptr) {
+    e.vcall(this.addr(), 0x13c, &args![]);
+}
+
+// Translated from 00bd2b40 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (not a Ghidra function; vtable entry at `010bbfdc`), `thiscall`,
+/// no stack words: calls the shader's vtable +0x128 with its word +0x84.
+pub fn fn_00bd2b40(e: &mut Engine, this: Ptr) {
+    let base = this.addr();
+    let pass = e.mem.u32(base + 0x84);
+    e.vcall(base, 0x128, &args![pass]);
+}
+
+/// The record `00bd2c30` answers (`0120233c`).
+const RECORD_0120233C: u32 = 0x0120_233c;
+
+// Translated from 00bd2c30 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (not a Ghidra function; vtable entry at `010bbec0`, `ECX` unread):
+/// answers the address `0120233c`.
+pub fn fn_00bd2c30(_e: &mut Engine, _this: Ptr) -> Ptr {
+    Ptr::new(RECORD_0120233C)
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x00bd_2720, fn_00bd2720(Ptr)),
+        entry!(0x00bd_2b40, fn_00bd2b40(Ptr)),
+        entry!(0x00bd_2c30, fn_00bd2c30(Ptr) -> Ptr),
         entry!(0x00bd_2d50, fn_00bd2d50(Ptr)),
         entry!(0x00bd_2b60, fn_00bd2b60(Ptr) -> Ptr),
         entry!(0x00bd_2e70, fn_00bd2e70() -> Ptr),
@@ -522,5 +552,28 @@ mod frond_tests {
         assert!(calls(&e, NI_FREE_00AA1460).is_empty());
         e.call(0x00bd_2fd0, &args![this, 1u32]);
         assert_eq!(calls(&e, NI_FREE_00AA1460), vec![vec![this, 0xa8]]);
+    }
+}
+
+#[cfg(test)]
+mod n071_tests {
+    use super::*;
+    use crate::units::bsshader::shadowlightshader::n071_rig::{
+        calls, engine, slot_target, vobject,
+    };
+
+    #[test]
+    fn the_small_slot_functions() {
+        let mut e = engine(&[]);
+        let this = vobject(&mut e, 0x90, &[]);
+        e.mem.set_u32(this + 0x84, 0x84);
+        e.call(0x00bd_2720, &args![this]);
+        e.call(0x00bd_2b40, &args![this]);
+        assert_eq!(calls(&e, slot_target(&e, this, 0x13c)), vec![vec![this]]);
+        assert_eq!(
+            calls(&e, slot_target(&e, this, 0x128)),
+            vec![vec![this, 0x84]]
+        );
+        assert_eq!(e.call(0x00bd_2c30, &args![this]).u32(), RECORD_0120233C);
     }
 }

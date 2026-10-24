@@ -5,7 +5,7 @@
 use crate::prelude::*;
 
 use crate::units::facegen::binaryfile::VECTOR_LAST;
-use crate::units::facegen::run_00ab0d50::reallocate;
+use crate::units::facegen::run_00ab0d50::{advance_checked, reallocate};
 use crate::units::facegen::run_00aba3c0::{
     max_or_one, vector_capacity, vector_size, ElementSize, VECTOR_ALLOCATOR,
 };
@@ -23,6 +23,8 @@ const FILL_BYTES: u32 = 0x00ac_3300;
 const FILL_BYTES_TAIL: u32 = 0x00ad_1740;
 const COPY_TAIL_BYTES: u32 = 0x00ad_5e20;
 const MOVE_BACKWARD_BYTES: u32 = 0x00ab_4490;
+/// `memmove_s` (`00ec7ce3`, `cdecl`: destination, size, source, count).
+const MEMMOVE_S: u32 = 0x00ec_7ce3;
 /// The 0x58-byte element (a texture morph: four words and three byte vectors from +0x10)
 /// vector's helpers: allocation (`0065e700`), the copies (`006603a0` before the gap and to
 /// move the tail up, `0065ffe0` after it and past the end), the element destructor
@@ -249,12 +251,70 @@ pub fn fn_00ab45f0(
     }
 }
 
+// Translated from 00ab4310 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map: the 0x58-byte element iterator's `+=` (`thiscall`, the count;
+/// see [`advance_checked`]). Returns `this`.
+pub fn fn_00ab4310(e: &mut Engine, this: Ptr, count: u32) -> Ptr {
+    advance_checked(e, this.addr(), count, 0x58);
+    this
+}
+
+// Translated from 00ab43d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map: the byte iterator's `+=` (`thiscall`, the count; see
+/// [`advance_checked`], an element size of 1). Returns `this`.
+pub fn fn_00ab43d0(e: &mut Engine, this: Ptr, count: u32) -> Ptr {
+    advance_checked(e, this.addr(), count, 1);
+    this
+}
+
+// Translated from 00ab4490 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`cdecl`: first, last, end): the bytes' backward move: for a
+/// positive (signed) `last - first`, `memmove_s(end - n, n, first, n)`. Returns `end - n`.
+pub fn fn_00ab4490(e: &mut Engine, first: u32, last: u32, end: u32) -> u32 {
+    let count = last.wrapping_sub(first);
+    let start = end.wrapping_sub(count);
+    if count as i32 > 0 {
+        e.call(MEMMOVE_S, &args![start, count, first, count]);
+    }
+    start
+}
+
+// Translated from 00ab4520 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`cdecl`, six words: first, last, the destination's end and three
+/// tag words it does not read): assigns the 0x58-byte elements before `last` down to `first` to
+/// the slots before `end`, from the back (`0065eb90`). Returns the destination's new start,
+/// `end - (last - first) / 0x58 * 0x58` (a signed division).
+pub fn fn_00ab4520(
+    e: &mut Engine,
+    first: u32,
+    last: u32,
+    end: u32,
+    _unused_3: u32,
+    _unused_4: u32,
+    _unused_5: u32,
+) -> u32 {
+    let start =
+        end.wrapping_sub(((last.wrapping_sub(first) as i32 / 0x58) as u32).wrapping_mul(0x58));
+    let mut target = end;
+    let mut source = last;
+    while first != source {
+        source = source.wrapping_sub(0x58);
+        target = target.wrapping_sub(0x58);
+        e.call(ELEMENT_ASSIGN_58, &args![target, source]);
+    }
+    start
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
         entry!(0x00ab_3370, fn_00ab3370(Ptr, u32, u32, u32, u32)),
         entry!(0x00ab_3a40, fn_00ab3a40(Ptr, u32, u32, u32, u32)),
         entry!(0x00ab_45f0, fn_00ab45f0(u32, u32, u32, u32, u32, u32)),
+        entry!(0x00ab_4310, fn_00ab4310(Ptr, u32) -> Ptr),
+        entry!(0x00ab_43d0, fn_00ab43d0(Ptr, u32) -> Ptr),
+        entry!(0x00ab_4490, fn_00ab4490(u32, u32, u32) -> u32),
+        entry!(0x00ab_4520, fn_00ab4520(u32, u32, u32, u32, u32, u32) -> u32),
     ]
 }
 
@@ -262,7 +322,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
 mod tests {
     use super::*;
     use crate::units::facegen::binaryfile::{
-        MEMORY_MANAGER_FREE, MEMORY_MANAGER_OBJECT, VECTOR_FIRST, VECTOR_PROXY,
+        INVALID_PARAMETER, MEMORY_MANAGER_FREE, MEMORY_MANAGER_OBJECT, VECTOR_FIRST, VECTOR_PROXY,
     };
 
     type Log = Vec<(u32, Vec<u32>)>;
@@ -435,6 +495,68 @@ mod tests {
         assert_eq!(
             calls_to(&log, ELEMENT_COPY_58),
             vec![vec![block, 0x1234], vec![block + 0x58, 0x1234]]
+        );
+    }
+
+    #[test]
+    fn iterator_advances_by_element_size() {
+        let mut e = engine();
+        e.register(INVALID_PARAMETER, |_, _| Ret::default());
+        let block = e.mem.alloc(0x58 * 2);
+        let vector = e.mem.alloc(0x18);
+        e.mem.set_u32(vector + VECTOR_FIRST, block);
+        e.mem.set_u32(vector + VECTOR_LAST, block + 0xb0);
+        let proxy = e.mem.alloc(4);
+        e.mem.set_u32(proxy, vector);
+        let iterator = e.mem.alloc(8);
+        e.mem.set_u32(iterator, proxy);
+        e.mem.set_u32(iterator + 4, block);
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x00ab_4310, &args![iterator, 2u32]).u32(), iterator);
+        assert_eq!(e.mem.u32(iterator + 4), block + 0xb0);
+        assert_eq!(
+            e.call(0x00ab_43d0, &args![iterator, u32::MAX]).u32(),
+            iterator
+        );
+        assert_eq!(e.mem.u32(iterator + 4), block + 0xaf);
+        assert!(calls_to(e.call_log.as_ref().unwrap(), INVALID_PARAMETER).is_empty());
+        e.call(0x00ab_43d0, &args![iterator, 2u32]);
+        let log = e.call_log.take().unwrap();
+        assert_eq!(e.mem.u32(iterator + 4), block + 0xb1);
+        assert_eq!(calls_to(&log, INVALID_PARAMETER).len(), 1);
+    }
+
+    #[test]
+    fn backward_moves_of_bytes_and_elements() {
+        let mut e = Engine::new();
+        e.register(MEMMOVE_S, |_, _| Ret::default());
+        e.register(ELEMENT_ASSIGN_58, |_, _| Ret::default());
+        e.call_log = Some(vec![]);
+        assert_eq!(
+            e.call(0x00ab_4490, &args![0x100u32, 0x110u32, 0x200u32])
+                .u32(),
+            0x1f0
+        );
+        assert_eq!(
+            e.call(0x00ab_4490, &args![0x110u32, 0x110u32, 0x200u32])
+                .u32(),
+            0x200
+        );
+        let start = e
+            .call(
+                0x00ab_4520,
+                &args![0x1000u32, 0x10b0u32, 0x2000u32, 0u32, 0u32, 0u32],
+            )
+            .u32();
+        let log = e.call_log.take().unwrap();
+        assert_eq!(
+            calls_to(&log, MEMMOVE_S),
+            vec![vec![0x1f0, 0x10, 0x100, 0x10]]
+        );
+        assert_eq!(start, 0x2000 - 0xb0);
+        assert_eq!(
+            calls_to(&log, ELEMENT_ASSIGN_58),
+            vec![vec![0x2000 - 0x58, 0x1058], vec![0x2000 - 0xb0, 0x1000]]
         );
     }
 }

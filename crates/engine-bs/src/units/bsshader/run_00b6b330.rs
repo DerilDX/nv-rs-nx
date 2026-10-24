@@ -281,9 +281,36 @@ pub fn fn_00b6b8d0(e: &mut Engine, flags: u32, group: u32) {
     begin_targets(e, 2, flags, group);
 }
 
+/// `00b6b0b0` (unit `run_00b6adb0`, unnamed; no arguments) and `00b6b100` (unnamed; no
+/// arguments, answers a render-target group or null).
+const FN_00B6B0B0: u32 = 0x00b6_b0b0;
+const HELD_GROUP_00B6B100: u32 = 0x00b6_b100;
+
+// Translated from 00b6b840 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`run_00b6b330`), no arguments: with targets held (`011fa020` not
+/// 0), runs `00b6b330` on the renderer at `011f4748`, then `00b6b0b0`, and begins the group
+/// `00b6b100` answers (the renderer's slot +0xc8 when null) with flags 0
+/// (`BeginUsingRenderTargetGroup`).
+pub fn fn_00b6b840(e: &mut Engine) {
+    if e.global::<u32>(TARGET_COUNT_011FA020) == 0 {
+        return;
+    }
+    let renderer = e.global::<u32>(GLOBAL_011F4748);
+    fn_00b6b330(e, Ptr::new(renderer));
+    e.call(FN_00B6B0B0, &args![]);
+    let mut group = e.call(HELD_GROUP_00B6B100, &args![]).u32();
+    if group == 0 {
+        let renderer = e.global::<u32>(GLOBAL_011F4748);
+        group = e.vcall(renderer, 0xc8, &args![]).u32();
+    }
+    let renderer = e.global::<u32>(GLOBAL_011F4748);
+    e.call(BEGIN_USING_TARGET_00B6B2A0, &args![renderer, group, 0u32]);
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x00b6_b840, fn_00b6b840()),
         entry!(0x00b6_b380, fn_00b6b380(Ptr, Ptr, u8, u32) -> Ptr),
         entry!(0x00b6_b330, fn_00b6b330(Ptr) -> bool),
         entry!(
@@ -587,5 +614,72 @@ mod renderer_tests {
         e.call(0x00b6_b8d0, &args![7u32, 0x0e7e_0000u32]);
         assert_eq!(e.mem.u32(renderer + 0x200), 3);
         assert!(calls(&e, slot(0x17c)).is_empty());
+    }
+}
+
+#[cfg(test)]
+mod n070_tests {
+    use super::*;
+
+    fn calls(e: &Engine, addr: u32) -> Vec<Vec<u32>> {
+        e.call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|(a, _)| *a == addr)
+            .map(|(_, w)| w.clone())
+            .collect()
+    }
+
+    const GROUP_SLOT: u32 = 0x0e40_0000;
+
+    /// A renderer in mode 0 (so `00b6b330` answers false) whose slot +0xc8 answers 0x4444;
+    /// `00b6b100` answers `held`.
+    fn rig(count: u32, held: u32) -> (Engine, u32) {
+        let mut e = Engine::new();
+        e.map(0x011f_4000, 0x1000);
+        e.map(0x011f_a000, 0x1000);
+        e.set_global(TARGET_COUNT_011FA020, count);
+        let vtable = e.mem.alloc(0x200);
+        e.mem.set_u32(vtable + 0xc8, GROUP_SLOT);
+        let renderer = e.mem.alloc(0x210);
+        e.mem.set_u32(renderer, vtable);
+        e.set_global(GLOBAL_011F4748, renderer);
+        e.register(GROUP_SLOT, |_, _| 0x4444u32.into_ret());
+        e.register(FN_00B6B0B0, |_, _| Ret::default());
+        e.register_double(HELD_GROUP_00B6B100, move |_, _| held.into_ret());
+        e.register(BEGIN_USING_TARGET_00B6B2A0, |_, _| Ret::default());
+        e.call_log = Some(vec![]);
+        (e, renderer)
+    }
+
+    #[test]
+    fn fn_00b6b840_begins_the_held_group() {
+        let (mut e, renderer) = rig(1, 0x5555);
+        e.call(0x00b6_b840, &args![]);
+        assert_eq!(calls(&e, FN_00B6B0B0).len(), 1);
+        assert!(calls(&e, GROUP_SLOT).is_empty());
+        assert_eq!(
+            calls(&e, BEGIN_USING_TARGET_00B6B2A0),
+            vec![vec![renderer, 0x5555, 0]]
+        );
+    }
+
+    #[test]
+    fn fn_00b6b840_asks_the_renderer_without_a_held_group() {
+        let (mut e, renderer) = rig(2, 0);
+        e.call(0x00b6_b840, &args![]);
+        assert_eq!(calls(&e, GROUP_SLOT), vec![vec![renderer]]);
+        assert_eq!(
+            calls(&e, BEGIN_USING_TARGET_00B6B2A0),
+            vec![vec![renderer, 0x4444, 0]]
+        );
+    }
+
+    #[test]
+    fn fn_00b6b840_does_nothing_without_targets() {
+        let (mut e, _) = rig(0, 0x5555);
+        e.call(0x00b6_b840, &args![]);
+        assert_eq!(e.call_log.take().unwrap().len(), 1);
     }
 }

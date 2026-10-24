@@ -68,9 +68,33 @@ pub fn fn_00c5dcd0(e: &mut Engine, this: Ptr, object: u32) {
     });
 }
 
+/// `NiTPointerListBase<NiTPointerAllocator<unsigned int>,NiPointer<NiPSysModifier>>::RemoveAll`
+/// (`00e74d40`, engine map; `thiscall`), run on the list at +0xAC.
+const LIST_REMOVE_ALL: u32 = 0x00e7_4d40;
+
+// Translated from 00c5dcb0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`thiscall`, `RET 4`): stores the low 16 bits of its word at
+/// +0xBA.
+pub fn fn_00c5dcb0(e: &mut Engine, this: Ptr, value: u16) {
+    e.mem.set_u16(this.addr() + 0xba, value);
+}
+
+// Translated from 00c5de30 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`thiscall`): clears the 16-bit word at +0xB8 and the word at
+/// +0xC0, then empties the list at +0xAC (`00e74d40`).
+pub fn fn_00c5de30(e: &mut Engine, this: Ptr) {
+    e.mem.set_u16(this.addr() + 0xb8, 0);
+    e.mem.set_u32(this.addr() + 0xc0, 0);
+    e.call(LIST_REMOVE_ALL, &args![this.addr() + 0xac]);
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
-    vec![entry!(0x00c5_dcd0, fn_00c5dcd0(Ptr, u32))]
+    vec![
+        entry!(0x00c5_dcb0, fn_00c5dcb0(Ptr, u16)),
+        entry!(0x00c5_dcd0, fn_00c5dcd0(Ptr, u32)),
+        entry!(0x00c5_de30, fn_00c5de30(Ptr)),
+    ]
 }
 
 #[cfg(test)]
@@ -141,5 +165,29 @@ mod tests {
         let log = e.call_log.take().unwrap();
         assert_eq!(log.len(), 2);
         assert_eq!(log[1].0, LIST_ADD);
+    }
+}
+
+#[cfg(test)]
+mod n069_tests {
+    use super::*;
+
+    #[test]
+    fn the_word_store_and_the_reset() {
+        let mut e = Engine::new();
+        e.register(LIST_REMOVE_ALL, |_, _| Ret::default());
+        let this = e.mem.alloc(0xc4);
+        e.call(0x00c5_dcb0, &args![this, 0x1_2345u32]);
+        assert_eq!(e.mem.u16(this + 0xba), 0x2345);
+        assert_eq!(e.mem.u16(this + 0xbc), 0);
+        e.mem.set_u16(this + 0xb8, 7);
+        e.mem.set_u32(this + 0xc0, 9);
+        e.call_log = Some(vec![]);
+        e.call(0x00c5_de30, &args![this]);
+        let log = e.call_log.take().unwrap();
+        assert!(log.contains(&(LIST_REMOVE_ALL, vec![this + 0xac])));
+        assert_eq!(e.mem.u16(this + 0xb8), 0);
+        assert_eq!(e.mem.u32(this + 0xc0), 0);
+        assert_eq!(e.mem.u16(this + 0xba), 0x2345);
     }
 }

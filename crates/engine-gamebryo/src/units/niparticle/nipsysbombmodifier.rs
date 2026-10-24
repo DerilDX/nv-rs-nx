@@ -436,6 +436,185 @@ pub fn ni_p_sys_bomb_modifier_load_binary(
     });
 }
 
+use crate::units::niparticle::nipsysdata::{add_viewer_string, stream_write};
+
+/// `NiPSysModifier`'s `IsEqual` (`00c31830`), `SaveBinary` (`00c31950`)
+/// and `GetViewerStrings` (`00c319e0`) (Xbox PDB names; `thiscall`, one
+/// word).
+const MODIFIER_IS_EQUAL: u32 = 0x00c3_1830;
+const MODIFIER_SAVE_BINARY: u32 = 0x00c3_1950;
+const MODIFIER_GET_VIEWER_STRINGS: u32 = 0x00c3_19e0;
+/// `00439090` (unnamed; `thiscall` on a point, the other point; a nonzero
+/// answer counts as unequal here), `NiColor::SaveBinary` (`00a69780`) and
+/// `NiPoint3::GetViewerString` (`00a59af0`, a label) (Xbox PDB names;
+/// `thiscall` on the axis).
+const POINT_UNEQUAL: u32 = 0x0043_9090;
+const POINT_SAVE_BINARY: u32 = 0x00a6_9780;
+const POINT_GET_VIEWER_STRING: u32 = 0x00a5_9af0;
+/// `NiObject::IsEqual` (`+0x5C`) and `NiStream::SaveLinkID` (`+0x30`)
+/// slots (Xbox PDB).
+const IS_EQUAL_SLOT: u32 = 0x5c;
+const STREAM_SAVE_LINK_ID_SLOT: u32 = 0x30;
+/// `NiObjectNET`'s name (+8).
+const OBJECT_NAME: u32 = 0x8;
+/// `NiGetViewerString` (`00a7d330`, the text), `_ov9` (`00a7d550`: a label
+/// and a `float`) and `_ov11` (`00a7d5e0`: a label and a text) (Xbox PDB
+/// names; `cdecl`).
+const VIEWER_STRING: u32 = 0x00a7_d330;
+const VIEWER_STRING_FLOAT: u32 = 0x00a7_d550;
+const VIEWER_STRING_TEXT: u32 = 0x00a7_d5e0;
+/// `NiPSysBombModifier::ms_RTTI` (its name is the first word).
+const RTTI: u32 = 0x0120_2790;
+/// The labels "Bomb Object" (`010c02f4`), "Bomb Axis" (`010c02e8`), "Decay"
+/// (`010be0f0`), "DeltaV" (`010c02e0`), "Decay Type" (`010c02c0`) and
+/// "Symmetry Type" (`010c0290`).
+const LABEL_BOMB_OBJECT: u32 = 0x010c_02f4;
+const LABEL_BOMB_AXIS: u32 = 0x010c_02e8;
+const LABEL_DECAY: u32 = 0x010b_e0f0;
+const LABEL_DELTA_V: u32 = 0x010c_02e0;
+const LABEL_DECAY_TYPE: u32 = 0x010c_02c0;
+const LABEL_SYMMETRY_TYPE: u32 = 0x010c_0290;
+/// The texts: "None" (`0102909c`) for no bomb object; "NONE"
+/// (`0101a6c0`), "LINEAR" (`010c02cc`) and "EXPONENTIAL" (`010c02d4`) for
+/// decay types 0, 1 and 2; "SPHERICAL" (`010c02a0`), "CYLINDRICAL"
+/// (`010c02ac`) and "PLANAR" (`010c02b8`) for symmetry types 0, 1 and 2;
+/// "Unknown" (`0106f148`) for other values.
+const TEXT_NO_OBJECT: u32 = 0x0102_909c;
+const TEXT_DECAY_NONE: u32 = 0x0101_a6c0;
+const TEXT_LINEAR: u32 = 0x010c_02cc;
+const TEXT_EXPONENTIAL: u32 = 0x010c_02d4;
+const TEXT_SPHERICAL: u32 = 0x010c_02a0;
+const TEXT_CYLINDRICAL: u32 = 0x010c_02ac;
+const TEXT_PLANAR: u32 = 0x010c_02b8;
+const TEXT_UNKNOWN: u32 = 0x0106_f148;
+
+// Translated from 00c2eaf0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiPSysBombModifier::IsEqual` (Xbox PDB): `NiPSysModifier`'s; both or
+/// neither must have a bomb object, and two must be equal (this one's
+/// `IsEqual`, slot `+0x5C`, given the other's); equal axes (`00439090` on
+/// this one's answering 0); equal decay and delta-v (`FUCOMPP`: a NaN is
+/// unequal); the same decay and symmetry types.
+pub fn ni_p_sys_bomb_modifier_is_equal(
+    e: &mut Engine,
+    this: Ptr<NiPSysBombModifier>,
+    other: Ptr<NiPSysBombModifier>,
+) -> bool {
+    type M = NiPSysBombModifier;
+    if !e.call(MODIFIER_IS_EQUAL, &args![this, other]).bool() {
+        return false;
+    }
+    let ours = e.get(this, M::m_pkBombObj);
+    let theirs = e.get(other, M::m_pkBombObj);
+    if ours != 0 {
+        if theirs == 0 {
+            return false;
+        }
+        if !e.vcall(ours, IS_EQUAL_SLOT, &args![theirs]).bool() {
+            return false;
+        }
+    } else if theirs != 0 {
+        return false;
+    }
+    let axis = M::m_kBombAxis.off;
+    if e.call(
+        POINT_UNEQUAL,
+        &args![this.addr() + axis, other.addr() + axis],
+    )
+    .bool()
+    {
+        return false;
+    }
+    for field in [M::m_fDecay, M::m_fDeltaV] {
+        if x87_m32(e.get(other, field)) != x87_m32(e.get(this, field)) {
+            return false;
+        }
+    }
+    e.get(this, M::m_eDecayType) == e.get(other, M::m_eDecayType)
+        && e.get(this, M::m_eSymmType) == e.get(other, M::m_eSymmType)
+}
+
+// Translated from 00c2ec40 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiPSysBombModifier::SaveBinary` (Xbox PDB): `NiPSysModifier`'s, the
+/// bomb object's link id (`NiStream::SaveLinkID`), the axis
+/// (`NiColor::SaveBinary`), then the decay, delta-v, decay type and
+/// symmetry type (4 bytes each).
+pub fn ni_p_sys_bomb_modifier_save_binary(
+    e: &mut Engine,
+    this: Ptr<NiPSysBombModifier>,
+    stream: Ptr,
+) {
+    type M = NiPSysBombModifier;
+    e.call(MODIFIER_SAVE_BINARY, &args![this, stream]);
+    let bomb = e.get(this, M::m_pkBombObj);
+    e.vcall(stream.addr(), STREAM_SAVE_LINK_ID_SLOT, &args![bomb]);
+    let axis = this.addr() + M::m_kBombAxis.off;
+    e.call(POINT_SAVE_BINARY, &args![axis, stream]);
+    e.with_stack(4, |e, slot| {
+        for field in [M::m_fDecay, M::m_fDeltaV, M::m_eDecayType, M::m_eSymmType] {
+            let value = this.addr() + field.off;
+            stream_write(e, stream.addr(), value, 4, 4, slot.addr());
+        }
+    });
+}
+
+// Translated from 00c2ed00 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiPSysBombModifier::GetViewerStrings` (Xbox PDB): `NiPSysModifier`'s
+/// strings, the class name, the bomb object's name (its `NiObjectNET`
+/// name, or "None"), the axis (`NiPoint3::GetViewerString`), the decay,
+/// the delta-v, and the decay and symmetry types by name.
+pub fn ni_p_sys_bomb_modifier_get_viewer_strings(
+    e: &mut Engine,
+    this: Ptr<NiPSysBombModifier>,
+    strings: Ptr,
+) {
+    type M = NiPSysBombModifier;
+    let strings = strings.addr();
+    e.call(MODIFIER_GET_VIEWER_STRINGS, &args![this, strings]);
+    let name = e.global::<u32>(RTTI);
+    let string = e.call(VIEWER_STRING, &args![name]).u32();
+    add_viewer_string(e, strings, string);
+    let bomb = e.get(this, M::m_pkBombObj);
+    let text = if bomb != 0 {
+        e.mem.u32(bomb + OBJECT_NAME)
+    } else {
+        TEXT_NO_OBJECT
+    };
+    let string = e
+        .call(VIEWER_STRING_TEXT, &args![LABEL_BOMB_OBJECT, text])
+        .u32();
+    add_viewer_string(e, strings, string);
+    let axis = this.addr() + M::m_kBombAxis.off;
+    let string = e
+        .call(POINT_GET_VIEWER_STRING, &args![axis, LABEL_BOMB_AXIS])
+        .u32();
+    add_viewer_string(e, strings, string);
+    for (label, field) in [(LABEL_DECAY, M::m_fDecay), (LABEL_DELTA_V, M::m_fDeltaV)] {
+        let value = x87_quiet_bits(e.get(this, field));
+        let string = e.call(VIEWER_STRING_FLOAT, &args![label, value]).u32();
+        add_viewer_string(e, strings, string);
+    }
+    let text = match e.get(this, M::m_eDecayType) {
+        0 => TEXT_DECAY_NONE,
+        1 => TEXT_LINEAR,
+        2 => TEXT_EXPONENTIAL,
+        _ => TEXT_UNKNOWN,
+    };
+    let string = e
+        .call(VIEWER_STRING_TEXT, &args![LABEL_DECAY_TYPE, text])
+        .u32();
+    add_viewer_string(e, strings, string);
+    let text = match e.get(this, M::m_eSymmType) {
+        0 => TEXT_SPHERICAL,
+        1 => TEXT_CYLINDRICAL,
+        2 => TEXT_PLANAR,
+        _ => TEXT_UNKNOWN,
+    };
+    let string = e
+        .call(VIEWER_STRING_TEXT, &args![LABEL_SYMMETRY_TYPE, text])
+        .u32();
+    add_viewer_string(e, strings, string);
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -464,6 +643,21 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         ),
         entry!(0x00c2e540, ni_p_sys_bomb_modifier_get_r_t_t_i() -> u32),
         entry!(0x00c2e550, ni_p_sys_bomb_modifier_scalar_deleting_destructor(Ptr, u32) -> Ptr),
+        entry!(
+            0x00c2_eaf0,
+            ni_p_sys_bomb_modifier_is_equal(
+                Ptr<NiPSysBombModifier>,
+                Ptr<NiPSysBombModifier>,
+            ) -> bool
+        ),
+        entry!(
+            0x00c2_ec40,
+            ni_p_sys_bomb_modifier_save_binary(Ptr<NiPSysBombModifier>, Ptr)
+        ),
+        entry!(
+            0x00c2_ed00,
+            ni_p_sys_bomb_modifier_get_viewer_strings(Ptr<NiPSysBombModifier>, Ptr)
+        ),
     ]
 }
 
@@ -758,5 +952,160 @@ mod tests {
         assert_eq!(e.get(this, NiPSysBombModifier::m_fDeltaV), 2.0f32.to_bits());
         assert_eq!(e.get(this, NiPSysBombModifier::m_eDecayType), 1);
         assert_eq!(e.get(this, NiPSysBombModifier::m_eSymmType), 2);
+    }
+}
+
+#[cfg(test)]
+mod n064_tests {
+    use super::*;
+    use crate::units::niparticle::nipsysdata::viewer_test::{self, answer, calls_to, quiet};
+
+    type M = NiPSysBombModifier;
+
+    fn bomb(e: &mut Engine) -> Ptr<M> {
+        let this = e.new_object::<M>();
+        for (i, value) in [1.0f32, 2.0, 3.0, 0.5, 4.0].iter().enumerate() {
+            e.mem.set_f32(this.addr() + 0x1c + 4 * i as u32, *value);
+        }
+        e.set(this, M::m_eDecayType, 1);
+        e.set(this, M::m_eSymmType, 2);
+        this
+    }
+
+    #[test]
+    fn is_equal_compares_object_axis_and_settings() {
+        const EQUAL: u32 = 0x0000_e05c;
+        let mut e = Engine::new();
+        e.register(MODIFIER_IS_EQUAL, |_, _| answer(1));
+        e.register(POINT_UNEQUAL, |e, a| {
+            answer(u32::from(e.mem.bytes(a[0], 12) != e.mem.bytes(a[1], 12)))
+        });
+        e.register(EQUAL, |_, a| answer(u32::from(a[1] == 0x5555)));
+        let this = bomb(&mut e);
+        let other = bomb(&mut e);
+        let check = |e: &mut Engine| e.call(0x00c2_eaf0, &args![this, other]).bool();
+        e.call_log = Some(vec![]);
+        assert!(check(&mut e));
+        assert_eq!(
+            calls_to(&e, POINT_UNEQUAL),
+            vec![vec![this.addr() + 0x1c, other.addr() + 0x1c]]
+        );
+        let ours = viewer_test::object(&mut e, &[(0x5c, EQUAL)]);
+        e.set(this, M::m_pkBombObj, ours);
+        assert!(!check(&mut e));
+        e.set(other, M::m_pkBombObj, 0x5555);
+        assert!(check(&mut e));
+        e.set(other, M::m_pkBombObj, 0x5556);
+        assert!(!check(&mut e));
+        e.set(this, M::m_pkBombObj, 0);
+        assert!(!check(&mut e));
+        e.set(other, M::m_pkBombObj, 0);
+        e.mem.set_f32(other.addr() + 0x20, 9.0);
+        assert!(!check(&mut e));
+        e.mem.set_f32(other.addr() + 0x20, 2.0);
+        for field in [M::m_fDecay, M::m_fDeltaV] {
+            let kept = e.get(other, field);
+            e.set(other, field, f32::NAN.to_bits());
+            e.set(this, field, f32::NAN.to_bits());
+            assert!(!check(&mut e));
+            e.set(other, field, kept);
+            e.set(this, field, kept);
+        }
+        for field in [M::m_eDecayType, M::m_eSymmType] {
+            let kept = e.get(other, field);
+            e.set(other, field, 7);
+            assert!(!check(&mut e));
+            e.set(other, field, kept);
+        }
+        assert!(check(&mut e));
+        e.register(MODIFIER_IS_EQUAL, |_, _| answer(0));
+        assert!(!check(&mut e));
+    }
+
+    #[test]
+    fn save_binary_writes_link_axis_and_settings() {
+        const SAVE_LINK: u32 = 0x0000_e030;
+        let mut e = Engine::new();
+        quiet(
+            &mut e,
+            &[MODIFIER_SAVE_BINARY, POINT_SAVE_BINARY, SAVE_LINK],
+        );
+        let stream = viewer_test::out_stream(&mut e);
+        let vtable = e.mem.alloc(0x40);
+        e.mem.set_u32(stream, vtable);
+        e.mem.set_u32(vtable + 0x30, SAVE_LINK);
+        let this = bomb(&mut e);
+        e.set(this, M::m_pkBombObj, 0x6666);
+        e.call_log = Some(vec![]);
+        e.call(0x00c2_ec40, &args![this, stream]);
+        assert_eq!(calls_to(&e, SAVE_LINK), vec![vec![stream, 0x6666]]);
+        assert_eq!(
+            calls_to(&e, POINT_SAVE_BINARY),
+            vec![vec![this.addr() + 0x1c, stream]]
+        );
+        let mut bytes: Vec<u8> = [0.5f32, 4.0].iter().flat_map(|v| v.to_le_bytes()).collect();
+        bytes.extend(1u32.to_le_bytes());
+        bytes.extend(2u32.to_le_bytes());
+        assert_eq!(viewer_test::written(&e, stream), (bytes, 16));
+    }
+
+    #[test]
+    fn viewer_strings_name_object_axis_settings_and_types() {
+        let mut e = Engine::new();
+        quiet(&mut e, &[MODIFIER_GET_VIEWER_STRINGS]);
+        viewer_test::counting(
+            &mut e,
+            &[
+                VIEWER_STRING,
+                VIEWER_STRING_TEXT,
+                VIEWER_STRING_FLOAT,
+                POINT_GET_VIEWER_STRING,
+            ],
+        );
+        e.map(RTTI, 4);
+        e.set_global::<u32>(RTTI, 0x0100_0100);
+        let this = bomb(&mut e);
+        let cases = [
+            (0, TEXT_DECAY_NONE, TEXT_SPHERICAL),
+            (1, TEXT_LINEAR, TEXT_CYLINDRICAL),
+            (2, TEXT_EXPONENTIAL, TEXT_PLANAR),
+            (3, TEXT_UNKNOWN, TEXT_UNKNOWN),
+        ];
+        for (kind, decay, symmetry) in cases {
+            e.set(this, M::m_eDecayType, kind);
+            e.set(this, M::m_eSymmType, kind);
+            let strings = viewer_test::strings(&mut e, 4);
+            e.call_log = Some(vec![]);
+            e.call(0x00c2_ed00, &args![this, strings]);
+            assert_eq!(viewer_test::collected(&e, strings).len(), 7);
+            assert_eq!(
+                calls_to(&e, VIEWER_STRING_TEXT),
+                vec![
+                    vec![LABEL_BOMB_OBJECT, TEXT_NO_OBJECT],
+                    vec![LABEL_DECAY_TYPE, decay],
+                    vec![LABEL_SYMMETRY_TYPE, symmetry]
+                ]
+            );
+        }
+        assert_eq!(
+            calls_to(&e, VIEWER_STRING_FLOAT),
+            vec![
+                vec![LABEL_DECAY, 0.5f32.to_bits()],
+                vec![LABEL_DELTA_V, 4.0f32.to_bits()]
+            ]
+        );
+        assert_eq!(
+            calls_to(&e, POINT_GET_VIEWER_STRING),
+            vec![vec![this.addr() + 0x1c, LABEL_BOMB_AXIS]]
+        );
+        let object = e.mem.alloc(0x10);
+        e.mem.set_u32(object + 8, 0x0100_0110);
+        e.set(this, M::m_pkBombObj, object);
+        let strings = viewer_test::strings(&mut e, 4);
+        e.call(0x00c2_ed00, &args![this, strings]);
+        assert_eq!(
+            calls_to(&e, VIEWER_STRING_TEXT)[3],
+            vec![LABEL_BOMB_OBJECT, 0x0100_0110]
+        );
     }
 }

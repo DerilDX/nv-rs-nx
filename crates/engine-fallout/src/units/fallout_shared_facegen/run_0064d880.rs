@@ -112,6 +112,37 @@ pub fn fn_0064db50(e: &mut Engine, this: Ptr, count: u32, value: u32) {
     e.call(VECTOR_RESIZE, &args![this, count, value]);
 }
 
+/// `_invalid_parameter_noinfo` (`00ec7c56`).
+const INVALID_PARAMETER: u32 = 0x00ec_7c56;
+
+// Translated from 0064da80 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`thiscall` on pixel data, two words: the level and one not
+/// read): the width of `level` (the word table at `+0x54`).
+pub fn fn_0064da80(e: &mut Engine, this: u32, level: u32, _unused_1: u32) -> u32 {
+    let widths = e.mem.u32(this.wrapping_add(0x54));
+    e.mem.u32(widths.wrapping_add(level.wrapping_mul(4)))
+}
+
+// Translated from 0064daa0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`thiscall` on pixel data, two words: the level and one not
+/// read): the height of `level` (the word table at `+0x58`).
+pub fn fn_0064daa0(e: &mut Engine, this: u32, level: u32, _unused_1: u32) -> u32 {
+    let heights = e.mem.u32(this.wrapping_add(0x58));
+    e.mem.u32(heights.wrapping_add(level.wrapping_mul(4)))
+}
+
+// Translated from 0064db20 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map: the colour vector's checked `operator[]` (`thiscall`, one
+/// word): `_invalid_parameter_noinfo` when `index` is not below the size (`0064dc30`), then
+/// the element address `first + 16 * index` (the first pointer at `+0xc`).
+pub fn fn_0064db20(e: &mut Engine, this: Ptr, index: u32) -> u32 {
+    let size = e.call(VECTOR_SIZE, &args![this]).u32();
+    if index >= size {
+        e.call(INVALID_PARAMETER, &args![]);
+    }
+    (index << 4).wrapping_add(e.mem.u32(this.addr() + 0xc))
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -119,6 +150,9 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x0064_dac0, fn_0064dac0(u32, u32, u32) -> u32),
         entry!(0x0064_db00, fn_0064db00(Ptr) -> bool),
         entry!(0x0064_db50, fn_0064db50(Ptr, u32, u32)),
+        entry!(0x0064_da80, fn_0064da80(u32, u32, u32) -> u32),
+        entry!(0x0064_daa0, fn_0064daa0(u32, u32, u32) -> u32),
+        entry!(0x0064_db20, fn_0064db20(Ptr, u32) -> u32),
     ]
 }
 
@@ -237,5 +271,45 @@ mod tests {
         e.call(0x0064_d880, &args![this]);
         assert!(calls(&e, VECTOR_RESIZE).is_empty());
         assert_eq!(calls(&e, NI_POINTER_DESTRUCT).len(), 1);
+    }
+}
+
+#[cfg(test)]
+mod n063_tests {
+    use super::*;
+
+    #[test]
+    fn level_sizes_read_the_width_and_height_tables() {
+        let mut e = Engine::new();
+        let data = e.mem.alloc(0x60);
+        let widths = e.mem.alloc(8);
+        let heights = e.mem.alloc(8);
+        e.mem.set_u32(data + 0x54, widths);
+        e.mem.set_u32(data + 0x58, heights);
+        e.mem.set_u32(widths + 4, 64);
+        e.mem.set_u32(heights + 4, 32);
+        assert_eq!(e.call(0x0064_da80, &args![data, 1u32, 9u32]).u32(), 64);
+        assert_eq!(e.call(0x0064_daa0, &args![data, 1u32, 9u32]).u32(), 32);
+    }
+
+    #[test]
+    fn element_address_checks_the_index_against_the_size() {
+        let mut e = Engine::new();
+        e.register(VECTOR_SIZE, |_, _| Ret {
+            eax: 2,
+            ..Ret::default()
+        });
+        e.register(INVALID_PARAMETER, |_, _| Ret::default());
+        let vector = e.mem.alloc(0x18);
+        e.mem.set_u32(vector + 0xc, 0x4000);
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x0064_db20, &args![vector, 1u32]).u32(), 0x4010);
+        let log = e.call_log.take().unwrap();
+        assert!(log.iter().all(|c| c.0 != INVALID_PARAMETER));
+        // At the size: reported, and the address is still answered.
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x0064_db20, &args![vector, 2u32]).u32(), 0x4020);
+        let log = e.call_log.take().unwrap();
+        assert_eq!(log.iter().filter(|c| c.0 == INVALID_PARAMETER).count(), 1);
     }
 }

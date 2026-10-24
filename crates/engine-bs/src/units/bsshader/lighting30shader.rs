@@ -3112,9 +3112,394 @@ pub fn lighting30_shader_create_constant_maps(e: &mut Engine, this: Ptr) {
     }
 }
 
+// Translated from 00bbb7f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (unit `lighting30shader.cpp`), `thiscall`, no stack words: gives
+/// each of the 0x70 passes at `01200ec0` to `01201080` to `this`'s vtable slot +0x128.
+pub fn fn_00bbb7f0(e: &mut Engine, this: Ptr) {
+    let mut at = PASSES_01200EC0;
+    while (at as i32) < 0x0120_1080 {
+        let pass = e.global::<u32>(at);
+        e.vcall(this.addr(), 0x128, &args![pass]);
+        at += 4;
+    }
+}
+
+/// The pass picker `00c0bd40` (unnamed; `thiscall`, two words) and `00e7eed0` (unnamed;
+/// `thiscall` on the pass's +0x30, no stack words).
+const PICK_PASS_00C0BD40: u32 = 0x00c0_bd40;
+const STATES_00E7EED0: u32 = 0x00e7_eed0;
+
+// Translated from 00bbb820 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed (Ghidra made no function of it): slot 81 of the vtable `010ba0f8`, `thiscall`, two
+/// words: the pass `00c0bd40` picks for them (on `this`) becomes current (`0126f74c`), then
+/// `00e7eed0` on its +0x30; what that answers in EAX, EDX and ST0 is this function's result.
+pub fn fn_00bbb820(e: &mut Engine, this: Ptr, first: u32, second: u32) -> Ret {
+    let pass = e
+        .call(PICK_PASS_00C0BD40, &args![this, first, second])
+        .u32();
+    e.set_global(RENDER_STATE_0126F74C, pass);
+    let states = e.mem.u32(pass + 0x30);
+    e.call(STATES_00E7EED0, &args![states])
+}
+
+/// The uniform-form entry of [`fn_00bbb820`]: `this` and the two words; the last call's
+/// registers pass through.
+fn fn_00bbb820_entry(e: &mut Engine, a: &[u32]) -> Ret {
+    fn_00bbb820(e, Ptr::new(a[0]), a[1], a[2])
+}
+
+// Translated from 00bbc610 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (unit `lighting30shader.cpp`), `thiscall` (`this` not read), two
+/// words: clears the texture word (+8) of each stage of `pass` (stage count +0x18, array +0x24)
+/// from `first` on.
+pub fn fn_00bbc610(e: &mut Engine, _this: Ptr, pass: Ptr, first: u32) {
+    let pass = pass.addr();
+    let mut index = first;
+    while index < e.mem.u32(pass + 0x18) {
+        let stage = e.mem.u32(e.mem.u32(pass + 0x24).wrapping_add(4 * index));
+        if stage != 0 {
+            e.mem.set_u32(stage + 8, 0);
+        }
+        index += 1;
+    }
+}
+
+/// The skinning object (`01201090`), the renderer (`011f9508`) and its `00e6fe30` (unnamed;
+/// `thiscall`, five words), and the name `"BoneMatrix3"` (`010a1cac`).
+const SKIN_01201090: u32 = 0x0120_1090;
+const RENDERER_CALL_00E6FE30: u32 = 0x00e6_fe30;
+const NAME_BONE_MATRIX3_010A1CAC: u32 = 0x010a_1cac;
+
+// Translated from 00bbd000 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (unit `lighting30shader.cpp`), `thiscall`, eight words of which
+/// the second (a geometry: +0x20, +0x28), third (skin data: +4, the u16 +0x20) and seventh are
+/// read. With skin data, a null +0x38 and either the skinning object `01201090` with its byte
+/// +8 set or +0x34 equal to +0x70: the renderer's `00e6fe30(geometry, seventh, 0, 3, 1)`; then
+/// the current pass's (`0126f74c`) vertex shader (+0x5c) gets its slot +0x78 with an entry,
+/// the geometry's +0x28, the u16, the geometry's +0x20 and the skin data's +4. The entry is
+/// the skinning object, or with +0x34 equal to +0x70 what the map at +0x70 answers for
+/// `"BoneMatrix3"` (its slot +0x70, `NiD3DShaderConstantMap::GetEntry`'s slot, one word: the
+/// other four words were pushed before and stay for slot +0x78). Answers 0.
+pub fn fn_00bbd000(
+    e: &mut Engine,
+    this: Ptr,
+    _unused_0: u32,
+    geometry: Ptr,
+    skin: Ptr,
+    _unused_3: u32,
+    _unused_4: u32,
+    _unused_5: u32,
+    seventh: u32,
+    _unused_7: u32,
+) -> u32 {
+    let base = this.addr();
+    if skin.is_null() || e.mem.u32(base + 0x38) != 0 {
+        return 0;
+    }
+    let object = e.global::<u32>(SKIN_01201090);
+    let skinning = object != 0 && e.mem.u8(object + 8) != 0;
+    if !skinning && e.mem.u32(base + 0x34) != e.mem.u32(base + 0x70) {
+        return 0;
+    }
+    let renderer = e.global::<u32>(RENDERER_011F9508);
+    e.call(
+        RENDERER_CALL_00E6FE30,
+        &args![renderer, geometry, seventh, 0u32, 3u32, 1u32],
+    );
+    let map = e.mem.u32(base + 0x70);
+    let geometry = geometry.addr();
+    let word_28 = e.mem.u32(geometry + 0x28);
+    let word_20 = e.mem.u32(geometry + 0x20);
+    let bones = u32::from(e.mem.u16(skin.addr() + 0x20));
+    let skin_word = e.mem.u32(skin.addr() + 4);
+    let pass = e.global::<u32>(RENDER_STATE_0126F74C);
+    let shader = e.mem.u32(pass + 0x5c);
+    let entry = if e.mem.u32(base + 0x34) == map {
+        e.vcall(map, 0x70, &args![NAME_BONE_MATRIX3_010A1CAC]).u32()
+    } else {
+        e.global::<u32>(SKIN_01201090)
+    };
+    e.vcall(
+        shader,
+        0x78,
+        &args![entry, word_28, bones, word_20, skin_word],
+    );
+    0
+}
+
+/// `BSShaderManager::GetShader` (engine map, `00b55560`; `cdecl`, the shader index), the
+/// `InterlockedIncrement`/`InterlockedDecrement` import slots, the masks per pass index
+/// (`01200a28`, `01200868`), the flag bytes they set (`01200854` to `01200864`, `01200848` to
+/// `01200851`), the setting byte `011f941c` and the render-state helpers.
+const GET_SHADER_00B55560: u32 = 0x00b5_5560;
+const MASKS_01200A28: u32 = 0x0120_0a28;
+const MASKS_01200868: u32 = 0x0120_0868;
+const FLAGS_01200854: u32 = 0x0120_0854;
+const FLAGS_01200848: u32 = 0x0120_0848;
+const SETTING_011F941C: u32 = 0x011f_941c;
+
+/// The `NiPointer` at `object + to` set from `object + from` when they differ (old one
+/// released: count +4, slot +4 at 0; new one held).
+fn copy_shader_pointer(e: &mut Engine, object: u32, to: u32, from: u32) {
+    let old = e.mem.u32(object + to);
+    if old == e.mem.u32(object + from) {
+        return;
+    }
+    if old != 0 {
+        let left = e.call(IMPORT_INTERLOCKED_DECREMENT, &args![old + 4]).u32();
+        if left == 0 {
+            e.vcall(old, 4, &args![]);
+        }
+    }
+    let new = e.mem.u32(object + from);
+    e.mem.set_u32(object + to, new);
+    if new != 0 {
+        e.call(IMPORT_INTERLOCKED_INCREMENT, &args![new + 4]);
+    }
+}
+
+// Translated from 00bbd880 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (unit `lighting30shader.cpp`), `cdecl`, one word (the pass kind).
+/// With shader 0x1d (`GetShader`) and kind 0x1e0 or 0x1e1, its constant maps +0x30 and +0x34
+/// select +0x6c and +0x70 (`00c663d0`) and nothing more. Otherwise its `NiPointer`s +0x30 and
+/// +0x34 take +0x74 and +0x78, and the kind picks a pass index (10..15: 1..6, 0x2da: 0x68,
+/// 0x2db: 0x69, 0x2e0/0x2e1: 0x6a/0x6b, 0x2e6/0x2e7: 0x6c/0x6d, 0x2ec/0x2ed: 0x6e/0x6f, any
+/// other: kind - 0x178; the compiler's jump tables as `match` arms). For the 17 shaders at
+/// `01201080` the byte +8 (when set) and the bytes `01200854 + i` become bit `i + 1` of the
+/// index's mask at `01200a28`; for the 10 objects at `012010c4` and the bytes `01200848 + j`
+/// bit `j + 1` of the mask at `01200868`. Last the index's pass (`01200ec0`) gets render
+/// state 0xa8: 3 for kinds 0x1d3..0x1d6, 0xf for 0x1cc..0x1df, 7 for 0x179..0x1e1, else 0 (and
+/// 0 for kinds 10..15 or with bit 0 of `011f941c` set).
+pub fn fn_00bbd880(e: &mut Engine, kind: u32) {
+    let shader = e.call(GET_SHADER_00B55560, &args![0x1du32]).u32();
+    if shader != 0 && (kind == 0x1e0 || kind == 0x1e1) {
+        e.call(SELECT_MAP_00C663D0, &args![shader + 0x30, shader + 0x6c]);
+        e.call(SELECT_MAP_00C663D0, &args![shader + 0x34, shader + 0x70]);
+        return;
+    }
+    copy_shader_pointer(e, shader, 0x30, 0x74);
+    copy_shader_pointer(e, shader, 0x34, 0x78);
+    let index = match kind {
+        10 => 1,
+        11 => 2,
+        12 => 3,
+        13 => 4,
+        14 => 5,
+        15 => 6,
+        0x2da => 0x68,
+        0x2db => 0x69,
+        0x2e0 => 0x6a,
+        0x2e1 => 0x6b,
+        0x2e6 => 0x6c,
+        0x2e7 => 0x6d,
+        0x2ec => 0x6e,
+        0x2ed => 0x6f,
+        _ => kind.wrapping_sub(0x178),
+    };
+    let mut bit = 1u32;
+    for i in 0..0x11u32 {
+        let object = e.global::<u32>(SHADERS_01201080 + 4 * i);
+        if object != 0 {
+            let mask = e.global::<u32>(MASKS_01200A28.wrapping_add(index.wrapping_mul(4)));
+            e.mem
+                .set_u8(object + 8, u8::from(mask & bit.rotate_left(1) != 0));
+        }
+        bit = bit.rotate_left(1);
+        let mask = e.global::<u32>(MASKS_01200A28.wrapping_add(index.wrapping_mul(4)));
+        e.set_global(FLAGS_01200854 + i, u8::from(mask & bit != 0));
+    }
+    for j in 1..=10u32 {
+        let object = e.global::<u32>(FLAGS_012010C4 + 4 * (j - 1));
+        if object != 0 {
+            let mask = e.global::<u32>(MASKS_01200868.wrapping_add(index.wrapping_mul(4)));
+            e.mem.set_u8(object + 8, (mask >> j) as u8 & 1);
+        }
+        let mask = e.global::<u32>(MASKS_01200868.wrapping_add(index.wrapping_mul(4)));
+        e.set_global(FLAGS_01200848 + (j - 1), (mask >> j) as u8 & 1);
+    }
+    let value = if !(10..=15).contains(&kind) && e.global::<u8>(SETTING_011F941C) & 1 == 0 {
+        if kind.wrapping_sub(0x1d3) <= 3 {
+            3
+        } else if kind.wrapping_sub(0x1cc) <= 0x13 {
+            0xf
+        } else if kind.wrapping_sub(0x179) <= 0x68 {
+            7
+        } else {
+            0
+        }
+    } else {
+        0
+    };
+    let pass = e.global::<u32>(PASSES_01200EC0.wrapping_add(index.wrapping_mul(4)));
+    pass_render_state(e, pass, 0xa8, value);
+}
+
+/// The stage function `00e7de90` (unnamed; `thiscall` on a stage, one word), the index map
+/// `00ba5060` (unit `run_00ba3e30`, `cdecl`, one word), the render-state setters `00b97ff0`
+/// (three words) and `00b97f20` (three words) (unit `bsrenderstate_xenon.cpp`, `cdecl`) and
+/// the default textures `011f9510`, `011f9518` and `011f952c`.
+const STAGE_SET_00E7DE90: u32 = 0x00e7_de90;
+const INDEX_MAP_00BA5060: u32 = 0x00ba_5060;
+const RENDER_STATE_00B97FF0: u32 = 0x00b9_7ff0;
+const RENDER_STATE_00B97F20: u32 = 0x00b9_7f20;
+const TEXTURE_011F9510: u32 = 0x011f_9510;
+const TEXTURE_011F9518: u32 = 0x011f_9518;
+const TEXTURE_011F952C: u32 = 0x011f_952c;
+
+// Translated from 00bbdcd0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (unit `lighting30shader.cpp`), `thiscall`, two words (a geometry,
+/// a pass). With the geometry's object +0xdc (O): stage 0 takes the texture of the geometry's
+/// `+0xb0` (when null `011f9518` with bit 7 of the geometry's +0x20, else `011f9510`), stage 1
+/// O's +8 (`011f952c` when null), each with `00e7de90(3)`; stages 2 on are cleared; then
+/// `00b97ff0` with the index maps (`00ba5060`) of O's +0x5c and +0x60 and 0, and `this`'s
+/// slot +0x108.
+pub fn fn_00bbdcd0(e: &mut Engine, this: Ptr, geometry: Ptr, pass: Ptr) {
+    let geometry = geometry.addr();
+    let object = e.mem.u32(geometry + 0xdc);
+    if object == 0 {
+        return;
+    }
+    let pass = pass.addr();
+    let stage = e.mem.u32(e.mem.u32(pass + 0x24));
+    let mut texture = e.mem.u32(e.mem.u32(geometry + 0xb0));
+    if texture == 0 {
+        texture = if e.mem.u32(geometry + 0x20) & 0x80 != 0 {
+            e.global::<u32>(TEXTURE_011F9518)
+        } else {
+            e.global::<u32>(TEXTURE_011F9510)
+        };
+    }
+    e.mem.set_u32(stage + 8, texture);
+    e.call(STAGE_SET_00E7DE90, &args![stage, 3u32]);
+    let own = e.mem.u32(object + 8);
+    let stage = e.mem.u32(e.mem.u32(pass + 0x24) + 4);
+    let texture = if own != 0 {
+        own
+    } else {
+        e.global::<u32>(TEXTURE_011F952C)
+    };
+    e.mem.set_u32(stage + 8, texture);
+    e.call(STAGE_SET_00E7DE90, &args![stage, 3u32]);
+    fn_00bbc610(e, Ptr::NULL, Ptr::new(pass), 2);
+    let second = e.mem.u32(object + 0x60);
+    let second = e.call(INDEX_MAP_00BA5060, &args![second]).u32();
+    let first = e.mem.u32(object + 0x5c);
+    let first = e.call(INDEX_MAP_00BA5060, &args![first]).u32();
+    e.call(RENDER_STATE_00B97FF0, &args![first, second, 0u32]);
+    e.vcall(this.addr(), 0x108, &args![]);
+}
+
+// Translated from 00bbdda0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (unit `lighting30shader.cpp`), `thiscall`, two words (a geometry,
+/// a pass). With the geometry's object +0xdc (O): stage 0 takes O's +0x6c (`011f952c` when
+/// null) with `00e7de90(3)`, stages 1 on are cleared, `this`'s slot +0x108 runs and
+/// `00b97f20(4, O's +0x70, 0)`.
+pub fn fn_00bbdda0(e: &mut Engine, this: Ptr, geometry: Ptr, pass: Ptr) {
+    let object = e.mem.u32(geometry.addr() + 0xdc);
+    if object == 0 {
+        return;
+    }
+    let pass = pass.addr();
+    let own = e.mem.u32(object + 0x6c);
+    let stage = e.mem.u32(e.mem.u32(pass + 0x24));
+    let texture = if own != 0 {
+        own
+    } else {
+        e.global::<u32>(TEXTURE_011F952C)
+    };
+    e.mem.set_u32(stage + 8, texture);
+    e.call(STAGE_SET_00E7DE90, &args![stage, 3u32]);
+    fn_00bbc610(e, Ptr::NULL, Ptr::new(pass), 1);
+    e.vcall(this.addr(), 0x108, &args![]);
+    let value = e.mem.u32(object + 0x70);
+    e.call(RENDER_STATE_00B97F20, &args![4u32, value, 0u32]);
+}
+
+/// What `00bbde20` writes: the light constants `01200be8` to `01200c1c` and the fog constants
+/// `01200c28` to `01200c44`; `BSShaderManager::GetFogProperty` (engine map, `00b55520`,
+/// `cdecl`, the fog kind byte `011f91c4`).
+const LIGHT_01200BE8: u32 = 0x0120_0be8;
+const LIGHT_01200BF8: u32 = 0x0120_0bf8;
+const LIGHT_01200C18: u32 = 0x0120_0c18;
+const FOG_01200C28: u32 = 0x0120_0c28;
+const GET_FOG_PROPERTY_00B55520: u32 = 0x00b5_5520;
+const FOG_KIND_011F91C4: u32 = 0x011f_91c4;
+
+// Translated from 00bbde20 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (vtable `010ba0f8`'s slot at `010ba15c`), `thiscall`, three words
+/// (a flag word, a geometry, one not read). With a geometry: its object +0xdc, when set, gives
+/// the eight words +0xc to +0x28 to `01200bf8`, the `float`s +0x4c, +0x50 to `01200be8` and
+/// +0x54 to `01200c18`, 1.0 to `01200c1c`; the fog constants `01200c28` to `01200c44` are
+/// cleared; with the flag word and the fog property (kind `011f91c4`) whose end (+0x30) or
+/// start (+0x2c) is not 0 (`FUCOM`; NaN counts as not 0) they become (colour +0x20 to +0x28, 0)
+/// and (end, end - start, power +0x60, 0).
+pub fn fn_00bbde20(e: &mut Engine, _this: Ptr, flag: u32, geometry: Ptr, _unused_2: u32) {
+    if geometry.is_null() {
+        return;
+    }
+    let object = e.mem.u32(geometry.addr() + 0xdc);
+    if object != 0 {
+        for index in 0..8u32 {
+            let word = e.mem.u32(object + 0xc + 4 * index);
+            e.set_global(LIGHT_01200BF8 + 4 * index, word);
+        }
+        for (offset, target) in [
+            (0x4cu32, LIGHT_01200BE8),
+            (0x50, LIGHT_01200BE8 + 4),
+            (0x54, LIGHT_01200C18),
+        ] {
+            let word = x87_quiet_bits(e.mem.u32(object + offset));
+            e.set_global(target, word);
+        }
+        e.set_global(LIGHT_01200C18 + 4, x87_store32(1.0));
+    }
+    for index in 0..8u32 {
+        e.set_global(FOG_01200C28 + 4 * index, x87_store32(0.0));
+    }
+    if flag == 0 {
+        return;
+    }
+    let kind = u32::from(e.global::<u8>(FOG_KIND_011F91C4));
+    let fog = e.call(GET_FOG_PROPERTY_00B55520, &args![kind]).u32();
+    if fog == 0 {
+        return;
+    }
+    let start = x87_load32(e.mem.u32(fog + 0x2c));
+    let end = x87_load32(e.mem.u32(fog + 0x30));
+    let power = x87_quiet_bits(e.mem.u32(fog + 0x60));
+    if end == 0.0 && start == 0.0 {
+        return;
+    }
+    let colour = [0x20u32, 0x24, 0x28].map(|offset| e.mem.u32(fog + offset));
+    let words = [
+        x87_store32(end),
+        x87_store32(x87_sub(end, start)),
+        power,
+        x87_store32(0.0),
+    ];
+    for (index, word) in words.iter().enumerate() {
+        e.set_global(FOG_01200C28 + 0x10 + 4 * index as u32, *word);
+    }
+    for (index, word) in colour.iter().enumerate() {
+        e.set_global(FOG_01200C28 + 4 * index as u32, x87_quiet_bits(*word));
+    }
+    e.set_global(FOG_01200C28 + 0xc, x87_store32(0.0));
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x00bb_b7f0, fn_00bbb7f0(Ptr)),
+        (0x00bb_b820, fn_00bbb820_entry as AbiFn),
+        entry!(0x00bb_c610, fn_00bbc610(Ptr, Ptr, u32)),
+        entry!(
+            0x00bb_d000,
+            fn_00bbd000(Ptr, u32, Ptr, Ptr, u32, u32, u32, u32, u32) -> u32
+        ),
+        entry!(0x00bb_d880, fn_00bbd880(u32)),
+        entry!(0x00bb_dcd0, fn_00bbdcd0(Ptr, Ptr, Ptr)),
+        entry!(0x00bb_dda0, fn_00bbdda0(Ptr, Ptr, Ptr)),
+        entry!(0x00bb_de20, fn_00bbde20(Ptr, u32, Ptr, u32)),
         entry!(0x00bb_c640, fn_00bbc640(Ptr, Ptr, Ptr, Ptr, Ptr) -> Ptr),
         entry!(0x00bb_d0d0, fn_00bbd0d0() -> Ptr),
         entry!(0x00bb_b790, fn_00bbb790(Ptr, u8)),
@@ -4624,5 +5009,356 @@ mod b056_set_up_tests {
         // Made already: only the empty slots are filled again.
         e.call(0x00bb_f5a0, &args![this]);
         assert_eq!(calls(&e, CONSTANT_MAP_CONSTRUCT).len(), 6);
+    }
+}
+
+#[cfg(test)]
+mod n070_tests {
+    use super::*;
+
+    fn calls(e: &Engine, addr: u32) -> Vec<Vec<u32>> {
+        e.call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|(a, _)| *a == addr)
+            .map(|(_, w)| w.clone())
+            .collect()
+    }
+
+    /// Slot doubles: `SLOTS + offset`.
+    const SLOTS: u32 = 0x0ed0_0000;
+
+    fn object(e: &mut Engine, size: u32) -> u32 {
+        let vtable = e.mem.alloc(0x140);
+        for offset in (0..0x140u32).step_by(4) {
+            e.mem.set_u32(vtable + offset, SLOTS + offset);
+        }
+        let object = e.mem.alloc(size);
+        e.mem.set_u32(object, vtable);
+        object
+    }
+
+    fn rig() -> Engine {
+        let mut e = Engine::new();
+        for page in [0x0120_0000u32, 0x0120_1000, 0x011f_9000, 0x0126_f000] {
+            e.map(page, 0x1000);
+        }
+        for offset in (0..0x140u32).step_by(4) {
+            e.register(SLOTS + offset, |_, _| Ret::default());
+        }
+        e.register(IMPORT_INTERLOCKED_INCREMENT, |e, a| {
+            let v = e.mem.u32(a[0]).wrapping_add(1);
+            e.mem.set_u32(a[0], v);
+            v.into_ret()
+        });
+        e.register(IMPORT_INTERLOCKED_DECREMENT, |e, a| {
+            let v = e.mem.u32(a[0]).wrapping_sub(1);
+            e.mem.set_u32(a[0], v);
+            v.into_ret()
+        });
+        e.call_log = Some(vec![]);
+        e
+    }
+
+    /// A pass with `count` stages.
+    fn pass(e: &mut Engine, count: u32) -> (u32, Vec<u32>) {
+        let stages: Vec<u32> = (0..count)
+            .map(|_| {
+                let stage = e.mem.alloc(0x10);
+                e.mem.set_u32(stage + 8, 0x99);
+                stage
+            })
+            .collect();
+        let array = e.mem.alloc(4 * count);
+        for (i, stage) in stages.iter().enumerate() {
+            e.mem.set_u32(array + 4 * i as u32, *stage);
+        }
+        let pass = e.mem.alloc(0x40);
+        e.mem.set_u32(pass + 0x18, count);
+        e.mem.set_u32(pass + 0x24, array);
+        (pass, stages)
+    }
+
+    #[test]
+    fn fn_00bbb7f0_gives_the_passes_to_slot_0x128() {
+        let mut e = rig();
+        for i in 0..0x70u32 {
+            e.set_global(PASSES_01200EC0 + 4 * i, 0x100 + i);
+        }
+        let this = object(&mut e, 4);
+        e.call(0x00bb_b7f0, &args![this]);
+        let given: Vec<u32> = calls(&e, SLOTS + 0x128).iter().map(|a| a[1]).collect();
+        assert_eq!(given, (0x100..0x170).collect::<Vec<u32>>());
+    }
+
+    #[test]
+    fn fn_00bbb820_makes_the_picked_pass_current() {
+        let mut e = rig();
+        let pass = e.mem.alloc(0x40);
+        e.mem.set_u32(pass + 0x30, 0x3030);
+        e.set_global(0x0120_0f00, pass);
+        e.register(PICK_PASS_00C0BD40, |e, _| e.mem.u32(0x0120_0f00).into_ret());
+        e.register(STATES_00E7EED0, |_, _| 7u32.into_ret());
+        assert_eq!(e.call(0x00bb_b820, &args![0x10u32, 1u32, 2u32]).u32(), 7);
+        assert_eq!(calls(&e, PICK_PASS_00C0BD40), vec![vec![0x10, 1, 2]]);
+        assert_eq!(e.global::<u32>(RENDER_STATE_0126F74C), pass);
+        assert_eq!(calls(&e, STATES_00E7EED0), vec![vec![0x3030]]);
+    }
+
+    #[test]
+    fn fn_00bbc610_clears_stages_from_the_first() {
+        let mut e = rig();
+        let (pass, stages) = pass(&mut e, 4);
+        let array = e.mem.u32(pass + 0x24);
+        e.mem.set_u32(array + 8, 0);
+        e.call(0x00bb_c610, &args![0u32, pass, 1u32]);
+        assert_eq!(e.mem.u32(stages[0] + 8), 0x99);
+        assert_eq!(e.mem.u32(stages[1] + 8), 0);
+        assert_eq!(e.mem.u32(stages[3] + 8), 0);
+        assert_eq!(e.mem.u32(stages[2] + 8), 0x99);
+    }
+
+    #[test]
+    fn fn_00bbd000_sets_the_bone_constants() {
+        let mut e = rig();
+        e.register(RENDERER_CALL_00E6FE30, |_, _| Ret::default());
+        e.register(SLOTS + 0x70, |_, _| 0x7070u32.into_ret());
+        e.set_global(RENDERER_011F9508, 0x9508u32);
+        let shader = object(&mut e, 4);
+        let pass = e.mem.alloc(0x60);
+        e.mem.set_u32(pass + 0x5c, shader);
+        e.set_global(RENDER_STATE_0126F74C, pass);
+        let map = object(&mut e, 4);
+        let this = e.mem.alloc(0x80);
+        e.mem.set_u32(this + 0x34, map);
+        e.mem.set_u32(this + 0x70, map);
+        let geometry = e.mem.alloc(0x30);
+        e.mem.set_u32(geometry + 0x20, 0x20);
+        e.mem.set_u32(geometry + 0x28, 0x28);
+        let skin = e.mem.alloc(0x24);
+        e.mem.set_u32(skin + 4, 0x44);
+        e.mem.set_u16(skin + 0x20, 3);
+        let words = |geometry: u32, skin: u32| {
+            args![this, 0u32, geometry, skin, 0u32, 0u32, 0u32, 0x77u32, 0u32]
+        };
+        assert_eq!(e.call(0x00bb_d000, &words(geometry, skin)).u32(), 0);
+        assert_eq!(
+            calls(&e, RENDERER_CALL_00E6FE30),
+            vec![vec![0x9508, geometry, 0x77, 0, 3, 1]]
+        );
+        assert_eq!(
+            calls(&e, SLOTS + 0x70),
+            vec![vec![map, NAME_BONE_MATRIX3_010A1CAC]]
+        );
+        assert_eq!(
+            calls(&e, SLOTS + 0x78),
+            vec![vec![shader, 0x7070, 0x28, 3, 0x20, 0x44]]
+        );
+        // A set skinning object with its byte: the object is the entry.
+        let skinning = e.mem.alloc(0xc);
+        e.mem.set_u8(skinning + 8, 1);
+        e.set_global(SKIN_01201090, skinning);
+        e.mem.set_u32(this + 0x34, 0);
+        e.call(0x00bb_d000, &words(geometry, skin));
+        assert_eq!(calls(&e, SLOTS + 0x78)[1][1], skinning);
+        // Neither: nothing.
+        e.mem.set_u8(skinning + 8, 0);
+        e.call(0x00bb_d000, &words(geometry, skin));
+        assert_eq!(calls(&e, SLOTS + 0x78).len(), 2);
+        // No skin data or +0x38 set: nothing.
+        e.mem.set_u8(skinning + 8, 1);
+        e.call(0x00bb_d000, &words(geometry, 0));
+        e.mem.set_u32(this + 0x38, 1);
+        e.call(0x00bb_d000, &words(geometry, skin));
+        assert_eq!(calls(&e, SLOTS + 0x78).len(), 2);
+    }
+
+    #[test]
+    fn fn_00bbd880_selects_maps_for_kinds_0x1e0_and_0x1e1() {
+        let mut e = rig();
+        let shader = e.mem.alloc(0x80);
+        e.set_global(0x0120_0f00, shader);
+        e.register(GET_SHADER_00B55560, |e, _| {
+            e.mem.u32(0x0120_0f00).into_ret()
+        });
+        e.register(SELECT_MAP_00C663D0, |_, _| Ret::default());
+        e.call(0x00bb_d880, &args![0x1e1u32]);
+        assert_eq!(
+            calls(&e, SELECT_MAP_00C663D0),
+            vec![
+                vec![shader + 0x30, shader + 0x6c],
+                vec![shader + 0x34, shader + 0x70]
+            ]
+        );
+        assert_eq!(calls(&e, GET_SHADER_00B55560), vec![vec![0x1d]]);
+    }
+
+    #[test]
+    fn fn_00bbd880_sets_flags_and_the_render_state() {
+        let mut e = rig();
+        e.register(NEW_RENDER_STATES_00E7F5D0, |e, _| {
+            e.mem.alloc(0x10).into_ret()
+        });
+        e.register(SET_RENDER_STATE_00E7F430, |_, _| Ret::default());
+        let shader = e.mem.alloc(0x80);
+        let held = object(&mut e, 8);
+        e.mem.set_u32(held + 4, 1);
+        e.mem.set_u32(shader + 0x30, held);
+        let new = object(&mut e, 8);
+        e.mem.set_u32(shader + 0x74, new);
+        e.set_global(0x0120_0f00, shader);
+        e.register(GET_SHADER_00B55560, |e, _| {
+            e.mem.u32(0x0120_0f00).into_ret()
+        });
+        // Kind 0x1d4: index 0x5c, render state 3.
+        let index = 0x1d4u32 - 0x178;
+        e.set_global(MASKS_01200A28 + 4 * index, 0b100u32);
+        e.set_global(MASKS_01200868 + 4 * index, 0b10u32);
+        let flagged = e.mem.alloc(0xc);
+        e.set_global(SHADERS_01201080 + 4, flagged);
+        let other = e.mem.alloc(0xc);
+        e.mem.set_u8(other + 8, 9);
+        e.set_global(FLAGS_012010C4, other);
+        let pass = e.mem.alloc(0x40);
+        e.set_global(PASSES_01200EC0 + 4 * index, pass);
+        e.call(0x00bb_d880, &args![0x1d4u32]);
+        assert_eq!(e.mem.u32(shader + 0x30), new);
+        assert_eq!(calls(&e, SLOTS + 4), vec![vec![held]]);
+        assert_eq!(e.mem.u32(new + 4), 1);
+        // Bit 2 belongs to shader 1.
+        assert_eq!(e.mem.u8(flagged + 8), 1);
+        assert_eq!(e.global::<u8>(FLAGS_01200854 + 1), 1);
+        assert_eq!(e.global::<u8>(FLAGS_01200854), 0);
+        assert_eq!(e.mem.u8(other + 8), 1);
+        assert_eq!(e.global::<u8>(FLAGS_01200848), 1);
+        let block = e.mem.u32(pass + 0x30);
+        assert_eq!(
+            calls(&e, SET_RENDER_STATE_00E7F430),
+            vec![vec![block, 0xa8, 3, 1]]
+        );
+        // Kind 12: index 3, state 0; kind 0x1d0: 0xf; kind 0x180: 7; kind 0x2ec: index 0x6e, 0.
+        for (kind, index, state) in [
+            (12u32, 3u32, 0u32),
+            (0x1d0, 0x58, 0xf),
+            (0x180, 8, 7),
+            (0x2ec, 0x6e, 0),
+        ] {
+            let pass = e.mem.alloc(0x40);
+            e.set_global(PASSES_01200EC0 + 4 * index, pass);
+            e.call(0x00bb_d880, &args![kind]);
+            let block = e.mem.u32(pass + 0x30);
+            assert_eq!(
+                calls(&e, SET_RENDER_STATE_00E7F430).last().unwrap(),
+                &vec![block, 0xa8, state, 1]
+            );
+        }
+        // The setting bit forces 0.
+        e.set_global(SETTING_011F941C, 1u8);
+        let pass = e.mem.alloc(0x40);
+        e.set_global(PASSES_01200EC0 + 4 * 8, pass);
+        e.call(0x00bb_d880, &args![0x180u32]);
+        assert_eq!(calls(&e, SET_RENDER_STATE_00E7F430).last().unwrap()[2], 0);
+    }
+
+    fn textured(e: &mut Engine) -> (u32, u32) {
+        let object = e.mem.alloc(0x74);
+        let textures = e.mem.alloc(4);
+        let geometry = e.mem.alloc(0xe0);
+        e.mem.set_u32(geometry + 0xb0, textures);
+        e.mem.set_u32(geometry + 0xdc, object);
+        (geometry, object)
+    }
+
+    #[test]
+    fn fn_00bbdcd0_sets_the_two_textures() {
+        let mut e = rig();
+        e.register(STAGE_SET_00E7DE90, |_, _| Ret::default());
+        e.register(RENDER_STATE_00B97FF0, |_, _| Ret::default());
+        e.register(INDEX_MAP_00BA5060, |_, a| (a[0] + 100).into_ret());
+        e.set_global(TEXTURE_011F9510, 0x9510u32);
+        e.set_global(TEXTURE_011F9518, 0x9518u32);
+        e.set_global(TEXTURE_011F952C, 0x952cu32);
+        let this = object(&mut e, 4);
+        let (geometry, object) = textured(&mut e);
+        e.mem.set_u32(object + 0x5c, 1);
+        e.mem.set_u32(object + 0x60, 2);
+        let (pass, stages) = pass(&mut e, 3);
+        e.call(0x00bb_dcd0, &args![this, geometry, pass]);
+        assert_eq!(e.mem.u32(stages[0] + 8), 0x9510);
+        assert_eq!(e.mem.u32(stages[1] + 8), 0x952c);
+        assert_eq!(e.mem.u32(stages[2] + 8), 0);
+        assert_eq!(calls(&e, RENDER_STATE_00B97FF0), vec![vec![101, 102, 0]]);
+        assert_eq!(calls(&e, SLOTS + 0x108), vec![vec![this]]);
+        // Bit 7 of +0x20 picks the other default; own textures win.
+        e.mem.set_u32(geometry + 0x20, 0x80);
+        e.call(0x00bb_dcd0, &args![this, geometry, pass]);
+        assert_eq!(e.mem.u32(stages[0] + 8), 0x9518);
+        e.mem.set_u32(e.mem.u32(geometry + 0xb0), 0x1111);
+        e.mem.set_u32(object + 8, 0x2222);
+        e.call(0x00bb_dcd0, &args![this, geometry, pass]);
+        assert_eq!(e.mem.u32(stages[0] + 8), 0x1111);
+        assert_eq!(e.mem.u32(stages[1] + 8), 0x2222);
+        // Without the object: nothing.
+        e.mem.set_u32(geometry + 0xdc, 0);
+        e.call(0x00bb_dcd0, &args![this, geometry, pass]);
+        assert_eq!(calls(&e, SLOTS + 0x108).len(), 3);
+    }
+
+    #[test]
+    fn fn_00bbdda0_sets_the_texture_and_state() {
+        let mut e = rig();
+        e.register(STAGE_SET_00E7DE90, |_, _| Ret::default());
+        e.register(RENDER_STATE_00B97F20, |_, _| Ret::default());
+        e.set_global(TEXTURE_011F952C, 0x952cu32);
+        let this = object(&mut e, 4);
+        let (geometry, object) = textured(&mut e);
+        e.mem.set_u32(object + 0x70, 0x70);
+        let (pass, stages) = pass(&mut e, 2);
+        e.call(0x00bb_dda0, &args![this, geometry, pass]);
+        assert_eq!(e.mem.u32(stages[0] + 8), 0x952c);
+        assert_eq!(e.mem.u32(stages[1] + 8), 0);
+        assert_eq!(calls(&e, RENDER_STATE_00B97F20), vec![vec![4, 0x70, 0]]);
+        e.mem.set_u32(object + 0x6c, 0x6c6c);
+        e.call(0x00bb_dda0, &args![this, geometry, pass]);
+        assert_eq!(e.mem.u32(stages[0] + 8), 0x6c6c);
+    }
+
+    #[test]
+    fn fn_00bbde20_sets_light_and_fog_constants() {
+        let mut e = rig();
+        let (geometry, object) = textured(&mut e);
+        for index in 0..8u32 {
+            e.mem.set_u32(object + 0xc + 4 * index, 0x10 + index);
+        }
+        e.mem.set_u32(object + 0x4c, 0x7f80_0001);
+        e.mem.set_f32(object + 0x54, 2.0);
+        let fog = e.mem.alloc(0x64);
+        e.mem.set_f32(fog + 0x2c, 10.0);
+        e.mem.set_f32(fog + 0x30, 30.0);
+        e.mem.set_f32(fog + 0x20, 0.5);
+        e.mem.set_f32(fog + 0x60, 2.0);
+        e.set_global(0x0120_0f00, fog);
+        e.register(GET_FOG_PROPERTY_00B55520, |e, _| {
+            e.mem.u32(0x0120_0f00).into_ret()
+        });
+        e.set_global(FOG_01200C28 + 0x18, 5u32);
+        e.call(0x00bb_de20, &args![0u32, 0u32, geometry, 0u32]);
+        assert_eq!(e.global::<u32>(LIGHT_01200BF8 + 0x1c), 0x17);
+        assert_eq!(e.global::<u32>(LIGHT_01200BE8), 0x7fc0_0001);
+        assert_eq!(e.global::<f32>(LIGHT_01200C18), 2.0);
+        assert_eq!(e.global::<f32>(LIGHT_01200C18 + 4), 1.0);
+        assert_eq!(e.global::<u32>(FOG_01200C28 + 0x18), 0);
+        assert!(calls(&e, GET_FOG_PROPERTY_00B55520).is_empty());
+        e.call(0x00bb_de20, &args![0u32, 1u32, geometry, 0u32]);
+        let fogs: Vec<f32> = (0..8)
+            .map(|i| e.global::<f32>(FOG_01200C28 + 4 * i))
+            .collect();
+        assert_eq!(fogs, vec![0.5, 0.0, 0.0, 0.0, 30.0, 20.0, 2.0, 0.0]);
+        // No range: the cleared constants stay.
+        e.mem.set_f32(fog + 0x2c, 0.0);
+        e.mem.set_f32(fog + 0x30, 0.0);
+        e.call(0x00bb_de20, &args![0u32, 1u32, geometry, 0u32]);
+        assert_eq!(e.global::<f32>(FOG_01200C28 + 0x10), 0.0);
     }
 }

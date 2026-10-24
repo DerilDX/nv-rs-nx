@@ -304,9 +304,172 @@ pub fn bs_psys_simple_color_modifier_scalar_deleting_destructor(
     this
 }
 
+/// `NiPSysModifier::SaveBinary` (`00c31950`), `NiPSysModifier::IsEqual` (`00c31830`) and
+/// `NiPSysModifier::GetViewerStrings` (`00c319e0`), `thiscall` with one word.
+const PSYS_MODIFIER_SAVE_BINARY: u32 = 0x00c3_1950;
+const PSYS_MODIFIER_IS_EQUAL: u32 = 0x00c3_1830;
+const PSYS_MODIFIER_GET_VIEWER_STRINGS: u32 = 0x00c3_19e0;
+/// `NiStreamSaveBinary<float>` (`00a3da50`, `cdecl`, `(stream, &float)`).
+const STREAM_SAVE_FLOAT: u32 = 0x00a3_da50;
+/// `NiColorA::SaveBinary` (`00a698a0`, `thiscall` on the colour, `(stream)`), the colour
+/// comparison `004a4cc0` (`thiscall` on a colour, `(&other)`, answers a byte) and
+/// `NiColorA::GetViewerString` (`00a69720`, `thiscall` on the colour, `(label)`).
+const COLOR_A_SAVE_BINARY: u32 = 0x00a6_98a0;
+const COLOR_A_EQUAL: u32 = 0x004a_4cc0;
+const COLOR_A_GET_VIEWER_STRING: u32 = 0x00a6_9720;
+/// `NiGetViewerString` (`00a7d330`, `(name)`), its `(label, float)` form `00a7d550` and the
+/// viewer-string array's add (`0096a610`, `thiscall`, `(&string)`).
+const NI_GET_VIEWER_STRING: u32 = 0x00a7_d330;
+const NI_GET_VIEWER_STRING_FLOAT: u32 = 0x00a7_d550;
+const VIEWER_STRINGS_ADD: u32 = 0x0096_a610;
+/// The class's `ms_RTTI` (its first word is the class name) and the double the
+/// percentages are shown multiplied by (`01017a40`, 100.0 in the exe).
+const RTTI: u32 = 0x0120_4390;
+const PERCENT_SCALE: u32 = 0x0101_7a40;
+/// The viewer labels of the percentages (`fColor1EndPct`, `fColor2StartPct`,
+/// `fColor2EndPct`, `fColor3StartPct`, `fFadeInPct`, `fFadeOutPct`, in the code's order)
+/// and of the three colours.
+const COLOR1_END_LABEL: u32 = 0x010c_3494;
+const COLOR2_START_LABEL: u32 = 0x010c_3480;
+const COLOR2_END_LABEL: u32 = 0x010c_3470;
+const COLOR3_START_LABEL: u32 = 0x010c_345c;
+const FADE_IN_LABEL: u32 = 0x010c_3450;
+const FADE_OUT_LABEL: u32 = 0x010c_3440;
+const COLOR1_LABEL: u32 = 0x010c_3438;
+const COLOR2_LABEL: u32 = 0x010c_3430;
+const COLOR3_LABEL: u32 = 0x010c_3428;
+
+// Translated from 00c60950 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSPSysSimpleColorModifier::SaveBinary` (Xbox PDB, engine map): `NiPSysModifier::SaveBinary`,
+/// the six percentages from `fFadeInPct` to `fColor3StartPct` (`NiStreamSaveBinary<float>`,
+/// in memory order), then the three colours (`NiColorA::SaveBinary`).
+pub fn bs_psys_simple_color_modifier_save_binary(e: &mut Engine, this: Ptr, stream: Ptr) {
+    e.call(PSYS_MODIFIER_SAVE_BINARY, &args![this, stream]);
+    let object = this.addr();
+    for field in [
+        FADE_IN,
+        FADE_OUT,
+        COLOR1_END,
+        COLOR2_START,
+        COLOR2_END,
+        COLOR3_START,
+    ] {
+        e.call(
+            STREAM_SAVE_FLOAT,
+            &args![stream, object.wrapping_add(field)],
+        );
+    }
+    for color in [COLOR1, COLOR2, COLOR3] {
+        e.call(
+            COLOR_A_SAVE_BINARY,
+            &args![object.wrapping_add(color), stream],
+        );
+    }
+}
+
+// Translated from 00c60a10 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSPSysSimpleColorModifier::IsEqual` (Xbox PDB, engine map): `NiPSysModifier::IsEqual`,
+/// then the six percentages in memory order (x87 `FUCOMPP`: unordered is not equal) and
+/// the three colours (`004a4cc0` on the other's colour with this one's), all equal.
+pub fn bs_psys_simple_color_modifier_is_equal(e: &mut Engine, this: Ptr, other: u32) -> bool {
+    if e.call(PSYS_MODIFIER_IS_EQUAL, &args![this, other]).u8() == 0 {
+        return false;
+    }
+    let object = this.addr();
+    for field in [
+        FADE_IN,
+        FADE_OUT,
+        COLOR1_END,
+        COLOR2_START,
+        COLOR2_END,
+        COLOR3_START,
+    ] {
+        let theirs = x87_load32(e.mem.u32(other.wrapping_add(field)));
+        let mine = x87_load32(e.mem.u32(object.wrapping_add(field)));
+        if mine != theirs {
+            return false;
+        }
+    }
+    for color in [COLOR1, COLOR2, COLOR3] {
+        let equal = e
+            .call(
+                COLOR_A_EQUAL,
+                &args![other.wrapping_add(color), object.wrapping_add(color)],
+            )
+            .u8();
+        if equal == 0 {
+            return false;
+        }
+    }
+    true
+}
+
+// Translated from 00c60b20 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSPSysSimpleColorModifier::GetViewerStrings` (Xbox PDB, engine map):
+/// `NiPSysModifier::GetViewerStrings`, the class name, each percentage times the double at
+/// `01017a40` (x87 `FMUL`, stored as a `float`) with its label, then each colour's own
+/// viewer string (`NiColorA::GetViewerString`), each added to the list.
+pub fn bs_psys_simple_color_modifier_get_viewer_strings(e: &mut Engine, this: Ptr, strings: Ptr) {
+    e.call(PSYS_MODIFIER_GET_VIEWER_STRINGS, &args![this, strings]);
+    let object = this.addr();
+    // The ten string locals, from EBP-0x28 (the last) to EBP-4 (the first).
+    e.with_stack(0x28, |e, slots| {
+        let mut slot = slots.addr().wrapping_add(0x24);
+        let name = e.global::<u32>(RTTI);
+        let text = e.call(NI_GET_VIEWER_STRING, &args![name]).u32();
+        e.mem.set_u32(slot, text);
+        e.call(VIEWER_STRINGS_ADD, &args![strings, slot]);
+        let scale = e.mem.f64(PERCENT_SCALE);
+        for (field, label) in [
+            (COLOR1_END, COLOR1_END_LABEL),
+            (COLOR2_START, COLOR2_START_LABEL),
+            (COLOR2_END, COLOR2_END_LABEL),
+            (COLOR3_START, COLOR3_START_LABEL),
+            (FADE_IN, FADE_IN_LABEL),
+            (FADE_OUT, FADE_OUT_LABEL),
+        ] {
+            let value = x87_mul(x87_load32(e.mem.u32(object.wrapping_add(field))), scale);
+            let shown = x87_quiet_bits(x87_store32(value));
+            let text = e
+                .call(NI_GET_VIEWER_STRING_FLOAT, &args![label, shown])
+                .u32();
+            slot = slot.wrapping_sub(4);
+            e.mem.set_u32(slot, text);
+            e.call(VIEWER_STRINGS_ADD, &args![strings, slot]);
+        }
+        for (color, label) in [
+            (COLOR1, COLOR1_LABEL),
+            (COLOR2, COLOR2_LABEL),
+            (COLOR3, COLOR3_LABEL),
+        ] {
+            let text = e
+                .call(
+                    COLOR_A_GET_VIEWER_STRING,
+                    &args![object.wrapping_add(color), label],
+                )
+                .u32();
+            slot = slot.wrapping_sub(4);
+            e.mem.set_u32(slot, text);
+            e.call(VIEWER_STRINGS_ADD, &args![strings, slot]);
+        }
+    });
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(
+            0x00c6_0950,
+            bs_psys_simple_color_modifier_save_binary(Ptr, Ptr)
+        ),
+        entry!(
+            0x00c6_0a10,
+            bs_psys_simple_color_modifier_is_equal(Ptr, u32) -> bool
+        ),
+        entry!(
+            0x00c6_0b20,
+            bs_psys_simple_color_modifier_get_viewer_strings(Ptr, Ptr)
+        ),
         entry!(0x00c6_0d40, fn_00c60d40(Ptr) -> u32),
         entry!(0x00c6_0910, fn_00c60910(Ptr, Ptr)),
         entry!(0x00c6_0930, fn_00c60930(Ptr, Ptr) -> bool),
@@ -587,5 +750,136 @@ mod constant_getter_tests {
                 (PSYS_MODIFIER_DESTRUCT, vec![0x5000]),
             ]
         );
+    }
+}
+
+#[cfg(test)]
+mod n068_tests {
+    use super::*;
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    type Log = Rc<RefCell<Vec<(u32, Vec<u32>)>>>;
+
+    fn logged(e: &mut Engine, log: &Log, address: u32, eax: u32) {
+        let log = log.clone();
+        e.register_double(address, move |_, a| {
+            log.borrow_mut().push((address, a.to_vec()));
+            eax.into_ret()
+        });
+    }
+
+    fn calls(log: &Log, address: u32) -> Vec<Vec<u32>> {
+        log.borrow()
+            .iter()
+            .filter(|c| c.0 == address)
+            .map(|c| c.1.clone())
+            .collect()
+    }
+
+    const PERCENTAGES: [u32; 6] = [
+        FADE_IN,
+        FADE_OUT,
+        COLOR1_END,
+        COLOR2_START,
+        COLOR2_END,
+        COLOR3_START,
+    ];
+
+    fn modifier(e: &mut Engine) -> u32 {
+        let this = e.mem.alloc(0x60);
+        for (i, field) in (1u32..).zip(PERCENTAGES) {
+            e.mem.set_f32(this + field, i as f32 * 0.125);
+        }
+        this
+    }
+
+    #[test]
+    fn save_binary_writes_percentages_then_colours() {
+        let mut e = Engine::new();
+        let log = Log::default();
+        logged(&mut e, &log, PSYS_MODIFIER_SAVE_BINARY, 0);
+        logged(&mut e, &log, STREAM_SAVE_FLOAT, 0);
+        logged(&mut e, &log, COLOR_A_SAVE_BINARY, 0);
+        e.call(0x00c6_0950, &args![0x1000u32, 0x6000u32]);
+        let mut expected = vec![(PSYS_MODIFIER_SAVE_BINARY, vec![0x1000, 0x6000])];
+        for field in PERCENTAGES {
+            expected.push((STREAM_SAVE_FLOAT, vec![0x6000, 0x1000 + field]));
+        }
+        for color in [COLOR1, COLOR2, COLOR3] {
+            expected.push((COLOR_A_SAVE_BINARY, vec![0x1000 + color, 0x6000]));
+        }
+        assert_eq!(*log.borrow(), expected);
+    }
+
+    #[test]
+    fn is_equal_compares_percentages_then_colours() {
+        let mut e = Engine::new();
+        let log = Log::default();
+        logged(&mut e, &log, PSYS_MODIFIER_IS_EQUAL, 1);
+        logged(&mut e, &log, COLOR_A_EQUAL, 1);
+        let this = modifier(&mut e);
+        let other = modifier(&mut e);
+        assert!(e.call(0x00c6_0a10, &args![this, other]).bool());
+        assert_eq!(
+            calls(&log, COLOR_A_EQUAL),
+            vec![
+                vec![other + COLOR1, this + COLOR1],
+                vec![other + COLOR2, this + COLOR2],
+                vec![other + COLOR3, this + COLOR3],
+            ]
+        );
+        for field in PERCENTAGES {
+            let kept = e.mem.u32(other + field);
+            e.mem.set_u32(other + field, 0x7fc0_0000);
+            assert!(!e.call(0x00c6_0a10, &args![this, other]).bool());
+            e.mem.set_u32(other + field, kept);
+        }
+        logged(&mut e, &log, COLOR_A_EQUAL, 0x100);
+        assert!(!e.call(0x00c6_0a10, &args![this, other]).bool());
+        logged(&mut e, &log, COLOR_A_EQUAL, 1);
+        logged(&mut e, &log, PSYS_MODIFIER_IS_EQUAL, 0);
+        assert!(!e.call(0x00c6_0a10, &args![this, other]).bool());
+    }
+
+    #[test]
+    fn viewer_strings_show_percentages_scaled_and_the_colours() {
+        let mut e = Engine::new();
+        let log = Log::default();
+        logged(&mut e, &log, PSYS_MODIFIER_GET_VIEWER_STRINGS, 0);
+        e.map(RTTI, 4);
+        e.set_global::<u32>(RTTI, 0x0101_0000);
+        e.map(PERCENT_SCALE, 8);
+        e.mem.set_f64(PERCENT_SCALE, 100.0);
+        e.register(NI_GET_VIEWER_STRING, |_, a| (a[0] + 1).into_ret());
+        logged(&mut e, &log, NI_GET_VIEWER_STRING_FLOAT, 0x7000);
+        e.register(COLOR_A_GET_VIEWER_STRING, |_, a| (a[0] + a[1]).into_ret());
+        let l = log.clone();
+        e.register_double(VIEWER_STRINGS_ADD, move |e, a| {
+            l.borrow_mut().push((0, vec![a[0], e.mem.u32(a[1])]));
+            Ret::default()
+        });
+        let this = modifier(&mut e);
+        e.call(0x00c6_0b20, &args![this, 0x6000u32]);
+        let shown: Vec<(u32, f32)> = calls(&log, NI_GET_VIEWER_STRING_FLOAT)
+            .iter()
+            .map(|c| (c[0], f32::from_bits(c[1])))
+            .collect();
+        assert_eq!(
+            shown,
+            vec![
+                (COLOR1_END_LABEL, 37.5),
+                (COLOR2_START_LABEL, 50.0),
+                (COLOR2_END_LABEL, 62.5),
+                (COLOR3_START_LABEL, 75.0),
+                (FADE_IN_LABEL, 12.5),
+                (FADE_OUT_LABEL, 25.0),
+            ]
+        );
+        let added = calls(&log, 0);
+        assert_eq!(added.len(), 10);
+        assert_eq!(added[0], vec![0x6000, 0x0101_0001]);
+        assert_eq!(added[7], vec![0x6000, this + COLOR1 + COLOR1_LABEL]);
+        assert_eq!(added[9], vec![0x6000, this + COLOR3 + COLOR3_LABEL]);
     }
 }

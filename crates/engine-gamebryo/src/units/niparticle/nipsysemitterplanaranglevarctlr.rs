@@ -40,9 +40,68 @@ pub fn ni_p_sys_emitter_planar_angle_var_ctlr_get_r_t_t_i(_e: &mut Engine) -> u3
     0x0120_2730
 }
 
+use crate::units::niparticle::nipsysmodifierfloatctlr::{
+    create_clone, get_target_float, set_target_float,
+};
+
+/// `NiPSysEmitter::m_fPlanarAngleVar` (Xbox PDB), +0x2c in the
+/// controller's modifier.
+const PLANAR_ANGLE_VAR: u32 = 0x2c;
+/// The vtable of `NiPSysEmitterPlanarAngleVarCtlr` (RTTI
+/// `.?AVNiPSysEmitterPlanarAngleVarCtlr@@`).
+const VTABLE: u32 = 0x010b_f754;
+
+// Translated from 00c2a8b0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiPSysEmitterPlanarAngleVarCtlr::GetTargetFloatValue` (Xbox PDB): the
+/// modifier's `float` at +0x2c (the planar angle variation) into `value`.
+pub fn ni_p_sys_emitter_planar_angle_var_ctlr_get_target_float_value(
+    e: &mut Engine,
+    this: Ptr,
+    value: Ptr,
+) {
+    get_target_float(e, this, PLANAR_ANGLE_VAR, value);
+}
+
+// Translated from 00c2b470 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiPSysEmitterPlanarAngleVarCtlr::SetTargetFloatValue` (Xbox PDB):
+/// `value` into the modifier's `float` at +0x2c (the planar angle
+/// variation).
+pub fn ni_p_sys_emitter_planar_angle_var_ctlr_set_target_float_value(
+    e: &mut Engine,
+    this: Ptr,
+    value: f32,
+) {
+    set_target_float(e, this, PLANAR_ANGLE_VAR, value);
+}
+
+// Translated from 00c2b480 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiPSysEmitterPlanarAngleVarCtlr::CreateClone` (Xbox PDB): a 0x40-byte
+/// object through the `NiPSysModifierFloatCtlr` constructor and this class's
+/// vtable (0 when the allocation fails), then the member copy into it (which
+/// still runs for a null clone). Returns the clone.
+pub fn ni_p_sys_emitter_planar_angle_var_ctlr_create_clone(
+    e: &mut Engine,
+    this: Ptr,
+    process: Ptr,
+) -> Ptr {
+    create_clone(e, this, process, VTABLE)
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(
+            0x00c2_a8b0,
+            ni_p_sys_emitter_planar_angle_var_ctlr_get_target_float_value(Ptr, Ptr)
+        ),
+        entry!(
+            0x00c2_b470,
+            ni_p_sys_emitter_planar_angle_var_ctlr_set_target_float_value(Ptr, f32)
+        ),
+        entry!(
+            0x00c2_b480,
+            ni_p_sys_emitter_planar_angle_var_ctlr_create_clone(Ptr, Ptr) -> Ptr
+        ),
         entry!(0x00c2b460, ni_p_sys_emitter_planar_angle_var_ctlr_get_r_t_t_i() -> u32),
         entry!(
             0x00c2b4d0,
@@ -117,5 +176,26 @@ mod tests {
     fn ni_p_sys_emitter_planar_angle_var_ctlr_get_r_t_t_i_returns_the_constant() {
         let mut e = Engine::new();
         assert_eq!(e.call(0x00c2_b460, &args![]).u32(), 0x0120_2730);
+    }
+}
+
+#[cfg(test)]
+mod value_tests {
+    use super::*;
+    use crate::units::niparticle::nipsysmodifierfloatctlr::subclass_checks;
+
+    #[test]
+    fn get_target_float_value_reads_the_planar_angle_variation() {
+        subclass_checks::get_value(0x00c2_a8b0, PLANAR_ANGLE_VAR);
+    }
+
+    #[test]
+    fn set_target_float_value_writes_the_planar_angle_variation() {
+        subclass_checks::set_value(0x00c2_b470, PLANAR_ANGLE_VAR);
+    }
+
+    #[test]
+    fn create_clone_uses_this_class_vtable() {
+        subclass_checks::create_clone(0x00c2_b480, VTABLE);
     }
 }

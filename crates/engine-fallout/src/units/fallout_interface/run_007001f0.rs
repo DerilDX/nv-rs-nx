@@ -48,6 +48,37 @@ pub fn fn_00700270(e: &mut Engine, this: Ptr, argument: u32) -> bool {
     e.call(TEST_007002A0, &args![this, argument]).u8() == 0
 }
 
+// Translated from 007001f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed (`thiscall`): of the two objects at +8 and +0xc, the word at +4 of the first
+/// when both are there with equal words, or only the first is there; of the second when
+/// only it is there; else 0.
+pub fn fn_007001f0(e: &mut Engine, this: Ptr) -> u32 {
+    let base = this.addr();
+    let first = |e: &Engine| e.mem.u32(base + 8);
+    let second = |e: &Engine| e.mem.u32(base + 0xc);
+    if first(e) != 0 && second(e) != 0 && e.mem.u32(first(e) + 4) == e.mem.u32(second(e) + 4) {
+        return e.mem.u32(first(e) + 4);
+    }
+    if first(e) != 0 && second(e) == 0 {
+        return e.mem.u32(first(e) + 4);
+    }
+    if first(e) == 0 && second(e) != 0 {
+        return e.mem.u32(second(e) + 4);
+    }
+    0
+}
+
+/// `BSStringT<char>::StrCmp` (`00408a80`, `thiscall`, `RET 8`: the other text and a
+/// case flag).
+const STRING_COMPARE: u32 = 0x0040_8a80;
+
+// Translated from 007002a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed (`thiscall`, `RET 4`): whether the string `this` equals `other` ignoring case
+/// (`StrCmp(other, 1)` is 0).
+pub fn fn_007002a0(e: &mut Engine, this: Ptr, other: u32) -> bool {
+    e.call(STRING_COMPARE, &args![this, other, 1u32]).u32() == 0
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -55,6 +86,8 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x0070_0300, fn_00700300(Ptr) -> u32),
         entry!(0x0070_0320, fn_00700320(Ptr, i32, i32)),
         entry!(0x0070_0270, fn_00700270(Ptr, u32) -> bool),
+        entry!(0x0070_01f0, fn_007001f0(Ptr) -> u32),
+        entry!(0x0070_02a0, fn_007002a0(Ptr, u32) -> bool),
     ]
 }
 
@@ -119,5 +152,49 @@ mod tests {
         assert_eq!(got.u32(), 1);
         assert_eq!(calls_to(&e, TEST_007002A0), vec![vec![0x7000, 0x100]]);
         assert_eq!(e.call(0x0070_0270, &args![0x7000u32, 0x101u32]).u32(), 0);
+    }
+}
+
+#[cfg(test)]
+mod n059_tests {
+    use super::*;
+
+    #[test]
+    fn fn_007001f0_picks_the_shared_or_only_word() {
+        let mut e = Engine::new();
+        let this = e.mem.alloc(0x10);
+        let first = e.mem.alloc(8);
+        let second = e.mem.alloc(8);
+        e.mem.set_u32(first + 4, 7);
+        e.mem.set_u32(second + 4, 9);
+        let pick = |e: &mut Engine, a: u32, b: u32| {
+            e.mem.set_u32(this + 8, a);
+            e.mem.set_u32(this + 0xc, b);
+            e.call(0x0070_01f0, &args![this]).u32()
+        };
+        assert_eq!(pick(&mut e, first, second), 0);
+        assert_eq!(pick(&mut e, first, 0), 7);
+        assert_eq!(pick(&mut e, 0, second), 9);
+        assert_eq!(pick(&mut e, 0, 0), 0);
+        e.mem.set_u32(second + 4, 7);
+        assert_eq!(pick(&mut e, first, second), 7);
+    }
+
+    #[test]
+    fn fn_007002a0_is_a_case_blind_equality() {
+        let mut e = Engine::new();
+        e.register(STRING_COMPARE, |_, a| (a[1] & 0xff).into_ret());
+        e.call_log = Some(vec![]);
+        assert!(e.call(0x0070_02a0, &args![0x5000u32, 0x100u32]).bool());
+        assert!(!e.call(0x0070_02a0, &args![0x5000u32, 0x101u32]).bool());
+        let calls: Vec<_> = e
+            .call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|(address, _)| *address == STRING_COMPARE)
+            .map(|(_, words)| words.clone())
+            .collect();
+        assert_eq!(calls[0], vec![0x5000, 0x100, 1]);
     }
 }

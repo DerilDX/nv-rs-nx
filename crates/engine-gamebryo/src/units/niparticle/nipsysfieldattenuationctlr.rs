@@ -36,9 +36,53 @@ pub fn ni_p_sys_field_attenuation_ctlr_get_r_t_t_i(_e: &mut Engine) -> u32 {
     0x0120_2720
 }
 
+use crate::units::niparticle::nipsysmodifierctlr::interp_target_modifier_is;
+use crate::units::niparticle::nipsysmodifierfloatctlr::create_clone;
+
+/// The vtable of `NiPSysFieldAttenuationCtlr` (RTTI
+/// `.?AVNiPSysFieldAttenuationCtlr@@`).
+const VTABLE: u32 = 0x010b_f554;
+/// The `NiRTTI` record of `NiPSysFieldModifier` (`012027e0`, the class name
+/// its static initializer gives it).
+const FIELD_MODIFIER_RTTI: u32 = 0x0120_27e0;
+
+// Translated from 00c2b240 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiPSysFieldAttenuationCtlr::CreateClone` (Xbox PDB): a 0x40-byte object
+/// through the `NiPSysModifierFloatCtlr` constructor and this class's vtable
+/// (0 when the allocation fails), then the member copy into it (which still
+/// runs for a null clone). Returns the clone.
+pub fn ni_p_sys_field_attenuation_ctlr_create_clone(
+    e: &mut Engine,
+    this: Ptr,
+    process: Ptr,
+) -> Ptr {
+    create_clone(e, this, process, VTABLE)
+}
+
+// Translated from 00c2b290 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiPSysFieldAttenuationCtlr::InterpTargetIsCorrectType` (Xbox PDB):
+/// `NiPSysModifierCtlr::InterpTargetIsCorrectType` (`00c31530`) on
+/// `target`, then `target`'s modifier with this controller's modifier name
+/// (`00c1b0f0`) must exist and be of kind `NiPSysFieldModifier`.
+pub fn ni_p_sys_field_attenuation_ctlr_interp_target_is_correct_type(
+    e: &mut Engine,
+    this: Ptr,
+    target: Ptr,
+) -> bool {
+    interp_target_modifier_is(e, this.addr(), target.addr(), FIELD_MODIFIER_RTTI)
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(
+            0x00c2_b240,
+            ni_p_sys_field_attenuation_ctlr_create_clone(Ptr, Ptr) -> Ptr
+        ),
+        entry!(
+            0x00c2_b290,
+            ni_p_sys_field_attenuation_ctlr_interp_target_is_correct_type(Ptr, Ptr) -> bool
+        ),
         entry!(0x00c2b230, ni_p_sys_field_attenuation_ctlr_get_r_t_t_i() -> u32),
         entry!(
             0x00c2b2e0,
@@ -109,5 +153,21 @@ mod tests {
     fn ni_p_sys_field_attenuation_ctlr_get_r_t_t_i_returns_the_constant() {
         let mut e = Engine::new();
         assert_eq!(e.call(0x00c2_b230, &args![]).u32(), 0x0120_2720);
+    }
+}
+
+#[cfg(test)]
+mod clone_tests {
+    use super::*;
+    use crate::units::niparticle::nipsysmodifierfloatctlr::subclass_checks;
+
+    #[test]
+    fn create_clone_uses_this_class_vtable() {
+        subclass_checks::create_clone(0x00c2_b240, VTABLE);
+    }
+
+    #[test]
+    fn interp_target_needs_a_field_modifier() {
+        subclass_checks::interp_target(0x00c2_b290, FIELD_MODIFIER_RTTI);
     }
 }

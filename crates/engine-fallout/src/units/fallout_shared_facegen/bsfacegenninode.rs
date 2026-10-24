@@ -813,9 +813,417 @@ pub fn bs_face_gen_ni_node_fix_skin_instances(
     }
 }
 
+/// The base rotation: nine words at +0xb0 (`BaseRotation`, an `NiMatrix3`, Xbox PDB).
+const BASE_ROTATION: u32 = 0xb0;
+/// The vtable slot `SetBaseRotation` calls with a stack buffer (+0x108) and the slot
+/// `CreateClone` calls with the cloning process (+0x68).
+const SLOT_0108: u32 = 0x108;
+const SLOT_0068: u32 = 0x68;
+/// `0043fa80` (thiscall on the node, one word; unnamed, `modelloader.cpp`).
+const NODE_0043FA80: u32 = 0x0043_fa80;
+/// `00653e50` (cdecl: the node, a word; unnamed).
+const NODE_00653E50: u32 = 0x0065_3e50;
+/// `008d8660` (thiscall, returns the byte at +0xe0 of its object; the map's name
+/// `MiddleHighProcess::GetIdleDoneOnce` comes from folded code).
+const BYTE_AT_E0_008D8660: u32 = 0x008d_8660;
+/// `NiNode::UpdateTransformAndBounds` (`00a5e0b0`).
+const NI_NODE_UPDATE_TRANSFORM_AND_BOUNDS: u32 = 0x00a5_e0b0;
+/// The Gamebryo allocation (`00aa13e0`, cdecl: size).
+const NI_ALLOCATE: u32 = 0x00aa_13e0;
+/// `BSFaceGenNiNode`'s constructor (`006628c0`, thiscall, no words).
+const CONSTRUCT_006628C0: u32 = 0x0066_28c0;
+/// `00a5dc80` (thiscall on an `NiNode`: clone, cloning process; `ninode.cpp`, its
+/// `CopyMembers` by its use).
+const NI_NODE_COPY_MEMBERS_00A5DC80: u32 = 0x00a5_dc80;
+/// `006e5cc0` (thiscall on an `NiPointer`, one word: the address of another to assign).
+const POINTER_ASSIGN_006E5CC0: u32 = 0x006e_5cc0;
+
+// Translated from 00662a10 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSFaceGenNiNode::GetBaseRotation` (Xbox PDB, `RET 4`): copies the nine words of the
+/// base rotation (+0xb0) to `result`; returns `result`.
+pub fn bs_face_gen_ni_node_get_base_rotation(
+    e: &mut Engine,
+    this: Ptr<BSFaceGenNiNode>,
+    result: u32,
+) -> u32 {
+    for i in 0..9u32 {
+        let word = e.mem.u32(this.addr().wrapping_add(BASE_ROTATION + i * 4));
+        e.mem.set_u32(result.wrapping_add(i * 4), word);
+    }
+    result
+}
+
+// Translated from 00662a40 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSFaceGenNiNode::GetAnimationUpdate` (Xbox PDB): `bAnimationUpdate`.
+pub fn bs_face_gen_ni_node_get_animation_update(e: &mut Engine, this: Ptr<BSFaceGenNiNode>) -> u8 {
+    e.get(this, BSFaceGenNiNode::bAnimationUpdate)
+}
+
+// Translated from 00662a80 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSFaceGenNiNode::GetApplyRotToParent` (Xbox PDB): `bApplyRotationToParent`.
+pub fn bs_face_gen_ni_node_get_apply_rot_to_parent(
+    e: &mut Engine,
+    this: Ptr<BSFaceGenNiNode>,
+) -> u8 {
+    e.get(this, BSFaceGenNiNode::bApplyRotationToParent)
+}
+
+// Translated from 00662aa0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSFaceGenNiNode::SetFixedNormals` (Xbox PDB, `RET 4`): the byte at +0xd5.
+pub fn bs_face_gen_ni_node_set_fixed_normals(
+    e: &mut Engine,
+    this: Ptr<BSFaceGenNiNode>,
+    value: u8,
+) {
+    e.mem.set_u8(this.addr().wrapping_add(0xd5), value);
+}
+
+// Translated from 009a0240 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSFaceGenNiNode::GetFixedNormals` (Xbox PDB): the byte at +0xd5.
+pub fn bs_face_gen_ni_node_get_fixed_normals(e: &mut Engine, this: Ptr<BSFaceGenNiNode>) -> u8 {
+    e.mem.u8(this.addr().wrapping_add(0xd5))
+}
+
+// Translated from 00662b70 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSFaceGenNiNode::SetBaseRotation` (Xbox PDB, `RET 4`): copies nine words from
+/// `rotation` to the base rotation (+0xb0), sets the byte at +0xd7, then passes what the
+/// node's slot +0x108 returns for a 0x24-byte stack buffer to `0043fa80`.
+pub fn bs_face_gen_ni_node_set_base_rotation(
+    e: &mut Engine,
+    this: Ptr<BSFaceGenNiNode>,
+    rotation: u32,
+) {
+    for i in 0..9u32 {
+        let word = e.mem.u32(rotation.wrapping_add(i * 4));
+        e.mem
+            .set_u32(this.addr().wrapping_add(BASE_ROTATION + i * 4), word);
+    }
+    e.mem.set_u8(this.addr().wrapping_add(0xd7), 1);
+    e.with_stack(0x24, |e, buffer| {
+        let value = e.vcall(this.addr(), SLOT_0108, &args![buffer]).u32();
+        e.call(NODE_0043FA80, &args![this, value]);
+    });
+}
+
+// Translated from 00663450 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the map (`RET 4`): the distance from the position `fn_006633f0` gives to
+/// the node's (`0045bb80`, `00439ef0`, `00457990`) against `fn_006633d0` +- 10: beyond
+/// `+ 10` without the byte `008d8660` reads, or for `mode` 0, `00653e50(this, 0)`;
+/// otherwise within `- 10` with that byte, or for `mode` 1, `00653e50(this, 1)`.
+pub fn fn_00663450(e: &mut Engine, this: Ptr<BSFaceGenNiNode>, mode: u32) {
+    let source = fn_006633f0(e);
+    let ten = x87_quiet_bits(e.mem.u32(TEN));
+    e.with_stack(0x18, |e, locals| {
+        let position = locals.addr();
+        let difference = position + 0xc;
+        for i in 0..3u32 {
+            let word = e.mem.u32(source.wrapping_add(i * 4));
+            e.mem.set_u32(position + i * 4, word);
+        }
+        let node_position = e.call(GETTER_0045BB80, &args![this]).u32();
+        let vector = e
+            .call(
+                POSITION_DIFFERENCE_00439EF0,
+                &args![position, difference, node_position],
+            )
+            .u32();
+        let distance = x87_store32(e.call(LENGTH_00457990, &args![vector]).f64());
+        let far = x87_add(fn_006633d0(e), x87_m32(ten));
+        // FLD distance; FCOMPP; TEST AH,0x41; JNZ: only beyond the far limit.
+        let off = x87_load32(distance) > far && e.call(BYTE_AT_E0_008D8660, &args![this]).u8() == 0;
+        if off || mode == 0 {
+            e.call(NODE_00653E50, &args![this, 0u32]);
+            return;
+        }
+        let near = x87_sub(fn_006633d0(e), x87_m32(ten));
+        // FLD distance; FCOMPP; TEST AH,5; JP: only within the near limit.
+        let on = x87_load32(distance) < near && e.call(BYTE_AT_E0_008D8660, &args![this]).u8() != 0;
+        if on || mode == 1 {
+            e.call(NODE_00653E50, &args![this, 1u32]);
+        }
+    });
+}
+
+// Translated from 00663ab0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSFaceGenNiNode::UpdateTransformAndBounds` (Xbox PDB, `RET 4`; Ghidra shows a
+/// library-match name): `UpdateMorphing`, then `NiNode::UpdateTransformAndBounds`, both
+/// with `update`.
+pub fn bs_face_gen_ni_node_update_transform_and_bounds(
+    e: &mut Engine,
+    this: Ptr<BSFaceGenNiNode>,
+    update: u32,
+) {
+    bs_face_gen_ni_node_update_morphing(e, this, update);
+    e.call(NI_NODE_UPDATE_TRANSFORM_AND_BOUNDS, &args![this, update]);
+}
+
+// Translated from 00663b80 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 00663b80 - the exception-unwinding frame (FS:[0]) is not translated.
+/// `BSFaceGenNiNode::CreateClone` (Xbox PDB, `RET 4`): a new node (0xf0 bytes from the
+/// Gamebryo allocator, constructed by `006628c0`; null when the allocation fails), this
+/// node's members copied into it (`CopyMembers`), then the node's slot +0x68 with
+/// `cloning`. Returns the clone.
+pub fn bs_face_gen_ni_node_create_clone(
+    e: &mut Engine,
+    this: Ptr<BSFaceGenNiNode>,
+    cloning: u32,
+) -> u32 {
+    let block = e.call(NI_ALLOCATE, &args![0xf0u32]).u32();
+    let clone = if block != 0 {
+        e.call(CONSTRUCT_006628C0, &args![block]).u32()
+    } else {
+        0
+    };
+    bs_face_gen_ni_node_copy_members(e, this, clone, cloning);
+    e.vcall(this.addr(), SLOT_0068, &args![cloning]);
+    clone
+}
+
+// Translated from 00663c30 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSFaceGenNiNode::CopyMembers` (Xbox PDB, `RET 8`): for a clone, the `NiNode` members
+/// (`00a5dc80`), `spAnimationData` (`006e5cc0`), the base rotation, the bytes at
+/// +0xd4..+0xd7, `fLastTime` (a quiet copy) and the bytes at +0xe0 and +0xe1.
+pub fn bs_face_gen_ni_node_copy_members(
+    e: &mut Engine,
+    this: Ptr<BSFaceGenNiNode>,
+    clone: u32,
+    cloning: u32,
+) {
+    if clone == 0 {
+        return;
+    }
+    let base = this.addr();
+    e.call(NI_NODE_COPY_MEMBERS_00A5DC80, &args![this, clone, cloning]);
+    e.call(
+        POINTER_ASSIGN_006E5CC0,
+        &args![clone.wrapping_add(0xac), base.wrapping_add(0xac)],
+    );
+    for i in 0..9u32 {
+        let word = e.mem.u32(base.wrapping_add(BASE_ROTATION + i * 4));
+        e.mem
+            .set_u32(clone.wrapping_add(BASE_ROTATION + i * 4), word);
+    }
+    for offset in [0xd4u32, 0xd5, 0xd6, 0xd7] {
+        let byte = e.mem.u8(base.wrapping_add(offset));
+        e.mem.set_u8(clone.wrapping_add(offset), byte);
+    }
+    let time = x87_quiet_bits(e.mem.u32(base.wrapping_add(0xdc)));
+    e.mem.set_u32(clone.wrapping_add(0xdc), time);
+    for offset in [0xe0u32, 0xe1] {
+        let byte = e.mem.u8(base.wrapping_add(offset));
+        e.mem.set_u8(clone.wrapping_add(offset), byte);
+    }
+}
+
+/// `NiNode::GetViewerStrings` (`00a5ea70`), `NiGetViewerString` (`00a7d330`, cdecl: a
+/// class name) and `NiGetViewerString_ov9` (`00a7d550`, cdecl: a name and a `float`).
+const NI_NODE_GET_VIEWER_STRINGS: u32 = 0x00a5_ea70;
+const NI_GET_VIEWER_STRING: u32 = 0x00a7_d330;
+const NI_GET_VIEWER_STRING_FLOAT: u32 = 0x00a7_d550;
+/// `0096a610` (thiscall on the string array, one word: the address of the string to add;
+/// unnamed).
+const STRINGS_ADD_0096A610: u32 = 0x0096_a610;
+/// `operator new` (`00401000`, cdecl: size).
+const OPERATOR_NEW: u32 = 0x0040_1000;
+/// `00406d00` (cdecl: buffer, size, format and its arguments; a formatted print).
+const PRINT_00406D00: u32 = 0x0040_6d00;
+/// `0084e3a0` (thiscall on a form, returns its form id by the format it fills).
+const FORM_ID_0084E3A0: u32 = 0x0084_e3a0;
+/// The node's RTTI record (`011d5bf8`), whose name `00559450` gives.
+const RTTI: u32 = 0x011d_5bf8;
+/// `"true"` and `"false"`.
+const TRUE_TEXT: u32 = 0x0102_fd2c;
+const FALSE_TEXT: u32 = 0x0102_fd24;
+/// The formats of the flags `GetViewerStrings` prints (`"bForceBaseMorph = %s"`, ...,
+/// `"bIAmInDialogue = %s"`) with their byte offsets.
+const VIEWER_FLAGS: [(u32, u32); 8] = [
+    (0xd4, 0x0106_6304),
+    (0xd5, 0x0106_62f0),
+    (0xd6, 0x0106_62d8),
+    (0xd7, 0x0106_62c0),
+    (0xd8, 0x0106_62a4),
+    (0xe0, 0x0106_628c),
+    (0xe1, 0x0106_6270),
+    (0xe2, 0x0106_625c),
+];
+/// `"fLastTime = %0.3f"`, `"pActor = %08X"`, `"pActor->iFormID = %08X"`,
+/// `"spAnimationData = %08X"`.
+const LAST_TIME_FORMAT: u32 = 0x0106_6248;
+const ACTOR_FORMAT: u32 = 0x0106_6238;
+const ACTOR_FORM_ID_FORMAT: u32 = 0x0106_6220;
+const ANIMATION_DATA_FORMAT: u32 = 0x0106_6208;
+/// `FLT_MAX` (`double`): an unset animation value.
+const UNSET: u32 = 0x0102_31b0;
+/// The animation data's value getters: slot +0x94 (expressions), `005dd4a0` (modifiers,
+/// thiscall: an index) and slot +0xa4 (phonemes), each a `float` in `ST0`.
+const SLOT_EXPRESSION_VALUE: u32 = 0x94;
+const SLOT_PHONEME_VALUE: u32 = 0xa4;
+/// The expression, modifier and phoneme names (`005dd830`, `005dd840`, `005dd850`,
+/// cdecl: an index).
+const EXPRESSION_NAME: u32 = 0x005d_d830;
+const MODIFIER_NAME: u32 = 0x005d_d840;
+const PHONEME_NAME: u32 = 0x005d_d850;
+
+/// Adds the string `text` to `strings` (`0096a610`, through a stack word).
+fn add_viewer_string(e: &mut Engine, strings: u32, text: u32) {
+    e.with_stack(4, |e, slot| {
+        e.mem.set_u32(slot.addr(), text);
+        e.call(STRINGS_ADD_0096A610, &args![strings, slot]);
+    });
+}
+
+/// A new 0x20-byte buffer (`operator new`) printed with `words` (`00406d00`) and added.
+fn add_printed(e: &mut Engine, strings: u32, words: &[u32]) {
+    let buffer = e.call(OPERATOR_NEW, &args![0x20u32]).u32();
+    let mut all = vec![buffer, 0x20];
+    all.extend_from_slice(words);
+    e.call(PRINT_00406D00, &all);
+    add_viewer_string(e, strings, buffer);
+}
+
+/// One animation value of the viewer strings: unless `value` gives `FLT_MAX` (`FCOMP;
+/// TEST AH,0x44; JNP`), asks it again and adds `NiGetViewerString_ov9(name, value)`.
+fn add_animation_value(
+    e: &mut Engine,
+    strings: u32,
+    index: u32,
+    name: u32,
+    value: fn(&mut Engine, u32, u32) -> f64,
+    node: u32,
+) {
+    let unset: f64 = e.global(UNSET);
+    let data = e.call(POINTER_GET, &args![node.wrapping_add(0xac)]).u32();
+    if value(e, data, index) == unset {
+        return;
+    }
+    let data = e.call(POINTER_GET, &args![node.wrapping_add(0xac)]).u32();
+    let current = x87_store32(value(e, data, index));
+    let text = e.call(name, &args![index]).u32();
+    let line = e
+        .call(NI_GET_VIEWER_STRING_FLOAT, &args![text, current])
+        .u32();
+    add_viewer_string(e, strings, line);
+}
+
+// Translated from 00663d10 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSFaceGenNiNode::GetViewerStrings` (Xbox PDB, `RET 4`): the `NiNode` strings, the class
+/// name, then printed lines (0x20-byte buffers) for the flags at +0xd4..+0xd8, +0xe0..+0xe2
+/// (`"true"`/`"false"`), `fLastTime` (as a `double`), `pActor` and, with an actor, its form
+/// id (`0084e3a0`), and `spAnimationData`; with animation data, a line for each expression
+/// (15), modifier (17) and phoneme (16) value that is not `FLT_MAX`.
+pub fn bs_face_gen_ni_node_get_viewer_strings(
+    e: &mut Engine,
+    this: Ptr<BSFaceGenNiNode>,
+    strings: u32,
+) {
+    let base = this.addr();
+    e.call(NI_NODE_GET_VIEWER_STRINGS, &args![this, strings]);
+    let name = e.call(POINTER_GET, &args![RTTI]).u32();
+    let line = e.call(NI_GET_VIEWER_STRING, &args![name]).u32();
+    add_viewer_string(e, strings, line);
+    for (offset, format) in VIEWER_FLAGS {
+        let buffer = e.call(OPERATOR_NEW, &args![0x20u32]).u32();
+        let text = if e.mem.u8(base.wrapping_add(offset)) != 0 {
+            TRUE_TEXT
+        } else {
+            FALSE_TEXT
+        };
+        e.call(PRINT_00406D00, &args![buffer, 0x20u32, format, text]);
+        add_viewer_string(e, strings, buffer);
+    }
+    // FLD float; FSTP double: the value exactly, a signalling NaN quieted.
+    let time = x87_load32(e.mem.u32(base.wrapping_add(0xdc))).to_bits();
+    add_printed(
+        e,
+        strings,
+        &[LAST_TIME_FORMAT, time as u32, (time >> 32) as u32],
+    );
+    let actor = e.get(this, BSFaceGenNiNode::pActor);
+    add_printed(e, strings, &[ACTOR_FORMAT, actor]);
+    if e.get(this, BSFaceGenNiNode::pActor) != 0 {
+        let buffer = e.call(OPERATOR_NEW, &args![0x20u32]).u32();
+        let actor = e.get(this, BSFaceGenNiNode::pActor);
+        let id = e.call(FORM_ID_0084E3A0, &args![actor]).u32();
+        e.call(
+            PRINT_00406D00,
+            &args![buffer, 0x20u32, ACTOR_FORM_ID_FORMAT, id],
+        );
+        add_viewer_string(e, strings, buffer);
+    }
+    let buffer = e.call(OPERATOR_NEW, &args![0x20u32]).u32();
+    let data = e.call(POINTER_GET, &args![base.wrapping_add(0xac)]).u32();
+    e.call(
+        PRINT_00406D00,
+        &args![buffer, 0x20u32, ANIMATION_DATA_FORMAT, data],
+    );
+    add_viewer_string(e, strings, buffer);
+    if e.call(POINTER_GET, &args![base.wrapping_add(0xac)]).u32() == 0 {
+        return;
+    }
+    fn expression(e: &mut Engine, data: u32, index: u32) -> f64 {
+        e.vcall(data, SLOT_EXPRESSION_VALUE, &args![index]).f64()
+    }
+    fn modifier(e: &mut Engine, data: u32, index: u32) -> f64 {
+        e.call(ANIMATION_VALUE_005DD4A0, &args![data, index]).f64()
+    }
+    fn phoneme(e: &mut Engine, data: u32, index: u32) -> f64 {
+        e.vcall(data, SLOT_PHONEME_VALUE, &args![index]).f64()
+    }
+    for index in 0..15u32 {
+        add_animation_value(e, strings, index, EXPRESSION_NAME, expression, base);
+    }
+    for index in 0..17u32 {
+        add_animation_value(e, strings, index, MODIFIER_NAME, modifier, base);
+    }
+    for index in 0..16u32 {
+        add_animation_value(e, strings, index, PHONEME_NAME, phoneme, base);
+    }
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(
+            0x0066_2a10,
+            bs_face_gen_ni_node_get_base_rotation(Ptr<BSFaceGenNiNode>, u32) -> u32
+        ),
+        entry!(
+            0x0066_2a40,
+            bs_face_gen_ni_node_get_animation_update(Ptr<BSFaceGenNiNode>) -> u8
+        ),
+        entry!(
+            0x0066_2a80,
+            bs_face_gen_ni_node_get_apply_rot_to_parent(Ptr<BSFaceGenNiNode>) -> u8
+        ),
+        entry!(
+            0x0066_2aa0,
+            bs_face_gen_ni_node_set_fixed_normals(Ptr<BSFaceGenNiNode>, u8)
+        ),
+        entry!(
+            0x009a_0240,
+            bs_face_gen_ni_node_get_fixed_normals(Ptr<BSFaceGenNiNode>) -> u8
+        ),
+        entry!(
+            0x0066_2b70,
+            bs_face_gen_ni_node_set_base_rotation(Ptr<BSFaceGenNiNode>, u32)
+        ),
+        entry!(0x0066_3450, fn_00663450(Ptr<BSFaceGenNiNode>, u32)),
+        entry!(
+            0x0066_3ab0,
+            bs_face_gen_ni_node_update_transform_and_bounds(Ptr<BSFaceGenNiNode>, u32)
+        ),
+        entry!(
+            0x0066_3b80,
+            bs_face_gen_ni_node_create_clone(Ptr<BSFaceGenNiNode>, u32) -> u32
+        ),
+        entry!(
+            0x0066_3c30,
+            bs_face_gen_ni_node_copy_members(Ptr<BSFaceGenNiNode>, u32, u32)
+        ),
+        entry!(
+            0x0066_3d10,
+            bs_face_gen_ni_node_get_viewer_strings(Ptr<BSFaceGenNiNode>, u32)
+        ),
         entry!(
             0x0066_29f0,
             bs_face_gen_ni_node_get_animation_data(Ptr) -> Ptr
@@ -1453,5 +1861,273 @@ mod b066_tests {
         e.call_log = Some(vec![]);
         e.call(0x0066_42e0, &args![node, root, 0u32]);
         assert!(calls(&e, DEBUG_MESSAGE).is_empty());
+    }
+}
+
+#[cfg(test)]
+mod n062_tests {
+    use super::*;
+
+    type Calls = Vec<Vec<u32>>;
+
+    fn answer(e: &mut Engine, addr: u32, eax: u32) {
+        e.register_double(addr, move |_, _| Ret {
+            eax,
+            ..Ret::default()
+        });
+    }
+
+    fn answer_float(e: &mut Engine, addr: u32, st0: f64) {
+        e.register_double(addr, move |_, _| Ret {
+            st0,
+            ..Ret::default()
+        });
+    }
+
+    fn calls(e: &Engine, addr: u32) -> Calls {
+        e.call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|c| c.0 == addr)
+            .map(|c| c.1.clone())
+            .collect()
+    }
+
+    const SLOTS: u32 = 0x0340_0000;
+
+    /// A node whose vtable sends every slot `s` to `SLOTS + s`.
+    fn node(e: &mut Engine) -> Ptr<BSFaceGenNiNode> {
+        let vtable = e.mem.alloc(0x200);
+        for s in (0..0x200).step_by(4) {
+            e.mem.set_u32(vtable + s, SLOTS + s);
+        }
+        let this = e.mem.alloc(0xf0);
+        e.mem.set_u32(this, vtable);
+        Ptr::new(this)
+    }
+
+    #[test]
+    fn rotation_and_flag_accessors() {
+        let mut e = Engine::new();
+        let this = node(&mut e);
+        let rotation = e.mem.alloc(0x24);
+        for i in 0..9u32 {
+            e.mem.set_u32(rotation + 4 * i, 0x100 + i);
+        }
+        answer(&mut e, SLOTS + 0x108, 0x55);
+        answer(&mut e, NODE_0043FA80, 0);
+        e.call_log = Some(vec![]);
+        e.call(0x0066_2b70, &args![this, rotation]);
+        assert_eq!(e.mem.u8(this.addr() + 0xd7), 1);
+        assert_eq!(calls(&e, NODE_0043FA80), vec![vec![this.addr(), 0x55]]);
+        assert_eq!(calls(&e, SLOTS + 0x108)[0][0], this.addr());
+        let result = e.mem.alloc(0x24);
+        assert_eq!(e.call(0x0066_2a10, &args![this, result]).u32(), result);
+        assert_eq!(e.mem.bytes(result, 0x24), e.mem.bytes(rotation, 0x24));
+        e.call(0x0066_2aa0, &args![this, 7u32]);
+        assert_eq!(e.call(0x009a_0240, &args![this]).u32() & 0xff, 7);
+        e.set(this, BSFaceGenNiNode::bAnimationUpdate, 3);
+        e.set(this, BSFaceGenNiNode::bApplyRotationToParent, 4);
+        assert_eq!(e.call(0x0066_2a40, &args![this]).u32() & 0xff, 3);
+        assert_eq!(e.call(0x0066_2a80, &args![this]).u32() & 0xff, 4);
+    }
+
+    /// `fn_00663450` with the node at `distance`, the setting `limit` and the byte at
+    /// +0xe0 `byte`; the words `00653e50` got.
+    fn by_distance(distance: f64, limit: f64, byte: u32, mode: u32) -> Calls {
+        let mut e = Engine::new();
+        let this = node(&mut e);
+        e.map(CAMERA_HOLDER_011D59EC, 4);
+        e.map(DEFAULT_POSITION_011F426C, 12);
+        e.map(TEN, 4);
+        e.mem.set_f32(TEN, 10.0);
+        answer(&mut e, GETTER_0045BB80, 0x6400);
+        answer(&mut e, POSITION_DIFFERENCE_00439EF0, 0x6500);
+        answer_float(&mut e, LENGTH_00457990, distance);
+        answer_float(&mut e, SETTING_REAL_00450410, limit);
+        answer(&mut e, BYTE_AT_E0_008D8660, byte);
+        answer(&mut e, NODE_00653E50, 0);
+        e.call_log = Some(vec![]);
+        e.call(0x0066_3450, &args![this, mode]);
+        assert_eq!(calls(&e, GETTER_0045BB80), vec![vec![this.addr()]]);
+        assert_eq!(calls(&e, LENGTH_00457990), vec![vec![0x6500]]);
+        calls(&e, NODE_00653E50)
+            .into_iter()
+            .map(|c| {
+                assert_eq!(c[0], this.addr());
+                c[1]
+            })
+            .map(|m| vec![m])
+            .collect()
+    }
+
+    #[test]
+    fn morphing_switch_by_distance() {
+        // Beyond 50 + 10 without the byte: off.
+        assert_eq!(by_distance(100.0, 50.0, 0, 2), vec![vec![0]]);
+        // Beyond, with the byte: only the mode decides.
+        assert!(by_distance(100.0, 50.0, 1, 2).is_empty());
+        assert_eq!(by_distance(100.0, 50.0, 1, 0), vec![vec![0]]);
+        assert_eq!(by_distance(100.0, 50.0, 1, 1), vec![vec![1]]);
+        // Within 50 - 10 with the byte: on.
+        assert_eq!(by_distance(30.0, 50.0, 1, 2), vec![vec![1]]);
+        assert!(by_distance(30.0, 50.0, 0, 2).is_empty());
+        assert_eq!(by_distance(30.0, 50.0, 0, 0), vec![vec![0]]);
+        // A NaN distance: never beyond nor within.
+        assert!(by_distance(f64::NAN, 50.0, 1, 2).is_empty());
+    }
+
+    #[test]
+    fn update_transform_and_bounds_morphs_first() {
+        let mut e = Engine::new();
+        let this = node(&mut e);
+        answer(&mut e, IS_APP_CULLED_00456610, 1);
+        answer(&mut e, NI_NODE_UPDATE_TRANSFORM_AND_BOUNDS, 0);
+        e.call_log = Some(vec![]);
+        e.call(0x0066_3ab0, &args![this, 0x7700u32]);
+        assert_eq!(calls(&e, IS_APP_CULLED_00456610), vec![vec![this.addr()]]);
+        assert_eq!(
+            calls(&e, NI_NODE_UPDATE_TRANSFORM_AND_BOUNDS),
+            vec![vec![this.addr(), 0x7700]]
+        );
+    }
+
+    #[test]
+    fn clone_copies_the_members() {
+        let mut e = Engine::new();
+        let this = node(&mut e);
+        for i in 0..0x40u32 {
+            e.mem.set_u8(this.addr() + 0xac + i, i as u8 + 1);
+        }
+        e.mem.set_u32(this.addr() + 0xdc, 0x7f80_0001);
+        let block = e.mem.alloc(0xf0);
+        answer(&mut e, NI_ALLOCATE, block);
+        answer(&mut e, CONSTRUCT_006628C0, block);
+        answer(&mut e, NI_NODE_COPY_MEMBERS_00A5DC80, 0);
+        answer(&mut e, POINTER_ASSIGN_006E5CC0, 0);
+        answer(&mut e, SLOTS + 0x68, 0);
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x0066_3b80, &args![this, 0x8800u32]).u32(), block);
+        assert_eq!(calls(&e, NI_ALLOCATE), vec![vec![0xf0]]);
+        assert_eq!(
+            calls(&e, NI_NODE_COPY_MEMBERS_00A5DC80),
+            vec![vec![this.addr(), block, 0x8800]]
+        );
+        assert_eq!(
+            calls(&e, POINTER_ASSIGN_006E5CC0),
+            vec![vec![block + 0xac, this.addr() + 0xac]]
+        );
+        assert_eq!(calls(&e, SLOTS + 0x68), vec![vec![this.addr(), 0x8800]]);
+        assert_eq!(
+            e.mem.bytes(block + 0xb0, 0x28),
+            e.mem.bytes(this.addr() + 0xb0, 0x28)
+        );
+        assert_eq!(e.mem.u32(block + 0xdc), 0x7fc0_0001);
+        assert_eq!(e.mem.u8(block + 0xe0), 0x35);
+        assert_eq!(e.mem.u8(block + 0xe1), 0x36);
+        // Bytes +0xd8..+0xdb and +0xe2 are not copied.
+        assert_eq!(e.mem.u8(block + 0xd8), 0);
+        assert_eq!(e.mem.u8(block + 0xe2), 0);
+        // A failed allocation: no clone, nothing copied, the slot still called.
+        answer(&mut e, NI_ALLOCATE, 0);
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x0066_3b80, &args![this, 0x8800u32]).u32(), 0);
+        assert!(calls(&e, CONSTRUCT_006628C0).is_empty());
+        assert!(calls(&e, NI_NODE_COPY_MEMBERS_00A5DC80).is_empty());
+        assert_eq!(calls(&e, SLOTS + 0x68).len(), 1);
+    }
+
+    #[test]
+    fn viewer_strings_list_the_flags_and_values() {
+        let mut e = Engine::new();
+        let this = node(&mut e);
+        e.mem.set_u8(this.addr() + 0xd4, 1);
+        e.mem.set_u8(this.addr() + 0xe2, 1);
+        e.mem.set_f32(this.addr() + 0xdc, 1.5);
+        e.set(this, BSFaceGenNiNode::pActor, 0x9900);
+        let data = e.mem.alloc(0x200);
+        let vtable = e.mem.alloc(0x200);
+        e.mem.set_u32(data, vtable);
+        e.mem.set_u32(vtable + 0x94, 0x0350_0094);
+        e.mem.set_u32(vtable + 0xa4, 0x0350_00a4);
+        e.mem.set_u32(this.addr() + 0xac, data);
+        e.register(POINTER_GET, |e, a| e.mem.u32(a[0]).into_ret());
+        e.map(RTTI, 4);
+        e.mem.set_u32(RTTI, 0x1234);
+        e.map(UNSET, 8);
+        e.mem.set_f64(UNSET, f64::from(f32::MAX));
+        // Expression 2, modifier 16 and phoneme 0 are set; all others are unset.
+        let value = |index: u32, wanted: u32| -> f64 {
+            if index == wanted {
+                0.25
+            } else {
+                f64::from(f32::MAX)
+            }
+        };
+        e.register_double(0x0350_0094, move |_, a| Ret {
+            st0: value(a[1], 2),
+            ..Ret::default()
+        });
+        e.register_double(ANIMATION_VALUE_005DD4A0, move |_, a| Ret {
+            st0: value(a[1], 16),
+            ..Ret::default()
+        });
+        e.register_double(0x0350_00a4, move |_, a| Ret {
+            st0: value(a[1], 0),
+            ..Ret::default()
+        });
+        e.register(OPERATOR_NEW, |e, a| e.mem.alloc(a[0]).into_ret());
+        e.register(NI_GET_VIEWER_STRING, |_, a| (a[0] + 1).into_ret());
+        e.register(NI_GET_VIEWER_STRING_FLOAT, |_, a| (a[0] + 2).into_ret());
+        e.register(EXPRESSION_NAME, |_, a| (0x100 + a[0]).into_ret());
+        e.register(MODIFIER_NAME, |_, a| (0x200 + a[0]).into_ret());
+        e.register(PHONEME_NAME, |_, a| (0x300 + a[0]).into_ret());
+        answer(&mut e, FORM_ID_0084E3A0, 0x4242);
+        answer(&mut e, NI_NODE_GET_VIEWER_STRINGS, 0);
+        answer(&mut e, PRINT_00406D00, 0);
+        e.register(STRINGS_ADD_0096A610, |e, a| {
+            let text = e.mem.u32(a[1]);
+            let count = e.mem.u32(a[0]);
+            e.mem.set_u32(a[0] + 4 + 4 * count, text);
+            e.mem.set_u32(a[0], count + 1);
+            Ret::default()
+        });
+        let strings = e.mem.alloc(0x100);
+        e.call_log = Some(vec![]);
+        e.call(0x0066_3d10, &args![this, strings]);
+        assert_eq!(
+            calls(&e, NI_NODE_GET_VIEWER_STRINGS),
+            vec![vec![this.addr(), strings]]
+        );
+        let prints = calls(&e, PRINT_00406D00);
+        assert_eq!(prints.len(), 12);
+        assert_eq!(prints[0][1..], [0x20, 0x0106_6304, TRUE_TEXT]);
+        assert_eq!(prints[1][2..], [0x0106_62f0, FALSE_TEXT]);
+        assert_eq!(prints[7][2..], [0x0106_625c, TRUE_TEXT]);
+        assert_eq!(prints[8][2..], [LAST_TIME_FORMAT, 0, 0x3ff8_0000]);
+        assert_eq!(prints[9][2..], [ACTOR_FORMAT, 0x9900]);
+        assert_eq!(prints[10][2..], [ACTOR_FORM_ID_FORMAT, 0x4242]);
+        assert_eq!(prints[11][2..], [ANIMATION_DATA_FORMAT, data]);
+        assert_eq!(
+            calls(&e, NI_GET_VIEWER_STRING_FLOAT),
+            vec![
+                vec![0x102, 0.25f32.to_bits()],
+                vec![0x210, 0.25f32.to_bits()],
+                vec![0x300, 0.25f32.to_bits()]
+            ]
+        );
+        // The class name, 12 printed lines and the three values.
+        assert_eq!(e.mem.u32(strings), 16);
+        assert_eq!(e.mem.u32(strings + 4), 0x1235);
+        assert_eq!(e.mem.u32(strings + 4 + 4 * 13), 0x104);
+        // Without an actor or animation data: no form id, no values.
+        e.set(this, BSFaceGenNiNode::pActor, 0);
+        e.mem.set_u32(this.addr() + 0xac, 0);
+        e.call_log = Some(vec![]);
+        e.call(0x0066_3d10, &args![this, strings]);
+        assert_eq!(calls(&e, PRINT_00406D00).len(), 11);
+        assert!(calls(&e, FORM_ID_0084E3A0).is_empty());
+        assert!(calls(&e, NI_GET_VIEWER_STRING_FLOAT).is_empty());
     }
 }

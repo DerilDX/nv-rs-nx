@@ -396,9 +396,339 @@ pub fn bolt_shader_create_constant_maps(e: &mut Engine, this: Ptr) {
     }
 }
 
+/// The segment index block (`01201f4c`), the segments per bolt (`011ae61c`, a signed word)
+/// and the bolts' started count (`01201f54`).
+const SEGMENT_INDICES_01201F4C: u32 = 0x0120_1f4c;
+const SEGMENTS_011AE61C: u32 = 0x011a_e61c;
+const STARTED_01201F54: u32 = 0x0120_1f54;
+
+/// The bolt count (`01201f50`), set on first use to 0x4b (shader model setting `011f91c0`
+/// below 2, signed) or 0xeb.
+fn bolt_count(e: &mut Engine) -> u32 {
+    let mut count = e.global::<u32>(SEGMENT_COUNT_01201F50);
+    if count == 0 {
+        count = if (e.global::<u32>(SHADER_MODEL_011F91C0) as i32) < 2 {
+            0x4b
+        } else {
+            0xeb
+        };
+        e.set_global(SEGMENT_COUNT_01201F50, count);
+    }
+    count
+}
+
+// Translated from 00bc0b70 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BoltShader::GetSegmentIndices` (Xbox PDB), no arguments: the segment index block
+/// (`01201f4c`), made on first use: `n` = bolt count (`01201f50`, set on first use) times the
+/// segments per bolt (`011ae61c`) entries of four `float`s from the memory manager (size
+/// checked for overflow), entry `i` = (i / m, i / m, (i + 1) / m, (i + 1) / m) with `i` read
+/// unsigned and `m` the segments per bolt (x87, through `float`s).
+pub fn bolt_shader_get_segment_indices(e: &mut Engine) -> u32 {
+    let block = e.global::<u32>(SEGMENT_INDICES_01201F4C);
+    if block != 0 {
+        return block;
+    }
+    let count = bolt_count(e).wrapping_mul(e.global::<u32>(SEGMENTS_011AE61C));
+    let size = count.wrapping_mul(4).checked_mul(4).unwrap_or(u32::MAX);
+    let block = e.call(MEMORY_ALLOCATE, &args![MEMORY_MANAGER, size]).u32();
+    e.set_global(SEGMENT_INDICES_01201F4C, block);
+    let mut index = 0u32;
+    while index < count {
+        let mut value = f64::from(index as i32);
+        if (index as i32) < 0 {
+            value = x87_add(value, x87_m32(e.global::<u32>(TWO_TO_32_01099378)));
+        }
+        let value_bits = x87_store32(value);
+        index += 1;
+        let segments_bits = x87_store32(f64::from(e.global::<u32>(SEGMENTS_011AE61C) as i32));
+        let value = x87_load32(value_bits);
+        let segments = x87_load32(segments_bits);
+        let low_bits = x87_store32(x87_div(value, segments));
+        let high_bits = x87_store32(x87_div(x87_add(value, 1.0), segments));
+        let entry = block.wrapping_add((index - 1).wrapping_mul(0x10));
+        let low = x87_quiet_bits(low_bits);
+        let high = x87_quiet_bits(high_bits);
+        for (offset, word) in [(0u32, low), (4, low), (8, high), (0xc, high)] {
+            e.mem.set_u32(entry.wrapping_add(offset), word);
+        }
+    }
+    e.global::<u32>(SEGMENT_INDICES_01201F4C)
+}
+
+// Translated from 00bc0c50 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (unit `boltshader.cpp`), no arguments: frees the segment index
+/// block (`01201f4c`, the memory manager's `Deallocate`) when set and clears the word.
+pub fn fn_00bc0c50(e: &mut Engine) {
+    let block = e.global::<u32>(SEGMENT_INDICES_01201F4C);
+    if block != 0 {
+        e.call(MEMORY_DEALLOCATE, &args![MEMORY_MANAGER, block]);
+    }
+    e.set_global(SEGMENT_INDICES_01201F4C, 0u32);
+}
+
+// Translated from 00bc0c70 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed (Ghidra made no function of it): slot 73 of the vtable `010ba3b0`, `thiscall`, no
+/// stack words: `this`'s slot +0x128 with the pass at +0x168; what it answers in EAX, EDX and
+/// ST0 is this function's result.
+pub fn fn_00bc0c70(e: &mut Engine, this: Ptr) -> Ret {
+    let pass = e.mem.u32(this.addr() + 0x168);
+    e.vcall(this.addr(), 0x128, &args![pass])
+}
+
+/// The uniform-form entry of [`fn_00bc0c70`]: `this`; the call's registers pass through.
+fn fn_00bc0c70_entry(e: &mut Engine, a: &[u32]) -> Ret {
+    fn_00bc0c70(e, Ptr::new(a[0]))
+}
+
+/// What `00bc0f70` answers: the address `01201f5c` (no RTTI locator for the vtable; the word
+/// is the class's `NiRTTI` by its place in the vtable, unconfirmed).
+const RECORD_01201F5C: u32 = 0x0120_1f5c;
+
+// Translated from 00bc0f70 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed (Ghidra made no function of it): slot 2 of the vtable `010ba3b0`, `thiscall`
+/// without reading `this`: answers the address `01201f5c`.
+pub fn fn_00bc0f70(_e: &mut Engine, _this: Ptr) -> u32 {
+    RECORD_01201F5C
+}
+
+/// `NiAVObject::GetProperty` (engine map, `00a59d30`; `thiscall`, the property type).
+const GET_PROPERTY_00A59D30: u32 = 0x00a5_9d30;
+
+/// A node child's bolt property (type 0xf among its type-3 properties), else null; a null
+/// child gives null without asking.
+fn child_bolt_property(e: &mut Engine, child: u32) -> u32 {
+    if child == 0 {
+        return 0;
+    }
+    let property = e.call(GET_PROPERTY_00A59D30, &args![child, 3u32]).u32();
+    if property != 0 && e.mem.u32(property + 0x1c) == 0xf {
+        property
+    } else {
+        0
+    }
+}
+
+/// The shared `NiPointer`'s object released: count +4 decremented, slot +4 at 0.
+fn release_shared(e: &mut Engine, object: u32) {
+    let left = e
+        .call(IMPORT_INTERLOCKED_DECREMENT, &args![object + 4])
+        .u32();
+    if left == 0 {
+        e.vcall(object, 4, &args![]);
+    }
+}
+
+// Translated from 00bc1470 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BoltShader::Stop` (Xbox PDB), `cdecl`, two words (a node, a bolt property): with both,
+/// each child of the node (count u16 +0xa8, array +0xa0) whose bolt property is the given one
+/// is removed (the node's slot +0xf0 with the index); then the started count (`01201f54`)
+/// goes down and at 0 or below the shared geometry (`01201f58`) is released and cleared and
+/// the count set to 0.
+pub fn bolt_shader_stop(e: &mut Engine, node: u32, property: u32) {
+    if node == 0 || property == 0 {
+        return;
+    }
+    let mut index = 0u32;
+    while index < u32::from(e.mem.u16(node + 0xa8)) {
+        let child = e.mem.u32(e.mem.u32(node + 0xa0).wrapping_add(4 * index));
+        let found = child_bolt_property(e, child);
+        if found != 0 && found == property {
+            e.vcall(node, 0xf0, &args![index]);
+        }
+        index += 1;
+    }
+    let started = e.global::<u32>(STARTED_01201F54).wrapping_sub(1);
+    e.set_global(STARTED_01201F54, started);
+    if started as i32 <= 0 {
+        let shared = e.global::<u32>(SHARED_POINTER_01201F58);
+        if shared != 0 {
+            release_shared(e, shared);
+            e.set_global(SHARED_POINTER_01201F58, 0u32);
+        }
+        e.set_global(STARTED_01201F54, 0u32);
+    }
+}
+
+/// What `GetBoltGeometry` makes (engine map): `NiTriShapeData::NiTriShapeData` (`00a7b630`),
+/// `NiAdditionalGeometryData::NiAdditionalGeometryData` (`00ba63e0`, unit `particleshader.cpp`),
+/// `::SetDataBlockCount` (`00a72ca0`), `::SetDataBlock` (`00a72bb0`), `::SetDataStream`
+/// (`00a726a0`), `00a67260` (unnamed), `NiTriShape::NiTriShape` (`00a74480`), the bolt
+/// property constructor `00bc1d40` (unnamed), `NiAVObject::AttachProperty` (`00439410`), the
+/// `float`s -1.0 (`01012054`) and the bound radius (`01018bfc`).
+const TRI_SHAPE_DATA_00A7B630: u32 = 0x00a7_b630;
+const ADDITIONAL_DATA_00BA63E0: u32 = 0x00ba_63e0;
+const SET_DATA_BLOCK_COUNT_00A72CA0: u32 = 0x00a7_2ca0;
+const SET_DATA_BLOCK_00A72BB0: u32 = 0x00a7_2bb0;
+const SET_DATA_STREAM_00A726A0: u32 = 0x00a7_26a0;
+const SET_ADDITIONAL_00A67260: u32 = 0x00a6_7260;
+const TRI_SHAPE_00A74480: u32 = 0x00a7_4480;
+const PROPERTY_CONSTRUCT_00BC1D40: u32 = 0x00bc_1d40;
+const ATTACH_PROPERTY_00439410: u32 = 0x0043_9410;
+const MINUS_ONE_01012054: u32 = 0x0101_2054;
+const RADIUS_01018BFC: u32 = 0x0101_8bfc;
+
+// Translated from 00bc15a0 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 00bc15a0 - the C++ exception frame (FS:[0] chain, unwind states 0 to 3 for the allocations) and the security-cookie bookkeeping are not translated.
+/// `BoltShader::GetBoltGeometry` (Xbox PDB), no arguments: the shared geometry (`01201f58`)
+/// when there is one; null with a bolt count (`01201f50`, set on first use) of 0. Otherwise,
+/// for `n` = segments per bolt (`011ae61c`) times the bolt count: `4n` vertices (16-bit) at
+/// (-1, -1, 0), (1, -1, 0), (1, 1, 0), (-1, 1, 0) per quad and `2n` triangles (v, v+1, v+2),
+/// (v+3, v, v+2) from the memory manager (sizes checked for overflow); an `NiTriShapeData`
+/// over them (0x58 bytes, no normals, colours or UVs), an `NiAdditionalGeometryData` (0x2c
+/// bytes) with one data block (the segment indices, `GetSegmentIndices`, `4 * 4n` bytes) and
+/// one stream given to the data, an `NiTriShape` (0xc4 bytes) with the bound radius
+/// `[01018bfc]` and a new bolt property (0x190 bytes, `00bc1d40`). It replaces the shared
+/// `NiPointer` (old one released, new one held). Null allocations are used as they are.
+pub fn bolt_shader_get_bolt_geometry(e: &mut Engine) -> u32 {
+    let shared = e.global::<u32>(SHARED_POINTER_01201F58);
+    if shared != 0 {
+        return shared;
+    }
+    let count = bolt_count(e);
+    if count == 0 {
+        return 0;
+    }
+    let quads = e.global::<u32>(SEGMENTS_011AE61C).wrapping_mul(count);
+    let vertices = quads.wrapping_mul(4) & 0xffff;
+    let triangles = quads.wrapping_mul(2) & 0xffff;
+    let allocate =
+        |e: &mut Engine, size: u32| e.call(MEMORY_ALLOCATE, &args![MEMORY_MANAGER, size]).u32();
+    let positions = allocate(e, vertices.checked_mul(0xc).unwrap_or(u32::MAX));
+    let index_bytes = triangles.wrapping_mul(3).checked_mul(2).unwrap_or(u32::MAX);
+    let indices = allocate(e, index_bytes);
+    if quads != 0 {
+        let minus_one = x87_quiet_bits(e.global::<u32>(MINUS_ONE_01012054));
+        let one = 0x3f80_0000u32;
+        let quad = [
+            minus_one, minus_one, 0, one, minus_one, 0, one, one, 0, minus_one, one, 0,
+        ];
+        let mut vertex = 0u32;
+        for q in 0..quads {
+            let at = positions.wrapping_add(q.wrapping_mul(0x30));
+            for (index, word) in quad.iter().enumerate() {
+                e.mem.set_u32(at.wrapping_add(4 * index as u32), *word);
+            }
+            let v = vertex as u16;
+            let words = [
+                v,
+                v.wrapping_add(1),
+                v.wrapping_add(2),
+                v.wrapping_add(3),
+                v,
+                v.wrapping_add(2),
+            ];
+            let cursor = indices.wrapping_add(q.wrapping_mul(0xc));
+            for (index, word) in words.iter().enumerate() {
+                e.mem.set_u16(cursor.wrapping_add(2 * index as u32), *word);
+            }
+            vertex = vertex.wrapping_add(4);
+        }
+    }
+    let block = e.call(NI_ALLOCATE, &args![0x58u32]).u32();
+    let data = if block != 0 {
+        e.call(
+            TRI_SHAPE_DATA_00A7B630,
+            &args![block, vertices, positions, 0u32, 0u32, 0u32, 0u32, 0u32, triangles, indices],
+        )
+        .u32()
+    } else {
+        0
+    };
+    let block = e.call(NI_ALLOCATE, &args![0x2cu32]).u32();
+    let extra = if block != 0 {
+        e.call(ADDITIONAL_DATA_00BA63E0, &args![block, vertices, 1u32])
+            .u32()
+    } else {
+        0
+    };
+    e.call(SET_DATA_BLOCK_COUNT_00A72CA0, &args![extra, 1u32]);
+    let bytes = vertices.wrapping_mul(4);
+    let segments = bolt_shader_get_segment_indices(e);
+    e.call(
+        SET_DATA_BLOCK_00A72BB0,
+        &args![extra, 0u32, segments, bytes, 1u32],
+    );
+    e.call(
+        SET_DATA_STREAM_00A726A0,
+        &args![extra, 0u32, 0u32, 0u32, 1u32, vertices, 4u32, 4u32],
+    );
+    e.call(SET_ADDITIONAL_00A67260, &args![data, extra]);
+    let block = e.call(NI_ALLOCATE, &args![0xc4u32]).u32();
+    let shape = if block != 0 {
+        e.call(TRI_SHAPE_00A74480, &args![block, data]).u32()
+    } else {
+        0
+    };
+    let bound = e.mem.u32(shape.wrapping_add(0xb8));
+    let center = [0x10u32, 0x14, 0x18].map(|offset| e.mem.u32(bound + offset));
+    let radius = x87_quiet_bits(e.global::<u32>(RADIUS_01018BFC));
+    e.mem.set_u32(bound + 0x1c, radius);
+    for (offset, word) in [0x10u32, 0x14, 0x18].iter().zip(center) {
+        e.mem.set_u32(bound + offset, word);
+    }
+    let block = e.call(NI_ALLOCATE, &args![0x190u32]).u32();
+    let property = if block != 0 {
+        e.call(PROPERTY_CONSTRUCT_00BC1D40, &args![block]).u32()
+    } else {
+        0
+    };
+    e.call(ATTACH_PROPERTY_00439410, &args![shape, property]);
+    let old = e.global::<u32>(SHARED_POINTER_01201F58);
+    if old != shape {
+        if old != 0 {
+            release_shared(e, old);
+        }
+        e.set_global(SHARED_POINTER_01201F58, shape);
+        e.call(IMPORT_INTERLOCKED_INCREMENT, &args![shape.wrapping_add(4)]);
+    }
+    e.global::<u32>(SHARED_POINTER_01201F58)
+}
+
+/// `NiObject::Clone` (engine map, `00a5d680`; `thiscall`) and `BSShaderManager::PrepareObject`
+/// (engine map, `00b57e30`; `cdecl`, three words).
+const CLONE_00A5D680: u32 = 0x00a5_d680;
+const PREPARE_OBJECT_00B57E30: u32 = 0x00b5_7e30;
+
+// Translated from 00bc18d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BoltShader::Start` (Xbox PDB), `cdecl`, one word (a node): clones the bolt geometry
+/// (`GetBoltGeometry`, `NiObject::Clone`), attaches the clone (the node's slot +0xdc with 1),
+/// prepares it (`PrepareObject(clone, 0, 0)`); with a bolt property (type 0xf) on the clone,
+/// `GetBoltGeometry` runs again, the started count (`01201f54`) goes up and the property's slot
+/// +0x9c gets the clone. Answers that property (null without a node or property).
+pub fn bolt_shader_start(e: &mut Engine, node: u32) -> u32 {
+    if node == 0 {
+        return 0;
+    }
+    let geometry = bolt_shader_get_bolt_geometry(e);
+    let clone = e.call(CLONE_00A5D680, &args![geometry]).u32();
+    e.vcall(node, 0xdc, &args![clone, 1u32]);
+    e.call(PREPARE_OBJECT_00B57E30, &args![clone, 0u32, 0u32]);
+    let found = e.call(GET_PROPERTY_00A59D30, &args![clone, 3u32]).u32();
+    let property = if found != 0 && e.mem.u32(found + 0x1c) == 0xf {
+        found
+    } else {
+        0
+    };
+    if property == 0 {
+        return 0;
+    }
+    bolt_shader_get_bolt_geometry(e);
+    let started = e.global::<u32>(STARTED_01201F54).wrapping_add(1);
+    e.set_global(STARTED_01201F54, started);
+    e.vcall(property, 0x9c, &args![clone]);
+    property
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x00bc_0b70, bolt_shader_get_segment_indices() -> u32),
+        entry!(0x00bc_0c50, fn_00bc0c50()),
+        (0x00bc_0c70, fn_00bc0c70_entry as AbiFn),
+        entry!(0x00bc_0f70, fn_00bc0f70(Ptr) -> u32),
+        entry!(0x00bc_1470, bolt_shader_stop(u32, u32)),
+        entry!(0x00bc_15a0, bolt_shader_get_bolt_geometry() -> u32),
+        entry!(0x00bc_18d0, bolt_shader_start(u32) -> u32),
         entry!(0x00bc_0c90, fn_00bc0c90(Ptr, Ptr) -> Ptr),
         entry!(0x00bc_10e0, fn_00bc10e0() -> Ptr),
         entry!(0x00bc_0f80, fn_00bc0f80(Ptr)),
@@ -753,5 +1083,227 @@ mod b056_tests {
         e.call(0x00bc_1950, &args![this]);
         assert_eq!(e.global::<u32>(SEGMENT_COUNT_01201F50), 0x4b);
         assert!(entries(&e, held).is_empty());
+    }
+}
+
+#[cfg(test)]
+mod n070_tests {
+    use super::*;
+
+    fn calls(e: &Engine, addr: u32) -> Vec<Vec<u32>> {
+        e.call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|(a, _)| *a == addr)
+            .map(|(_, w)| w.clone())
+            .collect()
+    }
+
+    /// Slot doubles: `SLOTS + offset`.
+    const SLOTS: u32 = 0x0ee0_0000;
+
+    fn object(e: &mut Engine, size: u32) -> u32 {
+        let vtable = e.mem.alloc(0x170);
+        for offset in (0..0x170u32).step_by(4) {
+            e.mem.set_u32(vtable + offset, SLOTS + offset);
+        }
+        let object = e.mem.alloc(size);
+        e.mem.set_u32(object, vtable);
+        object
+    }
+
+    fn rig() -> Engine {
+        let mut e = Engine::new();
+        for page in [
+            0x0120_1000u32,
+            0x011f_9000,
+            0x011a_e000,
+            0x0101_2000,
+            0x0101_8000,
+            0x0109_9000,
+        ] {
+            e.map(page, 0x1000);
+        }
+        for offset in (0..0x170u32).step_by(4) {
+            e.register(SLOTS + offset, |_, _| Ret::default());
+        }
+        e.register(IMPORT_INTERLOCKED_INCREMENT, |e, a| {
+            let v = e.mem.u32(a[0]).wrapping_add(1);
+            e.mem.set_u32(a[0], v);
+            v.into_ret()
+        });
+        e.register(IMPORT_INTERLOCKED_DECREMENT, |e, a| {
+            let v = e.mem.u32(a[0]).wrapping_sub(1);
+            e.mem.set_u32(a[0], v);
+            v.into_ret()
+        });
+        e.register(MEMORY_ALLOCATE, |e, a| e.mem.alloc(a[1]).into_ret());
+        e.register(MEMORY_DEALLOCATE, |_, _| Ret::default());
+        e.set_global(TWO_TO_32_01099378, 4_294_967_296.0f32);
+        e.call_log = Some(vec![]);
+        e
+    }
+
+    #[test]
+    fn get_segment_indices_builds_once() {
+        let mut e = rig();
+        e.set_global(SEGMENT_COUNT_01201F50, 1u32);
+        e.set_global(SEGMENTS_011AE61C, 4u32);
+        let block = e.call(0x00bc_0b70, &args![]).u32();
+        assert_eq!(calls(&e, MEMORY_ALLOCATE)[0][1], 0x40);
+        let entry = |e: &Engine, i: u32| -> Vec<f32> {
+            (0..4).map(|k| e.mem.f32(block + 16 * i + 4 * k)).collect()
+        };
+        assert_eq!(entry(&e, 0), vec![0.0, 0.0, 0.25, 0.25]);
+        assert_eq!(entry(&e, 3), vec![0.75, 0.75, 1.0, 1.0]);
+        assert_eq!(e.call(0x00bc_0b70, &args![]).u32(), block);
+        assert_eq!(calls(&e, MEMORY_ALLOCATE).len(), 1);
+        e.call(0x00bc_0c50, &args![]);
+        assert_eq!(
+            calls(&e, MEMORY_DEALLOCATE),
+            vec![vec![MEMORY_MANAGER, block]]
+        );
+        assert_eq!(e.global::<u32>(SEGMENT_INDICES_01201F4C), 0);
+        e.call(0x00bc_0c50, &args![]);
+        assert_eq!(calls(&e, MEMORY_DEALLOCATE).len(), 1);
+        // A zero count from the model setting (2 or more: 0xeb).
+        e.set_global(SEGMENT_COUNT_01201F50, 0u32);
+        e.set_global(SHADER_MODEL_011F91C0, 2u32);
+        e.set_global(SEGMENTS_011AE61C, 1u32);
+        e.call(0x00bc_0b70, &args![]);
+        assert_eq!(e.global::<u32>(SEGMENT_COUNT_01201F50), 0xeb);
+        assert_eq!(calls(&e, MEMORY_ALLOCATE)[1][1], 0xeb * 16);
+    }
+
+    #[test]
+    fn fn_00bc0c70_and_00bc0f70() {
+        let mut e = rig();
+        e.register(SLOTS + 0x128, |_, _| 3u32.into_ret());
+        let this = object(&mut e, 0x16c);
+        e.mem.set_u32(this + 0x168, 0x1680);
+        assert_eq!(e.call(0x00bc_0c70, &args![this]).u32(), 3);
+        assert_eq!(calls(&e, SLOTS + 0x128), vec![vec![this, 0x1680]]);
+        assert_eq!(e.call(0x00bc_0f70, &args![this]).u32(), 0x0120_1f5c);
+    }
+
+    #[test]
+    fn stop_removes_matching_children_and_releases() {
+        let mut e = rig();
+        let wanted = e.mem.alloc(0x20);
+        e.mem.set_u32(wanted + 0x1c, 0xf);
+        let other = e.mem.alloc(0x20);
+        e.mem.set_u32(other + 0x1c, 0x11);
+        let first = e.mem.alloc(8);
+        e.mem.set_u32(first + 4, other);
+        let second = e.mem.alloc(8);
+        e.mem.set_u32(second + 4, wanted);
+        let children = e.mem.alloc(8);
+        e.mem.set_u32(children, first);
+        e.mem.set_u32(children + 4, second);
+        e.register(GET_PROPERTY_00A59D30, |e, a| e.mem.u32(a[0] + 4).into_ret());
+        let node = object(&mut e, 0xac);
+        e.mem.set_u32(node + 0xa0, children);
+        e.mem.set_u16(node + 0xa8, 2);
+        let shared = object(&mut e, 8);
+        e.mem.set_u32(shared + 4, 1);
+        e.set_global(SHARED_POINTER_01201F58, shared);
+        e.set_global(STARTED_01201F54, 1u32);
+        e.call(0x00bc_1470, &args![node, wanted]);
+        assert_eq!(calls(&e, SLOTS + 0xf0), vec![vec![node, 1]]);
+        assert_eq!(e.global::<u32>(SHARED_POINTER_01201F58), 0);
+        assert_eq!(calls(&e, SLOTS + 4), vec![vec![shared]]);
+        assert_eq!(e.global::<u32>(STARTED_01201F54), 0);
+        e.set_global(STARTED_01201F54, 4u32);
+        e.call(0x00bc_1470, &args![node, 0u32]);
+        assert_eq!(e.global::<u32>(STARTED_01201F54), 4);
+    }
+
+    fn geometry_rig() -> Engine {
+        let mut e = rig();
+        e.register(NI_ALLOCATE, |e, a| e.mem.alloc(a[0]).into_ret());
+        for target in [
+            TRI_SHAPE_DATA_00A7B630,
+            ADDITIONAL_DATA_00BA63E0,
+            PROPERTY_CONSTRUCT_00BC1D40,
+        ] {
+            e.register(target, |_, a| a[0].into_ret());
+        }
+        e.register(TRI_SHAPE_00A74480, |e, a| {
+            let bound = e.mem.alloc(0x20);
+            e.mem.set_u32(bound + 0x14, 0x1414);
+            e.mem.set_u32(a[0] + 0xb8, bound);
+            a[0].into_ret()
+        });
+        for target in [
+            SET_DATA_BLOCK_COUNT_00A72CA0,
+            SET_DATA_BLOCK_00A72BB0,
+            SET_DATA_STREAM_00A726A0,
+            SET_ADDITIONAL_00A67260,
+            ATTACH_PROPERTY_00439410,
+        ] {
+            e.register(target, |_, _| Ret::default());
+        }
+        e.set_global(MINUS_ONE_01012054, -1.0f32);
+        e.set_global(RADIUS_01018BFC, 1000.0f32);
+        e.set_global(SEGMENT_COUNT_01201F50, 1u32);
+        e.set_global(SEGMENTS_011AE61C, 2u32);
+        e
+    }
+
+    #[test]
+    fn get_bolt_geometry_builds_the_shared_shape() {
+        let mut e = geometry_rig();
+        let shape = e.call(0x00bc_15a0, &args![]).u32();
+        assert_eq!(e.global::<u32>(SHARED_POINTER_01201F58), shape);
+        assert_eq!(e.mem.u32(shape + 4), 1);
+        let data = &calls(&e, TRI_SHAPE_DATA_00A7B630)[0];
+        assert_eq!(data[1], 8);
+        assert_eq!(data[3..8], [0, 0, 0, 0, 0]);
+        assert_eq!(data[8], 4);
+        let positions: Vec<f32> = (0..12).map(|i| e.mem.f32(data[2] + 4 * i)).collect();
+        assert_eq!(
+            positions,
+            vec![-1.0, -1.0, 0.0, 1.0, -1.0, 0.0, 1.0, 1.0, 0.0, -1.0, 1.0, 0.0]
+        );
+        let words: Vec<u16> = (0..12).map(|i| e.mem.u16(data[9] + 2 * i)).collect();
+        assert_eq!(words, vec![0, 1, 2, 3, 0, 2, 4, 5, 6, 7, 4, 6]);
+        let segments = e.global::<u32>(SEGMENT_INDICES_01201F4C);
+        assert_eq!(
+            calls(&e, SET_DATA_BLOCK_00A72BB0)[0][1..],
+            [0, segments, 32, 1]
+        );
+        assert_eq!(calls(&e, ADDITIONAL_DATA_00BA63E0)[0][1..], [8, 1]);
+        let bound = e.mem.u32(shape + 0xb8);
+        assert_eq!(e.mem.f32(bound + 0x1c), 1000.0);
+        assert_eq!(e.mem.u32(bound + 0x14), 0x1414);
+        assert_eq!(calls(&e, NI_ALLOCATE).last().unwrap(), &vec![0x190]);
+        assert_eq!(e.call(0x00bc_15a0, &args![]).u32(), shape);
+        assert_eq!(calls(&e, TRI_SHAPE_00A74480).len(), 1);
+    }
+
+    #[test]
+    fn start_attaches_a_clone_and_counts_it() {
+        let mut e = geometry_rig();
+        let clone = e.mem.alloc(0xc0);
+        e.set_global(0x0120_1f00, clone);
+        e.register(CLONE_00A5D680, |e, _| e.mem.u32(0x0120_1f00).into_ret());
+        e.register(PREPARE_OBJECT_00B57E30, |_, _| Ret::default());
+        let property = object(&mut e, 0x20);
+        e.mem.set_u32(property + 0x1c, 0xf);
+        e.set_global(0x0120_1f04, property);
+        e.register(GET_PROPERTY_00A59D30, |e, _| {
+            e.mem.u32(0x0120_1f04).into_ret()
+        });
+        let node = object(&mut e, 0xac);
+        assert_eq!(e.call(0x00bc_18d0, &args![node]).u32(), property);
+        assert_eq!(calls(&e, SLOTS + 0xdc), vec![vec![node, clone, 1]]);
+        assert_eq!(calls(&e, PREPARE_OBJECT_00B57E30), vec![vec![clone, 0, 0]]);
+        assert_eq!(calls(&e, SLOTS + 0x9c), vec![vec![property, clone]]);
+        assert_eq!(e.global::<u32>(STARTED_01201F54), 1);
+        e.mem.set_u32(property + 0x1c, 0x11);
+        assert_eq!(e.call(0x00bc_18d0, &args![node]).u32(), 0);
+        assert_eq!(e.global::<u32>(STARTED_01201F54), 1);
+        assert_eq!(e.call(0x00bc_18d0, &args![0u32]).u32(), 0);
     }
 }

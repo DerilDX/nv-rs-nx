@@ -708,9 +708,463 @@ pub fn fn_00bb3fc0(e: &mut Engine, this: Ptr, _unused_1: u32) -> u32 {
     build_additional_data(e, this, vertices, 0xd0)
 }
 
+/// `BSShaderPPLightingProperty::GetViewerStrings` (engine map, `00b690d0`) and
+/// `BSShaderLightingProperty::GetViewerStrings` (engine map, `00b71450`), `thiscall` with one
+/// word, the string array.
+const PP_LIGHTING_VIEWER_STRINGS: u32 = 0x00b6_90d0;
+const LIGHTING_VIEWER_STRINGS: u32 = 0x00b7_1450;
+
+// Translated from 00bb3380 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (not a Ghidra function; vtable entry at `010b94f0`): a jump to
+/// `BSShaderPPLightingProperty::GetViewerStrings` with the same `this` and string array.
+pub fn fn_00bb3380(e: &mut Engine, this: Ptr, strings: u32) {
+    e.call(PP_LIGHTING_VIEWER_STRINGS, &args![this, strings]);
+}
+
+// Translated from 00bb30a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (not a Ghidra function; vtable entry at `010b9398`): a jump to
+/// `00bb3380`, so `BSShaderPPLightingProperty::GetViewerStrings`.
+pub fn fn_00bb30a0(e: &mut Engine, this: Ptr, strings: u32) {
+    fn_00bb3380(e, this, strings);
+}
+
+// Translated from 00bb3390 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (not a Ghidra function; vtable entries at `010adb30`, `010adf08`,
+/// `010b9620`): a jump to `BSShaderLightingProperty::GetViewerStrings` with the same `this`
+/// and string array.
+pub fn fn_00bb3390(e: &mut Engine, this: Ptr, strings: u32) {
+    e.call(LIGHTING_VIEWER_STRINGS, &args![this, strings]);
+}
+
+// Translated from 00bb3940 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (not a Ghidra function; vtable entry at `010b9760`): a jump to
+/// `00bb3390`, so `BSShaderLightingProperty::GetViewerStrings`.
+pub fn fn_00bb3940(e: &mut Engine, this: Ptr, strings: u32) {
+    fn_00bb3390(e, this, strings);
+}
+
+// Translated from 00bb30b0 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 00bb30b0 - the C++ exception frame (FS:[0] chain, unwind state 0 for the allocation) is not translated.
+/// Unnamed in the engine map (vtable entry at `010b9464`), `thiscall`, no stack words: the
+/// clone. Allocates 0x108 bytes (`00aa13e0`); when that succeeds, constructs the `010b9490`
+/// class in them (`00bb3500`) with the object the vtable +0x11c answers, then stores the
+/// vtable `010b9338`, 4 at +0x58 and 10 at +0x1c. Answers the block (null when the allocation
+/// failed).
+pub fn fn_00bb30b0(e: &mut Engine, this: Ptr) -> u32 {
+    let block = e.call(NI_NEW, &args![0x108u32]).u32();
+    if block == 0 {
+        return 0;
+    }
+    let object = e.vcall(this.addr(), 0x11c, &args![]).u32();
+    fn_00bb3500(e, Ptr::new(block), object);
+    e.mem.set_u32(block, VTABLE_010B9338);
+    e.mem.set_u32(block + SHADER, 4);
+    e.mem.set_u32(block + SHADER_PROPERTY_TYPE, 10);
+    block
+}
+
+/// The block's word and `u16` set by `00bb3260` and `00bb3710`.
+fn set_block_pair(e: &mut Engine, block: u32, word: u32, half: u32) {
+    if block != 0 {
+        e.mem.set_u32(block + 8, word);
+        e.mem.set_u16(block + 0xc, half as u16);
+    }
+}
+
+// Translated from 00bb3260 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (not a Ghidra function; vtable entries at `010b9460`,
+/// `010b95b8`), `thiscall` with two words: when the pointer at +0x104 is set, its +8 gets the
+/// first word and its `u16` +0xc the low half of the second.
+pub fn fn_00bb3260(e: &mut Engine, this: Ptr, word: u32, half: u32) {
+    let block = e.mem.u32(this.addr() + POINTER_104);
+    set_block_pair(e, block, word, half);
+}
+
+// Translated from 00bb33a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (not a Ghidra function; vtable entries at `010b96a4`,
+/// `010b97e4`), `thiscall` with one word: +0x80 becomes 0 when the word is 3, else 3 (`SUB 3`,
+/// `NEG`, `SBB`, `AND 3`).
+pub fn fn_00bb33a0(e: &mut Engine, this: Ptr, value: u32) {
+    let result = if value.wrapping_sub(3) != 0 { 3 } else { 0 };
+    e.mem.set_u32(this.addr() + WORD_80, result);
+}
+
+// Translated from 00bb3440 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (vtable entries at `010b9670`, `010b97b0`), `thiscall` with three
+/// words (a geometry, two unread): runs `NiAVObject::UpdateProperties` on the geometry when its
+/// +0x9c address is null, and clears +0x58 when the pointer +0x7c is null.
+pub fn fn_00bb3440(e: &mut Engine, this: Ptr, geometry: u32, _unused_1: u32, _unused_2: u32) {
+    if geometry.wrapping_add(0x9c) == 0 {
+        e.call(NI_AV_OBJECT_UPDATE_PROPERTIES, &args![geometry]);
+    }
+    if e.mem.u32(this.addr() + POINTER_7C) == 0 {
+        e.mem.set_u32(this.addr() + SHADER, 0);
+    }
+}
+
+/// The records `00bb35a0`, `00bb36a0`, `00bb3c60` and `00bb40b0` answer.
+const RECORD_01200790: u32 = 0x0120_0790;
+const RECORD_01200798: u32 = 0x0120_0798;
+const RECORD_012007A0: u32 = 0x0120_07a0;
+const RECORD_012007A8: u32 = 0x0120_07a8;
+
+// Translated from 00bb35a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (not a Ghidra function; vtable entry at `010b9498`, `ECX`
+/// unread): answers the address `01200790`.
+pub fn fn_00bb35a0(_e: &mut Engine, _this: Ptr) -> Ptr {
+    Ptr::new(RECORD_01200790)
+}
+
+// Translated from 00bb36a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (not a Ghidra function; vtable entry at `010b95c8`, `ECX`
+/// unread): answers the address `01200798`.
+pub fn fn_00bb36a0(_e: &mut Engine, _this: Ptr) -> Ptr {
+    Ptr::new(RECORD_01200798)
+}
+
+// Translated from 00bb36b0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (not a Ghidra function; vtable entries at `010b96ac`,
+/// `010b97ec`), `thiscall` with one word: stores it at +0x80.
+pub fn fn_00bb36b0(e: &mut Engine, this: Ptr, value: u32) {
+    e.mem.set_u32(this.addr() + WORD_80, value);
+}
+
+// Translated from 00bb3710 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (not a Ghidra function; vtable entries at `010b9698`,
+/// `010b97d8`), `thiscall` with two words: when the pointer at +0x84 is set, its +8 gets the
+/// first word and its `u16` +0xc the low half of the second.
+pub fn fn_00bb3710(e: &mut Engine, this: Ptr, word: u32, half: u32) {
+    let block = e.mem.u32(this.addr() + POINTER_84);
+    set_block_pair(e, block, word, half);
+}
+
+/// The two RTTI records `00bb3880` looks for in the object's chain (`011f444c`, `011f4ac4`).
+const RTTI_011F444C: u32 = 0x011f_444c;
+const RTTI_011F4AC4: u32 = 0x011f_4ac4;
+
+/// Whether `rtti` is in the chain from `first` (each record's base at +4).
+fn chain_has(e: &Engine, first: u32, rtti: u32) -> bool {
+    let mut record = first;
+    while record != 0 {
+        if record == rtti {
+            return true;
+        }
+        record = e.mem.u32(record + 4);
+    }
+    false
+}
+
+// Translated from 00bb3880 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (vtable entries at `010b967c`, `010b97bc`), `thiscall` with two
+/// words: a `cdecl` callback and a word. With an object at +0x7c: walks its RTTI chain (vtable
+/// +8, bases at +4) for `011f444c`, and when that is not there, the chain again (the object
+/// read anew) for `011f4ac4` (an inlined `IsKindOf` whose answer goes unused); then calls the
+/// callback with the object (read anew), 0 and the word.
+pub fn fn_00bb3880(e: &mut Engine, this: Ptr, callback: u32, word: u32) {
+    let base = this.addr();
+    let object = e.mem.u32(base + POINTER_7C);
+    if object == 0 {
+        return;
+    }
+    let first = e.vcall(object, 8, &args![]).u32();
+    if !chain_has(e, first, RTTI_011F444C) {
+        let object = e.mem.u32(base + POINTER_7C);
+        if object != 0 {
+            let first = e.vcall(object, 8, &args![]).u32();
+            chain_has(e, first, RTTI_011F4AC4);
+        }
+    }
+    let object = e.mem.u32(base + POINTER_7C);
+    e.call(callback, &args![object, 0u32, word]);
+}
+
+// Translated from 00bb38e0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map: the `010b9490` class's scalar deleting destructor (vtable entry
+/// at `010b9490`), `thiscall`, `RET 4`. Runs `00bb35b0` and, with bit 0 of the flags, frees the
+/// 0x108 bytes (`00aa1460`). Answers `this`.
+pub fn fn_00bb38e0(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    fn_00bb35b0(e, this);
+    if flags & 1 != 0 {
+        e.call(NI_DELETE, &args![this, 0x108u32]);
+    }
+    this
+}
+
+// Translated from 00bb3910 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map: the `010b95c0` class's scalar deleting destructor (vtable entry
+/// at `010b95c0`), `thiscall`, `RET 4`. Runs `00bb3790` and, with bit 0 of the flags, frees the
+/// 0x88 bytes (`00aa1460`). Answers `this`.
+pub fn fn_00bb3910(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    fn_00bb3790(e, this);
+    if flags & 1 != 0 {
+        e.call(NI_DELETE, &args![this, 0x88u32]);
+    }
+    this
+}
+
+// Translated from 00bb3c60 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (not a Ghidra function; vtable entry at `010b9708`, `ECX`
+/// unread): answers the address `012007a0`.
+pub fn fn_00bb3c60(_e: &mut Engine, _this: Ptr) -> Ptr {
+    Ptr::new(RECORD_012007A0)
+}
+
+// Translated from 00bb3cb0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (not a Ghidra function; vtable entry at `010b9804`), `thiscall`
+/// with two words: with an object at +0x88, a jump to `00bb39e0` on it with the same words.
+pub fn fn_00bb3cb0(e: &mut Engine, this: Ptr, source: u32, count: u32) {
+    let object = e.mem.u32(this.addr() + POINTER_88);
+    if object != 0 {
+        fn_00bb39e0(e, Ptr::new(object), source, count);
+    }
+}
+
+// Translated from 00bb3e30 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 00bb3e30 - the C++ exception frame (FS:[0] chain, unwind state 0 for the allocation) is not translated.
+/// Unnamed in the engine map (vtable entry at `010b97f0`), `thiscall`, no stack words: the
+/// clone. Allocates 0x90 bytes (`00aa13e0`); when that succeeds, constructs them with
+/// `00bb3ba0` from the answers of the vtable +0xf8 (a `u16`), +0xcc and +0xfc (asked in the
+/// order +0xfc, +0xcc, +0xf8). Then calls the new object's vtable +0xdc with the pointer +0x7c
+/// (on a null object when the allocation failed, as the exe does) and answers it.
+pub fn fn_00bb3e30(e: &mut Engine, this: Ptr) -> u32 {
+    let base = this.addr();
+    let block = e.call(NI_NEW, &args![0x90u32]).u32();
+    let made = if block != 0 {
+        let third = e.vcall(base, 0xfc, &args![]).u32();
+        let second = e.vcall(base, 0xcc, &args![]).u32();
+        let value = e.vcall(base, 0xf8, &args![]).u16();
+        fn_00bb3ba0(e, Ptr::new(block), value, second, third).addr()
+    } else {
+        0
+    };
+    let pointer = e.mem.u32(base + POINTER_7C);
+    e.vcall(made, 0xdc, &args![pointer]);
+    made
+}
+
+/// This class's vtable (`010b9828`).
+const VTABLE_010B9828: u32 = 0x010b_9828;
+
+// Translated from 00bb4080 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map: the `010b9828` class's constructor, `thiscall`. Runs the
+/// `BSShaderLightingProperty` constructor (`00b71720`), stores the vtable, clears +0x7c, sets
+/// +0x58 to 0x10 and +0x1c to 3. Answers `this`.
+pub fn fn_00bb4080(e: &mut Engine, this: Ptr) -> Ptr {
+    let base = this.addr();
+    e.call(LIGHTING_CONSTRUCTOR, &args![base]);
+    e.mem.set_u32(base, VTABLE_010B9828);
+    e.mem.set_u32(base + POINTER_7C, 0);
+    e.mem.set_u32(base + SHADER, 0x10);
+    e.mem.set_u32(base + SHADER_PROPERTY_TYPE, 3);
+    this
+}
+
+// Translated from 00bb40b0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (not a Ghidra function; vtable entry at `010b9830`, `ECX`
+/// unread): answers the address `012007a8`.
+pub fn fn_00bb40b0(_e: &mut Engine, _this: Ptr) -> Ptr {
+    Ptr::new(RECORD_012007A8)
+}
+
+// Translated from 00bb40c0 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 00bb40c0 - the C++ exception frame (FS:[0] chain, unwind state 0 for the member) is not translated.
+/// Unnamed in the engine map: the `010b9828` class's destructor, `thiscall`. Stores the vtable,
+/// releases the reference at +0x7c (not cleared) and runs the `BSShaderLightingProperty`
+/// destructor (`00b71410`).
+pub fn fn_00bb40c0(e: &mut Engine, this: Ptr) {
+    let base = this.addr();
+    e.mem.set_u32(base, VTABLE_010B9828);
+    release_member(e, base + POINTER_7C);
+    e.call(LIGHTING_DESTRUCTOR, &args![base]);
+}
+
+// Translated from 00bb4140 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 00bb4140 - the C++ exception frame (FS:[0] chain, unwind state 0 for the allocation) is not translated.
+/// Unnamed in the engine map (vtable entry at `010b9870`), `thiscall` with one word: the
+/// clone. Allocates 0xd4 bytes (`00aa13e0`); when that succeeds, the `00bb4080` constructor's
+/// body (inlined in the exe) runs on them. Then `00b702b0` copies `this` into the block (null
+/// when the allocation failed) with the word. Answers the block.
+pub fn fn_00bb4140(e: &mut Engine, this: Ptr, word: u32) -> u32 {
+    let block = e.call(NI_NEW, &args![0xd4u32]).u32();
+    if block != 0 {
+        fn_00bb4080(e, Ptr::new(block));
+    }
+    e.call(LIGHTING_COPY_MEMBERS, &args![this, block, word]);
+    block
+}
+
+/// The fade distances (`011f9470`, `011f9474`, `011f9478`), the camera (`011f91c8`, its
+/// position at +0x1f0), the default bound (`011f4288`), the CRT square root (`00ec6040`, value
+/// and result in `ST0`), the interpolation `004b3ab0` (`cdecl`, five `float`s, result in
+/// `ST0`) and `BSShaderProperty::SetAlpha` (`00ba8ab0`, `thiscall`, one `float`).
+const FADE_START_011F9470: u32 = 0x011f_9470;
+const FADE_END_011F9474: u32 = 0x011f_9474;
+const FADE_LIMIT_011F9478: u32 = 0x011f_9478;
+const CAMERA_011F91C8: u32 = 0x011f_91c8;
+const DEFAULT_BOUND_011F4288: u32 = 0x011f_4288;
+const CRT_SQRT_00EC6040: u32 = 0x00ec_6040;
+const INTERPOLATE_004B3AB0: u32 = 0x004b_3ab0;
+const SET_ALPHA: u32 = 0x00ba_8ab0;
+
+// Translated from 00bb41e0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (vtable entry at `010b98c8`), `thiscall` with six words (a
+/// geometry, a key, an unread word, a high key, two unread words); answers the render-pass
+/// array. A high key of 7 answers 0 at once. The distance from the camera (`011f91c8` +0x1f0)
+/// to the geometry's bound centre (+0x20, `011f4288` without one), less its radius, goes to
+/// +0x34; when it differs from the old value and crosses the limit `011f9478` (rising past it
+/// or falling below it), +0x38 is cleared. With the geometry's +0x9c block (not null), the alpha
+/// is 1.0 without a property at +0xa4, else the property's +0x3c: when the start `011f9470` is
+/// not 0.0 and at most the distance, the passes are dropped (alpha set, 0 answered below); when
+/// the end `011f9474` and the limit are not 0.0, the end is at most the distance and the
+/// distance is below the limit, the alpha is `004b3ab0(0, 1, limit, end, distance)`; the alpha
+/// goes to `SetAlpha`. When the key differs from +0x38: the array is made
+/// (`CheckCreateRenderPassArray(1)`) and emptied, and unless the passes are dropped (then 0 is
+/// answered) pass 0x24c (0x24d with the geometry's +0xbc set) is added for the geometry and
+/// +0x38 becomes `high << 8 | key`.
+pub fn fn_00bb41e0(
+    e: &mut Engine,
+    this: Ptr,
+    geometry: u32,
+    key: u32,
+    _unused_2: u32,
+    high: u32,
+    _unused_4: u32,
+    _unused_5: u32,
+) -> u32 {
+    let base = this.addr();
+    if high == 7 {
+        return 0;
+    }
+    let camera = e.global::<u32>(CAMERA_011F91C8);
+    let old = x87_load32(x87_quiet_bits(e.mem.u32(base + 0x34)));
+    let eye = [
+        e.mem.u32(camera + 0x1f0),
+        e.mem.u32(camera + 0x1f4),
+        e.mem.u32(camera + 0x1f8),
+    ];
+    let mut keep = true;
+    let mut bound = e.mem.u32(geometry + 0x20);
+    if bound == 0 {
+        bound = DEFAULT_BOUND_011F4288;
+    }
+    let centre = [e.mem.u32(bound), e.mem.u32(bound + 4), e.mem.u32(bound + 8)];
+    let radius = e.mem.u32(bound + 0xc);
+    let delta: Vec<f64> = (0..3)
+        .map(|i| x87_load32(x87_store32(x87_sub(x87_load32(centre[i]), x87_m32(eye[i])))))
+        .collect();
+    let squares = x87_add(x87_mul(delta[1], delta[1]), x87_mul(delta[0], delta[0]));
+    let total = x87_store32(x87_add(squares, x87_mul(delta[2], delta[2])));
+    let root = e.call(CRT_SQRT_00EC6040, &args![x87_load32(total)]).f64();
+    let length = x87_load32(x87_store32(root));
+    let distance_bits = x87_store32(x87_sub(length, x87_m32(radius)));
+    let distance = x87_load32(distance_bits);
+    e.mem.set_u32(base + 0x34, distance_bits);
+    let limit = x87_load32(x87_quiet_bits(e.global::<u32>(FADE_LIMIT_011F9478)));
+    // `FUCOMP`, `TEST AH,0x44`, `JNP`: equal values leave +0x38 alone.
+    if old != distance {
+        let crossed = if limit > distance {
+            limit <= old
+        } else if limit <= distance {
+            limit > old
+        } else {
+            false
+        };
+        if crossed {
+            e.mem.set_u32(base + LAST_RENDER_PASS_STATE, 0);
+        }
+    }
+    if geometry.wrapping_add(0x9c) != 0 {
+        let property = e.mem.u32(geometry + 0xa4);
+        let mut alpha = 1.0f32.to_bits();
+        if property != 0 {
+            alpha = x87_quiet_bits(e.mem.u32(property + 0x3c));
+            let start = x87_load32(x87_quiet_bits(e.global::<u32>(FADE_START_011F9470)));
+            let end = x87_load32(x87_quiet_bits(e.global::<u32>(FADE_END_011F9474)));
+            if start != 0.0 && start <= distance {
+                keep = false;
+            } else if end != 0.0 && limit != 0.0 && end <= distance && distance < limit {
+                let value = e
+                    .call(
+                        INTERPOLATE_004B3AB0,
+                        &args![
+                            0.0f32.to_bits(),
+                            1.0f32.to_bits(),
+                            x87_store32(limit),
+                            x87_store32(end),
+                            distance_bits
+                        ],
+                    )
+                    .f64();
+                alpha = x87_store32(value);
+            }
+        }
+        e.call(SET_ALPHA, &args![base, alpha]);
+    }
+    if e.mem.u32(base + LAST_RENDER_PASS_STATE) != key {
+        e.call(CHECK_CREATE_RENDER_PASS_ARRAY, &args![base, 1u32]);
+        let array = e.mem.u32(base + RENDER_PASS_LIST);
+        e.mem.set_u32(array + 0x10, 0);
+        if !keep {
+            return 0;
+        }
+        let pass = if e.mem.u32(geometry + 0xbc) == 0 {
+            0x24cu32
+        } else {
+            0x24d
+        };
+        let array = e.mem.u32(base + RENDER_PASS_LIST);
+        e.call(
+            RENDER_PASS_ARRAY_ADD,
+            &args![array, geometry, pass, 1u32, 0u32, 0u32, 0u32, 0u32, 0u32],
+        );
+        e.mem
+            .set_u32(base + LAST_RENDER_PASS_STATE, (high << 8) | key);
+    }
+    e.mem.u32(base + RENDER_PASS_LIST)
+}
+
+// Translated from 00bb4470 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map: the `010b9828` class's scalar deleting destructor (vtable entry
+/// at `010b9828`), `thiscall`, `RET 4`. Runs `00bb40c0` and, with bit 0 of the flags, frees the
+/// 0xd4 bytes (`00aa1460`). Answers `this`.
+pub fn fn_00bb4470(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    fn_00bb40c0(e, this);
+    if flags & 1 != 0 {
+        e.call(NI_DELETE, &args![this, 0xd4u32]);
+    }
+    this
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x00bb_30a0, fn_00bb30a0(Ptr, u32)),
+        entry!(0x00bb_30b0, fn_00bb30b0(Ptr) -> u32),
+        entry!(0x00bb_3260, fn_00bb3260(Ptr, u32, u32)),
+        entry!(0x00bb_3380, fn_00bb3380(Ptr, u32)),
+        entry!(0x00bb_3390, fn_00bb3390(Ptr, u32)),
+        entry!(0x00bb_33a0, fn_00bb33a0(Ptr, u32)),
+        entry!(0x00bb_3440, fn_00bb3440(Ptr, u32, u32, u32)),
+        entry!(0x00bb_35a0, fn_00bb35a0(Ptr) -> Ptr),
+        entry!(0x00bb_36a0, fn_00bb36a0(Ptr) -> Ptr),
+        entry!(0x00bb_36b0, fn_00bb36b0(Ptr, u32)),
+        entry!(0x00bb_3710, fn_00bb3710(Ptr, u32, u32)),
+        entry!(0x00bb_3880, fn_00bb3880(Ptr, u32, u32)),
+        entry!(0x00bb_38e0, fn_00bb38e0(Ptr, u32) -> Ptr),
+        entry!(0x00bb_3910, fn_00bb3910(Ptr, u32) -> Ptr),
+        entry!(0x00bb_3940, fn_00bb3940(Ptr, u32)),
+        entry!(0x00bb_3c60, fn_00bb3c60(Ptr) -> Ptr),
+        entry!(0x00bb_3cb0, fn_00bb3cb0(Ptr, u32, u32)),
+        entry!(0x00bb_3e30, fn_00bb3e30(Ptr) -> u32),
+        entry!(0x00bb_4080, fn_00bb4080(Ptr) -> Ptr),
+        entry!(0x00bb_40b0, fn_00bb40b0(Ptr) -> Ptr),
+        entry!(0x00bb_40c0, fn_00bb40c0(Ptr)),
+        entry!(0x00bb_4140, fn_00bb4140(Ptr, u32) -> u32),
+        entry!(
+            0x00bb_41e0,
+            fn_00bb41e0(Ptr, u32, u32, u32, u32, u32, u32) -> u32
+        ),
+        entry!(0x00bb_4470, fn_00bb4470(Ptr, u32) -> Ptr),
         entry!(0x00bb_2fc0, fn_00bb2fc0(u32, f32, f32) -> bool),
         entry!(0x00bb_3070, fn_00bb3070(Ptr, u32) -> Ptr),
         entry!(0x00bb_3130, fn_00bb3130() -> u32),
@@ -1412,5 +1866,367 @@ mod tests {
             calls_to(&e, ADDITIONAL_DATA_SET_BLOCK_COUNT),
             vec![vec![0, 1]]
         );
+    }
+}
+
+#[cfg(test)]
+mod n071_tests {
+    use super::*;
+    use crate::units::bsshader::geometrydecalshader::shader_test_rig::{object, rig};
+    use crate::units::bsshader::shadowlightshader::n071_rig::{calls, order, slot_target, vobject};
+
+    #[test]
+    fn the_viewer_string_jumps() {
+        let mut e = rig();
+        e.register(PP_LIGHTING_VIEWER_STRINGS, |_, _| Ret::default());
+        e.register(LIGHTING_VIEWER_STRINGS, |_, _| Ret::default());
+        e.call(0x00bb_30a0, &args![1u32, 2u32]);
+        e.call(0x00bb_3380, &args![3u32, 4u32]);
+        e.call(0x00bb_3390, &args![5u32, 6u32]);
+        e.call(0x00bb_3940, &args![7u32, 8u32]);
+        assert_eq!(
+            calls(&e, PP_LIGHTING_VIEWER_STRINGS),
+            vec![vec![1, 2], vec![3, 4]]
+        );
+        assert_eq!(
+            calls(&e, LIGHTING_VIEWER_STRINGS),
+            vec![vec![5, 6], vec![7, 8]]
+        );
+    }
+
+    #[test]
+    fn the_small_accessors() {
+        let mut e = rig();
+        let this = e.mem.alloc(0x108);
+        for (addr, record) in [
+            (0x00bb_35a0u32, RECORD_01200790),
+            (0x00bb_36a0, RECORD_01200798),
+            (0x00bb_3c60, RECORD_012007A0),
+            (0x00bb_40b0, RECORD_012007A8),
+        ] {
+            assert_eq!(e.call(addr, &args![this]).u32(), record);
+        }
+        e.call(0x00bb_33a0, &args![this, 3u32]);
+        assert_eq!(e.mem.u32(this + 0x80), 0);
+        e.call(0x00bb_33a0, &args![this, 4u32]);
+        assert_eq!(e.mem.u32(this + 0x80), 3);
+        e.call(0x00bb_36b0, &args![this, 9u32]);
+        assert_eq!(e.mem.u32(this + 0x80), 9);
+        // No blocks: nothing is written.
+        e.call(0x00bb_3260, &args![this, 0x11u32, 0x2222u32]);
+        e.call(0x00bb_3710, &args![this, 0x11u32, 0x2222u32]);
+        let first = e.mem.alloc(0x10);
+        let second = e.mem.alloc(0x10);
+        e.mem.set_u32(this + 0x104, first);
+        e.mem.set_u32(this + 0x84, second);
+        e.call(0x00bb_3260, &args![this, 0x11u32, 0x0001_2222u32]);
+        e.call(0x00bb_3710, &args![this, 0x33u32, 0x4444u32]);
+        assert_eq!(
+            (e.mem.u32(first + 8), e.mem.u32(first + 0xc)),
+            (0x11, 0x2222)
+        );
+        assert_eq!(
+            (e.mem.u32(second + 8), e.mem.u16(second + 0xc)),
+            (0x33, 0x4444)
+        );
+    }
+
+    #[test]
+    fn fn_00bb30b0_clones_into_the_010b9338_class() {
+        let mut e = rig();
+        e.register(NI_NEW, |e, a| e.mem.alloc(a[0]).into_ret());
+        e.register(PP_LIGHTING_CONSTRUCTOR, |_, a| a[0].into_ret());
+        let held = object(&mut e, 0);
+        let this = vobject(&mut e, 0x108, &[(0x11c, held)]);
+        let made = e.call(0x00bb_30b0, &args![this]).u32();
+        assert_eq!(calls(&e, NI_NEW), vec![vec![0x108]]);
+        assert_eq!(e.mem.u32(made), VTABLE_010B9338);
+        assert_eq!(e.mem.u32(made + 0x104), held);
+        assert_eq!(e.mem.u32(held + 4), 1);
+        assert_eq!((e.mem.u32(made + 0x58), e.mem.u32(made + 0x1c)), (4, 10));
+        e.register(NI_NEW, |_, _| 0u32.into_ret());
+        assert_eq!(e.call(0x00bb_30b0, &args![this]).u32(), 0);
+    }
+
+    #[test]
+    fn fn_00bb3440_clears_the_shader_without_the_pointer() {
+        let mut e = rig();
+        e.register(NI_AV_OBJECT_UPDATE_PROPERTIES, |_, _| Ret::default());
+        let this = e.mem.alloc(0x88);
+        e.mem.set_u32(this + 0x58, 5);
+        e.mem.set_u32(this + 0x7c, 1);
+        e.call(0x00bb_3440, &args![this, 0x1000u32, 0u32, 0u32]);
+        assert_eq!(e.mem.u32(this + 0x58), 5);
+        e.mem.set_u32(this + 0x7c, 0);
+        e.call(
+            0x00bb_3440,
+            &args![this, 0u32.wrapping_sub(0x9c), 0u32, 0u32],
+        );
+        assert_eq!(e.mem.u32(this + 0x58), 0);
+        assert_eq!(
+            calls(&e, NI_AV_OBJECT_UPDATE_PROPERTIES),
+            vec![vec![0u32.wrapping_sub(0x9c)]]
+        );
+    }
+
+    #[test]
+    fn fn_00bb3880_walks_the_chain_then_calls_back() {
+        let mut e = rig();
+        const CALLBACK: u32 = 0x0e90_0000;
+        e.register(CALLBACK, |_, _| Ret::default());
+        let this = e.mem.alloc(0x88);
+        e.call(0x00bb_3880, &args![this, CALLBACK, 5u32]);
+        assert!(calls(&e, CALLBACK).is_empty());
+        // A chain holding 011f444c: one walk.
+        e.map(0x011f_4000, 0x1000);
+        let record = e.mem.alloc(8);
+        e.mem.set_u32(record + 4, RTTI_011F444C);
+        let object = vobject(&mut e, 0x10, &[(8, record)]);
+        e.mem.set_u32(this + 0x7c, object);
+        e.call(0x00bb_3880, &args![this, CALLBACK, 5u32]);
+        assert_eq!(calls(&e, slot_target(&e, object, 8)).len(), 1);
+        assert_eq!(calls(&e, CALLBACK), vec![vec![object, 0, 5]]);
+        // Without it: the chain is walked a second time.
+        let lone = e.mem.alloc(8);
+        let other = vobject(&mut e, 0x10, &[(8, lone)]);
+        e.mem.set_u32(this + 0x7c, other);
+        e.call_log = Some(vec![]);
+        e.call(0x00bb_3880, &args![this, CALLBACK, 6u32]);
+        assert_eq!(calls(&e, slot_target(&e, other, 8)).len(), 2);
+        assert_eq!(calls(&e, CALLBACK), vec![vec![other, 0, 6]]);
+    }
+
+    #[test]
+    fn the_scalar_deleting_destructors() {
+        let mut e = rig();
+        for target in [PP_LIGHTING_DESTRUCTOR, LIGHTING_DESTRUCTOR, NI_DELETE] {
+            e.register(target, |_, _| Ret::default());
+        }
+        let this = e.mem.alloc(0x108);
+        assert_eq!(e.call(0x00bb_38e0, &args![this, 1u32]).u32(), this);
+        assert_eq!(e.mem.u32(this), VTABLE_010B9490);
+        e.call(0x00bb_3910, &args![this, 1u32]);
+        assert_eq!(e.mem.u32(this), VTABLE_010B95C0);
+        let held = object(&mut e, 2);
+        e.mem.set_u32(this + 0x7c, held);
+        e.call(0x00bb_4470, &args![this, 1u32]);
+        assert_eq!(e.mem.u32(this), VTABLE_010B9828);
+        assert_eq!((e.mem.u32(this + 0x7c), e.mem.u32(held + 4)), (held, 1));
+        e.call(0x00bb_4470, &args![this, 0u32]);
+        assert_eq!(
+            calls(&e, NI_DELETE),
+            vec![vec![this, 0x108], vec![this, 0x88], vec![this, 0xd4]]
+        );
+        assert_eq!(calls(&e, LIGHTING_DESTRUCTOR).len(), 3);
+    }
+
+    #[test]
+    fn fn_00bb3cb0_passes_on_to_the_object() {
+        let mut e = rig();
+        e.register(MEMCPY, |_, _| Ret::default());
+        e.register(MEMSET, |_, _| Ret::default());
+        let this = e.mem.alloc(0x90);
+        e.call(0x00bb_3cb0, &args![this, 0x500u32, 2u32]);
+        assert!(calls(&e, MEMCPY).is_empty());
+        let object = e.mem.alloc(0x10);
+        let buffer = e.mem.alloc(0x300);
+        e.mem.set_u32(object + 8, buffer);
+        e.mem.set_u32(this + 0x88, object);
+        e.call(0x00bb_3cb0, &args![this, 0x500u32, 2u32]);
+        assert_eq!(calls(&e, MEMCPY), vec![vec![buffer, 0x500, 8]]);
+    }
+
+    #[test]
+    fn fn_00bb3e30_clones_through_00bb3ba0() {
+        let mut e = rig();
+        e.register(NI_NEW, |e, a| e.mem.alloc(a[0]).into_ret());
+        e.register(LIGHTING_CONSTRUCTOR, |_, a| a[0].into_ret());
+        let first = object(&mut e, 0);
+        let second = object(&mut e, 0);
+        let this = vobject(
+            &mut e,
+            0x90,
+            &[(0xfc, first), (0xcc, second), (0xf8, 0x1_00f8)],
+        );
+        e.mem.set_u32(this + 0x7c, 0x7c7c);
+        let mut slots = vec![0u32; 0x40];
+        slots[0xdc / 4] = 0x0e91_00dc;
+        e.put_vtable(VTABLE_010B9700, &slots);
+        e.register(0x0e91_00dc, |_, _| Ret::default());
+        let made = e.call(0x00bb_3e30, &args![this]).u32();
+        let log = order(&e);
+        let asked: Vec<u32> = log
+            .iter()
+            .copied()
+            .filter(|a| {
+                [0xfcu32, 0xcc, 0xf8]
+                    .iter()
+                    .any(|s| *a == slot_target(&e, this, *s))
+            })
+            .collect();
+        assert_eq!(
+            asked,
+            vec![
+                slot_target(&e, this, 0xfc),
+                slot_target(&e, this, 0xcc),
+                slot_target(&e, this, 0xf8)
+            ]
+        );
+        assert_eq!(e.mem.u16(made + 0x8c), 0xf8);
+        // 00bb3ba0 gets (the +0xf8 answer, the +0xcc answer, the +0xfc answer).
+        assert_eq!(e.mem.u32(made + 0x84), second);
+        assert_eq!(e.mem.u32(made + 0x88), first);
+        assert_eq!(calls(&e, 0x0e91_00dc), vec![vec![made, 0x7c7c]]);
+    }
+
+    #[test]
+    fn fn_00bb4080_and_00bb4140_construct_and_copy() {
+        let mut e = rig();
+        e.register(LIGHTING_CONSTRUCTOR, |_, a| a[0].into_ret());
+        e.register(LIGHTING_COPY_MEMBERS, |_, _| Ret::default());
+        e.register(NI_NEW, |e, a| e.mem.alloc(a[0]).into_ret());
+        let this = e.mem.alloc(0xd4);
+        e.mem.set_u32(this + 0x7c, 9);
+        assert_eq!(e.call(0x00bb_4080, &args![this]).u32(), this);
+        assert_eq!(e.mem.u32(this), VTABLE_010B9828);
+        assert_eq!(e.mem.u32(this + 0x7c), 0);
+        assert_eq!((e.mem.u32(this + 0x58), e.mem.u32(this + 0x1c)), (0x10, 3));
+        let made = e.call(0x00bb_4140, &args![this, 5u32]).u32();
+        assert_eq!(e.mem.u32(made), VTABLE_010B9828);
+        assert_eq!(calls(&e, LIGHTING_COPY_MEMBERS), vec![vec![this, made, 5]]);
+    }
+
+    #[test]
+    fn fn_00bb40c0_releases_the_member() {
+        let mut e = rig();
+        e.register(LIGHTING_DESTRUCTOR, |_, _| Ret::default());
+        let this = e.mem.alloc(0xd4);
+        e.call(0x00bb_40c0, &args![this]);
+        assert!(calls(&e, INTERLOCKED_DECREMENT).is_empty());
+        let held = object(&mut e, 1);
+        e.mem.set_u32(this + 0x7c, held);
+        e.call(0x00bb_40c0, &args![this]);
+        assert_eq!(calls(&e, REFERENCE_DELETE_FOR_TESTS), vec![vec![held]]);
+    }
+
+    const REFERENCE_DELETE_FOR_TESTS: u32 =
+        crate::units::bsshader::geometrydecalshader::shader_test_rig::REFERENCE_DELETE;
+
+    struct Fade {
+        e: Engine,
+        this: u32,
+        geometry: u32,
+        array: u32,
+    }
+
+    /// A property 30 units from the camera (bound radius 5: distance 25), a render-pass array,
+    /// the fade start 0, end 20, limit 40, and a geometry whose +0xa4 property has alpha 0.5.
+    fn fade_rig() -> Fade {
+        let mut e = rig();
+        e.map(0x011f_4000, 0x1000);
+        e.map(0x011f_9000, 0x1000);
+        for target in [
+            CHECK_CREATE_RENDER_PASS_ARRAY,
+            RENDER_PASS_ARRAY_ADD,
+            SET_ALPHA,
+        ] {
+            e.register(target, |_, _| Ret::default());
+        }
+        e.register(INTERPOLATE_004B3AB0, |_, _| Ret {
+            st0: 0.75,
+            ..Ret::default()
+        });
+        e.register(CRT_SQRT_00EC6040, |_, a| Ret {
+            st0: f64::from_bits(u64::from(a[0]) | u64::from(a[1]) << 32).sqrt(),
+            ..Ret::default()
+        });
+        let camera = e.mem.alloc(0x200);
+        e.set_global(CAMERA_011F91C8, camera);
+        let bound = e.mem.alloc(0x10);
+        e.mem.set_f32(bound, 30.0);
+        e.mem.set_f32(bound + 0xc, 5.0);
+        let geometry = e.mem.alloc(0xc0);
+        e.mem.set_u32(geometry + 0x20, bound);
+        let property = e.mem.alloc(0x40);
+        e.mem.set_f32(property + 0x3c, 0.5);
+        e.mem.set_u32(geometry + 0xa4, property);
+        let this = e.mem.alloc(0x40);
+        let array = e.mem.alloc(0x20);
+        e.mem.set_u32(this + 0x3c, array);
+        e.set_global(FADE_END_011F9474, 20.0f32);
+        e.set_global(FADE_LIMIT_011F9478, 40.0f32);
+        Fade {
+            e,
+            this,
+            geometry,
+            array,
+        }
+    }
+
+    fn fade(f: &mut Fade, key: u32, high: u32) -> u32 {
+        let args = args![f.this, f.geometry, key, 0u32, high, 0u32, 0u32];
+        f.e.call(0x00bb_41e0, &args).u32()
+    }
+
+    #[test]
+    fn fn_00bb41e0_fades_between_end_and_limit() {
+        let mut f = fade_rig();
+        assert_eq!(fade(&mut f, 1, 7), 0);
+        assert!(calls(&f.e, CRT_SQRT_00EC6040).is_empty());
+        assert_eq!(fade(&mut f, 1, 2), f.array);
+        assert_eq!(f.e.mem.f32(f.this + 0x34), 25.0);
+        let seen = calls(&f.e, INTERPOLATE_004B3AB0);
+        let floats: Vec<f32> = seen[0].iter().map(|w| f32::from_bits(*w)).collect();
+        assert_eq!(floats, vec![0.0, 1.0, 40.0, 20.0, 25.0]);
+        assert_eq!(
+            calls(&f.e, SET_ALPHA),
+            vec![vec![f.this, 0.75f32.to_bits()]]
+        );
+        assert_eq!(
+            calls(&f.e, RENDER_PASS_ARRAY_ADD),
+            vec![vec![f.array, f.geometry, 0x24c, 1, 0, 0, 0, 0, 0]]
+        );
+        assert_eq!(f.e.mem.u32(f.this + 0x38), 0x201);
+        // The same key, but rising past the limit (25 -> 50) clears +0x38 first: rebuilt;
+        // past the limit the property's own alpha.
+        f.e.mem.set_f32(f.e.mem.u32(f.geometry + 0x20) + 0xc, -20.0);
+        f.e.call_log = Some(vec![]);
+        assert_eq!(fade(&mut f, 0x201, 2), f.array);
+        assert_eq!(calls(&f.e, CHECK_CREATE_RENDER_PASS_ARRAY).len(), 1);
+        assert_eq!(f.e.mem.u32(f.this + 0x38), 0x201);
+        assert_eq!(calls(&f.e, SET_ALPHA), vec![vec![f.this, 0.5f32.to_bits()]]);
+    }
+
+    #[test]
+    fn fn_00bb41e0_drops_the_passes_past_the_start() {
+        let mut f = fade_rig();
+        f.e.set_global(FADE_START_011F9470, 10.0f32);
+        f.e.mem.set_u32(f.geometry + 0xbc, 1);
+        assert_eq!(fade(&mut f, 1, 2), 0);
+        assert_eq!(calls(&f.e, SET_ALPHA), vec![vec![f.this, 0.5f32.to_bits()]]);
+        assert_eq!(
+            calls(&f.e, CHECK_CREATE_RENDER_PASS_ARRAY),
+            vec![vec![f.this, 1]]
+        );
+        assert!(calls(&f.e, RENDER_PASS_ARRAY_ADD).is_empty());
+        // Without the start the 0x24d pass is added; without a property the alpha is 1.0.
+        f.e.set_global(FADE_START_011F9470, 0.0f32);
+        f.e.mem.set_u32(f.geometry + 0xa4, 0);
+        f.e.call_log = Some(vec![]);
+        assert_eq!(fade(&mut f, 1, 2), f.array);
+        assert_eq!(calls(&f.e, SET_ALPHA), vec![vec![f.this, 1.0f32.to_bits()]]);
+        assert_eq!(calls(&f.e, RENDER_PASS_ARRAY_ADD)[0][2], 0x24d);
+        // Falling below the limit (60 -> 25) clears +0x38 too.
+        f.e.mem.set_f32(f.this + 0x34, 60.0);
+        f.e.mem.set_u32(f.this + 0x38, 0x201);
+        f.e.call_log = Some(vec![]);
+        fade(&mut f, 0x201, 2);
+        assert_eq!(calls(&f.e, CHECK_CREATE_RENDER_PASS_ARRAY).len(), 1);
+        // Staying on one side keeps it.
+        f.e.mem.set_u32(f.this + 0x38, 0x201);
+        f.e.mem.set_f32(f.this + 0x34, 30.0);
+        f.e.call_log = Some(vec![]);
+        fade(&mut f, 0x201, 2);
+        assert!(calls(&f.e, CHECK_CREATE_RENDER_PASS_ARRAY).is_empty());
     }
 }

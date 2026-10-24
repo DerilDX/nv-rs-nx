@@ -1510,9 +1510,79 @@ pub fn bs_shader_no_lighting_create_constant_maps(e: &mut Engine, this: Ptr) {
     }
 }
 
+// Translated from 00bc6940 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (unit `bsshadernolighting.cpp`), `thiscall`, no stack words:
+/// gives each of the 0x1e passes at +0x6c to +0xe0 to `this`'s vtable slot +0x128.
+pub fn fn_00bc6940(e: &mut Engine, this: Ptr) {
+    let base = this.addr();
+    for index in 0..0x1eu32 {
+        let pass = e.mem.u32(base + 0x6c + 4 * index);
+        e.vcall(base, 0x128, &args![pass]);
+    }
+}
+
+// Translated from 00bc8d30 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSShaderNoLighting::ReloadShaders` (Xbox PDB), `thiscall`, no stack words: `LoadShaders`,
+/// then `LoadStagesAndPasses` (a tail jump: its answer is this function's).
+pub fn bs_shader_no_lighting_reload_shaders(e: &mut Engine, this: Ptr) -> bool {
+    bs_shader_no_lighting_load_shaders(e, this);
+    bs_shader_no_lighting_load_stages_and_passes(e, this)
+}
+
+/// The renderer's `00e6fe30` (unnamed; `thiscall`, five words).
+const RENDERER_CALL_00E6FE30: u32 = 0x00e6_fe30;
+
+// Translated from 00bc8f20 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed (Ghidra made no function of it): slot 25 of the vtable `010bb230`, `thiscall`,
+/// eight words of which the second (a geometry: +0x20, +0x28), third (skin data: +4, the u16
+/// +0x20) and seventh are read. With skin data: the renderer's (`011f9508`)
+/// `00e6fe30(geometry, seventh, 0, 3, 1)`, then the current pass's (`0126f74c`) vertex shader
+/// (+0x5c) gets its slot +0x78 with the bone entry +0x180, the geometry's +0x28, the u16, the
+/// geometry's +0x20 and the skin data's +4. Answers 0.
+pub fn fn_00bc8f20(
+    e: &mut Engine,
+    this: Ptr,
+    _unused_0: u32,
+    geometry: Ptr,
+    skin: Ptr,
+    _unused_3: u32,
+    _unused_4: u32,
+    _unused_5: u32,
+    seventh: u32,
+    _unused_7: u32,
+) -> u32 {
+    if skin.is_null() {
+        return 0;
+    }
+    let renderer = e.global::<u32>(RENDERER_011F9508);
+    e.call(
+        RENDERER_CALL_00E6FE30,
+        &args![renderer, geometry, seventh, 0u32, 3u32, 1u32],
+    );
+    let skin_word = e.mem.u32(skin.addr() + 4);
+    let pass = e.global::<u32>(RENDER_STATE_0126F74C);
+    let shader = e.mem.u32(pass + 0x5c);
+    let word_20 = e.mem.u32(geometry.addr() + 0x20);
+    let bones = u32::from(e.mem.u16(skin.addr() + 0x20));
+    let word_28 = e.mem.u32(geometry.addr() + 0x28);
+    let entry = e.mem.u32(this.addr() + 0x180);
+    e.vcall(
+        shader,
+        0x78,
+        &args![entry, word_28, bones, word_20, skin_word],
+    );
+    0
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x00bc_6940, fn_00bc6940(Ptr)),
+        entry!(0x00bc_8d30, bs_shader_no_lighting_reload_shaders(Ptr) -> bool),
+        entry!(
+            0x00bc_8f20,
+            fn_00bc8f20(Ptr, u32, Ptr, Ptr, u32, u32, u32, u32, u32) -> u32
+        ),
         entry!(0x00bc_77e0, bs_shader_no_lighting_load_stages_and_passes(Ptr) -> bool),
         entry!(0x00bc_5c40, bs_shader_no_lighting_load_shaders(Ptr)),
         entry!(0x00bc_8f80, bs_shader_no_lighting_bs_shader_no_lighting(Ptr, Ptr, Ptr, Ptr, Ptr, Ptr, Ptr, Ptr, Ptr, Ptr, Ptr, Ptr, Ptr) -> Ptr),
@@ -2444,5 +2514,102 @@ mod b056_tests {
         assert_eq!(e.mem.u32(this + 0x17c), NAME_EYE_DIR_010A189C + 1);
         assert_eq!(e.mem.u32(this + 0x170), NAME_SUBTEX_010BB36C + 1);
         assert_eq!(e.mem.u32(this + 0x180), NAME_BONE_MATRIX3_010A1CAC + 1);
+    }
+}
+
+#[cfg(test)]
+mod n070_tests {
+    use super::*;
+
+    fn calls(e: &Engine, addr: u32) -> Vec<Vec<u32>> {
+        e.call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|(a, _)| *a == addr)
+            .map(|(_, w)| w.clone())
+            .collect()
+    }
+
+    const SLOTS: u32 = 0x0ef0_0000;
+
+    fn object(e: &mut Engine, size: u32) -> u32 {
+        let vtable = e.mem.alloc(0x130);
+        for offset in (0..0x130u32).step_by(4) {
+            e.mem.set_u32(vtable + offset, SLOTS + offset);
+        }
+        let object = e.mem.alloc(size);
+        e.mem.set_u32(object, vtable);
+        object
+    }
+
+    fn rig() -> Engine {
+        let mut e = Engine::new();
+        e.map(0x011f_9000, 0x1000);
+        e.map(0x0126_f000, 0x1000);
+        for offset in (0..0x130u32).step_by(4) {
+            e.register(SLOTS + offset, |_, _| Ret::default());
+        }
+        e.call_log = Some(vec![]);
+        e
+    }
+
+    #[test]
+    fn fn_00bc6940_gives_the_passes_to_slot_0x128() {
+        let mut e = rig();
+        let this = object(&mut e, 0xe4);
+        for index in 0..0x1eu32 {
+            e.mem.set_u32(this + 0x6c + 4 * index, 0x200 + index);
+        }
+        e.call(0x00bc_6940, &args![this]);
+        let given: Vec<u32> = calls(&e, SLOTS + 0x128).iter().map(|a| a[1]).collect();
+        assert_eq!(given, (0x200..0x21e).collect::<Vec<u32>>());
+    }
+
+    #[test]
+    fn reload_shaders_loads_then_builds_passes() {
+        use crate::units::bsshader::geometrydecalshader::shader_test_rig::pass_rig;
+        let mut e = pass_rig();
+        let this = e.mem.alloc(0x1a0);
+        let answer = e.call(0x00bc_8d30, &args![this]).bool();
+        let direct = {
+            let mut e = pass_rig();
+            let this = e.mem.alloc(0x1a0);
+            bs_shader_no_lighting_load_shaders(&mut e, Ptr::new(this));
+            bs_shader_no_lighting_load_stages_and_passes(&mut e, Ptr::new(this))
+        };
+        assert_eq!(answer, direct);
+        assert!(!calls(&e, COMPILE_VERTEX_SHADER).is_empty());
+    }
+
+    #[test]
+    fn fn_00bc8f20_sets_the_bone_constants() {
+        let mut e = rig();
+        e.register(RENDERER_CALL_00E6FE30, |_, _| Ret::default());
+        e.set_global(RENDERER_011F9508, 0x9508u32);
+        let shader = object(&mut e, 4);
+        let pass = e.mem.alloc(0x60);
+        e.mem.set_u32(pass + 0x5c, shader);
+        e.set_global(RENDER_STATE_0126F74C, pass);
+        let this = e.mem.alloc(0x184);
+        e.mem.set_u32(this + 0x180, 0x1800);
+        let geometry = e.mem.alloc(0x30);
+        e.mem.set_u32(geometry + 0x20, 0x20);
+        e.mem.set_u32(geometry + 0x28, 0x28);
+        let skin = e.mem.alloc(0x24);
+        e.mem.set_u32(skin + 4, 0x44);
+        e.mem.set_u16(skin + 0x20, 5);
+        let words = |skin: u32| args![this, 0u32, geometry, skin, 0u32, 0u32, 0u32, 0x77u32, 0u32];
+        assert_eq!(e.call(0x00bc_8f20, &words(skin)).u32(), 0);
+        assert_eq!(
+            calls(&e, RENDERER_CALL_00E6FE30),
+            vec![vec![0x9508, geometry, 0x77, 0, 3, 1]]
+        );
+        assert_eq!(
+            calls(&e, SLOTS + 0x78),
+            vec![vec![shader, 0x1800, 0x28, 5, 0x20, 0x44]]
+        );
+        e.call(0x00bc_8f20, &words(0));
+        assert_eq!(calls(&e, SLOTS + 0x78).len(), 1);
     }
 }

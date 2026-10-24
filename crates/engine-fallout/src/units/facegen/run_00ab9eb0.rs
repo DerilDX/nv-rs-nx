@@ -8,7 +8,9 @@
 #[allow(unused_imports)]
 use crate::prelude::*;
 
-use crate::units::facegen::binaryfile::STRING_TIDY;
+use crate::units::facegen::binaryfile::{
+    INVALID_PARAMETER, MEMORY_MANAGER_FREE, MEMORY_MANAGER_OBJECT, STRING_TIDY, VECTOR_LAST,
+};
 
 /// The resize with a value (`00abb060`, `thiscall`: the count and the 0x20-byte value by
 /// value, nine words), unit `run_00aba3c0`.
@@ -22,6 +24,8 @@ const CONSTRUCT_N: u32 = 0x00ab_bfc0;
 /// `00aba4f0` on +0x20 (both `thiscall`, no stack words).
 const MEMBER_CONSTRUCT_0065C630: u32 = 0x0065_c630;
 const MEMBER_CONSTRUCT_00ABA4F0: u32 = 0x00ab_a4f0;
+/// The byte vector's element free (`00abc0a0`, `thiscall`), unit `run_00aba3c0`.
+const BYTE_VECTOR_TIDY: u32 = 0x00ab_c0a0;
 
 // Translated from 00ab9eb0 (decompiled, FalloutNV.exe 1.4.0.525)
 /// Unnamed in the engine map: `resize(count)` through the resize with a value (`00abb060`).
@@ -93,6 +97,66 @@ pub fn fn_00aba2f0(e: &mut Engine, this: Ptr) -> Ptr {
     this
 }
 
+/// The iterator `++` of the vector instances below (`thiscall`): a null proxy fails a check
+/// (`_invalid_parameter_noinfo`), and so does a pointer (+4) not below the container's last
+/// pointer (the container is the proxy's first word, read at address 0 when the proxy is null);
+/// then the pointer moves by one element.
+fn increment_checked(e: &mut Engine, iterator: u32, size: u32) {
+    if e.mem.u32(iterator) == 0 {
+        e.call(INVALID_PARAMETER, &[]);
+    }
+    let proxy = e.mem.u32(iterator);
+    let container = if proxy == 0 { 0 } else { e.mem.u32(proxy) };
+    let pointer = e.mem.u32(iterator + 4);
+    if pointer >= e.mem.u32(container.wrapping_add(VECTOR_LAST)) {
+        e.call(INVALID_PARAMETER, &[]);
+    }
+    let pointer = e.mem.u32(iterator + 4).wrapping_add(size);
+    e.mem.set_u32(iterator + 4, pointer);
+}
+
+// Translated from 00ab9f10 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map: the 0x20-byte element iterator's `++` (`thiscall`; see
+/// [`increment_checked`]). Returns `this`.
+pub fn fn_00ab9f10(e: &mut Engine, this: Ptr) -> Ptr {
+    increment_checked(e, this.addr(), 0x20);
+    this
+}
+
+// Translated from 00ab9f80 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map: the 0x2C-byte element iterator's `++` (`thiscall`; see
+/// [`increment_checked`]). Returns `this`.
+pub fn fn_00ab9f80(e: &mut Engine, this: Ptr) -> Ptr {
+    increment_checked(e, this.addr(), 0x2c);
+    this
+}
+
+// Translated from 00ab9ff0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map: the 0x34-byte element iterator's `++` (`thiscall`; see
+/// [`increment_checked`]). Returns `this`.
+pub fn fn_00ab9ff0(e: &mut Engine, this: Ptr) -> Ptr {
+    increment_checked(e, this.addr(), 0x34);
+    this
+}
+
+// Translated from 00aba060 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map: the 0x38-byte element iterator's `++` (`thiscall`; see
+/// [`increment_checked`]). Returns `this`.
+pub fn fn_00aba060(e: &mut Engine, this: Ptr) -> Ptr {
+    increment_checked(e, this.addr(), 0x38);
+    this
+}
+
+// Translated from 00aba1a0 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 00aba1a0 - the compiler's exception frame (FS:[0] chain, cookie 011c16bc) is not translated
+/// Unnamed in the engine map: the byte vector's destructor (`thiscall`): its elements freed
+/// (`00abc0a0`), then its container proxy (+0) given back to the memory manager.
+pub fn fn_00aba1a0(e: &mut Engine, this: Ptr) {
+    e.call(BYTE_VECTOR_TIDY, &args![this]);
+    let proxy = e.mem.u32(this.addr());
+    e.call(MEMORY_MANAGER_FREE, &args![MEMORY_MANAGER_OBJECT, proxy]);
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -101,6 +165,11 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00ab_a220, fn_00aba220(Ptr) -> Ptr),
         entry!(0x00ab_a270, fn_00aba270(Ptr) -> Ptr),
         entry!(0x00ab_a2f0, fn_00aba2f0(Ptr) -> Ptr),
+        entry!(0x00ab_9f10, fn_00ab9f10(Ptr) -> Ptr),
+        entry!(0x00ab_9f80, fn_00ab9f80(Ptr) -> Ptr),
+        entry!(0x00ab_9ff0, fn_00ab9ff0(Ptr) -> Ptr),
+        entry!(0x00ab_a060, fn_00aba060(Ptr) -> Ptr),
+        entry!(0x00ab_a1a0, fn_00aba1a0(Ptr)),
     ]
 }
 
@@ -200,6 +269,54 @@ mod tests {
         assert_eq!(
             calls_to(&log, MEMBER_CONSTRUCT_00ABA4F0),
             vec![vec![this + 0x20]]
+        );
+    }
+
+    #[test]
+    fn iterator_increments_check_the_end() {
+        let mut e = engine();
+        e.register(INVALID_PARAMETER, |_, _| Ret::default());
+        let vector = e.mem.alloc(0x18);
+        let proxy = e.mem.alloc(4);
+        e.mem.set_u32(proxy, vector);
+        let iterator = e.mem.alloc(8);
+        e.mem.set_u32(iterator, proxy);
+        for (addr, size) in [
+            (0x00ab_9f10u32, 0x20u32),
+            (0x00ab_9f80, 0x2c),
+            (0x00ab_9ff0, 0x34),
+            (0x00ab_a060, 0x38),
+        ] {
+            e.mem.set_u32(vector + VECTOR_LAST, 0x1000 + size);
+            e.mem.set_u32(iterator + 4, 0x1000);
+            e.call_log = Some(vec![]);
+            assert_eq!(e.call(addr, &args![iterator]).u32(), iterator);
+            assert_eq!(e.mem.u32(iterator + 4), 0x1000 + size);
+            // At the end: the check fails and the pointer still moves.
+            e.call(addr, &args![iterator]);
+            let log = e.call_log.take().unwrap();
+            assert_eq!(e.mem.u32(iterator + 4), 0x1000 + 2 * size);
+            assert_eq!(calls_to(&log, INVALID_PARAMETER).len(), 1);
+        }
+    }
+
+    #[test]
+    fn byte_vector_destructor_frees_elements_then_proxy() {
+        let mut e = engine();
+        for addr in [BYTE_VECTOR_TIDY, MEMORY_MANAGER_FREE] {
+            e.register(addr, |_, _| Ret::default());
+        }
+        let vector = e.mem.alloc(0x18);
+        e.mem.set_u32(vector, 0x4444);
+        e.call_log = Some(vec![]);
+        e.call(0x00ab_a1a0, &args![vector]);
+        let log = e.call_log.take().unwrap();
+        assert_eq!(
+            log[1..],
+            [
+                (BYTE_VECTOR_TIDY, vec![vector]),
+                (MEMORY_MANAGER_FREE, vec![MEMORY_MANAGER_OBJECT, 0x4444])
+            ]
         );
     }
 }

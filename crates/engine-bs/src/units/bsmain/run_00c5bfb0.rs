@@ -97,11 +97,52 @@ pub fn fn_00c5c160(e: &mut Engine, this: Ptr, result: u32) -> u32 {
     result
 }
 
+// Translated from 00c5c290 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 00c5c290 - the C++ exception-unwinding frame (FS:[0] chain, handler at 00f2fcb1, state variable) is not translated
+/// Unnamed in the engine map (`thiscall`, `RET 4`): removes the tail node of the list `this`
+/// (the previous node becomes the tail with no next node, or the head is cleared when there
+/// is none) and stores its item, counted, at `result`; the node goes back through `0045cee0`
+/// and the count goes down. Returns `result`.
+pub fn fn_00c5c290(e: &mut Engine, this: Ptr, result: u32) -> u32 {
+    let list = this.addr();
+    let node = e.mem.u32(list + 4);
+    let previous = e.mem.u32(e.mem.u32(list + 4) + 4);
+    e.mem.set_u32(list + 4, previous);
+    if e.mem.u32(list + 4) != 0 {
+        let tail = e.mem.u32(list + 4);
+        e.mem.set_u32(tail, 0);
+    } else {
+        e.mem.set_u32(list, 0);
+    }
+    take_item(e, list, node, result);
+    result
+}
+
+/// `00c1c280` (unit `nipsysemitterctlr.cpp`; `thiscall`, `RET 4`): the base constructor.
+const EMITTER_CONTROLLER_CONSTRUCTOR: u32 = 0x00c1_c280;
+/// The `BSPSysMultiTargetEmitterCtlr` virtual table (`010c2d54`, by RTTI).
+const MULTI_TARGET_EMITTER_VTABLE: u32 = 0x010c_2d54;
+
+// Translated from 00c5c3c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The `BSPSysMultiTargetEmitterCtlr` constructor (by its virtual table; unnamed in the
+/// engine map; `thiscall`, `RET 0xC`): the base constructor (`00c1c280`) with the first word,
+/// the class's virtual table, the second word at +0x5C and the low 16 bits of the third at
+/// +0x60. Answers `this`.
+pub fn fn_00c5c3c0(e: &mut Engine, this: Ptr, base_argument: u32, word: u32, count: u16) -> Ptr {
+    e.call(EMITTER_CONTROLLER_CONSTRUCTOR, &args![this, base_argument]);
+    e.mem.set_u32(this.addr(), MULTI_TARGET_EMITTER_VTABLE);
+    e.mem.set_u32(this.addr() + 0x5c, word);
+    e.mem.set_u16(this.addr() + 0x60, count);
+    this
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
         entry!(0x00c5_bfb0, fn_00c5bfb0(Ptr, u32, u32) -> u32),
         entry!(0x00c5_c160, fn_00c5c160(Ptr, u32) -> u32),
+        entry!(0x00c5_c290, fn_00c5c290(Ptr, u32) -> u32),
+        entry!(0x00c5_c3c0, fn_00c5c3c0(Ptr, u32, u32, u16) -> Ptr),
     ]
 }
 
@@ -210,5 +251,74 @@ mod tests {
         e.call(0x00c5_c160, &args![l.list, result]);
         assert_eq!(e.mem.u32(result), 0);
         assert_eq!(e.mem.u32(l.list + 8), 2);
+    }
+}
+
+#[cfg(test)]
+mod n069_tests {
+    use super::*;
+
+    #[test]
+    fn removing_the_tail_unlinks_it_and_hands_over_its_item() {
+        let mut e = Engine::new();
+        e.register(INTERLOCKED_INCREMENT, |e, a| {
+            let count = e.mem.u32(a[0]) + 1;
+            e.mem.set_u32(a[0], count);
+            count.into_ret()
+        });
+        e.register(INTERLOCKED_DECREMENT, |e, a| {
+            let count = e.mem.u32(a[0]) - 1;
+            e.mem.set_u32(a[0], count);
+            count.into_ret()
+        });
+        e.register(ASSIGN_POINTER, |e, a| {
+            e.mem.set_u32(a[0], a[1]);
+            Ret::default()
+        });
+        e.register(FREE_NODE, |_, _| Ret::default());
+        let item = e.mem.alloc(8);
+        e.mem.set_u32(item + 4, 1);
+        let list = e.mem.alloc(0xc);
+        let first = e.mem.alloc(0xc);
+        let last = e.mem.alloc(0xc);
+        e.mem.set_u32(first, last);
+        e.mem.set_u32(last + 4, first);
+        e.mem.set_u32(last + 8, item);
+        e.mem.set_u32(list, first);
+        e.mem.set_u32(list + 4, last);
+        e.mem.set_u32(list + 8, 2);
+        let result = e.mem.alloc(4);
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x00c5_c290, &args![list, result]).u32(), result);
+        let log = e.call_log.take().unwrap();
+        assert!(log.contains(&(FREE_NODE, vec![list + 8, last])));
+        assert_eq!(e.mem.u32(list + 4), first);
+        assert_eq!(e.mem.u32(first), 0);
+        assert_eq!(e.mem.u32(list + 8), 1);
+        assert_eq!(e.mem.u32(result), item);
+        // The node's reference went to the result.
+        assert_eq!(e.mem.u32(item + 4), 2);
+        // The last node: the head is cleared too.
+        e.mem.set_u32(first + 8, 0);
+        e.call(0x00c5_c290, &args![list, result]);
+        assert_eq!((e.mem.u32(list), e.mem.u32(list + 4)), (0, 0));
+        assert_eq!(e.mem.u32(result), 0);
+    }
+
+    #[test]
+    fn the_multi_target_emitter_constructor_stores_its_words() {
+        let mut e = Engine::new();
+        e.register(EMITTER_CONTROLLER_CONSTRUCTOR, |_, _| Ret::default());
+        let this = e.mem.alloc(0x64);
+        e.call_log = Some(vec![]);
+        let result = e
+            .call(0x00c5_c3c0, &args![this, 0x11u32, 0x22u32, 0x5_0033u32])
+            .u32();
+        let log = e.call_log.take().unwrap();
+        assert_eq!(result, this);
+        assert!(log.contains(&(EMITTER_CONTROLLER_CONSTRUCTOR, vec![this, 0x11])));
+        assert_eq!(e.mem.u32(this), MULTI_TARGET_EMITTER_VTABLE);
+        assert_eq!(e.mem.u32(this + 0x5c), 0x22);
+        assert_eq!(e.mem.u32(this + 0x60), 0x33);
     }
 }

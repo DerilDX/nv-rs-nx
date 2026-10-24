@@ -582,6 +582,111 @@ pub fn fn_00662860(e: &mut Engine, this: Ptr, index: u32) -> u32 {
         .wrapping_add(e.mem.u32(this.addr().wrapping_add(0xc)))
 }
 
+// Translated from 00662190 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The custom morph `index` (0..1, the table at +0x14), or null; the kind-3 getter of
+/// `fn_00662030`.
+pub fn fn_00662190(e: &mut Engine, this: Ptr, index: i32) -> u32 {
+    table_slot(e, this, 0x14, 1, index)
+}
+
+/// `BSFaceGenMorphDataHair`'s vtable.
+const MORPH_DATA_HAIR_VTABLE: u32 = 0x0106_5f5c;
+/// `"HairMorph"`.
+const HAIR_MORPH_NAME: u32 = 0x0106_5f4c;
+
+// Translated from 006621d0 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 006621d0 - the exception-unwinding frame (FS:[0]) is not translated.
+/// `BSFaceGenMorphDataHair::BSFaceGenMorphDataHair` (Xbox PDB, `RET 4`): the
+/// `BSFaceGenMorphData` part, the vtable, no morph (+8); with a FaceGen model whose first
+/// differential morph (`model + 0xC0`, entry 0) is named `"HairMorph"`, a new
+/// `BSFaceGenMorphDifferential` (0xc bytes; null when the allocation fails) of that entry's
+/// vertex count at +8, its offsets copied from the entry's vertices. Returns `this`.
+pub fn bs_face_gen_morph_data_hair_construct(e: &mut Engine, this: Ptr, model: u32) -> Ptr {
+    fn_00661d10(e, this);
+    e.mem.set_u32(this.addr(), MORPH_DATA_HAIR_VTABLE);
+    e.mem.set_u32(this.addr().wrapping_add(8), 0);
+    if model == 0 {
+        return this;
+    }
+    let collection = Ptr::new(model.wrapping_add(0xc0));
+    let entry = fn_00662860(e, collection, 0);
+    let name = e.call(ENTRY_NAME, &args![entry]).u32();
+    if e.call(NAME_COMPARE, &args![HAIR_MORPH_NAME, name]).u32() != 0 {
+        return this;
+    }
+    let entry = fn_00662860(e, collection, 0);
+    let count = e.call(VERTEX_COUNT, &args![entry.wrapping_add(0x1c)]).u32();
+    let block = e.call(OPERATOR_NEW, &args![0xcu32]).u32();
+    let morph = if block != 0 {
+        e.call(DIFFERENTIAL_CONSTRUCT, &args![block, count]).u32()
+    } else {
+        0
+    };
+    e.mem.set_u32(this.addr().wrapping_add(8), morph);
+    let morph = e.mem.u32(this.addr().wrapping_add(8));
+    let data = e.call(MORPH_DATA, &args![morph]).u32();
+    let mut vertex = 0u32;
+    while vertex < count {
+        let coordinate = |e: &mut Engine, at: u32| {
+            let entry = fn_00662860(e, collection, 0);
+            let point = e
+                .call(VERTEX_AT, &args![entry.wrapping_add(0x1c), vertex])
+                .u32();
+            x87_quiet_bits(e.mem.u32(point.wrapping_add(at)))
+        };
+        let z = coordinate(e, 8);
+        let y = coordinate(e, 4);
+        let x = coordinate(e, 0);
+        e.with_stack(0xc, |e, local| {
+            let point = e.call(POINT_SET, &args![local, x, y, z]).u32();
+            let target = data.wrapping_add(vertex.wrapping_mul(0xc));
+            for i in 0..3u32 {
+                let word = e.mem.u32(point.wrapping_add(i * 4));
+                e.mem.set_u32(target.wrapping_add(i * 4), word);
+            }
+        });
+        vertex += 1;
+    }
+    this
+}
+
+// Translated from 006623d0 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 006623d0 - the exception-unwinding frame (FS:[0]) is not translated.
+/// `BSFaceGenMorphDataHair`'s destructor body (unnamed in the map): the vtable, the morph
+/// (+8) deleted through its slot 0 with 1 when set, then the `BSFaceGenMorphData` part
+/// (`fn_00661d40`).
+pub fn fn_006623d0(e: &mut Engine, this: Ptr) {
+    e.mem.set_u32(this.addr(), MORPH_DATA_HAIR_VTABLE);
+    if e.mem.u32(this.addr().wrapping_add(8)) != 0 {
+        let morph = e.mem.u32(this.addr().wrapping_add(8));
+        if morph != 0 {
+            e.vcall(morph, 0x0, &args![1u32]);
+        }
+    }
+    fn_00661d40(e, this);
+}
+
+// Translated from 00662460 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the map (`RET 0xc`): applies the hair morph (+8; its slot +4, `ApplyMorph`)
+/// to `target` with `base` and `weight`, when there is a morph and a target and the weight
+/// is not below 0 (`FCOMP; TEST AH,5; JP`: a NaN applies).
+pub fn fn_00662460(e: &mut Engine, this: Ptr, target: u32, base: u32, weight: f32) {
+    let morph = e.mem.u32(this.addr().wrapping_add(8));
+    if morph == 0 || target == 0 {
+        return;
+    }
+    let zero: f64 = e.global(ZERO_DOUBLE);
+    if x87_load32(weight.to_bits()) < zero {
+        return;
+    }
+    let weight = x87_quiet_bits(weight.to_bits());
+    let morph = e.mem.u32(this.addr().wrapping_add(8));
+    e.vcall(morph, 0x4, &args![target, base, weight]);
+}
+
+/// `0.0` (`double`).
+const ZERO_DOUBLE: u32 = 0x0101_2060;
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -597,6 +702,10 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x0066_24c0, fn_006624c0(Ptr, u32, u32, u32) -> Ptr),
         entry!(0x0066_2720, fn_00662720(Ptr)),
         entry!(0x0066_2860, fn_00662860(Ptr, u32) -> u32),
+        entry!(0x0066_2190, fn_00662190(Ptr, i32) -> u32),
+        entry!(0x0066_21d0, bs_face_gen_morph_data_hair_construct(Ptr, u32) -> Ptr),
+        entry!(0x0066_23d0, fn_006623d0(Ptr)),
+        entry!(0x0066_2460, fn_00662460(Ptr, u32, u32, f32)),
         entry!(0x0066_1d30, fn_00661d30(Ptr) -> u32),
         entry!(0x0066_1d90, fn_00661d90(Ptr) -> u32),
         entry!(0x0066_2390, fn_00662390(Ptr) -> u32),
@@ -1012,5 +1121,91 @@ mod morph_data_tests {
         assert!(calls_to(&e, INVALID_INDEX).is_empty());
         assert_eq!(fn_00662860(&mut e, Ptr::new(collection), 2), 0x1068);
         assert_eq!(calls_to(&e, INVALID_INDEX).len(), 1);
+    }
+
+    #[test]
+    fn custom_morph_getter() {
+        let mut e = Engine::new();
+        let head = Ptr::<()>::new(e.mem.alloc(0x18));
+        assert_eq!(e.call(0x0066_2190, &args![head, 0u32]).u32(), 0);
+        let table = e.mem.alloc(8);
+        e.mem.set_u32(table, 0x4444);
+        e.mem.set_u32(table + 4, 0x5555);
+        e.mem.set_u32(head.addr() + 0x14, table);
+        assert_eq!(e.call(0x0066_2190, &args![head, 0u32]).u32(), 0x4444);
+        assert_eq!(e.call(0x0066_2190, &args![head, 1u32]).u32(), 0);
+        assert_eq!(e.call(0x0066_2190, &args![head, u32::MAX]).u32(), 0);
+    }
+
+    #[test]
+    fn hair_takes_the_hair_morph() {
+        let mut e = morph_engine();
+        let model = e.mem.alloc(0x100);
+        let entries = e.mem.alloc(0x34);
+        let vertices = e.mem.alloc(0x18);
+        for (i, word) in [1.0f32, 2.0, 3.0, 4.0, 5.0, 6.0].iter().enumerate() {
+            e.mem.set_f32(vertices + i as u32 * 4, *word);
+        }
+        e.mem.set_u32(entries, HAIR_MORPH_NAME);
+        e.mem.set_u32(entries + 0x1c, 2);
+        e.mem.set_u32(entries + 0x20, vertices);
+        e.mem.set_u32(model + 0xc0, 1);
+        e.mem.set_u32(model + 0xcc, entries);
+        let hair = Ptr::<()>::new(e.mem.alloc(0xc));
+        assert_eq!(e.call(0x0066_21d0, &args![hair, model]).u32(), hair.addr());
+        assert_eq!(e.mem.u32(hair.addr()), MORPH_DATA_HAIR_VTABLE);
+        let morph = e.mem.u32(hair.addr() + 8);
+        let data = e.mem.u32(morph + 4);
+        let copied: Vec<f32> = (0..6).map(|i| e.mem.f32(data + i * 4)).collect();
+        assert_eq!(copied, vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0]);
+        // Another name, or no model: no morph.
+        e.mem.set_u32(entries, 0x102);
+        bs_face_gen_morph_data_hair_construct(&mut e, hair, model);
+        assert_eq!(e.mem.u32(hair.addr() + 8), 0);
+        e.mem.set_u32(hair.addr() + 8, 0x77);
+        bs_face_gen_morph_data_hair_construct(&mut e, hair, 0);
+        assert_eq!(e.mem.u32(hair.addr() + 8), 0);
+        // Allocation failure: a null morph.
+        e.mem.set_u32(entries, HAIR_MORPH_NAME);
+        e.register(OPERATOR_NEW, |_, _| Ret::default());
+        e.register(MORPH_DATA, |_, _| Ret::default());
+        e.mem.set_u32(entries + 0x1c, 0);
+        bs_face_gen_morph_data_hair_construct(&mut e, hair, model);
+        assert_eq!(e.mem.u32(hair.addr() + 8), 0);
+    }
+
+    #[test]
+    fn hair_destructor_and_apply() {
+        let mut e = morph_engine();
+        e.register(MORPH_DATA_BASE_DESTRUCT, |_, _| Ret::default());
+        e.map(ZERO_DOUBLE, 8);
+        e.mem.set_f64(ZERO_DOUBLE, 0.0);
+        let hair = Ptr::<()>::new(e.mem.alloc(0xc));
+        let morph = e.mem.alloc(0xc);
+        e.mem.set_u32(morph, MORPH_VTABLE);
+        e.mem.set_u32(hair.addr() + 8, morph);
+        e.call_log = Some(vec![]);
+        e.call(0x0066_2460, &args![hair, 0x10u32, 0x20u32, 0.5f32]);
+        e.call(0x0066_2460, &args![hair, 0x10u32, 0x20u32, -0.5f32]);
+        e.call(0x0066_2460, &args![hair, 0u32, 0x20u32, 0.5f32]);
+        e.call(0x0066_2460, &args![hair, 0x10u32, 0x20u32, 0x7f80_0001u32]);
+        assert_eq!(
+            calls_to(&e, MORPH_APPLY),
+            vec![
+                vec![morph, 0x10, 0x20, 0.5f32.to_bits()],
+                vec![morph, 0x10, 0x20, 0x7fc0_0001]
+            ]
+        );
+        e.call(0x0066_23d0, &args![hair]);
+        assert_eq!(e.mem.u32(hair.addr()), MORPH_DATA_VTABLE);
+        assert_eq!(calls_to(&e, MORPH_DELETE), vec![vec![morph, 1]]);
+        assert_eq!(calls_to(&e, MORPH_DATA_BASE_DESTRUCT).len(), 1);
+        // Without a morph: nothing deleted, nothing applied.
+        e.mem.set_u32(hair.addr() + 8, 0);
+        e.call_log = Some(vec![]);
+        e.call(0x0066_23d0, &args![hair]);
+        e.call(0x0066_2460, &args![hair, 0x10u32, 0x20u32, 0.5f32]);
+        assert!(calls_to(&e, MORPH_DELETE).is_empty());
+        assert!(calls_to(&e, MORPH_APPLY).is_empty());
     }
 }

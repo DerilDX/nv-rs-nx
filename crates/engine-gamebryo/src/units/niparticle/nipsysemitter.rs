@@ -287,6 +287,234 @@ pub fn ni_p_sys_emitter_load_binary(e: &mut Engine, this: Ptr<NiPSysEmitter>, st
     });
 }
 
+use crate::units::niparticle::nipsysdata::{add_viewer_string, stream_write};
+use crate::units::niparticle::nipsysmodifier::fixed_string_release;
+
+/// The vtable `NiPSysEmitter`'s constructor stores (`010bde84`).
+const VTABLE: u32 = 0x010b_de84;
+/// `00a5b690` (unnamed, `cdecl`, a C string): the `NiFixedString` handle
+/// for a C string; and the null handle's global (`0109b220`).
+const FIXED_STRING_FROM_TEXT: u32 = 0x00a5_b690;
+const NULL_FIXED_STRING: u32 = 0x0109_b220;
+/// `NiPSysModifier`'s constructor with a name and an order (`00c316a0`,
+/// `thiscall`: the address of an `NiFixedString`, the order).
+const MODIFIER_CONSTRUCTOR: u32 = 0x00c3_16a0;
+/// `NiPSysModifier`'s `SaveBinary` (`00c31950`), `IsEqual` (`00c31830`) and
+/// `GetViewerStrings` (`00c319e0`) (Xbox PDB names; `thiscall`, one word).
+const MODIFIER_SAVE_BINARY: u32 = 0x00c3_1950;
+const MODIFIER_IS_EQUAL: u32 = 0x00c3_1830;
+const MODIFIER_GET_VIEWER_STRINGS: u32 = 0x00c3_19e0;
+/// `NiColorA::SaveBinary` (`00a698a0`, one word: the stream) and
+/// `NiColorA::GetViewerString` (`00a69720`, one word: the label) (Xbox PDB
+/// names; `thiscall` on the colour), and `004a4c90` (`NiColorA::operator_`
+/// in the engine map; `thiscall` on a colour, the other colour; a nonzero
+/// answer counts as unequal here).
+const COLOR_SAVE_BINARY: u32 = 0x00a6_98a0;
+const COLOR_GET_VIEWER_STRING: u32 = 0x00a6_9720;
+const COLOR_UNEQUAL: u32 = 0x004a_4c90;
+/// `NiGetViewerString` (`00a7d330`, the text) and `NiGetViewerString_ov9`
+/// (`00a7d550`: a label and a `float`) (Xbox PDB names; `cdecl`).
+const VIEWER_STRING: u32 = 0x00a7_d330;
+const VIEWER_STRING_FLOAT: u32 = 0x00a7_d550;
+/// `NiPSysEmitter::ms_RTTI` (its name is the first word).
+const RTTI: u32 = 0x0120_2540;
+/// The labels: "Speed" (`01044b18`), "Speed Variation" (`010bdfd0`),
+/// "Declination" (`010bdfc4`), "Declination Variation" (`010bdfac`),
+/// "Planar Angle" (`010bdf9c`), "Planar Angle Variation" (`010bdf84`),
+/// "Initial Color" (`010bdf74`), "Initial Radius" (`010bdf64`), "Radius
+/// Variation" (`010bdf50`), "Life Span" (`010bdf44`) and "Life Span
+/// Variation" (`010bdf30`).
+const LABEL_SPEED: u32 = 0x0104_4b18;
+const LABEL_SPEED_VAR: u32 = 0x010b_dfd0;
+const LABEL_DECLINATION: u32 = 0x010b_dfc4;
+const LABEL_DECLINATION_VAR: u32 = 0x010b_dfac;
+const LABEL_PLANAR_ANGLE: u32 = 0x010b_df9c;
+const LABEL_PLANAR_ANGLE_VAR: u32 = 0x010b_df84;
+const LABEL_INITIAL_COLOR: u32 = 0x010b_df74;
+const LABEL_INITIAL_RADIUS: u32 = 0x010b_df64;
+const LABEL_RADIUS_VAR: u32 = 0x010b_df50;
+const LABEL_LIFE_SPAN: u32 = 0x010b_df44;
+const LABEL_LIFE_SPAN_VAR: u32 = 0x010b_df30;
+
+/// The six floats before the colour and the four after it, in the order
+/// the save, the comparison and the viewer strings take them.
+const FLOATS_BEFORE_COLOR: [Field<NiPSysEmitter, u32>; 6] = [
+    NiPSysEmitter::m_fSpeed,
+    NiPSysEmitter::m_fSpeedVar,
+    NiPSysEmitter::m_fDeclination,
+    NiPSysEmitter::m_fDeclinationVar,
+    NiPSysEmitter::m_fPlanarAngle,
+    NiPSysEmitter::m_fPlanarAngleVar,
+];
+const FLOATS_AFTER_COLOR: [Field<NiPSysEmitter, u32>; 4] = [
+    NiPSysEmitter::m_fInitialRadius,
+    NiPSysEmitter::m_fRadiusVar,
+    NiPSysEmitter::m_fLifeSpan,
+    NiPSysEmitter::m_fLifeSpanVar,
+];
+
+// Translated from 00c21fe0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The `NiPSysEmitter` constructor with its settings (no PDB name):
+/// `NiPSysModifier`'s constructor with the name's `NiFixedString` (the null
+/// handle for a null name, else `00a5b690`, in a local released after) and
+/// `order`; then the vtable, the speed, declination and planar angle with
+/// their variations, the initial colour (four words), the initial radius,
+/// life span and its variation, the radius variation, and a scale of 1.0.
+/// Returns `this`.
+pub fn fn_00c21fe0(
+    e: &mut Engine,
+    this: Ptr<NiPSysEmitter>,
+    name: u32,
+    order: u32,
+    speed: f32,
+    speed_var: f32,
+    declination: f32,
+    declination_var: f32,
+    planar_angle: f32,
+    planar_angle_var: f32,
+    color_r: u32,
+    color_g: u32,
+    color_b: u32,
+    color_a: u32,
+    initial_radius: f32,
+    life_span: f32,
+    life_span_var: f32,
+    radius_var: f32,
+) -> Ptr<NiPSysEmitter> {
+    let handle = if name == 0 {
+        e.global::<u32>(NULL_FIXED_STRING)
+    } else {
+        e.call(FIXED_STRING_FROM_TEXT, &args![name]).u32()
+    };
+    e.with_stack(4, |e, local| {
+        e.mem.set_u32(local.addr(), handle);
+        e.call(MODIFIER_CONSTRUCTOR, &args![this, local, order]);
+        fixed_string_release(e, local.addr());
+    });
+    let float = |value: f32| x87_quiet_bits(value.to_bits());
+    e.set(this, NiPSysEmitter::m_fSpeed, float(speed));
+    e.set(this, NiPSysEmitter::m_fSpeedVar, float(speed_var));
+    e.set(this, NiPSysEmitter::m_fDeclination, float(declination));
+    e.set(
+        this,
+        NiPSysEmitter::m_fDeclinationVar,
+        float(declination_var),
+    );
+    e.set(this, NiPSysEmitter::m_fPlanarAngle, float(planar_angle));
+    e.set(
+        this,
+        NiPSysEmitter::m_fPlanarAngleVar,
+        float(planar_angle_var),
+    );
+    let color = this.addr() + NiPSysEmitter::m_kInitialColor.off;
+    e.mem.set_u32(color, color_r);
+    e.mem.set_u32(color + 4, color_g);
+    e.mem.set_u32(color + 8, color_b);
+    e.mem.set_u32(color + 12, color_a);
+    e.mem.set_u32(this.addr(), VTABLE);
+    e.set(this, NiPSysEmitter::m_fInitialRadius, float(initial_radius));
+    e.set(this, NiPSysEmitter::m_fRadiusVar, float(radius_var));
+    e.set(this, NiPSysEmitter::m_fLifeSpan, float(life_span));
+    e.set(this, NiPSysEmitter::m_fLifeSpanVar, float(life_span_var));
+    e.set(this, NiPSysEmitter::m_fScale, 1.0f32.to_bits());
+    this
+}
+
+// Translated from 00c22530 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiPSysEmitter::SaveBinary` (Xbox PDB): `NiPSysModifier`'s, the speed,
+/// declination and planar angle with their variations (4 bytes each), the
+/// initial colour (`NiColorA::SaveBinary`), then the initial radius, the
+/// radius variation, the life span and its variation.
+pub fn ni_p_sys_emitter_save_binary(e: &mut Engine, this: Ptr<NiPSysEmitter>, stream: Ptr) {
+    e.call(MODIFIER_SAVE_BINARY, &args![this, stream]);
+    e.with_stack(4, |e, slot| {
+        for field in FLOATS_BEFORE_COLOR {
+            let value = this.addr() + field.off;
+            stream_write(e, stream.addr(), value, 4, 4, slot.addr());
+        }
+        let color = this.addr() + NiPSysEmitter::m_kInitialColor.off;
+        e.call(COLOR_SAVE_BINARY, &args![color, stream]);
+        for field in FLOATS_AFTER_COLOR {
+            let value = this.addr() + field.off;
+            stream_write(e, stream.addr(), value, 4, 4, slot.addr());
+        }
+    });
+}
+
+// Translated from 00c226a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiPSysEmitter::IsEqual` (Xbox PDB): `NiPSysModifier`'s, then equal
+/// speed, declination and planar angle with their variations (`FUCOMPP`: a
+/// NaN is unequal), equal initial colours (`004a4c90` on the other's colour
+/// answering 0), and equal initial radius, radius variation, life span and
+/// life span variation.
+pub fn ni_p_sys_emitter_is_equal(
+    e: &mut Engine,
+    this: Ptr<NiPSysEmitter>,
+    other: Ptr<NiPSysEmitter>,
+) -> bool {
+    if !e.call(MODIFIER_IS_EQUAL, &args![this, other]).bool() {
+        return false;
+    }
+    for field in FLOATS_BEFORE_COLOR {
+        if x87_m32(e.get(this, field)) != x87_m32(e.get(other, field)) {
+            return false;
+        }
+    }
+    let ours = this.addr() + NiPSysEmitter::m_kInitialColor.off;
+    let theirs = other.addr() + NiPSysEmitter::m_kInitialColor.off;
+    if e.call(COLOR_UNEQUAL, &args![theirs, ours]).bool() {
+        return false;
+    }
+    for field in FLOATS_AFTER_COLOR {
+        if x87_m32(e.get(this, field)) != x87_m32(e.get(other, field)) {
+            return false;
+        }
+    }
+    true
+}
+
+// Translated from 00c22780 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiPSysEmitter::GetViewerStrings` (Xbox PDB): `NiPSysModifier`'s strings,
+/// the class name, the speed, declination and planar angle with their
+/// variations, the initial colour (`NiColorA::GetViewerString`), the
+/// initial radius, radius variation, life span and its variation.
+pub fn ni_p_sys_emitter_get_viewer_strings(e: &mut Engine, this: Ptr<NiPSysEmitter>, strings: Ptr) {
+    let strings = strings.addr();
+    e.call(MODIFIER_GET_VIEWER_STRINGS, &args![this, strings]);
+    let name = e.global::<u32>(RTTI);
+    let string = e.call(VIEWER_STRING, &args![name]).u32();
+    add_viewer_string(e, strings, string);
+    let labels = [
+        LABEL_SPEED,
+        LABEL_SPEED_VAR,
+        LABEL_DECLINATION,
+        LABEL_DECLINATION_VAR,
+        LABEL_PLANAR_ANGLE,
+        LABEL_PLANAR_ANGLE_VAR,
+    ];
+    for (label, field) in labels.into_iter().zip(FLOATS_BEFORE_COLOR) {
+        let value = x87_quiet_bits(e.get(this, field));
+        let string = e.call(VIEWER_STRING_FLOAT, &args![label, value]).u32();
+        add_viewer_string(e, strings, string);
+    }
+    let color = this.addr() + NiPSysEmitter::m_kInitialColor.off;
+    let string = e
+        .call(COLOR_GET_VIEWER_STRING, &args![color, LABEL_INITIAL_COLOR])
+        .u32();
+    add_viewer_string(e, strings, string);
+    let labels = [
+        LABEL_INITIAL_RADIUS,
+        LABEL_RADIUS_VAR,
+        LABEL_LIFE_SPAN,
+        LABEL_LIFE_SPAN_VAR,
+    ];
+    for (label, field) in labels.into_iter().zip(FLOATS_AFTER_COLOR) {
+        let value = x87_quiet_bits(e.get(this, field));
+        let string = e.call(VIEWER_STRING_FLOAT, &args![label, value]).u32();
+        add_viewer_string(e, strings, string);
+    }
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -300,6 +528,40 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         ),
         entry!(0x00c21fd0, ni_p_sys_emitter_get_r_t_t_i() -> u32),
         entry!(0x00c220a0, ni_p_sys_emitter_scalar_deleting_destructor(Ptr, u32) -> Ptr),
+        entry!(
+            0x00c2_1fe0,
+            fn_00c21fe0(
+                Ptr<NiPSysEmitter>,
+                u32,
+                u32,
+                f32,
+                f32,
+                f32,
+                f32,
+                f32,
+                f32,
+                u32,
+                u32,
+                u32,
+                u32,
+                f32,
+                f32,
+                f32,
+                f32,
+            ) -> Ptr<NiPSysEmitter>
+        ),
+        entry!(
+            0x00c2_2530,
+            ni_p_sys_emitter_save_binary(Ptr<NiPSysEmitter>, Ptr)
+        ),
+        entry!(
+            0x00c2_26a0,
+            ni_p_sys_emitter_is_equal(Ptr<NiPSysEmitter>, Ptr<NiPSysEmitter>) -> bool
+        ),
+        entry!(
+            0x00c2_2780,
+            ni_p_sys_emitter_get_viewer_strings(Ptr<NiPSysEmitter>, Ptr)
+        ),
     ]
 }
 
@@ -492,5 +754,209 @@ mod tests {
             assert_eq!(f(&e, NiPSysEmitter::m_fLifeSpanVar), 11.0);
             assert_eq!(f(&e, NiPSysEmitter::m_fScale), 0.0);
         }
+    }
+}
+
+#[cfg(test)]
+mod n064_tests {
+    use super::*;
+    use crate::units::niparticle::nipsysdata::viewer_test::{self, answer, calls_to};
+    use crate::units::niparticle::nipsysdata::STREAM_OUTPUT;
+    use crate::units::niparticle::nipsysmodifier::test_stream;
+
+    /// An emitter whose ten floats are 1.0 to 10.0 in save order and whose
+    /// colour words are 0x11..0x44.
+    fn emitter(e: &mut Engine) -> Ptr<NiPSysEmitter> {
+        let this = e.new_object::<NiPSysEmitter>();
+        let fields = FLOATS_BEFORE_COLOR.into_iter().chain(FLOATS_AFTER_COLOR);
+        for (i, field) in fields.enumerate() {
+            e.set(this, field, (i as f32 + 1.0).to_bits());
+        }
+        for i in 0..4 {
+            e.mem.set_u32(this.addr() + 0x30 + 4 * i, 0x11 * (i + 1));
+        }
+        this
+    }
+
+    #[test]
+    fn constructor_stores_the_settings() {
+        let mut e = Engine::new();
+        test_stream::interlocked(&mut e);
+        e.map(NULL_FIXED_STRING, 4);
+        e.set_global::<u32>(NULL_FIXED_STRING, 0x0f60_0000);
+        let handle = e.mem.alloc(0x10) + 8;
+        e.mem.set_u32(handle - 8, 1);
+        e.map(0x0f60_0010, 8);
+        e.mem.set_u32(0x0f60_0010, handle);
+        e.register(FIXED_STRING_FROM_TEXT, |e, _| {
+            answer(e.mem.u32(0x0f60_0010))
+        });
+        e.register(MODIFIER_CONSTRUCTOR, |e, a| {
+            let name = e.mem.u32(a[1]);
+            e.mem.set_u32(0x0f60_0014, name);
+            Ret::default()
+        });
+        let this = e.new_object::<NiPSysEmitter>();
+        e.call_log = Some(vec![]);
+        let words = args![
+            this,
+            0x0100_0000u32,
+            7u32,
+            1.0f32,
+            2.0f32,
+            3.0f32,
+            4.0f32,
+            5.0f32,
+            0x7f80_0001u32,
+            0x11u32,
+            0x22u32,
+            0x33u32,
+            0x44u32,
+            6.0f32,
+            7.0f32,
+            8.0f32,
+            9.0f32
+        ];
+        assert_eq!(e.call(0x00c2_1fe0, &words).u32(), this.addr());
+        assert_eq!(
+            calls_to(&e, FIXED_STRING_FROM_TEXT),
+            vec![vec![0x0100_0000]]
+        );
+        let constructed = calls_to(&e, MODIFIER_CONSTRUCTOR);
+        assert_eq!((constructed[0][0], constructed[0][2]), (this.addr(), 7));
+        assert_eq!(e.mem.u32(0x0f60_0014), handle);
+        assert_eq!(e.mem.u32(handle - 8), 0);
+        assert_eq!(e.mem.u32(this.addr()), VTABLE);
+        let floats: Vec<u32> = [1.0f32, 2.0, 3.0, 4.0, 5.0]
+            .iter()
+            .map(|v| v.to_bits())
+            .collect();
+        for (field, value) in FLOATS_BEFORE_COLOR.iter().zip(&floats) {
+            assert_eq!(e.get(this, *field), *value);
+        }
+        assert_eq!(e.get(this, NiPSysEmitter::m_fPlanarAngleVar), 0x7fc0_0001);
+        for i in 0..4 {
+            assert_eq!(e.mem.u32(this.addr() + 0x30 + 4 * i), 0x11 * (i + 1));
+        }
+        assert_eq!(
+            e.get(this, NiPSysEmitter::m_fInitialRadius),
+            6.0f32.to_bits()
+        );
+        assert_eq!(e.get(this, NiPSysEmitter::m_fLifeSpan), 7.0f32.to_bits());
+        assert_eq!(e.get(this, NiPSysEmitter::m_fLifeSpanVar), 8.0f32.to_bits());
+        assert_eq!(e.get(this, NiPSysEmitter::m_fRadiusVar), 9.0f32.to_bits());
+        assert_eq!(e.get(this, NiPSysEmitter::m_fScale), 1.0f32.to_bits());
+        // A null name: the null handle, not released.
+        e.call(0x00c2_1fe0, &{
+            let mut words = words.clone();
+            words[1] = 0;
+            words
+        });
+        assert_eq!(e.mem.u32(0x0f60_0014), 0x0f60_0000);
+        assert_eq!(calls_to(&e, FIXED_STRING_FROM_TEXT).len(), 1);
+    }
+
+    #[test]
+    fn save_binary_writes_the_floats_around_the_colour() {
+        let mut e = Engine::new();
+        e.register(MODIFIER_SAVE_BINARY, |_, _| Ret::default());
+        let stream = viewer_test::out_stream(&mut e);
+        e.register(COLOR_SAVE_BINARY, |e, a| {
+            let output = e.mem.u32(a[1] + STREAM_OUTPUT);
+            let buffer = e.mem.u32(output + 0x10);
+            let used = e.mem.u32(buffer);
+            e.mem.write(buffer + 4 + used, b"COLR");
+            e.mem.set_u32(buffer, used + 4);
+            Ret::default()
+        });
+        let this = emitter(&mut e);
+        e.call_log = Some(vec![]);
+        e.call(0x00c2_2530, &args![this, stream]);
+        assert_eq!(
+            calls_to(&e, COLOR_SAVE_BINARY),
+            vec![vec![this.addr() + 0x30, stream]]
+        );
+        let mut bytes: Vec<u8> = (1..=6).flat_map(|i| (i as f32).to_le_bytes()).collect();
+        bytes.extend(b"COLR");
+        bytes.extend((7..=10).flat_map(|i| (i as f32).to_le_bytes()));
+        let (written, position) = viewer_test::written(&e, stream);
+        assert_eq!(written, bytes);
+        assert_eq!(position, 40);
+    }
+
+    #[test]
+    fn is_equal_compares_every_setting() {
+        let mut e = Engine::new();
+        e.register(MODIFIER_IS_EQUAL, |_, _| answer(1));
+        e.register(COLOR_UNEQUAL, |e, a| {
+            answer(u32::from(e.mem.bytes(a[0], 16) != e.mem.bytes(a[1], 16)))
+        });
+        let this = emitter(&mut e);
+        let other = emitter(&mut e);
+        let check = |e: &mut Engine| e.call(0x00c2_26a0, &args![this, other]).bool();
+        e.call_log = Some(vec![]);
+        assert!(check(&mut e));
+        assert_eq!(
+            calls_to(&e, COLOR_UNEQUAL),
+            vec![vec![other.addr() + 0x30, this.addr() + 0x30]]
+        );
+        let fields = FLOATS_BEFORE_COLOR.into_iter().chain(FLOATS_AFTER_COLOR);
+        for field in fields {
+            let kept = e.get(other, field);
+            e.set(other, field, 0.25f32.to_bits());
+            assert!(!check(&mut e));
+            e.set(other, field, kept);
+        }
+        e.mem.set_u32(other.addr() + 0x3c, 0);
+        assert!(!check(&mut e));
+        e.mem.set_u32(other.addr() + 0x3c, 0x44);
+        e.set(this, NiPSysEmitter::m_fLifeSpanVar, f32::NAN.to_bits());
+        e.set(other, NiPSysEmitter::m_fLifeSpanVar, f32::NAN.to_bits());
+        assert!(!check(&mut e));
+        e.register(MODIFIER_IS_EQUAL, |_, _| answer(0));
+        assert!(!check(&mut e));
+    }
+
+    #[test]
+    fn viewer_strings_name_every_setting() {
+        let mut e = Engine::new();
+        e.register(MODIFIER_GET_VIEWER_STRINGS, |_, _| Ret::default());
+        viewer_test::counting(
+            &mut e,
+            &[VIEWER_STRING, VIEWER_STRING_FLOAT, COLOR_GET_VIEWER_STRING],
+        );
+        e.map(RTTI, 4);
+        e.set_global::<u32>(RTTI, 0x0100_0070);
+        let strings = viewer_test::strings(&mut e, 4);
+        let this = emitter(&mut e);
+        e.call_log = Some(vec![]);
+        e.call(0x00c2_2780, &args![this, strings]);
+        assert_eq!(
+            viewer_test::collected(&e, strings),
+            (1..=12).collect::<Vec<u32>>()
+        );
+        assert_eq!(calls_to(&e, VIEWER_STRING), vec![vec![0x0100_0070]]);
+        assert_eq!(
+            calls_to(&e, COLOR_GET_VIEWER_STRING),
+            vec![vec![this.addr() + 0x30, LABEL_INITIAL_COLOR]]
+        );
+        let labels = [
+            LABEL_SPEED,
+            LABEL_SPEED_VAR,
+            LABEL_DECLINATION,
+            LABEL_DECLINATION_VAR,
+            LABEL_PLANAR_ANGLE,
+            LABEL_PLANAR_ANGLE_VAR,
+            LABEL_INITIAL_RADIUS,
+            LABEL_RADIUS_VAR,
+            LABEL_LIFE_SPAN,
+            LABEL_LIFE_SPAN_VAR,
+        ];
+        let expected: Vec<Vec<u32>> = labels
+            .iter()
+            .enumerate()
+            .map(|(i, &label)| vec![label, (i as f32 + 1.0).to_bits()])
+            .collect();
+        assert_eq!(calls_to(&e, VIEWER_STRING_FLOAT), expected);
     }
 }

@@ -602,6 +602,382 @@ pub fn fn_00ac61c0(
     end
 }
 
+/// `fopen` (`00ec9a47`, `cdecl`: name, mode), `fwrite` (`00ecb086`), `fread` (`00ecb3a8`; both
+/// `cdecl`: buffer, size, count, file) and `fseek` (`00ecb65a`, `cdecl`: file, offset, origin).
+const FOPEN: u32 = 0x00ec_9a47;
+const FWRITE: u32 = 0x00ec_b086;
+const FREAD: u32 = 0x00ec_b3a8;
+const FSEEK: u32 = 0x00ec_b65a;
+/// The open modes `"wb"` (`0106e798`), `"rb"` (`0106e79c`), `"r+b"` (`010a2dd8`) and `"a+b"`
+/// (`010a2ddc`).
+const MODE_WRITE: u32 = 0x0106_e798;
+const MODE_READ: u32 = 0x0106_e79c;
+const MODE_UPDATE: u32 = 0x010a_2dd8;
+const MODE_APPEND: u32 = 0x010a_2ddc;
+/// The game file's seek (`NiBinaryStream` vtable slot +0x14: offset, origin) and the origin
+/// word `00ac5e90` passes (`010a2480`).
+const STREAM_SEEK: u32 = 0x14;
+const SEEK_ORIGIN: u32 = 0x010a_2480;
+/// `FutBinaryFileC::fileId` (+0x20).
+const FILE_ID: u32 = 0x20;
+
+/// The header check the open functions share: character 5 of the file id (asserting its length
+/// is at least 5) is copied into `vector`'s bytes (asserting more than 5), and the id is
+/// compared (`00ac6100` from offset 0, the whole id) with the vector's C string (`strlen`).
+/// Answers the compare's result (0 when equal).
+fn compare_with_id(e: &mut Engine, this: u32, vector: u32) -> i32 {
+    let id = this + FILE_ID;
+    check(e, e.mem.u32(id + STRING_LENGTH) >= 5);
+    let id_chars = string_chars(e, id);
+    check(e, vector_size(e, vector) > 5);
+    let first = e.mem.u32(vector + VECTOR_FIRST);
+    let version = e.mem.u8(id_chars.wrapping_add(5));
+    e.mem.set_u8(first.wrapping_add(5), version);
+    check(e, vector_size(e, vector) != 0);
+    let first = e.mem.u32(vector + VECTOR_FIRST);
+    let length = e.call(STRLEN, &args![first]).u32();
+    let id_length = e.mem.u32(id + STRING_LENGTH);
+    fn_00ac6100(e, Ptr::new(id), 0, id_length, first, length)
+}
+
+/// Makes the header vector (the id's length plus one bytes, `00aba0d0`) and reads the header
+/// into it (`readHeader(first, length, 1)`, its size asserted not 0 first). Answers whether
+/// the read succeeded.
+fn read_header_into(e: &mut Engine, this: Ptr<BSFaceGenBinaryFile>, header: u32) -> bool {
+    let length = e.get(this, BSFaceGenBinaryFile::fileIdLength);
+    e.call(
+        BYTE_VECTOR_CONSTRUCT,
+        &args![header, length.wrapping_add(1)],
+    );
+    let length = e.get(this, BSFaceGenBinaryFile::fileIdLength);
+    check(e, vector_size(e, header) != 0);
+    let first = e.mem.u32(header + VECTOR_FIRST);
+    fut_binary_file_c_read_header(e, this, first, length, 1)
+}
+
+/// Frees a byte vector: its elements (`00abc0a0`), then its proxy through the memory manager.
+fn free_byte_vector(e: &mut Engine, vector: u32) {
+    e.call(BYTE_VECTOR_TIDY, &args![vector]);
+    let proxy = e.mem.u32(vector + VECTOR_PROXY);
+    e.call(MEMORY_MANAGER_FREE, &args![MEMORY_MANAGER_OBJECT, proxy]);
+}
+
+/// Frees a byte vector: its elements (`00abc0a0`), then its proxy (`00abc120`).
+fn tidy_byte_vector(e: &mut Engine, vector: u32) {
+    e.call(BYTE_VECTOR_TIDY, &args![vector]);
+    e.call(BYTE_VECTOR_FREE_PROXY, &args![vector]);
+}
+
+// Translated from 00ac43b0 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 00ac43b0 - the compiler's exception frame (FS:[0] chain, cookie 011c16bc) is not translated
+/// `FutBinaryFileC::openForRead` (Xbox PDB; `thiscall`, the file name string by value). Closes
+/// the file, opens the name with `fopen(name, "rb")`; without a file `futSetLastError(4,
+/// name)`, false. The header is read into a byte vector of the id's length plus one
+/// (`readHeader`; a failed read answers false). A copy of it (`00ac5f00`) gets character 5 of
+/// the id and must equal the id as a C string, else `futSetLastError(2, name)`, `close`,
+/// false. When the header's character 5 (the version) is above `'0'` it must equal the id's,
+/// else `futSetLastError(4, name)`, `close`, false. Otherwise the id takes the header's version,
+/// the name becomes `m_fname` and the answer is true. Every path frees the vectors it made and
+/// destroys the name.
+pub fn fut_binary_file_c_open_for_read(
+    e: &mut Engine,
+    this: Ptr<BSFaceGenBinaryFile>,
+    name: StringArg,
+) -> bool {
+    with_string_arg(e, name, |e, name| {
+        fut_binary_file_c_close(e, this);
+        let chars = string_chars(e, name);
+        let file = e.call(FOPEN, &args![chars, MODE_READ]).u32();
+        e.set(this, BSFaceGenBinaryFile::fptr, file);
+        if e.get(this, BSFaceGenBinaryFile::fptr) == 0 {
+            set_last_error(e, 4, name);
+            e.call(STRING_TIDY, &args![name, 1u32, 0u32]);
+            return false;
+        }
+        e.with_stack(0x30, |e, vectors| {
+            let header = vectors.addr();
+            let copy = vectors.addr() + 0x18;
+            if !read_header_into(e, this, header) {
+                tidy_byte_vector(e, header);
+                e.call(STRING_TIDY, &args![name, 1u32, 0u32]);
+                return false;
+            }
+            fn_00ac5f00(e, Ptr::new(copy), Ptr::new(header));
+            let fail = |e: &mut Engine, code: u32| {
+                set_last_error(e, code, name);
+                fut_binary_file_c_close(e, this);
+                tidy_byte_vector(e, copy);
+                tidy_byte_vector(e, header);
+                e.call(STRING_TIDY, &args![name, 1u32, 0u32]);
+                false
+            };
+            if compare_with_id(e, this.addr(), copy) != 0 {
+                return fail(e, 2);
+            }
+            let id = this.addr() + FILE_ID;
+            check(e, vector_size(e, header) > 5);
+            let header_first = e.mem.u32(header + VECTOR_FIRST);
+            if e.mem.i8(header_first.wrapping_add(5)) as i32 > 0x30 {
+                check(e, e.mem.u32(id + STRING_LENGTH) >= 5);
+                let id_chars = string_chars(e, id);
+                check(e, vector_size(e, header) > 5);
+                let header_first = e.mem.u32(header + VECTOR_FIRST);
+                if e.mem.i8(id_chars.wrapping_add(5)) != e.mem.i8(header_first.wrapping_add(5)) {
+                    return fail(e, 4);
+                }
+            }
+            check(e, vector_size(e, header) > 5);
+            let header_first = e.mem.u32(header + VECTOR_FIRST);
+            check(e, e.mem.u32(id + STRING_LENGTH) >= 5);
+            let id_chars = string_chars(e, id);
+            let version = e.mem.u8(header_first.wrapping_add(5));
+            e.mem.set_u8(id_chars.wrapping_add(5), version);
+            let npos: u32 = e.global(STRING_NPOS);
+            e.call(STRING_ASSIGN, &args![this.addr() + 4, name, 0u32, npos]);
+            tidy_byte_vector(e, copy);
+            free_byte_vector(e, header);
+            e.call(STRING_TIDY, &args![name, 1u32, 0u32]);
+            true
+        })
+    })
+}
+
+// Translated from 00ac4910 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 00ac4910 - the compiler's exception frame (FS:[0] chain, cookie 011c16bc) is not translated
+/// `FutBinaryFileC::openForOverwrite` (Xbox PDB; `thiscall`, the file name string by value).
+/// Closes the file and opens the name with `fopen(name, "wb")`; without a file
+/// `futSetLastError(5, name)`, false. Then the id's characters are written as the header
+/// (`writeHeader(id, length, 1)`); a failed write sets `futSetLastError(5, name)`, closes and
+/// answers false. Otherwise the name becomes `m_fname` and the answer is true. The name is
+/// destroyed on every path.
+pub fn fut_binary_file_c_open_for_overwrite(
+    e: &mut Engine,
+    this: Ptr<BSFaceGenBinaryFile>,
+    name: StringArg,
+) -> bool {
+    with_string_arg(e, name, |e, name| {
+        fut_binary_file_c_close(e, this);
+        let chars = string_chars(e, name);
+        let file = e.call(FOPEN, &args![chars, MODE_WRITE]).u32();
+        e.set(this, BSFaceGenBinaryFile::fptr, file);
+        if e.get(this, BSFaceGenBinaryFile::fptr) == 0 {
+            set_last_error(e, 5, name);
+            e.call(STRING_TIDY, &args![name, 1u32, 0u32]);
+            return false;
+        }
+        let length = e.get(this, BSFaceGenBinaryFile::fileIdLength);
+        let id_chars = string_chars(e, this.addr() + FILE_ID);
+        if !fut_binary_file_c_write_header(e, this, id_chars, length, 1) {
+            set_last_error(e, 5, name);
+            fut_binary_file_c_close(e, this);
+            e.call(STRING_TIDY, &args![name, 1u32, 0u32]);
+            return false;
+        }
+        let npos: u32 = e.global(STRING_NPOS);
+        e.call(STRING_ASSIGN, &args![this.addr() + 4, name, 0u32, npos]);
+        e.call(STRING_TIDY, &args![name, 1u32, 0u32]);
+        true
+    })
+}
+
+// Translated from 00ac4b00 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 00ac4b00 - the compiler's exception frame (FS:[0] chain, cookie 011c16bc) is not translated
+/// Unnamed in the engine map: `FutBinaryFileC`'s open for update (`thiscall`, the address of the
+/// file name string). Closes the file and opens the name with `fopen(name, "r+b")`; without a
+/// file `futSetLastError(4, name)`, false. The header is read into a byte vector (a failed read
+/// answers false); a copy of it (`00ac5f00`) gets character 5 of the id and must equal the id as
+/// a C string, else `futSetLastError(2, name)`, `close`, false. Otherwise the id's character 5
+/// becomes `'0'`, the name becomes `m_fname` and the answer is true.
+pub fn fn_00ac4b00(e: &mut Engine, this: Ptr<BSFaceGenBinaryFile>, name: u32) -> bool {
+    fut_binary_file_c_close(e, this);
+    let chars = string_chars(e, name);
+    let file = e.call(FOPEN, &args![chars, MODE_UPDATE]).u32();
+    e.set(this, BSFaceGenBinaryFile::fptr, file);
+    if e.get(this, BSFaceGenBinaryFile::fptr) == 0 {
+        set_last_error(e, 4, name);
+        return false;
+    }
+    e.with_stack(0x30, |e, vectors| {
+        let header = vectors.addr();
+        let copy = vectors.addr() + 0x18;
+        if !read_header_into(e, this, header) {
+            free_byte_vector(e, header);
+            return false;
+        }
+        fn_00ac5f00(e, Ptr::new(copy), Ptr::new(header));
+        if compare_with_id(e, this.addr(), copy) != 0 {
+            set_last_error(e, 2, name);
+            fut_binary_file_c_close(e, this);
+            free_byte_vector(e, copy);
+            free_byte_vector(e, header);
+            return false;
+        }
+        let id = this.addr() + FILE_ID;
+        check(e, e.mem.u32(id + STRING_LENGTH) >= 5);
+        let id_chars = string_chars(e, id);
+        e.mem.set_u8(id_chars.wrapping_add(5), b'0');
+        let npos: u32 = e.global(STRING_NPOS);
+        e.call(STRING_ASSIGN, &args![this.addr() + 4, name, 0u32, npos]);
+        tidy_byte_vector(e, copy);
+        free_byte_vector(e, header);
+        true
+    })
+}
+
+// Translated from 00ac4f00 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 00ac4f00 - the compiler's exception frame (FS:[0] chain, cookie 011c16bc) is not translated
+/// Unnamed in the engine map: `FutBinaryFileC`'s open for appending (`thiscall`, the address of
+/// the file name string). Closes the file and opens the name with `fopen(name, "a+b")`; without
+/// a file `futSetLastError(4, name)`, false. The header is read into a byte vector (a failed
+/// read answers false), which gets character 5 of the id and must equal the id as a C string,
+/// else `futSetLastError(2, name)`, `close`, false. Otherwise the name becomes `m_fname` and
+/// the answer is true.
+pub fn fn_00ac4f00(e: &mut Engine, this: Ptr<BSFaceGenBinaryFile>, name: u32) -> bool {
+    fut_binary_file_c_close(e, this);
+    let chars = string_chars(e, name);
+    let file = e.call(FOPEN, &args![chars, MODE_APPEND]).u32();
+    e.set(this, BSFaceGenBinaryFile::fptr, file);
+    if e.get(this, BSFaceGenBinaryFile::fptr) == 0 {
+        set_last_error(e, 4, name);
+        return false;
+    }
+    e.with_stack(0x18, |e, header| {
+        let header = header.addr();
+        if !read_header_into(e, this, header) {
+            free_byte_vector(e, header);
+            return false;
+        }
+        if compare_with_id(e, this.addr(), header) != 0 {
+            set_last_error(e, 2, name);
+            fut_binary_file_c_close(e, this);
+            tidy_byte_vector(e, header);
+            return false;
+        }
+        let npos: u32 = e.global(STRING_NPOS);
+        e.call(STRING_ASSIGN, &args![this.addr() + 4, name, 0u32, npos]);
+        free_byte_vector(e, header);
+        true
+    })
+}
+
+/// `FutBinaryFileC::writeHeader` and `readHeader` share this shape: without a file false; a
+/// transfer of fewer than `count` elements sets `futSetLastError(code, m_fname)`, closes the
+/// file and answers false.
+fn transfer(
+    e: &mut Engine,
+    this: Ptr<BSFaceGenBinaryFile>,
+    function: u32,
+    code: u32,
+    buffer: u32,
+    size: u32,
+    count: u32,
+) -> bool {
+    let file = e.get(this, BSFaceGenBinaryFile::fptr);
+    if file == 0 {
+        return false;
+    }
+    let done = e.call(function, &args![buffer, size, count, file]).u32();
+    if done == count {
+        return true;
+    }
+    set_last_error(e, code, this.addr() + 4);
+    fut_binary_file_c_close(e, this);
+    false
+}
+
+// Translated from 00ac5220 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `FutBinaryFileC::writeHeader` (Xbox PDB; `thiscall`: buffer, size, count): `fwrite` to the
+/// C file; fewer than `count` written sets `futSetLastError(6, m_fname)` and closes. False
+/// without a file.
+pub fn fut_binary_file_c_write_header(
+    e: &mut Engine,
+    this: Ptr<BSFaceGenBinaryFile>,
+    buffer: u32,
+    size: u32,
+    count: u32,
+) -> bool {
+    transfer(e, this, FWRITE, 6, buffer, size, count)
+}
+
+// Translated from 00ac52b0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `FutBinaryFileC::readHeader` (Xbox PDB; `thiscall`: buffer, size, count): `fread` from the C
+/// file; fewer than `count` read sets `futSetLastError(1, m_fname)` and closes. False without a
+/// file.
+pub fn fut_binary_file_c_read_header(
+    e: &mut Engine,
+    this: Ptr<BSFaceGenBinaryFile>,
+    buffer: u32,
+    size: u32,
+    count: u32,
+) -> bool {
+    transfer(e, this, FREAD, 1, buffer, size, count)
+}
+
+// Translated from 00ac5340 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `FutBinaryFileC::write` (Xbox PDB; `thiscall`: buffer, size, count): `writeHeader`.
+pub fn fut_binary_file_c_write(
+    e: &mut Engine,
+    this: Ptr<BSFaceGenBinaryFile>,
+    buffer: u32,
+    size: u32,
+    count: u32,
+) -> bool {
+    fut_binary_file_c_write_header(e, this, buffer, size, count)
+}
+
+// Translated from 00ac5370 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `FutBinaryFileC::read` (Xbox PDB; `thiscall`: buffer, size, count): `readHeader`.
+pub fn fut_binary_file_c_read(
+    e: &mut Engine,
+    this: Ptr<BSFaceGenBinaryFile>,
+    buffer: u32,
+    size: u32,
+    count: u32,
+) -> bool {
+    fut_binary_file_c_read_header(e, this, buffer, size, count)
+}
+
+// Translated from 00ac53a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `FutBinaryFileC::seek` (Xbox PDB; `thiscall`, the offset): `fseek(file, offset, 0)`; a
+/// failure sets `futSetLastError(7, m_fname)`, closes and answers false. False without a file.
+pub fn fut_binary_file_c_seek(e: &mut Engine, this: Ptr<BSFaceGenBinaryFile>, offset: u32) -> bool {
+    let file = e.get(this, BSFaceGenBinaryFile::fptr);
+    if file == 0 {
+        return false;
+    }
+    if e.call(FSEEK, &args![file, offset, 0u32]).u32() == 0 {
+        return true;
+    }
+    set_last_error(e, 7, this.addr() + 4);
+    fut_binary_file_c_close(e, this);
+    false
+}
+
+// Translated from 00ac5e90 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map: `BSFaceGenBinaryFile`'s seek (`thiscall`, the offset): without a
+/// game file false; otherwise the file's seek (its vtable slot +0x14) gets the offset and the
+/// origin word at `010a2480`, and the answer is true.
+pub fn fn_00ac5e90(e: &mut Engine, this: Ptr<BSFaceGenBinaryFile>, offset: u32) -> bool {
+    if e.get(this, BSFaceGenBinaryFile::pFile) == 0 {
+        return false;
+    }
+    let origin: u32 = e.global(SEEK_ORIGIN);
+    let file = e.get(this, BSFaceGenBinaryFile::pFile);
+    e.vcall(file, STREAM_SEEK, &args![offset, origin]);
+    true
+}
+
+// Translated from 00ac5ed0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (the library signature matcher names it after a destructor with
+/// the same code): a `FILE*` holder's destructor (`thiscall`): `fclose` of the word at +0 when
+/// it is set.
+pub fn fn_00ac5ed0(e: &mut Engine, this: Ptr) {
+    let file = e.mem.u32(this.addr());
+    if file != 0 {
+        e.call(FCLOSE, &args![file]);
+    }
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -636,6 +1012,47 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00ac_5f00, fn_00ac5f00(Ptr, Ptr) -> Ptr),
         entry!(0x00ac_6100, fn_00ac6100(Ptr, u32, u32, u32, u32) -> i32),
         entry!(0x00ac_61c0, fn_00ac61c0(u32, u32, u32, u32, u32, u32) -> u32),
+        entry!(
+            0x00ac_43b0,
+            fut_binary_file_c_open_for_read(Ptr<BSFaceGenBinaryFile>, StringArg) -> bool
+        ),
+        entry!(
+            0x00ac_4910,
+            fut_binary_file_c_open_for_overwrite(Ptr<BSFaceGenBinaryFile>, StringArg) -> bool
+        ),
+        entry!(
+            0x00ac_4b00,
+            fn_00ac4b00(Ptr<BSFaceGenBinaryFile>, u32) -> bool
+        ),
+        entry!(
+            0x00ac_4f00,
+            fn_00ac4f00(Ptr<BSFaceGenBinaryFile>, u32) -> bool
+        ),
+        entry!(
+            0x00ac_5220,
+            fut_binary_file_c_write_header(Ptr<BSFaceGenBinaryFile>, u32, u32, u32) -> bool
+        ),
+        entry!(
+            0x00ac_52b0,
+            fut_binary_file_c_read_header(Ptr<BSFaceGenBinaryFile>, u32, u32, u32) -> bool
+        ),
+        entry!(
+            0x00ac_5340,
+            fut_binary_file_c_write(Ptr<BSFaceGenBinaryFile>, u32, u32, u32) -> bool
+        ),
+        entry!(
+            0x00ac_5370,
+            fut_binary_file_c_read(Ptr<BSFaceGenBinaryFile>, u32, u32, u32) -> bool
+        ),
+        entry!(
+            0x00ac_53a0,
+            fut_binary_file_c_seek(Ptr<BSFaceGenBinaryFile>, u32) -> bool
+        ),
+        entry!(
+            0x00ac_5e90,
+            fn_00ac5e90(Ptr<BSFaceGenBinaryFile>, u32) -> bool
+        ),
+        entry!(0x00ac_5ed0, fn_00ac5ed0(Ptr)),
     ]
 }
 
@@ -1103,5 +1520,191 @@ mod tests {
         assert_eq!(empty, destination);
         let log = e.call_log.take().unwrap();
         assert_eq!(calls_to(&log, MEMMOVE_S).len(), 1);
+    }
+
+    const C_FILE: u32 = 0x0050_0000;
+
+    /// The C file doubles: `fopen` answers `opened` (0 for a failure), `fread` copies `header`
+    /// and answers the count (0 when it has not enough bytes), `fwrite` answers `written`.
+    fn c_file_engine(opened: u32, header: &'static [u8], written: u32) -> Engine {
+        let mut e = engine();
+        e.register_double(FOPEN, move |_, _| opened.into_ret());
+        e.register_double(FREAD, move |e, a| {
+            let bytes = (a[1] * a[2]) as usize;
+            if bytes > header.len() {
+                return Ret::default();
+            }
+            e.mem.write(a[0], &header[..bytes]);
+            a[2].into_ret()
+        });
+        e.register_double(FWRITE, move |_, _| written.into_ret());
+        e
+    }
+
+    fn error_codes(log: &Log) -> Vec<u32> {
+        calls_to(log, SET_LAST_ERROR).iter().map(|w| w[0]).collect()
+    }
+
+    #[test]
+    fn c_file_open_for_read_checks_the_header() {
+        for (opened, header, codes, ok) in [
+            (C_FILE, &b"FRCTL001"[..], vec![], true),
+            (C_FILE, &b"FRXTL001"[..], vec![2], false),
+            (C_FILE, &b"FRCTL101"[..], vec![4], false),
+            (C_FILE, &b"FRC"[..], vec![1], false),
+            (0, &b"FRCTL001"[..], vec![4], false),
+        ] {
+            let mut e = c_file_engine(opened, header, 1);
+            let file = new_file(&mut e);
+            let name = name_arg(&mut e, b"a.ctl");
+            e.call_log = Some(vec![]);
+            let answer = e.call(0x00ac_43b0, &args![file, name]).bool();
+            let log = e.call_log.take().unwrap();
+            assert_eq!(answer, ok, "{header:?}");
+            assert_eq!(error_codes(&log), codes, "{header:?}");
+            assert_eq!(calls_to(&log, FOPEN)[0][1], MODE_READ);
+            if ok {
+                assert_eq!(string_text(&e, file.addr() + 4), b"a.ctl".to_vec());
+                assert_eq!(e.get(file, BSFaceGenBinaryFile::fptr), C_FILE);
+                assert_eq!(calls_to(&log, MEMORY_MANAGER_FREE).len(), 1);
+                assert_eq!(calls_to(&log, BYTE_VECTOR_FREE_PROXY).len(), 1);
+            } else if opened != 0 && header.len() == 8 {
+                // A failed check closes the file.
+                assert_eq!(calls_to(&log, FCLOSE), vec![vec![C_FILE]]);
+                assert_eq!(calls_to(&log, BYTE_VECTOR_FREE_PROXY).len(), 2);
+            }
+            // The name is destroyed on every path.
+            assert_eq!(calls_to(&log, STRING_TIDY).last().unwrap()[1..], [1, 0]);
+        }
+    }
+
+    #[test]
+    fn c_file_open_for_overwrite_writes_the_id() {
+        for (opened, written, ok) in [(C_FILE, 1u32, true), (C_FILE, 0, false), (0, 1, false)] {
+            let mut e = c_file_engine(opened, b"", written);
+            let file = new_file(&mut e);
+            let name = name_arg(&mut e, b"b.egm");
+            e.call_log = Some(vec![]);
+            let answer = e.call(0x00ac_4910, &args![file, name]).bool();
+            let log = e.call_log.take().unwrap();
+            assert_eq!(answer, ok);
+            assert_eq!(calls_to(&log, FOPEN)[0][1], MODE_WRITE);
+            if ok {
+                let writes = calls_to(&log, FWRITE);
+                assert_eq!(writes[0][1..], [8, 1, C_FILE]);
+                assert_eq!(e.mem.bytes(writes[0][0], 8), b"FRCTL001".to_vec());
+                assert_eq!(string_text(&e, file.addr() + 4), b"b.egm".to_vec());
+                assert!(error_codes(&log).is_empty());
+            } else if opened != 0 {
+                // The failed write reports 6, then the open 5.
+                assert_eq!(error_codes(&log), vec![6, 5]);
+            } else {
+                assert_eq!(error_codes(&log), vec![5]);
+                assert!(calls_to(&log, FWRITE).is_empty());
+            }
+        }
+    }
+
+    #[test]
+    fn c_file_open_for_update_and_append() {
+        for (addr, mode) in [(0x00ac_4b00u32, MODE_UPDATE), (0x00ac_4f00, MODE_APPEND)] {
+            for (header, codes, ok) in [
+                (&b"FRCTL001"[..], vec![], true),
+                (&b"FRCTX001"[..], vec![2], false),
+                (&b"F"[..], vec![1], false),
+            ] {
+                let mut e = c_file_engine(C_FILE, header, 1);
+                let file = new_file(&mut e);
+                // The id's version is 1: the header gets it before the compare.
+                put_string(&mut e, file.addr() + 0x20, b"FRCTL101");
+                let name = e.mem.alloc(0x1c);
+                put_string(&mut e, name, b"c.tri");
+                e.call_log = Some(vec![]);
+                let answer = e.call(addr, &args![file, name]).bool();
+                let log = e.call_log.take().unwrap();
+                assert_eq!(answer, ok, "{addr:x} {header:?}");
+                assert_eq!(error_codes(&log), codes, "{addr:x} {header:?}");
+                assert_eq!(calls_to(&log, FOPEN)[0][1], mode);
+                if ok {
+                    assert_eq!(string_text(&e, file.addr() + 4), b"c.tri".to_vec());
+                    // The update resets the id's version to '0'; the append keeps it.
+                    let id = string_text(&e, file.addr() + 0x20);
+                    assert_eq!(id[5], if addr == 0x00ac_4b00 { b'0' } else { b'1' });
+                }
+            }
+            let mut e = c_file_engine(0, b"", 1);
+            let file = new_file(&mut e);
+            let name = e.mem.alloc(0x1c);
+            put_string(&mut e, name, b"c.tri");
+            e.call_log = Some(vec![]);
+            assert!(!e.call(addr, &args![file, name]).bool());
+            let log = e.call_log.take().unwrap();
+            assert_eq!(error_codes(&log), vec![4]);
+            assert!(calls_to(&log, FREAD).is_empty());
+        }
+    }
+
+    #[test]
+    fn c_file_transfers_and_seek_report_failures() {
+        let mut e = c_file_engine(C_FILE, b"abcd", 2);
+        let file = new_file(&mut e);
+        let buffer = e.mem.alloc(8);
+        // No file: false and nothing called.
+        e.call_log = Some(vec![]);
+        assert!(!e.call(0x00ac_5370, &args![file, buffer, 2u32, 2u32]).bool());
+        assert!(!e.call(0x00ac_53a0, &args![file, 4u32]).bool());
+        let log = e.call_log.take().unwrap();
+        assert!(calls_to(&log, FREAD).is_empty());
+        e.set(file, BSFaceGenBinaryFile::fptr, C_FILE);
+        assert!(e.call(0x00ac_5370, &args![file, buffer, 2u32, 2u32]).bool());
+        assert_eq!(e.mem.bytes(buffer, 4), b"abcd".to_vec());
+        assert!(e.call(0x00ac_5340, &args![file, buffer, 1u32, 2u32]).bool());
+        e.call_log = Some(vec![]);
+        assert!(!e.call(0x00ac_52b0, &args![file, buffer, 4u32, 2u32]).bool());
+        let log = e.call_log.take().unwrap();
+        assert_eq!(error_codes(&log), vec![1]);
+        assert_eq!(e.get(file, BSFaceGenBinaryFile::fptr), 0);
+        e.set(file, BSFaceGenBinaryFile::fptr, C_FILE);
+        e.call_log = Some(vec![]);
+        assert!(!e.call(0x00ac_5220, &args![file, buffer, 1u32, 3u32]).bool());
+        let log = e.call_log.take().unwrap();
+        assert_eq!(error_codes(&log), vec![6]);
+        // The seek: 0 from fseek is success.
+        e.register(FSEEK, |_, a| u32::from(a[1] != 4).into_ret());
+        e.set(file, BSFaceGenBinaryFile::fptr, C_FILE);
+        e.call_log = Some(vec![]);
+        assert!(e.call(0x00ac_53a0, &args![file, 4u32]).bool());
+        assert!(!e.call(0x00ac_53a0, &args![file, 5u32]).bool());
+        let log = e.call_log.take().unwrap();
+        assert_eq!(
+            calls_to(&log, FSEEK),
+            vec![vec![C_FILE, 4, 0], vec![C_FILE, 5, 0]]
+        );
+        assert_eq!(error_codes(&log), vec![7]);
+    }
+
+    #[test]
+    fn game_file_seek_and_file_holder_destructor() {
+        let mut e = engine();
+        e.map(0x010a_2000, 0x1000);
+        e.set_global(SEEK_ORIGIN, 0u32);
+        let file = new_file(&mut e);
+        assert!(!e.call(0x00ac_5e90, &args![file, 9u32]).bool());
+        let stream = e.mem.alloc(0x10);
+        e.put_vtable(0x0090_8200, &[0, 0, 0, 0, 0, 0x0040_6030]);
+        e.mem.set_u32(stream, 0x0090_8200);
+        e.register(0x0040_6030, |_, _| Ret::default());
+        e.set(file, BSFaceGenBinaryFile::pFile, stream);
+        e.call_log = Some(vec![]);
+        assert!(e.call(0x00ac_5e90, &args![file, 9u32]).bool());
+        let log = e.call_log.take().unwrap();
+        assert_eq!(calls_to(&log, 0x0040_6030), vec![vec![stream, 9, 0]]);
+        let holder = e.mem.alloc(4);
+        e.call_log = Some(vec![]);
+        e.call(0x00ac_5ed0, &args![holder]);
+        e.mem.set_u32(holder, C_FILE);
+        e.call(0x00ac_5ed0, &args![holder]);
+        let log = e.call_log.take().unwrap();
+        assert_eq!(calls_to(&log, FCLOSE), vec![vec![C_FILE]]);
     }
 }

@@ -239,9 +239,114 @@ pub fn fn_00c64530(e: &mut Engine) -> Ptr {
     Ptr::new(object)
 }
 
+/// `NiFloatExtraData::SaveBinary` (`00a9a4e0`), `00a742a0` (unnamed,
+/// `NiMain/nistringextradata.cpp`), `NiBinaryExtraData::RegisterStreamables`
+/// (`00a89ae0`) and `NiIntegerExtraData::GetViewerStrings` (`00a99d70`):
+/// the engine map's names for the bodies this class's slots call;
+/// `thiscall`, one word each.
+const BASE_SAVE_BINARY: u32 = 0x00a9_a4e0;
+const BASE_IS_EQUAL: u32 = 0x00a7_42a0;
+const BASE_REGISTER_STREAMABLES: u32 = 0x00a8_9ae0;
+const BASE_GET_VIEWER_STRINGS: u32 = 0x00a9_9d70;
+/// `NiStreamSaveBinary<unsigned short>` (`00a303a0`, `cdecl`, `(stream,
+/// &value)`) and `00a417b0` (unnamed, `cdecl`, `(stream, floats, count)`:
+/// writes `count` floats).
+const SAVE_WORD16: u32 = 0x00a3_03a0;
+const SAVE_FLOATS: u32 = 0x00a4_17b0;
+/// `NiGetViewerString` (`00a7d330`, the class name) and the viewer-string
+/// array's `Add` (`0096a610`, `thiscall` on the array, the string's
+/// address); the word the class name is read from (`011f4428`, which other
+/// units read as `NiNode`'s `NiRTTI` record).
+const NI_GET_VIEWER_STRING: u32 = 0x00a7_d330;
+const STRINGS_ADD: u32 = 0x0096_a610;
+const CLASS_NAME_RECORD: u32 = 0x011f_4428;
+
+// Translated from 00c643d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSDecalPlacementVectorExtraData::SaveBinary` (Xbox PDB): the base part
+/// (`00a9a4e0`), the group count (`00a303a0` with +0x10), then for each
+/// group (index below the 16-bit count, signed) its vertex count
+/// (`00a303a0` with the group's first word), its positions (`00a417b0`:
+/// group +4, three floats per vertex) and its normals (group +0x64, the
+/// same count).
+pub fn bs_decal_placement_vector_extra_data_save_binary(
+    e: &mut Engine,
+    this: Ptr<BSDecalPlacementVectorExtraData>,
+    stream: Ptr,
+) {
+    e.call(BASE_SAVE_BINARY, &args![this, stream]);
+    e.call(SAVE_WORD16, &args![stream, this.addr() + 0x10]);
+    let mut index = 0i32;
+    while index < i32::from(e.get(this, BSDecalPlacementVectorExtraData::usGroupCount)) {
+        let slot = this.addr() + 0x14 + 4 * index as u32;
+        let group = e.mem.u32(slot);
+        e.call(SAVE_WORD16, &args![stream, group]);
+        let group = e.mem.u32(slot);
+        let vertices = u32::from(e.mem.u16(group));
+        e.call(
+            SAVE_FLOATS,
+            &args![stream, group + 4, vertices.wrapping_mul(3)],
+        );
+        let group = e.mem.u32(slot);
+        let vertices = u32::from(e.mem.u16(group));
+        e.call(
+            SAVE_FLOATS,
+            &args![stream, group + 0x64, vertices.wrapping_mul(3)],
+        );
+        index += 1;
+    }
+}
+
+// Translated from 00c644d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map: the class vtable's `IsEqual` slot (word
+/// `010c3908`). Answers `00a742a0`'s AL as it is.
+pub fn fn_00c644d0(e: &mut Engine, this: Ptr, other: Ptr) -> u8 {
+    e.call(BASE_IS_EQUAL, &args![this, other]).u8()
+}
+
+// Translated from 00c64500 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map: the class vtable's `RegisterStreamables` slot
+/// (word `010c3900`). The answer in EAX is 0 when `00a89ae0` answered
+/// nonzero in AL and 1 otherwise (`NEG`, `SBB`, `ADD 1`, as the exe
+/// computes it).
+pub fn fn_00c64500(e: &mut Engine, this: Ptr, stream: Ptr) -> u32 {
+    let registered = e.call(BASE_REGISTER_STREAMABLES, &args![this, stream]).u8();
+    u32::from(registered == 0)
+}
+
+// Translated from 00c645c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSDecalPlacementVectorExtraData::GetViewerStrings` (Xbox PDB): the base
+/// strings (`00a99d70`), then the name in the record at `011f4428` (not
+/// this class's own `012043d4`), added through `0096a610`.
+pub fn bs_decal_placement_vector_extra_data_get_viewer_strings(
+    e: &mut Engine,
+    this: Ptr,
+    strings: Ptr,
+) {
+    e.call(BASE_GET_VIEWER_STRINGS, &args![this, strings]);
+    let class_name = e.global::<u32>(CLASS_NAME_RECORD);
+    let text = e.call(NI_GET_VIEWER_STRING, &args![class_name]).u32();
+    e.with_stack(4, |e, slot| {
+        e.mem.set_u32(slot.addr(), text);
+        e.call(STRINGS_ADD, &args![strings, slot]);
+    });
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(
+            0x00c6_43d0,
+            bs_decal_placement_vector_extra_data_save_binary(
+                Ptr<BSDecalPlacementVectorExtraData>,
+                Ptr,
+            )
+        ),
+        entry!(0x00c6_44d0, fn_00c644d0(Ptr, Ptr) -> u8),
+        entry!(0x00c6_4500, fn_00c64500(Ptr, Ptr) -> u32),
+        entry!(
+            0x00c6_45c0,
+            bs_decal_placement_vector_extra_data_get_viewer_strings(Ptr, Ptr)
+        ),
         entry!(0x00c6_4600, fn_00c64600(Ptr) -> u32),
         entry!(0x00c6_44b0, fn_00c644b0(Ptr, Ptr)),
         entry!(0x00c6_3b40, fn_00c63b40(Ptr)),
@@ -445,5 +550,91 @@ mod b037_tests {
             ]
         );
         assert_eq!(calls(&e, DECAL_PLACEMENT_VECTOR_CONSTRUCTOR).len(), 1);
+    }
+}
+
+#[cfg(test)]
+mod n066_tests {
+    use super::*;
+
+    fn calls_to(e: &Engine, callee: u32) -> Vec<Vec<u32>> {
+        e.call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|(address, _)| *address == callee)
+            .map(|(_, words)| words.clone())
+            .collect()
+    }
+
+    fn word(eax: u32) -> Ret {
+        Ret {
+            eax,
+            ..Ret::default()
+        }
+    }
+
+    #[test]
+    fn save_binary_writes_every_group() {
+        let mut e = Engine::new();
+        e.register(BASE_SAVE_BINARY, |_, _| Ret::default());
+        e.register(SAVE_WORD16, |_, _| Ret::default());
+        e.register(SAVE_FLOATS, |_, _| Ret::default());
+        let this = e.mem.alloc(0x40);
+        let first = e.mem.alloc(0xc4);
+        let second = e.mem.alloc(0xc4);
+        e.mem.set_u16(first, 2);
+        e.mem.set_u16(second, 5);
+        e.mem.set_u16(this + 0x10, 2);
+        e.mem.set_u32(this + 0x14, first);
+        e.mem.set_u32(this + 0x18, second);
+        e.call_log = Some(vec![]);
+        e.call(0x00c6_43d0, &args![this, 0x2000u32]);
+        assert_eq!(calls_to(&e, BASE_SAVE_BINARY), vec![vec![this, 0x2000]]);
+        assert_eq!(
+            calls_to(&e, SAVE_WORD16),
+            vec![
+                vec![0x2000, this + 0x10],
+                vec![0x2000, first],
+                vec![0x2000, second]
+            ]
+        );
+        assert_eq!(
+            calls_to(&e, SAVE_FLOATS),
+            vec![
+                vec![0x2000, first + 4, 6],
+                vec![0x2000, first + 0x64, 6],
+                vec![0x2000, second + 4, 15],
+                vec![0x2000, second + 0x64, 15]
+            ]
+        );
+    }
+
+    #[test]
+    fn is_equal_and_register_streamables_use_the_base_answers() {
+        let mut e = Engine::new();
+        e.register(BASE_IS_EQUAL, |_, a| word(a[1] & 0xff));
+        assert_eq!(e.call(0x00c6_44d0, &args![0x1000u32, 0x2003u32]).u32(), 3);
+        e.register(BASE_REGISTER_STREAMABLES, |_, _| word(0x100));
+        assert_eq!(e.call(0x00c6_4500, &args![0x1000u32, 0x2000u32]).u32(), 1);
+        e.register(BASE_REGISTER_STREAMABLES, |_, _| word(1));
+        assert_eq!(e.call(0x00c6_4500, &args![0x1000u32, 0x2000u32]).u32(), 0);
+    }
+
+    #[test]
+    fn get_viewer_strings_adds_the_recorded_name() {
+        let mut e = Engine::new();
+        e.map(CLASS_NAME_RECORD, 4);
+        e.set_global(CLASS_NAME_RECORD, 0x0555_0000u32);
+        e.register(BASE_GET_VIEWER_STRINGS, |_, _| Ret::default());
+        e.register(NI_GET_VIEWER_STRING, |_, _| word(0x7000_0001));
+        e.register(STRINGS_ADD, |e, a| {
+            assert_eq!(e.mem.u32(a[1]), 0x7000_0001);
+            Ret::default()
+        });
+        e.call_log = Some(vec![]);
+        e.call(0x00c6_45c0, &args![0x1000u32, 0x2000u32]);
+        assert_eq!(calls_to(&e, NI_GET_VIEWER_STRING), vec![vec![0x0555_0000]]);
+        assert_eq!(calls_to(&e, STRINGS_ADD)[0][0], 0x2000);
     }
 }

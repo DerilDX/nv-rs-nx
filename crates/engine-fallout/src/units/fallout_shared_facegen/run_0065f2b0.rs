@@ -585,6 +585,577 @@ pub fn fn_006605d0(
     construct_each(e, first, last, destination, allocator, 0x58, 0x0066_0320)
 }
 
+/// The checked iterator constructor (`0065ded0`, thiscall on the vector: the out iterator,
+/// the owner and the pointer) and comparison (`0065dfd0`, thiscall on an iterator, one word:
+/// the other; result in `AL`).
+const MAKE_ITERATOR_0065DED0: u32 = 0x0065_ded0;
+const ITERATORS_DIFFER_0065DFD0: u32 = 0x0065_dfd0;
+/// `vector::begin()` of the 6-byte vectors (`0044a170`, thiscall, one word: the out
+/// iterator; answers its address).
+const BEGIN_0044A170: u32 = 0x0044_a170;
+/// The string from a C string (`0044a4c0`, thiscall, one word), `std::length_error`'s
+/// constructor (`0044a2e0`, thiscall, one word: the message string), the message
+/// (`vector<T> too long`) and `std::length_error`'s throw information.
+const STRING_FROM_C_0044A4C0: u32 = 0x0044_a4c0;
+const LENGTH_ERROR_CTOR_0044A2E0: u32 = 0x0044_a2e0;
+const VECTOR_TOO_LONG: u32 = 0x0101_73c4;
+const LENGTH_ERROR_THROW_INFO_01140CB0: u32 = 0x0114_0cb0;
+/// `memmove_s` (`00ec7ce3`, cdecl: destination, size, source, count).
+const MEMMOVE_S: u32 = 0x00ec_7ce3;
+/// Placement `operator new` (`006e6da0`, cdecl: size, place).
+const PLACEMENT_NEW_006E6DA0: u32 = 0x006e_6da0;
+/// The word at +4 of an object (`00726070`, thiscall).
+const WORD_AT_FOUR_00726070: u32 = 0x0072_6070;
+
+/// A copy's next step (cdecl, six words: first, last, destination and three tags).
+type CopyStep = fn(&mut Engine, u32, u32, u32, u32, u32, u32) -> u32;
+
+// Translated from 0065f2e0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed: `vector::capacity()` for the 6-byte vector (thiscall): 0 without `_Myfirst`,
+/// else `(_Myend - _Myfirst) / 6` (signed division).
+pub fn fn_0065f2e0(e: &mut Engine, this: Ptr) -> u32 {
+    let base = this.addr();
+    if e.mem.u32(base + VECTOR_FIRST) == 0 {
+        return 0;
+    }
+    let bytes = e
+        .mem
+        .u32(base + VECTOR_END)
+        .wrapping_sub(e.mem.u32(base + VECTOR_FIRST));
+    (bytes as i32).wrapping_div(6) as u32
+}
+
+// Translated from 0065f320 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed: `vector::clear()` for the second 6-byte vector (thiscall): [`fn_0065f5a0`] with
+/// `begin()` (`0044a170`) and `end()` ([`fn_0065f550`]), the result iterator a stack
+/// local.
+pub fn fn_0065f320(e: &mut Engine, this: Ptr) {
+    e.with_stack(0x2c, |e, frame| {
+        let ebp = frame.addr() + 0x2c;
+        let at = fn_0065f550(e, this, Ptr::new(ebp - 0x10)).addr();
+        let (end_owner, end) = (e.mem.u32(at), e.mem.u32(at + 4));
+        let at = e.call(BEGIN_0044A170, &args![this, ebp - 0x20]).u32();
+        let (begin_owner, begin) = (e.mem.u32(at), e.mem.u32(at.wrapping_add(4)));
+        fn_0065f5a0(
+            e,
+            this,
+            Ptr::new(ebp - 0x28),
+            begin_owner,
+            begin,
+            end_owner,
+            end,
+        );
+    });
+}
+
+// Translated from 0065f4b0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed: `vector::capacity()` for a byte vector (thiscall): 0 without `_Myfirst`, else
+/// `_Myend - _Myfirst`.
+pub fn fn_0065f4b0(e: &mut Engine, this: Ptr) -> u32 {
+    let base = this.addr();
+    if e.mem.u32(base + VECTOR_FIRST) == 0 {
+        return 0;
+    }
+    e.mem
+        .u32(base + VECTOR_END)
+        .wrapping_sub(e.mem.u32(base + VECTOR_FIRST))
+}
+
+// Translated from 0065f4f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed: `vector::clear()` for the first 6-byte vector (thiscall): [`fn_0065f700`] with
+/// `begin()` (`0044a170`) and `end()` ([`fn_0065f550`]), the result iterator a stack
+/// local.
+pub fn fn_0065f4f0(e: &mut Engine, this: Ptr) {
+    e.with_stack(0x2c, |e, frame| {
+        let ebp = frame.addr() + 0x2c;
+        let at = fn_0065f550(e, this, Ptr::new(ebp - 0x10)).addr();
+        let (end_owner, end) = (e.mem.u32(at), e.mem.u32(at + 4));
+        let at = e.call(BEGIN_0044A170, &args![this, ebp - 0x20]).u32();
+        let (begin_owner, begin) = (e.mem.u32(at), e.mem.u32(at.wrapping_add(4)));
+        fn_0065f700(
+            e,
+            this,
+            Ptr::new(ebp - 0x28),
+            begin_owner,
+            begin,
+            end_owner,
+            end,
+        );
+    });
+}
+
+/// `vector::erase(first, last)` for one 6-byte vector (thiscall; `out` the result iterator,
+/// the two iterators as two words each): both iterators are rebuilt (`0065ded0`); when they
+/// differ (`0065dfd0`), the tail from `last` is copied down to `first` (`copy`), the elements
+/// after the new end destroyed (`destroy`) and `_Mylast` moved. The result is the first
+/// iterator.
+fn erase_range(
+    e: &mut Engine,
+    this: Ptr,
+    out: Ptr,
+    first: [u32; 2],
+    last: [u32; 2],
+    copy: fn(&mut Engine, u32, u32, u32) -> u32,
+    destroy: fn(&mut Engine, Ptr, u32, u32),
+) -> Ptr {
+    let base = this.addr();
+    e.with_stack(0x10, |e, frame| {
+        let (from, to) = (frame.addr() + 8, frame.addr());
+        e.call(
+            MAKE_ITERATOR_0065DED0,
+            &args![this, from, first[0], first[1]],
+        );
+        e.call(MAKE_ITERATOR_0065DED0, &args![this, to, last[0], last[1]]);
+        if e.call(ITERATORS_DIFFER_0065DFD0, &args![from, to]).bool() {
+            let old_last = e.mem.u32(base + VECTOR_LAST);
+            let (source, target) = (e.mem.u32(to + 4), e.mem.u32(from + 4));
+            let new_last = copy(e, source, old_last, target);
+            let old_last = e.mem.u32(base + VECTOR_LAST);
+            destroy(e, this, new_last, old_last);
+            e.mem.set_u32(base + VECTOR_LAST, new_last);
+        }
+        let (owner, pointer) = (e.mem.u32(from), e.mem.u32(from + 4));
+        e.mem.set_u32(out.addr(), owner);
+        e.mem.set_u32(out.addr() + 4, pointer);
+    });
+    out
+}
+
+// Translated from 0065f5a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed: `vector::erase(first, last)` for the second 6-byte vector (thiscall, five words:
+/// the result iterator's address and the two iterators, `RET 0x14`): see [`erase_range`]
+/// with the copy [`fn_0065f820`] and [`fn_0065f400`]. Answers the result's address.
+pub fn fn_0065f5a0(
+    e: &mut Engine,
+    this: Ptr,
+    out: Ptr,
+    first_owner: u32,
+    first: u32,
+    last_owner: u32,
+    last: u32,
+) -> Ptr {
+    erase_range(
+        e,
+        this,
+        out,
+        [first_owner, first],
+        [last_owner, last],
+        fn_0065f820,
+        fn_0065f400,
+    )
+}
+
+// Translated from 0065f640 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed: `vector::_Xlen()` (no arguments): makes the string `vector<T> too long`
+/// (`0044a4c0`), a `std::length_error` from it (`0044a2e0`) and throws it
+/// (`_CxxThrowException`, which does not return in the game).
+// Translation incomplete: 0065f640 - the C++ exception-unwinding frame (FS:[0]) that destroys the message string is not translated
+pub fn fn_0065f640(e: &mut Engine) {
+    e.with_stack(0x50, |e, frame| {
+        let ebp = frame.addr() + 0x50;
+        let (message, error) = (ebp - 0x50, ebp - 0x34);
+        e.call(STRING_FROM_C_0044A4C0, &args![message, VECTOR_TOO_LONG]);
+        e.call(LENGTH_ERROR_CTOR_0044A2E0, &args![error, message]);
+        e.call(
+            CXX_THROW_EXCEPTION,
+            &args![error, LENGTH_ERROR_THROW_INFO_01140CB0],
+        );
+    });
+}
+
+// Translated from 0065f6c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed: the 6-byte allocator's `allocate(count)` (thiscall, one word, `RET 4`; `this` is
+/// not read): [`fn_0065f9e0`] with the count and 0.
+pub fn fn_0065f6c0(e: &mut Engine, _this: Ptr, count: u32) -> u32 {
+    fn_0065f9e0(e, count, 0)
+}
+
+// Translated from 0065f700 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed: `vector::erase(first, last)` for the first 6-byte vector (thiscall, five words,
+/// `RET 0x14`): see [`erase_range`] with the copy [`fn_0065f8c0`] and [`fn_0065f2b0`].
+/// Answers the result's address.
+pub fn fn_0065f700(
+    e: &mut Engine,
+    this: Ptr,
+    out: Ptr,
+    first_owner: u32,
+    first: u32,
+    last_owner: u32,
+    last: u32,
+) -> Ptr {
+    erase_range(
+        e,
+        this,
+        out,
+        [first_owner, first],
+        [last_owner, last],
+        fn_0065f8c0,
+        fn_0065f2b0,
+    )
+}
+
+// Translated from 0065f7c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed: the 6-byte allocator's `max_size()` (thiscall): the local `0x2aaaaaaa`, or 1 when
+/// that is 0 (the compiler kept the test; it always returns `0x2aaaaaaa`).
+pub fn fn_0065f7c0(_e: &mut Engine, _this: Ptr) -> u32 {
+    let count = std::hint::black_box(0x2aaa_aaaau32);
+    if count > 0 {
+        count
+    } else {
+        1
+    }
+}
+
+/// `std::copy(first, last, destination)` of the checked library for one element type
+/// (cdecl, three words): the pointer category tag (`0065e750` with `ECX` the address of the
+/// destination word, the addresses of the first and destination words pushed), the iterator
+/// category ([`fn_0065fd70`] with the category byte's address), the unchecked pointers of
+/// `last` and `first` ([`fn_0065fe40`]), then `next` with them, the destination, the
+/// category, the tag and the range-checked tag 0.
+fn checked_copy(e: &mut Engine, first: u32, last: u32, destination: u32, next: CopyStep) -> u32 {
+    e.with_stack(0x10, |e, frame| {
+        // The local word at EBP-4 holds the bytes at EBP-3 (category), EBP-2 (tag) and EBP-1
+        // (the range-checked tag); the argument words follow it.
+        let local = frame.addr();
+        let (category, tag, checked) = (local + 1, local + 2, local + 3);
+        let (first_at, last_at, destination_at) = (local + 4, local + 8, local + 0xc);
+        e.mem.set_u32(first_at, first);
+        e.mem.set_u32(last_at, last);
+        e.mem.set_u32(destination_at, destination);
+        e.mem.set_u8(checked, 0);
+        let pointer_tag = e
+            .call(
+                ITERATOR_TAG_0065E750,
+                &args![destination_at, first_at, destination_at],
+            )
+            .u32() as u8;
+        e.mem.set_u8(tag, pointer_tag);
+        let checked = u32::from(e.mem.u8(checked));
+        let pointer_tag = u32::from(e.mem.u8(tag));
+        let at = fn_0065fd70(e, category, first_at, destination_at);
+        let iterator_tag = u32::from(e.mem.u8(at));
+        let destination = e.mem.u32(destination_at);
+        let last = fn_0065fe40(e, last_at);
+        let first = fn_0065fe40(e, first_at);
+        next(
+            e,
+            first,
+            last,
+            destination,
+            iterator_tag,
+            pointer_tag,
+            checked,
+        )
+    })
+}
+
+// Translated from 0065f820 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed: `std::copy` for the second 6-byte vector (cdecl, three words): see
+/// [`checked_copy`], then [`fn_0065fd80`].
+pub fn fn_0065f820(e: &mut Engine, first: u32, last: u32, destination: u32) -> u32 {
+    checked_copy(e, first, last, destination, fn_0065fd80)
+}
+
+// Translated from 0065f890 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed: `vector::_Ucopy(first, last, destination)` for the first 6-byte vector
+/// (thiscall, three words, `RET 0xc`): [`fn_0065fde0`] with them and the allocator at `+8`.
+pub fn fn_0065f890(e: &mut Engine, this: Ptr, first: u32, last: u32, destination: u32) -> u32 {
+    fn_0065fde0(e, first, last, destination, this.addr() + VECTOR_ALLOCATOR)
+}
+
+// Translated from 0065f8c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed: `std::copy` for the first 6-byte vector (cdecl, three words): see
+/// [`checked_copy`], then [`fn_0065fe60`].
+pub fn fn_0065f8c0(e: &mut Engine, first: u32, last: u32, destination: u32) -> u32 {
+    checked_copy(e, first, last, destination, fn_0065fe60)
+}
+
+// Translated from 0065f930 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed: `vector::_Ucopy(first, last, destination)` for the second 6-byte vector
+/// (thiscall, three words, `RET 0xc`): [`fn_0065fea0`] with them and the allocator at `+8`.
+pub fn fn_0065f930(e: &mut Engine, this: Ptr, first: u32, last: u32, destination: u32) -> u32 {
+    fn_0065fea0(e, first, last, destination, this.addr() + VECTOR_ALLOCATOR)
+}
+
+// Translated from 0065fa80 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed: the copy constructor of a 0x1c-byte record (thiscall, one word: the source,
+/// `RET 4`): copies the float at `+0` (`FLD`/`FSTP`), then copy-constructs the first 6-byte
+/// vector at `+4` ([`fn_0065fb10`]). Answers `this`.
+pub fn fn_0065fa80(e: &mut Engine, this: Ptr, source: Ptr) -> Ptr {
+    let value = x87_quiet_bits(e.mem.u32(source.addr()));
+    e.mem.set_u32(this.addr(), value);
+    fn_0065fb10(e, Ptr::new(this.addr() + 4), Ptr::new(source.addr() + 4));
+    this
+}
+
+// Translated from 0065fd80 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed: the 6-byte copy's random-access, non-scalar form (`cdecl`, six words: first,
+/// last, destination and three tag words that are not read): copies the elements
+/// ([`fn_00660030`] with the destination's unchecked pointer, [`fn_0065fe40`]) and answers
+/// `destination + (last - first) / 6 * 6` (signed division). The exe passes on a tag byte of
+/// its own frame that it never sets (not read by the copy); here the frame starts zeroed.
+pub fn fn_0065fd80(
+    e: &mut Engine,
+    first: u32,
+    last: u32,
+    destination: u32,
+    _unused_3: u32,
+    _unused_4: u32,
+    _unused_5: u32,
+) -> u32 {
+    let count = (last.wrapping_sub(first) as i32).wrapping_div(6);
+    let end = (count.wrapping_mul(6) as u32).wrapping_add(destination);
+    e.with_stack(8, |e, frame| {
+        let (destination_at, unset_tag) = (frame.addr(), frame.addr() + 4);
+        e.mem.set_u32(destination_at, destination);
+        let unset = u32::from(e.mem.u8(unset_tag));
+        let target = fn_0065fe40(e, destination_at);
+        fn_00660030(e, first, last, target, unset, 0, 0);
+    });
+    end
+}
+
+// Translated from 0065fe60 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed: the first 6-byte vector's plain-data copy (`cdecl`, six words; it reads the first
+/// three): `memmove_s` (`00ec7ce3`: destination, size, source, count) of the `last - first`
+/// bytes when that is above 0 (signed). Answers `destination + (last - first)`.
+pub fn fn_0065fe60(
+    e: &mut Engine,
+    first: u32,
+    last: u32,
+    destination: u32,
+    _unused_3: u32,
+    _unused_4: u32,
+    _unused_5: u32,
+) -> u32 {
+    let bytes = last.wrapping_sub(first);
+    let end = destination.wrapping_add(bytes);
+    if bytes as i32 > 0 {
+        e.call(MEMMOVE_S, &args![destination, bytes, first, bytes]);
+    }
+    end
+}
+
+// Translated from 0065ff30 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed: `vector::_Ucopy(first, last, destination)` with checked iterators for the first
+/// 6-byte vector (the copy of [`fn_0065fb10`]; thiscall, five words: the two iterators as two
+/// words each and the destination, `RET 0x14`): [`fn_00660130`] with them and the allocator
+/// at `+8`.
+pub fn fn_0065ff30(
+    e: &mut Engine,
+    this: Ptr,
+    first_owner: u32,
+    first: u32,
+    last_owner: u32,
+    last: u32,
+    destination: u32,
+) -> u32 {
+    let allocator = this.addr() + VECTOR_ALLOCATOR;
+    fn_00660130(
+        e,
+        first_owner,
+        first,
+        last_owner,
+        last,
+        destination,
+        allocator,
+    )
+}
+
+// Translated from 0065ff60 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed: the same for the vector [`fn_0065fc10`] copies (thiscall, five words, `RET
+/// 0x14`): [`fn_00660190`] with them and the allocator at `+8`.
+pub fn fn_0065ff60(
+    e: &mut Engine,
+    this: Ptr,
+    first_owner: u32,
+    first: u32,
+    last_owner: u32,
+    last: u32,
+    destination: u32,
+) -> u32 {
+    let allocator = this.addr() + VECTOR_ALLOCATOR;
+    fn_00660190(
+        e,
+        first_owner,
+        first,
+        last_owner,
+        last,
+        destination,
+        allocator,
+    )
+}
+
+// Translated from 00660030 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed: the 6-byte element copy loop (`cdecl`, six words; the three tags are not read):
+/// copies each element (a word and a 16-bit word) from `first` up to `last` to `destination`
+/// on; answers the end of the destination.
+pub fn fn_00660030(
+    e: &mut Engine,
+    first: u32,
+    last: u32,
+    destination: u32,
+    _unused_3: u32,
+    _unused_4: u32,
+    _unused_5: u32,
+) -> u32 {
+    let (mut source, mut target) = (first, destination);
+    while source != last {
+        let word = e.mem.u32(source);
+        e.mem.set_u32(target, word);
+        let half = e.mem.u16(source.wrapping_add(4));
+        e.mem.set_u16(target.wrapping_add(4), half);
+        target = target.wrapping_add(6);
+        source = source.wrapping_add(6);
+    }
+    target
+}
+
+/// The checked uninitialized copy with checked iterators (cdecl, six words: the first and
+/// last iterators as two words each, the destination and the allocator): the pointer
+/// category tag (`0065e750` with `ECX` the address of the destination word, the addresses of
+/// the first iterator and the destination pushed), the unwrapped last and first iterators
+/// ([`fn_00660250`]), then `next` with them, the destination, the allocator, the tag and the
+/// range-checked tag 0.
+fn checked_record_copy(e: &mut Engine, words: [u32; 6], next: CopyStep) -> u32 {
+    e.with_stack(0x1c, |e, frame| {
+        // The local word at EBP-4 holds the tag (EBP-2) and the range-checked tag (EBP-1);
+        // the argument words follow it.
+        let local = frame.addr();
+        let (tag, checked) = (local + 2, local + 3);
+        let (first_at, last_at) = (local + 4, local + 0xc);
+        let (destination_at, allocator_at) = (local + 0x14, local + 0x18);
+        for (index, word) in words.iter().enumerate() {
+            e.mem.set_u32(first_at + 4 * index as u32, *word);
+        }
+        e.mem.set_u8(checked, 0);
+        let pointer_tag = e
+            .call(
+                ITERATOR_TAG_0065E750,
+                &args![destination_at, first_at, destination_at],
+            )
+            .u32() as u8;
+        e.mem.set_u8(tag, pointer_tag);
+        let checked = u32::from(e.mem.u8(checked));
+        let pointer_tag = u32::from(e.mem.u8(tag));
+        let allocator = e.mem.u32(allocator_at);
+        let destination = e.mem.u32(destination_at);
+        let last = fn_00660250(e, last_at);
+        let first = fn_00660250(e, first_at);
+        next(e, first, last, destination, allocator, pointer_tag, checked)
+    })
+}
+
+// Translated from 00660130 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed: the checked uninitialized copy of the first 6-byte vector (cdecl, six words): see
+/// [`checked_record_copy`], then [`fn_00660070`] (each element constructed).
+pub fn fn_00660130(
+    e: &mut Engine,
+    first_owner: u32,
+    first: u32,
+    last_owner: u32,
+    last: u32,
+    destination: u32,
+    allocator: u32,
+) -> u32 {
+    let words = [first_owner, first, last_owner, last, destination, allocator];
+    checked_record_copy(e, words, fn_00660070)
+}
+
+// Translated from 00660190 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed: the checked uninitialized copy of the vector [`fn_0065fc10`] copies (cdecl, six
+/// words): see [`checked_record_copy`], then [`fn_00660270`] (the bytes moved).
+pub fn fn_00660190(
+    e: &mut Engine,
+    first_owner: u32,
+    first: u32,
+    last_owner: u32,
+    last: u32,
+    destination: u32,
+    allocator: u32,
+) -> u32 {
+    let words = [first_owner, first, last_owner, last, destination, allocator];
+    checked_record_copy(e, words, fn_00660270)
+}
+
+// Translated from 006601f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed: the 6-byte allocator's `construct(place, value)` (thiscall, two words, `RET 8`;
+/// `this` is not read): [`fn_006602b0`] with them.
+pub fn fn_006601f0(e: &mut Engine, _this: Ptr, place: u32, value: u32) {
+    fn_006602b0(e, place, value);
+}
+
+// Translated from 00660250 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed: unwraps a checked iterator (`cdecl`, one word: the iterator's address):
+/// [`fn_00660400`] with the address and the byte at `EBP-1` (the top byte of the caller's
+/// `ECX`, which the frame's `PUSH ECX` left there); [`fn_00660400`] reads only its first word,
+/// so the byte is passed as 0 here.
+pub fn fn_00660250(e: &mut Engine, iterator: u32) -> u32 {
+    fn_00660400(e, iterator, 0)
+}
+
+// Translated from 006602b0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed: `_Construct(place, value)` for 6-byte elements (`cdecl`, two words): placement
+/// `operator new` (`006e6da0` with 6 and the place); when that answers a place, the word and
+/// 16-bit word of the value are copied there. Answers the place.
+pub fn fn_006602b0(e: &mut Engine, place: u32, value: u32) -> u32 {
+    let at = e.call(PLACEMENT_NEW_006E6DA0, &args![6u32, place]).u32();
+    if at != 0 {
+        let word = e.mem.u32(value);
+        e.mem.set_u32(at, word);
+        let half = e.mem.u16(value.wrapping_add(4));
+        e.mem.set_u16(at.wrapping_add(4), half);
+    }
+    at
+}
+
+// Translated from 00660300 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed: the 0x1c-byte record allocator's `construct(place, value)` (thiscall, two words,
+/// `RET 8`; `this` is not read): [`fn_00660410`] with them.
+pub fn fn_00660300(e: &mut Engine, _this: Ptr, place: u32, value: u32) {
+    fn_00660410(e, place, value);
+}
+
+// Translated from 00660320 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed: the 0x58-byte record allocator's `construct(place, value)` (thiscall, two
+/// words, `RET 8`; `this` is not read): [`fn_00660490`] with them.
+pub fn fn_00660320(e: &mut Engine, _this: Ptr, place: u32, value: u32) {
+    fn_00660490(e, place, value);
+}
+
+// Translated from 00660400 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed: the word an iterator points at (`cdecl`, two words; it reads only the first):
+/// `00726070` (the word at +4) on the iterator's address.
+pub fn fn_00660400(e: &mut Engine, iterator: u32, _unused_1: u32) -> u32 {
+    e.call(WORD_AT_FOUR_00726070, &args![iterator]).u32()
+}
+
+// Translated from 00660410 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed: `_Construct(place, value)` for the 0x1c-byte records (`cdecl`, two words):
+/// placement `operator new` (`006e6da0` with 0x1c and the place), then the copy constructor
+/// [`fn_0065fa80`] there from `value`. Answers the record (0 without a place).
+// Translation incomplete: 00660410 - the C++ exception-unwinding frame (FS:[0]) that frees the place when the copy throws is not translated
+pub fn fn_00660410(e: &mut Engine, place: u32, value: u32) -> u32 {
+    let at = e.call(PLACEMENT_NEW_006E6DA0, &args![0x1cu32, place]).u32();
+    if at == 0 {
+        return 0;
+    }
+    fn_0065fa80(e, Ptr::new(at), Ptr::new(value)).addr()
+}
+
+// Translated from 00660490 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed: `_Construct(place, value)` for the 0x58-byte records (`cdecl`, two words):
+/// placement `operator new` (`006e6da0` with 0x58 and the place), then the copy constructor
+/// [`fn_0065fab0`] there from `value`. Answers the record (0 without a place).
+// Translation incomplete: 00660490 - the C++ exception-unwinding frame (FS:[0]) that frees the place when the copy throws is not translated
+pub fn fn_00660490(e: &mut Engine, place: u32, value: u32) -> u32 {
+    let at = e.call(PLACEMENT_NEW_006E6DA0, &args![0x58u32, place]).u32();
+    if at == 0 {
+        return 0;
+    }
+    fn_0065fab0(e, Ptr::new(at), Ptr::new(value)).addr()
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -621,6 +1192,35 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x0066_03a0, fn_006603a0(u32, u32, u32, u32) -> u32),
         entry!(0x0066_0510, fn_00660510(u32, u32, u32, u32, u32, u32) -> u32),
         entry!(0x0066_05d0, fn_006605d0(u32, u32, u32, u32, u32, u32) -> u32),
+        entry!(0x0065_f2e0, fn_0065f2e0(Ptr) -> u32),
+        entry!(0x0065_f320, fn_0065f320(Ptr)),
+        entry!(0x0065_f4b0, fn_0065f4b0(Ptr) -> u32),
+        entry!(0x0065_f4f0, fn_0065f4f0(Ptr)),
+        entry!(0x0065_f5a0, fn_0065f5a0(Ptr, Ptr, u32, u32, u32, u32) -> Ptr),
+        entry!(0x0065_f640, fn_0065f640()),
+        entry!(0x0065_f6c0, fn_0065f6c0(Ptr, u32) -> u32),
+        entry!(0x0065_f700, fn_0065f700(Ptr, Ptr, u32, u32, u32, u32) -> Ptr),
+        entry!(0x0065_f7c0, fn_0065f7c0(Ptr) -> u32),
+        entry!(0x0065_f820, fn_0065f820(u32, u32, u32) -> u32),
+        entry!(0x0065_f890, fn_0065f890(Ptr, u32, u32, u32) -> u32),
+        entry!(0x0065_f8c0, fn_0065f8c0(u32, u32, u32) -> u32),
+        entry!(0x0065_f930, fn_0065f930(Ptr, u32, u32, u32) -> u32),
+        entry!(0x0065_fa80, fn_0065fa80(Ptr, Ptr) -> Ptr),
+        entry!(0x0065_fd80, fn_0065fd80(u32, u32, u32, u32, u32, u32) -> u32),
+        entry!(0x0065_fe60, fn_0065fe60(u32, u32, u32, u32, u32, u32) -> u32),
+        entry!(0x0065_ff30, fn_0065ff30(Ptr, u32, u32, u32, u32, u32) -> u32),
+        entry!(0x0065_ff60, fn_0065ff60(Ptr, u32, u32, u32, u32, u32) -> u32),
+        entry!(0x0066_0030, fn_00660030(u32, u32, u32, u32, u32, u32) -> u32),
+        entry!(0x0066_0130, fn_00660130(u32, u32, u32, u32, u32, u32) -> u32),
+        entry!(0x0066_0190, fn_00660190(u32, u32, u32, u32, u32, u32) -> u32),
+        entry!(0x0066_01f0, fn_006601f0(Ptr, u32, u32)),
+        entry!(0x0066_0250, fn_00660250(u32) -> u32),
+        entry!(0x0066_02b0, fn_006602b0(u32, u32) -> u32),
+        entry!(0x0066_0300, fn_00660300(Ptr, u32, u32)),
+        entry!(0x0066_0320, fn_00660320(Ptr, u32, u32)),
+        entry!(0x0066_0400, fn_00660400(u32, u32) -> u32),
+        entry!(0x0066_0410, fn_00660410(u32, u32) -> u32),
+        entry!(0x0066_0490, fn_00660490(u32, u32) -> u32),
     ]
 }
 
@@ -1010,5 +1610,370 @@ mod b046_tests {
             0x858
         );
         assert_eq!(e.call(0x0066_05d0, &words).u32(), 0x8b0);
+    }
+}
+
+#[cfg(test)]
+mod n063_tests {
+    use super::*;
+
+    fn calls_to(e: &Engine, address: u32) -> Vec<Vec<u32>> {
+        e.call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|(a, _)| *a == address)
+            .map(|(_, words)| words.clone())
+            .collect()
+    }
+
+    fn quiet(_: &mut Engine, _: &[u32]) -> Ret {
+        Ret::default()
+    }
+
+    /// The iterator helpers as plain operations: the tag is 0x5a, unwrapping reads the
+    /// word, a checked iterator is (owner, pointer), iterators differ by their pointers,
+    /// `begin()` and `end()` give `_Myfirst` and `_Mylast`, placement new answers the place.
+    fn iterator_world(e: &mut Engine) {
+        e.register(ITERATOR_TAG_0065E750, |_, _| 0x1_5au32.into_ret());
+        e.register(UNWRAP_0043B1D0, |e, a| e.mem.u32(a[0]).into_ret());
+        e.register(MAKE_ITERATOR_0065DED0, |e, a| {
+            e.mem.set_u32(a[1], a[2]);
+            e.mem.set_u32(a[1] + 4, a[3]);
+            Ret::default()
+        });
+        e.register(ITERATORS_DIFFER_0065DFD0, |e, a| {
+            u32::from(e.mem.u32(a[0] + 4) != e.mem.u32(a[1] + 4)).into_ret()
+        });
+        e.register(BEGIN_0044A170, |e, a| {
+            e.mem.set_u32(a[1], a[0]);
+            let first = e.mem.u32(a[0] + VECTOR_FIRST);
+            e.mem.set_u32(a[1] + 4, first);
+            a[1].into_ret()
+        });
+        e.register(0x0065_e000, |e, a| {
+            e.mem.set_u32(a[0], a[2]);
+            e.mem.set_u32(a[0] + 4, a[1]);
+            Ret::default()
+        });
+        e.register(PLACEMENT_NEW_006E6DA0, |_, a| a[1].into_ret());
+        e.register(WORD_AT_FOUR_00726070, |e, a| e.mem.u32(a[0] + 4).into_ret());
+    }
+
+    /// A vector of `count` 6-byte elements (element `i` holds `0x100 * i + 1` and `i`).
+    fn vector(e: &mut Engine, count: u32) -> u32 {
+        let this = e.mem.alloc(0x18);
+        let buffer = e.mem.alloc(6 * count.max(1) + 6);
+        for index in 0..count {
+            e.mem.set_u32(buffer + 6 * index, 0x100 * index + 1);
+            e.mem.set_u16(buffer + 6 * index + 4, index as u16);
+        }
+        e.mem.set_u32(this + VECTOR_FIRST, buffer);
+        e.mem.set_u32(this + VECTOR_LAST, buffer + 6 * count);
+        e.mem.set_u32(this + VECTOR_END, buffer + 6 * count + 6);
+        this
+    }
+
+    #[test]
+    fn capacities_count_elements_and_bytes() {
+        let mut e = Engine::new();
+        let this = vector(&mut e, 3);
+        assert_eq!(e.call(0x0065_f2e0, &args![this]).u32(), 4);
+        assert_eq!(e.call(0x0065_f4b0, &args![this]).u32(), 24);
+        e.mem.set_u32(this + VECTOR_FIRST, 0);
+        assert_eq!(e.call(0x0065_f2e0, &args![this]).u32(), 0);
+        assert_eq!(e.call(0x0065_f4b0, &args![this]).u32(), 0);
+    }
+
+    #[test]
+    fn erase_0065f5a0_moves_the_tail_down() {
+        let mut e = Engine::new();
+        iterator_world(&mut e);
+        e.register(0x0065_e9a0, quiet);
+        let this = vector(&mut e, 4);
+        let first = e.mem.u32(this + VECTOR_FIRST);
+        let out = e.mem.alloc(8);
+        e.call_log = Some(vec![]);
+        let result = e
+            .call(
+                0x0065_f5a0,
+                &args![this, out, 0x77u32, first + 6, 0x77u32, first + 12],
+            )
+            .u32();
+        assert_eq!(result, out);
+        assert_eq!((e.mem.u32(out), e.mem.u32(out + 4)), (0x77, first + 6));
+        // Elements 2 and 3 now at 1 and 2; the old last element destroyed.
+        assert_eq!(e.mem.u32(first + 6), 0x201);
+        assert_eq!(e.mem.u16(first + 10), 2);
+        assert_eq!(e.mem.u32(first + 12), 0x301);
+        assert_eq!(e.mem.u32(this + VECTOR_LAST), first + 18);
+        assert_eq!(calls_to(&e, 0x0065_e9a0), vec![vec![this + 8, first + 18]]);
+        // Equal iterators change nothing.
+        e.call_log = Some(vec![]);
+        e.call(0x0065_f5a0, &args![this, out, 0u32, first, 0u32, first]);
+        assert!(calls_to(&e, ITERATOR_TAG_0065E750).is_empty());
+        assert_eq!(e.mem.u32(this + VECTOR_LAST), first + 18);
+    }
+
+    #[test]
+    fn clear_0065f320_destroys_every_element() {
+        let mut e = Engine::new();
+        iterator_world(&mut e);
+        e.register(0x0065_e9a0, quiet);
+        let this = vector(&mut e, 2);
+        let first = e.mem.u32(this + VECTOR_FIRST);
+        e.call_log = Some(vec![]);
+        e.call(0x0065_f320, &args![this]);
+        assert_eq!(e.mem.u32(this + VECTOR_LAST), first);
+        assert_eq!(
+            calls_to(&e, 0x0065_e9a0),
+            vec![vec![this + 8, first], vec![this + 8, first + 6]]
+        );
+    }
+
+    #[test]
+    fn erase_0065f700_and_clear_0065f4f0_copy_bytes_and_destroy_through_the_stub() {
+        let mut e = Engine::new();
+        iterator_world(&mut e);
+        e.register(0x0040_fbe0, quiet);
+        e.register(MEMMOVE_S, quiet);
+        let this = vector(&mut e, 3);
+        let first = e.mem.u32(this + VECTOR_FIRST);
+        let out = e.mem.alloc(8);
+        e.call_log = Some(vec![]);
+        e.call(0x0065_f700, &args![this, out, 1u32, first, 1u32, first + 6]);
+        assert_eq!(
+            calls_to(&e, MEMMOVE_S),
+            vec![vec![first, 12, first + 6, 12]]
+        );
+        assert_eq!(e.mem.u32(this + VECTOR_LAST), first + 12);
+        assert_eq!(
+            calls_to(&e, 0x0040_fbe0),
+            vec![vec![first + 12, first + 18, this + 8, 0x5a]]
+        );
+        e.call_log = Some(vec![]);
+        e.call(0x0065_f4f0, &args![this]);
+        assert_eq!(e.mem.u32(this + VECTOR_LAST), first);
+        assert!(calls_to(&e, MEMMOVE_S).is_empty());
+    }
+
+    #[test]
+    fn length_error_0065f640_throws_vector_too_long() {
+        let mut e = Engine::new();
+        for address in [
+            STRING_FROM_C_0044A4C0,
+            LENGTH_ERROR_CTOR_0044A2E0,
+            CXX_THROW_EXCEPTION,
+        ] {
+            e.register(address, quiet);
+        }
+        e.call_log = Some(vec![]);
+        e.call(0x0065_f640, &args![]);
+        let message = calls_to(&e, STRING_FROM_C_0044A4C0);
+        assert_eq!(message[0][1], VECTOR_TOO_LONG);
+        let error = calls_to(&e, LENGTH_ERROR_CTOR_0044A2E0);
+        assert_eq!(error[0][1], message[0][0]);
+        assert_eq!(error[0][0], message[0][0] + 0x1c);
+        assert_eq!(
+            calls_to(&e, CXX_THROW_EXCEPTION),
+            vec![vec![error[0][0], LENGTH_ERROR_THROW_INFO_01140CB0]]
+        );
+    }
+
+    #[test]
+    fn allocator_0065f6c0_and_0065f7c0() {
+        let mut e = Engine::new();
+        e.register(OPERATOR_NEW, |_, a| (0x8000 + a[0]).into_ret());
+        assert_eq!(
+            e.call(0x0065_f6c0, &args![0x1234u32, 5u32]).u32(),
+            0x8000 + 30
+        );
+        assert_eq!(e.call(0x0065_f7c0, &args![0u32]).u32(), 0x2aaa_aaaa);
+    }
+
+    #[test]
+    fn copies_0065f820_0065fd80_and_00660030_copy_six_byte_elements() {
+        let mut e = Engine::new();
+        iterator_world(&mut e);
+        let source = vector(&mut e, 3);
+        let first = e.mem.u32(source + VECTOR_FIRST);
+        let target = e.mem.alloc(0x20);
+        e.call_log = Some(vec![]);
+        let end = e.call(0x0065_f820, &args![first, first + 18, target]).u32();
+        assert_eq!(end, target + 18);
+        assert_eq!(e.mem.u32(target + 12), 0x201);
+        assert_eq!(e.mem.u16(target + 16), 2);
+        let tag = calls_to(&e, ITERATOR_TAG_0065E750);
+        assert_eq!(tag[0][0], tag[0][2]);
+        assert_eq!(e.mem.u32(tag[0][1]), first);
+        assert_eq!(e.mem.u32(tag[0][2]), target);
+        let end = e
+            .call(
+                0x0065_fd80,
+                &args![first, first + 6, target, 0u32, 0u32, 0u32],
+            )
+            .u32();
+        assert_eq!(end, target + 6);
+        let end = e
+            .call(0x0066_0030, &args![first, first, target, 0u32, 0u32, 0u32])
+            .u32();
+        assert_eq!(end, target);
+    }
+
+    #[test]
+    fn copy_0065f8c0_and_0065fe60_move_bytes_only_when_some() {
+        let mut e = Engine::new();
+        iterator_world(&mut e);
+        e.register(MEMMOVE_S, quiet);
+        e.call_log = Some(vec![]);
+        let end = e
+            .call(0x0065_f8c0, &args![0x100u32, 0x10cu32, 0x400u32])
+            .u32();
+        assert_eq!(end, 0x40c);
+        assert_eq!(calls_to(&e, MEMMOVE_S), vec![vec![0x400, 12, 0x100, 12]]);
+        e.call_log = Some(vec![]);
+        let end = e
+            .call(
+                0x0065_fe60,
+                &args![0x10cu32, 0x100u32, 0x400u32, 0u32, 0u32, 0u32],
+            )
+            .u32();
+        assert_eq!(end, 0x3f4);
+        assert!(calls_to(&e, MEMMOVE_S).is_empty());
+    }
+
+    #[test]
+    fn uninitialized_copies_construct_through_the_allocators() {
+        let mut e = Engine::new();
+        iterator_world(&mut e);
+        let source = vector(&mut e, 2);
+        let first = e.mem.u32(source + VECTOR_FIRST);
+        let this = e.mem.alloc(0x18);
+        let target = e.mem.alloc(0x10);
+        // `_Ucopy` of the first vector: each element through `006601f0` and `006602b0`.
+        let end = e
+            .call(0x0065_f890, &args![this, first, first + 12, target])
+            .u32();
+        assert_eq!(end, target + 12);
+        assert_eq!(e.mem.u32(target + 6), 0x101);
+        assert_eq!(e.mem.u16(target + 10), 1);
+        // A null place constructs nothing.
+        e.register(PLACEMENT_NEW_006E6DA0, |_, _| Ret::default());
+        assert_eq!(e.call(0x0066_02b0, &args![0u32, first]).u32(), 0);
+        // The second vector's `_Ucopy` moves the bytes.
+        e.register(MEMMOVE_S, quiet);
+        e.call_log = Some(vec![]);
+        let end = e
+            .call(0x0065_f930, &args![this, first, first + 12, target])
+            .u32();
+        assert_eq!(end, target + 12);
+        assert_eq!(calls_to(&e, MEMMOVE_S), vec![vec![target, 12, first, 12]]);
+    }
+
+    #[test]
+    fn checked_copies_unwrap_the_iterators_and_construct_each_element() {
+        let mut e = Engine::new();
+        iterator_world(&mut e);
+        e.register(0x0065_de30, quiet);
+        e.register(0x0065_d3a0, quiet);
+        e.register(0x0065_7bc0, |_, _| 0u32.into_ret());
+        e.register(0x0065_cc50, |_, _| 0u32.into_ret());
+        e.register(0x0065_7ee0, |_, _| 0u32.into_ret());
+        e.register(0x00ec_aebb, quiet);
+        e.register(MEMMOVE_S, quiet);
+        // The source words (6-byte elements for the checked copies).
+        let records = e.mem.alloc(0x38);
+        e.mem.set_u32(records, 0x3f80_0000);
+        e.mem.set_u32(records + 0x1c, 0x4000_0000);
+        let target = e.mem.alloc(0x38);
+        let this = e.mem.alloc(0x18);
+        // An empty range: both iterators unwrapped through `00660400` (their word +4),
+        // nothing constructed.
+        e.call_log = Some(vec![]);
+        let end = e
+            .call(
+                0x0065_ff30,
+                &args![this, 0u32, records, 0u32, records, target],
+            )
+            .u32();
+        assert_eq!(end, target);
+        let unwrapped = calls_to(&e, WORD_AT_FOUR_00726070);
+        assert_eq!(unwrapped.len(), 2);
+        assert_eq!(e.mem.u32(unwrapped[0][0] + 4), records);
+        assert!(calls_to(&e, PLACEMENT_NEW_006E6DA0).is_empty());
+        let tag = calls_to(&e, ITERATOR_TAG_0065E750);
+        assert_eq!(e.mem.u32(tag[0][0]), target);
+        assert_eq!(e.mem.u32(tag[0][1] + 4), records);
+        // `00660130` constructs each 6-byte element of `[first, last)` (`006601f0`).
+        e.call_log = Some(vec![]);
+        let end = e
+            .call(
+                0x0066_0130,
+                &args![0u32, records, 0u32, records + 12, target, this + 8],
+            )
+            .u32();
+        assert_eq!(end, target + 12);
+        assert_eq!(e.mem.u32(target), 0x3f80_0000);
+        assert_eq!(
+            calls_to(&e, 0x0066_01f0),
+            vec![
+                vec![this + 8, target, records],
+                vec![this + 8, target + 6, records + 6]
+            ]
+        );
+        // The 0x58-byte records go through `0065fab0` (one record).
+        e.call_log = Some(vec![]);
+        let big = e.mem.alloc(0x58);
+        let place = e.mem.alloc(0x58);
+        e.call(0x0066_0490, &args![place, big]);
+        assert_eq!(calls_to(&e, 0x00ec_aebb).len(), 1);
+        e.call_log = Some(vec![]);
+        e.call(0x0065_ff60, &args![this, 0u32, 0u32, 0u32, 0u32, place]);
+        e.call(0x0066_0190, &args![0u32, 0u32, 0u32, 0u32, place, this + 8]);
+        assert_eq!(calls_to(&e, MEMMOVE_S).len(), 0);
+        e.call(
+            0x0066_0190,
+            &args![0u32, records, 0u32, records + 12, place, this + 8],
+        );
+        assert_eq!(calls_to(&e, MEMMOVE_S), vec![vec![place, 12, records, 12]]);
+    }
+
+    #[test]
+    fn constructs_and_record_copy_0065fa80() {
+        let mut e = Engine::new();
+        iterator_world(&mut e);
+        e.register(0x0065_de30, quiet);
+        e.register(0x0065_d3a0, quiet);
+        e.register(0x0065_7bc0, |_, _| 0u32.into_ret());
+        let source = e.mem.alloc(0x1c);
+        e.mem.set_u32(source, 0x7f80_0001);
+        let this = e.mem.alloc(0x1c);
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x0065_fa80, &args![this, source]).u32(), this);
+        // A signalling NaN is quieted by the FLD/FSTP copy.
+        assert_eq!(e.mem.u32(this), 0x7fc0_0001);
+        assert_eq!(calls_to(&e, 0x0065_7bc0), vec![vec![source + 4]]);
+        // The construct wrappers forward place and value.
+        let place = e.mem.alloc(0x1c);
+        e.call(0x0066_0300, &args![0u32, place, source]);
+        assert_eq!(e.mem.u32(place), 0x7fc0_0001);
+        let small = e.mem.alloc(8);
+        e.mem.set_u32(small, 0x1234_5678);
+        e.mem.set_u16(small + 4, 0x9abc);
+        let place = e.mem.alloc(8);
+        e.call(0x0066_01f0, &args![0u32, place, small]);
+        assert_eq!(e.mem.u32(place), 0x1234_5678);
+        assert_eq!(e.mem.u16(place + 4), 0x9abc);
+        e.register(PLACEMENT_NEW_006E6DA0, |_, _| Ret::default());
+        assert_eq!(e.call(0x0066_0410, &args![0u32, source]).u32(), 0);
+        assert_eq!(e.call(0x0066_0490, &args![0u32, source]).u32(), 0);
+        e.call_log = Some(vec![]);
+        e.call(0x0066_0320, &args![0u32, 0u32, source]);
+        assert_eq!(calls_to(&e, PLACEMENT_NEW_006E6DA0), vec![vec![0x58, 0]]);
+        // The unwrapping helpers read the word +4 of the iterator.
+        let iterator = e.mem.alloc(8);
+        e.mem.set_u32(iterator + 4, 0x4242);
+        assert_eq!(e.call(0x0066_0250, &args![iterator]).u32(), 0x4242);
+        assert_eq!(e.call(0x0066_0400, &args![iterator, 9u32]).u32(), 0x4242);
     }
 }

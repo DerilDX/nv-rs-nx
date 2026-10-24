@@ -335,9 +335,112 @@ pub fn fn_00bc09b0(e: &mut Engine, this: Ptr) {
     });
 }
 
+// Translated from 00bc0500 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (not a Ghidra function; vtable entry at `010ba364`), `thiscall`, no
+/// stack words: releases and clears the shared `NiPointer` `01201f44`, then gives each of the
+/// textures 0 to 4 of the array at +0x28 that is set no texture (`00ba37f0` with 0).
+pub fn fn_00bc0500(e: &mut Engine, this: Ptr) {
+    let base = this.addr();
+    ni_pointer_clear(e, TEXTURE_01201F44);
+    for index in 0..5 {
+        let texture = texture_at(e, base, index);
+        if texture != 0 {
+            e.call(TEXTURE_SET_00BA37F0, &args![texture, 0u32]);
+        }
+    }
+}
+
+// Translated from 00bc0550 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (not a Ghidra function; vtable entry at `010ba36c`), `thiscall`
+/// with one unread word; answers false. Textures 3, 4 and 2 get `01201f40`, `01201f48` and
+/// `01201f44` (`00ba37f0`); the first shader parameter of the array at +0x18 gets the pixel
+/// constants 1 (`011ae614`, `01201f2c`, `011ae618`, 0.0) and 2 (`01201f30`..`01201f3c`), the
+/// `float`s through `FLD`/`FSTP`.
+pub fn fn_00bc0550(e: &mut Engine, this: Ptr, _unused_0: u32) -> bool {
+    let base = this.addr();
+    for (index, shared) in [
+        (3u32, TEXTURE_01201F40),
+        (4, TEXTURE_01201F48),
+        (2, TEXTURE_01201F44),
+    ] {
+        let value = e.global::<u32>(shared);
+        let texture = texture_at(e, base, index);
+        e.call(TEXTURE_SET_00BA37F0, &args![texture, value]);
+    }
+    let parameters = e.mem.u32(base + 0x1c);
+    let parameter = e.mem.u32(parameters);
+    let quiet = |e: &Engine, addr: u32| x87_quiet_bits(e.global::<u32>(addr));
+    let words = [
+        quiet(e, CONSTANT_011AE614),
+        quiet(e, CONSTANT_01201F2C),
+        quiet(e, CONSTANT_011AE618),
+        0.0f32.to_bits(),
+    ];
+    e.call(
+        SHADER_PARAM_SET_PIXEL_CONSTANT,
+        &args![parameter, 1u32, words[0], words[1], words[2], words[3]],
+    );
+    let words = [0u32, 4, 8, 0xc].map(|offset| quiet(e, FLOATS_01201F30 + offset));
+    e.call(
+        SHADER_PARAM_SET_PIXEL_CONSTANT,
+        &args![parameter, 2u32, words[0], words[1], words[2], words[3]],
+    );
+    false
+}
+
+// Translated from 00bc0920 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (vtable entries at `010b81c8`, `010ba4d0`, `010baeb8`), `thiscall`,
+/// no stack words: calls the vtable +0x13c, then jumps through the vtable +0x140.
+pub fn fn_00bc0920(e: &mut Engine, this: Ptr) {
+    e.vcall(this.addr(), 0x13c, &args![]);
+    e.vcall(this.addr(), 0x140, &args![]);
+}
+
+/// `00e814b0` (unnamed, `thiscall`, no stack words).
+const RENDERER_CALL_00E814B0: u32 = 0x00e8_14b0;
+
+// Translated from 00bc0970 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (vtable entry at `010ba480`), `thiscall`, no stack words: with the
+/// word +0x28 set, calls the vtable +0xa0 of the object +0x18c and +0x88 of the object +0x190;
+/// then jumps to `00e814b0`.
+pub fn fn_00bc0970(e: &mut Engine, this: Ptr) {
+    let base = this.addr();
+    if e.mem.u32(base + 0x28) != 0 {
+        let object = e.mem.u32(base + 0x18c);
+        e.vcall(object, 0xa0, &args![]);
+        let object = e.mem.u32(base + 0x190);
+        e.vcall(object, 0x88, &args![]);
+    }
+    e.call(RENDERER_CALL_00E814B0, &args![base]);
+}
+
+/// The bolt segment count (`01201f50`) and the shader model (`011f91c0`).
+const SEGMENT_COUNT_01201F50: u32 = 0x0120_1f50;
+const SHADER_MODEL_011F91C0: u32 = 0x011f_91c0;
+
+// Translated from 00bc0b40 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map, no arguments: when the word `01201f50` is 0, sets it to 0x4b
+/// below shader model 2 (`011f91c0`, signed) and 0xeb from it on (`SETL`, `DEC`, `AND 0xa0`,
+/// `ADD 0x4b`). Answers the word.
+pub fn fn_00bc0b40(e: &mut Engine) -> u32 {
+    let count = e.global::<u32>(SEGMENT_COUNT_01201F50);
+    if count != 0 {
+        return count;
+    }
+    let below = u32::from(e.global::<i32>(SHADER_MODEL_011F91C0) < 2);
+    let count = (below.wrapping_sub(1) & 0xa0) + 0x4b;
+    e.set_global(SEGMENT_COUNT_01201F50, count);
+    count
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x00bc_0500, fn_00bc0500(Ptr)),
+        entry!(0x00bc_0550, fn_00bc0550(Ptr, u32) -> bool),
+        entry!(0x00bc_0920, fn_00bc0920(Ptr)),
+        entry!(0x00bc_0970, fn_00bc0970(Ptr)),
+        entry!(0x00bc_0b40, fn_00bc0b40() -> u32),
         entry!(0x00bc_0600, fn_00bc0600(Ptr) -> Ptr),
         entry!(0x00bc_0360, fn_00bc0360(Ptr)),
         entry!(0x00bc_06a0, fn_00bc06a0(Ptr, u32) -> Ptr),
@@ -594,5 +697,114 @@ mod b056_tests {
         assert!(pixel.pixel);
         assert_eq!(calls(&e, PIXEL_PROFILE_00B4F380), vec![vec![1]]);
         assert_eq!(calls(&e, MEMSET).len(), 2);
+    }
+}
+
+#[cfg(test)]
+mod n071_tests {
+    use super::*;
+    use crate::units::bsshader::geometrydecalshader::shader_test_rig::{object, rig};
+    use crate::units::bsshader::shadowlightshader::n071_rig::{calls, order, slot_target, vobject};
+
+    /// An effect whose texture array (+0x2c) has slots 0, 1, 3 set and 2, 4 null.
+    fn effect(e: &mut Engine) -> u32 {
+        let this = e.mem.alloc(0x200);
+        let array = e.mem.alloc(0x14);
+        for index in [0u32, 1, 3] {
+            e.mem.set_u32(array + 4 * index, 0x7000 + index);
+        }
+        e.mem.set_u32(this + 0x2c, array);
+        this
+    }
+
+    #[test]
+    fn fn_00bc0500_drops_the_shared_texture_and_the_slots() {
+        let mut e = rig();
+        e.map(0x0120_1000, 0x1000);
+        e.register(TEXTURE_SET_00BA37F0, |_, _| Ret::default());
+        let shared = object(&mut e, 1);
+        e.set_global(TEXTURE_01201F44, shared);
+        let this = effect(&mut e);
+        e.call(0x00bc_0500, &args![this]);
+        assert_eq!(e.global::<u32>(TEXTURE_01201F44), 0);
+        assert_eq!(
+            calls(&e, TEXTURE_SET_00BA37F0),
+            vec![vec![0x7000, 0], vec![0x7001, 0], vec![0x7003, 0]]
+        );
+    }
+
+    #[test]
+    fn fn_00bc0550_sets_the_textures_and_constants() {
+        let mut e = rig();
+        e.map(0x0120_1000, 0x1000);
+        e.map(0x011a_e000, 0x1000);
+        e.register(TEXTURE_SET_00BA37F0, |_, _| Ret::default());
+        e.register(SHADER_PARAM_SET_PIXEL_CONSTANT, |_, _| Ret::default());
+        e.set_global(TEXTURE_01201F40, 0x40u32);
+        e.set_global(TEXTURE_01201F44, 0x44u32);
+        e.set_global(TEXTURE_01201F48, 0x48u32);
+        e.set_global(CONSTANT_011AE614, 0x7f80_0001u32);
+        e.set_global(FLOATS_01201F30 + 0xc, 3.0f32);
+        let this = effect(&mut e);
+        let parameters = e.mem.alloc(8);
+        e.mem.set_u32(parameters, 0x88);
+        e.mem.set_u32(this + 0x1c, parameters);
+        assert!(!e.call(0x00bc_0550, &args![this, 0u32]).bool());
+        assert_eq!(
+            calls(&e, TEXTURE_SET_00BA37F0),
+            vec![vec![0x7003, 0x40], vec![0, 0x48], vec![0, 0x44]]
+        );
+        let constants = calls(&e, SHADER_PARAM_SET_PIXEL_CONSTANT);
+        assert_eq!(constants[0], vec![0x88, 1, 0x7fc0_0001, 0, 0, 0]);
+        assert_eq!(constants[1], vec![0x88, 2, 0, 0, 0, 3.0f32.to_bits()]);
+    }
+
+    #[test]
+    fn fn_00bc0920_and_00bc0970_call_their_slots() {
+        let mut e = rig();
+        e.register(RENDERER_CALL_00E814B0, |_, _| Ret::default());
+        let this = vobject(&mut e, 0x200, &[]);
+        e.call(0x00bc_0920, &args![this]);
+        assert_eq!(
+            order(&e),
+            vec![
+                0x00bc_0920,
+                slot_target(&e, this, 0x13c),
+                slot_target(&e, this, 0x140)
+            ]
+        );
+        let first = vobject(&mut e, 8, &[]);
+        let second = vobject(&mut e, 8, &[]);
+        e.mem.set_u32(this + 0x18c, first);
+        e.mem.set_u32(this + 0x190, second);
+        e.call_log = Some(vec![]);
+        e.call(0x00bc_0970, &args![this]);
+        assert_eq!(order(&e), vec![0x00bc_0970, RENDERER_CALL_00E814B0]);
+        e.mem.set_u32(this + 0x28, 1);
+        e.call_log = Some(vec![]);
+        e.call(0x00bc_0970, &args![this]);
+        assert_eq!(
+            order(&e),
+            vec![
+                0x00bc_0970,
+                slot_target(&e, first, 0xa0),
+                slot_target(&e, second, 0x88),
+                RENDERER_CALL_00E814B0
+            ]
+        );
+    }
+
+    #[test]
+    fn fn_00bc0b40_computes_the_count_once() {
+        let mut e = rig();
+        e.map(0x0120_1000, 0x1000);
+        e.map(0x011f_9000, 0x1000);
+        e.set_global(SHADER_MODEL_011F91C0, 1i32);
+        assert_eq!(e.call(0x00bc_0b40, &args![]).u32(), 0x4b);
+        e.set_global(SHADER_MODEL_011F91C0, 3i32);
+        assert_eq!(e.call(0x00bc_0b40, &args![]).u32(), 0x4b);
+        e.set_global(SEGMENT_COUNT_01201F50, 0u32);
+        assert_eq!(e.call(0x00bc_0b40, &args![]).u32(), 0xeb);
+        assert_eq!(e.global::<u32>(SEGMENT_COUNT_01201F50), 0xeb);
     }
 }

@@ -442,9 +442,217 @@ pub fn ni_p_sys_rotation_modifier_load_binary(
     );
 }
 
+/// `NiPSysModifier::IsEqual` (`00c31830`), `SaveBinary` (`00c31950`) and
+/// `GetViewerStrings` (`00c319e0`): `thiscall`, one word each.
+const MODIFIER_IS_EQUAL: u32 = 0x00c3_1830;
+const MODIFIER_SAVE_BINARY: u32 = 0x00c3_1950;
+const MODIFIER_GET_VIEWER_STRINGS: u32 = 0x00c3_19e0;
+/// `00439090` (unnamed, `thiscall` on a point, one word: the other point):
+/// answers nonzero when the two `NiPoint3`s differ.
+const POINT_DIFFERS: u32 = 0x0043_9090;
+/// `NiColor::SaveBinary` (`00a69780`, `thiscall` on the three floats, the
+/// stream): writes the initial axis.
+const COLOR_SAVE_BINARY: u32 = 0x00a6_9780;
+/// `NiPoint3::GetViewerString` (`00a59af0`, `thiscall` on the point, one
+/// word: the name).
+const POINT_GET_VIEWER_STRING: u32 = 0x00a5_9af0;
+/// `NiGetViewerString` (`00a7d330`, `cdecl`, the class name) and its `float`
+/// (`00a7d550`) and `bool` (`00a7d370`) overloads (`cdecl`, `(name, value)`).
+const NI_GET_VIEWER_STRING: u32 = 0x00a7_d330;
+const NI_GET_VIEWER_STRING_FLOAT: u32 = 0x00a7_d550;
+const NI_GET_VIEWER_STRING_BOOL: u32 = 0x00a7_d370;
+/// The viewer-string array's grow (`0096ad30`) and store (`0096ae90`).
+const STRINGS_GROW: u32 = 0x0096_ad30;
+const STRINGS_SET_AT: u32 = 0x0096_ae90;
+/// The `NiRTTI` record of the class (its first word is the class name).
+const ROTATION_MODIFIER_RTTI: u32 = 0x0120_2528;
+/// The viewer-string names: "Initial Rotation Speed", "Initial Rotation
+/// Speed Variation", "Random Rot Speed Sign", "Initial Rotation Angle",
+/// "Initial Rotation Angle Variation", "Random Initial Axis", "Initial Axis".
+const NAME_SPEED: u32 = 0x010b_dc30;
+const NAME_SPEED_VARIATION: u32 = 0x010b_dc0c;
+const NAME_RANDOM_SIGN: u32 = 0x010b_dbf4;
+const NAME_ANGLE: u32 = 0x010b_dbdc;
+const NAME_ANGLE_VARIATION: u32 = 0x010b_dbb8;
+const NAME_RANDOM_AXIS: u32 = 0x010b_dba4;
+const NAME_AXIS: u32 = 0x010b_db94;
+/// `NiStream`'s output stream (+0x250); its write function is at +0xC
+/// (`cdecl (stream, source, size, &count, 1)`), its position at +4.
+const STREAM_OUTPUT: u32 = 0x250;
+
+/// Appends `text` to the viewer-string array (the inlined `Add`).
+fn push_viewer_string(e: &mut Engine, strings: Ptr, text: u32) {
+    let size = u32::from(e.mem.u16(strings.addr() + 0xa));
+    if size >= u32::from(e.mem.u16(strings.addr() + 8)) {
+        let step = u32::from(e.mem.u16(strings.addr() + 0xe));
+        e.call(STRINGS_GROW, &args![strings, step + size]);
+    }
+    e.with_stack(4, |e, slot| {
+        e.mem.set_u32(slot.addr(), text);
+        e.call(STRINGS_SET_AT, &args![strings, size, slot]);
+    });
+}
+
+/// One write through the stream's output: `size` bytes from `source`, the
+/// count word at `count` set to `size` first; the result is added to the
+/// output's position.
+fn stream_write(e: &mut Engine, stream: Ptr, source: u32, size: u32, count: Ptr) {
+    let output = e.mem.u32(stream.addr() + STREAM_OUTPUT);
+    let write = e.mem.u32(output + 0xc);
+    e.mem.set_u32(count.addr(), size);
+    let put = e
+        .call(write, &args![output, source, size, count, 1u32])
+        .u32();
+    let position = e.mem.u32(output + 4);
+    e.mem.set_u32(output + 4, position.wrapping_add(put));
+}
+
+// Translated from 00c20a60 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiPSysRotationModifier::IsEqual` (Xbox PDB): the modifier comparison
+/// (`00c31830`), then the speed, its variation (floats, `FUCOMPP`: NaN is
+/// unequal), the random-sign byte, the angle, its variation, the random-axis
+/// byte, and last the axes (`00439090` on the other's axis, which must
+/// answer 0).
+pub fn ni_p_sys_rotation_modifier_is_equal(
+    e: &mut Engine,
+    this: Ptr<NiPSysRotationModifier>,
+    other: Ptr<NiPSysRotationModifier>,
+) -> bool {
+    if !e.call(MODIFIER_IS_EQUAL, &args![this, other]).bool() {
+        return false;
+    }
+    let float_equal =
+        |e: &Engine, off: u32| e.mem.f32(other.addr() + off) == e.mem.f32(this.addr() + off);
+    if !float_equal(e, NiPSysRotationModifier::m_fInitialRotSpeed.off)
+        || !float_equal(e, NiPSysRotationModifier::m_fInitialRotSpeedVar.off)
+        || e.get(other, NiPSysRotationModifier::m_bRandomRotSpeedSign)
+            != e.get(this, NiPSysRotationModifier::m_bRandomRotSpeedSign)
+        || !float_equal(e, NiPSysRotationModifier::m_fInitialRotAngle.off)
+        || !float_equal(e, NiPSysRotationModifier::m_fInitialRotAngleVar.off)
+        || e.get(other, NiPSysRotationModifier::m_bRandomInitialAxis)
+            != e.get(this, NiPSysRotationModifier::m_bRandomInitialAxis)
+    {
+        return false;
+    }
+    let axis = NiPSysRotationModifier::m_kInitialAxis.off;
+    !e.call(
+        POINT_DIFFERS,
+        &args![other.addr() + axis, this.addr() + axis],
+    )
+    .bool()
+}
+
+// Translated from 00c20c00 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiPSysRotationModifier::SaveBinary` (Xbox PDB): the modifier part
+/// (`00c31950`), then the speed, its variation, the angle and its variation
+/// (four bytes each, the count word in the argument slot), the random-sign
+/// byte and the random-axis byte (one byte each, copied into the low byte of
+/// the argument slot, the count in the local word), then the axis
+/// (`NiColor::SaveBinary`, `00a69780`).
+pub fn ni_p_sys_rotation_modifier_save_binary(
+    e: &mut Engine,
+    this: Ptr<NiPSysRotationModifier>,
+    stream: Ptr,
+) {
+    e.call(MODIFIER_SAVE_BINARY, &args![this, stream]);
+    // [0] the local count word, [4] the argument slot (holding `stream`).
+    e.with_stack(8, |e, frame| {
+        let local = frame;
+        let slot = Ptr::new(frame.addr() + 4);
+        e.mem.set_u32(slot.addr(), stream.addr());
+        for field in [
+            NiPSysRotationModifier::m_fInitialRotSpeed.off,
+            NiPSysRotationModifier::m_fInitialRotSpeedVar.off,
+            NiPSysRotationModifier::m_fInitialRotAngle.off,
+            NiPSysRotationModifier::m_fInitialRotAngleVar.off,
+        ] {
+            stream_write(e, stream, this.addr() + field, 4, slot);
+        }
+        for field in [
+            NiPSysRotationModifier::m_bRandomRotSpeedSign,
+            NiPSysRotationModifier::m_bRandomInitialAxis,
+        ] {
+            let byte = e.get(this, field);
+            e.mem.set_u8(slot.addr(), byte);
+            stream_write(e, stream, slot.addr(), 1, local);
+        }
+    });
+    e.call(
+        COLOR_SAVE_BINARY,
+        &args![
+            this.addr() + NiPSysRotationModifier::m_kInitialAxis.off,
+            stream
+        ],
+    );
+}
+
+// Translated from 00c20d00 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiPSysRotationModifier::GetViewerStrings` (Xbox PDB): the modifier
+/// strings (`00c319e0`), then the class name, the speed, its variation, the
+/// random-sign flag, the angle, its variation, the random-axis flag (floats
+/// pushed by `FLD`/`FSTP`, quieting a signalling NaN; flags zero-extended)
+/// and the axis (`00a59af0`), each appended to the array.
+pub fn ni_p_sys_rotation_modifier_get_viewer_strings(
+    e: &mut Engine,
+    this: Ptr<NiPSysRotationModifier>,
+    strings: Ptr,
+) {
+    e.call(MODIFIER_GET_VIEWER_STRINGS, &args![this, strings]);
+    let class_name = e.global::<u32>(ROTATION_MODIFIER_RTTI);
+    let text = e.call(NI_GET_VIEWER_STRING, &args![class_name]).u32();
+    push_viewer_string(e, strings, text);
+    let float_string = |e: &mut Engine, name: u32, value: u32| {
+        let value = x87_quiet_bits(value);
+        e.call(NI_GET_VIEWER_STRING_FLOAT, &args![name, value])
+            .u32()
+    };
+    let bool_string = |e: &mut Engine, name: u32, value: u8| {
+        e.call(NI_GET_VIEWER_STRING_BOOL, &args![name, u32::from(value)])
+            .u32()
+    };
+    let value = e.get(this, NiPSysRotationModifier::m_fInitialRotSpeed);
+    let text = float_string(e, NAME_SPEED, value);
+    push_viewer_string(e, strings, text);
+    let value = e.get(this, NiPSysRotationModifier::m_fInitialRotSpeedVar);
+    let text = float_string(e, NAME_SPEED_VARIATION, value);
+    push_viewer_string(e, strings, text);
+    let value = e.get(this, NiPSysRotationModifier::m_bRandomRotSpeedSign);
+    let text = bool_string(e, NAME_RANDOM_SIGN, value);
+    push_viewer_string(e, strings, text);
+    let value = e.get(this, NiPSysRotationModifier::m_fInitialRotAngle);
+    let text = float_string(e, NAME_ANGLE, value);
+    push_viewer_string(e, strings, text);
+    let value = e.get(this, NiPSysRotationModifier::m_fInitialRotAngleVar);
+    let text = float_string(e, NAME_ANGLE_VARIATION, value);
+    push_viewer_string(e, strings, text);
+    let value = e.get(this, NiPSysRotationModifier::m_bRandomInitialAxis);
+    let text = bool_string(e, NAME_RANDOM_AXIS, value);
+    push_viewer_string(e, strings, text);
+    let axis = this.addr() + NiPSysRotationModifier::m_kInitialAxis.off;
+    let text = e
+        .call(POINT_GET_VIEWER_STRING, &args![axis, NAME_AXIS])
+        .u32();
+    push_viewer_string(e, strings, text);
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(
+            0x00c2_0a60,
+            ni_p_sys_rotation_modifier_is_equal(
+                Ptr<NiPSysRotationModifier>,
+                Ptr<NiPSysRotationModifier>,
+            ) -> bool
+        ),
+        entry!(
+            0x00c2_0c00,
+            ni_p_sys_rotation_modifier_save_binary(Ptr<NiPSysRotationModifier>, Ptr)
+        ),
+        entry!(
+            0x00c2_0d00,
+            ni_p_sys_rotation_modifier_get_viewer_strings(Ptr<NiPSysRotationModifier>, Ptr)
+        ),
         entry!(
             0x00c2_05e0,
             fn_00c205e0(Ptr<NiPSysRotationModifier>, Ptr<NiPSysRotationModifier>, Ptr)
@@ -793,5 +1001,164 @@ mod tests {
             }
             assert_eq!(test_stream::position(&e, stream), bytes.len() as u32);
         }
+    }
+}
+
+#[cfg(test)]
+mod n066_tests {
+    use super::*;
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    fn calls_to(e: &Engine, callee: u32) -> Vec<Vec<u32>> {
+        e.call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|(address, _)| *address == callee)
+            .map(|(_, words)| words.clone())
+            .collect()
+    }
+
+    fn word(eax: u32) -> Ret {
+        Ret {
+            eax,
+            ..Ret::default()
+        }
+    }
+
+    fn modifier(e: &mut Engine) -> Ptr<NiPSysRotationModifier> {
+        let m = Ptr::new(e.mem.alloc(0x38));
+        for (i, off) in [0x18u32, 0x1c, 0x20, 0x24].iter().enumerate() {
+            e.mem.set_f32(m.addr() + off, i as f32 + 0.5);
+        }
+        e.mem.set_u8(m.addr() + 0x34, 1);
+        e.mem.set_u8(m.addr() + 0x35, 0);
+        m
+    }
+
+    #[test]
+    fn is_equal_checks_fields_in_order_and_the_axis_last() {
+        let mut e = Engine::new();
+        let this = modifier(&mut e);
+        let other = modifier(&mut e);
+        e.register(MODIFIER_IS_EQUAL, |_, _| word(1));
+        e.register(POINT_DIFFERS, |_, _| word(0));
+        e.call_log = Some(vec![]);
+        assert!(e.call(0x00c2_0a60, &args![this, other]).bool());
+        assert_eq!(
+            calls_to(&e, POINT_DIFFERS),
+            vec![vec![other.addr() + 0x28, this.addr() + 0x28]]
+        );
+        e.register(POINT_DIFFERS, |_, _| word(1));
+        assert!(!e.call(0x00c2_0a60, &args![this, other]).bool());
+        e.register(POINT_DIFFERS, |_, _| word(0));
+        e.mem.set_u8(other.addr() + 0x35, 1);
+        e.call_log = Some(vec![]);
+        assert!(!e.call(0x00c2_0a60, &args![this, other]).bool());
+        assert!(calls_to(&e, POINT_DIFFERS).is_empty());
+        e.mem.set_u8(other.addr() + 0x35, 0);
+        e.mem.set_u32(other.addr() + 0x24, 0x7fc0_0000);
+        assert!(!e.call(0x00c2_0a60, &args![this, other]).bool());
+        e.register(MODIFIER_IS_EQUAL, |_, _| word(0));
+        assert!(!e.call(0x00c2_0a60, &args![this, this]).bool());
+    }
+
+    #[test]
+    fn save_binary_writes_four_floats_two_bytes_and_the_axis() {
+        const WRITE: u32 = 0x0100_0040;
+        let mut e = Engine::new();
+        e.register(MODIFIER_SAVE_BINARY, |_, _| Ret::default());
+        e.register(COLOR_SAVE_BINARY, |_, _| Ret::default());
+        let written = Rc::new(RefCell::new(vec![]));
+        let log = written.clone();
+        e.register_double(WRITE, move |e, a| {
+            let bytes = e.mem.bytes(a[1], a[2]);
+            log.borrow_mut().push((a[2], e.mem.u32(a[3]), bytes));
+            word(a[2])
+        });
+        let output = e.mem.alloc(0x10);
+        e.mem.set_u32(output + 0xc, WRITE);
+        let stream = e.mem.alloc(0x260);
+        e.mem.set_u32(stream + STREAM_OUTPUT, output);
+        let this = modifier(&mut e);
+        e.mem.set_u8(this.addr() + 0x35, 7);
+        e.call_log = Some(vec![]);
+        e.call(0x00c2_0c00, &args![this, stream]);
+        let written = written.borrow();
+        assert_eq!(written.len(), 6);
+        assert_eq!(written[0], (4, 4, 0.5f32.to_le_bytes().to_vec()));
+        assert_eq!(written[3], (4, 4, 3.5f32.to_le_bytes().to_vec()));
+        assert_eq!(written[4], (1, 1, vec![7]));
+        assert_eq!(written[5], (1, 1, vec![1]));
+        assert_eq!(e.mem.u32(output + 4), 18);
+        assert_eq!(
+            calls_to(&e, COLOR_SAVE_BINARY),
+            vec![vec![this.addr() + 0x28, stream]]
+        );
+        assert_eq!(
+            calls_to(&e, MODIFIER_SAVE_BINARY),
+            vec![vec![this.addr(), stream]]
+        );
+    }
+
+    #[test]
+    fn get_viewer_strings_appends_eight_strings() {
+        let mut e = Engine::new();
+        e.map(ROTATION_MODIFIER_RTTI, 4);
+        e.set_global(ROTATION_MODIFIER_RTTI, 0x0555_0000u32);
+        e.register(MODIFIER_GET_VIEWER_STRINGS, |_, _| Ret::default());
+        e.register(NI_GET_VIEWER_STRING, |_, _| word(0x7000_0000));
+        e.register(NI_GET_VIEWER_STRING_FLOAT, |_, a| word(a[1]));
+        e.register(NI_GET_VIEWER_STRING_BOOL, |_, a| word(0x6000_0000 | a[1]));
+        e.register(POINT_GET_VIEWER_STRING, |_, _| word(0x5000_0000));
+        e.register(STRINGS_GROW, |e, a| {
+            e.mem.set_u16(a[0] + 8, a[1] as u16);
+            Ret::default()
+        });
+        let stored = Rc::new(RefCell::new(vec![]));
+        let seen = stored.clone();
+        e.register_double(STRINGS_SET_AT, move |e, a| {
+            seen.borrow_mut().push(e.mem.u32(a[2]));
+            e.mem.set_u16(a[0] + 0xa, a[1] as u16 + 1);
+            Ret::default()
+        });
+        let this = modifier(&mut e);
+        e.mem.set_u32(this.addr() + 0x18, 0x7f80_0001);
+        let strings = e.mem.alloc(0x10);
+        e.mem.set_u16(strings + 0xe, 1);
+        e.call_log = Some(vec![]);
+        e.call(0x00c2_0d00, &args![this, strings]);
+        assert_eq!(
+            *stored.borrow(),
+            vec![
+                0x7000_0000,
+                0x7fc0_0001,
+                1.5f32.to_bits(),
+                0x6000_0000,
+                2.5f32.to_bits(),
+                3.5f32.to_bits(),
+                0x6000_0001,
+                0x5000_0000,
+            ]
+        );
+        assert_eq!(calls_to(&e, STRINGS_GROW).len(), 8);
+        let names: Vec<u32> = calls_to(&e, NI_GET_VIEWER_STRING_FLOAT)
+            .iter()
+            .map(|c| c[0])
+            .collect();
+        assert_eq!(
+            names,
+            [
+                NAME_SPEED,
+                NAME_SPEED_VARIATION,
+                NAME_ANGLE,
+                NAME_ANGLE_VARIATION
+            ]
+        );
+        assert_eq!(
+            calls_to(&e, POINT_GET_VIEWER_STRING),
+            vec![vec![this.addr() + 0x28, NAME_AXIS]]
+        );
     }
 }

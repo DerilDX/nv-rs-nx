@@ -237,6 +237,17 @@ pub fn fn_007fed10(e: &mut Engine, this: Ptr) {
     e.call(BASE_DESTRUCTOR_007FAD10, &args![this]);
 }
 
+// Translated from 007feb40 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed (`thiscall`, `RET 4`: the result's address; a four-float value returned by
+/// value): copies the four words at +0xc0 into `out`. Answers `out`.
+pub fn fn_007feb40(e: &mut Engine, this: Ptr, out: u32) -> u32 {
+    for i in 0..4 {
+        let word = e.mem.u32(this.addr() + 0xc0 + 4 * i);
+        e.mem.set_u32(out + 4 * i, word);
+    }
+    out
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -245,6 +256,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x007f_ec30, fn_007fec30(Ptr, u32)),
         entry!(0x007f_ecc0, fn_007fecc0(Ptr)),
         entry!(0x007f_ed10, fn_007fed10(Ptr)),
+        entry!(0x007f_eb40, fn_007feb40(Ptr, u32) -> u32),
     ]
 }
 
@@ -420,5 +432,25 @@ mod tests {
             ]
         );
         assert_eq!(called(&e, BASE_DESTRUCTOR_007FAD10), vec![vec![this]]);
+    }
+}
+
+#[cfg(test)]
+mod n059_tests {
+    use super::*;
+
+    #[test]
+    fn copies_the_four_words() {
+        let mut e = Engine::new();
+        let this = e.mem.alloc(0xd0);
+        for i in 0..4 {
+            e.mem.set_u32(this + 0xc0 + 4 * i, 0x100 + i);
+        }
+        let out = e.mem.alloc(0x10);
+        assert_eq!(e.call(0x007f_eb40, &args![this, out]).u32(), out);
+        assert_eq!(
+            [0, 4, 8, 0xc].map(|o| e.mem.u32(out + o)),
+            [0x100, 0x101, 0x102, 0x103]
+        );
     }
 }

@@ -8739,9 +8739,193 @@ const STEPS_00C02340: &[Step] = &[
     Release,
 ];
 
+// Translated from 00bea040 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No function name in the engine map (`cdecl`, no arguments; `00b78980` jumps to it below
+/// shader model 2): fills the static passes held in turn from the slots `011fe244`, `011fe7c0`,
+/// `011fe7bc`, `011fe7c8`, `011fe7b4`, `011fe7cc` (6 passes, [`STEPS_00BEA040`]): while a pass
+/// has fewer than 2 stages, two texture stages; its `NiPointer`s at +0x5c and +0x44; its render
+/// states (48); and 17 words of the shaders' tables.
+// Translation incomplete: 00bea040 - the C++ exception frame (FS:[0] chain, its handler and state word, the cookie word it keeps) is not translated.
+pub fn fn_00bea040(e: &mut Engine) {
+    run_setup(e, STEPS_00BEA040);
+}
+
+const STEPS_00BEA040: &[Step] = &[
+    Acquire(0x011f_e244),
+    StagesBelow(
+        0x2,
+        &[
+            NewStage,
+            DefaultStage(Constant(0), 0x1, 0x2, 0x1),
+            SetStage(StageCount),
+            NewStage,
+            DefaultStage(Constant(0x1), 0x1, 0x2, 0x1),
+            SetStage(StageCount),
+        ],
+    ),
+    Assign(0x5c, 0x011f_ddec),
+    Assign(0x44, 0x011f_dae8),
+    State(0x1b, Constant(0)),
+    State(0xf, Constant(0)),
+    State(0x7, Constant(0x1)),
+    State(0x17, Constant(0x4)),
+    State(0xe, Constant(0x1)),
+    Store(0x011f_cecc, 0x80),
+    Store(0x011f_c2ec, 0xc),
+    Store(0x011f_b70c, 0x80),
+    Store(0x011f_ab2c, 0xc),
+    Switch(0x011f_e7c0),
+    StagesBelow(
+        0x2,
+        &[
+            NewStage,
+            DefaultStage(Constant(0), 0x1, 0x2, 0x1),
+            SetStage(StageCount),
+            NewStage,
+            DefaultStage(Constant(0x1), 0x1, 0x2, 0x1),
+            SetStage(StageCount),
+        ],
+    ),
+    Assign(0x5c, 0x011f_ddf0),
+    Assign(0x44, 0x011f_daec),
+    State(0x1b, Constant(0x1)),
+    State(0x13, Constant(0x5)),
+    State(0x14, Constant(0x6)),
+    State(0xf, Constant(0x1)),
+    State(0x19, Constant(0x5)),
+    State(0x18, Constant(0)),
+    State(0x7, Constant(0x1)),
+    State(0x17, Constant(0x4)),
+    State(0xe, Constant(0)),
+    Store(0x011f_d448, 0x80),
+    Store(0x011f_c868, 0xc),
+    Store(0x011f_bc88, 0x80),
+    Store(0x011f_b0a8, 0x4),
+    Switch(0x011f_e7bc),
+    StagesBelow(
+        0x2,
+        &[
+            NewStage,
+            DefaultStage(Constant(0), 0x1, 0x2, 0x1),
+            SetStage(StageCount),
+            NewStage,
+            DefaultStage(Constant(0x1), 0x1, 0x2, 0x1),
+            SetStage(StageCount),
+        ],
+    ),
+    Assign(0x5c, 0x011f_ddf4),
+    Assign(0x44, 0x011f_daf0),
+    State(0x13, Constant(0x5)),
+    State(0x14, Constant(0x2)),
+    State(0xf, Constant(0x1)),
+    State(0x19, Constant(0x5)),
+    State(0x18, Constant(0)),
+    State(0x7, Constant(0x1)),
+    State(0x17, Constant(0x4)),
+    State(0xe, Constant(0)),
+    Store(0x011f_d444, 0),
+    Store(0x011f_c864, 0x8),
+    Switch(0x011f_e7c8),
+    StagesBelow(
+        0x2,
+        &[
+            NewStage,
+            DefaultStage(Constant(0), 0x1, 0x2, 0x1),
+            SetStage(StageCount),
+            NewStage,
+            DefaultStage(Constant(0x1), 0x1, 0x2, 0x1),
+            SetStage(StageCount),
+        ],
+    ),
+    Assign(0x5c, 0x011f_ddf4),
+    Assign(0x44, 0x011f_daf4),
+    State(0x1b, Constant(0x1)),
+    State(0x13, Constant(0x5)),
+    State(0x14, Constant(0x2)),
+    State(0xf, Constant(0x1)),
+    State(0x19, Constant(0x5)),
+    State(0x18, Constant(0)),
+    State(0x7, Constant(0x1)),
+    State(0x17, Constant(0x4)),
+    State(0xe, Constant(0)),
+    Store(0x011f_d450, 0),
+    Store(0x011f_c870, 0x8),
+    Switch(0x011f_e7b4),
+    StagesBelow(
+        0x2,
+        &[
+            NewStage,
+            DefaultStage(Constant(0), 0x1, 0x2, 0x1),
+            SetStage(StageCount),
+            NewStage,
+            DefaultStage(Constant(0x1), 0x1, 0x2, 0x1),
+            SetStage(StageCount),
+        ],
+    ),
+    Assign(0x5c, 0x011f_ddf8),
+    Assign(0x44, 0x011f_daf8),
+    State(0x13, Constant(0x5)),
+    State(0x14, Constant(0x2)),
+    State(0xf, Constant(0x1)),
+    State(0x19, Constant(0x5)),
+    State(0x18, Constant(0)),
+    State(0x7, Constant(0x1)),
+    State(0x17, Constant(0x4)),
+    State(0xe, Constant(0)),
+    Store(0x011f_b70c, 0x80),
+    Store(0x011f_d43c, 0x80),
+    Store(0x011f_c85c, 0x8),
+    Switch(0x011f_e7cc),
+    StagesBelow(
+        0x2,
+        &[
+            NewStage,
+            DefaultStage(Constant(0), 0x1, 0x2, 0x1),
+            SetStage(StageCount),
+            NewStage,
+            DefaultStage(Constant(0x1), 0x1, 0x2, 0x1),
+            SetStage(StageCount),
+        ],
+    ),
+    Assign(0x5c, 0x011f_ddfc),
+    Assign(0x44, 0x011f_dafc),
+    State(0x1b, Constant(0x1)),
+    State(0x13, Constant(0x5)),
+    State(0x14, Constant(0x2)),
+    State(0xf, Constant(0x1)),
+    State(0x19, Constant(0x5)),
+    State(0x18, Constant(0)),
+    State(0x7, Constant(0x1)),
+    State(0x17, Constant(0x4)),
+    State(0xe, Constant(0)),
+    Store(0x011f_d454, 0x80),
+    Store(0x011f_c874, 0x8),
+    ReleaseStage,
+    Release,
+];
+
+/// `BSShader::~BSShader` (engine map, `00be0f10`, `thiscall`) and the Ni free (`00aa1460`,
+/// `cdecl`: block, size).
+const BS_SHADER_DESTRUCT: u32 = 0x00be_0f10;
+const NI_FREE_00AA1460: u32 = 0x00aa_1460;
+
+// Translated from 00be2290 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map: a shader's scalar deleting destructor (vtable entry at
+/// `010bc618`), `thiscall`, `RET 4`. Runs `BSShader::~BSShader` and, with bit 0 of the flags,
+/// frees the 0x6c bytes (`00aa1460`). Answers `this`.
+pub fn fn_00be2290(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    e.call(BS_SHADER_DESTRUCT, &args![this]);
+    if flags & 1 != 0 {
+        e.call(NI_FREE_00AA1460, &args![this, 0x6cu32]);
+    }
+    this
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x00be_2290, fn_00be2290(Ptr, u32) -> Ptr),
+        entry!(0x00be_a040, fn_00bea040()),
         entry!(0x00be_22b0, fn_00be22b0()),
         entry!(0x00be_39e0, fn_00be39e0()),
         entry!(0x00be_7420, fn_00be7420()),
@@ -9459,5 +9643,37 @@ mod b054_tests {
             .map(|a| a[0])
             .collect();
         assert_eq!(deleted, cleared);
+    }
+
+    #[test]
+    fn fn_00bea040_fills_its_passes() {
+        let mut e = setup_rig(STEPS_00BEA040);
+        e.call(0x00be_a040, &args![]);
+        check(
+            &e,
+            STEPS_00BEA040,
+            Expected {
+                stages: 12,
+                states: 48,
+                first_state: (0x1b, 0),
+                last_state: (0xe, 0),
+                stores: [(0x011f_cecc, 0x80), (0x011f_c874, 0x8)],
+            },
+        );
+        assert_eq!(e.global::<u32>(0x011f_c868), 0xc);
+        assert_eq!(e.global::<u32>(0x011f_d454), 0x80);
+    }
+
+    #[test]
+    fn fn_00be2290_destroys_and_frees_with_bit_0() {
+        let mut e = pass_rig();
+        e.register(BS_SHADER_DESTRUCT, |_, _| Ret::default());
+        e.register(NI_FREE_00AA1460, |_, _| Ret::default());
+        let this = e.mem.alloc(0x6c);
+        assert_eq!(e.call(0x00be_2290, &args![this, 0u32]).u32(), this);
+        assert!(calls(&e, NI_FREE_00AA1460).is_empty());
+        e.call(0x00be_2290, &args![this, 1u32]);
+        assert_eq!(calls(&e, BS_SHADER_DESTRUCT), vec![vec![this], vec![this]]);
+        assert_eq!(calls(&e, NI_FREE_00AA1460), vec![vec![this, 0x6c]]);
     }
 }

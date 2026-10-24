@@ -10,8 +10,8 @@
 use crate::prelude::*;
 
 use crate::units::facegen::binaryfile::{
-    string_chars, BSFaceGenBinaryFile, StringArg, INVALID_PARAMETER, STRING_LENGTH, STRING_NPOS,
-    STRING_TIDY, VECTOR_FIRST, VECTOR_LAST,
+    string_chars, BSFaceGenBinaryFile, StringArg, INVALID_PARAMETER, MEMORY_MANAGER_FREE,
+    MEMORY_MANAGER_OBJECT, STRING_LENGTH, STRING_NPOS, STRING_TIDY, VECTOR_FIRST, VECTOR_LAST,
 };
 
 /// `FutBinaryFileC`'s and `BSFaceGenBinaryFile`'s vtables (RTTI).
@@ -162,6 +162,42 @@ pub fn fn_00aaab30(e: &mut Engine, this: Ptr<BSFaceGenBinaryFile>) {
     fn_00aaaa80(e, this);
 }
 
+// Translated from 00aaab00 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `FutBinaryFileC::` scalar deleting destructor (Xbox PDB; `thiscall`, the flags):
+/// `FutBinaryFileC`'s destructor (`00aaaa80`), then, with flag bit 0, the memory manager's free
+/// of the object. Answers `this`.
+pub fn fut_binary_file_c_scalar_deleting_destructor(
+    e: &mut Engine,
+    this: Ptr<BSFaceGenBinaryFile>,
+    flags: u32,
+) -> Ptr<BSFaceGenBinaryFile> {
+    fn_00aaaa80(e, this);
+    if flags & 1 != 0 {
+        e.call(MEMORY_MANAGER_FREE, &args![MEMORY_MANAGER_OBJECT, this]);
+    }
+    this
+}
+
+// Translated from 00aaab90 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 00aaab90 - the compiler's exception frame (FS:[0] chain, cookie 011c16bc) is not translated
+/// `BSFaceGenBinaryFile::` scalar deleting destructor (Xbox PDB; `thiscall`, the flags):
+/// sets `BSFaceGenBinaryFile`'s vtable, closes the game file (`00ac5c00`), runs
+/// `FutBinaryFileC`'s destructor (`00aaaa80`), then, with flag bit 0, the memory manager's free
+/// of the object. Answers `this`.
+pub fn bs_face_gen_binary_file_scalar_deleting_destructor(
+    e: &mut Engine,
+    this: Ptr<BSFaceGenBinaryFile>,
+    flags: u32,
+) -> Ptr<BSFaceGenBinaryFile> {
+    e.mem.set_u32(this.addr(), BS_FACE_GEN_BINARY_FILE_VTABLE);
+    e.call(CLOSE_GAME_FILE, &args![this]);
+    fn_00aaaa80(e, this);
+    if flags & 1 != 0 {
+        e.call(MEMORY_MANAGER_FREE, &args![MEMORY_MANAGER_OBJECT, this]);
+    }
+    this
+}
+
 /// The `index`-th control of the vector at `vector`, after the code's bounds check
 /// (`index < (last - first) / 0x3C`, a signed division compared unsigned).
 fn checked_control(e: &mut Engine, vector: u32, index: u32) -> u32 {
@@ -266,7 +302,22 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
             fan_read_ctl_file(u32, u32, u32, u32, u32, u32) -> bool
         ),
         entry!(0x00aa_aa80, fn_00aaaa80(Ptr<BSFaceGenBinaryFile>)),
+        entry!(
+            0x00aa_ab00,
+            fut_binary_file_c_scalar_deleting_destructor(
+                Ptr<BSFaceGenBinaryFile>,
+                u32,
+            ) -> Ptr<BSFaceGenBinaryFile>
+        ),
         entry!(0x00aa_ab30, fn_00aaab30(Ptr<BSFaceGenBinaryFile>)),
+        entry!(
+            0x00aa_ab90,
+            bs_face_gen_binary_file_scalar_deleting_destructor(
+                Ptr<BSFaceGenBinaryFile>,
+                u32,
+            )
+                -> Ptr<BSFaceGenBinaryFile>
+        ),
         entry!(
             0x00aa_ac10,
             fn_00aaac10(Ptr, Ptr<BSFaceGenBinaryFile>, u32) -> bool
@@ -328,6 +379,38 @@ mod tests {
         assert_eq!(calls_to(&log, CLOSE_GAME_FILE), vec![vec![file.addr()]]);
         assert_eq!(calls_to(&log, FUT_BINARY_FILE_CLOSE).len(), 1);
         assert_eq!(e.mem.u32(file.addr()), FUT_BINARY_FILE_VTABLE);
+    }
+
+    #[test]
+    fn scalar_deleting_destructors_free_only_with_flag_bit_0() {
+        let mut e = Engine::new();
+        quiet(
+            &mut e,
+            &[
+                FUT_BINARY_FILE_CLOSE,
+                CLOSE_GAME_FILE,
+                STRING_TIDY,
+                MEMORY_MANAGER_FREE,
+            ],
+        );
+        let file: Ptr<BSFaceGenBinaryFile> = e.new_object();
+        for (addr, closes_game_file) in [(0x00aa_ab00u32, 0usize), (0x00aa_ab90, 1)] {
+            for flags in [0u32, 1, 2, 3] {
+                e.call_log = Some(vec![]);
+                let back = e.call(addr, &args![file, flags]).u32();
+                let log = e.call_log.take().unwrap();
+                assert_eq!(back, file.addr());
+                assert_eq!(e.mem.u32(file.addr()), FUT_BINARY_FILE_VTABLE);
+                assert_eq!(calls_to(&log, CLOSE_GAME_FILE).len(), closes_game_file);
+                assert_eq!(calls_to(&log, FUT_BINARY_FILE_CLOSE).len(), 1);
+                let frees = calls_to(&log, MEMORY_MANAGER_FREE);
+                if flags & 1 != 0 {
+                    assert_eq!(frees, vec![vec![MEMORY_MANAGER_OBJECT, file.addr()]]);
+                } else {
+                    assert!(frees.is_empty());
+                }
+            }
+        }
     }
 
     /// An engine whose file `read` (slot +0x10) serves the words of `data` in order (each read

@@ -687,9 +687,36 @@ pub fn fn_00bcae60(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
     this
 }
 
+/// `00be08b0` (unit `bsshader.cpp` range, unnamed; `thiscall`, no stack words).
+const SHADER_CALL_00BE08B0: u32 = 0x00be_08b0;
+
+// Translated from 00bca070 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (vtable entry at `010bb4e0`), `thiscall`, no stack words. With the
+/// word +0x28 set, calls the vtable +0xa0 of each of the three objects from +0x70 that is set;
+/// then the vtable +0x88 of each of the three from +0x7c that is set; then jumps to `00be08b0`.
+pub fn fn_00bca070(e: &mut Engine, this: Ptr) {
+    let base = this.addr();
+    if e.mem.u32(base + 0x28) != 0 {
+        for index in 0..3 {
+            let object = e.mem.u32(base + 0x70 + 4 * index);
+            if object != 0 {
+                e.vcall(object, 0xa0, &args![]);
+            }
+        }
+    }
+    for index in 0..3 {
+        let object = e.mem.u32(base + 0x7c + 4 * index);
+        if object != 0 {
+            e.vcall(object, 0x88, &args![]);
+        }
+    }
+    e.call(SHADER_CALL_00BE08B0, &args![base]);
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x00bc_a070, fn_00bca070(Ptr)),
         entry!(0x00bc_aca0, fn_00bcaca0(Ptr, Ptr, Ptr) -> Ptr),
         entry!(0x00bc_ae90, fn_00bcae90() -> Ptr),
         entry!(0x00bc_a050, fn_00bca050(Ptr, u32)),
@@ -1247,5 +1274,40 @@ mod b056_tests {
         e.call(0x00bc_ac60, &args![0u32, record]);
         assert_eq!(calls(&e, STATE_CALL_00B984F0), vec![vec![0, 0]]);
         assert_eq!(calls(&e, STATE_CALL_00B98070), vec![vec![0, 0]]);
+    }
+}
+
+#[cfg(test)]
+mod n071_tests {
+    use super::*;
+    use crate::units::bsshader::shadowlightshader::n071_rig::{
+        engine, order, slot_target, vobject,
+    };
+
+    #[test]
+    fn fn_00bca070_updates_the_set_objects() {
+        let mut e = engine(&[SHADER_CALL_00BE08B0]);
+        let this = e.mem.alloc(0x90);
+        let a = vobject(&mut e, 8, &[]);
+        let b = vobject(&mut e, 8, &[]);
+        e.mem.set_u32(this + 0x74, a);
+        e.mem.set_u32(this + 0x84, b);
+        e.call(0x00bc_a070, &args![this]);
+        assert_eq!(
+            order(&e),
+            vec![0x00bc_a070, slot_target(&e, b, 0x88), SHADER_CALL_00BE08B0]
+        );
+        e.mem.set_u32(this + 0x28, 1);
+        e.call_log = Some(vec![]);
+        e.call(0x00bc_a070, &args![this]);
+        assert_eq!(
+            order(&e),
+            vec![
+                0x00bc_a070,
+                slot_target(&e, a, 0xa0),
+                slot_target(&e, b, 0x88),
+                SHADER_CALL_00BE08B0
+            ]
+        );
     }
 }

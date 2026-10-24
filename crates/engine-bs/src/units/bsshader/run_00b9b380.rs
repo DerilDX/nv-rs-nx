@@ -261,9 +261,143 @@ pub fn fn_00b9bb10(e: &mut Engine, this: Ptr, value: u32, reset: u8) {
     e.mem.set_u32(base + 0xd8, x87_store32(value));
 }
 
+/// `ImageSpaceTexture::BorrowRenderedTexture` (`00ba3840`; `thiscall`, one word) and
+/// `::ReturnRenderedTexture` (`00ba39a0`; `thiscall`, no stack words),
+/// `ImageSpaceShaderParam::SetPixelConstant` (`00b8a790`; `thiscall`: index, four `float`s),
+/// `ImageSpaceEffect::SetTexture` (`00ba3cb0`; `thiscall`: index, texture, filter mode) (engine
+/// map) and `00ba3760` (unnamed; `thiscall` on a texture, one word).
+const BORROW_RENDERED_TEXTURE_00BA3840: u32 = 0x00ba_3840;
+const RETURN_RENDERED_TEXTURE_00BA39A0: u32 = 0x00ba_39a0;
+const SET_PIXEL_CONSTANT_00B8A790: u32 = 0x00b8_a790;
+const SET_TEXTURE_00BA3CB0: u32 = 0x00ba_3cb0;
+const TEXTURE_00BA3760: u32 = 0x00ba_3760;
+
+/// An effect of the array at `+0xc`: the pointer, null when it is null or 0x6c (the compiler's
+/// adjustment of a null base pointer).
+fn sub_effect(e: &Engine, this: u32, index: u32) -> u32 {
+    let effect = e.mem.u32(e.mem.u32(this + 0xc) + 4 * index);
+    if effect == 0 || effect.wrapping_sub(0x6c) == 0 {
+        0
+    } else {
+        effect
+    }
+}
+
+/// Pixel constants 0 to 3 of `param`: (`011ffe4c`, `011ffe50`, 0, 0), (`011ffe5c`,
+/// `011ffe60`, 0, 0), (`011ffe6c`, `011ffe70`, 0, 0), (`011ffe48`, 0, 0, 0), each `float`
+/// through `FLD`/`FSTP` (a signalling NaN quieted).
+fn set_common_constants(e: &mut Engine, param: u32) {
+    let float = |e: &Engine, addr: u32| x87_quiet_bits(e.global::<u32>(addr));
+    for (index, first) in [(0u32, 0x011f_fe4cu32), (1, 0x011f_fe5c), (2, 0x011f_fe6c)] {
+        let x = float(e, first);
+        let y = float(e, first + 4);
+        e.call(
+            SET_PIXEL_CONSTANT_00B8A790,
+            &args![param, index, x, y, 0u32, 0u32],
+        );
+    }
+    let x = float(e, 0x011f_fe48);
+    e.call(
+        SET_PIXEL_CONSTANT_00B8A790,
+        &args![param, 3u32, x, 0u32, 0u32, 0u32],
+    );
+}
+
+// Translated from 00b9b540 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`run_00b9b380`): the `Render` slot of the effect `00b9b830`
+/// builds, `thiscall`, four words (two passed on to the effects' slot +4, one to `this`'s slot
+/// +0x1c, one not read). With the byte +5 set it becomes what slot +0x1c answers for the third
+/// word. Borrows a rendered texture of kind 0x32 into +0x68. Effect 0 (`+0xc` array, null for
+/// a null or 0x6c pointer) with parameter 0 (`+0x1c` array): pixel constants 0 to 3 (see
+/// `set_common_constants`), 4 (`011ffe7c` to `011ffe84`, 0) and 5 (`011ffe8c` to `011ffe94`,
+/// 0); textures 0 = +0x68 (filter 0) and 1 = texture 1 of `pTextures` (+0x2c, filter 1);
+/// `00ba3760(3)` on textures 0 and 1; its slot +4 with the first two words, the parameter
+/// and 1. Effect 1 with parameter 1: constants 0 to 3; textures 0 = texture 0 of `pTextures`
+/// and 1 = +0x68 (filters 0); `00ba3760(3)` twice; slot +4 likewise. Last the borrowed
+/// texture is given back (`00ba39a0`).
+pub fn fn_00b9b540(
+    e: &mut Engine,
+    this: Ptr,
+    first: u32,
+    second: u32,
+    active: u32,
+    _unused_3: u32,
+) {
+    let base = this.addr();
+    if e.mem.u8(base + 5) != 0 {
+        let value = e.vcall(base, 0x1c, &args![active]).u8();
+        e.mem.set_u8(base + 5, value);
+    }
+    let borrowed = base + 0x68;
+    e.call(BORROW_RENDERED_TEXTURE_00BA3840, &args![borrowed, 0x32u32]);
+    let effect = sub_effect(e, base, 0);
+    let param = e.mem.u32(e.mem.u32(base + 0x1c));
+    set_common_constants(e, param);
+    let float = |e: &Engine, addr: u32| x87_quiet_bits(e.global::<u32>(addr));
+    for (index, first_float) in [(4u32, 0x011f_fe7cu32), (5, 0x011f_fe8c)] {
+        let x = float(e, first_float);
+        let y = float(e, first_float + 4);
+        let z = float(e, first_float + 8);
+        e.call(
+            SET_PIXEL_CONSTANT_00B8A790,
+            &args![param, index, x, y, z, 0u32],
+        );
+    }
+    e.call(SET_TEXTURE_00BA3CB0, &args![effect, 0u32, borrowed, 0u32]);
+    let texture_1 = e.mem.u32(e.mem.u32(base + 0x2c) + 4);
+    e.call(SET_TEXTURE_00BA3CB0, &args![effect, 1u32, texture_1, 1u32]);
+    for index in 0..2u32 {
+        let texture = e.mem.u32(e.mem.u32(base + 0x2c) + 4 * index);
+        e.call(TEXTURE_00BA3760, &args![texture, 3u32]);
+    }
+    e.vcall(effect, 4, &args![first, second, param, 1u32]);
+    let effect = sub_effect(e, base, 1);
+    let param = e.mem.u32(e.mem.u32(base + 0x1c) + 4);
+    set_common_constants(e, param);
+    let texture_0 = e.mem.u32(e.mem.u32(base + 0x2c));
+    e.call(SET_TEXTURE_00BA3CB0, &args![effect, 0u32, texture_0, 0u32]);
+    e.call(SET_TEXTURE_00BA3CB0, &args![effect, 1u32, borrowed, 0u32]);
+    for index in 0..2u32 {
+        let texture = e.mem.u32(e.mem.u32(base + 0x2c) + 4 * index);
+        e.call(TEXTURE_00BA3760, &args![texture, 3u32]);
+    }
+    e.vcall(effect, 4, &args![first, second, param, 1u32]);
+    e.call(RETURN_RENDERED_TEXTURE_00BA39A0, &args![borrowed]);
+}
+
+/// The tables' fill the first time: `00b9b400` with the seed `011f9410` truncated (`FISTP
+/// qword` with the rounding set to chop; its low word), then the byte +0x2b8 set (the exe
+/// keeps `this` in ECX across `00b9b400`, which does not change it).
+fn fill_tables(e: &mut Engine, this: Ptr) {
+    let seed = X87Ext::load32(e.global::<u32>(SEED_011F9410));
+    let seed = x87_fistp64_chop(seed) as u32;
+    fn_00b9b400(e, this, seed);
+    e.mem.set_u8(this.addr() + 0x2b8, 1);
+}
+
+// Translated from 00b9b7f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`run_00b9b380`), `thiscall`, no stack words: fills the tables
+/// from the seed `011f9410` (`00b9b400`, the seed truncated) and sets the byte +0x2b8.
+pub fn fn_00b9b7f0(e: &mut Engine, this: Ptr) {
+    fill_tables(e, this);
+}
+
+// Translated from 00b9bac0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`run_00b9b380`), `thiscall`, one word it does not read: the
+/// first time (byte +0x2b8 clear) fills the tables as `00b9b7f0` does. Answers true.
+pub fn fn_00b9bac0(e: &mut Engine, this: Ptr, _unused_0: u32) -> bool {
+    if e.mem.u8(this.addr() + 0x2b8) == 0 {
+        fill_tables(e, this);
+    }
+    true
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x00b9_b540, fn_00b9b540(Ptr, u32, u32, u32, u32)),
+        entry!(0x00b9_b7f0, fn_00b9b7f0(Ptr)),
+        entry!(0x00b9_bac0, fn_00b9bac0(Ptr, u32) -> bool),
         entry!(0x00b9_b830, fn_00b9b830(Ptr) -> Ptr),
         entry!(0x00b9_b380, fn_00b9b380(Ptr, u32) -> Ptr),
         entry!(0x00b9_b3b0, fn_00b9b3b0(Ptr, u32, u32, u32) -> u32),
@@ -503,5 +637,191 @@ mod more_tests {
         let (mut e, this) = fade_rig(1.0, -6.0);
         e.call(0x00b9_bb10, &args![this, 0u32, 0u32]);
         assert_eq!(e.mem.f32(this + 0xdc), 2.0);
+    }
+}
+
+#[cfg(test)]
+mod n070_tests {
+    use super::*;
+
+    fn calls(e: &Engine, addr: u32) -> Vec<Vec<u32>> {
+        e.call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|(a, _)| *a == addr)
+            .map(|(_, w)| w.clone())
+            .collect()
+    }
+
+    const ACTIVE_SLOT: u32 = 0x0e60_0000;
+    const RENDER_SLOT: u32 = 0x0e60_0004;
+
+    /// The effect of `00b9b830` with two sub-effects (slot +4 `RENDER_SLOT`), two parameters,
+    /// two textures, slot +0x1c `ACTIVE_SLOT` answering 0x2a, and the constants `011ffe48` to
+    /// `011ffe94` holding 1.0, 2.0, ... (a signalling NaN at `011ffe4c`).
+    fn render_rig(active: u8) -> (Engine, u32, [u32; 2]) {
+        let mut e = Engine::new();
+        e.map(0x011f_f000, 0x1000);
+        for i in 0..20u32 {
+            e.set_global(0x011f_fe48 + 4 * i, (i + 1) as f32);
+        }
+        e.set_global(0x011f_fe4c, 0x7f80_0001u32);
+        let vtable = e.mem.alloc(0x20);
+        e.mem.set_u32(vtable + 0x1c, ACTIVE_SLOT);
+        let this = e.mem.alloc(0x2c0);
+        e.mem.set_u32(this, vtable);
+        e.mem.set_u8(this + 5, active);
+        let effect_vtable = e.mem.alloc(8);
+        e.mem.set_u32(effect_vtable + 4, RENDER_SLOT);
+        let mut effects = [0u32; 2];
+        for effect in effects.iter_mut() {
+            *effect = e.mem.alloc(0x100) + 0x6c;
+            e.mem.set_u32(*effect, effect_vtable);
+        }
+        let list = e.mem.alloc(8);
+        e.mem.set_u32(list, effects[0]);
+        e.mem.set_u32(list + 4, effects[1]);
+        e.mem.set_u32(this + 0xc, list);
+        let params = e.mem.alloc(8);
+        e.mem.set_u32(params, 0x700);
+        e.mem.set_u32(params + 4, 0x704);
+        e.mem.set_u32(this + 0x1c, params);
+        let textures = e.mem.alloc(8);
+        e.mem.set_u32(textures, 0x800);
+        e.mem.set_u32(textures + 4, 0x804);
+        e.mem.set_u32(this + 0x2c, textures);
+        e.register(ACTIVE_SLOT, |_, _| 0x2au32.into_ret());
+        for target in [
+            RENDER_SLOT,
+            BORROW_RENDERED_TEXTURE_00BA3840,
+            RETURN_RENDERED_TEXTURE_00BA39A0,
+            SET_PIXEL_CONSTANT_00B8A790,
+            SET_TEXTURE_00BA3CB0,
+            TEXTURE_00BA3760,
+        ] {
+            e.register(target, |_, _| Ret::default());
+        }
+        e.call_log = Some(vec![]);
+        (e, this, effects)
+    }
+
+    #[test]
+    fn fn_00b9b540_renders_both_effects() {
+        let (mut e, this, effects) = render_rig(1);
+        e.call(
+            0x00b9_b540,
+            &args![this, 0x11u32, 0x22u32, 0x33u32, 0x44u32],
+        );
+        assert_eq!(calls(&e, ACTIVE_SLOT), vec![vec![this, 0x33]]);
+        assert_eq!(e.mem.u8(this + 5), 0x2a);
+        let borrowed = this + 0x68;
+        assert_eq!(
+            calls(&e, BORROW_RENDERED_TEXTURE_00BA3840),
+            vec![vec![borrowed, 0x32]]
+        );
+        let f = |v: f32| v.to_bits();
+        let sets = calls(&e, SET_PIXEL_CONSTANT_00B8A790);
+        assert_eq!(sets.len(), 10);
+        assert_eq!(sets[0], vec![0x700, 0, 0x7fc0_0001, f(3.0), 0, 0]);
+        assert_eq!(sets[3], vec![0x700, 3, f(1.0), 0, 0, 0]);
+        assert_eq!(sets[4], vec![0x700, 4, f(14.0), f(15.0), f(16.0), 0]);
+        assert_eq!(sets[5], vec![0x700, 5, f(18.0), f(19.0), f(20.0), 0]);
+        assert_eq!(sets[8], vec![0x704, 2, f(10.0), f(11.0), 0, 0]);
+        assert_eq!(
+            calls(&e, SET_TEXTURE_00BA3CB0),
+            vec![
+                vec![effects[0], 0, borrowed, 0],
+                vec![effects[0], 1, 0x804, 1],
+                vec![effects[1], 0, 0x800, 0],
+                vec![effects[1], 1, borrowed, 0],
+            ]
+        );
+        assert_eq!(
+            calls(&e, TEXTURE_00BA3760),
+            vec![
+                vec![0x800, 3],
+                vec![0x804, 3],
+                vec![0x800, 3],
+                vec![0x804, 3]
+            ]
+        );
+        assert_eq!(
+            calls(&e, RENDER_SLOT),
+            vec![
+                vec![effects[0], 0x11, 0x22, 0x700, 1],
+                vec![effects[1], 0x11, 0x22, 0x704, 1],
+            ]
+        );
+        assert_eq!(
+            calls(&e, RETURN_RENDERED_TEXTURE_00BA39A0),
+            vec![vec![borrowed]]
+        );
+    }
+
+    #[test]
+    fn fn_00b9b540_skips_slot_0x1c_when_inactive() {
+        let (mut e, this, _) = render_rig(0);
+        e.call(0x00b9_b540, &args![this, 0u32, 0u32, 0u32, 0u32]);
+        assert!(calls(&e, ACTIVE_SLOT).is_empty());
+        assert_eq!(e.mem.u8(this + 5), 0);
+    }
+
+    #[test]
+    fn fn_00b9b540_a_0x6c_effect_pointer_is_null() {
+        let (mut e, this, _) = render_rig(0);
+        let list = e.mem.u32(this + 0xc);
+        e.mem.set_u32(list, 0x6c);
+        // The null effect's vtable is then read at 0: map it with a render slot.
+        e.map(0, 0x1000);
+        let vtable = e.mem.alloc(8);
+        e.mem.set_u32(vtable + 4, RENDER_SLOT);
+        e.mem.set_u32(0, vtable);
+        e.call(0x00b9_b540, &args![this, 0u32, 0u32, 0u32, 0u32]);
+        assert_eq!(calls(&e, SET_TEXTURE_00BA3CB0)[0][0], 0);
+        assert_eq!(calls(&e, RENDER_SLOT)[0][0], 0);
+    }
+
+    fn seed_rig(seed: f32) -> (Engine, u32) {
+        let mut e = Engine::new();
+        e.map(0x011f_9000, 0x1000);
+        e.map(0x011a_d000, 0x1000);
+        for i in 0..0x100u32 {
+            e.mem.set_u8(TABLE_011AD900 + i, i as u8);
+        }
+        e.set_global(SEED_011F9410, seed);
+        let this = e.mem.alloc(0x2c0);
+        (e, this)
+    }
+
+    #[test]
+    fn fn_00b9b7f0_fills_the_tables_from_the_truncated_seed() {
+        // Seed 2.75 truncates to 2: start (2 * 0x5391313d + 0x22fc2945) >> 24.
+        let (mut e, this) = seed_rig(2.75);
+        e.call(0x00b9_b7f0, &args![this]);
+        let start = 2u32.wrapping_mul(0x5391_313d).wrapping_add(0x22fc_2945) >> 24;
+        assert_eq!(u32::from(e.mem.u8(this + 0x98)), start);
+        assert_eq!(u32::from(e.mem.u8(this + 0x198)), start);
+        assert_eq!(e.mem.u8(this + 0x2b8), 1);
+        // Even when the byte was set already.
+        e.mem.set_u8(this + 0x98, 0x77);
+        e.call(0x00b9_b7f0, &args![this]);
+        assert_eq!(u32::from(e.mem.u8(this + 0x98)), start);
+    }
+
+    #[test]
+    fn fn_00b9bac0_fills_only_the_first_time() {
+        let (mut e, this) = seed_rig(-1.5);
+        assert!(e.call(0x00b9_bac0, &args![this, 0u32]).bool());
+        let start = 1u32
+            .wrapping_neg()
+            .wrapping_mul(0x5391_313d)
+            .wrapping_add(0x22fc_2945)
+            >> 24;
+        assert_eq!(u32::from(e.mem.u8(this + 0x98)), start);
+        assert_eq!(e.mem.u8(this + 0x2b8), 1);
+        e.mem.set_u8(this + 0x98, 0x77);
+        assert!(e.call(0x00b9_bac0, &args![this, 0u32]).bool());
+        assert_eq!(e.mem.u8(this + 0x98), 0x77);
     }
 }

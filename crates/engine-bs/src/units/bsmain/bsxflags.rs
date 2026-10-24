@@ -272,9 +272,112 @@ pub fn fn_00c435a0(e: &mut Engine) {
     e.set_global::<u32>(BSX_FLAGS_NAME, 0);
 }
 
+/// `NiIntegerExtraData`'s member copy (`00a99c40`; `thiscall` on the source, `RET 8`: clone,
+/// cloning process), `NiBinaryExtraData::RegisterStreamables` (`00a89ae0`, engine map; the
+/// shared extra-data body, `thiscall`, `RET 4`), the integer comparison (`00a742a0`, unit
+/// `nistringextradata.cpp`; `thiscall`, `RET 4`: whether the other object is non-null with an
+/// equal word at +0xC) and `NiIntegerExtraData::GetViewerStrings` (`00a99d70`).
+const INTEGER_COPY_MEMBERS: u32 = 0x00a9_9c40;
+const EXTRA_DATA_REGISTER_STREAMABLES: u32 = 0x00a8_9ae0;
+const INTEGER_IS_EQUAL: u32 = 0x00a7_42a0;
+const INTEGER_GET_VIEWER_STRINGS: u32 = 0x00a9_9d70;
+/// `NiGetViewerString` (`00a7d330`, `cdecl`: text) and its `bool` overload (`00a7d370`,
+/// `cdecl`: name, byte); the viewer string array's `SetAtGrow` (`00470000`, `thiscall`,
+/// `RET 8`: index, address of the string) and add (`0096a610`, `thiscall`, `RET 4`).
+const VIEWER_STRING: u32 = 0x00a7_d330;
+const VIEWER_STRING_BOOL: u32 = 0x00a7_d370;
+const VIEWER_STRINGS_SET_AT_GROW: u32 = 0x0047_0000;
+const VIEWER_STRINGS_ADD: u32 = 0x0096_a610;
+/// The flag names (`bAnimated` `010c1948`, `bHavok` `010c1940`, `bRagDoll` `010c1934`,
+/// `bComplex` `010c1928`, `bAddon` `010c1920`, `bEditorMarker` `010c1910`, `bDynamic`
+/// `010c1904`, `bArticulated` `010c18f4`, `bIKTarget` `010c18e8`) by flag bit, from bit 0.
+const FLAG_NAMES: [u32; 9] = [
+    0x010c_1948,
+    0x010c_1940,
+    0x010c_1934,
+    0x010c_1928,
+    0x010c_1920,
+    0x010c_1910,
+    0x010c_1904,
+    0x010c_18f4,
+    0x010c_18e8,
+];
+
+// Translated from 00c430b0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The `BSXFlags` member copy (unnamed in the engine map; `thiscall` on the source, `RET 8`:
+/// clone, cloning process): forwards to `NiIntegerExtraData`'s (`00a99c40`).
+pub fn fn_00c430b0(e: &mut Engine, this: Ptr, clone: Ptr, cloning: Ptr) {
+    e.call(INTEGER_COPY_MEMBERS, &args![this, clone, cloning]);
+}
+
+// Translated from 00c43110 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`thiscall`, `RET 4`: stream): answers 1 when `00a89ae0`
+/// answers a zero byte and 0 otherwise (`NEG`/`SBB`/`ADD 1` on the byte).
+pub fn fn_00c43110(e: &mut Engine, this: Ptr, stream: Ptr) -> bool {
+    e.call(EXTRA_DATA_REGISTER_STREAMABLES, &args![this, stream])
+        .u8()
+        == 0
+}
+
+// Translated from 00c43160 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSXFlags`'s `IsEqual` (unnamed in the engine map; `thiscall`, `RET 4`: the other
+/// object): the byte `00a742a0` answers.
+pub fn fn_00c43160(e: &mut Engine, this: Ptr, other: Ptr) -> bool {
+    e.call(INTEGER_IS_EQUAL, &args![this, other]).u8() != 0
+}
+
+/// Passes the viewer string `text` (by address, as the exe does) to `function` on
+/// `strings`, after `leading` (the array's size for `SetAtGrow`, nothing for the add).
+fn store_viewer_string(
+    e: &mut Engine,
+    function: u32,
+    strings: Ptr,
+    leading: Option<u32>,
+    text: u32,
+) {
+    e.with_stack(4, |e, slot| {
+        e.mem.set_u32(slot.addr(), text);
+        match leading {
+            Some(index) => e.call(function, &args![strings, index, slot]),
+            None => e.call(function, &args![strings, slot]),
+        };
+    });
+}
+
+// Translated from 00c43220 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSXFlags::GetViewerStrings` (engine map; `thiscall`, `RET 4`: the viewer string array):
+/// `NiIntegerExtraData::GetViewerStrings` (`00a99d70`), then the class name (the first word
+/// of `01202de0`, `NiGetViewerString`) and the `bAnimated` flag (bit 0 of the flags at +0xC,
+/// `00a7d370`), each stored with `SetAtGrow` at the array's size (its 16-bit `m_usSize`,
+/// +0xA); then one string per further flag bit 1 to 8 (`bHavok`, `bRagDoll`, `bComplex`,
+/// `bAddon`, `bEditorMarker`, `bDynamic`, `bArticulated`, `bIKTarget`), each added
+/// (`0096a610`).
+pub fn bsx_flags_get_viewer_strings(e: &mut Engine, this: Ptr, strings: Ptr) {
+    e.call(INTEGER_GET_VIEWER_STRINGS, &args![this, strings]);
+    let name = e.mem.u32(BSX_FLAGS_RTTI);
+    let text = e.call(VIEWER_STRING, &args![name]).u32();
+    let size = u32::from(e.mem.u16(strings.addr().wrapping_add(0xa)));
+    store_viewer_string(e, VIEWER_STRINGS_SET_AT_GROW, strings, Some(size), text);
+    for (bit, flag_name) in FLAG_NAMES.iter().enumerate() {
+        let flags = e.mem.u32(this.addr().wrapping_add(0xc));
+        let set = u32::from(flags & (1 << bit) != 0);
+        let text = e.call(VIEWER_STRING_BOOL, &args![*flag_name, set]).u32();
+        if bit == 0 {
+            let size = u32::from(e.mem.u16(strings.addr().wrapping_add(0xa)));
+            store_viewer_string(e, VIEWER_STRINGS_SET_AT_GROW, strings, Some(size), text);
+        } else {
+            store_viewer_string(e, VIEWER_STRINGS_ADD, strings, None, text);
+        }
+    }
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x00c4_30b0, fn_00c430b0(Ptr, Ptr, Ptr)),
+        entry!(0x00c4_3110, fn_00c43110(Ptr, Ptr) -> bool),
+        entry!(0x00c4_3160, fn_00c43160(Ptr, Ptr) -> bool),
+        entry!(0x00c4_3220, bsx_flags_get_viewer_strings(Ptr, Ptr)),
         entry!(0x00c4_3470, fn_00c43470(Ptr)),
         entry!(0x00c4_2f70, bsx_flags_constructor(Ptr) -> Ptr),
         entry!(0x00c4_2ff0, bsx_flags_constructor_with_value(Ptr, u32) -> Ptr),
@@ -569,5 +672,65 @@ mod b004_tests {
         e.register(ALLOCATE, |_, _| 0u32.into_ret());
         e.call(0x00c4_3500, &args![]);
         assert_eq!(e.mem.u32(BSX_FLAGS_NAME), 0);
+    }
+}
+
+#[cfg(test)]
+mod n069_tests {
+    use super::*;
+
+    #[test]
+    fn copy_register_and_compare_forward_to_the_integer_bodies() {
+        let mut e = Engine::new();
+        e.register(INTEGER_COPY_MEMBERS, |_, _| Ret::default());
+        e.register(EXTRA_DATA_REGISTER_STREAMABLES, |_, a| a[1].into_ret());
+        e.register(INTEGER_IS_EQUAL, |_, a| a[1].into_ret());
+        e.call_log = Some(vec![]);
+        e.call(0x00c4_30b0, &args![0x10u32, 0x20u32, 0x30u32]);
+        let log = e.call_log.take().unwrap();
+        assert!(log.contains(&(INTEGER_COPY_MEMBERS, vec![0x10, 0x20, 0x30])));
+        assert!(e.call(0x00c4_3110, &args![0x10u32, 0x100u32]).bool());
+        assert!(!e.call(0x00c4_3110, &args![0x10u32, 0x101u32]).bool());
+        assert_eq!(e.call(0x00c4_3110, &args![0x10u32, 0x100u32]).u32(), 1);
+        assert!(e.call(0x00c4_3160, &args![0x10u32, 0x201u32]).bool());
+        assert!(!e.call(0x00c4_3160, &args![0x10u32, 0x200u32]).bool());
+    }
+
+    #[test]
+    fn viewer_strings_list_every_flag() {
+        let mut e = Engine::new();
+        e.map(BSX_FLAGS_RTTI, 8);
+        e.mem.set_u32(BSX_FLAGS_RTTI, 0x0400_0000);
+        e.register(INTEGER_GET_VIEWER_STRINGS, |_, _| Ret::default());
+        e.register(VIEWER_STRING, |_, _| 0x51u32.into_ret());
+        e.register(VIEWER_STRING_BOOL, |_, a| {
+            (a[0] & 0xfff).wrapping_mul(2).wrapping_add(a[1]).into_ret()
+        });
+        let stored = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let inner = stored.clone();
+        e.register_double(VIEWER_STRINGS_SET_AT_GROW, move |e, a| {
+            inner.borrow_mut().push((a[1], e.mem.u32(a[2])));
+            let size = e.mem.u16(a[0] + 0xa) + 1;
+            e.mem.set_u16(a[0] + 0xa, size);
+            Ret::default()
+        });
+        let inner = stored.clone();
+        e.register_double(VIEWER_STRINGS_ADD, move |e, a| {
+            inner.borrow_mut().push((0xffff, e.mem.u32(a[1])));
+            Ret::default()
+        });
+        let this = e.mem.alloc(0x10);
+        e.mem.set_u32(this + 0xc, 0x0000_0105);
+        let strings = e.mem.alloc(0x10);
+        e.mem.set_u16(strings + 0xa, 3);
+        e.call(0x00c4_3220, &args![this, strings]);
+        let expected: Vec<(u32, u32)> = std::iter::once((3, 0x51))
+            .chain(FLAG_NAMES.iter().enumerate().map(|(bit, name)| {
+                let set = u32::from(0x105u32 & (1 << bit) != 0);
+                let index = if bit == 0 { 4 } else { 0xffff };
+                (index, (name & 0xfff) * 2 + set)
+            }))
+            .collect();
+        assert_eq!(*stored.borrow(), expected);
     }
 }

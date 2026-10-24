@@ -95,9 +95,20 @@ pub fn fn_00bc5510(e: &mut Engine, this: Ptr) -> bool {
     true
 }
 
+/// The record `00bc5440` answers (`01201fd8`).
+const RECORD_01201FD8: u32 = 0x0120_1fd8;
+
+// Translated from 00bc5440 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (not a Ghidra function; vtable entry at `010baf68`, `ECX` unread):
+/// answers the address `01201fd8`.
+pub fn fn_00bc5440(_e: &mut Engine, _this: Ptr) -> Ptr {
+    Ptr::new(RECORD_01201FD8)
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x00bc_5440, fn_00bc5440(Ptr) -> Ptr),
         entry!(0x00bc_5450, fn_00bc5450(Ptr) -> u8),
         entry!(0x00bc_5510, fn_00bc5510(Ptr) -> bool),
     ]
@@ -174,5 +185,16 @@ mod tests {
         assert_eq!(calls(&e, CREATE_NEW_STAGE).len(), 1);
         assert_eq!(e.mem.u32(this + 0x74), 0);
         assert_eq!(render_states(&e, pass).len(), 13);
+    }
+}
+
+#[cfg(test)]
+mod n071_tests {
+    use super::*;
+
+    #[test]
+    fn fn_00bc5440_answers_its_record() {
+        let mut e = Engine::new();
+        assert_eq!(e.call(0x00bc_5440, &args![0u32]).u32(), RECORD_01201FD8);
     }
 }

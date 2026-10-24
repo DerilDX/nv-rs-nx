@@ -1068,8 +1068,1286 @@ pub fn ni_p_sys_mesh_emitter_link_object(e: &mut Engine, this: Ptr, stream: Ptr)
 }
 
 /// This unit's translated functions, by exe address.
+use crate::units::niparticle::nipsysmodifier::{
+    add_class_name, add_labelled, stream_write, NI_GET_VIEWER_STRING_FIXED,
+    NI_GET_VIEWER_STRING_FLOAT, STREAM_SAVE_LINK_ID, STRINGS_GROW,
+};
+
+/// `00aa4060` (unnamed, `BSCore/memorymanager.cpp`; `thiscall` on the
+/// memory manager `011f6238`, one word): frees a block.
+const MEMORY_FREE: u32 = 0x00aa_4060;
+/// `NiPSysEmitter::IsEqual` (`00c226a0`), `SaveBinary` (`00c22530`) and
+/// `GetViewerStrings` (`00c22780`): `thiscall`, one word.
+const EMITTER_IS_EQUAL: u32 = 0x00c2_26a0;
+const EMITTER_SAVE_BINARY: u32 = 0x00c2_2530;
+const EMITTER_GET_VIEWER_STRINGS: u32 = 0x00c2_2780;
+/// `00439090` (`thiscall` on an `NiPoint3`, one word): whether it differs
+/// from another point; `00a69780` (`thiscall`, the stream): writes its
+/// three floats (the engine map names it after `NiColor`).
+const POINT_NOT_EQUAL: u32 = 0x0043_9090;
+const POINT_SAVE_BINARY: u32 = 0x00a6_9780;
+/// `00a81f90` (unnamed, `NiMain/niskinpartition.cpp`): the
+/// `NiSkinPartition` constructor (`thiscall`, no stack words); `00a84980`
+/// (unnamed; `thiscall` on the partition, eight words: the geometry data,
+/// the skin data, the bones per partition, 4, then four zero words) makes
+/// the partitions and answers whether it did.
+const SKIN_PARTITION_CONSTRUCTOR: u32 = 0x00a8_1f90;
+const SKIN_PARTITION_MAKE: u32 = 0x00a8_4980;
+/// The `NiRTTI` record of `NiPSysMeshEmitter` (`01202500`).
+const RTTI: u32 = 0x0120_2500;
+/// Viewer-string labels: `"Emitter Object"`, `"m_eEmissionType"` and its
+/// values `"NI_EMIT_FROM_VERTICES"`, `..._FACE_CENTER`, `..._EDGE_CENTER`,
+/// `..._FACE_SURFACE`, `..._EDGE_SURFACE`, `"m_eInitVelocityType"` and its
+/// values `"NI_VELOCITY_USE_NORMALS"`, `..._RANDOM`, `..._DIRECTION`,
+/// `"UNKNOWN!!!"` for anything else, and the three axis components
+/// `"m_kEmissionAxis.x"`, `.y`, `.z`.
+const LABEL_EMITTER_OBJECT: u32 = 0x010b_d7e0;
+const LABEL_EMISSION_TYPE: u32 = 0x010b_d748;
+const EMISSION_TYPE_NAMES: [u32; 5] = [
+    0x010b_d7c8,
+    0x010b_d7ac,
+    0x010b_d790,
+    0x010b_d774,
+    0x010b_d758,
+];
+const LABEL_VELOCITY_TYPE: u32 = 0x010b_d6e8;
+const VELOCITY_TYPE_NAMES: [u32; 3] = [0x010b_d6fc, 0x010b_d714, 0x010b_d72c];
+const TEXT_UNKNOWN: u32 = 0x0109_d014;
+const LABEL_AXIS: [u32; 3] = [0x010b_d6d4, 0x010b_d6c0, 0x010b_d6ac];
+
+// Translated from 00a85520 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiMatrix3::operatorP_ov2` (Xbox PDB name; `thiscall` on the matrix,
+/// `RET 8`: the address of the result, a `float`): each of the nine
+/// entries times the float into the result, entry 0 as `m * s` and the last
+/// as `s * m` (`FMUL` with a memory operand). Returns the result's address.
+pub fn ni_matrix3_operator_times_ov2(e: &mut Engine, this: Ptr, result: Ptr, scale: f32) -> Ptr {
+    let (m, r) = (this.addr(), result.addr());
+    let s = x87_load32(scale.to_bits());
+    e.mem.set_u32(r, x87_store32(x87_mul(load_float(e, m), s)));
+    for i in 1..8 {
+        let product = x87_mul(load_float(e, m + 4 * i), s);
+        e.mem.set_u32(r + 4 * i, x87_store32(product));
+    }
+    let last = x87_mul(s, x87_m32(e.mem.u32(m + 0x20)));
+    e.mem.set_u32(r + 0x20, x87_store32(last));
+    result
+}
+
+// Translated from 00c1d170 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map: the skinned-emitter data's partition refresh
+/// (`thiscall` on the data, `RET 4`: the geometry; `bool` in `AL`). False
+/// without a geometry, for one that is not triangle based (slot +0x1c) or
+/// without a skin instance (+0xbc). The instance's partition (+0xc) is
+/// taken when it has one; otherwise, with skin data (+8), a new
+/// `NiSkinPartition` (0x10 bytes, `00a81f90`) is made from the geometry's
+/// data and the skin data with `max(bones (+0x44), 4)` bones per partition
+/// (`00a84980`; false when it fails). The partition is assigned to the
+/// data's `NiPointer` (+8, `0066b0d0`) and the answer is true.
+pub fn fn_00c1d170(e: &mut Engine, this: Ptr, geometry: Ptr) -> bool {
+    let g = geometry.addr();
+    if g == 0 || e.vcall(g, 0x1c, &args![]).u32() == 0 {
+        return false;
+    }
+    let skin = e.mem.u32(g + 0xbc);
+    if skin == 0 {
+        return false;
+    }
+    let mut partition = e.mem.u32(skin + 0xc);
+    if partition == 0 {
+        let skin_data = e.mem.u32(skin + 8);
+        if skin_data == 0 {
+            return false;
+        }
+        let mut bones = e.mem.u32(skin_data + 0x44);
+        if bones < 4 {
+            bones = partition + 4;
+        }
+        let block = e.call(NI_ALLOCATE, &args![0x10u32]).u32();
+        partition = if block == 0 {
+            0
+        } else {
+            e.call(SKIN_PARTITION_CONSTRUCTOR, &args![block]).u32()
+        };
+        let skin_data = e.mem.u32(skin + 8);
+        let data = e.mem.u32(g + 0xb8);
+        let made = e
+            .call(
+                SKIN_PARTITION_MAKE,
+                &args![partition, data, skin_data, bones, 4u32, 0u32, 0u32, 0u32, 0u32],
+            )
+            .bool();
+        if !made {
+            return false;
+        }
+    }
+    e.call(NI_POINTER_ASSIGN, &args![this.addr() + 8, partition]);
+    true
+}
+
+// Translated from 00c1d6b0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiPSysMeshEmitter::IsEqual` (Xbox PDB): `NiPSysEmitter::IsEqual`; the
+/// same geometry count (+0x5e); for each index both geometries null or both
+/// non-null and equal (the first's `IsEqual`, slot +0x5c); the same initial
+/// velocity and emission types; then the emission axes must not differ
+/// (`00439090`).
+pub fn ni_p_sys_mesh_emitter_is_equal(
+    e: &mut Engine,
+    this: Ptr<NiPSysMeshEmitter>,
+    other: Ptr<NiPSysMeshEmitter>,
+) -> bool {
+    let (a, b) = (this.addr(), other.addr());
+    if !e.call(EMITTER_IS_EQUAL, &args![a, b]).bool() {
+        return false;
+    }
+    let count = u32::from(e.mem.u16(a + 0x5e));
+    if count != u32::from(e.mem.u16(b + 0x5e)) {
+        return false;
+    }
+    for i in 0..count {
+        let mine = e.mem.u32(e.mem.u32(a + 0x58) + 4 * i);
+        let theirs = e.mem.u32(e.mem.u32(b + 0x58) + 4 * i);
+        if mine == 0 {
+            if theirs != 0 {
+                return false;
+            }
+        } else if theirs == 0 || !e.vcall(mine, 0x5c, &args![theirs]).bool() {
+            return false;
+        }
+    }
+    if e.get(this, NiPSysMeshEmitter::m_eInitVelocityType)
+        != e.get(other, NiPSysMeshEmitter::m_eInitVelocityType)
+        || e.get(this, NiPSysMeshEmitter::m_eEmissionType)
+            != e.get(other, NiPSysMeshEmitter::m_eEmissionType)
+    {
+        return false;
+    }
+    !e.call(POINT_NOT_EQUAL, &args![a + 0x7c, b + 0x7c]).bool()
+}
+
+/// The `NiTArray` deleting destructor shape of `00c1d980` and `00c1d9b0`:
+/// the array's vtable becomes `vtable`, its element block is freed
+/// (`00a47600`), and with bit 0 of `flags` the array itself goes back to the
+/// memory manager (`00aa4060`).
+fn array_deleting_destructor(e: &mut Engine, this: Ptr, flags: u32, vtable: u32) -> Ptr {
+    let elements = e.mem.u32(this.addr() + 4);
+    e.mem.set_u32(this.addr(), vtable);
+    e.call(NI_FREE, &args![elements]);
+    if flags & 1 != 0 {
+        e.call(MEMORY_FREE, &args![MEMORY_MANAGER, this]);
+    }
+    this
+}
+
+// Translated from 00c1d980 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map: the deleting destructor of the
+/// `NiTArray<NiPointer<NiGeometry>>` (vtable `010bd698`, RTTI
+/// `.?AV?$NiTArray@V?$NiPointer@VNiGeometry@@@@...`): its element block
+/// freed, the array freed with bit 0 of `flags`. Returns `this`.
+pub fn fn_00c1d980(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    array_deleting_destructor(e, this, flags, ARRAY_BASE_VTABLE)
+}
+
+// Translated from 00c1d9b0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The engine map names it
+/// `NiTObjectArray<NiPointer<NiGeometry>>::_scalar_deleting_destructor_`,
+/// but the body stores the vtable `010bd6a0` (RTTI
+/// `.?AV?$NiTArray@V?$NiPointer@VNiSkinnedEmitterData@NiPSysMeshEmit...`):
+/// that array's element block freed, the array freed with bit 0 of `flags`.
+/// Returns `this`.
+pub fn fn_00c1d9b0(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    array_deleting_destructor(e, this, flags, SKINNED_ARRAY_DESTROYED_VTABLE)
+}
+
+// Translated from 00c1d9e0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`thiscall`, `RET 0xc`: geometry, position,
+/// velocity; `bool` in `AL`): emission from a random vertex
+/// (`rand() % vertex count`, signed; a zero count is a division fault in
+/// the exe and a panic here). False without vertices (data +0x20). The
+/// position is the vertex; with initial velocity type 0 and normals (+0x24)
+/// the velocity becomes the vertex normal (read even without normals) times
+/// the velocity's length (`_CIsqrt`, the squared length kept in the stack
+/// word of the geometry argument). Then `fn_00c1cf50` and true.
+pub fn fn_00c1d9e0(
+    e: &mut Engine,
+    this: Ptr<NiPSysMeshEmitter>,
+    geometry: Ptr,
+    position: Ptr,
+    velocity: Ptr,
+) -> bool {
+    let random = e.call(RAND, &[]).i32();
+    let g = geometry.addr();
+    let data = e.mem.u32(g + 0xb8);
+    let count = i32::from(e.mem.u16(data + 8));
+    let index = (random % count) as u32;
+    let vertices = e.mem.u32(data + 0x20);
+    let normals = e.mem.u32(data + 0x24);
+    if vertices == 0 {
+        return false;
+    }
+    let offset = index.wrapping_mul(12);
+    copy_words(e, vertices.wrapping_add(offset), position.addr(), 3);
+    let normal = [
+        e.mem.u32(normals.wrapping_add(offset)),
+        e.mem.u32(normals.wrapping_add(offset + 4)),
+        e.mem.u32(normals.wrapping_add(offset + 8)),
+    ];
+    if e.get(this, NiPSysMeshEmitter::m_eInitVelocityType) == 0
+        && e.mem.u32(e.mem.u32(g + 0xb8) + 0x24) != 0
+    {
+        let v = velocity.addr();
+        let vy = load_float(e, v + 4);
+        let vx = load_float(e, v);
+        let vz = load_float(e, v + 8);
+        let xx = x87_mul(vx, vx);
+        let yy = x87_mul(vy, vy);
+        let sum = x87_add(yy, xx);
+        let zz = x87_mul(vz, vz);
+        let squared = x87_store32(x87_add(sum, zz));
+        let root = e.call(SQRT, &args![ld(squared)]).f64();
+        let length = ld(x87_store32(ld(x87_store32(root))));
+        let n0 = ld(normal[0]);
+        e.mem.set_u32(v, x87_store32(x87_mul(n0, length)));
+        let n1 = ld(normal[1]);
+        e.mem.set_u32(v + 4, x87_store32(x87_mul(n1, length)));
+        e.mem
+            .set_u32(v + 8, x87_store32(x87_mul(length, op(normal[2]))));
+    }
+    fn_00c1cf50(e, this, geometry, position, velocity);
+    true
+}
+
+// Translated from 00c1e8e0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiPSysMeshEmitter::SaveBinary` (Xbox PDB): `NiPSysEmitter`'s
+/// `SaveBinary`, the geometry count (+0x5e, as 4 bytes written from the
+/// stack word that held the stream argument), each geometry's link id
+/// (stream slot +0x30, nulls included), the initial velocity and emission
+/// types (4 bytes each), then the emission axis (`00a69780`). The component
+/// sizes go through the function's own stack word.
+pub fn ni_p_sys_mesh_emitter_save_binary(
+    e: &mut Engine,
+    this: Ptr<NiPSysMeshEmitter>,
+    stream: Ptr,
+) {
+    let (a, s) = (this.addr(), stream.addr());
+    e.call(EMITTER_SAVE_BINARY, &args![a, s]);
+    e.with_stack(8, |e, frame| {
+        let local = frame.addr();
+        let argument_slot = frame.addr() + 4;
+        e.mem.set_u32(argument_slot, u32::from(e.mem.u16(a + 0x5e)));
+        stream_write(e, s, argument_slot, 4, 4, local);
+        let mut i = 0u32;
+        while i < e.mem.u32(argument_slot) {
+            let geometry = e.mem.u32(e.mem.u32(a + 0x58) + 4 * i);
+            e.vcall(s, STREAM_SAVE_LINK_ID, &args![geometry]);
+            i += 1;
+        }
+        stream_write(e, s, a + 0x74, 4, 4, local);
+        stream_write(e, s, a + 0x78, 4, 4, local);
+    });
+    e.call(POINT_SAVE_BINARY, &args![a + 0x7c, s]);
+}
+
+/// The `NiTArray<char*>::Add` the end of `GetViewerStrings` inlines: at the
+/// current size (the array grown first when full, by the step plus the
+/// size), the size and non-null count follow the `SetAt` rules for the
+/// new string, which is stored.
+fn add_viewer_string_inline(e: &mut Engine, strings: u32, text: u32) {
+    let index = u32::from(e.mem.u16(strings + 0xa));
+    if index >= u32::from(e.mem.u16(strings + 8)) {
+        let step = u32::from(e.mem.u16(strings + 0xe));
+        e.call(STRINGS_GROW, &args![strings, step + index]);
+    }
+    let base = e.mem.u32(strings + 4);
+    if index >= u32::from(e.mem.u16(strings + 0xa)) {
+        e.mem.set_u16(strings + 0xa, (index + 1) as u16);
+        if text != 0 {
+            let count = e.mem.u16(strings + 0xc);
+            e.mem.set_u16(strings + 0xc, count.wrapping_add(1));
+        }
+    } else if text != 0 {
+        if e.mem.u32(base.wrapping_add(4 * index)) == 0 {
+            let count = e.mem.u16(strings + 0xc);
+            e.mem.set_u16(strings + 0xc, count.wrapping_add(1));
+        }
+    } else if e.mem.u32(base.wrapping_add(4 * index)) != 0 {
+        let count = e.mem.u16(strings + 0xc);
+        e.mem.set_u16(strings + 0xc, count.wrapping_add(0xffff));
+    }
+    let base = e.mem.u32(strings + 4);
+    e.mem.set_u32(base.wrapping_add(4 * index), text);
+}
+
+// Translated from 00c1f050 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiPSysMeshEmitter::GetViewerStrings` (Xbox PDB): `NiPSysEmitter`'s
+/// `GetViewerStrings`, the class name (`NiRTTI` `01202500`), `"Emitter
+/// Object"` with each non-null geometry's name (+8) for the indices below
+/// the non-null count (+0x60, re-read), the emission type and initial
+/// velocity type by name (`"UNKNOWN!!!"` past the known values), then the
+/// three emission axis components (floats through `FLD`/`FSTP`), each added
+/// by the inlined `NiTArray::Add`.
+pub fn ni_p_sys_mesh_emitter_get_viewer_strings(
+    e: &mut Engine,
+    this: Ptr<NiPSysMeshEmitter>,
+    strings: Ptr,
+) {
+    let (a, strings) = (this.addr(), strings.addr());
+    e.call(EMITTER_GET_VIEWER_STRINGS, &args![a, strings]);
+    add_class_name(e, strings, RTTI);
+    let mut i = 0u32;
+    while i < u32::from(e.mem.u16(a + 0x60)) {
+        let geometry = e.mem.u32(e.mem.u32(a + 0x58) + 4 * i);
+        if geometry != 0 {
+            let name = e.mem.u32(geometry + 8);
+            add_labelled(
+                e,
+                strings,
+                NI_GET_VIEWER_STRING_FIXED,
+                LABEL_EMITTER_OBJECT,
+                name,
+            );
+        }
+        i += 1;
+    }
+    let emission = e.get(this, NiPSysMeshEmitter::m_eEmissionType);
+    let name = EMISSION_TYPE_NAMES
+        .get(emission as usize)
+        .copied()
+        .unwrap_or(TEXT_UNKNOWN);
+    add_labelled(
+        e,
+        strings,
+        NI_GET_VIEWER_STRING_FIXED,
+        LABEL_EMISSION_TYPE,
+        name,
+    );
+    let velocity = e.get(this, NiPSysMeshEmitter::m_eInitVelocityType);
+    let name = VELOCITY_TYPE_NAMES
+        .get(velocity as usize)
+        .copied()
+        .unwrap_or(TEXT_UNKNOWN);
+    add_labelled(
+        e,
+        strings,
+        NI_GET_VIEWER_STRING_FIXED,
+        LABEL_VELOCITY_TYPE,
+        name,
+    );
+    for (k, label) in LABEL_AXIS.iter().enumerate() {
+        let value = x87_quiet_bits(e.mem.u32(a + 0x7c + 4 * k as u32));
+        let text = e
+            .call(NI_GET_VIEWER_STRING_FLOAT, &args![*label, value])
+            .u32();
+        add_viewer_string_inline(e, strings, text);
+    }
+}
+
+/// The zero point `011f426c` the skinning sums start from.
+const ORIGIN: u32 = 0x011f_426c;
+
+// Translated from 00c1d230 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map: the skinned position and normal of one
+/// vertex of a skin partition (`thiscall` on the emitter, which is not
+/// read; `RET 0x18`: position result, normal result, geometry, skin
+/// instance, partition, vertex index within the partition). The skin
+/// data's root-parent transform (skin data +0xc) times the inverse of the
+/// root parent's world transform (instance +0x10, its +0x68) is computed
+/// once (`InvertNonUniform`, the product `0062c250`). For each of the
+/// partition's bones per vertex (+0x24): the bone (through the vertex's
+/// palette entry (+0x10) when there is a palette, else the k-th bone of
+/// +4), that transform times the bone's world transform times the bone
+/// data's skin-to-bone transform (0x4c-byte entries at skin data +0x40);
+/// the vertex (the geometry's vertex at the partition's vertex map, +0xc)
+/// through the scaled rotation and translation, and the vertex normal
+/// (`(1, 0, 0)` without normals) through the rotation, both weighted by
+/// the vertex's weight (+8, four per vertex) and summed from the origin
+/// `011f426c`. The normal sum is normalized (`004a0c10`); both go to the
+/// results. x87 operations one by one in the exe's order; the stack slots
+/// are the exe's (the weight lives where the weight offset is kept).
+pub fn fn_00c1d230(
+    e: &mut Engine,
+    _this: Ptr<NiPSysMeshEmitter>,
+    position: Ptr,
+    normal: Ptr,
+    geometry: Ptr,
+    skin: Ptr,
+    partition: Ptr,
+    vertex: u32,
+) {
+    let (skin, partition) = (skin.addr(), partition.addr());
+    let skin_data = e.mem.u32(skin + 8);
+    e.with_stack(0x180, |e, frame| {
+        let at = |x: u32| frame.addr() + x;
+        let lf = |e: &Engine, x: u32| x87_load32(e.mem.u32(at(x)));
+        let mf = |e: &Engine, x: u32| x87_m32(e.mem.u32(at(x)));
+        let root = e.mem.u32(skin + 0x10);
+        e.call(
+            INVERT_NON_UNIFORM,
+            &args![root.wrapping_add(0x68), at(0x78)],
+        );
+        let product = e
+            .call(
+                TRANSFORM_PRODUCT,
+                &args![skin_data.wrapping_add(0xc), at(0xac), at(0x78)],
+            )
+            .u32();
+        copy_words(e, product, at(0xe0), 13);
+        let bone_data = e.mem.u32(skin_data.wrapping_add(0x40));
+        copy_words(e, ORIGIN, at(0x20), 3);
+        copy_words(e, ORIGIN, at(0x14), 3);
+        e.mem.set_u32(at(0x5c), bone_data);
+        let data = e.mem.u32(geometry.addr() + 0xb8);
+        let normals = e.mem.u32(data + 0x24);
+        let vertices = e.mem.u32(data + 0x20);
+        let map = e.mem.u32(partition + 0xc);
+        let mapped = u32::from(e.mem.u16(map.wrapping_add(2 * vertex)));
+        let offset = mapped.wrapping_mul(12);
+        copy_words(e, vertices.wrapping_add(offset), at(0x60), 3);
+        if normals != 0 {
+            copy_words(e, normals.wrapping_add(offset), at(0x38), 3);
+        } else {
+            e.mem.set_u32(at(0x2c), 1.0f32.to_bits());
+            e.mem.set_u32(at(0x30), 0);
+            let one = e.mem.u32(at(0x2c));
+            e.mem.set_u32(at(0x38), one);
+            e.mem.set_u32(at(0x34), 0);
+            let (y, z) = (e.mem.u32(at(0x30)), e.mem.u32(at(0x34)));
+            e.mem.set_u32(at(0x3c), y);
+            e.mem.set_u32(at(0x40), z);
+        }
+        let mut bones_per_vertex = u32::from(e.mem.u16(partition + 0x24));
+        if bones_per_vertex != 0 {
+            e.mem.set_u32(at(0x10), vertex << 4);
+            let mut k = 0u32;
+            loop {
+                let bones = e.mem.u32(partition + 4);
+                let palette = e.mem.u32(partition + 0x10);
+                let bone = if palette != 0 {
+                    let entry = bones_per_vertex.wrapping_mul(vertex).wrapping_add(palette);
+                    let slot = u32::from(e.mem.u8(entry.wrapping_add(k)));
+                    e.mem.u16(bones.wrapping_add(2 * slot))
+                } else {
+                    e.mem.u16(bones.wrapping_add(2 * k))
+                };
+                let bone = u32::from(bone);
+                let node = e.mem.u32(e.mem.u32(skin + 0x14).wrapping_add(4 * bone));
+                let bone_entry = bone.wrapping_mul(0x4c).wrapping_add(e.mem.u32(at(0x5c)));
+                let world = e
+                    .call(
+                        TRANSFORM_PRODUCT,
+                        &args![at(0xe0), at(0x148), node.wrapping_add(0x68)],
+                    )
+                    .u32();
+                let full = e
+                    .call(TRANSFORM_PRODUCT, &args![world, at(0x114), bone_entry])
+                    .u32();
+                copy_words(e, full, at(0x78), 13);
+                // The rotation scaled by the scale (+0xa8 of the copy).
+                let m0 = lf(e, 0x78);
+                let scale = lf(e, 0xa8);
+                e.mem.set_u32(at(0xac), x87_store32(x87_mul(m0, scale)));
+                let m1 = lf(e, 0x7c);
+                for i in 1..8 {
+                    let scaled = x87_mul(lf(e, 0x78 + 4 * i), scale);
+                    e.mem.set_u32(at(0xac + 4 * i), x87_store32(scaled));
+                }
+                let scaled = x87_mul(scale, lf(e, 0x98));
+                e.mem.set_u32(at(0xcc), x87_store32(scaled));
+                let weights = e.mem.u32(partition + 8);
+                let weight_offset = e.mem.u32(at(0x10));
+                let weight = x87_quiet_bits(e.mem.u32(weights.wrapping_add(weight_offset)));
+                e.mem.set_u32(at(0x10), weight);
+                // The position through the scaled rotation and translation.
+                let (vx, vy, vz) = (lf(e, 0x60), lf(e, 0x64), lf(e, 0x68));
+                let r = |e: &Engine, i: u32| lf(e, 0xac + 4 * i);
+                let r1vy = x87_mul(r(e, 1), vy);
+                let r0vx = x87_mul(r(e, 0), vx);
+                let s = x87_add(r0vx, r1vy);
+                let r2vz = x87_mul(r(e, 2), vz);
+                let p = x87_add(x87_add(r2vz, s), mf(e, 0x9c));
+                e.mem.set_u32(at(0x2c), x87_store32(p));
+                let r4vy = x87_mul(r(e, 4), vy);
+                let r3vx = x87_mul(r(e, 3), vx);
+                let s = x87_add(r4vy, r3vx);
+                let p = x87_add(x87_add(s, x87_mul(r(e, 5), vz)), mf(e, 0xa0));
+                e.mem.set_u32(at(0x30), x87_store32(p));
+                let vyr7 = x87_mul(vy, r(e, 7));
+                let vxr6 = x87_mul(vx, r(e, 6));
+                let s = x87_add(vxr6, vyr7);
+                let vzr8 = x87_mul(vz, mf(e, 0xcc));
+                let p = x87_add(x87_add(s, vzr8), mf(e, 0xa4));
+                e.mem.set_u32(at(0x34), x87_store32(p));
+                // The normal through the unscaled rotation.
+                let (ny, nx, nz) = (lf(e, 0x3c), lf(e, 0x38), lf(e, 0x40));
+                let m1ny = x87_mul(m1, ny);
+                let m0nx = x87_mul(m0, nx);
+                let s0 = x87_add(m0nx, m1ny);
+                let m2nz = x87_mul(lf(e, 0x80), nz);
+                e.mem.set_u32(at(0x50), x87_store32(x87_add(m2nz, s0)));
+                let m4ny = x87_mul(lf(e, 0x88), ny);
+                let m3nx = x87_mul(lf(e, 0x84), nx);
+                let s = x87_add(m4ny, m3nx);
+                let q = x87_add(s, x87_mul(lf(e, 0x8c), nz));
+                e.mem.set_u32(at(0x54), x87_store32(q));
+                let nym7 = x87_mul(ny, mf(e, 0x94));
+                let nxm6 = x87_mul(nx, lf(e, 0x90));
+                let s = x87_add(nxm6, nym7);
+                let nzm8 = x87_mul(nz, lf(e, 0x98));
+                e.mem.set_u32(at(0x58), x87_store32(x87_add(nzm8, s)));
+                // Weighted sums.
+                let w = lf(e, 0x10);
+                e.mem
+                    .set_u32(at(0x44), x87_store32(x87_mul(lf(e, 0x2c), w)));
+                e.mem
+                    .set_u32(at(0x48), x87_store32(x87_mul(lf(e, 0x30), w)));
+                e.mem
+                    .set_u32(at(0x4c), x87_store32(x87_mul(lf(e, 0x34), w)));
+                let sum = x87_add(lf(e, 0x44), mf(e, 0x20));
+                e.mem.set_u32(at(0x20), x87_store32(sum));
+                let sum = x87_add(lf(e, 0x24), mf(e, 0x48));
+                e.mem.set_u32(at(0x24), x87_store32(sum));
+                let sum = x87_add(lf(e, 0x28), mf(e, 0x4c));
+                e.mem.set_u32(at(0x28), x87_store32(sum));
+                e.mem
+                    .set_u32(at(0x6c), x87_store32(x87_mul(lf(e, 0x50), w)));
+                e.mem
+                    .set_u32(at(0x70), x87_store32(x87_mul(lf(e, 0x54), w)));
+                e.mem
+                    .set_u32(at(0x74), x87_store32(x87_mul(w, mf(e, 0x58))));
+                let sum = x87_add(lf(e, 0x6c), mf(e, 0x14));
+                e.mem.set_u32(at(0x14), x87_store32(sum));
+                let sum = x87_add(lf(e, 0x18), mf(e, 0x70));
+                e.mem.set_u32(at(0x18), x87_store32(sum));
+                e.mem.set_u32(at(0x10), weight_offset.wrapping_add(4));
+                let sum = x87_add(lf(e, 0x1c), mf(e, 0x74));
+                e.mem.set_u32(at(0x1c), x87_store32(sum));
+                k += 1;
+                bones_per_vertex = u32::from(e.mem.u16(partition + 0x24));
+                if k >= bones_per_vertex {
+                    break;
+                }
+            }
+        }
+        e.call(NORMALIZE, &args![at(0x14)]);
+        copy_words(e, at(0x20), position.addr(), 3);
+        copy_words(e, at(0x14), normal.addr(), 3);
+    });
+}
+
+/// `00457990` (unnamed; `thiscall` on an `NiPoint3`): its length in `ST0`;
+/// `004a3760` (unnamed; `cdecl`: result, a `float`, a point): the point
+/// times the float, returns the result's address.
+const POINT_LENGTH: u32 = 0x0045_7990;
+const SCALAR_TIMES_POINT: u32 = 0x004a_3760;
+
+/// `rand() / 32767.0` (`FILD`, `FDIV` by the `double` at `01029790`)
+/// rounded to a float.
+fn random_fraction_of(e: &Engine, random: i32) -> u32 {
+    let divisor: f64 = e.global(RAND_DIVISOR);
+    x87_store32(x87_div(f64::from(random), divisor))
+}
+
+// Translated from 00c1dec0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`thiscall`, `RET 0x10`: skinned-emitter
+/// data, geometry, position, velocity; `bool` in `AL`): emission from a
+/// random vertex of a skinned geometry. False without a geometry, for one
+/// that is not triangle based (slot +0x1c), without a skin partition (data
+/// +8) or without a skin instance (+0xbc). A random partition
+/// (`rand() / 32767 * count`, truncated, capped to the last) and a random
+/// vertex of it (a second fraction times its vertex count minus one,
+/// truncated); `fn_00c1d230` gives the skinned position and normal. The
+/// position is taken; with initial velocity type 0 and normals the
+/// velocity becomes the normal times the velocity's length (`00457990`,
+/// `004a3760`). Then `fn_00c1cf50` and true. The fractions live in the
+/// stack words of the data and geometry arguments.
+pub fn fn_00c1dec0(
+    e: &mut Engine,
+    this: Ptr<NiPSysMeshEmitter>,
+    skinned: Ptr,
+    geometry: Ptr,
+    position: Ptr,
+    velocity: Ptr,
+) -> bool {
+    let g = geometry.addr();
+    if g == 0 || e.vcall(g, 0x1c, &args![]).u32() == 0 {
+        return false;
+    }
+    let partitions = e.mem.u32(skinned.addr() + 8);
+    if partitions == 0 {
+        return false;
+    }
+    let count = u32::from(e.mem.u16(partitions + 8));
+    e.with_stack(0x44, |e, frame| {
+        let at = |x: u32| frame.addr() + x;
+        e.mem.set_u32(at(0x34), count);
+        let random = e.call(RAND, &[]).i32();
+        e.mem.set_u32(at(0x38), random as u32);
+        let last = count.wrapping_sub(1);
+        e.mem.set_u32(at(0x38), random_fraction_of(e, random));
+        let product = x87_mul(
+            x87_load32(e.mem.u32(at(0x38))),
+            f64::from(e.mem.u32(at(0x34)) as i32),
+        );
+        let truncated = x87_fistp64_chop(X87Ext::load64(product));
+        e.mem.set_u32(at(0x10), truncated as u32);
+        e.mem.set_u32(at(0x14), (truncated >> 32) as u32);
+        let mut index = truncated as u32;
+        if (index as i32) >= (last as i32) {
+            index = last;
+        }
+        let partitions = e.mem.u32(skinned.addr() + 8);
+        let entry = index
+            .wrapping_mul(0x2c)
+            .wrapping_add(e.mem.u32(partitions + 0xc));
+        let random = e.call(RAND, &[]).i32();
+        e.mem.set_u32(at(0x38), random as u32);
+        let skin = e.mem.u32(g + 0xbc);
+        e.mem.set_u32(at(0x34), random_fraction_of(e, random));
+        if skin == 0 {
+            return false;
+        }
+        copy_words(e, ORIGIN, at(0x18), 3);
+        copy_words(e, ORIGIN, at(0x24), 3);
+        let vertices = u32::from(e.mem.u16(entry.wrapping_add(0x1c))).wrapping_sub(1);
+        e.mem.set_u32(at(0x38), vertices);
+        let product = x87_mul(f64::from(vertices as i32), x87_m32(e.mem.u32(at(0x34))));
+        let truncated = x87_fistp64_chop(X87Ext::load64(product));
+        e.mem.set_u32(at(0x10), truncated as u32);
+        e.mem.set_u32(at(0x14), (truncated >> 32) as u32);
+        fn_00c1d230(
+            e,
+            this,
+            Ptr::new(at(0x18)),
+            Ptr::new(at(0x24)),
+            geometry,
+            Ptr::new(skin),
+            Ptr::new(entry),
+            truncated as u32,
+        );
+        copy_words(e, at(0x18), position.addr(), 3);
+        if e.get(this, NiPSysMeshEmitter::m_eInitVelocityType) == 0
+            && e.mem.u32(e.mem.u32(g + 0xb8) + 0x24) != 0
+        {
+            let length = e.call(POINT_LENGTH, &args![velocity]).f64();
+            e.mem.set_u32(at(0x38), x87_store32(length));
+            let length = x87_quiet_bits(e.mem.u32(at(0x38)));
+            let scaled = e
+                .call(SCALAR_TIMES_POINT, &args![at(0x18), length, at(0x24)])
+                .u32();
+            copy_words(e, scaled, velocity.addr(), 3);
+        }
+        fn_00c1cf50(e, this, geometry, position, velocity);
+        true
+    })
+}
+
+/// The velocity's length as the emit functions compute it inline: the
+/// squared length (`vy*vy`, `vx*vx` and `vz*vz` summed in the exe's order)
+/// rounded into the stack word at `slot`, `_CIsqrt` of it rounded there
+/// again (and copied through `FLD`/`FSTP`), loaded.
+fn velocity_length(e: &mut Engine, velocity: u32, slot: u32) -> f64 {
+    let vy = load_float(e, velocity + 4);
+    let vx = load_float(e, velocity);
+    let vz = load_float(e, velocity + 8);
+    let xx = x87_mul(vx, vx);
+    let yy = x87_mul(vy, vy);
+    let sum = x87_add(yy, xx);
+    let zz = x87_mul(vz, vz);
+    e.mem.set_u32(slot, x87_store32(x87_add(sum, zz)));
+    let root = e.call(SQRT, &args![ld(e.mem.u32(slot))]).f64();
+    e.mem.set_u32(slot, x87_store32(root));
+    let copied = x87_quiet_bits(e.mem.u32(slot));
+    e.mem.set_u32(slot, copied);
+    ld(copied)
+}
+
+// Translated from 00c1dae0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`thiscall`, `RET 0xc`: geometry, position,
+/// velocity; `bool` in `AL`): emission from a random edge. False without a
+/// geometry. A triangle-based geometry (slot +0x1c) gets a random triangle
+/// (`rand() % count`, unsigned; the count from its data's slot +0xa8, a
+/// zero count is a division fault in the exe and a panic here) whose
+/// corners differ (slot +0xac, at most 6 tries moving to the next
+/// triangle; the third corner lands in the stack word of the geometry
+/// argument), then a random edge of it (`rand() % 3`: 0 the first and
+/// second corners, 1 the second and third, 2 the first and third). Any
+/// other geometry must be of kind `011f4a48` (its `NiRTTI` chain; else
+/// false) and gets a random vertex `i` (a fraction times the vertex count
+/// minus one, truncated) and the edge `i`, `i + 1`. False without vertices
+/// (data +0x20). The position is the edge's midpoint; with initial velocity
+/// type 0 and normals (+0x24) the velocity becomes the normalized
+/// (`00525340`) mean of the two normals times the velocity's length
+/// (`_CIsqrt`); with emission type 4 the position is a random point of the
+/// edge instead. Then `fn_00c1cf50` and true. x87 operations one by one in
+/// the exe's order; the stack slots are the exe's.
+pub fn fn_00c1dae0(
+    e: &mut Engine,
+    this: Ptr<NiPSysMeshEmitter>,
+    geometry: Ptr,
+    position: Ptr,
+    velocity: Ptr,
+) -> bool {
+    let g = geometry.addr();
+    if g == 0 {
+        return false;
+    }
+    e.with_stack(0x60, |e, frame| {
+        let at = |x: u32| frame.addr() + x;
+        e.mem.set_u32(at(0x5c), g);
+        e.mem.set_u32(at(0x18), this.addr());
+        if e.vcall(g, 0x1c, &args![]).u32() != 0 {
+            let data = e.mem.u32(g + 0xb8);
+            let count = u32::from(e.vcall(data, 0xa8, &args![]).u16());
+            let random = e.call(RAND, &[]).u32();
+            let mut triangle = random % count;
+            let mut attempt: i32 = 0;
+            loop {
+                let data = e.mem.u32(g + 0xb8);
+                e.vcall(data, 0xac, &args![triangle, at(0x14), at(0x10), at(0x5c)]);
+                let a = e.mem.u16(at(0x14));
+                let b = e.mem.u16(at(0x10));
+                let c = e.mem.u16(at(0x5c));
+                if a != b && a != c && b != c {
+                    break;
+                }
+                triangle += 1;
+                if triangle >= count {
+                    triangle = 0;
+                }
+                attempt += 1;
+                if attempt >= 6 {
+                    break;
+                }
+            }
+            match e.call(RAND, &[]).i32() % 3 {
+                1 => {
+                    let b = u32::from(e.mem.u16(at(0x10)));
+                    let c = u32::from(e.mem.u16(at(0x5c)));
+                    e.mem.set_u32(at(0x14), b);
+                    e.mem.set_u32(at(0x10), c);
+                }
+                2 => {
+                    let c = u32::from(e.mem.u16(at(0x5c)));
+                    e.mem.set_u32(at(0x10), c);
+                }
+                _ => {}
+            }
+        } else {
+            let mut rtti = e.vcall(g, 8, &args![]).u32();
+            loop {
+                if rtti == 0 {
+                    return false;
+                }
+                if rtti == FALLBACK_RTTI {
+                    break;
+                }
+                rtti = e.mem.u32(rtti + 4);
+            }
+            let random = e.call(RAND, &[]).i32();
+            e.mem.set_u32(at(0x5c), random as u32);
+            let data = e.mem.u32(g + 0xb8);
+            let last = u32::from(e.mem.u16(data + 8)).wrapping_sub(1);
+            e.mem.set_u32(at(0x1c), random_fraction_of(e, random));
+            e.mem.set_u32(at(0x5c), last);
+            let product = x87_mul(f64::from(last as i32), x87_m32(e.mem.u32(at(0x1c))));
+            let truncated = x87_fistp64_chop(X87Ext::load64(product));
+            e.mem.set_u32(at(0x1c), truncated as u32);
+            e.mem.set_u32(at(0x20), (truncated >> 32) as u32);
+            let index = truncated as u32;
+            e.mem.set_u32(at(0x14), u32::from(index as u16));
+            e.mem
+                .set_u32(at(0x10), u32::from(index.wrapping_add(1) as u16));
+        }
+        let data = e.mem.u32(g + 0xb8);
+        let vertices = e.mem.u32(data + 0x20);
+        let normals = e.mem.u32(data + 0x24);
+        if vertices == 0 {
+            return false;
+        }
+        let first = u32::from(e.mem.u16(at(0x14))) * 12;
+        copy_words(e, vertices.wrapping_add(first), at(0x28), 3);
+        let second = u32::from(e.mem.u16(at(0x10))) * 12;
+        copy_words(e, vertices.wrapping_add(second), at(0x1c), 3);
+        let lf = |e: &Engine, x: u32| x87_load32(e.mem.u32(at(x)));
+        let mf = |e: &Engine, x: u32| x87_m32(e.mem.u32(at(x)));
+        let sx = x87_add(lf(e, 0x1c), mf(e, 0x28));
+        e.mem.set_u32(at(0x34), x87_store32(sx));
+        let sy = x87_add(lf(e, 0x2c), mf(e, 0x20));
+        e.mem.set_u32(at(0x38), x87_store32(sy));
+        let sz = x87_add(lf(e, 0x30), mf(e, 0x24));
+        e.mem.set_u32(at(0x3c), x87_store32(sz));
+        let half: f64 = e.global(HALF);
+        let p = position.addr();
+        // `FMUL ST1,ST0` (`DC C9`): the sum times 0.5.
+        let mx = x87_store32(x87_mul(lf(e, 0x34), half));
+        e.mem.set_u32(at(0x40), mx);
+        e.mem.set_u32(p, mx);
+        let my = x87_store32(x87_mul(lf(e, 0x38), half));
+        e.mem.set_u32(at(0x44), my);
+        e.mem.set_u32(p + 4, my);
+        let mz = x87_store32(x87_mul(lf(e, 0x3c), half));
+        e.mem.set_u32(at(0x48), mz);
+        e.mem.set_u32(p + 8, mz);
+        if e.get(this, NiPSysMeshEmitter::m_eInitVelocityType) == 0 && normals != 0 {
+            copy_words(e, normals.wrapping_add(first), at(0x40), 3);
+            copy_words(e, normals.wrapping_add(second), at(0x34), 3);
+            let ux = x87_add(lf(e, 0x34), mf(e, 0x40));
+            e.mem.set_u32(at(0x4c), x87_store32(ux));
+            let uy = x87_add(lf(e, 0x44), mf(e, 0x38));
+            e.mem.set_u32(at(0x50), x87_store32(uy));
+            let uz = x87_add(lf(e, 0x48), mf(e, 0x3c));
+            e.mem.set_u32(at(0x54), x87_store32(uz));
+            let nx = x87_store32(x87_mul(lf(e, 0x4c), half));
+            e.mem.set_u32(at(0x34), nx);
+            let ny = x87_store32(x87_mul(lf(e, 0x50), half));
+            e.mem.set_u32(at(0x38), ny);
+            let nz = x87_store32(x87_mul(half, mf(e, 0x54)));
+            e.mem.set_u32(at(0x3c), nz);
+            e.call(NORMALIZE_FAST, &args![at(0x34)]);
+            let v = velocity.addr();
+            let length = velocity_length(e, v, at(0x5c));
+            let x = x87_store32(x87_mul(lf(e, 0x34), length));
+            e.mem.set_u32(at(0x4c), x);
+            e.mem.set_u32(v, x);
+            let y = x87_store32(x87_mul(lf(e, 0x38), length));
+            e.mem.set_u32(at(0x50), y);
+            e.mem.set_u32(v + 4, y);
+            let z = x87_store32(x87_mul(length, mf(e, 0x3c)));
+            e.mem.set_u32(at(0x54), z);
+            e.mem.set_u32(v + 8, z);
+        }
+        if e.get(this, NiPSysMeshEmitter::m_eEmissionType) == 4 {
+            let random = e.call(RAND, &[]).i32();
+            e.mem.set_u32(at(0x5c), random as u32);
+            e.mem.set_u32(at(0x5c), random_fraction_of(e, random));
+            let (ax, ay, az) = (lf(e, 0x28), lf(e, 0x2c), lf(e, 0x30));
+            e.mem
+                .set_u32(at(0x4c), x87_store32(x87_sub(lf(e, 0x1c), ax)));
+            e.mem
+                .set_u32(at(0x50), x87_store32(x87_sub(lf(e, 0x20), ay)));
+            e.mem
+                .set_u32(at(0x54), x87_store32(x87_sub(lf(e, 0x24), az)));
+            let fraction = lf(e, 0x5c);
+            e.mem
+                .set_u32(at(0x40), x87_store32(x87_mul(lf(e, 0x4c), fraction)));
+            e.mem
+                .set_u32(at(0x44), x87_store32(x87_mul(lf(e, 0x50), fraction)));
+            e.mem
+                .set_u32(at(0x48), x87_store32(x87_mul(fraction, mf(e, 0x54))));
+            let x = x87_store32(x87_add(ax, lf(e, 0x40)));
+            e.mem.set_u32(at(0x4c), x);
+            e.mem.set_u32(p, x);
+            let y = x87_store32(x87_add(ay, mf(e, 0x44)));
+            e.mem.set_u32(at(0x50), y);
+            e.mem.set_u32(p + 4, y);
+            let z = x87_store32(x87_add(az, mf(e, 0x48)));
+            e.mem.set_u32(at(0x54), z);
+            e.mem.set_u32(p + 8, z);
+        }
+        fn_00c1cf50(e, this, geometry, position, velocity);
+        true
+    })
+}
+
+/// `00639780` (unnamed): `rand() / 32767` as a float, in `ST0`.
+const RANDOM_UNIT: u32 = 0x0063_9780;
+/// `0053d280` (unnamed; `thiscall` on an `NiPoint3`, `RET 8`: result, a
+/// `float`): the point divided by the float into the result.
+const POINT_DIVIDED: u32 = 0x0053_d280;
+/// `3.0` (`01017718`) and `2.0` (`010162c0`), `float`s.
+const THREE: u32 = 0x0101_7718;
+const TWO: u32 = 0x0101_62c0;
+
+/// The random skin partition both skinned emitters pick: `rand() / 32767`
+/// (into the stack word at `fraction_slot`) times the partition count
+/// (kept at `count_slot`, the truncated quadword stored there too),
+/// truncated and capped to the last. Returns the partition's entry
+/// (0x2c bytes each).
+fn random_partition(e: &mut Engine, partitions: u32, count_slot: u32, fraction_slot: u32) -> u32 {
+    let count = u32::from(e.mem.u16(partitions + 8));
+    e.mem.set_u32(count_slot, count);
+    let random = e.call(RAND, &[]).i32();
+    e.mem.set_u32(fraction_slot, random as u32);
+    e.mem.set_u32(fraction_slot, random_fraction_of(e, random));
+    let product = x87_mul(
+        x87_load32(e.mem.u32(fraction_slot)),
+        f64::from(e.mem.u32(count_slot) as i32),
+    );
+    let truncated = x87_fistp64_chop(X87Ext::load64(product));
+    e.mem.set_u32(count_slot, truncated as u32);
+    e.mem.set_u32(count_slot + 4, (truncated >> 32) as u32);
+    let last = count.wrapping_sub(1);
+    let mut index = truncated as u32;
+    if (index as i32) >= (last as i32) {
+        index = last;
+    }
+    index
+        .wrapping_mul(0x2c)
+        .wrapping_add(e.mem.u32(partitions + 0xc))
+}
+
+/// The random triangle index both skinned emitters pick from a partition
+/// entry with `triangles` (kept at `count_slot`): `00639780` times the
+/// count, truncated (the quadword at `index_slot`) and capped to the last.
+fn random_triangle(e: &mut Engine, triangles: u32, count_slot: u32, index_slot: u32) -> u32 {
+    e.mem.set_u32(count_slot, triangles);
+    let unit = e.call(RANDOM_UNIT, &[]).f64();
+    let product = x87_mul(unit, f64::from(e.mem.u32(count_slot) as i32));
+    let truncated = x87_fistp64_chop(X87Ext::load64(product));
+    e.mem.set_u32(index_slot, truncated as u32);
+    e.mem.set_u32(index_slot + 4, (truncated >> 32) as u32);
+    let last = triangles.wrapping_sub(1);
+    let mut index = truncated as u32;
+    if (index as i32) >= (last as i32) {
+        index = last;
+    }
+    index
+}
+
+/// The corners of triangle `index` of a partition entry: consecutive list
+/// entries for a strip partition (+0x22 non-zero), else entries `3 * index`
+/// to `3 * index + 2` of the list (+0x14).
+fn triangle_corners(e: &Engine, entry: u32, index: u32) -> [u32; 3] {
+    let list = e.mem.u32(entry.wrapping_add(0x14));
+    let first = if e.mem.u16(entry.wrapping_add(0x22)) != 0 {
+        index
+    } else {
+        index.wrapping_mul(3)
+    };
+    let corner = |k: u32| u32::from(e.mem.u16(list.wrapping_add(2 * first.wrapping_add(k))));
+    [corner(0), corner(1), corner(2)]
+}
+
+// Translated from 00c1e080 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`thiscall`, `RET 0x10`: skinned-emitter
+/// data, geometry, position, velocity; `bool` in `AL`): emission from a
+/// random face of a skinned geometry. False without a geometry, for one
+/// that is not triangle based (slot +0x1c) or without a skin partition. A
+/// random partition; one without triangles (+0x1e) emits by vertex
+/// instead (`fn_00c1dec0`, its answer). Otherwise a random triangle (false
+/// without a skin instance), its three corners skinned (`fn_00c1d230`, from
+/// the origin), the position their centroid (`(a + b) + c` divided by 3,
+/// `0053d280`); with initial velocity type 0 the velocity becomes the
+/// normalized (`00525340`) mean normal times the velocity's length
+/// (`00457990`, `004a3760`); with emission type 3 the position is a random
+/// point of the face (the square-root step `fn_00c1ced0` of one
+/// `00639780` fraction, a second along the second edge). Then
+/// `fn_00c1cf50` and true. The stack slots are the exe's.
+pub fn fn_00c1e080(
+    e: &mut Engine,
+    this: Ptr<NiPSysMeshEmitter>,
+    skinned: Ptr,
+    geometry: Ptr,
+    position: Ptr,
+    velocity: Ptr,
+) -> bool {
+    let g = geometry.addr();
+    if g == 0 || e.vcall(g, 0x1c, &args![]).u32() == 0 {
+        return false;
+    }
+    let partitions = e.mem.u32(skinned.addr() + 8);
+    if partitions == 0 {
+        return false;
+    }
+    e.with_stack(0x84, |e, frame| {
+        let at = |x: u32| frame.addr() + x;
+        e.mem.set_u32(at(0x74), skinned.addr());
+        e.mem.set_u32(at(0x78), g);
+        let entry = random_partition(e, partitions, at(0x10), at(0x78));
+        let triangles = u32::from(e.mem.u16(entry.wrapping_add(0x1e)));
+        if triangles == 0 {
+            return fn_00c1dec0(e, this, skinned, geometry, position, velocity);
+        }
+        let index = random_triangle(e, triangles, at(0x74), at(0x10));
+        let skin = e.mem.u32(g + 0xbc);
+        if skin == 0 {
+            return false;
+        }
+        let [c0, c1, c2] = triangle_corners(e, entry, index);
+        e.mem.set_u32(at(0x74), c0);
+        e.mem.set_u32(at(0x78), c1);
+        e.mem.set_u32(at(0x10), c2);
+        // P0 +0x1c, P1 +0x28, P2 +0x34; N0 +0x40, N1 +0x4c, N2 +0x58.
+        for base in [0x1c, 0x28, 0x34, 0x40, 0x4c, 0x58] {
+            copy_words(e, ORIGIN, at(base), 3);
+        }
+        let skin = Ptr::new(skin);
+        let entry_ptr = Ptr::new(entry);
+        for (point, normal, slot) in [(0x1c, 0x40, 0x74), (0x28, 0x4c, 0x78), (0x34, 0x58, 0x10)] {
+            let corner = e.mem.u32(at(slot));
+            fn_00c1d230(
+                e,
+                this,
+                Ptr::new(at(point)),
+                Ptr::new(at(normal)),
+                geometry,
+                skin,
+                entry_ptr,
+                corner,
+            );
+        }
+        let lf = |e: &Engine, x: u32| x87_load32(e.mem.u32(at(x)));
+        let mf = |e: &Engine, x: u32| x87_m32(e.mem.u32(at(x)));
+        let three = x87_quiet_bits(e.global::<u32>(THREE));
+        // (P1 + P0) + P2, divided by 3 into +0x10.
+        e.mem
+            .set_u32(at(0x10), x87_store32(x87_add(lf(e, 0x28), mf(e, 0x1c))));
+        e.mem
+            .set_u32(at(0x14), x87_store32(x87_add(lf(e, 0x20), mf(e, 0x2c))));
+        e.mem
+            .set_u32(at(0x18), x87_store32(x87_add(lf(e, 0x24), mf(e, 0x30))));
+        e.mem
+            .set_u32(at(0x64), x87_store32(x87_add(lf(e, 0x10), mf(e, 0x34))));
+        e.mem
+            .set_u32(at(0x68), x87_store32(x87_add(lf(e, 0x38), mf(e, 0x14))));
+        e.mem
+            .set_u32(at(0x6c), x87_store32(x87_add(lf(e, 0x3c), mf(e, 0x18))));
+        e.call(POINT_DIVIDED, &args![at(0x64), at(0x10), three]);
+        copy_words(e, at(0x10), position.addr(), 3);
+        if e.get(this, NiPSysMeshEmitter::m_eInitVelocityType) == 0 {
+            // (N1 + N0) + N2, divided by 3 into +0x58, normalized.
+            e.mem
+                .set_u32(at(0x10), x87_store32(x87_add(lf(e, 0x4c), mf(e, 0x40))));
+            e.mem
+                .set_u32(at(0x14), x87_store32(x87_add(lf(e, 0x44), mf(e, 0x50))));
+            e.mem
+                .set_u32(at(0x18), x87_store32(x87_add(lf(e, 0x48), mf(e, 0x54))));
+            e.mem
+                .set_u32(at(0x64), x87_store32(x87_add(lf(e, 0x10), mf(e, 0x58))));
+            e.mem
+                .set_u32(at(0x68), x87_store32(x87_add(lf(e, 0x5c), mf(e, 0x14))));
+            e.mem
+                .set_u32(at(0x6c), x87_store32(x87_add(lf(e, 0x60), mf(e, 0x18))));
+            e.call(POINT_DIVIDED, &args![at(0x64), at(0x58), three]);
+            e.call(NORMALIZE_FAST, &args![at(0x58)]);
+            let length = e.call(POINT_LENGTH, &args![velocity]).f64();
+            e.mem.set_u32(at(0x74), x87_store32(length));
+            let length = x87_quiet_bits(e.mem.u32(at(0x74)));
+            let scaled = e
+                .call(SCALAR_TIMES_POINT, &args![at(0x64), length, at(0x58)])
+                .u32();
+            copy_words(e, scaled, velocity.addr(), 3);
+        }
+        if e.get(this, NiPSysMeshEmitter::m_eEmissionType) == 3 {
+            // Edges: P1 - P0 into +0x10, P2 - P0 into +0x64.
+            let (p0x, p0y, p0z) = (lf(e, 0x1c), lf(e, 0x20), lf(e, 0x24));
+            e.mem
+                .set_u32(at(0x10), x87_store32(x87_sub(lf(e, 0x28), p0x)));
+            e.mem
+                .set_u32(at(0x14), x87_store32(x87_sub(lf(e, 0x2c), p0y)));
+            e.mem
+                .set_u32(at(0x18), x87_store32(x87_sub(lf(e, 0x30), p0z)));
+            e.mem
+                .set_u32(at(0x64), x87_store32(x87_sub(lf(e, 0x34), p0x)));
+            e.mem
+                .set_u32(at(0x68), x87_store32(x87_sub(mf(e, 0x38), p0y)));
+            e.mem
+                .set_u32(at(0x6c), x87_store32(x87_sub(mf(e, 0x3c), p0z)));
+            let first = e.call(RANDOM_UNIT, &[]).f64();
+            let root = fn_00c1ced0(e, f32::from_bits(x87_store32(first)));
+            e.mem.set_u32(at(0x74), x87_store32(f64::from(root)));
+            let second = e.call(RANDOM_UNIT, &[]).f64();
+            let q = e
+                .call(
+                    SCALAR_TIMES_POINT,
+                    &args![at(0x4c), x87_store32(second), at(0x64)],
+                )
+                .u32();
+            for k in 0..3 {
+                let d = x87_sub(x87_load32(e.mem.u32(q + 4 * k)), mf(e, 0x10 + 4 * k));
+                e.mem.set_u32(at(0x64 + 4 * k), x87_store32(d));
+            }
+            let s = x87_quiet_bits(e.mem.u32(at(0x74)));
+            let m = e
+                .call(SCALAR_TIMES_POINT, &args![at(0x40), s, at(0x64)])
+                .u32();
+            for k in 0..3 {
+                let o = x87_add(x87_load32(e.mem.u32(m + 4 * k)), mf(e, 0x1c + 4 * k));
+                e.mem.set_u32(at(0x58 + 4 * k), x87_store32(o));
+            }
+            let p = position.addr();
+            for k in 0..3 {
+                let value = x87_store32(x87_add(lf(e, 0x58 + 4 * k), mf(e, 0x10 + 4 * k)));
+                e.mem.set_u32(at(0x4c + 4 * k), value);
+                e.mem.set_u32(p + 4 * k, value);
+            }
+        }
+        fn_00c1cf50(e, this, geometry, position, velocity);
+        true
+    })
+}
+
+// Translated from 00c1e4e0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`thiscall`, `RET 0x10`: skinned-emitter
+/// data, geometry, position, velocity; `bool` in `AL`): emission from a
+/// random edge of a skinned geometry. False without a geometry, for one
+/// that is not triangle based (slot +0x1c) or without a skin partition. A
+/// random partition; one without triangles (+0x1e) emits by vertex
+/// instead (`fn_00c1dec0`, its answer). Otherwise a random triangle (false
+/// without a skin instance) and a random edge of it (`rand() % 3`: 0 the
+/// first and second corners, 1 the second and third, 2 the first and
+/// third); both ends skinned (`fn_00c1d230`, from the origin), the position
+/// their midpoint (`a + b` divided by 2, `0053d280`); with initial velocity
+/// type 0 the velocity becomes the normalized (`00525340`) mean normal
+/// times the velocity's length (`00457990`, `004a3760`); with emission
+/// type 4 the position is a random point of the edge (an `00639780`
+/// fraction). Then `fn_00c1cf50` and true. The stack slots are the exe's.
+pub fn fn_00c1e4e0(
+    e: &mut Engine,
+    this: Ptr<NiPSysMeshEmitter>,
+    skinned: Ptr,
+    geometry: Ptr,
+    position: Ptr,
+    velocity: Ptr,
+) -> bool {
+    let g = geometry.addr();
+    if g == 0 || e.vcall(g, 0x1c, &args![]).u32() == 0 {
+        return false;
+    }
+    let partitions = e.mem.u32(skinned.addr() + 8);
+    if partitions == 0 {
+        return false;
+    }
+    e.with_stack(0x6c, |e, frame| {
+        let at = |x: u32| frame.addr() + x;
+        e.mem.set_u32(at(0x5c), skinned.addr());
+        e.mem.set_u32(at(0x60), g);
+        let entry = random_partition(e, partitions, at(0x10), at(0x5c));
+        let triangles = u32::from(e.mem.u16(entry.wrapping_add(0x1e)));
+        if triangles == 0 {
+            return fn_00c1dec0(e, this, skinned, geometry, position, velocity);
+        }
+        let index = random_triangle(e, triangles, at(0x5c), at(0x10));
+        let skin = e.mem.u32(g + 0xbc);
+        e.mem.set_u32(at(0x10), skin);
+        if skin == 0 {
+            return false;
+        }
+        let [c0, c1, c2] = triangle_corners(e, entry, index);
+        e.mem.set_u32(at(0x5c), c2);
+        let (first, second) = match e.call(RAND, &[]).i32() % 3 {
+            1 => (c1, c2),
+            2 => (c0, c2),
+            _ => (c0, c1),
+        };
+        // P0 +0x1c, P1 +0x28; N0 +0x34, N1 +0x40.
+        for base in [0x1c, 0x28, 0x34, 0x40] {
+            copy_words(e, ORIGIN, at(base), 3);
+        }
+        let skin = Ptr::new(skin);
+        let entry_ptr = Ptr::new(entry);
+        for (point, normal, corner) in [(0x1c, 0x34, first), (0x28, 0x40, second)] {
+            fn_00c1d230(
+                e,
+                this,
+                Ptr::new(at(point)),
+                Ptr::new(at(normal)),
+                geometry,
+                skin,
+                entry_ptr,
+                corner,
+            );
+        }
+        let lf = |e: &Engine, x: u32| x87_load32(e.mem.u32(at(x)));
+        let mf = |e: &Engine, x: u32| x87_m32(e.mem.u32(at(x)));
+        let two = x87_quiet_bits(e.global::<u32>(TWO));
+        // P1 + P0 into +0x10, divided by 2 into +0x4c.
+        e.mem
+            .set_u32(at(0x10), x87_store32(x87_add(lf(e, 0x28), mf(e, 0x1c))));
+        e.mem
+            .set_u32(at(0x14), x87_store32(x87_add(lf(e, 0x20), mf(e, 0x2c))));
+        e.mem
+            .set_u32(at(0x18), x87_store32(x87_add(lf(e, 0x24), mf(e, 0x30))));
+        e.call(POINT_DIVIDED, &args![at(0x10), at(0x4c), two]);
+        copy_words(e, at(0x4c), position.addr(), 3);
+        if e.get(this, NiPSysMeshEmitter::m_eInitVelocityType) == 0 {
+            // N1 + N0 into +0x4c, divided by 2 into +0x40, normalized.
+            e.mem
+                .set_u32(at(0x4c), x87_store32(x87_add(lf(e, 0x40), mf(e, 0x34))));
+            e.mem
+                .set_u32(at(0x50), x87_store32(x87_add(lf(e, 0x38), mf(e, 0x44))));
+            e.mem
+                .set_u32(at(0x54), x87_store32(x87_add(lf(e, 0x3c), mf(e, 0x48))));
+            e.call(POINT_DIVIDED, &args![at(0x4c), at(0x40), two]);
+            e.call(NORMALIZE_FAST, &args![at(0x40)]);
+            let length = e.call(POINT_LENGTH, &args![velocity]).f64();
+            e.mem.set_u32(at(0x60), x87_store32(length));
+            let length = x87_quiet_bits(e.mem.u32(at(0x60)));
+            let scaled = e
+                .call(SCALAR_TIMES_POINT, &args![at(0x4c), length, at(0x40)])
+                .u32();
+            copy_words(e, scaled, velocity.addr(), 3);
+        }
+        if e.get(this, NiPSysMeshEmitter::m_eEmissionType) == 4 {
+            for k in 0..3 {
+                let d = x87_sub(lf(e, 0x28 + 4 * k), mf(e, 0x1c + 4 * k));
+                e.mem.set_u32(at(0x40 + 4 * k), x87_store32(d));
+            }
+            let unit = e.call(RANDOM_UNIT, &[]).f64();
+            e.mem.set_u32(at(0x60), x87_store32(unit));
+            let fraction = lf(e, 0x60);
+            e.mem
+                .set_u32(at(0x34), x87_store32(x87_mul(lf(e, 0x40), fraction)));
+            e.mem
+                .set_u32(at(0x38), x87_store32(x87_mul(lf(e, 0x44), fraction)));
+            e.mem
+                .set_u32(at(0x3c), x87_store32(x87_mul(fraction, mf(e, 0x48))));
+            let p = position.addr();
+            for k in 0..3 {
+                let value = x87_store32(x87_add(lf(e, 0x34 + 4 * k), mf(e, 0x1c + 4 * k)));
+                e.mem.set_u32(at(0x40 + 4 * k), value);
+                e.mem.set_u32(p + 4 * k, value);
+            }
+        }
+        fn_00c1cf50(e, this, geometry, position, velocity);
+        true
+    })
+}
+
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(
+            0x00c1_e080,
+            fn_00c1e080(Ptr<NiPSysMeshEmitter>, Ptr, Ptr, Ptr, Ptr) -> bool
+        ),
+        entry!(
+            0x00c1_e4e0,
+            fn_00c1e4e0(Ptr<NiPSysMeshEmitter>, Ptr, Ptr, Ptr, Ptr) -> bool
+        ),
+        entry!(
+            0x00c1_dae0,
+            fn_00c1dae0(Ptr<NiPSysMeshEmitter>, Ptr, Ptr, Ptr) -> bool
+        ),
+        entry!(
+            0x00c1_dec0,
+            fn_00c1dec0(Ptr<NiPSysMeshEmitter>, Ptr, Ptr, Ptr, Ptr) -> bool
+        ),
+        entry!(
+            0x00c1_d230,
+            fn_00c1d230(Ptr<NiPSysMeshEmitter>, Ptr, Ptr, Ptr, Ptr, Ptr, u32)
+        ),
+        entry!(
+            0x00a8_5520,
+            ni_matrix3_operator_times_ov2(Ptr, Ptr, f32) -> Ptr
+        ),
+        entry!(0x00c1_d170, fn_00c1d170(Ptr, Ptr) -> bool),
+        entry!(
+            0x00c1_d6b0,
+            ni_p_sys_mesh_emitter_is_equal(Ptr<NiPSysMeshEmitter>, Ptr<NiPSysMeshEmitter>) -> bool
+        ),
+        entry!(0x00c1_d980, fn_00c1d980(Ptr, u32) -> Ptr),
+        entry!(0x00c1_d9b0, fn_00c1d9b0(Ptr, u32) -> Ptr),
+        entry!(
+            0x00c1_d9e0,
+            fn_00c1d9e0(Ptr<NiPSysMeshEmitter>, Ptr, Ptr, Ptr) -> bool
+        ),
+        entry!(
+            0x00c1_e8e0,
+            ni_p_sys_mesh_emitter_save_binary(Ptr<NiPSysMeshEmitter>, Ptr)
+        ),
+        entry!(
+            0x00c1_f050,
+            ni_p_sys_mesh_emitter_get_viewer_strings(Ptr<NiPSysMeshEmitter>, Ptr)
+        ),
         entry!(0x00c1_ced0, fn_00c1ced0(f32) -> f32),
         entry!(0x00c1_cf20, fn_00c1cf20(Ptr) -> Ptr),
         entry!(
@@ -1907,5 +3185,747 @@ mod emitter_tests {
         e.register(GET_NUMBER_OF_LINK_IDS, |_, _| word(0));
         e.call(0x00c1_f990, &args![this, 0x7000u32]);
         assert_eq!(calls_to(&e, GET_OBJECT_FROM_LINK_ID).len(), 2);
+    }
+}
+
+#[cfg(test)]
+mod emitter_more_tests {
+    use super::*;
+    use crate::units::niparticle::nipsysmodifier::test_stream;
+    use crate::units::niparticle::nipsysmodifier::test_stream::calls_to;
+
+    fn word(value: u32) -> Ret {
+        Ret {
+            eax: value,
+            ..Ret::default()
+        }
+    }
+
+    fn f(v: f32) -> u32 {
+        v.to_bits()
+    }
+
+    #[test]
+    fn matrix_times_float_scales_every_entry() {
+        let mut e = Engine::new();
+        let matrix = e.mem.alloc(0x24);
+        for i in 0..9 {
+            e.mem.set_f32(matrix + 4 * i, i as f32);
+        }
+        e.mem.set_u32(matrix + 0x20, 0x7f80_0001);
+        let result = e.mem.alloc(0x24);
+        assert_eq!(
+            e.call(0x00a8_5520, &args![matrix, result, 2.0f32]).u32(),
+            result
+        );
+        for i in 0..8 {
+            assert_eq!(e.mem.f32(result + 4 * i), 2.0 * i as f32);
+        }
+        assert_eq!(e.mem.u32(result + 0x20), 0x7fc0_0001);
+    }
+
+    /// A geometry whose triangle test (slot +0x1c) answers `tri`, with data
+    /// at +0xb8 and an optional skin instance at +0xbc.
+    fn geometry(e: &mut Engine, tri: u32, skin: u32) -> (u32, u32) {
+        const IS_TRI: u32 = 0x0f90_0000;
+        e.register_double(IS_TRI, move |_, _| word(tri));
+        let vtable = e.mem.alloc(0x100);
+        e.mem.set_u32(vtable + 0x1c, IS_TRI);
+        let geometry = e.mem.alloc(0x100);
+        e.mem.set_u32(geometry, vtable);
+        let data = e.mem.alloc(0x100);
+        e.mem.set_u32(geometry + 0xb8, data);
+        e.mem.set_u32(geometry + 0xbc, skin);
+        (geometry, data)
+    }
+
+    #[test]
+    fn partition_refresh_takes_or_makes_the_partition() {
+        let mut e = Engine::new();
+        e.register(NI_POINTER_ASSIGN, |_, _| Ret::default());
+        let this = e.mem.alloc(0xc);
+        // Not triangle based: false.
+        let (g, _) = geometry(&mut e, 0, 0);
+        assert!(!e.call(0x00c1_d170, &args![this, g]).bool());
+        assert!(!e.call(0x00c1_d170, &args![this, 0u32]).bool());
+        // An existing partition is assigned.
+        let skin = e.mem.alloc(0x10);
+        e.mem.set_u32(skin + 0xc, 0x4400);
+        let (g, data) = geometry(&mut e, 1, skin);
+        e.call_log = Some(vec![]);
+        assert!(e.call(0x00c1_d170, &args![this, g]).bool());
+        assert_eq!(
+            calls_to(&e, NI_POINTER_ASSIGN),
+            vec![vec![this + 8, 0x4400]]
+        );
+        // Without one, a partition is made from the skin data (2 bones: 4).
+        e.mem.set_u32(skin + 0xc, 0);
+        let skin_data = e.mem.alloc(0x50);
+        e.mem.set_u32(skin_data + 0x44, 2);
+        e.mem.set_u32(skin + 8, skin_data);
+        e.register(NI_ALLOCATE, |e, a| word(e.mem.alloc(a[0])));
+        e.register(SKIN_PARTITION_CONSTRUCTOR, |_, a| word(a[0]));
+        e.register(SKIN_PARTITION_MAKE, |_, _| word(1));
+        e.call_log = Some(vec![]);
+        assert!(e.call(0x00c1_d170, &args![this, g]).bool());
+        let made = calls_to(&e, SKIN_PARTITION_MAKE);
+        let partition = made[0][0];
+        assert_eq!(made[0][1..], [data, skin_data, 4, 4, 0, 0, 0, 0]);
+        assert_eq!(
+            calls_to(&e, NI_POINTER_ASSIGN),
+            vec![vec![this + 8, partition]]
+        );
+        e.register(SKIN_PARTITION_MAKE, |_, _| word(0));
+        e.call_log = Some(vec![]);
+        assert!(!e.call(0x00c1_d170, &args![this, g]).bool());
+        assert!(calls_to(&e, NI_POINTER_ASSIGN).is_empty());
+        // No skin data: false.
+        e.mem.set_u32(skin + 8, 0);
+        assert!(!e.call(0x00c1_d170, &args![this, g]).bool());
+    }
+
+    #[test]
+    fn is_equal_checks_geometries_types_and_axis() {
+        const GEOMETRY_IS_EQUAL: u32 = 0x0f90_0010;
+        let mut e = Engine::new();
+        e.register(EMITTER_IS_EQUAL, |_, _| word(1));
+        e.register(POINT_NOT_EQUAL, |_, _| word(0));
+        e.register(GEOMETRY_IS_EQUAL, |e, a| {
+            word(u32::from(e.mem.u32(a[0] + 8) == e.mem.u32(a[1] + 8)))
+        });
+        let vtable = e.mem.alloc(0x60);
+        e.mem.set_u32(vtable + 0x5c, GEOMETRY_IS_EQUAL);
+        let geometry = |e: &mut Engine, tag: u32| {
+            let g = e.mem.alloc(0x10);
+            e.mem.set_u32(g, vtable);
+            e.mem.set_u32(g + 8, tag);
+            g
+        };
+        let emitter = |e: &mut Engine, elements: &[u32]| {
+            let this = e.new_object::<NiPSysMeshEmitter>();
+            let base = e.mem.alloc(8);
+            for (i, g) in elements.iter().enumerate() {
+                e.mem.set_u32(base + 4 * i as u32, *g);
+            }
+            e.mem.set_u32(this.addr() + 0x58, base);
+            e.mem.set_u16(this.addr() + 0x5e, elements.len() as u16);
+            this
+        };
+        let g1 = geometry(&mut e, 1);
+        let g2 = geometry(&mut e, 1);
+        let a = emitter(&mut e, &[g1, 0]);
+        let b = emitter(&mut e, &[g2, 0]);
+        e.call_log = Some(vec![]);
+        assert!(e.call(0x00c1_d6b0, &args![a, b]).bool());
+        assert_eq!(
+            calls_to(&e, POINT_NOT_EQUAL),
+            vec![vec![a.addr() + 0x7c, b.addr() + 0x7c]]
+        );
+        e.mem.set_u32(g2 + 8, 2);
+        assert!(!e.call(0x00c1_d6b0, &args![a, b]).bool());
+        let c = emitter(&mut e, &[g1, g1]);
+        assert!(!e.call(0x00c1_d6b0, &args![a, c]).bool());
+        assert!(!e.call(0x00c1_d6b0, &args![c, a]).bool());
+        let d = emitter(&mut e, &[g1]);
+        assert!(!e.call(0x00c1_d6b0, &args![a, d]).bool());
+        let a2 = emitter(&mut e, &[g1, 0]);
+        e.set(a2, NiPSysMeshEmitter::m_eEmissionType, 3);
+        assert!(!e.call(0x00c1_d6b0, &args![a, a2]).bool());
+        e.register(POINT_NOT_EQUAL, |_, _| word(1));
+        assert!(!e.call(0x00c1_d6b0, &args![a, a]).bool());
+        e.register(EMITTER_IS_EQUAL, |_, _| word(0));
+        assert!(!e.call(0x00c1_d6b0, &args![a, a]).bool());
+    }
+
+    #[test]
+    fn array_destructors_free_the_elements_and_the_array() {
+        for (address, vtable) in [
+            (0x00c1_d980u32, ARRAY_BASE_VTABLE),
+            (0x00c1_d9b0, SKINNED_ARRAY_DESTROYED_VTABLE),
+        ] {
+            for flags in [0u32, 1] {
+                let mut e = Engine::new();
+                e.register(NI_FREE, |_, _| Ret::default());
+                e.register(MEMORY_FREE, |_, _| Ret::default());
+                let this = e.mem.alloc(0x10);
+                e.mem.set_u32(this + 4, 0x5500);
+                e.call_log = Some(vec![]);
+                assert_eq!(e.call(address, &args![this, flags]).u32(), this);
+                assert_eq!(e.mem.u32(this), vtable);
+                assert_eq!(calls_to(&e, NI_FREE), vec![vec![0x5500]]);
+                let frees = calls_to(&e, MEMORY_FREE);
+                if flags == 1 {
+                    assert_eq!(frees, vec![vec![MEMORY_MANAGER, this]]);
+                } else {
+                    assert!(frees.is_empty());
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn vertex_emission_uses_the_vertex_and_its_normal() {
+        let mut e = Engine::new();
+        e.register(INVERT_NON_UNIFORM, |_, _| Ret::default());
+        e.register(TRANSFORM_PRODUCT, |_, _| Ret::default());
+        e.register(TRANSFORM_POINT, |_, a| word(a[2]));
+        e.register(ROTATE_VECTOR, |_, a| word(a[2]));
+        e.register(SQRT, |_, a| {
+            let value = f64::from_bits(u64::from(a[0]) | u64::from(a[1]) << 32);
+            value.sqrt().into_ret()
+        });
+        e.register(RAND, |_, _| word(7));
+        let (g, data) = geometry(&mut e, 1, 0);
+        e.mem.set_u16(data + 8, 3);
+        let this = e.new_object::<NiPSysMeshEmitter>();
+        let system = e.mem.alloc(0x100);
+        e.set(this, NiPSysMeshEmitter::m_pkTarget, system);
+        let position = e.mem.alloc(12);
+        let velocity = e.mem.alloc(12);
+        // No vertices: false.
+        assert!(!e
+            .call(0x00c1_d9e0, &args![this, g, position, velocity])
+            .bool());
+        let vertices = e.mem.alloc(36);
+        e.mem.set_f32(vertices + 12, 4.0);
+        e.mem.set_u32(data + 0x20, vertices);
+        let normals = e.mem.alloc(36);
+        e.mem.set_f32(normals + 12 + 8, 1.0);
+        e.mem.set_u32(data + 0x24, normals);
+        e.mem.set_f32(velocity, 3.0);
+        e.mem.set_f32(velocity + 4, 4.0);
+        // 7 % 3 = 1: vertex 1, its normal (0, 0, 1) times the length 5.
+        assert!(e
+            .call(0x00c1_d9e0, &args![this, g, position, velocity])
+            .bool());
+        assert_eq!(e.mem.f32(position), 4.0);
+        assert_eq!(
+            [
+                e.mem.u32(velocity),
+                e.mem.u32(velocity + 4),
+                e.mem.u32(velocity + 8)
+            ],
+            [0, 0, f(5.0)]
+        );
+        // A random initial velocity keeps the velocity.
+        e.set(this, NiPSysMeshEmitter::m_eInitVelocityType, 3);
+        e.mem.set_f32(velocity, 3.0);
+        assert!(e
+            .call(0x00c1_d9e0, &args![this, g, position, velocity])
+            .bool());
+        assert_eq!(e.mem.f32(velocity), 3.0);
+    }
+
+    #[test]
+    fn save_binary_writes_geometries_types_and_axis() {
+        const SAVE_LINK: u32 = 0x0f90_0020;
+        let mut e = Engine::new();
+        e.register(EMITTER_SAVE_BINARY, |_, _| Ret::default());
+        e.register(SAVE_LINK, |_, _| Ret::default());
+        e.register(POINT_SAVE_BINARY, |_, _| Ret::default());
+        let writes = test_stream::writes(&mut e);
+        let stream = test_stream::new_output(&mut e);
+        let vtable = e.mem.alloc(0x40);
+        e.mem.set_u32(stream, vtable);
+        e.mem.set_u32(vtable + STREAM_SAVE_LINK_ID, SAVE_LINK);
+        let this = e.new_object::<NiPSysMeshEmitter>();
+        let base = e.mem.alloc(8);
+        e.mem.set_u32(base, 0x11);
+        e.mem.set_u32(this.addr() + 0x58, base);
+        e.mem.set_u16(this.addr() + 0x5e, 2);
+        e.set(this, NiPSysMeshEmitter::m_eInitVelocityType, 1);
+        e.set(this, NiPSysMeshEmitter::m_eEmissionType, 2);
+        e.call_log = Some(vec![]);
+        e.call(0x00c1_e8e0, &args![this, stream]);
+        assert_eq!(
+            calls_to(&e, SAVE_LINK),
+            vec![vec![stream, 0x11], vec![stream, 0]]
+        );
+        assert_eq!(
+            *writes.borrow(),
+            vec![
+                (vec![2, 0, 0, 0], 4),
+                (vec![1, 0, 0, 0], 4),
+                (vec![2, 0, 0, 0], 4)
+            ]
+        );
+        assert_eq!(
+            calls_to(&e, POINT_SAVE_BINARY),
+            vec![vec![this.addr() + 0x7c, stream]]
+        );
+    }
+
+    #[test]
+    fn get_viewer_strings_names_geometries_types_and_axis() {
+        let mut e = Engine::new();
+        test_stream::global_word(&mut e, RTTI, 0x0abc_000c);
+        e.register(EMITTER_GET_VIEWER_STRINGS, |_, _| Ret::default());
+        let stored = test_stream::viewer_strings(&mut e);
+        let strings = test_stream::strings(&mut e);
+        let elements = e.mem.alloc(0x100);
+        e.mem.set_u32(strings + 4, elements);
+        let this = e.new_object::<NiPSysMeshEmitter>();
+        let geometry = e.mem.alloc(0x10);
+        e.mem.set_u32(geometry + 8, 0x7777);
+        let base = e.mem.alloc(8);
+        e.mem.set_u32(base + 4, geometry);
+        e.mem.set_u32(this.addr() + 0x58, base);
+        e.mem.set_u16(this.addr() + 0x60, 2);
+        e.set(this, NiPSysMeshEmitter::m_eEmissionType, 9);
+        e.set(this, NiPSysMeshEmitter::m_eInitVelocityType, 2);
+        e.mem.set_f32(this.addr() + 0x84, 1.5);
+        e.call_log = Some(vec![]);
+        e.call(0x00c1_f050, &args![this, strings]);
+        assert_eq!(
+            *stored.borrow(),
+            vec![
+                0x0abc_000c,
+                LABEL_EMITTER_OBJECT,
+                LABEL_EMISSION_TYPE,
+                LABEL_VELOCITY_TYPE
+            ]
+        );
+        assert_eq!(
+            calls_to(&e, NI_GET_VIEWER_STRING_FIXED),
+            vec![
+                vec![LABEL_EMITTER_OBJECT, 0x7777],
+                vec![LABEL_EMISSION_TYPE, TEXT_UNKNOWN],
+                vec![LABEL_VELOCITY_TYPE, VELOCITY_TYPE_NAMES[2]]
+            ]
+        );
+        // The three axis strings go in through the inlined add.
+        assert_eq!(e.mem.u16(strings + 0xa), 3);
+        assert_eq!(e.mem.u16(strings + 0xc), 3);
+        assert_eq!(
+            [
+                e.mem.u32(elements),
+                e.mem.u32(elements + 4),
+                e.mem.u32(elements + 8)
+            ],
+            LABEL_AXIS
+        );
+        assert_eq!(
+            calls_to(&e, NI_GET_VIEWER_STRING_FLOAT)[2],
+            vec![LABEL_AXIS[2], f(1.5)]
+        );
+    }
+}
+
+#[cfg(test)]
+mod skinned_tests {
+    use super::*;
+    use crate::units::niparticle::nipsysmodifier::test_stream::calls_to;
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    fn word(value: u32) -> Ret {
+        Ret {
+            eax: value,
+            ..Ret::default()
+        }
+    }
+
+    fn set_floats(e: &mut Engine, addr: u32, values: &[f32]) {
+        for (i, v) in values.iter().enumerate() {
+            e.mem.set_f32(addr + 4 * i as u32, *v);
+        }
+    }
+
+    fn floats(e: &Engine, addr: u32) -> [f32; 3] {
+        [e.mem.f32(addr), e.mem.f32(addr + 4), e.mem.f32(addr + 8)]
+    }
+
+    const IS_TRI: u32 = 0x0fa0_0000;
+    const TRIANGLE_COUNT: u32 = 0x0fa0_0010;
+    const TRIANGLE: u32 = 0x0fa0_0020;
+
+    /// Every transform product is rotation identity, translation (1, 0, 0)
+    /// and scale 2; the other helpers are plain point arithmetic.
+    fn doubles(e: &mut Engine) {
+        e.map(ORIGIN & !0xfff, 0x1000);
+        e.map(RAND_DIVISOR & !0xfff, 0x1000);
+        e.set_global(RAND_DIVISOR, 32767.0f64);
+        e.map(HALF & !0xfff, 0x1000);
+        e.set_global(HALF, 0.5f64);
+        e.map(ONE_AND_HALF & !0xfff, 0x1000);
+        e.set_global(ONE_AND_HALF, 1.5f64);
+        for (addr, value) in [(THREE, 3.0f32), (TWO, 2.0)] {
+            e.map(addr & !0xfff, 0x1000);
+            e.mem.set_f32(addr, value);
+        }
+        e.register(IS_TRI, |_, _| word(1));
+        e.register(INVERT_NON_UNIFORM, |_, _| Ret::default());
+        e.register(TRANSFORM_PRODUCT, |e, a| {
+            for i in 0..13 {
+                e.mem.set_u32(a[1] + 4 * i, 0);
+            }
+            for i in [0, 4, 8] {
+                e.mem.set_f32(a[1] + 4 * i, 1.0);
+            }
+            e.mem.set_f32(a[1] + 0x24, 1.0);
+            e.mem.set_f32(a[1] + 0x30, 2.0);
+            word(a[1])
+        });
+        e.register(TRANSFORM_POINT, |_, a| word(a[2]));
+        e.register(ROTATE_VECTOR, |_, a| word(a[2]));
+        e.register(NORMALIZE, |_, _| Ret::default());
+        e.register(NORMALIZE_FAST, |_, _| Ret::default());
+        e.register(POINT_LENGTH, |_, _| Ret {
+            st0: 5.0,
+            ..Ret::default()
+        });
+        e.register(SCALAR_TIMES_POINT, |e, a| {
+            let s = f32::from_bits(a[1]);
+            for i in 0..3 {
+                let v = e.mem.f32(a[2] + 4 * i) * s;
+                e.mem.set_f32(a[0] + 4 * i, v);
+            }
+            word(a[0])
+        });
+        e.register(POINT_DIVIDED, |e, a| {
+            let s = f32::from_bits(a[2]);
+            for i in 0..3 {
+                let v = e.mem.f32(a[0] + 4 * i) / s;
+                e.mem.set_f32(a[1] + 4 * i, v);
+            }
+            word(a[1])
+        });
+        e.register(SQRT, |_, a| {
+            let value = f64::from_bits(u64::from(a[0]) | u64::from(a[1]) << 32);
+            value.sqrt().into_ret()
+        });
+    }
+
+    fn rand_sequence(e: &mut Engine, values: Vec<u32>) {
+        let values = Rc::new(RefCell::new(values.into_iter()));
+        e.register_double(RAND, move |_, _| word(values.borrow_mut().next().unwrap()));
+    }
+
+    struct Skinned {
+        this: Ptr<NiPSysMeshEmitter>,
+        skinned: u32,
+        geometry: u32,
+        data: u32,
+        skin: u32,
+        entry: u32,
+        nodes: [u32; 2],
+    }
+
+    /// An emitter, a skinned geometry with three vertices `(2, 4, 8)`,
+    /// `(4, 0, 0)`, `(0, 6, 0)` (normals `(0, 0, 1)`), and one partition of
+    /// one triangle `0 1 2` with two bones per vertex (weights 0.25, 0.75).
+    fn skinned(e: &mut Engine) -> Skinned {
+        doubles(e);
+        let this = e.new_object::<NiPSysMeshEmitter>();
+        let system = e.mem.alloc(0x100);
+        e.set(this, NiPSysMeshEmitter::m_pkTarget, system);
+        let vtable = e.mem.alloc(0x100);
+        e.mem.set_u32(vtable + 0x1c, IS_TRI);
+        let geometry = e.mem.alloc(0x100);
+        e.mem.set_u32(geometry, vtable);
+        let data = e.mem.alloc(0x100);
+        e.mem.set_u32(geometry + 0xb8, data);
+        let vertices = e.mem.alloc(36);
+        set_floats(e, vertices, &[2.0, 4.0, 8.0, 4.0, 0.0, 0.0, 0.0, 6.0, 0.0]);
+        e.mem.set_u32(data + 0x20, vertices);
+        let normals = e.mem.alloc(36);
+        set_floats(e, normals, &[0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0]);
+        e.mem.set_u32(data + 0x24, normals);
+        e.mem.set_u16(data + 8, 3);
+        let skin_data = e.mem.alloc(0x50);
+        let bone_data = e.mem.alloc(2 * 0x4c);
+        e.mem.set_u32(skin_data + 0x40, bone_data);
+        let root = e.mem.alloc(0x100);
+        let nodes = [e.mem.alloc(0x100), e.mem.alloc(0x100)];
+        let bones = e.mem.alloc(8);
+        e.mem.set_u32(bones, nodes[0]);
+        e.mem.set_u32(bones + 4, nodes[1]);
+        let skin = e.mem.alloc(0x20);
+        e.mem.set_u32(skin + 8, skin_data);
+        e.mem.set_u32(skin + 0x10, root);
+        e.mem.set_u32(skin + 0x14, bones);
+        e.mem.set_u32(geometry + 0xbc, skin);
+        let entry = e.mem.alloc(0x2c);
+        let partition_bones = e.mem.alloc(4);
+        e.mem.set_u16(partition_bones, 0);
+        e.mem.set_u16(partition_bones + 2, 1);
+        e.mem.set_u32(entry + 4, partition_bones);
+        let weights = e.mem.alloc(48);
+        for vertex in 0..3 {
+            set_floats(e, weights + 16 * vertex, &[0.25, 0.75, 0.0, 0.0]);
+        }
+        e.mem.set_u32(entry + 8, weights);
+        let map = e.mem.alloc(6);
+        for i in 0..3 {
+            e.mem.set_u16(map + 2 * i, i as u16);
+        }
+        e.mem.set_u32(entry + 0xc, map);
+        let list = e.mem.alloc(6);
+        for i in 0..3 {
+            e.mem.set_u16(list + 2 * i, i as u16);
+        }
+        e.mem.set_u32(entry + 0x14, list);
+        e.mem.set_u16(entry + 0x1c, 3);
+        e.mem.set_u16(entry + 0x1e, 1);
+        e.mem.set_u16(entry + 0x24, 2);
+        let partitions = e.mem.alloc(0x10);
+        e.mem.set_u16(partitions + 8, 1);
+        e.mem.set_u32(partitions + 0xc, entry);
+        let skinned = e.mem.alloc(0xc);
+        e.mem.set_u32(skinned + 8, partitions);
+        Skinned {
+            this,
+            skinned,
+            geometry,
+            data,
+            skin,
+            entry,
+            nodes,
+        }
+    }
+
+    #[test]
+    fn skinned_vertex_blends_the_bones_by_weight() {
+        let mut e = Engine::new();
+        let s = skinned(&mut e);
+        let position = e.mem.alloc(12);
+        let normal = e.mem.alloc(12);
+        e.call_log = Some(vec![]);
+        e.call(
+            0x00c1_d230,
+            &args![s.this, position, normal, s.geometry, s.skin, s.entry, 0u32],
+        );
+        // 0.25 * (2v + t) + 0.75 * (2v + t) with t = (1, 0, 0).
+        assert_eq!(floats(&e, position), [5.0, 8.0, 16.0]);
+        assert_eq!(floats(&e, normal), [0.0, 0.0, 1.0]);
+        // One product per bone with each bone node's world transform.
+        let products = calls_to(&e, TRANSFORM_PRODUCT);
+        assert_eq!(products.len(), 1 + 2 * 2);
+        assert_eq!(products[1][2], s.nodes[0] + 0x68);
+        assert_eq!(products[3][2], s.nodes[1] + 0x68);
+        assert_eq!(calls_to(&e, NORMALIZE).len(), 1);
+        // A bone palette picks the bones through it; without normals the
+        // normal is (1, 0, 0).
+        let palette = e.mem.alloc(8);
+        e.mem.set_u8(palette + 2, 1);
+        e.mem.set_u8(palette + 3, 1);
+        e.mem.set_u32(s.entry + 0x10, palette);
+        e.mem.set_u32(s.data + 0x24, 0);
+        e.call_log = Some(vec![]);
+        e.call(
+            0x00c1_d230,
+            &args![s.this, position, normal, s.geometry, s.skin, s.entry, 1u32],
+        );
+        let products = calls_to(&e, TRANSFORM_PRODUCT);
+        assert_eq!(products[1][2], s.nodes[1] + 0x68);
+        assert_eq!(products[3][2], s.nodes[1] + 0x68);
+        assert_eq!(floats(&e, position), [9.0, 0.0, 0.0]);
+        assert_eq!(floats(&e, normal), [1.0, 0.0, 0.0]);
+    }
+
+    #[test]
+    fn skinned_vertex_emission_picks_a_partition_vertex() {
+        let mut e = Engine::new();
+        let s = skinned(&mut e);
+        // Partition 0 of 1; vertex fraction 0.5 of 2: vertex 1.
+        rand_sequence(&mut e, vec![0, 16384]);
+        let position = e.mem.alloc(12);
+        let velocity = e.mem.alloc(12);
+        assert!(e
+            .call(
+                0x00c1_dec0,
+                &args![s.this, s.skinned, s.geometry, position, velocity]
+            )
+            .bool());
+        assert_eq!(floats(&e, position), [9.0, 0.0, 0.0]);
+        assert_eq!(floats(&e, velocity), [0.0, 0.0, 5.0]);
+        // Without a skin instance, a partition or a triangle-based geometry: false.
+        e.mem.set_u32(s.geometry + 0xbc, 0);
+        rand_sequence(&mut e, vec![0, 0]);
+        assert!(!e
+            .call(
+                0x00c1_dec0,
+                &args![s.this, s.skinned, s.geometry, position, velocity]
+            )
+            .bool());
+        e.mem.set_u32(s.skinned + 8, 0);
+        assert!(!e
+            .call(
+                0x00c1_dec0,
+                &args![s.this, s.skinned, s.geometry, position, velocity]
+            )
+            .bool());
+        assert!(!e
+            .call(
+                0x00c1_dec0,
+                &args![s.this, s.skinned, 0u32, position, velocity]
+            )
+            .bool());
+    }
+
+    #[test]
+    fn skinned_face_emission_uses_the_centroid() {
+        let mut e = Engine::new();
+        let s = skinned(&mut e);
+        e.register(RANDOM_UNIT, |_, _| Ret {
+            st0: 0.5,
+            ..Ret::default()
+        });
+        rand_sequence(&mut e, vec![0]);
+        let position = e.mem.alloc(12);
+        let velocity = e.mem.alloc(12);
+        assert!(e
+            .call(
+                0x00c1_e080,
+                &args![s.this, s.skinned, s.geometry, position, velocity]
+            )
+            .bool());
+        // Skinned corners (5, 8, 16), (9, 0, 0), (1, 12, 0): the centroid.
+        assert_eq!(floats(&e, position), [5.0, 20.0 / 3.0, 16.0 / 3.0]);
+        assert_eq!(floats(&e, velocity), [0.0, 0.0, 5.0]);
+        // A partition without triangles emits by vertex.
+        e.mem.set_u16(s.entry + 0x1e, 0);
+        rand_sequence(&mut e, vec![0, 0, 0]);
+        e.call_log = Some(vec![]);
+        assert!(e
+            .call(
+                0x00c1_e080,
+                &args![s.this, s.skinned, s.geometry, position, velocity]
+            )
+            .bool());
+        assert_eq!(floats(&e, position), [5.0, 8.0, 16.0]);
+        assert!(calls_to(&e, POINT_DIVIDED).is_empty());
+    }
+
+    #[test]
+    fn skinned_face_area_emission_moves_into_the_face() {
+        let mut e = Engine::new();
+        let s = skinned(&mut e);
+        e.register(RANDOM_UNIT, |_, _| Ret {
+            st0: 0.0,
+            ..Ret::default()
+        });
+        e.set(s.this, NiPSysMeshEmitter::m_eEmissionType, 3);
+        e.set(s.this, NiPSysMeshEmitter::m_eInitVelocityType, 3);
+        rand_sequence(&mut e, vec![0]);
+        let position = e.mem.alloc(12);
+        let velocity = e.mem.alloc(12);
+        assert!(e
+            .call(
+                0x00c1_e080,
+                &args![s.this, s.skinned, s.geometry, position, velocity]
+            )
+            .bool());
+        // Fractions 0: s = fn_00c1ced0(0) and q = 0, so p0 + s * (0 - e1) + e1.
+        let root = fn_00c1ced0(&mut e, 0.0);
+        let x = 5.0 + root * (0.0 - 4.0) + 4.0;
+        let y = 8.0 + root * (0.0 - -8.0) + -8.0;
+        let z = 16.0 + root * (0.0 - -16.0) + -16.0;
+        let expected = [x, y, z];
+        let got = floats(&e, position);
+        for k in 0..3 {
+            assert!((got[k] - expected[k]).abs() < 1e-4, "{got:?} {expected:?}");
+        }
+        assert_eq!(floats(&e, velocity), [0.0, 0.0, 0.0]);
+    }
+
+    #[test]
+    fn skinned_edge_emission_uses_the_midpoint_or_a_point_on_it() {
+        let mut e = Engine::new();
+        let s = skinned(&mut e);
+        e.register(RANDOM_UNIT, |_, _| Ret {
+            st0: 0.5,
+            ..Ret::default()
+        });
+        // Partition 0, triangle 0, edge choice 1: corners 1 and 2.
+        rand_sequence(&mut e, vec![0, 1]);
+        let position = e.mem.alloc(12);
+        let velocity = e.mem.alloc(12);
+        assert!(e
+            .call(
+                0x00c1_e4e0,
+                &args![s.this, s.skinned, s.geometry, position, velocity]
+            )
+            .bool());
+        assert_eq!(floats(&e, position), [5.0, 6.0, 0.0]);
+        assert_eq!(floats(&e, velocity), [0.0, 0.0, 5.0]);
+        // Emission type 4: corner 1 + 0.5 * (corner 2 - corner 1); choice 0.
+        e.set(s.this, NiPSysMeshEmitter::m_eEmissionType, 4);
+        rand_sequence(&mut e, vec![0, 3]);
+        assert!(e
+            .call(
+                0x00c1_e4e0,
+                &args![s.this, s.skinned, s.geometry, position, velocity]
+            )
+            .bool());
+        assert_eq!(floats(&e, position), [7.0, 4.0, 8.0]);
+        // No skin instance: false.
+        e.mem.set_u32(s.geometry + 0xbc, 0);
+        rand_sequence(&mut e, vec![0, 0]);
+        assert!(!e
+            .call(
+                0x00c1_e4e0,
+                &args![s.this, s.skinned, s.geometry, position, velocity]
+            )
+            .bool());
+    }
+
+    #[test]
+    fn edge_emission_from_a_triangle_or_a_line_geometry() {
+        let mut e = Engine::new();
+        let s = skinned(&mut e);
+        let data_vtable = e.mem.alloc(0x100);
+        e.mem.set_u32(data_vtable + 0xa8, TRIANGLE_COUNT);
+        e.mem.set_u32(data_vtable + 0xac, TRIANGLE);
+        e.mem.set_u32(s.data, data_vtable);
+        e.register(TRIANGLE_COUNT, |_, _| word(0x0001_0002));
+        let corners = Rc::new(RefCell::new(vec![[1u16, 1, 2], [0, 1, 2]].into_iter()));
+        e.register_double(TRIANGLE, move |e, a| {
+            let [x, y, z] = corners.borrow_mut().next().unwrap();
+            e.mem.set_u16(a[2], x);
+            e.mem.set_u16(a[3], y);
+            e.mem.set_u16(a[4], z);
+            Ret::default()
+        });
+        // Triangle 5 % 2 = 1 repeats a corner, triangle 0 is used; edge
+        // choice 2: corners 0 and 2.
+        rand_sequence(&mut e, vec![5, 2]);
+        let position = e.mem.alloc(12);
+        let velocity = e.mem.alloc(12);
+        set_floats(&mut e, velocity, &[3.0, 4.0, 0.0]);
+        e.call_log = Some(vec![]);
+        assert!(e
+            .call(0x00c1_dae0, &args![s.this, s.geometry, position, velocity])
+            .bool());
+        let tries: Vec<u32> = calls_to(&e, TRIANGLE).iter().map(|w| w[1]).collect();
+        assert_eq!(tries, vec![1, 0]);
+        assert_eq!(floats(&e, position), [1.0, 5.0, 4.0]);
+        assert_eq!(floats(&e, velocity), [0.0, 0.0, 5.0]);
+        // A geometry that is not triangle based must be of the line kind.
+        e.register(IS_TRI, |_, _| Ret::default());
+        const GET_RTTI: u32 = 0x0fa0_0030;
+        e.map(FALLBACK_RTTI & !0xfff, 0x1000);
+        let vtable = e.mem.u32(s.geometry);
+        e.mem.set_u32(vtable + 8, GET_RTTI);
+        e.register(GET_RTTI, |_, _| word(0));
+        assert!(!e
+            .call(0x00c1_dae0, &args![s.this, s.geometry, position, velocity])
+            .bool());
+        e.register(GET_RTTI, |_, _| word(FALLBACK_RTTI));
+        // Vertex fraction 0.5 of 2: edge 1 to 2; emission type 4 with
+        // fraction 0: its first end.
+        e.set(s.this, NiPSysMeshEmitter::m_eEmissionType, 4);
+        e.set(s.this, NiPSysMeshEmitter::m_eInitVelocityType, 3);
+        rand_sequence(&mut e, vec![16384, 0]);
+        assert!(e
+            .call(0x00c1_dae0, &args![s.this, s.geometry, position, velocity])
+            .bool());
+        assert_eq!(floats(&e, position), [4.0, 0.0, 0.0]);
+        // No vertices: false.
+        e.mem.set_u32(s.data + 0x20, 0);
+        rand_sequence(&mut e, vec![0]);
+        assert!(!e
+            .call(0x00c1_dae0, &args![s.this, s.geometry, position, velocity])
+            .bool());
     }
 }

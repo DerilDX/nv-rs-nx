@@ -28,6 +28,7 @@ pub fn ni_p_sys_data_get_r_t_t_i(_e: &mut Engine) -> u32 {
     0x0120_2558
 }
 
+use crate::types::NiTArray;
 use crate::units::niparticle::nipsysmodifier::stream_read;
 use crate::units::platform::MEMORY_MANAGER;
 
@@ -625,6 +626,218 @@ pub fn ni_p_sys_data_load_binary(e: &mut Engine, this: Ptr<NiPSysData>, stream: 
     });
 }
 
+/// The viewer-string array's `SetSize` (`0096ad30`, `thiscall`, one word)
+/// and `SetAt` (`0096ae90`, `thiscall`: index and the address of the
+/// element), as the particle units' `GetViewerStrings` call them.
+pub(crate) const STRINGS_SET_SIZE: u32 = 0x0096_ad30;
+pub(crate) const STRINGS_SET_AT: u32 = 0x0096_ae90;
+
+/// The `NiTArray<char *>` add every `GetViewerStrings` of these units
+/// inlines: the index is `m_usSize`; when it is not below `m_usMaxSize`
+/// the array is resized to `m_usGrowBy` more than it (`0096ad30`), then
+/// the string is stored there through a local word (`0096ae90`).
+pub(crate) fn add_viewer_string(e: &mut Engine, strings: u32, string: u32) {
+    let array = Ptr::<NiTArray>::new(strings);
+    let index = u32::from(e.get(array, NiTArray::m_usSize));
+    if index >= u32::from(e.get(array, NiTArray::m_usMaxSize)) {
+        let grow = u32::from(e.get(array, NiTArray::m_usGrowBy));
+        e.call(STRINGS_SET_SIZE, &args![strings, grow.wrapping_add(index)]);
+    }
+    e.with_stack(4, |e, local| {
+        e.mem.set_u32(local.addr(), string);
+        e.call(STRINGS_SET_AT, &args![strings, index, local]);
+    });
+}
+
+/// `NiStream`'s output stream (`m_pkOstr`, +0x250 as the PC code reads it),
+/// and the output stream's position (+4) and write function (+0xC,
+/// `cdecl` `(stream, buffer, size, &component size, component count)`,
+/// returns the bytes written).
+pub(crate) const STREAM_OUTPUT: u32 = 0x250;
+const OUTPUT_POSITION: u32 = 0x4;
+const OUTPUT_WRITE: u32 = 0xc;
+
+/// One write through the output stream's write function from `buffer`:
+/// the word at `slot` is set to `component` and passed as the component
+/// size (one component); the position advances by the bytes written.
+pub(crate) fn stream_write(
+    e: &mut Engine,
+    stream: u32,
+    buffer: u32,
+    size: u32,
+    component: u32,
+    slot: u32,
+) {
+    let output = e.mem.u32(stream.wrapping_add(STREAM_OUTPUT));
+    let write = e.mem.u32(output.wrapping_add(OUTPUT_WRITE));
+    e.mem.set_u32(slot, component);
+    let bytes = e
+        .call(write, &args![output, buffer, size, slot, 1u32])
+        .u32();
+    let position = e.mem.u32(output.wrapping_add(OUTPUT_POSITION));
+    e.mem.set_u32(
+        output.wrapping_add(OUTPUT_POSITION),
+        position.wrapping_add(bytes),
+    );
+}
+
+/// `NiParticlesData::IsEqual` (`00a96a30`), `SaveBinary` (`00a97290`) and
+/// `GetViewerStrings` (`00a97420`) (Xbox PDB names; `thiscall`, one word).
+const PARTICLES_DATA_IS_EQUAL: u32 = 0x00a9_6a30;
+const PARTICLES_DATA_SAVE_BINARY: u32 = 0x00a9_7290;
+const PARTICLES_DATA_GET_VIEWER_STRINGS: u32 = 0x00a9_7420;
+/// `NiParticleInfo::IsEqual` (`00c31e90`, Xbox PDB name; `thiscall`, one
+/// word).
+const PARTICLE_INFO_IS_EQUAL: u32 = 0x00c3_1e90;
+/// `NiGetViewerString` (`00a7d330`, one word: the text) and its overloads
+/// `_ov6` (`00a7d490`: name, a 16-bit value) and `_ov10` (`00a7d5a0`:
+/// name, a pointer) (Xbox PDB names; `cdecl`; they return the string).
+const VIEWER_STRING: u32 = 0x00a7_d330;
+const VIEWER_STRING_U16: u32 = 0x00a7_d490;
+const VIEWER_STRING_POINTER: u32 = 0x00a7_d5a0;
+/// `NiPSysData::ms_RTTI`'s name (the word at `01202558`).
+const RTTI_NAME: u32 = 0x0120_2558;
+/// The labels `GetViewerStrings` passes: "m_pkParticleInfo" (`010be340`),
+/// "m_pfRotationSpeeds" (`010be32c`), "NumAddedParticles" (`010be318`) and
+/// "AddedParticlesBase" (`010be304`).
+const LABEL_PARTICLE_INFO: u32 = 0x010b_e340;
+const LABEL_ROTATION_SPEEDS: u32 = 0x010b_e32c;
+const LABEL_NUM_ADDED: u32 = 0x010b_e318;
+const LABEL_ADDED_BASE: u32 = 0x010b_e304;
+
+// Translated from 00a967e0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiParticlesData::SetActiveVertexCount` (Xbox PDB): the active count
+/// becomes `count`, at most the capacity (`m_usVertices`).
+pub fn ni_particles_data_set_active_vertex_count(
+    e: &mut Engine,
+    this: Ptr<NiPSysData>,
+    count: u16,
+) {
+    let vertices = e.get(this, NiPSysData::m_usVertices);
+    if count <= vertices {
+        e.set(this, NiPSysData::m_usActive, count);
+        return;
+    }
+    e.set(this, NiPSysData::m_usActive, vertices);
+}
+
+// Translated from 00a968c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map: replaces the rotation axes
+/// (`m_pkRotationAxes`), the old array given back to the memory manager.
+pub fn fn_00a968c0(e: &mut Engine, this: Ptr<NiPSysData>, axes: u32) {
+    let old = e.get(this, NiPSysData::m_pkRotationAxes);
+    e.call(DEALLOCATE, &args![MEMORY_MANAGER, old]);
+    e.set(this, NiPSysData::m_pkRotationAxes, axes);
+}
+
+// Translated from 00c24de0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiPSysData::IsEqual` (Xbox PDB): `NiParticlesData::IsEqual` first; then
+/// both or neither must have rotation speeds; for each active particle of
+/// `this` the particle infos must be equal (`NiParticleInfo::IsEqual`) and,
+/// when `this` has rotation speeds, the speeds equal (`FUCOMPP`: a NaN is
+/// unequal); finally the added-particle count and base must match.
+pub fn ni_p_sys_data_is_equal(
+    e: &mut Engine,
+    this: Ptr<NiPSysData>,
+    other: Ptr<NiPSysData>,
+) -> bool {
+    if !e.call(PARTICLES_DATA_IS_EQUAL, &args![this, other]).bool() {
+        return false;
+    }
+    let speeds = e.get(this, NiPSysData::m_pfRotationSpeeds);
+    let other_speeds = e.get(other, NiPSysData::m_pfRotationSpeeds);
+    if (speeds != 0 && other_speeds == 0) || (speeds == 0 && other_speeds != 0) {
+        return false;
+    }
+    let mut index: u16 = 0;
+    while index < e.get(this, NiPSysData::m_usActive) {
+        let offset = u32::from(index) * PARTICLE_INFO_SIZE;
+        let theirs = e
+            .get(other, NiPSysData::m_pkParticleInfo)
+            .wrapping_add(offset);
+        let ours = e
+            .get(this, NiPSysData::m_pkParticleInfo)
+            .wrapping_add(offset);
+        if !e.call(PARTICLE_INFO_IS_EQUAL, &args![ours, theirs]).bool() {
+            return false;
+        }
+        let speeds = e.get(this, NiPSysData::m_pfRotationSpeeds);
+        if speeds != 0 {
+            let ours = e.mem.f32(speeds.wrapping_add(u32::from(index) * 4));
+            let other_speeds = e.get(other, NiPSysData::m_pfRotationSpeeds);
+            let theirs = e.mem.f32(other_speeds.wrapping_add(u32::from(index) * 4));
+            if theirs != ours {
+                return false;
+            }
+        }
+        index = index.wrapping_add(1);
+    }
+    e.get(this, NiPSysData::m_usNumAddedParticles)
+        == e.get(other, NiPSysData::m_usNumAddedParticles)
+        && e.get(this, NiPSysData::m_usAddedParticlesBase)
+            == e.get(other, NiPSysData::m_usAddedParticlesBase)
+}
+
+// Translated from 00c24ef0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map: `NiPSysData`'s destructor body. The vtable
+/// back to `NiPSysData`'s, the particle info given back to the memory
+/// manager, the rotation speeds freed (`00aa10f0`), then `NiParticlesData`'s
+/// destructor body (a tail jump).
+pub fn fn_00c24ef0(e: &mut Engine, this: Ptr<NiPSysData>) {
+    let info = e.get(this, NiPSysData::m_pkParticleInfo);
+    e.mem.set_u32(this.addr(), VTABLE);
+    e.call(DEALLOCATE, &args![MEMORY_MANAGER, info]);
+    let speeds = e.get(this, NiPSysData::m_pfRotationSpeeds);
+    e.call(ARRAY_FREE, &args![speeds]);
+    e.call(PARTICLES_DATA_DESTRUCTOR, &args![this]);
+}
+
+// Translated from 00c25560 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiPSysData::SaveBinary` (Xbox PDB): `NiParticlesData::SaveBinary`, then
+/// one byte, whether there are rotation speeds (1 or 0).
+pub fn ni_p_sys_data_save_binary(e: &mut Engine, this: Ptr<NiPSysData>, stream: Ptr) {
+    e.call(PARTICLES_DATA_SAVE_BINARY, &args![this, stream]);
+    let has_speeds = u8::from(e.get(this, NiPSysData::m_pfRotationSpeeds) != 0);
+    e.with_stack(8, |e, locals| {
+        let flag = locals.addr();
+        let size_slot = flag + 4;
+        e.mem.set_u8(flag, has_speeds);
+        stream_write(e, stream.addr(), flag, 1, 1, size_slot);
+    });
+}
+
+// Translated from 00c255b0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiPSysData::GetViewerStrings` (Xbox PDB): `NiParticlesData`'s strings,
+/// then the class name, the particle-info and rotation-speed pointers and
+/// the added-particle count and base.
+pub fn ni_p_sys_data_get_viewer_strings(e: &mut Engine, this: Ptr<NiPSysData>, strings: Ptr) {
+    let strings = strings.addr();
+    e.call(PARTICLES_DATA_GET_VIEWER_STRINGS, &args![this, strings]);
+    let name = e.global::<u32>(RTTI_NAME);
+    let string = e.call(VIEWER_STRING, &args![name]).u32();
+    add_viewer_string(e, strings, string);
+    let info = e.get(this, NiPSysData::m_pkParticleInfo);
+    let string = e
+        .call(VIEWER_STRING_POINTER, &args![LABEL_PARTICLE_INFO, info])
+        .u32();
+    add_viewer_string(e, strings, string);
+    let speeds = e.get(this, NiPSysData::m_pfRotationSpeeds);
+    let string = e
+        .call(VIEWER_STRING_POINTER, &args![LABEL_ROTATION_SPEEDS, speeds])
+        .u32();
+    add_viewer_string(e, strings, string);
+    let added = u32::from(e.get(this, NiPSysData::m_usNumAddedParticles));
+    let string = e
+        .call(VIEWER_STRING_U16, &args![LABEL_NUM_ADDED, added])
+        .u32();
+    add_viewer_string(e, strings, string);
+    let base = u32::from(e.get(this, NiPSysData::m_usAddedParticlesBase));
+    let string = e
+        .call(VIEWER_STRING_U16, &args![LABEL_ADDED_BASE, base])
+        .u32();
+    add_viewer_string(e, strings, string);
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -663,7 +876,156 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00c24e90, ni_p_sys_data_get_r_t_t_i() -> u32),
         entry!(0x00a7_5f00, ni_p_sys_data_register_streamables(Ptr, Ptr) -> bool),
         entry!(0x00a7_b7d0, ni_p_sys_data_link_object(Ptr, Ptr)),
+        entry!(
+            0x00a9_67e0,
+            ni_particles_data_set_active_vertex_count(Ptr<NiPSysData>, u16)
+        ),
+        entry!(0x00a9_68c0, fn_00a968c0(Ptr<NiPSysData>, u32)),
+        entry!(
+            0x00c2_4de0,
+            ni_p_sys_data_is_equal(Ptr<NiPSysData>, Ptr<NiPSysData>) -> bool
+        ),
+        entry!(0x00c2_4ef0, fn_00c24ef0(Ptr<NiPSysData>)),
+        entry!(0x00c2_5560, ni_p_sys_data_save_binary(Ptr<NiPSysData>, Ptr)),
+        entry!(
+            0x00c2_55b0,
+            ni_p_sys_data_get_viewer_strings(Ptr<NiPSysData>, Ptr)
+        ),
     ]
+}
+
+/// Test support shared by this crate's particle units: a viewer-string
+/// array, a counter standing in for the string makers, and an output
+/// stream that keeps what is written.
+#[cfg(test)]
+pub(crate) mod viewer_test {
+    use super::*;
+    use std::cell::Cell;
+    use std::rc::Rc;
+
+    /// An `NiTArray<char *>` with room for 64 strings, capacity `max`,
+    /// growing by 4. The `SetSize` double sets the capacity; the `SetAt`
+    /// double stores the string its element pointer points at and makes
+    /// the size one more than the index.
+    pub fn strings(e: &mut Engine, max: u16) -> u32 {
+        let array = Ptr::<NiTArray>::new(e.mem.alloc(0x10));
+        let base = e.mem.alloc(64 * 4);
+        e.set(array, NiTArray::m_pBase, base);
+        e.set(array, NiTArray::m_usMaxSize, max);
+        e.set(array, NiTArray::m_usGrowBy, 4);
+        e.register(STRINGS_SET_SIZE, |e, a| {
+            e.mem.set_u16(a[0] + 8, a[1] as u16);
+            Ret::default()
+        });
+        e.register(STRINGS_SET_AT, |e, a| {
+            let base = e.mem.u32(a[0] + 4);
+            let string = e.mem.u32(a[2]);
+            e.mem.set_u32(base + 4 * a[1], string);
+            e.mem.set_u16(a[0] + 0xa, a[1] as u16 + 1);
+            Ret::default()
+        });
+        array.addr()
+    }
+
+    /// The strings stored so far, in index order.
+    pub fn collected(e: &Engine, strings: u32) -> Vec<u32> {
+        let base = e.mem.u32(strings + 4);
+        let size = u32::from(e.mem.u16(strings + 0xa));
+        (0..size).map(|i| e.mem.u32(base + 4 * i)).collect()
+    }
+
+    /// Doubles for the string makers at `addrs`: each call, whichever,
+    /// returns the next number from 1.
+    pub fn counting(e: &mut Engine, addrs: &[u32]) {
+        let next = Rc::new(Cell::new(0u32));
+        for &addr in addrs {
+            let next = next.clone();
+            e.register_double(addr, move |_, _| {
+                next.set(next.get() + 1);
+                Ret {
+                    eax: next.get(),
+                    ..Ret::default()
+                }
+            });
+        }
+    }
+
+    /// The logged calls to `callee`, their argument words.
+    pub fn calls_to(e: &Engine, callee: u32) -> Vec<Vec<u32>> {
+        e.call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|(address, _)| *address == callee)
+            .map(|(_, words)| words.clone())
+            .collect()
+    }
+
+    /// A double's answer in `EAX`.
+    pub fn answer(value: u32) -> Ret {
+        Ret {
+            eax: value,
+            ..Ret::default()
+        }
+    }
+
+    /// An object of 0x100 bytes whose vtable (0x100 bytes of its own) has
+    /// `slots` pointing at the given addresses.
+    pub fn object(e: &mut Engine, slots: &[(u32, u32)]) -> u32 {
+        let object = e.mem.alloc(0x100);
+        let vtable = e.mem.alloc(0x100);
+        e.mem.set_u32(object, vtable);
+        for &(slot, target) in slots {
+            e.mem.set_u32(vtable + slot, target);
+        }
+        object
+    }
+
+    /// Doubles answering 0 for every address in `addrs`.
+    pub fn quiet(e: &mut Engine, addrs: &[u32]) {
+        for &addr in addrs {
+            e.register(addr, |_, _| Ret::default());
+        }
+    }
+
+    /// The write function's address in tests.
+    pub const WRITE_FN: u32 = 0x0f7f_1000;
+
+    /// An `NiStream` whose output stream appends what is written to a
+    /// buffer (up to 0x400 bytes) and answers the size; returns the
+    /// stream's address.
+    pub fn out_stream(e: &mut Engine) -> u32 {
+        let stream = e.mem.alloc(0x300);
+        let output = e.mem.alloc(0x14);
+        let buffer = e.mem.alloc(0x404);
+        e.mem.set_u32(stream + STREAM_OUTPUT, output);
+        e.mem.set_u32(output + OUTPUT_WRITE, WRITE_FN);
+        e.mem.set_u32(output + 0x10, buffer);
+        e.register(WRITE_FN, |e, a| {
+            let (output, source, size) = (a[0], a[1], a[2]);
+            let buffer = e.mem.u32(output + 0x10);
+            let used = e.mem.u32(buffer);
+            let bytes = e.mem.bytes(source, size);
+            e.mem.write(buffer + 4 + used, &bytes);
+            e.mem.set_u32(buffer, used + size);
+            Ret {
+                eax: size,
+                ..Ret::default()
+            }
+        });
+        stream
+    }
+
+    /// The bytes written so far, and the output stream's position word.
+    pub fn written(e: &Engine, stream: u32) -> (Vec<u8>, u32) {
+        let output = e.mem.u32(stream + STREAM_OUTPUT);
+        let buffer = e.mem.u32(output + 0x10);
+        let used = e.mem.u32(buffer);
+        (
+            e.mem.bytes(buffer + 4, used),
+            e.mem.u32(output + OUTPUT_POSITION),
+        )
+    }
 }
 
 #[cfg(test)]
@@ -1142,5 +1504,176 @@ mod tests {
         assert_eq!(e.get(this, NiPSysData::m_pkParticleInfo), 0);
         assert!(calls_to(&e, PARTICLE_INFO_CONSTRUCTOR).is_empty());
         assert_eq!(e.get(this, NiPSysData::m_pfRotationSpeeds), 0);
+    }
+
+    #[test]
+    fn set_active_vertex_count_is_capped_at_the_capacity() {
+        let mut e = Engine::new();
+        let this = data(&mut e);
+        e.set(this, NiPSysData::m_usVertices, 10);
+        e.call(0x00a9_67e0, &args![this, 0xffff_0007u32]);
+        assert_eq!(e.get(this, NiPSysData::m_usActive), 7);
+        e.call(0x00a9_67e0, &args![this, 10u32]);
+        assert_eq!(e.get(this, NiPSysData::m_usActive), 10);
+        e.call(0x00a9_67e0, &args![this, 11u32]);
+        assert_eq!(e.get(this, NiPSysData::m_usActive), 10);
+    }
+
+    #[test]
+    fn rotation_axes_are_replaced() {
+        let mut e = Engine::new();
+        allocators(&mut e);
+        let this = data(&mut e);
+        e.set(this, NiPSysData::m_pkRotationAxes, 0x111);
+        e.call_log = Some(vec![]);
+        e.call(0x00a9_68c0, &args![this, 0x333u32]);
+        assert_eq!(calls_to(&e, DEALLOCATE), vec![vec![MEMORY_MANAGER, 0x111]]);
+        assert_eq!(e.get(this, NiPSysData::m_pkRotationAxes), 0x333);
+    }
+
+    fn equal_pair(e: &mut Engine) -> (Ptr<NiPSysData>, Ptr<NiPSysData>) {
+        e.register(PARTICLES_DATA_IS_EQUAL, |_, _| Ret {
+            eax: 1,
+            ..Ret::default()
+        });
+        e.register(PARTICLE_INFO_IS_EQUAL, |e, a| Ret {
+            eax: u32::from(e.mem.u32(a[0]) == e.mem.u32(a[1])),
+            ..Ret::default()
+        });
+        let this = data(e);
+        let other = data(e);
+        for p in [this, other] {
+            e.set(p, NiPSysData::m_usActive, 2);
+            let info = e.mem.alloc(2 * PARTICLE_INFO_SIZE);
+            e.set(p, NiPSysData::m_pkParticleInfo, info);
+            e.set(p, NiPSysData::m_usNumAddedParticles, 3);
+            e.set(p, NiPSysData::m_usAddedParticlesBase, 4);
+        }
+        (this, other)
+    }
+
+    #[test]
+    fn is_equal_compares_infos_speeds_and_added_counts() {
+        let mut e = Engine::new();
+        let (this, other) = equal_pair(&mut e);
+        let call = |e: &mut Engine| e.call(0x00c2_4de0, &args![this, other]).bool();
+        assert!(call(&mut e));
+        // Rotation speeds on one side only.
+        let speeds = e.mem.alloc(8);
+        e.set(this, NiPSysData::m_pfRotationSpeeds, speeds);
+        assert!(!call(&mut e));
+        e.set(this, NiPSysData::m_pfRotationSpeeds, 0);
+        e.set(other, NiPSysData::m_pfRotationSpeeds, speeds);
+        assert!(!call(&mut e));
+        // Both: equal speeds, then a NaN speed is unequal.
+        let theirs = e.mem.alloc(8);
+        e.set(this, NiPSysData::m_pfRotationSpeeds, theirs);
+        e.mem.set_f32(speeds + 4, 2.5);
+        e.mem.set_f32(theirs + 4, 2.5);
+        assert!(call(&mut e));
+        e.mem.set_u32(speeds + 4, 0x7fc0_0000);
+        e.mem.set_u32(theirs + 4, 0x7fc0_0000);
+        assert!(!call(&mut e));
+        e.mem.set_u32(speeds + 4, 0);
+        e.mem.set_u32(theirs + 4, 0);
+        // The second particle's info differs.
+        let info = e.get(other, NiPSysData::m_pkParticleInfo);
+        e.mem.set_u32(info + PARTICLE_INFO_SIZE, 9);
+        e.call_log = Some(vec![]);
+        assert!(!call(&mut e));
+        let ours = e.get(this, NiPSysData::m_pkParticleInfo);
+        assert_eq!(
+            calls_to(&e, PARTICLE_INFO_IS_EQUAL),
+            vec![vec![ours, info], vec![ours + 0x1c, info + 0x1c]]
+        );
+        e.mem.set_u32(info + PARTICLE_INFO_SIZE, 0);
+        assert!(call(&mut e));
+        // Added counts and base.
+        e.set(other, NiPSysData::m_usNumAddedParticles, 5);
+        assert!(!call(&mut e));
+        e.set(other, NiPSysData::m_usNumAddedParticles, 3);
+        e.set(other, NiPSysData::m_usAddedParticlesBase, 5);
+        assert!(!call(&mut e));
+        // NiParticlesData::IsEqual decides first.
+        e.register(PARTICLES_DATA_IS_EQUAL, |_, _| Ret::default());
+        e.set(other, NiPSysData::m_usAddedParticlesBase, 4);
+        assert!(!call(&mut e));
+    }
+
+    #[test]
+    fn destructor_body_frees_info_and_speeds_then_runs_the_base() {
+        let mut e = Engine::new();
+        allocators(&mut e);
+        e.register(PARTICLES_DATA_DESTRUCTOR, |_, _| Ret::default());
+        let this = data(&mut e);
+        e.set(this, NiPSysData::m_pkParticleInfo, 0x111);
+        e.set(this, NiPSysData::m_pfRotationSpeeds, 0x222);
+        e.call_log = Some(vec![]);
+        e.call(0x00c2_4ef0, &args![this]);
+        assert_eq!(e.mem.u32(this.addr()), VTABLE);
+        assert_eq!(calls_to(&e, DEALLOCATE), vec![vec![MEMORY_MANAGER, 0x111]]);
+        assert_eq!(calls_to(&e, ARRAY_FREE), vec![vec![0x222]]);
+        assert_eq!(
+            calls_to(&e, PARTICLES_DATA_DESTRUCTOR),
+            vec![vec![this.addr()]]
+        );
+    }
+
+    #[test]
+    fn save_binary_writes_whether_there_are_rotation_speeds() {
+        let mut e = Engine::new();
+        e.register(PARTICLES_DATA_SAVE_BINARY, |_, _| Ret::default());
+        let stream = viewer_test::out_stream(&mut e);
+        let this = data(&mut e);
+        e.call_log = Some(vec![]);
+        e.call(0x00c2_5560, &args![this, stream]);
+        assert_eq!(
+            calls_to(&e, PARTICLES_DATA_SAVE_BINARY),
+            vec![vec![this.addr(), stream]]
+        );
+        e.set(this, NiPSysData::m_pfRotationSpeeds, 0x40);
+        e.call(0x00c2_5560, &args![this, stream]);
+        assert_eq!(viewer_test::written(&e, stream), (vec![0, 1], 2));
+        let writes = calls_to(&e, viewer_test::WRITE_FN);
+        assert_eq!((writes[0][2], writes[0][4]), (1, 1));
+    }
+
+    #[test]
+    fn viewer_strings_add_the_name_pointers_and_counts() {
+        let mut e = Engine::new();
+        e.register(PARTICLES_DATA_GET_VIEWER_STRINGS, |_, _| Ret::default());
+        viewer_test::counting(
+            &mut e,
+            &[VIEWER_STRING, VIEWER_STRING_U16, VIEWER_STRING_POINTER],
+        );
+        e.map(RTTI_NAME, 4);
+        e.set_global::<u32>(RTTI_NAME, 0x0120_2600);
+        let strings = viewer_test::strings(&mut e, 2);
+        let this = data(&mut e);
+        e.set(this, NiPSysData::m_pkParticleInfo, 0x111);
+        e.set(this, NiPSysData::m_pfRotationSpeeds, 0x222);
+        e.set(this, NiPSysData::m_usNumAddedParticles, 0xfffe);
+        e.set(this, NiPSysData::m_usAddedParticlesBase, 5);
+        e.call_log = Some(vec![]);
+        e.call(0x00c2_55b0, &args![this, strings]);
+        assert_eq!(viewer_test::collected(&e, strings), vec![1, 2, 3, 4, 5]);
+        assert_eq!(
+            calls_to(&e, PARTICLES_DATA_GET_VIEWER_STRINGS),
+            vec![vec![this.addr(), strings]]
+        );
+        assert_eq!(calls_to(&e, VIEWER_STRING), vec![vec![0x0120_2600]]);
+        assert_eq!(
+            calls_to(&e, VIEWER_STRING_POINTER),
+            vec![
+                vec![LABEL_PARTICLE_INFO, 0x111],
+                vec![LABEL_ROTATION_SPEEDS, 0x222]
+            ]
+        );
+        assert_eq!(
+            calls_to(&e, VIEWER_STRING_U16),
+            vec![vec![LABEL_NUM_ADDED, 0xfffe], vec![LABEL_ADDED_BASE, 5]]
+        );
+        // Full at index 2: grown to 2 + 4.
+        assert_eq!(calls_to(&e, STRINGS_SET_SIZE), vec![vec![strings, 6]]);
     }
 }

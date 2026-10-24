@@ -115,9 +115,58 @@ pub fn bs_temp_node_manager_remove_expired(e: &mut Engine, this: u32, time: u32)
     });
 }
 
+/// `NiNode::UpdateSelectedDownwardPass` (`00a5ded0`) and `NiNode::UpdateRigidDownwardPass`
+/// (`00a5e1f0`), each `thiscall` with two words.
+const NODE_UPDATE_SELECTED_DOWNWARD_PASS: u32 = 0x00a5_ded0;
+const NODE_UPDATE_RIGID_DOWNWARD_PASS: u32 = 0x00a5_e1f0;
+
+// Translated from 00c44e70 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSTempNodeManager::UpdateSelectedDownwardPass` (Xbox PDB; `thiscall`, two words, `RET
+/// 8`): `RemoveExpired` with the float `update_data` points at (copied through the x87
+/// stack), then `NiNode::UpdateSelectedDownwardPass(update_data, flags)`.
+pub fn bs_temp_node_manager_update_selected_downward_pass(
+    e: &mut Engine,
+    this: u32,
+    update_data: u32,
+    flags: u32,
+) {
+    let time = x87_quiet_bits(e.mem.u32(update_data));
+    bs_temp_node_manager_remove_expired(e, this, time);
+    e.call(
+        NODE_UPDATE_SELECTED_DOWNWARD_PASS,
+        &args![this, update_data, flags],
+    );
+}
+
+// Translated from 00c44ea0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSTempNodeManager::UpdateRigidDownwardPass` (Xbox PDB; `thiscall`, two words, `RET 8`):
+/// `RemoveExpired` with the float `update_data` points at (copied through the x87 stack),
+/// then `NiNode::UpdateRigidDownwardPass(update_data, flags)`.
+pub fn bs_temp_node_manager_update_rigid_downward_pass(
+    e: &mut Engine,
+    this: u32,
+    update_data: u32,
+    flags: u32,
+) {
+    let time = x87_quiet_bits(e.mem.u32(update_data));
+    bs_temp_node_manager_remove_expired(e, this, time);
+    e.call(
+        NODE_UPDATE_RIGID_DOWNWARD_PASS,
+        &args![this, update_data, flags],
+    );
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(
+            0x00c4_4e70,
+            bs_temp_node_manager_update_selected_downward_pass(u32, u32, u32)
+        ),
+        entry!(
+            0x00c4_4ea0,
+            bs_temp_node_manager_update_rigid_downward_pass(u32, u32, u32)
+        ),
         entry!(
             0x00c4_4e40,
             bs_temp_node_manager_update_downward_pass(u32, u32, u32)
@@ -251,5 +300,52 @@ mod tests {
             calls_to(&e, NODE_UPDATE_DOWNWARD_PASS),
             vec![vec![this, data, 3]]
         );
+    }
+}
+
+#[cfg(test)]
+mod n068_tests {
+    use super::*;
+
+    fn calls_to(e: &Engine, address: u32) -> Vec<Vec<u32>> {
+        e.call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|(a, _)| *a == address)
+            .map(|(_, w)| w.clone())
+            .collect()
+    }
+
+    fn childless_manager(e: &mut Engine) -> u32 {
+        let this = e.mem.alloc(0xb0);
+        e.mem.set_f32(this + TIME, 2.0);
+        this
+    }
+
+    #[test]
+    fn selected_and_rigid_passes_remove_then_update() {
+        let mut e = Engine::new();
+        e.map(ZERO_DOUBLE & !0xfff, 0x1000);
+        e.register(NODE_UPDATE_SELECTED_DOWNWARD_PASS, |_, _| Ret::default());
+        e.register(NODE_UPDATE_RIGID_DOWNWARD_PASS, |_, _| Ret::default());
+        let data = e.mem.alloc(8);
+        e.mem.set_f32(data, 5.0);
+        for (address, pass) in [
+            (0x00c4_4e70, NODE_UPDATE_SELECTED_DOWNWARD_PASS),
+            (0x00c4_4ea0, NODE_UPDATE_RIGID_DOWNWARD_PASS),
+        ] {
+            let this = childless_manager(&mut e);
+            e.call_log = Some(vec![]);
+            e.call(address, &[this, data, 7]);
+            assert_eq!(e.mem.f32(this + TIME), 5.0);
+            assert_eq!(calls_to(&e, pass), vec![vec![this, data, 7]]);
+            let other = if pass == NODE_UPDATE_RIGID_DOWNWARD_PASS {
+                NODE_UPDATE_SELECTED_DOWNWARD_PASS
+            } else {
+                NODE_UPDATE_RIGID_DOWNWARD_PASS
+            };
+            assert!(calls_to(&e, other).is_empty());
+        }
     }
 }

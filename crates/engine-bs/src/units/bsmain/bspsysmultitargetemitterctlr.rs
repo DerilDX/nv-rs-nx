@@ -511,9 +511,236 @@ pub fn fn_00c1beb0(e: &mut Engine, this: Ptr, count: u32) {
     e.mem.set_u32(set + 4, count);
 }
 
+/// `BSPSysMultiTargetEmitterCtlr` is 0x64 bytes.
+const CONTROLLER_SIZE: u32 = 0x64;
+/// `NiPSysEmitterCtlr`'s member copy (`00c1bd30`, `thiscall`, `(destination, cloning)`),
+/// `ProcessClone` (`00c1bdc0`), `RegisterStreamables` (`00c1be10`), `SaveBinary`
+/// (`00c1be40`), `IsEqual` (`00c1be60`) and `GetViewerStrings` (`00c1ce70`), the last five
+/// `thiscall` with one word.
+const EMITTER_CTLR_COPY_MEMBERS: u32 = 0x00c1_bd30;
+const EMITTER_CTLR_PROCESS_CLONE: u32 = 0x00c1_bdc0;
+const EMITTER_CTLR_REGISTER_STREAMABLES: u32 = 0x00c1_be10;
+const EMITTER_CTLR_SAVE_BINARY: u32 = 0x00c1_be40;
+const EMITTER_CTLR_IS_EQUAL: u32 = 0x00c1_be60;
+const EMITTER_CTLR_GET_VIEWER_STRINGS: u32 = 0x00c1_ce70;
+/// The cloning process's object map lookup (`00a53c30`, `thiscall` on the map, `(key,
+/// &value)`); the map is the first word of the cloning process.
+const CLONE_MAP_LOOKUP: u32 = 0x00a5_3c30;
+/// `NiStreamSaveBinary<unsigned short>` (`00a303a0`, `cdecl`, `(stream, &value)`).
+const STREAM_SAVE_SHORT: u32 = 0x00a3_03a0;
+/// `NiGetViewerString` (`00a7d330`, `(name)`), its `(label, pointer)` form `00a7d5a0` and
+/// its `(label, unsigned short)` form `00a7d490` (all `cdecl`), and the viewer-string
+/// array's add (`0096a610`, `thiscall`, `(&string)`).
+const NI_GET_VIEWER_STRING: u32 = 0x00a7_d330;
+const NI_GET_VIEWER_STRING_POINTER: u32 = 0x00a7_d5a0;
+const NI_GET_VIEWER_STRING_SHORT: u32 = 0x00a7_d490;
+const VIEWER_STRINGS_ADD: u32 = 0x0096_a610;
+/// The class's `ms_RTTI` (its first word is the class name), and the labels `"Master
+/// Particle System"` and `"Max Full Emitters"`.
+const RTTI: u32 = 0x0120_3340;
+const MASTER_LABEL: u32 = 0x010c_2e5c;
+const MAX_FULL_EMITTERS_LABEL: u32 = 0x010c_2e48;
+
+// Translated from 00c5ca90 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 00c5ca90 - the C++ exception-unwinding frame (FS:[0] chain, handler at 00f2fcdf, state variable) is not translated
+/// `BSPSysMultiTargetEmitterCtlr::CreateClone` (Xbox PDB, engine map): allocates 0x64
+/// bytes, constructs a controller in it when that succeeds (`00c5c400`), copies the
+/// members into it (`00c5cb20`; into address 0 when the allocation failed) and returns it.
+pub fn bs_psys_multi_target_emitter_ctlr_create_clone(
+    e: &mut Engine,
+    this: Ptr<BSPSysMultiTargetEmitterCtlr>,
+    cloning: u32,
+) -> Ptr<BSPSysMultiTargetEmitterCtlr> {
+    let block = e.call(NI_NEW, &args![CONTROLLER_SIZE]).u32();
+    let clone = if block == 0 {
+        Ptr::new(0)
+    } else {
+        fn_00c5c400(e, Ptr::new(block))
+    };
+    fn_00c5cb20(e, this, clone, cloning);
+    clone
+}
+
+// Translated from 00c5cb20 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`thiscall`, `(destination, cloning)`, the member copy
+/// `CreateClone` uses): `NiPSysEmitterCtlr`'s member copy (`00c1bd30`), then
+/// `usMaxFullEmitters` copied (the master system is not).
+pub fn fn_00c5cb20(
+    e: &mut Engine,
+    this: Ptr<BSPSysMultiTargetEmitterCtlr>,
+    destination: Ptr<BSPSysMultiTargetEmitterCtlr>,
+    cloning: u32,
+) {
+    e.call(
+        EMITTER_CTLR_COPY_MEMBERS,
+        &args![this, destination, cloning],
+    );
+    let most = e.get(this, BSPSysMultiTargetEmitterCtlr::usMaxFullEmitters);
+    e.set(
+        destination,
+        BSPSysMultiTargetEmitterCtlr::usMaxFullEmitters,
+        most,
+    );
+}
+
+// Translated from 00c5cb50 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSPSysMultiTargetEmitterCtlr::ProcessClone` (Xbox PDB, engine map):
+/// `NiPSysEmitterCtlr::ProcessClone`, then through the cloning process's object map
+/// (`00a53c30`, one local starting at 0) the clone of this controller and, into the same
+/// local, the clone of the master system, which the controller's clone takes as its
+/// master. A master without a clone leaves the local holding the controller's clone.
+pub fn bs_psys_multi_target_emitter_ctlr_process_clone(
+    e: &mut Engine,
+    this: Ptr<BSPSysMultiTargetEmitterCtlr>,
+    cloning: u32,
+) {
+    e.call(EMITTER_CTLR_PROCESS_CLONE, &args![this, cloning]);
+    e.with_stack(4, |e, found| {
+        e.mem.set_u32(found.addr(), 0);
+        let map = e.mem.u32(cloning);
+        e.call(CLONE_MAP_LOOKUP, &args![map, this, found]);
+        let clone = e.mem.u32(found.addr());
+        let master = e.get(this, BSPSysMultiTargetEmitterCtlr::pMasterParticleSystem);
+        let map = e.mem.u32(cloning);
+        e.call(CLONE_MAP_LOOKUP, &args![map, master, found]);
+        let master_clone = e.mem.u32(found.addr());
+        e.set(
+            Ptr::<BSPSysMultiTargetEmitterCtlr>::new(clone),
+            BSPSysMultiTargetEmitterCtlr::pMasterParticleSystem,
+            master_clone,
+        );
+    });
+}
+
+// Translated from 00c5ccb0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSPSysMultiTargetEmitterCtlr::RegisterStreamables` (Xbox PDB, engine map): whether
+/// `NiPSysEmitterCtlr::RegisterStreamables` succeeded.
+pub fn bs_psys_multi_target_emitter_ctlr_register_streamables(
+    e: &mut Engine,
+    this: Ptr<BSPSysMultiTargetEmitterCtlr>,
+    stream: Ptr,
+) -> bool {
+    e.call(EMITTER_CTLR_REGISTER_STREAMABLES, &args![this, stream])
+        .u8()
+        != 0
+}
+
+// Translated from 00c5cce0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSPSysMultiTargetEmitterCtlr::SaveBinary` (Xbox PDB, engine map):
+/// `NiPSysEmitterCtlr::SaveBinary`, `usMaxFullEmitters` (`00a303a0`), then the master
+/// system's link (the stream's vtable slot 0x30).
+pub fn bs_psys_multi_target_emitter_ctlr_save_binary(
+    e: &mut Engine,
+    this: Ptr<BSPSysMultiTargetEmitterCtlr>,
+    stream: Ptr,
+) {
+    e.call(EMITTER_CTLR_SAVE_BINARY, &args![this, stream]);
+    e.call(
+        STREAM_SAVE_SHORT,
+        &args![stream, this.addr().wrapping_add(0x60)],
+    );
+    let master = e.get(this, BSPSysMultiTargetEmitterCtlr::pMasterParticleSystem);
+    e.vcall(stream.addr(), 0x30, &args![master]);
+}
+
+// Translated from 00c5cd20 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSPSysMultiTargetEmitterCtlr::IsEqual` (Xbox PDB, engine map):
+/// `NiPSysEmitterCtlr::IsEqual`, and when that holds, whether the master systems and
+/// `usMaxFullEmitters` are equal.
+pub fn bs_psys_multi_target_emitter_ctlr_is_equal(
+    e: &mut Engine,
+    this: Ptr<BSPSysMultiTargetEmitterCtlr>,
+    other: Ptr<BSPSysMultiTargetEmitterCtlr>,
+) -> bool {
+    if e.call(EMITTER_CTLR_IS_EQUAL, &args![this, other]).u8() == 0 {
+        return false;
+    }
+    e.get(this, BSPSysMultiTargetEmitterCtlr::pMasterParticleSystem)
+        == e.get(other, BSPSysMultiTargetEmitterCtlr::pMasterParticleSystem)
+        && e.get(this, BSPSysMultiTargetEmitterCtlr::usMaxFullEmitters)
+            == e.get(other, BSPSysMultiTargetEmitterCtlr::usMaxFullEmitters)
+}
+
+// Translated from 00c5cd80 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSPSysMultiTargetEmitterCtlr::GetViewerStrings` (Xbox PDB, engine map):
+/// `NiPSysEmitterCtlr::GetViewerStrings`, then the class name, `"Master Particle System"`
+/// with the master system and `"Max Full Emitters"` with `usMaxFullEmitters`, each added to
+/// the list.
+pub fn bs_psys_multi_target_emitter_ctlr_get_viewer_strings(
+    e: &mut Engine,
+    this: Ptr<BSPSysMultiTargetEmitterCtlr>,
+    strings: Ptr,
+) {
+    e.call(EMITTER_CTLR_GET_VIEWER_STRINGS, &args![this, strings]);
+    e.with_stack(0xc, |e, slots| {
+        let name = e.global::<u32>(RTTI);
+        let text = e.call(NI_GET_VIEWER_STRING, &args![name]).u32();
+        let slot = slots.addr().wrapping_add(8);
+        e.mem.set_u32(slot, text);
+        e.call(VIEWER_STRINGS_ADD, &args![strings, slot]);
+        let master = e.get(this, BSPSysMultiTargetEmitterCtlr::pMasterParticleSystem);
+        let text = e
+            .call(NI_GET_VIEWER_STRING_POINTER, &args![MASTER_LABEL, master])
+            .u32();
+        let slot = slots.addr().wrapping_add(4);
+        e.mem.set_u32(slot, text);
+        e.call(VIEWER_STRINGS_ADD, &args![strings, slot]);
+        let most = u32::from(e.get(this, BSPSysMultiTargetEmitterCtlr::usMaxFullEmitters));
+        let text = e
+            .call(
+                NI_GET_VIEWER_STRING_SHORT,
+                &args![MAX_FULL_EMITTERS_LABEL, most],
+            )
+            .u32();
+        e.mem.set_u32(slots.addr(), text);
+        e.call(VIEWER_STRINGS_ADD, &args![strings, slots]);
+    });
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(
+            0x00c5_ca90,
+            bs_psys_multi_target_emitter_ctlr_create_clone(
+                Ptr<BSPSysMultiTargetEmitterCtlr>,
+                u32,
+            )
+                -> Ptr<BSPSysMultiTargetEmitterCtlr>
+        ),
+        entry!(
+            0x00c5_cb20,
+            fn_00c5cb20(Ptr<BSPSysMultiTargetEmitterCtlr>, Ptr<BSPSysMultiTargetEmitterCtlr>, u32)
+        ),
+        entry!(
+            0x00c5_cb50,
+            bs_psys_multi_target_emitter_ctlr_process_clone(Ptr<BSPSysMultiTargetEmitterCtlr>, u32)
+        ),
+        entry!(
+            0x00c5_ccb0,
+            bs_psys_multi_target_emitter_ctlr_register_streamables(
+                Ptr<BSPSysMultiTargetEmitterCtlr>,
+                Ptr,
+            ) -> bool
+        ),
+        entry!(
+            0x00c5_cce0,
+            bs_psys_multi_target_emitter_ctlr_save_binary(Ptr<BSPSysMultiTargetEmitterCtlr>, Ptr)
+        ),
+        entry!(
+            0x00c5_cd20,
+            bs_psys_multi_target_emitter_ctlr_is_equal(
+                Ptr<BSPSysMultiTargetEmitterCtlr>,
+                Ptr<BSPSysMultiTargetEmitterCtlr>,
+            ) -> bool
+        ),
+        entry!(
+            0x00c5_cd80,
+            bs_psys_multi_target_emitter_ctlr_get_viewer_strings(
+                Ptr<BSPSysMultiTargetEmitterCtlr>,
+                Ptr,
+            )
+        ),
         entry!(0x00c5_cea0, fn_00c5cea0(Ptr) -> u32),
         entry!(
             0x00c5_cc90,
@@ -933,5 +1160,182 @@ mod emitter_tests {
         e.call(0x00c1_beb0, &args![set, 0u32]);
         assert_eq!(e.mem.u32(set), 0);
         assert_eq!(e.mem.u32(set + 4), 0);
+    }
+}
+
+#[cfg(test)]
+mod n068_tests {
+    use super::*;
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    type Log = Rc<RefCell<Vec<(u32, Vec<u32>)>>>;
+    type Controller = Ptr<BSPSysMultiTargetEmitterCtlr>;
+
+    fn logged(e: &mut Engine, log: &Log, address: u32, eax: u32) {
+        let log = log.clone();
+        e.register_double(address, move |_, a| {
+            log.borrow_mut().push((address, a.to_vec()));
+            eax.into_ret()
+        });
+    }
+
+    fn calls(log: &Log, address: u32) -> Vec<Vec<u32>> {
+        log.borrow()
+            .iter()
+            .filter(|c| c.0 == address)
+            .map(|c| c.1.clone())
+            .collect()
+    }
+
+    fn controller(e: &mut Engine, master: u32, most: u16) -> Controller {
+        let this = e.new_object::<BSPSysMultiTargetEmitterCtlr>();
+        e.set(
+            this,
+            BSPSysMultiTargetEmitterCtlr::pMasterParticleSystem,
+            master,
+        );
+        e.set(this, BSPSysMultiTargetEmitterCtlr::usMaxFullEmitters, most);
+        this
+    }
+
+    #[test]
+    fn create_clone_constructs_and_copies_the_maximum() {
+        let mut e = Engine::new();
+        let log = Log::default();
+        logged(&mut e, &log, BASE_CONSTRUCTOR_00C1C390, 0);
+        logged(&mut e, &log, EMITTER_CTLR_COPY_MEMBERS, 0);
+        let block = e.mem.alloc(0x64);
+        e.mem.write(block, &[0xab; 0x64]);
+        logged(&mut e, &log, NI_NEW, block);
+        let this = controller(&mut e, 0x7000, 12);
+        assert_eq!(e.call(0x00c5_ca90, &args![this, 0x5555u32]).u32(), block);
+        assert_eq!(e.mem.u32(block), VTABLE);
+        assert_eq!(e.mem.u16(block + 0x60), 12);
+        assert_eq!(e.mem.u32(block + 0x5c), 0);
+        assert_eq!(calls(&log, NI_NEW), vec![vec![0x64]]);
+        assert_eq!(
+            calls(&log, EMITTER_CTLR_COPY_MEMBERS),
+            vec![vec![this.addr(), block, 0x5555]]
+        );
+    }
+
+    #[test]
+    fn process_clone_points_the_clone_at_the_cloned_master() {
+        let mut e = Engine::new();
+        let log = Log::default();
+        logged(&mut e, &log, EMITTER_CTLR_PROCESS_CLONE, 0);
+        let this = controller(&mut e, 0x7000, 1);
+        let clone = controller(&mut e, 0x7000, 1);
+        e.register_double(CLONE_MAP_LOOKUP, move |e, a| {
+            assert_eq!(a[0], 0x9900);
+            if a[1] == this.addr() {
+                e.mem.set_u32(a[2], clone.addr());
+                return 1u32.into_ret();
+            }
+            if a[1] == 0x7000 {
+                e.mem.set_u32(a[2], 0x7100);
+                return 1u32.into_ret();
+            }
+            0u32.into_ret()
+        });
+        let cloning = e.mem.alloc(8);
+        e.mem.set_u32(cloning, 0x9900);
+        e.call(0x00c5_cb50, &args![this, cloning]);
+        assert_eq!(e.mem.u32(clone.addr() + 0x5c), 0x7100);
+        assert_eq!(
+            calls(&log, EMITTER_CTLR_PROCESS_CLONE),
+            vec![vec![this.addr(), cloning]]
+        );
+        // A master without a clone: the local still holds the controller's clone.
+        e.set(
+            this,
+            BSPSysMultiTargetEmitterCtlr::pMasterParticleSystem,
+            0x7200,
+        );
+        e.call(0x00c5_cb50, &args![this, cloning]);
+        assert_eq!(e.mem.u32(clone.addr() + 0x5c), clone.addr());
+    }
+
+    #[test]
+    fn register_streamables_answers_the_base_result() {
+        let mut e = Engine::new();
+        let log = Log::default();
+        logged(&mut e, &log, EMITTER_CTLR_REGISTER_STREAMABLES, 0x300);
+        assert!(!e.call(0x00c5_ccb0, &args![0x1000u32, 0x2000u32]).bool());
+        logged(&mut e, &log, EMITTER_CTLR_REGISTER_STREAMABLES, 1);
+        assert!(e.call(0x00c5_ccb0, &args![0x1000u32, 0x2000u32]).bool());
+    }
+
+    #[test]
+    fn save_binary_writes_the_maximum_and_the_master_link() {
+        let mut e = Engine::new();
+        let log = Log::default();
+        logged(&mut e, &log, EMITTER_CTLR_SAVE_BINARY, 0);
+        logged(&mut e, &log, STREAM_SAVE_SHORT, 0);
+        let vtable = e.mem.alloc(0x40);
+        e.mem.set_u32(vtable + 0x30, 0x0040_6500);
+        logged(&mut e, &log, 0x0040_6500, 0);
+        let stream = e.mem.alloc(4);
+        e.mem.set_u32(stream, vtable);
+        let this = controller(&mut e, 0x7000, 3);
+        e.call(0x00c5_cce0, &args![this, stream]);
+        assert_eq!(
+            *log.borrow(),
+            vec![
+                (EMITTER_CTLR_SAVE_BINARY, vec![this.addr(), stream]),
+                (STREAM_SAVE_SHORT, vec![stream, this.addr() + 0x60]),
+                (0x0040_6500, vec![stream, 0x7000]),
+            ]
+        );
+    }
+
+    #[test]
+    fn is_equal_compares_master_and_maximum() {
+        let mut e = Engine::new();
+        let log = Log::default();
+        logged(&mut e, &log, EMITTER_CTLR_IS_EQUAL, 1);
+        let this = controller(&mut e, 0x7000, 3);
+        let same = controller(&mut e, 0x7000, 3);
+        let other_master = controller(&mut e, 0x7001, 3);
+        let other_most = controller(&mut e, 0x7000, 4);
+        assert!(e.call(0x00c5_cd20, &args![this, same]).bool());
+        assert!(!e.call(0x00c5_cd20, &args![this, other_master]).bool());
+        assert!(!e.call(0x00c5_cd20, &args![this, other_most]).bool());
+        logged(&mut e, &log, EMITTER_CTLR_IS_EQUAL, 0);
+        assert!(!e.call(0x00c5_cd20, &args![this, same]).bool());
+    }
+
+    #[test]
+    fn viewer_strings_add_name_master_and_maximum() {
+        let mut e = Engine::new();
+        let log = Log::default();
+        logged(&mut e, &log, EMITTER_CTLR_GET_VIEWER_STRINGS, 0);
+        e.map(RTTI, 4);
+        e.set_global::<u32>(RTTI, 0x0101_0000);
+        e.register(NI_GET_VIEWER_STRING, |_, a| (a[0] + 1).into_ret());
+        e.register(NI_GET_VIEWER_STRING_POINTER, |_, a| {
+            (a[0] + a[1]).into_ret()
+        });
+        e.register(NI_GET_VIEWER_STRING_SHORT, |_, a| (a[0] + a[1]).into_ret());
+        let l = log.clone();
+        e.register_double(VIEWER_STRINGS_ADD, move |e, a| {
+            l.borrow_mut().push((0, vec![a[0], e.mem.u32(a[1])]));
+            Ret::default()
+        });
+        let this = controller(&mut e, 0x7000, 3);
+        e.call(0x00c5_cd80, &args![this, 0x6000u32]);
+        assert_eq!(
+            calls(&log, 0),
+            vec![
+                vec![0x6000, 0x0101_0001],
+                vec![0x6000, MASTER_LABEL + 0x7000],
+                vec![0x6000, MAX_FULL_EMITTERS_LABEL + 3],
+            ]
+        );
+        assert_eq!(
+            calls(&log, EMITTER_CTLR_GET_VIEWER_STRINGS),
+            vec![vec![this.addr(), 0x6000]]
+        );
     }
 }
