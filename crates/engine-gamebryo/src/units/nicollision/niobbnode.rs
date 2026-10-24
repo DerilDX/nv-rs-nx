@@ -403,9 +403,313 @@ pub fn ni_obb_node_find_collisions(
     }
 }
 
+/// The double 0.25 at `010290b0` (`FLD qword`).
+const QUARTER_010290B0: u32 = 0x0102_90b0;
+/// `00a59980` (thiscall on a symmetric `NiMatrix3`: the out eigenvalues, the out axes;
+/// `NiMain/nimatrix3.cpp`, no Xbox name): its eigen decomposition (by its use here).
+const MATRIX_EIGEN: u32 = 0x00a5_9980;
+/// `NiTransform::MakeIdentity` (`00a86bf0`, Xbox PDB; thiscall, no arguments).
+const MAKE_IDENTITY: u32 = 0x00a8_6bf0;
+
+/// A value stored as a float and loaded back.
+fn stored(value: f64) -> f64 {
+    x87_load32(x87_store32(value))
+}
+
+/// The three corners' addresses of triangle `t`: the `u16` indices at `triangles + 6 t` into the
+/// 12-byte vertices.
+fn triangle_corners(e: &Engine, triangles: u32, vertices: u32, t: u32) -> [u32; 3] {
+    let base = triangles.wrapping_add(t.wrapping_mul(6));
+    [0u32, 2, 4].map(|i| {
+        let index = u32::from(e.mem.u16(base.wrapping_add(i)));
+        vertices.wrapping_add(index.wrapping_mul(12))
+    })
+}
+
+/// `x0*x0 + ... ` as `fn_00eb8ae0` sums one diagonal term: `((c^2 + p0^2) + p1^2) + p2^2` of the
+/// floats at `offset` of the centroid and the three corners.
+fn diagonal_term(e: &Engine, c: u32, corners: [u32; 3], offset: u32) -> f64 {
+    let [p0, p1, p2] = corners.map(|p| load_float(e, p + offset));
+    let c = load_float(e, c + offset);
+    let p0p0 = x87_mul(p0, p0);
+    let cc = x87_mul(c, c);
+    let s = x87_add(cc, p0p0);
+    let s = x87_add(s, x87_mul(p1, p1));
+    x87_add(s, x87_mul(p2, p2))
+}
+
+/// An off-diagonal term of `fn_00eb8ae0`: `c.a*c.b + p0.a*p0.b + p1.a*p1.b + p2.a*p2.b` with the
+/// exe's operand orders (`c`, `p1` and `p2` as `[p+first] * [p+second]`, `p0` as the loaded and
+/// the memory operand's offsets `p0_order`).
+fn cross_term(
+    e: &Engine,
+    c: u32,
+    corners: [u32; 3],
+    first: u32,
+    second: u32,
+    p0_order: (u32, u32),
+) -> f64 {
+    let [p0, p1, p2] = corners;
+    let a = x87_mul(load_float(e, c + first), float_operand(e, c + second));
+    let b = x87_mul(
+        load_float(e, p0 + p0_order.0),
+        float_operand(e, p0 + p0_order.1),
+    );
+    let s = x87_add(a, b);
+    let s = x87_add(
+        s,
+        x87_mul(load_float(e, p1 + first), float_operand(e, p1 + second)),
+    );
+    x87_add(
+        s,
+        x87_mul(load_float(e, p2 + first), float_operand(e, p2 + second)),
+    )
+}
+
+// Translated from 00eb8ae0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`thiscall` on an `NiOBBNode`, eight words; `fn_00eb94e0` calls
+/// it): the area-weighted mean and covariance of the triangles `order[first..=last]` (`first`
+/// taken as a `u16`, the loop index compared as a signed number with `last`). For each
+/// triangle `t` (its indices at `triangles + 6 t`, its corners in the 12-byte `vertices`, its
+/// area `areas[t]` and its centroid `centroids[t]`, 12 bytes) the area and the sums `area * c`
+/// and `area * (c c^T + p0 p0^T + p1 p1^T + p2 p2^T)` are accumulated (each stored as a float).
+/// The box center (+4) becomes `sum(area c) / sum(area)` and `out` (a 3x3 matrix) gets
+/// `0.25 / sum(area) * sum(...) - center center^T` (the 0.25 a double at `010290b0`).
+#[allow(clippy::too_many_arguments)]
+pub fn fn_00eb8ae0(
+    e: &mut Engine,
+    this: Ptr,
+    out: Ptr,
+    triangles: Ptr,
+    vertices: Ptr,
+    areas: Ptr,
+    centroids: Ptr,
+    first: u32,
+    last: u32,
+    order: Ptr,
+) {
+    let n = this.addr();
+    // weight, x, y, z, xx, xy, xz, yy, yz, zz: stored floats starting at 0.0.
+    let mut sums = [0u32; 10];
+    let mut counter = first & 0xffff;
+    let mut index = counter;
+    if index as i32 <= last as i32 {
+        loop {
+            let t = e.mem.u32(order.addr().wrapping_add(index.wrapping_mul(4)));
+            let corners = triangle_corners(e, triangles.addr(), vertices.addr(), t);
+            let c = centroids.addr().wrapping_add(t.wrapping_mul(12));
+            let area = stored(load_float(e, areas.addr().wrapping_add(t.wrapping_mul(4))));
+            let add_to = |sums: &mut [u32; 10], slot: usize, value: f64| {
+                sums[slot] = x87_store32(x87_add(value, x87_m32(sums[slot])));
+            };
+            add_to(&mut sums, 0, area);
+            let px = stored(x87_mul(load_float(e, c), area));
+            let py = stored(x87_mul(area, float_operand(e, c + 4)));
+            let pz = stored(x87_mul(load_float(e, c + 8), area));
+            add_to(&mut sums, 1, px);
+            add_to(&mut sums, 2, py);
+            add_to(&mut sums, 3, pz);
+            let xx = x87_mul(diagonal_term(e, c, corners, 0), area);
+            add_to(&mut sums, 4, xx);
+            let xy = x87_mul(cross_term(e, c, corners, 0, 4, (4, 0)), area);
+            add_to(&mut sums, 5, xy);
+            let xz = x87_mul(cross_term(e, c, corners, 0, 8, (8, 0)), area);
+            add_to(&mut sums, 6, xz);
+            let yy = x87_mul(diagonal_term(e, c, corners, 4), area);
+            add_to(&mut sums, 7, yy);
+            let yz = x87_mul(cross_term(e, c, corners, 8, 4, (8, 4)), area);
+            add_to(&mut sums, 8, yz);
+            let zz = x87_mul(area, diagonal_term(e, c, corners, 8));
+            add_to(&mut sums, 9, zz);
+            counter = counter.wrapping_add(1);
+            index = counter & 0xffff;
+            if index as i32 > last as i32 {
+                break;
+            }
+        }
+    }
+    let inverse = stored(x87_div(1.0, x87_load32(sums[0])));
+    let quarter = x87_load64(e.mem.u64(QUARTER_010290B0));
+    let k = stored(x87_mul(quarter, inverse));
+    e.mem
+        .set_u32(n + 4, x87_store32(x87_mul(x87_load32(sums[1]), inverse)));
+    e.mem
+        .set_u32(n + 8, x87_store32(x87_mul(x87_load32(sums[2]), inverse)));
+    e.mem
+        .set_u32(n + 0xc, x87_store32(x87_mul(inverse, x87_m32(sums[3]))));
+    let (mx, my, mz) = (n + 4, n + 8, n + 0xc);
+    let o = out.addr();
+    let x = load_float(e, mx);
+    let r0 = x87_sub(x87_mul(k, x87_m32(sums[4])), x87_mul(x, x));
+    e.mem.set_u32(o, x87_store32(r0));
+    let r1 = x87_mul(k, x87_m32(sums[5]));
+    let r1 = x87_store32(x87_sub(
+        r1,
+        x87_mul(load_float(e, my), float_operand(e, mx)),
+    ));
+    e.mem.set_u32(o + 4, r1);
+    let r2 = x87_mul(k, x87_m32(sums[6]));
+    let r2 = x87_store32(x87_sub(
+        r2,
+        x87_mul(load_float(e, mx), float_operand(e, mz)),
+    ));
+    e.mem.set_u32(o + 8, r2);
+    let y = load_float(e, my);
+    let r4 = x87_sub(x87_mul(k, x87_m32(sums[7])), x87_mul(y, y));
+    e.mem.set_u32(o + 0x10, x87_store32(r4));
+    let r5 = x87_mul(k, x87_m32(sums[8]));
+    let r5 = x87_store32(x87_sub(
+        r5,
+        x87_mul(load_float(e, my), float_operand(e, mz)),
+    ));
+    e.mem.set_u32(o + 0x14, r5);
+    let z = load_float(e, mz);
+    let kzz = x87_mul(k, x87_load32(sums[9]));
+    let r8 = x87_sub(kzz, x87_mul(z, z));
+    e.mem.set_u32(o + 0x20, x87_store32(r8));
+    e.mem.set_u32(o + 0xc, r1);
+    e.mem.set_u32(o + 0x18, r2);
+    e.mem.set_u32(o + 0x1c, r5);
+}
+
+/// The projections of `point - center` on the three axes (the 3x3 floats at `axes`), each
+/// stored, in `fn_00eb94e0`'s operand order.
+fn project(e: &Engine, point: u32, center: u32, axes: u32) -> [f64; 3] {
+    let [dx, dy, dz] = [0u32, 4, 8].map(|i| {
+        stored(x87_sub(
+            load_float(e, point.wrapping_add(i)),
+            float_operand(e, center + i),
+        ))
+    });
+    let a = |i: u32| load_float(e, axes + 4 * i);
+    let m = |i: u32| float_operand(e, axes + 4 * i);
+    let s = x87_add(x87_mul(a(0), dx), x87_mul(dy, m(1)));
+    let p0 = stored(x87_add(s, x87_mul(dz, m(2))));
+    let t = x87_add(x87_mul(a(4), dy), x87_mul(a(3), dx));
+    let p1 = stored(x87_add(t, x87_mul(a(5), dz)));
+    let b = x87_mul(dy, m(7));
+    let c = x87_mul(dx, a(6));
+    let u = x87_add(c, b);
+    let p2 = stored(x87_add(x87_mul(dz, a(8)), u));
+    [p0, p1, p2]
+}
+
+// Translated from 00eb94e0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`thiscall` on an `NiOBBNode`, eight words: the root, the triangle
+/// indices, the vertices, the areas, the centroids, the first and last positions and the order
+/// array; `00eb9fa0` calls it): fits the node's box to the triangles `order[first..=last]`. The
+/// mean goes to the box center and the covariance to a matrix (`fn_00eb8ae0`), whose eigen
+/// decomposition (`00a59980`) gives the box axes (+0x10). Every corner's projection on the
+/// axes (relative to the center) widens the minimum and maximum per axis, both starting at 0.0
+/// (a smaller value replaces the minimum, otherwise a larger one the maximum; a NaN neither).
+/// The extents (+0x34) become `(max - min) * 0.5` and the center moves by the axes times
+/// `(min + max) * 0.5` (the 0.5 a double at `01011588`); the box is transformed by the identity
+/// (`00a86bf0`, `00eba480`) and the root stored at +0x7c.
+#[allow(clippy::too_many_arguments)]
+pub fn fn_00eb94e0(
+    e: &mut Engine,
+    this: Ptr,
+    root: u32,
+    triangles: Ptr,
+    vertices: Ptr,
+    areas: Ptr,
+    centroids: Ptr,
+    first: u32,
+    last: u32,
+    order: Ptr,
+) {
+    let n = this.addr();
+    let center = n + 4;
+    let axes = n + 0x10;
+    // The exe's frame: offsets from ESP after its four register pushes.
+    e.with_stack(0xc8, |e, frame| {
+        let f = frame.addr();
+        let covariance = f + 0x70;
+        fn_00eb8ae0(
+            e,
+            this,
+            Ptr::new(covariance),
+            triangles,
+            vertices,
+            areas,
+            centroids,
+            first,
+            last,
+            order,
+        );
+        e.call(MATRIX_EIGEN, &args![covariance, f + 0x64, axes]);
+        let mut low = [0u32; 3];
+        let mut high = [0u32; 3];
+        let mut counter = first & 0xffff;
+        let mut index = counter;
+        if index as i32 <= last as i32 {
+            loop {
+                let t = e.mem.u32(order.addr().wrapping_add(index.wrapping_mul(4)));
+                for corner in triangle_corners(e, triangles.addr(), vertices.addr(), t) {
+                    let projection = project(e, corner, center, axes);
+                    for axis in 0..3 {
+                        let p = projection[axis];
+                        if x87_load32(low[axis]) > p {
+                            low[axis] = x87_store32(p);
+                        } else if x87_load32(high[axis]) < p {
+                            high[axis] = x87_store32(p);
+                        }
+                    }
+                }
+                counter = counter.wrapping_add(1);
+                index = counter & 0xffff;
+                if index as i32 > last as i32 {
+                    break;
+                }
+            }
+        }
+        let half = x87_load64(e.mem.u64(HALF_01011588));
+        for axis in 0..3 {
+            let size = stored(x87_sub(x87_load32(high[axis]), x87_load32(low[axis])));
+            let extent = x87_store32(x87_mul(size, half));
+            e.mem.set_u32(n + 0x34 + 4 * axis as u32, extent);
+        }
+        let middle = [0usize, 1, 2]
+            .map(|axis| stored(x87_add(x87_load32(low[axis]), x87_load32(high[axis]))));
+        let m0 = stored(x87_mul(middle[0], half));
+        let m1 = stored(x87_mul(middle[1], half));
+        let m2 = stored(x87_mul(half, middle[2]));
+        let scaled = |e: &Engine, row: u32, m: f64| -> [f64; 3] {
+            let at = axes + row;
+            [
+                stored(x87_mul(load_float(e, at), m)),
+                stored(x87_mul(load_float(e, at + 4), m)),
+                stored(x87_mul(m, float_operand(e, at + 8))),
+            ]
+        };
+        let c2 = scaled(e, 0x18, m2);
+        let c1 = scaled(e, 0xc, m1);
+        let c0 = scaled(e, 0, m0);
+        let shift = [0usize, 1, 2].map(|i| stored(x87_add(stored(x87_add(c0[i], c1[i])), c2[i])));
+        let x = x87_add(shift[0], float_operand(e, center));
+        e.mem.set_u32(center, x87_store32(x));
+        let y = x87_add(shift[1], float_operand(e, center + 4));
+        e.mem.set_u32(center + 4, x87_store32(y));
+        let z = x87_add(load_float(e, center + 8), shift[2]);
+        e.mem.set_u32(center + 8, x87_store32(z));
+        let transform = f + 0x94;
+        e.call(MAKE_IDENTITY, &args![transform]);
+        e.call(NI_OBB_BOX_TRANSFORM, &args![center, transform]);
+        e.mem.set_u32(n + 0x7c, root);
+    });
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(
+            0x00eb_8ae0,
+            fn_00eb8ae0(Ptr, Ptr, Ptr, Ptr, Ptr, Ptr, u32, u32, Ptr)
+        ),
+        entry!(
+            0x00eb_94e0,
+            fn_00eb94e0(Ptr, u32, Ptr, Ptr, Ptr, Ptr, u32, u32, Ptr)
+        ),
         entry!(
             0x00eb_9180,
             ni_obb_node_test_collision(Ptr, Ptr, u32, u32, u32, u32, u32, u32) -> bool
@@ -636,5 +940,100 @@ mod tests {
             .map(|w| (w[0], w[1], w[6], w[7]))
             .collect();
         assert_eq!(calls, vec![(left, other, 2, 3), (right, other, 2, 3)]);
+    }
+}
+
+#[cfg(test)]
+mod n034b_tests {
+    use super::*;
+
+    fn floats(e: &mut Engine, values: &[f32]) -> u32 {
+        let at = e.mem.alloc(4 * values.len() as u32 + 4);
+        for (i, v) in (0u32..).zip(values) {
+            e.mem.set_f32(at + 4 * i, *v);
+        }
+        at
+    }
+
+    fn read(e: &Engine, at: u32, n: u32) -> Vec<f32> {
+        (0..n).map(|i| e.mem.f32(at + 4 * i)).collect()
+    }
+
+    /// Two triangles; the order array picks triangle 1 (indices 1 2 3: (0,0,0), (3,0,0),
+    /// (0,6,9); area 2, centroid (1,2,3)). Answers the eight words after the root.
+    fn triangles(e: &mut Engine) -> [u32; 7] {
+        e.map(0x0101_1000, 0x1000);
+        e.map(0x0102_9000, 0x1000);
+        e.mem.set_f64(HALF_01011588, 0.5);
+        e.mem.set_f64(QUARTER_010290B0, 0.25);
+        let list = e.mem.alloc(12);
+        for (i, v) in (0u32..).zip([0u16, 0, 0, 1, 2, 3]) {
+            e.mem.set_u16(list + 2 * i, v);
+        }
+        let vertices = floats(
+            e,
+            &[9.0, 9.0, 9.0, 0.0, 0.0, 0.0, 3.0, 0.0, 0.0, 0.0, 6.0, 9.0],
+        );
+        let areas = floats(e, &[5.0, 2.0]);
+        let centroids = floats(e, &[7.0, 7.0, 7.0, 1.0, 2.0, 3.0]);
+        let order = e.mem.alloc(8);
+        e.mem.set_u32(order, 1);
+        e.mem.set_u32(order + 4, 0);
+        [list, vertices, areas, centroids, 0x0005_0000, 0, order]
+    }
+
+    #[test]
+    fn covariance_of_the_chosen_triangles() {
+        let mut e = Engine::new();
+        let [list, vertices, areas, centroids, first, last, order] = triangles(&mut e);
+        let node = e.mem.alloc(0x8c);
+        let out = e.mem.alloc(0x24);
+        // `first` is taken as a u16: 0x0005_0000 is position 0.
+        e.call(
+            0x00eb_8ae0,
+            &args![node, out, list, vertices, areas, centroids, first, last, order],
+        );
+        assert_eq!(read(&e, node + 4, 3), vec![1.0, 2.0, 3.0]);
+        assert_eq!(
+            read(&e, out, 9),
+            vec![1.5, -1.5, -2.25, -1.5, 6.0, 9.0, -2.25, 9.0, 13.5]
+        );
+    }
+
+    #[test]
+    fn box_fits_the_corners_along_the_axes() {
+        let mut e = Engine::new();
+        let [list, vertices, areas, centroids, first, last, order] = triangles(&mut e);
+        e.register(MATRIX_EIGEN, |e, a| {
+            for i in 0..9 {
+                let v = if i % 4 == 0 { 1.0 } else { 0.0 };
+                e.mem.set_f32(a[2] + 4 * i, v);
+            }
+            Ret::default()
+        });
+        e.register(MAKE_IDENTITY, |_, _| Ret::default());
+        e.register(NI_OBB_BOX_TRANSFORM, |_, _| Ret::default());
+        let node = e.mem.alloc(0x8c);
+        e.call_log = Some(vec![]);
+        e.call(
+            0x00eb_94e0,
+            &args![node, 0x77u32, list, vertices, areas, centroids, first, last, order],
+        );
+        assert_eq!(read(&e, node + 0x34, 3), vec![1.5, 3.0, 4.5]);
+        assert_eq!(read(&e, node + 4, 3), vec![1.5, 3.0, 4.5]);
+        assert_eq!(e.mem.u32(node + 0x7c), 0x77);
+        let log = e.call_log.clone().unwrap();
+        let transform = log
+            .iter()
+            .find(|(a, _)| *a == NI_OBB_BOX_TRANSFORM)
+            .map(|(_, w)| w.clone())
+            .unwrap();
+        assert_eq!(transform[0], node + 4);
+        let eigen = log
+            .iter()
+            .find(|(a, _)| *a == MATRIX_EIGEN)
+            .map(|(_, w)| w.clone())
+            .unwrap();
+        assert_eq!(eigen[2], node + 0x10);
     }
 }

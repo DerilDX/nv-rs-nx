@@ -207,9 +207,26 @@ pub fn fn_0044de20(e: &mut Engine, this: Ptr) -> bool {
     e.mem.u8(this.addr().wrapping_add(FLAGS)) & 1 != 0
 }
 
+/// `00ec7944` (`thiscall`, `RET 4`): the `std::exception` copy constructor.
+const EXCEPTION_COPY: u32 = 0x00ec_7944;
+/// `std::bad_alloc`'s vtable (`010176f8`; RTTI `std::bad_alloc`, read
+/// through its locator).
+const BAD_ALLOC_VTABLE: u32 = 0x0101_76f8;
+
+// Translated from 0044dd10 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `std::bad_alloc`'s copy constructor (`thiscall`, `RET 4`; the class from
+/// the vtable's RTTI): the `std::exception` copy (`00ec7944`), then the
+/// vtable `010176f8`. Returns `this`.
+pub fn fn_0044dd10(e: &mut Engine, this: Ptr, other: u32) -> Ptr {
+    e.call(EXCEPTION_COPY, &args![this, other]);
+    e.mem.set_u32(this.addr(), BAD_ALLOC_VTABLE);
+    this
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x0044_dd10, fn_0044dd10(Ptr, u32) -> Ptr),
         entry!(0x0044ddc0, fn_0044ddc0(Ptr) -> u32),
         entry!(0x0044_dd40, fn_0044dd40(Ptr)),
         entry!(0x0044_d8c0, fn_0044d8c0(Ptr, u32) -> Ptr),
@@ -540,5 +557,25 @@ mod tests {
         assert!(!e.call(0x0044_de20, &args![this]).bool());
         e.mem.set_u8(this + FLAGS, 3);
         assert!(e.call(0x0044_de20, &args![this]).bool());
+    }
+}
+
+#[cfg(test)]
+mod n038_tests {
+    use super::*;
+
+    #[test]
+    fn at_0044dd10_copies_then_sets_the_vtable() {
+        let mut e = Engine::new();
+        e.register(EXCEPTION_COPY, |e, a| {
+            e.mem.set_u32(a[0], 0x1111);
+            Ret::default()
+        });
+        let this = e.mem.alloc(0xc);
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x0044_dd10, &args![this, 0x5000u32]).u32(), this);
+        assert_eq!(e.mem.u32(this), BAD_ALLOC_VTABLE);
+        let log = e.call_log.take().unwrap();
+        assert_eq!(log[1], (EXCEPTION_COPY, vec![this, 0x5000]));
     }
 }

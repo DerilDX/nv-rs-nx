@@ -3,6 +3,7 @@
 
 #[allow(unused_imports)]
 use crate::prelude::*;
+use crate::sse::{add, addps, mulps, subps};
 
 // Translated from 00d22030 (decompiled, FalloutNV.exe 1.4.0.525)
 /// `hkpIgnoreModifierConstraintAtom::getConstraintInfo` (named by the exe's symbol table; the
@@ -184,9 +185,9 @@ pub fn fn_00d21d10(
         let ones = load_lanes(e, BLEND_ONES);
         let weights = load_lanes(e, saved);
         let current = load_lanes(e, target);
-        let blended = std::array::from_fn(|lane| {
-            (ones[lane] - factor) * weights[lane] + current[lane] * factor
-        });
+        // `SUBPS`, `MULPS`, `ADDPS` with the SSE NaN rules, the destination first.
+        let splat = [factor; 4];
+        let blended = addps(mulps(subps(ones, splat), weights), mulps(current, splat));
         store_lanes(e, target, blended);
     }
 }
@@ -296,11 +297,12 @@ pub fn fn_00d21f10(
 /// +0x20 (copied bit for bit), `vector` the 16-byte vector at `record + 0x10`; the dot product
 /// sums the first three lanes of `vector * f` as `z + (y + x)`.
 fn moving_surface_term(e: &Engine, atom: Ptr, record: Ptr) -> Lanes {
+    // `MULPS`, `ADDSS`, `SUBPS` with the SSE NaN rules, the destination first.
     let factor = load_lanes(e, atom.addr() + 0x20);
     let vector = load_lanes(e, record.addr() + 0x10);
-    let product: Lanes = std::array::from_fn(|lane| vector[lane] * factor[lane]);
-    let dot = product[2] + (product[1] + product[0]);
-    std::array::from_fn(|lane| factor[lane] - dot * factor[lane])
+    let product = mulps(vector, factor);
+    let dot = add(product[2], add(product[1], product[0]));
+    subps(factor, mulps([dot; 4], factor))
 }
 
 // Translated from 00d21f50 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -320,11 +322,7 @@ pub fn fn_00d21f50(
 ) {
     let term = moving_surface_term(e, this, record);
     let current = load_lanes(e, target.addr());
-    store_lanes(
-        e,
-        target.addr(),
-        std::array::from_fn(|lane| term[lane] + current[lane]),
-    );
+    store_lanes(e, target.addr(), addps(term, current));
 }
 
 // Translated from 00d21fc0 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -344,11 +342,7 @@ pub fn fn_00d21fc0(
 ) {
     let term = moving_surface_term(e, this, record);
     let current = load_lanes(e, target.addr());
-    store_lanes(
-        e,
-        target.addr(),
-        std::array::from_fn(|lane| current[lane] - term[lane]),
-    );
+    store_lanes(e, target.addr(), subps(current, term));
 }
 
 /// This unit's translated functions, by exe address.

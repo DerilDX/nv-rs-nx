@@ -195,9 +195,74 @@ fn load_track_name(e: &mut Engine, file: Ptr, track: u32) {
     });
 }
 
+/// `TESForm::StartForm`, `TESForm::SaveData` and `TESForm::CloseForm`
+/// (engine map; `004855a0`, `00485e00`, `00485680`, `thiscall`) and
+/// `TESFullName::Save` (engine map, `00487010`, on the name part at +0x18).
+const START_FORM: u32 = 0x0048_55a0;
+const SAVE_DATA: u32 = 0x0048_5e00;
+const CLOSE_FORM: u32 = 0x0048_5680;
+const FULL_NAME_SAVE: u32 = 0x0048_7010;
+/// The chunk writers (`cdecl`): a byte (`004858f0`), a word (`00485910`)
+/// and `TESForm::AddChunkArray` (engine map, `004856f0`: type, data, size).
+const ADD_CHUNK_BYTE: u32 = 0x0048_58f0;
+const ADD_CHUNK_WORD: u32 = 0x0048_5910;
+const ADD_CHUNK_ARRAY: u32 = 0x0048_56f0;
+/// A string's length (`004048e0`, `thiscall`) and its characters
+/// (`00559450`, `thiscall`: the word at `this`).
+const STRING_LENGTH: u32 = 0x0040_48e0;
+const STRING_TEXT: u32 = 0x0055_9450;
+/// `0084e3a0` (`thiscall`): a form's id.
+const FORM_ID: u32 = 0x0084_e3a0;
+
+// Translated from 005991b0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `MediaSet::Save` (Xbox PDB name in the engine map; no stack word):
+/// `StartForm`, the name part's save, the word at +0x44 as `NAM1`, each
+/// non-empty track name (`TRACK_NAMES`, text and length + 1) as its chunk,
+/// the first twelve `FLOATS` as words (each loaded and stored through the
+/// x87, quieting a signalling NaN), the byte at +0xa8 as `PNAM`, the last
+/// four `FLOATS`, the ids of the forms at +0xbc (`HNAM`) and +0xc0
+/// (`INAM`) when set, then `SaveData` and `CloseForm`.
+pub fn media_set_save(e: &mut Engine, this: Ptr) {
+    let base = this.addr();
+    e.call(START_FORM, &args![this]);
+    e.call(FULL_NAME_SAVE, &args![base + 0x18]);
+    let kind = e.mem.u32(base + 0x44);
+    e.call(ADD_CHUNK_WORD, &args![chunk(b"NAM1"), kind]);
+    for (tag, offset) in TRACK_NAMES {
+        let name = base + offset;
+        if e.call(STRING_LENGTH, &args![name]).u32() != 0 {
+            let length = e.call(STRING_LENGTH, &args![name]).u32();
+            let text = e.call(STRING_TEXT, &args![name]).u32();
+            e.call(ADD_CHUNK_ARRAY, &args![tag, text, length.wrapping_add(1)]);
+        }
+    }
+    let save_float = |e: &mut Engine, (tag, offset): (u32, u32)| {
+        let value = x87_quiet_bits(e.mem.u32(base + offset));
+        e.call(ADD_CHUNK_WORD, &args![tag, value]);
+    };
+    for entry in &FLOATS[..12] {
+        save_float(e, *entry);
+    }
+    let flag = e.mem.u8(base + 0xa8);
+    e.call(ADD_CHUNK_BYTE, &args![chunk(b"PNAM"), u32::from(flag)]);
+    for entry in &FLOATS[12..] {
+        save_float(e, *entry);
+    }
+    for (tag, offset) in [(chunk(b"HNAM"), 0xbcu32), (chunk(b"INAM"), 0xc0)] {
+        let form = e.mem.u32(base + offset);
+        if form != 0 {
+            let id = e.call(FORM_ID, &args![form]).u32();
+            e.call(ADD_CHUNK_WORD, &args![tag, id]);
+        }
+    }
+    e.call(SAVE_DATA, &args![this]);
+    e.call(CLOSE_FORM, &args![this]);
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x0059_91b0, media_set_save(Ptr)),
         entry!(0x0059_8a70, media_set_init_item(Ptr)),
         entry!(0x0059_8bc0, media_set_load(Ptr, Ptr) -> bool),
     ]
@@ -386,5 +451,78 @@ mod tests {
         for (i, (_, field)) in FLOATS.iter().enumerate().skip(1) {
             assert_eq!(e.mem.f32(this + field), i as f32 + 1.0);
         }
+    }
+}
+
+#[cfg(test)]
+mod n038_tests {
+    use super::*;
+
+    #[test]
+    fn save_writes_every_chunk_in_order() {
+        let mut e = Engine::new();
+        for addr in [
+            START_FORM,
+            SAVE_DATA,
+            CLOSE_FORM,
+            FULL_NAME_SAVE,
+            ADD_CHUNK_BYTE,
+            ADD_CHUNK_WORD,
+            ADD_CHUNK_ARRAY,
+        ] {
+            e.register(addr, |_, _| Ret::default());
+        }
+        // A string's length is the word at +4; its text the word at +0.
+        e.register(STRING_LENGTH, |e, a| Ret {
+            eax: e.mem.u32(a[0] + 4),
+            ..Ret::default()
+        });
+        e.register(STRING_TEXT, |e, a| Ret {
+            eax: e.mem.u32(a[0]),
+            ..Ret::default()
+        });
+        e.register(FORM_ID, |_, a| Ret {
+            eax: a[0] + 1,
+            ..Ret::default()
+        });
+        let this = e.mem.alloc(0xc4);
+        e.mem.set_u32(this + 0x44, 3);
+        e.mem.set_u32(this + 0x58, 0x7000);
+        e.mem.set_u32(this + 0x5c, 4);
+        e.mem.set_u32(this + 0x50, 0x7f80_0001);
+        e.mem.set_u32(this + 0xb8, 1.5f32.to_bits());
+        e.mem.set_u8(this + 0xa8, 0x81);
+        e.mem.set_u32(this + 0xc0, 0x9000);
+        e.call_log = Some(vec![]);
+        e.call(0x0059_91b0, &args![this]);
+        let log: Vec<_> = e
+            .call_log
+            .take()
+            .unwrap()
+            .into_iter()
+            .filter(|c| c.0 != 0x0059_91b0 && c.0 != STRING_LENGTH && c.0 != STRING_TEXT)
+            .collect();
+        let mut expected = vec![
+            (START_FORM, vec![this]),
+            (FULL_NAME_SAVE, vec![this + 0x18]),
+            (ADD_CHUNK_WORD, vec![chunk(b"NAM1"), 3]),
+            (ADD_CHUNK_ARRAY, vec![chunk(b"NAM3"), 0x7000, 5]),
+        ];
+        for (i, (tag, offset)) in FLOATS.iter().enumerate() {
+            if i == 12 {
+                expected.push((ADD_CHUNK_BYTE, vec![chunk(b"PNAM"), 0x81]));
+            }
+            let value = match offset {
+                0x50 => 0x7fc0_0001,
+                0xb8 => 1.5f32.to_bits(),
+                _ => 0,
+            };
+            expected.push((ADD_CHUNK_WORD, vec![*tag, value]));
+        }
+        expected.push((FORM_ID, vec![0x9000]));
+        expected.push((ADD_CHUNK_WORD, vec![chunk(b"INAM"), 0x9001]));
+        expected.push((SAVE_DATA, vec![this]));
+        expected.push((CLOSE_FORM, vec![this]));
+        assert_eq!(log, expected);
     }
 }

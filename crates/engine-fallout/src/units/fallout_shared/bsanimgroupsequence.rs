@@ -711,6 +711,166 @@ fn play_sounds_sound(e: &mut Engine, actor: Ptr, sound: u32, node: u32, at: &dyn
     e.call(SOUND_HANDLE_DESTROY, &args![handle]);
 }
 
+/// The object at `011de45c` whose methods (`tessaveloadgame.cpp` in the
+/// engine map) write (`008579b0`) and read (`008579e0`) bytes (`RET 8`:
+/// address, size) and answer a version byte (`008df040`).
+const SAVE_LOAD_OBJECT_011DE45C: u32 = 0x011d_e45c;
+const SAVE_LOAD_WRITE: u32 = 0x0085_79b0;
+const SAVE_LOAD_READ: u32 = 0x0085_79e0;
+const SAVE_LOAD_VERSION: u32 = 0x008d_f040;
+/// Reads bytes from a load buffer (`00864980`, `this` = buffer; `RET 8`:
+/// address, size).
+const LOAD_BUFFER_READ: u32 = 0x0086_4980;
+/// `m_fOffset`'s neighbours that the loads reset (`+0x4C`, `+0x50`).
+const SEQUENCE_AFTER_OFFSET_1: u32 = 0x4c;
+const SEQUENCE_AFTER_OFFSET_2: u32 = 0x50;
+
+/// The version byte of the object at `011de45c`.
+fn save_load_version(e: &mut Engine) -> u8 {
+    let object = e.mem.u32(SAVE_LOAD_OBJECT_011DE45C);
+    e.call(SAVE_LOAD_VERSION, &args![object]).u8()
+}
+
+/// Writes (`008579b0`) or reads (`008579e0`) `size` bytes at `at` through
+/// the object at `011de45c`.
+fn save_load_bytes(e: &mut Engine, function: u32, at: u32, size: u32) {
+    let object = e.mem.u32(SAVE_LOAD_OBJECT_011DE45C);
+    e.call(function, &args![object, at, size]);
+}
+
+/// The tail both loads share: `+0x4C` and `+0x50` set to `-FLT_MAX` (the
+/// constant at `01023850` loaded and negated), then
+/// `BSAnimGroupSequence::GetScaledTime(time)` (passed through `FLD`/`FSTP`,
+/// its `ST0` dropped).
+fn reset_after_load(e: &mut Engine, this: Ptr, time: f32) {
+    let base = this.addr();
+    for field in [SEQUENCE_AFTER_OFFSET_1, SEQUENCE_AFTER_OFFSET_2] {
+        let max = e.mem.u32(FLOAT_MAX_01023850);
+        e.mem
+            .set_u32(base + field, x87_quiet_bits(max) ^ 0x8000_0000);
+    }
+    bs_anim_group_sequence_get_scaled_time(e, this, x87_quiet(time));
+}
+
+// Translated from 004efa50 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Clears the word at +8 of each interpolator item (`m_pkInterpArray`,
+/// `+0x14`, 0x10 bytes each) for the item count `0084e3a0(this)` answers
+/// (the word at +0xC, `m_uiArraySize`), asked again before each item.
+pub fn fn_004efa50(e: &mut Engine, this: Ptr) {
+    let mut index = 0u32;
+    while index < e.call(0x0084_e3a0, &args![this]).u32() {
+        let items = e.mem.u32(this.addr() + SEQUENCE_INTERP_ARRAY);
+        e.mem
+            .set_u32(items.wrapping_add(index << 4).wrapping_add(8), 0);
+        index = index.wrapping_add(1);
+    }
+}
+
+// Translated from 004efaa0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The size of a sequence's save data: 20 bytes, 24 when the version byte
+/// of the object at `011de45c` is below 0x71 (no argument is read).
+pub fn fn_004efaa0(e: &mut Engine) -> u16 {
+    let mut size: u16 = 8;
+    if save_load_version(e) < 0x71 {
+        size += 4;
+    }
+    size + 12
+}
+
+// Translated from 004efb10 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Forwards to `fn_004efaa0` (`this` unread) and passes its `AX` on.
+pub fn fn_004efb10(e: &mut Engine, _this: Ptr) -> u16 {
+    fn_004efaa0(e)
+}
+
+// Translated from 004efb20 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Saves the sequence through the object at `011de45c` (`RET 4`): the
+/// `float` `m_fOffset + time` (`+0x48`), the word `m_eState` (`+0x44`), the
+/// offset sum again when the version byte is below 0x71, `m_fLastTime`
+/// (`+0x34`), `m_fWeightedLastTime` (`+0x38`) and `m_fDestFrame` (`+0x54`),
+/// four bytes each.
+pub fn fn_004efb20(e: &mut Engine, this: Ptr, time: f32) {
+    let base = this.addr();
+    let offset = e.mem.u32(base + SEQUENCE_OFFSET);
+    let sum = x87_store32(x87_add(x87_load32(offset), x87_m32(time.to_bits())));
+    e.with_stack(4, |e, local| {
+        e.mem.set_u32(local.addr(), sum);
+        save_load_bytes(e, SAVE_LOAD_WRITE, local.addr(), 4);
+        save_load_bytes(e, SAVE_LOAD_WRITE, base + SEQUENCE_STATE, 4);
+        if save_load_version(e) < 0x71 {
+            save_load_bytes(e, SAVE_LOAD_WRITE, local.addr(), 4);
+        }
+    });
+    for field in [
+        SEQUENCE_LAST_TIME,
+        SEQUENCE_WEIGHTED_LAST_TIME,
+        SEQUENCE_DEST_FRAME,
+    ] {
+        save_load_bytes(e, SAVE_LOAD_WRITE, base + field, 4);
+    }
+}
+
+// Translated from 004efbc0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Loads the sequence through the object at `011de45c` (`RET 4`), the
+/// reverse of `fn_004efb20`: the saved offset sum into a stack `float`,
+/// `m_eState` (`+0x44`, a word), the sum again when the version byte is
+/// below 0x71; `m_fOffset` (`+0x48`) becomes the sum minus `time`; then
+/// `m_fLastTime`, `m_fWeightedLastTime` and `m_fDestFrame`, the fields at
+/// `+0x4C` and `+0x50` set to `-FLT_MAX`, and `GetScaledTime(time)` runs.
+pub fn fn_004efbc0(e: &mut Engine, this: Ptr, time: f32) {
+    let base = this.addr();
+    let sum = e.with_stack(4, |e, local| {
+        save_load_bytes(e, SAVE_LOAD_READ, local.addr(), 4);
+        save_load_bytes(e, SAVE_LOAD_READ, base + SEQUENCE_STATE, 4);
+        if save_load_version(e) < 0x71 {
+            save_load_bytes(e, SAVE_LOAD_READ, local.addr(), 4);
+        }
+        e.mem.u32(local.addr())
+    });
+    let offset = x87_store32(x87_sub(x87_load32(sum), x87_m32(time.to_bits())));
+    e.mem.set_u32(base + SEQUENCE_OFFSET, offset);
+    for field in [
+        SEQUENCE_LAST_TIME,
+        SEQUENCE_WEIGHTED_LAST_TIME,
+        SEQUENCE_DEST_FRAME,
+    ] {
+        save_load_bytes(e, SAVE_LOAD_READ, base + field, 4);
+    }
+    reset_after_load(e, this, time);
+}
+
+// Translated from 004efd10 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Loads the sequence from `buffer` (`RET 8`; `00864980` reads), the
+/// reverse of `BSAnimGroupSequence::SaveGame`: a `float` (0.0 before the
+/// read) less `time` becomes `m_fOffset` (`+0x48`), a byte zero-extended
+/// becomes `m_eState` (`+0x44`), then `m_fLastTime`, `m_fWeightedLastTime`
+/// and `m_fDestFrame`; the fields at `+0x4C` and `+0x50` are set to
+/// `-FLT_MAX` and `GetScaledTime(time)` runs.
+pub fn fn_004efd10(e: &mut Engine, this: Ptr, buffer: Ptr, time: f32) {
+    let base = this.addr();
+    e.with_stack(8, |e, locals| {
+        let value = locals.addr();
+        let state = value + 7;
+        e.mem.set_u32(value, 0.0f32.to_bits());
+        e.call(LOAD_BUFFER_READ, &args![buffer, value, 4u32]);
+        let read = e.mem.u32(value);
+        let offset = x87_store32(x87_sub(x87_load32(read), x87_m32(time.to_bits())));
+        e.mem.set_u32(base + SEQUENCE_OFFSET, offset);
+        e.mem.set_u8(state, 0);
+        e.call(LOAD_BUFFER_READ, &args![buffer, state, 1u32]);
+        let byte = e.mem.u8(state);
+        e.mem.set_u32(base + SEQUENCE_STATE, u32::from(byte));
+    });
+    for field in [
+        SEQUENCE_LAST_TIME,
+        SEQUENCE_WEIGHTED_LAST_TIME,
+        SEQUENCE_DEST_FRAME,
+    ] {
+        e.call(LOAD_BUFFER_READ, &args![buffer, base + field, 4u32]);
+    }
+    reset_after_load(e, this, time);
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -734,6 +894,12 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
             0x004e_fdc0,
             bs_anim_group_sequence_deactivate(Ptr, f32, u32)
         ),
+        entry!(0x004e_fa50, fn_004efa50(Ptr)),
+        entry!(0x004e_faa0, fn_004efaa0() -> u16),
+        entry!(0x004e_fb10, fn_004efb10(Ptr) -> u16),
+        entry!(0x004e_fb20, fn_004efb20(Ptr, f32)),
+        entry!(0x004e_fbc0, fn_004efbc0(Ptr, f32)),
+        entry!(0x004e_fd10, fn_004efd10(Ptr, Ptr, f32)),
     ]
 }
 
@@ -1421,5 +1587,164 @@ mod b035_tests {
         let log = e.call_log.take().unwrap();
         assert!(calls(&log, 0x00ad_73b0).is_empty());
         assert_eq!(calls(&log, 0x00ad_8830).len(), 1);
+    }
+}
+
+#[cfg(test)]
+mod n037_tests {
+    use super::*;
+
+    fn ret(eax: u32) -> Ret {
+        Ret {
+            eax,
+            ..Ret::default()
+        }
+    }
+
+    fn calls_to(e: &Engine, addr: u32) -> Vec<Vec<u32>> {
+        e.call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|c| c.0 == addr)
+            .map(|c| c.1.clone())
+            .collect()
+    }
+
+    const OBJECT: u32 = 0x0900_0000;
+
+    /// The object at `011de45c` with version byte `version`; reads fill each
+    /// byte with 0x40 plus the count of reads so far.
+    fn engine(version: u32) -> Engine {
+        let mut e = Engine::new();
+        e.map(SAVE_LOAD_OBJECT_011DE45C, 4);
+        e.mem.set_u32(SAVE_LOAD_OBJECT_011DE45C, OBJECT);
+        e.register_double(SAVE_LOAD_VERSION, move |_, _| ret(version));
+        e.register(SAVE_LOAD_WRITE, |_, _| Ret::default());
+        let mut reads = 0u8;
+        e.register_double(SAVE_LOAD_READ, move |e, a| {
+            reads += 1;
+            for i in 0..a[2] {
+                e.mem.set_u8(a[1] + i, 0x40 + reads);
+            }
+            Ret::default()
+        });
+        let mut reads = 0u8;
+        e.register_double(LOAD_BUFFER_READ, move |e, a| {
+            reads += 1;
+            for i in 0..a[2] {
+                e.mem.set_u8(a[1] + i, 0x40 + reads);
+            }
+            Ret::default()
+        });
+        e.register(0x00a3_0970, |_, _| Ret::default());
+        e.map(FLOAT_MAX_01023850, 4);
+        e.mem.set_u32(FLOAT_MAX_01023850, f32::MAX.to_bits());
+        e.call_log = Some(vec![]);
+        e
+    }
+
+    #[test]
+    fn clears_each_interpolator_word() {
+        let mut e = engine(0x80);
+        let this = e.mem.alloc(0x80);
+        let items = e.mem.alloc(0x30);
+        e.mem.write(items, &[0xcd; 0x30]);
+        e.mem.set_u32(this + SEQUENCE_INTERP_ARRAY, items);
+        e.register(0x0084_e3a0, |_, _| ret(2));
+        e.call(0x004e_fa50, &[this]);
+        assert_eq!(e.mem.u32(items + 8), 0);
+        assert_eq!(e.mem.u32(items + 0x18), 0);
+        assert_eq!(e.mem.u32(items + 0x28), 0xcdcd_cdcd);
+        assert_eq!(e.mem.u32(items + 4), 0xcdcd_cdcd);
+        assert_eq!(calls_to(&e, 0x0084_e3a0).len(), 3);
+    }
+
+    #[test]
+    fn save_size_depends_on_the_version() {
+        let mut e = engine(0x71);
+        assert_eq!(e.call(0x004e_faa0, &[]).u32(), 20);
+        assert_eq!(e.call(0x004e_fb10, &[0x1234]).u32(), 20);
+        let mut e = engine(0x70);
+        assert_eq!(e.call(0x004e_faa0, &[]).u32(), 24);
+        assert_eq!(calls_to(&e, SAVE_LOAD_VERSION), vec![vec![OBJECT]]);
+    }
+
+    #[test]
+    fn save_writes_the_offset_sum_and_the_fields() {
+        for (version, writes) in [(0x70u32, 6usize), (0x71, 5)] {
+            let mut e = engine(version);
+            let this = e.mem.alloc(0x80);
+            e.mem.set_u32(this + SEQUENCE_OFFSET, 1.5f32.to_bits());
+            let sums = std::rc::Rc::new(std::cell::RefCell::new(vec![]));
+            let seen = sums.clone();
+            e.register_double(SAVE_LOAD_WRITE, move |e, a| {
+                seen.borrow_mut().push(e.mem.u32(a[1]));
+                Ret::default()
+            });
+            e.call(0x004e_fb20, &args![this, 2.0f32]);
+            let writes_seen = calls_to(&e, SAVE_LOAD_WRITE);
+            assert_eq!(writes_seen.len(), writes);
+            assert_eq!(writes_seen[1], vec![OBJECT, this + SEQUENCE_STATE, 4]);
+            assert_eq!(
+                writes_seen[writes - 1],
+                vec![OBJECT, this + SEQUENCE_DEST_FRAME, 4]
+            );
+            assert_eq!(sums.borrow()[0], 3.5f32.to_bits());
+            if writes == 6 {
+                assert_eq!(sums.borrow()[2], 3.5f32.to_bits());
+            }
+        }
+    }
+
+    #[test]
+    fn load_reads_back_and_resets() {
+        let mut e = engine(0x70);
+        let this = e.mem.alloc(0x80);
+        e.call(0x004e_fbc0, &args![this, 0.0f32]);
+        // The third read (0x43 bytes) overwrote the first.
+        let sum = f32::from_bits(0x4343_4343);
+        assert_eq!(e.mem.u32(this + SEQUENCE_OFFSET), sum.to_bits());
+        assert_eq!(e.mem.u32(this + SEQUENCE_STATE), 0x4242_4242);
+        assert_eq!(e.mem.u32(this + SEQUENCE_DEST_FRAME), 0x4646_4646);
+        assert_eq!(e.mem.u32(this + 0x4c), (-f32::MAX).to_bits());
+        assert_eq!(e.mem.u32(this + 0x50), (-f32::MAX).to_bits());
+        let mut e = engine(0x71);
+        let this = e.mem.alloc(0x80);
+        e.mem.set_u32(this + SEQUENCE_STATE, 2);
+        // State 0x42424242 after the read: GetScaledTime does not compute.
+        e.call(0x004e_fbc0, &args![this, 1.0f32]);
+        assert_eq!(calls_to(&e, SAVE_LOAD_READ).len(), 5);
+        assert!(calls_to(&e, 0x00a3_0970).is_empty());
+        let sum = f32::from_bits(0x4141_4141);
+        assert_eq!(
+            e.mem.u32(this + SEQUENCE_OFFSET),
+            ((sum as f64 - 1.0) as f32).to_bits()
+        );
+    }
+
+    #[test]
+    fn load_from_buffer_reads_a_float_a_byte_and_three_fields() {
+        let mut e = engine(0x71);
+        let this = e.mem.alloc(0x80);
+        e.register_double(LOAD_BUFFER_READ, |e, a| {
+            match a[2] {
+                1 => e.mem.set_u8(a[1], 2),
+                _ => e.mem.set_u32(a[1], 5.0f32.to_bits()),
+            }
+            Ret::default()
+        });
+        e.register(0x00a3_0970, |_, _| Ret::default());
+        e.call(0x004e_fd10, &args![this, 0x5000u32, 1.5f32]);
+        assert_eq!(e.mem.f32(this + SEQUENCE_OFFSET), 3.5);
+        assert_eq!(e.mem.u32(this + SEQUENCE_STATE), 2);
+        assert_eq!(e.mem.f32(this + SEQUENCE_LAST_TIME), 5.0);
+        assert_eq!(e.mem.u32(this + 0x50), (-f32::MAX).to_bits());
+        let reads = calls_to(&e, LOAD_BUFFER_READ);
+        assert_eq!(reads.len(), 5);
+        assert_eq!(reads[1][2], 1);
+        // State 2: GetScaledTime runs with offset + time.
+        let scaled = calls_to(&e, 0x00a3_0970);
+        assert_eq!(scaled, vec![vec![this, 5.0f32.to_bits(), 1]]);
     }
 }

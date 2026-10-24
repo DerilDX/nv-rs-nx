@@ -428,9 +428,398 @@ pub fn fn_005edfb0(e: &mut Engine, this: Ptr) {
     free_elements_and_clear(e, base + 0xf8, base + 0x108);
 }
 
+/// The string compare the ragdoll parts use on their name arrays
+/// (`00408b20`, cdecl: two texts; non-zero when they differ).
+const TEXT_COMPARE: u32 = 0x0040_8b20;
+/// `strlen` (`0044a670`), allocate (`00401000`) and `strcpy_s`
+/// (`00406d30`: destination, size, source), all cdecl.
+const TEXT_LENGTH: u32 = 0x0044_a670;
+const ALLOCATE: u32 = 0x0040_1000;
+const TEXT_COPY: u32 = 0x0040_6d30;
+/// The name arrays' resize (`006f2290`, the engine map's
+/// `BSSimpleArray<TESObjectWEAP_P_1024>::SetSize`, a folded body;
+/// thiscall: count, 1).
+const STRING_ARRAY_SET_SIZE: u32 = 0x006f_2290;
+
+/// Whether two `float`s at `offset` differ: `FLD`, `FLD`, `FUCOMPP`,
+/// `TEST AH,0x44`: only equal and ordered values count as the same.
+fn float_differs(e: &Engine, this: u32, other: u32, offset: u32) -> bool {
+    let mine = x87_load32(e.mem.u32(this + offset));
+    let theirs = x87_load32(e.mem.u32(other + offset));
+    theirs != mine
+}
+
+/// The array part of the ragdoll parts' compares: `differs` set when the
+/// counts (`0044ddc0`) of the element arrays at `elements` differ, then
+/// (while still clear) each element pair (`element_at` on the other's,
+/// then on this one's) through `element_differs`; then set when the
+/// counts of the name arrays at `names` differ, and (while still clear)
+/// each name pair through `00408b20(this one's, the other's)`.
+fn arrays_differ(
+    e: &mut Engine,
+    this: u32,
+    other: u32,
+    elements: u32,
+    element_at: u32,
+    element_differs: fn(&mut Engine, Ptr, u32) -> bool,
+    names: u32,
+) -> bool {
+    let mut differs = false;
+    let mine = e.call(ARRAY_COUNT, &args![this + elements]).u32();
+    if mine != e.call(ARRAY_COUNT, &args![other + elements]).u32() {
+        differs = true;
+    }
+    if !differs {
+        let mut i = 0u32;
+        while i < e.call(ARRAY_COUNT, &args![this + elements]).u32() && !differs {
+            let theirs = e.call(element_at, &args![other + elements, i]).u32();
+            let mine = e.call(element_at, &args![this + elements, i]).u32();
+            differs = element_differs(e, Ptr::new(mine), theirs);
+            i = i.wrapping_add(1);
+        }
+    }
+    let mine = e.call(ARRAY_COUNT, &args![this + names]).u32();
+    if mine != e.call(ARRAY_COUNT, &args![other + names]).u32() {
+        differs = true;
+    }
+    if !differs {
+        let mut i = 0u32;
+        while i < e.call(ARRAY_COUNT, &args![this + names]).u32() && !differs {
+            let slot = e.call(ARRAY_AT, &args![other + names, i]).u32();
+            let theirs = e.mem.u32(slot);
+            let slot = e.call(ARRAY_AT, &args![this + names, i]).u32();
+            let mine = e.mem.u32(slot);
+            differs = e.call(TEXT_COMPARE, &args![mine, theirs]).u32() != 0;
+            i = i.wrapping_add(1);
+        }
+    }
+    differs
+}
+
+/// The array part of the ragdoll parts' copies: this one's element array
+/// cleared (`008454f0(1)`), its names freed and the name array cleared,
+/// both resized to the other's counts (`set_size(count, 1)`,
+/// `006f2290(count, 1)`), each element copied by `copy_element(source,
+/// destination)` (the addresses from `element_at`), and each name
+/// duplicated (`strlen` + 1 bytes from `00401000`, `strcpy_s`).
+fn copy_arrays(
+    e: &mut Engine,
+    this: u32,
+    other: u32,
+    elements: u32,
+    element_at: u32,
+    set_size: u32,
+    copy_element: fn(&mut Engine, u32, u32),
+    names: u32,
+) {
+    e.call(ARRAY_CLEAR, &args![this + elements, 1u32]);
+    let mut i = 0u32;
+    while i < e.call(ARRAY_COUNT, &args![this + names]).u32() {
+        let slot = e.call(ARRAY_AT, &args![this + names, i]).u32();
+        let text = e.mem.u32(slot);
+        e.call(FREE, &args![text]);
+        i = i.wrapping_add(1);
+    }
+    e.call(ARRAY_CLEAR, &args![this + names, 1u32]);
+    let count = e.call(ARRAY_COUNT, &args![other + elements]).u32();
+    e.call(set_size, &args![this + elements, count, 1u32]);
+    let count = e.call(ARRAY_COUNT, &args![other + names]).u32();
+    e.call(STRING_ARRAY_SET_SIZE, &args![this + names, count, 1u32]);
+    let mut i = 0u32;
+    while i < e.call(ARRAY_COUNT, &args![other + elements]).u32() {
+        let source = e.call(element_at, &args![other + elements, i]).u32();
+        let destination = e.call(element_at, &args![this + elements, i]).u32();
+        copy_element(e, source, destination);
+        i = i.wrapping_add(1);
+    }
+    let mut i = 0u32;
+    while i < e.call(ARRAY_COUNT, &args![other + names]).u32() {
+        let slot = e.call(ARRAY_AT, &args![other + names, i]).u32();
+        let text = e.mem.u32(slot);
+        let size = e.call(TEXT_LENGTH, &args![text]).u32().wrapping_add(1);
+        let copy = e.call(ALLOCATE, &args![size]).u32();
+        let slot = e.call(ARRAY_AT, &args![other + names, i]).u32();
+        let text = e.mem.u32(slot);
+        e.call(TEXT_COPY, &args![copy, size, text]);
+        let slot = e.call(ARRAY_AT, &args![this + names, i]).u32();
+        e.mem.set_u32(slot, copy);
+        i = i.wrapping_add(1);
+    }
+}
+
+/// `REP MOVSD` of `words` words.
+fn copy_words(e: &mut Engine, source: u32, destination: u32, words: u32) {
+    for i in 0..words {
+        let word = e.mem.u32(source + 4 * i);
+        e.mem.set_u32(destination + 4 * i, word);
+    }
+}
+
+/// `005ecb30`'s element copy: 0xE words.
+fn copy_foot_element(e: &mut Engine, source: u32, destination: u32) {
+    copy_words(e, source, destination, 0xe);
+}
+
+/// `005ecfd0`'s element copy: 0xA words.
+fn copy_look_element(e: &mut Engine, source: u32, destination: u32) {
+    copy_words(e, source, destination, 0xa);
+}
+
+/// `005ed360`'s element copy: the word at +0 and the `u16` at +4.
+fn copy_grab_element(e: &mut Engine, source: u32, destination: u32) {
+    let word = e.mem.u32(source);
+    e.mem.set_u32(destination, word);
+    let half = e.mem.u16(source + 4);
+    e.mem.set_u16(destination + 4, half);
+}
+
+// Translated from 005ec760 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Whether two 0x38-byte entries of the foot IK data's array (+0x30) are
+/// equal (`RET 4`: the other; the engine map has no name): the three
+/// `i16` at +0, +2, +4, the byte at +6 and the twelve `float`s at +8 ..
+/// +0x34 (unordered counts as different).
+pub fn fn_005ec760(e: &mut Engine, this: Ptr, other: u32) -> bool {
+    let base = this.addr();
+    for offset in [0u32, 2, 4] {
+        if e.mem.i16(base + offset) != e.mem.i16(other + offset) {
+            return false;
+        }
+    }
+    if e.mem.u8(base + 6) != e.mem.u8(other + 6) {
+        return false;
+    }
+    !(0..12).any(|i| float_differs(e, base, other, 8 + 4 * i))
+}
+
+// Translated from 005ec8f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Whether two foot IK entries differ (`RET 4`): the opposite of
+/// [`fn_005ec760`].
+pub fn fn_005ec8f0(e: &mut Engine, this: Ptr, other: u32) -> bool {
+    !fn_005ec760(e, this, other)
+}
+
+// Translated from 005ec920 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Whether the ragdoll's foot IK data (its member at +0x90) differs from
+/// another's (`RET 4`; `Compare`'s field compare, see `005eeb70`; the
+/// engine map has no name): the entry array at +0x30 (`005eedc0`,
+/// [`fn_005ec8f0`]) and the name array at +0x20, then the byte at +0 and
+/// the seven `float`s at +4 .. +0x1C.
+pub fn fn_005ec920(e: &mut Engine, this: Ptr, other: u32) -> bool {
+    let base = this.addr();
+    if arrays_differ(e, base, other, 0x30, 0x005e_edc0, fn_005ec8f0, 0x20) {
+        return true;
+    }
+    if e.mem.u8(base) != e.mem.u8(other) {
+        return true;
+    }
+    (0..7).any(|i| float_differs(e, base, other, 4 + 4 * i))
+}
+
+// Translated from 005ecb30 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Copies another foot IK data into this one (`RET 4`; `Copy`'s field
+/// copy, see `005eeb70`; the engine map has no name): the arrays (entries
+/// at +0x30 through `005eedc0`, resized by `005ef010`, 0xE words each;
+/// names at +0x20), then the seven `float`s +4 .. +0x1C (FLD/FSTP) and the
+/// byte at +0.
+pub fn fn_005ecb30(e: &mut Engine, this: Ptr, other: u32) {
+    let base = this.addr();
+    copy_arrays(
+        e,
+        base,
+        other,
+        0x30,
+        0x005e_edc0,
+        0x005e_f010,
+        copy_foot_element,
+        0x20,
+    );
+    for i in 0..7 {
+        let value = x87_quiet_bits(e.mem.u32(other + 4 + 4 * i));
+        e.mem.set_u32(base + 4 + 4 * i, value);
+    }
+    let byte = e.mem.u8(other);
+    e.mem.set_u8(base, byte);
+}
+
+// Translated from 005ecd10 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Whether two 0x28-byte entries of the look IK data's array (+0x14) are
+/// equal (`RET 4`: the other; the engine map has no name): the `i16` at
+/// +0 and +2 and the `float`s at +0x1C, +0x20, +0x24, +0x10, +0x14, +0x18,
+/// +4, +8, +0xC (unordered counts as different).
+pub fn fn_005ecd10(e: &mut Engine, this: Ptr, other: u32) -> bool {
+    let base = this.addr();
+    for offset in [0u32, 2] {
+        if e.mem.i16(base + offset) != e.mem.i16(other + offset) {
+            return false;
+        }
+    }
+    ![0x1cu32, 0x20, 0x24, 0x10, 0x14, 0x18, 4, 8, 0xc]
+        .into_iter()
+        .any(|offset| float_differs(e, base, other, offset))
+}
+
+// Translated from 005ece20 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Whether two look IK entries differ (`RET 4`): the opposite of
+/// [`fn_005ecd10`].
+pub fn fn_005ece20(e: &mut Engine, this: Ptr, other: u32) -> bool {
+    !fn_005ecd10(e, this, other)
+}
+
+// Translated from 005ece50 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Whether the ragdoll's look IK data (its member at +0xD0) differs from
+/// another's (`RET 4`; see `005eeb70`; the engine map has no name): the
+/// entry array at +0x14 (`00691750`, [`fn_005ece20`]) and the name array
+/// at +4, then the byte at +0.
+pub fn fn_005ece50(e: &mut Engine, this: Ptr, other: u32) -> bool {
+    let base = this.addr();
+    arrays_differ(e, base, other, 0x14, 0x0069_1750, fn_005ece20, 4)
+        || e.mem.u8(base) != e.mem.u8(other)
+}
+
+// Translated from 005ecfd0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Copies another look IK data into this one (`RET 4`; see `005eeb70`;
+/// the engine map has no name): the arrays (entries at +0x14 through
+/// `00691750`, resized by `005ef1f0`, 0xA words each; names at +4), then
+/// the byte at +0.
+pub fn fn_005ecfd0(e: &mut Engine, this: Ptr, other: u32) {
+    let base = this.addr();
+    copy_arrays(
+        e,
+        base,
+        other,
+        0x14,
+        0x0069_1750,
+        0x005e_f1f0,
+        copy_look_element,
+        4,
+    );
+    let byte = e.mem.u8(other);
+    e.mem.set_u8(base, byte);
+}
+
+// Translated from 005ed160 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Whether two 6-byte entries of the grab IK data's array (+0x14) are
+/// equal (`RET 4`: the other; the engine map has no name): the `i16` at
+/// +0, +2 and +4.
+pub fn fn_005ed160(e: &mut Engine, this: Ptr, other: u32) -> bool {
+    let base = this.addr();
+    [0u32, 2, 4]
+        .into_iter()
+        .all(|offset| e.mem.i16(base + offset) == e.mem.i16(other + offset))
+}
+
+// Translated from 005ed1b0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Whether two grab IK entries differ (`RET 4`): the opposite of
+/// [`fn_005ed160`].
+pub fn fn_005ed1b0(e: &mut Engine, this: Ptr, other: u32) -> bool {
+    !fn_005ed160(e, this, other)
+}
+
+// Translated from 005ed1e0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Whether the ragdoll's grab IK data (its member at +0xF4) differs from
+/// another's (`RET 4`; see `005eeb70`; the engine map has no name): the
+/// entry array at +0x14 (`0069ccf0`, [`fn_005ed1b0`]) and the name array
+/// at +4, then the byte at +0.
+pub fn fn_005ed1e0(e: &mut Engine, this: Ptr, other: u32) -> bool {
+    let base = this.addr();
+    arrays_differ(e, base, other, 0x14, 0x0069_ccf0, fn_005ed1b0, 4)
+        || e.mem.u8(base) != e.mem.u8(other)
+}
+
+// Translated from 005ed360 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Copies another grab IK data into this one (`RET 4`; see `005eeb70`;
+/// the engine map has no name): the arrays (entries at +0x14 through
+/// `0069ccf0`, resized by `005ef3d0`, a word and a `u16` each; names at
+/// +4), then the byte at +0.
+pub fn fn_005ed360(e: &mut Engine, this: Ptr, other: u32) {
+    let base = this.addr();
+    copy_arrays(
+        e,
+        base,
+        other,
+        0x14,
+        0x0069_ccf0,
+        0x005e_f3d0,
+        copy_grab_element,
+        4,
+    );
+    let byte = e.mem.u8(other);
+    e.mem.set_u8(base, byte);
+}
+
+// Translated from 005ed4f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Whether the ragdoll's pose matching data (its member at +0x118)
+/// differs from another's (`RET 4`; see `005eeb70`; the engine map has no
+/// name): the strings at +4 (`00501c90(other's, 1)`, non-zero when they
+/// differ), then the byte at +0, the `i16` at +0xC, +0xE, +0x10, the
+/// `float`s at +0x14 and +0x1C, the byte at +0x12 and the `float`s at
+/// +0x20 and +0x18 (unordered counts as different).
+pub fn fn_005ed4f0(e: &mut Engine, this: Ptr, other: u32) -> bool {
+    let base = this.addr();
+    if e.call(0x0050_1c90, &args![base + 4, other + 4, 1u32]).u32() != 0 {
+        return true;
+    }
+    if e.mem.u8(base) != e.mem.u8(other) {
+        return true;
+    }
+    for offset in [0xcu32, 0xe, 0x10] {
+        if e.mem.i16(base + offset) != e.mem.i16(other + offset) {
+            return true;
+        }
+    }
+    if float_differs(e, base, other, 0x14) || float_differs(e, base, other, 0x1c) {
+        return true;
+    }
+    if e.mem.u8(base + 0x12) != e.mem.u8(other + 0x12) {
+        return true;
+    }
+    float_differs(e, base, other, 0x20) || float_differs(e, base, other, 0x18)
+}
+
+// Translated from 005ed5f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Copies another pose matching data into this one (`RET 4`; see
+/// `005eeb70`; the engine map has no name): the string at +4
+/// (`00501c10`), the byte at +0, the `u16` at +0xC, +0xE, +0x10, the
+/// `float`s at +0x14 and +0x1C (FLD/FSTP), the byte at +0x12 and the
+/// `float`s at +0x18 and +0x20.
+pub fn fn_005ed5f0(e: &mut Engine, this: Ptr, other: u32) {
+    let base = this.addr();
+    e.call(0x0050_1c10, &args![base + 4, other + 4]);
+    let byte = e.mem.u8(other);
+    e.mem.set_u8(base, byte);
+    for offset in [0xcu32, 0xe, 0x10] {
+        let half = e.mem.u16(other + offset);
+        e.mem.set_u16(base + offset, half);
+    }
+    for offset in [0x14u32, 0x1c] {
+        let value = x87_quiet_bits(e.mem.u32(other + offset));
+        e.mem.set_u32(base + offset, value);
+    }
+    let byte = e.mem.u8(other + 0x12);
+    e.mem.set_u8(base + 0x12, byte);
+    for offset in [0x18u32, 0x20] {
+        let value = x87_quiet_bits(e.mem.u32(other + offset));
+        e.mem.set_u32(base + offset, value);
+    }
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x005e_c760, fn_005ec760(Ptr, u32) -> bool),
+        entry!(0x005e_c8f0, fn_005ec8f0(Ptr, u32) -> bool),
+        entry!(0x005e_c920, fn_005ec920(Ptr, u32) -> bool),
+        entry!(0x005e_cb30, fn_005ecb30(Ptr, u32)),
+        entry!(0x005e_cd10, fn_005ecd10(Ptr, u32) -> bool),
+        entry!(0x005e_ce20, fn_005ece20(Ptr, u32) -> bool),
+        entry!(0x005e_ce50, fn_005ece50(Ptr, u32) -> bool),
+        entry!(0x005e_cfd0, fn_005ecfd0(Ptr, u32)),
+        entry!(0x005e_d160, fn_005ed160(Ptr, u32) -> bool),
+        entry!(0x005e_d1b0, fn_005ed1b0(Ptr, u32) -> bool),
+        entry!(0x005e_d1e0, fn_005ed1e0(Ptr, u32) -> bool),
+        entry!(0x005e_d360, fn_005ed360(Ptr, u32)),
+        entry!(0x005e_d4f0, fn_005ed4f0(Ptr, u32) -> bool),
+        entry!(0x005e_d5f0, fn_005ed5f0(Ptr, u32)),
         entry!(0x005e_d680, fn_005ed680(Ptr) -> Ptr),
         entry!(0x005e_daf0, fn_005edaf0(Ptr)),
         entry!(0x005e_c4d0, fn_005ec4d0(Ptr, u32) -> Ptr),
@@ -955,5 +1344,297 @@ mod quest_and_ragdoll_tests {
             .filter(|a| [0x0059_1300, 0x005e_f3b0, 0x0048_3630].contains(a))
             .collect();
         assert_eq!(order, vec![0x0059_1300, 0x005e_f3b0, 0x0048_3630]);
+    }
+}
+
+#[cfg(test)]
+mod n041_tests {
+    use super::*;
+
+    fn ret(eax: u32) -> Ret {
+        Ret {
+            eax,
+            ..Ret::default()
+        }
+    }
+
+    fn calls(e: &Engine, addr: u32) -> Vec<Vec<u32>> {
+        e.call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|(a, _)| *a == addr)
+            .map(|(_, w)| w.clone())
+            .collect()
+    }
+
+    /// Arrays as `{count, data}`; the element getters index `data` by
+    /// their stride; resizes allocate fresh data; a text is a block whose
+    /// first word is its id (`strlen` answers 3).
+    fn array_doubles(e: &mut Engine) {
+        e.register(ARRAY_COUNT, |e, a| ret(e.mem.u32(a[0])));
+        e.register(ARRAY_AT, |e, a| ret(e.mem.u32(a[0] + 4) + 4 * a[1]));
+        e.register(0x005e_edc0, |e, a| ret(e.mem.u32(a[0] + 4) + 0x38 * a[1]));
+        e.register(0x0069_1750, |e, a| ret(e.mem.u32(a[0] + 4) + 0x28 * a[1]));
+        e.register(0x0069_ccf0, |e, a| ret(e.mem.u32(a[0] + 4) + 6 * a[1]));
+        e.register(ARRAY_CLEAR, |e, a| {
+            e.mem.set_u32(a[0], 0);
+            Ret::default()
+        });
+        for (addr, stride) in [
+            (0x005e_f010u32, 0x38u32),
+            (0x005e_f1f0, 0x28),
+            (0x005e_f3d0, 6),
+            (STRING_ARRAY_SET_SIZE, 4),
+        ] {
+            e.register_double(addr, move |e, a| {
+                assert_eq!(a[2], 1);
+                let data = e.mem.alloc((a[1] * stride).max(4));
+                e.mem.set_u32(a[0], a[1]);
+                e.mem.set_u32(a[0] + 4, data);
+                Ret::default()
+            });
+        }
+        e.register(TEXT_COMPARE, |e, a| {
+            ret(u32::from(e.mem.u32(a[0]) != e.mem.u32(a[1])))
+        });
+        e.register(TEXT_LENGTH, |_, _| ret(3));
+        e.register(ALLOCATE, |e, a| ret(e.mem.alloc(a[0])));
+        e.register(TEXT_COPY, |e, a| {
+            assert_eq!(a[1], 4);
+            let id = e.mem.u32(a[2]);
+            e.mem.set_u32(a[0], id);
+            Ret::default()
+        });
+        e.register(FREE, |_, _| Ret::default());
+    }
+
+    /// An array at `array` with `count` elements of `stride` bytes, each
+    /// filled with `fill` words.
+    fn array(e: &mut Engine, array: u32, count: u32, stride: u32, fill: u32) {
+        let data = e.mem.alloc((count * stride).max(4));
+        for i in 0..count * stride / 4 {
+            e.mem.set_u32(data + 4 * i, fill);
+        }
+        e.mem.set_u32(array, count);
+        e.mem.set_u32(array + 4, data);
+    }
+
+    /// A name array with texts whose ids are `ids`.
+    fn names(e: &mut Engine, array_at: u32, ids: &[u32]) {
+        array(e, array_at, ids.len() as u32, 4, 0);
+        let data = e.mem.u32(array_at + 4);
+        for (i, &id) in ids.iter().enumerate() {
+            let text = e.mem.alloc(4);
+            e.mem.set_u32(text, id);
+            e.mem.set_u32(data + 4 * i as u32, text);
+        }
+    }
+
+    #[test]
+    fn entry_compares() {
+        let mut e = Engine::new();
+        let a = e.mem.alloc(0x38);
+        let b = e.mem.alloc(0x38);
+        assert!(e.call(0x005e_c760, &args![a, b]).bool());
+        assert!(!e.call(0x005e_c8f0, &args![a, b]).bool());
+        assert!(e.call(0x005e_cd10, &args![a, b]).bool());
+        assert!(e.call(0x005e_d160, &args![a, b]).bool());
+        for (offset, value) in [(2u32, 1u32), (6, 1), (0x34, 0x3f80_0000)] {
+            e.mem.set_u32(b + offset, value);
+            assert!(!e.call(0x005e_c760, &args![a, b]).bool(), "{offset:x}");
+            assert!(e.call(0x005e_c8f0, &args![a, b]).bool());
+            e.mem.set_u32(b + offset, 0);
+        }
+        // Negative zero is equal, NaN never.
+        e.mem.set_u32(b + 0x24, 0x8000_0000);
+        assert!(e.call(0x005e_cd10, &args![a, b]).bool());
+        e.mem.set_u32(a + 0x24, 0x7fc0_0000);
+        e.mem.set_u32(b + 0x24, 0x7fc0_0000);
+        assert!(!e.call(0x005e_cd10, &args![a, b]).bool());
+        assert!(e.call(0x005e_ce20, &args![a, b]).bool());
+        // 005ecd10 ignores the bytes after +0x28, 005ed160 after +6.
+        e.mem.set_u32(a + 0x24, 0);
+        e.mem.set_u32(b + 0x24, 0);
+        e.mem.set_u32(b + 0x30, 5);
+        assert!(e.call(0x005e_cd10, &args![a, b]).bool());
+        e.mem.set_u16(b + 4, 5);
+        assert!(!e.call(0x005e_d160, &args![a, b]).bool());
+        assert!(e.call(0x005e_d1b0, &args![a, b]).bool());
+    }
+
+    /// Two foot IK data blocks alike: two entries and two names each.
+    fn foot_pair(e: &mut Engine) -> (u32, u32) {
+        let this = e.mem.alloc(0x40);
+        let other = e.mem.alloc(0x40);
+        for block in [this, other] {
+            array(e, block + 0x30, 2, 0x38, 0);
+            names(e, block + 0x20, &[7, 8]);
+        }
+        (this, other)
+    }
+
+    #[test]
+    fn fn_005ec920_compares_foot_ik_data() {
+        let mut e = Engine::new();
+        array_doubles(&mut e);
+        let (this, other) = foot_pair(&mut e);
+        e.call_log = Some(vec![]);
+        assert!(!e.call(0x005e_c920, &args![this, other]).bool());
+        let other_data = e.mem.u32(other + 0x34);
+        let this_data = e.mem.u32(this + 0x34);
+        assert_eq!(
+            calls(&e, 0x005e_edc0)[..2],
+            [vec![other + 0x30, 0], vec![this + 0x30, 0]]
+        );
+        assert_eq!(e.mem.u32(other_data), 0);
+        assert_eq!(e.mem.u32(this_data), 0);
+        assert_eq!(calls(&e, TEXT_COMPARE).len(), 2);
+        // An entry, a name, the byte or a float differs.
+        e.mem.set_u32(other_data + 0x38 + 8, 0x3f80_0000);
+        e.call_log = Some(vec![]);
+        assert!(e.call(0x005e_c920, &args![this, other]).bool());
+        assert!(calls(&e, TEXT_COMPARE).is_empty());
+        let (this, other) = foot_pair(&mut e);
+        names(&mut e, other + 0x20, &[7, 9]);
+        assert!(e.call(0x005e_c920, &args![this, other]).bool());
+        let (this, other) = foot_pair(&mut e);
+        names(&mut e, other + 0x20, &[7]);
+        assert!(e.call(0x005e_c920, &args![this, other]).bool());
+        let (this, other) = foot_pair(&mut e);
+        e.mem.set_u8(other, 1);
+        assert!(e.call(0x005e_c920, &args![this, other]).bool());
+        let (this, other) = foot_pair(&mut e);
+        e.mem.set_u32(other + 0x1c, 0x3f80_0000);
+        assert!(e.call(0x005e_c920, &args![this, other]).bool());
+        // Different entry counts: the name counts are still compared.
+        let (this, other) = foot_pair(&mut e);
+        array(&mut e, other + 0x30, 1, 0x38, 0);
+        e.call_log = Some(vec![]);
+        assert!(e.call(0x005e_c920, &args![this, other]).bool());
+        assert_eq!(calls(&e, ARRAY_COUNT).len(), 4);
+    }
+
+    #[test]
+    fn fn_005ecb30_copies_foot_ik_data() {
+        let mut e = Engine::new();
+        array_doubles(&mut e);
+        let this = e.mem.alloc(0x40);
+        let other = e.mem.alloc(0x40);
+        array(&mut e, this + 0x30, 1, 0x38, 0);
+        names(&mut e, this + 0x20, &[1, 2, 3]);
+        array(&mut e, other + 0x30, 2, 0x38, 0x1111);
+        names(&mut e, other + 0x20, &[5, 6]);
+        e.mem.set_u8(other, 9);
+        e.mem.set_u32(other + 0x1c, 0x7f80_0001);
+        e.mem.set_f32(other + 4, 1.5);
+        e.call_log = Some(vec![]);
+        e.call(0x005e_cb30, &args![this, other]);
+        assert_eq!(calls(&e, FREE).len(), 3);
+        assert_eq!(e.mem.u32(this + 0x30), 2);
+        let data = e.mem.u32(this + 0x34);
+        assert_eq!(e.mem.u32(data + 0x38 + 0x34), 0x1111);
+        assert_eq!(e.mem.u32(this + 0x20), 2);
+        let texts = e.mem.u32(this + 0x24);
+        let first = e.mem.u32(texts);
+        assert_eq!(e.mem.u32(first), 5);
+        assert_eq!(e.mem.u32(e.mem.u32(texts + 4)), 6);
+        assert_ne!(first, e.mem.u32(e.mem.u32(other + 0x24)));
+        assert_eq!(e.mem.u8(this), 9);
+        assert_eq!(e.mem.u32(this + 0x1c), 0x7fc0_0001);
+        assert_eq!(e.mem.f32(this + 4), 1.5);
+        assert_eq!(
+            calls(&e, ARRAY_CLEAR),
+            vec![vec![this + 0x30, 1], vec![this + 0x20, 1]]
+        );
+    }
+
+    #[test]
+    fn look_and_grab_ik_data() {
+        let mut e = Engine::new();
+        array_doubles(&mut e);
+        let this = e.mem.alloc(0x30);
+        let other = e.mem.alloc(0x30);
+        array(&mut e, other + 0x14, 2, 0x28, 0x2222);
+        names(&mut e, other + 4, &[4]);
+        e.mem.set_u8(other, 3);
+        array(&mut e, this + 0x14, 0, 0x28, 0);
+        names(&mut e, this + 4, &[]);
+        assert!(e.call(0x005e_ce50, &args![this, other]).bool());
+        e.call(0x005e_cfd0, &args![this, other]);
+        let data = e.mem.u32(this + 0x18);
+        assert_eq!(e.mem.u32(data + 0x4c), 0x2222);
+        assert_eq!(e.mem.u8(this), 3);
+        assert!(!e.call(0x005e_ce50, &args![this, other]).bool());
+        e.mem.set_u8(this, 4);
+        assert!(e.call(0x005e_ce50, &args![this, other]).bool());
+
+        let this = e.mem.alloc(0x30);
+        let other = e.mem.alloc(0x30);
+        array(&mut e, other + 0x14, 2, 6, 0);
+        let source = e.mem.u32(other + 0x18);
+        e.mem.set_u32(source + 6, 0x0003_0002);
+        e.mem.set_u16(source + 10, 4);
+        names(&mut e, other + 4, &[4]);
+        array(&mut e, this + 0x14, 0, 6, 0);
+        names(&mut e, this + 4, &[]);
+        e.call(0x005e_d360, &args![this, other]);
+        let data = e.mem.u32(this + 0x18);
+        assert_eq!(e.mem.u32(data + 6), 0x0003_0002);
+        assert_eq!(e.mem.u16(data + 10), 4);
+        assert!(!e.call(0x005e_d1e0, &args![this, other]).bool());
+        e.mem.set_u16(data + 10, 5);
+        assert!(e.call(0x005e_d1e0, &args![this, other]).bool());
+    }
+
+    #[test]
+    fn pose_matching_data_compare_and_copy() {
+        let mut e = Engine::new();
+        e.register(0x0050_1c90, |e, a| {
+            assert_eq!(a[2], 1);
+            ret(u32::from(e.mem.u32(a[0]) != e.mem.u32(a[1])))
+        });
+        e.register(0x0050_1c10, |e, a| {
+            let word = e.mem.u32(a[1]);
+            e.mem.set_u32(a[0], word);
+            Ret::default()
+        });
+        let this = e.mem.alloc(0x24);
+        let other = e.mem.alloc(0x24);
+        for (offset, value) in [
+            (0u32, 0x0000_0007u32),
+            (4, 0x55),
+            (0xc, 0x0002_0001),
+            (0x10, 0x0009_0003),
+            (0x14, 0x3f80_0000),
+            (0x18, 0x7f80_0001),
+            (0x1c, 0x4000_0000),
+            (0x20, 0x4040_0000),
+        ] {
+            e.mem.set_u32(other + offset, value);
+        }
+        assert!(e.call(0x005e_d4f0, &args![this, other]).bool());
+        e.call(0x005e_d5f0, &args![this, other]);
+        assert_eq!(e.mem.u8(this), 7);
+        assert_eq!(e.mem.u32(this + 4), 0x55);
+        assert_eq!(e.mem.u32(this + 0xc), 0x0002_0001);
+        assert_eq!(e.mem.u16(this + 0x10), 3);
+        assert_eq!(e.mem.u8(this + 0x12), 9);
+        assert_eq!(e.mem.u32(this + 0x18), 0x7fc0_0001);
+        assert_eq!(e.mem.u32(this + 0x20), 0x4040_0000);
+        // The NaN at +0x18 is never equal.
+        assert!(e.call(0x005e_d4f0, &args![this, other]).bool());
+        e.mem.set_u32(this + 0x18, 0);
+        e.mem.set_u32(other + 0x18, 0);
+        assert!(!e.call(0x005e_d4f0, &args![this, other]).bool());
+        for (offset, value) in [(0u32, 8u32), (0xe, 1), (0x12, 1), (0x1d, 1)] {
+            let old = e.mem.u32(other + offset);
+            e.mem.set_u8(other + offset, value as u8);
+            assert!(
+                e.call(0x005e_d4f0, &args![this, other]).bool(),
+                "{offset:x}"
+            );
+            e.mem.set_u32(other + offset, old);
+        }
     }
 }

@@ -362,6 +362,24 @@ fn set_centres_of_mass(e: &mut Engine, state: u32, transform: u32, translation: 
     e.mem.set_f32(state + 0x5c, 0.0);
 }
 
+/// [`set_centres_of_mass`] with the SSE NaN rules: `(y * c1 + x * c0) + z * c2`, each `MULPS`
+/// with the splatted lane as the destination, then `ADDPS` of the translation.
+fn set_centres_of_mass_sse(e: &mut Engine, state: u32, transform: u32, translation: Lanes) {
+    use crate::sse::{addps, mulps};
+    let time = x87_quiet_bits(e.mem.u32(state + 0x4c));
+    let v = load_lanes(e, state + 0x80);
+    let c0 = load_lanes(e, transform);
+    let c1 = load_lanes(e, transform + 0x10);
+    let c2 = load_lanes(e, transform + 0x20);
+    let mixed = addps(mulps(splat(v[1]), c1), mulps(splat(v[0]), c0));
+    let rotated = addps(mixed, mulps(splat(v[2]), c2));
+    let centre = addps(rotated, translation);
+    store_lanes(e, state + 0x40, centre);
+    store_lanes(e, state + 0x50, centre);
+    e.mem.set_u32(state + 0x4c, time);
+    e.mem.set_f32(state + 0x5c, 0.0);
+}
+
 // Translated from 00cf1f80 (decompiled, FalloutNV.exe 1.4.0.525)
 /// `hkSweptTransformUtil::warpTo` (map name), cdecl `(position, rotation quaternion, motion
 /// state)`: clears the vector at `+0x90`, stores the quaternion as both swept rotations
@@ -425,7 +443,7 @@ pub fn hk_swept_transform_util_warp_to_position(e: &mut Engine, position: Ptr, m
     let position_lanes = load_lanes(e, position.addr());
     store_lanes(e, state + 0x30, position_lanes);
     let position_lanes = load_lanes(e, position.addr());
-    set_centres_of_mass(e, state, state, position_lanes);
+    set_centres_of_mass_sse(e, state, state, position_lanes);
     let rotation = load_lanes(e, state + 0x70);
     store_lanes(e, state + 0x60, rotation);
 }

@@ -360,6 +360,157 @@ pub fn tes_land_texture_queue_texture(
     }
 }
 
+/// The `TESLandTexture` type descriptor (`01186350`, its name read at +8).
+const TYPE_LAND_TEXTURE: u32 = 0x0118_6350;
+/// `TESForm::CopyAllComponents` (`004851b0`), `TESForm::CompareAllComponents`
+/// (`00485270`), the copy `00401460` (`cdecl (to, from, size)`), `memcmp`
+/// (`00ec4835`) and the texture set getter `009611e0` (the word at +0x18).
+const FORM_COPY_ALL_COMPONENTS: u32 = 0x0048_51b0;
+const FORM_COMPARE_ALL_COMPONENTS: u32 = 0x0048_5270;
+const COPY_BYTES: u32 = 0x0040_1460;
+const MEMCMP: u32 = 0x00ec_4835;
+const TEXTURE_SET_GETTER: u32 = 0x0096_11e0;
+/// `TESForm::StartForm` (`004855a0`), `TESForm::CloseForm` (`00485680`),
+/// the empty `00483710` (`thiscall`, runs on the form and, when saving
+/// swaps bytes, on the Havok data), `TESForm::AddChunk` with a word
+/// (`00485910`, `cdecl`) and with a byte (`004858f0`, `cdecl`),
+/// `TESForm::__AddChunkData` (`00485990`, `cdecl`) and the byte
+/// `00401500` answers (whether saving swaps bytes).
+const FORM_START: u32 = 0x0048_55a0;
+const FORM_CLOSE: u32 = 0x0048_5680;
+const EMPTY_00483710: u32 = 0x0048_3710;
+const ADD_CHUNK_WORD: u32 = 0x0048_5910;
+const ADD_CHUNK_BYTE: u32 = 0x0048_58f0;
+const ADD_CHUNK_DATA: u32 = 0x0048_5990;
+const SAVE_SWAPS: u32 = 0x0040_1500;
+
+/// `other` cast from `TESForm` to `TESLandTexture`.
+fn cast_land_texture(e: &mut Engine, other: Ptr) -> u32 {
+    e.call(
+        RT_DYNAMIC_CAST,
+        &args![other, 0u32, TYPE_TES_FORM, TYPE_LAND_TEXTURE, 0u32],
+    )
+    .u32()
+}
+
+// Translated from 00540de0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`thiscall`, one word; the copy of a
+/// `TESLandTexture`): when `other` is one, empties the grass list, copies
+/// all components, the three Havok bytes (+0x1C), the specular exponent
+/// (+0x1F) and the texture set (`009611e0`), then appends each grass of
+/// `other`'s list (from its first node, while a node is not empty) to the
+/// list at +0x20.
+pub fn fn_00540de0(e: &mut Engine, this: Ptr<TESLandTexture>, other: Ptr) {
+    let source = cast_land_texture(e, other);
+    if source == 0 {
+        return;
+    }
+    let at = this.addr();
+    let list = e.call(GRASS_LIST, &args![this]).u32();
+    e.call(LIST_REMOVE_ALL, &args![list]);
+    e.call(FORM_COPY_ALL_COMPONENTS, &args![this, source]);
+    e.call(COPY_BYTES, &args![at + 0x1c, source + 0x1c, 3u32]);
+    let exponent = e.mem.u8(source + 0x1f);
+    e.mem.set_u8(at + 0x1f, exponent);
+    let set = e.call(TEXTURE_SET_GETTER, &args![source]).u32();
+    e.set(this, TESLandTexture::pTextureSet, set);
+    let mut node = e.call(GRASS_LIST, &args![source]).u32();
+    while node != 0 {
+        if e.call(NODE_IS_EMPTY, &args![node]).u8() != 0 {
+            break;
+        }
+        let item = e.call(NODE_ITEM, &args![node]).u32();
+        let grass = e.mem.u32(item);
+        e.with_stack(4, |e, slot| {
+            e.mem.set_u32(slot.addr(), grass);
+            e.call(LIST_ADD_TAIL, &args![at + 0x20, slot]);
+        });
+        node = e.call(NODE_NEXT, &args![node]).u32();
+    }
+}
+
+// Translated from 00540ec0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`thiscall`, one word; the comparison of a
+/// `TESLandTexture`): true (different) when `other` is none, when
+/// `CompareAllComponents` says so, when the three Havok bytes, the
+/// specular exponent or the texture set (`009611e0`) differ, when the two
+/// grass lists hold a different grass at the same place, or when one list
+/// is longer (walked by node, empty nodes included).
+pub fn fn_00540ec0(e: &mut Engine, this: Ptr<TESLandTexture>, other: Ptr) -> bool {
+    let source = cast_land_texture(e, other);
+    if source == 0 {
+        return true;
+    }
+    let at = this.addr();
+    if e.call(FORM_COMPARE_ALL_COMPONENTS, &args![this, source])
+        .u8()
+        != 0
+    {
+        return true;
+    }
+    if e.call(MEMCMP, &args![at + 0x1c, source + 0x1c, 3u32]).u32() != 0 {
+        return true;
+    }
+    if e.mem.u8(at + 0x1f) != e.mem.u8(source + 0x1f) {
+        return true;
+    }
+    let set = e.call(TEXTURE_SET_GETTER, &args![source]).u32();
+    if e.get(this, TESLandTexture::pTextureSet) != set {
+        return true;
+    }
+    let mut mine = e.call(GRASS_LIST, &args![this]).u32();
+    let mut theirs = e.call(GRASS_LIST, &args![source]).u32();
+    while mine != 0 && theirs != 0 {
+        let my_item = e.call(NODE_ITEM, &args![mine]).u32();
+        let their_item = e.call(NODE_ITEM, &args![theirs]).u32();
+        if e.mem.u32(my_item) != e.mem.u32(their_item) {
+            return true;
+        }
+        theirs = e.call(NODE_NEXT, &args![theirs]).u32();
+        mine = e.call(NODE_NEXT, &args![mine]).u32();
+    }
+    (mine == 0 && theirs != 0) || (theirs == 0 && mine != 0)
+}
+
+// Translated from 00541440 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TESLandTexture::Save` (Xbox PDB): starts the form, runs the empty
+/// `00483710` on it, with a texture set adds its form id as `TNAM`, adds
+/// the three Havok bytes (+0x1C) as `HNAM` (the empty `00483710` run on
+/// them before and after when saving swaps bytes), the specular exponent
+/// as `SNAM` and each grass's form id as `GNAM` (from the first node,
+/// while a node is not empty); closes the form.
+pub fn tes_land_texture_save(e: &mut Engine, this: Ptr<TESLandTexture>) {
+    let at = this.addr();
+    e.call(FORM_START, &args![this]);
+    e.call(EMPTY_00483710, &args![this]);
+    let set = e.get(this, TESLandTexture::pTextureSet);
+    if set != 0 {
+        let id = e.call(FORM_ID, &args![set]).u32();
+        e.call(ADD_CHUNK_WORD, &args![0x4d41_4e54u32, id]);
+    }
+    if e.call(SAVE_SWAPS, &args![]).u8() != 0 {
+        e.call(EMPTY_00483710, &args![at + 0x1c]);
+    }
+    e.call(ADD_CHUNK_DATA, &args![0x4d41_4e48u32, at + 0x1c, 3u32]);
+    if e.call(SAVE_SWAPS, &args![]).u8() != 0 {
+        e.call(EMPTY_00483710, &args![at + 0x1c]);
+    }
+    let exponent = u32::from(e.mem.u8(at + 0x1f));
+    e.call(ADD_CHUNK_BYTE, &args![0x4d41_4e53u32, exponent]);
+    let mut node = e.call(GRASS_LIST, &args![this]).u32();
+    while node != 0 {
+        if e.call(NODE_IS_EMPTY, &args![node]).u8() != 0 {
+            break;
+        }
+        let item = e.call(NODE_ITEM, &args![node]).u32();
+        let grass = e.mem.u32(item);
+        let id = e.call(FORM_ID, &args![grass]).u32();
+        e.call(ADD_CHUNK_WORD, &args![0x4d41_4e47u32, id]);
+        node = e.call(NODE_NEXT, &args![node]).u32();
+    }
+    e.call(FORM_CLOSE, &args![this]);
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -375,6 +526,9 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
             0x0054_1540,
             tes_land_texture_queue_texture(Ptr<TESLandTexture>, u32, u32)
         ),
+        entry!(0x0054_0de0, fn_00540de0(Ptr<TESLandTexture>, Ptr)),
+        entry!(0x0054_0ec0, fn_00540ec0(Ptr<TESLandTexture>, Ptr) -> bool),
+        entry!(0x0054_1440, tes_land_texture_save(Ptr<TESLandTexture>)),
     ]
 }
 
@@ -710,5 +864,178 @@ mod tests {
             assert_eq!(e.get(this, TESLandTexture::pTextureSet), 0);
             assert!(calls_to(&log, 0x7000_0008).is_empty());
         }
+    }
+}
+
+#[cfg(test)]
+mod n043_tests {
+    use super::*;
+
+    const STATE: u32 = 0x7300_0000;
+
+    fn calls(e: &Engine, addr: u32) -> Vec<Vec<u32>> {
+        e.call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|c| c.0 == addr)
+            .map(|c| c.1.clone())
+            .collect()
+    }
+
+    /// List nodes are 8 bytes (item, next) as the doubles read them; a
+    /// node whose item is 0 is empty.
+    fn engine() -> Engine {
+        let mut e = Engine::new();
+        e.map(STATE, 0x40);
+        e.register(GRASS_LIST, |_, a| (a[0] + 0x20).into_ret());
+        e.register(NODE_IS_EMPTY, |e, a| {
+            u32::from(e.mem.u32(a[0]) == 0).into_ret()
+        });
+        e.register(NODE_ITEM, |_, a| a[0].into_ret());
+        e.register(NODE_NEXT, |e, a| e.mem.u32(a[0] + 4).into_ret());
+        e.register(TEXTURE_SET_GETTER, |e, a| e.mem.u32(a[0] + 0x18).into_ret());
+        e.register(FORM_ID, |_, a| (a[0] + 1).into_ret());
+        e.register(RT_DYNAMIC_CAST, |_, a| a[0].into_ret());
+        for addr in [
+            LIST_REMOVE_ALL,
+            FORM_COPY_ALL_COMPONENTS,
+            COPY_BYTES,
+            LIST_ADD_TAIL,
+            FORM_START,
+            FORM_CLOSE,
+            EMPTY_00483710,
+            ADD_CHUNK_WORD,
+            ADD_CHUNK_BYTE,
+            ADD_CHUNK_DATA,
+        ] {
+            e.register(addr, |_, _| Ret::default());
+        }
+        e
+    }
+
+    /// A land texture whose list holds `grasses` (the first node inline at
+    /// +0x20, the others allocated).
+    fn texture(e: &mut Engine, grasses: &[u32]) -> u32 {
+        let this = e.mem.alloc(0x28);
+        let mut node = this + 0x20;
+        for (index, grass) in grasses.iter().enumerate() {
+            e.mem.set_u32(node, *grass);
+            if index + 1 < grasses.len() {
+                let next = e.mem.alloc(8);
+                e.mem.set_u32(node + 4, next);
+                node = next;
+            }
+        }
+        this
+    }
+
+    #[test]
+    fn copy_takes_the_data_and_the_grasses() {
+        let mut e = engine();
+        e.register_double(LIST_ADD_TAIL, |e, a| {
+            let grass = e.mem.u32(a[1]);
+            let n = e.mem.u32(STATE);
+            e.mem.set_u32(STATE + 4 + 4 * n, grass);
+            e.mem.set_u32(STATE, n + 1);
+            Ret::default()
+        });
+        let this = texture(&mut e, &[]);
+        let other = texture(&mut e, &[0x100, 0x200, 0x300]);
+        e.mem.set_u8(other + 0x1f, 9);
+        e.mem.set_u32(other + 0x18, 0x5000);
+        e.call_log = Some(vec![]);
+        e.call(0x0054_0de0, &args![this, other]);
+        assert_eq!(calls(&e, LIST_REMOVE_ALL), vec![vec![this + 0x20]]);
+        assert_eq!(calls(&e, FORM_COPY_ALL_COMPONENTS), vec![vec![this, other]]);
+        assert_eq!(
+            calls(&e, COPY_BYTES),
+            vec![vec![this + 0x1c, other + 0x1c, 3]]
+        );
+        assert_eq!(e.mem.u8(this + 0x1f), 9);
+        assert_eq!(e.mem.u32(this + 0x18), 0x5000);
+        assert_eq!(e.mem.u32(STATE), 3);
+        assert_eq!(
+            (
+                e.mem.u32(STATE + 4),
+                e.mem.u32(STATE + 8),
+                e.mem.u32(STATE + 0xc)
+            ),
+            (0x100, 0x200, 0x300)
+        );
+        assert!(calls(&e, LIST_ADD_TAIL).iter().all(|c| c[0] == this + 0x20));
+        // Not a land texture.
+        e.register(RT_DYNAMIC_CAST, |_, _| 0u32.into_ret());
+        e.call_log = Some(vec![]);
+        e.call(0x0054_0de0, &args![this, other]);
+        assert_eq!(e.call_log.as_ref().unwrap().len(), 2);
+    }
+
+    #[test]
+    fn compare_branches() {
+        let mut e = engine();
+        e.register(FORM_COMPARE_ALL_COMPONENTS, |e, _| {
+            e.mem.u32(STATE).into_ret()
+        });
+        e.register(MEMCMP, |e, _| e.mem.u32(STATE + 4).into_ret());
+        let this = texture(&mut e, &[0x100, 0x200]);
+        let same = texture(&mut e, &[0x100, 0x200]);
+        assert!(!e.call(0x0054_0ec0, &args![this, same]).bool());
+        let other = texture(&mut e, &[0x100, 0x300]);
+        assert!(e.call(0x0054_0ec0, &args![this, other]).bool());
+        let longer = texture(&mut e, &[0x100, 0x200, 0x300]);
+        assert!(e.call(0x0054_0ec0, &args![this, longer]).bool());
+        assert!(e.call(0x0054_0ec0, &args![longer, this]).bool());
+        e.mem.set_u8(same + 0x1f, 1);
+        assert!(e.call(0x0054_0ec0, &args![this, same]).bool());
+        e.mem.set_u8(same + 0x1f, 0);
+        e.mem.set_u32(same + 0x18, 1);
+        assert!(e.call(0x0054_0ec0, &args![this, same]).bool());
+        e.mem.set_u32(same + 0x18, 0);
+        e.mem.set_u32(STATE + 4, 1);
+        assert!(e.call(0x0054_0ec0, &args![this, same]).bool());
+        e.mem.set_u32(STATE + 4, 0);
+        e.mem.set_u32(STATE, 1);
+        assert!(e.call(0x0054_0ec0, &args![this, same]).bool());
+        e.mem.set_u32(STATE, 0);
+        e.register(RT_DYNAMIC_CAST, |_, _| 0u32.into_ret());
+        assert!(e.call(0x0054_0ec0, &args![this, same]).bool());
+    }
+
+    #[test]
+    fn save_writes_the_chunks() {
+        let mut e = engine();
+        e.register(SAVE_SWAPS, |e, _| e.mem.u32(STATE).into_ret());
+        let this = texture(&mut e, &[0x100, 0x200]);
+        e.mem.set_u32(this + 0x18, 0x5000);
+        e.mem.set_u8(this + 0x1f, 0x40);
+        e.mem.set_u32(STATE, 1);
+        e.call_log = Some(vec![]);
+        e.call(0x0054_1440, &args![this]);
+        assert_eq!(
+            calls(&e, ADD_CHUNK_WORD),
+            vec![
+                vec![0x4d41_4e54, 0x5001],
+                vec![0x4d41_4e47, 0x101],
+                vec![0x4d41_4e47, 0x201]
+            ]
+        );
+        assert_eq!(
+            calls(&e, ADD_CHUNK_DATA),
+            vec![vec![0x4d41_4e48, this + 0x1c, 3]]
+        );
+        assert_eq!(calls(&e, ADD_CHUNK_BYTE), vec![vec![0x4d41_4e53, 0x40]]);
+        assert_eq!(
+            calls(&e, EMPTY_00483710),
+            vec![vec![this], vec![this + 0x1c], vec![this + 0x1c]]
+        );
+        assert_eq!(calls(&e, FORM_CLOSE), vec![vec![this]]);
+        // No texture set, no swapping, an empty list.
+        let empty = texture(&mut e, &[]);
+        e.mem.set_u32(STATE, 0);
+        e.call_log = Some(vec![]);
+        e.call(0x0054_1440, &args![empty]);
+        assert!(calls(&e, ADD_CHUNK_WORD).is_empty());
+        assert_eq!(calls(&e, EMPTY_00483710), vec![vec![empty]]);
     }
 }

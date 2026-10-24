@@ -318,6 +318,228 @@ pub fn tes_casino_load(e: &mut Engine, this: Ptr, file: Ptr) -> bool {
     true
 }
 
+/// The swap helper `CASINO_DATA::Endian` calls on each word (`00401080`,
+/// `cdecl (word address, flag)`; given 0 here).
+const SWAP_WORD: u32 = 0x0040_1080;
+/// `TESForm::StartForm` (`004855a0`), `TESForm::CloseForm` (`00485680`),
+/// `TESForm::__SaveData` (`00485e20`, `thiscall (form, data, size)`) and
+/// `TESForm::AddChunkArray` (`004856f0`, `cdecl (chunk, data, size)`).
+const FORM_START: u32 = 0x0048_55a0;
+const FORM_CLOSE: u32 = 0x0048_5680;
+const FORM_SAVE_DATA: u32 = 0x0048_5e20;
+const FORM_ADD_CHUNK_ARRAY: u32 = 0x0048_56f0;
+/// The byte `00401500` answers (`011c54ba`): whether saving swaps bytes.
+const SAVE_SWAPS: u32 = 0x0040_1500;
+/// Component savers: `TESFullName::Save` (`00487010`),
+/// `TESModelTextureSwap::Save` (`0048a520`, three chunk words),
+/// `TESTexture::Save` (`0048e370`, one chunk word), `BGSMessageIcon::Save`
+/// (`0047a240`, one chunk word), `BGSDestructibleObjectForm::Save`
+/// (`00477f20`) and `BGSPickupPutdownSounds::Save` (`0047b560`).
+const SAVE_FULL_NAME: u32 = 0x0048_7010;
+const SAVE_MODEL_TEXTURE_SWAP: u32 = 0x0048_a520;
+const SAVE_TEXTURE: u32 = 0x0048_e370;
+const SAVE_MESSAGE_ICON: u32 = 0x0047_a240;
+const SAVE_DESTRUCTIBLE: u32 = 0x0047_7f20;
+const SAVE_PICKUP_PUTDOWN_SOUNDS: u32 = 0x0047_b560;
+/// A string's length (`004048e0`) and text (`00559450`), `BSStringT::Set`
+/// (`004037f0`, `thiscall (string, text, length)`) and the length of the
+/// string at +4 of a component (`0048cee0`).
+const STRING_LENGTH: u32 = 0x0040_48e0;
+const STRING_TEXT: u32 = 0x0055_9450;
+const STRING_SET: u32 = 0x0040_37f0;
+const COMPONENT_STRING_LENGTH: u32 = 0x0048_cee0;
+/// `__RTDynamicCast` (`00ec43fb`) from `TESForm` (`01183028`) to
+/// `TESCasinoChips` (`01189ee4`), the type descriptors' names read at +8.
+const DYNAMIC_CAST: u32 = 0x00ec_43fb;
+const TYPE_FORM: u32 = 0x0118_3028;
+const TYPE_CASINO_CHIPS: u32 = 0x0118_9ee4;
+/// `TESForm::CopyAllComponents` (`004851b0`), `TESForm::CompareAllComponents`
+/// (`00485270`), the form's type (`00401170`), the type setter `004f15a0`
+/// (one word) and the string comparison `00501c90` (`thiscall (string,
+/// other string, flag)`).
+const FORM_COPY_ALL_COMPONENTS: u32 = 0x0048_51b0;
+const FORM_COMPARE_ALL_COMPONENTS: u32 = 0x0048_5270;
+const FORM_TYPE: u32 = 0x0040_1170;
+const FORM_SET_TYPE: u32 = 0x004f_15a0;
+const STRING_COMPARE: u32 = 0x0050_1c90;
+/// `TESForm::LoadGame` (`00484c50`, two words), `0048ea10` (two words, on
+/// the component at +0x78), `00484d60` and `0048ea40` (one word each, the
+/// same pair).
+const FORM_LOAD_GAME: u32 = 0x0048_4c50;
+const VALUE_LOAD_GAME: u32 = 0x0048_ea10;
+const FORM_00484D60: u32 = 0x0048_4d60;
+const VALUE_0048EA40: u32 = 0x0048_ea40;
+
+// Translated from 004faaa0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `CASINO_DATA::Endian` (Xbox PDB): swaps each of the 13 words of the
+/// casino data (`00401080` with flag 0 on `this + 4 * n`).
+pub fn casino_data_endian(e: &mut Engine, this: Ptr) {
+    for index in 0..13u32 {
+        e.call(SWAP_WORD, &args![this.addr() + 4 * index, 0u32]);
+    }
+}
+
+// Translated from 00504280 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TESCasinoChips::Save` (Xbox PDB): starts the form, saves the full name
+/// (+0x30), the model (+0x3C: `MODL`, `MODT`, `MODS`), the icon (+0x5C,
+/// `ICON`), the message icon (+0x68, `MICO`), the destructible data (+0x80)
+/// and the pick-up/put-down sounds (+0x88); with a non-empty string at
+/// +0x94 adds `ONAM` holding it and its terminating zero; closes the form.
+pub fn tes_casino_chips_save(e: &mut Engine, this: Ptr) {
+    let base = this.addr();
+    e.call(FORM_START, &args![this]);
+    e.call(SAVE_FULL_NAME, &args![base + 0x30]);
+    e.call(
+        SAVE_MODEL_TEXTURE_SWAP,
+        &args![base + 0x3c, CHUNK_MODL, CHUNK_MODT, CHUNK_MODS],
+    );
+    e.call(SAVE_TEXTURE, &args![base + 0x5c, CHUNK_ICON]);
+    e.call(SAVE_MESSAGE_ICON, &args![base + 0x68, CHUNK_MICO]);
+    e.call(SAVE_DESTRUCTIBLE, &args![base + 0x80]);
+    e.call(SAVE_PICKUP_PUTDOWN_SOUNDS, &args![base + 0x88]);
+    if e.call(STRING_LENGTH, &args![base + 0x94]).u32() != 0 {
+        let size = e
+            .call(STRING_LENGTH, &args![base + 0x94])
+            .u32()
+            .wrapping_add(1);
+        let text = e.call(STRING_TEXT, &args![base + 0x94]).u32();
+        e.call(FORM_ADD_CHUNK_ARRAY, &args![CHUNK_ONAM, text, size]);
+    }
+    e.call(FORM_CLOSE, &args![this]);
+}
+
+/// `other` cast from `TESForm` to `TESCasinoChips`.
+fn cast_casino_chips(e: &mut Engine, other: Ptr) -> u32 {
+    e.call(
+        DYNAMIC_CAST,
+        &args![other, 0u32, TYPE_FORM, TYPE_CASINO_CHIPS, 0u32],
+    )
+    .u32()
+}
+
+// Translated from 00504340 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`thiscall`, one word; the copy of a
+/// `TESCasinoChips`): when `other` is one, copies all components, takes its
+/// form type (`00401170` into `004f15a0`) and sets the string at +0x94 to
+/// its text (`BSStringT::Set(text, 0)`).
+pub fn fn_00504340(e: &mut Engine, this: Ptr, other: Ptr) {
+    let source = cast_casino_chips(e, other);
+    if source == 0 {
+        return;
+    }
+    e.call(FORM_COPY_ALL_COMPONENTS, &args![this, source]);
+    let form_type = e.call(FORM_TYPE, &args![source]).u32();
+    e.call(FORM_SET_TYPE, &args![this, form_type]);
+    let text = e.call(STRING_TEXT, &args![source + 0x94]).u32();
+    e.call(STRING_SET, &args![this.addr() + 0x94, text, 0u32]);
+}
+
+// Translated from 005043b0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`thiscall`, one word; the comparison of a
+/// `TESCasinoChips`): true (different) when `other` is none, when
+/// `CompareAllComponents` says so, or when `00501c90` (with flag 1) finds
+/// the strings at +0x94 differ.
+pub fn fn_005043b0(e: &mut Engine, this: Ptr, other: Ptr) -> bool {
+    let source = cast_casino_chips(e, other);
+    if source == 0 {
+        return true;
+    }
+    if e.call(FORM_COMPARE_ALL_COMPONENTS, &args![this, source])
+        .u8()
+        != 0
+    {
+        return true;
+    }
+    e.call(
+        STRING_COMPARE,
+        &args![this.addr() + 0x94, source + 0x94, 1u32],
+    )
+    .u32()
+        != 0
+}
+
+// Translated from 00504420 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`thiscall`, two words): `TESForm::LoadGame`
+/// on the form, then `0048ea10` on the component at +0x78, both with the
+/// two words.
+pub fn fn_00504420(e: &mut Engine, this: Ptr, first: u32, second: u32) {
+    e.call(FORM_LOAD_GAME, &args![this, first, second]);
+    e.call(VALUE_LOAD_GAME, &args![this.addr() + 0x78, first, second]);
+}
+
+// Translated from 00504450 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`thiscall`, one word): `00484d60` on the
+/// form, then `0048ea40` on the component at +0x78, both with the word.
+pub fn fn_00504450(e: &mut Engine, this: Ptr, value: u32) {
+    e.call(FORM_00484D60, &args![this, value]);
+    e.call(VALUE_0048EA40, &args![this.addr() + 0x78, value]);
+}
+
+// Translated from 00504640 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`thiscall`; on a `TESCasino`): clears the
+/// 0x38-byte data at +0x1E8 (`memset`), then calls virtual slot 0 of each
+/// of the ten 0x20-byte models at +0x24 and of the eleven 0xC-byte textures
+/// at +0x164.
+pub fn fn_00504640(e: &mut Engine, this: Ptr) {
+    let base = this.addr();
+    e.call(MEMSET, &args![base + 0x1e8, 0u32, 0x38u32]);
+    for index in 0..10u32 {
+        e.vcall(base + 0x24 + index * 0x20, 0, &args![]);
+    }
+    for index in 0..11u32 {
+        e.vcall(base + 0x164 + index * 0xc, 0, &args![]);
+    }
+}
+
+// Translated from 00504710 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TESCasino::Save` (Xbox PDB): starts the form, saves the full name
+/// (+0x18), the 0x38-byte data at +0x1E8 (`__SaveData`; swapped by
+/// `CASINO_DATA::Endian` before and after when `00401500` answers non-zero),
+/// the first eight models at +0x24 that have a path (`0048cee0`; `MODL`,
+/// `MODT`, `MODS`), the models at +0x104, +0x124 and +0x144 the same way
+/// as `MOD2`, `MOD3` and `MOD4`, the textures 0..7 at +0x164 as `ICON` and
+/// 7..11 as `ICO2`; closes the form.
+pub fn tes_casino_save(e: &mut Engine, this: Ptr) {
+    let base = this.addr();
+    e.call(FORM_START, &args![this]);
+    e.call(SAVE_FULL_NAME, &args![base + 0x18]);
+    if e.call(SAVE_SWAPS, &args![]).u8() != 0 {
+        casino_data_endian(e, Ptr::new(base + 0x1e8));
+    }
+    e.call(FORM_SAVE_DATA, &args![this, base + 0x1e8, 0x38u32]);
+    if e.call(SAVE_SWAPS, &args![]).u8() != 0 {
+        casino_data_endian(e, Ptr::new(base + 0x1e8));
+    }
+    for index in 0..8u32 {
+        let model = base + 0x24 + index * 0x20;
+        if e.call(COMPONENT_STRING_LENGTH, &args![model]).u32() != 0 {
+            e.call(
+                SAVE_MODEL_TEXTURE_SWAP,
+                &args![model, CHUNK_MODL, CHUNK_MODT, CHUNK_MODS],
+            );
+        }
+    }
+    for (offset, chunk) in [
+        (0x104u32, CHUNK_MOD2),
+        (0x124, CHUNK_MOD3),
+        (0x144, CHUNK_MOD4),
+    ] {
+        if e.call(COMPONENT_STRING_LENGTH, &args![base + offset]).u32() != 0 {
+            e.call(
+                SAVE_MODEL_TEXTURE_SWAP,
+                &args![base + offset, chunk, CHUNK_MODT, CHUNK_MODS],
+            );
+        }
+    }
+    for index in 0..7u32 {
+        e.call(SAVE_TEXTURE, &args![base + 0x164 + index * 0xc, CHUNK_ICON]);
+    }
+    for index in 7..11u32 {
+        e.call(SAVE_TEXTURE, &args![base + 0x164 + index * 0xc, CHUNK_ICO2]);
+    }
+    e.call(FORM_CLOSE, &args![this]);
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -329,6 +551,14 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x0050_4620, fn_00504620(Ptr)),
         entry!(0x0050_46e0, fn_005046e0(Ptr)),
         entry!(0x0050_48d0, tes_casino_load(Ptr, Ptr) -> bool),
+        entry!(0x004f_aaa0, casino_data_endian(Ptr)),
+        entry!(0x0050_4280, tes_casino_chips_save(Ptr)),
+        entry!(0x0050_4340, fn_00504340(Ptr, Ptr)),
+        entry!(0x0050_43b0, fn_005043b0(Ptr, Ptr) -> bool),
+        entry!(0x0050_4420, fn_00504420(Ptr, u32, u32)),
+        entry!(0x0050_4450, fn_00504450(Ptr, u32)),
+        entry!(0x0050_4640, fn_00504640(Ptr)),
+        entry!(0x0050_4710, tes_casino_save(Ptr)),
     ]
 }
 
@@ -648,5 +878,228 @@ mod chips_and_casino_tests {
         e.call(0x0050_46e0, &args![this]);
         assert_eq!(calls(&e, 0x0048_4e60), vec![vec![this, 0xffff_ffff]]);
         assert_eq!(calls(&e, 0x0048_5d50), vec![vec![this + 0x214, 0x4400]]);
+    }
+}
+
+#[cfg(test)]
+mod n043_tests {
+    use super::*;
+
+    const SLOT_0: u32 = 0x7100_0000;
+
+    fn calls(e: &Engine, addr: u32) -> Vec<Vec<u32>> {
+        e.call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|c| c.0 == addr)
+            .map(|c| c.1.clone())
+            .collect()
+    }
+
+    fn quiet(e: &mut Engine, addrs: &[u32]) {
+        for &addr in addrs {
+            e.register(addr, |_, _| Ret::default());
+        }
+    }
+
+    #[test]
+    fn endian_swaps_the_13_words() {
+        let mut e = Engine::new();
+        quiet(&mut e, &[SWAP_WORD]);
+        e.call_log = Some(vec![]);
+        e.call(0x004f_aaa0, &args![0x1000u32]);
+        let swaps = calls(&e, SWAP_WORD);
+        assert_eq!(swaps.len(), 13);
+        assert_eq!(swaps[0], vec![0x1000, 0]);
+        assert_eq!(swaps[12], vec![0x1030, 0]);
+    }
+
+    #[test]
+    fn chips_save_writes_every_component_and_onam() {
+        let mut e = Engine::new();
+        quiet(
+            &mut e,
+            &[
+                FORM_START,
+                FORM_CLOSE,
+                SAVE_FULL_NAME,
+                SAVE_MODEL_TEXTURE_SWAP,
+                SAVE_TEXTURE,
+                SAVE_MESSAGE_ICON,
+                SAVE_DESTRUCTIBLE,
+                SAVE_PICKUP_PUTDOWN_SOUNDS,
+                FORM_ADD_CHUNK_ARRAY,
+            ],
+        );
+        e.map(0x7300_0000, 4);
+        e.register(STRING_LENGTH, |e, _| e.mem.u32(0x7300_0000).into_ret());
+        e.register(STRING_TEXT, |_, a| (a[0] + 1).into_ret());
+        let this = 0x1000u32;
+        e.mem.set_u32(0x7300_0000, 3);
+        e.call_log = Some(vec![]);
+        e.call(0x0050_4280, &args![this]);
+        let log: Vec<u32> = e.call_log.as_ref().unwrap().iter().map(|c| c.0).collect();
+        assert_eq!(log[1], FORM_START);
+        assert_eq!(*log.last().unwrap(), FORM_CLOSE);
+        assert_eq!(
+            calls(&e, SAVE_MODEL_TEXTURE_SWAP),
+            vec![vec![0x103c, CHUNK_MODL, CHUNK_MODT, CHUNK_MODS]]
+        );
+        assert_eq!(calls(&e, SAVE_TEXTURE), vec![vec![0x105c, CHUNK_ICON]]);
+        assert_eq!(calls(&e, SAVE_MESSAGE_ICON), vec![vec![0x1068, CHUNK_MICO]]);
+        assert_eq!(calls(&e, SAVE_DESTRUCTIBLE), vec![vec![0x1080]]);
+        assert_eq!(calls(&e, SAVE_PICKUP_PUTDOWN_SOUNDS), vec![vec![0x1088]]);
+        assert_eq!(
+            calls(&e, FORM_ADD_CHUNK_ARRAY),
+            vec![vec![CHUNK_ONAM, 0x1095, 4]]
+        );
+        e.mem.set_u32(0x7300_0000, 0);
+        e.call_log = Some(vec![]);
+        e.call(0x0050_4280, &args![this]);
+        assert!(calls(&e, FORM_ADD_CHUNK_ARRAY).is_empty());
+    }
+
+    #[test]
+    fn copy_takes_components_type_and_string() {
+        let mut e = Engine::new();
+        quiet(
+            &mut e,
+            &[FORM_COPY_ALL_COMPONENTS, FORM_SET_TYPE, STRING_SET],
+        );
+        e.register(DYNAMIC_CAST, |_, a| a[0].into_ret());
+        e.register(FORM_TYPE, |_, _| 0x6cu32.into_ret());
+        e.register(STRING_TEXT, |_, a| (a[0] + 1).into_ret());
+        e.call_log = Some(vec![]);
+        e.call(0x0050_4340, &args![0x1000u32, 0x2000u32]);
+        assert_eq!(
+            calls(&e, DYNAMIC_CAST),
+            vec![vec![0x2000, 0, TYPE_FORM, TYPE_CASINO_CHIPS, 0]]
+        );
+        assert_eq!(
+            calls(&e, FORM_COPY_ALL_COMPONENTS),
+            vec![vec![0x1000, 0x2000]]
+        );
+        assert_eq!(calls(&e, FORM_SET_TYPE), vec![vec![0x1000, 0x6c]]);
+        assert_eq!(calls(&e, STRING_SET), vec![vec![0x1094, 0x2095, 0]]);
+        e.register(DYNAMIC_CAST, |_, _| 0u32.into_ret());
+        e.call_log = Some(vec![]);
+        e.call(0x0050_4340, &args![0x1000u32, 0x2000u32]);
+        assert_eq!(e.call_log.as_ref().unwrap().len(), 2);
+    }
+
+    #[test]
+    fn compare_branches() {
+        let mut e = Engine::new();
+        e.map(0x7300_0000, 8);
+        e.register(DYNAMIC_CAST, |_, a| a[0].into_ret());
+        e.register(FORM_COMPARE_ALL_COMPONENTS, |e, _| {
+            e.mem.u32(0x7300_0000).into_ret()
+        });
+        e.register(STRING_COMPARE, |e, _| e.mem.u32(0x7300_0004).into_ret());
+        e.call_log = Some(vec![]);
+        assert!(!e.call(0x0050_43b0, &args![0x1000u32, 0x2000u32]).bool());
+        assert_eq!(calls(&e, STRING_COMPARE), vec![vec![0x1094, 0x2094, 1]]);
+        e.mem.set_u32(0x7300_0004, 2);
+        assert!(e.call(0x0050_43b0, &args![0x1000u32, 0x2000u32]).bool());
+        e.mem.set_u32(0x7300_0004, 0);
+        e.mem.set_u32(0x7300_0000, 0x100);
+        // Only the low byte of CompareAllComponents counts.
+        assert!(!e.call(0x0050_43b0, &args![0x1000u32, 0x2000u32]).bool());
+        e.mem.set_u32(0x7300_0000, 1);
+        assert!(e.call(0x0050_43b0, &args![0x1000u32, 0x2000u32]).bool());
+        e.register(DYNAMIC_CAST, |_, _| 0u32.into_ret());
+        e.mem.set_u32(0x7300_0000, 0);
+        assert!(e.call(0x0050_43b0, &args![0x1000u32, 0x2000u32]).bool());
+    }
+
+    #[test]
+    fn load_game_pair_and_one_word_pair() {
+        let mut e = Engine::new();
+        quiet(
+            &mut e,
+            &[
+                FORM_LOAD_GAME,
+                VALUE_LOAD_GAME,
+                FORM_00484D60,
+                VALUE_0048EA40,
+            ],
+        );
+        e.call_log = Some(vec![]);
+        e.call(0x0050_4420, &args![0x1000u32, 5u32, 6u32]);
+        e.call(0x0050_4450, &args![0x1000u32, 7u32]);
+        assert_eq!(calls(&e, FORM_LOAD_GAME), vec![vec![0x1000, 5, 6]]);
+        assert_eq!(calls(&e, VALUE_LOAD_GAME), vec![vec![0x1078, 5, 6]]);
+        assert_eq!(calls(&e, FORM_00484D60), vec![vec![0x1000, 7]]);
+        assert_eq!(calls(&e, VALUE_0048EA40), vec![vec![0x1078, 7]]);
+    }
+
+    #[test]
+    fn clear_resets_the_data_and_every_component() {
+        let mut e = Engine::new();
+        quiet(&mut e, &[MEMSET, SLOT_0]);
+        let vtable = e.mem.alloc(4);
+        e.mem.set_u32(vtable, SLOT_0);
+        let this = e.mem.alloc(0x220);
+        for index in 0..10 {
+            e.mem.set_u32(this + 0x24 + index * 0x20, vtable);
+        }
+        for index in 0..11 {
+            e.mem.set_u32(this + 0x164 + index * 0xc, vtable);
+        }
+        e.call_log = Some(vec![]);
+        e.call(0x0050_4640, &args![this]);
+        assert_eq!(calls(&e, MEMSET), vec![vec![this + 0x1e8, 0, 0x38]]);
+        let slots = calls(&e, SLOT_0);
+        assert_eq!(slots.len(), 21);
+        assert_eq!(slots[9], vec![this + 0x24 + 9 * 0x20]);
+        assert_eq!(slots[20], vec![this + 0x164 + 10 * 0xc]);
+    }
+
+    #[test]
+    fn casino_save_writes_models_textures_and_swapped_data() {
+        let mut e = Engine::new();
+        quiet(
+            &mut e,
+            &[
+                FORM_START,
+                FORM_CLOSE,
+                SAVE_FULL_NAME,
+                SAVE_MODEL_TEXTURE_SWAP,
+                SAVE_TEXTURE,
+                FORM_SAVE_DATA,
+                SWAP_WORD,
+            ],
+        );
+        e.map(0x7300_0000, 4);
+        e.register(SAVE_SWAPS, |e, _| e.mem.u32(0x7300_0000).into_ret());
+        // Models with a path: index 1 and the one at +0x124.
+        e.register(COMPONENT_STRING_LENGTH, |_, a| {
+            u32::from(a[0] == 0x1044 || a[0] == 0x1124).into_ret()
+        });
+        e.mem.set_u32(0x7300_0000, 1);
+        e.call_log = Some(vec![]);
+        e.call(0x0050_4710, &args![0x1000u32]);
+        assert_eq!(calls(&e, SAVE_FULL_NAME), vec![vec![0x1018]]);
+        assert_eq!(calls(&e, FORM_SAVE_DATA), vec![vec![0x1000, 0x11e8, 0x38]]);
+        assert_eq!(calls(&e, SWAP_WORD).len(), 26);
+        assert_eq!(calls(&e, COMPONENT_STRING_LENGTH).len(), 11);
+        assert_eq!(
+            calls(&e, SAVE_MODEL_TEXTURE_SWAP),
+            vec![
+                vec![0x1044, CHUNK_MODL, CHUNK_MODT, CHUNK_MODS],
+                vec![0x1124, CHUNK_MOD3, CHUNK_MODT, CHUNK_MODS]
+            ]
+        );
+        let textures = calls(&e, SAVE_TEXTURE);
+        assert_eq!(textures.len(), 11);
+        assert_eq!(textures[6], vec![0x1164 + 6 * 0xc, CHUNK_ICON]);
+        assert_eq!(textures[7], vec![0x1164 + 7 * 0xc, CHUNK_ICO2]);
+        assert_eq!(calls(&e, FORM_CLOSE), vec![vec![0x1000]]);
+        // No swapping.
+        e.mem.set_u32(0x7300_0000, 0);
+        e.call_log = Some(vec![]);
+        e.call(0x0050_4710, &args![0x1000u32]);
+        assert!(calls(&e, SWAP_WORD).is_empty());
     }
 }

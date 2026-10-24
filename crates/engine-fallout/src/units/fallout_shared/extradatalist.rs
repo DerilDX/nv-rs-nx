@@ -2209,14 +2209,27 @@ pub fn fn_00416870(e: &mut Engine, this: Ptr, x: f32, y: f32, z: f32) -> Ptr {
 
 // Translated from 004169a0 (decompiled, FalloutNV.exe 1.4.0.525)
 /// `sincos`: stores the sine of `angle` at `sine` and the cosine at `cosine`
-/// (both `float`). The code uses the x87 `FSINCOS`; the translation computes
-/// both in `f64` and rounds to `float`, which can differ from the extended
-/// precision result in the last bit.
+/// (both `float`), through the x87 `FSINCOS` and two scratch floats (`FSTP`
+/// the cosine, then the sine). For a finite `|angle| >= 2^63` `FSINCOS` sets
+/// C2 and pushes nothing: the first `FSTP` stores the angle itself as the
+/// cosine and the second pops an empty register, storing the default NaN
+/// `0xffc00000` as the sine.
 pub fn fn_004169a0(e: &mut Engine, angle: f32, sine: Ptr, cosine: Ptr) {
-    let angle = angle as f64;
-    e.mem.set_f32(sine.addr(), angle.sin() as f32);
-    e.mem.set_f32(cosine.addr(), angle.cos() as f32);
+    let bits = angle.to_bits();
+    let loaded = x87_load32(bits);
+    let (sine_slot, cosine_slot) = if loaded.is_finite() && loaded.abs() >= TWO_POW_63 {
+        (0xffc0_0000, x87_store32(loaded))
+    } else {
+        let (sin, cos) = x87_fsincos(X87Ext::load32(bits));
+        (sin.store32(), cos.store32())
+    };
+    e.mem.set_u32(sine.addr(), x87_quiet_bits(sine_slot));
+    e.mem.set_u32(cosine.addr(), x87_quiet_bits(cosine_slot));
 }
+
+/// `2^63`: the bound of the operand of `FSIN`/`FCOS`/`FSINCOS` (Intel SDM vol.
+/// 2: out of range for `|x| >= 2^63`).
+const TWO_POW_63: f64 = 9_223_372_036_854_775_808.0;
 
 // Translated from 004169d0 (decompiled, FalloutNV.exe 1.4.0.525)
 /// The word at +0x1D8 of the object (the region list of the data handler
@@ -7973,6 +7986,27 @@ mod tests {
         e.call(0x0041_69a0, &args![-1.0f32, sine, cosine]);
         assert_eq!(e.mem.f32(sine.addr()), ((-1.0f64).sin()) as f32);
         assert_eq!(e.mem.f32(cosine.addr()), ((1.0f64).cos()) as f32);
+    }
+
+    #[test]
+    fn sincos_out_of_range_stores_the_angle_and_the_default_nan() {
+        // `FSINCOS` leaves an operand with |x| >= 2^63 alone and pushes nothing: the cosine
+        // slot gets the angle, the sine slot the default NaN of the empty-register pop.
+        let mut e = extra_engine();
+        let sine: Ptr = Ptr::new(e.mem.alloc(8));
+        let cosine: Ptr = Ptr::new(e.mem.alloc(8));
+        for angle in [1e30f32, -1e30, f32::MAX] {
+            e.call(0x0041_69a0, &args![angle, sine, cosine]);
+            assert_eq!(e.mem.u32(sine.addr()), 0xffc0_0000);
+            assert_eq!(e.mem.u32(cosine.addr()), angle.to_bits());
+        }
+        // A NaN angle comes back quiet in both.
+        e.call(
+            0x0041_69a0,
+            &args![f32::from_bits(0x7f80_0001), sine, cosine],
+        );
+        assert_eq!(e.mem.u32(sine.addr()), 0x7fc0_0001);
+        assert_eq!(e.mem.u32(cosine.addr()), 0x7fc0_0001);
     }
 
     #[test]

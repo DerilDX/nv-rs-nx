@@ -172,11 +172,22 @@ pub fn bs_dismember_skin_instance_destructor(e: &mut Engine, this: Ptr) {
     e.call(NI_SKIN_INSTANCE_DESTRUCTOR, &args![this]);
 }
 
+/// The word [`fn_00688460`] answers (`011c6228`; the decal code names its shapes with it
+/// when the decal is not permanent).
+const TRANSIENT_NAME_WORD: u32 = 0x011c_6228;
+
+// Translated from 00688460 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (no arguments): answers the word at `011c6228`.
+pub fn fn_00688460(e: &mut Engine) -> u32 {
+    e.global::<u32>(TRANSIENT_NAME_WORD)
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
         entry!(0x004b_6190, ni_point3_dot(Ptr, u32) -> f32),
         entry!(0x0068_38b0, fn_006838b0(Ptr) -> u32),
+        entry!(0x0068_8460, fn_00688460() -> u32),
         entry!(0x0068_3a60, fn_00683a60() -> u32),
         entry!(
             0x0068_5e80,
@@ -369,5 +380,13 @@ mod b060_tests {
         e.call(0x0068_8610, &args![this]);
         assert_eq!(calls(&e, OPERATOR_DELETE).len(), 1);
         assert_eq!(calls(&e, NI_SKIN_INSTANCE_DESTRUCTOR), vec![vec![this]; 2]);
+    }
+
+    #[test]
+    fn fn_00688460_answers_the_word_at_011c6228() {
+        let mut e = Engine::new();
+        e.map(TRANSIENT_NAME_WORD, 4);
+        e.set_global(TRANSIENT_NAME_WORD, 0x0abc_def0u32);
+        assert_eq!(e.call(0x0068_8460, &args![]).u32(), 0x0abc_def0);
     }
 }

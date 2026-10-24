@@ -175,11 +175,64 @@ pub fn tes_object_misc_init_item(e: &mut Engine, this: Ptr) {
     e.call(0x0048_4ab0, &args![this, 1u32]);
 }
 
+/// `TESForm::StartForm` (`004855a0`), `TESForm::SaveData` (`00485e00`) and
+/// `TESForm::CloseForm` (`00485680`), `thiscall` on the form, no stack words.
+const START_FORM: u32 = 0x0048_55a0;
+const FORM_SAVE_DATA: u32 = 0x0048_5e00;
+const CLOSE_FORM: u32 = 0x0048_5680;
+/// The component saves (engine map; `thiscall`): `TESFullName::Save`
+/// (`00487010`), `TESModelTextureSwap::Save` (`0048a520`, three chunk
+/// tags), `TESTexture::Save` (`0048e370`, a tag), `BGSMessageIcon::Save`
+/// (`0047a240`, a tag), `TESScriptableForm::Save` (`0048cca0`),
+/// `BGSDestructibleObjectForm::Save` (`00477f20`) and
+/// `BGSPickupPutdownSounds::Save` (`0047b560`).
+const FULL_NAME_SAVE: u32 = 0x0048_7010;
+const MODEL_TEXTURE_SWAP_SAVE: u32 = 0x0048_a520;
+const TEXTURE_SAVE: u32 = 0x0048_e370;
+const MESSAGE_ICON_SAVE: u32 = 0x0047_a240;
+const SCRIPTABLE_FORM_SAVE: u32 = 0x0048_cca0;
+const DESTRUCTIBLE_SAVE: u32 = 0x0047_7f20;
+const PICKUP_PUTDOWN_SAVE: u32 = 0x0047_b560;
+/// `00485910` (cdecl(chunk, word)): adds a one-word chunk; the form-id
+/// getter (`0084e3a0`, `thiscall`: the word at +0xc).
+const ADD_CHUNK_WORD: u32 = 0x0048_5910;
+const FORM_ID: u32 = 0x0084_e3a0;
+
+// Translated from 0051ae80 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TESObjectMISC::Save` (engine map; no stack words): `StartForm`, the full
+/// name (+0x30), the model with texture swaps (+0x3c; `MODL`, `MODT`,
+/// `MODS`), the icon (+0x5c, `ICON`), the message icon (+0x8c, `MICO`),
+/// script (+0x68), destructible data (+0x84), pickup/putdown sounds
+/// (+0x9c), `TESForm::SaveData`, the form at +0xa8 by id as `RNAM` when set,
+/// `CloseForm`.
+pub fn tes_object_misc_save(e: &mut Engine, this: Ptr) {
+    let base = this.addr();
+    e.call(START_FORM, &args![this]);
+    e.call(FULL_NAME_SAVE, &args![base + 0x30]);
+    e.call(
+        MODEL_TEXTURE_SWAP_SAVE,
+        &args![base + 0x3c, MODL, MODT, MODS],
+    );
+    e.call(TEXTURE_SAVE, &args![base + 0x5c, ICON]);
+    e.call(MESSAGE_ICON_SAVE, &args![base + 0x8c, MICO]);
+    e.call(SCRIPTABLE_FORM_SAVE, &args![base + 0x68]);
+    e.call(DESTRUCTIBLE_SAVE, &args![base + 0x84]);
+    e.call(PICKUP_PUTDOWN_SAVE, &args![base + 0x9c]);
+    e.call(FORM_SAVE_DATA, &args![this]);
+    let sound = e.mem.u32(base + 0xa8);
+    if sound != 0 {
+        let id = e.call(FORM_ID, &args![sound]).u32();
+        e.call(ADD_CHUNK_WORD, &args![RNAM, id]);
+    }
+    e.call(CLOSE_FORM, &args![this]);
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
         entry!(0x0051_aaa0, fn_0051aaa0(Ptr, Ptr) -> bool),
         entry!(0x0051_a9a0, tes_object_misc_init_item(Ptr)),
+        entry!(0x0051_ae80, tes_object_misc_save(Ptr)),
     ]
 }
 
@@ -402,5 +455,59 @@ mod movement_path_tests {
         e.call_log = Some(vec![]);
         e.call(0x0051_a9a0, &args![form]);
         assert_eq!(e.call_log.take().unwrap().len(), 2);
+    }
+}
+
+#[cfg(test)]
+mod save_tests {
+    use super::*;
+
+    #[test]
+    fn save_writes_each_component_and_the_sound() {
+        let mut e = Engine::new();
+        for a in [
+            START_FORM,
+            FORM_SAVE_DATA,
+            CLOSE_FORM,
+            FULL_NAME_SAVE,
+            MODEL_TEXTURE_SWAP_SAVE,
+            TEXTURE_SAVE,
+            MESSAGE_ICON_SAVE,
+            SCRIPTABLE_FORM_SAVE,
+            DESTRUCTIBLE_SAVE,
+            PICKUP_PUTDOWN_SAVE,
+            ADD_CHUNK_WORD,
+        ] {
+            e.register(a, |_, _| Ret::default());
+        }
+        e.register(FORM_ID, |e, a| e.mem.u32(a[0] + 0xc).into_ret());
+        let this = e.mem.alloc(0xb0);
+        e.call_log = Some(vec![]);
+        e.call(0x0051_ae80, &args![this]);
+        let log = e.call_log.take().unwrap();
+        assert_eq!(
+            log[1..].to_vec(),
+            vec![
+                (START_FORM, vec![this]),
+                (FULL_NAME_SAVE, vec![this + 0x30]),
+                (MODEL_TEXTURE_SWAP_SAVE, vec![this + 0x3c, MODL, MODT, MODS]),
+                (TEXTURE_SAVE, vec![this + 0x5c, ICON]),
+                (MESSAGE_ICON_SAVE, vec![this + 0x8c, MICO]),
+                (SCRIPTABLE_FORM_SAVE, vec![this + 0x68]),
+                (DESTRUCTIBLE_SAVE, vec![this + 0x84]),
+                (PICKUP_PUTDOWN_SAVE, vec![this + 0x9c]),
+                (FORM_SAVE_DATA, vec![this]),
+                (CLOSE_FORM, vec![this])
+            ]
+        );
+        let sound = e.mem.alloc(0x18);
+        e.mem.set_u32(sound + 0xc, 0x0789);
+        e.mem.set_u32(this + 0xa8, sound);
+        e.call_log = Some(vec![]);
+        e.call(0x0051_ae80, &args![this]);
+        let log = e.call_log.take().unwrap();
+        let added: Vec<_> = log.iter().filter(|c| c.0 == ADD_CHUNK_WORD).collect();
+        assert_eq!(added.len(), 1);
+        assert_eq!(added[0].1, vec![RNAM, 0x0789]);
     }
 }

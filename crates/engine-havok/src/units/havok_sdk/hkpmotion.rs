@@ -252,12 +252,16 @@ pub fn hkp_motion_set_angular_velocity(e: &mut Engine, this: Ptr, velocity: Ptr)
 /// of the vector at +0xC0, +0xCC) to the linear velocity at +0xD0, four lanes of `MULPS` and
 /// `ADDPS`.
 pub fn hkp_motion_apply_linear_impulse(e: &mut Engine, this: Ptr, impulse: Ptr) {
+    // `MULPS` with the splatted inverse mass as the destination, `ADDPS` onto the
+    // velocity: the SSE NaN rules.
     let inverse_mass = e.mem.f32(this.addr() + 0xcc);
     for lane in 0..4 {
-        let scaled = inverse_mass * e.mem.f32(impulse.addr() + 4 * lane);
+        let scaled = crate::sse::mul(inverse_mass, e.mem.f32(impulse.addr() + 4 * lane));
         let velocity = e.mem.f32(this.addr() + 0xd0 + 4 * lane);
-        e.mem
-            .set_f32(this.addr() + 0xd0 + 4 * lane, scaled + velocity);
+        e.mem.set_f32(
+            this.addr() + 0xd0 + 4 * lane,
+            crate::sse::add(scaled, velocity),
+        );
     }
 }
 

@@ -55,7 +55,7 @@ pub fn middle_high_process_set_last_idle_played(e: &mut Engine, this: Ptr, value
 // Translated from 005075f0 (decompiled, FalloutNV.exe 1.4.0.525)
 /// `LowProcess::SetDeathTime` (Xbox PDB) stores its argument in `fDeathTime` at +0xa8.
 pub fn low_process_set_death_time(e: &mut Engine, this: Ptr, value: f32) {
-    e.mem.set_f32(this.addr() + 0xa8, value);
+    e.mem.set_f32(this.addr() + 0xa8, x87_quiet(value));
 }
 
 // Translated from 0051f510 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -1183,7 +1183,7 @@ pub fn low_process_set_is_aggressor(e: &mut Engine, this: Ptr<LowProcess>, on: u
 /// `LowProcess::SetEssentialDownTimer` (Xbox PDB) stores its argument in
 /// `fEssentialDownTimer` at +0xa4.
 pub fn low_process_set_essential_down_timer(e: &mut Engine, this: Ptr<LowProcess>, value: f32) {
-    e.set(this, LowProcess::fEssentialDownTimer, value);
+    e.set(this, LowProcess::fEssentialDownTimer, x87_quiet(value));
 }
 
 // Translated from 008d7f40 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -1193,7 +1193,7 @@ pub fn low_process_set_essential_down_timer(e: &mut Engine, this: Ptr<LowProcess
 pub fn fn_008d7f40(e: &mut Engine, this: Ptr<CombatTimer>, delay: f32) {
     let now = e.call(CLOCK, &args![]).f32();
     e.set(this, CombatTimer::fStartTime, now);
-    e.set(this, CombatTimer::fDelay, delay);
+    e.set(this, CombatTimer::fDelay, x87_quiet(delay));
 }
 
 // Translated from 008d7f20 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -1470,13 +1470,13 @@ pub fn middle_high_process_get_should_refresh_magic_shaders_effects(
 // Translated from 008d8620 (decompiled, FalloutNV.exe 1.4.0.525)
 /// `MiddleHighProcess::SetAlphaMult` (Xbox PDB) stores its argument in `fAlphaMult` at +0x170.
 pub fn middle_high_process_set_alpha_mult(e: &mut Engine, this: Ptr, value: f32) {
-    e.mem.set_f32(this.addr() + 0x170, value);
+    e.mem.set_f32(this.addr() + 0x170, x87_quiet(value));
 }
 
 // Translated from 008d8640 (decompiled, FalloutNV.exe 1.4.0.525)
 /// `MiddleHighProcess::SetScriptRefractionPower` (Xbox PDB) stores its argument in `fScriptRefractPower` at +0x174.
 pub fn middle_high_process_set_script_refraction_power(e: &mut Engine, this: Ptr, value: f32) {
-    e.mem.set_f32(this.addr() + 0x174, value);
+    e.mem.set_f32(this.addr() + 0x174, x87_quiet(value));
 }
 
 // Translated from 008d8660 (decompiled, FalloutNV.exe 1.4.0.525)

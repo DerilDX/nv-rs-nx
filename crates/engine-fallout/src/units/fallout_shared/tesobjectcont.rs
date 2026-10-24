@@ -598,6 +598,204 @@ pub fn fn_00516dc0(
     true
 }
 
+/// `TESForm::StartForm` (`004855a0`) and `TESForm::CloseForm` (`00485680`),
+/// `thiscall` on the form, no stack words.
+const START_FORM: u32 = 0x0048_55a0;
+const CLOSE_FORM: u32 = 0x0048_5680;
+/// The component saves (engine map; `thiscall`): `TESFullName::Save`
+/// (`00487010`), `TESModelTextureSwap::Save` (`0048a520`, three chunk
+/// tags), `TESScriptableForm::Save` (`0048cca0`), `TESContainer::Save`
+/// (`00481b40`) and `BGSDestructibleObjectForm::Save` (`00477f20`).
+const FULL_NAME_SAVE: u32 = 0x0048_7010;
+const MODEL_TEXTURE_SWAP_SAVE: u32 = 0x0048_a520;
+const SCRIPTABLE_FORM_SAVE: u32 = 0x0048_cca0;
+const CONTAINER_SAVE: u32 = 0x0048_1b40;
+const DESTRUCTIBLE_SAVE: u32 = 0x0047_7f20;
+/// `00401500`: the byte at `011c54ba` (whether saved words are
+/// byte-swapped); `00483710` (`thiscall` on the data): its byte swap, whose
+/// body does nothing.
+const SAVE_SWAPS_BYTES: u32 = 0x0040_1500;
+const SWAP_CONTAINER_DATA: u32 = 0x0048_3710;
+/// `TESForm::__SaveData` (`00485e20`, `thiscall`, `RET 8`: data, size).
+const SAVE_DATA: u32 = 0x0048_5e20;
+/// `00485910` (cdecl(chunk, word)): adds a one-word chunk.
+const ADD_CHUNK_WORD: u32 = 0x0048_5910;
+/// The form-id getter (`0084e3a0`, `thiscall`: the word at +0xc).
+const FORM_ID: u32 = 0x0084_e3a0;
+/// `__RTDynamicCast` (`00ec43fb`, cdecl, five words) and the type
+/// descriptor `TESObjectCONT` (`0118a674`).
+const RT_DYNAMIC_CAST: u32 = 0x00ec_43fb;
+const TYPE_TES_OBJECT_CONT: u32 = 0x0118_a674;
+/// `TESForm::CopyAllComponents` (`004851b0`, `RET 4`) and
+/// `TESForm::CompareAllComponents` (`00485270`, `RET 4`).
+const COPY_ALL_COMPONENTS: u32 = 0x0048_51b0;
+const COMPARE_ALL_COMPONENTS: u32 = 0x0048_5270;
+/// The container's accessors (`thiscall`): the data byte's address
+/// (`00461150`: `this + 0x98`), the word at +0x8c (`008ce390`) and its
+/// setter (`008cc6d0`, `RET 4`), the setter of the word at +0x90
+/// (`004fb0b0`, `RET 4`; `fn_00516bf0` reads it), the word at +0x94
+/// (`009185e0`) and its setter (`004febf0`, `RET 4`).
+const DATA_ADDRESS: u32 = 0x0046_1150;
+const OPEN_SOUND: u32 = 0x008c_e390;
+const SET_OPEN_SOUND: u32 = 0x008c_c6d0;
+const SET_CLOSE_SOUND: u32 = 0x004f_b0b0;
+const LOOPING_SOUND: u32 = 0x0091_85e0;
+const SET_LOOPING_SOUND: u32 = 0x004f_ebf0;
+/// `CanActivate`'s callees: `TESObjectREFR::GetLock` (`00569160`, no stack
+/// words), `005021a0` (`thiscall` on the lock), `TESObjectREFR::IsAnOwner`
+/// (`005785e0`, `RET 8`) and `Actor::HasObjects` (`00891db0`, `RET 0x14`).
+const GET_LOCK: u32 = 0x0056_9160;
+const LOCK_CHECK_005021A0: u32 = 0x0050_21a0;
+const IS_AN_OWNER: u32 = 0x0057_85e0;
+const HAS_OBJECTS: u32 = 0x0089_1db0;
+
+// Translated from 00516a20 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TESObjectCONT::Save` (engine map; no stack words): `StartForm`, the
+/// full name (+0x3c), the model with texture swaps (+0x48; `MODL`, `MODT`,
+/// `MODS`), script (+0x68), contents (`TESContainer::Save` on +0x30),
+/// destructible data (+0x7c), the data byte at +0x98 (`__SaveData`, 1 byte;
+/// `00483710` before and after when `00401500` says so), the forms at
+/// +0x8c, +0x90, +0x94 by id when set (`SNAM`, `QNAM`, `RNAM`), `CloseForm`.
+pub fn tes_object_cont_save(e: &mut Engine, this: Ptr) {
+    let base = this.addr();
+    e.call(START_FORM, &args![this]);
+    e.call(FULL_NAME_SAVE, &args![base + 0x3c]);
+    e.call(
+        MODEL_TEXTURE_SWAP_SAVE,
+        &args![base + 0x48, MODL, MODT, MODS],
+    );
+    e.call(SCRIPTABLE_FORM_SAVE, &args![base + 0x68]);
+    e.call(CONTAINER_SAVE, &args![base + 0x30]);
+    e.call(DESTRUCTIBLE_SAVE, &args![base + 0x7c]);
+    if e.call(SAVE_SWAPS_BYTES, &[]).u32() as u8 != 0 {
+        e.call(SWAP_CONTAINER_DATA, &args![base + 0x98]);
+    }
+    e.call(SAVE_DATA, &args![this, base + 0x98, 1u32]);
+    if e.call(SAVE_SWAPS_BYTES, &[]).u32() as u8 != 0 {
+        e.call(SWAP_CONTAINER_DATA, &args![base + 0x98]);
+    }
+    for (offset, tag) in [(0x8cu32, SNAM), (0x90, QNAM), (0x94, RNAM)] {
+        let form = e.mem.u32(base + offset);
+        if form != 0 {
+            let id = e.call(FORM_ID, &args![form]).u32();
+            e.call(ADD_CHUNK_WORD, &args![tag, id]);
+        }
+    }
+    e.call(CLOSE_FORM, &args![this]);
+}
+
+/// `other` as a `TESObjectCONT` (`__RTDynamicCast` from `TESForm`), or 0.
+fn as_container(e: &mut Engine, other: u32) -> u32 {
+    e.call(
+        RT_DYNAMIC_CAST,
+        &args![other, 0u32, TES_FORM_TYPE, TYPE_TES_OBJECT_CONT, 0u32],
+    )
+    .u32()
+}
+
+// Translated from 00516b60 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The container's copy (engine map: no name; `RET 4`): when `other` is a
+/// `TESObjectCONT`, copies all components (`TESForm::CopyAllComponents`
+/// with `other`), the data byte (+0x98) and the three sounds (+0x8c, +0x90,
+/// +0x94) through their getters and setters.
+pub fn fn_00516b60(e: &mut Engine, this: Ptr, other: u32) {
+    let source = as_container(e, other);
+    if source == 0 {
+        return;
+    }
+    e.call(COPY_ALL_COMPONENTS, &args![this, other]);
+    let data = e.call(DATA_ADDRESS, &args![source]).u32();
+    let byte = e.mem.u8(data);
+    e.mem.set_u8(this.addr() + 0x98, byte);
+    let open = e.call(OPEN_SOUND, &args![source]).u32();
+    e.call(SET_OPEN_SOUND, &args![this, open]);
+    let close = fn_00516bf0(e, Ptr::new(source));
+    e.call(SET_CLOSE_SOUND, &args![this, close]);
+    let looping = e.call(LOOPING_SOUND, &args![source]).u32();
+    e.call(SET_LOOPING_SOUND, &args![this, looping]);
+}
+
+// Translated from 00516c10 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The container's compare (engine map: no name; `RET 4`): true when
+/// `other` is no `TESObjectCONT`, when `TESForm::CompareAllComponents`
+/// (with the cast form) says they differ, or when the data bytes (signed)
+/// or any of the three sounds differ (this one's asked first).
+pub fn fn_00516c10(e: &mut Engine, this: Ptr, other: u32) -> bool {
+    let source = as_container(e, other);
+    if source == 0 {
+        return true;
+    }
+    if e.call(COMPARE_ALL_COMPONENTS, &args![this, source]).u32() as u8 != 0 {
+        return true;
+    }
+    let mine = e.mem.i8(this.addr() + 0x98);
+    let data = e.call(DATA_ADDRESS, &args![source]).u32();
+    if mine != e.mem.i8(data) {
+        return true;
+    }
+    let mine = e.call(OPEN_SOUND, &args![this]).u32();
+    if mine != e.call(OPEN_SOUND, &args![source]).u32() {
+        return true;
+    }
+    let mine = fn_00516bf0(e, this);
+    if mine != fn_00516bf0(e, Ptr::new(source)) {
+        return true;
+    }
+    let mine = e.call(LOOPING_SOUND, &args![this]).u32();
+    mine != e.call(LOOPING_SOUND, &args![source]).u32()
+}
+
+// Translated from 00516cd0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TESObjectCONT::CanActivate` (engine map; `RET 0xc`: the reference, the
+/// actor and a byte; `this` is not read): false without an actor or when
+/// its vtable slot `+0x100` answers false. True when the reference has no
+/// lock (`TESObjectREFR::GetLock`) or `005021a0` says the lock is open;
+/// when the actor is not the player and owns the reference
+/// (`TESObjectREFR::IsAnOwner(actor, 1)`); when the actor holds the lock's
+/// key (the lock's word +4, when set; `Actor::HasObjects(key, 0, 1, 0,
+/// &count)`); or, with `use_item` set, when it holds the form at `011ca268`.
+/// Else false. The count the game keeps on its stack is a block here.
+pub fn tes_object_cont_can_activate(
+    e: &mut Engine,
+    _this: Ptr,
+    reference: u32,
+    actor: u32,
+    use_item: u8,
+) -> bool {
+    if actor == 0 || e.vcall(actor, 0x100, &[]).u32() as u8 == 0 {
+        return false;
+    }
+    let lock = e.call(GET_LOCK, &args![reference]).u32();
+    if lock == 0 || e.call(LOCK_CHECK_005021A0, &args![lock]).u32() as u8 == 0 {
+        return true;
+    }
+    if actor != e.global::<u32>(PLAYER)
+        && e.call(IS_AN_OWNER, &args![reference, actor, 1u32]).u32() as u8 != 0
+    {
+        return true;
+    }
+    e.with_stack(4, |e, count| {
+        let key = e.mem.u32(lock + 4);
+        if key != 0
+            && e.call(HAS_OBJECTS, &args![actor, key, 0u32, 1u32, 0u32, count])
+                .u32() as u8
+                != 0
+        {
+            return true;
+        }
+        if use_item != 0 {
+            let item = e.global::<u32>(USED_ITEM_FORM);
+            if e.call(HAS_OBJECTS, &args![actor, item, 0u32, 1u32, 0u32, count])
+                .u32() as u8
+                != 0
+            {
+                return true;
+            }
+        }
+        false
+    })
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -614,6 +812,13 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x0051_6240, fn_00516240(Ptr)),
         entry!(0x0051_6370, tes_object_cont_init_item(Ptr)),
         entry!(0x0051_6dc0, fn_00516dc0(Ptr, Ptr, Ptr, u32, u32, u32) -> bool),
+        entry!(0x0051_6a20, tes_object_cont_save(Ptr)),
+        entry!(0x0051_6b60, fn_00516b60(Ptr, u32)),
+        entry!(0x0051_6c10, fn_00516c10(Ptr, u32) -> bool),
+        entry!(
+            0x0051_6cd0,
+            tes_object_cont_can_activate(Ptr, u32, u32, u8) -> bool
+        ),
     ]
 }
 
@@ -1510,5 +1715,207 @@ mod container_tests {
             assert!(calls_to(&log, 0x008b_fa40).is_empty());
             assert!(calls_to(&log, 0x00ad_73b0).is_empty());
         }
+    }
+}
+
+#[cfg(test)]
+mod save_copy_activate_tests {
+    use super::*;
+
+    type Log = Vec<(u32, Vec<u32>)>;
+
+    fn ret(eax: u32) -> Ret {
+        Ret {
+            eax,
+            ..Ret::default()
+        }
+    }
+
+    fn only(log: &Log, addr: u32) -> Vec<Vec<u32>> {
+        log.iter()
+            .filter(|(a, _)| *a == addr)
+            .map(|(_, w)| w.clone())
+            .collect()
+    }
+
+    fn run(e: &mut Engine, addr: u32, words: &[u32]) -> (Ret, Log) {
+        e.call_log = Some(vec![]);
+        let r = e.call(addr, words);
+        (r, e.call_log.take().unwrap())
+    }
+
+    #[test]
+    fn save_writes_components_data_and_sounds() {
+        let mut e = Engine::new();
+        for a in [
+            START_FORM,
+            CLOSE_FORM,
+            FULL_NAME_SAVE,
+            MODEL_TEXTURE_SWAP_SAVE,
+            SCRIPTABLE_FORM_SAVE,
+            CONTAINER_SAVE,
+            DESTRUCTIBLE_SAVE,
+            SWAP_CONTAINER_DATA,
+            SAVE_DATA,
+            ADD_CHUNK_WORD,
+        ] {
+            e.register(a, |_, _| Ret::default());
+        }
+        e.register(SAVE_SWAPS_BYTES, |_, _| ret(0));
+        e.register(FORM_ID, |e, a| ret(e.mem.u32(a[0] + 0xc)));
+        let this = e.mem.alloc(0xa0);
+        let sound = e.mem.alloc(0x18);
+        e.mem.set_u32(sound + 0xc, 0x0000_0456);
+        e.mem.set_u32(this + 0x90, sound);
+        let (_, log) = run(&mut e, 0x0051_6a20, &args![this]);
+        assert_eq!(only(&log, FULL_NAME_SAVE), vec![vec![this + 0x3c]]);
+        assert_eq!(
+            only(&log, MODEL_TEXTURE_SWAP_SAVE),
+            vec![vec![this + 0x48, MODL, MODT, MODS]]
+        );
+        assert_eq!(only(&log, SCRIPTABLE_FORM_SAVE), vec![vec![this + 0x68]]);
+        assert_eq!(only(&log, CONTAINER_SAVE), vec![vec![this + 0x30]]);
+        assert_eq!(only(&log, DESTRUCTIBLE_SAVE), vec![vec![this + 0x7c]]);
+        assert_eq!(only(&log, SAVE_DATA), vec![vec![this, this + 0x98, 1]]);
+        assert!(only(&log, SWAP_CONTAINER_DATA).is_empty());
+        assert_eq!(only(&log, ADD_CHUNK_WORD), vec![vec![QNAM, 0x456]]);
+        e.register(SAVE_SWAPS_BYTES, |_, _| ret(1));
+        e.mem.set_u32(this + 0x8c, sound);
+        e.mem.set_u32(this + 0x94, sound);
+        let (_, log) = run(&mut e, 0x0051_6a20, &args![this]);
+        assert_eq!(only(&log, SWAP_CONTAINER_DATA).len(), 2);
+        assert_eq!(
+            only(&log, ADD_CHUNK_WORD),
+            vec![vec![SNAM, 0x456], vec![QNAM, 0x456], vec![RNAM, 0x456]]
+        );
+    }
+
+    fn accessor_engine() -> Engine {
+        let mut e = Engine::new();
+        e.register(RT_DYNAMIC_CAST, |_, a| ret(a[0]));
+        e.register(COPY_ALL_COMPONENTS, |_, _| Ret::default());
+        e.register(COMPARE_ALL_COMPONENTS, |_, _| ret(0));
+        e.register(DATA_ADDRESS, |_, a| ret(a[0] + 0x98));
+        for (get, set, offset) in [
+            (OPEN_SOUND, SET_OPEN_SOUND, 0x8c),
+            (0, SET_CLOSE_SOUND, 0x90),
+            (LOOPING_SOUND, SET_LOOPING_SOUND, 0x94),
+        ] {
+            if get != 0 {
+                e.register_double(get, move |e, a| ret(e.mem.u32(a[0] + offset)));
+            }
+            e.register_double(set, move |e, a| {
+                e.mem.set_u32(a[0] + offset, a[1]);
+                Ret::default()
+            });
+        }
+        e
+    }
+
+    #[test]
+    fn copy_takes_the_data_byte_and_sounds() {
+        let mut e = accessor_engine();
+        let this = e.mem.alloc(0xa0);
+        let other = e.mem.alloc(0xa0);
+        e.mem.set_u8(other + 0x98, 0x81);
+        for (i, offset) in [0x8cu32, 0x90, 0x94].iter().enumerate() {
+            e.mem.set_u32(other + offset, 0x700 + i as u32);
+        }
+        let (_, log) = run(&mut e, 0x0051_6b60, &args![this, other]);
+        assert_eq!(only(&log, COPY_ALL_COMPONENTS), vec![vec![this, other]]);
+        assert_eq!(e.mem.u8(this + 0x98), 0x81);
+        assert_eq!(
+            [0x8c, 0x90, 0x94].map(|o| e.mem.u32(this + o)),
+            [0x700, 0x701, 0x702]
+        );
+        e.register(RT_DYNAMIC_CAST, |_, _| ret(0));
+        let fresh = e.mem.alloc(0xa0);
+        e.call(0x0051_6b60, &args![fresh, other]);
+        assert_eq!(e.mem.u8(fresh + 0x98), 0);
+    }
+
+    #[test]
+    fn compare_reports_each_difference() {
+        let mut e = accessor_engine();
+        let pair = |e: &mut Engine, offset: u32| {
+            let this = e.mem.alloc(0xa0);
+            let other = e.mem.alloc(0xa0);
+            for o in [0x8cu32, 0x90, 0x94] {
+                e.mem.set_u32(this + o, 0x55);
+                e.mem.set_u32(other + o, 0x55);
+            }
+            if offset != 0 {
+                let v = e.mem.u32(other + offset) + 1;
+                e.mem.set_u32(other + offset, v);
+            }
+            e.call(0x0051_6c10, &args![this, other]).bool()
+        };
+        assert!(!pair(&mut e, 0));
+        for offset in [0x8c, 0x90, 0x94, 0x98] {
+            assert!(pair(&mut e, offset));
+        }
+        e.register(COMPARE_ALL_COMPONENTS, |_, _| ret(1));
+        assert!(pair(&mut e, 0));
+        e.register(COMPARE_ALL_COMPONENTS, |_, _| ret(0));
+        e.register(RT_DYNAMIC_CAST, |_, _| ret(0));
+        assert!(pair(&mut e, 0));
+    }
+
+    /// An actor whose vtable slot `+0x100` answers `active`.
+    fn activate_engine(
+        active: u32,
+        lock_open: u32,
+        owner: u32,
+        has: [u32; 2],
+    ) -> (Engine, u32, u32) {
+        let mut e = Engine::new();
+        let actor = e.mem.alloc(0x10);
+        let vtable = e.mem.alloc(0x110);
+        e.mem.set_u32(actor, vtable);
+        e.mem.set_u32(vtable + 0x100, 0x0f47_0100);
+        e.register_double(0x0f47_0100, move |_, _| ret(active));
+        let lock = e.mem.alloc(8);
+        e.mem.set_u32(lock + 4, 0x0abc);
+        e.register_double(GET_LOCK, move |_, _| ret(lock));
+        e.register_double(LOCK_CHECK_005021A0, move |_, _| ret(lock_open));
+        e.register_double(IS_AN_OWNER, move |_, _| ret(owner));
+        e.register_double(HAS_OBJECTS, move |_, a| {
+            ret(if a[1] == 0x0abc { has[0] } else { has[1] })
+        });
+        e.map(PLAYER & !0xfff, 0x1000);
+        e.map(USED_ITEM_FORM & !0xfff, 0x1000);
+        e.set_global::<u32>(USED_ITEM_FORM, 0x0def);
+        (e, actor, lock)
+    }
+
+    fn can(e: &mut Engine, actor: u32, use_item: u32) -> bool {
+        e.call(0x0051_6cd0, &args![0u32, 0x9000u32, actor, use_item])
+            .bool()
+    }
+
+    #[test]
+    fn can_activate_checks_actor_lock_owner_and_keys() {
+        let (mut e, actor, _) = activate_engine(1, 1, 0, [0, 0]);
+        assert!(!can(&mut e, 0, 1));
+        assert!(!can(&mut e, actor, 1));
+        let (mut e, actor, _) = activate_engine(0x100, 0, 0, [0, 0]);
+        assert!(!can(&mut e, actor, 1));
+        let (mut e, actor, _) = activate_engine(1, 0x100, 0, [0, 0]);
+        assert!(can(&mut e, actor, 0));
+        let (mut e, actor, _) = activate_engine(1, 1, 1, [0, 0]);
+        assert!(can(&mut e, actor, 0));
+        e.set_global::<u32>(PLAYER, actor);
+        assert!(!can(&mut e, actor, 0));
+        let (mut e, actor, lock) = activate_engine(1, 1, 0, [1, 0]);
+        let (_, log) = run(&mut e, 0x0051_6cd0, &args![0u32, 0x9000u32, actor, 0u32]);
+        assert!(log.len() > 1);
+        let has = only(&log, HAS_OBJECTS);
+        assert_eq!(has[0][..5], [actor, 0x0abc, 0, 1, 0]);
+        assert!(can(&mut e, actor, 0));
+        e.mem.set_u32(lock + 4, 0);
+        assert!(!can(&mut e, actor, 0));
+        let (mut e, actor, _) = activate_engine(1, 1, 0, [0, 1]);
+        assert!(!can(&mut e, actor, 0x100));
+        assert!(can(&mut e, actor, 1));
     }
 }

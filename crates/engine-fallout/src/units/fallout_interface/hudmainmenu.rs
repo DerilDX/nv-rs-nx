@@ -5527,8 +5527,8 @@ pub fn fn_0077a400(e: &mut Engine, object: Ptr) -> Ptr {
 // Translated from 0077a450 (decompiled, FalloutNV.exe 1.4.0.525)
 /// Stores a pair of float coordinates at +0x7c and +0x80.
 pub fn fn_0077a450(e: &mut Engine, object: Ptr, x: f32, y: f32) {
-    e.mem.set_f32(object.addr() + 0x7c, x);
-    e.mem.set_f32(object.addr() + 0x80, y);
+    e.mem.set_f32(object.addr() + 0x7c, x87_quiet(x));
+    e.mem.set_f32(object.addr() + 0x80, x87_quiet(y));
 }
 
 // Translated from 0077a480 (decompiled, FalloutNV.exe 1.4.0.525)

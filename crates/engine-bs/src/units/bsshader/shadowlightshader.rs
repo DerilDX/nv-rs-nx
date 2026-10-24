@@ -33,10 +33,11 @@ const MEMCPY: u32 = 0x00ec_44d0;
 const MATRIX_011FEC88: u32 = 0x011f_ec88;
 
 // Translated from 00b79050 (decompiled, FalloutNV.exe 1.4.0.525)
-/// Unnamed in the engine map (`shadowlightshader.cpp`), `stdcall` with one word. With vertex
+/// Unnamed in the engine map (`shadowlightshader.cpp`), `thiscall` with one word. With vertex
 /// entry 12 enabled and the word not null: an identity matrix built on the stack (zeros from
 /// `FLDZ`, ones from `FLD1`) is copied to `011fec88` (`memcpy`, 0x40 bytes).
-pub fn fn_00b79050(e: &mut Engine, object: u32) {
+/// `this` (`ECX`) is not read, but `SetupGeometryConstants` (`00b7dab0`) calls it with `ECX` set.
+pub fn fn_00b79050(e: &mut Engine, _this: Ptr, object: u32) {
     if !entry_enabled(e, VERTEX_ENTRIES_011FEBD8 + 4 * 12) || object == 0 {
         return;
     }
@@ -58,10 +59,11 @@ const TWO_PI_0104EEA0: u32 = 0x0104_eea0;
 const ANGLE_011FD868: u32 = 0x011f_d868;
 
 // Translated from 00b790d0 (decompiled, FalloutNV.exe 1.4.0.525)
-/// Unnamed in the engine map (`shadowlightshader.cpp`), `stdcall` with one word, an object
+/// Unnamed in the engine map (`shadowlightshader.cpp`), `thiscall` with one word, an object
 /// with an integer at +0xe4. With vertex entry 15 enabled: `011fd868` = game time (`011f940c`)
 /// / 3600.0 * 6.28318 * the integer (x87, in the exe's order).
-pub fn fn_00b790d0(e: &mut Engine, object: Ptr) {
+/// `this` (`ECX`) is not read, but `SetupGeometryConstants` (`00b7dab0`) calls it with `ECX` set.
+pub fn fn_00b790d0(e: &mut Engine, _this: Ptr, object: Ptr) {
     if !entry_enabled(e, VERTEX_ENTRIES_011FEBD8 + 4 * 15) {
         return;
     }
@@ -81,10 +83,11 @@ const SOURCE_011F95F4: u32 = 0x011f_95f4;
 const TARGET_011FA2E0: u32 = 0x011f_a2e0;
 
 // Translated from 00b79100 (decompiled, FalloutNV.exe 1.4.0.525)
-/// Unnamed in the engine map (`shadowlightshader.cpp`), `stdcall` with one word it does not
+/// Unnamed in the engine map (`shadowlightshader.cpp`), `thiscall` with one word it does not
 /// read. With vertex entry 16 enabled: the four floats at `011fa2e0` become those at
 /// `011f95f4` less the camera's x and y (`011f474c`) and less 15.0 twice (the last as `FSUBR`).
-pub fn fn_00b79100(e: &mut Engine, _unused_0: u32) {
+/// `this` (`ECX`) is not read, but `SetupGeometryConstants` (`00b7dab0`) calls it with `ECX` set.
+pub fn fn_00b79100(e: &mut Engine, _this: Ptr, _unused_0: u32) {
     if !entry_enabled(e, VERTEX_ENTRIES_011FEBD8 + 4 * 16) {
         return;
     }
@@ -109,11 +112,12 @@ const DEFAULT_POSITION_011F4288: u32 = 0x011f_4288;
 const OFFSET_011FD8B4: u32 = 0x011f_d8b4;
 
 // Translated from 00b79180 (decompiled, FalloutNV.exe 1.4.0.525)
-/// Unnamed in the engine map (`shadowlightshader.cpp`), `stdcall` with one word, an object
+/// Unnamed in the engine map (`shadowlightshader.cpp`), `thiscall` with one word, an object
 /// whose +0x20 points at a position (`011f4288` when null). With vertex entry 17 enabled: the
 /// position less the camera (`011f474c`), each rounded to a float on the stack and copied to
 /// `011fd8b4`.
-pub fn fn_00b79180(e: &mut Engine, object: Ptr) {
+/// `this` (`ECX`) is not read, but `SetupGeometryConstants` (`00b7dab0`) calls it with `ECX` set.
+pub fn fn_00b79180(e: &mut Engine, _this: Ptr, object: Ptr) {
     if !entry_enabled(e, VERTEX_ENTRIES_011FEBD8 + 4 * 17) {
         return;
     }
@@ -152,14 +156,15 @@ const FLOAT_MAX_00404010: u32 = 0x0040_4010;
 const FLOAT_MIN_0040EBD0: u32 = 0x0040_ebd0;
 
 // Translated from 00b791f0 (decompiled, FalloutNV.exe 1.4.0.525)
-/// Unnamed in the engine map (`shadowlightshader.cpp`), `stdcall` with three words: the pass
+/// Unnamed in the engine map (`shadowlightshader.cpp`), `thiscall` with three words: the pass
 /// type and two objects. With vertex entry 21 enabled, `011fa0b0` (four floats) becomes for
 /// type 0xfe (the first object's +0x80, `011ad808`, 0, 0); for 0x61 (1, 0, 0, 0); for 0x230 the
 /// first object's +0x94 to +0xa0 with the last two replaced by the lerps between the pairs at
 /// `011f9634`/`011f962c` and `011f9638`/`011f9630` by the factor min(1, max(0, (time -
 /// `011f94ac`) / (`011ad838` * 5))) less the second object's +0x8c and +0x90 (the factor 1.0
 /// clears `011f94aa`). Every x87 step and copy is in the exe's order.
-pub fn fn_00b791f0(e: &mut Engine, pass_type: u32, first: Ptr, second: Ptr) {
+/// `this` (`ECX`) is not read, but `SetupGeometryConstants` (`00b7dab0`) calls it with `ECX` set.
+pub fn fn_00b791f0(e: &mut Engine, _this: Ptr, pass_type: u32, first: Ptr, second: Ptr) {
     if !entry_enabled(e, VERTEX_ENTRIES_011FEBD8 + 4 * 21) {
         return;
     }
@@ -228,13 +233,14 @@ pub fn fn_00b791f0(e: &mut Engine, pass_type: u32, first: Ptr, second: Ptr) {
 const ROWS_011FA0C0: u32 = 0x011f_a0c0;
 
 // Translated from 00b79410 (decompiled, FalloutNV.exe 1.4.0.525)
-/// Unnamed in the engine map (`shadowlightshader.cpp`), `stdcall` with two words: the pass
+/// Unnamed in the engine map (`shadowlightshader.cpp`), `thiscall` with two words: the pass
 /// type and an object (bytes at +9 and +0xb). Types 0x93 and 0x1f1 to 0x1f5 use rows 2 and 3
 /// of `011fa0c0` and set pixel entry 2's register count (+0x20) to max(3, byte +9 + 2,
 /// signed); type 0x1f6 uses rows 0 and 0x1b; others leave everything. With the selector byte
 /// +0xb the first row becomes (1 for 1, 1 for 2, 1 for 3, 1 for 4, else 0 each) and the second
 /// (selector 5, 6, 7, 8), as the x87 stack juggling of 0.0 and 1.0 in the exe leaves them.
-pub fn fn_00b79410(e: &mut Engine, pass_type: u32, object: Ptr) {
+/// `this` (`ECX`) is not read, but `SetupGeometryConstants` (`00b7dab0`) calls it with `ECX` set.
+pub fn fn_00b79410(e: &mut Engine, _this: Ptr, pass_type: u32, object: Ptr) {
     let object = object.addr();
     let (first_row, second_row);
     if pass_type > 0x1f5 {
@@ -368,10 +374,11 @@ const VALUE_011FD948: u32 = 0x011f_d948;
 const VALUE_010177E8: u32 = 0x0101_77e8;
 
 // Translated from 00b796f0 (decompiled, FalloutNV.exe 1.4.0.525)
-/// Unnamed in the engine map (`shadowlightshader.cpp`), `stdcall` with one word, an object.
+/// Unnamed in the engine map (`shadowlightshader.cpp`), `thiscall` with one word, an object.
 /// With pixel entry 16 enabled: `011fd944` takes its +0xe0, `011fd948` the float at `010177e8`
 /// when bit 4 of its byte +0x24 is set, else 1.0.
-pub fn fn_00b796f0(e: &mut Engine, object: Ptr) {
+/// `this` (`ECX`) is not read, but `SetupGeometryConstants` (`00b7dab0`) calls it with `ECX` set.
+pub fn fn_00b796f0(e: &mut Engine, _this: Ptr, object: Ptr) {
     if !entry_enabled(e, PIXEL_ENTRIES_011FEC30 + 4 * 16) {
         return;
     }
@@ -447,10 +454,11 @@ pub fn fn_00b79730(e: &mut Engine) {
 const VECTOR_011FA300: u32 = 0x011f_a300;
 
 // Translated from 00b798c0 (decompiled, FalloutNV.exe 1.4.0.525)
-/// Unnamed in the engine map (`shadowlightshader.cpp`), `stdcall` with one word, an object.
+/// Unnamed in the engine map (`shadowlightshader.cpp`), `thiscall` with one word, an object.
 /// With pixel entry 20 enabled: `011fa300` takes its floats +0xf0, +0xf4, +0xfc, +0xf8 in that
 /// order (each copied through the x87 stack).
-pub fn fn_00b798c0(e: &mut Engine, object: Ptr) {
+/// `this` (`ECX`) is not read, but `SetupGeometryConstants` (`00b7dab0`) calls it with `ECX` set.
+pub fn fn_00b798c0(e: &mut Engine, _this: Ptr, object: Ptr) {
     if !entry_enabled(e, PIXEL_ENTRIES_011FEC30 + 4 * 20) {
         return;
     }
@@ -646,13 +654,14 @@ const COUNTER_011FF9DC: u32 = 0x011f_f9dc;
 const COUNTER_011FFA18: u32 = 0x011f_fa18;
 
 // Translated from 00b7c320 (decompiled, FalloutNV.exe 1.4.0.525)
-/// A function Ghidra did not make (`shadowlightshader.cpp` by address), `stdcall` with one word:
+/// A function Ghidra did not make (`shadowlightshader.cpp` by address), `thiscall` with one word:
 /// a block whose +0x10 is a property with flags at +0x18 and whose +0xc is the shader property
 /// (flags at +0x20). Pass types 0x250 and 0x251 set `00b97e80(3, 0)`; a property with bit 0 set
 /// `00b98070(0, 0)`; for pass types 6 and 8 with bit 0x40000 of the shader property: the
 /// counter `011ff9dc` lowered and `SetZWriteEnable(1, 0)`, the counter `011ffa18` lowered and
 /// `00b98380(7, 0)`.
-pub fn fn_00b7c320(e: &mut Engine, block: Ptr) {
+/// `this` (`ECX`) is not read, but it sits in vtables and is called with `ECX` set.
+pub fn fn_00b7c320(e: &mut Engine, _this: Ptr, block: Ptr) {
     let block = block.addr();
     let pass_type = e.global::<u32>(RENDERING_PASS_TYPE_011F91E4);
     if pass_type == 0x250 || pass_type == 0x251 {
@@ -1039,15 +1048,17 @@ const GET_ACCUMULATOR: u32 = 0x00b4_f5c0;
 const SHADOW_PROJECTION_011FD968: u32 = 0x011f_d968;
 
 // Translated from 00b7b930 (decompiled, FalloutNV.exe 1.4.0.525)
-/// `ShadowLightShader::SetupGeometryConstants_ShadowProj` (engine map), `stdcall` with three
+/// `ShadowLightShader::SetupGeometryConstants_ShadowProj` (engine map), `thiscall` with three
 /// words: a block whose +0xc is an object with a register at +0x1c, a flag and a transform (a
 /// 3x3 rotation, a translation and a scale, 13 floats). With vertex entry 3 enabled, the object
 /// set with a register other than -1, and the accumulator's +0x194 set: `011fd968` becomes,
 /// without the flag, the rows (rotation row with translation x, y, z in the fourth column) and
 /// (0, 0, 0, scale), each float copied through the x87 stack; with it, the identity with the
 /// camera position (`011f474c`) in the fourth column.
+/// `this` (`ECX`) is not read, but `SetupGeometryConstants` (`00b7dab0`) calls it with `ECX` set.
 pub fn shadow_light_shader_setup_geometry_constants_shadow_proj(
     e: &mut Engine,
+    _this: Ptr,
     block: Ptr,
     flag: u32,
     transform: Ptr,
@@ -1091,14 +1102,15 @@ const PAIR_TEXTURE_011F95E4: u32 = 0x011f_95e4;
 const PAIR_TEXTURE_011F95E8: u32 = 0x011f_95e8;
 
 // Translated from 00b7cfb0 (decompiled, FalloutNV.exe 1.4.0.525)
-/// Unnamed in the engine map (`shadowlightshader.cpp`), `stdcall` with one word, the pass type.
+/// Unnamed in the engine map (`shadowlightshader.cpp`), a vtable slot (`thiscall`, `RET 4`; `this` is
+/// not read; its callers 00bcc590 and 00bce800 pass it) with one word, the pass type.
 /// The textures `011f95e4` and `011f95e8` go to a pair of the current pass's stages chosen by
 /// the type (the exe's two jump tables): stages 2 and 3 for 0x94 and 0x1f3; 6 and 7 for 0xa0 to
 /// 0xa2, 0xa6 to 0xa8, 0xb6 to 0xb8, 0xbc to 0xbe, 0x10a to 0x10c, 0x110 to 0x112, 0x115, 0x121,
 /// 0x122, 0x126 to 0x128 and 0x12b; 5 and 6 for 0xe0, 0xe1, 0xe5, 0xe6, 0xf2, 0xf3, 0xf7 and
 /// 0xf8; 4 and 5 for 0x160, 0x161, 0x163 and 0x164; 14 and 15 for every fourth type from 0x1f8
 /// to 0x22c; none for other types.
-pub fn fn_00b7cfb0(e: &mut Engine, pass_type: u32) {
+pub fn fn_00b7cfb0(e: &mut Engine, _this: Ptr, pass_type: u32) {
     let first = match pass_type {
         0x94 | 0x1f3 => 2u32,
         0xa0..=0xa2
@@ -1857,7 +1869,7 @@ const DOUBLE_HELPER_00B719C0: u32 = 0x00b7_19c0;
 const COLOUR_LUMINANCE_00B719E0: u32 = 0x00b7_19e0;
 
 // Translated from 00b7ba70 (decompiled, FalloutNV.exe 1.4.0.525)
-/// `ShadowLightShader::SetupGeometryConstants_AmbientEmittance` (engine map), `stdcall` with
+/// `ShadowLightShader::SetupGeometryConstants_AmbientEmittance` (engine map), `thiscall` with
 /// four words: the shader property (flags at +0x20 and +0x24, a float at +0x28, its vtable
 /// +0x110 answering a float), the rendering object (type +4, light count +9), a block whose
 /// +0x9c is a property with flags at +0x18, and a word for the ambient helpers. Row 0 of
@@ -1870,8 +1882,10 @@ const COLOUR_LUMINANCE_00B719E0: u32 = 0x00b7_19e0;
 /// (0, 0, 1 or 0 by the block property bits 0 and 9, 1 or 0 by bit 0x20000 of +0x24). For pass
 /// types 0x244 to 0x24b outside mode 10 the fourth word is multiplied by the property vtable
 /// +0x110. Every x87 step, copy and comparison follows the exe.
+/// `this` (`ECX`) is not read, but `SetupGeometryConstants` (`00b7dab0`) calls it with `ECX` set.
 pub fn shadow_light_shader_setup_geometry_constants_ambient_emittance(
     e: &mut Engine,
+    _this: Ptr,
     property: Ptr,
     rendering: Ptr,
     block: Ptr,
@@ -2344,6 +2358,7 @@ pub fn shadow_light_shader_setup_geometry_constants(e: &mut Engine, this: Ptr, b
             );
             shadow_light_shader_setup_geometry_constants_ambient_emittance(
                 e,
+                this,
                 p,
                 r,
                 Ptr::new(geometry),
@@ -2354,6 +2369,7 @@ pub fn shadow_light_shader_setup_geometry_constants(e: &mut Engine, this: Ptr, b
             );
             shadow_light_shader_setup_geometry_constants_shadow_proj(
                 e,
+                this,
                 Ptr::new(block),
                 skin,
                 Ptr::new(transform),
@@ -2364,12 +2380,12 @@ pub fn shadow_light_shader_setup_geometry_constants(e: &mut Engine, this: Ptr, b
                 Ptr::new(transform),
                 words,
             );
-            fn_00b79050(e, skin);
-            fn_00b790d0(e, p);
-            fn_00b79180(e, Ptr::new(geometry));
-            fn_00b79100(e, geometry);
-            fn_00b791f0(e, pass_type, p, Ptr::new(geometry));
-            fn_00b79410(e, pass_type, r);
+            fn_00b79050(e, this, skin);
+            fn_00b790d0(e, this, p);
+            fn_00b79180(e, this, Ptr::new(geometry));
+            fn_00b79100(e, this, geometry);
+            fn_00b791f0(e, this, pass_type, p, Ptr::new(geometry));
+            fn_00b79410(e, this, pass_type, r);
             shadow_light_shader_setup_geometry_constants_toggles(
                 e,
                 this,
@@ -2380,12 +2396,12 @@ pub fn shadow_light_shader_setup_geometry_constants(e: &mut Engine, this: Ptr, b
                 rendering,
                 Ptr::new(first_property),
             );
-            fn_00b796f0(e, p);
+            fn_00b796f0(e, this, p);
             fn_00b79730(e);
             shadow_light_shader_setup_geometry_constants_simple_shadow_clip_planes(
                 e, this, pass_type,
             );
-            fn_00b798c0(e, p);
+            fn_00b798c0(e, this, p);
         }
     });
     for (map_offset, program_offset) in [(0x30u32, 0x44u32), (0x34, 0x5c)] {
@@ -4849,19 +4865,19 @@ pub fn shadow_light_shader_load_pixel_shaders(e: &mut Engine, this: Ptr) {
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
-        entry!(0x00b7_9050, fn_00b79050(u32)),
-        entry!(0x00b7_90d0, fn_00b790d0(Ptr)),
-        entry!(0x00b7_9100, fn_00b79100(u32)),
-        entry!(0x00b7_9180, fn_00b79180(Ptr)),
-        entry!(0x00b7_91f0, fn_00b791f0(u32, Ptr, Ptr)),
-        entry!(0x00b7_9410, fn_00b79410(u32, Ptr)),
+        entry!(0x00b7_9050, fn_00b79050(Ptr, u32)),
+        entry!(0x00b7_90d0, fn_00b790d0(Ptr, Ptr)),
+        entry!(0x00b7_9100, fn_00b79100(Ptr, u32)),
+        entry!(0x00b7_9180, fn_00b79180(Ptr, Ptr)),
+        entry!(0x00b7_91f0, fn_00b791f0(Ptr, u32, Ptr, Ptr)),
+        entry!(0x00b7_9410, fn_00b79410(Ptr, u32, Ptr)),
         entry!(
             0x00b7_95b0,
             shadow_light_shader_setup_geometry_constants_toggles(Ptr, u32, u32, Ptr, u32, u32, Ptr)
         ),
-        entry!(0x00b7_96f0, fn_00b796f0(Ptr)),
+        entry!(0x00b7_96f0, fn_00b796f0(Ptr, Ptr)),
         entry!(0x00b7_9730, fn_00b79730()),
-        entry!(0x00b7_98c0, fn_00b798c0(Ptr)),
+        entry!(0x00b7_98c0, fn_00b798c0(Ptr, Ptr)),
         entry!(0x00b7_c0a0, fn_00b7c0a0(Ptr, u32, u32)),
         entry!(0x00b7_c0e0, fn_00b7c0e0(Ptr, u32, u32)),
         entry!(0x00b7_c120, fn_00b7c120(u32)),
@@ -4870,7 +4886,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00b7_c230, fn_00b7c230(Ptr, u32, u32, bool)),
         entry!(0x00b7_c290, fn_00b7c290(u32, u32, u32)),
         entry!(0x00b7_c2c0, fn_00b7c2c0(Ptr, u32, u32)),
-        entry!(0x00b7_c320, fn_00b7c320(Ptr)),
+        entry!(0x00b7_c320, fn_00b7c320(Ptr, Ptr)),
         entry!(0x00b7_c3a0, fn_00b7c3a0()),
         entry!(0x00b7_c510, fn_00b7c510(Ptr) -> u32),
         entry!(0x00b7_c580, fn_00b7c580()),
@@ -4885,9 +4901,9 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         (0x00b7_8ef0, eye_pos_entry as AbiFn),
         entry!(
             0x00b7_b930,
-            shadow_light_shader_setup_geometry_constants_shadow_proj(Ptr, u32, Ptr)
+            shadow_light_shader_setup_geometry_constants_shadow_proj(Ptr, Ptr, u32, Ptr)
         ),
-        entry!(0x00b7_cfb0, fn_00b7cfb0(u32)),
+        entry!(0x00b7_cfb0, fn_00b7cfb0(Ptr, u32)),
         entry!(
             0x00b7_b730,
             shadow_light_shader_setup_geometry_constants_obj_to_cube(Ptr, Ptr, u32, u32, u32)
@@ -4913,7 +4929,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         ),
         entry!(
             0x00b7_ba70,
-            shadow_light_shader_setup_geometry_constants_ambient_emittance(Ptr, Ptr, Ptr, u32)
+            shadow_light_shader_setup_geometry_constants_ambient_emittance(Ptr, Ptr, Ptr, Ptr, u32)
         ),
     ]
 }
@@ -5003,16 +5019,16 @@ mod tests {
             e.mem.write(a[0], &bytes);
             a[0].into_ret()
         });
-        e.call(0x00b7_9050, &args![0u32]);
+        e.call(0x00b7_9050, &args![0x5555u32, 0u32]);
         assert!(calls(&e, MEMCPY).is_empty());
-        e.call(0x00b7_9050, &args![1u32]);
+        e.call(0x00b7_9050, &args![0x5555u32, 1u32]);
         let matrix = floats(&e, MATRIX_011FEC88, 16);
         for (index, value) in matrix.iter().enumerate() {
             let expected = if index % 5 == 0 { 1.0 } else { 0.0 };
             assert_eq!(*value, expected);
         }
         disable(&mut e, VERTEX_ENTRIES_011FEBD8 + 4 * 12);
-        e.call(0x00b7_9050, &args![1u32]);
+        e.call(0x00b7_9050, &args![0x5555u32, 1u32]);
         assert_eq!(calls(&e, MEMCPY).len(), 1);
     }
 
@@ -5024,11 +5040,11 @@ mod tests {
         e.set_global(TWO_PI_0104EEA0, 6.5f64);
         let object = e.mem.alloc(0xe8);
         e.mem.set_u32(object + 0xe4, 2);
-        e.call(0x00b7_90d0, &args![object]);
+        e.call(0x00b7_90d0, &args![0x5555u32, object]);
         assert_eq!(e.global::<f32>(ANGLE_011FD868), 6.5);
         disable(&mut e, VERTEX_ENTRIES_011FEBD8 + 4 * 15);
         e.set_global(ANGLE_011FD868, 0u32);
-        e.call(0x00b7_90d0, &args![object]);
+        e.call(0x00b7_90d0, &args![0x5555u32, object]);
         assert_eq!(e.global::<u32>(ANGLE_011FD868), 0);
     }
 
@@ -5038,7 +5054,7 @@ mod tests {
         set_floats(&mut e, SOURCE_011F95F4, &[10.0, 20.0, 30.0, 40.0]);
         set_floats(&mut e, CAMERA_011F474C, &[1.0, 2.0]);
         e.set_global(FIFTEEN_01015A38, 15.0f64);
-        e.call(0x00b7_9100, &args![0u32]);
+        e.call(0x00b7_9100, &args![0x5555u32, 0u32]);
         assert_eq!(floats(&e, TARGET_011FA2E0, 4), vec![9.0, 18.0, 15.0, 25.0]);
     }
 
@@ -5048,12 +5064,12 @@ mod tests {
         set_floats(&mut e, CAMERA_011F474C, &[1.0, 2.0, 3.0]);
         set_floats(&mut e, DEFAULT_POSITION_011F4288, &[5.0, 5.0, 5.0]);
         let object = e.mem.alloc(0x24);
-        e.call(0x00b7_9180, &args![object]);
+        e.call(0x00b7_9180, &args![0x5555u32, object]);
         assert_eq!(floats(&e, OFFSET_011FD8B4, 3), vec![4.0, 3.0, 2.0]);
         let position = e.mem.alloc(0xc);
         set_floats(&mut e, position, &[2.0, 4.0, 8.0]);
         e.mem.set_u32(object + 0x20, position);
-        e.call(0x00b7_9180, &args![object]);
+        e.call(0x00b7_9180, &args![0x5555u32, object]);
         assert_eq!(floats(&e, OFFSET_011FD8B4, 3), vec![1.0, 2.0, 5.0]);
     }
 
@@ -5072,9 +5088,9 @@ mod tests {
         let second = e.mem.alloc(0x98);
         set_floats(&mut e, second + 0x8c, &[0.5, 0.25]);
         e.set_global(VALUE_011AD808, 4.0f32);
-        e.call(0x00b7_91f0, &args![0xfeu32, first, second]);
+        e.call(0x00b7_91f0, &args![0x5555u32, 0xfeu32, first, second]);
         assert_eq!(floats(&e, VECTOR_011FA0B0, 4), vec![3.0, 4.0, 0.0, 0.0]);
-        e.call(0x00b7_91f0, &args![0x61u32, first, second]);
+        e.call(0x00b7_91f0, &args![0x5555u32, 0x61u32, first, second]);
         assert_eq!(floats(&e, VECTOR_011FA0B0, 4), vec![1.0, 0.0, 0.0, 0.0]);
         // Halfway: time 15, start 10, duration 2 (times 5).
         e.set_global(GAME_TIME_011F940C, 15.0f32);
@@ -5083,13 +5099,13 @@ mod tests {
         e.set_global(FIVE_01020998, 5.0f64);
         set_floats(&mut e, TO_X_011F962C, &[10.0, 20.0, 2.0, 4.0]);
         e.set_global(RUNNING_011F94AA, 1u8);
-        e.call(0x00b7_91f0, &args![0x230u32, first, second]);
+        e.call(0x00b7_91f0, &args![0x5555u32, 0x230u32, first, second]);
         assert_eq!(floats(&e, VECTOR_011FA0B0, 4), vec![1.0, 2.0, 5.5, 11.75]);
         assert_eq!(e.global::<u8>(RUNNING_011F94AA), 1);
         assert_eq!(calls(&e, FLOAT_MAX_00404010)[0], vec![0, 0.5f32.to_bits()]);
         // Past the end the factor is 1.0, which clears the running byte.
         e.set_global(GAME_TIME_011F940C, 40.0f32);
-        e.call(0x00b7_91f0, &args![0x230u32, first, second]);
+        e.call(0x00b7_91f0, &args![0x5555u32, 0x230u32, first, second]);
         assert_eq!(floats(&e, VECTOR_011FA0B0 + 8, 2), vec![9.5, 19.75]);
         assert_eq!(e.global::<u8>(RUNNING_011F94AA), 0);
     }
@@ -5100,7 +5116,7 @@ mod tests {
         let object = e.mem.alloc(0xc);
         e.mem.set_u8(object + 9, 5);
         e.mem.set_u8(object + 0xb, 3);
-        e.call(0x00b7_9410, &args![0x93u32, object]);
+        e.call(0x00b7_9410, &args![0x5555u32, 0x93u32, object]);
         let entry = e.global::<u32>(PIXEL_ENTRIES_011FEC30 + 8);
         assert_eq!(e.mem.u32(entry + 0x20), 7);
         assert_eq!(
@@ -5110,24 +5126,24 @@ mod tests {
         assert_eq!(floats(&e, ROWS_011FA0C0 + 0x30, 4), vec![0.0; 4]);
         e.mem.set_u8(object + 9, 0);
         e.mem.set_u8(object + 0xb, 6);
-        e.call(0x00b7_9410, &args![0x1f3u32, object]);
+        e.call(0x00b7_9410, &args![0x5555u32, 0x1f3u32, object]);
         assert_eq!(e.mem.u32(entry + 0x20), 3);
         assert_eq!(
             floats(&e, ROWS_011FA0C0 + 0x30, 4),
             vec![0.0, 1.0, 0.0, 0.0]
         );
         e.mem.set_u8(object + 0xb, 1);
-        e.call(0x00b7_9410, &args![0x1f6u32, object]);
+        e.call(0x00b7_9410, &args![0x5555u32, 0x1f6u32, object]);
         assert_eq!(floats(&e, ROWS_011FA0C0, 4), vec![1.0, 0.0, 0.0, 0.0]);
         e.mem.set_u8(object + 0xb, 8);
-        e.call(0x00b7_9410, &args![0x1f6u32, object]);
+        e.call(0x00b7_9410, &args![0x5555u32, 0x1f6u32, object]);
         assert_eq!(
             floats(&e, ROWS_011FA0C0 + 0x1b0, 4),
             vec![0.0, 0.0, 0.0, 1.0]
         );
         // Other types leave everything.
         e.mem.set_u8(object + 0xb, 2);
-        e.call(0x00b7_9410, &args![0x1f0u32, object]);
+        e.call(0x00b7_9410, &args![0x5555u32, 0x1f0u32, object]);
         assert_eq!(floats(&e, ROWS_011FA0C0, 4), vec![0.0, 0.0, 0.0, 0.0]);
     }
 
@@ -5199,10 +5215,10 @@ mod tests {
         let object = e.mem.alloc(0xe4);
         e.mem.set_f32(object + 0xe0, 2.5);
         e.set_global(VALUE_010177E8, 0.9f32);
-        e.call(0x00b7_96f0, &args![object]);
+        e.call(0x00b7_96f0, &args![0x5555u32, object]);
         assert_eq!(floats(&e, VALUE_011FD944, 2), vec![2.5, 1.0]);
         e.mem.set_u8(object + 0x24, 0x10);
-        e.call(0x00b7_96f0, &args![object]);
+        e.call(0x00b7_96f0, &args![0x5555u32, object]);
         assert_eq!(floats(&e, VALUE_011FD944, 2), vec![2.5, 0.9]);
     }
 
@@ -5226,7 +5242,7 @@ mod tests {
         let mut e = rig(&[]);
         let object = e.mem.alloc(0x100);
         set_floats(&mut e, object + 0xf0, &[1.0, 2.0, 3.0, 4.0]);
-        e.call(0x00b7_98c0, &args![object]);
+        e.call(0x00b7_98c0, &args![0x5555u32, object]);
         assert_eq!(floats(&e, VECTOR_011FA300, 4), vec![1.0, 2.0, 4.0, 3.0]);
     }
 
@@ -5410,12 +5426,12 @@ mod tests {
         e.set_global(COUNTER_011FF9DC, 2u32);
         e.set_global(COUNTER_011FFA18, 2u32);
         e.set_global(RENDERING_PASS_TYPE_011F91E4, 0x251u32);
-        e.call(0x00b7_c320, &args![block]);
+        e.call(0x00b7_c320, &args![0x5555u32, block]);
         assert_eq!(calls(&e, RENDER_STATE_00B97E80), vec![vec![3, 0]]);
         assert_eq!(calls(&e, RENDER_STATE_00B98070), vec![vec![0, 0]]);
         assert!(calls(&e, SET_Z_WRITE_ENABLE).is_empty());
         e.set_global(RENDERING_PASS_TYPE_011F91E4, 8u32);
-        e.call(0x00b7_c320, &args![block]);
+        e.call(0x00b7_c320, &args![0x5555u32, block]);
         assert_eq!(calls(&e, SET_Z_WRITE_ENABLE), vec![vec![1, 0]]);
         assert_eq!(calls(&e, RENDER_STATE_00B98380), vec![vec![7, 0]]);
         assert_eq!(e.global::<u32>(COUNTER_011FF9DC), 1);
@@ -5682,7 +5698,7 @@ mod batch2_tests {
         let transform = e.mem.alloc(0x34);
         let values: Vec<f32> = (1..=13).map(|value| value as f32).collect();
         set_floats(&mut e, transform, &values);
-        e.call(0x00b7_b930, &args![block, 0u32, transform]);
+        e.call(0x00b7_b930, &args![0x5555u32, block, 0u32, transform]);
         assert_eq!(
             floats(&e, SHADOW_PROJECTION_011FD968, 16),
             vec![
@@ -5690,14 +5706,14 @@ mod batch2_tests {
             ]
         );
         set_floats(&mut e, CAMERA_011F474C, &[5.0, 6.0, 7.0]);
-        e.call(0x00b7_b930, &args![block, 1u32, transform]);
+        e.call(0x00b7_b930, &args![0x5555u32, block, 1u32, transform]);
         assert_eq!(
             floats(&e, SHADOW_PROJECTION_011FD968, 16),
             vec![1.0, 0.0, 0.0, 5.0, 0.0, 1.0, 0.0, 6.0, 0.0, 0.0, 1.0, 7.0, 0.0, 0.0, 0.0, 1.0]
         );
         // A register of -1 stops it.
         e.mem.set_u32(object + 0x1c, 0xffff_ffff);
-        e.call(0x00b7_b930, &args![block, 0u32, transform]);
+        e.call(0x00b7_b930, &args![0x5555u32, block, 0u32, transform]);
         assert_eq!(e.global::<f32>(SHADOW_PROJECTION_011FD968 + 0xc), 5.0);
         assert_eq!(calls(&e, GET_ACCUMULATOR).len(), 2);
     }
@@ -5720,7 +5736,7 @@ mod batch2_tests {
             for stage in &stages {
                 e.mem.set_u32(stage + 8, 0);
             }
-            e.call(0x00b7_cfb0, &args![pass_type]);
+            e.call(0x00b7_cfb0, &args![0u32, pass_type]);
             assert_eq!(e.mem.u32(stages[first] + 8), 0x0e00_00e4, "{pass_type:#x}");
             assert_eq!(e.mem.u32(stages[first + 1] + 8), 0x0e00_00e8);
         }
@@ -5728,7 +5744,7 @@ mod batch2_tests {
             e.mem.set_u32(stage + 8, 0);
         }
         for pass_type in [0x95u32, 0x1fd, 0x22d, 0x162] {
-            e.call(0x00b7_cfb0, &args![pass_type]);
+            e.call(0x00b7_cfb0, &args![0u32, pass_type]);
         }
         assert!(stages.iter().all(|stage| e.mem.u32(stage + 8) == 0));
     }
@@ -6242,20 +6258,32 @@ mod batch3_tests {
         let rendering = rendering_object(&mut e, 0xc5, &[0, 0]);
         let current = rendering_object(&mut e, 0x10, &[]);
         e.set_global(RENDERING_PASS_011F91E0, current);
-        e.call(0x00b7_ba70, &args![property, rendering, 0u32, 7u32]);
+        e.call(
+            0x00b7_ba70,
+            &args![0x5555u32, property, rendering, 0u32, 7u32],
+        );
         assert_eq!(floats(&e, ROWS_011FA0C0, 4), vec![0.1, 0.2, 0.3, 0.5]);
         assert_eq!(calls(&e, AMBIENT_00C03010), vec![vec![7]]);
         assert_eq!(e.global::<f32>(LIGHT_COUNT_011FD95C), 2.0);
         assert_eq!(e.global::<f32>(LIGHT_COUNT_011FA27C), 2.0);
         e.mem.set_u16(rendering + 4, 0xd7);
-        e.call(0x00b7_ba70, &args![property, rendering, 0u32, 8u32]);
+        e.call(
+            0x00b7_ba70,
+            &args![0x5555u32, property, rendering, 0u32, 8u32],
+        );
         assert_eq!(calls(&e, AMBIENT_00C03180), vec![vec![8]]);
         disable(&mut e, PIXEL_ENTRIES_011FEC30 + 4 * 3);
-        e.call(0x00b7_ba70, &args![property, rendering, 0u32, 9u32]);
+        e.call(
+            0x00b7_ba70,
+            &args![0x5555u32, property, rendering, 0u32, 9u32],
+        );
         assert_eq!(calls(&e, AMBIENT_00C03010).len(), 2);
         // White ambient.
         e.set_global(WHITE_AMBIENT_011F91A7, 1u8);
-        e.call(0x00b7_ba70, &args![property, rendering, 0u32, 9u32]);
+        e.call(
+            0x00b7_ba70,
+            &args![0x5555u32, property, rendering, 0u32, 9u32],
+        );
         assert_eq!(floats(&e, ROWS_011FA0C0, 4), vec![1.0; 4]);
     }
 
@@ -6270,7 +6298,10 @@ mod batch3_tests {
         e.set_global(RENDERING_PASS_011F91E0, current);
         // Without a light: the camera light luminance (0.2 * 0.5 + 0.4 * 0.25 + 0.8 * 0.25).
         e.register(GET_FIRST_ACTIVE_NON_SHADOW_LIGHT, |_, _| 0u32.into_ret());
-        e.call(0x00b7_ba70, &args![property, rendering, 0u32, 0u32]);
+        e.call(
+            0x00b7_ba70,
+            &args![0x5555u32, property, rendering, 0u32, 0u32],
+        );
         let luminance = (0.2f32 as f64 * 0.5 + 0.4f32 as f64 * 0.25) + 0.8f32 as f64 * 0.25;
         let expected = (luminance as f32 as f64 * 0.5) as f32;
         assert_eq!(e.global::<f32>(ROWS_011FA0C0 + 0xc), expected);
@@ -6294,7 +6325,10 @@ mod batch3_tests {
             second.min(1.0).into_ret()
         });
         e.register(COLOUR_LUMINANCE_00B719E0, |_, _| 1.0f64.into_ret());
-        e.call(0x00b7_ba70, &args![property, rendering, 0u32, 0u32]);
+        e.call(
+            0x00b7_ba70,
+            &args![0x5555u32, property, rendering, 0u32, 0u32],
+        );
         assert_eq!(e.global::<f32>(ROWS_011FA0C0 + 0xc), 0.5);
         let scale_call = &calls(&e, COLOUR_SCALE_00633B40)[0];
         assert_eq!(scale_call[0], values + 0xd4);
@@ -6316,18 +6350,30 @@ mod batch3_tests {
         let block = e.mem.alloc(0xa0);
         e.mem.set_u32(block + 0x9c, flags_property);
         e.set_global(SHADER_MODE_011F91B8, 8u32);
-        e.call(0x00b7_ba70, &args![property, rendering, block, 0u32]);
+        e.call(
+            0x00b7_ba70,
+            &args![0x5555u32, property, rendering, block, 0u32],
+        );
         assert_eq!(floats(&e, ROWS_011FA0C0, 4), vec![0.0, 0.0, 1.0, 0.0]);
         e.mem.set_u16(flags_property + 0x18, 0x200);
         e.mem.set_u32(property + 0x24, 0);
-        e.call(0x00b7_ba70, &args![property, rendering, block, 0u32]);
+        e.call(
+            0x00b7_ba70,
+            &args![0x5555u32, property, rendering, block, 0u32],
+        );
         assert_eq!(floats(&e, ROWS_011FA0C0, 4), vec![0.0, 0.0, 0.0, 1.0]);
         // Pass types 0x244 to 0x24b multiply the fourth word by the property's factor.
         e.set_global(RENDERING_PASS_TYPE_011F91E4, 0x246u32);
-        e.call(0x00b7_ba70, &args![property, rendering, block, 0u32]);
+        e.call(
+            0x00b7_ba70,
+            &args![0x5555u32, property, rendering, block, 0u32],
+        );
         assert_eq!(e.global::<f32>(ROWS_011FA0C0 + 0xc), 3.0);
         e.set_global(SHADER_MODE_011F91B8, 10u32);
-        e.call(0x00b7_ba70, &args![property, rendering, block, 0u32]);
+        e.call(
+            0x00b7_ba70,
+            &args![0x5555u32, property, rendering, block, 0u32],
+        );
         assert_eq!(e.global::<f32>(ROWS_011FA0C0 + 0xc), 0.5);
     }
 }

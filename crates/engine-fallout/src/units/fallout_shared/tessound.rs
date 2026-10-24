@@ -320,6 +320,203 @@ pub fn fn_005e2ca0(e: &mut Engine, this: Ptr) {
     e.call(0x0050_f740, &args![this]);
 }
 
+/// `__RTDynamicCast` (`00ec43fb`, `cdecl`, five words) and the RTTI type descriptors of
+/// `TESForm` (`01183028`) and `TESSound` (`011832fc`).
+const RT_DYNAMIC_CAST: u32 = 0x00ec_43fb;
+const TYPE_TES_FORM: u32 = 0x0118_3028;
+const TYPE_TES_SOUND: u32 = 0x0118_32fc;
+/// `TESForm::CopyAllComponents` (engine map, `004851b0`, `RET 4`) and
+/// `TESForm::CompareAllComponents` (`00485270`, `RET 4`).
+const COPY_ALL_COMPONENTS: u32 = 0x0048_51b0;
+const COMPARE_ALL_COMPONENTS: u32 = 0x0048_5270;
+/// `004e75d0` (`thiscall` on a sound, `RET 4`: a 0x24-byte buffer): answers the address of the
+/// sound data to copy (9 words).
+const SOUND_DATA_COPY: u32 = 0x004e_75d0;
+/// `TESForm::StartForm` (`004855a0`) and `TESForm::CloseForm` (`00485680`), engine map names.
+const START_FORM: u32 = 0x0048_55a0;
+const CLOSE_FORM: u32 = 0x0048_5680;
+/// `0048cea0` (`thiscall` on the file name component at +0x30): saves it.
+const SAVE_FILE_NAME: u32 = 0x0048_cea0;
+/// `004858f0` (`cdecl`: chunk, byte): adds a one-byte chunk.
+const ADD_BYTE_CHUNK: u32 = 0x0048_58f0;
+/// `TESForm::__AddChunkData` (engine map, `00485990`, `cdecl`: chunk, data, size).
+const ADD_CHUNK_DATA: u32 = 0x0048_5990;
+/// `00401500` (`cdecl`, no words): whether saved data has its byte order swapped.
+const SWAPS_BYTE_ORDER: u32 = 0x0040_1500;
+/// The byte-order swaps of a 32-bit word (`00401080`) and a 16-bit word (`00407a90`), `cdecl`
+/// (address, a flag byte).
+const SWAP_U32: u32 = 0x0040_1080;
+const SWAP_U16: u32 = 0x0040_7a90;
+/// `0045c650` (`thiscall` on the data handler at `011c3f2c`): the list of sounds.
+const SOUND_LIST: u32 = 0x0045_c650;
+/// List helpers: `008256d0` (empty), `006815c0` (the item word's address), `00726070` (next).
+const LIST_IS_EMPTY: u32 = 0x0082_56d0;
+const LIST_ITEM: u32 = 0x0068_15c0;
+const LIST_NEXT: u32 = 0x0072_6070;
+/// `00408da0` (`thiscall` on the file name component): its text.
+const FILE_NAME_TEXT: u32 = 0x0040_8da0;
+/// `00404dc0` (`cdecl`, two texts): `_stricmp`.
+const STRICMP: u32 = 0x0040_4dc0;
+
+// Translated from 005e2d20 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the map (`RET 4`: a form; the sound's copy by its body): when the form is a
+/// `TESSound`, takes its byte at +0x68, copies all components (`TESForm::CopyAllComponents`
+/// with the form as given) and the 9 words of sound data the source's `004e75d0` gives into
+/// +0x44.
+pub fn fn_005e2d20(e: &mut Engine, this: Ptr, form: u32) {
+    let base = this.addr();
+    let source = e
+        .call(
+            RT_DYNAMIC_CAST,
+            &args![form, 0u32, TYPE_TES_FORM, TYPE_TES_SOUND, 0u32],
+        )
+        .u32();
+    if source == 0 {
+        return;
+    }
+    let flags = e.mem.u8(source.wrapping_add(0x68));
+    e.mem.set_u8(base.wrapping_add(0x68), flags);
+    e.call(COPY_ALL_COMPONENTS, &args![this, form]);
+    e.with_stack(0x24, |e, buffer| {
+        let data = e.call(SOUND_DATA_COPY, &args![source, buffer]).u32();
+        for i in 0..9u32 {
+            let word = e.mem.u32(data.wrapping_add(4 * i));
+            e.mem.set_u32(base.wrapping_add(0x44 + 4 * i), word);
+        }
+    });
+}
+
+// Translated from 005e2d90 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the map (`RET 4`: a form; the sound's comparison by its body): true
+/// ("different") unless the form is a `TESSound` with the same byte at +0x68, the same five
+/// 16-bit words at +0x50, word +0x48, bytes +0x45, +0x44 and +0x46, 16-bit words +0x4C, +0x4E
+/// and +0x5A, words +0x5C, +0x60 and +0x64, and `TESForm::CompareAllComponents` false.
+pub fn fn_005e2d90(e: &mut Engine, this: Ptr, form: u32) -> bool {
+    let mine = this.addr();
+    let theirs = e
+        .call(
+            RT_DYNAMIC_CAST,
+            &args![form, 0u32, TYPE_TES_FORM, TYPE_TES_SOUND, 0u32],
+        )
+        .u32();
+    if theirs == 0 {
+        return true;
+    }
+    if e.mem.i8(theirs.wrapping_add(0x68)) != e.mem.i8(mine.wrapping_add(0x68)) {
+        return true;
+    }
+    let mut index = 0u32;
+    while index < 5 {
+        let at = 0x50 + index * 2;
+        if e.mem.u16(theirs.wrapping_add(at)) != e.mem.u16(mine.wrapping_add(at)) {
+            return true;
+        }
+        index += 1;
+    }
+    let same_u32 = |e: &Engine, at: u32| {
+        e.mem.u32(theirs.wrapping_add(at)) == e.mem.u32(mine.wrapping_add(at))
+    };
+    let same_u16 = |e: &Engine, at: u32| {
+        e.mem.u16(theirs.wrapping_add(at)) == e.mem.u16(mine.wrapping_add(at))
+    };
+    let same_u8 =
+        |e: &Engine, at: u32| e.mem.u8(theirs.wrapping_add(at)) == e.mem.u8(mine.wrapping_add(at));
+    let same = same_u32(e, 0x48)
+        && same_u8(e, 0x45)
+        && same_u8(e, 0x44)
+        && same_u8(e, 0x46)
+        && same_u16(e, 0x4c)
+        && same_u16(e, 0x4e)
+        && same_u16(e, 0x5a)
+        && same_u32(e, 0x5c)
+        && same_u32(e, 0x60)
+        && same_u32(e, 0x64);
+    if !same {
+        return true;
+    }
+    e.call(COMPARE_ALL_COMPONENTS, &args![this, theirs]).bool()
+}
+
+/// When saved data is byte-swapped (`00401500`): `005e3020` on the sound data (+0x44).
+fn swap_sound_data(e: &mut Engine, base: u32) {
+    if e.call(SWAPS_BYTE_ORDER, &[]).bool() {
+        fn_005e3020(e, Ptr::new(base.wrapping_add(0x44)));
+    }
+}
+
+// Translated from 005e2fa0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the map (`ECX`, plain `RET`; the sound's save by its body): writes the record:
+/// the file name (`0048cea0` on +0x30), `RNAM` (the byte at +0x68), `SNDD` (0x24 bytes at
+/// +0x44, byte-swapped by `005e3020` before and after when `00401500` says so).
+pub fn fn_005e2fa0(e: &mut Engine, this: Ptr) {
+    let base = this.addr();
+    e.call(START_FORM, &args![this]);
+    e.call(SAVE_FILE_NAME, &args![base.wrapping_add(0x30)]);
+    let flags = u32::from(e.mem.u8(base.wrapping_add(0x68)));
+    e.call(ADD_BYTE_CHUNK, &args![RNAM, flags]);
+    swap_sound_data(e, base);
+    e.call(
+        ADD_CHUNK_DATA,
+        &args![SNDD, base.wrapping_add(0x44), 0x24u32],
+    );
+    swap_sound_data(e, base);
+    e.call(CLOSE_FORM, &args![this]);
+}
+
+// Translated from 005e3020 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the map (`ECX` = the 0x24-byte sound data): swaps the byte order of its fields:
+/// the word at +4, the 16-bit words at +8 to +0x16, the words at +0x18, +0x1C and +0x20
+/// (`00401080`, `00407a90`, each with flag 0).
+pub fn fn_005e3020(e: &mut Engine, this: Ptr) {
+    let base = this.addr();
+    e.call(SWAP_U32, &args![base.wrapping_add(4), 0u32]);
+    for at in (8..0x18).step_by(2) {
+        e.call(SWAP_U16, &args![base.wrapping_add(at), 0u32]);
+    }
+    for at in [0x18u32, 0x1c, 0x20] {
+        e.call(SWAP_U32, &args![base.wrapping_add(at), 0u32]);
+    }
+}
+
+// Translated from 005e3510 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the map (`ECX` = the 0xC-byte `SNDX` data): swaps the byte order of the word at
+/// +4 and the 16-bit words at +8 and +0xA (flag 0).
+pub fn fn_005e3510(e: &mut Engine, this: Ptr) {
+    let base = this.addr();
+    e.call(SWAP_U32, &args![base.wrapping_add(4), 0u32]);
+    e.call(SWAP_U16, &args![base.wrapping_add(8), 0u32]);
+    e.call(SWAP_U16, &args![base.wrapping_add(0xa), 0u32]);
+}
+
+// Translated from 005e3570 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the map (`cdecl`, a file name; `creaturesounds.rs` calls it the sound for a file
+/// name): the first sound of the data handler's list (`0045c650`, until the list is empty) whose
+/// file name (`00408da0` on +0x30) is set and equals the name (`_stricmp`), else 0; 0 for a
+/// null name.
+pub fn fn_005e3570(e: &mut Engine, name: u32) -> u32 {
+    if name == 0 {
+        return 0;
+    }
+    let handler = e.global::<u32>(DATA_HANDLER);
+    let mut node = e.call(SOUND_LIST, &args![handler]).u32();
+    while node != 0 && !e.call(LIST_IS_EMPTY, &args![node]).bool() {
+        let at = e.call(LIST_ITEM, &args![node]).u32();
+        let sound = e.mem.u32(at);
+        if e.call(FILE_NAME_TEXT, &args![sound.wrapping_add(0x30)])
+            .u32()
+            != 0
+        {
+            let text = e
+                .call(FILE_NAME_TEXT, &args![sound.wrapping_add(0x30)])
+                .u32();
+            if e.call(STRICMP, &args![text, name]).u32() == 0 {
+                return sound;
+            }
+        }
+        node = e.call(LIST_NEXT, &args![node]).u32();
+    }
+    0
+}
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -333,6 +530,12 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x005e_2a70, tes_sound_get_pass_through_sound(i32) -> u32),
         entry!(0x005e_3600, tes_sound_generate_default_objects()),
         entry!(0x005e_2ca0, fn_005e2ca0(Ptr)),
+        entry!(0x005e_2d20, fn_005e2d20(Ptr, u32)),
+        entry!(0x005e_2d90, fn_005e2d90(Ptr, u32) -> bool),
+        entry!(0x005e_2fa0, fn_005e2fa0(Ptr)),
+        entry!(0x005e_3020, fn_005e3020(Ptr)),
+        entry!(0x005e_3510, fn_005e3510(Ptr)),
+        entry!(0x005e_3570, fn_005e3570(u32) -> u32),
     ]
 }
 
@@ -713,5 +916,167 @@ mod movement_path_tests {
             }
             assert_eq!(calls, expected);
         }
+    }
+}
+
+#[cfg(test)]
+mod n045_tests {
+    use super::*;
+
+    type Log = Vec<(u32, Vec<u32>)>;
+
+    fn ret(eax: u32) -> Ret {
+        Ret {
+            eax,
+            ..Ret::default()
+        }
+    }
+
+    fn ok(_: &mut Engine, _: &[u32]) -> Ret {
+        Ret::default()
+    }
+
+    fn only(log: &Log, addr: u32) -> Vec<Vec<u32>> {
+        log.iter()
+            .filter(|(a, _)| *a == addr)
+            .map(|(_, w)| w.clone())
+            .collect()
+    }
+
+    fn sound(e: &mut Engine) -> u32 {
+        let s = e.mem.alloc(0x70);
+        for i in 0..0x24 {
+            e.mem.set_u8(s + 0x44 + i, i as u8 + 1);
+        }
+        e.mem.set_u8(s + 0x68, 3);
+        s
+    }
+
+    #[test]
+    fn copy_takes_the_flags_components_and_data() {
+        let mut e = Engine::new();
+        e.register(RT_DYNAMIC_CAST, |_, a| ret(a[0]));
+        e.register(COPY_ALL_COMPONENTS, ok);
+        e.register(SOUND_DATA_COPY, |_, a| ret(a[0] + 0x44));
+        let source = sound(&mut e);
+        let this = e.mem.alloc(0x70);
+        e.call(0x005e_2d20, &[this, 0]);
+        assert_eq!(e.mem.u8(this + 0x68), 0);
+        e.call_log = Some(vec![]);
+        e.call(0x005e_2d20, &[this, source]);
+        let log = e.call_log.take().unwrap();
+        assert_eq!(only(&log, COPY_ALL_COMPONENTS), vec![vec![this, source]]);
+        assert_eq!(e.mem.u8(this + 0x68), 3);
+        assert_eq!(
+            e.mem.bytes(this + 0x44, 0x24),
+            e.mem.bytes(source + 0x44, 0x24)
+        );
+    }
+
+    #[test]
+    fn compare_checks_each_field() {
+        let mut e = Engine::new();
+        e.register(RT_DYNAMIC_CAST, |_, a| ret(a[0]));
+        e.register(COMPARE_ALL_COMPONENTS, |_, _| ret(0));
+        let a = sound(&mut e);
+        let b = sound(&mut e);
+        assert!(e.call(0x005e_2d90, &[a, 0]).bool());
+        assert!(!e.call(0x005e_2d90, &[a, b]).bool());
+        for at in [
+            0x68u32, 0x52, 0x48, 0x45, 0x44, 0x46, 0x4c, 0x4e, 0x5a, 0x5c, 0x60, 0x64,
+        ] {
+            let old = e.mem.u8(b + at);
+            e.mem.set_u8(b + at, old ^ 0x80);
+            assert!(e.call(0x005e_2d90, &[a, b]).bool(), "{at:x}");
+            e.mem.set_u8(b + at, old);
+        }
+        // Byte +0x47 is not compared.
+        e.mem.set_u8(b + 0x47, 0);
+        assert!(!e.call(0x005e_2d90, &[a, b]).bool());
+        e.register(COMPARE_ALL_COMPONENTS, |_, _| ret(1));
+        assert!(e.call(0x005e_2d90, &[a, b]).bool());
+    }
+
+    #[test]
+    fn save_writes_rnam_and_sndd_swapped_when_asked() {
+        let mut e = Engine::new();
+        for a in [
+            START_FORM,
+            CLOSE_FORM,
+            SAVE_FILE_NAME,
+            ADD_BYTE_CHUNK,
+            ADD_CHUNK_DATA,
+            SWAP_U32,
+            SWAP_U16,
+        ] {
+            e.register(a, ok);
+        }
+        e.register(SWAPS_BYTE_ORDER, |_, _| ret(0));
+        let s = sound(&mut e);
+        e.call_log = Some(vec![]);
+        e.call(0x005e_2fa0, &[s]);
+        let log = e.call_log.take().unwrap();
+        assert_eq!(only(&log, SAVE_FILE_NAME), vec![vec![s + 0x30]]);
+        assert_eq!(only(&log, ADD_BYTE_CHUNK), vec![vec![RNAM, 3]]);
+        assert_eq!(only(&log, ADD_CHUNK_DATA), vec![vec![SNDD, s + 0x44, 0x24]]);
+        assert!(only(&log, SWAP_U32).is_empty());
+        e.register(SWAPS_BYTE_ORDER, |_, _| ret(1));
+        e.call_log = Some(vec![]);
+        e.call(0x005e_2fa0, &[s]);
+        let log = e.call_log.take().unwrap();
+        assert_eq!(only(&log, SWAP_U32).len(), 8);
+        assert_eq!(only(&log, SWAP_U16).len(), 16);
+    }
+
+    #[test]
+    fn the_swaps_cover_the_data_fields() {
+        let mut e = Engine::new();
+        e.register(SWAP_U32, ok);
+        e.register(SWAP_U16, ok);
+        e.call_log = Some(vec![]);
+        e.call(0x005e_3020, &[0x1000]);
+        let log = e.call_log.take().unwrap();
+        assert_eq!(
+            only(&log, SWAP_U32),
+            vec![
+                vec![0x1004, 0],
+                vec![0x1018, 0],
+                vec![0x101c, 0],
+                vec![0x1020, 0]
+            ]
+        );
+        let halves: Vec<u32> = only(&log, SWAP_U16).iter().map(|w| w[0]).collect();
+        assert_eq!(halves, (0x1008..0x1018).step_by(2).collect::<Vec<u32>>());
+        e.call_log = Some(vec![]);
+        e.call(0x005e_3510, &[0x2000]);
+        let log = e.call_log.take().unwrap();
+        assert_eq!(only(&log, SWAP_U32), vec![vec![0x2004, 0]]);
+        assert_eq!(only(&log, SWAP_U16), vec![vec![0x2008, 0], vec![0x200a, 0]]);
+    }
+
+    #[test]
+    fn sound_for_a_file_name_walks_the_sound_list() {
+        let mut e = Engine::new();
+        e.map(0x011c_3000, 0x1000);
+        let head = e.mem.alloc(8);
+        let second = e.mem.alloc(8);
+        let a = e.mem.alloc(0x40);
+        let b = e.mem.alloc(0x40);
+        e.mem.set_u32(head, a);
+        e.mem.set_u32(head + 4, second);
+        e.mem.set_u32(second, b);
+        e.mem.set_u32(b + 0x30, 0x0300);
+        e.set_global::<u32>(DATA_HANDLER, 0x9000);
+        e.register_double(SOUND_LIST, move |_, _| ret(head));
+        e.register(LIST_IS_EMPTY, |e, a| {
+            ret(u32::from(e.mem.u32(a[0]) == 0 && e.mem.u32(a[0] + 4) == 0))
+        });
+        e.register(LIST_ITEM, |_, a| ret(a[0]));
+        e.register(LIST_NEXT, |e, a| ret(e.mem.u32(a[0] + 4)));
+        e.register(FILE_NAME_TEXT, |e, a| ret(e.mem.u32(a[0])));
+        e.register(STRICMP, |_, a| ret(u32::from(a[0] != a[1])));
+        assert_eq!(e.call(0x005e_3570, &[0]).u32(), 0);
+        assert_eq!(e.call(0x005e_3570, &[0x0300]).u32(), b);
+        assert_eq!(e.call(0x005e_3570, &[0x0400]).u32(), 0);
     }
 }

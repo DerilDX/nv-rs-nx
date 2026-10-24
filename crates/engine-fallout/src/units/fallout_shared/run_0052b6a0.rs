@@ -65,9 +65,75 @@ pub fn fn_0052b780(e: &mut Engine, this: Ptr) {
     }
 }
 
+/// `__RTDynamicCast` (`00ec43fb`, `cdecl`, five words) from `.?AVTESForm@@`
+/// (`01183028`) to `.?AVTESImageSpace@@` (`01184154`).
+const RT_DYNAMIC_CAST: u32 = 0x00ec_43fb;
+const TYPE_TES_FORM: u32 = 0x0118_3028;
+const TYPE_TES_IMAGE_SPACE: u32 = 0x0118_4154;
+/// `TESForm::CopyAllComponents` and `CompareAllComponents` (`004851b0`,
+/// `00485270`, engine map; `thiscall`, one word), the byte copy `00401460`
+/// (`cdecl`: destination, source, size) and `memcmp` (`00ec4835`).
+const COPY_ALL_COMPONENTS: u32 = 0x0048_51b0;
+const COMPARE_ALL_COMPONENTS: u32 = 0x0048_5270;
+const COPY_BYTES: u32 = 0x0040_1460;
+const MEMCMP: u32 = 0x00ec_4835;
+/// The size of the block at +0x18 the copy and the comparison cover.
+const DATA_SIZE: u32 = 0x98;
+
+/// `form` cast to `TESImageSpace`, or 0.
+fn cast_to_image_space(e: &mut Engine, form: u32) -> u32 {
+    e.call(
+        RT_DYNAMIC_CAST,
+        &args![form, 0u32, TYPE_TES_FORM, TYPE_TES_IMAGE_SPACE, 0u32],
+    )
+    .u32()
+}
+
+// Translated from 0052b6a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No map name (`thiscall`, one word, `RET 4`; a copy): when `source` casts
+/// to `TESImageSpace`, `TESForm::CopyAllComponents` with the cast form, then
+/// its 0x98 bytes at +0x18 copied to `this + 0x18` (`00401460`).
+pub fn fn_0052b6a0(e: &mut Engine, this: Ptr, source: u32) {
+    let other = cast_to_image_space(e, source);
+    if other == 0 {
+        return;
+    }
+    e.call(COPY_ALL_COMPONENTS, &args![this, other]);
+    e.call(
+        COPY_BYTES,
+        &args![this.addr() + 0x18, other.wrapping_add(0x18), DATA_SIZE],
+    );
+}
+
+// Translated from 0052b700 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No map name (`thiscall`, one word, `RET 4`): whether the form differs
+/// from `form`: true when it does not cast to `TESImageSpace`, when
+/// `TESForm::CompareAllComponents` answers true, or when `memcmp` finds the
+/// 0x98 bytes at +0x18 different.
+pub fn fn_0052b700(e: &mut Engine, this: Ptr, form: u32) -> bool {
+    let other = cast_to_image_space(e, form);
+    if other == 0 {
+        return true;
+    }
+    if e.call(COMPARE_ALL_COMPONENTS, &args![this, other]).bool() {
+        return true;
+    }
+    let order = e
+        .call(
+            MEMCMP,
+            &args![this.addr() + 0x18, other.wrapping_add(0x18), DATA_SIZE],
+        )
+        .u32();
+    order != 0
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
-    vec![entry!(0x0052_b780, fn_0052b780(Ptr))]
+    vec![
+        entry!(0x0052_b780, fn_0052b780(Ptr)),
+        entry!(0x0052_b6a0, fn_0052b6a0(Ptr, u32)),
+        entry!(0x0052_b700, fn_0052b700(Ptr, u32) -> bool),
+    ]
 }
 
 #[cfg(test)]
@@ -129,5 +195,82 @@ mod tests {
             .filter(|offset| word(*offset) == 0xaaaa_aaaa)
             .collect();
         assert_eq!(untouched, vec![0x50]);
+    }
+}
+
+#[cfg(test)]
+mod n040_tests {
+    use super::*;
+
+    fn calls_to(e: &mut Engine, targets: &[u32]) -> Vec<(u32, Vec<u32>)> {
+        e.call_log
+            .take()
+            .unwrap()
+            .into_iter()
+            .filter(|(a, _)| targets.contains(a))
+            .collect()
+    }
+
+    fn setup(e: &mut Engine) {
+        e.register(RT_DYNAMIC_CAST, |e, a| {
+            assert_eq!(a[1..], [0, TYPE_TES_FORM, TYPE_TES_IMAGE_SPACE, 0]);
+            let form = if e.mem.u32(a[0] + 0xc) == 0 { a[0] } else { 0 };
+            Ret {
+                eax: form,
+                ..Ret::default()
+            }
+        });
+        e.register(COPY_ALL_COMPONENTS, |_, _| Ret::default());
+        e.register(COPY_BYTES, |_, _| Ret::default());
+        e.register(COMPARE_ALL_COMPONENTS, |e, a| Ret {
+            eax: e.mem.u32(a[1] + 0x10),
+            ..Ret::default()
+        });
+        e.register(MEMCMP, |e, a| {
+            assert_eq!(a[2], DATA_SIZE);
+            Ret {
+                eax: u32::from(e.mem.u32(a[0]) != e.mem.u32(a[1])),
+                ..Ret::default()
+            }
+        });
+    }
+
+    #[test]
+    fn fn_0052b6a0_copies_an_image_space() {
+        let mut e = Engine::new();
+        setup(&mut e);
+        let this = e.mem.alloc(0xb0);
+        let other = e.mem.alloc(0xb0);
+        e.mem.set_u32(other + 0xc, 1);
+        e.call_log = Some(vec![]);
+        e.call(0x0052_b6a0, &[this, other]);
+        assert!(calls_to(&mut e, &[COPY_ALL_COMPONENTS, COPY_BYTES]).is_empty());
+        e.mem.set_u32(other + 0xc, 0);
+        e.call_log = Some(vec![]);
+        e.call(0x0052_b6a0, &[this, other]);
+        assert_eq!(
+            calls_to(&mut e, &[COPY_ALL_COMPONENTS, COPY_BYTES]),
+            vec![
+                (COPY_ALL_COMPONENTS, vec![this, other]),
+                (COPY_BYTES, vec![this + 0x18, other + 0x18, 0x98]),
+            ]
+        );
+    }
+
+    #[test]
+    fn fn_0052b700_compares_an_image_space() {
+        let mut e = Engine::new();
+        setup(&mut e);
+        let this = e.mem.alloc(0xb0);
+        let other = e.mem.alloc(0xb0);
+        e.mem.set_u32(other + 0xc, 1);
+        assert!(e.call(0x0052_b700, &[this, other]).bool());
+        e.mem.set_u32(other + 0xc, 0);
+        assert!(!e.call(0x0052_b700, &[this, other]).bool());
+        e.mem.set_u32(other + 0x18, 1);
+        assert!(e.call(0x0052_b700, &[this, other]).bool());
+        e.mem.set_u32(other + 0x18, 0);
+        e.mem.set_u32(other + 0x10, 1);
+        assert!(e.call(0x0052_b700, &[this, other]).bool());
     }
 }

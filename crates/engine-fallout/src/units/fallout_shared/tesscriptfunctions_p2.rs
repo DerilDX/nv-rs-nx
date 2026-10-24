@@ -2511,8 +2511,8 @@ pub fn fn_005bf8d0(e: &mut Engine, a: ScriptArgs) -> bool {
 // Translated from 005bf9a0 (decompiled, FalloutNV.exe 1.4.0.525)
 /// Stores the floats `x` and `y` at `this + 0x2c` and `this + 0x30`.
 pub fn fn_005bf9a0(e: &mut Engine, this: Ptr, x: f32, y: f32) {
-    e.mem.set_f32(this.addr().wrapping_add(0x2c), x);
-    e.mem.set_f32(this.addr().wrapping_add(0x30), y);
+    e.mem.set_f32(this.addr().wrapping_add(0x2c), x87_quiet(x));
+    e.mem.set_f32(this.addr().wrapping_add(0x30), x87_quiet(y));
 }
 
 // Translated from 005bf9c0 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -2596,13 +2596,15 @@ pub fn fn_005bfaf0(e: &mut Engine, a: ScriptArgs) -> bool {
 // Translated from 005bfbb0 (decompiled, FalloutNV.exe 1.4.0.525)
 /// Stores the float `value` at `this + 0x58`.
 pub fn fn_005bfbb0(e: &mut Engine, this: Ptr, value: f32) {
-    e.mem.set_f32(this.addr().wrapping_add(0x58), value);
+    e.mem
+        .set_f32(this.addr().wrapping_add(0x58), x87_quiet(value));
 }
 
 // Translated from 005bfbd0 (decompiled, FalloutNV.exe 1.4.0.525)
 /// Stores the float `value` at `this + 0x60`.
 pub fn fn_005bfbd0(e: &mut Engine, this: Ptr, value: f32) {
-    e.mem.set_f32(this.addr().wrapping_add(0x60), value);
+    e.mem
+        .set_f32(this.addr().wrapping_add(0x60), x87_quiet(value));
 }
 
 // Translated from 005bfbf0 (decompiled, FalloutNV.exe 1.4.0.525)

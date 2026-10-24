@@ -303,7 +303,7 @@ fn race_coordinate(e: &mut Engine, this: Ptr<TESNPC>) -> u32 {
 // Translated from 00601c10 (decompiled, FalloutNV.exe 1.4.0.525)
 /// Sets `fHairLength` (Xbox PDB field).
 pub fn fn_00601c10(e: &mut Engine, this: Ptr<TESNPC>, length: f32) {
-    e.set(this, TESNPC::fHairLength, length);
+    e.set(this, TESNPC::fHairLength, x87_quiet(length));
 }
 
 // Translated from 00601c30 (decompiled, FalloutNV.exe 1.4.0.525)

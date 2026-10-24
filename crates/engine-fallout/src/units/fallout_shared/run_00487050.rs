@@ -107,9 +107,57 @@ pub fn fn_004870f0(e: &mut Engine, this: Ptr, other: Ptr) {
     e.call(STRING_SET, &args![this.addr() + 4, text, 0u32]);
 }
 
+/// `0048cee0` (`thiscall`, no stack word): the length of the name string.
+const NAME_LENGTH: u32 = 0x0048_cee0;
+/// `BSStringT<char>::StrCmp` (engine map, `00408a80`, `thiscall`, `RET 8`:
+/// text and a flag): 0 when the strings match.
+const STRING_COMPARE: u32 = 0x0040_8a80;
+
+// Translated from 00487140 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TESFullName`'s compare (`thiscall`, `RET 4`; the engine map gives it no
+/// name): true (they differ) when `other` is not a `TESFullName`
+/// (`dynamic_cast` from `BaseFormComponent`). When either name has a length
+/// (`0048cee0`), true when the lengths differ or the string at +4 compares
+/// unequal (`00408a80` with the other's text, `00408da0`, and 0); false
+/// otherwise.
+pub fn fn_00487140(e: &mut Engine, this: Ptr, other: Ptr) -> bool {
+    let cast = e
+        .call(
+            RT_DYNAMIC_CAST,
+            &args![
+                other,
+                0u32,
+                TYPE_BASE_FORM_COMPONENT,
+                TYPE_TES_FULL_NAME,
+                0u32
+            ],
+        )
+        .u32();
+    if cast == 0 {
+        return true;
+    }
+    if e.call(NAME_LENGTH, &args![this]).u32() == 0 && e.call(NAME_LENGTH, &args![cast]).u32() == 0
+    {
+        return false;
+    }
+    let mine = e.call(NAME_LENGTH, &args![this]).u32();
+    let theirs = e.call(NAME_LENGTH, &args![cast]).u32();
+    if mine != theirs {
+        return true;
+    }
+    let text = e.call(GET_TEXT, &args![cast]).u32();
+    e.call(
+        STRING_COMPARE,
+        &args![this.addr().wrapping_add(4), text, 0u32],
+    )
+    .u32()
+        != 0
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x0048_7140, fn_00487140(Ptr, Ptr) -> bool),
         entry!(0x0048_7200, fn_00487200(Ptr)),
         entry!(0x00487050, fn_00487050(Ptr, Ptr<TESFile>)),
         entry!(0x004871d0, fn_004871d0(Ptr) -> Ptr),
@@ -264,5 +312,51 @@ mod copy_tests {
         e.call_log = Some(vec![]);
         e.call(0x0048_70f0, &args![0x100u32, 0x200u32]);
         assert_eq!(e.call_log.take().unwrap().len(), 2);
+    }
+}
+
+#[cfg(test)]
+mod n038_tests {
+    use super::*;
+
+    fn word(eax: u32) -> Ret {
+        Ret {
+            eax,
+            ..Ret::default()
+        }
+    }
+
+    #[test]
+    fn at_00487140_compares_lengths_then_text() {
+        let mut e = Engine::new();
+        e.mem.map(0x0f00_0000, 8);
+        e.register(RT_DYNAMIC_CAST, |e, _| word(e.mem.u32(0x0f00_0000)));
+        e.register(NAME_LENGTH, |e, a| word(e.mem.u32(a[0] + 8)));
+        e.register(GET_TEXT, |_, a| word(a[0] + 0x100));
+        e.register(STRING_COMPARE, |e, _| word(e.mem.u32(0x0f00_0004)));
+        let this = e.mem.alloc(0xc);
+        let other = e.mem.alloc(0xc);
+        let run = |e: &mut Engine| e.call(0x0048_7140, &args![this, other]).bool();
+        assert!(run(&mut e));
+        e.mem.set_u32(0x0f00_0000, other);
+        // Both empty.
+        assert!(!run(&mut e));
+        // Lengths differ (only one set, either side).
+        e.mem.set_u32(other + 8, 3);
+        assert!(run(&mut e));
+        e.mem.set_u32(other + 8, 0);
+        e.mem.set_u32(this + 8, 3);
+        assert!(run(&mut e));
+        // Same length: the string compare decides.
+        e.mem.set_u32(other + 8, 3);
+        e.call_log = Some(vec![]);
+        assert!(!run(&mut e));
+        let log = e.call_log.take().unwrap();
+        assert_eq!(
+            log.last().unwrap(),
+            &(STRING_COMPARE, vec![this + 4, other + 0x100, 0])
+        );
+        e.mem.set_u32(0x0f00_0004, 0xffff_ffff);
+        assert!(run(&mut e));
     }
 }

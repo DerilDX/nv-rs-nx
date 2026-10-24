@@ -394,6 +394,139 @@ pub fn fn_00618aa0(e: &mut Engine, this: Ptr, file: Ptr) -> bool {
     true
 }
 
+/// `__RTDynamicCast` (`00ec43fb`), the `TESForm` type descriptor
+/// (`01183028`) and the `TESSkill` one (`01186518`, `.?AVTESSkill@@`).
+const DYNAMIC_CAST: u32 = 0x00ec_43fb;
+const TYPE_TES_FORM: u32 = 0x0118_3028;
+const TYPE_TES_SKILL: u32 = 0x0118_6518;
+/// `00401460` (cdecl: destination, source, size) and `memcmp` (`00ec4835`).
+const MEMCPY: u32 = 0x0040_1460;
+const MEMCMP: u32 = 0x00ec_4835;
+/// The `TES` singleton pointer (`011c3f2c`).
+const TES: u32 = 0x011c_3f2c;
+
+/// The four 8-byte objects at +0x40 of `this` and of `other`, each with a
+/// vtable: `slot` of this one's with the other's address.
+fn component_call(e: &mut Engine, this: u32, other: u32, index: u32, slot: u32) -> Ret {
+    let mine = this + 0x40 + 8 * index;
+    let theirs = other + 0x40 + 8 * index;
+    e.vcall(mine, slot, &args![theirs])
+}
+
+// Translated from 00618390 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Copies another form (`RET 4`; the engine map gives it no name): nothing
+/// unless `other` is a `TESSkill` (`__RTDynamicCast` from `TESForm`);
+/// otherwise all components (`004851b0`), the 0x14 bytes at +0x2C, and the
+/// four objects at +0x40 (each object's virtual slot 8 with the other's).
+pub fn fn_00618390(e: &mut Engine, this: Ptr, other: Ptr) {
+    let cast = e
+        .call(
+            DYNAMIC_CAST,
+            &args![other, 0u32, TYPE_TES_FORM, TYPE_TES_SKILL, 0u32],
+        )
+        .u32();
+    if cast == 0 {
+        return;
+    }
+    e.call(0x0048_51b0, &args![this, other]);
+    e.call(MEMCPY, &args![this.addr() + 0x2c, cast + 0x2c, 0x14u32]);
+    for index in 0..4 {
+        component_call(e, this.addr(), cast, index, 8);
+    }
+}
+
+// Translated from 00618430 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Compares with another form (`RET 4`; the engine map gives it no name):
+/// true (they differ) unless `other` is a `TESSkill` (`__RTDynamicCast`)
+/// whose components (`TESForm::CompareAllComponents`, `00485270`), 0x14
+/// bytes at +0x2C (`memcmp` with `005d8a70` of the cast) and four objects
+/// at +0x40 (each object's virtual slot 0xC with the other's) are the same.
+pub fn fn_00618430(e: &mut Engine, this: Ptr, other: Ptr) -> bool {
+    let cast = e
+        .call(
+            DYNAMIC_CAST,
+            &args![other, 0u32, TYPE_TES_FORM, TYPE_TES_SKILL, 0u32],
+        )
+        .u32();
+    if cast == 0 {
+        return true;
+    }
+    if e.call(0x0048_5270, &args![this, cast]).u8() != 0 {
+        return true;
+    }
+    let theirs = e.call(TOPIC_QUEST_LIST, &args![cast]).u32();
+    if e.call(MEMCMP, &args![this.addr() + 0x2c, theirs, 0x14u32])
+        .u32()
+        != 0
+    {
+        return true;
+    }
+    for index in 0..4 {
+        if component_call(e, this.addr(), cast, index, 0xc).u8() != 0 {
+            return true;
+        }
+    }
+    false
+}
+
+// Translated from 00618960 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Saves the topic's index (`RET`, no stack words): starts the form
+/// (`TESForm::StartForm`, `004855a0`), adds the word at +0x3C as an `XIDX`
+/// chunk (`00485910`), leaves `this` in `011cbeb0` and closes the form
+/// (`00485680`).
+pub fn fn_00618960(e: &mut Engine, this: Ptr) {
+    e.call(0x0048_55a0, &args![this]);
+    let index = e.mem.u32(this.addr() + 0x3c);
+    e.call(0x0048_5910, &args![SIG_XIDX, index]);
+    e.set_global::<u32>(LAST_LOADED_TOPIC, this.addr());
+    e.call(0x0048_5680, &args![this]);
+}
+
+// Translated from 006189a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Forwards one word to the form's virtual slot 0x28 (`RET 4`).
+pub fn fn_006189a0(e: &mut Engine, this: Ptr, value: u32) {
+    e.vcall(this.addr(), 0x28, &args![value]);
+}
+
+// Translated from 006189c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Initialises the topic after loading from `file` (`RET 4`): the form's
+/// virtual slot 0x2C, `00472fe0` on the file with the form, `004600f0` on
+/// the `TES` singleton (its byte is not used), then for each per-quest
+/// entry of the list (`005d8a70`, up to the first empty node), each
+/// non-null info of its array (`00717e50`, count `0084e3a0`, element
+/// `00877a30`) is passed to `00460270` on `TES` with the file's byte
+/// (`00471c20`). Returns true.
+pub fn fn_006189c0(e: &mut Engine, this: Ptr, file: Ptr) -> bool {
+    e.vcall(this.addr(), 0x2c, &[]);
+    e.call(0x0047_2fe0, &args![file, this]);
+    let tes = e.global::<u32>(TES);
+    e.call(0x0046_00f0, &args![tes]);
+    let mut node = e.call(TOPIC_QUEST_LIST, &args![this]).u32();
+    while node != 0 {
+        let slot = e.call(NODE_ITEM, &args![node]).u32();
+        if e.mem.u32(slot) == 0 {
+            break;
+        }
+        let slot = e.call(NODE_ITEM, &args![node]).u32();
+        let entry = e.mem.u32(slot);
+        node = e.call(NODE_NEXT, &args![node]).u32();
+        let infos = e.call(PLUS_FOUR, &args![entry]).u32();
+        let count = e.call(WORD_AT_0XC, &args![infos]).u32();
+        let mut index = 0u32;
+        while index < count {
+            let at = e.call(0x0087_7a30, &args![infos, index]).u32();
+            let info = e.mem.u32(at);
+            if info != 0 {
+                let byte = u32::from(e.call(0x0047_1c20, &args![file]).u8());
+                let tes = e.global::<u32>(TES);
+                e.call(0x0046_0270, &args![tes, info, byte]);
+            }
+            index += 1;
+        }
+    }
+    true
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -408,6 +541,11 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x0061_88c0, fn_006188c0(Ptr)),
         entry!(0x0061_8890, fn_00618890(Ptr, u32) -> Ptr),
         entry!(0x0061_8aa0, fn_00618aa0(Ptr, Ptr) -> bool),
+        entry!(0x0061_8390, fn_00618390(Ptr, Ptr)),
+        entry!(0x0061_8430, fn_00618430(Ptr, Ptr) -> bool),
+        entry!(0x0061_8960, fn_00618960(Ptr)),
+        entry!(0x0061_89a0, fn_006189a0(Ptr, u32)),
+        entry!(0x0061_89c0, fn_006189c0(Ptr, Ptr) -> bool),
     ]
 }
 
@@ -767,5 +905,180 @@ mod b020_tests {
         e.call(0x0061_8aa0, &args![topic, 0x9000u32]);
         assert_eq!(e.mem.u8(topic + 0x24), 5);
         assert_eq!(calls_to(&e, 0x0000_1134), vec![vec![topic, 0x7300]]);
+    }
+}
+
+#[cfg(test)]
+mod tests_n042 {
+    use super::*;
+
+    type Log = Vec<(u32, Vec<u32>)>;
+
+    fn run(e: &mut Engine, addr: u32, words: &[u32]) -> (Ret, Log) {
+        e.call_log = Some(vec![]);
+        let result = e.call(addr, words);
+        let log = e
+            .call_log
+            .take()
+            .unwrap()
+            .into_iter()
+            .filter(|(a, _)| *a != addr)
+            .collect();
+        (result, log)
+    }
+
+    fn calls(log: &Log, addr: u32) -> Vec<Vec<u32>> {
+        log.iter()
+            .filter(|(a, _)| *a == addr)
+            .map(|(_, w)| w.clone())
+            .collect()
+    }
+
+    /// Two forms whose four objects at +0x40 share a vtable: slot 8 is a
+    /// logged double, slot 0xC says whether the objects' second words
+    /// differ.
+    fn forms(e: &mut Engine) -> (u32, u32) {
+        e.register(0x0f00_1008, |_, _| Ret::default());
+        e.register(0x0f00_100c, |e, a| {
+            u32::from(e.mem.u32(a[0] + 4) != e.mem.u32(a[1] + 4)).into_ret()
+        });
+        e.put_vtable(0x0f00_0000, &[0, 0, 0x0f00_1008, 0x0f00_100c]);
+        let this = e.mem.alloc(0x60);
+        let other = e.mem.alloc(0x60);
+        for form in [this, other] {
+            for i in 0..4 {
+                e.mem.set_u32(form + 0x40 + 8 * i, 0x0f00_0000);
+            }
+        }
+        e.register(DYNAMIC_CAST, |_, a| a[0].into_ret());
+        (this, other)
+    }
+
+    #[test]
+    fn copy_takes_components_data_and_objects() {
+        let mut e = Engine::new();
+        e.register(0x0048_51b0, |_, _| Ret::default());
+        e.register(MEMCPY, |_, _| Ret::default());
+        let (this, other) = forms(&mut e);
+        let (_, log) = run(&mut e, 0x0061_8390, &[this, other]);
+        assert_eq!(
+            calls(&log, DYNAMIC_CAST),
+            vec![vec![other, 0, TYPE_TES_FORM, TYPE_TES_SKILL, 0]]
+        );
+        assert_eq!(
+            calls(&log, MEMCPY),
+            vec![vec![this + 0x2c, other + 0x2c, 0x14]]
+        );
+        let copied: Vec<Vec<u32>> = (0..4)
+            .map(|i| vec![this + 0x40 + 8 * i, other + 0x40 + 8 * i])
+            .collect();
+        assert_eq!(calls(&log, 0x0f00_1008), copied);
+        e.register(DYNAMIC_CAST, |_, _| Ret::default());
+        let (_, log) = run(&mut e, 0x0061_8390, &[this, other]);
+        assert_eq!(log.len(), 1);
+    }
+
+    #[test]
+    fn compare_checks_components_data_and_objects() {
+        let mut e = Engine::new();
+        let (this, other) = forms(&mut e);
+        e.register(0x0048_5270, |e, a| e.mem.u32(a[0] + 0x10).into_ret());
+        e.register(TOPIC_QUEST_LIST, |_, a| (a[0] + 0x2c).into_ret());
+        e.register(MEMCMP, |e, a| {
+            u32::from((0..a[2]).any(|i| e.mem.u8(a[0] + i) != e.mem.u8(a[1] + i))).into_ret()
+        });
+        let (ret, log) = run(&mut e, 0x0061_8430, &[this, other]);
+        assert!(!ret.bool());
+        assert_eq!(calls(&log, 0x0f00_100c).len(), 4);
+        e.mem.set_u32(other + 0x40 + 8 * 2 + 4, 1);
+        let (ret, log) = run(&mut e, 0x0061_8430, &[this, other]);
+        assert!(ret.bool());
+        assert_eq!(calls(&log, 0x0f00_100c).len(), 3);
+        e.mem.set_u8(other + 0x3f, 1);
+        let (ret, log) = run(&mut e, 0x0061_8430, &[this, other]);
+        assert!(ret.bool());
+        assert!(calls(&log, 0x0f00_100c).is_empty());
+        e.mem.set_u32(this + 0x10, 1);
+        let (ret, log) = run(&mut e, 0x0061_8430, &[this, other]);
+        assert!(ret.bool());
+        assert!(calls(&log, MEMCMP).is_empty());
+        e.register(DYNAMIC_CAST, |_, _| Ret::default());
+        assert!(e.call(0x0061_8430, &args![this, other]).bool());
+    }
+
+    #[test]
+    fn save_writes_the_index_chunk() {
+        let mut e = Engine::new();
+        for addr in [0x0048_55a0, 0x0048_5910, 0x0048_5680] {
+            e.register(addr, |_, _| Ret::default());
+        }
+        e.map(LAST_LOADED_TOPIC, 4);
+        let this = e.mem.alloc(0x50);
+        e.mem.set_u32(this + 0x3c, 77);
+        let (_, log) = run(&mut e, 0x0061_8960, &[this]);
+        assert_eq!(
+            log,
+            vec![
+                (0x0048_55a0, vec![this]),
+                (0x0048_5910, vec![SIG_XIDX, 77]),
+                (0x0048_5680, vec![this]),
+            ]
+        );
+        assert_eq!(e.mem.u32(LAST_LOADED_TOPIC), this);
+    }
+
+    #[test]
+    fn forward_to_slot_0x28() {
+        let mut e = Engine::new();
+        e.register(0x0f00_1028, |_, _| Ret::default());
+        let mut slots = vec![0u32; 11];
+        slots[10] = 0x0f00_1028;
+        e.put_vtable(0x0f00_0000, &slots);
+        let this = e.mem.alloc(4);
+        e.mem.set_u32(this, 0x0f00_0000);
+        let (_, log) = run(&mut e, 0x0061_89a0, &[this, 9]);
+        assert_eq!(log, vec![(0x0f00_1028, vec![this, 9])]);
+    }
+
+    #[test]
+    fn init_passes_each_info_to_tes() {
+        let mut e = Engine::new();
+        for addr in [0x0f00_102c, 0x0047_2fe0, 0x0046_00f0, 0x0046_0270] {
+            e.register(addr, |_, _| Ret::default());
+        }
+        let mut slots = vec![0u32; 12];
+        slots[11] = 0x0f00_102c;
+        e.put_vtable(0x0f00_0000, &slots);
+        e.register(NODE_ITEM, |_, a| a[0].into_ret());
+        e.register(NODE_NEXT, |e, a| e.mem.u32(a[0] + 4).into_ret());
+        e.register(TOPIC_QUEST_LIST, |e, a| e.mem.u32(a[0] + 0x2c).into_ret());
+        e.register(PLUS_FOUR, |_, a| (a[0] + 4).into_ret());
+        e.register(WORD_AT_0XC, |e, a| e.mem.u32(a[0] + 0xc).into_ret());
+        // An info array: the elements are the words from +0x10.
+        e.register(0x0087_7a30, |_, a| (a[0] + 0x10 + 4 * a[1]).into_ret());
+        e.register(0x0047_1c20, |_, _| 0x101u32.into_ret());
+        e.map(TES, 4);
+        e.mem.set_u32(TES, 0x7700);
+        let entry = e.mem.alloc(0x20);
+        // The array at entry + 4: count at +0x10, elements from +0x14.
+        e.mem.set_u32(entry + 0x10, 3);
+        e.mem.set_u32(entry + 0x14, 0x5100);
+        e.mem.set_u32(entry + 0x18, 0);
+        e.mem.set_u32(entry + 0x1c, 0x5300);
+        let empty = e.mem.alloc(8);
+        let node = e.mem.alloc(8);
+        e.mem.set_u32(node, entry);
+        e.mem.set_u32(node + 4, empty);
+        let this = e.mem.alloc(0x40);
+        e.mem.set_u32(this, 0x0f00_0000);
+        e.mem.set_u32(this + 0x2c, node);
+        let (ret, log) = run(&mut e, 0x0061_89c0, &[this, 0x8800]);
+        assert!(ret.bool());
+        assert_eq!(calls(&log, 0x0047_2fe0), vec![vec![0x8800, this]]);
+        assert_eq!(calls(&log, 0x0046_00f0), vec![vec![0x7700]]);
+        assert_eq!(
+            calls(&log, 0x0046_0270),
+            vec![vec![0x7700, 0x5100, 1], vec![0x7700, 0x5300, 1]]
+        );
     }
 }

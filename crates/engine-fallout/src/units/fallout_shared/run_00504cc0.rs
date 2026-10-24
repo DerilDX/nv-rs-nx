@@ -217,6 +217,289 @@ pub fn fn_00505180(e: &mut Engine, this: Ptr, file: Ptr) -> bool {
     true
 }
 
+/// `__RTDynamicCast` (`00ec43fb`, cdecl: object, 0, from, to, 0).
+const DYNAMIC_CAST: u32 = 0x00ec_43fb;
+/// `memcmp` (`00ec4835`, cdecl: first, second, size).
+const MEMCMP: u32 = 0x00ec_4835;
+/// `00408da0` (`thiscall`): the string a name holder holds.
+const NAME_TEXT: u32 = 0x0040_8da0;
+/// `00408b20` (cdecl): compares two C strings.
+const STRING_COMPARE: u32 = 0x0040_8b20;
+/// `00401080` (cdecl: address, byte): swaps the byte order of one word.
+const SWAP_WORD: u32 = 0x0040_1080;
+/// `00401500` (no arguments): whether saved data needs its byte order swapped (`AL`).
+const SAVE_NEEDS_SWAP: u32 = 0x0040_1500;
+
+// Translated from 00504cc0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Copies from `other` (`RET 4`) when it casts (`__RTDynamicCast` from `01183028` to
+/// `0118645c`): the components (`TESForm::CopyAllComponents`), the ten 0x20-byte entries at
+/// +0x24 (each this entry's vtable slot 0x18 with the other entry's slot 0x14,
+/// `00504e00`), the eleven sound names at +0x164 (`00489100` with `00408da0` of
+/// `00504e20`), the form at +0x218 (`0084e3a0` of `00504e40`, or 0 without one), the 0x38
+/// bytes at +0x1E8 (`REP MOVSD` from `00504e60`; they reach +0x220, so the form word at +0x218 ends as the copied one) and the form type (`004f15a0` with
+/// `00401170`).
+pub fn fn_00504cc0(e: &mut Engine, this: Ptr, other: u32) {
+    let base = this.addr();
+    let cast = e
+        .call(
+            DYNAMIC_CAST,
+            &args![other, 0u32, 0x0118_3028u32, 0x0118_645cu32, 0u32],
+        )
+        .u32();
+    if cast == 0 {
+        return;
+    }
+    e.call(0x0048_51b0, &args![this, cast]);
+    for index in 0..10u32 {
+        let theirs = fn_00504e00(e, Ptr::new(cast), index);
+        let value = e.vcall(theirs, 0x14, &args![]).u32();
+        let ours = base + 0x24 + (index << 5);
+        e.vcall(ours, 0x18, &args![value]);
+    }
+    for index in 0..0xbu32 {
+        let theirs = fn_00504e20(e, Ptr::new(cast), index);
+        let name = e.call(NAME_TEXT, &args![theirs]).u32();
+        e.call(0x0048_9100, &args![base + 0x164 + index * 0xc, name]);
+    }
+    if fn_00504e40(e, Ptr::new(cast)) != 0 {
+        let form = fn_00504e40(e, Ptr::new(cast));
+        let value = e.call(0x0084_e3a0, &args![form]).u32();
+        e.mem.set_u32(base + 0x218, value);
+    } else {
+        e.mem.set_u32(base + 0x218, 0);
+    }
+    let source = fn_00504e60(e, Ptr::new(cast));
+    for word in 0..0xe {
+        let value = e.mem.u32(source.wrapping_add(4 * word));
+        e.mem.set_u32(base + 0x1e8 + 4 * word, value);
+    }
+    let kind = e.call(0x0040_1170, &args![cast]).u32();
+    e.call(0x004f_15a0, &args![this, kind]);
+}
+
+// Translated from 00504e00 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The address of entry `index` of the 0x20-byte entries at +0x24 (`RET 4`).
+pub fn fn_00504e00(_e: &mut Engine, this: Ptr, index: u32) -> u32 {
+    this.addr().wrapping_add(index << 5).wrapping_add(0x24)
+}
+
+// Translated from 00504e20 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The address of entry `index` of the 0xC-byte entries at +0x164 (`RET 4`).
+pub fn fn_00504e20(_e: &mut Engine, this: Ptr, index: u32) -> u32 {
+    this.addr()
+        .wrapping_add(index.wrapping_mul(0xc))
+        .wrapping_add(0x164)
+}
+
+// Translated from 00504e40 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The form of the form id at +0x218 (`004839c0`), and its value.
+pub fn fn_00504e40(e: &mut Engine, this: Ptr) -> u32 {
+    let id = e.mem.u32(this.addr() + 0x218);
+    e.call(LOOKUP_FORM, &args![id]).u32()
+}
+
+// Translated from 00504e80 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Whether `other` differs (`RET 4`, `AL`): true unless it casts (`__RTDynamicCast` from
+/// `01183028` to `0118645c`), `TESForm::CompareAllComponents` finds no difference, the
+/// eleven sound names (`00408da0`, `00408b20`) and the ten entries' slot 0x14 strings
+/// compare equal, the form of +0x218 (`004839c0`) is the other's (`00504e40`) and the 0x38
+/// bytes at +0x1E8 equal the other's (`00504e60`, `memcmp`).
+pub fn fn_00504e80(e: &mut Engine, this: Ptr, other: u32) -> bool {
+    let base = this.addr();
+    let cast = e
+        .call(
+            DYNAMIC_CAST,
+            &args![other, 0u32, 0x0118_3028u32, 0x0118_645cu32, 0u32],
+        )
+        .u32();
+    if cast == 0 {
+        return true;
+    }
+    if e.call(0x0048_5270, &args![this, cast]).bool() {
+        return true;
+    }
+    for index in 0..0xbu32 {
+        let theirs = fn_00504e20(e, Ptr::new(cast), index);
+        let their_name = e.call(NAME_TEXT, &args![theirs]).u32();
+        let our_name = e.call(NAME_TEXT, &args![base + 0x164 + index * 0xc]).u32();
+        if e.call(STRING_COMPARE, &args![our_name, their_name]).u32() != 0 {
+            return true;
+        }
+    }
+    for index in 0..10u32 {
+        let theirs = fn_00504e00(e, Ptr::new(cast), index);
+        let their_value = e.vcall(theirs, 0x14, &args![]).u32();
+        let ours = base + 0x24 + (index << 5);
+        let our_value = e.vcall(ours, 0x14, &args![]).u32();
+        if e.call(STRING_COMPARE, &args![our_value, their_value]).u32() != 0 {
+            return true;
+        }
+    }
+    let id = e.mem.u32(base + 0x218);
+    let form = e.call(LOOKUP_FORM, &args![id]).u32();
+    if form != fn_00504e40(e, Ptr::new(cast)) {
+        return true;
+    }
+    let theirs = fn_00504e60(e, Ptr::new(cast));
+    e.call(MEMCMP, &args![base + 0x1e8, theirs, 0x38u32]).u32() != 0
+}
+
+/// A byte-order swap of one data block.
+type BlockSwap = fn(&mut Engine, Ptr);
+
+// Translated from 005053c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Saves the form (`ECX` only; the chunks `00505180` loads): `TESForm::StartForm`, then the `CSTD` (0x5C bytes
+/// at +0x58), `CSAD` (0x54 at +0xB4) and `CSSD` (0x40 at +0x18) chunks through
+/// `TESForm::__AddChunkData`, each block swapped (`005059c0`, `005057a0`, `00505610`) before
+/// and after when `00401500` says the save needs it, and `TESForm::CloseForm`.
+pub fn fn_005053c0(e: &mut Engine, this: Ptr) {
+    let base = this.addr();
+    e.call(0x0048_55a0, &args![this]);
+    let blocks: [(u32, u32, u32, BlockSwap); 3] = [
+        (0x4454_5343, 0x58, 0x5c, fn_005059c0),
+        (0x4441_5343, 0xb4, 0x54, fn_005057a0),
+        (0x4453_5343, 0x18, 0x40, fn_00505610),
+    ];
+    for (chunk, offset, size, swap) in blocks {
+        if e.call(SAVE_NEEDS_SWAP, &args![]).bool() {
+            swap(e, Ptr::new(base + offset));
+        }
+        e.call(0x0048_5990, &args![chunk, base + offset, size]);
+        if e.call(SAVE_NEEDS_SWAP, &args![]).bool() {
+            swap(e, Ptr::new(base + offset));
+        }
+    }
+    e.call(0x0048_5680, &args![this]);
+}
+
+// Translated from 005054b0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Copies from `other` (`RET 4`) when it casts (`__RTDynamicCast` from `01183028` to
+/// `0118627c`): the components (`TESForm::CopyAllComponents`), then the three data blocks
+/// (`memcpy` of 0x5C bytes between the `0043c490` addresses, 0x54 between the `006ab360`
+/// ones, 0x40 between the `00500940` ones).
+pub fn fn_005054b0(e: &mut Engine, this: Ptr, other: u32) {
+    let cast = e
+        .call(
+            DYNAMIC_CAST,
+            &args![other, 0u32, 0x0118_3028u32, 0x0118_627cu32, 0u32],
+        )
+        .u32();
+    if cast == 0 {
+        return;
+    }
+    e.call(0x0048_51b0, &args![this, cast]);
+    for (getter, size) in [
+        (DATA_58_0043C490, 0x5cu32),
+        (DATA_B4_006AB360, 0x54),
+        (DATA_18_00500940, 0x40),
+    ] {
+        let source = e.call(getter, &args![cast]).u32();
+        let destination = e.call(getter, &args![this]).u32();
+        e.call(MEMCPY, &args![destination, source, size]);
+    }
+}
+
+// Translated from 00505550 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Whether `other` differs (`RET 4`, `AL`): true unless it casts (`__RTDynamicCast` from
+/// `01183028` to `0118627c`), `TESForm::CompareAllComponents` finds no difference and the
+/// three data blocks compare equal (`memcmp`, the `0043c490`, `006ab360` and `00500940`
+/// addresses, 0x5C, 0x54 and 0x40 bytes).
+pub fn fn_00505550(e: &mut Engine, this: Ptr, other: u32) -> bool {
+    let cast = e
+        .call(
+            DYNAMIC_CAST,
+            &args![other, 0u32, 0x0118_3028u32, 0x0118_627cu32, 0u32],
+        )
+        .u32();
+    if cast == 0 {
+        return true;
+    }
+    if e.call(0x0048_5270, &args![this, cast]).bool() {
+        return true;
+    }
+    for (getter, size) in [
+        (DATA_58_0043C490, 0x5cu32),
+        (DATA_B4_006AB360, 0x54),
+        (DATA_18_00500940, 0x40),
+    ] {
+        let theirs = e.call(getter, &args![cast]).u32();
+        let ours = e.call(getter, &args![this]).u32();
+        if e.call(MEMCMP, &args![ours, theirs, size]).u32() != 0 {
+            return true;
+        }
+    }
+    false
+}
+
+/// `00401080` with 0 on each word at `offsets` from `block`, in the exe's order.
+fn swap_words(e: &mut Engine, block: Ptr, offsets: &[u32]) {
+    for &offset in offsets {
+        e.call(SWAP_WORD, &args![block.addr() + offset, 0u32]);
+    }
+}
+
+// Translated from 00505610 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Swaps the byte order of the `CSSD` block's words (`00401080` with 0): +0x0 .. +0x20,
+/// +0x2C, +0x24, +0x30 .. +0x3C.
+pub fn fn_00505610(e: &mut Engine, this: Ptr) {
+    swap_words(
+        e,
+        this,
+        &[
+            0, 4, 8, 0xc, 0x10, 0x14, 0x18, 0x1c, 0x20, 0x2c, 0x24, 0x30, 0x34, 0x38, 0x3c,
+        ],
+    );
+}
+
+// Translated from 005057a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Swaps the byte order of the `CSAD` block's words (`00401080` with 0): +0x0 .. +0x40,
+/// +0x48, +0x44, +0x4C, +0x50.
+pub fn fn_005057a0(e: &mut Engine, this: Ptr) {
+    swap_words(
+        e,
+        this,
+        &[
+            0, 4, 8, 0xc, 0x10, 0x14, 0x18, 0x1c, 0x20, 0x24, 0x28, 0x2c, 0x30, 0x34, 0x38, 0x3c,
+            0x40, 0x48, 0x44, 0x4c, 0x50,
+        ],
+    );
+}
+
+// Translated from 005059c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Swaps the byte order of the `CSTD` block's words (`00401080` with 0): +0x4 .. +0x20,
+/// +0x28, +0x2C, +0x30, +0x38, +0x3C, +0x48, +0x4C, +0x58, +0x50.
+pub fn fn_005059c0(e: &mut Engine, this: Ptr) {
+    swap_words(
+        e,
+        this,
+        &[
+            4, 8, 0xc, 0x10, 0x14, 0x18, 0x1c, 0x20, 0x28, 0x2c, 0x30, 0x38, 0x3c, 0x48, 0x4c,
+            0x58, 0x50,
+        ],
+    );
+}
+
+// Translated from 00505b80 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The combat style's byte for attack `kind` (`RET 4`, `AL`; the jump table at `00505be4`):
+/// 0x5C `0073cb80`, 0x5D `00505c00`, 0x5E `00505c20`, 0x5F `006a9560`, 0x60 `009e8670`,
+/// anything else 0.
+pub fn fn_00505b80(e: &mut Engine, this: Ptr, kind: u32) -> u8 {
+    match kind.wrapping_sub(0x5c) {
+        0 => e.call(0x0073_cb80, &args![this]).u8(),
+        1 => fn_00505c00(e, this),
+        2 => fn_00505c20(e, this),
+        3 => e.call(0x006a_9560, &args![this]).u8(),
+        4 => e.call(0x009e_8670, &args![this]).u8(),
+        _ => 0,
+    }
+}
+
+// Translated from 00505c20 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The byte at +0x9A (`AL`).
+pub fn fn_00505c20(e: &mut Engine, this: Ptr) -> u8 {
+    e.mem.u8(this.addr() + 0x9a)
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -230,6 +513,19 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x0050_4fe0, fn_00504fe0(Ptr, u32, u32)),
         entry!(0x0050_4ff0, fn_00504ff0(Ptr, u32) -> u32),
         entry!(0x0050_5080, fn_00505080(Ptr, u32) -> Ptr),
+        entry!(0x0050_4cc0, fn_00504cc0(Ptr, u32)),
+        entry!(0x0050_4e00, fn_00504e00(Ptr, u32) -> u32),
+        entry!(0x0050_4e20, fn_00504e20(Ptr, u32) -> u32),
+        entry!(0x0050_4e40, fn_00504e40(Ptr) -> u32),
+        entry!(0x0050_4e80, fn_00504e80(Ptr, u32) -> bool),
+        entry!(0x0050_53c0, fn_005053c0(Ptr)),
+        entry!(0x0050_54b0, fn_005054b0(Ptr, u32)),
+        entry!(0x0050_5550, fn_00505550(Ptr, u32) -> bool),
+        entry!(0x0050_5610, fn_00505610(Ptr)),
+        entry!(0x0050_57a0, fn_005057a0(Ptr)),
+        entry!(0x0050_59c0, fn_005059c0(Ptr)),
+        entry!(0x0050_5b80, fn_00505b80(Ptr, u32) -> u8),
+        entry!(0x0050_5c20, fn_00505c20(Ptr) -> u8),
     ]
 }
 
@@ -541,5 +837,262 @@ mod combat_style_load_tests {
         assert!(calls(&e, SWAP_DATA_00505610).is_empty());
         assert!(calls(&e, CHUNK_SIZE).is_empty());
         assert_eq!(e.mem.u8(this + 0x18), 0x11);
+    }
+}
+
+#[cfg(test)]
+mod n039_tests {
+    use super::*;
+
+    fn calls_to(e: &Engine, callee: u32) -> Vec<Vec<u32>> {
+        e.call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|(address, _)| *address == callee)
+            .map(|(_, words)| words.clone())
+            .collect()
+    }
+
+    /// Two objects whose ten entries at +0x24 share one vtable: slot 0x14 answers the entry
+    /// address, slot 0x18 is recorded.
+    fn entry_objects(e: &mut Engine) -> (u32, u32) {
+        let mut table = vec![0u32; 8];
+        table[0x14 / 4] = 0x00ea_0014;
+        table[0x18 / 4] = 0x00ea_0018;
+        e.put_vtable(0x00dd_0000, &table);
+        e.register(0x00ea_0014, |_, a| a[0].into_ret());
+        e.register(0x00ea_0018, |_, _| Ret::default());
+        let make = |e: &mut Engine| {
+            let o = e.mem.alloc(0x220);
+            for i in 0..10 {
+                e.mem.set_u32(o + 0x24 + 0x20 * i, 0x00dd_0000);
+            }
+            o
+        };
+        (make(e), make(e))
+    }
+
+    #[test]
+    fn fn_00504cc0_copies_entries_names_form_and_block() {
+        let mut e = Engine::new();
+        let (this, other) = entry_objects(&mut e);
+        e.register(DYNAMIC_CAST, |_, a| a[0].into_ret());
+        for address in [0x0048_51b0, 0x0048_9100, 0x004f_15a0] {
+            e.register(address, |_, _| Ret::default());
+        }
+        e.register(NAME_TEXT, |_, a| (a[0] + 1).into_ret());
+        e.register(LOOKUP_FORM, |_, a| a[0].into_ret());
+        e.register(0x0084_e3a0, |_, a| (a[0] + 2).into_ret());
+        e.register(0x0040_1170, |_, _| 0x41u8.into_ret());
+        e.mem.set_u32(other + 0x218, 0x700);
+        // The block at +0x1E8 reaches +0x220: its word 12 is the form id at +0x218.
+        for word in 0..0xc {
+            e.mem.set_u32(other + 0x1e8 + 4 * word, 0x100 + word);
+        }
+        e.call_log = Some(vec![]);
+        e.call(0x0050_4cc0, &args![this, other]);
+        let set = calls_to(&e, 0x00ea_0018);
+        assert_eq!(set.len(), 10);
+        assert_eq!(set[3], vec![this + 0x24 + 0x60, other + 0x24 + 0x60]);
+        let names = calls_to(&e, 0x0048_9100);
+        assert_eq!(
+            names[10],
+            vec![this + 0x164 + 0x78, other + 0x164 + 0x78 + 1]
+        );
+        assert_eq!(calls_to(&e, 0x0084_e3a0), vec![vec![0x700]]);
+        assert_eq!(e.mem.u32(this + 0x218), 0x700);
+        assert_eq!(e.mem.u32(this + 0x1e8 + 0x2c), 0x10b);
+        assert_eq!(calls_to(&e, 0x004f_15a0), vec![vec![this, 0x41]]);
+        e.mem.set_u32(other + 0x218, 0);
+        e.call_log = Some(vec![]);
+        e.call(0x0050_4cc0, &args![this, other]);
+        assert!(calls_to(&e, 0x0084_e3a0).is_empty());
+        assert_eq!(e.mem.u32(this + 0x218), 0);
+    }
+
+    #[test]
+    fn fn_00504e00_addresses_the_entry() {
+        let mut e = Engine::new();
+        assert_eq!(e.call(0x0050_4e00, &args![0x1000u32, 3u32]).u32(), 0x1084);
+    }
+
+    #[test]
+    fn fn_00504e20_addresses_the_sound() {
+        let mut e = Engine::new();
+        assert_eq!(e.call(0x0050_4e20, &args![0x1000u32, 2u32]).u32(), 0x117c);
+    }
+
+    #[test]
+    fn fn_00504e40_looks_up_the_form() {
+        let mut e = Engine::new();
+        e.register(LOOKUP_FORM, |_, a| (a[0] + 1).into_ret());
+        let this = e.mem.alloc(0x220);
+        e.mem.set_u32(this + 0x218, 0x700);
+        assert_eq!(e.call(0x0050_4e40, &args![this]).u32(), 0x701);
+    }
+
+    #[test]
+    fn fn_00504e80_compares_everything() {
+        let mut e = Engine::new();
+        let (this, other) = entry_objects(&mut e);
+        e.register(DYNAMIC_CAST, |_, a| a[0].into_ret());
+        e.register(0x0048_5270, |_, _| false.into_ret());
+        e.register(NAME_TEXT, |_, a| a[0].into_ret());
+        e.register(STRING_COMPARE, |_, _| Ret::default());
+        e.register(LOOKUP_FORM, |_, a| a[0].into_ret());
+        e.register(MEMCMP, |_, _| Ret::default());
+        e.call_log = Some(vec![]);
+        assert!(!e.call(0x0050_4e80, &args![this, other]).bool());
+        assert_eq!(
+            calls_to(&e, STRING_COMPARE)[0],
+            vec![this + 0x164, other + 0x164]
+        );
+        assert_eq!(
+            calls_to(&e, MEMCMP),
+            vec![vec![this + 0x1e8, other + 0x1e8, 0x38]]
+        );
+        e.mem.set_u32(this + 0x218, 5);
+        assert!(e.call(0x0050_4e80, &args![this, other]).bool());
+        e.mem.set_u32(this + 0x218, 0);
+        e.register(STRING_COMPARE, |_, _| 1u32.into_ret());
+        assert!(e.call(0x0050_4e80, &args![this, other]).bool());
+        e.register(0x0048_5270, |_, _| true.into_ret());
+        assert!(e.call(0x0050_4e80, &args![this, other]).bool());
+        e.register(DYNAMIC_CAST, |_, _| Ret::default());
+        assert!(e.call(0x0050_4e80, &args![this, other]).bool());
+    }
+
+    #[test]
+    fn fn_005053c0_saves_three_chunks_swapping_around_them() {
+        let mut e = Engine::new();
+        for address in [0x0048_55a0, 0x0048_5990, 0x0048_5680, SWAP_WORD] {
+            e.register(address, |_, _| Ret::default());
+        }
+        e.register(SAVE_NEEDS_SWAP, |_, _| true.into_ret());
+        e.call_log = Some(vec![]);
+        e.call(0x0050_53c0, &args![0x1000u32]);
+        assert_eq!(
+            calls_to(&e, 0x0048_5990),
+            vec![
+                vec![0x4454_5343, 0x1058, 0x5c],
+                vec![0x4441_5343, 0x10b4, 0x54],
+                vec![0x4453_5343, 0x1018, 0x40]
+            ]
+        );
+        assert_eq!(calls_to(&e, SWAP_WORD).len(), 2 * (17 + 21 + 15));
+        e.register(SAVE_NEEDS_SWAP, |_, _| false.into_ret());
+        e.call_log = Some(vec![]);
+        e.call(0x0050_53c0, &args![0x1000u32]);
+        assert!(calls_to(&e, SWAP_WORD).is_empty());
+        assert_eq!(calls_to(&e, 0x0048_5680), vec![vec![0x1000]]);
+    }
+
+    #[test]
+    fn fn_005054b0_copies_the_three_blocks() {
+        let mut e = Engine::new();
+        e.register(DYNAMIC_CAST, |_, a| a[0].into_ret());
+        e.register(0x0048_51b0, |_, _| Ret::default());
+        e.register(DATA_58_0043C490, |_, a| (a[0] + 0x58).into_ret());
+        e.register(DATA_B4_006AB360, |_, a| (a[0] + 0xb4).into_ret());
+        e.register(DATA_18_00500940, |_, a| (a[0] + 0x18).into_ret());
+        e.register(MEMCPY, |_, a| a[0].into_ret());
+        e.call_log = Some(vec![]);
+        e.call(0x0050_54b0, &args![0x1000u32, 0x2000u32]);
+        assert_eq!(
+            calls_to(&e, MEMCPY),
+            vec![
+                vec![0x1058, 0x2058, 0x5c],
+                vec![0x10b4, 0x20b4, 0x54],
+                vec![0x1018, 0x2018, 0x40]
+            ]
+        );
+    }
+
+    #[test]
+    fn fn_00505550_compares_the_three_blocks() {
+        let mut e = Engine::new();
+        e.register(DYNAMIC_CAST, |_, a| a[0].into_ret());
+        e.register(0x0048_5270, |_, _| false.into_ret());
+        e.register(DATA_58_0043C490, |_, a| (a[0] + 0x58).into_ret());
+        e.register(DATA_B4_006AB360, |_, a| (a[0] + 0xb4).into_ret());
+        e.register(DATA_18_00500940, |_, a| (a[0] + 0x18).into_ret());
+        e.register(MEMCMP, |_, a| u32::from(a[2] == 0x40).into_ret());
+        e.call_log = Some(vec![]);
+        assert!(e.call(0x0050_5550, &args![0x1000u32, 0x2000u32]).bool());
+        assert_eq!(
+            calls_to(&e, MEMCMP).last().unwrap(),
+            &vec![0x1018, 0x2018, 0x40]
+        );
+        e.register(MEMCMP, |_, _| Ret::default());
+        assert!(!e.call(0x0050_5550, &args![0x1000u32, 0x2000u32]).bool());
+        e.register(0x0048_5270, |_, _| true.into_ret());
+        assert!(e.call(0x0050_5550, &args![0x1000u32, 0x2000u32]).bool());
+        e.register(DYNAMIC_CAST, |_, _| Ret::default());
+        assert!(e.call(0x0050_5550, &args![0x1000u32, 0x2000u32]).bool());
+    }
+
+    fn swapped(e: &mut Engine, address: u32) -> Vec<u32> {
+        e.register(SWAP_WORD, |_, _| Ret::default());
+        e.call_log = Some(vec![]);
+        e.call(address, &args![0x1000u32]);
+        calls_to(e, SWAP_WORD)
+            .iter()
+            .map(|c| {
+                assert_eq!(c[1], 0);
+                c[0] - 0x1000
+            })
+            .collect()
+    }
+
+    #[test]
+    fn fn_00505610_swaps_the_cssd_words() {
+        let mut e = Engine::new();
+        assert_eq!(
+            swapped(&mut e, 0x0050_5610),
+            vec![0, 4, 8, 0xc, 0x10, 0x14, 0x18, 0x1c, 0x20, 0x2c, 0x24, 0x30, 0x34, 0x38, 0x3c]
+        );
+    }
+
+    #[test]
+    fn fn_005057a0_swaps_the_csad_words() {
+        let mut e = Engine::new();
+        let offsets = swapped(&mut e, 0x0050_57a0);
+        assert_eq!(offsets.len(), 21);
+        assert_eq!(offsets[16..], [0x40, 0x48, 0x44, 0x4c, 0x50]);
+    }
+
+    #[test]
+    fn fn_005059c0_swaps_the_cstd_words() {
+        let mut e = Engine::new();
+        let offsets = swapped(&mut e, 0x0050_59c0);
+        assert_eq!(offsets.len(), 17);
+        assert_eq!(
+            (offsets[0], offsets[8], offsets[15], offsets[16]),
+            (4, 0x28, 0x58, 0x50)
+        );
+    }
+
+    #[test]
+    fn fn_00505b80_dispatches_by_kind() {
+        let mut e = Engine::new();
+        e.register(0x0073_cb80, |_, _| 1u8.into_ret());
+        e.register(0x006a_9560, |_, _| 4u8.into_ret());
+        e.register(0x009e_8670, |_, _| 5u8.into_ret());
+        let this = e.mem.alloc(0xa0);
+        e.mem.set_u8(this + 0x99, 2);
+        e.mem.set_u8(this + 0x9a, 3);
+        let answers: Vec<u8> = (0x5bu32..0x62)
+            .map(|kind| e.call(0x0050_5b80, &args![this, kind]).u8())
+            .collect();
+        assert_eq!(answers, vec![0, 1, 2, 3, 4, 5, 0]);
+    }
+
+    #[test]
+    fn fn_00505c20_reads_the_byte() {
+        let mut e = Engine::new();
+        let this = e.mem.alloc(0xa0);
+        e.mem.set_u8(this + 0x9a, 0x77);
+        assert_eq!(e.call(0x0050_5c20, &args![this]).u8(), 0x77);
     }
 }

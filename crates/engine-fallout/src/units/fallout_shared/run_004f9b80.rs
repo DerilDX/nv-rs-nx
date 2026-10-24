@@ -135,6 +135,53 @@ pub fn fn_004f9ef0(e: &mut Engine, this: Ptr) {
     e.call(0x0048_8ff0, &args![this.addr() + 8]);
 }
 
+// Translated from 004f9b80 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Copies from `other` (`RET 4`) when it casts (`__RTDynamicCast` from `01183028` to
+/// `01189c78`): the base copy `0051af50`, then the cast object's word at +0xAC
+/// (`004f9bf0`) to +0xAC and what `009ee040` gives for it to +0xB0.
+pub fn fn_004f9b80(e: &mut Engine, this: Ptr, other: u32) {
+    let base = this.addr();
+    let cast = e
+        .call(
+            0x00ec_43fb,
+            &args![other, 0u32, 0x0118_3028u32, 0x0118_9c78u32, 0u32],
+        )
+        .u32();
+    if cast == 0 {
+        return;
+    }
+    e.call(0x0051_af50, &args![this, cast]);
+    let word = fn_004f9bf0(e, Ptr::new(cast));
+    e.mem.set_u32(base + 0xac, word);
+    let started = e.call(0x009e_e040, &args![cast]).u32();
+    e.mem.set_u32(base + 0xb0, started);
+}
+
+// Translated from 004f9c10 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Whether `other` differs (`RET 4`, `AL`): true unless it casts (`__RTDynamicCast` from
+/// `01183028` to `01189c78`), the base comparison `0051afb0` finds no difference, and its
+/// word at +0xAC (`004f9bf0`) and `009ee040`'s value equal +0xAC and +0xB0.
+pub fn fn_004f9c10(e: &mut Engine, this: Ptr, other: u32) -> bool {
+    let base = this.addr();
+    let cast = e
+        .call(
+            0x00ec_43fb,
+            &args![other, 0u32, 0x0118_3028u32, 0x0118_9c78u32, 0u32],
+        )
+        .u32();
+    if cast == 0 {
+        return true;
+    }
+    if e.call(0x0051_afb0, &args![this, cast]).bool() {
+        return true;
+    }
+    if e.mem.u32(base + 0xac) != fn_004f9bf0(e, Ptr::new(cast)) {
+        return true;
+    }
+    let started = e.call(0x009e_e040, &args![cast]).u32();
+    e.mem.u32(base + 0xb0) != started
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -150,6 +197,8 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x004f_9d90, fn_004f9d90(Ptr) -> Ptr),
         entry!(0x004f_9d60, fn_004f9d60(Ptr, u32) -> Ptr),
         entry!(0x004f_9ec0, fn_004f9ec0(Ptr, u32) -> Ptr),
+        entry!(0x004f_9b80, fn_004f9b80(Ptr, u32)),
+        entry!(0x004f_9c10, fn_004f9c10(Ptr, u32) -> bool),
     ]
 }
 
@@ -387,5 +436,70 @@ mod b028_tests {
             log[2..],
             [(0x0046_ffb0, vec![this + 0x1c]), (0x0048_3630, vec![this])]
         );
+    }
+}
+
+#[cfg(test)]
+mod n039_tests {
+    use super::*;
+
+    fn calls_to(e: &Engine, callee: u32) -> Vec<Vec<u32>> {
+        e.call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|(address, _)| *address == callee)
+            .map(|(_, words)| words.clone())
+            .collect()
+    }
+
+    #[test]
+    fn fn_004f9b80_copies_from_the_cast_object() {
+        let mut e = Engine::new();
+        let other = e.mem.alloc(0xc0);
+        e.mem.set_u32(other + 0xac, 0x55);
+        e.register(0x00ec_43fb, |_, a| a[0].into_ret());
+        e.register(0x0051_af50, |_, _| Ret::default());
+        e.register(0x009e_e040, |_, _| 0x66u32.into_ret());
+        let this = e.mem.alloc(0xc0);
+        e.call_log = Some(vec![]);
+        e.call(0x004f_9b80, &args![this, other]);
+        assert_eq!(calls_to(&e, 0x0051_af50), vec![vec![this, other]]);
+        assert_eq!(
+            (e.mem.u32(this + 0xac), e.mem.u32(this + 0xb0)),
+            (0x55, 0x66)
+        );
+        assert_eq!(
+            calls_to(&e, 0x00ec_43fb)[0],
+            vec![other, 0, 0x0118_3028, 0x0118_9c78, 0]
+        );
+        e.register(0x00ec_43fb, |_, _| Ret::default());
+        let fresh = e.mem.alloc(0xc0);
+        e.call(0x004f_9b80, &args![fresh, other]);
+        assert_eq!(e.mem.u32(fresh + 0xac), 0);
+    }
+
+    #[test]
+    fn fn_004f9c10_reports_each_difference() {
+        let mut e = Engine::new();
+        let other = e.mem.alloc(0xc0);
+        e.mem.set_u32(other + 0xac, 0x55);
+        e.register(0x00ec_43fb, |_, a| a[0].into_ret());
+        e.register(0x0051_afb0, |_, _| false.into_ret());
+        e.register(0x009e_e040, |_, _| 0x66u32.into_ret());
+        let this = e.mem.alloc(0xc0);
+        e.mem.set_u32(this + 0xac, 0x55);
+        e.mem.set_u32(this + 0xb0, 0x66);
+        assert!(!e.call(0x004f_9c10, &args![this, other]).bool());
+        e.mem.set_u32(this + 0xb0, 0x67);
+        assert!(e.call(0x004f_9c10, &args![this, other]).bool());
+        e.mem.set_u32(this + 0xb0, 0x66);
+        e.mem.set_u32(this + 0xac, 0x56);
+        assert!(e.call(0x004f_9c10, &args![this, other]).bool());
+        e.mem.set_u32(this + 0xac, 0x55);
+        e.register(0x0051_afb0, |_, _| true.into_ret());
+        assert!(e.call(0x004f_9c10, &args![this, other]).bool());
+        e.register(0x00ec_43fb, |_, _| Ret::default());
+        assert!(e.call(0x004f_9c10, &args![this, other]).bool());
     }
 }

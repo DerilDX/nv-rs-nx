@@ -115,7 +115,7 @@ pub fn middle_high_process_get_radiation_magic_delta(e: &mut Engine, this: Ptr) 
 // Translated from 008d89e0 (decompiled, FalloutNV.exe 1.4.0.525)
 /// `MiddleHighProcess::SetRadiationWaterDelta` (Xbox PDB) stores its argument in `fRadiationWaterDelta` at +0x23c.
 pub fn middle_high_process_set_radiation_water_delta(e: &mut Engine, this: Ptr, value: f32) {
-    e.mem.set_f32(this.addr() + 0x23c, value);
+    e.mem.set_f32(this.addr() + 0x23c, x87_quiet(value));
 }
 
 // Translated from 008d8a00 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -127,7 +127,7 @@ pub fn middle_high_process_get_radiation_water_delta(e: &mut Engine, this: Ptr) 
 // Translated from 008d8a20 (decompiled, FalloutNV.exe 1.4.0.525)
 /// `MiddleHighProcess::SetRadiationDelta` (Xbox PDB) stores its argument in `fRadiationDelta` at +0x234.
 pub fn middle_high_process_set_radiation_delta(e: &mut Engine, this: Ptr, value: f32) {
-    e.mem.set_f32(this.addr() + 0x234, value);
+    e.mem.set_f32(this.addr() + 0x234, x87_quiet(value));
 }
 
 // Translated from 008d8a40 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -388,7 +388,7 @@ pub fn high_process_get_sound_delay(e: &mut Engine, this: Ptr) -> f32 {
 // Translated from 008d8f70 (decompiled, FalloutNV.exe 1.4.0.525)
 /// `HighProcess::SetSoundDelay` (Xbox PDB) stores its argument in `fSoundDelay` at +0x310.
 pub fn high_process_set_sound_delay(e: &mut Engine, this: Ptr, value: f32) {
-    e.mem.set_f32(this.addr() + 0x310, value);
+    e.mem.set_f32(this.addr() + 0x310, x87_quiet(value));
 }
 
 // Translated from 008d8f90 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -400,7 +400,7 @@ pub fn high_process_get_greeting_timer(e: &mut Engine, this: Ptr) -> f32 {
 // Translated from 008d8fb0 (decompiled, FalloutNV.exe 1.4.0.525)
 /// `HighProcess::SetGreetingTimer` (Xbox PDB) stores its argument in `fGreetingTimer` at +0x330.
 pub fn high_process_set_greeting_timer(e: &mut Engine, this: Ptr, value: f32) {
-    e.mem.set_f32(this.addr() + 0x330, value);
+    e.mem.set_f32(this.addr() + 0x330, x87_quiet(value));
 }
 
 // Translated from 008d8fd0 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -424,7 +424,7 @@ pub fn high_process_get_idle_timer(e: &mut Engine, this: Ptr) -> f32 {
 // Translated from 008d9030 (decompiled, FalloutNV.exe 1.4.0.525)
 /// `HighProcess::SetIdleTimer` (Xbox PDB) stores its argument in `fIdleTimer` at +0x334.
 pub fn high_process_set_idle_timer(e: &mut Engine, this: Ptr, value: f32) {
-    e.mem.set_f32(this.addr() + 0x334, value);
+    e.mem.set_f32(this.addr() + 0x334, x87_quiet(value));
 }
 
 // Translated from 008d9050 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -448,7 +448,7 @@ pub fn high_process_get_aware_player_timer(e: &mut Engine, this: Ptr) -> f32 {
 // Translated from 008d90e0 (decompiled, FalloutNV.exe 1.4.0.525)
 /// `HighProcess::SetBreathTimer` (Xbox PDB) stores its argument in `fBreathTimer` at +0x33c.
 pub fn high_process_set_breath_timer(e: &mut Engine, this: Ptr, value: f32) {
-    e.mem.set_f32(this.addr() + 0x33c, value);
+    e.mem.set_f32(this.addr() + 0x33c, x87_quiet(value));
 }
 
 // Translated from 008d9100 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -460,7 +460,7 @@ pub fn high_process_get_breath_timer(e: &mut Engine, this: Ptr) -> f32 {
 // Translated from 008d9120 (decompiled, FalloutNV.exe 1.4.0.525)
 /// `HighProcess::SetPackageEndTimerValue` (Xbox PDB) stores its argument in `fScriptPackageEndTime` at +0x378.
 pub fn high_process_set_package_end_timer_value(e: &mut Engine, this: Ptr, value: f32) {
-    e.mem.set_f32(this.addr() + 0x378, value);
+    e.mem.set_f32(this.addr() + 0x378, x87_quiet(value));
 }
 
 // Translated from 008d9140 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -631,7 +631,7 @@ pub fn high_process_get_social_talk_timer(e: &mut Engine, this: Ptr) -> f32 {
 // Translated from 008d9340 (decompiled, FalloutNV.exe 1.4.0.525)
 /// `HighProcess::SetSocialTalkTimer` (Xbox PDB) stores its argument in `fCheckToTalkTimer` at +0x2c8.
 pub fn high_process_set_social_talk_timer(e: &mut Engine, this: Ptr, value: f32) {
-    e.mem.set_f32(this.addr() + 0x2c8, value);
+    e.mem.set_f32(this.addr() + 0x2c8, x87_quiet(value));
 }
 
 // Translated from 008d9390 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -679,7 +679,7 @@ pub fn high_process_set_finishing_combat_package(e: &mut Engine, this: Ptr, valu
 // Translated from 008d9490 (decompiled, FalloutNV.exe 1.4.0.525)
 /// `HighProcess::SetDetectionTimer` (Xbox PDB) stores its argument in `fDetectionTimer` at +0x2f8.
 pub fn high_process_set_detection_timer(e: &mut Engine, this: Ptr, value: f32) {
-    e.mem.set_f32(this.addr() + 0x2f8, value);
+    e.mem.set_f32(this.addr() + 0x2f8, x87_quiet(value));
 }
 
 // Translated from 008d94b0 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -691,7 +691,7 @@ pub fn high_process_get_actor_light_level(e: &mut Engine, this: Ptr) -> f32 {
 // Translated from 008d94d0 (decompiled, FalloutNV.exe 1.4.0.525)
 /// `HighProcess::SetActorLightLevel` (Xbox PDB) stores its argument in `fLightLevel` at +0x3c4.
 pub fn high_process_set_actor_light_level(e: &mut Engine, this: Ptr, value: f32) {
-    e.mem.set_f32(this.addr() + 0x3c4, value);
+    e.mem.set_f32(this.addr() + 0x3c4, x87_quiet(value));
 }
 
 // Translated from 008d94f0 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -703,7 +703,7 @@ pub fn high_process_get_light_level_timer(e: &mut Engine, this: Ptr) -> f32 {
 // Translated from 008d9510 (decompiled, FalloutNV.exe 1.4.0.525)
 /// `HighProcess::SetLightLevelTimer` (Xbox PDB) stores its argument in `fLightLevelTimer` at +0x3c8.
 pub fn high_process_set_light_level_timer(e: &mut Engine, this: Ptr, value: f32) {
-    e.mem.set_f32(this.addr() + 0x3c8, value);
+    e.mem.set_f32(this.addr() + 0x3c8, x87_quiet(value));
 }
 
 // Translated from 008d9530 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -781,7 +781,7 @@ pub fn high_process_get_head_track_change_timer(e: &mut Engine, this: Ptr) -> f3
 // Translated from 008d9760 (decompiled, FalloutNV.exe 1.4.0.525)
 /// `HighProcess::SetHeadTrackChangeTimer` (Xbox PDB) stores its argument in `fHeadTrackTargetTimer` at +0x418.
 pub fn high_process_set_head_track_change_timer(e: &mut Engine, this: Ptr, value: f32) {
-    e.mem.set_f32(this.addr() + 0x418, value);
+    e.mem.set_f32(this.addr() + 0x418, x87_quiet(value));
 }
 
 // Translated from 008d9360 (decompiled, FalloutNV.exe 1.4.0.525)

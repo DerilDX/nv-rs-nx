@@ -142,9 +142,87 @@ pub fn fn_0044a240(e: &mut Engine, this: Ptr, count: u32) -> bool {
     true
 }
 
+/// `std::logic_error`'s vtable (`010173e8`; RTTI `std::logic_error`, read
+/// through its locator) and `std::length_error`'s (`010173dc`).
+const LOGIC_ERROR_VTABLE: u32 = 0x0101_73e8;
+const LENGTH_ERROR_VTABLE: u32 = 0x0101_73dc;
+/// `00ec78e0` (`thiscall`, no stack word): the `std::exception` base
+/// constructor.
+const EXCEPTION_CONSTRUCT: u32 = 0x00ec_78e0;
+/// `00ec7944` (`thiscall`, `RET 4`): the `std::exception` copy constructor.
+const EXCEPTION_COPY: u32 = 0x00ec_7944;
+/// `std::exception::~exception` (engine map, `00ec79a1`, `thiscall`).
+const EXCEPTION_DESTRUCT: u32 = 0x00ec_79a1;
+/// `0044a500` (`thiscall`, `RET 4`): copies a message string into the
+/// string at `this`.
+const MESSAGE_COPY: u32 = 0x0044_a500;
+/// `0044a540` (`thiscall`, no stack word): the message string's destructor.
+const MESSAGE_DESTRUCT: u32 = 0x0044_a540;
+
+// Translated from 0044a2e0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `std::length_error`'s constructor from a message (`thiscall`, `RET 4`;
+/// the class from the vtable's RTTI): the `std::logic_error` constructor
+/// `0044a310` with the message, then the vtable `010173dc`. Returns `this`.
+pub fn fn_0044a2e0(e: &mut Engine, this: Ptr, message: u32) -> Ptr {
+    fn_0044a310(e, this, message);
+    e.mem.set_u32(this.addr(), LENGTH_ERROR_VTABLE);
+    this
+}
+
+// Translated from 0044a310 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 0044a310 - the exception-unwinding frame (FS:[0]) that destroys the base on a throw is not translated.
+/// `std::logic_error`'s constructor from a message (`thiscall`, `RET 4`):
+/// the `std::exception` base (`00ec78e0`), the vtable `010173e8`, then the
+/// message copied into the string at +0xc (`0044a500`). Returns `this`.
+pub fn fn_0044a310(e: &mut Engine, this: Ptr, message: u32) -> Ptr {
+    e.call(EXCEPTION_CONSTRUCT, &args![this]);
+    e.mem.set_u32(this.addr(), LOGIC_ERROR_VTABLE);
+    e.call(MESSAGE_COPY, &args![this.addr().wrapping_add(0xc), message]);
+    this
+}
+
+// Translated from 0044a3d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `std::logic_error`'s destructor body (no stack word): the vtable
+/// `010173e8`, the message string's destructor (`0044a540` on +0xc), then
+/// `std::exception::~exception` (`00ec79a1`).
+pub fn fn_0044a3d0(e: &mut Engine, this: Ptr) {
+    e.mem.set_u32(this.addr(), LOGIC_ERROR_VTABLE);
+    e.call(MESSAGE_DESTRUCT, &args![this.addr().wrapping_add(0xc)]);
+    e.call(EXCEPTION_DESTRUCT, &args![this]);
+}
+
+// Translated from 0044a400 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `std::length_error`'s destructor body (no stack word): the vtable
+/// `010173dc`, then the `std::logic_error` one (`0044a3d0`).
+pub fn fn_0044a400(e: &mut Engine, this: Ptr) {
+    e.mem.set_u32(this.addr(), LENGTH_ERROR_VTABLE);
+    fn_0044a3d0(e, this);
+}
+
+// Translated from 0044a450 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 0044a450 - the exception-unwinding frame (FS:[0]) that destroys the base on a throw is not translated.
+/// `std::logic_error`'s copy constructor (`thiscall`, `RET 4`): the
+/// `std::exception` copy (`00ec7944`), the vtable `010173e8`, then the
+/// other's message (+0xc) copied into this one's (`0044a500`). Returns
+/// `this`.
+pub fn fn_0044a450(e: &mut Engine, this: Ptr, other: u32) -> Ptr {
+    e.call(EXCEPTION_COPY, &args![this, other]);
+    e.mem.set_u32(this.addr(), LOGIC_ERROR_VTABLE);
+    e.call(
+        MESSAGE_COPY,
+        &args![this.addr().wrapping_add(0xc), other.wrapping_add(0xc)],
+    );
+    this
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x0044_a2e0, fn_0044a2e0(Ptr, u32) -> Ptr),
+        entry!(0x0044_a310, fn_0044a310(Ptr, u32) -> Ptr),
+        entry!(0x0044_a3d0, fn_0044a3d0(Ptr)),
+        entry!(0x0044_a400, fn_0044a400(Ptr)),
+        entry!(0x0044_a450, fn_0044a450(Ptr, u32) -> Ptr),
         entry!(0x0044_a380, fn_0044a380(Ptr) -> Ptr),
         entry!(0x0044_a3a0, fn_0044a3a0(Ptr, u32) -> Ptr),
         entry!(0x0044_a420, fn_0044a420(Ptr, u32) -> Ptr),
@@ -324,5 +402,94 @@ mod b014_tests {
         assert_eq!(calls(&e, LENGTH_ERROR).len(), 1);
         assert!(calls(&e, ALLOCATE).is_empty());
         assert_eq!(e.mem.u32(this + FIRST), 0);
+    }
+}
+
+#[cfg(test)]
+mod n038_tests {
+    use super::*;
+
+    type Log = Vec<(u32, Vec<u32>)>;
+
+    fn engine() -> Engine {
+        let mut e = Engine::new();
+        for addr in [
+            EXCEPTION_CONSTRUCT,
+            EXCEPTION_COPY,
+            EXCEPTION_DESTRUCT,
+            MESSAGE_COPY,
+            MESSAGE_DESTRUCT,
+        ] {
+            e.register(addr, |_, _| Ret::default());
+        }
+        e
+    }
+
+    fn run(e: &mut Engine, addr: u32, words: &[u32]) -> (Ret, Log) {
+        e.call_log = Some(vec![]);
+        let result = e.call(addr, words);
+        let log = e
+            .call_log
+            .take()
+            .unwrap()
+            .into_iter()
+            .filter(|(a, _)| *a != addr)
+            .collect();
+        (result, log)
+    }
+
+    #[test]
+    fn at_0044a310_and_0044a2e0_construct_from_a_message() {
+        let mut e = engine();
+        let this = e.mem.alloc(0x28);
+        let (result, log) = run(&mut e, 0x0044_a310, &[this, 0x5000]);
+        assert_eq!(result.u32(), this);
+        assert_eq!(e.mem.u32(this), LOGIC_ERROR_VTABLE);
+        assert_eq!(
+            log,
+            vec![
+                (EXCEPTION_CONSTRUCT, vec![this]),
+                (MESSAGE_COPY, vec![this + 0xc, 0x5000]),
+            ]
+        );
+        let (result, log) = run(&mut e, 0x0044_a2e0, &[this, 0x5000]);
+        assert_eq!(result.u32(), this);
+        assert_eq!(e.mem.u32(this), LENGTH_ERROR_VTABLE);
+        assert_eq!(log.len(), 2);
+    }
+
+    #[test]
+    fn at_0044a3d0_and_0044a400_destroy() {
+        let mut e = engine();
+        let this = e.mem.alloc(0x28);
+        let (_, log) = run(&mut e, 0x0044_a400, &[this]);
+        assert_eq!(e.mem.u32(this), LOGIC_ERROR_VTABLE);
+        assert_eq!(
+            log,
+            vec![
+                (MESSAGE_DESTRUCT, vec![this + 0xc]),
+                (EXCEPTION_DESTRUCT, vec![this]),
+            ]
+        );
+        e.mem.set_u32(this, 0);
+        let (_, log) = run(&mut e, 0x0044_a3d0, &[this]);
+        assert_eq!(e.mem.u32(this), LOGIC_ERROR_VTABLE);
+        assert_eq!(log.len(), 2);
+    }
+
+    #[test]
+    fn at_0044a450_copies() {
+        let mut e = engine();
+        let this = e.mem.alloc(0x28);
+        let (result, log) = run(&mut e, 0x0044_a450, &[this, 0x5000]);
+        assert_eq!(result.u32(), this);
+        assert_eq!(e.mem.u32(this), LOGIC_ERROR_VTABLE);
+        assert_eq!(
+            log,
+            vec![
+                (EXCEPTION_COPY, vec![this, 0x5000]),
+                (MESSAGE_COPY, vec![this + 0xc, 0x500c]),
+            ]
+        );
     }
 }

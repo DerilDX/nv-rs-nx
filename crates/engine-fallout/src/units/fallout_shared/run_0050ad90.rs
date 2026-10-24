@@ -460,6 +460,424 @@ pub fn fn_0050b4c0(e: &mut Engine, this: Ptr) {
     e.call(FORM_BASE_DESTRUCT, &args![this]);
 }
 
+/// The `LEVELED_OBJECT` the last `LVLO` chunk of a type-0x4C record added (`011c8f98`), which
+/// a following `COED` chunk gives its extra.
+const LAST_TYPE_4C_OBJECT: u32 = 0x011c_8f98;
+/// `__RTDynamicCast` (`00ec43fb`, cdecl: object, 0, from, to, 0).
+const DYNAMIC_CAST: u32 = 0x00ec_43fb;
+/// `TESForm::CopyAllComponents` and `TESForm::CompareAllComponents` (Xbox PDB).
+const COPY_ALL_COMPONENTS: u32 = 0x0048_51b0;
+const COMPARE_ALL_COMPONENTS: u32 = 0x0048_5270;
+/// `TESForm::StartForm` and `TESForm::CloseForm` (Xbox PDB).
+const START_FORM: u32 = 0x0048_55a0;
+const CLOSE_FORM: u32 = 0x0048_5680;
+/// The list walk: `00717e50` (the leveled list's first node), `006815c0` (the node, whose
+/// word +0 is its entry) and `00726070` (the next node).
+const LIST_HEAD: u32 = 0x0071_7e50;
+const NODE_ITEM: u32 = 0x0068_15c0;
+const NODE_NEXT: u32 = 0x0072_6070;
+/// `00487f50` (no arguments): a random word.
+const RANDOM_WORD: u32 = 0x0048_7f50;
+/// The form list `0050c000` and `0050c1d0` build: `operator new(8)` and the constructor
+/// `0096a2d0` (null when the allocation fails), `005ae3d0` adds the word at an address.
+const LIST_CONSTRUCT: u32 = 0x0096_a2d0;
+const LIST_ADD: u32 = 0x005a_e3d0;
+
+/// A cast of `other` from `01183028` to `to`, then `TESForm::CopyAllComponents` with `other`
+/// itself (not the cast pointer) when it casts.
+fn copy_if_cast(e: &mut Engine, this: Ptr, other: u32, to: u32) {
+    let cast = e
+        .call(DYNAMIC_CAST, &args![other, 0u32, 0x0118_3028u32, to, 0u32])
+        .u32();
+    if cast != 0 {
+        e.call(COPY_ALL_COMPONENTS, &args![this, other]);
+    }
+}
+
+/// True unless `other` casts from `01183028` to `to` and `TESForm::CompareAllComponents`
+/// with the cast pointer finds no difference.
+fn differs_unless_cast(e: &mut Engine, this: Ptr, other: u32, to: u32) -> bool {
+    let cast = e
+        .call(DYNAMIC_CAST, &args![other, 0u32, 0x0118_3028u32, to, 0u32])
+        .u32();
+    if cast == 0 {
+        return true;
+    }
+    e.call(COMPARE_ALL_COMPONENTS, &args![this, cast]).bool()
+}
+
+/// A new form list (`operator new(8)`, `0096a2d0`), or null when the allocation fails.
+fn new_form_list(e: &mut Engine) -> u32 {
+    let block = e.call(ALLOCATE, &args![8u32]).u32();
+    if block == 0 {
+        0
+    } else {
+        e.call(LIST_CONSTRUCT, &args![block]).u32()
+    }
+}
+
+// Translated from 0050b2e0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Copies the components (`RET 4`) of `other` itself when it casts to `01189c10`.
+pub fn fn_0050b2e0(e: &mut Engine, this: Ptr, other: u32) {
+    copy_if_cast(e, this, other, 0x0118_9c10);
+}
+
+// Translated from 0050b320 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Whether `other` differs (`RET 4`, `AL`): true unless it casts to `01189c10` and
+/// `TESForm::CompareAllComponents` finds no difference.
+pub fn fn_0050b320(e: &mut Engine, this: Ptr, other: u32) -> bool {
+    differs_unless_cast(e, this, other, 0x0118_9c10)
+}
+
+// Translated from 0050b390 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Loads a saved game's data (`RET 4`): `00484da0` on the form, then
+/// `TESLeveledList::LoadGame` (`00488d70`) on the leveled list at +0x30, both with `buffer`.
+pub fn fn_0050b390(e: &mut Engine, this: Ptr, buffer: u32) {
+    e.call(0x0048_4da0, &args![this, buffer]);
+    e.call(0x0048_8d70, &args![this.addr() + 0x30, buffer]);
+}
+
+// Translated from 0050b3c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `004534f0` on the form, then `00488f10` on the leveled list at +0x30, both with `buffer`
+/// (`RET 4`).
+pub fn fn_0050b3c0(e: &mut Engine, this: Ptr, buffer: u32) {
+    e.call(0x0045_34f0, &args![this, buffer]);
+    e.call(0x0048_8f10, &args![this.addr() + 0x30, buffer]);
+}
+
+// Translated from 0050b530 (decompiled, FalloutNV.exe 1.4.0.525)
+/// A form's save (`ECX` only): `TESForm::StartForm`, `00483710`, `00488400` on the leveled
+/// list at +0x30 and `TESForm::CloseForm`.
+pub fn fn_0050b530(e: &mut Engine, this: Ptr) {
+    e.call(START_FORM, &args![this]);
+    e.call(0x0048_3710, &args![this]);
+    e.call(0x0048_8400, &args![this.addr() + 0x30]);
+    e.call(CLOSE_FORM, &args![this]);
+}
+
+// Translated from 0050b800 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Copies the components (`RET 4`) of `other` itself when it casts to `01186f7c`.
+pub fn fn_0050b800(e: &mut Engine, this: Ptr, other: u32) {
+    copy_if_cast(e, this, other, 0x0118_6f7c);
+}
+
+// Translated from 0050b840 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Whether `other` differs (`RET 4`, `AL`): true unless it casts to `01186f7c` and
+/// `TESForm::CompareAllComponents` finds no difference.
+pub fn fn_0050b840(e: &mut Engine, this: Ptr, other: u32) -> bool {
+    differs_unless_cast(e, this, other, 0x0118_6f7c)
+}
+
+// Translated from 0050b9b0 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 0050b9b0 - the exception-unwinding frame (FS:[0]) is not translated.
+/// The type-0x4C leveled form's destructor body (`ECX`): the vtables `01028c5c` and
+/// `01028c38` (+0x30), then `00483710`, the leveled list's destructor body (`004876d0` on
+/// +0x30) and the base destructor `0050e9f0`.
+pub fn fn_0050b9b0(e: &mut Engine, this: Ptr) {
+    let base = this.addr();
+    e.mem.set_u32(base, 0x0102_8c5c);
+    e.mem.set_u32(base + 0x30, 0x0102_8c38);
+    e.call(0x0048_3710, &args![this]);
+    e.call(LEVELED_LIST_DESTRUCT, &args![base + 0x30]);
+    e.call(FORM_BASE_DESTRUCT, &args![this]);
+}
+
+// Translated from 0050ba30 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 0050ba30 - the SEH frame (FS:[0]) and the /GS stack cookie check (00ec408c) are not translated; the EDID buffer from __alloca_probe_16 (00ec5ec0) is a with_stack block.
+/// The type-0x4C leveled form's load (`thiscall`, `RET 4`: the file): false for another
+/// record type; otherwise `TESForm::LoadForm`, then each chunk: `EDID` (vtable +0x134),
+/// `OBND` (vtable +0xE0), `LVLD` (chance of none), `LVLF` (the flags byte at +0x3D, size 0),
+/// `LVLG` (the chance global), `LVLO`/`COED` (objects and their extras, the last object
+/// kept in `011c8f98`); at the end `00484ab0` with 0; true.
+pub fn fn_0050ba30(e: &mut Engine, this: Ptr, file: Ptr) -> bool {
+    if e.call(GET_TES_FORM, &args![file]).u8() != 0x4c {
+        return false;
+    }
+    e.call(LOAD_FORM, &args![this, file]);
+    loop {
+        let tag = e.call(GET_TES_CHUNK, &args![file]).u32();
+        match tag {
+            CHUNK_EDID => load_editor_id(e, this, file),
+            CHUNK_OBND => {
+                e.vcall(this.addr(), LOAD_BOUNDS_SLOT, &args![file]);
+            }
+            CHUNK_COED | CHUNK_LVLO => load_leveled_object(e, this, file, LAST_TYPE_4C_OBJECT),
+            CHUNK_LVLD => load_chance_none(e, this, file),
+            CHUNK_LVLF => {
+                e.call(
+                    GET_CHUNK_DATA_SIZED,
+                    &args![file, this.addr().wrapping_add(0x3d), 0u32],
+                );
+            }
+            CHUNK_LVLG => load_chance_global(e, this, file),
+            _ => {}
+        }
+        if !e.call(NEXT_CHUNK, &args![file]).bool() {
+            break;
+        }
+    }
+    e.call(FORM_SET_FLAG, &args![this, 0u32]);
+    true
+}
+
+// Translated from 0050bcd0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Copies the components (`RET 4`) of `other` itself when it casts to `01187818`.
+pub fn fn_0050bcd0(e: &mut Engine, this: Ptr, other: u32) {
+    copy_if_cast(e, this, other, 0x0118_7818);
+}
+
+// Translated from 0050bd10 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Whether `other` differs (`RET 4`, `AL`): true unless it casts to `01187818` and
+/// `TESForm::CompareAllComponents` finds no difference.
+pub fn fn_0050bd10(e: &mut Engine, this: Ptr, other: u32) -> bool {
+    differs_unless_cast(e, this, other, 0x0118_7818)
+}
+
+// Translated from 0050bd60 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Picks an entry of the leveled list at +0x30 (`RET 0x14`): clears `*form` and the 16-bit
+/// `*count`; when the chance of none (vtable slot 0x10 of the list, a byte) is above a
+/// random number modulo 100 (`00487f50`), nothing. Otherwise walks the entries
+/// (`00717e50`, each entry's level the 16-bit word at +6) while their level is at most
+/// `level` and, for entries whose form casts to `01183140`, the skill `0040ca30` gives for
+/// `004065e0` of its +0xC part is `owner`; the highest level seen (a level above the best
+/// one, kept unless `004877e0` says to use all) starts a new run, an equal or lower one
+/// lengthens it. Among the run a random one (`00487f50` modulo its length) is taken: its
+/// form (+0) and count (+4), and when the form casts to `01187818` and `recurse` is set,
+/// the pick of that list instead (recursively, the count multiplied).
+#[allow(clippy::too_many_arguments)]
+pub fn fn_0050bd60(
+    e: &mut Engine,
+    this: Ptr,
+    owner: u32,
+    level: u16,
+    form: u32,
+    count: u32,
+    recurse: u8,
+) {
+    let list = this.addr() + 0x30;
+    e.mem.set_u32(form, 0);
+    e.mem.set_u16(count, 0);
+    let chance = e.vcall(list, 0x10, &args![]).u8();
+    if i32::from(chance) > 0 {
+        let roll = e.call(RANDOM_WORD, &args![]).u32() % 100;
+        if (roll as i32) < i32::from(chance) {
+            return;
+        }
+    }
+    let mut run = 1u32;
+    let mut best_level = 0i32;
+    let mut best_node = 0u32;
+    let mut node = e.call(LIST_HEAD, &args![list]).u32();
+    while node != 0 {
+        let item = e.call(NODE_ITEM, &args![node]).u32();
+        if e.mem.u32(item) == 0 {
+            break;
+        }
+        let item = e.call(NODE_ITEM, &args![node]).u32();
+        let entry = e.mem.u32(item);
+        let entry_form = e.mem.u32(entry);
+        let cast = e
+            .call(
+                DYNAMIC_CAST,
+                &args![entry_form, 0u32, 0x0118_3028u32, 0x0118_3140u32, 0u32],
+            )
+            .u32();
+        let entry_level = i32::from(e.mem.u16(entry + 6));
+        if entry_level > i32::from(level) {
+            break;
+        }
+        if cast != 0 {
+            let skill = e.call(0x0040_65e0, &args![cast + 0xc]).u32();
+            if e.call(0x0040_ca30, &args![skill]).u32() != owner {
+                break;
+            }
+        }
+        if entry_level > best_level
+            && (best_level == 0 || !e.call(0x0048_77e0, &args![list]).bool())
+        {
+            run = 1;
+            best_node = node;
+            best_level = entry_level;
+        } else {
+            run = run.wrapping_add(1);
+        }
+        node = e.call(NODE_NEXT, &args![node]).u32();
+    }
+    if best_node == 0 {
+        return;
+    }
+    let mut steps = e.call(RANDOM_WORD, &args![]).u32() % run;
+    let mut node = best_node;
+    while steps != 0 {
+        node = e.call(NODE_NEXT, &args![node]).u32();
+        steps -= 1;
+        if node == 0 {
+            return;
+        }
+    }
+    let item = e.call(NODE_ITEM, &args![node]).u32();
+    let entry = e.mem.u32(item);
+    let mut picked = e.mem.u32(entry);
+    let mut number = e.mem.u16(entry + 4);
+    let entry_form = e.mem.u32(entry);
+    let nested = e
+        .call(
+            DYNAMIC_CAST,
+            &args![entry_form, 0u32, 0x0118_3028u32, 0x0118_7818u32, 0u32],
+        )
+        .u32();
+    if nested != 0 && recurse != 0 {
+        e.with_stack(8, |e, locals| {
+            let inner_form = locals.addr();
+            let inner_count = inner_form + 4;
+            e.mem.set_u32(inner_form, 0);
+            e.mem.set_u16(inner_count, 0);
+            fn_0050bd60(
+                e,
+                Ptr::new(nested),
+                owner,
+                level,
+                inner_form,
+                inner_count,
+                recurse,
+            );
+            picked = e.mem.u32(inner_form);
+            number = (u32::from(number).wrapping_mul(u32::from(e.mem.u16(inner_count)))) as u16;
+        });
+    }
+    e.mem.set_u32(form, picked);
+    e.mem.set_u16(count, number);
+}
+
+// Translated from 0050bf90 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The pick of `0050bd60` (`RET 8`, recursing) cast to `01183060`, or null.
+pub fn fn_0050bf90(e: &mut Engine, this: Ptr, owner: u32, level: u16) -> u32 {
+    e.with_stack(8, |e, locals| {
+        let form = locals.addr();
+        let count = form + 4;
+        e.mem.set_u32(form, 0);
+        e.mem.set_u16(count, 0);
+        fn_0050bd60(e, this, owner, level, form, count, 1);
+        let picked = e.mem.u32(form);
+        if picked == 0 {
+            return 0;
+        }
+        e.call(
+            DYNAMIC_CAST,
+            &args![picked, 0u32, 0x0118_3028u32, 0x0118_3060u32, 0u32],
+        )
+        .u32()
+    })
+}
+
+// Translated from 0050c000 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 0050c000 - the exception-unwinding frame (FS:[0]) is not translated.
+/// The forms the leveled list at +0x30 gives (`RET 8`), as a new form list (`005ae3d0`
+/// adds): when `004878a0` says to use all, every entry's form that casts to `01183060`, and
+/// for forms that cast to `01187818` their pick (`0050bf90`); otherwise this list's pick
+/// (`0050bf90`). Null when nothing was added to a list that was never made.
+pub fn fn_0050c000(e: &mut Engine, this: Ptr, owner: u32, level: u16) -> u32 {
+    let list = this.addr() + 0x30;
+    let mut result = 0u32;
+    e.with_stack(8, |e, locals| {
+        let added = locals.addr();
+        let single = added + 4;
+        if e.call(0x0048_78a0, &args![list]).bool() {
+            let mut node = e.call(LIST_HEAD, &args![list]).u32();
+            while node != 0 {
+                let item = e.call(NODE_ITEM, &args![node]).u32();
+                let entry = e.mem.u32(item);
+                if entry != 0 {
+                    if result == 0 {
+                        result = new_form_list(e);
+                    }
+                    let entry_form = e.mem.u32(entry);
+                    let form = e
+                        .call(
+                            DYNAMIC_CAST,
+                            &args![entry_form, 0u32, 0x0118_3028u32, 0x0118_3060u32, 0u32],
+                        )
+                        .u32();
+                    e.mem.set_u32(added, form);
+                    if form != 0 {
+                        e.call(LIST_ADD, &args![result, added]);
+                    } else {
+                        let entry_form = e.mem.u32(entry);
+                        let nested = e
+                            .call(
+                                DYNAMIC_CAST,
+                                &args![entry_form, 0u32, 0x0118_3028u32, 0x0118_7818u32, 0u32],
+                            )
+                            .u32();
+                        if nested != 0 {
+                            let picked = fn_0050bf90(e, Ptr::new(nested), owner, level);
+                            e.mem.set_u32(added, picked);
+                            if picked != 0 {
+                                e.call(LIST_ADD, &args![result, added]);
+                            }
+                        }
+                    }
+                }
+                node = e.call(NODE_NEXT, &args![node]).u32();
+            }
+        } else {
+            let picked = fn_0050bf90(e, this, owner, level);
+            e.mem.set_u32(single, picked);
+            if picked != 0 {
+                result = new_form_list(e);
+                e.call(LIST_ADD, &args![result, single]);
+            }
+        }
+    });
+    result
+}
+
+// Translated from 0050c1d0 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 0050c1d0 - the exception-unwinding frame (FS:[0]) is not translated.
+/// The forms of all six owners (`RET 4`): for each index 0..6, the owner `0040ca10` gives,
+/// `actor`'s +0xA4 part's vtable slot 8 for it (the level), the forms `0050c000` gives,
+/// each new one (`005f65d0` says whether it is in) added to one form list made on the first
+/// (`operator new(8)`, `0096a2d0`); each per-index list is emptied (`00470470`) and deleted
+/// (`004702f0` with 1). Answers the form list, or null.
+pub fn fn_0050c1d0(e: &mut Engine, this: Ptr, actor: u32) -> u32 {
+    let mut result = 0u32;
+    e.with_stack(4, |e, local| {
+        let entry_word = local.addr();
+        let mut index = 0i32;
+        while index < 6 {
+            let owner = e.call(0x0040_ca10, &args![index as u32]).u32();
+            let value = e.vcall(actor + 0xa4, 8, &args![owner]).u32();
+            let forms = fn_0050c000(e, this, index as u32, value as u16);
+            let mut node = forms;
+            while node != 0 {
+                let item = e.call(NODE_ITEM, &args![node]).u32();
+                let entry = e.mem.u32(item);
+                e.mem.set_u32(entry_word, entry);
+                if entry != 0 {
+                    let mut add = true;
+                    if result == 0 {
+                        result = new_form_list(e);
+                    } else {
+                        add = !e.call(0x005f_65d0, &args![result, entry_word]).bool();
+                    }
+                    if add {
+                        e.call(LIST_ADD, &args![result, entry_word]);
+                    }
+                }
+                node = e.call(NODE_NEXT, &args![node]).u32();
+            }
+            if forms != 0 {
+                e.call(0x0047_0470, &args![forms]);
+            }
+            if forms != 0 {
+                e.call(0x0047_02f0, &args![forms, 1u32]);
+            }
+            index += 1;
+        }
+    });
+    result
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -480,6 +898,21 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x0050_b890, fn_0050b890(Ptr)),
         entry!(0x0050_aed0, fn_0050aed0(Ptr)),
         entry!(0x0050_b4c0, fn_0050b4c0(Ptr)),
+        entry!(0x0050_b2e0, fn_0050b2e0(Ptr, u32)),
+        entry!(0x0050_b320, fn_0050b320(Ptr, u32) -> bool),
+        entry!(0x0050_b390, fn_0050b390(Ptr, u32)),
+        entry!(0x0050_b3c0, fn_0050b3c0(Ptr, u32)),
+        entry!(0x0050_b530, fn_0050b530(Ptr)),
+        entry!(0x0050_b800, fn_0050b800(Ptr, u32)),
+        entry!(0x0050_b840, fn_0050b840(Ptr, u32) -> bool),
+        entry!(0x0050_b9b0, fn_0050b9b0(Ptr)),
+        entry!(0x0050_ba30, fn_0050ba30(Ptr, Ptr) -> bool),
+        entry!(0x0050_bcd0, fn_0050bcd0(Ptr, u32)),
+        entry!(0x0050_bd10, fn_0050bd10(Ptr, u32) -> bool),
+        entry!(0x0050_bd60, fn_0050bd60(Ptr, u32, u16, u32, u32, u8)),
+        entry!(0x0050_bf90, fn_0050bf90(Ptr, u32, u16) -> u32),
+        entry!(0x0050_c000, fn_0050c000(Ptr, u32, u16) -> u32),
+        entry!(0x0050_c1d0, fn_0050c1d0(Ptr, u32) -> u32),
     ]
 }
 
@@ -926,5 +1359,343 @@ mod b025_tests {
         );
         assert_eq!(calls_to(&e, MODEL_DESTRUCT).len(), 0);
         assert_eq!(calls_to(&e, LEVELED_LIST_DESTRUCT), vec![vec![this + 0x30]]);
+    }
+}
+
+#[cfg(test)]
+mod n039_tests {
+    use super::*;
+
+    fn calls_to(e: &Engine, callee: u32) -> Vec<Vec<u32>> {
+        e.call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|(address, _)| *address == callee)
+            .map(|(_, words)| words.clone())
+            .collect()
+    }
+
+    fn cast_doubles(e: &mut Engine, casts: bool, differs: bool) {
+        if casts {
+            e.register(DYNAMIC_CAST, |_, a| (a[0] + 8).into_ret());
+        } else {
+            e.register(DYNAMIC_CAST, |_, _| Ret::default());
+        }
+        e.register(COPY_ALL_COMPONENTS, |_, _| Ret::default());
+        e.register_double(COMPARE_ALL_COMPONENTS, move |_, _| differs.into_ret());
+    }
+
+    fn check_copy(address: u32, to: u32) {
+        let mut e = Engine::new();
+        cast_doubles(&mut e, true, false);
+        e.call_log = Some(vec![]);
+        e.call(address, &args![0x1000u32, 0x2000u32]);
+        assert_eq!(
+            calls_to(&e, DYNAMIC_CAST),
+            vec![vec![0x2000, 0, 0x0118_3028, to, 0]]
+        );
+        assert_eq!(
+            calls_to(&e, COPY_ALL_COMPONENTS),
+            vec![vec![0x1000, 0x2000]]
+        );
+        cast_doubles(&mut e, false, false);
+        e.call_log = Some(vec![]);
+        e.call(address, &args![0x1000u32, 0x2000u32]);
+        assert!(calls_to(&e, COPY_ALL_COMPONENTS).is_empty());
+    }
+
+    fn check_compare(address: u32, to: u32) {
+        let mut e = Engine::new();
+        cast_doubles(&mut e, true, false);
+        e.call_log = Some(vec![]);
+        assert!(!e.call(address, &args![0x1000u32, 0x2000u32]).bool());
+        assert_eq!(calls_to(&e, DYNAMIC_CAST)[0][3], to);
+        assert_eq!(
+            calls_to(&e, COMPARE_ALL_COMPONENTS),
+            vec![vec![0x1000, 0x2008]]
+        );
+        cast_doubles(&mut e, true, true);
+        assert!(e.call(address, &args![0x1000u32, 0x2000u32]).bool());
+        cast_doubles(&mut e, false, false);
+        assert!(e.call(address, &args![0x1000u32, 0x2000u32]).bool());
+    }
+
+    #[test]
+    fn fn_0050b2e0_copies_the_uncast_form() {
+        check_copy(0x0050_b2e0, 0x0118_9c10);
+    }
+
+    #[test]
+    fn fn_0050b320_compares_a_cast_form() {
+        check_compare(0x0050_b320, 0x0118_9c10);
+    }
+
+    #[test]
+    fn fn_0050b390_loads_form_and_list() {
+        let mut e = Engine::new();
+        e.register(0x0048_4da0, |_, _| Ret::default());
+        e.register(0x0048_8d70, |_, _| Ret::default());
+        e.call_log = Some(vec![]);
+        e.call(0x0050_b390, &args![0x1000u32, 0x5000u32]);
+        assert_eq!(calls_to(&e, 0x0048_4da0), vec![vec![0x1000, 0x5000]]);
+        assert_eq!(calls_to(&e, 0x0048_8d70), vec![vec![0x1030, 0x5000]]);
+    }
+
+    #[test]
+    fn fn_0050b3c0_passes_the_buffer_on() {
+        let mut e = Engine::new();
+        e.register(0x0045_34f0, |_, _| Ret::default());
+        e.register(0x0048_8f10, |_, _| Ret::default());
+        e.call_log = Some(vec![]);
+        e.call(0x0050_b3c0, &args![0x1000u32, 0x5000u32]);
+        assert_eq!(calls_to(&e, 0x0045_34f0), vec![vec![0x1000, 0x5000]]);
+        assert_eq!(calls_to(&e, 0x0048_8f10), vec![vec![0x1030, 0x5000]]);
+    }
+
+    #[test]
+    fn fn_0050b530_saves_in_order() {
+        let mut e = Engine::new();
+        for address in [START_FORM, 0x0048_3710, 0x0048_8400, CLOSE_FORM] {
+            e.register(address, |_, _| Ret::default());
+        }
+        e.call_log = Some(vec![]);
+        e.call(0x0050_b530, &args![0x1000u32]);
+        let log: Vec<(u32, Vec<u32>)> = e.call_log.take().unwrap().into_iter().skip(1).collect();
+        assert_eq!(
+            log,
+            vec![
+                (START_FORM, vec![0x1000]),
+                (0x0048_3710, vec![0x1000]),
+                (0x0048_8400, vec![0x1030]),
+                (CLOSE_FORM, vec![0x1000])
+            ]
+        );
+    }
+
+    #[test]
+    fn fn_0050b800_copies_the_uncast_form() {
+        check_copy(0x0050_b800, 0x0118_6f7c);
+    }
+
+    #[test]
+    fn fn_0050b840_compares_a_cast_form() {
+        check_compare(0x0050_b840, 0x0118_6f7c);
+    }
+
+    #[test]
+    fn fn_0050b9b0_destroys_in_order() {
+        let mut e = Engine::new();
+        for address in [0x0048_3710, LEVELED_LIST_DESTRUCT, FORM_BASE_DESTRUCT] {
+            e.register(address, |_, _| Ret::default());
+        }
+        let this = e.mem.alloc(0x50);
+        e.call_log = Some(vec![]);
+        e.call(0x0050_b9b0, &args![this]);
+        assert_eq!(
+            (e.mem.u32(this), e.mem.u32(this + 0x30)),
+            (0x0102_8c5c, 0x0102_8c38)
+        );
+        let log: Vec<(u32, Vec<u32>)> = e.call_log.take().unwrap().into_iter().skip(1).collect();
+        assert_eq!(
+            log,
+            vec![
+                (0x0048_3710, vec![this]),
+                (LEVELED_LIST_DESTRUCT, vec![this + 0x30]),
+                (FORM_BASE_DESTRUCT, vec![this])
+            ]
+        );
+    }
+
+    #[test]
+    fn fn_0050ba30_loads_chunks_of_type_0x4c() {
+        let mut e = Engine::new();
+        e.register(GET_TES_FORM, |_, _| 0x34u8.into_ret());
+        let this = e.mem.alloc(0x50);
+        assert!(!e.call(0x0050_ba30, &args![this, 0x9000u32]).bool());
+        e.register(GET_TES_FORM, |_, _| 0x4cu8.into_ret());
+        let mut tags = vec![CHUNK_LVLG, CHUNK_LVLF];
+        e.register_double(GET_TES_CHUNK, move |_, _| tags.remove(0).into_ret());
+        let mut more = vec![true, false];
+        e.register_double(NEXT_CHUNK, move |_, _| more.remove(0).into_ret());
+        e.register(GET_CHUNK_DATA, |e, a| {
+            e.mem.set_u32(a[1], 0x77);
+            Ret::default()
+        });
+        for address in [LOAD_FORM, FORM_SET_FLAG, GET_CHUNK_DATA_SIZED] {
+            e.register(address, |_, _| Ret::default());
+        }
+        e.call_log = Some(vec![]);
+        assert!(e.call(0x0050_ba30, &args![this, 0x9000u32]).bool());
+        assert_eq!(e.mem.u32(this + 0x40), 0x77);
+        assert_eq!(calls_to(&e, FORM_SET_FLAG), vec![vec![this, 0]]);
+        assert_eq!(calls_to(&e, LOAD_FORM), vec![vec![this, 0x9000]]);
+    }
+
+    #[test]
+    fn fn_0050ba30_keeps_the_last_object() {
+        let mut e = Engine::new();
+        e.register(GET_TES_FORM, |_, _| 0x4cu8.into_ret());
+        e.register(GET_TES_CHUNK, |_, _| CHUNK_LVLO.into_ret());
+        e.register(NEXT_CHUNK, |_, _| false.into_ret());
+        for address in [LOAD_FORM, FORM_SET_FLAG, GET_CHUNK_DATA_SIZED, FILL_MEMORY] {
+            e.register(address, |_, _| Ret::default());
+        }
+        e.register(FILE_FIXES_IDS, |_, _| false.into_ret());
+        e.register(LEVELED_LIST_ADD, |_, _| 0x6666u32.into_ret());
+        e.map(LAST_TYPE_4C_OBJECT, 4);
+        let this = e.mem.alloc(0x50);
+        assert!(e.call(0x0050_ba30, &args![this, 0x9000u32]).bool());
+        assert_eq!(e.global::<u32>(LAST_TYPE_4C_OBJECT), 0x6666);
+    }
+
+    #[test]
+    fn fn_0050bcd0_copies_the_uncast_form() {
+        check_copy(0x0050_bcd0, 0x0118_7818);
+    }
+
+    #[test]
+    fn fn_0050bd10_compares_a_cast_form() {
+        check_compare(0x0050_bd10, 0x0118_7818);
+    }
+
+    /// A leveled list at `this` + 0x30 over `entries` (form, count, level): nodes in a
+    /// chain, `00717e50` the first, `006815c0` the node, `00726070` the next. The chance of
+    /// none is `chance` (vtable slot 0x10), `00487f50` answers `random`, no form casts.
+    fn leveled_list(e: &mut Engine, entries: &[(u32, u16, u16)], chance: u8, random: u32) -> u32 {
+        let this = e.mem.alloc(0x50);
+        let mut table = vec![0u32; 8];
+        table[0x10 / 4] = 0x00ec_0010;
+        e.put_vtable(0x00df_0000, &table);
+        e.register_double(0x00ec_0010, move |_, _| chance.into_ret());
+        e.mem.set_u32(this + 0x30, 0x00df_0000);
+        let nodes: Vec<u32> = entries.iter().map(|_| e.mem.alloc(8)).collect();
+        for (i, &(form, count, level)) in entries.iter().enumerate() {
+            let entry = e.mem.alloc(8);
+            e.mem.set_u32(entry, form);
+            e.mem.set_u16(entry + 4, count);
+            e.mem.set_u16(entry + 6, level);
+            e.mem.set_u32(nodes[i], entry);
+            e.mem
+                .set_u32(nodes[i] + 4, nodes.get(i + 1).copied().unwrap_or(0));
+        }
+        let first = nodes.first().copied().unwrap_or(0);
+        e.register_double(LIST_HEAD, move |_, _| first.into_ret());
+        e.register(NODE_ITEM, |_, a| a[0].into_ret());
+        e.register(NODE_NEXT, |e, a| e.mem.u32(a[0] + 4).into_ret());
+        e.register_double(RANDOM_WORD, move |_, _| random.into_ret());
+        e.register(DYNAMIC_CAST, |_, _| Ret::default());
+        e.register(0x0048_77e0, |_, _| false.into_ret());
+        this
+    }
+
+    #[test]
+    fn fn_0050bd60_picks_from_the_highest_level_run() {
+        let mut e = Engine::new();
+        // Levels 1, 5, 5, 9: with level 6 the run is the two level-5 entries; 7 % 2 picks
+        // the second.
+        let this = leveled_list(
+            &mut e,
+            &[(0xa1, 1, 1), (0xa2, 2, 5), (0xa3, 3, 5), (0xa4, 4, 9)],
+            0,
+            7,
+        );
+        let out = e.mem.alloc(8);
+        e.call(0x0050_bd60, &args![this, 0u32, 6u32, out, out + 4, 1u32]);
+        assert_eq!((e.mem.u32(out), e.mem.u16(out + 4)), (0xa3, 3));
+        // The chance of none above the roll gives nothing.
+        let this = leveled_list(&mut e, &[(0xa1, 1, 1)], 50, 149);
+        e.mem.set_u32(out, 0x55);
+        e.call(0x0050_bd60, &args![this, 0u32, 6u32, out, out + 4, 1u32]);
+        assert_eq!(e.mem.u32(out), 0);
+        // Nothing at or below the level gives nothing.
+        let this = leveled_list(&mut e, &[(0xa4, 4, 9)], 0, 0);
+        e.call(0x0050_bd60, &args![this, 0u32, 6u32, out, out + 4, 1u32]);
+        assert_eq!(e.mem.u32(out), 0);
+    }
+
+    #[test]
+    fn fn_0050bf90_casts_the_pick() {
+        let mut e = Engine::new();
+        let this = leveled_list(&mut e, &[(0xa1, 1, 1)], 0, 0);
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x0050_bf90, &args![this, 0u32, 3u32]).u32(), 0);
+        let casts = calls_to(&e, DYNAMIC_CAST);
+        assert_eq!(
+            casts.last().unwrap(),
+            &vec![0xa1, 0, 0x0118_3028, 0x0118_3060, 0]
+        );
+        let this = leveled_list(&mut e, &[(0xa4, 1, 9)], 0, 0);
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x0050_bf90, &args![this, 0u32, 3u32]).u32(), 0);
+        assert!(calls_to(&e, DYNAMIC_CAST)
+            .iter()
+            .all(|c| c[3] != 0x0118_3060));
+    }
+
+    #[test]
+    fn fn_0050c000_makes_a_list_of_the_pick() {
+        let mut e = Engine::new();
+        let this = leveled_list(&mut e, &[(0xa1, 1, 1)], 0, 0);
+        e.register(0x0048_78a0, |_, _| false.into_ret());
+        e.register(DYNAMIC_CAST, |_, a| {
+            if a[3] == 0x0118_3060 { a[0] } else { 0 }.into_ret()
+        });
+        e.register(ALLOCATE, |e, a| e.mem.alloc(a[0]).into_ret());
+        e.register(LIST_CONSTRUCT, |_, a| a[0].into_ret());
+        e.register(LIST_ADD, |e, a| {
+            let value = e.mem.u32(a[1]);
+            e.mem.set_u32(a[0], value);
+            Ret::default()
+        });
+        let list = e.call(0x0050_c000, &args![this, 0u32, 3u32]).u32();
+        assert_ne!(list, 0);
+        assert_eq!(e.mem.u32(list), 0xa1);
+        // Use-all: every entry's form that casts.
+        e.register(0x0048_78a0, |_, _| true.into_ret());
+        let this = leveled_list(&mut e, &[(0xb1, 1, 1), (0xb2, 1, 2)], 0, 0);
+        e.register(DYNAMIC_CAST, |_, a| {
+            if a[3] == 0x0118_3060 { a[0] } else { 0 }.into_ret()
+        });
+        e.call_log = Some(vec![]);
+        let list = e.call(0x0050_c000, &args![this, 0u32, 3u32]).u32();
+        assert_eq!(calls_to(&e, LIST_ADD).len(), 2);
+        assert_eq!(e.mem.u32(list), 0xb2);
+    }
+
+    #[test]
+    fn fn_0050c1d0_merges_six_lists_without_repeats() {
+        let mut e = Engine::new();
+        let this = leveled_list(&mut e, &[(0xa1, 1, 1)], 0, 0);
+        e.register(0x0048_78a0, |_, _| false.into_ret());
+        e.register(DYNAMIC_CAST, |_, a| {
+            if a[3] == 0x0118_3060 { a[0] } else { 0 }.into_ret()
+        });
+        e.register(ALLOCATE, |e, a| e.mem.alloc(a[0]).into_ret());
+        // The form list: word 0 the value, word 1 the next node (none).
+        e.register(LIST_CONSTRUCT, |_, a| a[0].into_ret());
+        e.register(LIST_ADD, |e, a| {
+            let value = e.mem.u32(a[1]);
+            e.mem.set_u32(a[0], value);
+            Ret::default()
+        });
+        e.register(NODE_NEXT, |e, a| e.mem.u32(a[0] + 4).into_ret());
+        e.register(0x005f_65d0, |e, a| {
+            (e.mem.u32(a[0]) == e.mem.u32(a[1])).into_ret()
+        });
+        for address in [0x0047_0470, 0x0047_02f0, 0x0040_ca10] {
+            e.register(address, |_, _| Ret::default());
+        }
+        let actor = e.mem.alloc(0xb0);
+        e.put_vtable(0x00df_1000, &[0, 0, 0x00ec_1008]);
+        e.register(0x00ec_1008, |_, _| 3u32.into_ret());
+        e.mem.set_u32(actor + 0xa4, 0x00df_1000);
+        e.call_log = Some(vec![]);
+        let merged = e.call(0x0050_c1d0, &args![this, actor]).u32();
+        assert_eq!(e.mem.u32(merged), 0xa1);
+        // Seven adds: six per-index lists and the merged list's first.
+        assert_eq!(calls_to(&e, LIST_ADD).len(), 7);
+        assert_eq!(calls_to(&e, 0x005f_65d0).len(), 5);
+        assert_eq!(calls_to(&e, 0x0047_02f0).len(), 6);
     }
 }

@@ -1427,7 +1427,7 @@ pub fn fn_0068c890(e: &mut Engine, this: Ptr, mask: u16) -> bool {
 /// calls it on the lighting property it creates, with the parallax pass
 /// count).
 pub fn fn_0068c8b0(e: &mut Engine, this: Ptr, value: f32) {
-    e.mem.set_f32(this.addr() + 0xe8, value);
+    e.mem.set_f32(this.addr() + 0xe8, x87_quiet(value));
 }
 
 // Translated from 0068c8d0 (decompiled, FalloutNV.exe 1.4.0.525)

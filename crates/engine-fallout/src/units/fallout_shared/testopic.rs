@@ -1481,6 +1481,134 @@ fn print_conversation(e: &mut Engine, list: u32) {
     }
 }
 
+/// RTTI type descriptor `.?AVTESTopic@@` (read from the exe).
+const TYPE_TES_TOPIC: u32 = 0x0118_4720;
+/// `00401170` (`thiscall`): a form's type byte.
+const FORM_TYPE_OF: u32 = 0x0040_1170;
+/// `00484020` and `00484150` (`thiscall`, `RET 4`; `tesform.cpp` in the engine map): the
+/// form's own answers to the two questions below, for the other cases.
+const FORM_ANSWER_484020: u32 = 0x0048_4020;
+const FORM_ANSWER_484150: u32 = 0x0048_4150;
+/// The word at `01187020` the object's first word (its vtable) must equal for `00619510`.
+const OBJECT_VTABLE_WORD: u32 = 0x0118_7020;
+/// `00618920` (`thiscall`): the destructor body `006197f0` runs; `0061bf50` (`thiscall`): the
+/// one `0061c0f0` runs; `operator delete` (`00401030`, `cdecl`).
+const DESTRUCT_618920: u32 = 0x0061_8920;
+const DESTRUCT_61BF50: u32 = 0x0061_bf50;
+const OPERATOR_DELETE: u32 = 0x0040_1030;
+/// `005a8080` (`thiscall`): the address of the byte at +0x3C.
+const BYTE_3C_ADDRESS: u32 = 0x005a_8080;
+
+// Translated from 00619430 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the map (`RET 4`: a form): for a topic (type 0x45), whether this topic's form id
+/// (`0084e3a0`) is below the other's; for an info (type 0x46), whether its owner topic
+/// (`TESTopic::GetOwnerTopic`) is this one or vtable slot 0x3C says so for it; for anything
+/// else, `00484020`. False when the casts or the owner fail.
+pub fn fn_00619430(e: &mut Engine, this: Ptr, form: u32) -> bool {
+    let kind = e.call(FORM_TYPE_OF, &args![form]).u32();
+    if kind == 0x45 {
+        let topic = form_as_from(e, form, TYPE_TES_TOPIC);
+        if topic != 0 {
+            let mine = e.call(WORD_AT_0XC, &args![this]).u32();
+            return mine < e.call(WORD_AT_0XC, &args![topic]).u32();
+        }
+        false
+    } else if kind == 0x46 {
+        let info = form_as_from(e, form, TYPE_TES_TOPIC_INFO);
+        if info == 0 {
+            return false;
+        }
+        let owner = tes_topic_get_owner_topic(e, Ptr::new(info)).addr();
+        if owner == 0 {
+            return false;
+        }
+        if owner == this.addr() {
+            return true;
+        }
+        e.vcall(this.addr(), 0x3c, &args![owner]).bool()
+    } else {
+        e.call(FORM_ANSWER_484020, &args![this, form]).bool()
+    }
+}
+
+/// The form cast from `TESForm` to `target` (`__RTDynamicCast`).
+fn form_as_from(e: &mut Engine, form: u32, target: u32) -> u32 {
+    e.call(
+        RT_DYNAMIC_CAST,
+        &args![form, 0u32, TYPE_TES_FORM, target, 0u32],
+    )
+    .u32()
+}
+
+// Translated from 00619510 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the map (`RET 4`: an object): false unless the object's first word is the word at
+/// `01187020`; then by its word at +0xC (the exe's jump table at `006195b0`): 0 asks
+/// `00484150`, 1 to 6 answer false, 7 asks vtable slot 0x3C for the topic of the form id at +8
+/// (`004839c0`, cast to `TESTopic`; false without one); above 7 false.
+pub fn fn_00619510(e: &mut Engine, this: Ptr, object: u32) -> bool {
+    if object == 0 || e.mem.u32(object) != e.global::<u32>(OBJECT_VTABLE_WORD) {
+        return false;
+    }
+    match e.mem.u32(object.wrapping_add(0xc)) {
+        0 => e.call(FORM_ANSWER_484150, &args![this, object]).bool(),
+        1..=6 => false,
+        7 => {
+            let id = e.mem.u32(object.wrapping_add(8));
+            let topic = form_as(e, id, TYPE_TES_TOPIC);
+            if topic != 0 {
+                e.vcall(this.addr(), 0x3c, &args![topic]).bool()
+            } else {
+                false
+            }
+        }
+        _ => false,
+    }
+}
+
+// Translated from 006197f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the map (`RET 4`: flags; a scalar deleting destructor by its body): runs
+/// `00618920` on `this` and, with flag 1, deletes it (`operator delete`). Returns `this`.
+pub fn fn_006197f0(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    e.call(DESTRUCT_618920, &args![this]);
+    if flags & 1 != 0 {
+        e.call(OPERATOR_DELETE, &args![this]);
+    }
+    this
+}
+
+// Translated from 0061a720 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TESTopic::GetMatchingInfo` (engine map, `RET 8`: two words passed on): the info
+/// `TESTopic::GetMatchingInfo_ov2` answers, or 0 when it set its flag (a byte on the stack,
+/// cleared first).
+pub fn tes_topic_get_matching_info(e: &mut Engine, this: Ptr, first: u32, second: u32) -> u32 {
+    e.with_stack(4, |e, flag| {
+        e.mem.set_u8(flag.addr(), 0);
+        let info = tes_topic_get_matching_info_ov2(e, this, flag, first, second);
+        if e.mem.u8(flag.addr()) != 0 {
+            0
+        } else {
+            info
+        }
+    })
+}
+
+// Translated from 0061af10 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the map (`ECX`): whether bit 4 of the byte at +0x3C (`005a8080`) is set.
+pub fn fn_0061af10(e: &mut Engine, this: Ptr) -> bool {
+    let at = e.call(BYTE_3C_ADDRESS, &args![this]).u32();
+    e.mem.u8(at) & 4 != 0
+}
+
+// Translated from 0061c0f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSSimpleArray<INFO_LINK_ELEMENT,1024>::scalar deleting destructor` (engine map, `RET 4`:
+/// flags): runs `0061bf50` on `this` and, with flag 1, deletes it. Returns `this`.
+pub fn fn_0061c0f0(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    e.call(DESTRUCT_61BF50, &args![this]);
+    if flags & 1 != 0 {
+        e.call(OPERATOR_DELETE, &args![this]);
+    }
+    this
+}
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -1507,6 +1635,12 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x0061_a760, tes_topic_get_matching_info_ov2(Ptr, Ptr, u32, u32) -> u32),
         entry!(0x0061_b320, tes_topic_create_dialogue_item(Ptr, u32, u32, u32, u32, u8) -> u32),
         entry!(0x0061_b440, tes_topic_create_conversation(u32, u32, u32, u32) -> u32),
+        entry!(0x0061_9430, fn_00619430(Ptr, u32) -> bool),
+        entry!(0x0061_9510, fn_00619510(Ptr, u32) -> bool),
+        entry!(0x0061_97f0, fn_006197f0(Ptr, u32) -> Ptr),
+        entry!(0x0061_a720, tes_topic_get_matching_info(Ptr, u32, u32) -> u32),
+        entry!(0x0061_af10, fn_0061af10(Ptr) -> bool),
+        entry!(0x0061_c0f0, fn_0061c0f0(Ptr, u32) -> Ptr),
     ]
 }
 
@@ -2331,5 +2465,136 @@ mod b020_tests {
         let cleared = calls_to(&e, 0x0040_3d30);
         assert_eq!(cleared.len(), 1);
         assert_eq!(&cleared[0][1..], &[0, 0x7d0]);
+    }
+}
+
+#[cfg(test)]
+mod n045_tests {
+    use super::*;
+
+    type Log = Vec<(u32, Vec<u32>)>;
+
+    fn ret(eax: u32) -> Ret {
+        Ret {
+            eax,
+            ..Ret::default()
+        }
+    }
+
+    fn ok(_: &mut Engine, _: &[u32]) -> Ret {
+        Ret::default()
+    }
+
+    fn only(log: &Log, addr: u32) -> Vec<Vec<u32>> {
+        log.iter()
+            .filter(|(a, _)| *a == addr)
+            .map(|(_, w)| w.clone())
+            .collect()
+    }
+
+    /// A topic whose vtable slot 0x3C answers `answer`; its form id is `id`.
+    fn topic(e: &mut Engine, id: u32) -> u32 {
+        let t = e.mem.alloc(0x40);
+        let vt = e.mem.alloc(0x40);
+        e.mem.set_u32(t, vt);
+        e.mem.set_u32(vt + 0x3c, 0x0050_0000);
+        e.mem.set_u32(t + 0xc, id);
+        t
+    }
+
+    fn rig() -> Engine {
+        let mut e = Engine::new();
+        e.register(WORD_AT_0XC, |e, a| ret(e.mem.u32(a[0] + 0xc)));
+        e.register(FORM_TYPE_OF, |e, a| ret(u32::from(e.mem.u8(a[0] + 4))));
+        e.register(RT_DYNAMIC_CAST, |_, a| ret(a[0]));
+        e.register(0x0050_0000, |_, a| ret(u32::from(a[1] == 0x5555)));
+        e
+    }
+
+    #[test]
+    fn fn_00619430_orders_topics_and_owns_infos() {
+        let mut e = rig();
+        let this = topic(&mut e, 10);
+        let other = topic(&mut e, 20);
+        e.mem.set_u8(other + 4, 0x45);
+        assert!(e.call(0x0061_9430, &[this, other]).bool());
+        e.mem.set_u32(other + 0xc, 5);
+        assert!(!e.call(0x0061_9430, &[this, other]).bool());
+        // An info without an owner topic.
+        e.map(0x011c_3000, 0x1000);
+        e.register(LIST_AT_0X108, |_, _| ret(0));
+        let info = e.mem.alloc(0x20);
+        e.mem.set_u8(info + 4, 0x46);
+        assert!(!e.call(0x0061_9430, &[this, info]).bool());
+        // Anything else asks 00484020.
+        e.register(FORM_ANSWER_484020, |_, _| ret(1));
+        let form = e.mem.alloc(0x20);
+        e.mem.set_u8(form + 4, 0x10);
+        e.call_log = Some(vec![]);
+        assert!(e.call(0x0061_9430, &[this, form]).bool());
+        let log = e.call_log.take().unwrap();
+        assert_eq!(only(&log, FORM_ANSWER_484020), vec![vec![this, form]]);
+    }
+
+    #[test]
+    fn fn_00619510_answers_by_the_object_kind() {
+        let mut e = rig();
+        e.map(0x0118_7000, 0x1000);
+        e.set_global::<u32>(OBJECT_VTABLE_WORD, 0x0300);
+        let this = topic(&mut e, 1);
+        let object = e.mem.alloc(0x10);
+        assert!(!e.call(0x0061_9510, &[this, 0]).bool());
+        assert!(!e.call(0x0061_9510, &[this, object]).bool());
+        e.mem.set_u32(object, 0x0300);
+        e.register(FORM_ANSWER_484150, |_, _| ret(1));
+        assert!(e.call(0x0061_9510, &[this, object]).bool());
+        e.mem.set_u32(object + 0xc, 3);
+        assert!(!e.call(0x0061_9510, &[this, object]).bool());
+        e.mem.set_u32(object + 0xc, 7);
+        e.mem.set_u32(object + 8, 0x77);
+        e.register(FORM_BY_ID, |_, a| {
+            ret(if a[0] == 0x77 { 0x5555 } else { 0 })
+        });
+        assert!(e.call(0x0061_9510, &[this, object]).bool());
+        e.mem.set_u32(object + 8, 0x78);
+        assert!(!e.call(0x0061_9510, &[this, object]).bool());
+        e.mem.set_u32(object + 0xc, 8);
+        assert!(!e.call(0x0061_9510, &[this, object]).bool());
+    }
+
+    #[test]
+    fn deleting_destructors_delete_with_flag_1() {
+        let mut e = Engine::new();
+        e.register(DESTRUCT_618920, ok);
+        e.register(DESTRUCT_61BF50, ok);
+        e.register(OPERATOR_DELETE, ok);
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x0061_97f0, &[0x5000, 0]).u32(), 0x5000);
+        assert_eq!(e.call(0x0061_97f0, &[0x5000, 1]).u32(), 0x5000);
+        assert_eq!(e.call(0x0061_c0f0, &[0x6000, 3]).u32(), 0x6000);
+        assert_eq!(e.call(0x0061_c0f0, &[0x6000, 2]).u32(), 0x6000);
+        let log = e.call_log.take().unwrap();
+        assert_eq!(only(&log, DESTRUCT_618920).len(), 2);
+        assert_eq!(only(&log, DESTRUCT_61BF50).len(), 2);
+        assert_eq!(
+            only(&log, OPERATOR_DELETE),
+            vec![vec![0x5000], vec![0x6000]]
+        );
+    }
+
+    #[test]
+    fn get_matching_info_and_the_flag_byte() {
+        let mut e = Engine::new();
+        e.register(0x0061_9df0, |_, _| ret(0));
+        e.register(0x0044_0d80, |_, _| ret(1));
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x0061_a720, &[0x5000, 1, 2]).u32(), 0);
+        let log = e.call_log.take().unwrap();
+        assert_eq!(only(&log, 0x0044_0d80), vec![vec![0x5000]]);
+        e.register(BYTE_3C_ADDRESS, |_, a| ret(a[0] + 0x3c));
+        let t = e.mem.alloc(0x40);
+        assert!(!e.call(0x0061_af10, &[t]).bool());
+        e.mem.set_u8(t + 0x3c, 4);
+        assert!(e.call(0x0061_af10, &[t]).bool());
     }
 }

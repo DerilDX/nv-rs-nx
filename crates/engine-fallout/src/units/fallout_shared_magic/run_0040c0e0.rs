@@ -284,6 +284,193 @@ pub fn fn_0040c5b0(e: &mut Engine, this: Ptr) {
     e.call(FORM_SET_00484AB0, &args![this, 1u32]);
 }
 
+/// `TESForm::StartForm` (`004855a0`), `TESForm::CloseForm` (`00485680`) and
+/// `TESFullName::Save` (`00487010`) (engine map), thiscall.
+const TES_FORM_START_FORM: u32 = 0x0048_55a0;
+const TES_FORM_CLOSE_FORM: u32 = 0x0048_5680;
+const TES_FULL_NAME_SAVE: u32 = 0x0048_7010;
+/// Thiscall on an `EffectItemList` (`004056d0`, `effectitemlist.cpp` range):
+/// saves it.
+const EFFECT_LIST_SAVE_004056D0: u32 = 0x0040_56d0;
+/// `TESForm::CompareAllComponents` (`00485270`, `AL`) and
+/// `TESForm::CopyAllComponents` (`004851b0`) (engine map), thiscall (other
+/// form), `RET 4`.
+const TES_FORM_COMPARE_ALL_COMPONENTS: u32 = 0x0048_5270;
+const TES_FORM_COPY_ALL_COMPONENTS: u32 = 0x0048_51b0;
+/// Thiscall on an `EffectItemList` (other list), `RET 4`: whether they
+/// differ (`00405a00`) and the copy (`00405b10`) (`effectitemlist.rs`).
+const EFFECT_LIST_DIFFERS: u32 = 0x0040_5a00;
+const EFFECT_LIST_COPY: u32 = 0x0040_5b10;
+/// `__RTDynamicCast` (CRT), cdecl (object, offset, source type, target type,
+/// is-reference); the type descriptors of `TESForm`, `MagicItemForm` and
+/// `MagicItemObject`.
+const DYNAMIC_CAST: u32 = 0x00ec_43fb;
+const TYPE_TES_FORM: u32 = 0x0118_3028;
+const TYPE_MAGIC_ITEM_FORM: u32 = 0x0118_395c;
+const TYPE_MAGIC_ITEM_OBJECT: u32 = 0x0118_30e8;
+/// The `MagicItem` base's virtual slots the save, compare and copy use:
+/// two saves (+0x38, +0x3c), the compare (+0x30, `AL`) and the copy (+0x34).
+const SLOT_MAGIC_ITEM_SAVE_A: u32 = 0x38;
+const SLOT_MAGIC_ITEM_SAVE_B: u32 = 0x3c;
+const SLOT_MAGIC_ITEM_COMPARE: u32 = 0x30;
+const SLOT_MAGIC_ITEM_COPY: u32 = 0x34;
+
+/// Where a magic item form keeps its parts: the `MagicItem` base and its
+/// `EffectItemList`, and the RTTI type of the class.
+struct MagicItemParts {
+    magic_item: u32,
+    effects: u32,
+    class_type: u32,
+}
+
+/// `MagicItemForm`: the `MagicItem` at +0x18, the list at +0x24.
+const MAGIC_ITEM_FORM_PARTS: MagicItemParts = MagicItemParts {
+    magic_item: 0x18,
+    effects: 0x24,
+    class_type: TYPE_MAGIC_ITEM_FORM,
+};
+/// `MagicItemObject`: the `MagicItem` at +0x30, the list at +0x3c.
+const MAGIC_ITEM_OBJECT_PARTS: MagicItemParts = MagicItemParts {
+    magic_item: 0x30,
+    effects: 0x3c,
+    class_type: TYPE_MAGIC_ITEM_OBJECT,
+};
+
+/// `p + offset`, or 0 for a null `p`.
+fn part(p: u32, offset: u32) -> u32 {
+    if p == 0 {
+        0
+    } else {
+        p.wrapping_add(offset)
+    }
+}
+
+/// The shared body of `0040c1d0` and `0040c5f0`.
+fn save_magic_item_form(e: &mut Engine, this: Ptr, parts: &MagicItemParts) {
+    let base = this.addr();
+    e.call(TES_FORM_START_FORM, &args![this]);
+    let magic_item = base.wrapping_add(parts.magic_item);
+    e.call(TES_FULL_NAME_SAVE, &args![magic_item]);
+    e.vcall(magic_item, SLOT_MAGIC_ITEM_SAVE_A, &args![]);
+    e.vcall(magic_item, SLOT_MAGIC_ITEM_SAVE_B, &args![]);
+    e.call(
+        EFFECT_LIST_SAVE_004056D0,
+        &args![base.wrapping_add(parts.effects)],
+    );
+    e.call(TES_FORM_CLOSE_FORM, &args![this]);
+}
+
+/// The shared body of `0040c450` and `0040c870`.
+fn compare_magic_item_form(e: &mut Engine, this: Ptr, other: u32, parts: &MagicItemParts) -> bool {
+    let cast = e
+        .call(
+            DYNAMIC_CAST,
+            &args![other, 0u32, TYPE_TES_FORM, parts.class_type, 0u32],
+        )
+        .u32();
+    if cast == 0 {
+        return true;
+    }
+    if e.call(TES_FORM_COMPARE_ALL_COMPONENTS, &args![this, other])
+        .bool()
+    {
+        return true;
+    }
+    let base = this.addr();
+    let magic_item = base.wrapping_add(parts.magic_item);
+    if e.vcall(
+        magic_item,
+        SLOT_MAGIC_ITEM_COMPARE,
+        &args![part(cast, parts.magic_item)],
+    )
+    .bool()
+    {
+        return true;
+    }
+    e.call(
+        EFFECT_LIST_DIFFERS,
+        &args![base.wrapping_add(parts.effects), part(cast, parts.effects)],
+    )
+    .bool()
+}
+
+/// The shared body of `0040c510` and `0040c930`.
+fn copy_magic_item_form(e: &mut Engine, this: Ptr, other: u32, parts: &MagicItemParts) {
+    let cast = e
+        .call(
+            DYNAMIC_CAST,
+            &args![other, 0u32, TYPE_TES_FORM, parts.class_type, 0u32],
+        )
+        .u32();
+    if cast == 0 {
+        return;
+    }
+    e.call(TES_FORM_COPY_ALL_COMPONENTS, &args![this, other]);
+    let base = this.addr();
+    e.vcall(
+        base.wrapping_add(parts.magic_item),
+        SLOT_MAGIC_ITEM_COPY,
+        &args![part(cast, parts.magic_item)],
+    );
+    e.call(
+        EFFECT_LIST_COPY,
+        &args![base.wrapping_add(parts.effects), part(cast, parts.effects)],
+    );
+}
+
+// Translated from 0040c1d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`thiscall` on a `MagicItemForm`, plain `RET`):
+/// saves the form: `TESForm::StartForm`, the `MagicItem` at +0x18
+/// (`TESFullName::Save`, then its virtual slots +0x38 and +0x3c), the
+/// effect list at +0x24 (`004056d0`), `TESForm::CloseForm`.
+pub fn fn_0040c1d0(e: &mut Engine, this: Ptr) {
+    save_magic_item_form(e, this, &MAGIC_ITEM_FORM_PARTS);
+}
+
+// Translated from 0040c450 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`thiscall` on a `MagicItemForm`, `RET 4`):
+/// whether `other` differs: true when it is not a `MagicItemForm`
+/// (`__RTDynamicCast` from `TESForm`), when `TESForm::CompareAllComponents`
+/// says so, when the `MagicItem` (+0x18) virtual slot +0x30 says so for the
+/// other's `MagicItem`, or when the effect lists (+0x24) differ
+/// (`00405a00`).
+pub fn fn_0040c450(e: &mut Engine, this: Ptr, other: u32) -> bool {
+    compare_magic_item_form(e, this, other, &MAGIC_ITEM_FORM_PARTS)
+}
+
+// Translated from 0040c510 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`thiscall` on a `MagicItemForm`, `RET 4`):
+/// when `other` is a `MagicItemForm`, copies it: `TESForm::CopyAllComponents`,
+/// the `MagicItem` (+0x18) virtual slot +0x34 with the other's `MagicItem`,
+/// then the effect list (+0x24, `00405b10`); otherwise nothing.
+pub fn fn_0040c510(e: &mut Engine, this: Ptr, other: u32) {
+    copy_magic_item_form(e, this, other, &MAGIC_ITEM_FORM_PARTS);
+}
+
+// Translated from 0040c5f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`thiscall` on a `MagicItemObject`, plain
+/// `RET`): `0040c1d0`'s save with the `MagicItem` at +0x30 and the effect
+/// list at +0x3c.
+pub fn fn_0040c5f0(e: &mut Engine, this: Ptr) {
+    save_magic_item_form(e, this, &MAGIC_ITEM_OBJECT_PARTS);
+}
+
+// Translated from 0040c870 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`thiscall` on a `MagicItemObject`, `RET 4`):
+/// `0040c450`'s comparison for a `MagicItemObject` (the `MagicItem` at
+/// +0x30, the effect list at +0x3c).
+pub fn fn_0040c870(e: &mut Engine, this: Ptr, other: u32) -> bool {
+    compare_magic_item_form(e, this, other, &MAGIC_ITEM_OBJECT_PARTS)
+}
+
+// Translated from 0040c930 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`thiscall` on a `MagicItemObject`, `RET 4`):
+/// `0040c510`'s copy for a `MagicItemObject` (the `MagicItem` at +0x30, the
+/// effect list at +0x3c).
+pub fn fn_0040c930(e: &mut Engine, this: Ptr, other: u32) {
+    copy_magic_item_form(e, this, other, &MAGIC_ITEM_OBJECT_PARTS);
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -294,6 +481,12 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x0040_c130, fn_0040c130(Ptr)),
         entry!(0x0040_c230, fn_0040c230(Ptr, Ptr) -> bool),
         entry!(0x0040_c5b0, fn_0040c5b0(Ptr)),
+        entry!(0x0040_c1d0, fn_0040c1d0(Ptr)),
+        entry!(0x0040_c450, fn_0040c450(Ptr, u32) -> bool),
+        entry!(0x0040_c510, fn_0040c510(Ptr, u32)),
+        entry!(0x0040_c5f0, fn_0040c5f0(Ptr)),
+        entry!(0x0040_c870, fn_0040c870(Ptr, u32) -> bool),
+        entry!(0x0040_c930, fn_0040c930(Ptr, u32)),
     ]
 }
 
@@ -680,5 +873,169 @@ mod b060_tests {
             calls(&e, PRINT),
             vec![vec![MESSAGE_NO_EFFECTS, 0x77, 0x5000]]
         );
+    }
+}
+
+#[cfg(test)]
+mod magic_item_form_tests {
+    use super::*;
+
+    fn calls(e: &Engine, addr: u32) -> Vec<Vec<u32>> {
+        e.call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|(a, _)| *a == addr)
+            .map(|(_, w)| w.clone())
+            .collect()
+    }
+
+    const SLOT_FUNCTION: u32 = 0x00f1_0000;
+
+    /// A form whose `MagicItem` part (at `at`) has a vtable whose slots
+    /// +0x30 .. +0x3c are doubles at `SLOT_FUNCTION + slot`; slot +0x30
+    /// answers the byte at form +0x80.
+    fn form(e: &mut Engine, at: u32) -> u32 {
+        let form = e.mem.alloc(0x100);
+        let vtable = e.mem.alloc(0x40);
+        for slot in [0x30u32, 0x34, 0x38, 0x3c] {
+            e.mem.set_u32(vtable + slot, SLOT_FUNCTION + slot);
+        }
+        e.mem.set_u32(form + at, vtable);
+        form
+    }
+
+    fn engine() -> Engine {
+        let mut e = Engine::new();
+        e.register(SLOT_FUNCTION + 0x30, |e, a| {
+            u32::from(e.mem.u8(a[0] + 0x50) != 0).into_ret()
+        });
+        for slot in [0x34u32, 0x38, 0x3c] {
+            e.register(SLOT_FUNCTION + slot, |_, _| Ret::default());
+        }
+        for addr in [
+            TES_FORM_START_FORM,
+            TES_FORM_CLOSE_FORM,
+            TES_FULL_NAME_SAVE,
+            EFFECT_LIST_SAVE_004056D0,
+            TES_FORM_COPY_ALL_COMPONENTS,
+            EFFECT_LIST_COPY,
+        ] {
+            e.register(addr, |_, _| Ret::default());
+        }
+        e.register(DYNAMIC_CAST, |_, a| {
+            if a[0] == 0x9000 {
+                Ret::default()
+            } else {
+                a[0].into_ret()
+            }
+        });
+        e.register(TES_FORM_COMPARE_ALL_COMPONENTS, |e, a| {
+            u32::from(e.mem.u8(a[0] + 0xf0) != 0).into_ret()
+        });
+        e.register(EFFECT_LIST_DIFFERS, |e, a| {
+            u32::from(e.mem.u8(a[0] + 0x4) != 0).into_ret()
+        });
+        e
+    }
+
+    #[test]
+    fn saves_in_order() {
+        for (addr, at, list) in [
+            (0x0040_c1d0u32, 0x18u32, 0x24u32),
+            (0x0040_c5f0, 0x30, 0x3c),
+        ] {
+            let mut e = engine();
+            let this = form(&mut e, at);
+            e.call_log = Some(vec![]);
+            e.call(addr, &args![this]);
+            let log: Vec<(u32, Vec<u32>)> = e
+                .call_log
+                .take()
+                .unwrap()
+                .into_iter()
+                .filter(|(a, _)| *a != addr)
+                .collect();
+            assert_eq!(
+                log,
+                vec![
+                    (TES_FORM_START_FORM, vec![this]),
+                    (TES_FULL_NAME_SAVE, vec![this + at]),
+                    (SLOT_FUNCTION + 0x38, vec![this + at]),
+                    (SLOT_FUNCTION + 0x3c, vec![this + at]),
+                    (EFFECT_LIST_SAVE_004056D0, vec![this + list]),
+                    (TES_FORM_CLOSE_FORM, vec![this]),
+                ]
+            );
+        }
+    }
+
+    #[test]
+    fn compares_by_class_components_item_and_list() {
+        for (addr, at, list, class) in [
+            (0x0040_c450u32, 0x18u32, 0x24u32, TYPE_MAGIC_ITEM_FORM),
+            (0x0040_c870, 0x30, 0x3c, TYPE_MAGIC_ITEM_OBJECT),
+        ] {
+            let mut e = engine();
+            let this = form(&mut e, at);
+            let other = form(&mut e, at);
+            e.call_log = Some(vec![]);
+            assert!(!e.call(addr, &args![this, other]).bool());
+            assert_eq!(
+                calls(&e, DYNAMIC_CAST),
+                vec![vec![other, 0, TYPE_TES_FORM, class, 0]]
+            );
+            assert_eq!(
+                calls(&e, SLOT_FUNCTION + 0x30),
+                vec![vec![this + at, other + at]]
+            );
+            assert_eq!(
+                calls(&e, EFFECT_LIST_DIFFERS),
+                vec![vec![this + list, other + list]]
+            );
+            assert!(e.call(addr, &args![this, 0x9000u32]).bool());
+            e.mem.set_u8(this + list + 4, 1);
+            assert!(e.call(addr, &args![this, other]).bool());
+            e.mem.set_u8(this + list + 4, 0);
+            e.mem.set_u8(this + at + 0x50, 1);
+            assert!(e.call(addr, &args![this, other]).bool());
+            e.mem.set_u8(this + at + 0x50, 0);
+            e.mem.set_u8(this + 0xf0, 1);
+            e.call_log = Some(vec![]);
+            assert!(e.call(addr, &args![this, other]).bool());
+            assert!(calls(&e, SLOT_FUNCTION + 0x30).is_empty());
+        }
+    }
+
+    #[test]
+    fn copies_components_item_and_list() {
+        for (addr, at, list) in [
+            (0x0040_c510u32, 0x18u32, 0x24u32),
+            (0x0040_c930, 0x30, 0x3c),
+        ] {
+            let mut e = engine();
+            let this = form(&mut e, at);
+            let other = form(&mut e, at);
+            e.call_log = Some(vec![]);
+            e.call(addr, &args![this, other]);
+            let log: Vec<(u32, Vec<u32>)> = e
+                .call_log
+                .take()
+                .unwrap()
+                .into_iter()
+                .filter(|(a, _)| *a != addr && *a != DYNAMIC_CAST)
+                .collect();
+            assert_eq!(
+                log,
+                vec![
+                    (TES_FORM_COPY_ALL_COMPONENTS, vec![this, other]),
+                    (SLOT_FUNCTION + 0x34, vec![this + at, other + at]),
+                    (EFFECT_LIST_COPY, vec![this + list, other + list]),
+                ]
+            );
+            e.call_log = Some(vec![]);
+            e.call(addr, &args![this, 0x9000u32]);
+            assert!(calls(&e, TES_FORM_COPY_ALL_COMPONENTS).is_empty());
+        }
     }
 }

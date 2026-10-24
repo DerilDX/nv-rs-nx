@@ -80,9 +80,21 @@ pub fn fn_0049f8f0(e: &mut Engine, _this: Ptr, elements: u32, count: u32) {
     }
 }
 
+// Translated from 0049f8b0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Copies the words at +4, +8 and +0xc of `other` into `this` (`thiscall`,
+/// `RET 4`; the engine map gives it no name). Returns `this`.
+pub fn fn_0049f8b0(e: &mut Engine, this: Ptr, other: u32) -> Ptr {
+    for offset in [4u32, 8, 0xc] {
+        let value = e.mem.u32(other.wrapping_add(offset));
+        e.mem.set_u32(this.addr() + offset, value);
+    }
+    this
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x0049_f8b0, fn_0049f8b0(Ptr, u32) -> Ptr),
         entry!(0x0049_fa80, fn_0049fa80(Ptr) -> u32),
         entry!(0x0049_fa20, fn_0049fa20(Ptr, Ptr)),
         entry!(0x0049_f990, fn_0049f990(Ptr, u32, u32)),
@@ -172,5 +184,26 @@ mod tests {
             vec![vec![0x6000], vec![0x6018]]
         );
         assert_eq!(calls(&e, PLACEMENT_NEW).len(), 3);
+    }
+}
+
+#[cfg(test)]
+mod n038_tests {
+    use super::*;
+
+    #[test]
+    fn at_0049f8b0_copies_three_words() {
+        let mut e = Engine::new();
+        let this = e.mem.alloc(0x10);
+        let other = e.mem.alloc(0x10);
+        for i in 0..4 {
+            e.mem.set_u32(other + 4 * i, 0x10 + i);
+        }
+        e.mem.set_u32(this, 0x99);
+        assert_eq!(e.call(0x0049_f8b0, &args![this, other]).u32(), this);
+        assert_eq!(e.mem.u32(this), 0x99);
+        assert_eq!(e.mem.u32(this + 4), 0x11);
+        assert_eq!(e.mem.u32(this + 8), 0x12);
+        assert_eq!(e.mem.u32(this + 0xc), 0x13);
     }
 }

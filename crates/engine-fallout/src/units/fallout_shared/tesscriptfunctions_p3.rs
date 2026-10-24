@@ -1716,13 +1716,13 @@ pub fn script_set_camera_fov(e: &mut Engine, a: ScriptArgs) -> bool {
 // Translated from 005c59c0 (decompiled, FalloutNV.exe 1.4.0.525)
 /// `thiscall` (`float`): stores it at `this + 0x670`.
 pub fn fn_005c59c0(e: &mut Engine, this: Ptr, value: f32) {
-    e.mem.set_f32(this.addr() + 0x670, value);
+    e.mem.set_f32(this.addr() + 0x670, x87_quiet(value));
 }
 
 // Translated from 005c59e0 (decompiled, FalloutNV.exe 1.4.0.525)
 /// `thiscall` (`float`): stores it at `this + 0x674`.
 pub fn fn_005c59e0(e: &mut Engine, this: Ptr, value: f32) {
-    e.mem.set_f32(this.addr() + 0x674, value);
+    e.mem.set_f32(this.addr() + 0x674, x87_quiet(value));
 }
 
 // Translated from 005c5a00 (decompiled, FalloutNV.exe 1.4.0.525)

@@ -168,9 +168,10 @@ pub fn multi_bound_marker_data_scale(
     scale: f32,
 ) -> Ptr<MultiBoundMarkerData> {
     for offset in [0, 4, 8] {
-        let value = e.mem.f32(this.addr() + offset);
-        e.mem
-            .set_f32(this.addr() + offset, ((value as f64) * scale as f64) as f32);
+        // `FLD` the half extent, `FMUL` the float argument in memory.
+        let value = x87_load32(e.mem.u32(this.addr() + offset));
+        let product = x87_mul(value, x87_m32(scale.to_bits()));
+        e.mem.set_u32(this.addr() + offset, x87_store32(product));
     }
     this
 }

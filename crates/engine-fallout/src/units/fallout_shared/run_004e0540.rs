@@ -685,6 +685,329 @@ pub fn fn_004e2190(e: &mut Engine, this: Ptr) -> Ptr {
     e.call(POINTER_GET, &args![this.addr() + 0x88]).ptr()
 }
 
+// Translated from 004e0870 (decompiled, FalloutNV.exe 1.4.0.525)
+/// With the splatter enabled (`011c7834`), hands the object `011c786c` holds (`00559450`)
+/// to `004def90` and clears `011c7828`.
+pub fn fn_004e0870(e: &mut Engine) {
+    if e.global::<u8>(SPLATTER_ENABLED) == 0 {
+        return;
+    }
+    let object = e.call(POINTER_GET, &args![SPLATTER_OBJECT]).u32();
+    e.call(0x004d_ef90, &args![object]);
+    e.set_global::<u32>(SPLATTER_WORD, 0);
+}
+
+/// `00403e20` (`thiscall`): the address of a setting's value.
+const SETTING_ADDRESS: u32 = 0x0040_3e20;
+/// `RandomFloat` (Xbox PDB, `00476b70`, cdecl: low, high).
+const RANDOM_FLOAT: u32 = 0x0047_6b70;
+/// `004dfea0` (no arguments): a random float in `ST0`.
+const RANDOM_UNIT: u32 = 0x004d_fea0;
+/// The two-float constructor (`00452dc0`, `thiscall(x, y)`).
+const POINT2_CONSTRUCT: u32 = 0x0045_2dc0;
+
+/// An `operator new` block of `count` entries of `size` bytes (a size of `0xFFFFFFFF` when the
+/// multiplication overflows) with each entry built by `006815c0` (the vector constructor
+/// `00401050`), or null when the allocation fails.
+fn new_splatter_array(e: &mut Engine, count: u32, size: u32) -> u32 {
+    let bytes = count.checked_mul(size).unwrap_or(u32::MAX);
+    let block = e.call(OPERATOR_NEW, &args![bytes]).u32();
+    if block == 0 {
+        return 0;
+    }
+    e.call(0x0040_1050, &args![block, size, count, 0x0068_15c0u32]);
+    block
+}
+
+/// The value at a setting's address (`00403e20`), as `FLD`/`FSTP` copy it.
+fn setting_float(e: &mut Engine, setting: u32) -> u32 {
+    let address = e.call(SETTING_ADDRESS, &args![setting]).u32();
+    x87_quiet_bits(e.mem.u32(address))
+}
+
+/// `RandomFloat` between the values of the settings `low` and `high` (the high one is read
+/// first, as the exe pushes it first), stored as a float.
+fn random_between(e: &mut Engine, low: u32, high: u32) -> u32 {
+    let high = setting_float(e, high);
+    let low = setting_float(e, low);
+    x87_store32(e.call(RANDOM_FLOAT, &args![low, high]).f64())
+}
+
+/// 0.5 (the double at `01011588`) when `004dfea0` is not above the double at `01012060`
+/// (`TEST AH,0x41`: below, equal or unordered), else 0.0, stored as a float.
+fn random_half(e: &mut Engine) -> u32 {
+    let value = e.call(RANDOM_UNIT, &args![]).f64();
+    let zero = e.global::<f64>(ZERO_DOUBLE);
+    if value > zero {
+        0
+    } else {
+        x87_store32(x87_load64(e.global::<u64>(HALF_DOUBLE)))
+    }
+}
+
+/// One splatter corner: the point (`x`, `y`, `z` as pushed) turned by the rotation at `matrix`
+/// (`004b4500`) and moved by `center` (`00439e90`), its three words copied to `target`. The
+/// temporaries are the exe's (corner `k` at EBP-0xE0, -0xEC, -0xF8, each 0x24 lower).
+#[allow(clippy::too_many_arguments)]
+fn splatter_corner(
+    e: &mut Engine,
+    ebp: u32,
+    k: u32,
+    matrix: u32,
+    center: u32,
+    point: [u32; 3],
+    target: u32,
+) {
+    let local = ebp - 0xe0 - 0x24 * k;
+    let turned = ebp - 0xec - 0x24 * k;
+    let moved = ebp - 0xf8 - 0x24 * k;
+    let made = e
+        .call(POINT_CONSTRUCT, &args![local, point[0], point[1], point[2]])
+        .u32();
+    let turned = e.call(0x004b_4500, &args![matrix, turned, made]).u32();
+    let moved = e.call(0x0043_9e90, &args![turned, moved, center]).u32();
+    for word in 0..3 {
+        let value = e.mem.u32(moved + 4 * word);
+        e.mem.set_u32(target + 4 * word, value);
+    }
+}
+
+/// The four corners of one quad (`a` the half size, `depth` the third word): (-a, a), (a, a),
+/// (-a, -a), (a, -a), at `base` .. `base + 3` of the 12-byte `array`.
+#[allow(clippy::too_many_arguments)]
+fn splatter_quad(
+    e: &mut Engine,
+    ebp: u32,
+    first: u32,
+    matrix: u32,
+    center: u32,
+    half: u32,
+    depth: u32,
+    array: u32,
+    base: u32,
+) {
+    let plus = x87_quiet_bits(half);
+    let minus = plus ^ 0x8000_0000;
+    let depth = x87_quiet_bits(depth);
+    for (k, x, y) in [
+        (0u32, minus, plus),
+        (1, plus, plus),
+        (2, minus, minus),
+        (3, plus, minus),
+    ] {
+        let target = base.wrapping_add(k).wrapping_mul(0xc).wrapping_add(array);
+        splatter_corner(e, ebp, first + k, matrix, center, [x, y, depth], target);
+    }
+}
+
+/// The six indices of a quad's two triangles (`base`, +2, +1, +1, +2, +3) at entry `quad`*6
+/// of the 16-bit `indices`.
+fn splatter_triangles(e: &mut Engine, indices: u32, quad: u32, base: u32) {
+    let at = indices.wrapping_add(quad.wrapping_mul(6).wrapping_mul(2));
+    for (offset, step) in [(0u32, 0u32), (2, 2), (4, 1), (6, 1), (8, 2), (0xa, 3)] {
+        e.mem.set_u16(at + offset, base.wrapping_add(step) as u16);
+    }
+}
+
+// Translated from 004e08a0 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 004e08a0 - the exception-unwinding frame (FS:[0]) is not translated.
+/// Builds the screen splatter's geometry for `count` splats (cdecl) and returns its node
+/// (`00aa13e0(0xAC)`, constructor `00a5ecb0` with 0; null when the allocation fails): for
+/// each splat a quad of 4 corners (12 bytes each), texture coordinates (8 bytes each) and 6
+/// 16-bit indices, and with the third texture enabled (`011f941e`) a second set. Each splat's
+/// centre is two random values (`004dfea0`) times the frustum floats `01189550`/`01189554`
+/// (`00416870` with 0.0); its half size, depth and alternative depth are `RandomFloat`
+/// between the settings `011cf9a4`/`011cfaa0`, `011cfae0`/`011cf980` and
+/// `011ceca0`/`011cf920`, the alternative used when `004dff00` passes for the setting
+/// `011cefe4`; its rotation is the local matrix `004dfdd0` fills; the texture offset is 0.5
+/// or 0.0 per axis by two more random values (`00452dc0`), added (`004dfe30`) to (0.5, 0.5),
+/// (0, 0.5), (0.5, 0), (0, 0); the second set's half size is the setting `011cf2c4` and its
+/// coordinates (1, 1), (0, 1), (1, 0), (0, 0). Each set becomes a `NiTriShape` (`00a74410`,
+/// `00aa13e0(0xC4)`) with a texturing property (`00aa13e0(0x70)`, `00b81200`) holding the
+/// textures `011c7864` and `011c7860` (the second set: `011c7868`) through `004dfe80`,
+/// attached (`00439410`), prepared (`00b57e30` with 0, 0) and added to the node (vtable slot
+/// 0xDC with 1).
+pub fn fn_004e08a0(e: &mut Engine, count: u32) -> u32 {
+    let block = e.call(ALLOCATE, &args![0xacu32]).u32();
+    let node = if block == 0 {
+        0
+    } else {
+        e.call(0x00a5_ecb0, &args![block, 0u32]).u32()
+    };
+    let vertices = new_splatter_array(e, count << 2, 0xc);
+    let coordinates = new_splatter_array(e, count << 2, 8);
+    let index_bytes = count.wrapping_mul(6).checked_mul(2).unwrap_or(u32::MAX);
+    let indices = e.call(OPERATOR_NEW, &args![index_bytes]).u32();
+    let mut second_vertices = 0;
+    let mut second_coordinates = 0;
+    let mut second_indices = 0;
+    if e.global::<u8>(THIRD_TEXTURE_ENABLED) != 0 {
+        second_vertices = new_splatter_array(e, count << 2, 0xc);
+        second_coordinates = new_splatter_array(e, count << 2, 8);
+        let index_bytes = count.wrapping_mul(6).checked_mul(2).unwrap_or(u32::MAX);
+        second_indices = e.call(OPERATOR_NEW, &args![index_bytes]).u32();
+    }
+    // The frame below EBP: the rotation at EBP-0x7C, the centre at EBP-0x88, the texture
+    // offset at EBP-0x50 and the temporaries below them.
+    e.with_stack(0x2b0, |e, frame| {
+        let ebp = frame.addr() + 0x2b0;
+        let matrix = ebp - 0x7c;
+        let center = ebp - 0x88;
+        let offset = ebp - 0x50;
+        let mut splat = 0u32;
+        while splat < count {
+            let random = e.call(RANDOM_UNIT, &args![]).f64();
+            let right = x87_m32(e.global::<u32>(SPLATTER_FRUSTUM_RIGHT));
+            let x = x87_store32(x87_mul(random, right));
+            let random = e.call(RANDOM_UNIT, &args![]).f64();
+            let top = x87_m32(e.global::<u32>(SPLATTER_FRUSTUM_TOP));
+            let y = x87_store32(x87_mul(random, top));
+            e.call(
+                POINT_CONSTRUCT,
+                &args![center, x87_quiet_bits(x), x87_quiet_bits(y), 0u32],
+            );
+            let half = random_between(e, 0x011c_f9a4, 0x011c_faa0);
+            let mut depth = random_between(e, 0x011c_fae0, 0x011c_f980);
+            let other_depth = random_between(e, 0x011c_eca0, 0x011c_f920);
+            e.call(0x0068_15c0, &args![matrix]);
+            e.call(0x004d_fdd0, &args![matrix]);
+            let chance = setting_float(e, 0x011c_efe4);
+            if e.call(0x004d_ff00, &args![chance]).bool() {
+                depth = x87_quiet_bits(other_depth);
+            }
+            let u = random_half(e);
+            let v = random_half(e);
+            e.call(
+                POINT2_CONSTRUCT,
+                &args![offset, x87_quiet_bits(u), x87_quiet_bits(v)],
+            );
+            let second_half = setting_float(e, 0x011c_f2c4);
+            let base = splat << 2;
+            splatter_quad(e, ebp, 0, matrix, center, half, depth, vertices, base);
+            if e.global::<u8>(THIRD_TEXTURE_ENABLED) != 0 {
+                splatter_quad(
+                    e,
+                    ebp,
+                    4,
+                    matrix,
+                    center,
+                    second_half,
+                    depth,
+                    second_vertices,
+                    base,
+                );
+            }
+            let half_value = x87_quiet_bits(e.global::<u32>(HALF));
+            for (k, (cu, cv)) in [
+                (half_value, half_value),
+                (0, half_value),
+                (half_value, 0),
+                (0, 0),
+            ]
+            .into_iter()
+            .enumerate()
+            {
+                let k = k as u32;
+                let local = ebp - 0x1fc - 0x10 * k;
+                let sum = ebp - 0x204 - 0x10 * k;
+                let made = e.call(POINT2_CONSTRUCT, &args![local, cu, cv]).u32();
+                let moved = e.call(0x004d_fe30, &args![made, sum, offset]).u32();
+                let target = coordinates
+                    .wrapping_add(base.wrapping_mul(8))
+                    .wrapping_add(8 * k);
+                let first = e.mem.u32(moved);
+                let second = e.mem.u32(moved + 4);
+                e.mem.set_u32(target, first);
+                e.mem.set_u32(target + 4, second);
+            }
+            if e.global::<u8>(THIRD_TEXTURE_ENABLED) != 0 {
+                let one = 0x3f80_0000u32;
+                for (k, (cu, cv)) in [(one, one), (0, one), (one, 0), (0, 0)]
+                    .into_iter()
+                    .enumerate()
+                {
+                    let k = k as u32;
+                    let local = ebp - 0x23c - 8 * k;
+                    let made = e.call(POINT2_CONSTRUCT, &args![local, cu, cv]).u32();
+                    let target = second_coordinates
+                        .wrapping_add(base.wrapping_mul(8))
+                        .wrapping_add(8 * k);
+                    let first = e.mem.u32(made);
+                    let second = e.mem.u32(made + 4);
+                    e.mem.set_u32(target, first);
+                    e.mem.set_u32(target + 4, second);
+                }
+            }
+            splatter_triangles(e, indices, splat, base);
+            if e.global::<u8>(THIRD_TEXTURE_ENABLED) != 0 {
+                splatter_triangles(e, second_indices, splat, base);
+            }
+            splat += 1;
+        }
+    });
+    add_splatter_shape(
+        e,
+        node,
+        count,
+        [vertices, coordinates, indices],
+        &[SPLATTER_TEXTURES + 4, SPLATTER_TEXTURES],
+    );
+    if e.global::<u8>(THIRD_TEXTURE_ENABLED) != 0 {
+        add_splatter_shape(
+            e,
+            node,
+            count,
+            [second_vertices, second_coordinates, second_indices],
+            &[SPLATTER_TEXTURES + 8],
+        );
+    }
+    node
+}
+
+/// The end of `004e08a0` for one set: the `NiTriShape` (`00aa13e0(0xC4)`, `00a74410` with
+/// `count`*4 vertices, no normals or colours, one texture set, `count`*2 triangles; null when
+/// the allocation fails), the texturing property (`00aa13e0(0x70)`, `00b81200`) with the
+/// textures the pointers in `textures` hold in slots 0, 1, ... (`004dfe80`), attached
+/// (`00439410`), prepared (`00b57e30` with 0, 0) and added to the node (vtable slot 0xDC
+/// with 1).
+fn add_splatter_shape(e: &mut Engine, node: u32, count: u32, set: [u32; 3], textures: &[u32]) {
+    let [vertices, coordinates, indices] = set;
+    let block = e.call(ALLOCATE, &args![0xc4u32]).u32();
+    let shape = if block == 0 {
+        0
+    } else {
+        e.call(
+            0x00a7_4410,
+            &args![
+                block,
+                count << 2,
+                vertices,
+                0u32,
+                0u32,
+                coordinates,
+                1u32,
+                0u32,
+                count << 1,
+                indices
+            ],
+        )
+        .u32()
+    };
+    let block = e.call(ALLOCATE, &args![0x70u32]).u32();
+    let property = if block == 0 {
+        0
+    } else {
+        e.call(0x00b8_1200, &args![block]).u32()
+    };
+    for (slot, &holder) in textures.iter().enumerate() {
+        let texture = e.call(POINTER_GET, &args![holder]).u32();
+        e.call(0x004d_fe80, &args![property, slot as u32, texture]);
+    }
+    e.call(0x0043_9410, &args![shape, property]);
+    e.call(0x00b5_7e30, &args![shape, 0u32, 0u32]);
+    e.vcall(node, 0xdc, &args![shape, 1u32]);
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -705,6 +1028,8 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x004e_2160, fn_004e2160() -> u8),
         entry!(0x004e_2180, fn_004e2180() -> u8),
         entry!(0x004e_2190, fn_004e2190(Ptr) -> Ptr),
+        entry!(0x004e_0870, fn_004e0870()),
+        entry!(0x004e_08a0, fn_004e08a0(u32) -> u32),
     ]
 }
 
@@ -1213,5 +1538,196 @@ mod tests {
         e.call(0x004e_1bc0, &args![this, 0x77u32, 0u32]);
         assert_eq!(e.mem.u8(state + 0x166), 0);
         assert!(calls(&e, 0x0054_71e0).is_empty());
+    }
+}
+
+#[cfg(test)]
+mod n039_tests {
+    use super::*;
+
+    fn calls_to(e: &Engine, callee: u32) -> Vec<Vec<u32>> {
+        e.call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|(address, _)| *address == callee)
+            .map(|(_, words)| words.clone())
+            .collect()
+    }
+
+    fn float_at(e: &Engine, address: u32) -> f32 {
+        f32::from_bits(e.mem.u32(address))
+    }
+
+    #[test]
+    fn fn_004e0870_flushes_only_when_enabled() {
+        let mut e = Engine::new();
+        e.map(0x011c_7800, 0x80);
+        e.register(POINTER_GET, |_, _| 0x4321u32.into_ret());
+        e.register(0x004d_ef90, |_, _| Ret::default());
+        e.set_global::<u32>(SPLATTER_WORD, 7);
+        e.call_log = Some(vec![]);
+        e.call(0x004e_0870, &args![]);
+        assert_eq!(e.call_log.take().unwrap().len(), 1);
+        assert_eq!(e.global::<u32>(SPLATTER_WORD), 7);
+        e.set_global::<u8>(SPLATTER_ENABLED, 1);
+        e.call_log = Some(vec![]);
+        e.call(0x004e_0870, &args![]);
+        assert_eq!(calls_to(&e, POINTER_GET), vec![vec![SPLATTER_OBJECT]]);
+        assert_eq!(calls_to(&e, 0x004d_ef90), vec![vec![0x4321]]);
+        assert_eq!(e.global::<u32>(SPLATTER_WORD), 0);
+    }
+
+    /// Doubles for `004e08a0`: points and sums are computed in the test, the rotation is the
+    /// identity, `RandomFloat` gives low + high and the settings hold the given floats.
+    fn splatter_rig(e: &mut Engine, third: bool) -> u32 {
+        e.map(0x0118_9550, 8);
+        e.set_global::<f32>(SPLATTER_FRUSTUM_RIGHT, 2.0);
+        e.set_global::<f32>(SPLATTER_FRUSTUM_TOP, 4.0);
+        e.map(0x0101_6248, 4);
+        e.set_global::<f32>(HALF, 0.5);
+        e.map(0x0101_2060, 8);
+        e.set_global::<f64>(ZERO_DOUBLE, 0.0);
+        e.map(0x0101_1588, 8);
+        e.set_global::<f64>(HALF_DOUBLE, 0.5);
+        e.map(0x011f_941e, 1);
+        e.set_global::<u8>(THIRD_TEXTURE_ENABLED, u8::from(third));
+        e.map(SPLATTER_TEXTURES, 12);
+        e.register(ALLOCATE, |e, a| e.mem.alloc(a[0]).into_ret());
+        e.register(OPERATOR_NEW, |e, a| e.mem.alloc(a[0]).into_ret());
+        e.put_vtable(0x00d9_0000, &[0x00e6_0000; 0x40]);
+        e.register(0x00e6_0000, |_, _| Ret::default());
+        e.register(0x00a5_ecb0, |e, a| {
+            e.mem.set_u32(a[0], 0x00d9_0000);
+            a[0].into_ret()
+        });
+        for address in [
+            0x0040_1050,
+            0x0068_15c0,
+            0x004d_fdd0,
+            0x00b5_7e30,
+            0x0043_9410,
+            0x004d_fe80,
+        ] {
+            e.register(address, |_, _| Ret::default());
+        }
+        e.register(POINTER_GET, |_, a| (a[0] + 0x1000).into_ret());
+        e.register(0x00a7_4410, |_, a| a[0].into_ret());
+        e.register(0x00b8_1200, |_, a| a[0].into_ret());
+        let mut randoms = vec![0.5f32, 0.25, -1.0, 1.0];
+        e.register_double(RANDOM_UNIT, move |_, _| randoms.remove(0).into_ret());
+        let settings = e.mem.alloc(0x40);
+        let table = [
+            (0x011c_f9a4u32, 1.0f32),
+            (0x011c_faa0, 2.0),
+            (0x011c_fae0, 0.5),
+            (0x011c_f980, 0.5),
+            (0x011c_eca0, 0.0),
+            (0x011c_f920, 0.0),
+            (0x011c_efe4, 0.0),
+            (0x011c_f2c4, 0.25),
+        ];
+        for (i, (_, value)) in table.iter().enumerate() {
+            e.mem.set_u32(settings + 4 * i as u32, value.to_bits());
+        }
+        e.register_double(SETTING_ADDRESS, move |_, a| {
+            let i = table.iter().position(|(s, _)| *s == a[0]).unwrap() as u32;
+            (settings + 4 * i).into_ret()
+        });
+        e.register(RANDOM_FLOAT, |_, a| {
+            (f32::from_bits(a[0]) + f32::from_bits(a[1])).into_ret()
+        });
+        e.register(0x004d_ff00, |_, _| false.into_ret());
+        e.register(POINT_CONSTRUCT, |e, a| {
+            for i in 0..3 {
+                e.mem.set_u32(a[0] + 4 * i, a[1 + i as usize]);
+            }
+            a[0].into_ret()
+        });
+        e.register(POINT2_CONSTRUCT, |e, a| {
+            e.mem.set_u32(a[0], a[1]);
+            e.mem.set_u32(a[0] + 4, a[2]);
+            a[0].into_ret()
+        });
+        e.register(0x004b_4500, |e, a| {
+            for i in 0..3 {
+                let v = e.mem.u32(a[2] + 4 * i);
+                e.mem.set_u32(a[1] + 4 * i, v);
+            }
+            a[1].into_ret()
+        });
+        e.register(0x0043_9e90, |e, a| {
+            for i in 0..3 {
+                let sum = f32::from_bits(e.mem.u32(a[0] + 4 * i))
+                    + f32::from_bits(e.mem.u32(a[2] + 4 * i));
+                e.mem.set_u32(a[1] + 4 * i, sum.to_bits());
+            }
+            a[1].into_ret()
+        });
+        e.register(0x004d_fe30, |e, a| {
+            for i in 0..2 {
+                let sum = f32::from_bits(e.mem.u32(a[0] + 4 * i))
+                    + f32::from_bits(e.mem.u32(a[2] + 4 * i));
+                e.mem.set_u32(a[1] + 4 * i, sum.to_bits());
+            }
+            a[1].into_ret()
+        });
+        settings
+    }
+
+    #[test]
+    fn fn_004e08a0_builds_one_quad() {
+        let mut e = Engine::new();
+        splatter_rig(&mut e, false);
+        e.call_log = Some(vec![]);
+        let node = e.call(0x004e_08a0, &args![1u32]).u32();
+        let shapes = calls_to(&e, 0x00a7_4410);
+        assert_eq!(shapes.len(), 1);
+        let shape = &shapes[0];
+        assert_eq!(
+            (shape[1], shape[3], shape[4], shape[6], shape[7], shape[8]),
+            (4, 0, 0, 1, 0, 2)
+        );
+        let (vertices, coordinates, indices) = (shape[2], shape[5], shape[9]);
+        // Centre (1, 1, 0), half size 3, depth 1.
+        let corners: Vec<f32> = (0..12).map(|i| float_at(&e, vertices + 4 * i)).collect();
+        assert_eq!(
+            corners,
+            vec![-2.0, 4.0, 1.0, 4.0, 4.0, 1.0, -2.0, -2.0, 1.0, 4.0, -2.0, 1.0]
+        );
+        // Offset (0.5, 0.0).
+        let uv: Vec<f32> = (0..8).map(|i| float_at(&e, coordinates + 4 * i)).collect();
+        assert_eq!(uv, vec![1.0, 0.5, 0.5, 0.5, 1.0, 0.0, 0.5, 0.0]);
+        let triangles: Vec<u16> = (0..6).map(|i| e.mem.u16(indices + 2 * i)).collect();
+        assert_eq!(triangles, vec![0, 2, 1, 1, 2, 3]);
+        let property = calls_to(&e, 0x00b8_1200)[0][0];
+        assert_eq!(
+            calls_to(&e, 0x004d_fe80),
+            vec![
+                vec![property, 0, 0x011c_8864],
+                vec![property, 1, 0x011c_8860]
+            ]
+        );
+        assert_eq!(calls_to(&e, 0x00e6_0000), vec![vec![node, shape[0], 1]]);
+        assert_eq!(calls_to(&e, 0x00b5_7e30), vec![vec![shape[0], 0, 0]]);
+    }
+
+    #[test]
+    fn fn_004e08a0_builds_the_second_set_with_the_third_texture() {
+        let mut e = Engine::new();
+        splatter_rig(&mut e, true);
+        e.call_log = Some(vec![]);
+        e.call(0x004e_08a0, &args![1u32]);
+        let shapes = calls_to(&e, 0x00a7_4410);
+        assert_eq!(shapes.len(), 2);
+        let (vertices, coordinates, indices) = (shapes[1][2], shapes[1][5], shapes[1][9]);
+        let corners: Vec<f32> = (0..3).map(|i| float_at(&e, vertices + 4 * i)).collect();
+        assert_eq!(corners, vec![0.75, 1.25, 1.0]);
+        let uv: Vec<f32> = (0..8).map(|i| float_at(&e, coordinates + 4 * i)).collect();
+        assert_eq!(uv, vec![1.0, 1.0, 0.0, 1.0, 1.0, 0.0, 0.0, 0.0]);
+        assert_eq!(e.mem.u16(indices + 0xa), 3);
+        let property = calls_to(&e, 0x00b8_1200)[1][0];
+        assert_eq!(calls_to(&e, 0x004d_fe80)[2], vec![property, 0, 0x011c_8868]);
+        assert_eq!(calls_to(&e, OPERATOR_NEW).len(), 6);
     }
 }

@@ -674,9 +674,131 @@ pub fn value_modifier_effect_check_adjust_no_negative_magnitude(
     x87_load32(kept)
 }
 
+/// The effect's effect setting (`007df1d0`, thiscall on the effect;
+/// `statsmenu.cpp` range).
+const EFFECT_SETTING_007DF1D0: u32 = 0x007d_f1d0;
+/// `ActiveEffect::FinishInitLoadGame` (engine map), thiscall (word), `RET 4`.
+const ACTIVE_EFFECT_FINISH_INIT_LOAD_GAME: u32 = 0x0080_5760;
+/// The save/load singleton (pointer global) and a byte of it
+/// (`008df040`, `highprocess.cpp` range) compared with 0x5f and 0x62.
+const SAVE_LOAD_GAME: u32 = 0x011d_e45c;
+const SAVE_LOAD_BYTE_AT_80: u32 = 0x008d_f040;
+/// The target actor's virtual slots `FinishInitLoadGame` uses: +0x360
+/// (`AL`), +0x3b4 and +0x39c (actor value, value[, caster]).
+const SLOT_ACTOR_360: u32 = 0x360;
+const SLOT_ACTOR_3B4: u32 = 0x3b4;
+const SLOT_ACTOR_39C: u32 = 0x39c;
+/// `ValueModifierEffect`'s own virtual slot +0x60 (`GetActorValue`, Xbox
+/// PDB order).
+const SLOT_GET_ACTOR_VALUE: u32 = 0x60;
+
+// Translated from 0082c490 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ValueModifierEffect::Continue` (engine map; `thiscall`, plain `RET`):
+/// for a health effect (`eWhichActorValue` 0x10) on the player with an
+/// effect item of positive duration (`EffectItem::GetDuration`), the
+/// alchemy stats are kept as `Start` keeps them (stats 0x12 and 0x10 by the
+/// alchemy item's flags 2 and 4), with the duration times the magnitude
+/// (`FILD`, `FMUL float`, stored as a `float`) against the player's health
+/// below its permanent value.
+pub fn value_modifier_effect_continue(e: &mut Engine, this: Ptr<ActiveEffect>) {
+    let target = target_actor(e, this);
+    if target != e.global::<u32>(PLAYER) {
+        return;
+    }
+    let effect = e.get(this, ActiveEffect::pEffect);
+    if effect == 0 || e.call(EFFECT_ITEM_DURATION, &args![effect]).i32() <= 0 {
+        return;
+    }
+    if which(e, this) != HEALTH {
+        return;
+    }
+    let lost = player_health_lost(e);
+    alchemy_stats(e, this, x87_quiet_bits(lost), |e, this| {
+        let effect = e.get(this, ActiveEffect::pEffect);
+        let duration = e.call(EFFECT_ITEM_DURATION, &args![effect]).i32();
+        let amount = x87_store32(x87_mul(
+            f64::from(duration),
+            x87_m32(magnitude_bits(e, this)),
+        ));
+        x87_quiet_bits(amount)
+    });
+}
+
+// Translated from 0082ccb0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ValueModifierEffect::IsCausingDamage` (engine map; `thiscall`, plain
+/// `RET`): whether it is a health effect (`eWhichActorValue` 0x10) whose
+/// effect setting (`007df1d0`, asked twice) has flag 4 and not flag 2.
+pub fn value_modifier_effect_is_causing_damage(e: &mut Engine, this: Ptr<ActiveEffect>) -> bool {
+    if which(e, this) != HEALTH {
+        return false;
+    }
+    let setting = e.call(EFFECT_SETTING_007DF1D0, &args![this]).u32();
+    if !e.call(SETTING_HAS_FLAG, &args![setting, 4u32]).bool() {
+        return false;
+    }
+    let setting = e.call(EFFECT_SETTING_007DF1D0, &args![this]).u32();
+    !e.call(SETTING_HAS_FLAG, &args![setting, 2u32]).bool()
+}
+
+// Translated from 0082cd10 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ValueModifierEffect::FinishInitLoadGame` (engine map; `thiscall`, `RET
+/// 4`): `ActiveEffect::FinishInitLoadGame(word)`; then, when the save/load
+/// singleton's byte (`008df040`, read twice) is from 0x5f to 0x61, for a
+/// target actor whose virtual slot +0x360 answers true, an effect
+/// `00804b60` accepts and an effect setting with flag 2, the target's
+/// slot +0x3b4 runs with the effect's actor value (slot +0x60) and minus
+/// the magnitude (`00495460`, `FCHS`), then slot +0x39c with the actor
+/// value, the magnitude and the caster actor (or 0).
+pub fn value_modifier_effect_finish_init_load_game(
+    e: &mut Engine,
+    this: Ptr<ActiveEffect>,
+    word: u32,
+) {
+    e.call(ACTIVE_EFFECT_FINISH_INIT_LOAD_GAME, &args![this, word]);
+    let game = e.global::<u32>(SAVE_LOAD_GAME);
+    if e.call(SAVE_LOAD_BYTE_AT_80, &args![game]).u8() < 0x5f {
+        return;
+    }
+    let game = e.global::<u32>(SAVE_LOAD_GAME);
+    if e.call(SAVE_LOAD_BYTE_AT_80, &args![game]).u8() >= 0x62 {
+        return;
+    }
+    let target = target_actor(e, this);
+    if target == 0 || !e.vcall(target, SLOT_ACTOR_360, &args![]).bool() {
+        return;
+    }
+    if !e.call(EFFECT_TEST, &args![this]).bool() || !setting_flag(e, this, 2) {
+        return;
+    }
+    let caster = caster_actor(e, this);
+    let magnitude = e.call(RADIATION_AMOUNT, &args![this]).f64();
+    let negated = x87_store32(-magnitude);
+    let actor_value = e.vcall(this.addr(), SLOT_GET_ACTOR_VALUE, &args![]).u32();
+    e.vcall(target, SLOT_ACTOR_3B4, &args![actor_value, negated]);
+    let magnitude = x87_store32(e.call(RADIATION_AMOUNT, &args![this]).f64());
+    let actor_value = e.vcall(this.addr(), SLOT_GET_ACTOR_VALUE, &args![]).u32();
+    e.vcall(
+        target,
+        SLOT_ACTOR_39C,
+        &args![actor_value, magnitude, caster],
+    );
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(
+            0x0082_c490,
+            value_modifier_effect_continue(Ptr<ActiveEffect>)
+        ),
+        entry!(
+            0x0082_ccb0,
+            value_modifier_effect_is_causing_damage(Ptr<ActiveEffect>) -> bool
+        ),
+        entry!(
+            0x0082_cd10,
+            value_modifier_effect_finish_init_load_game(Ptr<ActiveEffect>, u32)
+        ),
         entry!(
             0x0082_bb30,
             value_modifier_effect_copy(Ptr<ActiveEffect>) -> u32
@@ -1278,5 +1400,184 @@ mod tests {
         returns(&mut e, VALUE_TEST_C, 0);
         let kept = value_modifier_effect_check_adjust_no_negative_magnitude(&mut e, effect, -5.0);
         assert_eq!(kept, -5.0);
+    }
+}
+
+#[cfg(test)]
+mod n050_tests {
+    use super::*;
+
+    fn calls(e: &Engine, addr: u32) -> Vec<Vec<u32>> {
+        e.call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|(a, _)| *a == addr)
+            .map(|(_, w)| w.clone())
+            .collect()
+    }
+
+    const SLOTS: u32 = 0x00f9_0000;
+
+    /// An object whose vtable slots `slots` point at `SLOTS + slot`.
+    fn with_vtable(e: &mut Engine, size: u32, slots: &[u32]) -> u32 {
+        let object = e.mem.alloc(size);
+        let vtable = e.mem.alloc(0x400);
+        for slot in slots {
+            e.mem.set_u32(vtable + slot, SLOTS + slot);
+        }
+        e.mem.set_u32(object, vtable);
+        object
+    }
+
+    /// Target and caster: the effect's words +0x24 / +0x28 are the actors
+    /// themselves.
+    fn engine() -> Engine {
+        let mut e = Engine::new();
+        e.map(0x011d_e000, 0x1000);
+        e.register(EFFECT_TARGET, |e, a| e.mem.u32(a[0] + 0x24).into_ret());
+        e.register(EFFECT_CASTER, |e, a| e.mem.u32(a[0] + 0x28).into_ret());
+        e.register(TARGET_AS_ACTOR, |_, a| a[0].into_ret());
+        e.register(CASTER_AS_ACTOR, |_, a| a[0].into_ret());
+        e
+    }
+
+    #[test]
+    fn continue_keeps_the_alchemy_stats_for_the_player() {
+        let mut e = engine();
+        // The player: its value owner at +0xa4 answers 100 permanent and 70
+        // current health.
+        let player = e.mem.alloc(0xb0);
+        let owner_vtable = e.mem.alloc(0x30);
+        e.mem.set_u32(owner_vtable + 0x20, SLOTS + 0x20);
+        e.mem.set_u32(owner_vtable + 0xc, SLOTS + 0xc);
+        e.mem.set_u32(player + 0xa4, owner_vtable);
+        e.register(SLOTS + 0x20, |_, _| Ret {
+            st0: 100.0,
+            ..Ret::default()
+        });
+        e.register(SLOTS + 0xc, |_, _| Ret {
+            st0: 70.0,
+            ..Ret::default()
+        });
+        e.set_global(PLAYER, player);
+        let item = with_vtable(&mut e, 0x10, &[0x18]);
+        e.register(SLOTS + 0x18, |_, _| 7u32.into_ret());
+        e.register_double(EFFECT_ITEM, move |_, _| item.into_ret());
+        e.register(RT_DYNAMIC_CAST, |_, a| a[0].into_ret());
+        e.register(ALCHEMY_HAS_FLAG, |_, _| 1u32.into_ret());
+        e.register(EFFECT_ITEM_DURATION, |_, _| 4u32.into_ret());
+        e.register(STAT_AMOUNT, |_, a| Ret {
+            st0: f64::from(f32::from_bits(a[0])) + f64::from(f32::from_bits(a[1])),
+            ..Ret::default()
+        });
+        e.register(FTOL, |_, a| {
+            (f64::from_bits(u64::from(a[0]) | u64::from(a[1]) << 32) as i32).into_ret()
+        });
+        e.register(MOD_STAT, |_, _| Ret::default());
+        let this: Ptr<ActiveEffect> = Ptr::new(e.mem.alloc(0x4c));
+        let this_word = this.addr();
+        e.mem.set_u32(this_word + 0x24, player);
+        e.mem.set_u32(this_word + 0xc, 0x4000);
+        e.mem.set_u32(this_word + 0x48, HEALTH);
+        e.set(this, ActiveEffect::fMagnitude, 2.5);
+        e.call_log = Some(vec![]);
+        e.call(0x0082_c490, &args![this]);
+        // amount 4 * 2.5 = 10, lost 30: 40 for both stats.
+        assert_eq!(calls(&e, MOD_STAT), vec![vec![0x12, 40], vec![0x10, 40]]);
+        assert_eq!(
+            calls(&e, STAT_AMOUNT)[0],
+            vec![10.0f32.to_bits(), 30.0f32.to_bits()]
+        );
+        // Not health, no duration, or not the player: nothing.
+        for change in 0..3 {
+            match change {
+                0 => e.mem.set_u32(this_word + 0x48, 7),
+                1 => e.register(EFFECT_ITEM_DURATION, |_, _| Ret::default()),
+                _ => e.mem.set_u32(this_word + 0x24, 0x7777),
+            }
+            e.call_log = Some(vec![]);
+            value_modifier_effect_continue(&mut e, this);
+            assert!(calls(&e, MOD_STAT).is_empty());
+        }
+    }
+
+    #[test]
+    fn causing_damage_is_health_with_flag_4_without_flag_2() {
+        let mut e = Engine::new();
+        e.register(EFFECT_SETTING_007DF1D0, |e, a| {
+            e.mem.u32(a[0] + 0x40).into_ret()
+        });
+        e.register(SETTING_HAS_FLAG, |_, a| {
+            u32::from(a[0] & a[1] != 0).into_ret()
+        });
+        let this: Ptr<ActiveEffect> = Ptr::new(e.mem.alloc(0x4c));
+        let word = this.addr();
+        e.mem.set_u32(word + 0x48, HEALTH);
+        e.mem.set_u32(word + 0x40, 4);
+        assert!(e.call(0x0082_ccb0, &args![this]).bool());
+        e.mem.set_u32(word + 0x40, 6);
+        assert!(!value_modifier_effect_is_causing_damage(&mut e, this));
+        e.mem.set_u32(word + 0x40, 0);
+        assert!(!value_modifier_effect_is_causing_damage(&mut e, this));
+        e.mem.set_u32(word + 0x40, 4);
+        e.mem.set_u32(word + 0x48, 0x11);
+        assert!(!value_modifier_effect_is_causing_damage(&mut e, this));
+    }
+
+    #[test]
+    fn finish_init_load_game_reapplies_for_bytes_5f_to_61() {
+        let mut e = engine();
+        e.set_global(SAVE_LOAD_GAME, 0x4444u32);
+        e.register(ACTIVE_EFFECT_FINISH_INIT_LOAD_GAME, |_, _| Ret::default());
+        e.register(SAVE_LOAD_BYTE_AT_80, |e, _| {
+            e.mem.u32(0x011d_e800).into_ret()
+        });
+        e.set_global(0x011d_e800u32, 0x60u32);
+        let target = with_vtable(
+            &mut e,
+            0x10,
+            &[SLOT_ACTOR_360, SLOT_ACTOR_3B4, SLOT_ACTOR_39C],
+        );
+        e.register(SLOTS + SLOT_ACTOR_360, |_, _| 1u32.into_ret());
+        e.register(SLOTS + SLOT_ACTOR_3B4, |_, _| Ret::default());
+        e.register(SLOTS + SLOT_ACTOR_39C, |_, _| Ret::default());
+        e.register(EFFECT_TEST, |_, _| 1u32.into_ret());
+        e.register(EFFECT_ITEM_SETTING, |_, a| a[0].into_ret());
+        e.register(SETTING_HAS_FLAG, |_, a| {
+            u32::from(a[0] & a[1] != 0).into_ret()
+        });
+        e.register(RADIATION_AMOUNT, |_, _| Ret {
+            st0: 3.0,
+            ..Ret::default()
+        });
+        let this = with_vtable(&mut e, 0x4c, &[SLOT_GET_ACTOR_VALUE]);
+        e.register(SLOTS + SLOT_GET_ACTOR_VALUE, |_, _| 0x22u32.into_ret());
+        e.mem.set_u32(this + 0x24, target);
+        e.mem.set_u32(this + 0x28, 0x5150);
+        e.mem.set_u32(this + 0xc, 2);
+        e.call_log = Some(vec![]);
+        e.call(0x0082_cd10, &args![this, 9u32]);
+        assert_eq!(
+            calls(&e, ACTIVE_EFFECT_FINISH_INIT_LOAD_GAME),
+            vec![vec![this, 9]]
+        );
+        assert_eq!(
+            calls(&e, SLOTS + SLOT_ACTOR_3B4),
+            vec![vec![target, 0x22, (-3.0f32).to_bits()]]
+        );
+        assert_eq!(
+            calls(&e, SLOTS + SLOT_ACTOR_39C),
+            vec![vec![target, 0x22, 3.0f32.to_bits(), 0x5150]]
+        );
+        // Other bytes, or a setting without flag 2: nothing more.
+        let effect: Ptr<ActiveEffect> = Ptr::new(this);
+        for (byte, flags) in [(0x5e, 2), (0x62, 2), (0x60, 4)] {
+            e.set_global(0x011d_e800u32, byte);
+            e.mem.set_u32(this + 0xc, flags);
+            e.call_log = Some(vec![]);
+            value_modifier_effect_finish_init_load_game(&mut e, effect, 9);
+            assert!(calls(&e, SLOTS + SLOT_ACTOR_3B4).is_empty());
+        }
     }
 }

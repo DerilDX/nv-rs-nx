@@ -88,6 +88,28 @@ pub fn tes_health_form_get_form_as_health_form(e: &mut Engine, form: Ptr) -> u32
     }
 }
 
+// Translated from 00487290 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TESHealthForm::CompareComponent` (Xbox PDB): true (different) when
+/// `other` is no `TESHealthForm` or its word at +4 (the health) differs.
+pub fn tes_health_form_compare_component(e: &mut Engine, this: Ptr, other: Ptr) -> bool {
+    let source = e
+        .call(
+            DYNAMIC_CAST,
+            &args![
+                other,
+                0u32,
+                TYPE_BASE_FORM_COMPONENT,
+                TYPE_HEALTH_FORM,
+                0u32
+            ],
+        )
+        .u32();
+    if source == 0 {
+        return true;
+    }
+    e.mem.u32(this.addr() + 4) != e.mem.u32(source + 4)
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -98,6 +120,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
             0x004872e0,
             tes_health_form_get_form_as_health_form(Ptr) -> u32
         ),
+        entry!(0x0048_7290, tes_health_form_compare_component(Ptr, Ptr) -> bool),
     ]
 }
 
@@ -195,5 +218,34 @@ mod physics_work_ahead_tests {
         let mut e = Engine::new();
         e.register(GET_FORM_AS_HEALTH_FORM, |_, _| Ret::default());
         assert_eq!(e.call(0x0048_73d0, &args![0x4000u32]).u32(), 0);
+    }
+}
+
+#[cfg(test)]
+mod n043_tests {
+    use super::*;
+
+    #[test]
+    fn compare_component_compares_the_health() {
+        let mut e = Engine::new();
+        e.register(DYNAMIC_CAST, |_, a| a[0].into_ret());
+        let this = e.mem.alloc(8);
+        let other = e.mem.alloc(8);
+        e.mem.set_u32(this + 4, 30);
+        e.mem.set_u32(other + 4, 30);
+        e.call_log = Some(vec![]);
+        assert!(!e.call(0x0048_7290, &args![this, other]).bool());
+        assert_eq!(
+            e.call_log.as_ref().unwrap()[1],
+            (
+                DYNAMIC_CAST,
+                vec![other, 0, TYPE_BASE_FORM_COMPONENT, TYPE_HEALTH_FORM, 0]
+            )
+        );
+        e.mem.set_u32(other + 4, 31);
+        assert!(e.call(0x0048_7290, &args![this, other]).bool());
+        e.register(DYNAMIC_CAST, |_, _| 0u32.into_ret());
+        e.mem.set_u32(other + 4, 30);
+        assert!(e.call(0x0048_7290, &args![this, other]).bool());
     }
 }

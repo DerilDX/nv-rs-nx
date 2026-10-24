@@ -203,7 +203,7 @@ pub fn fn_008d1e70(e: &mut Engine, this: Ptr<Character>) -> bool {
 // Translated from 008d1e90 (decompiled, FalloutNV.exe 1.4.0.525)
 /// Unnamed: stores `fequippedweight` (`+0x1c4`).
 pub fn fn_008d1e90(e: &mut Engine, this: Ptr<Character>, value: f32) {
-    e.set(this, Character::fequippedweight, value);
+    e.set(this, Character::fequippedweight, x87_quiet(value));
 }
 
 // Translated from 008d1eb0 (decompiled, FalloutNV.exe 1.4.0.525)

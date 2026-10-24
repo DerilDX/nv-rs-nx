@@ -489,6 +489,60 @@ pub fn tes_texture_list_load(
     e.mem.free(buffer);
 }
 
+/// `TESForm::AddChunkArray` (`004856f0`, cdecl(chunk, data, size)).
+const ADD_CHUNK_ARRAY: u32 = 0x0048_56f0;
+/// `004858f0` (cdecl(chunk, byte)): adds a one-byte chunk.
+const ADD_CHUNK_BYTE: u32 = 0x0048_58f0;
+/// `008d0600` (thiscall, `RET 8`): the texture list's save step; its body
+/// does nothing in this build.
+const TEXTURE_LIST_SAVE: u32 = 0x008d_0600;
+/// `00843150` (thiscall): the byte at `this + 0x14` (`cFlags`).
+const FLAGS_BYTE: u32 = 0x0084_3150;
+/// The byte `004898e0` answers.
+const WARN_FLAG_BYTE: u32 = 0x011a_cdf8;
+
+// Translated from 004891d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TESModel::Save` (Xbox PDB, `RET 8`): only when the model name is not
+/// empty (`0048cee0`): with a `model_chunk`, adds the name with its
+/// terminator as that chunk (`TESForm::AddChunkArray(model_chunk, name,
+/// length + 1)`); with a `texture_chunk`, runs `008d0600` on the texture
+/// list (`this + 0xc`) with `(texture_chunk, name)`. The name is the model's
+/// vtable slot `+0x14`, asked again for each use.
+pub fn tes_model_save(e: &mut Engine, this: Ptr<TESModel>, model_chunk: u32, texture_chunk: u32) {
+    if e.call(MODEL_LENGTH, &args![this]).u32() == 0 {
+        return;
+    }
+    if model_chunk != 0 {
+        let size = e.call(MODEL_LENGTH, &args![this]).u32().wrapping_add(1);
+        let name = model_name(e, this.addr());
+        e.call(ADD_CHUNK_ARRAY, &args![model_chunk, name, size]);
+    }
+    if texture_chunk != 0 {
+        let name = model_name(e, this.addr());
+        e.call(
+            TEXTURE_LIST_SAVE,
+            &args![this.addr() + 0xc, texture_chunk, name],
+        );
+    }
+}
+
+// Translated from 00489240 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TESModel::SaveFlags` (Xbox PDB, `RET 4`): when the flags byte
+/// (`00843150`) is not zero, adds it as `chunk` (`004858f0(chunk, flags)`).
+pub fn tes_model_save_flags(e: &mut Engine, this: Ptr<TESModel>, chunk: u32) {
+    let flags = e.call(FLAGS_BYTE, &args![this]).u32() as u8;
+    if flags != 0 {
+        e.call(ADD_CHUNK_BYTE, &args![chunk, u32::from(flags)]);
+    }
+}
+
+// Translated from 004898e0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The byte at `011acdf8` (the flag `TESTextureList::LoadFromBuffer` asks
+/// before logging a missing texture).
+pub fn fn_004898e0(e: &mut Engine) -> u8 {
+    e.global::<u8>(WARN_FLAG_BYTE)
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -530,6 +584,9 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
             0x00489940,
             tes_texture_list_load(Ptr<TESTextureList>, u32, u32, u32)
         ),
+        entry!(0x0048_91d0, tes_model_save(Ptr<TESModel>, u32, u32)),
+        entry!(0x0048_9240, tes_model_save_flags(Ptr<TESModel>, u32)),
+        entry!(0x0048_98e0, fn_004898e0() -> u8),
     ]
 }
 
@@ -1217,5 +1274,93 @@ mod model_component_tests {
             let (_, log) = run(&mut e, 0x0048_9940, &args![list, 0x900u32, 0u32, 0u32]);
             assert!(calls(&log, CHUNK_DATA).is_empty());
         }
+    }
+}
+
+#[cfg(test)]
+mod save_tests {
+    use super::*;
+
+    type Log = Vec<(u32, Vec<u32>)>;
+
+    fn calls(log: &Log, addr: u32) -> Vec<Vec<u32>> {
+        log.iter()
+            .filter(|(a, _)| *a == addr)
+            .map(|(_, w)| w.clone())
+            .collect()
+    }
+
+    fn run(e: &mut Engine, addr: u32, words: &[u32]) -> (Ret, Log) {
+        e.call_log = Some(vec![]);
+        let r = e.call(addr, words);
+        (r, e.call_log.take().unwrap())
+    }
+
+    /// A model whose name (vtable slot `+0x14`) is `0x5000` and whose length
+    /// (`0048cee0`) is `length`.
+    fn model(e: &mut Engine, length: u32) -> u32 {
+        let this = e.mem.alloc(0x18);
+        let vtable = e.mem.alloc(0x20);
+        e.mem.set_u32(this, vtable);
+        e.mem.set_u32(vtable + 0x14, 0x0f42_0014);
+        e.register(0x0f42_0014, |_, _| 0x5000u32.into_ret());
+        e.register_double(MODEL_LENGTH, move |_, _| length.into_ret());
+        e.register(ADD_CHUNK_ARRAY, |_, _| Ret::default());
+        e.register(TEXTURE_LIST_SAVE, |_, _| Ret::default());
+        this
+    }
+
+    #[test]
+    fn save_writes_the_name_and_the_texture_list() {
+        let mut e = Engine::new();
+        let this = model(&mut e, 7);
+        let (_, log) = run(
+            &mut e,
+            0x0048_91d0,
+            &args![this, 0x4c444f4du32, 0x5444_4f4du32],
+        );
+        assert_eq!(
+            calls(&log, ADD_CHUNK_ARRAY),
+            vec![vec![0x4c444f4d, 0x5000, 8]]
+        );
+        assert_eq!(
+            calls(&log, TEXTURE_LIST_SAVE),
+            vec![vec![this + 0xc, 0x5444_4f4d, 0x5000]]
+        );
+        let (_, log) = run(&mut e, 0x0048_91d0, &args![this, 0u32, 0u32]);
+        assert!(calls(&log, ADD_CHUNK_ARRAY).is_empty());
+        assert!(calls(&log, TEXTURE_LIST_SAVE).is_empty());
+    }
+
+    #[test]
+    fn save_skips_an_empty_name() {
+        let mut e = Engine::new();
+        let this = model(&mut e, 0);
+        let (_, log) = run(&mut e, 0x0048_91d0, &args![this, 1u32, 2u32]);
+        assert!(calls(&log, ADD_CHUNK_ARRAY).is_empty());
+        assert!(calls(&log, TEXTURE_LIST_SAVE).is_empty());
+    }
+
+    #[test]
+    fn save_flags_writes_a_set_byte_only() {
+        let mut e = Engine::new();
+        let this = e.mem.alloc(0x18);
+        e.register(FLAGS_BYTE, |e, a| {
+            u32::from(e.mem.u8(a[0] + 0x14)).into_ret()
+        });
+        e.register(ADD_CHUNK_BYTE, |_, _| Ret::default());
+        let (_, log) = run(&mut e, 0x0048_9240, &args![this, 0x4444_4f4du32]);
+        assert!(calls(&log, ADD_CHUNK_BYTE).is_empty());
+        e.mem.set_u8(this + 0x14, 0x82);
+        let (_, log) = run(&mut e, 0x0048_9240, &args![this, 0x4444_4f4du32]);
+        assert_eq!(calls(&log, ADD_CHUNK_BYTE), vec![vec![0x4444_4f4d, 0x82]]);
+    }
+
+    #[test]
+    fn warn_flag_reads_its_byte() {
+        let mut e = Engine::new();
+        e.map(WARN_FLAG_BYTE & !0xfff, 0x1000);
+        e.set_global::<u8>(WARN_FLAG_BYTE, 3);
+        assert_eq!(e.call(0x0048_98e0, &[]).u32() & 0xff, 3);
     }
 }

@@ -152,11 +152,88 @@ pub fn tes_challenge_load(e: &mut Engine, this: Ptr, file: Ptr) -> bool {
     true
 }
 
+/// The swap helpers (`cdecl (address, flag)`, given 0 here): a word
+/// (`00401080`) and a 16-bit word (`00407a90`).
+const SWAP_WORD: u32 = 0x0040_1080;
+const SWAP_SHORT: u32 = 0x0040_7a90;
+/// The savers `TESChallenge::Save` calls: `TESForm::StartForm`
+/// (`004855a0`), `TESFullName::Save` (`00487010`), `TESTexture::Save`
+/// (`0048e370`, one chunk word), `BGSMessageIcon::Save` (`0047a240`, one
+/// chunk word), `TESScriptableForm::Save` (`0048cca0`),
+/// `TESDescription::Save` (`00482cb0`), `TESForm::__SaveData` (`00485e20`,
+/// `thiscall (form, data, size)`), `TESForm::AddChunk` with a word
+/// (`00485910`, `cdecl`) and `TESForm::CloseForm` (`00485680`); the byte
+/// `00401500` answers (whether saving swaps bytes).
+const FORM_START: u32 = 0x0048_55a0;
+const SAVE_FULL_NAME: u32 = 0x0048_7010;
+const SAVE_TEXTURE: u32 = 0x0048_e370;
+const SAVE_MESSAGE_ICON: u32 = 0x0047_a240;
+const SAVE_SCRIPTABLE: u32 = 0x0048_cca0;
+const SAVE_DESCRIPTION: u32 = 0x0048_2cb0;
+const FORM_SAVE_DATA: u32 = 0x0048_5e20;
+const ADD_CHUNK_WORD: u32 = 0x0048_5910;
+const FORM_CLOSE: u32 = 0x0048_5680;
+const SAVE_SWAPS: u32 = 0x0040_1500;
+
+// Translated from 005f5480 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`thiscall`; the byte swap of the challenge's
+/// 0x18-byte data at +0x54 of a `TESChallenge`): the words at +0, +4,
+/// +0xC (`00401080`) and the 16-bit words at +8, +0x10, +0x12, +0x14
+/// (`00407a90`), in the exe's order.
+pub fn fn_005f5480(e: &mut Engine, this: Ptr) {
+    let at = this.addr();
+    for (helper, offset) in [
+        (SWAP_WORD, 0u32),
+        (SWAP_WORD, 4),
+        (SWAP_SHORT, 8),
+        (SWAP_WORD, 0xc),
+        (SWAP_SHORT, 0x10),
+        (SWAP_SHORT, 0x12),
+        (SWAP_SHORT, 0x14),
+    ] {
+        e.call(helper, &args![at + offset, 0u32]);
+    }
+}
+
+// Translated from 005f5540 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TESChallenge::Save` (Xbox PDB): starts the form, saves the full name
+/// (+0x18), the icon (+0x38, `ICON`), the message icon (+0x44, `MICO`),
+/// the script (+0x2C) and the description (+0x24), the 0x18-byte data at
+/// +0x54 (`__SaveData`, swapped by [`fn_005f5480`] before and after when
+/// saving swaps bytes), the forms at +0x74 and +0x78 (their form ids as
+/// `SNAM` and `XNAM`) and closes the form.
+pub fn tes_challenge_save(e: &mut Engine, this: Ptr) {
+    let at = this.addr();
+    e.call(FORM_START, &args![this]);
+    e.call(SAVE_FULL_NAME, &args![at + 0x18]);
+    e.call(SAVE_TEXTURE, &args![at + 0x38, CHUNK_ICON]);
+    e.call(SAVE_MESSAGE_ICON, &args![at + 0x44, CHUNK_MICO]);
+    e.call(SAVE_SCRIPTABLE, &args![at + 0x2c]);
+    e.call(SAVE_DESCRIPTION, &args![at + 0x24]);
+    if e.call(SAVE_SWAPS, &args![]).u8() != 0 {
+        fn_005f5480(e, Ptr::new(at + 0x54));
+    }
+    e.call(FORM_SAVE_DATA, &args![this, at + 0x54, 0x18u32]);
+    if e.call(SAVE_SWAPS, &args![]).u8() != 0 {
+        fn_005f5480(e, Ptr::new(at + 0x54));
+    }
+    for (offset, chunk) in [(0x74u32, CHUNK_SNAM), (0x78, CHUNK_XNAM)] {
+        let form = e.mem.u32(at + offset);
+        if form != 0 {
+            let id = e.call(FORM_ID, &args![form]).u32();
+            e.call(ADD_CHUNK_WORD, &args![chunk, id]);
+        }
+    }
+    e.call(FORM_CLOSE, &args![this]);
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
         entry!(0x005f_5080, tes_challenge_init_item(Ptr)),
         entry!(0x005f_51a0, tes_challenge_load(Ptr, Ptr) -> bool),
+        entry!(0x005f_5480, fn_005f5480(Ptr)),
+        entry!(0x005f_5540, tes_challenge_save(Ptr)),
     ]
 }
 
@@ -312,5 +389,101 @@ mod tests {
         assert_eq!(calls(&e, 0x005f_5480), vec![vec![this + 0x54]]);
         assert_eq!(calls(&e, 0x004f_ebb0), vec![vec![this, 0x22]]);
         assert_eq!(calls(&e, 0x0044_2a80), vec![vec![this, 0x33]]);
+    }
+}
+
+#[cfg(test)]
+mod n043_tests {
+    use super::*;
+
+    fn calls(e: &Engine, addr: u32) -> Vec<Vec<u32>> {
+        e.call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|c| c.0 == addr)
+            .map(|c| c.1.clone())
+            .collect()
+    }
+
+    fn engine() -> Engine {
+        let mut e = Engine::new();
+        e.map(0x7300_0000, 4);
+        for addr in [
+            SWAP_WORD,
+            SWAP_SHORT,
+            FORM_START,
+            SAVE_FULL_NAME,
+            SAVE_TEXTURE,
+            SAVE_MESSAGE_ICON,
+            SAVE_SCRIPTABLE,
+            SAVE_DESCRIPTION,
+            FORM_SAVE_DATA,
+            ADD_CHUNK_WORD,
+            FORM_CLOSE,
+        ] {
+            e.register(addr, |_, _| Ret::default());
+        }
+        e.register(SAVE_SWAPS, |e, _| e.mem.u32(0x7300_0000).into_ret());
+        e.register(FORM_ID, |_, a| (a[0] + 1).into_ret());
+        e
+    }
+
+    #[test]
+    fn endian_swaps_words_and_shorts() {
+        let mut e = engine();
+        e.call_log = Some(vec![]);
+        e.call(0x005f_5480, &args![0x1000u32]);
+        let order: Vec<(u32, u32)> = e
+            .call_log
+            .take()
+            .unwrap()
+            .into_iter()
+            .skip(1)
+            .map(|c| (c.0, c.1[0]))
+            .collect();
+        assert_eq!(
+            order,
+            vec![
+                (SWAP_WORD, 0x1000),
+                (SWAP_WORD, 0x1004),
+                (SWAP_SHORT, 0x1008),
+                (SWAP_WORD, 0x100c),
+                (SWAP_SHORT, 0x1010),
+                (SWAP_SHORT, 0x1012),
+                (SWAP_SHORT, 0x1014)
+            ]
+        );
+    }
+
+    #[test]
+    fn save_writes_every_part() {
+        let mut e = engine();
+        let this = e.mem.alloc(0x80);
+        e.mem.set_u32(this + 0x74, 0x5000);
+        e.mem.set_u32(0x7300_0000, 1);
+        e.call_log = Some(vec![]);
+        e.call(0x005f_5540, &args![this]);
+        assert_eq!(calls(&e, SAVE_TEXTURE), vec![vec![this + 0x38, CHUNK_ICON]]);
+        assert_eq!(
+            calls(&e, SAVE_MESSAGE_ICON),
+            vec![vec![this + 0x44, CHUNK_MICO]]
+        );
+        assert_eq!(calls(&e, SAVE_SCRIPTABLE), vec![vec![this + 0x2c]]);
+        assert_eq!(calls(&e, SAVE_DESCRIPTION), vec![vec![this + 0x24]]);
+        assert_eq!(
+            calls(&e, FORM_SAVE_DATA),
+            vec![vec![this, this + 0x54, 0x18]]
+        );
+        assert_eq!(calls(&e, SWAP_WORD).len(), 6);
+        assert_eq!(calls(&e, ADD_CHUNK_WORD), vec![vec![CHUNK_SNAM, 0x5001]]);
+        assert_eq!(calls(&e, FORM_CLOSE), vec![vec![this]]);
+        e.mem.set_u32(0x7300_0000, 0);
+        e.mem.set_u32(this + 0x74, 0);
+        e.mem.set_u32(this + 0x78, 0x6000);
+        e.call_log = Some(vec![]);
+        e.call(0x005f_5540, &args![this]);
+        assert!(calls(&e, SWAP_WORD).is_empty());
+        assert_eq!(calls(&e, ADD_CHUNK_WORD), vec![vec![CHUNK_XNAM, 0x6001]]);
     }
 }

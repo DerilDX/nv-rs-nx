@@ -512,6 +512,247 @@ pub fn bgs_ragdoll_load(e: &mut Engine, this: Ptr, file: Ptr) -> bool {
     true
 }
 
+/// `TESForm::StartForm`, `TESForm::CloseForm` (Xbox PDB, `004855a0`,
+/// `00485680`).
+const START_FORM: u32 = 0x0048_55a0;
+const CLOSE_FORM: u32 = 0x0048_5680;
+/// `TESModel::Save` (Xbox PDB, `004891d0`; `RET 8`: two signatures).
+const MODEL_SAVE: u32 = 0x0048_91d0;
+/// Chunk writers (cdecl): a word (`00485910`), data
+/// (`TESForm::__AddChunkData`, `00485990`: signature, data, size), 16-bit
+/// values (`00485730`: signature, data, count), bytes
+/// (`TESForm::AddChunkArray`, `004856f0`: signature, data, size).
+const ADD_CHUNK_WORD: u32 = 0x0048_5910;
+const ADD_CHUNK_DATA: u32 = 0x0048_5990;
+const ADD_CHUNK_SHORTS: u32 = 0x0048_5730;
+const ADD_CHUNK_ARRAY: u32 = 0x0048_56f0;
+/// Whether the data written needs byte swapping (`00401500`, no arguments).
+const SAVE_SWAPS: u32 = 0x0040_1500;
+/// Swaps a 32-bit word in place (`00401080`, cdecl: address, a byte 0).
+const WORD_SWAP_00401080: u32 = 0x0040_1080;
+/// A `BSStringT`'s length (`004048e0`) and characters (`00559450`).
+const STRING_LENGTH: u32 = 0x0040_48e0;
+const STRING_CHARS: u32 = 0x0055_9450;
+/// The reallocation wrapper (`0042f5d0`, cdecl: buffer, bytes; the new
+/// buffer in `EAX`).
+const REALLOCATE: u32 = 0x0042_f5d0;
+/// The `FootIK_Leg_DATA` array's destructor body (`005eeff0`).
+const FOOT_IK_ARRAY_DESTRUCTOR: u32 = 0x005e_eff0;
+/// The deallocation wrapper (`00401030`, cdecl).
+const DEALLOCATE: u32 = 0x0040_1030;
+/// The chunk signatures as the words the exe pushes: `MODL`, `MODT`, `NVER`,
+/// `DATA`, `XNAM`, `TNAM`, `RAFD`, `RAFB`, `RAPS`, `ANAM`.
+const SIG_MODL: u32 = 0x4c44_4f4d;
+const SIG_MODT: u32 = 0x5444_4f4d;
+const SIG_NVER: u32 = 0x5245_564e;
+const SIG_DATA: u32 = 0x4154_4144;
+const SIG_XNAM: u32 = 0x4d41_4e58;
+const SIG_TNAM: u32 = 0x4d41_4e54;
+const SIG_RAFD: u32 = 0x4446_4152;
+const SIG_RAFB: u32 = 0x4246_4152;
+const SIG_RAPS: u32 = 0x5350_4152;
+const SIG_ANAM: u32 = 0x4d41_4e41;
+
+/// `00407a90` (cdecl: address, a byte 0) on each 16-bit value, `00401080`
+/// on each word, as the swaps below call them.
+fn swap_shorts(e: &mut Engine, at: u32, count: u32) {
+    for i in 0..count {
+        e.call(FIX_SHORT_00407A90, &args![at + 2 * i, 0u32]);
+    }
+}
+
+fn swap_words(e: &mut Engine, at: u32, count: u32) {
+    for i in 0..count {
+        e.call(WORD_SWAP_00401080, &args![at + 4 * i, 0u32]);
+    }
+}
+
+// Translated from 005ee110 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BGSRagdoll::Save` (Xbox PDB): starts the form, saves the model at
+/// +0x18 (`MODL`/`MODT`), `NVER` 1, then the 14-byte `DATA` block from the
+/// stack: the sizes (low 16 bits of `0044ddc0`) of the arrays at +0x80,
+/// +0xC0, +0xE4 and +0x108 and the bytes at +0x40, +0x90, +0xD0, +0xF4 and
+/// +0x118 (its last byte is never written by the exe and holds whatever
+/// the stack held; here the stack block's 0), swapped by `005ee510` before
+/// and after when `00401500` says so. Then `XNAM` and `TNAM` with the form
+/// ids at +0x144 and +0x140 when set, `RAFD` (the 0x3C bytes at +0x44,
+/// `005ee380` around it), `RAFB` (the 16-bit values of the array at +0x80,
+/// from its element 0, when it has any), `RAPS` (the 0x18 bytes at
+/// +0x124, `005ee580` around it), `ANAM` (the string at +0x11C with its
+/// zero, when not empty), and closes the form.
+pub fn bgs_ragdoll_save(e: &mut Engine, this: Ptr) {
+    let base = this.addr();
+    e.call(START_FORM, &args![this]);
+    e.call(MODEL_SAVE, &args![base + 0x18, SIG_MODL, SIG_MODT]);
+    e.call(ADD_CHUNK_WORD, &args![SIG_NVER, 1u32]);
+    e.with_stack(0xe, |e, data| {
+        for (i, array) in [0x80u32, 0xc0, 0xe4, 0x108].into_iter().enumerate() {
+            let size = e.call(ARRAY_SIZE_0044DDC0, &args![base + array]).u16();
+            e.mem.set_u16(data.addr() + 2 * i as u32, size);
+        }
+        for (i, field) in [0x40u32, 0x90, 0xd0, 0xf4, 0x118].into_iter().enumerate() {
+            let byte = e.mem.u8(base + field);
+            e.mem.set_u8(data.addr() + 8 + i as u32, byte);
+        }
+        if e.call(SAVE_SWAPS, &args![]).bool() {
+            fn_005ee510(e, data);
+        }
+        e.call(ADD_CHUNK_DATA, &args![SIG_DATA, data, 0xeu32]);
+        if e.call(SAVE_SWAPS, &args![]).bool() {
+            fn_005ee510(e, data);
+        }
+    });
+    for (field, chunk) in [(0x144, SIG_XNAM), (0x140, SIG_TNAM)] {
+        let form = e.mem.u32(base + field);
+        if form != 0 {
+            let id = e.call(FORM_ID_0084E3A0, &args![form]).u32();
+            e.call(ADD_CHUNK_WORD, &args![chunk, id]);
+        }
+    }
+    let feedback = Ptr::new(base + 0x44);
+    if e.call(SAVE_SWAPS, &args![]).bool() {
+        fn_005ee380(e, feedback);
+    }
+    e.call(ADD_CHUNK_DATA, &args![SIG_RAFD, feedback, 0x3cu32]);
+    if e.call(SAVE_SWAPS, &args![]).bool() {
+        fn_005ee380(e, feedback);
+    }
+    if e.call(ARRAY_SIZE_0044DDC0, &args![base + 0x80]).u32() != 0 {
+        let count = e.call(ARRAY_SIZE_0044DDC0, &args![base + 0x80]).u32();
+        let first = e
+            .call(SHORT_ARRAY_AT_005EEDA0, &args![base + 0x80, 0u32])
+            .u32();
+        e.call(ADD_CHUNK_SHORTS, &args![SIG_RAFB, first, count]);
+    }
+    let pose = Ptr::new(base + 0x124);
+    if e.call(SAVE_SWAPS, &args![]).bool() {
+        fn_005ee580(e, pose);
+    }
+    e.call(ADD_CHUNK_DATA, &args![SIG_RAPS, pose, 0x18u32]);
+    if e.call(SAVE_SWAPS, &args![]).bool() {
+        fn_005ee580(e, pose);
+    }
+    if e.call(STRING_LENGTH, &args![base + 0x11c]).u32() != 0 {
+        let length = e.call(STRING_LENGTH, &args![base + 0x11c]).u32();
+        let chars = e.call(STRING_CHARS, &args![base + 0x11c]).u32();
+        e.call(
+            ADD_CHUNK_ARRAY,
+            &args![SIG_ANAM, chars, length.wrapping_add(1)],
+        );
+    }
+    e.call(CLOSE_FORM, &args![this]);
+}
+
+// Translated from 005ee380 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Swaps the 15 words of the 0x3C-byte `RAFD` block (`00401080` on each,
+/// with 0).
+pub fn fn_005ee380(e: &mut Engine, this: Ptr) {
+    swap_words(e, this.addr(), 15);
+}
+
+// Translated from 005ee510 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Swaps the first four 16-bit values of the `DATA` block (`00407a90` on
+/// each, with 0); its bytes are left alone.
+pub fn fn_005ee510(e: &mut Engine, this: Ptr) {
+    swap_shorts(e, this.addr(), 4);
+}
+
+// Translated from 005ee580 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Swaps the `RAPS` block: three 16-bit values at +0 (`00407a90`), then
+/// the four words from +8 (`00401080`), each with 0.
+pub fn fn_005ee580(e: &mut Engine, this: Ptr) {
+    swap_shorts(e, this.addr(), 3);
+    swap_words(e, this.addr() + 8, 4);
+}
+
+// Translated from 005ef150 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSSimpleArray<FootIK_DATA::FootIK_Leg_DATA,1024>::_Allocate` (Xbox
+/// PDB; `RET 4`): `count * 0x38` bytes (wrapping `IMUL`) from `00401000`.
+pub fn bs_simple_array_foot_ik_leg_data_1024_allocate(
+    e: &mut Engine,
+    _this: Ptr,
+    count: u32,
+) -> u32 {
+    e.call(ALLOCATE, &args![count.wrapping_mul(0x38)]).u32()
+}
+
+// Translated from 005ef180 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSSimpleArray<FootIK_DATA::FootIK_Leg_DATA,1024>::_Reallocate` (Xbox
+/// PDB; `RET 8`): `0042f5d0(buffer, count * 0x38)`, its `EAX` passed on.
+pub fn bs_simple_array_foot_ik_leg_data_1024_reallocate(
+    e: &mut Engine,
+    _this: Ptr,
+    buffer: u32,
+    count: u32,
+) -> u32 {
+    e.call(REALLOCATE, &args![buffer, count.wrapping_mul(0x38)])
+        .u32()
+}
+
+// Translated from 005ef360 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The `LookIK_Head_DATA` array's reallocation (unnamed in the engine map;
+/// `RET 8`): `0042f5d0(buffer, count * 0x28)`, its `EAX` passed on.
+pub fn fn_005ef360(e: &mut Engine, _this: Ptr, buffer: u32, count: u32) -> u32 {
+    e.call(REALLOCATE, &args![buffer, count.wrapping_mul(0x28)])
+        .u32()
+}
+
+// Translated from 005ef540 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The `GrabIK_Arm_DATA` array's reallocation (unnamed in the engine map;
+/// `RET 8`): `0042f5d0(buffer, count * 6)`, its `EAX` passed on.
+pub fn fn_005ef540(e: &mut Engine, _this: Ptr, buffer: u32, count: u32) -> u32 {
+    e.call(REALLOCATE, &args![buffer, count.wrapping_mul(6)])
+        .u32()
+}
+
+// Translated from 005ef5c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSSimpleArray<FootIK_DATA::FootIK_Leg_DATA,1024>` scalar deleting
+/// destructor (Xbox PDB; `RET 4`): the destructor body `005eeff0`, then
+/// `00401030(this)` when bit 0 of `flags` is set. Returns `this`.
+pub fn bs_simple_array_foot_ik_leg_data_1024_scalar_deleting_destructor(
+    e: &mut Engine,
+    this: Ptr,
+    flags: u32,
+) -> Ptr {
+    e.call(FOOT_IK_ARRAY_DESTRUCTOR, &args![this]);
+    if flags & 1 != 0 {
+        e.call(DEALLOCATE, &args![this]);
+    }
+    this
+}
+
+// Translated from 005ef5f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSSimpleArray<LookIK_DATA::LookIK_Head_DATA,1024>` scalar deleting
+/// destructor (Xbox PDB; `RET 4`): the destructor `fn_005ef1d0`, then
+/// `00401030(this)` when bit 0 of `flags` is set. Returns `this`.
+pub fn bs_simple_array_look_ik_head_data_1024_scalar_deleting_destructor(
+    e: &mut Engine,
+    this: Ptr,
+    flags: u32,
+) -> Ptr {
+    fn_005ef1d0(e, this);
+    if flags & 1 != 0 {
+        e.call(DEALLOCATE, &args![this]);
+    }
+    this
+}
+
+// Translated from 005ef620 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSSimpleArray<GrabIK_DATA::GrabIK_Arm_DATA,1024>` scalar deleting
+/// destructor (Xbox PDB; `RET 4`): the destructor `fn_005ef3b0`, then
+/// `00401030(this)` when bit 0 of `flags` is set. Returns `this`.
+pub fn bs_simple_array_grab_ik_arm_data_1024_scalar_deleting_destructor(
+    e: &mut Engine,
+    this: Ptr,
+    flags: u32,
+) -> Ptr {
+    fn_005ef3b0(e, this);
+    if flags & 1 != 0 {
+        e.call(DEALLOCATE, &args![this]);
+    }
+    this
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -529,6 +770,32 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x005e_f1f0, fn_005ef1f0(Ptr, u32, u8)),
         entry!(0x005e_f3d0, fn_005ef3d0(Ptr, u32, u8)),
         entry!(0x005e_ea20, bgs_ragdoll_init_item(Ptr)),
+        entry!(0x005e_e110, bgs_ragdoll_save(Ptr)),
+        entry!(0x005e_e380, fn_005ee380(Ptr)),
+        entry!(0x005e_e510, fn_005ee510(Ptr)),
+        entry!(0x005e_e580, fn_005ee580(Ptr)),
+        entry!(
+            0x005e_f150,
+            bs_simple_array_foot_ik_leg_data_1024_allocate(Ptr, u32) -> u32
+        ),
+        entry!(
+            0x005e_f180,
+            bs_simple_array_foot_ik_leg_data_1024_reallocate(Ptr, u32, u32) -> u32
+        ),
+        entry!(0x005e_f360, fn_005ef360(Ptr, u32, u32) -> u32),
+        entry!(0x005e_f540, fn_005ef540(Ptr, u32, u32) -> u32),
+        entry!(
+            0x005e_f5c0,
+            bs_simple_array_foot_ik_leg_data_1024_scalar_deleting_destructor(Ptr, u32) -> Ptr
+        ),
+        entry!(
+            0x005e_f5f0,
+            bs_simple_array_look_ik_head_data_1024_scalar_deleting_destructor(Ptr, u32) -> Ptr
+        ),
+        entry!(
+            0x005e_f620,
+            bs_simple_array_grab_ik_arm_data_1024_scalar_deleting_destructor(Ptr, u32) -> Ptr
+        ),
     ]
 }
 
@@ -1096,5 +1363,194 @@ mod tests {
             }
             assert_eq!(calls, expected);
         }
+    }
+}
+
+#[cfg(test)]
+mod n037_tests {
+    use super::*;
+
+    fn ret(eax: u32) -> Ret {
+        Ret {
+            eax,
+            ..Ret::default()
+        }
+    }
+
+    fn calls_to(e: &Engine, addr: u32) -> Vec<Vec<u32>> {
+        e.call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|c| c.0 == addr)
+            .map(|c| c.1.clone())
+            .collect()
+    }
+
+    type Chunks = std::rc::Rc<std::cell::RefCell<Vec<(u32, Vec<u8>)>>>;
+
+    /// Save doubles: array sizes are the word at +8 of the array, the
+    /// swaps add 1 to each byte they touch (the low byte for words and
+    /// 16-bit values), form ids the form plus 1; returns the data chunks.
+    fn engine(swaps: bool) -> (Engine, Chunks) {
+        let mut e = Engine::new();
+        for addr in [
+            START_FORM,
+            CLOSE_FORM,
+            MODEL_SAVE,
+            ADD_CHUNK_WORD,
+            ADD_CHUNK_SHORTS,
+            ADD_CHUNK_ARRAY,
+        ] {
+            e.register(addr, |_, _| Ret::default());
+        }
+        if swaps {
+            e.register(SAVE_SWAPS, |_, _| ret(1));
+        } else {
+            e.register(SAVE_SWAPS, |_, _| ret(0));
+        }
+        e.register(FIX_SHORT_00407A90, |e, a| {
+            let b = e.mem.u8(a[0]);
+            e.mem.set_u8(a[0], b + 1);
+            Ret::default()
+        });
+        e.register(WORD_SWAP_00401080, |e, a| {
+            let b = e.mem.u8(a[0]);
+            e.mem.set_u8(a[0], b + 1);
+            Ret::default()
+        });
+        e.register(ARRAY_SIZE_0044DDC0, |e, a| ret(e.mem.u32(a[0] + 8)));
+        e.register(SHORT_ARRAY_AT_005EEDA0, |e, a| {
+            ret(e.mem.u32(a[0] + 4) + 2 * a[1])
+        });
+        e.register(FORM_ID_0084E3A0, |_, a| ret(a[0] + 1));
+        e.register(STRING_LENGTH, |e, a| ret(e.mem.u32(a[0] + 4)));
+        e.register(STRING_CHARS, |e, a| ret(e.mem.u32(a[0])));
+        let chunks = Chunks::default();
+        let seen = chunks.clone();
+        e.register_double(ADD_CHUNK_DATA, move |e, a| {
+            let bytes = (0..a[2]).map(|i| e.mem.u8(a[1] + i)).collect();
+            seen.borrow_mut().push((a[0], bytes));
+            Ret::default()
+        });
+        e.call_log = Some(vec![]);
+        (e, chunks)
+    }
+
+    #[test]
+    fn save_writes_every_chunk() {
+        let (mut e, chunks) = engine(false);
+        let this = e.mem.alloc(0x148);
+        for (array, size) in [(0x80u32, 2u32), (0xc0, 3), (0xe4, 4), (0x108, 0x10005)] {
+            e.mem.set_u32(this + array + 8, size);
+        }
+        let shorts = e.mem.alloc(4);
+        e.mem.set_u32(this + 0x84, shorts);
+        for (i, field) in [0x40u32, 0x90, 0xd0, 0xf4, 0x118].into_iter().enumerate() {
+            e.mem.set_u8(this + field, 0x10 + i as u8);
+        }
+        e.mem.set_u32(this + 0x144, 0x500);
+        e.mem.set_u32(this + 0x11c, 0x9000);
+        e.mem.set_u32(this + 0x120, 4);
+        e.call(0x005e_e110, &[this]);
+        let chunks = chunks.borrow();
+        assert_eq!(chunks.len(), 3);
+        assert_eq!(
+            chunks[0],
+            (
+                SIG_DATA,
+                vec![2, 0, 3, 0, 4, 0, 5, 0, 0x10, 0x11, 0x12, 0x13, 0x14, 0]
+            )
+        );
+        assert_eq!(chunks[1].0, SIG_RAFD);
+        assert_eq!(chunks[1].1.len(), 0x3c);
+        assert_eq!(chunks[2].0, SIG_RAPS);
+        assert_eq!(chunks[2].1.len(), 0x18);
+        assert_eq!(
+            calls_to(&e, ADD_CHUNK_WORD),
+            vec![vec![SIG_NVER, 1], vec![SIG_XNAM, 0x501]]
+        );
+        assert_eq!(
+            calls_to(&e, ADD_CHUNK_SHORTS),
+            vec![vec![SIG_RAFB, shorts, 2]]
+        );
+        assert_eq!(
+            calls_to(&e, ADD_CHUNK_ARRAY),
+            vec![vec![SIG_ANAM, 0x9000, 5]]
+        );
+        assert_eq!(
+            calls_to(&e, MODEL_SAVE),
+            vec![vec![this + 0x18, SIG_MODL, SIG_MODT]]
+        );
+    }
+
+    #[test]
+    fn save_swaps_around_each_block() {
+        let (mut e, chunks) = engine(true);
+        let this = e.mem.alloc(0x148);
+        e.mem.set_u32(this + 0x140, 0x700);
+        e.call(0x005e_e110, &[this]);
+        let chunks = chunks.borrow();
+        // DATA: the four 16-bit values swapped, the bytes not.
+        assert_eq!(chunks[0].1[..9], [1, 0, 1, 0, 1, 0, 1, 0, 0]);
+        // RAFD: each of the 15 words.
+        assert!((0..15).all(|i| chunks[1].1[4 * i] == 1));
+        // RAPS: three 16-bit values, then four words from +8.
+        assert_eq!(chunks[2].1[..9], [1, 0, 1, 0, 1, 0, 0, 0, 1]);
+        assert_eq!(chunks[2].1[0x14], 1);
+        // Swapped back afterwards.
+        assert_eq!(e.mem.u8(this + 0x44), 2);
+        assert_eq!(e.mem.u8(this + 0x124), 2);
+        assert!(calls_to(&e, ADD_CHUNK_SHORTS).is_empty());
+        assert!(calls_to(&e, ADD_CHUNK_ARRAY).is_empty());
+        assert_eq!(calls_to(&e, ADD_CHUNK_WORD)[1], vec![SIG_TNAM, 0x701]);
+    }
+
+    #[test]
+    fn swaps_touch_their_fields_with_zero() {
+        let (mut e, _) = engine(false);
+        let block = e.mem.alloc(0x40);
+        e.call(0x005e_e380, &[block]);
+        e.call(0x005e_e510, &[block]);
+        e.call(0x005e_e580, &[block]);
+        let words = calls_to(&e, WORD_SWAP_00401080);
+        let shorts = calls_to(&e, FIX_SHORT_00407A90);
+        assert_eq!(words.len(), 19);
+        assert_eq!(words[14], vec![block + 0x38, 0]);
+        assert_eq!(words[15], vec![block + 8, 0]);
+        assert_eq!(shorts.len(), 7);
+        assert_eq!(shorts[3], vec![block + 6, 0]);
+        assert_eq!(shorts[6], vec![block + 4, 0]);
+    }
+
+    #[test]
+    fn allocations_scale_by_the_element_size() {
+        let (mut e, _) = engine(false);
+        e.register(ALLOCATE, |_, a| ret(a[0]));
+        e.register(REALLOCATE, |_, a| ret(a[0] + a[1]));
+        assert_eq!(e.call(0x005e_f150, &[0, 3]).u32(), 0xa8);
+        assert_eq!(e.call(0x005e_f180, &[0, 0x1000, 2]).u32(), 0x1070);
+        assert_eq!(e.call(0x005e_f360, &[0, 0x1000, 2]).u32(), 0x1050);
+        assert_eq!(e.call(0x005e_f540, &[0, 0x1000, 2]).u32(), 0x100c);
+    }
+
+    #[test]
+    fn scalar_deleting_destructors() {
+        let (mut e, _) = engine(false);
+        e.register(FOOT_IK_ARRAY_DESTRUCTOR, |_, _| Ret::default());
+        e.register(DEALLOCATE, |_, _| Ret::default());
+        e.register(ARRAY_RELEASE_008454F0, |_, _| Ret::default());
+        let array = e.mem.alloc(0x10);
+        assert_eq!(e.call(0x005e_f5c0, &[array, 0]).u32(), array);
+        assert_eq!(e.call(0x005e_f5f0, &[array, 1]).u32(), array);
+        assert_eq!(e.mem.u32(array), LOOK_IK_ARRAY_VTABLE);
+        assert_eq!(e.call(0x005e_f620, &[array, 3]).u32(), array);
+        assert_eq!(e.mem.u32(array), GRAB_IK_ARRAY_VTABLE);
+        assert_eq!(calls_to(&e, FOOT_IK_ARRAY_DESTRUCTOR), vec![vec![array]]);
+        assert_eq!(calls_to(&e, DEALLOCATE), vec![vec![array]; 2]);
+        assert_eq!(
+            calls_to(&e, ARRAY_RELEASE_008454F0),
+            vec![vec![array, 1]; 2]
+        );
     }
 }

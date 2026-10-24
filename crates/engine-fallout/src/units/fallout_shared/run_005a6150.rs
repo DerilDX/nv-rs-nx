@@ -225,9 +225,91 @@ pub fn fn_005a64b0(e: &mut Engine, this: Ptr<TESGlobal>, file: Ptr) -> bool {
     true
 }
 
+/// `__RTDynamicCast` (`00ec43fb`, cdecl) with the source and the
+/// `TESGlobal` target type descriptors `005a65e0` and `005a6640` pass.
+const DYNAMIC_CAST: u32 = 0x00ec_43fb;
+const CAST_SOURCE: u32 = 0x0118_3028;
+const GLOBAL_TYPE: u32 = 0x0118_3ad4;
+/// The global's type byte (`00529ea0`) and value (`00526ac0`, in `ST0`;
+/// the engine map's name for it, `BSMultiBoundCapsule::QMultiBoundRadius`,
+/// is folded code), both thiscall.
+const GLOBAL_TYPE_OF: u32 = 0x0052_9ea0;
+const GLOBAL_VALUE_OF: u32 = 0x0052_6ac0;
+
+// Translated from 005a6460 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TESGlobal`'s record writer (no stack words; the engine map has no
+/// name): `TESForm::StartForm`, the type byte at +0x20 as `FNAM`
+/// (`004858f0`, cdecl), the value at +0x24 as `FLTV` (`00485910`, cdecl,
+/// FLD/FSTP onto the stack), then `TESForm::CloseForm`.
+pub fn fn_005a6460(e: &mut Engine, this: Ptr<TESGlobal>) {
+    e.call(0x0048_55a0, &args![this]);
+    let kind = e.get(this, TESGlobal::cType);
+    e.call(0x0048_58f0, &args![0x4d41_4e46u32, u32::from(kind)]);
+    let value = x87_quiet_bits(e.mem.u32(this.addr() + 0x24));
+    e.call(0x0048_5910, &args![0x5654_4c46u32, value]);
+    e.call(0x0048_5680, &args![this]);
+}
+
+// Translated from 005a65e0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TESGlobal`'s copy (`RET 4`: the source form; the engine map has no
+/// name): the source through `__RTDynamicCast(source, 0, 01183028,
+/// 01183ad4, 0)`; nothing without it. Otherwise
+/// `TESForm::CopyAllComponents` given the uncast source, then the
+/// source's type byte (`00529ea0`) and value (`00526ac0`, stored as a
+/// `float`).
+pub fn fn_005a65e0(e: &mut Engine, this: Ptr<TESGlobal>, source: u32) {
+    let other = e
+        .call(
+            DYNAMIC_CAST,
+            &args![source, 0u32, CAST_SOURCE, GLOBAL_TYPE, 0u32],
+        )
+        .u32();
+    if other == 0 {
+        return;
+    }
+    e.call(0x0048_51b0, &args![this, source]);
+    let kind = e.call(GLOBAL_TYPE_OF, &args![other]).u8();
+    e.set(this, TESGlobal::cType, kind);
+    let value = e.call(GLOBAL_VALUE_OF, &args![other]).f64();
+    e.mem.set_u32(this.addr() + 0x24, x87_store32(value));
+}
+
+// Translated from 005a6640 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TESGlobal`'s compare (`RET 4`: the other form; true when they differ;
+/// the engine map has no name): true when the cast as in `005a65e0`
+/// fails, when `TESForm::CompareAllComponents` answers true, when the type
+/// bytes (`00529ea0`) differ or when the values (`00526ac0`, this one kept
+/// as a `double`) are not equal (unordered counts as different).
+pub fn fn_005a6640(e: &mut Engine, this: Ptr<TESGlobal>, form: u32) -> bool {
+    let other = e
+        .call(
+            DYNAMIC_CAST,
+            &args![form, 0u32, CAST_SOURCE, GLOBAL_TYPE, 0u32],
+        )
+        .u32();
+    if other == 0 {
+        return true;
+    }
+    if e.call(0x0048_5270, &args![this, other]).bool() {
+        return true;
+    }
+    let mine = e.call(GLOBAL_TYPE_OF, &args![this]).u8();
+    let theirs = e.call(GLOBAL_TYPE_OF, &args![other]).u8();
+    if mine != theirs {
+        return true;
+    }
+    let mine = e.call(GLOBAL_VALUE_OF, &args![this]).f64();
+    let theirs = e.call(GLOBAL_VALUE_OF, &args![other]).f64();
+    // FUCOMPP; TEST AH,0x44; JNP: equal only when ordered.
+    mine != theirs
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x005a_6460, fn_005a6460(Ptr<TESGlobal>)),
+        entry!(0x005a_65e0, fn_005a65e0(Ptr<TESGlobal>, u32)),
+        entry!(0x005a_6640, fn_005a6640(Ptr<TESGlobal>, u32) -> bool),
         entry!(0x005a6320, fn_005a6320(Ptr<TESGlobal>) -> Ptr<TESGlobal>),
         entry!(0x005a_63c0, fn_005a63c0(Ptr, u32) -> Ptr),
         entry!(0x005a_6150, fn_005a6150(Ptr) -> u32),
@@ -502,5 +584,104 @@ mod b020_tests {
         );
         e.register(0x0047_2660, |_, _| ret(7));
         assert!(!e.call(0x005a_64b0, &args![p, 0x9000u32]).bool());
+    }
+}
+
+#[cfg(test)]
+mod n041_tests {
+    use super::*;
+
+    fn ret(eax: u32) -> Ret {
+        Ret {
+            eax,
+            ..Ret::default()
+        }
+    }
+
+    fn calls(e: &Engine, addr: u32) -> Vec<Vec<u32>> {
+        e.call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|(a, _)| *a == addr)
+            .map(|(_, w)| w.clone())
+            .collect()
+    }
+
+    /// Getter doubles reading the type byte (+0x20) and value (+0x24).
+    fn getters(e: &mut Engine) {
+        e.register(GLOBAL_TYPE_OF, |e, a| ret(u32::from(e.mem.u8(a[0] + 0x20))));
+        e.register(GLOBAL_VALUE_OF, |e, a| Ret {
+            st0: f64::from(e.mem.f32(a[0] + 0x24)),
+            ..Ret::default()
+        });
+    }
+
+    #[test]
+    fn fn_005a6460_writes_type_and_value() {
+        let mut e = Engine::new();
+        for a in [0x0048_55a0u32, 0x0048_58f0, 0x0048_5910, 0x0048_5680] {
+            e.register(a, |_, _| Ret::default());
+        }
+        let this = e.new_object::<TESGlobal>();
+        e.set(this, TESGlobal::cType, 0x66);
+        e.mem.set_u32(this.addr() + 0x24, 0x7f80_0005);
+        e.call_log = Some(vec![]);
+        e.call(0x005a_6460, &args![this]);
+        assert_eq!(calls(&e, 0x0048_55a0), vec![vec![this.addr()]]);
+        assert_eq!(calls(&e, 0x0048_58f0), vec![vec![0x4d41_4e46, 0x66]]);
+        assert_eq!(calls(&e, 0x0048_5910), vec![vec![0x5654_4c46, 0x7fc0_0005]]);
+        assert_eq!(calls(&e, 0x0048_5680), vec![vec![this.addr()]]);
+    }
+
+    #[test]
+    fn fn_005a65e0_copies_type_and_value() {
+        let mut e = Engine::new();
+        getters(&mut e);
+        e.register(DYNAMIC_CAST, |_, a| {
+            ret(if a[0] == 3 { 0 } else { a[0] - 2 })
+        });
+        e.register(0x0048_51b0, |_, _| Ret::default());
+        let this = e.new_object::<TESGlobal>();
+        let source = e.new_object::<TESGlobal>().addr();
+        e.mem.set_u8(source + 0x20, 0x6c);
+        e.mem.set_f32(source + 0x24, -3.5);
+        e.call_log = Some(vec![]);
+        e.call(0x005a_65e0, &args![this, source + 2]);
+        assert_eq!(
+            calls(&e, DYNAMIC_CAST),
+            vec![vec![source + 2, 0, CAST_SOURCE, GLOBAL_TYPE, 0]]
+        );
+        assert_eq!(calls(&e, 0x0048_51b0), vec![vec![this.addr(), source + 2]]);
+        assert_eq!(e.get(this, TESGlobal::cType), 0x6c);
+        assert_eq!(e.get(this, TESGlobal::fValue), -3.5);
+        // No cast: nothing.
+        e.call_log = Some(vec![]);
+        e.call(0x005a_65e0, &args![this, 3u32]);
+        assert!(calls(&e, 0x0048_51b0).is_empty());
+    }
+
+    #[test]
+    fn fn_005a6640_compares_type_and_value() {
+        let mut e = Engine::new();
+        getters(&mut e);
+        e.register(DYNAMIC_CAST, |_, a| ret(a[0]));
+        e.register(0x0048_5270, |_, _| ret(0));
+        let this = e.new_object::<TESGlobal>();
+        let other = e.new_object::<TESGlobal>();
+        assert!(!e.call(0x005a_6640, &args![this, other]).bool());
+        assert!(e.call(0x005a_6640, &args![this, 0u32]).bool());
+        e.set(other, TESGlobal::cType, 1);
+        assert!(e.call(0x005a_6640, &args![this, other]).bool());
+        e.set(other, TESGlobal::cType, 0);
+        e.set(other, TESGlobal::fValue, 1.0);
+        assert!(e.call(0x005a_6640, &args![this, other]).bool());
+        e.set(other, TESGlobal::fValue, f32::NAN);
+        e.set(this, TESGlobal::fValue, f32::NAN);
+        assert!(e.call(0x005a_6640, &args![this, other]).bool());
+        e.set(other, TESGlobal::fValue, 0.0);
+        e.set(this, TESGlobal::fValue, 0.0);
+        e.register(0x0048_5270, |_, _| ret(1));
+        assert!(e.call(0x005a_6640, &args![this, other]).bool());
     }
 }

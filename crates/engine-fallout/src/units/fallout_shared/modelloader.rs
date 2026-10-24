@@ -2430,7 +2430,7 @@ pub fn fn_0043d410(
     update_controllers: u8,
     parallel_update: u8,
 ) -> Ptr<NiUpdateData> {
-    e.set(this, NiUpdateData::fTime, time);
+    e.set(this, NiUpdateData::fTime, x87_quiet(time));
     e.set(this, NiUpdateData::bUpdateControllers, update_controllers);
     e.set(this, NiUpdateData::bParallelUpdate, parallel_update);
     e.set(this, NiUpdateData::bFoundParticles, 0);

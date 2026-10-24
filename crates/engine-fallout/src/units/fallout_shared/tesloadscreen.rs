@@ -364,6 +364,112 @@ pub fn tes_load_screen_can_display_for_form(e: &mut Engine, this: Ptr, form: Ptr
     false
 }
 
+/// `TESForm::StartForm` (`004855a0`) and `TESForm::CloseForm` (`00485680`),
+/// `thiscall` on the form, no stack words.
+const START_FORM: u32 = 0x0048_55a0;
+const CLOSE_FORM: u32 = 0x0048_5680;
+/// `__RTDynamicCast` (`00ec43fb`, cdecl, five words) and the type
+/// descriptors `TESForm` (`01183028`) and `TESLoadScreen` (`01186260`).
+const RT_DYNAMIC_CAST: u32 = 0x00ec_43fb;
+const TYPE_TES_FORM: u32 = 0x0118_3028;
+const TYPE_TES_LOAD_SCREEN: u32 = 0x0118_6260;
+/// `TESForm::CopyAllComponents` (`004851b0`, `RET 4`) and
+/// `TESForm::CompareAllComponents` (`00485270`, `RET 4`).
+const COPY_ALL_COMPONENTS: u32 = 0x0048_51b0;
+const COMPARE_ALL_COMPONENTS: u32 = 0x0048_5270;
+/// `00905820` (`thiscall` on a list node, `RET 4`: the address of an item):
+/// appends the item; `005ae380` counts a list's items; `005f65d0` (`RET 4`:
+/// the address of an item) whether a list holds it.
+const LIST_APPEND: u32 = 0x0090_5820;
+const LIST_COUNT: u32 = 0x005a_e380;
+const LIST_HOLDS: u32 = 0x005f_65d0;
+/// The word at +0x34 (`005f36f0`) and its setter (`008d7dc0`, `RET 4`).
+const WORD_34: u32 = 0x005f_36f0;
+const SET_WORD_34: u32 = 0x008d_7dc0;
+/// The load screen's location list.
+const LOCATIONS_OFFSET: u32 = 0x2c;
+
+// Translated from 005a68b0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The load screen's save (engine map: no name; no stack words):
+/// `StartForm`, then `CloseForm`.
+pub fn fn_005a68b0(e: &mut Engine, this: Ptr) {
+    e.call(START_FORM, &args![this]);
+    e.call(CLOSE_FORM, &args![this]);
+}
+
+/// `other` as a `TESLoadScreen` (`__RTDynamicCast` from `TESForm`), or 0.
+fn as_load_screen(e: &mut Engine, other: u32) -> u32 {
+    e.call(
+        RT_DYNAMIC_CAST,
+        &args![other, 0u32, TYPE_TES_FORM, TYPE_TES_LOAD_SCREEN, 0u32],
+    )
+    .u32()
+}
+
+// Translated from 005a6c70 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The load screen's copy (engine map: no name; `RET 4`): when `other` is a
+/// `TESLoadScreen`, empties this location list (`fn_005a6e50`), appends each
+/// of the other's items (+0x2c) until a node holds none (`00905820` on the
+/// current destination node, which moves on to its next node when there is
+/// one), copies the word at +0x34, then all components
+/// (`TESForm::CopyAllComponents` with the cast form).
+pub fn fn_005a6c70(e: &mut Engine, this: Ptr, other: u32) {
+    let source = as_load_screen(e, other);
+    if source == 0 {
+        return;
+    }
+    fn_005a6e50(e, this);
+    let mut node = source + LOCATIONS_OFFSET;
+    let mut target = this.addr() + LOCATIONS_OFFSET;
+    while node != 0 && !e.call(NODE_IS_EMPTY, &args![node]).bool() {
+        let item = e.call(NODE_ITEM, &args![node]).u32();
+        e.call(LIST_APPEND, &args![target, item]);
+        if e.call(NODE_NEXT, &args![target]).u32() != 0 {
+            target = e.call(NODE_NEXT, &args![target]).u32();
+        }
+        node = e.call(NODE_NEXT, &args![node]).u32();
+    }
+    let word = e.call(WORD_34, &args![source]).u32();
+    e.call(SET_WORD_34, &args![this, word]);
+    e.call(COPY_ALL_COMPONENTS, &args![this, source]);
+}
+
+// Translated from 005a6d30 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The load screen's compare (engine map: no name; `RET 4`): true when
+/// `other` is no `TESLoadScreen`, when the location lists hold different
+/// numbers of items (`005ae380`, this one's first), when an item of the
+/// other's list is not in this one's (`005f65d0`), when
+/// `TESForm::CompareAllComponents` (with the cast form) says so, or when
+/// the words at +0x34 differ.
+pub fn fn_005a6d30(e: &mut Engine, this: Ptr, other: u32) -> bool {
+    let source = as_load_screen(e, other);
+    if source == 0 {
+        return true;
+    }
+    let mut node = source + LOCATIONS_OFFSET;
+    let mine = e
+        .call(LIST_COUNT, &args![this.addr() + LOCATIONS_OFFSET])
+        .u32();
+    if mine != e.call(LIST_COUNT, &args![node]).u32() {
+        return true;
+    }
+    while node != 0 && !e.call(NODE_IS_EMPTY, &args![node]).bool() {
+        let item = e.call(NODE_ITEM, &args![node]).u32();
+        if e.call(LIST_HOLDS, &args![this.addr() + LOCATIONS_OFFSET, item])
+            .u32() as u8
+            == 0
+        {
+            return true;
+        }
+        node = e.call(NODE_NEXT, &args![node]).u32();
+    }
+    if e.call(COMPARE_ALL_COMPONENTS, &args![this, source]).u32() as u8 != 0 {
+        return true;
+    }
+    let mine = e.call(WORD_34, &args![this]).u32();
+    mine != e.call(WORD_34, &args![source]).u32()
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -380,6 +486,9 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
             0x005a_6ec0,
             tes_load_screen_can_display_for_form(Ptr, Ptr) -> bool
         ),
+        entry!(0x005a_68b0, fn_005a68b0(Ptr)),
+        entry!(0x005a_6c70, fn_005a6c70(Ptr, u32)),
+        entry!(0x005a_6d30, fn_005a6d30(Ptr, u32) -> bool),
     ]
 }
 
@@ -802,5 +911,140 @@ mod b028_tests {
             let unknown = form(&mut e, [1, 0, 0x0a, 0, 0, 0, 0, kind]);
             assert!(!run(&mut e, unknown));
         }
+    }
+}
+
+#[cfg(test)]
+mod save_copy_compare_tests {
+    use super::*;
+
+    type Log = Vec<(u32, Vec<u32>)>;
+
+    fn ret(eax: u32) -> Ret {
+        Ret {
+            eax,
+            ..Ret::default()
+        }
+    }
+
+    fn only(log: &Log, addr: u32) -> Vec<Vec<u32>> {
+        log.iter()
+            .filter(|(a, _)| *a == addr)
+            .map(|(_, w)| w.clone())
+            .collect()
+    }
+
+    fn engine() -> Engine {
+        let mut e = Engine::new();
+        e.register(NODE_ITEM, |_, a| ret(a[0]));
+        e.register(NODE_NEXT, |e, a| ret(e.mem.u32(a[0] + 4)));
+        e.register(NODE_IS_EMPTY, |e, a| ret(u32::from(e.mem.u32(a[0]) == 0)));
+        e.register(LIST_COUNT, |e, a| {
+            let (mut node, mut n) = (a[0], 0);
+            while node != 0 {
+                n += u32::from(e.mem.u32(node) != 0);
+                node = e.mem.u32(node + 4);
+            }
+            ret(n)
+        });
+        e.register(LIST_HOLDS, |e, a| {
+            let item = e.mem.u32(a[1]);
+            let mut node = a[0];
+            while node != 0 {
+                if e.mem.u32(node) == item {
+                    return ret(1);
+                }
+                node = e.mem.u32(node + 4);
+            }
+            ret(0)
+        });
+        e.register(LIST_APPEND, |e, a| {
+            let item = e.mem.u32(a[1]);
+            if e.mem.u32(a[0]) == 0 {
+                e.mem.set_u32(a[0], item);
+                return Ret::default();
+            }
+            let mut node = a[0];
+            while e.mem.u32(node + 4) != 0 {
+                node = e.mem.u32(node + 4);
+            }
+            let new = e.mem.alloc(8);
+            e.mem.set_u32(new, item);
+            e.mem.set_u32(node + 4, new);
+            Ret::default()
+        });
+        e.register(LIST_CLEAR, |e, a| {
+            e.mem.set_u32(a[0], 0);
+            e.mem.set_u32(a[0] + 4, 0);
+            Ret::default()
+        });
+        e.register(OPERATOR_DELETE, |_, _| Ret::default());
+        e.register(WORD_34, |e, a| ret(e.mem.u32(a[0] + 0x34)));
+        e.register(SET_WORD_34, |e, a| {
+            e.mem.set_u32(a[0] + 0x34, a[1]);
+            Ret::default()
+        });
+        e.register(RT_DYNAMIC_CAST, |_, a| ret(a[0]));
+        e.register(COPY_ALL_COMPONENTS, |_, _| Ret::default());
+        e.register(COMPARE_ALL_COMPONENTS, |_, _| ret(0));
+        e
+    }
+
+    fn screen(e: &mut Engine, items: &[u32], word: u32) -> u32 {
+        let this = e.mem.alloc(0x38);
+        e.mem.set_u32(this + 0x34, word);
+        let mut node = this + 0x2c;
+        for (i, item) in items.iter().enumerate() {
+            e.mem.set_u32(node, *item);
+            if i + 1 < items.len() {
+                let next = e.mem.alloc(8);
+                e.mem.set_u32(node + 4, next);
+                node = next;
+            }
+        }
+        this
+    }
+
+    #[test]
+    fn save_starts_and_closes_the_form() {
+        let mut e = Engine::new();
+        e.register(START_FORM, |_, _| Ret::default());
+        e.register(CLOSE_FORM, |_, _| Ret::default());
+        e.call_log = Some(vec![]);
+        e.call(0x005a_68b0, &args![0x4000u32]);
+        let log = e.call_log.take().unwrap();
+        assert_eq!(
+            log[1..].to_vec(),
+            vec![(START_FORM, vec![0x4000]), (CLOSE_FORM, vec![0x4000])]
+        );
+    }
+
+    #[test]
+    fn copy_then_compare() {
+        let mut e = engine();
+        let other = screen(&mut e, &[0x61, 0x62], 0x9);
+        let this = screen(&mut e, &[0x70], 0);
+        assert!(e.call(0x005a_6d30, &args![this, other]).bool());
+        e.call_log = Some(vec![]);
+        e.call(0x005a_6c70, &args![this, other]);
+        let log = e.call_log.take().unwrap();
+        assert_eq!(only(&log, OPERATOR_DELETE), vec![vec![0x70]]);
+        assert_eq!(only(&log, COPY_ALL_COMPONENTS), vec![vec![this, other]]);
+        assert_eq!(e.mem.u32(this + 0x34), 9);
+        assert!(!e.call(0x005a_6d30, &args![this, other]).bool());
+        e.mem.set_u32(this + 0x34, 8);
+        assert!(e.call(0x005a_6d30, &args![this, other]).bool());
+        e.mem.set_u32(this + 0x34, 9);
+        let reordered = screen(&mut e, &[0x62, 0x61], 9);
+        assert!(!e.call(0x005a_6d30, &args![reordered, other]).bool());
+        let different = screen(&mut e, &[0x62, 0x63], 9);
+        assert!(e.call(0x005a_6d30, &args![different, other]).bool());
+        e.register(COMPARE_ALL_COMPONENTS, |_, _| ret(1));
+        assert!(e.call(0x005a_6d30, &args![this, other]).bool());
+        e.register(RT_DYNAMIC_CAST, |_, _| ret(0));
+        assert!(e.call(0x005a_6d30, &args![this, other]).bool());
+        let fresh = screen(&mut e, &[0x70], 1);
+        e.call(0x005a_6c70, &args![fresh, other]);
+        assert_eq!(e.mem.u32(fresh + 0x34), 1);
     }
 }

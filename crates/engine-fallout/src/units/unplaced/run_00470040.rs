@@ -185,6 +185,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x0047_04e0, fn_004704e0(Ptr, u16, u16) -> Ptr),
         entry!(0x0047_0550, fn_00470550(Ptr, u16, u16) -> Ptr),
         entry!(0x0047_05c0, fn_004705c0(Ptr) -> u32),
+        entry!(0x0047_00d0, fn_004700d0(Ptr, Ptr)),
     ]
 }
 
@@ -320,6 +321,20 @@ pub fn fn_00470550(e: &mut Engine, this: Ptr, max_size: u16, grow_by: u16) -> Pt
 pub fn fn_004705c0(e: &mut Engine, this: Ptr) -> u32 {
     e.call(CALL_6F99E0, &args![this.addr().wrapping_add(8)])
         .u32()
+}
+
+/// The list's head insertion (`0049fa20`, unnamed; `thiscall`, the node).
+const ADD_NODE_HEAD: u32 = 0x0049_fa20;
+
+// Translated from 004700d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`thiscall`, `RET 4`): makes a node ([`fn_004705c0`] on
+/// `this`), stores the word at `item` in the node's +8 and puts the node at the head of the
+/// list (`0049fa20`).
+pub fn fn_004700d0(e: &mut Engine, this: Ptr, item: Ptr) {
+    let node = fn_004705c0(e, this);
+    let value = e.mem.u32(item.addr());
+    e.mem.set_u32(node.wrapping_add(8), value);
+    e.call(ADD_NODE_HEAD, &args![this, node]);
 }
 
 #[cfg(test)]
@@ -700,5 +715,22 @@ mod b016_tests {
     fn forwarder_passes_this_plus_8() {
         let mut e = engine();
         assert_eq!(e.call(0x0047_05c0, &args![0x1000u32]).u32(), 0x1009);
+    }
+
+    #[test]
+    fn add_puts_a_new_node_with_the_item_at_the_head() {
+        let mut e = Engine::new();
+        let node = e.mem.alloc(0xc);
+        e.register_double(CALL_6F99E0, move |_, _| node.into_ret());
+        e.register(ADD_NODE_HEAD, |_, _| Ret::default());
+        let list = e.mem.alloc(0x10);
+        let item = e.mem.alloc(4);
+        e.mem.set_u32(item, 0x5151);
+        e.call_log = Some(vec![]);
+        e.call(0x0047_00d0, &args![list, item]);
+        let log = e.call_log.take().unwrap();
+        assert_eq!(log[1], (CALL_6F99E0, vec![list + 8]));
+        assert_eq!(log[2], (ADD_NODE_HEAD, vec![list, node]));
+        assert_eq!(e.mem.u32(node + 8), 0x5151);
     }
 }

@@ -3978,7 +3978,7 @@ pub fn fn_005b9f50(e: &mut Engine, this: Ptr, value: f32) {
 /// `this + 0x58`.
 pub fn fn_005b9f80(e: &mut Engine, this: Ptr, value: f32) {
     e.mem.set_u8(this.addr() + 5, 1);
-    e.mem.set_f32(this.addr() + 0x58, value);
+    e.mem.set_f32(this.addr() + 0x58, x87_quiet(value));
 }
 
 // Translated from 005b9fa0 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -5597,6 +5597,507 @@ pub fn script_toggle_high_process(e: &mut Engine) -> bool {
     true
 }
 
+// ---- n045: three bodies Ghidra made no function of (read from `disassemble_bytes`) ----------
+//
+// The three bodies keep an aligned frame (`EBX` holds the caller's `ESP`, the eight words at
+// `EBX + 8`); their locals are translated as a stack block addressed from the frame base, at
+// the exe's own `EBP` offsets.
+
+/// The player reference pointer (`011dea3c`) and the `TES` pointer `TES::Pick` runs on
+/// (`011dea10`).
+const N045_PLAYER: u32 = 0x011d_ea3c;
+const N045_TES: u32 = 0x011d_ea10;
+/// The data handler pointer (`011c3f2c`) whose `004698a0` (`RET 0x20`) places a new
+/// reference: form, position, rotation, two words from the anchor reference (`008d6f30` and
+/// `00575d70`, the world space), then three zero words.
+const N045_DATA_HANDLER: u32 = 0x011c_3f2c;
+const N045_PLACE_REFERENCE: u32 = 0x0046_98a0;
+/// The callees, by exe address: `00430830` (a point of a reference, three floats), `00416870` (`RET 0xC`,
+/// sets a point from three floats), `00c82870` (`bhkCollisionFilter::SetMultiLayerCollision`,
+/// `cdecl`, three words), `004a3c20` (constructs the pick data), `008c71b0` (`RET 4`,
+/// constructs a flags word), `004a39f0` (`RET 4`, sets a flag), `005dbe10` (the next pick
+/// id, a counter at `011b0808` that skips 0 by restarting at 10), `0059ce80` (`RET 4`),
+/// `004a3f70`, `004a3da0`, `004a3eb0` (`RET 4`: the pick data's filter, start and end),
+/// `TES::Pick` (`00458420`, `RET 4`), `005c53f0` (`RET 4`), `005609f0`, `00559450` (the
+/// first word), `004a3a40` (`cdecl`), `005dbe40` (`RET 4`), `005e05d0` (`RET 8`),
+/// `0043b230`, `005e05b0` (`RET 4`), `00c84f50` (`RET 8`), `005e0600`, `006815c0` (answers
+/// `this`), `PathingLocation::PathingLocation_ov3` (`006dcd70`, `RET 4`),
+/// `Pathing::GetNavmeshNormalForLocation` (`006d9100`, `cdecl`), `004ff7e0`, `00458620`
+/// (`cdecl`), `BSUtilities::GetRotationZToVectorTranspose` (`00c4b8a0`, `cdecl`, an output
+/// and a point by value), `NiMatrix3::ToEulerAnglesXYZ` (`00a592c0`, `RET 0xC`), `005dbe60`
+/// (`RET 4`), `TESObjectREFR::GetWorldSpace` (`00575d70`), `008d6f30`, `00564c60`,
+/// `0056c780`, `TESObjectREFR::SetRefPersists` (`00565480`), `005d43c0` (a list),
+/// `0041e340` (`RET 4`, adds to it), `0040ebd0` (`cdecl`, two floats, a float in `ST0`),
+/// `0045c670`, `006629f0`, `00461130` (a 3x3 matrix), `005df560` (`RET 0x10`, reads a
+/// matrix row), `005df510` (`RET 8`, writes a row), `005df5b0` (+0xDE0 of the player),
+/// `004b4500` (`RET 8`), `00439e90` (`RET 8`), `00931ed0` (`RET 4`), `004a3a20`,
+/// `TESHealthForm::GetFormAsHealthForm` (`004872e0`, `cdecl`), `00451110` (`RET 4`),
+/// `Actor::FadeIn` (`008bcd20`), `00568bd0` (`RET 4`, a float),
+/// `TESObjectREFR::FindReferenceFor3D` (`0056f930`, `cdecl`), `0084e3a0` (the form id) and
+/// `Script::PutNumericIDInDouble` (`005acc70`, `cdecl`).
+const N045_REFERENCE_POINT: u32 = 0x0043_0830;
+const N045_SET_POINT: u32 = 0x0041_6870;
+const N045_SET_MULTI_LAYER_COLLISION: u32 = 0x00c8_2870;
+const N045_PICK_DATA_CONSTRUCT: u32 = 0x004a_3c20;
+const N045_FLAGS_CONSTRUCT: u32 = 0x008c_71b0;
+const N045_FLAGS_SET: u32 = 0x004a_39f0;
+const N045_NEXT_PICK_ID: u32 = 0x005d_be10;
+const N045_FLAGS_COMBINE: u32 = 0x0059_ce80;
+const N045_PICK_SET_FILTER: u32 = 0x004a_3f70;
+const N045_PICK_SET_START: u32 = 0x004a_3da0;
+const N045_PICK_SET_END: u32 = 0x004a_3eb0;
+const N045_TES_PICK: u32 = 0x0045_8420;
+const N045_PICK_RESULT_OBJECT: u32 = 0x005c_53f0;
+const N045_RESULT_TEST: u32 = 0x0056_09f0;
+const N045_FIRST_WORD: u32 = 0x0055_9450;
+const N045_OBJECT_OF: u32 = 0x004a_3a40;
+const N045_OBJECT_TEST: u32 = 0x005d_be40;
+const N045_INDEX_LIST_CONSTRUCT: u32 = 0x005e_05d0;
+const N045_OBJECT_KIND: u32 = 0x0043_b230;
+const N045_INDEX_LIST_AT: u32 = 0x005e_05b0;
+const N045_INDEX_LIST_DESTRUCT: u32 = 0x005e_0600;
+const N045_LAYER_TEST: u32 = 0x00c8_4f50;
+const N045_SELF: u32 = 0x0068_15c0;
+const N045_PATHING_LOCATION: u32 = 0x006d_cd70;
+const N045_NAVMESH_NORMAL: u32 = 0x006d_9100;
+const N045_PATHING_LOCATION_DESTRUCT: u32 = 0x004f_f7e0;
+const N045_PICK_NORMAL: u32 = 0x0045_8620;
+const N045_ROTATION_TO_VECTOR: u32 = 0x00c4_b8a0;
+const N045_TO_EULER_ANGLES: u32 = 0x00a5_92c0;
+const N045_PICK_POINT: u32 = 0x005d_be60;
+const N045_WORLD_SPACE: u32 = 0x0057_5d70;
+const N045_PARENT_CELL: u32 = 0x008d_6f30;
+const N045_REFERENCE_FLAG_564C60: u32 = 0x0056_4c60;
+const N045_REFERENCE_FLAG_56C780: u32 = 0x0056_c780;
+const N045_SET_REF_PERSISTS: u32 = 0x0056_5480;
+const N045_REFERENCE_LIST: u32 = 0x005d_43c0;
+const N045_LIST_ADD: u32 = 0x0041_e340;
+const N045_ANGLE_FUNCTION: u32 = 0x0040_ebd0;
+const N045_SINGLETON_45C670: u32 = 0x0045_c670;
+const N045_ANIMATION_DATA: u32 = 0x0066_29f0;
+const N045_MATRIX_OF: u32 = 0x0046_1130;
+const N045_MATRIX_GET_ROW: u32 = 0x005d_f560;
+const N045_MATRIX_SET_ROW: u32 = 0x005d_f510;
+const N045_PLAYER_POINT: u32 = 0x005d_f5b0;
+const N045_MATRIX_TIMES: u32 = 0x004b_4500;
+const N045_POINT_PLUS: u32 = 0x0043_9e90;
+const N045_MOBILE_931ED0: u32 = 0x0093_1ed0;
+const N045_FLAGS_OF: u32 = 0x004a_3a20;
+const N045_HEALTH_FORM: u32 = 0x0048_72e0;
+const N045_PICK_HIT: u32 = 0x0045_1110;
+const N045_FADE_IN: u32 = 0x008b_cd20;
+const N045_SET_SCALE_LIKE: u32 = 0x0056_8bd0;
+const N045_FIND_REFERENCE_FOR_3D: u32 = 0x0056_f930;
+const N045_FORM_ID: u32 = 0x0084_e3a0;
+const N045_PUT_NUMERIC_ID_IN_DOUBLE: u32 = 0x005a_cc70;
+/// The constants the bodies read: two doubles added to and taken from a height (`0102f070`,
+/// `010231d8`), the float `0103d24c` given to `0040ebd0`, the double `01017a40` a health
+/// value is multiplied by, and the two forms `005db870` chooses between (`011ca280` for mode
+/// 2, else `011ca27c`).
+const N045_HEIGHT_UP: u32 = 0x0102_f070;
+const N045_HEIGHT_DOWN: u32 = 0x0102_31d8;
+const N045_ANGLE_CONSTANT: u32 = 0x0103_d24c;
+const N045_HEALTH_SCALE: u32 = 0x0101_7a40;
+const N045_FORM_MODE_2: u32 = 0x011c_a280;
+const N045_FORM_OTHER: u32 = 0x011c_a27c;
+
+/// Copies the three words at `from` to `to` (a point copied by value).
+fn copy_point(e: &mut Engine, to: u32, from: u32) {
+    for i in 0..3 {
+        let word = e.mem.u32(from + 4 * i);
+        e.mem.set_u32(to + 4 * i, word);
+    }
+}
+
+// Translated from 005db870 (PC disassembly, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 005db870 - the FS:[0] exception frame and the /GS stack cookie check (00ec408c) are not translated.
+/// A script command body (no Ghidra function, no map name): with its one parameter (a mode)
+/// parsed and an actor this reference (vtable slot 0x100), it picks from the reference's
+/// position (slot 0x1F4) a little above and below (the doubles at `0102f070` and `010231d8`),
+/// with a new pick id (`005dbe10`) and filter flag 0x27 (`TES::Pick`). When the pick hits
+/// (`005c53f0`, `005609f0`), the hit object's layer is tested (`005dbe40` with 0x40, or by
+/// walking its index list (`005e05d0`) to its last valid node, `00c84f50`), the normal is
+/// taken from the navmesh (`Pathing::GetNavmeshNormalForLocation`) or the pick
+/// (`00458620`), turned into a rotation (`00c4b8a0`, `NiMatrix3::ToEulerAnglesXYZ`) and the
+/// point is the pick's (`005dbe60`). A reference of the form `011ca280` (mode 2) or
+/// `011ca27c` is placed there (`004698a0`), its flags set (`00564c60` with "no rotation",
+/// `0056c780`, `SetRefPersists`), linked both ways with this reference (`0041e340`) and
+/// both marked changed (slot 0x48 with 0x80000000). Answers false only when the parameters
+/// do not parse. The exception frame and the stack cookie check are not translated.
+pub fn fn_005db870(e: &mut Engine, args: ScriptArgs) -> bool {
+    e.with_stack(0x1a0, |e, frame| {
+        let ebp = frame.addr() + 0x1a0;
+        let at = |offset: u32| ebp - offset;
+        e.mem.set_u32(at(0x18), 0);
+        if !args.parse(e, &[at(0x18)]) {
+            return false;
+        }
+        let this = args.this_obj.addr();
+        if this == 0 || !e.vcall(this, 0x100, &[]).bool() {
+            return true;
+        }
+        let kind = e.vcall(this, 0x1d0, &[]).u32();
+        e.mem.set_u32(at(0x1c), kind);
+        let position = e.vcall(this, 0x1f4, &[]).u32();
+        copy_point(e, at(0x28), position);
+        let location = e.call(N045_REFERENCE_POINT, &args![this]).u32();
+        let height = x87_quiet_bits(e.mem.u32(location + 8));
+        e.call(N045_SET_POINT, &args![at(0x34), 0u32, 0u32, height]);
+        e.mem.set_u8(at(0x35), 0);
+        e.mem.set_u32(at(0x3c), 0x0802_2802);
+        let layers = e.mem.u32(at(0x3c));
+        e.call(
+            N045_SET_MULTI_LAYER_COLLISION,
+            &args![0x27u32, layers, 0u32],
+        );
+        e.call(N045_PICK_DATA_CONSTRUCT, &args![at(0xf0)]);
+        e.call(N045_FLAGS_CONSTRUCT, &args![at(0xf4), 0u32]);
+        e.call(N045_FLAGS_SET, &args![at(0xf4), 0x27u32]);
+        let id = e.call(N045_NEXT_PICK_ID, &[]).u32();
+        e.call(N045_FLAGS_COMBINE, &args![at(0xf4), id]);
+        let flags = e.mem.u32(at(0xf4));
+        e.call(N045_PICK_SET_FILTER, &args![at(0xf0), flags]);
+        copy_point(e, at(0x100), at(0x28));
+        let up = x87_add(
+            x87_load32(e.mem.u32(at(0xf8))),
+            e.global::<f64>(N045_HEIGHT_UP),
+        );
+        e.mem.set_u32(at(0xf8), x87_store32(up));
+        copy_point(e, at(0x10c), at(0x28));
+        let down = x87_sub(
+            x87_load32(e.mem.u32(at(0x104))),
+            e.global::<f64>(N045_HEIGHT_DOWN),
+        );
+        e.mem.set_u32(at(0x104), x87_store32(down));
+        e.call(N045_PICK_SET_START, &args![at(0xf0), at(0x100)]);
+        e.call(N045_PICK_SET_END, &args![at(0xf0), at(0x10c)]);
+        let tes = e.global::<u32>(N045_TES);
+        e.call(N045_TES_PICK, &args![tes, at(0xf0)]);
+        let result = e
+            .call(N045_PICK_RESULT_OBJECT, &args![at(0xc0), at(0x10d)])
+            .u32();
+        if e.call(N045_RESULT_TEST, &args![result]).bool() {
+            e.mem.set_u8(at(0x10e), 0);
+            let holder = e.mem.u32(at(0x70));
+            let first = e.call(N045_FIRST_WORD, &args![holder]).u32();
+            e.mem.set_u32(at(0x114), first);
+            let object = e.call(N045_OBJECT_OF, &args![first]).u32();
+            e.mem.set_u32(at(0x118), object);
+            let hit = e.call(N045_OBJECT_TEST, &args![object, 0x40u32]).u8();
+            e.mem.set_u8(at(0x10e), hit);
+            if e.mem.u8(at(0x10e)) == 0 {
+                walk_hit_layers(e, ebp);
+            }
+            e.call(N045_SELF, &args![at(0x144)]);
+            if e.mem.u8(at(0x10e)) != 0 {
+                e.call(N045_PATHING_LOCATION, &args![at(0x16c), this]);
+                e.call(N045_NAVMESH_NORMAL, &args![at(0x16c), at(0x144)]);
+                e.call(N045_PATHING_LOCATION_DESTRUCT, &args![at(0x16c)]);
+            } else {
+                e.call(N045_PICK_NORMAL, &args![at(0x144), at(0xc0)]);
+            }
+            let (x, y, z) = (
+                e.mem.u32(at(0x144)),
+                e.mem.u32(at(0x140)),
+                e.mem.u32(at(0x13c)),
+            );
+            e.call(N045_ROTATION_TO_VECTOR, &args![at(0x190), x, y, z]);
+            e.call(
+                N045_TO_EULER_ANGLES,
+                &args![at(0x190), at(0x34), at(0x30), at(0x2c)],
+            );
+            e.mem.set_u8(at(0x35), 1);
+            e.call(N045_PICK_POINT, &args![at(0xf0), at(0x28)]);
+        }
+        let form = if e.mem.u32(at(0x18)) == 2 {
+            e.global::<u32>(N045_FORM_MODE_2)
+        } else {
+            e.global::<u32>(N045_FORM_OTHER)
+        };
+        e.mem.set_u32(at(0x194), form);
+        e.mem.set_u32(at(0x198), form);
+        let world_space = e.call(N045_WORLD_SPACE, &args![this]).u32();
+        let cell = e.call(N045_PARENT_CELL, &args![this]).u32();
+        let handler = e.global::<u32>(N045_DATA_HANDLER);
+        let form = e.mem.u32(at(0x198));
+        let placed = e
+            .call(
+                N045_PLACE_REFERENCE,
+                &args![
+                    handler,
+                    form,
+                    at(0x28),
+                    at(0x34),
+                    cell,
+                    world_space,
+                    0u32,
+                    0u32,
+                    0u32
+                ],
+            )
+            .u32();
+        e.mem.set_u32(at(0x19c), placed);
+        let unrotated = u32::from(e.mem.u8(at(0x35)) == 0);
+        e.call(N045_REFERENCE_FLAG_564C60, &args![placed, unrotated]);
+        e.call(N045_REFERENCE_FLAG_56C780, &args![placed, 1u32]);
+        e.call(N045_SET_REF_PERSISTS, &args![placed, 1u32]);
+        let list = e.call(N045_REFERENCE_LIST, &args![placed]).u32();
+        e.call(N045_LIST_ADD, &args![list, this]);
+        let list = e.call(N045_REFERENCE_LIST, &args![this]).u32();
+        e.call(N045_LIST_ADD, &args![list, placed]);
+        e.vcall(placed, 0x48, &args![0x8000_0000u32]);
+        e.vcall(this, 0x48, &args![0x8000_0000u32]);
+        true
+    })
+}
+
+/// `005db870`'s walk of the hit object's nodes when `005dbe40` refused it: an index list of 8
+/// (`005e05d0`) and up to eight indices from the pick result (`EBP - 0xA0`, -1 ends them); a
+/// node of kind 0xA (`0043b230`) skips one index; otherwise the node and index are kept and
+/// the walk goes to the child (slot 0x14 of slot 0x10's object, with the index and the list
+/// entry `005e05b0`). The kept node's object (`004a3a40`), when there is one, gives the layer
+/// test (`00c84f50` with the index and 0x40). The list is destroyed (`005e0600`).
+fn walk_hit_layers(e: &mut Engine, ebp: u32) {
+    let at = |offset: u32| ebp - offset;
+    let index_at = |i: u32| at(0xa0).wrapping_add(i.wrapping_mul(4));
+    let node = e.mem.u32(at(0x114));
+    e.mem.set_u32(at(0x11c), node);
+    e.mem.set_u32(at(0x120), 0);
+    e.mem.set_u32(at(0x124), 0xffff_ffff);
+    e.call(N045_INDEX_LIST_CONSTRUCT, &args![at(0x12c), 8u32, 0u32]);
+    let mut i = 0i32;
+    while i < 8 && e.mem.u32(index_at(i as u32)) != 0xffff_ffff {
+        let node = e.mem.u32(at(0x11c));
+        if e.call(N045_OBJECT_KIND, &args![node]).u32() == 0xa {
+            i += 1;
+            if i >= 8 || e.mem.u32(index_at(i as u32)) == 0xffff_ffff {
+                break;
+            }
+        }
+        let index = e.mem.u32(index_at(i as u32));
+        e.mem.set_u32(at(0x124), index);
+        let node = e.mem.u32(at(0x11c));
+        e.mem.set_u32(at(0x120), node);
+        let holder = e.vcall(node, 0x10, &[]).u32();
+        e.mem.set_u32(at(0x134), holder);
+        let entry = e
+            .call(N045_INDEX_LIST_AT, &args![at(0x12c), i as u32])
+            .u32();
+        let index = e.mem.u32(index_at(i as u32));
+        let child = e.vcall(holder, 0x14, &args![index, entry]).u32();
+        e.mem.set_u32(at(0x11c), child);
+        i += 1;
+    }
+    let kept = e.mem.u32(at(0x120));
+    let object = e.call(N045_OBJECT_OF, &args![kept]).u32();
+    e.mem.set_u32(at(0x138), object);
+    if object != 0 {
+        let index = e.mem.u32(at(0x124));
+        let hit = e.call(N045_LAYER_TEST, &args![object, index, 0x40u32]).u8();
+        e.mem.set_u8(at(0x10e), hit);
+    }
+    e.call(N045_INDEX_LIST_DESTRUCT, &args![at(0x12c)]);
+}
+
+/// The front `005df040` and `005df5d0` share (frame base `ebp`): the angle parameter
+/// (`EBP - 0x14`) through `0040ebd0` with `0103d24c`, a pick data, a point (0, angle, 0), the
+/// player's position, the transposed head matrix of the player's animation data (`0045c670`,
+/// `006629f0`, `00461130`, rows moved with `005df560`/`005df510`), the look point from the
+/// player's point (`005df5b0`) through `004b4500` and `00439e90`, the player's flags
+/// (`00931ed0`, `004a3a20`, `0059ce80` on a flags word with 6), and `TES::Pick` from the
+/// position to that point; answers the pick's result.
+fn pick_from_player(e: &mut Engine, ebp: u32) -> u32 {
+    let at = |offset: u32| ebp - offset;
+    let angle = x87_quiet_bits(e.mem.u32(at(0x14)));
+    let constant = x87_quiet_bits(e.global::<u32>(N045_ANGLE_CONSTANT));
+    let turned = e.call(N045_ANGLE_FUNCTION, &args![angle, constant]).f64();
+    e.mem.set_u32(at(0x14), x87_store32(turned));
+    e.call(N045_PICK_DATA_CONSTRUCT, &args![at(0xd0)]);
+    let angle = x87_quiet_bits(e.mem.u32(at(0x14)));
+    e.call(N045_SET_POINT, &args![at(0xdc), 0u32, angle, 0u32]);
+    let player = e.global::<u32>(N045_PLAYER);
+    let position = e.vcall(player, 0x1f4, &[]).u32();
+    copy_point(e, at(0xe8), position);
+    let singleton = e.call(N045_SINGLETON_45C670, &[]).u32();
+    let data = e.call(N045_ANIMATION_DATA, &args![singleton]).u32();
+    e.mem.set_u32(at(0xec), data);
+    let matrix = e.call(N045_MATRIX_OF, &args![data]).u32();
+    for i in 0..9 {
+        let word = e.mem.u32(matrix + 4 * i);
+        e.mem.set_u32(at(0x110) + 4 * i, word);
+    }
+    e.call(N045_SELF, &args![at(0x134)]);
+    e.call(N045_SELF, &args![at(0x140)]);
+    for row in 0..3u32 {
+        e.call(
+            N045_MATRIX_GET_ROW,
+            &args![at(0x110), row, at(0x13c), at(0x138), at(0x140)],
+        );
+        e.call(N045_MATRIX_SET_ROW, &args![at(0x134), row, at(0x140)]);
+    }
+    let player = e.global::<u32>(N045_PLAYER);
+    let point = e.call(N045_PLAYER_POINT, &args![player]).u32();
+    copy_point(e, at(0xe8), point);
+    let product = e
+        .call(N045_MATRIX_TIMES, &args![at(0x134), at(0x158), at(0xdc)])
+        .u32();
+    let sum = e
+        .call(N045_POINT_PLUS, &args![product, at(0x14c), at(0xe8)])
+        .u32();
+    copy_point(e, at(0xdc), sum);
+    let player = e.global::<u32>(N045_PLAYER);
+    e.call(N045_MOBILE_931ED0, &args![player, at(0x15c)]);
+    e.call(N045_FLAGS_CONSTRUCT, &args![at(0x160), 0u32]);
+    e.call(N045_FLAGS_SET, &args![at(0x160), 6u32]);
+    let player = e.global::<u32>(N045_PLAYER);
+    let source = e.call(N045_MOBILE_931ED0, &args![player, at(0x164)]).u32();
+    let flags = e.call(N045_FLAGS_OF, &args![source]).u32();
+    e.call(N045_FLAGS_COMBINE, &args![at(0x160), flags]);
+    let flags = e.mem.u32(at(0x160));
+    e.call(N045_PICK_SET_FILTER, &args![at(0xd0), flags]);
+    e.call(N045_PICK_SET_START, &args![at(0xd0), at(0xe8)]);
+    e.call(N045_PICK_SET_END, &args![at(0xd0), at(0xdc)]);
+    let tes = e.global::<u32>(N045_TES);
+    let picked = e.call(N045_TES_PICK, &args![tes, at(0xd0)]).u32();
+    e.mem.set_u32(at(0x168), picked);
+    picked
+}
+
+/// The locals both bodies set before parsing: the result 0.0, a form word 0, a flag 1 and two
+/// floats 0.0 (`EBP - 8` to `EBP - 0x14`).
+fn clear_pick_locals(e: &mut Engine, args: ScriptArgs, ebp: u32) {
+    e.mem.set_f64(args.result.addr(), 0.0);
+    e.mem.set_u32(ebp - 8, 0);
+    e.mem.set_u32(ebp - 0xc, 1);
+    e.mem.set_u32(ebp - 0x10, x87_store32(0.0));
+    e.mem.set_u32(ebp - 0x14, x87_store32(0.0));
+}
+
+// Translated from 005df040 (PC disassembly, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 005df040 - the /GS stack cookie check (00ec408c) is not translated.
+/// A script command body (no Ghidra function, no map name): parses a form, a flag and two
+/// floats, picks from the player (`pick_from_player`) and takes the pick's point
+/// (`005dbe60`, else the player's position). For a form that passes slot 0xE4 and a pick that
+/// hit (`00451110`), sets the result to 1.0 and places a reference of the form there
+/// (`004698a0` at the player's position, cell and world space); none answers false. An actor
+/// placed (slot 0x100) gets slot 0x41C with 0.0 and fades in (`Actor::FadeIn`); a form with
+/// health (`TESHealthForm::GetFormAsHealthForm`) gives it its health (slot 0x10, as a float,
+/// times the double `01017a40`, `00568bd0`). Answers true otherwise, false when the parameters
+/// do not parse. The stack cookie check is not translated.
+pub fn fn_005df040(e: &mut Engine, args: ScriptArgs) -> bool {
+    e.with_stack(0x1b0, |e, frame| {
+        let ebp = frame.addr() + 0x1b0;
+        let at = |offset: u32| ebp - offset;
+        clear_pick_locals(e, args, ebp);
+        if !args.parse(e, &[at(8), at(0xc), at(0x10), at(0x14)]) {
+            return false;
+        }
+        pick_from_player(e, ebp);
+        e.call(N045_SELF, &args![at(0x174)]);
+        e.call(N045_PICK_POINT, &args![at(0xd0), at(0x174)]);
+        let player = e.global::<u32>(N045_PLAYER);
+        let position = e.vcall(player, 0x1f4, &[]).u32();
+        copy_point(e, at(0x180), position);
+        let form = e.mem.u32(at(8));
+        if !e.vcall(form, 0xe4, &[]).bool() {
+            return true;
+        }
+        let form = e.mem.u32(at(8));
+        e.mem.set_u32(at(0x184), form);
+        let health = e.call(N045_HEALTH_FORM, &args![form]).u32();
+        e.mem.set_u32(at(0x188), health);
+        let tes = e.global::<u32>(N045_TES);
+        if !e.call(N045_PICK_HIT, &args![tes, at(0x174)]).bool() {
+            return true;
+        }
+        copy_point(e, at(0x180), at(0x174));
+        e.mem.set_f64(args.result.addr(), 1.0);
+        let player = e.global::<u32>(N045_PLAYER);
+        let world_space = e.call(N045_WORLD_SPACE, &args![player]).u32();
+        let player = e.global::<u32>(N045_PLAYER);
+        let cell = e.call(N045_PARENT_CELL, &args![player]).u32();
+        let player = e.global::<u32>(N045_PLAYER);
+        let point = e.call(N045_REFERENCE_POINT, &args![player]).u32();
+        let handler = e.global::<u32>(N045_DATA_HANDLER);
+        let form = e.mem.u32(at(0x184));
+        let placed = e
+            .call(
+                N045_PLACE_REFERENCE,
+                &args![
+                    handler,
+                    form,
+                    at(0x180),
+                    point,
+                    cell,
+                    world_space,
+                    0u32,
+                    0u32,
+                    0u32
+                ],
+            )
+            .u32();
+        e.mem.set_u32(at(0x18c), placed);
+        if placed == 0 {
+            return false;
+        }
+        if e.vcall(placed, 0x100, &[]).bool() {
+            e.mem.set_u32(at(0x190), placed);
+            e.vcall(placed, 0x41c, &args![x87_store32(0.0)]);
+            e.call(N045_FADE_IN, &args![placed]);
+        }
+        let health = e.mem.u32(at(0x188));
+        if health != 0 {
+            let value = e.vcall(health, 0x10, &[]).u32();
+            e.mem.set_u32(at(0x198), value);
+            e.mem.set_u32(at(0x194), 0);
+            let whole = f64::from(value);
+            e.mem.set_u32(at(0x19c), x87_store32(whole));
+            let scaled = x87_mul(
+                x87_load32(e.mem.u32(at(0x19c))),
+                e.global::<f64>(N045_HEALTH_SCALE),
+            );
+            e.mem.set_u32(at(0x19c), x87_store32(scaled));
+            let scaled = x87_quiet_bits(e.mem.u32(at(0x19c)));
+            e.call(N045_SET_SCALE_LIKE, &args![placed, scaled]);
+        }
+        true
+    })
+}
+
+// Translated from 005df5d0 (PC disassembly, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 005df5d0 - the /GS stack cookie check (00ec408c) is not translated.
+/// A script command body (no Ghidra function, no map name): parses two floats, picks from the
+/// player (`pick_from_player`) and, when the pick found a 3D object whose reference
+/// `TESObjectREFR::FindReferenceFor3D` gives, writes that reference's form id into the result
+/// (`Script::PutNumericIDInDouble`); the result stays 0.0 otherwise. Answers true, false when
+/// the parameters do not parse. The stack cookie check is not translated.
+pub fn fn_005df5d0(e: &mut Engine, args: ScriptArgs) -> bool {
+    e.with_stack(0x180, |e, frame| {
+        let ebp = frame.addr() + 0x180;
+        let at = |offset: u32| ebp - offset;
+        clear_pick_locals(e, args, ebp);
+        if !args.parse(e, &[at(0x10), at(0x14)]) {
+            return false;
+        }
+        let picked = pick_from_player(e, ebp);
+        let reference = if picked != 0 {
+            e.call(N045_FIND_REFERENCE_FOR_3D, &args![picked]).u32()
+        } else {
+            0
+        };
+        e.mem.set_u32(at(0x16c), reference);
+        e.mem.set_u32(at(0x170), reference);
+        if reference != 0 {
+            let id = e.call(N045_FORM_ID, &args![reference]).u32();
+            e.mem.set_u32(at(0x174), id);
+            e.call(
+                N045_PUT_NUMERIC_ID_IN_DOUBLE,
+                &args![at(0x174), args.result.addr()],
+            );
+        }
+        true
+    })
+}
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -5823,6 +6324,9 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
             script_show_head_track_target(ScriptArgs) -> bool
         ),
         entry!(0x005bc3b0, script_toggle_high_process() -> bool),
+        entry!(0x005d_b870, fn_005db870(ScriptArgs) -> bool),
+        entry!(0x005d_f040, fn_005df040(ScriptArgs) -> bool),
+        entry!(0x005d_f5d0, fn_005df5d0(ScriptArgs) -> bool),
     ]
 }
 
@@ -11213,5 +11717,323 @@ mod tests {
         assert!(e.call(0x005b_c310, &args![script(other)]).bool());
         assert!(e.call(0x005b_c310, &args![script(0)]).bool());
         assert!(calls(&e, HEAD_TRACK_TARGET_EXTRA).is_empty());
+    }
+}
+
+#[cfg(test)]
+mod n045_tests {
+    use super::*;
+
+    type Log = Vec<(u32, Vec<u32>)>;
+
+    fn ret(eax: u32) -> Ret {
+        Ret {
+            eax,
+            ..Ret::default()
+        }
+    }
+
+    fn ok(_: &mut Engine, _: &[u32]) -> Ret {
+        Ret::default()
+    }
+
+    fn only(log: &Log, addr: u32) -> Vec<Vec<u32>> {
+        log.iter()
+            .filter(|(a, _)| *a == addr)
+            .map(|(_, w)| w.clone())
+            .collect()
+    }
+
+    /// An object whose vtable maps the given slots to the given addresses.
+    fn object(e: &mut Engine, slots: &[(u32, u32)]) -> u32 {
+        let o = e.mem.alloc(0x20);
+        let vt = e.mem.alloc(0x420);
+        e.mem.set_u32(o, vt);
+        for (slot, target) in slots {
+            e.mem.set_u32(vt + slot, *target);
+        }
+        o
+    }
+
+    /// Script arguments with a result double.
+    fn script_args(e: &mut Engine, this: u32) -> (ScriptArgs, u32) {
+        let result = e.mem.alloc(8);
+        e.mem.set_f64(result, 7.0);
+        (
+            ScriptArgs {
+                param_info: 1,
+                script_data: 2,
+                this_obj: Ptr::new(this),
+                containing_obj: Ptr::NULL,
+                script_obj: Ptr::NULL,
+                event_list: 0,
+                result: Ptr::new(result),
+                opcode_offset: 3,
+            },
+            result,
+        )
+    }
+
+    fn words(a: ScriptArgs) -> Vec<u32> {
+        let mut out = vec![];
+        a.put(&mut out);
+        out
+    }
+
+    /// A parse double writing `values` to the outputs (after the seven fixed words).
+    fn parse_writes(e: &mut Engine, values: Vec<u32>) {
+        e.register_double(PARSE_PARAMETERS, move |e, a| {
+            for (i, v) in values.iter().enumerate() {
+                e.mem.set_u32(a[7 + i], *v);
+            }
+            ret(1)
+        });
+    }
+
+    fn quiet_all(e: &mut Engine, addrs: &[u32]) {
+        for a in addrs {
+            e.register(*a, ok);
+        }
+    }
+
+    fn base_engine() -> Engine {
+        let mut e = Engine::new();
+        e.map(0x011c_0000, 0x2_0000);
+        e.map(0x0101_0000, 0x4_0000);
+        quiet_all(
+            &mut e,
+            &[
+                N045_SET_POINT,
+                N045_SET_MULTI_LAYER_COLLISION,
+                N045_PICK_DATA_CONSTRUCT,
+                N045_FLAGS_CONSTRUCT,
+                N045_FLAGS_SET,
+                N045_FLAGS_COMBINE,
+                N045_PICK_SET_FILTER,
+                N045_PICK_SET_START,
+                N045_PICK_SET_END,
+                N045_SELF,
+                N045_PATHING_LOCATION,
+                N045_NAVMESH_NORMAL,
+                N045_PATHING_LOCATION_DESTRUCT,
+                N045_PICK_NORMAL,
+                N045_ROTATION_TO_VECTOR,
+                N045_TO_EULER_ANGLES,
+                N045_PICK_POINT,
+                N045_REFERENCE_FLAG_564C60,
+                N045_REFERENCE_FLAG_56C780,
+                N045_SET_REF_PERSISTS,
+                N045_LIST_ADD,
+                N045_MATRIX_GET_ROW,
+                N045_MATRIX_SET_ROW,
+                N045_MOBILE_931ED0,
+                N045_FADE_IN,
+                N045_SET_SCALE_LIKE,
+                N045_PUT_NUMERIC_ID_IN_DOUBLE,
+                N045_INDEX_LIST_CONSTRUCT,
+                N045_INDEX_LIST_DESTRUCT,
+            ],
+        );
+        e.register(N045_NEXT_PICK_ID, |_, _| ret(11));
+        e.register(N045_REFERENCE_LIST, |_, a| ret(a[0] + 0x10));
+        e.register(N045_WORLD_SPACE, |_, _| ret(0x5100));
+        e.register(N045_PARENT_CELL, |_, _| ret(0x5200));
+        e.register(N045_FLAGS_OF, |_, _| ret(0x22));
+        e
+    }
+
+    #[test]
+    fn fn_005db870_places_a_marker_at_the_pick() {
+        let mut e = base_engine();
+        let (a, _) = script_args(&mut e, 0);
+        e.register(PARSE_PARAMETERS, |_, _| ret(0));
+        assert!(!e.call(0x005d_b870, &words(a)).bool());
+        parse_writes(&mut e, vec![2]);
+        assert!(e.call(0x005d_b870, &words(a)).bool());
+        // An actor this reference, no pick hit: placed with the mode 2 form, unrotated.
+        let point = e.mem.alloc(0xc);
+        e.mem.set_f32(point, 1.0);
+        e.mem.set_f32(point + 4, 2.0);
+        e.mem.set_f32(point + 8, 3.0);
+        e.register_double(0x0050_0000, move |_, _| ret(point));
+        e.register(0x0050_0010, |_, _| ret(1));
+        e.register(0x0050_0020, ok);
+        e.register(0x0050_0030, |_, _| ret(4));
+        let this = object(
+            &mut e,
+            &[
+                (0x1f4, 0x0050_0000),
+                (0x100, 0x0050_0010),
+                (0x48, 0x0050_0020),
+                (0x1d0, 0x0050_0030),
+            ],
+        );
+        e.register_double(N045_REFERENCE_POINT, move |_, _| ret(point));
+        e.register(N045_TES_PICK, ok);
+        e.register(N045_PICK_RESULT_OBJECT, |_, a| ret(a[0]));
+        e.register(N045_RESULT_TEST, |_, _| ret(0));
+        let placed = object(&mut e, &[(0x48, 0x0050_0020)]);
+        e.register_double(N045_PLACE_REFERENCE, move |_, _| ret(placed));
+        e.set_global::<u32>(N045_FORM_MODE_2, 0x7200);
+        e.set_global::<u32>(N045_FORM_OTHER, 0x7300);
+        e.set_global::<u32>(N045_DATA_HANDLER, 0x7400);
+        e.set_global::<f64>(N045_HEIGHT_UP, 0.5);
+        e.set_global::<f64>(N045_HEIGHT_DOWN, 0.25);
+        let heights = std::rc::Rc::new(std::cell::Cell::new((0.0f32, 0.0f32)));
+        let h1 = heights.clone();
+        e.register_double(N045_PICK_SET_START, move |e, a| {
+            h1.set((e.mem.f32(a[1] + 8), h1.get().1));
+            Ret::default()
+        });
+        let h2 = heights.clone();
+        e.register_double(N045_PICK_SET_END, move |e, a| {
+            h2.set((h2.get().0, e.mem.f32(a[1] + 8)));
+            Ret::default()
+        });
+        let (a, _) = script_args(&mut e, this);
+        e.call_log = Some(vec![]);
+        assert!(e.call(0x005d_b870, &words(a)).bool());
+        let log = e.call_log.take().unwrap();
+        let set = only(&log, N045_SET_POINT);
+        assert_eq!(&set[0][1..], &[0, 0, 3.0f32.to_bits()]);
+        assert_eq!(
+            only(&log, N045_SET_MULTI_LAYER_COLLISION),
+            vec![vec![0x27, 0x0802_2802, 0]]
+        );
+        assert_eq!(heights.get(), (3.5, 2.75));
+        let place = only(&log, N045_PLACE_REFERENCE);
+        assert_eq!(place[0][0], 0x7400);
+        assert_eq!(place[0][1], 0x7200);
+        assert_eq!(&place[0][4..], &[0x5200, 0x5100, 0, 0, 0]);
+        assert_eq!(
+            only(&log, N045_REFERENCE_FLAG_564C60),
+            vec![vec![placed, 1]]
+        );
+        assert_eq!(
+            only(&log, N045_LIST_ADD),
+            vec![vec![placed + 0x10, this], vec![this + 0x10, placed]]
+        );
+        assert_eq!(only(&log, 0x0050_0020).len(), 2);
+        assert!(only(&log, N045_TO_EULER_ANGLES).is_empty());
+        // A hit on an accepted object: the navmesh normal and a rotation.
+        e.register(N045_RESULT_TEST, |_, _| ret(1));
+        e.register(N045_FIRST_WORD, |_, _| ret(0x6600));
+        e.register(N045_OBJECT_OF, |_, a| ret(a[0]));
+        e.register(N045_OBJECT_TEST, |_, _| ret(1));
+        parse_writes(&mut e, vec![1]);
+        e.call_log = Some(vec![]);
+        assert!(e.call(0x005d_b870, &words(a)).bool());
+        let log = e.call_log.take().unwrap();
+        assert_eq!(only(&log, N045_OBJECT_TEST), vec![vec![0x6600, 0x40]]);
+        assert_eq!(only(&log, N045_NAVMESH_NORMAL).len(), 1);
+        assert_eq!(only(&log, N045_TO_EULER_ANGLES).len(), 1);
+        assert_eq!(
+            only(&log, N045_REFERENCE_FLAG_564C60),
+            vec![vec![placed, 0]]
+        );
+        assert_eq!(only(&log, N045_PLACE_REFERENCE)[0][1], 0x7300);
+        // A refused object walks its nodes (none here) and uses the pick's normal.
+        e.register(N045_OBJECT_TEST, |_, _| ret(0));
+        e.register(N045_PICK_RESULT_OBJECT, |e, a| {
+            e.mem.set_u32(a[0] + 0x20, 0xffff_ffff);
+            ret(a[0])
+        });
+        e.call_log = Some(vec![]);
+        assert!(e.call(0x005d_b870, &words(a)).bool());
+        let log = e.call_log.take().unwrap();
+        assert_eq!(only(&log, N045_INDEX_LIST_CONSTRUCT)[0][1..], [8, 0]);
+        assert_eq!(only(&log, N045_PICK_NORMAL).len(), 1);
+        assert!(only(&log, N045_LAYER_TEST).is_empty());
+    }
+
+    /// Doubles for the player pick of `005df040` and `005df5d0`.
+    fn pick_engine() -> Engine {
+        let mut e = base_engine();
+        let point = e.mem.alloc(0xc);
+        e.mem.set_f32(point, 5.0);
+        e.register_double(0x0050_0000, move |_, _| ret(point));
+        e.register(0x0050_0010, |_, _| ret(1));
+        e.register(0x0050_0020, ok);
+        let player = object(&mut e, &[(0x1f4, 0x0050_0000), (0x100, 0x0050_0010)]);
+        e.set_global::<u32>(N045_PLAYER, player);
+        e.set_global::<u32>(N045_TES, 0x7500);
+        e.register(N045_ANGLE_FUNCTION, |_, a| Ret {
+            st0: f64::from(f32::from_bits(a[0])) * 2.0,
+            ..Ret::default()
+        });
+        e.register(N045_SINGLETON_45C670, |_, _| ret(0x6100));
+        e.register(N045_ANIMATION_DATA, |_, _| ret(0x6200));
+        let matrix = e.mem.alloc(0x24);
+        e.register_double(N045_MATRIX_OF, move |_, _| ret(matrix));
+        e.register_double(N045_PLAYER_POINT, move |_, _| ret(point));
+        e.register_double(N045_MATRIX_TIMES, move |_, _| ret(point));
+        e.register_double(N045_POINT_PLUS, move |_, _| ret(point));
+        e.register_double(N045_REFERENCE_POINT, move |_, _| ret(point));
+        e.register(N045_TES_PICK, |_, _| ret(0x6300));
+        e
+    }
+
+    #[test]
+    fn fn_005df040_places_the_form_where_the_player_looks() {
+        let mut e = pick_engine();
+        let health = object(&mut e, &[(0x10, 0x0050_0040)]);
+        e.register(0x0050_0040, |_, _| ret(50));
+        e.register(0x0050_0030, |_, _| ret(1));
+        let form = object(&mut e, &[(0xe4, 0x0050_0030)]);
+        e.register_double(N045_HEALTH_FORM, move |_, _| ret(health));
+        e.register(N045_PICK_HIT, |_, _| ret(1));
+        e.register(0x0050_0050, ok);
+        let placed = object(&mut e, &[(0x100, 0x0050_0010), (0x41c, 0x0050_0050)]);
+        e.register_double(N045_PLACE_REFERENCE, move |_, _| ret(placed));
+        e.set_global::<f64>(N045_HEALTH_SCALE, 0.5);
+        e.set_global::<u32>(N045_ANGLE_CONSTANT, 1.0f32.to_bits());
+        parse_writes(&mut e, vec![form, 1, 0, 1.5f32.to_bits()]);
+        let (a, result) = script_args(&mut e, 0);
+        e.call_log = Some(vec![]);
+        assert!(e.call(0x005d_f040, &words(a)).bool());
+        let log = e.call_log.take().unwrap();
+        assert_eq!(e.mem.f64(result), 1.0);
+        let angle = only(&log, N045_ANGLE_FUNCTION);
+        assert_eq!(angle[0], vec![1.5f32.to_bits(), 1.0f32.to_bits()]);
+        let set = only(&log, N045_SET_POINT);
+        assert_eq!(&set[0][1..], &[0, 3.0f32.to_bits(), 0]);
+        assert_eq!(only(&log, N045_MATRIX_GET_ROW).len(), 3);
+        assert_eq!(only(&log, N045_FLAGS_SET)[0][1], 6);
+        assert_eq!(only(&log, N045_PLACE_REFERENCE)[0][1], form);
+        assert_eq!(only(&log, 0x0050_0050)[0][1], 0);
+        assert_eq!(only(&log, N045_FADE_IN), vec![vec![placed]]);
+        assert_eq!(
+            only(&log, N045_SET_SCALE_LIKE),
+            vec![vec![placed, 25.0f32.to_bits()]]
+        );
+        // No placed reference answers false; a refused form leaves the result 0.
+        e.register(N045_PLACE_REFERENCE, |_, _| ret(0));
+        assert!(!e.call(0x005d_f040, &words(a)).bool());
+        e.register(0x0050_0030, |_, _| ret(0));
+        assert!(e.call(0x005d_f040, &words(a)).bool());
+        assert_eq!(e.mem.f64(result), 0.0);
+        e.register(PARSE_PARAMETERS, |_, _| ret(0));
+        assert!(!e.call(0x005d_f040, &words(a)).bool());
+    }
+
+    #[test]
+    fn fn_005df5d0_answers_the_picked_reference() {
+        let mut e = pick_engine();
+        parse_writes(&mut e, vec![0, 0]);
+        e.register(N045_FIND_REFERENCE_FOR_3D, |_, _| ret(0x6400));
+        e.register(N045_FORM_ID, |_, _| ret(0x0001_2345));
+        let (a, result) = script_args(&mut e, 0);
+        e.call_log = Some(vec![]);
+        assert!(e.call(0x005d_f5d0, &words(a)).bool());
+        let log = e.call_log.take().unwrap();
+        assert_eq!(only(&log, N045_FIND_REFERENCE_FOR_3D), vec![vec![0x6300]]);
+        let put = only(&log, N045_PUT_NUMERIC_ID_IN_DOUBLE);
+        assert_eq!(put[0][1], result);
+        assert_eq!(e.mem.f64(result), 0.0);
+        e.register(N045_TES_PICK, |_, _| ret(0));
+        e.call_log = Some(vec![]);
+        assert!(e.call(0x005d_f5d0, &words(a)).bool());
+        let log = e.call_log.take().unwrap();
+        assert!(only(&log, N045_FIND_REFERENCE_FOR_3D).is_empty());
     }
 }

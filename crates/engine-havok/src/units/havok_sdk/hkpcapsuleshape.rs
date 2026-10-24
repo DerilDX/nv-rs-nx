@@ -290,14 +290,20 @@ pub fn hkp_capsule_shape_get_collision_spheres_impl(
 /// (b - a))` and `l = (b - a) . (b - a)`: `a` when `t <= 0`, `b` when `l <=
 /// t`, else `a + (t / l) * (b - a)`. NaN takes the last case.
 pub fn fn_00d224c0(e: &mut Engine, point: Ptr, a: Ptr, b: Ptr, out: Ptr) {
+    use crate::sse::{add, addps, mulps, subps};
+    // The SSE arithmetic with its NaN rules (the destination operand first).
+    let dot = |x: Vec4, y: Vec4| {
+        let products = mulps(x, y);
+        add(products[2], add(products[1], products[0]))
+    };
     let p = load_vec(e, point.addr());
     let a_vec = load_vec(e, a.addr());
     let b_vec = load_vec(e, b.addr());
-    let d = zip_with(b_vec, a_vec, |q, r| q - r);
-    let to_a = zip_with(a_vec, p, |q, r| q - r);
+    let d = subps(b_vec, a_vec);
+    let to_a = subps(a_vec, p);
     // `FLD; FCHS; FSTP [float]`: the negation goes through x87.
-    let t = x87_quiet(-dot3(to_a, d));
-    let l = dot3(d, d);
+    let t = x87_quiet(-dot(to_a, d));
+    let l = dot(d, d);
     // `FCOM` against 0: the flag test falls through when `t < 0` or `t == 0`.
     if t <= 0.0 {
         store_vec(e, out.addr(), a_vec);
@@ -308,12 +314,10 @@ pub fn fn_00d224c0(e: &mut Engine, point: Ptr, a: Ptr, b: Ptr, out: Ptr) {
         store_vec(e, out.addr(), b_vec);
         return;
     }
-    let q = (t as f64 / l as f64) as f32;
-    store_vec(
-        e,
-        out.addr(),
-        zip_with(d, a_vec, |step, start| q * step + start),
-    );
+    // `FDIVP` of the two loaded floats (the x87 choice of NaN), then `MULPS` with the
+    // splatted quotient and `ADDPS` of `a`.
+    let q = f32::from_bits(x87_store32(x87_div(f64::from(t), x87_load32(l.to_bits()))));
+    store_vec(e, out.addr(), addps(mulps([q; 4], d), a_vec));
 }
 
 // Translated from 00d22590 (decompiled, FalloutNV.exe 1.4.0.525)

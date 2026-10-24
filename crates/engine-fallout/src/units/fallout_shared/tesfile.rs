@@ -955,7 +955,7 @@ pub fn fn_00471110(e: &mut Engine, this: Ptr<TESFile>, version: f32) {
     e.set(
         this.at(TESFile::fileHeaderInfo),
         FileHeader::fVersion,
-        version,
+        x87_quiet(version),
     );
 }
 

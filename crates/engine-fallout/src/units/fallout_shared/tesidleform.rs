@@ -468,6 +468,117 @@ pub fn tes_idle_form_check_idle_file(e: &mut Engine, this: Ptr<TesIdleForm>) -> 
         == 0
 }
 
+/// The 16-bit swap helper (`00407a90`, `cdecl (address, flag)`).
+const SWAP_SHORT: u32 = 0x0040_7a90;
+/// The savers `TESIdleForm::Save` calls: `TESForm::StartForm` (`004855a0`),
+/// `TESModel::Save` (`004891d0`, two chunk words), `TESCondition::Save`
+/// (`00680910`), `TESForm::__AddChunkData` (`00485990`, `cdecl`),
+/// `TESForm::__SaveData` (`00485e20`, `thiscall (form, data, size)`) and
+/// `TESForm::CloseForm` (`00485680`); the byte `00401500` answers (whether
+/// saving swaps bytes).
+const SAVE_FORM_START: u32 = 0x0048_55a0;
+const SAVE_MODEL: u32 = 0x0048_91d0;
+const SAVE_CONDITIONS: u32 = 0x0068_0910;
+const SAVE_CHUNK_DATA: u32 = 0x0048_5990;
+const SAVE_FORM_DATA: u32 = 0x0048_5e20;
+const SAVE_FORM_CLOSE: u32 = 0x0048_5680;
+const SAVE_SWAPS: u32 = 0x0040_1500;
+/// The idle getters the save asks for the `ANAM` pair: the parent
+/// (`008041a0`), whether an idle is only a grouping one (`00440d80`,
+/// answers a byte) and the previous idle (`006733e0`); all `thiscall`
+/// without words.
+const IDLE_PARENT: u32 = 0x0080_41a0;
+const IDLE_IS_GROUPING: u32 = 0x0044_0d80;
+const IDLE_PREVIOUS: u32 = 0x0067_33e0;
+
+// Translated from 005fea20 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`thiscall`; the byte swap of `IDLE_DATA`):
+/// the 16-bit word at +4 (`00407a90` with flag 0).
+pub fn fn_005fea20(e: &mut Engine, this: Ptr) {
+    e.call(SWAP_SHORT, &args![this.addr() + 4, 0u32]);
+}
+
+// Translated from 005fea50 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`thiscall`; the save of a `TESIdleForm`):
+/// starts the form, saves the model (+0x18, `MODL`, `MODT`) and the
+/// conditions (`00436aa0`), then the `ANAM` pair (8 stack bytes, zeroed):
+/// the parent's form id when there is a parent, and, unless this idle is
+/// a grouping one (`00440d80`), the form id of the first previous idle
+/// (`006733e0`, stepping over grouping ones) that exists; the pair is
+/// swapped (`00462230`) before and after when saving swaps bytes. Then the
+/// eight data bytes at +0x38 (`__SaveData`, swapped by [`fn_005fea20`]
+/// before and after) and closes the form.
+pub fn fn_005fea50(e: &mut Engine, this: Ptr<TesIdleForm>) {
+    let at = this.addr();
+    e.call(SAVE_FORM_START, &args![this]);
+    e.call(SAVE_MODEL, &args![at + 0x18, CHUNK_MODL, CHUNK_MODT]);
+    let conditions = e.call(CONDITIONS, &args![this]).u32();
+    e.call(SAVE_CONDITIONS, &args![conditions]);
+    e.with_stack(8, |e, pair| {
+        e.call(FILL_MEMORY, &args![pair, 0u32, 8u32]);
+        if e.call(IDLE_PARENT, &args![this]).u32() != 0 {
+            let parent = e.call(IDLE_PARENT, &args![this]).u32();
+            let id = e.call(FORM_ID, &args![parent]).u32();
+            e.mem.set_u32(pair.addr(), id);
+        }
+        if e.call(IDLE_IS_GROUPING, &args![this]).u8() == 0 {
+            let mut previous = e.call(IDLE_PREVIOUS, &args![this]).u32();
+            while previous != 0 && e.call(IDLE_IS_GROUPING, &args![previous]).u8() != 0 {
+                previous = e.call(IDLE_PREVIOUS, &args![previous]).u32();
+            }
+            if previous != 0 {
+                let id = e.call(FORM_ID, &args![previous]).u32();
+                e.mem.set_u32(pair.addr() + 4, id);
+            }
+        }
+        if e.call(SAVE_SWAPS, &args![]).u8() != 0 {
+            e.call(SWAP_PAIR, &args![pair]);
+        }
+        e.call(SAVE_CHUNK_DATA, &args![CHUNK_ANAM, pair, 8u32]);
+        if e.call(SAVE_SWAPS, &args![]).u8() != 0 {
+            e.call(SWAP_PAIR, &args![pair]);
+        }
+    });
+    if e.call(SAVE_SWAPS, &args![]).u8() != 0 {
+        fn_005fea20(e, Ptr::new(at + 0x38));
+    }
+    e.call(SAVE_FORM_DATA, &args![this, at + 0x38, 8u32]);
+    if e.call(SAVE_SWAPS, &args![]).u8() != 0 {
+        fn_005fea20(e, Ptr::new(at + 0x38));
+    }
+    e.call(SAVE_FORM_CLOSE, &args![this]);
+}
+
+// Translated from 005ff190 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`thiscall`, one byte word; the anim group
+/// section setter): keeps bits 6 and 7 of `cAnimData` and ors in `section`.
+pub fn fn_005ff190(e: &mut Engine, this: Ptr<TesIdleForm>, section: u32) {
+    let kept = e.get(this, TesIdleForm::cAnimData) & 0xc0;
+    e.set(this, TesIdleForm::cAnimData, kept);
+    let value = e.get(this, TesIdleForm::cAnimData) | section as u8;
+    e.set(this, TesIdleForm::cAnimData, value);
+}
+
+// Translated from 005ff220 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`thiscall`, one byte word): sets bit 6 of
+/// `cAnimData` when the byte is non-zero, clears it otherwise.
+pub fn fn_005ff220(e: &mut Engine, this: Ptr<TesIdleForm>, on: u32) {
+    let value = e.get(this, TesIdleForm::cAnimData);
+    let value = if on & 0xff != 0 {
+        value | 0x40
+    } else {
+        value & 0xbf
+    };
+    e.set(this, TesIdleForm::cAnimData, value);
+}
+
+// Translated from 005ff260 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`thiscall`): bit 0 of the byte at +0x3E
+/// (in `IDLE_DATA`).
+pub fn fn_005ff260(e: &mut Engine, this: Ptr<TesIdleForm>) -> bool {
+    e.mem.u8(this.addr() + 0x3e) & 1 != 0
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -494,6 +605,11 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
             0x005f_f280,
             tes_idle_form_check_idle_file(Ptr<TesIdleForm>) -> bool
         ),
+        entry!(0x005f_ea20, fn_005fea20(Ptr)),
+        entry!(0x005f_ea50, fn_005fea50(Ptr<TesIdleForm>)),
+        entry!(0x005f_f190, fn_005ff190(Ptr<TesIdleForm>, u32)),
+        entry!(0x005f_f220, fn_005ff220(Ptr<TesIdleForm>, u32)),
+        entry!(0x005f_f260, fn_005ff260(Ptr<TesIdleForm>) -> bool),
     ]
 }
 
@@ -908,5 +1024,121 @@ mod tests {
         );
         let (_, log) = run(&mut e, 0x005f_efa0, &[this, 0]);
         assert!(log.is_empty());
+    }
+}
+
+#[cfg(test)]
+mod n043_tests {
+    use super::*;
+
+    const STATE: u32 = 0x7300_0000;
+
+    fn calls(e: &Engine, addr: u32) -> Vec<Vec<u32>> {
+        e.call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|c| c.0 == addr)
+            .map(|c| c.1.clone())
+            .collect()
+    }
+
+    /// Idles at 0x1000-aligned addresses: the word at +0x100 is the parent,
+    /// +0x104 the previous idle, +0x108 the grouping flag.
+    fn engine() -> Engine {
+        let mut e = Engine::new();
+        e.map(STATE, 0x40);
+        for addr in [
+            SWAP_SHORT,
+            SAVE_FORM_START,
+            SAVE_MODEL,
+            SAVE_CONDITIONS,
+            SAVE_FORM_DATA,
+            SAVE_FORM_CLOSE,
+            SWAP_PAIR,
+        ] {
+            e.register(addr, |_, _| Ret::default());
+        }
+        e.register(SAVE_SWAPS, |e, _| e.mem.u32(STATE).into_ret());
+        e.register(FILL_MEMORY, |e, a| {
+            for offset in 0..a[2] {
+                e.mem.set_u8(a[0] + offset, a[1] as u8);
+            }
+            Ret::default()
+        });
+        e.register(CONDITIONS, |_, a| (a[0] + 0x50).into_ret());
+        e.register(IDLE_PARENT, |e, a| e.mem.u32(a[0] + 0x100).into_ret());
+        e.register(IDLE_PREVIOUS, |e, a| e.mem.u32(a[0] + 0x104).into_ret());
+        e.register(IDLE_IS_GROUPING, |e, a| e.mem.u32(a[0] + 0x108).into_ret());
+        e.register(FORM_ID, |_, a| (a[0] + 1).into_ret());
+        e.register_double(SAVE_CHUNK_DATA, |e, a| {
+            let first = e.mem.u32(a[1]);
+            let second = e.mem.u32(a[1] + 4);
+            e.mem.set_u32(STATE + 4, first);
+            e.mem.set_u32(STATE + 8, second);
+            Ret::default()
+        });
+        e.map(0x7400_0000, 0x4000);
+        e
+    }
+
+    #[test]
+    fn swap_short_at_4() {
+        let mut e = engine();
+        e.call_log = Some(vec![]);
+        e.call(0x005f_ea20, &args![0x1000u32]);
+        assert_eq!(calls(&e, SWAP_SHORT), vec![vec![0x1004, 0]]);
+    }
+
+    #[test]
+    fn save_writes_model_conditions_pair_and_data() {
+        let mut e = engine();
+        let this = 0x7400_0000u32;
+        let grouping = 0x7400_1000u32;
+        let previous = 0x7400_2000u32;
+        e.mem.set_u32(this + 0x100, 0x5000);
+        e.mem.set_u32(this + 0x104, grouping);
+        e.mem.set_u32(grouping + 0x108, 1);
+        e.mem.set_u32(grouping + 0x104, previous);
+        e.mem.set_u32(STATE, 1);
+        e.call_log = Some(vec![]);
+        e.call(0x005f_ea50, &args![this]);
+        assert_eq!(
+            calls(&e, SAVE_MODEL),
+            vec![vec![this + 0x18, CHUNK_MODL, CHUNK_MODT]]
+        );
+        assert_eq!(calls(&e, SAVE_CONDITIONS), vec![vec![this + 0x50]]);
+        assert_eq!(e.mem.u32(STATE + 4), 0x5001);
+        assert_eq!(e.mem.u32(STATE + 8), previous + 1);
+        assert_eq!(calls(&e, SAVE_CHUNK_DATA)[0][0], CHUNK_ANAM);
+        assert_eq!(calls(&e, SWAP_PAIR).len(), 2);
+        assert_eq!(calls(&e, SWAP_SHORT), vec![vec![this + 0x3c, 0]; 2]);
+        assert_eq!(calls(&e, SAVE_FORM_DATA), vec![vec![this, this + 0x38, 8]]);
+        assert_eq!(calls(&e, SAVE_FORM_CLOSE), vec![vec![this]]);
+        // A grouping idle keeps no previous one; nothing is swapped.
+        e.mem.set_u32(this + 0x108, 1);
+        e.mem.set_u32(this + 0x100, 0);
+        e.mem.set_u32(STATE, 0);
+        e.call_log = Some(vec![]);
+        e.call(0x005f_ea50, &args![this]);
+        assert_eq!((e.mem.u32(STATE + 4), e.mem.u32(STATE + 8)), (0, 0));
+        assert!(calls(&e, IDLE_PREVIOUS).is_empty());
+        assert!(calls(&e, SWAP_PAIR).is_empty());
+    }
+
+    #[test]
+    fn anim_data_bits() {
+        let mut e = engine();
+        let this = e.mem.alloc(0x54);
+        e.mem.set_u8(this + 0x38, 0xff);
+        e.call(0x005f_f190, &args![this, 0x1234_5605u32]);
+        assert_eq!(e.mem.u8(this + 0x38), 0xc5);
+        e.call(0x005f_f220, &args![this, 0x100u32]);
+        assert_eq!(e.mem.u8(this + 0x38), 0x85);
+        e.call(0x005f_f220, &args![this, 1u32]);
+        assert_eq!(e.mem.u8(this + 0x38), 0xc5);
+        assert!(!e.call(0x005f_f260, &args![this]).bool());
+        e.mem.set_u8(this + 0x3e, 3);
+        assert!(e.call(0x005f_f260, &args![this]).bool());
     }
 }

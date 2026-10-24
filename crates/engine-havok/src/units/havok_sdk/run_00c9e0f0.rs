@@ -42,12 +42,14 @@ fn mask_lanes(e: &Engine, mask_addr: u32, value: Lanes, xor: bool) -> Lanes {
     })
 }
 
+/// `MULPS a, b` (the SSE NaN rules: `a` is the destination).
 fn mul_lanes(a: Lanes, b: Lanes) -> Lanes {
-    std::array::from_fn(|lane| a[lane] * b[lane])
+    crate::sse::mulps(a, b)
 }
 
+/// `ADDPS a, b` (the SSE NaN rules).
 fn add_lanes(a: Lanes, b: Lanes) -> Lanes {
-    std::array::from_fn(|lane| a[lane] + b[lane])
+    crate::sse::addps(a, b)
 }
 
 // Translated from 00c9e0f0 (decompiled, FalloutNV.exe 1.4.0.525)

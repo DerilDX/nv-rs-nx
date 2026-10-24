@@ -1434,6 +1434,699 @@ pub fn tes_race_load(e: &mut Engine, this: Ptr, file: Ptr) -> bool {
     true
 }
 
+/// `TESForm::StartForm` (`004855a0`) and `TESForm::CloseForm` (`00485680`),
+/// `thiscall` on the form, no stack words.
+const START_FORM: u32 = 0x0048_55a0;
+const CLOSE_FORM: u32 = 0x0048_5680;
+/// The component saves (engine map; `thiscall`): `TESFullName::Save`
+/// (`00487010`), `TESDescription::Save` (`00482cb0`), `TESSpellList::Save`
+/// (`0048d330`), the reaction form's save (`0048bb70`), `TESModel::Save`
+/// (`004891d0`, two tags), `TESModel::SaveFlags` (`00489240`, a tag) and
+/// `TESTexture::Save` (`0048e370`, a tag).
+const FULL_NAME_SAVE: u32 = 0x0048_7010;
+const DESCRIPTION_SAVE: u32 = 0x0048_2cb0;
+const SPELL_LIST_SAVE: u32 = 0x0048_d330;
+const REACTION_SAVE: u32 = 0x0048_bb70;
+const MODEL_SAVE: u32 = 0x0048_91d0;
+const MODEL_SAVE_FLAGS: u32 = 0x0048_9240;
+const TEXTURE_SAVE: u32 = 0x0048_e370;
+/// `00401500`: the byte at `011c54ba` (whether saved words are byte-swapped).
+const SAVE_SWAPS_BYTES: u32 = 0x0040_1500;
+/// `TESForm` chunk writers (cdecl): `__SaveData` (`00485e20`, `thiscall`,
+/// `RET 8`: data, size), a word (`00485910`: chunk, word), an empty chunk
+/// (`TESForm::AddChunk`, `004856d0`: chunk), `AddChunkArray` (`004856f0`:
+/// chunk, data, size), `AddChunkArray_ov2` (`00485710`: chunk, data, count)
+/// and `AddChunk_ov2` (`00485950`: chunk, 16-bit word).
+const SAVE_DATA: u32 = 0x0048_5e20;
+const ADD_CHUNK_WORD: u32 = 0x0048_5910;
+const ADD_CHUNK_EMPTY: u32 = 0x0048_56d0;
+const ADD_CHUNK_ARRAY: u32 = 0x0048_56f0;
+const ADD_CHUNK_ARRAY_OV2: u32 = 0x0048_5710;
+const ADD_CHUNK_SHORT: u32 = 0x0048_5950;
+/// The attributes components (`thiscall`): their count (`009d2510`, always
+/// 7) and their copy into a buffer (`00480100`, `RET 4`).
+const ATTRIBUTE_COUNT: u32 = 0x009d_2510;
+const ATTRIBUTE_COPY: u32 = 0x0048_0100;
+/// `005ae380` (`thiscall` on a list): the number of nodes with an item;
+/// `009611e0` (`thiscall` on a face-geometry vector): its size (+0x18).
+const LIST_COUNT: u32 = 0x005a_e380;
+const VECTOR_SIZE: u32 = 0x0096_11e0;
+/// `__RTDynamicCast`'s type descriptor of `TESRace` (`01186370`),
+/// `TESForm::CopyAllComponents` (`004851b0`, `RET 4`),
+/// `TESForm::CompareAllComponents` (`00485270`, `RET 4`) and `_memcmp`
+/// (`00ec4835`, cdecl).
+const TYPE_TES_RACE: u32 = 0x0118_6370;
+const COPY_ALL_COMPONENTS: u32 = 0x0048_51b0;
+const COMPARE_ALL_COMPONENTS: u32 = 0x0048_5270;
+const MEMCMP: u32 = 0x00ec_4835;
+/// The race accessors outside this unit (`thiscall`): the voice type of a
+/// sex (`00604780`, `RET 4`: the word at `+0x4fc + 4 * sex`), the floats
+/// at `+0x60 + 4 * sex` (`00604210`) and `+0x68 + 4 * sex` (`006042d0`)
+/// in `ST0` (`RET 4`), the attributes' address (`004fadc0`: `+0x74`), the
+/// word at +0x70 (`004fd380`) and the 16-bit word at +0x4f8 (`00607350`).
+const VOICE_TYPE: u32 = 0x0060_4780;
+const FLOAT_60: u32 = 0x0060_4210;
+const FLOAT_68: u32 = 0x0060_42d0;
+const ATTRIBUTES: u32 = 0x004f_adc0;
+const WORD_70: u32 = 0x004f_d380;
+const WORD_4F8: u32 = 0x0060_7350;
+/// `00652900` (cdecl, two face coordinate sets): whether they differ; the
+/// random number (`00487f50`).
+const FACE_COORDS_DIFFER: u32 = 0x0065_2900;
+const RANDOM: u32 = 0x0048_7f50;
+/// The defaults of the two floats at +0xa0 and +0xa4 (5.0 at `0101712c`,
+/// 3.0 at `01017718`) and the 0.0 they are compared with (`01012060`).
+const DEFAULT_A0: u32 = 0x0101_712c;
+const DEFAULT_A4: u32 = 0x0101_7718;
+const ZERO_DOUBLE: u32 = 0x0101_2060;
+/// The model and texture chunk tags.
+const CHUNK_MODL: u32 = u32::from_le_bytes(*b"MODL");
+const CHUNK_MODT: u32 = u32::from_le_bytes(*b"MODT");
+const CHUNK_MODD: u32 = u32::from_le_bytes(*b"MODD");
+const CHUNK_ICON: u32 = u32::from_le_bytes(*b"ICON");
+/// `TESSoundFile::SetSoundFile` (engine map, `00489100`, `thiscall`,
+/// `RET 4`): the race's texture name setter.
+const SET_TEXTURE_NAME: u32 = 0x0048_9100;
+
+// Translated from 00611db0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Byte-swaps the race data's words (engine map: no name; no stack words):
+/// `+0x10 + 4 * i` and `+0x18 + 4 * i` for `i` in 0..2, then `+0x20`
+/// (`00401080` with a zero byte).
+pub fn fn_00611db0(e: &mut Engine, this: Ptr) {
+    let base = this.addr();
+    for i in 0..2u32 {
+        e.call(SWAP_WORD, &args![base + 0x10 + 4 * i, 0u32]);
+        e.call(SWAP_WORD, &args![base + 0x18 + 4 * i, 0u32]);
+    }
+    e.call(SWAP_WORD, &args![base + 0x20, 0u32]);
+}
+
+/// Each sex's chunk marker: `MNAM` for 0, `FNAM` for 1, nothing else.
+fn add_sex_marker(e: &mut Engine, sex: u32) {
+    if sex == 0 {
+        e.call(ADD_CHUNK_EMPTY, &args![CHUNK_MNAM]);
+    } else if sex == 1 {
+        e.call(ADD_CHUNK_EMPTY, &args![CHUNK_FNAM]);
+    }
+}
+
+/// The form ids of a list's items until the first null item, into a block
+/// of `4 * count` bytes (all ones on overflow) added as `tag`
+/// (`AddChunkArray_ov2` with the count) and freed.
+fn save_form_list(e: &mut Engine, list: u32, tag: u32) {
+    let mut node = list;
+    let mut index = 0u32;
+    let count = e.call(LIST_COUNT, &args![node]).u32();
+    let (size, overflow) = count.overflowing_mul(4);
+    let block = e
+        .call(ALLOCATE, &args![if overflow { 0xffff_ffff } else { size }])
+        .u32();
+    while node != 0 {
+        let at = e.call(NODE_DATA, &args![node]).u32();
+        if e.mem.u32(at) == 0 {
+            break;
+        }
+        let at = e.call(NODE_DATA, &args![node]).u32();
+        let form = e.mem.u32(at);
+        let id = e.call(FORM_ID, &args![form]).u32();
+        e.mem.set_u32(block.wrapping_add(index.wrapping_mul(4)), id);
+        index = index.wrapping_add(1);
+        node = e.call(NODE_NEXT, &args![node]).u32();
+    }
+    e.call(ADD_CHUNK_ARRAY_OV2, &args![tag, block, count]);
+    e.call(FREE, &args![block]);
+}
+
+/// One face-geometry vector of a sex (`male` for sex 0, `female` for sex 1,
+/// none for others): when it holds values, they are copied (`FLD`/`FSTP`,
+/// element by element through `0060b370` and `00629ab0` on an iterator the
+/// game keeps on its stack) into a zeroed block of `4 * count` bytes added
+/// as `tag` (`AddChunkArray_ov2` with the count) and freed.
+fn save_face_vector(e: &mut Engine, this: u32, sex: u32, (male, female): (u32, u32), tag: u32) {
+    let vector = match sex {
+        0 => this + male,
+        1 => this + female,
+        _ => 0,
+    };
+    let count = if vector != 0 {
+        e.call(VECTOR_SIZE, &args![vector]).u32()
+    } else {
+        0
+    };
+    if count == 0 {
+        return;
+    }
+    let bytes = count << 2;
+    let block = e.call(ALLOCATE, &args![bytes]).u32();
+    e.call(MEMSET, &args![block, 0u32, bytes]);
+    e.with_stack(8, |e, iterator| {
+        let mut index = 0u32;
+        while index < count {
+            if sex == 0 || sex == 1 {
+                let at = e.call(VECTOR_AT, &args![vector, iterator, index]).u32();
+                let element = e.call(ITERATOR_ELEMENT, &args![at, 0u32]).u32();
+                let value = x87_quiet_bits(e.mem.u32(element));
+                e.mem
+                    .set_u32(block.wrapping_add(index.wrapping_mul(4)), value);
+            }
+            index += 1;
+        }
+    });
+    e.call(ADD_CHUNK_ARRAY_OV2, &args![tag, block, count]);
+    e.call(FREE, &args![block]);
+}
+
+/// The form ids of the two words at `this + offset` (0 for a null word)
+/// into a stack pair added as `tag` (`AddChunkArray_ov2` with 2), when
+/// either word is set.
+fn save_form_pair(e: &mut Engine, this: u32, offset: u32, tag: u32) {
+    if e.mem.u32(this + offset) == 0 && e.mem.u32(this + offset + 4) == 0 {
+        return;
+    }
+    e.with_stack(8, |e, pair| {
+        for i in 0..2u32 {
+            let form = e.mem.u32(this + offset + 4 * i);
+            let id = if form != 0 {
+                e.call(FORM_ID, &args![form]).u32()
+            } else {
+                0
+            };
+            e.mem.set_u32(pair.addr() + 4 * i, id);
+        }
+        e.call(ADD_CHUNK_ARRAY_OV2, &args![tag, pair, 2u32]);
+    });
+}
+
+// Translated from 00611e50 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 00611e50 - the /GS cookie check (00ec408c) is not translated; the __alloca_probe_16 (00ec5ec0) attribute buffer is a with_stack block (its 16-byte alignment padding is not modelled).
+/// `TESRace`'s save (engine map: no name; no stack words): `StartForm`, the
+/// full name (+0x18), description (+0x24), spells (+0x2c), reactions
+/// (+0x40, `0048bb70`); the 0x24 bytes of data at +0x50 (`__SaveData`;
+/// `fn_00611db0` before and after when `00401500` says so); the forms at
+/// +0x504 and +0x508 by id (`ONAM`, `YNAM`); `NAM2`; the voice types
+/// (+0x4fc) as `VTCK` and the default hairs (+0x94) as `DNAM` when either
+/// of each pair is set; the two bytes at +0x9c (`CNAM`); the floats at
+/// +0xa0 (`PNAM`) and +0xa4 (`UNAM`); the attributes of both sexes (+0x74,
+/// +0x80, 7 bytes each) as `ATTR` (with size 2, as the exe passes); `NAM0`
+/// and per sex (`MNAM`, `FNAM`) the eight head parts (`INDX`, the model
+/// with `MODL`/`MODT`, its flags as `MODD`, the texture as `ICON`); `NAM1`
+/// and per sex the three body parts (`INDX`, texture, model, flags) and
+/// the body model (`INDX` 3); the hairs (`HNAM`) and eyes (`ENAM`) by id;
+/// per sex the face geometry vectors (`FGGS`, `FGGA`, `FGTS`) and the
+/// 16-bit word at +0x4f8 (`SNAM`); `CloseForm`.
+pub fn fn_00611e50(e: &mut Engine, this: Ptr) {
+    let base = this.addr();
+    e.call(START_FORM, &args![this]);
+    e.call(FULL_NAME_SAVE, &args![base + 0x18]);
+    e.call(DESCRIPTION_SAVE, &args![base + 0x24]);
+    e.call(SPELL_LIST_SAVE, &args![base + 0x2c]);
+    e.call(REACTION_SAVE, &args![base + 0x40]);
+    if e.call(SAVE_SWAPS_BYTES, &[]).u32() as u8 != 0 {
+        fn_00611db0(e, Ptr::new(base + 0x50));
+    }
+    e.call(SAVE_DATA, &args![this, base + 0x50, 0x24u32]);
+    if e.call(SAVE_SWAPS_BYTES, &[]).u32() as u8 != 0 {
+        fn_00611db0(e, Ptr::new(base + 0x50));
+    }
+    for (offset, tag) in [(0x504u32, CHUNK_ONAM), (0x508, CHUNK_YNAM)] {
+        let form = e.mem.u32(base + offset);
+        if form != 0 {
+            let id = e.call(FORM_ID, &args![form]).u32();
+            e.call(ADD_CHUNK_WORD, &args![tag, id]);
+        }
+    }
+    e.call(ADD_CHUNK_EMPTY, &args![CHUNK_NAM2]);
+    save_form_pair(e, base, 0x4fc, CHUNK_VTCK);
+    save_form_pair(e, base, 0x94, CHUNK_DNAM);
+    e.call(ADD_CHUNK_ARRAY, &args![CHUNK_CNAM, base + 0x9c, 2u32]);
+    for (offset, tag) in [(0xa0u32, CHUNK_PNAM), (0xa4, CHUNK_UNAM)] {
+        let value = x87_quiet_bits(e.mem.u32(base + offset));
+        e.call(ADD_CHUNK_WORD, &args![tag, value]);
+    }
+    let count = e.call(ATTRIBUTE_COUNT, &args![base + 0x74]).u32();
+    e.with_stack(count << 1, |e, buffer| {
+        e.call(ATTRIBUTE_COPY, &args![base + 0x74, buffer]);
+        e.call(
+            ATTRIBUTE_COPY,
+            &args![base + 0x80, buffer.addr().wrapping_add(count)],
+        );
+        e.call(ADD_CHUNK_ARRAY, &args![CHUNK_ATTR, buffer, 2u32]);
+    });
+    e.call(ADD_CHUNK_EMPTY, &args![CHUNK_NAM0]);
+    for sex in 0..2u32 {
+        add_sex_marker(e, sex);
+        for part in 0..8u32 {
+            e.call(ADD_CHUNK_WORD, &args![CHUNK_INDX, part]);
+            let model = base + 0xb0 + sex * 0xc0 + part * 0x18;
+            e.call(MODEL_SAVE, &args![model, CHUNK_MODL, CHUNK_MODT]);
+            e.call(MODEL_SAVE_FLAGS, &args![model, CHUNK_MODD]);
+            let texture = base + 0x230 + sex * 0x60 + part * 0xc;
+            e.call(TEXTURE_SAVE, &args![texture, CHUNK_ICON]);
+        }
+    }
+    e.call(ADD_CHUNK_EMPTY, &args![CHUNK_NAM1]);
+    for sex in 0..2u32 {
+        add_sex_marker(e, sex);
+        let mut part = 0u32;
+        while part < 3 {
+            e.call(ADD_CHUNK_WORD, &args![CHUNK_INDX, part]);
+            let texture = base + 0x2f0 + sex * 0x24 + part * 0xc;
+            e.call(TEXTURE_SAVE, &args![texture, CHUNK_ICON]);
+            let model = base + 0x338 + sex * 0x48 + part * 0x18;
+            e.call(MODEL_SAVE, &args![model, CHUNK_MODL, CHUNK_MODT]);
+            e.call(MODEL_SAVE_FLAGS, &args![model, CHUNK_MODD]);
+            part += 1;
+        }
+        e.call(ADD_CHUNK_WORD, &args![CHUNK_INDX, part]);
+        let body = base + 0x3c8 + sex * 0x18;
+        e.call(MODEL_SAVE, &args![body, CHUNK_MODL, CHUNK_MODT]);
+    }
+    let hairs = e.call(HAIR_LIST, &args![this]).u32();
+    save_form_list(e, hairs, CHUNK_HNAM);
+    let eyes = e.call(EYE_LIST, &args![this]).u32();
+    save_form_list(e, eyes, CHUNK_ENAM);
+    for sex in 0..2u32 {
+        add_sex_marker(e, sex);
+        save_face_vector(e, base, sex, (0x478, 0x3f8), CHUNK_FGGS);
+        save_face_vector(e, base, sex, (0x498, 0x418), CHUNK_FGGA);
+        save_face_vector(e, base, sex, (0x4b8, 0x438), CHUNK_FGTS);
+        let word = u32::from(e.mem.u16(base + 0x4f8));
+        e.call(ADD_CHUNK_SHORT, &args![CHUNK_SNAM, word]);
+    }
+    e.call(CLOSE_FORM, &args![this]);
+}
+
+/// `other` as a `TESRace` (`__RTDynamicCast` from `TESForm`), or 0.
+fn as_race(e: &mut Engine, other: u32) -> u32 {
+    e.call(
+        RT_DYNAMIC_CAST,
+        &args![other, 0u32, TES_FORM_TYPE, TYPE_TES_RACE, 0u32],
+    )
+    .u32()
+}
+
+// Translated from 00612c90 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TESRace`'s copy (engine map: no name; `RET 4`): when `other` is a
+/// `TESRace`: all components (`TESForm::CopyAllComponents` with `other`),
+/// the words at +0x504 and +0x508, the voice types and default hairs of
+/// both sexes, the two bytes at +0x9c, the floats at +0xa0 and +0xa4 (their
+/// getters, `FSTP`), the attributes (+0x74, +0x80, vtable slot `+8` with the
+/// other's), the 7 pairs of data bytes at +0x50, the floats at +0x60 and
+/// +0x68 of both sexes, the word at +0x70; per sex the eight head part
+/// models (by name, `fn_006139b0`) and textures (`fn_00613b60`), the three
+/// body textures (`fn_00613c00`) and models (`fn_00613a60`) and the body
+/// model (`fn_00613ad0`); the hair and eye lists (emptied, then each item
+/// of the other's until a null one appended); both sexes' face coordinates
+/// (`BSFaceGenManager::CopyFaceGenCoord`) and the word at +0x4f8.
+pub fn fn_00612c90(e: &mut Engine, this: Ptr, other: u32) {
+    let source = as_race(e, other);
+    if source == 0 {
+        return;
+    }
+    let base = this.addr();
+    e.call(COPY_ALL_COMPONENTS, &args![this, other]);
+    for offset in [0x504u32, 0x508] {
+        let word = e.mem.u32(source + offset);
+        e.mem.set_u32(base + offset, word);
+    }
+    for sex in 0..2u32 {
+        let voice = e.call(VOICE_TYPE, &args![source, sex]).u32();
+        e.mem.set_u32(base + 0x4fc + 4 * sex, voice);
+    }
+    for sex in 0..2i32 {
+        let hair = fn_00613870(e, Ptr::new(source), sex);
+        e.mem.set_u32(base + 0x94 + 4 * sex as u32, hair);
+    }
+    for sex in 0..2i32 {
+        let byte = fn_00613100(e, Ptr::new(source), sex);
+        e.mem.set_u8(base + 0x9c + sex as u32, byte);
+    }
+    let value = fn_00613120(e, Ptr::new(source));
+    e.mem.set_u32(base + 0xa0, x87_store32(f64::from(value)));
+    let value = fn_00613160(e, Ptr::new(source));
+    e.mem.set_u32(base + 0xa4, x87_store32(f64::from(value)));
+    let attributes = e.call(ATTRIBUTES, &args![source]).u32();
+    e.vcall(base + 0x74, 8, &args![attributes]);
+    let attributes = fn_006130e0(e, Ptr::new(source)).addr();
+    e.vcall(base + 0x80, 8, &args![attributes]);
+    for index in 0..7i32 {
+        let at = fn_006130c0(e, Ptr::new(source), index);
+        let byte = e.mem.u8(at.addr());
+        e.mem.set_u8(base + 0x50 + 2 * index as u32, byte);
+        let at = fn_006130c0(e, Ptr::new(source), index);
+        let byte = e.mem.u8(at.addr() + 1);
+        e.mem.set_u8(base + 0x51 + 2 * index as u32, byte);
+    }
+    for sex in 0..2u32 {
+        let value = e.call(FLOAT_60, &args![source, sex]).f64();
+        e.mem.set_u32(base + 0x60 + 4 * sex, x87_store32(value));
+        let value = e.call(FLOAT_68, &args![source, sex]).f64();
+        e.mem.set_u32(base + 0x68 + 4 * sex, x87_store32(value));
+    }
+    let word = e.call(WORD_70, &args![source]).u32();
+    e.mem.set_u32(base + 0x70, word);
+    for sex in 0..2i32 {
+        for part in 0..8i32 {
+            let model = fn_00613970(e, Ptr::new(source), sex, part);
+            let name = e.vcall(model.addr(), 0x14, &[]).u32();
+            fn_006139b0(e, this, sex, part, name);
+            let texture = fn_00613b20(e, Ptr::new(source), sex, part);
+            let text = e.call(PATH_TEXT, &args![texture]).u32();
+            fn_00613b60(e, this, sex, part, text);
+        }
+    }
+    for sex in 0..2i32 {
+        for part in 0..3i32 {
+            let texture = fn_00613bb0(e, Ptr::new(source), sex, part);
+            let text = e.call(PATH_TEXT, &args![texture]).u32();
+            fn_00613c00(e, this, sex, part, text);
+        }
+        for part in 0..3i32 {
+            let model = fn_00613a20(e, Ptr::new(source), sex, part);
+            let name = e.vcall(model.addr(), 0x14, &[]).u32();
+            fn_00613a60(e, this, sex, part, name);
+        }
+        let body = fn_006131a0(e, Ptr::new(source), sex);
+        let name = e.vcall(body.addr(), 0x14, &[]).u32();
+        fn_00613ad0(e, this, sex, name);
+    }
+    for (list_of, clear) in [
+        (HAIR_LIST, fn_00613850 as fn(&mut Engine, Ptr)),
+        (EYE_LIST, fn_00613950),
+    ] {
+        let mut node = e.call(list_of, &args![source]).u32();
+        clear(e, this);
+        while node != 0 {
+            let at = e.call(NODE_DATA, &args![node]).u32();
+            if e.mem.u32(at) == 0 {
+                break;
+            }
+            let at = e.call(NODE_DATA, &args![node]).u32();
+            let list = e.call(list_of, &args![this]).u32();
+            e.call(LIST_ADD_00905820, &args![list, at]);
+            node = e.call(NODE_NEXT, &args![node]).u32();
+        }
+    }
+    for sex in 0..2u32 {
+        let to = e.call(RACE_FACE_COORD, &args![this, sex]).u32();
+        let from = e.call(RACE_FACE_COORD, &args![source, sex]).u32();
+        e.call(COPY_FACE_COORD, &args![from, to, 0u32, 0u32]);
+    }
+    let word = e.call(WORD_4F8, &args![source]).u32() as u16;
+    e.mem.set_u16(base + 0x4f8, word);
+}
+
+// Translated from 006130c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The address of the data byte pair `index` (`this + 0x50 + 2 * index`;
+/// engine map: no name; `RET 4`).
+pub fn fn_006130c0(_e: &mut Engine, this: Ptr, index: i32) -> Ptr {
+    Ptr::new(
+        this.addr()
+            .wrapping_add((index as u32).wrapping_mul(2))
+            .wrapping_add(0x50),
+    )
+}
+
+// Translated from 00613100 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The byte at `this + 0x9c + index` (engine map: no name; `RET 4`).
+pub fn fn_00613100(e: &mut Engine, this: Ptr, index: i32) -> u8 {
+    e.mem
+        .u8(this.addr().wrapping_add(index as u32).wrapping_add(0x9c))
+}
+
+/// The float at `this + offset` when it is above 0.0 (`FCOMP` with the
+/// double at `01012060`), else the float at `default`; loaded and returned
+/// in `ST0`.
+fn positive_or_default(e: &mut Engine, this: Ptr, offset: u32, default: u32) -> f32 {
+    let bits = e.mem.u32(this.addr() + offset);
+    let chosen = if x87_load32(bits) > e.global::<f64>(ZERO_DOUBLE) {
+        bits
+    } else {
+        e.global::<u32>(default)
+    };
+    f32::from_bits(x87_quiet_bits(chosen))
+}
+
+// Translated from 00613120 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The float at +0xa0 when above 0.0, else 5.0 (`0101712c`), in `ST0`
+/// (engine map: no name; no stack words).
+pub fn fn_00613120(e: &mut Engine, this: Ptr) -> f32 {
+    positive_or_default(e, this, 0xa0, DEFAULT_A0)
+}
+
+// Translated from 00613160 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The float at +0xa4 when above 0.0, else 3.0 (`01017718`), in `ST0`
+/// (engine map: no name; no stack words).
+pub fn fn_00613160(e: &mut Engine, this: Ptr) -> f32 {
+    positive_or_default(e, this, 0xa4, DEFAULT_A4)
+}
+
+/// A component's compare (its vtable slot `+0xc` with the other's
+/// component), tested on `AL` as the exe does.
+fn part_differs(e: &mut Engine, part: u32, other: u32) -> bool {
+    e.vcall(part, 0xc, &args![other]).u32() as u8 != 0
+}
+
+// Translated from 006131c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TESRace`'s compare (engine map: no name; `RET 4`): true when `other` is
+/// no `TESRace` or when anything differs, in the exe's order:
+/// `TESForm::CompareAllComponents` (with the cast form), the 0x24 bytes of
+/// data at +0x50 (`_memcmp`), the words at +0x504 and +0x508, the voice
+/// types, default hairs and the bytes at +0x9c of both sexes, the floats of
+/// `fn_00613120` and `fn_00613160` (`FUCOMPP`: a NaN differs), the
+/// attributes (+0x74, +0x80, vtable slot `+0xc` with the other's), per sex
+/// the eight head part models and textures and the three body textures,
+/// three body models and the body model (each component's slot `+0xc`),
+/// the hair and eye counts and each of the other's hairs and eyes by form
+/// id (`fn_006137b0`, `fn_006138b0`); then for each sex whose face
+/// coordinates differ (`00652900`) the word at +0x4f8 becomes a random
+/// number (`00487f50`) and the answer is true; finally the words at +0x4f8.
+pub fn fn_006131c0(e: &mut Engine, this: Ptr, other: u32) -> bool {
+    let source = as_race(e, other);
+    if source == 0 {
+        return true;
+    }
+    let base = this.addr();
+    if e.call(COMPARE_ALL_COMPONENTS, &args![this, source]).u32() as u8 != 0 {
+        return true;
+    }
+    let data = fn_00613790(e, Ptr::new(source)).addr();
+    if e.call(MEMCMP, &args![base + 0x50, data, 0x24u32]).u32() != 0 {
+        return true;
+    }
+    for offset in [0x504u32, 0x508] {
+        if e.mem.u32(base + offset) != e.mem.u32(source + offset) {
+            return true;
+        }
+    }
+    for sex in 0..2u32 {
+        let mine = e.call(VOICE_TYPE, &args![this, sex]).u32();
+        if mine != e.call(VOICE_TYPE, &args![source, sex]).u32() {
+            return true;
+        }
+    }
+    for sex in 0..2i32 {
+        let mine = fn_00613870(e, this, sex);
+        if mine != fn_00613870(e, Ptr::new(source), sex) {
+            return true;
+        }
+    }
+    for sex in 0..2i32 {
+        let mine = fn_00613100(e, this, sex) as i8;
+        if mine != fn_00613100(e, Ptr::new(source), sex) as i8 {
+            return true;
+        }
+    }
+    let mine = f64::from(fn_00613120(e, this));
+    if mine != f64::from(fn_00613120(e, Ptr::new(source))) {
+        return true;
+    }
+    let mine = f64::from(fn_00613160(e, this));
+    if mine != f64::from(fn_00613160(e, Ptr::new(source))) {
+        return true;
+    }
+    let attributes = e.call(ATTRIBUTES, &args![source]).u32();
+    if part_differs(e, base + 0x74, attributes) {
+        return true;
+    }
+    let attributes = fn_006130e0(e, Ptr::new(source)).addr();
+    if part_differs(e, base + 0x80, attributes) {
+        return true;
+    }
+    for sex in 0..2u32 {
+        for part in 0..8u32 {
+            let theirs = fn_00613970(e, Ptr::new(source), sex as i32, part as i32).addr();
+            if part_differs(e, base + 0xb0 + sex * 0xc0 + part * 0x18, theirs) {
+                return true;
+            }
+            let theirs = fn_00613b20(e, Ptr::new(source), sex as i32, part as i32).addr();
+            if part_differs(e, base + 0x230 + sex * 0x60 + part * 0xc, theirs) {
+                return true;
+            }
+        }
+    }
+    for sex in 0..2u32 {
+        for part in 0..3u32 {
+            let offset = 0x2f0 + sex * 0x24 + part * 0xc;
+            if part_differs(e, base + offset, source + offset) {
+                return true;
+            }
+            let offset = 0x338 + sex * 0x48 + part * 0x18;
+            if part_differs(e, base + offset, source + offset) {
+                return true;
+            }
+        }
+        let offset = 0x3c8 + sex * 0x18;
+        if part_differs(e, base + offset, source + offset) {
+            return true;
+        }
+    }
+    for (list_of, holds) in [
+        (HAIR_LIST, fn_006137b0 as fn(&mut Engine, Ptr, u32) -> u32),
+        (EYE_LIST, fn_006138b0),
+    ] {
+        let mut node = e.call(list_of, &args![source]).u32();
+        let list = e.call(list_of, &args![this]).u32();
+        let mine = e.call(LIST_COUNT, &args![list]).u32();
+        if mine != e.call(LIST_COUNT, &args![node]).u32() {
+            return true;
+        }
+        while node != 0 {
+            let at = e.call(NODE_DATA, &args![node]).u32();
+            if e.mem.u32(at) == 0 {
+                break;
+            }
+            let at = e.call(NODE_DATA, &args![node]).u32();
+            let form = e.mem.u32(at);
+            let id = e.call(FORM_ID, &args![form]).u32();
+            if holds(e, this, id) == 0 {
+                return true;
+            }
+            node = e.call(NODE_NEXT, &args![node]).u32();
+        }
+    }
+    for sex in 0..2u32 {
+        let mine = e.call(RACE_FACE_COORD, &args![this, sex]).u32();
+        let theirs = e.call(RACE_FACE_COORD, &args![source, sex]).u32();
+        if e.call(FACE_COORDS_DIFFER, &args![theirs, mine]).u32() as u8 != 0 {
+            let random = e.call(RANDOM, &[]).u32() as u16;
+            e.mem.set_u16(base + 0x4f8, random);
+            return true;
+        }
+    }
+    let mine = e.call(WORD_4F8, &args![this]).u32() as u16;
+    mine != e.call(WORD_4F8, &args![source]).u32() as u16
+}
+
+// Translated from 00613870 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Default hair `index` (`this + 0x94 + 4 * index`; engine map: no name;
+/// `RET 4`).
+pub fn fn_00613870(e: &mut Engine, this: Ptr, index: i32) -> u32 {
+    e.mem.u32(
+        this.addr()
+            .wrapping_add((index as u32).wrapping_mul(4))
+            .wrapping_add(0x94),
+    )
+}
+
+/// `vcall(component, 0x18, [value])` on a model or texture component (its
+/// setter, slot `+0x18`).
+fn set_component(e: &mut Engine, component: u32, value: u32) {
+    e.vcall(component, 0x18, &args![value]);
+}
+
+// Translated from 006139b0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Sets head part model `part` (0..8) of `sex` (0..2, signed checks) to
+/// `name` (the model's vtable slot `+0x18`; engine map: no name; `RET 0xc`);
+/// nothing outside the ranges.
+pub fn fn_006139b0(e: &mut Engine, this: Ptr, sex: i32, part: i32, name: u32) {
+    if !(0..8).contains(&part) || !(0..2).contains(&sex) {
+        return;
+    }
+    let model = this
+        .addr()
+        .wrapping_add((sex as u32).wrapping_mul(0xc0))
+        .wrapping_add(0xb0)
+        .wrapping_add((part as u32).wrapping_mul(0x18));
+    set_component(e, model, name);
+}
+
+// Translated from 00613a60 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Sets body part model `part` (0..3) of `sex` (0..2, signed checks) to
+/// `name` (the model's vtable slot `+0x18`; engine map: no name; `RET 0xc`).
+pub fn fn_00613a60(e: &mut Engine, this: Ptr, sex: i32, part: i32, name: u32) {
+    if !(0..3).contains(&part) || !(0..2).contains(&sex) {
+        return;
+    }
+    let model = this
+        .addr()
+        .wrapping_add((sex as u32).wrapping_mul(0x48))
+        .wrapping_add(0x338)
+        .wrapping_add((part as u32).wrapping_mul(0x18));
+    set_component(e, model, name);
+}
+
+// Translated from 00613ad0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Sets the body model of `sex` (0..2, signed check) to `name` (vtable slot
+/// `+0x18` of `this + 0x3c8 + 0x18 * sex`; engine map: no name; `RET 8`).
+pub fn fn_00613ad0(e: &mut Engine, this: Ptr, sex: i32, name: u32) {
+    if !(0..2).contains(&sex) {
+        return;
+    }
+    let model = this
+        .addr()
+        .wrapping_add((sex as u32).wrapping_mul(0x18))
+        .wrapping_add(0x3c8);
+    set_component(e, model, name);
+}
+
+// Translated from 00613b60 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Sets head part texture `part` (0..8) of `sex` to `name`
+/// (`TESSoundFile::SetSoundFile`, `00489100`, on `this + 0x230 + 0x60 *
+/// sex + 0xc * part`; engine map: no name; `RET 0xc`). The exe accepts sex
+/// 0..=2 here (`JLE`), one more than the other setters.
+pub fn fn_00613b60(e: &mut Engine, this: Ptr, sex: i32, part: i32, name: u32) {
+    if !(0..8).contains(&part) || !(0..=2).contains(&sex) {
+        return;
+    }
+    let texture = this
+        .addr()
+        .wrapping_add((sex as u32).wrapping_mul(0x60))
+        .wrapping_add(0x230)
+        .wrapping_add((part as u32).wrapping_mul(0xc));
+    e.call(SET_TEXTURE_NAME, &args![texture, name]);
+}
+
+// Translated from 00613bb0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Body part texture `part` (0..3) of `sex` (0..2): `this + 0x2f0 + 0x24 *
+/// sex + 0xc * part`, or 0 outside the ranges (signed checks; engine map:
+/// no name; `RET 8`).
+pub fn fn_00613bb0(_e: &mut Engine, this: Ptr, sex: i32, part: i32) -> u32 {
+    if !(0..2).contains(&sex) || !(0..3).contains(&part) {
+        return 0;
+    }
+    this.addr()
+        .wrapping_add((sex as u32).wrapping_mul(0x24))
+        .wrapping_add(0x2f0)
+        .wrapping_add((part as u32).wrapping_mul(0xc))
+}
+
+// Translated from 00613c00 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Sets body part texture `part` (0..3) of `sex` (0..2) to `name`
+/// (`00489100` on its address; engine map: no name; `RET 0xc`); nothing
+/// outside the ranges.
+pub fn fn_00613c00(e: &mut Engine, this: Ptr, sex: i32, part: i32, name: u32) {
+    if !(0..2).contains(&sex) || !(0..3).contains(&part) {
+        return;
+    }
+    let texture = this
+        .addr()
+        .wrapping_add((sex as u32).wrapping_mul(0x24))
+        .wrapping_add(0x2f0)
+        .wrapping_add((part as u32).wrapping_mul(0xc));
+    e.call(SET_TEXTURE_NAME, &args![texture, name]);
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -1469,6 +2162,21 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x0061_48f0, tes_race_get_body_mod_texture_file_name(Ptr, u32, Ptr, Ptr) -> bool),
         entry!(0x0061_49b0, tes_race_get_body_texture(Ptr, u32, u32, u32, u32, u8) -> bool),
         entry!(0x0061_0cd0, tes_race_load(Ptr, Ptr) -> bool),
+        entry!(0x0061_1db0, fn_00611db0(Ptr)),
+        entry!(0x0061_1e50, fn_00611e50(Ptr)),
+        entry!(0x0061_2c90, fn_00612c90(Ptr, u32)),
+        entry!(0x0061_30c0, fn_006130c0(Ptr, i32) -> Ptr),
+        entry!(0x0061_3100, fn_00613100(Ptr, i32) -> u8),
+        entry!(0x0061_3120, fn_00613120(Ptr) -> f32),
+        entry!(0x0061_3160, fn_00613160(Ptr) -> f32),
+        entry!(0x0061_31c0, fn_006131c0(Ptr, u32) -> bool),
+        entry!(0x0061_3870, fn_00613870(Ptr, i32) -> u32),
+        entry!(0x0061_39b0, fn_006139b0(Ptr, i32, i32, u32)),
+        entry!(0x0061_3a60, fn_00613a60(Ptr, i32, i32, u32)),
+        entry!(0x0061_3ad0, fn_00613ad0(Ptr, i32, u32)),
+        entry!(0x0061_3b60, fn_00613b60(Ptr, i32, i32, u32)),
+        entry!(0x0061_3bb0, fn_00613bb0(Ptr, i32, i32) -> u32),
+        entry!(0x0061_3c00, fn_00613c00(Ptr, i32, i32, u32)),
     ]
 }
 
@@ -2603,5 +3311,456 @@ mod tests {
             calls_to(&e, 0x0048_9100),
             vec![vec![race + 0x230 + 3 * 0xc, 0x7e47]]
         );
+    }
+}
+
+#[cfg(test)]
+mod save_copy_compare_tests {
+    use super::*;
+
+    type Log = Vec<(u32, Vec<u32>)>;
+
+    fn ret(eax: u32) -> Ret {
+        Ret {
+            eax,
+            ..Ret::default()
+        }
+    }
+
+    fn only(log: &Log, addr: u32) -> Vec<Vec<u32>> {
+        log.iter()
+            .filter(|(a, _)| *a == addr)
+            .map(|(_, w)| w.clone())
+            .collect()
+    }
+
+    fn run(e: &mut Engine, addr: u32, words: &[u32]) -> (Ret, Log) {
+        e.call_log = Some(vec![]);
+        let r = e.call(addr, words);
+        (r, e.call_log.take().unwrap())
+    }
+
+    fn quiet(e: &mut Engine, addrs: &[u32]) {
+        for a in addrs {
+            e.register(*a, |_, _| Ret::default());
+        }
+    }
+
+    /// A race of 0x510 bytes; its hair list is at +0x8 and its eye list at
+    /// +0x10 (two-word nodes: item, next) for the list doubles.
+    fn race(e: &mut Engine) -> u32 {
+        e.mem.alloc(0x510)
+    }
+
+    fn form(e: &mut Engine, id: u32) -> u32 {
+        let form = e.mem.alloc(0x18);
+        e.mem.set_u32(form + 0xc, id);
+        form
+    }
+
+    fn list_doubles(e: &mut Engine) {
+        e.register(HAIR_LIST, |_, a| ret(a[0] + 8));
+        e.register(EYE_LIST, |_, a| ret(a[0] + 0x10));
+        e.register(NODE_DATA, |_, a| ret(a[0]));
+        e.register(NODE_NEXT, |e, a| ret(e.mem.u32(a[0] + 4)));
+        e.register(LIST_COUNT, |e, a| {
+            let (mut node, mut n) = (a[0], 0);
+            while node != 0 {
+                n += u32::from(e.mem.u32(node) != 0);
+                node = e.mem.u32(node + 4);
+            }
+            ret(n)
+        });
+        e.register(FORM_ID, |e, a| ret(e.mem.u32(a[0] + 0xc)));
+    }
+
+    fn set_list(e: &mut Engine, head: u32, items: &[u32]) {
+        let mut node = head;
+        for (i, item) in items.iter().enumerate() {
+            e.mem.set_u32(node, *item);
+            if i + 1 < items.len() {
+                let next = e.mem.alloc(8);
+                e.mem.set_u32(node + 4, next);
+                node = next;
+            }
+        }
+    }
+
+    #[test]
+    fn data_swap_covers_five_words() {
+        let mut e = Engine::new();
+        quiet(&mut e, &[SWAP_WORD]);
+        let (_, log) = run(&mut e, 0x0061_1db0, &args![0x4000u32]);
+        let swapped: Vec<u32> = only(&log, SWAP_WORD).iter().map(|c| c[0]).collect();
+        assert_eq!(swapped, vec![0x4010, 0x4018, 0x4014, 0x401c, 0x4020]);
+        assert!(only(&log, SWAP_WORD).iter().all(|c| c[1] == 0));
+    }
+
+    fn save_engine() -> Engine {
+        let mut e = Engine::new();
+        quiet(
+            &mut e,
+            &[
+                START_FORM,
+                CLOSE_FORM,
+                FULL_NAME_SAVE,
+                DESCRIPTION_SAVE,
+                SPELL_LIST_SAVE,
+                REACTION_SAVE,
+                SAVE_DATA,
+                ADD_CHUNK_WORD,
+                ADD_CHUNK_EMPTY,
+                ADD_CHUNK_ARRAY,
+                ADD_CHUNK_ARRAY_OV2,
+                ADD_CHUNK_SHORT,
+                MODEL_SAVE,
+                MODEL_SAVE_FLAGS,
+                TEXTURE_SAVE,
+                SWAP_WORD,
+                FREE,
+            ],
+        );
+        list_doubles(&mut e);
+        e.register(SAVE_SWAPS_BYTES, |_, _| ret(0));
+        e.register(ATTRIBUTE_COUNT, |_, _| ret(7));
+        e.register(ATTRIBUTE_COPY, |e, a| {
+            for i in 0..7 {
+                e.mem.set_u8(a[1] + i, (a[0] & 0xff) as u8);
+            }
+            Ret::default()
+        });
+        e.register(ALLOCATE, |e, a| ret(e.mem.alloc(a[0].clamp(4, 0x100))));
+        e.register(MEMSET, |_, _| Ret::default());
+        e.register(VECTOR_SIZE, |e, a| ret(e.mem.u32(a[0] + 0x18)));
+        e.register(VECTOR_AT, |e, a| {
+            let data = e.mem.u32(a[0]);
+            e.mem.set_u32(a[1], data + 4 * a[2]);
+            ret(a[1])
+        });
+        e.register(ITERATOR_ELEMENT, |e, a| ret(e.mem.u32(a[0]) + 4 * a[1]));
+        e
+    }
+
+    #[test]
+    fn save_writes_the_chunks_in_order() {
+        let mut e = save_engine();
+        let mut words = vec![];
+        let this = race(&mut e);
+        let older = form(&mut e, 0x111);
+        e.mem.set_u32(this + 0x504, older);
+        let voice = form(&mut e, 0x222);
+        e.mem.set_u32(this + 0x500, voice);
+        e.mem.set_u16(this + 0x9c, 0x0102);
+        e.mem.set_u32(this + 0xa0, 0x7f80_0001);
+        e.mem.set_u32(this + 0xa4, 2.0f32.to_bits());
+        e.mem.set_u16(this + 0x4f8, 0x55);
+        let hair = form(&mut e, 0x333);
+        set_list(&mut e, this + 8, &[hair]);
+        let values = e.mem.alloc(8);
+        e.mem.set_u32(values, 1.0f32.to_bits());
+        e.mem.set_u32(values + 4, 2.0f32.to_bits());
+        let vector = this + 0x478;
+        e.mem.set_u32(vector, values);
+        e.mem.set_u32(vector + 0x18, 2);
+        let seen = e.mem.alloc(0x40);
+        e.register_double(ADD_CHUNK_ARRAY_OV2, move |e, a| {
+            if a[0] == CHUNK_VTCK || a[0] == CHUNK_FGGS || a[0] == CHUNK_HNAM {
+                let n = e.mem.u32(seen + 0x3c);
+                for i in 0..a[2] {
+                    let word = e.mem.u32(a[1] + 4 * i);
+                    e.mem.set_u32(seen + 4 * (n + i), word);
+                }
+                e.mem.set_u32(seen + 0x3c, n + a[2]);
+            }
+            Ret::default()
+        });
+        let (_, log) = run(&mut e, 0x0061_1e50, &args![this]);
+        for c in only(&log, ADD_CHUNK_WORD) {
+            words.push((c[0], c[1]));
+        }
+        assert_eq!(words[0], (CHUNK_ONAM, 0x111));
+        assert_eq!(words[1], (CHUNK_PNAM, 0x7fc0_0001));
+        assert_eq!(words[2], (CHUNK_UNAM, 2.0f32.to_bits()));
+        assert_eq!(words.iter().filter(|w| w.0 == CHUNK_INDX).count(), 16 + 8);
+        let arrays = only(&log, ADD_CHUNK_ARRAY_OV2);
+        let tags: Vec<u32> = arrays.iter().map(|c| c[0]).collect();
+        assert_eq!(tags, vec![CHUNK_VTCK, CHUNK_HNAM, CHUNK_ENAM, CHUNK_FGGS]);
+        assert_eq!(
+            (0..5).map(|i| e.mem.u32(seen + 4 * i)).collect::<Vec<_>>(),
+            vec![0, 0x222, 0x333, 1.0f32.to_bits(), 2.0f32.to_bits()]
+        );
+        let plain = only(&log, ADD_CHUNK_ARRAY);
+        assert_eq!(plain[0], vec![CHUNK_CNAM, this + 0x9c, 2]);
+        assert_eq!((plain[1][0], plain[1][2]), (CHUNK_ATTR, 2));
+        assert_eq!(e.mem.u8(plain[1][1] + 7), ((this + 0x80) & 0xff) as u8);
+        assert_eq!(
+            only(&log, ADD_CHUNK_SHORT),
+            vec![vec![CHUNK_SNAM, 0x55], vec![CHUNK_SNAM, 0x55]]
+        );
+        let empty: Vec<u32> = only(&log, ADD_CHUNK_EMPTY).iter().map(|c| c[0]).collect();
+        assert_eq!(
+            empty,
+            vec![
+                CHUNK_NAM2, CHUNK_NAM0, CHUNK_MNAM, CHUNK_FNAM, CHUNK_NAM1, CHUNK_MNAM, CHUNK_FNAM,
+                CHUNK_MNAM, CHUNK_FNAM
+            ]
+        );
+        assert_eq!(only(&log, MODEL_SAVE).len(), 16 + 6 + 2);
+        assert_eq!(
+            only(&log, MODEL_SAVE)[16],
+            vec![this + 0x338, CHUNK_MODL, CHUNK_MODT]
+        );
+        assert_eq!(only(&log, TEXTURE_SAVE).len(), 16 + 6);
+        assert_eq!(only(&log, FREE).len(), 3);
+    }
+
+    fn copy_engine() -> Engine {
+        let mut e = Engine::new();
+        list_doubles(&mut e);
+        e.register(RT_DYNAMIC_CAST, |_, a| ret(a[0]));
+        quiet(
+            &mut e,
+            &[COPY_ALL_COMPONENTS, SET_TEXTURE_NAME, COPY_FACE_COORD],
+        );
+        e.register(VOICE_TYPE, |e, a| ret(e.mem.u32(a[0] + 0x4fc + 4 * a[1])));
+        e.register(FLOAT_60, |e, a| Ret {
+            st0: x87_load32(e.mem.u32(a[0] + 0x60 + 4 * a[1])),
+            ..Ret::default()
+        });
+        e.register(FLOAT_68, |e, a| Ret {
+            st0: x87_load32(e.mem.u32(a[0] + 0x68 + 4 * a[1])),
+            ..Ret::default()
+        });
+        e.register(ATTRIBUTES, |_, a| ret(a[0] + 0x74));
+        e.register(WORD_70, |e, a| ret(e.mem.u32(a[0] + 0x70)));
+        e.register(WORD_4F8, |e, a| ret(u32::from(e.mem.u16(a[0] + 0x4f8))));
+        e.register(PATH_TEXT, |_, a| ret(a[0] + 1));
+        e.register(LIST_CLEAR, |e, a| {
+            e.mem.set_u32(a[0], 0);
+            e.mem.set_u32(a[0] + 4, 0);
+            Ret::default()
+        });
+        e.register(LIST_ADD_00905820, |e, a| {
+            let item = e.mem.u32(a[1]);
+            let mut node = a[0];
+            if e.mem.u32(node) == 0 {
+                e.mem.set_u32(node, item);
+                return Ret::default();
+            }
+            while e.mem.u32(node + 4) != 0 {
+                node = e.mem.u32(node + 4);
+            }
+            let new = e.mem.alloc(8);
+            e.mem.set_u32(new, item);
+            e.mem.set_u32(node + 4, new);
+            Ret::default()
+        });
+        e.register(RACE_FACE_COORD, |_, a| ret(a[0] + 0x100 + a[1]));
+        e.map(DEFAULT_A0 & !0xfff, 0x1000);
+        e.map(DEFAULT_A4 & !0xfff, 0x1000);
+        e.map(ZERO_DOUBLE & !0xfff, 0x1000);
+        e.set_global::<u32>(DEFAULT_A0, 5.0f32.to_bits());
+        e.set_global::<u32>(DEFAULT_A4, 3.0f32.to_bits());
+        e
+    }
+
+    /// Gives every model and texture component of `race` a vtable whose
+    /// slots `+0xc` (compare: the two words differ) and `+0x14` (name: the
+    /// component's address plus 1) and `+0x18` (set) are doubles.
+    fn components(e: &mut Engine, race: u32) {
+        let vtable = e.mem.alloc(0x20);
+        e.mem.set_u32(vtable + 8, 0x0f4c_0008);
+        e.mem.set_u32(vtable + 0xc, 0x0f4c_000c);
+        e.mem.set_u32(vtable + 0x14, 0x0f4c_0014);
+        e.mem.set_u32(vtable + 0x18, 0x0f4c_0018);
+        e.register(0x0f4c_000c, |e, a| {
+            ret(u32::from(e.mem.u32(a[0] + 4) != e.mem.u32(a[1] + 4)))
+        });
+        e.register(0x0f4c_0014, |_, a| ret(a[0] + 1));
+        e.register(0x0f4c_0008, |e, a| {
+            e.mem.set_u32(a[0] + 4, a[1]);
+            Ret::default()
+        });
+        e.register(0x0f4c_0018, |e, a| {
+            e.mem.set_u32(a[0] + 4, a[1]);
+            Ret::default()
+        });
+        let mut at = vec![0x74u32, 0x80, 0x3c8, 0x3e0];
+        for sex in 0..2u32 {
+            for part in 0..8u32 {
+                at.push(0xb0 + sex * 0xc0 + part * 0x18);
+                at.push(0x230 + sex * 0x60 + part * 0xc);
+            }
+            for part in 0..3u32 {
+                at.push(0x2f0 + sex * 0x24 + part * 0xc);
+                at.push(0x338 + sex * 0x48 + part * 0x18);
+            }
+        }
+        for offset in at {
+            e.mem.set_u32(race + offset, vtable);
+        }
+    }
+
+    #[test]
+    fn copy_takes_every_field_of_another_race() {
+        let mut e = copy_engine();
+        let this = race(&mut e);
+        let other = race(&mut e);
+        components(&mut e, this);
+        components(&mut e, other);
+        e.mem.set_u32(other + 0x504, 0x504);
+        e.mem.set_u32(other + 0x500, 0x500);
+        e.mem.set_u32(other + 0x98, 0x98);
+        e.mem.set_u16(other + 0x9c, 0x0201);
+        e.mem.set_u32(other + 0xa0, 0.0f32.to_bits());
+        e.mem.set_u32(other + 0xa4, 4.0f32.to_bits());
+        e.mem.set_u8(other + 0x5d, 0x77);
+        e.mem.set_u32(other + 0x6c, 6.5f32.to_bits());
+        e.mem.set_u32(other + 0x70, 0x70);
+        e.mem.set_u16(other + 0x4f8, 0x4f8);
+        let hair = form(&mut e, 0x333);
+        set_list(&mut e, other + 8, &[hair]);
+        set_list(&mut e, this + 8, &[0x999]);
+        let (_, log) = run(&mut e, 0x0061_2c90, &args![this, other]);
+        assert_eq!(e.mem.u32(this + 0x504), 0x504);
+        assert_eq!(e.mem.u32(this + 0x500), 0x500);
+        assert_eq!(e.mem.u32(this + 0x98), 0x98);
+        assert_eq!(e.mem.u16(this + 0x9c), 0x0201);
+        assert_eq!(e.mem.u32(this + 0xa0), 5.0f32.to_bits());
+        assert_eq!(e.mem.u32(this + 0xa4), 4.0f32.to_bits());
+        assert_eq!(e.mem.u8(this + 0x5d), 0x77);
+        assert_eq!(e.mem.u32(this + 0x6c), 6.5f32.to_bits());
+        assert_eq!(e.mem.u32(this + 0x70), 0x70);
+        assert_eq!(e.mem.u16(this + 0x4f8), 0x4f8);
+        assert_eq!(e.mem.u32(this + 8), hair);
+        assert_eq!(e.mem.u32(this + 0x74 + 4), other + 0x74);
+        assert_eq!(e.mem.u32(this + 0xb0 + 4), other + 0xb0 + 1);
+        assert_eq!(e.mem.u32(this + 0x3e0 + 4), other + 0x3e0 + 1);
+        let textures = only(&log, SET_TEXTURE_NAME);
+        assert_eq!(textures.len(), 16 + 6);
+        assert_eq!(textures[0], vec![this + 0x230, other + 0x230 + 1]);
+        assert_eq!(
+            only(&log, COPY_FACE_COORD),
+            vec![
+                vec![other + 0x100, this + 0x100, 0, 0],
+                vec![other + 0x101, this + 0x101, 0, 0]
+            ]
+        );
+        e.register(RT_DYNAMIC_CAST, |_, _| ret(0));
+        let fresh = race(&mut e);
+        e.call(0x0061_2c90, &args![fresh, other]);
+        assert_eq!(e.mem.u32(fresh + 0x504), 0);
+    }
+
+    #[test]
+    fn compare_finds_each_kind_of_difference() {
+        let mut e = copy_engine();
+        e.register(COMPARE_ALL_COMPONENTS, |_, _| ret(0));
+        e.register(MEMCMP, |e, a| {
+            let differ = (0..a[2]).any(|i| e.mem.u8(a[0] + i) != e.mem.u8(a[1] + i));
+            ret(u32::from(differ))
+        });
+        e.register(FACE_COORDS_DIFFER, |e, a| {
+            ret(e.mem.u32(a[0]) ^ e.mem.u32(a[1]))
+        });
+        e.register(RANDOM, |_, _| ret(0x1_2345));
+        let pair = |e: &mut Engine| {
+            let this = race(e);
+            let other = race(e);
+            components(e, this);
+            components(e, other);
+            (this, other)
+        };
+        let differs =
+            |e: &mut Engine, this: u32, other: u32| e.call(0x0061_31c0, &args![this, other]).bool();
+        let (this, other) = pair(&mut e);
+        assert!(!differs(&mut e, this, other));
+        for (offset, value) in [
+            (0x60u32, 1u32),
+            (0x508, 1),
+            (0x4fc, 1),
+            (0x98, 1),
+            (0x9d, 1),
+            (0xa4, 9.0f32.to_bits()),
+            (0x80 + 4, 1),
+            (0xb0 + 0xc0 + 4, 1),
+            (0x230 + 4, 1),
+            (0x2f0 + 0x24 + 4, 1),
+            (0x338 + 4, 1),
+            (0x3e0 + 4, 1),
+            (0x4f8, 1),
+        ] {
+            let (this, other) = pair(&mut e);
+            e.mem.set_u32(other + offset, value);
+            assert!(differs(&mut e, this, other), "offset {offset:#x}");
+        }
+        let (this, other) = pair(&mut e);
+        let a = form(&mut e, 0x41);
+        let b = form(&mut e, 0x42);
+        set_list(&mut e, this + 0x10, &[a]);
+        set_list(&mut e, other + 0x10, &[b]);
+        assert!(differs(&mut e, this, other));
+        set_list(&mut e, other + 0x10, &[a]);
+        assert!(!differs(&mut e, this, other));
+        set_list(&mut e, other + 0x10, &[a, b]);
+        assert!(differs(&mut e, this, other));
+        let (this, other) = pair(&mut e);
+        e.mem.set_u32(other + 0x101, 1);
+        assert!(differs(&mut e, this, other));
+        assert_eq!(e.mem.u16(this + 0x4f8), 0x2345);
+        e.register(RT_DYNAMIC_CAST, |_, _| ret(0));
+        assert!(differs(&mut e, this, this));
+    }
+
+    #[test]
+    fn getters_and_setters_check_their_ranges() {
+        let mut e = copy_engine();
+        let this = race(&mut e);
+        components(&mut e, this);
+        e.mem.set_u32(this + 0x98, 0x98);
+        e.mem.set_u8(this + 0x9d, 0x9d);
+        assert_eq!(e.call(0x0061_30c0, &args![this, 3u32]).u32(), this + 0x56);
+        assert_eq!(e.call(0x0061_3100, &args![this, 1u32]).u32() & 0xff, 0x9d);
+        assert_eq!(e.call(0x0061_3870, &args![this, 1u32]).u32(), 0x98);
+        e.mem.set_u32(this + 0xa0, f32::NAN.to_bits());
+        assert_eq!(e.call(0x0061_3120, &args![this]).f64(), 5.0);
+        e.mem.set_u32(this + 0xa0, 0.5f32.to_bits());
+        assert_eq!(e.call(0x0061_3120, &args![this]).f64(), 0.5);
+        e.mem.set_u32(this + 0xa4, (-1.0f32).to_bits());
+        assert_eq!(e.call(0x0061_3160, &args![this]).f64(), 3.0);
+        e.call(0x0061_39b0, &args![this, 1u32, 7u32, 0x51u32]);
+        assert_eq!(e.mem.u32(this + 0xb0 + 0xc0 + 7 * 0x18 + 4), 0x51);
+        e.call(0x0061_39b0, &args![this, 2u32, 0u32, 0x52u32]);
+        e.call(0x0061_39b0, &args![this, 0u32, 8u32, 0x52u32]);
+        e.call(0x0061_3a60, &args![this, 0u32, 2u32, 0x53u32]);
+        assert_eq!(e.mem.u32(this + 0x338 + 2 * 0x18 + 4), 0x53);
+        e.call(0x0061_3a60, &args![this, 0u32, 3u32, 0x54u32]);
+        e.call(0x0061_3ad0, &args![this, 1u32, 0x55u32]);
+        assert_eq!(e.mem.u32(this + 0x3e0 + 4), 0x55);
+        e.call(0x0061_3ad0, &args![this, (-1i32) as u32, 0x56u32]);
+        e.call_log = Some(vec![]);
+        e.call(0x0061_3b60, &args![this, 2u32, 1u32, 0x57u32]);
+        e.call(0x0061_3b60, &args![this, 3u32, 1u32, 0x57u32]);
+        e.call(0x0061_3c00, &args![this, 1u32, 2u32, 0x58u32]);
+        e.call(0x0061_3c00, &args![this, 2u32, 2u32, 0x58u32]);
+        let log = e.call_log.take().unwrap();
+        assert_eq!(
+            only(&log, SET_TEXTURE_NAME),
+            vec![
+                vec![this + 0x230 + 2 * 0x60 + 0xc, 0x57],
+                vec![this + 0x2f0 + 0x24 + 0x18, 0x58]
+            ]
+        );
+        assert_eq!(
+            e.call(0x0061_3bb0, &args![this, 1u32, 2u32]).u32(),
+            this + 0x2f0 + 0x24 + 0x18
+        );
+        assert_eq!(e.call(0x0061_3bb0, &args![this, 1u32, 3u32]).u32(), 0);
+        assert_eq!(e.call(0x0061_3bb0, &args![this, 2u32, 0u32]).u32(), 0);
+        let untouched: Vec<u32> = [0xb0u32 + 2 * 0xc0, 0xb0 + 8 * 0x18, 0x338 + 3 * 0x18]
+            .iter()
+            .map(|o| e.mem.u32(this + o + 4))
+            .collect();
+        assert!(untouched.iter().all(|w| *w != 0x52 && *w != 0x54));
     }
 }

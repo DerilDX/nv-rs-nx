@@ -133,6 +133,88 @@ pub fn fn_0051a840(e: &mut Engine, this: Ptr) {
     }
 }
 
+/// `__RTDynamicCast` (`00ec43fb`, `cdecl`, five words) from `.?AVTESForm@@`
+/// (`01183028`) to `.?AVTESObjectIMOD@@` (`0118a754`).
+const RT_DYNAMIC_CAST: u32 = 0x00ec_43fb;
+const TYPE_TES_FORM: u32 = 0x0118_3028;
+const TYPE_TES_OBJECT_IMOD: u32 = 0x0118_a754;
+/// `TESForm::CopyAllComponents` and `CompareAllComponents` (`004851b0`,
+/// `00485270`, engine map; `thiscall`, one word).
+const COPY_ALL_COMPONENTS: u32 = 0x0048_51b0;
+const COMPARE_ALL_COMPONENTS: u32 = 0x0048_5270;
+
+/// `form` cast to `TESObjectIMOD`, or 0.
+fn cast_to_imod(e: &mut Engine, form: u32) -> u32 {
+    e.call(
+        RT_DYNAMIC_CAST,
+        &args![form, 0u32, TYPE_TES_FORM, TYPE_TES_OBJECT_IMOD, 0u32],
+    )
+    .u32()
+}
+
+// Translated from 0051a4c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No map name (`thiscall`, one word, `RET 4`; a copy): when `source` casts
+/// to `TESObjectIMOD`, `TESForm::CopyAllComponents(source)`.
+pub fn fn_0051a4c0(e: &mut Engine, this: Ptr, source: u32) {
+    if cast_to_imod(e, source) != 0 {
+        e.call(COPY_ALL_COMPONENTS, &args![this, source]);
+    }
+}
+
+// Translated from 0051a500 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No map name (`thiscall`, one word, `RET 4`): whether the form differs
+/// from `form`: true when it does not cast to `TESObjectIMOD`, else what
+/// `TESForm::CompareAllComponents` answers (as 1 or 0).
+pub fn fn_0051a500(e: &mut Engine, this: Ptr, form: u32) -> bool {
+    let other = cast_to_imod(e, form);
+    if other == 0 {
+        return true;
+    }
+    e.call(COMPARE_ALL_COMPONENTS, &args![this, other]).bool()
+}
+
+// Translated from 0051a550 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No map name (a save-size sum): the 16-bit sum of `00484bf0` on `this`
+/// and `0048e9b0` on `this + 0x7C`, each given `argument`. `RET 4`.
+pub fn fn_0051a550(e: &mut Engine, this: Ptr, argument: u32) -> u16 {
+    let mut size: u16 = 0;
+    size = size.wrapping_add(e.call(0x0048_4bf0, &args![this, argument]).u16());
+    let component = this.addr().wrapping_add(0x7c);
+    size.wrapping_add(e.call(0x0048_e9b0, &args![component, argument]).u16())
+}
+
+// Translated from 0051a5a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No map name: `00484c20` on `this`, then `0048e9e0` on `this + 0x7C`,
+/// each given `argument`. `RET 4`.
+pub fn fn_0051a5a0(e: &mut Engine, this: Ptr, argument: u32) {
+    e.call(0x0048_4c20, &args![this, argument]);
+    e.call(0x0048_e9e0, &args![this.addr() + 0x7c, argument]);
+}
+
+// Translated from 0051a5d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No map name: `00484c50` on `this`, then `0048ea10` on `this + 0x7C`,
+/// each given both stack words. `RET 8`.
+pub fn fn_0051a5d0(e: &mut Engine, this: Ptr, first: u32, second: u32) {
+    e.call(0x0048_4c50, &args![this, first, second]);
+    e.call(0x0048_ea10, &args![this.addr() + 0x7c, first, second]);
+}
+
+// Translated from 0051a600 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No map name: `00484d60` on `this`, then `0048ea40` on `this + 0x7C`,
+/// each given `argument`. `RET 4`.
+pub fn fn_0051a600(e: &mut Engine, this: Ptr, argument: u32) {
+    e.call(0x0048_4d60, &args![this, argument]);
+    e.call(0x0048_ea40, &args![this.addr() + 0x7c, argument]);
+}
+
+// Translated from 0051a630 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No map name: `00484da0` on `this`, then `0048ea80` on `this + 0x7C`,
+/// each given `argument`. `RET 4`.
+pub fn fn_0051a630(e: &mut Engine, this: Ptr, argument: u32) {
+    e.call(0x0048_4da0, &args![this, argument]);
+    e.call(0x0048_ea80, &args![this.addr() + 0x7c, argument]);
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -144,6 +226,13 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x0051_a980, fn_0051a980(Ptr)),
         entry!(0x0051_a810, fn_0051a810(Ptr, u32) -> Ptr),
         entry!(0x0051_a840, fn_0051a840(Ptr)),
+        entry!(0x0051_a4c0, fn_0051a4c0(Ptr, u32)),
+        entry!(0x0051_a500, fn_0051a500(Ptr, u32) -> bool),
+        entry!(0x0051_a550, fn_0051a550(Ptr, u32) -> u16),
+        entry!(0x0051_a5a0, fn_0051a5a0(Ptr, u32)),
+        entry!(0x0051_a5d0, fn_0051a5d0(Ptr, u32, u32)),
+        entry!(0x0051_a600, fn_0051a600(Ptr, u32)),
+        entry!(0x0051_a630, fn_0051a630(Ptr, u32)),
     ]
 }
 
@@ -299,5 +388,93 @@ mod tests_b043 {
             .collect();
         assert_eq!(log[1..], expected[..]);
         assert_eq!(e.mem.u32(this + 0x9c), 0x0102_b764);
+    }
+}
+
+#[cfg(test)]
+mod n040_tests {
+    use super::*;
+
+    fn calls_to(e: &mut Engine, targets: &[u32]) -> Vec<(u32, Vec<u32>)> {
+        e.call_log
+            .take()
+            .unwrap()
+            .into_iter()
+            .filter(|(a, _)| targets.contains(a))
+            .collect()
+    }
+
+    #[test]
+    fn fn_0051a4c0_and_0051a500_copy_and_compare_item_mods() {
+        let mut e = Engine::new();
+        e.register(RT_DYNAMIC_CAST, |e, a| {
+            assert_eq!(a[1..], [0, TYPE_TES_FORM, TYPE_TES_OBJECT_IMOD, 0]);
+            let form = if e.mem.u32(a[0] + 0xc) == 0 { a[0] } else { 0 };
+            Ret {
+                eax: form,
+                ..Ret::default()
+            }
+        });
+        e.register(COPY_ALL_COMPONENTS, |_, _| Ret::default());
+        e.register(COMPARE_ALL_COMPONENTS, |e, a| Ret {
+            eax: e.mem.u32(a[1] + 0x10),
+            ..Ret::default()
+        });
+        let this = e.mem.alloc(0x20);
+        let other = e.mem.alloc(0x20);
+        e.mem.set_u32(other + 0xc, 1);
+        e.call_log = Some(vec![]);
+        e.call(0x0051_a4c0, &[this, other]);
+        assert!(calls_to(&mut e, &[COPY_ALL_COMPONENTS]).is_empty());
+        assert!(e.call(0x0051_a500, &[this, other]).bool());
+        e.mem.set_u32(other + 0xc, 0);
+        e.call_log = Some(vec![]);
+        e.call(0x0051_a4c0, &[this, other]);
+        assert_eq!(
+            calls_to(&mut e, &[COPY_ALL_COMPONENTS]),
+            vec![(COPY_ALL_COMPONENTS, vec![this, other])]
+        );
+        assert!(!e.call(0x0051_a500, &[this, other]).bool());
+        e.mem.set_u32(other + 0x10, 1);
+        assert!(e.call(0x0051_a500, &[this, other]).bool());
+    }
+
+    #[test]
+    fn fn_0051a550_sums_in_16_bits() {
+        let mut e = Engine::new();
+        e.register(0x0048_4bf0, |_, _| Ret {
+            eax: 0x8000,
+            ..Ret::default()
+        });
+        e.register(0x0048_e9b0, |_, a| Ret {
+            eax: 0x8000 + a[0] - 0x107c,
+            ..Ret::default()
+        });
+        assert_eq!(e.call(0x0051_a550, &[0x1000, 1]).u16(), 0);
+    }
+
+    #[test]
+    fn fn_0051a5a0_and_friends_run_form_then_component() {
+        let cases: [(u32, u32, u32, &[u32]); 4] = [
+            (0x0051_a5a0, 0x0048_4c20, 0x0048_e9e0, &[7]),
+            (0x0051_a5d0, 0x0048_4c50, 0x0048_ea10, &[7, 8]),
+            (0x0051_a600, 0x0048_4d60, 0x0048_ea40, &[7]),
+            (0x0051_a630, 0x0048_4da0, 0x0048_ea80, &[7]),
+        ];
+        for (addr, form, component, extra) in cases {
+            let mut e = Engine::new();
+            e.register(form, |_, _| Ret::default());
+            e.register(component, |_, _| Ret::default());
+            let mut words = vec![0x1000];
+            words.extend_from_slice(extra);
+            e.call_log = Some(vec![]);
+            e.call(addr, &words);
+            let mut moved = vec![0x107c];
+            moved.extend_from_slice(extra);
+            assert_eq!(
+                calls_to(&mut e, &[form, component]),
+                vec![(form, words.clone()), (component, moved)]
+            );
+        }
     }
 }

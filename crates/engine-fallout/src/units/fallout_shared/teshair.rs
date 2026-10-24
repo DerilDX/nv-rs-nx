@@ -96,9 +96,38 @@ pub fn tes_hair_load(e: &mut Engine, this: Ptr, file: Ptr) -> bool {
     true
 }
 
+/// `TESForm::StartForm` (`004855a0`), `TESFullName::Save` (`00487010`),
+/// `TESModel::Save` (`004891d0`, two chunk words), `TESTexture::Save`
+/// (`0048e370`, one chunk word), `TESForm::AddChunk` with a byte
+/// (`004858f0`, `cdecl`) and `TESForm::CloseForm` (`00485680`).
+const SAVE_FORM_START: u32 = 0x0048_55a0;
+const SAVE_FULL_NAME: u32 = 0x0048_7010;
+const SAVE_MODEL: u32 = 0x0048_91d0;
+const SAVE_TEXTURE: u32 = 0x0048_e370;
+const SAVE_CHUNK_BYTE: u32 = 0x0048_58f0;
+const SAVE_FORM_CLOSE: u32 = 0x0048_5680;
+
+// Translated from 005fdc50 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TESHair::Save` (Xbox PDB): starts the form, saves the full name
+/// (+0x18), the model (+0x24, `MODL`, `MODT`) and the texture (+0x3C,
+/// `ICON`), adds the flags byte at +0x48 as `DATA` and closes the form.
+pub fn tes_hair_save(e: &mut Engine, this: Ptr) {
+    let at = this.addr();
+    e.call(SAVE_FORM_START, &args![this]);
+    e.call(SAVE_FULL_NAME, &args![at + 0x18]);
+    e.call(SAVE_MODEL, &args![at + 0x24, CHUNK_MODL, CHUNK_MODT]);
+    e.call(SAVE_TEXTURE, &args![at + 0x3c, CHUNK_ICON]);
+    let flags = u32::from(e.mem.u8(at + 0x48));
+    e.call(SAVE_CHUNK_BYTE, &args![CHUNK_DATA, flags]);
+    e.call(SAVE_FORM_CLOSE, &args![this]);
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
-    vec![entry!(0x005f_dcb0, tes_hair_load(Ptr, Ptr) -> bool)]
+    vec![
+        entry!(0x005f_dcb0, tes_hair_load(Ptr, Ptr) -> bool),
+        entry!(0x005f_dc50, tes_hair_save(Ptr)),
+    ]
 }
 
 #[cfg(test)]
@@ -227,5 +256,41 @@ mod tests {
         assert_eq!(calls_to(&e, LOAD_FULL_NAME), vec![vec![0, f]]);
         assert_eq!(calls_to(&e, LOAD_MODEL_CHUNK), vec![vec![0, f]]);
         assert_eq!(calls_to(&e, LOAD_TEXTURE_CHUNK), vec![vec![0, f]]);
+    }
+}
+
+#[cfg(test)]
+mod n043_tests {
+    use super::*;
+
+    #[test]
+    fn save_writes_name_model_texture_and_flags() {
+        let mut e = Engine::new();
+        for addr in [
+            SAVE_FORM_START,
+            SAVE_FULL_NAME,
+            SAVE_MODEL,
+            SAVE_TEXTURE,
+            SAVE_CHUNK_BYTE,
+            SAVE_FORM_CLOSE,
+        ] {
+            e.register(addr, |_, _| Ret::default());
+        }
+        let this = e.mem.alloc(0x50);
+        e.mem.set_u8(this + 0x48, 5);
+        e.call_log = Some(vec![]);
+        e.call(0x005f_dc50, &args![this]);
+        let log: Vec<(u32, Vec<u32>)> = e.call_log.take().unwrap().into_iter().skip(1).collect();
+        assert_eq!(
+            log,
+            vec![
+                (SAVE_FORM_START, vec![this]),
+                (SAVE_FULL_NAME, vec![this + 0x18]),
+                (SAVE_MODEL, vec![this + 0x24, CHUNK_MODL, CHUNK_MODT]),
+                (SAVE_TEXTURE, vec![this + 0x3c, CHUNK_ICON]),
+                (SAVE_CHUNK_BYTE, vec![CHUNK_DATA, 5]),
+                (SAVE_FORM_CLOSE, vec![this]),
+            ]
+        );
     }
 }

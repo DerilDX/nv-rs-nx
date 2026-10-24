@@ -100,6 +100,29 @@ pub fn fn_00403d50(e: &mut Engine, this: Ptr<EffectItem>) {
     e.call(CONDITION_DESTRUCT, &args![this.addr() + 0x1c]);
 }
 
+/// Thiscall on an effect item: its effect setting (`00825c00`, folded code).
+const ITEM_EFFECT_SETTING_00825C00: u32 = 0x0082_5c00;
+/// Thiscall on an effect item (source item), `RET 4` (`effectitem.cpp`):
+/// copies the source's values into it.
+const ITEM_COPY_VALUES_00404210: u32 = 0x0040_4210;
+
+// Translated from 00403ca0 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 00403ca0 - the C++ exception frame (FS:[0] chain, unwind state 0 after the conditions are built) is not translated.
+/// The `EffectItem` copy constructor (`thiscall`, `RET 4`; unnamed in the
+/// engine map): the data's start values (`00403ba0`), the conditions
+/// (+0x1c, `00680890`), `00403be0` with `source`'s effect setting
+/// (`00825c00`), then `pEffectSetting` (+0x14) cleared and
+/// `00404210(source)`. Returns `this`.
+pub fn fn_00403ca0(e: &mut Engine, this: Ptr<EffectItem>, source: u32) -> Ptr<EffectItem> {
+    fn_00403ba0(e, Ptr::new(this.addr()));
+    e.call(CONDITION_CONSTRUCT, &args![this.addr() + 0x1c]);
+    let setting = e.call(ITEM_EFFECT_SETTING_00825C00, &args![source]).u32();
+    fn_00403be0(e, this, setting);
+    e.set(this, EffectItem::pEffectSetting, Ptr::new(0));
+    e.call(ITEM_COPY_VALUES_00404210, &args![this, source]);
+    this
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -115,6 +138,10 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x0040_3c60, fn_00403c60(Ptr) -> bool),
         entry!(0x0040_3c80, fn_00403c80(u32, u32) -> bool),
         entry!(0x0040_3d50, fn_00403d50(Ptr<EffectItem>)),
+        entry!(
+            0x0040_3ca0,
+            fn_00403ca0(Ptr<EffectItem>, u32) -> Ptr<EffectItem>
+        ),
     ]
 }
 
@@ -227,5 +254,58 @@ mod tests {
             calls_to(&e, CONDITION_DESTRUCT),
             vec![vec![item.addr() + 0x1c]]
         );
+    }
+}
+
+#[cfg(test)]
+mod copy_tests {
+    use super::*;
+
+    #[test]
+    fn copy_constructor_starts_from_the_source_setting_then_copies() {
+        let mut e = Engine::new();
+        e.map(0x0118_3000, 0x1000);
+        e.map(0x0101_2000, 0x1000);
+        e.set_global(MINUS_ONE_FLOAT, -1.0f32);
+        e.set_global(FLAG_TABLE + 3 * 16, 2u32);
+        e.register(CONDITION_CONSTRUCT, |_, _| Ret::default());
+        e.register(WORD_AT_98, |_, _| 3u32.into_ret());
+        e.register(WORD_AT_9C, |_, _| 0x2au32.into_ret());
+        e.register(ITEM_EFFECT_SETTING_00825C00, |e, a| {
+            e.mem.u32(a[0] + 0x14).into_ret()
+        });
+        e.register(ITEM_COPY_VALUES_00404210, |e, a| {
+            // The setting is cleared before the copy runs.
+            assert_eq!(e.mem.u32(a[0] + 0x14), 0);
+            Ret::default()
+        });
+        let source = e.mem.alloc(0x24);
+        e.mem.set_u32(source + 0x14, 0x5000);
+        let this = e.mem.alloc(0x24);
+        e.mem.write(this, &[0xcc; 0x24]);
+        e.call_log = Some(vec![]);
+        let result = e.call(0x0040_3ca0, &args![this, source]).u32();
+        assert_eq!(result, this);
+        assert_eq!(e.mem.u32(this + 0x10), 0x2a);
+        assert_eq!(e.mem.u32(this + 0x18), (-1.0f32).to_bits());
+        assert_eq!(e.mem.u32(this + 0x14), 0);
+        assert_eq!(e.mem.u32(this + 0xc), 0);
+        let log = e.call_log.take().unwrap();
+        let watched = [
+            CONDITION_CONSTRUCT,
+            ITEM_EFFECT_SETTING_00825C00,
+            ITEM_COPY_VALUES_00404210,
+        ];
+        let order: Vec<u32> = log
+            .iter()
+            .map(|(a, _)| *a)
+            .filter(|a| watched.contains(a))
+            .collect();
+        assert_eq!(order, watched.to_vec());
+        let copies: Vec<_> = log
+            .iter()
+            .filter(|(a, _)| *a == ITEM_COPY_VALUES_00404210)
+            .collect();
+        assert_eq!(copies[0].1, vec![this, source]);
     }
 }

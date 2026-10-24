@@ -119,7 +119,7 @@ pub fn hk_ball_and_socket_constraint_cinfo_apply_scale(e: &mut Engine, scale: u3
     for lane in 0..8u32 {
         let address = cinfo.addr() + 0x20 + 4 * lane;
         let value = e.mem.f32(address);
-        e.mem.set_f32(address, scale * value);
+        e.mem.set_f32(address, crate::sse::mul(scale, value));
     }
 }
 

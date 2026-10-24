@@ -599,10 +599,12 @@ const FLAG_01200863: u32 = 0x0120_0863;
 const HOLDER_012010BC: u32 = 0x0120_10bc;
 
 // Translated from 00bb96d0 (decompiled, FalloutNV.exe 1.4.0.525)
-/// Unnamed in the engine map (`run_00bb8250`), `stdcall` with one word the code never reads
+/// Unnamed in the engine map (`run_00bb8250`), `thiscall` with one word the code never reads
 /// (`RET 4`; its caller `RenderPassImmediately` pushes one): clears the byte `01200863` and the
 /// byte +0x8 of the object at `012010bc`.
-pub fn fn_00bb96d0(e: &mut Engine, _unused_0: u32) {
+/// `this` (`ECX`, the current shader `011ffe2c`) is not read, but `RenderPassImmediately`
+/// calls it with `ECX` set.
+pub fn fn_00bb96d0(e: &mut Engine, _this: Ptr, _unused_0: u32) {
     let holder = e.global::<u32>(HOLDER_012010BC);
     e.set_global::<u8>(FLAG_01200863, 0);
     e.mem.set_u8(holder + 8, 0);
@@ -629,7 +631,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
             fn_00bb95e0(u32, u32, u32, u32, u32, u32, u32, u32, u32)
         ),
         entry!(0x00bb_9640, fn_00bb9640(Ptr, u32, Ptr)),
-        entry!(0x00bb_96d0, fn_00bb96d0(u32)),
+        entry!(0x00bb_96d0, fn_00bb96d0(Ptr, u32)),
     ]
 }
 
@@ -1119,7 +1121,7 @@ mod b056_tests {
         e.mem.set_u8(holder + 8, 1);
         e.set_global::<u32>(HOLDER_012010BC, holder);
         e.set_global::<u8>(FLAG_01200863, 1);
-        e.call(0x00bb_96d0, &args![0u32]);
+        e.call(0x00bb_96d0, &args![0x5555u32, 0u32]);
         assert_eq!(e.global::<u8>(FLAG_01200863), 0);
         assert_eq!(e.mem.u8(holder + 8), 0);
     }

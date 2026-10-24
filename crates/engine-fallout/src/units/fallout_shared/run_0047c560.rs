@@ -35,9 +35,58 @@ pub fn fn_0047c5b0(e: &mut Engine, this: Ptr) {
     each_component(e, this, 0x4);
 }
 
+// Translated from 0047c600 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Copies the components of another 38-slot array (`thiscall`, `RET 4`;
+/// the engine map gives it no name): nothing for a null `other`; otherwise
+/// for each slot where both arrays hold a component, vtable slot +0x08
+/// (`BaseFormComponent::CopyComponent`, Xbox PDB) of this one with the
+/// other's.
+pub fn fn_0047c600(e: &mut Engine, this: Ptr, other: u32) {
+    if other == 0 {
+        return;
+    }
+    for i in 0..SLOTS {
+        let mine = e.mem.u32(this.addr() + 4 * i);
+        if mine != 0 {
+            let theirs = e.mem.u32(other.wrapping_add(4 * i));
+            if theirs != 0 {
+                e.vcall(mine, 0x8, &args![theirs]);
+            }
+        }
+    }
+}
+
+// Translated from 0047c670 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Compares the components with another 38-slot array (`thiscall`, `RET
+/// 4`; the engine map gives it no name): true (they differ) for a null
+/// `other`; otherwise, slot by slot, true at the first slot where this
+/// array's component answers true to its vtable slot +0x0c
+/// (`BaseFormComponent::CompareComponent`, Xbox PDB) with the other's
+/// (null included), or where only the other array holds one. False when no
+/// slot differs.
+pub fn fn_0047c670(e: &mut Engine, this: Ptr, other: u32) -> bool {
+    if other == 0 {
+        return true;
+    }
+    for i in 0..SLOTS {
+        let mine = e.mem.u32(this.addr() + 4 * i);
+        let theirs = e.mem.u32(other.wrapping_add(4 * i));
+        if mine != 0 {
+            if e.vcall(mine, 0xc, &args![theirs]).bool() {
+                return true;
+            }
+        } else if theirs != 0 {
+            return true;
+        }
+    }
+    false
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x0047_c600, fn_0047c600(Ptr, u32)),
+        entry!(0x0047_c670, fn_0047c670(Ptr, u32) -> bool),
         entry!(0x0047_c560, fn_0047c560(Ptr)),
         entry!(0x0047_c5b0, fn_0047c5b0(Ptr)),
     ]
@@ -96,5 +145,83 @@ mod tests {
             vec![vec![c[0]], vec![c[1]], vec![c[2]]]
         );
         assert!(calls_to(&e, INIT).is_empty());
+    }
+}
+
+#[cfg(test)]
+mod n038_tests {
+    use super::*;
+
+    const VTABLE: u32 = 0x0200_0100;
+    const COPY: u32 = 0x0300_0100;
+    const COMPARE: u32 = 0x0300_0110;
+
+    /// Two arrays; the compare slot answers the byte at +4 of the component.
+    fn setup() -> (Engine, u32, u32) {
+        let mut e = Engine::new();
+        e.put_vtable(VTABLE, &[0, 0, COPY, COMPARE]);
+        e.register(COPY, |_, _| Ret::default());
+        e.register(COMPARE, |e, a| Ret {
+            eax: u32::from(e.mem.u8(a[0] + 4)),
+            ..Ret::default()
+        });
+        let this = e.mem.alloc(0x98);
+        let other = e.mem.alloc(0x98);
+        (e, this, other)
+    }
+
+    fn component(e: &mut Engine) -> u32 {
+        let c = e.mem.alloc(8);
+        e.mem.set_u32(c, VTABLE);
+        c
+    }
+
+    #[test]
+    fn at_0047c600_copies_where_both_have_one() {
+        let (mut e, this, other) = setup();
+        let a = component(&mut e);
+        let b = component(&mut e);
+        let c = component(&mut e);
+        e.mem.set_u32(this, a);
+        e.mem.set_u32(other, b);
+        e.mem.set_u32(this + 4 * 5, c);
+        e.mem.set_u32(other + 4 * 9, b);
+        let d = component(&mut e);
+        e.mem.set_u32(this + 4 * 37, d);
+        e.mem.set_u32(other + 4 * 37, c);
+        e.call_log = Some(vec![]);
+        e.call(0x0047_c600, &args![this, other]);
+        let copies: Vec<_> = e
+            .call_log
+            .take()
+            .unwrap()
+            .into_iter()
+            .filter(|x| x.0 == COPY)
+            .collect();
+        assert_eq!(copies, vec![(COPY, vec![a, b]), (COPY, vec![d, c])]);
+        e.call_log = Some(vec![]);
+        e.call(0x0047_c600, &args![this, 0u32]);
+        assert_eq!(e.call_log.take().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn at_0047c670_finds_the_first_difference() {
+        let (mut e, this, other) = setup();
+        assert!(e.call(0x0047_c670, &args![this, 0u32]).bool());
+        assert!(!e.call(0x0047_c670, &args![this, other]).bool());
+        let a = component(&mut e);
+        e.mem.set_u32(this + 4 * 3, a);
+        // The component compares with a null other: answers its byte (0).
+        e.call_log = Some(vec![]);
+        assert!(!e.call(0x0047_c670, &args![this, other]).bool());
+        let log = e.call_log.take().unwrap();
+        assert_eq!(log[1], (COMPARE, vec![a, 0]));
+        e.mem.set_u8(a + 4, 1);
+        assert!(e.call(0x0047_c670, &args![this, other]).bool());
+        e.mem.set_u8(a + 4, 0);
+        // Only the other holds one.
+        let b = component(&mut e);
+        e.mem.set_u32(other + 4 * 37, b);
+        assert!(e.call(0x0047_c670, &args![this, other]).bool());
     }
 }

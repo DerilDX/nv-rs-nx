@@ -158,9 +158,98 @@ pub fn fn_005f0a30(e: &mut Engine, this: Ptr<CreatureSounds>, kind: i32) -> u32 
     picked
 }
 
+// Translated from 005f0640 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map: copies another `CreatureSounds` into this
+/// one (`thiscall`, `RET 4`: the other): empties every type
+/// ([`fn_005f0820`]), then, with another, for each type 0 to 0x15 (a signed
+/// byte counter) each of its items up to an empty node: a new 8-byte block
+/// (`00401000`) filled from the item ([`fn_005f07f0`]) and added to this
+/// one's list ([`fn_005f0900`]).
+pub fn fn_005f0640(e: &mut Engine, this: Ptr<CreatureSounds>, other: u32) {
+    fn_005f0820(e, this);
+    if other == 0 {
+        return;
+    }
+    let mut kind: i8 = 0;
+    while i32::from(kind) < SOUND_TYPE_COUNT {
+        let mut node = fn_005f0ac0(e, Ptr::new(other), i32::from(kind));
+        while node != 0 && !e.call(LIST_IS_EMPTY, &args![node]).bool() {
+            let item = e.call(LIST_ITEM_ADDRESS, &args![node]).u32();
+            let sound = e.mem.u32(item);
+            let block = e.call(ALLOCATE_BLOCK, &args![8u32]).u32();
+            fn_005f07f0(e, Ptr::new(block), Ptr::new(sound));
+            fn_005f0900(e, this, Ptr::new(block), i32::from(kind));
+            node = e.call(LIST_NEXT, &args![node]).u32();
+        }
+        kind = kind.wrapping_add(1);
+    }
+}
+
+// Translated from 005f06f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map: whether another `CreatureSounds` differs
+/// (`thiscall`, `RET 4`: the other): true without one; then for each type
+/// 0 to 0x15 the two lists side by side while both nodes are set and not
+/// empty: true when the items' chance bytes (+4) or sounds (+0) differ;
+/// true when either walk stopped on a node that is still set. False when
+/// every type matches.
+pub fn fn_005f06f0(e: &mut Engine, this: Ptr<CreatureSounds>, other: u32) -> bool {
+    if other == 0 {
+        return true;
+    }
+    let mut kind: i8 = 0;
+    while i32::from(kind) < SOUND_TYPE_COUNT {
+        let mut mine = fn_005f0ac0(e, this, i32::from(kind));
+        let mut theirs = fn_005f0ac0(e, Ptr::new(other), i32::from(kind));
+        while mine != 0
+            && !e.call(LIST_IS_EMPTY, &args![mine]).bool()
+            && theirs != 0
+            && !e.call(LIST_IS_EMPTY, &args![theirs]).bool()
+        {
+            let slot = e.call(LIST_ITEM_ADDRESS, &args![mine]).u32();
+            let my_sound = Ptr::<CreatureSound>::new(e.mem.u32(slot));
+            let slot = e.call(LIST_ITEM_ADDRESS, &args![theirs]).u32();
+            let their_sound = Ptr::<CreatureSound>::new(e.mem.u32(slot));
+            if e.get(my_sound, CreatureSound::iChance) != e.get(their_sound, CreatureSound::iChance)
+            {
+                return true;
+            }
+            if e.get(my_sound, CreatureSound::pSound) != e.get(their_sound, CreatureSound::pSound) {
+                return true;
+            }
+            mine = e.call(LIST_NEXT, &args![mine]).u32();
+            theirs = e.call(LIST_NEXT, &args![theirs]).u32();
+        }
+        if mine != 0 || theirs != 0 {
+            return true;
+        }
+        kind = kind.wrapping_add(1);
+    }
+    false
+}
+
+// Translated from 005f07f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map: copies a `CREATURE_SOUND` (cdecl:
+/// destination, source): the sound (+0) and the chance byte (+4), only
+/// when both are set.
+pub fn fn_005f07f0(e: &mut Engine, destination: Ptr<CreatureSound>, source: Ptr<CreatureSound>) {
+    if destination.is_null() || source.is_null() {
+        return;
+    }
+    let sound = e.get(source, CreatureSound::pSound);
+    e.set(destination, CreatureSound::pSound, sound);
+    let chance = e.get(source, CreatureSound::iChance);
+    e.set(destination, CreatureSound::iChance, chance);
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x005f_0640, fn_005f0640(Ptr<CreatureSounds>, u32)),
+        entry!(0x005f_06f0, fn_005f06f0(Ptr<CreatureSounds>, u32) -> bool),
+        entry!(
+            0x005f_07f0,
+            fn_005f07f0(Ptr<CreatureSound>, Ptr<CreatureSound>)
+        ),
         entry!(0x005f_0ac0, fn_005f0ac0(Ptr<CreatureSounds>, i32) -> u32),
         entry!(0x005f_0860, fn_005f0860(Ptr<CreatureSounds>, i32)),
         entry!(0x005f_0820, fn_005f0820(Ptr<CreatureSounds>)),
@@ -343,5 +432,135 @@ mod b025_tests {
         assert_eq!(e.call(0x005f_0a30, &args![this, 3u32]).u32(), 0x35);
         assert_eq!(calls_to(&e, RANDOM).len(), 2);
         assert_eq!(e.call(0x005f_0a30, &args![this, 4u32]).u32(), 0);
+    }
+}
+
+#[cfg(test)]
+mod n041_tests {
+    use super::*;
+
+    fn ret(eax: u32) -> Ret {
+        Ret {
+            eax,
+            ..Ret::default()
+        }
+    }
+
+    fn calls(e: &Engine, addr: u32) -> Vec<Vec<u32>> {
+        e.call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|(a, _)| *a == addr)
+            .map(|(_, w)| w.clone())
+            .collect()
+    }
+
+    /// Lists as nodes `{item, next}`, empty when the item is 0.
+    fn list_doubles(e: &mut Engine) {
+        e.register(LIST_IS_EMPTY, |e, a| ret(u32::from(e.mem.u32(a[0]) == 0)));
+        e.register(LIST_ITEM_ADDRESS, |_, a| ret(a[0]));
+        e.register(LIST_NEXT, |e, a| ret(e.mem.u32(a[0] + 4)));
+    }
+
+    /// A list of `CREATURE_SOUND`s `(sound, chance)`.
+    fn sound_list(e: &mut Engine, sounds: &[(u32, u8)]) -> u32 {
+        let head = e.mem.alloc(8);
+        let mut node = head;
+        for (i, &(sound, chance)) in sounds.iter().enumerate() {
+            let item = e.mem.alloc(8);
+            e.mem.set_u32(item, sound);
+            e.mem.set_u8(item + 4, chance);
+            e.mem.set_u32(node, item);
+            if i + 1 < sounds.len() {
+                let next = e.mem.alloc(8);
+                e.mem.set_u32(node + 4, next);
+                node = next;
+            }
+        }
+        head
+    }
+
+    #[test]
+    fn fn_005f07f0_copies_only_between_two_sounds() {
+        let mut e = Engine::new();
+        let source = e.mem.alloc(8);
+        e.mem.set_u32(source, 0x77);
+        e.mem.set_u32(source + 4, 0xffff_ff33);
+        let destination = e.mem.alloc(8);
+        e.call(0x005f_07f0, &args![destination, source]);
+        assert_eq!(e.mem.u32(destination), 0x77);
+        assert_eq!(e.mem.u32(destination + 4), 0x33);
+        e.call(0x005f_07f0, &args![0u32, source]);
+        let other = e.mem.alloc(8);
+        e.call(0x005f_07f0, &args![other, 0u32]);
+        assert_eq!(e.mem.u32(other), 0);
+    }
+
+    #[test]
+    fn fn_005f0640_copies_each_type() {
+        let mut e = Engine::new();
+        list_doubles(&mut e);
+        e.register(ALLOCATE_BLOCK, |e, a| ret(e.mem.alloc(a[0])));
+        e.register(LIST_CONSTRUCT, |_, a| ret(a[0]));
+        e.register(LIST_INSERT_BEFORE, |e, a| {
+            // Puts the sound into the empty node.
+            let sound = e.mem.u32(a[1]);
+            e.mem.set_u32(a[0], sound);
+            Ret::default()
+        });
+        let this = e.mem.alloc(0x58);
+        let other = e.mem.alloc(0x58);
+        let list = sound_list(&mut e, &[(0x51, 25)]);
+        e.mem.set_u32(other + 8, list);
+        e.call_log = Some(vec![]);
+        e.call(0x005f_0640, &args![this, other]);
+        let copy = e.mem.u32(e.mem.u32(this + 8));
+        assert_ne!(copy, e.mem.u32(list));
+        assert_eq!((e.mem.u32(copy), e.mem.u8(copy + 4)), (0x51, 25));
+        assert_eq!(calls(&e, LIST_INSERT_BEFORE).len(), 1);
+        // Without another: only emptied.
+        e.call_log = Some(vec![]);
+        e.register(LIST_REMOVE_HEAD, |e, a| {
+            e.mem.set_u32(a[0], 0);
+            Ret::default()
+        });
+        e.register(FREE_BLOCK, |_, _| Ret::default());
+        e.register(LIST_DELETE, |_, _| Ret::default());
+        e.call(0x005f_0640, &args![this, 0u32]);
+        assert_eq!(e.mem.u32(this + 8), 0);
+        assert_eq!(calls(&e, ALLOCATE_BLOCK).len(), 0);
+    }
+
+    #[test]
+    fn fn_005f06f0_compares_the_lists_side_by_side() {
+        let mut e = Engine::new();
+        list_doubles(&mut e);
+        let this = e.mem.alloc(0x58);
+        let other = e.mem.alloc(0x58);
+        let mine = sound_list(&mut e, &[(1, 10), (2, 20)]);
+        let theirs = sound_list(&mut e, &[(1, 10), (2, 20)]);
+        e.mem.set_u32(this + 0x54, mine);
+        e.mem.set_u32(other + 0x54, theirs);
+        assert!(!e.call(0x005f_06f0, &args![this, other]).bool());
+        assert!(e.call(0x005f_06f0, &args![this, 0u32]).bool());
+        for sounds in [
+            vec![(1u32, 10u8), (2, 21)],
+            vec![(1, 10), (3, 20)],
+            vec![(1, 10)],
+            vec![(1, 10), (2, 20), (3, 30)],
+        ] {
+            let theirs = sound_list(&mut e, &sounds);
+            e.mem.set_u32(other + 0x54, theirs);
+            assert!(
+                e.call(0x005f_06f0, &args![this, other]).bool(),
+                "{sounds:?}"
+            );
+        }
+        // An empty list against none: the empty node is still set.
+        let empty = e.mem.alloc(8);
+        e.mem.set_u32(other + 0x54, empty);
+        e.mem.set_u32(this + 0x54, 0);
+        assert!(e.call(0x005f_06f0, &args![this, other]).bool());
     }
 }

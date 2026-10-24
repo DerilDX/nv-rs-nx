@@ -38,6 +38,16 @@ pub fn fn_005f4d60(e: &mut Engine, this: Ptr) -> bool {
     value == 0xe4 || (value > 0xeb && value <= 0xef)
 }
 
+// Translated from 005f4db0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Whether `005f2440` (cdecl; the engine map names it
+/// `TESAnimGroup::GetType`) maps the `u16` at +0x10 to 0xE5 or to 0xF1
+/// through 0xF4 (signed compares).
+pub fn fn_005f4db0(e: &mut Engine, this: Ptr) -> bool {
+    let number = u32::from(e.mem.u16(this.addr() + 0x10));
+    let value = e.call(0x005f_2440, &args![number]).i32();
+    value == 0xe5 || (value > 0xf0 && value <= 0xf4)
+}
+
 // Translated from 005f4ee0 (decompiled, FalloutNV.exe 1.4.0.525)
 /// Scalar deleting destructor of `TESChallenge`: runs the destructor body
 /// `005f4f10` on `this`, then frees `this` with `00401030` when bit 0 of
@@ -105,6 +115,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x005f_4f10, fn_005f4f10(Ptr)),
         entry!(0x005f_4fd0, fn_005f4fd0(Ptr)),
         entry!(0x005f_5020, fn_005f5020(Ptr, u8)),
+        entry!(0x005f_4db0, fn_005f4db0(Ptr) -> bool),
     ]
 }
 
@@ -250,5 +261,35 @@ mod challenge_tests {
         e.mem.set_u16(this + 0x5c, 0xffff);
         e.call(0x005f_5020, &args![this, 0u32]);
         assert_eq!(e.mem.u16(this + 0x5c), 0xfffb);
+    }
+}
+
+#[cfg(test)]
+mod n041_tests {
+    use super::*;
+
+    #[test]
+    fn fn_005f4db0_accepts_e5_and_f1_to_f4() {
+        let mut e = Engine::new();
+        e.register(0x005f_2440, |_, a| Ret {
+            eax: a[0],
+            ..Ret::default()
+        });
+        let this = e.mem.alloc(0x14);
+        for (value, expected) in [
+            (0xe5u16, true),
+            (0xe4, false),
+            (0xf0, false),
+            (0xf1, true),
+            (0xf4, true),
+            (0xf5, false),
+        ] {
+            e.mem.set_u16(this + 0x10, value);
+            assert_eq!(
+                e.call(0x005f_4db0, &args![this]).bool(),
+                expected,
+                "{value:x}"
+            );
+        }
     }
 }

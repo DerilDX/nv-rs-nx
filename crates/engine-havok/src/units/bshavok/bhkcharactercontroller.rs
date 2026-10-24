@@ -715,13 +715,22 @@ pub fn bhk_character_controller_apply_rotation_modifier(
     let remaining = x87_quiet(remaining);
     let time = x87_quiet(time);
     let used = if remaining > time { time } else { remaining };
-    let rot_mod = e.get(this, Ctl::fRotMod);
-    let result = (value as f64 + rot_mod as f64 * used as f64) as f32;
-    let left = (e.get(this, Ctl::fRotModTime) as f64 - time as f64) as f32;
-    e.set(this, Ctl::fRotModTime, left);
+    // `FLD fRotMod`, `FMUL` the scratch float, `FADDP` onto the value; then
+    // `FSUBR fRotModTime` (the field as a memory operand) on the time, and
+    // `FLD fRotMod`, `FSUB` the double: the x87 choice of NaN throughout.
+    let rot_mod = x87_load32(e.get(this, Ctl::fRotMod).to_bits());
+    let product = x87_mul(rot_mod, x87_m32(used.to_bits()));
+    let result = f32::from_bits(x87_store32(x87_add(f64::from(value), product)));
+    let remaining_field = x87_m32(e.get(this, Ctl::fRotModTime).to_bits());
+    let left = x87_store32(x87_sub(remaining_field, f64::from(time)));
+    e.set(this, Ctl::fRotModTime, f32::from_bits(left));
     let decay: f64 = e.global(ROT_MOD_DECAY);
-    let rot_mod = (e.get(this, Ctl::fRotMod) as f64 - decay) as f32;
-    e.set(this, Ctl::fRotMod, rot_mod);
+    let rot_mod = x87_load32(e.get(this, Ctl::fRotMod).to_bits());
+    e.set(
+        this,
+        Ctl::fRotMod,
+        f32::from_bits(x87_store32(x87_sub(rot_mod, decay))),
+    );
     result
 }
 

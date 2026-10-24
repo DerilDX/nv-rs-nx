@@ -4,7 +4,7 @@
 #[allow(unused_imports)]
 use crate::prelude::*;
 
-use crate::units::havok_sdk::hkpconvexradiusbuilder::{normalising_scale, sum_of_three};
+use crate::units::havok_sdk::hkpconvexradiusbuilder::normalising_scale;
 
 type Lanes = [f32; 4];
 
@@ -25,8 +25,14 @@ fn store_00d4f3d0(e: &mut Engine, at: u32, value: Lanes) {
     }
 }
 
+/// `MULPS a, b` (the SSE NaN rules: `a` is the destination).
 fn mul_00d4f3d0(a: Lanes, b: Lanes) -> Lanes {
-    [0usize, 1, 2, 3].map(|lane| a[lane] * b[lane])
+    crate::sse::mulps(a, b)
+}
+
+/// `z + (y + x)` with `ADDSS` (the higher lane the destination, the SSE NaN rules).
+fn sum_of_three(v: Lanes) -> f32 {
+    crate::sse::add(v[2], crate::sse::add(v[1], v[0]))
 }
 
 /// `v` scaled by the refined reciprocal square root of its first three lanes' squared length (0 for
@@ -54,7 +60,7 @@ fn zxy_00d4f3d0(v: Lanes) -> Lanes {
 fn cross_00d4f3d0(a: Lanes, b: Lanes) -> Lanes {
     let minuend = mul_00d4f3d0(zxy_00d4f3d0(b), yzx_00d4f3d0(a));
     let subtrahend = mul_00d4f3d0(yzx_00d4f3d0(b), zxy_00d4f3d0(a));
-    [0usize, 1, 2, 3].map(|lane| minuend[lane] - subtrahend[lane])
+    crate::sse::subps(minuend, subtrahend)
 }
 
 /// The three rows at `at` packed by the `UNPCKLPS`/`UNPCKHPS`/`MOVLHPS`/`MOVHLPS`/`SHUFPS`
@@ -76,7 +82,7 @@ fn transformed_00d4f3d0(v: Lanes, packed: [Lanes; 3]) -> Lanes {
     let by_y = mul_00d4f3d0([v[1]; 4], packed[1]);
     let by_x = mul_00d4f3d0([v[0]; 4], packed[0]);
     let by_z = mul_00d4f3d0([v[2]; 4], packed[2]);
-    [0usize, 1, 2, 3].map(|lane| (by_y[lane] + by_x[lane]) + by_z[lane])
+    crate::sse::addps(crate::sse::addps(by_y, by_x), by_z)
 }
 
 // Translated from 00d4f3d0 (decompiled, FalloutNV.exe 1.4.0.525)

@@ -166,17 +166,17 @@ fn movhlps(dst: Lanes, src: Lanes) -> Lanes {
 
 /// `MULPS dst, src`.
 fn mulps(dst: Lanes, src: Lanes) -> Lanes {
-    std::array::from_fn(|lane| dst[lane] * src[lane])
+    crate::sse::mulps(dst, src)
 }
 
 /// `ADDPS dst, src`.
 fn addps(dst: Lanes, src: Lanes) -> Lanes {
-    std::array::from_fn(|lane| dst[lane] + src[lane])
+    crate::sse::addps(dst, src)
 }
 
 /// `SUBPS dst, src`.
 fn subps(dst: Lanes, src: Lanes) -> Lanes {
-    std::array::from_fn(|lane| dst[lane] - src[lane])
+    crate::sse::subps(dst, src)
 }
 
 /// Lane `lane` of `v` in all four lanes (`SHUFPS v, v, lane * 0x55`).
@@ -196,7 +196,7 @@ fn load_columns(e: &Engine, addr: u32) -> [Lanes; 3] {
 /// The sum the exe forms from the three products `p` of a determinant: lane 1 plus lane 0
 /// (`ADDSS`), then lane 2 plus that.
 fn sum_of_products(p: Lanes) -> f32 {
-    p[2] + (p[1] + p[0])
+    crate::sse::add(p[2], crate::sse::add(p[1], p[0]))
 }
 
 /// The four lanes of a vector loaded from memory by a scalar `MOVSS`: the value, then zeros.

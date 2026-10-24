@@ -30,34 +30,34 @@ functions (ledger of 2026-10-23). Regenerate the numbers before relying on them.
 | Code group | Functions | Covered | % | System(s) | Phase |
 |---|---:|---:|---:|---|---|
 | compiler: static init/exit | 22,771 | 22,463 | 99 | Start-up and shut-down (table-run initializers and atexit destructors; refused rows left for hand translation) | done |
-| (unplaced: no unit in the map) | 2,430 | 1,614 | 66 | Spread across every system; assign by caller | all |
-| fallout shared (forms, references, world data) | 10,479 | 9,366 | 89 | Forms, records, references, cells, extra data | C |
+| (unplaced: no unit in the map) | 2,430 | 1,626 | 67 | Spread across every system; assign by caller | all |
+| fallout shared (forms, references, world data) | 10,479 | 10,393 | 99 | Forms, records, references, cells, extra data | C |
 | fallout/ai | 4,849 | 4,849 | 100 | AI, processes, movement, combat AI | A (movement), C |
-| fallout/interface | 2,645 | 1,734 | 66 | Menus, HUD, interface manager | C |
+| fallout/interface | 2,645 | 2,059 | 78 | Menus, HUD, interface manager | C |
 | Havok SDK | 7,377 | 7,377 | 100 | Physics engine (739 functions keep a marked part, mostly C++ exception frames) | A |
 | BSHavok | 1,634 | 1,634 | 100 | Bethesda's Havok layer: character controller, ragdolls, constraints | A |
-| NiCollision | 238 | 218 | 92 | Gamebryo collision | A |
+| NiCollision | 238 | 235 | 99 | Gamebryo collision | A |
 | fallout shared/havok | 478 | 454 | 95 | Game-side physics: water, camera caster, listeners | A |
 | fallout shared/pathfinding | 1,788 | 1,788 | 100 | Navmesh, pathfinding | C |
 | NiAnimation | 1,413 | 1,412 | 100 | Animation: controllers, blending, keyframes | A |
-| FaceGen + fallout shared/facegen | 907 | 476 | 52 | Faces, head morphs, lip sync | A |
-| BSAudio + fallout/audio | 494 | 437 | 88 | Audio | A |
-| NiMain | 1,722 | 1,718 | 100 | Scene graph, cameras, properties | B |
-| BSShader | 1,987 | 1,766 | 89 | Shaders, passes, accumulators, image space (game code, ADR-0007) | B |
+| FaceGen + fallout shared/facegen | 907 | 477 | 53 | Faces, head morphs, lip sync | A |
+| BSAudio + fallout/audio | 494 | 442 | 89 | Audio | A |
+| NiMain | 1,722 | 1,720 | 100 | Scene graph, cameras, properties | B |
+| BSShader | 1,987 | 1,768 | 89 | Shaders, passes, accumulators, image space (game code, ADR-0007) | B |
 | NiXenonRenderer + d3d9/d3dx9 | 992 | 875 | 88 | Gamebryo Direct3D 9 renderer, translated onto our own Direct3D 9 layer (ADR-0007) | B |
 | NiParticle | 704 | 327 | 46 | Particles, effects | B |
 | SpeedTree + fallout shared/speedtree | 847 | 821 | 97 | Trees | B |
-| BSMain | 991 | 598 | 60 | Scene helpers, culling, debris, scene graph | B |
+| BSMain | 991 | 599 | 60 | Scene helpers, culling, debris, scene graph | B |
 | fallout shared/sky | 164 | 149 | 91 | Sky, weather, sun, clouds | B |
 | fallout shared/distant terrain system | 204 | 153 | 75 | Distant land, LOD | B |
-| fallout shared/tempeffects | 149 | 101 | 68 | Temporary effects: decals, blood, shaders on actors | B |
+| fallout shared/tempeffects | 149 | 102 | 68 | Temporary effects: decals, blood, shaders on actors | B |
 | fallout shared/region system | 159 | 110 | 69 | Regions: weather, sounds, objects | B/C |
-| fallout/magic + fallout shared/magic | 1,001 | 426 | 43 | Magic, effects, chems, radiation, addictions | C |
+| fallout/magic + fallout shared/magic | 1,001 | 998 | 100 | Magic, effects, chems, radiation, addictions | C |
 | fallout/dialogue | 74 | 45 | 61 | Dialogue | C |
 | fallout/misc (save/load and more) | 1,045 | 886 | 85 | Saves, misc game systems | D |
 | BSMenu | 361 | 352 | 98 | Menu framework: tiles, fonts | C |
-| BSCore + BSSystem + BSSystemUtilities | 559 | 286 | 51 | Memory, threads, files, strings | platform |
-| BSMovie | 64 | 9 | 14 | Bink video playback (decoder in crates/bink) | D |
+| BSCore + BSSystem + BSSystemUtilities | 559 | 289 | 52 | Memory, threads, files, strings | platform |
+| BSMovie | 64 | 15 | 23 | Bink video playback (decoder in crates/bink) | D |
 | NiSystem, BSDevices, BSDiag, XAPILIB, XBOXKRNL, RemoteLog | 115 | 56 | 49 | Platform glue, input devices, diagnostics | platform |
 | LIBCMT, libcpmt, zLib | 815 | 114 | 14 | C runtime, zlib (platform replacements or translation) | platform |
 | fallout/debug, fallout shared/settings | 19 | 9 | 47 | Debug, settings | D |

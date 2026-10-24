@@ -9,6 +9,8 @@ use crate::units::havok_sdk::hkphingeconstraintdata::{
     beside, normalised, rotate_rows, CONSTRAINT_INFO_UTIL, IS_ORTHONORMAL, ORTHONORMAL_TOLERANCE,
     U_FLOAT8_ASSIGN,
 };
+use crate::units::havok_sdk::hkpprimitivedrawer::normalised_sse;
+use crate::units::havok_sdk::hkpprismaticconstraintdata::cross_yzx_sse;
 use crate::units::havok_sdk::hkpsphereshape::{load_vec, store_vec};
 
 /// The memory router (`0x00c8_5750`): its field `+0x10` is the allocator the block is freed through.
@@ -182,11 +184,12 @@ pub fn hkp_limited_hinge_constraint_data_set_in_body_space(
         (0x20, axis_a, perpendicular_a, 0x50, pivot_a),
         (0x60, axis_b, perpendicular_b, 0x90, pivot_b),
     ] {
-        let first = normalised(e, load_vec(e, axis.addr()));
+        // The SSE NaN rules: `MULPS` with the first vector's shuffles as the destinations.
+        let first = normalised_sse(e, load_vec(e, axis.addr()));
         store_vec(e, me + row, first);
-        let second = normalised(e, load_vec(e, perpendicular.addr()));
+        let second = normalised_sse(e, load_vec(e, perpendicular.addr()));
         store_vec(e, me + row + 0x10, second);
-        store_vec(e, me + row + 0x20, cross(first, second));
+        store_vec(e, me + row + 0x20, cross_yzx_sse(first, second, true));
         let point = load_vec(e, pivot.addr());
         store_vec(e, me + pivot_at, point);
     }

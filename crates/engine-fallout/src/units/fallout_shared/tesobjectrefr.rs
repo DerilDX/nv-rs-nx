@@ -4259,7 +4259,7 @@ pub fn fn_00560c80(e: &mut Engine, dest: Ptr, source: Ptr) -> Ptr {
 // Translated from 00560cf0 (decompiled, FalloutNV.exe 1.4.0.525)
 /// Stores `value` in the `float` at `this + 8`.
 pub fn fn_00560cf0(e: &mut Engine, this: Ptr, value: f32) {
-    e.mem.set_f32(this.addr() + 8, value);
+    e.mem.set_f32(this.addr() + 8, x87_quiet(value));
 }
 
 // Translated from 00560d10 (decompiled, FalloutNV.exe 1.4.0.525)

@@ -11,7 +11,7 @@
 #[allow(unused_imports)]
 use crate::prelude::*;
 
-use super::hkpboxmotion::{add, mul, splat, sub};
+use super::hkpboxmotion::{add, mul, splat};
 use super::hkpsphereshape::{load_vec, shufps, store_vec, Vec4};
 
 /// The `double` the local and world inertia compare the inverse mass against (`FCOM`) and the
@@ -135,18 +135,21 @@ pub fn hkp_sphere_motion_apply_point_impulse(e: &mut Engine, this: Ptr, impulse:
     let base = this.addr();
     let inverse = load_vec(e, base + INVERSE_INERTIA);
     let force = load_vec(e, impulse.addr());
-    let linear = add(
-        mul(splat(inverse, 3), force),
+    let linear = crate::sse::addps(
+        crate::sse::mulps(splat(inverse, 3), force),
         load_vec(e, base + LINEAR_VELOCITY),
     );
     store_vec(e, base + LINEAR_VELOCITY, linear);
     let centre = load_vec(e, base + CENTRE_OF_MASS);
-    let arm = sub(load_vec(e, point.addr()), centre);
+    let arm = crate::sse::subps(load_vec(e, point.addr()), centre);
     let force = load_vec(e, impulse.addr());
-    let first = mul(shufps(force, force, 0xc9), shufps(arm, arm, 0xd2));
-    let second = mul(shufps(force, force, 0xd2), shufps(arm, arm, 0xc9));
-    let torque = mul(sub(second, first), load_vec(e, base + INVERSE_INERTIA));
-    let angular = add(torque, load_vec(e, base + ANGULAR_VELOCITY));
+    let first = crate::sse::mulps(shufps(force, force, 0xc9), shufps(arm, arm, 0xd2));
+    let second = crate::sse::mulps(shufps(force, force, 0xd2), shufps(arm, arm, 0xc9));
+    let torque = crate::sse::mulps(
+        crate::sse::subps(second, first),
+        load_vec(e, base + INVERSE_INERTIA),
+    );
+    let angular = crate::sse::addps(torque, load_vec(e, base + ANGULAR_VELOCITY));
     store_vec(e, base + ANGULAR_VELOCITY, angular);
 }
 
@@ -166,10 +169,10 @@ pub fn hkp_sphere_motion_apply_angular_impulse(e: &mut Engine, this: Ptr, impuls
 /// the linear velocity, all four lanes.
 pub fn hkp_sphere_motion_apply_force(e: &mut Engine, this: Ptr, delta_time: f32, force: Ptr) {
     let base = this.addr();
-    let scaled = mul([delta_time; 4], load_vec(e, force.addr()));
+    let scaled = crate::sse::mulps([delta_time; 4], load_vec(e, force.addr()));
     let inverse_mass = splat(load_vec(e, base + INVERSE_INERTIA), 3);
-    let linear = add(
-        mul(inverse_mass, scaled),
+    let linear = crate::sse::addps(
+        crate::sse::mulps(inverse_mass, scaled),
         load_vec(e, base + LINEAR_VELOCITY),
     );
     store_vec(e, base + LINEAR_VELOCITY, linear);
@@ -220,24 +223,30 @@ pub fn hkp_sphere_motion_get_projected_point_velocity(
 ) {
     let base = this.addr();
     let centre = load_vec(e, base + CENTRE_OF_MASS);
-    let arm = sub(load_vec(e, point.addr()), centre);
+    let arm = crate::sse::subps(load_vec(e, point.addr()), centre);
     let direction = load_vec(e, normal.addr());
-    let first = mul(shufps(direction, direction, 0xc9), shufps(arm, arm, 0xd2));
-    let second = mul(shufps(direction, direction, 0xd2), shufps(arm, arm, 0xc9));
-    let linear = mul(load_vec(e, base + LINEAR_VELOCITY), direction);
-    let cross = sub(first, second);
-    let angular = mul(load_vec(e, base + ANGULAR_VELOCITY), cross);
-    let angular_sum = angular[2] + (angular[1] + angular[0]);
-    let linear_sum = linear[2] + (linear[1] + linear[0]);
-    let squares = mul(cross, cross);
-    let velocity = angular_sum + linear_sum;
+    let first = crate::sse::mulps(shufps(direction, direction, 0xc9), shufps(arm, arm, 0xd2));
+    let second = crate::sse::mulps(shufps(direction, direction, 0xd2), shufps(arm, arm, 0xc9));
+    let linear = crate::sse::mulps(load_vec(e, base + LINEAR_VELOCITY), direction);
+    let cross = crate::sse::subps(first, second);
+    let angular = crate::sse::mulps(load_vec(e, base + ANGULAR_VELOCITY), cross);
+    // `ADDSS` with the higher lane as the destination (the SSE NaN rules).
+    let sum = |v: Vec4| crate::sse::add(v[2], crate::sse::add(v[1], v[0]));
+    let angular_sum = sum(angular);
+    let linear_sum = sum(linear);
+    let squares = crate::sse::mulps(cross, cross);
+    let velocity = crate::sse::add(angular_sum, linear_sum);
     e.mem
         .set_u32(out_velocity.addr(), x87_quiet_bits(velocity.to_bits()));
-    let inertia = x87_quiet(e.mem.f32(base + INVERSE_INERTIA));
-    let square_sum = squares[2] + (squares[1] + squares[0]);
-    let mass =
-        f64::from(inertia) * f64::from(square_sum) + f64::from(e.mem.f32(base + INVERSE_MASS));
-    e.mem.set_f32(out_mass.addr(), mass as f32);
+    // `FLD [+0xC0]`, `FMUL` the scratch float, `FADD [+0xCC]` (a memory operand): the x87
+    // choice of NaN.
+    let inertia = x87_load32(e.mem.u32(base + INVERSE_INERTIA));
+    let square_sum = sum(squares);
+    let mass = x87_add(
+        x87_mul(inertia, x87_m32(square_sum.to_bits())),
+        x87_m32(e.mem.u32(base + INVERSE_MASS)),
+    );
+    e.mem.set_u32(out_mass.addr(), x87_store32(mass));
 }
 
 /// This unit's translated functions, by exe address.

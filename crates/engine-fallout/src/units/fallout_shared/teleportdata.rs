@@ -328,6 +328,285 @@ pub fn door_teleport_data_init_item(
     true
 }
 
+/// `00717e50` (`ECX` = object): returns the object's address + 4 (the
+/// engine map's name, `BaseProcess::GetActorPackageThatIsRunning`, is a
+/// folded body).
+const ADDRESS_PLUS_4: u32 = 0x0071_7e50;
+/// `00460140` (`ECX` = object): returns the object's address + 0x10.
+const ADDRESS_PLUS_16: u32 = 0x0046_0140;
+/// `00559450` (`ECX` = object): returns the object's first word.
+const FIRST_WORD: u32 = 0x0055_9450;
+/// `00537e90` (`ECX` = object, one word; `RET 4`): stores the word as the
+/// object's first word (the engine map's name,
+/// `BGSUnloadedFormBuffer::BGSUnloadedFormBuffer`, is a folded body).
+const SET_FIRST_WORD: u32 = 0x0053_7e90;
+/// `006f4ed0` (`ECX` = object, a point; `RET 4`): copies the point's three
+/// words to the object's +4.
+const SET_POINT_AT_4: u32 = 0x006f_4ed0;
+/// `00439090` (`ECX` = point, the other point; `RET 4`): the comparison of
+/// two points this unit's `Compare` uses (nonzero byte = they differ).
+const POINT_DIFFERS: u32 = 0x0043_9090;
+/// `TESObjectREFR::GetSpace` (Xbox PDB name of `00575ca0`; `ECX` =
+/// reference).
+const REFERENCE_GET_SPACE: u32 = 0x0057_5ca0;
+/// `00401500`: returns the byte at `011c54ba` (whether chunk data is
+/// byte-swapped when written).
+const WRITE_NEEDS_SWAP: u32 = 0x0040_1500;
+/// `TESForm::__AddChunkData` (Xbox PDB name of `00485990`; cdecl: tag,
+/// buffer, size).
+const ADD_CHUNK_DATA: u32 = 0x0048_5990;
+/// The save/load game object (`011de45c`, a pointer).
+const SAVE_LOAD_GAME: u32 = 0x011d_e45c;
+/// `008579b0` (`ECX` = save/load game; buffer, size; `RET 8`): writes bytes.
+const SAVE_WRITE: u32 = 0x0085_79b0;
+/// `TESSaveLoadGame::SaveNumericID` (Xbox PDB name of `00857a10`; buffer,
+/// size).
+const SAVE_NUMERIC_ID: u32 = 0x0085_7a10;
+/// `008579e0` (`ECX` = save/load game; buffer, size; `RET 8`): reads bytes.
+const LOAD_READ: u32 = 0x0085_79e0;
+/// `TESSaveLoadGame::LoadNumericID` (Xbox PDB name of `00857aa0`; buffer,
+/// size).
+const LOAD_NUMERIC_ID: u32 = 0x0085_7aa0;
+/// `00865e50` (`ECX` = save game buffer; data, size, a word; `RET 0xc`):
+/// writes bytes.
+const BUFFER_WRITE: u32 = 0x0086_5e50;
+/// `BGSSaveGameBuffer::SaveFormID_ov2` (Xbox PDB name of `00865df0`; `ECX` =
+/// buffer; form, a word).
+const BUFFER_SAVE_FORM_ID: u32 = 0x0086_5df0;
+/// `00864980` (`ECX` = load game buffer; data, size; `RET 8`): reads bytes.
+const BUFFER_READ: u32 = 0x0086_4980;
+/// `BGSLoadGameBuffer::LoadFormID_ov2` (Xbox PDB name of `008648e0`; `ECX`
+/// = buffer; the address of the form id to read).
+const BUFFER_LOAD_FORM_ID: u32 = 0x0086_48e0;
+
+/// Copies the three words at `from` to `to`.
+fn copy_point(e: &mut Engine, to: u32, from: u32) {
+    for i in 0..3 {
+        let word = e.mem.u32(from + 4 * i);
+        e.mem.set_u32(to + 4 * i, word);
+    }
+}
+
+// Translated from 0043a280 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Sets the rotation (+0x10) to the three words of the point at `point`
+/// (`RET 4`).
+pub fn fn_0043a280(e: &mut Engine, this: Ptr<DoorTeleportData>, point: Ptr) {
+    copy_point(e, this.addr() + 0x10, point.addr());
+}
+
+// Translated from 0043a390 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `DoorTeleportData::GetTeleportWorldLocation` (Xbox PDB; the location to
+/// fill; `RET 4`): fills `result` (`0043a3c0`) with the position (`this` +
+/// 4 through `00717e50`) and the linked door's space (`0043a3f0`); returns
+/// `result`.
+pub fn door_teleport_data_get_teleport_world_location(
+    e: &mut Engine,
+    this: Ptr<DoorTeleportData>,
+    result: Ptr,
+) -> Ptr {
+    let space = fn_0043a3f0(e, this);
+    let position = e.call(ADDRESS_PLUS_4, &args![this]).u32();
+    bgs_world_location_bgs_world_location(e, result, Ptr::new(position), space);
+    result
+}
+
+// Translated from 0043a3c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BGSWorldLocation::BGSWorldLocation` (Xbox PDB; a point and a space;
+/// `RET 8`): copies the point's three words to `this` and the space word to
+/// +0xC; returns `this`.
+pub fn bgs_world_location_bgs_world_location(
+    e: &mut Engine,
+    this: Ptr,
+    point: Ptr,
+    space: u32,
+) -> Ptr {
+    copy_point(e, this.addr(), point.addr());
+    e.mem.set_u32(this.addr() + 0xc, space);
+    this
+}
+
+// Translated from 0043a3f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The linked door's space (`TESObjectREFR::GetSpace`), 0 without a door.
+pub fn fn_0043a3f0(e: &mut Engine, this: Ptr<DoorTeleportData>) -> u32 {
+    let door = e.get(this, DoorTeleportData::pLinkedDoor);
+    if door == 0 {
+        return 0;
+    }
+    e.call(REFERENCE_GET_SPACE, &args![door]).u32()
+}
+
+// Translated from 0043a420 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Writes the `XTEL` chunk: nothing without a linked door; otherwise a
+/// 0x20-byte stack copy is prepared (`0055a400`) and cleared, filled with
+/// the door's form id (`0084e3a0`), the position, the rotation and the
+/// flags byte, byte-swapped when `00401500` says so, added as chunk data
+/// (`TESForm::__AddChunkData`) and swapped back when `00401500` says so.
+pub fn fn_0043a420(e: &mut Engine, this: Ptr<DoorTeleportData>) {
+    let door = e.get(this, DoorTeleportData::pLinkedDoor);
+    if door == 0 {
+        return;
+    }
+    let base = this.addr();
+    e.with_stack(0x20, |e, copy| {
+        let buffer = copy.addr();
+        e.call(DATA_PREPARE, &args![copy]);
+        e.call(FILL_MEMORY, &args![copy, 0u32, 0x20u32]);
+        let door = e.mem.u32(base);
+        let id = e.call(FORM_ID, &args![door]).u32();
+        e.mem.set_u32(buffer, id);
+        copy_point(e, buffer + 4, base + 4);
+        copy_point(e, buffer + 0x10, base + 0x10);
+        let flags = e.get(this, DoorTeleportData::cFlags);
+        e.mem.set_u8(buffer + 0x1c, flags);
+        if e.call(WRITE_NEEDS_SWAP, &[]).u8() != 0 {
+            e.call(DATA_SWAP, &args![copy]);
+        }
+        e.call(ADD_CHUNK_DATA, &args![CHUNK_XTEL, copy, 0x20u32]);
+        if e.call(WRITE_NEEDS_SWAP, &[]).u8() != 0 {
+            e.call(DATA_SWAP, &args![copy]);
+        }
+    });
+}
+
+// Translated from 0043a810 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Copies another teleport data (`RET 4`): the linked door (`00559450`,
+/// `00537e90`), the position (`00717e50`, `006f4ed0`), the rotation
+/// (`00460140`, `0043a280`) and the flags byte.
+pub fn fn_0043a810(e: &mut Engine, this: Ptr<DoorTeleportData>, other: Ptr<DoorTeleportData>) {
+    let door = e.call(FIRST_WORD, &args![other]).u32();
+    e.call(SET_FIRST_WORD, &args![this, door]);
+    let position = e.call(ADDRESS_PLUS_4, &args![other]).u32();
+    e.call(SET_POINT_AT_4, &args![this, position]);
+    let rotation = e.call(ADDRESS_PLUS_16, &args![other]).u32();
+    fn_0043a280(e, this, Ptr::new(rotation));
+    let flags = e.get(other, DoorTeleportData::cFlags);
+    e.set(this, DoorTeleportData::cFlags, flags);
+}
+
+// Translated from 0043a860 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `DoorTeleportData::Compare` (Xbox PDB; the other data; `RET 4`): true
+/// when the linked doors (`00559450`), the positions (`00439090` on the two
+/// `00717e50` points), the rotations (`00439090` on the two `00460140`
+/// points) or the flags differ, checked in that order.
+pub fn door_teleport_data_compare(
+    e: &mut Engine,
+    this: Ptr<DoorTeleportData>,
+    other: Ptr<DoorTeleportData>,
+) -> bool {
+    let mine = e.call(FIRST_WORD, &args![this]).u32();
+    let theirs = e.call(FIRST_WORD, &args![other]).u32();
+    if mine != theirs {
+        return true;
+    }
+    let theirs = e.call(ADDRESS_PLUS_4, &args![other]).u32();
+    let mine = e.call(ADDRESS_PLUS_4, &args![this]).u32();
+    if e.call(POINT_DIFFERS, &args![mine, theirs]).u8() != 0 {
+        return true;
+    }
+    let theirs = e.call(ADDRESS_PLUS_16, &args![other]).u32();
+    let mine = e.call(ADDRESS_PLUS_16, &args![this]).u32();
+    if e.call(POINT_DIFFERS, &args![mine, theirs]).u8() != 0 {
+        return true;
+    }
+    e.get(this, DoorTeleportData::cFlags) != e.get(other, DoorTeleportData::cFlags)
+}
+
+// Translated from 0043a8f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The save size: 0xC + 0xC + 4 = 0x1C (a `u16` summed on the stack).
+pub fn fn_0043a8f0(_e: &mut Engine, _this: Ptr<DoorTeleportData>) -> u16 {
+    let mut size: u16 = 0;
+    size += 0xc;
+    size += 0xc;
+    size += 4;
+    size
+}
+
+// Translated from 0043a930 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `DoorTeleportData::SaveGame` (Xbox PDB): writes the position and the
+/// rotation (0xC bytes each, `008579b0` on the save/load game at
+/// `011de45c`), then the linked door's form id (0 without a door) through
+/// `SaveNumericID`.
+pub fn door_teleport_data_save_game(e: &mut Engine, this: Ptr<DoorTeleportData>) {
+    let base = this.addr();
+    let game = e.global::<u32>(SAVE_LOAD_GAME);
+    e.call(SAVE_WRITE, &args![game, base + 4, 0xcu32]);
+    let game = e.global::<u32>(SAVE_LOAD_GAME);
+    e.call(SAVE_WRITE, &args![game, base + 0x10, 0xcu32]);
+    e.with_stack(4, |e, id| {
+        e.mem.set_u32(id.addr(), 0);
+        let door = e.get(this, DoorTeleportData::pLinkedDoor);
+        if door != 0 {
+            let form_id = e.call(FORM_ID, &args![door]).u32();
+            e.mem.set_u32(id.addr(), form_id);
+        }
+        let game = e.global::<u32>(SAVE_LOAD_GAME);
+        e.call(SAVE_NUMERIC_ID, &args![game, id, 4u32]);
+    });
+}
+
+// Translated from 0043a9a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `DoorTeleportData::LoadGame` (Xbox PDB): reads the position and the
+/// rotation (0xC bytes each, `008579e0`), then the linked door's form id
+/// through `LoadNumericID` into the door word.
+pub fn door_teleport_data_load_game(e: &mut Engine, this: Ptr<DoorTeleportData>) {
+    let base = this.addr();
+    let game = e.global::<u32>(SAVE_LOAD_GAME);
+    e.call(LOAD_READ, &args![game, base + 4, 0xcu32]);
+    let game = e.global::<u32>(SAVE_LOAD_GAME);
+    e.call(LOAD_READ, &args![game, base + 0x10, 0xcu32]);
+    e.with_stack(4, |e, id| {
+        let game = e.global::<u32>(SAVE_LOAD_GAME);
+        e.call(LOAD_NUMERIC_ID, &args![game, id, 4u32]);
+        let form_id = e.mem.u32(id.addr());
+        e.set(this, DoorTeleportData::pLinkedDoor, form_id);
+    });
+}
+
+// Translated from 0043a9f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Resolves the linked door's form id: when nonzero, the form with that id
+/// (`004839c0`) cast to `TESObjectREFR` (`__RTDynamicCast`) replaces it.
+pub fn fn_0043a9f0(e: &mut Engine, this: Ptr<DoorTeleportData>) {
+    let id = e.get(this, DoorTeleportData::pLinkedDoor);
+    if id == 0 {
+        return;
+    }
+    let form = e.call(LOOKUP_FORM, &args![id]).u32();
+    let door = e
+        .call(
+            DYNAMIC_CAST,
+            &args![form, 0u32, TYPE_TES_FORM, TYPE_TES_OBJECT_REFR, 0u32],
+        )
+        .u32();
+    e.set(this, DoorTeleportData::pLinkedDoor, door);
+}
+
+// Translated from 0043aa40 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `DoorTeleportData::SaveGame_ov2` (Xbox PDB; the save game buffer;
+/// `RET 4`): writes the position, the rotation (0xC bytes each) and the
+/// flags byte (`00865e50`, each with 0), then the linked door
+/// (`SaveFormID_ov2` with 0).
+pub fn door_teleport_data_save_game_ov2(e: &mut Engine, this: Ptr<DoorTeleportData>, buffer: Ptr) {
+    let base = this.addr();
+    e.call(BUFFER_WRITE, &args![buffer, base + 4, 0xcu32, 0u32]);
+    e.call(BUFFER_WRITE, &args![buffer, base + 0x10, 0xcu32, 0u32]);
+    e.call(BUFFER_WRITE, &args![buffer, base + 0x1c, 1u32, 0u32]);
+    let door = e.get(this, DoorTeleportData::pLinkedDoor);
+    e.call(BUFFER_SAVE_FORM_ID, &args![buffer, door, 0u32]);
+}
+
+// Translated from 0043aaa0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `DoorTeleportData::LoadGame_ov2` (Xbox PDB; the load game buffer;
+/// `RET 4`): reads the position, the rotation (0xC bytes each) and the
+/// flags byte (`00864980`), then the linked door's form id into the door
+/// word (`LoadFormID_ov2`).
+pub fn door_teleport_data_load_game_ov2(e: &mut Engine, this: Ptr<DoorTeleportData>, buffer: Ptr) {
+    let base = this.addr();
+    e.call(BUFFER_READ, &args![buffer, base + 4, 0xcu32]);
+    e.call(BUFFER_READ, &args![buffer, base + 0x10, 0xcu32]);
+    e.call(BUFFER_READ, &args![buffer, base + 0x1c, 1u32]);
+    e.call(BUFFER_LOAD_FORM_ID, &args![buffer, this]);
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -355,6 +634,43 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(
             0x0043_a590,
             door_teleport_data_init_item(Ptr<DoorTeleportData>, Ptr) -> bool
+        ),
+        entry!(0x0043_a280, fn_0043a280(Ptr<DoorTeleportData>, Ptr)),
+        entry!(
+            0x0043_a390,
+            door_teleport_data_get_teleport_world_location(Ptr<DoorTeleportData>, Ptr) -> Ptr
+        ),
+        entry!(
+            0x0043_a3c0,
+            bgs_world_location_bgs_world_location(Ptr, Ptr, u32) -> Ptr
+        ),
+        entry!(0x0043_a3f0, fn_0043a3f0(Ptr<DoorTeleportData>) -> u32),
+        entry!(0x0043_a420, fn_0043a420(Ptr<DoorTeleportData>)),
+        entry!(
+            0x0043_a810,
+            fn_0043a810(Ptr<DoorTeleportData>, Ptr<DoorTeleportData>)
+        ),
+        entry!(
+            0x0043_a860,
+            door_teleport_data_compare(Ptr<DoorTeleportData>, Ptr<DoorTeleportData>) -> bool
+        ),
+        entry!(0x0043_a8f0, fn_0043a8f0(Ptr<DoorTeleportData>) -> u16),
+        entry!(
+            0x0043_a930,
+            door_teleport_data_save_game(Ptr<DoorTeleportData>)
+        ),
+        entry!(
+            0x0043_a9a0,
+            door_teleport_data_load_game(Ptr<DoorTeleportData>)
+        ),
+        entry!(0x0043_a9f0, fn_0043a9f0(Ptr<DoorTeleportData>)),
+        entry!(
+            0x0043_aa40,
+            door_teleport_data_save_game_ov2(Ptr<DoorTeleportData>, Ptr)
+        ),
+        entry!(
+            0x0043_aaa0,
+            door_teleport_data_load_game_ov2(Ptr<DoorTeleportData>, Ptr)
         ),
     ]
 }
@@ -642,6 +958,260 @@ mod tests {
         assert_eq!(
             u64::from(rotation[0]) | u64::from(rotation[1]) << 32,
             0x7ff8_0000_2000_0000
+        );
+    }
+}
+
+#[cfg(test)]
+mod tests_n042 {
+    use super::*;
+
+    type Log = Vec<(u32, Vec<u32>)>;
+
+    fn run(e: &mut Engine, addr: u32, words: &[u32]) -> (Ret, Log) {
+        e.call_log = Some(vec![]);
+        let result = e.call(addr, words);
+        let log = e
+            .call_log
+            .take()
+            .unwrap()
+            .into_iter()
+            .filter(|(a, _)| *a != addr)
+            .collect();
+        (result, log)
+    }
+
+    fn calls(log: &Log, addr: u32) -> Vec<Vec<u32>> {
+        log.iter()
+            .filter(|(a, _)| *a == addr)
+            .map(|(_, w)| w.clone())
+            .collect()
+    }
+
+    fn engine(zero: &[u32]) -> Engine {
+        let mut e = Engine::new();
+        for addr in zero {
+            e.register(*addr, |_, _| Ret::default());
+        }
+        e.register(ADDRESS_PLUS_4, |_, a| (a[0] + 4).into_ret());
+        e.register(ADDRESS_PLUS_16, |_, a| (a[0] + 0x10).into_ret());
+        e.register(FIRST_WORD, |e, a| e.mem.u32(a[0]).into_ret());
+        e
+    }
+
+    fn data(e: &mut Engine, seed: u32) -> u32 {
+        let this = e.mem.alloc(0x20);
+        for i in 0..8 {
+            e.mem.set_u32(this + 4 * i, seed + i);
+        }
+        this
+    }
+
+    #[test]
+    fn rotation_setter_and_world_location_copy_points() {
+        let mut e = engine(&[]);
+        let this = data(&mut e, 0x100);
+        let point = data(&mut e, 0x900);
+        e.call(0x0043_a280, &args![this, point]);
+        let words: Vec<u32> = (0..8).map(|i| e.mem.u32(this + 4 * i)).collect();
+        assert_eq!(
+            words,
+            vec![0x100, 0x101, 0x102, 0x103, 0x900, 0x901, 0x902, 0x107]
+        );
+        e.register(REFERENCE_GET_SPACE, |_, a| (a[0] + 1).into_ret());
+        let result = e.mem.alloc(0x10);
+        let (ret, log) = run(&mut e, 0x0043_a390, &[this, result]);
+        assert_eq!(ret.u32(), result);
+        assert_eq!(calls(&log, REFERENCE_GET_SPACE), vec![vec![0x100]]);
+        let words: Vec<u32> = (0..4).map(|i| e.mem.u32(result + 4 * i)).collect();
+        assert_eq!(words, vec![0x101, 0x102, 0x103, 0x101]);
+        e.mem.set_u32(this, 0);
+        assert_eq!(e.call(0x0043_a3f0, &args![this]).u32(), 0);
+        let (ret, _) = run(&mut e, 0x0043_a3c0, &[result, point, 0x77]);
+        assert_eq!(ret.u32(), result);
+        let words: Vec<u32> = (0..4).map(|i| e.mem.u32(result + 4 * i)).collect();
+        assert_eq!(words, vec![0x900, 0x901, 0x902, 0x77]);
+    }
+
+    #[test]
+    fn xtel_chunk_is_written_with_the_doors_form_id() {
+        let mut e = engine(&[DATA_PREPARE, DATA_SWAP]);
+        e.register(FORM_ID, |_, _| 0xabcdu32.into_ret());
+        e.register(WRITE_NEEDS_SWAP, |_, _| 1u32.into_ret());
+        e.register(ADD_CHUNK_DATA, |e, a| {
+            let words: Vec<u32> = (0..8).map(|i| e.mem.u32(a[1] + 4 * i)).collect();
+            assert_eq!(
+                words,
+                vec![0xabcd, 0x101, 0x102, 0x103, 0x104, 0x105, 0x106, 0x07]
+            );
+            Ret::default()
+        });
+        e.register(FILL_MEMORY, |e, a| {
+            for i in 0..a[2] {
+                e.mem.set_u8(a[0] + i, a[1] as u8);
+            }
+            Ret::default()
+        });
+        let this = data(&mut e, 0x100);
+        let (_, log) = run(&mut e, 0x0043_a420, &[this]);
+        let copy = calls(&log, DATA_PREPARE)[0][0];
+        assert_eq!(calls(&log, FORM_ID), vec![vec![0x100]]);
+        assert_eq!(
+            calls(&log, ADD_CHUNK_DATA),
+            vec![vec![CHUNK_XTEL, copy, 0x20]]
+        );
+        assert_eq!(calls(&log, DATA_SWAP), vec![vec![copy], vec![copy]]);
+        e.register(WRITE_NEEDS_SWAP, |_, _| 0x100u32.into_ret());
+        let (_, log) = run(&mut e, 0x0043_a420, &[this]);
+        assert!(calls(&log, DATA_SWAP).is_empty());
+        e.mem.set_u32(this, 0);
+        let (_, log) = run(&mut e, 0x0043_a420, &[this]);
+        assert!(log.is_empty());
+    }
+
+    #[test]
+    fn copy_takes_door_points_and_flags() {
+        let mut e = engine(&[]);
+        e.register(SET_FIRST_WORD, |e, a| {
+            e.mem.set_u32(a[0], a[1]);
+            Ret::default()
+        });
+        e.register(SET_POINT_AT_4, |e, a| {
+            for i in 0..3 {
+                let w = e.mem.u32(a[1] + 4 * i);
+                e.mem.set_u32(a[0] + 4 + 4 * i, w);
+            }
+            Ret::default()
+        });
+        let this = data(&mut e, 0x100);
+        let other = data(&mut e, 0x200);
+        e.call(0x0043_a810, &args![this, other]);
+        let words: Vec<u32> = (0..8).map(|i| e.mem.u32(this + 4 * i)).collect();
+        assert_eq!(
+            words,
+            vec![0x200, 0x201, 0x202, 0x203, 0x204, 0x205, 0x206, 0x107]
+        );
+    }
+
+    #[test]
+    fn compare_checks_door_points_and_flags_in_order() {
+        let mut e = engine(&[]);
+        e.register(POINT_DIFFERS, |e, a| {
+            u32::from(e.mem.u32(a[0]) != e.mem.u32(a[1])).into_ret()
+        });
+        let this = data(&mut e, 0x100);
+        let other = data(&mut e, 0x100);
+        let (ret, log) = run(&mut e, 0x0043_a860, &[this, other]);
+        assert!(!ret.bool());
+        assert_eq!(
+            calls(&log, POINT_DIFFERS),
+            vec![vec![this + 4, other + 4], vec![this + 0x10, other + 0x10]]
+        );
+        e.mem.set_u8(other + 0x1c, 9);
+        assert!(e.call(0x0043_a860, &args![this, other]).bool());
+        e.mem.set_u32(other + 0x10, 9);
+        let (ret, log) = run(&mut e, 0x0043_a860, &[this, other]);
+        assert!(ret.bool());
+        assert_eq!(calls(&log, POINT_DIFFERS).len(), 2);
+        e.mem.set_u32(other + 4, 9);
+        let (ret, log) = run(&mut e, 0x0043_a860, &[this, other]);
+        assert!(ret.bool());
+        assert_eq!(calls(&log, POINT_DIFFERS).len(), 1);
+        e.mem.set_u32(other, 9);
+        let (ret, log) = run(&mut e, 0x0043_a860, &[this, other]);
+        assert!(ret.bool());
+        assert!(calls(&log, POINT_DIFFERS).is_empty());
+    }
+
+    #[test]
+    fn save_size_is_0x1c() {
+        let mut e = engine(&[]);
+        assert_eq!(e.call(0x0043_a8f0, &args![0x1234u32]).u32() & 0xffff, 0x1c);
+    }
+
+    #[test]
+    fn save_and_load_game_go_through_the_save_load_game() {
+        let mut e = engine(&[SAVE_WRITE, LOAD_READ]);
+        e.map(SAVE_LOAD_GAME, 4);
+        e.mem.set_u32(SAVE_LOAD_GAME, 0x7700);
+        e.register(FORM_ID, |_, _| 0xabcdu32.into_ret());
+        e.register(SAVE_NUMERIC_ID, |e, a| {
+            assert_eq!(e.mem.u32(a[1]), 0xabcd);
+            Ret::default()
+        });
+        e.register(LOAD_NUMERIC_ID, |e, a| {
+            e.mem.set_u32(a[1], 0x4444);
+            Ret::default()
+        });
+        let this = data(&mut e, 0x100);
+        let (_, log) = run(&mut e, 0x0043_a930, &[this]);
+        assert_eq!(
+            calls(&log, SAVE_WRITE),
+            vec![vec![0x7700, this + 4, 0xc], vec![0x7700, this + 0x10, 0xc]]
+        );
+        let saved = calls(&log, SAVE_NUMERIC_ID);
+        assert_eq!(saved.len(), 1);
+        assert_eq!((saved[0][0], saved[0][2]), (0x7700, 4));
+        e.register(SAVE_NUMERIC_ID, |e, a| {
+            assert_eq!(e.mem.u32(a[1]), 0);
+            Ret::default()
+        });
+        e.mem.set_u32(this, 0);
+        let (_, log) = run(&mut e, 0x0043_a930, &[this]);
+        assert!(calls(&log, FORM_ID).is_empty());
+        let (_, log) = run(&mut e, 0x0043_a9a0, &[this]);
+        assert_eq!(
+            calls(&log, LOAD_READ),
+            vec![vec![0x7700, this + 4, 0xc], vec![0x7700, this + 0x10, 0xc]]
+        );
+        assert_eq!(e.mem.u32(this), 0x4444);
+    }
+
+    #[test]
+    fn resolve_replaces_the_form_id_with_the_cast_reference() {
+        let mut e = engine(&[]);
+        e.register(LOOKUP_FORM, |_, a| (a[0] + 0x1000).into_ret());
+        e.register(DYNAMIC_CAST, |_, a| (a[0] + 1).into_ret());
+        let this = data(&mut e, 0x100);
+        let (_, log) = run(&mut e, 0x0043_a9f0, &[this]);
+        assert_eq!(
+            calls(&log, DYNAMIC_CAST),
+            vec![vec![0x1100, 0, TYPE_TES_FORM, TYPE_TES_OBJECT_REFR, 0]]
+        );
+        assert_eq!(e.mem.u32(this), 0x1101);
+        e.mem.set_u32(this, 0);
+        let (_, log) = run(&mut e, 0x0043_a9f0, &[this]);
+        assert!(log.is_empty());
+    }
+
+    #[test]
+    fn buffer_save_and_load_write_points_flags_and_door() {
+        let mut e = engine(&[
+            BUFFER_WRITE,
+            BUFFER_SAVE_FORM_ID,
+            BUFFER_READ,
+            BUFFER_LOAD_FORM_ID,
+        ]);
+        let this = data(&mut e, 0x100);
+        let (_, log) = run(&mut e, 0x0043_aa40, &[this, 0x8800]);
+        assert_eq!(
+            log,
+            vec![
+                (BUFFER_WRITE, vec![0x8800, this + 4, 0xc, 0]),
+                (BUFFER_WRITE, vec![0x8800, this + 0x10, 0xc, 0]),
+                (BUFFER_WRITE, vec![0x8800, this + 0x1c, 1, 0]),
+                (BUFFER_SAVE_FORM_ID, vec![0x8800, 0x100, 0]),
+            ]
+        );
+        let (_, log) = run(&mut e, 0x0043_aaa0, &[this, 0x8800]);
+        assert_eq!(
+            log,
+            vec![
+                (BUFFER_READ, vec![0x8800, this + 4, 0xc]),
+                (BUFFER_READ, vec![0x8800, this + 0x10, 0xc]),
+                (BUFFER_READ, vec![0x8800, this + 0x1c, 1]),
+                (BUFFER_LOAD_FORM_ID, vec![0x8800, this]),
+            ]
         );
     }
 }

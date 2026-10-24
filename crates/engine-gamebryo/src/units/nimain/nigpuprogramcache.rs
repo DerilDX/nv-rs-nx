@@ -578,14 +578,17 @@ pub fn ni_t_fixed_string_map_scalar_deleting_destructor(
 
 // Translated from 00ee90f0 (decompiled, FalloutNV.exe 1.4.0.525)
 // Translation incomplete: 00ee90f0 - the /GS cookie check (00ec408c) guarding the 0x400-byte flag buffer is not modeled
-/// `NiGPUProgramCache::PruneUnusedConstants` (Xbox PDB; static, two words: a program and a
-/// resource set): with a 0x400-byte flag per resource (cleared with `_memset`), every
+/// `NiGPUProgramCache::PruneUnusedConstants` (Xbox PDB: static; two stack words: a program and
+/// a resource set): with a 0x400-byte flag per resource (cleared with `_memset`), every
 /// variable the program names (slot +0x48 the count, asked again each round, +0x4c the
 /// name) marks the first resource whose variable handle (`GetVariable`) is that name, or
 /// compares equal as text; then from the last resource down every unmarked one is removed
 /// (`00ee8fe0`). Answers true.
+/// On the PC it is a vtable slot (31, no direct callers), so it is called with `ECX` set:
+/// `this` comes first, unread.
 pub fn ni_gpu_program_cache_prune_unused_constants(
     e: &mut Engine,
+    _this: Ptr,
     program: Ptr,
     resources: Ptr,
 ) -> bool {
@@ -1257,7 +1260,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         ),
         entry!(
             0x00ee_90f0,
-            ni_gpu_program_cache_prune_unused_constants(Ptr, Ptr) -> bool
+            ni_gpu_program_cache_prune_unused_constants(Ptr, Ptr, Ptr) -> bool
         ),
         entry!(0x00ee_9230, fn_00ee9230(Ptr, Ptr) -> bool),
         entry!(
@@ -1798,7 +1801,10 @@ mod n016_tests {
         let set = r.e.mem.alloc(0xc);
         r.e.mem.set_u32(set, elements);
         r.e.mem.set_u32(set + 8, 4);
-        assert!(r.e.call(0x00ee_90f0, &args![program, set]).bool());
+        assert!(r
+            .e
+            .call(0x00ee_90f0, &args![0x5555u32, program, set])
+            .bool());
         assert_eq!(r.e.mem.u32(set + 8), 2);
         assert_eq!(r.e.mem.u32(elements), resources[0]);
         assert_eq!(r.e.mem.u32(elements + 4), resources[3]);

@@ -165,6 +165,106 @@ pub fn tes_description_get_description(e: &mut Engine, this: Ptr, form: Ptr, chu
     }
 }
 
+/// The `DESC` chunk (`0x43534544`).
+const CHUNK_DESC: u32 = 0x4353_4544;
+/// `TESForm::AddChunkArray` (`004856f0`, `cdecl (chunk, data, size)`).
+const ADD_CHUNK_ARRAY: u32 = 0x0048_56f0;
+/// The type descriptor of `BaseFormComponent` (`01183040`, its name read at
+/// +8); `CAST_FROM` is `TESDescription`'s.
+const TYPE_BASE_FORM_COMPONENT: u32 = 0x0118_3040;
+/// `BSStringT::StrCmp` (`00408a80`, `thiscall (string, text, flag)`; flag 0
+/// compares with `00408b20`).
+const STRING_COMPARE: u32 = 0x0040_8a80;
+/// The getter `CopyComponent` uses for the other description's offset
+/// (`00726070`, `thiscall`, no name confirmed).
+const OTHER_OFFSET: u32 = 0x0072_6070;
+
+// Translated from 00482d30 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`thiscall`, no arguments): the length of the
+/// shared description text (`004048e0` on `011c5498`); `this` is not read.
+pub fn fn_00482d30(e: &mut Engine, _this: Ptr) -> u32 {
+    e.call(STRING_LENGTH, &args![DESCRIPTION_TEXT]).u32()
+}
+
+// Translated from 00482cd0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TESDescription::SaveDescriptionData` (Xbox PDB, `cdecl (description,
+/// chunk)`): with a description, adds `chunk` holding its text and the
+/// terminating zero (virtual slot `+0x10` with form 0 and `DESC`, length
+/// `fn_00482d30 + 1`), or a single zero byte when the shared text is empty.
+pub fn tes_description_save_description_data(e: &mut Engine, description: Ptr, chunk: u32) {
+    if description.is_null() {
+        return;
+    }
+    if fn_00482d30(e, description) != 0 {
+        let size = fn_00482d30(e, description).wrapping_add(1);
+        let text = e
+            .vcall(description.addr(), 0x10, &args![0u32, CHUNK_DESC])
+            .u32();
+        e.call(ADD_CHUNK_ARRAY, &args![chunk, text, size]);
+    } else {
+        e.with_stack(4, |e, zero| {
+            e.mem.set_u8(zero.addr(), 0);
+            e.call(ADD_CHUNK_ARRAY, &args![chunk, zero, 1u32]);
+        });
+    }
+}
+
+// Translated from 00482cb0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TESDescription::Save` (Xbox PDB): `SaveDescriptionData(this, DESC)`.
+pub fn tes_description_save(e: &mut Engine, this: Ptr) {
+    tes_description_save_description_data(e, this, CHUNK_DESC);
+}
+
+// Translated from 00482d80 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TESDescription::CopyComponent` (Xbox PDB): when `other` casts from
+/// `BaseFormComponent` to `TESDescription`, sets the shared text to its
+/// text (slot `+0x10`, form 0, `DESC`) and takes its offset (`00726070`)
+/// into +4.
+pub fn tes_description_copy_component(e: &mut Engine, this: Ptr, other: Ptr) {
+    let source = e
+        .call(
+            DYNAMIC_CAST,
+            &args![other, 0u32, TYPE_BASE_FORM_COMPONENT, CAST_FROM, 0u32],
+        )
+        .u32();
+    if source == 0 {
+        return;
+    }
+    let text = e.vcall(source, 0x10, &args![0u32, CHUNK_DESC]).u32();
+    e.call(STRING_SET, &args![DESCRIPTION_TEXT, text, 0u32]);
+    let offset = e.call(OTHER_OFFSET, &args![source]).u32();
+    e.mem
+        .set_u32(this.addr().wrapping_add(DESCRIPTION_OFFSET), offset);
+}
+
+// Translated from 00482df0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TESDescription::CompareComponent` (Xbox PDB): true (different) when
+/// `other` is no `TESDescription`; false when both lengths (`fn_00482d30`)
+/// are 0; otherwise true when the lengths differ or `StrCmp` of the shared
+/// text with `other`'s text (slot `+0x10`, form 0, `DESC`) is non-zero.
+pub fn tes_description_compare_component(e: &mut Engine, this: Ptr, other: Ptr) -> bool {
+    let source = e
+        .call(
+            DYNAMIC_CAST,
+            &args![other, 0u32, TYPE_BASE_FORM_COMPONENT, CAST_FROM, 0u32],
+        )
+        .ptr();
+    if source.is_null() {
+        return true;
+    }
+    if fn_00482d30(e, this) == 0 && fn_00482d30(e, source) == 0 {
+        return false;
+    }
+    let own = fn_00482d30(e, this);
+    if own != fn_00482d30(e, source) {
+        return true;
+    }
+    let text = e.vcall(source.addr(), 0x10, &args![0u32, CHUNK_DESC]).u32();
+    e.call(STRING_COMPARE, &args![DESCRIPTION_TEXT, text, 0u32])
+        .u32()
+        != 0
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -174,6 +274,11 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00483080, fn_00483080(Ptr, Ptr)),
         entry!(0x00482f40, tes_description_load_description(Ptr, Ptr, u32)),
         entry!(0x00482e90, tes_description_get_description(Ptr, Ptr, u32) -> Ptr),
+        entry!(0x0048_2d30, fn_00482d30(Ptr) -> u32),
+        entry!(0x0048_2cd0, tes_description_save_description_data(Ptr, u32)),
+        entry!(0x0048_2cb0, tes_description_save(Ptr)),
+        entry!(0x0048_2d80, tes_description_copy_component(Ptr, Ptr)),
+        entry!(0x0048_2df0, tes_description_compare_component(Ptr, Ptr) -> bool),
     ]
 }
 
@@ -361,5 +466,156 @@ mod b014_tests {
             0x6000
         );
         assert!(calls(&e, DYNAMIC_CAST).is_empty());
+    }
+}
+
+#[cfg(test)]
+mod n043_tests {
+    use super::*;
+
+    const TEXT_SLOT: u32 = 0x7100_0010;
+
+    fn calls(e: &Engine, addr: u32) -> Vec<Vec<u32>> {
+        e.call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|c| c.0 == addr)
+            .map(|c| c.1.clone())
+            .collect()
+    }
+
+    /// The shared length is the word at `0x7300_0000`; descriptions answer
+    /// `0x6000 + this` from slot `+0x10`.
+    fn engine() -> Engine {
+        let mut e = Engine::new();
+        e.map(0x011c_3000, 0x3000);
+        e.map(0x7300_0000, 0x10);
+        e.register(STRING_SET, |_, _| Ret::default());
+        e.register(STRING_LENGTH, |e, _| e.mem.u32(0x7300_0000).into_ret());
+        e.register(TEXT_SLOT, |_, a| (0x6000 + a[0]).into_ret());
+        e.register(ADD_CHUNK_ARRAY, |e, a| {
+            if a[2] == 1 {
+                let first = e.mem.u8(a[1]);
+                e.mem.set_u32(0x7300_0004, u32::from(first));
+            }
+            Ret::default()
+        });
+        e
+    }
+
+    fn description(e: &mut Engine) -> u32 {
+        let vtable = e.mem.alloc(0x20);
+        e.mem.set_u32(vtable + 0x10, TEXT_SLOT);
+        let object = e.mem.alloc(8);
+        e.mem.set_u32(object, vtable);
+        object
+    }
+
+    #[test]
+    fn length_of_the_shared_text() {
+        let mut e = engine();
+        e.mem.set_u32(0x7300_0000, 7);
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x0048_2d30, &args![0x1234u32]).u32(), 7);
+        assert_eq!(calls(&e, STRING_LENGTH), vec![vec![DESCRIPTION_TEXT]]);
+    }
+
+    #[test]
+    fn save_writes_the_text_or_one_zero_byte() {
+        let mut e = engine();
+        let this = description(&mut e);
+        e.mem.set_u32(0x7300_0000, 4);
+        e.call_log = Some(vec![]);
+        e.call(0x0048_2cb0, &args![this]);
+        assert_eq!(
+            calls(&e, ADD_CHUNK_ARRAY),
+            vec![vec![CHUNK_DESC, 0x6000 + this, 5]]
+        );
+        assert_eq!(calls(&e, TEXT_SLOT), vec![vec![this, 0, CHUNK_DESC]]);
+        // Empty text: one zero byte, under the given chunk.
+        e.mem.set_u32(0x7300_0000, 0);
+        e.mem.set_u32(0x7300_0004, 0xff);
+        e.call_log = Some(vec![]);
+        e.call(0x0048_2cd0, &args![this, 0x1122_3344u32]);
+        let added = calls(&e, ADD_CHUNK_ARRAY);
+        assert_eq!(added.len(), 1);
+        assert_eq!((added[0][0], added[0][2]), (0x1122_3344, 1));
+        assert_eq!(e.mem.u32(0x7300_0004), 0);
+        // No description: nothing.
+        e.call_log = Some(vec![]);
+        e.call(0x0048_2cd0, &args![0u32, 0x1122_3344u32]);
+        assert!(calls(&e, ADD_CHUNK_ARRAY).is_empty());
+    }
+
+    #[test]
+    fn copy_component_takes_the_text_and_offset() {
+        let mut e = engine();
+        let this = description(&mut e);
+        let other = description(&mut e);
+        e.register(OTHER_OFFSET, |_, a| (a[0] + 1).into_ret());
+        e.register(DYNAMIC_CAST, |_, a| a[0].into_ret());
+        e.call_log = Some(vec![]);
+        e.call(0x0048_2d80, &args![this, other]);
+        assert_eq!(
+            calls(&e, DYNAMIC_CAST),
+            vec![vec![other, 0, TYPE_BASE_FORM_COMPONENT, CAST_FROM, 0]]
+        );
+        assert_eq!(
+            calls(&e, STRING_SET),
+            vec![vec![DESCRIPTION_TEXT, 0x6000 + other, 0]]
+        );
+        assert_eq!(e.mem.u32(this + 4), other + 1);
+        // Not a description: nothing.
+        e.register(DYNAMIC_CAST, |_, _| 0u32.into_ret());
+        e.mem.set_u32(this + 4, 9);
+        e.call_log = Some(vec![]);
+        e.call(0x0048_2d80, &args![this, other]);
+        assert!(calls(&e, STRING_SET).is_empty());
+        assert_eq!(e.mem.u32(this + 4), 9);
+    }
+
+    #[test]
+    fn compare_component_branches() {
+        let mut e = engine();
+        let this = description(&mut e);
+        let other = description(&mut e);
+        e.register(STRING_COMPARE, |e, _| e.mem.u32(0x7300_0008).into_ret());
+        // Not a description: different.
+        e.register(DYNAMIC_CAST, |_, _| 0u32.into_ret());
+        assert!(e.call(0x0048_2df0, &args![this, other]).bool());
+        e.register(DYNAMIC_CAST, |_, a| a[0].into_ret());
+        // Both empty: same, nothing compared.
+        e.call_log = Some(vec![]);
+        assert!(!e.call(0x0048_2df0, &args![this, other]).bool());
+        assert!(calls(&e, STRING_COMPARE).is_empty());
+        // Same length, StrCmp 0: same; non-zero: different.
+        e.mem.set_u32(0x7300_0000, 3);
+        e.call_log = Some(vec![]);
+        assert!(!e.call(0x0048_2df0, &args![this, other]).bool());
+        assert_eq!(
+            calls(&e, STRING_COMPARE),
+            vec![vec![DESCRIPTION_TEXT, 0x6000 + other, 0]]
+        );
+        e.mem.set_u32(0x7300_0008, 1);
+        assert!(e.call(0x0048_2df0, &args![this, other]).bool());
+    }
+
+    #[test]
+    fn compare_component_different_lengths() {
+        let mut e = engine();
+        let this = description(&mut e);
+        let other = description(&mut e);
+        e.register(DYNAMIC_CAST, |_, a| a[0].into_ret());
+        e.register(STRING_COMPARE, |_, _| 0u32.into_ret());
+        // The length double answers 3 then 4.
+        let mut n = 0u32;
+        e.register_double(STRING_LENGTH, move |_, _| {
+            n += 1;
+            (2 + n).into_ret()
+        });
+        e.call_log = Some(vec![]);
+        assert!(e.call(0x0048_2df0, &args![this, other]).bool());
+        assert!(calls(&e, STRING_COMPARE).is_empty());
     }
 }

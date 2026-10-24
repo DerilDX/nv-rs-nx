@@ -154,15 +154,18 @@ pub fn hkp_inertia_tensor_computer_compute_box_volume_mass_properties(
     }
     let (h, out) = (half_extents.addr(), out.addr());
     let [x, y, z] = [0, 4, 8].map(|offset| f64::from(x87_quiet(e.mem.f32(h + offset))));
-    let m = rounded(e.mem.f64(THIRD) * f64::from(mass));
+    let m = rounded(x87_mul(e.mem.f64(THIRD), f64::from(mass)));
     for row in 0..3 {
         zero_vector(e, out + INERTIA + 0x10 * row);
     }
     zero_vector(e, out + CENTRE);
-    store(e, out + 0x20, (y * y + z * z) * m);
-    store(e, out + 0x34, (z * z + x * x) * m);
-    store(e, out + 0x48, (y * y + x * x) * m);
-    store(e, out + VOLUME, (z * (y * x)) * e.mem.f64(EIGHT));
+    // The x87 stack code, with the x87 choice of NaN.
+    let (fadd, fmul) = (x87_add, x87_mul);
+    store(e, out + 0x20, fmul(fadd(fmul(y, y), fmul(z, z)), m));
+    store(e, out + 0x34, fmul(fadd(fmul(z, z), fmul(x, x)), m));
+    store(e, out + 0x48, fmul(fadd(fmul(y, y), fmul(x, x)), m));
+    let eight = e.mem.f64(EIGHT);
+    store(e, out + VOLUME, fmul(fmul(z, fmul(y, x)), eight));
     e.mem.set_f32(out + MASS, x87_quiet(mass));
     0
 }
@@ -199,23 +202,31 @@ pub fn fn_00cebdf0(e: &mut Engine, source: Ptr, mass: f32, destination: Ptr) {
 /// offset vector `a` and the mass `p`, the tensor `m` loses `p * (a_y^2 + a_z^2)` and its two
 /// analogues on the diagonal and each off-diagonal pair gets `+ (a_i * p) * a_j`.
 fn shift_to_centre(e: &mut Engine, a: u32, p: f64, m: u32) {
-    let [a0, a1, a2] = [0, 4, 8].map(|offset| load(e, a + offset));
-    store(e, m, load(e, m) - (a2 * a2 + a1 * a1) * p);
-    store(e, m + 0x14, load(e, m + 0x14) - (a2 * a2 + a0 * a0) * p);
-    store(e, m + 0x28, load(e, m + 0x28) - (a1 * a1 + a0 * a0) * p);
-    let xy = rounded(((a0 * p) * a1) + load(e, m + 4));
-    let yz = rounded(((p * a1) * a2) + load(e, m + 0x18));
-    let zx = rounded(((p * a2) * a0) + load(e, m + 0x20));
-    for (offset, value) in [
-        (4, xy),
-        (0x10, xy),
-        (0x18, yz),
-        (0x24, yz),
-        (0x20, zx),
-        (8, zx),
-    ] {
-        store(e, m + offset, value);
-    }
+    // The x87 stack code with the x87 choice of NaN: `FLD` loads (quiet) and the memory
+    // operands of `FSUBR`/`FMUL`/`FADD` (a signalling NaN stays one there), each read when
+    // the code reads it.
+    let (fadd, fsub, fmul) = (x87_add, x87_sub, x87_mul);
+    let ld = |e: &Engine, addr: u32| x87_load32(e.mem.u32(addr));
+    let mem = |e: &Engine, addr: u32| x87_m32(e.mem.u32(addr));
+    let square = |e: &Engine, addr: u32| fmul(ld(e, addr), ld(e, addr));
+    let sum = fadd(square(e, a + 8), square(e, a + 4));
+    store(e, m, fsub(ld(e, m), fmul(sum, p)));
+    let sum = fadd(square(e, a + 8), square(e, a));
+    store(e, m + 0x14, fsub(mem(e, m + 0x14), fmul(sum, p)));
+    let sum = fadd(square(e, a + 4), square(e, a));
+    store(e, m + 0x28, fsub(mem(e, m + 0x28), fmul(sum, p)));
+    let product = fmul(fmul(ld(e, a), p), mem(e, a + 4));
+    let xy = rounded(fadd(product, mem(e, m + 4)));
+    store(e, m + 4, xy);
+    store(e, m + 0x10, xy);
+    let product = fmul(fmul(p, mem(e, a + 4)), mem(e, a + 8));
+    let yz = rounded(fadd(product, mem(e, m + 0x18)));
+    store(e, m + 0x18, yz);
+    store(e, m + 0x24, yz);
+    let product = fmul(fmul(p, mem(e, a + 8)), mem(e, a));
+    let zx = rounded(fadd(product, mem(e, m + 0x20)));
+    store(e, m + 0x20, zx);
+    store(e, m + 8, zx);
 }
 
 // Translated from 00cebe80 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -229,7 +240,7 @@ pub fn hkp_inertia_tensor_computer_shift_inertia_to_com(
     mass: f32,
     inertia: Ptr,
 ) {
-    shift_to_centre(e, offset.addr(), f64::from(mass), inertia.addr());
+    shift_to_centre(e, offset.addr(), x87_load32(mass.to_bits()), inertia.addr());
 }
 
 // Translated from 00cebf30 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -237,25 +248,33 @@ pub fn hkp_inertia_tensor_computer_shift_inertia_to_com(
 /// `p * (offset_j^2 + offset_k^2)`, the off-diagonal pairs lose `offset_i * p * offset_j`;
 /// the third pair uses `(p * offset_z) * offset_x`).
 pub fn fn_00cebf30(e: &mut Engine, offset: Ptr, mass: f32, inertia: Ptr) {
+    // The x87 stack code with the x87 choice of NaN: `FLD` loads (quiet) and the memory
+    // operands of `FADD`/`FMUL`/`FSUBR` (a signalling NaN stays one there), each read when
+    // the code reads it.
     let (a, m) = (offset.addr(), inertia.addr());
-    let p = f64::from(mass);
-    let [a0, a1, a2] = [0, 4, 8].map(|o| load(e, a + o));
-    store(e, m, load(e, m) + (a2 * a2 + a1 * a1) * p);
-    store(e, m + 0x14, load(e, m + 0x14) + (a2 * a2 + a0 * a0) * p);
-    store(e, m + 0x28, load(e, m + 0x28) + (a1 * a1 + a0 * a0) * p);
-    let xy = rounded(load(e, m + 4) - ((a0 * p) * a1));
-    let yz = rounded(load(e, m + 0x18) - ((a1 * p) * a2));
-    let zx = rounded(load(e, m + 0x20) - ((p * a2) * a0));
-    for (offset, value) in [
-        (4, xy),
-        (0x10, xy),
-        (0x18, yz),
-        (0x24, yz),
-        (0x20, zx),
-        (8, zx),
-    ] {
-        store(e, m + offset, value);
-    }
+    let (fadd, fsub, fmul) = (x87_add, x87_sub, x87_mul);
+    let ld = |e: &Engine, addr: u32| x87_load32(e.mem.u32(addr));
+    let mem = |e: &Engine, addr: u32| x87_m32(e.mem.u32(addr));
+    let square = |e: &Engine, addr: u32| fmul(ld(e, addr), ld(e, addr));
+    let p = x87_load32(mass.to_bits());
+    let sum = fadd(square(e, a + 8), square(e, a + 4));
+    store(e, m, fadd(fmul(sum, p), ld(e, m)));
+    let sum = fadd(square(e, a + 8), square(e, a));
+    store(e, m + 0x14, fadd(fmul(sum, p), mem(e, m + 0x14)));
+    let sum = fadd(square(e, a + 4), square(e, a));
+    store(e, m + 0x28, fadd(fmul(sum, p), mem(e, m + 0x28)));
+    let product = fmul(fmul(ld(e, a), p), mem(e, a + 4));
+    let xy = rounded(fsub(ld(e, m + 4), product));
+    store(e, m + 4, xy);
+    store(e, m + 0x10, xy);
+    let product = fmul(fmul(ld(e, a + 4), p), mem(e, a + 8));
+    let yz = rounded(fsub(ld(e, m + 0x18), product));
+    store(e, m + 0x18, yz);
+    store(e, m + 0x24, yz);
+    let product = fmul(fmul(p, ld(e, a + 8)), ld(e, a));
+    let zx = rounded(fsub(mem(e, m + 0x20), product));
+    store(e, m + 0x20, zx);
+    store(e, m + 8, zx);
 }
 
 // Translated from 00cebfd0 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -455,31 +474,40 @@ pub fn internal_inertia_tensor_computer_compute_inertial_tensor_internal(
     center_of_mass: Ptr,
     inertia: Ptr,
 ) {
+    // The x87 stack code with the x87 choice of NaN: `FLD` loads (quiet) and the memory
+    // operands of `FDIV`/`FADD`/`FMUL` (a signalling NaN stays one there).
     let (t, com, m) = (this.addr(), center_of_mass.addr(), inertia.addr());
-    let divisor = load(e, t + 0x64);
+    let (fadd, fmul) = (x87_add, x87_mul);
+    let ld = |e: &Engine, addr: u32| x87_load32(e.mem.u32(addr));
+    let mem = |e: &Engine, addr: u32| x87_m32(e.mem.u32(addr));
     for lane in 0..3 {
-        store(e, com + 4 * lane, load(e, t + 0x68 + 4 * lane) / divisor);
+        let quotient = x87_div(ld(e, t + 0x68 + 4 * lane), mem(e, t + 0x64));
+        store(e, com + 4 * lane, quotient);
     }
-    let rho = f64::from(density);
-    let [t74, t78, t7c] = [0x74, 0x78, 0x7c].map(|o| load(e, t + o));
-    store(e, m, (t7c + t78) * rho);
-    store(e, m + 0x14, (t7c + t74) * rho);
-    store(e, m + 0x28, (t78 + t74) * rho);
-    let negative = f64::from(-density);
-    let xy = rounded(load(e, t + 0x80) * negative);
-    let yz = rounded(load(e, t + 0x84) * negative);
-    let zx = rounded(negative * load(e, t + 0x88));
-    for (offset, value) in [
-        (4, xy),
-        (0x10, xy),
-        (0x18, yz),
-        (0x24, yz),
-        (0x20, zx),
-        (8, zx),
-    ] {
-        store(e, m + offset, value);
-    }
-    shift_to_centre(e, com, f64::from(mass), m);
+    let rho = x87_load32(density.to_bits());
+    store(e, m, fmul(fadd(ld(e, t + 0x7c), mem(e, t + 0x78)), rho));
+    store(
+        e,
+        m + 0x14,
+        fmul(fadd(ld(e, t + 0x7c), mem(e, t + 0x74)), rho),
+    );
+    store(
+        e,
+        m + 0x28,
+        fmul(fadd(ld(e, t + 0x78), mem(e, t + 0x74)), rho),
+    );
+    // `FCHS` of the density, stored to a scratch float and loaded back.
+    let negative = rounded(-rho);
+    let xy = rounded(fmul(ld(e, t + 0x80), negative));
+    store(e, m + 4, xy);
+    store(e, m + 0x10, xy);
+    let yz = rounded(fmul(ld(e, t + 0x84), negative));
+    store(e, m + 0x18, yz);
+    store(e, m + 0x24, yz);
+    let zx = rounded(fmul(negative, mem(e, t + 0x88)));
+    store(e, m + 0x20, zx);
+    store(e, m + 8, zx);
+    shift_to_centre(e, com, x87_load32(mass.to_bits()), m);
 }
 
 /// The float at `0x0104da48` (a large value) the bounding box search starts from, and the

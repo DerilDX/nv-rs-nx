@@ -982,6 +982,1027 @@ pub fn active_effect_save_active_effect_list(e: &mut Engine, buffer: u32, list: 
     e.call(SAVE_VARIABLE_SIZED_VALUE_OV2, &args![buffer, count, handle]);
 }
 
+/// The `TESSaveLoadGame` pointer (`011de45c`) the save and load functions below pass as
+/// `this` to `SaveNumericID`/`LoadNumericID`/`UseSaveGameBlocks` (Xbox PDB names of those
+/// callees) and to the byte readers and writers.
+const SAVE_LOAD_GAME_POINTER: u32 = 0x011d_e45c;
+/// `008579b0` (thiscall on the save-load game: address, size; unnamed): writes bytes.
+const SAVE_BYTES_008579B0: u32 = 0x0085_79b0;
+/// `008579e0` (thiscall on the save-load game: address, size; unnamed): reads bytes.
+const LOAD_BYTES_008579E0: u32 = 0x0085_79e0;
+/// `TESSaveLoadGame::SaveNumericID` (`00857a10`, address, size).
+const SAVE_NUMERIC_ID: u32 = 0x0085_7a10;
+/// `TESSaveLoadGame::LoadNumericID` (`00857aa0`, address, size).
+const LOAD_NUMERIC_ID: u32 = 0x0085_7aa0;
+/// `00857bd0` (thiscall on the save-load game, one word; unnamed).
+const SKIP_BYTES_00857BD0: u32 = 0x0085_7bd0;
+/// `008df040` (thiscall): the byte at +0x80 of the save-load game, which these functions
+/// compare with 0x2a, 0x41 and 0x48 (a format version, unconfirmed).
+const SAVE_VERSION_008DF040: u32 = 0x008d_f040;
+/// `TESSaveLoadGame::UseSaveGameBlocks` (`00862110`, returns `AL`).
+const USE_SAVE_GAME_BLOCKS: u32 = 0x0086_2110;
+/// `004fd3c0` (thiscall): the word at +0x84 of the save-load game (a record, read below
+/// at +0, +5 and +9).
+const LOAD_RECORD_004FD3C0: u32 = 0x004f_d3c0;
+/// `008256d0` (thiscall on a list node, `AL`): true when the node's item and next are
+/// both null.
+const LIST_NODE_IS_EMPTY: u32 = 0x0082_56d0;
+/// `00408d60` (thiscall on a setting): the address of its value (+4).
+const SETTING_VALUE_ADDRESS: u32 = 0x0040_8d60;
+/// The setting whose value byte enables the size reports.
+const SETTING_011DE4E8: u32 = 0x011d_e4e8;
+/// `004839c0` (cdecl, one word: a form id; returns the form).
+const LOOKUP_FORM_004839C0: u32 = 0x0048_39c0;
+/// `Error` (`0040fbe0`, cdecl, variable arguments; map name, `tesdatahandler.cpp`).
+const ERROR_0040FBE0: u32 = 0x0040_fbe0;
+/// `005b5e40` (cdecl, variable arguments, a format first; unnamed, `tesscriptfunctions.cpp`).
+const MESSAGE_005B5E40: u32 = 0x005b_5e40;
+/// `SaveGameWarning` (`00845cc0`, cdecl, variable arguments).
+const SAVE_GAME_WARNING: u32 = 0x0084_5cc0;
+/// The block marker the save writes and the load expects (`0x424c4f4b`).
+const BLOCK_MARKER: u32 = 0x424c_4f4b;
+/// `00803d30` (thiscall on a new 0x48-byte block: caster, spell, effect item; unnamed): an
+/// `ActiveEffect` constructor (stores the vtable `0107935c`).
+const ACTIVE_EFFECT_CONSTRUCTOR_00803D30: u32 = 0x0080_3d30;
+/// `MagicCaster::GetMagicCasterByNumericID` (`00818c60`, cdecl: id).
+const MAGIC_CASTER_BY_NUMERIC_ID: u32 = 0x0081_8c60;
+/// `MagicTarget::GetMagicTargetByNumericID` (`00825550`, cdecl: id).
+const MAGIC_TARGET_BY_NUMERIC_ID: u32 = 0x0082_5550;
+/// `MagicItem::GetMagicItemByNumericID` (`0040a250`, cdecl: id).
+const MAGIC_ITEM_BY_NUMERIC_ID: u32 = 0x0040_a250;
+/// `EffectItemList::GetEffectItemByIndex` (`00406ee0`, thiscall: index).
+const EFFECT_ITEM_BY_INDEX: u32 = 0x0040_6ee0;
+/// `EffectArchetypes::Activate` (map name, `00403ab0`, cdecl: four words): makes the
+/// active effect of an effect item.
+const EFFECT_ARCHETYPES_ACTIVATE: u32 = 0x0040_3ab0;
+/// `ProcessLists::AddTempEffect` (`00973fd0`, thiscall: the effect).
+const PROCESS_LISTS_ADD_TEMP_EFFECT: u32 = 0x0097_3fd0;
+/// The `ProcessLists` object `00973fd0` is called on.
+const PROCESS_LISTS: u32 = 0x011e_0e80;
+/// `008d8520` (thiscall on an actor; the map's name `MiddleHighProcess::GetSavedAcquireObject`
+/// may come from folded code).
+const ACTOR_OBJECT_008D8520: u32 = 0x008d_8520;
+/// `TESBoundObject`'s RTTI type descriptor (`.?AVTESBoundObject@@`).
+const TES_BOUND_OBJECT_TYPE: u32 = 0x0118_3108;
+/// `TESForm`'s RTTI type descriptor (`.?AVTESForm@@`).
+const TES_FORM_TYPE: u32 = 0x0118_3028;
+/// `ActiveEffect`'s RTTI type descriptor (`.?AVActiveEffect@@`).
+const ACTIVE_EFFECT_TYPE: u32 = 0x011a_0d1c;
+/// `VampirismEffect`'s RTTI type descriptor (`.?AVVampirismEffect@@`).
+const VAMPIRISM_EFFECT_TYPE: u32 = 0x011a_0d3c;
+/// The compare function the loads insert effects with (`00825270`).
+const EFFECT_COMPARE_00825270: u32 = 0x0082_5270;
+/// The allocator `00aa13e0` (cdecl: size).
+const ALLOCATE_00AA13E0: u32 = 0x00aa_13e0;
+/// `0081c530` (thiscall on a 0x3c-byte block; unnamed): the hit effect of kind 5.
+const HIT_EFFECT_KIND_5_CONSTRUCTOR: u32 = 0x0081_c530;
+/// `0081f220` (thiscall on a 0x6c-byte block; unnamed): the hit effect of kind 6.
+const HIT_EFFECT_KIND_6_CONSTRUCTOR: u32 = 0x0081_f220;
+/// `BGSLoadGameBuffer::LoadFormID` (`008648a0`, thiscall, no stack words).
+const LOAD_FORM_ID: u32 = 0x0086_48a0;
+/// `BGSLoadGameBuffer::LoadFormID_ov2` (`008648e0`, thiscall: address).
+const LOAD_FORM_ID_OV2: u32 = 0x0086_48e0;
+/// `00864980` (thiscall on the load buffer: address, size; unnamed): reads bytes.
+const LOAD_DATA_00864980: u32 = 0x0086_4980;
+/// `BGSLoadGameBuffer::LoadVariableSizedValue` (`00864a60`).
+const LOAD_VARIABLE_SIZED_VALUE: u32 = 0x0086_4a60;
+/// `0049bb50` (thiscall on the load buffer, one word; unnamed).
+const SKIP_0049BB50: u32 = 0x0049_bb50;
+/// `00984f60` (thiscall on a hit effect: the active effect; unnamed).
+const HIT_EFFECT_SET_EFFECT_00984F60: u32 = 0x0098_4f60;
+
+/// The save-load game object (`*011de45c`).
+pub(crate) fn save_load_game(e: &Engine) -> u32 {
+    e.global::<u32>(SAVE_LOAD_GAME_POINTER)
+}
+
+/// The save-load game's version byte (`008df040`).
+pub(crate) fn save_version(e: &mut Engine) -> u8 {
+    let game = save_load_game(e);
+    e.call(SAVE_VERSION_008DF040, &args![game]).u8()
+}
+
+/// `008579b0` on the save-load game: writes `size` bytes at `address`.
+pub(crate) fn save_bytes(e: &mut Engine, address: u32, size: u32) {
+    let game = save_load_game(e);
+    e.call(SAVE_BYTES_008579B0, &args![game, address, size]);
+}
+
+/// `008579e0` on the save-load game: reads `size` bytes to `address`.
+pub(crate) fn load_bytes(e: &mut Engine, address: u32, size: u32) {
+    let game = save_load_game(e);
+    e.call(LOAD_BYTES_008579E0, &args![game, address, size]);
+}
+
+/// `00825c00` on the save-load game (its word at +0x14).
+pub(crate) fn save_position(e: &mut Engine) -> u32 {
+    let game = save_load_game(e);
+    e.call(GETTER_00825C00, &args![game]).u32()
+}
+
+/// `UseSaveGameBlocks` on the save-load game.
+pub(crate) fn use_save_game_blocks(e: &mut Engine) -> bool {
+    let game = save_load_game(e);
+    e.call(USE_SAVE_GAME_BLOCKS, &args![game]).bool()
+}
+
+/// Whether the value byte of the setting at `011de4e8` is set.
+pub(crate) fn size_reports_enabled(e: &mut Engine) -> bool {
+    let value = e
+        .call(SETTING_VALUE_ADDRESS, &args![SETTING_011DE4E8])
+        .u32();
+    e.mem.u8(value) != 0
+}
+
+/// Walks a `BSSimpleList` from `node` as these functions do: it stops at a null node or at
+/// one `008256d0` reports empty, and hands `body` each node's item (`*006815c0(node)`).
+fn for_each_until_empty(e: &mut Engine, mut node: u32, mut body: impl FnMut(&mut Engine, u32)) {
+    while node != 0 && !e.call(LIST_NODE_IS_EMPTY, &args![node]).bool() {
+        let slot = e.call(LIST_NODE_ITEM, &args![node]).u32();
+        let item = e.mem.u32(slot);
+        body(e, item);
+        node = e.call(LIST_NODE_NEXT, &args![node]).u32();
+    }
+}
+
+/// Walks a `BSSimpleList` from `node` to its end and hands `body` each non-null item.
+fn for_each_item(e: &mut Engine, mut node: u32, mut body: impl FnMut(&mut Engine, u32)) {
+    while node != 0 {
+        let slot = e.call(LIST_NODE_ITEM, &args![node]).u32();
+        let item = e.mem.u32(slot);
+        if item != 0 {
+            body(e, item);
+        }
+        node = e.call(LIST_NODE_NEXT, &args![node]).u32();
+    }
+}
+
+/// Adds the hit effect at `item_slot` (a stack word) to the effect's hit-effect list, as
+/// both loads do: a new 8-byte node (`operator new`, `00470440`) for an empty list, the
+/// list's front insert (`005ae3d0`) otherwise.
+fn add_hit_effect(e: &mut Engine, this: Ptr<ActiveEffect>, item_slot: u32) {
+    if e.get(this, ActiveEffect::pHitEffects) == 0 {
+        let block = e.call(OPERATOR_NEW, &args![8u32]).u32();
+        let node = if block == 0 {
+            0
+        } else {
+            e.call(LIST_NODE_INIT_00470440, &args![block, item_slot])
+                .u32()
+        };
+        e.set(this, ActiveEffect::pHitEffects, node);
+    } else {
+        let list = e.get(this, ActiveEffect::pHitEffects);
+        e.call(LIST_INSERT_FRONT_005AE3D0, &args![list, item_slot]);
+    }
+}
+
+/// Makes a hit effect of `kind` as both loads do: kind 5 a 0x3c-byte `0081c530`, kind 6 a
+/// 0x6c-byte `0081f220` (null when the allocation fails); any other kind is reported
+/// through `005b5e40` with `format` and gives null.
+fn new_hit_effect(e: &mut Engine, kind: u8, format: u32) -> u32 {
+    match kind {
+        5 => {
+            let block = e.call(ALLOCATE_00AA13E0, &args![0x3cu32]).u32();
+            if block == 0 {
+                0
+            } else {
+                e.call(HIT_EFFECT_KIND_5_CONSTRUCTOR, &args![block]).u32()
+            }
+        }
+        6 => {
+            let block = e.call(ALLOCATE_00AA13E0, &args![0x6cu32]).u32();
+            if block == 0 {
+                0
+            } else {
+                e.call(HIT_EFFECT_KIND_6_CONSTRUCTOR, &args![block]).u32()
+            }
+        }
+        _ => {
+            e.call(MESSAGE_005B5E40, &args![format, u32::from(kind)]);
+            0
+        }
+    }
+}
+
+/// The source-file string these reports pass (`...\Magic\ActiveEffect.cpp`, `01079438`).
+const ACTIVE_EFFECT_FILE: u32 = 0x0107_9438;
+/// The formats the size reports of a save function use (with and without a record).
+pub(crate) const COUNTED_SIZE_FORMATS: [u32; 2] = [0x0101_2cb0, 0x0101_2c78];
+/// The formats the size reports after a save block is written use.
+pub(crate) const WRITTEN_SIZE_FORMATS: [u32; 2] = [0x0101_53a0, 0x0101_536c];
+
+/// `Error` with a size a save function counted or wrote, as `fn_00805a00`,
+/// `fn_00805b40` and the bound item effect's save functions report it: with the record of
+/// `004fd3e0` (`formats[0]`) its id, the name slot +0x130 of the form of that id
+/// (`004839c0`) and its word at +5 too; `file` and `line` name the caller's source.
+pub(crate) fn report_save_size(e: &mut Engine, formats: [u32; 2], size: u32, file: u32, line: u32) {
+    let game = save_load_game(e);
+    let record = e.call(GETTER_004FD3E0, &args![game]).u32();
+    if record != 0 {
+        let id = e.mem.u32(record);
+        let form = e.call(LOOKUP_FORM_004839C0, &args![id]).u32();
+        let word = e.mem.u32(record + 5);
+        let name = e.vcall(form, 0x130, &[]).u32();
+        let id = e.mem.u32(record);
+        e.call(
+            ERROR_0040FBE0,
+            &args![formats[0], size, id, name, word, line, file],
+        );
+    } else {
+        e.call(ERROR_0040FBE0, &args![formats[1], size, line, file]);
+    }
+}
+
+/// The start of a save block with save-game blocks on: the block marker (written from the
+/// stack word `marker_slot`) and the 2-byte size at `size_slot` to fill in later; returns
+/// the position of that size (`00825c00` between the two writes).
+pub(crate) fn save_block_start(e: &mut Engine, marker_slot: u32, size_slot: u32) -> u32 {
+    e.mem.set_u32(marker_slot, BLOCK_MARKER);
+    save_bytes(e, marker_slot, 4);
+    let size_at = save_position(e);
+    save_bytes(e, size_slot, 2);
+    size_at
+}
+
+/// The end of a save block: a size over 0xffff is reported through `005b5e40` (with
+/// `file` and `line`), and the 16 bits of the size are stored at `size_at`.
+pub(crate) fn save_block_finish(e: &mut Engine, size_at: u32, file: u32, line: u32) {
+    let now = save_position(e);
+    if now > size_at.wrapping_add(0xffff) {
+        e.call(MESSAGE_005B5E40, &args![0x0101_5318u32, file, line]);
+    }
+    e.mem.set_u16(size_at, now.wrapping_sub(size_at) as u16);
+}
+
+/// The start of a save block when loading with save-game blocks on: reads the marker into
+/// the stack word `marker_slot` and reports a wrong one through `005b5e40` (with the record
+/// of `004fd3c0`, or the save version), then reads the 2-byte size into `size_slot`;
+/// returns the position before the size (`00825c00`).
+pub(crate) fn load_block_start(
+    e: &mut Engine,
+    marker_slot: u32,
+    size_slot: u32,
+    file: u32,
+    line: u32,
+) -> u32 {
+    load_bytes(e, marker_slot, 4);
+    if e.mem.u32(marker_slot) != BLOCK_MARKER {
+        let game = save_load_game(e);
+        let record = e.call(LOAD_RECORD_004FD3C0, &args![game]).u32();
+        if record != 0 {
+            let id = e.mem.u32(record);
+            let form = e.call(LOOKUP_FORM_004839C0, &args![id]).u32();
+            let word = e.mem.u32(record + 5);
+            let byte = u32::from(e.mem.u8(record + 9));
+            let name = e.vcall(form, 0x130, &[]).u32();
+            let id = e.mem.u32(record);
+            e.call(
+                MESSAGE_005B5E40,
+                &args![0x0101_5718u32, file, line, id, name, byte, word],
+            );
+        } else {
+            let version = u32::from(save_version(e));
+            e.call(
+                MESSAGE_005B5E40,
+                &args![0x0101_56a8u32, file, line, version],
+            );
+        }
+    }
+    let start = save_position(e);
+    load_bytes(e, size_slot, 2);
+    start
+}
+
+/// The end of a loaded save block: the position (`00825c00`) is compared with the block's
+/// start plus its 16-bit size (re-read from `size_slot`); a position past or short of it is
+/// reported through `005b5e40` with the difference, `file` and `line`, and with the
+/// record of `004fd3c0` (its id, name, byte +9 and word +5) or the save version.
+pub(crate) fn load_block_check(e: &mut Engine, start: u32, size_slot: u32, file: u32, line: u32) {
+    let now = save_position(e);
+    let game = save_load_game(e);
+    let record = e.call(LOAD_RECORD_004FD3C0, &args![game]).u32();
+    let expected = |e: &Engine| u32::from(e.mem.u16(size_slot)).wrapping_add(start);
+    if record != 0 {
+        let id = e.mem.u32(record);
+        let form = e.call(LOOKUP_FORM_004839C0, &args![id]).u32();
+        let report = |e: &mut Engine, format: u32, difference: u32| {
+            let word = e.mem.u32(record + 5);
+            let byte = u32::from(e.mem.u8(record + 9));
+            let name = e.vcall(form, 0x130, &[]).u32();
+            let id = e.mem.u32(record);
+            e.call(
+                MESSAGE_005B5E40,
+                &args![format, difference, file, line, id, name, byte, word],
+            );
+        };
+        if now > expected(e) {
+            let difference = now.wrapping_sub(expected(e));
+            report(e, 0x0101_5588, difference);
+        } else if now < expected(e) {
+            let difference = expected(e).wrapping_sub(now);
+            report(e, 0x0101_5500, difference);
+        }
+    } else if now > expected(e) {
+        let version = u32::from(save_version(e));
+        let difference = now.wrapping_sub(expected(e));
+        e.call(
+            MESSAGE_005B5E40,
+            &args![0x0101_54a0u32, difference, file, line, version],
+        );
+    } else if now < expected(e) {
+        let version = u32::from(save_version(e));
+        let difference = expected(e).wrapping_sub(now);
+        e.call(
+            MESSAGE_005B5E40,
+            &args![0x0101_5440u32, difference, file, line, version],
+        );
+    }
+}
+
+// Translated from 00803fe0 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 00803fe0 - the exception-unwinding frame (FS:[0]) is not translated.
+/// `ActiveEffect::Copy` (Xbox PDB): a new 0x48-byte `ActiveEffect` (`operator new`, then
+/// `00803d30` with the caster, spell and effect item; null when the allocation fails),
+/// given this effect's data through `CopyData` (slot +0x44); returns it.
+pub fn active_effect_copy(e: &mut Engine, this: Ptr<ActiveEffect>) -> u32 {
+    let block = e.call(OPERATOR_NEW, &args![0x48u32]).u32();
+    let copy = if block == 0 {
+        0
+    } else {
+        let item = e.get(this, ActiveEffect::pEffect);
+        let spell = e.get(this, ActiveEffect::pSpell);
+        let caster = e.get(this, ActiveEffect::pCaster);
+        e.call(
+            ACTIVE_EFFECT_CONSTRUCTOR_00803D30,
+            &args![block, caster, spell, item],
+        )
+        .u32()
+    };
+    e.vcall(this.addr(), 0x44, &args![copy]);
+    copy
+}
+
+// Translated from 00804f80 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ActiveEffect::GetSaveSize` (Xbox PDB): 0x1c bytes, plus (save version 0x2a or later)
+/// one count byte and, per hit effect until an empty node, one type byte and its own size
+/// (slot +0xd0 with `this` and `argument`), plus 4 (version 0x48 or later) or 1 (0x41 or
+/// later). Returns `AX` (16-bit sums).
+pub fn active_effect_get_save_size(e: &mut Engine, this: Ptr<ActiveEffect>, argument: u32) -> u16 {
+    let mut size: u16 = 4 + 1 + 1 + 1 + 1 + 4 + 4 + 4 + 4 + 4;
+    if save_version(e) >= 0x2a {
+        size += 1;
+        let list = e.get(this, ActiveEffect::pHitEffects);
+        for_each_until_empty(e, list, |e, item| {
+            size = size.wrapping_add(1);
+            let own = e.vcall(item, 0xd0, &args![this, argument]).u16();
+            size = size.wrapping_add(own);
+        });
+    }
+    if save_version(e) >= 0x48 {
+        size = size.wrapping_add(4);
+    } else if save_version(e) >= 0x41 {
+        size = size.wrapping_add(1);
+    }
+    size
+}
+
+// Translated from 008050d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ActiveEffect::SaveGame` (Xbox PDB): writes the elapsed seconds, the five state bytes,
+/// magnitude and duration (`008579b0`), the caster's and target's form ids and the
+/// source's `0084e3a0` word (0 when unset; `SaveNumericID`); from save version 0x2a a
+/// count byte (stored afterwards where `00825c00` pointed before it was written) and per
+/// hit effect until an empty node its type (slot +0x9c) and its own save (slot +0xd4 with
+/// `this` and `argument`); then the flags (version 0x48 or later) or flag 1 as a byte
+/// (0x41 or later).
+pub fn active_effect_save_game(e: &mut Engine, this: Ptr<ActiveEffect>, argument: u32) {
+    let base = this.addr();
+    e.with_stack(0x24, |e, frame| {
+        let local = |offset: u32| frame.addr() + 0x24 - offset;
+        for (offset, size) in [
+            (0x04u32, 4u32),
+            (0x10, 1),
+            (0x11, 1),
+            (0x12, 1),
+            (0x13, 1),
+            (0x14, 1),
+            (0x1c, 4),
+            (0x20, 4),
+        ] {
+            save_bytes(e, base + offset, size);
+        }
+        let caster = e.get(this, ActiveEffect::pCaster);
+        let id = if caster == 0 {
+            0
+        } else {
+            e.call(MAGIC_CASTER_GET_FORM_ID, &args![caster]).u32()
+        };
+        e.mem.set_u32(local(8), id);
+        let game = save_load_game(e);
+        e.call(SAVE_NUMERIC_ID, &args![game, local(8), 4u32]);
+        let target = e.get(this, ActiveEffect::pTarget);
+        let id = if target == 0 {
+            0
+        } else {
+            e.call(MAGIC_TARGET_GET_FORM_ID, &args![target]).u32()
+        };
+        e.mem.set_u32(local(4), id);
+        let game = save_load_game(e);
+        e.call(SAVE_NUMERIC_ID, &args![game, local(4), 4u32]);
+        let source = e.get(this, ActiveEffect::pSource);
+        let id = if source == 0 {
+            0
+        } else {
+            e.call(GETTER_0084E3A0, &args![source]).u32()
+        };
+        e.mem.set_u32(local(0xc), id);
+        let game = save_load_game(e);
+        e.call(SAVE_NUMERIC_ID, &args![game, local(0xc), 4u32]);
+        if save_version(e) >= 0x2a {
+            e.mem.set_u8(local(0xd), 0);
+            let count_at = save_position(e);
+            save_bytes(e, local(0xd), 1);
+            let list = e.get(this, ActiveEffect::pHitEffects);
+            for_each_until_empty(e, list, |e, item| {
+                let kind = e.vcall(item, 0x9c, &[]).u8();
+                e.mem.set_u8(local(0x1d), kind);
+                save_bytes(e, local(0x1d), 1);
+                e.vcall(item, 0xd4, &args![this, argument]);
+                let count = e.mem.u8(local(0xd)).wrapping_add(1);
+                e.mem.set_u8(local(0xd), count);
+            });
+            let count = e.mem.u8(local(0xd));
+            e.mem.set_u8(count_at, count);
+        }
+        if save_version(e) >= 0x48 {
+            save_bytes(e, base + 0x18, 4);
+        } else if save_version(e) >= 0x41 {
+            let flag = fn_00804b80(e, this, 1);
+            e.mem.set_u8(local(0x1e), u8::from(flag));
+            save_bytes(e, local(0x1e), 1);
+        }
+    });
+}
+
+// Translated from 00805330 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 00805330 - the exception-unwinding frame (FS:[0]) is not translated.
+/// `ActiveEffect::LoadGame` (Xbox PDB): reads what `SaveGame` wrote: the elapsed seconds,
+/// state bytes, magnitude and duration (`008579e0`), then the caster, target and source
+/// ids into +0x28, +0x24 and +0x3c (`LoadNumericID`); from save version 0x2a a count and
+/// that many hit effects (a type byte: 5 or 6 make one, another is reported through
+/// `005b5e40` and leaves null, whose slot +0xd8 the exe then calls), each loaded (slot
+/// +0xd8 with `this` and `argument`) and added to the list; then the flags (version 0x48
+/// or later) or a byte that, when set, runs `fn_00805650` (0x41 or later).
+pub fn active_effect_load_game(e: &mut Engine, this: Ptr<ActiveEffect>, argument: u32) {
+    let base = this.addr();
+    e.with_stack(0x58, |e, frame| {
+        let local = |offset: u32| frame.addr() + 0x58 - offset;
+        for (offset, size) in [
+            (0x04u32, 4u32),
+            (0x10, 1),
+            (0x11, 1),
+            (0x12, 1),
+            (0x13, 1),
+            (0x14, 1),
+            (0x1c, 4),
+            (0x20, 4),
+        ] {
+            load_bytes(e, base + offset, size);
+        }
+        for (slot, field) in [(0x14u32, 0x28u32), (0x10, 0x24), (0x18, 0x3c)] {
+            let game = save_load_game(e);
+            e.call(LOAD_NUMERIC_ID, &args![game, local(slot), 4u32]);
+            let id = e.mem.u32(local(slot));
+            e.mem.set_u32(base + field, id);
+        }
+        if save_version(e) >= 0x2a {
+            load_bytes(e, local(0x19), 1);
+            let mut index = 0u32;
+            while index < u32::from(e.mem.u8(local(0x19))) {
+                load_bytes(e, local(0x25), 1);
+                let kind = e.mem.u8(local(0x25));
+                let hit_effect = new_hit_effect(e, kind, 0x0107_93b8);
+                e.mem.set_u32(local(0x24), hit_effect);
+                e.vcall(hit_effect, 0xd8, &args![this, argument]);
+                add_hit_effect(e, this, local(0x24));
+                index += 1;
+            }
+        }
+        if save_version(e) >= 0x48 {
+            load_bytes(e, base + 0x18, 4);
+        } else if save_version(e) >= 0x41 {
+            load_bytes(e, local(0x26), 1);
+            if e.mem.u8(local(0x26)) != 0 {
+                fn_00805650(e, this);
+            }
+        }
+    });
+}
+
+// Translated from 00805650 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed (`activeeffect.cpp`): sets flags 2 and 4 of the effect (`00803e80` twice).
+pub fn fn_00805650(e: &mut Engine, this: Ptr<ActiveEffect>) {
+    e.call(EFFECT_FLAG_00803E80, &args![this, 2u32]);
+    e.call(EFFECT_FLAG_00803E80, &args![this, 4u32]);
+}
+
+// Translated from 00805670 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ActiveEffect::InitLoadGame` (Xbox PDB): turns the loaded ids into objects: the caster
+/// (`GetMagicCasterByNumericID`) and target (`GetMagicTargetByNumericID`) when set; the
+/// source, only when the target id was set, becomes the form of its id (`004839c0`) cast
+/// through `__RTDynamicCast` (`01183028` to `01183108`). From save version 0x2a each hit
+/// effect until an empty node runs its slot +0xdc with `this` and `argument`.
+pub fn active_effect_init_load_game(e: &mut Engine, this: Ptr<ActiveEffect>, argument: u32) {
+    let caster = e.get(this, ActiveEffect::pCaster);
+    if caster != 0 {
+        let object = e.call(MAGIC_CASTER_BY_NUMERIC_ID, &args![caster]).u32();
+        e.set(this, ActiveEffect::pCaster, object);
+    }
+    let target = e.get(this, ActiveEffect::pTarget);
+    if target != 0 {
+        let object = e.call(MAGIC_TARGET_BY_NUMERIC_ID, &args![target]).u32();
+        e.set(this, ActiveEffect::pTarget, object);
+    }
+    let source = e.get(this, ActiveEffect::pSource);
+    if target != 0 {
+        let form = e.call(LOOKUP_FORM_004839C0, &args![source]).u32();
+        let cast = e
+            .call(
+                RT_DYNAMIC_CAST,
+                &args![form, 0u32, TES_FORM_TYPE, TES_BOUND_OBJECT_TYPE, 0u32],
+            )
+            .u32();
+        e.set(this, ActiveEffect::pSource, cast);
+    }
+    if save_version(e) >= 0x2a {
+        let list = e.get(this, ActiveEffect::pHitEffects);
+        for_each_until_empty(e, list, |e, item| {
+            e.vcall(item, 0xdc, &args![this, argument]);
+        });
+    }
+}
+
+// Translated from 00805760 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ActiveEffect::FinishInitLoadGame` (Xbox PDB): from save version 0x2a each hit effect
+/// until an empty node runs its slot +0xe0 (`this`, `argument`, 0) and is handed to
+/// `ProcessLists::AddTempEffect`; then the sound restarts (`fn_00804cd0`) when the effect
+/// setting has flag 0x400.
+pub fn active_effect_finish_init_load_game(e: &mut Engine, this: Ptr<ActiveEffect>, argument: u32) {
+    if save_version(e) >= 0x2a {
+        let list = e.get(this, ActiveEffect::pHitEffects);
+        for_each_until_empty(e, list, |e, item| {
+            e.vcall(item, 0xe0, &args![this, argument, 0u32]);
+            e.call(PROCESS_LISTS_ADD_TEMP_EFFECT, &args![PROCESS_LISTS, item]);
+        });
+    }
+    let setting = e.call(EFFECT_POINTER_007DF1D0, &args![this]).u32();
+    if e.call(FLAG_TEST_00403E60, &args![setting, 0x400u32]).bool() {
+        fn_00804cd0(e, this);
+    }
+}
+
+// Translated from 00805810 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed (cdecl: effect, argument): the bytes `SaveActiveEffect` writes for one effect:
+/// 2 more from save version 0x2a, 4 + 1, and the effect's own size (slot +0x10 with
+/// `argument`). Returns `AX`.
+pub fn fn_00805810(e: &mut Engine, effect: Ptr<ActiveEffect>, argument: u32) -> u16 {
+    let mut size = 0u16;
+    if save_version(e) >= 0x2a {
+        size += 2;
+    }
+    size += 4;
+    size += 1;
+    let own = e.vcall(effect.addr(), 0x10, &args![argument]).u16();
+    size.wrapping_add(own)
+}
+
+// Translated from 00805880 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ActiveEffect::SaveActiveEffect` (Xbox PDB, cdecl: effect, argument): from save version
+/// 0x2a its size (slot +0x10) as 2 bytes; its spell's form id (`SaveNumericID`); the
+/// effect item's index in the spell's list as a byte; then its own save (slot +0x18).
+pub fn active_effect_save_active_effect(e: &mut Engine, effect: Ptr<ActiveEffect>, argument: u32) {
+    e.with_stack(0xc, |e, frame| {
+        let local = |offset: u32| frame.addr() + 0xc - offset;
+        if save_version(e) >= 0x2a {
+            let size = e.vcall(effect.addr(), 0x10, &args![argument]).u16();
+            e.mem.set_u16(local(0xc), size);
+            save_bytes(e, local(0xc), 2);
+        }
+        let spell = e.get(effect, ActiveEffect::pSpell);
+        let id = e.call(MAGIC_ITEM_GET_FORM_ID, &args![spell]).u32();
+        e.mem.set_u32(local(4), id);
+        let game = save_load_game(e);
+        e.call(SAVE_NUMERIC_ID, &args![game, local(4), 4u32]);
+        let item = e.get(effect, ActiveEffect::pEffect);
+        let spell = e.get(effect, ActiveEffect::pSpell);
+        let index = e
+            .call(
+                EFFECT_ITEM_LIST_GET_INDEX,
+                &args![spell.wrapping_add(0xc), item],
+            )
+            .u8();
+        e.mem.set_u8(local(5), index);
+        save_bytes(e, local(5), 1);
+        e.vcall(effect.addr(), 0x18, &args![argument]);
+    });
+}
+
+// Translated from 00805920 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ActiveEffect::LoadActiveEffect` (Xbox PDB, cdecl: argument): reads what
+/// `SaveActiveEffect` wrote (the size, 0x1c before save version 0x2a; the spell id; the
+/// effect item's index). With the spell (`GetMagicItemByNumericID`) and its effect item
+/// (`GetEffectItemByIndex`) it makes the effect (`00403ab0` with 0, spell, item, 0), loads
+/// it (slot +0x20) and returns it; otherwise it passes the size to `00857bd0`, reports the
+/// id and index through `005b5e40` and returns null.
+pub fn active_effect_load_active_effect(e: &mut Engine, argument: u32) -> u32 {
+    e.with_stack(0x18, |e, frame| {
+        let local = |offset: u32| frame.addr() + 0x18 - offset;
+        e.mem.set_u16(local(0xc), 0x1c);
+        if save_version(e) >= 0x2a {
+            load_bytes(e, local(0xc), 2);
+        }
+        let game = save_load_game(e);
+        e.call(LOAD_NUMERIC_ID, &args![game, local(8), 4u32]);
+        load_bytes(e, local(0xd), 1);
+        let id = e.mem.u32(local(8));
+        let spell = e.call(MAGIC_ITEM_BY_NUMERIC_ID, &args![id]).u32();
+        if spell != 0 {
+            let index = u32::from(e.mem.u8(local(0xd)));
+            let item = e
+                .call(EFFECT_ITEM_BY_INDEX, &args![spell.wrapping_add(0xc), index])
+                .u32();
+            if item != 0 {
+                let effect = e
+                    .call(EFFECT_ARCHETYPES_ACTIVATE, &args![0u32, spell, item, 0u32])
+                    .u32();
+                e.vcall(effect, 0x20, &args![argument]);
+                return effect;
+            }
+        }
+        let size = u32::from(e.mem.u16(local(0xc)));
+        let game = save_load_game(e);
+        e.call(SKIP_BYTES_00857BD0, &args![game, size]);
+        let index = u32::from(e.mem.u8(local(0xd)));
+        let id = e.mem.u32(local(8));
+        e.call(MESSAGE_005B5E40, &args![0x0107_93e0u32, id, index]);
+        0
+    })
+}
+
+// Translated from 00805a00 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed (cdecl: list, argument): the bytes a list of effects takes in the save: 6 more
+/// with save-game blocks, 2, and `fn_00805810` per effect until an empty node. With the
+/// setting at `011de4e8` set it reports the size through `Error`. Returns `AX`.
+pub fn fn_00805a00(e: &mut Engine, list: u32, argument: u32) -> u16 {
+    let mut size = 0u16;
+    let start = size;
+    if use_save_game_blocks(e) {
+        size += 4;
+        size += 2;
+    }
+    size += 2;
+    for_each_until_empty(e, list, |e, effect| {
+        let own = fn_00805810(e, Ptr::new(effect), argument);
+        size = size.wrapping_add(own);
+    });
+    if size_reports_enabled(e) {
+        let counted = u32::from(size).wrapping_sub(u32::from(start));
+        report_save_size(e, COUNTED_SIZE_FORMATS, counted, ACTIVE_EFFECT_FILE, 0x3c8);
+    }
+    size
+}
+
+// Translated from 00805b40 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed (cdecl: list, argument): writes a list of effects. With save-game blocks it
+/// writes the block marker and a 2-byte size to fill in; then a 2-byte count, each effect
+/// until an empty node (`SaveActiveEffect`), and the count where it was. With the setting
+/// at `011de4e8` set it reports the bytes written through `Error`; with blocks it reports
+/// a size over 0xffff through `005b5e40` and stores the size (16 bits) after the marker.
+pub fn fn_00805b40(e: &mut Engine, list: u32, argument: u32) {
+    e.with_stack(0x2c, |e, frame| {
+        let local = |offset: u32| frame.addr() + 0x2c - offset;
+        e.mem.set_u16(local(0xc), 0);
+        let mut size_at = 0u32;
+        let mut start = save_position(e);
+        if size_reports_enabled(e) {
+            start = save_position(e);
+        }
+        if use_save_game_blocks(e) {
+            size_at = save_block_start(e, local(0x18), local(0xc));
+        }
+        e.mem.set_u16(local(0x14), 0);
+        let count_at = save_position(e);
+        save_bytes(e, local(0x14), 2);
+        for_each_until_empty(e, list, |e, effect| {
+            active_effect_save_active_effect(e, Ptr::new(effect), argument);
+            let count = e.mem.u16(local(0x14)).wrapping_add(1);
+            e.mem.set_u16(local(0x14), count);
+        });
+        let count = e.mem.u16(local(0x14));
+        e.mem.set_u16(count_at, count);
+        if size_reports_enabled(e) {
+            let end = save_position(e);
+            let written = end.wrapping_sub(start);
+            report_save_size(e, WRITTEN_SIZE_FORMATS, written, ACTIVE_EFFECT_FILE, 0x3e0);
+        }
+        if use_save_game_blocks(e) {
+            save_block_finish(e, size_at, ACTIVE_EFFECT_FILE, 0x3e0);
+        }
+    });
+}
+
+// Translated from 00805d40 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed (cdecl: list, argument): reads a list of effects written by `fn_00805b40`. With
+/// save-game blocks it checks the block marker (reporting a wrong one through `005b5e40`)
+/// and reads the block's size. The list's effects (until an empty node) are destroyed
+/// (slot 0 with 1; `00495460` runs first for `VampirismEffect`s) and the list cleared
+/// (`00470470`); then each of the count effects (`LoadActiveEffect`) is inserted with
+/// `00825270` (and, for a `VampirismEffect`, `008d8520` runs on `argument` when set).
+/// With blocks the position is then checked against the block's size.
+pub fn fn_00805d40(e: &mut Engine, list: u32, argument: u32) {
+    e.with_stack(0x4c, |e, frame| {
+        let local = |offset: u32| frame.addr() + 0x4c - offset;
+        e.mem.set_u16(local(0xc), 0);
+        let mut start = 0u32;
+        if use_save_game_blocks(e) {
+            start = load_block_start(e, local(0x1c), local(0xc), ACTIVE_EFFECT_FILE, 0x3e8);
+        }
+        for_each_until_empty(e, list, |e, item| {
+            let cast = e
+                .call(
+                    RT_DYNAMIC_CAST,
+                    &args![item, 0u32, ACTIVE_EFFECT_TYPE, VAMPIRISM_EFFECT_TYPE, 0u32],
+                )
+                .u32();
+            if cast != 0 {
+                // The result goes to a local nothing reads (FSTP).
+                e.call(EFFECT_REAL_00495460, &args![item]);
+            }
+            if item != 0 {
+                e.vcall(item, 0, &args![1u32]);
+            }
+        });
+        e.call(HIT_LIST_00470470, &args![list]);
+        load_bytes(e, local(0x14), 2);
+        let mut index = 0i32;
+        while index < i32::from(e.mem.u16(local(0x14))) {
+            let effect = active_effect_load_active_effect(e, argument);
+            let cast = e
+                .call(
+                    RT_DYNAMIC_CAST,
+                    &args![
+                        effect,
+                        0u32,
+                        ACTIVE_EFFECT_TYPE,
+                        VAMPIRISM_EFFECT_TYPE,
+                        0u32
+                    ],
+                )
+                .u32();
+            if cast != 0 && argument != 0 {
+                e.call(ACTOR_OBJECT_008D8520, &args![argument]);
+            }
+            if effect != 0 {
+                bs_simple_list_active_effect_insert(
+                    e,
+                    Ptr::new(list),
+                    effect,
+                    EFFECT_COMPARE_00825270,
+                );
+            }
+            index += 1;
+        }
+        if use_save_game_blocks(e) {
+            load_block_check(e, start, local(0xc), ACTIVE_EFFECT_FILE, 0x40f);
+        }
+    });
+}
+
+// Translated from 008060e0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed (cdecl: list, argument): each effect until an empty node runs its slot +0x28
+/// with `argument`.
+pub fn fn_008060e0(e: &mut Engine, list: u32, argument: u32) {
+    for_each_until_empty(e, list, |e, effect| {
+        e.vcall(effect, 0x28, &args![argument]);
+    });
+}
+
+// Translated from 00806130 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed (cdecl: list, actor): each effect until an empty node runs its slot +0x2c with
+/// `actor`; then, with an actor whose `008d8520` word is set, that object's slot +0x580
+/// runs with 1, 1, 1.
+pub fn fn_00806130(e: &mut Engine, list: u32, actor: u32) {
+    for_each_until_empty(e, list, |e, effect| {
+        e.vcall(effect, 0x2c, &args![actor]);
+    });
+    if actor != 0 && e.call(ACTOR_OBJECT_008D8520, &args![actor]).u32() != 0 {
+        let object = e.call(ACTOR_OBJECT_008D8520, &args![actor]).u32();
+        e.vcall(object, 0x580, &args![1u32, 1u32, 1u32]);
+    }
+}
+
+// Translated from 008061b0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed (cdecl: list, argument): each effect until an empty node runs its slot +0x34
+/// with `argument`.
+pub fn fn_008061b0(e: &mut Engine, list: u32, argument: u32) {
+    for_each_until_empty(e, list, |e, effect| {
+        e.vcall(effect, 0x34, &args![argument]);
+    });
+}
+
+// Translated from 00806420 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 00806420 - the exception-unwinding frame (FS:[0]) is not translated.
+/// `ActiveEffect::LoadGame_ov2` (Xbox PDB): reads what `SaveGame_ov2` wrote from the load
+/// buffer: the elapsed seconds, state bytes, magnitude, duration and flags (`00864980`),
+/// the caster, target and displacement spell ids (`LoadFormID_ov2`), the source (the form
+/// of `LoadFormID`'s id cast from `TESForm` to `TESBoundObject`), then the hit
+/// effects (a variable-sized count; each a type byte, 5 or 6 making one, another reported
+/// through `005b5e40` and leaving null; then `00984f60` with `this`, its load (slot +0xb0)
+/// and the list).
+pub fn active_effect_load_game_ov2(e: &mut Engine, this: Ptr<ActiveEffect>, buffer: u32) {
+    let base = this.addr();
+    e.with_stack(0x4c, |e, frame| {
+        let local = |offset: u32| frame.addr() + 0x4c - offset;
+        for (offset, size) in [
+            (0x04u32, 4u32),
+            (0x10, 1),
+            (0x11, 1),
+            (0x12, 1),
+            (0x13, 1),
+            (0x14, 1),
+            (0x1c, 4),
+            (0x20, 4),
+            (0x18, 4),
+        ] {
+            e.call(LOAD_DATA_00864980, &args![buffer, base + offset, size]);
+        }
+        for offset in [0x28u32, 0x24, 0x44] {
+            e.call(LOAD_FORM_ID_OV2, &args![buffer, base + offset]);
+        }
+        let id = e.call(LOAD_FORM_ID, &args![buffer]).u32();
+        let form = e.call(LOOKUP_FORM_004839C0, &args![id]).u32();
+        let source = e
+            .call(
+                RT_DYNAMIC_CAST,
+                &args![form, 0u32, TES_FORM_TYPE, TES_BOUND_OBJECT_TYPE, 0u32],
+            )
+            .u32();
+        e.set(this, ActiveEffect::pSource, source);
+        let count = e.call(LOAD_VARIABLE_SIZED_VALUE, &args![buffer]).u32();
+        for _ in 0..count {
+            e.mem.set_u8(local(0x19), 0);
+            e.call(LOAD_DATA_00864980, &args![buffer, local(0x19), 1u32]);
+            let kind = e.mem.u8(local(0x19));
+            let hit_effect = new_hit_effect(e, kind, 0x0107_947c);
+            e.mem.set_u32(local(0x18), hit_effect);
+            e.call(HIT_EFFECT_SET_EFFECT_00984F60, &args![hit_effect, this]);
+            e.vcall(hit_effect, 0xb0, &args![buffer]);
+            add_hit_effect(e, this, local(0x18));
+        }
+    });
+}
+
+// Translated from 008066d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ActiveEffect::InitLoadGame_ov2` (Xbox PDB): the caster, target and displacement spell
+/// ids become their objects (`GetMagicCasterByNumericID`, `GetMagicTargetByNumericID`,
+/// `GetMagicItemByNumericID`; 0 stays 0), and each hit effect runs its slot +0xb8 with
+/// `argument`.
+pub fn active_effect_init_load_game_ov2(e: &mut Engine, this: Ptr<ActiveEffect>, argument: u32) {
+    let caster = e.get(this, ActiveEffect::pCaster);
+    let caster = if caster == 0 {
+        0
+    } else {
+        e.call(MAGIC_CASTER_BY_NUMERIC_ID, &args![caster]).u32()
+    };
+    e.set(this, ActiveEffect::pCaster, caster);
+    let target = e.get(this, ActiveEffect::pTarget);
+    let target = if target == 0 {
+        0
+    } else {
+        e.call(MAGIC_TARGET_BY_NUMERIC_ID, &args![target]).u32()
+    };
+    e.set(this, ActiveEffect::pTarget, target);
+    let spell = e.get(this, ActiveEffect::pDisplacementSpell);
+    let spell = if spell == 0 {
+        0
+    } else {
+        e.call(MAGIC_ITEM_BY_NUMERIC_ID, &args![spell]).u32()
+    };
+    e.set(this, ActiveEffect::pDisplacementSpell, spell);
+    let list = e.get(this, ActiveEffect::pHitEffects);
+    for_each_item(e, list, |e, hit_effect| {
+        e.vcall(hit_effect, 0xb8, &args![argument]);
+    });
+}
+
+// Translated from 008067b0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ActiveEffect::FinishLoadGame` (Xbox PDB): restarts the sound (`fn_00804cd0`) when the
+/// effect setting has flag 0x400; each hit effect runs its slot +0xbc with `argument` and
+/// is handed to `ProcessLists::AddTempEffect`.
+pub fn active_effect_finish_load_game(e: &mut Engine, this: Ptr<ActiveEffect>, argument: u32) {
+    let setting = e.call(EFFECT_POINTER_007DF1D0, &args![this]).u32();
+    if e.call(FLAG_TEST_00403E60, &args![setting, 0x400u32]).bool() {
+        fn_00804cd0(e, this);
+    }
+    let list = e.get(this, ActiveEffect::pHitEffects);
+    for_each_item(e, list, |e, hit_effect| {
+        e.vcall(hit_effect, 0xbc, &args![argument]);
+        e.call(
+            PROCESS_LISTS_ADD_TEMP_EFFECT,
+            &args![PROCESS_LISTS, hit_effect],
+        );
+    });
+}
+
+// Translated from 00806910 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ActiveEffect::LoadActiveEffect_ov2` (Xbox PDB, cdecl: load buffer): reads what
+/// `fn_00806840` wrote: the spell (`LoadFormID_ov2`, `GetMagicItemByNumericID`), the
+/// effect item's index byte and the setting's word. When the spell has that effect item
+/// and its setting's `00810fd0` word matches, it reads the size, makes the effect
+/// (`00403ab0` with 0, spell, item, 0), loads it (slot +0x1c) and returns it; otherwise it
+/// passes the size to `0049bb50`, warns (`SaveGameWarning`) and returns null.
+pub fn active_effect_load_active_effect_ov2(e: &mut Engine, buffer: u32) -> u32 {
+    e.with_stack(0x1c, |e, frame| {
+        let local = |offset: u32| frame.addr() + 0x1c - offset;
+        e.mem.set_u32(local(0xc), 0);
+        e.call(LOAD_FORM_ID_OV2, &args![buffer, local(0xc)]);
+        let id = e.mem.u32(local(0xc));
+        let spell = if id == 0 {
+            0
+        } else {
+            e.call(MAGIC_ITEM_BY_NUMERIC_ID, &args![id]).u32()
+        };
+        e.mem.set_u8(local(5), 0);
+        e.call(LOAD_DATA_00864980, &args![buffer, local(5), 1u32]);
+        let value = e.call(LOAD_VARIABLE_SIZED_VALUE, &args![buffer]).u32();
+        let index = u32::from(e.mem.u8(local(5)));
+        if spell != 0 {
+            let item = e
+                .call(EFFECT_ITEM_BY_INDEX, &args![spell.wrapping_add(0xc), index])
+                .u32();
+            if item != 0 {
+                let setting = e.call(GETTER_00825C00, &args![item]).u32();
+                if e.call(GETTER_00810FD0, &args![setting]).u32() == value {
+                    e.call(LOAD_VARIABLE_SIZED_VALUE, &args![buffer]);
+                    let effect = e
+                        .call(EFFECT_ARCHETYPES_ACTIVATE, &args![0u32, spell, item, 0u32])
+                        .u32();
+                    e.vcall(effect, 0x1c, &args![buffer]);
+                    return effect;
+                }
+            }
+        }
+        let size = e.call(LOAD_VARIABLE_SIZED_VALUE, &args![buffer]).u32();
+        e.call(SKIP_0049BB50, &args![buffer, size]);
+        e.call(SAVE_GAME_WARNING, &args![0x0107_94a8u32, id, index, value]);
+        0
+    })
+}
+
+// Translated from 00806a90 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ActiveEffect::LoadActiveEffectList` (Xbox PDB, cdecl: load buffer, list): reverts the
+/// list (`RevertActiveEffectList`), then inserts each of the count effects
+/// (`LoadActiveEffect_ov2`, nulls skipped) with `00825270`.
+pub fn active_effect_load_active_effect_list(e: &mut Engine, buffer: u32, list: u32) {
+    active_effect_revert_active_effect_list(e, buffer, list);
+    let count = e.call(LOAD_VARIABLE_SIZED_VALUE, &args![buffer]).u32();
+    for _ in 0..count {
+        let effect = active_effect_load_active_effect_ov2(e, buffer);
+        if effect != 0 {
+            bs_simple_list_active_effect_insert(e, Ptr::new(list), effect, EFFECT_COMPARE_00825270);
+        }
+    }
+}
+
+// Translated from 00806b00 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed (cdecl: argument, list): each effect of the list runs its slot +0x24 with
+/// `argument`.
+pub fn fn_00806b00(e: &mut Engine, argument: u32, list: u32) {
+    for_each_item(e, list, |e, effect| {
+        e.vcall(effect, 0x24, &args![argument]);
+    });
+}
+
+// Translated from 00806b50 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ActiveEffect::FinishLoadActiveEffectList` (Xbox PDB, cdecl: argument, list): each
+/// effect of the list runs its slot +0x40 with `argument`.
+pub fn active_effect_finish_load_active_effect_list(e: &mut Engine, argument: u32, list: u32) {
+    for_each_item(e, list, |e, effect| {
+        e.vcall(effect, 0x40, &args![argument]);
+    });
+}
+
+// Translated from 00806ba0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ActiveEffect::RevertActiveEffectList` (Xbox PDB, cdecl: argument, list): each effect
+/// of the list runs its slot +0x30 with `argument` and is destroyed (slot 0 with 1); then
+/// the list is cleared (`00470470`).
+pub fn active_effect_revert_active_effect_list(e: &mut Engine, argument: u32, list: u32) {
+    for_each_item(e, list, |e, effect| {
+        e.vcall(effect, 0x30, &args![argument]);
+        e.vcall(effect, 0, &args![1u32]);
+    });
+    e.call(HIT_LIST_00470470, &args![list]);
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -1018,6 +2039,57 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         ),
         entry!(0x0080_6840, fn_00806840(u32, Ptr<ActiveEffect>)),
         entry!(0x0080_6a10, active_effect_save_active_effect_list(u32, u32)),
+        entry!(0x0080_3fe0, active_effect_copy(Ptr<ActiveEffect>) -> u32),
+        entry!(
+            0x0080_4f80,
+            active_effect_get_save_size(Ptr<ActiveEffect>, u32) -> u16
+        ),
+        entry!(0x0080_50d0, active_effect_save_game(Ptr<ActiveEffect>, u32)),
+        entry!(0x0080_5330, active_effect_load_game(Ptr<ActiveEffect>, u32)),
+        entry!(0x0080_5650, fn_00805650(Ptr<ActiveEffect>)),
+        entry!(
+            0x0080_5670,
+            active_effect_init_load_game(Ptr<ActiveEffect>, u32)
+        ),
+        entry!(
+            0x0080_5760,
+            active_effect_finish_init_load_game(Ptr<ActiveEffect>, u32)
+        ),
+        entry!(0x0080_5810, fn_00805810(Ptr<ActiveEffect>, u32) -> u16),
+        entry!(
+            0x0080_5880,
+            active_effect_save_active_effect(Ptr<ActiveEffect>, u32)
+        ),
+        entry!(0x0080_5920, active_effect_load_active_effect(u32) -> u32),
+        entry!(0x0080_5a00, fn_00805a00(u32, u32) -> u16),
+        entry!(0x0080_5b40, fn_00805b40(u32, u32)),
+        entry!(0x0080_5d40, fn_00805d40(u32, u32)),
+        entry!(0x0080_60e0, fn_008060e0(u32, u32)),
+        entry!(0x0080_6130, fn_00806130(u32, u32)),
+        entry!(0x0080_61b0, fn_008061b0(u32, u32)),
+        entry!(
+            0x0080_6420,
+            active_effect_load_game_ov2(Ptr<ActiveEffect>, u32)
+        ),
+        entry!(
+            0x0080_66d0,
+            active_effect_init_load_game_ov2(Ptr<ActiveEffect>, u32)
+        ),
+        entry!(
+            0x0080_67b0,
+            active_effect_finish_load_game(Ptr<ActiveEffect>, u32)
+        ),
+        entry!(0x0080_6910, active_effect_load_active_effect_ov2(u32) -> u32),
+        entry!(0x0080_6a90, active_effect_load_active_effect_list(u32, u32)),
+        entry!(0x0080_6b00, fn_00806b00(u32, u32)),
+        entry!(
+            0x0080_6b50,
+            active_effect_finish_load_active_effect_list(u32, u32)
+        ),
+        entry!(
+            0x0080_6ba0,
+            active_effect_revert_active_effect_list(u32, u32)
+        ),
     ]
 }
 
@@ -1904,5 +2976,763 @@ mod tests {
                 vec![0xb000, 2, 0x88]
             ]
         );
+    }
+}
+
+#[cfg(test)]
+mod save_load_tests {
+    use super::*;
+    use std::cell::RefCell;
+    use std::collections::VecDeque;
+    use std::rc::Rc;
+
+    type Calls = Vec<Vec<u32>>;
+    type Writes = Rc<RefCell<Vec<Vec<u8>>>>;
+
+    fn calls(e: &Engine, addr: u32) -> Calls {
+        e.call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|c| c.0 == addr)
+            .map(|c| c.1.clone())
+            .collect()
+    }
+
+    fn answer(e: &mut Engine, addr: u32, eax: u32) {
+        e.register_double(addr, move |_, _| Ret {
+            eax,
+            ..Ret::default()
+        });
+    }
+
+    /// An object whose vtable slots (byte offsets) are doubles at `0x0300_0000 + slot`
+    /// answering 0.
+    fn object(e: &mut Engine, slots: &[u32]) -> u32 {
+        let vtable = e.mem.alloc(0x600);
+        for slot in slots {
+            e.mem.set_u32(vtable + slot, 0x0300_0000 + slot);
+            if !e.is_translated(0x0300_0000 + slot) {
+                answer(e, 0x0300_0000 + slot, 0);
+            }
+        }
+        let this = e.mem.alloc(0x100);
+        e.mem.set_u32(this, vtable);
+        this
+    }
+
+    /// A list of `items` (8-byte nodes: item, next).
+    fn list(e: &mut Engine, items: &[u32]) -> u32 {
+        let mut next = 0;
+        for item in items.iter().rev() {
+            let node = e.mem.alloc(8);
+            e.mem.set_u32(node, *item);
+            e.mem.set_u32(node + 4, next);
+            next = node;
+        }
+        next
+    }
+
+    /// The save-load game (version `version`, its position a scratch buffer) and the list
+    /// node doubles.
+    fn rig(version: u8) -> Engine {
+        let mut e = Engine::new();
+        e.map(0x011d_e000, 0x1000);
+        let game = e.mem.alloc(0x100);
+        e.set_global(SAVE_LOAD_GAME_POINTER, game);
+        answer(&mut e, SAVE_VERSION_008DF040, u32::from(version));
+        e.register(LIST_NODE_IS_EMPTY, |e, a| {
+            u8::from(e.mem.u32(a[0]) == 0 && e.mem.u32(a[0] + 4) == 0).into_ret()
+        });
+        e.register(LIST_NODE_ITEM, |_, a| a[0].into_ret());
+        e.register(LIST_NODE_NEXT, |e, a| e.mem.u32(a[0] + 4).into_ret());
+        e.call_log = Some(vec![]);
+        e
+    }
+
+    /// Records the bytes each write (`008579b0`, `SaveNumericID`) passes.
+    fn record_writes(e: &mut Engine) -> Writes {
+        let writes: Writes = Rc::default();
+        for addr in [SAVE_BYTES_008579B0, SAVE_NUMERIC_ID] {
+            let log = Rc::clone(&writes);
+            e.register_double(addr, move |e, a| {
+                log.borrow_mut().push(e.mem.bytes(a[1], a[2]));
+                Ret::default()
+            });
+        }
+        writes
+    }
+
+    /// Feeds `data` to the reads (`008579e0`, `LoadNumericID`, `00864980`; the address and
+    /// size are the last two words).
+    fn feed(e: &mut Engine, data: &[u8]) {
+        let stream = Rc::new(RefCell::new(data.iter().copied().collect::<VecDeque<u8>>()));
+        for addr in [LOAD_BYTES_008579E0, LOAD_NUMERIC_ID, LOAD_DATA_00864980] {
+            let stream = Rc::clone(&stream);
+            e.register_double(addr, move |e, a| {
+                let (address, size) = (a[1], a[2]);
+                for i in 0..size {
+                    let byte = stream.borrow_mut().pop_front().unwrap();
+                    e.mem.set_u8(address + i, byte);
+                }
+                Ret::default()
+            });
+        }
+    }
+
+    fn effect(e: &mut Engine) -> Ptr<ActiveEffect> {
+        Ptr::new(object(e, &[0x10, 0x18, 0x44]))
+    }
+
+    #[test]
+    fn copy_makes_a_new_effect_and_hands_it_to_copy_data() {
+        let mut e = rig(0);
+        let this = effect(&mut e);
+        e.set(this, ActiveEffect::pCaster, 0x28);
+        e.set(this, ActiveEffect::pSpell, 0x08);
+        e.set(this, ActiveEffect::pEffect, 0x0c);
+        e.register(OPERATOR_NEW, |e, a| e.mem.alloc(a[0]).into_ret());
+        e.register(ACTIVE_EFFECT_CONSTRUCTOR_00803D30, |_, a| a[0].into_ret());
+        let copy = e.call(0x0080_3fe0, &args![this]).u32();
+        assert_ne!(copy, 0);
+        assert_eq!(
+            calls(&e, ACTIVE_EFFECT_CONSTRUCTOR_00803D30),
+            vec![vec![copy, 0x28, 0x08, 0x0c]]
+        );
+        assert_eq!(calls(&e, 0x0300_0044), vec![vec![this.addr(), copy]]);
+        // A failed allocation copies into null.
+        answer(&mut e, OPERATOR_NEW, 0);
+        assert_eq!(e.call(0x0080_3fe0, &args![this]).u32(), 0);
+        assert_eq!(calls(&e, ACTIVE_EFFECT_CONSTRUCTOR_00803D30).len(), 1);
+        assert_eq!(calls(&e, 0x0300_0044)[1], vec![this.addr(), 0]);
+    }
+
+    #[test]
+    fn save_size_counts_hit_effects_and_the_version_tail() {
+        for (version, expected) in [
+            (0x48u8, 28 + 1 + 4 + 6 + 4),
+            (0x41, 28 + 1 + 4 + 6 + 1),
+            (0x29, 28),
+        ] {
+            let mut e = rig(version);
+            let this = effect(&mut e);
+            let first = object(&mut e, &[0xd0]);
+            let second = object(&mut e, &[0xd0]);
+            let head = list(&mut e, &[first, second]);
+            e.set(this, ActiveEffect::pHitEffects, head);
+            // Slot +0xd0 answers 3 for the first, 0x10005 (AX 5) for the second.
+            e.register_double(0x0300_00d0, move |_, a| {
+                (if a[0] == first { 3u32 } else { 0x0001_0005 }).into_ret()
+            });
+            let size = e.call(0x0080_4f80, &args![this, 0x77u32]).u16();
+            assert_eq!(size, expected, "version {version:#x}");
+            if version >= 0x2a {
+                assert_eq!(calls(&e, 0x0300_00d0)[0], vec![first, this.addr(), 0x77]);
+            }
+        }
+    }
+
+    #[test]
+    fn save_game_writes_the_fields_ids_hit_effects_and_flag() {
+        let mut e = rig(0x41);
+        let writes = record_writes(&mut e);
+        let this = effect(&mut e);
+        let base = this.addr();
+        e.mem.set_u32(base + 4, 0x1111_1111);
+        e.mem.write(base + 0x10, &[1, 2, 3, 4, 5]);
+        e.mem.set_u32(base + 0x1c, 0x2222_2222);
+        e.mem.set_u32(base + 0x20, 0x3333_3333);
+        e.set(this, ActiveEffect::iFlags, 1);
+        e.set(this, ActiveEffect::pCaster, 0x4000);
+        e.set(this, ActiveEffect::pSource, 0x5000);
+        answer(&mut e, MAGIC_CASTER_GET_FORM_ID, 0xc0);
+        answer(&mut e, GETTER_0084E3A0, 0x50);
+        let position = e.mem.alloc(4);
+        answer(&mut e, GETTER_00825C00, position);
+        let hit = object(&mut e, &[0x9c, 0xd4]);
+        answer(&mut e, 0x0300_009c, 6);
+        let head = list(&mut e, &[hit]);
+        e.set(this, ActiveEffect::pHitEffects, head);
+        e.call(0x0080_50d0, &args![this, 0x77u32]);
+        let writes = writes.borrow();
+        let expected: Vec<Vec<u8>> = vec![
+            0x1111_1111u32.to_le_bytes().to_vec(),
+            vec![1],
+            vec![2],
+            vec![3],
+            vec![4],
+            vec![5],
+            0x2222_2222u32.to_le_bytes().to_vec(),
+            0x3333_3333u32.to_le_bytes().to_vec(),
+            0xc0u32.to_le_bytes().to_vec(),
+            0u32.to_le_bytes().to_vec(),
+            0x50u32.to_le_bytes().to_vec(),
+            vec![0],
+            vec![6],
+            vec![1],
+        ];
+        assert_eq!(*writes, expected);
+        assert_eq!(calls(&e, 0x0300_00d4), vec![vec![hit, base, 0x77]]);
+        assert_eq!(
+            e.mem.u8(position),
+            1,
+            "the count goes where 00825c00 pointed"
+        );
+    }
+
+    #[test]
+    fn load_game_reads_fields_ids_and_hit_effects() {
+        for version in [0x48u8, 0x41] {
+            let mut e = rig(version);
+            let this = effect(&mut e);
+            let base = this.addr();
+            let mut data = vec![];
+            data.extend(0x1111_1111u32.to_le_bytes());
+            data.extend([1, 2, 3, 4, 5]);
+            data.extend(0x2222_2222u32.to_le_bytes());
+            data.extend(0x3333_3333u32.to_le_bytes());
+            data.extend(0xc0u32.to_le_bytes());
+            data.extend(0x70u32.to_le_bytes());
+            data.extend(0x50u32.to_le_bytes());
+            data.extend([2, 5, 6]);
+            if version == 0x48 {
+                data.extend(0x99u32.to_le_bytes());
+            } else {
+                data.push(1);
+            }
+            feed(&mut e, &data);
+            e.register(ALLOCATE_00AA13E0, |e, a| e.mem.alloc(a[0]).into_ret());
+            let five = object(&mut e, &[0xd8]);
+            let six = object(&mut e, &[0xd8]);
+            answer(&mut e, HIT_EFFECT_KIND_5_CONSTRUCTOR, five);
+            answer(&mut e, HIT_EFFECT_KIND_6_CONSTRUCTOR, six);
+            e.register(OPERATOR_NEW, |e, a| e.mem.alloc(a[0]).into_ret());
+            e.register(LIST_NODE_INIT_00470440, |e, a| {
+                let item = e.mem.u32(a[1]);
+                e.mem.set_u32(a[0], item);
+                a[0].into_ret()
+            });
+            let front = Rc::new(RefCell::new(vec![]));
+            let seen = Rc::clone(&front);
+            e.register_double(LIST_INSERT_FRONT_005AE3D0, move |e, a| {
+                seen.borrow_mut().push(e.mem.u32(a[1]));
+                Ret::default()
+            });
+            e.register(EFFECT_FLAG_00803E80, |_, _| Ret::default());
+            e.call(0x0080_5330, &args![this, 0x77u32]);
+            assert_eq!(e.mem.u32(base + 4), 0x1111_1111);
+            assert_eq!(e.mem.bytes(base + 0x10, 5), vec![1, 2, 3, 4, 5]);
+            assert_eq!(e.get(this, ActiveEffect::pCaster), 0xc0);
+            assert_eq!(e.get(this, ActiveEffect::pTarget), 0x70);
+            assert_eq!(e.get(this, ActiveEffect::pSource), 0x50);
+            let node = e.get(this, ActiveEffect::pHitEffects);
+            assert_eq!(e.mem.u32(node), five);
+            assert_eq!(*front.borrow(), vec![six]);
+            assert_eq!(calls(&e, 0x0300_00d8).len(), 2);
+            assert_eq!(calls(&e, 0x0300_00d8)[0], vec![five, base, 0x77]);
+            if version == 0x48 {
+                assert_eq!(e.get(this, ActiveEffect::iFlags), 0x99);
+                assert!(calls(&e, EFFECT_FLAG_00803E80).is_empty());
+            } else {
+                assert_eq!(
+                    calls(&e, EFFECT_FLAG_00803E80),
+                    vec![vec![base, 2], vec![base, 4]]
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn load_game_reports_an_unknown_hit_effect_kind_then_calls_through_null() {
+        let mut e = rig(0x2a);
+        let this = effect(&mut e);
+        let mut data = vec![0u8; 17 + 12];
+        data.extend([1, 9]);
+        feed(&mut e, &data);
+        e.register(MESSAGE_005B5E40, |_, _| Ret::default());
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            e.call(0x0080_5330, &args![this, 0u32]);
+        }));
+        assert!(result.is_err(), "slot +0xd8 of a null hit effect");
+        assert_eq!(calls(&e, MESSAGE_005B5E40), vec![vec![0x0107_93b8, 9]]);
+    }
+
+    #[test]
+    fn fn_00805650_sets_flags_2_and_4() {
+        let mut e = rig(0);
+        e.register(EFFECT_FLAG_00803E80, |_, _| Ret::default());
+        e.call(0x0080_5650, &args![0x1234u32]);
+        assert_eq!(
+            calls(&e, EFFECT_FLAG_00803E80),
+            vec![vec![0x1234, 2], vec![0x1234, 4]]
+        );
+    }
+
+    #[test]
+    fn init_load_game_resolves_ids_and_casts_the_source_only_with_a_target() {
+        for target in [0u32, 9] {
+            let mut e = rig(0x2a);
+            let this = effect(&mut e);
+            e.set(this, ActiveEffect::pCaster, 7);
+            e.set(this, ActiveEffect::pTarget, target);
+            e.set(this, ActiveEffect::pSource, 0x55);
+            answer(&mut e, MAGIC_CASTER_BY_NUMERIC_ID, 0x700);
+            answer(&mut e, MAGIC_TARGET_BY_NUMERIC_ID, 0x900);
+            answer(&mut e, LOOKUP_FORM_004839C0, 0x5500);
+            answer(&mut e, RT_DYNAMIC_CAST, 0x5501);
+            let hit = object(&mut e, &[0xdc]);
+            let head = list(&mut e, &[hit]);
+            e.set(this, ActiveEffect::pHitEffects, head);
+            e.call(0x0080_5670, &args![this, 0x77u32]);
+            assert_eq!(e.get(this, ActiveEffect::pCaster), 0x700);
+            if target == 0 {
+                assert_eq!(e.get(this, ActiveEffect::pTarget), 0);
+                assert_eq!(e.get(this, ActiveEffect::pSource), 0x55);
+            } else {
+                assert_eq!(e.get(this, ActiveEffect::pTarget), 0x900);
+                assert_eq!(e.get(this, ActiveEffect::pSource), 0x5501);
+                assert_eq!(
+                    calls(&e, RT_DYNAMIC_CAST),
+                    vec![vec![0x5500, 0, TES_FORM_TYPE, TES_BOUND_OBJECT_TYPE, 0]]
+                );
+            }
+            assert_eq!(calls(&e, 0x0300_00dc), vec![vec![hit, this.addr(), 0x77]]);
+        }
+    }
+
+    #[test]
+    fn finish_init_load_game_adds_temp_effects_and_restarts_a_looping_sound() {
+        let mut e = rig(0x2a);
+        let this = effect(&mut e);
+        let hit = object(&mut e, &[0xe0]);
+        let head = list(&mut e, &[hit]);
+        e.set(this, ActiveEffect::pHitEffects, head);
+        e.register(PROCESS_LISTS_ADD_TEMP_EFFECT, |_, _| Ret::default());
+        answer(&mut e, EFFECT_POINTER_007DF1D0, 0x4444);
+        answer(&mut e, FLAG_TEST_00403E60, 0);
+        e.call(0x0080_5760, &args![this, 0x77u32]);
+        assert_eq!(
+            calls(&e, 0x0300_00e0),
+            vec![vec![hit, this.addr(), 0x77, 0]]
+        );
+        assert_eq!(
+            calls(&e, PROCESS_LISTS_ADD_TEMP_EFFECT),
+            vec![vec![PROCESS_LISTS, hit]]
+        );
+        assert_eq!(calls(&e, FLAG_TEST_00403E60), vec![vec![0x4444, 0x400]]);
+        // With flag 0x400 the sound restarts (its first call is 007df1d0 again).
+        answer(&mut e, FLAG_TEST_00403E60, 1);
+        answer(&mut e, GETTER_004FD3E0, 0);
+        e.call_log = Some(vec![]);
+        e.call(0x0080_5760, &args![this, 0x77u32]);
+        assert_eq!(calls(&e, GETTER_004FD3E0).len(), 1);
+    }
+
+    #[test]
+    fn fn_00805810_counts_the_effect_record() {
+        for (version, expected) in [(0x2au8, 2 + 4 + 1 + 5), (0x29, 4 + 1 + 5)] {
+            let mut e = rig(version);
+            let this = effect(&mut e);
+            answer(&mut e, 0x0300_0010, 0x0007_0005);
+            assert_eq!(e.call(0x0080_5810, &args![this, 0x77u32]).u16(), expected);
+            assert_eq!(calls(&e, 0x0300_0010), vec![vec![this.addr(), 0x77]]);
+        }
+    }
+
+    #[test]
+    fn save_active_effect_writes_size_id_index_then_its_own_save() {
+        let mut e = rig(0x2a);
+        let writes = record_writes(&mut e);
+        let this = effect(&mut e);
+        e.set(this, ActiveEffect::pSpell, 0x8000);
+        e.set(this, ActiveEffect::pEffect, 0x8100);
+        answer(&mut e, 0x0300_0010, 0x1234_0102);
+        answer(&mut e, MAGIC_ITEM_GET_FORM_ID, 0xabcd);
+        answer(&mut e, EFFECT_ITEM_LIST_GET_INDEX, 0x0103);
+        e.call(0x0080_5880, &args![this, 0x77u32]);
+        assert_eq!(
+            *writes.borrow(),
+            vec![vec![2, 1], 0xabcdu32.to_le_bytes().to_vec(), vec![3]]
+        );
+        assert_eq!(
+            calls(&e, EFFECT_ITEM_LIST_GET_INDEX),
+            vec![vec![0x800c, 0x8100]]
+        );
+        assert_eq!(calls(&e, 0x0300_0018), vec![vec![this.addr(), 0x77]]);
+    }
+
+    #[test]
+    fn load_active_effect_makes_the_effect_or_reports_and_skips() {
+        let mut e = rig(0x2a);
+        let mut data = vec![0x10, 0];
+        data.extend(0x77u32.to_le_bytes());
+        data.push(2);
+        feed(&mut e, &data);
+        answer(&mut e, MAGIC_ITEM_BY_NUMERIC_ID, 0x8000);
+        answer(&mut e, EFFECT_ITEM_BY_INDEX, 0x8100);
+        let made = object(&mut e, &[0x20]);
+        answer(&mut e, EFFECT_ARCHETYPES_ACTIVATE, made);
+        assert_eq!(e.call(0x0080_5920, &args![0x99u32]).u32(), made);
+        assert_eq!(calls(&e, MAGIC_ITEM_BY_NUMERIC_ID), vec![vec![0x77]]);
+        assert_eq!(calls(&e, EFFECT_ITEM_BY_INDEX), vec![vec![0x800c, 2]]);
+        assert_eq!(
+            calls(&e, EFFECT_ARCHETYPES_ACTIVATE),
+            vec![vec![0, 0x8000, 0x8100, 0]]
+        );
+        assert_eq!(calls(&e, 0x0300_0020), vec![vec![made, 0x99]]);
+        // Before version 0x2a the size is 0x1c; without the effect item it is skipped.
+        let mut e = rig(0x29);
+        let mut data = vec![];
+        data.extend(0x77u32.to_le_bytes());
+        data.push(2);
+        feed(&mut e, &data);
+        answer(&mut e, MAGIC_ITEM_BY_NUMERIC_ID, 0x8000);
+        answer(&mut e, EFFECT_ITEM_BY_INDEX, 0);
+        e.register(SKIP_BYTES_00857BD0, |_, _| Ret::default());
+        e.register(MESSAGE_005B5E40, |_, _| Ret::default());
+        assert_eq!(e.call(0x0080_5920, &args![0x99u32]).u32(), 0);
+        let game = save_load_game(&e);
+        assert_eq!(calls(&e, SKIP_BYTES_00857BD0), vec![vec![game, 0x1c]]);
+        assert_eq!(
+            calls(&e, MESSAGE_005B5E40),
+            vec![vec![0x0107_93e0, 0x77, 2]]
+        );
+    }
+
+    #[test]
+    fn fn_00805a00_counts_the_list_and_reports_the_size() {
+        let mut e = rig(0x2a);
+        answer(&mut e, USE_SAVE_GAME_BLOCKS, 1);
+        let value = e.mem.alloc(4);
+        e.mem.set_u8(value, 1);
+        answer(&mut e, SETTING_VALUE_ADDRESS, value);
+        answer(&mut e, GETTER_004FD3E0, 0);
+        e.register(ERROR_0040FBE0, |_, _| Ret::default());
+        let first = object(&mut e, &[0x10]);
+        answer(&mut e, 0x0300_0010, 3);
+        let head = list(&mut e, &[first]);
+        let size = e.call(0x0080_5a00, &args![head, 0x77u32]).u16();
+        // 4 + 2 + 2, then 2 + 4 + 1 + 3 for the effect.
+        assert_eq!(size, 18);
+        assert_eq!(
+            calls(&e, ERROR_0040FBE0),
+            vec![vec![0x0101_2c78, 18, 0x3c8, 0x0107_9438]]
+        );
+        // With a record: its id, the form's name slot and its word at +5.
+        let record = e.mem.alloc(0x10);
+        e.mem.set_u32(record, 0x42);
+        e.mem.set_u32(record + 5, 0x0506_0708);
+        answer(&mut e, GETTER_004FD3E0, record);
+        let form = object(&mut e, &[0x130]);
+        answer(&mut e, LOOKUP_FORM_004839C0, form);
+        answer(&mut e, 0x0300_0130, 0x6000);
+        e.call_log = Some(vec![]);
+        e.call(0x0080_5a00, &args![0u32, 0x77u32]);
+        assert_eq!(
+            calls(&e, ERROR_0040FBE0),
+            vec![vec![
+                0x0101_2cb0,
+                8,
+                0x42,
+                0x6000,
+                0x0506_0708,
+                0x3c8,
+                0x0107_9438
+            ]]
+        );
+    }
+
+    #[test]
+    fn fn_00805b40_writes_the_block_count_and_size() {
+        let mut e = rig(0x2a);
+        let writes = record_writes(&mut e);
+        answer(&mut e, USE_SAVE_GAME_BLOCKS, 1);
+        let value = e.mem.alloc(4);
+        answer(&mut e, SETTING_VALUE_ADDRESS, value);
+        let buffer = e.mem.alloc(0x40);
+        // The position advances 2 per call: start, size slot, count slot, end.
+        let position = Rc::new(RefCell::new(buffer));
+        let at = Rc::clone(&position);
+        e.register_double(GETTER_00825C00, move |_, _| {
+            let now = *at.borrow();
+            *at.borrow_mut() = now + 2;
+            now.into_ret()
+        });
+        let first = object(&mut e, &[0x10, 0x18]);
+        answer(&mut e, MAGIC_ITEM_GET_FORM_ID, 1);
+        answer(&mut e, EFFECT_ITEM_LIST_GET_INDEX, 0);
+        let head = list(&mut e, &[first, first]);
+        e.call(0x0080_5b40, &args![head, 0x77u32]);
+        let writes = writes.borrow();
+        assert_eq!(writes[0], BLOCK_MARKER.to_le_bytes().to_vec());
+        assert_eq!(writes[1], vec![0, 0]);
+        assert_eq!(writes[2], vec![0, 0]);
+        // Size slot at buffer + 2, count slot at buffer + 4, last position buffer + 6.
+        assert_eq!(e.mem.u16(buffer + 4), 2);
+        assert_eq!(e.mem.u16(buffer + 2), 4);
+        assert_eq!(calls(&e, 0x0300_0018).len(), 2);
+    }
+
+    #[test]
+    fn fn_00805d40_replaces_the_list_with_the_loaded_effects() {
+        let mut e = rig(0x2a);
+        answer(&mut e, USE_SAVE_GAME_BLOCKS, 0);
+        let old = object(&mut e, &[0]);
+        let head = list(&mut e, &[old]);
+        e.register(RT_DYNAMIC_CAST, |_, a| a[0].into_ret());
+        answer(&mut e, EFFECT_REAL_00495460, 0);
+        e.register(HIT_LIST_00470470, |e, a| {
+            e.mem.set_u32(a[0], 0);
+            e.mem.set_u32(a[0] + 4, 0);
+            Ret::default()
+        });
+        answer(&mut e, ACTOR_OBJECT_008D8520, 0);
+        // Count 1; the effect record: size, id, index.
+        let mut data = vec![1, 0, 0x10, 0];
+        data.extend(0x77u32.to_le_bytes());
+        data.push(0);
+        feed(&mut e, &data);
+        answer(&mut e, MAGIC_ITEM_BY_NUMERIC_ID, 0x8000);
+        answer(&mut e, EFFECT_ITEM_BY_INDEX, 0x8100);
+        let made = object(&mut e, &[0x20]);
+        answer(&mut e, EFFECT_ARCHETYPES_ACTIVATE, made);
+        e.call(0x0080_5d40, &args![head, 0x99u32]);
+        assert_eq!(calls(&e, 0x0300_0000), vec![vec![old, 1]]);
+        assert_eq!(calls(&e, EFFECT_REAL_00495460), vec![vec![old]]);
+        assert_eq!(e.mem.u32(head), made, "the loaded effect fills the head");
+        assert_eq!(calls(&e, ACTOR_OBJECT_008D8520), vec![vec![0x99]]);
+    }
+
+    #[test]
+    fn fn_00805d40_reports_a_wrong_marker_and_a_short_block() {
+        let mut e = rig(0x2a);
+        answer(&mut e, USE_SAVE_GAME_BLOCKS, 1);
+        answer(&mut e, LOAD_RECORD_004FD3C0, 0);
+        let positions = Rc::new(RefCell::new(vec![0x100u32, 0x150]));
+        let next = Rc::clone(&positions);
+        e.register_double(GETTER_00825C00, move |_, _| {
+            next.borrow_mut().remove(0).into_ret()
+        });
+        e.register(MESSAGE_005B5E40, |_, _| Ret::default());
+        e.register(HIT_LIST_00470470, |_, _| Ret::default());
+        // Marker 0, size 0x60, count 0.
+        let mut data = vec![0u8; 4];
+        data.extend([0x60, 0, 0, 0]);
+        feed(&mut e, &data);
+        e.call(0x0080_5d40, &args![0u32, 0u32]);
+        assert_eq!(
+            calls(&e, MESSAGE_005B5E40),
+            vec![
+                vec![0x0101_56a8, 0x0107_9438, 0x3e8, 0x2a],
+                vec![0x0101_5440, 0x10, 0x0107_9438, 0x40f, 0x2a]
+            ]
+        );
+    }
+
+    #[test]
+    fn list_walkers_call_their_slots_until_an_empty_node() {
+        for (addr, slot) in [(0x0080_60e0u32, 0x28u32), (0x0080_61b0, 0x34)] {
+            let mut e = rig(0);
+            let first = object(&mut e, &[slot]);
+            let head = list(&mut e, &[first, 0]);
+            // The second node (null item, no next) is empty: the walk stops there.
+            e.call(addr, &args![head, 0x77u32]);
+            assert_eq!(calls(&e, 0x0300_0000 + slot), vec![vec![first, 0x77]]);
+        }
+    }
+
+    #[test]
+    fn fn_00806130_tells_the_actor_object_after_the_effects() {
+        let mut e = rig(0);
+        let first = object(&mut e, &[0x2c]);
+        let head = list(&mut e, &[first]);
+        let process = object(&mut e, &[0x580]);
+        answer(&mut e, ACTOR_OBJECT_008D8520, process);
+        e.call(0x0080_6130, &args![head, 0x99u32]);
+        assert_eq!(calls(&e, 0x0300_002c), vec![vec![first, 0x99]]);
+        assert_eq!(calls(&e, 0x0300_0580), vec![vec![process, 1, 1, 1]]);
+        // Without an actor nothing more runs.
+        e.call_log = Some(vec![]);
+        e.call(0x0080_6130, &args![0u32, 0u32]);
+        assert!(calls(&e, ACTOR_OBJECT_008D8520).is_empty());
+    }
+
+    #[test]
+    fn load_game_ov2_reads_the_buffer_and_the_hit_effects() {
+        let mut e = rig(0);
+        let this = effect(&mut e);
+        let base = this.addr();
+        let mut data = vec![];
+        data.extend(0x1111_1111u32.to_le_bytes());
+        data.extend([1, 2, 3, 4, 5]);
+        data.extend(0x2222_2222u32.to_le_bytes());
+        data.extend(0x3333_3333u32.to_le_bytes());
+        data.extend(0x4444_4444u32.to_le_bytes());
+        data.push(6);
+        feed(&mut e, &data);
+        e.register(LOAD_FORM_ID_OV2, |_, _| Ret::default());
+        answer(&mut e, LOAD_FORM_ID, 0x50);
+        answer(&mut e, LOOKUP_FORM_004839C0, 0x5000);
+        answer(&mut e, RT_DYNAMIC_CAST, 0x5001);
+        answer(&mut e, LOAD_VARIABLE_SIZED_VALUE, 1);
+        e.register(ALLOCATE_00AA13E0, |e, a| e.mem.alloc(a[0]).into_ret());
+        let six = object(&mut e, &[0xb0]);
+        answer(&mut e, HIT_EFFECT_KIND_6_CONSTRUCTOR, six);
+        e.register(HIT_EFFECT_SET_EFFECT_00984F60, |_, _| Ret::default());
+        e.register(OPERATOR_NEW, |e, a| e.mem.alloc(a[0]).into_ret());
+        e.register(LIST_NODE_INIT_00470440, |e, a| {
+            let item = e.mem.u32(a[1]);
+            e.mem.set_u32(a[0], item);
+            a[0].into_ret()
+        });
+        e.call(0x0080_6420, &args![this, 0x88u32]);
+        assert_eq!(e.mem.u32(base + 0x18), 0x4444_4444);
+        assert_eq!(e.mem.bytes(base + 0x10, 5), vec![1, 2, 3, 4, 5]);
+        assert_eq!(
+            calls(&e, LOAD_FORM_ID_OV2),
+            vec![
+                vec![0x88, base + 0x28],
+                vec![0x88, base + 0x24],
+                vec![0x88, base + 0x44]
+            ]
+        );
+        assert_eq!(e.get(this, ActiveEffect::pSource), 0x5001);
+        assert_eq!(
+            calls(&e, HIT_EFFECT_SET_EFFECT_00984F60),
+            vec![vec![six, base]]
+        );
+        assert_eq!(calls(&e, 0x0300_00b0), vec![vec![six, 0x88]]);
+        let node = e.get(this, ActiveEffect::pHitEffects);
+        assert_eq!(e.mem.u32(node), six);
+    }
+
+    #[test]
+    fn init_load_game_ov2_resolves_the_three_ids() {
+        let mut e = rig(0);
+        let this = effect(&mut e);
+        e.set(this, ActiveEffect::pCaster, 7);
+        e.set(this, ActiveEffect::pTarget, 0);
+        e.set(this, ActiveEffect::pDisplacementSpell, 9);
+        answer(&mut e, MAGIC_CASTER_BY_NUMERIC_ID, 0x700);
+        answer(&mut e, MAGIC_ITEM_BY_NUMERIC_ID, 0x900);
+        let hit = object(&mut e, &[0xb8]);
+        let head = list(&mut e, &[0, hit]);
+        e.set(this, ActiveEffect::pHitEffects, head);
+        e.call(0x0080_66d0, &args![this, 0x77u32]);
+        assert_eq!(e.get(this, ActiveEffect::pCaster), 0x700);
+        assert_eq!(e.get(this, ActiveEffect::pTarget), 0);
+        assert_eq!(e.get(this, ActiveEffect::pDisplacementSpell), 0x900);
+        assert!(calls(&e, MAGIC_TARGET_BY_NUMERIC_ID).is_empty());
+        assert_eq!(calls(&e, 0x0300_00b8), vec![vec![hit, 0x77]]);
+    }
+
+    #[test]
+    fn finish_load_game_hands_each_hit_effect_to_the_process_lists() {
+        let mut e = rig(0);
+        let this = effect(&mut e);
+        answer(&mut e, EFFECT_POINTER_007DF1D0, 0x4444);
+        answer(&mut e, FLAG_TEST_00403E60, 0);
+        e.register(PROCESS_LISTS_ADD_TEMP_EFFECT, |_, _| Ret::default());
+        let hit = object(&mut e, &[0xbc]);
+        let head = list(&mut e, &[hit, 0]);
+        e.set(this, ActiveEffect::pHitEffects, head);
+        e.call(0x0080_67b0, &args![this, 0x77u32]);
+        assert_eq!(calls(&e, 0x0300_00bc), vec![vec![hit, 0x77]]);
+        assert_eq!(
+            calls(&e, PROCESS_LISTS_ADD_TEMP_EFFECT),
+            vec![vec![PROCESS_LISTS, hit]]
+        );
+    }
+
+    #[test]
+    fn load_active_effect_ov2_checks_the_setting_word() {
+        for matches in [true, false] {
+            let mut e = rig(0);
+            e.register(LOAD_FORM_ID_OV2, |e, a| {
+                e.mem.set_u32(a[1], 0x77);
+                Ret::default()
+            });
+            feed(&mut e, &[3]);
+            let values = Rc::new(RefCell::new(vec![0x10u32, 0x20, 0x30]));
+            let next = Rc::clone(&values);
+            e.register_double(LOAD_VARIABLE_SIZED_VALUE, move |_, _| {
+                next.borrow_mut().remove(0).into_ret()
+            });
+            answer(&mut e, MAGIC_ITEM_BY_NUMERIC_ID, 0x8000);
+            answer(&mut e, EFFECT_ITEM_BY_INDEX, 0x8100);
+            answer(&mut e, GETTER_00825C00, 0x8200);
+            answer(&mut e, GETTER_00810FD0, if matches { 0x10 } else { 0x11 });
+            let made = object(&mut e, &[0x1c]);
+            answer(&mut e, EFFECT_ARCHETYPES_ACTIVATE, made);
+            e.register(SKIP_0049BB50, |_, _| Ret::default());
+            e.register(SAVE_GAME_WARNING, |_, _| Ret::default());
+            let result = e.call(0x0080_6910, &args![0x88u32]).u32();
+            assert_eq!(calls(&e, EFFECT_ITEM_BY_INDEX), vec![vec![0x800c, 3]]);
+            if matches {
+                assert_eq!(result, made);
+                assert_eq!(calls(&e, 0x0300_001c), vec![vec![made, 0x88]]);
+            } else {
+                assert_eq!(result, 0);
+                assert_eq!(calls(&e, SKIP_0049BB50), vec![vec![0x88, 0x20]]);
+                assert_eq!(
+                    calls(&e, SAVE_GAME_WARNING),
+                    vec![vec![0x0107_94a8, 0x77, 3, 0x10]]
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn load_active_effect_list_reverts_then_inserts_the_loaded_effects() {
+        let mut e = rig(0);
+        let old = object(&mut e, &[0, 0x30]);
+        let head = list(&mut e, &[old]);
+        e.register(HIT_LIST_00470470, |e, a| {
+            e.mem.set_u32(a[0], 0);
+            Ret::default()
+        });
+        let values = Rc::new(RefCell::new(vec![1u32, 0x10, 0x20]));
+        let next = Rc::clone(&values);
+        e.register_double(LOAD_VARIABLE_SIZED_VALUE, move |_, _| {
+            next.borrow_mut().remove(0).into_ret()
+        });
+        e.register(LOAD_FORM_ID_OV2, |e, a| {
+            e.mem.set_u32(a[1], 0x77);
+            Ret::default()
+        });
+        feed(&mut e, &[0]);
+        answer(&mut e, MAGIC_ITEM_BY_NUMERIC_ID, 0x8000);
+        answer(&mut e, EFFECT_ITEM_BY_INDEX, 0x8100);
+        answer(&mut e, GETTER_00825C00, 0x8200);
+        answer(&mut e, GETTER_00810FD0, 0x10);
+        let made = object(&mut e, &[0x1c]);
+        answer(&mut e, EFFECT_ARCHETYPES_ACTIVATE, made);
+        e.call(0x0080_6a90, &args![0x88u32, head]);
+        assert_eq!(calls(&e, 0x0300_0030), vec![vec![old, 0x88]]);
+        assert_eq!(calls(&e, 0x0300_0000), vec![vec![old, 1]]);
+        assert_eq!(e.mem.u32(head), made);
+    }
+
+    #[test]
+    fn item_walkers_skip_null_items_and_call_their_slots() {
+        for (addr, slot) in [(0x0080_6b00u32, 0x24u32), (0x0080_6b50, 0x40)] {
+            let mut e = rig(0);
+            let first = object(&mut e, &[slot]);
+            let head = list(&mut e, &[0, first]);
+            e.call(addr, &args![0x77u32, head]);
+            assert_eq!(calls(&e, 0x0300_0000 + slot), vec![vec![first, 0x77]]);
+        }
+    }
+
+    #[test]
+    fn revert_list_reverts_and_destroys_each_effect_then_clears_the_list() {
+        let mut e = rig(0);
+        let first = object(&mut e, &[0, 0x30]);
+        let head = list(&mut e, &[first, 0]);
+        e.register(HIT_LIST_00470470, |_, _| Ret::default());
+        e.call(0x0080_6ba0, &args![0x77u32, head]);
+        assert_eq!(calls(&e, 0x0300_0030), vec![vec![first, 0x77]]);
+        assert_eq!(calls(&e, 0x0300_0000), vec![vec![first, 1]]);
+        assert_eq!(calls(&e, HIT_LIST_00470470), vec![vec![head]]);
     }
 }

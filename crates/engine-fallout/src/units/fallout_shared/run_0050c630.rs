@@ -144,6 +144,13 @@ pub fn fn_0050c9e0(e: &mut Engine, this: Ptr, value: u32) {
     e.mem.set_u32(this.addr() + 0xb8, value);
 }
 
+// Translated from 0050c820 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No map name: returns the address `this + 0xBC` (the block the
+/// constructor `0050c6c0` hands to `00416870`).
+pub fn fn_0050c820(_e: &mut Engine, this: Ptr) -> u32 {
+    this.addr().wrapping_add(0xbc)
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -155,7 +162,20 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x0050_c870, fn_0050c870(Ptr)),
         entry!(0x0050_c990, fn_0050c990(Ptr)),
         entry!(0x0050_c9e0, fn_0050c9e0(Ptr, u32)),
+        entry!(0x0050_c820, fn_0050c820(Ptr) -> u32),
     ]
+}
+
+#[cfg(test)]
+mod n040_tests {
+    use super::*;
+
+    #[test]
+    fn fn_0050c820_returns_the_block_at_0xbc() {
+        let mut e = Engine::new();
+        assert_eq!(e.call(0x0050_c820, &[0x1000]).u32(), 0x10bc);
+        assert_eq!(e.call(0x0050_c820, &[0xffff_ff80]).u32(), 0x3c);
+    }
 }
 
 #[cfg(test)]

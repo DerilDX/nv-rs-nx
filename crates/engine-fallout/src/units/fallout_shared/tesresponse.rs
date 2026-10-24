@@ -611,6 +611,29 @@ pub fn fn_006174b0(e: &mut Engine, this: Ptr<TesResponse>) -> u8 {
     e.get(this, TesResponse::ucResponseID)
 }
 
+/// The type descriptor of `TESRaceForm` (`01186bc0`) and the word at +4
+/// (`00726070`, `thiscall`): the race form's race.
+const TES_RACE_FORM_TYPE: u32 = 0x0118_6bc0;
+const WORD_AT_4: u32 = 0x0072_6070;
+
+// Translated from 00617270 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TESRaceForm::GetFormRace` (engine map name; cdecl, the form): the race
+/// of `form` when it is a `TESRaceForm` (`__RTDynamicCast` from `TESForm`;
+/// the word `00726070` reads at +4), else 0.
+pub fn tes_race_form_get_form_race(e: &mut Engine, form: u32) -> u32 {
+    let race_form = e
+        .call(
+            DYNAMIC_CAST,
+            &args![form, 0u32, TES_FORM_TYPE, TES_RACE_FORM_TYPE, 0u32],
+        )
+        .u32();
+    if race_form != 0 {
+        e.call(WORD_AT_4, &args![race_form]).u32()
+    } else {
+        0
+    }
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -640,6 +663,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
             tes_response_get_audio_filename(Ptr<TesResponse>, u32, u32, u32, Ptr)
         ),
         entry!(0x0061_74b0, fn_006174b0(Ptr<TesResponse>) -> u8),
+        entry!(0x0061_7270, tes_race_form_get_form_race(u32) -> u32),
     ]
 }
 
@@ -1201,5 +1225,27 @@ mod b040_tests {
             &args![p.this, 0u32, 1u32, 2u32, 0x4400u32, 0x5000u32],
         );
         assert!(!ok.bool());
+    }
+}
+
+#[cfg(test)]
+mod form_race_tests {
+    use super::*;
+
+    #[test]
+    fn form_race_is_the_race_forms_word_or_zero() {
+        let mut e = Engine::new();
+        e.register(DYNAMIC_CAST, |_, a| {
+            (if a[3] == TES_RACE_FORM_TYPE { a[0] } else { 0 }).into_ret()
+        });
+        e.register(WORD_AT_4, |e, a| e.mem.u32(a[0] + 4).into_ret());
+        let form = e.mem.alloc(8);
+        e.mem.set_u32(form + 4, 0x6000);
+        assert_eq!(e.call(0x0061_7270, &args![form]).u32(), 0x6000);
+        e.register(DYNAMIC_CAST, |_, _| 0u32.into_ret());
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x0061_7270, &args![form]).u32(), 0);
+        let log = e.call_log.take().unwrap();
+        assert!(log.iter().all(|c| c.0 != WORD_AT_4));
     }
 }

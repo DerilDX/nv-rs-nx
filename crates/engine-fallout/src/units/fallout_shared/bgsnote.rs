@@ -291,6 +291,260 @@ pub fn bgs_note_init_item(e: &mut Engine, this: Ptr<BGSNote>) {
     e.call(FORM_SET_FLAG, &args![this, 1u32]);
 }
 
+/// `BGSNote`'s RTTI type descriptor (`.?AVBGSNote@@`), the target of the
+/// `CopyFrom`/`Compare` casts (source: `TESForm`, [`CAST_SOURCE_TYPE`]).
+const TYPE_NOTE: u32 = 0x0118_640c;
+/// `004fadc0`: the address of a note's owner-quest list (`ECX` = the note).
+const OWNER_QUESTS_OF: u32 = 0x004f_adc0;
+/// The player (`PlayerCharacter *`, `011dea3c`).
+const PLAYER: u32 = 0x011d_ea3c;
+
+// Translated from 005e8c00 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`RET 4`), a copy from another form: nothing
+/// unless `source` is a note (`__RTDynamicCast`). Copies the components
+/// (`004851b0`), the type ([`fn_005e8f90`] with the source's
+/// [`fn_005e8d40`]), the speaker ([`fn_005e92d0`]), the note data by this
+/// note's (new) type (0 [`fn_005e9130`], 1 [`fn_005e9200`], 2
+/// [`fn_005e9190`], 3 [`fn_005e9270`], each with the source's getter),
+/// then clears `OwnerQuests` (`00470470`) and adds each of the source's
+/// owner quests (`004fadc0`, nodes until empty) with `005ae3d0`, and
+/// `bHasBeenRead`.
+pub fn fn_005e8c00(e: &mut Engine, this: Ptr<BGSNote>, source: u32) {
+    let cast = e
+        .call(
+            DYNAMIC_CAST,
+            &args![source, 0u32, CAST_SOURCE_TYPE, TYPE_NOTE, 0u32],
+        )
+        .u32();
+    if cast == 0 {
+        return;
+    }
+    let other: Ptr<BGSNote> = Ptr::new(cast);
+    e.call(0x0048_51b0, &args![this, source]);
+    let note_type = fn_005e8d40(e, other);
+    fn_005e8f90(e, this, note_type as u32);
+    let speaker = bgs_note_get_note_speaker(e, other);
+    fn_005e92d0(e, this, speaker);
+    match fn_005e8d40(e, this) {
+        0 => {
+            let data = fn_005e9100(e, other);
+            fn_005e9130(e, this, data);
+        }
+        1 => {
+            let data = fn_005e91d0(e, other);
+            fn_005e9200(e, this, data);
+        }
+        2 => {
+            let data = fn_005e9160(e, other);
+            fn_005e9190(e, this, data);
+        }
+        3 => {
+            let data = fn_005e9240(e, other);
+            fn_005e9270(e, this, data);
+        }
+        _ => {}
+    }
+    e.call(0x0047_0470, &args![this.addr() + 0x74]);
+    let mut node = e.call(OWNER_QUESTS_OF, &args![other]).u32();
+    while node != 0 && !e.call(NODE_IS_EMPTY, &args![node]).bool() {
+        let item = e.call(NODE_ITEM_ADDRESS, &args![node]).u32();
+        e.call(0x005a_e3d0, &args![this.addr() + 0x74, item]);
+        node = e.call(NODE_NEXT, &args![node]).u32();
+    }
+    let read = e.get(other, BGSNote::bHasBeenRead);
+    e.set(this, BGSNote::bHasBeenRead, read);
+}
+
+// Translated from 005e8d60 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`RET 4`), whether `other` differs: true
+/// when it is not a note, its components differ (`00485270`), its type
+/// differs, its data differs by this note's type (0: the sound; 1 and 2:
+/// only one has data, or this one's slot 3 (+0xC) with the other's is
+/// true; 3: the topic, then the speaker), its owner-quest count differs
+/// (`005ae380` of `004fadc0`, this note's first) or one of this note's
+/// owner quests is not in its list (`005f65d0` with a stack copy).
+pub fn fn_005e8d60(e: &mut Engine, this: Ptr<BGSNote>, other: u32) -> bool {
+    let cast = e
+        .call(
+            DYNAMIC_CAST,
+            &args![other, 0u32, CAST_SOURCE_TYPE, TYPE_NOTE, 0u32],
+        )
+        .u32();
+    if cast == 0 {
+        return true;
+    }
+    let theirs: Ptr<BGSNote> = Ptr::new(cast);
+    if e.call(0x0048_5270, &args![this, cast]).bool() {
+        return true;
+    }
+    let their_type = i32::from(e.get(theirs, BGSNote::cType) as i8);
+    let my_type = i32::from(e.get(this, BGSNote::cType) as i8);
+    if their_type != my_type {
+        return true;
+    }
+    match my_type {
+        0 => {
+            if fn_005e9100(e, this) != fn_005e9100(e, theirs) {
+                return true;
+            }
+        }
+        1 | 2 => {
+            let getter: fn(&mut Engine, Ptr<BGSNote>) -> u32 = if my_type == 1 {
+                fn_005e91d0
+            } else {
+                fn_005e9160
+            };
+            let mine = getter(e, this);
+            let other_data = getter(e, theirs);
+            if mine != 0 && other_data != 0 {
+                if e.vcall(mine, 0xc, &args![other_data]).bool() {
+                    return true;
+                }
+            } else if mine != 0 || other_data != 0 {
+                return true;
+            }
+        }
+        3 => {
+            if fn_005e9240(e, this) != fn_005e9240(e, theirs) {
+                return true;
+            }
+            if bgs_note_get_note_speaker(e, this) != bgs_note_get_note_speaker(e, theirs) {
+                return true;
+            }
+        }
+        _ => {}
+    }
+    let list = e.call(OWNER_QUESTS_OF, &args![this]).u32();
+    let my_count = e.call(0x005a_e380, &args![list]).u32();
+    let list = e.call(OWNER_QUESTS_OF, &args![theirs]).u32();
+    if my_count != e.call(0x005a_e380, &args![list]).u32() {
+        return true;
+    }
+    let mut node = e.call(OWNER_QUESTS_OF, &args![this]).u32();
+    while node != 0 && !e.call(NODE_IS_EMPTY, &args![node]).bool() {
+        let item = e.call(NODE_ITEM_ADDRESS, &args![node]).u32();
+        let quest = e.mem.u32(item);
+        let found = e.with_stack(4, |e, local| {
+            e.mem.set_u32(local.addr(), quest);
+            let list = e.call(OWNER_QUESTS_OF, &args![theirs]).u32();
+            e.call(0x005f_65d0, &args![list, local]).bool()
+        });
+        if !found {
+            return true;
+        }
+        node = e.call(NODE_NEXT, &args![node]).u32();
+    }
+    false
+}
+
+// Translated from 005e9130 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`RET 4`): on a type-0 note, sets the note
+/// data (its sound); otherwise nothing.
+pub fn fn_005e9130(e: &mut Engine, this: Ptr<BGSNote>, sound: u32) {
+    if fn_005e8d40(e, this) == 0 {
+        e.set(this, BGSNote::pNoteData, sound);
+    }
+}
+
+// Translated from 005e9190 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`RET 4`): on a type-2 note, passes `value`
+/// to the note data's slot 2 (+0x8).
+pub fn fn_005e9190(e: &mut Engine, this: Ptr<BGSNote>, value: u32) {
+    if fn_005e8d40(e, this) == 2 {
+        let data = e.get(this, BGSNote::pNoteData);
+        e.vcall(data, 0x8, &args![value]);
+    }
+}
+
+// Translated from 005e9200 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`RET 4`): on a type-1 note, passes `value`
+/// to the note data's slot 2 (+0x8).
+pub fn fn_005e9200(e: &mut Engine, this: Ptr<BGSNote>, value: u32) {
+    if fn_005e8d40(e, this) == 1 {
+        let data = e.get(this, BGSNote::pNoteData);
+        e.vcall(data, 0x8, &args![value]);
+    }
+}
+
+// Translated from 005e9300 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`RET 4`), sets `bHasBeenRead`: nothing when
+/// it already equals `read`; otherwise stores it and calls the form's slot
+/// 18 (+0x48) when set or slot 19 (+0x4C) when cleared, with `0x80000000`.
+pub fn fn_005e9300(e: &mut Engine, this: Ptr<BGSNote>, read: u8) {
+    if e.get(this, BGSNote::bHasBeenRead) == read {
+        return;
+    }
+    e.set(this, BGSNote::bHasBeenRead, read);
+    let slot = if e.get(this, BGSNote::bHasBeenRead) != 0 {
+        0x48
+    } else {
+        0x4c
+    };
+    e.vcall(this.addr(), slot, &args![0x8000_0000u32]);
+}
+
+// Translated from 005e9360 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BGSNote::Activate` (engine map), `RET 0x14`: false unless `activator`
+/// is the player (`011dea3c`); it is first cast from `TESObjectREFR` to
+/// `Actor` (`__RTDynamicCast`, result unused). When the reference has an
+/// owner (`00567790`) the player is not one of (`005785e0` with 1), the
+/// player gets the karma of the setting at `011cde20` (`00403e20`, the
+/// float truncated by `_ftol2`, `0094fd30`) when the owner is of the kind
+/// `00401170` answers 8 for and `0047d7c0` is false, or otherwise when the
+/// alignment (`0047e040`) of its slot 3 (+0xC) value 0x17 of the object at
+/// +0x100 is neither 2 nor 4. Then the player adds the note (`00966a70`,
+/// with 1), the reference is disabled (`00574400`) and it answers true.
+/// The last three words are not read.
+#[allow(clippy::too_many_arguments)]
+pub fn bgs_note_activate(
+    e: &mut Engine,
+    this: Ptr<BGSNote>,
+    reference: u32,
+    activator: u32,
+    _unused_3: u32,
+    _unused_4: u32,
+    _unused_5: u32,
+) -> bool {
+    e.call(
+        DYNAMIC_CAST,
+        &args![activator, 0u32, 0x0118_41ccu32, 0x0118_46d4u32, 0u32],
+    );
+    let mut rewards = false;
+    if activator != e.mem.u32(PLAYER) {
+        return false;
+    }
+    let owner = e.call(0x0056_7790, &args![reference]).u32();
+    if owner != 0 {
+        let player = e.mem.u32(PLAYER);
+        if !e.call(0x0057_85e0, &args![reference, player, 1u32]).bool() {
+            if e.call(0x0040_1170, &args![owner]).u32() == 8 {
+                if !e.call(0x0047_d7c0, &args![owner]).bool() {
+                    rewards = true;
+                }
+            } else if owner != 0 {
+                let value = e
+                    .vcall(owner.wrapping_add(0x100), 0xc, &args![0x17u32])
+                    .f64();
+                let alignment = e.call(0x0047_e040, &args![x87_store32(value)]).u32();
+                if alignment != 2 && alignment != 4 {
+                    rewards = true;
+                }
+            }
+        }
+    }
+    if rewards {
+        let setting = e.call(0x0040_3e20, &args![0x011c_de20u32]).u32();
+        let karma = x87_load32(e.mem.u32(setting));
+        let whole = e.call(0x00ec_62c0, &args![karma]).u32();
+        let player = e.mem.u32(PLAYER);
+        e.call(0x0094_fd30, &args![player, whole]);
+    }
+    let player = e.mem.u32(PLAYER);
+    e.call(0x0096_6a70, &args![player, this, 1u32]);
+    e.call(0x0057_4400, &args![reference]);
+    true
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -304,6 +558,16 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x005e_92d0, fn_005e92d0(Ptr<BGSNote>, u32)),
         entry!(0x005e_8f90, fn_005e8f90(Ptr<BGSNote>, u32)),
         entry!(0x005e_8900, bgs_note_init_item(Ptr<BGSNote>)),
+        entry!(0x005e_8c00, fn_005e8c00(Ptr<BGSNote>, u32)),
+        entry!(0x005e_8d60, fn_005e8d60(Ptr<BGSNote>, u32) -> bool),
+        entry!(0x005e_9130, fn_005e9130(Ptr<BGSNote>, u32)),
+        entry!(0x005e_9190, fn_005e9190(Ptr<BGSNote>, u32)),
+        entry!(0x005e_9200, fn_005e9200(Ptr<BGSNote>, u32)),
+        entry!(0x005e_9300, fn_005e9300(Ptr<BGSNote>, u8)),
+        entry!(
+            0x005e_9360,
+            bgs_note_activate(Ptr<BGSNote>, u32, u32, u32, u32, u32) -> bool
+        ),
     ]
 }
 
@@ -529,5 +793,258 @@ mod b025_tests {
         e.call_log = Some(vec![]);
         e.call(0x005e_8900, &args![n]);
         assert!(calls_to(&e, SOUNDS_INIT_ITEM).is_empty());
+    }
+}
+
+#[cfg(test)]
+mod n036_tests {
+    use super::*;
+
+    fn calls_to(log: &[(u32, Vec<u32>)], addr: u32) -> Vec<Vec<u32>> {
+        log.iter()
+            .filter(|c| c.0 == addr)
+            .map(|c| c.1.clone())
+            .collect()
+    }
+
+    fn quiet(e: &mut Engine, callees: &[u32]) {
+        for callee in callees {
+            e.register(*callee, |_, _| Ret::default());
+        }
+    }
+
+    /// A cast that answers the object when its word +0x10 is 1.
+    fn cast_engine() -> Engine {
+        let mut e = Engine::new();
+        e.register(DYNAMIC_CAST, |e, a| {
+            (if e.mem.u32(a[0] + 0x10) == 1 { a[0] } else { 0 }).into_ret()
+        });
+        e
+    }
+
+    fn note(e: &mut Engine, note_type: u8, data: u32) -> Ptr<BGSNote> {
+        let n = e.new_object::<BGSNote>();
+        e.mem.set_u32(n.addr() + 0x10, 1);
+        e.set(n, BGSNote::cType, note_type);
+        e.set(n, BGSNote::pNoteData, data);
+        n
+    }
+
+    #[test]
+    fn copy_from_copies_type_data_quests_and_read_flag() {
+        let mut e = cast_engine();
+        quiet(&mut e, &[0x0048_51b0, 0x0047_0470, 0x005a_e3d0]);
+        e.register(OWNER_QUESTS_OF, |_, a| (a[0] + 0x74).into_ret());
+        e.register(NODE_IS_EMPTY, |e, a| {
+            (e.mem.u32(a[0]) == 0 && e.mem.u32(a[0] + 4) == 0).into_ret()
+        });
+        e.register(NODE_ITEM_ADDRESS, |_, a| a[0].into_ret());
+        e.register(NODE_NEXT, |e, a| e.mem.u32(a[0] + 4).into_ret());
+        let source = note(&mut e, 3, 0x7700);
+        e.set(source, BGSNote::pSpeaker, 0x7800);
+        e.set(source, BGSNote::bHasBeenRead, 1);
+        let second = e.mem.alloc(8);
+        e.mem.set_u32(second, 0x9002);
+        e.mem.set_u32(source.addr() + 0x74, 0x9001);
+        e.mem.set_u32(source.addr() + 0x78, second);
+        let this = note(&mut e, 3, 0);
+        e.call_log = Some(vec![]);
+        e.call(0x005e_8c00, &args![this, source]);
+        assert_eq!(e.get(this, BGSNote::pNoteData), 0x7700);
+        assert_eq!(e.get(this, BGSNote::pSpeaker), 0x7800);
+        assert_eq!(e.get(this, BGSNote::bHasBeenRead), 1);
+        let log = e.call_log.take().unwrap();
+        assert_eq!(
+            calls_to(&log, 0x005a_e3d0),
+            vec![
+                vec![this.addr() + 0x74, source.addr() + 0x74],
+                vec![this.addr() + 0x74, second]
+            ]
+        );
+        assert_eq!(
+            calls_to(&log, 0x0048_51b0),
+            vec![vec![this.addr(), source.addr()]]
+        );
+
+        // A type-0 source sets the sound; a non-note does nothing.
+        let source = note(&mut e, 0, 0x5500);
+        let this = note(&mut e, 0, 0);
+        e.call(0x005e_8c00, &args![this, source]);
+        assert_eq!(e.get(this, BGSNote::pNoteData), 0x5500);
+        e.mem.set_u32(source.addr() + 0x10, 0);
+        e.call_log = Some(vec![]);
+        e.call(0x005e_8c00, &args![this, source]);
+        assert_eq!(e.call_log.take().unwrap().len(), 2);
+    }
+
+    #[test]
+    fn compare_checks_each_part() {
+        let mut e = cast_engine();
+        e.register(0x0048_5270, |e, a| {
+            (e.mem.u32(a[0] + 0x20) != e.mem.u32(a[1] + 0x20)).into_ret()
+        });
+        e.register(OWNER_QUESTS_OF, |_, a| (a[0] + 0x74).into_ret());
+        e.register(0x005a_e380, |e, a| e.mem.u32(a[0] + 4).into_ret());
+        e.register(NODE_IS_EMPTY, |e, a| (e.mem.u32(a[0]) == 0).into_ret());
+        e.register(NODE_ITEM_ADDRESS, |_, a| a[0].into_ret());
+        e.register(NODE_NEXT, |_, _| 0u32.into_ret());
+        e.register(0x005f_65d0, |e, a| {
+            (e.mem.u32(a[0]) == e.mem.u32(a[1])).into_ret()
+        });
+        e.put_vtable(0x0204_0000, &[0, 0, 0, 0x0090_000c]);
+        e.register(0x0090_000c, |_, a| (a[1] == 0x6666).into_ret());
+        let data = e.mem.alloc(4);
+        e.mem.set_u32(data, 0x0204_0000);
+        let a = note(&mut e, 1, data);
+        let b = note(&mut e, 1, 0x1111);
+        let compare = |e: &mut Engine| e.call(0x005e_8d60, &args![a, b]).bool();
+        assert!(!compare(&mut e));
+        e.set(b, BGSNote::pNoteData, 0x6666);
+        assert!(compare(&mut e));
+        e.set(b, BGSNote::pNoteData, 0);
+        assert!(compare(&mut e));
+        e.set(b, BGSNote::pNoteData, 0x1111);
+        // Owner quests: same first quest, then another.
+        e.mem.set_u32(a.addr() + 0x74, 0x9001);
+        e.mem.set_u32(b.addr() + 0x74, 0x9001);
+        assert!(!compare(&mut e));
+        e.mem.set_u32(b.addr() + 0x74, 0x9002);
+        assert!(compare(&mut e));
+        e.mem.set_u32(b.addr() + 0x74, 0x9001);
+        e.mem.set_u32(b.addr() + 0x78, 3);
+        assert!(compare(&mut e));
+        e.mem.set_u32(b.addr() + 0x78, 0);
+        // Type 3: topic then speaker.
+        e.set(a, BGSNote::cType, 3);
+        assert!(compare(&mut e));
+        e.set(b, BGSNote::cType, 3);
+        e.set(b, BGSNote::pNoteData, data);
+        assert!(!compare(&mut e));
+        e.set(b, BGSNote::pSpeaker, 4);
+        assert!(compare(&mut e));
+        e.set(b, BGSNote::pSpeaker, 0);
+        e.mem.set_u32(b.addr() + 0x20, 1);
+        assert!(compare(&mut e));
+        e.mem.set_u32(b.addr() + 0x10, 0);
+        assert!(compare(&mut e));
+    }
+
+    #[test]
+    fn data_setters_act_on_their_type() {
+        let mut e = Engine::new();
+        e.put_vtable(0x0204_0000, &[0, 0, 0x0090_0008]);
+        e.register(0x0090_0008, |_, _| Ret::default());
+        let data = e.mem.alloc(4);
+        e.mem.set_u32(data, 0x0204_0000);
+        let n = note(&mut e, 0, 0);
+        e.call(0x005e_9130, &args![n, 0x55u32]);
+        assert_eq!(e.get(n, BGSNote::pNoteData), 0x55);
+        e.set(n, BGSNote::cType, 1);
+        e.call(0x005e_9130, &args![n, 0x66u32]);
+        assert_eq!(e.get(n, BGSNote::pNoteData), 0x55);
+        e.set(n, BGSNote::pNoteData, data);
+        e.call_log = Some(vec![]);
+        e.call(0x005e_9200, &args![n, 7u32]);
+        e.call(0x005e_9190, &args![n, 8u32]);
+        e.set(n, BGSNote::cType, 2);
+        e.call(0x005e_9190, &args![n, 9u32]);
+        e.call(0x005e_9200, &args![n, 10u32]);
+        let log = e.call_log.take().unwrap();
+        assert_eq!(
+            calls_to(&log, 0x0090_0008),
+            vec![vec![data, 7], vec![data, 9]]
+        );
+    }
+
+    #[test]
+    fn set_read_calls_the_flag_slots_on_change() {
+        let mut e = Engine::new();
+        e.put_vtable(0x0204_0000, &[0; 0x20]);
+        e.mem.set_u32(0x0204_0048, 0x0090_0048);
+        e.mem.set_u32(0x0204_004c, 0x0090_004c);
+        quiet(&mut e, &[0x0090_0048, 0x0090_004c]);
+        let n = note(&mut e, 0, 0);
+        e.mem.set_u32(n.addr(), 0x0204_0000);
+        e.call_log = Some(vec![]);
+        e.call(0x005e_9300, &args![n, 0u32]);
+        e.call(0x005e_9300, &args![n, 0x101u32]);
+        assert_eq!(e.get(n, BGSNote::bHasBeenRead), 1);
+        e.call(0x005e_9300, &args![n, 0u32]);
+        let log = e.call_log.take().unwrap();
+        assert_eq!(
+            calls_to(&log, 0x0090_0048),
+            vec![vec![n.addr(), 0x8000_0000]]
+        );
+        assert_eq!(
+            calls_to(&log, 0x0090_004c),
+            vec![vec![n.addr(), 0x8000_0000]]
+        );
+    }
+
+    #[test]
+    fn activate_adds_the_note_and_rewards_karma_on_theft() {
+        let run = |owner_kind: u32, flag: bool, alignment: u32, owner: u32| {
+            let mut e = Engine::new();
+            e.map(0x011d_e000, 0x1000);
+            e.map(0x011c_d000, 0x1000);
+            e.mem.set_u32(PLAYER, 0x0400_0000);
+            quiet(
+                &mut e,
+                &[DYNAMIC_CAST, 0x0094_fd30, 0x0096_6a70, 0x0057_4400],
+            );
+            e.register_double(0x0056_7790, move |_, _| owner.into_ret());
+            e.register(0x0057_85e0, |_, _| false.into_ret());
+            e.register_double(0x0040_1170, move |_, _| owner_kind.into_ret());
+            e.register_double(0x0047_d7c0, move |_, _| flag.into_ret());
+            e.register_double(0x0047_e040, move |_, _| alignment.into_ret());
+            e.register(0x0040_3e20, |_, a| (a[0] + 4).into_ret());
+            e.mem.set_f32(0x011c_de24, -2.5);
+            e.register(0x00ec_62c0, |_, a| {
+                let value = f64::from_bits(u64::from(a[0]) | u64::from(a[1]) << 32);
+                (value as i32).into_ret()
+            });
+            if owner != 0 {
+                e.map(owner, 0x1000);
+                e.put_vtable(0x0205_0000, &[0, 0, 0, 0x0090_000c]);
+                e.mem.set_u32(owner + 0x100, 0x0205_0000);
+                e.register(0x0090_000c, |_, _| 1.0f64.into_ret());
+            }
+            let n = e.new_object::<BGSNote>();
+            e.call_log = Some(vec![]);
+            let result = e
+                .call(
+                    0x005e_9360,
+                    &args![n, 0x5000u32, 0x0400_0000u32, 0u32, 0u32, 0u32],
+                )
+                .bool();
+            assert!(result);
+            let log = e.call_log.take().unwrap();
+            assert_eq!(
+                calls_to(&log, 0x0096_6a70),
+                vec![vec![0x0400_0000, n.addr(), 1]]
+            );
+            assert_eq!(calls_to(&log, 0x0057_4400), vec![vec![0x5000]]);
+            calls_to(&log, 0x0094_fd30)
+        };
+        let reward = vec![vec![0x0400_0000, (-2i32) as u32]];
+        assert!(run(8, false, 0, 0).is_empty());
+        assert_eq!(run(8, false, 0, 0x0600_0000), reward);
+        assert!(run(8, true, 0, 0x0600_0000).is_empty());
+        assert_eq!(run(3, false, 1, 0x0600_0000), reward);
+        assert!(run(3, false, 2, 0x0600_0000).is_empty());
+        assert!(run(3, false, 4, 0x0600_0000).is_empty());
+
+        // Not the player: false, nothing added.
+        let mut e = Engine::new();
+        e.map(0x011d_e000, 0x1000);
+        e.mem.set_u32(PLAYER, 0x0400_0000);
+        quiet(&mut e, &[DYNAMIC_CAST]);
+        let n = e.new_object::<BGSNote>();
+        assert!(!e
+            .call(
+                0x005e_9360,
+                &args![n, 0x5000u32, 0x0400_0004u32, 0u32, 0u32, 0u32]
+            )
+            .bool());
     }
 }

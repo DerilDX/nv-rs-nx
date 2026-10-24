@@ -6093,7 +6093,7 @@ pub fn fn_0046dcc0(e: &mut Engine, this: Ptr, value: u8) {
 // Translated from 0046dce0 (decompiled, FalloutNV.exe 1.4.0.525)
 /// Stores the float `value` at `this + 0x24` (of a global form).
 pub fn fn_0046dce0(e: &mut Engine, this: Ptr, value: f32) {
-    e.mem.set_f32(this.addr() + 0x24, value);
+    e.mem.set_f32(this.addr() + 0x24, x87_quiet(value));
 }
 
 // Translated from 0046dd00 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -6141,9 +6141,11 @@ pub fn fn_0046e850(
 }
 
 // Translated from 0046e880 (decompiled, FalloutNV.exe 1.4.0.525)
-/// Sets `bCheckingModels` (`+0x61F`).
+/// Sets `bCheckingModels` (`+0x61F`) to the argument byte as it is (`MOV CL,[EBP+8]`, `MOV
+/// [EAX+0x61F],CL`: not normalised to 0 or 1).
 pub fn fn_0046e880(e: &mut Engine, this: Ptr<TESDataHandler>, value: u8) {
-    e.set(this, TESDataHandler::bCheckingModels, value != 0);
+    e.mem
+        .set_u8(this.addr() + TESDataHandler::bCheckingModels.off, value);
 }
 
 // Translated from 0046e8a0 (decompiled, FalloutNV.exe 1.4.0.525)

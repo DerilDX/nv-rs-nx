@@ -296,9 +296,195 @@ pub fn fn_00511a10(e: &mut Engine, this: Ptr) {
     e.call(DESTRUCT_00483630, &args![at]);
 }
 
+/// `__RTDynamicCast` (`00ec43fb`, `cdecl`, five words) and the type
+/// descriptors it is given: `.?AVTESForm@@` (`01183028`) to
+/// `.?AVTESObjectACTI@@` (`01186584`).
+const RT_DYNAMIC_CAST: u32 = 0x00ec_43fb;
+const TYPE_TES_FORM: u32 = 0x0118_3028;
+const TYPE_TES_OBJECT_ACTI: u32 = 0x0118_6584;
+/// `004fd3a0` (`thiscall`, no stack words) and `00407840` (`thiscall`, no
+/// stack words): two more getters both `00511120` and `005111e0` read.
+const FORM_004FD3A0: u32 = 0x004f_d3a0;
+const FORM_00407840: u32 = 0x0040_7840;
+/// `TESForm::CopyAllComponents` (`004851b0`) and
+/// `TESForm::CompareAllComponents` (`00485270`) (engine map; `thiscall`,
+/// one word).
+const COPY_ALL_COMPONENTS: u32 = 0x0048_51b0;
+const COMPARE_ALL_COMPONENTS: u32 = 0x0048_5270;
+/// The `BSStringT` destructor (`004037d0`, `thiscall`).
+const STRING_DESTRUCT: u32 = 0x0040_37d0;
+/// `0044ddc0` (`thiscall`): the form's flag word; `00403550` stores it
+/// (`thiscall`, one word); `00484b60` (`thiscall`, one word).
+const FORM_FLAGS: u32 = 0x0044_ddc0;
+const SET_FORM_FLAGS: u32 = 0x0040_3550;
+const FORM_00484B60: u32 = 0x0048_4b60;
+/// `00428110` (`thiscall` on the save or load buffer, one word: an out
+/// word), then `004280f0` (`thiscall` on its result, one word).
+const BUFFER_00428110: u32 = 0x0042_8110;
+const CHECK_004280F0: u32 = 0x0042_80f0;
+/// `BGSSaveGameBuffer::SaveString` (`00865e70`, two words),
+/// `BGSLoadGameBuffer::LoadString` (`008649a0`, one word) and
+/// `TESSoundFile::SetSoundFile` (`00489100`, one word) (engine map).
+const SAVE_STRING: u32 = 0x0086_5e70;
+const LOAD_STRING: u32 = 0x0086_49a0;
+const SET_SOUND_FILE: u32 = 0x0048_9100;
+
+/// Casts `form` to `TESObjectACTI` (`__RTDynamicCast(form, 0, TESForm,
+/// TESObjectACTI, 0)`).
+fn cast_to_activator(e: &mut Engine, form: u32) -> u32 {
+    e.call(
+        RT_DYNAMIC_CAST,
+        &args![form, 0u32, TYPE_TES_FORM, TYPE_TES_OBJECT_ACTI, 0u32],
+    )
+    .u32()
+}
+
+// Translated from 00511120 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`thiscall`, one word, `RET 4`; a form's
+/// copy from `source`): when `source` casts to `TESObjectACTI`, copies its
+/// parts into `this`: `004febb0(004fd3a0)`, `004febd0(00407840)`,
+/// `00442a80(00407820)`, `008ac890(slot +0x140)`, `004fb090(004fd3c0)`, and
+/// the string `005110e0` copies (a `BSStringT` built in the 8 bytes the
+/// call passes by value) to `00510ea0`; then
+/// `TESForm::CopyAllComponents(source)`. Nothing happens otherwise.
+pub fn fn_00511120(e: &mut Engine, this: Ptr, source: u32) {
+    let other = cast_to_activator(e, source);
+    if other == 0 {
+        return;
+    }
+    let value = e.call(FORM_004FD3A0, &args![other]).u32();
+    e.call(0x004f_ebb0, &args![this, value]);
+    let value = e.call(FORM_00407840, &args![other]).u32();
+    e.call(0x004f_ebd0, &args![this, value]);
+    let value = e.call(FORM_SOUND, &args![other]).u32();
+    e.call(0x0044_2a80, &args![this, value]);
+    let value = e.vcall(other, 0x140, &args![]).u32();
+    e.call(0x008a_c890, &args![this, value]);
+    let value = e.call(FORM_004FD3C0, &args![other]).u32();
+    e.call(0x004f_b090, &args![this, value]);
+    e.with_stack(8, |e, string| {
+        let string = string.addr();
+        fn_005110e0(e, Ptr::new(other), Ptr::new(string));
+        let first = e.mem.u32(string);
+        let second = e.mem.u32(string + 4);
+        e.call(0x0051_0ea0, &args![this, first, second]);
+    });
+    e.call(COPY_ALL_COMPONENTS, &args![this, source]);
+}
+
+// Translated from 005111e0 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 005111e0 - the FS:[0] exception frame (destroying the two string copies when a call throws) is not translated
+/// Unnamed in the engine map (`thiscall`, one word, `RET 4`): whether
+/// `this` differs from `other` (true) or matches it (false). A form that
+/// does not cast to `TESObjectACTI` differs; so does any of `004fd3a0`,
+/// `00407820`, `00407840`, slot +0x140 and `004fd3c0` answering differently
+/// for the two (compared in that order); then the two strings `005110e0`
+/// copies are compared by `00501c90` (on this form's copy, with the other's
+/// and 1; both copies destroyed after), and a non-zero answer differs;
+/// last, `TESForm::CompareAllComponents(other)` decides.
+pub fn fn_005111e0(e: &mut Engine, this: Ptr, form: u32) -> bool {
+    let other = cast_to_activator(e, form);
+    if other == 0 {
+        return true;
+    }
+    for getter in [FORM_004FD3A0, FORM_SOUND, FORM_00407840] {
+        let mine = e.call(getter, &args![this]).u32();
+        if mine != e.call(getter, &args![other]).u32() {
+            return true;
+        }
+    }
+    let mine = e.vcall(this.addr(), 0x140, &args![]).u32();
+    if mine != e.vcall(other, 0x140, &args![]).u32() {
+        return true;
+    }
+    let mine = e.call(FORM_004FD3C0, &args![this]).u32();
+    if mine != e.call(FORM_004FD3C0, &args![other]).u32() {
+        return true;
+    }
+    let compared = e.with_stack(0x10, |e, strings| {
+        let strings = strings.addr();
+        let theirs = fn_005110e0(e, Ptr::new(other), Ptr::new(strings));
+        let mine = fn_005110e0(e, this, Ptr::new(strings + 8));
+        let compared = e.call(0x0050_1c90, &args![mine, theirs, 1u32]).u32();
+        e.call(STRING_DESTRUCT, &args![strings + 8]);
+        e.call(STRING_DESTRUCT, &args![strings]);
+        compared
+    });
+    if compared != 0 {
+        return true;
+    }
+    e.call(COMPARE_ALL_COMPONENTS, &args![this, other]).bool()
+}
+
+// Translated from 00511370 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`thiscall`, one byte, `RET 4`): sets bit
+/// 0x40000000 of the form's flag word (`0044ddc0`) when `set` is non-zero,
+/// clears it otherwise, stores the word (`00403550`) and runs
+/// `00484b60(1)`.
+pub fn fn_00511370(e: &mut Engine, this: Ptr, set: u8) {
+    let mut flags = e.call(FORM_FLAGS, &args![this]).u32();
+    if set != 0 {
+        flags |= 0x4000_0000;
+    } else {
+        flags &= 0xbfff_ffff;
+    }
+    e.call(SET_FORM_FLAGS, &args![this, flags]);
+    e.call(FORM_00484B60, &args![this, 1u32]);
+}
+
+// Translated from 005113d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map: whether bit 0x10000000 of the form's flag
+/// word (`0044ddc0`) is set (0 or 1 in `EAX`).
+pub fn fn_005113d0(e: &mut Engine, this: Ptr) -> bool {
+    e.call(FORM_FLAGS, &args![this]).u32() & 0x1000_0000 != 0
+}
+
+// Translated from 00511860 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`thiscall`, one word, `RET 4`; a save):
+/// `00484d60(buffer)`, then when `004280f0(4)` on what `00428110` (given an
+/// out word on the stack) answers for the buffer is true, saves the
+/// location name of the member at +0x30 (`00408da0`) with
+/// `BGSSaveGameBuffer::SaveString(name, 0)`.
+pub fn fn_00511860(e: &mut Engine, this: Ptr, buffer: u32) {
+    e.call(0x0048_4d60, &args![this, buffer]);
+    e.with_stack(4, |e, word| {
+        let checker = e.call(BUFFER_00428110, &args![buffer, word]).u32();
+        if e.call(CHECK_004280F0, &args![checker, 4u32]).bool() {
+            let name = e.call(GET_LOCATION_NAME, &args![this.addr() + 0x30]).u32();
+            e.call(SAVE_STRING, &args![buffer, name, 0u32]);
+        }
+    });
+}
+
+// Translated from 005118c0 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 005118c0 - the /GS security cookie check (00ec408c) is not translated
+/// Unnamed in the engine map (`thiscall`, one word, `RET 4`; a load):
+/// `00484da0(buffer)`, then when `004280f0(4)` on what `00428110` (given an
+/// out word on the stack) answers for the buffer is true, loads a string
+/// into a 0x10C-byte stack buffer (`BGSLoadGameBuffer::LoadString`) and
+/// gives it to `TESSoundFile::SetSoundFile` on the member at +0x30.
+pub fn fn_005118c0(e: &mut Engine, this: Ptr, buffer: u32) {
+    e.call(0x0048_4da0, &args![this, buffer]);
+    e.with_stack(0x110, |e, block| {
+        let block = block.addr();
+        let checker = e.call(BUFFER_00428110, &args![buffer, block]).u32();
+        if e.call(CHECK_004280F0, &args![checker, 4u32]).bool() {
+            let name = block + 4;
+            e.call(LOAD_STRING, &args![buffer, name]);
+            e.call(SET_SOUND_FILE, &args![this.addr() + 0x30, name]);
+        }
+    });
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x0051_1120, fn_00511120(Ptr, u32)),
+        entry!(0x0051_11e0, fn_005111e0(Ptr, u32) -> bool),
+        entry!(0x0051_1370, fn_00511370(Ptr, u8)),
+        entry!(0x0051_13d0, fn_005113d0(Ptr) -> bool),
+        entry!(0x0051_1860, fn_00511860(Ptr, u32)),
+        entry!(0x0051_18c0, fn_005118c0(Ptr, u32)),
         entry!(0x0051_1950, fn_00511950(Ptr) -> Ptr),
         entry!(0x0051_1940, fn_00511940(Ptr, u32) -> u32),
         entry!(0x0051_19e0, fn_005119e0(Ptr, u32) -> Ptr),
@@ -624,5 +810,233 @@ mod activation_tests {
             ]]
         );
         assert_eq!(calls_to(&e, SOUND_PLAY), vec![vec![handle, 0]]);
+    }
+}
+
+#[cfg(test)]
+mod n040_tests {
+    use super::*;
+
+    fn calls_to(e: &mut Engine, targets: &[u32]) -> Vec<(u32, Vec<u32>)> {
+        e.call_log
+            .take()
+            .unwrap()
+            .into_iter()
+            .filter(|(a, _)| targets.contains(a))
+            .collect()
+    }
+
+    /// A form whose getters answer the word at +4 and whose slot +0x140
+    /// answers the word at +8.
+    fn form(e: &mut Engine, vtable: u32, key: u32) -> u32 {
+        let form = e.mem.alloc(0x100);
+        e.mem.set_u32(form, vtable);
+        e.mem.set_u32(form + 4, key);
+        e.mem.set_u32(form + 8, 0x140);
+        form
+    }
+
+    fn setup(e: &mut Engine) -> u32 {
+        let vtable = e.mem.alloc(0x200);
+        e.mem.set_u32(vtable + 0x140, 0x0090_0140);
+        e.register(0x0090_0140, |e, a| Ret {
+            eax: e.mem.u32(a[0] + 8),
+            ..Ret::default()
+        });
+        for getter in [FORM_004FD3A0, FORM_SOUND, FORM_00407840, FORM_004FD3C0] {
+            e.register(getter, |e, a| Ret {
+                eax: e.mem.u32(a[0] + 4),
+                ..Ret::default()
+            });
+        }
+        // The cast answers the form when its word at +0xc is zero.
+        e.register(RT_DYNAMIC_CAST, |e, a| {
+            assert_eq!(a[1..], [0, TYPE_TES_FORM, TYPE_TES_OBJECT_ACTI, 0]);
+            let form = if e.mem.u32(a[0] + 0xc) == 0 { a[0] } else { 0 };
+            Ret {
+                eax: form,
+                ..Ret::default()
+            }
+        });
+        e.register(STRING_COPY, |e, a| {
+            e.mem.set_u32(a[0], e.mem.u32(a[1]));
+            e.mem.set_u32(a[0] + 4, 0x55);
+            Ret::default()
+        });
+        e.register(STRING_DESTRUCT, |_, _| Ret::default());
+        vtable
+    }
+
+    #[test]
+    fn fn_00511120_copies_from_an_activator_only() {
+        let mut e = Engine::new();
+        let vtable = setup(&mut e);
+        let this = form(&mut e, vtable, 1);
+        let source = form(&mut e, vtable, 7);
+        e.mem.set_u32(source + 0x88, 0x88);
+        let setters = [
+            0x004f_ebb0,
+            0x004f_ebd0,
+            0x0044_2a80,
+            0x008a_c890,
+            0x004f_b090,
+            0x0051_0ea0,
+            COPY_ALL_COMPONENTS,
+        ];
+        for s in setters {
+            e.register(s, |_, _| Ret::default());
+        }
+        e.mem.set_u32(source + 0xc, 1);
+        e.call_log = Some(vec![]);
+        e.call(0x0051_1120, &[this, source]);
+        assert!(calls_to(&mut e, &setters).is_empty());
+        e.mem.set_u32(source + 0xc, 0);
+        e.call_log = Some(vec![]);
+        e.call(0x0051_1120, &[this, source]);
+        assert_eq!(
+            calls_to(&mut e, &setters),
+            vec![
+                (0x004f_ebb0, vec![this, 7]),
+                (0x004f_ebd0, vec![this, 7]),
+                (0x0044_2a80, vec![this, 7]),
+                (0x008a_c890, vec![this, 0x140]),
+                (0x004f_b090, vec![this, 7]),
+                (0x0051_0ea0, vec![this, 0x88, 0x55]),
+                (COPY_ALL_COMPONENTS, vec![this, source]),
+            ]
+        );
+    }
+
+    #[test]
+    fn fn_005111e0_compares_parts_then_strings_then_components() {
+        let mut e = Engine::new();
+        let vtable = setup(&mut e);
+        e.register(0x0050_1c90, |e, a| {
+            assert_eq!(a[2], 1);
+            Ret {
+                eax: u32::from(e.mem.u32(a[0]) != e.mem.u32(a[1])),
+                ..Ret::default()
+            }
+        });
+        e.register(COMPARE_ALL_COMPONENTS, |e, a| Ret {
+            eax: e.mem.u32(a[1] + 0x10),
+            ..Ret::default()
+        });
+        let this = form(&mut e, vtable, 3);
+        let other = form(&mut e, vtable, 3);
+        // Not an activator: differs.
+        e.mem.set_u32(other + 0xc, 1);
+        assert!(e.call(0x0051_11e0, &[this, other]).bool());
+        e.mem.set_u32(other + 0xc, 0);
+        // A getter differs.
+        e.mem.set_u32(other + 4, 4);
+        assert!(e.call(0x0051_11e0, &[this, other]).bool());
+        e.mem.set_u32(other + 4, 3);
+        // Slot +0x140 differs.
+        e.mem.set_u32(other + 8, 9);
+        assert!(e.call(0x0051_11e0, &[this, other]).bool());
+        e.mem.set_u32(other + 8, 0x140);
+        // The strings differ.
+        e.mem.set_u32(other + 0x88, 2);
+        e.call_log = Some(vec![]);
+        assert!(e.call(0x0051_11e0, &[this, other]).bool());
+        let log = calls_to(&mut e, &[STRING_DESTRUCT, COMPARE_ALL_COMPONENTS]);
+        assert_eq!(log.len(), 2);
+        assert_eq!(log[0].1[0], log[1].1[0] + 8);
+        e.mem.set_u32(other + 0x88, 0);
+        // Components decide.
+        assert!(!e.call(0x0051_11e0, &[this, other]).bool());
+        e.mem.set_u32(other + 0x10, 1);
+        assert!(e.call(0x0051_11e0, &[this, other]).bool());
+    }
+
+    #[test]
+    fn fn_00511370_sets_or_clears_the_flag() {
+        let mut e = Engine::new();
+        e.register(FORM_FLAGS, |_, _| Ret {
+            eax: 0x8000_0001,
+            ..Ret::default()
+        });
+        e.register(SET_FORM_FLAGS, |_, _| Ret::default());
+        e.register(FORM_00484B60, |_, _| Ret::default());
+        for (set, flags) in [(0x01u32, 0xc000_0001u32), (0x100, 0x8000_0001)] {
+            e.call_log = Some(vec![]);
+            e.call(0x0051_1370, &[0x1000, set]);
+            assert_eq!(
+                calls_to(&mut e, &[SET_FORM_FLAGS, FORM_00484B60]),
+                vec![
+                    (SET_FORM_FLAGS, vec![0x1000, flags]),
+                    (FORM_00484B60, vec![0x1000, 1])
+                ]
+            );
+        }
+    }
+
+    #[test]
+    fn fn_005113d0_tests_bit_28() {
+        let mut e = Engine::new();
+        e.register(FORM_FLAGS, |_, a| Ret {
+            eax: a[0],
+            ..Ret::default()
+        });
+        assert!(e.call(0x0051_13d0, &[0x1000_0000]).bool());
+        assert!(!e.call(0x0051_13d0, &[0xefff_ffff]).bool());
+    }
+
+    #[test]
+    fn fn_00511860_and_005118c0_save_and_load_the_name() {
+        let mut e = Engine::new();
+        e.register(0x0048_4d60, |_, _| Ret::default());
+        e.register(0x0048_4da0, |_, _| Ret::default());
+        e.register(BUFFER_00428110, |e, a| Ret {
+            eax: e.mem.u32(a[0]),
+            ..Ret::default()
+        });
+        e.register(CHECK_004280F0, |_, a| {
+            assert_eq!(a[1], 4);
+            Ret {
+                eax: a[0],
+                ..Ret::default()
+            }
+        });
+        e.register(GET_LOCATION_NAME, |_, _| Ret {
+            eax: 0x0077_0000,
+            ..Ret::default()
+        });
+        e.register(SAVE_STRING, |_, _| Ret::default());
+        e.register(LOAD_STRING, |_, _| Ret::default());
+        e.register(SET_SOUND_FILE, |_, _| Ret::default());
+        let buffer = e.mem.alloc(4);
+        let targets = [
+            0x0048_4d60,
+            0x0048_4da0,
+            BUFFER_00428110,
+            SAVE_STRING,
+            LOAD_STRING,
+            SET_SOUND_FILE,
+        ];
+        for flag in [0u32, 1] {
+            e.mem.set_u32(buffer, flag);
+            e.call_log = Some(vec![]);
+            e.call(0x0051_1860, &[0x1000, buffer]);
+            let log = calls_to(&mut e, &targets);
+            assert_eq!(log[0], (0x0048_4d60, vec![0x1000, buffer]));
+            if flag == 0 {
+                assert_eq!(log.len(), 2);
+            } else {
+                assert_eq!(log[2], (SAVE_STRING, vec![buffer, 0x0077_0000, 0]));
+            }
+            e.call_log = Some(vec![]);
+            e.call(0x0051_18c0, &[0x1000, buffer]);
+            let log = calls_to(&mut e, &targets);
+            assert_eq!(log[0], (0x0048_4da0, vec![0x1000, buffer]));
+            if flag == 0 {
+                assert_eq!(log.len(), 2);
+            } else {
+                let block = log[1].1[1];
+                assert_eq!(log[2], (LOAD_STRING, vec![buffer, block + 4]));
+                assert_eq!(log[3], (SET_SOUND_FILE, vec![0x1030, block + 4]));
+            }
+        }
     }
 }

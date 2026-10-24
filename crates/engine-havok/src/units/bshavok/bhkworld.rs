@@ -88,7 +88,8 @@ layout! {
 /// `bhkMemoryAllocator::blockAlloc` (Xbox PDB): allocates `size + 16` bytes
 /// and returns the first 16-byte-aligned address after reserving a trailing
 /// byte for the alignment distance.
-pub fn bhk_memory_allocator_block_alloc(e: &mut Engine, size: u32) -> Ptr {
+/// `this` (`ECX`) is not read, but it sits in vtables and is called with `ECX` set.
+pub fn bhk_memory_allocator_block_alloc(e: &mut Engine, _this: Ptr, size: u32) -> Ptr {
     let raw = e
         .call(HEAP_ALLOC, &args![HEAP_SINGLETON, size.wrapping_add(0x10)])
         .u32();
@@ -101,7 +102,8 @@ pub fn bhk_memory_allocator_block_alloc(e: &mut Engine, size: u32) -> Ptr {
 // Translated from 00c661a0 (decompiled, FalloutNV.exe 1.4.0.525)
 /// `bhkMemoryAllocator::blockFree` (Xbox PDB): recovers the raw allocation
 /// from the byte immediately before `block`; the second stack word is unused.
-pub fn bhk_memory_allocator_block_free(e: &mut Engine, block: Ptr, _unused_1: u32) {
+/// `this` (`ECX`) is not read, but it sits in vtables and is called with `ECX` set.
+pub fn bhk_memory_allocator_block_free(e: &mut Engine, _this: Ptr, block: Ptr, _unused_1: u32) {
     if !block.is_null() {
         let padding = e.mem.u8(block.addr() - 1) as u32;
         e.call(
@@ -114,7 +116,13 @@ pub fn bhk_memory_allocator_block_free(e: &mut Engine, block: Ptr, _unused_1: u3
 // Translated from 00c661c0 (decompiled, FalloutNV.exe 1.4.0.525)
 /// Returns the second of its two stack arguments; `RET 8` confirms both words
 /// are part of the function's ABI even though the first is not read.
-pub fn bhk_world_return_second_argument(_e: &mut Engine, _unused_0: u32, value: u32) -> u32 {
+/// `this` (`ECX`) is not read, but it sits in vtables and is called with `ECX` set.
+pub fn bhk_world_return_second_argument(
+    _e: &mut Engine,
+    _this: Ptr,
+    _unused_0: u32,
+    value: u32,
+) -> u32 {
     value
 }
 
@@ -4001,9 +4009,9 @@ pub fn fn_00c689c0(e: &mut Engine, collision_object: Ptr<BhkNiCollisionObject>, 
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
-        entry!(0x00c6_6170, bhk_memory_allocator_block_alloc(u32) -> Ptr),
-        entry!(0x00c6_61a0, bhk_memory_allocator_block_free(Ptr, u32)),
-        entry!(0x00c6_61c0, bhk_world_return_second_argument(u32, u32) -> u32),
+        entry!(0x00c6_6170, bhk_memory_allocator_block_alloc(Ptr, u32) -> Ptr),
+        entry!(0x00c6_61a0, bhk_memory_allocator_block_free(Ptr, Ptr, u32)),
+        entry!(0x00c6_61c0, bhk_world_return_second_argument(Ptr, u32, u32) -> u32),
         entry!(0x00c6_61d0, bhk_world_set_update_mode(u32)),
         entry!(0x00c6_6210, bhk_world_reset_step_accumulators()),
         entry!(0x00c6_6230, bhk_world_set_pick_count_override(u8)),
@@ -4226,7 +4234,7 @@ mod tests {
         e.map(0x0300_0000, 0x1000);
         e.register_double(HEAP_ALLOC, move |_, _| ret(raw));
         e.call_log = Some(vec![]);
-        let block = e.call(0x00c6_6170, &args![0x20u32]).ptr::<()>();
+        let block = e.call(0x00c6_6170, &args![0x5555u32, 0x20u32]).ptr::<()>();
         assert_eq!(block.addr(), raw + 0xd);
         assert_eq!(e.mem.u8(block.addr() - 1), 0xd);
         let call = e
@@ -4247,8 +4255,8 @@ mod tests {
         e.map(0x0300_1000, 0x1000);
         e.mem.set_u8(block - 1, 8);
         e.call_log = Some(vec![]);
-        e.call(0x00c6_61a0, &args![block, 0xfeedu32]);
-        e.call(0x00c6_61a0, &args![0u32, 0xfeedu32]);
+        e.call(0x00c6_61a0, &args![0x5555u32, block, 0xfeedu32]);
+        e.call(0x00c6_61a0, &args![0x5555u32, 0u32, 0xfeedu32]);
         let frees: Vec<_> = e
             .call_log
             .as_ref()
@@ -4263,7 +4271,10 @@ mod tests {
     #[test]
     fn second_argument_helper_returns_the_second_word() {
         let mut e = engine();
-        assert_eq!(e.call(0x00c6_61c0, &args![17u32, 29u32]).u32(), 29);
+        assert_eq!(
+            e.call(0x00c6_61c0, &args![0x5555u32, 17u32, 29u32]).u32(),
+            29
+        );
     }
 
     #[test]

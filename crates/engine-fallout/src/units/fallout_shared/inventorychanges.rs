@@ -3261,7 +3261,7 @@ pub fn fn_004c0c90(e: &mut Engine, this: Ptr, value: f32) {
     let stored = if (value as f64) < minimum {
         e.global::<f32>(PRICE_STEP)
     } else {
-        value
+        x87_quiet(value)
     };
     e.mem.set_f32(this.addr() + 0x110, stored);
 }

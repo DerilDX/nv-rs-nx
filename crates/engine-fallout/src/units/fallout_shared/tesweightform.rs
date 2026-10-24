@@ -75,11 +75,64 @@ pub fn tes_weight_form_initialize_data_component(e: &mut Engine, this: Ptr) {
     e.mem.set_u32(this.addr() + 4, x87_store32(0.0));
 }
 
+/// `__RTDynamicCast` (`00ec43fb`, cdecl, five words) and the RTTI type
+/// descriptors of `BaseFormComponent` (`01183040`) and `TESWeightForm`
+/// (`01183274`).
+const RT_DYNAMIC_CAST: u32 = 0x00ec_43fb;
+const TYPE_BASE_FORM_COMPONENT: u32 = 0x0118_3040;
+const TYPE_TES_WEIGHT_FORM: u32 = 0x0118_3274;
+/// `004f5d90` (thiscall, `RET 4`: a float): sets a weight form's weight.
+const SET_WEIGHT: u32 = 0x004f_5d90;
+
+/// The other component cast to `TESWeightForm`, or 0.
+fn as_weight_form(e: &mut Engine, other: u32) -> u32 {
+    e.call(
+        RT_DYNAMIC_CAST,
+        &args![
+            other,
+            0u32,
+            TYPE_BASE_FORM_COMPONENT,
+            TYPE_TES_WEIGHT_FORM,
+            0u32
+        ],
+    )
+    .u32()
+}
+
+// Translated from 0048eb10 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TESWeightForm::CopyComponent` (Xbox PDB, `RET 4`: the other component):
+/// when it is a `TESWeightForm`, sets this weight (`004f5d90`) to the other's
+/// (`006b9130`, stored to the pushed float with `FSTP`).
+pub fn tes_weight_form_copy_component(e: &mut Engine, this: Ptr, other: u32) {
+    let source = as_weight_form(e, other);
+    if source == 0 {
+        return;
+    }
+    let weight = e.call(WEIGHT_FIELD_VALUE, &args![source]).f64();
+    e.call(SET_WEIGHT, &args![this, x87_store32(weight)]);
+}
+
+// Translated from 0048eb60 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TESWeightForm::CompareComponent` (Xbox PDB, `RET 4`: the other
+/// component): true ("different") unless the other component is a
+/// `TESWeightForm` whose weight (`006b9130`) equals this one's (`FUCOMPP`:
+/// unordered counts as different).
+pub fn tes_weight_form_compare_component(e: &mut Engine, this: Ptr, other: u32) -> bool {
+    let source = as_weight_form(e, other);
+    if source == 0 {
+        return true;
+    }
+    let mine = e.call(WEIGHT_FIELD_VALUE, &args![this]).f64();
+    let theirs = e.call(WEIGHT_FIELD_VALUE, &args![source]).f64();
+    mine != theirs
+}
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
         entry!(0x0048_ebc0, tes_weight_form_get_form_weight(Ptr, u8) -> f32),
         entry!(0x00910b10, tes_weight_form_initialize_data_component(Ptr)),
+        entry!(0x0048_eb10, tes_weight_form_copy_component(Ptr, u32)),
+        entry!(0x0048_eb60, tes_weight_form_compare_component(Ptr, u32) -> bool),
     ]
 }
 
@@ -225,5 +278,50 @@ mod physics_work_ahead_tests {
         assert_eq!(e.call(0x0048_ebc0, &args![form, 0u8]).f32(), 0.0);
         e.mem.set_f32(form + 0x64, -2.0);
         assert_eq!(e.call(0x0048_ebc0, &args![form, 0u8]).f32(), -2.0);
+    }
+}
+
+#[cfg(test)]
+mod n045_tests {
+    use super::*;
+
+    fn engine() -> Engine {
+        let mut e = Engine::new();
+        e.register(RT_DYNAMIC_CAST, |_, a| a[0].into_ret());
+        e.register(WEIGHT_FIELD_VALUE, |e, a| Ret {
+            st0: f64::from(e.mem.f32(a[0] + 4)),
+            ..Ret::default()
+        });
+        e.register(SET_WEIGHT, |_, _| Ret::default());
+        e
+    }
+
+    #[test]
+    fn copy_passes_the_others_weight_as_a_float() {
+        let mut e = engine();
+        let other = e.mem.alloc(8);
+        e.mem.set_f32(other + 4, 2.5);
+        e.call_log = Some(vec![]);
+        e.call(0x0048_eb10, &[0x5000, 0]);
+        e.call(0x0048_eb10, &[0x5000, other]);
+        let log = e.call_log.take().unwrap();
+        let sets: Vec<_> = log.into_iter().filter(|(a, _)| *a == SET_WEIGHT).collect();
+        assert_eq!(sets, vec![(SET_WEIGHT, vec![0x5000, 2.5f32.to_bits()])]);
+    }
+
+    #[test]
+    fn compare_treats_unordered_weights_as_different() {
+        let mut e = engine();
+        let a = e.mem.alloc(8);
+        let b = e.mem.alloc(8);
+        e.mem.set_f32(a + 4, 1.0);
+        e.mem.set_f32(b + 4, 1.0);
+        assert!(e.call(0x0048_eb60, &[a, 0]).bool());
+        assert!(!e.call(0x0048_eb60, &[a, b]).bool());
+        e.mem.set_f32(b + 4, 1.5);
+        assert!(e.call(0x0048_eb60, &[a, b]).bool());
+        e.mem.set_f32(a + 4, f32::NAN);
+        e.mem.set_f32(b + 4, f32::NAN);
+        assert!(e.call(0x0048_eb60, &[a, b]).bool());
     }
 }

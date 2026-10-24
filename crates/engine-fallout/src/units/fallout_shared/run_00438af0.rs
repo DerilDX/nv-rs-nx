@@ -73,9 +73,52 @@ pub fn fn_00438bf0(e: &mut Engine, this: Ptr) {
     e.call(REMOVE_ALL, &args![this]);
 }
 
+/// `004858f0` (`cdecl`, chunk type and a byte): adds a one-byte chunk.
+const ADD_CHUNK_BYTE: u32 = 0x0048_58f0;
+/// `TESForm::AddChunkArray` (engine map, `004856f0`, `cdecl`: type, data,
+/// size).
+const ADD_CHUNK_ARRAY: u32 = 0x0048_56f0;
+/// `TESForm::AddChunk_ov2` (engine map, `00485950`, `cdecl`: type and a
+/// 16-bit value).
+const ADD_CHUNK_U16: u32 = 0x0048_5950;
+/// `00485910` (`cdecl`, chunk type and a word): adds a four-byte chunk.
+const ADD_CHUNK_WORD: u32 = 0x0048_5910;
+/// `0048cee0` (`thiscall`, no stack word): the length of the name string
+/// of the `TESFullName` at `this`.
+const NAME_LENGTH: u32 = 0x0048_cee0;
+/// `00408da0` (`thiscall`, no stack word; the engine map names the folded
+/// body `MapMarkerData::GetLocationName`): the name's characters.
+const NAME_TEXT: u32 = 0x0040_8da0;
+/// `0084e3a0` (`thiscall`, no stack word): a form's id.
+const FORM_ID: u32 = 0x0084_e3a0;
+
+// Translated from 00438c10 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Saves the object `00438bb0` builds (the engine map gives it no name; no
+/// stack word): the byte at +0xc as chunk `FNAM` (`004858f0`), the name
+/// (`00408da0`, length `0048cee0` plus 1) as `FULL`, the 16-bit value at
+/// +0xe as `TNAM`, and, when the form at +0x10 is set, its id as `WMI1`.
+pub fn fn_00438c10(e: &mut Engine, this: Ptr) {
+    let flags = e.mem.u8(this.addr() + 0xc);
+    e.call(ADD_CHUNK_BYTE, &args![0x4d41_4e46u32, u32::from(flags)]);
+    let length = e.call(NAME_LENGTH, &args![this]).u32();
+    let text = e.call(NAME_TEXT, &args![this]).u32();
+    e.call(
+        ADD_CHUNK_ARRAY,
+        &args![0x4c4c_5546u32, text, length.wrapping_add(1)],
+    );
+    let kind = e.mem.u16(this.addr() + 0xe);
+    e.call(ADD_CHUNK_U16, &args![0x4d41_4e54u32, u32::from(kind)]);
+    let form = e.mem.u32(this.addr() + 0x10);
+    if form != 0 {
+        let id = e.call(FORM_ID, &args![form]).u32();
+        e.call(ADD_CHUNK_WORD, &args![0x3149_4d57u32, id]);
+    }
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x0043_8c10, fn_00438c10(Ptr)),
         entry!(0x00438af0, fn_00438af0(Ptr)),
         entry!(0x0043_8b90, fn_00438b90(Ptr) -> bool),
         entry!(0x0043_8bb0, fn_00438bb0(Ptr) -> Ptr),
@@ -190,5 +233,66 @@ mod tests {
         e.call(0x0043_8af0, &args![this]);
         assert_eq!(e.call_log.take().unwrap().len(), 1);
         assert_eq!(e.mem.u32(this.addr() + 0xc), 0);
+    }
+}
+
+#[cfg(test)]
+mod n038_tests {
+    use super::*;
+
+    #[test]
+    fn at_00438c10_saves_flags_name_type_and_form() {
+        let mut e = Engine::new();
+        for addr in [
+            ADD_CHUNK_BYTE,
+            ADD_CHUNK_ARRAY,
+            ADD_CHUNK_U16,
+            ADD_CHUNK_WORD,
+        ] {
+            e.register(addr, |_, _| Ret::default());
+        }
+        e.register(NAME_LENGTH, |_, _| Ret {
+            eax: 5,
+            ..Ret::default()
+        });
+        e.register(NAME_TEXT, |_, _| Ret {
+            eax: 0x7000,
+            ..Ret::default()
+        });
+        e.register(FORM_ID, |_, a| Ret {
+            eax: a[0] + 1,
+            ..Ret::default()
+        });
+        let this = e.mem.alloc(0x14);
+        e.mem.set_u8(this + 0xc, 0x83);
+        e.mem.set_u16(this + 0xe, 0x1234);
+        e.call_log = Some(vec![]);
+        e.call(0x0043_8c10, &args![this]);
+        let log: Vec<_> = e
+            .call_log
+            .take()
+            .unwrap()
+            .into_iter()
+            .filter(|c| c.0 != 0x0043_8c10)
+            .collect();
+        assert_eq!(
+            log,
+            vec![
+                (ADD_CHUNK_BYTE, vec![0x4d41_4e46, 0x83]),
+                (NAME_LENGTH, vec![this]),
+                (NAME_TEXT, vec![this]),
+                (ADD_CHUNK_ARRAY, vec![0x4c4c_5546, 0x7000, 6]),
+                (ADD_CHUNK_U16, vec![0x4d41_4e54, 0x1234]),
+            ]
+        );
+        e.mem.set_u32(this + 0x10, 0x9000);
+        e.call_log = Some(vec![]);
+        e.call(0x0043_8c10, &args![this]);
+        let log = e.call_log.take().unwrap();
+        assert_eq!(log[log.len() - 2], (FORM_ID, vec![0x9000]));
+        assert_eq!(
+            log[log.len() - 1],
+            (ADD_CHUNK_WORD, vec![0x3149_4d57, 0x9001])
+        );
     }
 }

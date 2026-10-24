@@ -181,7 +181,7 @@ pub fn hk_hinge_constraint_cinfo_apply_scale(e: &mut Engine, scale: f32, data: P
         for lane in 0..4 {
             let at = data.addr() + base + 4 * lane;
             let value = e.mem.f32(at);
-            e.mem.set_f32(at, scale * value);
+            e.mem.set_f32(at, crate::sse::mul(scale, value));
         }
     }
 }

@@ -25,9 +25,28 @@ pub fn fn_00593450(e: &mut Engine, this: Ptr, file: Ptr) {
     }
 }
 
+/// `00401080` (`cdecl`: the address of a word and a byte; the loaders call
+/// it on each word of a record they byte-swap).
+const SWAP_WORD: u32 = 0x0040_1080;
+/// The word offsets `00593370` swaps, in its order.
+const DECAL_WORDS: [u32; 8] = [0x00, 0x04, 0x08, 0x0c, 0x18, 0x10, 0x14, 0x20];
+
+// Translated from 00593370 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No map name (`thiscall`; the fix-up `00593450` runs on a byte-swapped
+/// file): `00401080(address, 0)` on eight words of the 0x24-byte record,
+/// in the order of `DECAL_WORDS`.
+pub fn fn_00593370(e: &mut Engine, this: Ptr) {
+    for offset in DECAL_WORDS {
+        e.call(SWAP_WORD, &args![this.addr() + offset, 0u32]);
+    }
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
-    vec![entry!(0x0059_3450, fn_00593450(Ptr, Ptr))]
+    vec![
+        entry!(0x0059_3450, fn_00593450(Ptr, Ptr)),
+        entry!(0x0059_3370, fn_00593370(Ptr)),
+    ]
 }
 
 #[cfg(test)]
@@ -70,5 +89,30 @@ mod tests {
             };
             assert_eq!(calls_to(&e, FIXUP_00593370), expected);
         }
+    }
+}
+
+#[cfg(test)]
+mod n040_tests {
+    use super::*;
+
+    #[test]
+    fn fn_00593370_swaps_eight_words_in_order() {
+        let mut e = Engine::new();
+        e.register(SWAP_WORD, |_, _| Ret::default());
+        e.call_log = Some(vec![]);
+        e.call(0x0059_3370, &[0x1000]);
+        let log: Vec<_> = e
+            .call_log
+            .take()
+            .unwrap()
+            .into_iter()
+            .filter(|(a, _)| *a == SWAP_WORD)
+            .collect();
+        let expected: Vec<(u32, Vec<u32>)> = DECAL_WORDS
+            .iter()
+            .map(|o| (SWAP_WORD, vec![0x1000 + o, 0]))
+            .collect();
+        assert_eq!(log, expected);
     }
 }

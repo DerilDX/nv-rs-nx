@@ -46,9 +46,133 @@ pub fn fn_0040df90(_e: &mut Engine) -> u32 {
     0
 }
 
+/// Thiscall on a float setting: the address of its value (+4; for a null
+/// setting a zero stored at `01202800`) (`effectitem.cpp`).
+const SETTING_FLOAT_ADDRESS_00403E20: u32 = 0x0040_3e20;
+/// The float settings `0040df50` and `0040df70` read.
+const FLOAT_SETTING_011C36D8: u32 = 0x011c_36d8;
+const FLOAT_SETTING_011C3664: u32 = 0x011c_3664;
+/// Thiscall on an effect item: its effect setting (`00825c00`, folded code).
+const ITEM_EFFECT_SETTING: u32 = 0x0082_5c00;
+/// Thiscall on an effect setting (flag mask), `RET 4`: `AL`.
+const SETTING_HAS_FLAG: u32 = 0x0040_3e60;
+/// Thiscall on an effect setting: its associated form (the word at +0x60).
+const SETTING_ASSOCIATED_FORM: u32 = 0x005f_5f80;
+/// `__RTDynamicCast` (CRT), cdecl, and the type descriptors of `TESForm`
+/// and `TESBipedModelForm`.
+const DYNAMIC_CAST: u32 = 0x00ec_43fb;
+const TYPE_TES_FORM: u32 = 0x0118_3028;
+const TYPE_TES_BIPED_MODEL_FORM: u32 = 0x0118_3978;
+/// Thiscall on a `TESBipedModelForm` (other form), `RET 4`: `AL`
+/// (`tesbipedmodelform.cpp`).
+const BIPED_FORM_00480AD0: u32 = 0x0048_0ad0;
+
+// Translated from 0040dee0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (cdecl, one word): the word at `011c3538`,
+/// `011c353c`, `011c3540`, `011c3544`, `011c3548` or `011c354c` for `index`
+/// 0 to 5 (unsigned; the switch's jump table), 0 for any other.
+pub fn fn_0040dee0(e: &mut Engine, index: u32) -> u32 {
+    let global = match index {
+        0 => 0x011c_3538,
+        1 => 0x011c_353c,
+        2 => 0x011c_3540,
+        3 => 0x011c_3544,
+        4 => 0x011c_3548,
+        5 => 0x011c_354c,
+        _ => return 0,
+    };
+    e.mem.u32(global)
+}
+
+/// `FLD float` of the value of a float setting (`00403e20`).
+fn setting_float(e: &mut Engine, setting: u32) -> f32 {
+    let value = e
+        .call(SETTING_FLOAT_ADDRESS_00403E20, &args![setting])
+        .u32();
+    f32::from_bits(x87_quiet_bits(e.mem.u32(value)))
+}
+
+// Translated from 0040df50 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (no arguments, a float in `ST0`): the value
+/// of the float setting at `011c36d8`.
+pub fn fn_0040df50(e: &mut Engine) -> f32 {
+    setting_float(e, FLOAT_SETTING_011C36D8)
+}
+
+// Translated from 0040df70 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (no arguments, a float in `ST0`): the value
+/// of the float setting at `011c3664`.
+pub fn fn_0040df70(e: &mut Engine) -> f32 {
+    setting_float(e, FLOAT_SETTING_011C3664)
+}
+
+/// Whether the setting of the effect item `item` has a flag of `mask`.
+fn item_setting_has_flag(e: &mut Engine, item: u32, mask: u32) -> bool {
+    let setting = e.call(ITEM_EFFECT_SETTING, &args![item]).u32();
+    e.call(SETTING_HAS_FLAG, &args![setting, mask]).bool()
+}
+
+/// The associated form of the setting of the effect item `item`.
+fn item_associated_form(e: &mut Engine, item: u32) -> u32 {
+    let setting = e.call(ITEM_EFFECT_SETTING, &args![item]).u32();
+    e.call(SETTING_ASSOCIATED_FORM, &args![setting]).u32()
+}
+
+// Translated from 0040dfa0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (cdecl, two effect items; its caller is
+/// `CheckAddEffect`): false when either is null. When both items'
+/// settings have flag 0x20000 and both associated forms are
+/// `TESBipedModelForm`s (`__RTDynamicCast` from `TESForm`), the answer is
+/// `00480ad0` on the first with the second; otherwise whether both
+/// settings have flag 0x10000.
+pub fn fn_0040dfa0(e: &mut Engine, first: u32, second: u32) -> bool {
+    if first == 0 || second == 0 {
+        return false;
+    }
+    if item_setting_has_flag(e, first, 0x0002_0000) && item_setting_has_flag(e, second, 0x0002_0000)
+    {
+        let first_form = item_associated_form(e, first);
+        let second_form = item_associated_form(e, second);
+        let first_biped = e
+            .call(
+                DYNAMIC_CAST,
+                &args![
+                    first_form,
+                    0u32,
+                    TYPE_TES_FORM,
+                    TYPE_TES_BIPED_MODEL_FORM,
+                    0u32
+                ],
+            )
+            .u32();
+        let second_biped = e
+            .call(
+                DYNAMIC_CAST,
+                &args![
+                    second_form,
+                    0u32,
+                    TYPE_TES_FORM,
+                    TYPE_TES_BIPED_MODEL_FORM,
+                    0u32
+                ],
+            )
+            .u32();
+        if first_biped != 0 && second_biped != 0 {
+            return e
+                .call(BIPED_FORM_00480AD0, &args![first_biped, second_biped])
+                .bool();
+        }
+    }
+    item_setting_has_flag(e, first, 0x0001_0000) && item_setting_has_flag(e, second, 0x0001_0000)
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x0040_dee0, fn_0040dee0(u32) -> u32),
+        entry!(0x0040_df50, fn_0040df50() -> f32),
+        entry!(0x0040_df70, fn_0040df70() -> f32),
+        entry!(0x0040_dfa0, fn_0040dfa0(u32, u32) -> bool),
         entry!(0x0040e0b0, fn_0040e0b0(Ptr, u32, u32) -> Ptr),
         entry!(0x0040e130, fn_0040e130(Ptr, u32, u32) -> Ptr),
         entry!(0x0040_df90, fn_0040df90() -> u32),
@@ -99,5 +223,100 @@ mod tests {
         let mut e = Engine::new();
         assert_eq!(e.call(0x0040_df90, &[]).u32(), 0);
         assert_eq!(e.call(0x0040_df90, &[7]).u32(), 0);
+    }
+}
+
+#[cfg(test)]
+mod n050_tests {
+    use super::*;
+
+    fn calls(e: &Engine, addr: u32) -> Vec<Vec<u32>> {
+        e.call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|(a, _)| *a == addr)
+            .map(|(_, w)| w.clone())
+            .collect()
+    }
+
+    #[test]
+    fn word_by_index() {
+        let mut e = Engine::new();
+        e.map(0x011c_3000, 0x1000);
+        for i in 0..6u32 {
+            e.set_global(0x011c_3538 + 4 * i, 0x100 + i);
+        }
+        e.set_global(0x011c_3550u32, 0x777u32);
+        for i in 0..6u32 {
+            assert_eq!(e.call(0x0040_dee0, &args![i]).u32(), 0x100 + i);
+        }
+        assert_eq!(fn_0040dee0(&mut e, 6), 0);
+        assert_eq!(fn_0040dee0(&mut e, 0xffff_ffff), 0);
+    }
+
+    #[test]
+    fn setting_values_as_floats() {
+        let mut e = Engine::new();
+        e.map(0x011c_3000, 0x1000);
+        e.set_global(FLOAT_SETTING_011C36D8 + 4, 2.5f32);
+        e.set_global(FLOAT_SETTING_011C3664 + 4, 0x7f80_0001u32);
+        e.register(SETTING_FLOAT_ADDRESS_00403E20, |_, a| (a[0] + 4).into_ret());
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x0040_df50, &args![]).f32(), 2.5);
+        assert_eq!(
+            calls(&e, SETTING_FLOAT_ADDRESS_00403E20),
+            vec![vec![FLOAT_SETTING_011C36D8]]
+        );
+        // `FLD float` quiets a signalling NaN.
+        assert_eq!(fn_0040df70(&mut e).to_bits(), 0x7fc0_0001);
+    }
+
+    #[test]
+    fn effect_items_share_a_biped_form_or_both_flag_10000() {
+        let mut e = Engine::new();
+        // Item = setting = form: first word the flags, +0x60 the associated
+        // form, +0x64 nonzero when it is a biped model form, +0x68 the
+        // answer of `00480ad0`.
+        e.register(ITEM_EFFECT_SETTING, |_, a| a[0].into_ret());
+        e.register(SETTING_ASSOCIATED_FORM, |_, a| a[0].into_ret());
+        e.register(SETTING_HAS_FLAG, |e, a| {
+            u32::from(e.mem.u32(a[0]) & a[1] != 0).into_ret()
+        });
+        e.register(DYNAMIC_CAST, |e, a| {
+            if e.mem.u32(a[0] + 0x64) != 0 {
+                a[0].into_ret()
+            } else {
+                Ret::default()
+            }
+        });
+        e.register(BIPED_FORM_00480AD0, |e, a| {
+            e.mem.u32(a[0] + 0x68).into_ret()
+        });
+        let mut item = |flags: u32, biped: u32, answer: u32| {
+            let item = e.mem.alloc(0x70);
+            e.mem.set_u32(item, flags);
+            e.mem.set_u32(item + 0x64, biped);
+            e.mem.set_u32(item + 0x68, answer);
+            item
+        };
+        let biped_yes = item(0x2_0000, 1, 1);
+        let biped_no = item(0x2_0000, 1, 0);
+        let not_biped = item(0x3_0000, 0, 1);
+        let flag_10000 = item(0x1_0000, 0, 0);
+        let plain = item(0, 0, 0);
+        assert!(!e.call(0x0040_dfa0, &args![0u32, biped_yes]).bool());
+        assert!(!fn_0040dfa0(&mut e, biped_yes, 0));
+        e.call_log = Some(vec![]);
+        assert!(fn_0040dfa0(&mut e, biped_yes, biped_no));
+        assert_eq!(
+            calls(&e, BIPED_FORM_00480AD0),
+            vec![vec![biped_yes, biped_no]]
+        );
+        assert!(!fn_0040dfa0(&mut e, biped_no, biped_yes));
+        // A cast fails: the 0x10000 test decides.
+        assert!(!fn_0040dfa0(&mut e, biped_yes, not_biped));
+        assert!(fn_0040dfa0(&mut e, not_biped, flag_10000));
+        assert!(!fn_0040dfa0(&mut e, flag_10000, plain));
     }
 }

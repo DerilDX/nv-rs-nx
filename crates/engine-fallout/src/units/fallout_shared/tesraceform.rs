@@ -79,11 +79,34 @@ pub fn tes_race_form_init_item(e: &mut Engine, this: Ptr, owner: Ptr) {
     }
 }
 
+// Translated from 0048b8c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TESRaceForm::CompareComponent` (engine map; `RET 4`): true when `other`
+/// is no `TESRaceForm` (`__RTDynamicCast` from `BaseFormComponent`) or when
+/// the races (the word `00726070` reads at +4, this one's first) differ.
+pub fn tes_race_form_compare_component(e: &mut Engine, this: Ptr, other: u32) -> bool {
+    let race_form = e
+        .call(
+            0x00ec_43fb,
+            &args![other, 0u32, BASE_FORM_COMPONENT_TYPE, RACE_FORM_TYPE, 0u32],
+        )
+        .u32();
+    if race_form == 0 {
+        return true;
+    }
+    let mine = e.call(0x0072_6070, &args![this]).u32();
+    let theirs = e.call(0x0072_6070, &args![race_form]).u32();
+    mine != theirs
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
         entry!(0x0048_b870, tes_race_form_copy_component(Ptr, Ptr)),
         entry!(0x0048_b920, tes_race_form_init_item(Ptr, Ptr)),
+        entry!(
+            0x0048_b8c0,
+            tes_race_form_compare_component(Ptr, u32) -> bool
+        ),
     ]
 }
 
@@ -208,5 +231,27 @@ mod tests {
             assert_eq!(calls_to(&log, 0x005b_5e40), vec![expected]);
             assert_eq!(e.mem.u32(component + 4), 0);
         }
+    }
+}
+
+#[cfg(test)]
+mod compare_tests {
+    use super::*;
+
+    #[test]
+    fn compare_component_reports_other_races_and_non_race_forms() {
+        let mut e = Engine::new();
+        e.register(0x00ec_43fb, |_, a| a[0].into_ret());
+        e.register(0x0072_6070, |e, a| e.mem.u32(a[0] + 4).into_ret());
+        let this = e.mem.alloc(8);
+        let same = e.mem.alloc(8);
+        let other = e.mem.alloc(8);
+        e.mem.set_u32(this + 4, 0x6000);
+        e.mem.set_u32(same + 4, 0x6000);
+        e.mem.set_u32(other + 4, 0x6001);
+        assert!(!e.call(0x0048_b8c0, &args![this, same]).bool());
+        assert!(e.call(0x0048_b8c0, &args![this, other]).bool());
+        e.register(0x00ec_43fb, |_, _| 0u32.into_ret());
+        assert!(e.call(0x0048_b8c0, &args![this, same]).bool());
     }
 }

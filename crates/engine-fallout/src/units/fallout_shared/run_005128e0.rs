@@ -181,6 +181,71 @@ pub fn fn_00512e10(e: &mut Engine, this: Ptr) {
     e.call(0x0041_fd00, &args![base + 0x48, 3u32]);
 }
 
+/// `__RTDynamicCast` (`00ec43fb`, `cdecl`, five words) from `.?AVTESForm@@`
+/// (`01183028`) to `.?AVTESObjectARMO@@` (`01183a34`, the copy) or
+/// `.?AVTESObjectARMA@@` (`0118a620`, the comparison).
+const RT_DYNAMIC_CAST: u32 = 0x00ec_43fb;
+const TYPE_TES_FORM: u32 = 0x0118_3028;
+const TYPE_TES_OBJECT_ARMO: u32 = 0x0118_3a34;
+const TYPE_TES_OBJECT_ARMA: u32 = 0x0118_a620;
+/// `TESForm::CopyAllComponents` and `CompareAllComponents` (`004851b0`,
+/// `00485270`, engine map; `thiscall`, one word).
+const COPY_ALL_COMPONENTS: u32 = 0x0048_51b0;
+const COMPARE_ALL_COMPONENTS: u32 = 0x0048_5270;
+/// `00401460` (`cdecl`: destination, source, size; a byte copy) and
+/// `memcmp` (`00ec4835`, `cdecl`).
+const COPY_BYTES: u32 = 0x0040_1460;
+const MEMCMP: u32 = 0x00ec_4835;
+
+// Translated from 005128e0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`thiscall`, one word, `RET 4`; a copy): when
+/// `source` casts to `TESObjectARMO`, copies the 0xC bytes at
+/// `source + 0x178` to `this + 0x178` (`00401460`), then
+/// `TESForm::CopyAllComponents(source)`.
+pub fn fn_005128e0(e: &mut Engine, this: Ptr, source: u32) {
+    let cast = e
+        .call(
+            RT_DYNAMIC_CAST,
+            &args![source, 0u32, TYPE_TES_FORM, TYPE_TES_OBJECT_ARMO, 0u32],
+        )
+        .u32();
+    if cast == 0 {
+        return;
+    }
+    e.call(
+        COPY_BYTES,
+        &args![this.addr() + 0x178, source.wrapping_add(0x178), 0xcu32],
+    );
+    e.call(COPY_ALL_COMPONENTS, &args![this, source]);
+}
+
+// Translated from 00512940 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`thiscall`, one word, `RET 4`): whether the
+/// form differs from `form`: true when it does not cast to
+/// `TESObjectARMA`, when `TESForm::CompareAllComponents` answers true, or
+/// when `memcmp` finds the 0xC bytes at +0x178 of the two different.
+pub fn fn_00512940(e: &mut Engine, this: Ptr, form: u32) -> bool {
+    let other = e
+        .call(
+            RT_DYNAMIC_CAST,
+            &args![form, 0u32, TYPE_TES_FORM, TYPE_TES_OBJECT_ARMA, 0u32],
+        )
+        .u32();
+    if other == 0 {
+        return true;
+    }
+    if e.call(COMPARE_ALL_COMPONENTS, &args![this, other]).bool() {
+        return true;
+    }
+    let order = e
+        .call(
+            MEMCMP,
+            &args![this.addr() + 0x178, other.wrapping_add(0x178), 0xcu32],
+        )
+        .u32();
+    order != 0
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -192,6 +257,8 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x0051_2bd0, fn_00512bd0(Ptr)),
         entry!(0x0051_2d40, fn_00512d40(Ptr, u32) -> u32),
         entry!(0x0051_2e10, fn_00512e10(Ptr)),
+        entry!(0x0051_28e0, fn_005128e0(Ptr, u32)),
+        entry!(0x0051_2940, fn_00512940(Ptr, u32) -> bool),
     ]
 }
 
@@ -416,5 +483,94 @@ mod tests {
             }
             assert_eq!(calls, expected);
         }
+    }
+}
+
+#[cfg(test)]
+mod n040_tests {
+    use super::*;
+
+    fn calls_to(e: &mut Engine, targets: &[u32]) -> Vec<(u32, Vec<u32>)> {
+        e.call_log
+            .take()
+            .unwrap()
+            .into_iter()
+            .filter(|(a, _)| targets.contains(a))
+            .collect()
+    }
+
+    /// The cast answers the form when its word at +0xc is zero.
+    fn cast(e: &mut Engine) {
+        e.register(RT_DYNAMIC_CAST, |e, a| {
+            assert_eq!(a[2], TYPE_TES_FORM);
+            let form = if e.mem.u32(a[0] + 0xc) == 0 { a[0] } else { 0 };
+            Ret {
+                eax: form,
+                ..Ret::default()
+            }
+        });
+    }
+
+    #[test]
+    fn fn_005128e0_copies_from_armour_only() {
+        let mut e = Engine::new();
+        cast(&mut e);
+        e.register(COPY_BYTES, |_, _| Ret::default());
+        e.register(COPY_ALL_COMPONENTS, |_, _| Ret::default());
+        let this = e.mem.alloc(0x200);
+        let source = e.mem.alloc(0x200);
+        e.mem.set_u32(source + 0xc, 1);
+        e.call_log = Some(vec![]);
+        e.call(0x0051_28e0, &[this, source]);
+        let log = e.call_log.take().unwrap();
+        assert_eq!(
+            log[1].1,
+            vec![source, 0, TYPE_TES_FORM, TYPE_TES_OBJECT_ARMO, 0]
+        );
+        assert_eq!(log.len(), 2);
+        e.mem.set_u32(source + 0xc, 0);
+        e.call_log = Some(vec![]);
+        e.call(0x0051_28e0, &[this, source]);
+        assert_eq!(
+            calls_to(&mut e, &[COPY_BYTES, COPY_ALL_COMPONENTS]),
+            vec![
+                (COPY_BYTES, vec![this + 0x178, source + 0x178, 0xc]),
+                (COPY_ALL_COMPONENTS, vec![this, source]),
+            ]
+        );
+    }
+
+    #[test]
+    fn fn_00512940_compares_armour_addons() {
+        let mut e = Engine::new();
+        cast(&mut e);
+        e.register(COMPARE_ALL_COMPONENTS, |e, a| Ret {
+            eax: e.mem.u32(a[1] + 0x10),
+            ..Ret::default()
+        });
+        e.register(MEMCMP, |e, a| {
+            assert_eq!(a[2], 0xc);
+            Ret {
+                eax: u32::from(e.mem.u32(a[0]) != e.mem.u32(a[1])),
+                ..Ret::default()
+            }
+        });
+        let this = e.mem.alloc(0x200);
+        let other = e.mem.alloc(0x200);
+        e.mem.set_u32(other + 0xc, 1);
+        e.call_log = Some(vec![]);
+        assert!(e.call(0x0051_2940, &[this, other]).bool());
+        let log = e.call_log.take().unwrap();
+        assert_eq!(
+            log[1].1,
+            vec![other, 0, TYPE_TES_FORM, TYPE_TES_OBJECT_ARMA, 0]
+        );
+        e.mem.set_u32(other + 0xc, 0);
+        assert!(!e.call(0x0051_2940, &[this, other]).bool());
+        e.mem.set_u32(other + 0x178, 5);
+        assert!(e.call(0x0051_2940, &[this, other]).bool());
+        e.mem.set_u32(other + 0x178, 0);
+        e.mem.set_u32(other + 0x10, 1);
+        assert!(e.call(0x0051_2940, &[this, other]).bool());
     }
 }

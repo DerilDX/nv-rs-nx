@@ -559,6 +559,212 @@ pub fn fn_008670e0(e: &mut Engine, this: Ptr) -> Ptr {
     this
 }
 
+/// More imports, by slot: `BinkClose` (`00fdf3a4`), `BinkDoFrame` (`00fdf3bc`),
+/// `BinkCopyToBufferRect` (`00fdf3c0`), `BinkSetSoundSystem` (`00fdf3a0`), the slot holding
+/// `BinkOpenDirectSound`'s address (`00fdf3b4`), `PeekMessageA` (`00fdf29c`),
+/// `TranslateMessage` (`00fdf298`), `DispatchMessageA` (`00fdf294`) and `CreateSemaphoreA`
+/// (`00fdf0b4`).
+const BINK_CLOSE: u32 = 0x00fd_f3a4;
+const BINK_DO_FRAME: u32 = 0x00fd_f3bc;
+const BINK_COPY_TO_BUFFER_RECT: u32 = 0x00fd_f3c0;
+const BINK_SET_SOUND_SYSTEM: u32 = 0x00fd_f3a0;
+const BINK_OPEN_DIRECT_SOUND: u32 = 0x00fd_f3b4;
+const PEEK_MESSAGE: u32 = 0x00fd_f29c;
+const TRANSLATE_MESSAGE: u32 = 0x00fd_f298;
+const DISPATCH_MESSAGE: u32 = 0x00fd_f294;
+const CREATE_SEMAPHORE: u32 = 0x00fd_f0b4;
+/// This unit's frame texture set helpers (unnamed, `cdecl`): its release (`00ebfd20`, the
+/// set), the next tile rectangle (`00ebfda0`: the set and six word addresses; answers 0 when
+/// there is none) and the step past it (`00ebff00`, the set).
+const TEXTURES_RELEASE: u32 = 0x00eb_fd20;
+const TEXTURES_NEXT_RECT: u32 = 0x00eb_fda0;
+const TEXTURES_STEP: u32 = 0x00eb_ff00;
+/// `00ec1570` (this unit, unnamed; `thiscall`, no stack words): what the close runs last.
+const MOVIE_CLOSE_REST: u32 = 0x00ec_1570;
+/// `00ec3020` (this unit, unnamed; `thiscall`, one word): the name map's base constructor
+/// (given 0x25), and a vtable the player's constructor stores over it in turn.
+const NAME_MAP_CONSTRUCT: u32 = 0x00ec_3020;
+const MAP_VTABLE_010F1D04: u32 = 0x010f_1d04;
+/// `006b7f20` (unnamed; `thiscall` on the map: the position, a key and a value, each by
+/// address): the map's next item; and `MemoryManager::Deallocate` (`00aa4060`, `thiscall`
+/// on the manager `011f6238`).
+const MAP_NEXT_ITEM: u32 = 0x006b_7f20;
+const MEMORY_MANAGER: u32 = 0x011f_6238;
+const MEMORY_DEALLOCATE: u32 = 0x00aa_4060;
+
+// Translated from 00ec1020 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`thiscall`, no stack words): the movie's close. `BinkClose`
+/// on the Bink handle (+0) when there is one, the frame texture set (+8) released
+/// (`00ebfd20`) when there is one, then `00ec1570`.
+pub fn fn_00ec1020(e: &mut Engine, this: Ptr) {
+    let at = this.addr();
+    if e.mem.u32(at) != 0 {
+        let bink = e.mem.u32(at);
+        e.call(BINK_CLOSE, &args![bink]);
+    }
+    if e.mem.u32(at + 8) != 0 {
+        let textures = e.mem.u32(at + 8);
+        e.call(TEXTURES_RELEASE, &args![textures]);
+    }
+    e.call(MOVIE_CLOSE_REST, &args![at]);
+}
+
+// Translated from 00ec14d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`cdecl`: the Bink handle, the frame texture set, a flag): the
+/// frame copy. `BinkDoFrame`, then for each tile rectangle `00ebfda0` hands out (six words
+/// into locals) `BinkCopyToBufferRect` into it (the first two words, the Bink handle's word
+/// at +4, the source position 0, 0 and the other four words, flags 3 with 0x80000000 when
+/// `flag` is non-zero) and `00ebff00`. Answers whether the last copy (or none) answered
+/// non-zero.
+pub fn fn_00ec14d0(e: &mut Engine, bink: u32, textures: u32, flag: u32) -> bool {
+    e.call(BINK_DO_FRAME, &args![bink]);
+    // The locals, as the frame has them: +0 is [EBP-0x1C], +4 [EBP-0x18], +8 [EBP-0x14],
+    // +0xC [EBP-0x10], +0x10 [EBP-0xC], +0x14 [EBP-8].
+    let result = e.with_stack(0x18, |e, locals| {
+        let b = locals.addr();
+        let mut result = 1u32;
+        while e
+            .call(
+                TEXTURES_NEXT_RECT,
+                &args![textures, b, b + 0xc, b + 4, b + 0x14, b + 8, b + 0x10],
+            )
+            .u32()
+            != 0
+        {
+            let flags = if flag != 0 { 0x8000_0000u32 } else { 0 } | 3;
+            let height = e.mem.u32(bink.wrapping_add(4));
+            let words = [
+                bink,
+                e.mem.u32(b),
+                e.mem.u32(b + 0xc),
+                height,
+                0,
+                0,
+                e.mem.u32(b + 4),
+                e.mem.u32(b + 0x14),
+                e.mem.u32(b + 8),
+                e.mem.u32(b + 0x10),
+                flags,
+            ];
+            result = e.call(BINK_COPY_TO_BUFFER_RECT, &words).u32();
+            e.call(TEXTURES_STEP, &args![textures]);
+        }
+        result
+    });
+    result != 0
+}
+
+// Translated from 00ec1680 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`thiscall`, one word): when the low byte of `use_sound` is
+/// set, `BinkSetSoundSystem` with the address in the `BinkOpenDirectSound` import slot and
+/// 0. `this` is not read.
+pub fn fn_00ec1680(e: &mut Engine, _this: Ptr, use_sound: u8) {
+    if use_sound != 0 {
+        let open = e.mem.u32(BINK_OPEN_DIRECT_SOUND);
+        e.call(BINK_SET_SOUND_SYSTEM, &args![open, 0u32]);
+    }
+}
+
+// Translated from 00ec1840 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `MoviePlayer::CheckContinuePlaying` (engine map; `thiscall`, `RET 4`: one stack word the
+/// body never reads): pumps the window messages (`PeekMessageA` with remove, then
+/// `TranslateMessage` and `DispatchMessageA` on each) and answers whether the byte at +0x21
+/// is clear.
+pub fn movie_player_check_continue_playing(e: &mut Engine, this: Ptr, _unused_0: u32) -> bool {
+    e.with_stack(0x1c, |e, message| {
+        let message = message.addr();
+        while e
+            .call(PEEK_MESSAGE, &args![message, 0u32, 0u32, 0u32, 1u32])
+            .u32()
+            != 0
+        {
+            e.call(TRANSLATE_MESSAGE, &args![message]);
+            e.call(DISPATCH_MESSAGE, &args![message]);
+        }
+    });
+    e.mem.u8(this.addr() + 0x21) == 0
+}
+
+// Translated from 00ec20c0 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 00ec20c0 - the FS:[0] exception frame (unwind state 0 for the name map) is not translated
+/// The `MoviePlayer` constructor (`thiscall`, no stack words): its vtable (`010f1c44`), the
+/// words +4 to +0x14 and +0x1C and the bytes +0x18, +0x19, +0x20 to +0x22 cleared, the bytes
+/// +0x23 and +0x24 set to 1, +0x2C cleared; a semaphore (+0x30 initial count 0, +0x38
+/// maximum 1, `CreateSemaphoreA` with those words read back, no attributes or name) whose
+/// handle goes to +0x34; then the name map at +0x40: its base (`00ec3020` with 0x25), the
+/// vtables `010f1cc4` and `010f1ce4`, its byte +0x10 set to 1, the vtables `010f1d04` and
+/// `010f1c20`. Returns `this`.
+pub fn fn_00ec20c0(e: &mut Engine, this: Ptr) -> Ptr {
+    let at = this.addr();
+    e.mem.set_u32(at, PLAYER_VTABLE);
+    for offset in [4u32, 8, 0xc, 0x10, 0x14] {
+        e.mem.set_u32(at + offset, 0);
+    }
+    e.mem.set_u8(at + 0x18, 0);
+    e.mem.set_u8(at + 0x19, 0);
+    e.mem.set_u32(at + 0x1c, 0);
+    e.mem.set_u8(at + 0x20, 0);
+    e.mem.set_u8(at + 0x21, 0);
+    e.mem.set_u8(at + 0x22, 0);
+    e.mem.set_u8(at + 0x23, 1);
+    e.mem.set_u8(at + 0x24, 1);
+    e.mem.set_u32(at + 0x2c, 0);
+    let semaphore = at + 0x30;
+    e.mem.set_u32(semaphore, 0);
+    e.mem.set_u32(semaphore + 8, 1);
+    let maximum = e.mem.u32(semaphore + 8);
+    let initial = e.mem.u32(semaphore);
+    let handle = e
+        .call(CREATE_SEMAPHORE, &args![0u32, initial, maximum, 0u32])
+        .u32();
+    e.mem.set_u32(semaphore + 4, handle);
+    let map = at + 0x40;
+    e.call(NAME_MAP_CONSTRUCT, &args![map, 0x25u32]);
+    e.mem.set_u32(map, MAP_BASE_VTABLE);
+    e.mem.set_u32(map, STRING_MAP_VTABLE);
+    e.mem.set_u8(map + 0x10, 1);
+    e.mem.set_u32(map, MAP_VTABLE_010F1D04);
+    e.mem.set_u32(map, NAME_MAP_VTABLE);
+    this
+}
+
+// Translated from 00ec2e50 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`thiscall`, no stack words): the player's clean-up of its
+/// name map at +0x40 (bucket count at +4, buckets at +8). From the first non-null bucket
+/// head, `006b7f20` hands out the items (position, key and value locals, the key and value
+/// cleared before each step) and each value is freed (`MemoryManager::Deallocate`) until
+/// the position is null; then the map's base destructor body (`00438af0`).
+pub fn fn_00ec2e50(e: &mut Engine, this: Ptr) {
+    let map = this.addr() + 0x40;
+    let mut first = 0u32;
+    let mut index = 0u32;
+    while index < e.mem.u32(map + 4) {
+        let buckets = e.mem.u32(map + 8);
+        let head = e.mem.u32(buckets.wrapping_add(index.wrapping_mul(4)));
+        if head != 0 {
+            first = head;
+            break;
+        }
+        index += 1;
+    }
+    // The locals: the position (+0), the key (+4) and the value (+8).
+    e.with_stack(0xc, |e, locals| {
+        let position = locals.addr();
+        e.mem.set_u32(position, first);
+        while e.mem.u32(position) != 0 {
+            e.mem.set_u32(position + 4, 0);
+            e.mem.set_u32(position + 8, 0);
+            e.call(
+                MAP_NEXT_ITEM,
+                &args![map, position, position + 4, position + 8],
+            );
+            let value = e.mem.u32(position + 8);
+            e.call(MEMORY_DEALLOCATE, &args![MEMORY_MANAGER, value]);
+        }
+    });
+    e.call(MAP_BASE_DESTRUCT, &args![map]);
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -572,6 +778,15 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00ec15e0, fn_00ec15e0(Ptr)),
         entry!(0x00ec17c0, movie_player_get_playing_sequence(Ptr) -> bool),
         entry!(0x00ec1a90, ni_t_string_template_map_destruct(Ptr)),
+        entry!(0x00ec_1020, fn_00ec1020(Ptr)),
+        entry!(0x00ec_14d0, fn_00ec14d0(u32, u32, u32) -> bool),
+        entry!(0x00ec_1680, fn_00ec1680(Ptr, u8)),
+        entry!(
+            0x00ec_1840,
+            movie_player_check_continue_playing(Ptr, u32) -> bool
+        ),
+        entry!(0x00ec_20c0, fn_00ec20c0(Ptr) -> Ptr),
+        entry!(0x00ec_2e50, fn_00ec2e50(Ptr)),
         entry!(
             0x00ec1d50,
             bst_case_insensitive_string_map_key_to_hash_index(Ptr, u32) -> u32
@@ -908,5 +1123,226 @@ mod la1_tests {
         assert_eq!(query.1, vec![0x0c00_0000]);
         let sound = log.iter().find(|(a, _)| *a == PLAYER_SET_SOUND).unwrap();
         assert_eq!(sound.1, vec![this, 1]);
+    }
+}
+
+#[cfg(test)]
+mod lookahead2_tests {
+    use super::*;
+
+    fn calls(e: &Engine, address: u32) -> Vec<Vec<u32>> {
+        e.call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|(a, _)| *a == address)
+            .map(|(_, w)| w.clone())
+            .collect()
+    }
+
+    fn quiet(e: &mut Engine, addresses: &[u32]) {
+        for &address in addresses {
+            e.register(address, |_, _| Ret::default());
+        }
+        e.call_log = Some(vec![]);
+    }
+
+    #[test]
+    fn close_releases_what_is_there() {
+        let mut e = Engine::new();
+        quiet(&mut e, &[BINK_CLOSE, TEXTURES_RELEASE, MOVIE_CLOSE_REST]);
+        let movie = e.mem.alloc(0x28);
+        e.mem.set_u32(movie, 0x10);
+        e.mem.set_u32(movie + 8, 0x20);
+        e.call(0x00ec_1020, &args![movie]);
+        assert_eq!(calls(&e, BINK_CLOSE), vec![vec![0x10]]);
+        assert_eq!(calls(&e, TEXTURES_RELEASE), vec![vec![0x20]]);
+        assert_eq!(calls(&e, MOVIE_CLOSE_REST), vec![vec![movie]]);
+        let empty = e.mem.alloc(0x28);
+        e.call_log = Some(vec![]);
+        e.call(0x00ec_1020, &args![empty]);
+        assert!(calls(&e, BINK_CLOSE).is_empty());
+        assert!(calls(&e, TEXTURES_RELEASE).is_empty());
+        assert_eq!(calls(&e, MOVIE_CLOSE_REST), vec![vec![empty]]);
+    }
+
+    #[test]
+    fn frame_copy_copies_each_rectangle() {
+        let mut e = Engine::new();
+        quiet(&mut e, &[BINK_DO_FRAME, TEXTURES_STEP]);
+        let mut left = 2u32;
+        e.register_double(TEXTURES_NEXT_RECT, move |e, a| {
+            if left == 0 {
+                return 0u32.into_ret();
+            }
+            for (index, &out) in a[1..7].iter().enumerate() {
+                e.mem.set_u32(out, 0x100 * left + index as u32);
+            }
+            left -= 1;
+            1u32.into_ret()
+        });
+        // The first copy answers 0, the second 5.
+        let mut answers = vec![5u32, 0];
+        e.register_double(BINK_COPY_TO_BUFFER_RECT, move |_, _| {
+            answers.pop().unwrap().into_ret()
+        });
+        let bink = e.mem.alloc(8);
+        e.mem.set_u32(bink + 4, 0x77);
+        assert!(e.call(0x00ec_14d0, &args![bink, 0x900u32, 1u32]).bool());
+        let copies = calls(&e, BINK_COPY_TO_BUFFER_RECT);
+        assert_eq!(copies.len(), 2);
+        // The rectangle words in the order the helper is given their addresses.
+        assert_eq!(
+            copies[0],
+            vec![
+                bink,
+                0x200,
+                0x201,
+                0x77,
+                0,
+                0,
+                0x202,
+                0x203,
+                0x204,
+                0x205,
+                0x8000_0003
+            ]
+        );
+        assert_eq!(calls(&e, TEXTURES_STEP), vec![vec![0x900]; 2]);
+        assert_eq!(calls(&e, BINK_DO_FRAME), vec![vec![bink]]);
+    }
+
+    #[test]
+    fn frame_copy_answers_the_last_copy() {
+        let mut e = Engine::new();
+        quiet(&mut e, &[BINK_DO_FRAME, TEXTURES_STEP]);
+        let mut left = 1u32;
+        e.register_double(TEXTURES_NEXT_RECT, move |_, _| {
+            let more = left;
+            left = 0;
+            more.into_ret()
+        });
+        e.register(BINK_COPY_TO_BUFFER_RECT, |_, _| 0u32.into_ret());
+        let bink = e.mem.alloc(8);
+        assert!(!e.call(0x00ec_14d0, &args![bink, 0x900u32, 0u32]).bool());
+        assert_eq!(calls(&e, BINK_COPY_TO_BUFFER_RECT)[0][10], 3);
+        // No rectangle at all: true.
+        e.register(TEXTURES_NEXT_RECT, |_, _| 0u32.into_ret());
+        assert!(e.call(0x00ec_14d0, &args![bink, 0x900u32, 0u32]).bool());
+    }
+
+    #[test]
+    fn sound_system_is_set_only_with_the_flag() {
+        let mut e = Engine::new();
+        quiet(&mut e, &[BINK_SET_SOUND_SYSTEM]);
+        e.map(BINK_OPEN_DIRECT_SOUND, 4);
+        e.mem.set_u32(BINK_OPEN_DIRECT_SOUND, 0x0123_4560);
+        e.call(0x00ec_1680, &args![0u32, 0x100u32]);
+        assert!(calls(&e, BINK_SET_SOUND_SYSTEM).is_empty());
+        e.call(0x00ec_1680, &args![0u32, 1u32]);
+        assert_eq!(calls(&e, BINK_SET_SOUND_SYSTEM), vec![vec![0x0123_4560, 0]]);
+    }
+
+    #[test]
+    fn continue_playing_pumps_messages_then_reads_the_stop_byte() {
+        let mut e = Engine::new();
+        quiet(&mut e, &[TRANSLATE_MESSAGE, DISPATCH_MESSAGE]);
+        let mut waiting = 2u32;
+        e.register_double(PEEK_MESSAGE, move |_, _| {
+            let more = u32::from(waiting > 0);
+            waiting = waiting.saturating_sub(1);
+            more.into_ret()
+        });
+        let this = e.mem.alloc(0x28);
+        assert!(e.call(0x00ec_1840, &args![this, 9u32]).bool());
+        let peeks = calls(&e, PEEK_MESSAGE);
+        assert_eq!(peeks.len(), 3);
+        assert_eq!(peeks[0][1..], [0, 0, 0, 1]);
+        assert_eq!(calls(&e, TRANSLATE_MESSAGE), vec![vec![peeks[0][0]]; 2]);
+        assert_eq!(calls(&e, DISPATCH_MESSAGE), vec![vec![peeks[0][0]]; 2]);
+        e.mem.set_u8(this + 0x21, 1);
+        assert!(!e.call(0x00ec_1840, &args![this, 0u32]).bool());
+    }
+
+    #[test]
+    fn constructor_sets_the_fields_and_the_semaphore() {
+        let mut e = Engine::new();
+        e.register(CREATE_SEMAPHORE, |_, _| 0x4444u32.into_ret());
+        e.register(NAME_MAP_CONSTRUCT, |e, a| {
+            e.mem.set_u32(a[0], 0x1111);
+            a[0].into_ret()
+        });
+        e.call_log = Some(vec![]);
+        let this = e.mem.alloc(0x58);
+        for offset in (0..0x58).step_by(4) {
+            e.mem.set_u32(this + offset, 0xaaaa_aaaa);
+        }
+        assert_eq!(e.call(0x00ec_20c0, &args![this]).u32(), this);
+        assert_eq!(calls(&e, CREATE_SEMAPHORE), vec![vec![0, 0, 1, 0]]);
+        assert_eq!(calls(&e, NAME_MAP_CONSTRUCT), vec![vec![this + 0x40, 0x25]]);
+        let words: Vec<u32> = (0..0x40u32)
+            .step_by(4)
+            .map(|o| e.mem.u32(this + o))
+            .collect();
+        assert_eq!(
+            words,
+            vec![
+                PLAYER_VTABLE,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0xaaaa_0000,
+                0,
+                0x0100_0000,
+                0xaaaa_aa01,
+                0xaaaa_aaaa,
+                0,
+                0,
+                0x4444,
+                1,
+                0xaaaa_aaaa
+            ]
+        );
+        assert_eq!(e.mem.u32(this + 0x40), NAME_MAP_VTABLE);
+        assert_eq!(e.mem.u8(this + 0x50), 1);
+    }
+
+    #[test]
+    fn clean_up_frees_each_value_from_the_first_bucket() {
+        let mut e = Engine::new();
+        quiet(&mut e, &[MEMORY_DEALLOCATE, MAP_BASE_DESTRUCT]);
+        let mut values = vec![0x700u32, 0x600];
+        e.register_double(MAP_NEXT_ITEM, move |e, a| {
+            assert_eq!((e.mem.u32(a[2]), e.mem.u32(a[3])), (0, 0));
+            let value = values.pop().unwrap();
+            e.mem.set_u32(a[3], value);
+            e.mem.set_u32(a[2], 0x55);
+            let next = if values.is_empty() { 0 } else { 0x99 };
+            e.mem.set_u32(a[1], next);
+            Ret::default()
+        });
+        let this = e.mem.alloc(0x58);
+        let buckets = e.mem.alloc(0xc);
+        e.mem.set_u32(buckets + 8, 0x9000);
+        e.mem.set_u32(this + 0x44, 3);
+        e.mem.set_u32(this + 0x48, buckets);
+        e.call_log = Some(vec![]);
+        e.call(0x00ec_2e50, &args![this]);
+        let steps = calls(&e, MAP_NEXT_ITEM);
+        assert_eq!(steps.len(), 2);
+        assert_eq!(steps[0][0], this + 0x40);
+        assert_eq!(
+            calls(&e, MEMORY_DEALLOCATE),
+            vec![vec![MEMORY_MANAGER, 0x600], vec![MEMORY_MANAGER, 0x700]]
+        );
+        assert_eq!(calls(&e, MAP_BASE_DESTRUCT), vec![vec![this + 0x40]]);
+        // An empty map: only the destructor body.
+        e.mem.set_u32(buckets + 8, 0);
+        e.call_log = Some(vec![]);
+        e.call(0x00ec_2e50, &args![this]);
+        assert!(calls(&e, MAP_NEXT_ITEM).is_empty());
+        assert_eq!(calls(&e, MAP_BASE_DESTRUCT).len(), 1);
     }
 }

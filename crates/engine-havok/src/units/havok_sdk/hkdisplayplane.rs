@@ -12,7 +12,7 @@
 use crate::prelude::*;
 
 use super::hkdisplaygeometry::{allocate_geometry_block, push_back_slot, reset_transform};
-use super::hkpsphereshape::{copy_vec, load_vec, shufps, store_vec, zip_with, Vec4};
+use super::hkpsphereshape::{copy_vec, load_vec, shufps, store_vec, Vec4};
 
 /// The memory router (`00c85750`): word +0x10 is the heap allocator.
 const MEMORY_ROUTER: u32 = 0x00c8_5750;
@@ -33,18 +33,19 @@ pub fn hk_display_plane_create_plane_points(e: &mut Engine, this: Ptr, out: Ptr)
     let b = load_vec(e, me + 0x70);
     let c = load_vec(e, me + 0x80);
     let d = load_vec(e, me + 0x90);
-    let cross = zip_with(
-        zip_with(shufps(c, c, 0xd2), shufps(a, a, 0xc9), |x, y| x * y),
-        zip_with(shufps(c, c, 0xc9), shufps(a, a, 0xd2), |x, y| x * y),
-        |x, y| x - y,
+    use crate::sse::{addps, mulps, subps};
+    // `MULPS`/`SUBPS`/`ADDPS` with the SSE NaN rules, the destination first.
+    let cross = subps(
+        mulps(shufps(c, c, 0xd2), shufps(a, a, 0xc9)),
+        mulps(shufps(c, c, 0xc9), shufps(a, a, 0xd2)),
     );
-    let across = zip_with(d, cross, |x, y| x * y);
-    let along = zip_with(d, c, |x, y| x * y);
+    let across = mulps(d, cross);
+    let along = mulps(d, c);
     let corners: [Vec4; 4] = [
-        zip_with(zip_with(b, across, |x, y| x + y), along, |x, y| x + y),
-        zip_with(zip_with(b, across, |x, y| x + y), along, |x, y| x - y),
-        zip_with(zip_with(b, across, |x, y| x - y), along, |x, y| x + y),
-        zip_with(zip_with(b, across, |x, y| x - y), along, |x, y| x - y),
+        addps(addps(b, across), along),
+        subps(addps(b, across), along),
+        addps(subps(b, across), along),
+        subps(subps(b, across), along),
     ];
     for (index, corner) in corners.into_iter().enumerate() {
         store_vec(e, out.addr() + 0x10 * index as u32, corner);

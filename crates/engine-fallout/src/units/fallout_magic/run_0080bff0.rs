@@ -28,9 +28,113 @@ pub fn fn_0080bff0(e: &mut Engine, caster: u32, spell: u32, effect: u32) -> u32 
     .u32()
 }
 
+/// The `ActiveEffect` constructor `00803d30` (`thiscall`, three words).
+const ACTIVE_EFFECT_CONSTRUCTOR: u32 = 0x0080_3d30;
+/// The `CureEffect` vtable (`01079c8c`, RTTI `.?AVCureEffect@@`).
+const CURE_EFFECT_VTABLE: u32 = 0x0107_9c8c;
+/// `CureEffect::eSpellType` (Xbox PDB) +0x48.
+const CURE_SPELL_TYPE: u32 = 0x48;
+/// `CureEffect::eArchetypeID` (Xbox PDB) +0x4C.
+const CURE_ARCHETYPE: u32 = 0x4c;
+
+// Translated from 0080c070 (decompiled, FalloutNV.exe 1.4.0.525)
+/// A `CureEffect` constructor (by the vtable it stores; unnamed in the engine map;
+/// `thiscall`, `RET 0x10`): runs the `ActiveEffect` constructor `00803d30` with the first
+/// three words, stores the vtable, `eSpellType` (+0x48) from the fourth word and
+/// `eArchetypeID` (+0x4C) = -1. Returns `this`.
+pub fn fn_0080c070(
+    e: &mut Engine,
+    this: Ptr,
+    caster: u32,
+    spell: u32,
+    effect: u32,
+    spell_type: u32,
+) -> Ptr {
+    e.call(
+        ACTIVE_EFFECT_CONSTRUCTOR,
+        &args![this, caster, spell, effect],
+    );
+    e.mem.set_u32(this.addr(), CURE_EFFECT_VTABLE);
+    e.mem.set_u32(this.addr() + CURE_SPELL_TYPE, spell_type);
+    e.mem.set_u32(this.addr() + CURE_ARCHETYPE, 0xffff_ffff);
+    this
+}
+
+// Translated from 0080c0b0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// A `CureEffect` constructor (by the vtable it stores; unnamed in the engine map;
+/// `thiscall`, `RET 0x10`): runs the `ActiveEffect` constructor `00803d30` with the first
+/// three words, stores the vtable, `eSpellType` (+0x48) = 0 and `eArchetypeID` (+0x4C)
+/// from the fourth word. Returns `this`.
+pub fn fn_0080c0b0(
+    e: &mut Engine,
+    this: Ptr,
+    caster: u32,
+    spell: u32,
+    effect: u32,
+    archetype: u32,
+) -> Ptr {
+    e.call(
+        ACTIVE_EFFECT_CONSTRUCTOR,
+        &args![this, caster, spell, effect],
+    );
+    e.mem.set_u32(this.addr(), CURE_EFFECT_VTABLE);
+    e.mem.set_u32(this.addr() + CURE_SPELL_TYPE, 0);
+    e.mem.set_u32(this.addr() + CURE_ARCHETYPE, archetype);
+    this
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
-    vec![entry!(0x0080_bff0, fn_0080bff0(u32, u32, u32) -> u32)]
+    vec![
+        entry!(0x0080_bff0, fn_0080bff0(u32, u32, u32) -> u32),
+        entry!(0x0080_c070, fn_0080c070(Ptr, u32, u32, u32, u32) -> Ptr),
+        entry!(0x0080_c0b0, fn_0080c0b0(Ptr, u32, u32, u32, u32) -> Ptr),
+    ]
+}
+
+#[cfg(test)]
+mod n049_tests {
+    use super::*;
+
+    fn constructed(address: u32, fourth: u32) -> (u32, u32, u32, Vec<u32>) {
+        let mut e = Engine::new();
+        e.register(ACTIVE_EFFECT_CONSTRUCTOR, |e, a| {
+            e.mem.set_u32(a[0] + 0x48, 0xaaaa_aaaa);
+            e.mem.set_u32(a[0] + 0x4c, 0xbbbb_bbbb);
+            a[0].into_ret()
+        });
+        let this = e.mem.alloc(0x50);
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(address, &[this, 1, 2, 3, fourth]).u32(), this);
+        let log = e.call_log.take().unwrap();
+        let base: Vec<_> = log
+            .iter()
+            .filter(|(a, _)| *a == ACTIVE_EFFECT_CONSTRUCTOR)
+            .collect();
+        assert_eq!(base[0].1, vec![this, 1, 2, 3]);
+        (
+            e.mem.u32(this),
+            e.mem.u32(this + 0x48),
+            e.mem.u32(this + 0x4c),
+            base[0].1.clone(),
+        )
+    }
+
+    #[test]
+    fn fn_0080c070_takes_the_spell_type() {
+        let (vtable, spell_type, archetype, _) = constructed(0x0080_c070, 5);
+        assert_eq!(vtable, CURE_EFFECT_VTABLE);
+        assert_eq!(spell_type, 5);
+        assert_eq!(archetype, 0xffff_ffff);
+    }
+
+    #[test]
+    fn fn_0080c0b0_takes_the_archetype() {
+        let (vtable, spell_type, archetype, _) = constructed(0x0080_c0b0, 0x18);
+        assert_eq!(vtable, CURE_EFFECT_VTABLE);
+        assert_eq!(spell_type, 0);
+        assert_eq!(archetype, 0x18);
+    }
 }
 
 #[cfg(test)]

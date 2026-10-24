@@ -815,7 +815,7 @@ pub fn fn_00435dd0(e: &mut Engine) -> f32 {
 /// `CombatTimeStamp`'s constructor (the engine map has no name for it):
 /// stores `value` in the one-float time stamp at `this`. Returns `this`.
 pub fn fn_00435de0(e: &mut Engine, this: Ptr, value: f32) -> Ptr {
-    e.mem.set_u32(this.addr(), value.to_bits());
+    e.mem.set_u32(this.addr(), x87_quiet(value).to_bits());
     this
 }
 

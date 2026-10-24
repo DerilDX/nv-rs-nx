@@ -4,8 +4,8 @@
 #[allow(unused_imports)]
 use crate::prelude::*;
 
-use super::hkpprimitivedrawer::{normalised, rotate_by_quaternion};
-use super::hkpprismaticconstraintdata::{columns, combine_columns, cross_yzx};
+use super::hkpprimitivedrawer::{normalised, normalised_sse, rotate_by_quaternion};
+use super::hkpprismaticconstraintdata::{columns, combine_columns, cross_yzx, cross_yzx_sse};
 use super::hkpsphereshape::{copy_vec, load_vec, store_vec};
 use std::cmp::Ordering;
 
@@ -262,20 +262,22 @@ pub fn ragdoll_set_in_body_space(
     axis_b: u32,
 ) {
     let data = this.addr();
-    for (rows, axis, second, pivot, pivot_target) in [
-        (data + 0x20, axis_a, second_a, pivot_a, data + 0x50),
-        (data + 0x60, axis_b, second_b, pivot_b, data + 0x90),
+    // The SSE NaN rules throughout; body A's cross product has the second vector's shuffles
+    // as the `MULPS` destinations, body B's the first vector's.
+    for (rows, axis, second, pivot, pivot_target, a_first) in [
+        (data + 0x20, axis_a, second_a, pivot_a, data + 0x50, false),
+        (data + 0x60, axis_b, second_b, pivot_b, data + 0x90, true),
     ] {
         let vector = load_vec(e, axis);
-        let unit = normalised(e, vector);
+        let unit = normalised_sse(e, vector);
         store_vec(e, rows, unit);
         copy_vec(e, second, rows + 0x10);
         let vector = load_vec(e, rows + 0x10);
-        let unit = normalised(e, vector);
+        let unit = normalised_sse(e, vector);
         store_vec(e, rows + 0x10, unit);
         let first = load_vec(e, rows);
         let second = load_vec(e, rows + 0x10);
-        store_vec(e, rows + 0x20, cross_yzx(first, second));
+        store_vec(e, rows + 0x20, cross_yzx_sse(first, second, a_first));
         let pivot = load_vec(e, pivot);
         store_vec(e, pivot_target, pivot);
     }

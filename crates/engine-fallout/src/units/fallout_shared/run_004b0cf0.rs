@@ -169,9 +169,122 @@ pub fn fn_004b10f0(e: &mut Engine, day: u16, month: u16) -> u16 {
     result
 }
 
+/// `00822510` (`thiscall`, `RET 4`; unit `magicshaderhiteffect.cpp` by the
+/// engine map): asked on the handle with 0 (`AL`).
+const HANDLE_TEST: u32 = 0x0082_2510;
+/// `006e5cc0` (`thiscall`, `RET 4`; the engine map's
+/// `NiPointer<PathingDebugGeometryData>::operator=` is folded code).
+const HANDLE_ASSIGN: u32 = 0x006e_5cc0;
+/// The `u16` table of the first day of each of the twelve months (day of
+/// the year), and the `u16` after it: the days in the year.
+const MONTH_STARTS_01188EE4: u32 = 0x0118_8ee4;
+const DAYS_PER_YEAR_01188EFC: u32 = 0x0118_8efc;
+
+// Translated from 004b0f70 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `004b0cf0`'s per-item step (`thiscall`, `RET 4`; the engine map gives it
+/// no name): unless `00822510` on `handle` with 0 answers true, `006e5cc0`
+/// on `this` with `handle`.
+pub fn fn_004b0f70(e: &mut Engine, this: Ptr, handle: u32) {
+    if !e.call(HANDLE_TEST, &args![handle, 0u32]).bool() {
+        e.call(HANDLE_ASSIGN, &args![this, handle]);
+    }
+}
+
+// Translated from 004b0fa0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Constructor of the two-`u16` date (no stack word; the engine map gives
+/// it no name): both halves 0. Returns `this`.
+pub fn fn_004b0fa0(e: &mut Engine, this: Ptr) -> Ptr {
+    e.mem.set_u16(this.addr(), 0);
+    e.mem.set_u16(this.addr().wrapping_add(2), 0);
+    this
+}
+
+// Translated from 004b1000 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Copies the two-`u16` date `other` into `this` (`thiscall`, `RET 4`; the
+/// engine map gives it no name). Returns `this`.
+pub fn fn_004b1000(e: &mut Engine, this: Ptr, other: u32) -> Ptr {
+    let first = e.mem.u16(other);
+    e.mem.set_u16(this.addr(), first);
+    let second = e.mem.u16(other.wrapping_add(2));
+    e.mem.set_u16(this.addr().wrapping_add(2), second);
+    this
+}
+
+// Translated from 004b1030 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The date's day of the year (`u16` at +0) in `AX`; the upper half of
+/// `EAX` keeps the upper half of `this`, as the exe leaves it (no stack
+/// word; the engine map gives it no name).
+pub fn fn_004b1030(e: &mut Engine, this: Ptr) -> u32 {
+    (this.addr() & 0xffff_0000) | u32::from(e.mem.u16(this.addr()))
+}
+
+// Translated from 004b1050 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The date's second `u16` (+2) in `AX`; the upper half of `EAX` keeps the
+/// upper half of `this` (no stack word; the engine map gives it no name).
+pub fn fn_004b1050(e: &mut Engine, this: Ptr) -> u32 {
+    (this.addr() & 0xffff_0000) | u32::from(e.mem.u16(this.addr().wrapping_add(2)))
+}
+
+// Translated from 004b1070 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The day of the month of the date (no stack word; the engine map gives it
+/// no name): `004b1190` of its day of the year; `AX` is that call's `DX`
+/// (the day), the upper half of `EAX` its `EAX`'s.
+pub fn fn_004b1070(e: &mut Engine, this: Ptr) -> u32 {
+    let day_of_year = u32::from(e.mem.u16(this.addr()));
+    let split = fn_004b1190(e, day_of_year);
+    let month = split as u32;
+    let day = (split >> 32) as u32;
+    (month & 0xffff_0000) | (day & 0xffff)
+}
+
+// Translated from 004b10a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The month of the date (no stack word; the engine map gives it no name):
+/// the `EAX` of `004b1190` of its day of the year.
+pub fn fn_004b10a0(e: &mut Engine, this: Ptr) -> u32 {
+    let day_of_year = u32::from(e.mem.u16(this.addr()));
+    fn_004b1190(e, day_of_year) as u32
+}
+
+// Translated from 004b1190 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Splits a day of the year (`cdecl`, one word, its low 16 bits read; the
+/// engine map gives it no name) into month and day: a day above the year's
+/// count (`u16` at `01188efc`) becomes the count minus 1 (in `u16`); the
+/// month is the last of the twelve whose first day (`u16` table at
+/// `01188ee4`, entries 1 to 11 compared) is not above the day, 0 when none
+/// is. Answers `EAX` = the month and `DX` = the day minus the month's first
+/// day. The upper half of `EDX` is a stack word the exe never writes; the
+/// translation leaves it 0 (its two callers, `004b1070` and `004b10a0`,
+/// never read it).
+pub fn fn_004b1190(e: &mut Engine, day_of_year: u32) -> u64 {
+    let start = |e: &Engine, month: u16| {
+        e.mem
+            .u16(MONTH_STARTS_01188EE4.wrapping_add(u32::from(month) * 2))
+    };
+    let days_per_year = e.mem.u16(DAYS_PER_YEAR_01188EFC);
+    let mut day = day_of_year as u16;
+    if day > days_per_year {
+        day = days_per_year.wrapping_sub(1);
+    }
+    let mut month: u16 = 1;
+    while month < 12 && day >= start(e, month) {
+        month += 1;
+    }
+    month -= 1;
+    let rest = day.wrapping_sub(start(e, month));
+    u64::from(month) | (u64::from(rest) << 32)
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x004b_0f70, fn_004b0f70(Ptr, u32)),
+        entry!(0x004b_0fa0, fn_004b0fa0(Ptr) -> Ptr),
+        entry!(0x004b_1000, fn_004b1000(Ptr, u32) -> Ptr),
+        entry!(0x004b_1030, fn_004b1030(Ptr) -> u32),
+        entry!(0x004b_1050, fn_004b1050(Ptr) -> u32),
+        entry!(0x004b_1070, fn_004b1070(Ptr) -> u32),
+        entry!(0x004b_10a0, fn_004b10a0(Ptr) -> u32),
+        entry!(0x004b_1190, fn_004b1190(u32) -> u64),
         entry!(0x004b_0f40, fn_004b0f40(Ptr, u32) -> Ptr),
         entry!(0x004b_0cf0, fn_004b0cf0(Ptr)),
         entry!(0x004b_0da0, fn_004b0da0(Ptr, u32, u32) -> Ptr),
@@ -394,5 +507,87 @@ mod b035_tests {
             e.call(0x004b_10f0, &args![0x8000u32, 12u32]).u16(),
             365 + 0x7776
         );
+    }
+}
+
+#[cfg(test)]
+mod n038_tests {
+    use super::*;
+
+    /// The calendar tables: month starts of a 365-day year.
+    fn calendar() -> Engine {
+        let mut e = Engine::new();
+        e.mem.map(0x0118_8000, 0x1000);
+        let days = [31u16, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+        let mut start = 0u16;
+        for (month, count) in days.iter().enumerate() {
+            e.mem
+                .set_u16(MONTH_STARTS_01188EE4 + 2 * month as u32, start);
+            start += count;
+        }
+        e.mem.set_u16(DAYS_PER_YEAR_01188EFC, start);
+        e
+    }
+
+    #[test]
+    fn at_004b0f70_assigns_unless_the_test_answers_true() {
+        let mut e = Engine::new();
+        e.mem.map(0x0f00_0000, 4);
+        e.register(HANDLE_TEST, |e, _| Ret {
+            eax: e.mem.u32(0x0f00_0000),
+            ..Ret::default()
+        });
+        e.register(HANDLE_ASSIGN, |_, _| Ret::default());
+        e.call_log = Some(vec![]);
+        e.call(0x004b_0f70, &args![0x4000u32, 0x5000u32]);
+        let log = e.call_log.take().unwrap();
+        assert_eq!(log[1], (HANDLE_TEST, vec![0x5000, 0]));
+        assert_eq!(log[2], (HANDLE_ASSIGN, vec![0x4000, 0x5000]));
+        e.mem.set_u32(0x0f00_0000, 0x101);
+        e.call_log = Some(vec![]);
+        e.call(0x004b_0f70, &args![0x4000u32, 0x5000u32]);
+        assert_eq!(e.call_log.take().unwrap().len(), 2);
+    }
+
+    #[test]
+    fn date_halves_construct_copy_and_read() {
+        let mut e = Engine::new();
+        let this = e.mem.alloc(4);
+        let other = e.mem.alloc(4);
+        e.mem.set_u32(this, 0xffff_ffff);
+        assert_eq!(e.call(0x004b_0fa0, &args![this]).u32(), this);
+        assert_eq!(e.mem.u32(this), 0);
+        e.mem.set_u32(other, 0x0002_0150);
+        assert_eq!(e.call(0x004b_1000, &args![this, other]).u32(), this);
+        assert_eq!(e.mem.u32(this), 0x0002_0150);
+        let high = this & 0xffff_0000;
+        assert_eq!(e.call(0x004b_1030, &args![this]).u32(), high | 0x150);
+        assert_eq!(e.call(0x004b_1050, &args![this]).u32(), high | 2);
+    }
+
+    #[test]
+    fn at_004b1190_splits_the_day_of_the_year() {
+        let mut e = calendar();
+        let split = |e: &mut Engine, day: u32| e.call(0x004b_1190, &args![day]).u64();
+        assert_eq!(split(&mut e, 0), 0);
+        assert_eq!(split(&mut e, 30), 30 << 32);
+        assert_eq!(split(&mut e, 31), 1);
+        assert_eq!(split(&mut e, 59), 2);
+        assert_eq!(split(&mut e, 364), 11 | (30 << 32));
+        // 365 is not above the count: December 31 (its start 334).
+        assert_eq!(split(&mut e, 365), 11 | (31 << 32));
+        // Above the count: the last day.
+        assert_eq!(split(&mut e, 400), 11 | (30 << 32));
+        // Only the low 16 bits are read.
+        assert_eq!(split(&mut e, 0x0001_001f), 1);
+    }
+
+    #[test]
+    fn month_and_day_of_a_date() {
+        let mut e = calendar();
+        let this = e.mem.alloc(4);
+        e.mem.set_u16(this, 59 + 9);
+        assert_eq!(e.call(0x004b_10a0, &args![this]).u32(), 2);
+        assert_eq!(e.call(0x004b_1070, &args![this]).u32(), 9);
     }
 }

@@ -242,6 +242,119 @@ pub fn fn_0058e430(e: &mut Engine, this: Ptr, sound: u32) {
     e.mem.set_u32(this.addr() + 0x50, sound);
 }
 
+/// `__RTDynamicCast` (`00ec43fb`) from `.?AVTESForm@@` (`01183028`) to
+/// `.?AVBGSImpactData@@` (`011862fc`).
+const RT_DYNAMIC_CAST: u32 = 0x00ec_43fb;
+const TYPE_TES_FORM: u32 = 0x0118_3028;
+const TYPE_IMPACT_DATA: u32 = 0x0118_62fc;
+/// `TESForm::CopyAllComponents` and `CompareAllComponents` (`004851b0`,
+/// `00485270`), the byte copy `00401460` (`cdecl`: destination, source,
+/// size), `memcmp` (`00ec4835`), and the decal data's copy (`005932b0`)
+/// and comparison (`005932e0`) (`thiscall`, one word).
+const COPY_ALL_COMPONENTS: u32 = 0x0048_51b0;
+const COMPARE_ALL_COMPONENTS: u32 = 0x0048_5270;
+const COPY_BYTES: u32 = 0x0040_1460;
+const MEMCMP: u32 = 0x00ec_4835;
+const DECAL_DATA_COPY: u32 = 0x0059_32b0;
+const DECAL_DATA_DIFFERS: u32 = 0x0059_32e0;
+/// `00401080` (`cdecl`: the address of a word and a byte; the loaders
+/// call it on each word of a record they byte-swap).
+const SWAP_WORD: u32 = 0x0040_1080;
+
+/// `form` cast to `BGSImpactData`, or 0.
+fn cast_to_impact_data(e: &mut Engine, form: u32) -> u32 {
+    e.call(
+        RT_DYNAMIC_CAST,
+        &args![form, 0u32, TYPE_TES_FORM, TYPE_IMPACT_DATA, 0u32],
+    )
+    .u32()
+}
+
+// Translated from 0058dd10 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BGSImpactData`'s copy (by the RTTI it casts to; `thiscall`, one word,
+/// `RET 4`): when `source` casts, `TESForm::CopyAllComponents` with the
+/// cast form, its 0x18 bytes at +0x30 (`00401460`), its decal data at +0x54
+/// (`005932b0`) and the words at +0x48, +0x4C and +0x50.
+pub fn fn_0058dd10(e: &mut Engine, this: Ptr, source: u32) {
+    let other = cast_to_impact_data(e, source);
+    if other == 0 {
+        return;
+    }
+    let at = this.addr();
+    e.call(COPY_ALL_COMPONENTS, &args![this, other]);
+    e.call(
+        COPY_BYTES,
+        &args![at + 0x30, other.wrapping_add(0x30), 0x18u32],
+    );
+    e.call(
+        DECAL_DATA_COPY,
+        &args![at + DECAL_DATA, other.wrapping_add(DECAL_DATA)],
+    );
+    for offset in [0x48, 0x4c, 0x50] {
+        let word = e.mem.u32(other.wrapping_add(offset));
+        e.mem.set_u32(at + offset, word);
+    }
+}
+
+// Translated from 0058dda0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BGSImpactData`'s comparison (`thiscall`, one word, `RET 4`): whether it
+/// differs from `form`: true when it does not cast, when
+/// `TESForm::CompareAllComponents` answers true, when `memcmp` finds the
+/// 0x18 bytes at +0x30 different, when this form has decal data (`0058de80`
+/// false) that `005932e0` finds different, or when the words at +0x48,
+/// +0x4C or +0x50 differ.
+pub fn fn_0058dda0(e: &mut Engine, this: Ptr, form: u32) -> bool {
+    let other = cast_to_impact_data(e, form);
+    if other == 0 {
+        return true;
+    }
+    if e.call(COMPARE_ALL_COMPONENTS, &args![this, other]).bool() {
+        return true;
+    }
+    let at = this.addr();
+    let order = e
+        .call(MEMCMP, &args![at + 0x30, other.wrapping_add(0x30), 0x18u32])
+        .u32();
+    if order != 0 {
+        return true;
+    }
+    if !fn_0058de80(e, this)
+        && e.call(
+            DECAL_DATA_DIFFERS,
+            &args![at + DECAL_DATA, other.wrapping_add(DECAL_DATA)],
+        )
+        .bool()
+    {
+        return true;
+    }
+    [0x48u32, 0x4c, 0x50]
+        .iter()
+        .any(|offset| e.mem.u32(at + offset) != e.mem.u32(other.wrapping_add(*offset)))
+}
+
+/// The word offsets `0058e250` swaps, in its order.
+const RECORD_WORDS_0058E250: [u32; 13] = [
+    0x00, 0x14, 0x1c, 0x20, 0x04, 0x08, 0x0c, 0x18, 0x24, 0x28, 0x2c, 0x30, 0x34,
+];
+
+// Translated from 0058e250 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No map name (`thiscall`): `00401080(address, 0)` on 13 words of the
+/// record, in the order of `RECORD_WORDS_0058E250`.
+pub fn fn_0058e250(e: &mut Engine, this: Ptr) {
+    for offset in RECORD_WORDS_0058E250 {
+        e.call(SWAP_WORD, &args![this.addr() + offset, 0u32]);
+    }
+}
+
+// Translated from 0058e3a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No map name (`thiscall`): `00401080(address, 0)` on the five words at
+/// +0, +4, +8, +0xC and +0x10.
+pub fn fn_0058e3a0(e: &mut Engine, this: Ptr) {
+    for offset in [0x00, 0x04, 0x08, 0x0c, 0x10] {
+        e.call(SWAP_WORD, &args![this.addr() + offset, 0u32]);
+    }
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -252,6 +365,10 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x0058_de80, fn_0058de80(Ptr) -> bool),
         entry!(0x0058_dea0, fn_0058dea0(Ptr, Ptr) -> bool),
         entry!(0x0058_e430, fn_0058e430(Ptr, u32)),
+        entry!(0x0058_dd10, fn_0058dd10(Ptr, u32)),
+        entry!(0x0058_dda0, fn_0058dda0(Ptr, u32) -> bool),
+        entry!(0x0058_e250, fn_0058e250(Ptr)),
+        entry!(0x0058_e3a0, fn_0058e3a0(Ptr)),
     ]
 }
 
@@ -585,5 +702,130 @@ mod impact_data_tests {
         e.call_log = Some(vec![]);
         assert!(!e.call(0x0058_dea0, &args![this, f]).bool());
         assert!(calls(&e, 0x0048_5110).is_empty());
+    }
+}
+
+#[cfg(test)]
+mod n040_tests {
+    use super::*;
+
+    fn calls_to(e: &mut Engine, targets: &[u32]) -> Vec<(u32, Vec<u32>)> {
+        e.call_log
+            .take()
+            .unwrap()
+            .into_iter()
+            .filter(|(a, _)| targets.contains(a))
+            .collect()
+    }
+
+    fn setup(e: &mut Engine) {
+        e.register(RT_DYNAMIC_CAST, |e, a| {
+            assert_eq!(a[1..], [0, TYPE_TES_FORM, TYPE_IMPACT_DATA, 0]);
+            let form = if e.mem.u32(a[0] + 0xc) == 0 { a[0] } else { 0 };
+            Ret {
+                eax: form,
+                ..Ret::default()
+            }
+        });
+        e.register(COPY_ALL_COMPONENTS, |_, _| Ret::default());
+        e.register(COPY_BYTES, |_, _| Ret::default());
+        e.register(DECAL_DATA_COPY, |_, _| Ret::default());
+        e.register(COMPARE_ALL_COMPONENTS, |e, a| Ret {
+            eax: e.mem.u32(a[1] + 0x10),
+            ..Ret::default()
+        });
+        e.register(MEMCMP, |e, a| Ret {
+            eax: u32::from(e.mem.u32(a[0]) != e.mem.u32(a[1])),
+            ..Ret::default()
+        });
+        e.register(DECAL_DATA_DIFFERS, |e, a| Ret {
+            eax: u32::from(e.mem.u32(a[0] + 0x10) != e.mem.u32(a[1] + 0x10)),
+            ..Ret::default()
+        });
+        e.register(DECAL_DATA_FIELDS, |_, a| Ret {
+            eax: a[0],
+            ..Ret::default()
+        });
+    }
+
+    #[test]
+    fn fn_0058dd10_copies_impact_data() {
+        let mut e = Engine::new();
+        setup(&mut e);
+        let this = e.mem.alloc(0x80);
+        let other = e.mem.alloc(0x80);
+        e.mem.set_u32(other + 0x48, 0x48);
+        e.mem.set_u32(other + 0x4c, 0x4c);
+        e.mem.set_u32(other + 0x50, 0x50);
+        e.mem.set_u32(other + 0xc, 1);
+        let targets = [COPY_ALL_COMPONENTS, COPY_BYTES, DECAL_DATA_COPY];
+        e.call_log = Some(vec![]);
+        e.call(0x0058_dd10, &[this, other]);
+        assert!(calls_to(&mut e, &targets).is_empty());
+        e.mem.set_u32(other + 0xc, 0);
+        e.call_log = Some(vec![]);
+        e.call(0x0058_dd10, &[this, other]);
+        assert_eq!(
+            calls_to(&mut e, &targets),
+            vec![
+                (COPY_ALL_COMPONENTS, vec![this, other]),
+                (COPY_BYTES, vec![this + 0x30, other + 0x30, 0x18]),
+                (DECAL_DATA_COPY, vec![this + 0x54, other + 0x54]),
+            ]
+        );
+        for offset in [0x48, 0x4c, 0x50] {
+            assert_eq!(e.mem.u32(this + offset), offset);
+        }
+    }
+
+    #[test]
+    fn fn_0058dda0_compares_impact_data() {
+        let mut e = Engine::new();
+        setup(&mut e);
+        let this = e.mem.alloc(0x80);
+        let other = e.mem.alloc(0x80);
+        e.mem.set_u32(other + 0xc, 1);
+        assert!(e.call(0x0058_dda0, &[this, other]).bool());
+        e.mem.set_u32(other + 0xc, 0);
+        assert!(!e.call(0x0058_dda0, &[this, other]).bool());
+        e.mem.set_u32(other + 0x10, 1);
+        assert!(e.call(0x0058_dda0, &[this, other]).bool());
+        e.mem.set_u32(other + 0x10, 0);
+        e.mem.set_u32(other + 0x30, 1);
+        assert!(e.call(0x0058_dda0, &[this, other]).bool());
+        e.mem.set_u32(other + 0x30, 0);
+        // The decal data differs: only counted when this form has some.
+        e.mem.set_u32(other + 0x64, 1);
+        assert!(e.call(0x0058_dda0, &[this, other]).bool());
+        e.mem.set_u8(this + 0x44, 1);
+        assert!(!e.call(0x0058_dda0, &[this, other]).bool());
+        e.mem.set_u32(other + 0x64, 0);
+        for offset in [0x48, 0x4c, 0x50] {
+            e.mem.set_u32(other + offset, 1);
+            assert!(e.call(0x0058_dda0, &[this, other]).bool());
+            e.mem.set_u32(other + offset, 0);
+        }
+    }
+
+    #[test]
+    fn fn_0058e250_and_0058e3a0_swap_the_words() {
+        let mut e = Engine::new();
+        e.register(SWAP_WORD, |_, _| Ret::default());
+        e.call_log = Some(vec![]);
+        e.call(0x0058_e250, &[0x1000]);
+        let log = calls_to(&mut e, &[SWAP_WORD]);
+        let expected: Vec<(u32, Vec<u32>)> = RECORD_WORDS_0058E250
+            .iter()
+            .map(|o| (SWAP_WORD, vec![0x1000 + o, 0]))
+            .collect();
+        assert_eq!(log, expected);
+        e.call_log = Some(vec![]);
+        e.call(0x0058_e3a0, &[0x1000]);
+        let log = calls_to(&mut e, &[SWAP_WORD]);
+        let expected: Vec<(u32, Vec<u32>)> = [0u32, 4, 8, 0xc, 0x10]
+            .iter()
+            .map(|o| (SWAP_WORD, vec![0x1000 + o, 0]))
+            .collect();
+        assert_eq!(log, expected);
     }
 }

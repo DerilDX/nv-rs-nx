@@ -151,6 +151,107 @@ pub fn fn_00616a90(e: &mut Engine, this: Ptr, table: i8) -> u8 {
     0
 }
 
+/// `00403df0` (`ECX` = setting): the setting's string.
+const SETTING_STRING: u32 = 0x0040_3df0;
+/// The 16 settings `006167d0` picks from (row: the negative level, column:
+/// the positive level), and the 16 `00616890` picks from.
+const TABLE_006167D0: [u32; 16] = [
+    0x011c_bbfc,
+    0x011c_bbcc,
+    0x011c_baec,
+    0x011c_bd44,
+    0x011c_bcf0,
+    0x011c_ba4c,
+    0x011c_bb4c,
+    0x011c_bb8c,
+    0x011c_bb80,
+    0x011c_ba18,
+    0x011c_bab0,
+    0x011c_bd08,
+    0x011c_bb40,
+    0x011c_baa0,
+    0x011c_ba64,
+    0x011c_bd38,
+];
+const TABLE_00616890: [u32; 16] = [
+    0x011c_bd94,
+    0x011c_bba4,
+    0x011c_bc94,
+    0x011c_ba40,
+    0x011c_bbe4,
+    0x011c_bcd4,
+    0x011c_bd18,
+    0x011c_bc7c,
+    0x011c_bb64,
+    0x011c_bc28,
+    0x011c_bb10,
+    0x011c_bbbc,
+    0x011c_bc1c,
+    0x011c_bae0,
+    0x011c_bd50,
+    0x011c_bca0,
+];
+
+/// The string of the setting a 4x4 table on the stack (at `EBP - 0x48`)
+/// gives for the reputation's levels: the word at `negative * 16 +
+/// positive * 4` from the table (the levels as signed bytes; the exe makes
+/// no range check, so the read is translated as it is).
+fn level_table_string(e: &mut Engine, this: Ptr, table: &[u32; 16], frame_size: u32) -> u32 {
+    e.with_stack(frame_size, |e, frame| {
+        let ebp = frame.addr() + frame_size;
+        let start = ebp - 0x48;
+        for (i, setting) in table.iter().enumerate() {
+            e.mem.set_u32(start + 4 * i as u32, *setting);
+        }
+        let positive = fn_00616950(e, this, 1) as i8;
+        let negative = fn_00616950(e, this, 0) as i8;
+        let at = start
+            .wrapping_add((i32::from(negative) << 4) as u32)
+            .wrapping_add((i32::from(positive) * 4) as u32);
+        let setting = e.mem.u32(at);
+        e.call(SETTING_STRING, &args![setting]).u32()
+    })
+}
+
+// Translated from 006167d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The reputation's picture string: the setting a 4x4 table gives for the
+/// negative (row) and positive (column) levels (`00616950`), through
+/// `00403df0`.
+pub fn fn_006167d0(e: &mut Engine, this: Ptr) -> u32 {
+    level_table_string(e, this, &TABLE_006167D0, 0x4c)
+}
+
+// Translated from 00616890 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The reputation's level text: as `006167d0` with the second table.
+pub fn fn_00616890(e: &mut Engine, this: Ptr) -> u32 {
+    level_table_string(e, this, &TABLE_00616890, 0x50)
+}
+
+// Translated from 00616a60 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The positive fraction (`00616a20`) for `which` 1, else the negative one
+/// (`00616a40`), in ST0 (`RET 4`).
+pub fn fn_00616a60(e: &mut Engine, this: Ptr, which: i32) -> f32 {
+    if which == 1 {
+        fn_00616a20(e, this)
+    } else {
+        fn_00616a40(e, this)
+    }
+}
+
+// Translated from 00616c20 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Raises the reputation's negative side (`00615730` with 0) by the
+/// setting `011cbaf8` when `large` is set, else `011cbb1c` (`RET 4`).
+pub fn fn_00616c20(e: &mut Engine, this: Ptr, large: u8) {
+    let setting = if large != 0 {
+        0x011c_baf8u32
+    } else {
+        0x011c_bb1cu32
+    };
+    let at = e.call(SETTING_VALUE, &args![setting]).u32();
+    let amount = x87_quiet_bits(e.mem.u32(at));
+    e.call(0x0061_5730, &args![this, 0u32, amount]);
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -158,6 +259,10 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00616a20, fn_00616a20(Ptr) -> f32),
         entry!(0x00616a40, fn_00616a40(Ptr) -> f32),
         entry!(0x00616a90, fn_00616a90(Ptr, i8) -> u8),
+        entry!(0x0061_67d0, fn_006167d0(Ptr) -> u32),
+        entry!(0x0061_6890, fn_00616890(Ptr) -> u32),
+        entry!(0x0061_6a60, fn_00616a60(Ptr, i32) -> f32),
+        entry!(0x0061_6c20, fn_00616c20(Ptr, u8)),
     ]
 }
 
@@ -230,5 +335,81 @@ mod tests {
         e.mem.set_f32(form.addr() + 0x44, 30.0);
         e.mem.set_f32(form.addr() + 0x48, 30.0);
         assert_eq!(e.call(0x0061_6a90, &args![form, 0u32]).u8(), 3);
+    }
+}
+
+#[cfg(test)]
+mod tests_n042 {
+    use super::*;
+
+    /// A reputation with the fractions `positive` / 100 and `negative` /
+    /// 100 and thresholds 0.25, 0.5 and 0.75.
+    fn engine(positive: f32, negative: f32) -> (Engine, u32) {
+        let mut e = Engine::new();
+        let values = e.mem.alloc(0x10);
+        for (i, threshold) in [0.25f32, 0.5, 0.75].into_iter().enumerate() {
+            e.mem.set_u32(values + 4 * i as u32, threshold.to_bits());
+        }
+        e.register_double(SETTING_VALUE, move |_, a| {
+            let i = match a[0] {
+                THRESHOLD_ONE => 0,
+                THRESHOLD_TWO => 1,
+                THRESHOLD_THREE => 2,
+                _ => 3,
+            };
+            (values + 4 * i).into_ret()
+        });
+        e.register(SETTING_STRING, |_, a| (a[0] + 1).into_ret());
+        let this = e.mem.alloc(0x50);
+        e.mem.set_u32(this + 0x40, 100.0f32.to_bits());
+        e.mem.set_u32(this + 0x44, positive.to_bits());
+        e.mem.set_u32(this + 0x48, negative.to_bits());
+        (e, this)
+    }
+
+    #[test]
+    fn level_tables_pick_by_both_levels() {
+        // Positive level 2 (0.6), negative level 1 (0.3): row 1, column 2.
+        let (mut e, this) = engine(60.0, 30.0);
+        assert_eq!(e.call(0x0061_67d0, &args![this]).u32(), 0x011c_bb4d);
+        assert_eq!(e.call(0x0061_6890, &args![this]).u32(), 0x011c_bd19);
+        // Both 0: the first entry; both 3: the last.
+        let (mut e, this) = engine(0.0, 0.0);
+        assert_eq!(e.call(0x0061_67d0, &args![this]).u32(), 0x011c_bbfd);
+        let (mut e, this) = engine(90.0, 80.0);
+        assert_eq!(e.call(0x0061_6890, &args![this]).u32(), 0x011c_bca1);
+    }
+
+    #[test]
+    fn fraction_by_side() {
+        let (mut e, this) = engine(50.0, 25.0);
+        assert_eq!(e.call(0x0061_6a60, &args![this, 1u32]).f32(), 0.5);
+        assert_eq!(e.call(0x0061_6a60, &args![this, 0u32]).f32(), 0.25);
+        assert_eq!(e.call(0x0061_6a60, &args![this, 2u32]).f32(), 0.25);
+    }
+
+    #[test]
+    fn raise_by_setting_passes_the_float() {
+        let mut e = Engine::new();
+        let value = e.mem.alloc(4);
+        e.mem.set_u32(value, 0x7f80_0001);
+        e.register_double(SETTING_VALUE, move |_, _| value.into_ret());
+        e.register(0x0061_5730, |_, _| Ret::default());
+        e.call_log = Some(vec![]);
+        e.call(0x0061_6c20, &args![0x5000u32, 0x100u32]);
+        e.call(0x0061_6c20, &args![0x5000u32, 1u32]);
+        let log = e.call_log.take().unwrap();
+        let settings: Vec<u32> = log
+            .iter()
+            .filter(|c| c.0 == SETTING_VALUE)
+            .map(|c| c.1[0])
+            .collect();
+        assert_eq!(settings, vec![0x011c_bb1c, 0x011c_baf8]);
+        let raised: Vec<Vec<u32>> = log
+            .iter()
+            .filter(|c| c.0 == 0x0061_5730)
+            .map(|c| c.1.clone())
+            .collect();
+        assert_eq!(raised, vec![vec![0x5000, 0, 0x7fc0_0001]; 2]);
     }
 }

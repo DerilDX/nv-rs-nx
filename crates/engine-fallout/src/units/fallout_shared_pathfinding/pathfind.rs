@@ -2806,7 +2806,7 @@ pub fn fn_006d2c40(e: &mut Engine, this: Ptr) -> f32 {
 // Translated from 006d2c60 (decompiled, FalloutNV.exe 1.4.0.525)
 /// Stores the `float` at +0x20A4 of the max-cost search (its cost limit).
 pub fn fn_006d2c60(e: &mut Engine, this: Ptr, value: f32) {
-    e.mem.set_f32(this.addr() + 0x20a4, value);
+    e.mem.set_f32(this.addr() + 0x20a4, x87_quiet(value));
 }
 
 // Translated from 006d2c80 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -3295,13 +3295,13 @@ pub fn fn_006d3ac0(e: &mut Engine, this: Ptr, location: Ptr) {
 // Translated from 006d3ae0 (decompiled, FalloutNV.exe 1.4.0.525)
 /// Stores the request's `fActorRadius` (+0x68).
 pub fn fn_006d3ae0(e: &mut Engine, this: Ptr<PathingRequest>, radius: f32) {
-    e.set(this, PathingRequest::fActorRadius, radius);
+    e.set(this, PathingRequest::fActorRadius, x87_quiet(radius));
 }
 
 // Translated from 006d3b00 (decompiled, FalloutNV.exe 1.4.0.525)
 /// Stores the request's `fTargetRadius` (+0x74).
 pub fn fn_006d3b00(e: &mut Engine, this: Ptr<PathingRequest>, radius: f32) {
-    e.set(this, PathingRequest::fTargetRadius, radius);
+    e.set(this, PathingRequest::fTargetRadius, x87_quiet(radius));
 }
 
 // Translated from 006d3b20 (decompiled, FalloutNV.exe 1.4.0.525)

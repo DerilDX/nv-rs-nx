@@ -222,9 +222,106 @@ pub fn fn_004d5fa0(e: &mut Engine, buffer: Ptr) {
     });
 }
 
+/// `00404dc0` (`cdecl`, two strings): 0 when they match.
+const STRING_COMPARE: u32 = 0x0040_4dc0;
+/// `007dc0a0` (`cdecl`, the address of a stat index; unit `statsmenu.cpp`
+/// by the engine map): steps the index.
+const NEXT_STAT: u32 = 0x007d_c0a0;
+/// `"MENUS: Miscellaneous stat %s could not be found.  Returning MS_COUNT."`.
+const STAT_NOT_FOUND: u32 = 0x0102_0da8;
+/// The load buffer's read (`00864980`, `thiscall`: destination, size;
+/// `bgsloadgamebuffer.cpp` by the engine map).
+const LOAD_READ: u32 = 0x0086_4980;
+
+// Translated from 004d5eb0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `MiscStatManager::GetIDByName` (Xbox PDB name in the engine map; `cdecl`,
+/// one word): the index of the stat whose name (`MISC_STAT_NAMES`, null
+/// entries skipped) matches `name` (`00404dc0`), the index stepped by
+/// `007dc0a0` through its stack address; past the last (a signed compare
+/// with 0x2b) the not-found message is logged (`005b5e40`) and 0x2b
+/// (`MS_COUNT`) answered.
+pub fn misc_stat_manager_get_id_by_name(e: &mut Engine, name: u32) -> i32 {
+    e.with_stack(4, |e, index_at| loop {
+        let index = e.mem.i32(index_at.addr());
+        if index >= MISC_STAT_COUNT as i32 {
+            e.call(LOG, &args![STAT_NOT_FOUND, name]);
+            return MISC_STAT_COUNT as i32;
+        }
+        let entry = MISC_STAT_NAMES.wrapping_add((index as u32).wrapping_mul(4));
+        let stat_name = e.mem.u32(entry);
+        if stat_name != 0 && e.call(STRING_COMPARE, &args![stat_name, name]).u32() == 0 {
+            return index;
+        }
+        e.call(NEXT_STAT, &args![index_at]);
+    })
+}
+
+// Translated from 004d5f20 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Sets every stat's `iVal` from the 0x2b words at `values` (`cdecl`, one
+/// word; the engine map gives it no name). The table's entries are not
+/// checked for null.
+pub fn fn_004d5f20(e: &mut Engine, values: u32) {
+    for index in 0..MISC_STAT_COUNT as i32 {
+        let stat = e.mem.u32(stat_slot(index));
+        let value = e.mem.u32(values.wrapping_add(index as u32 * 4));
+        e.mem.set_u32(stat.wrapping_add(4), value);
+    }
+}
+
+// Translated from 004d5f60 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Copies every stat's `iVal` into the 0x2b words at `values` (`cdecl`,
+/// one word; the engine map gives it no name). The table's entries are not
+/// checked for null.
+pub fn fn_004d5f60(e: &mut Engine, values: u32) {
+    for index in 0..MISC_STAT_COUNT as i32 {
+        let stat = e.mem.u32(stat_slot(index));
+        let value = e.mem.u32(stat.wrapping_add(4));
+        e.mem.set_u32(values.wrapping_add(index as u32 * 4), value);
+    }
+}
+
+// Translated from 004d6020 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `MiscStatManager::LoadGame` (Xbox PDB name in the engine map; `cdecl`,
+/// the load buffer): the count is 0x15 unless the buffer's version (its
+/// virtual slot 0, a byte) is 11 or more, when it is read (`00864980`, 4
+/// bytes). With a count up to 0x1000000, that many words are read (each
+/// into a word cleared first); the first 0x2b go into the stats' `iVal`s
+/// whose table entry is set.
+pub fn misc_stat_manager_load_game(e: &mut Engine, buffer: u32) {
+    e.with_stack(8, |e, locals| {
+        let count_at = locals.addr();
+        let value_at = locals.addr() + 4;
+        e.mem.set_u32(count_at, 0x15);
+        let version = e.vcall(buffer, 0, &args![]).u8();
+        if version >= 0xb {
+            e.call(LOAD_READ, &args![buffer, count_at, 4u32]);
+        }
+        if e.mem.u32(count_at) > 0x0100_0000 {
+            return;
+        }
+        let mut index = 0u32;
+        while index < e.mem.u32(count_at) {
+            e.mem.set_u32(value_at, 0);
+            e.call(LOAD_READ, &args![buffer, value_at, 4u32]);
+            if index < MISC_STAT_COUNT {
+                let stat = e.mem.u32(stat_slot(index as i32));
+                if stat != 0 {
+                    let value = e.mem.u32(value_at);
+                    e.mem.set_u32(stat + 4, value);
+                }
+            }
+            index += 1;
+        }
+    });
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x004d_5eb0, misc_stat_manager_get_id_by_name(u32) -> i32),
+        entry!(0x004d_5f20, fn_004d5f20(u32)),
+        entry!(0x004d_5f60, fn_004d5f60(u32)),
+        entry!(0x004d_6020, misc_stat_manager_load_game(u32)),
         entry!(0x004d_5dd0, fn_004d5dd0(Ptr, u32) -> Ptr),
         entry!(0x004d_5c80, fn_004d5c80(Ptr) -> Ptr),
         entry!(
@@ -520,5 +617,114 @@ mod misc_stat_tests {
         assert_eq!(written.len(), 1 + 0x2b);
         assert_eq!(written[..4], [0x2b, 9, 0, 0xffff_ffff]);
         assert!(written[4..].iter().all(|v| *v == 0));
+    }
+}
+
+#[cfg(test)]
+mod n038_tests {
+    use super::*;
+
+    fn word(eax: u32) -> Ret {
+        Ret {
+            eax,
+            ..Ret::default()
+        }
+    }
+
+    /// The two tables mapped; stats 0..0x2b allocated with `iVal` = index.
+    fn with_stats() -> (Engine, Vec<u32>) {
+        let mut e = Engine::new();
+        e.mem.map(MISC_STAT_NAMES, 0x100);
+        e.mem.map(MISC_STAT_TABLE, 0x100);
+        let mut stats = vec![];
+        for index in 0..MISC_STAT_COUNT {
+            let stat = e.mem.alloc(8);
+            e.mem.set_u32(stat + 4, index);
+            e.mem.set_u32(MISC_STAT_TABLE + 4 * index, stat);
+            stats.push(stat);
+        }
+        (e, stats)
+    }
+
+    #[test]
+    fn get_id_by_name_finds_or_logs() {
+        let mut e = Engine::new();
+        e.mem.map(MISC_STAT_NAMES, 0x100);
+        // Names: entry 3 is "x" (0x5003), entry 1 is null, the rest 0x5000+i.
+        for index in 0..MISC_STAT_COUNT {
+            let name = if index == 1 { 0 } else { 0x5000 + index };
+            e.mem.set_u32(MISC_STAT_NAMES + 4 * index, name);
+        }
+        e.register(STRING_COMPARE, |_, a| word(u32::from(a[0] != a[1])));
+        e.register(NEXT_STAT, |e, a| {
+            let i = e.mem.u32(a[0]);
+            e.mem.set_u32(a[0], i + 1);
+            Ret::default()
+        });
+        e.register(LOG, |_, _| Ret::default());
+        assert_eq!(e.call(0x004d_5eb0, &args![0x5003u32]).i32(), 3);
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x004d_5eb0, &args![0x9999u32]).i32(), 0x2b);
+        let log = e.call_log.take().unwrap();
+        assert_eq!(log.last().unwrap(), &(LOG, vec![STAT_NOT_FOUND, 0x9999]));
+        // The null name is skipped without a compare.
+        assert_eq!(log.iter().filter(|c| c.0 == STRING_COMPARE).count(), 0x2a);
+    }
+
+    #[test]
+    fn values_go_in_and_out() {
+        let (mut e, stats) = with_stats();
+        let values = e.mem.alloc(4 * MISC_STAT_COUNT);
+        e.call(0x004d_5f60, &args![values]);
+        assert_eq!(e.mem.u32(values + 4 * 0x2a), 0x2a);
+        for index in 0..MISC_STAT_COUNT {
+            e.mem.set_u32(values + 4 * index, 100 + index);
+        }
+        e.call(0x004d_5f20, &args![values]);
+        assert_eq!(e.mem.u32(stats[0] + 4), 100);
+        assert_eq!(e.mem.u32(stats[0x2a] + 4), 100 + 0x2a);
+    }
+
+    #[test]
+    fn load_game_reads_the_count_by_version() {
+        let (mut e, stats) = with_stats();
+        e.mem.set_u32(MISC_STAT_TABLE + 4 * 2, 0);
+        // The buffer: vtable slot 0 answers the version at +4; reads hand out
+        // 0x1000 + n for the n-th read, the first being the count at +8.
+        e.put_vtable(0x0f00_1000, &[0x0f00_2000]);
+        e.register(0x0f00_2000, |e, a| word(e.mem.u32(a[0] + 4)));
+        e.register(LOAD_READ, |e, a| {
+            let n = e.mem.u32(a[0] + 0xc);
+            e.mem.set_u32(a[0] + 0xc, n + 1);
+            let value = if n == 0 {
+                e.mem.u32(a[0] + 8)
+            } else {
+                0x1000 + n
+            };
+            e.mem.set_u32(a[1], value);
+            Ret::default()
+        });
+        let buffer = e.mem.alloc(0x10);
+        e.mem.set_u32(buffer, 0x0f00_1000);
+        // Version 10: 0x15 values, no count read.
+        e.mem.set_u32(buffer + 4, 10);
+        e.mem.set_u32(buffer + 0xc, 1);
+        e.call(0x004d_6020, &args![buffer]);
+        assert_eq!(e.mem.u32(stats[0] + 4), 0x1001);
+        assert_eq!(e.mem.u32(stats[0x14] + 4), 0x1015);
+        assert_eq!(e.mem.u32(stats[0x15] + 4), 0x15);
+        assert_eq!(e.mem.u32(stats[2] + 4), 2);
+        // Version 11: count 0x30 read first; reads past 0x2b are dropped.
+        e.mem.set_u32(buffer + 4, 11);
+        e.mem.set_u32(buffer + 8, 0x30);
+        e.mem.set_u32(buffer + 0xc, 0);
+        e.call(0x004d_6020, &args![buffer]);
+        assert_eq!(e.mem.u32(stats[0x2a] + 4), 0x1000 + 0x2b);
+        assert_eq!(e.mem.u32(buffer + 0xc), 0x31);
+        // A count above 0x1000000 reads nothing more.
+        e.mem.set_u32(buffer + 8, 0x0100_0001);
+        e.mem.set_u32(buffer + 0xc, 0);
+        e.call(0x004d_6020, &args![buffer]);
+        assert_eq!(e.mem.u32(buffer + 0xc), 1);
     }
 }

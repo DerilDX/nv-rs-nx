@@ -321,6 +321,67 @@ pub fn fn_004fc540(e: &mut Engine, this: Ptr, file: Ptr) -> bool {
     true
 }
 
+/// `TESForm::StartForm` (Xbox PDB, `004855a0`).
+const FORM_START_FORM: u32 = 0x0048_55a0;
+/// `TESForm::CloseForm` (Xbox PDB, `00485680`).
+const FORM_CLOSE_FORM: u32 = 0x0048_5680;
+/// `TESModel::Save` (Xbox PDB, `004891d0`; `RET 8`: the two chunk
+/// signatures).
+const MODEL_SAVE: u32 = 0x0048_91d0;
+/// The `DNAM` block's constructor (`004019f0`, `this` only).
+const DNAM_BLOCK_INIT: u32 = 0x0040_19f0;
+/// Copies bytes (`00401460`, cdecl: destination, source, size).
+const COPY_BYTES: u32 = 0x0040_1460;
+/// `TESForm::__AddChunkData` (Xbox PDB, `00485990`, cdecl: signature, data,
+/// size).
+const ADD_CHUNK_DATA: u32 = 0x0048_5990;
+/// Whether the data written needs byte swapping (`00401500`, no arguments).
+const SAVE_SWAPS: u32 = 0x0040_1500;
+/// `TESForm`'s form id getter (`0084e3a0`).
+const FORM_ID: u32 = 0x0084_e3a0;
+
+// Translated from 004fc790 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Clears the 8-byte `DATA` block (the 16-bit word at +0 and the word at
+/// +4; bytes 2 and 3 are left as they are) and returns it.
+pub fn fn_004fc790(e: &mut Engine, this: Ptr) -> Ptr {
+    e.mem.set_u16(this.addr(), 0);
+    e.mem.set_u32(this.addr() + 4, 0);
+    this
+}
+
+// Translated from 004fc7b0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BGSPlaceableWater::Save` (Xbox PDB): starts the form, saves the model at
+/// +0x30 (`MODL`/`MODT`), then a `DNAM` chunk of a stack block (built by
+/// `004019f0`, the 8 bytes at +0x48 copied in) whose second word is the form
+/// id of the water form at +0x4C (0 without one), swapped (`00462230`)
+/// before and after the write when `00401500` says so; closes the form.
+pub fn bgs_placeable_water_save(e: &mut Engine, this: Ptr) {
+    e.call(FORM_START_FORM, &args![this]);
+    e.call(
+        MODEL_SAVE,
+        &args![this.addr() + 0x30, CHUNK_MODL, CHUNK_MODT],
+    );
+    e.with_stack(8, |e, block| {
+        e.call(DNAM_BLOCK_INIT, &args![block]);
+        e.call(COPY_BYTES, &args![block, this.addr() + 0x48, 8u32]);
+        let water = e.mem.u32(this.addr() + 0x4c);
+        let water_id = if water == 0 {
+            0
+        } else {
+            e.call(FORM_ID, &args![water]).u32()
+        };
+        e.mem.set_u32(block.addr() + 4, water_id);
+        if e.call(SAVE_SWAPS, &args![]).bool() {
+            e.call(DNAM_SWAP, &args![block]);
+        }
+        e.call(ADD_CHUNK_DATA, &args![CHUNK_DNAM, block, 8u32]);
+        if e.call(SAVE_SWAPS, &args![]).bool() {
+            e.call(DNAM_SWAP, &args![block]);
+        }
+    });
+    e.call(FORM_CLOSE_FORM, &args![this]);
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -340,6 +401,8 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x004f_c270, fn_004fc270(Ptr)),
         entry!(0x004f_c4b0, fn_004fc4b0(Ptr)),
         entry!(0x004f_c540, fn_004fc540(Ptr, Ptr) -> bool),
+        entry!(0x004f_c790, fn_004fc790(Ptr) -> Ptr),
+        entry!(0x004f_c7b0, bgs_placeable_water_save(Ptr)),
     ]
 }
 
@@ -722,5 +785,101 @@ mod water_tests {
         assert!(e.call(0x004f_c540, &[this, file]).bool());
         let log = e.call_log.take().unwrap();
         assert_eq!(only(&log, 0x00a0_00e0).len(), 1);
+    }
+}
+
+#[cfg(test)]
+mod n037_tests {
+    use super::*;
+
+    fn ret(eax: u32) -> Ret {
+        Ret {
+            eax,
+            ..Ret::default()
+        }
+    }
+
+    #[test]
+    fn data_block_init_clears_the_two_fields_only() {
+        let mut e = Engine::new();
+        let block = e.mem.alloc(8);
+        e.mem.write(block, &[0xcd; 8]);
+        assert_eq!(e.call(0x004f_c790, &[block]).u32(), block);
+        assert_eq!(e.mem.u32(block), 0xcdcd_0000);
+        assert_eq!(e.mem.u32(block + 4), 0);
+    }
+
+    type Chunks = std::rc::Rc<std::cell::RefCell<Vec<Vec<u32>>>>;
+
+    fn save_engine(swaps: bool) -> (Engine, Chunks) {
+        let mut e = Engine::new();
+        for addr in [
+            FORM_START_FORM,
+            FORM_CLOSE_FORM,
+            MODEL_SAVE,
+            DNAM_BLOCK_INIT,
+        ] {
+            e.register(addr, |_, _| Ret::default());
+        }
+        e.register(COPY_BYTES, |e, a| {
+            for i in 0..a[2] {
+                let b = e.mem.u8(a[1] + i);
+                e.mem.set_u8(a[0] + i, b);
+            }
+            Ret::default()
+        });
+        e.register(FORM_ID, |_, a| ret(a[0] + 0xc));
+        if swaps {
+            e.register(SAVE_SWAPS, |_, _| ret(1));
+        } else {
+            e.register(SAVE_SWAPS, |_, _| ret(0x100));
+        }
+        e.register(DNAM_SWAP, |e, a| {
+            for i in 0..2 {
+                let w = e.mem.u32(a[0] + 4 * i);
+                e.mem.set_u32(a[0] + 4 * i, w + 0x1000);
+            }
+            Ret::default()
+        });
+        let chunks = Chunks::default();
+        let seen = chunks.clone();
+        e.register_double(ADD_CHUNK_DATA, move |e, a| {
+            seen.borrow_mut()
+                .push(vec![a[0], a[2], e.mem.u32(a[1]), e.mem.u32(a[1] + 4)]);
+            Ret::default()
+        });
+        e.call_log = Some(vec![]);
+        (e, chunks)
+    }
+
+    #[test]
+    fn save_writes_model_and_dnam() {
+        let (mut e, chunks) = save_engine(false);
+        let this = e.mem.alloc(0x50);
+        e.mem.set_u32(this + 0x48, 0x11);
+        e.mem.set_u32(this + 0x4c, 0x2000);
+        e.call(0x004f_c7b0, &[this]);
+        e.mem.set_u32(this + 0x4c, 0);
+        e.call(0x004f_c7b0, &[this]);
+        assert_eq!(
+            *chunks.borrow(),
+            vec![
+                vec![CHUNK_DNAM, 8, 0x11, 0x200c],
+                vec![CHUNK_DNAM, 8, 0x11, 0]
+            ]
+        );
+        let models: Vec<Vec<u32>> = e
+            .call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|c| c.0 == MODEL_SAVE)
+            .map(|c| c.1.clone())
+            .collect();
+        assert_eq!(models[0], vec![this + 0x30, CHUNK_MODL, CHUNK_MODT]);
+        let (mut e, chunks) = save_engine(true);
+        let this = e.mem.alloc(0x50);
+        e.call(0x004f_c7b0, &[this]);
+        assert_eq!(*chunks.borrow(), vec![vec![CHUNK_DNAM, 8, 0x1000, 0x1000]]);
     }
 }

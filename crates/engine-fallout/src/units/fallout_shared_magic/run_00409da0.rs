@@ -167,6 +167,95 @@ pub fn fn_0040a140(e: &mut Engine, this: Ptr) {
     e.call(0x0059_1300, &args![this]);
 }
 
+/// `__RTDynamicCast` (CRT), cdecl (object, offset, source type, target type,
+/// is-reference), and the type descriptors of `MagicItem` and
+/// `IngredientItem` (their decorated names at +8).
+const DYNAMIC_CAST: u32 = 0x00ec_43fb;
+const TYPE_MAGIC_ITEM: u32 = 0x0118_3140;
+const TYPE_INGREDIENT_ITEM: u32 = 0x0118_39dc;
+/// Thiscall: the word at +0x9c (folded code).
+const WORD_AT_9C: u32 = 0x0058_6150;
+/// Thiscall (word), `RET 4`: stores the word at +0x9c
+/// (`magicballprojectile.cpp`, folded code).
+const SET_WORD_AT_9C: u32 = 0x0081_0570;
+/// Thiscall (mask), `RET 4`: whether the flags byte at +0xa0 has a bit of
+/// `mask` (`run_004098d0.rs`).
+const FLAGS_AT_A0_HAVE: u32 = 0x0040_9a30;
+/// `EffectItemList::GetCost` (`effectitemlist.rs`), thiscall (actor), `RET
+/// 4`: a float in `ST0`.
+const EFFECT_LIST_GET_COST: u32 = 0x0040_63e0;
+/// Thiscall: swaps the byte order of the word at `this` (`00503210`).
+const SWAP_BYTES_00503210: u32 = 0x0050_3210;
+
+// Translated from 00409fd0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`thiscall` on the `MagicItem` base at +0x30,
+/// `RET 4`): whether `other` (a `MagicItem`) differs from this ingredient:
+/// true when it is not an `IngredientItem` (`__RTDynamicCast`), or when its
+/// word at +0x9c (`00586150`, `other`'s first) or its flags byte (+0xa0)
+/// differs from this form's.
+pub fn fn_00409fd0(e: &mut Engine, this: Ptr, other: u32) -> bool {
+    let other = e
+        .call(
+            DYNAMIC_CAST,
+            &args![other, 0u32, TYPE_MAGIC_ITEM, TYPE_INGREDIENT_ITEM, 0u32],
+        )
+        .u32();
+    if other == 0 {
+        return true;
+    }
+    let theirs = e.call(WORD_AT_9C, &args![other]).u32();
+    let ours = e
+        .call(WORD_AT_9C, &args![this.addr().wrapping_sub(0x30)])
+        .u32();
+    theirs != ours || e.mem.u8(other + 0xa0) != e.mem.u8(this.addr() + 0x70)
+}
+
+// Translated from 0040a040 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`thiscall` on the `MagicItem` base at +0x30,
+/// `RET 4`): when `other` (a `MagicItem`) is an `IngredientItem`
+/// (`__RTDynamicCast`), copies its word at +0x9c (`00810570`) and its flags
+/// byte (+0xa0) into this form; otherwise nothing.
+pub fn fn_0040a040(e: &mut Engine, this: Ptr, other: u32) {
+    let other = e
+        .call(
+            DYNAMIC_CAST,
+            &args![other, 0u32, TYPE_MAGIC_ITEM, TYPE_INGREDIENT_ITEM, 0u32],
+        )
+        .u32();
+    if other == 0 {
+        return;
+    }
+    let value = e.call(WORD_AT_9C, &args![other]).u32();
+    e.call(
+        SET_WORD_AT_9C,
+        &args![this.addr().wrapping_sub(0x30), value],
+    );
+    let flags = e.mem.u8(other + 0xa0);
+    e.mem.set_u8(this.addr() + 0x70, flags);
+}
+
+// Translated from 0040a0a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`thiscall` on the `EffectItemList` at +0x3c,
+/// `RET 4`, a float in `ST0`): the ingredient's cost. With flag 1 of the
+/// form's flags byte (`00409a30`) it is the word at +0x9c (`FILD`);
+/// otherwise `EffectItemList::GetCost(0)` (the argument is not read).
+pub fn fn_0040a0a0(e: &mut Engine, this: Ptr, _unused_1: u32) -> f64 {
+    let form = this.addr().wrapping_sub(0x3c);
+    if e.call(FLAGS_AT_A0_HAVE, &args![form, 1u32]).bool() {
+        let value = e.call(WORD_AT_9C, &args![form]).i32();
+        f64::from(value)
+    } else {
+        e.call(EFFECT_LIST_GET_COST, &args![this, 0u32]).f64()
+    }
+}
+
+// Translated from 0040a0f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`thiscall`): swaps the byte order of the word
+/// at +0x9c (`00503210`).
+pub fn fn_0040a0f0(e: &mut Engine, this: Ptr) {
+    e.call(SWAP_BYTES_00503210, &args![this.addr() + 0x9c]);
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -176,6 +265,10 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x0040_9da0, fn_00409da0(Ptr, Ptr, u32)),
         entry!(0x0040_a1c0, fn_0040a1c0(Ptr)),
         entry!(0x0040_a140, fn_0040a140(Ptr)),
+        entry!(0x0040_9fd0, fn_00409fd0(Ptr, u32) -> bool),
+        entry!(0x0040_a040, fn_0040a040(Ptr, u32)),
+        entry!(0x0040_a0a0, fn_0040a0a0(Ptr, u32) -> f64),
+        entry!(0x0040_a0f0, fn_0040a0f0(Ptr)),
     ]
 }
 
@@ -425,5 +518,121 @@ mod tests {
         );
         assert_eq!(e.mem.u32(this), 0x0101_1d0c);
         assert_eq!(e.mem.u32(this + 0xc), 0x0101_1cf4);
+    }
+}
+
+#[cfg(test)]
+mod ingredient_value_tests {
+    use super::*;
+
+    fn calls_to(e: &Engine, addr: u32) -> Vec<Vec<u32>> {
+        e.call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|(a, _)| *a == addr)
+            .map(|(_, words)| words.clone())
+            .collect()
+    }
+
+    /// The cast answers `a[0] - 0x30` unless it is 0x9000.
+    fn engine() -> Engine {
+        let mut e = Engine::new();
+        e.register(DYNAMIC_CAST, |_, a| {
+            if a[0] == 0x9000 {
+                Ret::default()
+            } else {
+                (a[0] - 0x30).into_ret()
+            }
+        });
+        e.register(WORD_AT_9C, |e, a| e.mem.u32(a[0] + 0x9c).into_ret());
+        e.register(SET_WORD_AT_9C, |e, a| {
+            e.mem.set_u32(a[0] + 0x9c, a[1]);
+            Ret::default()
+        });
+        e
+    }
+
+    fn form(e: &mut Engine, value: u32, flags: u8) -> u32 {
+        let form = e.mem.alloc(0xa4);
+        e.mem.set_u32(form + 0x9c, value);
+        e.mem.set_u8(form + 0xa0, flags);
+        form
+    }
+
+    #[test]
+    fn ingredients_differ_by_value_or_flags() {
+        let mut e = engine();
+        let this = form(&mut e, 7, 1);
+        let same = form(&mut e, 7, 1);
+        let other_value = form(&mut e, 8, 1);
+        let other_flags = form(&mut e, 7, 3);
+        assert!(!e.call(0x0040_9fd0, &args![this + 0x30, same + 0x30]).bool());
+        assert!(fn_00409fd0(
+            &mut e,
+            Ptr::new(this + 0x30),
+            other_value + 0x30
+        ));
+        assert!(fn_00409fd0(
+            &mut e,
+            Ptr::new(this + 0x30),
+            other_flags + 0x30
+        ));
+        assert!(fn_00409fd0(&mut e, Ptr::new(this + 0x30), 0x9000));
+        e.call_log = Some(vec![]);
+        fn_00409fd0(&mut e, Ptr::new(this + 0x30), same + 0x30);
+        assert_eq!(
+            calls_to(&e, DYNAMIC_CAST),
+            vec![vec![
+                same + 0x30,
+                0,
+                TYPE_MAGIC_ITEM,
+                TYPE_INGREDIENT_ITEM,
+                0
+            ]]
+        );
+    }
+
+    #[test]
+    fn copy_takes_value_and_flags() {
+        let mut e = engine();
+        let this = form(&mut e, 0, 0);
+        let other = form(&mut e, 0x44, 0x81);
+        e.call(0x0040_a040, &args![this + 0x30, other + 0x30]);
+        assert_eq!(e.mem.u32(this + 0x9c), 0x44);
+        assert_eq!(e.mem.u8(this + 0xa0), 0x81);
+        e.call_log = Some(vec![]);
+        fn_0040a040(&mut e, Ptr::new(this + 0x30), 0x9000);
+        assert!(calls_to(&e, SET_WORD_AT_9C).is_empty());
+    }
+
+    #[test]
+    fn cost_is_the_value_or_the_effects_cost() {
+        let mut e = engine();
+        e.register(FLAGS_AT_A0_HAVE, |e, a| {
+            u32::from(u32::from(e.mem.u8(a[0] + 0xa0)) & a[1] != 0).into_ret()
+        });
+        e.register(EFFECT_LIST_GET_COST, |_, _| Ret {
+            st0: 3.25,
+            ..Ret::default()
+        });
+        let this = form(&mut e, (-5i32) as u32, 1);
+        assert_eq!(e.call(0x0040_a0a0, &args![this + 0x3c, 9u32]).f64(), -5.0);
+        e.mem.set_u8(this + 0xa0, 2);
+        e.call_log = Some(vec![]);
+        assert_eq!(fn_0040a0a0(&mut e, Ptr::new(this + 0x3c), 9), 3.25);
+        assert_eq!(
+            calls_to(&e, EFFECT_LIST_GET_COST),
+            vec![vec![this + 0x3c, 0]]
+        );
+    }
+
+    #[test]
+    fn swaps_the_word_at_9c() {
+        let mut e = Engine::new();
+        e.register(SWAP_BYTES_00503210, |_, _| Ret::default());
+        e.call_log = Some(vec![]);
+        e.call(0x0040_a0f0, &args![0x1000u32]);
+        assert_eq!(calls_to(&e, SWAP_BYTES_00503210), vec![vec![0x109c]]);
     }
 }

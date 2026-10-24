@@ -59,11 +59,44 @@ pub fn fn_00589500(e: &mut Engine, this: Ptr) {
     e.call(BASE_DESTRUCT, &args![this]);
 }
 
+/// `0048cee0` (`thiscall`: the name's length), `MapMarkerData::GetLocationName`
+/// (`00408da0`, engine map name; `thiscall`), `TESForm::AddChunkArray`
+/// (`004856f0`, `cdecl`: chunk name, data, size) and the chunk writer
+/// `00485910` (`cdecl`: chunk name, word).
+const NAME_LENGTH: u32 = 0x0048_cee0;
+const GET_LOCATION_NAME: u32 = 0x0040_8da0;
+const ADD_CHUNK_ARRAY: u32 = 0x0048_56f0;
+const WRITE_CHUNK_WORD: u32 = 0x0048_5910;
+
+// Translated from 00589560 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No map name (`thiscall`; the form's save): a `FULL` chunk with the name
+/// (`00408da0`) and its length plus one (`0048cee0`), a `CNAM` chunk with the
+/// word at +0x24 when it is set, `BNAM` with whether the byte at +0x28 is
+/// set (0 or 1), then `MNAM` and `NNAM` with the floats at +0xC and +0x10
+/// (copied through the x87 stack).
+pub fn fn_00589560(e: &mut Engine, this: Ptr) {
+    let at = this.addr();
+    let size = e.call(NAME_LENGTH, &args![this]).u32().wrapping_add(1);
+    let name = e.call(GET_LOCATION_NAME, &args![this]).u32();
+    e.call(ADD_CHUNK_ARRAY, &args![0x4c4c_5546u32, name, size]);
+    let word = e.mem.u32(at + 0x24);
+    if word != 0 {
+        e.call(WRITE_CHUNK_WORD, &args![0x4d41_4e43u32, word]);
+    }
+    let set = u32::from(e.mem.u8(at + 0x28) != 0);
+    e.call(WRITE_CHUNK_WORD, &args![0x4d41_4e42u32, set]);
+    let value = x87_quiet_bits(e.mem.u32(at + 0xc));
+    e.call(WRITE_CHUNK_WORD, &args![0x4d41_4e4du32, value]);
+    let value = x87_quiet_bits(e.mem.u32(at + 0x10));
+    e.call(WRITE_CHUNK_WORD, &args![0x4d41_4e4eu32, value]);
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
         entry!(0x0058_9450, fn_00589450(Ptr) -> Ptr),
         entry!(0x0058_9500, fn_00589500(Ptr)),
+        entry!(0x0058_9560, fn_00589560(Ptr)),
     ]
 }
 
@@ -130,5 +163,61 @@ mod tests {
             log,
             vec![(LIST_DESTRUCT, vec![0x402c]), (BASE_DESTRUCT, vec![0x4000])]
         );
+    }
+}
+
+#[cfg(test)]
+mod n040_tests {
+    use super::*;
+
+    #[test]
+    fn fn_00589560_saves_the_chunks() {
+        let mut e = Engine::new();
+        e.register(NAME_LENGTH, |_, _| Ret {
+            eax: 5,
+            ..Ret::default()
+        });
+        e.register(GET_LOCATION_NAME, |_, _| Ret {
+            eax: 0x0077_0000,
+            ..Ret::default()
+        });
+        e.register(ADD_CHUNK_ARRAY, |_, _| Ret::default());
+        e.register(WRITE_CHUNK_WORD, |_, _| Ret::default());
+        let this = e.mem.alloc(0x30);
+        e.mem.set_u8(this + 0x28, 0x40);
+        e.mem.set_f32(this + 0xc, 1.5);
+        e.mem.set_u32(this + 0x10, 0x7f80_0001);
+        let targets = [ADD_CHUNK_ARRAY, WRITE_CHUNK_WORD];
+        e.call_log = Some(vec![]);
+        e.call(0x0058_9560, &[this]);
+        let log: Vec<_> = e
+            .call_log
+            .take()
+            .unwrap()
+            .into_iter()
+            .filter(|(a, _)| targets.contains(a))
+            .collect();
+        assert_eq!(
+            log,
+            vec![
+                (ADD_CHUNK_ARRAY, vec![0x4c4c_5546, 0x0077_0000, 6]),
+                (WRITE_CHUNK_WORD, vec![0x4d41_4e42, 1]),
+                (WRITE_CHUNK_WORD, vec![0x4d41_4e4d, 1.5f32.to_bits()]),
+                (WRITE_CHUNK_WORD, vec![0x4d41_4e4e, 0x7fc0_0001]),
+            ]
+        );
+        e.mem.set_u32(this + 0x24, 0x1234);
+        e.mem.set_u8(this + 0x28, 0);
+        e.call_log = Some(vec![]);
+        e.call(0x0058_9560, &[this]);
+        let log: Vec<_> = e
+            .call_log
+            .take()
+            .unwrap()
+            .into_iter()
+            .filter(|(a, _)| *a == WRITE_CHUNK_WORD)
+            .collect();
+        assert_eq!(log[0].1, vec![0x4d41_4e43, 0x1234]);
+        assert_eq!(log[1].1, vec![0x4d41_4e42, 0]);
     }
 }

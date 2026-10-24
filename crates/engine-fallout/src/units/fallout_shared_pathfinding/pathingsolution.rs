@@ -474,25 +474,44 @@ pub fn fn_006e7c20(e: &mut Engine, this: Ptr<CurveSegment>, parameter: f32) {
 /// start position weight `1` minus that, the end tangent weight
 /// `t^3 - t^2` and the start tangent weight `t^3 - 2 t^2 + t`.
 pub fn fn_006e7c40(e: &mut Engine, this: Ptr<CurveSegment>, t: f32) {
+    // Every value goes through the x87 stack (`FLD`/`FMUL`/`FSTP`, the x87 NaN
+    // choice); the scratch floats `t`, `t^2` and `t^3` are memory operands.
+    let t = x87_quiet(t);
     e.set(this, CurveSegment::fParameter, t);
-    let square = (t as f64 * t as f64) as f32;
-    let cube = (square as f64 * t as f64) as f32;
+    let t_bits = t.to_bits();
+    let square = x87_store32(x87_mul(x87_load32(t_bits), x87_m32(t_bits)));
+    let cube = x87_store32(x87_mul(x87_load32(square), x87_m32(t_bits)));
     let minus_two: f64 = e.global(MINUS_TWO);
     let three: f64 = e.global(THREE);
     let one: f64 = e.global(ONE);
-    let end_position = (cube as f64 * minus_two + square as f64 * three) as f32;
-    e.set(this, CurveSegment::fWeightEndPosition, end_position);
+    let end_position = x87_add(
+        x87_mul(x87_load32(cube), minus_two),
+        x87_mul(x87_load32(square), three),
+    );
+    e.set(
+        this,
+        CurveSegment::fWeightEndPosition,
+        f32::from_bits(x87_store32(end_position)),
+    );
+    // `FLD` the stored weight back, `FCHS`, `FADD` the double 1.0.
+    let stored = x87_load32(e.get(this, CurveSegment::fWeightEndPosition).to_bits());
     e.set(
         this,
         CurveSegment::fWeightStartPosition,
-        (-(end_position as f64) + one) as f32,
+        f32::from_bits(x87_store32(x87_add(-stored, one))),
     );
-    let end_tangent = (cube as f64 - square as f64) as f32;
-    e.set(this, CurveSegment::fWeightEndTangent, end_tangent);
+    let end_tangent = x87_sub(x87_load32(cube), x87_m32(square));
+    e.set(
+        this,
+        CurveSegment::fWeightEndTangent,
+        f32::from_bits(x87_store32(end_tangent)),
+    );
+    let stored = x87_load32(e.get(this, CurveSegment::fWeightEndTangent).to_bits());
+    let start_tangent = x87_add(x87_sub(stored, x87_m32(square)), x87_m32(t_bits));
     e.set(
         this,
         CurveSegment::fWeightStartTangent,
-        (end_tangent as f64 - square as f64 + t as f64) as f32,
+        f32::from_bits(x87_store32(start_tangent)),
     );
 }
 

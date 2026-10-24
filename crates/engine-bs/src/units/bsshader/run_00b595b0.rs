@@ -485,6 +485,44 @@ pub fn fn_00b5a720(e: &mut Engine, this: Ptr, manager: u32, _unused_1: u32) {
     );
 }
 
+/// What the value destructor `00b595b0` runs: `00b58530` (unnamed; `thiscall` on the member
+/// at +0x1c, no stack words), the item destructor `00bd6570` (unnamed; `thiscall`, no stack
+/// words) and `NiTPointerListBase::RemoveAll` (`00b71300`; `thiscall` on the list at +0xc).
+const MEMBER_RESET_00B58530: u32 = 0x00b5_8530;
+const ITEM_DESTRUCT_00BD6570: u32 = 0x00bd_6570;
+const LIST_REMOVE_ALL_00B71300: u32 = 0x00b7_1300;
+
+// Translated from 00b595b0 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 00b595b0 - the C++ exception frame (FS:[0] chain, unwind states 2 to 0 for the members) is not translated.
+/// Unnamed in the engine map (`run_00b595b0`; `thiscall`, no stack words): the destructor of
+/// the first map's values. Releases and clears the reference-counted pointer at +0x18, runs
+/// `00b58530` on +0x1c, destroys (`00bd6570`) and frees (`MemoryManager::Deallocate`) every
+/// non-null item of the pointer list at +0xc (node: next at +0, item at +8), empties the list
+/// (`00b71300`); then, as the compiler's member destructors, `00b58530` on +0x1c again, the
+/// pointer at +0x18 released once more without clearing it (null by then unless `00b58530`
+/// set it), and the list emptied again.
+pub fn fn_00b595b0(e: &mut Engine, this: Ptr) {
+    let base = this.addr();
+    ni_pointer_clear(e, base + 0x18);
+    e.call(MEMBER_RESET_00B58530, &args![base + 0x1c]);
+    let mut node = e.mem.u32(base + 0xc);
+    while node != 0 {
+        let item = e.mem.u32(node + 8);
+        node = e.mem.u32(node);
+        if item != 0 {
+            e.call(ITEM_DESTRUCT_00BD6570, &args![item]);
+            e.call(MEMORY_DEALLOCATE_00AA4060, &args![MEMORY_MANAGER, item]);
+        }
+    }
+    e.call(LIST_REMOVE_ALL_00B71300, &args![base + 0xc]);
+    e.call(MEMBER_RESET_00B58530, &args![base + 0x1c]);
+    let pointer = e.mem.u32(base + 0x18);
+    if pointer != 0 {
+        release_reference(e, pointer);
+    }
+    e.call(LIST_REMOVE_ALL_00B71300, &args![base + 0xc]);
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -501,6 +539,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00b5_a4a0, fn_00b5a4a0(Ptr, u32, u32)),
         entry!(0x00b5_a700, fn_00b5a700(Ptr, u32) -> Ptr),
         entry!(0x00b5_a720, fn_00b5a720(Ptr, u32, u32)),
+        entry!(0x00b5_95b0, fn_00b595b0(Ptr)),
     ]
 }
 
@@ -968,5 +1007,58 @@ mod map_tests {
         assert_eq!(e.mem.u8(second + 0x56), 0);
         assert_eq!(e.mem.u8(second + 0x55), 0xcc);
         assert_eq!(e.mem.u8(first + 0x56), 0xcc);
+    }
+
+    #[test]
+    fn value_destructor_releases_frees_and_empties() {
+        let mut e = rig();
+        for callee in [
+            MEMBER_RESET_00B58530,
+            ITEM_DESTRUCT_00BD6570,
+            LIST_REMOVE_ALL_00B71300,
+            MEMORY_DEALLOCATE_00AA4060,
+        ] {
+            e.register(callee, |_, _| Ret::default());
+        }
+        let this = e.mem.alloc(0x20);
+        let pointer = object(&mut e, 1);
+        e.mem.set_u32(this + 0x18, pointer);
+        // Two nodes: the first with item 0x5000, the second with a null item.
+        let second = e.mem.alloc(0xc);
+        let first = e.mem.alloc(0xc);
+        e.mem.set_u32(first, second);
+        e.mem.set_u32(first + 8, 0x5000);
+        e.mem.set_u32(this + 0xc, first);
+        e.call(0x00b5_95b0, &args![this]);
+        assert_eq!(e.mem.u32(this + 0x18), 0);
+        assert_eq!(calls(&e, REFERENCE_DELETE), vec![vec![pointer]]);
+        assert_eq!(calls(&e, ITEM_DESTRUCT_00BD6570), vec![vec![0x5000]]);
+        assert_eq!(
+            calls(&e, MEMORY_DEALLOCATE_00AA4060),
+            vec![vec![MEMORY_MANAGER, 0x5000]]
+        );
+        assert_eq!(calls(&e, MEMBER_RESET_00B58530), vec![vec![this + 0x1c]; 2]);
+        assert_eq!(
+            calls(&e, LIST_REMOVE_ALL_00B71300),
+            vec![vec![this + 0xc]; 2]
+        );
+    }
+
+    #[test]
+    fn value_destructor_releases_a_pointer_the_member_reset_set() {
+        let mut e = rig();
+        let later = object(&mut e, 2);
+        e.register_double(MEMBER_RESET_00B58530, move |e, a| {
+            // The pointer at +0x18 (the member is at +0x1c).
+            e.mem.set_u32(a[0] - 4, later);
+            Ret::default()
+        });
+        e.register(LIST_REMOVE_ALL_00B71300, |_, _| Ret::default());
+        let this = e.mem.alloc(0x20);
+        e.call(0x00b5_95b0, &args![this]);
+        // Released once by the end (count 2 to 1), not cleared.
+        assert_eq!(e.mem.u32(later + 4), 1);
+        assert_eq!(e.mem.u32(this + 0x18), later);
+        assert!(calls(&e, REFERENCE_DELETE).is_empty());
     }
 }

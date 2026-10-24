@@ -775,6 +775,336 @@ pub fn tes_image_space_modifier_is_expired(e: &mut Engine, this: Ptr, start: f32
     duration < elapsed
 }
 
+/// The keyed tracks in the order `FlushData`, `Save`, `Copy` and `Compare`
+/// take them: (key count field, key array field, interpolator, chunk,
+/// colour keys).
+const KEYED_TRACKS: [(u32, u32, u32, u32, bool); 13] = [
+    (0xd4, 0x6fc, 0x504, 0x4d41_4e42, false),
+    (0xd8, 0x700, 0x51c, 0x4d41_4e56, false),
+    (0xd0, 0x704, 0x534, 0x4d41_4e54, true),
+    (0x10c, 0x708, 0x558, 0x334d_414e, true),
+    (0xdc, 0x70c, 0x57c, 0x4d41_4e52, false),
+    (0xe0, 0x710, 0x594, 0x4d41_4e53, false),
+    (0xe4, 0x714, 0x5ac, 0x4d41_4e55, false),
+    (0x104, 0x718, 0x5c4, 0x314d_414e, false),
+    (0x108, 0x71c, 0x5dc, 0x324d_414e, false),
+    (0xf4, 0x720, 0x5f4, 0x4d41_4e57, false),
+    (0xf8, 0x724, 0x60c, 0x4d41_4e58, false),
+    (0xfc, 0x728, 0x624, 0x4d41_4e59, false),
+    (0x110, 0x72c, 0x63c, 0x344d_414e, false),
+];
+/// `TESForm::StartForm` (`004855a0`), `TESForm::CloseForm` (`00485680`),
+/// `TESForm::__AddChunkData` (`00485990`, `cdecl (chunk, data, size)`),
+/// `TESForm::AddChunk` with a word (`00485910`, `cdecl`), the byte
+/// `00401500` answers (whether saving swaps bytes) and `operator delete`
+/// (`00401030`, `cdecl`).
+const FORM_START: u32 = 0x0048_55a0;
+const FORM_CLOSE: u32 = 0x0048_5680;
+const FORM_ADD_CHUNK_DATA: u32 = 0x0048_5990;
+const FORM_ADD_CHUNK_WORD: u32 = 0x0048_5910;
+const SAVE_SWAPS: u32 = 0x0040_1500;
+const OPERATOR_DELETE: u32 = 0x0040_1030;
+/// `TESForm::CopyAllComponents` (`004851b0`), `TESForm::CompareAllComponents`
+/// (`00485270`), the copy `00401460` (`cdecl (to, from, size)`) and
+/// `memcmp` (`00ec4835`).
+const FORM_COPY_ALL_COMPONENTS: u32 = 0x0048_51b0;
+const FORM_COMPARE_ALL_COMPONENTS: u32 = 0x0048_5270;
+const COPY_BYTES: u32 = 0x0040_1460;
+const MEMCMP: u32 = 0x00ec_4835;
+/// The `TESImageSpaceModifier` type descriptor (`011862b8`, its name read
+/// at +8).
+const TES_IMAGE_SPACE_MODIFIER_TYPE: u32 = 0x0118_62b8;
+/// The RTTI records `NiFloatData::GetRTTI` and the colour data's answer
+/// (`011f3748`, `011f3750`).
+const FLOAT_DATA_RTTI: u32 = 0x011f_3748;
+const COLOR_DATA_RTTI: u32 = 0x011f_3750;
+
+/// Side `side` of pair `pair` (0..0x15, 0..2): its key count field, key
+/// array field and interpolator.
+fn pair_track(pair: u32, side: u32) -> (u32, u32, u32) {
+    let slot = pair * 8 + side * 4;
+    (
+        PAIR_COUNTS + slot,
+        PAIR_KEYS + slot,
+        PAIRS + pair * 0x30 + side * 0x18,
+    )
+}
+
+// Translated from 0052cf80 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiFloatData::GetRTTI` (engine map, `thiscall`): answers the RTTI
+/// record at `011f3748`; `this` is not read.
+pub fn ni_float_data_get_rtti(_e: &mut Engine, _this: Ptr) -> u32 {
+    FLOAT_DATA_RTTI
+}
+
+// Translated from 0052d120 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiColorData::GetRTTI` (engine map, `thiscall`): answers the RTTI
+/// record at `011f3750`; `this` is not read.
+pub fn ni_color_data_get_rtti(_e: &mut Engine, _this: Ptr) -> u32 {
+    COLOR_DATA_RTTI
+}
+
+// Translated from 0052ed90 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TESImageSpaceModifier::FlushData` (Xbox PDB): takes every
+/// interpolator's key count (virtual slot `+0xE0`, given 0) and key array
+/// (slot `+0xEC`, given 0) back into the modifier's fields: the 0x15 pairs
+/// first, then the other tracks.
+pub fn tes_image_space_modifier_flush_data(e: &mut Engine, this: Ptr) {
+    let at = this.addr();
+    for pair in 0..0x15u32 {
+        for side in 0..2u32 {
+            let (count, keys, interpolator) = pair_track(pair, side);
+            let value = e.vcall(at + interpolator, 0xe0, &args![0u32]).u32();
+            e.mem.set_u32(at + count, value);
+            let value = e.vcall(at + interpolator, 0xec, &args![0u32]).u32();
+            e.mem.set_u32(at + keys, value);
+        }
+    }
+    for (count, keys, interpolator, _, _) in KEYED_TRACKS {
+        let value = e.vcall(at + interpolator, 0xe0, &args![0u32]).u32();
+        e.mem.set_u32(at + count, value);
+        let value = e.vcall(at + interpolator, 0xec, &args![0u32]).u32();
+        e.mem.set_u32(at + keys, value);
+    }
+}
+
+/// One keyed chunk of `Save`: `(size * count) >> 2` words copied into a new
+/// block (`operator new` of four times that, all ones on overflow),
+/// swapped word by word when saving swaps bytes, added as `chunk` and
+/// freed.
+fn save_track(e: &mut Engine, this: u32, count_at: u32, keys_at: u32, chunk: u32, size: u32) {
+    let words = size.wrapping_mul(e.mem.u32(this + count_at)) >> 2;
+    let bytes = words.checked_mul(4).unwrap_or(u32::MAX);
+    let block = e.call(OPERATOR_NEW, &args![bytes]).u32();
+    let keys = e.mem.u32(this + keys_at);
+    e.call(COPY_BYTES, &args![block, keys, words << 2]);
+    if e.call(SAVE_SWAPS, &args![]).u8() != 0 {
+        let mut word = 0u32;
+        while word < words {
+            e.call(SWAP_WORD, &args![block.wrapping_add(word * 4), 0u32]);
+            word += 1;
+        }
+    }
+    e.call(FORM_ADD_CHUNK_DATA, &args![chunk, block, words << 2]);
+    e.call(OPERATOR_DELETE, &args![block]);
+}
+
+// Translated from 0052f250 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TESImageSpaceModifier::Save` (Xbox PDB): starts the form, flushes the
+/// interpolators' keys back ([`tes_image_space_modifier_flush_data`]), adds
+/// the 0xF4-byte data at +0x20 as `DNAM` (swapped by
+/// `ImageSpaceModifierData::Endian` before and after when saving swaps
+/// bytes), each keyed track (`BNAM`, `VNAM`, `TNAM`, `NAM3`, `RNAM`,
+/// `SNAM`, `UNAM`, `NAM1`, `NAM2`, `WNAM`, `XNAM`, `YNAM`, `NAM4`) and
+/// each pair (`0x44414900 | pair | side << 6`), then with an intro sound
+/// (+0x1C) its form id as `RDSD` and with an outro sound (+0x18) as
+/// `RDSI`; closes the form.
+pub fn tes_image_space_modifier_save(e: &mut Engine, this: Ptr) {
+    let at = this.addr();
+    e.call(FORM_START, &args![this]);
+    tes_image_space_modifier_flush_data(e, this);
+    if e.call(SAVE_SWAPS, &args![]).u8() != 0 {
+        image_space_modifier_data_endian(e, Ptr::new(at + 0x20));
+    }
+    e.call(
+        FORM_ADD_CHUNK_DATA,
+        &args![0x4d41_4e44u32, at + 0x20, 0xf4u32],
+    );
+    if e.call(SAVE_SWAPS, &args![]).u8() != 0 {
+        image_space_modifier_data_endian(e, Ptr::new(at + 0x20));
+    }
+    for (count, keys, _, chunk, color) in KEYED_TRACKS {
+        let size = if color { 0x14 } else { 8 };
+        save_track(e, at, count, keys, chunk, size);
+    }
+    for pair in 0..0x15u32 {
+        for side in 0..2u32 {
+            let (count, keys, _) = pair_track(pair, side);
+            let chunk = pair | 0x4441_4900 | side << 6;
+            save_track(e, at, count, keys, chunk, 8);
+        }
+    }
+    let intro = e.mem.u32(at + 0x1c);
+    if intro != 0 {
+        let id = e.call(FORM_ID, &args![intro]).u32();
+        e.call(FORM_ADD_CHUNK_WORD, &args![0x4453_4452u32, id]);
+    }
+    let outro = e.mem.u32(at + 0x18);
+    if outro != 0 {
+        let id = e.call(FORM_ID, &args![outro]).u32();
+        e.call(FORM_ADD_CHUNK_WORD, &args![0x4953_4452u32, id]);
+    }
+    e.call(FORM_CLOSE, &args![this]);
+}
+
+/// One keyed track of `Copy`: a new key array of this modifier's count
+/// (already copied with the data), filled from `source`'s keys and handed
+/// to the interpolator (`ReplaceKeys` with type 1).
+fn copy_track(
+    e: &mut Engine,
+    this: u32,
+    source: u32,
+    (count_at, keys_at, interpolator): (u32, u32, u32),
+    color: bool,
+) {
+    let count = e.mem.u32(this + count_at);
+    let (size, construct) = if color {
+        (0x14, COLOR_KEY_CONSTRUCT)
+    } else {
+        (8, FLOAT_KEY_CONSTRUCT)
+    };
+    let keys = new_key_array(e, count, size, construct);
+    e.mem.set_u32(this + keys_at, keys);
+    let to = e.mem.u32(this + keys_at);
+    let from = e.mem.u32(source + keys_at);
+    let bytes = if color {
+        count.wrapping_mul(0x14)
+    } else {
+        count << 3
+    };
+    e.call(COPY_BYTES, &args![to, from, bytes]);
+    let keys = e.mem.u32(this + keys_at);
+    if color {
+        ni_color_interpolator_replace_keys(e, Ptr::new(this + interpolator), keys, count, 1);
+    } else {
+        ni_float_interpolator_replace_keys(e, Ptr::new(this + interpolator), keys, count, 1);
+    }
+}
+
+// Translated from 00530160 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 00530160 - the C++ exception frame (FS:[0], states for the fourteen key array allocations) is not translated
+/// `TESImageSpaceModifier::Copy` (Xbox PDB): when `other` is a
+/// `TESImageSpaceModifier`, flushes its keys
+/// ([`tes_image_space_modifier_flush_data`] on `other`), copies all
+/// components, runs virtual slot `+0x18`, takes its two sounds (+0x1C,
+/// +0x18) and its 0xF4-byte data, then gives every keyed track and every
+/// pair a new key array copied from `other`'s.
+pub fn tes_image_space_modifier_copy(e: &mut Engine, this: Ptr, other: Ptr) {
+    let source = e
+        .call(
+            RT_DYNAMIC_CAST,
+            &args![
+                other,
+                0u32,
+                TES_FORM_TYPE,
+                TES_IMAGE_SPACE_MODIFIER_TYPE,
+                0u32
+            ],
+        )
+        .u32();
+    if source == 0 {
+        return;
+    }
+    let at = this.addr();
+    tes_image_space_modifier_flush_data(e, Ptr::new(source));
+    e.call(FORM_COPY_ALL_COMPONENTS, &args![this, source]);
+    e.vcall(at, 0x18, &args![]);
+    let intro = e.mem.u32(source + 0x1c);
+    e.mem.set_u32(at + 0x1c, intro);
+    let outro = e.mem.u32(source + 0x18);
+    e.mem.set_u32(at + 0x18, outro);
+    e.call(COPY_BYTES, &args![at + 0x20, source + 0x20, 0xf4u32]);
+    for (count, keys, interpolator, _, color) in KEYED_TRACKS {
+        copy_track(e, at, source, (count, keys, interpolator), color);
+    }
+    for pair in 0..0x15u32 {
+        for side in 0..2u32 {
+            copy_track(e, at, source, pair_track(pair, side), false);
+        }
+    }
+}
+
+// Translated from 005310b0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TESImageSpaceModifier::Compare` (Xbox PDB): true (different) when
+/// `other` is no `TESImageSpaceModifier`; otherwise flushes both
+/// ([`tes_image_space_modifier_flush_data`]) and answers true at the first
+/// difference: the intro sound, the outro sound, `CompareAllComponents`,
+/// the 0xF4-byte data, each keyed track's keys (`memcmp` of this
+/// modifier's count of keys) and each pair's keys; else false.
+pub fn tes_image_space_modifier_compare(e: &mut Engine, this: Ptr, other: Ptr) -> bool {
+    let source = e
+        .call(
+            RT_DYNAMIC_CAST,
+            &args![
+                other,
+                0u32,
+                TES_FORM_TYPE,
+                TES_IMAGE_SPACE_MODIFIER_TYPE,
+                0u32
+            ],
+        )
+        .u32();
+    if source == 0 {
+        return true;
+    }
+    let at = this.addr();
+    tes_image_space_modifier_flush_data(e, this);
+    tes_image_space_modifier_flush_data(e, Ptr::new(source));
+    if e.mem.u32(at + 0x1c) != e.mem.u32(source + 0x1c) {
+        return true;
+    }
+    if e.mem.u32(at + 0x18) != e.mem.u32(source + 0x18) {
+        return true;
+    }
+    if e.call(FORM_COMPARE_ALL_COMPONENTS, &args![this, source])
+        .u8()
+        != 0
+    {
+        return true;
+    }
+    if e.call(MEMCMP, &args![at + 0x20, source + 0x20, 0xf4u32])
+        .u32()
+        != 0
+    {
+        return true;
+    }
+    for (count, keys, _, _, color) in KEYED_TRACKS {
+        let count = e.mem.u32(at + count);
+        let bytes = if color {
+            count.wrapping_mul(0x14)
+        } else {
+            count << 3
+        };
+        let mine = e.mem.u32(at + keys);
+        let theirs = e.mem.u32(source + keys);
+        if e.call(MEMCMP, &args![mine, theirs, bytes]).u32() != 0 {
+            return true;
+        }
+    }
+    for pair in 0..0x15u32 {
+        for side in 0..2u32 {
+            let (count, keys, _) = pair_track(pair, side);
+            let bytes = e.mem.u32(at + count) << 3;
+            let mine = e.mem.u32(at + keys);
+            let theirs = e.mem.u32(source + keys);
+            if e.call(MEMCMP, &args![mine, theirs, bytes]).u32() != 0 {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+// Translated from 00531490 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TESImageSpaceModifier::ImageSpaceModifierData::Endian` (Xbox PDB):
+/// swaps the words of the modifier data (`00401080` with flag 0): +4, the
+/// 0x2A pair counts from +8, then +0xB4, +0xB8, +0xB0, +0xEC, +0xBC, +0xC0,
+/// +0xC4, +0xE4, +0xE8, +0xCC, +0xD0, +0xD4, +0xD8, +0xDC, +0xF0.
+pub fn image_space_modifier_data_endian(e: &mut Engine, this: Ptr) {
+    let at = this.addr();
+    e.call(SWAP_WORD, &args![at + 4, 0u32]);
+    for pair in 0..0x15u32 {
+        for side in 0..2u32 {
+            e.call(SWAP_WORD, &args![at + 8 + pair * 8 + side * 4, 0u32]);
+        }
+    }
+    for offset in [
+        0xb4u32, 0xb8, 0xb0, 0xec, 0xbc, 0xc0, 0xc4, 0xe4, 0xe8, 0xcc, 0xd0, 0xd4, 0xd8, 0xdc, 0xf0,
+    ] {
+        e.call(SWAP_WORD, &args![at + offset, 0u32]);
+    }
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -819,6 +1149,13 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
             0x005316c0,
             tes_image_space_modifier_is_expired(Ptr, f32) -> bool
         ),
+        entry!(0x0052_cf80, ni_float_data_get_rtti(Ptr) -> u32),
+        entry!(0x0052_d120, ni_color_data_get_rtti(Ptr) -> u32),
+        entry!(0x0052_ed90, tes_image_space_modifier_flush_data(Ptr)),
+        entry!(0x0052_f250, tes_image_space_modifier_save(Ptr)),
+        entry!(0x0053_0160, tes_image_space_modifier_copy(Ptr, Ptr)),
+        entry!(0x0053_10b0, tes_image_space_modifier_compare(Ptr, Ptr) -> bool),
+        entry!(0x0053_1490, image_space_modifier_data_endian(Ptr)),
     ]
 }
 
@@ -1525,5 +1862,265 @@ mod image_space_modifier_tests {
         assert!(expired(&mut e, -10000.0));
         // A NaN start passes the first test and fails the second.
         assert!(!expired(&mut e, f32::NAN));
+    }
+}
+
+#[cfg(test)]
+mod n043_tests {
+    use super::*;
+
+    const MODIFIER: u32 = 0x7600_0000;
+    const OTHER: u32 = 0x7700_0000;
+    const STATE: u32 = 0x7300_0000;
+    const SLOT_COUNT: u32 = 0x7100_00e0;
+    const SLOT_KEYS: u32 = 0x7100_00ec;
+    const SLOT_18: u32 = 0x7100_0018;
+
+    fn calls(e: &Engine, addr: u32) -> Vec<Vec<u32>> {
+        e.call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|c| c.0 == addr)
+            .map(|c| c.1.clone())
+            .collect()
+    }
+
+    /// Every interpolator of a modifier at `at`.
+    fn interpolators(at: u32) -> Vec<u32> {
+        let mut all = vec![];
+        for pair in 0..0x15 {
+            for side in 0..2 {
+                all.push(at + pair_track(pair, side).2);
+            }
+        }
+        all.extend(KEYED_TRACKS.iter().map(|t| at + t.2));
+        all
+    }
+
+    /// Two modifiers whose interpolators answer 2 keys (slot +0xE0) at
+    /// `0x7900_0000 + interpolator` (slot +0xEC).
+    fn engine() -> Engine {
+        let mut e = Engine::new();
+        e.map(STATE, 0x40);
+        e.map(MODIFIER, 0x800);
+        e.map(OTHER, 0x800);
+        let vtable = e.mem.alloc(0x100);
+        e.mem.set_u32(vtable + 0x18, SLOT_18);
+        e.mem.set_u32(vtable + 0xe0, SLOT_COUNT);
+        e.mem.set_u32(vtable + 0xec, SLOT_KEYS);
+        for at in [MODIFIER, OTHER] {
+            e.mem.set_u32(at, vtable);
+            for interpolator in interpolators(at) {
+                e.mem.set_u32(interpolator, vtable);
+            }
+        }
+        e.register(SLOT_COUNT, |_, _| 2u32.into_ret());
+        e.register(SLOT_KEYS, |_, a| (0x7900_0000 + (a[0] & 0xffff)).into_ret());
+        e.register(SLOT_18, |_, _| Ret::default());
+        e
+    }
+
+    #[test]
+    fn rtti_records() {
+        let mut e = engine();
+        assert_eq!(e.call(0x0052_cf80, &args![0x1234u32]).u32(), 0x011f_3748);
+        assert_eq!(e.call(0x0052_d120, &args![0x1234u32]).u32(), 0x011f_3750);
+    }
+
+    #[test]
+    fn endian_swaps_the_data_words() {
+        let mut e = engine();
+        e.register(SWAP_WORD, |_, _| Ret::default());
+        e.call_log = Some(vec![]);
+        e.call(0x0053_1490, &args![0x1000u32]);
+        let swaps: Vec<u32> = calls(&e, SWAP_WORD).iter().map(|c| c[0]).collect();
+        assert_eq!(swaps.len(), 1 + 0x2a + 15);
+        assert_eq!(&swaps[..3], &[0x1004, 0x1008, 0x100c]);
+        assert_eq!(swaps[0x2a], 0x10ac);
+        assert_eq!(&swaps[0x2b..0x2e], &[0x10b4, 0x10b8, 0x10b0]);
+        assert_eq!(*swaps.last().unwrap(), 0x10f0);
+    }
+
+    #[test]
+    fn flush_takes_counts_and_keys_back() {
+        let mut e = engine();
+        e.call_log = Some(vec![]);
+        e.call(0x0052_ed90, &args![MODIFIER]);
+        assert_eq!(calls(&e, SLOT_COUNT).len(), 0x2a + 13);
+        assert_eq!(calls(&e, SLOT_COUNT)[0], vec![MODIFIER + 0x114, 0]);
+        assert_eq!(calls(&e, SLOT_KEYS)[1], vec![MODIFIER + 0x12c, 0]);
+        assert_eq!(e.mem.u32(MODIFIER + 0x28), 2);
+        assert_eq!(e.mem.u32(MODIFIER + 0x654), 0x7900_0114);
+        assert_eq!(e.mem.u32(MODIFIER + 0x658), 0x7900_012c);
+        assert_eq!(e.mem.u32(MODIFIER + 0xd0), 2);
+        assert_eq!(e.mem.u32(MODIFIER + 0x704), 0x7900_0534);
+        assert_eq!(e.mem.u32(MODIFIER + 0x110), 2);
+        assert_eq!(e.mem.u32(MODIFIER + 0x72c), 0x7900_063c);
+    }
+
+    #[test]
+    fn save_adds_every_chunk() {
+        let mut e = engine();
+        for addr in [
+            FORM_START,
+            FORM_CLOSE,
+            FORM_ADD_CHUNK_DATA,
+            FORM_ADD_CHUNK_WORD,
+            OPERATOR_DELETE,
+            COPY_BYTES,
+            SWAP_WORD,
+        ] {
+            e.register(addr, |_, _| Ret::default());
+        }
+        e.register(OPERATOR_NEW, |_, a| (0x7a00_0000 + a[0]).into_ret());
+        e.register(SAVE_SWAPS, |e, _| e.mem.u32(STATE).into_ret());
+        e.register(FORM_ID, |_, a| (a[0] + 1).into_ret());
+        e.mem.set_u32(MODIFIER + 0x1c, 0x5000);
+        e.mem.set_u32(STATE, 1);
+        e.call_log = Some(vec![]);
+        e.call(0x0052_f250, &args![MODIFIER]);
+        let chunks = calls(&e, FORM_ADD_CHUNK_DATA);
+        assert_eq!(chunks.len(), 1 + 13 + 0x2a);
+        assert_eq!(chunks[0], vec![0x4d41_4e44, MODIFIER + 0x20, 0xf4]);
+        // BNAM: two 8-byte keys; TNAM: two 0x14-byte keys.
+        assert_eq!(chunks[1], vec![0x4d41_4e42, 0x7a00_0010, 0x10]);
+        assert_eq!(chunks[3], vec![0x4d41_4e54, 0x7a00_0028, 0x28]);
+        assert_eq!(chunks[13][0], 0x344d_414e);
+        assert_eq!(chunks[14][0], 0x4441_4900);
+        assert_eq!(chunks[15][0], 0x4441_4940);
+        assert_eq!(chunks[55][0], 0x4441_4954);
+        assert_eq!(
+            calls(&e, COPY_BYTES)[0],
+            vec![0x7a00_0010, 0x7900_0504, 0x10]
+        );
+        // DNAM swapped twice (58 words each), each track's words once.
+        let words = 2 * 58 + 11 * 4 + 2 * 10 + 0x2a * 4;
+        assert_eq!(calls(&e, SWAP_WORD).len(), words);
+        assert_eq!(calls(&e, OPERATOR_DELETE).len(), 13 + 0x2a);
+        assert_eq!(
+            calls(&e, FORM_ADD_CHUNK_WORD),
+            vec![vec![0x4453_4452, 0x5001]]
+        );
+        assert_eq!(calls(&e, FORM_CLOSE), vec![vec![MODIFIER]]);
+        // No swapping, both sounds.
+        e.mem.set_u32(STATE, 0);
+        e.mem.set_u32(MODIFIER + 0x18, 0x6000);
+        e.call_log = Some(vec![]);
+        e.call(0x0052_f250, &args![MODIFIER]);
+        assert!(calls(&e, SWAP_WORD).is_empty());
+        assert_eq!(
+            calls(&e, FORM_ADD_CHUNK_WORD),
+            vec![vec![0x4453_4452, 0x5001], vec![0x4953_4452, 0x6001]]
+        );
+    }
+
+    fn copy_engine() -> Engine {
+        let mut e = engine();
+        e.register(FORM_COPY_ALL_COMPONENTS, |_, _| Ret::default());
+        e.register(VECTOR_CONSTRUCT, |_, _| Ret::default());
+        e.register(OPERATOR_NEW, |e, a| e.mem.alloc(a[0]).into_ret());
+        e.register(POINTER_GET, |_, _| 0x5555u32.into_ret());
+        e.register(FLOAT_DATA_REPLACE_ANIM, |_, _| Ret::default());
+        e.register(COLOR_DATA_REPLACE_ANIM, |_, _| Ret::default());
+        e.register(COPY_BYTES, |e, a| {
+            if a[2] == 0xf4 {
+                for offset in 0..0xf4 {
+                    let byte = e.mem.u8(a[1] + offset);
+                    e.mem.set_u8(a[0] + offset, byte);
+                }
+            }
+            Ret::default()
+        });
+        e.register(RT_DYNAMIC_CAST, |_, a| a[0].into_ret());
+        e
+    }
+
+    #[test]
+    fn copy_takes_data_sounds_and_new_keys() {
+        let mut e = copy_engine();
+        e.mem.set_u32(OTHER + 0x1c, 0x5000);
+        e.mem.set_u32(OTHER + 0x18, 0x6000);
+        e.call_log = Some(vec![]);
+        e.call(0x0053_0160, &args![MODIFIER, OTHER]);
+        assert_eq!(
+            calls(&e, RT_DYNAMIC_CAST),
+            vec![vec![
+                OTHER,
+                0,
+                TES_FORM_TYPE,
+                TES_IMAGE_SPACE_MODIFIER_TYPE,
+                0
+            ]]
+        );
+        // The source is flushed, not this one.
+        assert!(calls(&e, SLOT_COUNT).iter().all(|c| c[0] >= OTHER));
+        assert_eq!(calls(&e, SLOT_18), vec![vec![MODIFIER]]);
+        assert_eq!(e.mem.u32(MODIFIER + 0x1c), 0x5000);
+        assert_eq!(e.mem.u32(MODIFIER + 0x18), 0x6000);
+        assert_eq!(e.mem.u32(MODIFIER + 0xd4), 2);
+        let copies = calls(&e, COPY_BYTES);
+        assert_eq!(copies.len(), 1 + 13 + 0x2a);
+        assert_eq!(copies[1][1..], [0x7900_0504, 0x10]);
+        assert_eq!(copies[3][1..], [0x7900_0534, 0x28]);
+        let keys = e.mem.u32(MODIFIER + 0x6fc);
+        assert_eq!(copies[1][0], keys);
+        assert_eq!(e.mem.u32(keys - 4), 2);
+        let floats = calls(&e, FLOAT_DATA_REPLACE_ANIM);
+        assert_eq!(floats.len(), 11 + 0x2a);
+        assert_eq!(floats[0], vec![0x5555, keys, 2, 1]);
+        assert_eq!(calls(&e, COLOR_DATA_REPLACE_ANIM).len(), 2);
+        let constructs = calls(&e, VECTOR_CONSTRUCT);
+        assert_eq!(
+            constructs[2][1..],
+            [0x14, 2, COLOR_KEY_CONSTRUCT, KEY_DESTRUCT]
+        );
+        // Not a modifier: nothing.
+        e.register(RT_DYNAMIC_CAST, |_, _| 0u32.into_ret());
+        e.call_log = Some(vec![]);
+        e.call(0x0053_0160, &args![MODIFIER, OTHER]);
+        assert_eq!(e.call_log.as_ref().unwrap().len(), 2);
+    }
+
+    #[test]
+    fn compare_stops_at_the_first_difference() {
+        let mut e = engine();
+        e.register(RT_DYNAMIC_CAST, |_, a| a[0].into_ret());
+        e.register(FORM_COMPARE_ALL_COMPONENTS, |e, _| {
+            e.mem.u32(STATE + 4).into_ret()
+        });
+        // memcmp answers 1 on the call whose number is the state word.
+        e.mem.set_u32(STATE, 0xffff);
+        e.register_double(MEMCMP, |e, _| {
+            let n = e.mem.u32(STATE + 8);
+            e.mem.set_u32(STATE + 8, n + 1);
+            u32::from(n == e.mem.u32(STATE)).into_ret()
+        });
+        e.call_log = Some(vec![]);
+        assert!(!e.call(0x0053_10b0, &args![MODIFIER, OTHER]).bool());
+        let compares = calls(&e, MEMCMP);
+        assert_eq!(compares.len(), 1 + 13 + 0x2a);
+        assert_eq!(compares[0], vec![MODIFIER + 0x20, OTHER + 0x20, 0xf4]);
+        assert_eq!(compares[3], vec![0x7900_0534, 0x7900_0534, 0x28]);
+        assert_eq!(compares[14], vec![0x7900_0114, 0x7900_0114, 0x10]);
+        assert_eq!(calls(&e, SLOT_COUNT).len(), 2 * (0x2a + 13));
+        for stop in [0, 5, 20] {
+            e.mem.set_u32(STATE, stop);
+            e.mem.set_u32(STATE + 8, 0);
+            e.call_log = Some(vec![]);
+            assert!(e.call(0x0053_10b0, &args![MODIFIER, OTHER]).bool());
+            assert_eq!(calls(&e, MEMCMP).len(), stop as usize + 1);
+        }
+        e.mem.set_u32(STATE, 0xffff);
+        e.mem.set_u32(STATE + 4, 1);
+        assert!(e.call(0x0053_10b0, &args![MODIFIER, OTHER]).bool());
+        e.mem.set_u32(STATE + 4, 0);
+        e.mem.set_u32(OTHER + 0x18, 9);
+        assert!(e.call(0x0053_10b0, &args![MODIFIER, OTHER]).bool());
+        e.mem.set_u32(OTHER + 0x18, 0);
+        e.mem.set_u32(OTHER + 0x1c, 9);
+        assert!(e.call(0x0053_10b0, &args![MODIFIER, OTHER]).bool());
+        e.register(RT_DYNAMIC_CAST, |_, _| 0u32.into_ret());
+        assert!(e.call(0x0053_10b0, &args![MODIFIER, OTHER]).bool());
     }
 }

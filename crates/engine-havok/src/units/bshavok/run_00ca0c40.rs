@@ -19,26 +19,20 @@ pub fn fn_00ca0c40(e: &mut Engine, this: Ptr, point: Ptr, out: Ptr) {
     let origin = read(e, this.addr() + 0x140);
     let point = read(e, point.addr());
     let axis = read(e, this.addr() + 0x1c0);
-    let d = [
-        point[0] - origin[0],
-        point[1] - origin[1],
-        point[2] - origin[2],
-        point[3] - origin[3],
-    ];
-    // The exe computes the fourth lane as a3*d3 - a3*d3 (SSE): 0, or NaN.
-    #[allow(clippy::eq_op)]
-    let cross = [
-        axis[1] * d[2] - axis[2] * d[1],
-        axis[2] * d[0] - axis[0] * d[2],
-        axis[0] * d[1] - axis[1] * d[0],
-        axis[3] * d[3] - axis[3] * d[3],
-    ];
+    use crate::sse::{addps, mulps, subps};
+    // `SUBPS`, `MULPS`, `ADDPS` with the SSE NaN rules, the destination operand
+    // first: `(axis.yzxw * d.zxyw) - (axis.zxyw * d.yzxw)`, whose fourth lane is
+    // `a3*d3 - a3*d3` (0, or NaN).
+    let d = subps(point, origin);
+    let yzxw = |v: [f32; 4]| [v[1], v[2], v[0], v[3]];
+    let zxyw = |v: [f32; 4]| [v[2], v[0], v[1], v[3]];
+    let cross = subps(mulps(yzxw(axis), zxyw(d)), mulps(zxyw(axis), yzxw(d)));
     for (i, lane) in cross.iter().enumerate() {
         e.mem.set_f32(out.addr() + 4 * i as u32, *lane);
     }
     let base = read(e, this.addr() + 0x1b0);
-    for (i, lane) in cross.iter().enumerate() {
-        e.mem.set_f32(out.addr() + 4 * i as u32, base[i] + lane);
+    for (i, lane) in addps(base, cross).iter().enumerate() {
+        e.mem.set_f32(out.addr() + 4 * i as u32, *lane);
     }
 }
 

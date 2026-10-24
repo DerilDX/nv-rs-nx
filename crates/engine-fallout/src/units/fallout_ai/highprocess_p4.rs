@@ -5395,8 +5395,9 @@ const ACTOR_SLOT_DELETE_FADE_DONE: u32 = 0xc4;
 // Translated from 008fe8f0 (decompiled, FalloutNV.exe 1.4.0.525)
 /// `HighProcess::FadeIn` (Xbox PDB): unless the fade state is 5 or 6, sets
 /// it to 1 (`flag` zero) or 3, clears the fade reference and, when the alpha
-/// is not below 1.0, resets it to 0.0. The first stack word (the actor) is
-/// not read.
+/// is at least 1.0, resets it to 0.0 (`FCOMP`, `TEST AH,0x1`: C0 is set for
+/// below and for unordered, so a NaN alpha is kept). The first stack word (the
+/// actor) is not read.
 pub fn high_process_fade_in(e: &mut Engine, this: Ptr, _unused_0: u32, flag: u8) {
     let base = this.addr();
     let state = e.mem.u32(base + FADE_STATE);
@@ -5407,8 +5408,7 @@ pub fn high_process_fade_in(e: &mut Engine, this: Ptr, _unused_0: u32, flag: u8)
         .set_u32(base + FADE_STATE, if flag != 0 { 3 } else { 1 });
     e.mem.set_u32(base + FADE_REFERENCE, 0);
     let one = e.global::<f64>(ONE_DOUBLE);
-    let below_one = f64::from(e.mem.f32(base + FADE_ALPHA)) < one;
-    if !below_one {
+    if f64::from(e.mem.f32(base + FADE_ALPHA)) >= one {
         e.mem.set_f32(base + FADE_ALPHA, 0.0);
     }
 }

@@ -523,6 +523,584 @@ pub fn fn_005f1f30(e: &mut Engine, this: Ptr, buffer: u32) {
     }
 }
 
+/// `006ecd40` (`ECX` = object, one word; `RET 4`): stores the word at the
+/// object's +4 (the engine map's name,
+/// `CombatProcedureAttackMelee::Initialize`, is a folded body).
+const SET_WORD_4: u32 = 0x006e_cd40;
+/// `0044ddc0` (`ECX` = form): its flags word (+8).
+const FORM_FLAGS: u32 = 0x0044_ddc0;
+/// The save/load game object (`011de45c`, a pointer).
+const SAVE_LOAD_GAME_OBJECT: u32 = 0x011d_e45c;
+/// `TESSaveLoadGame::UseSaveGameBlocks` (Xbox PDB name of `00862110`;
+/// `ECX` = save/load game).
+const USE_SAVE_GAME_BLOCKS: u32 = 0x0086_2110;
+/// `008df040` (`ECX` = save/load game): the save's version byte.
+const SAVE_VERSION: u32 = 0x008d_f040;
+/// `00825c00` (`ECX` = save/load game): the current position in the save
+/// data.
+const SAVE_POSITION: u32 = 0x0082_5c00;
+/// `008579b0` (`ECX` = save/load game; buffer, size; `RET 8`): writes bytes.
+const SAVE_WRITE: u32 = 0x0085_79b0;
+/// `008579e0` (`ECX` = save/load game; buffer, size; `RET 8`): reads bytes.
+const LOAD_READ: u32 = 0x0085_79e0;
+/// `00408d60` (`ECX` = setting): the address of the setting's value.
+const SETTING_VALUE: u32 = 0x0040_8d60;
+/// The boolean setting whose value turns on the save size reports
+/// (`011de4e8`).
+const REPORT_SAVE_SIZES: u32 = 0x011d_e4e8;
+/// `004fd3e0` (`ECX` = save/load game): the record of the form being
+/// saved (form id at +0, flags at +5, a byte at +9), or 0.
+const SAVING_RECORD: u32 = 0x004f_d3e0;
+/// `004fd3c0` (`ECX` = save/load game): the record of the form being
+/// loaded, or 0.
+const LOADING_RECORD: u32 = 0x004f_d3c0;
+/// `004839c0` (cdecl: form id): the form with that id.
+const LOOKUP_FORM: u32 = 0x0048_39c0;
+/// `Error` (engine map name of `0040fbe0`; cdecl, a format and its
+/// arguments).
+const ERROR: u32 = 0x0040_fbe0;
+/// `005b5e40` (cdecl, a format and its arguments): writes a warning line.
+const LOG_WARNING: u32 = 0x005b_5e40;
+/// The source file name the save size reports pass (`01047628`).
+const SOURCE_FILE: u32 = 0x0104_7628;
+/// The block tag written before an actor base's save data (`KOLB`).
+const BLOCK_TAG: u32 = 0x424c_4f4b;
+/// `00408da0` (`ECX` = string): its characters.
+const STRING_TEXT: u32 = 0x0040_8da0;
+/// `strlen` wrapper (`0044a670`, cdecl).
+const STRING_LENGTH: u32 = 0x0044_a670;
+/// `TESForm::SaveGameDataOLD` (Xbox PDB name of `00484ce0`; `ECX` = form;
+/// buffer, size).
+const SAVE_FORM_DATA: u32 = 0x0048_4ce0;
+/// `00484d00` (`ECX` = form; buffer, size; `RET 8`): reads form data.
+const LOAD_FORM_DATA: u32 = 0x0048_4d00;
+/// `TESSoundFile::SetSoundFile` (engine map name of `00489100`; `ECX` =
+/// the name string at +0xD0, the characters; `RET 4`).
+const SET_NAME: u32 = 0x0048_9100;
+/// The vtable `005f2150` stores (`01047670`, slot 0 `005f2170`).
+const RESET_3D_ITERATOR_VTABLE: u32 = 0x0104_7670;
+/// The list `005f20a0` walks with its iterator (`011e0e80`).
+const ITERATED_LIST: u32 = 0x011e_0e80;
+/// `0096bbc0` (`ECX` = the list at `011e0e80`; the iterator; `RET 4`).
+const ITERATE: u32 = 0x0096_bbc0;
+/// `008d8520` (`ECX` = reference): its process (the engine map's name,
+/// `MiddleHighProcess::GetSavedAcquireObject`, is a folded body).
+const REFERENCE_PROCESS: u32 = 0x008d_8520;
+/// `007af430` (`ECX` = reference): its base object.
+const REFERENCE_BASE_OBJECT: u32 = 0x007a_f430;
+
+/// Sets attribute `index` to the byte `value` with the flag 1
+/// (`TESAttributes::SetAttributeValue`).
+fn set_attribute(e: &mut Engine, this: Ptr, index: u32, value: u8) {
+    e.call(ATTRIBUTE_SET, &args![this, index, u32::from(value), 1u32]);
+}
+
+// Translated from 005f0b30 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Sets the health (`RET 4`): the word goes to the health form at +0xB0
+/// (`006ecd40`, which stores it at its +4).
+pub fn fn_005f0b30(e: &mut Engine, this: Ptr, health: u32) {
+    e.call(SET_WORD_4, &args![this.addr() + 0xb0, health]);
+}
+
+// Translated from 005f0ba0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// False when `005f0b50` is false; otherwise true unless the form type is
+/// 0x2B and flag 0x40000 of the actor base data (+0x30, `00461580`) is set.
+pub fn fn_005f0ba0(e: &mut Engine, this: Ptr) -> bool {
+    if !fn_005f0b50(e, this) {
+        return false;
+    }
+    if e.call(GET_TYPE_BYTE, &args![this]).u32() == ACCEPTED_TYPE
+        && e.call(
+            TEST_FLAGS,
+            &args![this.addr() + FLAGS_OBJECT_OFFSET, 0x0004_0000u32],
+        )
+        .bool()
+    {
+        return false;
+    }
+    true
+}
+
+// Translated from 005f0f50 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Whether flag 0x80000 of the form's flags (`0044ddc0`) is set (the flag
+/// `TESActorBase::SetStartsDead` writes).
+pub fn fn_005f0f50(e: &mut Engine, this: Ptr) -> bool {
+    e.call(FORM_FLAGS, &args![this]).u32() & 0x0008_0000 != 0
+}
+
+// Translated from 005f14b0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Sets attribute index 5 of a `TESAttributes` to `value` with the flag 1
+/// (`TESAttributes::SetAttributeValue`, `RET 4`).
+pub fn fn_005f14b0(e: &mut Engine, this: Ptr, value: u8) {
+    set_attribute(e, this, 5, value);
+}
+
+// Translated from 005f14d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Sets attribute index 6 (as `005f14b0`).
+pub fn fn_005f14d0(e: &mut Engine, this: Ptr, value: u8) {
+    set_attribute(e, this, 6, value);
+}
+
+// Translated from 005f14f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Sets attribute index 7 (as `005f14b0`).
+pub fn fn_005f14f0(e: &mut Engine, this: Ptr, value: u8) {
+    set_attribute(e, this, 7, value);
+}
+
+// Translated from 005f1510 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Sets attribute index 8 (as `005f14b0`).
+pub fn fn_005f1510(e: &mut Engine, this: Ptr, value: u8) {
+    set_attribute(e, this, 8, value);
+}
+
+// Translated from 005f1530 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Sets attribute index 9 (as `005f14b0`).
+pub fn fn_005f1530(e: &mut Engine, this: Ptr, value: u8) {
+    set_attribute(e, this, 9, value);
+}
+
+// Translated from 005f1550 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Sets attribute index 0xA (as `005f14b0`).
+pub fn fn_005f1550(e: &mut Engine, this: Ptr, value: u8) {
+    set_attribute(e, this, 0xa, value);
+}
+
+/// The save size reports' check: whether the boolean setting at
+/// `011de4e8` is set.
+fn reports_save_sizes(e: &mut Engine) -> bool {
+    let value = e.call(SETTING_VALUE, &args![REPORT_SAVE_SIZES]).u32();
+    e.mem.u8(value) != 0
+}
+
+/// The form of a save record (`004839c0` on its form id) and its name
+/// (virtual slot 0x130 of the form).
+fn record_form_name(e: &mut Engine, record: u32) -> u32 {
+    let id = e.mem.u32(record);
+    let form = e.call(LOOKUP_FORM, &args![id]).u32();
+    e.vcall(form, 0x130, &[]).u32()
+}
+
+// Translated from 005f16f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The actor base's save size for the change `flags` (`RET 4`; a `u16`
+/// sum): 6 when the save uses blocks (`UseSaveGameBlocks`), the form's
+/// (`00484bf0`) for a save version of 0x6D or more, the attributes'
+/// (+0xB8 `004801e0`), the actor base data's (+0x30 `0047e380`), the spell
+/// list's (+0x7C `TESSpellList::GetSaveSize`) and the AI form's (+0x90
+/// `TESAIForm::GetSaveSize`), and with flag 0x20 the length of the name at
+/// +0xD0 plus 1. When the setting at `011de4e8` is set it reports the size
+/// (`Error`, line 0x226) with the record of the form being saved when
+/// there is one. The 4 bytes for the health are under a mask the compiler
+/// folded to 0 (`AND EAX,0`): never added.
+// The exe tests a mask the compiler folded to 0; the branch is kept as written.
+#[allow(clippy::bad_bit_mask, clippy::erasing_op)]
+pub fn fn_005f16f0(e: &mut Engine, this: Ptr, flags: u32) -> u16 {
+    let base = this.addr();
+    let mut size: u16 = 0;
+    let start = size;
+    let game = e.global::<u32>(SAVE_LOAD_GAME_OBJECT);
+    if e.call(USE_SAVE_GAME_BLOCKS, &args![game]).u8() != 0 {
+        size = size.wrapping_add(4);
+        size = size.wrapping_add(2);
+    }
+    let game = e.global::<u32>(SAVE_LOAD_GAME_OBJECT);
+    if e.call(SAVE_VERSION, &args![game]).u8() >= 0x6d {
+        let part = e.call(0x0048_4bf0, &args![this, flags]).u16();
+        size = size.wrapping_add(part);
+    }
+    for (offset, getter) in [
+        (0xb8, 0x0048_01e0),
+        (0x30, 0x0047_e380),
+        (0x7c, 0x0048_d8f0),
+        (0x90, 0x0047_f7e0),
+    ] {
+        let part = e.call(getter, &args![base + offset, flags]).u16();
+        size = size.wrapping_add(part);
+    }
+    // Folded mask (always false in the exe): the health's 4 bytes.
+    if flags & 0 != 0 {
+        size = size.wrapping_add(4);
+    }
+    if flags & 0x20 != 0 {
+        size = size.wrapping_add(1);
+        let text = e.call(STRING_TEXT, &args![base + 0xd0]).u32();
+        let length = e.call(STRING_LENGTH, &args![text]).u32();
+        size = size.wrapping_add(length as u16);
+    }
+    if reports_save_sizes(e) {
+        let game = e.global::<u32>(SAVE_LOAD_GAME_OBJECT);
+        let record = e.call(SAVING_RECORD, &args![game]).u32();
+        let reported = u32::from(size).wrapping_sub(u32::from(start));
+        if record != 0 {
+            let name = record_form_name(e, record);
+            let id = e.mem.u32(record);
+            let record_flags = e.mem.u32(record + 5);
+            e.call(
+                ERROR,
+                &args![
+                    0x0101_2cb0u32,
+                    reported,
+                    id,
+                    name,
+                    record_flags,
+                    0x226u32,
+                    SOURCE_FILE
+                ],
+            );
+        } else {
+            e.call(
+                ERROR,
+                &args![0x0101_2c78u32, reported, 0x226u32, SOURCE_FILE],
+            );
+        }
+    }
+    size
+}
+
+// Translated from 005f18c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The actor base's save (`RET 4`: the change flags). With save blocks
+/// (`UseSaveGameBlocks`) it writes the tag `KOLB` and a 16-bit size
+/// placeholder (4 and 2 bytes, `008579b0`), remembering the position before
+/// the placeholder (`00825c00`). Then the form (`00484c20`, save version
+/// 0x6D or more), the attributes (+0xB8 `00480210`), the actor base data
+/// (+0x30 `0047e4a0`), the spell list (+0x7C `TESSpellList::SaveGame`), the
+/// AI form (+0x90 `TESAIForm::SaveGame`) and, with flag 0x20, the name at
+/// +0xD0 as a length byte and its characters (`TESForm::SaveGameDataOLD`).
+/// When the setting at `011de4e8` is set the size written is reported
+/// (`Error`, line 0x24B). With save blocks the size since the placeholder
+/// is written into it, with a warning when it is more than 0xFFFF. The
+/// health (+0xB0) is saved under a mask the compiler folded to 0
+/// (`AND EDX,0`): never.
+// The exe tests a mask the compiler folded to 0; the branch is kept as written.
+#[allow(clippy::bad_bit_mask, clippy::erasing_op)]
+pub fn fn_005f18c0(e: &mut Engine, this: Ptr, flags: u32) {
+    let base = this.addr();
+    e.with_stack(0x34, |e, frame| {
+        // The exe's locals, at their offsets from `EBP`.
+        let ebp = frame.addr() + 0x34;
+        let size_slot = ebp - 8;
+        let tag_slot = ebp - 0x10;
+        let health_slot = ebp - 0x14;
+        let length_slot = ebp - 0x19;
+        e.mem.set_u16(size_slot, 0);
+        let mut placeholder = 0u32;
+        let game = e.global::<u32>(SAVE_LOAD_GAME_OBJECT);
+        let mut start = e.call(SAVE_POSITION, &args![game]).u32();
+        if reports_save_sizes(e) {
+            let game = e.global::<u32>(SAVE_LOAD_GAME_OBJECT);
+            start = e.call(SAVE_POSITION, &args![game]).u32();
+        }
+        let game = e.global::<u32>(SAVE_LOAD_GAME_OBJECT);
+        if e.call(USE_SAVE_GAME_BLOCKS, &args![game]).u8() != 0 {
+            e.mem.set_u32(tag_slot, BLOCK_TAG);
+            let game = e.global::<u32>(SAVE_LOAD_GAME_OBJECT);
+            e.call(SAVE_WRITE, &args![game, tag_slot, 4u32]);
+            let game = e.global::<u32>(SAVE_LOAD_GAME_OBJECT);
+            placeholder = e.call(SAVE_POSITION, &args![game]).u32();
+            let game = e.global::<u32>(SAVE_LOAD_GAME_OBJECT);
+            e.call(SAVE_WRITE, &args![game, size_slot, 2u32]);
+        }
+        let game = e.global::<u32>(SAVE_LOAD_GAME_OBJECT);
+        if e.call(SAVE_VERSION, &args![game]).u8() >= 0x6d {
+            e.call(0x0048_4c20, &args![this, flags]);
+        }
+        e.call(0x0048_0210, &args![base + 0xb8, flags]);
+        e.call(0x0047_e4a0, &args![base + 0x30, flags]);
+        e.call(0x0048_da20, &args![base + 0x7c, flags]);
+        e.call(0x0047_f840, &args![base + 0x90, flags]);
+        // Folded mask (always false in the exe): the health.
+        if flags & 0 != 0 {
+            let health = e.call(0x0072_6070, &args![base + 0xb0]).u32();
+            e.mem.set_u32(health_slot, health);
+            e.call(SAVE_FORM_DATA, &args![this, health_slot, 4u32]);
+        }
+        if flags & 0x20 != 0 {
+            let text = e.call(STRING_TEXT, &args![base + 0xd0]).u32();
+            let length = e.call(STRING_LENGTH, &args![text]).u32() as u8;
+            e.mem.set_u8(length_slot, length);
+            e.call(SAVE_FORM_DATA, &args![this, length_slot, 1u32]);
+            if e.mem.u8(length_slot) != 0 {
+                let length = u32::from(e.mem.u8(length_slot));
+                e.call(SAVE_FORM_DATA, &args![this, text, length]);
+            }
+        }
+        if reports_save_sizes(e) {
+            let game = e.global::<u32>(SAVE_LOAD_GAME_OBJECT);
+            let end = e.call(SAVE_POSITION, &args![game]).u32();
+            let game = e.global::<u32>(SAVE_LOAD_GAME_OBJECT);
+            let record = e.call(SAVING_RECORD, &args![game]).u32();
+            let written = end.wrapping_sub(start);
+            if record != 0 {
+                let name = record_form_name(e, record);
+                let id = e.mem.u32(record);
+                let record_flags = e.mem.u32(record + 5);
+                e.call(
+                    ERROR,
+                    &args![
+                        0x0101_53a0u32,
+                        written,
+                        id,
+                        name,
+                        record_flags,
+                        0x24bu32,
+                        SOURCE_FILE
+                    ],
+                );
+            } else {
+                e.call(
+                    ERROR,
+                    &args![0x0101_536cu32, written, 0x24bu32, SOURCE_FILE],
+                );
+            }
+        }
+        let game = e.global::<u32>(SAVE_LOAD_GAME_OBJECT);
+        if e.call(USE_SAVE_GAME_BLOCKS, &args![game]).u8() != 0 {
+            let game = e.global::<u32>(SAVE_LOAD_GAME_OBJECT);
+            let end = e.call(SAVE_POSITION, &args![game]).u32();
+            if end > placeholder.wrapping_add(0xffff) {
+                e.call(LOG_WARNING, &args![0x0101_5318u32, SOURCE_FILE, 0x24bu32]);
+            }
+            e.mem
+                .set_u16(placeholder, end.wrapping_sub(placeholder) as u16);
+        }
+    });
+}
+
+// Translated from 005f1b30 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 005f1b30 - the /GS stack cookie check (00ec408c) is not translated
+/// The actor base's load (`RET 8`: the change flags and a second word,
+/// both passed on). With save blocks (`UseSaveGameBlocks`) it reads the
+/// 4-byte tag (`008579e0`) and warns (line 0x254, with the record of the
+/// form being loaded when there is one, else the save version) when it is
+/// not `KOLB`, then remembers the position (`00825c00`) and reads the
+/// 16-bit block size. Then the form (`00484c50`, save version 0x6D or
+/// more), the attributes (+0xB8 `00480240`), the actor base data (+0x30
+/// `0047e6f0`), the spell list (+0x7C `0048dca0`), the AI form (+0x90
+/// `TESAIForm::LoadGame`) and, with flag 0x20, the name: a cleared
+/// 0x104-byte buffer, a length byte and that many characters
+/// (`00484d00`), set as the name at +0xD0 (`00489100`). With save blocks
+/// it warns (line 0x274) when the position is past or before the block's
+/// end. The health is loaded under a mask the compiler folded to 0
+/// (`AND ECX,0`): never.
+// The exe tests a mask the compiler folded to 0; the branch is kept as written.
+#[allow(clippy::bad_bit_mask, clippy::erasing_op)]
+pub fn fn_005f1b30(e: &mut Engine, this: Ptr, flags: u32, second: u32) {
+    let base = this.addr();
+    e.with_stack(0x13c, |e, frame| {
+        // The exe's locals, at their offsets from `EBP`.
+        let ebp = frame.addr() + 0x13c;
+        let size_slot = ebp - 4;
+        let tag_slot = ebp - 0xc;
+        let health_slot = ebp - 0x18;
+        let name_buffer = ebp - 0x128;
+        let length_slot = ebp - 0x129;
+        e.mem.set_u16(size_slot, 0);
+        let mut block_start = 0u32;
+        let game = e.global::<u32>(SAVE_LOAD_GAME_OBJECT);
+        if e.call(USE_SAVE_GAME_BLOCKS, &args![game]).u8() != 0 {
+            let game = e.global::<u32>(SAVE_LOAD_GAME_OBJECT);
+            e.call(LOAD_READ, &args![game, tag_slot, 4u32]);
+            if e.mem.u32(tag_slot) != BLOCK_TAG {
+                let game = e.global::<u32>(SAVE_LOAD_GAME_OBJECT);
+                let record = e.call(LOADING_RECORD, &args![game]).u32();
+                if record != 0 {
+                    let name = record_form_name(e, record);
+                    let id = e.mem.u32(record);
+                    let kind = u32::from(e.mem.u8(record + 9));
+                    let record_flags = e.mem.u32(record + 5);
+                    e.call(
+                        LOG_WARNING,
+                        &args![
+                            0x0101_5718u32,
+                            SOURCE_FILE,
+                            0x254u32,
+                            id,
+                            name,
+                            kind,
+                            record_flags
+                        ],
+                    );
+                } else {
+                    let game = e.global::<u32>(SAVE_LOAD_GAME_OBJECT);
+                    let version = u32::from(e.call(SAVE_VERSION, &args![game]).u8());
+                    e.call(
+                        LOG_WARNING,
+                        &args![0x0101_56a8u32, SOURCE_FILE, 0x254u32, version],
+                    );
+                }
+            }
+            let game = e.global::<u32>(SAVE_LOAD_GAME_OBJECT);
+            block_start = e.call(SAVE_POSITION, &args![game]).u32();
+            let game = e.global::<u32>(SAVE_LOAD_GAME_OBJECT);
+            e.call(LOAD_READ, &args![game, size_slot, 2u32]);
+        }
+        let game = e.global::<u32>(SAVE_LOAD_GAME_OBJECT);
+        if e.call(SAVE_VERSION, &args![game]).u8() >= 0x6d {
+            e.call(0x0048_4c50, &args![this, flags, second]);
+        }
+        e.call(0x0048_0240, &args![base + 0xb8, flags, second]);
+        e.call(0x0047_e6f0, &args![base + 0x30, flags, second]);
+        e.call(0x0048_dca0, &args![base + 0x7c, flags, second]);
+        e.call(0x0047_f8c0, &args![base + 0x90, flags, second]);
+        // Folded mask (always false in the exe): the health.
+        if flags & 0 != 0 {
+            e.call(LOAD_FORM_DATA, &args![this, health_slot, 4u32]);
+            let health = e.mem.u32(health_slot);
+            e.call(SET_WORD_4, &args![base + 0xb0, health]);
+        }
+        if flags & 0x20 != 0 {
+            e.call(0x0040_3d30, &args![name_buffer, 0u32, 0x104u32]);
+            e.call(LOAD_FORM_DATA, &args![this, length_slot, 1u32]);
+            if e.mem.u8(length_slot) != 0 {
+                let length = u32::from(e.mem.u8(length_slot));
+                e.call(LOAD_FORM_DATA, &args![this, name_buffer, length]);
+            }
+            e.call(SET_NAME, &args![base + 0xd0, name_buffer]);
+        }
+        let game = e.global::<u32>(SAVE_LOAD_GAME_OBJECT);
+        if e.call(USE_SAVE_GAME_BLOCKS, &args![game]).u8() == 0 {
+            return;
+        }
+        let game = e.global::<u32>(SAVE_LOAD_GAME_OBJECT);
+        let position = e.call(SAVE_POSITION, &args![game]).u32();
+        let game = e.global::<u32>(SAVE_LOAD_GAME_OBJECT);
+        let record = e.call(LOADING_RECORD, &args![game]).u32();
+        let end = u32::from(e.mem.u16(size_slot)).wrapping_add(block_start);
+        if record != 0 {
+            let id = e.mem.u32(record);
+            let form = e.call(LOOKUP_FORM, &args![id]).u32();
+            let (format, difference) = if position > end {
+                (0x0101_5588u32, position.wrapping_sub(end))
+            } else if position < end {
+                (0x0101_5500u32, end.wrapping_sub(position))
+            } else {
+                return;
+            };
+            let record_flags = e.mem.u32(record + 5);
+            let kind = u32::from(e.mem.u8(record + 9));
+            let name = e.vcall(form, 0x130, &[]).u32();
+            let id = e.mem.u32(record);
+            e.call(
+                LOG_WARNING,
+                &args![
+                    format,
+                    difference,
+                    SOURCE_FILE,
+                    0x274u32,
+                    id,
+                    name,
+                    kind,
+                    record_flags
+                ],
+            );
+        } else {
+            let (format, difference) = if position > end {
+                (0x0101_54a0u32, position.wrapping_sub(end))
+            } else if position < end {
+                (0x0101_5440u32, end.wrapping_sub(position))
+            } else {
+                return;
+            };
+            let game = e.global::<u32>(SAVE_LOAD_GAME_OBJECT);
+            let version = u32::from(e.call(SAVE_VERSION, &args![game]).u8());
+            e.call(
+                LOG_WARNING,
+                &args![format, difference, SOURCE_FILE, 0x274u32, version],
+            );
+        }
+    });
+}
+
+// Translated from 005f1fd0 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 005f1fd0 - the /GS stack cookie check (00ec408c) is not translated
+/// Loads the actor base from the load buffer (`RET 4`): the form
+/// (`00484da0`), the actor base data (+0x30, `0047ea70`), the spell list
+/// (+0x7C, `0048e140`), the attributes (+0xB8, `004802b0`), the AI form
+/// (+0x90, `0047f980`), then, when the buffer's flag 0x20 is set
+/// (`00428110`, `004280f0`), a name read into a stack buffer
+/// (`BGSLoadGameBuffer::LoadString`) and set as the name at +0xD0
+/// (`00489100`).
+pub fn fn_005f1fd0(e: &mut Engine, this: Ptr, buffer: u32) {
+    let base = this.addr();
+    e.call(0x0048_4da0, &args![this, buffer]);
+    e.call(0x0047_ea70, &args![base + 0x30, buffer]);
+    e.call(0x0048_e140, &args![base + 0x7c, buffer]);
+    e.call(0x0048_02b0, &args![base + 0xb8, buffer]);
+    e.call(0x0047_f980, &args![base + 0x90, buffer]);
+    e.with_stack(0x118, |e, frame| {
+        // The exe's locals, at their offsets from `EBP`.
+        let ebp = frame.addr() + 0x118;
+        let flags_slot = ebp - 0x114;
+        let name = ebp - 0x110;
+        let flags = e.call(0x0042_8110, &args![buffer, flags_slot]).u32();
+        if e.call(0x0042_80f0, &args![flags, 0x20u32]).u8() != 0 {
+            e.call(0x0086_49a0, &args![buffer, name]);
+            e.call(SET_NAME, &args![base + 0xd0, name]);
+        }
+    });
+}
+
+// Translated from 005f20a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Nothing for a zero byte; otherwise runs a stack `Reset3DMobIterator`
+/// (`005f2150`; +8 this actor base, +0xC the byte) over the list at
+/// `011e0e80` (`0096bbc0`) twice, with its +4 word 0 and then 1
+/// (`006ecd40`), and when the player's base form (`004181e0`) is this one
+/// and the player has a process (`008d8520`), passes the byte to the
+/// process's virtual slot 0x468 (`RET 4`).
+pub fn fn_005f20a0(e: &mut Engine, this: Ptr, value: u8) {
+    if value == 0 {
+        return;
+    }
+    e.with_stack(0x10, |e, iterator| {
+        fn_005f2150(e, iterator);
+        e.mem.set_u32(iterator.addr() + 8, this.addr());
+        e.mem.set_u8(iterator.addr() + 0xc, value);
+        e.call(SET_WORD_4, &args![iterator, 0u32]);
+        e.call(ITERATE, &args![ITERATED_LIST, iterator]);
+        e.call(SET_WORD_4, &args![iterator, 1u32]);
+        e.call(ITERATE, &args![ITERATED_LIST, iterator]);
+    });
+    let player = e.global::<u32>(PLAYER);
+    if e.call(PLAYER_BASE_FORM, &args![player]).u32() != this.addr() {
+        return;
+    }
+    let player = e.global::<u32>(PLAYER);
+    if e.call(REFERENCE_PROCESS, &args![player]).u32() == 0 {
+        return;
+    }
+    let player = e.global::<u32>(PLAYER);
+    let process = e.call(REFERENCE_PROCESS, &args![player]).u32();
+    e.vcall(process, 0x468, &args![u32::from(value)]);
+}
+
+// Translated from 005f2150 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The `Reset3DMobIterator` constructor (the vtable `01047670`, whose slot
+/// 0 is `Reset3DMobIterator::Operate`): its base (`005d8b10`), then the
+/// vtable. Returns `this`.
+pub fn fn_005f2150(e: &mut Engine, this: Ptr) -> Ptr {
+    e.call(0x005d_8b10, &args![this]);
+    e.mem.set_u32(this.addr(), RESET_3D_ITERATOR_VTABLE);
+    this
+}
+
+// Translated from 005f2170 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Reset3DMobIterator::Operate` (Xbox PDB; the reference; `RET 4`): when
+/// the reference's base object (`007af430`) is the iterator's actor base
+/// (+8) and the reference has a process (`008d8520`), passes the
+/// iterator's byte (+0xC) to the process's virtual slot 0x468. Returns
+/// nothing the callers read (`EAX` is left as the last call leaves it).
+pub fn reset_3d_mob_iterator_operate(e: &mut Engine, this: Ptr, reference: Ptr) {
+    let object = e.call(REFERENCE_BASE_OBJECT, &args![reference]).u32();
+    if object != e.mem.u32(this.addr() + 8) {
+        return;
+    }
+    if e.call(REFERENCE_PROCESS, &args![reference]).u32() == 0 {
+        return;
+    }
+    let process = e.call(REFERENCE_PROCESS, &args![reference]).u32();
+    let value = u32::from(e.mem.u8(this.addr() + 0xc));
+    e.vcall(process, 0x468, &args![value]);
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -551,6 +1129,22 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x005f_0d60, tes_actor_base_get_desirability(Ptr, u32) -> f32),
         entry!(0x005f_1590, tes_actor_base_should_run_init_default_worn(Ptr, u32) -> bool),
         entry!(0x005f_1f30, fn_005f1f30(Ptr, u32)),
+        entry!(0x005f_0b30, fn_005f0b30(Ptr, u32)),
+        entry!(0x005f_0ba0, fn_005f0ba0(Ptr) -> bool),
+        entry!(0x005f_0f50, fn_005f0f50(Ptr) -> bool),
+        entry!(0x005f_14b0, fn_005f14b0(Ptr, u8)),
+        entry!(0x005f_14d0, fn_005f14d0(Ptr, u8)),
+        entry!(0x005f_14f0, fn_005f14f0(Ptr, u8)),
+        entry!(0x005f_1510, fn_005f1510(Ptr, u8)),
+        entry!(0x005f_1530, fn_005f1530(Ptr, u8)),
+        entry!(0x005f_1550, fn_005f1550(Ptr, u8)),
+        entry!(0x005f_16f0, fn_005f16f0(Ptr, u32) -> u16),
+        entry!(0x005f_18c0, fn_005f18c0(Ptr, u32)),
+        entry!(0x005f_1b30, fn_005f1b30(Ptr, u32, u32)),
+        entry!(0x005f_1fd0, fn_005f1fd0(Ptr, u32)),
+        entry!(0x005f_20a0, fn_005f20a0(Ptr, u8)),
+        entry!(0x005f_2150, fn_005f2150(Ptr) -> Ptr),
+        entry!(0x005f_2170, reset_3d_mob_iterator_operate(Ptr, Ptr)),
     ]
 }
 
@@ -1157,5 +1751,486 @@ mod b024_tests {
                 assert_eq!(only(&log, 0x0086_5e70), vec![vec![0x8000, 0x30d1, 0]]);
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests_n042 {
+    use super::*;
+
+    type Log = Vec<(u32, Vec<u32>)>;
+
+    fn run(e: &mut Engine, addr: u32, words: &[u32]) -> (Ret, Log) {
+        e.call_log = Some(vec![]);
+        let result = e.call(addr, words);
+        let log = e
+            .call_log
+            .take()
+            .unwrap()
+            .into_iter()
+            .filter(|(a, _)| *a != addr)
+            .collect();
+        (result, log)
+    }
+
+    fn calls(log: &Log, addr: u32) -> Vec<Vec<u32>> {
+        log.iter()
+            .filter(|(a, _)| *a == addr)
+            .map(|(_, w)| w.clone())
+            .collect()
+    }
+
+    fn zero(e: &mut Engine, addrs: &[u32]) {
+        for addr in addrs {
+            e.register(*addr, |_, _| Ret::default());
+        }
+    }
+
+    #[test]
+    fn health_setter_and_attribute_setters() {
+        let mut e = Engine::new();
+        zero(&mut e, &[SET_WORD_4, ATTRIBUTE_SET]);
+        let (_, log) = run(&mut e, 0x005f_0b30, &[0x5000, 77]);
+        assert_eq!(log, vec![(SET_WORD_4, vec![0x50b0, 77])]);
+        for (addr, index) in [
+            (0x005f_14b0, 5),
+            (0x005f_14d0, 6),
+            (0x005f_14f0, 7),
+            (0x005f_1510, 8),
+            (0x005f_1530, 9),
+            (0x005f_1550, 0xa),
+        ] {
+            let (_, log) = run(&mut e, addr, &[0x5000, 0x1ff]);
+            assert_eq!(log, vec![(ATTRIBUTE_SET, vec![0x5000, index, 0xff, 1])]);
+        }
+    }
+
+    #[test]
+    fn flag_checks() {
+        let mut e = Engine::new();
+        e.register(GET_TYPE_BYTE, |e, a| e.mem.u32(a[0] + 0x40).into_ret());
+        e.register(TEST_FLAGS, |e, a| {
+            u32::from(e.mem.u32(a[0]) & a[1] != 0).into_ret()
+        });
+        e.register(FORM_FLAGS, |e, a| e.mem.u32(a[0] + 8).into_ret());
+        let this = e.mem.alloc(0x100);
+        // Not type 0x2b: 005f0b50 true, so true.
+        e.mem.set_u32(this + 0x40, 0x2a);
+        assert!(e.call(0x005f_0ba0, &args![this]).bool());
+        e.mem.set_u32(this + 0x40, 0x2b);
+        // 0x2b without flags 0x10 or 1: false.
+        assert!(!e.call(0x005f_0ba0, &args![this]).bool());
+        e.mem.set_u32(this + 0x30, 0x10);
+        assert!(e.call(0x005f_0ba0, &args![this]).bool());
+        e.mem.set_u32(this + 0x30, 0x0004_0001);
+        assert!(!e.call(0x005f_0ba0, &args![this]).bool());
+        e.mem.set_u32(this + 8, 0x0008_0000);
+        assert!(e.call(0x005f_0f50, &args![this]).bool());
+        e.mem.set_u32(this + 8, 0x0007_ffff);
+        assert!(!e.call(0x005f_0f50, &args![this]).bool());
+    }
+
+    fn save_engine(blocks: u32, version: u32, report: u8) -> Engine {
+        let mut e = Engine::new();
+        e.map(SAVE_LOAD_GAME_OBJECT, 4);
+        e.mem.set_u32(SAVE_LOAD_GAME_OBJECT, 0x7700);
+        e.register_double(USE_SAVE_GAME_BLOCKS, move |_, _| blocks.into_ret());
+        e.register_double(SAVE_VERSION, move |_, _| version.into_ret());
+        let setting = e.mem.alloc(4);
+        e.mem.set_u8(setting, report);
+        e.register_double(SETTING_VALUE, move |_, _| setting.into_ret());
+        e.register(STRING_TEXT, |e, a| e.mem.u32(a[0]).into_ret());
+        e.register(STRING_LENGTH, |_, _| 5u32.into_ret());
+        e.register(LOOKUP_FORM, |_, a| (a[0] + 0x10).into_ret());
+        e.register(0x0f00_1000, |_, _| 0x6600u32.into_ret());
+        let mut slots = vec![0u32; 0x134 / 4];
+        slots[0x130 / 4] = 0x0f00_1000;
+        e.put_vtable(0x0f00_0000, &slots);
+        zero(&mut e, &[ERROR, LOG_WARNING]);
+        e
+    }
+
+    /// A save record at a new block: form id `0x2000` (whose form, at
+    /// `0x2010`, has the vtable `0f000000`), flags at +5, a byte at +9.
+    fn record(e: &mut Engine) -> u32 {
+        e.map(0x2010, 4);
+        e.mem.set_u32(0x2010, 0x0f00_0000);
+        let record = e.mem.alloc(0x10);
+        e.mem.set_u32(record, 0x2000);
+        e.mem.set_u32(record + 5, 0xabcd_ef01);
+        e.mem.set_u8(record + 9, 0x2a);
+        record
+    }
+
+    #[test]
+    fn save_size_sums_the_parts() {
+        let mut e = save_engine(1, 0x6d, 0);
+        e.register(0x0048_4bf0, |_, _| 0x10u32.into_ret());
+        e.register(0x0048_01e0, |_, _| 0x7u32.into_ret());
+        e.register(0x0047_e380, |_, _| 0x1_0020u32.into_ret());
+        e.register(0x0048_d8f0, |_, _| 0x3u32.into_ret());
+        e.register(0x0047_f7e0, |_, _| 0x5u32.into_ret());
+        let this = e.mem.alloc(0x100);
+        let (ret, log) = run(&mut e, 0x005f_16f0, &[this, 0x20]);
+        assert_eq!(ret.u32() & 0xffff, 6 + 0x10 + 7 + 0x20 + 3 + 5 + 1 + 5);
+        assert_eq!(calls(&log, 0x0048_01e0), vec![vec![this + 0xb8, 0x20]]);
+        assert_eq!(calls(&log, 0x0047_f7e0), vec![vec![this + 0x90, 0x20]]);
+        assert!(calls(&log, ERROR).is_empty());
+        let mut e2 = save_engine(0, 0x6c, 1);
+        for getter in [0x0048_01e0, 0x0047_e380, 0x0048_d8f0, 0x0047_f7e0] {
+            e2.register(getter, |_, _| 1u32.into_ret());
+        }
+        e2.register(SAVING_RECORD, |_, _| Ret::default());
+        let (ret, log) = run(&mut e2, 0x005f_16f0, &[this, 0xffff_ffdf]);
+        assert_eq!(ret.u32() & 0xffff, 4);
+        assert!(calls(&log, 0x0048_4bf0).is_empty());
+        assert_eq!(
+            calls(&log, ERROR),
+            vec![vec![0x0101_2c78, 4, 0x226, SOURCE_FILE]]
+        );
+        let rec = record(&mut e2);
+        e2.register_double(SAVING_RECORD, move |_, _| rec.into_ret());
+        let (_, log) = run(&mut e2, 0x005f_16f0, &[this, 0]);
+        assert_eq!(
+            calls(&log, ERROR),
+            vec![vec![
+                0x0101_2cb0,
+                4,
+                0x2000,
+                0x6600,
+                0xabcd_ef01,
+                0x226,
+                SOURCE_FILE
+            ]]
+        );
+    }
+
+    #[test]
+    fn save_game_writes_the_block_and_its_size() {
+        let mut e = save_engine(1, 0x6d, 1);
+        zero(
+            &mut e,
+            &[
+                0x0048_4c20,
+                0x0048_0210,
+                0x0047_e4a0,
+                0x0048_da20,
+                0x0047_f840,
+                SAVE_FORM_DATA,
+            ],
+        );
+        let block = e.mem.alloc(0x20);
+        // The position: the block start, then 0x30 bytes later.
+        let position = e.mem.alloc(4);
+        e.mem.set_u32(position, block);
+        e.register_double(SAVE_POSITION, move |e, _| e.mem.u32(position).into_ret());
+        e.register_double(SAVE_WRITE, move |e, a| {
+            if a[2] == 4 {
+                assert_eq!(e.mem.u32(a[1]), BLOCK_TAG);
+            }
+            let at = e.mem.u32(position);
+            e.mem.set_u32(position, at + a[2]);
+            Ret::default()
+        });
+        e.register_double(0x0047_f840, move |e, _| {
+            let at = e.mem.u32(position);
+            e.mem.set_u32(position, at + 0x30);
+            Ret::default()
+        });
+        e.register(SAVING_RECORD, |_, _| Ret::default());
+        let this = e.mem.alloc(0x100);
+        e.mem.set_u32(this + 0xd0, 0x9000);
+        let (_, log) = run(&mut e, 0x005f_18c0, &[this, 0x20]);
+        assert_eq!(calls(&log, 0x0048_4c20), vec![vec![this, 0x20]]);
+        let saved = calls(&log, SAVE_FORM_DATA);
+        assert_eq!(saved.len(), 2);
+        assert_eq!((saved[0][0], saved[0][2]), (this, 1));
+        assert_eq!(saved[1], vec![this, 0x9000, 5]);
+        // The placeholder (after the tag) holds the bytes since it: 2 + 0x30.
+        assert_eq!(e.mem.u16(block + 4), 0x32);
+        assert_eq!(
+            calls(&log, ERROR),
+            vec![vec![0x0101_536c, 0x36, 0x24b, SOURCE_FILE]]
+        );
+        assert!(calls(&log, LOG_WARNING).is_empty());
+        // Without blocks nothing is written for the block.
+        let mut e = save_engine(0, 0x10, 0);
+        zero(
+            &mut e,
+            &[
+                0x0048_0210,
+                0x0047_e4a0,
+                0x0048_da20,
+                0x0047_f840,
+                SAVE_POSITION,
+                SAVE_WRITE,
+            ],
+        );
+        let (_, log) = run(&mut e, 0x005f_18c0, &[this, 0]);
+        assert!(calls(&log, SAVE_WRITE).is_empty());
+        assert!(calls(&log, 0x0048_4c20).is_empty());
+        assert!(calls(&log, SAVE_FORM_DATA).is_empty());
+    }
+
+    #[test]
+    fn save_game_warns_about_a_block_over_0xffff() {
+        let mut e = save_engine(1, 0x10, 0);
+        zero(
+            &mut e,
+            &[
+                0x0048_0210,
+                0x0047_e4a0,
+                0x0048_da20,
+                0x0047_f840,
+                SAVE_WRITE,
+            ],
+        );
+        let block = e.mem.alloc(0x20);
+        let calls_seen = e.mem.alloc(4);
+        e.register_double(SAVE_POSITION, move |e, _| {
+            let n = e.mem.u32(calls_seen);
+            e.mem.set_u32(calls_seen, n + 1);
+            // The second call (after the tag) is the placeholder; the last
+            // is 0x10000 bytes past it.
+            if n < 2 { block } else { block + 0x1_0000 }.into_ret()
+        });
+        let this = e.mem.alloc(0x100);
+        let (_, log) = run(&mut e, 0x005f_18c0, &[this, 0]);
+        assert_eq!(
+            calls(&log, LOG_WARNING),
+            vec![vec![0x0101_5318, SOURCE_FILE, 0x24b]]
+        );
+        assert_eq!(e.mem.u16(block), 0);
+    }
+
+    fn load_engine(blocks: u32, version: u32) -> Engine {
+        let mut e = save_engine(blocks, version, 0);
+        zero(
+            &mut e,
+            &[
+                0x0048_4c50,
+                0x0048_0240,
+                0x0047_e6f0,
+                0x0048_dca0,
+                0x0047_f8c0,
+                0x0040_3d30,
+                SET_NAME,
+            ],
+        );
+        e
+    }
+
+    #[test]
+    fn load_game_reads_the_block_parts_and_name() {
+        let mut e = load_engine(1, 0x6d);
+        e.register(LOAD_READ, |e, a| {
+            if a[2] == 4 {
+                e.mem.set_u32(a[1], BLOCK_TAG);
+            } else {
+                e.mem.set_u16(a[1], 0x40);
+            }
+            Ret::default()
+        });
+        e.register(SAVE_POSITION, |_, _| 0x1000u32.into_ret());
+        e.register(LOADING_RECORD, |_, _| Ret::default());
+        e.register(LOAD_FORM_DATA, |e, a| {
+            if a[2] == 1 {
+                e.mem.set_u8(a[1], 3);
+            }
+            Ret::default()
+        });
+        let this = e.mem.alloc(0x100);
+        let (_, log) = run(&mut e, 0x005f_1b30, &[this, 0x20, 9]);
+        assert_eq!(calls(&log, 0x0048_4c50), vec![vec![this, 0x20, 9]]);
+        assert_eq!(calls(&log, 0x0047_f8c0), vec![vec![this + 0x90, 0x20, 9]]);
+        let reads = calls(&log, LOAD_FORM_DATA);
+        assert_eq!(reads.len(), 2);
+        let buffer = reads[1][1];
+        assert_eq!(reads[1], vec![this, buffer, 3]);
+        assert_eq!(calls(&log, 0x0040_3d30), vec![vec![buffer, 0, 0x104]]);
+        assert_eq!(calls(&log, SET_NAME), vec![vec![this + 0xd0, buffer]]);
+        // The position 0x1000 is 0x40 before the block's end.
+        assert_eq!(
+            calls(&log, LOG_WARNING),
+            vec![vec![0x0101_5440, 0x40, SOURCE_FILE, 0x274, 0x6d]]
+        );
+    }
+
+    #[test]
+    fn load_game_warns_about_a_bad_tag_and_a_long_block_with_the_record() {
+        let mut e = load_engine(1, 0x10);
+        let rec = record(&mut e);
+        e.register_double(LOADING_RECORD, move |_, _| rec.into_ret());
+        e.register(LOAD_READ, |e, a| {
+            if a[2] == 4 {
+                e.mem.set_u32(a[1], 0x1234);
+            } else {
+                e.mem.set_u16(a[1], 0x10);
+            }
+            Ret::default()
+        });
+        let position = e.mem.alloc(4);
+        e.mem.set_u32(position, 0x1000);
+        e.register_double(SAVE_POSITION, move |e, _| e.mem.u32(position).into_ret());
+        e.register_double(0x0047_f8c0, move |e, _| {
+            e.mem.set_u32(position, 0x1018);
+            Ret::default()
+        });
+        let this = e.mem.alloc(0x100);
+        let (_, log) = run(&mut e, 0x005f_1b30, &[this, 0, 0]);
+        assert!(calls(&log, 0x0048_4c50).is_empty());
+        assert!(calls(&log, SET_NAME).is_empty());
+        assert_eq!(
+            calls(&log, LOG_WARNING),
+            vec![
+                vec![
+                    0x0101_5718,
+                    SOURCE_FILE,
+                    0x254,
+                    0x2000,
+                    0x6600,
+                    0x2a,
+                    0xabcd_ef01
+                ],
+                vec![
+                    0x0101_5588,
+                    8,
+                    SOURCE_FILE,
+                    0x274,
+                    0x2000,
+                    0x6600,
+                    0x2a,
+                    0xabcd_ef01
+                ]
+            ]
+        );
+        // Exactly at the end: no warning.
+        e.mem.set_u32(position, 0x1000);
+        e.register_double(0x0047_f8c0, move |e, _| {
+            e.mem.set_u32(position, 0x1010);
+            Ret::default()
+        });
+        e.register(LOAD_READ, |e, a| {
+            if a[2] == 4 {
+                e.mem.set_u32(a[1], BLOCK_TAG);
+            } else {
+                e.mem.set_u16(a[1], 0x10);
+            }
+            Ret::default()
+        });
+        let (_, log) = run(&mut e, 0x005f_1b30, &[this, 0, 0]);
+        assert!(calls(&log, LOG_WARNING).is_empty());
+    }
+
+    #[test]
+    fn load_game_without_blocks_reads_only_the_parts() {
+        let mut e = load_engine(0, 0x6c);
+        zero(&mut e, &[LOAD_READ, SAVE_POSITION, LOADING_RECORD]);
+        let this = e.mem.alloc(0x100);
+        let (_, log) = run(&mut e, 0x005f_1b30, &[this, 0, 0]);
+        assert!(calls(&log, LOAD_READ).is_empty());
+        assert!(calls(&log, LOADING_RECORD).is_empty());
+        assert_eq!(calls(&log, 0x0048_0240), vec![vec![this + 0xb8, 0, 0]]);
+    }
+
+    #[test]
+    fn buffer_load_reads_parts_and_the_name_with_flag_0x20() {
+        let mut e = Engine::new();
+        zero(
+            &mut e,
+            &[
+                0x0048_4da0,
+                0x0047_ea70,
+                0x0048_e140,
+                0x0048_02b0,
+                0x0047_f980,
+                0x0086_49a0,
+                SET_NAME,
+            ],
+        );
+        e.register(0x0042_8110, |_, _| 0x20u32.into_ret());
+        e.register(0x0042_80f0, |_, a| u32::from(a[0] & a[1] != 0).into_ret());
+        let (_, log) = run(&mut e, 0x005f_1fd0, &[0x5000, 0x8800]);
+        assert_eq!(
+            log[..5],
+            [
+                (0x0048_4da0, vec![0x5000, 0x8800]),
+                (0x0047_ea70, vec![0x5030, 0x8800]),
+                (0x0048_e140, vec![0x507c, 0x8800]),
+                (0x0048_02b0, vec![0x50b8, 0x8800]),
+                (0x0047_f980, vec![0x5090, 0x8800]),
+            ]
+        );
+        let name = calls(&log, 0x0086_49a0)[0][1];
+        assert_eq!(calls(&log, SET_NAME), vec![vec![0x50d0, name]]);
+        e.register(0x0042_8110, |_, _| 0x10u32.into_ret());
+        let (_, log) = run(&mut e, 0x005f_1fd0, &[0x5000, 0x8800]);
+        assert!(calls(&log, SET_NAME).is_empty());
+    }
+
+    #[test]
+    fn reset_3d_runs_the_iterator_twice_and_the_players_process() {
+        let mut e = Engine::new();
+        zero(&mut e, &[0x005d_8b10]);
+        e.register(SET_WORD_4, |e, a| {
+            e.mem.set_u32(a[0] + 4, a[1]);
+            Ret::default()
+        });
+        e.register(ITERATE, |e, a| {
+            let it = a[1];
+            (e.mem.u32(it) ^ e.mem.u32(it + 4) ^ e.mem.u32(it + 8) ^ e.mem.u32(it + 0xc)).into_ret()
+        });
+        e.map(PLAYER, 4);
+        e.mem.set_u32(PLAYER, 0x4400);
+        e.register(PLAYER_BASE_FORM, |_, _| 0x5000u32.into_ret());
+        e.register(REFERENCE_PROCESS, |_, _| 0x6000u32.into_ret());
+        e.map(0x6000, 4);
+        e.mem.set_u32(0x6000, 0x0f00_0000);
+        e.register(0x0f00_1000, |_, _| Ret::default());
+        let mut slots = vec![0u32; 0x46c / 4];
+        slots[0x468 / 4] = 0x0f00_1000;
+        e.put_vtable(0x0f00_0000, &slots);
+        let (_, log) = run(&mut e, 0x005f_20a0, &[0x5000, 0x101]);
+        let iterated = calls(&log, ITERATE);
+        assert_eq!(iterated.len(), 2);
+        assert_eq!(iterated[0][0], ITERATED_LIST);
+        let it = iterated[0][1];
+        assert_eq!(calls(&log, SET_WORD_4), vec![vec![it, 0], vec![it, 1]]);
+        assert_eq!(calls(&log, 0x0f00_1000), vec![vec![0x6000, 1]]);
+        e.register(PLAYER_BASE_FORM, |_, _| 0x5001u32.into_ret());
+        let (_, log) = run(&mut e, 0x005f_20a0, &[0x5000, 1]);
+        assert!(calls(&log, 0x0f00_1000).is_empty());
+        let (_, log) = run(&mut e, 0x005f_20a0, &[0x5000, 0x100]);
+        assert!(log.is_empty());
+    }
+
+    #[test]
+    fn iterator_constructor_and_operate() {
+        let mut e = Engine::new();
+        zero(&mut e, &[0x005d_8b10]);
+        let it = e.mem.alloc(0x10);
+        assert_eq!(e.call(0x005f_2150, &args![it]).u32(), it);
+        assert_eq!(e.mem.u32(it), RESET_3D_ITERATOR_VTABLE);
+        e.mem.set_u32(it + 8, 0x5000);
+        e.mem.set_u8(it + 0xc, 7);
+        e.register(REFERENCE_BASE_OBJECT, |e, a| e.mem.u32(a[0]).into_ret());
+        e.register(REFERENCE_PROCESS, |e, a| e.mem.u32(a[0] + 4).into_ret());
+        e.register(0x0f00_1000, |_, _| Ret::default());
+        let mut slots = vec![0u32; 0x46c / 4];
+        slots[0x468 / 4] = 0x0f00_1000;
+        e.put_vtable(0x0f00_0000, &slots);
+        let process = e.mem.alloc(4);
+        e.mem.set_u32(process, 0x0f00_0000);
+        let reference = e.mem.alloc(8);
+        e.mem.set_u32(reference, 0x5000);
+        e.mem.set_u32(reference + 4, process);
+        let (_, log) = run(&mut e, 0x005f_2170, &[it, reference]);
+        assert_eq!(calls(&log, 0x0f00_1000), vec![vec![process, 7]]);
+        e.mem.set_u32(reference + 4, 0);
+        let (_, log) = run(&mut e, 0x005f_2170, &[it, reference]);
+        assert!(calls(&log, 0x0f00_1000).is_empty());
+        e.mem.set_u32(reference, 0x5001);
+        let (_, log) = run(&mut e, 0x005f_2170, &[it, reference]);
+        assert_eq!(log.len(), 1);
     }
 }

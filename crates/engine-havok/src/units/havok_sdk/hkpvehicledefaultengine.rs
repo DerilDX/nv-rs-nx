@@ -64,72 +64,72 @@ pub fn calc_engine_info(
     rpm: Ptr,
     output: Ptr,
 ) {
+    // The x87 stack code with the x87 choice of NaN: `ld` is an `FLD` of a field (quiet), `mem`
+    // a field as the memory operand of `FADD`/`FSUB`/`FMUL`/`FDIV` (a signalling NaN stays
+    // one there) and `rounded` a store to a scratch float and the load back.
+    let (fadd, fsub, fmul, fdiv) = (x87_add, x87_sub, x87_mul, x87_div);
+    let me = this.addr();
+    let ld = |e: &Engine, offset: u32| x87_load32(e.mem.u32(me + offset));
+    let mem = |e: &Engine, offset: u32| x87_m32(e.mem.u32(me + offset));
+    let rounded = |value: f64| x87_load32(x87_store32(value));
+    let (min_rpm, opt_rpm, max_rpm, max_torque) = (0x08, 0x0c, 0x10, 0x14);
+    let (torque_min, torque_max, resistance_min, resistance_opt, resistance_max, slip) =
+        (0x18, 0x1c, 0x20, 0x24, 0x28, 0x2c);
     let out = output.addr();
     let r = x87_quiet(e.mem.f32(rpm.addr()));
     e.mem.set_f32(out + 4, r);
-    let t = x87_quiet(e.mem.f32(throttle.addr()));
+    let t = x87_load32(e.mem.u32(throttle.addr()));
     let min = e.get(this, HkpVehicleDefaultEngine::m_min_rpm);
-    let opt = e.get(this, HkpVehicleDefaultEngine::m_opt_rpm);
     let max = e.get(this, HkpVehicleDefaultEngine::m_max_rpm);
-    let max_torque = f64::from(e.get(this, HkpVehicleDefaultEngine::m_max_torque));
-    let wide = |value: f32| f64::from(value);
     if min > r {
-        let g = (wide(e.get(this, HkpVehicleDefaultEngine::m_clutch_slip_rpm)) * wide(t)) as f32;
-        let h = (wide(min) * HALF) as f32;
-        if h > r {
-            e.mem.set_f32(out + 4, (wide(g) + wide(min)) as f32);
+        let g = rounded(fmul(ld(e, slip), t));
+        let h = rounded(fmul(ld(e, min_rpm), HALF));
+        if h > f64::from(r) {
+            let sum = fadd(g, mem(e, min_rpm));
+            e.mem.set_u32(out + 4, x87_store32(sum));
         } else {
-            let lift = (wide(r) - wide(h)) * wide(g);
-            let corrected = lift / (wide(min) - wide(h));
-            e.mem.set_f32(out + 4, (corrected + wide(min)) as f32);
+            let lift = fmul(fsub(f64::from(r), h), g);
+            let corrected = fdiv(lift, fsub(mem(e, min_rpm), h));
+            let sum = fadd(corrected, ld(e, min_rpm));
+            e.mem.set_u32(out + 4, x87_store32(sum));
         }
     }
-    let rpm_out = x87_quiet(e.mem.f32(out + 4));
-    let d = (wide(rpm_out) - wide(opt)) as f32;
-    let r_opt = e.get(
-        this,
-        HkpVehicleDefaultEngine::m_resistance_factor_at_opt_rpm,
-    );
+    let rpm_out = x87_load32(e.mem.u32(out + 4));
+    let d = rounded(fsub(rpm_out, mem(e, opt_rpm)));
     if !(d < 0.0) {
         let rpm_out = x87_quiet(e.mem.f32(out + 4));
-        let r_max = e.get(
-            this,
-            HkpVehicleDefaultEngine::m_resistance_factor_at_max_rpm,
-        );
         if !(max > rpm_out) {
             e.mem.set_f32(out + 4, x87_quiet(max));
-            let drag = (wide(r_max) * max_torque) as f32;
-            let torque = (wide(t) * 0.0) - wide(drag);
-            e.mem.set_f32(out, torque as f32);
+            let drag = rounded(fmul(ld(e, resistance_max), mem(e, max_torque)));
+            let torque = fsub(fmul(t, 0.0), drag);
+            e.mem.set_u32(out, x87_store32(torque));
             return;
         }
-        let k = (1.0 / (wide(max) - wide(opt))) as f32;
-        let u = ((wide(r_max) - wide(r_opt)) * wide(k)) as f32;
-        let v = ((wide(u) * wide(d) + wide(r_opt)) * max_torque) as f32;
-        let f_max = e.get(this, HkpVehicleDefaultEngine::m_torque_factor_at_max_rpm);
-        let w = (wide(k) * ((wide(f_max) - 1.0) * wide(k))) as f32;
-        let z = (((wide(d) * wide(d)) * wide(w) + 1.0) * max_torque) as f32;
-        e.mem.set_f32(out, (wide(t) * wide(z) - wide(v)) as f32);
+        let k = rounded(fdiv(1.0, fsub(ld(e, max_rpm), mem(e, opt_rpm))));
+        let u = rounded(fmul(fsub(ld(e, resistance_max), mem(e, resistance_opt)), k));
+        let v = fmul(fadd(fmul(u, d), mem(e, resistance_opt)), mem(e, max_torque));
+        let v = rounded(v);
+        let w = rounded(fmul(k, fmul(fsub(ld(e, torque_max), 1.0), k)));
+        let z = fmul(fadd(fmul(fmul(d, d), w), 1.0), mem(e, max_torque));
+        let z = rounded(z);
+        e.mem.set_u32(out, x87_store32(fsub(fmul(t, z), v)));
         return;
     }
-    let k = (1.0 / (wide(min) - wide(opt))) as f32;
-    let r_min = e.get(
-        this,
-        HkpVehicleDefaultEngine::m_resistance_factor_at_min_rpm,
-    );
-    let u = ((wide(r_min) - wide(r_opt)) * wide(k)) as f32;
-    let p4 = ((wide(u) * wide(d) + wide(r_opt)) * max_torque) as f32;
-    let f_min = e.get(this, HkpVehicleDefaultEngine::m_torque_factor_at_min_rpm);
-    let w = (wide(k) * ((wide(f_min) - 1.0) * wide(k))) as f32;
-    let p1 = (((wide(d) * wide(d)) * wide(w) + 1.0) * max_torque) as f32;
+    let k = rounded(fdiv(1.0, fsub(ld(e, min_rpm), mem(e, opt_rpm))));
+    let u = rounded(fmul(fsub(ld(e, resistance_min), mem(e, resistance_opt)), k));
+    let p4 = fmul(fadd(fmul(u, d), mem(e, resistance_opt)), mem(e, max_torque));
+    let p4 = rounded(p4);
+    let w = rounded(fmul(k, fmul(fsub(ld(e, torque_min), 1.0), k)));
+    let p1 = fmul(fadd(fmul(fmul(d, d), w), 1.0), mem(e, max_torque));
+    let p1 = rounded(p1);
     let r2 = x87_quiet(e.mem.f32(rpm.addr()));
     let torque = if min > r2 {
-        let y = ((wide(r2) / wide(min)) * wide(p4)) as f32;
-        wide(t) * wide(p1) - wide(y)
+        let y = rounded(fmul(fdiv(f64::from(r2), mem(e, min_rpm)), p4));
+        fsub(fmul(t, p1), y)
     } else {
-        wide(t) * wide(p1) - wide(p4)
+        fsub(fmul(t, p1), p4)
     };
-    e.mem.set_f32(out, torque as f32);
+    e.mem.set_u32(out, x87_store32(torque));
 }
 
 /// This unit's translated functions, by exe address.

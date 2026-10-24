@@ -345,9 +345,38 @@ pub fn fn_005b4a80(e: &mut Engine, a: ScriptArgs) -> bool {
     true
 }
 
+// Translated from 005b4550 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 005b4550 - the /GS stack cookie check (00ec408c) is not translated.
+/// A script command body (no name in the engine map; the eight words of
+/// [`ScriptArgs`], answer in `AL`): parses its parameters into a 0x204-byte
+/// stack buffer (false when they do not parse), then shows that text with
+/// `00703e80(text, 0, 0, callback, 1, 0, 0.0, 0.0, <004c69f0 on 011d38b8>,
+/// 0)`, the callback `0095ee60` when `005a9460` on `011de45c` answers
+/// non-zero and `0095ee70` otherwise. True.
+pub fn fn_005b4550(e: &mut Engine, a: ScriptArgs) -> bool {
+    e.with_stack(0x204, |e, text| {
+        if !a.parse(e, &[text.addr()]) {
+            return false;
+        }
+        let holder = e.global::<u32>(0x011d_e45c);
+        let callback = if e.call(0x005a_9460, &args![holder]).u32() != 0 {
+            0x0095_ee60u32
+        } else {
+            0x0095_ee70
+        };
+        let word = e.call(0x004c_69f0, &args![0x011d_38b8u32]).u32();
+        e.call(
+            SHOW_BOX,
+            &args![text, 0u32, 0u32, callback, 1u32, 0u32, 0.0f32, 0.0f32, word, 0u32],
+        );
+        true
+    })
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x005b_4550, fn_005b4550(ScriptArgs) -> bool),
         entry!(0x005b4630, fn_005b4630(ScriptArgs) -> bool),
         entry!(0x005b4940, fn_005b4940()),
         entry!(
@@ -840,5 +869,75 @@ mod answer_b039_tests {
         assert!(!e
             .call(0x005b_4a80, &args![script_args(reference, 0, result)])
             .bool());
+    }
+}
+
+#[cfg(test)]
+mod n041_tests {
+    use super::*;
+    use crate::units::fallout_shared::tesscriptfunctions::PARSE_PARAMETERS;
+
+    fn ret(eax: u32) -> Ret {
+        Ret {
+            eax,
+            ..Ret::default()
+        }
+    }
+
+    fn calls(e: &Engine, addr: u32) -> Vec<Vec<u32>> {
+        e.call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|(a, _)| *a == addr)
+            .map(|(_, w)| w.clone())
+            .collect()
+    }
+
+    fn script_args() -> ScriptArgs {
+        ScriptArgs {
+            param_info: 1,
+            script_data: 2,
+            this_obj: Ptr::new(3),
+            containing_obj: Ptr::new(4),
+            script_obj: Ptr::new(5),
+            event_list: 6,
+            result: Ptr::new(7),
+            opcode_offset: 8,
+        }
+    }
+
+    #[test]
+    fn fn_005b4550_shows_the_parsed_text() {
+        for (state, callback) in [(1u32, 0x0095_ee60u32), (0, 0x0095_ee70)] {
+            let mut e = Engine::new();
+            e.map(0x011d_e000, 0x1000);
+            e.set_global(0x011d_e45c, 0x9999u32);
+            e.register(PARSE_PARAMETERS, |_, _| ret(1));
+            e.register_double(0x005a_9460, move |_, _| ret(state));
+            e.register(0x004c_69f0, |_, _| ret(0x4242));
+            e.register(SHOW_BOX, |_, _| Ret::default());
+            e.call_log = Some(vec![]);
+            let mut words = Vec::new();
+            script_args().put(&mut words);
+            assert!(e.call(0x005b_4550, &words).bool());
+            let parse = calls(&e, PARSE_PARAMETERS);
+            assert_eq!(parse.len(), 1);
+            assert_eq!(&parse[0][..7], &[1, 2, 8, 3, 4, 5, 6]);
+            let text = parse[0][7];
+            assert_eq!(calls(&e, 0x005a_9460), vec![vec![0x9999]]);
+            assert_eq!(calls(&e, 0x004c_69f0), vec![vec![0x011d_38b8]]);
+            assert_eq!(
+                calls(&e, SHOW_BOX),
+                vec![vec![text, 0, 0, callback, 1, 0, 0, 0, 0x4242, 0]]
+            );
+        }
+        let mut e = Engine::new();
+        e.register(PARSE_PARAMETERS, |_, _| ret(0));
+        e.call_log = Some(vec![]);
+        let mut words = Vec::new();
+        script_args().put(&mut words);
+        assert!(!e.call(0x005b_4550, &words).bool());
+        assert_eq!(e.call_log.as_ref().unwrap().len(), 2);
     }
 }

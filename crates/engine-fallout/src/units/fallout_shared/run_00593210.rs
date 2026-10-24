@@ -67,6 +67,19 @@ pub fn fn_005932b0(e: &mut Engine, this: Ptr, source: Ptr) {
     }
 }
 
+/// `memcmp` (`00ec4835`, `cdecl`).
+const MEMCMP: u32 = 0x00ec_4835;
+
+// Translated from 005932e0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The decal data's comparison (`thiscall`, one word, `RET 4`): true for a
+/// null `other`, else whether `memcmp` finds their 0x24 bytes different.
+pub fn fn_005932e0(e: &mut Engine, this: Ptr, other: u32) -> bool {
+    if other == 0 {
+        return true;
+    }
+    e.call(MEMCMP, &args![this, other, 0x24u32]).u32() != 0
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -75,6 +88,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x0059_3210, fn_00593210()),
         entry!(0x0059_3220, fn_00593220() -> u32),
         entry!(0x0059_32b0, fn_005932b0(Ptr, Ptr)),
+        entry!(0x0059_32e0, fn_005932e0(Ptr, u32) -> bool),
     ]
 }
 
@@ -165,5 +179,28 @@ mod static_init_callee_tests {
                 assert_eq!(log[1..], [(0x0040_1460, vec![0x5000, source, 0x24])]);
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod n040_tests {
+    use super::*;
+
+    #[test]
+    fn fn_005932e0_compares_the_decal_data() {
+        let mut e = Engine::new();
+        e.register(MEMCMP, |e, a| {
+            assert_eq!(a[2], 0x24);
+            Ret {
+                eax: u32::from(e.mem.u32(a[0]) != e.mem.u32(a[1])),
+                ..Ret::default()
+            }
+        });
+        let this = e.mem.alloc(0x24);
+        let other = e.mem.alloc(0x24);
+        assert!(e.call(0x0059_32e0, &[this, 0]).bool());
+        assert!(!e.call(0x0059_32e0, &[this, other]).bool());
+        e.mem.set_u32(other, 1);
+        assert!(e.call(0x0059_32e0, &[this, other]).bool());
     }
 }

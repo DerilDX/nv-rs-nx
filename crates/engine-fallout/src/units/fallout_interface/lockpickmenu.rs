@@ -2337,6 +2337,242 @@ pub fn fn_00791540(e: &mut Engine, _this: Ptr, state: u32) -> bool {
     false
 }
 
+/// `BGSEntryPoint::HandleEntryPoint` (`cdecl`: entry point, actor, the
+/// value's address).
+const HANDLE_ENTRY_POINT: u32 = 0x005e_58f0;
+/// thiscall (setting, value): an int game setting's value set (`0045ce80`).
+const SETTING_SET_INT: u32 = 0x0045_ce80;
+const TILE_GET_CHILD_BY_ID: u32 = 0x00a0_3eb0;
+/// `90.0` (`float`), the lock's angle when it is forced open.
+const FORCE_LOCK_ANGLE: u32 = 0x0102_49d8;
+/// `"LOCK BROKEN!  :("`.
+const LOCK_BROKEN_TEXT: u32 = 0x0107_4618;
+/// `"UILockpickingForceFail"` and the vault boy icon
+/// (`"Interface\Icons\Message Icons\glow_message_vaultboy_surprised.dds"`).
+const FORCE_FAIL_SOUND: u32 = 0x0107_4600;
+const FORCE_FAIL_ICON: u32 = 0x0104_9638;
+/// The game setting (string) of the force-fail message.
+const FORCE_FAIL_SETTING: u32 = 0x011d_3e98;
+/// The step `DoClick` widens or narrows the sweet spot by.
+const SWEET_SPOT_STEP: i32 = 5;
+
+// Translated from 007902f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `LockPickMenu::DoLeave` (engine map): for id 13, sets the interface
+/// root's trait `0xfa9` to the `float` at `01023cd8` (255.0, flag 1); other
+/// ids do nothing.
+pub fn lock_pick_menu_do_leave(e: &mut Engine, _this: Ptr, id: u32, _tile: u32) {
+    if id != 0xd {
+        return;
+    }
+    let alpha = quiet_field(e, ENTER_ALPHA);
+    let interface = e.call(INTERFACE_OBJECT, &args![]).u32();
+    let root = e.call(INTERFACE_ROOT_TILE, &args![interface]).u32();
+    e.call(TILE_SET_FLOAT, &args![root, 0xfa9u32, alpha, 1u32]);
+}
+
+/// [`lock_pick_menu_do_click`]'s fraction of the lock level's skill range
+/// the player has: `(skill - needed) / (2 * range)`, kept within 0..1
+/// (`0040ebd0` with 1.0, then `00404010` with 0.0), stored as a `float`.
+fn skill_fraction(e: &mut Engine, base: u32) -> u32 {
+    let level = e.mem.u32(base + LOCK_LEVEL);
+    let needed_at = SKILL_FOR_LEVEL.wrapping_add(level.wrapping_mul(4));
+    // The next level's word follows.
+    let range = e
+        .mem
+        .i32(needed_at.wrapping_add(4))
+        .wrapping_sub(e.mem.i32(needed_at));
+    let have = e
+        .mem
+        .i32(base + LOCKPICK_SKILL)
+        .wrapping_sub(e.mem.i32(needed_at));
+    let range = f64::from(range);
+    let doubled = x87_add(range, range);
+    let quotient = x87_store32(x87_div(f64::from(have), doubled));
+    let low = e
+        .call(
+            FLOAT_MIN,
+            &args![x87_quiet_bits(quotient), 1.0f32.to_bits()],
+        )
+        .f64();
+    let low = x87_store32(low);
+    let fraction = e.call(FLOAT_MAX, &args![low, 0.0f32.to_bits()]).f64();
+    x87_store32(fraction)
+}
+
+/// Adds the click's share to the two sweet-spot settings of the lock
+/// level (`low` table: `step * (1 - fraction)`, `high` table: `step *
+/// fraction`, each truncated and added to the setting's value).
+fn widen_settings(e: &mut Engine, base: u32, low: u32, high: u32, step: i32, fraction: u32) {
+    let level = e.mem.u32(base + LOCK_LEVEL);
+    let setting = e.mem.u32(low.wrapping_add(level.wrapping_mul(4)));
+    let value = e.call(SETTING_INT, &args![setting]).u32();
+    let rest = x87_sub(1.0, x87_load32(fraction));
+    let share = ftol(e, x87_mul(f64::from(step), rest));
+    let total = share.wrapping_add(e.mem.i32(value));
+    let level = e.mem.u32(base + LOCK_LEVEL);
+    let setting = e.mem.u32(low.wrapping_add(level.wrapping_mul(4)));
+    e.call(SETTING_SET_INT, &args![setting, total]);
+    let level = e.mem.u32(base + LOCK_LEVEL);
+    let setting = e.mem.u32(high.wrapping_add(level.wrapping_mul(4)));
+    let value = e.call(SETTING_INT, &args![setting]).u32();
+    let share = ftol(e, x87_mul(f64::from(step), x87_m32(fraction)));
+    let total = share.wrapping_add(e.mem.i32(value));
+    let level = e.mem.u32(base + LOCK_LEVEL);
+    let setting = e.mem.u32(high.wrapping_add(level.wrapping_mul(4)));
+    e.call(SETTING_SET_INT, &args![setting, total]);
+}
+
+/// Shows a sweet-spot width (`"%d"` into the stack `BSString` `text`) as
+/// text `0xfc4` of the tile at `tile_field`.
+fn show_width(e: &mut Engine, text: Ptr, tile_field: u32, width: u32) {
+    e.call(STRING_FORMAT, &args![text, INTEGER_FORMAT, width]);
+    let shown = e.call(POINTER_GET, &args![text]).u32();
+    let tile = e.mem.u32(tile_field);
+    e.call(TILE_SET_STRING, &args![tile, 0xfc4u32, shown, 1u32]);
+}
+
+// Translated from 00790330 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 00790330 - the C++ exception frame (FS:[0] chain, unwind states 0 and 1 around the two stack strings) is not translated.
+/// `LockPickMenu::DoClick` (engine map), the sweet-spot tuning and force
+/// buttons. 3 and 5 (wider, narrower by 5): the width `011da208` and half
+/// the step on `iTotalSweetSpotRadius`, the width shown on tile 4, the
+/// level's first two width settings (`011a0328`, `011a033c`) shared out by
+/// the skill fraction, and the six spot children (ids 0x11 to 0x16 of tile
+/// 14) widened (`0xfb1`) and moved back by half the step (`0xfa1`). 6 and 8:
+/// the same on `011da20c`, the whole step on the radius, tile 7 and the
+/// other two settings (`011a0350`, `011a0364`); children 1 to 5 by
+/// `i * 2 * step / 5` and `i * step / 5`. 9 (force): entry point 0x20 on a
+/// stack float; a roll of 100 below the force chance (the player's clamped
+/// lockpick skill against the level's) opens the lock (`bForceLockSuccess`,
+/// `fMaxLockAngle` 90.0, state 3); else without a target and a zero entry
+/// value the text `"LOCK BROKEN!  :("` is shown (tile 11) and the state is
+/// 6; else the target's lock gets one more try (`+0xC`, `AddLockChange`),
+/// the force-fail message is shown and the menu closes (`0078e0d0`). 10
+/// closes the menu.
+pub fn lock_pick_menu_do_click(e: &mut Engine, this: Ptr, id: u32, _tile: u32) {
+    let base = this.addr();
+    match id {
+        3 | 5 => {
+            let fraction = skill_fraction(e, base);
+            let sign = if id != 5 { 1 } else { -1 };
+            let step = sign * SWEET_SPOT_STEP;
+            e.with_stack(8, |e, text| {
+                e.call(STRING_CONSTRUCT, &args![text]);
+                let width = e.mem.i32(SWEET_SPOT_WIDTH_A).wrapping_add(step);
+                e.mem.set_u32(SWEET_SPOT_WIDTH_A, width as u32);
+                let radius = (step / 2).wrapping_add(e.mem.i32(base + SWEET_SPOT_RADIUS));
+                e.mem.set_u32(base + SWEET_SPOT_RADIUS, radius as u32);
+                let width = e.mem.u32(SWEET_SPOT_WIDTH_A);
+                show_width(e, text, base + TILES + 4 * 4, width);
+                widen_settings(e, base, SPOT_TABLE_A_LOW, SPOT_TABLE_A_HIGH, step, fraction);
+                for index in 0..6u32 {
+                    let parent = e.mem.u32(base + TILES + 4 * 14);
+                    let child = e
+                        .call(TILE_GET_CHILD_BY_ID, &args![parent, index + 0x11])
+                        .u32();
+                    let value = tile_value(e, child, 0xfb1);
+                    let wider = x87_store32(x87_add(value, f64::from(step)));
+                    e.call(TILE_SET_FLOAT, &args![child, 0xfb1u32, wider, 1u32]);
+                    let value = tile_value(e, child, 0xfa1);
+                    let moved = x87_store32(x87_sub(value, f64::from(step / 2)));
+                    e.call(TILE_SET_FLOAT, &args![child, 0xfa1u32, moved, 1u32]);
+                }
+                e.call(STRING_DESTROY, &args![text]);
+            });
+        }
+        6 | 8 => {
+            let fraction = skill_fraction(e, base);
+            let sign = if id != 8 { 1 } else { -1 };
+            let step = sign * SWEET_SPOT_STEP;
+            e.with_stack(8, |e, text| {
+                e.call(STRING_CONSTRUCT, &args![text]);
+                let width = e.mem.i32(SWEET_SPOT_WIDTH_B).wrapping_add(step);
+                e.mem.set_u32(SWEET_SPOT_WIDTH_B, width as u32);
+                let radius = e.mem.i32(base + SWEET_SPOT_RADIUS).wrapping_add(step);
+                e.mem.set_u32(base + SWEET_SPOT_RADIUS, radius as u32);
+                let width = e.mem.u32(SWEET_SPOT_WIDTH_B);
+                show_width(e, text, base + TILES + 4 * 7, width);
+                widen_settings(e, base, SPOT_TABLE_B_LOW, SPOT_TABLE_B_HIGH, step, fraction);
+                let two: f64 = e.global(SPOT_SCALE);
+                let five: f64 = e.global(SPOT_STEPS);
+                for index in 1..6i32 {
+                    let parent = e.mem.u32(base + TILES + 4 * 14);
+                    let child = e
+                        .call(TILE_GET_CHILD_BY_ID, &args![parent, (index + 0x11) as u32])
+                        .u32();
+                    let value = tile_value(e, child, 0xfb1);
+                    let scaled = x87_mul(x87_mul(f64::from(index), two), f64::from(step));
+                    let wider = x87_store32(x87_add(value, x87_div(scaled, five)));
+                    e.call(TILE_SET_FLOAT, &args![child, 0xfb1u32, wider, 1u32]);
+                    let value = tile_value(e, child, 0xfa1);
+                    let shift = x87_div(f64::from(index.wrapping_mul(step)), five);
+                    let moved = x87_store32(x87_sub(value, shift));
+                    e.call(TILE_SET_FLOAT, &args![child, 0xfa1u32, moved, 1u32]);
+                }
+                e.call(STRING_DESTROY, &args![text]);
+            });
+        }
+        9 => lock_pick_menu_force(e, base),
+        10 => fn_0078e0d0(e),
+        _ => {}
+    }
+}
+
+/// [`lock_pick_menu_do_click`]'s force button (id 9).
+fn lock_pick_menu_force(e: &mut Engine, base: u32) {
+    e.with_stack(4, |e, chance| {
+        e.mem.set_u32(chance.addr(), 0.0f32.to_bits());
+        let player = the_player(e);
+        e.call(HANDLE_ENTRY_POINT, &args![0x20u32, player, chance]);
+        let generator = e.call(RANDOM_GENERATOR, &args![]).u32();
+        let roll = e.call(RANDOM_UNSIGNED, &args![generator, 100u32]).u32();
+        let level = e.mem.u32(base + LOCK_LEVEL);
+        let needed = e
+            .mem
+            .u32(SKILL_FOR_LEVEL.wrapping_add(level.wrapping_mul(4)));
+        let values = the_player(e).wrapping_add(0xa4);
+        let skill = e
+            .call(
+                GET_CLAMPED_ACTOR_VALUE,
+                &args![values, LOCKPICK_ACTOR_VALUE],
+            )
+            .u32();
+        let force = e.call(GET_FORCE_LOCK_CHANCE, &args![skill, needed]).u32();
+        if roll < force {
+            e.mem.set_u8(base + FORCE_LOCK_SUCCESS, 1);
+            let angle = quiet_field(e, FORCE_LOCK_ANGLE);
+            e.mem.set_u32(base + MAX_LOCK_ANGLE, angle);
+            e.mem.set_u32(base + LOCK_STATE, 3);
+            return;
+        }
+        let zero: f64 = e.global(ZERO);
+        if e.mem.u32(base + LOCK_TARGET) == 0 && x87_m32(e.mem.u32(chance.addr())) == zero {
+            let tile = e.mem.u32(base + TILES + 4 * 11);
+            e.call(
+                TILE_SET_STRING,
+                &args![tile, 0xfc4u32, LOCK_BROKEN_TEXT, 1u32],
+            );
+            let tile = e.mem.u32(base + TILES + 4 * 11);
+            e.call(TILE_SET_VALUE, &args![tile, 0xfa3u32, 1u32]);
+            e.mem.set_u32(base + LOCK_STATE, 6);
+            return;
+        }
+        let target = e.mem.u32(base + LOCK_TARGET);
+        let lock = e.call(GET_LOCK, &args![target]).u32();
+        let tries = e.mem.u32(lock + 0xc).wrapping_add(1);
+        e.mem.set_u32(lock + 0xc, tries);
+        let target = e.mem.u32(base + LOCK_TARGET);
+        e.call(ADD_LOCK_CHANGE, &args![target]);
+        let seconds = quiet_field(e, MESSAGE_SECONDS);
+        let text = e.call(SETTING_STRING, &args![FORCE_FAIL_SETTING]).u32();
+        e.call(
+            SHOW_MESSAGE,
+            &args![text, 0u32, FORCE_FAIL_ICON, FORCE_FAIL_SOUND, seconds, 0u32],
+        );
+        fn_0078e0d0(e);
+    });
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -2363,6 +2599,8 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00790f40, lock_pick_menu_rotate_lock(Ptr, u32)),
         entry!(0x00791000, lock_pick_menu_create_sweet_spot(Ptr)),
         entry!(0x00791540, fn_00791540(Ptr, u32) -> bool),
+        entry!(0x0079_02f0, lock_pick_menu_do_leave(Ptr, u32, u32)),
+        entry!(0x0079_0330, lock_pick_menu_do_click(Ptr, u32, u32)),
     ]
 }
 
@@ -3385,5 +3623,194 @@ mod tests {
         assert_eq!(asked, vec![2, 3, 0]);
         e.register(CONTROL_PRESSED, |_, _| ret(0));
         assert!(!e.call(0x0079_1540, &args![0u32, 1u32]).bool());
+    }
+
+    #[test]
+    fn do_leave_restores_the_root_alpha_for_13() {
+        let mut e = world();
+        e.mem.set_f32(ENTER_ALPHA, 255.0);
+        e.register(INTERFACE_ROOT_TILE, |_, _| ret(0x4500));
+        e.call_log = Some(vec![]);
+        e.call(0x0079_02f0, &args![0x10u32, 0xcu32, 0u32]);
+        assert!(calls(&e, TILE_SET_FLOAT).is_empty());
+        e.call(0x0079_02f0, &args![0x10u32, 0xdu32, 0u32]);
+        assert_eq!(calls(&e, INTERFACE_ROOT_TILE), vec![vec![0x4400]]);
+        assert_eq!(
+            calls(&e, TILE_SET_FLOAT),
+            vec![vec![0x4500, 0xfa9, bits(255.0), 1]]
+        );
+    }
+
+    /// A menu at lock level 1 (skill 25 to 50) with skill 40, the tiles'
+    /// children answering `0x7000 + id`, `0xfb1` 20.0 and `0xfa1` 30.0, and
+    /// each level's width settings holding 100.
+    fn click_world() -> (Engine, u32) {
+        let mut e = world();
+        let this = e.mem.alloc(0x100);
+        e.mem.set_u32(this + LOCK_LEVEL, 1);
+        e.mem.set_u32(this + LOCKPICK_SKILL, 40);
+        e.mem.set_u32(this + SWEET_SPOT_RADIUS, 4);
+        e.mem.set_u32(this + TILES + 4 * 14, 0x7e00);
+        e.mem.set_u32(SKILL_FOR_LEVEL + 4, 25);
+        e.mem.set_u32(SKILL_FOR_LEVEL + 8, 50);
+        e.mem.set_u32(SWEET_SPOT_WIDTH_A, 10);
+        e.mem.set_u32(SWEET_SPOT_WIDTH_B, 20);
+        e.set_global(SPOT_SCALE, 2.0f64);
+        e.set_global(SPOT_STEPS, 5.0f64);
+        for table in [
+            SPOT_TABLE_A_LOW,
+            SPOT_TABLE_A_HIGH,
+            SPOT_TABLE_B_LOW,
+            SPOT_TABLE_B_HIGH,
+        ] {
+            let setting = e.mem.alloc(4);
+            e.mem.set_u32(setting, 100);
+            e.mem.set_u32(table + 4, setting);
+        }
+        e.register(SETTING_INT, |_, a| ret(a[0]));
+        e.register(SETTING_SET_INT, |_, _| Ret::default());
+        e.register(TILE_GET_CHILD_BY_ID, |_, a| ret(0x7000 + a[1]));
+        e.register(TILE_GET_FLOAT, |_, a| {
+            float(if a[1] == 0xfb1 { 20.0 } else { 30.0 })
+        });
+        e.register(FLOAT_MIN, |_, a| {
+            float(f64::from(f32::from_bits(a[0]).min(f32::from_bits(a[1]))))
+        });
+        e.register(FLOAT_MAX, |_, a| {
+            float(f64::from(f32::from_bits(a[0]).max(f32::from_bits(a[1]))))
+        });
+        (e, this)
+    }
+
+    #[test]
+    fn do_click_widens_the_first_sweet_spot() {
+        let (mut e, this) = click_world();
+        e.call_log = Some(vec![]);
+        e.call(0x0079_0330, &args![this, 3u32, 0u32]);
+        assert_eq!(e.mem.u32(SWEET_SPOT_WIDTH_A), 15);
+        assert_eq!(e.mem.u32(this + SWEET_SPOT_RADIUS), 6);
+        // (40 - 25) / (2 * 25) = 0.3.
+        assert_eq!(calls(&e, FLOAT_MIN), vec![vec![bits(0.3), bits(1.0)]]);
+        let text = calls(&e, STRING_CONSTRUCT)[0][0];
+        assert_eq!(
+            calls(&e, STRING_FORMAT),
+            vec![vec![text, INTEGER_FORMAT, 15]]
+        );
+        assert_eq!(calls(&e, TILE_SET_STRING)[0][1], 0xfc4);
+        assert_eq!(calls(&e, STRING_DESTROY), vec![vec![text]]);
+        // 5 * 0.7 truncated to 3 and 5 * 0.3 to 1, added to 100.
+        let low = e.mem.u32(SPOT_TABLE_A_LOW + 4);
+        let high = e.mem.u32(SPOT_TABLE_A_HIGH + 4);
+        assert_eq!(
+            calls(&e, SETTING_SET_INT),
+            vec![vec![low, 103], vec![high, 101]]
+        );
+        let sets = calls(&e, TILE_SET_FLOAT);
+        assert_eq!(sets.len(), 12);
+        assert_eq!(sets[0], vec![0x7011, 0xfb1, bits(25.0), 1]);
+        assert_eq!(sets[1], vec![0x7011, 0xfa1, bits(28.0), 1]);
+        assert_eq!(sets[11][0], 0x7016);
+        // Narrower (5): -5, half of it -2.
+        e.call(0x0079_0330, &args![this, 5u32, 0u32]);
+        assert_eq!(e.mem.u32(SWEET_SPOT_WIDTH_A), 10);
+        assert_eq!(e.mem.u32(this + SWEET_SPOT_RADIUS), 4);
+    }
+
+    #[test]
+    fn do_click_widens_the_second_sweet_spot() {
+        let (mut e, this) = click_world();
+        e.call_log = Some(vec![]);
+        e.call(0x0079_0330, &args![this, 8u32, 0u32]);
+        assert_eq!(e.mem.u32(SWEET_SPOT_WIDTH_B), 15);
+        assert_eq!(e.mem.i32(this + SWEET_SPOT_RADIUS), -1);
+        let low = e.mem.u32(SPOT_TABLE_B_LOW + 4);
+        let high = e.mem.u32(SPOT_TABLE_B_HIGH + 4);
+        // -5 * 0.7 truncated to -3 and -5 * 0.3 to -1.
+        assert_eq!(
+            calls(&e, SETTING_SET_INT),
+            vec![vec![low, 97], vec![high, 99]]
+        );
+        let sets = calls(&e, TILE_SET_FLOAT);
+        assert_eq!(sets.len(), 10);
+        // Child 1: 20 + 1 * 2 * -5 / 5 = 18; 30 - (1 * -5) / 5 = 31.
+        assert_eq!(sets[0], vec![0x7012, 0xfb1, bits(18.0), 1]);
+        assert_eq!(sets[1], vec![0x7012, 0xfa1, bits(31.0), 1]);
+        assert_eq!(sets[9], vec![0x7016, 0xfa1, bits(35.0), 1]);
+        e.call(0x0079_0330, &args![this, 6u32, 0u32]);
+        assert_eq!(e.mem.u32(SWEET_SPOT_WIDTH_B), 20);
+    }
+
+    #[test]
+    fn do_click_forces_the_lock() {
+        let (mut e, this) = click_world();
+        e.mem.set_f32(FORCE_LOCK_ANGLE, 90.0);
+        e.mem.set_f32(MESSAGE_SECONDS, 2.0);
+        e.set_global(LOCK_PICK_MENU_ME, this);
+        e.register(HANDLE_ENTRY_POINT, |_, _| Ret::default());
+        e.register(RANDOM_GENERATOR, |_, _| ret(0x6600));
+        e.register(RANDOM_UNSIGNED, |_, _| ret(10));
+        e.register(GET_CLAMPED_ACTOR_VALUE, |_, _| ret(45));
+        e.register(GET_FORCE_LOCK_CHANCE, |_, _| ret(20));
+        e.call_log = Some(vec![]);
+        e.call(0x0079_0330, &args![this, 9u32, 0u32]);
+        let player: u32 = e.global(PLAYER);
+        assert_eq!(
+            calls(&e, HANDLE_ENTRY_POINT)[0][0..2].to_vec(),
+            vec![0x20, player]
+        );
+        assert_eq!(calls(&e, RANDOM_UNSIGNED), vec![vec![0x6600, 100]]);
+        assert_eq!(
+            calls(&e, GET_CLAMPED_ACTOR_VALUE),
+            vec![vec![player + 0xa4, LOCKPICK_ACTOR_VALUE]]
+        );
+        assert_eq!(calls(&e, GET_FORCE_LOCK_CHANCE), vec![vec![45, 25]]);
+        assert_eq!(e.mem.u8(this + FORCE_LOCK_SUCCESS), 1);
+        assert_eq!(e.mem.u32(this + MAX_LOCK_ANGLE), bits(90.0));
+        assert_eq!(e.mem.u32(this + LOCK_STATE), 3);
+
+        // The roll fails without a target: the lock is broken.
+        e.register(RANDOM_UNSIGNED, |_, _| ret(30));
+        e.mem.set_u32(this + TILES + 4 * 11, 0x7b00);
+        e.call_log = Some(vec![]);
+        e.call(0x0079_0330, &args![this, 9u32, 0u32]);
+        assert_eq!(
+            calls(&e, TILE_SET_STRING),
+            vec![vec![0x7b00, 0xfc4, LOCK_BROKEN_TEXT, 1]]
+        );
+        assert_eq!(calls(&e, TILE_SET_VALUE), vec![vec![0x7b00, 0xfa3, 1]]);
+        assert_eq!(e.mem.u32(this + LOCK_STATE), 6);
+
+        // With a target: one more try on its lock, the message, closing.
+        let lock = e.mem.alloc(0x10);
+        e.mem.set_u32(lock + 0xc, 2);
+        e.register_double(GET_LOCK, move |_, _| ret(lock));
+        e.register(SETTING_STRING, |_, _| ret(0x5555));
+        e.mem.set_u32(this + LOCK_TARGET, 0x7c00);
+        e.call_log = Some(vec![]);
+        e.call(0x0079_0330, &args![this, 9u32, 0u32]);
+        assert_eq!(e.mem.u32(lock + 0xc), 3);
+        assert_eq!(calls(&e, ADD_LOCK_CHANGE), vec![vec![0x7c00]]);
+        assert_eq!(calls(&e, SETTING_STRING), vec![vec![FORCE_FAIL_SETTING]]);
+        assert_eq!(
+            calls(&e, SHOW_MESSAGE),
+            vec![vec![
+                0x5555,
+                0,
+                FORCE_FAIL_ICON,
+                FORCE_FAIL_SOUND,
+                bits(2.0),
+                0
+            ]]
+        );
+        assert_eq!(e.mem.u32(this + LOCK_STATE), 7);
+
+        // 10 closes; other ids do nothing.
+        e.mem.set_u32(this + LOCK_STATE, 0);
+        e.call(0x0079_0330, &args![this, 10u32, 0u32]);
+        assert_eq!(e.mem.u32(this + LOCK_STATE), 7);
+        e.mem.set_u32(this + LOCK_STATE, 0);
+        e.call_log = Some(vec![]);
+        e.call(0x0079_0330, &args![this, 4u32, 0u32]);
+        assert_eq!(e.call_log.as_ref().unwrap().len(), 1);
     }
 }

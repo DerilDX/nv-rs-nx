@@ -160,6 +160,246 @@ pub fn fn_00615330(e: &mut Engine, this: Ptr, text: u32) -> bool {
     })
 }
 
+/// `00403df0` (`ECX` = setting): the setting's string.
+const SETTING_STRING: u32 = 0x0040_3df0;
+/// `00403e20` (`ECX` = setting): the address of the setting's `float`.
+const SETTING_FLOAT: u32 = 0x0040_3e20;
+/// `00408da0` (`ECX` = string): its characters.
+const STRING_TEXT: u32 = 0x0040_8da0;
+/// `sprintf_s` wrapper (`00406d00`, cdecl: buffer, size, format, ...).
+const SPRINTF: u32 = 0x0040_6d00;
+/// `"%s\n%s"` (`0104bb5c`).
+const FORMAT_TWO_LINES: u32 = 0x0104_bb5c;
+/// `00616950` (`ECX` = reputation, which; `RET 4`): the reputation's
+/// level byte for fame (1) or infamy (0).
+const REPUTATION_LEVEL: u32 = 0x0061_6950;
+/// `007052f0` (cdecl, six words): shows the text as a corner message.
+const SHOW_MESSAGE: u32 = 0x0070_52f0;
+/// The message's display time (`010162c0`, a `float`).
+const MESSAGE_TIME: u32 = 0x0101_62c0;
+/// The player singleton pointer (`011dea3c`).
+const PLAYER: u32 = 0x011d_ea3c;
+/// `00953c50` (`ECX` = player, a word; `RET 4`): whether the player is in
+/// combat (`PlayerCharacter::IsPlayerCharacterInCombat` in the engine
+/// map).
+const PLAYER_IN_COMBAT: u32 = 0x0095_3c50;
+/// `Interface::InDialog` (engine map name of `007050d0`; no arguments).
+const IN_DIALOG: u32 = 0x0070_50d0;
+/// The reputation's floor for a decrease (`01012060`, a `double`).
+const REPUTATION_FLOOR: u32 = 0x0101_2060;
+/// The settings giving the amount for the change levels 1..=5 (the five
+/// words `00615c90` and `00615fa0` build on the stack).
+const LEVEL_SETTINGS: [u32; 5] = [
+    0x011c_bc88,
+    0x011c_bcc8,
+    0x011c_ba70,
+    0x011c_bc54,
+    0x011c_bb70,
+];
+
+/// Where a reputation change gets its operand: the `float` argument, or
+/// the setting of a change level (`00403e20`, read after the first level
+/// check).
+#[derive(Clone, Copy)]
+enum ChangeAmount {
+    Float(u32),
+    Level(i32),
+}
+
+/// The common body of `00615730`, `00615a00`, `00615c90` and `00615fa0`:
+/// fame (`which` 1, +0x44) or infamy (+0x48) is raised (clamped to the
+/// maximum at +0x40) or lowered (clamped to the `double` at `01012060`),
+/// the change is shown (`"%s\n%s"` of the setting text and the name at
+/// +0x18, then `007052f0` with the message setting, 0 and the `float` at
+/// `010162c0`), and when the level (`00616950`) changed the flag at +0x4C is
+/// set and, outside combat and dialog, the message box (`006155f0`) shows,
+/// else the player gets `006159e0`; last the form is marked changed
+/// (virtual slot 0x48 with 2).
+fn change_reputation(e: &mut Engine, this: Ptr, which: i32, amount: ChangeAmount, raise: bool) {
+    let base = this.addr();
+    e.with_stack(0x100, |e, text| {
+        let before = e.call(REPUTATION_LEVEL, &args![this, which as u32]).u8();
+        let fame = which == 1;
+        let operand = match amount {
+            ChangeAmount::Float(bits) => bits,
+            ChangeAmount::Level(level) => {
+                let setting = LEVEL_SETTINGS[(level - 1) as usize];
+                let at = e.call(SETTING_FLOAT, &args![setting]).u32();
+                e.mem.u32(at)
+            }
+        };
+        let field = base + if fame { 0x44 } else { 0x48 };
+        let current = x87_load32(e.mem.u32(field));
+        let changed = if raise {
+            x87_add(current, x87_m32(operand))
+        } else {
+            x87_sub(current, x87_m32(operand))
+        };
+        e.mem.set_u32(field, x87_store32(changed));
+        let value = x87_load32(e.mem.u32(field));
+        let clamped = if raise {
+            let maximum = x87_load32(e.mem.u32(base + 0x40));
+            if value <= maximum {
+                e.mem.u32(field)
+            } else {
+                e.mem.u32(base + 0x40)
+            }
+        } else {
+            let floor: f64 = e.global(REPUTATION_FLOOR);
+            if value >= floor {
+                e.mem.u32(field)
+            } else {
+                0
+            }
+        };
+        e.mem.set_u32(field, x87_quiet_bits(clamped));
+        let (text_setting, message_setting, flag) = match (fame, raise) {
+            (true, true) => (0x011c_bac0u32, 0x011c_bd5cu32, 1u32),
+            (false, true) => (0x011c_ba58, 0x011c_bad0, 0),
+            (true, false) => (0x011c_bb98, 0x011c_bc34, 0),
+            (false, false) => (0x011c_ba94, 0x011c_ba00, 1),
+        };
+        let line = e.call(SETTING_STRING, &args![text_setting]).u32();
+        let name = e.call(STRING_TEXT, &args![base + 0x18]).u32();
+        e.call(SPRINTF, &args![text, 0xfau32, FORMAT_TWO_LINES, name, line]);
+        let after = e.call(REPUTATION_LEVEL, &args![this, u32::from(fame)]).u8();
+        let mut level_changed = false;
+        if after != before {
+            e.mem.set_u32(base + 0x4c, flag);
+            level_changed = true;
+        }
+        let message = e.call(SETTING_STRING, &args![message_setting]).u32();
+        let time = x87_quiet_bits(e.global::<u32>(MESSAGE_TIME));
+        e.call(SHOW_MESSAGE, &args![text, 0u32, message, 0u32, time, 0u32]);
+        if level_changed {
+            let player = e.global::<u32>(PLAYER);
+            if e.call(PLAYER_IN_COMBAT, &args![player, 0u32]).u8() == 0
+                && e.call(IN_DIALOG, &[]).u8() == 0
+            {
+                fn_006155f0(e, this);
+            } else {
+                let player = e.global::<u32>(PLAYER);
+                fn_006159e0(e, Ptr::new(player), this.addr());
+            }
+        }
+    });
+    e.vcall(base, 0x48, &args![2u32]);
+}
+
+// Translated from 00615580 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Sets fame (+0x44, `which` 1) or infamy (+0x48) to `value` (`FLD`/`FSTP`)
+/// and marks the form changed (virtual slot 0x48 with 2; `RET 8`).
+pub fn fn_00615580(e: &mut Engine, this: Ptr, which: i32, value: f32) {
+    let field = this.addr() + if which == 1 { 0x44 } else { 0x48 };
+    e.mem.set_u32(field, x87_quiet_bits(value.to_bits()));
+    e.vcall(this.addr(), 0x48, &args![2u32]);
+}
+
+// Translated from 006155f0 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 006155f0 - the /GS stack cookie check (00ec408c) is not translated
+/// Shows the reputation level message box: `"%s\n%s"`-style text
+/// (`0104bb5c`) of the title (`00616710`) and the level text (`00616890`)
+/// in a 0x200-byte buffer, `00718630` on the tutorial manager (`004b7210`
+/// + 0x4D4) with 0x27, 0 and 0x1F4, then the message box (`00703f10`) with
+/// the text, `006167d0`, the name at +0x18, the button setting `011cbcb0`
+/// (the flag at +0x4C is 1) or `011cba30`, the callback `00615720`, 1,
+/// 0x17, two zero floats, the setting `011d38b8` and 0.
+pub fn fn_006155f0(e: &mut Engine, this: Ptr) {
+    e.with_stack(0x200, |e, text| {
+        let level_text = e.call(0x0061_6890, &args![this]).u32();
+        let title = e.call(0x0061_6710, &args![this]).u32();
+        e.call(
+            SPRINTF,
+            &args![text, 0x200u32, FORMAT_TWO_LINES, title, level_text],
+        );
+        let manager = e.call(0x004b_7210, &[]).u32();
+        e.call(
+            0x0071_8630,
+            &args![manager.wrapping_add(0x4d4), 0x27u32, 0u32, 0x1f4u32],
+        );
+        let button_setting = if e.mem.u32(this.addr() + 0x4c) == 1 {
+            0x011c_bcb0u32
+        } else {
+            0x011c_ba30u32
+        };
+        let last = e.call(SETTING_STRING, &args![0x011d_38b8u32]).u32();
+        let button = e.call(SETTING_STRING, &args![button_setting]).u32();
+        let name = e.call(STRING_TEXT, &args![this.addr() + 0x18]).u32();
+        let image = e.call(0x0061_67d0, &args![this]).u32();
+        e.call(
+            0x0070_3f10,
+            &args![
+                text,
+                image,
+                name,
+                button,
+                0x0061_5720u32,
+                1u32,
+                0x17u32,
+                0u32,
+                0u32,
+                last,
+                0u32
+            ],
+        );
+    });
+}
+
+// Translated from 00615720 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The message box's callback (`cdecl`, no arguments): stores the box's
+/// result byte (`Interface::GetMessageMenuResult`, `00703fa0`) at
+/// `0119a0bc`.
+pub fn fn_00615720(e: &mut Engine) {
+    let result = e.call(0x0070_3fa0, &[]).u8();
+    e.set_global::<u8>(0x0119_a0bc, result);
+}
+
+// Translated from 00615730 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 00615730 - the /GS stack cookie check (00ec408c) is not translated
+/// Raises fame (`which` 1) or infamy by `amount` (`RET 8`), clamped to
+/// the maximum at +0x40 (`change_reputation`).
+pub fn fn_00615730(e: &mut Engine, this: Ptr, which: i32, amount: f32) {
+    change_reputation(e, this, which, ChangeAmount::Float(amount.to_bits()), true);
+}
+
+// Translated from 006159e0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Stores a word at +0xE0C (`RET 4`; on the player: the reputation whose
+/// level changed while the message box could not show).
+pub fn fn_006159e0(e: &mut Engine, this: Ptr, value: u32) {
+    e.mem.set_u32(this.addr() + 0xe0c, value);
+}
+
+// Translated from 00615a00 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 00615a00 - the /GS stack cookie check (00ec408c) is not translated
+/// Lowers fame (`which` 1) or infamy by `amount` (`RET 8`), not below the
+/// `double` at `01012060` (`change_reputation`).
+pub fn fn_00615a00(e: &mut Engine, this: Ptr, which: i32, amount: f32) {
+    change_reputation(e, this, which, ChangeAmount::Float(amount.to_bits()), false);
+}
+
+// Translated from 00615c90 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 00615c90 - the /GS stack cookie check (00ec408c) is not translated
+/// Raises fame (`which` 1) or infamy by the amount of change `level` 1..=5
+/// (the settings `011cbc88`, `011cbcc8`, `011cba70`, `011cbc54`,
+/// `011cbb70`; `RET 8`); any other level does nothing.
+pub fn fn_00615c90(e: &mut Engine, this: Ptr, which: i32, level: i32) {
+    if level <= 0 || level >= 6 {
+        return;
+    }
+    change_reputation(e, this, which, ChangeAmount::Level(level), true);
+}
+
+// Translated from 00615fa0 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 00615fa0 - the /GS stack cookie check (00ec408c) is not translated
+/// Lowers fame (`which` 1) or infamy by the amount of change `level`
+/// 1..=5 (as `00615c90`; `RET 8`); any other level does nothing.
+pub fn fn_00615fa0(e: &mut Engine, this: Ptr, which: i32, level: i32) {
+    if level <= 0 || level >= 6 {
+        return;
+    }
+    change_reputation(e, this, which, ChangeAmount::Level(level), false);
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -172,6 +412,14 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x0061_5300, fn_00615300(i32) -> i32),
         entry!(0x0061_51f0, fn_006151f0(Ptr, i32, i32) -> u32),
         entry!(0x0061_5330, fn_00615330(Ptr, u32) -> bool),
+        entry!(0x0061_5580, fn_00615580(Ptr, i32, f32)),
+        entry!(0x0061_55f0, fn_006155f0(Ptr)),
+        entry!(0x0061_5720, fn_00615720()),
+        entry!(0x0061_5730, fn_00615730(Ptr, i32, f32)),
+        entry!(0x0061_59e0, fn_006159e0(Ptr, u32)),
+        entry!(0x0061_5a00, fn_00615a00(Ptr, i32, f32)),
+        entry!(0x0061_5c90, fn_00615c90(Ptr, i32, i32)),
+        entry!(0x0061_5fa0, fn_00615fa0(Ptr, i32, i32)),
     ]
 }
 
@@ -352,6 +600,204 @@ mod b022_tests {
             if changed {
                 assert_eq!(sets[0], vec![race + 0x50c, compares[0][1], 0]);
             }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests_n042 {
+    use super::*;
+
+    type Log = Vec<(u32, Vec<u32>)>;
+
+    fn run(e: &mut Engine, addr: u32, words: &[u32]) -> (Ret, Log) {
+        e.call_log = Some(vec![]);
+        let result = e.call(addr, words);
+        let log = e
+            .call_log
+            .take()
+            .unwrap()
+            .into_iter()
+            .filter(|(a, _)| *a != addr)
+            .collect();
+        (result, log)
+    }
+
+    fn calls(log: &Log, addr: u32) -> Vec<Vec<u32>> {
+        log.iter()
+            .filter(|(a, _)| *a == addr)
+            .map(|(_, w)| w.clone())
+            .collect()
+    }
+
+    const MARK_CHANGED: u32 = 0x0f00_1000;
+
+    /// A reputation with a vtable whose slot 0x48 is a logged double.
+    fn engine() -> (Engine, u32) {
+        let mut e = Engine::new();
+        e.register(MARK_CHANGED, |_, _| Ret::default());
+        let mut slots = vec![0u32; 0x4c / 4];
+        slots[0x48 / 4] = MARK_CHANGED;
+        e.put_vtable(0x0f00_0000, &slots);
+        let this = e.mem.alloc(0x50);
+        e.mem.set_u32(this, 0x0f00_0000);
+        (e, this)
+    }
+
+    #[test]
+    fn set_value_and_small_helpers() {
+        let (mut e, this) = engine();
+        let (_, log) = run(&mut e, 0x0061_5580, &[this, 1, 0x7f80_0001]);
+        assert_eq!(e.mem.u32(this + 0x44), 0x7fc0_0001);
+        assert_eq!(log, vec![(MARK_CHANGED, vec![this, 2])]);
+        e.call(0x0061_5580, &args![this, 0u32, 2.5f32]);
+        assert_eq!(e.mem.u32(this + 0x48), 2.5f32.to_bits());
+        let player = e.mem.alloc(0xe10);
+        e.call(0x0061_59e0, &args![player, 0x1234u32]);
+        assert_eq!(e.mem.u32(player + 0xe0c), 0x1234);
+        e.register(0x0070_3fa0, |_, _| 0x1_0003u32.into_ret());
+        e.map(0x0119_a0bc, 4);
+        e.call(0x0061_5720, &[]);
+        assert_eq!(e.mem.u8(0x0119_a0bc), 3);
+    }
+
+    fn change_engine(level_before: u32, level_after: u32) -> (Engine, u32) {
+        let (mut e, this) = engine();
+        e.register(SETTING_STRING, |_, a| (a[0] + 1).into_ret());
+        e.register(STRING_TEXT, |_, _| 0x7100u32.into_ret());
+        e.register(SPRINTF, |_, _| Ret::default());
+        e.register(SHOW_MESSAGE, |_, _| Ret::default());
+        let calls_seen = e.mem.alloc(4);
+        e.register_double(REPUTATION_LEVEL, move |e, _| {
+            let n = e.mem.u32(calls_seen);
+            e.mem.set_u32(calls_seen, n + 1);
+            if n % 2 == 0 {
+                level_before
+            } else {
+                level_after
+            }
+            .into_ret()
+        });
+        e.map(MESSAGE_TIME, 4);
+        e.mem.set_u32(MESSAGE_TIME, 3.0f32.to_bits());
+        e.map(REPUTATION_FLOOR, 8);
+        e.set_global::<f64>(REPUTATION_FLOOR, 0.0);
+        e.map(PLAYER, 4);
+        e.mem.set_u32(PLAYER, 0x4400);
+        e.register(PLAYER_IN_COMBAT, |_, _| Ret::default());
+        e.register(IN_DIALOG, |_, _| Ret::default());
+        // The message box's callees.
+        for addr in [
+            0x0061_6890,
+            0x0061_6710,
+            0x004b_7210,
+            0x0071_8630,
+            0x0061_67d0,
+            0x0070_3f10,
+        ] {
+            e.register(addr, |_, _| Ret::default());
+        }
+        e.mem.set_u32(this + 0x40, 100.0f32.to_bits());
+        (e, this)
+    }
+
+    #[test]
+    fn raising_fame_clamps_to_the_maximum_and_shows_the_change() {
+        let (mut e, this) = change_engine(2, 2);
+        e.mem.set_u32(this + 0x44, 90.0f32.to_bits());
+        let (_, log) = run(&mut e, 0x0061_5730, &[this, 1, 25.0f32.to_bits()]);
+        assert_eq!(f32::from_bits(e.mem.u32(this + 0x44)), 100.0);
+        let text = calls(&log, SPRINTF)[0][0];
+        assert_eq!(
+            calls(&log, SPRINTF),
+            vec![vec![text, 0xfa, FORMAT_TWO_LINES, 0x7100, 0x011c_bac1]]
+        );
+        assert_eq!(
+            calls(&log, REPUTATION_LEVEL),
+            vec![vec![this, 1], vec![this, 1]]
+        );
+        assert_eq!(
+            calls(&log, SHOW_MESSAGE),
+            vec![vec![text, 0, 0x011c_bd5d, 0, 3.0f32.to_bits(), 0]]
+        );
+        assert!(calls(&log, 0x0070_3f10).is_empty());
+        assert_eq!(log.last().unwrap(), &(MARK_CHANGED, vec![this, 2]));
+        // Below the maximum the sum stays.
+        e.mem.set_u32(this + 0x44, 10.0f32.to_bits());
+        e.call(0x0061_5730, &args![this, 1u32, 25.0f32]);
+        assert_eq!(f32::from_bits(e.mem.u32(this + 0x44)), 35.0);
+    }
+
+    #[test]
+    fn a_level_change_shows_the_box_or_tells_the_player() {
+        let (mut e, this) = change_engine(1, 2);
+        e.mem.set_u32(this + 0x48, 10.0f32.to_bits());
+        e.mem.set_u32(this + 0x4c, 1);
+        let (_, log) = run(&mut e, 0x0061_5730, &[this, 0, 5.0f32.to_bits()]);
+        assert_eq!(f32::from_bits(e.mem.u32(this + 0x48)), 15.0);
+        // Infamy raised: the flag goes to 0, the box shows with 011cba30.
+        assert_eq!(e.mem.u32(this + 0x4c), 0);
+        assert_eq!(
+            calls(&log, REPUTATION_LEVEL),
+            vec![vec![this, 0], vec![this, 0]]
+        );
+        let shown = calls(&log, 0x0070_3f10);
+        assert_eq!(shown.len(), 1);
+        assert_eq!(shown[0][3], 0x011c_ba31);
+        assert_eq!(shown[0][4], 0x0061_5720);
+        assert_eq!(shown[0][9], 0x011d_38b9);
+        assert_eq!(calls(&log, 0x0071_8630), vec![vec![0x4d4, 0x27, 0, 0x1f4]]);
+        // In combat the player gets the reputation instead.
+        e.register(PLAYER_IN_COMBAT, |_, _| 1u32.into_ret());
+        let player = e.mem.alloc(0xe10);
+        e.mem.set_u32(PLAYER, player);
+        let (_, log) = run(&mut e, 0x0061_5730, &[this, 0, 5.0f32.to_bits()]);
+        assert!(calls(&log, 0x0070_3f10).is_empty());
+        assert_eq!(e.mem.u32(player + 0xe0c), this);
+    }
+
+    #[test]
+    fn lowering_clamps_to_the_floor() {
+        let (mut e, this) = change_engine(3, 2);
+        e.register(PLAYER_IN_COMBAT, |_, _| 1u32.into_ret());
+        let player = e.mem.alloc(0xe10);
+        e.mem.set_u32(PLAYER, player);
+        e.mem.set_u32(this + 0x44, 10.0f32.to_bits());
+        let (_, log) = run(&mut e, 0x0061_5a00, &[this, 1, 25.0f32.to_bits()]);
+        assert_eq!(e.mem.u32(this + 0x44), 0);
+        assert_eq!(e.mem.u32(this + 0x4c), 0);
+        assert_eq!(calls(&log, SPRINTF)[0][4], 0x011c_bb99);
+        assert_eq!(calls(&log, SHOW_MESSAGE)[0][2], 0x011c_bc35);
+        e.mem.set_u32(this + 0x48, 30.0f32.to_bits());
+        let (_, log) = run(&mut e, 0x0061_5a00, &[this, 0, 25.0f32.to_bits()]);
+        assert_eq!(f32::from_bits(e.mem.u32(this + 0x48)), 5.0);
+        assert_eq!(e.mem.u32(this + 0x4c), 1);
+        assert_eq!(calls(&log, SPRINTF)[0][4], 0x011c_ba95);
+        assert_eq!(calls(&log, SHOW_MESSAGE)[0][2], 0x011c_ba01);
+        // A NaN result is clamped to 0.
+        e.mem.set_u32(this + 0x48, 0x7fc0_0000);
+        e.call(0x0061_5a00, &args![this, 0u32, 1.0f32]);
+        assert_eq!(e.mem.u32(this + 0x48), 0);
+    }
+
+    #[test]
+    fn level_changes_take_the_amount_from_the_settings() {
+        let (mut e, this) = change_engine(2, 2);
+        let amount = e.mem.alloc(4);
+        e.mem.set_u32(amount, 7.0f32.to_bits());
+        e.register_double(SETTING_FLOAT, move |_, _| amount.into_ret());
+        e.mem.set_u32(this + 0x44, 1.0f32.to_bits());
+        let (_, log) = run(&mut e, 0x0061_5c90, &[this, 1, 3]);
+        assert_eq!(f32::from_bits(e.mem.u32(this + 0x44)), 8.0);
+        assert_eq!(calls(&log, SETTING_FLOAT), vec![vec![0x011c_ba70]]);
+        let (_, log) = run(&mut e, 0x0061_5fa0, &[this, 1, 5]);
+        assert_eq!(f32::from_bits(e.mem.u32(this + 0x44)), 1.0);
+        assert_eq!(calls(&log, SETTING_FLOAT), vec![vec![0x011c_bb70]]);
+        for level in [0u32, 6, 0xffff_ffff] {
+            let (_, log) = run(&mut e, 0x0061_5c90, &[this, 1, level]);
+            assert!(log.is_empty());
+            let (_, log) = run(&mut e, 0x0061_5fa0, &[this, 1, level]);
+            assert!(log.is_empty());
         }
     }
 }

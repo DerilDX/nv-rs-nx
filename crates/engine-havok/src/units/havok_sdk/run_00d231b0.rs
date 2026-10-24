@@ -171,35 +171,47 @@ pub fn fn_00d231b0(
     other_direction: Ptr,
     out: Ptr,
 ) -> bool {
+    // The SSE parts with the SSE NaN rules (the destination operand first), the x87 parts
+    // with the x87 choice of NaN; `rounded` is a store to a scratch float.
+    use crate::sse::{add, addps, mulps, subps};
+    let dot = |a: Vec4, b: Vec4| {
+        let products = mulps(a, b);
+        add(products[2], add(products[1], products[0]))
+    };
+    let (fadd, fsub, fmul, fdiv) = (x87_add, x87_sub, x87_mul, x87_div);
+    let rounded = |value: f64| f32::from_bits(x87_store32(value));
+    let wide = |value: f32| f64::from(value);
     let p1 = load_vec(e, from.addr());
     let d1 = load_vec(e, direction.addr());
     let p2 = load_vec(e, other_from.addr());
     let d2 = load_vec(e, other_direction.addr());
-    let d12 = dot3(d2, d1);
-    let offset = vsub(p2, p1);
-    let along_first = dot3(d1, offset);
-    let along_second = dot3(d2, offset);
-    let first_squared = dot3(d1, d1);
-    let second_squared = dot3(d2, d2);
-    let product = f64::from(second_squared) * f64::from(first_squared);
-    let d12_squared = f64::from(d12) * f64::from(d12);
-    let denominator = (product - d12_squared) as f32;
-    let product_stored = product as f32;
-    let threshold =
-        ((d12_squared + f64::from(product_stored.abs())) * e.mem.f64(LINE_EPSILON)) as f32;
+    let d12 = dot(d2, d1);
+    let offset = subps(p2, p1);
+    let along_first = dot(d1, offset);
+    let along_second = dot(d2, offset);
+    let first_squared = dot(d1, d1);
+    let second_squared = dot(d2, d2);
+    let product = fmul(wide(second_squared), wide(first_squared));
+    let d12_squared = fmul(wide(d12), wide(d12));
+    let denominator = rounded(fsub(product, d12_squared));
+    let product_stored = rounded(product);
+    let sum = fadd(d12_squared, wide(product_stored.abs()));
+    let threshold = rounded(fmul(sum, e.mem.f64(LINE_EPSILON)));
     let parallel = !(threshold < denominator.abs());
     let s = if parallel {
         0.0
     } else {
-        let numerator = f64::from(second_squared) * f64::from(along_first)
-            - f64::from(along_second) * f64::from(d12);
-        (numerator / f64::from(denominator)) as f32
+        let numerator = fsub(
+            fmul(wide(second_squared), wide(along_first)),
+            fmul(wide(along_second), wide(d12)),
+        );
+        rounded(fdiv(numerator, wide(denominator)))
     };
-    let t = ((f64::from(d12) * f64::from(s) - f64::from(along_second)) / f64::from(second_squared))
-        as f32;
-    let point1 = vadd(scale(s, d1), p1);
-    let point2 = vadd(scale(t, d2), p2);
-    let distance = dot3(vsub(point1, point2), vsub(point1, point2));
+    let shifted = fsub(fmul(wide(d12), wide(s)), wide(along_second));
+    let t = rounded(fdiv(shifted, wide(second_squared)));
+    let point1 = addps(mulps([s; 4], d1), p1);
+    let point2 = addps(mulps([t; 4], d2), p2);
+    let distance = dot(subps(point1, point2), subps(point1, point2));
     let out = out.addr();
     e.mem.set_f32(out, x87_quiet(distance));
     store_vec(e, out + 0x10, point1);
@@ -987,7 +999,8 @@ pub fn fn_00d248a0(e: &mut Engine, this: Ptr, info: Ptr, flag: u8) -> Ptr {
     for lane in 0..4 {
         e.mem.set_f32(
             me + 0x50 + lane * 4,
-            extent[lane as usize] * scale_lanes[lane as usize],
+            // `MULPS` with the extent as the destination (the SSE NaN rules).
+            crate::sse::mul(extent[lane as usize], scale_lanes[lane as usize]),
         );
     }
     let p_loaded = x87_load32(e.mem.u32(at + 0x1c));
@@ -1022,7 +1035,7 @@ pub fn fn_00d248a0(e: &mut Engine, this: Ptr, info: Ptr, flag: u8) -> Ptr {
         let value = if lane == 1 {
             0.0
         } else {
-            factor * kept[lane as usize]
+            crate::sse::mul(factor, kept[lane as usize])
         };
         e.mem.set_f32(me + 0x40 + lane * 4, value);
     }

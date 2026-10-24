@@ -927,6 +927,534 @@ pub fn fn_005180b0(
     true
 }
 
+/// `TESForm::StartForm` (`004855a0`) and `TESForm::CloseForm` (`00485680`),
+/// `thiscall` on the form, no stack words.
+const START_FORM: u32 = 0x0048_55a0;
+const CLOSE_FORM: u32 = 0x0048_5680;
+/// The component saves (engine map; `thiscall`): `TESFullName::Save`
+/// (`00487010`), `TESModelTextureSwap::Save` (`0048a520`, three chunk
+/// tags), `TESScriptableForm::Save` (`0048cca0`) and
+/// `BGSDestructibleObjectForm::Save` (`00477f20`).
+const FULL_NAME_SAVE: u32 = 0x0048_7010;
+const MODEL_TEXTURE_SWAP_SAVE: u32 = 0x0048_a520;
+const SCRIPTABLE_FORM_SAVE: u32 = 0x0048_cca0;
+const DESTRUCTIBLE_SAVE: u32 = 0x0047_7f20;
+/// One-word (`00485910`) and one-byte (`004858f0`) chunks, cdecl(chunk,
+/// value).
+const ADD_CHUNK_WORD: u32 = 0x0048_5910;
+const ADD_CHUNK_BYTE: u32 = 0x0048_58f0;
+/// The form-id getter (`0084e3a0`, `thiscall`: the word at +0xc).
+const FORM_ID: u32 = 0x0084_e3a0;
+/// `BSSimpleList` node helpers (`thiscall` on a node): whether it holds no
+/// item (`008256d0`), its item's address (`006815c0`), the next node
+/// (`00726070`); `00905820` (`RET 4`: the address of an item) appends to a
+/// list; `005ae380` counts the nodes with an item; `005f65d0` (`RET 4`:
+/// the address of an item) whether a list holds that item.
+const NODE_IS_EMPTY: u32 = 0x0082_56d0;
+const NODE_ITEM: u32 = 0x0068_15c0;
+const NODE_NEXT: u32 = 0x0072_6070;
+const LIST_APPEND: u32 = 0x0090_5820;
+const LIST_COUNT: u32 = 0x005a_e380;
+const LIST_HOLDS: u32 = 0x005f_65d0;
+/// The door's random-teleport list (`00871a30`: `this + 0x88`) and its
+/// clear (`00519550`).
+const TELEPORT_LIST: u32 = 0x0087_1a30;
+const TELEPORT_LIST_CLEAR: u32 = 0x0051_9550;
+/// The door's sound getters (`thiscall`): +0x78 (`00407820`), +0x7c
+/// (`00407840`), +0x80 (`004fb070`).
+const SOUND_78: u32 = 0x0040_7820;
+const SOUND_7C: u32 = 0x0040_7840;
+const SOUND_80: u32 = 0x004f_b070;
+/// `__RTDynamicCast` (`00ec43fb`, cdecl, five words) and the type
+/// descriptors `TESForm` (`01183028`), `TESBoundObject` (`01183108`) and
+/// `TESObjectDOOR` (`01186530`).
+const RT_DYNAMIC_CAST: u32 = 0x00ec_43fb;
+const TYPE_TES_FORM: u32 = 0x0118_3028;
+const TYPE_TES_BOUND_OBJECT: u32 = 0x0118_3108;
+const TYPE_TES_OBJECT_DOOR: u32 = 0x0118_6530;
+/// `TESForm::CopyAllComponents` (`004851b0`, `RET 4`) and
+/// `TESForm::CompareAllComponents` (`00485270`, `RET 4`).
+const COPY_ALL_COMPONENTS: u32 = 0x0048_51b0;
+const COMPARE_ALL_COMPONENTS: u32 = 0x0048_5270;
+/// `NiTPointerMap<int,bool>`'s and `NiTMapBase<..,int,bool>`'s vtables
+/// (their slot 0 is `00519b50` and `00519c80`), the map's clear
+/// (`00438af0`), `NiAlloc` (`00aa1070`, cdecl), `NiFree` (`00aa10f0`, cdecl)
+/// and the `memset` wrapper (`00403d30`, cdecl).
+const POINTER_MAP_VTABLE: u32 = 0x0102_b3d0;
+const MAP_BASE_VTABLE: u32 = 0x0102_b3f0;
+const MAP_REMOVE_ALL: u32 = 0x0043_8af0;
+const NI_ALLOC: u32 = 0x00aa_1070;
+const NI_FREE: u32 = 0x00aa_10f0;
+const MEMSET: u32 = 0x0040_3d30;
+/// `005195e0`'s callees: `TESObjectREFR::GetWorldSpace` (`00575d70`), the
+/// reference's `008d6f30` and `00425fd0` on its answer, the visited map's
+/// constructor (`00519b20`, `RET 4`: the bucket count), lookup (`0057c850`,
+/// `RET 8`: key, out byte) and insert (`0084d310`, `RET 8`: key, value), the
+/// random number (`00487f50`), the player's `00962810` (`RET 4`) and
+/// `00962850` (`RET 8`), and the cell search `0054afb0` (cdecl, three
+/// words).
+const GET_WORLD_SPACE: u32 = 0x0057_5d70;
+const REFERENCE_PARENT_008D6F30: u32 = 0x008d_6f30;
+const PARENT_CHECK_00425FD0: u32 = 0x0042_5fd0;
+const VISITED_MAP_CONSTRUCT: u32 = 0x0051_9b20;
+const VISITED_MAP_LOOKUP: u32 = 0x0057_c850;
+const VISITED_MAP_INSERT: u32 = 0x0084_d310;
+const RANDOM: u32 = 0x0048_7f50;
+const PLAYER_PREFERRED_DOOR: u32 = 0x0096_2810;
+const PLAYER_SET_DOOR_CHOICE: u32 = 0x0096_2850;
+const FIND_DESTINATION: u32 = 0x0054_afb0;
+/// `00519810`'s callees: the reference's base object
+/// (`BGSSaveFormBuffer::GetForm` in the engine map, `007af430`), its
+/// teleport data (`00568e50`) and `TESObjectREFR::AddTeleport` (`00568e70`),
+/// the linked door setter on the teleport data (`00537e90`, `RET 4`), the
+/// reference's marker (`00569b20`), position (vtable slot `+0x1f4`) and
+/// rotation (`00430830`), `TESObjectREFR::GetDeltaForAngle` (`00572500`,
+/// `RET 8`: out vector, angle), the vector's scale (`00439180`, `RET 4`),
+/// sum (`00439e90`, `RET 8`: out, other) and set (`00416870`, `RET 0xc`),
+/// the teleport data's position (`006f4ed0`, `RET 4`) and rotation
+/// (`0043a280`, `RET 4`) setters, a float setting's address (`00403e20`),
+/// and `00404010` (cdecl, two floats, the answer in `ST0`).
+const BASE_OBJECT: u32 = 0x007a_f430;
+const TELEPORT_DATA: u32 = 0x0056_8e50;
+const ADD_TELEPORT: u32 = 0x0056_8e70;
+const SET_LINKED_DOOR: u32 = 0x0053_7e90;
+const TELEPORT_MARKER: u32 = 0x0056_9b20;
+const REFERENCE_ROTATION: u32 = 0x0043_0830;
+const DELTA_FOR_ANGLE: u32 = 0x0057_2500;
+const VECTOR_SCALE: u32 = 0x0043_9180;
+const VECTOR_ADD: u32 = 0x0043_9e90;
+const VECTOR_SET: u32 = 0x0041_6870;
+const SET_TELEPORT_POSITION: u32 = 0x006f_4ed0;
+const SET_TELEPORT_ROTATION: u32 = 0x0043_a280;
+const SETTING_FLOAT_ADDRESS: u32 = 0x0040_3e20;
+const FLOAT_PAIR_00404010: u32 = 0x0040_4010;
+/// The two float settings `00519810` reads (`011c9398`, `011c93c4`), the
+/// double added to the second (100.0 at `01017a40`) and the angle at
+/// `0102b3c8`.
+const DOOR_DISTANCE_SETTING: u32 = 0x011c_9398;
+const LOAD_DOOR_DISTANCE_SETTING: u32 = 0x011c_93c4;
+const DISTANCE_EXTRA: u32 = 0x0101_7a40;
+const DOOR_ANGLE: u32 = 0x0102_b3c8;
+/// `00759030`'s: the sound form of its argument (`005e9100`).
+const ARRIVAL_SOUND: u32 = 0x005e_9100;
+
+// Translated from 00517c30 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The door's save (engine map: no name; no stack words): `StartForm`, the
+/// full name (+0x30), the model with texture swaps (+0x3c; `MODL`, `MODT`,
+/// `MODS`), script (+0x5c), destructible data (+0x68), the sounds at +0x78,
+/// +0x7c, +0x80 by id when set (`SNAM`, `ANAM`, `BNAM`), the flags byte
+/// (+0x84) as `FNAM`, the id of each item of the teleport list (+0x88) as
+/// `TNAM` until a node holds none, `CloseForm`.
+pub fn fn_00517c30(e: &mut Engine, this: Ptr) {
+    let base = this.addr();
+    e.call(START_FORM, &args![this]);
+    e.call(FULL_NAME_SAVE, &args![base + 0x30]);
+    e.call(
+        MODEL_TEXTURE_SWAP_SAVE,
+        &args![base + 0x3c, MODL, MODT, MODS],
+    );
+    e.call(SCRIPTABLE_FORM_SAVE, &args![base + 0x5c]);
+    e.call(DESTRUCTIBLE_SAVE, &args![base + 0x68]);
+    for (offset, tag) in [(0x78u32, SNAM), (0x7c, ANAM), (0x80, BNAM)] {
+        let form = e.mem.u32(base + offset);
+        if form != 0 {
+            let id = e.call(FORM_ID, &args![form]).u32();
+            e.call(ADD_CHUNK_WORD, &args![tag, id]);
+        }
+    }
+    let flags = u32::from(e.mem.u8(base + 0x84));
+    e.call(ADD_CHUNK_BYTE, &args![FNAM, flags]);
+    let mut node = e.call(TELEPORT_LIST, &args![this]).u32();
+    while node != 0 && !e.call(NODE_IS_EMPTY, &args![node]).bool() {
+        let item = e.call(NODE_ITEM, &args![node]).u32();
+        let form = e.mem.u32(item);
+        let id = e.call(FORM_ID, &args![form]).u32();
+        e.call(ADD_CHUNK_WORD, &args![TNAM, id]);
+        node = e.call(NODE_NEXT, &args![node]).u32();
+    }
+    e.call(CLOSE_FORM, &args![this]);
+}
+
+/// `other` as a `TESObjectDOOR` (`__RTDynamicCast` from `TESForm`), or 0.
+fn as_door(e: &mut Engine, other: u32) -> u32 {
+    e.call(
+        RT_DYNAMIC_CAST,
+        &args![other, 0u32, TYPE_TES_FORM, TYPE_TES_OBJECT_DOOR, 0u32],
+    )
+    .u32()
+}
+
+// Translated from 00517d70 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The door's copy (engine map: no name; `RET 4`): when `other` is a
+/// `TESObjectDOOR`, empties this teleport list (`00519550`) and appends each
+/// of the other's items until a node holds none (`00905820` on the current
+/// destination node, which then moves on to its next node when there is
+/// one), copies the flags byte (+0x84) and the three sounds (+0x78, +0x7c,
+/// +0x80), then all components (`TESForm::CopyAllComponents` with
+/// `other`).
+pub fn fn_00517d70(e: &mut Engine, this: Ptr, other: u32) {
+    let source = as_door(e, other);
+    if source == 0 {
+        return;
+    }
+    e.call(TELEPORT_LIST_CLEAR, &args![this]);
+    let mut node = e.call(TELEPORT_LIST, &args![source]).u32();
+    let mut target = e.call(TELEPORT_LIST, &args![this]).u32();
+    while node != 0 && !e.call(NODE_IS_EMPTY, &args![node]).bool() {
+        let item = e.call(NODE_ITEM, &args![node]).u32();
+        e.call(LIST_APPEND, &args![target, item]);
+        if e.call(NODE_NEXT, &args![target]).u32() != 0 {
+            target = e.call(NODE_NEXT, &args![target]).u32();
+        }
+        node = e.call(NODE_NEXT, &args![node]).u32();
+    }
+    let flags = e.mem.u8(source + 0x84);
+    e.mem.set_u8(this.addr() + 0x84, flags);
+    for (getter, offset) in [(SOUND_78, 0x78u32), (SOUND_7C, 0x7c), (SOUND_80, 0x80)] {
+        let sound = e.call(getter, &args![source]).u32();
+        e.mem.set_u32(this.addr() + offset, sound);
+    }
+    e.call(COPY_ALL_COMPONENTS, &args![this, other]);
+}
+
+// Translated from 00517e70 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The door's compare (engine map: no name; `RET 4`): true when `other` is
+/// no `TESObjectDOOR`, when `TESForm::CompareAllComponents` (with the cast
+/// form) says they differ, when a sound (+0x78, +0x7c, +0x80) or the flags
+/// byte differs, when the teleport lists hold different numbers of items
+/// (`005ae380`, this one's first), or when an item of the other's list is
+/// not in this one's (`005f65d0`).
+pub fn fn_00517e70(e: &mut Engine, this: Ptr, other: u32) -> bool {
+    let source = as_door(e, other);
+    if source == 0 {
+        return true;
+    }
+    if e.call(COMPARE_ALL_COMPONENTS, &args![this, source]).u32() as u8 != 0 {
+        return true;
+    }
+    for (getter, offset) in [(SOUND_78, 0x78u32), (SOUND_7C, 0x7c), (SOUND_80, 0x80)] {
+        let theirs = e.call(getter, &args![source]).u32();
+        if e.mem.u32(this.addr() + offset) != theirs {
+            return true;
+        }
+    }
+    if e.mem.u8(this.addr() + 0x84) != e.mem.u8(source + 0x84) {
+        return true;
+    }
+    let mut node = e.call(TELEPORT_LIST, &args![source]).u32();
+    let list = e.call(TELEPORT_LIST, &args![this]).u32();
+    let mine = e.call(LIST_COUNT, &args![list]).u32();
+    if mine != e.call(LIST_COUNT, &args![node]).u32() {
+        return true;
+    }
+    while node != 0 && !e.call(NODE_IS_EMPTY, &args![node]).bool() {
+        let item = e.call(NODE_ITEM, &args![node]).u32();
+        let list = e.call(TELEPORT_LIST, &args![this]).u32();
+        if e.call(LIST_HOLDS, &args![list, item]).u32() as u8 == 0 {
+            return true;
+        }
+        node = e.call(NODE_NEXT, &args![node]).u32();
+    }
+    false
+}
+
+// Translated from 00517fd0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`ECX` only, plain `RET`): whether bit 2 (0x04)
+/// of the door's flags byte at +0x84 is set.
+pub fn fn_00517fd0(e: &mut Engine, this: Ptr) -> bool {
+    door_flag(e, this, 0x04)
+}
+
+// Translated from 00518030 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Sets (`on` non-zero) or clears bit 3 (0x08) of the door's flags byte at
+/// +0x84 (engine map: no name; `RET 4`, a byte).
+pub fn fn_00518030(e: &mut Engine, this: Ptr, on: u8) {
+    let flags = e.mem.u8(this.addr() + 0x84);
+    let flags = if on != 0 { flags | 0x08 } else { flags & 0xf7 };
+    e.mem.set_u8(this.addr() + 0x84, flags);
+}
+
+// Translated from 005195e0 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 005195e0 - the FS:[0] exception frame (it destroys the visited map if a step throws) is not translated.
+/// Picks a random teleport destination for the door (engine map: no name;
+/// `RET 8`, the reference and a word it does not read): 0 without a
+/// reference or without a world space (`TESObjectREFR::GetWorldSpace`, else
+/// the reference's `008d6f30` when `00425fd0` passes it). Otherwise, with a
+/// visited map (`00519b20` with 0x25 buckets) and the player's preferred
+/// index (`00962810` with the door), up to as many tries as the teleport
+/// list holds items, until a destination is found: a random index
+/// (`00487f50` modulo the count) not marked in the map (redrawn while the
+/// map holds it with a set value), the list's item at that index (0 past
+/// the end), `0054afb0(item, world space, &alternative)` as the
+/// destination; the first index giving an alternative is kept as the
+/// choice; a destination at the preferred index becomes the alternative
+/// and the search goes on; the index the walk stopped at is marked
+/// (`0084d310` with 1). With an index drawn, the player gets its low byte
+/// (`00962850` with the door). The map is destroyed (`00519bf0`). Answers
+/// the destination.
+pub fn fn_005195e0(e: &mut Engine, this: Ptr, reference: u32, _unused_2: u32) -> u32 {
+    let mut found = 0u32;
+    if reference == 0 {
+        return found;
+    }
+    let mut world_space = e.call(GET_WORLD_SPACE, &args![reference]).u32();
+    if world_space == 0 {
+        let parent = e.call(REFERENCE_PARENT_008D6F30, &args![reference]).u32();
+        if parent != 0 {
+            let parent = e.call(REFERENCE_PARENT_008D6F30, &args![reference]).u32();
+            if e.call(PARENT_CHECK_00425FD0, &args![parent]).u32() as u8 != 0 {
+                world_space = e.call(REFERENCE_PARENT_008D6F30, &args![reference]).u32();
+            }
+        }
+    }
+    if world_space == 0 {
+        return found;
+    }
+    e.with_stack(0x18, |e, locals| {
+        let map = locals.addr();
+        let alternative_at = locals.addr() + 0x10;
+        let marked_at = locals.addr() + 0x14;
+        e.call(VISITED_MAP_CONSTRUCT, &args![map, 0x25u32]);
+        let mut tries = 0u32;
+        let list = e.call(TELEPORT_LIST, &args![this]).u32();
+        let count = e.call(LIST_COUNT, &args![list]).u32();
+        let mut index = 0xffff_ffffu32;
+        let mut _choice = 0xffff_ffffu32;
+        let player = e.global::<u32>(PLAYER_REFERENCE);
+        let preferred = u32::from(e.call(PLAYER_PREFERRED_DOOR, &args![player, this]).u32() as u8);
+        while tries < count && found == 0 {
+            tries += 1;
+            index = e.call(RANDOM, &[]).u32() % count;
+            e.mem.set_u8(marked_at, 0);
+            while e
+                .call(VISITED_MAP_LOOKUP, &args![map, index, marked_at])
+                .u32() as u8
+                != 0
+                && e.mem.u8(marked_at) != 0
+            {
+                index = e.call(RANDOM, &[]).u32() % count;
+                e.mem.set_u8(marked_at, 0);
+            }
+            let mut item = 0u32;
+            let mut position = 0u32;
+            let mut node = e.call(TELEPORT_LIST, &args![this]).u32();
+            while node != 0 && !e.call(NODE_IS_EMPTY, &args![node]).bool() {
+                if position == index {
+                    let at = e.call(NODE_ITEM, &args![node]).u32();
+                    item = e.mem.u32(at);
+                    break;
+                }
+                position += 1;
+                node = e.call(NODE_NEXT, &args![node]).u32();
+            }
+            found = e
+                .call(FIND_DESTINATION, &args![item, world_space, alternative_at])
+                .u32();
+            if e.mem.u32(alternative_at) != 0 && _choice == 0xffff_ffff {
+                _choice = index;
+            }
+            if found != 0 && index == preferred {
+                e.mem.set_u32(alternative_at, found);
+                _choice = index;
+                found = 0;
+            }
+            e.call(VISITED_MAP_INSERT, &args![map, position, 1u32]);
+        }
+        if index != 0xffff_ffff {
+            let player = e.global::<u32>(PLAYER_REFERENCE);
+            e.call(PLAYER_SET_DOOR_CHOICE, &args![player, this, index & 0xff]);
+        }
+        fn_00519bf0(e, Ptr::new(map));
+    });
+    found
+}
+
+/// One side of `00519810`: the teleport data `data` leads to `target`
+/// (`00537e90`); its position and rotation are the target's marker's when
+/// it has one, else the target's position moved along its facing
+/// (`GetDeltaForAngle` with the angle at `0102b3c8`, scaled by
+/// `load_distance` when the target's door `target_door` has flag 0x02,
+/// else by `distance`) and its rotation with the angle added to its third
+/// component.
+fn place_teleport(
+    e: &mut Engine,
+    data: u32,
+    target: u32,
+    target_door: u32,
+    (distance, load_distance, angle): (u32, u32, u32),
+) {
+    e.call(SET_LINKED_DOOR, &args![data, target]);
+    let marker = e.call(TELEPORT_MARKER, &args![target]).u32();
+    if marker != 0 {
+        let position = e.vcall(marker, 0x1f4, &[]).u32();
+        e.call(SET_TELEPORT_POSITION, &args![data, position]);
+        let rotation = e.call(REFERENCE_ROTATION, &args![marker]).u32();
+        e.call(SET_TELEPORT_ROTATION, &args![data, rotation]);
+        return;
+    }
+    e.with_stack(0x24, |e, vectors| {
+        let delta = vectors.addr();
+        let sum = vectors.addr() + 0xc;
+        let rotation = vectors.addr() + 0x18;
+        e.call(DELTA_FOR_ANGLE, &args![target, delta, angle]);
+        let scale = if fn_00517fa0(e, Ptr::new(target_door)) {
+            load_distance
+        } else {
+            distance
+        };
+        e.call(VECTOR_SCALE, &args![delta, scale]);
+        let position = e.vcall(target, 0x1f4, &[]).u32();
+        let moved = e.call(VECTOR_ADD, &args![position, sum, delta]).u32();
+        e.call(SET_TELEPORT_POSITION, &args![data, moved]);
+        let facing = e.call(REFERENCE_ROTATION, &args![target]).u32();
+        let z = x87_store32(x87_add(x87_load32(e.mem.u32(facing + 8)), x87_m32(angle)));
+        let set = e.call(VECTOR_SET, &args![rotation, 0u32, 0u32, z]).u32();
+        e.call(SET_TELEPORT_ROTATION, &args![data, set]);
+    });
+}
+
+// Translated from 00519810 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Links two door references (engine map: no name; cdecl, two words):
+/// nothing when either is null, they are the same, either's base object is
+/// no `TESObjectDOOR`, either already has teleport data (`00568e50`), or
+/// either's new teleport data (`TESObjectREFR::AddTeleport`) is null.
+/// Otherwise reads the distance setting (`011c9398`) and the load distance
+/// (`00404010` of it and the setting at `011c93c4` plus 100.0), and makes
+/// each side lead to the other (`place_teleport`; the first's data to the
+/// second door first).
+pub fn fn_00519810(e: &mut Engine, first: u32, second: u32) {
+    if first == 0 || second == 0 || first == second {
+        return;
+    }
+    let base = e.call(BASE_OBJECT, &args![first]).u32();
+    let first_door = e
+        .call(
+            RT_DYNAMIC_CAST,
+            &args![
+                base,
+                0u32,
+                TYPE_TES_BOUND_OBJECT,
+                TYPE_TES_OBJECT_DOOR,
+                0u32
+            ],
+        )
+        .u32();
+    let base = e.call(BASE_OBJECT, &args![second]).u32();
+    let second_door = e
+        .call(
+            RT_DYNAMIC_CAST,
+            &args![
+                base,
+                0u32,
+                TYPE_TES_BOUND_OBJECT,
+                TYPE_TES_OBJECT_DOOR,
+                0u32
+            ],
+        )
+        .u32();
+    if first_door == 0 || second_door == 0 {
+        return;
+    }
+    if e.call(TELEPORT_DATA, &args![first]).u32() != 0
+        || e.call(TELEPORT_DATA, &args![second]).u32() != 0
+    {
+        return;
+    }
+    let first_data = e.call(ADD_TELEPORT, &args![first]).u32();
+    let second_data = e.call(ADD_TELEPORT, &args![second]).u32();
+    if first_data == 0 || second_data == 0 {
+        return;
+    }
+    let setting = e
+        .call(SETTING_FLOAT_ADDRESS, &args![DOOR_DISTANCE_SETTING])
+        .u32();
+    let distance = x87_quiet_bits(e.mem.u32(setting));
+    let setting = e
+        .call(SETTING_FLOAT_ADDRESS, &args![LOAD_DOOR_DISTANCE_SETTING])
+        .u32();
+    let widened = x87_store32(x87_add(
+        x87_load32(e.mem.u32(setting)),
+        e.global::<f64>(DISTANCE_EXTRA),
+    ));
+    let pair = e
+        .call(
+            FLOAT_PAIR_00404010,
+            &args![distance, x87_quiet_bits(widened)],
+        )
+        .f64();
+    let load_distance = x87_store32(pair);
+    let angle = x87_quiet_bits(e.global::<u32>(DOOR_ANGLE));
+    let floats = (distance, load_distance, angle);
+    place_teleport(e, first_data, second, second_door, floats);
+    place_teleport(e, second_data, first, first_door, floats);
+}
+
+// Translated from 00519b80 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The `NiTMapBase<NiTPointerAllocator<unsigned int>,int,bool>` constructor
+/// (engine map: no name; `RET 4`): its vtable (`0102b3f0`), `size` buckets
+/// at +4, 0 items at +0xc, and `4 * size` bytes of buckets (`NiAlloc`, not
+/// checked) at +8, cleared. Returns `this`.
+pub fn fn_00519b80(e: &mut Engine, this: Ptr, size: u32) -> Ptr {
+    let map = this.addr();
+    e.mem.set_u32(map, MAP_BASE_VTABLE);
+    e.mem.set_u32(map + 4, size);
+    e.mem.set_u32(map + 0xc, 0);
+    let bytes = e.mem.u32(map + 4) << 2;
+    let buckets = e.call(NI_ALLOC, &args![bytes]).u32();
+    e.mem.set_u32(map + 8, buckets);
+    let bytes = e.mem.u32(map + 4) << 2;
+    let buckets = e.mem.u32(map + 8);
+    e.call(MEMSET, &args![buckets, 0u32, bytes]);
+    this
+}
+
+// Translated from 00519bf0 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 00519bf0 - the FS:[0] exception frame (it runs the base destructor if the clear throws) is not translated.
+/// The `NiTPointerMap<int,bool>` destructor body (the scalar deleting
+/// destructor `00519b50` runs it; no stack words): its vtable (`0102b3d0`),
+/// the map emptied (`00438af0`), then the base destructor (`fn_00519c50`).
+pub fn fn_00519bf0(e: &mut Engine, this: Ptr) {
+    e.mem.set_u32(this.addr(), POINTER_MAP_VTABLE);
+    e.call(MAP_REMOVE_ALL, &args![this]);
+    fn_00519c50(e, this);
+}
+
+// Translated from 00519c50 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The `NiTMapBase<NiTPointerAllocator<unsigned int>,int,bool>` destructor
+/// body (the scalar deleting destructor `00519c80` runs it; no stack
+/// words): its vtable (`0102b3f0`), the map emptied (`00438af0`), the
+/// buckets freed (`NiFree`).
+pub fn fn_00519c50(e: &mut Engine, this: Ptr) {
+    e.mem.set_u32(this.addr(), MAP_BASE_VTABLE);
+    e.call(MAP_REMOVE_ALL, &args![this]);
+    let buckets = e.mem.u32(this.addr() + 8);
+    e.call(NI_FREE, &args![buckets]);
+}
+
+// Translated from 00759030 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 00759030 - the FS:[0] exception frame (it destroys the sound handle if Play throws) is not translated.
+/// `TESObjectDOOR::DoorTeleportPlayerArrivalCallback` (engine map; `RET 4`,
+/// `this` not read): plays the sound of `source` (`005e9100`) by its form id
+/// (`BSAudio::GetSoundHandleByNumericID` with flags 0x101 into a stack
+/// handle, `BSSoundHandle::Play` with 0) and destroys the handle
+/// (`00483710`). The handle the game keeps on its stack is a block here.
+pub fn tes_object_door_door_teleport_player_arrival_callback(
+    e: &mut Engine,
+    _this: Ptr,
+    source: u32,
+) {
+    let sound = e.call(ARRIVAL_SOUND, &args![source]).u32();
+    let id = e.call(FORM_ID, &args![sound]).u32();
+    e.with_stack(0xc, |e, handle| {
+        let audio = e.call(AUDIO, &[]).u32();
+        let filled = e
+            .call(SOUND_BY_ID, &args![audio, handle, id, 0x101u32])
+            .u32();
+        e.call(SOUND_PLAY, &args![filled, 0u32]);
+        e.call(SOUND_HANDLE_DESTROY, &args![handle]);
+    });
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -943,6 +1471,20 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x0051_8cf0, fn_00518cf0(Ptr)),
         entry!(0x0051_8b70, fn_00518b70(Ptr, Ptr)),
         entry!(0x0051_80b0, fn_005180b0(Ptr, Ptr, Ptr, u32, u32, u32) -> bool),
+        entry!(0x0051_7c30, fn_00517c30(Ptr)),
+        entry!(0x0051_7d70, fn_00517d70(Ptr, u32)),
+        entry!(0x0051_7e70, fn_00517e70(Ptr, u32) -> bool),
+        entry!(0x0051_7fd0, fn_00517fd0(Ptr) -> bool),
+        entry!(0x0051_8030, fn_00518030(Ptr, u8)),
+        entry!(0x0051_95e0, fn_005195e0(Ptr, u32, u32) -> u32),
+        entry!(0x0051_9810, fn_00519810(u32, u32)),
+        entry!(0x0051_9b80, fn_00519b80(Ptr, u32) -> Ptr),
+        entry!(0x0051_9bf0, fn_00519bf0(Ptr)),
+        entry!(0x0051_9c50, fn_00519c50(Ptr)),
+        entry!(
+            0x0075_9030,
+            tes_object_door_door_teleport_player_arrival_callback(Ptr, u32)
+        ),
     ]
 }
 
@@ -2168,5 +2710,455 @@ mod door_tests {
                 vec![vec![NPC_REF, 0x0006_4000, 0x0006_5000]]
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod save_copy_teleport_tests {
+    use super::*;
+
+    type Log = Vec<(u32, Vec<u32>)>;
+
+    fn ret(eax: u32) -> Ret {
+        Ret {
+            eax,
+            ..Ret::default()
+        }
+    }
+
+    fn only(log: &Log, addr: u32) -> Vec<Vec<u32>> {
+        log.iter()
+            .filter(|(a, _)| *a == addr)
+            .map(|(_, w)| w.clone())
+            .collect()
+    }
+
+    fn run(e: &mut Engine, addr: u32, words: &[u32]) -> (Ret, Log) {
+        e.call_log = Some(vec![]);
+        let r = e.call(addr, words);
+        (r, e.call_log.take().unwrap())
+    }
+
+    fn quiet(e: &mut Engine, addrs: &[u32]) {
+        for a in addrs {
+            e.register(*a, |_, _| Ret::default());
+        }
+    }
+
+    /// List doubles: a node is two words (item, next); a door's teleport
+    /// list is its `+0x88` node.
+    fn list_engine() -> Engine {
+        let mut e = Engine::new();
+        e.register(TELEPORT_LIST, |_, a| ret(a[0] + 0x88));
+        e.register(NODE_ITEM, |_, a| ret(a[0]));
+        e.register(NODE_NEXT, |e, a| ret(e.mem.u32(a[0] + 4)));
+        e.register(NODE_IS_EMPTY, |e, a| ret(u32::from(e.mem.u32(a[0]) == 0)));
+        e.register(LIST_COUNT, |e, a| {
+            let (mut node, mut n) = (a[0], 0);
+            while node != 0 {
+                n += u32::from(e.mem.u32(node) != 0);
+                node = e.mem.u32(node + 4);
+            }
+            ret(n)
+        });
+        e.register(LIST_HOLDS, |e, a| {
+            let item = e.mem.u32(a[1]);
+            let mut node = a[0];
+            while node != 0 {
+                if e.mem.u32(node) == item {
+                    return ret(1);
+                }
+                node = e.mem.u32(node + 4);
+            }
+            ret(0)
+        });
+        e.register(LIST_APPEND, |e, a| {
+            let item = e.mem.u32(a[1]);
+            if e.mem.u32(a[0]) == 0 {
+                e.mem.set_u32(a[0], item);
+                return Ret::default();
+            }
+            let mut node = a[0];
+            while e.mem.u32(node + 4) != 0 {
+                node = e.mem.u32(node + 4);
+            }
+            let new = e.mem.alloc(8);
+            e.mem.set_u32(new, item);
+            e.mem.set_u32(node + 4, new);
+            Ret::default()
+        });
+        e.register(TELEPORT_LIST_CLEAR, |e, a| {
+            e.mem.set_u32(a[0] + 0x88, 0);
+            e.mem.set_u32(a[0] + 0x8c, 0);
+            Ret::default()
+        });
+        e.register(SOUND_78, |e, a| ret(e.mem.u32(a[0] + 0x78)));
+        e.register(SOUND_7C, |e, a| ret(e.mem.u32(a[0] + 0x7c)));
+        e.register(SOUND_80, |e, a| ret(e.mem.u32(a[0] + 0x80)));
+        e.register(FORM_ID, |e, a| ret(e.mem.u32(a[0] + 0xc)));
+        e.register(RT_DYNAMIC_CAST, |_, a| ret(a[0]));
+        e
+    }
+
+    /// A door (0x90 bytes) whose teleport list holds `items`.
+    fn door(e: &mut Engine, items: &[u32]) -> u32 {
+        let this = e.mem.alloc(0x90);
+        let mut node = this + 0x88;
+        for (i, item) in items.iter().enumerate() {
+            e.mem.set_u32(node, *item);
+            if i + 1 < items.len() {
+                let next = e.mem.alloc(8);
+                e.mem.set_u32(node + 4, next);
+                node = next;
+            }
+        }
+        this
+    }
+
+    fn items(e: &Engine, this: u32) -> Vec<u32> {
+        let mut out = vec![];
+        let mut node = this + 0x88;
+        while node != 0 && e.mem.u32(node) != 0 {
+            out.push(e.mem.u32(node));
+            node = e.mem.u32(node + 4);
+        }
+        out
+    }
+
+    fn form(e: &mut Engine, id: u32) -> u32 {
+        let form = e.mem.alloc(0x18);
+        e.mem.set_u32(form + 0xc, id);
+        form
+    }
+
+    #[test]
+    fn save_writes_components_sounds_flags_and_teleports() {
+        let mut e = list_engine();
+        quiet(
+            &mut e,
+            &[
+                START_FORM,
+                CLOSE_FORM,
+                FULL_NAME_SAVE,
+                MODEL_TEXTURE_SWAP_SAVE,
+                SCRIPTABLE_FORM_SAVE,
+                DESTRUCTIBLE_SAVE,
+                ADD_CHUNK_WORD,
+                ADD_CHUNK_BYTE,
+            ],
+        );
+        let a = form(&mut e, 0x31);
+        let b = form(&mut e, 0x32);
+        let this = door(&mut e, &[a, b]);
+        e.mem.set_u32(this + 0x7c, a);
+        e.mem.set_u8(this + 0x84, 0x15);
+        let (_, log) = run(&mut e, 0x0051_7c30, &args![this]);
+        assert_eq!(
+            only(&log, MODEL_TEXTURE_SWAP_SAVE),
+            vec![vec![this + 0x3c, MODL, MODT, MODS]]
+        );
+        assert_eq!(only(&log, SCRIPTABLE_FORM_SAVE), vec![vec![this + 0x5c]]);
+        assert_eq!(only(&log, DESTRUCTIBLE_SAVE), vec![vec![this + 0x68]]);
+        assert_eq!(only(&log, ADD_CHUNK_BYTE), vec![vec![FNAM, 0x15]]);
+        assert_eq!(
+            only(&log, ADD_CHUNK_WORD),
+            vec![vec![ANAM, 0x31], vec![TNAM, 0x31], vec![TNAM, 0x32]]
+        );
+        assert_eq!(only(&log, CLOSE_FORM), vec![vec![this]]);
+    }
+
+    #[test]
+    fn copy_and_compare_follow_lists_flags_and_sounds() {
+        let mut e = list_engine();
+        quiet(&mut e, &[COPY_ALL_COMPONENTS]);
+        e.register(COMPARE_ALL_COMPONENTS, |_, _| ret(0x100));
+        let other = door(&mut e, &[0x501, 0x502]);
+        e.mem.set_u8(other + 0x84, 6);
+        e.mem.set_u32(other + 0x78, 0x78);
+        e.mem.set_u32(other + 0x7c, 0x7c);
+        e.mem.set_u32(other + 0x80, 0x80);
+        let this = door(&mut e, &[0x999]);
+        assert!(e.call(0x0051_7e70, &args![this, other]).bool());
+        let (_, log) = run(&mut e, 0x0051_7d70, &args![this, other]);
+        assert_eq!(items(&e, this), vec![0x501, 0x502]);
+        assert_eq!(e.mem.u8(this + 0x84), 6);
+        assert_eq!(
+            [0x78, 0x7c, 0x80].map(|o| e.mem.u32(this + o)),
+            [0x78, 0x7c, 0x80]
+        );
+        assert_eq!(only(&log, COPY_ALL_COMPONENTS), vec![vec![this, other]]);
+        assert!(!e.call(0x0051_7e70, &args![this, other]).bool());
+        e.mem.set_u8(this + 0x84, 7);
+        assert!(e.call(0x0051_7e70, &args![this, other]).bool());
+        e.mem.set_u8(this + 0x84, 6);
+        e.mem.set_u32(this + 0x80, 1);
+        assert!(e.call(0x0051_7e70, &args![this, other]).bool());
+        e.mem.set_u32(this + 0x80, 0x80);
+        let swapped = door(&mut e, &[0x502, 0x501]);
+        for o in [0x78u32, 0x7c, 0x80] {
+            e.mem.set_u32(swapped + o, o);
+        }
+        e.mem.set_u8(swapped + 0x84, 6);
+        assert!(!e.call(0x0051_7e70, &args![swapped, other]).bool());
+        let different = door(&mut e, &[0x502, 0x503]);
+        for o in [0x78u32, 0x7c, 0x80] {
+            e.mem.set_u32(different + o, o);
+        }
+        e.mem.set_u8(different + 0x84, 6);
+        assert!(e.call(0x0051_7e70, &args![different, other]).bool());
+        e.register(COMPARE_ALL_COMPONENTS, |_, _| ret(1));
+        assert!(e.call(0x0051_7e70, &args![this, other]).bool());
+        e.register(RT_DYNAMIC_CAST, |_, _| ret(0));
+        assert!(e.call(0x0051_7e70, &args![this, other]).bool());
+        let fresh = door(&mut e, &[0x777]);
+        e.call(0x0051_7d70, &args![fresh, other]);
+        assert_eq!(items(&e, fresh), vec![0x777]);
+    }
+
+    #[test]
+    fn flag_bits_two_and_three() {
+        let mut e = Engine::new();
+        let this = e.mem.alloc(0x90);
+        assert!(!e.call(0x0051_7fd0, &args![this]).bool());
+        e.mem.set_u8(this + 0x84, 0x04);
+        assert!(e.call(0x0051_7fd0, &args![this]).bool());
+        e.call(0x0051_8030, &args![this, 1u32]);
+        assert_eq!(e.mem.u8(this + 0x84), 0x0c);
+        e.call(0x0051_8030, &args![this, 0x100u32]);
+        assert_eq!(e.mem.u8(this + 0x84), 0x04);
+    }
+
+    #[test]
+    fn map_construction_and_destruction() {
+        let mut e = Engine::new();
+        e.register(NI_ALLOC, |e, a| ret(e.mem.alloc(a[0])));
+        e.register(MEMSET, |_, _| Ret::default());
+        e.register(MAP_REMOVE_ALL, |_, _| Ret::default());
+        e.register(NI_FREE, |_, _| Ret::default());
+        let map = e.mem.alloc(0x10);
+        let (r, log) = run(&mut e, 0x0051_9b80, &args![map, 0x25u32]);
+        assert_eq!(r.eax, map);
+        assert_eq!(e.mem.u32(map), MAP_BASE_VTABLE);
+        assert_eq!((e.mem.u32(map + 4), e.mem.u32(map + 0xc)), (0x25, 0));
+        let buckets = e.mem.u32(map + 8);
+        assert_eq!(only(&log, NI_ALLOC), vec![vec![0x94]]);
+        assert_eq!(only(&log, MEMSET), vec![vec![buckets, 0, 0x94]]);
+        let (_, log) = run(&mut e, 0x0051_9bf0, &args![map]);
+        assert_eq!(e.mem.u32(map), MAP_BASE_VTABLE);
+        assert_eq!(only(&log, MAP_REMOVE_ALL), vec![vec![map], vec![map]]);
+        assert_eq!(only(&log, NI_FREE), vec![vec![buckets]]);
+        e.mem.set_u32(map, 0);
+        let (_, log) = run(&mut e, 0x0051_9c50, &args![map]);
+        assert_eq!(e.mem.u32(map), MAP_BASE_VTABLE);
+        assert_eq!(only(&log, NI_FREE).len(), 1);
+    }
+
+    #[test]
+    fn arrival_callback_plays_the_sound() {
+        let mut e = Engine::new();
+        e.register(ARRIVAL_SOUND, |_, a| ret(a[0] + 0x100));
+        e.register(FORM_ID, |_, a| ret(a[0] + 1));
+        e.register(AUDIO, |_, _| ret(0xa000));
+        e.register(SOUND_BY_ID, |_, a| ret(a[1]));
+        quiet(&mut e, &[SOUND_PLAY, SOUND_HANDLE_DESTROY]);
+        let (_, log) = run(&mut e, 0x0075_9030, &args![0u32, 0x5000u32]);
+        let by_id = only(&log, SOUND_BY_ID);
+        assert_eq!(
+            (by_id[0][0], by_id[0][2], by_id[0][3]),
+            (0xa000, 0x5101, 0x101)
+        );
+        let handle = by_id[0][1];
+        assert_eq!(only(&log, SOUND_PLAY), vec![vec![handle, 0]]);
+        assert_eq!(only(&log, SOUND_HANDLE_DESTROY), vec![vec![handle]]);
+    }
+
+    /// The random door search with `items` in the list and `random` the
+    /// sequence `00487f50` answers; `0054afb0` finds item `0x700 + n` as
+    /// `0x7700 + n` when `n` is in `hits`.
+    fn search(
+        items: &[u32],
+        random: Vec<u32>,
+        hits: Vec<u32>,
+        preferred: u32,
+    ) -> (Engine, u32, Log) {
+        let mut e = list_engine();
+        e.map(PLAYER_REFERENCE & !0xfff, 0x1000);
+        e.set_global::<u32>(PLAYER_REFERENCE, 0x0bad_0000);
+        e.register(GET_WORLD_SPACE, |_, _| ret(0x4400));
+        let mut draws = random.into_iter();
+        e.register_double(RANDOM, move |_, _| ret(draws.next().unwrap()));
+        e.register(VISITED_MAP_CONSTRUCT, |e, a| {
+            let set = e.mem.alloc(0x40);
+            e.mem.set_u32(a[0], set);
+            Ret::default()
+        });
+        e.register(VISITED_MAP_LOOKUP, |e, a| {
+            let set = e.mem.u32(a[0]);
+            let marked = e.mem.u8(set + a[1]);
+            e.mem.set_u8(a[2], marked);
+            ret(u32::from(marked != 0))
+        });
+        e.register(VISITED_MAP_INSERT, |e, a| {
+            let set = e.mem.u32(a[0]);
+            e.mem.set_u8(set + a[1], a[2] as u8);
+            Ret::default()
+        });
+        e.register_double(PLAYER_PREFERRED_DOOR, move |_, _| ret(preferred));
+        e.register_double(FIND_DESTINATION, move |e, a| {
+            let n = a[0].wrapping_sub(0x700);
+            if hits.contains(&n) {
+                e.mem.set_u32(a[2], 1);
+                ret(0x7700 + n)
+            } else {
+                ret(0)
+            }
+        });
+        quiet(&mut e, &[PLAYER_SET_DOOR_CHOICE, MAP_REMOVE_ALL, NI_FREE]);
+        let this = door(&mut e, items);
+        let (r, log) = run(&mut e, 0x0051_95e0, &args![this, 0x9000u32, 0u32]);
+        (e, r.eax, log)
+    }
+
+    #[test]
+    fn random_destination_skips_visited_and_preferred() {
+        let items = [0x700, 0x701, 0x702];
+        let (_, found, log) = search(&items, vec![4, 2], vec![1], 0xff);
+        assert_eq!(found, 0x7701);
+        assert_eq!(only(&log, FIND_DESTINATION).len(), 1);
+        assert_eq!(only(&log, PLAYER_SET_DOOR_CHOICE)[0][2], 1);
+        let (_, found, log) = search(&items, vec![1, 1, 0, 2], vec![1], 1);
+        assert_eq!(found, 0);
+        assert_eq!(only(&log, RANDOM).len(), 4);
+        assert_eq!(only(&log, FIND_DESTINATION).len(), 3);
+        assert_eq!(only(&log, VISITED_MAP_INSERT).len(), 3);
+        assert_eq!(only(&log, MAP_REMOVE_ALL).len(), 2);
+    }
+
+    #[test]
+    fn random_destination_needs_a_reference_and_a_world_space() {
+        let mut e = list_engine();
+        let this = door(&mut e, &[0x700]);
+        let (r, log) = run(&mut e, 0x0051_95e0, &args![this, 0u32, 0u32]);
+        assert_eq!((r.eax, log.len()), (0, 1));
+        e.register(GET_WORLD_SPACE, |_, _| ret(0));
+        e.register(REFERENCE_PARENT_008D6F30, |_, _| ret(0x5500));
+        e.register(PARENT_CHECK_00425FD0, |_, _| ret(0x100));
+        let (r, log) = run(&mut e, 0x0051_95e0, &args![this, 0x9000u32, 0u32]);
+        assert_eq!(r.eax, 0);
+        assert_eq!(only(&log, REFERENCE_PARENT_008D6F30).len(), 2);
+        assert!(only(&log, VISITED_MAP_CONSTRUCT).is_empty());
+    }
+
+    /// Two door references (vtable slot `+0x1f4` answers their position
+    /// block), their bases doors, and the teleport doubles.
+    fn link_engine() -> (Engine, u32, u32) {
+        let mut e = list_engine();
+        e.register(BASE_OBJECT, |e, a| ret(e.mem.u32(a[0] + 4)));
+        e.register(TELEPORT_DATA, |_, _| ret(0));
+        e.register(ADD_TELEPORT, |_, a| ret(a[0] + 0x40));
+        let setting = e.mem.alloc(8);
+        e.mem.set_u32(setting, 64.0f32.to_bits());
+        e.mem.set_u32(setting + 4, 32.0f32.to_bits());
+        e.register_double(SETTING_FLOAT_ADDRESS, move |_, a| {
+            ret(if a[0] == DOOR_DISTANCE_SETTING {
+                setting
+            } else {
+                setting + 4
+            })
+        });
+        e.map(DISTANCE_EXTRA & !0xfff, 0x1000);
+        e.set_global::<f64>(DISTANCE_EXTRA, 100.0);
+        e.map(DOOR_ANGLE & !0xfff, 0x1000);
+        e.set_global::<u32>(DOOR_ANGLE, 0.5f32.to_bits());
+        e.register(FLOAT_PAIR_00404010, |_, a| Ret {
+            st0: f64::from(f32::from_bits(a[0]).max(f32::from_bits(a[1]))),
+            ..Ret::default()
+        });
+        e.register(TELEPORT_MARKER, |_, _| ret(0));
+        e.register(REFERENCE_ROTATION, |_, a| ret(a[0] + 0x30));
+        e.register(VECTOR_ADD, |_, a| ret(a[1]));
+        e.register(VECTOR_SET, |_, a| ret(a[0]));
+        quiet(
+            &mut e,
+            &[
+                SET_LINKED_DOOR,
+                SET_TELEPORT_POSITION,
+                SET_TELEPORT_ROTATION,
+                DELTA_FOR_ANGLE,
+                VECTOR_SCALE,
+            ],
+        );
+        e.register(0x0f48_01f4, |_, a| ret(a[0] + 0x20));
+        let vtable = e.mem.alloc(0x200);
+        e.mem.set_u32(vtable + 0x1f4, 0x0f48_01f4);
+        let reference = |e: &mut Engine, flags: u8| {
+            let r = e.mem.alloc(0x80);
+            e.mem.set_u32(r, vtable);
+            let base = e.mem.alloc(0x90);
+            e.mem.set_u8(base + 0x84, flags);
+            e.mem.set_u32(r + 4, base);
+            e.mem.set_u32(r + 0x38, 1.0f32.to_bits());
+            r
+        };
+        let first = reference(&mut e, 0);
+        let second = reference(&mut e, 2);
+        (e, first, second)
+    }
+
+    #[test]
+    fn linking_places_each_side_at_the_other() {
+        let (mut e, first, second) = link_engine();
+        let (_, log) = run(&mut e, 0x0051_9810, &args![first, second]);
+        assert_eq!(
+            only(&log, SET_LINKED_DOOR),
+            vec![vec![first + 0x40, second], vec![second + 0x40, first]]
+        );
+        let scales = only(&log, VECTOR_SCALE);
+        // The second door has flag 0x02: the larger of 64 and 32 + 100.
+        assert_eq!(scales[0][1], 132.0f32.to_bits());
+        assert_eq!(scales[1][1], 64.0f32.to_bits());
+        let deltas = only(&log, DELTA_FOR_ANGLE);
+        assert_eq!((deltas[0][0], deltas[0][2]), (second, 0.5f32.to_bits()));
+        let sets = only(&log, VECTOR_SET);
+        assert_eq!(sets[0][1..], [0, 0, 1.5f32.to_bits()]);
+        let positions = only(&log, SET_TELEPORT_POSITION);
+        assert_eq!(positions[0][0], first + 0x40);
+        assert_eq!(only(&log, VECTOR_ADD)[0][0], second + 0x20);
+    }
+
+    #[test]
+    fn linking_uses_markers_and_refuses_bad_pairs() {
+        let (mut e, first, second) = link_engine();
+        let marker_ref = e.mem.alloc(0x40);
+        let vtable = e.mem.u32(first);
+        e.mem.set_u32(marker_ref, vtable);
+        e.register_double(TELEPORT_MARKER, move |_, _| ret(marker_ref));
+        let (_, log) = run(&mut e, 0x0051_9810, &args![first, second]);
+        assert_eq!(
+            only(&log, SET_TELEPORT_POSITION),
+            vec![
+                vec![first + 0x40, marker_ref + 0x20],
+                vec![second + 0x40, marker_ref + 0x20]
+            ]
+        );
+        assert_eq!(
+            only(&log, SET_TELEPORT_ROTATION),
+            vec![
+                vec![first + 0x40, marker_ref + 0x30],
+                vec![second + 0x40, marker_ref + 0x30]
+            ]
+        );
+        assert!(only(&log, DELTA_FOR_ANGLE).is_empty());
+        for (a, b) in [(0, second), (first, 0), (first, first)] {
+            let (_, log) = run(&mut e, 0x0051_9810, &args![a, b]);
+            assert_eq!(log.len(), 1);
+        }
+        e.register(TELEPORT_DATA, |_, _| ret(1));
+        let (_, log) = run(&mut e, 0x0051_9810, &args![first, second]);
+        assert!(only(&log, ADD_TELEPORT).is_empty());
+        e.register(TELEPORT_DATA, |_, _| ret(0));
+        e.register(RT_DYNAMIC_CAST, |_, _| ret(0));
+        let (_, log) = run(&mut e, 0x0051_9810, &args![first, second]);
+        assert!(only(&log, TELEPORT_DATA).is_empty());
     }
 }

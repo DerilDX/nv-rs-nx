@@ -278,6 +278,203 @@ pub fn fn_00647f00(
     f32::from_bits(x87_quiet_bits(result))
 }
 
+/// `004579e0` (`cdecl`, one float; a float in `ST0`): the curve
+/// `00647960` applies.
+const CURVE_004579E0: u32 = 0x0045_79e0;
+/// `RandomFloat` (engine map name of `00476b70`; `cdecl`, two floats: the
+/// low and high limit; `ST0`).
+const RANDOM_FLOAT: u32 = 0x0047_6b70;
+/// `_ftol2` (`00ec62c0`): `ST0` truncated to an integer.
+const FTOL2: u32 = 0x00ec_62c0;
+/// The doubles `00647a30` scales by (`01016408`, `01017a40`) (`00647fd0` scales by the
+/// hundredth at `01031148`).
+const SCALE_01016408: u32 = 0x0101_6408;
+const HUNDRED_01017A40: u32 = 0x0101_7a40;
+
+/// The x87 compare `FCOMP` of `a` with `b` as `FNSTSW AX; TEST AH,5; JP`
+/// takes the jump: neither less nor unordered.
+fn not_below(a: f64, b: f64) -> bool {
+    a >= b
+}
+
+// Translated from 00647960 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`cdecl`, two floats; the answer in `ST0`):
+/// `t = 1 - second` (a `float`); 0.0 when `t` is below the `double` at
+/// `01012060` (or unordered), else `004579e0(t) * first` stored as a
+/// `float`.
+pub fn fn_00647960(e: &mut Engine, first: f32, second: f32) -> f32 {
+    let t = x87_store32(x87_sub(1.0, x87_load32(second.to_bits())));
+    if !not_below(x87_load32(t), double_at(e, DOUBLE_ZERO)) {
+        return 0.0;
+    }
+    let curve = e.call(CURVE_004579E0, &args![x87_quiet_bits(t)]).f64();
+    f32::from_bits(x87_store32(x87_mul(curve, x87_m32(first.to_bits()))))
+}
+
+// Translated from 006479a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`cdecl`, three floats; `ST0`): `t = third /
+/// second` (a `float`); 0.0 when `t` is above the `double` 1.0 at
+/// `01012070`, else `00647960(first, t)` (also for an unordered `t`).
+pub fn fn_006479a0(e: &mut Engine, first: f32, second: f32, third: f32) -> f32 {
+    let t = x87_store32(x87_div(
+        x87_load32(third.to_bits()),
+        x87_m32(second.to_bits()),
+    ));
+    let value = x87_load32(t);
+    let one = double_at(e, DOUBLE_ONE);
+    // `TEST AH,0x41; JNZ`: less, equal or unordered.
+    if !(value <= one || value.is_nan()) {
+        return 0.0;
+    }
+    fn_00647960(
+        e,
+        f32::from_bits(x87_quiet_bits(first.to_bits())),
+        f32::from_bits(x87_quiet_bits(t)),
+    )
+}
+
+// Translated from 00647a30 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`cdecl`: an object, a second object, a
+/// `float`; `ST0`): 0.0 unless both objects are set. `rate` is the second
+/// object's byte (`00647ac0`) times the `double` at `01016408`, `value` the
+/// first object's virtual slot 4 with 0x10 (both stored as `float`s). A
+/// `value` at most 0.0 answers the `float`; otherwise, with `rate` above
+/// 0.0, `amount / (rate * value)` times the `double` at `01017a40`, else
+/// 0.0.
+pub fn fn_00647a30(e: &mut Engine, object: u32, other: Ptr, amount: f32) -> f32 {
+    let mut result = x87_store32(0.0);
+    if object != 0 && !other.is_null() {
+        let byte = fn_00647ac0(e, other);
+        let rate = x87_store32(x87_mul(f64::from(byte), double_at(e, SCALE_01016408)));
+        let value = x87_store32(e.vcall(object, 4, &args![0x10u32]).f64());
+        let zero = double_at(e, DOUBLE_ZERO);
+        let loaded = x87_load32(value);
+        if loaded <= zero {
+            result = x87_quiet_bits(amount.to_bits());
+        } else {
+            let rate_loaded = x87_load32(rate);
+            if !(rate_loaded <= zero || rate_loaded.is_nan()) {
+                let product = x87_mul(rate_loaded, x87_m32(value));
+                let quotient = x87_div(x87_m32(amount.to_bits()), product);
+                result = x87_store32(x87_mul(quotient, double_at(e, HUNDRED_01017A40)));
+            }
+        }
+    }
+    f32::from_bits(x87_quiet_bits(result))
+}
+
+// Translated from 00647ac0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The byte at +0x62.
+pub fn fn_00647ac0(e: &mut Engine, this: Ptr) -> u8 {
+    e.mem.u8(this.addr() + 0x62)
+}
+
+// Translated from 00647ae0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`cdecl`, one float): `s1 + (value * s3 + s2)
+/// + RandomFloat(-s4, s4)` with the settings `s1` `011cee24`, `s2`
+/// `011cf314`, `s3` `011ced28` and `s4` `011ceb38` (each part stored as a
+/// `float`), truncated (`_ftol2`) and at least 0 (`00647b70`).
+pub fn fn_00647ae0(e: &mut Engine, value: f32) -> i32 {
+    let base = x87_quiet_bits(setting_bits(e, 0x011c_ee24));
+    let offset = setting_bits(e, 0x011c_f314);
+    let factor = setting_bits(e, 0x011c_ed28);
+    let scaled = x87_store32(x87_add(
+        x87_mul(x87_load32(value.to_bits()), x87_m32(factor)),
+        x87_m32(offset),
+    ));
+    let high = x87_quiet_bits(setting_bits(e, 0x011c_eb38));
+    let low = x87_quiet_bits(setting_bits(e, 0x011c_eb38)) ^ 0x8000_0000;
+    let random = x87_store32(e.call(RANDOM_FLOAT, &args![low, high]).f64());
+    let sum = x87_add(x87_add(x87_load32(base), x87_m32(scaled)), x87_m32(random));
+    let whole = e.call(FTOL2, &args![sum]).i32();
+    fn_00647b70(e, 0, whole)
+}
+
+// Translated from 00647bd0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`cdecl`: the address of an unsigned integer,
+/// a low and a high limit): clamps the integer, the high limit tested
+/// first.
+pub fn fn_00647bd0(e: &mut Engine, value: Ptr, low: u32, high: u32) {
+    let at = value.addr();
+    if e.mem.u32(at) > high {
+        e.mem.set_u32(at, high);
+    } else if e.mem.u32(at) < low {
+        e.mem.set_u32(at, low);
+    }
+}
+
+// Translated from 00647cf0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`cdecl`, one word): the word as an unsigned
+/// number (`FILD qword` of it with a zero high word), in `ST0`.
+pub fn fn_00647cf0(_e: &mut Engine, value: u32) -> f64 {
+    f64::from(value)
+}
+
+// Translated from 00647f50 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`cdecl`, six words): `00647d10` with the
+/// three words, 0 and the three bytes, stored as a `float`.
+pub fn fn_00647f50(
+    e: &mut Engine,
+    actor: u32,
+    second: u32,
+    third: u32,
+    fourth: u8,
+    fifth: u8,
+    sixth: u8,
+) -> f32 {
+    let value = fn_00647d10(e, actor, second, third, 0, fourth, fifth, sixth);
+    f32::from_bits(x87_quiet_bits(value.to_bits()))
+}
+
+// Translated from 00647f90 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`cdecl`, six words): `00647f00` with the
+/// three words, the first two bytes, 0 and the third byte, stored as a
+/// `float`.
+pub fn fn_00647f90(
+    e: &mut Engine,
+    actor: u32,
+    second: u32,
+    third: u32,
+    fourth: u8,
+    fifth: u8,
+    sixth: u8,
+) -> f32 {
+    let value = fn_00647f00(e, actor, second, third, fourth, fifth, 0, sixth);
+    f32::from_bits(x87_quiet_bits(value.to_bits()))
+}
+
+// Translated from 00647fd0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`cdecl`, one word: an actor value owner):
+/// `s1 + (s2 - s1) * (value * k)` with the owner's virtual slot 0xC for
+/// 0x15 as `value`, the `double` `k` at `01031148` and the settings `s1`
+/// `011d0cc0` and `s2` `011d0e1c` (each part stored as a `float`); 0.0
+/// when that is below the `double` at `01012060` (or unordered).
+pub fn fn_00647fd0(e: &mut Engine, owner: u32) -> f32 {
+    let value = e.vcall(owner, 0xc, &args![0x15u32]).f64();
+    let scaled = x87_store32(x87_mul(value, double_at(e, DOUBLE_HUNDREDTH)));
+    let start = x87_quiet_bits(setting_bits(e, 0x011d_0cc0));
+    let end = setting_bits(e, 0x011d_0e1c);
+    let start_again = setting_bits(e, 0x011d_0cc0);
+    let span = x87_sub(x87_load32(end), x87_m32(start_again));
+    let total = x87_store32(x87_add(x87_mul(span, x87_m32(scaled)), x87_m32(start)));
+    if !not_below(x87_load32(total), double_at(e, DOUBLE_ZERO)) {
+        return 0.0;
+    }
+    f32::from_bits(x87_quiet_bits(total))
+}
+
+// Translated from 00648050 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`cdecl`, one float): `value * 10.0 (the
+/// double at 01020758) * s2 + s1` with the settings `s1` `011d05ec` and
+/// `s2` `011d0fd8`, stored as a `float`.
+pub fn fn_00648050(e: &mut Engine, value: f32) -> f32 {
+    let offset = setting_bits(e, 0x011d_05ec);
+    let factor = setting_bits(e, 0x011d_0fd8);
+    let scaled = x87_mul(x87_load32(value.to_bits()), double_at(e, DOUBLE_TEN));
+    let total = x87_add(x87_mul(scaled, x87_m32(factor)), x87_m32(offset));
+    f32::from_bits(x87_quiet_bits(x87_store32(total)))
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -287,6 +484,17 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x0064_7c00, fn_00647c00(f32, f32) -> f32),
         entry!(0x0064_7d10, fn_00647d10(u32, u32, u32, u8, u8, u8, u8) -> f32),
         entry!(0x0064_7f00, fn_00647f00(u32, u32, u32, u8, u8, u8, u8) -> f32),
+        entry!(0x0064_7960, fn_00647960(f32, f32) -> f32),
+        entry!(0x0064_79a0, fn_006479a0(f32, f32, f32) -> f32),
+        entry!(0x0064_7a30, fn_00647a30(u32, Ptr, f32) -> f32),
+        entry!(0x0064_7ac0, fn_00647ac0(Ptr) -> u8),
+        entry!(0x0064_7ae0, fn_00647ae0(f32) -> i32),
+        entry!(0x0064_7bd0, fn_00647bd0(Ptr, u32, u32)),
+        entry!(0x0064_7cf0, fn_00647cf0(u32) -> f64),
+        entry!(0x0064_7f50, fn_00647f50(u32, u32, u32, u8, u8, u8) -> f32),
+        entry!(0x0064_7f90, fn_00647f90(u32, u32, u32, u8, u8, u8) -> f32),
+        entry!(0x0064_7fd0, fn_00647fd0(u32) -> f32),
+        entry!(0x0064_8050, fn_00648050(f32) -> f32),
     ]
 }
 
@@ -479,5 +687,223 @@ mod tests {
         assert_eq!(value, 1.0 * 4.0 * 3.0);
         let log = e.call_log.take().unwrap();
         assert!(log.iter().all(|c| c.0 != TEST_00646CB0));
+    }
+}
+
+#[cfg(test)]
+mod tests_n042 {
+    use super::*;
+
+    fn engine() -> Engine {
+        let mut e = Engine::new();
+        for (address, value) in [
+            (DOUBLE_ZERO, 0.0f64),
+            (DOUBLE_ONE, 1.0),
+            (DOUBLE_TEN, 10.0),
+            (SCALE_01016408, 0.5),
+            (HUNDRED_01017A40, 2.0),
+            (DOUBLE_HUNDREDTH, 0.01),
+        ] {
+            e.map(address, 8);
+            e.set_global::<f64>(address, value);
+        }
+        e
+    }
+
+    /// Settings: each setting's value lives in a block the double hands
+    /// out; `values` maps setting addresses to floats.
+    fn settings(e: &mut Engine, values: &[(u32, f32)]) {
+        let block = e.mem.alloc(4 * values.len() as u32);
+        let mut table = Vec::new();
+        for (i, (setting, value)) in values.iter().enumerate() {
+            let at = block + 4 * i as u32;
+            e.mem.set_u32(at, value.to_bits());
+            table.push((*setting, at));
+        }
+        e.register_double(SETTING_VALUE, move |_, a| {
+            table.iter().find(|(s, _)| *s == a[0]).unwrap().1.into_ret()
+        });
+    }
+
+    fn ret_f64(value: f64) -> Ret {
+        Ret {
+            st0: value,
+            ..Ret::default()
+        }
+    }
+
+    #[test]
+    fn curve_of_one_minus() {
+        let mut e = engine();
+        e.register(CURVE_004579E0, |_, a| {
+            ret_f64(f64::from(f32::from_bits(a[0])) * 4.0)
+        });
+        let r = e.call(0x0064_7960, &args![3.0f32, 0.25f32]).f32();
+        assert_eq!(r, 9.0);
+        // 1 - 2 is below 0: 0.0 without the curve.
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x0064_7960, &args![3.0f32, 2.0f32]).f32(), 0.0);
+        let log = e.call_log.take().unwrap();
+        assert!(log.iter().all(|c| c.0 != CURVE_004579E0));
+        // A NaN second makes t unordered: 0.0.
+        assert_eq!(e.call(0x0064_7960, &args![3.0f32, f32::NAN]).f32(), 0.0);
+    }
+
+    #[test]
+    fn ratio_at_most_one_goes_through_the_curve() {
+        let mut e = engine();
+        e.register(CURVE_004579E0, |_, a| {
+            ret_f64(f64::from(f32::from_bits(a[0])))
+        });
+        // t = 1 / 4, curve(1 - t) * 2.
+        let r = e.call(0x0064_79a0, &args![2.0f32, 4.0f32, 1.0f32]).f32();
+        assert_eq!(r, 1.5);
+        // t = 4 / 2 above 1: 0.0.
+        assert_eq!(
+            e.call(0x0064_79a0, &args![2.0f32, 2.0f32, 4.0f32]).f32(),
+            0.0
+        );
+        // t exactly 1: 1 - 1 = 0, not below 0, curve(0) * 2 = 0.
+        assert_eq!(
+            e.call(0x0064_79a0, &args![2.0f32, 2.0f32, 2.0f32]).f32(),
+            0.0
+        );
+    }
+
+    #[test]
+    fn rate_formula() {
+        let mut e = engine();
+        e.register(0x0f00_1004, |e, a| {
+            ret_f64(f64::from(f32::from_bits(e.mem.u32(a[0] + 4))))
+        });
+        e.put_vtable(0x0f00_0000, &[0, 0x0f00_1004]);
+        let object = e.mem.alloc(8);
+        e.mem.set_u32(object, 0x0f00_0000);
+        e.mem.set_u32(object + 4, 4.0f32.to_bits());
+        let other = e.mem.alloc(0x70);
+        e.mem.set_u8(other + 0x62, 6);
+        // rate 3, value 4: 12 / (3 * 4) * 2.
+        let r = e.call(0x0064_7a30, &args![object, other, 12.0f32]).f32();
+        assert_eq!(r, 2.0);
+        // value 0: the amount.
+        e.mem.set_u32(object + 4, 0.0f32.to_bits());
+        assert_eq!(
+            e.call(0x0064_7a30, &args![object, other, 12.0f32]).f32(),
+            12.0
+        );
+        // rate 0 with a positive value: 0.0.
+        e.mem.set_u32(object + 4, 4.0f32.to_bits());
+        e.mem.set_u8(other + 0x62, 0);
+        assert_eq!(
+            e.call(0x0064_7a30, &args![object, other, 12.0f32]).f32(),
+            0.0
+        );
+        // No object: 0.0.
+        assert_eq!(e.call(0x0064_7a30, &args![0u32, other, 12.0f32]).f32(), 0.0);
+        assert_eq!(
+            e.call(0x0064_7a30, &args![object, 0u32, 12.0f32]).f32(),
+            0.0
+        );
+        assert_eq!(e.call(0x0064_7ac0, &args![other]).u32() & 0xff, 0);
+    }
+
+    #[test]
+    fn random_total_is_truncated_and_not_negative() {
+        let mut e = engine();
+        settings(
+            &mut e,
+            &[
+                (0x011c_ee24, 1.0),
+                (0x011c_f314, 2.0),
+                (0x011c_ed28, 3.0),
+                (0x011c_eb38, 0.5),
+            ],
+        );
+        e.register(RANDOM_FLOAT, |_, a| {
+            assert_eq!(a[0], (-0.5f32).to_bits());
+            assert_eq!(a[1], 0.5f32.to_bits());
+            ret_f64(0.25)
+        });
+        e.register(FTOL2, |_, a| {
+            let value = f64::from_bits(u64::from(a[0]) | u64::from(a[1]) << 32);
+            (value as i32 as u32).into_ret()
+        });
+        // 1 + (2 * 3 + 2) + 0.25 = 9.25.
+        assert_eq!(e.call(0x0064_7ae0, &args![2.0f32]).i32(), 9);
+        assert_eq!(e.call(0x0064_7ae0, &args![-10.0f32]).i32(), 0);
+    }
+
+    #[test]
+    fn unsigned_clamp_and_word_as_number() {
+        let mut e = engine();
+        let value = e.mem.alloc(4);
+        for (start, expected) in [(5u32, 5u32), (20, 10), (1, 3), (0x8000_0000, 10)] {
+            e.mem.set_u32(value, start);
+            e.call(0x0064_7bd0, &args![value, 3u32, 10u32]);
+            assert_eq!(e.mem.u32(value), expected);
+        }
+        assert_eq!(
+            e.call(0x0064_7cf0, &args![0xffff_ffffu32]).f64(),
+            4294967295.0
+        );
+    }
+
+    #[test]
+    fn wrappers_pass_their_bytes_in_place() {
+        let mut e = engine();
+        settings(
+            &mut e,
+            &[
+                (SETTING_011D0448, 1.0),
+                (SETTING_011D0C30, 2.0),
+                (SETTING_011CFFF4, 3.0),
+                (SETTING_011D0898, 1.0),
+            ],
+        );
+        e.map(DOUBLE_TWO, 8);
+        e.set_global::<f64>(DOUBLE_TWO, 2.0);
+        // Healthy body parts, no slot-8 effect, a skill of 100.
+        e.register(BODY_PART_CONDITION, |_, _| ret_f64(1.0));
+        e.register(0x0f00_1008, |_, _| Ret::default());
+        e.register(0x0f00_100c, |_, _| ret_f64(100.0));
+        e.put_vtable(0x0f00_0000, &[0, 0, 0x0f00_1008, 0x0f00_100c]);
+        let actor = e.mem.alloc(4);
+        e.mem.set_u32(actor, 0x0f00_0000);
+        let call = |e: &mut Engine, addr: u32, d: u32, f: u32| {
+            e.call(addr, &args![actor, 0u32, 0u32, d, f, 0u32]).f32()
+        };
+        // 00647f50: its bytes are 00647d10's fifth and sixth (the fourth
+        // is 0); both set double the value (011d0c30).
+        assert_eq!(call(&mut e, 0x0064_7f50, 1, 1), 2.0);
+        assert_eq!(call(&mut e, 0x0064_7f50, 0, 1), 1.0);
+        // 00647f90: 00647f00 with (d, f, 0, ...), whose 00647d10 gets them
+        // as its fifth and sixth again.
+        assert_eq!(call(&mut e, 0x0064_7f90, 1, 1), 2.0);
+        assert_eq!(call(&mut e, 0x0064_7f90, 1, 0), 1.0);
+    }
+
+    #[test]
+    fn owner_formula_with_floor() {
+        let mut e = engine();
+        settings(&mut e, &[(0x011d_0cc0, 1.0), (0x011d_0e1c, 3.0)]);
+        e.register(0x0f00_100c, |e, a| {
+            ret_f64(f64::from(f32::from_bits(e.mem.u32(a[0] + 4))))
+        });
+        e.put_vtable(0x0f00_0000, &[0, 0, 0, 0x0f00_100c]);
+        let owner = e.mem.alloc(8);
+        e.mem.set_u32(owner, 0x0f00_0000);
+        e.mem.set_u32(owner + 4, 50.0f32.to_bits());
+        // 1 + (3 - 1) * (50 * 0.01) = 2.
+        assert_eq!(e.call(0x0064_7fd0, &args![owner]).f32(), 2.0);
+        e.mem.set_u32(owner + 4, (-200.0f32).to_bits());
+        assert_eq!(e.call(0x0064_7fd0, &args![owner]).f32(), 0.0);
+    }
+
+    #[test]
+    fn scaled_setting_sum() {
+        let mut e = engine();
+        settings(&mut e, &[(0x011d_05ec, 1.0), (0x011d_0fd8, 0.5)]);
+        // 3 * 10 * 0.5 + 1.
+        assert_eq!(e.call(0x0064_8050, &args![3.0f32]).f32(), 16.0);
     }
 }

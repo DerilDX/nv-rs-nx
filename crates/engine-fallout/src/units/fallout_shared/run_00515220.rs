@@ -80,6 +80,131 @@ pub fn fn_00515580(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
     this
 }
 
+/// The object pointer at `011de45c` that `008579b0` and `008579e0`
+/// (`tessaveloadgame.cpp`, `thiscall`, two words) run on.
+const SAVE_LOAD_GAME: u32 = 0x011d_e45c;
+/// `00428110` (`thiscall` on the save or load buffer, one word: an out
+/// word), then `004280f0` (`thiscall` on its result, one word).
+const BUFFER_00428110: u32 = 0x0042_8110;
+const CHECK_004280F0: u32 = 0x0042_80f0;
+
+// Translated from 00515220 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No map name (a save-size sum, `RET 4`): the 16-bit sum of `00484bf0` on
+/// `this` and `0048e9b0` on `this + 0x84`, each given `flags`, plus one when
+/// bit 0x20 of `flags` is set.
+pub fn fn_00515220(e: &mut Engine, this: Ptr, flags: u32) -> u16 {
+    let mut size: u16 = 0;
+    size = size.wrapping_add(e.call(0x0048_4bf0, &args![this, flags]).u16());
+    let component = this.addr().wrapping_add(0x84);
+    size = size.wrapping_add(e.call(0x0048_e9b0, &args![component, flags]).u16());
+    if flags & 0x20 != 0 {
+        size = size.wrapping_add(1);
+    }
+    size
+}
+
+// Translated from 00515290 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No map name (`RET 4`): `00484c20` on `this` and `0048e9e0` on
+/// `this + 0x84`, each given `flags`; with bit 0x20 of `flags`, `008579b0`
+/// on the object at `011de45c` with the byte address `this + 0xC1` and 1.
+pub fn fn_00515290(e: &mut Engine, this: Ptr, flags: u32) {
+    e.call(0x0048_4c20, &args![this, flags]);
+    e.call(0x0048_e9e0, &args![this.addr() + 0x84, flags]);
+    if flags & 0x20 != 0 {
+        let target = e.global::<u32>(SAVE_LOAD_GAME);
+        e.call(0x0085_79b0, &args![target, this.addr() + 0xc1, 1u32]);
+    }
+}
+
+// Translated from 005152e0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No map name (`RET 8`): `00484c50` on `this` and `0048ea10` on
+/// `this + 0x84`, each given both words; with bit 0x20 of `flags`,
+/// `008579e0` on the object at `011de45c` with `this + 0xC1` and 1.
+pub fn fn_005152e0(e: &mut Engine, this: Ptr, flags: u32, second: u32) {
+    e.call(0x0048_4c50, &args![this, flags, second]);
+    e.call(0x0048_ea10, &args![this.addr() + 0x84, flags, second]);
+    if flags & 0x20 != 0 {
+        let target = e.global::<u32>(SAVE_LOAD_GAME);
+        e.call(0x0085_79e0, &args![target, this.addr() + 0xc1, 1u32]);
+    }
+}
+
+// Translated from 00515340 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No map name (`RET 4`; a save): `00484d60` on `this` and `0048ea40` on
+/// `this + 0x84`, each given `buffer`; then when `004280f0(0x20)` on what
+/// `00428110` (given an out word on the stack) answers for the buffer is
+/// true, `00865e50` on the buffer with `this + 0xC1`, 1 and 0.
+pub fn fn_00515340(e: &mut Engine, this: Ptr, buffer: u32) {
+    e.call(0x0048_4d60, &args![this, buffer]);
+    e.call(0x0048_ea40, &args![this.addr() + 0x84, buffer]);
+    e.with_stack(4, |e, word| {
+        let checker = e.call(BUFFER_00428110, &args![buffer, word]).u32();
+        if e.call(CHECK_004280F0, &args![checker, 0x20u32]).bool() {
+            e.call(0x0086_5e50, &args![buffer, this.addr() + 0xc1, 1u32, 0u32]);
+        }
+    });
+}
+
+// Translated from 005153a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No map name (`RET 4`; a load): `00484da0` on `this` and `0048ea80` on
+/// `this + 0x84`, each given `buffer`; then when `004280f0(0x20)` on what
+/// `00428110` (given an out word on the stack) answers for the buffer is
+/// true, `00864980` on the buffer with `this + 0xC1` and 1.
+pub fn fn_005153a0(e: &mut Engine, this: Ptr, buffer: u32) {
+    e.call(0x0048_4da0, &args![this, buffer]);
+    e.call(0x0048_ea80, &args![this.addr() + 0x84, buffer]);
+    e.with_stack(4, |e, word| {
+        let checker = e.call(BUFFER_00428110, &args![buffer, word]).u32();
+        if e.call(CHECK_004280F0, &args![checker, 0x20u32]).bool() {
+            e.call(0x0086_4980, &args![buffer, this.addr() + 0xc1, 1u32]);
+        }
+    });
+}
+
+/// The vtables `005155b0` stores, by offset.
+const DESTRUCTOR_VTABLES: [(u32, u32); 9] = [
+    (0x00, 0x0102_ac0c),
+    (0x30, 0x0102_abf8),
+    (0x3c, 0x0102_abe4),
+    (0x48, 0x0102_abcc),
+    (0x58, 0x0102_abac),
+    (0x60, 0x0102_ab98),
+    (0x68, 0x0102_ab84),
+    (0x144, 0x0102_ab70),
+    (0x14c, 0x0102_ab5c),
+];
+/// The component destructors `005155b0` runs, in its order.
+const DESTRUCTOR_COMPONENTS: [(u32, u32); 5] = [
+    (0x144, 0x0047_5380),
+    (0x68, 0x0048_0400),
+    (0x60, 0x0048_eaf0),
+    (0x58, 0x0048_e7d0),
+    (0x30, 0x0059_1300),
+];
+
+// Translated from 005155b0 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 005155b0 - the FS:[0] exception frame (running the remaining destructors when one throws) is not translated
+/// No map name: a destructor body (`thiscall`): stores the nine vtables
+/// (`DESTRUCTOR_VTABLES`), runs the component destructors
+/// (`DESTRUCTOR_COMPONENTS`, in that order), then `0050e9f0` on `this`.
+pub fn fn_005155b0(e: &mut Engine, this: Ptr) {
+    let at = this.addr();
+    for (offset, vtable) in DESTRUCTOR_VTABLES {
+        e.mem.set_u32(at + offset, vtable);
+    }
+    for (offset, destructor) in DESTRUCTOR_COMPONENTS {
+        e.call(destructor, &args![at + offset]);
+    }
+    e.call(0x0050_e9f0, &args![this]);
+}
+
+// Translated from 005156b0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No map name: `NonActorMagicCaster::SetCurrentSpell` (`0041fd00`, engine
+/// map) on the member at +0x48 with 3.
+pub fn fn_005156b0(e: &mut Engine, this: Ptr) {
+    e.call(0x0041_fd00, &args![this.addr() + 0x48, 3u32]);
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -89,6 +214,13 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x0051_5420, fn_00515420(Ptr, u32)),
         entry!(0x0051_5430, fn_00515430(Ptr, u32) -> u16),
         entry!(0x0051_5580, fn_00515580(Ptr, u32) -> Ptr),
+        entry!(0x0051_5220, fn_00515220(Ptr, u32) -> u16),
+        entry!(0x0051_5290, fn_00515290(Ptr, u32)),
+        entry!(0x0051_52e0, fn_005152e0(Ptr, u32, u32)),
+        entry!(0x0051_5340, fn_00515340(Ptr, u32)),
+        entry!(0x0051_53a0, fn_005153a0(Ptr, u32)),
+        entry!(0x0051_55b0, fn_005155b0(Ptr)),
+        entry!(0x0051_56b0, fn_005156b0(Ptr)),
     ]
 }
 
@@ -202,5 +334,156 @@ mod le81_thunk_tests {
             }
             assert_eq!(calls, expected);
         }
+    }
+}
+
+#[cfg(test)]
+mod n040_tests {
+    use super::*;
+
+    fn calls_to(e: &mut Engine, targets: &[u32]) -> Vec<(u32, Vec<u32>)> {
+        e.call_log
+            .take()
+            .unwrap()
+            .into_iter()
+            .filter(|(a, _)| targets.contains(a))
+            .collect()
+    }
+
+    #[test]
+    fn fn_00515220_counts_the_extra_byte() {
+        let mut e = Engine::new();
+        e.register(0x0048_4bf0, |_, _| Ret {
+            eax: 0x10,
+            ..Ret::default()
+        });
+        e.register(0x0048_e9b0, |_, _| Ret {
+            eax: 0xffef,
+            ..Ret::default()
+        });
+        assert_eq!(e.call(0x0051_5220, &[0x1000, 0]).u16(), 0xffff);
+        assert_eq!(e.call(0x0051_5220, &[0x1000, 0x20]).u16(), 0);
+    }
+
+    #[test]
+    fn fn_00515290_and_005152e0_save_and_load_the_byte() {
+        let mut e = Engine::new();
+        let targets = [
+            0x0048_4c20,
+            0x0048_e9e0,
+            0x0048_4c50,
+            0x0048_ea10,
+            0x0085_79b0,
+            0x0085_79e0,
+        ];
+        for t in targets {
+            e.register(t, |_, _| Ret::default());
+        }
+        e.map(0x011d_e000, 0x1000);
+        e.set_global(SAVE_LOAD_GAME, 0x7000u32);
+        e.call_log = Some(vec![]);
+        e.call(0x0051_5290, &[0x1000, 0x1f]);
+        e.call(0x0051_52e0, &[0x1000, 0xdf, 5]);
+        assert_eq!(
+            calls_to(&mut e, &targets),
+            vec![
+                (0x0048_4c20, vec![0x1000, 0x1f]),
+                (0x0048_e9e0, vec![0x1084, 0x1f]),
+                (0x0048_4c50, vec![0x1000, 0xdf, 5]),
+                (0x0048_ea10, vec![0x1084, 0xdf, 5]),
+            ]
+        );
+        e.call_log = Some(vec![]);
+        e.call(0x0051_5290, &[0x1000, 0x20]);
+        e.call(0x0051_52e0, &[0x1000, 0x20, 5]);
+        let log = calls_to(&mut e, &[0x0085_79b0, 0x0085_79e0]);
+        assert_eq!(
+            log,
+            vec![
+                (0x0085_79b0, vec![0x7000, 0x10c1, 1]),
+                (0x0085_79e0, vec![0x7000, 0x10c1, 1]),
+            ]
+        );
+    }
+
+    #[test]
+    fn fn_00515340_and_005153a0_check_the_buffer() {
+        let mut e = Engine::new();
+        let targets = [
+            0x0048_4d60,
+            0x0048_ea40,
+            0x0048_4da0,
+            0x0048_ea80,
+            0x0086_5e50,
+            0x0086_4980,
+        ];
+        for t in targets {
+            e.register(t, |_, _| Ret::default());
+        }
+        e.register(BUFFER_00428110, |e, a| Ret {
+            eax: e.mem.u32(a[0]),
+            ..Ret::default()
+        });
+        e.register(CHECK_004280F0, |_, a| {
+            assert_eq!(a[1], 0x20);
+            Ret {
+                eax: a[0],
+                ..Ret::default()
+            }
+        });
+        let buffer = e.mem.alloc(4);
+        e.call_log = Some(vec![]);
+        e.call(0x0051_5340, &[0x1000, buffer]);
+        e.call(0x0051_53a0, &[0x1000, buffer]);
+        assert_eq!(
+            calls_to(&mut e, &targets),
+            vec![
+                (0x0048_4d60, vec![0x1000, buffer]),
+                (0x0048_ea40, vec![0x1084, buffer]),
+                (0x0048_4da0, vec![0x1000, buffer]),
+                (0x0048_ea80, vec![0x1084, buffer]),
+            ]
+        );
+        e.mem.set_u32(buffer, 1);
+        e.call_log = Some(vec![]);
+        e.call(0x0051_5340, &[0x1000, buffer]);
+        e.call(0x0051_53a0, &[0x1000, buffer]);
+        assert_eq!(
+            calls_to(&mut e, &[0x0086_5e50, 0x0086_4980]),
+            vec![
+                (0x0086_5e50, vec![buffer, 0x10c1, 1, 0]),
+                (0x0086_4980, vec![buffer, 0x10c1, 1]),
+            ]
+        );
+    }
+
+    #[test]
+    fn fn_005155b0_and_005156b0() {
+        let mut e = Engine::new();
+        for (_, d) in DESTRUCTOR_COMPONENTS {
+            e.register(d, |_, _| Ret::default());
+        }
+        e.register(0x0050_e9f0, |_, _| Ret::default());
+        e.register(0x0041_fd00, |_, _| Ret::default());
+        let this = e.mem.alloc(0x150);
+        e.call_log = Some(vec![]);
+        e.call(0x0051_55b0, &[this]);
+        let mut expected: Vec<(u32, Vec<u32>)> = DESTRUCTOR_COMPONENTS
+            .iter()
+            .map(|(o, d)| (*d, vec![this + o]))
+            .collect();
+        expected.push((0x0050_e9f0, vec![this]));
+        let mut targets: Vec<u32> = DESTRUCTOR_COMPONENTS.iter().map(|(_, d)| *d).collect();
+        targets.push(0x0050_e9f0);
+        assert_eq!(calls_to(&mut e, &targets), expected);
+        for (offset, vtable) in DESTRUCTOR_VTABLES {
+            assert_eq!(e.mem.u32(this + offset), vtable);
+        }
+        e.call_log = Some(vec![]);
+        e.call(0x0051_56b0, &[this]);
+        assert_eq!(
+            calls_to(&mut e, &[0x0041_fd00]),
+            vec![(0x0041_fd00, vec![this + 0x48, 3])]
+        );
     }
 }

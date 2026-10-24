@@ -58,12 +58,14 @@ pub fn fn_00d40940(e: &mut Engine, this: Ptr) {
     let a = [x0[1], x1[1], x2[1], x2[3]];
     let b = [x0[0], x1[0], x2[0], x2[1]];
     let c = [x0[2], x1[2], x2[2], x2[3]];
+    // `MULPS` with the splatted lane as the destination, `ADDPS`: the SSE NaN rules.
+    use crate::sse::{add, mul};
     for lane in 0..4usize {
-        let by_y = v[1] * a[lane];
-        let by_x = v[0] * b[lane];
-        let by_z = v[2] * c[lane];
+        let by_y = mul(v[1], a[lane]);
+        let by_x = mul(v[0], b[lane]);
+        let by_z = mul(v[2], c[lane]);
         e.mem
-            .set_f32(me + 0xd0 + lane as u32 * 4, (by_y + by_x) + by_z);
+            .set_f32(me + 0xd0 + lane as u32 * 4, add(add(by_y, by_x), by_z));
     }
 }
 

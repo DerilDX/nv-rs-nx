@@ -65,9 +65,43 @@ pub fn fn_005fdb60(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
     this
 }
 
+/// Adds `amount` to the word at `offset`; when the object at +0x38 is set
+/// and the byte `notify` is non-zero, runs `00616c20(which)` on it; then
+/// vtable slot 0x48 with 0x80000000.
+fn add_and_notify(e: &mut Engine, this: Ptr, offset: u32, amount: u32, notify: u8, which: u32) {
+    let at = this.addr() + offset;
+    let value = e.mem.u32(at).wrapping_add(amount);
+    e.mem.set_u32(at, value);
+    let target = e.mem.u32(this.addr() + 0x38);
+    if target != 0 && notify != 0 {
+        e.call(0x0061_6c20, &args![target, which]);
+    }
+    e.vcall(this.addr(), 0x48, &args![0x8000_0000u32]);
+}
+
+// Translated from 005fda00 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Adds `amount` to the word at +0x48 (`RET 8`: the amount, a byte; the
+/// engine map has no name); when the object at +0x38 is set and the byte
+/// is non-zero, `00616c20(0)` runs on it; then vtable slot 0x48 with
+/// 0x80000000.
+pub fn fn_005fda00(e: &mut Engine, this: Ptr, amount: u32, notify: u8) {
+    add_and_notify(e, this, 0x48, amount, notify, 0);
+}
+
+// Translated from 005fda50 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Adds `amount` to the word at +0x44 (`RET 8`: the amount, a byte; the
+/// engine map has no name); when the object at +0x38 is set and the byte
+/// is non-zero, `00616c20(1)` runs on it; then vtable slot 0x48 with
+/// 0x80000000.
+pub fn fn_005fda50(e: &mut Engine, this: Ptr, amount: u32, notify: u8) {
+    add_and_notify(e, this, 0x44, amount, notify, 1);
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x005f_da00, fn_005fda00(Ptr, u32, u8)),
+        entry!(0x005f_da50, fn_005fda50(Ptr, u32, u8)),
         entry!(0x005f_daa0, fn_005fdaa0(Ptr) -> Ptr),
         entry!(0x005f_dc30, fn_005fdc30(Ptr)),
         entry!(0x005f_db90, fn_005fdb90(Ptr)),
@@ -150,6 +184,39 @@ mod b022_tests {
             assert_eq!(e.mem.u32(object + 0x18), 0x0104_9b88);
             assert_eq!(e.mem.u32(object + 0x24), 0x0104_9b64);
             assert_eq!(e.mem.u32(object + 0x3c), 0x0104_9b44);
+        }
+    }
+}
+
+#[cfg(test)]
+mod n041_tests {
+    use super::*;
+
+    #[test]
+    fn counters_add_and_notify() {
+        let mut e = Engine::new();
+        let vtable = e.mem.alloc(0x50);
+        e.mem.set_u32(vtable + 0x48, 0x7000_0048);
+        e.register(0x7000_0048, |_, _| Ret::default());
+        e.register(0x0061_6c20, |_, _| Ret::default());
+        let this = e.mem.alloc(0x50);
+        e.mem.set_u32(this, vtable);
+        e.mem.set_u32(this + 0x48, 0xffff_ffff);
+        e.call_log = Some(vec![]);
+        e.call(0x005f_da00, &args![this, 2u32, 1u32]);
+        assert_eq!(e.mem.u32(this + 0x48), 1);
+        let log = e.call_log.take().unwrap();
+        assert!(!log.iter().any(|(a, _)| *a == 0x0061_6c20));
+        assert!(log.contains(&(0x7000_0048, vec![this, 0x8000_0000])));
+        e.mem.set_u32(this + 0x38, 0x4000);
+        for (addr, offset, which) in [(0x005f_da00u32, 0x48u32, 0u32), (0x005f_da50, 0x44, 1)] {
+            e.call_log = Some(vec![]);
+            e.call(addr, &args![this, 3u32, 0x100u32]);
+            e.call(addr, &args![this, 3u32, 1u32]);
+            let log = e.call_log.take().unwrap();
+            let notified: Vec<_> = log.iter().filter(|(a, _)| *a == 0x0061_6c20).collect();
+            assert_eq!(notified, vec![&(0x0061_6c20, vec![0x4000, which])]);
+            assert_eq!(e.mem.u32(this + offset), if which == 0 { 7 } else { 6 });
         }
     }
 }

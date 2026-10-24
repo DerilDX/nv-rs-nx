@@ -2057,6 +2057,50 @@ pub fn fn_00835690(e: &mut Engine, this: Ptr<StationState>, on: u8) {
     set_station_flag(e, this, 0x80, on);
 }
 
+// Translated from 00833bc0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Whether flag `4` of `iStationFlags` is set (`EAX` exactly 0 or 1).
+pub fn fn_00833bc0(e: &mut Engine, this: Ptr<StationState>) -> bool {
+    station_flag(e, this, 4)
+}
+
+// Translated from 00833be0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Whether flag `0x10` of `iStationFlags` is set (`EAX` exactly 0 or 1).
+pub fn fn_00833be0(e: &mut Engine, this: Ptr<StationState>) -> bool {
+    station_flag(e, this, 0x10)
+}
+
+// Translated from 00833c90 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Sets (`on`) or clears flag `0x40` of `iStationFlags` (`thiscall`, `RET 4`).
+pub fn fn_00833c90(e: &mut Engine, this: Ptr<StationState>, on: u8) {
+    set_station_flag(e, this, 0x40, on);
+}
+
+/// The byte [`fn_00833cf0`] answers (`011dcfa4`; the dialogue menu sets and clears it).
+const DIALOGUE_FLAG_011DCFA4: u32 = 0x011d_cfa4;
+
+// Translated from 00833cf0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (no arguments): the byte at `011dcfa4`, in `AL`.
+pub fn fn_00833cf0(e: &mut Engine) -> u8 {
+    e.global(DIALOGUE_FLAG_011DCFA4)
+}
+
+/// The task base constructor `RadioConvTask`'s constructor runs (`00c3ce60`, unit
+/// `queuedfiles.obj`, unnamed; `thiscall`, one word) and `RadioConvTask`'s vtable
+/// (`0107cf18`, RTTI `.?AVRadioConvTask@@`).
+const TASK_BASE_CONSTRUCT: u32 = 0x00c3_ce60;
+const RADIO_CONV_TASK_VTABLE: u32 = 0x0107_cf18;
+
+// Translated from 00837250 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `RadioConvTask`'s constructor (the engine map gives no name; the vtable's RTTI names the
+/// class; `thiscall`, `RET 4`): the base (`00c3ce60` with 0), the vtable, the station at
+/// +0x30. Returns `this`.
+pub fn fn_00837250(e: &mut Engine, this: Ptr, station: u32) -> Ptr {
+    e.call(TASK_BASE_CONSTRUCT, &args![this, 0u32]);
+    e.mem.set_u32(this.addr(), RADIO_CONV_TASK_VTABLE);
+    e.mem.set_u32(this.addr() + 0x30, station);
+    this
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -2064,6 +2108,11 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x0083_2490, fn_00832490(Ptr<StationState>, u8)),
         entry!(0x0083_3c00, fn_00833c00(Ptr<StationState>) -> bool),
         entry!(0x0083_3ce0, fn_00833ce0() -> u8),
+        entry!(0x0083_3bc0, fn_00833bc0(Ptr<StationState>) -> bool),
+        entry!(0x0083_3be0, fn_00833be0(Ptr<StationState>) -> bool),
+        entry!(0x0083_3c90, fn_00833c90(Ptr<StationState>, u8)),
+        entry!(0x0083_3cf0, fn_00833cf0() -> u8),
+        entry!(0x0083_7250, fn_00837250(Ptr, u32) -> Ptr),
         entry!(0x0083_5670, fn_00835670(Ptr<StationState>) -> bool),
         entry!(0x0083_5690, fn_00835690(Ptr<StationState>, u8)),
         entry!(0x0083_72c0, fn_008372c0(Ptr)),
@@ -3032,5 +3081,48 @@ mod la1_tests {
         assert_eq!(e.get(state, StationState::iStationFlags), 0x0001_0008);
         e.set(state, StationState::iStationFlags, !8u32);
         assert_eq!(e.call(0x0083_5670, &args![state]).u32(), 0);
+    }
+
+    #[test]
+    fn station_flags_4_0x10_and_0x40() {
+        let mut e = Engine::new();
+        let state = e.new_object::<StationState>();
+        e.set(state, StationState::iStationFlags, 0x0001_0004);
+        assert_eq!(e.call(0x0083_3bc0, &args![state]).u32(), 1);
+        assert_eq!(e.call(0x0083_3be0, &args![state]).u32(), 0);
+        e.set(state, StationState::iStationFlags, 0x10);
+        assert_eq!(e.call(0x0083_3bc0, &args![state]).u32(), 0);
+        assert_eq!(e.call(0x0083_3be0, &args![state]).u32(), 1);
+        // Only the low byte of the flag word counts.
+        e.call(0x0083_3c90, &args![state, 0x100u32]);
+        assert_eq!(e.get(state, StationState::iStationFlags), 0x10);
+        e.call(0x0083_3c90, &args![state, 1u32]);
+        assert_eq!(e.get(state, StationState::iStationFlags), 0x50);
+        e.call(0x0083_3c90, &args![state, 0u32]);
+        assert_eq!(e.get(state, StationState::iStationFlags), 0x10);
+    }
+
+    #[test]
+    fn dialogue_flag_byte() {
+        let mut e = Engine::new();
+        e.map(DIALOGUE_FLAG_011DCFA4, 4);
+        e.set_global(DIALOGUE_FLAG_011DCFA4, 0x0000_0207u32);
+        assert_eq!(e.call(0x0083_3cf0, &args![]).u8(), 7);
+    }
+
+    #[test]
+    fn radio_conv_task_constructor() {
+        let mut e = Engine::new();
+        e.register(TASK_BASE_CONSTRUCT, |e, a| {
+            e.mem.set_u32(a[0], 0x1234);
+            a[0].into_ret()
+        });
+        let this = e.mem.alloc(0x34);
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x0083_7250, &args![this, 0x5150u32]).u32(), this);
+        let log = e.call_log.take().unwrap();
+        assert_eq!(log[1..], [(TASK_BASE_CONSTRUCT, vec![this, 0])]);
+        assert_eq!(e.mem.u32(this), RADIO_CONV_TASK_VTABLE);
+        assert_eq!(e.mem.u32(this + 0x30), 0x5150);
     }
 }

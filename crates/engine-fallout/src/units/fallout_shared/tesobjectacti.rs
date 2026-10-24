@@ -242,12 +242,90 @@ pub fn fn_00510ea0(e: &mut Engine, this: Ptr, text_data: u32, text_lengths: u32)
     });
 }
 
+/// `TESForm::StartForm` (`004855a0`) and `TESForm::CloseForm` (`00485680`),
+/// `thiscall` on the form, no stack words.
+const START_FORM: u32 = 0x0048_55a0;
+const CLOSE_FORM: u32 = 0x0048_5680;
+/// The component saves (engine map; `thiscall`): `TESFullName::Save`
+/// (`00487010`), `TESModelTextureSwap::Save` (`0048a520`, three chunk tags),
+/// `TESScriptableForm::Save` (`0048cca0`) and
+/// `BGSDestructibleObjectForm::Save` (`00477f20`).
+const FULL_NAME_SAVE: u32 = 0x0048_7010;
+const MODEL_TEXTURE_SWAP_SAVE: u32 = 0x0048_a520;
+const SCRIPTABLE_FORM_SAVE: u32 = 0x0048_cca0;
+const DESTRUCTIBLE_SAVE: u32 = 0x0047_7f20;
+/// `00485910` (cdecl(chunk, word)): adds a one-word chunk;
+/// `TESForm::AddChunkArray` (`004856f0`, cdecl(chunk, data, size)).
+const ADD_CHUNK_WORD: u32 = 0x0048_5910;
+const ADD_CHUNK_ARRAY: u32 = 0x0048_56f0;
+/// The `BSStringT` at +0x88: its length (`004048e0`, `thiscall`), a copy of
+/// it into a string the caller gives (`005110e0`, `thiscall` on the
+/// activator, `RET 4`; answers that string), the string's text (`00559450`)
+/// and its destructor (`004037d0`).
+const STRING_LENGTH: u32 = 0x0040_48e0;
+const COPY_ACTIVATION_PROMPT: u32 = 0x0051_10e0;
+const STRING_TEXT: u32 = 0x0055_9450;
+const STRING_DESTRUCT: u32 = 0x0040_37d0;
+/// The forms `Save` writes by id, with their tags: +0x74 `SNAM`, +0x78
+/// `VNAM`, +0x7c `INAM`, +0x80 `WNAM`, +0x84 `RNAM`.
+const SAVED_FORMS: [(u32, u32); 5] = [
+    (0x74, SNAM),
+    (0x78, VNAM),
+    (0x7c, INAM),
+    (0x80, WNAM),
+    (0x84, RNAM),
+];
+
+// Translated from 00510f00 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 00510f00 - the FS:[0] exception frame (it destroys the two string copies if a step throws) is not translated.
+/// `TESObjectACTI::Save` (engine map; no stack words): `StartForm`, the full
+/// name, the model with texture swaps (`MODL`, `MODT`, `MODS`), the script
+/// and the destructible data; each set form of +0x74, +0x78, +0x7c, +0x80,
+/// +0x84 by id (`SNAM`, `VNAM`, `INAM`, `WNAM`, `RNAM`); when the string at
+/// +0x88 is not empty, a copy of it (`005110e0`) gives the length and a
+/// second copy the text of chunk `XATO` (with its terminator); both copies
+/// are destroyed; `CloseForm`. The two string copies the game keeps on its
+/// stack are a block here.
+pub fn tes_object_acti_save(e: &mut Engine, this: Ptr) {
+    let base = this.addr();
+    e.call(START_FORM, &args![this]);
+    e.call(FULL_NAME_SAVE, &args![base + 0x30]);
+    e.call(
+        MODEL_TEXTURE_SWAP_SAVE,
+        &args![base + 0x3c, MODL, MODT, MODS],
+    );
+    e.call(SCRIPTABLE_FORM_SAVE, &args![base + 0x5c]);
+    e.call(DESTRUCTIBLE_SAVE, &args![base + 0x68]);
+    for (offset, tag) in SAVED_FORMS {
+        let form = e.mem.u32(base + offset);
+        if form != 0 {
+            let id = e.call(FORM_ID, &args![form]).u32();
+            e.call(ADD_CHUNK_WORD, &args![tag, id]);
+        }
+    }
+    if e.call(STRING_LENGTH, &args![base + 0x88]).u32() != 0 {
+        e.with_stack(0x10, |e, strings| {
+            let first = strings.addr();
+            let second = strings.addr() + 8;
+            let copy = e.call(COPY_ACTIVATION_PROMPT, &args![this, first]).u32();
+            let size = e.call(STRING_LENGTH, &args![copy]).u32().wrapping_add(1);
+            let copy = e.call(COPY_ACTIVATION_PROMPT, &args![this, second]).u32();
+            let text = e.call(STRING_TEXT, &args![copy]).u32();
+            e.call(ADD_CHUNK_ARRAY, &args![XATO, text, size]);
+            e.call(STRING_DESTRUCT, &args![second]);
+            e.call(STRING_DESTRUCT, &args![first]);
+        });
+    }
+    e.call(CLOSE_FORM, &args![this]);
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
         entry!(0x0051_0a90, fn_00510a90(Ptr, Ptr) -> bool),
         entry!(0x0051_0770, tes_object_acti_init_item(Ptr)),
         entry!(0x0051_0ea0, fn_00510ea0(Ptr, u32, u32)),
+        entry!(0x0051_0f00, tes_object_acti_save(Ptr)),
     ]
 }
 
@@ -530,5 +608,89 @@ mod movement_path_tests {
         let this = e.mem.alloc(0x70);
         let (_, calls) = run(&mut e, 0x0051_0a90, &[this, FILE]);
         assert_eq!(calls.len(), 2);
+    }
+}
+
+#[cfg(test)]
+mod save_tests {
+    use super::*;
+
+    type Log = Vec<(u32, Vec<u32>)>;
+
+    fn only(log: &Log, addr: u32) -> Vec<Vec<u32>> {
+        log.iter()
+            .filter(|(a, _)| *a == addr)
+            .map(|(_, w)| w.clone())
+            .collect()
+    }
+
+    fn engine(prompt_length: u32) -> Engine {
+        let mut e = Engine::new();
+        for a in [
+            START_FORM,
+            CLOSE_FORM,
+            FULL_NAME_SAVE,
+            MODEL_TEXTURE_SWAP_SAVE,
+            SCRIPTABLE_FORM_SAVE,
+            DESTRUCTIBLE_SAVE,
+            ADD_CHUNK_WORD,
+            ADD_CHUNK_ARRAY,
+            STRING_DESTRUCT,
+        ] {
+            e.register(a, |_, _| Ret::default());
+        }
+        e.register(FORM_ID, |e, a| e.mem.u32(a[0] + 0xc).into_ret());
+        e.register_double(STRING_LENGTH, move |_, _| prompt_length.into_ret());
+        e.register(COPY_ACTIVATION_PROMPT, |_, a| a[1].into_ret());
+        e.register(STRING_TEXT, |_, a| (a[0] + 0x1000).into_ret());
+        e
+    }
+
+    #[test]
+    fn save_writes_components_forms_and_the_prompt() {
+        let mut e = engine(5);
+        let this = e.mem.alloc(0x90);
+        let sound = e.mem.alloc(0x18);
+        e.mem.set_u32(sound + 0xc, 0x0000_0123);
+        e.mem.set_u32(this + 0x74, sound);
+        e.mem.set_u32(this + 0x84, sound);
+        e.call_log = Some(vec![]);
+        e.call(0x0051_0f00, &args![this]);
+        let log = e.call_log.take().unwrap();
+        assert_eq!(only(&log, START_FORM), vec![vec![this]]);
+        assert_eq!(only(&log, FULL_NAME_SAVE), vec![vec![this + 0x30]]);
+        assert_eq!(
+            only(&log, MODEL_TEXTURE_SWAP_SAVE),
+            vec![vec![this + 0x3c, MODL, MODT, MODS]]
+        );
+        assert_eq!(only(&log, SCRIPTABLE_FORM_SAVE), vec![vec![this + 0x5c]]);
+        assert_eq!(only(&log, DESTRUCTIBLE_SAVE), vec![vec![this + 0x68]]);
+        assert_eq!(
+            only(&log, ADD_CHUNK_WORD),
+            vec![vec![SNAM, 0x123], vec![RNAM, 0x123]]
+        );
+        let copies = only(&log, COPY_ACTIVATION_PROMPT);
+        assert_eq!(copies.len(), 2);
+        let (first, second) = (copies[0][1], copies[1][1]);
+        assert_eq!(second, first + 8);
+        assert_eq!(
+            only(&log, ADD_CHUNK_ARRAY),
+            vec![vec![XATO, second + 0x1000, 6]]
+        );
+        assert_eq!(only(&log, STRING_DESTRUCT), vec![vec![second], vec![first]]);
+        assert_eq!(only(&log, CLOSE_FORM), vec![vec![this]]);
+    }
+
+    #[test]
+    fn save_skips_an_empty_prompt() {
+        let mut e = engine(0);
+        let this = e.mem.alloc(0x90);
+        e.call_log = Some(vec![]);
+        e.call(0x0051_0f00, &args![this]);
+        let log = e.call_log.take().unwrap();
+        assert!(only(&log, COPY_ACTIVATION_PROMPT).is_empty());
+        assert!(only(&log, ADD_CHUNK_ARRAY).is_empty());
+        assert!(only(&log, ADD_CHUNK_WORD).is_empty());
+        assert_eq!(only(&log, CLOSE_FORM).len(), 1);
     }
 }

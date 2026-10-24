@@ -1799,7 +1799,7 @@ pub fn actor_trigger_pain(e: &mut Engine, this: Ptr<Actor>, start_dialogue: u8, 
 // Translated from 008a7f40 (decompiled, FalloutNV.exe 1.4.0.525)
 /// Stores a `float` at `this + 0x344` (the process's pain timer).
 pub fn fn_008a7f40(e: &mut Engine, this: Ptr, value: f32) {
-    e.mem.set_f32(this.addr() + 0x344, value);
+    e.mem.set_f32(this.addr() + 0x344, x87_quiet(value));
 }
 
 // Translated from 008a7f60 (decompiled, FalloutNV.exe 1.4.0.525)

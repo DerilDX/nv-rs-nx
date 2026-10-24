@@ -249,6 +249,148 @@ pub fn tes_class_load(e: &mut Engine, this: Ptr<TESClass>, file: Ptr) -> bool {
     true
 }
 
+/// The swap helper (`00401080`, `cdecl (word address, flag)`; given 0).
+const SWAP_WORD: u32 = 0x0040_1080;
+/// The savers `TESClass::Save` calls: `TESForm::StartForm` (`004855a0`),
+/// `TESFullName::Save` (`00487010`), `TESDescription::Save` (`00482cb0`),
+/// `TESTexture::Save` (`0048e370`, one chunk word),
+/// `TESForm::__AddChunkData` (`00485990`, `cdecl`), the attributes'
+/// packing into seven bytes (`00480100`, `thiscall`, one word: the
+/// buffer), `TESForm::AddChunkArray` (`004856f0`, `cdecl`) and
+/// `TESForm::CloseForm` (`00485680`); the byte `00401500` answers (whether
+/// saving swaps bytes).
+const FORM_START: u32 = 0x0048_55a0;
+const SAVE_FULL_NAME: u32 = 0x0048_7010;
+const SAVE_DESCRIPTION: u32 = 0x0048_2cb0;
+const SAVE_TEXTURE: u32 = 0x0048_e370;
+const ADD_CHUNK_DATA: u32 = 0x0048_5990;
+const PACK_ATTRIBUTES: u32 = 0x0048_0100;
+const ADD_CHUNK_ARRAY: u32 = 0x0048_56f0;
+const FORM_CLOSE: u32 = 0x0048_5680;
+const SAVE_SWAPS: u32 = 0x0040_1500;
+/// `__RTDynamicCast` (`00ec43fb`) from `TESForm` (`01183028`) to `TESClass`
+/// (`01186424`), the type descriptors' names read at +8;
+/// `TESForm::CopyAllComponents` (`004851b0`), `TESForm::CompareAllComponents`
+/// (`00485270`), the class data getter (`005d43c0`, `thiscall`), the copy
+/// `00401460` (`cdecl (to, from, size)`) and `memcmp` (`00ec4835`).
+const DYNAMIC_CAST: u32 = 0x00ec_43fb;
+const TYPE_FORM: u32 = 0x0118_3028;
+const TYPE_CLASS: u32 = 0x0118_6424;
+const FORM_COPY_ALL_COMPONENTS: u32 = 0x0048_51b0;
+const FORM_COMPARE_ALL_COMPONENTS: u32 = 0x0048_5270;
+const CLASS_DATA: u32 = 0x005d_43c0;
+const COPY_BYTES: u32 = 0x0040_1460;
+const MEMCMP: u32 = 0x00ec_4835;
+
+// Translated from 005f6810 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 005f6810 - the /GS cookie check (00ec408c) is not translated
+/// `TESClass::Save` (Xbox PDB): starts the form, saves the full name
+/// (+0x18), the description (+0x24), the icon (+0x2C, `ICON`), the
+/// 0x1C-byte class data at +0x44 as `DATA` (swapped by [`fn_005f68d0`]
+/// before and after when saving swaps bytes), the attributes (+0x38,
+/// packed by `00480100` into seven stack bytes) as `ATTR`, and closes the
+/// form.
+pub fn tes_class_save(e: &mut Engine, this: Ptr<TESClass>) {
+    let at = this.addr();
+    e.call(FORM_START, &args![this]);
+    e.call(SAVE_FULL_NAME, &args![at + 0x18]);
+    e.call(SAVE_DESCRIPTION, &args![at + 0x24]);
+    e.call(SAVE_TEXTURE, &args![at + 0x2c, CHUNK_ICON]);
+    if e.call(SAVE_SWAPS, &args![]).u8() != 0 {
+        fn_005f68d0(e, Ptr::new(at + 0x44));
+    }
+    e.call(ADD_CHUNK_DATA, &args![CHUNK_DATA, at + 0x44, 0x1cu32]);
+    if e.call(SAVE_SWAPS, &args![]).u8() != 0 {
+        fn_005f68d0(e, Ptr::new(at + 0x44));
+    }
+    e.with_stack(8, |e, attributes| {
+        e.call(PACK_ATTRIBUTES, &args![at + 0x38, attributes]);
+        e.call(ADD_CHUNK_ARRAY, &args![CHUNK_ATTR, attributes, 7u32]);
+    });
+    e.call(FORM_CLOSE, &args![this]);
+}
+
+// Translated from 005f68d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`thiscall`; the byte swap of `CLASS_DATA`):
+/// the word at +0x14, then the four tag skills at +0..+0xC (`00401080`
+/// with flag 0).
+pub fn fn_005f68d0(e: &mut Engine, this: Ptr) {
+    e.call(SWAP_WORD, &args![this.addr() + 0x14, 0u32]);
+    for index in 0..4u32 {
+        e.call(SWAP_WORD, &args![this.addr() + index * 4, 0u32]);
+    }
+}
+
+// Translated from 005f6c90 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`thiscall`; the byte swap of the old class
+/// data): the word at +0x10, then the three words at +0..+8 (`00401080`
+/// with flag 0).
+pub fn fn_005f6c90(e: &mut Engine, this: Ptr) {
+    e.call(SWAP_WORD, &args![this.addr() + 0x10, 0u32]);
+    for index in 0..3u32 {
+        e.call(SWAP_WORD, &args![this.addr() + index * 4, 0u32]);
+    }
+}
+
+/// `other` cast from `TESForm` to `TESClass`.
+fn cast_class(e: &mut Engine, other: Ptr) -> u32 {
+    e.call(
+        DYNAMIC_CAST,
+        &args![other, 0u32, TYPE_FORM, TYPE_CLASS, 0u32],
+    )
+    .u32()
+}
+
+// Translated from 005f6cf0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`thiscall`, one word; the comparison of a
+/// `TESClass`): true (different) when `other` is none, when
+/// `CompareAllComponents` says so, or when the 0x1C-byte class data at
+/// +0x44 differs from the data of `other` (`005d43c0`, `memcmp`).
+pub fn fn_005f6cf0(e: &mut Engine, this: Ptr<TESClass>, other: Ptr) -> bool {
+    let source = cast_class(e, other);
+    if source == 0 {
+        return true;
+    }
+    if e.call(FORM_COMPARE_ALL_COMPONENTS, &args![this, source])
+        .u8()
+        != 0
+    {
+        return true;
+    }
+    let data = e.call(CLASS_DATA, &args![source]).u32();
+    e.call(MEMCMP, &args![this.addr() + 0x44, data, 0x1cu32])
+        .u32()
+        != 0
+}
+
+// Translated from 005f6d70 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`thiscall`, one word; the copy of a
+/// `TESClass`): when `other` is one, `CopyAllComponents` from `other` (the
+/// word as given) and the 0x1C-byte class data of the cast (`005d43c0`).
+pub fn fn_005f6d70(e: &mut Engine, this: Ptr<TESClass>, other: Ptr) {
+    let source = cast_class(e, other);
+    if source == 0 {
+        return;
+    }
+    e.call(FORM_COPY_ALL_COMPONENTS, &args![this, other]);
+    let data = e.call(CLASS_DATA, &args![source]).u32();
+    e.call(COPY_BYTES, &args![this.addr() + 0x44, data, 0x1cu32]);
+}
+
+// Translated from 005f6df0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`thiscall`, one word; the training skill
+/// setter): when `skill` is a valid skill (`0047f060`), stores `skill -
+/// 0x20` in `cTrainingSkill`.
+pub fn fn_005f6df0(e: &mut Engine, this: Ptr<TESClass>, skill: u32) {
+    if e.call(IS_VALID_SKILL, &args![skill]).u8() != 0 {
+        e.set(
+            this,
+            TESClass::cTrainingSkill,
+            skill.wrapping_sub(0x20) as u8,
+        );
+    }
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -260,6 +402,12 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x005f_6e20, fn_005f6e20(Ptr<TESClass>) -> bool),
         entry!(0x005f_6e60, tes_class_is_guard(Ptr<TESClass>) -> bool),
         entry!(0x005f_6930, tes_class_load(Ptr<TESClass>, Ptr) -> bool),
+        entry!(0x005f_6810, tes_class_save(Ptr<TESClass>)),
+        entry!(0x005f_68d0, fn_005f68d0(Ptr)),
+        entry!(0x005f_6c90, fn_005f6c90(Ptr)),
+        entry!(0x005f_6cf0, fn_005f6cf0(Ptr<TESClass>, Ptr) -> bool),
+        entry!(0x005f_6d70, fn_005f6d70(Ptr<TESClass>, Ptr)),
+        entry!(0x005f_6df0, fn_005f6df0(Ptr<TESClass>, u32)),
     ]
 }
 
@@ -529,5 +677,141 @@ mod tests {
             vec![vec![INVALID_CLASS_MESSAGE, 0x0bad]]
         );
         assert_eq!(calls_to(&e, 0x005f_6df0), vec![vec![this.addr(), 0x20]]);
+    }
+}
+
+#[cfg(test)]
+mod n043_tests {
+    use super::*;
+
+    const STATE: u32 = 0x7300_0000;
+
+    fn calls(e: &Engine, addr: u32) -> Vec<Vec<u32>> {
+        e.call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|c| c.0 == addr)
+            .map(|c| c.1.clone())
+            .collect()
+    }
+
+    fn engine() -> Engine {
+        let mut e = Engine::new();
+        e.map(STATE, 0x40);
+        for addr in [
+            SWAP_WORD,
+            FORM_START,
+            SAVE_FULL_NAME,
+            SAVE_DESCRIPTION,
+            SAVE_TEXTURE,
+            ADD_CHUNK_DATA,
+            ADD_CHUNK_ARRAY,
+            FORM_CLOSE,
+            FORM_COPY_ALL_COMPONENTS,
+            COPY_BYTES,
+        ] {
+            e.register(addr, |_, _| Ret::default());
+        }
+        e.register(SAVE_SWAPS, |e, _| e.mem.u32(STATE).into_ret());
+        e.register(PACK_ATTRIBUTES, |e, a| {
+            e.mem.write(a[1], &[1, 2, 3, 4, 5, 6, 7]);
+            Ret::default()
+        });
+        e.register(DYNAMIC_CAST, |_, a| a[0].into_ret());
+        e.register(CLASS_DATA, |_, a| (a[0] + 0x44).into_ret());
+        e
+    }
+
+    #[test]
+    fn save_writes_data_and_attributes() {
+        let mut e = engine();
+        e.register_double(ADD_CHUNK_ARRAY, |e, a| {
+            let first = e.mem.u8(a[1]);
+            let last = e.mem.u8(a[1] + 6);
+            e.mem
+                .set_u32(STATE + 4, u32::from(first) << 8 | u32::from(last));
+            Ret::default()
+        });
+        let this = e.mem.alloc(0x60);
+        e.mem.set_u32(STATE, 1);
+        e.call_log = Some(vec![]);
+        e.call(0x005f_6810, &args![this]);
+        assert_eq!(calls(&e, SAVE_FULL_NAME), vec![vec![this + 0x18]]);
+        assert_eq!(calls(&e, SAVE_DESCRIPTION), vec![vec![this + 0x24]]);
+        assert_eq!(calls(&e, SAVE_TEXTURE), vec![vec![this + 0x2c, CHUNK_ICON]]);
+        assert_eq!(
+            calls(&e, ADD_CHUNK_DATA),
+            vec![vec![CHUNK_DATA, this + 0x44, 0x1c]]
+        );
+        assert_eq!(calls(&e, SWAP_WORD).len(), 10);
+        assert_eq!(calls(&e, PACK_ATTRIBUTES)[0][0], this + 0x38);
+        let added = calls(&e, ADD_CHUNK_ARRAY);
+        assert_eq!((added[0][0], added[0][2]), (CHUNK_ATTR, 7));
+        assert_eq!(e.mem.u32(STATE + 4), 0x0107);
+        assert_eq!(calls(&e, FORM_CLOSE), vec![vec![this]]);
+        e.mem.set_u32(STATE, 0);
+        e.call_log = Some(vec![]);
+        e.call(0x005f_6810, &args![this]);
+        assert!(calls(&e, SWAP_WORD).is_empty());
+    }
+
+    #[test]
+    fn swaps_of_the_two_data_layouts() {
+        let mut e = engine();
+        e.call_log = Some(vec![]);
+        e.call(0x005f_68d0, &args![0x1000u32]);
+        let swaps: Vec<u32> = calls(&e, SWAP_WORD).iter().map(|c| c[0]).collect();
+        assert_eq!(swaps, vec![0x1014, 0x1000, 0x1004, 0x1008, 0x100c]);
+        e.call_log = Some(vec![]);
+        e.call(0x005f_6c90, &args![0x1000u32]);
+        let swaps: Vec<u32> = calls(&e, SWAP_WORD).iter().map(|c| c[0]).collect();
+        assert_eq!(swaps, vec![0x1010, 0x1000, 0x1004, 0x1008]);
+    }
+
+    #[test]
+    fn compare_and_copy() {
+        let mut e = engine();
+        e.register(FORM_COMPARE_ALL_COMPONENTS, |e, _| {
+            e.mem.u32(STATE).into_ret()
+        });
+        e.register(MEMCMP, |e, _| e.mem.u32(STATE + 4).into_ret());
+        e.call_log = Some(vec![]);
+        assert!(!e.call(0x005f_6cf0, &args![0x1000u32, 0x2000u32]).bool());
+        assert_eq!(
+            calls(&e, DYNAMIC_CAST),
+            vec![vec![0x2000, 0, TYPE_FORM, TYPE_CLASS, 0]]
+        );
+        assert_eq!(calls(&e, MEMCMP), vec![vec![0x1044, 0x2044, 0x1c]]);
+        e.mem.set_u32(STATE + 4, 1);
+        assert!(e.call(0x005f_6cf0, &args![0x1000u32, 0x2000u32]).bool());
+        e.mem.set_u32(STATE + 4, 0);
+        e.mem.set_u32(STATE, 1);
+        assert!(e.call(0x005f_6cf0, &args![0x1000u32, 0x2000u32]).bool());
+        e.call_log = Some(vec![]);
+        e.call(0x005f_6d70, &args![0x1000u32, 0x2000u32]);
+        assert_eq!(
+            calls(&e, FORM_COPY_ALL_COMPONENTS),
+            vec![vec![0x1000, 0x2000]]
+        );
+        assert_eq!(calls(&e, COPY_BYTES), vec![vec![0x1044, 0x2044, 0x1c]]);
+        e.register(DYNAMIC_CAST, |_, _| 0u32.into_ret());
+        assert!(e.call(0x005f_6cf0, &args![0x1000u32, 0x2000u32]).bool());
+        e.call_log = Some(vec![]);
+        e.call(0x005f_6d70, &args![0x1000u32, 0x2000u32]);
+        assert!(calls(&e, COPY_BYTES).is_empty());
+    }
+
+    #[test]
+    fn training_skill_setter() {
+        let mut e = engine();
+        e.register(IS_VALID_SKILL, |_, a| {
+            u32::from(a[0] >= 0x20 && a[0] < 0x2e).into_ret()
+        });
+        let this = e.mem.alloc(0x60);
+        e.call(0x005f_6df0, &args![this, 0x25u32]);
+        assert_eq!(e.mem.u8(this + 0x5c), 5);
+        e.call(0x005f_6df0, &args![this, 0x40u32]);
+        assert_eq!(e.mem.u8(this + 0x5c), 5);
     }
 }

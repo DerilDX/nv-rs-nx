@@ -591,9 +591,61 @@ pub fn fn_0060c120(e: &mut Engine, this: Ptr, index: u32, pointer: u32) {
     e.call(NI_POINTER_ASSIGN, &args![at, pointer]);
 }
 
+// Translated from 0060c290 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Copies the pointers `[first, last)` so that they end at `destination`
+/// (cdecl; the engine map has no name): the count is `(last - first) >> 2`
+/// (signed), the start `destination - 4 * count`; when the count is above
+/// 0 the words move with `memmove_s(start, 4 * count, first, 4 * count)`
+/// (`00ec7ce3`). Answers the start.
+pub fn fn_0060c290(e: &mut Engine, first: u32, last: u32, destination: u32) -> u32 {
+    let count = (last.wrapping_sub(first) as i32) >> 2;
+    let bytes = (count as u32).wrapping_shl(2);
+    let start = destination.wrapping_sub(bytes);
+    if count > 0 {
+        e.call(0x00ec_7ce3, &args![start, bytes, first, bytes]);
+    }
+    start
+}
+
+// Translated from 0060c950 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Hands each objective of the quest a state (`RET 4`: a word it never
+/// reads; the engine map has no name): for each item of the list
+/// `005d43e0` gives, up to an empty slot, `005ec5d0` on the item with 3
+/// when `005a5e70` answers true for it and 2 otherwise.
+pub fn fn_0060c950(e: &mut Engine, this: Ptr<TESQuest>, _unused_1: u32) {
+    let mut node = e.call(0x005d_43e0, &args![this]).u32();
+    while node != 0 {
+        let slot = e.call(0x0068_15c0, &args![node]).u32();
+        if e.mem.u32(slot) == 0 {
+            break;
+        }
+        let slot = e.call(0x0068_15c0, &args![node]).u32();
+        let objective = e.mem.u32(slot);
+        let state = if e.call(0x005a_5e70, &args![objective]).bool() {
+            3u32
+        } else {
+            2
+        };
+        let slot = e.call(0x0068_15c0, &args![node]).u32();
+        let objective = e.mem.u32(slot);
+        e.call(0x005e_c5d0, &args![objective, state]);
+        node = e.call(0x0072_6070, &args![node]).u32();
+    }
+}
+
+// Translated from 0060cad0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Lowers a miscellaneous stat by one (cdecl: the stat; the engine map
+/// has no name): `MiscStatManager::ModVal(stat, -1)` (`004d5e10`, cdecl).
+pub fn fn_0060cad0(e: &mut Engine, stat: u32) {
+    e.call(0x004d_5e10, &args![stat, 0xffff_ffffu32]);
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x0060_c290, fn_0060c290(u32, u32, u32) -> u32),
+        entry!(0x0060_c950, fn_0060c950(Ptr<TESQuest>, u32)),
+        entry!(0x0060_cad0, fn_0060cad0(u32)),
         entry!(0x0060c4b0, fn_0060c4b0(Ptr<TESQuest>) -> Ptr<TESQuest>),
         entry!(0x0060c5c0, fn_0060c5c0(Ptr<QuestData>) -> Ptr<QuestData>),
         entry!(0x0060c740, fn_0060c740(Ptr<TESQuest>)),
@@ -1314,5 +1366,86 @@ mod b008_tests {
         assert_eq!(end.u32(), 0x308);
         let end = e.call(0x0060_c320, &args![0x100u32, 0x10cu32, 0x400u32, 9u32]);
         assert_eq!(end.u32(), 0x40c);
+    }
+}
+
+#[cfg(test)]
+mod n041_tests {
+    use super::*;
+
+    fn ret(eax: u32) -> Ret {
+        Ret {
+            eax,
+            ..Ret::default()
+        }
+    }
+
+    fn calls(e: &Engine, addr: u32) -> Vec<Vec<u32>> {
+        e.call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|(a, _)| *a == addr)
+            .map(|(_, w)| w.clone())
+            .collect()
+    }
+
+    #[test]
+    fn fn_0060c290_moves_the_words_before_the_destination() {
+        let mut e = Engine::new();
+        e.register(0x00ec_7ce3, |_, _| Ret::default());
+        e.call_log = Some(vec![]);
+        assert_eq!(
+            e.call(0x0060_c290, &args![0x1000u32, 0x100cu32, 0x2010u32])
+                .u32(),
+            0x2004
+        );
+        assert_eq!(calls(&e, 0x00ec_7ce3), vec![vec![0x2004, 12, 0x1000, 12]]);
+        // An empty or reversed range moves nothing.
+        e.call_log = Some(vec![]);
+        assert_eq!(
+            e.call(0x0060_c290, &args![0x1000u32, 0x1000u32, 0x2010u32])
+                .u32(),
+            0x2010
+        );
+        assert_eq!(
+            e.call(0x0060_c290, &args![0x1008u32, 0x1000u32, 0x2010u32])
+                .u32(),
+            0x2018
+        );
+        assert!(calls(&e, 0x00ec_7ce3).is_empty());
+    }
+
+    #[test]
+    fn fn_0060c950_hands_each_objective_its_state() {
+        let mut e = Engine::new();
+        let quest = e.mem.alloc(0x6c);
+        // The list: nodes {item, next}; the second item answers true.
+        let second = e.mem.alloc(8);
+        e.mem.set_u32(quest + 0x4c, 0x51);
+        e.mem.set_u32(quest + 0x50, second);
+        e.mem.set_u32(second, 0x52);
+        e.register(0x005d_43e0, |_, a| ret(a[0] + 0x4c));
+        e.register(0x0068_15c0, |_, a| ret(a[0]));
+        e.register(0x0072_6070, |e, a| ret(e.mem.u32(a[0] + 4)));
+        e.register(0x005a_5e70, |_, a| ret(u32::from(a[0] == 0x52)));
+        e.register(0x005e_c5d0, |_, _| Ret::default());
+        e.call_log = Some(vec![]);
+        e.call(0x0060_c950, &args![quest, 0xdeadu32]);
+        assert_eq!(calls(&e, 0x005e_c5d0), vec![vec![0x51, 2], vec![0x52, 3]]);
+        // An empty slot stops the walk.
+        e.mem.set_u32(quest + 0x4c, 0);
+        e.call_log = Some(vec![]);
+        e.call(0x0060_c950, &args![quest, 0u32]);
+        assert!(calls(&e, 0x005e_c5d0).is_empty());
+    }
+
+    #[test]
+    fn fn_0060cad0_lowers_the_stat_by_one() {
+        let mut e = Engine::new();
+        e.register(0x004d_5e10, |_, _| Ret::default());
+        e.call_log = Some(vec![]);
+        e.call(0x0060_cad0, &args![0x1bu32]);
+        assert_eq!(calls(&e, 0x004d_5e10), vec![vec![0x1b, 0xffff_ffff]]);
     }
 }

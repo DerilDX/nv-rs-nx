@@ -1036,6 +1036,115 @@ pub fn actor_value_info_load(e: &mut Engine, this: Ptr, file: Ptr) -> bool {
     true
 }
 
+/// The weapon-skill badge textures `0066ea20` answers
+/// (`Interface\Icons\TypeIcons\weap_skill_icon_<skill>.dds`).
+const BADGE_BIG_GUNS: u32 = 0x0106_755c;
+const BADGE_ENERGY: u32 = 0x0106_7524;
+const BADGE_EXPLOSIVES: u32 = 0x0106_74e8;
+const BADGE_MELEE: u32 = 0x0106_74b4;
+const BADGE_SMALL_ARMS: u32 = 0x0106_747c;
+const BADGE_UNARMED: u32 = 0x0106_7444;
+/// The `double` 0.0 at `01012060`.
+const ZERO_01012060: u32 = 0x0101_2060;
+
+// Translated from 0066ea20 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ActorValue::GetItemWeaponTypeBadge` (engine map), `cdecl`: the badge
+/// texture path of a weapon skill's actor value (the compiler's byte map
+/// and jump table over `index - 0x21` as `match` arms): 0x21 big guns,
+/// 0x22 energy weapons, 0x23 explosives, 0x26 melee, 0x29 small arms,
+/// 0x2D unarmed; null for any other.
+pub fn actor_value_get_item_weapon_type_badge(_e: &mut Engine, index: u32) -> u32 {
+    match index.wrapping_sub(0x21) {
+        0 => BADGE_BIG_GUNS,
+        1 => BADGE_ENERGY,
+        2 => BADGE_EXPLOSIVES,
+        5 => BADGE_MELEE,
+        8 => BADGE_SMALL_ARMS,
+        0xc => BADGE_UNARMED,
+        _ => 0,
+    }
+}
+
+// Translated from 0066eac0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ActorValue::GetActorValueScriptName` (engine map), `cdecl`: the script
+/// name (+0x38) of the actor value's info (`0066e920`), null without one.
+pub fn actor_value_get_actor_value_script_name(e: &mut Engine, index: u32) -> u32 {
+    let info = info_of(e, index);
+    if info == 0 {
+        0
+    } else {
+        e.mem.u32(info + 0x38)
+    }
+}
+
+// Translated from 0066eb40 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`cdecl`): the first actor value whose
+/// registered info's script name (+0x38, the infos at `011d61c8` read
+/// without a null test) compares equal to `name` (`00404dc0` answers 0),
+/// else 0x4D.
+pub fn fn_0066eb40(e: &mut Engine, name: u32) -> u32 {
+    let mut found = 0x4du32;
+    let mut index = 0u32;
+    while (index as i32) < 0x4d && found == 0x4d {
+        let info = e.mem.u32(ACTOR_VALUE_INFOS + index * 4);
+        let script_name = e.mem.u32(info + 0x38);
+        if e.call(0x0040_4dc0, &args![script_name, name]).u32() == 0 {
+            found = index;
+        }
+        index += 1;
+    }
+    found
+}
+
+// Translated from 0066eea0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ActorValue::CheckClampDamageModifier` (engine map), `cdecl`: `delta`,
+/// unless it is below 0.0 (the `double` at `01012060`; `FCOMP`, false on
+/// NaN) for an actor value with flag 0x20 (`00406d70`): then the owner's
+/// slot 5 (+0x14) plus slot 1 (+0x4) value for it (`FADD`, stored as a
+/// `float`) is, when below `-delta`, negated and answered instead.
+pub fn actor_value_check_clamp_damage_modifier(
+    e: &mut Engine,
+    owner: u32,
+    index: u32,
+    delta: f32,
+) -> f32 {
+    let mut result = x87_quiet_bits(delta.to_bits());
+    let zero = f64::from_bits(e.mem.u64(ZERO_01012060));
+    if x87_load32(delta.to_bits()) < zero && e.call(HAS_FLAG, &args![index, 0x20u32]).bool() {
+        let first = e.vcall(owner, 0x4, &args![index]).f64();
+        let second = e.vcall(owner, 0x14, &args![index]).f64();
+        let sum = x87_store32(x87_add(second, first));
+        if x87_load32(sum) < -x87_load32(delta.to_bits()) {
+            result = x87_store32(-x87_load32(sum));
+        }
+    }
+    f32::from_bits(result)
+}
+
+// Translated from 006703b0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ActorValueInfo::Save` (engine map): starts the form (`004855a0`), saves
+/// the full name (`00487010`, +0x18), the description (`00482cb0`, +0x24)
+/// and the icon (`0048e370`, +0x2C, with `ICON`); when the abbreviation
+/// string (+0x3C, length `004048e0`) is not empty, it is added as `ANAM`
+/// with its terminator (`004856f0`, characters from `00559450`); then
+/// closes the form (`00485680`).
+pub fn actor_value_info_save(e: &mut Engine, this: Ptr) {
+    let base = this.addr();
+    e.call(0x0048_55a0, &args![this]);
+    e.call(0x0048_7010, &args![base + 0x18]);
+    e.call(0x0048_2cb0, &args![base + 0x24]);
+    e.call(0x0048_e370, &args![base + 0x2c, CHUNK_ICON]);
+    if e.call(0x0040_48e0, &args![base + 0x3c]).u32() != 0 {
+        let length = e.call(0x0040_48e0, &args![base + 0x3c]).u32();
+        let chars = e.call(STRING_CHARS, &args![base + 0x3c]).u32();
+        e.call(
+            0x0048_56f0,
+            &args![CHUNK_ANAM, chars, length.wrapping_add(1)],
+        );
+    }
+    e.call(0x0048_5680, &args![this]);
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -1080,6 +1189,20 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00670080, fn_00670080(Ptr)),
         (0x00670120, fn_00670120_entry as AbiFn),
         entry!(0x006701a0, actor_value_info_load(Ptr, Ptr) -> bool),
+        entry!(
+            0x0066_ea20,
+            actor_value_get_item_weapon_type_badge(u32) -> u32
+        ),
+        entry!(
+            0x0066_eac0,
+            actor_value_get_actor_value_script_name(u32) -> u32
+        ),
+        entry!(0x0066_eb40, fn_0066eb40(u32) -> u32),
+        entry!(
+            0x0066_eea0,
+            actor_value_check_clamp_damage_modifier(u32, u32, f32) -> f32
+        ),
+        entry!(0x0067_03b0, actor_value_info_save(Ptr)),
     ]
 }
 
@@ -1682,5 +1805,117 @@ mod b019_tests {
         e.call_log = Some(vec![]);
         assert!(!e.call(0x0067_01a0, &args![this, file]).bool());
         assert!(calls(&e, 0x0048_5110).is_empty());
+    }
+}
+
+#[cfg(test)]
+mod n036_tests {
+    use super::*;
+
+    fn calls_to(log: &[(u32, Vec<u32>)], addr: u32) -> Vec<Vec<u32>> {
+        log.iter()
+            .filter(|c| c.0 == addr)
+            .map(|c| c.1.clone())
+            .collect()
+    }
+
+    #[test]
+    fn weapon_badges_by_skill() {
+        let mut e = Engine::new();
+        let badge = |e: &mut Engine, index: u32| e.call(0x0066_ea20, &args![index]).u32();
+        assert_eq!(badge(&mut e, 0x21), BADGE_BIG_GUNS);
+        assert_eq!(badge(&mut e, 0x22), BADGE_ENERGY);
+        assert_eq!(badge(&mut e, 0x23), BADGE_EXPLOSIVES);
+        assert_eq!(badge(&mut e, 0x26), BADGE_MELEE);
+        assert_eq!(badge(&mut e, 0x29), BADGE_SMALL_ARMS);
+        assert_eq!(badge(&mut e, 0x2d), BADGE_UNARMED);
+        for other in [0x20, 0x24, 0x25, 0x27, 0x28, 0x2a, 0x2c, 0x2e, 0] {
+            assert_eq!(badge(&mut e, other), 0);
+        }
+    }
+
+    #[test]
+    fn script_name_and_lookup_by_name() {
+        let mut e = Engine::new();
+        e.map(0x011d_6000, 0x1000);
+        let info = e.mem.alloc(0x40);
+        e.mem.set_u32(info + 0x38, 0x7700);
+        e.register_double(ACTOR_VALUE_INFO, move |_, a| {
+            (if a[0] == 3 { info } else { 0 }).into_ret()
+        });
+        assert_eq!(e.call(0x0066_eac0, &args![3u32]).u32(), 0x7700);
+        assert_eq!(e.call(0x0066_eac0, &args![4u32]).u32(), 0);
+
+        let other = e.mem.alloc(0x40);
+        e.mem.set_u32(other + 0x38, 0x7100);
+        for i in 0..0x4d {
+            e.mem
+                .set_u32(ACTOR_VALUE_INFOS + i * 4, if i == 7 { info } else { other });
+        }
+        e.register(0x0040_4dc0, |_, a| u32::from(a[0] != a[1]).into_ret());
+        assert_eq!(e.call(0x0066_eb40, &args![0x7700u32]).u32(), 7);
+        assert_eq!(e.call(0x0066_eb40, &args![0x7100u32]).u32(), 0);
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x0066_eb40, &args![0x7200u32]).u32(), 0x4d);
+        assert_eq!(
+            calls_to(&e.call_log.take().unwrap(), 0x0040_4dc0).len(),
+            0x4d
+        );
+    }
+
+    #[test]
+    fn clamp_damage_modifier_limits_negative_deltas() {
+        let mut e = Engine::new();
+        e.map(0x0101_2000, 0x1000);
+        e.register(HAS_FLAG, |_, a| (a[0] == 1).into_ret());
+        e.put_vtable(0x0207_0000, &[0, 0x0090_0004, 0, 0, 0, 0x0090_0014]);
+        e.register(0x0090_0004, |_, _| 10.0f64.into_ret());
+        e.register(0x0090_0014, |_, _| (-4.0f64).into_ret());
+        let owner = e.mem.alloc(4);
+        e.mem.set_u32(owner, 0x0207_0000);
+        let clamp = |e: &mut Engine, index: u32, delta: f32| {
+            e.call(0x0066_eea0, &args![owner, index, delta.to_bits()])
+                .f64()
+        };
+        // 10 - 4 = 6: a delta of -8 is limited to -6, -5 kept.
+        assert_eq!(clamp(&mut e, 1, -8.0), -6.0);
+        assert_eq!(clamp(&mut e, 1, -5.0), -5.0);
+        // Without the flag, or a non-negative delta, unchanged.
+        assert_eq!(clamp(&mut e, 2, -8.0), -8.0);
+        assert_eq!(clamp(&mut e, 1, 3.0), 3.0);
+        e.call_log = Some(vec![]);
+        assert!(clamp(&mut e, 1, f32::NAN).is_nan());
+        assert!(calls_to(&e.call_log.take().unwrap(), HAS_FLAG).is_empty());
+    }
+
+    #[test]
+    fn info_save_writes_components_and_abbreviation() {
+        for length in [0u32, 3] {
+            let mut e = Engine::new();
+            for callee in [
+                0x0048_55a0,
+                0x0048_7010,
+                0x0048_2cb0,
+                0x0048_e370,
+                0x0048_56f0,
+                0x0048_5680,
+            ] {
+                e.register(callee, |_, _| Ret::default());
+            }
+            e.register_double(0x0040_48e0, move |_, _| length.into_ret());
+            e.register(STRING_CHARS, |_, a| (a[0] + 0x100).into_ret());
+            e.call_log = Some(vec![]);
+            e.call(0x0067_03b0, &args![0x5000u32]);
+            let log = e.call_log.take().unwrap();
+            assert_eq!(calls_to(&log, 0x0048_e370), vec![vec![0x502c, CHUNK_ICON]]);
+            assert_eq!(calls_to(&log, 0x0048_2cb0), vec![vec![0x5024]]);
+            let anam = calls_to(&log, 0x0048_56f0);
+            if length == 0 {
+                assert!(anam.is_empty());
+            } else {
+                assert_eq!(anam, vec![vec![CHUNK_ANAM, 0x513c, 4]]);
+            }
+            assert_eq!(calls_to(&log, 0x0048_5680), vec![vec![0x5000]]);
+        }
     }
 }

@@ -7,7 +7,8 @@
 
 #[allow(unused_imports)]
 use crate::prelude::*;
-use crate::units::havok_sdk::hkpconvexradiusbuilder::{mulps, shufps, splat, subps, sum_of_three};
+use crate::sse::{mulps, subps};
+use crate::units::havok_sdk::hkpconvexradiusbuilder::{shufps, splat};
 use crate::x87::rsqrt_estimate;
 
 type Vec4 = [f32; 4];
@@ -22,14 +23,20 @@ fn load(e: &Engine, at: Ptr) -> Vec4 {
     ]
 }
 
+/// `SUBPS a, b` (the SSE NaN rules).
 fn sub(a: Vec4, b: Vec4) -> Vec4 {
-    [a[0] - b[0], a[1] - b[1], a[2] - b[2], a[3] - b[3]]
+    subps(a, b)
 }
 
-/// The sum of the three lane products added as `z + (y + x)`.
+/// `MULPS a, b`, then the sum of the three lane products added as `z + (y + x)` (`ADDSS`
+/// with the higher lane as the destination), with the SSE NaN rules.
 fn dot3(a: Vec4, b: Vec4) -> f32 {
-    let p = [a[0] * b[0], a[1] * b[1], a[2] * b[2]];
-    p[2] + (p[1] + p[0])
+    sum_of_three(mulps(a, b))
+}
+
+/// `z + (y + x)` with `ADDSS` (the higher lane the destination, the SSE NaN rules).
+fn sum_of_three(v: Vec4) -> f32 {
+    crate::sse::add(v[2], crate::sse::add(v[1], v[0]))
 }
 
 // Translated from 00cd72a0 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -47,28 +54,38 @@ pub fn fn_00cd72a0(e: &mut Engine, triangle: Ptr, out: Ptr) {
     let to_a = sub(a, c);
     let from_b = sub(c, b);
     let to_b = sub(b, a);
-    let normal = [
-        to_a[2] * from_b[1] - to_a[1] * from_b[2],
-        to_a[0] * from_b[2] - to_a[2] * from_b[0],
-        to_a[1] * from_b[0] - to_a[0] * from_b[1],
-        0.0,
-    ];
+    // `(a - c).zxyw * (c - b).yzxw - (a - c).yzxw * (c - b).zxyw` (`MULPS`, `SUBPS`, the
+    // destination first; the fourth lane is not summed).
+    let normal = subps(
+        mulps(shufps(to_a, to_a, 0xd2), shufps(from_b, from_b, 0xc9)),
+        mulps(shufps(to_a, to_a, 0xc9), shufps(from_b, from_b, 0xd2)),
+    );
+    // The four sums go through the x87 stack into a scratch vector (quieted), which
+    // `RSQRTPS` and the Newton step (SSE NaN rules) take.
     let squares = [
         dot3(from_b, from_b),
         dot3(to_a, to_a),
         dot3(to_b, to_b),
         dot3(normal, normal),
-    ];
+    ]
+    .map(x87_quiet);
     let refined = squares.map(|x| {
+        use crate::sse::{mul, sub};
         let estimate = rsqrt_estimate(x);
-        (3.0 - (estimate * x) * estimate) * (0.5 * estimate)
+        mul(
+            sub(3.0, mul(mul(estimate, x), estimate)),
+            mul(0.5, estimate),
+        )
     });
     for (lane, value) in refined.into_iter().enumerate() {
         e.mem
             .set_f32(out.addr() + 4 * lane as u32, x87_quiet(value));
     }
-    let length = (f64::from(squares[3]) * f64::from(refined[3])) as f32;
-    e.mem.set_f32(out.addr() + 0x10, length);
+    let length = x87_mul(
+        x87_load32(squares[3].to_bits()),
+        x87_load32(refined[3].to_bits()),
+    );
+    e.mem.set_u32(out.addr() + 0x10, x87_store32(length));
 }
 
 // Translated from 00cd7530 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -89,56 +106,64 @@ pub fn fn_00cd7530(e: &mut Engine, p: Ptr, a: Ptr, b: Ptr, c: Ptr, out: Ptr) {
     let e2 = sub(vc, vb);
     let n1 = dot3(e1, e1);
     let n2 = dot3(e2, e2);
-    let d = dot3(e1, e2);
-    let n1n2 = (f64::from(n1) * f64::from(n2)) as f32;
-    let d2 = (f64::from(d) * f64::from(d)) as f32;
-    let det = (f64::from(n1n2) - f64::from(d2)) as f32;
+    // `MULPS` with `e2` as the destination.
+    let d = dot3(e2, e1);
+    // The x87 stack code with the x87 choice of NaN; `rounded` is a store to a scratch
+    // float, `wide` the load of one.
+    let (fsub, fmul, fdiv) = (x87_sub, x87_mul, x87_div);
+    let rounded = |value: f64| f32::from_bits(x87_store32(value));
+    let wide = |value: f32| x87_load32(value.to_bits());
+    let n1n2 = rounded(fmul(wide(n1), wide(n2)));
+    let d2 = rounded(fmul(wide(d), wide(d)));
+    let det = rounded(fsub(wide(n1n2), wide(d2)));
     let out = out.addr();
     if det > 0.0 {
-        let inv = (1.0 / f64::from(det)) as f32;
+        let inv = rounded(fdiv(1.0, wide(det)));
         let from_point = sub(vb, point);
         let p1 = dot3(from_point, e1);
         let p2 = dot3(from_point, e2);
-        let (d, n1, n2) = (f64::from(d), f64::from(n1), f64::from(n2));
-        let x = (f64::from(p2) * d - n2 * f64::from(p1)) as f32;
-        let y = (f64::from(p1) * d - n1 * f64::from(p2)) as f32;
-        let (x_d, y_d, inv_d) = (f64::from(x), f64::from(y), f64::from(inv));
-        e.mem.set_f32(out, (x_d * inv_d) as f32);
-        e.mem
-            .set_f32(out + 4, (((f64::from(det) - x_d) - y_d) * inv_d) as f32);
-        e.mem.set_f32(out + 8, (y_d * inv_d) as f32);
+        let (d, n1, n2) = (wide(d), wide(n1), wide(n2));
+        let x = rounded(fsub(fmul(wide(p2), d), fmul(n2, wide(p1))));
+        let y = rounded(fsub(fmul(wide(p1), d), fmul(n1, wide(p2))));
+        let (x_d, y_d, inv_d) = (wide(x), wide(y), wide(inv));
+        e.mem.set_u32(out, x87_store32(fmul(x_d, inv_d)));
+        let rest = fsub(fsub(wide(det), x_d), y_d);
+        e.mem.set_u32(out + 4, x87_store32(fmul(rest, inv_d)));
+        e.mem.set_u32(out + 8, x87_store32(fmul(y_d, inv_d)));
         return;
     }
     let e3 = sub(va, vc);
     let n3 = dot3(e3, e3);
-    // The fraction of the edge `from` + `edge`, `length` long, that `p` projects on.
+    // The fraction of the edge `from` + `edge`, `length` long, that `p` projects on (`FDIVR`
+    // of the scratch float by the loaded length).
     let fraction = |from: Vec4, edge: Vec4, length: f32| -> f32 {
         let along = dot3(sub(point, from), edge);
-        (f64::from(along) / f64::from(length)) as f32
+        rounded(fdiv(wide(along), wide(length)))
     };
+    let one_minus = |value: f32| f32::from_bits(x87_store32(fsub(1.0, wide(value))));
     if !(n1 >= n2) {
         if !(n3 >= n2) {
             let r = fraction(vb, e2, n2);
             e.mem.set_f32(out, 0.0);
             e.mem.set_f32(out + 8, r);
-            e.mem.set_f32(out + 4, 1.0 - r);
+            e.mem.set_f32(out + 4, one_minus(r));
         } else {
             let q = fraction(vc, e3, n3);
             e.mem.set_f32(out, q);
             e.mem.set_f32(out + 4, 0.0);
-            e.mem.set_f32(out + 8, 1.0 - q);
+            e.mem.set_f32(out + 8, one_minus(q));
         }
     } else if !(n3 >= n1) {
         let r = fraction(vb, e1, n1);
         e.mem.set_f32(out, r);
-        e.mem.set_f32(out + 4, 1.0 - r);
+        e.mem.set_f32(out + 4, one_minus(r));
         e.mem.set_f32(out + 8, 0.0);
     } else {
         e.mem.set_f32(out + 4, 0.0);
         if 0.0 < n3 {
             let q = fraction(vc, e3, n3);
             e.mem.set_f32(out, q);
-            e.mem.set_f32(out + 8, 1.0 - q);
+            e.mem.set_f32(out + 8, one_minus(q));
         } else {
             e.mem.set_f32(out, 0.0);
             e.mem.set_f32(out + 8, 0.0);
@@ -189,7 +214,7 @@ pub fn fn_00cd7160(e: &mut Engine, triangle: Ptr, out: Ptr) {
         .set_u32(out + 4, x87_store32(x87_mul(n2_loaded, inverse)));
     e.mem
         .set_u32(out + 8, x87_store32(x87_mul(d_loaded, inverse)));
-    let length = sum_of_three(mulps(cross, cross)).sqrt();
+    let length = crate::sse::sqrt(sum_of_three(mulps(cross, cross)));
     let reciprocal = x87_div(1.0, x87_m32(length.to_bits()));
     e.mem.set_u32(out + 0xc, x87_store32(reciprocal));
 }

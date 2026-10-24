@@ -264,9 +264,225 @@ pub fn script_effect_save_game_ov2(e: &mut Engine, this: Ptr, buffer: u32) {
     });
 }
 
+/// The save game object (`011de45c`).
+const SAVE_GAME: u32 = 0x011d_e45c;
+/// `0047c850` (`thiscall`, here on the save game object): a byte (its body answers 0).
+const SAVE_GAME_FLAG_0047C850: u32 = 0x0047_c850;
+/// `008df040` (`thiscall`): the save game object's version byte (+0x80).
+const SAVE_VERSION: u32 = 0x008d_f040;
+/// The version from which the locals' size is saved as a 16-bit word.
+const VERSION_SIZED_LOCALS: i32 = 0x2a;
+/// `Script::RunScriptEffectFinish` (engine map, `005ac380`; `thiscall`, two words:
+/// reference, locals).
+const SCRIPT_RUN_EFFECT_FINISH: u32 = 0x005a_c380;
+/// `ActiveEffect::GetSaveSize` (engine map, `00804f80`), `ActiveEffect::SaveGame`
+/// (`008050d0`), `ActiveEffect::LoadGame` (`00805330`), `ActiveEffect::LoadGame_ov2`
+/// (`00806420`) (`thiscall`, one word each).
+const ACTIVE_EFFECT_GET_SAVE_SIZE: u32 = 0x0080_4f80;
+const ACTIVE_EFFECT_SAVE: u32 = 0x0080_50d0;
+const ACTIVE_EFFECT_LOAD: u32 = 0x0080_5330;
+const ACTIVE_EFFECT_LOAD_OV2: u32 = 0x0080_6420;
+/// `004534f0` (`thiscall`, one word): an empty body.
+const EMPTY_004534F0: u32 = 0x0045_34f0;
+/// `ScriptLocals` helpers (`tesscript.cpp`; `thiscall`): the save size (`005a94f0`, a
+/// 16-bit answer), save (`005a9670`), load (`005a9950`), revert (`005a9d00`),
+/// `ScriptLocals::LoadGame` (`005a9f20`, one word: the buffer), and a stack copy's
+/// constructor (`005a8b80`) and destructor (`005a8bc0`; the engine map's name,
+/// `ScriptLocals::ScriptLocals`, is its caller's view).
+const LOCALS_SAVE_SIZE: u32 = 0x005a_94f0;
+const LOCALS_SAVE: u32 = 0x005a_9670;
+const LOCALS_LOAD: u32 = 0x005a_9950;
+const LOCALS_REVERT: u32 = 0x005a_9d00;
+const LOCALS_LOAD_GAME: u32 = 0x005a_9f20;
+const LOCALS_CONSTRUCT: u32 = 0x005a_8b80;
+const LOCALS_DESTROY: u32 = 0x005a_8bc0;
+/// The save game object's write (`008579b0`) and read (`008579e0`) of raw bytes
+/// (`thiscall`, two words: address, size), and its skip (`00857bd0`, one word: a byte
+/// count added to its position at +0x14).
+const SAVE_WRITE: u32 = 0x0085_79b0;
+const SAVE_READ: u32 = 0x0085_79e0;
+const SAVE_SKIP: u32 = 0x0085_7bd0;
+/// `00864980` (`thiscall` on a load buffer, two words: address, size): reads raw bytes.
+const LOAD_BUFFER_READ: u32 = 0x0086_4980;
+
+/// The save game object's version byte, as the exe compares it (`MOVZX`, signed `CMP`).
+fn save_version(e: &mut Engine) -> i32 {
+    let save_game: u32 = e.global(SAVE_GAME);
+    i32::from(e.call(SAVE_VERSION, &args![save_game]).u8())
+}
+
+// Translated from 00827b20 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ScriptEffect::Finish` (Xbox PDB): when there is a script and the save game object's
+/// byte `0047c850` is clear (asked twice: run when the first answer is clear or the second
+/// set), runs the script's effect-finish block (`005ac380`) on the target's reference
+/// (`pTarget`'s vtable +4) with `pEffectLocals`; then, when there are locals, deletes them
+/// (their deleting destructor with 1) and clears `pEffectLocals`.
+pub fn script_effect_finish(e: &mut Engine, this: Ptr) {
+    let base = this.addr();
+    if e.mem.u32(base + SCRIPT) != 0 {
+        let save_game: u32 = e.global(SAVE_GAME);
+        let run = !e.call(SAVE_GAME_FLAG_0047C850, &args![save_game]).bool() || {
+            let save_game: u32 = e.global(SAVE_GAME);
+            e.call(SAVE_GAME_FLAG_0047C850, &args![save_game]).bool()
+        };
+        if run {
+            let target = e.call(ACTIVE_EFFECT_TARGET, &args![base]).u32();
+            let locals = e.mem.u32(base + EFFECT_LOCALS);
+            let reference = e.vcall(target, TARGET_SLOT_REFERENCE, &args![]).u32();
+            let script = e.mem.u32(base + SCRIPT);
+            e.call(SCRIPT_RUN_EFFECT_FINISH, &args![script, reference, locals]);
+        }
+    }
+    if e.mem.u32(base + EFFECT_LOCALS) != 0 {
+        let locals = e.mem.u32(base + EFFECT_LOCALS);
+        if locals != 0 {
+            e.call(LOCALS_DELETING_DESTRUCTOR, &args![locals, 1u32]);
+        }
+        e.mem.set_u32(base + EFFECT_LOCALS, 0);
+    }
+}
+
+// Translated from 00827c20 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ScriptEffect::GetSaveSize` (Xbox PDB; `thiscall`, `RET 4`; 16-bit sums): the
+/// `ActiveEffect` size (`00804f80` with the same word), plus 2 from save version 0x2A on,
+/// plus the locals' size (`005a94f0`) when there are locals.
+pub fn script_effect_get_save_size(e: &mut Engine, this: Ptr, argument: u32) -> u16 {
+    let base = this.addr();
+    let mut size = e
+        .call(ACTIVE_EFFECT_GET_SAVE_SIZE, &args![this, argument])
+        .u16();
+    if save_version(e) >= VERSION_SIZED_LOCALS {
+        size = size.wrapping_add(2);
+    }
+    if e.mem.u32(base + EFFECT_LOCALS) != 0 {
+        let locals = e.mem.u32(base + EFFECT_LOCALS);
+        let locals_size = e.call(LOCALS_SAVE_SIZE, &args![locals]).u16();
+        size = size.wrapping_add(locals_size);
+    }
+    size
+}
+
+// Translated from 00827ca0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ScriptEffect::SaveGame` (Xbox PDB; `thiscall`, `RET 4`): saves the `ActiveEffect`
+/// data (`008050d0`); from save version 0x2A on, writes the locals' size as a 16-bit word
+/// (0 without locals; `008579b0`); before that version the size counts as 1. When the
+/// size is not 0, saves the locals (`005a9670`).
+pub fn script_effect_save_game(e: &mut Engine, this: Ptr, argument: u32) {
+    let base = this.addr();
+    e.call(ACTIVE_EFFECT_SAVE, &args![this, argument]);
+    e.with_stack(4, |e, size| {
+        e.mem.set_u16(size.addr(), 0);
+        if save_version(e) >= VERSION_SIZED_LOCALS {
+            if e.mem.u32(base + EFFECT_LOCALS) != 0 {
+                let locals = e.mem.u32(base + EFFECT_LOCALS);
+                let locals_size = e.call(LOCALS_SAVE_SIZE, &args![locals]).u16();
+                e.mem.set_u16(size.addr(), locals_size);
+            }
+            let save_game: u32 = e.global(SAVE_GAME);
+            e.call(SAVE_WRITE, &args![save_game, size, 2u32]);
+        }
+        if save_version(e) < VERSION_SIZED_LOCALS {
+            e.mem.set_u16(size.addr(), 1);
+        }
+        if e.mem.u16(size.addr()) != 0 {
+            let locals = e.mem.u32(base + EFFECT_LOCALS);
+            e.call(LOCALS_SAVE, &args![locals]);
+        }
+    });
+}
+
+// Translated from 00827d30 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ScriptEffect::LoadGame` (Xbox PDB; `thiscall`, `RET 4`): loads the `ActiveEffect`
+/// data (`00805330`); from save version 0x2A on reads the locals' 16-bit size
+/// (`008579e0`), before it the size counts as 1. With a size, makes the script's locals
+/// when there are none (`005abf60`) and loads them (`005a9950`); when there still are none
+/// it skips the size's bytes instead (`00857bd0`).
+pub fn script_effect_load_game(e: &mut Engine, this: Ptr, argument: u32) {
+    let base = this.addr();
+    e.call(ACTIVE_EFFECT_LOAD, &args![this, argument]);
+    e.with_stack(4, |e, size| {
+        e.mem.set_u16(size.addr(), 0);
+        if save_version(e) >= VERSION_SIZED_LOCALS {
+            let save_game: u32 = e.global(SAVE_GAME);
+            e.call(SAVE_READ, &args![save_game, size, 2u32]);
+        }
+        if save_version(e) < VERSION_SIZED_LOCALS {
+            e.mem.set_u16(size.addr(), 1);
+        }
+        let bytes = e.mem.u16(size.addr());
+        if bytes == 0 {
+            return;
+        }
+        if e.mem.u32(base + EFFECT_LOCALS) == 0 {
+            let script = e.mem.u32(base + SCRIPT);
+            let locals = e.call(SCRIPT_CREATE_LOCALS, &args![script]).u32();
+            e.mem.set_u32(base + EFFECT_LOCALS, locals);
+        }
+        if e.mem.u32(base + EFFECT_LOCALS) != 0 {
+            let locals = e.mem.u32(base + EFFECT_LOCALS);
+            e.call(LOCALS_LOAD, &args![locals]);
+        } else {
+            let save_game: u32 = e.global(SAVE_GAME);
+            e.call(SAVE_SKIP, &args![save_game, u32::from(bytes)]);
+        }
+    });
+}
+
+// Translated from 00827de0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ScriptEffect::Revert` (Xbox PDB; `thiscall`, `RET 4`): the base's `004534f0` (an empty
+/// body) with the same word, then, when there are locals, their revert (`005a9d00`).
+pub fn script_effect_revert(e: &mut Engine, this: Ptr, argument: u32) {
+    let base = this.addr();
+    e.call(EMPTY_004534F0, &args![this, argument]);
+    if e.mem.u32(base + EFFECT_LOCALS) != 0 {
+        let locals = e.mem.u32(base + EFFECT_LOCALS);
+        e.call(LOCALS_REVERT, &args![locals]);
+    }
+}
+
+// Translated from 00827e60 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 00827e60 - the C++ exception-unwinding frame (FS:[0]) that destroys the stack ScriptLocals when its load throws is not translated
+/// `ScriptEffect::LoadGame_ov2` (Xbox PDB; `thiscall`, `RET 4`): loads the `ActiveEffect`
+/// data (`00806420`) and reads one byte from the buffer (`00864980`). When the byte is
+/// set, makes the script's locals when there are none (`005abf60`) and loads them from the
+/// buffer (`005a9f20`); when there still are none, loads into a 0x14-byte `ScriptLocals`
+/// on the stack (`005a8b80`, `005a9f20`, `005a8bc0`) to skip the data.
+pub fn script_effect_load_game_ov2(e: &mut Engine, this: Ptr, buffer: u32) {
+    let base = this.addr();
+    e.call(ACTIVE_EFFECT_LOAD_OV2, &args![this, buffer]);
+    e.with_stack(0x20, |e, frame| {
+        let flag = frame.addr() + 0x18;
+        let scratch_locals = frame.addr();
+        e.mem.set_u8(flag, 0);
+        e.call(LOAD_BUFFER_READ, &args![buffer, flag, 1u32]);
+        if e.mem.u8(flag) == 0 {
+            return;
+        }
+        if e.mem.u32(base + EFFECT_LOCALS) == 0 {
+            let script = e.mem.u32(base + SCRIPT);
+            let locals = e.call(SCRIPT_CREATE_LOCALS, &args![script]).u32();
+            e.mem.set_u32(base + EFFECT_LOCALS, locals);
+        }
+        if e.mem.u32(base + EFFECT_LOCALS) != 0 {
+            let locals = e.mem.u32(base + EFFECT_LOCALS);
+            e.call(LOCALS_LOAD_GAME, &args![locals, buffer]);
+        } else {
+            e.call(LOCALS_CONSTRUCT, &args![scratch_locals]);
+            e.call(LOCALS_LOAD_GAME, &args![scratch_locals, buffer]);
+            e.call(LOCALS_DESTROY, &args![scratch_locals]);
+        }
+    });
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x0082_7b20, script_effect_finish(Ptr)),
+        entry!(0x0082_7c20, script_effect_get_save_size(Ptr, u32) -> u16),
+        entry!(0x0082_7ca0, script_effect_save_game(Ptr, u32)),
+        entry!(0x0082_7d30, script_effect_load_game(Ptr, u32)),
+        entry!(0x0082_7de0, script_effect_revert(Ptr, u32)),
+        entry!(0x0082_7e60, script_effect_load_game_ov2(Ptr, u32)),
         entry!(0x00827740, fn_00827740(Ptr, u32, u32, u32) -> Ptr),
         entry!(
             0x008277c0,
@@ -526,5 +742,214 @@ mod tests {
         e.call(0x0082_7e10, &args![this, 0x900u32]);
         assert_eq!(written.get(), 0);
         assert!(calls(&e, LOCALS_SAVE_GAME).is_empty());
+    }
+}
+
+#[cfg(test)]
+mod n049_tests {
+    use super::*;
+
+    const REFERENCE_DOUBLE: u32 = 0x0e70_0000;
+
+    fn calls(e: &Engine, callee: u32) -> Vec<Vec<u32>> {
+        e.call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|(address, _)| *address == callee)
+            .map(|(_, words)| words.clone())
+            .collect()
+    }
+
+    /// An effect with `script` and `locals`, the save game object at 0x3000 with
+    /// `version`, and every callee doubled.
+    fn engine(script: u32, locals: u32, version: u32) -> (Engine, u32) {
+        let mut e = Engine::new();
+        e.map(0x011d_e000, 0x1000);
+        e.set_global::<u32>(SAVE_GAME, 0x3000);
+        let this = e.mem.alloc(0x50);
+        e.mem.set_u32(this + SCRIPT, script);
+        e.mem.set_u32(this + EFFECT_LOCALS, locals);
+        let vtable = e.mem.alloc(0x10);
+        e.mem
+            .set_u32(vtable + TARGET_SLOT_REFERENCE, REFERENCE_DOUBLE);
+        let target = e.mem.alloc(8);
+        e.mem.set_u32(target, vtable);
+        e.register_double(ACTIVE_EFFECT_TARGET, move |_, _| target.into_ret());
+        e.register(REFERENCE_DOUBLE, |_, _| 0x5150u32.into_ret());
+        e.register_double(SAVE_VERSION, move |_, _| version.into_ret());
+        e.register(SAVE_GAME_FLAG_0047C850, |_, _| 0u32.into_ret());
+        e.register(LOCALS_SAVE_SIZE, |_, _| 0x1_0020u32.into_ret());
+        e.register(ACTIVE_EFFECT_GET_SAVE_SIZE, |_, _| 0x100u32.into_ret());
+        e.register(SCRIPT_CREATE_LOCALS, |_, _| 0x6600u32.into_ret());
+        e.register(SAVE_READ, |e, a| {
+            e.mem.set_u16(a[1], 0x33);
+            Ret::default()
+        });
+        e.register(LOAD_BUFFER_READ, |e, a| {
+            e.mem.set_u8(a[1], 1);
+            Ret::default()
+        });
+        for callee in [
+            SCRIPT_RUN_EFFECT_FINISH,
+            LOCALS_DELETING_DESTRUCTOR,
+            ACTIVE_EFFECT_SAVE,
+            ACTIVE_EFFECT_LOAD,
+            ACTIVE_EFFECT_LOAD_OV2,
+            EMPTY_004534F0,
+            LOCALS_SAVE,
+            LOCALS_LOAD,
+            LOCALS_REVERT,
+            LOCALS_LOAD_GAME,
+            LOCALS_CONSTRUCT,
+            LOCALS_DESTROY,
+            SAVE_WRITE,
+            SAVE_SKIP,
+        ] {
+            e.register(callee, |_, _| Ret::default());
+        }
+        e.call_log = Some(vec![]);
+        (e, this)
+    }
+
+    #[test]
+    fn finish_runs_the_script_and_deletes_the_locals() {
+        let (mut e, this) = engine(0x4400, 0x5500, 0x50);
+        e.call(0x0082_7b20, &[this]);
+        assert_eq!(
+            calls(&e, SCRIPT_RUN_EFFECT_FINISH),
+            vec![vec![0x4400, 0x5150, 0x5500]]
+        );
+        assert_eq!(calls(&e, SAVE_GAME_FLAG_0047C850), vec![vec![0x3000]]);
+        assert_eq!(calls(&e, LOCALS_DELETING_DESTRUCTOR), vec![vec![0x5500, 1]]);
+        assert_eq!(e.mem.u32(this + EFFECT_LOCALS), 0);
+    }
+
+    #[test]
+    fn finish_asks_twice_and_skips_without_script() {
+        let (mut e, this) = engine(0x4400, 0, 0x50);
+        e.register(SAVE_GAME_FLAG_0047C850, |_, _| 1u32.into_ret());
+        e.call(0x0082_7b20, &[this]);
+        assert_eq!(calls(&e, SAVE_GAME_FLAG_0047C850).len(), 2);
+        assert_eq!(calls(&e, SCRIPT_RUN_EFFECT_FINISH).len(), 1);
+        assert!(calls(&e, LOCALS_DELETING_DESTRUCTOR).is_empty());
+
+        let (mut e, this) = engine(0, 0x5500, 0x50);
+        e.call(0x0082_7b20, &[this]);
+        assert!(calls(&e, SCRIPT_RUN_EFFECT_FINISH).is_empty());
+        assert!(calls(&e, SAVE_GAME_FLAG_0047C850).is_empty());
+        assert_eq!(calls(&e, LOCALS_DELETING_DESTRUCTOR).len(), 1);
+    }
+
+    #[test]
+    fn get_save_size_by_version_and_locals() {
+        let (mut e, this) = engine(0x4400, 0x5500, 0x2a);
+        assert_eq!(e.call(0x0082_7c20, &[this, 9]).u32(), 0x122);
+        assert_eq!(calls(&e, ACTIVE_EFFECT_GET_SAVE_SIZE), vec![vec![this, 9]]);
+        let (mut e, this) = engine(0x4400, 0, 0x29);
+        assert_eq!(e.call(0x0082_7c20, &[this, 9]).u32(), 0x100);
+    }
+
+    #[test]
+    fn save_game_writes_the_size_then_the_locals() {
+        let (mut e, this) = engine(0x4400, 0x5500, 0x2a);
+        e.call(0x0082_7ca0, &[this, 9]);
+        assert_eq!(calls(&e, ACTIVE_EFFECT_SAVE), vec![vec![this, 9]]);
+        let writes = calls(&e, SAVE_WRITE);
+        assert_eq!(writes.len(), 1);
+        assert_eq!(writes[0][2], 2);
+        assert_eq!(calls(&e, LOCALS_SAVE), vec![vec![0x5500]]);
+
+        // Without locals the size 0 is written and nothing more.
+        let (mut e, this) = engine(0x4400, 0, 0x2a);
+        e.call(0x0082_7ca0, &[this, 9]);
+        assert_eq!(calls(&e, SAVE_WRITE).len(), 1);
+        assert!(calls(&e, LOCALS_SAVE).is_empty());
+
+        // An old version writes nothing and saves the locals.
+        let (mut e, this) = engine(0x4400, 0x5500, 0x10);
+        e.call(0x0082_7ca0, &[this, 9]);
+        assert!(calls(&e, SAVE_WRITE).is_empty());
+        assert_eq!(calls(&e, LOCALS_SAVE), vec![vec![0x5500]]);
+    }
+
+    #[test]
+    fn save_game_writes_the_locals_size_word() {
+        let (mut e, this) = engine(0x4400, 0x5500, 0x2a);
+        let probe = e.mem.alloc(4);
+        e.register_double(SAVE_WRITE, move |e, a| {
+            let word = e.mem.u16(a[1]);
+            e.mem.set_u16(probe, word);
+            Ret::default()
+        });
+        e.call(0x0082_7ca0, &[this, 9]);
+        assert_eq!(e.mem.u16(probe), 0x20);
+    }
+
+    #[test]
+    fn load_game_reads_and_loads_or_skips() {
+        let (mut e, this) = engine(0x4400, 0, 0x2a);
+        e.call(0x0082_7d30, &[this, 9]);
+        assert_eq!(calls(&e, ACTIVE_EFFECT_LOAD), vec![vec![this, 9]]);
+        assert_eq!(calls(&e, SAVE_READ).len(), 1);
+        assert_eq!(calls(&e, SCRIPT_CREATE_LOCALS), vec![vec![0x4400]]);
+        assert_eq!(e.mem.u32(this + EFFECT_LOCALS), 0x6600);
+        assert_eq!(calls(&e, LOCALS_LOAD), vec![vec![0x6600]]);
+
+        // No locals can be made: the bytes are skipped.
+        let (mut e, this) = engine(0x4400, 0, 0x2a);
+        e.register(SCRIPT_CREATE_LOCALS, |_, _| 0u32.into_ret());
+        e.call(0x0082_7d30, &[this, 9]);
+        assert_eq!(calls(&e, SAVE_SKIP), vec![vec![0x3000, 0x33]]);
+
+        // A zero size does nothing more.
+        let (mut e, this) = engine(0x4400, 0, 0x2a);
+        e.register(SAVE_READ, |_, _| Ret::default());
+        e.call(0x0082_7d30, &[this, 9]);
+        assert!(calls(&e, SCRIPT_CREATE_LOCALS).is_empty());
+
+        // An old version reads nothing and counts 1.
+        let (mut e, this) = engine(0x4400, 0, 0x10);
+        e.register(SCRIPT_CREATE_LOCALS, |_, _| 0u32.into_ret());
+        e.call(0x0082_7d30, &[this, 9]);
+        assert!(calls(&e, SAVE_READ).is_empty());
+        assert_eq!(calls(&e, SAVE_SKIP), vec![vec![0x3000, 1]]);
+    }
+
+    #[test]
+    fn revert_reverts_the_locals() {
+        let (mut e, this) = engine(0x4400, 0x5500, 0x2a);
+        e.call(0x0082_7de0, &[this, 9]);
+        assert_eq!(calls(&e, EMPTY_004534F0), vec![vec![this, 9]]);
+        assert_eq!(calls(&e, LOCALS_REVERT), vec![vec![0x5500]]);
+        let (mut e, this) = engine(0x4400, 0, 0x2a);
+        e.call(0x0082_7de0, &[this, 9]);
+        assert!(calls(&e, LOCALS_REVERT).is_empty());
+    }
+
+    #[test]
+    fn load_game_ov2_loads_into_the_locals_or_a_scratch_copy() {
+        let (mut e, this) = engine(0x4400, 0x5500, 0x2a);
+        e.call(0x0082_7e60, &[this, 0x900]);
+        assert_eq!(calls(&e, ACTIVE_EFFECT_LOAD_OV2), vec![vec![this, 0x900]]);
+        assert_eq!(calls(&e, LOAD_BUFFER_READ)[0][2], 1);
+        assert_eq!(calls(&e, LOCALS_LOAD_GAME), vec![vec![0x5500, 0x900]]);
+
+        let (mut e, this) = engine(0x4400, 0, 0x2a);
+        e.register(SCRIPT_CREATE_LOCALS, |_, _| 0u32.into_ret());
+        e.call(0x0082_7e60, &[this, 0x900]);
+        let scratch = calls(&e, LOCALS_CONSTRUCT);
+        assert_eq!(scratch.len(), 1);
+        assert_eq!(
+            calls(&e, LOCALS_LOAD_GAME),
+            vec![vec![scratch[0][0], 0x900]]
+        );
+        assert_eq!(calls(&e, LOCALS_DESTROY), vec![vec![scratch[0][0]]]);
+
+        let (mut e, this) = engine(0x4400, 0, 0x2a);
+        e.register(LOAD_BUFFER_READ, |_, _| Ret::default());
+        e.call(0x0082_7e60, &[this, 0x900]);
+        assert!(calls(&e, LOCALS_LOAD_GAME).is_empty());
+        assert!(calls(&e, SCRIPT_CREATE_LOCALS).is_empty());
     }
 }

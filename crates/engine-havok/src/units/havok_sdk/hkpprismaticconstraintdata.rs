@@ -3,7 +3,7 @@
 
 use std::cmp::Ordering;
 
-use super::hkpprimitivedrawer::normalised;
+use super::hkpprimitivedrawer::{normalised, normalised_sse};
 use super::hkpsphereshape::{
     load_vec, movhlps, movlhps, shufps, store_vec, unpckhps, unpcklps, zip_with, Vec4,
 };
@@ -67,6 +67,20 @@ pub(crate) fn cross_yzx(a: Vec4, b: Vec4) -> Vec4 {
     let plus = zip_with(shufps(a, a, 0xc9), shufps(b, b, 0xd2), |x, y| x * y);
     let minus = zip_with(shufps(a, a, 0xd2), shufps(b, b, 0xc9), |x, y| x * y);
     zip_with(plus, minus, |x, y| x - y)
+}
+
+/// [`cross_yzx`] with the SSE NaN rules. With `a_first` each `MULPS` has the shuffled `a` as
+/// its destination (`a.yzx * b.zxy - a.zxy * b.yzx`); otherwise the shuffled `b`
+/// (`b.zxy * a.yzx - b.yzx * a.zxy`, the same products).
+pub(crate) fn cross_yzx_sse(a: Vec4, b: Vec4, a_first: bool) -> Vec4 {
+    use crate::sse::{mulps, subps};
+    let (a_yzx, a_zxy) = (shufps(a, a, 0xc9), shufps(a, a, 0xd2));
+    let (b_yzx, b_zxy) = (shufps(b, b, 0xc9), shufps(b, b, 0xd2));
+    if a_first {
+        subps(mulps(a_yzx, b_zxy), mulps(a_zxy, b_yzx))
+    } else {
+        subps(mulps(b_zxy, a_yzx), mulps(b_yzx, a_zxy))
+    }
 }
 
 /// The columns of the three rows (`UNPCKLPS`, `UNPCKHPS`, `MOVLHPS`, `MOVHLPS`, `SHUFPS`): the
@@ -225,19 +239,21 @@ pub fn prismatic_set_in_body_space(
     store_vec(e, data + PIVOT_A, pivot);
     let pivot = load_vec(e, pivot_b);
     store_vec(e, data + PIVOT_B, pivot);
-    for (rows, axis, second) in [
-        (data + ROTATION_A, axis_a, second_a),
-        (data + ROTATION_B, axis_b, second_b),
+    // The SSE NaN rules throughout; body A's cross product has the second vector's shuffles
+    // as the `MULPS` destinations, body B's the first vector's.
+    for (rows, axis, second, a_first) in [
+        (data + ROTATION_A, axis_a, second_a, false),
+        (data + ROTATION_B, axis_b, second_b, true),
     ] {
         let vector = load_vec(e, axis);
-        store_vec(e, rows, normalised(e, vector));
+        store_vec(e, rows, normalised_sse(e, vector));
         let vector = load_vec(e, second);
         store_vec(e, rows + 0x10, vector);
         let vector = load_vec(e, rows + 0x10);
-        store_vec(e, rows + 0x10, normalised(e, vector));
+        store_vec(e, rows + 0x10, normalised_sse(e, vector));
         let first = load_vec(e, rows);
         let second = load_vec(e, rows + 0x10);
-        store_vec(e, rows + 0x20, cross_yzx(first, second));
+        store_vec(e, rows + 0x20, cross_yzx_sse(first, second, a_first));
     }
 }
 

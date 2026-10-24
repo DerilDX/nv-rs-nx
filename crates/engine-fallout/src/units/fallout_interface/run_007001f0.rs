@@ -38,12 +38,23 @@ pub fn fn_00700320(e: &mut Engine, this: Ptr, trait_id: i32, value: i32) {
     e.call(TILE_SET_FLOAT, &args![this, trait_id, value, 1u32]);
 }
 
+/// `007002a0` (unnamed; `thiscall`, one word; answers a byte in `AL`).
+const TEST_007002A0: u32 = 0x0070_02a0;
+
+// Translated from 00700270 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`thiscall`, `RET 4`): the negation of `007002a0` on `this`
+/// with `argument`: 1 in `EAX` when its byte answer is 0, else 0 (`MOVZX; NEG; SBB; ADD 1`).
+pub fn fn_00700270(e: &mut Engine, this: Ptr, argument: u32) -> bool {
+    e.call(TEST_007002A0, &args![this, argument]).u8() == 0
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
         entry!(0x0070_02d0, fn_007002d0(Ptr) -> Ptr),
         entry!(0x0070_0300, fn_00700300(Ptr) -> u32),
         entry!(0x0070_0320, fn_00700320(Ptr, i32, i32)),
+        entry!(0x0070_0270, fn_00700270(Ptr, u32) -> bool),
     ]
 }
 
@@ -96,5 +107,17 @@ mod tests {
             calls_to(&e, TILE_SET_FLOAT),
             vec![vec![0x5000, 0xfb1, (-7.0f32).to_bits(), 1]]
         );
+    }
+
+    #[test]
+    fn fn_00700270_negates_the_low_byte() {
+        let mut e = Engine::new();
+        // The double answers the argument; only its low byte counts.
+        e.register(TEST_007002A0, |_, a| a[1].into_ret());
+        e.call_log = Some(vec![]);
+        let got = e.call(0x0070_0270, &args![0x7000u32, 0x100u32]);
+        assert_eq!(got.u32(), 1);
+        assert_eq!(calls_to(&e, TEST_007002A0), vec![vec![0x7000, 0x100]]);
+        assert_eq!(e.call(0x0070_0270, &args![0x7000u32, 0x101u32]).u32(), 0);
     }
 }

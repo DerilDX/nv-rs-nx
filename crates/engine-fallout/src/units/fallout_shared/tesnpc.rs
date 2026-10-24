@@ -1703,7 +1703,7 @@ pub fn fn_00604ba0(e: &mut Engine, this: Ptr, template: Ptr) {
 // Translated from 006053f0 (decompiled, FalloutNV.exe 1.4.0.525)
 /// Stores the weight (`fWeight`).
 pub fn fn_006053f0(e: &mut Engine, this: Ptr<TESNPC>, weight: f32) {
-    e.set(this, TESNPC::fWeight, weight);
+    e.set(this, TESNPC::fWeight, x87_quiet(weight));
 }
 
 // Translated from 00605410 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -3576,7 +3576,7 @@ pub fn fn_00607810(e: &mut Engine, this: Ptr, index: u32, value: f32) {
 // Translated from 00607830 (decompiled, FalloutNV.exe 1.4.0.525)
 /// Stores a `float` at `+0x1a8`.
 pub fn fn_00607830(e: &mut Engine, this: Ptr, value: f32) {
-    e.mem.set_f32(this.addr() + 0x1a8, value);
+    e.mem.set_f32(this.addr() + 0x1a8, x87_quiet(value));
 }
 
 // Translated from 00607850 (decompiled, FalloutNV.exe 1.4.0.525)

@@ -504,9 +504,288 @@ fn in_list_of(e: &mut Engine, owner: u32, wanted: u32) -> bool {
     })
 }
 
+/// `__RTDynamicCast` (`00ec43fb`, cdecl), the source type descriptor and
+/// the target `005f5630` and `005f56b0` pass (`011864c8`, the type
+/// descriptor named `.?AVTESChallenge@@`).
+const DYNAMIC_CAST: u32 = 0x00ec_43fb;
+const CAST_SOURCE: u32 = 0x0118_3028;
+const CHALLENGE_TYPE: u32 = 0x0118_64c8;
+/// The challenge's two values `005f5630` copies and `005f56b0` compares:
+/// `004fd3a0` (set by `004febb0`) and `00407820` (set by `00442a80`), all
+/// thiscall.
+const FIRST_VALUE: u32 = 0x004f_d3a0;
+const SET_FIRST_VALUE: u32 = 0x004f_ebb0;
+const SECOND_VALUE: u32 = 0x0040_7820;
+const SET_SECOND_VALUE: u32 = 0x0044_2a80;
+
+// Translated from 005f5630 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TESChallenge`'s copy (`RET 4`: the source form; the engine map has no
+/// name): the source through `__RTDynamicCast(source, 0, 01183028,
+/// 011864c8, 0)`; nothing without it. Otherwise the 0x18 bytes at +0x54
+/// (`00401460`), the source's `004fd3a0` set through `004febb0`, its
+/// `00407820` set through `00442a80`, then `TESForm::CopyAllComponents`
+/// given the uncast source.
+pub fn fn_005f5630(e: &mut Engine, this: Ptr, source: u32) {
+    let base = this.addr();
+    let other = e
+        .call(
+            DYNAMIC_CAST,
+            &args![source, 0u32, CAST_SOURCE, CHALLENGE_TYPE, 0u32],
+        )
+        .u32();
+    if other == 0 {
+        return;
+    }
+    e.call(0x0040_1460, &args![base + 0x54, other + 0x54, 0x18u32]);
+    let value = e.call(FIRST_VALUE, &args![other]).u32();
+    e.call(SET_FIRST_VALUE, &args![this, value]);
+    let value = e.call(SECOND_VALUE, &args![other]).u32();
+    e.call(SET_SECOND_VALUE, &args![this, value]);
+    e.call(0x0048_51b0, &args![this, source]);
+}
+
+// Translated from 005f56b0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TESChallenge`'s compare (`RET 4`: the other form; true when they
+/// differ; the engine map has no name): true when the cast as in
+/// `005f5630` fails, when `_memcmp` of the 0x18 bytes at +0x54 (the
+/// other's through [`fn_005f5760`]) is not 0, when `00407820` or
+/// `004fd3a0` answer differently, otherwise
+/// `TESForm::CompareAllComponents`.
+pub fn fn_005f56b0(e: &mut Engine, this: Ptr, form: u32) -> bool {
+    let base = this.addr();
+    let other = e
+        .call(
+            DYNAMIC_CAST,
+            &args![form, 0u32, CAST_SOURCE, CHALLENGE_TYPE, 0u32],
+        )
+        .u32();
+    if other == 0 {
+        return true;
+    }
+    let data = fn_005f5760(e, Ptr::new(other)).addr();
+    if e.call(0x00ec_4835, &args![base + 0x54, data, 0x18u32])
+        .u32()
+        != 0
+    {
+        return true;
+    }
+    let mine = e.call(SECOND_VALUE, &args![this]).u32();
+    if mine != e.call(SECOND_VALUE, &args![other]).u32() {
+        return true;
+    }
+    let mine = e.call(FIRST_VALUE, &args![this]).u32();
+    if mine != e.call(FIRST_VALUE, &args![other]).u32() {
+        return true;
+    }
+    e.call(0x0048_5270, &args![this, other]).bool()
+}
+
+// Translated from 005f57c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Loads the object from `buffer` (`RET 4`; the engine map has no name),
+/// the counterpart of [`fn_005f5780`]: `00484da0` on `this` with the
+/// buffer, then the words at +0x6C and +0x70 through `00864980` (thiscall
+/// on the buffer: address, size 4).
+pub fn fn_005f57c0(e: &mut Engine, this: Ptr, buffer: u32) {
+    e.call(0x0048_4da0, &args![this, buffer]);
+    e.call(0x0086_4980, &args![buffer, this.addr() + 0x6c, 4u32]);
+    e.call(0x0086_4980, &args![buffer, this.addr() + 0x70, 4u32]);
+}
+
+// Translated from 005f5820 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Clears the word at +0x6C (no stack words; the engine map has no name).
+pub fn fn_005f5820(e: &mut Engine, this: Ptr) {
+    e.mem.set_u32(this.addr() + 0x6c, 0);
+}
+
+// Translated from 005f5f60 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Bit 1 of the 16-bit word at +0x5C (no stack words; the engine map has
+/// no name).
+pub fn fn_005f5f60(e: &mut Engine, this: Ptr) -> u32 {
+    u32::from(e.mem.u16(this.addr() + 0x5c)) & 2
+}
+
+/// Sets (`set` non-zero) or clears `bit` in the word at +0x70, then runs
+/// [`fn_005f5800`].
+fn set_flag(e: &mut Engine, this: Ptr, set: u8, bit: u32) {
+    let at = this.addr() + 0x70;
+    let flags = e.mem.u32(at);
+    if set == 0 {
+        e.mem.set_u32(at, flags & !bit);
+    } else {
+        e.mem.set_u32(at, flags | bit);
+    }
+    fn_005f5800(e, this);
+}
+
+// Translated from 005f6000 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Sets or clears bit 1 of the word at +0x70 by the byte `set` (`RET 4`;
+/// the engine map has no name), then runs [`fn_005f5800`].
+pub fn fn_005f6000(e: &mut Engine, this: Ptr, set: u8) {
+    set_flag(e, this, set, 2);
+}
+
+// Translated from 005f6060 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Sets or clears bit 2 of the word at +0x70 by the byte `set` (`RET 4`;
+/// the engine map has no name), then runs [`fn_005f5800`].
+pub fn fn_005f6060(e: &mut Engine, this: Ptr, set: u8) {
+    set_flag(e, this, set, 4);
+}
+
+// Translated from 005f60c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Bit 3 of the word at +0x70 (no stack words; the engine map has no
+/// name).
+pub fn fn_005f60c0(e: &mut Engine, this: Ptr) -> u32 {
+    e.mem.u32(this.addr() + 0x70) & 8
+}
+
+// Translated from 005f6570 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Sets or clears bit 0 of the word at +0x70 by the byte `set` (`RET 4`;
+/// the engine map has no name), then runs [`fn_005f5800`].
+pub fn fn_005f6570(e: &mut Engine, this: Ptr, set: u8) {
+    set_flag(e, this, set, 1);
+}
+
+// Translated from 005f6110 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 005f6110 - the /GS stack cookie check (00ec408c) is not translated.
+/// Counts `amount` towards the forms of kind 13 that name `form` (cdecl:
+/// the form, the amount; the engine map has no name). It walks the list
+/// at `011cb448` (kind 13 of `011cb3e0`) and skips null entries and the
+/// forms [`fn_005f5950`] skips (`005a6150` / [`fn_005f5f60`],
+/// [`fn_005f5930`] / `005a60d0`), and those whose form id (`0084e3a0`)
+/// differs from `form`'s. The rest is [`fn_005f5950`]'s: `amount` counted
+/// ([`fn_005f60e0`]); below the target the progress message on reaching 0
+/// in steps of [`fn_005f5f80`] (100 when 0); at the target the script, the
+/// stat 0x1B, the completion message with menu sound 0x15, then a restart
+/// ([`fn_005f5820`], [`fn_005f6060`]`(1)`, the excess counted again) when
+/// [`fn_005f5f60`] answers non-zero and [`fn_005f60c0`] zero, or done
+/// ([`fn_005f6000`]`(1)`) with the lists rebuilt ([`fn_005f5880`]) after
+/// the walk. Answers true.
+pub fn fn_005f6110(e: &mut Engine, form: u32, amount: u32) -> bool {
+    let mut node = ACTIVE_LISTS + 0xd * 8;
+    let mut completed = false;
+    while node != 0 {
+        let data = e.call(NODE_DATA, &args![node]).u32();
+        let challenge = e.mem.u32(data);
+        if challenge == 0 {
+            node = e.call(NODE_NEXT, &args![node]).u32();
+            continue;
+        }
+        let this = Ptr::new(challenge);
+        if e.call(FORM_TEST_005A6150, &args![challenge]).u32() != 0 && fn_005f5f60(e, this) == 0 {
+            node = e.call(NODE_NEXT, &args![node]).u32();
+            continue;
+        }
+        if fn_005f5930(e, this) != 0 && e.call(FORM_TEST_005A60D0, &args![challenge]).u32() == 0 {
+            node = e.call(NODE_NEXT, &args![node]).u32();
+            continue;
+        }
+        let wanted = e.call(0x0084_e3a0, &args![form]).u32();
+        if wanted != e.call(0x0084_e3a0, &args![challenge]).u32() {
+            node = e.call(NODE_NEXT, &args![node]).u32();
+            continue;
+        }
+        fn_005f60e0(e, this, amount);
+        let progress = e.call(FORM_PROGRESS, &args![challenge]).i32();
+        let target = e.call(FORM_TARGET, &args![challenge]).i32();
+        if progress < target {
+            let start = e.call(FORM_PROGRESS, &args![challenge]).i32();
+            let step = if fn_005f5f80(e, this) != 0 {
+                fn_005f5f80(e, this) as i32
+            } else {
+                100
+            };
+            let mut count = start;
+            while count >= 0 {
+                if count == 0 && message_allowed(e, challenge) {
+                    let text = description(e, challenge);
+                    let target = e.call(FORM_TARGET, &args![challenge]).u32();
+                    let progress = e.call(FORM_PROGRESS, &args![challenge]).u32();
+                    e.with_stack(0x200, |e, buffer| {
+                        show_progress(e, challenge, buffer, target, progress, text);
+                    });
+                }
+                count = count.wrapping_sub(step);
+            }
+        } else {
+            if e.call(NODE_NEXT, &args![challenge + 0x2c]).u32() != 0 {
+                let player = e.global::<u32>(0x011d_ea3c);
+                let script = e.call(NODE_NEXT, &args![challenge + 0x2c]).u32();
+                e.call(0x005a_c340, &args![script, player, 0u32]);
+            }
+            if e.call(FORM_KIND, &args![challenge]).u32() != 0xb || fn_005f5fa0(e, this) != 0x1b {
+                e.call(0x004d_5c60, &args![0x1bu32]);
+            }
+            if message_allowed(e, challenge) {
+                let text = description(e, challenge);
+                let target_first = e.call(FORM_TARGET, &args![challenge]).u32();
+                let target_second = e.call(FORM_TARGET, &args![challenge]).u32();
+                e.with_stack(0x200, |e, buffer| {
+                    show_progress(e, challenge, buffer, target_first, target_second, text);
+                });
+                e.call(0x0070_6f30, &args![0x15u32]);
+            }
+            if fn_005f5f60(e, this) != 0 && fn_005f60c0(e, this) == 0 {
+                let progress = e.call(FORM_PROGRESS, &args![challenge]).u32();
+                let target = e.call(FORM_TARGET, &args![challenge]).u32();
+                let excess = progress.wrapping_sub(target);
+                fn_005f5820(e, this);
+                fn_005f6060(e, this, 1);
+                fn_005f60e0(e, this, excess);
+            } else {
+                fn_005f6000(e, this, 1);
+                completed = true;
+            }
+        }
+        node = e.call(NODE_NEXT, &args![node]).u32();
+    }
+    if completed {
+        fn_005f5880(e);
+    }
+    true
+}
+
+// Translated from 005f64f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Activates a challenge form (cdecl: the form; the engine map has no
+/// name): nothing for a null form; otherwise its kind (`006a1b60`), bit 0
+/// of its flags set ([`fn_005f6570`]`(1)`), the form added to its kind's
+/// list at `011cb3e0` (`005ae3d0`) unless that list holds it
+/// ([`fn_005f65d0`]), and removed from the one at `011cb450` (`00905330`)
+/// when that one holds it (each given the address of the argument word).
+/// Answers true.
+pub fn fn_005f64f0(e: &mut Engine, form: u32) -> bool {
+    if form == 0 {
+        return true;
+    }
+    let kind = e.call(FORM_KIND, &args![form]).u32();
+    fn_005f6570(e, Ptr::new(form), 1);
+    e.with_stack(4, |e, argument| {
+        e.mem.set_u32(argument.addr(), form);
+        let active = kind.wrapping_mul(8).wrapping_add(ACTIVE_LISTS);
+        if !fn_005f65d0(e, Ptr::new(active), argument) {
+            e.call(LIST_ADD, &args![active, argument]);
+        }
+        let other = kind.wrapping_mul(8).wrapping_add(OTHER_LISTS);
+        if fn_005f65d0(e, Ptr::new(other), argument) {
+            e.call(0x0090_5330, &args![other, argument]);
+        }
+    });
+    true
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x005f_5630, fn_005f5630(Ptr, u32)),
+        entry!(0x005f_56b0, fn_005f56b0(Ptr, u32) -> bool),
+        entry!(0x005f_57c0, fn_005f57c0(Ptr, u32)),
+        entry!(0x005f_5820, fn_005f5820(Ptr)),
+        entry!(0x005f_5f60, fn_005f5f60(Ptr) -> u32),
+        entry!(0x005f_6000, fn_005f6000(Ptr, u8)),
+        entry!(0x005f_6060, fn_005f6060(Ptr, u8)),
+        entry!(0x005f_60c0, fn_005f60c0(Ptr) -> u32),
+        entry!(0x005f_6110, fn_005f6110(u32, u32) -> bool),
+        entry!(0x005f_64f0, fn_005f64f0(u32) -> bool),
+        entry!(0x005f_6570, fn_005f6570(Ptr, u8)),
         entry!(0x005f5760, fn_005f5760(Ptr) -> Ptr),
         entry!(0x005f65d0, fn_005f65d0(Ptr, Ptr) -> bool),
         entry!(0x005f_6610, fn_005f6610(Ptr) -> Ptr),
@@ -1062,5 +1341,259 @@ mod b022_tests {
         assert!(matched(3, none, 0, 0, [0, 1, 0]));
         assert!(!matched(3, none, 0, 0, [0, 2, 0]));
         assert!(matched(2, none, 0, 0, [0, 2, 0]));
+    }
+}
+
+#[cfg(test)]
+mod n041_tests {
+    use super::*;
+
+    fn ret(eax: u32) -> Ret {
+        Ret {
+            eax,
+            ..Ret::default()
+        }
+    }
+
+    fn calls(e: &Engine, addr: u32) -> Vec<Vec<u32>> {
+        e.call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|(a, _)| *a == addr)
+            .map(|(_, w)| w.clone())
+            .collect()
+    }
+
+    #[test]
+    fn challenge_copy_and_compare() {
+        let mut e = Engine::new();
+        e.register(DYNAMIC_CAST, |_, a| ret(if a[0] == 1 { 0 } else { a[0] }));
+        for a in [
+            0x0040_1460u32,
+            SET_FIRST_VALUE,
+            SET_SECOND_VALUE,
+            0x0048_51b0,
+        ] {
+            e.register(a, |_, _| Ret::default());
+        }
+        e.register(FIRST_VALUE, |e, a| ret(e.mem.u32(a[0] + 0x40)));
+        e.register(SECOND_VALUE, |e, a| ret(e.mem.u32(a[0] + 0x44)));
+        let this = e.mem.alloc(0x80);
+        let other = e.mem.alloc(0x80);
+        e.mem.set_u32(other + 0x40, 0x41);
+        e.mem.set_u32(other + 0x44, 0x42);
+        e.call_log = Some(vec![]);
+        e.call(0x005f_5630, &args![this, other]);
+        assert_eq!(
+            calls(&e, DYNAMIC_CAST),
+            vec![vec![other, 0, CAST_SOURCE, CHALLENGE_TYPE, 0]]
+        );
+        assert_eq!(
+            calls(&e, 0x0040_1460),
+            vec![vec![this + 0x54, other + 0x54, 0x18]]
+        );
+        assert_eq!(calls(&e, SET_FIRST_VALUE), vec![vec![this, 0x41]]);
+        assert_eq!(calls(&e, SET_SECOND_VALUE), vec![vec![this, 0x42]]);
+        assert_eq!(calls(&e, 0x0048_51b0), vec![vec![this, other]]);
+        e.call_log = Some(vec![]);
+        e.call(0x005f_5630, &args![this, 1u32]);
+        assert!(calls(&e, 0x0040_1460).is_empty());
+
+        e.register(0x00ec_4835, |_, _| ret(0));
+        e.register(0x0048_5270, |_, _| ret(0));
+        e.mem.set_u32(this + 0x40, 0x41);
+        e.mem.set_u32(this + 0x44, 0x42);
+        e.call_log = Some(vec![]);
+        assert!(!e.call(0x005f_56b0, &args![this, other]).bool());
+        assert_eq!(
+            calls(&e, 0x00ec_4835),
+            vec![vec![this + 0x54, other + 0x54, 0x18]]
+        );
+        assert!(e.call(0x005f_56b0, &args![this, 1u32]).bool());
+        e.mem.set_u32(this + 0x44, 0);
+        assert!(e.call(0x005f_56b0, &args![this, other]).bool());
+        e.mem.set_u32(this + 0x44, 0x42);
+        e.mem.set_u32(this + 0x40, 0);
+        assert!(e.call(0x005f_56b0, &args![this, other]).bool());
+        e.mem.set_u32(this + 0x40, 0x41);
+        e.register(0x00ec_4835, |_, _| ret(1));
+        assert!(e.call(0x005f_56b0, &args![this, other]).bool());
+        e.register(0x00ec_4835, |_, _| ret(0));
+        e.register(0x0048_5270, |_, _| ret(1));
+        assert!(e.call(0x005f_56b0, &args![this, other]).bool());
+    }
+
+    #[test]
+    fn load_and_flag_helpers() {
+        let mut e = Engine::new();
+        e.register(0x0048_4da0, |_, _| Ret::default());
+        e.register(0x0086_4980, |_, _| Ret::default());
+        let this = e.mem.alloc(0x80);
+        e.call_log = Some(vec![]);
+        e.call(0x005f_57c0, &args![this, 0x4444u32]);
+        assert_eq!(calls(&e, 0x0048_4da0), vec![vec![this, 0x4444]]);
+        assert_eq!(
+            calls(&e, 0x0086_4980),
+            vec![vec![0x4444, this + 0x6c, 4], vec![0x4444, this + 0x70, 4]]
+        );
+        e.mem.set_u32(this + 0x6c, 9);
+        e.call(0x005f_5820, &args![this]);
+        assert_eq!(e.mem.u32(this + 0x6c), 0);
+        e.mem.set_u16(this + 0x5c, 0xffff);
+        assert_eq!(e.call(0x005f_5f60, &args![this]).u32(), 2);
+        e.mem.set_u16(this + 0x5c, 0xfffd);
+        assert_eq!(e.call(0x005f_5f60, &args![this]).u32(), 0);
+
+        let vtable = e.mem.alloc(0x50);
+        e.mem.set_u32(vtable + 0x48, 0x7000_0048);
+        e.register(0x7000_0048, |_, _| Ret::default());
+        e.mem.set_u32(this, vtable);
+        e.mem.set_u32(this + 0x70, 0xf0);
+        e.call_log = Some(vec![]);
+        for (addr, bit) in [(0x005f_6570u32, 1u32), (0x005f_6000, 2), (0x005f_6060, 4)] {
+            e.call(addr, &args![this, 0x100u32]);
+            assert_eq!(e.mem.u32(this + 0x70) & bit, 0, "{addr:x}");
+            e.call(addr, &args![this, 1u32]);
+            assert_eq!(e.mem.u32(this + 0x70) & bit, bit, "{addr:x}");
+        }
+        assert_eq!(e.mem.u32(this + 0x70), 0xf7);
+        assert_eq!(calls(&e, 0x7000_0048), vec![vec![this, 2]; 6]);
+        assert_eq!(e.call(0x005f_60c0, &args![this]).u32(), 0);
+        e.mem.set_u32(this + 0x70, 0xff);
+        assert_eq!(e.call(0x005f_60c0, &args![this]).u32(), 8);
+    }
+
+    #[test]
+    fn fn_005f64f0_moves_the_form_to_its_active_list() {
+        let mut e = Engine::new();
+        e.map(0x011c_b000, 0x1000);
+        e.register(FORM_KIND, |e, a| ret(e.mem.u32(a[0] + 0x54)));
+        e.register(LIST_ADD, |e, a| {
+            let form = e.mem.u32(a[1]);
+            e.mem.set_u32(a[0], form);
+            Ret::default()
+        });
+        e.register(0x0090_5330, |e, a| {
+            e.mem.set_u32(a[0], 0);
+            Ret::default()
+        });
+        let vtable = e.mem.alloc(0x50);
+        e.mem.set_u32(vtable + 0x48, 0x7000_0048);
+        e.register(0x7000_0048, |_, _| Ret::default());
+        let form = e.mem.alloc(0x80);
+        e.mem.set_u32(form, vtable);
+        e.mem.set_u32(form + 0x54, 3);
+        e.mem.set_u32(OTHER_LISTS + 3 * 8, form);
+        e.call_log = Some(vec![]);
+        assert!(e.call(0x005f_64f0, &args![form]).bool());
+        assert_eq!(e.mem.u32(form + 0x70), 1);
+        assert_eq!(e.mem.u32(ACTIVE_LISTS + 3 * 8), form);
+        assert_eq!(e.mem.u32(OTHER_LISTS + 3 * 8), 0);
+        // Already active and not in the other list: no calls.
+        e.call_log = Some(vec![]);
+        e.call(0x005f_64f0, &args![form]);
+        assert!(calls(&e, LIST_ADD).is_empty());
+        assert!(calls(&e, 0x0090_5330).is_empty());
+        e.call_log = Some(vec![]);
+        assert!(e.call(0x005f_64f0, &args![0u32]).bool());
+        assert!(calls(&e, FORM_KIND).is_empty());
+    }
+
+    /// A kind-13 challenge in the list at `011cb448` (nodes `{data, next}`):
+    /// form id at +0xC, progress at +0x6C, target 10.
+    fn challenge_setup() -> (Engine, u32) {
+        let mut e = Engine::new();
+        e.map(0x011c_b000, 0x1000);
+        e.map(0x011c_3000, 0x1000);
+        e.map(0x011d_e000, 0x1000);
+        e.map(0x0101_6000, 0x1000);
+        e.register(NODE_DATA, |_, a| ret(a[0]));
+        e.register(NODE_NEXT, |e, a| ret(e.mem.u32(a[0] + 4)));
+        e.register(FORM_TEST_005A6150, |_, _| ret(0));
+        e.register(FORM_TEST_005A60D0, |_, _| ret(0));
+        e.register(0x0084_e3a0, |e, a| ret(e.mem.u32(a[0] + 0xc)));
+        e.register(FORM_PROGRESS, |e, a| ret(e.mem.u32(a[0] + 0x6c)));
+        e.register(FORM_TARGET, |_, _| ret(10));
+        e.register(FORM_KIND, |_, _| ret(0xd));
+        e.register(FORM_NAME, |_, _| ret(0));
+        e.register(LIST_CLEAR, |_, _| Ret::default());
+        e.register(FIRST_FORM_NODE, |_, _| ret(0));
+        for a in [
+            0x004d_5c60u32,
+            0x0070_6f30,
+            FORMAT,
+            SHOW_MESSAGE,
+            MESSAGE_ICON,
+        ] {
+            e.register(a, |_, _| Ret::default());
+        }
+        let vtable = e.mem.alloc(0x50);
+        e.mem.set_u32(vtable + 0x48, 0x7000_0048);
+        e.register(0x7000_0048, |_, _| Ret::default());
+        let challenge = e.mem.alloc(0x80);
+        e.mem.set_u32(challenge, vtable);
+        e.mem.set_u32(challenge + 0xc, 0x77);
+        e.mem.set_u32(ACTIVE_LISTS + 0xd * 8, challenge);
+        (e, challenge)
+    }
+
+    #[test]
+    fn fn_005f6110_completes_or_restarts_a_matching_challenge() {
+        // Restart: bit 1 at +0x5C and bit 3 at +0x70 clear.
+        let (mut e, challenge) = challenge_setup();
+        e.mem.set_u16(challenge + 0x5c, 2);
+        let form = e.mem.alloc(0x10);
+        e.mem.set_u32(form + 0xc, 0x77);
+        e.call_log = Some(vec![]);
+        assert!(e.call(0x005f_6110, &args![form, 12u32]).bool());
+        assert_eq!(e.mem.u32(challenge + 0x6c), 2);
+        assert_eq!(e.mem.u32(challenge + 0x70), 4);
+        assert_eq!(calls(&e, 0x004d_5c60), vec![vec![0x1b]]);
+        assert!(calls(&e, LIST_CLEAR).is_empty());
+
+        // Done: marked and the lists rebuilt.
+        let (mut e, challenge) = challenge_setup();
+        e.call_log = Some(vec![]);
+        let form = form_with_id(&mut e, 0x77);
+        e.call(0x005f_6110, &args![form, 10u32]);
+        assert_eq!(e.mem.u32(challenge + 0x70), 2);
+        assert_eq!(calls(&e, LIST_CLEAR).len(), 28);
+
+        // Another form id: nothing counted.
+        let (mut e, challenge) = challenge_setup();
+        let form = form_with_id(&mut e, 0x78);
+        e.call(0x005f_6110, &args![form, 10u32]);
+        assert_eq!(e.mem.u32(challenge + 0x6c), 0);
+    }
+
+    fn form_with_id(e: &mut Engine, id: u32) -> u32 {
+        let form = e.mem.alloc(0x10);
+        e.mem.set_u32(form + 0xc, id);
+        form
+    }
+
+    #[test]
+    fn fn_005f6110_shows_the_progress_at_zero() {
+        let (mut e, challenge) = challenge_setup();
+        e.register(FORM_NAME, |_, _| ret(0x5555));
+        let text = e.mem.alloc(4);
+        e.mem.set_u8(text, b'x');
+        e.register_double(STRING_TEXT, move |_, _| ret(text));
+        let description_vtable = e.mem.alloc(0x14);
+        e.mem.set_u32(description_vtable + 0x10, 0x7000_0010);
+        e.register(0x7000_0010, |_, _| ret(0x6666));
+        e.mem.set_u32(challenge + 0x24, description_vtable);
+        e.call_log = Some(vec![]);
+        let form = form_with_id(&mut e, 0x77);
+        e.call(0x005f_6110, &args![form, 0u32]);
+        let format = calls(&e, FORMAT);
+        assert_eq!(format.len(), 1);
+        assert_eq!(
+            &format[0][1..],
+            &[0x200, PROGRESS_FORMAT, 0x5555, 0, 10, 0x6666]
+        );
+        assert_eq!(calls(&e, SHOW_MESSAGE).len(), 1);
+        assert!(calls(&e, 0x0070_6f30).is_empty());
     }
 }

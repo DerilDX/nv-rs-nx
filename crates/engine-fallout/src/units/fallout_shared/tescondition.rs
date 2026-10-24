@@ -327,6 +327,66 @@ pub fn tes_condition_get_condition_item(e: &mut Engine, this: Ptr, index: i32) -
     0
 }
 
+/// `00680fe0` (`thiscall`): empties the condition list before a copy.
+const CONDITION_CLEAR: u32 = 0x0068_0fe0;
+/// The copy `00401460` and `memcmp` (`00ec4835`), both `cdecl (a, b,
+/// size)`.
+const COPY_BYTES: u32 = 0x0040_1460;
+const MEMCMP: u32 = 0x00ec_4835;
+
+// Translated from 00680a70 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 00680a70 - the C++ exception frame (FS:[0], state for the item allocation) is not translated
+/// Unnamed in the engine map (`thiscall`, two words; the copy of a
+/// condition list): empties this list (`00680fe0`), then for each item of
+/// `other` (while the node is not null and not the end) a new 0x1C-byte
+/// item ([`fn_006811e0`], or null when the allocation fails) gets the
+/// item's bytes ([`fn_00681590`], given `second` too) and is added after
+/// this list's node (`00905820`), which moves on when it has a next node.
+pub fn fn_00680a70(e: &mut Engine, this: Ptr, other: u32, second: u32) {
+    e.call(CONDITION_CLEAR, &args![this]);
+    let mut mine = e.call(LIST_NODE_ITEM_SLOT, &args![this]).u32();
+    let mut theirs = e.call(LIST_NODE_ITEM_SLOT, &args![other]).u32();
+    while theirs != 0 && e.call(NODE_IS_END, &args![theirs]).u8() == 0 {
+        let block = e.call(OPERATOR_NEW, &args![CONDITION_ITEM_SIZE]).u32();
+        let item = if block != 0 {
+            fn_006811e0(e, Ptr::new(block)).addr()
+        } else {
+            0
+        };
+        e.with_stack(4, |e, slot| {
+            e.mem.set_u32(slot.addr(), item);
+            let source = e.call(LIST_NODE_ITEM_SLOT, &args![theirs]).u32();
+            let source = e.mem.u32(source);
+            fn_00681590(e, Ptr::new(item), source, second);
+            e.call(LIST_APPEND, &args![mine, slot]);
+        });
+        if e.call(NODE_NEXT, &args![mine]).u32() != 0 {
+            mine = e.call(NODE_NEXT, &args![mine]).u32();
+        }
+        theirs = e.call(NODE_NEXT, &args![theirs]).u32();
+    }
+}
+
+// Translated from 00681590 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`thiscall`, two words; the copy of a
+/// condition item): the 0x1C bytes of `source` (through `006815c0`) into
+/// this item; the second word is not read.
+pub fn fn_00681590(e: &mut Engine, this: Ptr, source: u32, _unused_2: u32) {
+    let from = e.call(LIST_NODE_ITEM_SLOT, &args![source]).u32();
+    e.call(COPY_BYTES, &args![this, from, CONDITION_ITEM_SIZE]);
+}
+
+// Translated from 006815d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`thiscall`, one word; whether two condition
+/// items differ): `memcmp` of `other` (through `006815c0`) with this item
+/// over 0x1C bytes is non-zero.
+pub fn fn_006815d0(e: &mut Engine, this: Ptr, other: u32) -> bool {
+    let theirs = e.call(LIST_NODE_ITEM_SLOT, &args![other]).u32();
+    e.call(MEMCMP, &args![theirs, this, CONDITION_ITEM_SIZE])
+        .u32()
+        != 0
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -342,6 +402,9 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x006811e0, fn_006811e0(Ptr) -> Ptr),
         entry!(0x0068_0b70, fn_00680b70(Ptr, u32) -> bool),
         entry!(0x0068_0f70, tes_condition_get_condition_item(Ptr, i32) -> u32),
+        entry!(0x0068_0a70, fn_00680a70(Ptr, u32, u32)),
+        entry!(0x0068_1590, fn_00681590(Ptr, u32, u32)),
+        entry!(0x0068_15d0, fn_006815d0(Ptr, u32) -> bool),
     ]
 }
 
@@ -747,5 +810,94 @@ mod b039_tests {
         assert_eq!(e.call(0x0068_0f70, &args![a, 2i32]).u32(), 0x73);
         assert_eq!(e.call(0x0068_0f70, &args![a, 3i32]).u32(), 0);
         assert_eq!(e.call(0x0068_0f70, &args![a, -1i32]).u32(), 0);
+    }
+}
+
+#[cfg(test)]
+mod n043_tests {
+    use super::*;
+
+    const STATE: u32 = 0x7300_0000;
+
+    fn calls(e: &Engine, addr: u32) -> Vec<Vec<u32>> {
+        e.call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|c| c.0 == addr)
+            .map(|c| c.1.clone())
+            .collect()
+    }
+
+    /// Lists are (item, next) nodes; `006815c0` answers its argument.
+    fn engine() -> Engine {
+        let mut e = Engine::new();
+        e.map(STATE, 0x40);
+        e.register(LIST_NODE_ITEM_SLOT, |_, a| a[0].into_ret());
+        e.register(NODE_IS_END, |e, a| {
+            u32::from(e.mem.u32(a[0]) == 0).into_ret()
+        });
+        e.register(NODE_NEXT, |e, a| e.mem.u32(a[0] + 4).into_ret());
+        for addr in [CONDITION_CLEAR, COPY_BYTES, MEMSET, ITEM_SETUP] {
+            e.register(addr, |_, _| Ret::default());
+        }
+        e.register(OPERATOR_NEW, |e, a| e.mem.alloc(a[0]).into_ret());
+        e.register_double(LIST_APPEND, |e, a| {
+            let item = e.mem.u32(a[1]);
+            let n = e.mem.u32(STATE);
+            e.mem.set_u32(STATE + 4 + 4 * n, item);
+            e.mem.set_u32(STATE, n + 1);
+            Ret::default()
+        });
+        e
+    }
+
+    fn list(e: &mut Engine, items: &[u32]) -> u32 {
+        let head = e.mem.alloc(8);
+        let mut node = head;
+        for (index, item) in items.iter().enumerate() {
+            e.mem.set_u32(node, *item);
+            if index + 1 < items.len() {
+                let next = e.mem.alloc(8);
+                e.mem.set_u32(node + 4, next);
+                node = next;
+            }
+        }
+        head
+    }
+
+    #[test]
+    fn copy_makes_new_items() {
+        let mut e = engine();
+        let this = list(&mut e, &[]);
+        let other = list(&mut e, &[0x100, 0x200]);
+        e.call_log = Some(vec![]);
+        e.call(0x0068_0a70, &args![this, other, 9u32]);
+        assert_eq!(calls(&e, CONDITION_CLEAR), vec![vec![this]]);
+        assert_eq!(e.mem.u32(STATE), 2);
+        let first = e.mem.u32(STATE + 4);
+        let copies = calls(&e, COPY_BYTES);
+        assert_eq!(copies[0], vec![first, 0x100, 0x1c]);
+        assert_eq!(copies[1][1], 0x200);
+        assert_eq!(calls(&e, ITEM_SETUP)[0], vec![first, ITEM_SETUP_VALUE]);
+        assert!(calls(&e, LIST_APPEND).iter().all(|c| c[0] == this));
+        // An empty source copies nothing.
+        let empty = list(&mut e, &[]);
+        e.call_log = Some(vec![]);
+        e.call(0x0068_0a70, &args![this, empty, 9u32]);
+        assert!(calls(&e, OPERATOR_NEW).is_empty());
+    }
+
+    #[test]
+    fn item_copy_and_compare() {
+        let mut e = engine();
+        e.register(MEMCMP, |e, _| e.mem.u32(STATE + 0x20).into_ret());
+        e.call_log = Some(vec![]);
+        e.call(0x0068_1590, &args![0x1000u32, 0x2000u32, 7u32]);
+        assert_eq!(calls(&e, COPY_BYTES), vec![vec![0x1000, 0x2000, 0x1c]]);
+        assert!(!e.call(0x0068_15d0, &args![0x1000u32, 0x2000u32]).bool());
+        assert_eq!(calls(&e, MEMCMP), vec![vec![0x2000, 0x1000, 0x1c]]);
+        e.mem.set_u32(STATE + 0x20, 0x100);
+        assert!(e.call(0x0068_15d0, &args![0x1000u32, 0x2000u32]).bool());
     }
 }

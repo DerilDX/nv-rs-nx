@@ -635,9 +635,157 @@ pub fn fn_00488350(e: &mut Engine, this: Ptr<TESLeveledList>, reference: Ptr, co
     });
 }
 
+/// `00905330` (`thiscall`, `RET 4`): removes the item whose word is at the
+/// given address from the list.
+const LIST_REMOVE_ITEM: u32 = 0x0090_5330;
+/// `004858f0` (`cdecl`, chunk type and a byte): adds a one-byte chunk.
+const ADD_CHUNK_BYTE: u32 = 0x0048_58f0;
+/// `00485910` (`cdecl`, chunk type and a word): adds a four-byte chunk.
+const ADD_CHUNK_WORD: u32 = 0x0048_5910;
+/// `TESForm::__AddChunkData` (engine map, `00485990`, `cdecl`: type, data,
+/// size).
+const ADD_CHUNK_DATA: u32 = 0x0048_5990;
+/// `0084e3a0` (`thiscall`, no stack word): a form's id.
+const FORM_ID: u32 = 0x0084_e3a0;
+/// `00401500` (no parameters): whether saved data is byte-swapped (`AL`).
+const NEEDS_SWAP: u32 = 0x0040_1500;
+/// `00407a90` and `00401080` (`cdecl`: address and a byte flag): swap the
+/// 16-bit and the 32-bit value at the address in place.
+const SWAP_16: u32 = 0x0040_7a90;
+const SWAP_32: u32 = 0x0040_1080;
+/// `0040e6c0` (`thiscall`, no stack word; unit `containeritemextra.cpp` by
+/// the engine map): saves a `ContainerItemExtra`.
+const ITEM_EXTRA_SAVE: u32 = 0x0040_e6c0;
+
+/// Sets or clears `bit` of `cLLFlags` (+0xd) by the low byte of `value`.
+fn set_list_flag(e: &mut Engine, this: Ptr<TESLeveledList>, bit: u8, value: u32) {
+    let flags = e.get(this, TESLeveledList::cLLFlags);
+    let flags = if value as u8 != 0 {
+        flags | bit
+    } else {
+        flags & !bit
+    };
+    e.set(this, TESLeveledList::cLLFlags, flags);
+}
+
+// Translated from 00487800 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Sets (low byte of `value` non-zero) or clears bit 0x01 of `cLLFlags`
+/// (`thiscall`, `RET 4`; the engine map gives it no name).
+pub fn fn_00487800(e: &mut Engine, this: Ptr<TESLeveledList>, value: u32) {
+    set_list_flag(e, this, 0x01, value);
+}
+
+// Translated from 00487860 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Sets or clears bit 0x02 of `cLLFlags` (`thiscall`, `RET 4`; the engine
+/// map gives it no name).
+pub fn fn_00487860(e: &mut Engine, this: Ptr<TESLeveledList>, value: u32) {
+    set_list_flag(e, this, 0x02, value);
+}
+
+// Translated from 004878c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Sets or clears bit 0x04 of `cLLFlags` (`thiscall`, `RET 4`; the engine
+/// map gives it no name).
+pub fn fn_004878c0(e: &mut Engine, this: Ptr<TESLeveledList>, value: u32) {
+    set_list_flag(e, this, 0x04, value);
+}
+
+// Translated from 00487980 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Takes every entry out of `ScriptAddedList` (+0x14; no stack word; the
+/// engine map gives it no name): while that list is not empty (`008256d0`)
+/// its head item (`006815c0`) is read and the head removed (`0063f7b0`),
+/// the item is removed from `leveledList` (+4, `00905330` with the address
+/// of the stack word holding it) and, when non-null, deleted (`00481760`
+/// with 1).
+pub fn fn_00487980(e: &mut Engine, this: Ptr<TESLeveledList>) {
+    let added = this.addr() + 0x14;
+    e.with_stack(4, |e, slot| loop {
+        if e.call(NODE_IS_EMPTY, &args![added]).bool() {
+            break;
+        }
+        let item_at = e.call(NODE_ITEM_ADDRESS, &args![added]).u32();
+        let item = e.mem.u32(item_at);
+        e.mem.set_u32(slot.addr(), item);
+        e.call(LIST_REMOVE_HEAD, &args![added]);
+        e.call(LIST_REMOVE_ITEM, &args![this.addr() + 4, slot]);
+        let item = e.mem.u32(slot.addr());
+        if item != 0 {
+            e.call(LEVELED_OBJECT_DELETE, &args![item, 1u32]);
+        }
+    });
+}
+
+// Translated from 00488400 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 00488400 - bytes 2-3 and 10-11 of each LVLO record are uninitialised stack in the exe; the model's fresh stack block holds zeros there.
+/// `TESLeveledList`'s save (no stack word; the engine map gives it no
+/// name): `cChanceNone` as chunk `LVLD` and `cLLFlags` as `LVLF`
+/// (`004858f0`), the chance global's id as `LVLG` when set (`00485910`);
+/// then for each node of `leveledList` (`00717e50`, `00726070`) until a node
+/// without an item: a 12-byte `LVLO` record (`00485990`) holding the
+/// level (`u16` at +0), the item form's id (`0084e3a0`, at +4) and the
+/// count (`u16` at +8), byte-swapped before and after (`00488510`) when
+/// `00401500` says so, then the item's extra data saved (`0040e6c0`) when
+/// it has one.
+pub fn fn_00488400(e: &mut Engine, this: Ptr<TESLeveledList>) {
+    let chance = e.get(this, TESLeveledList::cChanceNone);
+    e.call(ADD_CHUNK_BYTE, &args![0x444c_564cu32, u32::from(chance)]);
+    let flags = e.get(this, TESLeveledList::cLLFlags);
+    e.call(ADD_CHUNK_BYTE, &args![0x464c_564cu32, u32::from(flags)]);
+    let global = e.get(this, TESLeveledList::pChanceGlobal);
+    if global != 0 {
+        let id = e.call(FORM_ID, &args![global]).u32();
+        e.call(ADD_CHUNK_WORD, &args![0x474c_564cu32, id]);
+    }
+    let mut node = e.call(LEVELED_LIST_HEAD, &args![this]).u32();
+    e.with_stack(0xc, |e, record| {
+        let record = record.addr();
+        while node != 0 {
+            let item_at = e.call(NODE_ITEM_ADDRESS, &args![node]).u32();
+            let item = e.mem.u32(item_at);
+            if item == 0 {
+                break;
+            }
+            let form = e.mem.u32(item);
+            let id = e.call(FORM_ID, &args![form]).u32();
+            e.mem.set_u32(record + 4, id);
+            let level = e.mem.u16(item + 6);
+            e.mem.set_u16(record, level);
+            let count = e.mem.u16(item + 4);
+            e.mem.set_u16(record + 8, count);
+            if e.call(NEEDS_SWAP, &args![]).bool() {
+                fn_00488510(e, Ptr::new(record));
+            }
+            e.call(ADD_CHUNK_DATA, &args![0x4f4c_564cu32, record, 0xcu32]);
+            if e.call(NEEDS_SWAP, &args![]).bool() {
+                fn_00488510(e, Ptr::new(record));
+            }
+            let extra = e.mem.u32(item + 8);
+            if extra != 0 {
+                e.call(ITEM_EXTRA_SAVE, &args![extra]);
+            }
+            node = e.call(NODE_NEXT, &args![node]).u32();
+        }
+    });
+}
+
+// Translated from 00488510 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Byte-swaps an `LVLO` record in place (no stack word; the engine map
+/// gives it no name): the 16-bit value at +0 (`00407a90`), the word at +4
+/// (`00401080`) and the 16-bit value at +8, each with the flag 0.
+pub fn fn_00488510(e: &mut Engine, this: Ptr) {
+    e.call(SWAP_16, &args![this, 0u32]);
+    e.call(SWAP_32, &args![this.addr().wrapping_add(4), 0u32]);
+    e.call(SWAP_16, &args![this.addr().wrapping_add(8), 0u32]);
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x0048_7800, fn_00487800(Ptr<TESLeveledList>, u32)),
+        entry!(0x0048_7860, fn_00487860(Ptr<TESLeveledList>, u32)),
+        entry!(0x0048_78c0, fn_004878c0(Ptr<TESLeveledList>, u32)),
+        entry!(0x0048_7980, fn_00487980(Ptr<TESLeveledList>)),
+        entry!(0x0048_8400, fn_00488400(Ptr<TESLeveledList>)),
+        entry!(0x0048_8510, fn_00488510(Ptr)),
         entry!(0x00487f50, fn_00487f50() -> u32),
         entry!(0x0048_7620, fn_00487620(Ptr<LeveledObject>)),
         entry!(0x0048_7740, fn_00487740(Ptr<TESLeveledList>)),
@@ -1175,5 +1323,154 @@ mod b025_tests {
         e.call_log = Some(vec![]);
         e.call(0x0048_8350, &args![l, reference, container]);
         assert_eq!(calls_to(&e, CONTAINER_ADD).len(), 1);
+    }
+}
+
+#[cfg(test)]
+mod n038_tests {
+    use super::*;
+
+    type Log = Vec<(u32, Vec<u32>)>;
+
+    fn word(eax: u32) -> Ret {
+        Ret {
+            eax,
+            ..Ret::default()
+        }
+    }
+
+    fn run(e: &mut Engine, addr: u32, words: &[u32]) -> Log {
+        e.call_log = Some(vec![]);
+        e.call(addr, words);
+        e.call_log
+            .take()
+            .unwrap()
+            .into_iter()
+            .filter(|(a, _)| *a != addr)
+            .collect()
+    }
+
+    #[test]
+    fn flag_setters_set_and_clear_their_bit() {
+        let mut e = Engine::new();
+        let this = e.mem.alloc(0x1c);
+        for (addr, bit) in [(0x0048_7800, 1u8), (0x0048_7860, 2), (0x0048_78c0, 4)] {
+            e.mem.set_u8(this + 0xd, 0x80);
+            e.call(addr, &args![this, 0x100u32 | 1]);
+            assert_eq!(e.mem.u8(this + 0xd), 0x80 | bit);
+            // Only the low byte counts.
+            e.call(addr, &args![this, 0x100u32]);
+            assert_eq!(e.mem.u8(this + 0xd), 0x80);
+            e.mem.set_u8(this + 0xd, 0xff);
+            e.call(addr, &args![this, 0u32]);
+            assert_eq!(e.mem.u8(this + 0xd), !bit);
+        }
+    }
+
+    #[test]
+    fn at_00487980_drains_the_script_added_list() {
+        let mut e = Engine::new();
+        // The list at +0x14 is a count at +0x14 and items at +0x18, +0x1c;
+        // the doubles pop from the end.
+        e.register(NODE_IS_EMPTY, |e, a| word(u32::from(e.mem.u32(a[0]) == 0)));
+        e.register(NODE_ITEM_ADDRESS, |e, a| {
+            let n = e.mem.u32(a[0]);
+            word(a[0] + 4 * n)
+        });
+        e.register(LIST_REMOVE_HEAD, |e, a| {
+            let n = e.mem.u32(a[0]);
+            e.mem.set_u32(a[0], n - 1);
+            Ret::default()
+        });
+        e.register(LIST_REMOVE_ITEM, |_, _| Ret::default());
+        e.register(LEVELED_OBJECT_DELETE, |_, _| Ret::default());
+        let this = e.mem.alloc(0x28);
+        e.mem.set_u32(this + 0x14, 2);
+        e.mem.set_u32(this + 0x18, 0x5100);
+        e.mem.set_u32(this + 0x1c, 0);
+        let log = run(&mut e, 0x0048_7980, &[this]);
+        let removed: Vec<_> = log.iter().filter(|c| c.0 == LIST_REMOVE_ITEM).collect();
+        assert_eq!(removed.len(), 2);
+        assert_eq!(removed[0].1[0], this + 4);
+        let deleted: Vec<_> = log
+            .iter()
+            .filter(|c| c.0 == LEVELED_OBJECT_DELETE)
+            .cloned()
+            .collect();
+        assert_eq!(deleted, vec![(LEVELED_OBJECT_DELETE, vec![0x5100, 1])]);
+        assert_eq!(e.mem.u32(this + 0x14), 0);
+    }
+
+    #[test]
+    fn at_00488400_saves_header_and_records() {
+        let mut e = Engine::new();
+        e.mem.map(0x0f00_0000, 8);
+        e.register(ADD_CHUNK_BYTE, |_, _| Ret::default());
+        e.register(ADD_CHUNK_WORD, |_, _| Ret::default());
+        e.register(FORM_ID, |_, a| word(a[0] + 1));
+        e.register(NEEDS_SWAP, |e, _| word(e.mem.u32(0x0f00_0000)));
+        e.register(SWAP_16, |_, _| Ret::default());
+        e.register(SWAP_32, |_, _| Ret::default());
+        e.register(ITEM_EXTRA_SAVE, |_, _| Ret::default());
+        // The record's bytes at the time of the chunk call.
+        e.register(ADD_CHUNK_DATA, |e, a| {
+            let bytes = e.mem.bytes(a[1], 12);
+            let at = 0x0f00_0004;
+            let n = e.mem.u32(at);
+            e.mem.set_u32(at, n + 1);
+            if n == 0 {
+                assert_eq!(bytes, vec![5, 0, 0, 0, 0x01, 0x70, 0, 0, 2, 0, 0, 0]);
+            }
+            Ret::default()
+        });
+        // Nodes: a node is [item, next].
+        e.register(LEVELED_LIST_HEAD, |e, a| word(e.mem.u32(a[0] + 4)));
+        e.register(NODE_ITEM_ADDRESS, |_, a| word(a[0]));
+        e.register(NODE_NEXT, |e, a| word(e.mem.u32(a[0] + 4)));
+        let this = e.mem.alloc(0x1c);
+        e.mem.set_u8(this + 0xc, 0x10);
+        e.mem.set_u8(this + 0xd, 0x3);
+        let item = e.mem.alloc(0xc);
+        e.mem.set_u32(item, 0x7000);
+        e.mem.set_u16(item + 4, 2);
+        e.mem.set_u16(item + 6, 5);
+        let empty = e.mem.alloc(8);
+        let node = e.mem.alloc(8);
+        e.mem.set_u32(node, item);
+        e.mem.set_u32(node + 4, empty);
+        e.mem.set_u32(this + 4, node);
+        let log = run(&mut e, 0x0048_8400, &[this]);
+        assert_eq!(log[0], (ADD_CHUNK_BYTE, vec![0x444c_564c, 0x10]));
+        assert_eq!(log[1], (ADD_CHUNK_BYTE, vec![0x464c_564c, 3]));
+        assert_eq!(log[2], (LEVELED_LIST_HEAD, vec![this]));
+        assert!(!log.iter().any(|c| c.0 == ADD_CHUNK_WORD || c.0 == SWAP_16));
+        assert!(!log.iter().any(|c| c.0 == ITEM_EXTRA_SAVE));
+        assert_eq!(e.mem.u32(0x0f00_0004), 1);
+        let chunk = log.iter().find(|c| c.0 == ADD_CHUNK_DATA).unwrap();
+        assert_eq!((chunk.1[0], chunk.1[2]), (0x4f4c_564c, 0xc));
+        // With a global, swapping and an extra.
+        e.mem.set_u32(this + 0x10, 0x9000);
+        e.mem.set_u32(item + 8, 0x6000);
+        e.mem.set_u32(0x0f00_0000, 1);
+        let log = run(&mut e, 0x0048_8400, &[this]);
+        assert_eq!(log[3], (ADD_CHUNK_WORD, vec![0x474c_564c, 0x9001]));
+        assert_eq!(log.iter().filter(|c| c.0 == SWAP_32).count(), 2);
+        assert!(log.contains(&(ITEM_EXTRA_SAVE, vec![0x6000])));
+    }
+
+    #[test]
+    fn at_00488510_swaps_the_three_fields() {
+        let mut e = Engine::new();
+        e.register(SWAP_16, |_, _| Ret::default());
+        e.register(SWAP_32, |_, _| Ret::default());
+        let log = run(&mut e, 0x0048_8510, &[0x5000]);
+        assert_eq!(
+            log,
+            vec![
+                (SWAP_16, vec![0x5000, 0]),
+                (SWAP_32, vec![0x5004, 0]),
+                (SWAP_16, vec![0x5008, 0]),
+            ]
+        );
     }
 }

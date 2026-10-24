@@ -160,12 +160,153 @@ pub fn fn_0058a200(e: &mut Engine, this: Ptr<BGSAcousticSpace>) -> bool {
     e.get(this, BGSAcousticSpace::bIsInterior)
 }
 
+/// The getters of the five sounds, paired with `SOUND_SETTERS` (each
+/// `thiscall`, a word answer; the engine map's names for the folded bodies
+/// of `005f36f0` and `008041a0` belong to other classes).
+const SOUND_GETTERS: [u32; 5] = [
+    0x005f_36f0,
+    0x009e_32d0,
+    0x0063_9b40,
+    0x008d_6f30,
+    0x0080_41a0,
+];
+/// The getter of the `RDAT` word (`006733e0`), of the word `00589f70` does
+/// not save but `0058a120` copies through `0058e430` (`0068a830`), and of
+/// `eEnvType` (`0068a810`); `00792780` (`thiscall`, one byte) is the
+/// setter `0058a120` gives `bIsInterior` to.
+const RDAT_GETTER: u32 = 0x0067_33e0;
+const GETTER_0068A830: u32 = 0x0068_a830;
+const SETTER_0058E430: u32 = 0x0058_e430;
+const ENV_TYPE_GETTER: u32 = 0x0068_a810;
+const INTERIOR_SETTER: u32 = 0x0079_2780;
+/// `TESForm::StartForm`, `CloseForm` (`004855a0`, `00485680`), the chunk
+/// writer `00485910` (`cdecl`: name, word), `0084e3a0` (`thiscall`: the
+/// value a form is saved as), `TESForm::CopyAllComponents` and
+/// `CompareAllComponents` (`004851b0`, `00485270`).
+const START_FORM: u32 = 0x0048_55a0;
+const CLOSE_FORM: u32 = 0x0048_5680;
+const WRITE_CHUNK_WORD: u32 = 0x0048_5910;
+const FORM_SAVE_VALUE: u32 = 0x0084_e3a0;
+const COPY_ALL_COMPONENTS: u32 = 0x0048_51b0;
+const COMPARE_ALL_COMPONENTS: u32 = 0x0048_5270;
+/// `__RTDynamicCast` (`00ec43fb`) from `.?AVTESForm@@` (`01183028`) to
+/// `.?AVBGSAcousticSpace@@` (`01184134`).
+const RT_DYNAMIC_CAST: u32 = 0x00ec_43fb;
+const TYPE_TES_FORM: u32 = 0x0118_3028;
+const TYPE_ACOUSTIC_SPACE: u32 = 0x0118_4134;
+
+/// The byte `bIsInterior` (+0x30) as `0058a200` answers it in `AL` (its
+/// callers compare and pass the whole byte).
+fn interior_byte(e: &Engine, form: u32) -> u8 {
+    e.mem.u8(form.wrapping_add(0x30))
+}
+
+/// `form` cast to `BGSAcousticSpace`, or 0.
+fn cast_to_acoustic_space(e: &mut Engine, form: u32) -> u32 {
+    e.call(
+        RT_DYNAMIC_CAST,
+        &args![form, 0u32, TYPE_TES_FORM, TYPE_ACOUSTIC_SPACE, 0u32],
+    )
+    .u32()
+}
+
+// Translated from 00589f70 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BGSAcousticSpace`'s save (`thiscall`): `StartForm`; five `SNAM` chunks,
+/// each the save value (`0084e3a0`) of a sound getter's form or 0 without
+/// one (each getter asked twice); `WNAM` with `iWallaPop`; an `RDAT` chunk
+/// only when the `RDAT` getter answers a form; `ANAM` with the
+/// `eEnvType` getter's word; `INAM` with 1 or 0 for `bIsInterior`;
+/// `CloseForm`.
+pub fn fn_00589f70(e: &mut Engine, this: Ptr<BGSAcousticSpace>) {
+    e.call(START_FORM, &args![this]);
+    for getter in SOUND_GETTERS {
+        let mut value = 0;
+        if e.call(getter, &args![this]).u32() != 0 {
+            let form = e.call(getter, &args![this]).u32();
+            value = e.call(FORM_SAVE_VALUE, &args![form]).u32();
+        }
+        e.call(WRITE_CHUNK_WORD, &args![SIG_SNAM, value]);
+    }
+    let walla = e.get(this, BGSAcousticSpace::iWallaPop);
+    e.call(WRITE_CHUNK_WORD, &args![SIG_WNAM, walla]);
+    if e.call(RDAT_GETTER, &args![this]).u32() != 0 {
+        let form = e.call(RDAT_GETTER, &args![this]).u32();
+        let value = e.call(FORM_SAVE_VALUE, &args![form]).u32();
+        e.call(WRITE_CHUNK_WORD, &args![SIG_RDAT, value]);
+    }
+    let env = e.call(ENV_TYPE_GETTER, &args![this]).u32();
+    e.call(WRITE_CHUNK_WORD, &args![SIG_ANAM, env]);
+    let interior = e.mem.u8(this.addr() + 0x30) != 0;
+    e.call(WRITE_CHUNK_WORD, &args![SIG_INAM, u32::from(interior)]);
+    e.call(CLOSE_FORM, &args![this]);
+}
+
+// Translated from 0058a120 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BGSAcousticSpace`'s copy (`thiscall`, one word, `RET 4`): when
+/// `source` casts to `BGSAcousticSpace`, gives each value of the cast form
+/// to this form's setter: `bIsInterior` (`00792780`), the five sounds
+/// (`SOUND_SETTERS`), `0068a830` to `0058e430`, the `RDAT` word
+/// (`00673400`) and `eEnvType` (`00589f50`), then
+/// `TESForm::CopyAllComponents` with the cast form.
+pub fn fn_0058a120(e: &mut Engine, this: Ptr<BGSAcousticSpace>, source: u32) {
+    let other = cast_to_acoustic_space(e, source);
+    if other == 0 {
+        return;
+    }
+    // `0058a200` answers the byte `bIsInterior` as it is (`MOVZX` of `AL`).
+    let interior = u32::from(interior_byte(e, other));
+    e.call(INTERIOR_SETTER, &args![this, interior]);
+    for (getter, setter) in SOUND_GETTERS.into_iter().zip(SOUND_SETTERS) {
+        let value = e.call(getter, &args![other]).u32();
+        e.call(setter, &args![this, value]);
+    }
+    let value = e.call(GETTER_0068A830, &args![other]).u32();
+    e.call(SETTER_0058E430, &args![this, value]);
+    let value = e.call(RDAT_GETTER, &args![other]).u32();
+    e.call(RDAT_SETTER, &args![this, value]);
+    let value = e.call(ENV_TYPE_GETTER, &args![other]).u32();
+    fn_00589f50(e, this, value);
+    e.call(COPY_ALL_COMPONENTS, &args![this, other]);
+}
+
+// Translated from 0058a220 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BGSAcousticSpace`'s comparison (`thiscall`, one word, `RET 4`):
+/// whether it differs from `form`: true when it does not cast, when
+/// `bIsInterior` differs, when `TESForm::CompareAllComponents` answers
+/// true, or when any of the five sound getters, `0068a830`, the `RDAT`
+/// getter or the `eEnvType` getter answers differently (in that order).
+pub fn fn_0058a220(e: &mut Engine, this: Ptr<BGSAcousticSpace>, form: u32) -> bool {
+    let other = cast_to_acoustic_space(e, form);
+    if other == 0 {
+        return true;
+    }
+    if interior_byte(e, this.addr()) != interior_byte(e, other) {
+        return true;
+    }
+    if e.call(COMPARE_ALL_COMPONENTS, &args![this, other]).bool() {
+        return true;
+    }
+    let getters = SOUND_GETTERS
+        .into_iter()
+        .chain([GETTER_0068A830, RDAT_GETTER, ENV_TYPE_GETTER]);
+    for getter in getters {
+        let mine = e.call(getter, &args![this]).u32();
+        if mine != e.call(getter, &args![other]).u32() {
+            return true;
+        }
+    }
+    false
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
         entry!(0x0058_9d30, fn_00589d30(Ptr<BGSAcousticSpace>, Ptr) -> bool),
         entry!(0x0058_9f50, fn_00589f50(Ptr<BGSAcousticSpace>, u32)),
         entry!(0x0058_a200, fn_0058a200(Ptr<BGSAcousticSpace>) -> bool),
+        entry!(0x0058_9f70, fn_00589f70(Ptr<BGSAcousticSpace>)),
+        entry!(0x0058_a120, fn_0058a120(Ptr<BGSAcousticSpace>, u32)),
+        entry!(0x0058_a220, fn_0058a220(Ptr<BGSAcousticSpace>, u32) -> bool),
     ]
 }
 
@@ -291,5 +432,162 @@ mod tests {
         assert!(!e.call(0x0058_a200, &args![this]).bool());
         e.mem.set_u8(this.addr() + 0x30, 1);
         assert!(e.call(0x0058_a200, &args![this]).bool());
+    }
+}
+
+#[cfg(test)]
+mod n040_tests {
+    use super::*;
+
+    fn calls_to(e: &mut Engine, targets: &[u32]) -> Vec<(u32, Vec<u32>)> {
+        e.call_log
+            .take()
+            .unwrap()
+            .into_iter()
+            .filter(|(a, _)| targets.contains(a))
+            .collect()
+    }
+
+    /// Getter `i` of the list answers the word at `+0x100 + 4 * i` of the
+    /// form; the save value of a form is the form plus 1.
+    fn getters() -> Vec<u32> {
+        let mut all = SOUND_GETTERS.to_vec();
+        all.extend([GETTER_0068A830, RDAT_GETTER, ENV_TYPE_GETTER]);
+        all
+    }
+
+    fn setup(e: &mut Engine) {
+        for (index, getter) in getters().into_iter().enumerate() {
+            let offset = 0x100 + 4 * index as u32;
+            e.register_double(getter, move |e, a| Ret {
+                eax: e.mem.u32(a[0] + offset),
+                ..Ret::default()
+            });
+        }
+        e.register(FORM_SAVE_VALUE, |_, a| Ret {
+            eax: a[0] + 1,
+            ..Ret::default()
+        });
+        e.register(RT_DYNAMIC_CAST, |e, a| {
+            assert_eq!(a[1..], [0, TYPE_TES_FORM, TYPE_ACOUSTIC_SPACE, 0]);
+            let form = if e.mem.u32(a[0] + 0xc) == 0 { a[0] } else { 0 };
+            Ret {
+                eax: form,
+                ..Ret::default()
+            }
+        });
+        for t in [
+            START_FORM,
+            CLOSE_FORM,
+            WRITE_CHUNK_WORD,
+            COPY_ALL_COMPONENTS,
+            INTERIOR_SETTER,
+            SETTER_0058E430,
+            RDAT_SETTER,
+        ] {
+            e.register(t, |_, _| Ret::default());
+        }
+        for s in SOUND_SETTERS {
+            e.register(s, |_, _| Ret::default());
+        }
+        e.register(COMPARE_ALL_COMPONENTS, |e, a| Ret {
+            eax: e.mem.u32(a[1] + 0x10),
+            ..Ret::default()
+        });
+    }
+
+    #[test]
+    fn fn_00589f70_saves_the_acoustic_space() {
+        let mut e = Engine::new();
+        setup(&mut e);
+        let this = e.mem.alloc(0x140);
+        e.mem.set_u32(this + 0x104, 0x5000);
+        e.mem.set_u32(this + 0x110, 0x6000);
+        e.mem.set_u32(this + 0x50, 0x77);
+        e.mem.set_u32(this + 0x11c, 3);
+        e.mem.set_u8(this + 0x30, 2);
+        e.call_log = Some(vec![]);
+        e.call(0x0058_9f70, &[this]);
+        let log = calls_to(&mut e, &[START_FORM, WRITE_CHUNK_WORD, CLOSE_FORM]);
+        let words: Vec<Vec<u32>> = log.iter().map(|(_, a)| a.clone()).collect();
+        assert_eq!(log[0], (START_FORM, vec![this]));
+        assert_eq!(
+            words[1..10],
+            [
+                vec![SIG_SNAM, 0],
+                vec![SIG_SNAM, 0x5001],
+                vec![SIG_SNAM, 0],
+                vec![SIG_SNAM, 0],
+                vec![SIG_SNAM, 0x6001],
+                vec![SIG_WNAM, 0x77],
+                vec![SIG_ANAM, 3],
+                vec![SIG_INAM, 1],
+                vec![this],
+            ]
+        );
+        e.mem.set_u32(this + 0x118, 0x7000);
+        e.mem.set_u8(this + 0x30, 0);
+        e.call_log = Some(vec![]);
+        e.call(0x0058_9f70, &[this]);
+        let log = calls_to(&mut e, &[WRITE_CHUNK_WORD]);
+        assert_eq!(log[6].1, vec![SIG_RDAT, 0x7001]);
+        assert_eq!(log[8].1, vec![SIG_INAM, 0]);
+    }
+
+    #[test]
+    fn fn_0058a120_copies_the_acoustic_space() {
+        let mut e = Engine::new();
+        setup(&mut e);
+        let this = e.mem.alloc(0x140);
+        let other = e.mem.alloc(0x140);
+        for index in 0..8u32 {
+            e.mem.set_u32(other + 0x100 + 4 * index, 0x10 + index);
+        }
+        e.mem.set_u8(other + 0x30, 2);
+        e.mem.set_u32(other + 0xc, 1);
+        e.call_log = Some(vec![]);
+        e.call(0x0058_a120, &[this, other]);
+        assert!(calls_to(&mut e, &[COPY_ALL_COMPONENTS]).is_empty());
+        e.mem.set_u32(other + 0xc, 0);
+        let mut setters = vec![INTERIOR_SETTER];
+        setters.extend(SOUND_SETTERS);
+        setters.extend([SETTER_0058E430, RDAT_SETTER, COPY_ALL_COMPONENTS]);
+        e.call_log = Some(vec![]);
+        e.call(0x0058_a120, &[this, other]);
+        let mut expected = vec![(INTERIOR_SETTER, vec![this, 2])];
+        for (index, setter) in SOUND_SETTERS.into_iter().enumerate() {
+            expected.push((setter, vec![this, 0x10 + index as u32]));
+        }
+        expected.push((SETTER_0058E430, vec![this, 0x15]));
+        expected.push((RDAT_SETTER, vec![this, 0x16]));
+        expected.push((COPY_ALL_COMPONENTS, vec![this, other]));
+        assert_eq!(calls_to(&mut e, &setters), expected);
+        assert_eq!(e.mem.u32(this + 0x4c), 0x17);
+    }
+
+    #[test]
+    fn fn_0058a220_compares_the_acoustic_space() {
+        let mut e = Engine::new();
+        setup(&mut e);
+        let this = e.mem.alloc(0x140);
+        let other = e.mem.alloc(0x140);
+        e.mem.set_u32(other + 0xc, 1);
+        assert!(e.call(0x0058_a220, &[this, other]).bool());
+        e.mem.set_u32(other + 0xc, 0);
+        assert!(!e.call(0x0058_a220, &[this, other]).bool());
+        // The whole byte is compared.
+        e.mem.set_u8(this + 0x30, 1);
+        e.mem.set_u8(other + 0x30, 2);
+        assert!(e.call(0x0058_a220, &[this, other]).bool());
+        e.mem.set_u8(other + 0x30, 1);
+        e.mem.set_u32(other + 0x10, 1);
+        assert!(e.call(0x0058_a220, &[this, other]).bool());
+        e.mem.set_u32(other + 0x10, 0);
+        for index in 0..8u32 {
+            e.mem.set_u32(other + 0x100 + 4 * index, 9);
+            assert!(e.call(0x0058_a220, &[this, other]).bool());
+            e.mem.set_u32(other + 0x100 + 4 * index, 0);
+        }
+        assert!(!e.call(0x0058_a220, &[this, other]).bool());
     }
 }

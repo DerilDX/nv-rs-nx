@@ -71,6 +71,23 @@ fn cross(e: &Engine, o: u32, a: u32, b: u32) -> f64 {
     (ax - ox) * (by - oy) - (bx - ox) * (ay - oy)
 }
 
+/// [`cross`] as the x87 runs it: `FLD a.x`, `FSUB o.x`, `FLD b.y`, `FSUB o.y`,
+/// `FMULP`, the same for the second product, `FSUBP` (each `FSUB` takes the
+/// float in memory, so a signalling NaN there meets the x87 NaN rule as one).
+fn cross_x87(e: &Engine, o: u32, a: u32, b: u32) -> f64 {
+    let m = |p: u32| x87_m32(e.mem.u32(p));
+    let l = |p: u32| x87_load32(e.mem.u32(p));
+    let first = x87_mul(
+        x87_sub(l(a), m(o)),
+        x87_sub(l(b.wrapping_add(4)), m(o.wrapping_add(4))),
+    );
+    let second = x87_mul(
+        x87_sub(l(b), m(o)),
+        x87_sub(l(a.wrapping_add(4)), m(o.wrapping_add(4))),
+    );
+    x87_sub(first, second)
+}
+
 /// Copies `words` words from `source` to `dest`.
 fn copy_words(e: &mut Engine, dest: u32, source: u32, words: u32) {
     for word in 0..words {
@@ -120,15 +137,16 @@ pub fn fn_006b9790(e: &mut Engine, p1: Ptr, p2: Ptr, p3: Ptr, p4: Ptr, out: Ptr)
 /// true.
 pub fn fn_006b9820(e: &mut Engine, p1: Ptr, p2: Ptr, p3: Ptr, p4: Ptr, out: Ptr) -> bool {
     let (a, b, c, p) = (p1.addr(), p2.addr(), p3.addr(), p4.addr());
-    let area = cross(e, a, b, c) as f32;
-    if f64::from(area) == e.global::<f64>(ZERO) {
+    let area = x87_store32(cross_x87(e, a, b, c));
+    if x87_load32(area) == e.global::<f64>(ZERO) {
         return false;
     }
-    let inverse = (1.0 / f64::from(area)) as f32;
-    let weights = [cross(e, p, b, c), cross(e, p, c, a), cross(e, p, a, b)];
-    for (i, weight) in weights.iter().enumerate() {
-        let value = (weight * f64::from(inverse)) as f32;
-        e.mem.set_f32(out.addr().wrapping_add(4 * i as u32), value);
+    let inverse = x87_store32(x87_div(1.0, x87_load32(area)));
+    // Each weight is stored before the next is computed, as the exe does.
+    for (i, (o, u, v)) in [(p, b, c), (p, c, a), (p, a, b)].into_iter().enumerate() {
+        let value = x87_mul(cross_x87(e, o, u, v), x87_m32(inverse));
+        e.mem
+            .set_u32(out.addr().wrapping_add(4 * i as u32), x87_store32(value));
     }
     true
 }
@@ -335,43 +353,54 @@ pub fn fn_006b9cf0(
 ) -> bool {
     let zero = e.global::<f64>(ZERO);
     let (a, b, c, p) = (p1.addr(), p2.addr(), p3.addr(), point.addr());
-    let area = cross(e, a, b, c) as f32;
-    if f64::from(area) == zero {
+    let area = x87_store32(cross_x87(e, a, b, c));
+    if x87_load32(area) == zero {
         return false;
     }
-    let (ax, ay) = xy(e, a);
-    let (bx, by) = xy(e, b);
-    let (cx, cy) = xy(e, c);
-    let (px, py) = xy(e, p);
-    let bx_p = f64::from((bx - px) as f32);
-    let cx_p = f64::from((cx - px) as f32);
-    let by_p = f64::from((by - py) as f32);
-    let cy_p = f64::from((cy - py) as f32);
-    let inverse = f64::from((1.0 / f64::from(area)) as f32);
-    let w1 = ((bx_p * cy_p - cx_p * by_p) * inverse) as f32;
-    if f64::from(w1) < zero {
+    // The x87 stack code: `FLD` a float, `FSUB`/`FMUL` a float in memory, `FSTP`
+    // to a scratch float (the scratch floats are the `u32` bit patterns here).
+    let m = |q: u32| x87_m32(e.mem.u32(q));
+    let l = |q: u32| x87_load32(e.mem.u32(q));
+    let difference = |from: u32, to: u32| x87_store32(x87_sub(l(from), m(to)));
+    let bx_p = difference(b, p);
+    let cx_p = difference(c, p);
+    let by_p = difference(b.wrapping_add(4), p.wrapping_add(4));
+    let cy_p = difference(c.wrapping_add(4), p.wrapping_add(4));
+    let inverse = x87_store32(x87_div(1.0, x87_load32(area)));
+    // `FLD s; FMUL t; FLD u; FMUL v; FSUBP; FMUL inverse; FSTP`.
+    let weight = |s: u32, t: u32, u: u32, v: u32| {
+        let first = x87_mul(x87_load32(s), x87_m32(t));
+        let second = x87_mul(x87_load32(u), x87_m32(v));
+        x87_store32(x87_mul(x87_sub(first, second), x87_m32(inverse)))
+    };
+    let w1 = weight(bx_p, cy_p, cx_p, by_p);
+    if x87_load32(w1) < zero {
         return false;
     }
-    let ax_p = f64::from((ax - px) as f32);
-    let ay_p = f64::from((ay - py) as f32);
-    let w2 = ((cx_p * ay_p - ax_p * cy_p) * inverse) as f32;
-    if f64::from(w2) < zero {
+    let ax_p = difference(a, p);
+    let ay_p = difference(a.wrapping_add(4), p.wrapping_add(4));
+    let w2 = weight(cx_p, ay_p, ax_p, cy_p);
+    if x87_load32(w2) < zero {
         return false;
     }
-    let w3 = ((ax_p * by_p - bx_p * ay_p) * inverse) as f32;
-    if f64::from(w3) < zero {
+    let w3 = weight(ax_p, by_p, bx_p, ay_p);
+    if x87_load32(w3) < zero {
         return false;
     }
-    let z = |q: u32| f64::from(e.mem.f32(q.wrapping_add(8)));
-    let surface = (f64::from(w1) * z(a) + f64::from(w2) * z(b) + f64::from(w3) * z(c)) as f32;
-    let height = (f64::from(surface) - z(p)) as f32;
-    if above < height {
+    let z = |q: u32| m(q.wrapping_add(8));
+    let surface = x87_store32(x87_add(
+        x87_add(x87_mul(x87_load32(w1), z(a)), x87_mul(x87_load32(w2), z(b))),
+        x87_mul(x87_load32(w3), z(c)),
+    ));
+    let height = x87_store32(x87_sub(x87_load32(surface), z(p)));
+    let height_value = f32::from_bits(height);
+    if above < height_value {
         return false;
     }
-    if height < -below {
+    if height_value < -below {
         return false;
     }
-    e.mem.set_f32(out.addr(), height);
+    e.mem.set_u32(out.addr(), height);
     true
 }
 

@@ -342,6 +342,266 @@ pub fn tes_ammo_clone_3d(e: &mut Engine, this: Ptr, reference: u32, flag: u8) ->
     clone
 }
 
+/// `00401500`: returns the byte at `011c54ba` (whether chunk data is
+/// byte-swapped when written).
+const WRITE_NEEDS_SWAP: u32 = 0x0040_1500;
+/// The `TESAmmo` type descriptor (`011840c4`).
+const TYPE_TES_AMMO: u32 = 0x0118_40c4;
+/// `00401460` (cdecl: destination, source, size): copies memory.
+const MEMCPY: u32 = 0x0040_1460;
+/// `memcmp` (`00ec4835`, cdecl: first, second, size).
+const MEMCMP: u32 = 0x00ec_4835;
+/// `00984230` (`ECX` = ammo): the address of its `DAT2` data (+0xB0).
+const DATA2: u32 = 0x0098_4230;
+/// `00559450` (`ECX` = string): its characters (the string's first word).
+const STRING_TEXT: u32 = 0x0055_9450;
+/// `004037f0` (`ECX` = string; characters, a word; `RET 8`): sets the
+/// string.
+const STRING_SET: u32 = 0x0040_37f0;
+/// `004048e0` (`ECX` = string): its length.
+const STRING_LENGTH: u32 = 0x0040_48e0;
+/// `00501c90` (`ECX` = string; the other string, a word; `RET 8`): compares
+/// the two strings (nonzero = they differ).
+const STRING_COMPARE: u32 = 0x0050_1c90;
+/// `008256d0` (`ECX` = list node): nonzero byte when the node holds nothing.
+const NODE_IS_EMPTY: u32 = 0x0082_56d0;
+/// `0063f7b0` (`ECX` = list): removes the list's first item.
+const LIST_REMOVE_HEAD: u32 = 0x0063_f7b0;
+/// `00905820` (`ECX` = list; the address of the item; `RET 4`): adds the
+/// item.
+const LIST_ADD: u32 = 0x0090_5820;
+/// `005ae380` (`ECX` = list): its item count (the engine map's name,
+/// `VATS::GetCount`, is a folded body).
+const LIST_COUNT: u32 = 0x005a_e380;
+
+// Translated from 00503280 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TESAmmo::Save` (Xbox PDB): starts the form (`TESForm::StartForm`,
+/// `004855a0`), saves the components (full name +0x30 `00487010`, model
+/// +0x3C `0048a520` with `MODL`/`MODT`/`MODS`, icon +0x5C `0048e370` with
+/// `ICON`, message icon +0x68 `0047a240` with `MICO`, script +0x9C
+/// `0048cca0`, destructible +0x88 `00477f20`, pickup sounds +0x90
+/// `0047b560`), the 8 bytes at +0xA8 (`TESForm::__SaveData`, swapped
+/// before and after through `00503210` when `00401500` says so), the
+/// `DAT2` chunk (+0xB0, 0x14 bytes, with the forms at +0xB4 and +0xBC
+/// replaced by their form ids, or 0, for the write and put back after;
+/// swapped through `00503240`), the strings at +0xC4 (`ONAM`) and +0xCC
+/// (`QNAM`) with their terminators when not empty (`TESForm::AddChunkArray`),
+/// a `RCIL` chunk with the form id of each effect of the effect list
+/// (`00485910`), and closes the form (`00485680`).
+pub fn tes_ammo_save(e: &mut Engine, this: Ptr) {
+    let base = this.addr();
+    e.call(0x0048_55a0, &args![this]);
+    e.call(0x0048_7010, &args![base + 0x30]);
+    e.call(
+        0x0048_a520,
+        &args![base + 0x3c, 0x4c44_4f4du32, 0x5444_4f4du32, 0x5344_4f4du32],
+    );
+    e.call(0x0048_e370, &args![base + 0x5c, 0x4e4f_4349u32]);
+    e.call(0x0047_a240, &args![base + 0x68, 0x4f43_494du32]);
+    e.call(0x0048_cca0, &args![base + 0x9c]);
+    e.call(0x0047_7f20, &args![base + 0x88]);
+    e.call(0x0047_b560, &args![base + 0x90]);
+    if e.call(WRITE_NEEDS_SWAP, &[]).u8() != 0 {
+        e.call(0x0050_3210, &args![base + 0xa8]);
+    }
+    e.call(0x0048_5e20, &args![this, base + 0xa8, 8u32]);
+    if e.call(WRITE_NEEDS_SWAP, &[]).u8() != 0 {
+        e.call(0x0050_3210, &args![base + 0xa8]);
+    }
+    let projectile = e.mem.u32(base + 0xb4);
+    let consumed = e.mem.u32(base + 0xbc);
+    let id = if e.mem.u32(base + 0xb4) != 0 {
+        let form = e.mem.u32(base + 0xb4);
+        e.call(FORM_ID, &args![form]).u32()
+    } else {
+        0
+    };
+    e.mem.set_u32(base + 0xb4, id);
+    let id = if e.mem.u32(base + 0xbc) != 0 {
+        let form = e.mem.u32(base + 0xbc);
+        e.call(FORM_ID, &args![form]).u32()
+    } else {
+        0
+    };
+    e.mem.set_u32(base + 0xbc, id);
+    if e.call(WRITE_NEEDS_SWAP, &[]).u8() != 0 {
+        e.call(0x0050_3240, &args![base + 0xb0]);
+    }
+    e.call(0x0048_5990, &args![0x3254_4144u32, base + 0xb0, 0x14u32]);
+    if e.call(WRITE_NEEDS_SWAP, &[]).u8() != 0 {
+        e.call(0x0050_3240, &args![base + 0xb0]);
+    }
+    e.mem.set_u32(base + 0xb4, projectile);
+    e.mem.set_u32(base + 0xbc, consumed);
+    for (offset, tag) in [(0xc4, 0x4d41_4e4fu32), (0xcc, 0x4d41_4e51u32)] {
+        if e.call(STRING_LENGTH, &args![base + offset]).u32() != 0 {
+            let length = e.call(STRING_LENGTH, &args![base + offset]).u32();
+            let text = e.call(STRING_TEXT, &args![base + offset]).u32();
+            e.call(0x0048_56f0, &args![tag, text, length.wrapping_add(1)]);
+        }
+    }
+    let mut node = e.call(EFFECT_LIST, &args![this]).u32();
+    while node != 0 {
+        let data = e.call(NODE_DATA, &args![node]).u32();
+        if e.mem.u32(data) == 0 {
+            break;
+        }
+        let data = e.call(NODE_DATA, &args![node]).u32();
+        let effect = e.mem.u32(data);
+        node = e.call(NODE_NEXT, &args![node]).u32();
+        let id = e.call(FORM_ID, &args![effect]).u32();
+        e.call(0x0048_5910, &args![0x4c49_4352u32, id]);
+    }
+    e.call(0x0048_5680, &args![this]);
+}
+
+// Translated from 00503510 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Copies another ammo (`RET 4`; the engine map gives it no name): nothing
+/// unless `other` is a `TESAmmo` (`__RTDynamicCast` from `TESForm`);
+/// otherwise copies all components (`004851b0`), the 8 bytes at +0xA8 and
+/// the 0x14 `DAT2` bytes (+0xB0, `00984230`), the form type
+/// (`00401170`, `004f15a0`), the strings at +0xC4 and +0xCC, empties this
+/// ammo's effect list (`0063f7b0` until `008256d0` says it is empty) and
+/// adds each of `other`'s effects to it (`00905820`).
+pub fn fn_00503510(e: &mut Engine, this: Ptr, other: Ptr) {
+    let base = this.addr();
+    let cast = e
+        .call(
+            RT_DYNAMIC_CAST,
+            &args![other, 0u32, TES_FORM_TYPE, TYPE_TES_AMMO, 0u32],
+        )
+        .u32();
+    if cast == 0 {
+        return;
+    }
+    e.call(0x0048_51b0, &args![this, other]);
+    let source = fn_00503650(e, Ptr::new(cast));
+    e.call(MEMCPY, &args![base + 0xa8, source, 8u32]);
+    let source = e.call(DATA2, &args![cast]).u32();
+    e.call(MEMCPY, &args![base + 0xb0, source, 0x14u32]);
+    let kind = e.call(0x0040_1170, &args![cast]).u32();
+    e.call(0x004f_15a0, &args![this, kind]);
+    for offset in [0xc4, 0xcc] {
+        let text = e.call(STRING_TEXT, &args![cast + offset]).u32();
+        e.call(STRING_SET, &args![base + offset, text, 0u32]);
+    }
+    loop {
+        let list = e.call(EFFECT_LIST, &args![this]).u32();
+        if e.call(NODE_IS_EMPTY, &args![list]).u8() != 0 {
+            break;
+        }
+        let list = e.call(EFFECT_LIST, &args![this]).u32();
+        e.call(LIST_REMOVE_HEAD, &args![list]);
+    }
+    let mut node = e.call(EFFECT_LIST, &args![cast]).u32();
+    while node != 0 {
+        if e.call(NODE_IS_EMPTY, &args![node]).u8() != 0 {
+            break;
+        }
+        let data = e.call(NODE_DATA, &args![node]).u32();
+        let effect = e.mem.u32(data);
+        e.with_stack(4, |e, item| {
+            e.mem.set_u32(item.addr(), effect);
+            let list = e.call(EFFECT_LIST, &args![this]).u32();
+            e.call(LIST_ADD, &args![list, item]);
+        });
+        node = e.call(NODE_NEXT, &args![node]).u32();
+    }
+}
+
+// Translated from 00503670 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Compares with another ammo (`RET 4`; the engine map gives it no name):
+/// true (they differ) unless `other` is a `TESAmmo` (`__RTDynamicCast`)
+/// whose components (`TESForm::CompareAllComponents`, `00485270`), the 8
+/// bytes at +0xA8, the 0x14 `DAT2` bytes (`memcmp`), the strings at +0xCC
+/// and +0xC4 (`00501c90` with 1), the effect counts (`005ae380`) and each
+/// effect (virtual slot 0x10C of this ammo's effect with the other's, in
+/// list order) are the same. This list running out first, or an empty node
+/// in it, counts as a difference.
+pub fn fn_00503670(e: &mut Engine, this: Ptr, other: Ptr) -> bool {
+    let base = this.addr();
+    let cast = e
+        .call(
+            RT_DYNAMIC_CAST,
+            &args![other, 0u32, TES_FORM_TYPE, TYPE_TES_AMMO, 0u32],
+        )
+        .u32();
+    if cast == 0 {
+        return true;
+    }
+    if e.call(0x0048_5270, &args![this, cast]).u8() != 0 {
+        return true;
+    }
+    let theirs = fn_00503650(e, Ptr::new(cast));
+    if e.call(MEMCMP, &args![base + 0xa8, theirs, 8u32]).u32() != 0 {
+        return true;
+    }
+    let theirs = e.call(DATA2, &args![cast]).u32();
+    if e.call(MEMCMP, &args![base + 0xb0, theirs, 0x14u32]).u32() != 0 {
+        return true;
+    }
+    for offset in [0xcc, 0xc4] {
+        if e.call(STRING_COMPARE, &args![base + offset, cast + offset, 1u32])
+            .u32()
+            != 0
+        {
+            return true;
+        }
+    }
+    let list = e.call(EFFECT_LIST, &args![this]).u32();
+    let mine = e.call(LIST_COUNT, &args![list]).u32();
+    let list = e.call(EFFECT_LIST, &args![cast]).u32();
+    if mine != e.call(LIST_COUNT, &args![list]).u32() {
+        return true;
+    }
+    let mut mine = e.call(EFFECT_LIST, &args![this]).u32();
+    let mut theirs = e.call(EFFECT_LIST, &args![cast]).u32();
+    while theirs != 0 {
+        if e.call(NODE_IS_EMPTY, &args![theirs]).u8() != 0 {
+            break;
+        }
+        if mine == 0 || e.call(NODE_IS_EMPTY, &args![mine]).u8() != 0 {
+            return true;
+        }
+        let data = e.call(NODE_DATA, &args![mine]).u32();
+        let effect = e.mem.u32(data);
+        let data = e.call(NODE_DATA, &args![theirs]).u32();
+        let their_effect = e.mem.u32(data);
+        if e.vcall(effect, 0x10c, &args![their_effect]).u8() != 0 {
+            return true;
+        }
+        theirs = e.call(NODE_NEXT, &args![theirs]).u32();
+        mine = e.call(NODE_NEXT, &args![mine]).u32();
+    }
+    false
+}
+
+// Translated from 005039e0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The word at `011c6200` (`cdecl`, no arguments): the arrow node name
+/// `TESAmmo::Clone3D` looks up for a count of 1.
+pub fn fn_005039e0(e: &mut Engine) -> u32 {
+    e.global::<u32>(0x011c_6200)
+}
+
+// Translated from 005039f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The save size for `flags` (`RET 4`): the form's (`00484bf0`) plus the
+/// value component's (+0x78, `0048e9b0`), summed as `u16`.
+pub fn fn_005039f0(e: &mut Engine, this: Ptr, flags: u32) -> u16 {
+    let mut size: u16 = 0;
+    let form = e.call(0x0048_4bf0, &args![this, flags]).u16();
+    size = size.wrapping_add(form);
+    let value = e.call(0x0048_e9b0, &args![this.addr() + 0x78, flags]).u16();
+    size.wrapping_add(value)
+}
+
+// Translated from 00503a40 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Passes one word to the form's `00484da0` and the value component's
+/// (+0x78) `0048ea80` (`RET 4`).
+pub fn fn_00503a40(e: &mut Engine, this: Ptr, value: u32) {
+    e.call(0x0048_4da0, &args![this, value]);
+    e.call(0x0048_ea80, &args![this.addr() + 0x78, value]);
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -354,6 +614,12 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x0050_2a50, tes_ammo_init_item(Ptr)),
         entry!(0x0050_3a70, tes_ammo_build_menu_string(Ptr, u32, u32)),
         entry!(0x0050_3820, tes_ammo_clone_3d(Ptr, u32, u8) -> u32),
+        entry!(0x0050_3280, tes_ammo_save(Ptr)),
+        entry!(0x0050_3510, fn_00503510(Ptr, Ptr)),
+        entry!(0x0050_3670, fn_00503670(Ptr, Ptr) -> bool),
+        entry!(0x0050_39e0, fn_005039e0() -> u32),
+        entry!(0x0050_39f0, fn_005039f0(Ptr, u32) -> u16),
+        entry!(0x0050_3a40, fn_00503a40(Ptr, u32)),
     ]
 }
 
@@ -757,5 +1023,317 @@ mod b022_tests {
         e.register(0x0050_ee50, |_, _| ret(0));
         assert_eq!(e.call(0x0050_3820, &[a, 0x5000, 0]).u32(), 0);
         assert!(calls_to(&e, 0x0043_d4d0).is_empty());
+    }
+}
+
+#[cfg(test)]
+mod tests_n042 {
+    use super::*;
+
+    type Log = Vec<(u32, Vec<u32>)>;
+
+    fn run(e: &mut Engine, addr: u32, words: &[u32]) -> (Ret, Log) {
+        e.call_log = Some(vec![]);
+        let result = e.call(addr, words);
+        let log = e
+            .call_log
+            .take()
+            .unwrap()
+            .into_iter()
+            .filter(|(a, _)| *a != addr)
+            .collect();
+        (result, log)
+    }
+
+    fn calls(log: &Log, addr: u32) -> Vec<Vec<u32>> {
+        log.iter()
+            .filter(|(a, _)| *a == addr)
+            .map(|(_, w)| w.clone())
+            .collect()
+    }
+
+    fn zero(e: &mut Engine, addrs: &[u32]) {
+        for addr in addrs {
+            e.register(*addr, |_, _| Ret::default());
+        }
+    }
+
+    /// A list: node = [data word, next]; `NODE_DATA` gives the node itself,
+    /// `NODE_NEXT` the second word, `NODE_IS_EMPTY` whether the data is 0.
+    fn list_engine() -> Engine {
+        let mut e = Engine::new();
+        e.register(NODE_DATA, |_, a| a[0].into_ret());
+        e.register(NODE_NEXT, |e, a| e.mem.u32(a[0] + 4).into_ret());
+        e.register(NODE_IS_EMPTY, |e, a| {
+            u32::from(e.mem.u32(a[0]) == 0).into_ret()
+        });
+        // The effect list is the word at +0xd4 of the ammo.
+        e.register(EFFECT_LIST, |e, a| e.mem.u32(a[0] + 0xd4).into_ret());
+        e
+    }
+
+    fn list(e: &mut Engine, items: &[u32]) -> u32 {
+        let mut next = 0;
+        let mut head = 0;
+        for item in items.iter().rev() {
+            head = e.mem.alloc(8);
+            e.mem.set_u32(head, *item);
+            e.mem.set_u32(head + 4, next);
+            next = head;
+        }
+        if head == 0 {
+            head = e.mem.alloc(8);
+        }
+        head
+    }
+
+    #[test]
+    fn save_writes_components_data_and_effects() {
+        let mut e = list_engine();
+        zero(
+            &mut e,
+            &[
+                0x0048_55a0,
+                0x0048_7010,
+                0x0048_a520,
+                0x0048_e370,
+                0x0047_a240,
+                0x0048_cca0,
+                0x0047_7f20,
+                0x0047_b560,
+                0x0050_3210,
+                0x0048_5e20,
+                0x0050_3240,
+                0x0048_56f0,
+                0x0048_5910,
+                0x0048_5680,
+            ],
+        );
+        e.register(WRITE_NEEDS_SWAP, |_, _| 1u32.into_ret());
+        e.register(FORM_ID, |_, a| (a[0] + 0x10).into_ret());
+        e.register(STRING_LENGTH, |e, a| e.mem.u32(a[0] + 4).into_ret());
+        e.register(STRING_TEXT, |e, a| e.mem.u32(a[0]).into_ret());
+        e.register(0x0048_5990, |e, a| {
+            assert_eq!(e.mem.u32(a[1] + 4), 0x5010);
+            assert_eq!(e.mem.u32(a[1] + 0xc), 0);
+            Ret::default()
+        });
+        let this = e.mem.alloc(0xdc);
+        e.mem.set_u32(this + 0xb4, 0x5000);
+        e.mem.set_u32(this + 0xc4, 0x7000);
+        e.mem.set_u32(this + 0xc8, 3);
+        let effects = list(&mut e, &[0x8000, 0x9000]);
+        e.mem.set_u32(this + 0xd4, effects);
+        let (_, log) = run(&mut e, 0x0050_3280, &[this]);
+        assert_eq!(log[0], (0x0048_55a0, vec![this]));
+        assert_eq!(
+            calls(&log, 0x0048_a520),
+            vec![vec![this + 0x3c, 0x4c44_4f4d, 0x5444_4f4d, 0x5344_4f4d]]
+        );
+        assert_eq!(calls(&log, 0x0048_5e20), vec![vec![this, this + 0xa8, 8]]);
+        assert_eq!(calls(&log, 0x0050_3210).len(), 2);
+        assert_eq!(
+            calls(&log, 0x0048_5990),
+            vec![vec![0x3254_4144, this + 0xb0, 0x14]]
+        );
+        assert_eq!(e.mem.u32(this + 0xb4), 0x5000);
+        assert_eq!(e.mem.u32(this + 0xbc), 0);
+        assert_eq!(calls(&log, 0x0048_56f0), vec![vec![0x4d41_4e4f, 0x7000, 4]]);
+        assert_eq!(
+            calls(&log, 0x0048_5910),
+            vec![vec![0x4c49_4352, 0x8010], vec![0x4c49_4352, 0x9010]]
+        );
+        assert_eq!(log.last().unwrap(), &(0x0048_5680, vec![this]));
+    }
+
+    #[test]
+    fn copy_takes_data_strings_and_effects() {
+        let mut e = list_engine();
+        zero(&mut e, &[0x0048_51b0, MEMCPY, 0x004f_15a0, STRING_SET]);
+        e.register(RT_DYNAMIC_CAST, |_, a| a[0].into_ret());
+        e.register(DATA2, |_, a| (a[0] + 0xb0).into_ret());
+        e.register(0x0040_1170, |_, _| 0x29u32.into_ret());
+        e.register(STRING_TEXT, |e, a| e.mem.u32(a[0]).into_ret());
+        e.register(LIST_REMOVE_HEAD, |e, a| {
+            e.mem.set_u32(a[0], 0);
+            Ret::default()
+        });
+        e.register(LIST_ADD, |e, a| e.mem.u32(a[1]).into_ret());
+        let this = e.mem.alloc(0xdc);
+        let other = e.mem.alloc(0xdc);
+        e.mem.set_u32(other + 0xc4, 0x7000);
+        e.mem.set_u32(other + 0xcc, 0x7100);
+        let mine = list(&mut e, &[0x8000]);
+        e.mem.set_u32(this + 0xd4, mine);
+        let theirs = list(&mut e, &[0x9000, 0x9100]);
+        e.mem.set_u32(other + 0xd4, theirs);
+        let (_, log) = run(&mut e, 0x0050_3510, &[this, other]);
+        assert_eq!(
+            calls(&log, MEMCPY),
+            vec![
+                vec![this + 0xa8, other + 0xa8, 8],
+                vec![this + 0xb0, other + 0xb0, 0x14]
+            ]
+        );
+        assert_eq!(calls(&log, 0x004f_15a0), vec![vec![this, 0x29]]);
+        assert_eq!(
+            calls(&log, STRING_SET),
+            vec![vec![this + 0xc4, 0x7000, 0], vec![this + 0xcc, 0x7100, 0]]
+        );
+        assert_eq!(calls(&log, LIST_REMOVE_HEAD), vec![vec![mine]]);
+        let added = calls(&log, LIST_ADD);
+        assert_eq!(added.len(), 2);
+        assert!(added.iter().all(|a| a[0] == mine));
+        e.register(RT_DYNAMIC_CAST, |_, _| Ret::default());
+        let (_, log) = run(&mut e, 0x0050_3510, &[this, other]);
+        assert_eq!(log.len(), 1);
+    }
+
+    fn compare_engine() -> Engine {
+        let mut e = list_engine();
+        e.register(RT_DYNAMIC_CAST, |_, a| a[0].into_ret());
+        e.register(0x0048_5270, |e, a| e.mem.u32(a[0] + 0x40).into_ret());
+        e.register(DATA2, |_, a| (a[0] + 0xb0).into_ret());
+        e.register(MEMCMP, |e, a| {
+            let differ = (0..a[2]).any(|i| e.mem.u8(a[0] + i) != e.mem.u8(a[1] + i));
+            u32::from(differ).into_ret()
+        });
+        e.register(STRING_COMPARE, |e, a| {
+            (e.mem.u32(a[0]) ^ e.mem.u32(a[1])).into_ret()
+        });
+        e.register(LIST_COUNT, |e, a| {
+            let mut count = 0u32;
+            let mut node = a[0];
+            while node != 0 && e.mem.u32(node) != 0 {
+                count += 1;
+                node = e.mem.u32(node + 4);
+            }
+            count.into_ret()
+        });
+        e.register(0x0f00_1000, |_, a| u32::from(a[0] != a[1] - 1).into_ret());
+        let mut slots = vec![0u32; 0x110 / 4];
+        slots[0x10c / 4] = 0x0f00_1000;
+        e.put_vtable(0x0f00_0000, &slots);
+        e
+    }
+
+    fn effect(e: &mut Engine) -> u32 {
+        let effect = e.mem.alloc(4);
+        e.mem.set_u32(effect, 0x0f00_0000);
+        effect
+    }
+
+    #[test]
+    fn compare_checks_each_part_in_order() {
+        let mut e = compare_engine();
+        let this = e.mem.alloc(0xdc);
+        let other = e.mem.alloc(0xdc);
+        let a = effect(&mut e);
+        let b = effect(&mut e);
+        // The double says equal when the other's effect is this one's + 1.
+        let mine = list(&mut e, &[a, b]);
+        let theirs = list(&mut e, &[a + 1, b + 1]);
+        e.mem.set_u32(this + 0xd4, mine);
+        e.mem.set_u32(other + 0xd4, theirs);
+        let (ret, log) = run(&mut e, 0x0050_3670, &[this, other]);
+        assert!(!ret.bool());
+        assert_eq!(
+            calls(&log, STRING_COMPARE),
+            vec![
+                vec![this + 0xcc, other + 0xcc, 1],
+                vec![this + 0xc4, other + 0xc4, 1]
+            ]
+        );
+        assert_eq!(
+            calls(&log, 0x0f00_1000),
+            vec![vec![a, a + 1], vec![b, b + 1]]
+        );
+        // An effect differs.
+        e.mem.set_u32(theirs, a + 2);
+        assert!(e.call(0x0050_3670, &args![this, other]).bool());
+        e.mem.set_u32(theirs, a + 1);
+        // The counts differ.
+        let shorter = list(&mut e, &[a + 1]);
+        e.mem.set_u32(other + 0xd4, shorter);
+        let (ret, log) = run(&mut e, 0x0050_3670, &[this, other]);
+        assert!(ret.bool());
+        assert!(calls(&log, 0x0f00_1000).is_empty());
+        e.mem.set_u32(other + 0xd4, theirs);
+        // A string differs.
+        e.mem.set_u32(other + 0xc4, 5);
+        assert!(e.call(0x0050_3670, &args![this, other]).bool());
+        e.mem.set_u32(other + 0xc4, 0);
+        // The DAT2 bytes differ.
+        e.mem.set_u8(other + 0xc3, 5);
+        let (ret, log) = run(&mut e, 0x0050_3670, &[this, other]);
+        assert!(ret.bool());
+        assert_eq!(
+            calls(&log, MEMCMP),
+            vec![
+                vec![this + 0xa8, other + 0xa8, 8],
+                vec![this + 0xb0, other + 0xb0, 0x14]
+            ]
+        );
+        e.mem.set_u8(other + 0xc3, 0);
+        // The +0xa8 bytes differ.
+        e.mem.set_u8(other + 0xa8, 5);
+        assert!(e.call(0x0050_3670, &args![this, other]).bool());
+        e.mem.set_u8(other + 0xa8, 0);
+        // The components differ.
+        e.mem.set_u32(this + 0x40, 1);
+        assert!(e.call(0x0050_3670, &args![this, other]).bool());
+        e.mem.set_u32(this + 0x40, 0);
+        e.register(RT_DYNAMIC_CAST, |_, _| Ret::default());
+        assert!(e.call(0x0050_3670, &args![this, other]).bool());
+    }
+
+    #[test]
+    fn compare_counts_an_empty_node_of_this_list_as_a_difference() {
+        let mut e = compare_engine();
+        // Equal counts (the count stops at an empty node), but this list's
+        // first node is empty while the other's is not.
+        e.register(LIST_COUNT, |_, _| 1u32.into_ret());
+        let this = e.mem.alloc(0xdc);
+        let other = e.mem.alloc(0xdc);
+        let a = effect(&mut e);
+        let mine = list(&mut e, &[]);
+        let theirs = list(&mut e, &[a]);
+        e.mem.set_u32(this + 0xd4, mine);
+        e.mem.set_u32(other + 0xd4, theirs);
+        assert!(e.call(0x0050_3670, &args![this, other]).bool());
+        e.mem.set_u32(this + 0xd4, 0);
+        assert!(e.call(0x0050_3670, &args![this, other]).bool());
+        // Both empty: equal.
+        e.mem.set_u32(other + 0xd4, 0);
+        assert!(!e.call(0x0050_3670, &args![this, other]).bool());
+    }
+
+    #[test]
+    fn small_helpers() {
+        let mut e = Engine::new();
+        e.map(0x011c_6200, 4);
+        e.mem.set_u32(0x011c_6200, 0x1234);
+        assert_eq!(e.call(0x0050_39e0, &[]).u32(), 0x1234);
+        e.register(0x0048_4bf0, |_, a| (0xfff0 + a[1]).into_ret());
+        e.register(0x0048_e9b0, |_, a| (a[1] + 0x20).into_ret());
+        let (ret, log) = run(&mut e, 0x0050_39f0, &[0x5000, 1]);
+        // 0xfff1 + 0x21 wraps in 16 bits.
+        assert_eq!(ret.u32() & 0xffff, 0x0012);
+        assert_eq!(
+            log,
+            vec![
+                (0x0048_4bf0, vec![0x5000, 1]),
+                (0x0048_e9b0, vec![0x5078, 1])
+            ]
+        );
+        zero(&mut e, &[0x0048_4da0, 0x0048_ea80]);
+        let (_, log) = run(&mut e, 0x0050_3a40, &[0x5000, 7]);
+        assert_eq!(
+            log,
+            vec![
+                (0x0048_4da0, vec![0x5000, 7]),
+                (0x0048_ea80, vec![0x5078, 7])
+            ]
+        );
     }
 }

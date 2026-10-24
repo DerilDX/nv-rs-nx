@@ -1971,6 +1971,231 @@ pub fn love_tester_menu_init_machine(e: &mut Engine, this: Ptr) {
     });
 }
 
+// Translated from 007915e0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `LoveTesterMenu::Create` (engine map; no words): the machine with 0x23
+/// points ([`love_tester_menu_create`], `Create_ov2`). Named by address
+/// because the overload it calls has the plain name.
+pub fn fn_007915e0(e: &mut Engine) {
+    love_tester_menu_create(e, 0x23);
+}
+
+/// [`love_tester_menu_do_gamepad`]'s and [`love_tester_menu_do_key`]'s raise:
+/// with a page value (not -1), points left (`GetTotalPointsUsed` below
+/// `iAvailablePoints`, +0x58) and the player's value below 10, clicks up
+/// (vtable +0xc with 2). Answers whether it clicked.
+fn raise_page_value(e: &mut Engine, this: u32, index: i32) -> bool {
+    if index == -1 {
+        return false;
+    }
+    let used = e.call(GET_TOTAL_POINTS_USED, &args![this]).i32();
+    if used >= e.mem.i32(this + 0x58) {
+        return false;
+    }
+    if player_value(e, index as u32) >= 10 {
+        return false;
+    }
+    e.vcall(this, 0xc, &args![2u32, 0u32]);
+    true
+}
+
+/// The lower counterpart: with a page value whose player value is above 1,
+/// clicks down (vtable +0xc with 3).
+fn lower_page_value(e: &mut Engine, this: u32, index: i32) -> bool {
+    if index == -1 {
+        return false;
+    }
+    if player_value(e, index as u32) <= 1 {
+        return false;
+    }
+    e.vcall(this, 0xc, &args![3u32, 0u32]);
+    true
+}
+
+// Translated from 00791cf0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `LoveTesterMenu::DoGamepad` (engine map). Only while the machine is the
+/// top menu (`Interface::IsTopMenuID(0x432)`); the page value is
+/// [`fn_00794d30`]'s. Buttons 1 and 9 raise the value ([`raise_page_value`]),
+/// 2 and 10 lower it, except on the summary (state 8, where 1 and 2 answer
+/// 0); 3 and 4 answer 0 in every state (their checks for state 8 lead to
+/// the checks of 1 and 2). Buttons that raise or lower answer 1 whether or
+/// not they clicked; other buttons 0.
+pub fn love_tester_menu_do_gamepad(e: &mut Engine, this: Ptr, button: u32, _unused_1: u32) -> u8 {
+    let base = this.addr();
+    if !e.call(IS_TOP_MENU_ID, &args![MENU_ID]).bool() {
+        return 0;
+    }
+    let index = fn_00794d30(e, this);
+    match button {
+        1 | 3 => {
+            if button == 3 && e.mem.u32(base + 0x48) != 8 {
+                return 0;
+            }
+            if e.mem.u32(base + 0x48) == 8 {
+                return 0;
+            }
+            raise_page_value(e, base, index);
+            1
+        }
+        2 | 4 => {
+            if button == 4 && e.mem.u32(base + 0x48) != 8 {
+                return 0;
+            }
+            if e.mem.u32(base + 0x48) == 8 {
+                return 0;
+            }
+            lower_page_value(e, base, index);
+            1
+        }
+        9 => {
+            raise_page_value(e, base, index);
+            1
+        }
+        10 => {
+            lower_page_value(e, base, index);
+            1
+        }
+        _ => 0,
+    }
+}
+
+// Translated from 007927a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `LoveTesterMenu::DoKey` (engine map): keys `0x80000001` and `0x80000002`
+/// click next (vtable +0xc with 1 for the first, 0 for the second) and
+/// answer 1; `0x80000003`, `+` (0x2b) and `=` (0x3d) raise the page value
+/// ([`raise_page_value`] on [`fn_00794d30`]'s value), `0x80000004`, `-`
+/// (0x2d) and `_` (0x5f) lower it, answering whether they clicked; other
+/// keys answer 0.
+pub fn love_tester_menu_do_key(e: &mut Engine, this: Ptr, key: u32) -> u8 {
+    let base = this.addr();
+    match key {
+        0x8000_0001 | 0x8000_0002 => {
+            e.vcall(base, 0xc, &args![u32::from(key == 0x8000_0001), 0u32]);
+            1
+        }
+        0x8000_0003 | 0x2b | 0x3d => {
+            let index = fn_00794d30(e, this);
+            u8::from(raise_page_value(e, base, index))
+        }
+        0x8000_0004 | 0x2d | 0x5f => {
+            let index = fn_00794d30(e, this);
+            u8::from(lower_page_value(e, base, index))
+        }
+        _ => 0,
+    }
+}
+
+/// The summary down and value down handlers' body: with the actor value
+/// `index` (not -1), plays the down sound (a held handle) while the value
+/// is above 1 and lowers it (at least 1, `00647b70`;
+/// `PlayerCharacter::SetActorBaseValue`); then the page is refreshed.
+fn lower_and_refresh(e: &mut Engine, index: i32) {
+    if index != -1 {
+        let value = player_value(e, index as u32);
+        if value > 1 {
+            play_sound_held(e, SOUND_VALUE_DOWN);
+        }
+        let lowered = e
+            .call(MAX_00647B70, &args![value.wrapping_sub(1), 1u32])
+            .u32();
+        let player = e.mem.u32(PLAYER);
+        e.call(SET_ACTOR_BASE_VALUE, &args![player, index, lowered]);
+    }
+    let instance = menu(e);
+    love_tester_menu_refresh_page(e, Ptr::new(instance));
+}
+
+// Translated from 007957c0 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 007957c0 - the FS:[0] exception frame (unwinding on a throw) is not translated
+/// The summary page's down handler (unnamed in the engine map; `cdecl`,
+/// the button): with an instance, lowers the button's actor value (+0x24)
+/// as [`lower_and_refresh`] says.
+pub fn fn_007957c0(e: &mut Engine, button: u32) {
+    if menu(e) == 0 {
+        return;
+    }
+    let index = e.mem.i32(button + 0x24);
+    lower_and_refresh(e, index);
+}
+
+// Translated from 007958e0 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 007958e0 - the FS:[0] exception frame (unwinding on a throw) is not translated
+/// The value down handler (unnamed in the engine map; `cdecl`, the button,
+/// not read): with an instance, lowers the page's value ([`fn_00794d30`])
+/// as [`lower_and_refresh`] says.
+pub fn fn_007958e0(e: &mut Engine, _unused_0: u32) {
+    if menu(e) == 0 {
+        return;
+    }
+    let instance = menu(e);
+    let index = fn_00794d30(e, Ptr::new(instance));
+    lower_and_refresh(e, index);
+}
+
+// Translated from 00795a00 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 00795a00 - the FS:[0] exception frame (unwinding on a throw) is not translated
+/// The summary page's up handler (unnamed in the engine map; `cdecl`, the
+/// button): with an instance and the button's actor value (+0x24, not -1),
+/// plays the up sound (a held handle) while the value is below 10 and,
+/// while points remain, raises it (at most 10, `004a8f20`;
+/// `PlayerCharacter::SetActorBaseValue`); then the page is refreshed.
+pub fn fn_00795a00(e: &mut Engine, button: u32) {
+    if menu(e) == 0 {
+        return;
+    }
+    let index = e.mem.i32(button + 0x24);
+    if index != -1 {
+        let value = player_value(e, index as u32);
+        if value < 10 {
+            play_sound_held(e, SOUND_VALUE_UP);
+        }
+        let instance = menu(e);
+        let used = e.call(GET_TOTAL_POINTS_USED, &args![instance]).i32();
+        if used < e.mem.i32(menu(e) + 0x58) {
+            let raised = e
+                .call(MIN_004A8F20, &args![value.wrapping_add(1), 10u32])
+                .u32();
+            let player = e.mem.u32(PLAYER);
+            e.call(SET_ACTOR_BASE_VALUE, &args![player, index, raised]);
+        }
+    }
+    let instance = menu(e);
+    love_tester_menu_refresh_page(e, Ptr::new(instance));
+}
+
+// Translated from 00795ca0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `LoveTesterMenu::PreviousPage` (engine map; `cdecl`, the button, not
+/// read): with an instance whose page animation is finished, turns the
+/// page back and refreshes it.
+pub fn love_tester_menu_previous_page(e: &mut Engine, _unused_0: u32) {
+    let instance = menu(e);
+    if instance == 0 || e.mem.u8(instance + 0x54) == 0 {
+        return;
+    }
+    love_tester_menu_turn_page(e, Ptr::new(instance), false);
+    let instance = menu(e);
+    love_tester_menu_refresh_page(e, Ptr::new(instance));
+}
+
+// Translated from 00795ce0 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 00795ce0 - the FS:[0] exception frame (unwinding on a throw) is not translated
+/// `LoveTesterMenu::CloseCallback` (engine map; `cdecl`, the button, not
+/// read): with an instance whose points are all used
+/// (`GetTotalPointsUsed` equal to `iAvailablePoints`), plays the finish
+/// sound and closes the machine (`007917a0`); otherwise plays the refused
+/// sound.
+pub fn love_tester_menu_close_callback(e: &mut Engine, _unused_0: u32) {
+    if menu(e) != 0 {
+        let instance = menu(e);
+        let used = e.call(GET_TOTAL_POINTS_USED, &args![instance]).i32();
+        if used == e.mem.i32(menu(e) + 0x58) {
+            play_sound(e, SOUND_FINISH);
+            fn_007917a0(e);
+            return;
+        }
+    }
+    play_sound(e, SOUND_REFUSED);
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -2005,6 +2230,14 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
             0x0079_6100,
             love_tester_menu_load_button_and_text_images(Ptr)
         ),
+        entry!(0x0079_15e0, fn_007915e0()),
+        entry!(0x0079_1cf0, love_tester_menu_do_gamepad(Ptr, u32, u32) -> u8),
+        entry!(0x0079_27a0, love_tester_menu_do_key(Ptr, u32) -> u8),
+        entry!(0x0079_57c0, fn_007957c0(u32)),
+        entry!(0x0079_58e0, fn_007958e0(u32)),
+        entry!(0x0079_5a00, fn_00795a00(u32)),
+        entry!(0x0079_5ca0, love_tester_menu_previous_page(u32)),
+        entry!(0x0079_5ce0, love_tester_menu_close_callback(u32)),
     ]
 }
 
@@ -3359,5 +3592,193 @@ mod menu_tests {
         assert!(called(e, 0x0079_4e70).is_empty());
         // The animation is finished: the page turns forward.
         assert_eq!(e.mem.u32(this + 0x48), 1);
+    }
+
+    /// The machine with a vtable whose click slot (+0xc) is logged and the
+    /// top-menu check answering `top`.
+    fn input_engine(values: [i32; 12], used: u32, top: bool) -> (Engine, u32) {
+        let (mut e, this) = engine(values, used);
+        let vtable = e.mem.alloc(0x10);
+        e.mem.set_u32(vtable + 0xc, 0x7a0c);
+        e.mem.set_u32(this, vtable);
+        e.register(0x7a0c, |_, _| Ret::default());
+        e.register_double(IS_TOP_MENU_ID, move |_, _| u32::from(top).into_ret());
+        e.mem.set_u32(this + 0x58, 3);
+        (e, this)
+    }
+
+    #[test]
+    fn create_without_words_gives_0x23_points() {
+        let (mut e, this) = create_engine(0x432, true);
+        e.call(0x0079_15e0, &[]);
+        assert_eq!(e.mem.u32(this + 0x58), 0x23);
+        assert_eq!(e.mem.u32(MENU_INSTANCE), this);
+    }
+
+    #[test]
+    fn do_gamepad_raises_and_lowers_the_page_value() {
+        let mut values = [0; 12];
+        values[5] = 5;
+        let (mut e, this) = input_engine(values, 0, true);
+        e.mem.set_u32(this + 0x48, 1);
+        assert_eq!(e.call(0x0079_1cf0, &[this, 9, 0]).u32() as u8, 1);
+        assert_eq!(called(&e, 0x7a0c), vec![vec![this, 2, 0]]);
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x0079_1cf0, &[this, 2, 0]).u32() as u8, 1);
+        assert_eq!(called(&e, 0x7a0c), vec![vec![this, 3, 0]]);
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x0079_1cf0, &[this, 1, 0]).u32() as u8, 1);
+        assert_eq!(e.call(0x0079_1cf0, &[this, 10, 0]).u32() as u8, 1);
+        // 3 and 4 answer 0 in any state; so do 1 and 2 on the summary.
+        assert_eq!(e.call(0x0079_1cf0, &[this, 3, 0]).u32() as u8, 0);
+        e.mem.set_u32(this + 0x48, 8);
+        assert_eq!(e.call(0x0079_1cf0, &[this, 3, 0]).u32() as u8, 0);
+        assert_eq!(e.call(0x0079_1cf0, &[this, 4, 0]).u32() as u8, 0);
+        assert_eq!(e.call(0x0079_1cf0, &[this, 1, 0]).u32() as u8, 0);
+        assert_eq!(e.call(0x0079_1cf0, &[this, 5, 0]).u32() as u8, 0);
+        // On the summary (no hardcore) there is no page value: 9 still
+        // answers 1 without a click.
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x0079_1cf0, &[this, 9, 0]).u32() as u8, 1);
+        assert!(called(&e, 0x7a0c).is_empty());
+        // At 10 the value is not raised.
+        let mut values = [0; 12];
+        values[5] = 10;
+        let (mut e, this) = input_engine(values, 0, true);
+        e.mem.set_u32(this + 0x48, 1);
+        assert_eq!(e.call(0x0079_1cf0, &[this, 1, 0]).u32() as u8, 1);
+        assert!(called(&e, 0x7a0c).is_empty());
+        // Not the top menu: nothing.
+        let (mut e, this) = input_engine(values, 0, false);
+        assert_eq!(e.call(0x0079_1cf0, &[this, 9, 0]).u32() as u8, 0);
+    }
+
+    #[test]
+    fn do_key_clicks_and_changes_the_page_value() {
+        let mut values = [0; 12];
+        values[6] = 1;
+        let (mut e, this) = input_engine(values, 0, true);
+        assert_eq!(e.call(0x0079_27a0, &[this, 0x8000_0001]).u32() as u8, 1);
+        assert_eq!(e.call(0x0079_27a0, &[this, 0x8000_0002]).u32() as u8, 1);
+        assert_eq!(called(&e, 0x7a0c), vec![vec![this, 1, 0], vec![this, 0, 0]]);
+        e.mem.set_u32(this + 0x48, 2);
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x0079_27a0, &[this, 0x2b]).u32() as u8, 1);
+        assert_eq!(e.call(0x0079_27a0, &[this, 0x3d]).u32() as u8, 1);
+        assert_eq!(e.call(0x0079_27a0, &[this, 0x8000_0003]).u32() as u8, 1);
+        assert_eq!(called(&e, 0x7a0c), vec![vec![this, 2, 0]; 3]);
+        // The value is 1: lowering does nothing and answers 0.
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x0079_27a0, &[this, 0x2d]).u32() as u8, 0);
+        assert_eq!(e.call(0x0079_27a0, &[this, 0x5f]).u32() as u8, 0);
+        assert_eq!(e.call(0x0079_27a0, &[this, 0x8000_0004]).u32() as u8, 0);
+        assert!(called(&e, 0x7a0c).is_empty());
+        // All points used: raising answers 0; other keys 0.
+        let (mut e, this) = input_engine(values, 3, true);
+        e.mem.set_u32(this + 0x48, 2);
+        assert_eq!(e.call(0x0079_27a0, &[this, 0x2b]).u32() as u8, 0);
+        assert_eq!(e.call(0x0079_27a0, &[this, 0x41]).u32() as u8, 0);
+        assert_eq!(e.call(0x0079_27a0, &[this, 0x8000_0005]).u32() as u8, 0);
+    }
+
+    #[test]
+    fn summary_and_value_down_handlers_lower_the_value() {
+        let mut values = [0; 12];
+        values[5] = 5;
+        values[7] = 1;
+        let (mut e, this) = engine(values, 0);
+        e.register(MAX_00647B70, |_, a| {
+            ((a[0] as i32).max(a[1] as i32) as u32).into_ret()
+        });
+        let button = e.mem.alloc(0x28);
+        e.mem.set_u32(button + 0x24, 5);
+        e.call(0x0079_57c0, &[button]);
+        let player = e.mem.u32(PLAYER);
+        assert_eq!(sounds(&e), vec![SOUND_VALUE_DOWN]);
+        assert_eq!(called(&e, SET_ACTOR_BASE_VALUE), vec![vec![player, 5, 4]]);
+        // At 1: no sound, kept at 1.
+        e.mem.set_u32(button + 0x24, 7);
+        e.call_log = Some(vec![]);
+        e.call(0x0079_57c0, &[button]);
+        assert!(sounds(&e).is_empty());
+        assert_eq!(called(&e, SET_ACTOR_BASE_VALUE), vec![vec![player, 7, 1]]);
+        // No actor value: only the refresh.
+        e.mem.set_u32(button + 0x24, 0xffff_ffff);
+        e.call_log = Some(vec![]);
+        e.call(0x0079_57c0, &[button]);
+        assert!(called(&e, SET_ACTOR_BASE_VALUE).is_empty());
+        // The value down handler uses the page's value (state 1: 5).
+        e.mem.set_u32(this + 0x48, 1);
+        e.call_log = Some(vec![]);
+        e.call(0x0079_58e0, &[0]);
+        assert_eq!(called(&e, SET_ACTOR_BASE_VALUE), vec![vec![player, 5, 4]]);
+        // No instance: nothing.
+        e.mem.set_u32(MENU_INSTANCE, 0);
+        e.call_log = Some(vec![]);
+        e.call(0x0079_57c0, &[button]);
+        e.call(0x0079_58e0, &[0]);
+        assert_eq!(e.call_log.as_ref().unwrap().len(), 2);
+    }
+
+    #[test]
+    fn summary_up_handler_raises_while_points_remain() {
+        let mut values = [0; 12];
+        values[5] = 9;
+        let (mut e, this) = engine(values, 0);
+        e.register(MIN_004A8F20, |_, a| a[0].min(a[1]).into_ret());
+        e.mem.set_u32(this + 0x58, 1);
+        let button = e.mem.alloc(0x28);
+        e.mem.set_u32(button + 0x24, 5);
+        e.call(0x0079_5a00, &[button]);
+        let player = e.mem.u32(PLAYER);
+        assert_eq!(sounds(&e), vec![SOUND_VALUE_UP]);
+        assert_eq!(called(&e, SET_ACTOR_BASE_VALUE), vec![vec![player, 5, 10]]);
+        // No points left: the sound but no change.
+        let (mut e, this) = engine(values, 1);
+        e.mem.set_u32(this + 0x58, 1);
+        let button = e.mem.alloc(0x28);
+        e.mem.set_u32(button + 0x24, 5);
+        e.call(0x0079_5a00, &[button]);
+        assert_eq!(sounds(&e), vec![SOUND_VALUE_UP]);
+        assert!(called(&e, SET_ACTOR_BASE_VALUE).is_empty());
+        e.mem.set_u32(MENU_INSTANCE, 0);
+        e.call_log = Some(vec![]);
+        e.call(0x0079_5a00, &[button]);
+        assert_eq!(e.call_log.as_ref().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn previous_page_turns_back_once_the_animation_finished() {
+        let (mut e, this) = turn_engine();
+        e.mem.set_u32(this + 0x48, 2);
+        e.call(0x0079_5ca0, &[0]);
+        assert_eq!(e.mem.u32(this + 0x48), 2);
+        e.mem.set_u8(this + 0x54, 1);
+        e.call(0x0079_5ca0, &[0]);
+        assert_eq!(e.mem.u32(this + 0x48), 1);
+        assert_eq!(e.mem.u8(TURN_FORWARD), 0);
+        e.mem.set_u32(MENU_INSTANCE, 0);
+        e.call_log = Some(vec![]);
+        e.call(0x0079_5ca0, &[0]);
+        assert_eq!(e.call_log.as_ref().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn close_callback_closes_only_with_all_points_used() {
+        let (mut e, this) = engine([0; 12], 3);
+        e.register(TILE_GET_MENU_BY_CLASS, |_, _| Ret::default());
+        e.mem.set_u32(this + 0x58, 3);
+        e.call(0x0079_5ce0, &[0]);
+        assert_eq!(sounds(&e), vec![SOUND_FINISH]);
+        assert_eq!(called(&e, TILE_GET_MENU_BY_CLASS), vec![vec![0x432]]);
+        e.mem.set_u32(this + 0x58, 4);
+        e.call_log = Some(vec![]);
+        e.call(0x0079_5ce0, &[0]);
+        assert_eq!(sounds(&e), vec![SOUND_REFUSED]);
+        assert!(called(&e, TILE_GET_MENU_BY_CLASS).is_empty());
+        e.mem.set_u32(MENU_INSTANCE, 0);
+        e.call_log = Some(vec![]);
+        e.call(0x0079_5ce0, &[0]);
+        assert_eq!(sounds(&e), vec![SOUND_REFUSED]);
     }
 }

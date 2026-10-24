@@ -994,9 +994,185 @@ pub fn fn_00eb8ab0(e: &mut Engine, this: Ptr) {
     }
 }
 
+/// `NiOBBLeaf`'s vtable (`010f1b70`).
+const NI_OBB_LEAF_VTABLE: u32 = 0x010f_1b70;
+/// The double at `01099ee0` (the float 1/3 widened).
+const THIRD_01099EE0: u32 = 0x0109_9ee0;
+/// The double 0.5 at `01011588`.
+const HALF_01011588: u32 = 0x0101_1588;
+/// `NiTransform::MakeIdentity` (`00a86bf0`, Xbox PDB; thiscall, no arguments).
+const MAKE_IDENTITY: u32 = 0x00a8_6bf0;
+
+/// A corner's coordinate widening a range: below the minimum it becomes the minimum, otherwise
+/// above the maximum it becomes the maximum (a NaN changes neither).
+fn widen(minimum: &mut f64, maximum: &mut f64, value: f64) {
+    if *minimum > value {
+        *minimum = value;
+    } else if *maximum < value {
+        *maximum = value;
+    }
+}
+
+// Translated from 00eb6b90 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`thiscall`, five words: the root, the triangle indices, the
+/// vertices, the vertices the leaf keeps and the triangle; `00eb9fa0` and `00eb5e30` call it):
+/// the `NiOBBLeaf` constructor. The children, root (+0x7c) and stamp (+0x88) are cleared, the
+/// vtable `010f1b70` stored and the three vertex pointers (+0x8c) set into the kept vertices by
+/// the triangle's `u16` indices (positions `3 t`, `3 t + 1`, `3 t + 2` taken as `u16`). From the
+/// corners in `vertices`: the box center is their mean (times the double at `01099ee0`), the
+/// first axis the normalized first edge (`004a0c10`), the second the second edge minus its
+/// projection on the first, normalized, the third their cross product; each corner's projection
+/// on the axes (relative to the center) widens ranges that start at 0.0, the extents become half
+/// the ranges and the center moves to the middle of each range (the 0.5 a double at
+/// `01011588`); each value stored as a float in the exe's order. The box is transformed by the
+/// identity (`00a86bf0`, `00eba480`) and the root stored. Answers `this`.
+pub fn fn_00eb6b90(
+    e: &mut Engine,
+    this: Ptr,
+    root: u32,
+    triangles: Ptr,
+    vertices: Ptr,
+    leaf_vertices: Ptr,
+    triangle: u32,
+) -> Ptr {
+    let n = this.addr();
+    for offset in [0x7cu32, 0x88, 0x80, 0x84] {
+        e.mem.set_u32(n + offset, 0);
+    }
+    e.mem.set_u32(n, NI_OBB_LEAF_VTABLE);
+    let first = triangle.wrapping_mul(3) & 0xffff;
+    let index = |e: &Engine, k: u32| -> u32 {
+        let position = first.wrapping_add(k) & 0xffff;
+        u32::from(e.mem.u16(triangles.addr().wrapping_add(position * 2)))
+    };
+    let indices = [index(e, 0), index(e, 1), index(e, 2)];
+    for (k, i) in (0u32..).zip(indices) {
+        let kept = leaf_vertices.addr().wrapping_add(i.wrapping_mul(12));
+        e.mem.set_u32(n + 0x8c + 4 * k, kept);
+    }
+    let [v0, v1, v2] = indices.map(|i| vertices.addr().wrapping_add(i.wrapping_mul(12)));
+    let center = n + 4;
+    let a0 = n + 0x10;
+    let a1 = n + 0x1c;
+    let a2 = n + 0x28;
+    let op = |e: &Engine, address: u32| float_operand(e, address);
+    // The center: the mean of the corners.
+    let s01 = [0u32, 4, 8].map(|i| round(x87_add(load(e, v1 + i), op(e, v0 + i))));
+    let sum = [
+        round(x87_add(load(e, v2), x87_m32(x87_store32(s01[0])))),
+        round(x87_add(load(e, v2 + 4), x87_m32(x87_store32(s01[1])))),
+        round(x87_add(s01[2], op(e, v2 + 8))),
+    ];
+    let third = x87_load64(e.mem.u64(THIRD_01099EE0));
+    let middle = [
+        x87_store32(x87_mul(sum[0], third)),
+        x87_store32(x87_mul(sum[1], third)),
+        x87_store32(x87_mul(third, sum[2])),
+    ];
+    write_point(e, center, middle);
+    // The first axis: the first edge, normalized.
+    let edge = [0u32, 4, 8].map(|i| x87_store32(x87_sub(load(e, v1 + i), op(e, v0 + i))));
+    write_point(e, a0, edge);
+    e.call(UNITIZE, &args![a0]);
+    // The second: the second edge without its part along the first, normalized.
+    let edge = [0u32, 4, 8].map(|i| x87_store32(x87_sub(load(e, v2 + i), op(e, v0 + i))));
+    write_point(e, a1, edge);
+    let dot = x87_add(
+        x87_mul(load(e, a1 + 4), op(e, a0 + 4)),
+        x87_mul(load(e, a1), op(e, a0)),
+    );
+    let dot = round(x87_add(dot, x87_mul(load(e, a1 + 8), op(e, a0 + 8))));
+    let along = [
+        x87_store32(x87_mul(load(e, a0), dot)),
+        x87_store32(x87_mul(load(e, a0 + 4), dot)),
+        x87_store32(x87_mul(dot, op(e, a0 + 8))),
+    ];
+    for (i, part) in (0u32..).zip(along) {
+        let value = x87_sub(load(e, a1 + 4 * i), x87_m32(part));
+        e.mem.set_u32(a1 + 4 * i, x87_store32(value));
+    }
+    e.call(UNITIZE, &args![a1]);
+    // The third: their cross product.
+    let x = x87_sub(
+        x87_mul(load(e, a0 + 4), op(e, a1 + 8)),
+        x87_mul(load(e, a0 + 8), op(e, a1 + 4)),
+    );
+    let y = x87_sub(
+        x87_mul(load(e, a1), op(e, a0 + 8)),
+        x87_mul(load(e, a0), op(e, a1 + 8)),
+    );
+    let z = x87_sub(
+        x87_mul(load(e, a0), op(e, a1 + 4)),
+        x87_mul(load(e, a1), op(e, a0 + 4)),
+    );
+    write_point(e, a2, [x87_store32(x), x87_store32(y), x87_store32(z)]);
+    // The ranges of the corners' projections.
+    let mut low = [0.0f64; 3];
+    let mut high = [0.0f64; 3];
+    for (k, corner) in [v0, v1, v2].into_iter().enumerate() {
+        let [dx, dy, dz] =
+            [0u32, 4, 8].map(|i| round(x87_sub(load(e, corner + i), op(e, center + i))));
+        let s = x87_add(x87_mul(load(e, a0), dx), x87_mul(load(e, a0 + 4), dy));
+        let p0 = round(x87_add(x87_mul(load(e, a0 + 8), dz), s));
+        let s = if k == 1 {
+            x87_add(x87_mul(load(e, a1 + 4), dy), x87_mul(load(e, a1), dx))
+        } else {
+            x87_add(x87_mul(load(e, a1 + 4), dy), x87_mul(dx, op(e, a1)))
+        };
+        let p1 = round(x87_add(s, x87_mul(load(e, a1 + 8), dz)));
+        let s = x87_add(x87_mul(dx, load(e, a2)), x87_mul(dy, load(e, a2 + 4)));
+        let p2 = round(x87_add(s, x87_mul(dz, op(e, a2 + 8))));
+        for (axis, value) in [p0, p1, p2].into_iter().enumerate() {
+            widen(&mut low[axis], &mut high[axis], value);
+        }
+    }
+    let half = x87_load64(e.mem.u64(HALF_01011588));
+    let size = [0usize, 1, 2].map(|axis| round(x87_sub(high[axis], low[axis])));
+    let extents = size.map(|s| x87_store32(x87_mul(s, half)));
+    write_point(e, n + 0x34, extents);
+    let s0 = round(x87_add(low[0], high[0]));
+    let s1 = round(x87_add(low[1], high[1]));
+    let s2 = round(x87_add(high[2], low[2]));
+    let m0 = round(x87_mul(s0, half));
+    let m1 = round(x87_mul(s1, half));
+    let m2 = round(x87_mul(half, s2));
+    let c2 = [
+        round(x87_mul(m2, op(e, a2))),
+        round(x87_mul(load(e, a2 + 4), m2)),
+        round(x87_mul(m2, op(e, a2 + 8))),
+    ];
+    let c1 = [
+        round(x87_mul(load(e, a1), m1)),
+        round(x87_mul(load(e, a1 + 4), m1)),
+        round(x87_mul(m1, op(e, a1 + 8))),
+    ];
+    let c0 = [
+        round(x87_mul(load(e, a0), m0)),
+        round(x87_mul(load(e, a0 + 4), m0)),
+        round(x87_mul(m0, op(e, a0 + 8))),
+    ];
+    let shift = [0usize, 1, 2].map(|i| round(x87_add(round(x87_add(c0[i], c1[i])), c2[i])));
+    let x = x87_add(load(e, center), shift[0]);
+    e.mem.set_u32(center, x87_store32(x));
+    let y = x87_add(load(e, center + 4), shift[1]);
+    e.mem.set_u32(center + 4, x87_store32(y));
+    let z = x87_add(shift[2], op(e, center + 8));
+    e.mem.set_u32(center + 8, x87_store32(z));
+    e.with_stack(0x34, |e, transform| {
+        e.call(MAKE_IDENTITY, &args![transform]);
+        e.call(NI_OBB_BOX_TRANSFORM, &args![center, transform]);
+    });
+    e.mem.set_u32(n + 0x7c, root);
+    this
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(
+            0x00eb_6b90,
+            fn_00eb6b90(Ptr, u32, Ptr, Ptr, Ptr, u32) -> Ptr
+        ),
         entry!(
             0x00eb_6b50,
             ni_obb_leaf_scalar_deleting_destructor(Ptr, u32) -> Ptr
@@ -1425,5 +1601,72 @@ mod tests {
         let ray = &calls_to(&e, RAY_HITS_TRIANGLE)[0];
         assert_eq!(ray[5], 0x0055_0001);
         assert_eq!(e.mem.u32(this + 0x88), 0x0055_0004);
+    }
+}
+
+#[cfg(test)]
+mod constructor_tests {
+    use super::*;
+
+    fn read(e: &Engine, at: u32, n: u32) -> Vec<f32> {
+        (0..n).map(|i| e.mem.f32(at + 4 * i)).collect()
+    }
+
+    #[test]
+    fn leaf_box_fits_its_triangle() {
+        let mut e = Engine::new();
+        e.map(0x0101_1000, 0x1000);
+        e.map(0x0109_9000, 0x1000);
+        e.mem.set_f64(HALF_01011588, 0.5);
+        e.mem.set_u64(THIRD_01099EE0, 0x3fd5_5555_6000_0000);
+        e.register(UNITIZE, |e, a| {
+            let v = read(e, a[0], 3);
+            let length = (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt();
+            for (i, x) in (0u32..).zip(v) {
+                e.mem.set_f32(a[0] + 4 * i, x / length);
+            }
+            Ret::default()
+        });
+        e.register(MAKE_IDENTITY, |_, _| Ret::default());
+        e.register(NI_OBB_BOX_TRANSFORM, |_, _| Ret::default());
+        // Triangle 1 uses indices 3, 1, 2 (positions 3..6).
+        let triangles = e.mem.alloc(12);
+        for (i, v) in (0u32..).zip([0u16, 0, 0, 3, 1, 2]) {
+            e.mem.set_u16(triangles + 2 * i, v);
+        }
+        let vertices = e.mem.alloc(48);
+        for (i, v) in (0u32..).zip([
+            9.0f32, 9.0, 9.0, 3.0, 0.0, 0.0, 0.0, 3.0, 0.0, 0.0, 0.0, 0.0,
+        ]) {
+            e.mem.set_f32(vertices + 4 * i, v);
+        }
+        let kept = 0x0004_0000u32;
+        let this = e.mem.alloc(0x98);
+        e.call_log = Some(vec![]);
+        let r = e
+            .call(
+                0x00eb_6b90,
+                &args![this, 0x77u32, triangles, vertices, kept, 1u32],
+            )
+            .u32();
+        assert_eq!(r, this);
+        assert_eq!(e.mem.u32(this), NI_OBB_LEAF_VTABLE);
+        assert_eq!(e.mem.u32(this + 0x7c), 0x77);
+        assert_eq!(e.mem.u32(this + 0x8c), kept + 36);
+        assert_eq!(e.mem.u32(this + 0x90), kept + 12);
+        assert_eq!(e.mem.u32(this + 0x94), kept + 24);
+        assert_eq!(
+            read(&e, this + 0x10, 9),
+            vec![1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0]
+        );
+        assert_eq!(read(&e, this + 4, 3), vec![1.5, 1.5, 0.0]);
+        assert_eq!(read(&e, this + 0x34, 3), vec![1.5, 1.5, 0.0]);
+        let log = e.call_log.clone().unwrap();
+        let transform: Vec<_> = log
+            .iter()
+            .filter(|(a, _)| *a == NI_OBB_BOX_TRANSFORM)
+            .collect();
+        assert_eq!(transform.len(), 1);
+        assert_eq!(transform[0].1[0], this + 4);
     }
 }

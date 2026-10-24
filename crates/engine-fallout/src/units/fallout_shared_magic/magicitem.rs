@@ -846,9 +846,404 @@ pub fn magic_item_magic_item_init_item(e: &mut Engine, this: Ptr, form: u32) {
     }
 }
 
+/// Cdecl (form id): the form with that id, or 0 (`tesform.cpp`).
+const LOOK_UP_FORM_004839C0: u32 = 0x0048_39c0;
+/// The counter `0040ab50` raises and `0040bed0` lowers.
+const PRELOADED_COUNT: u32 = 0x011c_3438;
+/// Thiscall on a setting: the word at +4 (its value; `effectitem.cpp`,
+/// null for a null setting).
+const SETTING_VALUE_00403DF0: u32 = 0x0040_3df0;
+/// Thiscall on a string (the text), `RET 4`: constructs it from the text
+/// (`run_0040c0e0.rs`).
+const STRING_CONSTRUCT_0040C0E0: u32 = 0x0040_c0e0;
+/// The settings whose text `0040bef0` copies, by type: 1, 2, 3, 4, 5, 6 and
+/// any other.
+const TYPE_TEXT_SETTING_1: u32 = 0x011c_34c0;
+const TYPE_TEXT_SETTING_2: u32 = 0x011c_344c;
+const TYPE_TEXT_SETTING_3: u32 = 0x011c_348c;
+const TYPE_TEXT_SETTING_4: u32 = 0x011c_34a0;
+const TYPE_TEXT_SETTING_5: u32 = 0x011c_3458;
+const TYPE_TEXT_SETTING_6: u32 = 0x011c_34d8;
+const TYPE_TEXT_SETTING_OTHER: u32 = 0x011c_3474;
+
+// Translated from 0040a250 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `MagicItem::GetMagicItemByNumericID` (engine map; cdecl): the form with
+/// id `form_id` (`004839c0`) as a `MagicItem`: its `MagicItemForm`'s
+/// `MagicItem` base (+0x18) when it is one, else its `MagicItemObject`'s
+/// (+0x30) (`__RTDynamicCast` from `TESForm`, both casts made first), else
+/// 0; 0 without such a form.
+pub fn magic_item_get_magic_item_by_numeric_id(e: &mut Engine, form_id: u32) -> u32 {
+    let form = e.call(LOOK_UP_FORM_004839C0, &args![form_id]).u32();
+    if form == 0 {
+        return 0;
+    }
+    let as_form = e
+        .call(
+            RT_DYNAMIC_CAST,
+            &args![form, 0u32, RTTI_SOURCE_TYPE, MAGIC_ITEM_FORM_TYPE, 0u32],
+        )
+        .u32();
+    let as_object = e
+        .call(
+            RT_DYNAMIC_CAST,
+            &args![form, 0u32, RTTI_SOURCE_TYPE, MAGIC_ITEM_OBJECT_TYPE, 0u32],
+        )
+        .u32();
+    if as_form != 0 {
+        as_form.wrapping_add(0x18)
+    } else if as_object != 0 {
+        as_object.wrapping_add(0x30)
+    } else {
+        0
+    }
+}
+
+// Translated from 0040ab50 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (no arguments): adds one to the counter at
+/// `011c3438`.
+pub fn fn_0040ab50(e: &mut Engine) {
+    let count = e.mem.u32(PRELOADED_COUNT);
+    e.mem.set_u32(PRELOADED_COUNT, count.wrapping_add(1));
+}
+
+// Translated from 0040bed0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (no arguments): takes one from the counter at
+/// `011c3438`.
+pub fn fn_0040bed0(e: &mut Engine) {
+    let count = e.mem.u32(PRELOADED_COUNT);
+    e.mem.set_u32(PRELOADED_COUNT, count.wrapping_sub(1));
+}
+
+// Translated from 0040bef0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`thiscall`, `RET 8`; `this` is not read):
+/// constructs the string `result` (`0040c0e0`) from the text of the setting
+/// for `kind` (`00403df0`): `011c34c0` for 1, `011c344c` for 2, `011c348c`
+/// for 3, `011c34a0` for 4, `011c3458` for 5, `011c34d8` for 6 (the
+/// switch's jump table), `011c3474` for any other. Returns `result`.
+pub fn fn_0040bef0(e: &mut Engine, _this: Ptr, result: u32, kind: u32) -> u32 {
+    let setting = match kind.wrapping_sub(1) {
+        0 => TYPE_TEXT_SETTING_1,
+        1 => TYPE_TEXT_SETTING_2,
+        2 => TYPE_TEXT_SETTING_3,
+        3 => TYPE_TEXT_SETTING_4,
+        4 => TYPE_TEXT_SETTING_5,
+        5 => TYPE_TEXT_SETTING_6,
+        _ => TYPE_TEXT_SETTING_OTHER,
+    };
+    let text = e.call(SETTING_VALUE_00403DF0, &args![setting]).u32();
+    e.call(STRING_CONSTRUCT_0040C0E0, &args![result, text]);
+    result
+}
+
+/// `EffectSetting::IsEffectQueued` (`00408a20`) and
+/// `EffectSetting::IsAssociatedItemQueued` (`004088a0`) (engine map), thiscall: `AL`.
+const EFFECT_SETTING_IS_ASSOCIATED_ITEM_QUEUED: u32 = 0x0040_88a0;
+/// Thiscall on a setting (`effectsetting.cpp`): an integer from the counter at +0xa8
+/// (`004089c0`) and at +0xac (`004087e0`), the number of references to add.
+const SETTING_EFFECT_COUNT_004089C0: u32 = 0x0040_89c0;
+const SETTING_ASSOCIATED_COUNT_004087E0: u32 = 0x0040_87e0;
+/// The model pointer the code keeps on its stack: set up by `00633c90` (thiscall, the
+/// pointer, `RET 4`), read by `00559450` (thiscall: the word at `this`) and handed to
+/// `0040c110` (`run_0040c0e0.rs`) when it goes out of scope.
+const MODEL_POINTER_CONSTRUCT: u32 = 0x0063_3c90;
+const WORD_AT_THIS_00559450: u32 = 0x0055_9450;
+const MODEL_POINTER_DESTRUCT: u32 = 0x0040_c110;
+/// `ModelLoader::FindModel` (engine map), thiscall on the loader (path, address of the
+/// pointer), `RET 8`.
+const MODEL_LOADER_FIND_MODEL: u32 = 0x0044_72a0;
+/// `Model::ModManualRefCount` (engine map), thiscall on the model (count), `RET 4`.
+const MODEL_MOD_MANUAL_REF_COUNT: u32 = 0x0043_b410;
+/// Thiscall on a model (`0092c870`): called once per reference before the animation
+/// files are counted.
+const MODEL_0092C870: u32 = 0x0092_c870;
+
+/// The model pointer `FindModel` filled in `pointer`, given `count` more manual
+/// references when there is one (`00559450` read twice, then `ModManualRefCount`).
+fn add_model_references(e: &mut Engine, pointer: u32, count: i32) {
+    if e.call(WORD_AT_THIS_00559450, &args![pointer]).u32() != 0 {
+        let model = e.call(WORD_AT_THIS_00559450, &args![pointer]).u32();
+        e.call(MODEL_MOD_MANUAL_REF_COUNT, &args![model, count]);
+    }
+}
+
+/// `ModelLoader::FindModel(path, &pointer)` on the singleton.
+fn find_model(e: &mut Engine, path: u32, pointer: u32) {
+    let loader = e.global::<u32>(MODEL_LOADER);
+    e.call(MODEL_LOADER_FIND_MODEL, &args![loader, path, pointer]);
+}
+
+/// A `NiPointer<Model>` on the stack for `path`: constructed with null, filled by
+/// `FindModel`, the model given `count` references, then destroyed.
+fn reference_model(e: &mut Engine, path: u32, count: i32) {
+    e.with_stack(4, |e, pointer| {
+        e.call(MODEL_POINTER_CONSTRUCT, &args![pointer, 0u32]);
+        find_model(e, path, pointer.addr());
+        add_model_references(e, pointer.addr(), count);
+        e.call(MODEL_POINTER_DESTRUCT, &args![pointer]);
+    });
+}
+
+/// `FinishedLoading`'s arm for a setting with flag 0x40000 whose associated form casts to
+/// the class of `01183a00`: the model at +0xdc is found and, when there is one, given its
+/// references (`0092c870` once per reference on it), then the models named by the list
+/// at +0x114 next to the model's folder, the `Skeleton` animation files when the model's
+/// file name starts with `Skeleton`, and the `SpecialAnims` files of the `TESAnimation` at
+/// +0xc4 are loaded `count` times each. The 0x104-byte path buffer is on the game's stack.
+fn finish_model_with_animations(e: &mut Engine, form: u32, count: i32) {
+    e.with_stack(4, |e, pointer| {
+        e.call(MODEL_POINTER_CONSTRUCT, &args![pointer, 0u32]);
+        let model_field = form.wrapping_add(0xdc);
+        let path = e.vcall(model_field, SLOT_MODEL_PATH, &args![]).u32();
+        find_model(e, path, pointer.addr());
+        if e.call(WORD_AT_THIS_00559450, &args![pointer]).u32() != 0 {
+            let mut i = 0i32;
+            while i < count {
+                let model = e.call(WORD_AT_THIS_00559450, &args![pointer]).u32();
+                e.call(MODEL_0092C870, &args![model]);
+                i += 1;
+            }
+            let model = e.call(WORD_AT_THIS_00559450, &args![pointer]).u32();
+            let model_path = e.call(WORD_AT_THIS_00559450, &args![model]).u32();
+            let names = e
+                .call(MEMBER_LIST_AT_4, &args![form.wrapping_add(0x114)])
+                .u32();
+            e.with_stack(PATH_BUFFER_SIZE, |e, buffer| {
+                let buffer = buffer.addr();
+                e.call(STRING_COPY, &args![buffer, PATH_BUFFER_SIZE, model_path]);
+                let mut folder_end = fn_0040ab30(e, Ptr::new(buffer), 0x5c).addr();
+                let mut node = names;
+                while folder_end != 0 && node != 0 {
+                    e.mem.set_u8(folder_end.wrapping_add(1), 0);
+                    let slot = e.call(LIST_NODE_ITEM_SLOT, &args![node]).u32();
+                    let name = e.mem.u32(slot);
+                    if name != 0 {
+                        e.call(STRING_APPEND, &args![buffer, PATH_BUFFER_SIZE, name]);
+                        reference_model(e, buffer, count);
+                    }
+                    node = e.call(LIST_NODE_NEXT, &args![node]).u32();
+                }
+                let last_slash = e.call(CRT_STRRCHR, &args![model_path, 0x5cu32]).u32();
+                if last_slash != 0
+                    && e.call(
+                        CRT_STRNICMP,
+                        &args![last_slash.wrapping_add(1), SKELETON_TEXT, 8u32],
+                    )
+                    .u32()
+                        == 0
+                {
+                    let loader = e.global::<u32>(MODEL_LOADER);
+                    let files = e
+                        .call(
+                            MODEL_LOADER_BUILD_KF_LIST,
+                            &args![loader, model_path, 0u32, 0u32, 0u32],
+                        )
+                        .u32();
+                    let mut node = files;
+                    while node != 0 {
+                        let slot = e.call(LIST_NODE_ITEM_SLOT, &args![node]).u32();
+                        let file = e.mem.u32(slot);
+                        if file != 0 {
+                            let mut i = 0i32;
+                            while i < count {
+                                load_animation_file(e, file);
+                                i += 1;
+                            }
+                        }
+                        e.call(FREE_BLOCK, &args![file]);
+                        node = e.call(LIST_NODE_NEXT, &args![node]).u32();
+                    }
+                    e.call(FILENAME_LIST_CLEAR, &args![files]);
+                    if files != 0 {
+                        e.call(FILENAME_LIST_DESTROY, &args![files, 1u32]);
+                    }
+                }
+                let animation = form.wrapping_add(0xc4);
+                if e.call(ANIMATION_HAS_KF_FILES, &args![animation]).bool() {
+                    e.mem.set_u8(folder_end.wrapping_add(1), 0);
+                    e.call(
+                        STRING_APPEND,
+                        &args![buffer, PATH_BUFFER_SIZE, SPECIAL_ANIMS_TEXT],
+                    );
+                    e.call(
+                        STRING_APPEND,
+                        &args![buffer, PATH_BUFFER_SIZE, SPECIAL_ANIMS_SEPARATOR_TEXT],
+                    );
+                    folder_end = fn_0040ab30(e, Ptr::new(buffer), 0x5c).addr();
+                    let mut node = e.call(MEMBER_LIST_AT_4, &args![animation]).u32();
+                    while node != 0 {
+                        e.mem.set_u8(folder_end.wrapping_add(1), 0);
+                        let slot = e.call(LIST_NODE_ITEM_SLOT, &args![node]).u32();
+                        let name = e.mem.u32(slot);
+                        if name != 0 {
+                            e.call(STRING_APPEND, &args![buffer, PATH_BUFFER_SIZE, name]);
+                            let mut i = 0i32;
+                            while i < count {
+                                load_animation_file(e, buffer);
+                                i += 1;
+                            }
+                        }
+                        node = e.call(LIST_NODE_NEXT, &args![node]).u32();
+                    }
+                }
+            });
+        }
+        e.call(MODEL_POINTER_DESTRUCT, &args![pointer]);
+    });
+}
+
+/// `FinishedLoading`'s arms for a setting's associated form, chosen by the setting's flag
+/// masks 0x10000, 0x20000 and 0x40000 (each tested only when there is an associated form,
+/// in this order); the models found get `count` references.
+fn finish_associated_form(e: &mut Engine, setting: u32, associated: u32, count: i32) {
+    if associated != 0
+        && e.call(FORM_HAS_FLAG, &args![setting, 0x0001_0000u32])
+            .bool()
+    {
+        let form = dynamic_cast(e, associated, RTTI_CAST_FOR_10000);
+        if form != 0
+            && e.call(MODEL_PATH_LENGTH, &args![form.wrapping_add(0x3c)])
+                .u32()
+                != 0
+        {
+            e.with_stack(4, |e, pointer| {
+                e.call(MODEL_POINTER_CONSTRUCT, &args![pointer, 0u32]);
+                let model = form.wrapping_add(0x3c);
+                let path = e.vcall(model, SLOT_MODEL_PATH, &args![]).u32();
+                find_model(e, path, pointer.addr());
+                add_model_references(e, pointer.addr(), count);
+                e.call(MODEL_POINTER_DESTRUCT, &args![pointer]);
+            });
+        }
+    } else if associated != 0
+        && e.call(FORM_HAS_FLAG, &args![setting, 0x0002_0000u32])
+            .bool()
+    {
+        let form = dynamic_cast(e, associated, RTTI_CAST_FOR_20000);
+        if form != 0 {
+            e.with_stack(4, |e, pointer| {
+                e.call(MODEL_POINTER_CONSTRUCT, &args![pointer, 0u32]);
+                let biped = form.wrapping_add(0x70);
+                let first = e.call(BIPED_MODEL_BY_INDEX, &args![biped, 0u32]).u32();
+                find_model(e, first, pointer.addr());
+                add_model_references(e, pointer.addr(), count);
+                let second = e.call(BIPED_MODEL_BY_INDEX, &args![biped, 1u32]).u32();
+                find_model(e, second, pointer.addr());
+                add_model_references(e, pointer.addr(), count);
+                e.call(MODEL_POINTER_DESTRUCT, &args![pointer]);
+            });
+        }
+    } else if associated != 0
+        && e.call(FORM_HAS_FLAG, &args![setting, 0x0004_0000u32])
+            .bool()
+    {
+        let form = dynamic_cast(e, associated, RTTI_CAST_FOR_40000_FIRST);
+        if form != 0 {
+            let list = e
+                .call(BUILD_DEFAULT_MODEL_LIST, &args![form, 1u32, 1u32])
+                .u32();
+            let mut node = list;
+            while node != 0 && !e.call(LIST_NODE_IS_EMPTY, &args![node]).bool() {
+                let slot = e.call(LIST_NODE_ITEM_SLOT, &args![node]).u32();
+                let path = e.mem.u32(slot);
+                e.with_stack(4, |e, pointer| {
+                    e.call(MODEL_POINTER_CONSTRUCT, &args![pointer, 0u32]);
+                    find_model(e, path, pointer.addr());
+                    add_model_references(e, pointer.addr(), count);
+                    node = e.call(LIST_NODE_NEXT, &args![node]).u32();
+                    e.call(MODEL_POINTER_DESTRUCT, &args![pointer]);
+                });
+            }
+            e.call(FILENAME_LIST_CLEAR, &args![list]);
+            if list != 0 {
+                e.call(FILENAME_LIST_DESTROY, &args![list, 1u32]);
+            }
+        }
+        let form = dynamic_cast(e, associated, RTTI_CAST_FOR_40000_SECOND);
+        if form != 0 {
+            finish_model_with_animations(e, form, count);
+        }
+    }
+}
+
+// Translated from 0040ab70 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 0040ab70 - the C++ exception frame (FS:[0] chain, unwind states 0 to 5 around the model pointers) and the /GS security cookie check (00ec408c) are not translated.
+/// `MagicItem::FinishedLoading` (engine map; `thiscall`, plain `RET`): when the item is
+/// not loading (`0040b6b0`) it is preloaded and unloaded (`Preload(1)`, `Unload(1)`).
+/// Otherwise the models its loading queued get their manual references: the model of its
+/// strongest effect (`GetAVEffect(0)`, +0x18, when it has a path) by the effect's queued
+/// count (`004089c0`, when `IsEffectQueued`, else 0); then, for each effect item of the
+/// list at +0xc (none for an empty list), the models of its setting's associated form by
+/// the setting's associated count (`004087e0` when `IsAssociatedItemQueued`; nothing when
+/// that is 0), as [`finish_associated_form`] finds them.
+pub fn magic_item_finished_loading(e: &mut Engine, this: Ptr) {
+    let effect = e.call(MAGIC_ITEM_GET_AV_EFFECT, &args![this, 0u32]).u32();
+    if !e.call(MAGIC_ITEM_IS_LOADING, &args![this]).bool() {
+        magic_item_preload(e, this, 1);
+        magic_item_unload(e, this, 1);
+        return;
+    }
+    if effect != 0 {
+        let count = if e
+            .call(EFFECT_SETTING_IS_EFFECT_QUEUED, &args![effect])
+            .bool()
+        {
+            e.call(SETTING_EFFECT_COUNT_004089C0, &args![effect]).i32()
+        } else {
+            0
+        };
+        let model = effect.wrapping_add(0x18);
+        if e.call(MODEL_PATH_LENGTH, &args![model]).u32() != 0 {
+            e.with_stack(4, |e, pointer| {
+                e.call(MODEL_POINTER_CONSTRUCT, &args![pointer, 0u32]);
+                let path = e.vcall(model, SLOT_MODEL_PATH, &args![]).u32();
+                find_model(e, path, pointer.addr());
+                add_model_references(e, pointer.addr(), count);
+                e.call(MODEL_POINTER_DESTRUCT, &args![pointer]);
+            });
+        }
+    }
+    let mut walked = effect_list(this);
+    if e.call(LIST_NODE_IS_EMPTY, &args![walked.wrapping_add(4)])
+        .bool()
+    {
+        return;
+    }
+    while walked != 0 {
+        let slot = e
+            .call(LIST_NODE_ITEM_SLOT, &args![walked.wrapping_add(4)])
+            .u32();
+        let effect_item = e.mem.u32(slot);
+        let setting = e.call(EFFECT_ITEM_SETTING, &args![effect_item]).u32();
+        let associated = e
+            .call(EFFECT_SETTING_ASSOCIATED_FORM, &args![setting])
+            .u32();
+        let count = if e
+            .call(EFFECT_SETTING_IS_ASSOCIATED_ITEM_QUEUED, &args![setting])
+            .bool()
+        {
+            e.call(SETTING_ASSOCIATED_COUNT_004087E0, &args![setting])
+                .i32()
+        } else {
+            0
+        };
+        if count != 0 {
+            finish_associated_form(e, setting, associated, count);
+        }
+        walked = next_walked(e, walked.wrapping_add(4));
+    }
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(
+            0x0040_a250,
+            magic_item_get_magic_item_by_numeric_id(u32) -> u32
+        ),
+        entry!(0x0040_ab50, fn_0040ab50()),
+        entry!(0x0040_bed0, fn_0040bed0()),
+        entry!(0x0040_bef0, fn_0040bef0(Ptr, u32, u32) -> u32),
+        entry!(0x0040_ab70, magic_item_finished_loading(Ptr)),
         entry!(0x0040_a420, magic_item_preload(Ptr, u8)),
         entry!(0x0040_ab30, fn_0040ab30(Ptr, u32) -> Ptr),
         entry!(0x0040_a1e0, magic_item_get_magic_item_form_id(Ptr) -> u32),
@@ -1709,5 +2104,356 @@ mod b066_tests {
             calls(&e, EFFECT_ITEM_INIT_ITEM),
             vec![vec![a, 0x5000], vec![b, 0x5000]]
         );
+    }
+}
+
+#[cfg(test)]
+mod finished_loading_tests {
+    use super::*;
+
+    const LOADER: u32 = 0x00c0_ffee;
+
+    fn calls(e: &Engine, addr: u32) -> Vec<Vec<u32>> {
+        e.call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|(a, _)| *a == addr)
+            .map(|(_, w)| w.clone())
+            .collect()
+    }
+
+    fn put_text(e: &mut Engine, text: &str) -> u32 {
+        let address = e.mem.alloc(text.len() as u32 + 1);
+        e.mem.write(address, text.as_bytes());
+        e.mem.set_u8(address + text.len() as u32, 0);
+        address
+    }
+
+    fn text(e: &Engine, address: u32) -> String {
+        String::from_utf8(e.mem.cstr(address)).unwrap()
+    }
+
+    /// A list of nodes (item word, next word) holding `items`.
+    fn node_list(e: &mut Engine, items: &[u32]) -> u32 {
+        let mut next = 0;
+        for item in items.iter().rev() {
+            let node = e.mem.alloc(8);
+            e.mem.set_u32(node, *item);
+            e.mem.set_u32(node + 4, next);
+            next = node;
+        }
+        next
+    }
+
+    /// A `TESModel`-like object whose vtable slot +0x14 answers `path`.
+    fn model_with_path(e: &mut Engine, at: u32, path: u32) {
+        let vtable = e.mem.alloc(0x20);
+        let function = 0x00f0_0000 + (at & 0xffff);
+        e.mem.set_u32(vtable + 0x14, function);
+        e.mem.set_u32(at, vtable);
+        e.register_double(function, move |_, _| path.into_ret());
+    }
+
+    /// The engine with the list helpers, the loader singleton and the model pointer
+    /// doubles: `FindModel` stores a model (0x7000 plus the path's low 12 bits) whose
+    /// first word is the path.
+    fn engine() -> Engine {
+        let mut e = Engine::new();
+        e.map(0x011c_3000, 0x1000);
+        e.set_global(MODEL_LOADER, LOADER);
+        e.register(LIST_NODE_ITEM_SLOT, |_, a| a[0].into_ret());
+        e.register(LIST_NODE_NEXT, |e, a| e.mem.u32(a[0] + 4).into_ret());
+        e.register(LIST_NODE_IS_EMPTY, |e, a| {
+            u32::from(e.mem.u32(a[0]) == 0 && e.mem.u32(a[0] + 4) == 0).into_ret()
+        });
+        e.register(MODEL_POINTER_CONSTRUCT, |e, a| {
+            e.mem.set_u32(a[0], a[1]);
+            Ret::default()
+        });
+        e.register(MODEL_POINTER_DESTRUCT, |_, _| Ret::default());
+        e.register(WORD_AT_THIS_00559450, |e, a| e.mem.u32(a[0]).into_ret());
+        e.register(MODEL_LOADER_FIND_MODEL, |e, a| {
+            // The model keeps a copy of the path (the caller's buffer changes).
+            let path = e.mem.cstr(a[1]);
+            let copy = e.mem.alloc(path.len() as u32 + 1);
+            e.mem.write(copy, &path);
+            e.mem.set_u8(copy + path.len() as u32, 0);
+            let model = e.mem.alloc(8);
+            e.mem.set_u32(model, copy);
+            e.mem.set_u32(a[2], model);
+            Ret::default()
+        });
+        e.register(MODEL_MOD_MANUAL_REF_COUNT, |_, _| Ret::default());
+        e.register(MODEL_PATH_LENGTH, |e, a| {
+            u32::from(e.mem.u32(a[0] + 4) != 0).into_ret()
+        });
+        e.register(EFFECT_ITEM_SETTING, |e, a| {
+            e.mem.u32(a[0] + 0x14).into_ret()
+        });
+        e.register(EFFECT_SETTING_ASSOCIATED_FORM, |e, a| {
+            e.mem.u32(a[0] + 0x60).into_ret()
+        });
+        e.register(FORM_HAS_FLAG, |e, a| {
+            u32::from(e.mem.u32(a[0]) & a[1] != 0).into_ret()
+        });
+        e.register(EFFECT_SETTING_IS_ASSOCIATED_ITEM_QUEUED, |e, a| {
+            u32::from(e.mem.u32(a[0] + 0xac) != 0).into_ret()
+        });
+        e.register(SETTING_ASSOCIATED_COUNT_004087E0, |e, a| {
+            e.mem.u32(a[0] + 0xac).into_ret()
+        });
+        e.register(MAGIC_ITEM_IS_LOADING, |_, _| 1u32.into_ret());
+        e
+    }
+
+    /// A magic item whose list at +0xc holds one effect item with a setting of
+    /// `flags`, `count` queued references and the associated form `form`.
+    fn item_with_setting(e: &mut Engine, flags: u32, count: u32, form: u32) -> Ptr {
+        let setting = e.mem.alloc(0xb0);
+        e.mem.set_u32(setting, flags);
+        e.mem.set_u32(setting + 0x60, form);
+        e.mem.set_u32(setting + 0xac, count);
+        let effect_item = e.mem.alloc(0x24);
+        e.mem.set_u32(effect_item + 0x14, setting);
+        let item = e.mem.alloc(0x20);
+        e.mem.set_u32(item + 0x10, effect_item);
+        Ptr::new(item)
+    }
+
+    fn model_references(e: &Engine) -> Vec<(String, u32)> {
+        calls(e, MODEL_MOD_MANUAL_REF_COUNT)
+            .into_iter()
+            .map(|w| (text(e, e.mem.u32(w[0])), w[1]))
+            .collect()
+    }
+
+    #[test]
+    fn not_loading_preloads_and_unloads() {
+        let mut e = engine();
+        e.register(MAGIC_ITEM_IS_LOADING, |_, _| Ret::default());
+        e.register(MAGIC_ITEM_GET_AV_EFFECT, |_, _| Ret::default());
+        let item: Ptr = Ptr::new(e.mem.alloc(0x20));
+        e.call_log = Some(vec![]);
+        e.call(0x0040_ab70, &args![item]);
+        assert!(calls(&e, MODEL_LOADER_FIND_MODEL).is_empty());
+        // `Preload` and `Unload` each looked at the (empty) list.
+        assert!(calls(&e, LIST_NODE_IS_EMPTY).len() >= 2);
+    }
+
+    #[test]
+    fn effect_model_gets_the_queued_count() {
+        let mut e = engine();
+        let effect = e.mem.alloc(0xb0);
+        let path = put_text(&mut e, "effect.nif");
+        e.mem.set_u32(effect + 0x1c, 1);
+        model_with_path(&mut e, effect + 0x18, path);
+        e.register_double(MAGIC_ITEM_GET_AV_EFFECT, move |_, _| effect.into_ret());
+        e.register(EFFECT_SETTING_IS_EFFECT_QUEUED, |_, _| 1u32.into_ret());
+        e.register(SETTING_EFFECT_COUNT_004089C0, |_, _| 3u32.into_ret());
+        let item: Ptr = Ptr::new(e.mem.alloc(0x20));
+        e.call_log = Some(vec![]);
+        magic_item_finished_loading(&mut e, item);
+        assert_eq!(model_references(&e), vec![("effect.nif".to_string(), 3)]);
+        assert_eq!(calls(&e, MODEL_LOADER_FIND_MODEL)[0][0], LOADER);
+        // Not queued: the count is 0.
+        e.register(EFFECT_SETTING_IS_EFFECT_QUEUED, |_, _| Ret::default());
+        e.call_log = Some(vec![]);
+        magic_item_finished_loading(&mut e, item);
+        assert_eq!(model_references(&e), vec![("effect.nif".to_string(), 0)]);
+    }
+
+    #[test]
+    fn associated_model_and_biped_models() {
+        let mut e = engine();
+        e.register(MAGIC_ITEM_GET_AV_EFFECT, |_, _| Ret::default());
+        e.register(RT_DYNAMIC_CAST, |_, a| a[0].into_ret());
+        let form = e.mem.alloc(0x100);
+        let path = put_text(&mut e, "weapon.nif");
+        e.mem.set_u32(form + 0x40, 1);
+        model_with_path(&mut e, form + 0x3c, path);
+        let item = item_with_setting(&mut e, 0x0001_0000, 2, form);
+        e.call_log = Some(vec![]);
+        magic_item_finished_loading(&mut e, item);
+        assert_eq!(model_references(&e), vec![("weapon.nif".to_string(), 2)]);
+        assert_eq!(calls(&e, RT_DYNAMIC_CAST)[0][3], RTTI_CAST_FOR_10000);
+
+        let male = put_text(&mut e, "male.nif");
+        let female = put_text(&mut e, "female.nif");
+        e.register_double(BIPED_MODEL_BY_INDEX, move |_, a| {
+            if a[1] == 0 { male } else { female }.into_ret()
+        });
+        let item = item_with_setting(&mut e, 0x0002_0000, 4, form);
+        e.call_log = Some(vec![]);
+        magic_item_finished_loading(&mut e, item);
+        assert_eq!(
+            model_references(&e),
+            vec![("male.nif".to_string(), 4), ("female.nif".to_string(), 4)]
+        );
+        assert_eq!(calls(&e, BIPED_MODEL_BY_INDEX)[0], vec![form + 0x70, 0]);
+        // Without a queued count nothing is looked at.
+        let item = item_with_setting(&mut e, 0x0002_0000, 0, form);
+        e.call_log = Some(vec![]);
+        magic_item_finished_loading(&mut e, item);
+        assert!(calls(&e, RT_DYNAMIC_CAST).is_empty());
+    }
+
+    #[test]
+    fn default_models_and_animations() {
+        let mut e = engine();
+        e.register(MAGIC_ITEM_GET_AV_EFFECT, |_, _| Ret::default());
+        let creature = e.mem.alloc(0x200);
+        e.register_double(RT_DYNAMIC_CAST, move |_, a| {
+            if a[3] == RTTI_CAST_FOR_40000_FIRST {
+                Ret::default()
+            } else {
+                creature.into_ret()
+            }
+        });
+        let model_path = put_text(&mut e, "creatures\\dog\\Skeleton.nif");
+        model_with_path(&mut e, creature + 0xdc, model_path);
+        let extra = put_text(&mut e, "head.nif");
+        let names = node_list(&mut e, &[extra, 0]);
+        e.mem.set_u32(creature + 0x118, names);
+        let special = put_text(&mut e, "idle.kf");
+        let special_list = node_list(&mut e, &[special]);
+        e.mem.set_u32(creature + 0xc8, special_list);
+        e.register(MEMBER_LIST_AT_4, |e, a| e.mem.u32(a[0] + 4).into_ret());
+        e.register(MODEL_0092C870, |_, _| Ret::default());
+        e.register(STRING_COPY, |e, a| {
+            let source = e.mem.cstr(a[2]);
+            e.mem.write(a[0], &source);
+            e.mem.set_u8(a[0] + source.len() as u32, 0);
+            Ret::default()
+        });
+        e.register(STRING_APPEND, |e, a| {
+            let start = a[0] + e.mem.cstr(a[0]).len() as u32;
+            let source = e.mem.cstr(a[2]);
+            e.mem.write(start, &source);
+            e.mem.set_u8(start + source.len() as u32, 0);
+            Ret::default()
+        });
+        e.register(CRT_STRRCHR, |e, a| {
+            let bytes = e.mem.cstr(a[0]);
+            match bytes.iter().rposition(|b| u32::from(*b) == a[1]) {
+                Some(i) => (a[0] + i as u32).into_ret(),
+                None => Ret::default(),
+            }
+        });
+        e.register(CRT_STRNICMP, |e, a| {
+            let left = e.mem.cstr(a[0]);
+            let right = e.mem.cstr(a[1]);
+            let n = a[2] as usize;
+            let same = left
+                .iter()
+                .take(n)
+                .map(u8::to_ascii_lowercase)
+                .eq(right.iter().take(n).map(u8::to_ascii_lowercase));
+            u32::from(!same).into_ret()
+        });
+        let kf = put_text(&mut e, "skeleton.kf");
+        let kf_list = node_list(&mut e, &[kf]);
+        e.register_double(MODEL_LOADER_BUILD_KF_LIST, move |_, _| kf_list.into_ret());
+        e.register(FREE_BLOCK, |_, _| Ret::default());
+        e.register(FILENAME_LIST_CLEAR, |_, _| Ret::default());
+        e.register(FILENAME_LIST_DESTROY, |_, _| Ret::default());
+        e.register(ANIMATION_HAS_KF_FILES, |_, _| 1u32.into_ret());
+        e.map(0x0101_3000, 0x1000);
+        e.mem.write(SPECIAL_ANIMS_TEXT, b"SpecialAnims\0");
+        e.mem.write(SPECIAL_ANIMS_SEPARATOR_TEXT, b"\\\0");
+        e.mem.write(SKELETON_TEXT, b"Skeleton\0");
+        let loaded = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let seen = loaded.clone();
+        e.register_double(MODEL_LOADER_LOAD_KF, move |e, a| {
+            seen.borrow_mut().push(text(e, a[1]));
+            Ret::default()
+        });
+        let item = item_with_setting(&mut e, 0x0004_0000, 2, creature);
+        e.call_log = Some(vec![]);
+        e.call(0x0040_ab70, &args![item]);
+        assert_eq!(
+            model_references(&e),
+            vec![("creatures\\dog\\head.nif".to_string(), 2)]
+        );
+        assert_eq!(calls(&e, MODEL_0092C870).len(), 2);
+        assert_eq!(
+            *loaded.borrow(),
+            vec![
+                "skeleton.kf".to_string(),
+                "skeleton.kf".to_string(),
+                "creatures\\dog\\SpecialAnims\\idle.kf".to_string(),
+                "creatures\\dog\\SpecialAnims\\idle.kf".to_string(),
+            ]
+        );
+        assert_eq!(calls(&e, FREE_BLOCK), vec![vec![kf]]);
+        let built = calls(&e, MODEL_LOADER_BUILD_KF_LIST);
+        assert_eq!(built.len(), 1);
+        assert_eq!(built[0][0], LOADER);
+        assert_eq!(text(&e, built[0][1]), "creatures\\dog\\Skeleton.nif");
+        assert_eq!(built[0][2..], [0, 0, 0]);
+    }
+
+    #[test]
+    fn numeric_id_lookup() {
+        let mut e = Engine::new();
+        e.register(LOOK_UP_FORM_004839C0, |_, a| {
+            if a[0] == 0 { 0 } else { a[0] + 0x1000 }.into_ret()
+        });
+        e.register(RT_DYNAMIC_CAST, |_, a| {
+            let wanted = match a[0] & 0xf {
+                1 => MAGIC_ITEM_FORM_TYPE,
+                2 => MAGIC_ITEM_OBJECT_TYPE,
+                _ => 0,
+            };
+            u32::from(a[3] == wanted).wrapping_mul(a[0]).into_ret()
+        });
+        assert_eq!(e.call(0x0040_a250, &args![0u32]).u32(), 0);
+        assert_eq!(e.call(0x0040_a250, &args![0x101u32]).u32(), 0x1101 + 0x18);
+        assert_eq!(
+            magic_item_get_magic_item_by_numeric_id(&mut e, 0x102),
+            0x1102 + 0x30
+        );
+        assert_eq!(magic_item_get_magic_item_by_numeric_id(&mut e, 0x103), 0);
+    }
+
+    #[test]
+    fn preloaded_counter() {
+        let mut e = Engine::new();
+        e.map(0x011c_3000, 0x1000);
+        e.set_global(PRELOADED_COUNT, 0xffff_ffffu32);
+        e.call(0x0040_ab50, &args![]);
+        assert_eq!(e.mem.u32(PRELOADED_COUNT), 0);
+        e.call(0x0040_bed0, &args![]);
+        e.call(0x0040_bed0, &args![]);
+        assert_eq!(e.mem.u32(PRELOADED_COUNT), 0xffff_fffe);
+    }
+
+    #[test]
+    fn type_text_by_kind() {
+        let mut e = Engine::new();
+        e.register(SETTING_VALUE_00403DF0, |_, a| (a[0] + 4).into_ret());
+        e.register(STRING_CONSTRUCT_0040C0E0, |_, _| Ret::default());
+        let cases = [
+            (1, TYPE_TEXT_SETTING_1),
+            (2, TYPE_TEXT_SETTING_2),
+            (3, TYPE_TEXT_SETTING_3),
+            (4, TYPE_TEXT_SETTING_4),
+            (5, TYPE_TEXT_SETTING_5),
+            (6, TYPE_TEXT_SETTING_6),
+            (0, TYPE_TEXT_SETTING_OTHER),
+            (7, TYPE_TEXT_SETTING_OTHER),
+        ];
+        for (kind, setting) in cases {
+            e.call_log = Some(vec![]);
+            let result = e
+                .call(0x0040_bef0, &args![0x5000u32, 0x6000u32, kind])
+                .u32();
+            assert_eq!(result, 0x6000);
+            assert_eq!(calls(&e, SETTING_VALUE_00403DF0), vec![vec![setting]]);
+            assert_eq!(
+                calls(&e, STRING_CONSTRUCT_0040C0E0),
+                vec![vec![0x6000, setting + 4]]
+            );
+        }
     }
 }

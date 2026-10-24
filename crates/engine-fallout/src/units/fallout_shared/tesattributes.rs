@@ -108,6 +108,48 @@ pub fn tes_attributes_set_attribute_value(
     }
 }
 
+// Translated from 00480070 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TESAttributes::CompareComponent` (Xbox PDB; `RET 4`): true when
+/// `other` is not a `TESAttributes` (`__RTDynamicCast` from
+/// `BaseFormComponent`) or when one of the 7 attribute bytes (+4..+0xA)
+/// differs from the cast's value for that index (`ToActorValue(0, index)`,
+/// then `00480160`'s low byte).
+pub fn tes_attributes_compare_component(e: &mut Engine, this: Ptr, other: Ptr) -> bool {
+    let attributes = e
+        .call(
+            DYNAMIC_CAST,
+            &args![
+                other,
+                0u32,
+                TYPE_BASE_FORM_COMPONENT,
+                TYPE_TES_ATTRIBUTES,
+                0u32
+            ],
+        )
+        .u32();
+    if attributes == 0 {
+        return true;
+    }
+    for index in 0..7u32 {
+        let mine = e.mem.u8(this.addr() + index + 4);
+        let code = e.call(TO_ACTOR_VALUE, &args![0u32, index & 0xff]).u32();
+        let theirs = fn_00480160(e, Ptr::new(attributes), code) as u8;
+        if mine != theirs {
+            return true;
+        }
+    }
+    false
+}
+
+// Translated from 00480100 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Writes the `TESAttributes` data into a buffer (unnamed in the map; one
+/// stack word, `RET 4`): copies the 7 bytes at +4 to the buffer
+/// (`00401460`) and answers the size `009d2510` gives.
+pub fn fn_00480100(e: &mut Engine, this: Ptr, buffer: Ptr) -> u32 {
+    e.call(MEMCPY, &args![buffer, this.byte_add(4), 7u32]);
+    e.call(ATTRIBUTES_SIZE, &args![this]).u32()
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -119,6 +161,8 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
             0x0048_0180,
             tes_attributes_set_attribute_value(Ptr, u32, u8, u8)
         ),
+        entry!(0x0048_0070, tes_attributes_compare_component(Ptr, Ptr) -> bool),
+        entry!(0x0048_0100, fn_00480100(Ptr, Ptr) -> u32),
     ]
 }
 
@@ -261,6 +305,59 @@ mod tests {
             vec![
                 (MEMCPY, vec![0x0400_0004, 0x0500_0000, 7]),
                 (ATTRIBUTES_SIZE, vec![0x0400_0000]),
+            ]
+        );
+    }
+}
+
+#[cfg(test)]
+mod tests_n042 {
+    use super::*;
+
+    #[test]
+    fn compare_component_checks_the_seven_bytes() {
+        let mut e = Engine::new();
+        e.register(DYNAMIC_CAST, |_, a| a[0].into_ret());
+        // Code = index + 5, so `00480160` reads the byte at +4 + index.
+        e.register(TO_ACTOR_VALUE, |_, a| (a[1] + 5).into_ret());
+        let this = e.mem.alloc(0x10);
+        let other = e.mem.alloc(0x10);
+        for i in 0..7 {
+            e.mem.set_u8(this + 4 + i, i as u8 + 1);
+            e.mem.set_u8(other + 4 + i, i as u8 + 1);
+        }
+        e.call_log = Some(vec![]);
+        assert!(!e.call(0x0048_0070, &args![this, other]).bool());
+        let log = e.call_log.take().unwrap();
+        let asked: Vec<Vec<u32>> = log
+            .iter()
+            .filter(|c| c.0 == TO_ACTOR_VALUE)
+            .map(|c| c.1.clone())
+            .collect();
+        assert_eq!(asked, (0..7).map(|i| vec![0, i]).collect::<Vec<_>>());
+        e.mem.set_u8(other + 4 + 3, 0x40);
+        e.call_log = Some(vec![]);
+        assert!(e.call(0x0048_0070, &args![this, other]).bool());
+        let log = e.call_log.take().unwrap();
+        assert_eq!(log.iter().filter(|c| c.0 == TO_ACTOR_VALUE).count(), 4);
+        e.register(DYNAMIC_CAST, |_, _| Ret::default());
+        assert!(e.call(0x0048_0070, &args![this, other]).bool());
+    }
+
+    #[test]
+    fn write_copies_seven_bytes_out_and_answers_the_size() {
+        let mut e = Engine::new();
+        e.register(MEMCPY, |_, _| Ret::default());
+        e.register(ATTRIBUTES_SIZE, |_, _| 7u32.into_ret());
+        e.call_log = Some(vec![]);
+        let size = e.call(0x0048_0100, &args![0x5000u32, 0x6000u32]).u32();
+        assert_eq!(size, 7);
+        let log = e.call_log.take().unwrap();
+        assert_eq!(
+            log[1..],
+            [
+                (MEMCPY, vec![0x6000, 0x5004, 7]),
+                (ATTRIBUTES_SIZE, vec![0x5000])
             ]
         );
     }

@@ -70,6 +70,48 @@ pub fn fn_00590610(e: &mut Engine, this: Ptr) {
     e.call(0x0048_3630, &args![this]);
 }
 
+/// `__RTDynamicCast` (`00ec43fb`) from `.?AVTESForm@@` (`01183028`) to
+/// `.?AVBGSMenuIcon@@` (`011863f0`).
+const RT_DYNAMIC_CAST: u32 = 0x00ec_43fb;
+const TYPE_TES_FORM: u32 = 0x0118_3028;
+const TYPE_MENU_ICON: u32 = 0x0118_63f0;
+/// `TESForm::CopyAllComponents` and `CompareAllComponents` (`004851b0`,
+/// `00485270`, engine map; `thiscall`, one word).
+const COPY_ALL_COMPONENTS: u32 = 0x0048_51b0;
+const COMPARE_ALL_COMPONENTS: u32 = 0x0048_5270;
+
+/// `form` cast to `BGSMenuIcon`, or 0.
+fn cast_to_menu_icon(e: &mut Engine, form: u32) -> u32 {
+    e.call(
+        RT_DYNAMIC_CAST,
+        &args![form, 0u32, TYPE_TES_FORM, TYPE_MENU_ICON, 0u32],
+    )
+    .u32()
+}
+
+// Translated from 005904a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BGSMenuIcon`'s copy (by the RTTI it casts to; `thiscall`, one word,
+/// `RET 4`): when `source` casts, `TESForm::CopyAllComponents` with the
+/// cast form.
+pub fn fn_005904a0(e: &mut Engine, this: Ptr, source: u32) {
+    let other = cast_to_menu_icon(e, source);
+    if other != 0 {
+        e.call(COPY_ALL_COMPONENTS, &args![this, other]);
+    }
+}
+
+// Translated from 005904e0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BGSMenuIcon`'s comparison (`thiscall`, one word, `RET 4`): true when
+/// `form` does not cast, else what `TESForm::CompareAllComponents` answers
+/// (as 1 or 0).
+pub fn fn_005904e0(e: &mut Engine, this: Ptr, form: u32) -> bool {
+    let other = cast_to_menu_icon(e, form);
+    if other == 0 {
+        return true;
+    }
+    e.call(COMPARE_ALL_COMPONENTS, &args![this, other]).bool()
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -78,6 +120,8 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x0059_06a0, fn_005906a0(Ptr)),
         entry!(0x0059_06d0, fn_005906d0(Ptr)),
         entry!(0x0059_0610, fn_00590610(Ptr)),
+        entry!(0x0059_04a0, fn_005904a0(Ptr, u32)),
+        entry!(0x0059_04e0, fn_005904e0(Ptr, u32) -> bool),
     ]
 }
 
@@ -200,5 +244,50 @@ mod tests {
             }
             assert_eq!(calls, expected);
         }
+    }
+}
+
+#[cfg(test)]
+mod n040_tests {
+    use super::*;
+
+    #[test]
+    fn fn_005904a0_and_005904e0_copy_and_compare_menu_icons() {
+        let mut e = Engine::new();
+        e.register(RT_DYNAMIC_CAST, |e, a| {
+            assert_eq!(a[1..], [0, TYPE_TES_FORM, TYPE_MENU_ICON, 0]);
+            let form = if e.mem.u32(a[0] + 0xc) == 0 { a[0] } else { 0 };
+            Ret {
+                eax: form,
+                ..Ret::default()
+            }
+        });
+        e.register(COPY_ALL_COMPONENTS, |_, _| Ret::default());
+        e.register(COMPARE_ALL_COMPONENTS, |e, a| Ret {
+            eax: e.mem.u32(a[1] + 0x10),
+            ..Ret::default()
+        });
+        let this = e.mem.alloc(0x20);
+        let other = e.mem.alloc(0x20);
+        let copies = |e: &mut Engine| -> usize {
+            e.call_log
+                .take()
+                .unwrap()
+                .iter()
+                .filter(|(a, _)| *a == COPY_ALL_COMPONENTS)
+                .count()
+        };
+        e.mem.set_u32(other + 0xc, 1);
+        e.call_log = Some(vec![]);
+        e.call(0x0059_04a0, &[this, other]);
+        assert_eq!(copies(&mut e), 0);
+        assert!(e.call(0x0059_04e0, &[this, other]).bool());
+        e.mem.set_u32(other + 0xc, 0);
+        e.call_log = Some(vec![]);
+        e.call(0x0059_04a0, &[this, other]);
+        assert_eq!(copies(&mut e), 1);
+        assert!(!e.call(0x0059_04e0, &[this, other]).bool());
+        e.mem.set_u32(other + 0x10, 1);
+        assert!(e.call(0x0059_04e0, &[this, other]).bool());
     }
 }

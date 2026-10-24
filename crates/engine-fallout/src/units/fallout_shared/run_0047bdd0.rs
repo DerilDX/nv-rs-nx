@@ -48,9 +48,44 @@ pub fn fn_0047bdd0(e: &mut Engine, this: Ptr, other: Ptr) {
     e.call(SET_SHORT_8, &args![this, u32::from(short)]);
 }
 
+// Translated from 0047be30 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BGSTouchSpellForm`'s compare (`thiscall`, `RET 4`; the engine map gives
+/// it no name): true (they differ) when `other` is not a
+/// `BGSTouchSpellForm` (`dynamic_cast` from `BaseFormComponent`), when the
+/// words at +4 (`00726070`) differ or the 16-bit values at +8 (`004a8ae0`)
+/// differ.
+pub fn fn_0047be30(e: &mut Engine, this: Ptr, other: Ptr) -> bool {
+    let cast = e
+        .call(
+            RT_DYNAMIC_CAST,
+            &args![
+                other,
+                0u32,
+                TYPE_BASE_FORM_COMPONENT,
+                TYPE_BGS_TOUCH_SPELL_FORM,
+                0u32
+            ],
+        )
+        .u32();
+    if cast == 0 {
+        return true;
+    }
+    let mine = e.call(GET_WORD_4, &args![this]).u32();
+    let theirs = e.call(GET_WORD_4, &args![cast]).u32();
+    if mine != theirs {
+        return true;
+    }
+    let mine = e.call(GET_SHORT_8, &args![this]).u16();
+    let theirs = e.call(GET_SHORT_8, &args![cast]).u16();
+    mine != theirs
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
-    vec![entry!(0x0047_bdd0, fn_0047bdd0(Ptr, Ptr))]
+    vec![
+        entry!(0x0047_be30, fn_0047be30(Ptr, Ptr) -> bool),
+        entry!(0x0047_bdd0, fn_0047bdd0(Ptr, Ptr)),
+    ]
 }
 
 #[cfg(test)]
@@ -99,5 +134,54 @@ mod tests {
         e.call_log = Some(vec![]);
         e.call(0x0047_bdd0, &args![0x100u32, 0x200u32]);
         assert_eq!(e.call_log.take().unwrap().len(), 2);
+    }
+}
+
+#[cfg(test)]
+mod n038_tests {
+    use super::*;
+
+    fn word(eax: u32) -> Ret {
+        Ret {
+            eax,
+            ..Ret::default()
+        }
+    }
+
+    #[test]
+    fn at_0047be30_compares_both_fields() {
+        let mut e = Engine::new();
+        e.mem.map(0x0f00_0000, 4);
+        e.register(RT_DYNAMIC_CAST, |e, _| word(e.mem.u32(0x0f00_0000)));
+        e.register(GET_WORD_4, |e, a| word(e.mem.u32(a[0] + 4)));
+        // The upper half of EAX is not compared (`MOVZX ...,AX`).
+        e.register(GET_SHORT_8, |e, a| word(e.mem.u32(a[0] + 8)));
+        let this = e.mem.alloc(0xc);
+        let other = e.mem.alloc(0xc);
+        e.call_log = Some(vec![]);
+        assert!(e.call(0x0047_be30, &args![this, other]).bool());
+        let log = e.call_log.take().unwrap();
+        assert_eq!(
+            log[1],
+            (
+                RT_DYNAMIC_CAST,
+                vec![
+                    other,
+                    0,
+                    TYPE_BASE_FORM_COMPONENT,
+                    TYPE_BGS_TOUCH_SPELL_FORM,
+                    0
+                ]
+            )
+        );
+        e.mem.set_u32(0x0f00_0000, other);
+        assert!(!e.call(0x0047_be30, &args![this, other]).bool());
+        e.mem.set_u32(other + 8, 0x0001_0000);
+        assert!(!e.call(0x0047_be30, &args![this, other]).bool());
+        e.mem.set_u32(other + 8, 2);
+        assert!(e.call(0x0047_be30, &args![this, other]).bool());
+        e.mem.set_u32(other + 8, 0);
+        e.mem.set_u32(other + 4, 2);
+        assert!(e.call(0x0047_be30, &args![this, other]).bool());
     }
 }

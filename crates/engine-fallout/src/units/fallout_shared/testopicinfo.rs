@@ -1564,6 +1564,464 @@ pub fn tes_topic_info_run_result(e: &mut Engine, this: Ptr, index: u32, referenc
     }
 }
 
+/// RTTI type descriptor `.?AVTESTopicInfo@@` (read from the exe).
+const TYPE_TES_TOPIC_INFO: u32 = 0x0118_4738;
+/// The word at `01187020` a condition object's first word (its vtable) must equal, and the
+/// word at `01187344` a condition's function word (+8) is compared with by `0061d8c0`.
+const CONDITION_VTABLE_WORD: u32 = 0x0118_7020;
+const CONDITION_FUNCTION_WORD: u32 = 0x0118_7344;
+/// `00484020` (`thiscall`, `RET 4`; `tesform.cpp`): the form's own answer for other forms;
+/// `00484730` (`RET 4`), `00485be0` (`RET 4`), `TESForm::LoadGame` (`00484c50`, `RET 8`),
+/// `004534f0` (`RET 4`) and `00484da0` (`RET 4`): the form base methods the info overrides
+/// call.
+const FORM_ANSWER_484020: u32 = 0x0048_4020;
+const FORM_SET_484730: u32 = 0x0048_4730;
+const FORM_TEST_485BE0: u32 = 0x0048_5be0;
+const FORM_LOAD_GAME: u32 = 0x0048_4c50;
+const FORM_4534F0: u32 = 0x0045_34f0;
+const FORM_484DA0: u32 = 0x0048_4da0;
+/// The save buffer's flag words: `00428110` (load) and `0042ce30` (save) copy the buffer's
+/// word to a local (`RET 4`), `004280f0` (`RET 4`) tests a flag in it.
+const BUFFER_FLAGS_LOAD: u32 = 0x0042_8110;
+const BUFFER_FLAGS_SAVE: u32 = 0x0042_ce30;
+const FLAGS_TEST: u32 = 0x0042_80f0;
+/// `00680a70` (`thiscall` on the conditions, `RET 8`: source, owner): copies conditions.
+const CONDITIONS_COPY: u32 = 0x0068_0a70;
+/// `00401280` and `00440e30` (`thiscall` on the form): the two words `GetFormDetailedString`
+/// prints first (`00440e30` with the type name in its format, `00401280` the editor id).
+const FORM_TEXT_AT_401280: u32 = 0x0040_1280;
+const FORM_TEXT_AT_440E30: u32 = 0x0044_0e30;
+/// The string printf (`00406f60`, `cdecl`: string, format, ...).
+const STRING_PRINTF: u32 = 0x0040_6f60;
+/// The formats `GetFormDetailedString` uses.
+const FORMAT_DETAILED: u32 = 0x0104_d71c;
+const FORMAT_TOPIC: u32 = 0x0104_d75c;
+const FORMAT_QUEST: u32 = 0x0104_d748;
+const FORMAT_TEXT: u32 = 0x0104_d738;
+/// `LowProcess::GetGenericLocation` (`008041a0`), `LowProcess::GetSecondGenericLocation`
+/// (`006733e0`) and `SetSecondGenericLocation` (`00673400`, `RET 4`), engine map names; the
+/// set of the first is `SET_DIFFICULTY` (`008d8040`).
+const GET_GENERIC_LOCATION: u32 = 0x0080_41a0;
+const GET_SECOND_GENERIC_LOCATION: u32 = 0x0067_33e0;
+const SET_SECOND_GENERIC_LOCATION: u32 = 0x0067_3400;
+/// `004610d0` (`thiscall` on an info): the object whose first word `0061cfd0` takes.
+const INFO_TEXT_HOLDER: u32 = 0x0046_10d0;
+/// `0061f340` (`thiscall`, `RET 4`): sets the info's index (16 bits, zero-extended).
+const SET_INFO_INDEX: u32 = 0x0061_f340;
+/// The form types `0061e330` gives to `0087ce80` instead of copying (0x56, 0x59).
+const FORM_TYPE_56: u32 = 0x56;
+const FORM_TYPE_59: u32 = 0x59;
+/// `TESForm::CopyAllComponents` (engine map, `004851b0`, `RET 4`).
+const COPY_ALL_COMPONENTS: u32 = 0x0048_51b0;
+
+/// Appends each item of the list from `node` (until an empty item) to `list` (`00905820`
+/// with the item's stack word).
+fn append_items(e: &mut Engine, mut node: u32, list_of: impl Fn(&mut Engine) -> u32, slot: u32) {
+    e.mem.set_u32(slot, 0);
+    while node != 0 {
+        let at = e.call(NODE_ITEM, &args![node]).u32();
+        if e.mem.u32(at) == 0 {
+            break;
+        }
+        let at = e.call(NODE_ITEM, &args![node]).u32();
+        let item = e.mem.u32(at);
+        e.mem.set_u32(slot, item);
+        node = e.call(NODE_NEXT, &args![node]).u32();
+        let list = list_of(e);
+        e.call(LIST_APPEND, &args![list, slot]);
+    }
+}
+
+// Translated from 0061c210 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the map (`ECX` = conversation data, `RET 8`: the info (not read) and other
+/// conversation data): with other data, empties this one (`0061c330`) and appends the other's
+/// link-to (`00413f40`), link-from (`006815c0`) and follow-up (`00460140`) topics, each list
+/// until an empty item (the follow-ups stop the whole function there).
+pub fn fn_0061c210(e: &mut Engine, this: Ptr, _unused_1: u32, other: u32) {
+    if other == 0 {
+        return;
+    }
+    e.call(CONVERSATION_0061C330, &args![this]);
+    e.with_stack(8, |e, locals| {
+        let first = locals.addr();
+        let second = first + 4;
+        e.mem.set_u32(second, 0);
+        let node = e.call(LINK_TO, &args![other]).u32();
+        append_items(e, node, |e| e.call(LINK_TO, &args![this]).u32(), first);
+        let node = e.call(LINK_FROM, &args![other]).u32();
+        append_items(e, node, |e| e.call(LINK_FROM, &args![this]).u32(), first);
+        let mut node = e.call(FOLLOW_UP, &args![other]).u32();
+        while node != 0 {
+            let at = e.call(NODE_ITEM, &args![node]).u32();
+            let item = e.mem.u32(at);
+            e.mem.set_u32(second, item);
+            if item == 0 {
+                return;
+            }
+            node = e.call(NODE_NEXT, &args![node]).u32();
+            let list = e.call(FOLLOW_UP, &args![this]).u32();
+            e.call(LIST_APPEND, &args![list, second]);
+        }
+    });
+}
+
+// Translated from 0061cdc0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the map (`RET 4`: a byte): sets bit 2 of the byte at +0x25 when the byte is
+/// set, clears it otherwise.
+pub fn fn_0061cdc0(e: &mut Engine, this: Ptr, set: u8) {
+    let at = this.addr().wrapping_add(0x25);
+    let flags = e.mem.u8(at);
+    let flags = if set != 0 { flags | 2 } else { flags & 0xfd };
+    e.mem.set_u8(at, flags);
+}
+
+/// The owner topic of an info (`TESTopic::GetOwnerTopic`, `cdecl`).
+fn owner_topic(e: &mut Engine, info: u32) -> u32 {
+    e.call(GET_OWNER_TOPIC, &args![info]).u32()
+}
+
+// Translated from 0061d6a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the map (`RET 4`: a byte): when `004077c0` is false, the byte is set and
+/// `004013e0` is true, tells the owner topic (vtable slot 0xC8 with 1); then the form's
+/// `00484730` with the byte.
+pub fn fn_0061d6a0(e: &mut Engine, this: Ptr, flag: u8) {
+    if !e.call(FORM_004077C0, &args![this]).bool()
+        && flag != 0
+        && e.call(FORM_004013E0, &args![this]).bool()
+    {
+        let topic = owner_topic(e, this.addr());
+        if topic != 0 {
+            e.vcall(topic, 0xc8, &args![1u32]);
+        }
+    }
+    e.call(FORM_SET_484730, &args![this, u32::from(flag)]);
+}
+
+// Translated from 0061d710 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the map (`RET 4`: a form): for a topic (type 0x45), vtable slot 0x3C of this
+/// info's owner topic for it (when both exist and differ); for an info (type 0x46), the same
+/// between the two infos' owner topics (asked of this one's); otherwise `00484020`. False when
+/// a cast or owner is missing.
+pub fn fn_0061d710(e: &mut Engine, this: Ptr, form: u32) -> bool {
+    let kind = e.call(FORM_TYPE, &args![form]).u32();
+    if kind == 0x45 {
+        let topic = e
+            .call(
+                DYNAMIC_CAST,
+                &args![form, 0u32, TYPE_TES_FORM, TYPE_TES_TOPIC, 0u32],
+            )
+            .u32();
+        if topic == 0 {
+            return false;
+        }
+        let owner = owner_topic(e, this.addr());
+        if owner != 0 && owner != topic {
+            return e.vcall(owner, 0x3c, &args![topic]).bool();
+        }
+        false
+    } else if kind == 0x46 {
+        let info = e
+            .call(
+                DYNAMIC_CAST,
+                &args![form, 0u32, TYPE_TES_FORM, TYPE_TES_TOPIC_INFO, 0u32],
+            )
+            .u32();
+        if info == 0 {
+            return false;
+        }
+        let mine = owner_topic(e, this.addr());
+        let theirs = owner_topic(e, info);
+        if theirs != 0 && mine != 0 && theirs != mine {
+            return e.vcall(mine, 0x3c, &args![theirs]).bool();
+        }
+        false
+    } else {
+        e.call(FORM_ANSWER_484020, &args![this, form]).bool()
+    }
+}
+
+// Translated from 0061d820 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the map (`RET 0xC`: a condition, two bytes): false unless the condition's
+/// first word is the word at `01187020` and this info has an owner topic; with the first
+/// byte set the topic's vtable slot 0x110 answers (the condition and both bytes); when that
+/// is false and the condition's word at +0xC is 7, `00485be0` with its word at +8 can make it
+/// true.
+pub fn fn_0061d820(e: &mut Engine, this: Ptr, condition: u32, check: u8, extra: u8) -> bool {
+    if condition == 0 || e.mem.u32(condition) != e.global::<u32>(CONDITION_VTABLE_WORD) {
+        return false;
+    }
+    let topic = owner_topic(e, this.addr());
+    if topic == 0 {
+        return false;
+    }
+    let mut result = false;
+    if check != 0 {
+        result = e
+            .vcall(
+                topic,
+                0x110,
+                &args![condition, u32::from(check), u32::from(extra)],
+            )
+            .bool();
+    }
+    if !result && e.mem.u32(condition.wrapping_add(0xc)) == 7 {
+        let id = e.mem.u32(condition.wrapping_add(8));
+        if e.call(FORM_TEST_485BE0, &args![topic, id]).bool() {
+            result = true;
+        }
+    }
+    result
+}
+
+// Translated from 0061d8c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the map (`RET 8`: an output condition, a condition): clears the output's first
+/// word; for a condition whose word at +0xC is 0 and whose function word (+8) is the word at
+/// `01187344`, when this info has an owner topic, fills the output with the word at
+/// `01187020`, kind 7 (+0xC), the topic's form id (+8) and zeros at +4 and +0x10.
+pub fn fn_0061d8c0(e: &mut Engine, this: Ptr, out: u32, condition: u32) {
+    if out == 0 {
+        return;
+    }
+    e.mem.set_u32(out, 0);
+    if condition == 0 || e.mem.u32(condition.wrapping_add(0xc)) != 0 {
+        return;
+    }
+    if e.mem.u32(condition.wrapping_add(8)) != e.global::<u32>(CONDITION_FUNCTION_WORD) {
+        return;
+    }
+    let topic = owner_topic(e, this.addr());
+    if topic == 0 {
+        return;
+    }
+    let first = e.global::<u32>(CONDITION_VTABLE_WORD);
+    e.mem.set_u32(out, first);
+    e.mem.set_u32(out.wrapping_add(0xc), 7);
+    let id = e.call(FORM_ID, &args![topic]).u32();
+    e.mem.set_u32(out.wrapping_add(8), id);
+    e.mem.set_u32(out.wrapping_add(4), 0);
+    e.mem.set_u32(out.wrapping_add(0x10), 0);
+}
+
+// Translated from 0061d950 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 0061d950 - the /GS stack cookie check (00ec408c) is not translated.
+/// `TESTopicInfo::GetFormDetailedString` (engine map, `RET 4`: a string): prints into the
+/// string (`00406f60`, "%s Form '%s' (%08X): %s%s%s") the words of `00440e30` and `00401280`,
+/// the form id, then the quest part ("Quest '%s' (%08X)": the owner topic's quest `00619d00`
+/// when `004013e0` says so, its name from slot 0x138), the topic part (", Topic '%s' (%08X)":
+/// the owner topic's name from slot 0x130) and the text part (", Text: \"%s\"": the first
+/// response's text), each built with `sprintf` into a stack buffer that stays empty without
+/// its object. The stack cookie check is not translated.
+pub fn tes_topic_info_get_form_detailed_string(e: &mut Engine, this: Ptr, string: u32) {
+    e.with_stack(0x318, |e, buffers| {
+        let quest_part = buffers.addr();
+        let topic_part = quest_part + 0x108;
+        let text_part = quest_part + 0x210;
+        e.mem.set_u8(topic_part, 0);
+        let topic = owner_topic(e, this.addr());
+        if topic != 0 {
+            let id = e.call(FORM_ID, &args![topic]).u32();
+            let name = e.vcall(topic, 0x130, &[]).u32();
+            e.call(SPRINTF, &args![topic_part, FORMAT_TOPIC, name, id]);
+        }
+        e.mem.set_u8(quest_part, 0);
+        if topic != 0 && e.call(FORM_004013E0, &args![this]).bool() {
+            let quest = e.call(TOPIC_QUEST, &args![topic, this]).u32();
+            if quest != 0 {
+                let id = e.call(FORM_ID, &args![quest]).u32();
+                let name = e.vcall(quest, 0x138, &[]).u32();
+                e.call(SPRINTF, &args![quest_part, FORMAT_QUEST, name, id]);
+            }
+        }
+        e.mem.set_u8(text_part, 0);
+        let list = tes_topic_info_get_response_list(e, this, Ptr::NULL).addr();
+        let response = e.call(WORD_AT_ZERO, &args![list]).u32();
+        if response != 0 {
+            let text = e.call(GET_RESPONSE_TEXT, &args![response]).u32();
+            e.call(SPRINTF, &args![text_part, FORMAT_TEXT, text]);
+        }
+        let id = e.call(FORM_ID, &args![this]).u32();
+        let editor = e.call(FORM_TEXT_AT_401280, &args![this]).u32();
+        let kind = e.call(FORM_TEXT_AT_440E30, &args![this]).u32();
+        e.call(
+            STRING_PRINTF,
+            &args![
+                string,
+                FORMAT_DETAILED,
+                kind,
+                editor,
+                id,
+                quest_part,
+                topic_part,
+                text_part
+            ],
+        );
+    });
+}
+
+// Translated from 0061dad0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the map (`RET 8`: flags and a word): `TESForm::LoadGame` with both, then the
+/// byte at +0x22 set when flag 0x80000000 is.
+pub fn fn_0061dad0(e: &mut Engine, this: Ptr, flags: u32, word: u32) {
+    e.call(FORM_LOAD_GAME, &args![this, flags, word]);
+    if flags & 0x8000_0000 != 0 {
+        e.mem.set_u8(this.addr().wrapping_add(0x22), 1);
+    }
+}
+
+// Translated from 0061db00 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the map (`RET 4`: flags): `004534f0` with them, then the byte at +0x22 cleared
+/// when flag 0x80000000 is set.
+pub fn fn_0061db00(e: &mut Engine, this: Ptr, flags: u32) {
+    e.call(FORM_4534F0, &args![this, flags]);
+    if flags & 0x8000_0000 != 0 {
+        e.mem.set_u8(this.addr().wrapping_add(0x22), 0);
+    }
+}
+
+/// Whether the save buffer's flag word (copied to a stack word by `copy`) has 0x80000000
+/// (`004280f0`).
+fn buffer_has_flag(e: &mut Engine, buffer: u32, copy: u32) -> bool {
+    e.with_stack(4, |e, local| {
+        let flags = e.call(copy, &args![buffer, local]).u32();
+        e.call(FLAGS_TEST, &args![flags, 0x8000_0000u32]).bool()
+    })
+}
+
+// Translated from 0061db30 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the map (`RET 4`: a load buffer): `00484da0` with it, then the byte at +0x22
+/// set when the buffer's flags (`00428110`) have 0x80000000.
+pub fn fn_0061db30(e: &mut Engine, this: Ptr, buffer: u32) {
+    e.call(FORM_484DA0, &args![this, buffer]);
+    if buffer_has_flag(e, buffer, BUFFER_FLAGS_LOAD) {
+        e.mem.set_u8(this.addr().wrapping_add(0x22), 1);
+    }
+}
+
+// Translated from 0061db80 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the map (`RET 4`: a save buffer): `004534f0` with it, then the byte at +0x22
+/// cleared when the buffer's flags (`0042ce30`) have 0x80000000.
+pub fn fn_0061db80(e: &mut Engine, this: Ptr, buffer: u32) {
+    e.call(FORM_4534F0, &args![this, buffer]);
+    if buffer_has_flag(e, buffer, BUFFER_FLAGS_SAVE) {
+        e.mem.set_u8(this.addr().wrapping_add(0x22), 0);
+    }
+}
+
+// Translated from 0061e0f0 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 0061e0f0 - the FS:[0] exception frame (destroying the stack conditions on unwinding) is not translated.
+/// Unnamed in the map (`RET 4`: conditions or null): copies the conditions into this info's
+/// (+0x18, `00680a70` with this info as owner); without any, copies an empty conditions object
+/// built on the stack (`00680890`, then `006808b0`). The exception frame is not translated.
+pub fn fn_0061e0f0(e: &mut Engine, this: Ptr, conditions: u32) {
+    let target = this.addr().wrapping_add(0x18);
+    if conditions != 0 {
+        e.call(CONDITIONS_COPY, &args![target, conditions, this]);
+        return;
+    }
+    e.with_stack(8, |e, empty| {
+        e.call(CONDITIONS_CONSTRUCT, &args![empty]);
+        e.call(CONDITIONS_COPY, &args![target, empty, this]);
+        e.call(CONDITIONS_DESTRUCT, &args![empty]);
+    });
+}
+
+// Translated from 0061e330 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 0061e330 - the FS:[0] exception frame (deleting a new response on unwinding) is not translated.
+/// Unnamed in the map (`RET 4`: a form; the info's copy by its body): when the form is a
+/// `TESTopicInfo`, copies all components and its word at +0x23 (`0061e5e0`), rebuilds the
+/// added topics (`0061d250`, then each of the source's `00436aa0` topics appended until an
+/// empty item), empties the responses (`0061d230`) and copies each source response (`0045cd60`
+/// walk) into a new one (`00401000`, `00616ce0`, `006174d0`, added by `0061cc60`), the text
+/// (`004610d0`, `0061cfd0`), the +0x40 form (types 0x56 and 0x59 and null go through
+/// `0087ce80`, others are copied), the two generic locations, the speaker (`00639b40`,
+/// `00409480`), both result scripts (`Script::CopyResultScript`), the index (`00619a70`,
+/// `0061f340`), the conditions (`0061e0f0` with the source's `00500940`), the conversation
+/// data (`009e32d0`, `0061e180`) and the flag `004013e0` (`00484ab0`). The exception frame is
+/// not translated.
+pub fn fn_0061e330(e: &mut Engine, this: Ptr, form: u32) {
+    let base = this.addr();
+    let source = e
+        .call(
+            DYNAMIC_CAST,
+            &args![form, 0u32, TYPE_TES_FORM, TYPE_TES_TOPIC_INFO, 0u32],
+        )
+        .u32();
+    if source == 0 {
+        return;
+    }
+    e.call(COPY_ALL_COMPONENTS, &args![this, form]);
+    let at = fn_0061e5e0(e, Ptr::new(source)).addr();
+    let word = e.mem.u32(at);
+    e.mem.set_u32(base.wrapping_add(0x23), word);
+    fn_0061d250(e, this);
+    e.with_stack(4, |e, slot| {
+        let node = e.call(ADD_TOPICS, &args![source]).u32();
+        append_items(
+            e,
+            node,
+            |e| e.call(ADD_TOPICS, &args![this]).u32(),
+            slot.addr(),
+        );
+    });
+    fn_0061d230(e, this);
+    let list = tes_topic_info_get_response_list(e, Ptr::new(source), Ptr::NULL).addr();
+    let mut response = e.call(WORD_AT_ZERO, &args![list]).u32();
+    while response != 0 {
+        let block = e.call(OPERATOR_NEW, &args![RESPONSE_SIZE]).u32();
+        let copy = if block != 0 {
+            e.call(RESPONSE_CONSTRUCT, &args![block]).u32()
+        } else {
+            0
+        };
+        e.call(RESPONSE_COPY, &args![copy, response]);
+        let list = tes_topic_info_get_response_list(e, this, Ptr::NULL).addr();
+        fn_0061cc60(e, Ptr::new(list), copy);
+        response = e.call(RESPONSE_NEXT, &args![response]).u32();
+    }
+    let holder = e.call(INFO_TEXT_HOLDER, &args![source]).u32();
+    let text = e.call(WORD_AT_ZERO, &args![holder]).u32();
+    fn_0061cfd0(e, this, text);
+    let other = e.mem.u32(source.wrapping_add(0x40));
+    if other == 0 {
+        e.call(INFO_SET_0087CE80, &args![this, 0u32]);
+    } else {
+        let kind = e.call(FORM_TYPE, &args![other]).u32();
+        if kind == FORM_TYPE_56 || kind == FORM_TYPE_59 {
+            let other = e.mem.u32(source.wrapping_add(0x40));
+            e.call(INFO_SET_0087CE80, &args![this, other]);
+        } else {
+            let other = e.mem.u32(source.wrapping_add(0x40));
+            e.mem.set_u32(base.wrapping_add(0x40), other);
+        }
+    }
+    let location = e.call(GET_GENERIC_LOCATION, &args![source]).u32();
+    e.call(SET_DIFFICULTY, &args![this, location]);
+    let speaker = e.call(SPEAKER, &args![source]).u32();
+    e.call(INFO_SET_00409480, &args![this, speaker]);
+    for index in 0..2u32 {
+        let from = tes_topic_info_get_result_script(e, Ptr::new(source), index);
+        let to = tes_topic_info_get_result_script(e, this, index);
+        e.call(SCRIPT_COPY, &args![to, from]);
+    }
+    let info_index = u32::from(e.call(INFO_INDEX, &args![source]).u16());
+    e.call(SET_INFO_INDEX, &args![this, info_index]);
+    let conditions = e.call(AT_0X18, &args![source]).u32();
+    fn_0061e0f0(e, this, conditions);
+    if e.call(CONVERSATION_DATA, &args![source]).u32() != 0 {
+        let data = e.call(CONVERSATION_DATA, &args![source]).u32();
+        fn_0061e180(e, this, data);
+    }
+    let location = e.call(GET_SECOND_GENERIC_LOCATION, &args![source]).u32();
+    e.call(SET_SECOND_GENERIC_LOCATION, &args![this, location]);
+    let flag = u32::from(e.call(FORM_004013E0, &args![source]).u8());
+    e.call(FORM_SET_484AB0, &args![this, flag]);
+}
+
+// Translated from 0061e5e0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the map (`ECX`): `this + 0x23`.
+pub fn fn_0061e5e0(_e: &mut Engine, this: Ptr) -> Ptr {
+    Ptr::new(this.addr().wrapping_add(0x23))
+}
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -1603,6 +2061,23 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x0061_eb60, tes_topic_info_get_result_script(Ptr, u32) -> u32),
         entry!(0x0061_f150, tes_topic_info_add_topic_list(Ptr)),
         entry!(0x0061_f170, tes_topic_info_run_result(Ptr, u32, Ptr)),
+        entry!(0x0061_c210, fn_0061c210(Ptr, u32, u32)),
+        entry!(0x0061_cdc0, fn_0061cdc0(Ptr, u8)),
+        entry!(0x0061_d6a0, fn_0061d6a0(Ptr, u8)),
+        entry!(0x0061_d710, fn_0061d710(Ptr, u32) -> bool),
+        entry!(0x0061_d820, fn_0061d820(Ptr, u32, u8, u8) -> bool),
+        entry!(0x0061_d8c0, fn_0061d8c0(Ptr, u32, u32)),
+        entry!(
+            0x0061_d950,
+            tes_topic_info_get_form_detailed_string(Ptr, u32)
+        ),
+        entry!(0x0061_dad0, fn_0061dad0(Ptr, u32, u32)),
+        entry!(0x0061_db00, fn_0061db00(Ptr, u32)),
+        entry!(0x0061_db30, fn_0061db30(Ptr, u32)),
+        entry!(0x0061_db80, fn_0061db80(Ptr, u32)),
+        entry!(0x0061_e0f0, fn_0061e0f0(Ptr, u32)),
+        entry!(0x0061_e330, fn_0061e330(Ptr, u32)),
+        entry!(0x0061_e5e0, fn_0061e5e0(Ptr) -> Ptr),
     ]
 }
 
@@ -2790,5 +3265,336 @@ mod b027_tests {
             vec![vec![0x011c_bfb4, reference, 0x6600, 0, 1]]
         );
         assert_eq!(calls(&log, REFERENCE_00935920), vec![vec![reference, info]]);
+    }
+}
+
+#[cfg(test)]
+mod n045_tests {
+    use super::*;
+
+    type Log = Vec<(u32, Vec<u32>)>;
+
+    fn ret(eax: u32) -> Ret {
+        Ret {
+            eax,
+            ..Ret::default()
+        }
+    }
+
+    fn ok(_: &mut Engine, _: &[u32]) -> Ret {
+        Ret::default()
+    }
+
+    fn only(log: &Log, addr: u32) -> Vec<Vec<u32>> {
+        log.iter()
+            .filter(|(a, _)| *a == addr)
+            .map(|(_, w)| w.clone())
+            .collect()
+    }
+
+    /// An object whose vtable maps `slot` to `target`.
+    fn object(e: &mut Engine, slot: u32, target: u32) -> u32 {
+        let o = e.mem.alloc(0x60);
+        let vt = e.mem.alloc(0x140);
+        e.mem.set_u32(o, vt);
+        e.mem.set_u32(vt + slot, target);
+        o
+    }
+
+    fn lists(e: &mut Engine) {
+        e.register(NODE_ITEM, |_, a| ret(a[0]));
+        e.register(NODE_NEXT, |e, a| ret(e.mem.u32(a[0] + 4)));
+        e.register(LIST_APPEND, |e, a| {
+            let item = e.mem.u32(a[1]);
+            let n = e.mem.u32(a[0] + 0x20);
+            e.mem.set_u32(a[0] + 0x24 + 4 * n, item);
+            e.mem.set_u32(a[0] + 0x20, n + 1);
+            Ret::default()
+        });
+    }
+
+    #[test]
+    fn fn_0061c210_copies_the_three_topic_lists() {
+        let mut e = Engine::new();
+        lists(&mut e);
+        e.register(CONVERSATION_0061C330, ok);
+        // The data's lists (item, next): link-from at +0 (its accessor is the node item
+        // accessor itself), link-to at +0x100, follow-up at +0x200 here.
+        e.register(LINK_TO, |_, a| ret(a[0] + 0x100));
+        e.register(FOLLOW_UP, |_, a| ret(a[0] + 0x200));
+        let other = e.mem.alloc(0x300);
+        let tail = e.mem.alloc(8);
+        e.mem.set_u32(other + 0x100, 0x11);
+        e.mem.set_u32(other + 0x104, tail);
+        e.mem.set_u32(tail, 0x12);
+        e.mem.set_u32(other, 0x21);
+        e.mem.set_u32(other + 0x200, 0x31);
+        let this = e.mem.alloc(0x300);
+        e.call(0x0061_c210, &[this, 0x9999, 0]);
+        assert_eq!(e.mem.u32(this + 0x120), 0);
+        e.call_log = Some(vec![]);
+        e.call(0x0061_c210, &[this, 0x9999, other]);
+        let log = e.call_log.take().unwrap();
+        assert_eq!(only(&log, CONVERSATION_0061C330), vec![vec![this]]);
+        // The append double counts at +0x20 of each list and stores from +0x24.
+        assert_eq!(e.mem.u32(this + 0x120), 2);
+        assert_eq!(
+            (e.mem.u32(this + 0x124), e.mem.u32(this + 0x128)),
+            (0x11, 0x12)
+        );
+        assert_eq!((e.mem.u32(this + 0x20), e.mem.u32(this + 0x24)), (1, 0x21));
+        assert_eq!(e.mem.u32(this + 0x224), 0x31);
+    }
+
+    #[test]
+    fn fn_0061cdc0_sets_and_clears_bit_2() {
+        let mut e = Engine::new();
+        let this = e.mem.alloc(0x30);
+        e.mem.set_u8(this + 0x25, 0x81);
+        e.call(0x0061_cdc0, &[this, 1]);
+        assert_eq!(e.mem.u8(this + 0x25), 0x83);
+        e.call(0x0061_cdc0, &[this, 0x100]);
+        assert_eq!(e.mem.u8(this + 0x25), 0x81);
+    }
+
+    #[test]
+    fn fn_0061d6a0_tells_the_owner_topic() {
+        let mut e = Engine::new();
+        e.register(FORM_004077C0, |_, _| ret(0));
+        e.register(FORM_004013E0, |_, _| ret(1));
+        e.register(FORM_SET_484730, ok);
+        e.register(0x0050_0000, ok);
+        let topic = object(&mut e, 0xc8, 0x0050_0000);
+        e.register_double(GET_OWNER_TOPIC, move |_, _| ret(topic));
+        e.call_log = Some(vec![]);
+        e.call(0x0061_d6a0, &[0x5000, 1]);
+        e.call(0x0061_d6a0, &[0x5000, 0]);
+        let log = e.call_log.take().unwrap();
+        assert_eq!(only(&log, 0x0050_0000), vec![vec![topic, 1]]);
+        assert_eq!(
+            only(&log, FORM_SET_484730),
+            vec![vec![0x5000, 1], vec![0x5000, 0]]
+        );
+    }
+
+    #[test]
+    fn fn_0061d710_compares_owner_topics() {
+        let mut e = Engine::new();
+        e.register(FORM_TYPE, |e, a| ret(u32::from(e.mem.u8(a[0] + 4))));
+        e.register(DYNAMIC_CAST, |_, a| ret(a[0]));
+        e.register(0x0050_0000, |_, a| ret(u32::from(a[1] != 0)));
+        let mine = object(&mut e, 0x3c, 0x0050_0000);
+        let theirs = object(&mut e, 0x3c, 0x0050_0000);
+        let info = e.mem.alloc(0x20);
+        e.mem.set_u8(info + 4, 0x46);
+        e.register_double(GET_OWNER_TOPIC, move |_, a| {
+            ret(if a[0] == info { theirs } else { mine })
+        });
+        e.mem.set_u8(theirs + 4, 0x45);
+        e.mem.set_u8(mine + 4, 0x45);
+        assert!(e.call(0x0061_d710, &[0x5000, theirs]).bool());
+        assert!(!e.call(0x0061_d710, &[0x5000, mine]).bool());
+        assert!(e.call(0x0061_d710, &[0x5000, info]).bool());
+        e.register(FORM_ANSWER_484020, |_, _| ret(1));
+        let other = e.mem.alloc(0x20);
+        e.mem.set_u8(other + 4, 0x10);
+        assert!(e.call(0x0061_d710, &[0x5000, other]).bool());
+    }
+
+    #[test]
+    fn fn_0061d820_and_fn_0061d8c0_handle_topic_conditions() {
+        let mut e = Engine::new();
+        e.map(0x0118_7000, 0x1000);
+        e.set_global::<u32>(CONDITION_VTABLE_WORD, 0x0300);
+        e.set_global::<u32>(CONDITION_FUNCTION_WORD, 0x0400);
+        e.register(0x0050_0000, |_, a| ret(u32::from(a[3] == 9)));
+        let topic = object(&mut e, 0x110, 0x0050_0000);
+        e.register_double(GET_OWNER_TOPIC, move |_, _| ret(topic));
+        e.register(FORM_TEST_485BE0, |_, a| ret(u32::from(a[1] == 0x77)));
+        let condition = e.mem.alloc(0x14);
+        assert!(!e.call(0x0061_d820, &[0x5000, condition, 1, 9]).bool());
+        e.mem.set_u32(condition, 0x0300);
+        assert!(e.call(0x0061_d820, &[0x5000, condition, 1, 9]).bool());
+        assert!(!e.call(0x0061_d820, &[0x5000, condition, 1, 2]).bool());
+        e.mem.set_u32(condition + 0xc, 7);
+        e.mem.set_u32(condition + 8, 0x77);
+        assert!(e.call(0x0061_d820, &[0x5000, condition, 0, 0]).bool());
+        // 0061d8c0 fills a kind-7 condition with the topic's id.
+        e.register(FORM_ID, |_, _| ret(0x1234));
+        let out = e.mem.alloc(0x14);
+        e.mem.set_u32(out, 0xffff);
+        let source = e.mem.alloc(0x14);
+        e.mem.set_u32(source + 8, 0x0401);
+        e.call(0x0061_d8c0, &[0x5000, out, source]);
+        assert_eq!(e.mem.u32(out), 0);
+        e.mem.set_u32(source + 8, 0x0400);
+        e.call(0x0061_d8c0, &[0x5000, out, source]);
+        assert_eq!(e.mem.u32(out), 0x0300);
+        assert_eq!((e.mem.u32(out + 8), e.mem.u32(out + 0xc)), (0x1234, 7));
+        e.call(0x0061_d8c0, &[0x5000, 0, source]);
+    }
+
+    #[test]
+    fn get_form_detailed_string_prints_its_parts() {
+        let mut e = Engine::new();
+        e.map(0x011c_b000, 0x2000);
+        e.register(0x0050_0000, |_, _| ret(0x7100));
+        e.register(0x0050_0010, |_, _| ret(0x7200));
+        let topic = object(&mut e, 0x130, 0x0050_0000);
+        let quest = object(&mut e, 0x138, 0x0050_0010);
+        e.register_double(GET_OWNER_TOPIC, move |_, _| ret(topic));
+        e.register(FORM_004013E0, |_, _| ret(1));
+        e.register_double(TOPIC_QUEST, move |_, _| ret(quest));
+        e.register(FORM_ID, |_, a| ret(a[0] & 0xff));
+        e.register(SPRINTF, ok);
+        e.register(STRING_PRINTF, ok);
+        e.register(FORM_TEXT_AT_401280, |_, _| ret(0x401));
+        e.register(FORM_TEXT_AT_440E30, |_, _| ret(0x440));
+        let info = e.mem.alloc(0x60);
+        e.mem.set_u32(SHARED_RESPONSES_INFO, info);
+        e.mem.set_u32(SHARED_RESPONSES, 0);
+        e.register(WORD_AT_ZERO, |e, a| ret(e.mem.u32(a[0])));
+        e.call_log = Some(vec![]);
+        e.call(0x0061_d950, &[info, 0x9000]);
+        let log = e.call_log.take().unwrap();
+        let s = only(&log, SPRINTF);
+        assert_eq!(s.len(), 2);
+        assert_eq!(&s[0][1..], &[FORMAT_TOPIC, 0x7100, topic & 0xff]);
+        assert_eq!(&s[1][1..], &[FORMAT_QUEST, 0x7200, quest & 0xff]);
+        let p = only(&log, STRING_PRINTF);
+        assert_eq!(
+            &p[0][..5],
+            &[0x9000, FORMAT_DETAILED, 0x440, 0x401, info & 0xff]
+        );
+        assert_eq!(p[0][6], s[0][0]);
+        assert_eq!(p[0][5], s[1][0]);
+    }
+
+    #[test]
+    fn save_and_load_overrides_keep_flag_0x22() {
+        let mut e = Engine::new();
+        e.register(FORM_LOAD_GAME, ok);
+        e.register(FORM_4534F0, ok);
+        e.register(FORM_484DA0, ok);
+        e.register(BUFFER_FLAGS_LOAD, |_, _| ret(0x8000_0000));
+        e.register(BUFFER_FLAGS_SAVE, |_, _| ret(0x8000_0000));
+        e.register(FLAGS_TEST, |_, a| ret(u32::from(a[0] & a[1] != 0)));
+        let this = e.mem.alloc(0x30);
+        e.call(0x0061_dad0, &[this, 1, 2]);
+        assert_eq!(e.mem.u8(this + 0x22), 0);
+        e.call(0x0061_dad0, &[this, 0x8000_0000, 2]);
+        assert_eq!(e.mem.u8(this + 0x22), 1);
+        e.call(0x0061_db00, &[this, 0x8000_0000]);
+        assert_eq!(e.mem.u8(this + 0x22), 0);
+        e.call(0x0061_db30, &[this, 0x7000]);
+        assert_eq!(e.mem.u8(this + 0x22), 1);
+        e.call(0x0061_db80, &[this, 0x7000]);
+        assert_eq!(e.mem.u8(this + 0x22), 0);
+        e.register(BUFFER_FLAGS_LOAD, |_, _| ret(0));
+        e.call(0x0061_db30, &[this, 0x7000]);
+        assert_eq!(e.mem.u8(this + 0x22), 0);
+    }
+
+    #[test]
+    fn fn_0061e0f0_copies_given_or_empty_conditions() {
+        let mut e = Engine::new();
+        e.register(CONDITIONS_COPY, ok);
+        e.register(CONDITIONS_CONSTRUCT, ok);
+        e.register(CONDITIONS_DESTRUCT, ok);
+        e.call_log = Some(vec![]);
+        e.call(0x0061_e0f0, &[0x5000, 0x6000]);
+        e.call(0x0061_e0f0, &[0x5000, 0]);
+        let log = e.call_log.take().unwrap();
+        let copies = only(&log, CONDITIONS_COPY);
+        assert_eq!(copies[0], vec![0x5018, 0x6000, 0x5000]);
+        let empty = only(&log, CONDITIONS_CONSTRUCT)[0][0];
+        assert_eq!(copies[1], vec![0x5018, empty, 0x5000]);
+        assert_eq!(only(&log, CONDITIONS_DESTRUCT), vec![vec![empty]]);
+        assert_eq!(e.call(0x0061_e5e0, &[0x5000]).u32(), 0x5023);
+    }
+
+    #[test]
+    fn fn_0061e330_copies_an_info() {
+        let mut e = Engine::new();
+        e.map(0x011c_b000, 0x2000);
+        lists(&mut e);
+        let this = e.mem.alloc(0x60);
+        e.register(DYNAMIC_CAST, |_, a| ret(a[0]));
+        for a in [
+            COPY_ALL_COMPONENTS,
+            NODE_0063F7B0,
+            STRING_SET,
+            INFO_SET_0087CE80,
+            SET_DIFFICULTY,
+            INFO_SET_00409480,
+            SCRIPT_COPY,
+            SET_INFO_INDEX,
+            CONDITIONS_COPY,
+            CONVERSATION_0061C210,
+            SET_SECOND_GENERIC_LOCATION,
+            FORM_SET_484AB0,
+        ] {
+            e.register(a, ok);
+        }
+        e.register(ADD_TOPICS, |_, a| ret(a[0] + 0x30));
+        e.register(NODE_IS_END, |_, _| ret(1));
+        e.register(WORD_AT_ZERO, |e, a| ret(e.mem.u32(a[0])));
+        e.register(INFO_TEXT_HOLDER, |_, a| ret(a[0] + 0x50));
+        e.register(GET_GENERIC_LOCATION, |_, _| ret(0x31));
+        e.register(GET_SECOND_GENERIC_LOCATION, |_, _| ret(0x32));
+        e.register(SPEAKER, |_, _| ret(0x33));
+        e.register(INFO_INDEX, |_, _| ret(0xffff_0007));
+        e.register(AT_0X18, |_, _| ret(0x6000));
+        e.register(CONVERSATION_DATA, |_, _| ret(0x6100));
+        e.register(FORM_004013E0, |_, _| ret(0x101));
+        e.register(FORM_TYPE, |e, a| ret(u32::from(e.mem.u8(a[0] + 4))));
+        e.mem.set_u32(SHARED_RESPONSES_INFO, this);
+        e.mem.set_u32(SHARED_RESPONSES, 0);
+        e.mem.set_u32(RESULT_SCRIPTS_INFO, this);
+        e.mem.set_u32(this + 0x38, 0x6200);
+        e.mem.set_u32(this + 0x50, 0x6300);
+        e.mem.set_u32(this + 0x23, 0x0102_0304);
+        let other = e.mem.alloc(0x10);
+        e.mem.set_u8(other + 4, 0x56);
+        e.mem.set_u32(this + 0x40, other);
+        e.call(0x0061_e330, &[this, 0]);
+        e.call_log = Some(vec![]);
+        e.call(0x0061_e330, &[this, this]);
+        let log = e.call_log.take().unwrap();
+        assert_eq!(only(&log, COPY_ALL_COMPONENTS), vec![vec![this, this]]);
+        assert_eq!(e.mem.u32(this + 0x23), 0x0102_0304);
+        assert_eq!(only(&log, STRING_SET), vec![vec![this + 0x28, 0x6300, 0]]);
+        assert_eq!(only(&log, INFO_SET_0087CE80), vec![vec![this, other]]);
+        assert_eq!(only(&log, SET_DIFFICULTY), vec![vec![this, 0x31]]);
+        assert_eq!(only(&log, INFO_SET_00409480), vec![vec![this, 0x33]]);
+        assert_eq!(
+            only(&log, SCRIPT_COPY),
+            vec![
+                vec![RESULT_SCRIPTS, RESULT_SCRIPTS],
+                vec![
+                    RESULT_SCRIPTS + RESULT_SCRIPT_SIZE,
+                    RESULT_SCRIPTS + RESULT_SCRIPT_SIZE
+                ]
+            ]
+        );
+        assert_eq!(only(&log, SET_INFO_INDEX), vec![vec![this, 7]]);
+        assert_eq!(
+            only(&log, CONDITIONS_COPY),
+            vec![vec![this + 0x18, 0x6000, this]]
+        );
+        assert_eq!(
+            only(&log, CONVERSATION_0061C210),
+            vec![vec![0x6200, this, 0x6100]]
+        );
+        assert_eq!(
+            only(&log, SET_SECOND_GENERIC_LOCATION),
+            vec![vec![this, 0x32]]
+        );
+        assert_eq!(only(&log, FORM_SET_484AB0), vec![vec![this, 1]]);
+        // A form of another type at +0x40 is copied as it is.
+        e.mem.set_u8(other + 4, 0x10);
+        e.mem.set_u32(this + 0x40, other);
+        e.call(0x0061_e330, &[this, this]);
+        assert_eq!(e.mem.u32(this + 0x40), other);
     }
 }

@@ -208,8 +208,10 @@ fn closest_points(e: &mut Engine, body_a: u32, body_b: u32, collector: u32) {
 /// `(hit byte, ray input, ray output)`); each hit becomes a contact point (position, normal
 /// and a distance of `(fraction - 1) * ray length + shape margin`, in the first body's
 /// frame) given to the collector's virtual function at +4.
+/// `this` (`ECX`) is not read, but it sits in vtables and is called with `ECX` set.
 pub fn hkp_multi_ray_convex_agent_get_closest_points(
     e: &mut Engine,
+    _this: Ptr,
     body_a: Ptr,
     body_b: Ptr,
     _unused_2: u32,
@@ -500,10 +502,11 @@ pub fn hkp_multi_ray_convex_agent_process_collision(
 /// method with `RET 0x10`, stack words `(a0, a1, a2, a3)`: builds a collector object on the stack (vtable
 /// `010ce7fc`, the float at `0104da48` (an `FLD`/`FSTP` copy) at +4 and `a3` at +8) and calls
 /// `getClosestPoints` (`00d37010`) with `(a1, a0, a2, collector)` (the bodies swapped).
-/// Virtual method: the first word is `this` (`ECX` in the exe), which the body never reads.
+/// Virtual method: the first word is `this` (`ECX` in the exe), which the body never reads; it
+/// stays in `ECX` for the call to `00d37010`.
 pub fn hkp_symmetric_agent_linear_cast_multi_ray_convex_agent_get_closest_points(
     e: &mut Engine,
-    _this: u32,
+    this: u32,
     a0: Ptr,
     a1: Ptr,
     a2: u32,
@@ -515,7 +518,7 @@ pub fn hkp_symmetric_agent_linear_cast_multi_ray_convex_agent_get_closest_points
         let limit = x87_quiet_bits(e.mem.u32(NEARLY_FLOAT_MAX));
         e.mem.set_u32(c + 4, limit);
         e.mem.set_u32(c, CLOSEST_COLLECTOR_VTABLE);
-        hkp_multi_ray_convex_agent_get_closest_points(e, a1, a0, a2, collector);
+        hkp_multi_ray_convex_agent_get_closest_points(e, Ptr::new(this), a1, a0, a2, collector);
     });
 }
 
@@ -685,7 +688,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00d3_6fc0, hkp_multi_ray_convex_agent_cleanup(Ptr, u32)),
         entry!(
             0x00d3_7010,
-            hkp_multi_ray_convex_agent_get_closest_points(Ptr, Ptr, u32, Ptr)
+            hkp_multi_ray_convex_agent_get_closest_points(Ptr, Ptr, Ptr, u32, Ptr)
         ),
         entry!(0x00d3_7280, fn_00d37280(Ptr, Ptr, u32, Ptr)),
         entry!(
@@ -1074,12 +1077,15 @@ mod tests {
         (collector, seen)
     }
 
-    fn check_closest_points(address: u32) {
+    /// `this` is the leading word of the virtual (thiscall) copy; the cdecl copy has none.
+    fn check_closest_points(address: u32, this: &[u32]) {
         let mut r = rig();
         let (ray_body, target_body) = r.bodies(&TWO_RAYS, 0.5);
         r.set_script(&[Some(([1.0, 2.0, 3.0, 0.5], 0.25)), None]);
         let (collector, seen) = collector_with_snapshot(&mut r);
-        r.e.call(address, &args![ray_body, target_body, 0u32, collector]);
+        let mut words = this.to_vec();
+        words.extend(args![ray_body, target_body, 0u32, collector]);
+        r.e.call(address, &words);
         assert_eq!(seen_rays(&r), moved_rays());
         for cast in r.casts.borrow().iter() {
             // The output is set up again for each ray: fraction 1, two keys of -1 and a zero.
@@ -1104,12 +1110,12 @@ mod tests {
 
     #[test]
     fn closest_points_reports_each_hit_as_a_contact_point() {
-        check_closest_points(0x00d3_7010);
+        check_closest_points(0x00d3_7010, &[0x5555]);
     }
 
     #[test]
     fn the_cdecl_copy_of_closest_points_does_the_same() {
-        check_closest_points(0x00d3_7280);
+        check_closest_points(0x00d3_7280, &[]);
     }
 
     #[test]
@@ -1117,7 +1123,10 @@ mod tests {
         let mut r = rig();
         let (ray_body, target_body) = r.bodies(&[], 0.0);
         let (collector, seen) = collector_with_snapshot(&mut r);
-        r.e.call(0x00d3_7010, &args![ray_body, target_body, 0u32, collector]);
+        r.e.call(
+            0x00d3_7010,
+            &args![0x5555u32, ray_body, target_body, 0u32, collector],
+        );
         assert!(r.casts.borrow().is_empty());
         assert!(seen.borrow().is_empty());
         assert_eq!(r.timer_labels(), [LABEL_RAY_CONVEX, LABEL_END]);
@@ -1129,7 +1138,10 @@ mod tests {
         let (ray_body, target_body) = r.bodies(&[], 0.0);
         let (collector, _) = collector_with_snapshot(&mut r);
         r.e.mem.set_u32(r.timer + 4, r.timer_records + 0x60);
-        r.e.call(0x00d3_7010, &args![ray_body, target_body, 0u32, collector]);
+        r.e.call(
+            0x00d3_7010,
+            &args![0x5555u32, ray_body, target_body, 0u32, collector],
+        );
         assert_eq!(r.e.mem.u32(r.timer + 4), r.timer_records + 0x60);
         assert_eq!(r.e.mem.u32(r.timer_records), 0);
     }

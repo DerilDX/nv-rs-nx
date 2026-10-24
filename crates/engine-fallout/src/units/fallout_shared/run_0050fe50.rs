@@ -64,6 +64,22 @@ pub fn fn_005105f0(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
     this
 }
 
+// Translated from 00510080 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No map name (`thiscall`, no stack words): takes the object's node
+/// (slot +0x174 with 0), runs `NiAVObject::UpdateProperties` (`00a5a040`,
+/// engine map) on it, builds a three-`float` point of zeros on the stack
+/// (`0043d410`, the first given by `FLDZ`/`FSTP`) and passes it to
+/// `00a59c60` on the node. Returns true (`MOV AL,1`).
+pub fn fn_00510080(e: &mut Engine, this: Ptr) -> bool {
+    let node = e.vcall(this.addr(), 0x174, &args![0u32]).u32();
+    e.call(0x00a5_a040, &args![node]);
+    e.with_stack(0xc, |e, point| {
+        e.call(0x0043_d410, &args![point, 0.0f32.to_bits(), 0u32, 0u32]);
+        e.call(0x00a5_9c60, &args![node, point]);
+    });
+    true
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -85,6 +101,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x0051_04b0, fn_005104b0(u32, u32, u32) -> u32),
         entry!(0x0051_04d0, fn_005104d0(u32, u32, u32) -> u32),
         entry!(0x0051_0640, fn_00510640(Ptr)),
+        entry!(0x0051_0080, fn_00510080(Ptr) -> bool),
     ]
 }
 
@@ -875,5 +892,45 @@ mod b016_tests {
         );
         assert_eq!(e.mem.u32(this), 0x0102_9d5c);
         assert_eq!(e.mem.u32(this + 0x70), 0x0102_9ce8);
+    }
+}
+
+#[cfg(test)]
+mod n040_tests {
+    use super::*;
+
+    #[test]
+    fn fn_00510080_updates_the_node_and_sets_a_zero_point() {
+        let mut e = Engine::new();
+        let node = e.mem.alloc(0x10);
+        let vtable = e.mem.alloc(0x200);
+        let this = e.mem.alloc(0x10);
+        e.mem.set_u32(this, vtable);
+        e.mem.set_u32(vtable + 0x174, 0x0090_0174);
+        e.mem.set_u32(this + 4, node);
+        e.register(0x0090_0174, |e, a| {
+            assert_eq!(a[1], 0);
+            Ret {
+                eax: e.mem.u32(a[0] + 4),
+                ..Ret::default()
+            }
+        });
+        e.register(0x00a5_a040, |_, _| Ret::default());
+        e.register(0x0043_d410, |_, _| Ret::default());
+        e.register(0x00a5_9c60, |_, _| Ret::default());
+        e.call_log = Some(vec![]);
+        assert!(e.call(0x0051_0080, &[this]).bool());
+        let log: Vec<_> = e
+            .call_log
+            .take()
+            .unwrap()
+            .into_iter()
+            .filter(|(a, _)| [0x00a5_a040, 0x0043_d410, 0x00a5_9c60].contains(a))
+            .collect();
+        assert_eq!(log.len(), 3);
+        assert_eq!(log[0], (0x00a5_a040, vec![node]));
+        let point = log[1].1[0];
+        assert_eq!(log[1].1[1..], [0, 0, 0]);
+        assert_eq!(log[2], (0x00a5_9c60, vec![node, point]));
     }
 }

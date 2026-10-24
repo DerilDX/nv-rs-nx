@@ -289,9 +289,191 @@ pub fn fn_00eadb90(
     })
 }
 
+/// The nine words (a 3x3 matrix, zero in the image) `00eadf30` starts its sums from.
+const ZERO_MATRIX_011F4248: u32 = 0x011f_4248;
+/// The double 0.5 at `01011588`.
+const HALF_01011588: u32 = 0x0101_1588;
+/// The float at `0101e2bc` (0.1 in the image): the extent a flat box gets.
+const SMALLEST_EXTENT_0101E2BC: u32 = 0x0101_e2bc;
+/// `00a59980` (thiscall on a symmetric `NiMatrix3`: the out eigenvalues, the out axes;
+/// `NiMain/nimatrix3.cpp`, no Xbox name): its eigen decomposition (by its use here).
+const MATRIX_EIGEN: u32 = 0x00a5_9980;
+
+/// Where a corner's coordinate widens a range: below the minimum (a memory word) it becomes the
+/// minimum, otherwise above the maximum it becomes the maximum (each stored as a float; a NaN
+/// changes neither).
+fn widen(minimum: &mut u32, maximum: &mut u32, value: f64) {
+    if x87_load32(*minimum) > value {
+        *minimum = x87_store32(value);
+    } else if value > x87_load32(*maximum) {
+        *maximum = x87_store32(value);
+    }
+}
+
+// Translated from 00eadf30 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`thiscall` on a 0x3c-byte box: center +0, three axes +0xc, extents
+/// +0x30; two words: the point count (a `u16`) and the points; `00e9c850` calls it): fits a box
+/// around the points. The center is their mean (summed from the first point, times `1 / count`,
+/// each stored) and the coordinate ranges are kept. When a range is empty (its maximum equals its
+/// minimum) the box is axis-aligned: identity axes, extents half the ranges (a nonpositive one
+/// raised to the float at `0101e2bc`). Otherwise the sums of the center's products (the same
+/// products added once per point, from the zero matrix at `011f4248`) give a symmetric matrix
+/// whose eigen decomposition (`00a59980`) fills the axes; the projections of `point - center` on
+/// them (from the first point's raw differences) give the ranges, and the center moves to the
+/// middle of each range along its axis (the 0.5 a double at `01011588`) with the extents half
+/// the ranges.
+pub fn fn_00eadf30(e: &mut Engine, this: Ptr, count: u32, points: Ptr) {
+    let b = this.addr();
+    let pts = points.addr();
+    let count = count & 0xffff;
+    let first = [0u32, 4, 8].map(|i| through_float(load(e, pts.wrapping_add(i))));
+    let mut low = first.map(x87_store32);
+    let mut high = low;
+    for i in [0u32, 4, 8] {
+        let word = e.mem.u32(pts.wrapping_add(i));
+        e.mem.set_u32(b + i, word);
+    }
+    for k in 1..count {
+        let p = pts.wrapping_add(12 * k);
+        let x = x87_add(load(e, p), operand(e, b));
+        e.mem.set_u32(b, x87_store32(x));
+        let y = x87_add(load(e, b + 4), operand(e, p.wrapping_add(4)));
+        e.mem.set_u32(b + 4, x87_store32(y));
+        let z = x87_add(load(e, p.wrapping_add(8)), operand(e, b + 8));
+        e.mem.set_u32(b + 8, x87_store32(z));
+        for axis in 0..3 {
+            let value = load(e, p.wrapping_add(4 * axis as u32));
+            widen(&mut low[axis], &mut high[axis], value);
+        }
+    }
+    let inverse = through_float(x87_div(1.0, f64::from(count)));
+    let x = x87_mul(inverse, operand(e, b));
+    e.mem.set_u32(b, x87_store32(x));
+    let y = x87_mul(load(e, b + 4), inverse);
+    e.mem.set_u32(b + 4, x87_store32(y));
+    let z = x87_mul(inverse, operand(e, b + 8));
+    e.mem.set_u32(b + 8, x87_store32(z));
+    let half = x87_load64(e.mem.u64(HALF_01011588));
+    let flat = (0..3).any(|axis| x87_load32(high[axis]) == x87_load32(low[axis]));
+    if flat {
+        let identity = [1.0f32, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0];
+        for (i, v) in (0u32..).zip(identity) {
+            e.mem.set_u32(b + 0xc + 4 * i, v.to_bits());
+        }
+        let ex = x87_mul(x87_sub(x87_load32(high[0]), x87_load32(low[0])), half);
+        let ey = x87_mul(x87_sub(x87_load32(high[1]), x87_load32(low[1])), half);
+        let ez = x87_mul(half, x87_sub(x87_load32(high[2]), x87_m32(low[2])));
+        let smallest = x87_store32(load(e, SMALLEST_EXTENT_0101E2BC));
+        for (i, extent) in (0u32..).zip([ex, ey, ez]) {
+            let mut word = x87_store32(extent);
+            if x87_m32(word) <= 0.0 {
+                word = smallest;
+            }
+            e.mem.set_u32(b + 0x30 + 4 * i, word);
+        }
+        return;
+    }
+    e.with_stack(0x6c, |e, frame| {
+        let f = frame.addr();
+        let matrix = f + 0x48;
+        for i in 0..9u32 {
+            let word = e.mem.u32(ZERO_MATRIX_011F4248 + 4 * i);
+            e.mem.set_u32(matrix + 4 * i, word);
+        }
+        if count > 0 {
+            let cx = load(e, b);
+            let xx = x87_mul(cx, cx);
+            let xy = x87_mul(load(e, b + 4), operand(e, b));
+            let xz = x87_mul(load(e, b), operand(e, b + 8));
+            let cy = load(e, b + 4);
+            let yy = x87_mul(cy, cy);
+            let yz = x87_mul(load(e, b + 4), operand(e, b + 8));
+            let cz = load(e, b + 8);
+            let zz = x87_mul(cz, cz);
+            for _ in 0..count {
+                for (slot, product) in [(0u32, xx), (1, xy), (2, xz), (4, yy), (5, yz), (8, zz)] {
+                    let at = matrix + 4 * slot;
+                    let sum = x87_add(load(e, at), product);
+                    e.mem.set_u32(at, x87_store32(sum));
+                }
+            }
+        }
+        for (from, to) in [(1u32, 3u32), (2, 6), (5, 7)] {
+            let word = x87_quiet_bits(e.mem.u32(matrix + 4 * from));
+            e.mem.set_u32(matrix + 4 * to, word);
+        }
+        let axes = b + 0xc;
+        e.call(MATRIX_EIGEN, &args![matrix, f + 0x3c, axes]);
+        let a = |e: &Engine, i: u32| load(e, axes + 4 * i);
+        let m = |e: &Engine, i: u32| operand(e, axes + 4 * i);
+        low = [0u32, 4, 8]
+            .map(|i| x87_store32(x87_sub(load(e, pts.wrapping_add(i)), operand(e, b + i))));
+        high = low;
+        for k in 1..count {
+            let p = pts.wrapping_add(12 * k);
+            let [dx, dy, dz] = [0u32, 4, 8]
+                .map(|i| through_float(x87_sub(load(e, p.wrapping_add(i)), operand(e, b + i))));
+            let s = x87_add(x87_mul(a(e, 1), dy), x87_mul(dx, m(e, 0)));
+            let p0 = through_float(x87_add(x87_mul(a(e, 2), dz), s));
+            widen(&mut low[0], &mut high[0], p0);
+            let s = x87_add(x87_mul(a(e, 3), dx), x87_mul(dy, m(e, 4)));
+            let p1 = through_float(x87_add(s, x87_mul(a(e, 5), dz)));
+            widen(&mut low[1], &mut high[1], p1);
+            let c = x87_mul(dx, a(e, 6));
+            let d = x87_mul(dy, a(e, 7));
+            let s = x87_add(d, c);
+            let p2 = through_float(x87_add(x87_mul(dz, a(e, 8)), s));
+            widen(&mut low[2], &mut high[2], p2);
+        }
+        // The center moves to the middle of each range along its axis.
+        let middle = |axis: usize| x87_add(x87_load32(high[axis]), x87_m32(low[axis]));
+        let m0 = through_float(x87_mul(middle(0), half));
+        let t = [
+            through_float(x87_mul(a(e, 0), m0)),
+            through_float(x87_mul(a(e, 1), m0)),
+            through_float(x87_mul(m0, m(e, 2))),
+        ];
+        let cx = through_float(x87_add(t[0], operand(e, b)));
+        e.mem.set_u32(b, x87_store32(cx));
+        let cy = through_float(x87_add(load(e, b + 4), t[1]));
+        e.mem.set_u32(b + 4, x87_store32(cy));
+        let cz = through_float(x87_add(t[2], operand(e, b + 8)));
+        e.mem.set_u32(b + 8, x87_store32(cz));
+        let m1 = through_float(x87_mul(middle(1), half));
+        let t = [
+            through_float(x87_mul(a(e, 3), m1)),
+            through_float(x87_mul(a(e, 4), m1)),
+            through_float(x87_mul(m1, m(e, 5))),
+        ];
+        let cx = through_float(x87_add(cx, t[0]));
+        e.mem.set_u32(b, x87_store32(cx));
+        let cy = through_float(x87_add(cy, t[1]));
+        e.mem.set_u32(b + 4, x87_store32(cy));
+        let cz = through_float(x87_add(cz, t[2]));
+        e.mem.set_u32(b + 8, x87_store32(cz));
+        let s2 = x87_add(x87_load32(high[2]), x87_load32(low[2]));
+        let m2 = through_float(x87_mul(s2, half));
+        let t = [
+            through_float(x87_mul(m2, m(e, 6))),
+            through_float(x87_mul(a(e, 7), m2)),
+            through_float(x87_mul(m2, m(e, 8))),
+        ];
+        e.mem.set_u32(b, x87_store32(x87_add(cx, t[0])));
+        e.mem.set_u32(b + 4, x87_store32(x87_add(cy, t[1])));
+        e.mem.set_u32(b + 8, x87_store32(x87_add(cz, t[2])));
+        let ex = x87_mul(x87_sub(x87_load32(high[0]), x87_m32(low[0])), half);
+        e.mem.set_u32(b + 0x30, x87_store32(ex));
+        let ey = x87_mul(x87_sub(x87_load32(high[1]), x87_m32(low[1])), half);
+        e.mem.set_u32(b + 0x34, x87_store32(ey));
+        let ez = x87_mul(half, x87_sub(x87_m32(high[2]), x87_load32(low[2])));
+        e.mem.set_u32(b + 0x38, x87_store32(ez));
+    });
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x00ea_df30, fn_00eadf30(Ptr, u32, Ptr)),
         entry!(0x00eada70, fn_00eada70(Ptr, Ptr, Ptr) -> bool),
         entry!(
             0x00eadb90,
@@ -447,5 +629,69 @@ mod tests {
         assert_eq!((t, u, v), (1.0, 0.25, 0.25));
         assert!(!ray(&mut e, [0.25, 0.25, 1.0], [0.0, 0.0, -1.0], false, 1).0);
         assert!(!ray(&mut e, [0.75, 0.75, 1.0], [0.0, 0.0, -1.0], false, 0).0);
+    }
+}
+
+#[cfg(test)]
+mod box_fit_tests {
+    use super::*;
+
+    fn points(e: &mut Engine, values: &[[f32; 3]]) -> u32 {
+        let at = e.mem.alloc(12 * values.len() as u32);
+        for (i, p) in (0u32..).zip(values) {
+            for (k, v) in (0u32..).zip(p) {
+                e.mem.set_f32(at + 12 * i + 4 * k, *v);
+            }
+        }
+        at
+    }
+
+    fn read(e: &Engine, at: u32, n: u32) -> Vec<f32> {
+        (0..n).map(|i| e.mem.f32(at + 4 * i)).collect()
+    }
+
+    fn setup(e: &mut Engine) {
+        e.map(0x0101_1000, 0x1000);
+        e.map(0x0101_e000, 0x1000);
+        e.map(0x011f_4000, 0x1000);
+        e.mem.set_f64(HALF_01011588, 0.5);
+        e.mem.set_f32(SMALLEST_EXTENT_0101E2BC, 0.1);
+    }
+
+    #[test]
+    fn a_flat_set_gets_an_axis_aligned_box() {
+        let mut e = Engine::new();
+        setup(&mut e);
+        let p = points(&mut e, &[[0.0, 0.0, 0.0], [2.0, 0.0, 4.0], [4.0, 0.0, 2.0]]);
+        let b = e.mem.alloc(0x3c);
+        e.call(0x00ea_df30, &args![b, 0xffff_0003u32, p]);
+        assert_eq!(read(&e, b, 3), vec![2.0, 0.0, 2.0]);
+        assert_eq!(
+            read(&e, b + 0xc, 9),
+            vec![1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0]
+        );
+        assert_eq!(read(&e, b + 0x30, 3), vec![2.0, 0.1, 2.0]);
+    }
+
+    #[test]
+    fn a_full_set_uses_the_eigen_axes() {
+        let mut e = Engine::new();
+        setup(&mut e);
+        e.register(MATRIX_EIGEN, |e, a| {
+            assert_eq!(
+                read(e, a[0], 9),
+                vec![27.0, 27.0, 36.0, 27.0, 27.0, 36.0, 36.0, 36.0, 48.0]
+            );
+            for i in 0..9 {
+                let v = if i % 4 == 0 { 1.0 } else { 0.0 };
+                e.mem.set_f32(a[2] + 4 * i, v);
+            }
+            Ret::default()
+        });
+        let p = points(&mut e, &[[0.0, 0.0, 0.0], [3.0, 6.0, 3.0], [6.0, 3.0, 9.0]]);
+        let b = e.mem.alloc(0x3c);
+        e.call(0x00ea_df30, &args![b, 3u32, p]);
+        assert_eq!(read(&e, b, 3), vec![3.0, 3.0, 4.5]);
+        assert_eq!(read(&e, b + 0x30, 3), vec![3.0, 3.0, 4.5]);
     }
 }

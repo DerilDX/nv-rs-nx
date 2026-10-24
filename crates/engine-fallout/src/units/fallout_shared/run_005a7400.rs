@@ -166,9 +166,203 @@ pub fn fn_005a7d40(e: &mut Engine, this: Ptr) {
     e.call(0x0048_3630, &args![this]);
 }
 
+/// `__RTDynamicCast` (`00ec43fb`, cdecl), the source type descriptor and
+/// the targets: `TESLoadScreenType`'s (`01186110`, by its RTTI name) and `TESRecipeCategory`'s
+/// (`01186490`, by its RTTI name) as these functions pass them.
+const DYNAMIC_CAST: u32 = 0x00ec_43fb;
+const CAST_SOURCE: u32 = 0x0118_3028;
+const LOAD_SCREEN_TYPE: u32 = 0x0118_6110;
+const CATEGORY_TYPE: u32 = 0x0118_6490;
+/// Whether the file's words are swapped (`00401500`, no arguments).
+const SWAPPED: u32 = 0x0040_1500;
+/// `TESForm::StartForm`, `TESForm::__SaveData`, `TESForm::CloseForm`,
+/// `TESForm::CopyAllComponents`, `TESForm::CompareAllComponents`.
+const START_FORM: u32 = 0x0048_55a0;
+const SAVE_DATA: u32 = 0x0048_5e20;
+const CLOSE_FORM: u32 = 0x0048_5680;
+const COPY_COMPONENTS: u32 = 0x0048_51b0;
+const COMPARE_COMPONENTS: u32 = 0x0048_5270;
+/// The copy and compare helpers (`00401460`, `_memcmp` `00ec4835`; cdecl:
+/// two addresses and a size).
+const COPY_BYTES: u32 = 0x0040_1460;
+const COMPARE_BYTES: u32 = 0x00ec_4835;
+
+// Translated from 005a7400 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Swaps the 22 words of `TESLoadScreenType`'s 0x58-byte data at +0x18 (`this`; the engine map
+/// has no name): `00401080(word, 0)` (cdecl) on each, in the exe's order
+/// +0x28, +0x10, +4, +8, +0x14, +0xC, +0x1C, +0x20, +0x24, +0x38, +0x2C,
+/// +0x30, +0x3C, +0x34, +0x44, +0x48, +0x4C, +0x50, +0, +0x18, +0x40,
+/// +0x54.
+pub fn fn_005a7400(e: &mut Engine, this: Ptr) {
+    for offset in [
+        0x28u32, 0x10, 4, 8, 0x14, 0xc, 0x1c, 0x20, 0x24, 0x38, 0x2c, 0x30, 0x3c, 0x34, 0x44, 0x48,
+        0x4c, 0x50, 0, 0x18, 0x40, 0x54,
+    ] {
+        e.call(0x0040_1080, &args![this.addr() + offset, 0u32]);
+    }
+}
+
+// Translated from 005a7630 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TESLoadScreenType`'s record writer (no stack words; the engine map has no
+/// name): `TESForm::StartForm`, the 0x58 bytes at +0x18 as
+/// `TESForm::__SaveData(+0x18, 0x58)`, swapped by `005a7400` before and
+/// after when `00401500` answers true, then `TESForm::CloseForm`.
+pub fn fn_005a7630(e: &mut Engine, this: Ptr) {
+    let base = this.addr();
+    e.call(START_FORM, &args![this]);
+    if e.call(SWAPPED, &args![]).bool() {
+        fn_005a7400(e, Ptr::new(base + 0x18));
+    }
+    e.call(SAVE_DATA, &args![this, base + 0x18, 0x58u32]);
+    if e.call(SWAPPED, &args![]).bool() {
+        fn_005a7400(e, Ptr::new(base + 0x18));
+    }
+    e.call(CLOSE_FORM, &args![this]);
+}
+
+// Translated from 005a7690 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TESLoadScreenType`'s copy (`RET 4`: the source form; the engine map has no
+/// name): the source through `__RTDynamicCast(source, 0, 01183028,
+/// 01186110, 0)`; nothing without it, otherwise the 0x58 bytes at +0x18
+/// (`00401460`) and `TESForm::CopyAllComponents` given the uncast source.
+pub fn fn_005a7690(e: &mut Engine, this: Ptr, source: u32) {
+    let base = this.addr();
+    let other = e
+        .call(
+            DYNAMIC_CAST,
+            &args![source, 0u32, CAST_SOURCE, LOAD_SCREEN_TYPE, 0u32],
+        )
+        .u32();
+    if other == 0 {
+        return;
+    }
+    e.call(COPY_BYTES, &args![base + 0x18, other + 0x18, 0x58u32]);
+    e.call(COPY_COMPONENTS, &args![this, source]);
+}
+
+// Translated from 005a76f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TESLoadScreenType`'s compare (`RET 4`: the other form; true when they differ;
+/// the engine map has no name): true when the cast as in `005a7690`
+/// fails or `_memcmp` of the 0x58 bytes at +0x18 (the other's through
+/// `00500940`) is not 0, otherwise `TESForm::CompareAllComponents`.
+pub fn fn_005a76f0(e: &mut Engine, this: Ptr, form: u32) -> bool {
+    let base = this.addr();
+    let other = e
+        .call(
+            DYNAMIC_CAST,
+            &args![form, 0u32, CAST_SOURCE, LOAD_SCREEN_TYPE, 0u32],
+        )
+        .u32();
+    if other == 0 {
+        return true;
+    }
+    let data = e.call(0x0050_0940, &args![other]).u32();
+    if e.call(COMPARE_BYTES, &args![base + 0x18, data, 0x58u32])
+        .u32()
+        != 0
+    {
+        return true;
+    }
+    e.call(COMPARE_COMPONENTS, &args![this, other]).bool()
+}
+
+// Translated from 005a7770 (decompiled, FalloutNV.exe 1.4.0.525)
+/// A 16-bit sum starting at 0 with one term, `00484bf0(word)` (`RET 4`;
+/// the engine map has no name): that call's 16-bit result.
+pub fn fn_005a7770(e: &mut Engine, this: Ptr, word: u32) -> u16 {
+    let sum = 0u16;
+    let term = e.call(0x0048_4bf0, &args![this, word]).u16();
+    sum.wrapping_add(term)
+}
+
+// Translated from 005a7a90 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TESRecipeCategory`'s record writer (no stack words; the engine map has
+/// no name): `TESForm::StartForm`, `TESFullName::Save` on +0x18, the flag
+/// byte at +0x24 as `TESForm::__SaveData(+0x24, 1)`, with `00483710` run on
+/// it before and after when `00401500` answers true, then
+/// `TESForm::CloseForm`.
+pub fn fn_005a7a90(e: &mut Engine, this: Ptr) {
+    let base = this.addr();
+    e.call(START_FORM, &args![this]);
+    e.call(0x0048_7010, &args![base + 0x18]);
+    if e.call(SWAPPED, &args![]).bool() {
+        e.call(0x0048_3710, &args![base + 0x24]);
+    }
+    e.call(SAVE_DATA, &args![this, base + 0x24, 1u32]);
+    if e.call(SWAPPED, &args![]).bool() {
+        e.call(0x0048_3710, &args![base + 0x24]);
+    }
+    e.call(CLOSE_FORM, &args![this]);
+}
+
+// Translated from 005a7b00 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TESRecipeCategory`'s copy (`RET 4`: the source form; the engine map
+/// has no name): the source through `__RTDynamicCast(source, 0, 01183028,
+/// 01186490, 0)`; nothing without it, otherwise the byte at +0x24
+/// (`00401460`) and `TESForm::CopyAllComponents` given the uncast source.
+pub fn fn_005a7b00(e: &mut Engine, this: Ptr, source: u32) {
+    let base = this.addr();
+    let other = e
+        .call(
+            DYNAMIC_CAST,
+            &args![source, 0u32, CAST_SOURCE, CATEGORY_TYPE, 0u32],
+        )
+        .u32();
+    if other == 0 {
+        return;
+    }
+    e.call(COPY_BYTES, &args![base + 0x24, other + 0x24, 1u32]);
+    e.call(COPY_COMPONENTS, &args![this, source]);
+}
+
+// Translated from 005a7b60 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TESRecipeCategory`'s compare (`RET 4`: the other form; true when they
+/// differ; the engine map has no name): true when the cast as in
+/// `005a7b00` fails or `_memcmp` of the byte at +0x24 (the other's through
+/// `00430830`) is not 0, otherwise `TESForm::CompareAllComponents`.
+pub fn fn_005a7b60(e: &mut Engine, this: Ptr, form: u32) -> bool {
+    let base = this.addr();
+    let other = e
+        .call(
+            DYNAMIC_CAST,
+            &args![form, 0u32, CAST_SOURCE, CATEGORY_TYPE, 0u32],
+        )
+        .u32();
+    if other == 0 {
+        return true;
+    }
+    let data = e.call(0x0043_0830, &args![other]).u32();
+    if e.call(COMPARE_BYTES, &args![base + 0x24, data, 1u32]).u32() != 0 {
+        return true;
+    }
+    e.call(COMPARE_COMPONENTS, &args![this, other]).bool()
+}
+
+// Translated from 005a7c00 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Whether two objects differ (`RET 4`: the other; the engine map has no
+/// name): true when `00559450` or `00726070` (both thiscall, no stack
+/// words) answers differently for them.
+pub fn fn_005a7c00(e: &mut Engine, this: Ptr, other: u32) -> bool {
+    let mine = e.call(0x0055_9450, &args![this]).u32();
+    if mine != e.call(0x0055_9450, &args![other]).u32() {
+        return true;
+    }
+    let mine = e.call(0x0072_6070, &args![this]).u32();
+    mine != e.call(0x0072_6070, &args![other]).u32()
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x005a_7400, fn_005a7400(Ptr)),
+        entry!(0x005a_7630, fn_005a7630(Ptr)),
+        entry!(0x005a_7690, fn_005a7690(Ptr, u32)),
+        entry!(0x005a_76f0, fn_005a76f0(Ptr, u32) -> bool),
+        entry!(0x005a_7770, fn_005a7770(Ptr, u32) -> u16),
+        entry!(0x005a_7a90, fn_005a7a90(Ptr)),
+        entry!(0x005a_7b00, fn_005a7b00(Ptr, u32)),
+        entry!(0x005a_7b60, fn_005a7b60(Ptr, u32) -> bool),
+        entry!(0x005a_7c00, fn_005a7c00(Ptr, u32) -> bool),
         entry!(0x005a_77b0, fn_005a77b0(Ptr) -> Ptr),
         entry!(0x005a_7c50, fn_005a7c50(Ptr) -> Ptr),
         entry!(0x005a_7870, fn_005a7870(Ptr, u32) -> Ptr),
@@ -435,5 +629,171 @@ mod recipe_tests {
         let (e, _, _, result) = category(0x6a, false);
         assert!(!result);
         assert!(calls(&e, 0x0048_5110).is_empty());
+    }
+}
+
+#[cfg(test)]
+mod n041_tests {
+    use super::*;
+
+    fn ret(eax: u32) -> Ret {
+        Ret {
+            eax,
+            ..Ret::default()
+        }
+    }
+
+    fn calls(e: &Engine, addr: u32) -> Vec<Vec<u32>> {
+        e.call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|(a, _)| *a == addr)
+            .map(|(_, w)| w.clone())
+            .collect()
+    }
+
+    fn quiet(e: &mut Engine, addrs: &[u32]) {
+        for &a in addrs {
+            e.register(a, |_, _| Ret::default());
+        }
+    }
+
+    #[test]
+    fn fn_005a7400_swaps_the_words_in_order() {
+        let mut e = Engine::new();
+        quiet(&mut e, &[0x0040_1080]);
+        let data = e.mem.alloc(0x58);
+        e.call_log = Some(vec![]);
+        e.call(0x005a_7400, &args![data]);
+        let offsets: Vec<u32> = calls(&e, 0x0040_1080)
+            .iter()
+            .map(|c| {
+                assert_eq!(c[1], 0);
+                c[0] - data
+            })
+            .collect();
+        assert_eq!(
+            offsets,
+            vec![
+                0x28, 0x10, 4, 8, 0x14, 0xc, 0x1c, 0x20, 0x24, 0x38, 0x2c, 0x30, 0x3c, 0x34, 0x44,
+                0x48, 0x4c, 0x50, 0, 0x18, 0x40, 0x54
+            ]
+        );
+    }
+
+    #[test]
+    fn load_screen_type_and_category_writers_swap_only_when_asked() {
+        let mut e = Engine::new();
+        quiet(
+            &mut e,
+            &[
+                START_FORM,
+                SAVE_DATA,
+                CLOSE_FORM,
+                0x0040_1080,
+                0x0048_7010,
+                0x0048_3710,
+            ],
+        );
+        let this = e.mem.alloc(0x5c);
+        for swap in [0u32, 1] {
+            e.register_double(SWAPPED, move |_, _| ret(swap));
+            e.call_log = Some(vec![]);
+            e.call(0x005a_7630, &args![this]);
+            assert_eq!(calls(&e, START_FORM), vec![vec![this]]);
+            assert_eq!(calls(&e, SAVE_DATA), vec![vec![this, this + 0x18, 0x58]]);
+            assert_eq!(calls(&e, 0x0040_1080).len(), 44 * swap as usize);
+            assert_eq!(calls(&e, CLOSE_FORM), vec![vec![this]]);
+
+            e.call_log = Some(vec![]);
+            e.call(0x005a_7a90, &args![this]);
+            assert_eq!(calls(&e, 0x0048_7010), vec![vec![this + 0x18]]);
+            assert_eq!(calls(&e, SAVE_DATA), vec![vec![this, this + 0x24, 1]]);
+            let swaps = calls(&e, 0x0048_3710);
+            assert_eq!(swaps.len(), 2 * swap as usize);
+            assert!(swaps.iter().all(|c| c == &vec![this + 0x24]));
+            assert_eq!(calls(&e, CLOSE_FORM), vec![vec![this]]);
+        }
+    }
+
+    #[test]
+    fn load_screen_type_and_category_copies() {
+        let mut e = Engine::new();
+        quiet(&mut e, &[COPY_BYTES, COPY_COMPONENTS]);
+        e.register(DYNAMIC_CAST, |_, a| {
+            ret(if a[0] == 1 { 0 } else { a[0] + 0x100 })
+        });
+        let this = e.mem.alloc(0x5c);
+        for (addr, target, offset, size) in [
+            (0x005a_7690u32, LOAD_SCREEN_TYPE, 0x18u32, 0x58u32),
+            (0x005a_7b00, CATEGORY_TYPE, 0x24, 1),
+        ] {
+            e.call_log = Some(vec![]);
+            e.call(addr, &args![this, 0x4000u32]);
+            assert_eq!(
+                calls(&e, DYNAMIC_CAST),
+                vec![vec![0x4000, 0, CAST_SOURCE, target, 0]]
+            );
+            assert_eq!(
+                calls(&e, COPY_BYTES),
+                vec![vec![this + offset, 0x4100 + offset, size]]
+            );
+            assert_eq!(calls(&e, COPY_COMPONENTS), vec![vec![this, 0x4000]]);
+            e.call_log = Some(vec![]);
+            e.call(addr, &args![this, 1u32]);
+            assert!(calls(&e, COPY_BYTES).is_empty());
+        }
+    }
+
+    #[test]
+    fn load_screen_type_and_category_compares() {
+        let mut e = Engine::new();
+        e.register(DYNAMIC_CAST, |_, a| {
+            ret(if a[0] == 1 { 0 } else { a[0] + 0x100 })
+        });
+        e.register(0x0050_0940, |_, a| ret(a[0] + 0x18));
+        e.register(0x0043_0830, |_, a| ret(a[0] + 0x24));
+        let this = e.mem.alloc(0x5c);
+        for (addr, offset, size) in [(0x005a_76f0u32, 0x18u32, 0x58u32), (0x005a_7b60, 0x24, 1)] {
+            for (order, components, differs) in [(0u32, 0u32, false), (5, 0, true), (0, 1, true)] {
+                e.register_double(COMPARE_BYTES, move |_, _| ret(order));
+                e.register_double(COMPARE_COMPONENTS, move |_, _| ret(components));
+                e.call_log = Some(vec![]);
+                assert_eq!(e.call(addr, &args![this, 0x4000u32]).bool(), differs);
+                assert_eq!(
+                    calls(&e, COMPARE_BYTES),
+                    vec![vec![this + offset, 0x4100 + offset, size]]
+                );
+            }
+            assert!(e.call(addr, &args![this, 1u32]).bool());
+        }
+    }
+
+    #[test]
+    fn fn_005a7770_returns_the_16_bit_term() {
+        let mut e = Engine::new();
+        e.register(0x0048_4bf0, |_, a| ret(0xffff_0000 | a[1]));
+        let this = e.mem.alloc(4);
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x005a_7770, &args![this, 4u32]).u32() & 0xffff, 4);
+        assert_eq!(calls(&e, 0x0048_4bf0), vec![vec![this, 4]]);
+    }
+
+    #[test]
+    fn fn_005a7c00_compares_the_two_answers() {
+        let mut e = Engine::new();
+        e.register(0x0055_9450, |e, a| ret(e.mem.u32(a[0])));
+        e.register(0x0072_6070, |e, a| ret(e.mem.u32(a[0] + 4)));
+        let this = e.mem.alloc(8);
+        let other = e.mem.alloc(8);
+        assert!(!e.call(0x005a_7c00, &args![this, other]).bool());
+        e.mem.set_u32(other + 4, 1);
+        assert!(e.call(0x005a_7c00, &args![this, other]).bool());
+        e.mem.set_u32(other + 4, 0);
+        e.mem.set_u32(other, 1);
+        e.call_log = Some(vec![]);
+        assert!(e.call(0x005a_7c00, &args![this, other]).bool());
+        assert!(calls(&e, 0x0072_6070).is_empty());
     }
 }

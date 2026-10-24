@@ -65,12 +65,74 @@ pub fn tes_image_space_modifiable_form_init_item(e: &mut Engine, this: Ptr, owne
     }
 }
 
+/// The `BaseFormComponent` (`01183040`) and `TESImageSpaceModifiableForm`
+/// (`01186ae8`) type descriptors (their names read at +8).
+const TYPE_BASE_FORM_COMPONENT: u32 = 0x0118_3040;
+const TYPE_MODIFIABLE_FORM: u32 = 0x0118_6ae8;
+/// The getter of the word at +4 (`00726070`, `thiscall`) and its setter
+/// (`006ecd40`, `thiscall`, one word; the engine map's name for it is folded
+/// code).
+const GET_MODIFIER: u32 = 0x0072_6070;
+const SET_MODIFIER: u32 = 0x006e_cd40;
+
+/// `other` cast from `BaseFormComponent` to `TESImageSpaceModifiableForm`.
+fn cast_modifiable_form(e: &mut Engine, other: Ptr) -> u32 {
+    e.call(
+        DYNAMIC_CAST,
+        &args![
+            other,
+            0u32,
+            TYPE_BASE_FORM_COMPONENT,
+            TYPE_MODIFIABLE_FORM,
+            0u32
+        ],
+    )
+    .u32()
+}
+
+// Translated from 00487570 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TESImageSpaceModifiableForm::CopyComponent` (Xbox PDB): when `other`
+/// is a `TESImageSpaceModifiableForm`, takes its modifier (+4, through
+/// `00726070` and `006ecd40`).
+pub fn tes_image_space_modifiable_form_copy_component(e: &mut Engine, this: Ptr, other: Ptr) {
+    let source = cast_modifiable_form(e, other);
+    if source == 0 {
+        return;
+    }
+    let modifier = e.call(GET_MODIFIER, &args![source]).u32();
+    e.call(SET_MODIFIER, &args![this, modifier]);
+}
+
+// Translated from 004875c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TESImageSpaceModifiableForm::CompareComponent` (Xbox PDB): true
+/// (different) when `other` is no `TESImageSpaceModifiableForm` or the
+/// modifiers (`00726070`) differ.
+pub fn tes_image_space_modifiable_form_compare_component(
+    e: &mut Engine,
+    this: Ptr,
+    other: Ptr,
+) -> bool {
+    let source = cast_modifiable_form(e, other);
+    if source == 0 {
+        return true;
+    }
+    let own = e.call(GET_MODIFIER, &args![this]).u32();
+    own != e.call(GET_MODIFIER, &args![source]).u32()
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
-    vec![entry!(
-        0x0048_7490,
-        tes_image_space_modifiable_form_init_item(Ptr, Ptr)
-    )]
+    vec![
+        entry!(
+            0x0048_7490,
+            tes_image_space_modifiable_form_init_item(Ptr, Ptr)
+        ),
+        entry!(
+            0x0048_7570,
+            tes_image_space_modifiable_form_copy_component(Ptr, Ptr)
+        ),
+        entry!(0x0048_75c0, tes_image_space_modifiable_form_compare_component(Ptr, Ptr) -> bool),
+    ]
 }
 
 #[cfg(test)]
@@ -198,5 +260,58 @@ mod tests {
             let log = e.call_log.take().unwrap();
             assert_eq!(calls_to(&log, WARNING), vec![expected]);
         }
+    }
+}
+
+#[cfg(test)]
+mod n043_tests {
+    use super::*;
+
+    fn engine() -> Engine {
+        let mut e = Engine::new();
+        e.register(DYNAMIC_CAST, |_, a| a[0].into_ret());
+        e.register(GET_MODIFIER, |e, a| e.mem.u32(a[0] + 4).into_ret());
+        e.register(SET_MODIFIER, |e, a| {
+            e.mem.set_u32(a[0] + 4, a[1]);
+            Ret::default()
+        });
+        e
+    }
+
+    #[test]
+    fn copy_component_takes_the_modifier() {
+        let mut e = engine();
+        let this = e.mem.alloc(8);
+        let other = e.mem.alloc(8);
+        e.mem.set_u32(other + 4, 0x4444);
+        e.call_log = Some(vec![]);
+        e.call(0x0048_7570, &args![this, other]);
+        assert_eq!(e.mem.u32(this + 4), 0x4444);
+        assert_eq!(
+            e.call_log.as_ref().unwrap()[1],
+            (
+                DYNAMIC_CAST,
+                vec![other, 0, TYPE_BASE_FORM_COMPONENT, TYPE_MODIFIABLE_FORM, 0]
+            )
+        );
+        e.register(DYNAMIC_CAST, |_, _| 0u32.into_ret());
+        e.mem.set_u32(other + 4, 0x5555);
+        e.call(0x0048_7570, &args![this, other]);
+        assert_eq!(e.mem.u32(this + 4), 0x4444);
+    }
+
+    #[test]
+    fn compare_component_compares_the_modifier() {
+        let mut e = engine();
+        let this = e.mem.alloc(8);
+        let other = e.mem.alloc(8);
+        e.mem.set_u32(this + 4, 0x4444);
+        e.mem.set_u32(other + 4, 0x4444);
+        assert!(!e.call(0x0048_75c0, &args![this, other]).bool());
+        e.mem.set_u32(other + 4, 0x4445);
+        assert!(e.call(0x0048_75c0, &args![this, other]).bool());
+        e.register(DYNAMIC_CAST, |_, _| 0u32.into_ret());
+        e.mem.set_u32(other + 4, 0x4444);
+        assert!(e.call(0x0048_75c0, &args![this, other]).bool());
     }
 }

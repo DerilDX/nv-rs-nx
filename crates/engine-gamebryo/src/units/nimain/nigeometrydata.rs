@@ -1051,9 +1051,11 @@ pub fn fn_00a66970(e: &mut Engine, first: Ptr, second: Ptr, count: u32) -> i32 {
 }
 
 // Translated from 00a669d0 (decompiled, FalloutNV.exe 1.4.0.525)
-/// `NiGeometryData::SetGroup` (Xbox PDB; static, one stack word): stores the group in
+/// `NiGeometryData::SetGroup` (Xbox PDB; static there, one stack word): stores the group in
 /// `011f4880`, the global `GetGroup` answers.
-pub fn ni_geometry_data_set_group(e: &mut Engine, group: Ptr) {
+/// On the PC it is a vtable slot (33 of the `NiGeometryData` vtables, no direct callers), so
+/// it is called with `ECX` set: `this` comes first, unread.
+pub fn ni_geometry_data_set_group(e: &mut Engine, _this: Ptr, group: Ptr) {
     e.mem.set_u32(GEOMETRY_GROUP, group.addr());
 }
 
@@ -1823,7 +1825,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00a67bf0, ni_geometry_data_get_rtti() -> Ptr),
         entry!(0x00a68800, ni_geometry_data_scalar_deleting_destructor(Ptr, u32) -> Ptr),
         entry!(0x00a6_6970, fn_00a66970(Ptr, Ptr, u32) -> i32),
-        entry!(0x00a6_69d0, ni_geometry_data_set_group(Ptr)),
+        entry!(0x00a6_69d0, ni_geometry_data_set_group(Ptr, Ptr)),
         entry!(0x00a6_69f0, ni_geometry_data_create_normals(Ptr, u32)),
         entry!(0x00a6_6a60, fn_00a66a60(Ptr, u32)),
         entry!(
@@ -2624,7 +2626,7 @@ mod n016_tests {
     #[test]
     fn set_group_stores_the_global() {
         let mut e = engine();
-        e.call(0x00a6_69d0, &args![0x0e70_0000u32]);
+        e.call(0x00a6_69d0, &args![0x5555u32, 0x0e70_0000u32]);
         assert_eq!(e.mem.u32(GEOMETRY_GROUP), 0x0e70_0000);
     }
 

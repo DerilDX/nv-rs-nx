@@ -495,6 +495,514 @@ pub fn fn_00598020(e: &mut Engine, this: Ptr) -> u8 {
     e.mem.u8(this.addr() + 0x37)
 }
 
+/// The list helpers of the controller's form lists: the item slot of a
+/// node (`006815c0`, its address), the next node (`00726070`), whether the
+/// list is empty (`008256d0`) and its count (`005ae380`).
+const LIST_ITEM: u32 = 0x0068_15c0;
+const LIST_NEXT: u32 = 0x0072_6070;
+const LIST_IS_EMPTY: u32 = 0x0082_56d0;
+const LIST_COUNT: u32 = 0x005a_e380;
+/// The form id of a form (`0084e3a0`, thiscall).
+const FORM_ID: u32 = 0x0084_e3a0;
+/// Writes a 4-byte chunk (`00485910`, cdecl: the chunk type, the word).
+const WRITE_CHUNK: u32 = 0x0048_5910;
+/// `__RTDynamicCast` (`00ec43fb`, cdecl) and the two type descriptors
+/// these functions pass to it (source and target).
+const DYNAMIC_CAST: u32 = 0x00ec_43fb;
+const CAST_SOURCE: u32 = 0x0118_3028;
+const CAST_TARGET: u32 = 0x0118_418c;
+/// The six form lists with the chunk each is saved as by `00596790`.
+const SAVED_LISTS: [(u32, u32); 6] = [
+    (0x88, 0x4d41_4e48), // HNAM
+    (0x90, 0x4d41_4e5a), // ZNAM
+    (0x98, 0x4d41_4e58), // XNAM
+    (0xa0, 0x4d41_4e59), // YNAM
+    (0xa8, 0x4d41_4e4c), // LNAM
+    (0xb0, 0x4d41_4e47), // GNAM
+];
+/// The audio media helpers: the fade out (`00830680`, cdecl: milliseconds,
+/// channel), the length of what a channel plays (`008308c0`, cdecl), pause
+/// and unpause (`008305e0`, `00830610`).
+const MEDIA_FADE: u32 = 0x0083_0680;
+const MEDIA_PLAYED: u32 = 0x0083_08c0;
+const MEDIA_PAUSE: u32 = 0x0083_05e0;
+const MEDIA_UNPAUSE: u32 = 0x0083_0610;
+/// The sound helpers: `BSAudio::QInstance` (`00453a70`),
+/// `BSAudio::GetSoundHandleByNumericID` (`00ad73b0`), `BSSoundHandle::Play`
+/// (`00ad8830`) and the handle's destructor (`00483710`).
+const AUDIO_INSTANCE: u32 = 0x0045_3a70;
+const AUDIO_HANDLE_BY_ID: u32 = 0x00ad_73b0;
+const SOUND_PLAY: u32 = 0x00ad_8830;
+const SOUND_HANDLE_DESTROY: u32 = 0x0048_3710;
+/// The object byte `00598060` compares with +0x32 (`0071aa80`, thiscall).
+const LOCATION_BYTE: u32 = 0x0071_aa80;
+
+/// The word in the item slot of a list node.
+fn list_item(e: &mut Engine, node: u32) -> u32 {
+    let slot = e.call(LIST_ITEM, &args![node]).u32();
+    e.mem.u32(slot)
+}
+
+/// The sound sequence these functions share: the form id of `form`
+/// (`0084e3a0`), a sound handle on the stack from
+/// `BSAudio::GetSoundHandleByNumericID(handle, id, 0x901)` on
+/// `BSAudio::QInstance()`, `BSSoundHandle::Play(0)` on what it returns,
+/// then the handle's destructor.
+fn play_form_sound(e: &mut Engine, form: u32) {
+    let id = e.call(FORM_ID, &args![form]).u32();
+    e.with_stack(0xc, |e, handle| {
+        let audio = e.call(AUDIO_INSTANCE, &args![]).u32();
+        let sound = e
+            .call(AUDIO_HANDLE_BY_ID, &args![audio, handle, id, 0x901u32])
+            .u32();
+        e.call(SOUND_PLAY, &args![sound, 0u32]);
+        e.call(SOUND_HANDLE_DESTROY, &args![handle]);
+    });
+}
+
+/// The `float` at `offset` times 1000.0 (`FLD`, `FMUL double [01017b70]`).
+fn millis_of(e: &mut Engine, base: u32, offset: u32) -> f64 {
+    let thousand = e.global::<f64>(THOUSAND);
+    x87_mul(x87_load32(e.mem.u32(base + offset)), thousand)
+}
+
+// Translated from 00596790 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The media location controller's record writer (no stack words; the
+/// engine map has no name): `TESForm::StartForm`, `TESFullName::Save` on
+/// +0x18, then the chunks through `00485910`: `NAM1`..`NAM7` (+0x6C word,
+/// +0x70, +0x74, +0x7C floats, +0x80, +0x84 words, +0x78 float), each
+/// non-empty form list's form ids (+0x88 `HNAM`, +0x90 `ZNAM`, +0x98
+/// `XNAM`, +0xA0 `YNAM`, +0xA8 `LNAM`, +0xB0 `GNAM`; the loader reads
+/// +0x90 from `YNAM` and +0xA0 from `XNAM`, the exe writes these), `RNAM`
+/// (the form id of +0x60 when set), `FNAM` (+0x64), then
+/// `TESForm::CloseForm`.
+pub fn fn_00596790(e: &mut Engine, this: Ptr) {
+    let base = this.addr();
+    e.call(0x0048_55a0, &args![this]);
+    e.call(0x0048_7010, &args![base + 0x18]);
+    let word = e.mem.u32(base + 0x6c);
+    e.call(WRITE_CHUNK, &args![0x314d_414eu32, word]);
+    for (chunk, offset) in [
+        (0x324d_414eu32, 0x70u32),
+        (0x334d_414e, 0x74),
+        (0x344d_414e, 0x7c),
+    ] {
+        // FLD/FSTP onto the stack.
+        let value = x87_quiet_bits(e.mem.u32(base + offset));
+        e.call(WRITE_CHUNK, &args![chunk, value]);
+    }
+    let word = e.mem.u32(base + 0x80);
+    e.call(WRITE_CHUNK, &args![0x354d_414eu32, word]);
+    let word = e.mem.u32(base + 0x84);
+    e.call(WRITE_CHUNK, &args![0x364d_414eu32, word]);
+    let value = x87_quiet_bits(e.mem.u32(base + 0x78));
+    e.call(WRITE_CHUNK, &args![0x374d_414eu32, value]);
+    for (offset, chunk) in SAVED_LISTS {
+        let mut node = base + offset;
+        if e.call(LIST_IS_EMPTY, &args![node]).bool() {
+            continue;
+        }
+        while node != 0 {
+            let form = list_item(e, node);
+            if form == 0 {
+                break;
+            }
+            let id = e.call(FORM_ID, &args![form]).u32();
+            e.call(WRITE_CHUNK, &args![chunk, id]);
+            node = e.call(LIST_NEXT, &args![node]).u32();
+        }
+    }
+    let form = e.mem.u32(base + 0x60);
+    if form != 0 {
+        let id = e.call(FORM_ID, &args![form]).u32();
+        e.call(WRITE_CHUNK, &args![0x4d41_4e52u32, id]);
+    }
+    let word = e.mem.u32(base + 0x64);
+    e.call(WRITE_CHUNK, &args![0x4d41_4e46u32, word]);
+    e.call(0x0048_5680, &args![this]);
+}
+
+// Translated from 00596ac0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The media location controller's copy (`RET 4`: the source form; the
+/// engine map has no name): the source through `__RTDynamicCast(source, 0,
+/// 01183028, 0118418c, 0)`; nothing without it. Otherwise
+/// `TESForm::CopyAllComponents`, the words +0x6C, +0x80, +0x84, +0x60,
+/// +0x64, +0x68 and the floats +0x70, +0x74, +0x7C, +0x78 (FLD/FSTP), and
+/// each of the six form lists emptied (`00470470`) and refilled with the
+/// source list's items (`005ae3d0`, given the item slot) up to its first
+/// empty slot.
+pub fn fn_00596ac0(e: &mut Engine, this: Ptr, source: u32) {
+    let base = this.addr();
+    let other = e
+        .call(
+            DYNAMIC_CAST,
+            &args![source, 0u32, CAST_SOURCE, CAST_TARGET, 0u32],
+        )
+        .u32();
+    if other == 0 {
+        return;
+    }
+    e.call(0x0048_51b0, &args![this, other]);
+    let word = e.mem.u32(other + 0x6c);
+    e.mem.set_u32(base + 0x6c, word);
+    for offset in [0x70u32, 0x74, 0x7c, 0x78] {
+        let value = x87_quiet_bits(e.mem.u32(other + offset));
+        e.mem.set_u32(base + offset, value);
+    }
+    for offset in [0x80u32, 0x84, 0x60, 0x64, 0x68] {
+        let word = e.mem.u32(other + offset);
+        e.mem.set_u32(base + offset, word);
+    }
+    for offset in CONTROLLER_LISTS {
+        e.call(LIST_CLEAR, &args![base + offset]);
+        let mut node = other + offset;
+        while node != 0 && list_item(e, node) != 0 {
+            let slot = e.call(LIST_ITEM, &args![node]).u32();
+            e.call(LIST_ADD, &args![base + offset, slot]);
+            node = e.call(LIST_NEXT, &args![node]).u32();
+        }
+    }
+}
+
+// Translated from 00596d70 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The media location controller's compare (`RET 4`: the other form;
+/// true when they differ; the engine map has no name): the other through
+/// `__RTDynamicCast` as in `00596ac0`; true without it, when a word
+/// (+0x6C, +0x60, +0x64, +0x68), a float (+0x70, +0x74, +0x7C, +0x78,
+/// unordered counts as different) or a word (+0x80, +0x84) differs, or
+/// `TESForm::CompareAllComponents` answers true. Then each of the six
+/// form lists: true when either first slot is empty (the other's checked
+/// first), the counts (`005ae380`) differ, or one of this list's items
+/// finds no item of the other list for which its vtable slot 0x10C
+/// answers false. False after all six.
+pub fn fn_00596d70(e: &mut Engine, this: Ptr, form: u32) -> bool {
+    let base = this.addr();
+    let other = e
+        .call(
+            DYNAMIC_CAST,
+            &args![form, 0u32, CAST_SOURCE, CAST_TARGET, 0u32],
+        )
+        .u32();
+    if other == 0 {
+        return true;
+    }
+    for offset in [0x6cu32, 0x60, 0x64, 0x68] {
+        if e.mem.u32(base + offset) != e.mem.u32(other + offset) {
+            return true;
+        }
+    }
+    for offset in [0x70u32, 0x74, 0x7c, 0x78] {
+        let mine = x87_load32(e.mem.u32(base + offset));
+        let theirs = x87_load32(e.mem.u32(other + offset));
+        // FUCOMPP; TEST AH,0x44; JNP: on only when equal and ordered.
+        if theirs != mine {
+            return true;
+        }
+    }
+    for offset in [0x80u32, 0x84] {
+        if e.mem.u32(base + offset) != e.mem.u32(other + offset) {
+            return true;
+        }
+    }
+    if e.call(0x0048_5270, &args![this, other]).bool() {
+        return true;
+    }
+    for offset in CONTROLLER_LISTS {
+        if list_item(e, other + offset) == 0 || list_item(e, base + offset) == 0 {
+            return true;
+        }
+        let theirs = e.call(LIST_COUNT, &args![other + offset]).u32();
+        let mine = e.call(LIST_COUNT, &args![base + offset]).u32();
+        if theirs != mine {
+            return true;
+        }
+        let mut node = base + offset;
+        while node != 0 && list_item(e, node) != 0 {
+            let mut found = false;
+            let mut other_node = other + offset;
+            while other_node != 0 && list_item(e, other_node) != 0 {
+                let item = list_item(e, node);
+                let other_item = list_item(e, other_node);
+                if !e.vcall(item, 0x10c, &args![other_item]).bool() {
+                    found = true;
+                    break;
+                }
+                other_node = e.call(LIST_NEXT, &args![other_node]).u32();
+            }
+            if !found {
+                return true;
+            }
+            node = e.call(LIST_NEXT, &args![node]).u32();
+        }
+    }
+    false
+}
+
+// Translated from 00598060 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 00598060 - the exception-unwinding frame (FS:[0]) around the sound handles is not translated.
+/// The media set's kind-2 run (`RET 0xC`: time in milliseconds, a flag
+/// byte, the location object; the engine map has no name). Channel 3
+/// playing (`MediaIsPlaying(3, 1)`), the object's level (`00598040`)
+/// below 100.0 (`low`). A set flag while +0x31 is clear zeroes
+/// `011dd37c`. When the start time (+0x2C) and channel 2's played length
+/// (`008308c0(2)`) are set and their sum less the fade (+0xB4 seconds) is
+/// below `time`, channel 2 fades out, +0x2C becomes `time`, and the
+/// answer is false when the object's state (`00598000`) is set; otherwise
+/// it counts as a restart. A change (not playing, the flag differs from
+/// +0x31, the object's byte (`0071aa80`) from +0x32, or `low` from a clear
+/// +0x34) once `time` passed `011dd37c`, or a restart, picks the track:
+/// with the flag +0x48 (the sound at +0xBC played when set and +0x30
+/// clear; +0x30 set), else by the object's byte +0x68 or +0x58 (the sound
+/// at +0xC0 when +0x30 and +0xC0 are set; +0x30 cleared). The track then
+/// starts on channel 3 (fade 1000 ms for +0x48, else +0xB4 seconds; its
+/// volume, the offset into what channel 3 plays unless restarted), after
+/// `011dd37c` takes `time` (plus +0xAC seconds without the flag); the
+/// flag, the object's byte and `low` are kept. Without a change: when not
+/// `low`, `time` past `011ca9fc` and +0x30 clear, channel 3 fades out if
+/// playing and the answer is false. True otherwise.
+pub fn fn_00598060(e: &mut Engine, this: Ptr, time: u32, flag: u8, location: u32) -> bool {
+    let base = this.addr();
+    let playing = e.call(MEDIA_IS_PLAYING, &args![3u32, 1u32]).u8();
+    let mut result = true;
+    let level = f64::from(fn_00598040(e, Ptr::new(location)));
+    let hundred = e.global::<f64>(HUNDRED);
+    // FCOMP; TEST AH,5; JP: low only when level < 100.
+    let low = u8::from(level < hundred);
+    if e.mem.u8(base + 0x31) == 0 && flag != 0 {
+        e.set_global(NEXT_TRACK_TIME, 0u32);
+    }
+    let played = e.call(MEDIA_PLAYED, &args![2u32]).u32();
+    let mut restarted = false;
+    let start = e.mem.u32(base + 0x2c);
+    if start != 0 && played != 0 {
+        let end = f64::from(start.wrapping_add(played));
+        let left = x87_sub(end, millis_of(e, base, 0xb4));
+        // FCOMPP; TEST AH,5; JP: on only when left < time.
+        if left < f64::from(time) {
+            let fade = millis_of(e, base, 0xb4);
+            let millis = e.call(FTOL, &args![fade]).u32();
+            e.call(MEDIA_FADE, &args![millis, 2u32]);
+            e.mem.set_u32(base + 0x2c, time);
+            if fn_00598000(e, Ptr::new(location)) != 0 {
+                return false;
+            }
+            restarted = true;
+        }
+    }
+    let changed = playing == 0
+        || e.mem.u8(base + 0x31) != flag
+        || e.mem.u8(base + 0x32) != e.call(LOCATION_BYTE, &args![location]).u8()
+        || (e.mem.i8(base + 0x34) != low as i8 && e.mem.i8(base + 0x34) == 0);
+    if (changed && e.global::<u32>(NEXT_TRACK_TIME) < time) || restarted {
+        let track;
+        if flag != 0 {
+            if e.mem.u32(base + 0xbc) != 0 && e.mem.u8(base + 0x30) == 0 {
+                let form = e.mem.u32(base + 0xbc);
+                play_form_sound(e, form);
+            }
+            track = base + 0x48;
+            e.mem.set_u8(base + 0x30, 1);
+        } else if e.call(LOCATION_BYTE, &args![location]).u8() != 0 {
+            if e.mem.u8(base + 0x30) != 0 && e.mem.u32(base + 0xc0) != 0 {
+                let form = e.mem.u32(base + 0xc0);
+                play_form_sound(e, form);
+            }
+            track = base + 0x68;
+            e.mem.set_u8(base + 0x30, 0);
+        } else {
+            if e.mem.u8(base + 0x30) != 0 && e.mem.u32(base + 0xc0) != 0 {
+                let form = e.mem.u32(base + 0xc0);
+                play_form_sound(e, form);
+            }
+            track = base + 0x58;
+            e.mem.set_u8(base + 0x30, 0);
+        }
+        if track == 0 {
+            // Only when `this` plus the offset wraps to 0.
+            let fade = millis_of(e, base, 0xb4);
+            let millis = e.call(FTOL, &args![fade]).u32();
+            e.call(MEDIA_FADE, &args![millis, 3u32]);
+            result = false;
+        } else {
+            e.set_global(NEXT_TRACK_TIME, time);
+            if flag == 0 {
+                let delay = millis_of(e, base, 0xac);
+                let next = x87_add(delay, f64::from(e.global::<u32>(NEXT_TRACK_TIME)));
+                e.set_global(NEXT_TRACK_TIME, fistp_chop_low(next));
+            }
+            let mut offset = 0u32;
+            if e.call(MEDIA_POSITION, &args![3u32]).u32() != 0 && !restarted {
+                let position = e.call(MEDIA_POSITION, &args![3u32]).u32();
+                offset = time.wrapping_sub(position);
+            }
+            let volume = x87_quiet_bits(e.mem.u32(track + 8));
+            let fade = if track == base + 0x48 {
+                1000
+            } else {
+                fistp_chop_low(millis_of(e, base, 0xb4))
+            };
+            let name = e.call(0x0055_9450, &args![track]).u32();
+            e.call(
+                MEDIA_START,
+                &args![3u32, name, fade, 1u32, 1u32, volume, offset],
+            );
+            e.call(MEDIA_UPDATE, &args![]);
+        }
+        e.mem.set_u8(base + 0x31, flag);
+        let byte = e.call(LOCATION_BYTE, &args![location]).u8();
+        e.mem.set_u8(base + 0x32, byte);
+        e.mem.set_u8(base + 0x34, low);
+    } else if low == 0 && time > e.global::<u32>(MEDIA_SET_TIME) && e.mem.u8(base + 0x30) == 0 {
+        if playing != 0 {
+            let fade = millis_of(e, base, 0xb4);
+            let millis = e.call(FTOL, &args![fade]).u32();
+            e.call(MEDIA_FADE, &args![millis, 3u32]);
+        }
+        result = false;
+    }
+    result
+}
+
+/// `00598550`'s start of the track at +0x48 on `channel`: its fade (+0xB0
+/// seconds, truncated), volume (+0x50) and no offset.
+fn start_first_track(e: &mut Engine, base: u32, channel: u32) {
+    let volume = x87_quiet_bits(e.mem.u32(base + 0x50));
+    let fade = fistp_chop_low(millis_of(e, base, 0xb0));
+    let name = e.call(0x0055_9450, &args![base + 0x48]).u32();
+    e.call(
+        MEDIA_START,
+        &args![channel, name, fade, 1u32, 1u32, volume, 0u32],
+    );
+}
+
+// Translated from 00598550 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 00598550 - the exception-unwinding frame (FS:[0]) around the sound handles is not translated.
+/// The media set's kind-0 run (`RET 0xC`: a flag byte, time in
+/// milliseconds, the channel; the engine map has no name). With the flag:
+/// when the channel is not playing (`MediaIsPlaying(channel, 0)`) and
+/// +0x30 is clear, the sound at +0xBC plays (when set), `011ca9fc` becomes
+/// `time - 1`, +0x30 is set and the track at +0x48 starts, then the media
+/// update (`008304c0`) and `MediaPause`. Then `MediaUnPause` and +0x30 set
+/// when `011ca9fc` plus the `float` at +0xAC is below `time`; and when the
+/// channel's played length (`008308c0`) is set and `time` passed
+/// `011ca9fc` plus it less 1000, the track starts again, the media update
+/// runs and `011ca9fc` becomes `time`. Without the flag: when the channel
+/// plays and +0x30 is set it fades out (+0xB0 seconds), the sound at +0xC0
+/// plays (when set), `011ca9fc` becomes `time` plus +0xB4 seconds
+/// (truncated), `BGSMenuPacker::RecomputePacking` (engine map name) runs on
+/// `011dd374` with it when that is set, and +0x30 is cleared. Answers the
+/// flag.
+pub fn fn_00598550(e: &mut Engine, this: Ptr, flag: u8, time: u32, channel: u32) -> u8 {
+    let base = this.addr();
+    if flag != 0 {
+        let playing = e.call(MEDIA_IS_PLAYING, &args![channel, 0u32]).u8();
+        if playing == 0 && e.mem.u8(base + 0x30) == 0 {
+            if e.mem.u32(base + 0xbc) != 0 && e.mem.u8(base + 0x30) == 0 {
+                let form = e.mem.u32(base + 0xbc);
+                play_form_sound(e, form);
+            }
+            e.set_global(MEDIA_SET_TIME, time.wrapping_sub(1));
+            e.mem.set_u8(base + 0x30, 1);
+            start_first_track(e, base, channel);
+            e.call(MEDIA_UPDATE, &args![]);
+            e.call(MEDIA_PAUSE, &args![]);
+        }
+        let set_time = f64::from(e.global::<u32>(MEDIA_SET_TIME));
+        let until = x87_add(set_time, x87_m32(e.mem.u32(base + 0xac)));
+        // FCOMPP; TEST AH,5; JP: on only when until < time.
+        if until < f64::from(time) {
+            e.call(MEDIA_UNPAUSE, &args![]);
+            e.mem.set_u8(base + 0x30, 1);
+        }
+        let played = e.call(MEDIA_PLAYED, &args![channel]).u32();
+        if played != 0 {
+            let end = e
+                .global::<u32>(MEDIA_SET_TIME)
+                .wrapping_add(played)
+                .wrapping_sub(1000);
+            if time > end {
+                start_first_track(e, base, channel);
+                e.call(MEDIA_UPDATE, &args![]);
+                e.set_global(MEDIA_SET_TIME, time);
+            }
+        }
+    } else {
+        let mut faded = false;
+        if e.call(MEDIA_IS_PLAYING, &args![channel, 0u32]).bool() && e.mem.u8(base + 0x30) != 0 {
+            faded = true;
+            let fade = millis_of(e, base, 0xb0);
+            let millis = e.call(FTOL, &args![fade]).u32();
+            e.call(MEDIA_FADE, &args![millis, channel]);
+        }
+        if faded {
+            if e.mem.u32(base + 0xc0) != 0 {
+                let form = e.mem.u32(base + 0xc0);
+                play_form_sound(e, form);
+            }
+            let next = x87_add(f64::from(time), millis_of(e, base, 0xb4));
+            e.set_global(MEDIA_SET_TIME, fistp_chop_low(next));
+            let packer = e.global::<u32>(0x011d_d374);
+            if packer != 0 {
+                let set_time = e.global::<u32>(MEDIA_SET_TIME);
+                e.call(0x0070_37c0, &args![packer, set_time]);
+            }
+            e.mem.set_u8(base + 0x30, 0);
+        }
+    }
+    flag
+}
+
+// Translated from 00598890 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 00598890 - the exception-unwinding frame (FS:[0]) around the sound handles is not translated.
+/// The media set's kind-3 run (`RET 4`: time in milliseconds; the engine
+/// map has no name). True at once unless `time` passed `011ca9fc`.
+/// Otherwise the object `008d8520` gives on `011dea10` (engine map:
+/// `MiddleHighProcess::GetSavedAcquireObject`) decides: none, or both
+/// `00966a20` not below `00595ea0` and `00596030` not below `00966a20`
+/// (the doubles they return in `ST0`; unordered counts as below), plays
+/// the sound at +0xBC and sets `011ca9fc` to `time` plus
+/// `00944460(+0xAC seconds, +0xB4 seconds)` (each through `_ftol2`);
+/// otherwise the sound at +0xC0 and `00944460(+0xB0 seconds, +0xB8
+/// seconds)`. Answers true.
+pub fn fn_00598890(e: &mut Engine, this: Ptr, time: u32) -> bool {
+    let base = this.addr();
+    if time <= e.global::<u32>(MEDIA_SET_TIME) {
+        return true;
+    }
+    let holder = e.global::<u32>(0x011d_ea10);
+    let object = e.call(0x008d_8520, &args![holder]).u32();
+    let first = if object != 0 {
+        let low = e.call(0x0059_5ea0, &args![object]).f64();
+        let middle = e.call(0x0096_6a20, &args![object]).f64();
+        // FCOMP; TEST AH,1; JNZ: below (or unordered) answers false.
+        if !(middle >= low) {
+            false
+        } else {
+            let middle = e.call(0x0096_6a20, &args![object]).f64();
+            let high = e.call(0x0059_6030, &args![object]).f64();
+            high >= middle
+        }
+    } else {
+        true
+    };
+    let (sound, a, b) = if first {
+        (0xbcu32, 0xb4u32, 0xacu32)
+    } else {
+        (0xc0, 0xb8, 0xb0)
+    };
+    let form = e.mem.u32(base + sound);
+    play_form_sound(e, form);
+    let pushed_first = millis_of(e, base, a);
+    let pushed_first = e.call(FTOL, &args![pushed_first]).u32();
+    let pushed_second = millis_of(e, base, b);
+    let pushed_second = e.call(FTOL, &args![pushed_second]).u32();
+    let span = e
+        .call(0x0094_4460, &args![pushed_second, pushed_first])
+        .u32();
+    e.set_global(MEDIA_SET_TIME, span.wrapping_add(time));
+    true
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -511,6 +1019,12 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x0059_7a60, fn_00597a60(Ptr, u32, u8, u32) -> bool),
         entry!(0x0059_8000, fn_00598000(Ptr) -> u32),
         entry!(0x0059_8020, fn_00598020(Ptr) -> u8),
+        entry!(0x0059_6790, fn_00596790(Ptr)),
+        entry!(0x0059_6ac0, fn_00596ac0(Ptr, u32)),
+        entry!(0x0059_6d70, fn_00596d70(Ptr, u32) -> bool),
+        entry!(0x0059_8060, fn_00598060(Ptr, u32, u8, u32) -> bool),
+        entry!(0x0059_8550, fn_00598550(Ptr, u8, u32, u32) -> u8),
+        entry!(0x0059_8890, fn_00598890(Ptr, u32) -> bool),
     ]
 }
 
@@ -1050,5 +1564,479 @@ mod media_tests {
             .call(0x0059_7a60, &args![this, 5000u32, 0u32, object])
             .bool());
         assert_eq!(calls(&e, MEDIA_START)[0][6], 800);
+    }
+}
+
+#[cfg(test)]
+mod n041_tests {
+    use super::*;
+
+    fn ret(eax: u32) -> Ret {
+        Ret {
+            eax,
+            ..Ret::default()
+        }
+    }
+
+    fn calls(e: &Engine, addr: u32) -> Vec<Vec<u32>> {
+        e.call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|(a, _)| *a == addr)
+            .map(|(_, w)| w.clone())
+            .collect()
+    }
+
+    /// List doubles over nodes `{item, next}`: the item slot is the node.
+    fn list_doubles(e: &mut Engine) {
+        e.register(LIST_ITEM, |_, a| ret(a[0]));
+        e.register(LIST_NEXT, |e, a| ret(e.mem.u32(a[0] + 4)));
+        e.register(LIST_IS_EMPTY, |e, a| ret(u32::from(e.mem.u32(a[0]) == 0)));
+        e.register(LIST_COUNT, |e, a| {
+            let mut node = a[0];
+            let mut n = 0;
+            while node != 0 && e.mem.u32(node) != 0 {
+                n += 1;
+                node = e.mem.u32(node + 4);
+            }
+            ret(n)
+        });
+    }
+
+    /// Fills the list head at `head` with `items` (extra nodes allocated).
+    fn fill(e: &mut Engine, head: u32, items: &[u32]) {
+        let mut node = head;
+        for (i, &item) in items.iter().enumerate() {
+            e.mem.set_u32(node, item);
+            if i + 1 < items.len() {
+                let next = e.mem.alloc(8);
+                e.mem.set_u32(node + 4, next);
+                node = next;
+            } else {
+                e.mem.set_u32(node + 4, 0);
+            }
+        }
+    }
+
+    fn sound_doubles(e: &mut Engine) {
+        e.register(FORM_ID, |e, a| ret(e.mem.u32(a[0] + 0xc)));
+        e.register(AUDIO_INSTANCE, |_, _| ret(0x0bad_0000));
+        e.register(AUDIO_HANDLE_BY_ID, |_, a| ret(a[1]));
+        e.register(SOUND_PLAY, |_, _| Ret::default());
+        e.register(SOUND_HANDLE_DESTROY, |_, _| Ret::default());
+    }
+
+    #[test]
+    fn fn_00596790_writes_the_chunks_and_the_lists() {
+        let mut e = Engine::new();
+        list_doubles(&mut e);
+        for a in [0x0048_55a0u32, 0x0048_7010, 0x0048_5680, WRITE_CHUNK] {
+            e.register(a, |_, _| Ret::default());
+        }
+        e.register(FORM_ID, |e, a| ret(e.mem.u32(a[0] + 0xc)));
+        let this = e.mem.alloc(0xc4);
+        for (offset, value) in [
+            (0x6cu32, 1u32),
+            (0x70, 0x4000_0000),
+            (0x74, 0x7f80_0001),
+            (0x7c, 4),
+            (0x80, 5),
+            (0x84, 6),
+            (0x78, 7),
+            (0x64, 0x64),
+        ] {
+            e.mem.set_u32(this + offset, value);
+        }
+        let form_a = e.mem.alloc(0x10);
+        e.mem.set_u32(form_a + 0xc, 0xaa);
+        let form_b = e.mem.alloc(0x10);
+        e.mem.set_u32(form_b + 0xc, 0xbb);
+        fill(&mut e, this + 0x88, &[form_a, form_b]);
+        fill(&mut e, this + 0xa0, &[form_b]);
+        e.call_log = Some(vec![]);
+        e.call(0x0059_6790, &args![this]);
+        assert_eq!(calls(&e, 0x0048_55a0), vec![vec![this]]);
+        assert_eq!(calls(&e, 0x0048_7010), vec![vec![this + 0x18]]);
+        assert_eq!(
+            calls(&e, WRITE_CHUNK),
+            vec![
+                vec![0x314d_414e, 1],
+                vec![0x324d_414e, 0x4000_0000],
+                vec![0x334d_414e, 0x7fc0_0001],
+                vec![0x344d_414e, 4],
+                vec![0x354d_414e, 5],
+                vec![0x364d_414e, 6],
+                vec![0x374d_414e, 7],
+                vec![0x4d41_4e48, 0xaa],
+                vec![0x4d41_4e48, 0xbb],
+                vec![0x4d41_4e59, 0xbb],
+                vec![0x4d41_4e46, 0x64],
+            ]
+        );
+        assert_eq!(calls(&e, 0x0048_5680), vec![vec![this]]);
+
+        // RNAM with a form at +0x60.
+        e.mem.set_u32(this + 0x60, form_a);
+        e.call_log = Some(vec![]);
+        e.call(0x0059_6790, &args![this]);
+        assert!(calls(&e, WRITE_CHUNK).contains(&vec![0x4d41_4e52, 0xaa]));
+    }
+
+    #[test]
+    fn fn_00596ac0_copies_fields_and_lists() {
+        let mut e = Engine::new();
+        list_doubles(&mut e);
+        e.register(DYNAMIC_CAST, |_, a| ret(a[0] & !1));
+        for a in [0x0048_51b0u32, LIST_CLEAR, LIST_ADD] {
+            e.register(a, |_, _| Ret::default());
+        }
+        let this = e.mem.alloc(0xc4);
+        let other = e.mem.alloc(0xc4);
+        for offset in (0x60u32..0x88).step_by(4) {
+            e.mem.set_u32(other + offset, offset);
+        }
+        e.mem.set_u32(other + 0x70, 0xff80_0001);
+        fill(&mut e, other + 0x98, &[0x111, 0x222]);
+        // A cast that fails: nothing.
+        e.call_log = Some(vec![]);
+        e.call(0x0059_6ac0, &args![this, 1u32]);
+        assert_eq!(e.call_log.as_ref().unwrap().len(), 2);
+        e.call_log = Some(vec![]);
+        e.call(0x0059_6ac0, &args![this, other]);
+        assert_eq!(
+            calls(&e, DYNAMIC_CAST),
+            vec![vec![other, 0, CAST_SOURCE, CAST_TARGET, 0]]
+        );
+        assert_eq!(calls(&e, 0x0048_51b0), vec![vec![this, other]]);
+        for offset in (0x60u32..0x88).step_by(4) {
+            let expected = if offset == 0x70 { 0xffc0_0001 } else { offset };
+            assert_eq!(e.mem.u32(this + offset), expected, "{offset:x}");
+        }
+        let cleared: Vec<u32> = calls(&e, LIST_CLEAR).iter().map(|c| c[0] - this).collect();
+        assert_eq!(cleared, CONTROLLER_LISTS.to_vec());
+        let second = e.mem.u32(other + 0x9c);
+        assert_eq!(
+            calls(&e, LIST_ADD),
+            vec![vec![this + 0x98, other + 0x98], vec![this + 0x98, second]]
+        );
+    }
+
+    /// Two controllers alike: equal fields and one item in each list.
+    fn alike(e: &mut Engine) -> (u32, u32) {
+        list_doubles(e);
+        e.register(DYNAMIC_CAST, |_, a| ret(a[0]));
+        e.register(0x0048_5270, |_, _| ret(0));
+        // The items' slot 0x10C: differs unless the other item is the same.
+        let vtable = e.mem.alloc(0x110);
+        e.mem.set_u32(vtable + 0x10c, 0x7000_010c);
+        e.register(0x7000_010c, |_, a| ret(u32::from(a[0] != a[1])));
+        let this = e.mem.alloc(0xc4);
+        let other = e.mem.alloc(0xc4);
+        for offset in CONTROLLER_LISTS {
+            let item = e.mem.alloc(4);
+            e.mem.set_u32(item, vtable);
+            e.mem.set_u32(this + offset, item);
+            e.mem.set_u32(other + offset, item);
+        }
+        (this, other)
+    }
+
+    #[test]
+    fn fn_00596d70_compares_fields_and_lists() {
+        let mut e = Engine::new();
+        let (this, other) = alike(&mut e);
+        assert!(!e.call(0x0059_6d70, &args![this, other]).bool());
+        assert!(e.call(0x0059_6d70, &args![this, 0u32]).bool());
+        // A word, a float (NaN is never equal) and a component differ.
+        e.mem.set_u32(other + 0x64, 1);
+        assert!(e.call(0x0059_6d70, &args![this, other]).bool());
+        e.mem.set_u32(other + 0x64, 0);
+        e.mem.set_u32(this + 0x74, 0x7fc0_0000);
+        e.mem.set_u32(other + 0x74, 0x7fc0_0000);
+        assert!(e.call(0x0059_6d70, &args![this, other]).bool());
+        e.mem.set_u32(this + 0x74, 0);
+        e.mem.set_u32(other + 0x74, 0x8000_0000);
+        assert!(!e.call(0x0059_6d70, &args![this, other]).bool());
+        e.register(0x0048_5270, |_, _| ret(1));
+        assert!(e.call(0x0059_6d70, &args![this, other]).bool());
+        e.register(0x0048_5270, |_, _| ret(0));
+        // A list item no item of the other list matches.
+        let other_item = e.mem.alloc(4);
+        let vtable = e.mem.u32(e.mem.u32(this + 0xa8));
+        e.mem.set_u32(other_item, vtable);
+        let mine = e.mem.u32(this + 0xa8);
+        e.mem.set_u32(other + 0xa8, other_item);
+        assert!(e.call(0x0059_6d70, &args![this, other]).bool());
+        // Matched somewhere in a longer list, with equal counts.
+        fill(&mut e, other + 0xa8, &[other_item, mine]);
+        fill(&mut e, this + 0xa8, &[mine, mine]);
+        assert!(!e.call(0x0059_6d70, &args![this, other]).bool());
+        // Different counts, and an empty list on either side.
+        fill(&mut e, this + 0xa8, &[mine]);
+        assert!(e.call(0x0059_6d70, &args![this, other]).bool());
+        let (this, other) = alike(&mut e);
+        e.mem.set_u32(this + 0xb0, 0);
+        assert!(e.call(0x0059_6d70, &args![this, other]).bool());
+        let (this, other) = alike(&mut e);
+        e.mem.set_u32(other + 0x88, 0);
+        assert!(e.call(0x0059_6d70, &args![this, other]).bool());
+    }
+
+    /// A media set and object: fade 2.0 s, delay 1.5 s, track volumes at
+    /// +0x50/+0x60/+0x70, the object's level and byte.
+    fn media_set(
+        level: f32,
+        byte: u8,
+        playing: bool,
+        played: u32,
+        position: u32,
+    ) -> (Engine, u32, u32) {
+        let mut e = Engine::new();
+        e.map(0x0101_7000, 0x1000);
+        e.map(0x011d_d000, 0x1000);
+        e.map(0x011c_a000, 0x1000);
+        e.set_global(THOUSAND, 1000.0f64);
+        e.set_global(HUNDRED, 100.0f64);
+        let this = e.mem.alloc(0xc4);
+        e.mem.set_f32(this + 0xb4, 2.0);
+        e.mem.set_f32(this + 0xac, 1.5);
+        e.mem.set_f32(this + 0x50, 0.5);
+        e.mem.set_f32(this + 0x60, 0.6);
+        e.mem.set_f32(this + 0x70, 0.7);
+        let object = e.mem.alloc(0x70);
+        e.mem.set_f32(object + 0x3c, level);
+        e.mem.set_u8(object + 0x40, byte);
+        e.register(LOCATION_BYTE, |e, a| ret(u32::from(e.mem.u8(a[0] + 0x40))));
+        e.register_double(MEDIA_IS_PLAYING, move |_, _| ret(u32::from(playing)));
+        e.register_double(MEDIA_PLAYED, move |_, _| ret(played));
+        e.register_double(MEDIA_POSITION, move |_, _| ret(position));
+        e.register(FTOL, |_, a| ret(f64::take(a, &mut 0) as i32 as u32));
+        e.register(0x0055_9450, |_, a| ret(a[0] + 1));
+        for a in [MEDIA_FADE, MEDIA_START, MEDIA_UPDATE] {
+            e.register(a, |_, _| Ret::default());
+        }
+        sound_doubles(&mut e);
+        (e, this, object)
+    }
+
+    #[test]
+    fn fn_00598060_starts_the_flag_track() {
+        let (mut e, this, object) = media_set(2.0, 0, false, 0, 4000);
+        let form = e.mem.alloc(0x10);
+        e.mem.set_u32(form + 0xc, 0x77);
+        e.mem.set_u32(this + 0xbc, form);
+        e.set_global(NEXT_TRACK_TIME, 99u32);
+        e.call_log = Some(vec![]);
+        assert!(e
+            .call(0x0059_8060, &args![this, 5000u32, 1u32, object])
+            .bool());
+        assert_eq!(calls(&e, MEDIA_IS_PLAYING), vec![vec![3, 1]]);
+        let handles = calls(&e, AUDIO_HANDLE_BY_ID);
+        assert_eq!(handles.len(), 1);
+        assert_eq!(&handles[0][2..], &[0x77, 0x901]);
+        assert_eq!(calls(&e, SOUND_PLAY), vec![vec![handles[0][1], 0]]);
+        assert_eq!(e.mem.u8(this + 0x30), 1);
+        // The flag: the next start is the time itself.
+        assert_eq!(e.global::<u32>(NEXT_TRACK_TIME), 5000);
+        assert_eq!(
+            calls(&e, MEDIA_START),
+            vec![vec![3, this + 0x49, 1000, 1, 1, 0.5f32.to_bits(), 1000]]
+        );
+        assert_eq!(
+            (
+                e.mem.u8(this + 0x31),
+                e.mem.u8(this + 0x32),
+                e.mem.u8(this + 0x34)
+            ),
+            (1, 0, 1)
+        );
+    }
+
+    #[test]
+    fn fn_00598060_picks_by_the_object_byte_without_the_flag() {
+        for (byte, track, volume) in [(1u8, 0x68u32, 0.7f32), (0, 0x58, 0.6)] {
+            let (mut e, this, object) = media_set(0.5, byte, false, 0, 0);
+            let form = e.mem.alloc(0x10);
+            e.mem.set_u32(this + 0xc0, form);
+            e.mem.set_u8(this + 0x30, 1);
+            e.call_log = Some(vec![]);
+            assert!(e
+                .call(0x0059_8060, &args![this, 5000u32, 0u32, object])
+                .bool());
+            assert_eq!(calls(&e, SOUND_PLAY).len(), 1);
+            assert_eq!(e.mem.u8(this + 0x30), 0);
+            assert_eq!(e.global::<u32>(NEXT_TRACK_TIME), 6500);
+            assert_eq!(
+                calls(&e, MEDIA_START),
+                vec![vec![3, this + track + 1, 2000, 1, 1, volume.to_bits(), 0]]
+            );
+            assert_eq!((e.mem.u8(this + 0x32), e.mem.u8(this + 0x34)), (byte, 1));
+        }
+    }
+
+    #[test]
+    fn fn_00598060_restarts_and_fades() {
+        // Finished on channel 2 (1000 + 3000 - 2000 < 2500), no state: restart.
+        let (mut e, this, object) = media_set(2.0, 0, true, 3000, 100);
+        e.mem.set_u32(this + 0x2c, 1000);
+        e.set_global(NEXT_TRACK_TIME, 9000u32);
+        e.call_log = Some(vec![]);
+        assert!(e
+            .call(0x0059_8060, &args![this, 2500u32, 0u32, object])
+            .bool());
+        assert_eq!(calls(&e, MEDIA_FADE), vec![vec![2000, 2]]);
+        assert_eq!(calls(&e, MEDIA_START)[0][6], 0);
+        assert_eq!(e.mem.u32(this + 0x2c), 2500);
+        // With the object's state set: false after the fade.
+        let (mut e, this, object) = media_set(2.0, 0, true, 3000, 100);
+        e.mem.set_u32(this + 0x2c, 1000);
+        e.mem.set_u32(object + 0x6c, 0x20);
+        e.call_log = Some(vec![]);
+        assert!(!e
+            .call(0x0059_8060, &args![this, 2500u32, 0u32, object])
+            .bool());
+        assert!(calls(&e, MEDIA_START).is_empty());
+        // Unchanged and not low, past 011ca9fc: fade channel 3, false.
+        let (mut e, this, object) = media_set(150.0, 0, true, 0, 0);
+        e.set_global(NEXT_TRACK_TIME, 9000u32);
+        e.call_log = Some(vec![]);
+        assert!(!e
+            .call(0x0059_8060, &args![this, 2500u32, 0u32, object])
+            .bool());
+        assert_eq!(calls(&e, MEDIA_FADE), vec![vec![2000, 3]]);
+        assert!(calls(&e, MEDIA_START).is_empty());
+        // A set flag clears 011dd37c while +0x31 is clear.
+        let (mut e, this, object) = media_set(0.5, 0, true, 0, 0);
+        e.mem.set_u8(this + 0x34, 1);
+        e.set_global(NEXT_TRACK_TIME, 9000u32);
+        e.call_log = Some(vec![]);
+        assert!(e
+            .call(0x0059_8060, &args![this, 2500u32, 1u32, object])
+            .bool());
+        assert_eq!(calls(&e, MEDIA_START).len(), 1);
+    }
+
+    fn kind0(playing: bool, played: u32) -> (Engine, u32) {
+        let (mut e, this, _) = media_set(0.0, 0, playing, played, 0);
+        e.mem.set_f32(this + 0xb0, 3.0);
+        e.mem.set_f32(this + 0xac, 0.25);
+        for a in [MEDIA_PAUSE, MEDIA_UNPAUSE, 0x0070_37c0] {
+            e.register(a, |_, _| Ret::default());
+        }
+        (e, this)
+    }
+
+    #[test]
+    fn fn_00598550_starts_paused_then_unpauses() {
+        let (mut e, this) = kind0(false, 0);
+        let form = e.mem.alloc(0x10);
+        e.mem.set_u32(this + 0xbc, form);
+        e.call_log = Some(vec![]);
+        assert_eq!(
+            e.call(0x0059_8550, &args![this, 1u32, 500u32, 4u32]).u8(),
+            1
+        );
+        assert_eq!(calls(&e, MEDIA_IS_PLAYING), vec![vec![4, 0]]);
+        assert_eq!(calls(&e, SOUND_PLAY).len(), 1);
+        assert_eq!(
+            calls(&e, MEDIA_START),
+            vec![vec![4, this + 0x49, 3000, 1, 1, 0.5f32.to_bits(), 0]]
+        );
+        assert_eq!(calls(&e, MEDIA_PAUSE).len(), 1);
+        // 499 + 0.25 < 500: unpaused.
+        assert_eq!(calls(&e, MEDIA_UNPAUSE).len(), 1);
+        assert_eq!(e.global::<u32>(MEDIA_SET_TIME), 499);
+        assert_eq!(e.mem.u8(this + 0x30), 1);
+
+        // Playing: no start; past the played length less a second: again.
+        let (mut e, this) = kind0(true, 1500);
+        e.set_global(MEDIA_SET_TIME, 1000u32);
+        e.call_log = Some(vec![]);
+        e.call(0x0059_8550, &args![this, 1u32, 1501u32, 4u32]);
+        assert_eq!(calls(&e, MEDIA_PAUSE).len(), 0);
+        assert_eq!(calls(&e, MEDIA_START).len(), 1);
+        assert_eq!(e.global::<u32>(MEDIA_SET_TIME), 1501);
+        e.call_log = Some(vec![]);
+        e.call(0x0059_8550, &args![this, 1u32, 1501u32, 4u32]);
+        assert!(calls(&e, MEDIA_START).is_empty());
+        assert!(calls(&e, MEDIA_UNPAUSE).is_empty());
+    }
+
+    #[test]
+    fn fn_00598550_without_the_flag_fades_and_sets_the_time() {
+        let (mut e, this) = kind0(true, 0);
+        e.mem.set_u8(this + 0x30, 1);
+        let form = e.mem.alloc(0x10);
+        e.mem.set_u32(this + 0xc0, form);
+        e.set_global(0x011d_d374, 0x4444u32);
+        e.call_log = Some(vec![]);
+        assert_eq!(
+            e.call(0x0059_8550, &args![this, 0u32, 500u32, 4u32]).u8(),
+            0
+        );
+        assert_eq!(calls(&e, MEDIA_FADE), vec![vec![3000, 4]]);
+        assert_eq!(calls(&e, SOUND_PLAY).len(), 1);
+        assert_eq!(e.global::<u32>(MEDIA_SET_TIME), 2500);
+        assert_eq!(calls(&e, 0x0070_37c0), vec![vec![0x4444, 2500]]);
+        assert_eq!(e.mem.u8(this + 0x30), 0);
+        // +0x30 clear: nothing.
+        e.call_log = Some(vec![]);
+        e.call(0x0059_8550, &args![this, 0u32, 500u32, 4u32]);
+        assert!(calls(&e, MEDIA_FADE).is_empty());
+    }
+
+    fn st0(value: f64) -> Ret {
+        Ret {
+            st0: value,
+            ..Ret::default()
+        }
+    }
+
+    #[test]
+    fn fn_00598890_picks_the_sound_and_span() {
+        let (mut e, this, _) = media_set(0.0, 0, false, 0, 0);
+        e.mem.set_f32(this + 0xb0, 3.0);
+        e.mem.set_f32(this + 0xb8, 4.0);
+        let first = e.mem.alloc(0x10);
+        let second = e.mem.alloc(0x10);
+        e.mem.set_u32(this + 0xbc, first);
+        e.mem.set_u32(this + 0xc0, second);
+        e.map(0x011d_e000, 0x1000);
+        e.set_global(0x011d_ea10, 0x5555u32);
+        e.set_global(MEDIA_SET_TIME, 100u32);
+        e.register(0x0094_4460, |_, a| ret(a[0] * 10 + a[1]));
+        e.register(0x008d_8520, |_, _| ret(0));
+        // Not past 011ca9fc: true at once.
+        e.call_log = Some(vec![]);
+        assert!(e.call(0x0059_8890, &args![this, 100u32]).bool());
+        assert!(calls(&e, 0x008d_8520).is_empty());
+        // No object: the first sound, span(+0xAC, +0xB4).
+        e.call_log = Some(vec![]);
+        assert!(e.call(0x0059_8890, &args![this, 101u32]).bool());
+        assert_eq!(calls(&e, 0x008d_8520), vec![vec![0x5555]]);
+        assert_eq!(calls(&e, FORM_ID), vec![vec![first]]);
+        assert_eq!(calls(&e, 0x0094_4460), vec![vec![1500, 2000]]);
+        assert_eq!(e.global::<u32>(MEDIA_SET_TIME), 17101);
+        // An object: its three values decide.
+        e.register(0x008d_8520, |_, _| ret(0x6666));
+        for (low, middle, high, first_sound) in [
+            (1.0, 2.0, 3.0, true),
+            (1.0, 1.0, 1.0, true),
+            (2.0, 1.0, 3.0, false),
+            (1.0, 2.0, 1.5, false),
+            (f64::NAN, 2.0, 3.0, false),
+        ] {
+            e.register_double(0x0059_5ea0, move |_, _| st0(low));
+            e.register_double(0x0096_6a20, move |_, _| st0(middle));
+            e.register_double(0x0059_6030, move |_, _| st0(high));
+            e.set_global(MEDIA_SET_TIME, 0u32);
+            e.call_log = Some(vec![]);
+            e.call(0x0059_8890, &args![this, 1u32]);
+            let sound = if first_sound { first } else { second };
+            assert_eq!(calls(&e, FORM_ID), vec![vec![sound]]);
+            let span = if first_sound { 17001 } else { 34001 };
+            assert_eq!(e.global::<u32>(MEDIA_SET_TIME), span);
+        }
     }
 }

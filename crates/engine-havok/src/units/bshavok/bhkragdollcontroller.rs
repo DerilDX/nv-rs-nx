@@ -3911,8 +3911,10 @@ pub fn fn_00c75ed0(e: &mut Engine, this: Ptr) {
 
 // Translated from 00c75f40 (decompiled, FalloutNV.exe 1.4.0.525)
 /// Allocates `count * 4` bytes (`MemoryManager::Allocate`, `00aa3e40`); the one stack argument
-/// is the callee's to pop, so the call is stdcall.
-pub fn fn_00c75f40(e: &mut Engine, count: u32) -> u32 {
+/// is the callee's to pop (`thiscall`).
+/// `this` (`ECX`, the array) is not read, but it is a `BSSimpleArray` vtable slot and is called
+/// with `ECX` set.
+pub fn fn_00c75f40(e: &mut Engine, _this: Ptr, count: u32) -> u32 {
     e.call(
         MEMORY_ALLOCATE,
         &args![MEMORY_MANAGER, count.wrapping_mul(4)],
@@ -4416,8 +4418,10 @@ pub fn ni_t_map_ni_av_object_short_scalar_deleting_destructor(
 
 // Translated from 00c7a5d0 (decompiled, FalloutNV.exe 1.4.0.525)
 /// `BSSimpleArray<bhkRagdollController::BoneTransf>::_Allocate` (Xbox PDB): allocates
-/// `count * 0x38` bytes (`MemoryManager::Allocate`); stdcall `(count)`.
-pub fn bs_simple_array_bone_transf_allocate(e: &mut Engine, count: u32) -> u32 {
+/// `count * 0x38` bytes (`MemoryManager::Allocate`); stack `(count)`.
+/// `this` (`ECX`, the array) is not read, but it is a `BSSimpleArray` vtable slot and is called
+/// with `ECX` set.
+pub fn bs_simple_array_bone_transf_allocate(e: &mut Engine, _this: Ptr, count: u32) -> u32 {
     e.call(
         MEMORY_ALLOCATE,
         &args![MEMORY_MANAGER, count.wrapping_mul(0x38)],
@@ -4426,10 +4430,17 @@ pub fn bs_simple_array_bone_transf_allocate(e: &mut Engine, count: u32) -> u32 {
 }
 
 // Translated from 00c7a600 (decompiled, FalloutNV.exe 1.4.0.525)
-/// `BSSimpleArray<bhkRagdollController::BoneTransf>::_Reallocate` (Xbox PDB): stdcall
+/// `BSSimpleArray<bhkRagdollController::BoneTransf>::_Reallocate` (Xbox PDB): stack
 /// `(block, count)`: resizes the block to `count * 0x38` bytes (`MemoryManager::Reallocate`,
 /// `00aa4150`, `(block, size)`) and answers its result.
-pub fn bs_simple_array_bone_transf_reallocate(e: &mut Engine, block: u32, count: u32) -> u32 {
+/// `this` (`ECX`, the array) is not read, but it is a `BSSimpleArray` vtable slot and is called
+/// with `ECX` set.
+pub fn bs_simple_array_bone_transf_reallocate(
+    e: &mut Engine,
+    _this: Ptr,
+    block: u32,
+    count: u32,
+) -> u32 {
     e.call(
         0x00aa_4150,
         &args![MEMORY_MANAGER, block, count.wrapping_mul(0x38)],
@@ -4439,14 +4450,14 @@ pub fn bs_simple_array_bone_transf_reallocate(e: &mut Engine, block: u32, count:
 
 /// The destructor body of a `BSSimpleArray` whose vtable is `vtable` and whose free function is
 /// the vtable's slot 2 at `vtable + 8`: stores the vtable and, when there is data (`+4`),
-/// frees it through that slot (called directly, stdcall `(block)`) and clears data, capacity
-/// (`+0xc`) and size (`+8`).
+/// frees it through that slot (called directly with `ECX` still the array, `(block)` on the
+/// stack) and clears data, capacity (`+0xc`) and size (`+8`).
 fn simple_array_destruct(e: &mut Engine, this: u32, vtable: u32) {
     let data = e.mem.u32(this + 4);
     e.mem.set_u32(this, vtable);
     if data != 0 {
         let free = e.mem.u32(vtable + 8);
-        e.call(free, &args![data]);
+        e.call(free, &args![this, data]);
         e.mem.set_u32(this + 4, 0);
         e.mem.set_u32(this + 0xc, 0);
         e.mem.set_u32(this + 8, 0);
@@ -6072,17 +6083,18 @@ pub fn fn_00c74c90(e: &mut Engine, this: Ptr, out: Ptr) {
 // Translated from 00c75580 (decompiled, FalloutNV.exe 1.4.0.525)
 /// Thiscall with one byte stack word `enable` (no engine-map name). The byte at `+0xb3` becomes
 /// 1 when the byte at `+0x43` is 0, the byte at `+0xb1` is set and `enable` is non-zero, 0 when
-/// `+0x43` is 0 otherwise, and stays when `+0x43` is set. When `enable` is zero the two
+/// `+0x43` is 0 otherwise, and stays as it is (the byte written back unchanged) when `+0x43`
+/// is set. When `enable` is zero the two
 /// quaternions at `+0x120` and `+0x170` are set to the identity vector at `010c71b0` and the
 /// bytes at `+0x180` and `+0x130` to 1.
 pub fn fn_00c75580(e: &mut Engine, this: Ptr, enable: u8) {
     let base = this.addr();
     let flag = if e.mem.u8(base + 0x43) == 0 {
-        e.mem.u8(base + 0xb1) != 0 && enable != 0
+        u8::from(e.mem.u8(base + 0xb1) != 0 && enable != 0)
     } else {
-        e.mem.u8(base + 0xb3) != 0
+        e.mem.u8(base + 0xb3)
     };
-    e.mem.set_u8(base + 0xb3, flag as u8);
+    e.mem.set_u8(base + 0xb3, flag);
     if enable == 0 {
         let identity = load4(e, 0x010c_71b0);
         store4(e, base + 0x120, identity);
@@ -7008,7 +7020,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00c75e00, fn_00c75e00(Ptr)),
         entry!(0x00c75e20, fn_00c75e20(u32, Ptr, u32, u32)),
         entry!(0x00c75ed0, fn_00c75ed0(Ptr)),
-        entry!(0x00c75f40, fn_00c75f40(u32) -> u32),
+        entry!(0x00c75f40, fn_00c75f40(Ptr, u32) -> u32),
         entry!(0x00c75f60, fn_00c75f60(u32, Ptr, u32, u32)),
         entry!(0x00c75f80, fn_00c75f80(Ptr)),
         entry!(0x00c75fa0, fn_00c75fa0(Ptr)),
@@ -7044,8 +7056,8 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00c7a570, ni_t_map_pose_array_scalar_deleting_destructor(Ptr, u32) -> Ptr),
         entry!(0x00c7a590, ni_t_map_ragdoll_share_data_scalar_deleting_destructor(Ptr, u32) -> Ptr),
         entry!(0x00c7a5b0, ni_t_map_ni_av_object_short_scalar_deleting_destructor(Ptr, u32) -> Ptr),
-        entry!(0x00c7a5d0, bs_simple_array_bone_transf_allocate(u32) -> u32),
-        entry!(0x00c7a600, bs_simple_array_bone_transf_reallocate(u32, u32) -> u32),
+        entry!(0x00c7a5d0, bs_simple_array_bone_transf_allocate(Ptr, u32) -> u32),
+        entry!(0x00c7a600, bs_simple_array_bone_transf_reallocate(Ptr, u32, u32) -> u32),
         entry!(0x00c7a630, fn_00c7a630(Ptr)),
         entry!(0x00c7a660, fn_00c7a660(Ptr)),
         entry!(0x00c7a690, bs_simple_array_bone_transf_scalar_deleting_destructor(Ptr, u32) -> Ptr),
@@ -10151,7 +10163,7 @@ mod tests {
         let log = CallLog::default();
         recorder(&mut e, &log, MEMORY_ALLOCATE, 0x3333);
         recorder(&mut e, &log, MEMORY_DEALLOCATE, 0);
-        assert_eq!(e.call(0x00c7_5f40, &args![5u32]).u32(), 0x3333);
+        assert_eq!(e.call(0x00c7_5f40, &args![0x5555u32, 5u32]).u32(), 0x3333);
         assert_eq!(
             calls_to(&log, MEMORY_ALLOCATE),
             vec![vec![MEMORY_MANAGER, 20]]
@@ -10666,7 +10678,7 @@ mod tests {
             e.mem.set_u32(this + 8, 3);
             e.mem.set_u32(this + 0xc, 4);
             e.call(address, &args![this]);
-            assert_eq!(calls_to(&log, 0x0900_00f0), vec![vec![0x7000]]);
+            assert_eq!(calls_to(&log, 0x0900_00f0), vec![vec![this, 0x7000]]);
             assert_eq!(
                 (
                     e.mem.u32(this + 4),
@@ -10684,12 +10696,16 @@ mod tests {
         let log = CallLog::default();
         recorder(&mut e, &log, MEMORY_ALLOCATE, 0x5555);
         recorder(&mut e, &log, 0x00aa_4150, 0x6666);
-        assert_eq!(e.call(0x00c7_a5d0, &args![3u32]).u32(), 0x5555);
+        assert_eq!(e.call(0x00c7_a5d0, &args![0x7777u32, 3u32]).u32(), 0x5555);
         assert_eq!(
             calls_to(&log, MEMORY_ALLOCATE),
             vec![vec![MEMORY_MANAGER, 0xa8]]
         );
-        assert_eq!(e.call(0x00c7_a600, &args![0x1234u32, 2u32]).u32(), 0x6666);
+        assert_eq!(
+            e.call(0x00c7_a600, &args![0x5555u32, 0x1234u32, 2u32])
+                .u32(),
+            0x6666
+        );
         assert_eq!(
             calls_to(&log, 0x00aa_4150),
             vec![vec![MEMORY_MANAGER, 0x1234, 0x70]]

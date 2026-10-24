@@ -333,11 +333,15 @@ pub fn hkp_sphere_shape_get_aabb_impl(
     tolerance: f32,
     out: Ptr,
 ) {
+    // `FLD m_radius`, `FADD` the tolerance argument (a memory operand): the x87 choice of
+    // NaN; then `SUBPS`/`ADDPS` with the SSE NaN rules (the destination first).
     let radius = e.get(this, HkpSphereShape::m_radius);
-    let margin = (radius as f64 + tolerance as f64) as f32;
+    let sum = x87_add(x87_load32(radius.to_bits()), x87_m32(tolerance.to_bits()));
+    let margin = [f32::from_bits(x87_store32(sum)); 4];
     let centre = load_vec(e, transform.addr() + 0x30);
-    store_vec(e, out.addr(), centre.map(|lane| lane - margin));
-    store_vec(e, out.addr() + 0x10, centre.map(|lane| margin + lane));
+    store_vec(e, out.addr(), crate::sse::subps(centre, margin));
+    let centre = load_vec(e, transform.addr() + 0x30);
+    store_vec(e, out.addr() + 0x10, crate::sse::addps(margin, centre));
 }
 
 // Translated from 00cd8140 (decompiled, FalloutNV.exe 1.4.0.525)

@@ -120,6 +120,15 @@ pub fn fn_00517500(e: &mut Engine, this: Ptr) {
     e.call(0x0050_f740, &args![this]);
 }
 
+// Translated from 005173d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Thunk: moves `this` back by 0x48 (`SUB ECX,0x48`) and jumps to
+/// `00516210` (the deleting destructor in `tesobjectcont.rs`, `RET 4`),
+/// passing its stack word on; returns what it returns.
+pub fn fn_005173d0(e: &mut Engine, this: Ptr, flags: u32) -> u32 {
+    let base = this.addr().wrapping_sub(0x48);
+    e.call(0x0051_6210, &args![base, flags]).u32()
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -131,6 +140,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x0051_7670, fn_00517670(Ptr) -> u32),
         entry!(0x0051_7630, fn_00517630(Ptr) -> u32),
         entry!(0x0051_7500, fn_00517500(Ptr)),
+        entry!(0x0051_73d0, fn_005173d0(Ptr, u32) -> u32),
     ]
 }
 
@@ -318,5 +328,29 @@ mod b036_tests {
                 (0x0050_f740, vec![this]),
             ]
         );
+    }
+}
+
+#[cfg(test)]
+mod n040_tests {
+    use super::*;
+
+    #[test]
+    fn fn_005173d0_moves_this_back_to_the_destructor() {
+        let mut e = Engine::new();
+        e.register(0x0051_6210, |_, a| Ret {
+            eax: a[0] + a[1],
+            ..Ret::default()
+        });
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x0051_73d0, &[0x2048, 1]).u32(), 0x2001);
+        let log: Vec<_> = e
+            .call_log
+            .take()
+            .unwrap()
+            .into_iter()
+            .filter(|(a, _)| *a == 0x0051_6210)
+            .collect();
+        assert_eq!(log, vec![(0x0051_6210, vec![0x2000, 1])]);
     }
 }

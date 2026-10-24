@@ -268,11 +268,21 @@ fn package_qualifies(e: &mut Engine, item: u32, step: &Step) -> bool {
     !e.call(LIST_CONTAINS, &args![step.out, step.package]).bool()
 }
 
+// Translated from 0067eff0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Clears two parts (`thiscall`, no stack words; the engine map gives it
+/// no name): `00401080` (`cdecl`) with a zero byte on +4 and +8.
+pub fn fn_0067eff0(e: &mut Engine, this: Ptr) {
+    for offset in [4, 8] {
+        e.call(0x0040_1080, &args![this.addr() + offset, 0u32]);
+    }
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
         entry!(0x0067efd0, fn_0067efd0(Ptr) -> bool),
         entry!(0x0067ec40, fn_0067ec40(Ptr, Ptr, Ptr, u32, f32)),
+        entry!(0x0067_eff0, fn_0067eff0(Ptr)),
     ]
 }
 
@@ -472,5 +482,26 @@ mod tests {
         e.call_log = Some(vec![]);
         e.call(0x0067_ec40, &args![list, actor, 0u32, 0u32, 1.0f32]);
         assert!(calls_to(&e, LIST_IS_EMPTY).is_empty());
+    }
+}
+
+#[cfg(test)]
+mod tests_n042 {
+    use super::*;
+
+    #[test]
+    fn clears_two_parts() {
+        let mut e = Engine::new();
+        e.register(0x0040_1080, |_, _| Ret::default());
+        e.call_log = Some(vec![]);
+        e.call(0x0067_eff0, &args![0x5000u32]);
+        let log = e.call_log.take().unwrap();
+        assert_eq!(
+            log[1..],
+            [
+                (0x0040_1080, vec![0x5004, 0]),
+                (0x0040_1080, vec![0x5008, 0])
+            ]
+        );
     }
 }

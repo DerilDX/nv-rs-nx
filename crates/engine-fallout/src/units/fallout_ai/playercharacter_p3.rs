@@ -5267,13 +5267,13 @@ pub fn fn_00965240(e: &mut Engine, value: u8) {
 // Translated from 00965250 (decompiled, FalloutNV.exe 1.4.0.525)
 /// Stores the float at `+0x28` of the image space modifier instance.
 pub fn fn_00965250(e: &mut Engine, this: Ptr, value: f32) {
-    e.mem.set_f32(this.addr() + 0x28, value);
+    e.mem.set_f32(this.addr() + 0x28, x87_quiet(value));
 }
 
 // Translated from 00965580 (decompiled, FalloutNV.exe 1.4.0.525)
 /// Stores the float at `+0x38` of the image space modifier instance.
 pub fn fn_00965580(e: &mut Engine, this: Ptr, value: f32) {
-    e.mem.set_f32(this.addr() + 0x38, value);
+    e.mem.set_f32(this.addr() + 0x38, x87_quiet(value));
 }
 
 // Translated from 009655a0 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -5324,7 +5324,7 @@ pub fn fn_009669c0(e: &mut Engine, this: Ptr) -> f32 {
 // Translated from 00966a00 (decompiled, FalloutNV.exe 1.4.0.525)
 /// Stores the float at `+0xd0`.
 pub fn fn_00966a00(e: &mut Engine, this: Ptr, value: f32) {
-    e.mem.set_f32(this.addr() + 0xd0, value);
+    e.mem.set_f32(this.addr() + 0xd0, x87_quiet(value));
 }
 
 // Translated from 00966a20 (decompiled, FalloutNV.exe 1.4.0.525)

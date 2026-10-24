@@ -209,7 +209,8 @@ pub fn bhk_tri_sampled_height_field_bv_tree_shape_copy_members(
 
 // Translated from 00cb0020 (decompiled, FalloutNV.exe 1.4.0.525)
 /// Unnamed in the engine map: clears the byte at `flag` (one stack word; `ECX` unused).
-pub fn fn_00cb0020(e: &mut Engine, flag: Ptr) {
+/// `this` (`ECX`) is not read, but it sits in vtables and is called with `ECX` set.
+pub fn fn_00cb0020(e: &mut Engine, _this: Ptr, flag: Ptr) {
     e.mem.set_u8(flag.addr(), 0);
 }
 
@@ -605,7 +606,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
             0x00cafff0,
             bhk_tri_sampled_height_field_bv_tree_shape_copy_members(Ptr, u32, u32)
         ),
-        entry!(0x00cb0020, fn_00cb0020(Ptr)),
+        entry!(0x00cb0020, fn_00cb0020(Ptr, Ptr)),
         entry!(
             0x00cb0030,
             bhk_tri_sampled_height_field_bv_tree_shape_copy_cinfo(Ptr, u32)
@@ -752,7 +753,7 @@ mod tests {
         let mut e = Engine::new();
         let byte = e.mem.alloc(4);
         e.mem.set_u8(byte, 5);
-        e.call(0x00cb_0020, &args![byte]);
+        e.call(0x00cb_0020, &args![0x5555u32, byte]);
         assert_eq!(e.mem.u8(byte), 0);
     }
 

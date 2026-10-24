@@ -1209,7 +1209,7 @@ pub fn fn_005840b0(e: &mut Engine, this: Ptr) {
 // Translated from 00584150 (decompiled, FalloutNV.exe 1.4.0.525)
 /// Sets `fLODWaterHeight` (Xbox PDB).
 pub fn fn_00584150(e: &mut Engine, this: Ptr<TESWorldSpace>, height: f32) {
-    e.set(this, TESWorldSpace::fLODWaterHeight, height);
+    e.set(this, TESWorldSpace::fLODWaterHeight, x87_quiet(height));
 }
 
 // Translated from 00584170 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -2249,13 +2249,13 @@ pub fn fn_005860c0(e: &mut Engine, this: Ptr<TESWorldSpace>) -> Ptr {
 // Translated from 00586110 (decompiled, FalloutNV.exe 1.4.0.525)
 /// Sets `fDefaultLandHeight` (Xbox PDB).
 pub fn fn_00586110(e: &mut Engine, this: Ptr<TESWorldSpace>, height: f32) {
-    e.set(this, TESWorldSpace::fDefaultLandHeight, height);
+    e.set(this, TESWorldSpace::fDefaultLandHeight, x87_quiet(height));
 }
 
 // Translated from 00586130 (decompiled, FalloutNV.exe 1.4.0.525)
 /// Sets `fDefaultWaterHeight` (Xbox PDB).
 pub fn fn_00586130(e: &mut Engine, this: Ptr<TESWorldSpace>, height: f32) {
-    e.set(this, TESWorldSpace::fDefaultWaterHeight, height);
+    e.set(this, TESWorldSpace::fDefaultWaterHeight, x87_quiet(height));
 }
 
 // Translated from 00586150 (decompiled, FalloutNV.exe 1.4.0.525)

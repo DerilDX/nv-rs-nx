@@ -405,6 +405,184 @@ pub fn tes_ai_form_get_missed_packages(
     );
 }
 
+/// The five copied setting floats `InitializeDataComponent` fills
+/// (`011c52a8`..`011c52b8`), read by index by `0047eeb0`.
+const COPIED_SETTING_FLOATS: u32 = 0x011c_52a8;
+/// `__RTDynamicCast` (`00ec43fb`).
+const DYNAMIC_CAST: u32 = 0x00ec_43fb;
+/// The `BaseFormComponent` type descriptor (`01183040`).
+const TYPE_BASE_FORM_COMPONENT: u32 = 0x0118_3040;
+/// The `TESAIForm` type descriptor (`01186cd4`).
+const TYPE_TES_AI_FORM: u32 = 0x0118_6cd4;
+/// `00401170` (`ECX` = form): its form type.
+const FORM_TYPE: u32 = 0x0040_1170;
+/// `BGSEquipType::GetEquipType` (engine map name of `00479430`; cdecl: a
+/// form).
+const GET_EQUIP_TYPE: u32 = 0x0047_9430;
+/// `0067e4a0` (`ECX` = package list, the other list; `RET 4`): nonzero
+/// byte when the two package lists differ.
+const PACKAGE_LISTS_DIFFER: u32 = 0x0067_e4a0;
+/// The save/load game object (`011de45c`, a pointer).
+const SAVE_LOAD_GAME: u32 = 0x011d_e45c;
+/// `008579b0` (`ECX` = save/load game; buffer, size; `RET 8`): writes bytes.
+const SAVE_WRITE: u32 = 0x0085_79b0;
+/// `008579e0` (`ECX` = save/load game; buffer, size; `RET 8`): reads bytes.
+const LOAD_READ: u32 = 0x0085_79e0;
+
+// Translated from 0047eeb0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The copied setting float number `index` (`011c52a8` + 4 * index, loaded
+/// with `FLD`), 0.0 (`FLDZ`) for an index of 5 or more (`cdecl`, one byte).
+pub fn fn_0047eeb0(e: &mut Engine, index: u8) -> f32 {
+    if i32::from(index) >= 5 {
+        return 0.0;
+    }
+    let bits = e.mem.u32(COPIED_SETTING_FLOATS + 4 * u32::from(index));
+    f32::from_bits(x87_quiet_bits(bits))
+}
+
+// Translated from 0047efe0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Whether `iServiceFlags` (+0xC) has any of `flags` (`RET 4`).
+pub fn fn_0047efe0(e: &mut Engine, this: Ptr, flags: u32) -> bool {
+    e.mem.u32(this.addr() + 0xc) & flags != 0
+}
+
+// Translated from 0047f300 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TESAIForm::CompareComponent` (Xbox PDB; `RET 4`): casts `other` (a
+/// `BaseFormComponent`) to a `TESAIForm` (`__RTDynamicCast`); true when the
+/// cast fails or when any getter (`004f1540`, `0047ee30`, `004f6de0`,
+/// `005bb4d0`, `0047ef30`, `0062f2f0` as bytes, `00825c00` as a word,
+/// `00705cf0` as a byte, `0084e3a0` and `0047f000` as words, `00824060` as
+/// a byte, in that order) gives `this` and the cast form different values,
+/// or when the package lists differ (`0067e4a0` on this form's list with
+/// the other's, both through `00500940`).
+pub fn tes_ai_form_compare_component(e: &mut Engine, this: Ptr, other: Ptr) -> bool {
+    let cast = e
+        .call(
+            DYNAMIC_CAST,
+            &args![
+                other,
+                0u32,
+                TYPE_BASE_FORM_COMPONENT,
+                TYPE_TES_AI_FORM,
+                0u32
+            ],
+        )
+        .u32();
+    if cast == 0 {
+        return true;
+    }
+    let cast = Ptr::new(cast);
+    let byte = |e: &mut Engine, getter: u32, form: Ptr| e.call(getter, &args![form]).u8();
+    let word = |e: &mut Engine, getter: u32, form: Ptr| e.call(getter, &args![form]).u32();
+    if byte(e, 0x004f_1540, this) != byte(e, 0x004f_1540, cast) {
+        return true;
+    }
+    if fn_0047ee30(e, this) != fn_0047ee30(e, cast) {
+        return true;
+    }
+    if byte(e, 0x004f_6de0, this) != byte(e, 0x004f_6de0, cast) {
+        return true;
+    }
+    if byte(e, 0x005b_b4d0, this) != byte(e, 0x005b_b4d0, cast) {
+        return true;
+    }
+    if fn_0047ef30(e, this) != fn_0047ef30(e, cast) {
+        return true;
+    }
+    if byte(e, 0x0062_f2f0, this) != byte(e, 0x0062_f2f0, cast) {
+        return true;
+    }
+    if word(e, 0x0082_5c00, this) != word(e, 0x0082_5c00, cast) {
+        return true;
+    }
+    if byte(e, 0x0070_5cf0, this) != byte(e, 0x0070_5cf0, cast) {
+        return true;
+    }
+    if word(e, 0x0084_e3a0, this) != word(e, 0x0084_e3a0, cast) {
+        return true;
+    }
+    if fn_0047f000(e, this) != fn_0047f000(e, cast) {
+        return true;
+    }
+    if byte(e, 0x0082_4060, this) != byte(e, 0x0082_4060, cast) {
+        return true;
+    }
+    let theirs = e.call(PACKAGE_LIST, &args![cast]).u32();
+    let mine = e.call(PACKAGE_LIST, &args![this]).u32();
+    e.call(PACKAGE_LISTS_DIFFER, &args![mine, theirs]).u8() != 0
+}
+
+// Translated from 0047f600 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TESAIForm::SellBuysItem` (Xbox PDB; the item form; `RET 4`): whether
+/// the service flags (`0047efe0`) cover the item's form type (`00401170`):
+/// type 0x18 needs flag 2, 0x19 flag 8, 0x1F, 0x32 and 0x67 flag 0x400,
+/// 0x28 and 0x29 flag 1; for type 0x2F the flag follows the item's equip
+/// type (`00479430`): 0xA flag 0x20, 0xB flag 0x40, 0xC flag 0x10, 0xD
+/// flag 4. Any other type or equip type: false.
+pub fn tes_ai_form_sell_buys_item(e: &mut Engine, this: Ptr, item: Ptr) -> bool {
+    let kind = e.call(FORM_TYPE, &args![item]).u32();
+    // The compiler's switch: a byte table (`0047f728`, indexed by type -
+    // 0x18, compared as unsigned up to 0x4F) picks one of seven cases.
+    match kind.wrapping_sub(0x18) {
+        0 => fn_0047efe0(e, this, 2),
+        1 => fn_0047efe0(e, this, 8),
+        7 | 26 | 79 => fn_0047efe0(e, this, 0x400),
+        16 | 17 => fn_0047efe0(e, this, 1),
+        23 => {
+            let equip = e.call(GET_EQUIP_TYPE, &args![item]).u32();
+            match equip.wrapping_sub(0xa) {
+                0 => fn_0047efe0(e, this, 0x20),
+                1 => fn_0047efe0(e, this, 0x40),
+                2 => fn_0047efe0(e, this, 0x10),
+                3 => fn_0047efe0(e, this, 4),
+                _ => false,
+            }
+        }
+        _ => false,
+    }
+}
+
+// Translated from 0047f7e0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TESAIForm::GetSaveSize` (Xbox PDB; the change flags; `RET 4`): 5 (one
+/// per saved byte, summed as a `u16`) when change flag 8 is set, else 0.
+pub fn tes_ai_form_get_save_size(_e: &mut Engine, _this: Ptr, flags: u32) -> u16 {
+    let mut size: u16 = 0;
+    if flags & 8 != 0 {
+        for _ in 0..5 {
+            size += 1;
+        }
+    }
+    size
+}
+
+// Translated from 0047f840 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TESAIForm::SaveGame` (Xbox PDB; the change flags; `RET 4`): with change
+/// flag 8, writes the five bytes at +4..+8 one at a time (`008579b0` on the
+/// save/load game at `011de45c`).
+pub fn tes_ai_form_save_game(e: &mut Engine, this: Ptr, flags: u32) {
+    if flags & 8 == 0 {
+        return;
+    }
+    for offset in 4..9 {
+        let game = e.global::<u32>(SAVE_LOAD_GAME);
+        e.call(SAVE_WRITE, &args![game, this.addr() + offset, 1u32]);
+    }
+}
+
+// Translated from 0047f8c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TESAIForm::LoadGame` (Xbox PDB; the change flags and a word it does not
+/// read; `RET 8`): with change flag 8, reads the five bytes at +4..+8 one
+/// at a time (`008579e0`).
+pub fn tes_ai_form_load_game(e: &mut Engine, this: Ptr, flags: u32, _unused_2: u32) {
+    if flags & 8 == 0 {
+        return;
+    }
+    for offset in 4..9 {
+        let game = e.global::<u32>(SAVE_LOAD_GAME);
+        e.call(LOAD_READ, &args![game, this.addr() + offset, 1u32]);
+    }
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -439,6 +617,13 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
             0x0047_f590,
             tes_ai_form_get_missed_packages(Ptr, u32, f32, f32)
         ),
+        entry!(0x0047_eeb0, fn_0047eeb0(u8) -> f32),
+        entry!(0x0047_efe0, fn_0047efe0(Ptr, u32) -> bool),
+        entry!(0x0047_f300, tes_ai_form_compare_component(Ptr, Ptr) -> bool),
+        entry!(0x0047_f600, tes_ai_form_sell_buys_item(Ptr, Ptr) -> bool),
+        entry!(0x0047_f7e0, tes_ai_form_get_save_size(Ptr, u32) -> u16),
+        entry!(0x0047_f840, tes_ai_form_save_game(Ptr, u32)),
+        entry!(0x0047_f8c0, tes_ai_form_load_game(Ptr, u32, u32)),
     ]
 }
 
@@ -790,5 +975,187 @@ mod b020_tests {
         e.call(0x0047_f590, &args![0u32, 3u32, 1.5f32, 1.5f32]);
         e.call(0x0047_f590, &args![0x4444u32, 3u32, 1.5f32, 1.5f32]);
         assert_eq!(calls_to(&e, 0x0067_ec40).len(), 1);
+    }
+}
+
+#[cfg(test)]
+mod tests_n042 {
+    use super::*;
+
+    type Log = Vec<(u32, Vec<u32>)>;
+
+    fn run(e: &mut Engine, addr: u32, words: &[u32]) -> (Ret, Log) {
+        e.call_log = Some(vec![]);
+        let result = e.call(addr, words);
+        let log = e
+            .call_log
+            .take()
+            .unwrap()
+            .into_iter()
+            .filter(|(a, _)| *a != addr)
+            .collect();
+        (result, log)
+    }
+
+    fn calls(log: &Log, addr: u32) -> Vec<Vec<u32>> {
+        log.iter()
+            .filter(|(a, _)| *a == addr)
+            .map(|(_, w)| w.clone())
+            .collect()
+    }
+
+    #[test]
+    fn copied_setting_float_by_index() {
+        let mut e = Engine::new();
+        e.map(COPIED_SETTING_FLOATS, 0x14);
+        for i in 0..5 {
+            e.mem
+                .set_u32(COPIED_SETTING_FLOATS + 4 * i, (i as f32 + 0.5).to_bits());
+        }
+        e.mem.set_u32(COPIED_SETTING_FLOATS + 8, 0x7f80_0001);
+        assert_eq!(e.call(0x0047_eeb0, &args![1u32]).f32(), 1.5);
+        assert_eq!(e.call(0x0047_eeb0, &args![4u32]).f32(), 4.5);
+        assert_eq!(
+            e.call(0x0047_eeb0, &args![0x102u32]).f32().to_bits(),
+            0x7fc0_0001
+        );
+        assert_eq!(e.call(0x0047_eeb0, &args![5u32]).f32(), 0.0);
+    }
+
+    #[test]
+    fn service_flag_test() {
+        let mut e = Engine::new();
+        let this = e.mem.alloc(0x20);
+        e.mem.set_u32(this + 0xc, 0x0408);
+        assert!(e.call(0x0047_efe0, &args![this, 0x400u32]).bool());
+        assert!(!e.call(0x0047_efe0, &args![this, 0x3u32]).bool());
+    }
+
+    const GETTERS: [u32; 8] = [
+        0x004f_1540,
+        0x004f_6de0,
+        0x005b_b4d0,
+        0x0062_f2f0,
+        0x0082_5c00,
+        0x0070_5cf0,
+        0x0084_e3a0,
+        0x0082_4060,
+    ];
+
+    fn compare_engine() -> Engine {
+        let mut e = Engine::new();
+        e.register(DYNAMIC_CAST, |_, a| a[0].into_ret());
+        // Each getter returns the word at +0x40 of the form (plus
+        // `0x100` for the byte getters, which the compare must cut off).
+        for getter in GETTERS {
+            e.register(getter, |e, a| e.mem.u32(a[0] + 0x40).into_ret());
+        }
+        e.register(PACKAGE_LIST, |_, a| (a[0] + 0x18).into_ret());
+        e.register(PACKAGE_LISTS_DIFFER, |e, a| {
+            u32::from(e.mem.u32(a[0]) != e.mem.u32(a[1])).into_ret()
+        });
+        e
+    }
+
+    #[test]
+    fn compare_component_checks_every_getter_and_the_packages() {
+        let mut e = compare_engine();
+        let this = e.mem.alloc(0x60);
+        let other = e.mem.alloc(0x60);
+        e.mem.set_u32(this + 0x40, 0x105);
+        e.mem.set_u32(other + 0x40, 0x105);
+        let (ret, log) = run(&mut e, 0x0047_f300, &[this, other]);
+        assert!(!ret.bool());
+        assert_eq!(
+            calls(&log, DYNAMIC_CAST),
+            vec![vec![
+                other,
+                0,
+                TYPE_BASE_FORM_COMPONENT,
+                TYPE_TES_AI_FORM,
+                0
+            ]]
+        );
+        assert_eq!(
+            calls(&log, PACKAGE_LISTS_DIFFER),
+            vec![vec![this + 0x18, other + 0x18]]
+        );
+        // The byte getters see equal bytes, the word getters differ.
+        e.mem.set_u32(other + 0x40, 0x205);
+        let (ret, log) = run(&mut e, 0x0047_f300, &[this, other]);
+        assert!(ret.bool());
+        assert_eq!(calls(&log, 0x0082_5c00).len(), 2);
+        assert!(calls(&log, 0x0070_5cf0).is_empty());
+        // The packages differ.
+        e.mem.set_u32(other + 0x40, 0x105);
+        e.mem.set_u32(other + 0x18, 1);
+        assert!(e.call(0x0047_f300, &args![this, other]).bool());
+        // A direct field getter differs.
+        e.mem.set_u32(other + 0x18, 0);
+        e.mem.set_u8(other + 0x12, 3);
+        let (ret, log) = run(&mut e, 0x0047_f300, &[this, other]);
+        assert!(ret.bool());
+        assert!(calls(&log, 0x004f_6de0).is_empty());
+        e.register(DYNAMIC_CAST, |_, _| Ret::default());
+        let (ret, log) = run(&mut e, 0x0047_f300, &[this, other]);
+        assert!(ret.bool());
+        assert_eq!(log.len(), 1);
+    }
+
+    #[test]
+    fn sell_buys_item_by_form_type_and_equip_type() {
+        let mut e = Engine::new();
+        let this = e.mem.alloc(0x20);
+        let item = e.mem.alloc(0x40);
+        e.register(FORM_TYPE, |e, a| e.mem.u32(a[0]).into_ret());
+        e.register(GET_EQUIP_TYPE, |e, a| e.mem.u32(a[0] + 4).into_ret());
+        let check = |e: &mut Engine, kind: u32, equip: u32, flags: u32| {
+            e.mem.set_u32(item, kind);
+            e.mem.set_u32(item + 4, equip);
+            e.mem.set_u32(this + 0xc, flags);
+            e.call(0x0047_f600, &args![this, item]).bool()
+        };
+        for (kind, flag) in [
+            (0x18, 2),
+            (0x19, 8),
+            (0x1f, 0x400),
+            (0x32, 0x400),
+            (0x67, 0x400),
+            (0x28, 1),
+            (0x29, 1),
+        ] {
+            assert!(check(&mut e, kind, 0, flag), "type {kind:#x}");
+            assert!(!check(&mut e, kind, 0, !flag), "type {kind:#x}");
+        }
+        for (equip, flag) in [(0xa, 0x20), (0xb, 0x40), (0xc, 0x10), (0xd, 4)] {
+            assert!(check(&mut e, 0x2f, equip, flag));
+            assert!(!check(&mut e, 0x2f, equip, !flag));
+        }
+        assert!(!check(&mut e, 0x2f, 0xe, !0));
+        assert!(!check(&mut e, 0x2f, 9, !0));
+        assert!(!check(&mut e, 0x1a, 0, !0));
+        assert!(!check(&mut e, 0x68, 0, !0));
+        assert!(!check(&mut e, 0x17, 0, !0));
+    }
+
+    #[test]
+    fn save_size_save_and_load_follow_change_flag_8() {
+        let mut e = Engine::new();
+        e.register(SAVE_WRITE, |_, _| Ret::default());
+        e.register(LOAD_READ, |_, _| Ret::default());
+        e.map(SAVE_LOAD_GAME, 4);
+        e.mem.set_u32(SAVE_LOAD_GAME, 0x7700);
+        assert_eq!(e.call(0x0047_f7e0, &args![0u32, 8u32]).u32() & 0xffff, 5);
+        assert_eq!(e.call(0x0047_f7e0, &args![0u32, 7u32]).u32() & 0xffff, 0);
+        let this = e.mem.alloc(0x20);
+        let (_, log) = run(&mut e, 0x0047_f840, &[this, 8]);
+        let expected: Vec<Vec<u32>> = (4..9).map(|o| vec![0x7700, this + o, 1]).collect();
+        assert_eq!(calls(&log, SAVE_WRITE), expected);
+        let (_, log) = run(&mut e, 0x0047_f8c0, &[this, 0xff, 0]);
+        assert_eq!(calls(&log, LOAD_READ), expected);
+        let (_, log) = run(&mut e, 0x0047_f840, &[this, 7]);
+        assert!(log.is_empty());
+        let (_, log) = run(&mut e, 0x0047_f8c0, &[this, 7, 0]);
+        assert!(log.is_empty());
     }
 }

@@ -3728,12 +3728,13 @@ pub fn animation_init_group_speed(e: &mut Engine, this: Ptr<Animation>, group: P
 /// `this` (a vector scaled by the inverse of its argument); the map has no
 /// name for it.
 pub fn fn_004941c0(e: &mut Engine, this: Ptr, divisor: f32) -> Ptr {
-    let inverse = (1.0f64 / divisor as f64) as f32;
+    // `FLD1`, `FDIVRP`, `FSTP` the scratch float; then `FLD` each lane, `FMUL` the scratch.
+    let inverse = x87_store32(x87_div(1.0, x87_load32(divisor.to_bits())));
     for i in 0..3u32 {
         let address = this.addr() + 4 * i;
-        let value = e.mem.f32(address);
+        let value = x87_load32(e.mem.u32(address));
         e.mem
-            .set_f32(address, (value as f64 * inverse as f64) as f32);
+            .set_u32(address, x87_store32(x87_mul(value, x87_m32(inverse))));
     }
     this
 }
@@ -4407,7 +4408,7 @@ pub fn fn_00495460(e: &mut Engine, this: Ptr) -> f32 {
 /// Stores `value` in the `float` at +0x1c of `this` (the sequence weight),
 /// raised to 0 when negative; the map has no name for it.
 pub fn fn_00495480(e: &mut Engine, this: Ptr, value: f32) {
-    e.mem.set_f32(this.addr() + 0x1c, value);
+    e.mem.set_f32(this.addr() + 0x1c, x87_quiet(value));
     if (e.mem.f32(this.addr() + 0x1c) as f64) < double_constant(e, DOUBLE_ZERO) {
         e.mem.set_f32(this.addr() + 0x1c, 0.0);
     }

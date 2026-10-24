@@ -90,6 +90,99 @@ pub fn fn_00483170(e: &mut Engine, this: Ptr, value: u16) {
     e.mem.set_u16(this.addr() + 8, value);
 }
 
+/// `TESForm::AddChunk` with a word (`00485910`, `cdecl (chunk, value)`)
+/// and with a 16-bit word (`TESForm::AddChunk_ov2`, `00485950`).
+const ADD_CHUNK_WORD: u32 = 0x0048_5910;
+const ADD_CHUNK_SHORT: u32 = 0x0048_5950;
+/// The getter of the form id at +0xC (`0084e3a0`, `thiscall`).
+const FORM_ID: u32 = 0x0084_e3a0;
+/// `__RTDynamicCast` (`00ec43fb`) from `BaseFormComponent` (`01183040`) to
+/// `TESEnchantableForm` (`011839b4`), the type descriptors' names read at +8.
+const DYNAMIC_CAST: u32 = 0x00ec_43fb;
+const TYPE_BASE_FORM_COMPONENT: u32 = 0x0118_3040;
+const TYPE_ENCHANTABLE_FORM: u32 = 0x0118_39b4;
+/// The getters `CopyComponent` and `CompareComponent` call: the word at +4
+/// (`00726070`) and the 16-bit word (`004a8ae0`, answers `AX`); the setter of
+/// the word at +4 (`006ecd40`, one word) and `0041fd00` (one word, given the
+/// other component's virtual slot `+0x10`).
+const GET_ENCHANTMENT: u32 = 0x0072_6070;
+const GET_AMOUNT: u32 = 0x004a_8ae0;
+const SET_ENCHANTMENT: u32 = 0x006e_cd40;
+const SET_SLOT_10_VALUE: u32 = 0x0041_fd00;
+
+// Translated from 0047bd70 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TESEnchantableForm::Save` (Xbox PDB): with an enchantment (+4), adds
+/// `EITM` holding its form id (`0084e3a0`); with a non-zero 16-bit word at
+/// +8, adds `EAMT` holding it.
+pub fn tes_enchantable_form_save(e: &mut Engine, this: Ptr) {
+    let enchantment = e.mem.u32(this.addr() + 4);
+    if enchantment != 0 {
+        let id = e.call(FORM_ID, &args![enchantment]).u32();
+        e.call(ADD_CHUNK_WORD, &args![0x4d54_4945u32, id]);
+    }
+    let amount = e.mem.u16(this.addr() + 8);
+    if amount != 0 {
+        e.call(ADD_CHUNK_SHORT, &args![0x544d_4145u32, u32::from(amount)]);
+    }
+}
+
+// Translated from 00483100 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TESEnchantableForm::CopyComponent` (Xbox PDB): when `other` casts to
+/// `TESEnchantableForm`, takes its word at +4 (`00726070` into `006ecd40`),
+/// its 16-bit word (`004a8ae0` into `fn_00483170`) and hands its virtual
+/// slot `+0x10`'s answer to `0041fd00`.
+pub fn tes_enchantable_form_copy_component(e: &mut Engine, this: Ptr, other: Ptr) {
+    let source = e
+        .call(
+            DYNAMIC_CAST,
+            &args![
+                other,
+                0u32,
+                TYPE_BASE_FORM_COMPONENT,
+                TYPE_ENCHANTABLE_FORM,
+                0u32
+            ],
+        )
+        .u32();
+    if source == 0 {
+        return;
+    }
+    let enchantment = e.call(GET_ENCHANTMENT, &args![source]).u32();
+    e.call(SET_ENCHANTMENT, &args![this, enchantment]);
+    let amount = e.call(GET_AMOUNT, &args![source]).u16();
+    fn_00483170(e, this, amount);
+    let value = e.vcall(source, 0x10, &args![]).u32();
+    e.call(SET_SLOT_10_VALUE, &args![this, value]);
+}
+
+// Translated from 00483190 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TESEnchantableForm::CompareComponent` (Xbox PDB): true (different) when
+/// `other` is no `TESEnchantableForm`, when the words at +4 (`00726070`)
+/// differ or when the 16-bit words (`004a8ae0`) differ.
+pub fn tes_enchantable_form_compare_component(e: &mut Engine, this: Ptr, other: Ptr) -> bool {
+    let source = e
+        .call(
+            DYNAMIC_CAST,
+            &args![
+                other,
+                0u32,
+                TYPE_BASE_FORM_COMPONENT,
+                TYPE_ENCHANTABLE_FORM,
+                0u32
+            ],
+        )
+        .u32();
+    if source == 0 {
+        return true;
+    }
+    let own = e.call(GET_ENCHANTMENT, &args![this]).u32();
+    if own != e.call(GET_ENCHANTMENT, &args![source]).u32() {
+        return true;
+    }
+    let own = e.call(GET_AMOUNT, &args![this]).u16();
+    own != e.call(GET_AMOUNT, &args![source]).u16()
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -99,6 +192,9 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
             tes_enchantable_form_initialize_data_component(Ptr)
         ),
         entry!(0x00483170, fn_00483170(Ptr, u16)),
+        entry!(0x0047_bd70, tes_enchantable_form_save(Ptr)),
+        entry!(0x0048_3100, tes_enchantable_form_copy_component(Ptr, Ptr)),
+        entry!(0x0048_3190, tes_enchantable_form_compare_component(Ptr, Ptr) -> bool),
     ]
 }
 
@@ -252,5 +348,105 @@ mod movement_path_tests {
                 OWNER_NAME
             ]]
         );
+    }
+}
+
+#[cfg(test)]
+mod n043_tests {
+    use super::*;
+
+    const SLOT_10: u32 = 0x7100_0010;
+
+    fn calls(e: &Engine, addr: u32) -> Vec<Vec<u32>> {
+        e.call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|c| c.0 == addr)
+            .map(|c| c.1.clone())
+            .collect()
+    }
+
+    fn engine() -> Engine {
+        let mut e = Engine::new();
+        e.register(ADD_CHUNK_WORD, |_, _| Ret::default());
+        e.register(ADD_CHUNK_SHORT, |_, _| Ret::default());
+        e.register(FORM_ID, |_, a| (a[0] + 0x10).into_ret());
+        e.register(DYNAMIC_CAST, |_, a| a[0].into_ret());
+        e.register(GET_ENCHANTMENT, |e, a| e.mem.u32(a[0] + 4).into_ret());
+        e.register(GET_AMOUNT, |e, a| {
+            (0xabcd_0000 | u32::from(e.mem.u16(a[0] + 8))).into_ret()
+        });
+        e.register(SET_ENCHANTMENT, |e, a| {
+            e.mem.set_u32(a[0] + 4, a[1]);
+            Ret::default()
+        });
+        e.register(SET_SLOT_10_VALUE, |_, _| Ret::default());
+        e.register(SLOT_10, |_, a| (a[0] + 0x30).into_ret());
+        e
+    }
+
+    fn component(e: &mut Engine, enchantment: u32, amount: u16) -> u32 {
+        let vtable = e.mem.alloc(0x20);
+        e.mem.set_u32(vtable + 0x10, SLOT_10);
+        let object = e.mem.alloc(0x10);
+        e.mem.set_u32(object, vtable);
+        e.mem.set_u32(object + 4, enchantment);
+        e.mem.set_u16(object + 8, amount);
+        object
+    }
+
+    #[test]
+    fn save_adds_the_chunks_it_has() {
+        let mut e = engine();
+        let this = component(&mut e, 0x5000, 7);
+        e.call_log = Some(vec![]);
+        e.call(0x0047_bd70, &args![this]);
+        assert_eq!(calls(&e, ADD_CHUNK_WORD), vec![vec![0x4d54_4945, 0x5010]]);
+        assert_eq!(calls(&e, ADD_CHUNK_SHORT), vec![vec![0x544d_4145, 7]]);
+        let empty = component(&mut e, 0, 0);
+        e.call_log = Some(vec![]);
+        e.call(0x0047_bd70, &args![empty]);
+        assert_eq!(e.call_log.as_ref().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn copy_component_takes_the_three_values() {
+        let mut e = engine();
+        let this = component(&mut e, 0, 0);
+        let other = component(&mut e, 0x5000, 9);
+        e.call_log = Some(vec![]);
+        e.call(0x0048_3100, &args![this, other]);
+        assert_eq!(
+            calls(&e, DYNAMIC_CAST),
+            vec![vec![
+                other,
+                0,
+                TYPE_BASE_FORM_COMPONENT,
+                TYPE_ENCHANTABLE_FORM,
+                0
+            ]]
+        );
+        assert_eq!(e.mem.u32(this + 4), 0x5000);
+        assert_eq!(e.mem.u16(this + 8), 9);
+        assert_eq!(calls(&e, SET_SLOT_10_VALUE), vec![vec![this, other + 0x30]]);
+        e.register(DYNAMIC_CAST, |_, _| 0u32.into_ret());
+        e.call_log = Some(vec![]);
+        e.call(0x0048_3100, &args![this, other]);
+        assert_eq!(e.call_log.as_ref().unwrap().len(), 2);
+    }
+
+    #[test]
+    fn compare_component_branches() {
+        let mut e = engine();
+        let this = component(&mut e, 0x5000, 9);
+        let same = component(&mut e, 0x5000, 9);
+        let other_enchantment = component(&mut e, 0x6000, 9);
+        let other_amount = component(&mut e, 0x5000, 8);
+        assert!(!e.call(0x0048_3190, &args![this, same]).bool());
+        assert!(e.call(0x0048_3190, &args![this, other_enchantment]).bool());
+        assert!(e.call(0x0048_3190, &args![this, other_amount]).bool());
+        e.register(DYNAMIC_CAST, |_, _| 0u32.into_ret());
+        assert!(e.call(0x0048_3190, &args![this, same]).bool());
     }
 }

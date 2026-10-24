@@ -1057,10 +1057,10 @@ pub fn fn_0050f760(e: &mut Engine, this: Ptr<TESBoundObject>, argument: u32) -> 
 
 // Translated from 0050f780 (decompiled, FalloutNV.exe 1.4.0.525)
 /// Forwards (`argument`, `flag`) to `008d0600` (the engine map names it
-/// `ProcessLists::PrintLists`; unconfirmed) with the same `this` and returns
-/// its result.
-pub fn fn_0050f780(e: &mut Engine, this: Ptr, argument: u32, flag: u8) -> u32 {
-    e.call(0x008d_0600, &args![this, argument, flag]).u32()
+/// `ProcessLists::PrintLists`; unconfirmed) with the same `this`. Both are
+/// `void` (Ghidra; `008d0600` returns at once): nothing is answered.
+pub fn fn_0050f780(e: &mut Engine, this: Ptr, argument: u32, flag: u8) {
+    e.call(0x008d_0600, &args![this, argument, flag]);
 }
 
 // Translated from 0050f7a0 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -1459,7 +1459,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
             tes_bound_anim_object_destruct(Ptr<TESBoundObject>)
         ),
         entry!(0x0050f760, fn_0050f760(Ptr<TESBoundObject>, u32) -> bool),
-        entry!(0x0050f780, fn_0050f780(Ptr, u32, u8) -> u32),
+        entry!(0x0050f780, fn_0050f780(Ptr, u32, u8)),
         entry!(
             0x0050f7a0,
             tes_bound_tree_object_construct(Ptr<TESBoundObject>) -> Ptr<TESBoundObject>
@@ -2727,7 +2727,7 @@ mod tests {
         let mut e = engine();
         e.register(0x008d_0600, |_, _| ret(0x42));
         start_log(&mut e);
-        assert_eq!(e.call(0x0050f780, &[0x1000, 0x2000, 0x1ff]).u32(), 0x42);
+        e.call(0x0050f780, &[0x1000, 0x2000, 0x1ff]);
         assert_eq!(
             calls(&mut e),
             vec![(0x008d_0600, vec![0x1000, 0x2000, 0xff])]

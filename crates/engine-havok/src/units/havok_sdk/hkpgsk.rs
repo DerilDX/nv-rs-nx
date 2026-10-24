@@ -417,7 +417,7 @@ pub fn hkp_gsk_convert_feature_to_closest_distance(
         copy16(e, t + 0x20, o + 0x10);
     } else if e.mem.u32(t + 4) == 1 {
         let w = shufps(ld(e, i), ld(e, i), 0xff);
-        let moved = vadd(vmul(w, ld(e, o)), ld(e, t + 0xa0));
+        let moved = crate::sse::addps(crate::sse::mulps(w, ld(e, o)), ld(e, t + 0xa0));
         st(e, o + 0x10, moved);
     } else {
         copy16(e, t + 0x130, o + 0x10);

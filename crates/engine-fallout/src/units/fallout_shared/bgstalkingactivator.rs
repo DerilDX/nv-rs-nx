@@ -664,6 +664,281 @@ pub fn fn_004ff980(e: &mut Engine, this: Ptr, value: Ptr) {
     e.mem.set_u32(head, bits);
 }
 
+/// `TESForm::StartForm`, `TESForm::CloseForm` (Xbox PDB, `004855a0`,
+/// `00485680`).
+const START_FORM: u32 = 0x0048_55a0;
+const CLOSE_FORM: u32 = 0x0048_5680;
+/// The components' `Save`s (Xbox PDB): `TESFullName::Save` (`00487010`),
+/// `TESModelTextureSwap::Save` (`0048a520`, `RET 0xC`: three signatures),
+/// `TESScriptableForm::Save` (`0048cca0`), `BGSDestructibleObjectForm::Save`
+/// (`00477f20`).
+const FULL_NAME_SAVE: u32 = 0x0048_7010;
+const MODEL_SAVE: u32 = 0x0048_a520;
+const SCRIPTABLE_SAVE: u32 = 0x0048_cca0;
+const DESTRUCTIBLE_SAVE: u32 = 0x0047_7f20;
+/// Writes a one-word chunk (`00485910`, cdecl: signature, word).
+const ADD_CHUNK_WORD: u32 = 0x0048_5910;
+/// The `BGSTalkingActivator` type descriptor
+/// (`.?AVBGSTalkingActivator@@`).
+const TYPE_TALKING_ACTIVATOR: u32 = 0x0118_9e04;
+/// The activator part's copy (`00511120`) and comparison (`005111e0`, true
+/// when different); one stack word: the other form.
+const ACTIVATOR_COPY: u32 = 0x0051_1120;
+const ACTIVATOR_DIFFERS: u32 = 0x0051_11e0;
+/// `005113d0` (`this` only, `bool`): the activator part's test that
+/// `fn_004fee20` adds to `004fedc0`'s.
+const ACTIVATOR_TEST_5113D0: u32 = 0x0051_13d0;
+/// `pVoiceType`'s getter (`009185e0`, the word at +0x94).
+const GET_VOICE_TYPE: u32 = 0x0091_85e0;
+/// The player (`PlayerCharacter*` at `011dea3c`).
+const PLAYER: u32 = 0x011d_ea3c;
+/// A reference's extra data list (`005d43c0`, `this` = reference).
+const REFERENCE_EXTRA_LIST: u32 = 0x005d_43c0;
+/// `ExtraDataList::GetTalkingActorExtra` (Xbox PDB, `0042e110`) and
+/// `ExtraDataList::SetTalkingActorExtra` (Xbox PDB, `0042e060`; two stack
+/// words: the activator, the reference).
+const GET_TALKING_ACTOR_EXTRA: u32 = 0x0042_e110;
+const SET_TALKING_ACTOR_EXTRA: u32 = 0x0042_e060;
+/// `TESObjectREFR::AddTalkingActivatorMobileObjectREFR` (Xbox PDB,
+/// `00578950`, `this` = reference).
+const ADD_TALKING_MOBILE_OBJECT: u32 = 0x0057_8950;
+/// `VATS::QuitVATSPlayback` (Xbox PDB, `009c8950`, `RET 8`) on the object at
+/// `011f2250`.
+const QUIT_VATS_PLAYBACK: u32 = 0x009c_8950;
+const VATS_011F2250: u32 = 0x011f_2250;
+/// `Interface::QueueMenuCreate` (Xbox PDB, `00709470`, cdecl, six words).
+const QUEUE_MENU_CREATE: u32 = 0x0070_9470;
+/// `MobileObject::GetCurrentPackage` (Xbox PDB, `009344a0`).
+const GET_CURRENT_PACKAGE: u32 = 0x0093_44a0;
+/// `0041ca90` (`this` = package): the package's type.
+const PACKAGE_TYPE: u32 = 0x0041_ca90;
+/// `DialoguePackage::GetActorStartedConversation` (Xbox PDB, `009ee040`).
+const ACTOR_STARTED_CONVERSATION: u32 = 0x009e_e040;
+/// `00403df0` (`this` only): the word at +4 of a non-null `this`, else 0;
+/// used on `011d4810`.
+const WORD_AT_4: u32 = 0x0040_3df0;
+const OBJECT_011D4810: u32 = 0x011d_4810;
+/// `007052f0` (cdecl, six words), given that word, three zeros, the `float`
+/// at `010162c0` and a zero when the player activates a talking activator
+/// whose reference already has a talker.
+const NOTICE_7052F0: u32 = 0x0070_52f0;
+const NOTICE_VALUE_010162C0: u32 = 0x0101_62c0;
+/// Reference virtual slots as this code uses them: 0xFC and 0x100 (`bool`
+/// tests, no arguments), 0x48 / 0x4C (one word: flag bits set / cleared, as
+/// the setter of `pTempRef` pairs them), 0x280 (nine words).
+const SLOT_FC: u32 = 0xfc;
+const SLOT_100: u32 = 0x100;
+const SLOT_SET_FLAGS: u32 = 0x48;
+const SLOT_CLEAR_FLAGS: u32 = 0x4c;
+const SLOT_280: u32 = 0x280;
+
+/// `other` cast from `TESForm` to `BGSTalkingActivator` (0 when it is not
+/// one).
+fn cast_talking_activator(e: &mut Engine, other: Ptr) -> u32 {
+    e.call(
+        RT_DYNAMIC_CAST,
+        &args![other, 0u32, CAST_SOURCE_TYPE, TYPE_TALKING_ACTIVATOR, 0u32],
+    )
+    .u32()
+}
+
+/// `reference`'s `ExtraTalkingActor` (`GetTalkingActorExtra` on its extra
+/// data list).
+fn talking_actor_extra(e: &mut Engine, reference: Ptr) -> u32 {
+    let list = e.call(REFERENCE_EXTRA_LIST, &args![reference]).u32();
+    e.call(GET_TALKING_ACTOR_EXTRA, &args![list]).u32()
+}
+
+// Translated from 004fec10 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The talking activator's `Save`: starts the form, saves the full name,
+/// the model (`MODL`/`MODT`/`MODS`), the script and the destructible data,
+/// then one-word chunks of the form ids of `pSoundLoop` (`SNAM`, `+0x74`),
+/// `pVoiceType` (`VNAM`, `+0x94`) and `pRadioTemplate` (`INAM`, `+0x7C`)
+/// that are set, and closes the form.
+pub fn fn_004fec10(e: &mut Engine, this: Ptr) {
+    let base = this.addr();
+    e.call(START_FORM, &args![this]);
+    e.call(FULL_NAME_SAVE, &args![base + FULL_NAME]);
+    e.call(
+        MODEL_SAVE,
+        &args![base + MODEL, CHUNK_MODL, CHUNK_MODT, CHUNK_MODS],
+    );
+    e.call(SCRIPTABLE_SAVE, &args![base + SCRIPTABLE]);
+    e.call(DESTRUCTIBLE_SAVE, &args![base + DESTRUCTIBLE]);
+    for (field, chunk) in [(0x74, CHUNK_SNAM), (0x94, CHUNK_VNAM), (0x7c, CHUNK_INAM)] {
+        let form = e.mem.u32(base + field);
+        if form != 0 {
+            let id = e.call(FORM_ID_84E3A0, &args![form]).u32();
+            e.call(ADD_CHUNK_WORD, &args![chunk, id]);
+        }
+    }
+    e.call(CLOSE_FORM, &args![this]);
+}
+
+// Translated from 004fecf0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The talking activator's form copy (`RET 4`): when `other` casts to a
+/// `BGSTalkingActivator`, the activator part is copied (`00511120`, given
+/// `other` as passed) and `pVoiceType` taken from the cast form.
+pub fn fn_004fecf0(e: &mut Engine, this: Ptr, other: Ptr) {
+    let source = cast_talking_activator(e, other);
+    if source == 0 {
+        return;
+    }
+    e.call(ACTIVATOR_COPY, &args![this, other]);
+    let voice = e.call(GET_VOICE_TYPE, &args![source]).u32();
+    fn_004febf0(e, this, voice);
+}
+
+// Translated from 004fed50 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The talking activator's form comparison (`RET 4`): true (different) when
+/// `other` is not a `BGSTalkingActivator`, the activator parts differ
+/// (`005111e0`) or the voice types differ; false otherwise.
+pub fn fn_004fed50(e: &mut Engine, this: Ptr, other: Ptr) -> bool {
+    let source = cast_talking_activator(e, other);
+    if source == 0 {
+        return true;
+    }
+    if e.call(ACTIVATOR_DIFFERS, &args![this, other]).bool() {
+        return true;
+    }
+    let mine = e.call(GET_VOICE_TYPE, &args![this]).u32();
+    mine != e.call(GET_VOICE_TYPE, &args![source]).u32()
+}
+
+// Translated from 004fee20 (decompiled, FalloutNV.exe 1.4.0.525)
+/// True when both `004fedc0` (its low byte) and `005113d0` say yes.
+pub fn fn_004fee20(e: &mut Engine, this: Ptr) -> bool {
+    fn_004fedc0(e, this) as u8 != 0 && e.call(ACTIVATOR_TEST_5113D0, &args![this]).bool()
+}
+
+// Translated from 004fee60 (decompiled, FalloutNV.exe 1.4.0.525)
+/// cdecl(form): true for a non-null form of type 0x16 for which both
+/// `004fedc0` and `fn_004fee20` say yes.
+pub fn fn_004fee60(e: &mut Engine, form: Ptr) -> bool {
+    if form.is_null() || e.call(FORM_TYPE, &args![form]).u32() != TALKING_ACTIVATOR_TYPE {
+        return false;
+    }
+    fn_004fedc0(e, form) as u8 != 0 && fn_004fee20(e, form)
+}
+
+// Translated from 004feeb0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BGSTalkingActivator::Activate` (Xbox PDB; `RET 0x14`, the last three
+/// words unread): `reference` is the activator's reference, `activator` who
+/// activates it.
+///
+/// When the player activates a reference whose `ExtraTalkingActor` already
+/// has a talker (`+0xC`), `007052f0` is called with the word `00403df0`
+/// reads from `011d4810`, three zeros, the `float` at `010162c0` and 0, and
+/// false is returned. Otherwise the talker is the reference itself when its
+/// slot 0xFC says so, else the reference gets a talking-actor extra
+/// (`SetTalkingActorExtra(this, reference)`), flag 0x80000000 through its
+/// slot 0x48, and the extra's talker. The target is `activator` when its
+/// slot 0x100 says so, else `AddTalkingActivatorMobileObjectREFR`'s answer.
+/// With a talker: for the player, `VATS::QuitVATSPlayback(0, 0)` and
+/// `Interface::QueueMenuCreate(4, talker, 0, pTempRef, 1, 0)`; for anyone
+/// else the talker's slot 0x280 is called with (target, 0, 0, 1, 0, 0, 0,
+/// 0, 0) unless the talker's current package is of type 0x1C and was
+/// started by the target. True then.
+pub fn bgs_talking_activator_activate(
+    e: &mut Engine,
+    this: Ptr,
+    reference: Ptr,
+    activator: Ptr,
+    _unused_3: u32,
+    _unused_4: u32,
+    _unused_5: u32,
+) -> bool {
+    if activator.addr() == e.mem.u32(PLAYER) {
+        let extra = talking_actor_extra(e, reference);
+        if extra != 0 && e.mem.u32(extra + 0xc) != 0 {
+            let word = e.call(WORD_AT_4, &args![OBJECT_011D4810]).u32();
+            let value = x87_quiet_bits(e.mem.u32(NOTICE_VALUE_010162C0));
+            e.call(NOTICE_7052F0, &args![word, 0u32, 0u32, 0u32, value, 0u32]);
+            return false;
+        }
+    }
+    let talker = if e.vcall(reference.addr(), SLOT_FC, &[]).bool() {
+        reference.addr()
+    } else {
+        let list = e.call(REFERENCE_EXTRA_LIST, &args![reference]).u32();
+        e.call(SET_TALKING_ACTOR_EXTRA, &args![list, this, reference]);
+        e.vcall(reference.addr(), SLOT_SET_FLAGS, &args![0x8000_0000u32]);
+        let extra = talking_actor_extra(e, reference);
+        e.mem.u32(extra + 0xc)
+    };
+    let target = if e.vcall(activator.addr(), SLOT_100, &[]).bool() {
+        activator.addr()
+    } else {
+        e.call(ADD_TALKING_MOBILE_OBJECT, &args![activator]).u32()
+    };
+    if talker == 0 {
+        return true;
+    }
+    if activator.addr() == e.mem.u32(PLAYER) {
+        e.call(QUIT_VATS_PLAYBACK, &args![VATS_011F2250, 0u32, 0u32]);
+        let temp_ref = e.mem.u32(this.addr() + 0x90);
+        e.call(
+            QUEUE_MENU_CREATE,
+            &args![4u32, talker, 0u32, temp_ref, 1u32, 0u32],
+        );
+        return true;
+    }
+    let mut package = 0;
+    if e.call(GET_CURRENT_PACKAGE, &args![talker]).u32() != 0 {
+        let current = e.call(GET_CURRENT_PACKAGE, &args![talker]).u32();
+        if e.call(PACKAGE_TYPE, &args![current]).u32() == 0x1c {
+            package = e.call(GET_CURRENT_PACKAGE, &args![talker]).u32();
+        }
+    }
+    if package != 0 && e.call(ACTOR_STARTED_CONVERSATION, &args![package]).u32() == target {
+        return true;
+    }
+    e.vcall(
+        talker,
+        SLOT_280,
+        &args![target, 0u32, 0u32, 1u32, 0u32, 0u32, 0u32, 0u32, 0u32],
+    );
+    true
+}
+
+// Translated from 004ff070 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BGSTalkingActivator::AddMobileObjectExtra` (Xbox PDB; `RET 4`): gives
+/// `reference` a talking-actor extra (`SetTalkingActorExtra(this,
+/// reference)`), flag 0x80000000 through its slot 0x48, and returns the
+/// extra's talker (`+0xC`), 0 without an extra.
+pub fn bgs_talking_activator_add_mobile_object_extra(
+    e: &mut Engine,
+    this: Ptr,
+    reference: Ptr,
+) -> u32 {
+    let list = e.call(REFERENCE_EXTRA_LIST, &args![reference]).u32();
+    e.call(SET_TALKING_ACTOR_EXTRA, &args![list, this, reference]);
+    e.vcall(reference.addr(), SLOT_SET_FLAGS, &args![0x8000_0000u32]);
+    if talking_actor_extra(e, reference) == 0 {
+        return 0;
+    }
+    let extra = talking_actor_extra(e, reference);
+    e.mem.u32(extra + 0xc)
+}
+
+// Translated from 004ff0e0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Sets `pTempRef` (`+0x90`, `RET 4`): a non-null reference whose slot
+/// 0x100 says no is refused; otherwise it is stored and flag 0x800000 set
+/// on the activator through its slot 0x48, or for null cleared through its
+/// slot 0x4C.
+pub fn fn_004ff0e0(e: &mut Engine, this: Ptr, reference: Ptr) {
+    if !reference.is_null() && !e.vcall(reference.addr(), SLOT_100, &[]).bool() {
+        return;
+    }
+    e.mem.set_u32(this.addr() + 0x90, reference.addr());
+    let slot = if reference.is_null() {
+        SLOT_CLEAR_FLAGS
+    } else {
+        SLOT_SET_FLAGS
+    };
+    e.vcall(this.addr(), slot, &args![0x0080_0000u32]);
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -687,6 +962,20 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
             bgs_talking_activator_get_radio_stations_in_range_of_ref(Ptr, Ptr, Ptr)
         ),
         entry!(0x004f_f980, fn_004ff980(Ptr, Ptr)),
+        entry!(0x004f_ec10, fn_004fec10(Ptr)),
+        entry!(0x004f_ecf0, fn_004fecf0(Ptr, Ptr)),
+        entry!(0x004f_ed50, fn_004fed50(Ptr, Ptr) -> bool),
+        entry!(0x004f_ee20, fn_004fee20(Ptr) -> bool),
+        entry!(0x004f_ee60, fn_004fee60(Ptr) -> bool),
+        entry!(
+            0x004f_eeb0,
+            bgs_talking_activator_activate(Ptr, Ptr, Ptr, u32, u32, u32) -> bool
+        ),
+        entry!(
+            0x004f_f070,
+            bgs_talking_activator_add_mobile_object_extra(Ptr, Ptr) -> u32
+        ),
+        entry!(0x004f_f0e0, fn_004ff0e0(Ptr, Ptr)),
     ]
 }
 
@@ -1198,5 +1487,298 @@ mod tests {
         let node = e.mem.u32(list + 4);
         assert_eq!(e.mem.f32(node), 2.5);
         assert_eq!(e.mem.u32(node + 4), 0);
+    }
+}
+
+#[cfg(test)]
+mod n037_tests {
+    use super::*;
+
+    fn ret(eax: u32) -> Ret {
+        Ret {
+            eax,
+            ..Ret::default()
+        }
+    }
+
+    fn calls_to(e: &Engine, addr: u32) -> Vec<Vec<u32>> {
+        e.call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|c| c.0 == addr)
+            .map(|c| c.1.clone())
+            .collect()
+    }
+
+    const VTABLE: u32 = 0x0600_0000;
+    const SLOT_TARGET: u32 = 0x7000_0000;
+
+    /// Objects share one vtable; slot `n` runs the double at `0x70000000 +
+    /// n`. Slot 0xFC answers bit 0 of the word at +4, slot 0x100 bit 1.
+    fn engine() -> Engine {
+        let mut e = Engine::new();
+        let slots: Vec<u32> = (0..0xa1).map(|i| SLOT_TARGET + 4 * i).collect();
+        e.put_vtable(VTABLE, &slots);
+        e.register(SLOT_TARGET + SLOT_FC, |e, a| ret(e.mem.u32(a[0] + 4) & 1));
+        e.register(SLOT_TARGET + SLOT_100, |e, a| {
+            ret((e.mem.u32(a[0] + 4) >> 1) & 1)
+        });
+        for slot in [SLOT_SET_FLAGS, SLOT_CLEAR_FLAGS, SLOT_280] {
+            e.register(SLOT_TARGET + slot, |_, _| Ret::default());
+        }
+        e.map(PLAYER, 4);
+        e.call_log = Some(vec![]);
+        e
+    }
+
+    fn object(e: &mut Engine, flags: u32) -> u32 {
+        let object = e.mem.alloc(0xa0);
+        e.mem.set_u32(object, VTABLE);
+        e.mem.set_u32(object + 4, flags);
+        object
+    }
+
+    #[test]
+    fn save_writes_components_and_the_set_forms() {
+        let mut e = engine();
+        for addr in [
+            START_FORM,
+            CLOSE_FORM,
+            FULL_NAME_SAVE,
+            MODEL_SAVE,
+            SCRIPTABLE_SAVE,
+            DESTRUCTIBLE_SAVE,
+            ADD_CHUNK_WORD,
+        ] {
+            e.register(addr, |_, _| Ret::default());
+        }
+        e.register(FORM_ID_84E3A0, |_, a| ret(a[0] + 1));
+        let this = e.mem.alloc(0x98);
+        e.mem.set_u32(this + 0x74, 0x500);
+        e.mem.set_u32(this + 0x7c, 0x700);
+        e.call(0x004f_ec10, &[this]);
+        assert_eq!(
+            calls_to(&e, MODEL_SAVE),
+            vec![vec![this + 0x3c, CHUNK_MODL, CHUNK_MODT, CHUNK_MODS]]
+        );
+        assert_eq!(calls_to(&e, DESTRUCTIBLE_SAVE), vec![vec![this + 0x68]]);
+        assert_eq!(
+            calls_to(&e, ADD_CHUNK_WORD),
+            vec![vec![CHUNK_SNAM, 0x501], vec![CHUNK_INAM, 0x701]]
+        );
+        e.mem.set_u32(this + 0x94, 0x600);
+        e.call_log = Some(vec![]);
+        e.call(0x004f_ec10, &[this]);
+        assert_eq!(calls_to(&e, ADD_CHUNK_WORD)[1], vec![CHUNK_VNAM, 0x601]);
+        assert_eq!(calls_to(&e, CLOSE_FORM), vec![vec![this]]);
+    }
+
+    #[test]
+    fn copy_and_compare_use_the_activator_part_and_the_voice() {
+        let mut e = engine();
+        e.register(RT_DYNAMIC_CAST, |_, a| {
+            ret(if a[0] & 1 == 0 { a[0] } else { 0 })
+        });
+        e.register(ACTIVATOR_COPY, |_, _| Ret::default());
+        e.register(GET_VOICE_TYPE, |e, a| ret(e.mem.u32(a[0] + 0x94)));
+        e.register(ACTIVATOR_DIFFERS, |e, a| {
+            ret(u32::from(e.mem.u32(a[1] + 0x30) != 0))
+        });
+        let this = e.mem.alloc(0x98);
+        let other = e.mem.alloc(0x98);
+        e.mem.set_u32(other + 0x94, 0x600);
+        e.call(0x004f_ecf0, &[this, other + 1]);
+        assert_eq!(e.mem.u32(this + 0x94), 0);
+        assert!(e.call(0x004f_ed50, &[this, other + 1]).bool());
+        assert!(e.call(0x004f_ed50, &[this, other]).bool());
+        e.call(0x004f_ecf0, &[this, other]);
+        assert_eq!(e.mem.u32(this + 0x94), 0x600);
+        assert_eq!(calls_to(&e, ACTIVATOR_COPY), vec![vec![this, other]]);
+        assert_eq!(
+            calls_to(&e, RT_DYNAMIC_CAST)[0],
+            vec![other + 1, 0, CAST_SOURCE_TYPE, TYPE_TALKING_ACTIVATOR, 0]
+        );
+        assert!(!e.call(0x004f_ed50, &[this, other]).bool());
+        e.mem.set_u32(other + 0x30, 1);
+        assert!(e.call(0x004f_ed50, &[this, other]).bool());
+    }
+
+    #[test]
+    fn the_two_radio_tests() {
+        let mut e = engine();
+        // 004011d0 answers the word at +8 (only its low byte counts),
+        // 005113d0 the word at +0xC.
+        e.register(FORM_CALL_4011D0, |e, a| ret(e.mem.u32(a[0] + 8)));
+        e.register(ACTIVATOR_TEST_5113D0, |e, a| ret(e.mem.u32(a[0] + 0xc)));
+        e.register(FORM_TYPE, |e, a| ret(e.mem.u32(a[0] + 0x10)));
+        let form = e.mem.alloc(0x20);
+        e.mem.set_u32(form + 8, 0x100);
+        e.mem.set_u32(form + 0xc, 1);
+        e.mem.set_u32(form + 0x10, TALKING_ACTIVATOR_TYPE);
+        assert!(!e.call(0x004f_ee20, &[form]).bool());
+        assert!(!e.call(0x004f_ee60, &[form]).bool());
+        e.mem.set_u32(form + 8, 1);
+        assert!(e.call(0x004f_ee20, &[form]).bool());
+        assert!(e.call(0x004f_ee60, &[form]).bool());
+        e.mem.set_u32(form + 0xc, 0);
+        assert!(!e.call(0x004f_ee20, &[form]).bool());
+        assert!(!e.call(0x004f_ee60, &[form]).bool());
+        e.mem.set_u32(form + 0xc, 1);
+        e.mem.set_u32(form + 0x10, 0x15);
+        assert!(!e.call(0x004f_ee60, &[form]).bool());
+        assert!(!e.call(0x004f_ee60, &[0]).bool());
+    }
+
+    /// Doubles for `Activate`: the extra list is the reference plus 0x40,
+    /// the extra the list plus 0x10 unless the list's word is 0, packages
+    /// as the word at +0x20 of the talker.
+    fn activate_engine() -> Engine {
+        let mut e = engine();
+        e.register(REFERENCE_EXTRA_LIST, |_, a| ret(a[0] + 0x40));
+        e.register(GET_TALKING_ACTOR_EXTRA, |e, a| {
+            ret(if e.mem.u32(a[0]) == 0 { 0 } else { a[0] + 0x10 })
+        });
+        e.register(SET_TALKING_ACTOR_EXTRA, |e, a| {
+            e.mem.set_u32(a[0], 1);
+            let talker = e.mem.u32(a[2] + 0x60);
+            e.mem.set_u32(a[0] + 0x1c, talker);
+            Ret::default()
+        });
+        e.register(ADD_TALKING_MOBILE_OBJECT, |_, a| ret(a[0] + 2));
+        e.register(WORD_AT_4, |_, _| ret(0x55));
+        for addr in [NOTICE_7052F0, QUIT_VATS_PLAYBACK, QUEUE_MENU_CREATE] {
+            e.register(addr, |_, _| Ret::default());
+        }
+        e.register(GET_CURRENT_PACKAGE, |e, a| ret(e.mem.u32(a[0] + 0x20)));
+        e.register(PACKAGE_TYPE, |e, a| ret(e.mem.u32(a[0])));
+        e.register(ACTOR_STARTED_CONVERSATION, |e, a| ret(e.mem.u32(a[0] + 4)));
+        e.map(NOTICE_VALUE_010162C0, 4);
+        e.mem.set_u32(NOTICE_VALUE_010162C0, 2.0f32.to_bits());
+        e
+    }
+
+    #[test]
+    fn activate_by_the_player() {
+        let mut e = activate_engine();
+        let this = e.mem.alloc(0x98);
+        e.mem.set_u32(this + 0x90, 0x777);
+        let player = object(&mut e, 2);
+        e.mem.set_u32(PLAYER, player);
+        let reference = object(&mut e, 0);
+        let talker = object(&mut e, 0);
+        e.mem.set_u32(reference + 0x60, talker);
+        // No extra yet: one is made, its talker opens the dialogue menu.
+        let r = e.call(0x004f_eeb0, &[this, reference, player, 9, 9, 9]);
+        assert!(r.bool());
+        assert_eq!(
+            calls_to(&e, SET_TALKING_ACTOR_EXTRA),
+            vec![vec![reference + 0x40, this, reference]]
+        );
+        assert_eq!(
+            calls_to(&e, SLOT_TARGET + SLOT_SET_FLAGS),
+            vec![vec![reference, 0x8000_0000]]
+        );
+        assert_eq!(
+            calls_to(&e, QUIT_VATS_PLAYBACK),
+            vec![vec![VATS_011F2250, 0, 0]]
+        );
+        assert_eq!(
+            calls_to(&e, QUEUE_MENU_CREATE),
+            vec![vec![4, talker, 0, 0x777, 1, 0]]
+        );
+        // Already talking: the notice, false.
+        e.call_log = Some(vec![]);
+        let r = e.call(0x004f_eeb0, &[this, reference, player, 9, 9, 9]);
+        assert!(!r.bool());
+        assert_eq!(
+            calls_to(&e, NOTICE_7052F0),
+            vec![vec![0x55, 0, 0, 0, 2.0f32.to_bits(), 0]]
+        );
+        assert_eq!(calls_to(&e, WORD_AT_4), vec![vec![OBJECT_011D4810]]);
+        assert!(calls_to(&e, QUEUE_MENU_CREATE).is_empty());
+    }
+
+    #[test]
+    fn activate_by_someone_else() {
+        let mut e = activate_engine();
+        let this = e.mem.alloc(0x98);
+        let player = object(&mut e, 2);
+        e.mem.set_u32(PLAYER, player);
+        // An actor reference talks itself; a non-mobile activator gets a
+        // stand-in (its address plus 2).
+        let reference = object(&mut e, 1);
+        let activator = object(&mut e, 0);
+        assert!(e
+            .call(0x004f_eeb0, &[this, reference, activator, 0, 0, 0])
+            .bool());
+        assert!(calls_to(&e, SET_TALKING_ACTOR_EXTRA).is_empty());
+        assert_eq!(
+            calls_to(&e, SLOT_TARGET + SLOT_280),
+            vec![vec![reference, activator + 2, 0, 0, 1, 0, 0, 0, 0, 0]]
+        );
+        // A dialogue package (type 0x1C) started by the target: nothing.
+        let package = e.mem.alloc(8);
+        e.mem.set_u32(package, 0x1c);
+        e.mem.set_u32(package + 4, activator + 2);
+        e.mem.set_u32(reference + 0x20, package);
+        e.call_log = Some(vec![]);
+        assert!(e
+            .call(0x004f_eeb0, &[this, reference, activator, 0, 0, 0])
+            .bool());
+        assert!(calls_to(&e, SLOT_TARGET + SLOT_280).is_empty());
+        // Another package type: the conversation starts.
+        e.mem.set_u32(package, 0x1b);
+        e.call_log = Some(vec![]);
+        assert!(e
+            .call(0x004f_eeb0, &[this, reference, activator, 0, 0, 0])
+            .bool());
+        assert_eq!(calls_to(&e, SLOT_TARGET + SLOT_280).len(), 1);
+        // A reference whose extra has no talker: nothing more.
+        let lonely = object(&mut e, 0);
+        e.call_log = Some(vec![]);
+        assert!(e
+            .call(0x004f_eeb0, &[this, lonely, activator, 0, 0, 0])
+            .bool());
+        assert!(calls_to(&e, SLOT_TARGET + SLOT_280).is_empty());
+    }
+
+    #[test]
+    fn add_mobile_object_extra_returns_the_talker() {
+        let mut e = activate_engine();
+        let this = e.mem.alloc(0x98);
+        let reference = object(&mut e, 0);
+        e.mem.set_u32(reference + 0x60, 0x4444);
+        assert_eq!(e.call(0x004f_f070, &[this, reference]).u32(), 0x4444);
+        assert_eq!(
+            calls_to(&e, SET_TALKING_ACTOR_EXTRA),
+            vec![vec![reference + 0x40, this, reference]]
+        );
+        // Without an extra after all: 0.
+        e.register(GET_TALKING_ACTOR_EXTRA, |_, _| ret(0));
+        assert_eq!(e.call(0x004f_f070, &[this, reference]).u32(), 0);
+    }
+
+    #[test]
+    fn temp_ref_setter() {
+        let mut e = engine();
+        let this = object(&mut e, 0);
+        let mobile = object(&mut e, 2);
+        let other = object(&mut e, 0);
+        e.call(0x004f_f0e0, &[this, other]);
+        assert_eq!(e.mem.u32(this + 0x90), 0);
+        assert!(calls_to(&e, SLOT_TARGET + SLOT_SET_FLAGS).is_empty());
+        e.call(0x004f_f0e0, &[this, mobile]);
+        assert_eq!(e.mem.u32(this + 0x90), mobile);
+        assert_eq!(
+            calls_to(&e, SLOT_TARGET + SLOT_SET_FLAGS),
+            vec![vec![this, 0x0080_0000]]
+        );
+        e.call(0x004f_f0e0, &[this, 0]);
+        assert_eq!(e.mem.u32(this + 0x90), 0);
+        assert_eq!(
+            calls_to(&e, SLOT_TARGET + SLOT_CLEAR_FLAGS),
+            vec![vec![this, 0x0080_0000]]
+        );
     }
 }

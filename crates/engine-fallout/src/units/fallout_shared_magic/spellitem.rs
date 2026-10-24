@@ -158,6 +158,188 @@ pub fn fn_0040e500(e: &mut Engine, this: Ptr, cost: u32) {
     e.mem.set_u32(this.addr() + 0x38, cost);
 }
 
+/// No arguments: `AL`, the byte at `011c54ba` (whether saved data has its
+/// byte order swapped).
+const SWAP_ON_SAVE_00401500: u32 = 0x0040_1500;
+/// Thiscall on the 0x10 bytes at +0x1c (`005a6b10`, `tesloadscreen.cpp`
+/// range): run before and after the chunk when saved data is byte-swapped.
+const SWAP_DATA_005A6B10: u32 = 0x005a_6b10;
+/// `TESForm::__AddChunkData` (engine map), cdecl (chunk tag, data, size).
+const ADD_CHUNK_DATA: u32 = 0x0048_5990;
+/// `__RTDynamicCast` (CRT), cdecl, and the type descriptors of `MagicItem`
+/// and `SpellItem`.
+const DYNAMIC_CAST: u32 = 0x00ec_43fb;
+const TYPE_MAGIC_ITEM: u32 = 0x0118_3140;
+const TYPE_SPELL_ITEM: u32 = 0x0118_3060;
+/// The `MagicItem` virtual slot +0x18: a word (the spell type; `GetCost`
+/// treats 2 and 3 apart).
+const SLOT_MAGIC_ITEM_TYPE: u32 = 0x18;
+/// Thiscall: the word at +0x38 (`iCostOverride`) and at +0x3c
+/// (`eLevelOverride`) (folded code).
+const WORD_AT_38: u32 = 0x009e_32d0;
+const WORD_AT_3C: u32 = 0x0063_9b40;
+/// Thiscall (word), `RET 4`: stores the word at +0x34 (folded code named
+/// `LowProcess::SetItemBeingUsed` in the engine map) and at +0x3c
+/// (`00409480`, `enchantmentitem.rs`).
+const SET_WORD_AT_34: u32 = 0x008d_7dc0;
+const SET_WORD_AT_3C: u32 = 0x0040_9480;
+/// `ActorValueOwner::GetClampedActorValue` (engine map), thiscall on the
+/// actor's value owner (+0xa4) (actor value), `RET 4`: an integer.
+const GET_CLAMPED_ACTOR_VALUE: u32 = 0x0066_ef20;
+/// `EffectItemList::GetAssociatedSkill` (`004065e0`) and
+/// `EffectItemList::GetCost` (`004063e0`, actor, `RET 4`, `ST0`)
+/// (`effectitemlist.rs`), thiscall.
+const EFFECT_LIST_GET_ASSOCIATED_SKILL: u32 = 0x0040_65e0;
+const EFFECT_LIST_GET_COST: u32 = 0x0040_63e0;
+/// `MagicFormulas::AdjustMagicSpellCost` (engine map), cdecl (cost, skill,
+/// value of actor value 0xb): a float in `ST0`.
+const ADJUST_MAGIC_SPELL_COST: u32 = 0x0064_9180;
+
+// Translated from 0040e1e0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`thiscall` on the `MagicItem` base at +0x18):
+/// whether the spell's flags (+0x40) lack flag 1 (`0040e210`).
+pub fn fn_0040e1e0(e: &mut Engine, this: Ptr) -> bool {
+    !fn_0040e210(e, Ptr::new(this.addr().wrapping_sub(0x18)), 1)
+}
+
+// Translated from 0040e230 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`thiscall`, `RET 8`): sets (when the byte
+/// `set` is non-zero) or clears the bits of `mask` in `SpellItemData::iFlags`
+/// (+0x40).
+pub fn fn_0040e230(e: &mut Engine, this: Ptr, mask: u32, set: u8) {
+    let flags = u32::from(e.mem.u8(this.addr() + 0x40));
+    let flags = if set != 0 {
+        flags | mask
+    } else {
+        flags & !mask
+    };
+    e.mem.set_u8(this.addr() + 0x40, flags as u8);
+}
+
+// Translated from 0040e360 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`thiscall`, plain `RET`): adds the 0x10 bytes
+/// at +0x1c (the spell data) as a chunk (`TESForm::__AddChunkData`) tagged
+/// with what the vtable slot +0x24 returns; when `00401500` says saved data
+/// is byte-swapped, `005a6b10` runs on them before and after.
+pub fn fn_0040e360(e: &mut Engine, this: Ptr) {
+    let data = this.addr() + 0x1c;
+    if e.call(SWAP_ON_SAVE_00401500, &args![]).bool() {
+        e.call(SWAP_DATA_005A6B10, &args![data]);
+    }
+    let tag = e.vcall(this.addr(), 0x24, &args![]).u32();
+    e.call(ADD_CHUNK_DATA, &args![tag, data, 0x10u32]);
+    if e.call(SWAP_ON_SAVE_00401500, &args![]).bool() {
+        e.call(SWAP_DATA_005A6B10, &args![data]);
+    }
+}
+
+/// `other` (a `MagicItem`) as a `SpellItem` (`__RTDynamicCast`), or 0.
+fn as_spell_item(e: &mut Engine, other: u32) -> u32 {
+    e.call(
+        DYNAMIC_CAST,
+        &args![other, 0u32, TYPE_MAGIC_ITEM, TYPE_SPELL_ITEM, 0u32],
+    )
+    .u32()
+}
+
+// Translated from 0040e3c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`thiscall` on the `MagicItem` base at +0x18,
+/// `RET 4`): whether `other` (a `MagicItem`) differs from this spell: true
+/// when it is not a `SpellItem`, or when its spell type (the `MagicItem`
+/// virtual slot +0x18), cost override (+0x38), level override (+0x3c; each
+/// `other`'s first) or flags byte (+0x40) differs from this spell's.
+pub fn fn_0040e3c0(e: &mut Engine, this: Ptr, other: u32) -> bool {
+    let other = as_spell_item(e, other);
+    if other == 0 {
+        return true;
+    }
+    let theirs = e
+        .vcall(other.wrapping_add(0x18), SLOT_MAGIC_ITEM_TYPE, &args![])
+        .u32();
+    let ours = e.vcall(this.addr(), SLOT_MAGIC_ITEM_TYPE, &args![]).u32();
+    if theirs != ours {
+        return true;
+    }
+    let form = this.addr().wrapping_sub(0x18);
+    for getter in [WORD_AT_38, WORD_AT_3C] {
+        let theirs = e.call(getter, &args![other]).u32();
+        let ours = e.call(getter, &args![form]).u32();
+        if theirs != ours {
+            return true;
+        }
+    }
+    e.mem.u8(other + 0x40) != e.mem.u8(this.addr() + 0x28)
+}
+
+// Translated from 0040e470 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`thiscall` on the `MagicItem` base at +0x18,
+/// `RET 4`): when `other` (a `MagicItem`) is a `SpellItem`, copies its
+/// spell type (the `MagicItem` virtual slot +0x18, stored at +0x34 by
+/// `008d7dc0`), cost override (+0x38, `0040e500`), level override (+0x3c,
+/// `00409480`) and flags byte (+0x40) into this spell; otherwise nothing.
+pub fn fn_0040e470(e: &mut Engine, this: Ptr, other: u32) {
+    let other = as_spell_item(e, other);
+    if other == 0 {
+        return;
+    }
+    let form = this.addr().wrapping_sub(0x18);
+    let kind = e
+        .vcall(other.wrapping_add(0x18), SLOT_MAGIC_ITEM_TYPE, &args![])
+        .u32();
+    e.call(SET_WORD_AT_34, &args![form, kind]);
+    let cost = e.call(WORD_AT_38, &args![other]).u32();
+    fn_0040e500(e, Ptr::new(form), cost);
+    let level = e.call(WORD_AT_3C, &args![other]).u32();
+    e.call(SET_WORD_AT_3C, &args![form, level]);
+    let flags = e.mem.u8(other + 0x40);
+    e.mem.set_u8(this.addr() + 0x28, flags);
+}
+
+// Translated from 0040e520 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `SpellItem::GetCost` (engine map; `thiscall` on the `EffectItemList` at
+/// +0x24, `RET 4`, a float in `ST0`): the actor counts only when the spell
+/// type (the `MagicItem` virtual slot +0x18, `this - 0xc`) is neither 2 nor
+/// 3. With flag 1 of the spell's flags (`0040e210`) the cost is the cost
+/// override (+0x38, `FILD`, stored as a `float`), adjusted by
+/// `MagicFormulas::AdjustMagicSpellCost` with the actor's clamped values of
+/// the list's associated skill and of actor value 0xb when there is an
+/// actor; otherwise it is `EffectItemList::GetCost(actor)`.
+pub fn spell_item_get_cost(e: &mut Engine, this: Ptr, actor: u32) -> f32 {
+    let magic_item = this.addr().wrapping_sub(0xc);
+    let actor = if e.vcall(magic_item, SLOT_MAGIC_ITEM_TYPE, &args![]).u32() == 2
+        || e.vcall(magic_item, SLOT_MAGIC_ITEM_TYPE, &args![]).u32() == 3
+    {
+        0
+    } else {
+        actor
+    };
+    let form = this.addr().wrapping_sub(0x24);
+    let cost = if fn_0040e210(e, Ptr::new(form), 1) {
+        let override_cost = e.call(WORD_AT_38, &args![form]).i32();
+        let mut cost = x87_store32(f64::from(override_cost));
+        if actor != 0 {
+            let values = actor.wrapping_add(0xa4);
+            let value_b = e
+                .call(GET_CLAMPED_ACTOR_VALUE, &args![values, 0xbu32])
+                .u32();
+            let skill = e.call(EFFECT_LIST_GET_ASSOCIATED_SKILL, &args![this]).u32();
+            let skill_value = e.call(GET_CLAMPED_ACTOR_VALUE, &args![values, skill]).u32();
+            let adjusted = e
+                .call(
+                    ADJUST_MAGIC_SPELL_COST,
+                    &args![x87_quiet_bits(cost), skill_value, value_b],
+                )
+                .f64();
+            cost = x87_store32(adjusted);
+        }
+        cost
+    } else {
+        let total = e.call(EFFECT_LIST_GET_COST, &args![this, actor]).f64();
+        x87_store32(total)
+    };
+    f32::from_bits(x87_quiet_bits(cost))
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -175,6 +357,12 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x0040_e2c0, fn_0040e2c0(Ptr)),
         entry!(0x0040_e330, fn_0040e330(Ptr)),
         entry!(0x0040_e500, fn_0040e500(Ptr, u32)),
+        entry!(0x0040_e1e0, fn_0040e1e0(Ptr) -> bool),
+        entry!(0x0040_e230, fn_0040e230(Ptr, u32, u8)),
+        entry!(0x0040_e360, fn_0040e360(Ptr)),
+        entry!(0x0040_e3c0, fn_0040e3c0(Ptr, u32) -> bool),
+        entry!(0x0040_e470, fn_0040e470(Ptr, u32)),
+        entry!(0x0040_e520, spell_item_get_cost(Ptr, u32) -> f32),
     ]
 }
 
@@ -449,5 +637,186 @@ mod spell_data_tests {
         assert_eq!(e.mem.u8(this + 0x40), 0);
         e.call(0x0040_e500, &args![this, 40u32]);
         assert_eq!(e.mem.u32(this + 0x38), 40);
+    }
+}
+
+#[cfg(test)]
+mod spell_n050_tests {
+    use super::*;
+
+    fn calls(e: &Engine, addr: u32) -> Vec<Vec<u32>> {
+        e.call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|(a, _)| *a == addr)
+            .map(|(_, w)| w.clone())
+            .collect()
+    }
+
+    const TYPE_SLOT_FUNCTION: u32 = 0x00f2_0000;
+
+    /// A spell form: the `MagicItem` base at +0x18 with a vtable whose slot
+    /// +0x18 answers the word at form +0x80; the given data words.
+    fn spell(e: &mut Engine, kind: u32, cost: u32, level: u32, flags: u8) -> u32 {
+        let form = e.mem.alloc(0x90);
+        let vtable = e.mem.alloc(0x20);
+        e.mem.set_u32(vtable + 0x18, TYPE_SLOT_FUNCTION);
+        e.mem.set_u32(form + 0x18, vtable);
+        e.mem.set_u32(form + 0x80, kind);
+        e.mem.set_u32(form + 0x38, cost);
+        e.mem.set_u32(form + 0x3c, level);
+        e.mem.set_u8(form + 0x40, flags);
+        form
+    }
+
+    fn engine() -> Engine {
+        let mut e = Engine::new();
+        e.register(TYPE_SLOT_FUNCTION, |e, a| {
+            e.mem.u32(a[0] - 0x18 + 0x80).into_ret()
+        });
+        e.register(WORD_AT_38, |e, a| e.mem.u32(a[0] + 0x38).into_ret());
+        e.register(WORD_AT_3C, |e, a| e.mem.u32(a[0] + 0x3c).into_ret());
+        e.register(SET_WORD_AT_34, |e, a| {
+            e.mem.set_u32(a[0] + 0x34, a[1]);
+            Ret::default()
+        });
+        e.register(SET_WORD_AT_3C, |e, a| {
+            e.mem.set_u32(a[0] + 0x3c, a[1]);
+            Ret::default()
+        });
+        e.register(DYNAMIC_CAST, |_, a| {
+            if a[0] == 0x9000 {
+                Ret::default()
+            } else {
+                (a[0] - 0x18).into_ret()
+            }
+        });
+        e
+    }
+
+    #[test]
+    fn lacks_flag_one() {
+        let mut e = Engine::new();
+        let form = e.mem.alloc(0x44);
+        e.mem.set_u8(form + 0x40, 0xfe);
+        assert!(e.call(0x0040_e1e0, &args![form + 0x18]).bool());
+        e.mem.set_u8(form + 0x40, 0x01);
+        assert!(!fn_0040e1e0(&mut e, Ptr::new(form + 0x18)));
+    }
+
+    #[test]
+    fn flag_updates() {
+        let mut e = Engine::new();
+        let form = e.mem.alloc(0x44);
+        e.mem.set_u8(form + 0x40, 0x10);
+        e.call(0x0040_e230, &args![form, 0x0103u32, 0x200u32]);
+        assert_eq!(e.mem.u8(form + 0x40), 0x10);
+        e.call(0x0040_e230, &args![form, 0x0103u32, 1u32]);
+        assert_eq!(e.mem.u8(form + 0x40), 0x13);
+        fn_0040e230(&mut e, Ptr::new(form), 0x11, 0);
+        assert_eq!(e.mem.u8(form + 0x40), 0x02);
+    }
+
+    #[test]
+    fn data_chunk_with_and_without_swapping() {
+        let mut e = Engine::new();
+        let vtable = e.mem.alloc(0x40);
+        e.mem.set_u32(vtable + 0x24, 0x0056_0000);
+        e.register(0x0056_0000, |_, _| 0x5449_5053u32.into_ret());
+        e.register(ADD_CHUNK_DATA, |_, _| Ret::default());
+        e.register(SWAP_DATA_005A6B10, |_, _| Ret::default());
+        e.register(SWAP_ON_SAVE_00401500, |_, _| Ret::default());
+        let this = e.mem.alloc(0x44);
+        e.mem.set_u32(this, vtable);
+        e.call_log = Some(vec![]);
+        e.call(0x0040_e360, &args![this]);
+        assert_eq!(
+            calls(&e, ADD_CHUNK_DATA),
+            vec![vec![0x5449_5053, this + 0x1c, 0x10]]
+        );
+        assert!(calls(&e, SWAP_DATA_005A6B10).is_empty());
+        e.register(SWAP_ON_SAVE_00401500, |_, _| 1u32.into_ret());
+        e.call_log = Some(vec![]);
+        fn_0040e360(&mut e, Ptr::new(this));
+        assert_eq!(
+            calls(&e, SWAP_DATA_005A6B10),
+            vec![vec![this + 0x1c], vec![this + 0x1c]]
+        );
+    }
+
+    #[test]
+    fn spells_differ_by_any_value() {
+        let mut e = engine();
+        let this = spell(&mut e, 1, 2, 3, 4);
+        let same = spell(&mut e, 1, 2, 3, 4);
+        assert!(!e.call(0x0040_e3c0, &args![this + 0x18, same + 0x18]).bool());
+        assert!(fn_0040e3c0(&mut e, Ptr::new(this + 0x18), 0x9000));
+        for (kind, cost, level, flags) in [(9, 2, 3, 4), (1, 9, 3, 4), (1, 2, 9, 4), (1, 2, 3, 9)] {
+            let other = spell(&mut e, kind, cost, level, flags);
+            assert!(fn_0040e3c0(&mut e, Ptr::new(this + 0x18), other + 0x18));
+        }
+    }
+
+    #[test]
+    fn copy_takes_the_other_spells_values() {
+        let mut e = engine();
+        let this = spell(&mut e, 0, 0, 0, 0);
+        let other = spell(&mut e, 3, 0x55, 0x66, 0x81);
+        e.call(0x0040_e470, &args![this + 0x18, other + 0x18]);
+        assert_eq!(e.mem.u32(this + 0x34), 3);
+        assert_eq!(e.mem.u32(this + 0x38), 0x55);
+        assert_eq!(e.mem.u32(this + 0x3c), 0x66);
+        assert_eq!(e.mem.u8(this + 0x40), 0x81);
+        e.call_log = Some(vec![]);
+        fn_0040e470(&mut e, Ptr::new(this + 0x18), 0x9000);
+        assert!(calls(&e, SET_WORD_AT_34).is_empty());
+    }
+
+    #[test]
+    fn cost_override_adjusted_for_the_actor_or_effects_cost() {
+        let mut e = engine();
+        e.register(GET_CLAMPED_ACTOR_VALUE, |_, a| (a[1] * 10).into_ret());
+        e.register(EFFECT_LIST_GET_ASSOCIATED_SKILL, |_, _| 0x20u32.into_ret());
+        e.register(ADJUST_MAGIC_SPELL_COST, |_, a| Ret {
+            st0: f64::from(f32::from_bits(a[0])) + f64::from(a[1]) + f64::from(a[2]) / 1000.0,
+            ..Ret::default()
+        });
+        e.register(EFFECT_LIST_GET_COST, |_, a| Ret {
+            st0: f64::from(a[1]) + 0.5,
+            ..Ret::default()
+        });
+        let actor = 0x4000u32;
+        let form = spell(&mut e, 0, 16_777_217, 0, 1);
+        // The override is stored as a float (2^24 + 1 rounds to 2^24).
+        e.call_log = Some(vec![]);
+        let cost = e.call(0x0040_e520, &args![form + 0x24, actor]).f32();
+        assert_eq!(cost, 16_777_216.0 + 320.0);
+        assert_eq!(
+            calls(&e, GET_CLAMPED_ACTOR_VALUE),
+            vec![vec![actor + 0xa4, 0xb], vec![actor + 0xa4, 0x20]]
+        );
+        let adjusted = calls(&e, ADJUST_MAGIC_SPELL_COST);
+        assert_eq!(adjusted[0][0], 16_777_216.0f32.to_bits());
+        // Spell types 2 and 3 ignore the actor: no adjustment.
+        for kind in [2, 3] {
+            e.mem.set_u32(form + 0x80, kind);
+            e.call_log = Some(vec![]);
+            assert_eq!(
+                spell_item_get_cost(&mut e, Ptr::new(form + 0x24), actor),
+                16_777_216.0
+            );
+            assert!(calls(&e, ADJUST_MAGIC_SPELL_COST).is_empty());
+        }
+        // Without the override: the effects' cost with the actor (or 0).
+        e.mem.set_u8(form + 0x40, 0);
+        e.call_log = Some(vec![]);
+        assert_eq!(
+            spell_item_get_cost(&mut e, Ptr::new(form + 0x24), actor),
+            0.5
+        );
+        assert_eq!(calls(&e, EFFECT_LIST_GET_COST), vec![vec![form + 0x24, 0]]);
+        e.mem.set_u32(form + 0x80, 1);
+        assert_eq!(spell_item_get_cost(&mut e, Ptr::new(form + 0x24), 7), 7.5);
     }
 }

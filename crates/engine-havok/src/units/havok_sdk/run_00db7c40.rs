@@ -18,9 +18,10 @@ pub fn fn_00db7c40(e: &mut Engine) -> u32 {
 }
 
 // Translated from 00db7c70 (decompiled, FalloutNV.exe 1.4.0.525)
-/// Unnamed in the engine map (`RET 8`: two stack words, the first never read: `_unused_0`).
-/// Answers the second word.
-pub fn fn_00db7c70(_e: &mut Engine, _unused_0: u32, value: u32) -> u32 {
+/// Unnamed in the engine map. Thiscall (`RET 8`: two stack words, the first never read:
+/// `_unused_0`; `this` is not read either, its one caller `00db7c90` passes the uid cache
+/// object). Answers the second stack word.
+pub fn fn_00db7c70(_e: &mut Engine, _this: Ptr, _unused_0: u32, value: u32) -> u32 {
     value
 }
 
@@ -53,7 +54,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00db7c00, fn_00db7c00(Ptr) -> u32),
         entry!(0x00db7c20, fn_00db7c20(Ptr, u32)),
         entry!(0x00db7c40, fn_00db7c40() -> u32),
-        entry!(0x00db7c70, fn_00db7c70(u32, u32) -> u32),
+        entry!(0x00db7c70, fn_00db7c70(Ptr, u32, u32) -> u32),
     ]
 }
 
@@ -167,7 +168,8 @@ mod tests {
     fn fn_00db7c70_answers_its_second_word() {
         let mut e = Engine::new();
         assert_eq!(
-            e.call(0x00db_7c70, &args![0x1111u32, 0x2222u32]).u32(),
+            e.call(0x00db_7c70, &args![0x3333u32, 0x1111u32, 0x2222u32])
+                .u32(),
             0x2222
         );
     }

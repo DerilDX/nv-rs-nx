@@ -72,6 +72,32 @@ pub fn tes_attack_damage_form_get_attack_damage(e: &mut Engine, this: Ptr) -> u1
     e.mem.u16(this.addr() + 4)
 }
 
+// Translated from 0047fe80 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TESAttackDamageForm::CompareComponent` (Xbox PDB; `RET 4`): true when
+/// `other` is not a `TESAttackDamageForm` (`__RTDynamicCast` from
+/// `BaseFormComponent`) or when the two attack damages (virtual slot 0x10,
+/// 16 bits) differ.
+pub fn tes_attack_damage_form_compare_component(e: &mut Engine, this: Ptr, other: Ptr) -> bool {
+    let cast = e
+        .call(
+            DYNAMIC_CAST,
+            &args![
+                other,
+                0u32,
+                TYPE_BASE_FORM_COMPONENT,
+                TYPE_ATTACK_DAMAGE_FORM,
+                0u32
+            ],
+        )
+        .u32();
+    if cast == 0 {
+        return true;
+    }
+    let mine = e.vcall(this.addr(), SLOT_GET_ATTACK_DAMAGE, &args![]).u16();
+    let theirs = e.vcall(cast, SLOT_GET_ATTACK_DAMAGE, &args![]).u16();
+    mine != theirs
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -84,6 +110,10 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(
             0x0047ff30,
             tes_attack_damage_form_get_attack_damage(Ptr) -> u16
+        ),
+        entry!(
+            0x0047_fe80,
+            tes_attack_damage_form_compare_component(Ptr, Ptr) -> bool
         ),
     ]
 }
@@ -151,5 +181,42 @@ mod tests {
         assert_eq!(e.call(0x0047_fef0, &args![0x5000u32]).u32(), 12);
         assert_eq!(calls(&e, DYNAMIC_CAST)[0][2], TYPE_TES_FORM);
         assert_eq!(e.call(0x0047_fef0, &args![0x6000u32]).u32(), 0);
+    }
+}
+
+#[cfg(test)]
+mod tests_n042 {
+    use super::*;
+
+    #[test]
+    fn compare_component_compares_the_damages() {
+        let mut e = Engine::new();
+        e.register(DYNAMIC_CAST, |_, a| a[0].into_ret());
+        e.register(0x0f00_1000, |e, a| e.mem.u32(a[0] + 4).into_ret());
+        e.put_vtable(0x0f00_0000, &[0, 0, 0, 0, 0x0f00_1000]);
+        let this = e.mem.alloc(8);
+        let other = e.mem.alloc(8);
+        for p in [this, other] {
+            e.mem.set_u32(p, 0x0f00_0000);
+        }
+        e.mem.set_u32(this + 4, 0x1_0007);
+        e.mem.set_u32(other + 4, 0x2_0007);
+        e.call_log = Some(vec![]);
+        assert!(!e.call(0x0047_fe80, &args![this, other]).bool());
+        let log = e.call_log.take().unwrap();
+        assert!(log.contains(&(
+            DYNAMIC_CAST,
+            vec![
+                other,
+                0,
+                TYPE_BASE_FORM_COMPONENT,
+                TYPE_ATTACK_DAMAGE_FORM,
+                0
+            ]
+        )));
+        e.mem.set_u32(other + 4, 8);
+        assert!(e.call(0x0047_fe80, &args![this, other]).bool());
+        e.register(DYNAMIC_CAST, |_, _| Ret::default());
+        assert!(e.call(0x0047_fe80, &args![this, other]).bool());
     }
 }

@@ -100,6 +100,99 @@ pub fn fn_0048e580(e: &mut Engine, this: Ptr, result: Ptr) -> u32 {
     tes_texture_get_as_normal_file(e, result, path)
 }
 
+/// `0048cee0` (thiscall on a texture): the length of its path (`004048e0` on
+/// the string at +4).
+const PATH_LENGTH: u32 = 0x0048_cee0;
+/// `00408da0` (thiscall on a texture; engine map name
+/// `MapMarkerData::GetLocationName`, a shared body): its path text.
+const PATH_TEXT: u32 = 0x0040_8da0;
+/// `TESForm::AddChunkArray` (engine map, `004856f0`, cdecl: chunk, data,
+/// size).
+const ADD_CHUNK_ARRAY: u32 = 0x0048_56f0;
+/// `004037f0` (thiscall on a string, `RET 8`: text, length): sets it.
+const STRING_SET: u32 = 0x0040_37f0;
+/// `00404dc0` (cdecl, two strings): their comparison through `00ec68e4`.
+const STRING_COMPARE: u32 = 0x0040_4dc0;
+/// `__RTDynamicCast` (`00ec43fb`, cdecl, five words) and the RTTI type
+/// descriptors of `BaseFormComponent` (`01183040`) and `TESTexture`
+/// (`01183218`).
+const RT_DYNAMIC_CAST: u32 = 0x00ec_43fb;
+const TYPE_BASE_FORM_COMPONENT: u32 = 0x0118_3040;
+const TYPE_TES_TEXTURE: u32 = 0x0118_3218;
+
+// Translated from 0048e370 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TESTexture::Save` (Xbox PDB, `RET 4`: the chunk): when the path is not
+/// empty (`0048cee0`), adds it as a chunk (`TESForm::AddChunkArray`) with its
+/// terminator (length + 1).
+pub fn tes_texture_save(e: &mut Engine, this: Ptr, chunk: u32) {
+    if e.call(PATH_LENGTH, &args![this]).u32() == 0 {
+        return;
+    }
+    let size = e.call(PATH_LENGTH, &args![this]).u32().wrapping_add(1);
+    let text = e.call(PATH_TEXT, &args![this]).u32();
+    e.call(ADD_CHUNK_ARRAY, &args![chunk, text, size]);
+}
+
+// Translated from 0048e4a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No map name (`RET 4`: the other component; `TESTexture::CopyComponent`
+/// by its shape): when the other component is a `TESTexture`
+/// (`__RTDynamicCast` from `BaseFormComponent`), sets this path (the string
+/// at +4, `004037f0` with length 0) to the other's text (`00408da0`).
+pub fn fn_0048e4a0(e: &mut Engine, this: Ptr, other: u32) {
+    let source = e
+        .call(
+            RT_DYNAMIC_CAST,
+            &args![
+                other,
+                0u32,
+                TYPE_BASE_FORM_COMPONENT,
+                TYPE_TES_TEXTURE,
+                0u32
+            ],
+        )
+        .u32();
+    if source == 0 {
+        return;
+    }
+    let text = e.call(PATH_TEXT, &args![source]).u32();
+    e.call(STRING_SET, &args![this.addr().wrapping_add(4), text, 0u32]);
+}
+
+// Translated from 0048e4f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No map name (`RET 4`: the other component; `TESTexture::CompareComponent`
+/// by its shape): true ("different") when the other component is not a
+/// `TESTexture`; false when both paths are empty; otherwise true when the
+/// lengths (`0048cee0`) differ or the texts compare unequal (`00404dc0`,
+/// this text first).
+pub fn fn_0048e4f0(e: &mut Engine, this: Ptr, other: u32) -> bool {
+    let source = e
+        .call(
+            RT_DYNAMIC_CAST,
+            &args![
+                other,
+                0u32,
+                TYPE_BASE_FORM_COMPONENT,
+                TYPE_TES_TEXTURE,
+                0u32
+            ],
+        )
+        .u32();
+    if source == 0 {
+        return true;
+    }
+    if e.call(PATH_LENGTH, &args![this]).u32() == 0
+        && e.call(PATH_LENGTH, &args![source]).u32() == 0
+    {
+        return false;
+    }
+    let length = e.call(PATH_LENGTH, &args![this]).u32();
+    if length != e.call(PATH_LENGTH, &args![source]).u32() {
+        return true;
+    }
+    let theirs = e.call(PATH_TEXT, &args![source]).u32();
+    let mine = e.call(PATH_TEXT, &args![this]).u32();
+    e.call(STRING_COMPARE, &args![mine, theirs]).u32() != 0
+}
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -110,6 +203,9 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x0048_e3b0, tes_texture_is_texture_chunk(u32) -> bool),
         entry!(0x0048_e5b0, tes_texture_get_as_normal_file(Ptr, u32) -> u32),
         entry!(0x0048_e580, fn_0048e580(Ptr, Ptr) -> u32),
+        entry!(0x0048_e370, tes_texture_save(Ptr, u32)),
+        entry!(0x0048_e4a0, fn_0048e4a0(Ptr, u32)),
+        entry!(0x0048_e4f0, fn_0048e4f0(Ptr, u32) -> bool),
     ]
 }
 
@@ -296,5 +392,88 @@ mod b022_tests {
             result + 0x1000
         );
         assert_eq!(*set.borrow(), b"x_n.dds");
+    }
+}
+
+#[cfg(test)]
+mod n045_tests {
+    use super::*;
+
+    type Log = Vec<(u32, Vec<u32>)>;
+
+    fn only(log: &Log, addr: u32) -> Vec<Vec<u32>> {
+        log.iter()
+            .filter(|(a, _)| *a == addr)
+            .map(|(_, w)| w.clone())
+            .collect()
+    }
+
+    /// A texture is a length word at +8 and a text pointer at +4 here.
+    fn engine() -> Engine {
+        let mut e = Engine::new();
+        e.register(PATH_LENGTH, |e, a| e.mem.u32(a[0] + 8).into_ret());
+        e.register(PATH_TEXT, |e, a| e.mem.u32(a[0] + 4).into_ret());
+        e.register(ADD_CHUNK_ARRAY, |_, _| Ret::default());
+        e.register(STRING_SET, |_, _| Ret::default());
+        e.register(RT_DYNAMIC_CAST, |_, a| a[0].into_ret());
+        e.register(STRING_COMPARE, |e, a| {
+            u32::from(e.mem.cstr(a[0]) != e.mem.cstr(a[1])).into_ret()
+        });
+        e
+    }
+
+    fn texture(e: &mut Engine, text: &[u8]) -> u32 {
+        let t = e.mem.alloc(0x10);
+        let s = e.mem.alloc(0x20);
+        e.mem.set_cstr(s, text);
+        e.mem.set_u32(t + 4, s);
+        e.mem.set_u32(t + 8, text.len() as u32);
+        t
+    }
+
+    #[test]
+    fn save_adds_the_path_with_its_terminator() {
+        let mut e = engine();
+        let empty = texture(&mut e, b"");
+        let t = texture(&mut e, b"a.dds");
+        e.call_log = Some(vec![]);
+        e.call(0x0048_e370, &[empty, 0x4e4f_4349]);
+        e.call(0x0048_e370, &[t, 0x4e4f_4349]);
+        let log = e.call_log.take().unwrap();
+        let text = e.mem.u32(t + 4);
+        assert_eq!(
+            only(&log, ADD_CHUNK_ARRAY),
+            vec![vec![0x4e4f_4349, text, 6]]
+        );
+    }
+
+    #[test]
+    fn copy_sets_this_path_from_a_texture() {
+        let mut e = engine();
+        let t = texture(&mut e, b"x");
+        let other = texture(&mut e, b"b.dds");
+        e.call_log = Some(vec![]);
+        e.call(0x0048_e4a0, &[t, 0]);
+        e.call(0x0048_e4a0, &[t, other]);
+        let log = e.call_log.take().unwrap();
+        let text = e.mem.u32(other + 4);
+        assert_eq!(only(&log, STRING_SET), vec![vec![t + 4, text, 0]]);
+    }
+
+    #[test]
+    fn compare_checks_cast_lengths_and_text() {
+        let mut e = engine();
+        let a = texture(&mut e, b"abc");
+        let b = texture(&mut e, b"abc");
+        let c = texture(&mut e, b"abd");
+        let d = texture(&mut e, b"ab");
+        let empty1 = texture(&mut e, b"");
+        let empty2 = texture(&mut e, b"");
+        assert!(e.call(0x0048_e4f0, &[a, 0]).bool());
+        assert!(!e.call(0x0048_e4f0, &[empty1, empty2]).bool());
+        assert!(!e.call(0x0048_e4f0, &[a, b]).bool());
+        assert!(e.call(0x0048_e4f0, &[a, c]).bool());
+        assert!(e.call(0x0048_e4f0, &[a, d]).bool());
+        assert!(e.call(0x0048_e4f0, &[empty1, d]).bool());
     }
 }

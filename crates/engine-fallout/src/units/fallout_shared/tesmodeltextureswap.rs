@@ -602,6 +602,246 @@ pub fn tes_model_texture_swap_swap_textures(e: &mut Engine, this: Ptr, node: u32
     });
 }
 
+/// `strlen` (wrapper `0044a670`, cdecl).
+const STRLEN: u32 = 0x0044_a670;
+/// `memcpy(dest, source, count)` (wrapper `00401460`, cdecl).
+const MEMCPY: u32 = 0x0040_1460;
+/// `00401500`: the byte at `011c54ba` (whether saved words are byte-swapped).
+const SWAP_BYTES: u32 = 0x0040_1500;
+/// `00401080` (cdecl(word pointer, byte)): byte-swaps the word in place.
+const SWAP_WORD: u32 = 0x0040_1080;
+/// `TESForm::__AddChunkData` (`00485990`, cdecl(chunk, data, size)).
+const ADD_CHUNK_DATA: u32 = 0x0048_5990;
+/// `TESModel::Save` (`004891d0`, thiscall, `RET 8`), `TESModel::CopyComponent`
+/// (`00489430`, `RET 4`) and `TESModel::CompareComponent` (`00489480`,
+/// `RET 4`).
+const MODEL_SAVE: u32 = 0x0048_91d0;
+const MODEL_COPY_COMPONENT: u32 = 0x0048_9430;
+const MODEL_COMPARE_COMPONENT: u32 = 0x0048_9480;
+/// `005ae380` (thiscall on a list node): the number of nodes with an item.
+const LIST_COUNT: u32 = 0x005a_e380;
+/// `__RTDynamicCast` (`00ec43fb`, cdecl, five words) and the type descriptors
+/// `BaseFormComponent` (`01183040`) and `TESModelTextureSwap` (`011831c4`,
+/// name `.?AVTESModelTextureSwap@@` read at +8).
+const RT_DYNAMIC_CAST: u32 = 0x00ec_43fb;
+const TYPE_BASE_FORM_COMPONENT: u32 = 0x0118_3040;
+const TYPE_TES_MODEL_TEXTURE_SWAP: u32 = 0x0118_31c4;
+/// `_stricmp` (wrapper `00404dc0`, cdecl) and `NiStricmp` (`00aa1360`, cdecl).
+const STRICMP: u32 = 0x0040_4dc0;
+const NI_STRICMP: u32 = 0x00aa_1360;
+
+/// `other` as a `TESModelTextureSwap` (`__RTDynamicCast` from
+/// `BaseFormComponent`), or 0.
+fn as_texture_swap(e: &mut Engine, other: u32) -> u32 {
+    e.call(
+        RT_DYNAMIC_CAST,
+        &args![
+            other,
+            0u32,
+            TYPE_BASE_FORM_COMPONENT,
+            TYPE_TES_MODEL_TEXTURE_SWAP,
+            0u32
+        ],
+    )
+    .u32()
+}
+
+// Translated from 0048a520 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TESModelTextureSwap::Save` (engine map, `RET 0xc`): `TESModel::Save`
+/// with `model_chunk` and `texture_chunk`, then, when the swap list packs
+/// into a block (`BuildTextureSwapChunkData`), adds the block as
+/// `swap_chunk` (`TESForm::__AddChunkData(swap_chunk, block, size)`) and
+/// frees it. The two out words the game keeps on its stack are a block
+/// here.
+pub fn tes_model_texture_swap_save(
+    e: &mut Engine,
+    this: Ptr,
+    model_chunk: u32,
+    texture_chunk: u32,
+    swap_chunk: u32,
+) {
+    e.call(MODEL_SAVE, &args![this, model_chunk, texture_chunk]);
+    e.with_stack(8, |e, out| {
+        let block = out.addr();
+        let size = out.addr() + 4;
+        e.mem.set_u32(block, 0);
+        e.mem.set_u32(size, 0);
+        if tes_model_texture_swap_build_texture_swap_chunk_data(e, this, block, size) {
+            let data = e.mem.u32(block);
+            let length = e.mem.u32(size);
+            e.call(ADD_CHUNK_DATA, &args![swap_chunk, data, length]);
+            let data = e.mem.u32(block);
+            e.call(FREE, &args![data]);
+        }
+    });
+}
+
+// Translated from 0048a590 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TESModelTextureSwap::BuildTextureSwapChunkData` (engine map, `RET 8`):
+/// clears `*block` and `*size`; unless the swap list (`00500940`) ends at
+/// once (`008256d0`, asked even of a null node, as the exe does), sizes the
+/// chunk (4 bytes of count, then per entry 4 + name length + 4 + 4),
+/// allocates it into `*block` and writes the count, then per entry the
+/// name length, the name's bytes (`memcpy`, no terminator), the texture
+/// set's form id (`0084e3a0`, 0 without a texture set) and the shape index
+/// (+4). Before the count, and again before each name length, the count
+/// word on the stack is byte-swapped when `00401500` says so (`00401080`);
+/// the exe swaps the count there, never the length. Answers whether
+/// `*block` is set.
+pub fn tes_model_texture_swap_build_texture_swap_chunk_data(
+    e: &mut Engine,
+    this: Ptr,
+    block: u32,
+    size: u32,
+) -> bool {
+    e.mem.set_u32(block, 0);
+    e.mem.set_u32(size, 0);
+    let mut node = e.call(SWAP_LIST, &args![this]).u32();
+    if !e.call(NODE_IS_END, &args![node]).bool() {
+        let mut count = 0u32;
+        e.mem.set_u32(size, 4);
+        while node != 0 && !e.call(NODE_IS_END, &args![node]).bool() {
+            let data = e.call(NODE_DATA, &args![node]).u32();
+            let entry = e.mem.u32(data);
+            let total = e.mem.u32(size).wrapping_add(4);
+            e.mem.set_u32(size, total);
+            let length = e.call(STRLEN, &args![entry + 8]).u32();
+            let total = length.wrapping_add(e.mem.u32(size));
+            e.mem.set_u32(size, total);
+            let total = e.mem.u32(size).wrapping_add(4);
+            e.mem.set_u32(size, total);
+            let total = e.mem.u32(size).wrapping_add(4);
+            e.mem.set_u32(size, total);
+            count = count.wrapping_add(1);
+            node = e.call(NODE_NEXT, &args![node]).u32();
+        }
+        let bytes = e.mem.u32(size);
+        let buffer = e.call(ALLOCATE, &args![bytes]).u32();
+        e.mem.set_u32(block, buffer);
+        let mut out = e.mem.u32(block);
+        e.with_stack(4, |e, count_word| {
+            e.mem.set_u32(count_word.addr(), count);
+            if e.call(SWAP_BYTES, &[]).u32() as u8 != 0 {
+                e.call(SWAP_WORD, &args![count_word, 0u32]);
+            }
+            let value = e.mem.u32(count_word.addr());
+            e.mem.set_u32(out, value);
+            out = out.wrapping_add(4);
+            node = e.call(SWAP_LIST, &args![this]).u32();
+            while node != 0 && !e.call(NODE_IS_END, &args![node]).bool() {
+                let data = e.call(NODE_DATA, &args![node]).u32();
+                let entry = e.mem.u32(data);
+                let length = e.call(STRLEN, &args![entry + 8]).u32();
+                if e.call(SWAP_BYTES, &[]).u32() as u8 != 0 {
+                    e.call(SWAP_WORD, &args![count_word, 0u32]);
+                }
+                e.mem.set_u32(out, length);
+                out = out.wrapping_add(4);
+                e.call(MEMCPY, &args![out, entry + 8, length]);
+                out = out.wrapping_add(length);
+                let mut id = 0u32;
+                let texture_set = e.mem.u32(entry);
+                if texture_set != 0 {
+                    id = e.call(WORD_0C, &args![texture_set]).u32();
+                }
+                e.mem.set_u32(out, id);
+                out = out.wrapping_add(4);
+                let index = e.mem.u32(entry + 4);
+                e.mem.set_u32(out, index);
+                out = out.wrapping_add(4);
+                node = e.call(NODE_NEXT, &args![node]).u32();
+            }
+        });
+    }
+    e.mem.u32(block) != 0
+}
+
+// Translated from 0048aba0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TESModelTextureSwap::CopyComponent` (engine map, `RET 4`):
+/// `TESModel::CopyComponent`, then, when `other` is a
+/// `TESModelTextureSwap`, empties this swap list (`ClearTexSwapList`) and
+/// adds each of the other's entries (`AddTexSwap` with its name, shape index
+/// and texture set).
+pub fn tes_model_texture_swap_copy_component(e: &mut Engine, this: Ptr, other: u32) {
+    e.call(MODEL_COPY_COMPONENT, &args![this, other]);
+    let source = as_texture_swap(e, other);
+    if source == 0 {
+        return;
+    }
+    tes_model_texture_swap_clear_tex_swap_list(e, this);
+    let mut node = e.call(SWAP_LIST, &args![source]).u32();
+    while node != 0 && !e.call(NODE_IS_END, &args![node]).bool() {
+        let data = e.call(NODE_DATA, &args![node]).u32();
+        let entry = e.mem.u32(data);
+        let texture_set = e.mem.u32(entry);
+        let index = e.mem.i32(entry + 4);
+        tes_model_texture_swap_add_tex_swap(e, this, entry + 8, index, texture_set);
+        node = e.call(NODE_NEXT, &args![node]).u32();
+    }
+}
+
+// Translated from 0048ac40 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TESModelTextureSwap::CompareComponent` (engine map, `RET 4`): true when
+/// the two differ: when `TESModel::CompareComponent` says so; when `other`
+/// is no `TESModelTextureSwap`; when the swap lists hold different numbers
+/// of entries (`005ae380`, the other's counted first); when an entry of the
+/// other has no entry of its shape index here (`GetTexSwap`), another
+/// texture set, or a name that differs ignoring case (`_stricmp`, only when
+/// both names are not empty).
+pub fn tes_model_texture_swap_compare_component(e: &mut Engine, this: Ptr, other: u32) -> bool {
+    if e.call(MODEL_COMPARE_COMPONENT, &args![this, other]).u32() as u8 != 0 {
+        return true;
+    }
+    let source = as_texture_swap(e, other);
+    if source == 0 {
+        return true;
+    }
+    let list = e.call(SWAP_LIST, &args![source]).u32();
+    let theirs = e.call(LIST_COUNT, &args![list]).u32();
+    let list = e.call(SWAP_LIST, &args![this]).u32();
+    let mine = e.call(LIST_COUNT, &args![list]).u32();
+    if theirs != mine {
+        return true;
+    }
+    let mut node = e.call(SWAP_LIST, &args![source]).u32();
+    while node != 0 && !e.call(NODE_IS_END, &args![node]).bool() {
+        let data = e.call(NODE_DATA, &args![node]).u32();
+        let entry = e.mem.u32(data);
+        let index = e.mem.i32(entry + 4);
+        let own = tes_model_texture_swap_get_tex_swap(e, this, index);
+        if own == 0 {
+            return true;
+        }
+        if e.mem.u32(own) != e.mem.u32(entry) {
+            return true;
+        }
+        if e.mem.i8(own + 8) != 0
+            && e.mem.i8(entry + 8) != 0
+            && e.call(STRICMP, &args![own + 8, entry + 8]).u32() != 0
+        {
+            return true;
+        }
+        node = e.call(NODE_NEXT, &args![node]).u32();
+    }
+    false
+}
+
+// Translated from 0048af90 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiFixedString::EqualsNoCase` (engine map, `RET 4`): true when the
+/// string word at `this` is `other`; false when either is null; otherwise
+/// whether `NiStricmp(*this, other)` gives 0.
+pub fn ni_fixed_string_equals_no_case(e: &mut Engine, this: Ptr, other: u32) -> bool {
+    let mine = e.mem.u32(this.addr());
+    if mine == other {
+        return true;
+    }
+    if other == 0 || e.mem.u32(this.addr()) == 0 {
+        return false;
+    }
+    let mine = e.mem.u32(this.addr());
+    e.call(NI_STRICMP, &args![mine, other]).u32() == 0
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -641,6 +881,17 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x0048_a440, tes_model_texture_swap_scalar_deleting_destructor(Ptr, u32) -> Ptr),
         entry!(0x0048_b3b0, bs_map_int_tex_swap_p_scalar_deleting_destructor(Ptr, u32) -> Ptr),
         entry!(0x0048_b530, bs_map_base_int_tex_swap_p_scalar_deleting_destructor(Ptr, u32) -> Ptr),
+        entry!(0x0048_a520, tes_model_texture_swap_save(Ptr, u32, u32, u32)),
+        entry!(
+            0x0048_a590,
+            tes_model_texture_swap_build_texture_swap_chunk_data(Ptr, u32, u32) -> bool
+        ),
+        entry!(0x0048_aba0, tes_model_texture_swap_copy_component(Ptr, u32)),
+        entry!(
+            0x0048_ac40,
+            tes_model_texture_swap_compare_component(Ptr, u32) -> bool
+        ),
+        entry!(0x0048_af90, ni_fixed_string_equals_no_case(Ptr, u32) -> bool),
     ]
 }
 
@@ -1395,5 +1646,288 @@ mod b022_tests {
         e.call_log = Some(vec![]);
         e.call(0x0048_afe0, &args![model, 0u32]);
         assert_eq!(e.call_log.as_ref().unwrap().len(), 1);
+    }
+}
+
+#[cfg(test)]
+mod save_copy_compare_tests {
+    use super::*;
+
+    type Log = Vec<(u32, Vec<u32>)>;
+
+    fn ret(eax: u32) -> Ret {
+        Ret {
+            eax,
+            ..Ret::default()
+        }
+    }
+
+    fn only(log: &Log, addr: u32) -> Vec<Vec<u32>> {
+        log.iter()
+            .filter(|(a, _)| *a == addr)
+            .map(|(_, w)| w.clone())
+            .collect()
+    }
+
+    fn c_string(e: &Engine, mut p: u32) -> String {
+        let mut s = String::new();
+        while e.mem.u8(p) != 0 {
+            s.push(e.mem.u8(p) as char);
+            p += 1;
+        }
+        s
+    }
+
+    /// List doubles: a node is two words (item, next); the swap list of a
+    /// model is its `+0x18` node.
+    fn engine() -> Engine {
+        let mut e = Engine::new();
+        e.register(SWAP_LIST, |_, a| ret(a[0] + 0x18));
+        e.register(NODE_DATA, |_, a| ret(a[0]));
+        e.register(NODE_NEXT, |e, a| ret(e.mem.u32(a[0] + 4)));
+        e.register(NODE_IS_END, |e, a| ret(u32::from(e.mem.u32(a[0]) == 0)));
+        e.register(LIST_COUNT, |e, a| {
+            let (mut node, mut n) = (a[0], 0);
+            while node != 0 {
+                n += u32::from(e.mem.u32(node) != 0);
+                node = e.mem.u32(node + 4);
+            }
+            ret(n)
+        });
+        e.register(LIST_ADD, |e, a| {
+            let item = e.mem.u32(a[1]);
+            if e.mem.u32(a[0]) == 0 {
+                e.mem.set_u32(a[0], item);
+                return Ret::default();
+            }
+            let mut node = a[0];
+            while e.mem.u32(node + 4) != 0 {
+                node = e.mem.u32(node + 4);
+            }
+            let new = e.mem.alloc(8);
+            e.mem.set_u32(new, item);
+            e.mem.set_u32(node + 4, new);
+            Ret::default()
+        });
+        e.register(LIST_REMOVE_HEAD, |e, a| {
+            let next = e.mem.u32(a[0] + 4);
+            if next != 0 {
+                let (item, after) = (e.mem.u32(next), e.mem.u32(next + 4));
+                e.mem.set_u32(a[0], item);
+                e.mem.set_u32(a[0] + 4, after);
+            } else {
+                e.mem.set_u32(a[0], 0);
+            }
+            Ret::default()
+        });
+        e.register(ALLOCATE, |e, a| ret(e.mem.alloc(a[0])));
+        e.register(FREE, |_, _| Ret::default());
+        e.register(STRLEN, |e, a| ret(c_string(e, a[0]).len() as u32));
+        e.register(0x0040_6d30, |e, a| {
+            let text = c_string(e, a[2]);
+            for (i, b) in text.bytes().chain([0]).enumerate() {
+                e.mem.set_u8(a[0] + i as u32, b);
+            }
+            Ret::default()
+        });
+        e.register(MEMCPY, |e, a| {
+            for i in 0..a[2] {
+                let b = e.mem.u8(a[1] + i);
+                e.mem.set_u8(a[0] + i, b);
+            }
+            Ret::default()
+        });
+        e.register(STRICMP, |e, a| {
+            let (x, y) = (c_string(e, a[0]), c_string(e, a[1]));
+            ret(u32::from(!x.eq_ignore_ascii_case(&y)))
+        });
+        e.register(WORD_0C, |e, a| ret(e.mem.u32(a[0] + 0xc)));
+        e.register(SWAP_BYTES, |_, _| ret(0));
+        e.register(SWAP_WORD, |e, a| {
+            let v = e.mem.u32(a[0]).swap_bytes();
+            e.mem.set_u32(a[0], v);
+            Ret::default()
+        });
+        e
+    }
+
+    /// A swap entry (texture set, index, name).
+    fn entry(e: &mut Engine, texture_set: u32, index: u32, name: &str) -> u32 {
+        let p = e.mem.alloc(0x88);
+        e.mem.set_u32(p, texture_set);
+        e.mem.set_u32(p + 4, index);
+        for (i, b) in name.bytes().enumerate() {
+            e.mem.set_u8(p + 8 + i as u32, b);
+        }
+        p
+    }
+
+    /// A model (0x20 bytes) whose swap list (+0x18) holds `entries`.
+    fn model(e: &mut Engine, entries: &[u32]) -> u32 {
+        let this = e.mem.alloc(0x20);
+        let mut node = this + 0x18;
+        for (i, item) in entries.iter().enumerate() {
+            e.mem.set_u32(node, *item);
+            if i + 1 < entries.len() {
+                let next = e.mem.alloc(8);
+                e.mem.set_u32(node + 4, next);
+                node = next;
+            }
+        }
+        this
+    }
+
+    fn texture_set(e: &mut Engine, id: u32) -> u32 {
+        let p = e.mem.alloc(0x18);
+        e.mem.set_u32(p + 0xc, id);
+        p
+    }
+
+    #[test]
+    fn build_packs_count_names_ids_and_indices() {
+        let mut e = engine();
+        let set = texture_set(&mut e, 0x1234);
+        let a = entry(&mut e, set, 3, "ab");
+        let b = entry(&mut e, 0, 0xffff_ffff, "xyz");
+        let this = model(&mut e, &[a, b]);
+        let out = e.mem.alloc(8);
+        e.mem.set_u32(out, 0x77);
+        let built = e.call(0x0048_a590, &args![this, out, out + 4]).bool();
+        assert!(built);
+        let (block, size) = (e.mem.u32(out), e.mem.u32(out + 4));
+        assert_eq!(size, 4 + (4 + 2 + 8) + (4 + 3 + 8));
+        let words = |e: &Engine, at: u32| e.mem.u32(block + at);
+        assert_eq!(words(&e, 0), 2);
+        assert_eq!(words(&e, 4), 2);
+        assert_eq!((e.mem.u8(block + 8), e.mem.u8(block + 9)), (b'a', b'b'));
+        assert_eq!(words(&e, 10), 0x1234);
+        assert_eq!(words(&e, 14), 3);
+        assert_eq!(words(&e, 18), 3);
+        assert_eq!(words(&e, 25), 0);
+        assert_eq!(words(&e, 29), 0xffff_ffff);
+    }
+
+    #[test]
+    fn build_swaps_the_count_word_only() {
+        let mut e = engine();
+        e.register(SWAP_BYTES, |_, _| ret(1));
+        let a = entry(&mut e, 0, 1, "ab");
+        let this = model(&mut e, &[a]);
+        let out = e.mem.alloc(8);
+        e.call_log = Some(vec![]);
+        assert!(e.call(0x0048_a590, &args![this, out, out + 4]).bool());
+        let log = e.call_log.take().unwrap();
+        assert_eq!(only(&log, SWAP_WORD).len(), 2);
+        let block = e.mem.u32(out);
+        assert_eq!(e.mem.u32(block), 0x0100_0000);
+        assert_eq!(e.mem.u32(block + 4), 2);
+    }
+
+    #[test]
+    fn build_of_an_empty_list_answers_false() {
+        let mut e = engine();
+        let this = model(&mut e, &[0]);
+        let out = e.mem.alloc(8);
+        e.mem.set_u32(out, 5);
+        e.mem.set_u32(out + 4, 5);
+        assert!(!e.call(0x0048_a590, &args![this, out, out + 4]).bool());
+        assert_eq!((e.mem.u32(out), e.mem.u32(out + 4)), (0, 0));
+    }
+
+    #[test]
+    fn save_adds_the_swap_chunk_after_the_model() {
+        let mut e = engine();
+        e.register(MODEL_SAVE, |_, _| Ret::default());
+        e.register(ADD_CHUNK_DATA, |_, _| Ret::default());
+        let a = entry(&mut e, 0, 1, "ab");
+        let this = model(&mut e, &[a]);
+        e.call_log = Some(vec![]);
+        e.call(0x0048_a520, &args![this, 1u32, 2u32, 3u32]);
+        let log = e.call_log.take().unwrap();
+        assert_eq!(only(&log, MODEL_SAVE), vec![vec![this, 1, 2]]);
+        let added = only(&log, ADD_CHUNK_DATA);
+        assert_eq!(added.len(), 1);
+        assert_eq!((added[0][0], added[0][2]), (3, 4 + 4 + 2 + 8));
+        assert_eq!(only(&log, FREE), vec![vec![added[0][1]]]);
+        let empty = model(&mut e, &[0]);
+        e.call_log = Some(vec![]);
+        e.call(0x0048_a520, &args![empty, 1u32, 2u32, 3u32]);
+        let log = e.call_log.take().unwrap();
+        assert!(only(&log, ADD_CHUNK_DATA).is_empty());
+        assert!(only(&log, FREE).is_empty());
+    }
+
+    #[test]
+    fn copy_replaces_the_list_with_the_others_entries() {
+        let mut e = engine();
+        e.register(MODEL_COPY_COMPONENT, |_, _| Ret::default());
+        e.register(RT_DYNAMIC_CAST, |_, a| ret(a[0]));
+        let old = entry(&mut e, 9, 9, "old");
+        let this = model(&mut e, &[old]);
+        let a = entry(&mut e, 0x500, 2, "two");
+        let b = entry(&mut e, 0x600, 4, "four");
+        let other = model(&mut e, &[a, b]);
+        e.call(0x0048_aba0, &args![this, other]);
+        let first = e.mem.u32(this + 0x18);
+        assert_ne!(first, old);
+        assert_eq!((e.mem.u32(first), e.mem.u32(first + 4)), (0x500, 2));
+        assert_eq!(c_string(&e, first + 8), "two");
+        let second = e.mem.u32(e.mem.u32(this + 0x1c));
+        assert_eq!((e.mem.u32(second), e.mem.u32(second + 4)), (0x600, 4));
+        e.register(RT_DYNAMIC_CAST, |_, _| ret(0));
+        let keep = model(&mut e, &[old]);
+        e.call(0x0048_aba0, &args![keep, other]);
+        assert_eq!(e.mem.u32(keep + 0x18), old);
+    }
+
+    #[test]
+    fn compare_reports_each_difference() {
+        let mut e = engine();
+        e.register(MODEL_COMPARE_COMPONENT, |_, _| ret(0));
+        e.register(RT_DYNAMIC_CAST, |_, a| ret(a[0]));
+        let a = entry(&mut e, 0x500, 2, "Two");
+        let same = entry(&mut e, 0x500, 2, "two");
+        let other_set = entry(&mut e, 0x501, 2, "two");
+        let other_name = entry(&mut e, 0x500, 2, "zwei");
+        let no_name = entry(&mut e, 0x500, 2, "");
+        let other_index = entry(&mut e, 0x500, 3, "two");
+        let differs = |e: &mut Engine, mine: &[u32], theirs: &[u32]| {
+            let this = model(e, mine);
+            let other = model(e, theirs);
+            e.call(0x0048_ac40, &args![this, other]).bool()
+        };
+        assert!(!differs(&mut e, &[a], &[same]));
+        assert!(!differs(&mut e, &[a], &[no_name]));
+        assert!(differs(&mut e, &[a], &[other_set]));
+        assert!(differs(&mut e, &[a], &[other_name]));
+        assert!(differs(&mut e, &[a], &[other_index]));
+        assert!(differs(&mut e, &[a], &[same, other_index]));
+        e.register(RT_DYNAMIC_CAST, |_, _| ret(0));
+        assert!(differs(&mut e, &[a], &[same]));
+        e.register(RT_DYNAMIC_CAST, |_, a| ret(a[0]));
+        e.register(MODEL_COMPARE_COMPONENT, |_, _| ret(0x100));
+        assert!(!differs(&mut e, &[a], &[same]));
+        e.register(MODEL_COMPARE_COMPONENT, |_, _| ret(1));
+        assert!(differs(&mut e, &[a], &[same]));
+    }
+
+    #[test]
+    fn fixed_strings_compare_ignoring_case() {
+        let mut e = engine();
+        e.register(NI_STRICMP, |e, a| {
+            let (x, y) = (c_string(e, a[0]), c_string(e, a[1]));
+            ret(u32::from(!x.eq_ignore_ascii_case(&y)))
+        });
+        let this = e.mem.alloc(4);
+        let text = entry(&mut e, 0, 0, "Abc") + 8;
+        let upper = entry(&mut e, 0, 0, "ABC") + 8;
+        let other = entry(&mut e, 0, 0, "abd") + 8;
+        let equal = |e: &mut Engine, other: u32| e.call(0x0048_af90, &args![this, other]).bool();
+        assert!(equal(&mut e, 0));
+        e.mem.set_u32(this, text);
+        assert!(equal(&mut e, text));
+        assert!(equal(&mut e, upper));
+        assert!(!equal(&mut e, other));
+        assert!(!equal(&mut e, 0));
     }
 }

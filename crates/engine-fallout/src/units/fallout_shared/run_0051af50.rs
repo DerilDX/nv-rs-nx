@@ -150,6 +150,131 @@ pub fn fn_0051b200(e: &mut Engine, this: Ptr) {
     }
 }
 
+/// `__RTDynamicCast` (`00ec43fb`, `cdecl`, five words) from `.?AVTESForm@@`
+/// (`01183028`) to `.?AVTESObjectMISC@@` (`0118654c`).
+const RT_DYNAMIC_CAST: u32 = 0x00ec_43fb;
+const TYPE_TES_FORM: u32 = 0x0118_3028;
+const TYPE_TES_OBJECT_MISC: u32 = 0x0118_654c;
+/// `TESForm::CopyAllComponents` and `CompareAllComponents` (`004851b0`,
+/// `00485270`, engine map; `thiscall`, one word).
+const COPY_ALL_COMPONENTS: u32 = 0x0048_51b0;
+const COMPARE_ALL_COMPONENTS: u32 = 0x0048_5270;
+/// `008cdd90` (`thiscall`, a word answer) and its setter `009db930`
+/// (`thiscall`, one word).
+const GET_008CDD90: u32 = 0x008c_dd90;
+const SET_009DB930: u32 = 0x009d_b930;
+/// `TESForm::StartForm` and `CloseForm` (`004855a0`, `00485680`, engine
+/// map; `thiscall`), `TESModelTextureSwap::Save` (`0048a520`, three chunk
+/// names), the chunk writers `004858f0` (`cdecl`: name, byte) and
+/// `00485910` (`cdecl`: name, word), and `0084e3a0` (`thiscall`).
+const START_FORM: u32 = 0x0048_55a0;
+const CLOSE_FORM: u32 = 0x0048_5680;
+const MODEL_SAVE: u32 = 0x0048_a520;
+const WRITE_CHUNK_BYTE: u32 = 0x0048_58f0;
+const WRITE_CHUNK_WORD: u32 = 0x0048_5910;
+const MEMBER_0084E3A0: u32 = 0x0084_e3a0;
+
+/// `form` cast to `TESObjectMISC`, or 0.
+fn cast_to_misc(e: &mut Engine, form: u32) -> u32 {
+    e.call(
+        RT_DYNAMIC_CAST,
+        &args![form, 0u32, TYPE_TES_FORM, TYPE_TES_OBJECT_MISC, 0u32],
+    )
+    .u32()
+}
+
+// Translated from 0051af50 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No map name (`thiscall`, one word, `RET 4`; a copy): when `source` casts
+/// to `TESObjectMISC`, sets `009db930` to what `008cdd90` answers for the
+/// cast form, then `TESForm::CopyAllComponents(source)`.
+pub fn fn_0051af50(e: &mut Engine, this: Ptr, source: u32) {
+    let other = cast_to_misc(e, source);
+    if other == 0 {
+        return;
+    }
+    let value = e.call(GET_008CDD90, &args![other]).u32();
+    e.call(SET_009DB930, &args![this, value]);
+    e.call(COPY_ALL_COMPONENTS, &args![this, source]);
+}
+
+// Translated from 0051afb0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No map name (`thiscall`, one word, `RET 4`): whether the form differs
+/// from `form`: true when it does not cast to `TESObjectMISC` or the two
+/// answer differently to `008cdd90`, else what
+/// `TESForm::CompareAllComponents` answers (as 1 or 0).
+pub fn fn_0051afb0(e: &mut Engine, this: Ptr, form: u32) -> bool {
+    let other = cast_to_misc(e, form);
+    if other == 0 {
+        return true;
+    }
+    let mine = e.call(GET_008CDD90, &args![this]).u32();
+    if mine != e.call(GET_008CDD90, &args![other]).u32() {
+        return true;
+    }
+    e.call(COMPARE_ALL_COMPONENTS, &args![this, other]).bool()
+}
+
+// Translated from 0051b020 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No map name (a save-size sum): the 16-bit sum of `00484bf0` on `this`
+/// and `0048e9b0` on `this + 0x74`, each given `argument`. `RET 4`.
+pub fn fn_0051b020(e: &mut Engine, this: Ptr, argument: u32) -> u16 {
+    let mut size: u16 = 0;
+    size = size.wrapping_add(e.call(0x0048_4bf0, &args![this, argument]).u16());
+    let component = this.addr().wrapping_add(0x74);
+    size.wrapping_add(e.call(0x0048_e9b0, &args![component, argument]).u16())
+}
+
+// Translated from 0051b070 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No map name: `00484c20` on `this`, then `0048e9e0` on `this + 0x74`,
+/// each given `argument`. `RET 4`.
+pub fn fn_0051b070(e: &mut Engine, this: Ptr, argument: u32) {
+    e.call(0x0048_4c20, &args![this, argument]);
+    e.call(0x0048_e9e0, &args![this.addr() + 0x74, argument]);
+}
+
+// Translated from 0051b0a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No map name: `00484c50` on `this`, then `0048ea10` on `this + 0x74`,
+/// each given both stack words. `RET 8`.
+pub fn fn_0051b0a0(e: &mut Engine, this: Ptr, first: u32, second: u32) {
+    e.call(0x0048_4c50, &args![this, first, second]);
+    e.call(0x0048_ea10, &args![this.addr() + 0x74, first, second]);
+}
+
+// Translated from 0051b0d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No map name: `00484d60` on `this`, then `0048ea40` on `this + 0x74`,
+/// each given `argument`. `RET 4`.
+pub fn fn_0051b0d0(e: &mut Engine, this: Ptr, argument: u32) {
+    e.call(0x0048_4d60, &args![this, argument]);
+    e.call(0x0048_ea40, &args![this.addr() + 0x74, argument]);
+}
+
+// Translated from 0051b100 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No map name: `00484da0` on `this`, then `0048ea80` on `this + 0x74`,
+/// each given `argument`. `RET 4`.
+pub fn fn_0051b100(e: &mut Engine, this: Ptr, argument: u32) {
+    e.call(0x0048_4da0, &args![this, argument]);
+    e.call(0x0048_ea80, &args![this.addr() + 0x74, argument]);
+}
+
+// Translated from 0051b4b0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No map name (`thiscall`; the form's save): `StartForm`, the model at
+/// +0x30 saved with the chunk names `MODL`, `MODT`, `MODS`, a `BRUS` chunk
+/// with the byte at +0x50, an `RNAM` chunk with what `0084e3a0` answers
+/// for the word at +0x54 when it is set, then `CloseForm`.
+pub fn fn_0051b4b0(e: &mut Engine, this: Ptr) {
+    let at = this.addr();
+    e.call(START_FORM, &args![this]);
+    e.call(MODEL_SAVE, &args![at + 0x30, MODL, MODT, MODS]);
+    let byte = u32::from(e.mem.u8(at + 0x50));
+    e.call(WRITE_CHUNK_BYTE, &args![BRUS, byte]);
+    let member = e.mem.u32(at + 0x54);
+    if member != 0 {
+        let value = e.call(MEMBER_0084E3A0, &args![member]).u32();
+        e.call(WRITE_CHUNK_WORD, &args![RNAM, value]);
+    }
+    e.call(CLOSE_FORM, &args![this]);
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -158,6 +283,14 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x0051_b280, fn_0051b280(Ptr, Ptr) -> bool),
         entry!(0x0051_b1d0, fn_0051b1d0(Ptr, u32) -> Ptr),
         entry!(0x0051_b200, fn_0051b200(Ptr)),
+        entry!(0x0051_af50, fn_0051af50(Ptr, u32)),
+        entry!(0x0051_afb0, fn_0051afb0(Ptr, u32) -> bool),
+        entry!(0x0051_b020, fn_0051b020(Ptr, u32) -> u16),
+        entry!(0x0051_b070, fn_0051b070(Ptr, u32)),
+        entry!(0x0051_b0a0, fn_0051b0a0(Ptr, u32, u32)),
+        entry!(0x0051_b0d0, fn_0051b0d0(Ptr, u32)),
+        entry!(0x0051_b100, fn_0051b100(Ptr, u32)),
+        entry!(0x0051_b4b0, fn_0051b4b0(Ptr)),
     ]
 }
 
@@ -370,5 +503,147 @@ mod tests_b043 {
         );
         assert_eq!(e.mem.u32(this), 0x0102_ba2c);
         assert_eq!(e.mem.u32(this + 0x30), 0x0102_ba04);
+    }
+}
+
+#[cfg(test)]
+mod n040_tests {
+    use super::*;
+
+    fn calls_to(e: &mut Engine, targets: &[u32]) -> Vec<(u32, Vec<u32>)> {
+        e.call_log
+            .take()
+            .unwrap()
+            .into_iter()
+            .filter(|(a, _)| targets.contains(a))
+            .collect()
+    }
+
+    #[test]
+    fn fn_0051af50_and_0051afb0_copy_and_compare_misc_items() {
+        let mut e = Engine::new();
+        e.register(RT_DYNAMIC_CAST, |e, a| {
+            assert_eq!(a[1..], [0, TYPE_TES_FORM, TYPE_TES_OBJECT_MISC, 0]);
+            let form = if e.mem.u32(a[0] + 0xc) == 0 { a[0] } else { 0 };
+            Ret {
+                eax: form,
+                ..Ret::default()
+            }
+        });
+        e.register(COPY_ALL_COMPONENTS, |_, _| Ret::default());
+        e.register(SET_009DB930, |_, _| Ret::default());
+        e.register(GET_008CDD90, |e, a| Ret {
+            eax: e.mem.u32(a[0] + 4),
+            ..Ret::default()
+        });
+        e.register(COMPARE_ALL_COMPONENTS, |e, a| Ret {
+            eax: e.mem.u32(a[1] + 0x10),
+            ..Ret::default()
+        });
+        let this = e.mem.alloc(0x20);
+        let other = e.mem.alloc(0x20);
+        e.mem.set_u32(other + 4, 0x44);
+        e.mem.set_u32(other + 0xc, 1);
+        e.call_log = Some(vec![]);
+        e.call(0x0051_af50, &[this, other]);
+        assert!(calls_to(&mut e, &[COPY_ALL_COMPONENTS, SET_009DB930]).is_empty());
+        assert!(e.call(0x0051_afb0, &[this, other]).bool());
+        e.mem.set_u32(other + 0xc, 0);
+        e.call_log = Some(vec![]);
+        e.call(0x0051_af50, &[this, other]);
+        assert_eq!(
+            calls_to(&mut e, &[COPY_ALL_COMPONENTS, SET_009DB930]),
+            vec![
+                (SET_009DB930, vec![this, 0x44]),
+                (COPY_ALL_COMPONENTS, vec![this, other]),
+            ]
+        );
+        assert!(e.call(0x0051_afb0, &[this, other]).bool());
+        e.mem.set_u32(this + 4, 0x44);
+        assert!(!e.call(0x0051_afb0, &[this, other]).bool());
+        e.mem.set_u32(other + 0x10, 1);
+        assert!(e.call(0x0051_afb0, &[this, other]).bool());
+    }
+
+    #[test]
+    fn fn_0051b020_and_friends_use_the_component_at_0x74() {
+        let cases: [(u32, u32, u32, &[u32]); 5] = [
+            (0x0051_b020, 0x0048_4bf0, 0x0048_e9b0, &[7]),
+            (0x0051_b070, 0x0048_4c20, 0x0048_e9e0, &[7]),
+            (0x0051_b0a0, 0x0048_4c50, 0x0048_ea10, &[7, 8]),
+            (0x0051_b0d0, 0x0048_4d60, 0x0048_ea40, &[7]),
+            (0x0051_b100, 0x0048_4da0, 0x0048_ea80, &[7]),
+        ];
+        for (addr, form, component, extra) in cases {
+            let mut e = Engine::new();
+            e.register(form, |_, _| Ret {
+                eax: 0xffff,
+                ..Ret::default()
+            });
+            e.register(component, |_, _| Ret {
+                eax: 3,
+                ..Ret::default()
+            });
+            let mut words = vec![0x1000];
+            words.extend_from_slice(extra);
+            e.call_log = Some(vec![]);
+            let result = e.call(addr, &words);
+            if addr == 0x0051_b020 {
+                assert_eq!(result.u16(), 2);
+            }
+            let mut moved = vec![0x1074];
+            moved.extend_from_slice(extra);
+            assert_eq!(
+                calls_to(&mut e, &[form, component]),
+                vec![(form, words.clone()), (component, moved)]
+            );
+        }
+    }
+
+    #[test]
+    fn fn_0051b4b0_saves_model_brush_and_rnam() {
+        let mut e = Engine::new();
+        let targets = [
+            START_FORM,
+            MODEL_SAVE,
+            WRITE_CHUNK_BYTE,
+            MEMBER_0084E3A0,
+            WRITE_CHUNK_WORD,
+            CLOSE_FORM,
+        ];
+        for t in targets {
+            e.register(t, |_, _| Ret {
+                eax: 0x99,
+                ..Ret::default()
+            });
+        }
+        let this = e.mem.alloc(0x60);
+        e.mem.set_u32(this + 0x50, 0xffff_ff07);
+        e.call_log = Some(vec![]);
+        e.call(0x0051_b4b0, &[this]);
+        let model = vec![this + 0x30, 0x4c44_4f4d, 0x5444_4f4d, 0x5344_4f4d];
+        assert_eq!(
+            calls_to(&mut e, &targets),
+            vec![
+                (START_FORM, vec![this]),
+                (MODEL_SAVE, model.clone()),
+                (WRITE_CHUNK_BYTE, vec![0x5355_5242, 7]),
+                (CLOSE_FORM, vec![this]),
+            ]
+        );
+        e.mem.set_u32(this + 0x54, 0x6000);
+        e.call_log = Some(vec![]);
+        e.call(0x0051_b4b0, &[this]);
+        assert_eq!(
+            calls_to(&mut e, &targets),
+            vec![
+                (START_FORM, vec![this]),
+                (MODEL_SAVE, model),
+                (WRITE_CHUNK_BYTE, vec![0x5355_5242, 7]),
+                (MEMBER_0084E3A0, vec![0x6000]),
+                (WRITE_CHUNK_WORD, vec![0x4d41_4e52, 0x99]),
+                (CLOSE_FORM, vec![this]),
+            ]
+        );
     }
 }

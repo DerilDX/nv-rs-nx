@@ -391,6 +391,13 @@ fn stage_hold(e: &mut Engine, stage: u32) {
     }
 }
 
+/// The shader object's slot `slot` (`PUSH 0; CALL`): the getters behind it (`00e95d50`, ...)
+/// take no stack word (plain `RET`), so the pushed 0 stays on the stack and is the render
+/// state's second word (`keep`) in the call after (`00e90e00`/`00e88870`, `RET 8`).
+fn shader_of(e: &mut Engine, source: u32, slot: u32) -> u32 {
+    e.vcall(source, slot, &args![]).u32()
+}
+
 // Translated from 00bca760 (decompiled, FalloutNV.exe 1.4.0.525)
 /// Unnamed in the engine map (`run_00bca070`; the vtable `010bb410`, slot +0x78), `thiscall`
 /// with one stack word: the geometry's set-up record, whose word +0xc holds the property (bytes
@@ -425,8 +432,8 @@ pub fn fn_00bca760(e: &mut Engine, this: Ptr, geometry: Ptr) {
         e.call(RENDER_STATE_SET_00B79950, &args![state, vertex]);
         let state = e.global::<u32>(RENDER_STATE_0126F74C);
         let source = e.mem.u32(state + 0x5c);
-        let value = e.vcall(source, 0x84, &args![0u32]).u32();
-        e.vcall(object, 0x8c, &args![value]);
+        let value = shader_of(e, source, 0x84);
+        e.vcall(object, 0x8c, &args![value, 0u32]);
         let state = e.global::<u32>(RENDER_STATE_0126F74C);
         let pixel = if second_texture {
             e.mem.u32(base + 0x80)
@@ -436,8 +443,8 @@ pub fn fn_00bca760(e: &mut Engine, this: Ptr, geometry: Ptr) {
         e.call(RENDER_STATE_SET_00B80600, &args![state, pixel]);
         let state = e.global::<u32>(RENDER_STATE_0126F74C);
         let source = e.mem.u32(state + 0x44);
-        let value = e.vcall(source, 0x7c, &args![0u32]).u32();
-        e.vcall(object, 0x7c, &args![value]);
+        let value = shader_of(e, source, 0x7c);
+        e.vcall(object, 0x7c, &args![value, 0u32]);
         e.mem.u32(base + 0x88)
     } else {
         let vertex = e.mem.u32(base + 0x78);
@@ -447,12 +454,12 @@ pub fn fn_00bca760(e: &mut Engine, this: Ptr, geometry: Ptr) {
         e.call(RENDER_STATE_SET_00B80600, &args![state, pixel]);
         let state = e.global::<u32>(RENDER_STATE_0126F74C);
         let source = e.mem.u32(state + 0x5c);
-        let value = e.vcall(source, 0x84, &args![0u32]).u32();
-        e.vcall(object, 0x8c, &args![value]);
+        let value = shader_of(e, source, 0x84);
+        e.vcall(object, 0x8c, &args![value, 0u32]);
         let state = e.global::<u32>(RENDER_STATE_0126F74C);
         let source = e.mem.u32(state + 0x44);
-        let value = e.vcall(source, 0x7c, &args![0u32]).u32();
-        e.vcall(object, 0x7c, &args![value]);
+        let value = shader_of(e, source, 0x7c);
+        e.vcall(object, 0x7c, &args![value, 0u32]);
         e.mem.u32(base + 0x8c)
     };
     e.vcall(base, 0xc0, &args![declaration]);
@@ -1036,6 +1043,16 @@ mod b056_tests {
             vec![vec![state, 0x0e50_0080]]
         );
         assert_eq!(calls(&e, STATE_SLOTS + 0x8c)[0][1], 0x5c);
+        assert_eq!(
+            calls(&e, STATE_SLOTS + 0x8c)[0][2],
+            0,
+            "the 0 left on the stack"
+        );
+        assert_eq!(
+            calls(&e, STATE_SLOTS + 0x7c)[0],
+            vec![e.mem.u32(state + 0x44)]
+        );
+        assert_eq!(calls(&e, STATE_SLOTS + 0x7c)[1][1..], [0x44, 0]);
         assert_eq!(calls(&e, STATE_SLOTS + 0xc0), vec![vec![this, 0x0e50_0088]]);
         assert_eq!(
             calls(&e, STAGE_CALL_00E7DE90),

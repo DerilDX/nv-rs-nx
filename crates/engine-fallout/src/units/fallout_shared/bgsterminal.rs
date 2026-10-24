@@ -798,6 +798,629 @@ pub fn bgs_terminal_is_unlocked(e: &mut Engine, this: Ptr<BGSTerminal>, referenc
     unlocked
 }
 
+/// `TESForm::StartForm`, `TESForm::CloseForm` (Xbox PDB, `004855a0`,
+/// `00485680`).
+const START_FORM: u32 = 0x0048_55a0;
+const CLOSE_FORM: u32 = 0x0048_5680;
+/// The components' `Save`s (Xbox PDB): `TESFullName::Save` (`00487010`),
+/// `TESModelTextureSwap::Save` (`0048a520`, `RET 0xC`: three signatures),
+/// `TESScriptableForm::Save` (`0048cca0`), `BGSDestructibleObjectForm::Save`
+/// (`00477f20`), `TESDescription::Save` (`00482cb0`).
+const FULL_NAME_SAVE: u32 = 0x0048_7010;
+const MODEL_SAVE: u32 = 0x0048_a520;
+const SCRIPTABLE_SAVE: u32 = 0x0048_cca0;
+const DESTRUCTIBLE_SAVE: u32 = 0x0047_7f20;
+const DESCRIPTION_SAVE: u32 = 0x0048_2cb0;
+/// `Script::SaveResultScript` and `TESCondition::Save` (Xbox PDB,
+/// `005abe00`, `00680910`).
+const RESULT_SCRIPT_SAVE: u32 = 0x005a_be00;
+const CONDITION_SAVE: u32 = 0x0068_0910;
+/// Chunk writers (cdecl): a word (`00485910`), a byte (`004858f0`, the byte
+/// zero-extended), bytes (`TESForm::AddChunkArray`, Xbox PDB, `004856f0`:
+/// signature, data, size), data (`TESForm::__AddChunkData`, `00485990`).
+const ADD_CHUNK_WORD: u32 = 0x0048_5910;
+const ADD_CHUNK_BYTE: u32 = 0x0048_58f0;
+const ADD_CHUNK_ARRAY: u32 = 0x0048_56f0;
+const ADD_CHUNK_DATA: u32 = 0x0048_5990;
+/// Whether the data written needs byte swapping (`00401500`, no arguments).
+const SAVE_SWAPS: u32 = 0x0040_1500;
+/// Byte-swaps the 4-byte `DNAM` block (`00483710`, `this` only).
+const SWAP_DNAM: u32 = 0x0048_3710;
+/// The password getter (`004fd400`, the word at +0xA0).
+const GET_PASSWORD: u32 = 0x004f_d400;
+/// The menu item list's first node (`00461150`, `this` = terminal).
+const MENU_ITEMS: u32 = 0x0046_1150;
+/// A string's characters (`00559450`, `this` = `BSStringT`).
+const STRING_CHARS: u32 = 0x0055_9450;
+/// `strlen` (`0044a670`, cdecl).
+const STRLEN: u32 = 0x0044_a670;
+/// The `PNAM`, `RNAM` chunk signatures.
+const SIG_PNAM_WORD: u32 = 0x4d41_4e50;
+const SIG_RNAM_WORD: u32 = 0x4d41_4e52;
+/// Copies a `BSStringT` (`00501c10`, `ECX` = destination, one stack word)
+/// and compares two (`00501c30`, `bool`: true when different).
+const STRING_COPY: u32 = 0x0050_1c10;
+const STRING_DIFFERS: u32 = 0x0050_1c30;
+/// Copies 4 bytes (`00401460`, cdecl: destination, source, size).
+const COPY_BYTES: u32 = 0x0040_1460;
+/// `memcmp` (`00ec4835`, cdecl).
+const MEMCMP: u32 = 0x00ec_4835;
+/// The list's item count (`005ae380`; the engine map names the folded
+/// body `VATS::GetCount`).
+const LIST_COUNT: u32 = 0x005a_e380;
+/// `Script::CopyResultScript` (Xbox PDB, `005aa420`, one stack word) and
+/// `Script::CompareResultScripts` (Xbox PDB, `005ab240`, `bool`).
+const RESULT_SCRIPT_COPY: u32 = 0x005a_a420;
+const RESULT_SCRIPTS_DIFFER: u32 = 0x005a_b240;
+/// The conditions' copy (`00680a70`, `RET 8`: source, 0) and comparison
+/// (`00680b70`, `bool`).
+const CONDITIONS_COPY: u32 = 0x0068_0a70;
+const CONDITIONS_DIFFER: u32 = 0x0068_0b70;
+/// The activator part's copy (`00511120`) and comparison (`005111e0`).
+const ACTIVATOR_COPY: u32 = 0x0051_1120;
+const ACTIVATOR_DIFFERS: u32 = 0x0051_11e0;
+/// `Interface::IsPipboyOpening` (Xbox PDB, `00709bc0`).
+const IS_PIPBOY_OPENING: u32 = 0x0070_9bc0;
+/// `BGSOpenCloseForm::GetOpenState` (Xbox PDB, `0047b250`, cdecl) and
+/// `BGSOpenCloseForm::HandleActivate` (Xbox PDB, `0047a560`, cdecl:
+/// reference, activator, 0).
+const GET_OPEN_STATE: u32 = 0x0047_b250;
+const HANDLE_ACTIVATE: u32 = 0x0047_a560;
+/// `PlayerCharacter::GetTerminalAccess` (Xbox PDB, `00966c60`, `RET 4`).
+const GET_TERMINAL_ACCESS: u32 = 0x0096_6c60;
+/// `004bd510` (cdecl: two `float`s, the result in `ST0`), given the minimum
+/// skill and 1.0.
+const ROUND_SKILL_4BD510: u32 = 0x004b_d510;
+/// `_ftol2_sse` (`00ec62c0`): the value in `ST0` (a leading `f64`) to an
+/// integer.
+const FTOL: u32 = 0x00ec_62c0;
+/// `ActorValue::GetActorValueName` (Xbox PDB, `0066e950`, cdecl).
+const ACTOR_VALUE_NAME: u32 = 0x0066_e950;
+/// The text of the `Setting` at `011c8394` (`004c69f0`, `this` only), used
+/// as the format of the skill message.
+const SETTING_TEXT: u32 = 0x004c_69f0;
+const SKILL_MESSAGE_SETTING: u32 = 0x011c_8394;
+/// The string's formatter (`00406f60`, cdecl: string, format, ...).
+const STRING_FORMAT: u32 = 0x0040_6f60;
+/// `007052f0` (cdecl, six words): text, 0, icon path, 0, the `float` at
+/// `010162c0`, 0.
+const SHOW_MESSAGE_7052F0: u32 = 0x0070_52f0;
+const MESSAGE_VALUE_010162C0: u32 = 0x0101_62c0;
+/// `"Interface\Icons\Message Icons\glow_message_vaultboy_angry.dds"` and
+/// `"...glow_message_vaultboy_sad.dds"`.
+const ICON_ANGRY: u32 = 0x0102_5cdc;
+const ICON_SAD: u32 = 0x0102_08a0;
+/// `00403df0` (`this` only): the word at +4 of a non-null `this`, else 0;
+/// used on `011d4810`.
+const WORD_AT_4: u32 = 0x0040_3df0;
+const OBJECT_011D4810: u32 = 0x011d_4810;
+/// `BSAudio::QInstance` (Xbox PDB, `00453a70`), `BSAudio::
+/// GetSoundHandleByName` (Xbox PDB, `00ad7550`, `RET 0xC`: the handle
+/// out, the name, flags), `BSSoundHandle::Play` (Xbox PDB, `00ad8830`,
+/// `RET 4`) and the handle's release (`00483710`).
+const AUDIO_INSTANCE: u32 = 0x0045_3a70;
+const SOUND_HANDLE_BY_NAME: u32 = 0x00ad_7550;
+const SOUND_PLAY: u32 = 0x00ad_8830;
+const SOUND_HANDLE_RELEASE: u32 = 0x0048_3710;
+/// `"UIPopUpMessageGeneral"`.
+const POPUP_SOUND: u32 = 0x0102_5cc4;
+/// `TESObjectREFR::GetOwner` (Xbox PDB, `00567790`) and
+/// `TESObjectREFR::IsAnOwner` (Xbox PDB, `005785e0`, `RET 8`).
+const GET_OWNER: u32 = 0x0056_7790;
+const IS_AN_OWNER: u32 = 0x0057_85e0;
+/// `0047d7c0` (`this` = an owner of form type 8, `bool`).
+const FACTION_TEST_47D7C0: u32 = 0x0047_d7c0;
+/// `TESActorBaseData::GetAlignmentForKarma` (Xbox PDB, `0047e040`, cdecl:
+/// a `float`).
+const ALIGNMENT_FOR_KARMA: u32 = 0x0047_e040;
+/// The `Setting` at `011cde20` whose value is the karma reward.
+const KARMA_SETTING: u32 = 0x011c_de20;
+/// `PlayerCharacter::RewardKarma` (Xbox PDB, `0094fd30`, `RET 4`).
+const REWARD_KARMA: u32 = 0x0094_fd30;
+/// `Interface::QueueMenuCreate` (Xbox PDB, `00709470`, cdecl, six words).
+const QUEUE_MENU_CREATE: u32 = 0x0070_9470;
+/// `ExtraDataList::GetScriptLocals` (Xbox PDB name of `00418830`) and
+/// `Script::Run` (Xbox PDB, `005ac1e0`, `RET 0x10`).
+const GET_SCRIPT_LOCALS: u32 = 0x0041_8830;
+const SCRIPT_RUN: u32 = 0x005a_c1e0;
+/// `ExtraDataList::SetTerminalState` (Xbox PDB name of `0041be10`, one
+/// stack word: the byte zero-extended).
+const SET_TERMINAL_STATE: u32 = 0x0041_be10;
+/// `BaseExtraList::RemoveExtra_ov2` (Xbox PDB, `00410140`, one stack word:
+/// the extra type).
+const REMOVE_EXTRA: u32 = 0x0041_0140;
+/// Sets the lock level of a reference's extra data (`0041bf80`, one stack
+/// word).
+const SET_LOCK_LEVEL: u32 = 0x0041_bf80;
+
+/// `other` cast from `TESForm` to `BGSTerminal` (0 when it is not one).
+fn cast_terminal(e: &mut Engine, other: Ptr) -> u32 {
+    e.call(
+        RT_DYNAMIC_CAST,
+        &args![other, 0u32, TYPE_TES_FORM, TYPE_TERMINAL, 0u32],
+    )
+    .u32()
+}
+
+/// Writes one of a menu item's strings: the bytes and the terminating zero
+/// (`AddChunkArray`) when it has characters, a zero word otherwise.
+fn save_item_string(e: &mut Engine, string: u32, chunk: u32) {
+    if e.call(STRING_CHARS, &args![string]).u32() == 0 {
+        e.call(ADD_CHUNK_WORD, &args![chunk, 0u32]);
+    } else {
+        let chars = e.call(STRING_CHARS, &args![string]).u32();
+        let length = e.call(STRLEN, &args![chars]).u32();
+        let chars = e.call(STRING_CHARS, &args![string]).u32();
+        e.call(
+            ADD_CHUNK_ARRAY,
+            &args![chunk, chars, length.wrapping_add(1)],
+        );
+    }
+}
+
+/// The "skill too low" message both `Activate` and `HandleOpenFinish` show:
+/// the minimum skill to hack (`GetMinSkillRequiredToHack`, stored as a
+/// `float`) goes with 1.0 through `004bd510`, is truncated (`_ftol2_sse`),
+/// and with the name of actor value 0x28 formats the text of the `Setting`
+/// at `011c8394` into a stack string, which `007052f0` shows with `icon`;
+/// `Activate` also plays the pop-up sound before the string is destroyed.
+fn show_skill_message(
+    e: &mut Engine,
+    terminal: Ptr<BGSTerminal>,
+    reference: u32,
+    icon: u32,
+    with_sound: bool,
+) {
+    e.with_stack(8, |e, text| {
+        e.call(STRING_CONSTRUCT, &args![text]);
+        let minimum = bgs_terminal_get_min_skill_required_to_hack(e, terminal, reference);
+        let minimum = x87_store32(minimum);
+        let rounded = e
+            .call(ROUND_SKILL_4BD510, &args![minimum, 1.0f32.to_bits()])
+            .f64();
+        let skill = e.call(FTOL, &args![rounded]).u32();
+        let name = e.call(ACTOR_VALUE_NAME, &args![0x28u32]).u32();
+        let format = e.call(SETTING_TEXT, &args![SKILL_MESSAGE_SETTING]).u32();
+        e.call(STRING_FORMAT, &args![text, format, name, skill]);
+        let chars = e.call(STRING_CHARS, &args![text]).u32();
+        let value = x87_quiet_bits(e.mem.u32(MESSAGE_VALUE_010162C0));
+        e.call(
+            SHOW_MESSAGE_7052F0,
+            &args![chars, 0u32, icon, 0u32, value, 0u32],
+        );
+        if with_sound {
+            play_popup_sound(e);
+        }
+        e.call(STRING_DESTRUCT, &args![text]);
+    });
+}
+
+/// `Activate`'s pop-up sound: a handle for `"UIPopUpMessageGeneral"`
+/// (flags 0x121) from the audio instance, played (`Play(0)`), released.
+fn play_popup_sound(e: &mut Engine) {
+    e.with_stack(0xc, |e, handle| {
+        let audio = e.call(AUDIO_INSTANCE, &args![]).u32();
+        let got = e
+            .call(
+                SOUND_HANDLE_BY_NAME,
+                &args![audio, handle, POPUP_SOUND, 0x121u32],
+            )
+            .u32();
+        e.call(SOUND_PLAY, &args![got, 0u32]);
+        e.call(SOUND_HANDLE_RELEASE, &args![handle]);
+    });
+}
+
+// Translated from 00500a40 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BGSTerminal::Save` (Xbox PDB): starts the form; saves the full name,
+/// the model (`MODL`/`MODT`/`MODS`), the script, the destructible data and
+/// the description; `SNAM` with the form id of the sound at +0x74 and
+/// `PNAM` with the password's (read through its getter twice) when set;
+/// the 4-byte `DNAM` at +0xA4 (swapped before and after when `00401500`
+/// says so); then per menu item: `ITXT` and `RNAM` (the response and result
+/// texts with their zero, or a zero word when empty), `ANAM` (the flags
+/// byte), `INAM` and `TNAM` (the display note's and submenu's form ids when
+/// set), the result script and the conditions. Closes the form.
+pub fn bgs_terminal_save(e: &mut Engine, this: Ptr<BGSTerminal>) {
+    let base = this.addr();
+    e.call(START_FORM, &args![this]);
+    e.call(FULL_NAME_SAVE, &args![base + 0x30]);
+    e.call(
+        MODEL_SAVE,
+        &args![base + 0x3c, SIG_MODL, SIG_MODT, SIG_MODS],
+    );
+    e.call(SCRIPTABLE_SAVE, &args![base + 0x5c]);
+    e.call(DESTRUCTIBLE_SAVE, &args![base + 0x68]);
+    e.call(DESCRIPTION_SAVE, &args![base + 0x90]);
+    let sound = e.mem.u32(base + 0x74);
+    if sound != 0 {
+        let id = e.call(FORM_ID, &args![sound]).u32();
+        e.call(ADD_CHUNK_WORD, &args![SIG_SNAM, id]);
+    }
+    if e.call(GET_PASSWORD, &args![this]).u32() != 0 {
+        let password = e.call(GET_PASSWORD, &args![this]).u32();
+        let id = e.call(FORM_ID, &args![password]).u32();
+        e.call(ADD_CHUNK_WORD, &args![SIG_PNAM_WORD, id]);
+    }
+    if e.call(SAVE_SWAPS, &args![]).bool() {
+        e.call(SWAP_DNAM, &args![base + 0xa4]);
+    }
+    e.call(ADD_CHUNK_DATA, &args![SIG_DNAM, base + 0xa4, 4u32]);
+    if e.call(SAVE_SWAPS, &args![]).bool() {
+        e.call(SWAP_DNAM, &args![base + 0xa4]);
+    }
+    let mut node = e.call(MENU_ITEMS, &args![this]).u32();
+    while node != 0 && !e.call(NODE_IS_EMPTY, &args![node]).bool() {
+        let item_at = e.call(NODE_ITEM, &args![node]).u32();
+        let item = e.mem.u32(item_at);
+        node = e.call(NODE_NEXT, &args![node]).u32();
+        save_item_string(e, item, SIG_ITXT);
+        save_item_string(e, item + 8, SIG_RNAM_WORD);
+        let flags = e.mem.u8(item + 0x74);
+        e.call(ADD_CHUNK_BYTE, &args![SIG_ANAM, u32::from(flags)]);
+        for (field, chunk) in [(0x6c, SIG_INAM), (0x70, SIG_TNAM)] {
+            let form = e.mem.u32(item + field);
+            if form != 0 {
+                let id = e.call(FORM_ID, &args![form]).u32();
+                e.call(ADD_CHUNK_WORD, &args![chunk, id]);
+            }
+        }
+        e.call(RESULT_SCRIPT_SAVE, &args![item + 0x10]);
+        e.call(CONDITION_SAVE, &args![item + 0x64]);
+    }
+    e.call(CLOSE_FORM, &args![this]);
+}
+
+// Translated from 00500cb0 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 00500cb0 - the exception frame (FS:[0]) around each new menu item's construction is not translated
+/// The terminal's form copy (`RET 4`): when `other` casts to a
+/// `BGSTerminal`, takes its password (`00500a20`) and the 4-byte `DNAM`
+/// (+0xA4), empties this menu (`00501050`) and, for each of its menu
+/// items, appends (`00501170`) a new 0x78-byte item (`00401000`, built by
+/// `00500960`; a failed allocation leaves the item null as the exe does)
+/// with copies of the two strings (`00501c10`), the display note, submenu
+/// and flags, the result script (`Script::CopyResultScript`) and the
+/// conditions (`00680a70` with 0); then copies the activator part
+/// (`00511120` with the cast form).
+pub fn fn_00500cb0(e: &mut Engine, this: Ptr<BGSTerminal>, other: Ptr) {
+    let source = cast_terminal(e, other);
+    if source == 0 {
+        return;
+    }
+    let base = this.addr();
+    let password = e.call(GET_PASSWORD, &args![source]).u32();
+    fn_00500a20(e, this, password);
+    e.call(COPY_BYTES, &args![base + 0xa4, source + 0xa4, 4u32]);
+    fn_00501050(e, this);
+    let mut node = e.call(MENU_ITEMS, &args![source]).u32();
+    while node != 0 && !e.call(NODE_IS_EMPTY, &args![node]).bool() {
+        let item_at = e.call(NODE_ITEM, &args![node]).u32();
+        let theirs = e.mem.u32(item_at);
+        node = e.call(NODE_NEXT, &args![node]).u32();
+        let memory = e.call(ALLOCATE, &args![0x78u32]).u32();
+        let mine = if memory == 0 {
+            0
+        } else {
+            fn_00500960(e, Ptr::new(memory)).addr()
+        };
+        e.call(STRING_COPY, &args![mine, theirs]);
+        e.call(STRING_COPY, &args![mine.wrapping_add(8), theirs + 8]);
+        let note = e.mem.u32(theirs + 0x6c);
+        e.mem.set_u32(mine.wrapping_add(0x6c), note);
+        let submenu = e.mem.u32(theirs + 0x70);
+        e.mem.set_u32(mine.wrapping_add(0x70), submenu);
+        let flags = e.mem.u8(theirs + 0x74);
+        e.mem.set_u8(mine.wrapping_add(0x74), flags);
+        e.call(
+            RESULT_SCRIPT_COPY,
+            &args![mine.wrapping_add(0x10), theirs + 0x10],
+        );
+        e.call(
+            CONDITIONS_COPY,
+            &args![mine.wrapping_add(0x64), theirs + 0x64, 0u32],
+        );
+        fn_00501170(e, this, mine);
+    }
+    e.call(ACTIVATOR_COPY, &args![this, source]);
+}
+
+// Translated from 00500e60 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The terminal's form comparison (`RET 4`): true (different) when `other`
+/// is not a `BGSTerminal`, the passwords or the `DNAM` bytes (`memcmp`)
+/// differ, the menus have different counts (`005ae380`), any item pair
+/// (walked together while both lists have items) differs in its strings
+/// (`00501c30`), result script, conditions, display note, submenu or flags
+/// byte, or the activator parts differ (`005111e0`); false otherwise.
+pub fn fn_00500e60(e: &mut Engine, this: Ptr<BGSTerminal>, other: Ptr) -> bool {
+    let source = cast_terminal(e, other);
+    if source == 0 {
+        return true;
+    }
+    let base = this.addr();
+    let mine = e.call(GET_PASSWORD, &args![this]).u32();
+    if mine != e.call(GET_PASSWORD, &args![source]).u32() {
+        return true;
+    }
+    if e.call(MEMCMP, &args![base + 0xa4, source + 0xa4, 4u32])
+        .u32()
+        != 0
+    {
+        return true;
+    }
+    let mut my_node = e.call(MENU_ITEMS, &args![this]).u32();
+    let mut their_node = e.call(MENU_ITEMS, &args![source]).u32();
+    let my_count = e.call(LIST_COUNT, &args![my_node]).u32();
+    if my_count != e.call(LIST_COUNT, &args![their_node]).u32() {
+        return true;
+    }
+    while their_node != 0
+        && !e.call(NODE_IS_EMPTY, &args![their_node]).bool()
+        && my_node != 0
+        && !e.call(NODE_IS_EMPTY, &args![my_node]).bool()
+    {
+        let theirs_at = e.call(NODE_ITEM, &args![their_node]).u32();
+        let theirs = e.mem.u32(theirs_at);
+        let mine_at = e.call(NODE_ITEM, &args![my_node]).u32();
+        let mine = e.mem.u32(mine_at);
+        if e.call(STRING_DIFFERS, &args![mine, theirs]).bool()
+            || e.call(STRING_DIFFERS, &args![mine + 8, theirs + 8]).bool()
+            || e.call(RESULT_SCRIPTS_DIFFER, &args![mine + 0x10, theirs + 0x10])
+                .bool()
+            || e.call(CONDITIONS_DIFFER, &args![mine + 0x64, theirs + 0x64])
+                .bool()
+            || e.mem.u32(mine + 0x6c) != e.mem.u32(theirs + 0x6c)
+            || e.mem.u32(mine + 0x70) != e.mem.u32(theirs + 0x70)
+            || e.mem.u8(mine + 0x74) != e.mem.u8(theirs + 0x74)
+        {
+            return true;
+        }
+        their_node = e.call(NODE_NEXT, &args![their_node]).u32();
+        my_node = e.call(NODE_NEXT, &args![my_node]).u32();
+    }
+    e.call(ACTIVATOR_DIFFERS, &args![this, source]).bool()
+}
+
+// Translated from 00501270 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BGSTerminal::GetHackMiniGameValue` (Xbox PDB; `RET 4`): twice the hack
+/// lock level plus bit 0 of the terminal's form id (`0084e3a0`) plus 4, at
+/// most 12 (signed).
+pub fn bgs_terminal_get_hack_mini_game_value(
+    e: &mut Engine,
+    this: Ptr<BGSTerminal>,
+    reference: u32,
+) -> i32 {
+    let level = bgs_terminal_get_hack_difficulty_lock_level(e, this, reference);
+    let doubled = level << 1;
+    let id = e.call(FORM_ID, &args![this]).u32();
+    let value = ((id & 1).wrapping_add(doubled)).wrapping_add(4) as i32;
+    if value > 0xc {
+        0xc
+    } else {
+        value
+    }
+}
+
+// Translated from 005012c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BGSTerminal::IsTerminalRefInUse` (Xbox PDB; cdecl, one word): true for
+/// a reference whose `00569b80` object is furniture
+/// (`TESObjectREFR::IsFurniture`, `00568680`) without a free marker
+/// (`TESObjectREFR::HasFreeMarker(1)`, `00568260`).
+pub fn bgs_terminal_is_terminal_ref_in_use(e: &mut Engine, reference: u32) -> bool {
+    if reference == 0 {
+        return false;
+    }
+    let object = e.call(0x0056_9b80, &args![reference]).u32();
+    if object == 0 || !e.call(0x0056_8680, &args![object]).bool() {
+        return false;
+    }
+    !e.call(0x0056_8260, &args![object, 1u32]).bool()
+}
+
+// Translated from 00501310 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 00501310 - the exception frame (FS:[0]) around the message string is not translated
+/// `BGSTerminal::Activate` (Xbox PDB; `RET 0x14`, the last three words
+/// unread): false while the Pip-Boy is opening. An open terminal
+/// (`GetOpenState` 1) goes to the open/close form's slot 0 (at +0x70, with
+/// `reference` and `activator`). When the player's terminal access
+/// (`GetTerminalAccess`) is 4 the skill message is shown with the angry
+/// icon and the pop-up sound. When the player activates a terminal in use
+/// (`IsTerminalRefInUse`) `007052f0` gets the `011d4810` word, zeros and
+/// the `float` at `010162c0`, and false is returned. Otherwise: an owned
+/// reference the activator does not own (`IsAnOwner(activator, 1)`) on a
+/// terminal without flag bit 1 rewards karma (the value of the `Setting`
+/// at `011cde20`, truncated) when the owner is of form type 8 and
+/// `0047d7c0` says no, or is another non-null owner whose alignment
+/// (`GetAlignmentForKarma` of its slot 0xC at +0x100 with 0x17) is not 2
+/// or 4; then `BGSOpenCloseForm::HandleActivate(reference, activator, 0)`.
+/// True in all these cases.
+pub fn bgs_terminal_activate(
+    e: &mut Engine,
+    this: Ptr<BGSTerminal>,
+    reference: u32,
+    activator: u32,
+    _unused_3: u32,
+    _unused_4: u32,
+    _unused_5: u32,
+) -> bool {
+    if e.call(IS_PIPBOY_OPENING, &args![]).bool() {
+        return false;
+    }
+    let base = this.addr();
+    if e.call(GET_OPEN_STATE, &args![reference]).u32() == 1 {
+        e.vcall(base + 0x70, 0, &args![reference, activator]);
+        return true;
+    }
+    if activator == e.mem.u32(PLAYER) {
+        let player = e.mem.u32(PLAYER);
+        if e.call(GET_TERMINAL_ACCESS, &args![player, reference]).u32() == 4 {
+            show_skill_message(e, this, reference, ICON_ANGRY, true);
+            return true;
+        }
+    }
+    if activator == e.mem.u32(PLAYER) && bgs_terminal_is_terminal_ref_in_use(e, reference) {
+        let word = e.call(WORD_AT_4, &args![OBJECT_011D4810]).u32();
+        let value = x87_quiet_bits(e.mem.u32(MESSAGE_VALUE_010162C0));
+        e.call(
+            SHOW_MESSAGE_7052F0,
+            &args![word, 0u32, 0u32, 0u32, value, 0u32],
+        );
+        return false;
+    }
+    if e.call(GET_OWNER, &args![reference]).u32() != 0
+        && !e
+            .call(IS_AN_OWNER, &args![reference, activator, 1u32])
+            .bool()
+        && !fn_005015d0(e, this)
+    {
+        let mut reward = false;
+        let owner = e.call(GET_OWNER, &args![reference]).u32();
+        if e.call(0x0040_1170, &args![owner]).u32() == 8 {
+            if !e.call(FACTION_TEST_47D7C0, &args![owner]).bool() {
+                reward = true;
+            }
+        } else if owner != 0 {
+            let karma = e.vcall(owner + 0x100, 0xc, &args![0x17u32]).f64();
+            let karma = x87_store32(karma);
+            let alignment = e.call(ALIGNMENT_FOR_KARMA, &args![karma]).u32();
+            if alignment != 2 && alignment != 4 {
+                reward = true;
+            }
+        }
+        if reward {
+            let value_at = e.call(SETTING_VALUE, &args![KARMA_SETTING]).u32();
+            let value = x87_load32(e.mem.u32(value_at));
+            let amount = e.call(FTOL, &args![value]).u32();
+            let player = e.mem.u32(PLAYER);
+            e.call(REWARD_KARMA, &args![player, amount]);
+        }
+    }
+    e.call(HANDLE_ACTIVATE, &args![reference, activator, 0u32]);
+    true
+}
+
+// Translated from 005015f0 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 005015f0 - the exception frame (FS:[0]) around the message string is not translated
+/// `BGSTerminal::HandleOpenFinish` (Xbox PDB; `RET 8`), `this` the
+/// terminal's open/close form at +0x70: for a reference opened by the
+/// player, by the player's terminal access (the exe's jump table): 0 or 1
+/// queue menu 3, 2 or 3 menu 2 (`QueueMenuCreate(n, reference, 0, 0, 1,
+/// 0)`), 4 shows the skill message with the sad icon (on the terminal at
+/// `this - 0x70`); then `BGSOpenCloseForm::HandleActivate(reference,
+/// activator, 0)`.
+pub fn bgs_terminal_handle_open_finish(e: &mut Engine, this: Ptr, reference: u32, activator: u32) {
+    if reference == 0 || activator != e.mem.u32(PLAYER) {
+        return;
+    }
+    let player = e.mem.u32(PLAYER);
+    let access = e.call(GET_TERMINAL_ACCESS, &args![player, reference]).u32();
+    match access {
+        0 | 1 => {
+            e.call(
+                QUEUE_MENU_CREATE,
+                &args![3u32, reference, 0u32, 0u32, 1u32, 0u32],
+            );
+        }
+        2 | 3 => {
+            e.call(
+                QUEUE_MENU_CREATE,
+                &args![2u32, reference, 0u32, 0u32, 1u32, 0u32],
+            );
+        }
+        4 => {
+            let terminal = Ptr::new(this.addr().wrapping_sub(0x70));
+            show_skill_message(e, terminal, reference, ICON_SAD, false);
+        }
+        _ => {}
+    }
+    e.call(HANDLE_ACTIVATE, &args![reference, activator, 0u32]);
+}
+
+// Translated from 00501830 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TERMINAL_MENU_ITEM::RunResultScript` (Xbox PDB; `RET 4`): clears the
+/// byte at +0x10 of the result script's header (`00500940`), then
+/// `Script::Run(reference, the reference's script locals, 0, 1)` on the
+/// result script (+0x10).
+pub fn terminal_menu_item_run_result_script(
+    e: &mut Engine,
+    this: Ptr<TerminalMenuItem>,
+    reference: u32,
+) {
+    let script = this.addr() + 0x10;
+    let header = fn_00500940(e, Ptr::new(script));
+    e.mem.set_u8(header.addr() + 0x10, 0);
+    let extra = e.call(EXTRA_DATA, &args![reference]).u32();
+    let locals = e.call(GET_SCRIPT_LOCALS, &args![extra]).u32();
+    e.call(SCRIPT_RUN, &args![script, reference, locals, 0u32, 1u32]);
+}
+
+// Translated from 005018b0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BGSTerminal::SetHacked` (Xbox PDB; cdecl: reference, a byte): sets
+/// (non-zero) or clears bit 0x80 of the reference's terminal state, then
+/// flag 0x80000000 through the reference's slot 0x48.
+pub fn bgs_terminal_set_hacked(e: &mut Engine, reference: u32, hacked: u32) {
+    if reference == 0 {
+        return;
+    }
+    let extra = e.call(EXTRA_DATA, &args![reference]).u32();
+    let state = e.call(EXTRA_TERMINAL_STATE, &args![extra]).u8();
+    let state = if hacked as u8 != 0 {
+        state | 0x80
+    } else {
+        state & 0x7f
+    };
+    let extra = e.call(EXTRA_DATA, &args![reference]).u32();
+    e.call(SET_TERMINAL_STATE, &args![extra, u32::from(state)]);
+    e.vcall(reference, 0x48, &args![0x8000_0000u32]);
+}
+
+// Translated from 00501930 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BGSTerminal::LockOut` (Xbox PDB; cdecl: reference, a byte): the
+/// reference's terminal state goes up by one (as a byte, non-zero) or to 0,
+/// then flag 0x80000000 through the reference's slot 0x48.
+pub fn bgs_terminal_lock_out(e: &mut Engine, reference: u32, lock: u32) {
+    if reference == 0 {
+        return;
+    }
+    let extra = e.call(EXTRA_DATA, &args![reference]).u32();
+    let state = e.call(EXTRA_TERMINAL_STATE, &args![extra]).u8();
+    let state = if lock as u8 != 0 {
+        state.wrapping_add(1)
+    } else {
+        0
+    };
+    let extra = e.call(EXTRA_DATA, &args![reference]).u32();
+    e.call(SET_TERMINAL_STATE, &args![extra, u32::from(state)]);
+    e.vcall(reference, 0x48, &args![0x8000_0000u32]);
+}
+
+// Translated from 00501a10 (decompiled, FalloutNV.exe 1.4.0.525)
+/// cdecl(reference): removes extra type 0x50 from a non-null reference's
+/// extra data (`BaseExtraList::RemoveExtra_ov2`).
+pub fn fn_00501a10(e: &mut Engine, reference: u32) {
+    if reference != 0 {
+        let extra = e.call(EXTRA_DATA, &args![reference]).u32();
+        e.call(REMOVE_EXTRA, &args![extra, 0x50u32]);
+    }
+}
+
+// Translated from 00501a80 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Sets a reference's lock level (`RET 8`; `0041bf80` on its extra data):
+/// -1 when `level` (the whole word) equals `Data.cDifficulty` (+0xA4) and
+/// the terminal has no flag bit 1, otherwise the low byte of `level`.
+pub fn fn_00501a80(e: &mut Engine, this: Ptr<BGSTerminal>, reference: u32, level: u32) {
+    if reference == 0 {
+        return;
+    }
+    let difficulty = u32::from(e.get(this, BGSTerminal::cDifficulty));
+    let value = if level == difficulty && !fn_005015d0(e, this) {
+        u32::MAX
+    } else {
+        level & 0xff
+    };
+    let extra = e.call(EXTRA_DATA, &args![reference]).u32();
+    e.call(SET_LOCK_LEVEL, &args![extra, value]);
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -839,6 +1462,30 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
             0x0050_1ae0,
             bgs_terminal_is_unlocked(Ptr<BGSTerminal>, u32) -> bool
         ),
+        entry!(0x0050_0a40, bgs_terminal_save(Ptr<BGSTerminal>)),
+        entry!(0x0050_0cb0, fn_00500cb0(Ptr<BGSTerminal>, Ptr)),
+        entry!(0x0050_0e60, fn_00500e60(Ptr<BGSTerminal>, Ptr) -> bool),
+        entry!(
+            0x0050_1270,
+            bgs_terminal_get_hack_mini_game_value(Ptr<BGSTerminal>, u32) -> i32
+        ),
+        entry!(
+            0x0050_12c0,
+            bgs_terminal_is_terminal_ref_in_use(u32) -> bool
+        ),
+        entry!(
+            0x0050_1310,
+            bgs_terminal_activate(Ptr<BGSTerminal>, u32, u32, u32, u32, u32) -> bool
+        ),
+        entry!(0x0050_15f0, bgs_terminal_handle_open_finish(Ptr, u32, u32)),
+        entry!(
+            0x0050_1830,
+            terminal_menu_item_run_result_script(Ptr<TerminalMenuItem>, u32)
+        ),
+        entry!(0x0050_18b0, bgs_terminal_set_hacked(u32, u32)),
+        entry!(0x0050_1930, bgs_terminal_lock_out(u32, u32)),
+        entry!(0x0050_1a10, fn_00501a10(u32)),
+        entry!(0x0050_1a80, fn_00501a80(Ptr<BGSTerminal>, u32, u32)),
     ]
 }
 
@@ -1446,5 +2093,566 @@ mod b023_tests {
         assert_eq!(sets[2][0], variable + 0x18);
         assert_eq!(sets[2][2], 0);
         assert_eq!(sets.len(), 3);
+    }
+}
+
+#[cfg(test)]
+mod n037_tests {
+    use super::*;
+
+    fn ret(eax: u32) -> Ret {
+        Ret {
+            eax,
+            ..Ret::default()
+        }
+    }
+
+    fn calls_to(e: &Engine, addr: u32) -> Vec<Vec<u32>> {
+        e.call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|c| c.0 == addr)
+            .map(|c| c.1.clone())
+            .collect()
+    }
+
+    const VTABLE: u32 = 0x0600_0000;
+    const SLOT_TARGET: u32 = 0x7000_0000;
+
+    /// No-op doubles for everything these functions call; lists are nodes
+    /// of an item word and a next word, a terminal's list head inline at
+    /// +0x98; strings' characters are their first word; form ids are the
+    /// form plus 1; the cast keeps even addresses.
+    fn engine() -> Engine {
+        let mut e = Engine::new();
+        for addr in [
+            START_FORM,
+            CLOSE_FORM,
+            FULL_NAME_SAVE,
+            MODEL_SAVE,
+            SCRIPTABLE_SAVE,
+            DESTRUCTIBLE_SAVE,
+            DESCRIPTION_SAVE,
+            RESULT_SCRIPT_SAVE,
+            CONDITION_SAVE,
+            ADD_CHUNK_WORD,
+            ADD_CHUNK_BYTE,
+            ADD_CHUNK_ARRAY,
+            ADD_CHUNK_DATA,
+            SWAP_DNAM,
+            STRING_COPY,
+            RESULT_SCRIPT_COPY,
+            CONDITIONS_COPY,
+            ACTIVATOR_COPY,
+            LIST_ADD_TAIL,
+            LIST_REMOVE_FIRST,
+            STRING_CONSTRUCT,
+            STRING_DESTRUCT,
+            0x005a_a0f0,
+            0x0068_0890,
+            SET_FORM_FLAG_8,
+            0x0048_4490,
+            HANDLE_ACTIVATE,
+            QUEUE_MENU_CREATE,
+            SHOW_MESSAGE_7052F0,
+            STRING_FORMAT,
+            SOUND_PLAY,
+            SOUND_HANDLE_RELEASE,
+            REWARD_KARMA,
+            SCRIPT_RUN,
+            SET_TERMINAL_STATE,
+            REMOVE_EXTRA,
+            SET_LOCK_LEVEL,
+        ] {
+            e.register(addr, |_, _| Ret::default());
+        }
+        e.register(SAVE_SWAPS, |_, _| ret(0));
+        e.register(FORM_ID, |_, a| ret(a[0] + 1));
+        e.register(GET_PASSWORD, |e, a| ret(e.mem.u32(a[0] + 0xa0)));
+        e.register(MENU_ITEMS, |_, a| ret(a[0] + 0x98));
+        e.register(NODE_IS_EMPTY, |e, a| ret(u32::from(e.mem.u32(a[0]) == 0)));
+        e.register(NODE_ITEM, |_, a| ret(a[0]));
+        e.register(NODE_NEXT, |e, a| ret(e.mem.u32(a[0] + 4)));
+        e.register(STRING_CHARS, |e, a| ret(e.mem.u32(a[0])));
+        e.register(STRLEN, |_, _| ret(5));
+        e.register(RT_DYNAMIC_CAST, |_, a| {
+            ret(if a[0] & 1 == 0 { a[0] } else { 0 })
+        });
+        e.register(ALLOCATE, |e, a| ret(e.mem.alloc(a[0])));
+        e.register(LIST_COUNT, |e, a| {
+            let mut count = 0;
+            let mut node = a[0];
+            while node != 0 && e.mem.u32(node) != 0 {
+                count += 1;
+                node = e.mem.u32(node + 4);
+            }
+            ret(count)
+        });
+        e.register(MEMCMP, |e, a| {
+            ret(u32::from(e.mem.u32(a[0]) != e.mem.u32(a[1])))
+        });
+        e.register(STRING_DIFFERS, |e, a| {
+            ret(u32::from(e.mem.u32(a[0]) != e.mem.u32(a[1])))
+        });
+        e.register(RESULT_SCRIPTS_DIFFER, |e, a| {
+            ret(u32::from(e.mem.u32(a[0]) != e.mem.u32(a[1])))
+        });
+        e.register(CONDITIONS_DIFFER, |e, a| {
+            ret(u32::from(e.mem.u32(a[0]) != e.mem.u32(a[1])))
+        });
+        e.register(ACTIVATOR_DIFFERS, |_, _| ret(0));
+        let slots: Vec<u32> = (0..0x14).map(|i| SLOT_TARGET + 4 * i).collect();
+        e.put_vtable(VTABLE, &slots);
+        for i in 0..0x14 {
+            e.register(SLOT_TARGET + 4 * i, |_, _| Ret::default());
+        }
+        e.map(PLAYER, 4);
+        e.map(MESSAGE_VALUE_010162C0, 4);
+        e.mem.set_u32(MESSAGE_VALUE_010162C0, 2.0f32.to_bits());
+        e.call_log = Some(vec![]);
+        e
+    }
+
+    fn terminal(e: &mut Engine) -> u32 {
+        let terminal = e.mem.alloc(0xa8);
+        e.mem.set_u32(terminal, VTABLE);
+        e.mem.set_u32(terminal + 0x70, VTABLE);
+        terminal
+    }
+
+    /// Appends an item node to the terminal's list.
+    fn add_item(e: &mut Engine, terminal: u32, item: u32) {
+        let mut node = terminal + 0x98;
+        while e.mem.u32(node) != 0 {
+            let next = e.mem.u32(node + 4);
+            if next == 0 {
+                let new = e.mem.alloc(8);
+                e.mem.set_u32(node + 4, new);
+                node = new;
+                break;
+            }
+            node = next;
+        }
+        e.mem.set_u32(node, item);
+    }
+
+    fn item(e: &mut Engine) -> u32 {
+        e.mem.alloc(0x78)
+    }
+
+    #[test]
+    fn save_writes_the_terminal_and_its_items() {
+        let mut e = engine();
+        let this = terminal(&mut e);
+        e.mem.set_u32(this + 0x74, 0x500);
+        e.mem.set_u32(this + 0xa0, 0x600);
+        let first = item(&mut e);
+        e.mem.set_u32(first, 0x9000);
+        e.mem.set_u8(first + 0x74, 3);
+        e.mem.set_u32(first + 0x70, 0x800);
+        add_item(&mut e, this, first);
+        e.call(0x0050_0a40, &[this]);
+        assert_eq!(
+            calls_to(&e, ADD_CHUNK_WORD),
+            vec![
+                vec![SIG_SNAM, 0x501],
+                vec![SIG_PNAM_WORD, 0x601],
+                vec![SIG_RNAM_WORD, 0],
+                vec![SIG_TNAM, 0x801],
+            ]
+        );
+        assert_eq!(
+            calls_to(&e, ADD_CHUNK_ARRAY),
+            vec![vec![SIG_ITXT, 0x9000, 6]]
+        );
+        assert_eq!(calls_to(&e, ADD_CHUNK_BYTE), vec![vec![SIG_ANAM, 3]]);
+        assert_eq!(
+            calls_to(&e, ADD_CHUNK_DATA),
+            vec![vec![SIG_DNAM, this + 0xa4, 4]]
+        );
+        assert_eq!(calls_to(&e, DESCRIPTION_SAVE), vec![vec![this + 0x90]]);
+        assert_eq!(calls_to(&e, RESULT_SCRIPT_SAVE), vec![vec![first + 0x10]]);
+        assert_eq!(calls_to(&e, CONDITION_SAVE), vec![vec![first + 0x64]]);
+        assert!(calls_to(&e, SWAP_DNAM).is_empty());
+        e.register(SAVE_SWAPS, |_, _| ret(1));
+        e.call_log = Some(vec![]);
+        e.call(0x0050_0a40, &[this]);
+        assert_eq!(calls_to(&e, SWAP_DNAM), vec![vec![this + 0xa4]; 2]);
+    }
+
+    #[test]
+    fn copy_rebuilds_the_menu() {
+        let mut e = engine();
+        let this = terminal(&mut e);
+        let other = terminal(&mut e);
+        e.mem.set_u32(other + 0xa0, 0x600);
+        e.mem.set_u32(other + 0xa4, 0x0102_0304);
+        let theirs = item(&mut e);
+        e.mem.set_u32(theirs + 0x6c, 0x11);
+        e.mem.set_u32(theirs + 0x70, 0x22);
+        e.mem.set_u8(theirs + 0x74, 7);
+        add_item(&mut e, other, theirs);
+        e.call(0x0050_0cb0, &[this, other + 1]);
+        assert!(calls_to(&e, ALLOCATE).is_empty());
+        e.register(COPY_BYTES, |e, a| {
+            let w = e.mem.u32(a[1]);
+            e.mem.set_u32(a[0], w);
+            Ret::default()
+        });
+        let added_at = e.mem.alloc(4);
+        e.register_double(LIST_ADD_TAIL, move |e, a| {
+            let item = e.mem.u32(a[1]);
+            e.mem.set_u32(added_at, item);
+            Ret::default()
+        });
+        e.call(0x0050_0cb0, &[this, other]);
+        assert_eq!(e.mem.u32(this + 0xa0), 0x600);
+        assert_eq!(e.mem.u32(this + 0xa4), 0x0102_0304);
+        assert_eq!(calls_to(&e, LIST_ADD_TAIL).len(), 1);
+        let mine = e.mem.u32(added_at);
+        assert_eq!(e.mem.u32(mine + 0x6c), 0x11);
+        assert_eq!(e.mem.u32(mine + 0x70), 0x22);
+        assert_eq!(e.mem.u8(mine + 0x74), 7);
+        assert_eq!(
+            calls_to(&e, STRING_COPY),
+            vec![vec![mine, theirs], vec![mine + 8, theirs + 8]]
+        );
+        assert_eq!(
+            calls_to(&e, CONDITIONS_COPY),
+            vec![vec![mine + 0x64, theirs + 0x64, 0]]
+        );
+        assert_eq!(calls_to(&e, ACTIVATOR_COPY), vec![vec![this, other]]);
+    }
+
+    #[test]
+    fn compare_walks_both_menus() {
+        let mut e = engine();
+        let this = terminal(&mut e);
+        let other = terminal(&mut e);
+        let mine = item(&mut e);
+        let theirs = item(&mut e);
+        add_item(&mut e, this, mine);
+        add_item(&mut e, other, theirs);
+        assert!(!e.call(0x0050_0e60, &[this, other]).bool());
+        assert!(e.call(0x0050_0e60, &[this, other + 1]).bool());
+        for field in [0u32, 8, 0x10, 0x64, 0x6c, 0x70, 0x74] {
+            e.mem.set_u8(theirs + field, 1);
+            assert!(e.call(0x0050_0e60, &[this, other]).bool(), "{field:x}");
+            e.mem.set_u8(theirs + field, 0);
+        }
+        e.mem.set_u32(other + 0xa0, 5);
+        assert!(e.call(0x0050_0e60, &[this, other]).bool());
+        e.mem.set_u32(other + 0xa0, 0);
+        e.mem.set_u8(other + 0xa5, 1);
+        assert!(e.call(0x0050_0e60, &[this, other]).bool());
+        e.mem.set_u8(other + 0xa5, 0);
+        let extra = item(&mut e);
+        add_item(&mut e, other, extra);
+        assert!(e.call(0x0050_0e60, &[this, other]).bool());
+        let mine_too = item(&mut e);
+        add_item(&mut e, this, mine_too);
+        assert!(!e.call(0x0050_0e60, &[this, other]).bool());
+        e.register(ACTIVATOR_DIFFERS, |_, _| ret(1));
+        assert!(e.call(0x0050_0e60, &[this, other]).bool());
+    }
+
+    #[test]
+    fn mini_game_value_is_capped_at_twelve() {
+        let mut e = engine();
+        let this = terminal(&mut e);
+        // Without a reference the level is cDifficulty (no level scaling).
+        e.mem.set_u8(this + 0xa4, 2);
+        let odd = this | 1;
+        e.register_double(FORM_ID, move |_, _| ret(odd));
+        assert_eq!(e.call(0x0050_1270, &[this, 0]).i32(), 9);
+        e.mem.set_u8(this + 0xa4, 4);
+        assert_eq!(e.call(0x0050_1270, &[this, 0]).i32(), 12);
+        e.register(FORM_ID, |_, _| ret(2));
+        e.mem.set_u8(this + 0xa4, 0);
+        assert_eq!(e.call(0x0050_1270, &[this, 0]).i32(), 4);
+    }
+
+    #[test]
+    fn terminal_ref_in_use_needs_occupied_furniture() {
+        let mut e = engine();
+        e.register(0x0056_9b80, |e, a| ret(e.mem.u32(a[0])));
+        e.register(0x0056_8680, |e, a| ret(e.mem.u32(a[0])));
+        e.register(0x0056_8260, |e, a| ret(e.mem.u32(a[0] + 4)));
+        let reference = e.mem.alloc(4);
+        let object = e.mem.alloc(8);
+        assert!(!e.call(0x0050_12c0, &[0]).bool());
+        assert!(!e.call(0x0050_12c0, &[reference]).bool());
+        e.mem.set_u32(reference, object);
+        assert!(!e.call(0x0050_12c0, &[reference]).bool());
+        e.mem.set_u32(object, 1);
+        assert!(e.call(0x0050_12c0, &[reference]).bool());
+        e.mem.set_u32(object + 4, 1);
+        assert!(!e.call(0x0050_12c0, &[reference]).bool());
+        assert_eq!(calls_to(&e, 0x0056_8260)[0], vec![object, 1]);
+    }
+
+    /// `Activate` doubles: open state is the reference's word at +0, the
+    /// player's terminal access the word at +4, in use when +8 is set,
+    /// the owner the word at +0xC, ownership +0x10.
+    fn activate_engine() -> Engine {
+        let mut e = engine();
+        e.register(IS_PIPBOY_OPENING, |_, _| ret(0));
+        e.register(GET_OPEN_STATE, |e, a| ret(e.mem.u32(a[0])));
+        e.register(GET_TERMINAL_ACCESS, |e, a| ret(e.mem.u32(a[1] + 4)));
+        e.register(0x0056_9b80, |e, a| ret(e.mem.u32(a[0] + 8)));
+        e.register(0x0056_8680, |_, _| ret(1));
+        e.register(0x0056_8260, |_, _| ret(0));
+        e.register(GET_OWNER, |e, a| ret(e.mem.u32(a[0] + 0xc)));
+        e.register(IS_AN_OWNER, |e, a| ret(e.mem.u32(a[0] + 0x10)));
+        e.register(WORD_AT_4, |_, _| ret(0x55));
+        e.register(0x0040_1170, |e, a| ret(e.mem.u32(a[0] + 0x40)));
+        e.register(FACTION_TEST_47D7C0, |e, a| ret(e.mem.u32(a[0] + 0x44)));
+        e.register(ALIGNMENT_FOR_KARMA, |_, a| ret(a[0] >> 24));
+        e.register(FTOL, |_, a| {
+            ret(f64::from_bits(u64::from(a[0]) | u64::from(a[1]) << 32) as u32)
+        });
+        let karma = e.mem.alloc(4);
+        e.mem.set_u32(karma, 25.0f32.to_bits());
+        e.register_double(SETTING_VALUE, move |_, _| ret(karma));
+        e.register(ROUND_SKILL_4BD510, |_, a| Ret {
+            st0: f64::from(f32::from_bits(a[0])),
+            ..Ret::default()
+        });
+        e.register(ACTOR_VALUE_NAME, |_, _| ret(0x0aaa));
+        e.register(SETTING_TEXT, |_, _| ret(0x0fff));
+        e.register(AUDIO_INSTANCE, |_, _| ret(0x0a00));
+        e.register(SOUND_HANDLE_BY_NAME, |_, a| ret(a[1]));
+        e.register(EXTRA_DATA, |_, a| ret(a[0] + 0x40));
+        e.register(EXTRA_LOCK_LEVEL, |_, _| ret(0xff));
+        e
+    }
+
+    #[test]
+    fn activate_open_and_hack_paths() {
+        let mut e = activate_engine();
+        let this = terminal(&mut e);
+        let player = e.mem.alloc(0x10);
+        e.mem.set_u32(PLAYER, player);
+        let reference = e.mem.alloc(0x20);
+        // The Pip-Boy is opening: false, nothing else.
+        e.register(IS_PIPBOY_OPENING, |_, _| ret(1));
+        assert!(!e
+            .call(0x0050_1310, &[this, reference, player, 0, 0, 0])
+            .bool());
+        e.register(IS_PIPBOY_OPENING, |_, _| ret(0));
+        // Open: the open/close form's slot 0.
+        e.mem.set_u32(reference, 1);
+        assert!(e
+            .call(0x0050_1310, &[this, reference, player, 0, 0, 0])
+            .bool());
+        assert_eq!(
+            calls_to(&e, SLOT_TARGET),
+            vec![vec![this + 0x70, reference, player]]
+        );
+        // Access 4: the skill message (lock level cDifficulty 0, so the
+        // first setting, 25.0 here), the angry icon and the sound.
+        e.mem.set_u32(reference, 0);
+        e.mem.set_u32(reference + 4, 4);
+        e.call_log = Some(vec![]);
+        assert!(e
+            .call(0x0050_1310, &[this, reference, player, 0, 0, 0])
+            .bool());
+        let shown = calls_to(&e, SHOW_MESSAGE_7052F0);
+        assert_eq!(shown.len(), 1);
+        assert_eq!(shown[0][1..], [0, ICON_ANGRY, 0, 2.0f32.to_bits(), 0]);
+        let formats = calls_to(&e, STRING_FORMAT);
+        assert_eq!(formats[0][1..], [0x0fff, 0x0aaa, 25]);
+        assert_eq!(calls_to(&e, ACTOR_VALUE_NAME), vec![vec![0x28]]);
+        assert_eq!(calls_to(&e, ROUND_SKILL_4BD510)[0][1], 1.0f32.to_bits());
+        let handle = calls_to(&e, SOUND_HANDLE_BY_NAME)[0][1];
+        assert_eq!(
+            calls_to(&e, SOUND_HANDLE_BY_NAME),
+            vec![vec![0x0a00, handle, POPUP_SOUND, 0x121]]
+        );
+        assert_eq!(calls_to(&e, SOUND_PLAY), vec![vec![handle, 0]]);
+        assert!(calls_to(&e, HANDLE_ACTIVATE).is_empty());
+        // In use: the notice and false.
+        e.mem.set_u32(reference + 4, 0);
+        e.mem.set_u32(reference + 8, 0x77);
+        e.call_log = Some(vec![]);
+        assert!(!e
+            .call(0x0050_1310, &[this, reference, player, 0, 0, 0])
+            .bool());
+        assert_eq!(
+            calls_to(&e, SHOW_MESSAGE_7052F0),
+            vec![vec![0x55, 0, 0, 0, 2.0f32.to_bits(), 0]]
+        );
+    }
+
+    #[test]
+    fn activate_rewards_karma_for_another_owners_terminal() {
+        let mut e = activate_engine();
+        let this = terminal(&mut e);
+        let player = e.mem.alloc(0x10);
+        e.mem.set_u32(PLAYER, player);
+        let reference = e.mem.alloc(0x20);
+        let someone = e.mem.alloc(0x20);
+        // Unowned: straight to HandleActivate.
+        assert!(e
+            .call(0x0050_1310, &[this, reference, someone, 0, 0, 0])
+            .bool());
+        assert_eq!(
+            calls_to(&e, HANDLE_ACTIVATE),
+            vec![vec![reference, someone, 0]]
+        );
+        assert!(calls_to(&e, REWARD_KARMA).is_empty());
+        // A faction owner (type 8) that 0047d7c0 says no to: karma 25.
+        let faction = e.mem.alloc(0x48);
+        e.mem.set_u32(faction + 0x40, 8);
+        e.mem.set_u32(reference + 0xc, faction);
+        e.call_log = Some(vec![]);
+        assert!(e
+            .call(0x0050_1310, &[this, reference, someone, 0, 0, 0])
+            .bool());
+        assert_eq!(calls_to(&e, REWARD_KARMA), vec![vec![player, 25]]);
+        assert_eq!(calls_to(&e, IS_AN_OWNER), vec![vec![reference, someone, 1]]);
+        e.mem.set_u32(faction + 0x44, 1);
+        e.call_log = Some(vec![]);
+        e.call(0x0050_1310, &[this, reference, someone, 0, 0, 0]);
+        assert!(calls_to(&e, REWARD_KARMA).is_empty());
+        // An NPC owner: alignment from the karma value (2 and 4 spare it).
+        let npc = e.mem.alloc(0x110);
+        e.mem.set_u32(npc + 0x100, VTABLE);
+        e.mem.set_u32(reference + 0xc, npc);
+        e.register_double(SLOT_TARGET + 0xc, |_, a| {
+            assert_eq!(a[1], 0x17);
+            Ret {
+                st0: f64::from(f32::from_bits(0x0200_0000)),
+                ..Ret::default()
+            }
+        });
+        e.call_log = Some(vec![]);
+        e.call(0x0050_1310, &[this, reference, someone, 0, 0, 0]);
+        assert!(calls_to(&e, REWARD_KARMA).is_empty());
+        assert_eq!(
+            calls_to(&e, SLOT_TARGET + 0xc),
+            vec![vec![npc + 0x100, 0x17]]
+        );
+        e.register(SLOT_TARGET + 0xc, |_, _| Ret {
+            st0: f64::from(f32::from_bits(0x0300_0000)),
+            ..Ret::default()
+        });
+        e.call_log = Some(vec![]);
+        e.call(0x0050_1310, &[this, reference, someone, 0, 0, 0]);
+        assert_eq!(calls_to(&e, REWARD_KARMA).len(), 1);
+        // The activator owns it, or the terminal has flag bit 1: no karma.
+        e.mem.set_u32(reference + 0x10, 1);
+        e.call_log = Some(vec![]);
+        e.call(0x0050_1310, &[this, reference, someone, 0, 0, 0]);
+        assert!(calls_to(&e, REWARD_KARMA).is_empty());
+        e.mem.set_u32(reference + 0x10, 0);
+        e.mem.set_u8(this + 0xa5, 2);
+        e.call_log = Some(vec![]);
+        e.call(0x0050_1310, &[this, reference, someone, 0, 0, 0]);
+        assert!(calls_to(&e, REWARD_KARMA).is_empty());
+        assert_eq!(calls_to(&e, HANDLE_ACTIVATE).len(), 1);
+    }
+
+    #[test]
+    fn handle_open_finish_by_access() {
+        let mut e = activate_engine();
+        let this = terminal(&mut e);
+        let player = e.mem.alloc(0x10);
+        e.mem.set_u32(PLAYER, player);
+        let reference = e.mem.alloc(0x20);
+        let form = this + 0x70;
+        for (access, menu) in [(0u32, 3u32), (1, 3), (2, 2), (3, 2)] {
+            e.mem.set_u32(reference + 4, access);
+            e.call_log = Some(vec![]);
+            e.call(0x0050_15f0, &[form, reference, player]);
+            assert_eq!(
+                calls_to(&e, QUEUE_MENU_CREATE),
+                vec![vec![menu, reference, 0, 0, 1, 0]]
+            );
+            assert_eq!(
+                calls_to(&e, HANDLE_ACTIVATE),
+                vec![vec![reference, player, 0]]
+            );
+        }
+        e.mem.set_u32(reference + 4, 4);
+        e.call_log = Some(vec![]);
+        e.call(0x0050_15f0, &[form, reference, player]);
+        assert_eq!(calls_to(&e, SHOW_MESSAGE_7052F0)[0][2], ICON_SAD);
+        assert!(calls_to(&e, SOUND_PLAY).is_empty());
+        e.mem.set_u32(reference + 4, 5);
+        e.call_log = Some(vec![]);
+        e.call(0x0050_15f0, &[form, reference, player]);
+        assert!(calls_to(&e, QUEUE_MENU_CREATE).is_empty());
+        assert_eq!(calls_to(&e, HANDLE_ACTIVATE).len(), 1);
+        // Not the player, or no reference: nothing.
+        e.call_log = Some(vec![]);
+        e.call(0x0050_15f0, &[form, reference, reference]);
+        e.call(0x0050_15f0, &[form, 0, player]);
+        assert!(calls_to(&e, HANDLE_ACTIVATE).is_empty());
+    }
+
+    #[test]
+    fn run_result_script_runs_with_the_references_locals() {
+        let mut e = engine();
+        e.register(EXTRA_DATA, |_, a| ret(a[0] + 0x40));
+        e.register(GET_SCRIPT_LOCALS, |_, a| ret(a[0] + 1));
+        let this = item(&mut e);
+        e.mem.set_u8(this + 0x10 + 0x18 + 0x10, 9);
+        e.call(0x0050_1830, &[this, 0x5000]);
+        assert_eq!(e.mem.u8(this + 0x38), 0);
+        assert_eq!(
+            calls_to(&e, SCRIPT_RUN),
+            vec![vec![this + 0x10, 0x5000, 0x5041, 0, 1]]
+        );
+    }
+
+    #[test]
+    fn terminal_state_and_lock_level_setters() {
+        let mut e = engine();
+        e.register(EXTRA_DATA, |_, a| ret(a[0] + 0x40));
+        e.register(EXTRA_TERMINAL_STATE, |e, a| ret(e.mem.u32(a[0])));
+        let reference = e.mem.alloc(0x50);
+        e.mem.set_u32(reference, VTABLE);
+        e.mem.set_u32(reference + 0x40, 0x81);
+        e.call(0x0050_18b0, &[reference, 0x100]);
+        e.call(0x0050_18b0, &[reference, 1]);
+        e.call(0x0050_1930, &[reference, 1]);
+        e.call(0x0050_1930, &[reference, 0]);
+        e.call(0x0050_18b0, &[0, 1]);
+        assert_eq!(
+            calls_to(&e, SET_TERMINAL_STATE),
+            vec![
+                vec![reference + 0x40, 1],
+                vec![reference + 0x40, 0x81],
+                vec![reference + 0x40, 0x82],
+                vec![reference + 0x40, 0],
+            ]
+        );
+        assert_eq!(
+            calls_to(&e, SLOT_TARGET + 0x48),
+            vec![vec![reference, 0x8000_0000]; 4]
+        );
+        e.call(0x0050_1a10, &[reference]);
+        e.call(0x0050_1a10, &[0]);
+        assert_eq!(
+            calls_to(&e, REMOVE_EXTRA),
+            vec![vec![reference + 0x40, 0x50]]
+        );
+        let this = terminal(&mut e);
+        e.mem.set_u8(this + 0xa4, 3);
+        e.call(0x0050_1a80, &[this, reference, 3]);
+        e.call(0x0050_1a80, &[this, reference, 0x103]);
+        e.mem.set_u8(this + 0xa5, 2);
+        e.call(0x0050_1a80, &[this, reference, 3]);
+        e.call(0x0050_1a80, &[this, 0, 3]);
+        assert_eq!(
+            calls_to(&e, SET_LOCK_LEVEL),
+            vec![
+                vec![reference + 0x40, u32::MAX],
+                vec![reference + 0x40, 3],
+                vec![reference + 0x40, 3],
+            ]
+        );
     }
 }

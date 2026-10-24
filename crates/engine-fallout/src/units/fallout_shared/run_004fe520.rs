@@ -81,6 +81,54 @@ pub fn fn_004fe7a0(e: &mut Engine, this: Ptr) {
     e.call(0x0051_0710, &args![this]);
 }
 
+// Translated from 004fe520 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Saves the form (`ECX` only): `TESForm::StartForm`, the model at +0x30
+/// (`TESModelTextureSwap::Save` with `MODL`, `MODT`, `MODS`), `TESForm::CloseForm`.
+pub fn fn_004fe520(e: &mut Engine, this: Ptr) {
+    e.call(0x0048_55a0, &args![this]);
+    e.call(
+        0x0048_a520,
+        &args![
+            this.addr() + 0x30,
+            0x4c44_4f4du32,
+            0x5444_4f4du32,
+            0x5344_4f4du32
+        ],
+    );
+    e.call(0x0048_5680, &args![this]);
+}
+
+// Translated from 004fe5a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Copies the components of `other` (`RET 4`, `TESForm::CopyAllComponents`) when it casts
+/// (`__RTDynamicCast` from `01183028` to `01189ddc`).
+pub fn fn_004fe5a0(e: &mut Engine, this: Ptr, other: u32) {
+    let cast = e
+        .call(
+            0x00ec_43fb,
+            &args![other, 0u32, 0x0118_3028u32, 0x0118_9ddcu32, 0u32],
+        )
+        .u32();
+    if cast != 0 {
+        e.call(0x0048_51b0, &args![this, cast]);
+    }
+}
+
+// Translated from 004fe5e0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Whether `other` differs (`RET 4`, `AL`): true unless it casts (`__RTDynamicCast` from
+/// `01183028` to `01189ddc`) and `TESForm::CompareAllComponents` finds no difference.
+pub fn fn_004fe5e0(e: &mut Engine, this: Ptr, other: u32) -> bool {
+    let cast = e
+        .call(
+            0x00ec_43fb,
+            &args![other, 0u32, 0x0118_3028u32, 0x0118_9ddcu32, 0u32],
+        )
+        .u32();
+    if cast == 0 {
+        return true;
+    }
+    e.call(0x0048_5270, &args![this, cast]).bool()
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -90,6 +138,9 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x004f_e560, fn_004fe560(Ptr)),
         entry!(0x004f_e710, fn_004fe710(Ptr)),
         entry!(0x004f_e7a0, fn_004fe7a0(Ptr)),
+        entry!(0x004f_e520, fn_004fe520(Ptr)),
+        entry!(0x004f_e5a0, fn_004fe5a0(Ptr, u32)),
+        entry!(0x004f_e5e0, fn_004fe5e0(Ptr, u32) -> bool),
     ]
 }
 
@@ -254,5 +305,74 @@ mod le81_thunk_tests {
             }
             assert_eq!(calls, expected);
         }
+    }
+}
+
+#[cfg(test)]
+mod n039_tests {
+    use super::*;
+
+    fn calls_to(e: &Engine, callee: u32) -> Vec<Vec<u32>> {
+        e.call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|(address, _)| *address == callee)
+            .map(|(_, words)| words.clone())
+            .collect()
+    }
+
+    #[test]
+    fn fn_004fe520_saves_the_model() {
+        let mut e = Engine::new();
+        for address in [0x0048_55a0, 0x0048_a520, 0x0048_5680] {
+            e.register(address, |_, _| Ret::default());
+        }
+        e.call_log = Some(vec![]);
+        e.call(0x004f_e520, &args![0x1000u32]);
+        let order: Vec<(u32, Vec<u32>)> = e.call_log.take().unwrap().into_iter().skip(1).collect();
+        assert_eq!(
+            order,
+            vec![
+                (0x0048_55a0, vec![0x1000]),
+                (
+                    0x0048_a520,
+                    vec![0x1030, 0x4c44_4f4d, 0x5444_4f4d, 0x5344_4f4d]
+                ),
+                (0x0048_5680, vec![0x1000])
+            ]
+        );
+    }
+
+    #[test]
+    fn fn_004fe5a0_copies_only_a_cast_form() {
+        let mut e = Engine::new();
+        e.register(0x00ec_43fb, |_, a| a[0].into_ret());
+        e.register(0x0048_51b0, |_, _| Ret::default());
+        e.call_log = Some(vec![]);
+        e.call(0x004f_e5a0, &args![0x1000u32, 0x2000u32]);
+        assert_eq!(calls_to(&e, 0x0048_51b0), vec![vec![0x1000, 0x2000]]);
+        assert_eq!(
+            calls_to(&e, 0x00ec_43fb),
+            vec![vec![0x2000, 0, 0x0118_3028, 0x0118_9ddc, 0]]
+        );
+        e.register(0x00ec_43fb, |_, _| Ret::default());
+        e.call_log = Some(vec![]);
+        e.call(0x004f_e5a0, &args![0x1000u32, 0x2000u32]);
+        assert!(calls_to(&e, 0x0048_51b0).is_empty());
+    }
+
+    #[test]
+    fn fn_004fe5e0_compares_a_cast_form() {
+        let mut e = Engine::new();
+        e.register(0x00ec_43fb, |_, a| a[0].into_ret());
+        e.register(0x0048_5270, |_, _| false.into_ret());
+        assert!(!e.call(0x004f_e5e0, &args![0x1000u32, 0x2000u32]).bool());
+        e.register(0x0048_5270, |_, _| 0x100u32.into_ret());
+        assert!(!e.call(0x004f_e5e0, &args![0x1000u32, 0x2000u32]).bool());
+        e.register(0x0048_5270, |_, _| true.into_ret());
+        assert!(e.call(0x004f_e5e0, &args![0x1000u32, 0x2000u32]).bool());
+        e.register(0x00ec_43fb, |_, _| Ret::default());
+        assert!(e.call(0x004f_e5e0, &args![0x1000u32, 0x2000u32]).bool());
     }
 }

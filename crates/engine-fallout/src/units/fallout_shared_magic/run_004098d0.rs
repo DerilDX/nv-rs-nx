@@ -88,6 +88,50 @@ pub fn fn_00409c40(e: &mut Engine, this: Ptr) {
     e.call(0x0048_3710, &args![this]);
 }
 
+// Translated from 00409a10 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`thiscall` on the component at +0x3c of the
+/// form `fn_004098f0` constructs): whether the form's flags byte (+0xa0)
+/// has flag 2 (`00409a30`).
+pub fn fn_00409a10(e: &mut Engine, this: Ptr) -> bool {
+    fn_00409a30(e, Ptr::new(this.addr().wrapping_sub(0x3c)), 2)
+}
+
+// Translated from 00409a30 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`thiscall`, `RET 4`): whether the flags byte
+/// at +0xa0 has a bit of `mask`.
+pub fn fn_00409a30(e: &mut Engine, this: Ptr, mask: u32) -> bool {
+    u32::from(e.mem.u8(this.addr() + 0xa0)) & mask != 0
+}
+
+// Translated from 00409a50 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`thiscall`): whether the flags byte at +0xa0
+/// lacks flag 1 (`00409a30`).
+pub fn fn_00409a50(e: &mut Engine, this: Ptr) -> bool {
+    !fn_00409a30(e, this, 1)
+}
+
+// Translated from 00409a70 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`thiscall`, `RET 4`): flag 1 of the flags
+/// byte at +0xa0 set when the byte `clear` is zero, cleared otherwise
+/// (`00409aa0`).
+pub fn fn_00409a70(e: &mut Engine, this: Ptr, clear: u8) {
+    fn_00409aa0(e, this, 1, u8::from(clear == 0));
+}
+
+// Translated from 00409aa0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`thiscall`, `RET 8`): sets (when the byte
+/// `set` is non-zero) or clears the bits of `mask` in the flags byte at
+/// +0xa0.
+pub fn fn_00409aa0(e: &mut Engine, this: Ptr, mask: u32, set: u8) {
+    let flags = u32::from(e.mem.u8(this.addr() + 0xa0));
+    let flags = if set != 0 {
+        flags | mask
+    } else {
+        flags & !mask
+    };
+    e.mem.set_u8(this.addr() + 0xa0, flags as u8);
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -96,6 +140,11 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x0040_9b40, fn_00409b40(Ptr)),
         entry!(0x0040_9c40, fn_00409c40(Ptr)),
         entry!(0x0040_9b10, fn_00409b10(Ptr, u32) -> Ptr),
+        entry!(0x0040_9a10, fn_00409a10(Ptr) -> bool),
+        entry!(0x0040_9a30, fn_00409a30(Ptr, u32) -> bool),
+        entry!(0x0040_9a50, fn_00409a50(Ptr) -> bool),
+        entry!(0x0040_9a70, fn_00409a70(Ptr, u8)),
+        entry!(0x0040_9aa0, fn_00409aa0(Ptr, u32, u8)),
     ]
 }
 
@@ -235,5 +284,42 @@ mod tests {
         assert_eq!(inner[0].1, vec![this]);
         assert_eq!(e.mem.u32(this + 0x9c), 0xffff_ffff);
         assert_eq!(e.mem.u8(this + 0xa0), 0);
+    }
+}
+
+#[cfg(test)]
+mod flag_tests {
+    use super::*;
+
+    #[test]
+    fn flag_queries() {
+        let mut e = Engine::new();
+        let form = e.mem.alloc(0xa4);
+        e.mem.set_u8(form + 0xa0, 0x02);
+        assert!(e.call(0x0040_9a30, &args![form, 0x102u32]).bool());
+        assert!(!fn_00409a30(&mut e, Ptr::new(form), 0x101));
+        assert!(e.call(0x0040_9a10, &args![form + 0x3c]).bool());
+        assert!(e.call(0x0040_9a50, &args![form]).bool());
+        e.mem.set_u8(form + 0xa0, 0x01);
+        assert!(!fn_00409a10(&mut e, Ptr::new(form + 0x3c)));
+        assert!(!fn_00409a50(&mut e, Ptr::new(form)));
+    }
+
+    #[test]
+    fn flag_updates() {
+        let mut e = Engine::new();
+        let form = e.mem.alloc(0xa4);
+        e.mem.set_u8(form + 0xa0, 0x10);
+        e.mem.set_u8(form + 0xa1, 0x77);
+        e.call(0x0040_9aa0, &args![form, 0x0306u32, 0x100u32]);
+        // The set byte is 0 (only its low byte is read): clear 0x06.
+        assert_eq!(e.mem.u8(form + 0xa0), 0x10);
+        e.call(0x0040_9aa0, &args![form, 0x0306u32, 1u32]);
+        assert_eq!(e.mem.u8(form + 0xa0), 0x16);
+        assert_eq!(e.mem.u8(form + 0xa1), 0x77);
+        e.call(0x0040_9a70, &args![form, 0x200u32]);
+        assert_eq!(e.mem.u8(form + 0xa0), 0x17);
+        fn_00409a70(&mut e, Ptr::new(form), 5);
+        assert_eq!(e.mem.u8(form + 0xa0), 0x16);
     }
 }

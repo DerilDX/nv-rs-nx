@@ -254,11 +254,61 @@ pub fn fn_005120a0(e: &mut Engine, this: Ptr, file: Ptr) -> bool {
     true
 }
 
+/// Byte-swaps a 16-bit word in place (`00407a90`, cdecl(address, byte)).
+const SWAP_WORD16: u32 = 0x0040_7a90;
+/// `TESForm::StartForm` (`004855a0`), `TESForm::CloseForm` (`00485680`) and
+/// `TESForm::SaveData` (`00485e00`), `thiscall` on the form, no stack words.
+const START_FORM: u32 = 0x0048_55a0;
+const CLOSE_FORM: u32 = 0x0048_5680;
+const FORM_SAVE_DATA: u32 = 0x0048_5e00;
+/// The component saves (engine map; `thiscall`): `TESFullName::Save`
+/// (`00487010`), `TESBipedModelForm::Save` (`00480610`) and
+/// `BGSEquipType::Save` (`00479350`).
+const FULL_NAME_SAVE: u32 = 0x0048_7010;
+const BIPED_MODEL_SAVE: u32 = 0x0048_0610;
+const EQUIP_TYPE_SAVE: u32 = 0x0047_9350;
+/// `00401500`: the byte at `011c54ba` (whether saved words are byte-swapped).
+const SAVE_SWAPS_BYTES: u32 = 0x0040_1500;
+/// `TESForm::__AddChunkData` (`00485990`, cdecl(chunk, data, size)).
+const ADD_CHUNK_DATA: u32 = 0x0048_5990;
+
+// Translated from 00512810 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Byte-swaps the 16-bit word at `this` (`00407a90` with a zero byte;
+/// engine map: no name; no stack words).
+pub fn fn_00512810(e: &mut Engine, this: Ptr) {
+    e.call(SWAP_WORD16, &args![this, 0u32]);
+}
+
+// Translated from 00512840 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TESObjectARMA::Save` (engine map; no stack words): `StartForm`, the
+/// full name (+0x30), the biped model (+0x70), the equip type (+0x154),
+/// `TESForm::SaveData`, the 0xc bytes at +0x178 as chunk `DNAM`
+/// (byte-swapped before and back after, `00535aa0`, when `00401500` says
+/// so), `CloseForm`.
+pub fn tes_object_arma_save(e: &mut Engine, this: Ptr) {
+    let base = this.addr();
+    e.call(START_FORM, &args![this]);
+    e.call(FULL_NAME_SAVE, &args![base + 0x30]);
+    e.call(BIPED_MODEL_SAVE, &args![base + 0x70]);
+    e.call(EQUIP_TYPE_SAVE, &args![base + 0x154]);
+    e.call(FORM_SAVE_DATA, &args![this]);
+    if e.call(SAVE_SWAPS_BYTES, &[]).u32() as u8 != 0 {
+        e.call(SWAP_DATA, &args![base + 0x178]);
+    }
+    e.call(ADD_CHUNK_DATA, &args![CHUNK_DNAM, base + 0x178, 0xcu32]);
+    if e.call(SAVE_SWAPS_BYTES, &[]).u32() as u8 != 0 {
+        e.call(SWAP_DATA, &args![base + 0x178]);
+    }
+    e.call(CLOSE_FORM, &args![this]);
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
         entry!(0x0051_2030, tes_object_arma_init_item(Ptr)),
         entry!(0x0051_20a0, fn_005120a0(Ptr, Ptr) -> bool),
+        entry!(0x0051_2810, fn_00512810(Ptr)),
+        entry!(0x0051_2840, tes_object_arma_save(Ptr)),
     ]
 }
 
@@ -519,5 +569,63 @@ mod tests {
         e.call_log = Some(vec![]);
         assert!(!e.call(0x0051_20a0, &args![this, f]).bool());
         assert!(calls(&e, 0x004f_15a0).is_empty());
+    }
+}
+
+#[cfg(test)]
+mod save_tests {
+    use super::*;
+
+    type Log = Vec<(u32, Vec<u32>)>;
+
+    fn only(log: &Log, addr: u32) -> Vec<Vec<u32>> {
+        log.iter()
+            .filter(|(a, _)| *a == addr)
+            .map(|(_, w)| w.clone())
+            .collect()
+    }
+
+    #[test]
+    fn swap_passes_this_and_a_zero_byte() {
+        let mut e = Engine::new();
+        e.register(SWAP_WORD16, |_, _| Ret::default());
+        e.call_log = Some(vec![]);
+        e.call(0x0051_2810, &args![0x4400u32]);
+        let log = e.call_log.take().unwrap();
+        assert_eq!(only(&log, SWAP_WORD16), vec![vec![0x4400, 0]]);
+    }
+
+    #[test]
+    fn save_writes_components_and_dnam() {
+        for swaps in [0u32, 1] {
+            let mut e = Engine::new();
+            for a in [
+                START_FORM,
+                CLOSE_FORM,
+                FORM_SAVE_DATA,
+                FULL_NAME_SAVE,
+                BIPED_MODEL_SAVE,
+                EQUIP_TYPE_SAVE,
+                ADD_CHUNK_DATA,
+                SWAP_DATA,
+            ] {
+                e.register(a, |_, _| Ret::default());
+            }
+            e.register_double(SAVE_SWAPS_BYTES, move |_, _| swaps.into_ret());
+            let this = e.mem.alloc(0x190);
+            e.call_log = Some(vec![]);
+            e.call(0x0051_2840, &args![this]);
+            let log = e.call_log.take().unwrap();
+            assert_eq!(only(&log, FULL_NAME_SAVE), vec![vec![this + 0x30]]);
+            assert_eq!(only(&log, BIPED_MODEL_SAVE), vec![vec![this + 0x70]]);
+            assert_eq!(only(&log, EQUIP_TYPE_SAVE), vec![vec![this + 0x154]]);
+            assert_eq!(only(&log, FORM_SAVE_DATA), vec![vec![this]]);
+            assert_eq!(
+                only(&log, ADD_CHUNK_DATA),
+                vec![vec![CHUNK_DNAM, this + 0x178, 0xc]]
+            );
+            assert_eq!(only(&log, SWAP_DATA).len(), 2 * swaps as usize);
+            assert_eq!(only(&log, CLOSE_FORM), vec![vec![this]]);
+        }
     }
 }

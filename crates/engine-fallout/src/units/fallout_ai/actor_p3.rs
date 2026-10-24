@@ -1979,7 +1979,7 @@ pub fn fn_00894f90(e: &mut Engine, this: Ptr<Actor>, directions: u8) -> u32 {
 /// Sets the `float` at `+0x10c` of an animation object (its speed
 /// multiplier).
 pub fn fn_008950f0(e: &mut Engine, this: Ptr, value: f32) {
-    e.mem.set_f32(this.addr() + 0x10c, value);
+    e.mem.set_f32(this.addr() + 0x10c, x87_quiet(value));
 }
 
 // Translated from 00897890 (decompiled, FalloutNV.exe 1.4.0.525)

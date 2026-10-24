@@ -2621,8 +2621,8 @@ pub fn tes_update_current_grid_cell(e: &mut Engine, this: Ptr<TES>, pos: Ptr, fl
 /// Stores the two floats `x`, `y` in `this` and returns `this` (a
 /// two-float point's constructor).
 pub fn fn_00452dc0(e: &mut Engine, this: Ptr, x: f32, y: f32) -> Ptr {
-    e.mem.set_f32(this.addr(), x);
-    e.mem.set_f32(this.addr() + 4, y);
+    e.mem.set_f32(this.addr(), x87_quiet(x));
+    e.mem.set_f32(this.addr() + 4, x87_quiet(y));
     this
 }
 

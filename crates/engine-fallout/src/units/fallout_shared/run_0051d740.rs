@@ -282,6 +282,19 @@ pub fn fn_0051db00(e: &mut Engine, this: Ptr) {
     e.call(0x0050_e9f0, &args![this]);
 }
 
+/// The table of name pointers `0051dab0` indexes (`0118a870`, in the exe's
+/// data; its first entry points at the text `HandToHandMelee`).
+const NAME_TABLE: u32 = 0x0118_a870;
+
+// Translated from 0051dab0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No map name (`thiscall`): the name pointer the table at `0118a870`
+/// holds for the signed byte at +0xF4 (`MOVSX`, so a negative byte reads
+/// before the table, as the exe does).
+pub fn fn_0051dab0(e: &mut Engine, this: Ptr) -> u32 {
+    let index = e.mem.u8(this.addr() + 0xf4) as i8 as i32 as u32;
+    e.mem.u32(NAME_TABLE.wrapping_add(index.wrapping_mul(4)))
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -293,6 +306,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x0051_e2a0, fn_0051e2a0(Ptr, u8) -> i32),
         entry!(0x0051_e300, fn_0051e300(Ptr)),
         entry!(0x0051_db00, fn_0051db00(Ptr)),
+        entry!(0x0051_dab0, fn_0051dab0(Ptr) -> u32),
     ]
 }
 
@@ -673,5 +687,25 @@ mod b020_tests {
         assert_eq!(log[35], (0x0048_a490, vec![p + 0x3c]));
         assert_eq!(log[36], (0x0059_1300, vec![p + 0x30]));
         assert_eq!(log[37], (0x0050_e9f0, vec![p]));
+    }
+}
+
+#[cfg(test)]
+mod n040_tests {
+    use super::*;
+
+    #[test]
+    fn fn_0051dab0_reads_the_name_table_by_signed_byte() {
+        let mut e = Engine::new();
+        e.map(0x0118_a000, 0x1000);
+        e.set_global(NAME_TABLE, 0x0100_0000u32);
+        e.set_global(NAME_TABLE + 8, 0x0100_0008u32);
+        e.set_global(NAME_TABLE - 4, 0x00ff_fffcu32);
+        let this = e.mem.alloc(0x100);
+        assert_eq!(e.call(0x0051_dab0, &[this]).u32(), 0x0100_0000);
+        e.mem.set_u8(this + 0xf4, 2);
+        assert_eq!(e.call(0x0051_dab0, &[this]).u32(), 0x0100_0008);
+        e.mem.set_u8(this + 0xf4, 0xff);
+        assert_eq!(e.call(0x0051_dab0, &[this]).u32(), 0x00ff_fffc);
     }
 }

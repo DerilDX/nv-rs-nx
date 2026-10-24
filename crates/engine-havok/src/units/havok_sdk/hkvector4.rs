@@ -23,12 +23,14 @@ fn store(e: &mut Engine, addr: u32, v: Lanes) {
     }
 }
 
+/// `MULPS a, b` (the SSE NaN rules: `a` is the destination).
 fn mul(a: Lanes, b: Lanes) -> Lanes {
-    std::array::from_fn(|lane| a[lane] * b[lane])
+    crate::sse::mulps(a, b)
 }
 
+/// `ADDPS a, b` (the SSE NaN rules).
 fn add(a: Lanes, b: Lanes) -> Lanes {
-    std::array::from_fn(|lane| a[lane] + b[lane])
+    crate::sse::addps(a, b)
 }
 
 /// `SHUFPS v, v, 0x00 / 0x55 / 0xaa`: one lane broadcast to all four.
@@ -71,10 +73,7 @@ pub fn set_transformed_pos(e: &mut Engine, this: Ptr, transform: Ptr, vector: Pt
 /// immediates `0xd4` / `0xe4`), which is what the fourth lane of the result uses.
 pub fn set_transformed_inverse_pos(e: &mut Engine, this: Ptr, transform: Ptr, vector: Ptr) {
     let translation = load(e, transform.addr() + 0x30);
-    let v: Lanes = {
-        let raw = load(e, vector.addr());
-        std::array::from_fn(|lane| raw[lane] - translation[lane])
-    };
+    let v: Lanes = sub(load(e, vector.addr()), translation);
     let c0 = load(e, transform.addr());
     let c1 = load(e, transform.addr() + 0x10);
     let c2 = load(e, transform.addr() + 0x20);
@@ -83,7 +82,8 @@ pub fn set_transformed_inverse_pos(e: &mut Engine, this: Ptr, transform: Ptr, ve
     let row2 = [c0[2], c1[2], c2[2], c2[3]];
     let by_y = mul(splat(v, 1), row1);
     let by_x = mul(splat(v, 0), row0);
-    let by_z = mul(splat(v, 2), row2);
+    // `MULPS` with the row as the destination here.
+    let by_z = mul(row2, splat(v, 2));
     store(e, this.addr(), add(add(by_y, by_x), by_z));
 }
 
@@ -203,8 +203,9 @@ fn shufps(dest: Lanes, src: Lanes, imm: u8) -> Lanes {
     [pick(dest, 0), pick(dest, 2), pick(src, 4), pick(src, 6)]
 }
 
+/// `SUBPS a, b` (the SSE NaN rules).
 fn sub(a: Lanes, b: Lanes) -> Lanes {
-    std::array::from_fn(|lane| a[lane] - b[lane])
+    crate::sse::subps(a, b)
 }
 
 /// The four-lane quaternion rotation both `_ov2` functions end in, in the order of their
@@ -220,9 +221,9 @@ fn rotate_by_quaternion(
 ) -> Lanes {
     // `ADDSS` adds only lane 0; the other lanes keep the broadcast value.
     let mut y_sum = splat(products, 1);
-    y_sum[0] += products[0];
+    y_sum[0] = crate::sse::add(y_sum[0], products[0]);
     let mut dot = splat(products, 2);
-    dot[0] += y_sum[0];
+    dot[0] = crate::sse::add(dot[0], y_sum[0]);
     let w = shufps(quaternion, quaternion, 0xff);
     let cross_w = mul(cross, w);
     let w_squared = mul(w, w);

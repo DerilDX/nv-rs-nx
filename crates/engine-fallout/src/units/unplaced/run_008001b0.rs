@@ -203,12 +203,22 @@ pub fn fn_00800ed0(e: &mut Engine, this: Ptr) {
     e.mem.set_u32(at + 0x10, 0xffff_ffff);
 }
 
+// Translated from 008009d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`thiscall`, no stack words): when the byte at +0x2B4 is set,
+/// sets the byte at +0x2B5 to 1.
+pub fn fn_008009d0(e: &mut Engine, this: Ptr) {
+    if e.mem.u8(this.addr() + 0x2b4) != 0 {
+        e.mem.set_u8(this.addr() + 0x2b5, 1);
+    }
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
         entry!(0x008001b0, fn_008001b0(Ptr)),
         entry!(0x00800370, fn_00800370(Ptr)),
         entry!(0x00800ed0, fn_00800ed0(Ptr)),
+        entry!(0x0080_09d0, fn_008009d0(Ptr)),
     ]
 }
 
@@ -364,5 +374,16 @@ mod tests {
         e.call(0x0080_0370, &args![this]);
         assert_eq!(calls_to(&e, STEP_00800900), vec![vec![this, now]]);
         assert!(calls_to(&e, STEP_008007B0).is_empty());
+    }
+
+    #[test]
+    fn fn_008009d0_marks_only_when_the_flag_is_set() {
+        let mut e = Engine::new();
+        let this = e.mem.alloc(0x2c0);
+        e.call(0x0080_09d0, &args![this]);
+        assert_eq!(e.mem.u8(this + 0x2b5), 0);
+        e.mem.set_u8(this + 0x2b4, 2);
+        e.call(0x0080_09d0, &args![this]);
+        assert_eq!(e.mem.u8(this + 0x2b5), 1);
     }
 }

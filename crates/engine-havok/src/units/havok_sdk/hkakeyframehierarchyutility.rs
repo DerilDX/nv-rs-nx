@@ -523,23 +523,23 @@ pub fn fn_00d6bec0(e: &mut Engine, a: Ptr, b: Ptr, out: Ptr) {
     let (a, b, out) = (a.addr(), b.addr(), out.addr());
     let b_vec = load_vec(e, b);
     let a_vec = load_vec(e, a);
-    let cross = sub4(
-        mul4(rotate_lanes_d2(b_vec), rotate_lanes_c9(a_vec)),
-        mul4(rotate_lanes_c9(b_vec), rotate_lanes_d2(a_vec)),
+    let cross = crate::sse::subps(
+        crate::sse::mulps(rotate_lanes_d2(b_vec), rotate_lanes_c9(a_vec)),
+        crate::sse::mulps(rotate_lanes_c9(b_vec), rotate_lanes_d2(a_vec)),
     );
     store_vec(e, out, cross);
     let b_w = splat(load_vec(e, b)[3]);
     let a_vec = load_vec(e, a);
-    let cross = sub4(cross, mul4(b_w, a_vec));
+    let cross = crate::sse::subps(cross, crate::sse::mulps(b_w, a_vec));
     store_vec(e, out, cross);
     let a_vec = load_vec(e, a);
     let b_vec = load_vec(e, b);
-    let sum = add4(mul4(splat(a_vec[3]), b_vec), cross);
-    let doubled = add4(sum, sum);
+    let sum = crate::sse::addps(crate::sse::mulps(splat(a_vec[3]), b_vec), cross);
+    let doubled = crate::sse::addps(sum, sum);
     store_vec(e, out, doubled);
-    let products = mul4(load_vec(e, b), load_vec(e, a));
-    let pairs = add4(shufps(products, products, 0x4e), products);
-    let total = add4(shufps(pairs, pairs, 0xb1), pairs);
+    let products = crate::sse::mulps(load_vec(e, b), load_vec(e, a));
+    let pairs = crate::sse::addps(shufps(products, products, 0x4e), products);
+    let total = crate::sse::addps(shufps(pairs, pairs, 0xb1), pairs);
     if total[0].to_bits() >> 31 != 0 {
         let signs = load_bits(e, SIGN_BITS);
         let flipped: [u32; 4] = std::array::from_fn(|lane| doubled[lane].to_bits() ^ signs[lane]);

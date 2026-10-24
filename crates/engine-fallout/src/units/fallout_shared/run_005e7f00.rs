@@ -351,9 +351,135 @@ pub fn fn_005e84e0(e: &mut Engine, this: Ptr<BGSNote>, file: Ptr) -> bool {
     true
 }
 
+/// `__RTDynamicCast` (`00ec43fb`, cdecl), the source type descriptor and
+/// the target `005e7f00` and `005e7f40` pass (`0119750c`, the type
+/// descriptor named `.?AVBGSIdleMarker@@`).
+const DYNAMIC_CAST: u32 = 0x00ec_43fb;
+const CAST_SOURCE: u32 = 0x0118_3028;
+const IDLE_MARKER_TYPE: u32 = 0x0119_750c;
+/// The form id of a form (`0084e3a0`, thiscall) and the chunk writers
+/// (cdecl): a byte (`004858f0`), a word (`00485910`), an array
+/// (`TESForm::AddChunkArray`, `004856f0`: chunk, data, size).
+const FORM_ID: u32 = 0x0084_e3a0;
+const WRITE_BYTE_CHUNK: u32 = 0x0048_58f0;
+const WRITE_WORD_CHUNK: u32 = 0x0048_5910;
+const WRITE_ARRAY_CHUNK: u32 = 0x0048_56f0;
+
+// Translated from 005e7f00 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BGSIdleMarker`'s copy (`RET 4`: the source form; the engine map has no
+/// name): the source through `__RTDynamicCast(source, 0, 01183028,
+/// 0119750c, 0)`, then `TESForm::CopyAllComponents` given the cast source
+/// when there is one.
+pub fn fn_005e7f00(e: &mut Engine, this: Ptr, source: u32) {
+    let other = e
+        .call(
+            DYNAMIC_CAST,
+            &args![source, 0u32, CAST_SOURCE, IDLE_MARKER_TYPE, 0u32],
+        )
+        .u32();
+    if other != 0 {
+        e.call(0x0048_51b0, &args![this, other]);
+    }
+}
+
+// Translated from 005e7f40 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BGSIdleMarker`'s compare (`RET 4`: the other form; true when they
+/// differ; the engine map has no name): true when the cast as in
+/// `005e7f00` fails, otherwise `TESForm::CompareAllComponents`.
+pub fn fn_005e7f40(e: &mut Engine, this: Ptr, form: u32) -> bool {
+    let other = e
+        .call(
+            DYNAMIC_CAST,
+            &args![form, 0u32, CAST_SOURCE, IDLE_MARKER_TYPE, 0u32],
+        )
+        .u32();
+    if other == 0 {
+        return true;
+    }
+    e.call(0x0048_5270, &args![this, other]).bool()
+}
+
+// Translated from 005e8300 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BGSNote`'s record writer (slot 0x2C of its vtable `01046874`; no stack
+/// words; the engine map has no name): `TESForm::StartForm`,
+/// `TESFullName::Save` (+0x48), `TESModel::Save('MODL', 'MODT')` (+0x30),
+/// `TESTexture::Save('ICON')` (+0x54), `BGSPickupPutdownSounds::Save`
+/// (+0x60), the type byte (+0x7C) as `DATA`, the form ids of the list
+/// (`004fadc0`, up to an empty node) as `ONAM`, then by the type (the
+/// exe's jump table on the signed byte): 0 the form id of `005e9100` as
+/// `SNAM`; 1 `TESDescription::SaveDescriptionData(005e91d0, 'TNAM')`; 2
+/// the text of `005e9160` (`00408da0`) with its length (`0048cee0`) plus
+/// one as the `XNAM` array; 3 the form ids of `005e9240` as `TNAM` and of
+/// `BGSNote::GetNoteSpeaker` as `SNAM` (each only when set); then
+/// `TESForm::CloseForm`.
+pub fn fn_005e8300(e: &mut Engine, this: Ptr<BGSNote>) {
+    let base = this.addr();
+    e.call(0x0048_55a0, &args![this]);
+    e.call(0x0048_7010, &args![base + 0x48]);
+    e.call(
+        0x0048_91d0,
+        &args![base + 0x30, 0x4c44_4f4du32, 0x5444_4f4du32],
+    );
+    e.call(0x0048_e370, &args![base + 0x54, 0x4e4f_4349u32]);
+    e.call(0x0047_b560, &args![base + 0x60]);
+    let kind = e.mem.u8(base + 0x7c);
+    e.call(WRITE_BYTE_CHUNK, &args![0x4154_4144u32, u32::from(kind)]);
+    let mut node = e.call(0x004f_adc0, &args![this]).u32();
+    while node != 0 && !e.call(0x0082_56d0, &args![node]).bool() {
+        let slot = e.call(0x0068_15c0, &args![node]).u32();
+        let form = e.mem.u32(slot);
+        let id = e.call(FORM_ID, &args![form]).u32();
+        e.call(WRITE_WORD_CHUNK, &args![0x4d41_4e4fu32, id]);
+        node = e.call(0x0072_6070, &args![node]).u32();
+    }
+    match e.mem.i8(base + 0x7c) {
+        0 => {
+            let sound = e.call(0x005e_9100, &args![this]).u32();
+            if sound != 0 {
+                let id = e.call(FORM_ID, &args![sound]).u32();
+                e.call(WRITE_WORD_CHUNK, &args![0x4d41_4e53u32, id]);
+            }
+        }
+        1 => {
+            let description = e.call(0x005e_91d0, &args![this]).u32();
+            if description != 0 {
+                e.call(0x0048_2cd0, &args![description, 0x4d41_4e54u32]);
+            }
+        }
+        2 => {
+            let file = e.call(0x005e_9160, &args![this]).u32();
+            if file != 0 {
+                let length = e.call(0x0048_cee0, &args![file]).u32();
+                let text = e.call(0x0040_8da0, &args![file]).u32();
+                e.call(
+                    WRITE_ARRAY_CHUNK,
+                    &args![0x4d41_4e58u32, text, length.wrapping_add(1)],
+                );
+            }
+        }
+        3 => {
+            let topic = e.call(0x005e_9240, &args![this]).u32();
+            if topic != 0 {
+                let id = e.call(FORM_ID, &args![topic]).u32();
+                e.call(WRITE_WORD_CHUNK, &args![0x4d41_4e54u32, id]);
+            }
+            let speaker = e.call(0x005e_92a0, &args![this]).u32();
+            if speaker != 0 {
+                let id = e.call(FORM_ID, &args![speaker]).u32();
+                e.call(WRITE_WORD_CHUNK, &args![0x4d41_4e53u32, id]);
+            }
+        }
+        _ => {}
+    }
+    e.call(0x0048_5680, &args![this]);
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x005e_7f00, fn_005e7f00(Ptr, u32)),
+        entry!(0x005e_7f40, fn_005e7f40(Ptr, u32) -> bool),
+        entry!(0x005e_8300, fn_005e8300(Ptr<BGSNote>)),
         entry!(0x005e_8060, fn_005e8060(Ptr) -> Ptr),
         entry!(0x005e_8240, fn_005e8240(Ptr<BGSNote>)),
         entry!(0x005e_8270, fn_005e8270(Ptr<BGSNote>)),
@@ -717,5 +843,163 @@ mod b025_tests {
         e.call(0x005e_84e0, &args![n, 0x9000u32]);
         assert!(calls_to(&e, NOTE_DATA_AS_FILE).is_empty());
         assert!(calls_to(&e, NOTE_SET_SOUND).is_empty());
+    }
+}
+
+#[cfg(test)]
+mod n041_tests {
+    use super::*;
+
+    fn ret(eax: u32) -> Ret {
+        Ret {
+            eax,
+            ..Ret::default()
+        }
+    }
+
+    fn calls(e: &Engine, addr: u32) -> Vec<Vec<u32>> {
+        e.call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|(a, _)| *a == addr)
+            .map(|(_, w)| w.clone())
+            .collect()
+    }
+
+    #[test]
+    fn idle_marker_copy_and_compare() {
+        let mut e = Engine::new();
+        e.register(DYNAMIC_CAST, |_, a| {
+            ret(if a[0] == 1 { 0 } else { a[0] + 4 })
+        });
+        e.register(0x0048_51b0, |_, _| Ret::default());
+        e.call_log = Some(vec![]);
+        e.call(0x005e_7f00, &args![0x100u32, 0x200u32]);
+        assert_eq!(
+            calls(&e, DYNAMIC_CAST),
+            vec![vec![0x200, 0, CAST_SOURCE, IDLE_MARKER_TYPE, 0]]
+        );
+        assert_eq!(calls(&e, 0x0048_51b0), vec![vec![0x100, 0x204]]);
+        e.call_log = Some(vec![]);
+        e.call(0x005e_7f00, &args![0x100u32, 1u32]);
+        assert!(calls(&e, 0x0048_51b0).is_empty());
+        for (components, differs) in [(0u32, false), (1, true)] {
+            e.register_double(0x0048_5270, move |_, _| ret(components));
+            e.call_log = Some(vec![]);
+            assert_eq!(
+                e.call(0x005e_7f40, &args![0x100u32, 0x200u32]).bool(),
+                differs
+            );
+            assert_eq!(calls(&e, 0x0048_5270), vec![vec![0x100, 0x204]]);
+        }
+        assert!(e.call(0x005e_7f40, &args![0x100u32, 1u32]).bool());
+    }
+
+    fn note_writer(kind: u8) -> (Engine, u32) {
+        let mut e = Engine::new();
+        for a in [
+            0x0048_55a0u32,
+            0x0048_7010,
+            0x0048_91d0,
+            0x0048_e370,
+            0x0047_b560,
+            WRITE_BYTE_CHUNK,
+            WRITE_WORD_CHUNK,
+            WRITE_ARRAY_CHUNK,
+            0x0048_2cd0,
+            0x0048_5680,
+        ] {
+            e.register(a, |_, _| Ret::default());
+        }
+        e.register(FORM_ID, |_, a| ret(a[0] | 0x1000_0000));
+        // The list at +0x74: nodes {item, next}; empty when the item is 0.
+        e.register(0x004f_adc0, |_, a| ret(a[0] + 0x74));
+        e.register(0x0082_56d0, |e, a| ret(u32::from(e.mem.u32(a[0]) == 0)));
+        e.register(0x0068_15c0, |_, a| ret(a[0]));
+        e.register(0x0072_6070, |e, a| ret(e.mem.u32(a[0] + 4)));
+        for (addr, value) in [
+            (0x005e_9100u32, 0x51u32),
+            (0x005e_91d0, 0x52),
+            (0x005e_9160, 0x53),
+            (0x005e_9240, 0x54),
+            (0x005e_92a0, 0x55),
+        ] {
+            e.register_double(addr, move |_, _| ret(value));
+        }
+        e.register(0x0048_cee0, |_, _| ret(6));
+        e.register(0x0040_8da0, |_, a| ret(a[0] + 0x100));
+        let this = e.mem.alloc(0x80);
+        e.mem.set_u8(this + 0x7c, kind);
+        let second = e.mem.alloc(8);
+        e.mem.set_u32(this + 0x74, 0x61);
+        e.mem.set_u32(this + 0x78, second);
+        e.mem.set_u32(second, 0x62);
+        (e, this)
+    }
+
+    #[test]
+    fn fn_005e8300_writes_the_components_and_the_list() {
+        let (mut e, this) = note_writer(0);
+        e.call_log = Some(vec![]);
+        e.call(0x005e_8300, &args![this]);
+        assert_eq!(calls(&e, 0x0048_7010), vec![vec![this + 0x48]]);
+        assert_eq!(
+            calls(&e, 0x0048_91d0),
+            vec![vec![this + 0x30, 0x4c44_4f4d, 0x5444_4f4d]]
+        );
+        assert_eq!(calls(&e, 0x0048_e370), vec![vec![this + 0x54, 0x4e4f_4349]]);
+        assert_eq!(calls(&e, 0x0047_b560), vec![vec![this + 0x60]]);
+        assert_eq!(calls(&e, WRITE_BYTE_CHUNK), vec![vec![0x4154_4144, 0]]);
+        assert_eq!(
+            calls(&e, WRITE_WORD_CHUNK),
+            vec![
+                vec![0x4d41_4e4f, 0x1000_0061],
+                vec![0x4d41_4e4f, 0x1000_0062],
+                vec![0x4d41_4e53, 0x1000_0051]
+            ]
+        );
+        assert_eq!(calls(&e, 0x0048_5680), vec![vec![this]]);
+    }
+
+    #[test]
+    fn fn_005e8300_writes_by_the_type() {
+        let (mut e, this) = note_writer(1);
+        e.call_log = Some(vec![]);
+        e.call(0x005e_8300, &args![this]);
+        assert_eq!(calls(&e, 0x0048_2cd0), vec![vec![0x52, 0x4d41_4e54]]);
+
+        let (mut e, this) = note_writer(2);
+        e.call_log = Some(vec![]);
+        e.call(0x005e_8300, &args![this]);
+        assert_eq!(
+            calls(&e, WRITE_ARRAY_CHUNK),
+            vec![vec![0x4d41_4e58, 0x153, 7]]
+        );
+
+        let (mut e, this) = note_writer(3);
+        e.call_log = Some(vec![]);
+        e.call(0x005e_8300, &args![this]);
+        let words = calls(&e, WRITE_WORD_CHUNK);
+        assert_eq!(
+            &words[2..],
+            &[
+                vec![0x4d41_4e54, 0x1000_0054],
+                vec![0x4d41_4e53, 0x1000_0055]
+            ]
+        );
+
+        // Type 3 with neither set; a type out of range writes nothing more.
+        e.register(0x005e_9240, |_, _| ret(0));
+        e.register(0x005e_92a0, |_, _| ret(0));
+        e.call_log = Some(vec![]);
+        e.call(0x005e_8300, &args![this]);
+        assert_eq!(calls(&e, WRITE_WORD_CHUNK).len(), 2);
+        let (mut e, this) = note_writer(0xff);
+        e.call_log = Some(vec![]);
+        e.call(0x005e_8300, &args![this]);
+        assert_eq!(calls(&e, WRITE_WORD_CHUNK).len(), 2);
+        assert!(calls(&e, 0x005e_9100).is_empty());
+        assert_eq!(calls(&e, 0x0048_5680), vec![vec![this]]);
     }
 }

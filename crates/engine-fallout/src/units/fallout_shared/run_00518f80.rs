@@ -145,6 +145,61 @@ pub fn fn_00519040(e: &mut Engine, this: Ptr, reference: u32) -> u32 {
     node
 }
 
+/// `TESObjectREFR::FindReferenceFor3D` (`0056f930`, engine map; `cdecl`,
+/// one word), `BGSSaveFormBuffer::GetForm` (`007af430`, engine map name;
+/// `thiscall` on the reference: its base form) and `00401170` (`thiscall`:
+/// the form's type).
+const FIND_REFERENCE_FOR_3D: u32 = 0x0056_f930;
+const REFERENCE_BASE_FORM: u32 = 0x007a_f430;
+const FORM_TYPE: u32 = 0x0040_1170;
+/// The player pointer (`011dea3c`), `008d8520` (`thiscall` on it, no stack
+/// words; its engine map name, `MiddleHighProcess::GetSavedAcquireObject`,
+/// is unconfirmed for this use: its answer is cast as a process) and the
+/// type descriptors `.?AVBaseProcess@@` (`0118a6b8`) and
+/// `.?AVHighProcess@@` (`0118a6d4`) for `__RTDynamicCast` (`00ec43fb`).
+const PLAYER: u32 = 0x011d_ea3c;
+const PLAYER_008D8520: u32 = 0x008d_8520;
+const RT_DYNAMIC_CAST: u32 = 0x00ec_43fb;
+const TYPE_BASE_PROCESS: u32 = 0x0118_a6b8;
+const TYPE_HIGH_PROCESS: u32 = 0x0118_a6d4;
+
+// Translated from 00518f80 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`cdecl`, one word: the 3D object; the
+/// callback `00519040` hands its controller): finds the reference for the
+/// 3D (`0056f930`); when there is one whose base form is of type 0x1C and
+/// whose `00477ba0` answers false, and the player's process (`008d8520`,
+/// cast from `BaseProcess` to `HighProcess`) exists and answers other than
+/// 4 at slot +0x610, stores the reference in the player (`00519020`).
+pub fn fn_00518f80(e: &mut Engine, object: u32) {
+    let reference = e.call(FIND_REFERENCE_FOR_3D, &args![object]).u32();
+    if reference == 0 {
+        return;
+    }
+    let base = e.call(REFERENCE_BASE_FORM, &args![reference]).u32();
+    if e.call(FORM_TYPE, &args![base]).u32() != 0x1c {
+        return;
+    }
+    if e.call(REFERENCE_FLAG_00800000, &args![reference]).bool() {
+        return;
+    }
+    let player = e.global::<u32>(PLAYER);
+    let process = e.call(PLAYER_008D8520, &args![player]).u32();
+    let high = e
+        .call(
+            RT_DYNAMIC_CAST,
+            &args![process, 0u32, TYPE_BASE_PROCESS, TYPE_HIGH_PROCESS, 0u32],
+        )
+        .u32();
+    if high == 0 {
+        return;
+    }
+    if e.vcall(high, 0x610, &args![]).u32() == 4 {
+        return;
+    }
+    let player = e.global::<u32>(PLAYER);
+    fn_00519020(e, Ptr::new(player), reference);
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -152,6 +207,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x0051_9270, fn_00519270(Ptr, u32)),
         entry!(0x0051_9230, fn_00519230(Ptr, u32, u8)),
         entry!(0x0051_9040, fn_00519040(Ptr, u32) -> u32),
+        entry!(0x0051_8f80, fn_00518f80(u32)),
     ]
 }
 
@@ -333,5 +389,93 @@ mod tests {
         e.call_log = Some(vec![]);
         e.call(0x0051_9040, &args![this, reference]);
         assert_eq!(calls_to(&e, REMOVE_CONTROLLER).len(), 1, "not animating");
+    }
+}
+
+#[cfg(test)]
+mod n040_tests {
+    use super::*;
+
+    /// The reference is the object plus 0x100; its base form is itself and
+    /// its type the word at +0x10; `00477ba0` answers the word at +0x14; the
+    /// player's process is the word at +0x20 of the player; the process
+    /// answers the word at +0x24 at slot +0x610.
+    fn setup(e: &mut Engine) -> (u32, u32) {
+        e.register(FIND_REFERENCE_FOR_3D, |_, a| Ret {
+            eax: if a[0] == 0 { 0 } else { a[0] + 0x100 },
+            ..Ret::default()
+        });
+        e.register(REFERENCE_BASE_FORM, |_, a| Ret {
+            eax: a[0],
+            ..Ret::default()
+        });
+        e.register(FORM_TYPE, |e, a| Ret {
+            eax: e.mem.u32(a[0] + 0x10),
+            ..Ret::default()
+        });
+        e.register(REFERENCE_FLAG_00800000, |e, a| Ret {
+            eax: e.mem.u32(a[0] + 0x14),
+            ..Ret::default()
+        });
+        e.register(PLAYER_008D8520, |e, a| Ret {
+            eax: e.mem.u32(a[0] + 0x20),
+            ..Ret::default()
+        });
+        e.register(RT_DYNAMIC_CAST, |_, a| {
+            assert_eq!(a[1..], [0, TYPE_BASE_PROCESS, TYPE_HIGH_PROCESS, 0]);
+            Ret {
+                eax: a[0],
+                ..Ret::default()
+            }
+        });
+        e.register(0x0090_0610, |e, a| Ret {
+            eax: e.mem.u32(a[0] + 0x24),
+            ..Ret::default()
+        });
+        e.map(0x011d_e000, 0x1000);
+        let player = e.mem.alloc(0x700);
+        e.set_global(PLAYER, player);
+        let process = e.mem.alloc(0x30);
+        let vtable = e.mem.alloc(0x700);
+        e.mem.set_u32(process, vtable);
+        e.mem.set_u32(vtable + 0x610, 0x0090_0610);
+        e.mem.set_u32(player + 0x20, process);
+        let object = e.mem.alloc(0x200);
+        let reference = object + 0x100;
+        e.mem.set_u32(reference + 0x10, 0x1c);
+        (player, object)
+    }
+
+    #[test]
+    fn fn_00518f80_stores_the_reference_in_the_player() {
+        let mut e = Engine::new();
+        let (player, object) = setup(&mut e);
+        let reference = object + 0x100;
+        let process = e.mem.u32(player + 0x20);
+        // No reference.
+        e.call(0x0051_8f80, &[0]);
+        assert_eq!(e.mem.u32(player + 0x688), 0);
+        // Wrong type.
+        e.mem.set_u32(reference + 0x10, 0x1b);
+        e.call(0x0051_8f80, &[object]);
+        assert_eq!(e.mem.u32(player + 0x688), 0);
+        e.mem.set_u32(reference + 0x10, 0x1c);
+        // Flagged reference.
+        e.mem.set_u32(reference + 0x14, 1);
+        e.call(0x0051_8f80, &[object]);
+        assert_eq!(e.mem.u32(player + 0x688), 0);
+        e.mem.set_u32(reference + 0x14, 0);
+        // The process answers 4.
+        e.mem.set_u32(process + 0x24, 4);
+        e.call(0x0051_8f80, &[object]);
+        assert_eq!(e.mem.u32(player + 0x688), 0);
+        // No process.
+        e.mem.set_u32(process + 0x24, 3);
+        e.mem.set_u32(player + 0x20, 0);
+        e.call(0x0051_8f80, &[object]);
+        assert_eq!(e.mem.u32(player + 0x688), 0);
+        e.mem.set_u32(player + 0x20, process);
+        e.call(0x0051_8f80, &[object]);
+        assert_eq!(e.mem.u32(player + 0x688), reference);
     }
 }

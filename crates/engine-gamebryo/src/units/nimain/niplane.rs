@@ -110,9 +110,30 @@ pub fn ni_plane_ni_plane_ov4(
     this
 }
 
+/// The three words `NiPlane::NiPlane` copies into the normal (`011f426c`, `011f4270`,
+/// `011f4274`; a global point the engine map does not name).
+const DEFAULT_NORMAL: u32 = 0x011f_426c;
+
+// Translated from 00a69940 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiPlane::NiPlane` (engine map; `thiscall`, no stack word): the normal copied as three
+/// words from the global point at `011f426c`, the constant `0.0` (`FLDZ`/`FSTP`, stored
+/// between the second and the third word, as the exe orders the stores). Returns `this`.
+pub fn ni_plane_ni_plane(e: &mut Engine, this: Ptr<NiPlane>) -> Ptr<NiPlane> {
+    let base = this.addr();
+    let x = e.mem.u32(DEFAULT_NORMAL);
+    e.mem.set_u32(base, x);
+    let y = e.mem.u32(DEFAULT_NORMAL + 4);
+    e.mem.set_u32(base + 4, y);
+    let z = e.mem.u32(DEFAULT_NORMAL + 8);
+    e.mem.set_u32(base + 0xc, x87_store32(0.0));
+    e.mem.set_u32(base + 8, z);
+    this
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x00a6_9940, ni_plane_ni_plane(Ptr<NiPlane>) -> Ptr<NiPlane>),
         entry!(
             0x00a6_99d0,
             ni_plane_ni_plane_ov4(Ptr<NiPlane>, Ptr, Ptr, Ptr) -> Ptr<NiPlane>
@@ -223,5 +244,25 @@ mod la1_tests {
         // The first point is p1 - p0, the second p2 - p1.
         assert_eq!(cross.1[0] + 0xc, cross.1[1]);
         assert_eq!(cross.1[2] + 0xc, cross.1[0]);
+    }
+}
+
+#[cfg(test)]
+mod lookahead2_tests {
+    use super::*;
+
+    #[test]
+    fn default_plane_copies_the_global_normal_and_zeroes_the_constant() {
+        let mut e = Engine::new();
+        e.map(DEFAULT_NORMAL, 0xc);
+        e.mem.set_u32(DEFAULT_NORMAL, 0x7f80_0001);
+        e.mem.set_u32(DEFAULT_NORMAL + 4, 2);
+        e.mem.set_u32(DEFAULT_NORMAL + 8, 3);
+        let this = e.mem.alloc(0x10);
+        e.mem.set_u32(this + 0xc, 0x1234);
+        let r = e.call(0x00a6_9940, &[this]);
+        assert_eq!(r.u32(), this);
+        let words: Vec<u32> = (0..4).map(|i| e.mem.u32(this + 4 * i)).collect();
+        assert_eq!(words, vec![0x7f80_0001, 2, 3, 0]);
     }
 }

@@ -191,12 +191,40 @@ pub fn bgs_head_part_init_item(e: &mut Engine, this: Ptr) {
     e.call(0x0048_4ab0, &args![this, 1u32]);
 }
 
+// Translated from 005e7480 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BGSHeadPart::Save` (engine map): starts the form (`004855a0`), saves
+/// the full name (`00487010`, +0x18) and the texture-swap model
+/// (`0048a520`, +0x24, with `MODL`, `MODT`, `MODS`), the byte +0x44 as
+/// `DATA` (`004858f0`), each extra part (list `00624700`, nodes until
+/// empty, the next node taken before) as its form id (`0084e3a0`) in an
+/// `HNAM` chunk (`00485910`), then closes the form (`00485680`).
+pub fn bgs_head_part_save(e: &mut Engine, this: Ptr) {
+    e.call(0x0048_55a0, &args![this]);
+    e.call(0x0048_7010, &args![this.addr() + 0x18]);
+    e.call(
+        0x0048_a520,
+        &args![this.addr() + 0x24, CHUNK_MODL, CHUNK_MODT, CHUNK_MODS],
+    );
+    let flags = u32::from(e.mem.u8(this.addr() + 0x44));
+    e.call(0x0048_58f0, &args![CHUNK_DATA, flags]);
+    let mut node = e.call(0x0062_4700, &args![this]).u32();
+    while node != 0 && !e.call(0x0082_56d0, &args![node]).bool() {
+        let item = e.call(0x0068_15c0, &args![node]).u32();
+        let extra_part = e.mem.u32(item);
+        node = e.call(0x0072_6070, &args![node]).u32();
+        let id = e.call(0x0084_e3a0, &args![extra_part]).u32();
+        e.call(0x0048_5910, &args![CHUNK_HNAM, id]);
+    }
+    e.call(0x0048_5680, &args![this]);
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
         entry!(0x005e_7790, fn_005e7790(Ptr, u32)),
         entry!(0x005e_7530, fn_005e7530(Ptr, Ptr) -> bool),
         entry!(0x005e_77b0, bgs_head_part_init_item(Ptr)),
+        entry!(0x005e_7480, bgs_head_part_save(Ptr)),
     ]
 }
 
@@ -461,5 +489,69 @@ mod tests {
         e.register(0x0040_13e0, |_, _| ret(1));
         e.call(0x005e_77b0, &args![part]);
         assert_eq!(e.call_log.as_ref().unwrap().len(), 2);
+    }
+}
+
+#[cfg(test)]
+mod n036_tests {
+    use super::*;
+
+    #[test]
+    fn save_writes_model_data_and_each_extra_part() {
+        let mut e = Engine::new();
+        for callee in [
+            0x0048_55a0,
+            0x0048_7010,
+            0x0048_a520,
+            0x0048_58f0,
+            0x0048_5910,
+            0x0048_5680,
+        ] {
+            e.register(callee, |_, _| Ret::default());
+        }
+        e.register(0x0062_4700, |_, a| (a[0] + 0x48).into_ret());
+        e.register(0x0082_56d0, |e, a| (e.mem.u32(a[0]) == 0).into_ret());
+        e.register(0x0068_15c0, |_, a| a[0].into_ret());
+        e.register(0x0072_6070, |e, a| e.mem.u32(a[0] + 4).into_ret());
+        e.register(0x0084_e3a0, |_, a| (a[0] | 0x0100_0000).into_ret());
+        let this: Ptr = Ptr::new(e.mem.alloc(0x60));
+        e.mem.set_u8(this.addr() + 0x44, 0x83);
+        let next = e.mem.alloc(8);
+        e.mem.set_u32(next, 0x22);
+        e.mem.set_u32(this.addr() + 0x48, 0x11);
+        e.mem.set_u32(this.addr() + 0x4c, next);
+        e.call_log = Some(vec![]);
+        e.call(0x005e_7480, &args![this]);
+        let log = e.call_log.take().unwrap();
+        let calls: Vec<(u32, Vec<u32>)> = log
+            .into_iter()
+            .filter(|c| {
+                ![
+                    0x005e_7480,
+                    0x0062_4700,
+                    0x0082_56d0,
+                    0x0068_15c0,
+                    0x0072_6070,
+                    0x0084_e3a0,
+                ]
+                .contains(&c.0)
+            })
+            .collect();
+        let a = this.addr();
+        assert_eq!(
+            calls,
+            vec![
+                (0x0048_55a0, vec![a]),
+                (0x0048_7010, vec![a + 0x18]),
+                (
+                    0x0048_a520,
+                    vec![a + 0x24, CHUNK_MODL, CHUNK_MODT, CHUNK_MODS]
+                ),
+                (0x0048_58f0, vec![CHUNK_DATA, 0x83]),
+                (0x0048_5910, vec![CHUNK_HNAM, 0x0100_0011]),
+                (0x0048_5910, vec![CHUNK_HNAM, 0x0100_0022]),
+                (0x0048_5680, vec![a]),
+            ]
+        );
     }
 }

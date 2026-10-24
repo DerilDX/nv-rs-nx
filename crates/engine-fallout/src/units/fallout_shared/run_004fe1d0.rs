@@ -57,6 +57,27 @@ pub fn fn_004fe310(e: &mut Engine, this: Ptr) {
     }
 }
 
+// Translated from 004fe1d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The number the kind bits (`004fd4f0`, signed compares) map to: 0x10000 gives 0x3D,
+/// 0x20000 0x3E, 0x40000 0x3F, 0x80000 0x40, 0x100000 0x69, anything else 0.
+pub fn fn_004fe1d0(e: &mut Engine, this: Ptr) -> u32 {
+    let kind = e.call(0x004f_d4f0, &args![this]).u32() as i32;
+    if kind <= 0x40000 {
+        match kind {
+            0x40000 => 0x3f,
+            0x10000 => 0x3d,
+            0x20000 => 0x3e,
+            _ => 0,
+        }
+    } else {
+        match kind {
+            0x80000 => 0x40,
+            0x0010_0000 => 0x69,
+            _ => 0,
+        }
+    }
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -64,6 +85,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x004f_e250, fn_004fe250(Ptr, u32) -> u32),
         entry!(0x004f_e2e0, fn_004fe2e0(Ptr, u32) -> Ptr),
         entry!(0x004f_e310, fn_004fe310(Ptr)),
+        entry!(0x004f_e1d0, fn_004fe1d0(Ptr) -> u32),
     ]
 }
 
@@ -171,5 +193,34 @@ mod tests_b043 {
         );
         assert_eq!(e.mem.u32(this), 0x0102_535c);
         assert_eq!(e.mem.u32(this + 0x30), 0x0102_5334);
+    }
+}
+
+#[cfg(test)]
+mod n039_tests {
+    use super::*;
+
+    #[test]
+    fn fn_004fe1d0_maps_the_kind() {
+        let mut e = Engine::new();
+        let this = e.mem.alloc(0x80);
+        for (kind, expected) in [
+            (0x10000u32, 0x3du32),
+            (0x20000, 0x3e),
+            (0x40000, 0x3f),
+            (0x80000, 0x40),
+            (0x0010_0000, 0x69),
+            (0x30000, 0),
+            (0, 0),
+            (0x8000_0000, 0),
+            (0x0018_0000, 0),
+        ] {
+            e.register_double(0x004f_d4f0, move |_, _| kind.into_ret());
+            assert_eq!(
+                e.call(0x004f_e1d0, &args![this]).u32(),
+                expected,
+                "{kind:x}"
+            );
+        }
     }
 }

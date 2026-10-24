@@ -3331,7 +3331,7 @@ pub fn fn_0098ad70(e: &mut Engine, this: Ptr) -> bool {
 // Translated from 0098adb0 (decompiled, FalloutNV.exe 1.4.0.525)
 /// `PathingLOSGridMap`: stores the `float` `value` at +0x48.
 pub fn fn_0098adb0(e: &mut Engine, this: Ptr, value: f32) {
-    e.mem.set_f32(this.addr() + 0x48, value);
+    e.mem.set_f32(this.addr() + 0x48, x87_quiet(value));
 }
 
 // Translated from 0098add0 (decompiled, FalloutNV.exe 1.4.0.525)

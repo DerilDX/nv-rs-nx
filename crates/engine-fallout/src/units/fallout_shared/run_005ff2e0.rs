@@ -205,9 +205,144 @@ pub fn fn_005ff7f0(e: &mut Engine, this: Ptr, text: u32) -> bool {
     })
 }
 
+/// `NiFormArray::GetIndexForForm` (engine map name of `004d6100`; `ECX` =
+/// array, the form; `RET 4`): the index, -1 when absent.
+const INDEX_FOR_FORM: u32 = 0x004d_6100;
+/// `00486b80` (`ECX` = array, an index; `RET 4`): removes that element;
+/// `0061bdc0` (`ECX` = array) runs after each removal.
+const ARRAY_REMOVE: u32 = 0x0048_6b80;
+const ARRAY_0061BDC0: u32 = 0x0061_bdc0;
+/// `LowProcess::SetGenericLocation` (engine map name of `008d8040`) and
+/// `LowProcess::SetSecondGenericLocation` (`00673400`): set the idle's
+/// parent (+0x44) and previous idle (+0x48); `006733e0` reads the
+/// previous one. All thiscall on the idle.
+const SET_IDLE_PARENT: u32 = 0x008d_8040;
+const SET_IDLE_PREVIOUS: u32 = 0x0067_3400;
+const IDLE_PREVIOUS: u32 = 0x0067_33e0;
+/// The idle manager (`[011cb6a0]`) and its root and loose idle arrays for
+/// an idle (`006005c0`, `00600690`; thiscall, the idle).
+const IDLE_MANAGER: u32 = 0x011c_b6a0;
+const ROOT_IDLE_ARRAY: u32 = 0x0060_05c0;
+const LOOSE_IDLE_ARRAY: u32 = 0x0060_0690;
+
+// Translated from 005ff520 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The index of `form` in the idle's child array (+0x40) through
+/// `NiFormArray::GetIndexForForm` (`RET 4`), -1 without an array. The
+/// engine map gives it no name.
+pub fn fn_005ff520(e: &mut Engine, this: Ptr, form: u32) -> u32 {
+    let children = e.mem.u32(this.addr() + 0x40);
+    if children == 0 {
+        return 0xffff_ffff;
+    }
+    e.call(INDEX_FOR_FORM, &args![children, form]).u32()
+}
+
+// Translated from 005ff560 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Removes the child at `index` (`RET 4`; the engine map has no name):
+/// with a child array, the next child ([`fn_005ff4d0`] at `index + 1`)
+/// takes the one before (`index - 1`) as its previous idle (`00673400`)
+/// when there is a next one, then the element is removed (`00486b80`) and
+/// `0061bdc0` runs on the array.
+pub fn fn_005ff560(e: &mut Engine, this: Ptr, index: u32) {
+    if e.mem.u32(this.addr() + 0x40) == 0 {
+        return;
+    }
+    let next = fn_005ff4d0(e, this, index.wrapping_add(1));
+    let previous = fn_005ff4d0(e, this, index.wrapping_sub(1));
+    if next != 0 {
+        e.call(SET_IDLE_PREVIOUS, &args![next, previous]);
+    }
+    let children = e.mem.u32(this.addr() + 0x40);
+    e.call(ARRAY_REMOVE, &args![children, index]);
+    let children = e.mem.u32(this.addr() + 0x40);
+    e.call(ARRAY_0061BDC0, &args![children]);
+}
+
+// Translated from 005ff5d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Removes the child `form` (`RET 4`; the engine map has no name): with a
+/// form and a child array, [`fn_005ff560`] at its index
+/// ([`fn_005ff520`]).
+pub fn fn_005ff5d0(e: &mut Engine, this: Ptr, form: u32) {
+    if form != 0 && e.mem.u32(this.addr() + 0x40) != 0 {
+        let index = fn_005ff520(e, this, form);
+        fn_005ff560(e, this, index);
+    }
+}
+
+/// Removes the element at `index` from `array` (`00486b80`), then runs
+/// `0061bdc0` on it.
+fn remove_at(e: &mut Engine, array: u32, index: u32) {
+    e.call(ARRAY_REMOVE, &args![array, index]);
+    e.call(ARRAY_0061BDC0, &args![array]);
+}
+
+// Translated from 005ff610 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Takes the idle out of its array (no stack words; the engine map has no
+/// name). A loose idle (`005ff200` answers true) leaves the manager's
+/// loose array (`00600690` on `[011cb6a0]`) when found
+/// (`NiFormArray::GetIndexForForm`) and is no longer loose
+/// (`005ff220(0)`). Otherwise its array is its parent's child array
+/// (`008d6f30` on `008041a0`'s answer) or the manager's root array
+/// (`006005c0`); when found there it is removed, its parent cleared
+/// (`008d8040(0)`), and the element now at its index, when set, takes its
+/// previous idle (`006733e0`; through `0084e3a0`, 0 for none, unless
+/// `004013e0` answers true for that element) before the idle's own
+/// previous idle is cleared (`00673400(0)`).
+pub fn fn_005ff610(e: &mut Engine, this: Ptr) {
+    let idle = this.addr();
+    if e.call(0x005f_f200, &args![idle]).bool() {
+        let manager = e.global::<u32>(IDLE_MANAGER);
+        let array = e.call(LOOSE_IDLE_ARRAY, &args![manager, idle]).u32();
+        let index = e.call(INDEX_FOR_FORM, &args![array, idle]).i32();
+        if index != -1 {
+            remove_at(e, array, index as u32);
+        }
+        e.call(0x005f_f220, &args![idle, 0u32]);
+        return;
+    }
+    let array = if e.call(IDLE_PARENT, &args![idle]).u32() != 0 {
+        let parent = e.call(IDLE_PARENT, &args![idle]).u32();
+        e.call(0x008d_6f30, &args![parent]).u32()
+    } else {
+        let manager = e.global::<u32>(IDLE_MANAGER);
+        e.call(ROOT_IDLE_ARRAY, &args![manager, idle]).u32()
+    };
+    if array == 0 {
+        return;
+    }
+    let index = e.call(INDEX_FOR_FORM, &args![array, idle]).i32();
+    if index == -1 {
+        return;
+    }
+    remove_at(e, array, index as u32);
+    e.call(SET_IDLE_PARENT, &args![idle, 0u32]);
+    let slot = e.call(0x0087_7a30, &args![array, index as u32]).u32();
+    let next = e.mem.u32(slot);
+    if next == 0 {
+        return;
+    }
+    if e.call(0x0040_13e0, &args![next]).bool() {
+        let previous = e.call(IDLE_PREVIOUS, &args![idle]).u32();
+        e.call(SET_IDLE_PREVIOUS, &args![next, previous]);
+    } else {
+        let previous = e.call(IDLE_PREVIOUS, &args![idle]).u32();
+        let id = if previous != 0 {
+            e.call(0x0084_e3a0, &args![previous]).u32()
+        } else {
+            0
+        };
+        e.call(SET_IDLE_PREVIOUS, &args![next, id]);
+    }
+    e.call(SET_IDLE_PREVIOUS, &args![idle, 0u32]);
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x005f_f520, fn_005ff520(Ptr, u32) -> u32),
+        entry!(0x005f_f560, fn_005ff560(Ptr, u32)),
+        entry!(0x005f_f5d0, fn_005ff5d0(Ptr, u32)),
+        entry!(0x005f_f610, fn_005ff610(Ptr)),
         entry!(0x005f_f880, fn_005ff880(Ptr, u32) -> u32),
         entry!(0x005f_f2e0, fn_005ff2e0(Ptr, u32, u32, u32) -> u32),
         entry!(0x005f_f430, fn_005ff430(Ptr, u32, u32, u8) -> bool),
@@ -441,5 +576,151 @@ mod b027_tests {
         assert!(result.bool());
         let buffer = calls(&log, STRING_COPY)[0][0];
         assert_eq!(calls(&log, STRING_SET), vec![vec![0x404c, buffer, 0]]);
+    }
+}
+
+#[cfg(test)]
+mod n041_tests {
+    use super::*;
+
+    fn ret(eax: u32) -> Ret {
+        Ret {
+            eax,
+            ..Ret::default()
+        }
+    }
+
+    fn calls(e: &Engine, addr: u32) -> Vec<Vec<u32>> {
+        e.call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|(a, _)| *a == addr)
+            .map(|(_, w)| w.clone())
+            .collect()
+    }
+
+    /// Arrays as `{data, .., count at +0xC}` of form words.
+    fn array_doubles(e: &mut Engine) {
+        e.register(INDEX_FOR_FORM, |e, a| {
+            let data = e.mem.u32(a[0]);
+            let count = e.mem.u32(a[0] + 0xc);
+            let found = (0..count).find(|&i| e.mem.u32(data + 4 * i) == a[1]);
+            ret(found.unwrap_or(0xffff_ffff))
+        });
+        e.register(FORM_AT, |e, a| ret(e.mem.u32(e.mem.u32(a[0]) + 4 * a[1])));
+        e.register(0x0087_7a30, |e, a| ret(e.mem.u32(a[0]) + 4 * a[1]));
+        e.register(DYNAMIC_CAST, |_, a| ret(a[0]));
+        e.register(ARRAY_REMOVE, |_, _| Ret::default());
+        e.register(ARRAY_0061BDC0, |_, _| Ret::default());
+        e.register(SET_IDLE_PREVIOUS, |_, _| Ret::default());
+        e.register(SET_IDLE_PARENT, |_, _| Ret::default());
+    }
+
+    fn array(e: &mut Engine, forms: &[u32]) -> u32 {
+        let array = e.mem.alloc(0x10);
+        let data = e.mem.alloc(4 * forms.len() as u32 + 4);
+        for (i, &form) in forms.iter().enumerate() {
+            e.mem.set_u32(data + 4 * i as u32, form);
+        }
+        e.mem.set_u32(array, data);
+        e.mem.set_u32(array + 0xc, forms.len() as u32);
+        array
+    }
+
+    #[test]
+    fn child_index_and_removal() {
+        let mut e = Engine::new();
+        array_doubles(&mut e);
+        let idle = e.mem.alloc(0x50);
+        assert_eq!(
+            e.call(0x005f_f520, &args![idle, 0x22u32]).u32(),
+            0xffff_ffff
+        );
+        e.call_log = Some(vec![]);
+        e.call(0x005f_f560, &args![idle, 1u32]);
+        e.call(0x005f_f5d0, &args![idle, 0x22u32]);
+        assert_eq!(e.call_log.as_ref().unwrap().len(), 2);
+        let children = array(&mut e, &[0x11, 0x22, 0x33]);
+        e.mem.set_u32(idle + 0x40, children);
+        assert_eq!(e.call(0x005f_f520, &args![idle, 0x22u32]).u32(), 1);
+        e.call_log = Some(vec![]);
+        e.call(0x005f_f5d0, &args![idle, 0x22u32]);
+        assert_eq!(calls(&e, SET_IDLE_PREVIOUS), vec![vec![0x33, 0x11]]);
+        assert_eq!(calls(&e, ARRAY_REMOVE), vec![vec![children, 1]]);
+        assert_eq!(calls(&e, ARRAY_0061BDC0), vec![vec![children]]);
+        // The last child: no next one.
+        e.call_log = Some(vec![]);
+        e.call(0x005f_f560, &args![idle, 2u32]);
+        assert!(calls(&e, SET_IDLE_PREVIOUS).is_empty());
+        assert_eq!(calls(&e, ARRAY_REMOVE), vec![vec![children, 2]]);
+        e.call_log = Some(vec![]);
+        e.call(0x005f_f5d0, &args![idle, 0u32]);
+        assert_eq!(e.call_log.as_ref().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn fn_005ff610_takes_a_loose_idle_out() {
+        let mut e = Engine::new();
+        array_doubles(&mut e);
+        e.map(0x011c_b000, 0x1000);
+        e.set_global(IDLE_MANAGER, 0x6000u32);
+        let idle = e.mem.alloc(0x50);
+        let loose = array(&mut e, &[0x5, idle]);
+        e.register(0x005f_f200, |_, _| ret(1));
+        e.register_double(LOOSE_IDLE_ARRAY, move |_, _| ret(loose));
+        e.register(0x005f_f220, |_, _| Ret::default());
+        e.call_log = Some(vec![]);
+        e.call(0x005f_f610, &args![idle]);
+        assert_eq!(calls(&e, LOOSE_IDLE_ARRAY), vec![vec![0x6000, idle]]);
+        assert_eq!(calls(&e, ARRAY_REMOVE), vec![vec![loose, 1]]);
+        assert_eq!(calls(&e, 0x005f_f220), vec![vec![idle, 0]]);
+        // Not in the array: only the flag.
+        let empty = array(&mut e, &[]);
+        e.register_double(LOOSE_IDLE_ARRAY, move |_, _| ret(empty));
+        e.call_log = Some(vec![]);
+        e.call(0x005f_f610, &args![idle]);
+        assert!(calls(&e, ARRAY_REMOVE).is_empty());
+        assert_eq!(calls(&e, 0x005f_f220).len(), 1);
+    }
+
+    #[test]
+    fn fn_005ff610_takes_a_child_out_of_its_parent() {
+        let mut e = Engine::new();
+        array_doubles(&mut e);
+        e.map(0x011c_b000, 0x1000);
+        e.set_global(IDLE_MANAGER, 0x6000u32);
+        e.register(0x005f_f200, |_, _| ret(0));
+        let idle = e.mem.alloc(0x50);
+        let next = e.mem.alloc(0x50);
+        // After the removal the next idle sits at the idle's index.
+        let children = array(&mut e, &[next, next]);
+        e.register_double(0x0080_41a0, move |_, a| {
+            ret(if a[0] == idle { 0x7000 } else { 0 })
+        });
+        e.register_double(0x008d_6f30, move |_, _| ret(children));
+        e.register(IDLE_PREVIOUS, |_, _| ret(0x4321));
+        e.register(0x0084_e3a0, |_, a| ret(a[0] + 1));
+        for (temporary, previous) in [(0u32, 0x4322u32), (1, 0x4321)] {
+            e.register_double(0x0040_13e0, move |_, _| ret(temporary));
+            // The index lookup finds the idle at 1.
+            e.register_double(INDEX_FOR_FORM, |_, _| ret(1));
+            e.call_log = Some(vec![]);
+            e.call(0x005f_f610, &args![idle]);
+            assert_eq!(calls(&e, 0x008d_6f30), vec![vec![0x7000]]);
+            assert_eq!(calls(&e, ARRAY_REMOVE), vec![vec![children, 1]]);
+            assert_eq!(calls(&e, SET_IDLE_PARENT), vec![vec![idle, 0]]);
+            assert_eq!(
+                calls(&e, SET_IDLE_PREVIOUS),
+                vec![vec![next, previous], vec![idle, 0]]
+            );
+        }
+        // No parent: the root array; not found there: nothing removed.
+        e.register(0x0080_41a0, |_, _| ret(0));
+        e.register(ROOT_IDLE_ARRAY, |_, _| ret(0));
+        e.call_log = Some(vec![]);
+        e.call(0x005f_f610, &args![idle]);
+        assert_eq!(calls(&e, ROOT_IDLE_ARRAY), vec![vec![0x6000, idle]]);
+        assert!(calls(&e, INDEX_FOR_FORM).is_empty());
     }
 }

@@ -1968,6 +1968,280 @@ pub fn fn_005fa330(
     true
 }
 
+/// The destructor body `005f78b0` runs (`005f77b0`, `thiscall`).
+const CREATURE_DESTRUCT_005F77B0: u32 = 0x005f_77b0;
+/// The savers `TESCreature::Save` calls: `TESForm::StartForm`
+/// (`004855a0`), `TESFullName::Save` (`00487010`), `TESModel::Save`
+/// (`004891d0`, two chunk words), `TESSpellList::Save` (`0048d330`),
+/// `TESEnchantableForm::Save` (`0047bd70`), `TESModelList::Save`
+/// (`00489ba0`, two chunk words), `TESActorBaseData::Save` (`0047cac0`),
+/// `BGSDestructibleObjectForm::Save` (`00477f20`), the empty `00483710`,
+/// `TESForm::__SaveData` (`00485e20`, `thiscall (form, data, size)`),
+/// `TESForm::AddChunk` with a byte (`004858f0`) and with a word
+/// (`00485910`, both `cdecl`) and `TESForm::CloseForm` (`00485680`); the
+/// byte `00401500` answers (whether saving swaps bytes).
+const SAVE_FORM_START: u32 = 0x0048_55a0;
+const SAVE_FULL_NAME: u32 = 0x0048_7010;
+const SAVE_MODEL: u32 = 0x0048_91d0;
+const SAVE_SPELL_LIST: u32 = 0x0048_d330;
+const SAVE_ENCHANTABLE: u32 = 0x0047_bd70;
+const SAVE_MODEL_LIST: u32 = 0x0048_9ba0;
+const SAVE_ACTOR_BASE_DATA: u32 = 0x0047_cac0;
+const SAVE_DESTRUCTIBLE: u32 = 0x0047_7f20;
+const SAVE_EMPTY_00483710: u32 = 0x0048_3710;
+const SAVE_FORM_DATA: u32 = 0x0048_5e20;
+const SAVE_CHUNK_BYTE: u32 = 0x0048_58f0;
+const SAVE_CHUNK_WORD: u32 = 0x0048_5910;
+const SAVE_FORM_CLOSE: u32 = 0x0048_5680;
+const SAVE_SWAPS: u32 = 0x0040_1500;
+/// The creature getters the save asks for the template (`005f91d0`) and the
+/// combat style (`005f9100`), and the template's own save step (`005f03a0`);
+/// all `thiscall` without words.
+const CREATURE_TEMPLATE_005F91D0: u32 = 0x005f_91d0;
+const CREATURE_COMBAT_STYLE_005F9100: u32 = 0x005f_9100;
+const TEMPLATE_005F03A0: u32 = 0x005f_03a0;
+/// The actor base data setter `005f9010` forwards to (`0047dd50`,
+/// `thiscall`, three words: the flag, the value, 1).
+const ACTOR_BASE_DATA_SET_FLAG: u32 = 0x0047_dd50;
+/// The calls of the creature actor value setter `005fa200`: whether the
+/// index is one of a group (`00406d70`, `cdecl (index, 0x400)`), the
+/// setter `005fa2c0` (`thiscall`, one byte), the 16-bit setter of the
+/// actor base data at +0x10C (`0047ff50`, one word) and the base setter
+/// `005f12d0` (`thiscall`, two words).
+const INDEX_IN_GROUP: u32 = 0x0040_6d70;
+const CREATURE_SETTER_005FA2C0: u32 = 0x005f_a2c0;
+const DATA_SET_SHORT: u32 = 0x0047_ff50;
+const BASE_SET_ACTOR_VALUE: u32 = 0x005f_12d0;
+/// The change-flag size, save, load and load-game steps of the base
+/// (`005f16f0`, `005f18c0`, `005f1b30`, `005f1fd0`), `TESForm::SaveGameDataOLD`
+/// (`00484ce0`) and `TESForm::LoadGameDataOLD` (`00484d00`), both
+/// `thiscall (form, data, size)`, and the load-game buffer reads
+/// (`00428110`, `004280f0`, `00864980` as in `TESLeveledList::LoadGame`).
+const BASE_CHANGED_SIZE: u32 = 0x005f_16f0;
+const BASE_SAVE_GAME: u32 = 0x005f_18c0;
+const BASE_LOAD_GAME: u32 = 0x005f_1b30;
+const BASE_LOAD_GAME_BUFFER: u32 = 0x005f_1fd0;
+const FORM_SAVE_GAME_DATA: u32 = 0x0048_4ce0;
+const FORM_LOAD_GAME_DATA: u32 = 0x0048_4d00;
+const BUFFER_READ: u32 = 0x0086_4980;
+/// The setting value getter (`0043d4d0`, `thiscall`: the address of the
+/// value) and the three settings the sound level picks
+/// (`011cdde0`, `011cd538`, `011cd3b4`).
+const SETTING_VALUE_ADDRESS: u32 = 0x0043_d4d0;
+const SETTING_SOUND_LEVEL_0: u32 = 0x011c_dde0;
+const SETTING_SOUND_LEVEL_1: u32 = 0x011c_d538;
+const SETTING_SOUND_LEVEL_2: u32 = 0x011c_d3b4;
+
+// Translated from 005f78b0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`thiscall`, one word; the scalar deleting
+/// destructor of a `TESCreature`): the destructor body `005f77b0`, then
+/// `operator delete` (`00401030`) when bit 0 of `flags` is set; answers
+/// `this`.
+pub fn fn_005f78b0(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    e.call(CREATURE_DESTRUCT_005F77B0, &args![this]);
+    if flags & 1 != 0 {
+        e.call(FREE, &args![this]);
+    }
+    this
+}
+
+// Translated from 005f7c20 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TESCreature::Save` (Xbox PDB): starts the form, saves the full name
+/// (+0xD0), the model (+0xDC, `MODL`, `MODT`), the spell list (+0x7C), the
+/// enchantable part (+0x70), the model list (+0x114, `NIFZ`, `NIFT`), the
+/// actor base data (+0x30) and the destructible data (+0x104), the four
+/// bytes at +0x12C (`__SaveData`; the empty `00483710` run on them before
+/// and after when saving swaps bytes), the hand reach (`RNAM`), the forms
+/// of virtual slots +0x188 (`ZNAM`) and +0x180 (`PNAM`) when there are
+/// any, the turn speed (`TNAM`), base scale (`BNAM`) and foot weight
+/// (+0x138, `WNAM`) floats, the blood impact material (`NAM4`) and sound
+/// level (`NAM5`); with actor base flag 0x100 set the template's
+/// `005f03a0`, otherwise the combat style's form id (`CSCR`); the impact
+/// data set (`CNAM`) and weapon list (`LNAM`) when set; closes the form.
+pub fn tes_creature_save(e: &mut Engine, this: Ptr) {
+    let at = this.addr();
+    e.call(SAVE_FORM_START, &args![this]);
+    e.call(SAVE_FULL_NAME, &args![at + 0xd0]);
+    e.call(
+        SAVE_MODEL,
+        &args![at + 0xdc, 0x4c44_4f4du32, 0x5444_4f4du32],
+    );
+    e.call(SAVE_SPELL_LIST, &args![at + 0x7c]);
+    e.call(SAVE_ENCHANTABLE, &args![at + 0x70]);
+    e.call(
+        SAVE_MODEL_LIST,
+        &args![at + 0x114, 0x5a46_494eu32, 0x5446_494eu32],
+    );
+    e.call(SAVE_ACTOR_BASE_DATA, &args![at + 0x30]);
+    e.call(SAVE_DESTRUCTIBLE, &args![at + 0x104]);
+    if e.call(SAVE_SWAPS, &args![]).u8() != 0 {
+        e.call(SAVE_EMPTY_00483710, &args![at + 0x12c]);
+    }
+    e.call(SAVE_FORM_DATA, &args![this, at + 0x12c, 4u32]);
+    if e.call(SAVE_SWAPS, &args![]).u8() != 0 {
+        e.call(SAVE_EMPTY_00483710, &args![at + 0x12c]);
+    }
+    let reach = u32::from(e.mem.u8(at + 0x130));
+    e.call(SAVE_CHUNK_BYTE, &args![0x4d41_4e52u32, reach]);
+    for (slot, chunk) in [(0x188u32, 0x4d41_4e5au32), (0x180, 0x4d41_4e50)] {
+        if e.vcall(at, slot, &args![]).u32() != 0 {
+            let form = e.vcall(at, slot, &args![]).u32();
+            let id = e.call(FORM_ID, &args![form]).u32();
+            e.call(SAVE_CHUNK_WORD, &args![chunk, id]);
+        }
+    }
+    for (offset, chunk) in [
+        (0x134u32, 0x4d41_4e54u32),
+        (0x13c, 0x4d41_4e42),
+        (0x138, 0x4d41_4e57),
+    ] {
+        let value = x87_quiet_bits(e.mem.u32(at + offset));
+        e.call(SAVE_CHUNK_WORD, &args![chunk, value]);
+    }
+    let value = e.mem.u32(at + 0x148);
+    e.call(SAVE_CHUNK_WORD, &args![0x344d_414eu32, value]);
+    let value = e.mem.u32(at + 0x154);
+    e.call(SAVE_CHUNK_WORD, &args![0x354d_414eu32, value]);
+    if e.call(FORM_FLAGS_TEST, &args![at + 0x30, 0x100u32]).u8() != 0 {
+        let template = e.call(CREATURE_TEMPLATE_005F91D0, &args![this]).u32();
+        if template != 0 {
+            e.call(TEMPLATE_005F03A0, &args![template]);
+        }
+    } else {
+        let style = e.call(CREATURE_COMBAT_STYLE_005F9100, &args![this]).u32();
+        if style != 0 {
+            let id = e.call(FORM_ID, &args![style]).u32();
+            e.call(SAVE_CHUNK_WORD, &args![0x5243_5343u32, id]);
+        }
+    }
+    for (offset, chunk) in [(0x14cu32, 0x4d41_4e43u32), (0x158, 0x4d41_4e4c)] {
+        let form = e.mem.u32(at + offset);
+        if form != 0 {
+            let id = e.call(FORM_ID, &args![form]).u32();
+            e.call(SAVE_CHUNK_WORD, &args![chunk, id]);
+        }
+    }
+    e.call(SAVE_FORM_CLOSE, &args![this]);
+}
+
+// Translated from 005f9010 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`thiscall`, one byte word): sets actor base
+/// flag 0x800 to `value` (`0047dd50(0x800, value, 1)`).
+pub fn fn_005f9010(e: &mut Engine, this: Ptr, value: u32) {
+    let value = value & 0xff;
+    e.call(
+        ACTOR_BASE_DATA_SET_FLAG,
+        &args![this, 0x800u32, value, 1u32],
+    );
+}
+
+// Translated from 005fa200 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`thiscall`, two words: an actor value index
+/// and a value): for an index of the 0x400 group (`00406d70`) the low byte
+/// of the value goes to `005fa2c0` and virtual slot +0x48 is told 0x200;
+/// index 0x38 stores the value clamped to 0..0xFFFF (signed) through
+/// `0047ff50` on +0x10C; any other index goes to the base setter
+/// `005f12d0`.
+pub fn fn_005fa200(e: &mut Engine, this: Ptr, index: u32, value: u32) {
+    if e.call(INDEX_IN_GROUP, &args![index, 0x400u32]).u8() != 0 {
+        e.call(CREATURE_SETTER_005FA2C0, &args![this, value & 0xff]);
+        e.vcall(this.addr(), 0x48, &args![0x200u32]);
+    } else if index == 0x38 {
+        let signed = value as i32;
+        let stored = if signed < 0 {
+            0
+        } else if signed > 0xffff {
+            0xffff
+        } else {
+            value & 0xffff
+        };
+        e.call(DATA_SET_SHORT, &args![this.addr() + 0x10c, stored]);
+    } else {
+        e.call(BASE_SET_ACTOR_VALUE, &args![this, index, value]);
+    }
+}
+
+// Translated from 005fb180 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`thiscall`, one word: change flags): the
+/// base size of the changed data (`005f16f0`) plus 3 with flag 0x200. A
+/// block guarded by `flags & 0` (4 more) never runs and is left out.
+pub fn fn_005fb180(e: &mut Engine, this: Ptr, flags: u32) -> u16 {
+    let mut size = e.call(BASE_CHANGED_SIZE, &args![this, flags]).u16();
+    if flags & 0x200 != 0 {
+        size = size.wrapping_add(3);
+    }
+    size
+}
+
+// Translated from 005fb1e0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`thiscall`, one word: change flags): the
+/// base save (`005f18c0`), then with flag 0x200 the bytes at +0x12D,
+/// +0x12E and +0x12F (`TESForm::SaveGameDataOLD`, one byte each). A block
+/// guarded by `flags & 0` (the combat style form id) never runs and is
+/// left out.
+pub fn fn_005fb1e0(e: &mut Engine, this: Ptr, flags: u32) {
+    e.call(BASE_SAVE_GAME, &args![this, flags]);
+    if flags & 0x200 != 0 {
+        for offset in [0x12du32, 0x12e, 0x12f] {
+            e.call(
+                FORM_SAVE_GAME_DATA,
+                &args![this, this.addr() + offset, 1u32],
+            );
+        }
+    }
+}
+
+// Translated from 005fb270 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`thiscall`, two words: change flags and a
+/// second word): the base load (`005f1b30`), then with flag 0x200 the
+/// bytes at +0x12D, +0x12E and +0x12F (`TESForm::LoadGameDataOLD`, one
+/// byte each). A block guarded by `flags & 0` (the combat style) never
+/// runs and is left out.
+pub fn fn_005fb270(e: &mut Engine, this: Ptr, flags: u32, second: u32) {
+    e.call(BASE_LOAD_GAME, &args![this, flags, second]);
+    if flags & 0x200 != 0 {
+        for offset in [0x12du32, 0x12e, 0x12f] {
+            e.call(
+                FORM_LOAD_GAME_DATA,
+                &args![this, this.addr() + offset, 1u32],
+            );
+        }
+    }
+}
+
+// Translated from 005fb3b0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`thiscall`, one word: the load-game buffer):
+/// the base load (`005f1fd0`), then, when the buffer's change flags have
+/// 0x200 (`00428110` with a stack word, `004280f0`), one byte each into
+/// +0x12D, +0x12E and +0x12F (`00864980`).
+pub fn fn_005fb3b0(e: &mut Engine, this: Ptr, buffer: Ptr) {
+    e.call(BASE_LOAD_GAME_BUFFER, &args![this, buffer]);
+    let changed = e.with_stack(4, |e, scratch| {
+        let flags = e.call(BUFFER_FLAGS, &args![buffer, scratch]).u32();
+        e.call(FLAGS_TEST, &args![flags, 0x200u32]).u8()
+    });
+    if changed != 0 {
+        for offset in [0x12du32, 0x12e, 0x12f] {
+            e.call(BUFFER_READ, &args![buffer, this.addr() + offset, 1u32]);
+        }
+    }
+}
+
+// Translated from 005fbeb0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`thiscall`): the value of the setting for
+/// the sound level (+0x154): 0 `011cdde0`, 1 `011cd538`, 2 `011cd3b4`
+/// (the word at the address `0043d4d0` answers); 0 for any other level.
+pub fn fn_005fbeb0(e: &mut Engine, this: Ptr) -> u32 {
+    let setting = match e.mem.u32(this.addr() + 0x154) {
+        0 => SETTING_SOUND_LEVEL_0,
+        1 => SETTING_SOUND_LEVEL_1,
+        2 => SETTING_SOUND_LEVEL_2,
+        _ => return 0,
+    };
+    let value = e.call(SETTING_VALUE_ADDRESS, &args![setting]).u32();
+    e.mem.u32(value)
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -2015,6 +2289,15 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x005f_7ec0, tes_creature_load(Ptr, Ptr) -> bool),
         entry!(0x005f_b450, fn_005fb450(Ptr, u32)),
         entry!(0x005f_a330, fn_005fa330(Ptr, u32, u32, u32, u32, u32) -> bool),
+        entry!(0x005f_78b0, fn_005f78b0(Ptr, u32) -> Ptr),
+        entry!(0x005f_7c20, tes_creature_save(Ptr)),
+        entry!(0x005f_9010, fn_005f9010(Ptr, u32)),
+        entry!(0x005f_a200, fn_005fa200(Ptr, u32, u32)),
+        entry!(0x005f_b180, fn_005fb180(Ptr, u32) -> u16),
+        entry!(0x005f_b1e0, fn_005fb1e0(Ptr, u32)),
+        entry!(0x005f_b270, fn_005fb270(Ptr, u32, u32)),
+        entry!(0x005f_b3b0, fn_005fb3b0(Ptr, Ptr)),
+        entry!(0x005f_beb0, fn_005fbeb0(Ptr) -> u32),
     ]
 }
 
@@ -3939,5 +4222,264 @@ mod b024_activate_tests {
             vec![vec![WHO_PROCESS, WHO, 1]]
         );
         assert_eq!(only(&log, 0x0070_9470), vec![vec![4, WHO, 0x5150, 0, 1, 0]]);
+    }
+}
+
+#[cfg(test)]
+mod n043_tests {
+    use super::*;
+
+    const STATE: u32 = 0x7300_0000;
+    const SLOT_180: u32 = 0x7100_0180;
+    const SLOT_188: u32 = 0x7100_0188;
+    const SLOT_48: u32 = 0x7100_0048;
+
+    fn calls(e: &Engine, addr: u32) -> Vec<Vec<u32>> {
+        e.call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|c| c.0 == addr)
+            .map(|c| c.1.clone())
+            .collect()
+    }
+
+    fn quiet(e: &mut Engine, addrs: &[u32]) {
+        for &addr in addrs {
+            e.register(addr, |_, _| Ret::default());
+        }
+    }
+
+    fn creature(e: &mut Engine) -> u32 {
+        let vtable = e.mem.alloc(0x190);
+        e.mem.set_u32(vtable + 0x180, SLOT_180);
+        e.mem.set_u32(vtable + 0x188, SLOT_188);
+        e.mem.set_u32(vtable + 0x48, SLOT_48);
+        let this = e.mem.alloc(0x160);
+        e.mem.set_u32(this, vtable);
+        this
+    }
+
+    fn engine() -> Engine {
+        let mut e = Engine::new();
+        e.map(STATE, 0x40);
+        e
+    }
+
+    #[test]
+    fn scalar_deleting_destructor() {
+        let mut e = engine();
+        quiet(&mut e, &[CREATURE_DESTRUCT_005F77B0, FREE]);
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x005f_78b0, &args![0x1000u32, 1u32]).u32(), 0x1000);
+        assert_eq!(calls(&e, FREE), vec![vec![0x1000]]);
+        e.call_log = Some(vec![]);
+        e.call(0x005f_78b0, &args![0x1000u32, 2u32]);
+        assert_eq!(calls(&e, CREATURE_DESTRUCT_005F77B0), vec![vec![0x1000]]);
+        assert!(calls(&e, FREE).is_empty());
+    }
+
+    #[test]
+    fn save_writes_every_part() {
+        let mut e = engine();
+        quiet(
+            &mut e,
+            &[
+                SAVE_FORM_START,
+                SAVE_FULL_NAME,
+                SAVE_MODEL,
+                SAVE_SPELL_LIST,
+                SAVE_ENCHANTABLE,
+                SAVE_MODEL_LIST,
+                SAVE_ACTOR_BASE_DATA,
+                SAVE_DESTRUCTIBLE,
+                SAVE_EMPTY_00483710,
+                SAVE_FORM_DATA,
+                SAVE_CHUNK_BYTE,
+                SAVE_CHUNK_WORD,
+                SAVE_FORM_CLOSE,
+                TEMPLATE_005F03A0,
+            ],
+        );
+        e.register(SAVE_SWAPS, |e, _| e.mem.u32(STATE).into_ret());
+        e.register(FORM_ID, |_, a| (a[0] + 1).into_ret());
+        e.register(SLOT_188, |e, _| e.mem.u32(STATE + 4).into_ret());
+        e.register(SLOT_180, |_, _| 0x6000u32.into_ret());
+        e.register(FORM_FLAGS_TEST, |e, _| e.mem.u32(STATE + 8).into_ret());
+        e.register(CREATURE_TEMPLATE_005F91D0, |_, _| 0x7000u32.into_ret());
+        e.register(CREATURE_COMBAT_STYLE_005F9100, |_, _| 0x8000u32.into_ret());
+        let this = creature(&mut e);
+        e.mem.set_u8(this + 0x130, 0x22);
+        e.mem.set_u32(this + 0x134, 0x7f80_0001);
+        e.mem.set_f32(this + 0x13c, 1.5);
+        e.mem.set_f32(this + 0x138, 2.5);
+        e.mem.set_u32(this + 0x148, 4);
+        e.mem.set_u32(this + 0x154, 2);
+        e.mem.set_u32(this + 0x158, 0x9000);
+        e.mem.set_u32(STATE, 1);
+        e.call_log = Some(vec![]);
+        e.call(0x005f_7c20, &args![this]);
+        assert_eq!(
+            calls(&e, SAVE_MODEL),
+            vec![vec![this + 0xdc, 0x4c44_4f4d, 0x5444_4f4d]]
+        );
+        assert_eq!(
+            calls(&e, SAVE_MODEL_LIST),
+            vec![vec![this + 0x114, 0x5a46_494e, 0x5446_494e]]
+        );
+        assert_eq!(calls(&e, SAVE_ENCHANTABLE), vec![vec![this + 0x70]]);
+        assert_eq!(calls(&e, SAVE_EMPTY_00483710).len(), 2);
+        assert_eq!(calls(&e, SAVE_FORM_DATA), vec![vec![this, this + 0x12c, 4]]);
+        assert_eq!(calls(&e, SAVE_CHUNK_BYTE), vec![vec![0x4d41_4e52, 0x22]]);
+        assert_eq!(
+            calls(&e, SAVE_CHUNK_WORD),
+            vec![
+                vec![0x4d41_4e50, 0x6001],
+                vec![0x4d41_4e54, 0x7fc0_0001],
+                vec![0x4d41_4e42, 1.5f32.to_bits()],
+                vec![0x4d41_4e57, 2.5f32.to_bits()],
+                vec![0x344d_414e, 4],
+                vec![0x354d_414e, 2],
+                vec![0x5243_5343, 0x8001],
+                vec![0x4d41_4e4c, 0x9001]
+            ]
+        );
+        assert!(calls(&e, TEMPLATE_005F03A0).is_empty());
+        // With a ZNAM form, no swapping and actor base flag 0x100.
+        e.mem.set_u32(STATE, 0);
+        e.mem.set_u32(STATE + 4, 0x5000);
+        e.mem.set_u32(STATE + 8, 1);
+        e.call_log = Some(vec![]);
+        e.call(0x005f_7c20, &args![this]);
+        assert!(calls(&e, SAVE_EMPTY_00483710).is_empty());
+        assert_eq!(calls(&e, SAVE_CHUNK_WORD)[0], vec![0x4d41_4e5a, 0x5001]);
+        assert_eq!(calls(&e, TEMPLATE_005F03A0), vec![vec![0x7000]]);
+        assert!(calls(&e, SAVE_CHUNK_WORD)
+            .iter()
+            .all(|c| c[0] != 0x5243_5343));
+    }
+
+    #[test]
+    fn flag_setter_forwards() {
+        let mut e = engine();
+        quiet(&mut e, &[ACTOR_BASE_DATA_SET_FLAG]);
+        e.call_log = Some(vec![]);
+        e.call(0x005f_9010, &args![0x1000u32, 0x1234_5601u32]);
+        assert_eq!(
+            calls(&e, ACTOR_BASE_DATA_SET_FLAG),
+            vec![vec![0x1000, 0x800, 1, 1]]
+        );
+    }
+
+    #[test]
+    fn actor_value_setter_branches() {
+        let mut e = engine();
+        quiet(
+            &mut e,
+            &[
+                CREATURE_SETTER_005FA2C0,
+                SLOT_48,
+                DATA_SET_SHORT,
+                BASE_SET_ACTOR_VALUE,
+            ],
+        );
+        e.register(INDEX_IN_GROUP, |_, a| u32::from(a[0] == 0x20).into_ret());
+        let this = creature(&mut e);
+        e.call_log = Some(vec![]);
+        e.call(0x005f_a200, &args![this, 0x20u32, 0x1ffu32]);
+        assert_eq!(calls(&e, INDEX_IN_GROUP)[0], vec![0x20, 0x400]);
+        assert_eq!(calls(&e, CREATURE_SETTER_005FA2C0), vec![vec![this, 0xff]]);
+        assert_eq!(calls(&e, SLOT_48), vec![vec![this, 0x200]]);
+        e.call_log = Some(vec![]);
+        for value in [0xffff_fff0u32, 0x1_0000, 0x1234] {
+            e.call(0x005f_a200, &args![this, 0x38u32, value]);
+        }
+        assert_eq!(
+            calls(&e, DATA_SET_SHORT),
+            vec![
+                vec![this + 0x10c, 0],
+                vec![this + 0x10c, 0xffff],
+                vec![this + 0x10c, 0x1234]
+            ]
+        );
+        e.call(0x005f_a200, &args![this, 0x10u32, 5u32]);
+        assert_eq!(calls(&e, BASE_SET_ACTOR_VALUE), vec![vec![this, 0x10, 5]]);
+    }
+
+    #[test]
+    fn change_size_save_and_loads() {
+        let mut e = engine();
+        quiet(
+            &mut e,
+            &[
+                BASE_SAVE_GAME,
+                BASE_LOAD_GAME,
+                BASE_LOAD_GAME_BUFFER,
+                FORM_SAVE_GAME_DATA,
+                FORM_LOAD_GAME_DATA,
+                BUFFER_READ,
+            ],
+        );
+        e.register(BASE_CHANGED_SIZE, |_, _| 0x1_0010u32.into_ret());
+        assert_eq!(e.call(0x005f_b180, &args![0x1000u32, 0x200u32]).u16(), 0x13);
+        assert_eq!(e.call(0x005f_b180, &args![0x1000u32, 0x100u32]).u16(), 0x10);
+        e.call_log = Some(vec![]);
+        e.call(0x005f_b1e0, &args![0x1000u32, 0x200u32]);
+        e.call(0x005f_b270, &args![0x1000u32, 0x200u32, 7u32]);
+        assert_eq!(calls(&e, BASE_SAVE_GAME), vec![vec![0x1000, 0x200]]);
+        assert_eq!(calls(&e, BASE_LOAD_GAME), vec![vec![0x1000, 0x200, 7]]);
+        assert_eq!(
+            calls(&e, FORM_SAVE_GAME_DATA),
+            vec![
+                vec![0x1000, 0x112d, 1],
+                vec![0x1000, 0x112e, 1],
+                vec![0x1000, 0x112f, 1]
+            ]
+        );
+        assert_eq!(calls(&e, FORM_LOAD_GAME_DATA).len(), 3);
+        e.call_log = Some(vec![]);
+        e.call(0x005f_b1e0, &args![0x1000u32, 0x100u32]);
+        e.call(0x005f_b270, &args![0x1000u32, 0x100u32, 7u32]);
+        assert!(calls(&e, FORM_SAVE_GAME_DATA).is_empty());
+        assert!(calls(&e, FORM_LOAD_GAME_DATA).is_empty());
+        // The buffer load: the flags test passes, then fails.
+        e.register(BUFFER_FLAGS, |_, a| (a[0] + 0x40).into_ret());
+        e.register(FLAGS_TEST, |e, _| e.mem.u32(STATE).into_ret());
+        e.mem.set_u32(STATE, 1);
+        e.call_log = Some(vec![]);
+        e.call(0x005f_b3b0, &args![0x1000u32, 0x2000u32]);
+        assert_eq!(calls(&e, BASE_LOAD_GAME_BUFFER), vec![vec![0x1000, 0x2000]]);
+        assert_eq!(calls(&e, FLAGS_TEST), vec![vec![0x2040, 0x200]]);
+        assert_eq!(
+            calls(&e, BUFFER_READ),
+            vec![
+                vec![0x2000, 0x112d, 1],
+                vec![0x2000, 0x112e, 1],
+                vec![0x2000, 0x112f, 1]
+            ]
+        );
+        e.mem.set_u32(STATE, 0);
+        e.call_log = Some(vec![]);
+        e.call(0x005f_b3b0, &args![0x1000u32, 0x2000u32]);
+        assert!(calls(&e, BUFFER_READ).is_empty());
+    }
+
+    #[test]
+    fn sound_level_setting() {
+        let mut e = engine();
+        e.register(SETTING_VALUE_ADDRESS, |_, a| {
+            (0x7300_0000 + (a[0] & 0xf)).into_ret()
+        });
+        e.mem.set_u32(STATE, 11);
+        e.mem.set_u32(STATE + 4, 22);
+        e.mem.set_u32(STATE + 8, 33);
+        let this = e.mem.alloc(0x160);
+        let mut answers = vec![];
+        for level in 0..4u32 {
+            e.mem.set_u32(this + 0x154, level);
+            answers.push(e.call(0x005f_beb0, &args![this]).u32());
+        }
+        // 011cdde0 & 0xf = 0, 011cd538 & 0xf = 8, 011cd3b4 & 0xf = 4.
+        assert_eq!(answers, vec![11, 33, 22, 0]);
     }
 }

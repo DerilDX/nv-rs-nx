@@ -54,9 +54,40 @@ pub fn fn_00488fd0(e: &mut Engine, this: Ptr) -> Ptr {
     this
 }
 
+/// `0042ce30` (`thiscall`, `RET 4`; unit `extradatalist.cpp` by the engine
+/// map): the changed-form data of the load buffer, written to the given
+/// out word; answers the object `004280f0` is asked on.
+const CHANGE_DATA: u32 = 0x0042_ce30;
+/// `004280f0` (`thiscall`, `RET 4`): whether the change flags hold the
+/// given bits (`AL`).
+const HAS_CHANGE_FLAGS: u32 = 0x0042_80f0;
+/// The `TESLeveledList` change flag of script-added entries (as
+/// `run_00487620` names `0x80000000`).
+const CHANGE_LEVELED_LIST_ADDED: u32 = 0x8000_0000;
+/// `00487980` (`thiscall`, no stack word; `run_00487620`): takes the
+/// script-added entries out of the leveled list.
+const REMOVE_SCRIPT_ADDED: u32 = 0x0048_7980;
+
+// Translated from 00488f10 (decompiled, FalloutNV.exe 1.4.0.525)
+/// A leveled list's revert step (`thiscall`, `RET 4`, the load buffer; the
+/// engine map gives it no name): when the buffer's change data (`0042ce30`,
+/// with a stack out word) has flag `0x80000000` (`004280f0`), the
+/// script-added entries are taken out (`00487980` on `this`).
+pub fn fn_00488f10(e: &mut Engine, this: Ptr, buffer: u32) {
+    let flagged = e.with_stack(4, |e, out| {
+        let data = e.call(CHANGE_DATA, &args![buffer, out]).u32();
+        e.call(HAS_CHANGE_FLAGS, &args![data, CHANGE_LEVELED_LIST_ADDED])
+            .bool()
+    });
+    if flagged {
+        e.call(REMOVE_SCRIPT_ADDED, &args![this]);
+    }
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x0048_8f10, fn_00488f10(Ptr, u32)),
         entry!(0x0048_8ff0, fn_00488ff0(Ptr) -> bool),
         entry!(0x00488f50, fn_00488f50(Ptr) -> Ptr),
         entry!(0x0048_9010, fn_00489010(Ptr, u32) -> Ptr),
@@ -154,5 +185,37 @@ mod tests {
         // Only the low byte of the first word is cleared.
         assert_eq!(e.mem.u32(this), 0xffff_ff00);
         assert_eq!(e.mem.u32(this + 4), 0);
+    }
+}
+
+#[cfg(test)]
+mod n038_tests {
+    use super::*;
+
+    #[test]
+    fn at_00488f10_removes_when_flagged() {
+        let mut e = Engine::new();
+        e.mem.map(0x0f00_0000, 4);
+        e.register(CHANGE_DATA, |_, _| Ret {
+            eax: 0x6000,
+            ..Ret::default()
+        });
+        e.register(HAS_CHANGE_FLAGS, |e, _| Ret {
+            eax: e.mem.u32(0x0f00_0000),
+            ..Ret::default()
+        });
+        e.register(REMOVE_SCRIPT_ADDED, |_, _| Ret::default());
+        e.call_log = Some(vec![]);
+        e.call(0x0048_8f10, &args![0x4000u32, 0x5000u32]);
+        let log = e.call_log.take().unwrap();
+        assert_eq!(log[1].0, CHANGE_DATA);
+        assert_eq!(log[1].1[0], 0x5000);
+        assert_eq!(log[2], (HAS_CHANGE_FLAGS, vec![0x6000, 0x8000_0000]));
+        assert_eq!(log.len(), 3);
+        e.mem.set_u32(0x0f00_0000, 1);
+        e.call_log = Some(vec![]);
+        e.call(0x0048_8f10, &args![0x4000u32, 0x5000u32]);
+        let log = e.call_log.take().unwrap();
+        assert_eq!(log[3], (REMOVE_SCRIPT_ADDED, vec![0x4000]));
     }
 }

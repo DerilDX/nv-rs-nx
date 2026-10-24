@@ -52,9 +52,65 @@ pub fn fn_005efdd0(e: &mut Engine, _this: Ptr, destination: u32, source: u32, co
     }
 }
 
+/// The shape of `005efdd0` for elements of `size` bytes: one `memmove` per
+/// element, forwards when `destination` is below `source`, backwards
+/// (signed index) when it is above, nothing when equal or `count` is 0.
+fn move_elements(e: &mut Engine, destination: u32, source: u32, count: u32, size: u32) {
+    if count == 0 {
+        return;
+    }
+    if destination < source {
+        let mut index = 0u32;
+        while index < count {
+            let offset = index.wrapping_mul(size);
+            e.call(
+                MEMMOVE,
+                &args![
+                    destination.wrapping_add(offset),
+                    source.wrapping_add(offset),
+                    size
+                ],
+            );
+            index = index.wrapping_add(1);
+        }
+    } else if destination > source {
+        let mut index = count.wrapping_sub(1);
+        while index as i32 >= 0 {
+            let offset = index.wrapping_mul(size);
+            e.call(
+                MEMMOVE,
+                &args![
+                    destination.wrapping_add(offset),
+                    source.wrapping_add(offset),
+                    size
+                ],
+            );
+            index = index.wrapping_sub(1);
+        }
+    }
+}
+
+// Translated from 005efe70 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Moves `count` 0x38-byte foot IK entries from `source` to `destination`
+/// (`thiscall`, `RET 0xC`; `this` is not read; the engine map has no
+/// name), as [`fn_005efdd0`] does for 16-bit elements.
+pub fn fn_005efe70(e: &mut Engine, _this: Ptr, destination: u32, source: u32, count: u32) {
+    move_elements(e, destination, source, count, 0x38);
+}
+
+// Translated from 005eff10 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Moves `count` 6-byte grab IK entries from `source` to `destination`
+/// (`thiscall`, `RET 0xC`; `this` is not read; the engine map has no
+/// name), as [`fn_005efdd0`] does for 16-bit elements.
+pub fn fn_005eff10(e: &mut Engine, _this: Ptr, destination: u32, source: u32, count: u32) {
+    move_elements(e, destination, source, count, 6);
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x005e_fe70, fn_005efe70(Ptr, u32, u32, u32)),
+        entry!(0x005e_ff10, fn_005eff10(Ptr, u32, u32, u32)),
         entry!(0x005e_ffb0, fn_005effb0(Ptr, u32) -> u32),
         entry!(0x005e_fdd0, fn_005efdd0(Ptr, u32, u32, u32)),
     ]
@@ -125,5 +181,52 @@ mod tests_b043 {
         );
         assert!(moves(&mut e, 0x100, 0x100, 2).is_empty());
         assert!(moves(&mut e, 0x100, 0x200, 0).is_empty());
+    }
+}
+
+#[cfg(test)]
+mod n041_tests {
+    use super::*;
+
+    fn moves(
+        e: &mut Engine,
+        addr: u32,
+        destination: u32,
+        source: u32,
+        count: u32,
+    ) -> Vec<Vec<u32>> {
+        e.call_log = Some(vec![]);
+        e.call(addr, &args![0u32, destination, source, count]);
+        e.call_log
+            .take()
+            .unwrap()
+            .into_iter()
+            .filter(|(a, _)| *a == MEMMOVE)
+            .map(|(_, w)| w)
+            .collect()
+    }
+
+    #[test]
+    fn entries_move_forwards_or_backwards() {
+        let mut e = Engine::new();
+        e.register(MEMMOVE, |_, _| Ret::default());
+        for (addr, size) in [(0x005e_fe70u32, 0x38u32), (0x005e_ff10, 6)] {
+            assert_eq!(
+                moves(&mut e, addr, 0x1000, 0x2000, 2),
+                vec![
+                    vec![0x1000, 0x2000, size],
+                    vec![0x1000 + size, 0x2000 + size, size]
+                ]
+            );
+            assert_eq!(
+                moves(&mut e, addr, 0x2000, 0x1000, 2),
+                vec![
+                    vec![0x2000 + size, 0x1000 + size, size],
+                    vec![0x2000, 0x1000, size]
+                ]
+            );
+            assert!(moves(&mut e, addr, 0x1000, 0x1000, 2).is_empty());
+            assert!(moves(&mut e, addr, 0x1000, 0x2000, 0).is_empty());
+        }
     }
 }

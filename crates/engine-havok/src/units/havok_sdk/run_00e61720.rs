@@ -67,9 +67,25 @@ use crate::units::havok_sdk::hkgeometryprocessing::{
     unpckhps, unpcklps, Vec4,
 };
 
-/// The dot product of the first three lanes, built `z + (y + x)` as the exe does.
+/// The dot product of the first three lanes, built `z + (y + x)` as the exe does, with the
+/// SSE NaN rules (`MULPS` with `a` as the destination, `ADDSS` with the higher lane).
 fn dot3(a: Vec4, b: Vec4) -> f32 {
-    sum3(mul4(a, b))
+    sum3_sse(mul4_sse(a, b))
+}
+
+/// `SUBPS a, b` with the SSE NaN rules.
+fn sub4_sse(a: Vec4, b: Vec4) -> Vec4 {
+    crate::sse::subps(a, b)
+}
+
+/// `MULPS a, b` with the SSE NaN rules (`a` is the destination).
+fn mul4_sse(a: Vec4, b: Vec4) -> Vec4 {
+    crate::sse::mulps(a, b)
+}
+
+/// `z + (y + x)` with `ADDSS` (the higher lane the destination, the SSE NaN rules).
+fn sum3_sse(v: Vec4) -> f32 {
+    crate::sse::add(v[2], crate::sse::add(v[1], v[0]))
 }
 
 /// The x87 register stack, one `f64` per register (the code computes in extended
@@ -478,9 +494,9 @@ pub fn fn_00e61a10(e: &mut Engine, point: Ptr, a: Ptr, base: Ptr, c: Ptr, out: P
     let a_vec = load_vec4(e, a.addr());
     let base_vec = load_vec4(e, base.addr());
     let c_vec = load_vec4(e, c.addr());
-    let d1 = sub4(a_vec, base_vec);
+    let d1 = sub4_sse(a_vec, base_vec);
     let slot_8 = dot3(d1, d1).to_bits();
-    let d2 = sub4(c_vec, base_vec);
+    let d2 = sub4_sse(c_vec, base_vec);
     let slot_c = dot3(d2, d2).to_bits();
     let slot_4 = dot3(d2, d1).to_bits();
     let o = out.addr();
@@ -511,7 +527,7 @@ pub fn fn_00e61a10(e: &mut Engine, point: Ptr, a: Ptr, base: Ptr, c: Ptr, out: P
         let point_vec = load_vec4(e, point.addr());
         x.fld_st(0);
         x.fld1();
-        let shifted = sub4(base_vec, point_vec);
+        let shifted = sub4_sse(base_vec, point_vec);
         x.fdivrp(1);
         let f1 = dot3(shifted, d1);
         let f2 = dot3(shifted, d2);
@@ -558,7 +574,7 @@ pub fn fn_00e61a10(e: &mut Engine, point: Ptr, a: Ptr, base: Ptr, c: Ptr, out: P
     // A degenerate triangle: the stack holds [det, 0, b, cc, m]; keep [0, b, cc, det],
     // then [b, cc, 0].
     x.fstp_st(4);
-    let d3 = sub4(a_vec, c_vec);
+    let d3 = sub4_sse(a_vec, c_vec);
     x.fstp_st(3);
     let e3 = dot3(d3, d3).to_bits();
     let flags = x.fcom(1);
@@ -577,7 +593,7 @@ pub fn fn_00e61a10(e: &mut Engine, point: Ptr, a: Ptr, base: Ptr, c: Ptr, out: P
                 let c_vec = load_vec4(e, c.addr());
                 x.pop();
                 let point_vec = load_vec4(e, point.addr());
-                let slot_c = dot3(sub4(point_vec, c_vec), d3).to_bits();
+                let slot_c = dot3(sub4_sse(point_vec, c_vec), d3).to_bits();
                 x.fdivr_m(x87_m32(slot_c));
                 let slot_c = x.fstp_m32();
                 x.fld_m32(slot_c);
@@ -594,7 +610,7 @@ pub fn fn_00e61a10(e: &mut Engine, point: Ptr, a: Ptr, base: Ptr, c: Ptr, out: P
             // e3 < b.
             x.pop();
             let point_vec = load_vec4(e, point.addr());
-            let slot_c = dot3(sub4(point_vec, base_vec), d1).to_bits();
+            let slot_c = dot3(sub4_sse(point_vec, base_vec), d1).to_bits();
             x.fdivr_m(x87_m32(slot_c));
             let slot_c = x.fstp_m32();
             x.fld_m32(slot_c);
@@ -612,7 +628,7 @@ pub fn fn_00e61a10(e: &mut Engine, point: Ptr, a: Ptr, base: Ptr, c: Ptr, out: P
         if flags & 0x01 == 0 {
             x.fstp_st(1);
             let point_vec = load_vec4(e, point.addr());
-            let slot_c = dot3(sub4(point_vec, c_vec), d3).to_bits();
+            let slot_c = dot3(sub4_sse(point_vec, c_vec), d3).to_bits();
             x.fdivr_m(x87_m32(slot_c));
             let slot_c = x.fstp_m32();
             x.fld_m32(slot_c);
@@ -627,7 +643,7 @@ pub fn fn_00e61a10(e: &mut Engine, point: Ptr, a: Ptr, base: Ptr, c: Ptr, out: P
             let point_vec = load_vec4(e, point.addr());
             x.fxch(1);
             e.mem.set_u32(o, x.fstp_m32());
-            let slot_c = dot3(sub4(point_vec, base_vec), d2).to_bits();
+            let slot_c = dot3(sub4_sse(point_vec, base_vec), d2).to_bits();
             x.fdivr_m(x87_m32(slot_c));
             let slot_c = x.fstp_m32();
             x.fld_m32(slot_c);
@@ -652,8 +668,8 @@ pub fn fn_00e61d30(e: &mut Engine, triangle: Ptr, out: Ptr) {
     let p1 = load_vec4(e, t + 0x10);
     let p0 = load_vec4(e, t);
     let p2 = load_vec4(e, t + 0x20);
-    let d1 = sub4(p0, p1);
-    let d2 = sub4(p2, p1);
+    let d1 = sub4_sse(p0, p1);
+    let d2 = sub4_sse(p2, p1);
     let slot_8 = dot3(d1, d1).to_bits();
     let slot_c = dot3(d2, d2).to_bits();
     let slot_4 = dot3(d2, d1).to_bits();
@@ -698,10 +714,10 @@ pub fn fn_00e61d30(e: &mut Engine, triangle: Ptr, out: Ptr) {
     // The normal d1 x d2 by the exe's shuffles: (d2.zxy * d1.yzx) - (d2.yzx * d1.zxy).
     let zxy = |v: Vec4| [v[2], v[0], v[1], v[3]];
     let yzx = |v: Vec4| [v[1], v[2], v[0], v[3]];
-    let normal = sub4(mul4(zxy(d2), yzx(d1)), mul4(yzx(d2), zxy(d1)));
-    let squares = mul4(normal, normal);
-    let length_squared = squares[2] + (squares[1] + squares[0]);
-    let slot_c = length_squared.sqrt().to_bits();
+    let normal = sub4_sse(mul4_sse(zxy(d2), yzx(d1)), mul4_sse(yzx(d2), zxy(d1)));
+    let squares = mul4_sse(normal, normal);
+    let length_squared = sum3_sse(squares);
+    let slot_c = crate::sse::sqrt(length_squared).to_bits();
     x.fdiv_m(x87_m32(slot_c));
     e.mem.set_u32(o + 0xc, x.fstp_m32());
     debug_assert!(x.is_empty());
@@ -989,25 +1005,25 @@ pub fn fn_00e61e70(e: &mut Engine, triangle: Ptr, out: Ptr) {
     let p2 = load_vec4(e, t + 0x20);
     let p0 = load_vec4(e, t);
     let p1 = load_vec4(e, t + 0x10);
-    let a = sub4(p0, p2);
-    let b = sub4(p2, p1);
-    let c = sub4(p1, p0);
-    let first = mul4(shufps(a, a, 0xc9), shufps(b, b, 0xd2));
-    let second = mul4(shufps(a, a, 0xd2), shufps(b, b, 0xc9));
-    let normal = sub4(second, first);
+    let a = sub4_sse(p0, p2);
+    let b = sub4_sse(p2, p1);
+    let c = sub4_sse(p1, p0);
+    let first = mul4_sse(shufps(a, a, 0xc9), shufps(b, b, 0xd2));
+    let second = mul4_sse(shufps(a, a, 0xd2), shufps(b, b, 0xc9));
+    let normal = sub4_sse(second, first);
     let squares = [
-        sum3(mul4(b, b)),
-        sum3(mul4(a, a)),
-        sum3(mul4(c, c)),
-        sum3(mul4(normal, normal)),
+        sum3_sse(mul4_sse(b, b)),
+        sum3_sse(mul4_sse(a, a)),
+        sum3_sse(mul4_sse(c, c)),
+        sum3_sse(mul4_sse(normal, normal)),
     ];
     let slots = squares.map(|value| x87_quiet_bits(value.to_bits()));
     let lengths = slots.map(f32::from_bits);
     let threes = load_vec4(e, THREES);
     let halves = load_vec4(e, HALVES);
     let estimate = lengths.map(rsqrt_estimate);
-    let times = mul4(mul4(estimate, lengths), estimate);
-    let refined = mul4(sub4(threes, times), mul4(halves, estimate));
+    let times = mul4_sse(mul4_sse(estimate, lengths), estimate);
+    let refined = mul4_sse(sub4_sse(threes, times), mul4_sse(halves, estimate));
     let o = out.addr();
     for (lane, value) in refined.iter().enumerate() {
         e.mem
@@ -1036,18 +1052,23 @@ pub fn fn_00e61fb0(e: &mut Engine, triangle: Ptr, factors: Ptr, matrix: Ptr, nor
     let p2 = load_vec4(e, t + 0x20);
     let p1 = load_vec4(e, t + 0x10);
     let p0 = load_vec4(e, t);
-    let b = sub4(p2, p1);
-    let c = sub4(p1, p0);
-    let a = sub4(p0, p2);
+    let b = sub4_sse(p2, p1);
+    let c = sub4_sse(p1, p0);
+    let a = sub4_sse(p0, p2);
     let yzx = |v: Vec4| shufps(v, v, 0xc9);
     let zxy = |v: Vec4| shufps(v, v, 0xd2);
-    let cross_of = |u: Vec4, v: Vec4| sub4(mul4(zxy(u), yzx(v)), mul4(yzx(u), zxy(v)));
-    let normal_vec = mul4(cross_of(a, b), [e.mem.f32(f + 0xc); 4]);
+    let cross_of = |u: Vec4, v: Vec4| sub4_sse(mul4_sse(zxy(u), yzx(v)), mul4_sse(yzx(u), zxy(v)));
+    let normal_vec = mul4_sse(cross_of(a, b), [e.mem.f32(f + 0xc); 4]);
     store_vec4(e, n, normal_vec);
-    let scaled_b = mul4([e.mem.f32(f); 4], b);
-    let scaled_a = mul4([e.mem.f32(f + 4); 4], a);
-    let scaled_c = mul4([e.mem.f32(f + 8); 4], c);
-    let row = |u: Vec4| sub4(mul4(yzx(u), zxy(normal_vec)), mul4(zxy(u), yzx(normal_vec)));
+    let scaled_b = mul4_sse([e.mem.f32(f); 4], b);
+    let scaled_a = mul4_sse([e.mem.f32(f + 4); 4], a);
+    let scaled_c = mul4_sse([e.mem.f32(f + 8); 4], c);
+    let row = |u: Vec4| {
+        sub4_sse(
+            mul4_sse(yzx(u), zxy(normal_vec)),
+            mul4_sse(zxy(u), yzx(normal_vec)),
+        )
+    };
     store_vec4(e, m, row(scaled_b));
     store_vec4(e, m + 0x10, row(scaled_a));
     store_vec4(e, m + 0x20, row(scaled_c));

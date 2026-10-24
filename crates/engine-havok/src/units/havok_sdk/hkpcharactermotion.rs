@@ -14,6 +14,7 @@
 
 #[allow(unused_imports)]
 use crate::prelude::*;
+use crate::sse::{add, addps, mulps, subps};
 
 layout! {
     /// `hkpCharacterMotion` (Xbox PDB `hkpMotion` layout): only the fields
@@ -207,22 +208,18 @@ pub fn hkp_character_motion_apply_point_impulse(
     store_vec(
         e,
         me + LINEAR_VELOCITY,
-        zip_with(j.map(|lane| mass_inv * lane), linear, |p, q| p + q),
+        addps(mulps([mass_inv; 4], j), linear),
     );
 
     let centre = load_vec(e, me + CENTER_OF_MASS);
-    let r = zip_with(load_vec(e, point.addr()), centre, |p, q| p - q);
+    let r = subps(load_vec(e, point.addr()), centre);
     let j = load_vec(e, impulse.addr());
-    let first = zip_with(shuffle_c9(j), shuffle_d2(r), |p, q| p * q);
-    let second = zip_with(shuffle_d2(j), shuffle_c9(r), |p, q| p * q);
+    let first = mulps(shuffle_c9(j), shuffle_d2(r));
+    let second = mulps(shuffle_d2(j), shuffle_c9(r));
     let inertia = load_vec(e, me + INERTIA_AND_MASS_INV);
-    let torque = zip_with(zip_with(second, first, |p, q| p - q), inertia, |p, q| p * q);
+    let torque = mulps(subps(second, first), inertia);
     let angular = load_vec(e, me + ANGULAR_VELOCITY);
-    store_vec(
-        e,
-        me + ANGULAR_VELOCITY,
-        zip_with(torque, angular, |p, q| p + q),
-    );
+    store_vec(e, me + ANGULAR_VELOCITY, addps(torque, angular));
 }
 
 // Translated from 00d1ef50 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -258,12 +255,8 @@ pub fn hkp_character_motion_apply_force(
     let f = load_vec(e, force.addr());
     let mass_inv = inverse_mass(e, this);
     let linear = load_vec(e, me + LINEAR_VELOCITY);
-    let impulse = f.map(|lane| mass_inv * (delta_time * lane));
-    store_vec(
-        e,
-        me + LINEAR_VELOCITY,
-        zip_with(impulse, linear, |p, q| p + q),
-    );
+    let impulse = mulps([mass_inv; 4], mulps([delta_time; 4], f));
+    store_vec(e, me + LINEAR_VELOCITY, addps(impulse, linear));
 }
 
 // Translated from 00d1efd0 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -320,18 +313,18 @@ pub fn hkp_character_motion_get_projected_point_velocity(
 ) {
     let me = this.addr();
     let centre = load_vec(e, me + CENTER_OF_MASS);
-    let r = zip_with(load_vec(e, point.addr()), centre, |p, q| p - q);
+    let r = subps(load_vec(e, point.addr()), centre);
     let n = load_vec(e, normal.addr());
     let linear = load_vec(e, me + LINEAR_VELOCITY);
-    let along = zip_with(linear, n, |p, q| p * q);
-    let first = zip_with(shuffle_c9(n), shuffle_d2(r), |p, q| p * q);
-    let second = zip_with(shuffle_d2(n), shuffle_c9(r), |p, q| p * q);
+    let along = mulps(linear, n);
+    let first = mulps(shuffle_c9(n), shuffle_d2(r));
+    let second = mulps(shuffle_d2(n), shuffle_c9(r));
     let angular = load_vec(e, me + ANGULAR_VELOCITY);
-    let turning = zip_with(zip_with(first, second, |p, q| p - q), angular, |p, q| p * q);
-    let turning_sum = turning[2] + (turning[1] + turning[0]);
-    let along_sum = along[2] + (along[1] + along[0]);
+    let turning = mulps(subps(first, second), angular);
+    let turning_sum = add(turning[2], add(turning[1], turning[0]));
+    let along_sum = add(along[2], add(along[1], along[0]));
     e.mem
-        .set_f32(out_velocity.addr(), x87_quiet(turning_sum + along_sum));
+        .set_f32(out_velocity.addr(), x87_quiet(add(turning_sum, along_sum)));
     let mass_inv = x87_quiet(inverse_mass(e, this));
     e.mem.set_f32(out_inverse_mass.addr(), mass_inv);
 }

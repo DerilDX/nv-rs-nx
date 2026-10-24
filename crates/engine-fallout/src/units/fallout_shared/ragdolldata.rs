@@ -396,9 +396,475 @@ pub fn fn_004d9fc0(e: &mut Engine, this: Ptr, flag: u8, mask: u16) {
     e.mem.set_u16(this.addr() + 0xc, flags);
 }
 
+/// `00401500` (no parameters): whether saved data is byte-swapped (`AL`).
+const NEEDS_SWAP: u32 = 0x0040_1500;
+/// `TESForm::__AddChunkData` (engine map, `00485990`, `cdecl`: type, data,
+/// size).
+const ADD_CHUNK_DATA: u32 = 0x0048_5990;
+/// `TESForm::AddChunkArray_ov2` (engine map, `00485710`, `cdecl`: type,
+/// floats, count).
+const ADD_CHUNK_FLOATS: u32 = 0x0048_5710;
+/// `00401460` (`cdecl`: destination, source, size): copies bytes.
+const COPY_BYTES: u32 = 0x0040_1460;
+/// `memcmp` (`00ec4835`, `cdecl`).
+const MEMCMP: u32 = 0x00ec_4835;
+/// `NiMatrix3::ToEulerAnglesXYZ` (engine map, `00a592c0`; `ECX` = matrix;
+/// the addresses of the three angles; `RET 0xc`).
+const TO_EULER: u32 = 0x00a5_92c0;
+/// `0045bc00` (`ECX` = object, a word; `RET 4`; unit `tes.cpp` by the engine
+/// map): the node the `Bip01` rotation is read from and applied to.
+const BIP01_NODE: u32 = 0x0045_bc00;
+/// The log call (`005b5e40`, `cdecl` with a format).
+const LOG: u32 = 0x005b_5e40;
+/// `"HAVOK: Failed to initialize RagDollData."`.
+const INIT_FAILED: u32 = 0x0102_1060;
+
+/// The address of bone `index` of the array.
+fn bone_at(e: &Engine, this: Ptr<RagDollData>, index: u32) -> u32 {
+    index
+        .wrapping_mul(BONE_SIZE)
+        .wrapping_add(e.get(this, RagDollData::pBoneArray))
+}
+
+/// `count` bones of 0x1c bytes from `00401000` (all ones when the size
+/// overflows, as the compiler's `MUL`/`SETO` makes it), each constructed
+/// (`00401050` with `0055a400`); 0 when the allocation fails.
+fn allocate_bones(e: &mut Engine, count: u32) -> u32 {
+    let bytes = count.checked_mul(BONE_SIZE).unwrap_or(u32::MAX);
+    let block = e.call(ALLOCATE, &args![bytes]).u32();
+    if block != 0 {
+        e.call(
+            CONSTRUCT_ARRAY,
+            &args![block, BONE_SIZE, count, BONE_CONSTRUCT],
+        );
+        block
+    } else {
+        0
+    }
+}
+
+/// The object a node's virtual slot `0xc` answers, 0 for no node.
+fn node_object(e: &mut Engine, node: u32) -> u32 {
+    if node != 0 {
+        e.vcall(node, 0xc, &[]).u32()
+    } else {
+        0
+    }
+}
+
+// Translated from 004d9280 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Byte-swaps a `RagDollBone`'s six floats (+4 to +0x18) in place, each
+/// with `00401080` and the flag 0 (no stack word; the engine map gives it
+/// no name).
+pub fn fn_004d9280(e: &mut Engine, this: Ptr) {
+    for offset in [4u32, 8, 0xc, 0x10, 0x14, 0x18] {
+        e.call(FLOAT_SWAP, &args![this.addr().wrapping_add(offset), 0u32]);
+    }
+}
+
+// Translated from 004d93c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `RagDollData::Save` (Xbox PDB name in the engine map; no stack word):
+/// with bones, the array as chunk `XRGD` (`00485990`, count * 0x1c bytes),
+/// each bone byte-swapped (`004d9280`) before and after when `00401500`
+/// says so; then, when `Bip01Rot` differs from the point at `011f426c`
+/// (`00439090`), its three floats as `XRGB` (`00485710`).
+pub fn rag_doll_data_save(e: &mut Engine, this: Ptr<RagDollData>) {
+    let swap_all = |e: &mut Engine| {
+        let mut index = 0u32;
+        while index < u32::from(e.get(this, RagDollData::iBoneCount)) {
+            let bone = bone_at(e, this, index);
+            fn_004d9280(e, Ptr::new(bone));
+            index += 1;
+        }
+    };
+    if e.get(this, RagDollData::iBoneCount) != 0 {
+        if e.call(NEEDS_SWAP, &args![]).bool() {
+            swap_all(e);
+        }
+        let size = u32::from(e.get(this, RagDollData::iBoneCount)) * BONE_SIZE;
+        let bones = e.get(this, RagDollData::pBoneArray);
+        e.call(ADD_CHUNK_DATA, &args![CHUNK_XRGD, bones, size]);
+        if e.call(NEEDS_SWAP, &args![]).bool() {
+            swap_all(e);
+        }
+    }
+    let rotation = this.addr() + 8;
+    if e.call(COMPARE_439090, &args![rotation, ORIGIN]).bool() {
+        e.call(ADD_CHUNK_FLOATS, &args![CHUNK_XRGB, rotation, 3u32]);
+    }
+}
+
+// Translated from 004d9670 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 004d9670 - the exception-unwinding frame (FS:[0]) around the bone array's allocation is not translated.
+/// `RagDollData::Copy` (Xbox PDB name in the engine map; `thiscall`, `RET
+/// 4`): nothing for a null `other`. Otherwise the bone array is freed
+/// (`00401030`), the count and `Bip01Rot` copied, a new array of that many
+/// constructed bones made (`00401000`, `00401050` with `0055a400`; null
+/// when the allocation fails) and the other's bones copied into it
+/// (`00401460`, count * 0x1c bytes).
+pub fn rag_doll_data_copy(e: &mut Engine, this: Ptr<RagDollData>, other: Ptr<RagDollData>) {
+    if other.is_null() {
+        return;
+    }
+    let bones = e.get(this, RagDollData::pBoneArray);
+    e.call(FREE, &args![bones]);
+    let count = e.get(other, RagDollData::iBoneCount);
+    e.set(this, RagDollData::iBoneCount, count);
+    for offset in [8u32, 0xc, 0x10] {
+        let word = e.mem.u32(other.addr() + offset);
+        e.mem.set_u32(this.addr() + offset, word);
+    }
+    let count = u32::from(e.get(this, RagDollData::iBoneCount));
+    let bones = allocate_bones(e, count);
+    e.set(this, RagDollData::pBoneArray, bones);
+    let size = u32::from(e.get(this, RagDollData::iBoneCount)) * BONE_SIZE;
+    let theirs = e.get(other, RagDollData::pBoneArray);
+    let mine = e.get(this, RagDollData::pBoneArray);
+    e.call(COPY_BYTES, &args![mine, theirs, size]);
+}
+
+// Translated from 004d9780 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `RagDollData::Compare` (Xbox PDB name in the engine map; `thiscall`,
+/// `RET 4`): true (they differ) for a null `other`, different counts, a
+/// different `Bip01Rot` (`00439090`) or, with bones, bones whose bytes
+/// differ (`memcmp`, count * 0x1c bytes).
+pub fn rag_doll_data_compare(
+    e: &mut Engine,
+    this: Ptr<RagDollData>,
+    other: Ptr<RagDollData>,
+) -> bool {
+    if other.is_null() {
+        return true;
+    }
+    if e.get(this, RagDollData::iBoneCount) != e.get(other, RagDollData::iBoneCount) {
+        return true;
+    }
+    if e.call(COMPARE_439090, &args![this.addr() + 8, other.addr() + 8])
+        .bool()
+    {
+        return true;
+    }
+    let count = u32::from(e.get(this, RagDollData::iBoneCount));
+    if count != 0 {
+        let mine = e.get(this, RagDollData::pBoneArray);
+        let theirs = e.get(other, RagDollData::pBoneArray);
+        if e.call(MEMCMP, &args![mine, theirs, count * BONE_SIZE])
+            .u32()
+            != 0
+        {
+            return true;
+        }
+    }
+    false
+}
+
+// Translated from 004d9800 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `RagDollData::UpdateDataFromReference` (Xbox PDB name in the engine map;
+/// `thiscall`, `RET 4`). With a reference whose slot `0x1d0` answers a
+/// root: the object is the root's slot `0xc`; for an actor (slot `0x100`)
+/// `Bip01Rot` is read first (`004da340`); without bones the array is built
+/// (`004da010`); with bones they are read from the object down (`004d9bd0`
+/// with flag 0, counting in a stack word), and a failure rebuilds the array
+/// (`004da010`). True when the bones read equal the count and none failed.
+pub fn rag_doll_data_update_data_from_reference(
+    e: &mut Engine,
+    this: Ptr<RagDollData>,
+    reference: Ptr,
+) -> bool {
+    e.with_stack(4, |e, placed| {
+        e.mem.set_u32(placed.addr(), 0);
+        let mut ok = 1u8;
+        if !reference.is_null() && e.vcall(reference.addr(), 0x1d0, &[]).u32() != 0 {
+            let root = e.vcall(reference.addr(), 0x1d0, &[]).u32();
+            let object = node_object(e, root);
+            if e.vcall(reference.addr(), 0x100, &[]).bool() {
+                rag_doll_data_update_rag_doll_data_from_bip01_node(e, this, reference);
+            }
+            if e.get(this, RagDollData::iBoneCount) == 0 {
+                rag_doll_data_create_rag_doll_bone_array(e, this, reference);
+            }
+            if e.get(this, RagDollData::iBoneCount) != 0 {
+                ok = rag_doll_data_update_rag_doll_data_from_node(
+                    e,
+                    this,
+                    Ptr::new(object),
+                    placed,
+                    0,
+                );
+            }
+            if ok == 0 {
+                rag_doll_data_create_rag_doll_bone_array(e, this, reference);
+            }
+        }
+        let count = u32::from(e.get(this, RagDollData::iBoneCount));
+        e.mem.u32(placed.addr()) == count && ok != 0
+    })
+}
+
+// Translated from 004d9bd0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `RagDollData::UpdateRagDollDataFromNode` (Xbox PDB name in the engine
+/// map; `thiscall`: the node, the address of the count of bones read, a
+/// byte flag; `RET 0xc`). With a node and bones left: when `004a8b00` gives
+/// an object for the node, the value `004d9da0` reads from `0043b4f0` (with
+/// a stack word) of the object's `006fa820` is, with the flag, stored as the
+/// next bone's `iBoneID` byte, or, without it, must equal that byte (as a
+/// signed byte) or the answer is 0 at once; the bone takes the node's
+/// position (the three words `0043c490` points at) and its rotation's Euler
+/// angles (`006a9540`, `ToEulerAnglesXYZ`), and the count goes up. Then each
+/// child's slot `0xc` object, when there is one, is visited (a failure
+/// makes the answer 0), stopping once every bone is read. The answer is 1
+/// unless a bone failed.
+pub fn rag_doll_data_update_rag_doll_data_from_node(
+    e: &mut Engine,
+    this: Ptr<RagDollData>,
+    node: Ptr,
+    placed: Ptr,
+    flag: u32,
+) -> u8 {
+    let mut result = 1u8;
+    if node.is_null() {
+        return result;
+    }
+    let all_read =
+        |e: &Engine| e.mem.u32(placed.addr()) >= u32::from(e.get(this, RagDollData::iBoneCount));
+    if all_read(e) {
+        return result;
+    }
+    let body = e.call(NODE_4A8B00, &args![node]).u32();
+    if body != 0 {
+        let read_id = |e: &mut Engine| {
+            e.with_stack(4, |e, word| {
+                let object = e.call(OBJECT_6FA820, &args![body]).u32();
+                let info = e.call(OBJECT_43B4F0, &args![object, word]).u32();
+                fn_004d9da0(e, Ptr::new(info))
+            })
+        };
+        if flag as u8 != 0 {
+            let id = read_id(e);
+            let bone = bone_at(e, this, e.mem.u32(placed.addr()));
+            e.mem.set_u8(bone, id as u8);
+        } else {
+            let bone = bone_at(e, this, e.mem.u32(placed.addr()));
+            let saved = i32::from(e.mem.u8(bone) as i8);
+            if saved != read_id(e) as i32 {
+                return 0;
+            }
+        }
+        let position = e.call(NODE_43C490, &args![node]).u32();
+        let bone = bone_at(e, this, e.mem.u32(placed.addr()));
+        for offset in [0u32, 4, 8] {
+            let word = e.mem.u32(position + offset);
+            e.mem.set_u32(bone + 4 + offset, word);
+        }
+        let bone = bone_at(e, this, e.mem.u32(placed.addr()));
+        let rotation = e.call(NODE_ROTATION, &args![node]).u32();
+        e.call(
+            TO_EULER,
+            &args![rotation, bone + 0x10, bone + 0x14, bone + 0x18],
+        );
+        let count = e.mem.u32(placed.addr()).wrapping_add(1);
+        e.mem.set_u32(placed.addr(), count);
+    }
+    let children = e.call(CHILD_COUNT, &args![node]).u32();
+    let mut index = 0u32;
+    while index < children {
+        let child = e.call(CHILD_AT, &args![node, index]).u32();
+        let object = node_object(e, child);
+        if object != 0
+            && rag_doll_data_update_rag_doll_data_from_node(
+                e,
+                this,
+                Ptr::new(object),
+                placed,
+                u32::from(flag as u8),
+            ) == 0
+        {
+            result = 0;
+        }
+        if all_read(e) {
+            break;
+        }
+        index += 1;
+    }
+    result
+}
+
+// Translated from 004da010 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 004da010 - the exception-unwinding frame (FS:[0]) around the bone array's allocation is not translated.
+/// `RagDollData::CreateRagDollBoneArray` (Xbox PDB name in the engine map;
+/// `thiscall`, `RET 4`): the count goes to 0 and the bone array is freed
+/// (`00401030`; the pointer is left as it was). With a reference whose
+/// slot `0x1d0` answers a root, the count becomes the number of bodies
+/// under the root's slot `0xc` object (`004da180`, a byte); with any, a new
+/// array of constructed bones is made and filled from the object down
+/// (`004d9bd0` with flag 1, from a stack count of 0), logging the failure
+/// message (`005b5e40`) when that fails.
+pub fn rag_doll_data_create_rag_doll_bone_array(
+    e: &mut Engine,
+    this: Ptr<RagDollData>,
+    reference: Ptr,
+) {
+    e.set(this, RagDollData::iBoneCount, 0);
+    let bones = e.get(this, RagDollData::pBoneArray);
+    e.call(FREE, &args![bones]);
+    if reference.is_null() || e.vcall(reference.addr(), 0x1d0, &[]).u32() == 0 {
+        return;
+    }
+    let root = e.vcall(reference.addr(), 0x1d0, &[]).u32();
+    let object = node_object(e, root);
+    let count = fn_004da180(e, object);
+    e.set(this, RagDollData::iBoneCount, count);
+    if e.get(this, RagDollData::iBoneCount) == 0 {
+        return;
+    }
+    let count = u32::from(e.get(this, RagDollData::iBoneCount));
+    let bones = allocate_bones(e, count);
+    e.set(this, RagDollData::pBoneArray, bones);
+    let ok = e.with_stack(4, |e, placed| {
+        e.mem.set_u32(placed.addr(), 0);
+        rag_doll_data_update_rag_doll_data_from_node(e, this, Ptr::new(object), placed, 1)
+    });
+    if ok == 0 {
+        e.call(LOG, &args![INIT_FAILED]);
+    }
+}
+
+// Translated from 004da180 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The number of bodies in a node tree (`cdecl`, the node; a byte, adding
+/// with wraparound; the engine map gives it no name): 0 for no node;
+/// otherwise 1 when `004a8b00` gives the node an object, plus the count of
+/// each child's slot `0xc` object.
+pub fn fn_004da180(e: &mut Engine, node: u32) -> u8 {
+    let mut count = 0u8;
+    if node == 0 {
+        return count;
+    }
+    if e.call(NODE_4A8B00, &args![node]).u32() != 0 {
+        count = count.wrapping_add(1);
+    }
+    let children = e.call(CHILD_COUNT, &args![node]).u32();
+    let mut index = 0u32;
+    while index < children {
+        let child = e.call(CHILD_AT, &args![node, index]).u32();
+        let object = node_object(e, child);
+        if object != 0 {
+            count = count.wrapping_add(fn_004da180(e, object));
+        }
+        index += 1;
+    }
+    count
+}
+
+// Translated from 004da230 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Applies `Bip01Rot` to an actor (`thiscall`, `RET 4`, the reference; the
+/// engine map gives it no name): only when it differs from the point at
+/// `011f426c` (`00439090`). For a reference whose slot `0x100` answers
+/// true, the slot `0xc` object of its slot `0x1d0` root; its `0045bc00` node
+/// (with 0) gets the rotation built from the three angles
+/// (`NiMatrix3::FromEulerAnglesXYZ` into a stack matrix after `006815c0`,
+/// then `0043fa80`) and is updated (its slot `0xb8` with update data
+/// `0043d410(0.0, 0, 0)`).
+pub fn fn_004da230(e: &mut Engine, this: Ptr<RagDollData>, reference: Ptr) {
+    if !e
+        .call(COMPARE_439090, &args![this.addr() + 8, ORIGIN])
+        .bool()
+    {
+        return;
+    }
+    let root = if !reference.is_null() && e.vcall(reference.addr(), 0x100, &[]).bool() {
+        e.vcall(reference.addr(), 0x1d0, &[]).u32()
+    } else {
+        0
+    };
+    let object = node_object(e, root);
+    if object == 0 {
+        return;
+    }
+    let node = e.call(BIP01_NODE, &args![object, 0u32]).u32();
+    if node == 0 {
+        return;
+    }
+    e.with_stack(0x24, |e, matrix| {
+        e.call(POINT_PREPARE, &args![matrix]);
+        let x = x87_quiet_bits(e.mem.u32(this.addr() + 8));
+        let y = x87_quiet_bits(e.mem.u32(this.addr() + 0xc));
+        let z = x87_quiet_bits(e.mem.u32(this.addr() + 0x10));
+        e.call(FROM_EULER, &args![matrix, x, y, z]);
+        e.call(NODE_SET_ROTATE, &args![node, matrix]);
+    });
+    e.with_stack(0xc, |e, update| {
+        e.call(
+            UPDATE_DATA_CONSTRUCT,
+            &args![update, x87_store32(0.0), 0u32, 0u32],
+        );
+        e.vcall(node, 0xb8, &args![update]);
+    });
+}
+
+// Translated from 004da340 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `RagDollData::UpdateRagDollDataFromBip01Node` (Xbox PDB name in the
+/// engine map; `thiscall`, `RET 4`, the reference): for a reference whose
+/// slot `0x100` answers true, the slot `0xc` object of its slot `0x1d0`
+/// root; its `0045bc00` node (with 0), when there is one, gives
+/// `Bip01Rot` the Euler angles of its rotation (`006a9540`,
+/// `ToEulerAnglesXYZ`).
+pub fn rag_doll_data_update_rag_doll_data_from_bip01_node(
+    e: &mut Engine,
+    this: Ptr<RagDollData>,
+    reference: Ptr,
+) {
+    let root = if !reference.is_null() && e.vcall(reference.addr(), 0x100, &[]).bool() {
+        e.vcall(reference.addr(), 0x1d0, &[]).u32()
+    } else {
+        0
+    };
+    let object = node_object(e, root);
+    if object == 0 {
+        return;
+    }
+    let node = e.call(BIP01_NODE, &args![object, 0u32]).u32();
+    if node == 0 {
+        return;
+    }
+    let base = this.addr();
+    let rotation = e.call(NODE_ROTATION, &args![node]).u32();
+    e.call(
+        TO_EULER,
+        &args![rotation, base + 8, base + 0xc, base + 0x10],
+    );
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x004d_9280, fn_004d9280(Ptr)),
+        entry!(0x004d_93c0, rag_doll_data_save(Ptr<RagDollData>)),
+        entry!(
+            0x004d_9670,
+            rag_doll_data_copy(Ptr<RagDollData>, Ptr<RagDollData>)
+        ),
+        entry!(
+            0x004d_9780,
+            rag_doll_data_compare(Ptr<RagDollData>, Ptr<RagDollData>) -> bool
+        ),
+        entry!(
+            0x004d_9800,
+            rag_doll_data_update_data_from_reference(Ptr<RagDollData>, Ptr) -> bool
+        ),
+        entry!(
+            0x004d_9bd0,
+            rag_doll_data_update_rag_doll_data_from_node(Ptr<RagDollData>, Ptr, Ptr, u32) -> u8
+        ),
+        entry!(
+            0x004d_a010,
+            rag_doll_data_create_rag_doll_bone_array(Ptr<RagDollData>, Ptr)
+        ),
+        entry!(0x004d_a180, fn_004da180(u32) -> u8),
+        entry!(0x004d_a230, fn_004da230(Ptr<RagDollData>, Ptr)),
+        entry!(
+            0x004d_a340,
+            rag_doll_data_update_rag_doll_data_from_bip01_node(Ptr<RagDollData>, Ptr)
+        ),
         entry!(
             0x004d_9330,
             rag_doll_data_rag_doll_data(Ptr<RagDollData>) -> Ptr<RagDollData>
@@ -792,4 +1258,374 @@ mod tests {
 
     /// The reference's actor test slot.
     const SLOT_ACTOR_TEST: u32 = 0x100;
+}
+
+#[cfg(test)]
+mod n038_tests {
+    use super::*;
+
+    type Log = Vec<(u32, Vec<u32>)>;
+
+    const SCRATCH: u32 = 0x0f00_0000;
+    const REF_VTABLE: u32 = 0x0f00_1000;
+    const NODE_VTABLE: u32 = 0x0f00_2000;
+    const REF_SLOT_100: u32 = 0x0f00_3000;
+    const REF_SLOT_1D0: u32 = 0x0f00_3010;
+    const NODE_SLOT_C: u32 = 0x0f00_3020;
+    const NODE_SLOT_B8: u32 = 0x0f00_3030;
+
+    fn word(eax: u32) -> Ret {
+        Ret {
+            eax,
+            ..Ret::default()
+        }
+    }
+
+    fn run(e: &mut Engine, addr: u32, words: &[u32]) -> (Ret, Log) {
+        e.call_log = Some(vec![]);
+        let result = e.call(addr, words);
+        let log = e
+            .call_log
+            .take()
+            .unwrap()
+            .into_iter()
+            .filter(|(a, _)| *a != addr)
+            .collect();
+        (result, log)
+    }
+
+    /// A scene of doubles. A reference is `[vtable, root, actor byte]`; a
+    /// node is `[vtable, object, body, child count, child 0, child 1,
+    /// position x, y, z, id]`, its slot `0xc` answering its object word
+    /// (itself for a plain node). `004a8b00` answers the body word, the
+    /// child count and child doubles read the node, `0043b4f0` answers the
+    /// node itself so `004d9da0` reads the id word, `0043c490` answers the
+    /// position's address. Other callees answer 0, or `SCRATCH` words.
+    fn engine() -> Engine {
+        let mut e = Engine::new();
+        e.mem.map(SCRATCH, 0x20);
+        e.mem.map(0x011f_4000, 0x1000);
+        e.put_vtable(REF_VTABLE, &[0; 0x80]);
+        e.mem.set_u32(REF_VTABLE + 0x100, REF_SLOT_100);
+        e.mem.set_u32(REF_VTABLE + 0x1d0, REF_SLOT_1D0);
+        e.put_vtable(NODE_VTABLE, &[0; 0x30]);
+        e.mem.set_u32(NODE_VTABLE + 0xc, NODE_SLOT_C);
+        e.mem.set_u32(NODE_VTABLE + 0xb8, NODE_SLOT_B8);
+        e.register(REF_SLOT_100, |e, a| word(e.mem.u32(a[0] + 8)));
+        e.register(REF_SLOT_1D0, |e, a| word(e.mem.u32(a[0] + 4)));
+        e.register(NODE_SLOT_C, |e, a| word(e.mem.u32(a[0] + 4)));
+        e.register(NODE_SLOT_B8, |_, _| Ret::default());
+        e.register(NODE_4A8B00, |e, a| word(e.mem.u32(a[0] + 8)));
+        e.register(CHILD_COUNT, |e, a| word(e.mem.u32(a[0] + 0xc)));
+        e.register(CHILD_AT, |e, a| word(e.mem.u32(a[0] + 0x10 + 4 * a[1])));
+        e.register(OBJECT_6FA820, |_, a| word(a[0]));
+        // `004a8b00` answered the body; the body is the node itself here.
+        e.register(OBJECT_43B4F0, |_, a| word(a[0] + 0x24 - 1));
+        e.register(NODE_43C490, |_, a| word(a[0] + 0x18));
+        e.register(NODE_ROTATION, |_, a| word(a[0] + 0x100));
+        for addr in [
+            TO_EULER,
+            FLOAT_SWAP,
+            ADD_CHUNK_DATA,
+            ADD_CHUNK_FLOATS,
+            COPY_BYTES,
+            FREE,
+            CONSTRUCT_ARRAY,
+            LOG,
+            POINT_PREPARE,
+            FROM_EULER,
+            NODE_SET_ROTATE,
+            UPDATE_DATA_CONSTRUCT,
+        ] {
+            e.register(addr, |_, _| Ret::default());
+        }
+        e.register(NEEDS_SWAP, |e, _| word(e.mem.u32(SCRATCH)));
+        e.register(COMPARE_439090, |e, _| word(e.mem.u32(SCRATCH + 4)));
+        e.register(MEMCMP, |e, _| word(e.mem.u32(SCRATCH + 8)));
+        e.register(ALLOCATE, |e, a| word(e.mem.alloc(a[0])));
+        e.register(BIP01_NODE, |e, _| word(e.mem.u32(SCRATCH + 0xc)));
+        e
+    }
+
+    /// A node whose body is itself (when `body`), with the id byte at
+    /// +0x24's bits 8 to 12 (`004d9da0` reads the word at +0x23).
+    fn node(e: &mut Engine, body: bool, id: u8, children: &[u32]) -> u32 {
+        let n = e.mem.alloc(0x40);
+        e.mem.set_u32(n, NODE_VTABLE);
+        e.mem.set_u32(n + 4, n);
+        e.mem.set_u32(n + 8, if body { n } else { 0 });
+        e.mem.set_u32(n + 0xc, children.len() as u32);
+        for (i, child) in children.iter().enumerate() {
+            e.mem.set_u32(n + 0x10 + 4 * i as u32, *child);
+        }
+        e.mem.set_u32(n + 0x18, 0x11);
+        e.mem.set_u32(n + 0x1c, 0x22);
+        e.mem.set_u32(n + 0x20, 0x33);
+        e.mem.set_u8(n + 0x24, id);
+        n
+    }
+
+    fn reference(e: &mut Engine, root: u32, actor: bool) -> u32 {
+        let r = e.mem.alloc(0xc);
+        e.mem.set_u32(r, REF_VTABLE);
+        e.mem.set_u32(r + 4, root);
+        e.mem.set_u32(r + 8, u32::from(actor));
+        r
+    }
+
+    fn data(e: &mut Engine, count: u8) -> u32 {
+        let d = e.mem.alloc(0x14);
+        e.mem.set_u8(d, count);
+        let bones = e.mem.alloc(0x1c * u32::from(count).max(1));
+        e.mem.set_u32(d + 4, bones);
+        d
+    }
+
+    #[test]
+    fn at_004d9280_swaps_six_floats() {
+        let mut e = engine();
+        let (_, log) = run(&mut e, 0x004d_9280, &[0x5000]);
+        let swapped: Vec<_> = log.iter().map(|c| c.1[0]).collect();
+        assert_eq!(
+            swapped,
+            vec![0x5004, 0x5008, 0x500c, 0x5010, 0x5014, 0x5018]
+        );
+        assert!(log.iter().all(|c| c.0 == FLOAT_SWAP && c.1[1] == 0));
+    }
+
+    #[test]
+    fn save_writes_bones_and_rotation() {
+        let mut e = engine();
+        let d = data(&mut e, 2);
+        let bones = e.mem.u32(d + 4);
+        let (_, log) = run(&mut e, 0x004d_93c0, &[d]);
+        assert_eq!(log[1], (ADD_CHUNK_DATA, vec![CHUNK_XRGD, bones, 0x38]));
+        assert!(!log
+            .iter()
+            .any(|c| c.0 == FLOAT_SWAP || c.0 == ADD_CHUNK_FLOATS));
+        assert_eq!(log.last().unwrap(), &(COMPARE_439090, vec![d + 8, ORIGIN]));
+        e.mem.set_u32(SCRATCH, 1);
+        e.mem.set_u32(SCRATCH + 4, 1);
+        let (_, log) = run(&mut e, 0x004d_93c0, &[d]);
+        assert_eq!(log.iter().filter(|c| c.0 == FLOAT_SWAP).count(), 24);
+        assert!(log.contains(&(FLOAT_SWAP, vec![bones + 0x1c + 0x18, 0])));
+        assert_eq!(
+            log.last().unwrap(),
+            &(ADD_CHUNK_FLOATS, vec![CHUNK_XRGB, d + 8, 3])
+        );
+        // No bones: only the rotation.
+        e.mem.set_u8(d, 0);
+        let (_, log) = run(&mut e, 0x004d_93c0, &[d]);
+        assert_eq!(log.len(), 2);
+    }
+
+    #[test]
+    fn copy_rebuilds_the_array() {
+        let mut e = engine();
+        let d = data(&mut e, 1);
+        let old = e.mem.u32(d + 4);
+        let other = data(&mut e, 3);
+        e.mem.set_u32(other + 8, 7);
+        e.mem.set_u32(other + 0x10, 9);
+        let (_, log) = run(&mut e, 0x004d_9670, &[d, 0]);
+        assert!(log.is_empty());
+        let (_, log) = run(&mut e, 0x004d_9670, &[d, other]);
+        let bones = e.mem.u32(d + 4);
+        assert_eq!(e.mem.u8(d), 3);
+        assert_eq!(e.mem.u32(d + 8), 7);
+        assert_eq!(e.mem.u32(d + 0x10), 9);
+        assert_eq!(log[0], (FREE, vec![old]));
+        assert_eq!(log[1], (ALLOCATE, vec![0x54]));
+        assert_eq!(
+            log[2],
+            (CONSTRUCT_ARRAY, vec![bones, 0x1c, 3, BONE_CONSTRUCT])
+        );
+        let theirs = e.mem.u32(other + 4);
+        assert_eq!(log[3], (COPY_BYTES, vec![bones, theirs, 0x54]));
+    }
+
+    #[test]
+    fn compare_checks_count_rotation_and_bytes() {
+        let mut e = engine();
+        let d = data(&mut e, 2);
+        let other = data(&mut e, 2);
+        let compare = |e: &mut Engine, x: u32, y: u32| e.call(0x004d_9780, &args![x, y]).bool();
+        assert!(compare(&mut e, d, 0));
+        assert!(!compare(&mut e, d, other));
+        e.mem.set_u32(SCRATCH + 8, 1);
+        assert!(compare(&mut e, d, other));
+        e.mem.set_u32(SCRATCH + 8, 0);
+        e.mem.set_u32(SCRATCH + 4, 1);
+        assert!(compare(&mut e, d, other));
+        e.mem.set_u32(SCRATCH + 4, 0);
+        e.mem.set_u8(other, 1);
+        assert!(compare(&mut e, d, other));
+        // No bones: no memcmp.
+        e.mem.set_u8(d, 0);
+        e.mem.set_u8(other, 0);
+        e.mem.set_u32(SCRATCH + 8, 1);
+        assert!(!compare(&mut e, d, other));
+    }
+
+    #[test]
+    fn from_node_writes_ids_or_checks_them() {
+        let mut e = engine();
+        let leaf = node(&mut e, true, 5, &[]);
+        let plain = node(&mut e, false, 0, &[leaf]);
+        let root = node(&mut e, true, 4, &[plain]);
+        let d = data(&mut e, 2);
+        let bones = e.mem.u32(d + 4);
+        let placed = e.mem.alloc(4);
+        // Flag 1: the ids are written.
+        let (result, log) = run(&mut e, 0x004d_9bd0, &[d, root, placed, 1]);
+        assert_eq!(result.u8(), 1);
+        assert_eq!(e.mem.u32(placed), 2);
+        assert_eq!(e.mem.u8(bones), 4);
+        assert_eq!(e.mem.u8(bones + 0x1c), 5);
+        assert_eq!(e.mem.u32(bones + 4), 0x11);
+        assert_eq!(e.mem.u32(bones + 0xc), 0x33);
+        assert!(log.contains(&(
+            TO_EULER,
+            vec![root + 0x100, bones + 0x10, bones + 0x14, bones + 0x18]
+        )));
+        // Flag 0: the ids match.
+        e.mem.set_u32(placed, 0);
+        assert_eq!(e.call(0x004d_9bd0, &args![d, root, placed, 0u32]).u8(), 1);
+        // A mismatch in a child makes the answer 0.
+        e.mem.set_u8(bones + 0x1c, 6);
+        e.mem.set_u32(placed, 0);
+        assert_eq!(e.call(0x004d_9bd0, &args![d, root, placed, 0u32]).u8(), 0);
+        assert_eq!(e.mem.u32(placed), 1);
+        // A mismatch on the node itself: 0 at once.
+        e.mem.set_u8(bones, 9);
+        e.mem.set_u32(placed, 0);
+        let (result, log) = run(&mut e, 0x004d_9bd0, &[d, root, placed, 0]);
+        assert_eq!(result.u8(), 0);
+        assert!(!log.iter().any(|c| c.0 == CHILD_COUNT));
+        // All read already, or no node: 1 without work.
+        e.mem.set_u32(placed, 2);
+        let (result, log) = run(&mut e, 0x004d_9bd0, &[d, root, placed, 0]);
+        assert_eq!((result.u8(), log.len()), (1, 0));
+        let (result, _) = run(&mut e, 0x004d_9bd0, &[d, 0, placed, 0]);
+        assert_eq!(result.u8(), 1);
+    }
+
+    #[test]
+    fn at_004da180_counts_bodies() {
+        let mut e = engine();
+        let a = node(&mut e, true, 0, &[]);
+        let b = node(&mut e, false, 0, &[a]);
+        let c = node(&mut e, true, 0, &[]);
+        let root = node(&mut e, true, 0, &[b, c]);
+        assert_eq!(e.call(0x004d_a180, &args![root]).u8(), 3);
+        assert_eq!(e.call(0x004d_a180, &args![0u32]).u8(), 0);
+    }
+
+    #[test]
+    fn create_builds_and_fills_the_array() {
+        let mut e = engine();
+        let leaf = node(&mut e, true, 5, &[]);
+        let root = node(&mut e, true, 4, &[leaf]);
+        let r = reference(&mut e, root, false);
+        let d = data(&mut e, 7);
+        let old = e.mem.u32(d + 4);
+        let (_, log) = run(&mut e, 0x004d_a010, &[d, r]);
+        assert_eq!(log[0], (FREE, vec![old]));
+        assert_eq!(e.mem.u8(d), 2);
+        let bones = e.mem.u32(d + 4);
+        assert_ne!(bones, old);
+        assert_eq!(e.mem.u8(bones + 0x1c), 5);
+        assert!(!log.iter().any(|c| c.0 == LOG));
+        // No root: the count is 0 and the old pointer stays.
+        let r = reference(&mut e, 0, false);
+        let (_, log) = run(&mut e, 0x004d_a010, &[d, r]);
+        assert_eq!(e.mem.u8(d), 0);
+        assert_eq!(e.mem.u32(d + 4), bones);
+        assert_eq!(log.iter().filter(|c| c.0 == FREE).count(), 1);
+    }
+
+    #[test]
+    fn update_from_reference_reads_or_rebuilds() {
+        let mut e = engine();
+        let leaf = node(&mut e, true, 5, &[]);
+        let root = node(&mut e, true, 4, &[leaf]);
+        let r = reference(&mut e, root, false);
+        // No bones yet: built, then read.
+        let d = data(&mut e, 0);
+        assert!(e.call(0x004d_9800, &args![d, r]).bool());
+        assert_eq!(e.mem.u8(d), 2);
+        // Ids that no longer match: rebuilt, and the answer is false.
+        let bones = e.mem.u32(d + 4);
+        e.mem.set_u8(bones, 1);
+        e.call_log = Some(vec![]);
+        assert!(!e.call(0x004d_9800, &args![d, r]).bool());
+        let log = e.call_log.take().unwrap();
+        assert_eq!(log.iter().filter(|c| c.0 == FREE).count(), 1);
+        // An actor reads Bip01Rot first.
+        let actor = reference(&mut e, root, true);
+        e.mem.set_u32(SCRATCH + 0xc, 0x7000);
+        e.call_log = Some(vec![]);
+        assert!(e.call(0x004d_9800, &args![d, actor]).bool());
+        let log = e.call_log.take().unwrap();
+        assert!(log.contains(&(TO_EULER, vec![0x7100, d + 8, d + 0xc, d + 0x10])));
+        // No reference: true only when there are no bones.
+        assert!(!e.call(0x004d_9800, &args![d, 0u32]).bool());
+        let empty = data(&mut e, 0);
+        assert!(e.call(0x004d_9800, &args![empty, 0u32]).bool());
+    }
+
+    #[test]
+    fn at_004da230_applies_the_rotation_to_an_actor() {
+        let mut e = engine();
+        let root = node(&mut e, false, 0, &[]);
+        let actor = reference(&mut e, root, true);
+        let d = data(&mut e, 0);
+        e.mem.set_u32(d + 8, 0x7f80_0001);
+        e.mem.set_u32(d + 0xc, 2.0f32.to_bits());
+        e.mem.set_u32(d + 0x10, 3.0f32.to_bits());
+        // Same rotation as the origin: nothing.
+        let (_, log) = run(&mut e, 0x004d_a230, &[d, actor]);
+        assert_eq!(log.len(), 1);
+        e.mem.set_u32(SCRATCH + 4, 1);
+        // No node: stops.
+        let (_, log) = run(&mut e, 0x004d_a230, &[d, actor]);
+        assert_eq!(log.last().unwrap().0, BIP01_NODE);
+        let target = node(&mut e, false, 0, &[]);
+        e.mem.set_u32(SCRATCH + 0xc, target);
+        let (_, log) = run(&mut e, 0x004d_a230, &[d, actor]);
+        let euler = log.iter().find(|c| c.0 == FROM_EULER).unwrap();
+        assert_eq!(
+            &euler.1[1..],
+            &[0x7fc0_0001, 2.0f32.to_bits(), 3.0f32.to_bits()]
+        );
+        let matrix = euler.1[0];
+        assert!(log.contains(&(NODE_SET_ROTATE, vec![target, matrix])));
+        let update = log.iter().find(|c| c.0 == UPDATE_DATA_CONSTRUCT).unwrap();
+        assert_eq!(&update.1[1..], &[0, 0, 0]);
+        assert!(log.contains(&(NODE_SLOT_B8, vec![target, update.1[0]])));
+        // Not an actor: no object, nothing after the compare.
+        let plain = reference(&mut e, root, false);
+        let (_, log) = run(&mut e, 0x004d_a230, &[d, plain]);
+        assert!(!log.iter().any(|c| c.0 == BIP01_NODE));
+    }
+
+    #[test]
+    fn at_004da340_reads_the_rotation_of_an_actor() {
+        let mut e = engine();
+        let root = node(&mut e, false, 0, &[]);
+        let actor = reference(&mut e, root, true);
+        let d = data(&mut e, 0);
+        let (_, log) = run(&mut e, 0x004d_a340, &[d, actor]);
+        assert!(!log.iter().any(|c| c.0 == TO_EULER));
+        e.mem.set_u32(SCRATCH + 0xc, 0x7000);
+        let (_, log) = run(&mut e, 0x004d_a340, &[d, actor]);
+        assert!(log.contains(&(BIP01_NODE, vec![root, 0])));
+        assert_eq!(
+            log.last().unwrap(),
+            &(TO_EULER, vec![0x7100, d + 8, d + 0xc, d + 0x10])
+        );
+        let plain = reference(&mut e, root, false);
+        let (_, log) = run(&mut e, 0x004d_a340, &[d, plain]);
+        assert!(!log.iter().any(|c| c.0 == BIP01_NODE));
+    }
 }

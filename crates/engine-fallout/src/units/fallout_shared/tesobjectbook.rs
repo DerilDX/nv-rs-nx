@@ -217,12 +217,284 @@ pub fn fn_00514f30(_e: &mut Engine, this: Ptr) -> u32 {
     this.addr().wrapping_add(0xc0)
 }
 
+/// `TESForm::StartForm` (`004855a0`) and `TESForm::CloseForm` (`00485680`),
+/// `thiscall` on the form, no stack words.
+const START_FORM: u32 = 0x0048_55a0;
+const CLOSE_FORM: u32 = 0x0048_5680;
+/// The component saves (engine map; `thiscall`): `TESFullName::Save`
+/// (`00487010`), `TESModelTextureSwap::Save` (`0048a520`, three chunk
+/// tags), `TESTexture::Save` (`0048e370`, a tag), `BGSMessageIcon::Save`
+/// (`0047a240`, a tag), `TESScriptableForm::Save` (`0048cca0`),
+/// `TESEnchantableForm::Save` (`0047bd70`), `TESDescription::Save`
+/// (`00482cb0`), `BGSDestructibleObjectForm::Save` (`00477f20`) and
+/// `BGSPickupPutdownSounds::Save` (`0047b560`).
+const FULL_NAME_SAVE: u32 = 0x0048_7010;
+const MODEL_TEXTURE_SWAP_SAVE: u32 = 0x0048_a520;
+const TEXTURE_SAVE: u32 = 0x0048_e370;
+const MESSAGE_ICON_SAVE: u32 = 0x0047_a240;
+const SCRIPTABLE_FORM_SAVE: u32 = 0x0048_cca0;
+const ENCHANTABLE_SAVE: u32 = 0x0047_bd70;
+const DESCRIPTION_SAVE: u32 = 0x0048_2cb0;
+const DESTRUCTIBLE_SAVE: u32 = 0x0047_7f20;
+const PICKUP_PUTDOWN_SAVE: u32 = 0x0047_b560;
+/// `00401500`: the byte at `011c54ba` (whether saved words are
+/// byte-swapped); `00483710` (`thiscall` on the data): its byte swap, whose
+/// body does nothing.
+const SAVE_SWAPS_BYTES: u32 = 0x0040_1500;
+const SWAP_BOOK_DATA: u32 = 0x0048_3710;
+/// `TESForm::__SaveData` (`00485e20`, `thiscall`, `RET 8`: data, size).
+const SAVE_DATA: u32 = 0x0048_5e20;
+/// `__RTDynamicCast` (`00ec43fb`, cdecl, five words) and the type
+/// descriptors `TESForm` (`01183028`), `TESObjectBOOK` (`0118a650`),
+/// `TESObjectREFR` (`011841cc`) and `Actor` (`011846d4`).
+const RT_DYNAMIC_CAST: u32 = 0x00ec_43fb;
+const TYPE_TES_FORM: u32 = 0x0118_3028;
+const TYPE_TES_OBJECT_BOOK: u32 = 0x0118_a650;
+const TYPE_TES_OBJECT_REFR: u32 = 0x0118_41cc;
+const TYPE_ACTOR: u32 = 0x0118_46d4;
+/// `TESForm::CopyAllComponents` (`004851b0`, `RET 4`) and
+/// `TESForm::CompareAllComponents` (`00485270`, `RET 4`).
+const COPY_ALL_COMPONENTS: u32 = 0x0048_51b0;
+const COMPARE_ALL_COMPONENTS: u32 = 0x0048_5270;
+/// `_memcmp` (`00ec4835`, cdecl).
+const MEMCMP: u32 = 0x00ec_4835;
+/// `0050f670` (`thiscall`, `RET 0x14`; engine map unit `tesobject.cpp`).
+const OBJECT_ACTIVATE_0050F670: u32 = 0x0050_f670;
+/// `Read`'s callees: `00493bb0` (`thiscall` on the actor),
+/// `Interface::IsInMenuMode` (`00702360`), the message box `007052f0`
+/// (cdecl, six words), a string setting's text (`00403df0`, `thiscall` on
+/// the setting) and a float setting's address (`00403e20`), `0047f060`
+/// (cdecl, the actor value), `BGSEntryPoint::HandleEntryPoint` (`005e58f0`,
+/// cdecl, three words), `MiscStatManager::Increment` (`004d5c60`, cdecl),
+/// `_ftol2` (`00ec62c0`, the value in `ST0`),
+/// `ActorValue::GetActorValueName` (`0066e950`, cdecl), the `BSStringT`
+/// constructor (`004037b0`), format (`00406f60`, cdecl), text (`00559450`)
+/// and destructor (`004037d0`).
+const ACTOR_CHECK_00493BB0: u32 = 0x0049_3bb0;
+const IS_IN_MENU_MODE: u32 = 0x0070_2360;
+const SHOW_MESSAGE: u32 = 0x0070_52f0;
+const SETTING_STRING: u32 = 0x0040_3df0;
+const SETTING_FLOAT_ADDRESS: u32 = 0x0040_3e20;
+const SKILL_CHECK_0047F060: u32 = 0x0047_f060;
+const HANDLE_ENTRY_POINT: u32 = 0x005e_58f0;
+const MISC_STAT_INCREMENT: u32 = 0x004d_5c60;
+const FTOL2: u32 = 0x00ec_62c0;
+const ACTOR_VALUE_NAME: u32 = 0x0066_e950;
+const STRING_CONSTRUCT: u32 = 0x0040_37b0;
+const STRING_FORMAT: u32 = 0x0040_6f60;
+const STRING_TEXT: u32 = 0x0055_9450;
+const STRING_DESTRUCT: u32 = 0x0040_37d0;
+/// The player (the word at `011dea3c`).
+const PLAYER: u32 = 0x011d_ea3c;
+/// The settings `Read` uses: the message when the book can't be read now
+/// (string, `011d4ccc`), the skill-increase message format (string,
+/// `011d49c0`) and the skill points a book gives (float, `011c9284`).
+const CANNOT_READ_SETTING: u32 = 0x011d_4ccc;
+const SKILL_MESSAGE_SETTING: u32 = 0x011d_49c0;
+const BOOK_SKILL_POINTS_SETTING: u32 = 0x011c_9284;
+/// The float (2.0) at `010162c0` both messages pass.
+const MESSAGE_FLOAT: u32 = 0x0101_62c0;
+
+// Translated from 00514de0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TESObjectBOOK::Save` (engine map; no stack words): `StartForm`, the
+/// full name (+0x30), the model with texture swaps (+0x3c; `MODL`, `MODT`,
+/// `MODS`), the icon (+0x5c, `ICON`), the message icon (+0xa4, `MICO`),
+/// script (+0x68), enchantment (+0x74), description (+0x94), destructible
+/// data (+0x9c), pickup/putdown sounds (+0xb4), the 2 bytes of data at
+/// +0xc0 (`__SaveData`; `00483710` before and after when `00401500` says
+/// so), `CloseForm`.
+pub fn tes_object_book_save(e: &mut Engine, this: Ptr) {
+    let base = this.addr();
+    e.call(START_FORM, &args![this]);
+    e.call(FULL_NAME_SAVE, &args![base + 0x30]);
+    e.call(
+        MODEL_TEXTURE_SWAP_SAVE,
+        &args![base + 0x3c, SIG_MODL, SIG_MODT, SIG_MODS],
+    );
+    e.call(TEXTURE_SAVE, &args![base + 0x5c, SIG_ICON]);
+    e.call(MESSAGE_ICON_SAVE, &args![base + 0xa4, SIG_MICO]);
+    for (offset, save) in [
+        (0x68u32, SCRIPTABLE_FORM_SAVE),
+        (0x74, ENCHANTABLE_SAVE),
+        (0x94, DESCRIPTION_SAVE),
+        (0x9c, DESTRUCTIBLE_SAVE),
+        (0xb4, PICKUP_PUTDOWN_SAVE),
+    ] {
+        e.call(save, &args![base + offset]);
+    }
+    if e.call(SAVE_SWAPS_BYTES, &[]).u32() as u8 != 0 {
+        e.call(SWAP_BOOK_DATA, &args![base + 0xc0]);
+    }
+    e.call(SAVE_DATA, &args![this, base + 0xc0, 2u32]);
+    if e.call(SAVE_SWAPS_BYTES, &[]).u32() as u8 != 0 {
+        e.call(SWAP_BOOK_DATA, &args![base + 0xc0]);
+    }
+    e.call(CLOSE_FORM, &args![this]);
+}
+
+/// `other` as a `TESObjectBOOK` (`__RTDynamicCast` from `TESForm`), or 0.
+fn as_book(e: &mut Engine, other: u32) -> u32 {
+    e.call(
+        RT_DYNAMIC_CAST,
+        &args![other, 0u32, TYPE_TES_FORM, TYPE_TES_OBJECT_BOOK, 0u32],
+    )
+    .u32()
+}
+
+// Translated from 00514ed0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The book's copy (engine map: no name; `RET 4`): when `other` is a
+/// `TESObjectBOOK`, copies all components (`TESForm::CopyAllComponents` with
+/// `other`) and the 16-bit data word at +0xc0.
+pub fn fn_00514ed0(e: &mut Engine, this: Ptr, other: u32) {
+    let source = as_book(e, other);
+    if source == 0 {
+        return;
+    }
+    e.call(COPY_ALL_COMPONENTS, &args![this, other]);
+    let data = fn_00514f30(e, Ptr::new(source));
+    let word = e.mem.u16(data);
+    e.mem.set_u16(this.addr() + 0xc0, word);
+}
+
+// Translated from 00514f50 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The book's compare (engine map: no name; `RET 4`): true when `other` is
+/// no `TESObjectBOOK`, when `TESForm::CompareAllComponents` (with the cast
+/// form) says they differ, or when the 2 bytes of data at +0xc0 differ
+/// (`_memcmp`).
+pub fn fn_00514f50(e: &mut Engine, this: Ptr, other: u32) -> bool {
+    let source = as_book(e, other);
+    if source == 0 {
+        return true;
+    }
+    if e.call(COMPARE_ALL_COMPONENTS, &args![this, source]).u32() as u8 != 0 {
+        return true;
+    }
+    let data = fn_00514f30(e, Ptr::new(source));
+    e.call(MEMCMP, &args![this.addr() + 0xc0, data, 2u32]).u32() != 0
+}
+
+// Translated from 00514fd0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The skill a book teaches (engine map: no name; no stack words): -1 when
+/// the signed byte at +0xc1 is -1, else `ActorValue::ToActorValue(2, byte)`.
+pub fn fn_00514fd0(e: &mut Engine, this: Ptr) -> u32 {
+    if e.mem.i8(this.addr() + 0xc1) == -1 {
+        return 0xffff_ffff;
+    }
+    let skill = u32::from(e.mem.u8(this.addr() + 0xc1));
+    e.call(TO_ACTOR_VALUE, &args![2u32, skill]).u32()
+}
+
+// Translated from 00515010 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Forwards its five words to `0050f670` on `this` (the third as a byte,
+/// zero-extended) and answers what it answers (engine map: no name;
+/// `RET 0x14`).
+pub fn fn_00515010(
+    e: &mut Engine,
+    this: Ptr,
+    first: u32,
+    second: u32,
+    third: u8,
+    fourth: u32,
+    fifth: u32,
+) -> u32 {
+    e.call(
+        OBJECT_ACTIVATE_0050F670,
+        &args![this, first, second, u32::from(third), fourth, fifth],
+    )
+    .u32()
+}
+
+/// The message box `007052f0` with `text`, `second`, 0, 0, the float at
+/// `010162c0` (`FLD`/`FSTP` copy) and 0.
+fn show_message(e: &mut Engine, text: u32, second: u32) {
+    let float = x87_quiet_bits(e.global::<u32>(MESSAGE_FLOAT));
+    e.call(SHOW_MESSAGE, &args![text, second, 0u32, 0u32, float, 0u32]);
+}
+
+// Translated from 00515040 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 00515040 - the FS:[0] exception frame (it destroys the message string if a step throws) is not translated.
+/// `TESObjectBOOK::Read` (engine map; `RET 4`, the reader as a reference):
+/// casts the reader to `Actor` (no null check before its vtable slot
+/// `+0x360`); when that slot answers false, false. When `00493bb0` answers
+/// true and the interface is not in menu mode, shows the "cannot read now"
+/// message (`011d4ccc`) and answers false. Otherwise, when the book's skill
+/// (`fn_00514fd0`) passes `0047f060` and the player's value of it (the
+/// player's `+0xa4` part, vtable slot `+0x1c`) is below 200: takes the
+/// skill points setting (`011c9284`), lets entry point 0xb adjust them
+/// (`BGSEntryPoint::HandleEntryPoint(0xb, player, &points)`), raises the
+/// skill (player vtable slot `+0x3a4` with the skill, the points and 0),
+/// counts misc stat 0xf, formats the message (`011d49c0`, the skill's name,
+/// the points through `_ftol2`) into a string, shows it and answers true.
+/// Else false. The string and the points the game keeps on its stack are a
+/// block here.
+pub fn tes_object_book_read(e: &mut Engine, this: Ptr, reader: u32) -> bool {
+    let actor = e
+        .call(
+            RT_DYNAMIC_CAST,
+            &args![reader, 0u32, TYPE_TES_OBJECT_REFR, TYPE_ACTOR, 0u32],
+        )
+        .u32();
+    if e.vcall(actor, 0x360, &[]).u32() as u8 == 0 {
+        return false;
+    }
+    if e.call(ACTOR_CHECK_00493BB0, &args![actor]).u32() as u8 != 0
+        && e.call(IS_IN_MENU_MODE, &[]).u32() as u8 == 0
+    {
+        let text = e.call(SETTING_STRING, &args![CANNOT_READ_SETTING]).u32();
+        show_message(e, text, 0);
+        return false;
+    }
+    let skill = fn_00514fd0(e, this);
+    if e.call(SKILL_CHECK_0047F060, &args![skill]).u32() as u8 == 0 {
+        return false;
+    }
+    let player = e.global::<u32>(PLAYER);
+    let current = e.vcall(player + 0xa4, 0x1c, &args![skill]).i32();
+    if current >= 0xc8 {
+        return false;
+    }
+    e.with_stack(0xc, |e, locals| {
+        let points_at = locals.addr();
+        let message = locals.addr() + 4;
+        let setting = e
+            .call(SETTING_FLOAT_ADDRESS, &args![BOOK_SKILL_POINTS_SETTING])
+            .u32();
+        let points = x87_quiet_bits(e.mem.u32(setting));
+        e.mem.set_u32(points_at, points);
+        e.call(STRING_CONSTRUCT, &args![message]);
+        let player = e.global::<u32>(PLAYER);
+        e.call(HANDLE_ENTRY_POINT, &args![0xbu32, player, points_at]);
+        let points = x87_quiet_bits(e.mem.u32(points_at));
+        let player = e.global::<u32>(PLAYER);
+        e.vcall(player, 0x3a4, &args![skill, points, 0u32]);
+        e.call(MISC_STAT_INCREMENT, &args![0xfu32]);
+        let value = x87_load32(e.mem.u32(points_at));
+        let whole = e.call(FTOL2, &args![value]).u32();
+        let name = e.call(ACTOR_VALUE_NAME, &args![skill]).u32();
+        let format = e.call(SETTING_STRING, &args![SKILL_MESSAGE_SETTING]).u32();
+        e.call(STRING_FORMAT, &args![message, format, name, whole]);
+        let text = e.call(STRING_TEXT, &args![message]).u32();
+        show_message(e, text, 1);
+        e.call(STRING_DESTRUCT, &args![message]);
+    });
+    true
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
         entry!(0x0051_4870, tes_object_book_init_item(Ptr)),
         entry!(0x0051_4930, fn_00514930(Ptr, Ptr) -> bool),
         entry!(0x0051_4f30, fn_00514f30(Ptr) -> u32),
+        entry!(0x0051_4de0, tes_object_book_save(Ptr)),
+        entry!(0x0051_4ed0, fn_00514ed0(Ptr, u32)),
+        entry!(0x0051_4f50, fn_00514f50(Ptr, u32) -> bool),
+        entry!(0x0051_4fd0, fn_00514fd0(Ptr) -> u32),
+        entry!(
+            0x0051_5010,
+            fn_00515010(Ptr, u32, u32, u8, u32, u32) -> u32
+        ),
+        entry!(0x0051_5040, tes_object_book_read(Ptr, u32) -> bool),
     ]
 }
 
@@ -420,5 +692,238 @@ mod tests {
             calls_to(&log, LOAD_DATA),
             vec![vec![this, file, this + 0xc0, 2]]
         );
+    }
+}
+
+#[cfg(test)]
+mod save_read_tests {
+    use super::*;
+
+    type Log = Vec<(u32, Vec<u32>)>;
+
+    fn ret(eax: u32) -> Ret {
+        Ret {
+            eax,
+            ..Ret::default()
+        }
+    }
+
+    fn only(log: &Log, addr: u32) -> Vec<Vec<u32>> {
+        log.iter()
+            .filter(|(a, _)| *a == addr)
+            .map(|(_, w)| w.clone())
+            .collect()
+    }
+
+    fn run(e: &mut Engine, addr: u32, words: &[u32]) -> (Ret, Log) {
+        e.call_log = Some(vec![]);
+        let r = e.call(addr, words);
+        (r, e.call_log.take().unwrap())
+    }
+
+    fn quiet(e: &mut Engine, addrs: &[u32]) {
+        for a in addrs {
+            e.register(*a, |_, _| Ret::default());
+        }
+    }
+
+    #[test]
+    fn save_writes_components_and_data() {
+        let mut e = Engine::new();
+        quiet(
+            &mut e,
+            &[
+                START_FORM,
+                CLOSE_FORM,
+                FULL_NAME_SAVE,
+                MODEL_TEXTURE_SWAP_SAVE,
+                TEXTURE_SAVE,
+                MESSAGE_ICON_SAVE,
+                SCRIPTABLE_FORM_SAVE,
+                ENCHANTABLE_SAVE,
+                DESCRIPTION_SAVE,
+                DESTRUCTIBLE_SAVE,
+                PICKUP_PUTDOWN_SAVE,
+                SWAP_BOOK_DATA,
+                SAVE_DATA,
+            ],
+        );
+        e.register(SAVE_SWAPS_BYTES, |_, _| ret(1));
+        let this = e.mem.alloc(0xc4);
+        let (_, log) = run(&mut e, 0x0051_4de0, &args![this]);
+        assert_eq!(
+            only(&log, MODEL_TEXTURE_SWAP_SAVE),
+            vec![vec![this + 0x3c, SIG_MODL, SIG_MODT, SIG_MODS]]
+        );
+        assert_eq!(only(&log, TEXTURE_SAVE), vec![vec![this + 0x5c, SIG_ICON]]);
+        assert_eq!(
+            only(&log, MESSAGE_ICON_SAVE),
+            vec![vec![this + 0xa4, SIG_MICO]]
+        );
+        for (save, offset) in [
+            (FULL_NAME_SAVE, 0x30),
+            (SCRIPTABLE_FORM_SAVE, 0x68),
+            (ENCHANTABLE_SAVE, 0x74),
+            (DESCRIPTION_SAVE, 0x94),
+            (DESTRUCTIBLE_SAVE, 0x9c),
+            (PICKUP_PUTDOWN_SAVE, 0xb4),
+        ] {
+            assert_eq!(only(&log, save), vec![vec![this + offset]]);
+        }
+        assert_eq!(only(&log, SAVE_DATA), vec![vec![this, this + 0xc0, 2]]);
+        assert_eq!(only(&log, SWAP_BOOK_DATA).len(), 2);
+        assert_eq!(only(&log, CLOSE_FORM), vec![vec![this]]);
+    }
+
+    #[test]
+    fn copy_and_compare_use_the_data_word() {
+        let mut e = Engine::new();
+        e.register(RT_DYNAMIC_CAST, |_, a| ret(a[0]));
+        e.register(COPY_ALL_COMPONENTS, |_, _| Ret::default());
+        e.register(COMPARE_ALL_COMPONENTS, |_, _| ret(0x100));
+        e.register(MEMCMP, |e, a| {
+            let differ = (0..a[2]).any(|i| e.mem.u8(a[0] + i) != e.mem.u8(a[1] + i));
+            ret(u32::from(differ))
+        });
+        let this = e.mem.alloc(0xc4);
+        let other = e.mem.alloc(0xc4);
+        e.mem.set_u32(other + 0xc0, 0xaabb_1234);
+        e.mem.set_u32(this + 0xc0, 0xccdd_0000);
+        assert!(e.call(0x0051_4f50, &args![this, other]).bool());
+        let (_, log) = run(&mut e, 0x0051_4ed0, &args![this, other]);
+        assert_eq!(only(&log, COPY_ALL_COMPONENTS), vec![vec![this, other]]);
+        assert_eq!(e.mem.u32(this + 0xc0), 0xccdd_1234);
+        assert!(!e.call(0x0051_4f50, &args![this, other]).bool());
+        e.register(COMPARE_ALL_COMPONENTS, |_, _| ret(1));
+        assert!(e.call(0x0051_4f50, &args![this, other]).bool());
+        e.register(RT_DYNAMIC_CAST, |_, _| ret(0));
+        assert!(e.call(0x0051_4f50, &args![this, other]).bool());
+        e.mem.set_u16(other + 0xc0, 0x5555);
+        e.call(0x0051_4ed0, &args![this, other]);
+        assert_eq!(e.mem.u16(this + 0xc0), 0x1234);
+    }
+
+    #[test]
+    fn skill_is_minus_one_or_the_actor_value() {
+        let mut e = Engine::new();
+        e.register(TO_ACTOR_VALUE, |_, a| ret(a[0] * 0x100 + a[1]));
+        let this = e.mem.alloc(0xc4);
+        e.mem.set_u8(this + 0xc1, 0xff);
+        assert_eq!(e.call(0x0051_4fd0, &args![this]).u32(), 0xffff_ffff);
+        e.mem.set_u8(this + 0xc1, 0x8e);
+        assert_eq!(e.call(0x0051_4fd0, &args![this]).u32(), 0x28e);
+    }
+
+    #[test]
+    fn forwarder_passes_five_words_with_a_byte() {
+        let mut e = Engine::new();
+        e.register(OBJECT_ACTIVATE_0050F670, |_, a| ret(a[3] + a[5]));
+        let (r, log) = run(
+            &mut e,
+            0x0051_5010,
+            &args![0x500u32, 1u32, 2u32, 0x1ffu32, 4u32, 5u32],
+        );
+        assert_eq!(
+            only(&log, OBJECT_ACTIVATE_0050F670),
+            vec![vec![0x500, 1, 2, 0xff, 4, 5]]
+        );
+        assert_eq!(r.eax, 0xff + 5);
+    }
+
+    /// The reader actor: vtable slot `+0x360` answers `can_read`; the
+    /// player's `+0xa4` part answers `skill_value` from slot `+0x1c`.
+    fn read_engine(can_read: u32, busy: u32, skill_value: u32) -> (Engine, u32, u32) {
+        let mut e = Engine::new();
+        e.register(RT_DYNAMIC_CAST, |_, a| ret(a[0]));
+        let actor = e.mem.alloc(0x10);
+        let vtable = e.mem.alloc(0x400);
+        e.mem.set_u32(actor, vtable);
+        e.mem.set_u32(vtable + 0x360, 0x0f46_0360);
+        e.register_double(0x0f46_0360, move |_, _| ret(can_read));
+        e.register_double(ACTOR_CHECK_00493BB0, move |_, _| ret(busy));
+        e.register(IS_IN_MENU_MODE, |_, _| ret(0));
+        e.register(SETTING_STRING, |_, a| ret(a[0] + 1));
+        e.register(SHOW_MESSAGE, |_, _| Ret::default());
+        e.register(TO_ACTOR_VALUE, |_, a| ret(a[1]));
+        e.register(SKILL_CHECK_0047F060, |_, a| ret(u32::from(a[0] == 0x2b)));
+        e.map(PLAYER & !0xfff, 0x1000);
+        let player = e.mem.alloc(0x100);
+        e.set_global::<u32>(PLAYER, player);
+        let player_vtable = e.mem.alloc(0x400);
+        e.mem.set_u32(player, player_vtable);
+        e.mem.set_u32(player_vtable + 0x3a4, 0x0f46_03a4);
+        e.register(0x0f46_03a4, |_, _| Ret::default());
+        let part_vtable = e.mem.alloc(0x20);
+        e.mem.set_u32(player + 0xa4, part_vtable);
+        e.mem.set_u32(part_vtable + 0x1c, 0x0f46_001c);
+        e.register_double(0x0f46_001c, move |_, _| ret(skill_value));
+        let setting = e.mem.alloc(4);
+        e.mem.set_u32(setting, 1.0f32.to_bits());
+        e.register_double(SETTING_FLOAT_ADDRESS, move |_, _| ret(setting));
+        e.register(HANDLE_ENTRY_POINT, |e, a| {
+            let v = f32::from_bits(e.mem.u32(a[2])) * 2.0;
+            e.mem.set_u32(a[2], v.to_bits());
+            Ret::default()
+        });
+        e.register(MISC_STAT_INCREMENT, |_, _| Ret::default());
+        e.register(FTOL2, |_, a| {
+            let value = f64::from_bits(u64::from(a[0]) | u64::from(a[1]) << 32);
+            ret(value as i32 as u32)
+        });
+        e.register(ACTOR_VALUE_NAME, |_, a| ret(0x4000 + a[0]));
+        e.register(STRING_CONSTRUCT, |_, _| Ret::default());
+        e.register(STRING_FORMAT, |_, _| Ret::default());
+        e.register(STRING_TEXT, |_, a| ret(a[0] + 0x10));
+        e.register(STRING_DESTRUCT, |_, _| Ret::default());
+        e.map(MESSAGE_FLOAT & !0xfff, 0x1000);
+        e.set_global::<u32>(MESSAGE_FLOAT, 2.0f32.to_bits());
+        let book = e.mem.alloc(0xc4);
+        e.mem.set_u8(book + 0xc1, 0x2b);
+        (e, book, actor)
+    }
+
+    #[test]
+    fn read_raises_the_skill_and_shows_the_message() {
+        let (mut e, book, actor) = read_engine(1, 0, 50);
+        let (r, log) = run(&mut e, 0x0051_5040, &args![book, actor]);
+        assert!(r.eax & 0xff != 0);
+        assert_eq!(
+            only(&log, HANDLE_ENTRY_POINT)[0][..2],
+            [0xb, e.global::<u32>(PLAYER)]
+        );
+        assert_eq!(only(&log, 0x0f46_03a4)[0][1..], [0x2b, 2.0f32.to_bits(), 0]);
+        assert_eq!(only(&log, MISC_STAT_INCREMENT), vec![vec![0xf]]);
+        let format = only(&log, STRING_FORMAT);
+        assert_eq!(format[0][1..], [SKILL_MESSAGE_SETTING + 1, 0x402b, 2]);
+        let message = format[0][0];
+        assert_eq!(
+            only(&log, SHOW_MESSAGE),
+            vec![vec![message + 0x10, 1, 0, 0, 2.0f32.to_bits(), 0]]
+        );
+        assert_eq!(only(&log, STRING_DESTRUCT), vec![vec![message]]);
+    }
+
+    #[test]
+    fn read_stops_early_in_each_case() {
+        let (mut e, book, actor) = read_engine(0x100, 0, 50);
+        let (r, log) = run(&mut e, 0x0051_5040, &args![book, actor]);
+        assert_eq!(r.eax & 0xff, 0);
+        assert!(only(&log, SHOW_MESSAGE).is_empty());
+        let (mut e, book, actor) = read_engine(1, 1, 50);
+        let (r, log) = run(&mut e, 0x0051_5040, &args![book, actor]);
+        assert_eq!(r.eax & 0xff, 0);
+        assert_eq!(
+            only(&log, SHOW_MESSAGE),
+            vec![vec![CANNOT_READ_SETTING + 1, 0, 0, 0, 2.0f32.to_bits(), 0]]
+        );
+        let (mut e, book, actor) = read_engine(1, 0, 200);
+        let (r, log) = run(&mut e, 0x0051_5040, &args![book, actor]);
+        assert_eq!(r.eax & 0xff, 0);
+        assert!(only(&log, HANDLE_ENTRY_POINT).is_empty());
+        let (mut e, book, actor) = read_engine(1, 0, 50);
+        e.mem.set_u8(book + 0xc1, 0x2c);
+        let (r, log) = run(&mut e, 0x0051_5040, &args![book, actor]);
+        assert_eq!(r.eax & 0xff, 0);
+        assert!(only(&log, 0x0f46_001c).is_empty());
     }
 }

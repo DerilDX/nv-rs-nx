@@ -283,6 +283,180 @@ pub fn tes_weather_list_load_weather_list_chunk(e: &mut Engine, list: Ptr, file:
     e.call(OPERATOR_DELETE, &args![array]);
 }
 
+/// `VATS::GetCount` in the engine map (`005ae380`, `ECX` = list; a folded body): the list's
+/// item count.
+const LIST_COUNT: u32 = 0x005a_e380;
+/// `00401500` (`cdecl`, no words): the byte at `011c54ba`, whether saved data has its byte
+/// order swapped.
+const SWAPS_BYTE_ORDER: u32 = 0x0040_1500;
+/// `TESForm::__AddChunkData` (engine map, `00485990`, `cdecl`: chunk, data, size).
+const ADD_CHUNK_DATA: u32 = 0x0048_5990;
+/// The game's `memcpy` wrapper (`00401460`, `cdecl`: destination, source, size).
+const MEMCPY: u32 = 0x0040_1460;
+/// `_memcmp` (engine map, `00ec4835`, `cdecl`).
+const MEMCMP: u32 = 0x00ec_4835;
+/// `008256d0` (`ECX` = list): whether its head node is empty (both words 0).
+const LIST_IS_EMPTY: u32 = 0x0082_56d0;
+/// `00905820` (`ECX` = list, one stack word: the address of the item): adds an item to a
+/// `BSSimpleList`.
+const LIST_ADD_00905820: u32 = 0x0090_5820;
+
+/// The byte size the exe allocates for `count` entries of 0xc bytes: `count * 0xc`, or all
+/// ones when the product overflows (`MUL`, `SETO`, `NEG`, `OR`).
+fn entry_array_size(count: u32) -> u32 {
+    let size = u64::from(count) * 0xc;
+    if size > u64::from(u32::MAX) {
+        u32::MAX
+    } else {
+        size as u32
+    }
+}
+
+/// When saved data is byte-swapped (`00401500`): `005a6b10` on each of the first `count`
+/// entries of the array.
+fn swap_entries(e: &mut Engine, array: u32, count: u32) {
+    if !e.call(SWAPS_BYTE_ORDER, &[]).bool() {
+        return;
+    }
+    let mut index = 0u32;
+    while index < count {
+        e.call(
+            SWAP_THREE_WORDS,
+            &args![index.wrapping_mul(0xc).wrapping_add(array)],
+        );
+        index += 1;
+    }
+}
+
+// Translated from 00582380 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 00582380 - the FS:[0] exception frame (unwinding the array allocation) is not translated.
+/// `TESWeatherList::Save` (Xbox PDB, `ECX` = the list, `RET 4`: the chunk): for a list with
+/// items (`005ae380`), builds an array of 0xc-byte entries (`00401000` with the overflow-safe
+/// size, each cleared by `00582570` through the vector constructor `00401050`): for every node
+/// (empty items are not skipped) the weather's form id (`0084e3a0`), the chance word and the
+/// global's form id (0 without one). The entries are byte-swapped (`005a6b10`) around the
+/// chunk write (`TESForm::__AddChunkData`) when `00401500` says so, and the array deleted.
+/// The exception frame around the vector construction is not translated.
+pub fn tes_weather_list_save(e: &mut Engine, this: Ptr, chunk: u32) {
+    let count = e.call(LIST_COUNT, &args![this]).u32();
+    if count == 0 {
+        return;
+    }
+    let block = e.call(ALLOCATE, &args![entry_array_size(count)]).u32();
+    let array = if block != 0 {
+        e.call(
+            VECTOR_CONSTRUCTOR,
+            &args![block, 0xcu32, count, 0x0058_2570u32],
+        );
+        block
+    } else {
+        0
+    };
+    let mut index = 0u32;
+    let mut node = this.addr();
+    while node != 0 {
+        let entry_at = array.wrapping_add(index.wrapping_mul(0xc));
+        let item_at = e.call(LIST_ITEM_006815C0, &args![node]).u32();
+        let weather = e.mem.u32(e.mem.u32(item_at));
+        let id = e.call(FORM_ID_0084E3A0, &args![weather]).u32();
+        e.mem.set_u32(entry_at, id);
+        let item_at = e.call(LIST_ITEM_006815C0, &args![node]).u32();
+        let chance = e.mem.u32(e.mem.u32(item_at).wrapping_add(4));
+        e.mem.set_u32(entry_at.wrapping_add(4), chance);
+        let item_at = e.call(LIST_ITEM_006815C0, &args![node]).u32();
+        let global_id = if e.mem.u32(e.mem.u32(item_at).wrapping_add(8)) != 0 {
+            let item_at = e.call(LIST_ITEM_006815C0, &args![node]).u32();
+            let global = e.mem.u32(e.mem.u32(item_at).wrapping_add(8));
+            e.call(FORM_ID_0084E3A0, &args![global]).u32()
+        } else {
+            0
+        };
+        e.mem.set_u32(entry_at.wrapping_add(8), global_id);
+        index = index.wrapping_add(1);
+        node = e.call(NODE_FOLLOWING_00726070, &args![node]).u32();
+    }
+    swap_entries(e, array, index);
+    e.call(
+        ADD_CHUNK_DATA,
+        &args![chunk, array, index.wrapping_mul(0xc)],
+    );
+    swap_entries(e, array, index);
+    e.call(OPERATOR_DELETE, &args![array]);
+}
+
+// Translated from 005825a0 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 005825a0 - the FS:[0] exception frame (unwinding the entry allocation) is not translated.
+/// Unnamed in the map (`ECX` = the list, `RET 8`: another list and a byte flag; a copy by its
+/// body): with another list, first frees this list's entries (`00582780`) unless the flag is
+/// set; then, unless the other list is empty (`008256d0`), adds a copy of each of its entries
+/// (every node, empty items included): a new 0xc-byte entry (`00401000`, `00824340`; null when
+/// the allocation fails) gets the entry's 12 bytes (`00401460`) and is added (`00905820`).
+/// The exception frame around the entry's construction is not translated.
+pub fn fn_005825a0(e: &mut Engine, this: Ptr, other: u32, keep: u8) {
+    if other == 0 {
+        return;
+    }
+    if keep == 0 {
+        fn_00582780(e, this);
+    }
+    if e.call(LIST_IS_EMPTY, &args![other]).bool() {
+        return;
+    }
+    let mut node = other;
+    while node != 0 {
+        let block = e.call(ALLOCATE, &args![0xcu32]).u32();
+        let entry = if block != 0 {
+            e.call(NEW_ENTRY_00824340, &args![block]).u32()
+        } else {
+            0
+        };
+        let item_at = e.call(LIST_ITEM_006815C0, &args![node]).u32();
+        let source = e.mem.u32(item_at);
+        e.call(MEMCPY, &args![entry, source, 0xcu32]);
+        e.with_stack(4, |e, slot| {
+            e.mem.set_u32(slot.addr(), entry);
+            e.call(LIST_ADD_00905820, &args![this, slot]);
+        });
+        node = e.call(NODE_FOLLOWING_00726070, &args![node]).u32();
+    }
+}
+
+// Translated from 00582690 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the map (`ECX` = the list, `RET 4`: another list; a comparison by its body):
+/// true ("different") without another list; false when both are empty (`008256d0`); true
+/// when their counts differ (`005ae380`); otherwise true when some entry of this list (every
+/// node) has no 12-byte match (`_memcmp`) among the other's nodes, else false. The inner walk
+/// steps once more after a match.
+pub fn fn_00582690(e: &mut Engine, this: Ptr, other: u32) -> bool {
+    if other == 0 {
+        return true;
+    }
+    if e.call(LIST_IS_EMPTY, &args![this]).bool() && e.call(LIST_IS_EMPTY, &args![other]).bool() {
+        return false;
+    }
+    let mine = e.call(LIST_COUNT, &args![this]).u32();
+    if mine != e.call(LIST_COUNT, &args![other]).u32() {
+        return true;
+    }
+    let mut node = this.addr();
+    while node != 0 {
+        let mut found = false;
+        let mut theirs = other;
+        while !found && theirs != 0 {
+            let item_at = e.call(LIST_ITEM_006815C0, &args![theirs]).u32();
+            let their_entry = e.mem.u32(item_at);
+            let item_at = e.call(LIST_ITEM_006815C0, &args![node]).u32();
+            let my_entry = e.mem.u32(item_at);
+            found = e.call(MEMCMP, &args![my_entry, their_entry, 0xcu32]).u32() == 0;
+            theirs = e.call(NODE_FOLLOWING_00726070, &args![theirs]).u32();
+        }
+        if !found {
+            return true;
+        }
+        node = e.call(NODE_FOLLOWING_00726070, &args![node]).u32();
+    }
+    false
+}
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -294,6 +468,9 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
             0x0058_2940,
             tes_weather_list_load_weather_list_chunk(Ptr, Ptr, Ptr)
         ),
+        entry!(0x0058_2380, tes_weather_list_save(Ptr, u32)),
+        entry!(0x0058_25a0, fn_005825a0(Ptr, u32, u8)),
+        entry!(0x0058_2690, fn_00582690(Ptr, u32) -> bool),
     ]
 }
 
@@ -604,5 +781,188 @@ mod list_tests {
         assert_eq!(calls(&e, GET_CHUNK_DATA_SIZED), vec![vec![FILE, 0, 0x18]]);
         assert_eq!(calls(&e, ADD_COMPILE_INDEX)[2], vec![0xc, FILE]);
         assert_eq!(calls(&e, OPERATOR_DELETE).last().unwrap(), &vec![0]);
+    }
+}
+
+#[cfg(test)]
+mod n045_tests {
+    use super::*;
+
+    type Log = Vec<(u32, Vec<u32>)>;
+
+    fn only(log: &Log, addr: u32) -> Vec<Vec<u32>> {
+        log.iter()
+            .filter(|(a, _)| *a == addr)
+            .map(|(_, w)| w.clone())
+            .collect()
+    }
+
+    fn engine() -> Engine {
+        let mut e = Engine::new();
+        e.register(LIST_ITEM_006815C0, |_, a| a[0].into_ret());
+        e.register(NODE_FOLLOWING_00726070, |e, a| {
+            e.mem.u32(a[0] + 4).into_ret()
+        });
+        e.register(LIST_COUNT, |e, a| {
+            let mut node = a[0];
+            let mut n = 0u32;
+            while node != 0 {
+                if e.mem.u32(node) != 0 {
+                    n += 1;
+                }
+                node = e.mem.u32(node + 4);
+            }
+            n.into_ret()
+        });
+        e.register(LIST_IS_EMPTY, |e, a| {
+            u32::from(e.mem.u32(a[0]) == 0 && e.mem.u32(a[0] + 4) == 0).into_ret()
+        });
+        e.register(ALLOCATE, |e, a| e.mem.alloc(a[0]).into_ret());
+        e.register(VECTOR_CONSTRUCTOR, |_, _| Ret::default());
+        e.register(FORM_ID_0084E3A0, |e, a| e.mem.u32(a[0] + 0xc).into_ret());
+        e.register(ADD_CHUNK_DATA, |_, _| Ret::default());
+        e.register(SWAP_THREE_WORDS, |_, _| Ret::default());
+        e.register(OPERATOR_DELETE, |_, _| Ret::default());
+        e.register(LIST_REMOVE_ALL_00470470, |_, _| Ret::default());
+        e.register(NEW_ENTRY_00824340, |_, a| a[0].into_ret());
+        e.register(MEMCPY, |e, a| {
+            let bytes = e.mem.bytes(a[1], a[2]);
+            e.mem.write(a[0], &bytes);
+            Ret::default()
+        });
+        e.register(MEMCMP, |e, a| {
+            u32::from(e.mem.bytes(a[0], a[2]) != e.mem.bytes(a[1], a[2])).into_ret()
+        });
+        e
+    }
+
+    fn list(e: &mut Engine, items: &[u32]) -> u32 {
+        let head = e.mem.alloc(8);
+        let mut node = head;
+        for (i, item) in items.iter().enumerate() {
+            e.mem.set_u32(node, *item);
+            if i + 1 < items.len() {
+                let next = e.mem.alloc(8);
+                e.mem.set_u32(node + 4, next);
+                node = next;
+            }
+        }
+        head
+    }
+
+    fn entry(e: &mut Engine, words: [u32; 3]) -> u32 {
+        let entry = e.mem.alloc(0xc);
+        for (i, w) in words.iter().enumerate() {
+            e.mem.set_u32(entry + 4 * i as u32, *w);
+        }
+        entry
+    }
+
+    fn form(e: &mut Engine, id: u32) -> u32 {
+        let f = e.mem.alloc(0x10);
+        e.mem.set_u32(f + 0xc, id);
+        f
+    }
+
+    #[test]
+    fn save_writes_ids_chances_and_globals() {
+        let mut e = engine();
+        let swap = std::rc::Rc::new(std::cell::Cell::new(false));
+        let s = swap.clone();
+        e.register_double(SWAPS_BYTE_ORDER, move |_, _| u32::from(s.get()).into_ret());
+        let w1 = form(&mut e, 0x101);
+        let w2 = form(&mut e, 0x102);
+        let g = form(&mut e, 0x201);
+        let a = entry(&mut e, [w1, 30, g]);
+        let b = entry(&mut e, [w2, 70, 0]);
+        let empty = list(&mut e, &[]);
+        e.call_log = Some(vec![]);
+        e.call(0x0058_2380, &[empty, 0x4d414e57]);
+        assert!(e.call_log.take().unwrap().iter().all(|c| c.0 != ALLOCATE));
+        let this = list(&mut e, &[a, b]);
+        let saved = std::rc::Rc::new(std::cell::RefCell::new(vec![]));
+        let s2 = saved.clone();
+        e.register_double(ADD_CHUNK_DATA, move |e, a| {
+            *s2.borrow_mut() = (0..a[2] / 4).map(|i| e.mem.u32(a[1] + 4 * i)).collect();
+            Ret::default()
+        });
+        e.call_log = Some(vec![]);
+        e.call(0x0058_2380, &[this, 0x4d414e57]);
+        let log = e.call_log.take().unwrap();
+        assert_eq!(only(&log, ALLOCATE), vec![vec![0x18]]);
+        let array = only(&log, VECTOR_CONSTRUCTOR)[0][0];
+        assert_eq!(
+            only(&log, VECTOR_CONSTRUCTOR),
+            vec![vec![array, 0xc, 2, 0x0058_2570]]
+        );
+        assert_eq!(*saved.borrow(), vec![0x101, 30, 0x201, 0x102, 70, 0]);
+        assert_eq!(only(&log, ADD_CHUNK_DATA)[0][0], 0x4d414e57);
+        assert!(only(&log, SWAP_THREE_WORDS).is_empty());
+        assert_eq!(only(&log, OPERATOR_DELETE), vec![vec![array]]);
+        swap.set(true);
+        e.call_log = Some(vec![]);
+        e.call(0x0058_2380, &[this, 0x4d414e57]);
+        let log = e.call_log.take().unwrap();
+        let array = only(&log, VECTOR_CONSTRUCTOR)[0][0];
+        assert_eq!(
+            only(&log, SWAP_THREE_WORDS),
+            vec![
+                vec![array],
+                vec![array + 0xc],
+                vec![array],
+                vec![array + 0xc]
+            ]
+        );
+        assert_eq!(entry_array_size(0x1555_5556), u32::MAX);
+    }
+
+    #[test]
+    fn copy_frees_unless_kept_and_copies_each_entry() {
+        let mut e = engine();
+        let a = entry(&mut e, [1, 2, 3]);
+        let source = list(&mut e, &[a]);
+        let this = list(&mut e, &[]);
+        let added = std::rc::Rc::new(std::cell::Cell::new(0));
+        let s = added.clone();
+        e.register_double(LIST_ADD_00905820, move |e, a| {
+            s.set(e.mem.u32(a[1]));
+            Ret::default()
+        });
+        e.call_log = Some(vec![]);
+        e.call(0x0058_25a0, &[this, 0, 0]);
+        assert_eq!(e.call_log.take().unwrap().len(), 1);
+        e.call_log = Some(vec![]);
+        e.call(0x0058_25a0, &[this, source, 1]);
+        let log = e.call_log.take().unwrap();
+        assert!(only(&log, LIST_REMOVE_ALL_00470470).is_empty());
+        let copy = added.get();
+        assert_eq!(e.mem.bytes(copy, 0xc), e.mem.bytes(a, 0xc));
+        let empty = list(&mut e, &[]);
+        e.call_log = Some(vec![]);
+        e.call(0x0058_25a0, &[this, empty, 0]);
+        let log = e.call_log.take().unwrap();
+        assert_eq!(only(&log, LIST_REMOVE_ALL_00470470), vec![vec![this]]);
+        assert!(only(&log, ALLOCATE).is_empty());
+    }
+
+    #[test]
+    fn compare_matches_entries_in_any_order() {
+        let mut e = engine();
+        let a = entry(&mut e, [1, 2, 3]);
+        let b = entry(&mut e, [4, 5, 6]);
+        let a2 = entry(&mut e, [1, 2, 3]);
+        let b2 = entry(&mut e, [4, 5, 6]);
+        let c = entry(&mut e, [4, 5, 7]);
+        let this = list(&mut e, &[a, b]);
+        let same = list(&mut e, &[b2, a2]);
+        let other = list(&mut e, &[a2, c]);
+        let short = list(&mut e, &[a2]);
+        let empty1 = list(&mut e, &[]);
+        let empty2 = list(&mut e, &[]);
+        assert!(e.call(0x0058_2690, &[this, 0]).bool());
+        assert!(!e.call(0x0058_2690, &[empty1, empty2]).bool());
+        assert!(e.call(0x0058_2690, &[this, short]).bool());
+        assert!(!e.call(0x0058_2690, &[this, same]).bool());
+        assert!(e.call(0x0058_2690, &[this, other]).bool());
     }
 }

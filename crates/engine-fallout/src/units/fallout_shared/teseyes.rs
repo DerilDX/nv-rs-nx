@@ -56,6 +56,29 @@ pub fn fn_005fc0f0(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
     this
 }
 
+/// `TESForm::StartForm` (`004855a0`), `TESFullName::Save` (`00487010`),
+/// `TESTexture::Save` (`0048e370`, one chunk word), `TESForm::AddChunk`
+/// with a byte (`004858f0`, `cdecl`) and `TESForm::CloseForm` (`00485680`).
+const SAVE_FORM_START: u32 = 0x0048_55a0;
+const SAVE_FULL_NAME: u32 = 0x0048_7010;
+const SAVE_TEXTURE: u32 = 0x0048_e370;
+const SAVE_CHUNK_BYTE: u32 = 0x0048_58f0;
+const SAVE_FORM_CLOSE: u32 = 0x0048_5680;
+
+// Translated from 005fc1d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TESEyes::Save` (Xbox PDB): starts the form, saves the full name
+/// (+0x18) and the texture (+0x24, `ICON`), adds the flags byte at +0x30
+/// as `DATA` and closes the form.
+pub fn tes_eyes_save(e: &mut Engine, this: Ptr) {
+    let at = this.addr();
+    e.call(SAVE_FORM_START, &args![this]);
+    e.call(SAVE_FULL_NAME, &args![at + 0x18]);
+    e.call(SAVE_TEXTURE, &args![at + 0x24, 0x4e4f_4349u32]);
+    let flags = u32::from(e.mem.u8(at + 0x30));
+    e.call(SAVE_CHUNK_BYTE, &args![0x4154_4144u32, flags]);
+    e.call(SAVE_FORM_CLOSE, &args![this]);
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -63,6 +86,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x005f_c1b0, fn_005fc1b0(Ptr)),
         entry!(0x005f_c120, fn_005fc120(Ptr)),
         entry!(0x005f_c0f0, fn_005fc0f0(Ptr, u32) -> Ptr),
+        entry!(0x005f_c1d0, tes_eyes_save(Ptr)),
     ]
 }
 
@@ -156,5 +180,39 @@ mod b020_tests {
                 assert_eq!(log[3], (0x0040_1030, vec![p]));
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod n043_tests {
+    use super::*;
+
+    #[test]
+    fn save_writes_name_texture_and_flags() {
+        let mut e = Engine::new();
+        for addr in [
+            SAVE_FORM_START,
+            SAVE_FULL_NAME,
+            SAVE_TEXTURE,
+            SAVE_CHUNK_BYTE,
+            SAVE_FORM_CLOSE,
+        ] {
+            e.register(addr, |_, _| Ret::default());
+        }
+        let this = e.mem.alloc(0x34);
+        e.mem.set_u8(this + 0x30, 3);
+        e.call_log = Some(vec![]);
+        e.call(0x005f_c1d0, &args![this]);
+        let log: Vec<(u32, Vec<u32>)> = e.call_log.take().unwrap().into_iter().skip(1).collect();
+        assert_eq!(
+            log,
+            vec![
+                (SAVE_FORM_START, vec![this]),
+                (SAVE_FULL_NAME, vec![this + 0x18]),
+                (SAVE_TEXTURE, vec![this + 0x24, 0x4e4f_4349]),
+                (SAVE_CHUNK_BYTE, vec![0x4154_4144, 3]),
+                (SAVE_FORM_CLOSE, vec![this]),
+            ]
+        );
     }
 }

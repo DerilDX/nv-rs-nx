@@ -832,6 +832,205 @@ pub fn effect_item_list_get_effect_item_index(
     0
 }
 
+/// Thiscall on a list: the number of its nodes holding an item (`005ae380`,
+/// folded code named `VATS::GetCount` in the engine map).
+const LIST_COUNT_005AE380: u32 = 0x005a_e380;
+/// Thiscall on an effect item (the other item), `RET 4`: `AL`, whether the
+/// two items differ (`effectitem.cpp`).
+const ITEM_DIFFERS_004042A0: u32 = 0x0040_42a0;
+/// Thiscall on an effect item: a word compared with `HasScript`'s argument
+/// (`effectitem.cpp`).
+const ITEM_MEMBER_004045E0: u32 = 0x0040_45e0;
+/// `EffectItem::GetDuration` (`004044d0`) and `EffectItem::GetMagnitude`
+/// (`00404390`) (engine map), thiscall: an integer.
+const ITEM_GET_DURATION: u32 = 0x0040_44d0;
+const ITEM_GET_MAGNITUDE: u32 = 0x0040_4390;
+/// The effect item copy constructor (`run_00403b30.rs`), thiscall (source
+/// item), `RET 4`.
+const EFFECT_ITEM_COPY_00403CA0: u32 = 0x0040_3ca0;
+/// `GetEffectItemByIndex`'s warning.
+const NO_ITEM_AT_INDEX_TEXT: u32 = 0x0101_26c8;
+
+// Translated from 00405a00 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`thiscall`, `RET 4`): whether the list differs
+/// from `other`. True when their item counts (`005ae380`, `other`'s first)
+/// differ; false for an empty list; otherwise the two lists are walked side
+/// by side and the answer is true at the first pair of items (both non-null)
+/// that `004042a0` says differ, false at the end.
+pub fn fn_00405a00(e: &mut Engine, this: Ptr<EffectItemList>, other: u32) -> bool {
+    let other_count = e
+        .call(LIST_COUNT_005AE380, &args![other.wrapping_add(4)])
+        .u32();
+    let count = e.call(LIST_COUNT_005AE380, &args![this.addr() + 4]).u32();
+    if other_count != count {
+        return true;
+    }
+    if e.call(LIST_IS_EMPTY, &args![this.addr() + 4]).bool() {
+        return false;
+    }
+    let mut cursor = this.addr();
+    let mut other_cursor = other;
+    while cursor != 0 {
+        let item = cursor_item(e, cursor);
+        let other_item = cursor_item(e, other_cursor);
+        if item != 0
+            && other_item != 0
+            && e.call(ITEM_DIFFERS_004042A0, &args![item, other_item])
+                .bool()
+        {
+            return true;
+        }
+        cursor = next_cursor(e, cursor);
+        other_cursor = next_cursor(e, other_cursor);
+    }
+    false
+}
+
+// Translated from 00405b10 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 00405b10 - the C++ exception frame (FS:[0] chain, unwind state 0 around the new effect item) is not translated.
+/// Unnamed in the engine map (`thiscall`, `RET 4`): makes the list a copy
+/// of `source`'s. Empties it (`00406340`), then for each item of `source`
+/// allocates 0x24 bytes, copies the item into them (`00403ca0`; 0 when the
+/// allocation failed) and adds that (`AddEffect`).
+pub fn fn_00405b10(e: &mut Engine, this: Ptr<EffectItemList>, source: u32) {
+    fn_00406340(e, this);
+    let mut cursor = source;
+    while cursor != 0 {
+        let item = cursor_item(e, cursor);
+        if item != 0 {
+            let memory = e.call(ALLOCATE, &args![0x24u32]).u32();
+            let copy = if memory == 0 {
+                0
+            } else {
+                e.call(EFFECT_ITEM_COPY_00403CA0, &args![memory, item])
+                    .u32()
+            };
+            effect_item_list_add_effect(e, this, copy);
+        }
+        cursor = next_cursor(e, cursor);
+    }
+}
+
+// Translated from 00405c00 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `EffectItemList::GetEffectScore` (engine map; `thiscall`, `RET 0xc`, a
+/// float in `ST0`): the sum, as a `float`, of magnitude times duration
+/// (`EffectItem::GetMagnitude`, `EffectItem::GetDuration`, a duration below
+/// 1 counting as 1; `IMUL`) over the items whose setting's `00810fd0` word
+/// is `archetype`, whose setting's actor value (`00586150`, when the setting
+/// has one, `00403c60`) is `actor_value` unless that is 0x4d, and whose
+/// range (`0084e3a0`) is `range` unless that is 3. Items whose setting has
+/// flag 4 (`00403e60`) are subtracted.
+pub fn effect_item_list_get_effect_score(
+    e: &mut Engine,
+    this: Ptr<EffectItemList>,
+    archetype: u32,
+    range: u32,
+    actor_value: u32,
+) -> f32 {
+    let mut total = 0.0f32.to_bits();
+    let mut cursor = this.addr();
+    while cursor != 0 {
+        let item = cursor_item(e, cursor);
+        if item != 0 {
+            let setting = e.call(ITEM_EFFECT_SETTING, &args![item]).u32();
+            if e.call(WORD_AT_98, &args![setting]).u32() == archetype
+                && (actor_value == 0x4d
+                    || !e.call(SETTING_HAS_ACTOR_VALUE, &args![setting]).bool()
+                    || e.call(WORD_AT_9C, &args![setting]).u32() == actor_value)
+                && (range == 3 || e.call(WORD_AT_C, &args![item]).u32() == range)
+            {
+                let duration = if e.call(ITEM_GET_DURATION, &args![item]).i32() > 0 {
+                    e.call(ITEM_GET_DURATION, &args![item]).i32()
+                } else {
+                    1
+                };
+                let magnitude = e.call(ITEM_GET_MAGNITUDE, &args![item]).i32();
+                let value = x87_store32(f64::from(magnitude.wrapping_mul(duration)));
+                total = if e.call(SETTING_HAS_FLAG, &args![setting, 4u32]).bool() {
+                    x87_store32(x87_sub(x87_load32(total), x87_m32(value)))
+                } else {
+                    x87_store32(x87_add(x87_load32(total), x87_m32(value)))
+                };
+            }
+        }
+        cursor = next_cursor(e, cursor);
+    }
+    f32::from_bits(x87_quiet_bits(total))
+}
+
+// Translated from 00405e80 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `EffectItemList::HasScript` (engine map; `thiscall`, `RET 4`): false
+/// for an empty list; otherwise whether an item's `004045e0` word is
+/// `script` and the item is not flagged `0x400000` (`00405e40`).
+pub fn effect_item_list_has_script(e: &mut Engine, this: Ptr<EffectItemList>, script: u32) -> bool {
+    let mut cursor = this.addr();
+    if e.call(LIST_IS_EMPTY, &args![cursor + 4]).bool() {
+        return false;
+    }
+    let mut found = false;
+    while cursor != 0 && !found {
+        let item = cursor_item(e, cursor);
+        if item != 0
+            && e.call(ITEM_MEMBER_004045E0, &args![item]).u32() == script
+            && !fn_00405e40(e, Ptr::new(item))
+        {
+            found = true;
+        }
+        cursor = next_cursor(e, cursor);
+    }
+    found
+}
+
+// Translated from 00406090 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`thiscall`, plain `RET`): an effect of range 0
+/// not flagged `0x400000`; false for an empty list (the same body as
+/// `HasTargetEffect` with range 0).
+pub fn fn_00406090(e: &mut Engine, this: Ptr<EffectItemList>) -> bool {
+    has_effect_of_range(e, this, 0)
+}
+
+// Translated from 004062a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`thiscall`, plain `RET`): false for an empty
+/// list; otherwise whether an item is flagged `0x400000` (`00405e40`).
+pub fn fn_004062a0(e: &mut Engine, this: Ptr<EffectItemList>) -> bool {
+    let mut found = false;
+    let mut cursor = this.addr();
+    if e.call(LIST_IS_EMPTY, &args![cursor + 4]).bool() {
+        return false;
+    }
+    while cursor != 0 && !found {
+        let item = cursor_item(e, cursor);
+        if item != 0 && fn_00405e40(e, Ptr::new(item)) {
+            found = true;
+        }
+        cursor = next_cursor(e, cursor);
+    }
+    found
+}
+
+// Translated from 00406ee0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `EffectItemList::GetEffectItemByIndex` (engine map; `thiscall`, `RET 4`):
+/// the item at `index` (a byte) of the list; warns (`010126c8`) and returns
+/// 0 when the list is shorter.
+pub fn effect_item_list_get_effect_item_by_index(
+    e: &mut Engine,
+    this: Ptr<EffectItemList>,
+    index: u8,
+) -> u32 {
+    let mut position = 0u8;
+    let mut node = if this.is_null() { 0 } else { this.addr() + 4 };
+    while node != 0 {
+        if position == index {
+            let slot = e.call(SELF, &args![node]).u32();
+            return e.mem.u32(slot);
+        }
+        position = position.wrapping_add(1);
+        node = e.call(NEXT_NODE, &args![node]).u32();
+    }
+    e.call(PRINT_WARNING, &args![NO_ITEM_AT_INDEX_TEXT]);
+    0
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -894,6 +1093,22 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(
             0x0040_6e70,
             effect_item_list_get_effect_item_index(Ptr<EffectItemList>, u32) -> u8
+        ),
+        entry!(0x0040_5a00, fn_00405a00(Ptr<EffectItemList>, u32) -> bool),
+        entry!(0x0040_5b10, fn_00405b10(Ptr<EffectItemList>, u32)),
+        entry!(
+            0x0040_5c00,
+            effect_item_list_get_effect_score(Ptr<EffectItemList>, u32, u32, u32) -> f32
+        ),
+        entry!(
+            0x0040_5e80,
+            effect_item_list_has_script(Ptr<EffectItemList>, u32) -> bool
+        ),
+        entry!(0x0040_6090, fn_00406090(Ptr<EffectItemList>) -> bool),
+        entry!(0x0040_62a0, fn_004062a0(Ptr<EffectItemList>) -> bool),
+        entry!(
+            0x0040_6ee0,
+            effect_item_list_get_effect_item_by_index(Ptr<EffectItemList>, u8) -> u32
         ),
     ]
 }
@@ -1597,5 +1812,238 @@ mod effect_item_list_tests {
             .map(|c| c[0])
             .collect();
         assert_eq!(points, vec![0xc, 0xc, 0x2c]);
+    }
+}
+
+#[cfg(test)]
+mod list_query_tests {
+    use super::*;
+
+    /// List helpers as the game's: `006815c0` the node itself, `00726070`
+    /// the word at +4, `008256d0` whether the first item is null.
+    fn engine() -> Engine {
+        let mut e = Engine::new();
+        e.register(SELF, |_, a| a[0].into_ret());
+        e.register(NEXT_NODE, |e, a| e.mem.u32(a[0] + 4).into_ret());
+        e.register(LIST_IS_EMPTY, |e, a| {
+            u32::from(e.mem.u32(a[0]) == 0).into_ret()
+        });
+        e.register(PRINT_WARNING, |_, _| Ret::default());
+        e
+    }
+
+    fn list_of(e: &mut Engine, items: &[u32]) -> Ptr<EffectItemList> {
+        let list: Ptr<EffectItemList> = e.new_object();
+        let mut node = list.addr() + 4;
+        for (i, item) in items.iter().enumerate() {
+            e.mem.set_u32(node, *item);
+            if i + 1 < items.len() {
+                let next = e.mem.alloc(8);
+                e.mem.set_u32(node + 4, next);
+                node = next;
+            }
+        }
+        list
+    }
+
+    fn calls_to(e: &Engine, addr: u32) -> Vec<Vec<u32>> {
+        e.call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|(a, _)| *a == addr)
+            .map(|(_, words)| words.clone())
+            .collect()
+    }
+
+    /// An item the doubles below read: bit 0 of its first word the
+    /// `0x400000` flag, the word at +4 its range, +8 its `004045e0` word,
+    /// and itself as its effect setting (+0x14).
+    fn item(e: &mut Engine, flagged: bool, range: u32, word: u32) -> u32 {
+        let item = e.mem.alloc(0x24);
+        e.mem.set_u32(item, u32::from(flagged));
+        e.mem.set_u32(item + 4, range);
+        e.mem.set_u32(item + 8, word);
+        e.mem.set_u32(item + 0x14, item);
+        item
+    }
+
+    fn item_doubles(e: &mut Engine) {
+        e.register(SETTING_HAS_FLAG, |e, a| {
+            u32::from(a[1] == 0x0040_0000 && e.mem.u32(a[0]) & 1 != 0).into_ret()
+        });
+        e.register(WORD_AT_C, |e, a| e.mem.u32(a[0] + 4).into_ret());
+        e.register(ITEM_MEMBER_004045E0, |e, a| e.mem.u32(a[0] + 8).into_ret());
+    }
+
+    #[test]
+    fn lists_differ_by_count_or_by_an_item() {
+        let mut e = engine();
+        e.register(LIST_COUNT_005AE380, |e, a| {
+            let mut node = a[0];
+            let mut count = 0u32;
+            while node != 0 {
+                if e.mem.u32(node) != 0 {
+                    count += 1;
+                }
+                node = e.mem.u32(node + 4);
+            }
+            count.into_ret()
+        });
+        e.register(ITEM_DIFFERS_004042A0, |_, a| {
+            u32::from(a[0] % 0x100 != a[1] % 0x100).into_ret()
+        });
+        let a = list_of(&mut e, &[0x1010, 0x1020]);
+        let b = list_of(&mut e, &[0x2010, 0x2020]);
+        let c = list_of(&mut e, &[0x2010, 0x2030]);
+        let d = list_of(&mut e, &[0x2010]);
+        let empty = list_of(&mut e, &[0]);
+        let empty2 = list_of(&mut e, &[0]);
+        assert!(!fn_00405a00(&mut e, a, b.addr()));
+        assert!(fn_00405a00(&mut e, a, c.addr()));
+        assert!(fn_00405a00(&mut e, a, d.addr()));
+        assert!(!e.call(0x0040_5a00, &args![empty, empty2]).bool());
+        e.call_log = Some(vec![]);
+        fn_00405a00(&mut e, a, d.addr());
+        assert_eq!(
+            calls_to(&e, LIST_COUNT_005AE380),
+            vec![vec![d.addr() + 4], vec![a.addr() + 4]]
+        );
+    }
+
+    #[test]
+    fn copy_empties_then_adds_a_copy_of_each_item() {
+        let mut e = engine();
+        e.register(LIST_REMOVE_FIRST, |e, a| {
+            e.mem.set_u32(a[0], 0);
+            Ret::default()
+        });
+        e.register(0x0040_59d0, |_, _| Ret::default());
+        e.register(ITEM_IS_USAGE_MONITOR, |_, _| Ret::default());
+        e.register(ITEM_IS_HOSTILE, |_, _| Ret::default());
+        e.register(LIST_APPEND, |_, _| Ret::default());
+        e.register(ALLOCATE, |e, _| e.mem.alloc(0x24).into_ret());
+        e.register(EFFECT_ITEM_COPY_00403CA0, |_, a| a[0].into_ret());
+        let this = list_of(&mut e, &[0]);
+        let source = list_of(&mut e, &[0x1010, 0, 0x1030]);
+        e.call_log = Some(vec![]);
+        e.call(0x0040_5b10, &args![this, source]);
+        let copies = calls_to(&e, EFFECT_ITEM_COPY_00403CA0);
+        assert_eq!(copies.len(), 2);
+        assert_eq!(copies[0][1], 0x1010);
+        assert_eq!(copies[1][1], 0x1030);
+        assert_eq!(calls_to(&e, ALLOCATE), vec![vec![0x24], vec![0x24]]);
+        assert_eq!(calls_to(&e, LIST_APPEND).len(), 2);
+        // A failed allocation adds a null item.
+        e.register(ALLOCATE, |_, _| Ret::default());
+        e.call_log = Some(vec![]);
+        fn_00405b10(&mut e, this, source.addr());
+        assert!(calls_to(&e, EFFECT_ITEM_COPY_00403CA0).is_empty());
+        assert_eq!(calls_to(&e, ITEM_IS_USAGE_MONITOR), vec![vec![0], vec![0]]);
+    }
+
+    #[test]
+    fn effect_score_sums_matching_items() {
+        let mut e = engine();
+        // Item words: +0 archetype, +4 range, +8 actor value (0 for none),
+        // +0xc duration, +0x10 magnitude, +0x18 subtract flag.
+        e.register(ITEM_EFFECT_SETTING, |_, a| a[0].into_ret());
+        e.register(WORD_AT_98, |e, a| e.mem.u32(a[0]).into_ret());
+        e.register(WORD_AT_C, |e, a| e.mem.u32(a[0] + 4).into_ret());
+        e.register(SETTING_HAS_ACTOR_VALUE, |e, a| {
+            u32::from(e.mem.u32(a[0] + 8) != 0).into_ret()
+        });
+        e.register(WORD_AT_9C, |e, a| e.mem.u32(a[0] + 8).into_ret());
+        e.register(ITEM_GET_DURATION, |e, a| e.mem.u32(a[0] + 0xc).into_ret());
+        e.register(ITEM_GET_MAGNITUDE, |e, a| e.mem.u32(a[0] + 0x10).into_ret());
+        e.register(SETTING_HAS_FLAG, |e, a| {
+            u32::from(a[1] == 4 && e.mem.u32(a[0] + 0x18) != 0).into_ret()
+        });
+        let mut make = |words: [u32; 7]| {
+            let item = e.mem.alloc(0x20);
+            for (i, w) in words.iter().enumerate() {
+                e.mem.set_u32(item + 4 * i as u32, *w);
+            }
+            item
+        };
+        let plain = make([5, 2, 0, 10, 3, 0, 0]); // +30
+        let short = make([5, 1, 7, 0, 4, 0, 0]); // duration 0 counts 1: +4
+        let minus = make([5, 2, 7, (-2i32) as u32, 6, 0, 1]); // -6
+        let other_av = make([5, 2, 8, 1, 100, 0, 0]);
+        let other_kind = make([6, 2, 0, 1, 100, 0, 0]);
+        let list = list_of(&mut e, &[plain, 0, short, minus, other_av, other_kind]);
+        assert_eq!(
+            effect_item_list_get_effect_score(&mut e, list, 5, 3, 7),
+            28.0
+        );
+        assert_eq!(
+            e.call(0x0040_5c00, &args![list, 5u32, 3u32, 0x4du32]).f32(),
+            128.0
+        );
+        assert_eq!(
+            effect_item_list_get_effect_score(&mut e, list, 5, 2, 7),
+            24.0
+        );
+        assert_eq!(
+            effect_item_list_get_effect_score(&mut e, list, 9, 3, 0x4d),
+            0.0
+        );
+    }
+
+    #[test]
+    fn has_script_finds_an_unflagged_match() {
+        let mut e = engine();
+        item_doubles(&mut e);
+        let flagged = item(&mut e, true, 0, 0x77);
+        let plain = item(&mut e, false, 0, 0x77);
+        let empty = list_of(&mut e, &[0]);
+        assert!(!effect_item_list_has_script(&mut e, empty, 0x77));
+        let only_flagged = list_of(&mut e, &[flagged]);
+        assert!(!effect_item_list_has_script(&mut e, only_flagged, 0x77));
+        let both = list_of(&mut e, &[flagged, 0, plain]);
+        assert!(e.call(0x0040_5e80, &args![both, 0x77u32]).bool());
+        assert!(!effect_item_list_has_script(&mut e, both, 0x78));
+    }
+
+    #[test]
+    fn range_zero_effect_and_flagged_effect() {
+        let mut e = engine();
+        item_doubles(&mut e);
+        let flagged_self = item(&mut e, true, 0, 0);
+        let self_item = item(&mut e, false, 0, 0);
+        let touch = item(&mut e, false, 1, 0);
+        let empty = list_of(&mut e, &[0]);
+        assert!(!e.call(0x0040_6090, &args![empty]).bool());
+        assert!(!e.call(0x0040_62a0, &args![empty]).bool());
+        let a = list_of(&mut e, &[touch, flagged_self]);
+        assert!(!fn_00406090(&mut e, a));
+        assert!(fn_004062a0(&mut e, a));
+        let b = list_of(&mut e, &[touch, 0, self_item]);
+        assert!(fn_00406090(&mut e, b));
+        assert!(!fn_004062a0(&mut e, b));
+    }
+
+    #[test]
+    fn item_by_index_or_warning() {
+        let mut e = engine();
+        let list = list_of(&mut e, &[0x10, 0x20, 0x30]);
+        assert_eq!(e.call(0x0040_6ee0, &args![list, 0u32]).u32(), 0x10);
+        // Only the low byte of the index word counts.
+        assert_eq!(e.call(0x0040_6ee0, &args![list, 0x102u32]).u32(), 0x30);
+        e.call_log = Some(vec![]);
+        assert_eq!(
+            effect_item_list_get_effect_item_by_index(&mut e, list, 3),
+            0
+        );
+        assert_eq!(
+            calls_to(&e, PRINT_WARNING),
+            vec![vec![NO_ITEM_AT_INDEX_TEXT]]
+        );
+        e.call_log = Some(vec![]);
+        assert_eq!(
+            effect_item_list_get_effect_item_by_index(&mut e, Ptr::new(0), 0),
+            0
+        );
+        assert_eq!(calls_to(&e, PRINT_WARNING).len(), 1);
     }
 }

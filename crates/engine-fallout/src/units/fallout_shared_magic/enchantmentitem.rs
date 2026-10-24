@@ -305,6 +305,120 @@ pub fn enchantment_item_is_valid_effect_for_enchantment(
     }
 }
 
+/// Thiscall on a spell or enchantment form (two words), `RET 8`
+/// (`spellitem.cpp`).
+const SPELL_ITEM_0040E230: u32 = 0x0040_e230;
+/// The RTTI type descriptors of `MagicItem` and `EnchantmentItem` (their
+/// decorated names at +8).
+const TYPE_MAGIC_ITEM: u32 = 0x0118_3140;
+const TYPE_ENCHANTMENT_ITEM: u32 = 0x0118_3594;
+/// Thiscall: the word at +0x38 (`EnchantmentItemData::iChargeOverride`,
+/// Xbox PDB name, PC offset; folded code).
+const WORD_AT_38: u32 = 0x009e_32d0;
+/// Thiscall: the word at +0x3c (`EnchantmentItemData::iCostOverride`; folded
+/// code).
+const WORD_AT_3C: u32 = 0x0063_9b40;
+/// Thiscall (word), `RET 4`: stores the word at +0x38 (`spellitem.cpp`).
+const SET_WORD_AT_38: u32 = 0x0040_e500;
+/// Thiscall (word), `RET 4`: stores the word at +0x34 (folded code named
+/// `LowProcess::SetItemBeingUsed` in the engine map).
+const SET_WORD_AT_34: u32 = 0x008d_7dc0;
+/// Thiscall (mask), `RET 4`: whether the byte at +0x40 has a bit of `mask`
+/// (`spellitem.cpp`).
+const FLAGS_AT_40_HAVE: u32 = 0x0040_e210;
+/// `EffectItemList::GetCost` (`effectitemlist.rs`), thiscall (actor), `RET
+/// 4`: a float in `ST0`.
+const EFFECT_LIST_GET_COST: u32 = 0x0040_63e0;
+
+// Translated from 00409100 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`thiscall` on the `MagicItem` base at +0x18,
+/// `RET 4`): `0040e230` on the whole form with 1 and whether the byte
+/// `flag` is zero.
+pub fn fn_00409100(e: &mut Engine, this: Ptr, flag: u8) {
+    let form = this.addr().wrapping_sub(0x18);
+    e.call(
+        SPELL_ITEM_0040E230,
+        &args![form, 1u32, u32::from(flag == 0)],
+    );
+}
+
+// Translated from 00409360 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`thiscall` on the `MagicItem` base at +0x18,
+/// `RET 4`): whether `other` (a `MagicItem`) differs from this
+/// enchantment: true when it is not an `EnchantmentItem`
+/// (`__RTDynamicCast`), or when its charge override (+0x38), cost override
+/// (+0x3c), casting type (+0x34, each through its getter, `other`'s first)
+/// or flags byte (+0x40) differs from this form's.
+pub fn fn_00409360(e: &mut Engine, this: Ptr, other: u32) -> bool {
+    let other = e
+        .call(
+            DYNAMIC_CAST,
+            &args![other, 0u32, TYPE_MAGIC_ITEM, TYPE_ENCHANTMENT_ITEM, 0u32],
+        )
+        .u32();
+    if other == 0 {
+        return true;
+    }
+    let form = this.addr().wrapping_sub(0x18);
+    for getter in [WORD_AT_38, WORD_AT_3C, WORD_AT_34] {
+        let theirs = e.call(getter, &args![other]).u32();
+        let ours = e.call(getter, &args![form]).u32();
+        if theirs != ours {
+            return true;
+        }
+    }
+    e.mem.u8(other + 0x40) != e.mem.u8(this.addr() + 0x28)
+}
+
+// Translated from 00409400 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`thiscall` on the `MagicItem` base at +0x18,
+/// `RET 4`): when `other` (a `MagicItem`) is an `EnchantmentItem`
+/// (`__RTDynamicCast`), copies its charge override (+0x38, `0040e500`),
+/// cost override (+0x3c, `00409480`), casting type (+0x34, `008d7dc0`) and
+/// flags byte (+0x40) into this form; otherwise nothing.
+pub fn fn_00409400(e: &mut Engine, this: Ptr, other: u32) {
+    let other = e
+        .call(
+            DYNAMIC_CAST,
+            &args![other, 0u32, TYPE_MAGIC_ITEM, TYPE_ENCHANTMENT_ITEM, 0u32],
+        )
+        .u32();
+    if other == 0 {
+        return;
+    }
+    let form = this.addr().wrapping_sub(0x18);
+    let charge = e.call(WORD_AT_38, &args![other]).u32();
+    e.call(SET_WORD_AT_38, &args![form, charge]);
+    let cost = e.call(WORD_AT_3C, &args![other]).u32();
+    fn_00409480(e, Ptr::new(form), cost);
+    let casting = e.call(WORD_AT_34, &args![other]).u32();
+    e.call(SET_WORD_AT_34, &args![form, casting]);
+    let flags = e.mem.u8(other + 0x40);
+    e.mem.set_u8(this.addr() + 0x28, flags);
+}
+
+// Translated from 004094a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`thiscall` on the `EffectItemList` at +0x24,
+/// `RET 4`, a float in `ST0`): the enchantment's cost. With flag 1 of the
+/// byte at +0x40 (`0040e210`) it is the cost override (+0x3c, `FILD`);
+/// otherwise `EffectItemList::GetCost(0)` (the argument is not read).
+pub fn fn_004094a0(e: &mut Engine, this: Ptr, _unused_1: u32) -> f64 {
+    let form = this.addr().wrapping_sub(0x24);
+    if e.call(FLAGS_AT_40_HAVE, &args![form, 1u32]).bool() {
+        let cost = e.call(WORD_AT_3C, &args![form]).i32();
+        f64::from(cost)
+    } else {
+        e.call(EFFECT_LIST_GET_COST, &args![this, 0u32]).f64()
+    }
+}
+
+// Translated from 00409700 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`thiscall` on a weapon): whether bit 0 of
+/// the byte at +0xc0 is set.
+pub fn fn_00409700(e: &mut Engine, this: Ptr) -> bool {
+    e.mem.u8(this.addr() + 0xc0) & 1 != 0
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -324,6 +438,11 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
             0x0040_9720,
             enchantment_item_is_valid_effect_for_enchantment(u32, u32, u32) -> bool
         ),
+        entry!(0x0040_9100, fn_00409100(Ptr, u8)),
+        entry!(0x0040_9360, fn_00409360(Ptr, u32) -> bool),
+        entry!(0x0040_9400, fn_00409400(Ptr, u32)),
+        entry!(0x0040_94a0, fn_004094a0(Ptr, u32) -> f64),
+        entry!(0x0040_9700, fn_00409700(Ptr) -> bool),
     ]
 }
 
@@ -600,5 +719,137 @@ mod enchantment_tests {
         let mut e = Engine::new();
         assert!(!e.call(0x0040_9720, &args![0u32, 0u32, 0x7200u32]).bool());
         assert!(!e.call(0x0040_9720, &args![0x7000u32, 0u32, 0u32]).bool());
+    }
+}
+
+#[cfg(test)]
+mod enchantment_copy_tests {
+    use super::*;
+
+    fn calls_to(e: &Engine, addr: u32) -> Vec<Vec<u32>> {
+        e.call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|(a, _)| *a == addr)
+            .map(|(_, words)| words.clone())
+            .collect()
+    }
+
+    /// Getters and setters as the game's; the cast answers the object at
+    /// `a[0] - 0x18` unless it is 0x9000 (not an enchantment).
+    fn engine() -> Engine {
+        let mut e = Engine::new();
+        e.register(DYNAMIC_CAST, |_, a| {
+            if a[0] == 0x9000 {
+                Ret::default()
+            } else {
+                (a[0] - 0x18).into_ret()
+            }
+        });
+        e.register(WORD_AT_38, |e, a| e.mem.u32(a[0] + 0x38).into_ret());
+        e.register(WORD_AT_3C, |e, a| e.mem.u32(a[0] + 0x3c).into_ret());
+        e.register(WORD_AT_34, |e, a| e.mem.u32(a[0] + 0x34).into_ret());
+        e.register(SET_WORD_AT_38, |e, a| {
+            e.mem.set_u32(a[0] + 0x38, a[1]);
+            Ret::default()
+        });
+        e.register(SET_WORD_AT_34, |e, a| {
+            e.mem.set_u32(a[0] + 0x34, a[1]);
+            Ret::default()
+        });
+        e
+    }
+
+    fn form(e: &mut Engine, words: [u32; 3], flags: u8) -> u32 {
+        let form = e.mem.alloc(0x44);
+        e.mem.set_u32(form + 0x34, words[0]);
+        e.mem.set_u32(form + 0x38, words[1]);
+        e.mem.set_u32(form + 0x3c, words[2]);
+        e.mem.set_u8(form + 0x40, flags);
+        form
+    }
+
+    #[test]
+    fn flag_call_passes_one_and_the_inverted_byte() {
+        let mut e = Engine::new();
+        e.register(SPELL_ITEM_0040E230, |_, _| Ret::default());
+        e.call_log = Some(vec![]);
+        e.call(0x0040_9100, &args![0x1018u32, 0x100u32]);
+        e.call(0x0040_9100, &args![0x1018u32, 1u32]);
+        assert_eq!(
+            calls_to(&e, SPELL_ITEM_0040E230),
+            vec![vec![0x1000, 1, 1], vec![0x1000, 1, 0]]
+        );
+    }
+
+    #[test]
+    fn enchantments_differ_by_any_value() {
+        let mut e = engine();
+        let this = form(&mut e, [1, 2, 3], 4);
+        let same = form(&mut e, [1, 2, 3], 4);
+        assert!(!e.call(0x0040_9360, &args![this + 0x18, same + 0x18]).bool());
+        assert!(fn_00409360(&mut e, Ptr::new(this + 0x18), 0x9000));
+        for (words, flags) in [
+            ([1, 2, 9], 4),
+            ([1, 9, 3], 4),
+            ([9, 2, 3], 4),
+            ([1, 2, 3], 5),
+        ] {
+            let other = form(&mut e, words, flags);
+            assert!(fn_00409360(&mut e, Ptr::new(this + 0x18), other + 0x18));
+        }
+    }
+
+    #[test]
+    fn copy_takes_the_other_enchantments_values() {
+        let mut e = engine();
+        let this = form(&mut e, [0, 0, 0], 0);
+        let other = form(&mut e, [3, 0x55, 0x66], 0x81);
+        e.call(0x0040_9400, &args![this + 0x18, other + 0x18]);
+        assert_eq!(e.mem.u32(this + 0x34), 3);
+        assert_eq!(e.mem.u32(this + 0x38), 0x55);
+        assert_eq!(e.mem.u32(this + 0x3c), 0x66);
+        assert_eq!(e.mem.u8(this + 0x40), 0x81);
+        e.call_log = Some(vec![]);
+        fn_00409400(&mut e, Ptr::new(this + 0x18), 0x9000);
+        assert!(calls_to(&e, SET_WORD_AT_38).is_empty());
+    }
+
+    #[test]
+    fn cost_is_the_override_or_the_effects_cost() {
+        let mut e = Engine::new();
+        e.register(FLAGS_AT_40_HAVE, |e, a| {
+            u32::from(u32::from(e.mem.u8(a[0] + 0x40)) & a[1] != 0).into_ret()
+        });
+        e.register(WORD_AT_3C, |e, a| e.mem.u32(a[0] + 0x3c).into_ret());
+        e.register(EFFECT_LIST_GET_COST, |_, _| Ret {
+            st0: 12.5,
+            ..Ret::default()
+        });
+        let form = e.mem.alloc(0x44);
+        e.mem.set_u32(form + 0x3c, (-0x0100_0001i32) as u32);
+        e.mem.set_u8(form + 0x40, 1);
+        assert_eq!(
+            e.call(0x0040_94a0, &args![form + 0x24, 7u32]).f64(),
+            -16_777_217.0
+        );
+        e.mem.set_u8(form + 0x40, 2);
+        e.call_log = Some(vec![]);
+        assert_eq!(fn_004094a0(&mut e, Ptr::new(form + 0x24), 7), 12.5);
+        assert_eq!(
+            calls_to(&e, EFFECT_LIST_GET_COST),
+            vec![vec![form + 0x24, 0]]
+        );
+    }
+
+    #[test]
+    fn weapon_flag_is_bit_zero_of_byte_c0() {
+        let mut e = Engine::new();
+        let weapon = e.mem.alloc(0xc4);
+        e.mem.set_u8(weapon + 0xc0, 0xfe);
+        assert!(!e.call(0x0040_9700, &args![weapon]).bool());
+        e.mem.set_u8(weapon + 0xc0, 0x01);
+        assert!(e.call(0x0040_9700, &args![weapon]).bool());
     }
 }

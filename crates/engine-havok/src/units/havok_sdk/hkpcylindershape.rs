@@ -836,11 +836,13 @@ pub fn fn_00d573e0(e: &mut Engine, this: Ptr, radius: f32) {
     let me = this.addr();
     let radius = x87_quiet(radius);
     e.mem.set_f32(me + CYLINDER_RADIUS, radius);
-    let convex = e.mem.f32(me + CONVEX_RADIUS);
-    let sum = (f64::from(convex) + f64::from(radius)) as f32;
-    e.mem.set_f32(me + VERTEX_A + 0xc, sum);
-    let sum = (f64::from(radius) + f64::from(convex)) as f32;
-    e.mem.set_f32(me + VERTEX_B + 0xc, sum);
+    // `FLD [+0x10]`, `FADD ST0,ST1`; then `FADD [+0x10]` (a memory operand) onto the radius:
+    // the x87 choice of NaN.
+    let convex = e.mem.u32(me + CONVEX_RADIUS);
+    let sum = x87_add(x87_load32(convex), f64::from(radius));
+    e.mem.set_u32(me + VERTEX_A + 0xc, x87_store32(sum));
+    let sum = x87_add(f64::from(radius), x87_m32(convex));
+    e.mem.set_u32(me + VERTEX_B + 0xc, x87_store32(sum));
 }
 
 // Translated from 00d57aa0 (decompiled, FalloutNV.exe 1.4.0.525)

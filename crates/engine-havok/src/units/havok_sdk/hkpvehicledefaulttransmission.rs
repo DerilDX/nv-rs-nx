@@ -243,7 +243,8 @@ pub fn calc_transmission_rpm(
 /// `hkpVehicleDefaultTransmission::updateCurrentGear` (Xbox PDB), `(this, delta time, _,
 /// output)`; the second stack word is not read. The countdown (`output + 0x10`) loses the delta
 /// time (stored as `float`); while the shifting byte (`+0xF`) is set it is cleared once the
-/// countdown is not above zero (also for a NaN). Unless the reversing byte (`+0xD`) is set:
+/// countdown is at most zero (`FLDZ`, `FCOMPP`, `TEST AH,0x1`: C0 is set for `0 < countdown`
+/// and for unordered, so a NaN countdown keeps the byte). Unless the reversing byte (`+0xD`) is set:
 /// when the rpm (`+0`) is below `downshiftRPM` and the signed gear byte (`+0xE`) is above
 /// zero, the gear goes down by one; and when `upshiftRPM` is below the rpm and the (new) gear
 /// plus one is below `m_gearsRatio`'s size, the gear goes up by one. Each gear change sets the
@@ -258,9 +259,11 @@ pub fn update_current_gear(
     let out = output.addr();
     let shifting = e.mem.u8(out + 0xf) != 0;
     let countdown = x87_quiet(e.mem.f32(out + 0x10));
-    let remaining = (f64::from(countdown) - f64::from(delta_time)) as f32;
+    // `FLD` the countdown, `FSUB` the delta time (a memory operand): the x87 choice of NaN.
+    let difference = x87_sub(f64::from(countdown), x87_m32(delta_time.to_bits()));
+    let remaining = f32::from_bits(x87_store32(difference));
     e.mem.set_f32(out + 0x10, remaining);
-    if shifting && !(0.0 < remaining) {
+    if shifting && remaining <= 0.0 {
         e.mem.set_u8(out + 0xf, 0);
     }
     if e.mem.u8(out + 0xd) != 0 {

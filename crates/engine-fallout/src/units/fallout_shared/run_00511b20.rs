@@ -173,6 +173,83 @@ pub fn fn_00512010(e: &mut Engine, this: Ptr) {
     e.call(0x0040_3d30, &args![this.addr() + 0x178, 0u32, 0xcu32]);
 }
 
+/// `__RTDynamicCast` (`00ec43fb`, `cdecl`, five words) from `.?AVTESForm@@`
+/// (`01183028`) to `.?AVTESObjectANIO@@` (`01186244`).
+const RT_DYNAMIC_CAST: u32 = 0x00ec_43fb;
+const TYPE_TES_FORM: u32 = 0x0118_3028;
+const TYPE_TES_OBJECT_ANIO: u32 = 0x0118_6244;
+/// `TESForm::StartForm`, `TESForm::CloseForm` (`004855a0`, `00485680`,
+/// `thiscall`), `TESModelTextureSwap::Save` (`0048a520`, three chunk names),
+/// `TESForm::CopyAllComponents` and `CompareAllComponents` (`004851b0`,
+/// `00485270`, one word) (engine map); `0084e3a0` (`thiscall`) and the
+/// chunk writer `00485910` (`cdecl`: chunk name, word).
+const START_FORM: u32 = 0x0048_55a0;
+const CLOSE_FORM: u32 = 0x0048_5680;
+const MODEL_SAVE: u32 = 0x0048_a520;
+const COPY_ALL_COMPONENTS: u32 = 0x0048_51b0;
+const COMPARE_ALL_COMPONENTS: u32 = 0x0048_5270;
+const MEMBER_0084E3A0: u32 = 0x0084_e3a0;
+const WRITE_CHUNK_WORD: u32 = 0x0048_5910;
+
+/// `form` cast to `TESObjectANIO`, or 0.
+fn cast_to_anio(e: &mut Engine, form: u32) -> u32 {
+    e.call(
+        RT_DYNAMIC_CAST,
+        &args![form, 0u32, TYPE_TES_FORM, TYPE_TES_OBJECT_ANIO, 0u32],
+    )
+    .u32()
+}
+
+// Translated from 00511d10 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`thiscall`; the form's save): `StartForm`,
+/// the model at +0x18 saved with the chunk names `MODL`, `MODT`, `MODS`,
+/// then, when the word at +0x38 is set, a `DATA` chunk with what
+/// `0084e3a0` answers for it; `CloseForm`.
+pub fn fn_00511d10(e: &mut Engine, this: Ptr) {
+    e.call(START_FORM, &args![this]);
+    e.call(
+        MODEL_SAVE,
+        &args![this.addr() + 0x18, CHUNK_MODL, CHUNK_MODT, CHUNK_MODS],
+    );
+    let member = e.mem.u32(this.addr() + 0x38);
+    if member != 0 {
+        let value = e.call(MEMBER_0084E3A0, &args![member]).u32();
+        e.call(WRITE_CHUNK_WORD, &args![CHUNK_DATA, value]);
+    }
+    e.call(CLOSE_FORM, &args![this]);
+}
+
+// Translated from 00511d70 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`thiscall`, one word, `RET 4`; the form's
+/// copy): when `source` casts to `TESObjectANIO`,
+/// `TESForm::CopyAllComponents(source)` and the word at +0x38 copied from
+/// the cast form.
+pub fn fn_00511d70(e: &mut Engine, this: Ptr, source: u32) {
+    let other = cast_to_anio(e, source);
+    if other == 0 {
+        return;
+    }
+    e.call(COPY_ALL_COMPONENTS, &args![this, source]);
+    let value = e.mem.u32(other + 0x38);
+    e.mem.set_u32(this.addr() + 0x38, value);
+}
+
+// Translated from 00511dc0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`thiscall`, one word, `RET 4`): whether the
+/// form differs from `form`: true when it does not cast to
+/// `TESObjectANIO`, when `TESForm::CompareAllComponents` answers true, or
+/// when the words at +0x38 differ.
+pub fn fn_00511dc0(e: &mut Engine, this: Ptr, form: u32) -> bool {
+    let other = cast_to_anio(e, form);
+    if other == 0 {
+        return true;
+    }
+    if e.call(COMPARE_ALL_COMPONENTS, &args![this, other]).bool() {
+        return true;
+    }
+    e.mem.u32(this.addr() + 0x38) != e.mem.u32(other + 0x38)
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -182,6 +259,9 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x0051_1e40, fn_00511e40(Ptr) -> Ptr),
         entry!(0x0051_1f60, fn_00511f60(Ptr)),
         entry!(0x0051_2010, fn_00512010(Ptr)),
+        entry!(0x0051_1d10, fn_00511d10(Ptr)),
+        entry!(0x0051_1d70, fn_00511d70(Ptr, u32)),
+        entry!(0x0051_1dc0, fn_00511dc0(Ptr, u32) -> bool),
     ]
 }
 
@@ -393,5 +473,104 @@ mod b028_tests {
         e.call(0x0051_2010, &args![0x4000u32]);
         let log = e.call_log.take().unwrap();
         assert_eq!(log[1..], [(0x0040_3d30, vec![0x4178, 0, 0xc])]);
+    }
+}
+
+#[cfg(test)]
+mod n040_tests {
+    use super::*;
+
+    fn calls_to(e: &mut Engine, targets: &[u32]) -> Vec<(u32, Vec<u32>)> {
+        e.call_log
+            .take()
+            .unwrap()
+            .into_iter()
+            .filter(|(a, _)| targets.contains(a))
+            .collect()
+    }
+
+    /// The cast answers the form when its word at +0xc is zero.
+    fn cast(e: &mut Engine) {
+        e.register(RT_DYNAMIC_CAST, |e, a| {
+            assert_eq!(a[1..], [0, TYPE_TES_FORM, TYPE_TES_OBJECT_ANIO, 0]);
+            let form = if e.mem.u32(a[0] + 0xc) == 0 { a[0] } else { 0 };
+            Ret {
+                eax: form,
+                ..Ret::default()
+            }
+        });
+    }
+
+    #[test]
+    fn fn_00511d10_saves_the_model_and_the_data_chunk() {
+        let mut e = Engine::new();
+        let targets = [
+            START_FORM,
+            MODEL_SAVE,
+            MEMBER_0084E3A0,
+            WRITE_CHUNK_WORD,
+            CLOSE_FORM,
+        ];
+        for t in targets {
+            e.register(t, |_, _| Ret {
+                eax: 0x99,
+                ..Ret::default()
+            });
+        }
+        let this = e.mem.alloc(0x40);
+        e.call_log = Some(vec![]);
+        e.call(0x0051_1d10, &[this]);
+        let model = vec![this + 0x18, 0x4c44_4f4d, 0x5444_4f4d, 0x5344_4f4d];
+        assert_eq!(
+            calls_to(&mut e, &targets),
+            vec![
+                (START_FORM, vec![this]),
+                (MODEL_SAVE, model.clone()),
+                (CLOSE_FORM, vec![this]),
+            ]
+        );
+        e.mem.set_u32(this + 0x38, 0x5000);
+        e.call_log = Some(vec![]);
+        e.call(0x0051_1d10, &[this]);
+        assert_eq!(
+            calls_to(&mut e, &targets),
+            vec![
+                (START_FORM, vec![this]),
+                (MODEL_SAVE, model),
+                (MEMBER_0084E3A0, vec![0x5000]),
+                (WRITE_CHUNK_WORD, vec![0x4154_4144, 0x99]),
+                (CLOSE_FORM, vec![this]),
+            ]
+        );
+    }
+
+    #[test]
+    fn fn_00511d70_and_00511dc0_copy_and_compare() {
+        let mut e = Engine::new();
+        cast(&mut e);
+        e.register(COPY_ALL_COMPONENTS, |_, _| Ret::default());
+        e.register(COMPARE_ALL_COMPONENTS, |e, a| Ret {
+            eax: e.mem.u32(a[1] + 0x10),
+            ..Ret::default()
+        });
+        let this = e.mem.alloc(0x40);
+        let other = e.mem.alloc(0x40);
+        e.mem.set_u32(other + 0x38, 0x77);
+        e.mem.set_u32(other + 0xc, 1);
+        assert!(e.call(0x0051_1dc0, &[this, other]).bool());
+        e.call(0x0051_1d70, &[this, other]);
+        assert_eq!(e.mem.u32(this + 0x38), 0);
+        e.mem.set_u32(other + 0xc, 0);
+        assert!(e.call(0x0051_1dc0, &[this, other]).bool());
+        e.call_log = Some(vec![]);
+        e.call(0x0051_1d70, &[this, other]);
+        assert_eq!(
+            calls_to(&mut e, &[COPY_ALL_COMPONENTS]),
+            vec![(COPY_ALL_COMPONENTS, vec![this, other])]
+        );
+        assert_eq!(e.mem.u32(this + 0x38), 0x77);
+        assert!(!e.call(0x0051_1dc0, &[this, other]).bool());
+        e.mem.set_u32(other + 0x10, 1);
+        assert!(e.call(0x0051_1dc0, &[this, other]).bool());
     }
 }

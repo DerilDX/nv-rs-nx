@@ -2025,8 +2025,8 @@ pub fn fn_006915d0(
         e.mem.set_u32(this.addr() + 4 * word, value);
     }
     e.call(POINT_CONSTRUCTOR, &args![this.byte_add(0xc)]);
-    e.set(this, NavMeshStaticAvoidNode::fRadius, radius);
-    e.set(this, NavMeshStaticAvoidNode::fCost, cost);
+    e.set(this, NavMeshStaticAvoidNode::fRadius, x87_quiet(radius));
+    e.set(this, NavMeshStaticAvoidNode::fCost, x87_quiet(cost));
     e.set(this, NavMeshStaticAvoidNode::eType, 0);
     this
 }

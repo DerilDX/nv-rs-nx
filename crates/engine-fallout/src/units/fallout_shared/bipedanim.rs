@@ -1961,9 +1961,9 @@ pub fn fn_004ad1d0(e: &mut Engine, this: Ptr<NiCloningProcess>) {
 // Translated from 004ad240 (decompiled, FalloutNV.exe 1.4.0.525)
 /// Sets the three scale floats of an `NiCloningProcess` to `scale`.
 pub fn fn_004ad240(e: &mut Engine, this: Ptr<NiCloningProcess>, scale: f32) {
-    e.set(this, NiCloningProcess::m_fScale_z, scale);
-    e.set(this, NiCloningProcess::m_fScale_y, scale);
-    e.set(this, NiCloningProcess::m_fScale_x, scale);
+    e.set(this, NiCloningProcess::m_fScale_z, x87_quiet(scale));
+    e.set(this, NiCloningProcess::m_fScale_y, x87_quiet(scale));
+    e.set(this, NiCloningProcess::m_fScale_x, x87_quiet(scale));
 }
 
 // Translated from 004ad270 (decompiled, FalloutNV.exe 1.4.0.525)

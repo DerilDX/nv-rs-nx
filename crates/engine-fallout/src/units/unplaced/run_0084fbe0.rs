@@ -133,10 +133,105 @@ pub fn fn_0084ff30(e: &mut Engine, _this: Ptr, path: u32) {
     e.call(CREATE_DIRECTORY, &args![path, 0u32]);
 }
 
+// Translated from 0084fbe0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`cdecl`, two words: two save file entries): a sort compare by
+/// the 64-bit value [`fn_0084fc50`] reads from each (+0x2C low word, +0x30 high word), the
+/// larger first: -1 when `first`'s is larger, 1 when it is smaller, else 0. The high words
+/// are compared first, then the low words, unsigned.
+pub fn fn_0084fbe0(e: &mut Engine, first: Ptr, second: Ptr) -> i32 {
+    // The two locals: `first`'s value at +0 (low, high), `second`'s at +8.
+    e.with_stack(0x10, |e, locals| {
+        let l = locals.addr();
+        fn_0084fc50(e, first, Ptr::new(l));
+        fn_0084fc50(e, second, Ptr::new(l + 8));
+        let (first_low, first_high) = (e.mem.u32(l), e.mem.u32(l + 4));
+        let (second_low, second_high) = (e.mem.u32(l + 8), e.mem.u32(l + 0xc));
+        if first_high > second_high {
+            -1
+        } else if first_high < second_high {
+            1
+        } else if first_low > second_low {
+            -1
+        } else {
+            i32::from(first_low < second_low)
+        }
+    })
+}
+
+// Translated from 0084fc50 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`thiscall`, `RET 4`): copies the words at +0x2C and +0x30 to
+/// `out` and `out + 4` (an eight-byte value, low word first).
+pub fn fn_0084fc50(e: &mut Engine, this: Ptr, out: Ptr) {
+    let low = e.mem.u32(this.addr() + 0x2c);
+    let high = e.mem.u32(this.addr() + 0x30);
+    e.mem.set_u32(out.addr(), low);
+    e.mem.set_u32(out.addr() + 4, high);
+}
+
+/// `operator delete` (`00401030`, cdecl).
+const OPERATOR_DELETE: u32 = 0x0040_1030;
+
+// Translated from 0084fd70 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The deleting destructor of the 0x38-byte object (`thiscall`, `RET 4`): its destructor
+/// ([`fn_0084fe50`]), then `operator delete` on `this` when bit 0 of `flags` is set.
+/// Returns `this`.
+pub fn fn_0084fd70(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    fn_0084fe50(e, this);
+    if flags & 1 != 0 {
+        e.call(OPERATOR_DELETE, &args![this]);
+    }
+    this
+}
+
+/// `00851540` (unit `bgssaveloadmanager.cpp`, unnamed; `thiscall`, no stack words): what the
+/// destructor runs first; and the `BSStringT` destructor (`004037d0`, `thiscall`).
+const OBJECT_CLEAR_00851540: u32 = 0x0085_1540;
+const STRING_DTOR: u32 = 0x0040_37d0;
+
+// Translated from 0084fe50 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 0084fe50 - the FS:[0] exception frame (unwind state 0 for the string member) is not translated
+/// The destructor of the 0x38-byte object (`thiscall`, no stack words): `00851540` on
+/// `this`, `operator delete` on the word at +0x14, then the `BSStringT` at +0x30 destroyed
+/// (`004037d0`).
+pub fn fn_0084fe50(e: &mut Engine, this: Ptr) {
+    e.call(OBJECT_CLEAR_00851540, &args![this]);
+    let block = e.mem.u32(this.addr() + 0x14);
+    e.call(OPERATOR_DELETE, &args![block]);
+    e.call(STRING_DTOR, &args![this.addr() + 0x30]);
+}
+
+/// `strlen` (`0044a670`, cdecl), the text compare `00404dc0` (cdecl, two words; the name is
+/// left as it is when it answers 0) and the extension `".fos"` (`01076e74`).
+const TEXT_LENGTH: u32 = 0x0044_a670;
+const TEXT_COMPARE: u32 = 0x0040_4dc0;
+const SAVE_EXTENSION: u32 = 0x0107_6e74;
+
+// Translated from 0084fec0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`thiscall`, `RET 8`; `this` is not read): copies `name` into
+/// the 0x104-byte buffer `out` (`00406d30`) and appends `".fos"` (`00406d50`) unless the
+/// copy is at least four characters long and its last four compare equal to `".fos"`
+/// (`00404dc0` answering 0).
+pub fn fn_0084fec0(e: &mut Engine, _this: Ptr, name: u32, out: u32) {
+    e.call(STRING_COPY, &args![out, PATH_SIZE, name]);
+    let length = e.call(TEXT_LENGTH, &args![out]).u32();
+    if length >= 4 {
+        let tail = out.wrapping_add(length).wrapping_sub(4);
+        if e.call(TEXT_COMPARE, &args![tail, SAVE_EXTENSION]).u32() == 0 {
+            return;
+        }
+    }
+    e.call(STRING_APPEND, &args![out, PATH_SIZE, SAVE_EXTENSION]);
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
         entry!(0x0084_fd30, fn_0084fd30()),
+        entry!(0x0084_fbe0, fn_0084fbe0(Ptr, Ptr) -> i32),
+        entry!(0x0084_fc50, fn_0084fc50(Ptr, Ptr)),
+        entry!(0x0084_fd70, fn_0084fd70(Ptr, u32) -> Ptr),
+        entry!(0x0084_fe50, fn_0084fe50(Ptr)),
+        entry!(0x0084_fec0, fn_0084fec0(Ptr, u32, u32)),
         entry!(0x0084_ff30, fn_0084ff30(Ptr, u32)),
         entry!(0x0084fc70, fn_0084fc70()),
         entry!(0x0084fda0, fn_0084fda0(Ptr) -> Ptr),
@@ -306,5 +401,127 @@ mod la1_tests {
                 (CREATE_DIRECTORY, vec![0x7000, 0]),
             ]
         );
+    }
+}
+
+#[cfg(test)]
+mod lookahead2_tests {
+    use super::*;
+
+    fn calls(e: &Engine, address: u32) -> Vec<Vec<u32>> {
+        e.call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|(a, _)| *a == address)
+            .map(|(_, w)| w.clone())
+            .collect()
+    }
+
+    fn entry(e: &mut Engine, low: u32, high: u32) -> u32 {
+        let at = e.mem.alloc(0x38);
+        e.mem.set_u32(at + 0x2c, low);
+        e.mem.set_u32(at + 0x30, high);
+        at
+    }
+
+    #[test]
+    fn compare_puts_the_larger_value_first() {
+        let mut e = Engine::new();
+        let cases = [
+            ((0, 2), (0xffff_ffff, 1), -1),
+            ((0xffff_ffff, 1), (0, 2), 1),
+            ((5, 0x8000_0000), (4, 0x8000_0000), -1),
+            ((4, 7), (5, 7), 1),
+            ((4, 7), (4, 7), 0),
+        ];
+        for ((a_low, a_high), (b_low, b_high), want) in cases {
+            let a = entry(&mut e, a_low, a_high);
+            let b = entry(&mut e, b_low, b_high);
+            assert_eq!(e.call(0x0084_fbe0, &args![a, b]).i32(), want);
+        }
+    }
+
+    #[test]
+    fn value_copy_writes_low_then_high() {
+        let mut e = Engine::new();
+        let this = entry(&mut e, 0x1111, 0x2222);
+        let out = e.mem.alloc(8);
+        e.call(0x0084_fc50, &args![this, out]);
+        assert_eq!([e.mem.u32(out), e.mem.u32(out + 4)], [0x1111, 0x2222]);
+    }
+
+    #[test]
+    fn destructor_and_deleting_destructor() {
+        let mut e = Engine::new();
+        for callee in [OBJECT_CLEAR_00851540, OPERATOR_DELETE, STRING_DTOR] {
+            e.register(callee, |_, _| Ret::default());
+        }
+        let this = e.mem.alloc(0x38);
+        e.mem.set_u32(this + 0x14, 0x6600);
+        e.call_log = Some(vec![]);
+        e.call(0x0084_fe50, &args![this]);
+        let log = e.call_log.take().unwrap();
+        assert_eq!(
+            log[1..],
+            [
+                (OBJECT_CLEAR_00851540, vec![this]),
+                (OPERATOR_DELETE, vec![0x6600]),
+                (STRING_DTOR, vec![this + 0x30])
+            ]
+        );
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x0084_fd70, &args![this, 2u32]).u32(), this);
+        assert_eq!(calls(&e, OPERATOR_DELETE), vec![vec![0x6600]]);
+        e.call_log = Some(vec![]);
+        e.call(0x0084_fd70, &args![this, 3u32]);
+        assert_eq!(calls(&e, OPERATOR_DELETE), vec![vec![0x6600], vec![this]]);
+        assert_eq!(calls(&e, STRING_DTOR), vec![vec![this + 0x30]]);
+    }
+
+    /// Doubles: the copy and append on the buffer, `strlen`, and a compare answering 0 for
+    /// equal texts.
+    fn name_engine() -> Engine {
+        let mut e = Engine::new();
+        e.register(STRING_COPY, |e, a| {
+            let text = e.mem.cstr(a[2]);
+            e.mem.set_cstr(a[0], &text);
+            Ret::default()
+        });
+        e.register(STRING_APPEND, |e, a| {
+            let mut text = e.mem.cstr(a[0]);
+            text.extend(e.mem.cstr(a[2]));
+            e.mem.set_cstr(a[0], &text);
+            Ret::default()
+        });
+        e.register(TEXT_LENGTH, |e, a| {
+            (e.mem.cstr(a[0]).len() as u32).into_ret()
+        });
+        e.register(TEXT_COMPARE, |e, a| {
+            u32::from(e.mem.cstr(a[0]) != e.mem.cstr(a[1])).into_ret()
+        });
+        e.map(SAVE_EXTENSION, 8);
+        e.mem.set_cstr(SAVE_EXTENSION, b".fos");
+        e
+    }
+
+    #[test]
+    fn save_name_gets_the_extension_once() {
+        let mut e = name_engine();
+        let out = e.mem.alloc(0x104);
+        for (name, want) in [
+            (&b"Save 3"[..], &b"Save 3.fos"[..]),
+            (b"Save 3.fos", b"Save 3.fos"),
+            (b"fos", b"fos.fos"),
+            (b".fos", b".fos"),
+            (b"a.FOS", b"a.FOS.fos"),
+        ] {
+            let text = e.mem.alloc(0x20);
+            e.mem.set_cstr(text, name);
+            e.call_log = Some(vec![]);
+            e.call(0x0084_fec0, &args![0u32, text, out]);
+            assert_eq!(e.mem.cstr(out), want.to_vec());
+            assert_eq!(calls(&e, STRING_COPY), vec![vec![out, 0x104, text]]);
+        }
     }
 }

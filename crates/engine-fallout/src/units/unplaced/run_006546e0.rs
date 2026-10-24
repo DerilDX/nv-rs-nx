@@ -1262,10 +1262,24 @@ fn update_head(e: &mut Engine, frame: &Frame, node: u32, data: u32, kind: &mut u
     e.call(UNLOCK, &args![]);
 }
 
+/// `004bc480` (unnamed; `thiscall`, one word): what the value setter runs with 1 after the
+/// store.
+const AFTER_SET_004BC480: u32 = 0x004b_c480;
+
+// Translated from 00654700 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`thiscall`, `RET 4`): stores `value` at +0x38 (`FLD`/`FSTP`,
+/// a signalling NaN stored quiet), then `004bc480` on `this` with 1.
+pub fn fn_00654700(e: &mut Engine, this: Ptr, value: f32) {
+    e.mem
+        .set_u32(this.addr() + 0x38, x87_quiet_bits(value.to_bits()));
+    e.call(AFTER_SET_004BC480, &args![this, 1u32]);
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
         entry!(0x0065_46e0, fn_006546e0(Ptr) -> u32),
+        entry!(0x0065_4700, fn_00654700(Ptr, f32)),
         entry!(0x0065_6fd0, fn_00656fd0(Ptr, Ptr)),
         entry!(0x0065_5270, fn_00655270() -> u32),
         entry!(0x0065_6d80, fn_00656d80(Ptr) -> u32),
@@ -1866,5 +1880,19 @@ mod face_gen_tests {
             vec![vec![geometry, 1, 1]]
         );
         assert_eq!(calls(&e, SHADER_SLOT_C0), vec![vec![shader]]);
+    }
+
+    #[test]
+    fn value_setter_stores_quiet_then_marks() {
+        let mut e = Engine::new();
+        e.register(AFTER_SET_004BC480, |_, _| Ret::default());
+        let this = e.mem.alloc(0x40);
+        e.call_log = Some(vec![]);
+        e.call(0x0065_4700, &args![this, 0x7f80_0005u32]);
+        assert_eq!(e.mem.u32(this + 0x38), 0x7fc0_0005);
+        let log = e.call_log.take().unwrap();
+        assert_eq!(log[1..], [(AFTER_SET_004BC480, vec![this, 1])]);
+        e.call(0x0065_4700, &args![this, 0.75f32]);
+        assert_eq!(e.mem.u32(this + 0x38), 0.75f32.to_bits());
     }
 }

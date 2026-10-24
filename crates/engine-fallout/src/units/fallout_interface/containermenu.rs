@@ -2225,9 +2225,628 @@ pub fn container_menu_do_idle(e: &mut Engine, this: Ptr<ContainerMenu>) {
     }
 }
 
+/// `Interface::IsTopMenuID` (cdecl: class).
+const IS_TOP_MENU: u32 = 0x0070_2450;
+/// The interface manager's wheel direction (`0070ec70`): negative for one way.
+const WHEEL_DIRECTION_0070EC70: u32 = 0x0070_ec70;
+/// The list box's virtual slot +4 (`DoGamepad` tests it for 0 before entering the other list).
+const LIST_BOX_SLOT_4: u32 = 0x4;
+/// `ExtraDataList`: the owner word `GetStolenValue` compares (`00418660`; what it holds is not
+/// confirmed beyond that use).
+const EXTRA_OWNER_00418660: u32 = 0x0041_8660;
+/// `ItemChange::GetItemValue` (`ST0`).
+const ITEM_GET_VALUE: u32 = 0x004b_d400;
+/// `ActorValueOwner::GetClampedActorValue` (index) and the pickpocket chance (`00643400`,
+/// cdecl: the player's value, the target's value, the item value as a float).
+const GET_CLAMPED_ACTOR_VALUE: u32 = 0x0066_ef20;
+const PICKPOCKET_CHANCE_00643400: u32 = 0x0064_3400;
+/// The random generator (`00476c00`) and `BSRandom::UnsignedInt` (bound).
+const RANDOM: u32 = 0x0047_6c00;
+const RANDOM_UNSIGNED: u32 = 0x00aa_5230;
+/// `MiscStatManager::Increment` (cdecl: stat).
+const MISC_STAT_INCREMENT: u32 = 0x004d_5c60;
+/// The player's reaction to a caught pickpocket (`008c00e0`, `this` = player: target, 0, 0).
+const PLAYER_CAUGHT_008C00E0: u32 = 0x008c_00e0;
+/// The setting of the "caught" message and of the karma reward (`Setting` objects).
+const SETTING_CAUGHT_MESSAGE: u32 = 0x011d_3f94;
+const SETTING_KARMA: u32 = 0x011c_de20;
+/// A setting's float address (`00403e20`).
+const SETTING_FLOAT_ADDRESS: u32 = 0x0040_3e20;
+/// The base data of a reference (`004181e0`), `TESActorBaseData::GetAlignmentForKarma`
+/// (cdecl: float) and `PlayerCharacter::RewardKarma` (int).
+const REFERENCE_BASE_DATA_004181E0: u32 = 0x0041_81e0;
+const ALIGNMENT_FOR_KARMA: u32 = 0x0047_e040;
+const REWARD_KARMA: u32 = 0x0094_fd30;
+/// `_ftol2` (`ST0` passed as an `f64` argument).
+const FTOL2: u32 = 0x00ec_62c0;
+/// `TESTopic::GetMatchingInfo` (speaker, target).
+const TOPIC_GET_MATCHING_INFO: u32 = 0x0061_a720;
+/// The quest of a topic info (`006733e0`; the engine map's name for the folded body is
+/// `LowProcess::GetSecondGenericLocation`).
+const INFO_QUEST_006733E0: u32 = 0x0067_33e0;
+/// `DialogueItem`: constructor (quest, topic, info, speaker), destructor, `FirstResponse`,
+/// `GetCurrentResponse`.
+const DIALOGUE_ITEM_CONSTRUCT: u32 = 0x0083_c520;
+const DIALOGUE_ITEM_DESTRUCT: u32 = 0x0083_c670;
+const DIALOGUE_ITEM_FIRST_RESPONSE: u32 = 0x0083_c7b0;
+const DIALOGUE_ITEM_CURRENT_RESPONSE: u32 = 0x0083_c820;
+/// The text of a `Tile::Value`-style string holder (`0084e3a0`).
+const VALUE_STRING_0084E3A0: u32 = 0x0084_e3a0;
+/// The actor's sound for a voice file (`00933150`: handle, file, 0, 0x102, 1).
+const ACTOR_VOICE_SOUND_00933150: u32 = 0x0093_3150;
+/// Accessors of a dialogue response used for the speech call: `00441110`, `009611e0`,
+/// `004048e0` (of the response's +`006815c0` field), `00460140`.
+const RESPONSE_00441110: u32 = 0x0044_1110;
+const RESPONSE_009611E0: u32 = 0x0096_11e0;
+const STRING_004048E0: u32 = 0x0040_48e0;
+const RESPONSE_00460140: u32 = 0x0046_0140;
+/// `BSStringT` copy constructor (`004047f0`, source).
+const STRING_COPY_CONSTRUCT: u32 = 0x0040_47f0;
+/// The type descriptors of `TESObjectREFR` and `Actor` for `__RTDynamicCast` (read as the
+/// code passes them).
+const TYPE_011841CC: u32 = 0x0118_41cc;
+const TYPE_011846D4: u32 = 0x0118_46d4;
+/// The subtitles setting's text (`00408d60` on `011d8928`) and
+/// `Actor::AlwaysShowSubtitles`.
+const SUBTITLES_STRING_00408D60: u32 = 0x0040_8d60;
+const SUBTITLES_SETTING: u32 = 0x011d_8928;
+const ALWAYS_SHOW_SUBTITLES: u32 = 0x008c_1bc0;
+/// `BSSoundHandle::GetDuration`, `strlen` (`00ec6130`), the subtitle speed setting and the
+/// double 1000.0.
+const SOUND_HANDLE_GET_DURATION: u32 = 0x00ad_8b30;
+const STRLEN: u32 = 0x00ec_6130;
+const SETTING_SUBTITLE_SPEED: u32 = 0x011d_2178;
+const THOUSAND_01017B70: u32 = 0x0101_7b70;
+/// `ExtraDataList::GetCount` (`i16` in `AX`) is `EXTRA_GET_COUNT`; the item's sound tile
+/// name `CM_Subtitle`.
+const SUBTITLE_TILE: u32 = 0x0107_21f4;
+
+/// The tile a list item shows (`007b5370` on its +4, then the word there).
+fn item_tile(e: &mut Engine, tile: u32) -> u32 {
+    let slot = e.call(LIST_ITEM_TILE, &args![tile.wrapping_add(4)]).u32();
+    e.mem.u32(slot)
+}
+
+/// The first extra data list of an item change (the item of its list's first node), or 0.
+fn first_extra_list(e: &mut Engine, item: u32) -> u32 {
+    if e.call(FIRST_WORD, &args![item]).u32() == 0 {
+        return 0;
+    }
+    let node = e.call(FIRST_WORD, &args![item]).u32();
+    let slot = e.call(FIRST_WORD_ADDRESS, &args![node]).u32();
+    e.mem.u32(slot)
+}
+
+/// The container reference as an `Actor` (`__RTDynamicCast`), or 0 when it is none.
+fn container_actor(e: &mut Engine) -> u32 {
+    let reference = e.mem.u32(me(e).wrapping_add(0x74));
+    if reference != 0 && is_actor(e, reference) {
+        let reference = e.mem.u32(me(e).wrapping_add(0x74));
+        e.call(
+            RT_DYNAMIC_CAST,
+            &args![reference, 0u32, TYPE_011841CC, TYPE_011846D4, 0u32],
+        )
+        .u32()
+    } else {
+        0
+    }
+}
+
+// Translated from 0075cc70 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed (`thiscall`, used on the player): the address `this + 0xdf4` (the weapon mod
+/// list `ContainerMenu` walks).
+pub fn fn_0075cc70(_e: &mut Engine, this: Ptr) -> u32 {
+    this.addr().wrapping_add(0xdf4)
+}
+
+// Translated from 0075d250 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ContainerMenu::DoGamepad` (Xbox PDB; `thiscall`, `RET 8`: button, an unread word): with
+/// the menu on top, buttons 3 and 4 click (`DoClick`, slot +0xc) the filter buttons of the
+/// current list (0 or 2 for the player's items, 5 or 7 for the container's) between saving
+/// and restoring its list state, outside mode 4; buttons 13 and 14 enter (`DoEnter`, slot
+/// +0x10, ids 0x15 and 0x16) the other list when the list's slot +4 is 0 and it has items.
+/// True when handled.
+pub fn container_menu_do_gamepad(
+    e: &mut Engine,
+    this: Ptr<ContainerMenu>,
+    button: i32,
+    _unused_2: u32,
+) -> bool {
+    let base = this.addr();
+    if !e.call(IS_TOP_MENU, &args![CONTAINER_MENU_CLASS]).bool() {
+        return false;
+    }
+    match button {
+        3 | 4 => {
+            if e.get(this, ContainerMenu::eContainerMode) == 4 {
+                return false;
+            }
+            if e.get(this, ContainerMenu::plbCurrListbox) == base.wrapping_add(ITEMS) {
+                e.call(LIST_SAVE_STATE, &args![base.wrapping_add(ITEMS)]);
+                let id = if button != 4 { 2u32 } else { 0 };
+                e.vcall(base, 0xc, &args![id, 0u32]);
+                e.call(LIST_RESTORE_STATE, &args![base.wrapping_add(ITEMS), 0u32]);
+            } else {
+                e.call(LIST_SAVE_STATE, &args![base.wrapping_add(CONTAINER)]);
+                let id = if button != 4 { 7u32 } else { 5 };
+                e.vcall(base, 0xc, &args![id, 0u32]);
+                e.call(
+                    LIST_RESTORE_STATE,
+                    &args![base.wrapping_add(CONTAINER), 0u32],
+                );
+            }
+            true
+        }
+        0xd | 0xe => {
+            let (from, to, id) = if button == 0xd {
+                (ITEMS, CONTAINER, 0x15u32)
+            } else {
+                (CONTAINER, ITEMS, 0x16)
+            };
+            if e.vcall(base.wrapping_add(from), LIST_BOX_SLOT_4, &args![])
+                .u32()
+                == 0
+                && e.call(LIST_COUNT, &args![base.wrapping_add(from)]).u32() != 0
+            {
+                e.call(LIST_SAVE_STATE, &args![base.wrapping_add(to)]);
+                e.vcall(base, 0x10, &args![id, 0u32]);
+                e.call(LIST_RESTORE_STATE, &args![base.wrapping_add(from), 1u32]);
+                true
+            } else {
+                false
+            }
+        }
+        _ => false,
+    }
+}
+
+// Translated from 0075d430 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ContainerMenu::DoGamepadUpEvent` (Xbox PDB; `thiscall`, `RET 8`: button, an unread
+/// word): button 11 clicks id 10 (take all) outside modes 3 and 4 while the menu is shown
+/// (fade state +0x24 is 1); button 10 closes the menu. True when handled.
+pub fn container_menu_do_gamepad_up_event(
+    e: &mut Engine,
+    this: Ptr<ContainerMenu>,
+    button: i32,
+    _unused_2: u32,
+) -> bool {
+    let mode = e.get(this, ContainerMenu::eContainerMode);
+    if button == 0xb && mode != 4 && mode != 3 && e.mem.u32(this.addr().wrapping_add(0x24)) == 1 {
+        e.vcall(this.addr(), 0xc, &args![10u32, 0u32]);
+        true
+    } else if button == 10 {
+        container_menu_close(e);
+        true
+    } else {
+        false
+    }
+}
+
+// Translated from 0075d4a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ContainerMenu::DoWheelMove` (Xbox PDB; `thiscall`, `RET 8`: wheel id, an unread word): for
+/// ids 1 and 6, clicks (`DoClick`) the list's previous or next filter button: 0 or 5 when the
+/// interface's wheel value (`0070ec70`) is negative, 2 or 7 otherwise.
+pub fn container_menu_do_wheel_move(
+    e: &mut Engine,
+    this: Ptr<ContainerMenu>,
+    id: i32,
+    _unused_2: u32,
+) {
+    if id != 1 && id != 6 {
+        return;
+    }
+    let interface = e.call(INTERFACE_SINGLETON, &args![]).u32();
+    let direction = e.call(WHEEL_DIRECTION_0070EC70, &args![interface]).i32();
+    let first = if id != 1 { 5u32 } else { 0 };
+    let button = if direction < 0 { first } else { first + 2 };
+    e.vcall(this.addr(), 0xc, &args![button, 0u32]);
+}
+
+// Translated from 0075da60 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ContainerMenu::TakeAllFn` (Xbox PDB; `cdecl`, the list box callback: tile, item): unless
+/// a pickpocket already failed (+0x89), moves one item: an item dropped by someone who is not
+/// the player and not a follower goes back through the player's slot +0x3d0 (dropper, 1, 0);
+/// an item whose tile's 0xfa9 is 128 stays. While pickpocketing (mode 2) the stolen value
+/// (`GetStolenValue` of the whole stack) is added up and checked (`PickpocketCheck`), a
+/// failure setting +0x89. The item then moves through the container's slot +0x17c (object,
+/// first extra list, count, stolen flag, 0, player, 0, 0, 1, 0).
+pub fn container_menu_take_all_fn(e: &mut Engine, tile: u32, item: u32) {
+    if item == 0 || me(e) == 0 || tile == 0 || e.mem.u8(me(e).wrapping_add(0x89)) != 0 {
+        return;
+    }
+    let extra = first_extra_list(e, item);
+    if extra != 0 && e.call(EXTRA_GET_ITEM_DROPPER, &args![extra]).u32() != 0 {
+        let dropper = e.call(EXTRA_GET_ITEM_DROPPER, &args![extra]).u32();
+        if !e.call(FORM_TEST_00440DA0, &args![dropper]).bool() {
+            let dropper = e.call(EXTRA_GET_ITEM_DROPPER, &args![extra]).u32();
+            if !e.call(FORM_TEST_00440D80, &args![dropper]).bool() {
+                let dropper = e.call(EXTRA_GET_ITEM_DROPPER, &args![extra]).u32();
+                let player = player_actor(e);
+                e.vcall(player, 0x3d0, &args![dropper, 1u32, 0u32]);
+                return;
+            }
+        }
+    }
+    let shown = item_tile(e, tile);
+    let alpha = e.call(GET_FLOAT_TRAIT, &args![shown, TRAIT_0XFA9]).f64();
+    // `FCOMP; TEST AH,0x44; JP`: the item stays when the value equals 128.
+    if alpha == e.global::<f64>(DISABLED_VALUE) {
+        return;
+    }
+    let menu = menu(e);
+    if e.get(menu, ContainerMenu::eContainerMode) == 2 {
+        let reference = e.get(menu, ContainerMenu::pContainerRef);
+        let actor = if is_actor(e, reference) {
+            e.get(menu, ContainerMenu::pContainerRef)
+        } else {
+            0
+        };
+        let count = e.call(WORD_AT_FOUR, &args![item]).i32();
+        let value = container_menu_get_stolen_value(e, menu, item, count, 1);
+        let total = e.get(menu, ContainerMenu::iValueStolen).wrapping_add(value);
+        e.set(menu, ContainerMenu::iValueStolen, total);
+        let passed = container_menu_pickpocket_check(e, menu, actor, value);
+        e.set(menu, ContainerMenu::bPickpocketFail, u8::from(!passed));
+    }
+    let extra = first_extra_list(e, item);
+    let stolen = u32::from(e.get(menu, ContainerMenu::eContainerMode) == 2);
+    let count = e.call(WORD_AT_FOUR, &args![item]).u32();
+    let object = e.call(ITEM_OBJECT, &args![item]).u32();
+    let player = player_actor(e);
+    let container = e.get(menu, ContainerMenu::pContainerRef);
+    e.vcall(
+        container,
+        0x17c,
+        &args![object, extra, count, stolen, 0u32, player, 0u32, 0u32, 1u32, 0u32],
+    );
+}
+
+// Translated from 0075e0b0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ContainerMenu::PickpocketCheck` (Xbox PDB; `thiscall`, `RET 8`: target, value): true
+/// without a target, for a value of 0 or less, or when the target's slot +0x230 says so.
+/// Otherwise the chance (`00643400` of the player's clamped actor value 0x2a, the target's
+/// actor value 0x2a and the value as a float) is rolled against `BSRandom::UnsignedInt(100)`
+/// after the player's slot +0x47c (0x2a, 1): a success counts the misc stat 13 once (when the
+/// container list is current); a failure makes the player react (`008c00e0`), shows the
+/// caught message and sets +0x89. Either way, unless the target's karma alignment is 2 or 4,
+/// the player is given the karma setting.
+pub fn container_menu_pickpocket_check(
+    e: &mut Engine,
+    this: Ptr<ContainerMenu>,
+    target: u32,
+    value: i32,
+) -> bool {
+    if target == 0 || value <= 0 || e.vcall(target, 0x230, &args![]).bool() {
+        return true;
+    }
+    let mut passed = true;
+    let amount = x87_store32(f64::from(value));
+    let target_value = e.vcall(target.wrapping_add(0xa4), 8, &args![0x2au32]).u32();
+    let player = player_actor(e);
+    let player_value = e
+        .call(
+            GET_CLAMPED_ACTOR_VALUE,
+            &args![player.wrapping_add(0xa4), 0x2au32],
+        )
+        .u32();
+    let chance = e
+        .call(
+            PICKPOCKET_CHANCE_00643400,
+            &args![player_value, target_value, amount],
+        )
+        .u32();
+    let player = player_actor(e);
+    e.vcall(player, 0x47c, &args![0x2au32, 1u32]);
+    let random = e.call(RANDOM, &args![]).u32();
+    let roll = e.call(RANDOM_UNSIGNED, &args![random, 100u32]).u32();
+    if roll < chance {
+        if e.get(this, ContainerMenu::plbCurrListbox) == this.addr().wrapping_add(CONTAINER)
+            && e.get(this, ContainerMenu::bPickPocketTallied) == 0
+        {
+            e.call(MISC_STAT_INCREMENT, &args![0xdu32]);
+            e.set(this, ContainerMenu::bPickPocketTallied, 1);
+        }
+    } else {
+        let player = player_actor(e);
+        e.call(PLAYER_CAUGHT_008C00E0, &args![player, target, 0u32, 0u32]);
+        let time = x87_quiet_bits(e.global::<u32>(MESSAGE_TIME));
+        let text = e.call(SETTING_STRING, &args![SETTING_CAUGHT_MESSAGE]).u32();
+        e.call(SHOW_MESSAGE, &args![text, 2u32, 0u32, 0u32, time, 0u32]);
+        passed = false;
+        e.set(this, ContainerMenu::bPickpocketFail, 1);
+    }
+    e.call(REFERENCE_BASE_DATA_004181E0, &args![target]);
+    let base = e
+        .call(REFERENCE_BASE_DATA_004181E0, &args![target])
+        .u32()
+        .wrapping_add(0x100);
+    let karma = e.vcall(base, 0xc, &args![0x17u32]).f64();
+    let alignment = e
+        .call(ALIGNMENT_FOR_KARMA, &args![x87_store32(karma)])
+        .u32();
+    if alignment != 2 && alignment != 4 {
+        let setting = e.call(SETTING_FLOAT_ADDRESS, &args![SETTING_KARMA]).u32();
+        let reward = x87_load32(e.mem.u32(setting));
+        let reward = e.call(FTOL2, &args![reward]).u32();
+        let player = player_actor(e);
+        e.call(REWARD_KARMA, &args![player, reward]);
+    }
+    passed
+}
+
+// Translated from 0075e240 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ContainerMenu::GetStolenValue` (Xbox PDB; `thiscall`, `RET 0xc`: item, count, whether
+/// unowned items count): the item's value (`GetItemValue`, through `00406d90`) times the
+/// count of each of its extra lists (as `i16`) whose owner word (`00418660`) is the
+/// container's owner (the container itself for an actor, else `TESObjectREFR::GetOwner`), or
+/// unset when unowned items count; the count left after the lists counts too when unowned
+/// items do.
+pub fn container_menu_get_stolen_value(
+    e: &mut Engine,
+    this: Ptr<ContainerMenu>,
+    item: u32,
+    count: i32,
+    unowned: u8,
+) -> i32 {
+    let value = e.call(ITEM_GET_VALUE, &args![item]).f64();
+    let value = e.call(FLOAT_TO_INT, &args![x87_store32(value)]).i32();
+    let mut left = count;
+    let mut total = 0i32;
+    let reference = e.get(this, ContainerMenu::pContainerRef);
+    let owner = if is_actor(e, reference) {
+        e.get(this, ContainerMenu::pContainerRef)
+    } else {
+        let reference = e.get(this, ContainerMenu::pContainerRef);
+        e.call(REFERENCE_OWNER, &args![reference]).u32()
+    };
+    let mut node = e.call(FIRST_WORD, &args![item]).u32();
+    while left > 0 && node != 0 {
+        let slot = e.call(FIRST_WORD_ADDRESS, &args![node]).u32();
+        if e.mem.u32(slot) == 0 {
+            break;
+        }
+        let slot = e.call(FIRST_WORD_ADDRESS, &args![node]).u32();
+        let extra = e.mem.u32(slot);
+        let extra_owner = e.call(EXTRA_OWNER_00418660, &args![extra]).u32();
+        let counts = if extra_owner == 0 && unowned != 0 {
+            true
+        } else if extra_owner != 0 {
+            let slot = e.call(FIRST_WORD_ADDRESS, &args![node]).u32();
+            let extra = e.mem.u32(slot);
+            e.call(EXTRA_OWNER_00418660, &args![extra]).u32() == owner
+        } else {
+            false
+        };
+        if counts {
+            let slot = e.call(FIRST_WORD_ADDRESS, &args![node]).u32();
+            let extra = e.mem.u32(slot);
+            let stack = i32::from(e.call(EXTRA_GET_COUNT, &args![extra]).u16() as i16);
+            total = stack.wrapping_mul(value).wrapping_add(total);
+        }
+        let slot = e.call(FIRST_WORD_ADDRESS, &args![node]).u32();
+        let extra = e.mem.u32(slot);
+        let stack = i32::from(e.call(EXTRA_GET_COUNT, &args![extra]).u16() as i16);
+        left = left.wrapping_sub(stack);
+        node = e.call(WORD_AT_FOUR, &args![node]).u32();
+    }
+    if unowned != 0 {
+        total = left.wrapping_mul(value).wrapping_add(total);
+    }
+    total
+}
+
+// Translated from 0075ec60 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ContainerMenu::PlayReactivityBark` (Xbox PDB; `thiscall`, `RET 4`: topic): finds the
+/// topic's info for the container actor and the player and builds a `DialogueItem` on the
+/// stack. With a response, the bark sound (`m_hCurrentReactivityBark`, +0x100) becomes the
+/// actor's sound for the response's voice file (when it has one), or the actor speaks it
+/// through its slot +0x284 (13 words; its float result is not used); then the subtitle shows
+/// (`DisplayContainerMenuSubtitle`, given a copy of the response text and of the bark sound
+/// by value).
+// Translation incomplete: 0075ec60 - the C++ exception frame (FS:[0], unwind states for the dialogue item and the temporary handles) is not translated.
+pub fn container_menu_play_reactivity_bark(e: &mut Engine, this: Ptr<ContainerMenu>, topic: u32) {
+    use crate::units::fallout_dialogue::dialogueitem::DialogueItem;
+    let base = this.addr();
+    let player = player_actor(e);
+    let actor = container_actor(e);
+    let info = if topic != 0 {
+        e.call(TOPIC_GET_MATCHING_INFO, &args![topic, actor, player])
+            .u32()
+    } else {
+        0
+    };
+    if info == 0 {
+        return;
+    }
+    let quest = e.call(INFO_QUEST_006733E0, &args![info]).u32();
+    e.with_stack(DialogueItem::SIZE, |e, dialogue| {
+        e.call(
+            DIALOGUE_ITEM_CONSTRUCT,
+            &args![dialogue, quest, topic, info, actor],
+        );
+        e.call(DIALOGUE_ITEM_FIRST_RESPONSE, &args![dialogue]);
+        let response = e
+            .call(DIALOGUE_ITEM_CURRENT_RESPONSE, &args![dialogue])
+            .u32();
+        if response != 0 {
+            if e.call(FORM_OF, &args![response]).u32() != 0 {
+                let voice = e.call(FORM_OF, &args![response]).u32();
+                let file = e.call(VALUE_STRING_0084E3A0, &args![voice]).u32();
+                e.with_stack(0xc, |e, handle| {
+                    let sound = e
+                        .call(
+                            ACTOR_VOICE_SOUND_00933150,
+                            &args![actor, handle, file, 0u32, 0x102u32, 1u32],
+                        )
+                        .u32();
+                    e.call(
+                        SOUND_HANDLE_ASSIGN,
+                        &args![base.wrapping_add(REACTIVITY_BARK), sound],
+                    );
+                    e.call(SOUND_HANDLE_DESTRUCTOR, &args![handle]);
+                });
+            } else {
+                let first = e.call(RESPONSE_00441110, &args![response]).u32();
+                let second = e.call(RESPONSE_009611E0, &args![response]).u32();
+                let field = e.call(FIRST_WORD_ADDRESS, &args![response]).u32();
+                let third = e.call(STRING_004048E0, &args![field]).u32();
+                let fourth = e.call(VALUE_STRING_0084E3A0, &args![response]).u32();
+                let fifth = e.call(ITEM_OBJECT, &args![response]).u32();
+                let holder = e.call(RESPONSE_00460140, &args![response]).u32();
+                let sixth = e.call(FIRST_WORD, &args![holder]).u32();
+                e.vcall(
+                    actor,
+                    0x284,
+                    &args![
+                        sixth,
+                        base.wrapping_add(REACTIVITY_BARK),
+                        fifth,
+                        fourth,
+                        third,
+                        second,
+                        first,
+                        player,
+                        1u32,
+                        1u32,
+                        0u32,
+                        0u32,
+                        1u32
+                    ],
+                );
+            }
+            // The two by-value arguments are built where the call's arguments go: the sound
+            // handle copy (`00418900`) at +8, the string copy (`004047f0`) at +0.
+            let words = e.with_stack(0x14, |e, arguments| {
+                e.call(
+                    SOUND_HANDLE_ASSIGN,
+                    &args![
+                        arguments.addr().wrapping_add(8),
+                        base.wrapping_add(REACTIVITY_BARK)
+                    ],
+                );
+                let text = e.call(FIRST_WORD_ADDRESS, &args![response]).u32();
+                e.call(STRING_COPY_CONSTRUCT, &args![arguments, text]);
+                let mut words = [0u32; 5];
+                for (i, word) in words.iter_mut().enumerate() {
+                    *word = e.mem.u32(arguments.addr().wrapping_add(4 * i as u32));
+                }
+                words
+            });
+            container_menu_display_container_menu_subtitle(
+                e, this, words[0], words[1], words[2], words[3], words[4],
+            );
+        }
+        e.call(DIALOGUE_ITEM_DESTRUCT, &args![dialogue]);
+    });
+}
+
+// Translated from 0075eea0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ContainerMenu::DisplayContainerMenuSubtitle` (Xbox PDB; `thiscall`, `RET 0x14`: a
+/// `BSStringT` and a `BSSoundHandle` by value, five words): for a text that is not empty, when
+/// subtitles are on (the setting's text at `011d8928` is not empty) or the container actor
+/// always shows them, writes the text into the `CM_Subtitle` tile and sets the time to clear
+/// it (`m_nTimeToClearSubtitle`, +0xfc): now plus the sound's duration, or, without one, the
+/// text's length times the subtitle speed setting times 1000 (`FISTP qword` with chop). Then
+/// destroys the two by-value arguments.
+// Translation incomplete: 0075eea0 - the C++ exception frame (FS:[0], unwind states for the by-value arguments) is not translated.
+pub fn container_menu_display_container_menu_subtitle(
+    e: &mut Engine,
+    this: Ptr<ContainerMenu>,
+    text_0: u32,
+    text_1: u32,
+    sound_0: u32,
+    sound_1: u32,
+    sound_2: u32,
+) {
+    e.with_stack(0x14, |e, arguments| {
+        let text = arguments.addr();
+        let sound = text.wrapping_add(8);
+        for (i, word) in [text_0, text_1, sound_0, sound_1, sound_2]
+            .into_iter()
+            .enumerate()
+        {
+            e.mem.set_u32(text.wrapping_add(4 * i as u32), word);
+        }
+        let actor = container_actor(e);
+        if e.call(STRING_004048E0, &args![text]).u32() != 0 {
+            let subtitles = e
+                .call(SUBTITLES_STRING_00408D60, &args![SUBTITLES_SETTING])
+                .u32();
+            let shown = e.mem.u8(subtitles) != 0
+                || (actor != 0 && e.call(ALWAYS_SHOW_SUBTITLES, &args![actor]).bool());
+            if shown {
+                let menu_tile = e.call(WORD_AT_FOUR, &args![me(e)]).u32();
+                let tile = e
+                    .call(TILE_FIND_CHILD, &args![menu_tile, SUBTITLE_TILE])
+                    .u32();
+                if tile != 0 {
+                    let string = e.call(FIRST_WORD, &args![text]).u32();
+                    set_string(e, tile, TRAIT_STRING, string);
+                }
+                let duration = e.call(SOUND_HANDLE_GET_DURATION, &args![sound]).i32();
+                let mut time = x87_store32(f64::from(duration));
+                // `FCOMP; TEST AH,0x44; JP`: the length counts only when the duration is 0.
+                if x87_m32(time) == e.global::<f64>(ZERO_DOUBLE) {
+                    let string = e.call(FIRST_WORD, &args![text]).u32();
+                    let length = e.call(STRLEN, &args![string]).u32();
+                    let speed = e
+                        .call(SETTING_FLOAT_ADDRESS, &args![SETTING_SUBTITLE_SPEED])
+                        .u32();
+                    let speed = x87_load32(e.mem.u32(speed));
+                    let product = x87_mul(speed, f64::from(length));
+                    time = x87_store32(x87_mul(product, e.global::<f64>(THOUSAND_01017B70)));
+                }
+                let now = e.call(CURRENT_TIME, &args![]).u32();
+                let clear = x87_add(f64::from(now), x87_m32(time));
+                let clear = x87_fistp64_chop(X87Ext::load64(clear)) as u32;
+                e.set(this, ContainerMenu::m_nTimeToClearSubtitle, clear);
+            }
+        }
+        e.call(STRING_DESTROY, &args![text]);
+        e.call(SOUND_HANDLE_DESTRUCTOR, &args![sound]);
+    });
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x0075_cc70, fn_0075cc70(Ptr) -> u32),
+        entry!(
+            0x0075_d250,
+            container_menu_do_gamepad(Ptr<ContainerMenu>, i32, u32) -> bool
+        ),
+        entry!(
+            0x0075_d430,
+            container_menu_do_gamepad_up_event(Ptr<ContainerMenu>, i32, u32) -> bool
+        ),
+        entry!(
+            0x0075_d4a0,
+            container_menu_do_wheel_move(Ptr<ContainerMenu>, i32, u32)
+        ),
+        entry!(0x0075_da60, container_menu_take_all_fn(u32, u32)),
+        entry!(
+            0x0075_e0b0,
+            container_menu_pickpocket_check(Ptr<ContainerMenu>, u32, i32) -> bool
+        ),
+        entry!(
+            0x0075_e240,
+            container_menu_get_stolen_value(Ptr<ContainerMenu>, u32, i32, u8) -> i32
+        ),
+        entry!(
+            0x0075_ec60,
+            container_menu_play_reactivity_bark(Ptr<ContainerMenu>, u32)
+        ),
+        entry!(
+            0x0075_eea0,
+            container_menu_display_container_menu_subtitle(
+                Ptr<ContainerMenu>,
+                u32,
+                u32,
+                u32,
+                u32,
+                u32,
+            )
+        ),
         entry!(
             0x0075_b0d0,
             container_menu_container_menu(Ptr<ContainerMenu>) -> Ptr<ContainerMenu>
@@ -3361,5 +3980,502 @@ mod tests {
             calls_to(&e, SET_ITEM_CARD),
             vec![vec![0, tile(0x70), 0, 0x7000, 0]]
         );
+    }
+}
+
+#[cfg(test)]
+mod n053_tests {
+    use super::*;
+
+    /// The callees of this batch's functions outside this file, stubbed to return 0.
+    const FOREIGN: &[u32] = &[
+        IS_TOP_MENU,
+        LIST_SAVE_STATE,
+        LIST_RESTORE_STATE,
+        LIST_COUNT,
+        INTERFACE_SINGLETON,
+        WHEEL_DIRECTION_0070EC70,
+        FIRST_WORD,
+        FIRST_WORD_ADDRESS,
+        EXTRA_GET_ITEM_DROPPER,
+        FORM_TEST_00440DA0,
+        FORM_TEST_00440D80,
+        LIST_ITEM_TILE,
+        GET_FLOAT_TRAIT,
+        WORD_AT_FOUR,
+        ITEM_OBJECT,
+        GET_CLAMPED_ACTOR_VALUE,
+        PICKPOCKET_CHANCE_00643400,
+        RANDOM,
+        RANDOM_UNSIGNED,
+        MISC_STAT_INCREMENT,
+        PLAYER_CAUGHT_008C00E0,
+        SETTING_STRING,
+        SHOW_MESSAGE,
+        REFERENCE_BASE_DATA_004181E0,
+        ALIGNMENT_FOR_KARMA,
+        SETTING_FLOAT_ADDRESS,
+        REWARD_KARMA,
+        ITEM_GET_VALUE,
+        FLOAT_TO_INT,
+        REFERENCE_OWNER,
+        EXTRA_OWNER_00418660,
+        EXTRA_GET_COUNT,
+        RT_DYNAMIC_CAST,
+        TOPIC_GET_MATCHING_INFO,
+        INFO_QUEST_006733E0,
+        DIALOGUE_ITEM_CONSTRUCT,
+        DIALOGUE_ITEM_DESTRUCT,
+        DIALOGUE_ITEM_FIRST_RESPONSE,
+        DIALOGUE_ITEM_CURRENT_RESPONSE,
+        FORM_OF,
+        VALUE_STRING_0084E3A0,
+        ACTOR_VOICE_SOUND_00933150,
+        SOUND_HANDLE_ASSIGN,
+        SOUND_HANDLE_DESTRUCTOR,
+        SOUND_HANDLE_FADE_OUT,
+        RESPONSE_00441110,
+        RESPONSE_009611E0,
+        STRING_004048E0,
+        RESPONSE_00460140,
+        STRING_COPY_CONSTRUCT,
+        SUBTITLES_STRING_00408D60,
+        ALWAYS_SHOW_SUBTITLES,
+        TILE_FIND_CHILD,
+        SET_STRING_TRAIT,
+        SOUND_HANDLE_GET_DURATION,
+        STRLEN,
+        CURRENT_TIME,
+        STRING_DESTROY,
+    ];
+
+    fn engine() -> Engine {
+        let mut e = Engine::new();
+        for &callee in FOREIGN {
+            e.register(callee, |_, _| Ret::default());
+        }
+        e.register(FTOL2, |_, a| {
+            let value = f64::from_bits(u64::from(a[0]) | u64::from(a[1]) << 32);
+            (value as i32).into_ret()
+        });
+        for page in [
+            0x0101_2000u32,
+            0x0101_6000,
+            0x0101_7000,
+            0x0102_e000,
+            0x011d_9000,
+            0x011d_e000,
+        ] {
+            e.map(page, 0x1000);
+        }
+        e.set_global(DISABLED_VALUE, 128.0f64);
+        e.set_global(ZERO_DOUBLE, 0.0f64);
+        e.set_global(THOUSAND_01017B70, 1000.0f64);
+        e.call_log = Some(vec![]);
+        e
+    }
+
+    fn calls(e: &Engine, addr: u32) -> Vec<Vec<u32>> {
+        e.call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|(a, _)| *a == addr)
+            .map(|(_, w)| w.clone())
+            .collect()
+    }
+
+    fn float_ret(value: f64) -> Ret {
+        Ret {
+            st0: value,
+            ..Ret::default()
+        }
+    }
+
+    /// A menu with a vtable whose slots +0xc (`DoClick`) and +0x10 (`DoEnter`) are recorded,
+    /// made `pMe`.
+    fn new_menu(e: &mut Engine) -> u32 {
+        e.put_vtable(0x0f10_0000, &[0, 0, 0, 0x0f10_0100, 0x0f10_0200]);
+        e.register(0x0f10_0100, |_, _| Ret::default());
+        e.register(0x0f10_0200, |_, _| Ret::default());
+        let this = e.mem.alloc(0x110);
+        e.mem.set_u32(this, 0x0f10_0000);
+        e.set_global(CONTAINER_MENU, this);
+        this
+    }
+
+    /// A reference with a vtable: slot +0x100 (is an actor) answers `actor`, slots +0x17c,
+    /// +0x230, +0x284, +0x3d0 and +0x47c are recorded.
+    fn reference(e: &mut Engine, vtable: u32, actor: bool) -> u32 {
+        let mut slots = vec![0u32; 0x480 / 4];
+        slots[0x100 / 4] = vtable + 0x100;
+        slots[0x17c / 4] = vtable + 0x17c;
+        slots[0x230 / 4] = vtable + 0x230;
+        slots[0x284 / 4] = vtable + 0x284;
+        slots[0x3d0 / 4] = vtable + 0x3d0;
+        slots[0x47c / 4] = vtable + 0x47c;
+        e.put_vtable(vtable, &slots);
+        if actor {
+            e.register(vtable + 0x100, |_, _| 1u32.into_ret());
+        } else {
+            e.register(vtable + 0x100, |_, _| Ret::default());
+        }
+        for slot in [0x17c, 0x230, 0x284, 0x3d0, 0x47c] {
+            e.register(vtable + slot, |_, _| Ret::default());
+        }
+        let object = e.mem.alloc(0x100);
+        e.mem.set_u32(object, vtable);
+        object
+    }
+
+    /// What `PickpocketCheck` reads of a target: its actor values (+0xa4, slot +8 answers 30),
+    /// its base data (`004181e0`, the karma slot +0xc of +0x100 answers -5.0) and the karma
+    /// setting (-2.5).
+    fn pickpocket_target(e: &mut Engine, target: u32) {
+        e.put_vtable(0x0f15_0000, &[0, 0, 0x0f15_0100]);
+        e.register(0x0f15_0100, |_, _| 30u32.into_ret());
+        e.mem.set_u32(target + 0xa4, 0x0f15_0000);
+        let base = e.mem.alloc(0x110);
+        e.put_vtable(0x0f15_1000, &[0, 0, 0, 0x0f15_1100]);
+        e.register(0x0f15_1100, |_, _| float_ret(-5.0));
+        e.mem.set_u32(base + 0x100, 0x0f15_1000);
+        e.register_double(REFERENCE_BASE_DATA_004181E0, move |_, _| base.into_ret());
+        let karma = e.mem.alloc(4);
+        e.mem.set_u32(karma, (-2.5f32).to_bits());
+        e.register_double(SETTING_FLOAT_ADDRESS, move |_, _| karma.into_ret());
+    }
+
+    #[test]
+    fn fn_0075cc70_is_the_mod_list_address() {
+        let mut e = engine();
+        assert_eq!(e.call(0x0075_cc70, &args![0x1000u32]).u32(), 0x1df4);
+    }
+
+    #[test]
+    fn do_gamepad_clicks_filters_and_enters_the_other_list() {
+        let mut e = engine();
+        let this = new_menu(&mut e);
+        assert!(!e.call(0x0075_d250, &args![this, 3u32, 0u32]).bool());
+        e.register(IS_TOP_MENU, |_, _| 1u32.into_ret());
+        e.mem.set_u32(this + 0xf8, this + ITEMS);
+        assert!(e.call(0x0075_d250, &args![this, 3u32, 0u32]).bool());
+        assert!(e.call(0x0075_d250, &args![this, 4u32, 0u32]).bool());
+        e.mem.set_u32(this + 0xf8, this + CONTAINER);
+        assert!(e.call(0x0075_d250, &args![this, 3u32, 0u32]).bool());
+        assert!(e.call(0x0075_d250, &args![this, 4u32, 0u32]).bool());
+        let ids: Vec<_> = calls(&e, 0x0f10_0100).iter().map(|w| w[1]).collect();
+        assert_eq!(ids, vec![2, 0, 7, 5]);
+        assert_eq!(calls(&e, LIST_RESTORE_STATE)[3], vec![this + CONTAINER, 0]);
+        // Mode 4 ignores the filter buttons.
+        e.mem.set_u32(this + 0x80, 4);
+        assert!(!e.call(0x0075_d250, &args![this, 3u32, 0u32]).bool());
+        // Button 13 enters the container list from the items list.
+        e.put_vtable(0x0f10_1000, &[0, 0x0f10_1100]);
+        e.register(0x0f10_1100, |_, _| Ret::default());
+        e.mem.set_u32(this + ITEMS, 0x0f10_1000);
+        assert!(!e.call(0x0075_d250, &args![this, 0xdu32, 0u32]).bool());
+        e.register(LIST_COUNT, |_, _| 2u32.into_ret());
+        assert!(e.call(0x0075_d250, &args![this, 0xdu32, 0u32]).bool());
+        assert_eq!(calls(&e, 0x0f10_0200), vec![vec![this, 0x15, 0]]);
+        assert_eq!(
+            calls(&e, LIST_SAVE_STATE).last().unwrap(),
+            &vec![this + CONTAINER]
+        );
+        assert_eq!(
+            calls(&e, LIST_RESTORE_STATE).last().unwrap(),
+            &vec![this + ITEMS, 1]
+        );
+        assert!(!e.call(0x0075_d250, &args![this, 5u32, 0u32]).bool());
+    }
+
+    #[test]
+    fn do_gamepad_up_event_takes_all_or_closes() {
+        let mut e = engine();
+        let this = new_menu(&mut e);
+        assert!(!e.call(0x0075_d430, &args![this, 0xbu32, 0u32]).bool());
+        e.mem.set_u32(this + 0x24, 1);
+        assert!(e.call(0x0075_d430, &args![this, 0xbu32, 0u32]).bool());
+        assert_eq!(calls(&e, 0x0f10_0100), vec![vec![this, 10, 0]]);
+        e.mem.set_u32(this + 0x80, 3);
+        assert!(!e.call(0x0075_d430, &args![this, 0xbu32, 0u32]).bool());
+        e.set_global(CONTAINER_MENU, 0u32);
+        assert!(e.call(0x0075_d430, &args![this, 10u32, 0u32]).bool());
+        assert!(!e.call(0x0075_d430, &args![this, 9u32, 0u32]).bool());
+    }
+
+    #[test]
+    fn do_wheel_move_clicks_by_direction() {
+        let mut e = engine();
+        let this = new_menu(&mut e);
+        e.call(0x0075_d4a0, &args![this, 2u32, 0u32]);
+        assert!(calls(&e, 0x0f10_0100).is_empty());
+        e.register(WHEEL_DIRECTION_0070EC70, |_, _| (-1i32).into_ret());
+        e.call(0x0075_d4a0, &args![this, 1u32, 0u32]);
+        e.call(0x0075_d4a0, &args![this, 6u32, 0u32]);
+        e.register(WHEEL_DIRECTION_0070EC70, |_, _| 1u32.into_ret());
+        e.call(0x0075_d4a0, &args![this, 1u32, 0u32]);
+        e.call(0x0075_d4a0, &args![this, 6u32, 0u32]);
+        let ids: Vec<_> = calls(&e, 0x0f10_0100).iter().map(|w| w[1]).collect();
+        assert_eq!(ids, vec![0, 5, 2, 7]);
+    }
+
+    #[test]
+    fn take_all_moves_an_item_and_checks_a_pickpocket() {
+        let mut e = engine();
+        let this = new_menu(&mut e);
+        let player = reference(&mut e, 0x0f19_0000, true);
+        e.set_global(PLAYER, player);
+        let container = reference(&mut e, 0x0f11_0000, true);
+        pickpocket_target(&mut e, container);
+        e.mem.set_u32(this + 0x74, container);
+        e.mem.set_u32(this + 0x80, 2);
+        e.mem.set_u32(this + 0x84, 5);
+        let shown = e.mem.alloc(4);
+        e.mem.set_u32(shown, 0x6100);
+        e.register_double(LIST_ITEM_TILE, move |_, _| shown.into_ret());
+        e.register(WORD_AT_FOUR, |_, _| 3u32.into_ret());
+        e.register(ITEM_OBJECT, |_, _| 0x7300u32.into_ret());
+        // The stolen value: an item value of 4 and no extra lists: 3 * 4.
+        e.register(FLOAT_TO_INT, |_, _| 4u32.into_ret());
+        e.call(0x0075_da60, &args![0x6000u32, 0x7200u32]);
+        assert_eq!(e.mem.u32(this + 0x84), 17);
+        // The chance is 0, so the roll fails: the menu records the failure.
+        assert_eq!(e.mem.u8(this + 0x89), 1);
+        assert_eq!(
+            calls(&e, 0x0f11_017c),
+            vec![vec![container, 0x7300, 0, 3, 1, 0, player, 0, 0, 1, 0]]
+        );
+        // After a failure nothing moves.
+        e.call(0x0075_da60, &args![0x6000u32, 0x7200u32]);
+        assert_eq!(calls(&e, 0x0f11_017c).len(), 1);
+    }
+
+    #[test]
+    fn take_all_returns_a_dropped_item_and_skips_a_disabled_one() {
+        let mut e = engine();
+        let this = new_menu(&mut e);
+        let player = reference(&mut e, 0x0f12_0000, true);
+        e.set_global(PLAYER, player);
+        e.mem.set_u32(this + 0x80, 1);
+        let extra_slot = e.mem.alloc(4);
+        e.mem.set_u32(extra_slot, 0x7400);
+        e.register(FIRST_WORD, |_, _| 0x7500u32.into_ret());
+        e.register_double(FIRST_WORD_ADDRESS, move |_, _| extra_slot.into_ret());
+        e.register(EXTRA_GET_ITEM_DROPPER, |_, _| 0x7600u32.into_ret());
+        e.call(0x0075_da60, &args![0x6000u32, 0x7200u32]);
+        assert_eq!(calls(&e, 0x0f12_03d0), vec![vec![player, 0x7600, 1, 0]]);
+        assert!(calls(&e, GET_FLOAT_TRAIT).is_empty());
+        // A follower's drop goes on to the tile test: 128 stays.
+        e.register(FORM_TEST_00440D80, |_, _| 1u32.into_ret());
+        let shown = e.mem.alloc(4);
+        e.register_double(LIST_ITEM_TILE, move |_, _| shown.into_ret());
+        e.register(GET_FLOAT_TRAIT, |_, _| float_ret(128.0));
+        e.call(0x0075_da60, &args![0x6000u32, 0x7200u32]);
+        assert_eq!(calls(&e, GET_FLOAT_TRAIT).len(), 1);
+        assert!(calls(&e, ITEM_OBJECT).is_empty());
+    }
+
+    #[test]
+    fn pickpocket_check_rolls_against_the_chance() {
+        let mut e = engine();
+        let this = new_menu(&mut e);
+        let player = reference(&mut e, 0x0f13_0000, true);
+        e.set_global(PLAYER, player);
+        let target = reference(&mut e, 0x0f14_0000, true);
+        pickpocket_target(&mut e, target);
+        e.register(GET_CLAMPED_ACTOR_VALUE, |_, _| 50u32.into_ret());
+        e.register(PICKPOCKET_CHANCE_00643400, |_, _| 60u32.into_ret());
+        e.register(RANDOM_UNSIGNED, |_, _| 10u32.into_ret());
+        e.register(ALIGNMENT_FOR_KARMA, |_, _| 1u32.into_ret());
+        e.mem.set_u32(this + 0xf8, this + CONTAINER);
+        assert!(e.call(0x0075_e0b0, &args![this, 0u32, 5u32]).bool());
+        assert!(e.call(0x0075_e0b0, &args![this, target, 0u32]).bool());
+        assert!(e.call(0x0075_e0b0, &args![this, target, 7u32]).bool());
+        assert_eq!(
+            calls(&e, PICKPOCKET_CHANCE_00643400),
+            vec![vec![50, 30, 7.0f32.to_bits()]]
+        );
+        assert_eq!(calls(&e, 0x0f15_0100), vec![vec![target + 0xa4, 0x2a]]);
+        assert_eq!(calls(&e, 0x0f13_047c), vec![vec![player, 0x2a, 1]]);
+        assert_eq!(calls(&e, RANDOM_UNSIGNED)[0][1], 100);
+        assert_eq!(calls(&e, MISC_STAT_INCREMENT), vec![vec![0xd]]);
+        assert_eq!(e.mem.u8(this + 0x88), 1);
+        assert_eq!(
+            calls(&e, ALIGNMENT_FOR_KARMA),
+            vec![vec![(-5.0f32).to_bits()]]
+        );
+        assert_eq!(calls(&e, REWARD_KARMA), vec![vec![player, (-2i32) as u32]]);
+        // A failed roll: the player reacts, the message shows, +0x89 is set.
+        e.register(RANDOM_UNSIGNED, |_, _| 60u32.into_ret());
+        e.register(ALIGNMENT_FOR_KARMA, |_, _| 4u32.into_ret());
+        assert!(!e.call(0x0075_e0b0, &args![this, target, 7u32]).bool());
+        assert_eq!(
+            calls(&e, PLAYER_CAUGHT_008C00E0),
+            vec![vec![player, target, 0, 0]]
+        );
+        assert_eq!(calls(&e, SHOW_MESSAGE)[0][1..4], [2, 0, 0]);
+        assert_eq!(e.mem.u8(this + 0x89), 1);
+        assert_eq!(calls(&e, REWARD_KARMA).len(), 1);
+    }
+
+    #[test]
+    fn the_stolen_value_counts_owned_and_unowned_stacks() {
+        let mut e = engine();
+        let this = new_menu(&mut e);
+        let container = reference(&mut e, 0x0f16_0000, false);
+        e.mem.set_u32(this + 0x74, container);
+        e.register(REFERENCE_OWNER, |_, _| 0x7700u32.into_ret());
+        e.register(FLOAT_TO_INT, |_, _| 10u32.into_ret());
+        // Two extra lists: one owned by 0x7700 (2 items), one unowned (1 item).
+        let first = e.mem.alloc(8);
+        let second = e.mem.alloc(8);
+        e.mem.set_u32(first, 0x7a00);
+        e.mem.set_u32(first + 4, second);
+        e.mem.set_u32(second, 0x7b00);
+        e.register_double(FIRST_WORD, move |_, _| first.into_ret());
+        e.register(FIRST_WORD_ADDRESS, |_, a| a[0].into_ret());
+        e.register(WORD_AT_FOUR, |e, a| e.mem.u32(a[0] + 4).into_ret());
+        e.register(EXTRA_OWNER_00418660, |_, a| {
+            (if a[0] == 0x7a00 { 0x7700u32 } else { 0 }).into_ret()
+        });
+        e.register(EXTRA_GET_COUNT, |_, a| {
+            (if a[0] == 0x7a00 { 2u32 } else { 1 }).into_ret()
+        });
+        assert_eq!(
+            e.call(0x0075_e240, &args![this, 0x7200u32, 5i32, 0u32])
+                .i32(),
+            20
+        );
+        // Unowned items count too, and so do the 2 items left after the lists.
+        assert_eq!(
+            e.call(0x0075_e240, &args![this, 0x7200u32, 5i32, 1u32])
+                .i32(),
+            50
+        );
+    }
+
+    #[test]
+    fn a_reactivity_bark_speaks_and_shows_its_subtitle() {
+        let mut e = engine();
+        let this = new_menu(&mut e);
+        e.set_global(PLAYER, 0x7100u32);
+        let container = reference(&mut e, 0x0f17_0000, true);
+        e.mem.set_u32(this + 0x74, container);
+        let actor = reference(&mut e, 0x0f18_0000, true);
+        e.register_double(RT_DYNAMIC_CAST, move |_, _| actor.into_ret());
+        e.register(TOPIC_GET_MATCHING_INFO, |_, _| 0x7c00u32.into_ret());
+        e.register(INFO_QUEST_006733E0, |_, _| 0x7d00u32.into_ret());
+        e.register(DIALOGUE_ITEM_CURRENT_RESPONSE, |_, _| 0x7e00u32.into_ret());
+        e.register(RESPONSE_00460140, |_, _| 0x7f00u32.into_ret());
+        e.register(FIRST_WORD, |_, a| (a[0] + 1).into_ret());
+        e.register(FIRST_WORD_ADDRESS, |_, a| (a[0] + 8).into_ret());
+        e.register(STRING_COPY_CONSTRUCT, |e, a| {
+            e.mem.set_u32(a[0], 0xaaaa);
+            e.mem.set_u32(a[0] + 4, 0xbbbb);
+            Ret::default()
+        });
+        e.register(SOUND_HANDLE_ASSIGN, |e, a| {
+            e.mem.set_u32(a[0], 0xcccc);
+            Ret::default()
+        });
+        e.call(0x0075_ec60, &args![this, 0x7b00u32]);
+        assert_eq!(
+            calls(&e, TOPIC_GET_MATCHING_INFO),
+            vec![vec![0x7b00, actor, 0x7100]]
+        );
+        let built = calls(&e, DIALOGUE_ITEM_CONSTRUCT);
+        assert_eq!(built[0][1..], [0x7d00, 0x7b00, 0x7c00, actor]);
+        let spoken = calls(&e, 0x0f18_0284);
+        assert_eq!(spoken.len(), 1);
+        assert_eq!(
+            spoken[0],
+            vec![
+                actor,
+                0x7f01,
+                this + 0x100,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0x7100,
+                1,
+                1,
+                0,
+                0,
+                1
+            ]
+        );
+        assert_eq!(calls(&e, STRING_COPY_CONSTRUCT)[0][1], 0x7e08);
+        assert_eq!(calls(&e, SOUND_HANDLE_ASSIGN)[0][1], this + 0x100);
+        // The subtitle got the copies: its two destructors run on them.
+        assert_eq!(calls(&e, STRING_DESTROY).len(), 1);
+        assert_eq!(calls(&e, SOUND_HANDLE_DESTRUCTOR).len(), 1);
+        assert_eq!(calls(&e, DIALOGUE_ITEM_DESTRUCT), vec![vec![built[0][0]]]);
+        // No info: nothing is built.
+        e.register(TOPIC_GET_MATCHING_INFO, |_, _| Ret::default());
+        e.call(0x0075_ec60, &args![this, 0x7b00u32]);
+        assert_eq!(calls(&e, DIALOGUE_ITEM_CONSTRUCT).len(), 1);
+    }
+
+    #[test]
+    fn a_reactivity_bark_with_a_voice_file_takes_the_actor_sound() {
+        let mut e = engine();
+        let this = new_menu(&mut e);
+        e.register(TOPIC_GET_MATCHING_INFO, |_, _| 0x7c00u32.into_ret());
+        e.register(DIALOGUE_ITEM_CURRENT_RESPONSE, |_, _| 0x7e00u32.into_ret());
+        e.register(FORM_OF, |_, _| 0x8100u32.into_ret());
+        e.register(VALUE_STRING_0084E3A0, |_, _| 0x8200u32.into_ret());
+        e.register(ACTOR_VOICE_SOUND_00933150, |_, _| 0x8300u32.into_ret());
+        e.call(0x0075_ec60, &args![this, 0x7b00u32]);
+        let sound = calls(&e, ACTOR_VOICE_SOUND_00933150);
+        assert_eq!(sound.len(), 1);
+        assert_eq!(sound[0][0], 0);
+        assert_eq!(sound[0][2..], [0x8200, 0, 0x102, 1]);
+        assert_eq!(
+            calls(&e, SOUND_HANDLE_ASSIGN)[0],
+            vec![this + 0x100, 0x8300]
+        );
+    }
+
+    #[test]
+    fn the_subtitle_time_comes_from_the_sound_or_the_text() {
+        let mut e = engine();
+        let this = new_menu(&mut e);
+        let on = e.mem.alloc(4);
+        e.mem.set_u8(on, b'1');
+        e.register_double(SUBTITLES_STRING_00408D60, move |_, _| on.into_ret());
+        e.register(STRING_004048E0, |_, _| 5u32.into_ret());
+        e.register(WORD_AT_FOUR, |_, _| 0x6000u32.into_ret());
+        e.register(TILE_FIND_CHILD, |_, _| 0x6100u32.into_ret());
+        e.register(FIRST_WORD, |e, a| e.mem.u32(a[0]).into_ret());
+        e.register(CURRENT_TIME, |_, _| 1000u32.into_ret());
+        e.register(SOUND_HANDLE_GET_DURATION, |_, _| 2500u32.into_ret());
+        e.call(0x0075_eea0, &args![this, 0x9000u32, 5u32, 1u32, 0u32, 0u32]);
+        assert_eq!(
+            calls(&e, TILE_FIND_CHILD),
+            vec![vec![0x6000, SUBTITLE_TILE]]
+        );
+        assert_eq!(
+            calls(&e, SET_STRING_TRAIT),
+            vec![vec![0x6100, TRAIT_STRING as u32, 0x9000, 1]]
+        );
+        assert_eq!(e.mem.u32(this + 0xfc), 3500);
+        let text = calls(&e, STRING_DESTROY)[0][0];
+        assert_eq!(calls(&e, SOUND_HANDLE_DESTRUCTOR), vec![vec![text + 8]]);
+        // No duration: length 4 times the speed 0.25 times 1000.
+        e.register(SOUND_HANDLE_GET_DURATION, |_, _| Ret::default());
+        e.register(STRLEN, |_, _| 4u32.into_ret());
+        let speed = e.mem.alloc(4);
+        e.mem.set_u32(speed, 0.25f32.to_bits());
+        e.register_double(SETTING_FLOAT_ADDRESS, move |_, _| speed.into_ret());
+        e.call(0x0075_eea0, &args![this, 0x9000u32, 5u32, 1u32, 0u32, 0u32]);
+        assert_eq!(e.mem.u32(this + 0xfc), 2000);
+        // An empty text sets nothing but still destroys the arguments.
+        e.mem.set_u32(this + 0xfc, 0);
+        e.register(STRING_004048E0, |_, _| Ret::default());
+        e.call(0x0075_eea0, &args![this, 0x9000u32, 5u32, 1u32, 0u32, 0u32]);
+        assert_eq!(e.mem.u32(this + 0xfc), 0);
+        assert_eq!(calls(&e, STRING_DESTROY).len(), 3);
     }
 }

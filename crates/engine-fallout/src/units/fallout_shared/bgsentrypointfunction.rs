@@ -521,6 +521,675 @@ pub fn bgs_entry_point_function_data_activate_choice_init_item(
     }
 }
 
+/// `005e5b80` [`bgs_entry_point_function_check_function_arguments`] and the
+/// value getter of a one- or two-value data (`006b9130`, `ECX` = the data,
+/// result in `ST0`).
+const DATA_VALUE: u32 = 0x006b_9130;
+/// `00488d50` (engine map: `BSFaceGenKeyframe::GetTime`, a folded getter):
+/// called on a two-value data, result in `ST0`.
+const DATA_SECOND_VALUE: u32 = 0x0048_8d50;
+/// `00413f40`: `this + 8` (the activate-choice data's result script).
+const RESULT_SCRIPT_OF: u32 = 0x0041_3f40;
+/// `00ec43fb`: `__RTDynamicCast` (cdecl, five words).
+const DYNAMIC_CAST: u32 = 0x00ec_43fb;
+/// `004858f0`: adds a one-byte chunk to the form being saved (cdecl).
+const ADD_BYTE_CHUNK: u32 = 0x0048_58f0;
+/// `00485910`: adds a four-byte chunk to the form being saved (cdecl).
+const ADD_WORD_CHUNK: u32 = 0x0048_5910;
+/// `0x54465045`, chunk `EPFT` (the data type byte).
+const CHUNK_EPFT: u32 = 0x5446_5045;
+/// `0x44465045`, chunk `EPFD` (the data's values).
+const CHUNK_EPFD: u32 = 0x4446_5045;
+/// `BGSEntryPointFunctionDataTwoValue`'s vtable (RTTI).
+const TWO_VALUE_VTABLE: u32 = 0x0104_6300;
+/// RTTI type descriptors (`.?AVBGSEntryPointFunctionData...@@`): the cast
+/// source of the `Compare` methods and their targets.
+const TYPE_FUNCTION_DATA: u32 = 0x0119_7440;
+const TYPE_ONE_VALUE: u32 = 0x0119_7410;
+const TYPE_TWO_VALUE: u32 = 0x0119_7468;
+const TYPE_LEVELED_LIST: u32 = 0x0119_7498;
+const TYPE_ACTIVATE_CHOICE: u32 = 0x0119_74cc;
+
+// Translated from 005e5c70 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The entry point function of type 0 with a one-value data (type 1), cdecl,
+/// five words: when `CheckFunctionArguments(0, 1, ...)` passes, the `float`
+/// the first argument points at becomes the data's value (`006b9130`, in
+/// `ST0`; `FSTP dword`). The first word only goes to the check.
+pub fn fn_005e5c70(
+    e: &mut Engine,
+    subject: u32,
+    function_type: u32,
+    argument_count: u8,
+    arguments: Ptr,
+    data: Ptr,
+) {
+    if !bgs_entry_point_function_check_function_arguments(
+        e,
+        0,
+        1,
+        subject,
+        function_type,
+        argument_count,
+        arguments,
+        data,
+    ) {
+        return;
+    }
+    let target = e.mem.u32(arguments.addr());
+    let value = e.call(DATA_VALUE, &args![data]).f64();
+    e.mem.set_u32(target, x87_store32(value));
+}
+
+// Translated from 005e5cc0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The entry point function of type 0 with a one-value data (type 1), cdecl,
+/// five words: when the check passes, the data's value (`006b9130`) is added
+/// to the `float` the first argument points at (`FADD dword`, `FSTP dword`).
+pub fn fn_005e5cc0(
+    e: &mut Engine,
+    subject: u32,
+    function_type: u32,
+    argument_count: u8,
+    arguments: Ptr,
+    data: Ptr,
+) {
+    if !bgs_entry_point_function_check_function_arguments(
+        e,
+        0,
+        1,
+        subject,
+        function_type,
+        argument_count,
+        arguments,
+        data,
+    ) {
+        return;
+    }
+    let target = e.mem.u32(arguments.addr());
+    let value = e.call(DATA_VALUE, &args![data]).f64();
+    let sum = x87_add(value, x87_m32(e.mem.u32(target)));
+    e.mem.set_u32(target, x87_store32(sum));
+}
+
+// Translated from 005e5d80 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The entry point function of type 0 with a two-value data (type 2), cdecl,
+/// five words: when `CheckFunctionArguments(0, 2, ...)` passes, adds
+/// `RandomFloat(value, second)` (`00476b70`, cdecl, both pushed as floats;
+/// `value` from `006b9130`, `second` from `00488d50`, read first) to the
+/// `float` the first argument points at.
+pub fn fn_005e5d80(
+    e: &mut Engine,
+    subject: u32,
+    function_type: u32,
+    argument_count: u8,
+    arguments: Ptr,
+    data: Ptr,
+) {
+    if !bgs_entry_point_function_check_function_arguments(
+        e,
+        0,
+        2,
+        subject,
+        function_type,
+        argument_count,
+        arguments,
+        data,
+    ) {
+        return;
+    }
+    let target = e.mem.u32(arguments.addr());
+    let second = e.call(DATA_SECOND_VALUE, &args![data]).f64();
+    let second = x87_store32(second);
+    let value = e.call(DATA_VALUE, &args![data]).f64();
+    let value = x87_store32(value);
+    let random = e.call(0x0047_6b70, &args![value, second]).f64();
+    let sum = x87_add(random, x87_m32(e.mem.u32(target)));
+    e.mem.set_u32(target, x87_store32(sum));
+}
+
+// Translated from 005e5df0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The entry point function of type 0 with a two-value data (type 2), cdecl,
+/// five words: when the check passes, the data's value (`006b9130`, stored
+/// as a `float`) times the integer slot 2 (+0x8) of the object at
+/// `subject + 0xA4` answers for the data's second value (`00488d50`,
+/// truncated with `FISTP qword` under the compiler's chop sequence, low
+/// word passed) is added to the `float` the first argument points at
+/// (`FILD`, `FMUL dword`, `FADD dword`, `FSTP dword`).
+pub fn fn_005e5df0(
+    e: &mut Engine,
+    subject: u32,
+    function_type: u32,
+    argument_count: u8,
+    arguments: Ptr,
+    data: Ptr,
+) {
+    if !bgs_entry_point_function_check_function_arguments(
+        e,
+        0,
+        2,
+        subject,
+        function_type,
+        argument_count,
+        arguments,
+        data,
+    ) {
+        return;
+    }
+    let target = e.mem.u32(arguments.addr());
+    let value = e.call(DATA_VALUE, &args![data]).f64();
+    let scale = x87_store32(value);
+    let second = e.call(DATA_SECOND_VALUE, &args![data]).f64();
+    let whole = x87_fistp64_chop(X87Ext::from(second)) as u32;
+    let count = e
+        .vcall(subject.wrapping_add(0xa4), 0x8, &args![whole])
+        .i32();
+    let product = x87_mul(f64::from(count), x87_m32(scale));
+    let sum = x87_add(product, x87_m32(e.mem.u32(target)));
+    e.mem.set_u32(target, x87_store32(sum));
+}
+
+// Translated from 005e5ea0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The entry point function of type 0 without data (data type 0), cdecl,
+/// five words: when `CheckFunctionArguments(0, 0, ...)` passes, the `float`
+/// the first argument points at becomes `00408840` of itself (cdecl, the
+/// float pushed through `FLD`/`FSTP`; result in `ST0`).
+pub fn fn_005e5ea0(
+    e: &mut Engine,
+    subject: u32,
+    function_type: u32,
+    argument_count: u8,
+    arguments: Ptr,
+    data: Ptr,
+) {
+    if !bgs_entry_point_function_check_function_arguments(
+        e,
+        0,
+        0,
+        subject,
+        function_type,
+        argument_count,
+        arguments,
+        data,
+    ) {
+        return;
+    }
+    let target = e.mem.u32(arguments.addr());
+    let pushed = x87_quiet_bits(e.mem.u32(target));
+    let result = e.call(0x0040_8840, &args![pushed]).f64();
+    e.mem.set_u32(target, x87_store32(result));
+}
+
+// Translated from 005e5ef0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// As [`fn_005e5ea0`], with the result negated (`FCHS`) before it is stored.
+pub fn fn_005e5ef0(
+    e: &mut Engine,
+    subject: u32,
+    function_type: u32,
+    argument_count: u8,
+    arguments: Ptr,
+    data: Ptr,
+) {
+    if !bgs_entry_point_function_check_function_arguments(
+        e,
+        0,
+        0,
+        subject,
+        function_type,
+        argument_count,
+        arguments,
+        data,
+    ) {
+        return;
+    }
+    let target = e.mem.u32(arguments.addr());
+    let pushed = x87_quiet_bits(e.mem.u32(target));
+    let result = e.call(0x0040_8840, &args![pushed]).f64();
+    e.mem.set_u32(target, x87_store32(-result));
+}
+
+// Translated from 005e5f50 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 005e5f50 - the exception-unwinding frame (FS:[0]) and the security-cookie word it pushes are not translated.
+/// The entry point function of type 1 with a leveled-list data (type 3),
+/// cdecl, five words: when `CheckFunctionArguments(1, 3, ...)` passes, a
+/// stack `TESContainer` (12 bytes, `00481610`/`00481680`) is filled from
+/// the data's list (`00726070` of the data, +0x30; `00488350` with
+/// `subject` and the container). When the first argument (`target`) has
+/// inventory changes (`004bf220`), each container entry (list nodes from
+/// `00717e50`, next `00726070`, until a node is empty (`008256d0`) or holds
+/// no entry) whose item (+0x4) answers true to slot 57 (+0xE4) is added to
+/// `target` through its slot 100 (+0x190): with the item's script
+/// (`004826d0`) as one item per count, each with a new `ExtraDataList`
+/// (0x20 bytes, `00410360`) counted 1 (`00419ad0`) that gets the script
+/// (`00419ed0`, `00419f80` of `005abf60`) when it has none, and the last
+/// list passed with count 1; without a script with no list and the entry's
+/// count (+0x0).
+pub fn fn_005e5f50(
+    e: &mut Engine,
+    subject: u32,
+    function_type: u32,
+    argument_count: u8,
+    arguments: Ptr,
+    data: Ptr,
+) {
+    if !bgs_entry_point_function_check_function_arguments(
+        e,
+        1,
+        3,
+        subject,
+        function_type,
+        argument_count,
+        arguments,
+        data,
+    ) {
+        return;
+    }
+    let target = e.mem.u32(arguments.addr());
+    e.with_stack(0xc, |e, container| {
+        e.call(0x0048_1610, &args![container]);
+        let holder = e.call(0x0072_6070, &args![data]).u32();
+        e.call(
+            0x0048_8350,
+            &args![holder.wrapping_add(0x30), subject, container],
+        );
+        let changes = e.call(0x004b_f220, &args![target]).u32();
+        let mut node = e.call(0x0071_7e50, &args![container]).u32();
+        if changes != 0 {
+            while node != 0 {
+                if e.call(0x0082_56d0, &args![node]).bool() {
+                    break;
+                }
+                let slot = e.call(0x0068_15c0, &args![node]).u32();
+                if e.mem.u32(slot) == 0 {
+                    break;
+                }
+                let slot = e.call(0x0068_15c0, &args![node]).u32();
+                let entry = e.mem.u32(slot);
+                let mut form = 0;
+                let item = e.mem.u32(entry.wrapping_add(4));
+                if item != 0 && e.vcall(item, 0xe4, &args![]).bool() {
+                    form = e.mem.u32(entry.wrapping_add(4));
+                }
+                if form != 0 {
+                    let item = e.mem.u32(entry.wrapping_add(4));
+                    let script = e.call(0x0048_26d0, &args![item]).u32();
+                    if script != 0 {
+                        let mut extra = 0u32;
+                        let mut index: i32 = 0;
+                        while index < e.mem.u32(entry) as i32 {
+                            let block = e.call(OPERATOR_NEW, &args![0x20u32]).u32();
+                            extra = if block == 0 {
+                                0
+                            } else {
+                                e.call(0x0041_0360, &args![block]).u32()
+                            };
+                            e.call(0x0041_9ad0, &args![extra, 1u32]);
+                            if extra != 0 && e.call(0x0041_8800, &args![extra]).u32() == 0 {
+                                e.call(0x0041_9ed0, &args![extra, script]);
+                                let own = e.call(0x0041_8800, &args![extra]).u32();
+                                let prepared = e.call(0x005a_bf60, &args![own]).u32();
+                                e.call(0x0041_9f80, &args![extra, prepared]);
+                            }
+                            index += 1;
+                        }
+                        e.vcall(target, 0x190, &args![form, extra, 1u32]);
+                    } else {
+                        let count = e.mem.u32(entry);
+                        e.vcall(target, 0x190, &args![form, 0u32, count]);
+                    }
+                }
+                node = e.call(0x0072_6070, &args![node]).u32();
+            }
+        }
+        e.call(0x0048_1680, &args![container]);
+    });
+}
+
+// Translated from 005e61b0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BGSEntryPointFunction::AddActivateChoiceFunction` (engine map), cdecl,
+/// five words: when `CheckFunctionArguments(2, 4, ...)` passes and the
+/// first argument and `data` are not null: when `005f5930` of the data is
+/// true, runs its result script (`00413f40`, when not null) through
+/// `005ac1e0` with the second argument and three zeros; otherwise gives
+/// the first argument `005ae3d0` with the address of a stack word holding
+/// `data`.
+pub fn bgs_entry_point_function_add_activate_choice_function(
+    e: &mut Engine,
+    subject: u32,
+    function_type: u32,
+    argument_count: u8,
+    arguments: Ptr,
+    data: Ptr,
+) {
+    if !bgs_entry_point_function_check_function_arguments(
+        e,
+        2,
+        4,
+        subject,
+        function_type,
+        argument_count,
+        arguments,
+        data,
+    ) {
+        return;
+    }
+    let first = e.mem.u32(arguments.addr());
+    let second = e.mem.u32(arguments.addr() + 4);
+    if first == 0 || data.is_null() {
+        return;
+    }
+    if e.call(0x005f_5930, &args![data]).bool() {
+        let script = e.call(RESULT_SCRIPT_OF, &args![data]).u32();
+        if script != 0 {
+            e.call(0x005a_c1e0, &args![script, second, 0u32, 0u32, 0u32]);
+        }
+    } else {
+        e.with_stack(4, |e, slot| {
+            e.mem.set_u32(slot.addr(), data.addr());
+            e.call(0x005a_e3d0, &args![first, slot]);
+        });
+    }
+}
+
+// Translated from 005e6250 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Saves the function data's type: slot 1 (+0x4, low byte) added as chunk
+/// `EPFT` (`004858f0`, the byte zero-extended).
+pub fn fn_005e6250(e: &mut Engine, this: Ptr) {
+    let data_type = e.vcall(this.addr(), 0x4, &args![]).u8();
+    e.call(ADD_BYTE_CHUNK, &args![CHUNK_EPFT, u32::from(data_type)]);
+}
+
+// Translated from 005e64b0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BGSEntryPointFunctionDataTwoValue` constructor (its vtable `01046300`,
+/// by RTTI): the base ([`fn_005e6420`]), the vtable, both values (+0x4,
+/// +0x8) = 0.0 (`FLDZ`). Returns `this`.
+pub fn fn_005e64b0(e: &mut Engine, this: Ptr) -> Ptr {
+    fn_005e6420(e, this);
+    e.mem.set_u32(this.addr(), TWO_VALUE_VTABLE);
+    e.mem.set_f32(this.addr() + 4, 0.0);
+    e.mem.set_f32(this.addr() + 8, 0.0);
+    this
+}
+
+// Translated from 005e6670 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 005e6670 - the exception-unwinding frame (FS:[0]) and the security-cookie word it pushes are not translated.
+/// `BGSEntryPointFunctionDataOneValue::Duplicate` (engine map): a new
+/// one-value data (8 bytes, [`fn_005e63f0`]; null when the allocation
+/// fails) with this one's value (+0x4, `FLD`/`FSTP`). The value is stored
+/// without a null test, as the exe does.
+pub fn bgs_entry_point_function_data_one_value_duplicate(e: &mut Engine, this: Ptr) -> Ptr {
+    let block = e.call(OPERATOR_NEW, &args![8u32]).u32();
+    let copy = if block == 0 {
+        Ptr::NULL
+    } else {
+        fn_005e63f0(e, Ptr::new(block))
+    };
+    let value = x87_quiet_bits(e.mem.u32(this.addr() + 4));
+    e.mem.set_u32(copy.addr().wrapping_add(4), value);
+    copy
+}
+
+// Translated from 005e6700 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BGSEntryPointFunctionDataOneValue::Compare` (engine map): whether
+/// `other` differs: true when it is not a one-value data
+/// (`__RTDynamicCast`) or its value (+0x4) is not equal (`FUCOMPP`; NaN
+/// differs).
+pub fn bgs_entry_point_function_data_one_value_compare(
+    e: &mut Engine,
+    this: Ptr,
+    other: Ptr,
+) -> bool {
+    let cast = e
+        .call(
+            DYNAMIC_CAST,
+            &args![other, 0u32, TYPE_FUNCTION_DATA, TYPE_ONE_VALUE, 0u32],
+        )
+        .u32();
+    if cast == 0 {
+        return true;
+    }
+    let mine = x87_load32(e.mem.u32(this.addr() + 4));
+    let theirs = x87_load32(e.mem.u32(cast + 4));
+    theirs != mine
+}
+
+// Translated from 005e6760 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BGSEntryPointFunctionDataOneValue::Save` (engine map): the type
+/// ([`fn_005e6250`]), then the value (+0x4) as chunk `EPFD` (`00485910`,
+/// the float pushed through `FLD`/`FSTP`).
+pub fn bgs_entry_point_function_data_one_value_save(e: &mut Engine, this: Ptr) {
+    fn_005e6250(e, this);
+    let value = x87_quiet_bits(e.mem.u32(this.addr() + 4));
+    e.call(ADD_WORD_CHUNK, &args![CHUNK_EPFD, value]);
+}
+
+// Translated from 005e67f0 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 005e67f0 - the exception-unwinding frame (FS:[0]) and the security-cookie word it pushes are not translated.
+/// `BGSEntryPointFunctionDataTwoValue::Duplicate` (engine map): a new
+/// two-value data (12 bytes, [`fn_005e64b0`]; null when the allocation
+/// fails) with this one's values (+0x4, +0x8, `FLD`/`FSTP`), stored without
+/// a null test.
+pub fn bgs_entry_point_function_data_two_value_duplicate(e: &mut Engine, this: Ptr) -> Ptr {
+    let block = e.call(OPERATOR_NEW, &args![0xcu32]).u32();
+    let copy = if block == 0 {
+        Ptr::NULL
+    } else {
+        fn_005e64b0(e, Ptr::new(block))
+    };
+    let first = x87_quiet_bits(e.mem.u32(this.addr() + 4));
+    e.mem.set_u32(copy.addr().wrapping_add(4), first);
+    let second = x87_quiet_bits(e.mem.u32(this.addr() + 8));
+    e.mem.set_u32(copy.addr().wrapping_add(8), second);
+    copy
+}
+
+// Translated from 005e6890 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BGSEntryPointFunctionDataTwoValue::Compare` (engine map): true when
+/// `other` is not a two-value data or either value (+0x4, then +0x8)
+/// is not equal (`FUCOMPP`; NaN differs).
+pub fn bgs_entry_point_function_data_two_value_compare(
+    e: &mut Engine,
+    this: Ptr,
+    other: Ptr,
+) -> bool {
+    let cast = e
+        .call(
+            DYNAMIC_CAST,
+            &args![other, 0u32, TYPE_FUNCTION_DATA, TYPE_TWO_VALUE, 0u32],
+        )
+        .u32();
+    if cast == 0 {
+        return true;
+    }
+    for offset in [4, 8] {
+        let mine = x87_load32(e.mem.u32(this.addr() + offset));
+        let theirs = x87_load32(e.mem.u32(cast + offset));
+        if theirs != mine {
+            return true;
+        }
+    }
+    false
+}
+
+// Translated from 005e6900 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BGSEntryPointFunctionDataTwoValue::Save` (engine map): the type
+/// ([`fn_005e6250`]), then both values copied to an 8-byte stack buffer
+/// (`FLD`/`FSTP`), swapped by `00462230` when `00401500` is true, added as
+/// chunk `EPFD` (`00485990`, 8 bytes), and swapped back the same way.
+pub fn bgs_entry_point_function_data_two_value_save(e: &mut Engine, this: Ptr) {
+    fn_005e6250(e, this);
+    e.with_stack(8, |e, buffer| {
+        let first = x87_quiet_bits(e.mem.u32(this.addr() + 4));
+        e.mem.set_u32(buffer.addr(), first);
+        let second = x87_quiet_bits(e.mem.u32(this.addr() + 8));
+        e.mem.set_u32(buffer.addr() + 4, second);
+        if e.call(0x0040_1500, &args![]).bool() {
+            e.call(0x0046_2230, &args![buffer]);
+        }
+        e.call(0x0048_5990, &args![CHUNK_EPFD, buffer, 8u32]);
+        if e.call(0x0040_1500, &args![]).bool() {
+            e.call(0x0046_2230, &args![buffer]);
+        }
+    });
+}
+
+// Translated from 005e6970 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BGSEntryPointFunctionDataTwoValue::Load` (engine map): false unless the
+/// chunk of `file` is 8 bytes; reads it into a stack buffer, swapped by
+/// `00462230` when the file needs it, and copies its two floats to +0x4
+/// and +0x8 (`FLD`/`FSTP`). Returns true.
+pub fn bgs_entry_point_function_data_two_value_load(e: &mut Engine, this: Ptr, file: Ptr) -> bool {
+    let size = e.call(CHUNK_SIZE, &args![file]).u32();
+    if size != 8 {
+        return false;
+    }
+    e.with_stack(8, |e, buffer| {
+        e.call(GET_CHUNK_DATA, &args![file, buffer, size]);
+        if e.call(NEEDS_BYTE_SWAP, &args![file]).bool() {
+            e.call(0x0046_2230, &args![buffer]);
+        }
+        let first = x87_quiet_bits(e.mem.u32(buffer.addr()));
+        e.mem.set_u32(this.addr() + 4, first);
+        let second = x87_quiet_bits(e.mem.u32(buffer.addr() + 4));
+        e.mem.set_u32(this.addr() + 8, second);
+    });
+    true
+}
+
+// Translated from 005e69d0 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 005e69d0 - the exception-unwinding frame (FS:[0]) and the security-cookie word it pushes are not translated.
+/// `BGSEntryPointFunctionDataLeveledList::Duplicate` (engine map): a new
+/// leveled-list data (8 bytes, [`fn_005e6510`]; null when the allocation
+/// fails) with this one's list (+0x4), stored without a null test.
+pub fn bgs_entry_point_function_data_leveled_list_duplicate(e: &mut Engine, this: Ptr) -> Ptr {
+    let block = e.call(OPERATOR_NEW, &args![8u32]).u32();
+    let copy = if block == 0 {
+        Ptr::NULL
+    } else {
+        fn_005e6510(e, Ptr::new(block))
+    };
+    let list = e.mem.u32(this.addr() + 4);
+    e.mem.set_u32(copy.addr().wrapping_add(4), list);
+    copy
+}
+
+// Translated from 005e6a60 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BGSEntryPointFunctionDataLeveledList::Compare` (engine map): true when
+/// `other` is not a leveled-list data or its list (+0x4) is another one.
+pub fn bgs_entry_point_function_data_leveled_list_compare(
+    e: &mut Engine,
+    this: Ptr,
+    other: Ptr,
+) -> bool {
+    let cast = e
+        .call(
+            DYNAMIC_CAST,
+            &args![other, 0u32, TYPE_FUNCTION_DATA, TYPE_LEVELED_LIST, 0u32],
+        )
+        .u32();
+    if cast == 0 {
+        return true;
+    }
+    e.mem.u32(this.addr() + 4) != e.mem.u32(cast + 4)
+}
+
+// Translated from 005e6ab0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BGSEntryPointFunctionDataLeveledList::Save` (engine map): the type
+/// ([`fn_005e6250`]), then, when there is a list (+0x4), its form id
+/// (`0084e3a0`) as chunk `EPFD` (`00485910`).
+pub fn bgs_entry_point_function_data_leveled_list_save(e: &mut Engine, this: Ptr) {
+    fn_005e6250(e, this);
+    let list = e.mem.u32(this.addr() + 4);
+    if list != 0 {
+        let id = e.call(FORM_ID, &args![list]).u32();
+        e.call(ADD_WORD_CHUNK, &args![CHUNK_EPFD, id]);
+    }
+}
+
+// Translated from 005e6cd0 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 005e6cd0 - the exception-unwinding frame (FS:[0]) and the security-cookie word it pushes are not translated.
+/// `BGSEntryPointFunctionDataActivateChoice::Duplicate` (engine map): a new
+/// activate-choice data (0x60 bytes, [`fn_005e6540`]; null when the
+/// allocation fails) given this one's label
+/// ([`bgs_entry_point_function_data_activate_choice_set_label`]), a copy of
+/// its result script (`005aa420` on the copy's `00413f40`, with this one's,
+/// which is read first) and its word +0x5C; used without a null test.
+pub fn bgs_entry_point_function_data_activate_choice_duplicate(e: &mut Engine, this: Ptr) -> Ptr {
+    let block = e.call(OPERATOR_NEW, &args![0x60u32]).u32();
+    let copy = if block == 0 {
+        Ptr::NULL
+    } else {
+        fn_005e6540(e, Ptr::new(block))
+    };
+    let label = Ptr::new(e.mem.u32(this.addr() + 4));
+    bgs_entry_point_function_data_activate_choice_set_label(e, copy, label);
+    let source = e.call(RESULT_SCRIPT_OF, &args![this]).u32();
+    let destination = e.call(RESULT_SCRIPT_OF, &args![copy]).u32();
+    e.call(0x005a_a420, &args![destination, source]);
+    let word = e.mem.u16(this.addr() + 0x5c);
+    e.mem.set_u16(copy.addr().wrapping_add(0x5c), word);
+    copy
+}
+
+// Translated from 005e6d80 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BGSEntryPointFunctionDataActivateChoice::Compare` (engine map): true
+/// when `other` is not an activate-choice data, only one of the two has a
+/// label (+0x4), both labels differ (`00408b20` not 0), the result scripts
+/// differ (`005ab240` on this one's `00413f40` with `other`'s, read first)
+/// or the words +0x5C differ.
+pub fn bgs_entry_point_function_data_activate_choice_compare(
+    e: &mut Engine,
+    this: Ptr,
+    other: Ptr,
+) -> bool {
+    let cast = e
+        .call(
+            DYNAMIC_CAST,
+            &args![other, 0u32, TYPE_FUNCTION_DATA, TYPE_ACTIVATE_CHOICE, 0u32],
+        )
+        .u32();
+    if cast == 0 {
+        return true;
+    }
+    let mine = e.mem.u32(this.addr() + 4);
+    let theirs = e.mem.u32(cast + 4);
+    if (mine == 0) != (theirs == 0) {
+        return true;
+    }
+    if mine != 0 && theirs != 0 && e.call(0x0040_8b20, &args![mine, theirs]).u32() != 0 {
+        return true;
+    }
+    let their_script = e.call(RESULT_SCRIPT_OF, &args![cast]).u32();
+    let my_script = e.call(RESULT_SCRIPT_OF, &args![this]).u32();
+    if e.call(0x005a_b240, &args![my_script, their_script]).bool() {
+        return true;
+    }
+    e.mem.u16(this.addr() + 0x5c) != e.mem.u16(cast + 0x5c)
+}
+
+// Translated from 005e6e50 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BGSEntryPointFunctionDataActivateChoice::Save` (engine map): the type
+/// ([`fn_005e6250`]); the label (+0x4), when there is one and `strlen`
+/// (`00ec6130`) is not 0, as chunk `EPF2` with its terminator (`004856f0`,
+/// length from `0044a670` + 1); the word +0x5C (zero-extended) as chunk
+/// `EPF3` (`00485950`); then the result script's save (`005abe00` on
+/// `00413f40`).
+pub fn bgs_entry_point_function_data_activate_choice_save(e: &mut Engine, this: Ptr) {
+    fn_005e6250(e, this);
+    let label = e.mem.u32(this.addr() + 4);
+    if label != 0 && e.call(0x00ec_6130, &args![label]).u32() != 0 {
+        let label = e.mem.u32(this.addr() + 4);
+        let length = e.call(0x0044_a670, &args![label]).u32();
+        let label = e.mem.u32(this.addr() + 4);
+        e.call(
+            0x0048_56f0,
+            &args![CHUNK_EPF2, label, length.wrapping_add(1)],
+        );
+    }
+    let word = u32::from(e.mem.u16(this.addr() + 0x5c));
+    e.call(0x0048_5950, &args![CHUNK_EPF3, word]);
+    let script = e.call(RESULT_SCRIPT_OF, &args![this]).u32();
+    e.call(0x005a_be00, &args![script]);
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -564,6 +1233,71 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(
             0x005e_7230,
             bgs_entry_point_function_data_activate_choice_init_item(Ptr, Ptr)
+        ),
+        entry!(0x005e_5c70, fn_005e5c70(u32, u32, u8, Ptr, Ptr)),
+        entry!(0x005e_5cc0, fn_005e5cc0(u32, u32, u8, Ptr, Ptr)),
+        entry!(0x005e_5d80, fn_005e5d80(u32, u32, u8, Ptr, Ptr)),
+        entry!(0x005e_5df0, fn_005e5df0(u32, u32, u8, Ptr, Ptr)),
+        entry!(0x005e_5ea0, fn_005e5ea0(u32, u32, u8, Ptr, Ptr)),
+        entry!(0x005e_5ef0, fn_005e5ef0(u32, u32, u8, Ptr, Ptr)),
+        entry!(0x005e_5f50, fn_005e5f50(u32, u32, u8, Ptr, Ptr)),
+        entry!(
+            0x005e_61b0,
+            bgs_entry_point_function_add_activate_choice_function(u32, u32, u8, Ptr, Ptr)
+        ),
+        entry!(0x005e_6250, fn_005e6250(Ptr)),
+        entry!(0x005e_64b0, fn_005e64b0(Ptr) -> Ptr),
+        entry!(
+            0x005e_6670,
+            bgs_entry_point_function_data_one_value_duplicate(Ptr) -> Ptr
+        ),
+        entry!(
+            0x005e_6700,
+            bgs_entry_point_function_data_one_value_compare(Ptr, Ptr) -> bool
+        ),
+        entry!(
+            0x005e_6760,
+            bgs_entry_point_function_data_one_value_save(Ptr)
+        ),
+        entry!(
+            0x005e_67f0,
+            bgs_entry_point_function_data_two_value_duplicate(Ptr) -> Ptr
+        ),
+        entry!(
+            0x005e_6890,
+            bgs_entry_point_function_data_two_value_compare(Ptr, Ptr) -> bool
+        ),
+        entry!(
+            0x005e_6900,
+            bgs_entry_point_function_data_two_value_save(Ptr)
+        ),
+        entry!(
+            0x005e_6970,
+            bgs_entry_point_function_data_two_value_load(Ptr, Ptr) -> bool
+        ),
+        entry!(
+            0x005e_69d0,
+            bgs_entry_point_function_data_leveled_list_duplicate(Ptr) -> Ptr
+        ),
+        entry!(
+            0x005e_6a60,
+            bgs_entry_point_function_data_leveled_list_compare(Ptr, Ptr) -> bool
+        ),
+        entry!(
+            0x005e_6ab0,
+            bgs_entry_point_function_data_leveled_list_save(Ptr)
+        ),
+        entry!(
+            0x005e_6cd0,
+            bgs_entry_point_function_data_activate_choice_duplicate(Ptr) -> Ptr
+        ),
+        entry!(
+            0x005e_6d80,
+            bgs_entry_point_function_data_activate_choice_compare(Ptr, Ptr) -> bool
+        ),
+        entry!(
+            0x005e_6e50,
+            bgs_entry_point_function_data_activate_choice_save(Ptr)
         ),
     ]
 }
@@ -1118,5 +1852,507 @@ mod b028_tests {
                 );
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod n036_tests {
+    use super::*;
+
+    fn quiet(e: &mut Engine, callees: &[u32]) {
+        for callee in callees {
+            e.register(*callee, |_, _| Ret::default());
+        }
+    }
+
+    fn calls_to(log: &[(u32, Vec<u32>)], addr: u32) -> Vec<Vec<u32>> {
+        log.iter()
+            .filter(|c| c.0 == addr)
+            .map(|c| c.1.clone())
+            .collect()
+    }
+
+    /// An engine whose argument-count table gives types 0, 1 and 2 one, one
+    /// and two arguments, and a data object of `data_type` (slot 1 answers
+    /// the word at +4).
+    fn function_engine(data_type: u32) -> (Engine, u32) {
+        let mut e = Engine::new();
+        e.map(0x0119_7000, 0x1000);
+        e.mem.set_u32(ARGUMENT_COUNTS, 1);
+        e.mem.set_u32(ARGUMENT_COUNTS + 4, 1);
+        e.mem.set_u32(ARGUMENT_COUNTS + 8, 2);
+        quiet(&mut e, &[PRINT_WARNING]);
+        e.put_vtable(0x0200_0000, &[0, 0x0090_0000]);
+        e.register(0x0090_0000, |e, a| e.mem.u32(a[0] + 4).into_ret());
+        let data = e.mem.alloc(0x40);
+        e.mem.set_u32(data, 0x0200_0000);
+        e.mem.set_u32(data + 4, data_type);
+        (e, data)
+    }
+
+    /// A float target and the one-word argument array pointing at it.
+    fn float_target(e: &mut Engine, value: f32) -> (u32, u32) {
+        let target = e.mem.alloc(4);
+        e.mem.set_f32(target, value);
+        let arguments = e.mem.alloc(8);
+        e.mem.set_u32(arguments, target);
+        (target, arguments)
+    }
+
+    #[test]
+    fn fn_005e5c70_sets_the_target_to_the_value() {
+        let (mut e, data) = function_engine(1);
+        e.register(DATA_VALUE, |_, _| 2.5f64.into_ret());
+        let (target, arguments) = float_target(&mut e, 3.0);
+        e.call(0x005e_5c70, &args![9u32, 0u32, 1u32, arguments, data]);
+        assert_eq!(e.mem.f32(target), 2.5);
+        e.mem.set_f32(target, 3.0);
+        e.call(0x005e_5c70, &args![9u32, 1u32, 1u32, arguments, data]);
+        assert_eq!(e.mem.f32(target), 3.0);
+    }
+
+    #[test]
+    fn fn_005e5cc0_adds_the_value() {
+        let (mut e, data) = function_engine(1);
+        e.register(DATA_VALUE, |_, _| 2.5f64.into_ret());
+        let (target, arguments) = float_target(&mut e, 3.0);
+        e.call(0x005e_5cc0, &args![9u32, 0u32, 1u32, arguments, data]);
+        assert_eq!(e.mem.f32(target), 5.5);
+        // A one-value data fails the two-value check of 005e5d80.
+        e.call(0x005e_5d80, &args![9u32, 0u32, 1u32, arguments, data]);
+        assert_eq!(e.mem.f32(target), 5.5);
+    }
+
+    #[test]
+    fn fn_005e5d80_adds_a_random_float_between_the_values() {
+        let (mut e, data) = function_engine(2);
+        e.register(DATA_VALUE, |_, _| 1.0f64.into_ret());
+        e.register(DATA_SECOND_VALUE, |_, _| 4.0f64.into_ret());
+        e.register(0x0047_6b70, |_, a| {
+            let low = f32::from_bits(a[0]);
+            let high = f32::from_bits(a[1]);
+            f64::from(low + high / 16.0).into_ret()
+        });
+        let (target, arguments) = float_target(&mut e, 3.0);
+        e.call(0x005e_5d80, &args![9u32, 0u32, 1u32, arguments, data]);
+        assert_eq!(e.mem.f32(target), 4.25);
+    }
+
+    #[test]
+    fn fn_005e5df0_adds_the_value_times_the_subjects_count() {
+        let (mut e, data) = function_engine(2);
+        e.register(DATA_VALUE, |_, _| 1.5f64.into_ret());
+        e.register(DATA_SECOND_VALUE, |_, _| (-2.9f64).into_ret());
+        e.put_vtable(0x0201_0000, &[0, 0, 0x0090_0008]);
+        e.register(0x0090_0008, |_, a| (a[1] as i32 * 3).into_ret());
+        let subject = e.mem.alloc(0xb0);
+        e.mem.set_u32(subject + 0xa4, 0x0201_0000);
+        let (target, arguments) = float_target(&mut e, 1.0);
+        e.call_log = Some(vec![]);
+        e.call(0x005e_5df0, &args![subject, 0u32, 1u32, arguments, data]);
+        // -2.9 truncates to -2; -2 * 3 * 1.5 + 1.
+        assert_eq!(e.mem.f32(target), -8.0);
+        let log = e.call_log.take().unwrap();
+        assert_eq!(
+            calls_to(&log, 0x0090_0008),
+            vec![vec![subject + 0xa4, (-2i32) as u32]]
+        );
+    }
+
+    #[test]
+    fn fn_005e5ea0_and_005e5ef0_store_the_callee_result() {
+        let (mut e, _) = function_engine(0);
+        e.register(0x0040_8840, |_, a| {
+            f64::from(f32::from_bits(a[0]) * 2.0).into_ret()
+        });
+        let (target, arguments) = float_target(&mut e, 3.0);
+        e.call(0x005e_5ea0, &args![9u32, 0u32, 1u32, arguments, 0u32]);
+        assert_eq!(e.mem.f32(target), 6.0);
+        e.call(0x005e_5ef0, &args![9u32, 0u32, 1u32, arguments, 0u32]);
+        assert_eq!(e.mem.f32(target), -12.0);
+        // Wrong type: nothing.
+        e.call(0x005e_5ef0, &args![9u32, 2u32, 1u32, arguments, 0u32]);
+        assert_eq!(e.mem.f32(target), -12.0);
+    }
+
+    #[test]
+    fn fn_005e5f50_adds_the_container_items_to_the_target() {
+        let (mut e, data) = function_engine(3);
+        quiet(
+            &mut e,
+            &[
+                0x0048_1610,
+                0x0048_1680,
+                0x0048_8350,
+                0x0041_9ad0,
+                0x0041_9ed0,
+                0x0041_9f80,
+            ],
+        );
+        e.register(0x0072_6070, |e, a| e.mem.u32(a[0] + 4).into_ret());
+        e.register(0x0068_15c0, |_, a| a[0].into_ret());
+        e.register(0x0082_56d0, |_, _| false.into_ret());
+        e.register(0x004b_f220, |_, _| 1u32.into_ret());
+        e.register(OPERATOR_NEW, |e, a| e.mem.alloc(a[0]).into_ret());
+        e.register(0x0041_0360, |_, a| a[0].into_ret());
+        e.register(0x0041_8800, |_, _| 0u32.into_ret());
+        e.register(0x005a_bf60, |_, a| (a[0] + 1).into_ret());
+        // Items: slot 57 answers true; the first has a script.
+        e.put_vtable(0x0202_0000, &[0; 0x80]);
+        e.mem.set_u32(0x0202_0000 + 0xe4, 0x0090_00e4);
+        e.register(0x0090_00e4, |_, _| true.into_ret());
+        let scripted = e.mem.alloc(8);
+        e.mem.set_u32(scripted, 0x0202_0000);
+        let plain = e.mem.alloc(8);
+        e.mem.set_u32(plain, 0x0202_0000);
+        e.register_double(0x0048_26d0, move |_, a| {
+            u32::from(a[0] == scripted).wrapping_mul(0x7700).into_ret()
+        });
+        let first = e.mem.alloc(8);
+        e.mem.set_u32(first, 2);
+        e.mem.set_u32(first + 4, scripted);
+        let second = e.mem.alloc(8);
+        e.mem.set_u32(second, 5);
+        e.mem.set_u32(second + 4, plain);
+        let node2 = e.mem.alloc(8);
+        e.mem.set_u32(node2, second);
+        let node1 = e.mem.alloc(8);
+        e.mem.set_u32(node1, first);
+        e.mem.set_u32(node1 + 4, node2);
+        e.register_double(0x0071_7e50, move |_, _| node1.into_ret());
+        // The target: slot 100 records.
+        e.put_vtable(0x0203_0000, &[0; 0x80]);
+        e.mem.set_u32(0x0203_0000 + 0x190, 0x0090_0190);
+        e.register(0x0090_0190, |_, _| Ret::default());
+        let target = e.mem.alloc(8);
+        e.mem.set_u32(target, 0x0203_0000);
+        let arguments = e.mem.alloc(4);
+        e.mem.set_u32(arguments, target);
+        e.call_log = Some(vec![]);
+        e.call(0x005e_5f50, &args![0x6000u32, 1u32, 1u32, arguments, data]);
+        let log = e.call_log.take().unwrap();
+        let extras = calls_to(&log, 0x0041_0360);
+        assert_eq!(extras.len(), 2);
+        assert_eq!(
+            calls_to(&log, 0x0090_0190),
+            vec![
+                vec![target, scripted, extras[1][0], 1],
+                vec![target, plain, 0, 5]
+            ]
+        );
+        assert_eq!(
+            calls_to(&log, 0x0041_9ed0),
+            vec![vec![extras[0][0], 0x7700], vec![extras[1][0], 0x7700]]
+        );
+        assert_eq!(calls_to(&log, 0x0048_8350)[0][..2], [3 + 0x30, 0x6000]);
+        assert_eq!(calls_to(&log, 0x0048_1680).len(), 1);
+
+        // No inventory changes: nothing is added.
+        e.register(0x004b_f220, |_, _| 0u32.into_ret());
+        e.call_log = Some(vec![]);
+        e.call(0x005e_5f50, &args![0x6000u32, 1u32, 1u32, arguments, data]);
+        assert!(calls_to(&e.call_log.take().unwrap(), 0x0090_0190).is_empty());
+    }
+
+    #[test]
+    fn add_activate_choice_function_runs_or_adds_the_choice() {
+        let (mut e, data) = function_engine(4);
+        quiet(&mut e, &[0x005a_c1e0, 0x005a_e3d0]);
+        e.register(RESULT_SCRIPT_OF, |_, a| (a[0] + 8).into_ret());
+        let arguments = e.mem.alloc(8);
+        e.mem.set_u32(arguments, 0x5000);
+        e.mem.set_u32(arguments + 4, 0x5100);
+        for runs in [true, false] {
+            e.register_double(0x005f_5930, move |_, _| runs.into_ret());
+            e.call_log = Some(vec![]);
+            e.call(0x005e_61b0, &args![9u32, 2u32, 2u32, arguments, data]);
+            let log = e.call_log.take().unwrap();
+            if runs {
+                assert_eq!(
+                    calls_to(&log, 0x005a_c1e0),
+                    vec![vec![data + 8, 0x5100, 0, 0, 0]]
+                );
+            } else {
+                let added = calls_to(&log, 0x005a_e3d0);
+                assert_eq!(added[0][0], 0x5000);
+                assert!(calls_to(&log, 0x005a_c1e0).is_empty());
+            }
+        }
+        // A null first argument: nothing.
+        e.mem.set_u32(arguments, 0);
+        e.call_log = Some(vec![]);
+        e.call(0x005e_61b0, &args![9u32, 2u32, 2u32, arguments, data]);
+        assert!(calls_to(&e.call_log.take().unwrap(), 0x005f_5930).is_empty());
+    }
+
+    #[test]
+    fn fn_005e6250_saves_the_type_byte() {
+        let (mut e, data) = function_engine(0x1ff);
+        quiet(&mut e, &[ADD_BYTE_CHUNK]);
+        e.call_log = Some(vec![]);
+        e.call(0x005e_6250, &args![data]);
+        let log = e.call_log.take().unwrap();
+        assert_eq!(calls_to(&log, ADD_BYTE_CHUNK), vec![vec![CHUNK_EPFT, 0xff]]);
+    }
+
+    #[test]
+    fn fn_005e64b0_builds_a_two_value_data() {
+        let mut e = Engine::new();
+        let this = e.mem.alloc(0xc);
+        e.mem.write(this, &[0xcc; 0xc]);
+        assert_eq!(e.call(0x005e_64b0, &args![this]).u32(), this);
+        assert_eq!(e.mem.u32(this), TWO_VALUE_VTABLE);
+        assert_eq!((e.mem.u32(this + 4), e.mem.u32(this + 8)), (0, 0));
+    }
+
+    fn duplicate_engine() -> Engine {
+        let mut e = Engine::new();
+        e.register(OPERATOR_NEW, |e, a| e.mem.alloc(a[0]).into_ret());
+        quiet(&mut e, &[0x005a_a0f0, 0x0048_4ab0, 0x0048_4490]);
+        e
+    }
+
+    #[test]
+    fn the_duplicates_copy_their_values() {
+        let mut e = duplicate_engine();
+        let this = e.mem.alloc(0xc);
+        e.mem.set_f32(this + 4, 1.5);
+        e.mem.set_u32(this + 8, 0x7f80_0001);
+        let one = e.call(0x005e_6670, &args![this]).u32();
+        assert_eq!(e.mem.u32(one), ONE_VALUE_VTABLE);
+        assert_eq!(e.mem.f32(one + 4), 1.5);
+        let two = e.call(0x005e_67f0, &args![this]).u32();
+        assert_eq!(e.mem.u32(two), TWO_VALUE_VTABLE);
+        assert_eq!(e.mem.f32(two + 4), 1.5);
+        // FLD/FSTP quiets the signalling NaN.
+        assert_eq!(e.mem.u32(two + 8), 0x7fc0_0001);
+        e.mem.set_u32(this + 4, 0x4444);
+        let list = e.call(0x005e_69d0, &args![this]).u32();
+        assert_eq!(e.mem.u32(list), LEVELED_LIST_VTABLE);
+        assert_eq!(e.mem.u32(list + 4), 0x4444);
+    }
+
+    #[test]
+    fn activate_choice_duplicate_copies_label_script_and_word() {
+        let mut e = duplicate_engine();
+        quiet(&mut e, &[OPERATOR_DELETE, 0x005a_a420]);
+        e.register(RESULT_SCRIPT_OF, |_, a| (a[0] + 8).into_ret());
+        e.register(0x0044_a670, |e, a| {
+            (e.mem.cstr(a[0]).len() as u32).into_ret()
+        });
+        e.register(0x0040_46f0, |e, a| {
+            let text = e.mem.cstr(a[1]);
+            e.mem.set_cstr(a[0], &text);
+            Ret::default()
+        });
+        let this = e.mem.alloc(0x60);
+        let label = e.mem.alloc(8);
+        e.mem.set_cstr(label, b"Use");
+        e.mem.set_u32(this + 4, label);
+        e.mem.set_u16(this + 0x5c, 0x1234);
+        e.call_log = Some(vec![]);
+        let copy = e.call(0x005e_6cd0, &args![this]).u32();
+        assert_eq!(e.mem.u32(copy), ACTIVATE_CHOICE_VTABLE);
+        assert_eq!(e.mem.cstr(e.mem.u32(copy + 4)), b"Use".to_vec());
+        assert_eq!(e.mem.u16(copy + 0x5c), 0x1234);
+        let log = e.call_log.take().unwrap();
+        assert_eq!(calls_to(&log, 0x005a_a420), vec![vec![copy + 8, this + 8]]);
+        assert_eq!(
+            calls_to(&log, RESULT_SCRIPT_OF),
+            vec![vec![this], vec![copy]]
+        );
+    }
+
+    /// A cast double that answers the object when its word +0x10 is the
+    /// target type, else null.
+    fn compare_engine() -> Engine {
+        let mut e = Engine::new();
+        e.register(DYNAMIC_CAST, |e, a| {
+            let kind = e.mem.u32(a[0] + 0x10);
+            (if kind == a[3] { a[0] } else { 0 }).into_ret()
+        });
+        e
+    }
+
+    #[test]
+    fn value_compares_test_type_and_values() {
+        let mut e = compare_engine();
+        let this = e.mem.alloc(0x14);
+        let other = e.mem.alloc(0x14);
+        e.mem.set_f32(this + 4, 1.0);
+        e.mem.set_f32(this + 8, 2.0);
+        e.mem.set_f32(other + 4, 1.0);
+        e.mem.set_f32(other + 8, 2.0);
+        e.mem.set_u32(other + 0x10, TYPE_ONE_VALUE);
+        assert!(!e.call(0x005e_6700, &args![this, other]).bool());
+        assert!(e.call(0x005e_6890, &args![this, other]).bool());
+        e.mem.set_u32(other + 0x10, TYPE_TWO_VALUE);
+        assert!(e.call(0x005e_6700, &args![this, other]).bool());
+        assert!(!e.call(0x005e_6890, &args![this, other]).bool());
+        e.mem.set_f32(other + 8, 3.0);
+        assert!(e.call(0x005e_6890, &args![this, other]).bool());
+        e.mem.set_u32(other + 0x10, TYPE_ONE_VALUE);
+        e.mem.set_u32(this + 4, 0x7fc0_0000);
+        e.mem.set_u32(other + 4, 0x7fc0_0000);
+        assert!(e.call(0x005e_6700, &args![this, other]).bool());
+        // Leveled list: the same list or another one.
+        e.mem.set_u32(other + 0x10, TYPE_LEVELED_LIST);
+        assert!(!e.call(0x005e_6a60, &args![this, other]).bool());
+        e.mem.set_u32(other + 4, 9);
+        assert!(e.call(0x005e_6a60, &args![this, other]).bool());
+        e.mem.set_u32(other + 0x10, 0);
+        assert!(e.call(0x005e_6a60, &args![this, other]).bool());
+    }
+
+    #[test]
+    fn activate_choice_compare_tests_labels_scripts_and_word() {
+        let mut e = compare_engine();
+        e.register(RESULT_SCRIPT_OF, |_, a| (a[0] + 8).into_ret());
+        e.register(0x0040_8b20, |e, a| {
+            u32::from(e.mem.cstr(a[0]) != e.mem.cstr(a[1])).into_ret()
+        });
+        e.register(0x005a_b240, |e, a| {
+            (e.mem.u32(a[0]) != e.mem.u32(a[1])).into_ret()
+        });
+        let this = e.mem.alloc(0x60);
+        let other = e.mem.alloc(0x60);
+        e.mem.set_u32(other + 0x10, TYPE_ACTIVATE_CHOICE);
+        e.mem.set_u32(this + 0x10, TYPE_ACTIVATE_CHOICE);
+        let compare = |e: &mut Engine| e.call(0x005e_6d80, &args![this, other]).bool();
+        assert!(!compare(&mut e));
+        let a = e.mem.alloc(8);
+        e.mem.set_cstr(a, b"A");
+        let b = e.mem.alloc(8);
+        e.mem.set_cstr(b, b"B");
+        e.mem.set_u32(this + 4, a);
+        assert!(compare(&mut e));
+        e.mem.set_u32(other + 4, b);
+        assert!(compare(&mut e));
+        e.mem.set_u32(other + 4, a);
+        assert!(!compare(&mut e));
+        e.mem.set_u32(this + 8, 1);
+        assert!(compare(&mut e));
+        e.mem.set_u32(this + 8, 0);
+        e.mem.set_u16(other + 0x5c, 2);
+        assert!(compare(&mut e));
+        e.mem.set_u32(other + 0x10, 0);
+        e.mem.set_u16(other + 0x5c, 0);
+        assert!(compare(&mut e));
+    }
+
+    #[test]
+    fn the_saves_write_type_and_values() {
+        let (mut e, _) = function_engine(1);
+        quiet(
+            &mut e,
+            &[
+                ADD_BYTE_CHUNK,
+                ADD_WORD_CHUNK,
+                0x0048_56f0,
+                0x0048_5950,
+                0x005a_be00,
+            ],
+        );
+        e.register(FORM_ID, |_, a| (a[0] | 0x0100_0000).into_ret());
+        e.register(RESULT_SCRIPT_OF, |_, a| (a[0] + 8).into_ret());
+        e.register(0x00ec_6130, |e, a| {
+            (e.mem.cstr(a[0]).len() as u32).into_ret()
+        });
+        e.register(0x0044_a670, |e, a| {
+            (e.mem.cstr(a[0]).len() as u32).into_ret()
+        });
+        // A one-value data (its vtable from the engine above).
+        let one = e.mem.alloc(0x60);
+        e.mem.set_u32(one, 0x0200_0000);
+        e.mem.set_u32(one + 4, 0x7f80_0001);
+        e.call_log = Some(vec![]);
+        e.call(0x005e_6760, &args![one]);
+        let log = e.call_log.take().unwrap();
+        assert_eq!(
+            calls_to(&log, ADD_WORD_CHUNK),
+            vec![vec![CHUNK_EPFD, 0x7fc0_0001]]
+        );
+        assert_eq!(calls_to(&log, ADD_BYTE_CHUNK)[0][0], CHUNK_EPFT);
+        // Leveled list: the form id when there is a list.
+        e.mem.set_u32(one + 4, 0x55);
+        e.call_log = Some(vec![]);
+        e.call(0x005e_6ab0, &args![one]);
+        let log = e.call_log.take().unwrap();
+        assert_eq!(
+            calls_to(&log, ADD_WORD_CHUNK),
+            vec![vec![CHUNK_EPFD, 0x0100_0055]]
+        );
+        // Activate choice: label, word, script.
+        let label = e.mem.alloc(8);
+        e.mem.set_cstr(label, b"Go");
+        e.mem.set_u32(one + 4, label);
+        e.mem.set_u16(one + 0x5c, 0x8001);
+        e.call_log = Some(vec![]);
+        e.call(0x005e_6e50, &args![one]);
+        let log = e.call_log.take().unwrap();
+        assert_eq!(
+            calls_to(&log, 0x0048_56f0),
+            vec![vec![CHUNK_EPF2, label, 3]]
+        );
+        assert_eq!(calls_to(&log, 0x0048_5950), vec![vec![CHUNK_EPF3, 0x8001]]);
+        assert_eq!(calls_to(&log, 0x005a_be00), vec![vec![one + 8]]);
+        // An empty label is not saved.
+        e.mem.set_cstr(label, b"");
+        e.call_log = Some(vec![]);
+        e.call(0x005e_6e50, &args![one]);
+        assert!(calls_to(&e.call_log.take().unwrap(), 0x0048_56f0).is_empty());
+    }
+
+    #[test]
+    fn two_value_save_and_load_swap_through_the_buffer() {
+        let (mut e, _) = function_engine(2);
+        quiet(&mut e, &[ADD_BYTE_CHUNK]);
+        e.map(0x0300_0000, 0x1000);
+        e.register(0x0040_1500, |_, _| true.into_ret());
+        e.register(0x0046_2230, |e, a| {
+            let first = e.mem.u32(a[0]);
+            let second = e.mem.u32(a[0] + 4);
+            e.mem.set_u32(a[0], second);
+            e.mem.set_u32(a[0] + 4, first);
+            Ret::default()
+        });
+        e.register(0x0048_5990, |e, a| {
+            let first = e.mem.u32(a[1]);
+            let second = e.mem.u32(a[1] + 4);
+            e.mem.set_u32(0x0300_0000, first);
+            e.mem.set_u32(0x0300_0004, second);
+            Ret::default()
+        });
+        let this = e.mem.alloc(0xc);
+        e.mem.set_u32(this, 0x0200_0000);
+        e.mem.set_f32(this + 4, 1.0);
+        e.mem.set_f32(this + 8, 2.0);
+        e.call_log = Some(vec![]);
+        e.call(0x005e_6900, &args![this]);
+        assert_eq!(e.mem.f32(0x0300_0000), 2.0);
+        assert_eq!(e.mem.f32(0x0300_0004), 1.0);
+        let log = e.call_log.take().unwrap();
+        assert_eq!(calls_to(&log, 0x0046_2230).len(), 2);
+        assert_eq!(calls_to(&log, 0x0048_5990)[0][2], 8);
+
+        // Load: 8 bytes, swapped when the file needs it.
+        let bytes: Vec<u8> = [3.0f32, 4.0f32]
+            .iter()
+            .flat_map(|v| v.to_le_bytes())
+            .collect();
+        for swap in [false, true] {
+            let data = bytes.clone();
+            e.register_double(CHUNK_SIZE, |_, _| 8u32.into_ret());
+            e.register_double(GET_CHUNK_DATA, move |e, a| {
+                e.mem.write(a[1], &data);
+                Ret::default()
+            });
+            e.register_double(NEEDS_BYTE_SWAP, move |_, _| swap.into_ret());
+            assert!(e.call(0x005e_6970, &args![this, 0x7000u32]).bool());
+            let want = if swap { (4.0, 3.0) } else { (3.0, 4.0) };
+            assert_eq!((e.mem.f32(this + 4), e.mem.f32(this + 8)), want);
+        }
+        e.register(CHUNK_SIZE, |_, _| 4u32.into_ret());
+        assert!(!e.call(0x005e_6970, &args![this, 0x7000u32]).bool());
     }
 }

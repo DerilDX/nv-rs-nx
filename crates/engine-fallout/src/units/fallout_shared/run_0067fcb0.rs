@@ -75,6 +75,59 @@ pub fn fn_0067fdf0(e: &mut Engine, this: Ptr, value: u8) {
     e.mem.set_u8(this.addr() + 3, value);
 }
 
+// Translated from 0067fe10 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Whether this value differs from `other` (one stack word; true for a
+/// null `other`): `00678cc0`, `00678ca0` (words), `00678ce0`, `0086a460`
+/// (signed bytes) and `00726070` (a word) are compared in that order on
+/// both, the first difference answering true.
+pub fn fn_0067fe10(e: &mut Engine, this: Ptr, other: Ptr) -> bool {
+    if other.is_null() {
+        return true;
+    }
+    for (getter, byte) in [
+        (0x0067_8cc0u32, false),
+        (0x0067_8ca0, false),
+        (0x0067_8ce0, true),
+        (0x0086_a460, true),
+        (0x0072_6070, false),
+    ] {
+        let mine = e.call(getter, &args![this]).u32();
+        let theirs = e.call(getter, &args![other]).u32();
+        let differ = if byte {
+            mine as u8 as i8 != theirs as u8 as i8
+        } else {
+            mine != theirs
+        };
+        if differ {
+            return true;
+        }
+    }
+    false
+}
+
+// Translated from 0067fec0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Writes the value as a `PSDT` chunk (`TESForm::__AddChunkData` with the
+/// 8 bytes at `this`), byte-swapped before and after (`0060ce80`) when
+/// `00401500` says so.
+pub fn fn_0067fec0(e: &mut Engine, this: Ptr) {
+    if e.call(0x0040_1500, &[]).u8() != 0 {
+        e.call(0x0060_ce80, &args![this]);
+    }
+    e.call(0x0048_5990, &args![0x5444_5350u32, this, 8u32]);
+    if e.call(0x0040_1500, &[]).u8() != 0 {
+        e.call(0x0060_ce80, &args![this]);
+    }
+}
+
+// Translated from 0067ff10 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Clears three parts (`thiscall`, no stack words): `00401080` (`cdecl`)
+/// with a zero byte on +4, +8 and +0xC.
+pub fn fn_0067ff10(e: &mut Engine, this: Ptr) {
+    for offset in [4, 8, 0xc] {
+        e.call(0x0040_1080, &args![this.addr() + offset, 0u32]);
+    }
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -84,6 +137,9 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x0067_fdb0, fn_0067fdb0(Ptr, u8)),
         entry!(0x0067_fdd0, fn_0067fdd0(Ptr, u8)),
         entry!(0x0067_fdf0, fn_0067fdf0(Ptr, u8)),
+        entry!(0x0067_fe10, fn_0067fe10(Ptr, Ptr) -> bool),
+        entry!(0x0067_fec0, fn_0067fec0(Ptr)),
+        entry!(0x0067_ff10, fn_0067ff10(Ptr)),
     ]
 }
 
@@ -159,5 +215,83 @@ mod tests {
                 (0x4, 4, 0x0),
             ],
         });
+    }
+}
+
+#[cfg(test)]
+mod tests_n042 {
+    use super::*;
+
+    #[test]
+    fn values_differ_by_each_getter() {
+        let mut e = Engine::new();
+        // The getters read the words at +0..+0x10 of the value.
+        for (i, getter) in [
+            0x0067_8cc0u32,
+            0x0067_8ca0,
+            0x0067_8ce0,
+            0x0086_a460,
+            0x0072_6070,
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let offset = 4 * i as u32;
+            e.register_double(getter, move |e, a| e.mem.u32(a[0] + offset).into_ret());
+        }
+        let this = e.mem.alloc(0x14);
+        let other = e.mem.alloc(0x14);
+        assert!(!e.call(0x0067_fe10, &args![this, other]).bool());
+        assert!(e.call(0x0067_fe10, &args![this, 0u32]).bool());
+        // The byte getters ignore the upper bytes.
+        e.mem.set_u32(other + 8, 0x1200);
+        e.mem.set_u32(other + 0xc, 0x3400);
+        assert!(!e.call(0x0067_fe10, &args![this, other]).bool());
+        for i in [0u32, 1, 2, 3, 4] {
+            let word = e.mem.u32(other + 4 * i);
+            e.mem.set_u32(other + 4 * i, word | 1);
+            assert!(
+                e.call(0x0067_fe10, &args![this, other]).bool(),
+                "getter {i}"
+            );
+            e.mem.set_u32(other + 4 * i, word);
+        }
+    }
+
+    #[test]
+    fn writes_the_psdt_chunk() {
+        let mut e = Engine::new();
+        e.register(0x0040_1500, |_, _| 1u32.into_ret());
+        e.register(0x0060_ce80, |_, _| Ret::default());
+        e.register(0x0048_5990, |_, _| Ret::default());
+        e.call_log = Some(vec![]);
+        e.call(0x0067_fec0, &args![0x5000u32]);
+        let log = e.call_log.take().unwrap();
+        assert_eq!(
+            log[1..],
+            [
+                (0x0040_1500, vec![]),
+                (0x0060_ce80, vec![0x5000]),
+                (0x0048_5990, vec![0x5444_5350, 0x5000, 8]),
+                (0x0040_1500, vec![]),
+                (0x0060_ce80, vec![0x5000])
+            ]
+        );
+        e.register(0x0040_1500, |_, _| 0x100u32.into_ret());
+        e.call_log = Some(vec![]);
+        e.call(0x0067_fec0, &args![0x5000u32]);
+        let log = e.call_log.take().unwrap();
+        assert!(log.iter().all(|c| c.0 != 0x0060_ce80));
+    }
+
+    #[test]
+    fn clears_three_parts() {
+        let mut e = Engine::new();
+        e.register(0x0040_1080, |_, _| Ret::default());
+        e.call_log = Some(vec![]);
+        e.call(0x0067_ff10, &args![0x5000u32]);
+        let log = e.call_log.take().unwrap();
+        let cleared: Vec<u32> = log[1..].iter().map(|c| c.1[0]).collect();
+        assert_eq!(cleared, vec![0x5004, 0x5008, 0x500c]);
     }
 }

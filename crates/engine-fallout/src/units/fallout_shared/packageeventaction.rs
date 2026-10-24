@@ -360,9 +360,92 @@ pub fn package_event_action_init_item(e: &mut Engine, this: Ptr<PackageEventActi
     }
 }
 
+/// The other action's fields, through the folded getters the exe calls:
+/// `00559450` (the word at +0), `0044ddc0` (the same) and `00726070` (the
+/// word at +4), each `thiscall` with no stack word.
+const OTHER_IDLE: u32 = 0x0055_9450;
+const OTHER_TOPIC: u32 = 0x0044_ddc0;
+const OTHER_SCRIPT: u32 = 0x0072_6070;
+/// `Script::CompareResultScripts` (engine map, `005ab240`, `thiscall`, `RET
+/// 4`) and `Script::SaveResultScript` (engine map, `005abe00`, `thiscall`).
+const COMPARE_RESULT_SCRIPTS: u32 = 0x005a_b240;
+const SAVE_RESULT_SCRIPT: u32 = 0x005a_be00;
+/// `TESForm::AddChunk` (engine map, `004856d0`, `cdecl`: the type) and
+/// `00485910` (`cdecl`: type and a word).
+const ADD_CHUNK: u32 = 0x0048_56d0;
+const ADD_CHUNK_WORD: u32 = 0x0048_5910;
+
+// Translated from 0067dbf0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `PackageEventAction::Compare` (Xbox PDB name in the engine map;
+/// `thiscall`, `RET 4`): true (they differ) when the idles differ, the
+/// topics differ (the other's read by `00559450` and `0044ddc0` against
+/// +0 and +8), or exactly one has a result script, or both have and
+/// `Script::CompareResultScripts` (`005ab240`) says they differ.
+pub fn package_event_action_compare(
+    e: &mut Engine,
+    this: Ptr<PackageEventAction>,
+    other: u32,
+) -> bool {
+    if e.get(this, PackageEventAction::pIdle) != e.call(OTHER_IDLE, &args![other]).u32() {
+        return true;
+    }
+    if e.get(this, PackageEventAction::pTopic) != e.call(OTHER_TOPIC, &args![other]).u32() {
+        return true;
+    }
+    if e.get(this, PackageEventAction::pResultScript) == 0
+        && e.call(OTHER_SCRIPT, &args![other]).u32() == 0
+    {
+        return false;
+    }
+    if e.get(this, PackageEventAction::pResultScript) == 0
+        || e.call(OTHER_SCRIPT, &args![other]).u32() == 0
+    {
+        return true;
+    }
+    let theirs = e.call(OTHER_SCRIPT, &args![other]).u32();
+    let mine = e.get(this, PackageEventAction::pResultScript);
+    e.call(COMPARE_RESULT_SCRIPTS, &args![mine, theirs]).bool()
+}
+
+// Translated from 0067dc80 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `PackageEventAction::Save` (Xbox PDB name in the engine map; `thiscall`,
+/// `RET 4`, the chunk type): an empty chunk of `kind` (`004856d0`), the
+/// idle's id (`0084e3a0`, 0 without one) as `INAM`, the result script's
+/// save (`005abe00`) when there is one, then the topic's id (taken before
+/// the script's save) as `TNAM`.
+pub fn package_event_action_save(e: &mut Engine, this: Ptr<PackageEventAction>, kind: u32) {
+    e.call(ADD_CHUNK, &args![kind]);
+    let idle = e.get(this, PackageEventAction::pIdle);
+    let idle_id = if idle != 0 {
+        e.call(FORM_ID, &args![idle]).u32()
+    } else {
+        0
+    };
+    e.call(ADD_CHUNK_WORD, &args![CHUNK_INAM, idle_id]);
+    let topic = e.get(this, PackageEventAction::pTopic);
+    let topic_id = if topic != 0 {
+        e.call(FORM_ID, &args![topic]).u32()
+    } else {
+        0
+    };
+    let script = e.get(this, PackageEventAction::pResultScript);
+    if script != 0 {
+        e.call(SAVE_RESULT_SCRIPT, &args![script]);
+    }
+    e.call(ADD_CHUNK_WORD, &args![CHUNK_TNAM, topic_id]);
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(
+            0x0067_dbf0,
+            package_event_action_compare(Ptr<PackageEventAction>, u32) -> bool
+        ),
+        entry!(
+            0x0067_dc80,
+            package_event_action_save(Ptr<PackageEventAction>, u32)
+        ),
         entry!(
             0x0067_dd20,
             package_event_action_load(Ptr<PackageEventAction>, Ptr)
@@ -627,5 +710,89 @@ mod tests {
             vec![vec![FORMAT_SCRIPT_ERRORS, 0x6600, 0x00ab_cdef]]
         );
         assert_eq!(counts.get(), 2);
+    }
+}
+
+#[cfg(test)]
+mod n038_tests {
+    use super::*;
+
+    fn word(eax: u32) -> Ret {
+        Ret {
+            eax,
+            ..Ret::default()
+        }
+    }
+
+    #[test]
+    fn compare_checks_idle_topic_and_scripts() {
+        let mut e = Engine::new();
+        e.mem.map(0x0f00_0000, 4);
+        e.register(OTHER_IDLE, |e, a| word(e.mem.u32(a[0])));
+        e.register(OTHER_TOPIC, |e, a| word(e.mem.u32(a[0] + 8)));
+        e.register(OTHER_SCRIPT, |e, a| word(e.mem.u32(a[0] + 4)));
+        e.register(COMPARE_RESULT_SCRIPTS, |e, _| word(e.mem.u32(0x0f00_0000)));
+        let this = e.mem.alloc(0x10);
+        let other = e.mem.alloc(0x10);
+        let compare = |e: &mut Engine| e.call(0x0067_dbf0, &args![this, other]).bool();
+        assert!(!compare(&mut e));
+        e.mem.set_u32(other, 1);
+        assert!(compare(&mut e));
+        e.mem.set_u32(other, 0);
+        e.mem.set_u32(other + 8, 1);
+        assert!(compare(&mut e));
+        e.mem.set_u32(other + 8, 0);
+        e.mem.set_u32(other + 4, 0x5000);
+        assert!(compare(&mut e));
+        e.mem.set_u32(this + 4, 0x6000);
+        e.call_log = Some(vec![]);
+        assert!(!compare(&mut e));
+        let log = e.call_log.take().unwrap();
+        assert_eq!(
+            log.last().unwrap(),
+            &(COMPARE_RESULT_SCRIPTS, vec![0x6000, 0x5000])
+        );
+        e.mem.set_u32(0x0f00_0000, 1);
+        assert!(compare(&mut e));
+        e.mem.set_u32(other + 4, 0);
+        assert!(compare(&mut e));
+    }
+
+    #[test]
+    fn save_writes_idle_script_and_topic() {
+        let mut e = Engine::new();
+        e.register(FORM_ID, |_, a| word(a[0] + 1));
+        for addr in [ADD_CHUNK, ADD_CHUNK_WORD, SAVE_RESULT_SCRIPT] {
+            e.register(addr, |_, _| Ret::default());
+        }
+        let this = e.mem.alloc(0x10);
+        e.call_log = Some(vec![]);
+        e.call(0x0067_dc80, &args![this, 0x3144_5450u32]);
+        let log: Vec<_> = e.call_log.take().unwrap().into_iter().skip(1).collect();
+        assert_eq!(
+            log,
+            vec![
+                (ADD_CHUNK, vec![0x3144_5450]),
+                (ADD_CHUNK_WORD, vec![CHUNK_INAM, 0]),
+                (ADD_CHUNK_WORD, vec![CHUNK_TNAM, 0]),
+            ]
+        );
+        e.mem.set_u32(this, 0x5000);
+        e.mem.set_u32(this + 4, 0x6000);
+        e.mem.set_u32(this + 8, 0x7000);
+        e.call_log = Some(vec![]);
+        e.call(0x0067_dc80, &args![this, 0x3144_5450u32]);
+        let log: Vec<_> = e.call_log.take().unwrap().into_iter().skip(1).collect();
+        assert_eq!(
+            log,
+            vec![
+                (ADD_CHUNK, vec![0x3144_5450]),
+                (FORM_ID, vec![0x5000]),
+                (ADD_CHUNK_WORD, vec![CHUNK_INAM, 0x5001]),
+                (FORM_ID, vec![0x7000]),
+                (SAVE_RESULT_SCRIPT, vec![0x6000]),
+                (ADD_CHUNK_WORD, vec![CHUNK_TNAM, 0x7001]),
+            ]
+        );
     }
 }

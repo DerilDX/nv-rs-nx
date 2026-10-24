@@ -66,13 +66,92 @@ pub fn fn_00822a80(e: &mut Engine, this: Ptr) {
     e.call(LIST_DESTRUCT, &args![list]);
 }
 
+/// `operator delete` (`00401030`, `cdecl`).
+const OPERATOR_DELETE: u32 = 0x0040_1030;
+/// The `double` `00822a20` compares its argument with (`01012060`).
+const COMPARED_DOUBLE: u32 = 0x0101_2060;
+
+// Translated from 008229d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// A scalar deleting destructor (`thiscall`, `RET 4`): the destructor `00822a00`, then
+/// `operator delete` when bit 0 of `flags` is set. Returns `this`.
+pub fn fn_008229d0(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    fn_00822a00(e, this);
+    if flags & 1 != 0 {
+        e.call(OPERATOR_DELETE, &args![this]);
+    }
+    this
+}
+
+// Translated from 00822a20 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The slot +0x24 of `MagicTarget` vtables (`0107bc4c`, `0107bebc`, `0107bbbc`;
+/// `CheckResistance` in the Xbox PDB's slot list; `thiscall`, `RET 4`): it loads the float
+/// argument and compares it with the `double` at `01012060` (`FLD`, `FCOMP`), keeps no
+/// result of the compare and returns with the x87 stack as it found it: nothing in `ST0`,
+/// nothing else changed. The two reads are done here too.
+pub fn fn_00822a20(e: &mut Engine, _this: Ptr, value: f32) {
+    let _loaded = x87_quiet(value);
+    let _compared: f64 = e.global(COMPARED_DOUBLE);
+}
+
+// Translated from 00822a70 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (in the vtable at `0107b090`; `thiscall`, `RET 0xc`, the three
+/// stack words unread): 1.0 in `ST0` (`FLD1`).
+pub fn fn_00822a70(
+    _e: &mut Engine,
+    _this: Ptr,
+    _unused_1: u32,
+    _unused_2: u32,
+    _unused_3: u32,
+) -> f32 {
+    1.0
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
         entry!(0x0082_2a00, fn_00822a00(Ptr)),
         entry!(0x00822a40, fn_00822a40(Ptr) -> Ptr),
         entry!(0x0082_2a80, fn_00822a80(Ptr)),
+        entry!(0x0082_29d0, fn_008229d0(Ptr, u32) -> Ptr),
+        entry!(0x0082_2a20, fn_00822a20(Ptr, f32)),
+        entry!(0x0082_2a70, fn_00822a70(Ptr, u32, u32, u32) -> f32),
     ]
+}
+
+#[cfg(test)]
+mod n049_tests {
+    use super::*;
+
+    #[test]
+    fn fn_008229d0_destroys_and_deletes_with_bit_zero() {
+        let mut e = Engine::new();
+        e.register(0x0081_de70, |_, _| Ret::default());
+        e.register(OPERATOR_DELETE, |_, _| Ret::default());
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x0082_29d0, &[0x500, 0]).u32(), 0x500);
+        assert_eq!(e.call(0x0082_29d0, &[0x500, 1]).u32(), 0x500);
+        let log = e.call_log.take().unwrap();
+        let destroyed = log.iter().filter(|(a, _)| *a == 0x0081_de70).count();
+        let deleted: Vec<_> = log.iter().filter(|(a, _)| *a == OPERATOR_DELETE).collect();
+        assert_eq!(destroyed, 2);
+        assert_eq!(deleted.len(), 1);
+        assert_eq!(deleted[0].1, vec![0x500]);
+    }
+
+    #[test]
+    fn fn_00822a20_returns_nothing() {
+        let mut e = Engine::new();
+        e.map(0x0101_2000, 0x100);
+        e.set_global::<f64>(COMPARED_DOUBLE, 0.0);
+        let r = e.call(0x0082_2a20, &args![0x10u32, 2.5f32]);
+        assert_eq!(r, Ret::default());
+    }
+
+    #[test]
+    fn fn_00822a70_answers_one() {
+        let mut e = Engine::new();
+        assert_eq!(e.call(0x0082_2a70, &[0x10, 1, 2, 3]).f64(), 1.0);
+    }
 }
 
 #[cfg(test)]

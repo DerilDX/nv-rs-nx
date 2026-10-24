@@ -73,11 +73,101 @@ pub fn tes_value_form_get_form_value(e: &mut Engine, form: Ptr) -> i32 {
     -1
 }
 
+/// `BaseFormComponent`'s RTTI type descriptor (`01183040`).
+const TYPE_BASE_FORM_COMPONENT: u32 = 0x0118_3040;
+/// The save/load game object the old save functions use (the pointer at
+/// `011de45c`).
+const SAVE_LOAD_GAME: u32 = 0x011d_e45c;
+/// `008579b0` (thiscall on the save/load game object, `RET 8`: data, size):
+/// writes bytes.
+const WRITE_BYTES: u32 = 0x0085_79b0;
+/// `008579e0` (thiscall on the save/load game object, `RET 8`: data, size):
+/// reads bytes.
+const READ_BYTES: u32 = 0x0085_79e0;
+
+/// The other component cast to `TESValueForm` (`__RTDynamicCast` from
+/// `BaseFormComponent`), or 0.
+fn as_value_form(e: &mut Engine, other: u32) -> u32 {
+    e.call(
+        RT_DYNAMIC_CAST,
+        &args![
+            other,
+            0u32,
+            TYPE_BASE_FORM_COMPONENT,
+            TYPE_TES_VALUE_FORM,
+            0u32
+        ],
+    )
+    .u32()
+}
+
+// Translated from 0048e7f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TESValueForm::CopyComponent` (Xbox PDB, `RET 4`: the other component):
+/// when it is a `TESValueForm`, sets this value (`0048e960`) to the other's
+/// (`00726070`, its word at +4).
+pub fn tes_value_form_copy_component(e: &mut Engine, this: Ptr, other: u32) {
+    let source = as_value_form(e, other);
+    if source == 0 {
+        return;
+    }
+    let value = e.call(VALUE_FORM_VALUE, &args![source]).u32();
+    fn_0048e960(e, this, value);
+}
+
+// Translated from 0048e840 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TESValueForm::CompareComponent` (Xbox PDB, `RET 4`: the other
+/// component): true ("different") unless the other component is a
+/// `TESValueForm` with the same value (`00726070` on each, this first).
+pub fn tes_value_form_compare_component(e: &mut Engine, this: Ptr, other: u32) -> bool {
+    let source = as_value_form(e, other);
+    if source == 0 {
+        return true;
+    }
+    let mine = e.call(VALUE_FORM_VALUE, &args![this]).u32();
+    mine != e.call(VALUE_FORM_VALUE, &args![source]).u32()
+}
+
+// Translated from 0048e9b0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TESValueForm::GetSaveSize` (Xbox PDB, `RET 4`: the save flags): 4 when
+/// flag 2 is set, else 0.
+pub fn tes_value_form_get_save_size(_e: &mut Engine, _this: Ptr, flags: u32) -> u16 {
+    let mut size = 0u16;
+    if flags & 2 != 0 {
+        size = size.wrapping_add(4);
+    }
+    size
+}
+
+// Translated from 0048e9e0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TESValueForm::SaveGame` (Xbox PDB, `RET 4`: the save flags): with flag
+/// 2, writes the value (the 4 bytes at +4) to the old save (`008579b0`).
+pub fn tes_value_form_save_game(e: &mut Engine, this: Ptr, flags: u32) {
+    if flags & 2 != 0 {
+        let slg = e.global::<u32>(SAVE_LOAD_GAME);
+        e.call(WRITE_BYTES, &args![slg, this.addr().wrapping_add(4), 4u32]);
+    }
+}
+
+// Translated from 0048ea10 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TESValueForm::LoadGame` (Xbox PDB, `RET 8`: the save flags and a word it
+/// does not read): with flag 2, reads the value (the 4 bytes at +4) back
+/// from the old save (`008579e0`).
+pub fn tes_value_form_load_game(e: &mut Engine, this: Ptr, flags: u32, _unused_2: u32) {
+    if flags & 2 != 0 {
+        let slg = e.global::<u32>(SAVE_LOAD_GAME);
+        e.call(READ_BYTES, &args![slg, this.addr().wrapping_add(4), 4u32]);
+    }
+}
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
         entry!(0x0048e960, fn_0048e960(Ptr, u32)),
         entry!(0x0048_e8a0, tes_value_form_get_form_value(Ptr) -> i32),
+        entry!(0x0048_e7f0, tes_value_form_copy_component(Ptr, u32)),
+        entry!(0x0048_e840, tes_value_form_compare_component(Ptr, u32) -> bool),
+        entry!(0x0048_e9b0, tes_value_form_get_save_size(Ptr, u32) -> u16),
+        entry!(0x0048_e9e0, tes_value_form_save_game(Ptr, u32)),
+        entry!(0x0048_ea10, tes_value_form_load_game(Ptr, u32, u32)),
     ]
 }
 
@@ -180,5 +270,68 @@ mod b040_tests {
 
         let mut e = get_value_engine(0, 0);
         assert_eq!(e.call(0x0048_e8a0, &args![0x4000u32]).i32(), -1);
+    }
+}
+
+#[cfg(test)]
+mod n045_tests {
+    use super::*;
+
+    fn engine() -> Engine {
+        let mut e = Engine::new();
+        // Casts to `TESValueForm` succeed for nonzero objects; casts to
+        // `TESForm` fail.
+        e.register(RT_DYNAMIC_CAST, |_, a| {
+            if a[3] == TYPE_TES_VALUE_FORM {
+                a[0].into_ret()
+            } else {
+                Ret::default()
+            }
+        });
+        e.register(VALUE_FORM_VALUE, |e, a| e.mem.u32(a[0] + 4).into_ret());
+        e
+    }
+
+    #[test]
+    fn copy_and_compare_use_the_others_value() {
+        let mut e = engine();
+        let this = e.mem.alloc(8);
+        let other = e.mem.alloc(8);
+        e.mem.set_u32(other + 4, 250);
+        assert!(e.call(0x0048_e840, &[this, other]).bool());
+        assert!(e.call(0x0048_e840, &[this, 0]).bool());
+        e.call(0x0048_e7f0, &[this, 0]);
+        assert_eq!(e.mem.u32(this + 4), 0);
+        e.call(0x0048_e7f0, &[this, other]);
+        assert_eq!(e.mem.u32(this + 4), 250);
+        assert!(!e.call(0x0048_e840, &[this, other]).bool());
+    }
+
+    #[test]
+    fn save_size_save_and_load_follow_flag_2() {
+        let mut e = engine();
+        assert_eq!(e.call(0x0048_e9b0, &[0x5000, 1]).u16(), 0);
+        assert_eq!(e.call(0x0048_e9b0, &[0x5000, 2]).u16(), 4);
+        e.map(0x011d_e000, 0x1000);
+        e.set_global::<u32>(SAVE_LOAD_GAME, 0x7000);
+        e.register(WRITE_BYTES, |_, _| Ret::default());
+        e.register(READ_BYTES, |_, _| Ret::default());
+        e.call_log = Some(vec![]);
+        e.call(0x0048_e9e0, &[0x5000, 0xfd]);
+        e.call(0x0048_ea10, &[0x5000, 0xfd, 9]);
+        e.call(0x0048_e9e0, &[0x5000, 2]);
+        e.call(0x0048_ea10, &[0x5000, 2, 9]);
+        let log = e.call_log.take().unwrap();
+        let io: Vec<_> = log
+            .into_iter()
+            .filter(|(a, _)| *a == WRITE_BYTES || *a == READ_BYTES)
+            .collect();
+        assert_eq!(
+            io,
+            vec![
+                (WRITE_BYTES, vec![0x7000, 0x5004, 4]),
+                (READ_BYTES, vec![0x7000, 0x5004, 4])
+            ]
+        );
     }
 }

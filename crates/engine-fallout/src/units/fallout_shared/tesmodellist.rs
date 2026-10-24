@@ -271,6 +271,99 @@ pub fn fn_0048a2c0(e: &mut Engine, this: Ptr, other: u32) {
     }
 }
 
+/// `TESForm::AddChunkArray` (`004856f0`, cdecl(chunk, data, size)).
+const ADD_CHUNK_ARRAY: u32 = 0x0048_56f0;
+/// `strcpy_s(dest, size, source)` (wrapper `00406d30`, cdecl).
+const STRCPY_S: u32 = 0x0040_6d30;
+/// `004534f0` (thiscall, `RET 4`): the texture lists' save step; its body
+/// does nothing in this build.
+const TEXTURE_ARRAY_SAVE: u32 = 0x0045_34f0;
+/// `_stricmp` (wrapper `00404dc0`, cdecl).
+const STRICMP: u32 = 0x0040_4dc0;
+
+// Translated from 00489ba0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TESModelList::Save` (Xbox PDB, `RET 8`): unless the name list (+0x04) is
+/// empty, packs its names (null items skipped) one after another, each with
+/// its terminator, plus one final zero byte, into a block of exactly that
+/// size (`00401000`; `strcpy_s` with the room left), adds it as `chunk`
+/// (`TESForm::AddChunkArray`) and frees it. Then always runs `004534f0` on
+/// the texture lists (+0x0C) with `texture_chunk`.
+pub fn tes_model_list_save(e: &mut Engine, this: Ptr, chunk: u32, texture_chunk: u32) {
+    let list = this.addr() + 4;
+    if !e.call(LIST_IS_EMPTY, &args![list]).bool() {
+        let mut size = 1u32;
+        let mut node = list;
+        while node != 0 {
+            let item = e.call(NODE_ITEM, &args![node]).u32();
+            let name = e.mem.u32(item);
+            if name != 0 {
+                let length = e.call(STRLEN, &args![name]).u32();
+                size = size.wrapping_add(length).wrapping_add(1);
+            }
+            node = e.call(NODE_NEXT, &args![node]).u32();
+        }
+        let buffer = e.call(ALLOCATE, &args![size]).u32();
+        let mut out = buffer;
+        let mut room = size;
+        node = list;
+        while node != 0 {
+            let item = e.call(NODE_ITEM, &args![node]).u32();
+            let name = e.mem.u32(item);
+            if name != 0 {
+                e.call(STRCPY_S, &args![out, room, name]);
+                let step = e.call(STRLEN, &args![name]).u32().wrapping_add(1);
+                out = out.wrapping_add(step);
+                room = room.wrapping_sub(step);
+            }
+            node = e.call(NODE_NEXT, &args![node]).u32();
+        }
+        e.mem.set_u8(out, 0);
+        e.call(ADD_CHUNK_ARRAY, &args![chunk, buffer, size]);
+        e.call(FREE, &args![buffer]);
+    }
+    e.call(TEXTURE_ARRAY_SAVE, &args![this.addr() + 0xc, texture_chunk]);
+}
+
+// Translated from 00489e40 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TESModelList::CompareComponent` (Xbox PDB, `RET 4`): true when the two
+/// differ: when `other` is no `TESModelList`; when, walking both name lists
+/// (+0x04) side by side, one item has a name and the other not, or both
+/// names differ ignoring case (`_stricmp`); when one list is longer.
+pub fn tes_model_list_compare_component(e: &mut Engine, this: Ptr, other: u32) -> bool {
+    let source = e
+        .call(
+            RT_DYNAMIC_CAST,
+            &args![
+                other,
+                0u32,
+                TYPE_BASE_FORM_COMPONENT,
+                TYPE_TES_MODEL_LIST,
+                0u32
+            ],
+        )
+        .u32();
+    if source == 0 {
+        return true;
+    }
+    let mut mine = this.addr() + 4;
+    let mut theirs = source + 4;
+    while mine != 0 && theirs != 0 {
+        let item = e.call(NODE_ITEM, &args![mine]).u32();
+        let a = e.mem.u32(item);
+        let item = e.call(NODE_ITEM, &args![theirs]).u32();
+        let b = e.mem.u32(item);
+        if (a == 0 && b != 0) || (a != 0 && b == 0) {
+            return true;
+        }
+        if a != 0 && b != 0 && e.call(STRICMP, &args![a, b]).u32() != 0 {
+            return true;
+        }
+        mine = e.call(NODE_NEXT, &args![mine]).u32();
+        theirs = e.call(NODE_NEXT, &args![theirs]).u32();
+    }
+    mine != 0 || theirs != 0
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -284,6 +377,11 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x0048_9db0, tes_model_list_copy_component(Ptr, u32)),
         entry!(0x0048_a0d0, fn_0048a0d0(Ptr, u32, Ptr)),
         entry!(0x0048_a2c0, fn_0048a2c0(Ptr, u32)),
+        entry!(0x0048_9ba0, tes_model_list_save(Ptr, u32, u32)),
+        entry!(
+            0x0048_9e40,
+            tes_model_list_compare_component(Ptr, u32) -> bool
+        ),
     ]
 }
 
@@ -629,5 +727,142 @@ mod tests {
             only(&log, 0x0048_99f0),
             vec![vec![first, 0x51], vec![0, 0x52]]
         );
+    }
+}
+
+#[cfg(test)]
+mod save_compare_tests {
+    use super::*;
+
+    type Log = Vec<(u32, Vec<u32>)>;
+
+    fn ret(eax: u32) -> Ret {
+        Ret {
+            eax,
+            ..Ret::default()
+        }
+    }
+
+    fn only(log: &Log, addr: u32) -> Vec<Vec<u32>> {
+        log.iter()
+            .filter(|(a, _)| *a == addr)
+            .map(|(_, w)| w.clone())
+            .collect()
+    }
+
+    fn put_string(e: &mut Engine, text: &str) -> u32 {
+        let p = e.mem.alloc(text.len() as u32 + 1);
+        for (i, b) in text.bytes().enumerate() {
+            e.mem.set_u8(p + i as u32, b);
+        }
+        p
+    }
+
+    fn c_string(e: &Engine, mut p: u32) -> String {
+        let mut s = String::new();
+        while e.mem.u8(p) != 0 {
+            s.push(e.mem.u8(p) as char);
+            p += 1;
+        }
+        s
+    }
+
+    /// List, string and allocator doubles (a node is two words: item,
+    /// next).
+    fn engine() -> Engine {
+        let mut e = Engine::new();
+        e.register(NODE_ITEM, |_, a| ret(a[0]));
+        e.register(NODE_NEXT, |e, a| ret(e.mem.u32(a[0] + 4)));
+        e.register(LIST_IS_EMPTY, |e, a| ret(u32::from(e.mem.u32(a[0]) == 0)));
+        e.register(ALLOCATE, |e, a| ret(e.mem.alloc(a[0])));
+        e.register(FREE, |_, _| Ret::default());
+        e.register(STRLEN, |e, a| ret(c_string(e, a[0]).len() as u32));
+        e.register(STRCPY_S, |e, a| {
+            let text = c_string(e, a[2]);
+            assert!(text.len() < a[1] as usize);
+            for (i, b) in text.bytes().chain([0]).enumerate() {
+                e.mem.set_u8(a[0] + i as u32, b);
+            }
+            Ret::default()
+        });
+        e.register(STRICMP, |e, a| {
+            let (x, y) = (c_string(e, a[0]), c_string(e, a[1]));
+            ret(u32::from(!x.eq_ignore_ascii_case(&y)))
+        });
+        e.register(ADD_CHUNK_ARRAY, |_, _| Ret::default());
+        e.register(TEXTURE_ARRAY_SAVE, |_, _| Ret::default());
+        e
+    }
+
+    /// A model list (0x14 bytes) whose name list holds `items` (0 = a null
+    /// item).
+    fn list(e: &mut Engine, items: &[u32]) -> u32 {
+        let this = e.mem.alloc(0x14);
+        let mut node = this + 4;
+        for (i, item) in items.iter().enumerate() {
+            e.mem.set_u32(node, *item);
+            if i + 1 < items.len() {
+                let next = e.mem.alloc(8);
+                e.mem.set_u32(node + 4, next);
+                node = next;
+            }
+        }
+        this
+    }
+
+    #[test]
+    fn save_packs_the_names_and_saves_the_textures() {
+        let mut e = engine();
+        let a = put_string(&mut e, "a.nif");
+        let b = put_string(&mut e, "bc.nif");
+        let this = list(&mut e, &[a, 0, b]);
+        e.call_log = Some(vec![]);
+        e.call(0x0048_9ba0, &args![this, 0x4c44_4f4du32, 0x5446_494eu32]);
+        let log = e.call_log.take().unwrap();
+        let added = only(&log, ADD_CHUNK_ARRAY);
+        assert_eq!(added.len(), 1);
+        let (chunk, buffer, size) = (added[0][0], added[0][1], added[0][2]);
+        assert_eq!((chunk, size), (0x4c44_4f4d, 14));
+        let bytes: Vec<u8> = (0..size).map(|i| e.mem.u8(buffer + i)).collect();
+        assert_eq!(bytes, b"a.nif\0bc.nif\0\0");
+        assert_eq!(only(&log, FREE), vec![vec![buffer]]);
+        assert_eq!(
+            only(&log, TEXTURE_ARRAY_SAVE),
+            vec![vec![this + 0xc, 0x5446_494e]]
+        );
+    }
+
+    #[test]
+    fn save_of_an_empty_list_only_saves_the_textures() {
+        let mut e = engine();
+        let this = list(&mut e, &[0]);
+        e.call_log = Some(vec![]);
+        e.call(0x0048_9ba0, &args![this, 1u32, 2u32]);
+        let log = e.call_log.take().unwrap();
+        assert!(only(&log, ADD_CHUNK_ARRAY).is_empty());
+        assert_eq!(only(&log, TEXTURE_ARRAY_SAVE), vec![vec![this + 0xc, 2]]);
+    }
+
+    fn compare(e: &mut Engine, mine: &[u32], theirs: &[u32]) -> bool {
+        let this = list(e, mine);
+        let other = list(e, theirs);
+        e.call(0x0048_9e40, &args![this, other]).bool()
+    }
+
+    #[test]
+    fn compare_reports_each_difference() {
+        let mut e = engine();
+        e.register(RT_DYNAMIC_CAST, |_, a| ret(a[0]));
+        let a = put_string(&mut e, "a.nif");
+        let upper = put_string(&mut e, "A.NIF");
+        let b = put_string(&mut e, "b.nif");
+        assert!(!compare(&mut e, &[a, 0], &[upper, 0]));
+        assert!(compare(&mut e, &[a], &[b]));
+        assert!(compare(&mut e, &[a], &[0]));
+        assert!(compare(&mut e, &[0], &[a]));
+        assert!(compare(&mut e, &[a, b], &[a]));
+        assert!(compare(&mut e, &[a], &[a, b]));
+        e.register(RT_DYNAMIC_CAST, |_, _| ret(0));
+        assert!(compare(&mut e, &[a], &[a]));
     }
 }

@@ -436,6 +436,98 @@ pub fn fn_0060fd90(e: &mut Engine, this: Ptr<TESQuestStageItem>) -> bool {
     e.get(this, TESQuestStageItem::iFlags) & 2 != 0
 }
 
+/// The log-entry cache: the stage item whose entry it holds (the word at
+/// `011cb86c`) and the entry text (the `BSStringT` at `011cb8a0`, set with
+/// `004037f0(text, length)` and read with `00559450`).
+const LOG_ENTRY_ITEM: u32 = 0x011c_b86c;
+const LOG_ENTRY_TEXT: u32 = 0x011c_b8a0;
+const STRING_TEXT: u32 = 0x0055_9450;
+/// `TESFile::GetThreadSafeFile` (`004739b0`), `TESFile::SetOffset`
+/// (`004723a0`, `RET 4`: the record's offset), `TESFile::GetTESForm`
+/// (`00472660`).
+const FILE_THREAD_SAFE: u32 = 0x0047_39b0;
+const FILE_SET_OFFSET: u32 = 0x0047_23a0;
+const FILE_FORM_TYPE: u32 = 0x0047_2660;
+/// The form's type byte (`00401170`: the byte at +4) and the form type table
+/// (`01187000`, 0xc bytes per type; its first byte the record type the file
+/// must hold).
+const FORM_TYPE: u32 = 0x0040_1170;
+const FORM_TYPE_TABLE: u32 = 0x0118_7000;
+/// The chunk holding a log entry's text (found after `QSDT`).
+const CHUNK_CNAM: u32 = u32::from_le_bytes(*b"CNAM");
+
+// Translated from 0060fdb0 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 0060fdb0 - the /GS cookie check (00ec408c) is not translated; the __alloca_probe_16 (00ec5ec0) buffer is a with_stack block of the chunk size (its 16-byte alignment padding is not modelled).
+/// `TESQuestStageItem::GetLogEntry` (engine map; `RET 4`, the quest): 0
+/// without a quest. Unless this item is the one the cache (`011cb86c`)
+/// holds, it becomes it and the cached text is emptied; then 0 when the
+/// quest has no file (`TESForm::GetFile(-1)`) or the item no record offset
+/// (+0x60), when the thread-safe file can't seek to the offset, or when the
+/// record's type is not the quest's (`01187000`). The record's chunks are
+/// walked: each `QSDT` counts a stage item, the one whose count is the
+/// item's index (+0x64, a byte) marking the next `CNAM`s, whose text (read
+/// whole) is cached; the walk stops once the cache holds text or at the
+/// last chunk. Answers the cached text, 0 when it is empty.
+pub fn tes_quest_stage_item_get_log_entry(e: &mut Engine, this: Ptr, quest: u32) -> u32 {
+    if quest == 0 {
+        return 0;
+    }
+    if this.addr() != e.global::<u32>(LOG_ENTRY_ITEM) {
+        e.set_global::<u32>(LOG_ENTRY_ITEM, this.addr());
+        e.call(STRING_SET, &args![LOG_ENTRY_TEXT, 0u32, 0u32]);
+        let file = e.call(FORM_GET_FILE, &args![quest, 0xffff_ffffu32]).u32();
+        if file == 0 || e.mem.u32(this.addr() + 0x60) == 0 {
+            return 0;
+        }
+        let file = e.call(FILE_THREAD_SAFE, &args![file]).u32();
+        let offset = e.mem.u32(this.addr() + 0x60);
+        if e.call(FILE_SET_OFFSET, &args![file, offset]).u32() as u8 == 0 {
+            return 0;
+        }
+        let record = u32::from(e.call(FILE_FORM_TYPE, &args![file]).u32() as u8);
+        let quest_type = e.call(FORM_TYPE, &args![quest]).u32();
+        let expected = e
+            .mem
+            .u8(FORM_TYPE_TABLE.wrapping_add(quest_type.wrapping_mul(0xc)));
+        if record != u32::from(expected) {
+            return 0;
+        }
+        let mut marked = false;
+        let mut index = 0u8;
+        loop {
+            let chunk = e.call(FILE_CHUNK_TYPE, &args![file]).u32();
+            if chunk == 0 {
+                break;
+            }
+            if chunk == CHUNK_CNAM {
+                if marked {
+                    let size = e.call(FILE_CHUNK_SIZE, &args![file]).u32();
+                    e.with_stack(size, |e, buffer| {
+                        e.call(FILE_GET_CHUNK_DATA, &args![file, buffer, size]);
+                        e.call(STRING_SET, &args![LOG_ENTRY_TEXT, buffer, 0u32]);
+                    });
+                }
+            } else if chunk == CHUNK_QSDT {
+                if index == e.mem.u8(this.addr() + 0x64) {
+                    marked = true;
+                }
+                index = index.wrapping_add(1);
+            }
+            if e.call(STRING_TEXT, &args![LOG_ENTRY_TEXT]).u32() != 0 {
+                break;
+            }
+            if !e.call(FILE_NEXT_CHUNK, &args![file]).bool() {
+                break;
+            }
+        }
+    }
+    if e.call(STRING_TEXT, &args![LOG_ENTRY_TEXT]).u32() != 0 {
+        e.call(STRING_TEXT, &args![LOG_ENTRY_TEXT]).u32()
+    } else {
+        0
+    }
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -450,6 +542,10 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x0060fb60, fn_0060fb60(Ptr<TESQuestStageItem>, u8)),
         entry!(0x0060fd70, fn_0060fd70(Ptr<TESQuestStageItem>) -> bool),
         entry!(0x0060fd90, fn_0060fd90(Ptr<TESQuestStageItem>) -> bool),
+        entry!(
+            0x0060_fdb0,
+            tes_quest_stage_item_get_log_entry(Ptr, u32) -> u32
+        ),
     ]
 }
 
@@ -992,5 +1088,122 @@ mod tests {
             assert_eq!(fn_0060fd70(&mut e, item), complete);
             assert_eq!(fn_0060fd90(&mut e, item), fail);
         }
+    }
+}
+
+#[cfg(test)]
+mod log_entry_tests {
+    use super::*;
+    use std::cell::Cell;
+    use std::rc::Rc;
+
+    fn ret(eax: u32) -> Ret {
+        Ret {
+            eax,
+            ..Ret::default()
+        }
+    }
+
+    /// A file holding `chunks`; `CNAM` chunks read as the text "log" plus
+    /// their position. The cached string keeps its text pointer in its first
+    /// word.
+    fn engine(chunks: Vec<u32>, record_type: u32) -> Engine {
+        let mut e = Engine::new();
+        e.map(LOG_ENTRY_ITEM & !0xfff, 0x1000);
+        e.map(FORM_TYPE_TABLE, 0x1000);
+        e.mem.set_u8(FORM_TYPE_TABLE + 0x47 * 0xc, 0x47);
+        e.register(FORM_TYPE, |_, _| ret(0x47));
+        e.register(FORM_GET_FILE, |_, _| ret(0xf11e));
+        e.register(FILE_THREAD_SAFE, |_, a| ret(a[0] + 1));
+        e.register(FILE_SET_OFFSET, |_, a| ret(u32::from(a[1] != 0xbad)));
+        e.register_double(FILE_FORM_TYPE, move |_, _| ret(record_type));
+        let position = Rc::new(Cell::new(0usize));
+        let at = position.clone();
+        let list = chunks.clone();
+        e.register_double(FILE_CHUNK_TYPE, move |_, _| {
+            ret(list.get(at.get()).copied().unwrap_or(0))
+        });
+        let at = position.clone();
+        e.register_double(FILE_NEXT_CHUNK, move |_, _| {
+            at.set(at.get() + 1);
+            ret(1)
+        });
+        e.register(FILE_CHUNK_SIZE, |_, _| ret(5));
+        let at = position;
+        e.register_double(FILE_GET_CHUNK_DATA, move |e, a| {
+            e.mem.write(a[1], b"log");
+            e.mem.set_u8(a[1] + 3, b'0' + at.get() as u8);
+            e.mem.set_u8(a[1] + 4, 0);
+            ret(1)
+        });
+        e.register(STRING_SET, |e, a| {
+            let copy = if a[1] == 0 {
+                0
+            } else {
+                let p = e.mem.alloc(8);
+                for i in 0..8 {
+                    let b = e.mem.u8(a[1] + i);
+                    e.mem.set_u8(p + i, b);
+                }
+                p
+            };
+            e.mem.set_u32(a[0], copy);
+            Ret::default()
+        });
+        e.register(STRING_TEXT, |e, a| ret(e.mem.u32(a[0])));
+        e
+    }
+
+    fn item(e: &mut Engine, offset: u32, index: u8) -> u32 {
+        let item = e.mem.alloc(0x74);
+        e.mem.set_u32(item + 0x60, offset);
+        e.mem.set_u8(item + 0x64, index);
+        item
+    }
+
+    fn text(e: &Engine, p: u32) -> Vec<u8> {
+        (0..4).map(|i| e.mem.u8(p + i)).collect()
+    }
+
+    #[test]
+    fn log_entry_is_the_cnam_after_the_items_qsdt() {
+        let chunks = vec![
+            CHUNK_QSDT,
+            CHUNK_CNAM,
+            CHUNK_QSDT,
+            u32::from_le_bytes(*b"SCHR"),
+            CHUNK_CNAM,
+            CHUNK_CNAM,
+        ];
+        let mut e = engine(chunks, 0x47);
+        let this = item(&mut e, 0x100, 1);
+        let entry = e.call(0x0060_fdb0, &args![this, 0x9000u32]).u32();
+        assert_eq!(text(&e, entry), b"log4");
+        assert_eq!(e.global::<u32>(LOG_ENTRY_ITEM), this);
+        e.call_log = Some(vec![]);
+        let again = e.call(0x0060_fdb0, &args![this, 0x9000u32]).u32();
+        let log = e.call_log.take().unwrap();
+        assert_eq!(again, entry);
+        assert!(log.iter().all(|c| c.0 != FORM_GET_FILE));
+    }
+
+    #[test]
+    fn log_entry_is_null_on_each_failure() {
+        let chunks = vec![CHUNK_QSDT, CHUNK_CNAM];
+        let mut e = engine(chunks.clone(), 0x47);
+        let this = item(&mut e, 0x100, 0);
+        assert_eq!(e.call(0x0060_fdb0, &args![this, 0u32]).u32(), 0);
+        let other = item(&mut e, 0xbad, 0);
+        assert_eq!(e.call(0x0060_fdb0, &args![other, 0x9000u32]).u32(), 0);
+        let none = item(&mut e, 0, 0);
+        assert_eq!(e.call(0x0060_fdb0, &args![none, 0x9000u32]).u32(), 0);
+        let missing = item(&mut e, 0x100, 5);
+        assert_eq!(e.call(0x0060_fdb0, &args![missing, 0x9000u32]).u32(), 0);
+        let mut e = engine(chunks, 0x48);
+        let this = item(&mut e, 0x100, 0);
+        assert_eq!(e.call(0x0060_fdb0, &args![this, 0x9000u32]).u32(), 0);
+        e.register(FORM_GET_FILE, |_, _| ret(0));
+        let other = item(&mut e, 0x100, 0);
+        assert_eq!(e.call(0x0060_fdb0, &args![other, 0x9000u32]).u32(), 0);
     }
 }

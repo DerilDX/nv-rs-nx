@@ -51,9 +51,33 @@ pub fn fn_00e80390(e: &mut Engine, count: u32) -> u32 {
     block + 4
 }
 
+/// The global object [`fn_00e803f0`] releases (`0126f72c`), the destructor body it runs on
+/// it first (`00a90ac0`, unit `NiMain/nioldscreenspace.cpp`, unnamed; `thiscall`, no stack
+/// words) and `MemoryManager::Deallocate` (`00aa4060`, `thiscall` on the manager, the
+/// block).
+const GLOBAL_OBJECT_0126F72C: u32 = 0x0126_f72c;
+const OBJECT_DESTRUCT: u32 = 0x00a9_0ac0;
+const MEMORY_DEALLOCATE: u32 = 0x00aa_4060;
+
+// Translated from 00e803f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (no arguments): when the global at `0126f72c` holds an object,
+/// destroys it (`00a90ac0`) and frees it (`MemoryManager::Deallocate`); then clears the
+/// global.
+pub fn fn_00e803f0(e: &mut Engine) {
+    let object = e.global::<u32>(GLOBAL_OBJECT_0126F72C);
+    if object != 0 {
+        e.call(OBJECT_DESTRUCT, &args![object]);
+        e.call(MEMORY_DEALLOCATE, &args![MEMORY_MANAGER, object]);
+    }
+    e.set_global(GLOBAL_OBJECT_0126F72C, 0u32);
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
-    vec![entry!(0x00e8_0390, fn_00e80390(u32) -> u32)]
+    vec![
+        entry!(0x00e8_0390, fn_00e80390(u32) -> u32),
+        entry!(0x00e8_03f0, fn_00e803f0()),
+    ]
 }
 
 #[cfg(test)]
@@ -106,5 +130,28 @@ mod tests {
         e.call_log = Some(vec![]);
         assert_eq!(e.call(0x00e8_0390, &[2]).u32(), 0);
         assert!(calls_to(&e, VECTOR_CONSTRUCT).is_empty());
+    }
+
+    #[test]
+    fn fn_00e803f0_destroys_frees_and_clears_the_global() {
+        let mut e = Engine::new();
+        e.register(OBJECT_DESTRUCT, |_, _| Ret::default());
+        e.register(MEMORY_DEALLOCATE, |_, _| Ret::default());
+        e.map(GLOBAL_OBJECT_0126F72C, 4);
+        e.set_global(GLOBAL_OBJECT_0126F72C, 0x7700u32);
+        e.call_log = Some(vec![]);
+        e.call(0x00e8_03f0, &args![]);
+        let log = e.call_log.take().unwrap();
+        assert_eq!(
+            log[1..],
+            [
+                (OBJECT_DESTRUCT, vec![0x7700]),
+                (MEMORY_DEALLOCATE, vec![MEMORY_MANAGER, 0x7700])
+            ]
+        );
+        assert_eq!(e.global::<u32>(GLOBAL_OBJECT_0126F72C), 0);
+        e.call_log = Some(vec![]);
+        e.call(0x00e8_03f0, &args![]);
+        assert_eq!(e.call_log.take().unwrap().len(), 1);
     }
 }

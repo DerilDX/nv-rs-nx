@@ -405,9 +405,195 @@ pub fn fn_005fcb70(e: &mut Engine, this: Ptr, file: Ptr) -> bool {
     true
 }
 
+/// `__RTDynamicCast` (`00ec43fb`, cdecl), the source type descriptor and
+/// the target `005fc3a0` and `005fc420` pass (`01186388`, the type
+/// descriptor named `.?AVTESEyes@@`).
+const DYNAMIC_CAST: u32 = 0x00ec_43fb;
+const CAST_SOURCE: u32 = 0x0118_3028;
+const EYES_TYPE: u32 = 0x0118_6388;
+/// The chunk writers (cdecl): a word (`00485910`) and an array
+/// (`TESForm::AddChunkArray`, `004856f0`: chunk, data, size).
+const WRITE_WORD_CHUNK: u32 = 0x0048_5910;
+const WRITE_ARRAY_CHUNK: u32 = 0x0048_56f0;
+/// One of `TESEyes`' flag getters.
+type FlagGetter = fn(&mut Engine, Ptr) -> bool;
+
+// Translated from 005fc3a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TESEyes`' copy (`RET 4`: the source form; the engine map has no
+/// name): the source through `__RTDynamicCast(source, 0, 01183028,
+/// 01186388, 0)`; nothing without it. Otherwise
+/// `TESForm::CopyAllComponents` given the uncast source, then the three
+/// flags through their getters and setters ([`fn_005fc4d0`] /
+/// [`fn_005fc4f0`], [`fn_005fc530`] / [`fn_005fc550`], [`fn_005fc590`] /
+/// [`fn_005fc5b0`]).
+pub fn fn_005fc3a0(e: &mut Engine, this: Ptr, source: u32) {
+    let other = e
+        .call(
+            DYNAMIC_CAST,
+            &args![source, 0u32, CAST_SOURCE, EYES_TYPE, 0u32],
+        )
+        .u32();
+    if other == 0 {
+        return;
+    }
+    e.call(0x0048_51b0, &args![this, source]);
+    let flag = fn_005fc4d0(e, Ptr::new(other));
+    fn_005fc4f0(e, this, u8::from(flag));
+    let flag = fn_005fc530(e, Ptr::new(other));
+    fn_005fc550(e, this, u8::from(flag));
+    let flag = fn_005fc590(e, Ptr::new(other));
+    fn_005fc5b0(e, this, u8::from(flag));
+}
+
+// Translated from 005fc420 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TESEyes`' compare (`RET 4`: the other form; true when they differ;
+/// the engine map has no name): true when the cast as in `005fc3a0` fails,
+/// `TESForm::CompareAllComponents` answers true, or [`fn_005fc4d0`],
+/// [`fn_005fc530`] or [`fn_005fc590`] answer differently for the two.
+pub fn fn_005fc420(e: &mut Engine, this: Ptr, form: u32) -> bool {
+    let other = e
+        .call(
+            DYNAMIC_CAST,
+            &args![form, 0u32, CAST_SOURCE, EYES_TYPE, 0u32],
+        )
+        .u32();
+    if other == 0 {
+        return true;
+    }
+    if e.call(0x0048_5270, &args![this, other]).bool() {
+        return true;
+    }
+    let getters: [FlagGetter; 3] = [fn_005fc4d0, fn_005fc530, fn_005fc590];
+    for getter in getters {
+        let theirs = getter(e, Ptr::new(other));
+        if theirs != getter(e, this) {
+            return true;
+        }
+    }
+    false
+}
+
+// Translated from 005fc4d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// True when bit 0x1 of `TESEyes`' flags byte (+0x30) is set.
+pub fn fn_005fc4d0(e: &mut Engine, this: Ptr) -> bool {
+    i32::from(e.mem.i8(this.addr() + 0x30)) & 1 != 0
+}
+
+/// Sets (`set`) or clears `bit` in the flags byte at +0x30.
+fn set_eyes_bit(e: &mut Engine, this: Ptr, bit: u8, set: bool) {
+    let at = this.addr() + 0x30;
+    let flags = e.mem.u8(at);
+    e.mem
+        .set_u8(at, if set { flags | bit } else { flags & !bit });
+}
+
+// Translated from 005fc4f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Sets bit 0x1 of `TESEyes`' flags byte (+0x30) when the byte `value` is
+/// non-zero, clears it otherwise (`RET 4`).
+pub fn fn_005fc4f0(e: &mut Engine, this: Ptr, value: u8) {
+    set_eyes_bit(e, this, 1, value != 0);
+}
+
+// Translated from 005fc550 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Clears bit 0x2 of `TESEyes`' flags byte (+0x30) when the byte `value`
+/// is non-zero, sets it otherwise (`RET 4`; the counterpart of
+/// [`fn_005fc530`]).
+pub fn fn_005fc550(e: &mut Engine, this: Ptr, value: u8) {
+    set_eyes_bit(e, this, 2, value == 0);
+}
+
+// Translated from 005fc5b0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Clears bit 0x4 of `TESEyes`' flags byte (+0x30) when the byte `value`
+/// is non-zero, sets it otherwise (`RET 4`; the counterpart of
+/// [`fn_005fc590`]).
+pub fn fn_005fc5b0(e: &mut Engine, this: Ptr, value: u8) {
+    set_eyes_bit(e, this, 4, value == 0);
+}
+
+// Translated from 005fc970 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Sets (the byte `set` non-zero) or clears the bits `bits` in the
+/// faction's flags word at +0x34 (`RET 8`; the engine map has no name),
+/// then calls vtable slot 0x48 with 2.
+pub fn fn_005fc970(e: &mut Engine, this: Ptr, bits: u32, set: u8) {
+    let at = this.addr() + 0x34;
+    let flags = e.mem.u32(at);
+    if set != 0 {
+        e.mem.set_u32(at, flags | bits);
+    } else {
+        e.mem.set_u32(at, !bits & flags);
+    }
+    e.vcall(this.addr(), 0x48, &args![2u32]);
+}
+
+// Translated from 005fc9d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The faction's record writer (the layout `005fc680` builds; no stack
+/// words; the engine map has no name): `TESForm::StartForm`,
+/// `TESFullName::Save` (+0x18), `0048bb70` (+0x24), the flags word (+0x34)
+/// as `TESForm::__SaveData(+0x34, 4)` with `00503210` on it before and
+/// after when `00401500` answers true; then for each rank of the list
+/// (`005a8080`, up to an empty node) its index as `RNAM`, the texts at +0
+/// and +8 (`004048e0` the length, `00559450` the text; each with its
+/// terminator) as `MNAM` and `FNAM` and the one at +0x10 (`0048cee0`,
+/// `00408da0`) as `INAM` when not empty; the form id of +0x38 as `WMI1`
+/// when set; then `TESForm::CloseForm`.
+pub fn fn_005fc9d0(e: &mut Engine, this: Ptr) {
+    let base = this.addr();
+    e.call(0x0048_55a0, &args![this]);
+    e.call(0x0048_7010, &args![base + 0x18]);
+    e.call(0x0048_bb70, &args![base + 0x24]);
+    if e.call(0x0040_1500, &args![]).bool() {
+        e.call(0x0050_3210, &args![base + 0x34]);
+    }
+    e.call(0x0048_5e20, &args![this, base + 0x34, 4u32]);
+    if e.call(0x0040_1500, &args![]).bool() {
+        e.call(0x0050_3210, &args![base + 0x34]);
+    }
+    let mut index = 0u32;
+    let mut node = e.call(RANK_LIST, &args![this]).u32();
+    while node != 0 && !e.call(LIST_IS_EMPTY, &args![node]).bool() {
+        let slot = e.call(NODE_ITEM, &args![node]).u32();
+        let rank = e.mem.u32(slot);
+        e.call(WRITE_WORD_CHUNK, &args![SIG_RNAM, index]);
+        for (offset, chunk) in [(0u32, SIG_MNAM), (8, SIG_FNAM)] {
+            if e.call(0x0040_48e0, &args![rank + offset]).u32() != 0 {
+                let size = e
+                    .call(0x0040_48e0, &args![rank + offset])
+                    .u32()
+                    .wrapping_add(1);
+                let text = e.call(0x0055_9450, &args![rank + offset]).u32();
+                e.call(WRITE_ARRAY_CHUNK, &args![chunk, text, size]);
+            }
+        }
+        if e.call(0x0048_cee0, &args![rank + 0x10]).u32() != 0 {
+            let size = e
+                .call(0x0048_cee0, &args![rank + 0x10])
+                .u32()
+                .wrapping_add(1);
+            let text = e.call(0x0040_8da0, &args![rank + 0x10]).u32();
+            e.call(WRITE_ARRAY_CHUNK, &args![SIG_INAM, text, size]);
+        }
+        index = index.wrapping_add(1);
+        node = e.call(0x0072_6070, &args![node]).u32();
+    }
+    let reputation = e.mem.u32(base + 0x38);
+    if reputation != 0 {
+        let id = e.call(0x0084_e3a0, &args![reputation]).u32();
+        e.call(WRITE_WORD_CHUNK, &args![SIG_WMI1, id]);
+    }
+    e.call(0x0048_5680, &args![this]);
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x005f_c3a0, fn_005fc3a0(Ptr, u32)),
+        entry!(0x005f_c420, fn_005fc420(Ptr, u32) -> bool),
+        entry!(0x005f_c4d0, fn_005fc4d0(Ptr) -> bool),
+        entry!(0x005f_c4f0, fn_005fc4f0(Ptr, u8)),
+        entry!(0x005f_c550, fn_005fc550(Ptr, u8)),
+        entry!(0x005f_c5b0, fn_005fc5b0(Ptr, u8)),
+        entry!(0x005f_c970, fn_005fc970(Ptr, u32, u8)),
+        entry!(0x005f_c9d0, fn_005fc9d0(Ptr)),
         entry!(0x005f_c840, fn_005fc840(Ptr)),
         entry!(0x005f_c680, fn_005fc680(Ptr) -> Ptr),
         entry!(0x005f_c220, fn_005fc220(Ptr, Ptr) -> bool),
@@ -830,5 +1016,158 @@ mod b020_tests {
         });
         e.call(0x005f_cb70, &args![p, 0x9000u32]);
         assert_eq!(e.mem.u32(p.addr() + 0x34), 0xffff_fff0);
+    }
+}
+
+#[cfg(test)]
+mod n041_tests {
+    use super::*;
+
+    fn ret(eax: u32) -> Ret {
+        Ret {
+            eax,
+            ..Ret::default()
+        }
+    }
+
+    fn calls(e: &Engine, addr: u32) -> Vec<Vec<u32>> {
+        e.call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|(a, _)| *a == addr)
+            .map(|(_, w)| w.clone())
+            .collect()
+    }
+
+    #[test]
+    fn eyes_flag_getters_and_setters() {
+        let mut e = Engine::new();
+        let eyes = e.mem.alloc(0x34);
+        e.mem.set_u8(eyes + 0x30, 0xf8);
+        assert!(!e.call(0x005f_c4d0, &args![eyes]).bool());
+        e.call(0x005f_c4f0, &args![eyes, 0x100u32]);
+        assert_eq!(e.mem.u8(eyes + 0x30), 0xf8);
+        e.call(0x005f_c4f0, &args![eyes, 1u32]);
+        assert_eq!(e.mem.u8(eyes + 0x30), 0xf9);
+        assert!(e.call(0x005f_c4d0, &args![eyes]).bool());
+        // 005fc550 and 005fc5b0 store the opposite of their byte.
+        e.call(0x005f_c550, &args![eyes, 0u32]);
+        e.call(0x005f_c5b0, &args![eyes, 0u32]);
+        assert_eq!(e.mem.u8(eyes + 0x30), 0xff);
+        e.call(0x005f_c550, &args![eyes, 1u32]);
+        assert_eq!(e.mem.u8(eyes + 0x30), 0xfd);
+        e.call(0x005f_c5b0, &args![eyes, 7u32]);
+        assert_eq!(e.mem.u8(eyes + 0x30), 0xf9);
+    }
+
+    #[test]
+    fn eyes_copy_and_compare() {
+        let mut e = Engine::new();
+        e.register(DYNAMIC_CAST, |_, a| ret(if a[0] == 1 { 0 } else { a[0] }));
+        e.register(0x0048_51b0, |_, _| Ret::default());
+        e.register(0x0048_5270, |_, _| ret(0));
+        let this = e.mem.alloc(0x34);
+        let other = e.mem.alloc(0x34);
+        // Playable, not for males (bit 2 set), for females.
+        e.mem.set_u8(other + 0x30, 0x03);
+        e.mem.set_u8(this + 0x30, 0x04);
+        assert!(e.call(0x005f_c420, &args![this, other]).bool());
+        e.call_log = Some(vec![]);
+        e.call(0x005f_c3a0, &args![this, other]);
+        assert_eq!(
+            calls(&e, DYNAMIC_CAST),
+            vec![vec![other, 0, CAST_SOURCE, EYES_TYPE, 0]]
+        );
+        assert_eq!(calls(&e, 0x0048_51b0), vec![vec![this, other]]);
+        assert_eq!(e.mem.u8(this + 0x30), 0x03);
+        assert!(!e.call(0x005f_c420, &args![this, other]).bool());
+        assert!(e.call(0x005f_c420, &args![this, 1u32]).bool());
+        e.register(0x0048_5270, |_, _| ret(1));
+        assert!(e.call(0x005f_c420, &args![this, other]).bool());
+        e.call_log = Some(vec![]);
+        e.call(0x005f_c3a0, &args![this, 1u32]);
+        assert!(calls(&e, 0x0048_51b0).is_empty());
+    }
+
+    #[test]
+    fn fn_005fc970_sets_or_clears_the_faction_flags() {
+        let mut e = Engine::new();
+        let vtable = e.mem.alloc(0x50);
+        e.mem.set_u32(vtable + 0x48, 0x7000_0048);
+        e.register(0x7000_0048, |_, _| Ret::default());
+        let faction = e.mem.alloc(0x40);
+        e.mem.set_u32(faction, vtable);
+        e.mem.set_u32(faction + 0x34, 0x10);
+        e.call_log = Some(vec![]);
+        e.call(0x005f_c970, &args![faction, 0x3u32, 1u32]);
+        assert_eq!(e.mem.u32(faction + 0x34), 0x13);
+        e.call(0x005f_c970, &args![faction, 0x11u32, 0x200u32]);
+        assert_eq!(e.mem.u32(faction + 0x34), 0x2);
+        assert_eq!(calls(&e, 0x7000_0048), vec![vec![faction, 2]; 2]);
+    }
+
+    #[test]
+    fn fn_005fc9d0_writes_the_faction_and_its_ranks() {
+        let mut e = Engine::new();
+        for a in [
+            0x0048_55a0u32,
+            0x0048_7010,
+            0x0048_bb70,
+            0x0050_3210,
+            0x0048_5e20,
+            0x0048_5680,
+            WRITE_WORD_CHUNK,
+            WRITE_ARRAY_CHUNK,
+        ] {
+            e.register(a, |_, _| Ret::default());
+        }
+        e.register(0x0040_1500, |_, _| ret(1));
+        // The rank list at +0x3C: nodes {item, next}.
+        e.register(RANK_LIST, |_, a| ret(a[0] + 0x3c));
+        e.register(LIST_IS_EMPTY, |e, a| ret(u32::from(e.mem.u32(a[0]) == 0)));
+        e.register(NODE_ITEM, |_, a| ret(a[0]));
+        e.register(0x0072_6070, |e, a| ret(e.mem.u32(a[0] + 4)));
+        // Texts: the length is the word at +4, the text the word at +0.
+        e.register(0x0040_48e0, |e, a| ret(e.mem.u32(a[0] + 4)));
+        e.register(0x0055_9450, |e, a| ret(e.mem.u32(a[0])));
+        e.register(0x0048_cee0, |e, a| ret(e.mem.u32(a[0] + 4)));
+        e.register(0x0040_8da0, |e, a| ret(e.mem.u32(a[0])));
+        e.register(0x0084_e3a0, |_, a| ret(a[0] + 1));
+        let faction = e.mem.alloc(0x50);
+        let first = e.mem.alloc(0x18);
+        e.mem.set_u32(first, 0x111);
+        e.mem.set_u32(first + 4, 5);
+        e.mem.set_u32(first + 0x10, 0x333);
+        e.mem.set_u32(first + 0x14, 2);
+        let second = e.mem.alloc(0x18);
+        e.mem.set_u32(second + 8, 0x222);
+        e.mem.set_u32(second + 0xc, 3);
+        let node = e.mem.alloc(8);
+        e.mem.set_u32(faction + 0x3c, first);
+        e.mem.set_u32(faction + 0x40, node);
+        e.mem.set_u32(node, second);
+        e.mem.set_u32(faction + 0x38, 0x900);
+        e.call_log = Some(vec![]);
+        e.call(0x005f_c9d0, &args![faction]);
+        assert_eq!(calls(&e, 0x0048_bb70), vec![vec![faction + 0x24]]);
+        assert_eq!(calls(&e, 0x0050_3210).len(), 2);
+        assert_eq!(
+            calls(&e, 0x0048_5e20),
+            vec![vec![faction, faction + 0x34, 4]]
+        );
+        assert_eq!(
+            calls(&e, WRITE_WORD_CHUNK),
+            vec![vec![SIG_RNAM, 0], vec![SIG_RNAM, 1], vec![SIG_WMI1, 0x901]]
+        );
+        assert_eq!(
+            calls(&e, WRITE_ARRAY_CHUNK),
+            vec![
+                vec![SIG_MNAM, 0x111, 6],
+                vec![SIG_INAM, 0x333, 3],
+                vec![SIG_FNAM, 0x222, 4]
+            ]
+        );
+        assert_eq!(calls(&e, 0x0048_5680), vec![vec![faction]]);
     }
 }

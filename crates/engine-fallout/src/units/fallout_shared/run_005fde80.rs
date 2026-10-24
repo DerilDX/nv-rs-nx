@@ -326,9 +326,203 @@ pub fn fn_005fe770(e: &mut Engine, this: Ptr) -> u32 {
     children
 }
 
+/// `__RTDynamicCast` (`00ec43fb`, cdecl), the source type descriptor and
+/// the targets: `TESHair`'s (`011863a0`) and `TESIdleForm`'s (`01186a18`),
+/// both by their RTTI names.
+const DYNAMIC_CAST: u32 = 0x00ec_43fb;
+const CAST_SOURCE: u32 = 0x0118_3028;
+const HAIR_TYPE: u32 = 0x0118_63a0;
+const IDLE_FORM_TYPE: u32 = 0x0118_6a18;
+
+// Translated from 005fde80 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TESHair`'s copy (`RET 4`: the source form; the engine map has no
+/// name): the source through `__RTDynamicCast(source, 0, 01183028,
+/// 011863a0, 0)`; nothing without it, otherwise
+/// `TESForm::CopyAllComponents` given the uncast source and the flags
+/// byte at +0x48.
+pub fn fn_005fde80(e: &mut Engine, this: Ptr, source: u32) {
+    let other = e
+        .call(
+            DYNAMIC_CAST,
+            &args![source, 0u32, CAST_SOURCE, HAIR_TYPE, 0u32],
+        )
+        .u32();
+    if other == 0 {
+        return;
+    }
+    e.call(0x0048_51b0, &args![this, source]);
+    let flags = e.mem.u8(other + 0x48);
+    e.mem.set_u8(this.addr() + 0x48, flags);
+}
+
+// Translated from 005fded0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TESHair`'s compare (`RET 4`: the other form; true when they differ;
+/// the engine map has no name): true when the cast as in `005fde80`
+/// fails, `TESForm::CompareAllComponents` answers true or the flags bytes
+/// at +0x48 differ.
+pub fn fn_005fded0(e: &mut Engine, this: Ptr, form: u32) -> bool {
+    let other = e
+        .call(
+            DYNAMIC_CAST,
+            &args![form, 0u32, CAST_SOURCE, HAIR_TYPE, 0u32],
+        )
+        .u32();
+    if other == 0 {
+        return true;
+    }
+    if e.call(0x0048_5270, &args![this, other]).bool() {
+        return true;
+    }
+    e.mem.i8(other + 0x48) != e.mem.i8(this.addr() + 0x48)
+}
+
+// Translated from 005fdf40 (decompiled, FalloutNV.exe 1.4.0.525)
+/// True when bit 0x1 of `TESHair`'s flags byte (+0x48) is set.
+pub fn fn_005fdf40(e: &mut Engine, this: Ptr) -> bool {
+    i32::from(e.mem.i8(this.addr() + 0x48)) & 1 != 0
+}
+
+// Translated from 005fe470 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TESIdleForm`'s copy (`RET 4`: the source form; the engine map has no
+/// name): the source through `__RTDynamicCast(source, 0, 01183028,
+/// 01186a18, 0)`; nothing without it. Otherwise
+/// `TESForm::CopyAllComponents` given the cast source, the conditions
+/// (`00436aa0` on each) copied by `00680a70(source's, 0)` on this one's,
+/// the byte `005ff200` answers kept, the eight bytes at +0x38 copied, and
+/// that byte handed to `005ff220` unless `004077c0` answers true.
+pub fn fn_005fe470(e: &mut Engine, this: Ptr, source: u32) {
+    let base = this.addr();
+    let other = e
+        .call(
+            DYNAMIC_CAST,
+            &args![source, 0u32, CAST_SOURCE, IDLE_FORM_TYPE, 0u32],
+        )
+        .u32();
+    if other == 0 {
+        return;
+    }
+    e.call(0x0048_51b0, &args![this, other]);
+    let theirs = e.call(CONDITIONS, &args![other]).u32();
+    let mine = e.call(CONDITIONS, &args![this]).u32();
+    e.call(0x0068_0a70, &args![mine, theirs, 0u32]);
+    let kept = e.call(0x005f_f200, &args![this]).u8();
+    let low = e.mem.u32(other + 0x38);
+    let high = e.mem.u32(other + 0x3c);
+    e.mem.set_u32(base + 0x38, low);
+    e.mem.set_u32(base + 0x3c, high);
+    if !e.call(TEST_004077C0, &args![this]).bool() {
+        e.call(0x005f_f220, &args![this, u32::from(kept)]);
+    }
+}
+
+/// `004077c0` (thiscall, no stack words), the test `005fe470` makes
+/// before `005ff220`.
+const TEST_004077C0: u32 = 0x0040_77c0;
+
+// Translated from 005fe510 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TESIdleForm`'s compare (`RET 4`: the other form; true when they
+/// differ; the engine map has no name): true when the cast as in
+/// `005fe470` fails, `TESForm::CompareAllComponents` answers true,
+/// `00680b70(other's conditions)` on this one's (`00436aa0`) answers true,
+/// or the bytes at +0x38, +0x39, +0x3A, the `u16` at +0x3C or the byte at
+/// +0x3E differ.
+pub fn fn_005fe510(e: &mut Engine, this: Ptr, form: u32) -> bool {
+    let base = this.addr();
+    let other = e
+        .call(
+            DYNAMIC_CAST,
+            &args![form, 0u32, CAST_SOURCE, IDLE_FORM_TYPE, 0u32],
+        )
+        .u32();
+    if other == 0 {
+        return true;
+    }
+    if e.call(0x0048_5270, &args![this, other]).bool() {
+        return true;
+    }
+    let theirs = e.call(CONDITIONS, &args![other]).u32();
+    let mine = e.call(CONDITIONS, &args![this]).u32();
+    if e.call(0x0068_0b70, &args![mine, theirs]).bool() {
+        return true;
+    }
+    for offset in [0x38u32, 0x39, 0x3a] {
+        if e.mem.u8(base + offset) != e.mem.u8(other + offset) {
+            return true;
+        }
+    }
+    e.mem.u16(base + 0x3c) != e.mem.u16(other + 0x3c)
+        || e.mem.u8(base + 0x3e) != e.mem.u8(other + 0x3e)
+}
+
+// Translated from 005fe600 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Makes a copy of an idle for a reference (`RET 8`: a byte, the
+/// reference; the engine map has no name): `004867a0(byte, reference)` on
+/// `this`, through `__RTDynamicCast` to `TESIdleForm` (`01186a18`). The
+/// copy's parent (`008d8040`) is what `00853130(+0x44, &found)` on the
+/// reference finds, or the word at +0x44 when it answers false or 0; its
+/// previous idle (`00673400`) likewise from +0x48. With an array at +0x40:
+/// `0061bdc0` on it, its count (`0084e3a0`), the copy's array
+/// ([`fn_005fe770`]) sized to it (`00864280`), and each element's vtable
+/// slot 0x40 (the byte, the reference) stored in the copy's array
+/// (`0061bd20(index, &result)`). Answers the copy.
+pub fn fn_005fe600(e: &mut Engine, this: Ptr, flag: u8, reference: u32) -> u32 {
+    let base = this.addr();
+    let made = e
+        .call(0x0048_67a0, &args![this, u32::from(flag), reference])
+        .u32();
+    let copy = e
+        .call(
+            DYNAMIC_CAST,
+            &args![made, 0u32, CAST_SOURCE, IDLE_FORM_TYPE, 0u32],
+        )
+        .u32();
+    for (offset, setter) in [(0x44u32, SET_IDLE_PARENT), (0x48, SET_IDLE_PREVIOUS)] {
+        let found = e.with_stack(4, |e, found| {
+            let field = e.mem.u32(base + offset);
+            let ok = e.call(0x0085_3130, &args![reference, field, found]).bool();
+            let value = e.mem.u32(found.addr());
+            if !ok || value == 0 {
+                e.mem.u32(base + offset)
+            } else {
+                value
+            }
+        });
+        e.call(setter, &args![copy, found]);
+    }
+    let array = e.mem.u32(base + 0x40);
+    if array != 0 {
+        e.call(ARRAY_0061BDC0, &args![array]);
+        let array = e.mem.u32(base + 0x40);
+        let count = e.call(0x0084_e3a0, &args![array]).u32();
+        let target = fn_005fe770(e, Ptr::new(copy));
+        e.call(0x0086_4280, &args![target, count]);
+        let mut index = 0u32;
+        while index < count {
+            let array = e.mem.u32(base + 0x40);
+            let slot = e.call(0x0087_7a30, &args![array, index]).u32();
+            let element = e.mem.u32(slot);
+            let result = e
+                .vcall(element, 0x40, &args![u32::from(flag), reference])
+                .u32();
+            e.with_stack(4, |e, local| {
+                e.mem.set_u32(local.addr(), result);
+                e.call(0x0061_bd20, &args![target, index, local]);
+            });
+            index = index.wrapping_add(1);
+        }
+    }
+    copy
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x005f_de80, fn_005fde80(Ptr, u32)),
+        entry!(0x005f_ded0, fn_005fded0(Ptr, u32) -> bool),
+        entry!(0x005f_df40, fn_005fdf40(Ptr) -> bool),
+        entry!(0x005f_e470, fn_005fe470(Ptr, u32)),
+        entry!(0x005f_e510, fn_005fe510(Ptr, u32) -> bool),
+        entry!(0x005f_e600, fn_005fe600(Ptr, u8, u32) -> u32),
         entry!(0x005f_e040, fn_005fe040(Ptr) -> Ptr),
         entry!(0x005f_e030, fn_005fe030(Ptr, u32) -> u32),
         entry!(0x005f_df60, fn_005fdf60(Ptr) -> bool),
@@ -678,5 +872,180 @@ mod b027_tests {
         assert_eq!(calls(&log, FORM_DESTRUCT), vec![vec![idle]]);
         let (_, log) = run(&mut e, 0x005f_e130, &[idle, 3]);
         assert_eq!(calls(&log, FREE), vec![vec![idle]]);
+    }
+}
+
+#[cfg(test)]
+mod n041_tests {
+    use super::*;
+
+    fn ret(eax: u32) -> Ret {
+        Ret {
+            eax,
+            ..Ret::default()
+        }
+    }
+
+    fn calls(e: &Engine, addr: u32) -> Vec<Vec<u32>> {
+        e.call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|(a, _)| *a == addr)
+            .map(|(_, w)| w.clone())
+            .collect()
+    }
+
+    #[test]
+    fn hair_copy_compare_and_flag() {
+        let mut e = Engine::new();
+        e.register(DYNAMIC_CAST, |_, a| ret(if a[0] == 1 { 0 } else { a[0] }));
+        e.register(0x0048_51b0, |_, _| Ret::default());
+        e.register(0x0048_5270, |_, _| ret(0));
+        let this = e.mem.alloc(0x50);
+        let other = e.mem.alloc(0x50);
+        e.mem.set_u8(other + 0x48, 0x81);
+        assert!(e.call(0x005f_ded0, &args![this, other]).bool());
+        e.call_log = Some(vec![]);
+        e.call(0x005f_de80, &args![this, other]);
+        assert_eq!(
+            calls(&e, DYNAMIC_CAST),
+            vec![vec![other, 0, CAST_SOURCE, HAIR_TYPE, 0]]
+        );
+        assert_eq!(e.mem.u8(this + 0x48), 0x81);
+        assert!(!e.call(0x005f_ded0, &args![this, other]).bool());
+        assert!(e.call(0x005f_ded0, &args![this, 1u32]).bool());
+        e.register(0x0048_5270, |_, _| ret(1));
+        assert!(e.call(0x005f_ded0, &args![this, other]).bool());
+        assert!(e.call(0x005f_df40, &args![this]).bool());
+        e.mem.set_u8(this + 0x48, 0x80);
+        assert!(!e.call(0x005f_df40, &args![this]).bool());
+        e.call_log = Some(vec![]);
+        e.call(0x005f_de80, &args![this, 1u32]);
+        assert!(calls(&e, 0x0048_51b0).is_empty());
+    }
+
+    #[test]
+    fn idle_copy_and_compare() {
+        let mut e = Engine::new();
+        e.register(DYNAMIC_CAST, |_, a| ret(if a[0] == 1 { 0 } else { a[0] }));
+        e.register(0x0048_51b0, |_, _| Ret::default());
+        e.register(0x0048_5270, |_, _| ret(0));
+        e.register(CONDITIONS, |_, a| ret(a[0] + 0x10));
+        e.register(0x0068_0a70, |_, _| Ret::default());
+        e.register(0x0068_0b70, |_, _| ret(0));
+        e.register(0x005f_f200, |_, _| ret(0x1ab));
+        e.register(0x005f_f220, |_, _| Ret::default());
+        let this = e.mem.alloc(0x50);
+        let other = e.mem.alloc(0x50);
+        e.mem.set_u32(other + 0x38, 0x0403_0201);
+        e.mem.set_u32(other + 0x3c, 0x0007_0506);
+        for (temporary, kept) in [(0u32, 1usize), (1, 0)] {
+            e.register_double(TEST_004077C0, move |_, _| ret(temporary));
+            e.call_log = Some(vec![]);
+            e.call(0x005f_e470, &args![this, other]);
+            assert_eq!(calls(&e, 0x0048_51b0), vec![vec![this, other]]);
+            assert_eq!(
+                calls(&e, 0x0068_0a70),
+                vec![vec![this + 0x10, other + 0x10, 0]]
+            );
+            assert_eq!(e.mem.u32(this + 0x38), 0x0403_0201);
+            assert_eq!(e.mem.u32(this + 0x3c), 0x0007_0506);
+            let handed = calls(&e, 0x005f_f220);
+            assert_eq!(handed.len(), kept);
+            if kept == 1 {
+                assert_eq!(handed[0], vec![this, 0xab]);
+            }
+        }
+        e.call_log = Some(vec![]);
+        assert!(!e.call(0x005f_e510, &args![this, other]).bool());
+        assert_eq!(
+            calls(&e, 0x0068_0b70),
+            vec![vec![this + 0x10, other + 0x10]]
+        );
+        for offset in [0x38u32, 0x39, 0x3a, 0x3c, 0x3d, 0x3e] {
+            let old = e.mem.u8(this + offset);
+            e.mem.set_u8(this + offset, old ^ 0x40);
+            assert!(
+                e.call(0x005f_e510, &args![this, other]).bool(),
+                "{offset:x}"
+            );
+            e.mem.set_u8(this + offset, old);
+        }
+        // The byte at +0x3F is not compared.
+        e.mem.set_u8(this + 0x3f, 9);
+        assert!(!e.call(0x005f_e510, &args![this, other]).bool());
+        e.register(0x0068_0b70, |_, _| ret(1));
+        assert!(e.call(0x005f_e510, &args![this, other]).bool());
+        assert!(e.call(0x005f_e510, &args![this, 1u32]).bool());
+        e.register(0x0068_0b70, |_, _| ret(0));
+        e.register(0x0048_5270, |_, _| ret(1));
+        assert!(e.call(0x005f_e510, &args![this, other]).bool());
+    }
+
+    #[test]
+    fn fn_005fe600_copies_the_idle_for_a_reference() {
+        let mut e = Engine::new();
+        let this = e.mem.alloc(0x50);
+        let copy = e.mem.alloc(0x50);
+        e.register_double(0x0048_67a0, move |_, _| ret(copy));
+        e.register(DYNAMIC_CAST, |_, a| ret(a[0]));
+        // The reference finds a replacement for the parent only.
+        e.register(0x0085_3130, |e, a| {
+            if a[1] == 0x4400 {
+                e.mem.set_u32(a[2], 0x4401);
+            }
+            ret(1)
+        });
+        e.register(SET_IDLE_PARENT, |_, _| Ret::default());
+        e.register(SET_IDLE_PREVIOUS, |_, _| Ret::default());
+        e.mem.set_u32(this + 0x44, 0x4400);
+        e.mem.set_u32(this + 0x48, 0x4800);
+        e.call_log = Some(vec![]);
+        assert_eq!(
+            e.call(0x005f_e600, &args![this, 0x101u32, 0x9000u32]).u32(),
+            copy
+        );
+        assert_eq!(calls(&e, 0x0048_67a0), vec![vec![this, 1, 0x9000]]);
+        assert_eq!(
+            calls(&e, DYNAMIC_CAST),
+            vec![vec![copy, 0, CAST_SOURCE, IDLE_FORM_TYPE, 0]]
+        );
+        assert_eq!(calls(&e, SET_IDLE_PARENT), vec![vec![copy, 0x4401]]);
+        assert_eq!(calls(&e, SET_IDLE_PREVIOUS), vec![vec![copy, 0x4800]]);
+
+        // With children: each one's slot 0x40 goes into the copy's array.
+        let vtable = e.mem.alloc(0x44);
+        e.mem.set_u32(vtable + 0x40, 0x7000_0040);
+        e.register(0x7000_0040, |_, a| ret(a[0] + a[1] + a[2]));
+        let child = e.mem.alloc(4);
+        e.mem.set_u32(child, vtable);
+        let children = e.mem.alloc(0x10);
+        let data = e.mem.alloc(8);
+        e.mem.set_u32(children, data);
+        e.mem.set_u32(children + 0xc, 2);
+        e.mem.set_u32(data, child);
+        e.mem.set_u32(data + 4, child);
+        e.mem.set_u32(this + 0x40, children);
+        let target = e.mem.alloc(0x18);
+        e.mem.set_u32(copy + 0x40, target);
+        e.register(ARRAY_0061BDC0, |_, _| Ret::default());
+        e.register(0x0084_e3a0, |e, a| ret(e.mem.u32(a[0] + 0xc)));
+        e.register(0x0086_4280, |_, _| Ret::default());
+        e.register(0x0087_7a30, |e, a| ret(e.mem.u32(a[0]) + 4 * a[1]));
+        let stored = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let seen = stored.clone();
+        e.register_double(0x0061_bd20, move |e, a| {
+            seen.borrow_mut().push((a[0], a[1], e.mem.u32(a[2])));
+            Ret::default()
+        });
+        e.call_log = Some(vec![]);
+        e.call(0x005f_e600, &args![this, 2u32, 0x9000u32]);
+        assert_eq!(calls(&e, 0x0086_4280), vec![vec![target, 2]]);
+        let value = child + 2 + 0x9000;
+        assert_eq!(
+            *stored.borrow(),
+            vec![(target, 0, value), (target, 1, value)]
+        );
     }
 }

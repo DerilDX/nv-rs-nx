@@ -209,9 +209,50 @@ pub fn concussion_effect_check_apply_concussion(
     e.mem.set_u8(APPLYING_011DBE50, 0);
 }
 
+/// A byte that must be set for `GetConcussion` to answer (`0118abb1`).
+const CONCUSSION_ENABLED_0118ABB1: u32 = 0x0118_abb1;
+/// The concussion modifier `GetConcussion` keeps (`011c9704`).
+const CONCUSSION_MODIFIER_011C9704: u32 = 0x011c_9704;
+/// `004839c0` (cdecl, one word: a form id; returns the form).
+const LOOKUP_FORM_004839C0: u32 = 0x0048_39c0;
+/// `__RTDynamicCast` (`00ec43fb`, cdecl: object, vfDelta, source type, target type, isReference).
+const RT_DYNAMIC_CAST: u32 = 0x00ec_43fb;
+/// `TESForm`'s RTTI type descriptor (`.?AVTESForm@@`).
+const TES_FORM_TYPE: u32 = 0x0118_3028;
+/// `TESImageSpaceModifier`'s RTTI type descriptor (`.?AVTESImageSpaceModifier@@`).
+const TES_IMAGE_SPACE_MODIFIER_TYPE: u32 = 0x0118_62b8;
+
+// Translated from 0080bfa0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TESImageSpaceModifier::GetConcussion` (Xbox PDB, cdecl, no words): null unless the
+/// byte at `0118abb1` is set; otherwise the modifier kept at `011c9704`, found on first
+/// use as form 0x164 (`004839c0`) cast from `TESForm` to `TESImageSpaceModifier`.
+pub fn tes_image_space_modifier_get_concussion(e: &mut Engine) -> u32 {
+    if e.mem.u8(CONCUSSION_ENABLED_0118ABB1) == 0 {
+        return 0;
+    }
+    if e.global::<u32>(CONCUSSION_MODIFIER_011C9704) == 0 {
+        let form = e.call(LOOKUP_FORM_004839C0, &args![0x164u32]).u32();
+        let modifier = e
+            .call(
+                RT_DYNAMIC_CAST,
+                &args![
+                    form,
+                    0u32,
+                    TES_FORM_TYPE,
+                    TES_IMAGE_SPACE_MODIFIER_TYPE,
+                    0u32
+                ],
+            )
+            .u32();
+        e.set_global(CONCUSSION_MODIFIER_011C9704, modifier);
+    }
+    e.global::<u32>(CONCUSSION_MODIFIER_011C9704)
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x0080_bfa0, tes_image_space_modifier_get_concussion() -> u32),
         entry!(
             0x0080_bcb0,
             concussion_effect_copy(Ptr<ConcussionEffect>) -> u32
@@ -434,5 +475,33 @@ mod tests {
         e.register(GET_MAGIC_TARGET_0059BB30, |_, _| 0u32.into_ret());
         e.call(0x0080_bdd0, &[this, 0.5f32.to_bits()]);
         assert!(called(&e, SETTING_VALUE).is_empty());
+    }
+}
+
+#[cfg(test)]
+mod get_concussion_tests {
+    use super::*;
+
+    #[test]
+    fn get_concussion_finds_the_modifier_once_when_enabled() {
+        let mut e = Engine::new();
+        e.map(0x0118_a000, 0x1000);
+        e.map(0x011c_9000, 0x1000);
+        e.register(LOOKUP_FORM_004839C0, |_, a| (a[0] + 0x1000).into_ret());
+        e.register(RT_DYNAMIC_CAST, |_, a| (a[0] + 4).into_ret());
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x0080_bfa0, &[]).u32(), 0);
+        e.mem.set_u8(CONCUSSION_ENABLED_0118ABB1, 1);
+        assert_eq!(e.call(0x0080_bfa0, &[]).u32(), 0x1168);
+        assert_eq!(e.call(0x0080_bfa0, &[]).u32(), 0x1168);
+        let log = e.call_log.take().unwrap();
+        let lookups: Vec<_> = log.iter().filter(|c| c.0 == LOOKUP_FORM_004839C0).collect();
+        assert_eq!(lookups.len(), 1);
+        assert_eq!(lookups[0].1, vec![0x164]);
+        let casts: Vec<_> = log.iter().filter(|c| c.0 == RT_DYNAMIC_CAST).collect();
+        assert_eq!(
+            casts[0].1,
+            vec![0x1164, 0, TES_FORM_TYPE, TES_IMAGE_SPACE_MODIFIER_TYPE, 0]
+        );
     }
 }

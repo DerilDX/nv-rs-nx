@@ -770,6 +770,205 @@ pub fn fn_0050de10(e: &mut Engine) -> u32 {
     e.global::<u32>(0x011c_620c)
 }
 
+/// `TESForm::StartForm` (`004855a0`) and `TESForm::CloseForm` (`00485680`),
+/// `thiscall` on the form, no stack words.
+const START_FORM: u32 = 0x0048_55a0;
+const CLOSE_FORM: u32 = 0x0048_5680;
+/// The component saves (engine map; `thiscall`): `TESModelTextureSwap::Save`
+/// (`0048a520`, three chunk tags), `TESScriptableForm::Save` (`0048cca0`),
+/// `BGSDestructibleObjectForm::Save` (`00477f20`), `TESFullName::Save`
+/// (`00487010`), `TESTexture::Save` (`0048e370`, a tag) and
+/// `BGSMessageIcon::Save` (`0047a240`, a tag).
+const MODEL_TEXTURE_SWAP_SAVE: u32 = 0x0048_a520;
+const SCRIPTABLE_FORM_SAVE: u32 = 0x0048_cca0;
+const DESTRUCTIBLE_SAVE: u32 = 0x0047_7f20;
+const FULL_NAME_SAVE: u32 = 0x0048_7010;
+const TEXTURE_SAVE: u32 = 0x0048_e370;
+const MESSAGE_ICON_SAVE: u32 = 0x0047_a240;
+/// `00401500`: the byte at `011c54ba` (whether saved words are
+/// byte-swapped); `00693dc0` (`thiscall`): byte-swaps the light's data.
+const SAVE_SWAPS_BYTES: u32 = 0x0040_1500;
+const SWAP_LIGHT_DATA: u32 = 0x0069_3dc0;
+/// `TESForm::__SaveData` (`00485e20`, `thiscall`, `RET 8`: data, size).
+const SAVE_DATA: u32 = 0x0048_5e20;
+/// `00485910` (cdecl(chunk, word)): adds a one-word chunk.
+const ADD_CHUNK_WORD: u32 = 0x0048_5910;
+/// The form-id getter (`0084e3a0`, `thiscall`: the word at +0xc).
+const FORM_ID: u32 = 0x0084_e3a0;
+/// `__RTDynamicCast` (`00ec43fb`, cdecl, five words) and the type
+/// descriptors `TESForm` (`01183028`) and `TESObjectLIGH` (`01183938`).
+const RT_DYNAMIC_CAST: u32 = 0x00ec_43fb;
+const TYPE_TES_FORM: u32 = 0x0118_3028;
+const TYPE_TES_OBJECT_LIGH: u32 = 0x0118_3938;
+/// `TESForm::CopyAllComponents` (`004851b0`, `RET 4`) and
+/// `TESForm::CompareAllComponents` (`00485270`, `RET 4`).
+const COPY_ALL_COMPONENTS: u32 = 0x0048_51b0;
+const COMPARE_ALL_COMPONENTS: u32 = 0x0048_5270;
+/// The light's accessors (`thiscall`): the float at +0xb4 in `ST0`
+/// (`006d2c40`), its setter (`006e5ee0`, `RET 4`), the word at +0xb8
+/// (`004036b0`) and its setter (`0050c9e0`, `RET 4`).
+const FADE_VALUE: u32 = 0x006d_2c40;
+const SET_FADE_VALUE: u32 = 0x006e_5ee0;
+const SOUND_WORD: u32 = 0x0040_36b0;
+const SET_SOUND_WORD: u32 = 0x0050_c9e0;
+/// `_memcmp` (`00ec4835`, cdecl).
+const MEMCMP: u32 = 0x00ec_4835;
+/// `NiNode` helpers (`thiscall` on the node): the child count (`0043b480`)
+/// and the child at an index (`0043b4a0`, `RET 4`); `NiAVObject::GetProperty`
+/// (`00a59d30`, `RET 4`: the property type); `004bc450` (`thiscall` on the
+/// property, `RET 4`) with the address `011f4998`.
+const CHILD_COUNT: u32 = 0x0043_b480;
+const CHILD_AT: u32 = 0x0043_b4a0;
+const GET_PROPERTY: u32 = 0x00a5_9d30;
+const PROPERTY_CALL: u32 = 0x004b_c450;
+const PROPERTY_ARGUMENT: u32 = 0x011f_4998;
+
+// Translated from 0050cf20 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TESObjectLIGH::Save` (engine map; no stack words): `StartForm`, the
+/// model with texture swaps (`MODL`, `MODT`, `MODS`), the script and the
+/// destructible data; with flag bit 1 of the word at +0xa8 the full name,
+/// the icon (`ICON`) and the message icon (`MICO`), else clears flag bit 5
+/// (0x20) there and sets the word at +0x9c to -1. Then the 0x18 bytes of
+/// data at +0x9c (`__SaveData`), byte-swapped before and back after
+/// (`00693dc0`) when `00401500` says so; the float at +0xb4 as chunk `FNAM`
+/// (`FLD`/`FSTP` copy); with a sound (+0xb8) its form id as chunk `SNAM`;
+/// `CloseForm`.
+pub fn tes_object_ligh_save(e: &mut Engine, this: Ptr) {
+    let base = this.addr();
+    e.call(START_FORM, &args![this]);
+    e.call(
+        MODEL_TEXTURE_SWAP_SAVE,
+        &args![base + 0x3c, SIG_MODL, SIG_MODT, SIG_MODS],
+    );
+    e.call(SCRIPTABLE_FORM_SAVE, &args![base + 0x78]);
+    e.call(DESTRUCTIBLE_SAVE, &args![base + 0x94]);
+    if e.mem.u32(base + 0xa8) & 2 != 0 {
+        e.call(FULL_NAME_SAVE, &args![base + 0x30]);
+        e.call(TEXTURE_SAVE, &args![base + 0x5c, SIG_ICON]);
+        e.call(MESSAGE_ICON_SAVE, &args![base + 0x68, SIG_MICO]);
+    } else {
+        let flags = e.mem.u32(base + 0xa8) & 0xffff_ffdf;
+        e.mem.set_u32(base + 0xa8, flags);
+        e.mem.set_u32(base + 0x9c, 0xffff_ffff);
+    }
+    if e.call(SAVE_SWAPS_BYTES, &[]).u32() as u8 != 0 {
+        e.call(SWAP_LIGHT_DATA, &args![base + 0x9c]);
+    }
+    e.call(SAVE_DATA, &args![this, base + 0x9c, 0x18u32]);
+    if e.call(SAVE_SWAPS_BYTES, &[]).u32() as u8 != 0 {
+        e.call(SWAP_LIGHT_DATA, &args![base + 0x9c]);
+    }
+    let fade = copy_float(e, base + 0xb4);
+    e.call(ADD_CHUNK_WORD, &args![SIG_FNAM, fade]);
+    let sound = e.mem.u32(base + 0xb8);
+    if sound != 0 {
+        let id = e.call(FORM_ID, &args![sound]).u32();
+        e.call(ADD_CHUNK_WORD, &args![SIG_SNAM, id]);
+    }
+    e.call(CLOSE_FORM, &args![this]);
+}
+
+// Translated from 0050d060 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The light's copy (engine map: no name; `RET 4`): when `other` is a
+/// `TESObjectLIGH`, copies all components (`TESForm::CopyAllComponents`
+/// with `other`), the 0x18 bytes of data (+0x9c), the float at +0xb4
+/// (through `ST0`, stored with `FSTP dword`) and the word at +0xb8.
+pub fn fn_0050d060(e: &mut Engine, this: Ptr, other: u32) {
+    let source = e
+        .call(
+            RT_DYNAMIC_CAST,
+            &args![other, 0u32, TYPE_TES_FORM, TYPE_TES_OBJECT_LIGH, 0u32],
+        )
+        .u32();
+    if source == 0 {
+        return;
+    }
+    e.call(COPY_ALL_COMPONENTS, &args![this, other]);
+    let data = fn_0050d100(e, Ptr::new(source));
+    for offset in (0..0x18).step_by(4) {
+        let word = e.mem.u32(data + offset);
+        e.mem.set_u32(this.addr() + 0x9c + offset, word);
+    }
+    let fade = e.call(FADE_VALUE, &args![source]).f64();
+    e.call(SET_FADE_VALUE, &args![this, x87_store32(fade)]);
+    let sound = e.call(SOUND_WORD, &args![source]).u32();
+    e.call(SET_SOUND_WORD, &args![this, sound]);
+}
+
+// Translated from 0050d120 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The light's compare (engine map: no name; `RET 4`): true when the two
+/// differ: when `other` is no `TESObjectLIGH`; when
+/// `TESForm::CompareAllComponents` (with the cast form) says so; when the
+/// words at +0xb8 differ; when the 0x18 bytes of data differ (`_memcmp`);
+/// when the floats at +0xb4 compare unequal (`FUCOMPP`, a NaN included).
+pub fn fn_0050d120(e: &mut Engine, this: Ptr, other: u32) -> bool {
+    let source = e
+        .call(
+            RT_DYNAMIC_CAST,
+            &args![other, 0u32, TYPE_TES_FORM, TYPE_TES_OBJECT_LIGH, 0u32],
+        )
+        .u32();
+    if source == 0 {
+        return true;
+    }
+    if e.call(COMPARE_ALL_COMPONENTS, &args![this, source]).u32() as u8 != 0 {
+        return true;
+    }
+    let sound = e.call(SOUND_WORD, &args![source]).u32();
+    if e.mem.u32(this.addr() + 0xb8) != sound {
+        return true;
+    }
+    let data = fn_0050d100(e, Ptr::new(source));
+    if e.call(MEMCMP, &args![this.addr() + 0x9c, data, 0x18u32])
+        .u32()
+        != 0
+    {
+        return true;
+    }
+    let mine = e.call(FADE_VALUE, &args![this]).f64();
+    let theirs = e.call(FADE_VALUE, &args![source]).f64();
+    // FUCOMPP then `TEST AH,0x44; JNP`: only "equal" (C3 alone) answers false;
+    // unordered (a NaN) answers true, as `!=` does.
+    mine != theirs
+}
+
+// Translated from 0050d640 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TESObjectLIGH::StopParticlesRecursive` (engine map; cdecl, the node):
+/// for each child of `node` (the count asked again each time), skipping
+/// null ones: a child whose vtable slot `+0xc` answers non-zero is walked
+/// the same way; otherwise its property of type 2 (`GetProperty`), when it
+/// has one, gets `004bc450` with the address `011f4998`.
+pub fn tes_object_ligh_stop_particles_recursive(e: &mut Engine, node: u32) {
+    let mut index = 0u32;
+    while index < e.call(CHILD_COUNT, &args![node]).u32() {
+        let child = e.call(CHILD_AT, &args![node, index]).u32();
+        if child != 0 {
+            if e.vcall(child, 0xc, &[]).u32() != 0 {
+                tes_object_ligh_stop_particles_recursive(e, child);
+            } else {
+                let property = e.call(GET_PROPERTY, &args![child, 2u32]).u32();
+                if property != 0 {
+                    e.call(PROPERTY_CALL, &args![property, PROPERTY_ARGUMENT]);
+                }
+            }
+        }
+        index += 1;
+    }
+}
+
+// Translated from 0050ddb0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Sets (`on` non-zero) or clears flag bit 0 of the light's flags word at
+/// +0xa8 (engine map: no name; `RET 4`, a byte).
+pub fn fn_0050ddb0(e: &mut Engine, this: Ptr, on: u8) {
+    let flags = e.mem.u32(this.addr() + 0xa8);
+    let flags = if on != 0 {
+        flags | 1
+    } else {
+        flags & 0xffff_fffe
+    };
+    e.mem.set_u32(this.addr() + 0xa8, flags);
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -791,6 +990,11 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
             tes_object_ligh_gen_dynamic(Ptr, u32, u32, bool) -> u32
         ),
         entry!(0x0050_de10, fn_0050de10() -> u32),
+        entry!(0x0050_cf20, tes_object_ligh_save(Ptr)),
+        entry!(0x0050_d060, fn_0050d060(Ptr, u32)),
+        entry!(0x0050_d120, fn_0050d120(Ptr, u32) -> bool),
+        entry!(0x0050_d640, tes_object_ligh_stop_particles_recursive(u32)),
+        entry!(0x0050_ddb0, fn_0050ddb0(Ptr, u8)),
     ]
 }
 
@@ -1523,5 +1727,249 @@ mod b023_tests {
         assert_eq!(e.call(0x0050_d250, &[this, 0]).u32(), node);
         let log = e.call_log.take().unwrap();
         assert_eq!(calls_to(&log, NI_ALLOCATE), vec![vec![0xe4]]);
+    }
+}
+
+#[cfg(test)]
+mod save_copy_tests {
+    use super::*;
+
+    type Log = Vec<(u32, Vec<u32>)>;
+
+    fn ret(eax: u32) -> Ret {
+        Ret {
+            eax,
+            ..Ret::default()
+        }
+    }
+
+    fn only(log: &Log, addr: u32) -> Vec<Vec<u32>> {
+        log.iter()
+            .filter(|(a, _)| *a == addr)
+            .map(|(_, w)| w.clone())
+            .collect()
+    }
+
+    fn run(e: &mut Engine, addr: u32, words: &[u32]) -> (Ret, Log) {
+        e.call_log = Some(vec![]);
+        let r = e.call(addr, words);
+        (r, e.call_log.take().unwrap())
+    }
+
+    fn quiet(e: &mut Engine, addrs: &[u32]) {
+        for a in addrs {
+            e.register(*a, |_, _| Ret::default());
+        }
+    }
+
+    fn light(e: &mut Engine) -> u32 {
+        e.mem.alloc(0xc8)
+    }
+
+    #[test]
+    fn save_writes_the_components_and_chunks() {
+        let mut e = Engine::new();
+        quiet(
+            &mut e,
+            &[
+                START_FORM,
+                CLOSE_FORM,
+                MODEL_TEXTURE_SWAP_SAVE,
+                SCRIPTABLE_FORM_SAVE,
+                DESTRUCTIBLE_SAVE,
+                FULL_NAME_SAVE,
+                TEXTURE_SAVE,
+                MESSAGE_ICON_SAVE,
+                SWAP_LIGHT_DATA,
+                SAVE_DATA,
+                ADD_CHUNK_WORD,
+            ],
+        );
+        e.register(SAVE_SWAPS_BYTES, |_, _| ret(0));
+        e.register(FORM_ID, |e, a| ret(e.mem.u32(a[0] + 0xc)));
+        let this = light(&mut e);
+        e.mem.set_u32(this + 0xa8, 0x22);
+        e.mem.set_u32(this + 0xb4, 0x7f80_0001);
+        let sound = e.mem.alloc(0x18);
+        e.mem.set_u32(sound + 0xc, 0x0000_abcd);
+        e.mem.set_u32(this + 0xb8, sound);
+        let (_, log) = run(&mut e, 0x0050_cf20, &args![this]);
+        assert_eq!(
+            only(&log, MODEL_TEXTURE_SWAP_SAVE),
+            vec![vec![this + 0x3c, SIG_MODL, SIG_MODT, SIG_MODS]]
+        );
+        assert_eq!(only(&log, SCRIPTABLE_FORM_SAVE), vec![vec![this + 0x78]]);
+        assert_eq!(only(&log, DESTRUCTIBLE_SAVE), vec![vec![this + 0x94]]);
+        assert_eq!(only(&log, FULL_NAME_SAVE), vec![vec![this + 0x30]]);
+        assert_eq!(only(&log, TEXTURE_SAVE), vec![vec![this + 0x5c, SIG_ICON]]);
+        assert_eq!(
+            only(&log, MESSAGE_ICON_SAVE),
+            vec![vec![this + 0x68, SIG_MICO]]
+        );
+        assert_eq!(only(&log, SAVE_DATA), vec![vec![this, this + 0x9c, 0x18]]);
+        assert_eq!(
+            only(&log, ADD_CHUNK_WORD),
+            vec![vec![SIG_FNAM, 0x7fc0_0001], vec![SIG_SNAM, 0xabcd]]
+        );
+        assert!(only(&log, SWAP_LIGHT_DATA).is_empty());
+        assert_eq!(only(&log, CLOSE_FORM), vec![vec![this]]);
+        assert_eq!(e.mem.u32(this + 0xa8), 0x22);
+    }
+
+    #[test]
+    fn save_without_flag_two_clears_bit_five_and_swaps_when_asked() {
+        let mut e = Engine::new();
+        quiet(
+            &mut e,
+            &[
+                START_FORM,
+                CLOSE_FORM,
+                MODEL_TEXTURE_SWAP_SAVE,
+                SCRIPTABLE_FORM_SAVE,
+                DESTRUCTIBLE_SAVE,
+                FULL_NAME_SAVE,
+                SWAP_LIGHT_DATA,
+                SAVE_DATA,
+                ADD_CHUNK_WORD,
+            ],
+        );
+        e.register(SAVE_SWAPS_BYTES, |_, _| ret(0x101));
+        let this = light(&mut e);
+        e.mem.set_u32(this + 0xa8, 0x21);
+        e.mem.set_u32(this + 0x9c, 5);
+        let (_, log) = run(&mut e, 0x0050_cf20, &args![this]);
+        assert_eq!(e.mem.u32(this + 0xa8), 1);
+        assert_eq!(e.mem.u32(this + 0x9c), 0xffff_ffff);
+        assert!(only(&log, FULL_NAME_SAVE).is_empty());
+        assert_eq!(only(&log, SWAP_LIGHT_DATA).len(), 2);
+        assert_eq!(only(&log, ADD_CHUNK_WORD).len(), 1);
+    }
+
+    #[test]
+    fn copy_takes_data_fade_and_sound() {
+        let mut e = Engine::new();
+        e.register(RT_DYNAMIC_CAST, |_, a| ret(a[0]));
+        e.register(COPY_ALL_COMPONENTS, |_, _| Ret::default());
+        e.register(FADE_VALUE, |e, a| Ret {
+            st0: x87_load32(e.mem.u32(a[0] + 0xb4)),
+            ..Ret::default()
+        });
+        e.register(SET_FADE_VALUE, |e, a| {
+            e.mem.set_u32(a[0] + 0xb4, a[1]);
+            Ret::default()
+        });
+        e.register(SOUND_WORD, |e, a| ret(e.mem.u32(a[0] + 0xb8)));
+        e.register(SET_SOUND_WORD, |e, a| {
+            e.mem.set_u32(a[0] + 0xb8, a[1]);
+            Ret::default()
+        });
+        let this = light(&mut e);
+        let other = light(&mut e);
+        for i in 0..6 {
+            e.mem.set_u32(other + 0x9c + 4 * i, 0x100 + i);
+        }
+        e.mem.set_u32(other + 0xb4, 1.5f32.to_bits());
+        e.mem.set_u32(other + 0xb8, 0x777);
+        let (_, log) = run(&mut e, 0x0050_d060, &args![this, other]);
+        assert_eq!(only(&log, COPY_ALL_COMPONENTS), vec![vec![this, other]]);
+        for i in 0..6 {
+            assert_eq!(e.mem.u32(this + 0x9c + 4 * i), 0x100 + i);
+        }
+        assert_eq!(e.mem.u32(this + 0xb4), 1.5f32.to_bits());
+        assert_eq!(e.mem.u32(this + 0xb8), 0x777);
+        e.register(RT_DYNAMIC_CAST, |_, _| ret(0));
+        let fresh = light(&mut e);
+        e.call(0x0050_d060, &args![fresh, other]);
+        assert_eq!(e.mem.u32(fresh + 0xb8), 0);
+    }
+
+    #[test]
+    fn compare_reports_each_difference() {
+        let mut e = Engine::new();
+        e.register(RT_DYNAMIC_CAST, |_, a| ret(a[0]));
+        e.register(COMPARE_ALL_COMPONENTS, |_, _| ret(0x200));
+        e.register(FADE_VALUE, |e, a| Ret {
+            st0: x87_load32(e.mem.u32(a[0] + 0xb4)),
+            ..Ret::default()
+        });
+        e.register(SOUND_WORD, |e, a| ret(e.mem.u32(a[0] + 0xb8)));
+        e.register(MEMCMP, |e, a| {
+            let differ = (0..a[2]).any(|i| e.mem.u8(a[0] + i) != e.mem.u8(a[1] + i));
+            ret(u32::from(differ))
+        });
+        let pair = |e: &mut Engine, change: &dyn Fn(&mut Engine, u32)| {
+            let this = light(e);
+            let other = light(e);
+            for p in [this, other] {
+                e.mem.set_u32(p + 0x9c, 3);
+                e.mem.set_u32(p + 0xb4, 2.0f32.to_bits());
+                e.mem.set_u32(p + 0xb8, 0x55);
+            }
+            change(e, other);
+            e.call(0x0050_d120, &args![this, other]).bool()
+        };
+        assert!(!pair(&mut e, &|_, _| {}));
+        assert!(pair(&mut e, &|e, o| e.mem.set_u32(o + 0xb8, 0x56)));
+        assert!(pair(&mut e, &|e, o| e.mem.set_u32(o + 0xb0, 1)));
+        assert!(pair(&mut e, &|e, o| e
+            .mem
+            .set_u32(o + 0xb4, 2.5f32.to_bits())));
+        assert!(pair(&mut e, &|e, o| e
+            .mem
+            .set_u32(o + 0xb4, f32::NAN.to_bits())));
+        e.register(COMPARE_ALL_COMPONENTS, |_, _| ret(1));
+        assert!(pair(&mut e, &|_, _| {}));
+        e.register(COMPARE_ALL_COMPONENTS, |_, _| ret(0));
+        e.register(RT_DYNAMIC_CAST, |_, _| ret(0));
+        assert!(pair(&mut e, &|_, _| {}));
+    }
+
+    #[test]
+    fn stop_particles_walks_nodes_and_stops_properties() {
+        let mut e = Engine::new();
+        // A node is [vtable, count, children...]; slot +0xc answers whether
+        // it is a node (its count word is not 0xffff_ffff).
+        e.register(CHILD_COUNT, |e, a| ret(e.mem.u32(a[0] + 4)));
+        e.register(CHILD_AT, |e, a| ret(e.mem.u32(a[0] + 8 + 4 * a[1])));
+        e.register(0x0f45_000c, |e, a| {
+            ret(u32::from(e.mem.u32(a[0] + 4) != 0xffff_ffff))
+        });
+        e.register(GET_PROPERTY, |e, a| ret(e.mem.u32(a[0] + 8)));
+        e.register(PROPERTY_CALL, |_, _| Ret::default());
+        let vtable = e.mem.alloc(0x10);
+        e.mem.set_u32(vtable + 0xc, 0x0f45_000c);
+        let object = |e: &mut Engine, words: &[u32]| {
+            let p = e.mem.alloc(4 + 4 * words.len() as u32);
+            e.mem.set_u32(p, vtable);
+            for (i, w) in words.iter().enumerate() {
+                e.mem.set_u32(p + 4 + 4 * i as u32, *w);
+            }
+            p
+        };
+        let leaf = object(&mut e, &[0xffff_ffff, 0x6100]);
+        let bare = object(&mut e, &[0xffff_ffff, 0]);
+        let inner = object(&mut e, &[1, leaf]);
+        let root = object(&mut e, &[4, inner, 0, bare, leaf]);
+        let (_, log) = run(&mut e, 0x0050_d640, &args![root]);
+        assert_eq!(
+            only(&log, PROPERTY_CALL),
+            vec![
+                vec![0x6100, PROPERTY_ARGUMENT],
+                vec![0x6100, PROPERTY_ARGUMENT]
+            ]
+        );
+        assert_eq!(only(&log, GET_PROPERTY).len(), 3);
+        assert_eq!(only(&log, 0x0050_d640).len(), 1);
+    }
+
+    #[test]
+    fn flag_bit_zero_follows_the_byte() {
+        let mut e = Engine::new();
+        let this = light(&mut e);
+        e.mem.set_u32(this + 0xa8, 0x10);
+        e.call(0x0050_ddb0, &args![this, 0x100u32 + 1]);
+        assert_eq!(e.mem.u32(this + 0xa8), 0x11);
+        e.call(0x0050_ddb0, &args![this, 0x100u32]);
+        assert_eq!(e.mem.u32(this + 0xa8), 0x10);
     }
 }

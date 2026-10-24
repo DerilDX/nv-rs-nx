@@ -452,12 +452,26 @@ pub fn fn_00556850(e: &mut Engine, this: Ptr) -> bool {
     e.mem.u8(this.addr().wrapping_add(0x25)) & 1 != 0
 }
 
+// Translated from 00555be0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No map name (`thiscall`): clears the seen data of the reference's extra
+/// data (`004610d0`, then `ExtraDataList::SetSeenData(0)`), clears bit 0 of
+/// the byte at +0x25 and calls its own slot +0x4C with 0x80000000.
+pub fn fn_00555be0(e: &mut Engine, this: Ptr) {
+    let extra = e.call(EXTRA_DATA, &args![this]).u32();
+    e.call(SET_SEEN_DATA, &args![extra, 0u32]);
+    let at = this.addr() + 0x25;
+    let byte = e.mem.u8(at) & 0xfe;
+    e.mem.set_u8(at, byte);
+    e.vcall(this.addr(), 0x4c, &args![0x8000_0000u32]);
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
         entry!(0x0055_5c20, fn_00555c20()),
         entry!(0x0055_5f60, fn_00555f60(Ptr, u32)),
         entry!(0x0055_6850, fn_00556850(Ptr) -> bool),
+        entry!(0x0055_5be0, fn_00555be0(Ptr)),
     ]
 }
 
@@ -754,6 +768,44 @@ mod tests {
         assert_eq!(
             calls_to(&e, VECTOR_CONSTRUCT)[0][1..],
             [0xc, 9, POINT_ELEMENT_CONSTRUCT]
+        );
+    }
+}
+
+#[cfg(test)]
+mod n040_tests {
+    use super::*;
+
+    #[test]
+    fn fn_00555be0_clears_the_seen_data() {
+        let mut e = Engine::new();
+        e.register(EXTRA_DATA, |_, a| Ret {
+            eax: a[0] + 0x44,
+            ..Ret::default()
+        });
+        e.register(SET_SEEN_DATA, |_, _| Ret::default());
+        e.register(0x0090_004c, |_, _| Ret::default());
+        let this = e.mem.alloc(0x30);
+        let vtable = e.mem.alloc(0x50);
+        e.mem.set_u32(this, vtable);
+        e.mem.set_u32(vtable + 0x4c, 0x0090_004c);
+        e.mem.set_u8(this + 0x25, 0xff);
+        e.call_log = Some(vec![]);
+        e.call(0x0055_5be0, &[this]);
+        assert_eq!(e.mem.u8(this + 0x25), 0xfe);
+        let log: Vec<_> = e
+            .call_log
+            .take()
+            .unwrap()
+            .into_iter()
+            .filter(|(a, _)| [SET_SEEN_DATA, 0x0090_004c].contains(a))
+            .collect();
+        assert_eq!(
+            log,
+            vec![
+                (SET_SEEN_DATA, vec![this + 0x44, 0]),
+                (0x0090_004c, vec![this, 0x8000_0000]),
+            ]
         );
     }
 }

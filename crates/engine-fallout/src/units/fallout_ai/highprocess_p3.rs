@@ -168,7 +168,7 @@ fn player_pointer(e: &Engine) -> u32 {
 // Translated from 008d9780 (decompiled, FalloutNV.exe 1.4.0.525)
 /// `HighProcess::SetAvoidWaitTimer` (Xbox PDB) stores `fAvoidWaitTimer` (+0x450).
 pub fn high_process_set_avoid_wait_timer(e: &mut Engine, this: Ptr<HighProcess>, value: f32) {
-    e.set(this, HighProcess::fAvoidWaitTimer, value);
+    e.set(this, HighProcess::fAvoidWaitTimer, x87_quiet(value));
 }
 
 // Translated from 008d97a0 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -1564,7 +1564,7 @@ pub fn high_process_process_observe_combat(e: &mut Engine, this: Ptr<HighProcess
 /// Unnamed in the engine map: stores the float at +0xd8 of `this` (the
 /// `PathingRequestHide` that `ProcessObserveCombat` builds: its radius).
 pub fn fn_008dbd80(e: &mut Engine, this: Ptr, value: f32) {
-    e.mem.set_f32(this.addr() + 0xd8, value);
+    e.mem.set_f32(this.addr() + 0xd8, x87_quiet(value));
 }
 
 // Translated from 008dbda0 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -8442,7 +8442,7 @@ pub fn fn_008e7c00(e: &mut Engine, this: Ptr<LowProcess>) -> bool {
 /// Unnamed in the engine map. A setter of the `PathingRequest` the callers
 /// pass: stores a float at +0x8c and sets the byte at +0x99 to 1.
 pub fn fn_008e7c20(e: &mut Engine, this: Ptr, value: f32) {
-    e.mem.set_f32(this.addr() + 0x8c, value);
+    e.mem.set_f32(this.addr() + 0x8c, x87_quiet(value));
     e.mem.set_u8(this.addr() + 0x99, 1);
 }
 

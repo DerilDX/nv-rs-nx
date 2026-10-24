@@ -299,6 +299,45 @@ fn transform_row(e: &Engine, this: Ptr<NiCamera>, row: u32, x: f64, y: f64, z: f
         + world_to_cam(e, this, row, 3)
 }
 
+/// [`transform_row`] as the x87 code runs it on the point at `point`: `FLD` the
+/// matrix entry, `FMUL` the point's float in memory, `FADDP`, and `FADD` the
+/// fourth entry in memory, with the x87 choice of NaN.
+fn transform_row_x87(e: &Engine, this: Ptr<NiCamera>, row: u32, point: u32) -> f64 {
+    let entry = |column: u32| this.addr() + WORLD_TO_CAM + 4 * (4 * row + column);
+    let product = |column: u32| {
+        x87_mul(
+            x87_load32(e.mem.u32(entry(column))),
+            x87_m32(e.mem.u32(point + 4 * column)),
+        )
+    };
+    let sum = x87_add(x87_add(product(0), product(1)), product(2));
+    x87_add(sum, x87_m32(e.mem.u32(entry(3))))
+}
+
+/// [`map_to_port`] as `NiCamera::WorldPtToScreenPt` inlines it, on the x87
+/// stack: `FLD right`, `FSUB left` (and `FLD top`, `FSUB bottom`; `FLD right`,
+/// `FADD left`; `FLD bottom`, `FADD top`), the double `0.5`, the coordinates
+/// read back from `out_x` / `out_y`, with the x87 choice of NaN.
+fn map_to_port_x87(e: &mut Engine, this: Ptr<NiCamera>, out_x: Ptr, out_y: Ptr) {
+    let half = e.global::<f64>(HALF);
+    let me = this.addr();
+    let ld = |e: &Engine, address: u32| x87_load32(e.mem.u32(address));
+    let m = |e: &Engine, address: u32| x87_m32(e.mem.u32(address));
+    let (left, right, top, bottom) = (me + 0x100, me + 0x104, me + 0x108, me + 0x10c);
+    let width = x87_mul(x87_sub(ld(e, right), m(e, left)), half);
+    let scaled_x = x87_mul(width, ld(e, out_x.addr()));
+    e.mem.set_u32(out_x.addr(), x87_store32(scaled_x));
+    let height = x87_mul(x87_sub(ld(e, top), m(e, bottom)), half);
+    let scaled_y = x87_mul(height, m(e, out_y.addr()));
+    e.mem.set_u32(out_y.addr(), x87_store32(scaled_y));
+    let centre_x = x87_mul(x87_add(ld(e, right), m(e, left)), half);
+    let shifted_x = x87_add(centre_x, m(e, out_x.addr()));
+    e.mem.set_u32(out_x.addr(), x87_store32(shifted_x));
+    let centre_y = x87_mul(half, x87_add(ld(e, bottom), m(e, top)));
+    let shifted_y = x87_add(centre_y, m(e, out_y.addr()));
+    e.mem.set_u32(out_y.addr(), x87_store32(shifted_y));
+}
+
 /// The point at `p` (three floats) as `f64`s.
 fn point(e: &Engine, p: Ptr) -> (f64, f64, f64) {
     (
@@ -417,44 +456,31 @@ pub fn ni_camera_set_view_frustum(e: &mut Engine, this: Ptr<NiCamera>, frustum: 
 /// become `centre_y +/- (right - left) / ratio * 0.5`; otherwise the left
 /// and right become `centre_x +/- (top - bottom) * ratio * 0.5`.
 pub fn fn_00a6fb90(e: &mut Engine, this: Ptr<NiCamera>, ratio: f32, fit_vertical: bool) {
+    // The x87 code: `FLD` a field, `FSUB`/`FADD`/`FMUL`/`FDIV` a float in memory
+    // (a field, the ratio argument or a scratch float), stores rounding to a
+    // float; every operation keeps the x87 choice of NaN.
     let half = e.global::<f64>(HALF);
-    if fit_vertical {
-        let right = e.get(this, NiCamera::m_kViewFrustum_m_fRight) as f64;
-        let left = e.get(this, NiCamera::m_kViewFrustum_m_fLeft) as f64;
-        let width = (right - left) as f32;
-        let delta = (width as f64 / ratio as f64 * half) as f32;
-        let bottom = e.get(this, NiCamera::m_kViewFrustum_m_fBottom) as f64;
-        let top = e.get(this, NiCamera::m_kViewFrustum_m_fTop) as f64;
-        let centre = (half * (bottom + top)) as f32;
-        e.set(
-            this,
-            NiCamera::m_kViewFrustum_m_fTop,
-            (centre as f64 + delta as f64) as f32,
-        );
-        e.set(
-            this,
-            NiCamera::m_kViewFrustum_m_fBottom,
-            (centre as f64 - delta as f64) as f32,
-        );
+    let me = this.addr();
+    let ld = |e: &Engine, offset: u32| x87_load32(e.mem.u32(me + offset));
+    let m = |e: &Engine, offset: u32| x87_m32(e.mem.u32(me + offset));
+    let (left, right, top, bottom) = (0xdc, 0xe0, 0xe4, 0xe8);
+    // With `fit_vertical`: `(right - left) / ratio` and the centre of bottom and
+    // top, written to top and bottom; else `(top - bottom) * ratio` and the
+    // centre of right and left, written to right and left.
+    let (span, sum, low, high) = if fit_vertical {
+        let width = x87_store32(x87_sub(ld(e, right), m(e, left)));
+        let quotient = x87_div(x87_load32(width), x87_m32(ratio.to_bits()));
+        (quotient, x87_add(ld(e, bottom), m(e, top)), bottom, top)
     } else {
-        let top = e.get(this, NiCamera::m_kViewFrustum_m_fTop) as f64;
-        let bottom = e.get(this, NiCamera::m_kViewFrustum_m_fBottom) as f64;
-        let height = (top - bottom) as f32;
-        let delta = (height as f64 * ratio as f64 * half) as f32;
-        let right = e.get(this, NiCamera::m_kViewFrustum_m_fRight) as f64;
-        let left = e.get(this, NiCamera::m_kViewFrustum_m_fLeft) as f64;
-        let centre = (half * (right + left)) as f32;
-        e.set(
-            this,
-            NiCamera::m_kViewFrustum_m_fRight,
-            (centre as f64 + delta as f64) as f32,
-        );
-        e.set(
-            this,
-            NiCamera::m_kViewFrustum_m_fLeft,
-            (centre as f64 - delta as f64) as f32,
-        );
-    }
+        let height = x87_store32(x87_sub(ld(e, top), m(e, bottom)));
+        let product = x87_mul(x87_load32(height), x87_m32(ratio.to_bits()));
+        (product, x87_add(ld(e, right), m(e, left)), left, right)
+    };
+    let delta = x87_load32(x87_store32(x87_mul(span, half)));
+    let centre = x87_load32(x87_store32(x87_mul(half, sum)));
+    e.mem
+        .set_u32(me + high, x87_store32(x87_add(centre, delta)));
+    e.mem.set_u32(me + low, x87_store32(x87_sub(centre, delta)));
 }
 
 // Translated from 00a6fc50 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -472,20 +498,23 @@ pub fn ni_camera_world_pt_to_screen_pt(
     out_y: Ptr,
     min_w: f32,
 ) -> bool {
-    let (x, y, z) = point(e, world_point);
-    let w = transform_row(e, this, 3, x, y, z) as f32;
-    if !(min_w < w) {
+    let point = world_point.addr();
+    let w = x87_store32(transform_row_x87(e, this, 3, point));
+    if !(min_w < f32::from_bits(w)) {
         return false;
     }
-    let inverse = (1.0 / w as f64) as f32;
-    let screen_x = transform_row(e, this, 0, x, y, z) as f32;
-    e.mem.set_f32(out_x.addr(), screen_x);
-    let screen_y = transform_row(e, this, 1, x, y, z) as f32;
-    e.mem.set_f32(out_y.addr(), screen_y);
-    let normalised_x = (screen_x as f64 * inverse as f64) as f32;
-    e.mem.set_f32(out_x.addr(), normalised_x);
-    let normalised_y = (inverse as f64 * screen_y as f64) as f32;
-    e.mem.set_f32(out_y.addr(), normalised_y);
+    let inverse = x87_store32(x87_div(1.0, x87_load32(w)));
+    let screen_x = x87_store32(transform_row_x87(e, this, 0, point));
+    e.mem.set_u32(out_x.addr(), screen_x);
+    let screen_y = x87_store32(transform_row_x87(e, this, 1, point));
+    e.mem.set_u32(out_y.addr(), screen_y);
+    // `FLD [out_x]` times the scratch `inverse`; `inverse` times `[out_y]`.
+    let normalised_x = x87_mul(x87_load32(e.mem.u32(out_x.addr())), x87_load32(inverse));
+    e.mem.set_u32(out_x.addr(), x87_store32(normalised_x));
+    let normalised_y = x87_mul(x87_load32(inverse), x87_m32(e.mem.u32(out_y.addr())));
+    e.mem.set_u32(out_y.addr(), x87_store32(normalised_y));
+    let normalised_x = e.mem.f32(out_x.addr());
+    let normalised_y = e.mem.f32(out_y.addr());
     let minus_one = e.global::<f32>(MINUS_ONE);
     if !(minus_one <= normalised_x) || !(normalised_x <= 1.0) {
         return false;
@@ -493,7 +522,7 @@ pub fn ni_camera_world_pt_to_screen_pt(
     if !(minus_one <= normalised_y) || !(normalised_y <= 1.0) {
         return false;
     }
-    map_to_port(e, this, out_x, out_y);
+    map_to_port_x87(e, this, out_x, out_y);
     true
 }
 
@@ -1007,62 +1036,72 @@ pub fn ni_camera_world_to_camera_matrix(e: &mut Engine, this: Ptr<NiCamera>) {
         world_translation(e, this, 1),
         world_translation(e, this, 2),
     ];
+    // The products and sums go through the x87 stack with its choice of NaN
+    // (`mul`, `add`); the rotation and translation are copied into scratch
+    // floats first and loaded from there (quiet). `rounded` is a store to a
+    // scratch float and the load back. The frustum fields that are memory
+    // operands (`FADD`/`FSUB` of left, top, bottom and near) keep a signalling
+    // NaN as one (`x87_m32`).
+    let (mul, add, sub, div) = (x87_mul, x87_add, x87_sub, x87_div);
+    let rounded = |value: f64| x87_load32(x87_store32(value));
     // Minus the dot product of the translation with columns 2, 1 and 0.
-    let n2 = -(((t[0] * r[0][2] + t[1] * r[1][2]) + t[2] * r[2][2]) as f32 as f64);
-    let n1 = -(((t[0] * r[0][1] + t[1] * r[1][1]) + t[2] * r[2][1]) as f32 as f64);
-    let n0 = -(((t[0] * r[0][0] + t[1] * r[1][0]) + t[2] * r[2][0]) as f32 as f64);
-    let right = e.get(this, NiCamera::m_kViewFrustum_m_fRight) as f64;
-    let left = e.get(this, NiCamera::m_kViewFrustum_m_fLeft) as f64;
-    let top = e.get(this, NiCamera::m_kViewFrustum_m_fTop) as f64;
-    let bottom = e.get(this, NiCamera::m_kViewFrustum_m_fBottom) as f64;
-    let near = e.get(this, NiCamera::m_kViewFrustum_m_fNear) as f64;
-    let far = e.get(this, NiCamera::m_kViewFrustum_m_fFar) as f64;
-    let sum_horizontal = (right + left) as f32 as f64;
-    let sum_vertical = (bottom + top) as f32 as f64;
-    let inverse_width = (1.0 / (right - left)) as f32 as f64;
-    let inverse_height = (1.0 / (top - bottom)) as f32 as f64;
-    let inverse_depth = (1.0 / (far - near)) as f32 as f64;
+    let dot = |column: usize| {
+        let sum = add(mul(t[0], r[0][column]), mul(t[1], r[1][column]));
+        rounded(add(sum, mul(t[2], r[2][column])))
+    };
+    let n2 = -dot(2);
+    let n1 = -dot(1);
+    let n0 = -dot(0);
+    let me = this.addr();
+    let ld = |e: &Engine, offset: u32| x87_load32(e.mem.u32(me + offset));
+    let m = |e: &Engine, offset: u32| x87_m32(e.mem.u32(me + offset));
+    let (left, right, top, bottom, near, far) = (0xdc, 0xe0, 0xe4, 0xe8, 0xec, 0xf0);
+    let sum_horizontal = rounded(add(ld(e, right), m(e, left)));
+    let sum_vertical = rounded(add(ld(e, bottom), m(e, top)));
+    let inverse_width = rounded(div(1.0, sub(ld(e, right), m(e, left))));
+    let inverse_height = rounded(div(1.0, sub(ld(e, top), m(e, bottom))));
+    let inverse_depth = rounded(div(1.0, sub(ld(e, far), m(e, near))));
     let two = e.global::<f64>(TWO);
-    let a = (two * inverse_width) as f32 as f64;
+    let a = rounded(mul(two, inverse_width));
     if e.get(this, NiCamera::m_kViewFrustum_m_bOrtho) {
-        let b = (two * inverse_height) as f32 as f64;
-        set_world_to_cam(e, this, 0, 0, a * r[0][2]);
-        set_world_to_cam(e, this, 0, 1, a * r[1][2]);
-        set_world_to_cam(e, this, 0, 2, a * r[2][2]);
-        let centre_x = (inverse_width * sum_horizontal) as f32 as f64;
-        set_world_to_cam(e, this, 0, 3, centre_x + a * n2);
-        set_world_to_cam(e, this, 1, 0, b * r[0][1]);
-        set_world_to_cam(e, this, 1, 1, b * r[1][1]);
-        set_world_to_cam(e, this, 1, 2, b * r[2][1]);
-        let centre_y = (inverse_height * sum_vertical) as f32 as f64;
-        set_world_to_cam(e, this, 1, 3, centre_y + b * n1);
-        set_world_to_cam(e, this, 2, 0, inverse_depth * r[0][0]);
-        set_world_to_cam(e, this, 2, 1, inverse_depth * r[1][0]);
-        set_world_to_cam(e, this, 2, 2, inverse_depth * r[2][0]);
-        let near_shift = (-near * inverse_depth) as f32 as f64;
-        set_world_to_cam(e, this, 2, 3, n0 * inverse_depth + near_shift);
+        let b = rounded(mul(two, inverse_height));
+        set_world_to_cam(e, this, 0, 0, mul(a, r[0][2]));
+        set_world_to_cam(e, this, 0, 1, mul(a, r[1][2]));
+        set_world_to_cam(e, this, 0, 2, mul(a, r[2][2]));
+        let centre_x = rounded(mul(inverse_width, sum_horizontal));
+        set_world_to_cam(e, this, 0, 3, add(centre_x, mul(a, n2)));
+        set_world_to_cam(e, this, 1, 0, mul(b, r[0][1]));
+        set_world_to_cam(e, this, 1, 1, mul(b, r[1][1]));
+        set_world_to_cam(e, this, 1, 2, mul(b, r[2][1]));
+        let centre_y = rounded(mul(inverse_height, sum_vertical));
+        set_world_to_cam(e, this, 1, 3, add(centre_y, mul(b, n1)));
+        set_world_to_cam(e, this, 2, 0, mul(inverse_depth, r[0][0]));
+        set_world_to_cam(e, this, 2, 1, mul(inverse_depth, r[1][0]));
+        set_world_to_cam(e, this, 2, 2, mul(inverse_depth, r[2][0]));
+        let near_shift = rounded(mul(-ld(e, near), inverse_depth));
+        set_world_to_cam(e, this, 2, 3, add(mul(n0, inverse_depth), near_shift));
         set_world_to_cam(e, this, 3, 0, 0.0);
         set_world_to_cam(e, this, 3, 1, 0.0);
         set_world_to_cam(e, this, 3, 2, 0.0);
         set_world_to_cam(e, this, 3, 3, 1.0);
     } else {
-        let p = (-sum_horizontal * inverse_width) as f32 as f64;
-        let b = (two * inverse_height) as f32 as f64;
-        let q = (-sum_vertical * inverse_height) as f32 as f64;
-        let far_scale = (far * inverse_depth) as f32 as f64;
-        set_world_to_cam(e, this, 0, 0, a * r[0][2] + p * r[0][0]);
-        set_world_to_cam(e, this, 0, 1, p * r[1][0] + a * r[1][2]);
-        set_world_to_cam(e, this, 0, 2, p * r[2][0] + a * r[2][2]);
-        set_world_to_cam(e, this, 0, 3, p * n0 + a * n2);
-        set_world_to_cam(e, this, 1, 0, q * r[0][0] + b * r[0][1]);
-        set_world_to_cam(e, this, 1, 1, q * r[1][0] + b * r[1][1]);
-        set_world_to_cam(e, this, 1, 2, q * r[2][0] + b * r[2][1]);
-        set_world_to_cam(e, this, 1, 3, q * n0 + b * n1);
-        set_world_to_cam(e, this, 2, 0, far_scale * r[0][0]);
-        set_world_to_cam(e, this, 2, 1, far_scale * r[1][0]);
-        set_world_to_cam(e, this, 2, 2, far_scale * r[2][0]);
-        let near_shift = (-near * far_scale) as f32 as f64;
-        set_world_to_cam(e, this, 2, 3, far_scale * n0 + near_shift);
+        let p = rounded(mul(-sum_horizontal, inverse_width));
+        let b = rounded(mul(two, inverse_height));
+        let q = rounded(mul(-sum_vertical, inverse_height));
+        let far_scale = rounded(mul(ld(e, far), inverse_depth));
+        set_world_to_cam(e, this, 0, 0, add(mul(a, r[0][2]), mul(p, r[0][0])));
+        set_world_to_cam(e, this, 0, 1, add(mul(p, r[1][0]), mul(a, r[1][2])));
+        set_world_to_cam(e, this, 0, 2, add(mul(p, r[2][0]), mul(a, r[2][2])));
+        set_world_to_cam(e, this, 0, 3, add(mul(p, n0), mul(a, n2)));
+        set_world_to_cam(e, this, 1, 0, add(mul(q, r[0][0]), mul(b, r[0][1])));
+        set_world_to_cam(e, this, 1, 1, add(mul(q, r[1][0]), mul(b, r[1][1])));
+        set_world_to_cam(e, this, 1, 2, add(mul(q, r[2][0]), mul(b, r[2][1])));
+        set_world_to_cam(e, this, 1, 3, add(mul(q, n0), mul(b, n1)));
+        set_world_to_cam(e, this, 2, 0, mul(far_scale, r[0][0]));
+        set_world_to_cam(e, this, 2, 1, mul(far_scale, r[1][0]));
+        set_world_to_cam(e, this, 2, 2, mul(far_scale, r[2][0]));
+        let near_shift = rounded(mul(-ld(e, near), far_scale));
+        set_world_to_cam(e, this, 2, 3, add(mul(far_scale, n0), near_shift));
         set_world_to_cam(e, this, 3, 0, r[0][0]);
         set_world_to_cam(e, this, 3, 1, r[1][0]);
         set_world_to_cam(e, this, 3, 2, r[2][0]);

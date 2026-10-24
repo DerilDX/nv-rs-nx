@@ -163,11 +163,57 @@ pub fn fn_0051a030(e: &mut Engine, this: Ptr, file: Ptr) -> bool {
     true
 }
 
+/// `TESForm::StartForm` (`004855a0`), `TESForm::SaveData` (`00485e00`) and
+/// `TESForm::CloseForm` (`00485680`), `thiscall` on the form, no stack words.
+const START_FORM: u32 = 0x0048_55a0;
+const FORM_SAVE_DATA: u32 = 0x0048_5e00;
+const CLOSE_FORM: u32 = 0x0048_5680;
+/// The component saves (engine map; `thiscall`): `TESFullName::Save`
+/// (`00487010`), `TESModelTextureSwap::Save` (`0048a520`, three chunk
+/// tags), `TESTexture::Save` (`0048e370`, a tag), `BGSMessageIcon::Save`
+/// (`0047a240`, a tag), `TESScriptableForm::Save` (`0048cca0`),
+/// `BGSDestructibleObjectForm::Save` (`00477f20`) and
+/// `BGSPickupPutdownSounds::Save` (`0047b560`).
+const FULL_NAME_SAVE: u32 = 0x0048_7010;
+const MODEL_TEXTURE_SWAP_SAVE: u32 = 0x0048_a520;
+const TEXTURE_SAVE: u32 = 0x0048_e370;
+const MESSAGE_ICON_SAVE: u32 = 0x0047_a240;
+const SCRIPTABLE_FORM_SAVE: u32 = 0x0048_cca0;
+const DESTRUCTIBLE_SAVE: u32 = 0x0047_7f20;
+const PICKUP_PUTDOWN_SAVE: u32 = 0x0047_b560;
+/// `TESDescription::Save` (`00482cb0`, `thiscall`).
+const DESCRIPTION_SAVE: u32 = 0x0048_2cb0;
+
+// Translated from 0051a420 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TESObjectIMOD::Save` (engine map; no stack words): `StartForm`, the full
+/// name (+0x30), the model with texture swaps (+0x3c; `MODL`, `MODT`,
+/// `MODS`), the icon (+0x5c, `ICON`), the message icon (+0x94, `MICO`),
+/// script (+0x68), description (+0x74), destructible data (+0x8c),
+/// pickup/putdown sounds (+0xa4), `TESForm::SaveData`, `CloseForm`.
+pub fn tes_object_imod_save(e: &mut Engine, this: Ptr) {
+    let base = this.addr();
+    e.call(START_FORM, &args![this]);
+    e.call(FULL_NAME_SAVE, &args![base + FULL_NAME]);
+    e.call(
+        MODEL_TEXTURE_SWAP_SAVE,
+        &args![base + MODEL, CHUNK_MODL, CHUNK_MODT, CHUNK_MODS],
+    );
+    e.call(TEXTURE_SAVE, &args![base + ICON, CHUNK_ICON]);
+    e.call(MESSAGE_ICON_SAVE, &args![base + MESSAGE_ICON, CHUNK_MICO]);
+    e.call(SCRIPTABLE_FORM_SAVE, &args![base + SCRIPT]);
+    e.call(DESCRIPTION_SAVE, &args![base + DESCRIPTION]);
+    e.call(DESTRUCTIBLE_SAVE, &args![base + DESTRUCTIBLE]);
+    e.call(PICKUP_PUTDOWN_SAVE, &args![base + SOUNDS]);
+    e.call(FORM_SAVE_DATA, &args![this]);
+    e.call(CLOSE_FORM, &args![this]);
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
         entry!(0x0051_9fc0, tes_object_imod_init_item(Ptr)),
         entry!(0x0051_a030, fn_0051a030(Ptr, Ptr) -> bool),
+        entry!(0x0051_a420, tes_object_imod_save(Ptr)),
     ]
 }
 
@@ -332,5 +378,52 @@ mod tests {
         assert_eq!(calls(&e, 0x0047_81e0), vec![vec![this + 0x8c, file]; 2]);
         assert_eq!(calls(&e, 0x0040_3550), vec![vec![this + 0xa4, 0x33]]);
         assert_eq!(calls(&e, 0x0048_61f0), vec![vec![this, file, 0, 0]]);
+    }
+}
+
+#[cfg(test)]
+mod save_tests {
+    use super::*;
+
+    #[test]
+    fn save_writes_each_component_in_order() {
+        let mut e = Engine::new();
+        for a in [
+            START_FORM,
+            FORM_SAVE_DATA,
+            CLOSE_FORM,
+            FULL_NAME_SAVE,
+            MODEL_TEXTURE_SWAP_SAVE,
+            TEXTURE_SAVE,
+            MESSAGE_ICON_SAVE,
+            SCRIPTABLE_FORM_SAVE,
+            DESCRIPTION_SAVE,
+            DESTRUCTIBLE_SAVE,
+            PICKUP_PUTDOWN_SAVE,
+        ] {
+            e.register(a, |_, _| Ret::default());
+        }
+        e.call_log = Some(vec![]);
+        e.call(0x0051_a420, &args![0x4000u32]);
+        let log = e.call_log.take().unwrap();
+        assert_eq!(
+            log[1..].to_vec(),
+            vec![
+                (START_FORM, vec![0x4000]),
+                (FULL_NAME_SAVE, vec![0x4030]),
+                (
+                    MODEL_TEXTURE_SWAP_SAVE,
+                    vec![0x403c, CHUNK_MODL, CHUNK_MODT, CHUNK_MODS]
+                ),
+                (TEXTURE_SAVE, vec![0x405c, CHUNK_ICON]),
+                (MESSAGE_ICON_SAVE, vec![0x4094, CHUNK_MICO]),
+                (SCRIPTABLE_FORM_SAVE, vec![0x4068]),
+                (DESCRIPTION_SAVE, vec![0x4074]),
+                (DESTRUCTIBLE_SAVE, vec![0x408c]),
+                (PICKUP_PUTDOWN_SAVE, vec![0x40a4]),
+                (FORM_SAVE_DATA, vec![0x4000]),
+                (CLOSE_FORM, vec![0x4000])
+            ]
+        );
     }
 }

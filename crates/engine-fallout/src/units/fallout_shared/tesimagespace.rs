@@ -143,6 +143,31 @@ pub fn fn_0052b440(e: &mut Engine, this: Ptr, file: Ptr) -> bool {
     true
 }
 
+/// `TESForm::StartForm` (`004855a0`), `TESForm::CloseForm` (`00485680`),
+/// `TESForm::__AddChunkData` (`00485990`, `cdecl (chunk, data, size)`) and
+/// the byte `00401500` answers (`011c54ba`: whether saving swaps bytes).
+const FORM_START: u32 = 0x0048_55a0;
+const FORM_CLOSE: u32 = 0x0048_5680;
+const FORM_ADD_CHUNK_DATA: u32 = 0x0048_5990;
+const SAVE_SWAPS: u32 = 0x0040_1500;
+
+// Translated from 0052b630 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TESImageSpace::Save` (Xbox PDB): starts the form, adds the 0x98-byte
+/// parameters at +0x18 as `DNAM` (swapped by `ImageSpaceParameterData::Endian`
+/// before and after when `00401500` answers non-zero) and closes the form.
+pub fn tes_image_space_save(e: &mut Engine, this: Ptr) {
+    let data = this.addr() + 0x18;
+    e.call(FORM_START, &args![this]);
+    if e.call(SAVE_SWAPS, &args![]).u8() != 0 {
+        e.call(IMAGE_SPACE_PARAMETERS_ENDIAN, &args![data]);
+    }
+    e.call(FORM_ADD_CHUNK_DATA, &args![CHUNK_DNAM, data, 0x98u32]);
+    if e.call(SAVE_SWAPS, &args![]).u8() != 0 {
+        e.call(IMAGE_SPACE_PARAMETERS_ENDIAN, &args![data]);
+    }
+    e.call(FORM_CLOSE, &args![this]);
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -151,6 +176,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x0052_b410, fn_0052b410(Ptr)),
         entry!(0x0052_b3b0, fn_0052b3b0(Ptr)),
         entry!(0x0052_b440, fn_0052b440(Ptr, Ptr) -> bool),
+        entry!(0x0052_b630, tes_image_space_save(Ptr)),
     ]
 }
 
@@ -337,5 +363,51 @@ mod tests {
             }
             assert_eq!(calls, expected);
         }
+    }
+}
+
+#[cfg(test)]
+mod n043_tests {
+    use super::*;
+
+    #[test]
+    fn save_adds_dnam_swapped_when_asked() {
+        let mut e = Engine::new();
+        e.map(0x7300_0000, 4);
+        for addr in [
+            FORM_START,
+            FORM_CLOSE,
+            FORM_ADD_CHUNK_DATA,
+            IMAGE_SPACE_PARAMETERS_ENDIAN,
+        ] {
+            e.register(addr, |_, _| Ret::default());
+        }
+        e.register(SAVE_SWAPS, |e, _| e.mem.u32(0x7300_0000).into_ret());
+        e.mem.set_u32(0x7300_0000, 1);
+        e.call_log = Some(vec![]);
+        e.call(0x0052_b630, &args![0x1000u32]);
+        let order: Vec<(u32, Vec<u32>)> = e
+            .call_log
+            .take()
+            .unwrap()
+            .into_iter()
+            .filter(|c| c.0 != SAVE_SWAPS)
+            .skip(1)
+            .collect();
+        assert_eq!(
+            order,
+            vec![
+                (FORM_START, vec![0x1000]),
+                (IMAGE_SPACE_PARAMETERS_ENDIAN, vec![0x1018]),
+                (FORM_ADD_CHUNK_DATA, vec![CHUNK_DNAM, 0x1018, 0x98]),
+                (IMAGE_SPACE_PARAMETERS_ENDIAN, vec![0x1018]),
+                (FORM_CLOSE, vec![0x1000]),
+            ]
+        );
+        e.mem.set_u32(0x7300_0000, 0);
+        e.call_log = Some(vec![]);
+        e.call(0x0052_b630, &args![0x1000u32]);
+        let log = e.call_log.take().unwrap();
+        assert!(log.iter().all(|c| c.0 != IMAGE_SPACE_PARAMETERS_ENDIAN));
     }
 }

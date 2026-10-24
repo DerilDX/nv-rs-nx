@@ -133,9 +133,115 @@ pub fn fn_005f0360(e: &mut Engine, this: Ptr) -> Ptr {
     this
 }
 
+/// `__RTDynamicCast` (`00ec43fb`, cdecl), the source type descriptor and
+/// the target `005f02a0` and `005f02f0` pass (`01186318`, the type
+/// descriptor named `.?AVBGSVoiceType@@`).
+const DYNAMIC_CAST: u32 = 0x00ec_43fb;
+const CAST_SOURCE: u32 = 0x0118_3028;
+const VOICE_TYPE_TYPE: u32 = 0x0118_6318;
+/// Whether the file's words are swapped (`00401500`, no arguments).
+const SWAPPED: u32 = 0x0040_1500;
+/// The chunk writers (cdecl): a byte (`004858f0`), a word (`00485910`).
+const WRITE_BYTE_CHUNK: u32 = 0x0048_58f0;
+const WRITE_WORD_CHUNK: u32 = 0x0048_5910;
+
+// Translated from 005f0140 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BGSVoiceType`'s record writer (no stack words; the engine map has no
+/// name): `TESForm::StartForm`, the byte at +0x18 as `DNAM`
+/// (`TESForm::__AddChunkData('DNAM', +0x18, 1)`, cdecl), with `00483710`
+/// run on it before and after when `00401500` answers true, then
+/// `TESForm::CloseForm`.
+pub fn fn_005f0140(e: &mut Engine, this: Ptr) {
+    let data = this.addr() + 0x18;
+    e.call(0x0048_55a0, &args![this]);
+    if e.call(SWAPPED, &args![]).bool() {
+        e.call(0x0048_3710, &args![data]);
+    }
+    e.call(0x0048_5990, &args![SIG_DNAM, data, 1u32]);
+    if e.call(SWAPPED, &args![]).bool() {
+        e.call(0x0048_3710, &args![data]);
+    }
+    e.call(0x0048_5680, &args![this]);
+}
+
+// Translated from 005f02a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BGSVoiceType`'s copy (`RET 4`: the source form; the engine map has no
+/// name): the source through `__RTDynamicCast(source, 0, 01183028,
+/// 01186318, 0)`; nothing without it, otherwise the byte at +0x18 and
+/// `TESForm::CopyAllComponents` given the uncast source.
+pub fn fn_005f02a0(e: &mut Engine, this: Ptr, source: u32) {
+    let other = e
+        .call(
+            DYNAMIC_CAST,
+            &args![source, 0u32, CAST_SOURCE, VOICE_TYPE_TYPE, 0u32],
+        )
+        .u32();
+    if other == 0 {
+        return;
+    }
+    let byte = e.mem.u8(other + 0x18);
+    e.mem.set_u8(this.addr() + 0x18, byte);
+    e.call(0x0048_51b0, &args![this, source]);
+}
+
+// Translated from 005f02f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BGSVoiceType`'s compare (`RET 4`: the other form; true when they
+/// differ; the engine map has no name): true when the cast as in
+/// `005f02a0` fails or the bytes at +0x18 differ, otherwise
+/// `TESForm::CompareAllComponents`.
+pub fn fn_005f02f0(e: &mut Engine, this: Ptr, form: u32) -> bool {
+    let other = e
+        .call(
+            DYNAMIC_CAST,
+            &args![form, 0u32, CAST_SOURCE, VOICE_TYPE_TYPE, 0u32],
+        )
+        .u32();
+    if other == 0 {
+        return true;
+    }
+    if e.mem.i8(this.addr() + 0x18) != e.mem.i8(other + 0x18) {
+        return true;
+    }
+    e.call(0x0048_5270, &args![this, other]).bool()
+}
+
+// Translated from 005f03a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `CreatureSounds`' chunk writer (no stack words; the engine map has no
+/// name): for each sound type 0 to 0x15 whose list (`005f0ac0`) is set and
+/// not empty, the type as `CSDT`, then for each item up to an empty node
+/// the sound's form id (`0084e3a0`, 0 without a sound) as `CSDI` and the
+/// chance byte (+4) as `CSDC`.
+pub fn fn_005f03a0(e: &mut Engine, this: Ptr) {
+    let mut kind = 0i32;
+    while kind < 0x16 {
+        let mut node = e.call(0x005f_0ac0, &args![this, kind]).u32();
+        if node != 0 && !e.call(0x0082_56d0, &args![node]).bool() {
+            e.call(WRITE_WORD_CHUNK, &args![0x5444_5343u32, kind]);
+            while node != 0 && !e.call(0x0082_56d0, &args![node]).bool() {
+                let slot = e.call(0x0068_15c0, &args![node]).u32();
+                let sound = e.mem.u32(slot);
+                let mut id = 0u32;
+                let form = e.mem.u32(sound);
+                if form != 0 {
+                    id = e.call(0x0084_e3a0, &args![form]).u32();
+                }
+                e.call(WRITE_WORD_CHUNK, &args![0x4944_5343u32, id]);
+                let chance = e.mem.u8(sound + 4);
+                e.call(WRITE_BYTE_CHUNK, &args![0x4344_5343u32, u32::from(chance)]);
+                node = e.call(0x0072_6070, &args![node]).u32();
+            }
+        }
+        kind += 1;
+    }
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x005f_0140, fn_005f0140(Ptr)),
+        entry!(0x005f_02a0, fn_005f02a0(Ptr, u32)),
+        entry!(0x005f_02f0, fn_005f02f0(Ptr, u32) -> bool),
+        entry!(0x005f_03a0, fn_005f03a0(Ptr)),
         entry!(0x005f_0380, fn_005f0380(Ptr)),
         entry!(0x005f_0040, fn_005f0040(Ptr, Ptr) -> bool),
         entry!(0x005f_0060, fn_005f0060(Ptr) -> u32),
@@ -313,5 +419,116 @@ mod b020_tests {
             calls(&mut e, 0x005f_0360),
             vec![(0x0040_3d30, vec![0x3000, 0, 0x58])]
         );
+    }
+}
+
+#[cfg(test)]
+mod n041_tests {
+    use super::*;
+
+    fn ret(eax: u32) -> Ret {
+        Ret {
+            eax,
+            ..Ret::default()
+        }
+    }
+
+    fn calls(e: &Engine, addr: u32) -> Vec<Vec<u32>> {
+        e.call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|(a, _)| *a == addr)
+            .map(|(_, w)| w.clone())
+            .collect()
+    }
+
+    #[test]
+    fn voice_type_save_copy_and_compare() {
+        let mut e = Engine::new();
+        for a in [
+            0x0048_55a0u32,
+            0x0048_3710,
+            0x0048_5990,
+            0x0048_5680,
+            0x0048_51b0,
+        ] {
+            e.register(a, |_, _| Ret::default());
+        }
+        let this = e.mem.alloc(0x20);
+        for swap in [0u32, 1] {
+            e.register_double(SWAPPED, move |_, _| ret(swap));
+            e.call_log = Some(vec![]);
+            e.call(0x005f_0140, &args![this]);
+            assert_eq!(calls(&e, 0x0048_5990), vec![vec![SIG_DNAM, this + 0x18, 1]]);
+            assert_eq!(calls(&e, 0x0048_3710).len(), 2 * swap as usize);
+            assert_eq!(calls(&e, 0x0048_5680), vec![vec![this]]);
+        }
+        e.register(DYNAMIC_CAST, |_, a| ret(if a[0] == 1 { 0 } else { a[0] }));
+        let other = e.mem.alloc(0x20);
+        e.mem.set_u8(other + 0x18, 0x81);
+        e.call_log = Some(vec![]);
+        e.call(0x005f_02a0, &args![this, other]);
+        assert_eq!(
+            calls(&e, DYNAMIC_CAST),
+            vec![vec![other, 0, CAST_SOURCE, VOICE_TYPE_TYPE, 0]]
+        );
+        assert_eq!(e.mem.u8(this + 0x18), 0x81);
+        assert_eq!(calls(&e, 0x0048_51b0), vec![vec![this, other]]);
+        e.call_log = Some(vec![]);
+        e.call(0x005f_02a0, &args![this, 1u32]);
+        assert!(calls(&e, 0x0048_51b0).is_empty());
+        e.register(0x0048_5270, |_, _| ret(0));
+        assert!(!e.call(0x005f_02f0, &args![this, other]).bool());
+        assert!(e.call(0x005f_02f0, &args![this, 1u32]).bool());
+        e.mem.set_u8(other + 0x18, 1);
+        assert!(e.call(0x005f_02f0, &args![this, other]).bool());
+        e.mem.set_u8(other + 0x18, 0x81);
+        e.register(0x0048_5270, |_, _| ret(1));
+        assert!(e.call(0x005f_02f0, &args![this, other]).bool());
+    }
+
+    #[test]
+    fn fn_005f03a0_writes_each_sound_type() {
+        let mut e = Engine::new();
+        // Type 3 has two sounds (one without a form), type 5 an empty list.
+        let this = e.mem.alloc(0x58);
+        let first = e.mem.alloc(8);
+        let second = e.mem.alloc(8);
+        let form = e.mem.alloc(0x10);
+        e.mem.set_u32(first, form);
+        e.mem.set_u8(first + 4, 40);
+        e.mem.set_u8(second + 4, 60);
+        let list = e.mem.alloc(8);
+        let node = e.mem.alloc(8);
+        e.mem.set_u32(list, first);
+        e.mem.set_u32(list + 4, node);
+        e.mem.set_u32(node, second);
+        let empty = e.mem.alloc(8);
+        e.mem.set_u32(this + 0xc, list);
+        e.mem.set_u32(this + 0x14, empty);
+        e.register(0x005f_0ac0, |e, a| ret(e.mem.u32(a[0] + 4 * a[1])));
+        e.register(0x0082_56d0, |e, a| ret(u32::from(e.mem.u32(a[0]) == 0)));
+        e.register(0x0068_15c0, |_, a| ret(a[0]));
+        e.register(0x0072_6070, |e, a| ret(e.mem.u32(a[0] + 4)));
+        e.register(0x0084_e3a0, |_, _| ret(0xabcd));
+        e.register(WRITE_WORD_CHUNK, |_, _| Ret::default());
+        e.register(WRITE_BYTE_CHUNK, |_, _| Ret::default());
+        e.call_log = Some(vec![]);
+        e.call(0x005f_03a0, &args![this]);
+        assert_eq!(calls(&e, 0x005f_0ac0).len(), 0x16);
+        assert_eq!(
+            calls(&e, WRITE_WORD_CHUNK),
+            vec![
+                vec![0x5444_5343, 3],
+                vec![0x4944_5343, 0xabcd],
+                vec![0x4944_5343, 0]
+            ]
+        );
+        assert_eq!(
+            calls(&e, WRITE_BYTE_CHUNK),
+            vec![vec![0x4344_5343, 40], vec![0x4344_5343, 60]]
+        );
+        assert_eq!(calls(&e, 0x0084_e3a0), vec![vec![form]]);
     }
 }

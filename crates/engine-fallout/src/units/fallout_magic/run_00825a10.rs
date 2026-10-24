@@ -196,9 +196,119 @@ fn drop_from_entry(e: &mut Engine, this: Ptr, lists: u32, index: u32) {
     }
 }
 
+// Translated from 00825a10 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 00825a10 - the C++ exception-unwinding frame (FS:[0]) that destroys the extra data base when the caster constructor throws is not translated
+/// The `NonActorMagicCaster` default constructor (by the vtables it sets; unnamed in the
+/// engine map; `thiscall`, plain `RET`): the `BSExtraData` base with type 0x32, the
+/// `MagicCaster` base (+0xC), both vtables, then `pCasterObject`, `pCurrentSpell` and
+/// `pDesiredTarget` cleared. Returns `this`.
+pub fn fn_00825a10(e: &mut Engine, this: Ptr) -> Ptr {
+    let base = this.addr();
+    e.call(EXTRA_DATA_CONSTRUCT, &args![base, 0x32u32]);
+    e.call(MAGIC_CASTER_CONSTRUCT, &args![base + MAGIC_CASTER_BASE]);
+    e.mem.set_u32(base, NON_ACTOR_MAGIC_CASTER_VTABLE);
+    e.mem.set_u32(
+        base + MAGIC_CASTER_BASE,
+        NON_ACTOR_MAGIC_CASTER_CASTER_VTABLE,
+    );
+    e.mem.set_u32(base + CASTER_OBJECT, 0);
+    e.mem.set_u32(base + CURRENT_SPELL, 0);
+    e.mem.set_u32(base + DESIRED_TARGET, 0);
+    this
+}
+
+// `NonActorMagicTarget` (Xbox PDB, 0x28 bytes): a `BSExtraData` (type 0x33) with a
+// `MagicTarget` base at +0xC, `pTargetObject` +0x1C and `lActiveEffectList` +0x20 (the PC
+// code uses the same offsets).
+
+/// `NonActorMagicTarget`'s vtables (RTTI `.?AVNonActorMagicTarget@@`): the `BSExtraData`
+/// one at +0 and the `MagicTarget` one at +0xC.
+const NON_ACTOR_MAGIC_TARGET_VTABLE: u32 = 0x0107_becc;
+const NON_ACTOR_MAGIC_TARGET_TARGET_VTABLE: u32 = 0x0107_be98;
+/// The `MagicTarget` base (Xbox PDB) at +0xC.
+const MAGIC_TARGET_BASE: u32 = 0xc;
+/// `pTargetObject` (Xbox PDB).
+const TARGET_OBJECT: u32 = 0x1c;
+/// `lActiveEffectList` (Xbox PDB).
+const ACTIVE_EFFECT_LIST: u32 = 0x20;
+/// The `MagicTarget` constructor (`00822a40`) and destructor body (`00822a80`)
+/// (`thiscall`).
+const MAGIC_TARGET_CONSTRUCT: u32 = 0x0082_2a40;
+const MAGIC_TARGET_DESTROY: u32 = 0x0082_2a80;
+/// The effect list's constructor (`0096a2d0`) and destructor body (`0046ffb0`)
+/// (`thiscall`).
+const LIST_CONSTRUCT: u32 = 0x0096_a2d0;
+const LIST_DESTROY: u32 = 0x0046_ffb0;
+
+/// The part of the `NonActorMagicTarget` constructors before the target object.
+fn construct_non_actor_magic_target(e: &mut Engine, base: u32) {
+    e.call(EXTRA_DATA_CONSTRUCT, &args![base, 0x33u32]);
+    e.call(MAGIC_TARGET_CONSTRUCT, &args![base + MAGIC_TARGET_BASE]);
+    e.mem.set_u32(base, NON_ACTOR_MAGIC_TARGET_VTABLE);
+    e.mem.set_u32(
+        base + MAGIC_TARGET_BASE,
+        NON_ACTOR_MAGIC_TARGET_TARGET_VTABLE,
+    );
+    e.call(LIST_CONSTRUCT, &args![base + ACTIVE_EFFECT_LIST]);
+}
+
+// Translated from 00825ea0 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 00825ea0 - the C++ exception-unwinding frame (FS:[0]) that destroys the bases when a later constructor throws is not translated
+/// The `NonActorMagicTarget` default constructor (by the vtables it sets; unnamed in the
+/// engine map; `thiscall`, plain `RET`): the `BSExtraData` base with type 0x33, the
+/// `MagicTarget` base (+0xC, `00822a40`), both vtables, the effect list (+0x20,
+/// `0096a2d0`) and `pTargetObject` cleared. Returns `this`.
+pub fn fn_00825ea0(e: &mut Engine, this: Ptr) -> Ptr {
+    let base = this.addr();
+    construct_non_actor_magic_target(e, base);
+    e.mem.set_u32(base + TARGET_OBJECT, 0);
+    this
+}
+
+// Translated from 00825f30 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The `NonActorMagicTarget` scalar deleting destructor (by the destructor it calls;
+/// `thiscall`, `RET 4`): the destructor `00825f60`, then the free `00401030` when bit 0 of
+/// `flags` is set. Returns `this`.
+pub fn fn_00825f30(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    fn_00825f60(e, this);
+    if flags & 1 != 0 {
+        e.call(FREE, &args![this]);
+    }
+    this
+}
+
+// Translated from 00825f60 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 00825f60 - the C++ exception-unwinding frame (FS:[0]) that destroys the remaining bases when a destructor throws is not translated
+/// The `NonActorMagicTarget` destructor (unnamed in the engine map; `thiscall`): destroys
+/// the effect list (+0x20, `0046ffb0`), the `MagicTarget` base (+0xC, `00822a80`) and the
+/// `BSExtraData` base (`0040ecb0`). It stores no vtable itself.
+pub fn fn_00825f60(e: &mut Engine, this: Ptr) {
+    let base = this.addr();
+    e.call(LIST_DESTROY, &args![base + ACTIVE_EFFECT_LIST]);
+    e.call(MAGIC_TARGET_DESTROY, &args![base + MAGIC_TARGET_BASE]);
+    e.call(EXTRA_DATA_DESTROY, &args![base]);
+}
+
+// Translated from 00825fd0 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 00825fd0 - the C++ exception-unwinding frame (FS:[0]) that destroys the bases when a later constructor throws is not translated
+/// The `NonActorMagicTarget` constructor for a reference (by the vtables it sets; unnamed
+/// in the engine map; `thiscall`, `RET 4`): as `00825ea0`, with `pTargetObject` the
+/// reference. Returns `this`.
+pub fn fn_00825fd0(e: &mut Engine, this: Ptr, reference: u32) -> Ptr {
+    let base = this.addr();
+    construct_non_actor_magic_target(e, base);
+    e.mem.set_u32(base + TARGET_OBJECT, reference);
+    this
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x0082_5a10, fn_00825a10(Ptr) -> Ptr),
+        entry!(0x0082_5ea0, fn_00825ea0(Ptr) -> Ptr),
+        entry!(0x0082_5f30, fn_00825f30(Ptr, u32) -> Ptr),
+        entry!(0x0082_5f60, fn_00825f60(Ptr)),
+        entry!(0x0082_5fd0, fn_00825fd0(Ptr, u32) -> Ptr),
         entry!(0x00825c00, fn_00825c00(Ptr) -> u32),
         entry!(0x00825aa0, fn_00825aa0(Ptr, u32) -> Ptr),
         entry!(0x00825ad0, fn_00825ad0(Ptr, u32) -> Ptr),
@@ -344,5 +454,94 @@ mod tests {
         let object: Ptr = Ptr::new(e.mem.alloc(0x50));
         e.mem.set_u32(object.addr() + 0x14, 0x1234_5678);
         assert_eq!(e.call(0x0082_5c00, &args![object]).u32(), 0x1234_5678);
+    }
+}
+
+#[cfg(test)]
+mod n049_tests {
+    use super::*;
+
+    fn calls(e: &Engine, callee: u32) -> Vec<Vec<u32>> {
+        e.call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|(address, _)| *address == callee)
+            .map(|(_, words)| words.clone())
+            .collect()
+    }
+
+    fn engine() -> Engine {
+        let mut e = Engine::new();
+        for callee in [
+            EXTRA_DATA_CONSTRUCT,
+            EXTRA_DATA_DESTROY,
+            MAGIC_CASTER_CONSTRUCT,
+            MAGIC_TARGET_CONSTRUCT,
+            MAGIC_TARGET_DESTROY,
+            LIST_CONSTRUCT,
+            LIST_DESTROY,
+            FREE,
+        ] {
+            e.register(callee, |_, a| a[0].into_ret());
+        }
+        e.call_log = Some(vec![]);
+        e
+    }
+
+    fn dirty(e: &mut Engine, size: u32) -> u32 {
+        let this = e.mem.alloc(size);
+        for i in 0..size / 4 {
+            e.mem.set_u32(this + 4 * i, 0xffff_ffff);
+        }
+        this
+    }
+
+    #[test]
+    fn fn_00825a10_constructs_an_empty_caster() {
+        let mut e = engine();
+        let this = dirty(&mut e, 0x24);
+        assert_eq!(e.call(0x0082_5a10, &[this]).u32(), this);
+        assert_eq!(calls(&e, EXTRA_DATA_CONSTRUCT), vec![vec![this, 0x32]]);
+        assert_eq!(calls(&e, MAGIC_CASTER_CONSTRUCT), vec![vec![this + 0xc]]);
+        assert_eq!(e.mem.u32(this), NON_ACTOR_MAGIC_CASTER_VTABLE);
+        assert_eq!(e.mem.u32(this + 0xc), NON_ACTOR_MAGIC_CASTER_CASTER_VTABLE);
+        assert_eq!(e.mem.u32(this + CURRENT_SPELL), 0);
+        assert_eq!(e.mem.u32(this + DESIRED_TARGET), 0);
+        assert_eq!(e.mem.u32(this + CASTER_OBJECT), 0);
+    }
+
+    #[test]
+    fn fn_00825ea0_and_00825fd0_construct_targets() {
+        let mut e = engine();
+        let this = dirty(&mut e, 0x28);
+        assert_eq!(e.call(0x0082_5ea0, &[this]).u32(), this);
+        assert_eq!(calls(&e, EXTRA_DATA_CONSTRUCT), vec![vec![this, 0x33]]);
+        assert_eq!(calls(&e, MAGIC_TARGET_CONSTRUCT), vec![vec![this + 0xc]]);
+        assert_eq!(calls(&e, LIST_CONSTRUCT), vec![vec![this + 0x20]]);
+        assert_eq!(e.mem.u32(this), NON_ACTOR_MAGIC_TARGET_VTABLE);
+        assert_eq!(e.mem.u32(this + 0xc), NON_ACTOR_MAGIC_TARGET_TARGET_VTABLE);
+        assert_eq!(e.mem.u32(this + TARGET_OBJECT), 0);
+
+        let other = dirty(&mut e, 0x28);
+        assert_eq!(e.call(0x0082_5fd0, &[other, 0x7777]).u32(), other);
+        assert_eq!(e.mem.u32(other), NON_ACTOR_MAGIC_TARGET_VTABLE);
+        assert_eq!(e.mem.u32(other + TARGET_OBJECT), 0x7777);
+        assert_eq!(calls(&e, LIST_CONSTRUCT).len(), 2);
+    }
+
+    #[test]
+    fn fn_00825f30_and_00825f60_destroy_the_parts() {
+        let mut e = engine();
+        let this = dirty(&mut e, 0x28);
+        assert_eq!(e.call(0x0082_5f30, &[this, 0]).u32(), this);
+        assert_eq!(calls(&e, LIST_DESTROY), vec![vec![this + 0x20]]);
+        assert_eq!(calls(&e, MAGIC_TARGET_DESTROY), vec![vec![this + 0xc]]);
+        assert_eq!(calls(&e, EXTRA_DATA_DESTROY), vec![vec![this]]);
+        assert!(calls(&e, FREE).is_empty());
+        // No vtable is stored.
+        assert_eq!(e.mem.u32(this), 0xffff_ffff);
+        assert_eq!(e.call(0x0082_5f30, &[this, 1]).u32(), this);
+        assert_eq!(calls(&e, FREE), vec![vec![this]]);
     }
 }

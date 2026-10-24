@@ -340,10 +340,14 @@ pub fn c_vec3_operator_p(
     out: Ptr<CVec3>,
     other: Ptr<CVec3>,
 ) -> Ptr<CVec3> {
+    // `FLD other[i]`, `FMUL this[j]` (a memory operand), `FSUBRP`: the x87 choice of NaN.
     let (t, o) = (this.addr(), other.addr());
-    let x = ld(e, o + 8) * ld(e, t + 4) - ld(e, o + 4) * ld(e, t + 8);
-    let y = ld(e, o) * ld(e, t + 8) - ld(e, o + 8) * ld(e, t);
-    let z = ld(e, o + 4) * ld(e, t) - ld(e, o) * ld(e, t + 4);
+    let product = |e: &Engine, i: u32, j: u32| {
+        x87_mul(x87_load32(e.mem.u32(o + i)), x87_m32(e.mem.u32(t + j)))
+    };
+    let x = x87_sub(product(e, 8, 4), product(e, 4, 8));
+    let y = x87_sub(product(e, 0, 8), product(e, 8, 0));
+    let z = x87_sub(product(e, 4, 0), product(e, 0, 4));
     st(e, out.addr(), x);
     st(e, out.addr() + 4, y);
     st(e, out.addr() + 8, z);
@@ -364,8 +368,15 @@ pub fn c_vec3_operator_p_ov2(
     let mut result = [0.0f64; 3];
     for (j, slot) in result.iter_mut().enumerate() {
         let j = j as u32;
-        *slot = ld(e, m + 0x18 + 4 * j) * ld(e, t + 8)
-            + (ld(e, m + 0x0C + 4 * j) * ld(e, t + 4) + ld(e, m + 4 * j) * ld(e, t));
+        // `FLD matrix[..]`, `FMUL this[..]` (a memory operand), two `FADDP`: the x87 choice
+        // of NaN.
+        let product = |row: u32, lane: u32| {
+            x87_mul(
+                x87_load32(e.mem.u32(m + row + 4 * j)),
+                x87_m32(e.mem.u32(t + lane)),
+            )
+        };
+        *slot = x87_add(product(0x18, 8), x87_add(product(0x0c, 4), product(0, 0)));
     }
     for (j, value) in result.iter().enumerate() {
         st(e, out.addr() + 4 * j as u32, *value);
@@ -434,8 +445,15 @@ pub fn c_rot_transform_operator_p_ov2(
     let mut result = [0.0f64; 3];
     for (j, slot) in result.iter_mut().enumerate() {
         let j = j as u32;
-        *slot = ld(e, o + 8) * ld(e, t + 12 * j + 8)
-            + (ld(e, o + 4) * ld(e, t + 12 * j + 4) + ld(e, o) * ld(e, t + 12 * j));
+        // `FLD other[..]`, `FMUL this[..]` (a memory operand), two `FADDP`: the x87 choice
+        // of NaN.
+        let product = |lane: u32| {
+            x87_mul(
+                x87_load32(e.mem.u32(o + lane)),
+                x87_m32(e.mem.u32(t + 12 * j + lane)),
+            )
+        };
+        *slot = x87_add(product(8), x87_add(product(4), product(0)));
     }
     for (j, value) in result.iter().enumerate() {
         st(e, out.addr() + 4 * j as u32, *value);

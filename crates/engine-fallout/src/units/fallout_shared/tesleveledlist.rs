@@ -169,12 +169,116 @@ pub fn tes_leveled_list_init_item(e: &mut Engine, this: Ptr<TESLeveledList>, own
     });
 }
 
+/// The load-game buffer calls `LoadGame` makes: `00428110` (`thiscall`, one
+/// word: the address of a stack word; answers an object), `004280f0`
+/// (`thiscall` on that answer, one word: `0x80000000`; answers a byte),
+/// `BGSLoadGameBuffer::LoadVariableSizedValue` (`00864a60`),
+/// `BGSLoadGameBuffer::LoadFormID` (`008648a0`) and the read of `size`
+/// bytes into `data` (`00864980`, `thiscall (buffer, data, size)`).
+const BUFFER_00428110: u32 = 0x0042_8110;
+const BUFFER_004280F0: u32 = 0x0042_80f0;
+const BUFFER_LOAD_VARIABLE_SIZED_VALUE: u32 = 0x0086_4a60;
+const BUFFER_LOAD_FORM_ID: u32 = 0x0086_48a0;
+const BUFFER_READ: u32 = 0x0086_4980;
+/// `008256d0` (`thiscall`, answers a byte), asked of `ScriptAddedList`
+/// (+0x14); when it answers 0, `00487980` (`thiscall` on the leveled list).
+const LIST_008256D0: u32 = 0x0082_56d0;
+const LEVELED_LIST_00487980: u32 = 0x0048_7980;
+/// The allocator (`00401000`, `cdecl (size)`), the `ContainerItemExtra`
+/// constructor (`0040e690`, `thiscall`) and the setter `LoadGame` gives the
+/// loaded float (`0040eb90`, `thiscall`, one word).
+const ALLOCATE: u32 = 0x0040_1000;
+const CONTAINER_ITEM_EXTRA_CTOR: u32 = 0x0040_e690;
+const CONTAINER_ITEM_EXTRA_0040EB90: u32 = 0x0040_eb90;
+/// The double `-1.0` the loaded float is compared with (`0101a6b0`).
+const MINUS_ONE: u32 = 0x0101_a6b0;
+/// `00487a00` (`thiscall` on the leveled list, five words: the buffer's
+/// virtual slot `+4` answer, the two 16-bit values, the form and the extra).
+const LEVELED_LIST_00487A00: u32 = 0x0048_7a00;
+
+// Translated from 00488d70 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 00488d70 - the C++ exception frame (FS:[0], state for the ContainerItemExtra allocation) is not translated
+/// `TESLeveledList::LoadGame` (Xbox PDB): when the buffer's `004280f0`
+/// check passes, clears the script-added list unless `008256d0` says so,
+/// then reads a count (`LoadVariableSizedValue`) and that many entries: a
+/// form id (`LoadFormID`, looked up by `004839c0`), two 16-bit values and a
+/// float. For each entry whose form exists: unless the float equals the
+/// double at `0101a6b0` (-1.0; a NaN is not equal), a new
+/// `ContainerItemExtra` (0xC bytes, null when the allocation fails) gets the
+/// float (`0040eb90`, called even on null); then `00487a00` gets the
+/// buffer's slot `+4` answer, the 16-bit value read first, the second, the
+/// form and the extra (or null).
+pub fn tes_leveled_list_load_game(e: &mut Engine, this: Ptr<TESLeveledList>, buffer: Ptr) {
+    let ok = e.with_stack(4, |e, scratch| {
+        let object = e.call(BUFFER_00428110, &args![buffer, scratch]).u32();
+        e.call(BUFFER_004280F0, &args![object, 0x8000_0000u32]).u8()
+    });
+    if ok == 0 {
+        return;
+    }
+    // TESLeveledList::ScriptAddedList (Xbox PDB) +0x14.
+    if e.call(LIST_008256D0, &args![this.addr() + 0x14]).u8() == 0 {
+        e.call(LEVELED_LIST_00487980, &args![this]);
+    }
+    let count = e
+        .call(BUFFER_LOAD_VARIABLE_SIZED_VALUE, &args![buffer])
+        .u32();
+    let mut index = 0u32;
+    while index < count {
+        e.with_stack(0xc, |e, locals| {
+            // +0: the first 16-bit value, +4: the second, +8: the float.
+            let first = locals.addr();
+            let second = locals.addr() + 4;
+            let value = locals.addr() + 8;
+            e.mem.set_u16(second, 0);
+            e.mem.set_u16(first, 0);
+            e.mem.set_u32(value, 0);
+            let id = e.call(BUFFER_LOAD_FORM_ID, &args![buffer]).u32();
+            let form = e.call(0x0048_39c0, &args![id]).u32();
+            e.call(BUFFER_READ, &args![buffer, first, 2u32]);
+            e.call(BUFFER_READ, &args![buffer, second, 2u32]);
+            e.call(BUFFER_READ, &args![buffer, value, 4u32]);
+            if form == 0 {
+                return;
+            }
+            let mut extra = 0u32;
+            let bits = e.mem.u32(value);
+            if x87_load32(bits) != e.global::<f64>(MINUS_ONE) {
+                let block = e.call(ALLOCATE, &args![0xcu32]).u32();
+                extra = if block != 0 {
+                    e.call(CONTAINER_ITEM_EXTRA_CTOR, &args![block]).u32()
+                } else {
+                    0
+                };
+                e.call(
+                    CONTAINER_ITEM_EXTRA_0040EB90,
+                    &args![extra, x87_quiet_bits(bits)],
+                );
+            }
+            let answer = e.vcall(buffer.addr(), 4, &args![]).u32();
+            let first = u32::from(e.mem.u16(first));
+            let second = u32::from(e.mem.u16(second));
+            e.call(
+                LEVELED_LIST_00487A00,
+                &args![this, answer, first, second, form, extra],
+            );
+        });
+        index += 1;
+    }
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
-    vec![entry!(
-        0x0048_8570,
-        tes_leveled_list_init_item(Ptr<TESLeveledList>, Ptr)
-    )]
+    vec![
+        entry!(
+            0x0048_8570,
+            tes_leveled_list_init_item(Ptr<TESLeveledList>, Ptr)
+        ),
+        entry!(
+            0x0048_8d70,
+            tes_leveled_list_load_game(Ptr<TESLeveledList>, Ptr)
+        ),
+    ]
 }
 
 #[cfg(test)]
@@ -351,5 +455,133 @@ mod tests {
                 vec![MISSING_GLOBAL_NO_OWNER, 0x8100_0033]
             ]
         );
+    }
+}
+
+#[cfg(test)]
+mod n043_tests {
+    use super::*;
+
+    const BUFFER_VTABLE: u32 = 0x7200_0000;
+    const BUFFER_SLOT_4: u32 = 0x7200_1004;
+    /// The double's state: the next entry's index.
+    const STATE: u32 = 0x7300_0000;
+
+    fn calls(e: &Engine, addr: u32) -> Vec<Vec<u32>> {
+        e.call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|c| c.0 == addr)
+            .map(|c| c.1.clone())
+            .collect()
+    }
+
+    /// Entries: form ids 0x10, 0x11, 0x12 (0x11 finds no form); the 16-bit
+    /// values `0x100 + n` and `0x200 + n`; floats 2.5, -1.0, -1.0 (entry
+    /// two has no form), then a NaN in entry 0 when `nan` is set.
+    fn engine(check: u8, empty: u8, count: u32, nan: bool) -> (Engine, u32) {
+        let mut e = Engine::new();
+        e.map(0x0101_a000, 0x1000);
+        e.set_global(MINUS_ONE, -1.0f64);
+        e.map(STATE, 0x20);
+        e.map(BUFFER_VTABLE, 0x10);
+        e.mem.set_u32(BUFFER_VTABLE + 4, BUFFER_SLOT_4);
+        e.mem.set_u32(STATE + 4, u32::from(check));
+        e.mem.set_u32(STATE + 8, u32::from(empty));
+        e.mem
+            .set_u32(STATE + 0xc, count | if nan { 0x100 } else { 0 });
+        e.register(BUFFER_00428110, |_, a| (a[0] + 0x40).into_ret());
+        e.register(BUFFER_004280F0, |e, _| e.mem.u32(STATE + 4).into_ret());
+        e.register(LIST_008256D0, |e, _| e.mem.u32(STATE + 8).into_ret());
+        e.register(LEVELED_LIST_00487980, |_, _| Ret::default());
+        e.register(BUFFER_LOAD_VARIABLE_SIZED_VALUE, |e, _| {
+            (e.mem.u32(STATE + 0xc) & 0xff).into_ret()
+        });
+        e.register(BUFFER_LOAD_FORM_ID, |e, _| {
+            let n = e.mem.u32(STATE);
+            e.mem.set_u32(STATE, n + 1);
+            (0x10 + n).into_ret()
+        });
+        e.register(0x0048_39c0, |_, a| {
+            let form = if a[0] == 0x11 { 0 } else { a[0] + 0x5000 };
+            form.into_ret()
+        });
+        e.register(BUFFER_READ, |e, a| {
+            let n = e.mem.u32(STATE) - 1;
+            let nan = e.mem.u32(STATE + 0xc) & 0x100 != 0;
+            let k = e.mem.u32(STATE + 0x10);
+            e.mem.set_u32(STATE + 0x10, k + 1);
+            match k % 3 {
+                0 => e.mem.set_u16(a[1], 0x100 + n as u16),
+                1 => e.mem.set_u16(a[1], 0x200 + n as u16),
+                _ => {
+                    let bits = match (n, nan) {
+                        (0, true) => 0x7fa0_0000,
+                        (0, false) => 2.5f32.to_bits(),
+                        _ => (-1.0f32).to_bits(),
+                    };
+                    e.mem.set_u32(a[1], bits);
+                }
+            }
+            Ret::default()
+        });
+        e.register(ALLOCATE, |_, _| 0x6000u32.into_ret());
+        e.register(CONTAINER_ITEM_EXTRA_CTOR, |_, a| (a[0] + 1).into_ret());
+        e.register(CONTAINER_ITEM_EXTRA_0040EB90, |_, _| Ret::default());
+        e.register(BUFFER_SLOT_4, |_, _| 0x7777u32.into_ret());
+        e.register(LEVELED_LIST_00487A00, |_, _| Ret::default());
+        let buffer = e.mem.alloc(8);
+        e.mem.set_u32(buffer, BUFFER_VTABLE);
+        (e, buffer)
+    }
+
+    #[test]
+    fn load_game_reads_every_entry() {
+        let (mut e, buffer) = engine(1, 0, 3, false);
+        let this = e.mem.alloc(0x1c);
+        e.call_log = Some(vec![]);
+        e.call(0x0048_8d70, &args![this, buffer]);
+        assert_eq!(
+            calls(&e, BUFFER_004280F0)[0],
+            vec![buffer + 0x40, 0x8000_0000]
+        );
+        assert_eq!(calls(&e, LIST_008256D0), vec![vec![this + 0x14]]);
+        assert_eq!(calls(&e, LEVELED_LIST_00487980), vec![vec![this]]);
+        assert_eq!(calls(&e, BUFFER_READ).len(), 9);
+        // Entry 0: 2.5 makes an extra; entry 1 has no form; entry 2's -1.0
+        // makes none.
+        assert_eq!(calls(&e, ALLOCATE), vec![vec![0xc]]);
+        assert_eq!(
+            calls(&e, CONTAINER_ITEM_EXTRA_0040EB90),
+            vec![vec![0x6001, 2.5f32.to_bits()]]
+        );
+        let added = calls(&e, LEVELED_LIST_00487A00);
+        assert_eq!(added.len(), 2);
+        assert_eq!(added[0], vec![this, 0x7777, 0x100, 0x200, 0x5010, 0x6001]);
+        assert_eq!(added[1], vec![this, 0x7777, 0x102, 0x202, 0x5012, 0]);
+    }
+
+    #[test]
+    fn load_game_nan_failed_allocation_and_early_exit() {
+        let (mut e, buffer) = engine(1, 1, 1, true);
+        e.register(ALLOCATE, |_, _| 0u32.into_ret());
+        let this = e.mem.alloc(0x1c);
+        e.call_log = Some(vec![]);
+        e.call(0x0048_8d70, &args![this, buffer]);
+        // The list is not cleared; the NaN is not -1.0: the setter runs on null.
+        assert!(calls(&e, LEVELED_LIST_00487980).is_empty());
+        assert!(calls(&e, CONTAINER_ITEM_EXTRA_CTOR).is_empty());
+        assert_eq!(
+            calls(&e, CONTAINER_ITEM_EXTRA_0040EB90),
+            vec![vec![0, 0x7fe0_0000]]
+        );
+        assert_eq!(calls(&e, LEVELED_LIST_00487A00)[0][5], 0);
+        // The check fails: nothing is read.
+        let (mut e, buffer) = engine(0, 0, 3, false);
+        e.call_log = Some(vec![]);
+        e.call(0x0048_8d70, &args![this, buffer]);
+        assert!(calls(&e, LIST_008256D0).is_empty());
+        assert!(calls(&e, BUFFER_LOAD_VARIABLE_SIZED_VALUE).is_empty());
     }
 }

@@ -992,9 +992,21 @@ pub fn fn_00bb4740(
     e.mem.u32(base + PASSES)
 }
 
+// Translated from 00bb4520 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed: the default constructor of the `010b9910` class (`thiscall`, no stack words):
+/// the `BSShaderPPLightingProperty` constructor, the vtable, then the pass at +0x100
+/// cleared. Returns `this`.
+pub fn fn_00bb4520(e: &mut Engine, this: Ptr) -> Ptr {
+    e.call(PP_LIGHTING_CONSTRUCTOR, &args![this]);
+    e.mem.set_u32(this.addr(), VTABLE_010B9910);
+    e.mem.set_u32(this.addr() + OWN_PASS, 0);
+    this
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x00bb_4520, fn_00bb4520(Ptr) -> Ptr),
         entry!(0x00bb_4540, fn_00bb4540(Ptr, u32) -> Ptr),
         entry!(0x00bb_4650, fn_00bb4650(Ptr, u32) -> Ptr),
         entry!(0x00bb_4680, fn_00bb4680(Ptr, Ptr) -> Ptr),
@@ -1523,5 +1535,21 @@ mod tests {
             calls_to(&e, PP_LIGHTING_COPY_MEMBERS),
             vec![vec![this.addr(), clone, 0x6000]]
         );
+    }
+
+    #[test]
+    fn default_constructor_sets_the_vtable_and_clears_the_pass() {
+        let mut e = Engine::new();
+        e.register(PP_LIGHTING_CONSTRUCTOR, |e, a| {
+            e.mem.set_u32(a[0], 0x1234);
+            a[0].into_ret()
+        });
+        let this = e.mem.alloc(0x108);
+        e.mem.set_u32(this + OWN_PASS, 0x77);
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x00bb_4520, &args![this]).u32(), this);
+        assert_eq!(calls_to(&e, PP_LIGHTING_CONSTRUCTOR), vec![vec![this]]);
+        assert_eq!(e.mem.u32(this), VTABLE_010B9910);
+        assert_eq!(e.mem.u32(this + OWN_PASS), 0);
     }
 }

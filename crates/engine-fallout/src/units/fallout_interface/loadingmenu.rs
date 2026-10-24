@@ -1169,9 +1169,13 @@ pub fn loading_menu_create_impl(e: &mut Engine, this: Ptr<LoadingMenu>, location
         e.vcall(replaced, 0, &args![1u32]);
     }
     e.set(this, LoadingMenu::pLocation, Ptr::new(location));
-    let value_owner = e.mem.u32(VALUE_OWNER);
-    let value = e.call(VALUE_GETTER, &args![value_owner]).f32() as f64;
-    if e.mem.u8(INITIAL_LOAD) != 0 || value != e.global::<f64>(ZERO) {
+    // 00789222: the value is read only when the initial-load byte is clear (JNZ past it).
+    let hide_all = e.mem.u8(INITIAL_LOAD) != 0 || {
+        let value_owner = e.mem.u32(VALUE_OWNER);
+        let value = e.call(VALUE_GETTER, &args![value_owner]).f32() as f64;
+        value != e.global::<f64>(ZERO)
+    };
+    if hide_all {
         e.call(HIDE_ALL_BUT, &args![this, 0u32, 0u32]);
     } else if e.mem.u8(MENU_REPLACED) != 0 || overlay_active(e) {
         fn_0078afa0(e, this, 0);
@@ -4351,6 +4355,17 @@ mod tests {
         assert_eq!(r.e.get(menu, LoadingMenu::pLocation).addr(), 0x44);
         // No slide setup: the list was not rebuilt.
         assert!(r.calls_to(CANDIDATES_RESET).is_empty());
+    }
+
+    #[test]
+    fn create_on_the_initial_load_does_not_read_the_value() {
+        let (mut r, menu) = impl_world();
+        r.e.mem.set_u8(INITIAL_LOAD, 1);
+        loading_menu_create_impl(&mut r.e, menu, 0x44);
+        assert!(
+            r.calls_to(VALUE_GETTER).is_empty(),
+            "00789222 jumps past it"
+        );
     }
 
     #[test]

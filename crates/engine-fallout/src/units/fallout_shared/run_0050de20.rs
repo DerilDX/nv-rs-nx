@@ -445,9 +445,102 @@ pub fn fn_0050e6c0(e: &mut Engine) -> bool {
     true
 }
 
+// Translated from 0050e4b0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No map name: when `0046f070` on `this` returns a non-zero byte, passes
+/// the five stack words on to `0050f670` on `this` (the third as its byte,
+/// `MOVZX`) and returns its byte; otherwise returns false. `RET 0x14`.
+pub fn fn_0050e4b0(
+    e: &mut Engine,
+    this: Ptr,
+    first: u32,
+    second: u32,
+    flag: u8,
+    fourth: u32,
+    fifth: u32,
+) -> bool {
+    if !e.call(0x0046_f070, &args![this]).bool() {
+        return false;
+    }
+    e.call(
+        0x0050_f670,
+        &args![this, first, second, u32::from(flag), fourth, fifth],
+    )
+    .bool()
+}
+
+// Translated from 0050e4f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No map name (a save-size sum): the 16-bit sum of `00484bf0` on `this`
+/// and `0048e9b0` on `this + 0x8C`, each given `argument`. `RET 4`.
+pub fn fn_0050e4f0(e: &mut Engine, this: Ptr, argument: u32) -> u16 {
+    let mut size: u16 = 0;
+    size = size.wrapping_add(e.call(0x0048_4bf0, &args![this, argument]).u16());
+    let component = this.addr().wrapping_add(0x8c);
+    size.wrapping_add(e.call(0x0048_e9b0, &args![component, argument]).u16())
+}
+
+// Translated from 0050e550 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No map name: `00484c20` on `this`, then `0048e9e0` on `this + 0x8C`,
+/// each given `argument`. `RET 4`.
+pub fn fn_0050e550(e: &mut Engine, this: Ptr, argument: u32) {
+    e.call(0x0048_4c20, &args![this, argument]);
+    let component = this.addr().wrapping_add(0x8c);
+    e.call(0x0048_e9e0, &args![component, argument]);
+}
+
+// Translated from 0050e580 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No map name: `00484c50` on `this`, then `0048ea10` on `this + 0x8C`,
+/// each given both stack words. `RET 8`.
+pub fn fn_0050e580(e: &mut Engine, this: Ptr, first: u32, second: u32) {
+    e.call(0x0048_4c50, &args![this, first, second]);
+    let component = this.addr().wrapping_add(0x8c);
+    e.call(0x0048_ea10, &args![component, first, second]);
+}
+
+// Translated from 0050e5c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No map name: `00484d60` on `this`, then `0048ea40` on `this + 0x8C`,
+/// each given `argument`. `RET 4`.
+pub fn fn_0050e5c0(e: &mut Engine, this: Ptr, argument: u32) {
+    e.call(0x0048_4d60, &args![this, argument]);
+    let component = this.addr().wrapping_add(0x8c);
+    e.call(0x0048_ea40, &args![component, argument]);
+}
+
+// Translated from 0050e5f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No map name: `00484da0` on `this`, then `0048ea80` on `this + 0x8C`,
+/// each given `argument`. `RET 4`.
+pub fn fn_0050e5f0(e: &mut Engine, this: Ptr, argument: u32) {
+    e.call(0x0048_4da0, &args![this, argument]);
+    let component = this.addr().wrapping_add(0x8c);
+    e.call(0x0048_ea80, &args![component, argument]);
+}
+
+// Translated from 0050e680 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Thunk: moves `this` back by 0x8C (`SUB ECX,0x8c`) and jumps to
+/// `0050e4f0`, passing its stack word on.
+pub fn fn_0050e680(e: &mut Engine, this: Ptr, argument: u32) -> u16 {
+    fn_0050e4f0(e, Ptr::new(this.addr().wrapping_sub(0x8c)), argument)
+}
+
+// Translated from 0050e690 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Thunk: moves `this` back by 0x3C (`SUB ECX,0x3c`) and jumps to the
+/// scalar deleting destructor `0050c840`, passing its stack word (the
+/// flags) on; returns what it returns.
+pub fn fn_0050e690(e: &mut Engine, this: Ptr, flags: u32) -> u32 {
+    let base = this.addr().wrapping_sub(0x3c);
+    e.call(0x0050_c840, &args![base, flags]).u32()
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x0050_e4b0, fn_0050e4b0(Ptr, u32, u32, u8, u32, u32) -> bool),
+        entry!(0x0050_e4f0, fn_0050e4f0(Ptr, u32) -> u16),
+        entry!(0x0050_e550, fn_0050e550(Ptr, u32)),
+        entry!(0x0050_e580, fn_0050e580(Ptr, u32, u32)),
+        entry!(0x0050_e5c0, fn_0050e5c0(Ptr, u32)),
+        entry!(0x0050_e5f0, fn_0050e5f0(Ptr, u32)),
+        entry!(0x0050_e680, fn_0050e680(Ptr, u32) -> u16),
+        entry!(0x0050_e690, fn_0050e690(Ptr, u32) -> u32),
         entry!(0x0050_e6a0, fn_0050e6a0(Ptr, u32, u32)),
         entry!(0x0050_e6b0, fn_0050e6b0(Ptr, u32)),
         entry!(0x0050de20, fn_0050de20(Ptr, u32, u32) -> bool),
@@ -850,5 +943,116 @@ mod light_update_tests {
         e.mem.set_u8(MODE_SETTING_FOUR + 4, 1);
         e.call(0x0050_e6c0, &[]);
         assert_eq!(e.mem.u8(LIGHT_MODE_BITS), 5);
+    }
+}
+
+#[cfg(test)]
+mod n040_tests {
+    use super::*;
+
+    fn calls_to(e: &mut Engine, targets: &[u32]) -> Vec<(u32, Vec<u32>)> {
+        e.call_log
+            .take()
+            .unwrap()
+            .into_iter()
+            .filter(|(a, _)| targets.contains(a))
+            .collect()
+    }
+
+    #[test]
+    fn fn_0050e4b0_forwards_only_when_the_check_passes() {
+        let mut e = Engine::new();
+        e.register(0x0046_f070, |e, a| Ret {
+            eax: e.mem.u32(a[0]) | 0x100,
+            ..Ret::default()
+        });
+        e.register(0x0050_f670, |_, _| Ret {
+            eax: 0xffff_ff01,
+            ..Ret::default()
+        });
+        let this = e.mem.alloc(8);
+        e.call_log = Some(vec![]);
+        let result = e.call(0x0050_e4b0, &[this, 1, 2, 0xffff_ff03, 4, 5]);
+        assert!(!result.bool());
+        assert!(calls_to(&mut e, &[0x0050_f670]).is_empty());
+        e.mem.set_u32(this, 1);
+        e.call_log = Some(vec![]);
+        let result = e.call(0x0050_e4b0, &[this, 1, 2, 0xffff_ff03, 4, 5]);
+        assert!(result.bool());
+        assert_eq!(
+            calls_to(&mut e, &[0x0050_f670]),
+            vec![(0x0050_f670, vec![this, 1, 2, 3, 4, 5])]
+        );
+    }
+
+    #[test]
+    fn fn_0050e4f0_sums_both_sizes_in_16_bits() {
+        let mut e = Engine::new();
+        e.register(0x0048_4bf0, |_, _| Ret {
+            eax: 0x1_fff0,
+            ..Ret::default()
+        });
+        e.register(0x0048_e9b0, |_, _| Ret {
+            eax: 0x20,
+            ..Ret::default()
+        });
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x0050_e4f0, &[0x1000, 7]).u16(), 0x10);
+        assert_eq!(
+            calls_to(&mut e, &[0x0048_4bf0, 0x0048_e9b0]),
+            vec![
+                (0x0048_4bf0, vec![0x1000, 7]),
+                (0x0048_e9b0, vec![0x108c, 7])
+            ]
+        );
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x0050_e680, &[0x108c, 9]).u16(), 0x10);
+        assert_eq!(
+            calls_to(&mut e, &[0x0048_4bf0, 0x0048_e9b0]),
+            vec![
+                (0x0048_4bf0, vec![0x1000, 9]),
+                (0x0048_e9b0, vec![0x108c, 9])
+            ]
+        );
+    }
+
+    #[test]
+    fn fn_0050e550_and_friends_run_form_then_component() {
+        let cases: [(u32, u32, u32, &[u32]); 4] = [
+            (0x0050_e550, 0x0048_4c20, 0x0048_e9e0, &[7]),
+            (0x0050_e580, 0x0048_4c50, 0x0048_ea10, &[7, 8]),
+            (0x0050_e5c0, 0x0048_4d60, 0x0048_ea40, &[7]),
+            (0x0050_e5f0, 0x0048_4da0, 0x0048_ea80, &[7]),
+        ];
+        for (addr, form, component, extra) in cases {
+            let mut e = Engine::new();
+            e.register(form, |_, _| Ret::default());
+            e.register(component, |_, _| Ret::default());
+            let mut words = vec![0x1000];
+            words.extend_from_slice(extra);
+            e.call_log = Some(vec![]);
+            e.call(addr, &words);
+            let mut moved = vec![0x108c];
+            moved.extend_from_slice(extra);
+            assert_eq!(
+                calls_to(&mut e, &[form, component]),
+                vec![(form, words.clone()), (component, moved)]
+            );
+        }
+    }
+
+    #[test]
+    fn fn_0050e690_moves_this_back_to_the_destructor() {
+        let mut e = Engine::new();
+        e.register(0x0050_c840, |_, a| Ret {
+            eax: a[0],
+            ..Ret::default()
+        });
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x0050_e690, &[0x203c, 1]).u32(), 0x2000);
+        assert_eq!(
+            calls_to(&mut e, &[0x0050_c840]),
+            vec![(0x0050_c840, vec![0x2000, 1])]
+        );
     }
 }

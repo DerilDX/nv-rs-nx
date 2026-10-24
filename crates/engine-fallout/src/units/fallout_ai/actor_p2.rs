@@ -1238,7 +1238,7 @@ pub fn fn_00885490(e: &mut Engine, this: Ptr<HighProcess>) -> f32 {
 // Translated from 008854b0 (decompiled, FalloutNV.exe 1.4.0.525)
 /// Writes `HighProcess::fCachedActorHeight` (Xbox PDB).
 pub fn fn_008854b0(e: &mut Engine, this: Ptr<HighProcess>, height: f32) {
-    e.set(this, HighProcess::fCachedActorHeight, height);
+    e.set(this, HighProcess::fCachedActorHeight, x87_quiet(height));
 }
 
 // Translated from 008854d0 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -3124,8 +3124,8 @@ pub fn fn_00888970(e: &mut Engine, this: Ptr<Actor>, _unused_1: u32) {
 // Translated from 00888a20 (decompiled, FalloutNV.exe 1.4.0.525)
 /// Stores two floats at `+0x150` and `+0x154`.
 pub fn fn_00888a20(e: &mut Engine, this: Ptr, first: f32, second: f32) {
-    e.mem.set_f32(this.addr() + 0x150, first);
-    e.mem.set_f32(this.addr() + 0x154, second);
+    e.mem.set_f32(this.addr() + 0x150, x87_quiet(first));
+    e.mem.set_f32(this.addr() + 0x154, x87_quiet(second));
 }
 
 // Translated from 00888a50 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -4402,7 +4402,7 @@ pub fn fn_0088b070(e: &mut Engine, this: Ptr, flag: Ptr) {
 // Translated from 0088b110 (decompiled, FalloutNV.exe 1.4.0.525)
 /// Stores the `float` at `+0x560`.
 pub fn fn_0088b110(e: &mut Engine, this: Ptr, value: f32) {
-    e.mem.set_f32(this.addr() + 0x560, value);
+    e.mem.set_f32(this.addr() + 0x560, x87_quiet(value));
 }
 
 // Translated from 0088b130 (decompiled, FalloutNV.exe 1.4.0.525)

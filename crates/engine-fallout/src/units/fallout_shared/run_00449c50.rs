@@ -29,9 +29,34 @@ pub fn fn_00449c50(e: &mut Engine, this: Ptr) {
     e.call(BASE_DESTRUCTOR_0044C1E0, &args![this]);
 }
 
+/// `0044ddc0` (`thiscall`, no stack word): the word at `this` (here the
+/// table's bucket count).
+const BUCKET_COUNT: u32 = 0x0044_ddc0;
+
+// Translated from 00449cb0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The bucket of a string key (`thiscall`, `RET 4`; the engine map gives it
+/// no name): the hash `h = h * 33 + c` over the key's characters (each a
+/// signed byte, in 32-bit wrapping arithmetic) modulo the bucket count
+/// (`0044ddc0` on `this`; an unsigned `DIV`, which faults on a count of 0).
+pub fn fn_00449cb0(e: &mut Engine, this: Ptr, key: u32) -> u32 {
+    let mut hash = 0u32;
+    let mut at = key;
+    loop {
+        let c = e.mem.i8(at);
+        if c == 0 {
+            break;
+        }
+        hash = (hash << 5).wrapping_add(hash).wrapping_add(c as i32 as u32);
+        at = at.wrapping_add(1);
+    }
+    let count = e.call(BUCKET_COUNT, &args![this]).u32();
+    hash % count
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x0044_9cb0, fn_00449cb0(Ptr, u32) -> u32),
         entry!(0x0044_9d10, fn_00449d10(Ptr, u32) -> Ptr),
         entry!(0x0044_9c50, fn_00449c50(Ptr)),
     ]
@@ -88,5 +113,35 @@ mod tests_b043 {
             ]
         );
         assert_eq!(e.mem.u32(this), 0x0101_72dc);
+    }
+}
+
+#[cfg(test)]
+mod n038_tests {
+    use super::*;
+
+    #[test]
+    fn at_00449cb0_hashes_signed_characters_modulo_the_count() {
+        let mut e = Engine::new();
+        e.register(BUCKET_COUNT, |e, a| Ret {
+            eax: e.mem.u32(a[0]),
+            ..Ret::default()
+        });
+        let this = e.mem.alloc(4);
+        e.mem.set_u32(this, 1000);
+        let key = e.mem.alloc(8);
+        e.mem.set_cstr(key, b"ab");
+        // ((0 * 33 + 97) * 33 + 98) % 1000 = 3299 % 1000.
+        assert_eq!(e.call(0x0044_9cb0, &args![this, key]).u32(), 299);
+        // A byte above 0x7f counts as negative: 0 * 33 - 1 wraps.
+        e.mem.set_cstr(key, &[0xff]);
+        e.mem.set_u32(this, 7);
+        assert_eq!(
+            e.call(0x0044_9cb0, &args![this, key]).u32(),
+            0xffff_ffff % 7
+        );
+        // The empty key is bucket 0.
+        e.mem.set_cstr(key, b"");
+        assert_eq!(e.call(0x0044_9cb0, &args![this, key]).u32(), 0);
     }
 }

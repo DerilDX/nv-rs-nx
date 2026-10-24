@@ -1220,9 +1220,442 @@ pub fn fn_007fc8d0(e: &mut Engine, this: Ptr<FORenderedMenu>) {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Batch n051
+
+/// `FORenderedMenu::FORenderedMenu` (`007faa20`), the `FORenderedTerminal` vtable
+/// (`0106ebe4`) and the `NiPointer` constructor (`00633c90`, `RET 4`).
+const RENDERED_MENU_CONSTRUCT: u32 = 0x007f_aa20;
+const RENDERED_TERMINAL_VTABLE: u32 = 0x0106_ebe4;
+/// The vertical hold's speed scale (`01016978`, a `double`) and the shudder a finished
+/// vertical hold starts: its duration (`0101b2d0`) and intensity and frequency
+/// (`010181bc`).
+const VERT_HOLD_SPEED_SCALE: u32 = 0x0101_6978;
+const SHUDDER_DURATION_0101B2D0: u32 = 0x0101_b2d0;
+const SHUDDER_VALUE_010181BC: u32 = 0x0101_81bc;
+/// The distortion settings: its length (`011db520`) and the random part of the next
+/// distortion time (`011db4f8`, an integer); `rand` (`00ecadb8`).
+const DISTORT_LENGTH_SETTING: u32 = 0x011d_b520;
+const DISTORT_INTERVAL_SETTING: u32 = 0x011d_b4f8;
+const SETTING_INT_VALUE: u32 = 0x0043_d4d0;
+const RAND: u32 = 0x00ec_adb8;
+/// `00404040` (cdecl, a `float`, `ST0`): the whole part the vertical hold wraps by.
+const WRAP_00404040: u32 = 0x0040_4040;
+/// `1.0` and `0.0` (`double`s) and `-1.0` (a `float`).
+const ONE_DOUBLE: u32 = 0x0101_2070;
+const ZERO_DOUBLE: u32 = 0x0101_2060;
+const MINUS_ONE_FLOAT: u32 = 0x0101_2054;
+/// The effect parameters `DoEffect` hands the image-space shader (statics; their names
+/// are not confirmed): the blur radius and intensity (`011ae5e8`, `011ae5ec`), the
+/// scanline scale (`011ae5f0`), the height (`011ae5f4`), the distortion setting
+/// (`011ae5f8`), the vertical offset (`012007e8`), the third `DoEffect` word
+/// (`012007ec`), the distortion length and position (`012007f0`, `012007f4`), its flag
+/// (`012007f8`), the tint color (`01200800`, four words) and two texture pointers
+/// (`01200810`, `01200818`).
+const EFFECT_BLUR_RADIUS: u32 = 0x011a_e5e8;
+const EFFECT_BLUR_INTENSITY: u32 = 0x011a_e5ec;
+const EFFECT_SCANLINE_SCALE: u32 = 0x011a_e5f0;
+const EFFECT_HEIGHT: u32 = 0x011a_e5f4;
+const EFFECT_DISTORT_SETTING: u32 = 0x011a_e5f8;
+const EFFECT_VERTICAL_OFFSET: u32 = 0x0120_07e8;
+const EFFECT_THIRD_012007EC: u32 = 0x0120_07ec;
+const EFFECT_DISTORT_LENGTH: u32 = 0x0120_07f0;
+const EFFECT_DISTORT_POSITION: u32 = 0x0120_07f4;
+const EFFECT_DISTORT_FLAG: u32 = 0x0120_07f8;
+const EFFECT_TINT: u32 = 0x0120_0800;
+const EFFECT_SCANLINES_POINTER: u32 = 0x0120_0810;
+const EFFECT_TEXTURE_POINTER: u32 = 0x0120_0818;
+/// The distortion setting `DoEffect` copies (`011db464`).
+const DISTORT_EFFECT_SETTING: u32 = 0x011d_b464;
+/// `NiPointer` assignment from a pointer (`006e5cc0`, `RET 4`; the map's folded name),
+/// `BSRenderedTexture::GetTexture` (`004bc320`, `RET 4`),
+/// `InterfaceManager::GetMenuHeight` (`00717860`, `ST0`), the tile float getter
+/// (`00a011b0`, `RET 4`), `ImageSpaceManager::CreatePartialScreenGeometry` (`00b8c3b0`,
+/// `RET 0xc`) and the image-space effect render (`00b97550`, `RET 0x18`).
+const POINTER_ASSIGN_006E5CC0: u32 = 0x006e_5cc0;
+const RENDERED_TEXTURE_GET_TEXTURE: u32 = 0x004b_c320;
+const GET_MENU_HEIGHT: u32 = 0x0071_7860;
+const TILE_GET_FLOAT: u32 = 0x00a0_11b0;
+const CREATE_PARTIAL_SCREEN_GEOMETRY: u32 = 0x00b8_c3b0;
+const IMAGE_SPACE_RENDER_00B97550: u32 = 0x00b9_7550;
+
+// Translated from 00705fe0 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 00705fe0 - the C++ exception-unwinding frame (FS:[0] around the base) is not translated.
+/// `FORenderedMenu::FORenderedMenu` in the engine map, by its body the
+/// `FORenderedTerminal` constructor: the `FORenderedMenu` base (`007faa20`), the
+/// `FORenderedTerminal` vtable `0106ebe4`, `OriginalPos` (+0xd8, `006815c0`) and
+/// `spExitButton` (+0xe4, `NiPointer` with 0). Returns `this`.
+pub fn fn_00705fe0(e: &mut Engine, this: Ptr<FORenderedMenu>) -> Ptr<FORenderedMenu> {
+    e.call(RENDERED_MENU_CONSTRUCT, &args![this]);
+    e.mem.set_u32(this.addr(), RENDERED_TERMINAL_VTABLE);
+    e.call(POINT_INIT_006815C0, &args![this.addr() + 0xd8]);
+    e.call(POINTER_INIT, &args![this.addr() + 0xe4, 0u32]);
+    this
+}
+
+// Translated from 007faef0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed (`thiscall`): `bMenuRendering` (+0xb9), in `AL`.
+pub fn fn_007faef0(e: &mut Engine, this: Ptr<FORenderedMenu>) -> u8 {
+    e.get(this, FORenderedMenu::bMenuRendering)
+}
+
+// Translated from 007fb250 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed (`thiscall`, `RET 8`: two `float`s; starts a vertical hold): sets
+/// `bVertHoldActive`, `fVertHoldDuration` (+0x68) to the first, `fVertHoldSpeed` (+0x6c)
+/// to the second times the `double` at `01016978`, `fVertHoldStartTime` (+0x64) to now
+/// in milliseconds and `fVertHoldCurrentPosition` (+0x70) to 0.
+pub fn fn_007fb250(e: &mut Engine, this: Ptr<FORenderedMenu>, duration: f32, speed: f32) {
+    let base = this.addr();
+    e.set(this, FORenderedMenu::bVertHoldActive, 1);
+    e.mem
+        .set_u32(base + 0x68, x87_quiet_bits(duration.to_bits()));
+    let scale: f64 = e.global(VERT_HOLD_SPEED_SCALE);
+    e.mem.set_u32(
+        base + 0x6c,
+        x87_store32(x87_mul(x87_load32(speed.to_bits()), scale)),
+    );
+    let now = now_milliseconds(e);
+    e.mem.set_u32(base + 0x64, now);
+    e.mem.set_u32(base + 0x70, x87_store32(0.0));
+}
+
+// Translated from 007fb2b0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed (`thiscall`, `RET 0xc`: three `float`s; starts a shudder): sets
+/// `bShudderActive`, `fShudderDuration` (+0x7c), `fShudderIntensity` (+0x80),
+/// `fShudderFrequency` (+0x84), `fShudderStartTime` (+0x78) to now in milliseconds and
+/// `fShudderCurrentPosition` (+0x88) to 0.
+pub fn fn_007fb2b0(
+    e: &mut Engine,
+    this: Ptr<FORenderedMenu>,
+    duration: f32,
+    intensity: f32,
+    frequency: f32,
+) {
+    let base = this.addr();
+    e.set(this, FORenderedMenu::bShudderActive, 1);
+    e.mem
+        .set_u32(base + 0x7c, x87_quiet_bits(duration.to_bits()));
+    e.mem
+        .set_u32(base + 0x80, x87_quiet_bits(intensity.to_bits()));
+    e.mem
+        .set_u32(base + 0x84, x87_quiet_bits(frequency.to_bits()));
+    let now = now_milliseconds(e);
+    e.mem.set_u32(base + 0x78, now);
+    e.mem.set_u32(base + 0x88, x87_store32(0.0));
+}
+
+// Translated from 007fb310 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed (`thiscall`, `RET 4`: the time; the distortion update, slot +0x4c by its place
+/// in `OnIdle`): `fDistortPosition` (+0x9c) is the time since `fDistortStartTime` over
+/// `fDistortDuration` (+0xa0); past the setting at `011db520` plus 1.0 the distortion
+/// stops and `fNextDistortTime` becomes the time plus `rand() %` the setting at
+/// `011db4f8`.
+pub fn fn_007fb310(e: &mut Engine, this: Ptr<FORenderedMenu>, time: f32) {
+    let base = this.addr();
+    let elapsed = x87_store32(x87_sub(
+        x87_load32(time.to_bits()),
+        x87_m32(e.mem.u32(base + 0x98)),
+    ));
+    e.mem.set_u32(
+        base + 0x9c,
+        x87_store32(x87_div(
+            x87_load32(elapsed),
+            x87_m32(e.mem.u32(base + 0xa0)),
+        )),
+    );
+    let length = setting_float(e, DISTORT_LENGTH_SETTING);
+    let limit = x87_add(length, e.global::<f64>(ONE_DOUBLE));
+    let position = x87_load32(e.mem.u32(base + 0x9c));
+    // FCOMPP (position against the limit); TEST AH,0x41; JNZ: only when above it.
+    if position > limit {
+        e.set(this, FORenderedMenu::bDistortActive, 0);
+        let random = e.call(RAND, &args![]).i32();
+        let interval = e
+            .call(SETTING_INT_VALUE, &args![DISTORT_INTERVAL_SETTING])
+            .u32();
+        let part = random.wrapping_rem(e.mem.i32(interval));
+        e.mem.set_u32(
+            base + 0xa4,
+            x87_store32(x87_add(f64::from(part), x87_m32(time.to_bits()))),
+        );
+    }
+}
+
+// Translated from 007fb3a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed (`thiscall`, `RET 4`: the time; the shudder update, slot +0x40): past
+/// `fShudderDuration` the shudder stops; otherwise `fShudderCurrentPosition` (+0x88) is
+/// `004e44d0(elapsed * frequency) * intensity * (1 - elapsed / duration)`.
+pub fn fn_007fb3a0(e: &mut Engine, this: Ptr<FORenderedMenu>, time: f32) {
+    let base = this.addr();
+    let elapsed = x87_store32(x87_sub(
+        x87_load32(time.to_bits()),
+        x87_m32(e.mem.u32(base + 0x78)),
+    ));
+    let duration = x87_load32(e.mem.u32(base + 0x7c));
+    // FCOMPP (duration against elapsed); TEST AH,5; JP: stops when the duration is below.
+    if duration < x87_load32(elapsed) {
+        e.set(this, FORenderedMenu::bShudderActive, 0);
+        return;
+    }
+    let left = x87_store32(x87_sub(
+        1.0,
+        x87_div(x87_load32(elapsed), x87_m32(e.mem.u32(base + 0x7c))),
+    ));
+    let phase = x87_store32(x87_mul(
+        x87_load32(elapsed),
+        x87_m32(e.mem.u32(base + 0x84)),
+    ));
+    let wave = e
+        .call(FLOAT_FUNCTION_004E44D0, &args![x87_quiet_bits(phase)])
+        .f64();
+    let value = x87_mul(wave, x87_m32(e.mem.u32(base + 0x80)));
+    e.mem
+        .set_u32(base + 0x88, x87_store32(x87_mul(value, x87_m32(left))));
+}
+
+// Translated from 007fb420 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed (`thiscall`, `RET 4`: the time; the burst update, slot +0x38): past
+/// `fBurstDuration` the burst stops; otherwise `fBurstCurrentIntensity` is
+/// `fBurstMaximumIntensity * (1 - elapsed / duration)`.
+pub fn fn_007fb420(e: &mut Engine, this: Ptr<FORenderedMenu>, time: f32) {
+    let base = this.addr();
+    let elapsed = x87_store32(x87_sub(
+        x87_load32(time.to_bits()),
+        x87_m32(e.mem.u32(base + 0x50)),
+    ));
+    let duration = x87_load32(e.mem.u32(base + 0x54));
+    // FCOMPP (duration against elapsed); TEST AH,5; JP: stops when the duration is below.
+    if duration < x87_load32(elapsed) {
+        e.set(this, FORenderedMenu::bBurstActive, 0);
+        return;
+    }
+    let left = x87_store32(x87_sub(
+        1.0,
+        x87_div(x87_load32(elapsed), x87_m32(e.mem.u32(base + 0x54))),
+    ));
+    e.mem.set_u32(
+        base + 0x5c,
+        x87_store32(x87_mul(x87_load32(e.mem.u32(base + 0x58)), x87_m32(left))),
+    );
+}
+
+// Translated from 007fb480 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed (`thiscall`, `RET 4`: the time; the vertical hold update, slot +0x3c): past
+/// `fVertHoldDuration` the hold stops and a shudder starts (`007fb2b0` with the floats at
+/// `0101b2d0`, `010181bc`, `010181bc`); otherwise `fVertHoldCurrentPosition` is the
+/// elapsed time times `fVertHoldSpeed`, wrapped into [0, 1) (less `00404040` of it) when
+/// at least 1.0 or below 0.0.
+pub fn fn_007fb480(e: &mut Engine, this: Ptr<FORenderedMenu>, time: f32) {
+    let base = this.addr();
+    let elapsed = x87_store32(x87_sub(
+        x87_load32(time.to_bits()),
+        x87_m32(e.mem.u32(base + 0x64)),
+    ));
+    let duration = x87_load32(e.mem.u32(base + 0x68));
+    if duration < x87_load32(elapsed) {
+        e.set(this, FORenderedMenu::bVertHoldActive, 0);
+        let length = f32::from_bits(x87_quiet_bits(e.global::<u32>(SHUDDER_DURATION_0101B2D0)));
+        let value = f32::from_bits(x87_quiet_bits(e.global::<u32>(SHUDDER_VALUE_010181BC)));
+        fn_007fb2b0(e, this, length, value, value);
+        return;
+    }
+    e.mem.set_u32(
+        base + 0x70,
+        x87_store32(x87_mul(
+            x87_load32(elapsed),
+            x87_m32(e.mem.u32(base + 0x6c)),
+        )),
+    );
+    let position = x87_load32(e.mem.u32(base + 0x70));
+    // FCOMP 1.0; TEST AH,1; JZ: wraps at 1.0 and above; else FCOMP 0.0; TEST AH,5; JP:
+    // wraps below 0.0 (neither for NaN).
+    let wraps = position >= e.global::<f64>(ONE_DOUBLE) || position < e.global::<f64>(ZERO_DOUBLE);
+    if wraps {
+        let whole = e
+            .call(
+                WRAP_00404040,
+                &args![x87_quiet_bits(e.mem.u32(base + 0x70))],
+            )
+            .f64();
+        e.mem.set_u32(
+            base + 0x70,
+            x87_store32(x87_sub(x87_m32(e.mem.u32(base + 0x70)), whole)),
+        );
+    }
+}
+
+// Translated from 007fb730 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed (`thiscall` on an `NiColor`, `RET 8`: the result and the other color): the
+/// component-wise sum (each an `FLD`/`FADD`/`FSTP` of `float`s) written to the result,
+/// which is returned.
+pub fn fn_007fb730(e: &mut Engine, this: u32, result: u32, other: u32) -> u32 {
+    let mut sum = [0u32; 3];
+    for (i, word) in sum.iter_mut().enumerate() {
+        let offset = 4 * i as u32;
+        *word = e.mem.u32(this + offset);
+    }
+    for (i, word) in sum.iter_mut().enumerate() {
+        let offset = 4 * i as u32;
+        *word = x87_store32(x87_add(
+            x87_load32(*word),
+            x87_m32(e.mem.u32(other + offset)),
+        ));
+    }
+    for (i, word) in sum.iter().enumerate() {
+        e.mem.set_u32(result + 4 * i as u32, *word);
+    }
+    result
+}
+
+// Translated from 007fbeb0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed (`thiscall`, `RET 8`: a `bool` and a pointer): stores the flag at +0x1fc and
+/// the pointer in the `NiPointer` at +0x1f8 (`0066b0d0`).
+pub fn fn_007fbeb0(e: &mut Engine, this: u32, flag: u8, pointer: u32) {
+    e.mem.set_u8(this + 0x1fc, flag);
+    e.call(POINTER_SET, &args![this + 0x1f8, pointer]);
+}
+
+// Translated from 007fbee0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `FORenderedMenu::DoEffect` (Xbox PDB, `RET 0xc`: a rendered texture and two words):
+/// fills the image-space effect's statics from the menu: the blur radius and intensity
+/// and the scanline scale (+0x40..+0x48), no vertical offset, the scanlines texture
+/// (+0xbc into `01200810`), the texture of the rendered texture (`01200818`), the height
+/// (`GetMenuHeight` for the Pip-Boy menu, else the menu tile's trait `0xfb0`); a burst
+/// scales the blur by `1 + fBurstCurrentIntensity`; a vertical hold sets the offset to
+/// `height * position`, a shudder adds `height * position`; the pulse adds to the blur;
+/// the distortion copies its settings (`011db520`, `011db464`), its position and sets
+/// its flag, or clears them (position -1.0); the tint color (+0xc0) is copied. With
+/// partial-screen geometry it is made when missing (`CreatePartialScreenGeometry` with
+/// the height twice) and handed to `004e3270()` (`007fbeb0` with 1). Stores the third
+/// word, renders effect 0xa (`00b97550` with the renderer `0043c4b0`, the texture, the
+/// second word, 0 and 1) and clears `01200818`.
+pub fn fo_rendered_menu_do_effect(
+    e: &mut Engine,
+    this: Ptr<FORenderedMenu>,
+    texture: u32,
+    second: u32,
+    third: u32,
+) {
+    let base = this.addr();
+    e.call(INTERFACE_GET_004B7210, &args![]);
+    for (offset, global) in [
+        (0x40u32, EFFECT_BLUR_RADIUS),
+        (0x44, EFFECT_BLUR_INTENSITY),
+        (0x48, EFFECT_SCANLINE_SCALE),
+    ] {
+        let value = x87_quiet_bits(e.mem.u32(base + offset));
+        e.set_global(global, value);
+    }
+    e.set_global(EFFECT_VERTICAL_OFFSET, x87_store32(0.0));
+    e.call(
+        POINTER_ASSIGN_006E5CC0,
+        &args![EFFECT_SCANLINES_POINTER, base + SCANLINES_TEXTURE],
+    );
+    let inner = e
+        .call(RENDERED_TEXTURE_GET_TEXTURE, &args![texture, 0u32])
+        .u32();
+    e.call(POINTER_SET, &args![EFFECT_TEXTURE_POINTER, inner]);
+    let pipboy = e.call(INTERFACE_GET_PIPBOY, &args![]).u32();
+    let height = if base == pipboy {
+        e.call(GET_MENU_HEIGHT, &args![]).f64()
+    } else {
+        let tile = e.mem.u32(base + 0x18);
+        e.call(TILE_GET_FLOAT, &args![tile, 0xfb0u32]).f64()
+    };
+    e.set_global(EFFECT_HEIGHT, x87_store32(height));
+    if e.get(this, FORenderedMenu::bBurstActive) != 0 {
+        for global in [EFFECT_BLUR_INTENSITY, EFFECT_BLUR_RADIUS] {
+            let factor = x87_add(x87_load32(e.mem.u32(base + 0x5c)), 1.0);
+            let value = x87_mul(factor, x87_m32(e.global::<u32>(global)));
+            e.set_global(global, x87_store32(value));
+        }
+    }
+    if e.get(this, FORenderedMenu::bVertHoldActive) != 0 {
+        let height = e.call(GET_MENU_HEIGHT, &args![]).f64();
+        let value = x87_mul(height, x87_m32(e.mem.u32(base + 0x70)));
+        e.set_global(EFFECT_VERTICAL_OFFSET, x87_store32(value));
+    }
+    if e.get(this, FORenderedMenu::bShudderActive) != 0 {
+        let height = e.call(GET_MENU_HEIGHT, &args![]).f64();
+        let value = x87_mul(height, x87_m32(e.mem.u32(base + 0x88)));
+        let value = x87_add(value, x87_m32(e.global::<u32>(EFFECT_VERTICAL_OFFSET)));
+        e.set_global(EFFECT_VERTICAL_OFFSET, x87_store32(value));
+    }
+    for (global, offset) in [(EFFECT_BLUR_INTENSITY, 0x8cu32), (EFFECT_BLUR_RADIUS, 0x90)] {
+        let value = x87_add(
+            x87_load32(e.global::<u32>(global)),
+            x87_m32(e.mem.u32(base + offset)),
+        );
+        e.set_global(global, x87_store32(value));
+    }
+    if e.get(this, FORenderedMenu::bDistortActive) != 0 {
+        let length = e.call(SETTING_VALUE, &args![DISTORT_LENGTH_SETTING]).u32();
+        let length = x87_quiet_bits(e.mem.u32(length));
+        e.set_global(EFFECT_DISTORT_LENGTH, length);
+        let setting = e.call(SETTING_VALUE, &args![DISTORT_EFFECT_SETTING]).u32();
+        let setting = x87_quiet_bits(e.mem.u32(setting));
+        e.set_global(EFFECT_DISTORT_SETTING, setting);
+        let position = x87_quiet_bits(e.mem.u32(base + 0x9c));
+        e.set_global(EFFECT_DISTORT_POSITION, position);
+        e.set_global(EFFECT_DISTORT_FLAG, 1u8);
+    } else {
+        e.set_global(EFFECT_DISTORT_LENGTH, x87_store32(0.0));
+        e.set_global(EFFECT_DISTORT_SETTING, x87_store32(0.0));
+        let minus_one = x87_quiet_bits(e.global::<u32>(MINUS_ONE_FLOAT));
+        e.set_global(EFFECT_DISTORT_POSITION, minus_one);
+    }
+    for i in 0..4 {
+        let word = e.mem.u32(base + 0xc0 + 4 * i);
+        e.set_global(EFFECT_TINT + 4 * i, word);
+    }
+    if e.get(this, FORenderedMenu::bUsePartialScreenGeometry) != 0
+        && e.call(POINTER_GET, &args![base + 0xc]).u32() == 0
+    {
+        let first = e.call(GET_MENU_HEIGHT, &args![]).f64();
+        let first = x87_store32(first);
+        let second_height = e.call(GET_MENU_HEIGHT, &args![]).f64();
+        let second_height = x87_store32(second_height);
+        let manager = e.call(GETTER_004E3270, &args![]).u32();
+        e.call(
+            CREATE_PARTIAL_SCREEN_GEOMETRY,
+            &args![manager, second_height, first, base + 0xc],
+        );
+    }
+    if e.get(this, FORenderedMenu::bUsePartialScreenGeometry) != 0 {
+        let geometry = e.call(POINTER_GET, &args![base + 0xc]).u32();
+        let manager = e.call(GETTER_004E3270, &args![]).u32();
+        fn_007fbeb0(e, manager, 1, geometry);
+    }
+    e.set_global(EFFECT_THIRD_012007EC, third);
+    let renderer = e.call(RENDERER_0043C4B0, &args![]).u32();
+    let manager = e.call(GETTER_004E3270, &args![]).u32();
+    e.call(
+        IMAGE_SPACE_RENDER_00B97550,
+        &args![manager, 0xau32, renderer, texture, second, 0u32, 1u32],
+    );
+    e.call(POINTER_SET, &args![EFFECT_TEXTURE_POINTER, 0u32]);
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(
+            0x0070_5fe0,
+            fn_00705fe0(Ptr<FORenderedMenu>) -> Ptr<FORenderedMenu>
+        ),
+        entry!(0x007f_aef0, fn_007faef0(Ptr<FORenderedMenu>) -> u8),
+        entry!(0x007f_b250, fn_007fb250(Ptr<FORenderedMenu>, f32, f32)),
+        entry!(0x007f_b2b0, fn_007fb2b0(Ptr<FORenderedMenu>, f32, f32, f32)),
+        entry!(0x007f_b310, fn_007fb310(Ptr<FORenderedMenu>, f32)),
+        entry!(0x007f_b3a0, fn_007fb3a0(Ptr<FORenderedMenu>, f32)),
+        entry!(0x007f_b420, fn_007fb420(Ptr<FORenderedMenu>, f32)),
+        entry!(0x007f_b480, fn_007fb480(Ptr<FORenderedMenu>, f32)),
+        entry!(0x007f_b730, fn_007fb730(u32, u32, u32) -> u32),
+        entry!(0x007f_beb0, fn_007fbeb0(u32, u8, u32)),
+        entry!(
+            0x007f_bee0,
+            fo_rendered_menu_do_effect(Ptr<FORenderedMenu>, u32, u32, u32)
+        ),
         entry!(
             0x007f_ae70,
             fo_rendered_menu_set_screen_texture(Ptr<FORenderedMenu>, u32)
@@ -2178,6 +2611,296 @@ mod tests {
         assert_eq!(
             calls(&e, SET_APP_CULLED_00450F90),
             vec![vec![(0x3e9 << 8) + 1, 0]]
+        );
+    }
+}
+
+#[cfg(test)]
+mod n051_tests {
+    use super::*;
+
+    fn calls_to(e: &Engine, addr: u32) -> Vec<Vec<u32>> {
+        e.call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|(a, _)| *a == addr)
+            .map(|(_, words)| words.clone())
+            .collect()
+    }
+
+    fn st0(value: f64) -> Ret {
+        Ret {
+            st0: value,
+            ..Ret::default()
+        }
+    }
+
+    fn answer(e: &mut Engine, addr: u32, value: u32) {
+        e.register_double(addr, move |_, _| value.into_ret());
+    }
+
+    fn stub(e: &mut Engine, addrs: &[u32]) {
+        for &addr in addrs {
+            e.register(addr, |_, _| Ret::default());
+        }
+    }
+
+    /// An engine with the constants and statics mapped and the clock at 2000 ms.
+    fn engine() -> Engine {
+        let mut e = Engine::new();
+        for page in [
+            0x0101_2000,
+            0x0101_6000,
+            0x0101_8000,
+            0x0101_b000,
+            0x011a_e000,
+            0x0120_0000,
+            0x011d_b000,
+        ] {
+            e.map(page, 0x1000);
+        }
+        e.set_global(ONE_DOUBLE, 1.0f64);
+        e.set_global(ZERO_DOUBLE, 0.0f64);
+        e.set_global(MINUS_ONE_FLOAT, -1.0f32);
+        e.set_global(VERT_HOLD_SPEED_SCALE, 0.5f64);
+        e.set_global(SHUDDER_DURATION_0101B2D0, 250.0f32);
+        e.set_global(SHUDDER_VALUE_010181BC, 0.05f32);
+        answer(&mut e, TIMER_GET_00825C00, 2000);
+        e
+    }
+
+    fn menu(e: &mut Engine) -> Ptr<FORenderedMenu> {
+        Ptr::new(e.mem.alloc(0x200))
+    }
+
+    fn float(e: &Engine, address: u32) -> f32 {
+        e.mem.f32(address)
+    }
+
+    #[test]
+    fn the_terminal_constructor_builds_on_the_menu() {
+        let mut e = engine();
+        stub(
+            &mut e,
+            &[RENDERED_MENU_CONSTRUCT, POINT_INIT_006815C0, POINTER_INIT],
+        );
+        let this = menu(&mut e);
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x0070_5fe0, &args![this]).u32(), this.addr());
+        assert_eq!(e.mem.u32(this.addr()), RENDERED_TERMINAL_VTABLE);
+        assert_eq!(
+            calls_to(&e, RENDERED_MENU_CONSTRUCT),
+            vec![vec![this.addr()]]
+        );
+        assert_eq!(
+            calls_to(&e, POINT_INIT_006815C0),
+            vec![vec![this.addr() + 0xd8]]
+        );
+        assert_eq!(
+            calls_to(&e, POINTER_INIT),
+            vec![vec![this.addr() + 0xe4, 0]]
+        );
+    }
+
+    #[test]
+    fn menu_rendering_is_read_from_its_byte() {
+        let mut e = engine();
+        let this = menu(&mut e);
+        e.mem.set_u8(this.addr() + 0xb9, 1);
+        assert_eq!(e.call(0x007f_aef0, &args![this]).u8(), 1);
+    }
+
+    #[test]
+    fn starting_a_vertical_hold_and_a_shudder() {
+        let mut e = engine();
+        let this = menu(&mut e);
+        e.call(0x007f_b250, &args![this, 300.0f32, 4.0f32]);
+        assert_eq!(e.mem.u8(this.addr() + 0x60), 1);
+        assert_eq!(float(&e, this.addr() + 0x68), 300.0);
+        assert_eq!(float(&e, this.addr() + 0x6c), 2.0);
+        assert_eq!(float(&e, this.addr() + 0x64), 2000.0);
+        e.call(0x007f_b2b0, &args![this, 1.0f32, 2.0f32, 3.0f32]);
+        assert_eq!(e.mem.u8(this.addr() + 0x74), 1);
+        assert_eq!(
+            [0x7c, 0x80, 0x84, 0x78].map(|o| float(&e, this.addr() + o)),
+            [1.0, 2.0, 3.0, 2000.0]
+        );
+    }
+
+    #[test]
+    fn the_distortion_ends_after_its_length() {
+        let mut e = engine();
+        let this = menu(&mut e);
+        let length = e.mem.alloc(4);
+        e.mem.set_f32(length, 1.0);
+        let interval = e.mem.alloc(4);
+        e.mem.set_i32(interval, 100);
+        e.register_double(SETTING_VALUE, move |_, _| length.into_ret());
+        answer(&mut e, SETTING_INT_VALUE, interval);
+        answer(&mut e, RAND, 1234);
+        e.set(this, FORenderedMenu::bDistortActive, 1);
+        e.mem.set_f32(this.addr() + 0x98, 1000.0);
+        e.mem.set_f32(this.addr() + 0xa0, 500.0);
+        e.call(0x007f_b310, &args![this, 1500.0f32]);
+        assert_eq!(float(&e, this.addr() + 0x9c), 1.0);
+        assert_eq!(e.get(this, FORenderedMenu::bDistortActive), 1);
+        e.call(0x007f_b310, &args![this, 2100.0f32]);
+        assert_eq!(float(&e, this.addr() + 0x9c), 2.2);
+        assert_eq!(e.get(this, FORenderedMenu::bDistortActive), 0);
+        assert_eq!(float(&e, this.addr() + 0xa4), 2134.0);
+    }
+
+    #[test]
+    fn the_shudder_fades_out() {
+        let mut e = engine();
+        let this = menu(&mut e);
+        e.register(FLOAT_FUNCTION_004E44D0, |_, a| {
+            st0(f64::from(f32::from_bits(a[0])))
+        });
+        e.set(this, FORenderedMenu::bShudderActive, 1);
+        e.mem.set_f32(this.addr() + 0x78, 100.0);
+        e.mem.set_f32(this.addr() + 0x7c, 200.0);
+        e.mem.set_f32(this.addr() + 0x80, 2.0);
+        e.mem.set_f32(this.addr() + 0x84, 0.5);
+        e.call(0x007f_b3a0, &args![this, 150.0f32]);
+        // sin-like(25) * 2 * (1 - 50/200).
+        assert_eq!(float(&e, this.addr() + 0x88), 37.5);
+        e.call(0x007f_b3a0, &args![this, 301.0f32]);
+        assert_eq!(e.get(this, FORenderedMenu::bShudderActive), 0);
+    }
+
+    #[test]
+    fn the_burst_fades_out() {
+        let mut e = engine();
+        let this = menu(&mut e);
+        e.set(this, FORenderedMenu::bBurstActive, 1);
+        e.mem.set_f32(this.addr() + 0x50, 100.0);
+        e.mem.set_f32(this.addr() + 0x54, 200.0);
+        e.mem.set_f32(this.addr() + 0x58, 4.0);
+        e.call(0x007f_b420, &args![this, 250.0f32]);
+        assert_eq!(float(&e, this.addr() + 0x5c), 1.0);
+        e.call(0x007f_b420, &args![this, 300.0f32]);
+        assert_eq!(e.get(this, FORenderedMenu::bBurstActive), 1);
+        assert_eq!(float(&e, this.addr() + 0x5c), 0.0);
+        e.call(0x007f_b420, &args![this, 300.5f32]);
+        assert_eq!(e.get(this, FORenderedMenu::bBurstActive), 0);
+    }
+
+    #[test]
+    fn the_vertical_hold_wraps_and_ends_in_a_shudder() {
+        let mut e = engine();
+        let this = menu(&mut e);
+        e.register(WRAP_00404040, |_, a| {
+            st0(f64::from(f32::from_bits(a[0])).floor())
+        });
+        e.set(this, FORenderedMenu::bVertHoldActive, 1);
+        e.mem.set_f32(this.addr() + 0x64, 0.0);
+        e.mem.set_f32(this.addr() + 0x68, 100.0);
+        e.mem.set_f32(this.addr() + 0x6c, 0.025);
+        e.call(0x007f_b480, &args![this, 20.0f32]);
+        assert_eq!(float(&e, this.addr() + 0x70), 0.5);
+        e.call(0x007f_b480, &args![this, 60.0f32]);
+        assert_eq!(float(&e, this.addr() + 0x70), 0.5);
+        e.call(0x007f_b480, &args![this, 100.5f32]);
+        assert_eq!(e.get(this, FORenderedMenu::bVertHoldActive), 0);
+        assert_eq!(e.get(this, FORenderedMenu::bShudderActive), 1);
+        assert_eq!(float(&e, this.addr() + 0x7c), 250.0);
+        assert_eq!(float(&e, this.addr() + 0x84), 0.05);
+    }
+
+    #[test]
+    fn colors_add_component_wise() {
+        let mut e = engine();
+        let a = e.mem.alloc(12);
+        let b = e.mem.alloc(12);
+        let out = e.mem.alloc(12);
+        for (i, (x, y)) in [(1.0f32, 0.5f32), (2.0, 0.25), (3.0, -1.0)]
+            .iter()
+            .enumerate()
+        {
+            e.mem.set_f32(a + 4 * i as u32, *x);
+            e.mem.set_f32(b + 4 * i as u32, *y);
+        }
+        assert_eq!(e.call(0x007f_b730, &args![a, out, b]).u32(), out);
+        assert_eq!([0, 4, 8].map(|o| float(&e, out + o)), [1.5, 2.25, 2.0]);
+        assert_eq!(float(&e, a), 1.0);
+    }
+
+    #[test]
+    fn the_partial_screen_flag_and_pointer_are_stored() {
+        let mut e = engine();
+        stub(&mut e, &[POINTER_SET]);
+        let object = e.mem.alloc(0x200);
+        e.call_log = Some(vec![]);
+        e.call(0x007f_beb0, &args![object, 1u32, 0x7000u32]);
+        assert_eq!(e.mem.u8(object + 0x1fc), 1);
+        assert_eq!(
+            calls_to(&e, POINTER_SET),
+            vec![vec![object + 0x1f8, 0x7000]]
+        );
+    }
+
+    #[test]
+    fn do_effect_fills_the_shader_statics() {
+        let mut e = engine();
+        stub(
+            &mut e,
+            &[
+                INTERFACE_GET_004B7210,
+                POINTER_ASSIGN_006E5CC0,
+                RENDERED_TEXTURE_GET_TEXTURE,
+                POINTER_SET,
+                POINTER_GET,
+                INTERFACE_GET_PIPBOY,
+                CREATE_PARTIAL_SCREEN_GEOMETRY,
+                IMAGE_SPACE_RENDER_00B97550,
+            ],
+        );
+        e.register(GET_MENU_HEIGHT, |_, _| st0(10.0));
+        e.register(TILE_GET_FLOAT, |_, _| st0(20.0));
+        answer(&mut e, RENDERER_0043C4B0, 0x6600);
+        let manager = e.mem.alloc(0x200);
+        answer(&mut e, GETTER_004E3270, manager);
+        let this = menu(&mut e);
+        let base = this.addr();
+        e.mem.set_u32(base + 0x18, 0x5000);
+        e.mem.set_f32(base + 0x40, 2.0);
+        e.mem.set_f32(base + 0x44, 3.0);
+        e.mem.set_f32(base + 0x48, 4.0);
+        e.set(this, FORenderedMenu::bBurstActive, 1);
+        e.mem.set_f32(base + 0x5c, 1.0);
+        e.set(this, FORenderedMenu::bShudderActive, 1);
+        e.mem.set_f32(base + 0x88, 0.5);
+        e.mem.set_f32(base + 0x8c, 0.25);
+        e.mem.set_f32(base + 0x90, 0.5);
+        e.mem.set_u32(base + 0xc0, 0x11);
+        e.mem.set_u32(base + 0xcc, 0x44);
+        e.mem.set_u8(base + 0x2a, 1);
+        e.call_log = Some(vec![]);
+        e.call(0x007f_bee0, &args![this, 0x7100u32, 0x7200u32, 0x7300u32]);
+        assert_eq!(float(&e, EFFECT_BLUR_RADIUS), 4.5);
+        assert_eq!(float(&e, EFFECT_BLUR_INTENSITY), 6.25);
+        assert_eq!(float(&e, EFFECT_SCANLINE_SCALE), 4.0);
+        assert_eq!(float(&e, EFFECT_HEIGHT), 20.0);
+        assert_eq!(float(&e, EFFECT_VERTICAL_OFFSET), 5.0);
+        assert_eq!(float(&e, EFFECT_DISTORT_POSITION), -1.0);
+        assert_eq!(e.global::<u32>(EFFECT_TINT), 0x11);
+        assert_eq!(e.global::<u32>(EFFECT_TINT + 0xc), 0x44);
+        assert_eq!(e.global::<u32>(EFFECT_THIRD_012007EC), 0x7300);
+        let ten = 10.0f32.to_bits();
+        assert_eq!(
+            calls_to(&e, CREATE_PARTIAL_SCREEN_GEOMETRY),
+            vec![vec![manager, ten, ten, base + 0xc]]
+        );
+        assert_eq!(
+            calls_to(&e, IMAGE_SPACE_RENDER_00B97550),
+            vec![vec![manager, 0xa, 0x6600, 0x7100, 0x7200, 0, 1]]
+        );
+        assert_eq!(e.mem.u8(manager + 0x1fc), 1);
+        assert_eq!(
+            calls_to(&e, POINTER_SET).last().unwrap(),
+            &vec![EFFECT_TEXTURE_POINTER, 0]
         );
     }
 }

@@ -5960,7 +5960,7 @@ pub fn fn_00977c70(e: &mut Engine, this: Ptr) -> f32 {
 // Translated from 00977c90 (decompiled, FalloutNV.exe 1.4.0.525)
 /// Stores a `float` into the process field at +0x440.
 pub fn fn_00977c90(e: &mut Engine, this: Ptr, value: f32) {
-    e.mem.set_f32(this.addr() + 0x440, value);
+    e.mem.set_f32(this.addr() + 0x440, x87_quiet(value));
 }
 
 // Translated from 009777a0 (decompiled, FalloutNV.exe 1.4.0.525)

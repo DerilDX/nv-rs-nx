@@ -1818,7 +1818,7 @@ pub fn fn_008c17c0(e: &mut Engine, this: Ptr<Actor>) {
 // Translated from 008c1920 (decompiled, FalloutNV.exe 1.4.0.525)
 /// Stores the `float` `value` at `+0x118` of an animation object.
 pub fn fn_008c1920(e: &mut Engine, this: Ptr, value: f32) {
-    e.mem.set_f32(this.addr() + 0x118, value);
+    e.mem.set_f32(this.addr() + 0x118, x87_quiet(value));
 }
 
 // Translated from 008c1940 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -1831,7 +1831,7 @@ pub fn fn_008c1940(e: &mut Engine, this: Ptr<Actor>) {
 // Translated from 008c1aa0 (decompiled, FalloutNV.exe 1.4.0.525)
 /// Stores the `float` `value` at `+0x11c` of an animation object.
 pub fn fn_008c1aa0(e: &mut Engine, this: Ptr, value: f32) {
-    e.mem.set_f32(this.addr() + 0x11c, value);
+    e.mem.set_f32(this.addr() + 0x11c, x87_quiet(value));
 }
 
 // Translated from 008c1ac0 (decompiled, FalloutNV.exe 1.4.0.525)

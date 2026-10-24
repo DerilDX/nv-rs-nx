@@ -241,6 +241,124 @@ pub fn tes_climate_load(e: &mut Engine, this: Ptr<TESClimate>, file: Ptr) -> boo
     true
 }
 
+/// `TESForm::StartForm` (`004855a0`), `TESForm::CloseForm` (`00485680`),
+/// `TESForm::AddChunkArray` (`004856f0`, `cdecl (chunk, data, size)`), the
+/// weather list's save (`00582380`, `thiscall`, one chunk word),
+/// `TESTexture::Save` (`0048e370`, one chunk word) and `TESModel::Save`
+/// (`004891d0`, two chunk words).
+const FORM_START: u32 = 0x0048_55a0;
+const FORM_CLOSE: u32 = 0x0048_5680;
+const FORM_ADD_CHUNK_ARRAY: u32 = 0x0048_56f0;
+const WEATHER_LIST_SAVE: u32 = 0x0058_2380;
+const TEXTURE_SAVE: u32 = 0x0048_e370;
+const MODEL_SAVE: u32 = 0x0048_91d0;
+/// `TESForm::CopyAllComponents` (`004851b0`), `TESForm::CompareAllComponents`
+/// (`00485270`), the weather list's copy (`005825a0`, two words) and
+/// comparison (`00582690`, one word), the copy `00401460` (`cdecl (to,
+/// from, size)`) and `memcmp` (`00ec4835`).
+const FORM_COPY_ALL_COMPONENTS: u32 = 0x0048_51b0;
+const FORM_COMPARE_ALL_COMPONENTS: u32 = 0x0048_5270;
+const WEATHER_LIST_COPY: u32 = 0x0058_25a0;
+const WEATHER_LIST_COMPARE: u32 = 0x0058_2690;
+const COPY_BYTES: u32 = 0x0040_1460;
+const MEMCMP: u32 = 0x00ec_4835;
+/// The `TESClimate` type descriptor (`01184170`, its name read at +8).
+const TYPE_TES_CLIMATE: u32 = 0x0118_4170;
+
+// Translated from 0052ae80 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TESClimate::Save` (Xbox PDB): starts the form, saves the weather list
+/// (+0x30, `WLST`), the two sky textures (+0x38, +0x44, as `FNAM` and
+/// `GNAM`: `FNAM` plus the index), the night sky model (+0x18, `MODL`,
+/// `MODT`), the six data bytes at +0x50 (`TNAM`), and closes the form.
+pub fn tes_climate_save(e: &mut Engine, this: Ptr<TESClimate>) {
+    let base = this.addr();
+    e.call(FORM_START, &args![this]);
+    e.call(WEATHER_LIST_SAVE, &args![base + 0x30, CHUNK_WLST as u32]);
+    for index in 0..2u32 {
+        e.call(
+            TEXTURE_SAVE,
+            &args![base + 0x38 + index * 0xc, (CHUNK_FNAM as u32) + index],
+        );
+    }
+    e.call(
+        MODEL_SAVE,
+        &args![base + 0x18, CHUNK_MODL as u32, 0x5444_4f4du32],
+    );
+    e.call(
+        FORM_ADD_CHUNK_ARRAY,
+        &args![CHUNK_TNAM as u32, base + 0x50, 6u32],
+    );
+    e.call(FORM_CLOSE, &args![this]);
+}
+
+/// `other` cast from `TESForm` to `TESClimate`.
+fn cast_climate(e: &mut Engine, other: Ptr) -> u32 {
+    e.call(
+        DYNAMIC_CAST,
+        &args![other, 0u32, TYPE_TES_FORM, TYPE_TES_CLIMATE, 0u32],
+    )
+    .u32()
+}
+
+// Translated from 0052af10 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`thiscall`, one word; the copy of a
+/// `TESClimate`): when `other` is one, copies all components, the weather
+/// list (`005825a0` with flag 0), each sky texture and the night sky model
+/// (virtual slot `+8` of each with `other`'s) and the six data bytes.
+pub fn fn_0052af10(e: &mut Engine, this: Ptr<TESClimate>, other: Ptr) {
+    let source = cast_climate(e, other);
+    if source == 0 {
+        return;
+    }
+    let base = this.addr();
+    e.call(FORM_COPY_ALL_COMPONENTS, &args![this, source]);
+    e.call(WEATHER_LIST_COPY, &args![base + 0x30, source + 0x30, 0u32]);
+    for index in 0..2u32 {
+        let offset = 0x38 + index * 0xc;
+        e.vcall(base + offset, 8, &args![source + offset]);
+    }
+    e.vcall(base + 0x18, 8, &args![source + 0x18]);
+    e.call(COPY_BYTES, &args![base + 0x50, source + 0x50, 6u32]);
+}
+
+// Translated from 0052afe0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`thiscall`, one word; the comparison of a
+/// `TESClimate`): true (different) when `other` is none, when
+/// `CompareAllComponents` says so, when a sky texture's or the night sky
+/// model's virtual slot `+0xC` answers non-zero, when the weather lists
+/// differ (`00582690`) or when the six data bytes differ (`memcmp`).
+pub fn fn_0052afe0(e: &mut Engine, this: Ptr<TESClimate>, other: Ptr) -> bool {
+    let source = cast_climate(e, other);
+    if source == 0 {
+        return true;
+    }
+    let base = this.addr();
+    if e.call(FORM_COMPARE_ALL_COMPONENTS, &args![this, source])
+        .u8()
+        != 0
+    {
+        return true;
+    }
+    for index in 0..2u32 {
+        let offset = 0x38 + index * 0xc;
+        if e.vcall(base + offset, 0xc, &args![source + offset]).u8() != 0 {
+            return true;
+        }
+    }
+    if e.vcall(base + 0x18, 0xc, &args![source + 0x18]).u8() != 0 {
+        return true;
+    }
+    if e.call(WEATHER_LIST_COMPARE, &args![base + 0x30, source + 0x30])
+        .u8()
+        != 0
+    {
+        return true;
+    }
+    e.call(MEMCMP, &args![base + 0x50, source + 0x50, 6u32])
+        .u32()
+        != 0
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -249,6 +367,9 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x0052_b2c0, fn_0052b2c0(Ptr<TESClimate>, u8)),
         entry!(0x0052_b0f0, tes_climate_make_default(Ptr<TESClimate>)),
         entry!(0x0052_ac90, tes_climate_load(Ptr<TESClimate>, Ptr) -> bool),
+        entry!(0x0052_ae80, tes_climate_save(Ptr<TESClimate>)),
+        entry!(0x0052_af10, fn_0052af10(Ptr<TESClimate>, Ptr)),
+        entry!(0x0052_afe0, fn_0052afe0(Ptr<TESClimate>, Ptr) -> bool),
     ]
 }
 
@@ -479,5 +600,144 @@ mod tests {
         let (mut e, this) = load_rig(vec![(CHUNK_WLST as u32, 0xc)], [u32::MAX, 0]);
         assert!(e.call(0x0052_ac90, &args![this, FILE]).bool());
         assert_eq!(calls(&e, LOG).len(), 1);
+    }
+}
+
+#[cfg(test)]
+mod n043_tests {
+    use super::*;
+
+    const STATE: u32 = 0x7300_0000;
+    const SLOT_COPY: u32 = 0x7100_0008;
+    const SLOT_COMPARE: u32 = 0x7100_000c;
+
+    fn calls(e: &Engine, addr: u32) -> Vec<Vec<u32>> {
+        e.call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|c| c.0 == addr)
+            .map(|c| c.1.clone())
+            .collect()
+    }
+
+    fn engine() -> Engine {
+        let mut e = Engine::new();
+        e.map(STATE, 0x40);
+        for addr in [
+            FORM_START,
+            FORM_CLOSE,
+            FORM_ADD_CHUNK_ARRAY,
+            WEATHER_LIST_SAVE,
+            TEXTURE_SAVE,
+            MODEL_SAVE,
+            FORM_COPY_ALL_COMPONENTS,
+            WEATHER_LIST_COPY,
+            COPY_BYTES,
+            SLOT_COPY,
+        ] {
+            e.register(addr, |_, _| Ret::default());
+        }
+        e.register(DYNAMIC_CAST, |_, a| a[0].into_ret());
+        e
+    }
+
+    /// A climate whose components' vtables answer through the two slots.
+    fn climate(e: &mut Engine) -> u32 {
+        let vtable = e.mem.alloc(0x10);
+        e.mem.set_u32(vtable + 8, SLOT_COPY);
+        e.mem.set_u32(vtable + 0xc, SLOT_COMPARE);
+        let this = e.mem.alloc(0x60);
+        for offset in [0x18, 0x38, 0x44] {
+            e.mem.set_u32(this + offset, vtable);
+        }
+        this
+    }
+
+    #[test]
+    fn save_writes_every_part() {
+        let mut e = engine();
+        let this = 0x1000u32;
+        e.call_log = Some(vec![]);
+        e.call(0x0052_ae80, &args![this]);
+        let order: Vec<(u32, Vec<u32>)> = e.call_log.take().unwrap().into_iter().skip(1).collect();
+        assert_eq!(
+            order,
+            vec![
+                (FORM_START, vec![this]),
+                (WEATHER_LIST_SAVE, vec![0x1030, 0x5453_4c57]),
+                (TEXTURE_SAVE, vec![0x1038, 0x4d41_4e46]),
+                (TEXTURE_SAVE, vec![0x1044, 0x4d41_4e47]),
+                (MODEL_SAVE, vec![0x1018, 0x4c44_4f4d, 0x5444_4f4d]),
+                (FORM_ADD_CHUNK_ARRAY, vec![0x4d41_4e54, 0x1050, 6]),
+                (FORM_CLOSE, vec![this]),
+            ]
+        );
+    }
+
+    #[test]
+    fn copy_takes_every_part() {
+        let mut e = engine();
+        let this = climate(&mut e);
+        let other = 0x9000u32;
+        e.call_log = Some(vec![]);
+        e.call(0x0052_af10, &args![this, other]);
+        assert_eq!(
+            calls(&e, DYNAMIC_CAST),
+            vec![vec![other, 0, TYPE_TES_FORM, TYPE_TES_CLIMATE, 0]]
+        );
+        assert_eq!(calls(&e, FORM_COPY_ALL_COMPONENTS), vec![vec![this, other]]);
+        assert_eq!(
+            calls(&e, WEATHER_LIST_COPY),
+            vec![vec![this + 0x30, other + 0x30, 0]]
+        );
+        assert_eq!(
+            calls(&e, SLOT_COPY),
+            vec![
+                vec![this + 0x38, other + 0x38],
+                vec![this + 0x44, other + 0x44],
+                vec![this + 0x18, other + 0x18]
+            ]
+        );
+        assert_eq!(
+            calls(&e, COPY_BYTES),
+            vec![vec![this + 0x50, other + 0x50, 6]]
+        );
+        e.register(DYNAMIC_CAST, |_, _| 0u32.into_ret());
+        e.call_log = Some(vec![]);
+        e.call(0x0052_af10, &args![this, other]);
+        assert_eq!(e.call_log.as_ref().unwrap().len(), 2);
+    }
+
+    #[test]
+    fn compare_branches() {
+        let mut e = engine();
+        // STATE: CompareAllComponents; +4: the offset whose slot answers 1;
+        // +8: the weather lists; +0xC: memcmp.
+        e.register(FORM_COMPARE_ALL_COMPONENTS, |e, _| {
+            e.mem.u32(STATE).into_ret()
+        });
+        e.register_double(SLOT_COMPARE, |e, a| {
+            u32::from(a[1] & 0xff == e.mem.u32(STATE + 4)).into_ret()
+        });
+        e.register(WEATHER_LIST_COMPARE, |e, _| e.mem.u32(STATE + 8).into_ret());
+        e.register(MEMCMP, |e, _| e.mem.u32(STATE + 0xc).into_ret());
+        let this = climate(&mut e);
+        let other = 0x9000u32;
+        e.call_log = Some(vec![]);
+        assert!(!e.call(0x0052_afe0, &args![this, other]).bool());
+        assert_eq!(calls(&e, MEMCMP), vec![vec![this + 0x50, other + 0x50, 6]]);
+        for offset in [0x38, 0x44, 0x18] {
+            e.mem.set_u32(STATE + 4, offset);
+            assert!(e.call(0x0052_afe0, &args![this, other]).bool());
+        }
+        e.mem.set_u32(STATE + 4, 0);
+        for at in [STATE, STATE + 8, STATE + 0xc] {
+            e.mem.set_u32(at, 1);
+            assert!(e.call(0x0052_afe0, &args![this, other]).bool());
+            e.mem.set_u32(at, 0);
+        }
+        e.register(DYNAMIC_CAST, |_, _| 0u32.into_ret());
+        assert!(e.call(0x0052_afe0, &args![this, other]).bool());
     }
 }

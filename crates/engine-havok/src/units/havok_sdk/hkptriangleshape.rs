@@ -195,9 +195,11 @@ pub fn hkp_triangle_shape_get_collision_spheres_impl(
     sphere(e, 2, c);
     if e.get(this, HkpTriangleShape::m_isExtruded) != 0 {
         let extrusion = load_vec(e, me + EXTRUSION);
-        sphere(e, 3, zip_with(extrusion, a, |p, q| p + q));
-        sphere(e, 4, zip_with(extrusion, b, |p, q| p + q));
-        sphere(e, 5, zip_with(c, extrusion, |p, q| p + q));
+        // `ADDPS` with the SSE NaN rules, the destination operand first.
+        use crate::sse::addps;
+        sphere(e, 3, addps(extrusion, a));
+        sphere(e, 4, addps(extrusion, b));
+        sphere(e, 5, addps(c, extrusion));
     }
 }
 

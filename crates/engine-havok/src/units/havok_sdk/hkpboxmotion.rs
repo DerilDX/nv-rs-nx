@@ -93,12 +93,46 @@ pub(crate) fn rows_times(v: Vec4, r0: Vec4, r1: Vec4, r2: Vec4) -> Vec4 {
     add(add(part_y, part_x), part_z)
 }
 
-/// `s.y * r1 + s.x * r0 + s.z * r2` (the weighted sum of the rows), `+ old`.
+/// `s.y * r1 + s.x * r0 + s.z * r2` (the weighted sum of the rows), `+ old`, with the SSE
+/// NaN rules (each `MULPS` with the splatted lane as the destination).
 fn rows_weighted(s: Vec4, r0: Vec4, r1: Vec4, r2: Vec4, old: Vec4) -> Vec4 {
-    let part_y = mul(splat(s, 1), r1);
-    let part_x = mul(splat(s, 0), r0);
-    let part_z = mul(splat(s, 2), r2);
-    add(add(add(part_y, part_x), part_z), old)
+    use crate::sse::{addps, mulps};
+    let part_y = mulps(splat(s, 1), r1);
+    let part_x = mulps(splat(s, 0), r0);
+    let part_z = mulps(splat(s, 2), r2);
+    addps(addps(addps(part_y, part_x), part_z), old)
+}
+
+/// [`cross`] with the SSE NaN rules (`MULPS`, `SUBPS`, the destination first).
+fn cross_sse(r: Vec4, v: Vec4) -> Vec4 {
+    use crate::sse::{mulps, subps};
+    let minus = mulps(shufps(v, v, 0xc9), shufps(r, r, 0xd2));
+    let plus = mulps(shufps(v, v, 0xd2), shufps(r, r, 0xc9));
+    subps(plus, minus)
+}
+
+/// [`rows_times`] with the SSE NaN rules. `z_lane_first`: the `MULPS` of the `z` part has the
+/// splatted `v.z` as its destination (else the column, as in [`rows_times`]).
+fn rows_times_sse(v: Vec4, r0: Vec4, r1: Vec4, r2: Vec4, z_lane_first: bool) -> Vec4 {
+    use crate::sse::{addps, mulps};
+    let low = unpcklps(r0, r1);
+    let high = unpckhps(r0, r1);
+    let column_x = movlhps(low, r2);
+    let column_y = shufps(movhlps(column_x, low), r2, 0xd4);
+    let column_z = shufps(high, r2, 0xe4);
+    let part_y = mulps(splat(v, 1), column_y);
+    let part_x = mulps(splat(v, 0), column_x);
+    let part_z = if z_lane_first {
+        mulps(splat(v, 2), column_z)
+    } else {
+        mulps(column_z, splat(v, 2))
+    };
+    addps(addps(part_y, part_x), part_z)
+}
+
+/// `z + (y + x)` with `ADDSS` (the higher lane the destination, the SSE NaN rules).
+fn sum3_sse(v: Vec4) -> f32 {
+    crate::sse::add(v[2], crate::sse::add(v[1], v[0]))
 }
 
 /// The three rotation vectors of the motion.
@@ -234,11 +268,15 @@ pub fn hkp_box_motion_get_inertia_world(e: &mut Engine, this: Ptr, out: Ptr) {
 pub fn hkp_box_motion_apply_force(e: &mut Engine, this: Ptr, delta_time: f32, force: Ptr) {
     let motion = this.addr();
     let force = load_vec(e, force.addr());
-    let scaled = mul([delta_time; 4], force);
+    let scaled = crate::sse::mulps([delta_time; 4], force);
     let inverse = load_vec(e, motion + INVERSE_INERTIA);
-    let change = mul(splat(inverse, 3), scaled);
+    let change = crate::sse::mulps(splat(inverse, 3), scaled);
     let velocity = load_vec(e, motion + LINEAR_VELOCITY);
-    store_vec(e, motion + LINEAR_VELOCITY, add(change, velocity));
+    store_vec(
+        e,
+        motion + LINEAR_VELOCITY,
+        crate::sse::addps(change, velocity),
+    );
 }
 
 // Translated from 00d1e970 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -277,21 +315,22 @@ pub fn hkp_box_motion_apply_torque(e: &mut Engine, this: Ptr, delta_time: f32, t
 /// `r x impulse` is carried through the rotation, scaled by the inverse inertia and carried
 /// back, and added to the angular velocity (`+0xE0`).
 pub fn hkp_box_motion_apply_point_impulse(e: &mut Engine, this: Ptr, impulse: Ptr, point: Ptr) {
+    use crate::sse::{addps, mulps, subps};
     let motion = this.addr();
     let inverse = load_vec(e, motion + INVERSE_INERTIA);
     let impulse = load_vec(e, impulse.addr());
-    let linear = add(
-        mul(splat(inverse, 3), impulse),
+    let linear = addps(
+        mulps(splat(inverse, 3), impulse),
         load_vec(e, motion + LINEAR_VELOCITY),
     );
     store_vec(e, motion + LINEAR_VELOCITY, linear);
-    let arm = sub(
+    let arm = subps(
         load_vec(e, point.addr()),
         load_vec(e, motion + CENTRE_OF_MASS),
     );
-    let torque = cross(arm, impulse);
+    let torque = cross_sse(arm, impulse);
     let (r0, r1, r2) = rotation(e, motion);
-    let local = mul(rows_times(torque, r0, r1, r2), inverse);
+    let local = mulps(rows_times_sse(torque, r0, r1, r2, false), inverse);
     let angular = rows_weighted(local, r0, r1, r2, load_vec(e, motion + ANGULAR_VELOCITY));
     store_vec(e, motion + ANGULAR_VELOCITY, angular);
 }
@@ -305,7 +344,7 @@ pub fn hkp_box_motion_apply_angular_impulse(e: &mut Engine, this: Ptr, impulse: 
     let (r0, r1, r2) = rotation(e, motion);
     let impulse = load_vec(e, impulse.addr());
     let inverse = load_vec(e, motion + INVERSE_INERTIA);
-    let local = mul(rows_times(impulse, r0, r1, r2), inverse);
+    let local = crate::sse::mulps(rows_times_sse(impulse, r0, r1, r2, true), inverse);
     let angular = rows_weighted(local, r0, r1, r2, load_vec(e, motion + ANGULAR_VELOCITY));
     store_vec(e, motion + ANGULAR_VELOCITY, angular);
 }
@@ -325,26 +364,26 @@ pub fn hkp_box_motion_get_projected_point_velocity(
     velocity: Ptr,
     mass_factor: Ptr,
 ) {
+    use crate::sse::{mulps, subps};
     let motion = this.addr();
     let centre = load_vec(e, motion + CENTRE_OF_MASS);
-    let arm = sub(load_vec(e, point.addr()), centre);
+    let arm = subps(load_vec(e, point.addr()), centre);
     let normal = load_vec(e, normal.addr());
-    let moment = cross(arm, normal);
-    let linear = mul(load_vec(e, motion + LINEAR_VELOCITY), normal);
-    let angular = mul(load_vec(e, motion + ANGULAR_VELOCITY), moment);
-    let angular_sum = angular[2] + (angular[1] + angular[0]);
-    let linear_sum = linear[2] + (linear[1] + linear[0]);
-    let total = angular_sum + linear_sum;
+    let moment = cross_sse(arm, normal);
+    let linear = mulps(load_vec(e, motion + LINEAR_VELOCITY), normal);
+    let angular = mulps(load_vec(e, motion + ANGULAR_VELOCITY), moment);
+    let total = crate::sse::add(sum3_sse(angular), sum3_sse(linear));
     e.mem
         .set_u32(velocity.addr(), x87_quiet_bits(total.to_bits()));
     let (r0, r1, r2) = rotation(e, motion);
-    let carried = rows_times(moment, r0, r1, r2);
+    let carried = rows_times_sse(moment, r0, r1, r2, false);
     let inverse = load_vec(e, motion + INVERSE_INERTIA);
-    let weighted = mul(mul(inverse, carried), carried);
-    let sum = weighted[2] + (weighted[1] + weighted[0]);
-    let base = f64::from(x87_quiet(e.mem.f32(motion + INVERSE_INERTIA + 0xc)));
-    e.mem
-        .set_f32(mass_factor.addr(), (base + f64::from(sum)) as f32);
+    let weighted = mulps(mulps(inverse, carried), carried);
+    let sum = sum3_sse(weighted);
+    // `FLD [+0xCC]`, `FADD` the scratch float (the x87 choice of NaN).
+    let base = x87_load32(e.mem.u32(motion + INVERSE_INERTIA + 0xc));
+    let mass = x87_add(base, x87_m32(sum.to_bits()));
+    e.mem.set_u32(mass_factor.addr(), x87_store32(mass));
 }
 
 /// This unit's translated functions, by exe address.

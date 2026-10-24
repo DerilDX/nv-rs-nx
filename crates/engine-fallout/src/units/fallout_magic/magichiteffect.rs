@@ -322,7 +322,269 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
             0x0081_bc50,
             magic_hit_effect_clear_target(Ptr<MagicHitEffect>)
         ),
+        entry!(
+            0x0081_b860,
+            magic_hit_effect_update(Ptr<MagicHitEffect>, f32) -> bool
+        ),
+        entry!(0x0081_bc70, fn_0081bc70(Ptr, u32)),
+        entry!(0x0081_bd30, magic_hit_effect_get_save_size(Ptr, u32, u32) -> u16),
+        entry!(
+            0x0081_bd80,
+            magic_hit_effect_save_game(Ptr<MagicHitEffect>, u32, u32)
+        ),
+        entry!(
+            0x0081_bde0,
+            magic_hit_effect_load_game(Ptr<MagicHitEffect>, u32, u32)
+        ),
+        entry!(
+            0x0081_be50,
+            magic_hit_effect_init_load_game(Ptr<MagicHitEffect>, u32, u32)
+        ),
+        entry!(
+            0x0081_be80,
+            magic_hit_effect_save_game_ov2(Ptr<MagicHitEffect>, u32)
+        ),
+        entry!(
+            0x0081_bed0,
+            magic_hit_effect_load_game_ov2(Ptr<MagicHitEffect>, u32)
+        ),
+        entry!(
+            0x0081_bf20,
+            magic_hit_effect_init_load_game_ov2(Ptr<MagicHitEffect>, u32)
+        ),
     ]
+}
+
+/// `00440d80` (`thiscall`): a `bool` of the reference that ends the effect.
+const REFERENCE_FLAG: u32 = 0x0044_0d80;
+/// `00441110` (`thiscall`): the temporary effect's object whose cell `0041fd00` (`RET 4`)
+/// takes; `0084e3a0` (`thiscall`): the word at +0xC (the cell); `TESObjectCELL::Get3D`
+/// (`00545cb0`); `009611e0` (`thiscall`): a node's parent; `005497a0` (`thiscall`): the
+/// cell's root node.
+const EFFECT_OBJECT_00441110: u32 = 0x0044_1110;
+const SET_CELL_0041FD00: u32 = 0x0041_fd00;
+const WORD_AT_C: u32 = 0x0084_e3a0;
+const CELL_GET_3D: u32 = 0x0054_5cb0;
+const NODE_PARENT: u32 = 0x0096_11e0;
+const CELL_ROOT_NODE: u32 = 0x0054_97a0;
+/// The save/load manager (`011de45c`), its version (`008df040`), its word save
+/// (`008579b0`) and load (`008579e0`) (`RET 8`: the address, the size).
+const SAVE_LOAD_MANAGER: u32 = 0x011d_e45c;
+const SAVE_VERSION: u32 = 0x008d_f040;
+const SAVE_WORD: u32 = 0x0085_79b0;
+const LOAD_WORD: u32 = 0x0085_79e0;
+/// `BSTempEffect::SaveGame_ov2` (`00682a30`) / `LoadGame_ov2` (`00682a80`) (`RET 4`); the
+/// save buffer's `00865e50` (`RET 0xC`: address, size, 0) and `SaveFormID_ov2`
+/// (`00865df0`, `RET 8`); the load buffer's `00864980` (`RET 8`) and `LoadFormID_ov2`
+/// (`008648e0`, `RET 4`); the base body `004534f0` (`RET 4`).
+const BS_TEMP_EFFECT_SAVE_GAME_OV2: u32 = 0x0068_2a30;
+const BS_TEMP_EFFECT_LOAD_GAME_OV2: u32 = 0x0068_2a80;
+const BUFFER_SAVE_DATA: u32 = 0x0086_5e50;
+const BUFFER_SAVE_FORM_ID: u32 = 0x0086_5df0;
+const BUFFER_LOAD_DATA: u32 = 0x0086_4980;
+const BUFFER_LOAD_FORM_ID: u32 = 0x0086_48e0;
+const BASE_INIT_LOAD_GAME_004534F0: u32 = 0x0045_34f0;
+/// `004839c0` (`cdecl`: the form of an id) and the type descriptors `.?AVTESForm@@` and
+/// `.?AVTESObjectREFR@@`.
+const LOOKUP_FORM: u32 = 0x0048_39c0;
+const TYPE_TES_FORM: u32 = 0x0118_3028;
+const TYPE_TES_OBJECT_REFR: u32 = 0x0118_41cc;
+
+// Translated from 0081b860 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `MagicHitEffect::Update` (Xbox PDB; `thiscall`, `RET 4`: the elapsed time): ages the
+/// effect (`fAge` plus the time); false when the target is gone (no target, no 3D, or
+/// `00440d80` true); otherwise sets `bFinished` once the lifetime is below the age, and
+/// answers true.
+pub fn magic_hit_effect_update(e: &mut Engine, this: Ptr<MagicHitEffect>, time: f32) -> bool {
+    let age = x87_store32(x87_add(
+        x87_load32(e.get(this, MagicHitEffect::fAge)),
+        x87_m32(time.to_bits()),
+    ));
+    e.set(this, MagicHitEffect::fAge, age);
+    let target = e.get(this, MagicHitEffect::pTarget);
+    if target == 0 || e.vcall(target, 0x1d0, &[]).u32() == 0 {
+        return false;
+    }
+    let target = e.get(this, MagicHitEffect::pTarget);
+    if e.call(REFERENCE_FLAG, &args![target]).bool() {
+        return false;
+    }
+    let age = x87_load32(e.get(this, MagicHitEffect::fAge));
+    let lifetime = x87_load32(e.get(this, MagicHitEffect::fLifetime));
+    // FCOMPP (the lifetime against the age) / TEST AH,5 / JP: finished when the lifetime
+    // is below.
+    if lifetime < age {
+        e.set(this, MagicHitEffect::bFinished, 1);
+    }
+    true
+}
+
+// Translated from 0081bc70 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`thiscall`, `RET 4`: a node): with the effect's object
+/// (`00441110`), takes its cell (`0041fd00`); then, for a node in a cell with 3D, attaches
+/// the node under the cell's root node (its slot +0xDC with 1) unless its grandparent is
+/// already the cell's 3D.
+pub fn fn_0081bc70(e: &mut Engine, this: Ptr, node: u32) {
+    if e.call(EFFECT_OBJECT_00441110, &args![this]).u32() == 0 {
+        return;
+    }
+    let object = e.call(EFFECT_OBJECT_00441110, &args![this]).u32();
+    let cell = e.call(REFERENCE_CELL_008D6F30, &args![object]).u32();
+    e.call(SET_CELL_0041FD00, &args![this, cell]);
+    if node == 0 || e.call(WORD_AT_C, &args![this]).u32() == 0 {
+        return;
+    }
+    let cell = e.call(WORD_AT_C, &args![this]).u32();
+    if e.call(CELL_GET_3D, &args![cell]).u32() == 0 {
+        return;
+    }
+    if e.call(NODE_PARENT, &args![node]).u32() != 0 {
+        let cell = e.call(WORD_AT_C, &args![this]).u32();
+        let cell_3d = e.call(CELL_GET_3D, &args![cell]).u32();
+        let parent = e.call(NODE_PARENT, &args![node]).u32();
+        if cell_3d == e.call(NODE_PARENT, &args![parent]).u32() {
+            return;
+        }
+    }
+    let cell = e.call(WORD_AT_C, &args![this]).u32();
+    let root = e.call(CELL_ROOT_NODE, &args![cell]).u32();
+    e.vcall(root, 0xdc, &args![node, 1u32]);
+}
+
+// Translated from 0081bd30 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `MagicHitEffect::GetSaveSize` (Xbox PDB; `thiscall`, `RET 8`, both words unread): 4 + 1,
+/// plus 4 for a save version of 0x72 or more.
+pub fn magic_hit_effect_get_save_size(
+    e: &mut Engine,
+    _this: Ptr,
+    _unused_1: u32,
+    _unused_2: u32,
+) -> u16 {
+    let mut size = 0u16;
+    size = size.wrapping_add(4);
+    size = size.wrapping_add(1);
+    let manager = e.mem.u32(SAVE_LOAD_MANAGER);
+    if e.call(SAVE_VERSION, &args![manager]).u8() >= 0x72 {
+        size = size.wrapping_add(4);
+    }
+    size
+}
+
+// Translated from 0081bd80 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `MagicHitEffect::SaveGame` (Xbox PDB; `thiscall`, `RET 8`, both words unread): `fAge`
+/// (4), `bFinished` (1) and, for a version of 0x72 or more, `fLifetime` (4), through the
+/// save/load manager.
+pub fn magic_hit_effect_save_game(
+    e: &mut Engine,
+    this: Ptr<MagicHitEffect>,
+    _unused_1: u32,
+    _unused_2: u32,
+) {
+    let base = this.addr();
+    let manager = e.mem.u32(SAVE_LOAD_MANAGER);
+    e.call(SAVE_WORD, &args![manager, base.wrapping_add(0x20), 4u32]);
+    let manager = e.mem.u32(SAVE_LOAD_MANAGER);
+    e.call(SAVE_WORD, &args![manager, base.wrapping_add(0x24), 1u32]);
+    let manager = e.mem.u32(SAVE_LOAD_MANAGER);
+    if e.call(SAVE_VERSION, &args![manager]).u8() >= 0x72 {
+        let manager = e.mem.u32(SAVE_LOAD_MANAGER);
+        e.call(SAVE_WORD, &args![manager, base.wrapping_add(8), 4u32]);
+    }
+}
+
+// Translated from 0081bde0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `MagicHitEffect::LoadGame` (Xbox PDB; `thiscall`, `RET 8`: the effect and the target):
+/// loads `fAge`, `bFinished` and (version 0x72 or more) `fLifetime` through the save/load
+/// manager, then stores `pEffect` and `pTarget`.
+pub fn magic_hit_effect_load_game(
+    e: &mut Engine,
+    this: Ptr<MagicHitEffect>,
+    effect: u32,
+    target: u32,
+) {
+    let base = this.addr();
+    let manager = e.mem.u32(SAVE_LOAD_MANAGER);
+    e.call(LOAD_WORD, &args![manager, base.wrapping_add(0x20), 4u32]);
+    let manager = e.mem.u32(SAVE_LOAD_MANAGER);
+    e.call(LOAD_WORD, &args![manager, base.wrapping_add(0x24), 1u32]);
+    let manager = e.mem.u32(SAVE_LOAD_MANAGER);
+    if e.call(SAVE_VERSION, &args![manager]).u8() >= 0x72 {
+        let manager = e.mem.u32(SAVE_LOAD_MANAGER);
+        e.call(LOAD_WORD, &args![manager, base.wrapping_add(8), 4u32]);
+    }
+    e.set(this, MagicHitEffect::pEffect, effect);
+    e.set(this, MagicHitEffect::pTarget, target);
+}
+
+// Translated from 0081be50 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `MagicHitEffect::InitLoadGame` (Xbox PDB; `thiscall`, `RET 8`: a word it never reads and
+/// the target): `pCell` = the target's cell (`008d6f30`), when there is a target.
+pub fn magic_hit_effect_init_load_game(
+    e: &mut Engine,
+    this: Ptr<MagicHitEffect>,
+    _unused_1: u32,
+    target: u32,
+) {
+    if target != 0 {
+        let cell = e.call(REFERENCE_CELL_008D6F30, &args![target]).u32();
+        e.set(this, MagicHitEffect::pCell, cell);
+    }
+}
+
+// Translated from 0081be80 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `MagicHitEffect::SaveGame_ov2` (Xbox PDB; `thiscall`, `RET 4`: the save buffer):
+/// `BSTempEffect::SaveGame_ov2`, then `fAge` (4), `bFinished` (1) and the target's form id.
+pub fn magic_hit_effect_save_game_ov2(e: &mut Engine, this: Ptr<MagicHitEffect>, buffer: u32) {
+    let base = this.addr();
+    e.call(BS_TEMP_EFFECT_SAVE_GAME_OV2, &args![this, buffer]);
+    e.call(
+        BUFFER_SAVE_DATA,
+        &args![buffer, base.wrapping_add(0x20), 4u32, 0u32],
+    );
+    e.call(
+        BUFFER_SAVE_DATA,
+        &args![buffer, base.wrapping_add(0x24), 1u32, 0u32],
+    );
+    let target = e.get(this, MagicHitEffect::pTarget);
+    e.call(BUFFER_SAVE_FORM_ID, &args![buffer, target, 0u32]);
+}
+
+// Translated from 0081bed0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `MagicHitEffect::LoadGame_ov2` (Xbox PDB; `thiscall`, `RET 4`: the load buffer):
+/// `BSTempEffect::LoadGame_ov2`, then `fAge`, `bFinished` and the target's form id into
+/// `pTarget` (`LoadFormID_ov2`).
+pub fn magic_hit_effect_load_game_ov2(e: &mut Engine, this: Ptr<MagicHitEffect>, buffer: u32) {
+    let base = this.addr();
+    e.call(BS_TEMP_EFFECT_LOAD_GAME_OV2, &args![this, buffer]);
+    e.call(
+        BUFFER_LOAD_DATA,
+        &args![buffer, base.wrapping_add(0x20), 4u32],
+    );
+    e.call(
+        BUFFER_LOAD_DATA,
+        &args![buffer, base.wrapping_add(0x24), 1u32],
+    );
+    e.call(BUFFER_LOAD_FORM_ID, &args![buffer, base.wrapping_add(0x1c)]);
+}
+
+// Translated from 0081bf20 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `MagicHitEffect::InitLoadGame_ov2` (Xbox PDB; `thiscall`, `RET 4`): the base body
+/// `004534f0` with the word, then `pTarget` (a loaded form id) resolved (`004839c0`) and
+/// cast to `TESObjectREFR`, or null.
+pub fn magic_hit_effect_init_load_game_ov2(e: &mut Engine, this: Ptr<MagicHitEffect>, buffer: u32) {
+    e.call(BASE_INIT_LOAD_GAME_004534F0, &args![this, buffer]);
+    let id = e.get(this, MagicHitEffect::pTarget);
+    let target = if id != 0 {
+        let form = e.call(LOOKUP_FORM, &args![id]).u32();
+        e.call(
+            DYNAMIC_CAST,
+            &args![form, 0u32, TYPE_TES_FORM, TYPE_TES_OBJECT_REFR, 0u32],
+        )
+        .u32()
+    } else {
+        0
+    };
+    e.set(this, MagicHitEffect::pTarget, target);
 }
 
 #[cfg(test)]
@@ -603,5 +865,179 @@ mod constant_getter_tests {
         let mut e = Engine::new();
         assert_eq!(e.call(0x0081_b6b0, &args![0x1000u32]).u32(), 0x011d_c6b4);
         assert_eq!(e.call(0x0081_b6b0, &args![0u32]).u32(), 0x011d_c6b4);
+    }
+}
+
+#[cfg(test)]
+mod n047_hit_tests {
+    use super::*;
+
+    fn calls(e: &Engine, addr: u32) -> Vec<Vec<u32>> {
+        e.call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|(a, _)| *a == addr)
+            .map(|(_, w)| w.clone())
+            .collect()
+    }
+
+    fn quiet(e: &mut Engine, addresses: &[u32]) {
+        for &addr in addresses {
+            e.register(addr, |_, _| Ret::default());
+        }
+    }
+
+    fn engine() -> Engine {
+        let mut e = Engine::new();
+        e.map(0x011d_e000, 0x1000);
+        e.mem.set_u32(SAVE_LOAD_MANAGER, 0x5100);
+        e.call_log = Some(vec![]);
+        e
+    }
+
+    #[test]
+    fn update_ages_and_finishes() {
+        let mut e = engine();
+        let this: Ptr<MagicHitEffect> = e.new_object();
+        let target = e.mem.alloc(0x10);
+        let vtable = e.mem.alloc(0x200);
+        e.mem.set_u32(vtable + 0x1d0, 0x0370_0000);
+        e.mem.set_u32(target, vtable);
+        e.register(0x0370_0000, |_, _| 1u32.into_ret());
+        e.register(REFERENCE_FLAG, |_, _| 0u32.into_ret());
+        e.set(this, MagicHitEffect::pTarget, target);
+        e.set(this, MagicHitEffect::fLifetime, 2.0f32.to_bits());
+        assert!(e.call(0x0081_b860, &args![this, 1.5f32]).bool());
+        assert_eq!(f32::from_bits(e.get(this, MagicHitEffect::fAge)), 1.5);
+        assert_eq!(e.get(this, MagicHitEffect::bFinished), 0);
+        assert!(e.call(0x0081_b860, &args![this, 1.0f32]).bool());
+        assert_eq!(e.get(this, MagicHitEffect::bFinished), 1);
+        // Gone targets answer false (the age still grows).
+        e.register(REFERENCE_FLAG, |_, _| 1u32.into_ret());
+        assert!(!e.call(0x0081_b860, &args![this, 1.0f32]).bool());
+        assert_eq!(f32::from_bits(e.get(this, MagicHitEffect::fAge)), 3.5);
+        e.set(this, MagicHitEffect::pTarget, 0);
+        assert!(!e.call(0x0081_b860, &args![this, 1.0f32]).bool());
+    }
+
+    #[test]
+    fn attach_puts_the_node_under_the_cell_root() {
+        let mut e = engine();
+        let this = e.mem.alloc(0x28);
+        e.register(EFFECT_OBJECT_00441110, |_, _| 0x7000u32.into_ret());
+        e.register(REFERENCE_CELL_008D6F30, |_, _| 0x5400u32.into_ret());
+        e.register(SET_CELL_0041FD00, |e, a| {
+            e.mem.set_u32(a[0] + 0xc, a[1]);
+            Ret::default()
+        });
+        e.register(WORD_AT_C, |e, a| e.mem.u32(a[0] + 0xc).into_ret());
+        e.register(CELL_GET_3D, |_, _| 0x5500u32.into_ret());
+        e.register(NODE_PARENT, |_, a| {
+            (if a[0] == 0x4400 { 0x4500u32 } else { 0x4600 }).into_ret()
+        });
+        let root = e.mem.alloc(4);
+        let vtable = e.mem.alloc(0x100);
+        e.mem.set_u32(vtable + 0xdc, 0x0370_0010);
+        e.mem.set_u32(root, vtable);
+        e.register_double(CELL_ROOT_NODE, move |_, _| root.into_ret());
+        quiet(&mut e, &[0x0370_0010]);
+        e.call(0x0081_bc70, &args![this, 0x4400u32]);
+        assert_eq!(calls(&e, SET_CELL_0041FD00), vec![vec![this, 0x5400]]);
+        assert_eq!(calls(&e, 0x0370_0010), vec![vec![root, 0x4400, 1]]);
+        // Already under the cell's 3D: nothing.
+        e.register(NODE_PARENT, |_, a| {
+            (if a[0] == 0x4400 { 0x4500u32 } else { 0x5500 }).into_ret()
+        });
+        e.call(0x0081_bc70, &args![this, 0x4400u32]);
+        assert_eq!(calls(&e, 0x0370_0010).len(), 1);
+        // No node: only the cell is taken.
+        e.call(0x0081_bc70, &args![this, 0u32]);
+        assert_eq!(calls(&e, SET_CELL_0041FD00).len(), 3);
+        assert_eq!(calls(&e, CELL_ROOT_NODE).len(), 1);
+    }
+
+    #[test]
+    fn save_size_save_and_load() {
+        let mut e = engine();
+        e.register(SAVE_VERSION, |_, _| 0x72u32.into_ret());
+        let this: Ptr<MagicHitEffect> = e.new_object();
+        assert_eq!(e.call(0x0081_bd30, &args![this, 0u32, 0u32]).u16(), 9);
+        quiet(&mut e, &[SAVE_WORD, LOAD_WORD]);
+        e.call(0x0081_bd80, &args![this, 0u32, 0u32]);
+        let base = this.addr();
+        assert_eq!(
+            calls(&e, SAVE_WORD),
+            vec![
+                vec![0x5100, base + 0x20, 4],
+                vec![0x5100, base + 0x24, 1],
+                vec![0x5100, base + 8, 4]
+            ]
+        );
+        e.call(0x0081_bde0, &args![this, 0x1111u32, 0x2222u32]);
+        assert_eq!(calls(&e, LOAD_WORD).len(), 3);
+        assert_eq!(e.get(this, MagicHitEffect::pEffect), 0x1111);
+        assert_eq!(e.get(this, MagicHitEffect::pTarget), 0x2222);
+        e.register(SAVE_VERSION, |_, _| 0x71u32.into_ret());
+        assert_eq!(e.call(0x0081_bd30, &args![this, 0u32, 0u32]).u16(), 5);
+        e.call(0x0081_bd80, &args![this, 0u32, 0u32]);
+        assert_eq!(calls(&e, SAVE_WORD).len(), 5);
+        // InitLoadGame takes the target's cell.
+        e.register(REFERENCE_CELL_008D6F30, |_, _| 0x5400u32.into_ret());
+        e.call(0x0081_be50, &args![this, 0u32, 0x2222u32]);
+        assert_eq!(e.get(this, MagicHitEffect::pCell), 0x5400);
+        e.set(this, MagicHitEffect::pCell, 0);
+        e.call(0x0081_be50, &args![this, 0u32, 0u32]);
+        assert_eq!(e.get(this, MagicHitEffect::pCell), 0);
+    }
+
+    #[test]
+    fn buffer_save_load_and_target_resolution() {
+        let mut e = engine();
+        let this: Ptr<MagicHitEffect> = e.new_object();
+        let base = this.addr();
+        e.set(this, MagicHitEffect::pTarget, 0x7000);
+        quiet(
+            &mut e,
+            &[
+                BS_TEMP_EFFECT_SAVE_GAME_OV2,
+                BUFFER_SAVE_DATA,
+                BUFFER_SAVE_FORM_ID,
+                BS_TEMP_EFFECT_LOAD_GAME_OV2,
+                BUFFER_LOAD_DATA,
+                BUFFER_LOAD_FORM_ID,
+                BASE_INIT_LOAD_GAME_004534F0,
+            ],
+        );
+        e.call(0x0081_be80, &args![this, 0x9900u32]);
+        assert_eq!(
+            calls(&e, BUFFER_SAVE_DATA),
+            vec![
+                vec![0x9900, base + 0x20, 4, 0],
+                vec![0x9900, base + 0x24, 1, 0]
+            ]
+        );
+        assert_eq!(
+            calls(&e, BUFFER_SAVE_FORM_ID),
+            vec![vec![0x9900, 0x7000, 0]]
+        );
+        e.call(0x0081_bed0, &args![this, 0x9900u32]);
+        assert_eq!(
+            calls(&e, BUFFER_LOAD_FORM_ID),
+            vec![vec![0x9900, base + 0x1c]]
+        );
+        assert_eq!(calls(&e, BUFFER_LOAD_DATA).len(), 2);
+        e.register(LOOKUP_FORM, |_, a| (a[0] + 1).into_ret());
+        e.register(DYNAMIC_CAST, |_, a| (a[0] + 1).into_ret());
+        e.call(0x0081_bf20, &args![this, 0x9900u32]);
+        assert_eq!(e.get(this, MagicHitEffect::pTarget), 0x7002);
+        assert_eq!(
+            calls(&e, DYNAMIC_CAST),
+            vec![vec![0x7001, 0, TYPE_TES_FORM, TYPE_TES_OBJECT_REFR, 0]]
+        );
+        e.set(this, MagicHitEffect::pTarget, 0);
+        e.call(0x0081_bf20, &args![this, 0x9900u32]);
+        assert_eq!(e.get(this, MagicHitEffect::pTarget), 0);
+        assert_eq!(calls(&e, LOOKUP_FORM).len(), 1);
     }
 }

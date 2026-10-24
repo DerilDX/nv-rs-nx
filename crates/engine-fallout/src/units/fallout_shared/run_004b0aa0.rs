@@ -69,9 +69,54 @@ pub fn fn_004b0aa0(e: &mut Engine, this: Ptr, key: u32, count: u32) {
     });
 }
 
+/// `00559450` (`thiscall`, no stack word): the word at `this`.
+const WORD_AT: u32 = 0x0055_9450;
+
+// Translated from 004b0ba0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Finds an object for `key` (`thiscall`, `RET 4`; `this` is the first
+/// node of a list; the engine map gives it no name). The list is walked
+/// (`008256d0` stops it, `006815c0` the node's entry, `00726070` the next
+/// node) for the first entry whose first word is `key`. In that entry's
+/// list at +4 the walk answers the first item (`00559450` of the node's
+/// entry address) that is non-null and whose `00726070` answers 1; it
+/// answers 0 at once when it reaches a node for which `004a4460` answers
+/// true, and 0 when nothing matched.
+pub fn fn_004b0ba0(e: &mut Engine, this: Ptr, key: u32) -> u32 {
+    let mut found = 0u32;
+    let mut node = this.addr();
+    while node != 0 && found == 0 && !e.call(WALK_STOPS, &args![node]).bool() {
+        let entry_at = e.call(ENTRY_HOLDER, &args![node]).u32();
+        let entry = e.mem.u32(entry_at);
+        if entry != 0 && e.mem.u32(entry) == key {
+            found = entry;
+        }
+        node = e.call(WALK_NEXT, &args![node]).u32();
+    }
+    let mut result = 0u32;
+    if found == 0 {
+        return result;
+    }
+    let mut node = found.wrapping_add(4);
+    while result == 0 && node != 0 {
+        if e.call(LIST_IS_EMPTY, &args![node]).bool() {
+            break;
+        }
+        let item_at = e.call(ENTRY_HOLDER, &args![node]).u32();
+        let item = e.call(WORD_AT, &args![item_at]).u32();
+        if item != 0 && e.call(WALK_NEXT, &args![item]).u32() == 1 {
+            result = item;
+        }
+        node = e.call(WALK_NEXT, &args![node]).u32();
+    }
+    result
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
-    vec![entry!(0x004b_0aa0, fn_004b0aa0(Ptr, u32, u32))]
+    vec![
+        entry!(0x004b_0ba0, fn_004b0ba0(Ptr, u32) -> u32),
+        entry!(0x004b_0aa0, fn_004b0aa0(Ptr, u32, u32)),
+    ]
 }
 
 #[cfg(test)]
@@ -149,5 +194,58 @@ mod tests {
         let log = e.call_log.take().unwrap();
         assert_eq!(log.iter().filter(|c| c.0 == WALK_NEXT).count(), 3);
         assert!(log.iter().all(|c| c.0 != LIST_IS_EMPTY));
+    }
+}
+
+#[cfg(test)]
+mod n038_tests {
+    use super::*;
+
+    fn word(eax: u32) -> Ret {
+        Ret {
+            eax,
+            ..Ret::default()
+        }
+    }
+
+    /// Nodes are `[entry, next, stop]`; `00726070` answers +4 of anything
+    /// (an item's +4 is its state); `004a4460` answers +8 of the node.
+    fn engine() -> Engine {
+        let mut e = Engine::new();
+        e.register(WALK_STOPS, |e, a| word(e.mem.u32(a[0] + 8)));
+        e.register(ENTRY_HOLDER, |_, a| word(a[0]));
+        e.register(WALK_NEXT, |e, a| word(e.mem.u32(a[0] + 4)));
+        e.register(LIST_IS_EMPTY, |e, a| word(e.mem.u32(a[0] + 8)));
+        e.register(WORD_AT, |e, a| word(e.mem.u32(a[0])));
+        e
+    }
+
+    fn node(e: &mut Engine, entry: u32, next: u32) -> u32 {
+        let n = e.mem.alloc(0xc);
+        e.mem.set_u32(n, entry);
+        e.mem.set_u32(n + 4, next);
+        n
+    }
+
+    #[test]
+    fn at_004b0ba0_finds_the_item_in_state_one() {
+        let mut e = engine();
+        let item_a = node(&mut e, 0, 2);
+        let item_b = node(&mut e, 0, 1);
+        // The entry: key at +0, its list's first node inline at +4.
+        let entry = e.mem.alloc(0x10);
+        e.mem.set_u32(entry, 0x55);
+        let second = node(&mut e, item_b, 0);
+        e.mem.set_u32(entry + 4, item_a);
+        e.mem.set_u32(entry + 8, second);
+        let other = e.mem.alloc(4);
+        e.mem.set_u32(other, 0x44);
+        let n2 = node(&mut e, entry, 0);
+        let first = node(&mut e, other, n2);
+        assert_eq!(e.call(0x004b_0ba0, &args![first, 0x55u32]).u32(), item_b);
+        assert_eq!(e.call(0x004b_0ba0, &args![first, 0x66u32]).u32(), 0);
+        // A node of the entry's list that `004a4460` stops on: 0.
+        e.mem.set_u32(entry + 0xc, 1);
+        assert_eq!(e.call(0x004b_0ba0, &args![first, 0x55u32]).u32(), 0);
     }
 }

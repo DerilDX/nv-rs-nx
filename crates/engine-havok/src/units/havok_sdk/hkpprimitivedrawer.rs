@@ -71,6 +71,15 @@ pub(crate) fn normalised(e: &Engine, v: Vec4) -> Vec4 {
     v.map(|lane| factor * lane)
 }
 
+/// [`normalised`] with the SSE NaN rules: `MULPS v, v`, the `ADDSS` sum (`z + (y + x)`, the
+/// higher lane the destination) and `MULPS` with the splatted factor as the destination.
+pub(crate) fn normalised_sse(e: &Engine, v: Vec4) -> Vec4 {
+    use crate::sse::{add, mulps};
+    let squares = mulps(v, v);
+    let factor = inverse_length(e, add(squares[2], add(squares[1], squares[0])));
+    mulps([factor; 4], v)
+}
+
 /// Rotates `v` by the quaternion `q`: `2 * (w * (q' x v) + (w * w - 0.5) * v + (q . v) * q)`,
 /// where `q'` is the quaternion's vector part, all four lanes.
 pub(crate) fn rotate_by_quaternion(e: &Engine, q: Vec4, v: Vec4) -> Vec4 {

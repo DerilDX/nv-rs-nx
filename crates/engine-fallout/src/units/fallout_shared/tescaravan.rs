@@ -404,6 +404,208 @@ pub fn tes_caravan_deck_load(e: &mut Engine, this: Ptr, file: Ptr) -> bool {
     true
 }
 
+/// The savers the caravan forms call: `TESForm::StartForm` (`004855a0`),
+/// `TESForm::SaveData` (`00485e00`), `TESForm::CloseForm` (`00485680`),
+/// `TESFullName::Save` (`00487010`), `TESModelTextureSwap::Save`
+/// (`0048a520`, three chunk words), `TESTexture::Save` (`0048e370`, one
+/// chunk word), `BGSMessageIcon::Save` (`0047a240`, one chunk word),
+/// `TESScriptableForm::Save` (`0048cca0`), `BGSPickupPutdownSounds::Save`
+/// (`0047b560`) and `TESForm::AddChunk` with a word (`00485910`, `cdecl`).
+const FORM_START: u32 = 0x0048_55a0;
+const FORM_SAVE_DATA: u32 = 0x0048_5e00;
+const FORM_CLOSE: u32 = 0x0048_5680;
+const SAVE_FULL_NAME: u32 = 0x0048_7010;
+const SAVE_MODEL_TEXTURE_SWAP: u32 = 0x0048_a520;
+const SAVE_TEXTURE: u32 = 0x0048_e370;
+const SAVE_MESSAGE_ICON: u32 = 0x0047_a240;
+const SAVE_SCRIPTABLE: u32 = 0x0048_cca0;
+const SAVE_PICKUP_PUTDOWN_SOUNDS: u32 = 0x0047_b560;
+const ADD_CHUNK_WORD: u32 = 0x0048_5910;
+/// The card's two textures (`0050d100` answers the first, `00503650` the
+/// second; `thiscall`, no words), the card's value pair (`006ab360`: the
+/// address of two words), and the money's model getter (`0059b270`,
+/// `thiscall`, one word: the index).
+const CARD_TEXTURE_FIRST: u32 = 0x0050_d100;
+const CARD_TEXTURE_SECOND: u32 = 0x0050_3650;
+const CARD_VALUE: u32 = 0x006a_b360;
+const MONEY_MODEL: u32 = 0x0059_b270;
+/// The chunk codes the saves write.
+const CHUNK_MOD2: u32 = 0x3244_4f4d;
+const CHUNK_MOD3: u32 = 0x3344_4f4d;
+/// `__RTDynamicCast` (`00ec43fb`) from `TESForm` (`01183028`) to
+/// `TESCaravanCard` (`0118c5c4`), the type descriptors' names read at +8;
+/// `TESForm::CopyAllComponents` (`004851b0`), `TESForm::CompareAllComponents`
+/// (`00485270`), a texture's path text (`00408da0`), the path setter
+/// (`00489100`, `thiscall`, one word), the form's type (`00401170`), the
+/// type setter `004f15a0` (one word), the text comparison `00408b20`
+/// (`cdecl`) and `memcmp` (`00ec4835`).
+const DYNAMIC_CAST: u32 = 0x00ec_43fb;
+const TYPE_FORM: u32 = 0x0118_3028;
+const TYPE_CARAVAN_CARD: u32 = 0x0118_c5c4;
+const FORM_COPY_ALL_COMPONENTS: u32 = 0x0048_51b0;
+const FORM_COMPARE_ALL_COMPONENTS: u32 = 0x0048_5270;
+const TEXTURE_PATH_TEXT: u32 = 0x0040_8da0;
+const TEXTURE_SET_PATH: u32 = 0x0048_9100;
+const FORM_TYPE: u32 = 0x0040_1170;
+const FORM_SET_TYPE: u32 = 0x004f_15a0;
+const TEXT_COMPARE: u32 = 0x0040_8b20;
+const MEMCMP: u32 = 0x00ec_4835;
+/// `00484c20` (`thiscall`, one word): the base body `0059adb0` forwards to.
+const FORWARD_TARGET_00484C20: u32 = 0x0048_4c20;
+
+// Translated from 0059a720 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TESCaravanCard::Save` (Xbox PDB): starts the form, saves the full name
+/// (+0x30), the model (+0x3C: `MODL`, `MODT`, `MODS`), the icon (+0x5C,
+/// `ICON`), the message icon (+0x68, `MICO`), the script (+0x80), the
+/// pick-up/put-down sounds (+0x8C), the two card textures (`TX00`,
+/// `TX01`), the words at +0xB8 and +0xB4 (both `INTV`, in that order) and
+/// the form data, and closes the form.
+pub fn tes_caravan_card_save(e: &mut Engine, this: Ptr) {
+    let at = this.addr();
+    e.call(FORM_START, &args![this]);
+    e.call(SAVE_FULL_NAME, &args![at + 0x30]);
+    e.call(
+        SAVE_MODEL_TEXTURE_SWAP,
+        &args![at + 0x3c, CHUNK_MODL, CHUNK_MODT, CHUNK_MODS],
+    );
+    e.call(SAVE_TEXTURE, &args![at + 0x5c, CHUNK_ICON]);
+    e.call(SAVE_MESSAGE_ICON, &args![at + 0x68, CHUNK_MICO]);
+    e.call(SAVE_SCRIPTABLE, &args![at + 0x80]);
+    e.call(SAVE_PICKUP_PUTDOWN_SOUNDS, &args![at + 0x8c]);
+    let texture = e.call(CARD_TEXTURE_FIRST, &args![this]).u32();
+    e.call(SAVE_TEXTURE, &args![texture, CHUNK_TX00]);
+    let texture = e.call(CARD_TEXTURE_SECOND, &args![this]).u32();
+    e.call(SAVE_TEXTURE, &args![texture, CHUNK_TX01]);
+    let value = e.mem.u32(at + 0xb8);
+    e.call(ADD_CHUNK_WORD, &args![CHUNK_INTV, value]);
+    let value = e.mem.u32(at + 0xb4);
+    e.call(ADD_CHUNK_WORD, &args![CHUNK_INTV, value]);
+    e.call(FORM_SAVE_DATA, &args![this]);
+    e.call(FORM_CLOSE, &args![this]);
+}
+
+/// `other` cast from `TESForm` to `TESCaravanCard`.
+fn cast_caravan_card(e: &mut Engine, other: Ptr) -> u32 {
+    e.call(
+        DYNAMIC_CAST,
+        &args![other, 0u32, TYPE_FORM, TYPE_CARAVAN_CARD, 0u32],
+    )
+    .u32()
+}
+
+// Translated from 0059ac20 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`thiscall`, one word; the copy of a
+/// `TESCaravanCard`): when `other` is one, copies all components, the two
+/// card texture paths (into the textures at +0x9C and +0xA8), its value
+/// pair (`006ab360`, into +0xB4 and +0xB8) and its form type (`00401170`
+/// of `other` as given into `004f15a0`).
+pub fn fn_0059ac20(e: &mut Engine, this: Ptr, other: Ptr) {
+    let source = cast_caravan_card(e, other);
+    if source == 0 {
+        return;
+    }
+    let at = this.addr();
+    e.call(FORM_COPY_ALL_COMPONENTS, &args![this, source]);
+    let texture = e.call(CARD_TEXTURE_FIRST, &args![source]).u32();
+    let path = e.call(TEXTURE_PATH_TEXT, &args![texture]).u32();
+    e.call(TEXTURE_SET_PATH, &args![at + 0x9c, path]);
+    let texture = e.call(CARD_TEXTURE_SECOND, &args![source]).u32();
+    let path = e.call(TEXTURE_PATH_TEXT, &args![texture]).u32();
+    e.call(TEXTURE_SET_PATH, &args![at + 0xa8, path]);
+    let pair = e.call(CARD_VALUE, &args![source]).u32();
+    let first = e.mem.u32(pair);
+    let second = e.mem.u32(pair + 4);
+    e.mem.set_u32(at + 0xb4, first);
+    e.mem.set_u32(at + 0xb8, second);
+    let form_type = e.call(FORM_TYPE, &args![other]).u32();
+    e.call(FORM_SET_TYPE, &args![this, form_type]);
+}
+
+// Translated from 0059acd0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`thiscall`, one word; the comparison of a
+/// `TESCaravanCard`): true (different) when `other` is none, when
+/// `CompareAllComponents` says so, when either texture path differs
+/// (`00408b20` of this card's path and `other`'s), or when the eight bytes
+/// at +0xB4 differ from `other`'s value pair (`memcmp`).
+pub fn fn_0059acd0(e: &mut Engine, this: Ptr, other: Ptr) -> bool {
+    let source = cast_caravan_card(e, other);
+    if source == 0 {
+        return true;
+    }
+    let at = this.addr();
+    if e.call(FORM_COMPARE_ALL_COMPONENTS, &args![this, source])
+        .u8()
+        != 0
+    {
+        return true;
+    }
+    for (getter, offset) in [(CARD_TEXTURE_FIRST, 0x9c), (CARD_TEXTURE_SECOND, 0xa8)] {
+        let texture = e.call(getter, &args![source]).u32();
+        let theirs = e.call(TEXTURE_PATH_TEXT, &args![texture]).u32();
+        let mine = e.call(TEXTURE_PATH_TEXT, &args![at + offset]).u32();
+        if e.call(TEXT_COMPARE, &args![mine, theirs]).u32() != 0 {
+            return true;
+        }
+    }
+    let pair = e.call(CARD_VALUE, &args![source]).u32();
+    e.call(MEMCMP, &args![at + 0xb4, pair, 8u32]).u32() != 0
+}
+
+// Translated from 0059adb0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`thiscall`, one word): forwards `this` and
+/// the word to `00484c20`.
+pub fn fn_0059adb0(e: &mut Engine, this: Ptr, argument: u32) {
+    e.call(FORWARD_TARGET_00484C20, &args![this, argument]);
+}
+
+// Translated from 0059ae10 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`cdecl (first, second)`, a sort comparison):
+/// the first word of each card's value pair (`006ab360` of `*first` and
+/// `*second`), compared signed: 1, -1 or 0.
+pub fn fn_0059ae10(e: &mut Engine, first: Ptr, second: Ptr) -> i32 {
+    let card = e.mem.u32(first.addr());
+    let pair = e.call(CARD_VALUE, &args![card]).u32();
+    let left = e.mem.u32(pair) as i32;
+    let card = e.mem.u32(second.addr());
+    let pair = e.call(CARD_VALUE, &args![card]).u32();
+    let right = e.mem.u32(pair) as i32;
+    if left > right {
+        1
+    } else if left < right {
+        -1
+    } else {
+        0
+    }
+}
+
+// Translated from 0059b1b0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TESCaravanMoney::Save` (Xbox PDB): starts the form, saves the full
+/// name (+0x30), the model (+0x3C: `MODL`, `MODT`, `MODS`), the icon
+/// (+0x5C, `ICON`), the message icon (+0x68, `MICO`), the pick-up/put-down
+/// sounds (+0x80) and the form data, then the two extra models
+/// (`0059b270` with 0 and 1) as `MOD2` and `MOD3`, and closes the form.
+pub fn tes_caravan_money_save(e: &mut Engine, this: Ptr) {
+    let at = this.addr();
+    e.call(FORM_START, &args![this]);
+    e.call(SAVE_FULL_NAME, &args![at + 0x30]);
+    e.call(
+        SAVE_MODEL_TEXTURE_SWAP,
+        &args![at + 0x3c, CHUNK_MODL, CHUNK_MODT, CHUNK_MODS],
+    );
+    e.call(SAVE_TEXTURE, &args![at + 0x5c, CHUNK_ICON]);
+    e.call(SAVE_MESSAGE_ICON, &args![at + 0x68, CHUNK_MICO]);
+    e.call(SAVE_PICKUP_PUTDOWN_SOUNDS, &args![at + 0x80]);
+    e.call(FORM_SAVE_DATA, &args![this]);
+    for (index, chunk) in [(0u32, CHUNK_MOD2), (1, CHUNK_MOD3)] {
+        let model = e.call(MONEY_MODEL, &args![this, index]).u32();
+        e.call(
+            SAVE_MODEL_TEXTURE_SWAP,
+            &args![model, chunk, CHUNK_MODT, CHUNK_MODS],
+        );
+    }
+    e.call(FORM_CLOSE, &args![this]);
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -418,6 +620,12 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x0059_af90, fn_0059af90(Ptr, u32) -> Ptr),
         entry!(0x0059_a800, fn_0059a800(Ptr, Ptr) -> bool),
         entry!(0x0059_bb50, tes_caravan_deck_load(Ptr, Ptr) -> bool),
+        entry!(0x0059_a720, tes_caravan_card_save(Ptr)),
+        entry!(0x0059_ac20, fn_0059ac20(Ptr, Ptr)),
+        entry!(0x0059_acd0, fn_0059acd0(Ptr, Ptr) -> bool),
+        entry!(0x0059_adb0, fn_0059adb0(Ptr, u32)),
+        entry!(0x0059_ae10, fn_0059ae10(Ptr, Ptr) -> i32),
+        entry!(0x0059_b1b0, tes_caravan_money_save(Ptr)),
     ]
 }
 
@@ -926,5 +1134,188 @@ mod tests {
                 usize::from(list != 0)
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod n043_tests {
+    use super::*;
+
+    const STATE: u32 = 0x7300_0000;
+
+    fn calls(e: &Engine, addr: u32) -> Vec<Vec<u32>> {
+        e.call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|c| c.0 == addr)
+            .map(|c| c.1.clone())
+            .collect()
+    }
+
+    fn engine() -> Engine {
+        let mut e = Engine::new();
+        e.map(STATE, 0x40);
+        for addr in [
+            FORM_START,
+            FORM_SAVE_DATA,
+            FORM_CLOSE,
+            SAVE_FULL_NAME,
+            SAVE_MODEL_TEXTURE_SWAP,
+            SAVE_TEXTURE,
+            SAVE_MESSAGE_ICON,
+            SAVE_SCRIPTABLE,
+            SAVE_PICKUP_PUTDOWN_SOUNDS,
+            ADD_CHUNK_WORD,
+            FORM_COPY_ALL_COMPONENTS,
+            TEXTURE_SET_PATH,
+            FORM_SET_TYPE,
+            FORWARD_TARGET_00484C20,
+        ] {
+            e.register(addr, |_, _| Ret::default());
+        }
+        e.register(CARD_TEXTURE_FIRST, |_, a| (a[0] + 0x10).into_ret());
+        e.register(CARD_TEXTURE_SECOND, |_, a| (a[0] + 0x20).into_ret());
+        e.register(CARD_VALUE, |_, a| (a[0] + 0xb4).into_ret());
+        e.register(MONEY_MODEL, |_, a| (a[0] + 0x100 + a[1]).into_ret());
+        e.register(TEXTURE_PATH_TEXT, |_, a| (a[0] + 1).into_ret());
+        e.register(DYNAMIC_CAST, |_, a| a[0].into_ret());
+        e.register(FORM_TYPE, |_, _| 0x56u32.into_ret());
+        e
+    }
+
+    #[test]
+    fn card_save_writes_every_part() {
+        let mut e = engine();
+        let this = e.mem.alloc(0xc0);
+        e.mem.set_u32(this + 0xb4, 7);
+        e.mem.set_u32(this + 0xb8, 8);
+        e.call_log = Some(vec![]);
+        e.call(0x0059_a720, &args![this]);
+        assert_eq!(
+            calls(&e, SAVE_TEXTURE),
+            vec![
+                vec![this + 0x5c, CHUNK_ICON],
+                vec![this + 0x10, CHUNK_TX00],
+                vec![this + 0x20, CHUNK_TX01]
+            ]
+        );
+        assert_eq!(
+            calls(&e, ADD_CHUNK_WORD),
+            vec![vec![CHUNK_INTV, 8], vec![CHUNK_INTV, 7]]
+        );
+        assert_eq!(calls(&e, SAVE_SCRIPTABLE), vec![vec![this + 0x80]]);
+        assert_eq!(
+            calls(&e, SAVE_PICKUP_PUTDOWN_SOUNDS),
+            vec![vec![this + 0x8c]]
+        );
+        let log = e.call_log.take().unwrap();
+        let tail: Vec<u32> = log.iter().rev().take(2).map(|c| c.0).collect();
+        assert_eq!(tail, vec![FORM_CLOSE, FORM_SAVE_DATA]);
+    }
+
+    #[test]
+    fn card_copy_takes_paths_values_and_type() {
+        let mut e = engine();
+        let this = e.mem.alloc(0xc0);
+        let other = e.mem.alloc(0xc0);
+        e.mem.set_u32(other + 0xb4, 3);
+        e.mem.set_u32(other + 0xb8, 4);
+        e.call_log = Some(vec![]);
+        e.call(0x0059_ac20, &args![this, other]);
+        assert_eq!(
+            calls(&e, DYNAMIC_CAST),
+            vec![vec![other, 0, TYPE_FORM, TYPE_CARAVAN_CARD, 0]]
+        );
+        assert_eq!(
+            calls(&e, TEXTURE_SET_PATH),
+            vec![
+                vec![this + 0x9c, other + 0x11],
+                vec![this + 0xa8, other + 0x21]
+            ]
+        );
+        assert_eq!((e.mem.u32(this + 0xb4), e.mem.u32(this + 0xb8)), (3, 4));
+        assert_eq!(calls(&e, FORM_TYPE), vec![vec![other]]);
+        assert_eq!(calls(&e, FORM_SET_TYPE), vec![vec![this, 0x56]]);
+        e.register(DYNAMIC_CAST, |_, _| 0u32.into_ret());
+        e.call_log = Some(vec![]);
+        e.call(0x0059_ac20, &args![this, other]);
+        assert_eq!(e.call_log.as_ref().unwrap().len(), 2);
+    }
+
+    #[test]
+    fn card_compare_branches() {
+        let mut e = engine();
+        e.register(FORM_COMPARE_ALL_COMPONENTS, |e, _| {
+            e.mem.u32(STATE).into_ret()
+        });
+        // The text comparison differs on the call numbered by STATE + 4.
+        e.mem.set_u32(STATE + 4, 0xff);
+        e.register(TEXT_COMPARE, |e, _| {
+            let n = e.mem.u32(STATE + 8);
+            e.mem.set_u32(STATE + 8, n + 1);
+            u32::from(n == e.mem.u32(STATE + 4)).into_ret()
+        });
+        e.register(MEMCMP, |e, _| e.mem.u32(STATE + 0xc).into_ret());
+        let this = 0x1000u32;
+        let other = 0x2000u32;
+        e.call_log = Some(vec![]);
+        assert!(!e.call(0x0059_acd0, &args![this, other]).bool());
+        assert_eq!(
+            calls(&e, TEXT_COMPARE),
+            vec![vec![0x109d, 0x2011], vec![0x10a9, 0x2021]]
+        );
+        assert_eq!(calls(&e, MEMCMP), vec![vec![0x10b4, 0x20b4, 8]]);
+        for stop in [0, 1] {
+            e.mem.set_u32(STATE + 4, stop);
+            e.mem.set_u32(STATE + 8, 0);
+            assert!(e.call(0x0059_acd0, &args![this, other]).bool());
+        }
+        e.mem.set_u32(STATE + 4, 0xff);
+        e.mem.set_u32(STATE + 0xc, 1);
+        assert!(e.call(0x0059_acd0, &args![this, other]).bool());
+        e.mem.set_u32(STATE + 0xc, 0);
+        e.mem.set_u32(STATE, 1);
+        assert!(e.call(0x0059_acd0, &args![this, other]).bool());
+        e.register(DYNAMIC_CAST, |_, _| 0u32.into_ret());
+        assert!(e.call(0x0059_acd0, &args![this, other]).bool());
+    }
+
+    #[test]
+    fn forward_and_sort_comparison() {
+        let mut e = engine();
+        e.call_log = Some(vec![]);
+        e.call(0x0059_adb0, &args![0x1000u32, 0x55u32]);
+        assert_eq!(calls(&e, FORWARD_TARGET_00484C20), vec![vec![0x1000, 0x55]]);
+        let first = e.mem.alloc(0xc0);
+        let second = e.mem.alloc(0xc0);
+        let a = e.mem.alloc(4);
+        let b = e.mem.alloc(4);
+        e.mem.set_u32(a, first);
+        e.mem.set_u32(b, second);
+        e.mem.set_u32(first + 0xb4, 5);
+        e.mem.set_u32(second + 0xb4, (-3i32) as u32);
+        assert_eq!(e.call(0x0059_ae10, &args![a, b]).i32(), 1);
+        assert_eq!(e.call(0x0059_ae10, &args![b, a]).i32(), -1);
+        assert_eq!(e.call(0x0059_ae10, &args![a, a]).i32(), 0);
+    }
+
+    #[test]
+    fn money_save_writes_every_part() {
+        let mut e = engine();
+        let this = 0x1000u32;
+        e.call_log = Some(vec![]);
+        e.call(0x0059_b1b0, &args![this]);
+        assert_eq!(
+            calls(&e, SAVE_MODEL_TEXTURE_SWAP),
+            vec![
+                vec![0x103c, CHUNK_MODL, CHUNK_MODT, CHUNK_MODS],
+                vec![0x1100, CHUNK_MOD2, CHUNK_MODT, CHUNK_MODS],
+                vec![0x1101, CHUNK_MOD3, CHUNK_MODT, CHUNK_MODS]
+            ]
+        );
+        assert_eq!(calls(&e, SAVE_PICKUP_PUTDOWN_SOUNDS), vec![vec![0x1080]]);
+        assert_eq!(calls(&e, MONEY_MODEL), vec![vec![this, 0], vec![this, 1]]);
+        assert_eq!(calls(&e, FORM_CLOSE), vec![vec![this]]);
     }
 }

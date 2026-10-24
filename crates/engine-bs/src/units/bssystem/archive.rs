@@ -3689,9 +3689,46 @@ fn read_tables(e: &mut Engine, this: Ptr<Archive>) {
     }
     let _end = e.call(GET_TICK_COUNT, &args![]).u32();
 }
+
+/// `00afac20` (archive.cpp, unnamed in the engine map; `thiscall` on the archive, three
+/// words): what [`fn_00af7c40`] runs for each archive whose type bits meet its mask.
+const ARCHIVE_PER_FILE: u32 = 0x00af_ac20;
+
+// Translated from 00af7c40 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 00af7c40 - the FS:[0] exception frame (the unwind state of the NiPointer per archive) is not translated
+/// Unnamed in the engine map (cdecl, three words): under the archive list's critical
+/// section (`011f8170`), walks the list of opened archives (`011f8160`) and runs `00afac20`
+/// with `first`, `second` and 0 on each archive whose type bits (`iArchiveType`) meet
+/// `types`, holding a reference to the archive while it does. The walk stops at a node
+/// whose item and next pointer are both null (an empty list head). As in the exe, a null
+/// item in a node that is not empty still has its type bits read.
+pub fn fn_00af7c40(e: &mut Engine, first: u32, second: u32, types: u32) {
+    e.call(ENTER_CRITICAL_SECTION, &args![ARCHIVE_LIST_LOCK]);
+    let mut node = e.global::<u32>(ARCHIVE_LIST);
+    while node != 0 {
+        let empty = e.mem.u32(node + 4) == 0 && e.mem.u32(node) == 0;
+        if empty {
+            break;
+        }
+        let archive = e.mem.u32(node);
+        if archive != 0 {
+            add_ref(e, archive);
+        }
+        if type_matches(e, archive, types) {
+            e.call(ARCHIVE_PER_FILE, &args![archive, first, second, 0u32]);
+        }
+        node = e.mem.u32(node + 4);
+        if archive != 0 {
+            release(e, archive);
+        }
+    }
+    e.call(LEAVE_CRITICAL_SECTION, &args![ARCHIVE_LIST_LOCK]);
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x00af_7c40, fn_00af7c40(u32, u32, u32)),
         entry!(
             0x00af_59e0,
             archive_manager_cleanup_archive_strings_after_startup()
@@ -5881,5 +5918,50 @@ mod tests {
         );
         let opens = calls_to(&e, FOPEN_S);
         assert_eq!(opens[0][2], TEXT_READ_MODE);
+    }
+
+    #[test]
+    fn per_file_runs_on_each_archive_of_the_type_under_the_lock() {
+        let (mut e, _) = engine();
+        e.register(ARCHIVE_PER_FILE, |_, _| Ret::default());
+        let (first, second) = (archive(&mut e), archive(&mut e));
+        e.mem.set_u16(first.addr() + 0x180, 2);
+        e.mem.set_u16(second.addr() + 0x180, 1);
+        // A node with neither an archive nor a next pointer ends the walk.
+        let empty = node(&mut e, 0, 0);
+        let tail = node(&mut e, second.addr(), empty);
+        let head = node(&mut e, first.addr(), tail);
+        e.set_global(ARCHIVE_LIST, head);
+        e.call_log = Some(vec![]);
+        e.call(0x00af_7c40, &args![0x11u32, 0x22u32, 3u32]);
+        assert_eq!(
+            calls_to(&e, ARCHIVE_PER_FILE),
+            vec![
+                vec![first.addr(), 0x11, 0x22, 0],
+                vec![second.addr(), 0x11, 0x22, 0]
+            ]
+        );
+        assert_eq!(
+            calls_to(&e, ENTER_CRITICAL_SECTION),
+            vec![vec![ARCHIVE_LIST_LOCK]]
+        );
+        assert_eq!(
+            calls_to(&e, LEAVE_CRITICAL_SECTION),
+            vec![vec![ARCHIVE_LIST_LOCK]]
+        );
+        // Each reference taken is given back; the counts are as before.
+        assert_eq!((count(&e, first), count(&e, second)), (1, 1));
+        assert_eq!(calls_to(&e, INTERLOCKED_INCREMENT).len(), 2);
+        e.call_log = Some(vec![]);
+        e.call(0x00af_7c40, &args![0x11u32, 0x22u32, 2u32]);
+        assert_eq!(
+            calls_to(&e, ARCHIVE_PER_FILE),
+            vec![vec![first.addr(), 0x11, 0x22, 0]]
+        );
+        e.set_global(ARCHIVE_LIST, empty);
+        e.call_log = Some(vec![]);
+        e.call(0x00af_7c40, &args![0x11u32, 0x22u32, 3u32]);
+        assert!(calls_to(&e, ARCHIVE_PER_FILE).is_empty());
+        assert!(calls_to(&e, INTERLOCKED_INCREMENT).is_empty());
     }
 }

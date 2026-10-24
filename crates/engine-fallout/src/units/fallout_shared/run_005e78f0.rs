@@ -238,9 +238,99 @@ pub fn fn_005e7bf0(e: &mut Engine, this: Ptr, file: Ptr) -> bool {
     true
 }
 
+/// `__RTDynamicCast` (`00ec43fb`, cdecl), the source type descriptor and
+/// the target `005e78f0` and `005e79a0` pass (`011863b8`, the type
+/// descriptor named `.?AVBGSHeadPart@@`).
+const DYNAMIC_CAST: u32 = 0x00ec_43fb;
+const CAST_SOURCE: u32 = 0x0118_3028;
+const CAST_TARGET: u32 = 0x0118_63b8;
+/// The form's list (`00624700`, thiscall) and the list helpers: empty it
+/// (`00470470`), whether a node is empty (`008256d0`), a node's item slot
+/// (`006815c0`) and the next node (`00726070`).
+const FORM_LIST: u32 = 0x0062_4700;
+const LIST_CLEAR: u32 = 0x0047_0470;
+const LIST_IS_EMPTY: u32 = 0x0082_56d0;
+const LIST_ITEM: u32 = 0x0068_15c0;
+const LIST_NEXT: u32 = 0x0072_6070;
+
+// Translated from 005e78f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BGSHeadPart`'s copy (`RET 4`: the source form; the engine map has no name):
+/// the source through `__RTDynamicCast(source, 0, 01183028, 011863b8, 0)`;
+/// nothing without it. Otherwise `TESForm::CopyAllComponents` given the
+/// uncast source, the byte at +0x44, then this form's list (`00624700`)
+/// emptied and each item of the source's list, up to an empty node,
+/// added with `005e7790` (the next node is taken before the add).
+pub fn fn_005e78f0(e: &mut Engine, this: Ptr, source: u32) {
+    let base = this.addr();
+    let other = e
+        .call(
+            DYNAMIC_CAST,
+            &args![source, 0u32, CAST_SOURCE, CAST_TARGET, 0u32],
+        )
+        .u32();
+    if other == 0 {
+        return;
+    }
+    e.call(0x0048_51b0, &args![this, source]);
+    let byte = e.mem.u8(other + 0x44);
+    e.mem.set_u8(base + 0x44, byte);
+    let list = e.call(FORM_LIST, &args![this]).u32();
+    e.call(LIST_CLEAR, &args![list]);
+    let mut node = e.call(FORM_LIST, &args![other]).u32();
+    while node != 0 && !e.call(LIST_IS_EMPTY, &args![node]).bool() {
+        let slot = e.call(LIST_ITEM, &args![node]).u32();
+        let item = e.mem.u32(slot);
+        node = e.call(LIST_NEXT, &args![node]).u32();
+        e.call(0x005e_7790, &args![this, item]);
+    }
+}
+
+// Translated from 005e79a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BGSHeadPart`'s compare (`RET 4`: the other form; true when they differ; the
+/// engine map has no name): true when the cast as in `005e78f0` fails,
+/// `TESForm::CompareAllComponents` answers true or the bytes at +0x44
+/// differ; then for each item of the other's list (`00624700`), up to an
+/// empty node, true when this form's list does not hold it (`005f65d0`,
+/// given the item's address on the stack). False otherwise.
+pub fn fn_005e79a0(e: &mut Engine, this: Ptr, form: u32) -> bool {
+    let base = this.addr();
+    let other = e
+        .call(
+            DYNAMIC_CAST,
+            &args![form, 0u32, CAST_SOURCE, CAST_TARGET, 0u32],
+        )
+        .u32();
+    if other == 0 {
+        return true;
+    }
+    if e.call(0x0048_5270, &args![this, other]).bool() {
+        return true;
+    }
+    if e.mem.i8(other + 0x44) != e.mem.i8(base + 0x44) {
+        return true;
+    }
+    let mut node = e.call(FORM_LIST, &args![other]).u32();
+    while node != 0 && !e.call(LIST_IS_EMPTY, &args![node]).bool() {
+        let slot = e.call(LIST_ITEM, &args![node]).u32();
+        let item = e.mem.u32(slot);
+        node = e.call(LIST_NEXT, &args![node]).u32();
+        let held = e.with_stack(4, |e, local| {
+            e.mem.set_u32(local.addr(), item);
+            let list = e.call(FORM_LIST, &args![this]).u32();
+            e.call(0x005f_65d0, &args![list, local]).bool()
+        });
+        if !held {
+            return true;
+        }
+    }
+    false
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x005e_78f0, fn_005e78f0(Ptr, u32)),
+        entry!(0x005e_79a0, fn_005e79a0(Ptr, u32) -> bool),
         entry!(0x005e_7a90, fn_005e7a90(Ptr) -> Ptr),
         entry!(0x005e_7a80, fn_005e7a80(Ptr, u32) -> u32),
         entry!(0x005e_7b10, fn_005e7b10(Ptr, u32) -> Ptr),
@@ -504,5 +594,104 @@ mod b025_tests {
         e.call_log = Some(vec![]);
         e.call(0x005e_7bb0, &args![this]);
         assert!(calls_to(&e, IDLE_COLLECTION_INIT_ITEM).is_empty());
+    }
+}
+
+#[cfg(test)]
+mod n041_tests {
+    use super::*;
+
+    fn ret(eax: u32) -> Ret {
+        Ret {
+            eax,
+            ..Ret::default()
+        }
+    }
+
+    fn calls(e: &Engine, addr: u32) -> Vec<Vec<u32>> {
+        e.call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|(a, _)| *a == addr)
+            .map(|(_, w)| w.clone())
+            .collect()
+    }
+
+    /// Forms whose list head is at +0x48 (nodes `{item, next}`; a node is
+    /// empty when its item is 0).
+    fn doubles(e: &mut Engine) {
+        e.register(DYNAMIC_CAST, |_, a| ret(a[0]));
+        e.register(FORM_LIST, |_, a| ret(a[0] + 0x48));
+        e.register(LIST_IS_EMPTY, |e, a| ret(u32::from(e.mem.u32(a[0]) == 0)));
+        e.register(LIST_ITEM, |_, a| ret(a[0]));
+        e.register(LIST_NEXT, |e, a| ret(e.mem.u32(a[0] + 4)));
+    }
+
+    fn two_items(e: &mut Engine, form: u32, a: u32, b: u32) {
+        let second = e.mem.alloc(8);
+        e.mem.set_u32(form + 0x48, a);
+        e.mem.set_u32(form + 0x4c, second);
+        e.mem.set_u32(second, b);
+    }
+
+    #[test]
+    fn fn_005e78f0_copies_the_byte_and_the_list() {
+        let mut e = Engine::new();
+        doubles(&mut e);
+        for a in [0x0048_51b0u32, LIST_CLEAR, 0x005e_7790] {
+            e.register(a, |_, _| Ret::default());
+        }
+        let this = e.mem.alloc(0x50);
+        let other = e.mem.alloc(0x50);
+        e.mem.set_u8(other + 0x44, 9);
+        two_items(&mut e, other, 0x11, 0x22);
+        e.call_log = Some(vec![]);
+        e.call(0x005e_78f0, &args![this, other]);
+        assert_eq!(
+            calls(&e, DYNAMIC_CAST),
+            vec![vec![other, 0, CAST_SOURCE, CAST_TARGET, 0]]
+        );
+        assert_eq!(calls(&e, 0x0048_51b0), vec![vec![this, other]]);
+        assert_eq!(e.mem.u8(this + 0x44), 9);
+        assert_eq!(calls(&e, LIST_CLEAR), vec![vec![this + 0x48]]);
+        assert_eq!(
+            calls(&e, 0x005e_7790),
+            vec![vec![this, 0x11], vec![this, 0x22]]
+        );
+        e.register(DYNAMIC_CAST, |_, _| ret(0));
+        e.call_log = Some(vec![]);
+        e.call(0x005e_78f0, &args![this, other]);
+        assert!(calls(&e, 0x0048_51b0).is_empty());
+    }
+
+    #[test]
+    fn fn_005e79a0_checks_each_item_is_held() {
+        let mut e = Engine::new();
+        doubles(&mut e);
+        e.register(0x0048_5270, |_, _| ret(0));
+        // Held when the item is 0x11 or 0x22.
+        e.register(0x005f_65d0, |e, a| {
+            let item = e.mem.u32(a[1]);
+            ret(u32::from(item == 0x11 || item == 0x22))
+        });
+        let this = e.mem.alloc(0x50);
+        let other = e.mem.alloc(0x50);
+        two_items(&mut e, other, 0x11, 0x22);
+        e.call_log = Some(vec![]);
+        assert!(!e.call(0x005e_79a0, &args![this, other]).bool());
+        let held = calls(&e, 0x005f_65d0);
+        assert_eq!(held.len(), 2);
+        assert!(held.iter().all(|c| c[0] == this + 0x48));
+        two_items(&mut e, other, 0x11, 0x33);
+        assert!(e.call(0x005e_79a0, &args![this, other]).bool());
+        e.mem.set_u32(other + 0x48, 0);
+        assert!(!e.call(0x005e_79a0, &args![this, other]).bool());
+        e.mem.set_u8(other + 0x44, 1);
+        assert!(e.call(0x005e_79a0, &args![this, other]).bool());
+        e.mem.set_u8(other + 0x44, 0);
+        e.register(0x0048_5270, |_, _| ret(1));
+        assert!(e.call(0x005e_79a0, &args![this, other]).bool());
+        assert!(e.call(0x005e_79a0, &args![this, 0u32]).bool());
     }
 }

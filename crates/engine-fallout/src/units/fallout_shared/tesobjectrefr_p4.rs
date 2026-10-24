@@ -3273,7 +3273,7 @@ pub fn fn_00573f00(e: &mut Engine, this: Ptr, flag: u8) {
 /// Stores a float at `+0x544` of `this` (the exe does not name the class
 /// or the field).
 pub fn fn_00573f20(e: &mut Engine, this: Ptr, value: f32) {
-    e.mem.set_f32(this.addr() + 0x544, value);
+    e.mem.set_f32(this.addr() + 0x544, x87_quiet(value));
 }
 
 // Translated from 00573f40 (decompiled, FalloutNV.exe 1.4.0.525)

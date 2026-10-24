@@ -204,9 +204,309 @@ pub fn fn_0059a030(e: &mut Engine, kind: u32, effects: u32, value: f32) -> f32 {
     f32::from_bits(x87_quiet_bits(result))
 }
 
+/// `__RTDynamicCast` (`00ec43fb`, cdecl), the source type descriptor these
+/// functions pass, and the targets: the media set's (`01186168`) and the
+/// ammo effect's (`01186474`).
+const DYNAMIC_CAST: u32 = 0x00ec_43fb;
+const CAST_SOURCE: u32 = 0x0118_3028;
+const MEDIA_SET_TYPE: u32 = 0x0118_6168;
+const AMMO_EFFECT_TYPE: u32 = 0x0118_6474;
+/// `TESForm::CopyAllComponents` and `TESForm::CompareAllComponents`.
+const COPY_COMPONENTS: u32 = 0x0048_51b0;
+const COMPARE_COMPONENTS: u32 = 0x0048_5270;
+/// A track's string: its text (`00559450`), set (`004037f0`: text,
+/// length), copy (`004047f0`), compare (`BSStringT<char>::StrCmp`,
+/// `00408a80`) and destructor (`007d9ec0`).
+const STRING_TEXT: u32 = 0x0055_9450;
+const STRING_SET: u32 = 0x0040_37f0;
+const STRING_COPY: u32 = 0x0040_47f0;
+const STRING_COMPARE: u32 = 0x0040_8a80;
+const STRING_DESTROY: u32 = 0x007d_9ec0;
+
+/// Puts a track passed by value (its four words) into a stack block for
+/// `f`, as the exe has it in its argument area.
+fn track_on_stack<R>(
+    e: &mut Engine,
+    text: u32,
+    lengths: u32,
+    volume: f32,
+    other: f32,
+    f: impl FnOnce(&mut Engine, u32) -> R,
+) -> R {
+    e.with_stack(0x10, |e, track| {
+        let t = track.addr();
+        e.mem.set_u32(t, text);
+        e.mem.set_u32(t + 4, lengths);
+        e.mem.set_u32(t + 8, volume.to_bits());
+        e.mem.set_u32(t + 0xc, other.to_bits());
+        f(e, t)
+    })
+}
+
+/// A media set track copied into a stack temporary (`00599780`) from
+/// `source`, handed to `f` as its four words.
+fn copied_track<R>(e: &mut Engine, source: u32, f: impl FnOnce(&mut Engine, [u32; 4]) -> R) -> R {
+    e.with_stack(0x10, |e, temp| {
+        fn_00599780(e, temp, source);
+        let t = temp.addr();
+        let words = [
+            e.mem.u32(t),
+            e.mem.u32(t + 4),
+            e.mem.u32(t + 8),
+            e.mem.u32(t + 0xc),
+        ];
+        f(e, words)
+    })
+}
+
+// Translated from 00599550 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `MediaSet`'s copy (`RET 4`: the source form; the engine map has no
+/// name): the source through `__RTDynamicCast(source, 0, 01183028,
+/// 01186168, 0)`; nothing without it. Otherwise the word at +0x44, each of
+/// the six tracks (a copy of the source's track, `00599780`, assigned by
+/// value through `00599700`), the byte at +0xA8, the floats +0xAC .. +0xB8
+/// (FLD/FSTP), the sound words +0xBC and +0xC0, then
+/// `TESForm::CopyAllComponents`.
+pub fn fn_00599550(e: &mut Engine, this: Ptr, source: u32) {
+    let base = this.addr();
+    let other = e
+        .call(
+            DYNAMIC_CAST,
+            &args![source, 0u32, CAST_SOURCE, MEDIA_SET_TYPE, 0u32],
+        )
+        .u32();
+    if other == 0 {
+        return;
+    }
+    let word = e.mem.u32(other + 0x44);
+    e.mem.set_u32(base + 0x44, word);
+    for track in TRACKS {
+        copied_track(e, other + track, |e, w| {
+            fn_00599700(
+                e,
+                Ptr::new(base + track),
+                w[0],
+                w[1],
+                f32::from_bits(w[2]),
+                f32::from_bits(w[3]),
+            );
+        });
+    }
+    let byte = e.mem.u8(other + 0xa8);
+    e.mem.set_u8(base + 0xa8, byte);
+    for offset in [0xacu32, 0xb0, 0xb4, 0xb8] {
+        let value = x87_quiet_bits(e.mem.u32(other + offset));
+        e.mem.set_u32(base + offset, value);
+    }
+    for offset in [0xbcu32, 0xc0] {
+        let word = e.mem.u32(other + offset);
+        e.mem.set_u32(base + offset, word);
+    }
+    e.call(COPY_COMPONENTS, &args![this, other]);
+}
+
+// Translated from 00599700 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 00599700 - the exception-unwinding frame (FS:[0]) around the by-value track is not translated.
+/// A media set track's assignment from a track passed by value (`RET
+/// 0x10`: its string's two words and its floats at +8 and +0xC; the engine
+/// map has no name): the string set to the argument's text (`004037f0`
+/// with length 0), the two floats copied (FLD/FSTP), then the argument's
+/// string destroyed (`007d9ec0`), as the callee owns it.
+pub fn fn_00599700(e: &mut Engine, this: Ptr, text: u32, lengths: u32, volume: f32, other: f32) {
+    let base = this.addr();
+    track_on_stack(e, text, lengths, volume, other, |e, track| {
+        let name = e.call(STRING_TEXT, &args![track]).u32();
+        e.call(STRING_SET, &args![this, name, 0u32]);
+        let value = x87_quiet_bits(e.mem.u32(track + 8));
+        e.mem.set_u32(base + 8, value);
+        let value = x87_quiet_bits(e.mem.u32(track + 0xc));
+        e.mem.set_u32(base + 0xc, value);
+        e.call(STRING_DESTROY, &args![track]);
+    });
+}
+
+// Translated from 00599780 (decompiled, FalloutNV.exe 1.4.0.525)
+/// A media set track's copy constructor (`RET 4`: the source track; the
+/// engine map has no name): the string (`004047f0`), then the floats at
+/// +8 and +0xC (FLD/FSTP). Returns `this`.
+pub fn fn_00599780(e: &mut Engine, this: Ptr, source: u32) -> Ptr {
+    let base = this.addr();
+    e.call(STRING_COPY, &args![this, source]);
+    let value = x87_quiet_bits(e.mem.u32(source + 8));
+    e.mem.set_u32(base + 8, value);
+    let value = x87_quiet_bits(e.mem.u32(source + 0xc));
+    e.mem.set_u32(base + 0xc, value);
+    this
+}
+
+// Translated from 005997c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `MediaSet`'s compare (`RET 4`: the other form; true when they differ;
+/// the engine map has no name): the other through `__RTDynamicCast` as in
+/// `00599550`; true without it, when the words at +0x44 differ, when
+/// `00599a50` answers true for one of the six tracks (given a copy of the
+/// other's track, `00599780`), when the bytes at +0xA8, the floats +0xAC ..
+/// +0xB8 (unordered counts as different) or the words +0xBC, +0xC0 differ,
+/// or when `TESForm::CompareAllComponents` answers true.
+pub fn fn_005997c0(e: &mut Engine, this: Ptr, form: u32) -> bool {
+    let base = this.addr();
+    let other = e
+        .call(
+            DYNAMIC_CAST,
+            &args![form, 0u32, CAST_SOURCE, MEDIA_SET_TYPE, 0u32],
+        )
+        .u32();
+    if other == 0 {
+        return true;
+    }
+    if e.mem.u32(other + 0x44) != e.mem.u32(base + 0x44) {
+        return true;
+    }
+    for track in TRACKS {
+        let differs = copied_track(e, other + track, |e, w| {
+            fn_00599a50(
+                e,
+                Ptr::new(base + track),
+                w[0],
+                w[1],
+                f32::from_bits(w[2]),
+                f32::from_bits(w[3]),
+            )
+        });
+        if differs {
+            return true;
+        }
+    }
+    if e.mem.i8(base + 0xa8) != e.mem.i8(other + 0xa8) {
+        return true;
+    }
+    for offset in [0xacu32, 0xb0, 0xb4, 0xb8] {
+        let mine = x87_load32(e.mem.u32(base + offset));
+        let theirs = x87_load32(e.mem.u32(other + offset));
+        // FUCOMPP; TEST AH,0x44; JNP: on only when equal and ordered.
+        if theirs != mine {
+            return true;
+        }
+    }
+    for offset in [0xbcu32, 0xc0] {
+        if e.mem.u32(base + offset) != e.mem.u32(other + offset) {
+            return true;
+        }
+    }
+    e.call(COMPARE_COMPONENTS, &args![this, other]).bool()
+}
+
+// Translated from 00599a50 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 00599a50 - the exception-unwinding frame (FS:[0]) around the by-value track is not translated.
+/// A media set track's compare with a track passed by value (`RET 0x10`,
+/// as `00599700`; the engine map has no name): true when a float (+8,
+/// +0xC) differs from the argument's (unordered counts as different);
+/// otherwise the strings through `BSStringT<char>::StrCmp(text, 0)`, true
+/// when it answers 0 and false otherwise (the exe answers true for equal
+/// tracks). The argument's string is destroyed (`007d9ec0`) before each
+/// answer.
+pub fn fn_00599a50(
+    e: &mut Engine,
+    this: Ptr,
+    text: u32,
+    lengths: u32,
+    volume: f32,
+    other: f32,
+) -> bool {
+    let base = this.addr();
+    track_on_stack(e, text, lengths, volume, other, |e, track| {
+        for offset in [8u32, 0xc] {
+            let mine = x87_load32(e.mem.u32(base + offset));
+            let theirs = x87_load32(e.mem.u32(track + offset));
+            // FUCOMPP; TEST AH,0x44; JNP: on only when equal and ordered.
+            if theirs != mine {
+                e.call(STRING_DESTROY, &args![track]);
+                return true;
+            }
+        }
+        let name = e.call(STRING_TEXT, &args![track]).u32();
+        let order = e.call(STRING_COMPARE, &args![this, name, 0u32]).u32();
+        e.call(STRING_DESTROY, &args![track]);
+        order == 0
+    })
+}
+
+// Translated from 00599ef0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TESAmmoEffect`'s record writer (no stack words; the engine map has no
+/// name): `TESForm::StartForm`, `TESFullName::Save` on +0x18, then the
+/// 0xC bytes at +0x24 as `TESForm::__SaveData(+0x24, 0xC)`, each side of
+/// it swapped by `005a6b10` when `00401500` answers true, then
+/// `TESForm::CloseForm`.
+pub fn fn_00599ef0(e: &mut Engine, this: Ptr) {
+    let base = this.addr();
+    e.call(0x0048_55a0, &args![this]);
+    e.call(0x0048_7010, &args![base + 0x18]);
+    if e.call(0x0040_1500, &args![]).bool() {
+        e.call(0x005a_6b10, &args![base + 0x24]);
+    }
+    e.call(0x0048_5e20, &args![this, base + 0x24, 0xcu32]);
+    if e.call(0x0040_1500, &args![]).bool() {
+        e.call(0x005a_6b10, &args![base + 0x24]);
+    }
+    e.call(0x0048_5680, &args![this]);
+}
+
+// Translated from 00599f60 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TESAmmoEffect`'s copy (`RET 4`: the source form; the engine map has no
+/// name): the source through `__RTDynamicCast(source, 0, 01183028,
+/// 01186474, 0)`; nothing without it, otherwise the 0xC bytes at +0x24
+/// (`00401460`, cdecl: destination, source, size) and
+/// `TESForm::CopyAllComponents` given the uncast source.
+pub fn fn_00599f60(e: &mut Engine, this: Ptr, source: u32) {
+    let base = this.addr();
+    let other = e
+        .call(
+            DYNAMIC_CAST,
+            &args![source, 0u32, CAST_SOURCE, AMMO_EFFECT_TYPE, 0u32],
+        )
+        .u32();
+    if other == 0 {
+        return;
+    }
+    e.call(0x0040_1460, &args![base + 0x24, other + 0x24, 0xcu32]);
+    e.call(COPY_COMPONENTS, &args![this, source]);
+}
+
+// Translated from 00599fc0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TESAmmoEffect`'s compare (`RET 4`: the other form; true when they
+/// differ; the engine map has no name): true when the cast as in
+/// `00599f60` fails or `_memcmp` of the 0xC bytes at +0x24 is not 0,
+/// otherwise `TESForm::CompareAllComponents`.
+pub fn fn_00599fc0(e: &mut Engine, this: Ptr, form: u32) -> bool {
+    let base = this.addr();
+    let other = e
+        .call(
+            DYNAMIC_CAST,
+            &args![form, 0u32, CAST_SOURCE, AMMO_EFFECT_TYPE, 0u32],
+        )
+        .u32();
+    if other == 0 {
+        return true;
+    }
+    if e.call(0x00ec_4835, &args![base + 0x24, other + 0x24, 0xcu32])
+        .u32()
+        != 0
+    {
+        return true;
+    }
+    e.call(COMPARE_COMPONENTS, &args![this, other]).bool()
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x0059_9550, fn_00599550(Ptr, u32)),
+        entry!(0x0059_9700, fn_00599700(Ptr, u32, u32, f32, f32)),
+        entry!(0x0059_9780, fn_00599780(Ptr, u32) -> Ptr),
+        entry!(0x0059_97c0, fn_005997c0(Ptr, u32) -> bool),
+        entry!(0x0059_9a50, fn_00599a50(Ptr, u32, u32, f32, f32) -> bool),
+        entry!(0x0059_9ef0, fn_00599ef0(Ptr)),
+        entry!(0x0059_9f60, fn_00599f60(Ptr, u32)),
+        entry!(0x0059_9fc0, fn_00599fc0(Ptr, u32) -> bool),
         entry!(0x0059_9c40, fn_00599c40(Ptr) -> Ptr),
         entry!(0x0059_9cd0, fn_00599cd0(Ptr, u32) -> Ptr),
         entry!(0x0059_9b30, fn_00599b30(Ptr)),
@@ -463,5 +763,225 @@ mod media_set_and_ammo_effect_tests {
         e.call_log = Some(vec![]);
         assert_eq!(e.call(0x0059_a030, &args![1u32, 0u32, 4.0f32]).f32(), 4.0);
         assert!(calls(&e, 0x0040_1000).is_empty());
+    }
+}
+
+#[cfg(test)]
+mod n041_tests {
+    use super::*;
+
+    fn ret(eax: u32) -> Ret {
+        Ret {
+            eax,
+            ..Ret::default()
+        }
+    }
+
+    fn calls(e: &Engine, addr: u32) -> Vec<Vec<u32>> {
+        e.call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|(a, _)| *a == addr)
+            .map(|(_, w)| w.clone())
+            .collect()
+    }
+
+    /// String doubles: the text is the first word; a copy copies the two
+    /// words; the compare answers 0 when the texts match.
+    fn string_doubles(e: &mut Engine) {
+        e.register(STRING_TEXT, |e, a| ret(e.mem.u32(a[0])));
+        e.register(STRING_SET, |e, a| {
+            e.mem.set_u32(a[0], a[1]);
+            Ret::default()
+        });
+        e.register(STRING_COPY, |e, a| {
+            let (text, lengths) = (e.mem.u32(a[1]), e.mem.u32(a[1] + 4));
+            e.mem.set_u32(a[0], text);
+            e.mem.set_u32(a[0] + 4, lengths);
+            Ret::default()
+        });
+        e.register(STRING_COMPARE, |e, a| {
+            ret(u32::from(e.mem.u32(a[0]) != a[1]))
+        });
+        e.register(STRING_DESTROY, |_, _| Ret::default());
+    }
+
+    #[test]
+    fn fn_00599780_and_00599700_copy_a_track() {
+        let mut e = Engine::new();
+        string_doubles(&mut e);
+        let source = e.mem.alloc(0x10);
+        e.mem.set_u32(source, 0x1234);
+        e.mem.set_u32(source + 4, 0x0004_0004);
+        e.mem.set_u32(source + 8, 0x7f80_0001);
+        e.mem.set_f32(source + 0xc, 2.5);
+        let copy = e.mem.alloc(0x10);
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x0059_9780, &args![copy, source]).u32(), copy);
+        assert_eq!(calls(&e, STRING_COPY), vec![vec![copy, source]]);
+        assert_eq!(e.mem.u32(copy + 8), 0x7fc0_0001);
+        assert_eq!(e.mem.f32(copy + 0xc), 2.5);
+
+        let track = e.mem.alloc(0x10);
+        e.call_log = Some(vec![]);
+        e.call(
+            0x0059_9700,
+            &args![track, 0x5678u32, 9u32, 0xff80_0002u32, 1.5f32],
+        );
+        assert_eq!(e.mem.u32(track), 0x5678);
+        assert_eq!(e.mem.u32(track + 8), 0xffc0_0002);
+        assert_eq!(e.mem.f32(track + 0xc), 1.5);
+        assert_eq!(calls(&e, STRING_SET), vec![vec![track, 0x5678, 0]]);
+        // The argument copy is the one destroyed.
+        let text = calls(&e, STRING_TEXT)[0][0];
+        assert_ne!(text, track);
+        assert_eq!(calls(&e, STRING_DESTROY), vec![vec![text]]);
+    }
+
+    #[test]
+    fn fn_00599a50_answers_true_for_equal_tracks() {
+        let mut e = Engine::new();
+        string_doubles(&mut e);
+        let track = e.mem.alloc(0x10);
+        e.mem.set_u32(track, 0x77);
+        e.mem.set_f32(track + 8, 1.0);
+        e.mem.set_f32(track + 0xc, 2.0);
+        let check = |e: &mut Engine, text: u32, a: f32, b: f32| {
+            e.call_log = Some(vec![]);
+            let r = e.call(0x0059_9a50, &args![track, text, 0u32, a, b]).bool();
+            assert_eq!(calls(e, STRING_DESTROY).len(), 1);
+            (r, calls(e, STRING_COMPARE).len())
+        };
+        assert_eq!(check(&mut e, 0x77, 1.0, 2.0), (true, 1));
+        assert_eq!(check(&mut e, 0x78, 1.0, 2.0), (false, 1));
+        assert_eq!(check(&mut e, 0x78, 1.5, 2.0), (true, 0));
+        assert_eq!(check(&mut e, 0x78, 1.0, f32::NAN), (true, 0));
+    }
+
+    /// Two media sets alike: the tracks' texts differ, so `00599a50`
+    /// answers false for each.
+    fn media_sets(e: &mut Engine) -> (u32, u32) {
+        string_doubles(e);
+        e.register(DYNAMIC_CAST, |_, a| ret(a[0]));
+        e.register(COMPARE_COMPONENTS, |_, _| ret(0));
+        e.register(COPY_COMPONENTS, |_, _| Ret::default());
+        let this = e.mem.alloc(0xc4);
+        let other = e.mem.alloc(0xc4);
+        for track in TRACKS {
+            e.mem.set_u32(this + track, 0x100 + track);
+            e.mem.set_u32(other + track, 0x200 + track);
+        }
+        (this, other)
+    }
+
+    #[test]
+    fn fn_005997c0_compares_media_sets() {
+        let mut e = Engine::new();
+        let (this, other) = media_sets(&mut e);
+        e.call_log = Some(vec![]);
+        assert!(!e.call(0x0059_97c0, &args![this, other]).bool());
+        assert_eq!(
+            calls(&e, DYNAMIC_CAST),
+            vec![vec![other, 0, CAST_SOURCE, MEDIA_SET_TYPE, 0]]
+        );
+        assert_eq!(calls(&e, STRING_COPY).len(), 6);
+        assert_eq!(calls(&e, STRING_DESTROY).len(), 6);
+        assert!(e.call(0x0059_97c0, &args![this, 0u32]).bool());
+        for (offset, value) in [(0x44u32, 1u32), (0xa8, 1), (0xb0, 0x7fc0_0000), (0xc0, 3)] {
+            let (this, other) = media_sets(&mut e);
+            e.mem.set_u32(this + offset, value);
+            assert!(
+                e.call(0x0059_97c0, &args![this, other]).bool(),
+                "{offset:x}"
+            );
+        }
+        // A track whose text matches: 00599a50 answers true.
+        let (this, other) = media_sets(&mut e);
+        e.mem.set_u32(this + 0x88, 0x288);
+        e.call_log = Some(vec![]);
+        assert!(e.call(0x0059_97c0, &args![this, other]).bool());
+        assert_eq!(calls(&e, STRING_COPY).len(), 5);
+        let (this, other) = media_sets(&mut e);
+        e.register(COMPARE_COMPONENTS, |_, _| ret(1));
+        assert!(e.call(0x0059_97c0, &args![this, other]).bool());
+    }
+
+    #[test]
+    fn fn_00599550_copies_a_media_set() {
+        let mut e = Engine::new();
+        let (this, other) = media_sets(&mut e);
+        for offset in [0x44u32, 0xac, 0xb0, 0xb4, 0xbc, 0xc0] {
+            e.mem.set_u32(other + offset, offset);
+        }
+        e.mem.set_u32(other + 0xb8, 0x7f80_0003);
+        e.mem.set_u8(other + 0xa8, 0x5a);
+        e.mem.set_f32(other + 0x58 + 8, 0.25);
+        e.call_log = Some(vec![]);
+        e.call(0x0059_9550, &args![this, other]);
+        for offset in [0x44u32, 0xac, 0xb0, 0xb4, 0xbc, 0xc0] {
+            assert_eq!(e.mem.u32(this + offset), offset);
+        }
+        assert_eq!(e.mem.u32(this + 0xb8), 0x7fc0_0003);
+        assert_eq!(e.mem.u8(this + 0xa8), 0x5a);
+        for track in TRACKS {
+            assert_eq!(e.mem.u32(this + track), 0x200 + track);
+        }
+        assert_eq!(e.mem.f32(this + 0x58 + 8), 0.25);
+        assert_eq!(calls(&e, COPY_COMPONENTS), vec![vec![this, other]]);
+        // No cast: nothing.
+        e.call_log = Some(vec![]);
+        e.call(0x0059_9550, &args![this, 0u32]);
+        assert!(calls(&e, COPY_COMPONENTS).is_empty());
+    }
+
+    #[test]
+    fn ammo_effect_save_copy_and_compare() {
+        let mut e = Engine::new();
+        for a in [
+            0x0048_55a0u32,
+            0x0048_7010,
+            0x005a_6b10,
+            0x0048_5e20,
+            0x0048_5680,
+            0x0040_1460,
+            COPY_COMPONENTS,
+        ] {
+            e.register(a, |_, _| Ret::default());
+        }
+        let this = e.mem.alloc(0x30);
+        for swap in [0u32, 1] {
+            e.register_double(0x0040_1500, move |_, _| ret(swap));
+            e.call_log = Some(vec![]);
+            e.call(0x0059_9ef0, &args![this]);
+            assert_eq!(calls(&e, 0x0048_7010), vec![vec![this + 0x18]]);
+            assert_eq!(calls(&e, 0x0048_5e20), vec![vec![this, this + 0x24, 0xc]]);
+            assert_eq!(calls(&e, 0x005a_6b10).len(), 2 * swap as usize);
+            assert_eq!(calls(&e, 0x0048_5680), vec![vec![this]]);
+        }
+
+        e.register(DYNAMIC_CAST, |_, a| ret(a[0] & !0xf));
+        let source = e.mem.alloc(0x30);
+        e.call_log = Some(vec![]);
+        e.call(0x0059_9f60, &args![this, source + 1]);
+        assert_eq!(
+            calls(&e, DYNAMIC_CAST),
+            vec![vec![source + 1, 0, CAST_SOURCE, AMMO_EFFECT_TYPE, 0]]
+        );
+        assert_eq!(
+            calls(&e, 0x0040_1460),
+            vec![vec![this + 0x24, source + 0x24, 0xc]]
+        );
+        assert_eq!(calls(&e, COPY_COMPONENTS), vec![vec![this, source + 1]]);
+        e.call_log = Some(vec![]);
+        e.call(0x0059_9f60, &args![this, 1u32]);
+        assert!(calls(&e, 0x0040_1460).is_empty());
+
+        for (order, components, differs) in [(0u32, 0u32, false), (1, 0, true), (0, 1, true)] {
+            e.register_double(0x00ec_4835, move |_, _| ret(order));
+            e.register_double(COMPARE_COMPONENTS, move |_, _| ret(components));
+            assert_eq!(e.call(0x0059_9fc0, &args![this, source]).bool(), differs);
+        }
+        assert!(e.call(0x0059_9fc0, &args![this, 2u32]).bool());
     }
 }

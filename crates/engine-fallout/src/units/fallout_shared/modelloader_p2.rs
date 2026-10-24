@@ -3154,7 +3154,11 @@ pub fn fn_00443ff0(e: &mut Engine, this: Ptr<QueuedModel>, value: u8) {
 /// `QueuedModel` setter (no name in the engine map): stores
 /// `mfOverriddenVisualDistance` (Xbox PDB).
 pub fn fn_00444020(e: &mut Engine, this: Ptr<QueuedModel>, distance: f32) {
-    e.set(this, QueuedModel::mfOverriddenVisualDistance, distance);
+    e.set(
+        this,
+        QueuedModel::mfOverriddenVisualDistance,
+        x87_quiet(distance),
+    );
 }
 
 // Translated from 00444040 (decompiled, FalloutNV.exe 1.4.0.525)

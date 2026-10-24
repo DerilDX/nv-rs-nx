@@ -49,6 +49,34 @@ pub fn fn_0067c450(e: &mut Engine, this: Ptr, value: u32) -> Ptr {
     this
 }
 
+// Translated from 0067c330 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 0067c330 - the exception-unwinding frame (FS:[0]) and the security-cookie word it pushes are not translated
+/// Loads from the load game buffer (`RET 4`; the engine map gives it no
+/// name): the word at +8 (`00864980`, 4 bytes), then a byte; when set, a
+/// new 0xC-byte object (`00401000`, constructed with `0067f030`, or 0 when
+/// the allocation fails) is stored at +4 and loads itself (`0067fbe0` with
+/// the buffer).
+pub fn fn_0067c330(e: &mut Engine, this: Ptr, buffer: Ptr) {
+    e.call(0x0086_4980, &args![buffer, this.addr() + 8, 4u32]);
+    let present = e.with_stack(4, |e, flag| {
+        e.mem.set_u8(flag.addr(), 0);
+        e.call(0x0086_4980, &args![buffer, flag, 1u32]);
+        e.mem.u8(flag.addr())
+    });
+    if present == 0 {
+        return;
+    }
+    let block = e.call(0x0040_1000, &args![0xcu32]).u32();
+    let object = if block != 0 {
+        e.call(0x0067_f030, &args![block]).u32()
+    } else {
+        0
+    };
+    e.mem.set_u32(this.addr() + 4, object);
+    let object = e.mem.u32(this.addr() + 4);
+    e.call(0x0067_fbe0, &args![object, buffer]);
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -56,6 +84,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x0067_c3f0, fn_0067c3f0(Ptr) -> Ptr),
         entry!(0x0067_c420, fn_0067c420(Ptr, u32) -> Ptr),
         entry!(0x0067_c450, fn_0067c450(Ptr, u32) -> Ptr),
+        entry!(0x0067_c330, fn_0067c330(Ptr, Ptr)),
     ]
 }
 
@@ -145,5 +174,38 @@ mod tests {
             0x0106_89e4,
             "the vtable was stored before the call"
         );
+    }
+}
+
+#[cfg(test)]
+mod tests_n042 {
+    use super::*;
+
+    #[test]
+    fn load_reads_the_word_then_the_object() {
+        let mut e = Engine::new();
+        e.register(0x0086_4980, |e, a| {
+            if a[2] == 4 {
+                e.mem.set_u32(a[1], 0x1234);
+            } else {
+                e.mem.set_u8(a[1], 1);
+            }
+            Ret::default()
+        });
+        e.register(0x0040_1000, |_, _| 0x7000u32.into_ret());
+        e.register(0x0067_f030, |_, a| (a[0] + 1).into_ret());
+        e.register(0x0067_fbe0, |_, _| Ret::default());
+        let this = e.mem.alloc(0xc);
+        e.call_log = Some(vec![]);
+        e.call(0x0067_c330, &args![this, 0x8800u32]);
+        let log = e.call_log.take().unwrap();
+        assert_eq!(log[1], (0x0086_4980, vec![0x8800, this + 8, 4]));
+        assert_eq!(e.mem.u32(this + 8), 0x1234);
+        assert_eq!(e.mem.u32(this + 4), 0x7001);
+        assert_eq!(log.last().unwrap(), &(0x0067_fbe0, vec![0x7001, 0x8800]));
+        e.register(0x0086_4980, |_, _| Ret::default());
+        e.call_log = Some(vec![]);
+        e.call(0x0067_c330, &args![this, 0x8800u32]);
+        assert_eq!(e.call_log.take().unwrap().len(), 3);
     }
 }

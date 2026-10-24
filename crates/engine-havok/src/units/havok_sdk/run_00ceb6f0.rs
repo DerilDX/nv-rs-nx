@@ -3,7 +3,8 @@
 
 #[allow(unused_imports)]
 use crate::prelude::*;
-use crate::units::havok_sdk::hkpconvexradiusbuilder::{mulps, shufps, subps, sum_of_three};
+use crate::sse::{mulps, subps};
+use crate::units::havok_sdk::hkpconvexradiusbuilder::shufps;
 use crate::units::havok_sdk::hkpsphereshape::{load_vec, Vec4};
 
 /// The doubles `0.0001` (`01032980`) and `-0.0001` (`010cb430`) the determinant is compared with.
@@ -16,6 +17,11 @@ fn cross(a: Vec4, b: Vec4) -> Vec4 {
         mulps(shufps(a, a, 0xc9), shufps(b, b, 0xd2)),
         mulps(shufps(a, a, 0xd2), shufps(b, b, 0xc9)),
     )
+}
+
+/// `z + (y + x)` with `ADDSS` (the higher lane the destination, the SSE NaN rules).
+fn sum_of_three(v: Vec4) -> f32 {
+    crate::sse::add(v[2], crate::sse::add(v[1], v[0]))
 }
 
 /// What an `FLD dword` of the float `value` puts on the x87 stack.
@@ -103,7 +109,8 @@ pub fn fn_00ceb6f0(
         e.mem.set_u8(out_hit.addr(), 0);
         return;
     }
-    let scaled_float = sum_of_three(mulps(w, subps(load_vec(e, second.addr()), origin)));
+    // `MULPS` of `w` with `second - base` still in its register.
+    let scaled_float = sum_of_three(mulps(w, to_second));
     let scaled = x87_mul(loaded(scaled_float), inverse);
     e.mem.set_u32(out_scaled.addr(), x87_store32(scaled));
     e.mem.set_u8(out_hit.addr(), 1);

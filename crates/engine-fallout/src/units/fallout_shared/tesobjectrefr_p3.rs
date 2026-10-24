@@ -2571,9 +2571,9 @@ pub fn fn_0056e860(e: &mut Engine, this: Ptr) -> Ptr {
 /// Stores `value` in the three floats at `this`, `this + 4` and
 /// `this + 8`.
 pub fn fn_0056e8a0(e: &mut Engine, this: Ptr, value: f32) {
-    e.mem.set_f32(this.addr(), value);
-    e.mem.set_f32(this.addr() + 4, value);
-    e.mem.set_f32(this.addr() + 8, value);
+    e.mem.set_f32(this.addr(), x87_quiet(value));
+    e.mem.set_f32(this.addr() + 4, x87_quiet(value));
+    e.mem.set_f32(this.addr() + 8, x87_quiet(value));
 }
 
 // Translated from 0056e8d0 (decompiled, FalloutNV.exe 1.4.0.525)

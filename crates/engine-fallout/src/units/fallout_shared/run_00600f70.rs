@@ -105,9 +105,46 @@ pub fn fn_00601100(e: &mut Engine, this: Ptr, size: u32) -> Ptr {
     this
 }
 
+/// The scalar deleting destructor shape: `body` on `this`, then `00401030`
+/// frees `this` when bit 0 of `flags` is set. Returns `this`.
+fn delete_with(e: &mut Engine, this: Ptr, flags: u32, body: u32) -> Ptr {
+    e.call(body, &args![this]);
+    if flags & 1 != 0 {
+        e.call(0x0040_1030, &args![this]);
+    }
+    this
+}
+
+// Translated from 00600f70 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Scalar deleting destructor shape (`RET 4`; the engine map gives it no
+/// name; the class is unconfirmed): the destructor body `00600b90` on
+/// `this`, then `00401030` when bit 0 of `flags` is set. Returns `this`.
+pub fn fn_00600f70(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    delete_with(e, this, flags, 0x0060_0b90)
+}
+
+// Translated from 00600fa0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Scalar deleting destructor shape (`RET 4`; the engine map gives it no
+/// name; the class is unconfirmed): the destructor body `005ffbd0` on
+/// `this`, then `00401030` when bit 0 of `flags` is set. Returns `this`.
+pub fn fn_00600fa0(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    delete_with(e, this, flags, 0x005f_fbd0)
+}
+
+// Translated from 00601070 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Scalar deleting destructor shape (`RET 4`; the engine map gives it no
+/// name; the class is unconfirmed): the destructor body `00600d70` on
+/// `this`, then `00401030` when bit 0 of `flags` is set. Returns `this`.
+pub fn fn_00601070(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    delete_with(e, this, flags, 0x0060_0d70)
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x0060_0f70, fn_00600f70(Ptr, u32) -> Ptr),
+        entry!(0x0060_0fa0, fn_00600fa0(Ptr, u32) -> Ptr),
+        entry!(0x0060_1070, fn_00601070(Ptr, u32) -> Ptr),
         entry!(0x0060_0fd0, fn_00600fd0(Ptr, u32, u8) -> Ptr),
         entry!(0x0060_1000, fn_00601000(Ptr, u16, u16) -> Ptr),
         entry!(0x0060_10a0, fn_006010a0(Ptr, u32, u8) -> Ptr),
@@ -186,5 +223,33 @@ mod tests {
         assert_eq!(e.get(array, NiTArray::m_pBase), 0x0010_0004);
         e.call(0x0060_1000, &args![array, 0u32, 2u32]);
         assert_eq!(e.get(array, NiTArray::m_pBase), 0);
+    }
+}
+
+#[cfg(test)]
+mod n041_tests {
+    use super::*;
+
+    #[test]
+    fn deleting_destructors_free_only_with_bit_zero() {
+        for (addr, body) in [
+            (0x0060_0f70u32, 0x0060_0b90u32),
+            (0x0060_0fa0, 0x005f_fbd0),
+            (0x0060_1070, 0x0060_0d70),
+        ] {
+            let mut e = Engine::new();
+            e.register(body, |_, _| Ret::default());
+            e.register(0x0040_1030, |_, _| Ret::default());
+            for (flags, frees) in [(0u32, false), (2, false), (1, true), (3, true)] {
+                e.call_log = Some(vec![]);
+                assert_eq!(e.call(addr, &args![0x1000u32, flags]).u32(), 0x1000);
+                let log = e.call_log.take().unwrap();
+                let mut expected = vec![(addr, vec![0x1000, flags]), (body, vec![0x1000])];
+                if frees {
+                    expected.push((0x0040_1030, vec![0x1000]));
+                }
+                assert_eq!(log, expected);
+            }
+        }
     }
 }

@@ -224,12 +224,42 @@ pub fn fo_script_functions_get_vats_value_condition_function(
     answered
 }
 
+// Translated from 00594dc0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `FOScriptFunctions::GetVATSValueFunction` (Xbox PDB name in the engine
+/// map; the script command's eight words): parses two word arguments
+/// (`Script::ParseParameters`, both starting at 0) and answers
+/// `GetVATSValueConditionFunction(thisObj, first, second, result)`
+/// (`00594e40`); false when they do not parse.
+pub fn fo_script_functions_get_vats_value_function(
+    e: &mut Engine,
+    a: crate::units::fallout_shared::tesscriptfunctions::ScriptArgs,
+) -> bool {
+    let Some([value, form]) = a.parse_into(e, [0, 0]) else {
+        return false;
+    };
+    fo_script_functions_get_vats_value_condition_function(
+        e,
+        a.this_obj.addr(),
+        value as i32,
+        form,
+        a.result,
+    )
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
-    vec![entry!(
-        0x0059_4e40,
-        fo_script_functions_get_vats_value_condition_function(u32, i32, u32, Ptr) -> bool
-    )]
+    vec![
+        entry!(
+            0x0059_4dc0,
+            fo_script_functions_get_vats_value_function(
+                crate::units::fallout_shared::tesscriptfunctions::ScriptArgs
+            ) -> bool
+        ),
+        entry!(
+            0x0059_4e40,
+            fo_script_functions_get_vats_value_condition_function(u32, i32, u32, Ptr) -> bool
+        ),
+    ]
 }
 
 #[cfg(test)]
@@ -382,5 +412,42 @@ mod tests {
                 (bits >> 32) as u32
             ]]
         );
+    }
+}
+
+#[cfg(test)]
+mod n038_tests {
+    use super::*;
+
+    #[test]
+    fn get_vats_value_parses_then_asks_the_condition() {
+        let mut e = Engine::new();
+        e.mem.map(0x0f00_0000, 4);
+        // The parse fills its two outputs with 0x11 and 0x5000 and answers
+        // the word at 0x0f00_0000.
+        e.register(0x005a_ccb0, |e, a| {
+            e.mem.set_u32(a[7], 0x11);
+            e.mem.set_u32(a[8], 0x5000);
+            Ret {
+                eax: e.mem.u32(0x0f00_0000),
+                ..Ret::default()
+            }
+        });
+        // VATS mode 0: no action, the condition answers false.
+        e.register(WORD_AT, |_, _| Ret::default());
+        e.register(IS_CONSOLE_VISIBLE, |_, _| Ret::default());
+        let result = e.mem.alloc(8);
+        e.mem.set_f64(result, 7.0);
+        let words = [1u32, 2, 3, 4, 5, 6, result, 8];
+        e.call_log = Some(vec![]);
+        assert!(!e.call(0x0059_4dc0, &words).bool());
+        let log = e.call_log.take().unwrap();
+        assert_eq!(&log[1].1[..7], &[1, 2, 8, 3, 4, 5, 6]);
+        assert_eq!(log.len(), 2);
+        assert_eq!(e.mem.f64(result), 7.0);
+        // Parsed: the condition runs (and clears the result).
+        e.mem.set_u32(0x0f00_0000, 1);
+        assert!(!e.call(0x0059_4dc0, &words).bool());
+        assert_eq!(e.mem.f64(result), 0.0);
     }
 }

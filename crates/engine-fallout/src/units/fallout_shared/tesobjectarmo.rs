@@ -433,12 +433,130 @@ pub fn fn_00513d60(e: &mut Engine, this: Ptr) -> Ptr {
     this
 }
 
+/// `TESForm::StartForm` (`004855a0`), `TESForm::CloseForm` (`00485680`) and
+/// `TESForm::SaveData` (`00485e00`), `thiscall` on the form, no stack words.
+const START_FORM: u32 = 0x0048_55a0;
+const CLOSE_FORM: u32 = 0x0048_5680;
+const FORM_SAVE_DATA: u32 = 0x0048_5e00;
+/// The component saves (engine map; `thiscall`, no stack words):
+/// `TESFullName::Save` (`00487010`), `TESScriptableForm::Save` (`0048cca0`),
+/// `TESEnchantableForm::Save` (`0047bd70`), `TESBipedModelForm::Save`
+/// (`00480610`), `BGSDestructibleObjectForm::Save` (`00477f20`),
+/// `BGSRepairItemList::Save` (`0047b8a0`), `BGSBipedModelList::Save`
+/// (`00474d60`), `BGSEquipType::Save` (`00479350`) and
+/// `BGSPickupPutdownSounds::Save` (`0047b560`).
+const FULL_NAME_SAVE: u32 = 0x0048_7010;
+const SCRIPTABLE_FORM_SAVE: u32 = 0x0048_cca0;
+const ENCHANTABLE_SAVE: u32 = 0x0047_bd70;
+const BIPED_MODEL_SAVE: u32 = 0x0048_0610;
+const DESTRUCTIBLE_SAVE: u32 = 0x0047_7f20;
+const REPAIR_LIST_SAVE: u32 = 0x0047_b8a0;
+const BIPED_MODEL_LIST_SAVE: u32 = 0x0047_4d60;
+const EQUIP_TYPE_SAVE: u32 = 0x0047_9350;
+const PICKUP_PUTDOWN_SAVE: u32 = 0x0047_b560;
+/// `00401500`: the byte at `011c54ba` (whether saved words are byte-swapped).
+const SAVE_SWAPS_BYTES: u32 = 0x0040_1500;
+/// `TESForm::__AddChunkData` (`00485990`, cdecl(chunk, data, size)) and
+/// `00485910` (cdecl(chunk, word)): adds a one-word chunk.
+const ADD_CHUNK_DATA: u32 = 0x0048_5990;
+const ADD_CHUNK_WORD: u32 = 0x0048_5910;
+/// The form-id getter (`0084e3a0`, `thiscall`: the word at +0xc).
+const FORM_ID: u32 = 0x0084_e3a0;
+/// The 0xc-byte sound record `Save` writes as `SNAM`: its constructor
+/// (`00513d60`, `thiscall`: clears its word +0, byte +4 and word +8) and
+/// its byte swap (`00483710`, `thiscall`; its body does nothing).
+const SOUND_RECORD_CONSTRUCT: u32 = 0x0051_3d60;
+const SOUND_RECORD_SWAP: u32 = 0x0048_3710;
+
+// Translated from 00513d90 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 00513d90 - the SNAM record's padding bytes 5..7, which the exe writes with the chunk from its uninitialised stack, are 0 here.
+/// `TESObjectARMO::Save` (engine map; no stack words): `StartForm`, the
+/// full name (+0x30), script (+0x3c), enchantment (+0x48), biped model
+/// (+0x70), destructible data (+0x14c), repair list (+0x15c), biped model
+/// list (+0x164), equip type (+0x154) and pickup/putdown sounds (+0x16c),
+/// `TESForm::SaveData`, the 0xc bytes at +0x178 as `DNAM` (byte-swapped
+/// before and back after, `00535aa0`, when `00401500` says so), then `BNAM`
+/// (1 when the byte at +0x18c is set, else 0). Without that byte, the form
+/// at +0x188 by id as `TNAM`; with it, +0x188 is a list of sound entries:
+/// for each node until the first null item, an entry with a form gets a
+/// record (`00513d60`) of the form's id, the entry's byte +4 and word +8,
+/// written as `SNAM` (0xc bytes, `00483710` before and after when
+/// `00401500` says so). `CloseForm`. The record the game keeps on its stack
+/// is a zeroed block here, so its three padding bytes (5..7, written with
+/// the chunk) are 0 where the exe writes whatever its stack held.
+pub fn tes_object_armo_save(e: &mut Engine, this: Ptr) {
+    let base = this.addr();
+    e.call(START_FORM, &args![this]);
+    for (offset, save) in [
+        (0x30u32, FULL_NAME_SAVE),
+        (0x3c, SCRIPTABLE_FORM_SAVE),
+        (0x48, ENCHANTABLE_SAVE),
+        (0x70, BIPED_MODEL_SAVE),
+        (0x14c, DESTRUCTIBLE_SAVE),
+        (0x15c, REPAIR_LIST_SAVE),
+        (0x164, BIPED_MODEL_LIST_SAVE),
+        (0x154, EQUIP_TYPE_SAVE),
+        (0x16c, PICKUP_PUTDOWN_SAVE),
+    ] {
+        e.call(save, &args![base + offset]);
+    }
+    e.call(FORM_SAVE_DATA, &args![this]);
+    if e.call(SAVE_SWAPS_BYTES, &[]).u32() as u8 != 0 {
+        e.call(SWAP_DATA, &args![base + 0x178]);
+    }
+    e.call(ADD_CHUNK_DATA, &args![SIG_DNAM, base + 0x178, 0xcu32]);
+    if e.call(SAVE_SWAPS_BYTES, &[]).u32() as u8 != 0 {
+        e.call(SWAP_DATA, &args![base + 0x178]);
+    }
+    let is_list = u32::from(e.mem.u8(base + 0x18c) != 0);
+    e.call(ADD_CHUNK_WORD, &args![SIG_BNAM, is_list]);
+    if e.mem.u8(base + 0x18c) == 0 {
+        let form = e.mem.u32(base + 0x188);
+        if form != 0 {
+            let id = e.call(FORM_ID, &args![form]).u32();
+            e.call(ADD_CHUNK_WORD, &args![SIG_TNAM, id]);
+        }
+    } else if e.mem.u32(base + 0x188) != 0 {
+        let mut node = e.mem.u32(base + 0x188);
+        e.with_stack(0xc, |e, record| {
+            while node != 0 {
+                let at = e.call(NODE_ITEM, &args![node]).u32();
+                if e.mem.u32(at) == 0 {
+                    break;
+                }
+                let at = e.call(NODE_ITEM, &args![node]).u32();
+                let entry = e.mem.u32(at);
+                node = e.call(NODE_NEXT, &args![node]).u32();
+                if entry != 0 && e.mem.u32(entry) != 0 {
+                    e.call(SOUND_RECORD_CONSTRUCT, &args![record]);
+                    let form = e.mem.u32(entry);
+                    let id = e.call(FORM_ID, &args![form]).u32();
+                    e.mem.set_u32(record.addr(), id);
+                    let byte = e.mem.u8(entry + 4);
+                    e.mem.set_u8(record.addr() + 4, byte);
+                    let word = e.mem.u32(entry + 8);
+                    e.mem.set_u32(record.addr() + 8, word);
+                    if e.call(SAVE_SWAPS_BYTES, &[]).u32() as u8 != 0 {
+                        e.call(SOUND_RECORD_SWAP, &args![record]);
+                    }
+                    e.call(ADD_CHUNK_DATA, &args![SIG_SNAM, record, 0xcu32]);
+                    if e.call(SAVE_SWAPS_BYTES, &[]).u32() as u8 != 0 {
+                        e.call(SOUND_RECORD_SWAP, &args![record]);
+                    }
+                }
+            }
+        });
+    }
+    e.call(CLOSE_FORM, &args![this]);
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
         entry!(0x0051_2e60, tes_object_armo_init_item(Ptr)),
         entry!(0x0051_2fd0, fn_00512fd0(Ptr, Ptr) -> bool),
         entry!(0x0051_3d60, fn_00513d60(Ptr) -> Ptr),
+        entry!(0x0051_3d90, tes_object_armo_save(Ptr)),
     ]
 }
 
@@ -832,5 +950,141 @@ mod tests {
         // DATA not 2 bytes longer: no buffer.
         assert!(calls_to(&log, LOAD_DATA).contains(&vec![this, file, 0, 0]));
         assert!(calls_to(&log, SWAP_DATA).is_empty());
+    }
+}
+
+#[cfg(test)]
+mod save_tests {
+    use super::*;
+
+    type Log = Vec<(u32, Vec<u32>)>;
+
+    fn only(log: &Log, addr: u32) -> Vec<Vec<u32>> {
+        log.iter()
+            .filter(|(a, _)| *a == addr)
+            .map(|(_, w)| w.clone())
+            .collect()
+    }
+
+    const SAVES: [u32; 9] = [
+        FULL_NAME_SAVE,
+        SCRIPTABLE_FORM_SAVE,
+        ENCHANTABLE_SAVE,
+        BIPED_MODEL_SAVE,
+        DESTRUCTIBLE_SAVE,
+        REPAIR_LIST_SAVE,
+        BIPED_MODEL_LIST_SAVE,
+        EQUIP_TYPE_SAVE,
+        PICKUP_PUTDOWN_SAVE,
+    ];
+
+    fn engine(swaps: u32) -> Engine {
+        let mut e = Engine::new();
+        for a in SAVES.into_iter().chain([
+            START_FORM,
+            CLOSE_FORM,
+            FORM_SAVE_DATA,
+            SWAP_DATA,
+            ADD_CHUNK_WORD,
+            SOUND_RECORD_SWAP,
+        ]) {
+            e.register(a, |_, _| Ret::default());
+        }
+        e.register_double(SAVE_SWAPS_BYTES, move |_, _| swaps.into_ret());
+        e.register(FORM_ID, |e, a| e.mem.u32(a[0] + 0xc).into_ret());
+        e.register(NODE_ITEM, |_, a| a[0].into_ret());
+        e.register(NODE_NEXT, |e, a| e.mem.u32(a[0] + 4).into_ret());
+        e.register(SOUND_RECORD_CONSTRUCT, |e, a| {
+            e.mem.set_u32(a[0], 0);
+            e.mem.set_u8(a[0] + 4, 0);
+            e.mem.set_u32(a[0] + 8, 0);
+            a[0].into_ret()
+        });
+        e
+    }
+
+    fn form(e: &mut Engine, id: u32) -> u32 {
+        let form = e.mem.alloc(0x18);
+        e.mem.set_u32(form + 0xc, id);
+        form
+    }
+
+    #[test]
+    fn save_writes_components_dnam_bnam_and_tnam() {
+        let mut e = engine(0);
+        e.register(ADD_CHUNK_DATA, |_, _| Ret::default());
+        let this = e.mem.alloc(0x190);
+        let template = form(&mut e, 0x0abc);
+        e.mem.set_u32(this + 0x188, template);
+        e.call_log = Some(vec![]);
+        e.call(0x0051_3d90, &args![this]);
+        let log = e.call_log.take().unwrap();
+        let offsets = [0x30, 0x3c, 0x48, 0x70, 0x14c, 0x15c, 0x164, 0x154, 0x16c];
+        for (save, offset) in SAVES.iter().zip(offsets) {
+            assert_eq!(only(&log, *save), vec![vec![this + offset]]);
+        }
+        assert_eq!(only(&log, FORM_SAVE_DATA), vec![vec![this]]);
+        assert_eq!(
+            only(&log, ADD_CHUNK_DATA),
+            vec![vec![SIG_DNAM, this + 0x178, 0xc]]
+        );
+        assert_eq!(
+            only(&log, ADD_CHUNK_WORD),
+            vec![vec![SIG_BNAM, 0], vec![SIG_TNAM, 0x0abc]]
+        );
+        assert!(only(&log, SWAP_DATA).is_empty());
+        assert_eq!(only(&log, CLOSE_FORM), vec![vec![this]]);
+    }
+
+    #[test]
+    fn save_writes_one_snam_per_sound_entry() {
+        let mut e = engine(1);
+        let seen = e.mem.alloc(0x40);
+        e.register_double(ADD_CHUNK_DATA, move |e, a| {
+            if a[0] == SIG_SNAM {
+                let n = e.mem.u32(seen + 0x3c);
+                for i in 0..3 {
+                    let word = e.mem.u32(a[1] + 4 * i);
+                    e.mem.set_u32(seen + 0xc * n + 4 * i, word);
+                }
+                e.mem.set_u32(seen + 0x3c, n + 1);
+            }
+            Ret::default()
+        });
+        let this = e.mem.alloc(0x190);
+        e.mem.set_u8(this + 0x18c, 2);
+        let entry = |e: &mut Engine, form: u32, byte: u8, word: u32| {
+            let p = e.mem.alloc(0xc);
+            e.mem.set_u32(p, form);
+            e.mem.set_u8(p + 4, byte);
+            e.mem.set_u32(p + 8, word);
+            p
+        };
+        let first_form = form(&mut e, 0x111);
+        let second_form = form(&mut e, 0x222);
+        let a = entry(&mut e, first_form, 7, 0x70);
+        let empty = entry(&mut e, 0, 1, 1);
+        let b = entry(&mut e, second_form, 8, 0x80);
+        let after_end = entry(&mut e, first_form, 9, 0x90);
+        let mut nodes = vec![];
+        for item in [a, empty, b, 0, after_end] {
+            let node = e.mem.alloc(8);
+            e.mem.set_u32(node, item);
+            nodes.push(node);
+        }
+        for pair in nodes.windows(2) {
+            e.mem.set_u32(pair[0] + 4, pair[1]);
+        }
+        e.mem.set_u32(this + 0x188, nodes[0]);
+        e.call_log = Some(vec![]);
+        e.call(0x0051_3d90, &args![this]);
+        let log = e.call_log.take().unwrap();
+        assert_eq!(e.mem.u32(seen + 0x3c), 2);
+        let records: Vec<u32> = (0..6).map(|i| e.mem.u32(seen + 4 * i)).collect();
+        assert_eq!(records, vec![0x111, 7, 0x70, 0x222, 8, 0x80]);
+        assert_eq!(only(&log, ADD_CHUNK_WORD), vec![vec![SIG_BNAM, 1]]);
+        assert_eq!(only(&log, SWAP_DATA).len(), 2);
+        assert_eq!(only(&log, SOUND_RECORD_SWAP).len(), 4);
+        assert_eq!(only(&log, SOUND_RECORD_CONSTRUCT).len(), 2);
     }
 }

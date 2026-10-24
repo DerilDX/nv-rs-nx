@@ -425,6 +425,178 @@ pub fn fn_005928a0(e: &mut Engine, this: Ptr, file: Ptr) -> bool {
     true
 }
 
+/// `__RTDynamicCast` (`00ec43fb`, cdecl: object, vfptr offset, source type,
+/// target type, is-reference).
+const RT_DYNAMIC_CAST: u32 = 0x00ec_43fb;
+/// The `TESForm` and `BGSTextureSet` type descriptors (`.?AVTESForm@@`,
+/// `.?AVBGSTextureSet@@`).
+const TYPE_TES_FORM: u32 = 0x0118_3028;
+const TYPE_BGS_TEXTURE_SET: u32 = 0x0118_7788;
+/// The decal record at +0x80 (0x24 bytes, `DecalData*`) and the `DNAM`
+/// flags word at +0x84.
+const DECAL: u32 = 0x80;
+const FLAGS: u32 = 0x84;
+/// Copies one decal record into another (`005932b0`, `ECX` = destination,
+/// one stack word: the source).
+const DECAL_DATA_COPY: u32 = 0x0059_32b0;
+/// Compares two decal records (`005932e0`, `ECX`, one stack word): true
+/// when they differ.
+const DECAL_DATA_DIFFERS: u32 = 0x0059_32e0;
+/// `DecalData::Save` (Xbox PDB, `00593320`; `RET 4`: the chunk signature).
+const DECAL_DATA_SAVE: u32 = 0x0059_3320;
+/// `TESForm::CopyAllComponents` and `TESForm::CompareAllComponents` (Xbox
+/// PDB, `004851b0`, `00485270`; one stack word: the other form).
+const COPY_ALL_COMPONENTS: u32 = 0x0048_51b0;
+const COMPARE_ALL_COMPONENTS: u32 = 0x0048_5270;
+/// `TESForm::StartForm` and `TESForm::CloseForm` (Xbox PDB, `004855a0`,
+/// `00485680`).
+const START_FORM: u32 = 0x0048_55a0;
+const CLOSE_FORM: u32 = 0x0048_5680;
+/// `TESTexture::Save` (Xbox PDB, `0048e370`; `RET 4`: the chunk signature).
+const TEXTURE_SAVE: u32 = 0x0048_e370;
+/// The six texture chunk signatures (`TX00`..`TX05`, words at `0118c574`).
+const TEXTURE_CHUNKS: u32 = 0x0118_c574;
+/// `TESForm::AddChunk_ov2` (Xbox PDB, `00485950`, cdecl: signature, a
+/// 16-bit value).
+const ADD_CHUNK_U16: u32 = 0x0048_5950;
+/// `TESSoundFile::SetSoundFile` (Xbox PDB name of `00489100`; `ECX` = the
+/// string, one stack word: the text).
+const SET_STRING: u32 = 0x0048_9100;
+
+/// `other` cast from `TESForm` to `BGSTextureSet` (0 when it is not one).
+fn cast_texture_set(e: &mut Engine, other: Ptr) -> u32 {
+    e.call(
+        RT_DYNAMIC_CAST,
+        &args![other, 0u32, TYPE_TES_FORM, TYPE_BGS_TEXTURE_SET, 0u32],
+    )
+    .u32()
+}
+
+// Translated from 00592560 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 00592560 - the exception frame (FS:[0]) around the decal record's construction is not translated
+/// The texture set's form copy (`RET 4`): when `other` casts to a
+/// `BGSTextureSet`, each of the six textures copies the other's through its
+/// vtable slot 8; the decal record follows the other's (a new 0x24-byte one
+/// from `00401000` built by `00593240` when this one has none, then
+/// `005932b0`; or this one's deleted through `007b3fa0(1)` and cleared when
+/// the other has none), the flags word (+0x84) is copied, and
+/// `TESForm::CopyAllComponents` runs.
+pub fn fn_00592560(e: &mut Engine, this: Ptr, other: Ptr) {
+    let source = cast_texture_set(e, other);
+    if source == 0 {
+        return;
+    }
+    let base = this.addr();
+    for index in 0..6u32 {
+        let texture = base + TEXTURES + index * 0xc;
+        e.vcall(texture, 8, &args![source + TEXTURES + index * 0xc]);
+    }
+    if e.mem.u32(source + DECAL) == 0 {
+        let decal = e.mem.u32(base + DECAL);
+        if decal != 0 {
+            e.call(DELETE_007B3FA0, &args![decal, 1u32]);
+            e.mem.set_u32(base + DECAL, 0);
+        }
+    } else {
+        if e.mem.u32(base + DECAL) == 0 {
+            let memory = e.call(ALLOCATE, &args![0x24u32]).u32();
+            let decal = if memory == 0 {
+                0
+            } else {
+                e.call(DECAL_DATA_CTOR, &args![memory]).u32()
+            };
+            e.mem.set_u32(base + DECAL, decal);
+        }
+        let theirs = e.mem.u32(source + DECAL);
+        let mine = e.mem.u32(base + DECAL);
+        e.call(DECAL_DATA_COPY, &args![mine, theirs]);
+    }
+    let flags = e.mem.u16(source + FLAGS);
+    e.mem.set_u16(base + FLAGS, flags);
+    e.call(COPY_ALL_COMPONENTS, &args![this, source]);
+}
+
+// Translated from 005926f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The texture set's form comparison (`RET 4`): true (different) when
+/// `other` is not a `BGSTextureSet`, any of the six textures differs (its
+/// vtable slot 0xC), only one of them has a decal record or the records
+/// differ (`005932e0`), the flags words (+0x84) differ, or
+/// `TESForm::CompareAllComponents` says so; false otherwise.
+pub fn fn_005926f0(e: &mut Engine, this: Ptr, other: Ptr) -> bool {
+    let source = cast_texture_set(e, other);
+    if source == 0 {
+        return true;
+    }
+    let base = this.addr();
+    for index in 0..6u32 {
+        let texture = base + TEXTURES + index * 0xc;
+        if e.vcall(texture, 0xc, &args![source + TEXTURES + index * 0xc])
+            .bool()
+        {
+            return true;
+        }
+    }
+    let theirs = e.mem.u32(source + DECAL);
+    if theirs == 0 {
+        if e.mem.u32(base + DECAL) != 0 {
+            return true;
+        }
+    } else {
+        let mine = e.mem.u32(base + DECAL);
+        if mine == 0 {
+            return true;
+        }
+        if e.call(DECAL_DATA_DIFFERS, &args![mine, theirs]).bool() {
+            return true;
+        }
+    }
+    if e.mem.u16(base + FLAGS) != e.mem.u16(source + FLAGS) {
+        return true;
+    }
+    e.call(COMPARE_ALL_COMPONENTS, &args![this, source]).bool()
+}
+
+// Translated from 00592810 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BGSTextureSet::Save` (Xbox PDB): starts the form, saves the six
+/// textures under the signatures at `0118c574` (`TX00`..`TX05`), the decal
+/// record as `DODT` when there is one, the flags word (+0x84) as a 16-bit
+/// `DNAM` chunk, and closes the form.
+pub fn bgs_texture_set_save(e: &mut Engine, this: Ptr) {
+    e.call(START_FORM, &args![this]);
+    let base = this.addr();
+    for index in 0..6u32 {
+        let chunk = e.mem.u32(TEXTURE_CHUNKS + index * 4);
+        e.call(TEXTURE_SAVE, &args![base + TEXTURES + index * 0xc, chunk]);
+    }
+    let decal = e.mem.u32(base + DECAL);
+    if decal != 0 {
+        e.call(DECAL_DATA_SAVE, &args![decal, CHUNK_DODT]);
+    }
+    let flags = e.mem.u16(base + FLAGS);
+    e.call(ADD_CHUNK_U16, &args![CHUNK_DNAM, u32::from(flags)]);
+    e.call(CLOSE_FORM, &args![this]);
+}
+
+// Translated from 00593030 (decompiled, FalloutNV.exe 1.4.0.525)
+/// A virtual of the texture set's base at +0x30 (slot 0x94 of the table at
+/// `01033c7c`, whose locator names `BGSTextureSet` at offset 0x30; `RET 8`):
+/// gives texture `index` the file name `text` through `00489100` on that
+/// `TESTexture` (relative to the base: 0 at +0x8, 1 at +0x14, 2 at +0x2C,
+/// 3 at +0x38, 4 at +0x44, 5 at +0x20, the exe's jump table; in the form
+/// these are textures 0, 1, 3, 4, 5 and 2). Any other index does nothing.
+pub fn fn_00593030(e: &mut Engine, this: Ptr, index: u32, text: u32) {
+    let field = match index {
+        0 => 0x8,
+        1 => 0x14,
+        2 => 0x2c,
+        3 => 0x38,
+        4 => 0x44,
+        5 => 0x20,
+        _ => return,
+    };
+    e.call(SET_STRING, &args![this.addr() + field, text]);
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -444,6 +616,10 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x0059_2d20, bgs_texture_set_create_shader_texture_set(Ptr) -> u32),
         entry!(0x0059_2f30, bgs_texture_set_get_texture(Ptr, u32, Ptr)),
         entry!(0x0059_28a0, fn_005928a0(Ptr, Ptr) -> bool),
+        entry!(0x0059_2560, fn_00592560(Ptr, Ptr)),
+        entry!(0x0059_26f0, fn_005926f0(Ptr, Ptr) -> bool),
+        entry!(0x0059_2810, bgs_texture_set_save(Ptr)),
+        entry!(0x0059_3030, fn_00593030(Ptr, u32, u32)),
     ]
 }
 
@@ -901,5 +1077,183 @@ mod texture_set_tests {
             calls(&e, STRCPY_S),
             vec![vec![path[0], 0x104, TEXTURES_DIRECTORY]]
         );
+    }
+}
+
+#[cfg(test)]
+mod n037_tests {
+    use super::*;
+
+    fn ret(eax: u32) -> Ret {
+        Ret {
+            eax,
+            ..Ret::default()
+        }
+    }
+
+    fn calls_to(e: &Engine, addr: u32) -> Vec<Vec<u32>> {
+        e.call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|c| c.0 == addr)
+            .map(|c| c.1.clone())
+            .collect()
+    }
+
+    const TEXTURE_VTABLE: u32 = 0x0600_0000;
+    const TEXTURE_COPY: u32 = 0x7000_0008;
+    const TEXTURE_DIFFERS: u32 = 0x7000_000c;
+
+    /// Doubles; the cast keeps even addresses; texture `n` of a set whose
+    /// word at +0x30 is `n + 1` differs.
+    fn engine() -> Engine {
+        let mut e = Engine::new();
+        e.put_vtable(TEXTURE_VTABLE, &[0, 0, TEXTURE_COPY, TEXTURE_DIFFERS]);
+        e.register(TEXTURE_COPY, |_, _| Ret::default());
+        e.register(TEXTURE_DIFFERS, |e, a| {
+            let set = a[0] - TEXTURES - (a[0] - TEXTURES) % 0x100;
+            let index = (a[0] - set - TEXTURES) / 0xc;
+            ret(u32::from(e.mem.u32(set + 0x30) == index + 1))
+        });
+        e.register(RT_DYNAMIC_CAST, |_, a| {
+            ret(if a[0] & 1 == 0 { a[0] } else { 0 })
+        });
+        for addr in [
+            DECAL_DATA_COPY,
+            DELETE_007B3FA0,
+            COPY_ALL_COMPONENTS,
+            START_FORM,
+            CLOSE_FORM,
+            TEXTURE_SAVE,
+            DECAL_DATA_SAVE,
+            ADD_CHUNK_U16,
+            SET_STRING,
+        ] {
+            e.register(addr, |_, _| Ret::default());
+        }
+        e.register(ALLOCATE, |e, a| ret(e.mem.alloc(a[0])));
+        e.register(DECAL_DATA_CTOR, |_, a| ret(a[0]));
+        e.register(DECAL_DATA_DIFFERS, |e, a| {
+            ret(u32::from(e.mem.u32(a[0]) != e.mem.u32(a[1])))
+        });
+        e.register(COMPARE_ALL_COMPONENTS, |_, _| ret(0));
+        e.call_log = Some(vec![]);
+        e
+    }
+
+    /// A set aligned to 0x100 so the texture double finds it.
+    fn texture_set(e: &mut Engine) -> u32 {
+        let block = e.mem.alloc(0x200);
+        let set = (block + 0xff) & !0xff;
+        for index in 0..6 {
+            e.mem.set_u32(set + TEXTURES + index * 0xc, TEXTURE_VTABLE);
+        }
+        set
+    }
+
+    #[test]
+    fn copy_takes_textures_decal_and_flags() {
+        let mut e = engine();
+        let this = texture_set(&mut e);
+        let other = texture_set(&mut e);
+        let decal = e.mem.alloc(0x24);
+        e.mem.set_u32(other + DECAL, decal);
+        e.mem.set_u16(other + FLAGS, 0x1234);
+        e.call(0x0059_2560, &[this, other + 1]);
+        assert!(calls_to(&e, TEXTURE_COPY).is_empty());
+        e.call(0x0059_2560, &[this, other]);
+        let copies = calls_to(&e, TEXTURE_COPY);
+        assert_eq!(copies.len(), 6);
+        assert_eq!(copies[5], vec![this + 0x74, other + 0x74]);
+        let mine = e.mem.u32(this + DECAL);
+        assert_ne!(mine, 0);
+        assert_eq!(calls_to(&e, ALLOCATE), vec![vec![0x24]]);
+        assert_eq!(calls_to(&e, DECAL_DATA_COPY), vec![vec![mine, decal]]);
+        assert_eq!(e.mem.u16(this + FLAGS), 0x1234);
+        assert_eq!(calls_to(&e, COPY_ALL_COMPONENTS), vec![vec![this, other]]);
+        // Again: the record is reused.
+        e.call(0x0059_2560, &[this, other]);
+        assert_eq!(calls_to(&e, ALLOCATE).len(), 1);
+        // The other without a record: this one's is deleted.
+        e.mem.set_u32(other + DECAL, 0);
+        e.call(0x0059_2560, &[this, other]);
+        assert_eq!(calls_to(&e, DELETE_007B3FA0), vec![vec![mine, 1]]);
+        assert_eq!(e.mem.u32(this + DECAL), 0);
+    }
+
+    #[test]
+    fn compare_finds_each_difference() {
+        let mut e = engine();
+        let this = texture_set(&mut e);
+        let other = texture_set(&mut e);
+        assert!(!e.call(0x0059_26f0, &[this, other]).bool());
+        assert!(e.call(0x0059_26f0, &[this, other + 1]).bool());
+        e.mem.set_u32(this + 0x30, 6);
+        assert!(e.call(0x0059_26f0, &[this, other]).bool());
+        e.mem.set_u32(this + 0x30, 0);
+        let decal_a = e.mem.alloc(0x24);
+        let decal_b = e.mem.alloc(0x24);
+        e.mem.set_u32(this + DECAL, decal_a);
+        assert!(e.call(0x0059_26f0, &[this, other]).bool());
+        e.mem.set_u32(other + DECAL, decal_b);
+        assert!(!e.call(0x0059_26f0, &[this, other]).bool());
+        e.mem.set_u32(decal_b, 1);
+        assert!(e.call(0x0059_26f0, &[this, other]).bool());
+        e.mem.set_u32(this + DECAL, 0);
+        assert!(e.call(0x0059_26f0, &[this, other]).bool());
+        e.mem.set_u32(other + DECAL, 0);
+        e.mem.set_u16(other + FLAGS, 2);
+        assert!(e.call(0x0059_26f0, &[this, other]).bool());
+        e.mem.set_u16(other + FLAGS, 0);
+        e.register(COMPARE_ALL_COMPONENTS, |_, _| ret(1));
+        assert!(e.call(0x0059_26f0, &[this, other]).bool());
+    }
+
+    #[test]
+    fn save_writes_textures_decal_and_flags() {
+        let mut e = engine();
+        e.map(TEXTURE_CHUNKS, 0x18);
+        for (i, chunk) in [
+            CHUNK_TX00, CHUNK_TX01, CHUNK_TX02, CHUNK_TX03, CHUNK_TX04, CHUNK_TX05,
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            e.mem.set_u32(TEXTURE_CHUNKS + 4 * i as u32, chunk);
+        }
+        let this = texture_set(&mut e);
+        e.mem.set_u16(this + FLAGS, 7);
+        e.call(0x0059_2810, &[this]);
+        let textures = calls_to(&e, TEXTURE_SAVE);
+        assert_eq!(textures[0], vec![this + 0x38, CHUNK_TX00]);
+        assert_eq!(textures[5], vec![this + 0x74, CHUNK_TX05]);
+        assert!(calls_to(&e, DECAL_DATA_SAVE).is_empty());
+        assert_eq!(calls_to(&e, ADD_CHUNK_U16), vec![vec![CHUNK_DNAM, 7]]);
+        let decal = e.mem.alloc(0x24);
+        e.mem.set_u32(this + DECAL, decal);
+        e.call(0x0059_2810, &[this]);
+        assert_eq!(calls_to(&e, DECAL_DATA_SAVE), vec![vec![decal, CHUNK_DODT]]);
+        assert_eq!(calls_to(&e, CLOSE_FORM).len(), 2);
+    }
+
+    #[test]
+    fn set_texture_path_follows_the_jump_table() {
+        let mut e = engine();
+        for (index, field) in [
+            (0u32, 8u32),
+            (1, 0x14),
+            (2, 0x2c),
+            (3, 0x38),
+            (4, 0x44),
+            (5, 0x20),
+        ] {
+            e.call_log = Some(vec![]);
+            e.call(0x0059_3030, &[0x5000, index, 0x77]);
+            assert_eq!(calls_to(&e, SET_STRING), vec![vec![0x5000 + field, 0x77]]);
+        }
+        e.call_log = Some(vec![]);
+        e.call(0x0059_3030, &[0x5000, 6, 0x77]);
+        assert!(calls_to(&e, SET_STRING).is_empty());
     }
 }

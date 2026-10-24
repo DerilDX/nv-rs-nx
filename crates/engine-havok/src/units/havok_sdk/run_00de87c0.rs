@@ -100,7 +100,7 @@ pub fn fn_00de88a0(e: &mut Engine, this: Ptr, scalar: Ptr, matrix: Ptr) {
         store(
             e,
             this.addr().wrapping_add(0x10 * row),
-            mul(broadcast(factor), values),
+            crate::sse::mulps(broadcast(factor), values),
         );
     }
 }
@@ -284,7 +284,7 @@ pub fn fn_00de8d30(e: &mut Engine, this: Ptr, scalar: Ptr) {
         store(
             e,
             this.addr().wrapping_add(0x10 * row),
-            mul(broadcast(factor), values),
+            crate::sse::mulps(broadcast(factor), values),
         );
     }
 }

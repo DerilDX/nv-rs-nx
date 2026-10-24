@@ -5868,7 +5868,11 @@ pub fn fn_009442c0(e: &mut Engine, this: Ptr) -> bool {
 // Translated from 009442e0 (decompiled, FalloutNV.exe 1.4.0.525)
 /// Stores the float at `+0x1F4` (for the player `fTimeSinceLastAmmoRegenTick`).
 pub fn fn_009442e0(e: &mut Engine, this: Ptr<PlayerCharacter>, value: f32) {
-    e.set(this, PlayerCharacter::fTimeSinceLastAmmoRegenTick, value);
+    e.set(
+        this,
+        PlayerCharacter::fTimeSinceLastAmmoRegenTick,
+        x87_quiet(value),
+    );
 }
 
 /// Allocates 8 bytes and builds a `BSSimpleList` in them with `0096a2d0`,
@@ -6876,7 +6880,7 @@ pub fn fn_00944360(e: &mut Engine, this: Ptr<PlayerCharacter>) -> bool {
 // Translated from 00944380 (decompiled, FalloutNV.exe 1.4.0.525)
 /// Stores `fCounterAttackTimer` (Xbox PDB).
 pub fn fn_00944380(e: &mut Engine, this: Ptr<PlayerCharacter>, value: f32) {
-    e.set(this, PlayerCharacter::fCounterAttackTimer, value);
+    e.set(this, PlayerCharacter::fCounterAttackTimer, x87_quiet(value));
 }
 
 // Translated from 009443a0 (decompiled, FalloutNV.exe 1.4.0.525)

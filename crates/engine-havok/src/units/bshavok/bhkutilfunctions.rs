@@ -408,7 +408,9 @@ pub fn fn_00c7fb50(e: &mut Engine, object: Ptr) -> u32 {
 // Translated from 00c7fc20 (decompiled, FalloutNV.exe 1.4.0.525)
 /// `BSSimpleArray<struct bhkUtilFunctions::AVLevel>::_Allocate` (Xbox PDB), stack `(count)`:
 /// the pool allocator (`00aa3e40` on the pool object `011f6238`) for `count` 8-byte elements.
-pub fn bs_simple_array_av_level_allocate(e: &mut Engine, count: u32) -> u32 {
+/// `this` (`ECX`, the array) is not read, but it is a `BSSimpleArray` vtable slot and is called
+/// with `ECX` set.
+pub fn bs_simple_array_av_level_allocate(e: &mut Engine, _this: Ptr, count: u32) -> u32 {
     e.call(POOL_ALLOCATE, &args![POOL_OBJECT, count.wrapping_mul(8)])
         .u32()
 }
@@ -417,7 +419,14 @@ pub fn bs_simple_array_av_level_allocate(e: &mut Engine, count: u32) -> u32 {
 /// `BSSimpleArray<struct bhkUtilFunctions::AVLevel>::_Reallocate` (Xbox PDB), stack `(block,
 /// count)`: the pool reallocation (`00aa4150` on the pool object, `(block, bytes)`) for `count`
 /// 8-byte elements.
-pub fn bs_simple_array_av_level_reallocate(e: &mut Engine, block: u32, count: u32) -> u32 {
+/// `this` (`ECX`, the array) is not read, but it is a `BSSimpleArray` vtable slot and is called
+/// with `ECX` set.
+pub fn bs_simple_array_av_level_reallocate(
+    e: &mut Engine,
+    _this: Ptr,
+    block: u32,
+    count: u32,
+) -> u32 {
     e.call(
         POOL_REALLOCATE,
         &args![POOL_OBJECT, block, count.wrapping_mul(8)],
@@ -1749,7 +1758,9 @@ pub fn bhk_util_functions_create_tree(e: &mut Engine, height: f32, radius: f32) 
 // Translated from 00cb9cb0 (decompiled, FalloutNV.exe 1.4.0.525)
 /// `BSSimpleArray<struct bhkRagdollController::BoneTransf>::_Deallocate` (Xbox PDB), stack
 /// `(block)`: the pool free (`00aa4060` on the pool object `011f6238`).
-pub fn bs_simple_array_bone_transf_deallocate(e: &mut Engine, block: u32) {
+/// `this` (`ECX`, the array) is not read, but it is a `BSSimpleArray` vtable slot and is called
+/// with `ECX` set.
+pub fn bs_simple_array_bone_transf_deallocate(e: &mut Engine, _this: Ptr, block: u32) {
     e.call(POOL_FREE, &args![POOL_OBJECT, block]);
 }
 
@@ -1763,8 +1774,8 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00c7fa90, bhk_util_functions_get_ni_a_v_object(Ptr) -> u32),
         entry!(0x00c7fb20, fn_00c7fb20(Ptr) -> u32),
         entry!(0x00c7fb50, fn_00c7fb50(Ptr) -> u32),
-        entry!(0x00c7fc20, bs_simple_array_av_level_allocate(u32) -> u32),
-        entry!(0x00c7fc40, bs_simple_array_av_level_reallocate(u32, u32) -> u32),
+        entry!(0x00c7fc20, bs_simple_array_av_level_allocate(Ptr, u32) -> u32),
+        entry!(0x00c7fc40, bs_simple_array_av_level_reallocate(Ptr, u32, u32) -> u32),
         entry!(0x00c7fc60, fn_00c7fc60(Ptr) -> u32),
         entry!(0x00c7fcc0, fn_00c7fcc0(Ptr, u32, Ptr, u32) -> bool),
         entry!(0x00c7ff40, fn_00c7ff40(Ptr, u32) -> u32),
@@ -1804,7 +1815,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         ),
         entry!(0x00c812d0, fn_00c812d0(Ptr, u32) -> u32),
         entry!(0x00c81380, bhk_util_functions_create_tree(f32, f32) -> u32),
-        entry!(0x00cb9cb0, bs_simple_array_bone_transf_deallocate(u32)),
+        entry!(0x00cb9cb0, bs_simple_array_bone_transf_deallocate(Ptr, u32)),
     ]
 }
 
@@ -2196,9 +2207,13 @@ mod movement_tests {
         let mut e = engine();
         answer(&mut e, POOL_ALLOCATE, 0x1111);
         answer(&mut e, POOL_REALLOCATE, 0x2222);
-        assert_eq!(e.call(0x00c7_fc20, &args![5u32]).u32(), 0x1111);
+        assert_eq!(e.call(0x00c7_fc20, &args![0x5555u32, 5u32]).u32(), 0x1111);
         assert_eq!(calls_to(&e, POOL_ALLOCATE), vec![vec![POOL_OBJECT, 40]]);
-        assert_eq!(e.call(0x00c7_fc40, &args![0x9000u32, 3u32]).u32(), 0x2222);
+        assert_eq!(
+            e.call(0x00c7_fc40, &args![0x5555u32, 0x9000u32, 3u32])
+                .u32(),
+            0x2222
+        );
         assert_eq!(
             calls_to(&e, POOL_REALLOCATE),
             vec![vec![POOL_OBJECT, 0x9000, 24]]
@@ -3761,7 +3776,7 @@ mod movement_tests {
     fn bone_transform_arrays_free_their_block_to_the_pool() {
         let mut e = engine();
         quiet(&mut e, &[POOL_FREE]);
-        e.call(0x00cb_9cb0, &args![0x1234u32]);
+        e.call(0x00cb_9cb0, &args![0x5555u32, 0x1234u32]);
         assert_eq!(calls_to(&e, POOL_FREE), vec![vec![POOL_OBJECT, 0x1234]]);
     }
 }

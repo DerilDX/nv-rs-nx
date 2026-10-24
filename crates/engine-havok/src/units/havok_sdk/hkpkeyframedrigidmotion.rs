@@ -3,8 +3,7 @@
 
 #[allow(unused_imports)]
 use crate::prelude::*;
-use crate::units::havok_sdk::hkpboxmotion::cross;
-use crate::units::havok_sdk::hkpsphereshape::{load_vec, store_vec, sum3, zip_with};
+use crate::units::havok_sdk::hkpsphereshape::{load_vec, store_vec};
 
 /// The motion base constructor (`00c86530`, `this`, `(position, rotation, 0)`).
 const MOTION_CONSTRUCT: u32 = 0x00c8_6530;
@@ -205,11 +204,21 @@ pub fn hkp_keyframed_rigid_motion_get_projected_point_velocity(
 ) {
     let me = this.addr();
     let centre = load_vec(e, me + 0x60);
-    let arm = zip_with(load_vec(e, point.addr()), centre, |p, c| p - c);
+    // `SUBPS`, `MULPS`, `ADDSS` with the SSE NaN rules, the destination operand first:
+    // `normal.yzxw * arm.zxyw - normal.zxyw * arm.yzxw`.
+    use crate::sse::{add, mulps, subps};
+    let sum = |v: [f32; 4]| add(v[2], add(v[1], v[0]));
+    let yzxw = |v: [f32; 4]| [v[1], v[2], v[0], v[3]];
+    let zxyw = |v: [f32; 4]| [v[2], v[0], v[1], v[3]];
+    let arm = subps(load_vec(e, point.addr()), centre);
     let direction = load_vec(e, normal.addr());
-    let linear = zip_with(load_vec(e, me + 0xd0), direction, |v, n| v * n);
-    let angular = zip_with(cross(direction, arm), load_vec(e, me + 0xe0), |t, w| t * w);
-    let along = sum3(angular) + sum3(linear);
+    let linear = mulps(load_vec(e, me + 0xd0), direction);
+    let moment = subps(
+        mulps(yzxw(direction), zxyw(arm)),
+        mulps(zxyw(direction), yzxw(arm)),
+    );
+    let angular = mulps(moment, load_vec(e, me + 0xe0));
+    let along = add(sum(angular), sum(linear));
     e.mem.set_f32(velocity.addr(), x87_quiet(along));
     e.mem.set_f32(distance.addr(), 0.0);
 }

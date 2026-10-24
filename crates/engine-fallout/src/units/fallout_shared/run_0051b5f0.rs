@@ -226,6 +226,96 @@ pub fn fn_0051baf0(e: &mut Engine, this: Ptr, index: u8) -> u32 {
     e.mem.u32(element)
 }
 
+/// `__RTDynamicCast` (`00ec43fb`, `cdecl`, five words) from `.?AVTESForm@@`
+/// (`01183028`) to `.?AVTESObjectSTAT@@` (`01186568`).
+const RT_DYNAMIC_CAST: u32 = 0x00ec_43fb;
+const TYPE_TES_FORM: u32 = 0x0118_3028;
+const TYPE_TES_OBJECT_STAT: u32 = 0x0118_6568;
+/// `TESForm::CopyAllComponents` and `CompareAllComponents` (`004851b0`,
+/// `00485270`, engine map; `thiscall`, one word).
+const COPY_ALL_COMPONENTS: u32 = 0x0048_51b0;
+const COMPARE_ALL_COMPONENTS: u32 = 0x0048_5270;
+/// `_ftol2` (`00ec62c0`): the value in `ST0` truncated to an integer.
+const FTOL2: u32 = 0x00ec_62c0;
+
+/// `form` cast to `TESObjectSTAT`, or 0.
+fn cast_to_stat(e: &mut Engine, form: u32) -> u32 {
+    e.call(
+        RT_DYNAMIC_CAST,
+        &args![form, 0u32, TYPE_TES_FORM, TYPE_TES_OBJECT_STAT, 0u32],
+    )
+    .u32()
+}
+
+// Translated from 0051b5f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No map name (`thiscall`, one word, `RET 4`; a copy): when `source` casts
+/// to `TESObjectSTAT`, copies the word at +0x54 from the cast form, runs
+/// `TESForm::CopyAllComponents` with the cast form and copies the byte at
+/// +0x50.
+pub fn fn_0051b5f0(e: &mut Engine, this: Ptr, source: u32) {
+    let other = cast_to_stat(e, source);
+    if other == 0 {
+        return;
+    }
+    let at = this.addr();
+    let word = e.mem.u32(other.wrapping_add(0x54));
+    e.mem.set_u32(at + 0x54, word);
+    e.call(COPY_ALL_COMPONENTS, &args![this, other]);
+    let byte = e.mem.u8(other.wrapping_add(0x50));
+    e.mem.set_u8(at + 0x50, byte);
+}
+
+// Translated from 0051b650 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No map name (`thiscall`, one word, `RET 4`): whether the form differs
+/// from `form`: true when it does not cast to `TESObjectSTAT`, when
+/// `TESForm::CompareAllComponents` answers true, or when the bytes at +0x50
+/// or the words at +0x54 differ.
+pub fn fn_0051b650(e: &mut Engine, this: Ptr, form: u32) -> bool {
+    let other = cast_to_stat(e, form);
+    if other == 0 {
+        return true;
+    }
+    if e.call(COMPARE_ALL_COMPONENTS, &args![this, other]).bool() {
+        return true;
+    }
+    let at = this.addr();
+    if e.mem.u8(at + 0x50) as i8 != e.mem.u8(other.wrapping_add(0x50)) as i8 {
+        return true;
+    }
+    e.mem.u32(at + 0x54) != e.mem.u32(other.wrapping_add(0x54))
+}
+
+// Translated from 0051b6d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Thunk: moves `this` back by 0x30 (`SUB ECX,0x30`) and jumps to the
+/// deleting destructor `0051b1d0` (`run_0051af50.rs`), passing its stack
+/// word on; returns what it returns.
+pub fn fn_0051b6d0(e: &mut Engine, this: Ptr, flags: u32) -> u32 {
+    let base = this.addr().wrapping_sub(0x30);
+    e.call(0x0051_b1d0, &args![base, flags]).u32()
+}
+
+// Translated from 0051b830 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No map name (`thiscall`): answers 0x400.
+pub fn fn_0051b830(_e: &mut Engine, _this: Ptr) -> u32 {
+    0x400
+}
+
+// Translated from 0051b880 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No map name (`thiscall`): the integer at +0x80 loaded into `ST0`
+/// (`FILD`, exact).
+pub fn fn_0051b880(e: &mut Engine, this: Ptr) -> f64 {
+    f64::from(e.mem.u32(this.addr() + 0x80) as i32)
+}
+
+// Translated from 0051b8a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No map name (`thiscall`, one `float`, `RET 4`): stores `value`
+/// truncated by `_ftol2` (`FLD`, then `00ec62c0`) at +0x80.
+pub fn fn_0051b8a0(e: &mut Engine, this: Ptr, value: f32) {
+    let loaded = x87_load32(value.to_bits());
+    let whole = e.call(FTOL2, &args![loaded]).u32();
+    e.mem.set_u32(this.addr() + 0x80, whole);
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -244,6 +334,12 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x0051_b6e0, fn_0051b6e0(Ptr) -> Ptr),
         entry!(0x0051_b930, fn_0051b930(Ptr) -> Ptr),
         entry!(0x0051_b970, fn_0051b970(Ptr) -> Ptr),
+        entry!(0x0051_b5f0, fn_0051b5f0(Ptr, u32)),
+        entry!(0x0051_b650, fn_0051b650(Ptr, u32) -> bool),
+        entry!(0x0051_b6d0, fn_0051b6d0(Ptr, u32) -> u32),
+        entry!(0x0051_b830, fn_0051b830(Ptr) -> u32),
+        entry!(0x0051_b880, fn_0051b880(Ptr) -> f64),
+        entry!(0x0051_b8a0, fn_0051b8a0(Ptr, f32)),
     ]
 }
 
@@ -542,5 +638,112 @@ mod tree_tests {
         let (mut e, this) = seed_rig(&[]);
         assert_eq!(e.call(0x0051_baf0, &args![this, 0u32]).u32(), 0x777);
         assert!(calls(&e, ARRAY_ELEMENT_00877A30).is_empty());
+    }
+}
+
+#[cfg(test)]
+mod n040_tests {
+    use super::*;
+
+    fn calls_to(e: &mut Engine, targets: &[u32]) -> Vec<(u32, Vec<u32>)> {
+        e.call_log
+            .take()
+            .unwrap()
+            .into_iter()
+            .filter(|(a, _)| targets.contains(a))
+            .collect()
+    }
+
+    fn cast(e: &mut Engine) {
+        e.register(RT_DYNAMIC_CAST, |e, a| {
+            assert_eq!(a[1..], [0, TYPE_TES_FORM, TYPE_TES_OBJECT_STAT, 0]);
+            let form = if e.mem.u32(a[0] + 0xc) == 0 { a[0] } else { 0 };
+            Ret {
+                eax: form,
+                ..Ret::default()
+            }
+        });
+    }
+
+    #[test]
+    fn fn_0051b5f0_copies_from_a_static() {
+        let mut e = Engine::new();
+        cast(&mut e);
+        e.register(COPY_ALL_COMPONENTS, |_, _| Ret::default());
+        let this = e.mem.alloc(0x60);
+        let other = e.mem.alloc(0x60);
+        e.mem.set_u32(other + 0x54, 0x5454);
+        e.mem.set_u8(other + 0x50, 0x50);
+        e.mem.set_u32(other + 0xc, 1);
+        e.call(0x0051_b5f0, &[this, other]);
+        assert_eq!(e.mem.u32(this + 0x54), 0);
+        e.mem.set_u32(other + 0xc, 0);
+        e.call_log = Some(vec![]);
+        e.call(0x0051_b5f0, &[this, other]);
+        assert_eq!(
+            calls_to(&mut e, &[COPY_ALL_COMPONENTS]),
+            vec![(COPY_ALL_COMPONENTS, vec![this, other])]
+        );
+        assert_eq!(e.mem.u32(this + 0x54), 0x5454);
+        assert_eq!(e.mem.u8(this + 0x50), 0x50);
+    }
+
+    #[test]
+    fn fn_0051b650_compares_byte_and_word() {
+        let mut e = Engine::new();
+        cast(&mut e);
+        e.register(COMPARE_ALL_COMPONENTS, |e, a| Ret {
+            eax: e.mem.u32(a[1] + 0x10),
+            ..Ret::default()
+        });
+        let this = e.mem.alloc(0x60);
+        let other = e.mem.alloc(0x60);
+        e.mem.set_u32(other + 0xc, 1);
+        assert!(e.call(0x0051_b650, &[this, other]).bool());
+        e.mem.set_u32(other + 0xc, 0);
+        assert!(!e.call(0x0051_b650, &[this, other]).bool());
+        e.mem.set_u8(other + 0x50, 0x80);
+        assert!(e.call(0x0051_b650, &[this, other]).bool());
+        e.mem.set_u8(this + 0x50, 0x80);
+        e.mem.set_u32(other + 0x54, 1);
+        assert!(e.call(0x0051_b650, &[this, other]).bool());
+        e.mem.set_u32(other + 0x54, 0);
+        e.mem.set_u32(other + 0x10, 1);
+        assert!(e.call(0x0051_b650, &[this, other]).bool());
+    }
+
+    #[test]
+    fn fn_0051b6d0_moves_this_back_to_the_destructor() {
+        let mut e = Engine::new();
+        e.register(0x0051_b1d0, |_, a| Ret {
+            eax: a[0],
+            ..Ret::default()
+        });
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x0051_b6d0, &[0x2030, 1]).u32(), 0x2000);
+        assert_eq!(
+            calls_to(&mut e, &[0x0051_b1d0]),
+            vec![(0x0051_b1d0, vec![0x2000, 1])]
+        );
+    }
+
+    #[test]
+    fn fn_0051b830_b880_b8a0_the_count() {
+        let mut e = Engine::new();
+        let this = e.mem.alloc(0x90);
+        assert_eq!(e.call(0x0051_b830, &[this]).u32(), 0x400);
+        e.mem.set_u32(this + 0x80, 0xffff_fffe);
+        assert_eq!(e.call(0x0051_b880, &[this]).f64(), -2.0);
+        e.mem.set_u32(this + 0x80, 0x7fff_ffff);
+        assert_eq!(e.call(0x0051_b880, &[this]).f64(), 2_147_483_647.0);
+        e.register(FTOL2, |_, a| {
+            let value = f64::from_bits(u64::from(a[0]) | (u64::from(a[1]) << 32));
+            Ret {
+                eax: value as i32 as u32,
+                ..Ret::default()
+            }
+        });
+        e.call(0x0051_b8a0, &[this, (-3.75f32).to_bits()]);
+        assert_eq!(e.mem.u32(this + 0x80), (-3i32) as u32);
     }
 }

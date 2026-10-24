@@ -26,24 +26,23 @@ fn store(e: &mut Engine, at: u32, value: Vec4) {
     }
 }
 
+/// `SUBPS a, b` (the SSE NaN rules).
 fn sub(a: Vec4, b: Vec4) -> Vec4 {
-    [a[0] - b[0], a[1] - b[1], a[2] - b[2], a[3] - b[3]]
+    crate::sse::subps(a, b)
 }
 
-/// The sum of the three lane products added as `z + (y + x)`.
+/// `MULPS a, b`, then the sum of the three lane products added as `z + (y + x)` (`ADDSS`
+/// with the higher lane as the destination), with the SSE NaN rules.
 fn dot3(a: Vec4, b: Vec4) -> f32 {
-    let p = [a[0] * b[0], a[1] * b[1], a[2] * b[2]];
-    p[2] + (p[1] + p[0])
+    use crate::sse::{add, mulps};
+    let p = mulps(a, b);
+    add(p[2], add(p[1], p[0]))
 }
 
-/// `scale * direction + base` in every lane (`MULPS` then `ADDPS`).
+/// `scale * direction + base` in every lane (`MULPS` with the splatted scale as the
+/// destination, then `ADDPS` onto `base`), with the SSE NaN rules.
 fn scaled_add(scale: f32, direction: Vec4, base: Vec4) -> Vec4 {
-    [
-        scale * direction[0] + base[0],
-        scale * direction[1] + base[1],
-        scale * direction[2] + base[2],
-        scale * direction[3] + base[3],
-    ]
+    crate::sse::addps(crate::sse::mulps([scale; 4], direction), base)
 }
 
 // Translated from 00d230e0 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -66,7 +65,11 @@ pub fn hk_line_segment_closest_point(e: &mut Engine, point: Ptr, a: Ptr, b: Ptr,
         store(e, out.addr(), b);
         return 4;
     }
-    let fraction = (f64::from(projection) / f64::from(length_squared)) as f32;
+    // `FDIVP` of the two loaded floats (the x87 choice of NaN).
+    let fraction = f32::from_bits(x87_store32(x87_div(
+        x87_load32(projection.to_bits()),
+        x87_load32(length_squared.to_bits()),
+    )));
     store(e, out.addr(), scaled_add(fraction, along, a));
     0
 }
@@ -92,7 +95,8 @@ pub fn hk_line_segment_closest_line_seg_line_seg(
     let c = load(e, start_b);
     let v = load(e, direction_b);
     let r = sub(c, a);
-    let uv = dot3(u, v);
+    // `MULPS` with `v` as the destination.
+    let uv = dot3(v, u);
     let ur = dot3(u, r);
     let vr = dot3(v, r);
     let uu = dot3(u, u);
@@ -104,25 +108,29 @@ pub fn hk_line_segment_closest_line_seg_line_seg(
         f64::from(uu),
         f64::from(vv),
     );
+    // The x87 arithmetic keeps the x87 choice of NaN; `rounded` is a store to a
+    // scratch float.
+    let (fadd, fsub, fmul, fdiv) = (x87_add, x87_sub, x87_mul, x87_div);
+    let rounded = |value: f64| f32::from_bits(x87_store32(value));
     // The determinant is stored as a float, made positive and reloaded.
-    let determinant = (uu_d * vv_d - uv_d * uv_d) as f32;
+    let determinant = rounded(fsub(fmul(uu_d, vv_d), fmul(uv_d, uv_d)));
     let denominator = x87_quiet(determinant.abs());
-    let numerator = (ur_d * vv_d - vr_d * uv_d) as f32;
+    let numerator = rounded(fsub(fmul(ur_d, vv_d), fmul(vr_d, uv_d)));
     let (den_d, num_d) = (f64::from(denominator), f64::from(numerator));
 
     let mut status;
     let mut s: f32;
     let t: f32;
-    if !(num_d * den_d >= den_d * den_d) {
+    if !(fmul(num_d, den_d) >= fmul(den_d, den_d)) {
         if numerator <= 0.0 {
             s = 0.0;
             status = 2;
         } else {
             // The constant is the double 2^-20 at 0x010cb420.
-            let scaled =
-                ((uu_d * vv_d + uv_d * uv_d) * f64::from_bits(0x3eb0_0000_0000_0000)) as f32;
+            let sum = fadd(fmul(uu_d, vv_d), fmul(uv_d, uv_d));
+            let scaled = rounded(fmul(sum, f64::from_bits(0x3eb0_0000_0000_0000)));
             if scaled < denominator {
-                s = (num_d / den_d) as f32;
+                s = rounded(fdiv(num_d, den_d));
                 status = 0;
             } else {
                 s = 1.0;
@@ -134,7 +142,7 @@ pub fn hk_line_segment_closest_line_seg_line_seg(
         status = 1;
     }
 
-    let w = (uv_d * f64::from(s) - vr_d) as f32;
+    let w = rounded(fsub(fmul(uv_d, f64::from(s)), vr_d));
     let mut clamped_t = true;
     if w >= vv {
         status = 4;
@@ -143,11 +151,11 @@ pub fn hk_line_segment_closest_line_seg_line_seg(
         status = 8;
         t = 0.0;
     } else {
-        t = (f64::from(w) / vv_d) as f32;
+        t = rounded(fdiv(f64::from(w), vv_d));
         clamped_t = false;
     }
     if clamped_t {
-        let projected = (uv_d * f64::from(t) + ur_d) as f32;
+        let projected = rounded(fadd(fmul(uv_d, f64::from(t)), ur_d));
         if projected <= 0.0 {
             status |= 2;
             s = 0.0;
@@ -155,7 +163,7 @@ pub fn hk_line_segment_closest_line_seg_line_seg(
             status |= 1;
             s = 1.0;
         } else {
-            s = (f64::from(projected) / uu_d) as f32;
+            s = rounded(fdiv(f64::from(projected), uu_d));
         }
     }
 

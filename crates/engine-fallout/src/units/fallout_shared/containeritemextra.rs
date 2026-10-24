@@ -137,6 +137,101 @@ pub fn container_item_extra_init_item(e: &mut Engine, this: Ptr<ContainerItemExt
     });
 }
 
+/// `TESForm::__AddChunkData` (Xbox PDB, `00485990`, cdecl: signature, data,
+/// size).
+const ADD_CHUNK_DATA: u32 = 0x0048_5990;
+/// Whether the data written needs byte swapping (`00401500`, no arguments,
+/// `bool` in `AL`).
+const SAVE_SWAPS: u32 = 0x0040_1500;
+/// Byte-swaps the 0xC-byte `COED` record in place (`005a6b10`, `this` only).
+const SWAP_COED: u32 = 0x005a_6b10;
+/// Byte-swaps the 8-byte `CNTO` record in place (`00462230`, `this` only).
+const SWAP_CNTO: u32 = 0x0046_2230;
+/// Whether the extra holds nothing but its defaults (`0040e9c0`, `this`
+/// only, `bool` in `AL`).
+const IS_DEFAULT: u32 = 0x0040_e9c0;
+/// The `CNTO` chunk signature, as the word the exe pushes.
+const SIG_CNTO: u32 = 0x4f54_4e43;
+
+// Translated from 0040e6c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Saves the extra as a `COED` chunk unless it holds only its defaults
+/// (`0040e9c0`): a stack record of the owner's form id (0 without an
+/// owner), the global's form id when there is one (`fn_0040e9f0`), else
+/// the union word as it is (0 without an owner), and the health multiplier
+/// (`FLD`/`FSTP`, a signalling NaN coming out quiet). The record is swapped
+/// (`005a6b10`) before and after `TESForm::__AddChunkData` when `00401500`
+/// says so.
+pub fn fn_0040e6c0(e: &mut Engine, this: Ptr<ContainerItemExtra>) {
+    if e.call(IS_DEFAULT, &args![this]).bool() {
+        return;
+    }
+    e.with_stack(0xc, |e, record| {
+        let owner = e.get(this, ContainerItemExtra::pOwnerForm);
+        let (owner_id, union) = if owner == 0 {
+            (0, 0)
+        } else {
+            let owner_id = e.call(FORM_ID, &args![owner]).u32();
+            let global = fn_0040e9f0(e, this);
+            let union = if global == 0 {
+                e.get(this, ContainerItemExtra::iUnion)
+            } else {
+                e.call(FORM_ID, &args![global]).u32()
+            };
+            (owner_id, union)
+        };
+        e.mem.set_u32(record.addr(), owner_id);
+        e.mem.set_u32(record.addr() + 4, union);
+        let health = x87_quiet_bits(e.get(this, ContainerItemExtra::fHealthMult));
+        e.mem.set_u32(record.addr() + 8, health);
+        if e.call(SAVE_SWAPS, &args![]).bool() {
+            e.call(SWAP_COED, &args![record]);
+        }
+        e.call(ADD_CHUNK_DATA, &args![SIG_COED, record, 0xcu32]);
+        if e.call(SAVE_SWAPS, &args![]).bool() {
+            e.call(SWAP_COED, &args![record]);
+        }
+    });
+}
+
+// Translated from 0040e9f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The owner's global: the union word when there is an owner of form type
+/// 0x2A (`00401170`), else 0.
+pub fn fn_0040e9f0(e: &mut Engine, this: Ptr<ContainerItemExtra>) -> u32 {
+    let owner = e.get(this, ContainerItemExtra::pOwnerForm);
+    if owner != 0 && e.call(FORM_TYPE, &args![owner]).u32() == 0x2a {
+        return e.get(this, ContainerItemExtra::iUnion);
+    }
+    0
+}
+
+// Translated from 00481310 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Saves a container entry (the engine map names it
+/// `ContainerItemExtra::Save`, but `this` is the entry: the count at +0, the
+/// form at +4, the `ContainerItemExtra*` at +8): a `CNTO` chunk of the form's
+/// id and the count (swapped by `00462230` before and after
+/// `TESForm::__AddChunkData` when `00401500` says so), then the extra's
+/// `COED` chunk (`fn_0040e6c0`) when there is one.
+pub fn fn_00481310(e: &mut Engine, this: Ptr) {
+    // The entry's count (+0), form (+4) and extra (+8).
+    let count = e.mem.u32(this.addr());
+    let form = e.mem.u32(this.addr() + 4);
+    e.with_stack(8, |e, record| {
+        e.mem.set_u32(record.addr() + 4, count);
+        let form_id = e.call(FORM_ID, &args![form]).u32();
+        e.mem.set_u32(record.addr(), form_id);
+        if e.call(SAVE_SWAPS, &args![]).bool() {
+            e.call(SWAP_CNTO, &args![record]);
+        }
+        e.call(ADD_CHUNK_DATA, &args![SIG_CNTO, record, 8u32]);
+        if e.call(SAVE_SWAPS, &args![]).bool() {
+            e.call(SWAP_CNTO, &args![record]);
+        }
+    });
+    let extra = e.mem.u32(this.addr() + 8);
+    if extra != 0 {
+        fn_0040e6c0(e, Ptr::new(extra));
+    }
+}
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -154,6 +249,9 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
             0x0040_e7f0,
             container_item_extra_init_item(Ptr<ContainerItemExtra>, Ptr)
         ),
+        entry!(0x0040_e6c0, fn_0040e6c0(Ptr<ContainerItemExtra>)),
+        entry!(0x0040_e9f0, fn_0040e9f0(Ptr<ContainerItemExtra>) -> u32),
+        entry!(0x0048_1310, fn_00481310(Ptr)),
     ]
 }
 
@@ -301,5 +399,115 @@ mod tests {
         e.call(0x0040_e7f0, &[t, form]);
         assert!(calls_to(e.call_log.as_ref().unwrap(), LOOKUP_FORM).is_empty());
         assert_eq!(e.mem.u32(t + 4), 0);
+    }
+
+    type Chunks = std::rc::Rc<std::cell::RefCell<Vec<(u32, Vec<u32>)>>>;
+
+    /// Doubles for the save path: form ids are the form address plus 0x100,
+    /// forms ending in 1 are of type 0x2A, a swap adds 0x1000 to each word of
+    /// the record; returns the chunks written (signature and words).
+    fn save_doubles(e: &mut Engine, swaps: bool) -> Chunks {
+        e.register(FORM_ID, |_, a| ret(a[0] + 0x100));
+        e.register(FORM_TYPE, |_, a| {
+            ret(if a[0] & 0xf == 1 { 0x2a } else { 0x1c })
+        });
+        e.register(IS_DEFAULT, |_, _| ret(0x100));
+        if swaps {
+            e.register(SAVE_SWAPS, |_, _| ret(0x101));
+        } else {
+            e.register(SAVE_SWAPS, |_, _| ret(0x100));
+        }
+        e.register(SWAP_COED, |e, a| {
+            for i in 0..3 {
+                let w = e.mem.u32(a[0] + 4 * i);
+                e.mem.set_u32(a[0] + 4 * i, w + 0x1000);
+            }
+            Ret::default()
+        });
+        e.register(SWAP_CNTO, |e, a| {
+            for i in 0..2 {
+                let w = e.mem.u32(a[0] + 4 * i);
+                e.mem.set_u32(a[0] + 4 * i, w + 0x1000);
+            }
+            Ret::default()
+        });
+        let chunks = Chunks::default();
+        let seen = chunks.clone();
+        e.register_double(ADD_CHUNK_DATA, move |e, a| {
+            let words = (0..a[2] / 4).map(|i| e.mem.u32(a[1] + 4 * i)).collect();
+            seen.borrow_mut().push((a[0], words));
+            Ret::default()
+        });
+        chunks
+    }
+
+    #[test]
+    fn global_of_owner_needs_an_owner_of_type_0x2a() {
+        let mut e = Engine::new();
+        save_doubles(&mut e, false);
+        let this: Ptr<ContainerItemExtra> = e.new_object();
+        e.mem.set_u32(this.addr() + 4, 0x77);
+        assert_eq!(e.call(0x0040_e9f0, &args![this]).u32(), 0);
+        e.mem.set_u32(this.addr(), 0x1002);
+        assert_eq!(e.call(0x0040_e9f0, &args![this]).u32(), 0);
+        e.mem.set_u32(this.addr(), 0x1001);
+        assert_eq!(e.call(0x0040_e9f0, &args![this]).u32(), 0x77);
+    }
+
+    #[test]
+    fn coed_save_writes_ids_and_the_multiplier() {
+        let mut e = Engine::new();
+        let chunks = save_doubles(&mut e, false);
+        let this: Ptr<ContainerItemExtra> = e.new_object();
+        let t = this.addr();
+        // An owner of type 0x2A with a global: both as form ids.
+        e.mem.set_u32(t, 0x1001);
+        e.mem.set_u32(t + 4, 0x2000);
+        e.mem.set_u32(t + 8, 0x7f80_0001);
+        e.call(0x0040_e6c0, &args![this]);
+        // Another owner: the rank word as it is.
+        e.mem.set_u32(t, 0x1002);
+        e.mem.set_u32(t + 4, 3);
+        e.call(0x0040_e6c0, &args![this]);
+        // No owner: zeros.
+        e.mem.set_u32(t, 0);
+        e.call(0x0040_e6c0, &args![this]);
+        assert_eq!(
+            *chunks.borrow(),
+            vec![
+                (SIG_COED, vec![0x1101, 0x2100, 0x7fc0_0001]),
+                (SIG_COED, vec![0x1102, 3, 0x7fc0_0001]),
+                (SIG_COED, vec![0, 0, 0x7fc0_0001]),
+            ]
+        );
+        // Swapped before the write; a default extra writes nothing.
+        let chunks = save_doubles(&mut e, true);
+        e.call(0x0040_e6c0, &args![this]);
+        e.register(IS_DEFAULT, |_, _| ret(1));
+        e.call(0x0040_e6c0, &args![this]);
+        assert_eq!(
+            *chunks.borrow(),
+            vec![(SIG_COED, vec![0x1000, 0x1000, 0x7fc0_1001])]
+        );
+    }
+
+    #[test]
+    fn container_entry_save_writes_cnto_then_coed() {
+        let mut e = Engine::new();
+        let chunks = save_doubles(&mut e, true);
+        let extra: Ptr<ContainerItemExtra> = e.new_object();
+        e.mem.set_u32(extra.addr(), 0x1002);
+        e.mem.set_u32(extra.addr() + 4, 4);
+        let entry = e.mem.alloc(0xc);
+        e.mem.set_u32(entry, 5);
+        e.mem.set_u32(entry + 4, 0x3000);
+        e.call(0x0048_1310, &[entry]);
+        e.mem.set_u32(entry + 8, extra.addr());
+        e.call(0x0048_1310, &[entry]);
+        let cnto = (SIG_CNTO, vec![0x4100, 0x1005]);
+        assert_eq!(
+            *chunks.borrow(),
+            vec![cnto.clone(), cnto, (SIG_COED, vec![0x2102, 0x1004, 0x1000]),]
+        );
     }
 }

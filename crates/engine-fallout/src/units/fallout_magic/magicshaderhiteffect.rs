@@ -1265,6 +1265,1286 @@ pub fn fn_00822630(e: &mut Engine, this: Ptr) {
     e.call(STRING_ARRAY_CLEAR_008454F0, &args![this, 1u32]);
 }
 
+/// `MagicHitEffect`'s methods this class calls: `InitLoadGame` (`0081be50`,
+/// two words), `Update` (`0081b860`, one `float`), `GetSaveSize`,
+/// `SaveGame`, `LoadGame` (`0081bd30`, `0081bd80`, `0081bde0`, two words),
+/// `SaveGame_ov2`, `LoadGame_ov2` (`0081be80`, `0081bed0`, one word) and
+/// `0081bc70` (one word); the base's `FinishInitLoadGame` (`008d05e0`, three
+/// words) and `FinishLoadGame` (`009dace0`, one word) as the class calls
+/// them.
+const HIT_EFFECT_INIT_LOAD_GAME: u32 = 0x0081_be50;
+const HIT_EFFECT_UPDATE: u32 = 0x0081_b860;
+const HIT_EFFECT_GET_SAVE_SIZE: u32 = 0x0081_bd30;
+const HIT_EFFECT_SAVE_GAME: u32 = 0x0081_bd80;
+const HIT_EFFECT_LOAD_GAME: u32 = 0x0081_bde0;
+const HIT_EFFECT_SAVE_GAME_OV2: u32 = 0x0081_be80;
+const HIT_EFFECT_LOAD_GAME_OV2: u32 = 0x0081_bed0;
+const HIT_EFFECT_0081BC70: u32 = 0x0081_bc70;
+const HIT_EFFECT_FINISH_INIT_LOAD_GAME: u32 = 0x008d_05e0;
+const HIT_EFFECT_FINISH_LOAD_GAME: u32 = 0x009d_ace0;
+/// The largest finite `float` (`01016970`) the second constructor stores for
+/// a negative lifetime.
+const LONGEST_LIFETIME: u32 = 0x0101_6970;
+/// `0080d0d0` (no arguments): the effect shader the alpha code skips.
+const SKIPPED_SHADER_0080D0D0: u32 = 0x0080_d0d0;
+/// `0043b300` (`cdecl`, two words) with `011f9140`, and `006d2c40`
+/// (`thiscall`, `ST0`): the 3D's value the alpha scale takes; otherwise
+/// the target's slot +0x420.
+const NODE_TEST_0043B300: u32 = 0x0043_b300;
+const NODE_TEST_ARGUMENT_011F9140: u32 = 0x011f_9140;
+const NODE_VALUE_006D2C40: u32 = 0x006d_2c40;
+/// `006a78f0` (`thiscall`, `ST0`: a particle property's rate), `00507da0`
+/// (`thiscall` on the shader, four words), `0040ebd0` (`cdecl`, two
+/// floats: the smaller), `004fd380` (`thiscall`: the property's live
+/// count; the engine map's `TESWorldSpace::GetParentWorldSimple` is a
+/// folded body), `008133b0` / `00567470` / `00821680` and `00821640` /
+/// `00821660` / `008216a0` (the shader's fade times, `ST0`), `00507e30`
+/// (`thiscall` on the shader, five words: the texture effect's update),
+/// `BSShaderUtil::RecursiveSetPropertyFadeAlpha` (`00b6bb30`, `cdecl`, two
+/// words) and the `double` -1.0 (`0101a6b0`).
+const PARTICLE_RATE_006A78F0: u32 = 0x006a_78f0;
+const SHADER_PARTICLES_00507DA0: u32 = 0x0050_7da0;
+const MIN_0040EBD0: u32 = 0x0040_ebd0;
+const PARTICLE_LIVE_004FD380: u32 = 0x004f_d380;
+const SHADER_FADE_IN_008133B0: u32 = 0x0081_33b0;
+const SHADER_TEXTURE_UPDATE_00507E30: u32 = 0x0050_7e30;
+const RECURSIVE_SET_PROPERTY_FADE_ALPHA: u32 = 0x00b6_bb30;
+const MINUS_ONE_DOUBLE: u32 = 0x0101_a6b0;
+/// `009a7c40` and `00759450` (`thiscall` on the shader, `ST0`) and
+/// `00ba6cf0` (`thiscall` on a particle property, one `float`).
+const SHADER_TIME_009A7C40: u32 = 0x009a_7c40;
+const SHADER_TIME_00759450: u32 = 0x0075_9450;
+const PARTICLE_SET_TIME_00BA6CF0: u32 = 0x00ba_6cf0;
+/// `PathingLocation::GetWorldspace` (the engine map's name for `00441110`:
+/// the hit effect's target word), `00461130` (a node's rotation),
+/// `NiMatrix3::Inverse` (`004b45b0`, one word), `NiMatrix3::operatorP`
+/// (`0043f8d0`, two words), `004b4500` (two words: a matrix times a point)
+/// and `00653270` (`cdecl`) with `011f4428`.
+const TARGET_00441110: u32 = 0x0044_1110;
+const NODE_ROTATION_00461130: u32 = 0x0046_1130;
+const MATRIX_INVERSE: u32 = 0x004b_45b0;
+const MATRIX_MULTIPLY: u32 = 0x0043_f8d0;
+const MATRIX_TIMES_POINT_004B4500: u32 = 0x004b_4500;
+const NODE_LOOKUP_00653270: u32 = 0x0065_3270;
+const NODE_LOOKUP_ARGUMENT_011F4428: u32 = 0x011f_4428;
+/// `00440460` (`thiscall`, one word: set a translation).
+const SET_TRANSLATE_00440460: u32 = 0x0044_0460;
+/// The save/load game object (`011de45c`), its version (`008df040`), write
+/// and read (`008579b0`, `008579e0`) and `TESSaveLoadGame::SaveNumericID` /
+/// `LoadNumericID` (`00857a10`, `00857aa0`).
+const SAVE_LOAD_GAME: u32 = 0x011d_e45c;
+const SAVE_VERSION: u32 = 0x008d_f040;
+const SAVE_WRITE: u32 = 0x0085_79b0;
+const LOAD_READ: u32 = 0x0085_79e0;
+const SAVE_NUMERIC_ID: u32 = 0x0085_7a10;
+const LOAD_NUMERIC_ID: u32 = 0x0085_7aa0;
+/// `004839c0` (`cdecl`: the form of an id) and the type descriptors
+/// `01183028` (`TESForm`), `01183918` (`TESEffectShader`).
+const LOOKUP_FORM_004839C0: u32 = 0x0048_39c0;
+const TYPE_TES_FORM: u32 = 0x0118_3028;
+const TYPE_TES_EFFECT_SHADER: u32 = 0x0118_3918;
+/// `008d6f30` (`thiscall`: the reference's cell) and `00450ff0`
+/// (`thiscall` on the cell, a byte).
+const REFERENCE_CELL_008D6F30: u32 = 0x008d_6f30;
+const CELL_TEST_00450FF0: u32 = 0x0045_0ff0;
+/// The save buffer's `00865e50` (three words: write) and
+/// `BGSSaveGameBuffer::SaveFormID_ov2` (`00865df0`, two words); the load
+/// buffer's `00864980` (two words: read) and
+/// `BGSLoadGameBuffer::LoadFormID` (`008648a0`).
+const BUFFER_WRITE_00865E50: u32 = 0x0086_5e50;
+const BUFFER_SAVE_FORM_ID: u32 = 0x0086_5df0;
+const BUFFER_READ_00864980: u32 = 0x0086_4980;
+const BUFFER_LOAD_FORM_ID: u32 = 0x0086_48a0;
+/// The weighted random's members: `00438660` / `00438690` (`thiscall`:
+/// construct / destroy the array at +0x10) and `005a00a0` (`cdecl`, the
+/// word +0x20: the roll).
+const WEIGHTS_CONSTRUCT_00438660: u32 = 0x0043_8660;
+const WEIGHTS_DESTRUCT_00438690: u32 = 0x0043_8690;
+const ROLL_005A00A0: u32 = 0x005a_00a0;
+/// The free `00401030` (`cdecl`, one word).
+const FREE_00401030: u32 = 0x0040_1030;
+
+/// Stores `value` at `address` as a `float` (`FSTP`).
+fn store_float(e: &mut Engine, address: u32, value: f64) {
+    e.mem.set_u32(address, x87_store32(value));
+}
+
+/// The item `index` of the array at `this + array` held through its
+/// `NiPointer` (`006a7ad0`, `00559450`).
+fn array_item(e: &mut Engine, this: u32, array: u32, index: u32) -> u32 {
+    let slot = e
+        .call(ARRAY_AT_006A7AD0, &args![this.wrapping_add(array), index])
+        .u32();
+    e.call(WORD_AT_0_00559450, &args![slot]).u32()
+}
+
+/// The count of the array at `this + array` (`0044ddc0`).
+fn array_count(e: &mut Engine, this: u32, array: u32) -> u32 {
+    e.call(WORD_AT_8_0044DDC0, &args![this.wrapping_add(array)])
+        .u32()
+}
+
+/// The object held by the `NiPointer` at `this + offset` (`00559450`).
+fn held(e: &mut Engine, this: u32, offset: u32) -> u32 {
+    e.call(WORD_AT_0_00559450, &args![this.wrapping_add(offset)])
+        .u32()
+}
+
+// Translated from 0081d390 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `MagicShaderHitEffect::InitLoadGame` (engine map; `thiscall`, `RET 8`):
+/// `MagicHitEffect::InitLoadGame` with the two words.
+pub fn magic_shader_hit_effect_init_load_game(e: &mut Engine, this: Ptr, first: u32, second: u32) {
+    e.call(HIT_EFFECT_INIT_LOAD_GAME, &args![this, first, second]);
+}
+
+// Translated from 0081f580 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The second `MagicShaderHitEffect` constructor (`thiscall`, `RET 0xC`: the
+/// target, the effect shader, the lifetime): as `0081f350` but with the
+/// shader given (`pEffectData`), `MagicHitEffect`'s constructor with the
+/// target and 0, and the lifetime stored (a negative one becomes the
+/// largest `float`, `01016970`). Returns `this`.
+// Translation incomplete: 0081f580 - the FS:[0] exception frame (unwinding the members on a throw) is not translated
+pub fn fn_0081f580(
+    e: &mut Engine,
+    this: Ptr<MagicShaderHitEffect>,
+    target: u32,
+    shader: u32,
+    lifetime: f32,
+) -> Ptr<MagicShaderHitEffect> {
+    let base = this.addr();
+    e.call(MAGIC_HIT_EFFECT_CONSTRUCTOR, &args![this, target, 0u32]);
+    e.mem.set_u32(base, MAGIC_SHADER_HIT_EFFECT_VTABLE);
+    fn_00822530(e, Ptr::new(base.wrapping_add(PARTICLE_PROPERTY_ARRAY)));
+    e.call(
+        NI_POINTER_FROM_00633C90,
+        &args![base.wrapping_add(PARTICLE_NODE), 0u32],
+    );
+    fn_00822580(e, Ptr::new(base.wrapping_add(ADD_ON_OBJECTS)));
+    e.call(
+        NI_POINTER_FROM_00633C90,
+        &args![base.wrapping_add(TEX_EFFECT_DATA), 0u32],
+    );
+    e.set(this, MagicShaderHitEffect::pEffectData, shader);
+    e.set(this, MagicShaderHitEffect::fAlphaTimer, 0);
+    e.call(
+        NI_POINTER_ASSIGN_0066B0D0,
+        &args![base.wrapping_add(TEX_EFFECT_DATA), 0u32],
+    );
+    e.call(
+        NI_POINTER_ASSIGN_0066B0D0,
+        &args![base.wrapping_add(PARTICLE_NODE), 0u32],
+    );
+    e.set(this, MagicShaderHitEffect::bWeaponEnchantment, 0);
+    e.set(this, MagicShaderHitEffect::pWornObject, 0);
+    e.set(this, MagicShaderHitEffect::fAddonAlpha, 1.0f32.to_bits());
+    e.set(this, MagicShaderHitEffect::fAddonScale, 1.0f32.to_bits());
+    let player = e.mem.u32(PLAYER);
+    if e.get(this, MagicShaderHitEffect::pTarget) == player {
+        let has_node = e.call(PLAYER_NODE_00950BB0, &args![player, 0u32]).u32() != 0;
+        let third_person = has_node && {
+            let player = e.mem.u32(PLAYER);
+            let node = e.call(PLAYER_NODE_00950BB0, &args![player, 0u32]).u32();
+            !e.call(QUERY_00456610, &args![node]).bool()
+        };
+        e.set(
+            this,
+            MagicShaderHitEffect::b3rdPerson,
+            u8::from(third_person),
+        );
+    } else {
+        e.set(this, MagicShaderHitEffect::b3rdPerson, 0);
+    }
+    // FCOMP with 0.0, TEST AH,5, JP: the largest float only below 0.0.
+    let stored = if x87_load32(lifetime.to_bits()) < e.global::<f64>(ZERO_01012060) {
+        x87_quiet_bits(e.global::<u32>(LONGEST_LIFETIME))
+    } else {
+        x87_quiet_bits(lifetime.to_bits())
+    };
+    e.mem.set_u32(base.wrapping_add(8), stored);
+    let shader = e.get(this, MagicShaderHitEffect::pEffectData);
+    walk_addon_models(e, shader, |e, loader, name| {
+        load_model(e, loader, name);
+    });
+    this
+}
+
+// Translated from 00820b50 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed (`thiscall`): `this + 0x11C`.
+pub fn fn_00820b50(_e: &mut Engine, this: Ptr) -> u32 {
+    this.addr().wrapping_add(0x11c)
+}
+
+// Translated from 00820b70 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed (`thiscall`, `RET 4`: a `float`): the word +0x64 becomes 2 and
+/// the `float` +0x68 the value (through `FLD`/`FSTP`).
+pub fn fn_00820b70(e: &mut Engine, this: Ptr, value: f32) {
+    e.mem.set_u32(this.addr().wrapping_add(0x64), 2);
+    e.mem.set_u32(
+        this.addr().wrapping_add(0x68),
+        x87_quiet_bits(value.to_bits()),
+    );
+}
+
+// Translated from 00820b90 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed (`thiscall`): the word +0x64 becomes 1.
+pub fn fn_00820b90(e: &mut Engine, this: Ptr) {
+    e.mem.set_u32(this.addr().wrapping_add(0x64), 1);
+}
+
+// Translated from 00820bb0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed (`thiscall`): the word +0x64 becomes 0.
+pub fn fn_00820bb0(e: &mut Engine, this: Ptr) {
+    e.mem.set_u32(this.addr().wrapping_add(0x64), 0);
+}
+
+// Translated from 00820bd0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed (`thiscall`, `RET 4`: a byte): stores the byte at +0x6C.
+pub fn fn_00820bd0(e: &mut Engine, this: Ptr, value: u8) {
+    e.mem.set_u8(this.addr().wrapping_add(0x6c), value);
+}
+
+// Translated from 00820bf0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed (`thiscall`): the word at +0x6A4 (the code reads it from the
+/// player as the active hit effect).
+pub fn fn_00820bf0(e: &mut Engine, this: Ptr) -> u32 {
+    e.mem.u32(this.addr().wrapping_add(0x6a4))
+}
+
+// Translated from 00820f30 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `MagicShaderHitEffect::Update` (engine map; `thiscall`, `RET 4`: the
+/// elapsed seconds; answers a byte). When `MagicHitEffect::Update` answers
+/// false or the target has no 3D, slot +0xC8 runs and the answer is false.
+/// Otherwise `fAlphaTimer` advances, slot +0xCC runs, and an alpha scale is
+/// found (1.0; for an actor target whose shader is not `0080d0d0`'s: the
+/// target's alpha above 0.99 is lowered once a texture effect has its +0x6C
+/// object, and the scale is the 3D's `006d2c40` value or the target's slot
+/// +0x420, divided by the target's alpha when that is above 0). With
+/// particle properties and a particle node, the particles are stepped
+/// (`00507da0` with their total rate, then each property's share,
+/// `00821600`, `00821620`, `UpdateParticles`); with add-ons the add-on
+/// alpha and scale fade (`0040ebd0`, `00404010`) and are applied
+/// (`RecursiveSetPropertyFadeAlpha`, `00440490`). With a texture effect it
+/// is updated (`00507e30`) and its +0x18 and +0x28 scaled. Any particle
+/// still alive, positive fade or texture alpha keeps the effect; a finished
+/// effect with nothing left releases an actor target's process (slot
+/// +0x580 with 1, 1, 0), runs slot +0xC8 and answers false.
+pub fn magic_shader_hit_effect_update(
+    e: &mut Engine,
+    this: Ptr<MagicShaderHitEffect>,
+    seconds: f32,
+) -> u8 {
+    let base = this.addr();
+    let seconds = seconds.to_bits();
+    let target = e.get(this, MagicShaderHitEffect::pTarget);
+    let alive = e
+        .call(HIT_EFFECT_UPDATE, &args![base, x87_quiet_bits(seconds)])
+        .bool()
+        && target != 0
+        && e.vcall(target, 0x1d0, &[]).u32() != 0;
+    if !alive {
+        e.vcall(base, 0xc8, &[]);
+        return 0;
+    }
+    let timer = x87_add(
+        x87_load32(e.get(this, MagicShaderHitEffect::fAlphaTimer)),
+        x87_m32(seconds),
+    );
+    e.set(this, MagicShaderHitEffect::fAlphaTimer, x87_store32(timer));
+    let mut done = e.get(this, MagicShaderHitEffect::bFinished);
+    e.vcall(base, 0xcc, &[]);
+    let mut scale = 1.0f32.to_bits();
+    let zero = e.global::<f64>(ZERO_01012060);
+    let target = e.get(this, MagicShaderHitEffect::pTarget);
+    if e.vcall(target, 0x100, &[]).bool()
+        && e.get(this, MagicShaderHitEffect::pEffectData)
+            != e.call(SKIPPED_SHADER_0080D0D0, &[]).u32()
+    {
+        if held(e, base, TEX_EFFECT_DATA) != 0 {
+            let texture = held(e, base, TEX_EFFECT_DATA);
+            let lowered = held(e, texture, 0x6c) != 0
+                && {
+                    let target = e.get(this, MagicShaderHitEffect::pTarget);
+                    e.vcall(target, 0x100, &[]).bool()
+                }
+                && {
+                    let target = e.get(this, MagicShaderHitEffect::pTarget);
+                    let alpha = e.call(ACTOR_GET_ALPHA_MULT, &args![target]).st0;
+                    alpha > e.global::<f64>(ALPHA_LIMIT_0106D508)
+                };
+            if lowered {
+                let lower = x87_quiet_bits(e.global::<u32>(LOWER_ALPHA_0106682C));
+                let target = e.get(this, MagicShaderHitEffect::pTarget);
+                e.call(ACTOR_SET_ALPHA_MULT, &args![target, lower]);
+                let target = e.get(this, MagicShaderHitEffect::pTarget);
+                e.call(ACTOR_UPDATE_ALPHA, &args![target]);
+            }
+        }
+        let target = e.get(this, MagicShaderHitEffect::pTarget);
+        let node = e.vcall(target, 0x1d0, &[]).u32();
+        scale = if e
+            .call(
+                NODE_TEST_0043B300,
+                &args![NODE_TEST_ARGUMENT_011F9140, node],
+            )
+            .bool()
+        {
+            x87_store32(e.call(NODE_VALUE_006D2C40, &args![node]).st0)
+        } else {
+            let target = e.get(this, MagicShaderHitEffect::pTarget);
+            x87_store32(e.vcall(target, 0x420, &[]).st0)
+        };
+        let target = e.get(this, MagicShaderHitEffect::pTarget);
+        let alpha = x87_store32(e.call(ACTOR_GET_ALPHA_MULT, &args![target]).st0);
+        if x87_load32(alpha) > zero {
+            scale = x87_store32(x87_div(x87_load32(scale), x87_m32(alpha)));
+        }
+    }
+    if array_count(e, base, PARTICLE_PROPERTY_ARRAY) != 0
+        && e.call(
+            WORD_DIFFERS_0052AA80,
+            &args![base.wrapping_add(PARTICLE_NODE), 0u32],
+        )
+        .bool()
+    {
+        let mut total = 0u32;
+        let mut index = 0;
+        while index < array_count(e, base, PARTICLE_PROPERTY_ARRAY) {
+            let property = array_item(e, base, PARTICLE_PROPERTY_ARRAY, index);
+            let rate = e.call(PARTICLE_RATE_006A78F0, &args![property]).st0;
+            let step = e.call(PARTICLE_STEP_00BA52D0, &[]).u32();
+            total = x87_store32(x87_add(x87_mul(f64::from(step), rate), x87_m32(total)));
+            index += 1;
+        }
+        let shader = e.get(this, MagicShaderHitEffect::pEffectData);
+        let timer = x87_quiet_bits(e.get(this, MagicShaderHitEffect::fAlphaTimer));
+        let finished = u32::from(e.get(this, MagicShaderHitEffect::bFinished));
+        let mut remaining = x87_store32(
+            e.call(
+                SHADER_PARTICLES_00507DA0,
+                &args![
+                    shader,
+                    x87_quiet_bits(total),
+                    x87_quiet_bits(seconds),
+                    timer,
+                    finished
+                ],
+            )
+            .st0,
+        );
+        if x87_load32(remaining) > zero {
+            done = 0;
+        }
+        let mut index = 0;
+        while index < array_count(e, base, PARTICLE_PROPERTY_ARRAY) {
+            let step = e.call(PARTICLE_STEP_00BA52D0, &[]).u32();
+            let step = x87_store32(f64::from(step));
+            let part = x87_store32(
+                e.call(MIN_0040EBD0, &args![x87_quiet_bits(remaining), step])
+                    .st0,
+            );
+            remaining = x87_store32(x87_sub(x87_load32(remaining), x87_m32(part)));
+            let property = array_item(e, base, PARTICLE_PROPERTY_ARRAY, index);
+            let step = e.call(PARTICLE_STEP_00BA52D0, &[]).u32();
+            let share = x87_store32(x87_div(x87_m32(part), f64::from(step)));
+            fn_00821600(e, Ptr::new(property), x87_quiet_bits(share));
+            fn_00821620(e, Ptr::new(property), f32::from_bits(x87_quiet_bits(scale)));
+            let timer = x87_quiet_bits(e.get(this, MagicShaderHitEffect::fAlphaTimer));
+            e.call(UPDATE_PARTICLES, &args![property, timer, 0u32, 1u32]);
+            if e.call(PARTICLE_LIVE_004FD380, &args![property]).i32() > 0 {
+                done = 0;
+            }
+            index += 1;
+        }
+        if array_count(e, base, ADD_ON_OBJECTS) != 0 {
+            let shader = e.get(this, MagicShaderHitEffect::pEffectData);
+            let finished = e.get(this, MagicShaderHitEffect::bFinished) != 0;
+            let alpha_time = if !finished {
+                f64::from(fn_00821640(e, Ptr::new(shader)))
+            } else {
+                x87_mul(
+                    f64::from(fn_00821660(e, Ptr::new(shader))),
+                    e.global::<f64>(MINUS_ONE_DOUBLE),
+                )
+            };
+            let step = x87_store32(x87_div(x87_load32(seconds), alpha_time));
+            let alpha = x87_store32(x87_add(
+                x87_load32(e.get(this, MagicShaderHitEffect::fAddonAlpha)),
+                x87_m32(step),
+            ));
+            let alpha = fade_clamp(e, alpha);
+            e.set(this, MagicShaderHitEffect::fAddonAlpha, alpha);
+            if x87_load32(e.get(this, MagicShaderHitEffect::fAddonAlpha)) > zero {
+                done = 0;
+            }
+            let shader = e.get(this, MagicShaderHitEffect::pEffectData);
+            let scale_time = if e.get(this, MagicShaderHitEffect::bFinished) == 0 {
+                e.call(SHADER_FADE_IN_008133B0, &args![shader]).st0
+            } else {
+                x87_mul(
+                    f64::from(fn_008216a0(e, Ptr::new(shader))),
+                    e.global::<f64>(MINUS_ONE_DOUBLE),
+                )
+            };
+            let step = x87_store32(x87_div(x87_load32(seconds), scale_time));
+            let addon_scale = x87_store32(x87_add(
+                x87_load32(e.get(this, MagicShaderHitEffect::fAddonScale)),
+                x87_m32(step),
+            ));
+            let addon_scale = fade_clamp(e, addon_scale);
+            e.set(this, MagicShaderHitEffect::fAddonScale, addon_scale);
+            let one = 1.0f32.to_bits();
+            let shader = e.get(this, MagicShaderHitEffect::pEffectData);
+            let full = if e.get(this, MagicShaderHitEffect::bFinished) == 0 {
+                x87_store32(e.call(SHADER_VALUE_00567470, &args![shader]).st0)
+            } else {
+                x87_store32(f64::from(fn_00821680(e, Ptr::new(shader))))
+            };
+            let smallest = x87_quiet_bits(e.global::<u32>(ADDON_SCALE_01013EA4));
+            let low = x87_store32(e.call(FLOAT_HELPER_00404010, &args![smallest, full]).st0);
+            let low = x87_quiet_bits(low);
+            let size = x87_store32(x87_add(
+                x87_mul(
+                    x87_sub(x87_load32(one), x87_m32(low)),
+                    x87_m32(e.get(this, MagicShaderHitEffect::fAddonScale)),
+                ),
+                x87_m32(low),
+            ));
+            let mut index = 0;
+            while index < array_count(e, base, ADD_ON_OBJECTS) {
+                let object = array_item(e, base, ADD_ON_OBJECTS, index);
+                let alpha = x87_quiet_bits(e.get(this, MagicShaderHitEffect::fAddonAlpha));
+                let node = e.vcall(object, 0xc, &[]).u32();
+                e.call(RECURSIVE_SET_PROPERTY_FADE_ALPHA, &args![node, alpha]);
+                let object = array_item(e, base, ADD_ON_OBJECTS, index);
+                e.call(SET_SCALE_00440490, &args![object, x87_quiet_bits(size)]);
+                index += 1;
+            }
+        }
+    }
+    if held(e, base, TEX_EFFECT_DATA) != 0 {
+        let finished = u32::from(e.get(this, MagicShaderHitEffect::bFinished));
+        let age = x87_quiet_bits(e.get(this, MagicShaderHitEffect::fAge));
+        let timer = x87_quiet_bits(e.get(this, MagicShaderHitEffect::fAlphaTimer));
+        let texture = held(e, base, TEX_EFFECT_DATA);
+        let shader = e.get(this, MagicShaderHitEffect::pEffectData);
+        e.call(
+            SHADER_TEXTURE_UPDATE_00507E30,
+            &args![
+                shader,
+                texture,
+                x87_quiet_bits(seconds),
+                timer,
+                age,
+                finished
+            ],
+        );
+        for offset in [0x18u32, 0x28] {
+            let field = held(e, base, TEX_EFFECT_DATA).wrapping_add(offset);
+            let value = x87_mul(x87_load32(e.mem.u32(field)), x87_m32(scale));
+            store_float(e, field, value);
+        }
+        let texture = held(e, base, TEX_EFFECT_DATA);
+        let fading = x87_load32(e.mem.u32(texture.wrapping_add(0x48))) > zero || {
+            let texture = held(e, base, TEX_EFFECT_DATA);
+            x87_load32(e.mem.u32(texture.wrapping_add(0x38))) > zero
+        };
+        if fading {
+            done = 0;
+        }
+    }
+    if e.get(this, MagicShaderHitEffect::bFinished) != 0 && done != 0 {
+        let target = e.get(this, MagicShaderHitEffect::pTarget);
+        if e.vcall(target, 0x100, &[]).bool()
+            && e.call(SAVED_ACQUIRE_OBJECT_008D8520, &args![target]).u32() != 0
+        {
+            let target = e.get(this, MagicShaderHitEffect::pTarget);
+            let process = e.call(SAVED_ACQUIRE_OBJECT_008D8520, &args![target]).u32();
+            e.vcall(process, 0x580, &args![1u32, 1u32, 0u32]);
+        }
+        e.vcall(base, 0xc8, &[]);
+        return 0;
+    }
+    1
+}
+
+/// `max(0, min(1, value))` as `00820f30` computes the add-on fades: the
+/// value (through `FLD`/`FSTP`) and 1.0 to `0040ebd0`, its answer stored
+/// as a `float` with 0.0 to `00404010`, that answer stored as a `float`.
+fn fade_clamp(e: &mut Engine, value: u32) -> u32 {
+    let smaller = e
+        .call(
+            MIN_0040EBD0,
+            &args![1.0f32.to_bits(), x87_quiet_bits(value)],
+        )
+        .st0;
+    let smaller = x87_store32(smaller);
+    x87_store32(e.call(FLOAT_HELPER_00404010, &args![0u32, smaller]).st0)
+}
+
+// Translated from 00821620 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed (`thiscall`, `RET 4`: a `float`): stores the value at +0x130
+/// (through `FLD`/`FSTP`).
+pub fn fn_00821620(e: &mut Engine, this: Ptr, value: f32) {
+    e.mem.set_u32(
+        this.addr().wrapping_add(0x130),
+        x87_quiet_bits(value.to_bits()),
+    );
+}
+
+// Translated from 008216a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed (`thiscall`): the `float` at +0x148, in `ST0`.
+pub fn fn_008216a0(e: &mut Engine, this: Ptr) -> f32 {
+    x87_quiet(e.mem.f32(this.addr().wrapping_add(0x148)))
+}
+
+// Translated from 008216c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `MagicShaderHitEffect::ResetAlphaTimer` (engine map; `thiscall`): the
+/// texture effect's larger alpha (`00404010` of its +0x38 and +0x48, 0.0
+/// without one; a weapon enchantment clears both and uses 0.0) sets
+/// `fAlphaTimer`: the shader's `00759450` time scaled by that alpha over
+/// the shader's `009a7c40` alpha when it is below it, otherwise the
+/// `00759450` time itself; each particle property gets the timer
+/// (`00ba6cf0`).
+pub fn magic_shader_hit_effect_reset_alpha_timer(e: &mut Engine, this: Ptr<MagicShaderHitEffect>) {
+    let base = this.addr();
+    let mut alpha = 0u32;
+    if held(e, base, TEX_EFFECT_DATA) != 0 {
+        let texture = held(e, base, TEX_EFFECT_DATA);
+        let second = x87_quiet_bits(e.mem.u32(texture.wrapping_add(0x48)));
+        let texture = held(e, base, TEX_EFFECT_DATA);
+        let first = x87_quiet_bits(e.mem.u32(texture.wrapping_add(0x38)));
+        alpha = x87_store32(e.call(FLOAT_HELPER_00404010, &args![first, second]).st0);
+    }
+    if e.get(this, MagicShaderHitEffect::bWeaponEnchantment) != 0 {
+        alpha = 0;
+        let texture = held(e, base, TEX_EFFECT_DATA);
+        e.mem.set_u32(texture.wrapping_add(0x38), 0);
+        let texture = held(e, base, TEX_EFFECT_DATA);
+        e.mem.set_u32(texture.wrapping_add(0x48), 0);
+    }
+    let shader = e.get(this, MagicShaderHitEffect::pEffectData);
+    let full = e.call(SHADER_TIME_009A7C40, &args![shader]).st0;
+    // FCOMPP; TEST AH,5; JP: the scaled time only when alpha < full.
+    let timer = if x87_load32(alpha) < full {
+        let shader = e.get(this, MagicShaderHitEffect::pEffectData);
+        let time = e.call(SHADER_TIME_00759450, &args![shader]).st0;
+        let shader = e.get(this, MagicShaderHitEffect::pEffectData);
+        let full = e.call(SHADER_TIME_009A7C40, &args![shader]).st0;
+        x87_store32(x87_mul(x87_div(x87_m32(alpha), full), time))
+    } else {
+        let shader = e.get(this, MagicShaderHitEffect::pEffectData);
+        x87_store32(e.call(SHADER_TIME_00759450, &args![shader]).st0)
+    };
+    e.set(this, MagicShaderHitEffect::fAlphaTimer, timer);
+    let mut index = 0;
+    while index < array_count(e, base, PARTICLE_PROPERTY_ARRAY) {
+        let timer = x87_quiet_bits(e.get(this, MagicShaderHitEffect::fAlphaTimer));
+        let property = array_item(e, base, PARTICLE_PROPERTY_ARRAY, index);
+        e.call(PARTICLE_SET_TIME_00BA6CF0, &args![property, timer]);
+        index += 1;
+    }
+}
+
+// Translated from 008217e0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `MagicShaderHitEffect::UpdatePosition` (engine map; `thiscall`). For the
+/// player's effect (the target `00441110` is the player) it notes whether
+/// the player's active hit effect (`00820bf0`) is this one and whether the
+/// player is in first person (the player's 3D `00950bb0(0)` passes
+/// `00456610`). The 3D is the player's (`00950bb0(0)`), the target's (slot
+/// +0x1D0), or for a weapon enchantment the attach point (`00820c10`).
+/// With a particle node and 3D (and not the player's active effect): the
+/// rotation (the 3D's for a weapon enchantment, else `011a9448`'s nine
+/// words) and position are given to the particle node; in first person
+/// with a first-person 3D (`00950bb0(1)`), the node is attached under
+/// `00653270`'s node there (its slot +0xDC with 1) when it is not its parent
+/// yet, and placed relative to its parent (inverse rotation, the offset of
+/// the 3D from the parent) and updated at time 0. Finally `0081bc70` gets
+/// the particle node, or 0 in first person or for the player's active
+/// effect.
+///
+/// The stack frame is modelled as a block of the frame's size, the locals
+/// at their `EBP` offsets.
+pub fn magic_shader_hit_effect_update_position(e: &mut Engine, this: Ptr<MagicShaderHitEffect>) {
+    let base = this.addr();
+    e.with_stack(0xe8, |e, frame| {
+        let ebp = frame.addr().wrapping_add(0xe8);
+        let local = |offset: u32| ebp.wrapping_sub(offset);
+        let target = e.call(TARGET_00441110, &args![base]).u32();
+        let is_player = target == e.mem.u32(PLAYER);
+        let own = is_player && e.mem.u32(PLAYER) != 0 && {
+            let player = e.mem.u32(PLAYER);
+            fn_00820bf0(e, Ptr::new(player)) == base
+        };
+        let first_person = is_player
+            && e.mem.u32(PLAYER) != 0
+            && {
+                let player = e.mem.u32(PLAYER);
+                e.call(PLAYER_NODE_00950BB0, &args![player, 0u32]).u32() != 0
+            }
+            && {
+                let player = e.mem.u32(PLAYER);
+                let node = e.call(PLAYER_NODE_00950BB0, &args![player, 0u32]).u32();
+                e.call(QUERY_00456610, &args![node]).bool()
+            };
+        let node = if e.get(this, MagicShaderHitEffect::bWeaponEnchantment) == 0 {
+            if is_player {
+                let player = e.mem.u32(PLAYER);
+                e.call(PLAYER_NODE_00950BB0, &args![player, 0u32]).u32()
+            } else {
+                let target = e.get(this, MagicShaderHitEffect::pTarget);
+                e.vcall(target, 0x1d0, &[]).u32()
+            }
+        } else {
+            fn_00820c10(
+                e,
+                this,
+                local(0x11),
+                local(0x11),
+                local(0x10),
+                local(0x18),
+                local(0x1c),
+            );
+            e.mem.u32(local(0x1c))
+        };
+        let particle_node = base.wrapping_add(PARTICLE_NODE);
+        if e.call(WORD_DIFFERS_0052AA80, &args![particle_node, 0u32])
+            .bool()
+            && node != 0
+        {
+            let source = if e.get(this, MagicShaderHitEffect::bWeaponEnchantment) != 0 {
+                e.call(NODE_ROTATION_00461130, &args![node]).u32()
+            } else {
+                NODE_ARGUMENT_011A9448
+            };
+            let rotation = local(0x40);
+            for i in 0..9 {
+                let word = e.mem.u32(source.wrapping_add(4 * i));
+                e.mem.set_u32(rotation.wrapping_add(4 * i), word);
+            }
+            if !own {
+                let first_view = first_person && {
+                    let player = e.mem.u32(PLAYER);
+                    e.call(PLAYER_NODE_00950BB0, &args![player, 1u32]).u32() != 0
+                };
+                if !first_view {
+                    let position = e.call(CAMERA_POSITION_0045BB80, &args![node]).u32();
+                    let object = held(e, base, PARTICLE_NODE);
+                    e.call(SET_TRANSLATE_00440460, &args![object, position]);
+                    let object = held(e, base, PARTICLE_NODE);
+                    e.call(NODE_SET_0043FA80, &args![object, rotation]);
+                } else {
+                    let player = e.mem.u32(PLAYER);
+                    let view = e.call(PLAYER_NODE_00950BB0, &args![player, 1u32]).u32();
+                    let attach = e
+                        .call(
+                            NODE_LOOKUP_00653270,
+                            &args![NODE_LOOKUP_ARGUMENT_011F4428, view],
+                        )
+                        .u32();
+                    if attach != 0 {
+                        let object = held(e, base, PARTICLE_NODE);
+                        let parent = e.call(WORD_AT_18_009611E0, &args![object]).u32();
+                        if attach != parent {
+                            let object = held(e, base, PARTICLE_NODE);
+                            e.vcall(attach, 0xdc, &args![object, 1u32]);
+                        }
+                    }
+                    if first_person {
+                        let object = held(e, base, PARTICLE_NODE);
+                        let parent = e.call(WORD_AT_18_009611E0, &args![object]).u32();
+                        let parent_rotation = e.call(NODE_ROTATION_00461130, &args![parent]).u32();
+                        let inverse = e
+                            .call(MATRIX_INVERSE, &args![parent_rotation, local(0x78)])
+                            .u32();
+                        let product = e
+                            .call(MATRIX_MULTIPLY, &args![inverse, local(0x9c), rotation])
+                            .u32();
+                        let object = held(e, base, PARTICLE_NODE);
+                        e.call(NODE_SET_0043FA80, &args![object, product]);
+                        let object = held(e, base, PARTICLE_NODE);
+                        let parent = e.call(WORD_AT_18_009611E0, &args![object]).u32();
+                        let parent_position =
+                            e.call(CAMERA_POSITION_0045BB80, &args![parent]).u32();
+                        let position = e.call(CAMERA_POSITION_0045BB80, &args![node]).u32();
+                        let offset = e
+                            .call(
+                                POINT_SUBTRACT_00439EF0,
+                                &args![position, local(0xcc), parent_position],
+                            )
+                            .u32();
+                        let object = held(e, base, PARTICLE_NODE);
+                        let parent = e.call(WORD_AT_18_009611E0, &args![object]).u32();
+                        let parent_rotation = e.call(NODE_ROTATION_00461130, &args![parent]).u32();
+                        let inverse = e
+                            .call(MATRIX_INVERSE, &args![parent_rotation, local(0xc0)])
+                            .u32();
+                        let local_position = e
+                            .call(
+                                MATRIX_TIMES_POINT_004B4500,
+                                &args![inverse, local(0xd8), offset],
+                            )
+                            .u32();
+                        let object = held(e, base, PARTICLE_NODE);
+                        e.call(SET_TRANSLATE_00440460, &args![object, local_position]);
+                        let block = local(0x50);
+                        e.call(POINT_SET_0043D410, &args![block, 0u32, 0u32, 0u32]);
+                        let object = held(e, base, PARTICLE_NODE);
+                        e.call(SET_TRANSLATE_00A59C60, &args![object, block]);
+                    } else {
+                        // Not reached: this branch needs the first-person flag
+                        // the enclosing test already required.
+                        let object = held(e, base, PARTICLE_NODE);
+                        e.call(NODE_SET_0043FA80, &args![object, rotation]);
+                        let position = e.call(CAMERA_POSITION_0045BB80, &args![node]).u32();
+                        let object = held(e, base, PARTICLE_NODE);
+                        e.call(SET_TRANSLATE_00440460, &args![object, position]);
+                    }
+                }
+            }
+        }
+        if first_person || own {
+            e.call(HIT_EFFECT_0081BC70, &args![base, 0u32]);
+        } else {
+            let object = held(e, base, PARTICLE_NODE);
+            e.call(HIT_EFFECT_0081BC70, &args![base, object]);
+        }
+    });
+}
+
+// Translated from 00821bd0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `MagicShaderHitEffect::ClearTarget` (engine map; `thiscall`): for the
+/// two fire shaders (form ids 0x852FE and 0x84A51) the target's moving
+/// sounds stop (`BSAudio::StopMovingSounds(3D, 1.0, 0)`); with a texture
+/// effect its shader stops on the player's two views or on the target's
+/// 3D; with a particle node every particle shader stops on it; the
+/// particle array is cleared (its buffer freed), the particle node
+/// detached (`AttachParent(0)`), both pointers cleared and the target
+/// forgotten.
+pub fn magic_shader_hit_effect_clear_target(e: &mut Engine, this: Ptr<MagicShaderHitEffect>) {
+    let base = this.addr();
+    let fire = e.get(this, MagicShaderHitEffect::pTarget) != 0
+        && e.get(this, MagicShaderHitEffect::pEffectData) != 0
+        && {
+            let shader = e.get(this, MagicShaderHitEffect::pEffectData);
+            e.call(FORM_ID_0084E3A0, &args![shader]).u32() == FIRE_SHADER_852FE || {
+                let shader = e.get(this, MagicShaderHitEffect::pEffectData);
+                e.call(FORM_ID_0084E3A0, &args![shader]).u32() == FIRE_SHADER_84A51
+            }
+        };
+    if fire {
+        let target = e.get(this, MagicShaderHitEffect::pTarget);
+        let node = e.vcall(target, 0x1d0, &[]).u32();
+        let audio = e.call(BS_AUDIO_INSTANCE, &[]).u32();
+        e.call(
+            BS_AUDIO_STOP_MOVING_SOUNDS,
+            &args![audio, node, 1.0f32.to_bits(), 0u32],
+        );
+    }
+    if held(e, base, TEX_EFFECT_DATA) != 0 {
+        let player = e.mem.u32(PLAYER);
+        if e.get(this, MagicShaderHitEffect::pTarget) == player {
+            for view in [1u32, 0] {
+                let player = e.mem.u32(PLAYER);
+                let node = e.call(PLAYER_NODE_00950BB0, &args![player, view]).u32();
+                if node != 0 {
+                    stop_texture_shader(e, this, node);
+                }
+            }
+        } else if e.get(this, MagicShaderHitEffect::pTarget) != 0 {
+            let target = e.get(this, MagicShaderHitEffect::pTarget);
+            let node = e.vcall(target, 0x1d0, &[]).u32();
+            if node != 0 {
+                stop_texture_shader(e, this, node);
+            }
+        }
+    }
+    let particle_node = base.wrapping_add(PARTICLE_NODE);
+    if e.call(WORD_DIFFERS_0052AA80, &args![particle_node, 0u32])
+        .bool()
+    {
+        let mut index = 0;
+        while index < array_count(e, base, PARTICLE_PROPERTY_ARRAY) {
+            let property = array_item(e, base, PARTICLE_PROPERTY_ARRAY, index);
+            let node = held(e, base, PARTICLE_NODE);
+            let shader = e.get(this, MagicShaderHitEffect::pEffectData);
+            e.call(STOP_PARTICLE_SHADER, &args![shader, node, property]);
+            index += 1;
+        }
+    }
+    fn_006c6200(e, Ptr::new(base.wrapping_add(PARTICLE_PROPERTY_ARRAY)), 1);
+    if e.call(WORD_DIFFERS_0052AA80, &args![particle_node, 0u32])
+        .bool()
+    {
+        let node = held(e, base, PARTICLE_NODE);
+        e.call(ATTACH_PARENT_00A59D00, &args![node, 0u32]);
+    }
+    e.call(NI_POINTER_ASSIGN_0066B0D0, &args![particle_node, 0u32]);
+    e.call(
+        NI_POINTER_ASSIGN_0066B0D0,
+        &args![base.wrapping_add(TEX_EFFECT_DATA), 0u32],
+    );
+    e.set(this, MagicShaderHitEffect::pTarget, 0);
+}
+
+// Translated from 00821dd0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `MagicShaderHitEffect::GetSaveSize` (engine map; `thiscall`, `RET 8`):
+/// the base's size plus 4, plus 1 and 4 from save version 0x37 (16-bit
+/// sums).
+pub fn magic_shader_hit_effect_get_save_size(
+    e: &mut Engine,
+    this: Ptr,
+    first: u32,
+    second: u32,
+) -> u16 {
+    let mut size = e
+        .call(HIT_EFFECT_GET_SAVE_SIZE, &args![this, first, second])
+        .u16();
+    size = size.wrapping_add(4);
+    let save_load = e.mem.u32(SAVE_LOAD_GAME);
+    if e.call(SAVE_VERSION, &args![save_load]).u8() >= 0x37 {
+        size = size.wrapping_add(1).wrapping_add(4);
+    }
+    size
+}
+
+// Translated from 00821e40 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `MagicShaderHitEffect::SaveGame` (engine map; `thiscall`, `RET 8`): the
+/// base's save and `fAlphaTimer`; from save version 0x37 also
+/// `bWeaponEnchantment` and the worn object's form id (0 without one).
+pub fn magic_shader_hit_effect_save_game(
+    e: &mut Engine,
+    this: Ptr<MagicShaderHitEffect>,
+    first: u32,
+    second: u32,
+) {
+    let base = this.addr();
+    e.call(HIT_EFFECT_SAVE_GAME, &args![base, first, second]);
+    let save_load = e.mem.u32(SAVE_LOAD_GAME);
+    e.call(SAVE_WRITE, &args![save_load, base.wrapping_add(0x34), 4u32]);
+    let save_load = e.mem.u32(SAVE_LOAD_GAME);
+    if e.call(SAVE_VERSION, &args![save_load]).u8() < 0x37 {
+        return;
+    }
+    let save_load = e.mem.u32(SAVE_LOAD_GAME);
+    e.call(SAVE_WRITE, &args![save_load, base.wrapping_add(0x28), 1u32]);
+    e.with_stack(4, |e, id| {
+        e.mem.set_u32(id.addr(), 0);
+        if e.get(this, MagicShaderHitEffect::pWornObject) != 0 {
+            let worn = e.get(this, MagicShaderHitEffect::pWornObject);
+            let value = e.call(FORM_ID_0084E3A0, &args![worn]).u32();
+            e.mem.set_u32(id.addr(), value);
+        }
+        let save_load = e.mem.u32(SAVE_LOAD_GAME);
+        e.call(SAVE_NUMERIC_ID, &args![save_load, id, 4u32]);
+    });
+}
+
+// Translated from 00821ed0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `MagicShaderHitEffect::LoadGame` (engine map; `thiscall`, `RET 8`): the
+/// base's load and `fAlphaTimer`; from save version 0x37 also
+/// `bWeaponEnchantment` and the worn object (an id's form cast to
+/// `TESBoundObject`, kept only when the id is not 0).
+pub fn magic_shader_hit_effect_load_game(
+    e: &mut Engine,
+    this: Ptr<MagicShaderHitEffect>,
+    first: u32,
+    second: u32,
+) {
+    let base = this.addr();
+    e.call(HIT_EFFECT_LOAD_GAME, &args![base, first, second]);
+    let save_load = e.mem.u32(SAVE_LOAD_GAME);
+    e.call(LOAD_READ, &args![save_load, base.wrapping_add(0x34), 4u32]);
+    let save_load = e.mem.u32(SAVE_LOAD_GAME);
+    if e.call(SAVE_VERSION, &args![save_load]).u8() < 0x37 {
+        return;
+    }
+    let save_load = e.mem.u32(SAVE_LOAD_GAME);
+    e.call(LOAD_READ, &args![save_load, base.wrapping_add(0x28), 1u32]);
+    e.with_stack(4, |e, id| {
+        let save_load = e.mem.u32(SAVE_LOAD_GAME);
+        e.call(LOAD_NUMERIC_ID, &args![save_load, id, 4u32]);
+        let value = e.mem.u32(id.addr());
+        if value != 0 {
+            let form = e.call(LOOKUP_FORM_004839C0, &args![value]).u32();
+            let worn = e
+                .call(
+                    RT_DYNAMIC_CAST,
+                    &args![form, 0u32, TYPE_TES_FORM, RTTI_01183108, 0u32],
+                )
+                .u32();
+            e.set(this, MagicShaderHitEffect::pWornObject, worn);
+        }
+    });
+}
+
+// Translated from 00821f70 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `MagicShaderHitEffect::FinishInitLoadGame` (engine map; `thiscall`,
+/// `RET 0xC`: the active effect, the reference, a shader): the base's
+/// (`008d05e0` with the two words and 0); `pEffectData` becomes the effect
+/// setting's shader (`MagicItem::GetAVEffect(0)` of the active effect's
+/// item, its `00407820`) or the third word; slot +0xC4 runs with `fAge` and
+/// `bFinished` kept, then slot +0x94 with 0.0.
+pub fn magic_shader_hit_effect_finish_init_load_game(
+    e: &mut Engine,
+    this: Ptr<MagicShaderHitEffect>,
+    effect: u32,
+    reference: u32,
+    shader: u32,
+) {
+    let base = this.addr();
+    e.call(
+        HIT_EFFECT_FINISH_INIT_LOAD_GAME,
+        &args![base, effect, reference, 0u32],
+    );
+    if effect != 0 {
+        let item = e.call(WORD_AT_8_0044DDC0, &args![effect]).u32();
+        let setting = e.call(MAGIC_ITEM_GET_AV_EFFECT, &args![item, 0u32]).u32();
+        let found = e.call(WORD_AT_78_00407820, &args![setting]).u32();
+        e.set(this, MagicShaderHitEffect::pEffectData, found);
+    } else {
+        e.set(this, MagicShaderHitEffect::pEffectData, shader);
+    }
+    let age = x87_quiet_bits(e.get(this, MagicShaderHitEffect::fAge));
+    let finished = e.get(this, MagicShaderHitEffect::bFinished);
+    e.vcall(base, 0xc4, &[]);
+    e.set(this, MagicShaderHitEffect::fAge, x87_quiet_bits(age));
+    e.set(this, MagicShaderHitEffect::bFinished, finished);
+    e.vcall(base, 0x94, &args![0u32]);
+}
+
+// Translated from 00822010 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `MagicShaderHitEffect::CheckShouldSave` (engine map; `thiscall`): true
+/// only without an active effect, with a target and a shader, not a weapon
+/// enchantment, and when the shader is not `0080d0d0`'s.
+pub fn magic_shader_hit_effect_check_should_save(
+    e: &mut Engine,
+    this: Ptr<MagicShaderHitEffect>,
+) -> u8 {
+    if e.mem.u32(this.addr().wrapping_add(0x18)) != 0 {
+        return 0;
+    }
+    if e.get(this, MagicShaderHitEffect::pTarget) == 0
+        || e.get(this, MagicShaderHitEffect::pEffectData) == 0
+        || e.get(this, MagicShaderHitEffect::bWeaponEnchantment) != 0
+    {
+        return 0;
+    }
+    let skipped = e.call(SKIPPED_SHADER_0080D0D0, &[]).u32();
+    u8::from(e.get(this, MagicShaderHitEffect::pEffectData) != skipped)
+}
+
+// Translated from 00822060 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `MagicShaderHitEffect::GetSaveSize_ov2` (engine map; `thiscall`): 8 plus
+/// this effect's slot +0xD0 with (0, target) (16-bit sums).
+pub fn magic_shader_hit_effect_get_save_size_ov2(
+    e: &mut Engine,
+    this: Ptr<MagicShaderHitEffect>,
+) -> u16 {
+    let size: u16 = 4u16.wrapping_add(4);
+    let target = e.get(this, MagicShaderHitEffect::pTarget);
+    let more = e.vcall(this.addr(), 0xd0, &args![0u32, target]).u16();
+    size.wrapping_add(more)
+}
+
+// Translated from 008220c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `MagicShaderHitEffect::SaveGame_ov2` (engine map; `thiscall`): the
+/// target's and the shader's ids (`0084e3a0`) through
+/// `TESSaveLoadGame::SaveNumericID`, then slot +0xD4 with (0, target).
+pub fn magic_shader_hit_effect_save_game_ov2(e: &mut Engine, this: Ptr<MagicShaderHitEffect>) {
+    e.with_stack(8, |e, frame| {
+        // `[EBP-4]` and `[EBP-8]`.
+        let target_id = frame.addr().wrapping_add(4);
+        let shader_id = frame.addr();
+        let target = e.get(this, MagicShaderHitEffect::pTarget);
+        let id = e.call(FORM_ID_0084E3A0, &args![target]).u32();
+        e.mem.set_u32(target_id, id);
+        let save_load = e.mem.u32(SAVE_LOAD_GAME);
+        e.call(SAVE_NUMERIC_ID, &args![save_load, target_id, 4u32]);
+        let shader = e.get(this, MagicShaderHitEffect::pEffectData);
+        let id = e.call(FORM_ID_0084E3A0, &args![shader]).u32();
+        e.mem.set_u32(shader_id, id);
+        let save_load = e.mem.u32(SAVE_LOAD_GAME);
+        e.call(SAVE_NUMERIC_ID, &args![save_load, shader_id, 4u32]);
+    });
+    let target = e.get(this, MagicShaderHitEffect::pTarget);
+    e.vcall(this.addr(), 0xd4, &args![0u32, target]);
+}
+
+// Translated from 00822130 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `MagicShaderHitEffect::LoadGame_ov2` (engine map; `thiscall`; answers a
+/// byte): reads the target's id (a `TESObjectREFR`) and the shader's id (a
+/// `TESEffectShader`); the answer is true when the target has a cell that
+/// passes `00450ff0` and the shader was found. Slot +0xD8 runs with (0,
+/// target), and when the answer is true slots +0xDC with (0, target) and
+/// +0xE0 with (0, target, shader).
+pub fn magic_shader_hit_effect_load_game_ov2(
+    e: &mut Engine,
+    this: Ptr<MagicShaderHitEffect>,
+) -> u8 {
+    let base = this.addr();
+    e.with_stack(0x10, |e, frame| {
+        // `[EBP-8]` (the target's id) and `[EBP-0x10]` (the shader's id).
+        let target_id = frame.addr().wrapping_add(8);
+        let shader_id = frame.addr();
+        let mut loaded = 1u8;
+        let save_load = e.mem.u32(SAVE_LOAD_GAME);
+        e.call(LOAD_NUMERIC_ID, &args![save_load, target_id, 4u32]);
+        let id = e.mem.u32(target_id);
+        let form = e.call(LOOKUP_FORM_004839C0, &args![id]).u32();
+        let target = e
+            .call(
+                RT_DYNAMIC_CAST,
+                &args![form, 0u32, TYPE_TES_FORM, RTTI_011841CC, 0u32],
+            )
+            .u32();
+        e.set(this, MagicShaderHitEffect::pTarget, target);
+        let target = e.get(this, MagicShaderHitEffect::pTarget);
+        let good = target != 0 && e.call(REFERENCE_CELL_008D6F30, &args![target]).u32() != 0 && {
+            let target = e.get(this, MagicShaderHitEffect::pTarget);
+            let cell = e.call(REFERENCE_CELL_008D6F30, &args![target]).u32();
+            e.call(CELL_TEST_00450FF0, &args![cell]).bool()
+        };
+        if !good {
+            loaded = 0;
+        }
+        let save_load = e.mem.u32(SAVE_LOAD_GAME);
+        e.call(LOAD_NUMERIC_ID, &args![save_load, shader_id, 4u32]);
+        let id = e.mem.u32(shader_id);
+        let form = e.call(LOOKUP_FORM_004839C0, &args![id]).u32();
+        let shader = e
+            .call(
+                RT_DYNAMIC_CAST,
+                &args![form, 0u32, TYPE_TES_FORM, TYPE_TES_EFFECT_SHADER, 0u32],
+            )
+            .u32();
+        if shader == 0 {
+            loaded = 0;
+        }
+        let target = e.get(this, MagicShaderHitEffect::pTarget);
+        e.vcall(base, 0xd8, &args![0u32, target]);
+        if loaded != 0 {
+            let target = e.get(this, MagicShaderHitEffect::pTarget);
+            e.vcall(base, 0xdc, &args![0u32, target]);
+            let target = e.get(this, MagicShaderHitEffect::pTarget);
+            e.vcall(base, 0xe0, &args![0u32, target, shader]);
+        }
+        loaded
+    })
+}
+
+// Translated from 00822250 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `MagicShaderHitEffect::SaveGame_ov3` (engine map; `thiscall`, `RET 4`:
+/// the save buffer): the base's save, then `bWeaponEnchantment`,
+/// `fAlphaTimer`, `fAddonAlpha`, `fAddonScale`, `b3rdPerson` (`00865e50`
+/// with their sizes and 0) and the worn object's and the shader's form ids
+/// (`SaveFormID_ov2` with 0).
+pub fn magic_shader_hit_effect_save_game_ov3(
+    e: &mut Engine,
+    this: Ptr<MagicShaderHitEffect>,
+    buffer: u32,
+) {
+    let base = this.addr();
+    e.call(HIT_EFFECT_SAVE_GAME_OV2, &args![base, buffer]);
+    for (offset, size) in [(0x28u32, 1u32), (0x34, 4), (0x60, 4), (0x64, 4), (0x4c, 1)] {
+        e.call(
+            BUFFER_WRITE_00865E50,
+            &args![buffer, base.wrapping_add(offset), size, 0u32],
+        );
+    }
+    let worn = e.get(this, MagicShaderHitEffect::pWornObject);
+    e.call(BUFFER_SAVE_FORM_ID, &args![buffer, worn, 0u32]);
+    let shader = e.get(this, MagicShaderHitEffect::pEffectData);
+    e.call(BUFFER_SAVE_FORM_ID, &args![buffer, shader, 0u32]);
+}
+
+// Translated from 008222f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `MagicShaderHitEffect::LoadGame_ov3` (engine map; `thiscall`, `RET 4`:
+/// the load buffer): the base's load, `bWeaponEnchantment`,
+/// `fAlphaTimer`, from buffer version 8 (its slot 0) `fAddonAlpha` and
+/// `fAddonScale`, `b3rdPerson`, then the worn object (a `TESBoundObject`)
+/// and the shader (a `TESEffectShader`) from their form ids.
+pub fn magic_shader_hit_effect_load_game_ov3(
+    e: &mut Engine,
+    this: Ptr<MagicShaderHitEffect>,
+    buffer: u32,
+) {
+    let base = this.addr();
+    e.call(HIT_EFFECT_LOAD_GAME_OV2, &args![base, buffer]);
+    e.call(
+        BUFFER_READ_00864980,
+        &args![buffer, base.wrapping_add(0x28), 1u32],
+    );
+    e.call(
+        BUFFER_READ_00864980,
+        &args![buffer, base.wrapping_add(0x34), 4u32],
+    );
+    if e.vcall(buffer, 0, &[]).u8() >= 8 {
+        e.call(
+            BUFFER_READ_00864980,
+            &args![buffer, base.wrapping_add(0x60), 4u32],
+        );
+        e.call(
+            BUFFER_READ_00864980,
+            &args![buffer, base.wrapping_add(0x64), 4u32],
+        );
+    }
+    e.call(
+        BUFFER_READ_00864980,
+        &args![buffer, base.wrapping_add(0x4c), 1u32],
+    );
+    let id = e.call(BUFFER_LOAD_FORM_ID, &args![buffer]).u32();
+    let form = e.call(LOOKUP_FORM_004839C0, &args![id]).u32();
+    let worn = e
+        .call(
+            RT_DYNAMIC_CAST,
+            &args![form, 0u32, TYPE_TES_FORM, RTTI_01183108, 0u32],
+        )
+        .u32();
+    e.set(this, MagicShaderHitEffect::pWornObject, worn);
+    let id = e.call(BUFFER_LOAD_FORM_ID, &args![buffer]).u32();
+    let form = e.call(LOOKUP_FORM_004839C0, &args![id]).u32();
+    let shader = e
+        .call(
+            RT_DYNAMIC_CAST,
+            &args![form, 0u32, TYPE_TES_FORM, TYPE_TES_EFFECT_SHADER, 0u32],
+        )
+        .u32();
+    e.set(this, MagicShaderHitEffect::pEffectData, shader);
+}
+
+// Translated from 008223d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `MagicShaderHitEffect::FinishLoadGame` (engine map; `thiscall`, `RET 4`:
+/// the load buffer): the base's (`009dace0`), slot +0xC4 with `fAge` and
+/// `bFinished` kept, then slot +0x94 with 0.0.
+pub fn magic_shader_hit_effect_finish_load_game(
+    e: &mut Engine,
+    this: Ptr<MagicShaderHitEffect>,
+    buffer: u32,
+) {
+    let base = this.addr();
+    e.call(HIT_EFFECT_FINISH_LOAD_GAME, &args![base, buffer]);
+    let age = x87_quiet_bits(e.get(this, MagicShaderHitEffect::fAge));
+    let finished = e.get(this, MagicShaderHitEffect::bFinished);
+    e.vcall(base, 0xc4, &[]);
+    e.set(this, MagicShaderHitEffect::fAge, x87_quiet_bits(age));
+    e.set(this, MagicShaderHitEffect::bFinished, finished);
+    e.vcall(base, 0x94, &args![0u32]);
+}
+
+// Translated from 00822440 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The weighted random's constructor (`thiscall`; its use in `0081fc70`):
+/// the string array base ([`fn_00822600`]), the weights at +0x10
+/// (`00438660`) and the word +0x20 cleared. Returns `this`.
+// Translation incomplete: 00822440 - the FS:[0] exception frame (unwinding the base on a throw) is not translated
+pub fn fn_00822440(e: &mut Engine, this: Ptr) -> Ptr {
+    fn_00822600(e, this);
+    e.call(
+        WEIGHTS_CONSTRUCT_00438660,
+        &args![this.addr().wrapping_add(0x10)],
+    );
+    e.mem.set_u32(this.addr().wrapping_add(0x20), 0);
+    this
+}
+
+// Translated from 008224b0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The weighted random's destructor (`thiscall`): the weights at +0x10
+/// (`00438690`), then the string array base ([`fn_00822630`]).
+// Translation incomplete: 008224b0 - the FS:[0] exception frame (unwinding the base on a throw) is not translated
+pub fn fn_008224b0(e: &mut Engine, this: Ptr) {
+    e.call(
+        WEIGHTS_DESTRUCT_00438690,
+        &args![this.addr().wrapping_add(0x10)],
+    );
+    fn_00822630(e, this);
+}
+
+// Translated from 00822650 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The weighted random's pick (`thiscall`): a roll (`005a00a0` with the
+/// word +0x20) walks the weights (+0x10's items, `006a7ad0`) taking each
+/// away until one is above what is left; that index's string (`006a7ad0`
+/// on `this`) is the answer, 0 when none is.
+pub fn fn_00822650(e: &mut Engine, this: Ptr) -> u32 {
+    let base = this.addr();
+    let mut result = 0;
+    let mut found = false;
+    let total = e.mem.u32(base.wrapping_add(0x20));
+    let mut left = e.call(ROLL_005A00A0, &args![total]).u32();
+    let mut index = 0u32;
+    loop {
+        let count = e.call(WORD_AT_8_0044DDC0, &args![base]).u32();
+        if index >= count || found {
+            break;
+        }
+        let weight = e
+            .call(ARRAY_AT_006A7AD0, &args![base.wrapping_add(0x10), index])
+            .u32();
+        if left < e.mem.u32(weight) {
+            let entry = e.call(ARRAY_AT_006A7AD0, &args![base, index]).u32();
+            result = e.mem.u32(entry);
+            found = true;
+        }
+        let weight = e
+            .call(ARRAY_AT_006A7AD0, &args![base.wrapping_add(0x10), index])
+            .u32();
+        left = left.wrapping_sub(e.mem.u32(weight));
+        index = index.wrapping_add(1);
+    }
+    result
+}
+
+/// A scalar deleting destructor: `destroy`, then the free (`00401030`) of
+/// `this` when bit 0 of the flags is set.
+fn scalar_deleting(e: &mut Engine, this: Ptr, flags: u32, destroy: fn(&mut Engine, Ptr)) -> Ptr {
+    destroy(e, this);
+    if flags & 1 != 0 {
+        e.call(FREE_00401030, &args![this]);
+    }
+    this
+}
+
+// Translated from 008226f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSSimpleArray<NiPointer<ParticleShaderProperty>,1024>`'s scalar
+/// deleting destructor (engine map; `thiscall`, `RET 4`): the destructor
+/// ([`bs_simple_array_particle_shader_property_destructor`]) and the free
+/// with bit 0. Returns `this`.
+pub fn bs_simple_array_particle_shader_property_scalar_deleting_destructor(
+    e: &mut Engine,
+    this: Ptr,
+    flags: u32,
+) -> Ptr {
+    scalar_deleting(
+        e,
+        this,
+        flags,
+        bs_simple_array_particle_shader_property_destructor,
+    )
+}
+
+// Translated from 00822720 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSSimpleArray<NiPointer<NiAVObject>,1024>`'s scalar deleting destructor
+/// (engine map; `thiscall`, `RET 4`): the destructor
+/// ([`bs_simple_array_ni_av_object_destructor`]) and the free with bit 0.
+/// Returns `this`.
+pub fn bs_simple_array_ni_av_object_scalar_deleting_destructor(
+    e: &mut Engine,
+    this: Ptr,
+    flags: u32,
+) -> Ptr {
+    scalar_deleting(e, this, flags, bs_simple_array_ni_av_object_destructor)
+}
+
+// Translated from 00822750 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSSimpleArray<char *,1024>`'s scalar deleting destructor (engine map;
+/// `thiscall`, `RET 4`): the destructor ([`fn_00822630`]) and the free with
+/// bit 0. Returns `this`.
+pub fn bs_simple_array_char_scalar_deleting_destructor(
+    e: &mut Engine,
+    this: Ptr,
+    flags: u32,
+) -> Ptr {
+    scalar_deleting(e, this, flags, fn_00822630)
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -1318,6 +2598,97 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         ),
         entry!(0x00822600, fn_00822600(Ptr) -> Ptr),
         entry!(0x008225d0, fn_008225d0(Ptr, u32) -> u32),
+        entry!(
+            0x0081_d390,
+            magic_shader_hit_effect_init_load_game(Ptr, u32, u32)
+        ),
+        entry!(
+            0x0081_f580,
+            fn_0081f580(Ptr<MagicShaderHitEffect>, u32, u32, f32) -> Ptr<MagicShaderHitEffect>
+        ),
+        entry!(0x0082_0b50, fn_00820b50(Ptr) -> u32),
+        entry!(0x0082_0b70, fn_00820b70(Ptr, f32)),
+        entry!(0x0082_0b90, fn_00820b90(Ptr)),
+        entry!(0x0082_0bb0, fn_00820bb0(Ptr)),
+        entry!(0x0082_0bd0, fn_00820bd0(Ptr, u8)),
+        entry!(0x0082_0bf0, fn_00820bf0(Ptr) -> u32),
+        entry!(
+            0x0082_0f30,
+            magic_shader_hit_effect_update(Ptr<MagicShaderHitEffect>, f32) -> u8
+        ),
+        entry!(0x0082_1620, fn_00821620(Ptr, f32)),
+        entry!(0x0082_16a0, fn_008216a0(Ptr) -> f32),
+        entry!(
+            0x0082_16c0,
+            magic_shader_hit_effect_reset_alpha_timer(Ptr<MagicShaderHitEffect>)
+        ),
+        entry!(
+            0x0082_17e0,
+            magic_shader_hit_effect_update_position(Ptr<MagicShaderHitEffect>)
+        ),
+        entry!(
+            0x0082_1bd0,
+            magic_shader_hit_effect_clear_target(Ptr<MagicShaderHitEffect>)
+        ),
+        entry!(
+            0x0082_1dd0,
+            magic_shader_hit_effect_get_save_size(Ptr, u32, u32) -> u16
+        ),
+        entry!(
+            0x0082_1e40,
+            magic_shader_hit_effect_save_game(Ptr<MagicShaderHitEffect>, u32, u32)
+        ),
+        entry!(
+            0x0082_1ed0,
+            magic_shader_hit_effect_load_game(Ptr<MagicShaderHitEffect>, u32, u32)
+        ),
+        entry!(
+            0x0082_1f70,
+            magic_shader_hit_effect_finish_init_load_game(Ptr<MagicShaderHitEffect>, u32, u32, u32)
+        ),
+        entry!(
+            0x0082_2010,
+            magic_shader_hit_effect_check_should_save(Ptr<MagicShaderHitEffect>) -> u8
+        ),
+        entry!(
+            0x0082_2060,
+            magic_shader_hit_effect_get_save_size_ov2(Ptr<MagicShaderHitEffect>) -> u16
+        ),
+        entry!(
+            0x0082_20c0,
+            magic_shader_hit_effect_save_game_ov2(Ptr<MagicShaderHitEffect>)
+        ),
+        entry!(
+            0x0082_2130,
+            magic_shader_hit_effect_load_game_ov2(Ptr<MagicShaderHitEffect>) -> u8
+        ),
+        entry!(
+            0x0082_2250,
+            magic_shader_hit_effect_save_game_ov3(Ptr<MagicShaderHitEffect>, u32)
+        ),
+        entry!(
+            0x0082_22f0,
+            magic_shader_hit_effect_load_game_ov3(Ptr<MagicShaderHitEffect>, u32)
+        ),
+        entry!(
+            0x0082_23d0,
+            magic_shader_hit_effect_finish_load_game(Ptr<MagicShaderHitEffect>, u32)
+        ),
+        entry!(0x0082_2440, fn_00822440(Ptr) -> Ptr),
+        entry!(0x0082_24b0, fn_008224b0(Ptr)),
+        entry!(0x0082_2650, fn_00822650(Ptr) -> u32),
+        entry!(
+            0x0082_26f0,
+            bs_simple_array_particle_shader_property_scalar_deleting_destructor(Ptr, u32) -> Ptr
+        ),
+        entry!(
+            0x0082_2720,
+            bs_simple_array_ni_av_object_scalar_deleting_destructor(Ptr, u32) -> Ptr
+        ),
+        entry!(
+            0x0082_2750,
+            bs_simple_array_char_scalar_deleting_destructor(Ptr, u32) -> Ptr
+        ),
     ]
 }
 
@@ -2014,5 +3385,889 @@ mod hit_effect_tests {
         assert_eq!(e.mem.f32(this + 0x60), 0.0);
         assert_eq!(e.mem.u32(this + 0x50 + 8), 1);
         assert_eq!(calls(&e, START_ANIMATIONS), vec![vec![0x7b00]]);
+    }
+}
+
+#[cfg(test)]
+mod tests_n048 {
+    use super::*;
+
+    type Log = Vec<(u32, Vec<u32>)>;
+
+    fn ret(eax: u32) -> Ret {
+        Ret {
+            eax,
+            ..Ret::default()
+        }
+    }
+
+    fn st0(value: f64) -> Ret {
+        Ret {
+            st0: value,
+            ..Ret::default()
+        }
+    }
+
+    fn calls(log: &Log, addr: u32) -> Vec<Vec<u32>> {
+        log.iter()
+            .filter(|(a, _)| *a == addr)
+            .map(|(_, w)| w.clone())
+            .collect()
+    }
+
+    fn zero(e: &mut Engine, addrs: &[u32]) {
+        for addr in addrs {
+            e.register(*addr, |_, _| Ret::default());
+        }
+    }
+
+    fn run(e: &mut Engine, addr: u32, words: &[u32]) -> (Ret, Log) {
+        e.call_log = Some(vec![]);
+        let r = e.call(addr, words);
+        (r, e.call_log.take().unwrap())
+    }
+
+    /// An object whose vtable sends each listed slot to `code + slot`, a
+    /// double answering the paired word.
+    fn object(e: &mut Engine, code: u32, slots: &[(u32, u32)]) -> u32 {
+        let size = slots.iter().map(|s| s.0).max().unwrap_or(0) + 4;
+        let vtable = e.mem.alloc(size);
+        for &(slot, answer) in slots {
+            e.mem.set_u32(vtable + slot, code + slot);
+            e.register_double(code + slot, move |_, _| ret(answer));
+        }
+        let object = e.mem.alloc(0x700);
+        e.mem.set_u32(object, vtable);
+        object
+    }
+
+    const EFFECT: u32 = 0x0300_0000;
+    const TARGET: u32 = 0x0310_0000;
+    const PROCESS: u32 = 0x0320_0000;
+    const ADDON: u32 = 0x0330_0000;
+    const ATTACH: u32 = 0x0340_0000;
+    const BUFFER: u32 = 0x0350_0000;
+
+    /// `NiPointer`s holding their object in their first word, the arrays
+    /// as `[count at +8, item i at items + 4 i]` (`0044ddc0`, `006a7ad0`),
+    /// the globals mapped.
+    fn rig(e: &mut Engine) {
+        e.register(WORD_AT_0_00559450, |e, a| ret(e.mem.u32(a[0])));
+        e.register(NI_POINTER_ASSIGN_0066B0D0, |e, a| {
+            e.mem.set_u32(a[0], a[1]);
+            Ret::default()
+        });
+        e.register(WORD_AT_8_0044DDC0, |e, a| ret(e.mem.u32(a[0] + 8)));
+        e.register(
+            ARRAY_AT_006A7AD0,
+            |e, a| ret(e.mem.u32(a[0] + 4) + 4 * a[1]),
+        );
+        e.register(WORD_DIFFERS_0052AA80, |e, a| {
+            ret(u32::from(e.mem.u32(a[0]) != a[1]))
+        });
+        for addr in [PLAYER, SAVE_LOAD_GAME] {
+            e.map(addr, 4);
+        }
+        e.mem.set_u32(SAVE_LOAD_GAME, 0x5a1d);
+        for (addr, value) in [
+            (ZERO_01012060, 0.0f64),
+            (ALPHA_LIMIT_0106D508, 0.99),
+            (MINUS_ONE_DOUBLE, -1.0),
+        ] {
+            e.map(addr, 8);
+            e.set_global::<f64>(addr, value);
+        }
+        for (addr, bits) in [
+            (LONGEST_LIFETIME, f32::MAX.to_bits()),
+            (LOWER_ALPHA_0106682C, 0.99f32.to_bits()),
+            (ADDON_SCALE_01013EA4, 0.01f32.to_bits()),
+        ] {
+            e.map(addr, 4);
+            e.set_global::<u32>(addr, bits);
+        }
+    }
+
+    /// Fills the array at `this + array` with the words (each slot an
+    /// `NiPointer` holding its item).
+    fn word_array(e: &mut Engine, this: u32, array: u32, words: &[u32]) {
+        let buffer = e.mem.alloc(4 * words.len() as u32 + 4);
+        for (i, word) in words.iter().enumerate() {
+            e.mem.set_u32(buffer + 4 * i as u32, *word);
+        }
+        e.mem.set_u32(this + array + 4, buffer);
+        e.mem.set_u32(this + array + 8, words.len() as u32);
+    }
+
+    fn effect(e: &mut Engine, slots: &[(u32, u32)]) -> Ptr<MagicShaderHitEffect> {
+        Ptr::new(object(e, EFFECT, slots))
+    }
+
+    #[test]
+    fn init_load_game_forwards() {
+        let mut e = Engine::new();
+        zero(&mut e, &[HIT_EFFECT_INIT_LOAD_GAME]);
+        let (_, log) = run(&mut e, 0x0081_d390, &args![0x10u32, 0x20u32, 0x30u32]);
+        assert_eq!(
+            calls(&log, HIT_EFFECT_INIT_LOAD_GAME),
+            vec![vec![0x10, 0x20, 0x30]]
+        );
+    }
+
+    #[test]
+    fn second_constructor_takes_the_shader_and_lifetime() {
+        let mut e = Engine::new();
+        rig(&mut e);
+        zero(
+            &mut e,
+            &[
+                MAGIC_HIT_EFFECT_CONSTRUCTOR,
+                ARRAY_INIT_00822860,
+                NI_POINTER_FROM_00633C90,
+                MODEL_LOADER_LOAD_FILE,
+            ],
+        );
+        e.register(WORD_AT_10C_005A29B0, |_, _| ret(0));
+        let this = e.new_object::<MagicShaderHitEffect>();
+        e.mem.write(this.addr(), &[0xffu8; 0x6c]);
+        let (r, log) = run(
+            &mut e,
+            0x0081_f580,
+            &args![this, 0x7a7au32, 0x5aedu32, (-2.0f32).to_bits()],
+        );
+        assert_eq!(r.u32(), this.addr());
+        assert_eq!(
+            calls(&log, MAGIC_HIT_EFFECT_CONSTRUCTOR),
+            vec![vec![this.addr(), 0x7a7a, 0]]
+        );
+        assert_eq!(e.mem.u32(this.addr()), MAGIC_SHADER_HIT_EFFECT_VTABLE);
+        assert_eq!(e.get(this, MagicShaderHitEffect::pEffectData), 0x5aed);
+        assert_eq!(e.get(this, MagicShaderHitEffect::fAlphaTimer), 0);
+        assert_eq!(e.get(this, MagicShaderHitEffect::spParticleNode), 0);
+        assert_eq!(e.get(this, MagicShaderHitEffect::spTexEffectData), 0);
+        assert_eq!(e.get(this, MagicShaderHitEffect::bWeaponEnchantment), 0);
+        assert_eq!(e.get(this, MagicShaderHitEffect::pWornObject), 0);
+        assert_eq!(
+            e.get(this, MagicShaderHitEffect::fAddonAlpha),
+            1.0f32.to_bits()
+        );
+        assert_eq!(e.get(this, MagicShaderHitEffect::b3rdPerson), 0);
+        assert_eq!(e.mem.u32(this.addr() + 8), f32::MAX.to_bits());
+        assert_eq!(e.mem.u32(this.addr() + 0x38), PARTICLE_ARRAY_VTABLE);
+        assert_eq!(e.mem.u32(this.addr() + 0x50), OBJECT_ARRAY_VTABLE);
+        // The player's effect in third person; a positive lifetime kept.
+        e.mem.write(this.addr(), &[0u8; 0x6c]);
+        e.mem.set_u32(this.addr() + 0x1c, 0x7a7a);
+        e.mem.set_u32(PLAYER, 0x7a7a);
+        e.register(MAGIC_HIT_EFFECT_CONSTRUCTOR, |e, a| {
+            e.mem.set_u32(a[0] + 0x1c, a[1]);
+            Ret::default()
+        });
+        e.register(PLAYER_NODE_00950BB0, |_, _| ret(0x0de));
+        e.register(QUERY_00456610, |_, _| ret(0));
+        e.call(
+            0x0081_f580,
+            &args![this, 0x7a7au32, 0x5aedu32, 3.0f32.to_bits()],
+        );
+        assert_eq!(e.get(this, MagicShaderHitEffect::b3rdPerson), 1);
+        assert_eq!(e.mem.u32(this.addr() + 8), 3.0f32.to_bits());
+    }
+
+    #[test]
+    fn small_accessors() {
+        let mut e = Engine::new();
+        let this = e.mem.alloc(0x6a8);
+        assert_eq!(e.call(0x0082_0b50, &args![this]).u32(), this + 0x11c);
+        e.call(0x0082_0b70, &args![this, 0x7f80_0001u32]);
+        assert_eq!(e.mem.u32(this + 0x64), 2);
+        assert_eq!(e.mem.u32(this + 0x68), 0x7fc0_0001);
+        e.call(0x0082_0b90, &args![this]);
+        assert_eq!(e.mem.u32(this + 0x64), 1);
+        e.call(0x0082_0bb0, &args![this]);
+        assert_eq!(e.mem.u32(this + 0x64), 0);
+        e.call(0x0082_0bd0, &args![this, 0x1ffu32]);
+        assert_eq!(e.mem.u8(this + 0x6c), 0xff);
+        e.mem.set_u32(this + 0x6a4, 0xace);
+        assert_eq!(e.call(0x0082_0bf0, &args![this]).u32(), 0xace);
+        e.call(0x0082_1620, &args![this, 2.5f32.to_bits()]);
+        assert_eq!(e.mem.u32(this + 0x130), 2.5f32.to_bits());
+        e.mem.set_u32(this + 0x148, 4.0f32.to_bits());
+        assert_eq!(e.call(0x0082_16a0, &args![this]).f64(), 4.0);
+    }
+
+    /// An effect with a live target (`TARGET` slots), a shader and
+    /// `bFinished` set as given.
+    fn update_world(e: &mut Engine, actor: u32) -> (Ptr<MagicShaderHitEffect>, u32) {
+        rig(e);
+        let target = object(e, TARGET, &[(0x1d0, 0x0d0d), (0x100, actor), (0x420, 0)]);
+        e.register(TARGET + 0x420, |_, _| st0(2.0));
+        let this = effect(e, &[(0xc8, 0), (0xcc, 0)]);
+        e.set(this, MagicShaderHitEffect::pTarget, target);
+        e.set(this, MagicShaderHitEffect::pEffectData, 0x5aed);
+        e.register(HIT_EFFECT_UPDATE, |_, _| ret(1));
+        e.register(SKIPPED_SHADER_0080D0D0, |_, _| ret(0x5aed));
+        (this, target)
+    }
+
+    #[test]
+    fn update_answers_false_when_the_base_or_target_ends() {
+        let mut e = Engine::new();
+        let (this, _) = update_world(&mut e, 0);
+        e.register(HIT_EFFECT_UPDATE, |_, _| ret(0x100));
+        let (r, log) = run(&mut e, 0x0082_0f30, &args![this, 0.5f32.to_bits()]);
+        assert_eq!(r.u32(), 0);
+        assert_eq!(calls(&log, EFFECT + 0xc8), vec![vec![this.addr()]]);
+        assert!(calls(&log, EFFECT + 0xcc).is_empty());
+        e.register(HIT_EFFECT_UPDATE, |_, _| ret(1));
+        e.register(TARGET + 0x1d0, |_, _| ret(0));
+        let (r, _) = run(&mut e, 0x0082_0f30, &args![this, 0.5f32.to_bits()]);
+        assert_eq!(r.u32(), 0);
+    }
+
+    #[test]
+    fn update_steps_particles_addons_and_texture() {
+        let mut e = Engine::new();
+        let (this, target) = update_world(&mut e, 1);
+        let base = this.addr();
+        e.register(SKIPPED_SHADER_0080D0D0, |_, _| ret(0));
+        e.set(this, MagicShaderHitEffect::fAlphaTimer, 1.0f32.to_bits());
+        e.set(this, MagicShaderHitEffect::fAddonAlpha, 0.25f32.to_bits());
+        e.set(this, MagicShaderHitEffect::fAddonScale, 0.5f32.to_bits());
+        // A texture effect whose +0x6C object is set, a target at alpha 1.
+        let texture = e.mem.alloc(0x70);
+        e.mem.set_u32(texture + 0x6c, 0x0b0b);
+        e.mem.set_u32(texture + 0x18, 2.0f32.to_bits());
+        e.mem.set_u32(texture + 0x28, 3.0f32.to_bits());
+        e.set(this, MagicShaderHitEffect::spTexEffectData, texture);
+        e.register(ACTOR_GET_ALPHA_MULT, |_, _| st0(1.0));
+        zero(
+            &mut e,
+            &[
+                ACTOR_SET_ALPHA_MULT,
+                ACTOR_UPDATE_ALPHA,
+                SHADER_TEXTURE_UPDATE_00507E30,
+                UPDATE_PARTICLES,
+                RECURSIVE_SET_PROPERTY_FADE_ALPHA,
+                SET_SCALE_00440490,
+            ],
+        );
+        e.register(NODE_TEST_0043B300, |_, _| ret(0));
+        // Particles: one property with rate 2, step 3.
+        e.set(this, MagicShaderHitEffect::spParticleNode, 0x9a9e);
+        let property = e.mem.alloc(0x150);
+        word_array(&mut e, base, PARTICLE_PROPERTY_ARRAY, &[property]);
+        e.register(PARTICLE_RATE_006A78F0, |_, _| st0(2.0));
+        e.register(PARTICLE_STEP_00BA52D0, |_, _| ret(3));
+        e.register(SHADER_PARTICLES_00507DA0, |_, _| st0(1.5));
+        e.register(MIN_0040EBD0, |_, a| {
+            let (x, y) = (f32::from_bits(a[0]), f32::from_bits(a[1]));
+            st0(f64::from(if x < y { x } else { y }))
+        });
+        e.register(FLOAT_HELPER_00404010, |_, a| {
+            let (x, y) = (f32::from_bits(a[0]), f32::from_bits(a[1]));
+            st0(f64::from(if x > y { x } else { y }))
+        });
+        e.register(PARTICLE_LIVE_004FD380, |_, _| ret(0));
+        // Add-ons: one object, fade times 4 (in) and 8.
+        let addon = object(&mut e, ADDON, &[(0xc, 0x4e0d)]);
+        word_array(&mut e, base, ADD_ON_OBJECTS, &[addon]);
+        let shader = e.mem.alloc(0x150);
+        e.mem.set_u32(shader + 0x134, 4.0f32.to_bits());
+        e.set(this, MagicShaderHitEffect::pEffectData, shader);
+        e.register(SHADER_FADE_IN_008133B0, |_, _| st0(8.0));
+        e.register(SHADER_VALUE_00567470, |_, _| st0(0.5));
+        let (r, log) = run(&mut e, 0x0082_0f30, &args![this, 0.5f32.to_bits()]);
+        assert_eq!(r.u32(), 1);
+        assert_eq!(
+            e.get(this, MagicShaderHitEffect::fAlphaTimer),
+            1.5f32.to_bits()
+        );
+        // Alpha 1.0 above 0.99: lowered.
+        assert_eq!(
+            calls(&log, ACTOR_SET_ALPHA_MULT),
+            vec![vec![target, 0.99f32.to_bits()]]
+        );
+        // Total rate 3 * 2 = 6.
+        let stepped = calls(&log, SHADER_PARTICLES_00507DA0);
+        assert_eq!(
+            stepped,
+            vec![vec![
+                shader,
+                6.0f32.to_bits(),
+                0.5f32.to_bits(),
+                1.5f32.to_bits(),
+                0
+            ]]
+        );
+        // min(1.5, 3) = 1.5 shared by 3: 0.5.
+        assert_eq!(e.mem.u32(property + 0x78), 0.5f32.to_bits());
+        // The scale: slot +0x420's 2.0 over alpha 1.0.
+        assert_eq!(e.mem.u32(property + 0x130), 2.0f32.to_bits());
+        assert_eq!(
+            calls(&log, UPDATE_PARTICLES),
+            vec![vec![property, 1.5f32.to_bits(), 0, 1]]
+        );
+        // Add-on alpha 0.25 + 0.5 / 4 = 0.375, scale 0.5 + 0.5 / 8 = 0.5625.
+        assert_eq!(
+            e.get(this, MagicShaderHitEffect::fAddonAlpha),
+            0.375f32.to_bits()
+        );
+        assert_eq!(
+            e.get(this, MagicShaderHitEffect::fAddonScale),
+            0.5625f32.to_bits()
+        );
+        assert_eq!(
+            calls(&log, RECURSIVE_SET_PROPERTY_FADE_ALPHA),
+            vec![vec![0x4e0d, 0.375f32.to_bits()]]
+        );
+        // Size (1 - 0.5) * 0.5625 + 0.5.
+        assert_eq!(
+            calls(&log, SET_SCALE_00440490),
+            vec![vec![addon, 0.78125f32.to_bits()]]
+        );
+        assert_eq!(
+            calls(&log, SHADER_TEXTURE_UPDATE_00507E30),
+            vec![vec![
+                shader,
+                texture,
+                0.5f32.to_bits(),
+                1.5f32.to_bits(),
+                0,
+                0
+            ]]
+        );
+        assert_eq!(e.mem.u32(texture + 0x18), 4.0f32.to_bits());
+        assert_eq!(e.mem.u32(texture + 0x28), 6.0f32.to_bits());
+    }
+
+    #[test]
+    fn update_releases_a_finished_effect() {
+        let mut e = Engine::new();
+        let (this, target) = update_world(&mut e, 1);
+        e.set(this, MagicShaderHitEffect::bFinished, 1);
+        let process = object(&mut e, PROCESS, &[(0x580, 0)]);
+        e.register_double(SAVED_ACQUIRE_OBJECT_008D8520, move |_, _| ret(process));
+        let (r, log) = run(&mut e, 0x0082_0f30, &args![this, 0.5f32.to_bits()]);
+        assert_eq!(r.u32(), 0);
+        assert_eq!(calls(&log, PROCESS + 0x580), vec![vec![process, 1, 1, 0]]);
+        assert_eq!(calls(&log, EFFECT + 0xc8), vec![vec![this.addr()]]);
+        assert_eq!(calls(&log, SAVED_ACQUIRE_OBJECT_008D8520)[0], vec![target]);
+        // A texture alpha still above 0 keeps it.
+        let texture = e.mem.alloc(0x70);
+        e.mem.set_u32(texture + 0x38, 0.5f32.to_bits());
+        e.set(this, MagicShaderHitEffect::spTexEffectData, texture);
+        zero(&mut e, &[SHADER_TEXTURE_UPDATE_00507E30]);
+        let (r, log) = run(&mut e, 0x0082_0f30, &args![this, 0.5f32.to_bits()]);
+        assert_eq!(r.u32(), 1);
+        assert!(calls(&log, PROCESS + 0x580).is_empty());
+    }
+
+    #[test]
+    fn reset_alpha_timer_scales_the_shader_time() {
+        let mut e = Engine::new();
+        rig(&mut e);
+        let this = effect(&mut e, &[]);
+        let base = this.addr();
+        let texture = e.mem.alloc(0x50);
+        e.mem.set_u32(texture + 0x38, 0.25f32.to_bits());
+        e.mem.set_u32(texture + 0x48, 0.5f32.to_bits());
+        e.set(this, MagicShaderHitEffect::spTexEffectData, texture);
+        e.register(FLOAT_HELPER_00404010, |_, a| {
+            let (x, y) = (f32::from_bits(a[0]), f32::from_bits(a[1]));
+            st0(f64::from(if x > y { x } else { y }))
+        });
+        e.register(SHADER_TIME_009A7C40, |_, _| st0(1.0));
+        e.register(SHADER_TIME_00759450, |_, _| st0(8.0));
+        let property = e.mem.alloc(4);
+        word_array(&mut e, base, PARTICLE_PROPERTY_ARRAY, &[property]);
+        zero(&mut e, &[PARTICLE_SET_TIME_00BA6CF0]);
+        let (_, log) = run(&mut e, 0x0082_16c0, &args![this]);
+        assert_eq!(
+            calls(&log, FLOAT_HELPER_00404010),
+            vec![vec![0.25f32.to_bits(), 0.5f32.to_bits()]]
+        );
+        assert_eq!(
+            e.get(this, MagicShaderHitEffect::fAlphaTimer),
+            4.0f32.to_bits()
+        );
+        assert_eq!(
+            calls(&log, PARTICLE_SET_TIME_00BA6CF0),
+            vec![vec![property, 4.0f32.to_bits()]]
+        );
+        // Alpha not below the full alpha: the time itself.
+        e.register(SHADER_TIME_009A7C40, |_, _| st0(0.5));
+        e.call(0x0082_16c0, &args![this]);
+        assert_eq!(
+            e.get(this, MagicShaderHitEffect::fAlphaTimer),
+            8.0f32.to_bits()
+        );
+        // A weapon enchantment clears the texture's alphas.
+        e.set(this, MagicShaderHitEffect::bWeaponEnchantment, 1);
+        e.register(SHADER_TIME_009A7C40, |_, _| st0(1.0));
+        e.call(0x0082_16c0, &args![this]);
+        assert_eq!(e.mem.u32(texture + 0x38), 0);
+        assert_eq!(e.mem.u32(texture + 0x48), 0);
+        assert_eq!(e.get(this, MagicShaderHitEffect::fAlphaTimer), 0);
+    }
+
+    fn position_world(e: &mut Engine) -> (Ptr<MagicShaderHitEffect>, u32) {
+        rig(e);
+        let node = e.mem.alloc(0x40);
+        let target = object(e, TARGET, &[(0x1d0, node)]);
+        let this = effect(e, &[]);
+        e.set(this, MagicShaderHitEffect::pTarget, target);
+        e.set(this, MagicShaderHitEffect::spParticleNode, 0x9a9e);
+        e.register_double(TARGET_00441110, move |_, _| ret(target));
+        e.register(CAMERA_POSITION_0045BB80, |_, a| ret(a[0] + 0x30));
+        zero(
+            e,
+            &[
+                SET_TRANSLATE_00440460,
+                NODE_SET_0043FA80,
+                HIT_EFFECT_0081BC70,
+                POINT_SET_0043D410,
+                SET_TRANSLATE_00A59C60,
+            ],
+        );
+        e.map(NODE_ARGUMENT_011A9448, 0x24);
+        for i in 0..9 {
+            e.mem.set_u32(NODE_ARGUMENT_011A9448 + 4 * i, 0x100 + i);
+        }
+        (this, node)
+    }
+
+    #[test]
+    fn update_position_places_the_particle_node() {
+        let mut e = Engine::new();
+        let (this, node) = position_world(&mut e);
+        let (_, log) = run(&mut e, 0x0082_17e0, &args![this]);
+        assert_eq!(
+            calls(&log, SET_TRANSLATE_00440460),
+            vec![vec![0x9a9e, node + 0x30]]
+        );
+        let rotation = calls(&log, NODE_SET_0043FA80)[0][1];
+        for i in 0..9 {
+            assert_eq!(e.mem.u32(rotation + 4 * i), 0x100 + i);
+        }
+        assert_eq!(
+            calls(&log, HIT_EFFECT_0081BC70),
+            vec![vec![this.addr(), 0x9a9e]]
+        );
+        // No particle node: only the hand-over.
+        e.set(this, MagicShaderHitEffect::spParticleNode, 0);
+        let (_, log) = run(&mut e, 0x0082_17e0, &args![this]);
+        assert!(calls(&log, SET_TRANSLATE_00440460).is_empty());
+        assert_eq!(calls(&log, HIT_EFFECT_0081BC70), vec![vec![this.addr(), 0]]);
+    }
+
+    #[test]
+    fn update_position_in_first_person() {
+        let mut e = Engine::new();
+        let (this, _) = position_world(&mut e);
+        let target = e.get(this, MagicShaderHitEffect::pTarget);
+        e.mem.set_u32(PLAYER, target);
+        let player_node = e.mem.alloc(0x40);
+        e.register_double(PLAYER_NODE_00950BB0, move |_, _| ret(player_node));
+        e.register(QUERY_00456610, |_, _| ret(1));
+        let attach = object(&mut e, ATTACH, &[(0xdc, 0)]);
+        e.register_double(NODE_LOOKUP_00653270, move |_, _| ret(attach));
+        e.register(WORD_AT_18_009611E0, |_, _| ret(0x9a7e));
+        e.register(NODE_ROTATION_00461130, |_, a| ret(a[0] + 0x10));
+        e.register(MATRIX_INVERSE, |_, a| ret(a[1]));
+        e.register(MATRIX_MULTIPLY, |_, a| ret(a[1]));
+        e.register(POINT_SUBTRACT_00439EF0, |_, a| ret(a[1]));
+        e.register(MATRIX_TIMES_POINT_004B4500, |_, a| ret(a[1]));
+        let (_, log) = run(&mut e, 0x0082_17e0, &args![this]);
+        assert_eq!(
+            calls(&log, NODE_LOOKUP_00653270),
+            vec![vec![NODE_LOOKUP_ARGUMENT_011F4428, player_node]]
+        );
+        assert_eq!(calls(&log, ATTACH + 0xdc), vec![vec![attach, 0x9a9e, 1]]);
+        assert_eq!(calls(&log, MATRIX_INVERSE)[0][0], 0x9a8e);
+        let product = calls(&log, MATRIX_MULTIPLY)[0].clone();
+        assert_eq!(
+            calls(&log, NODE_SET_0043FA80),
+            vec![vec![0x9a9e, product[1]]]
+        );
+        let offset = calls(&log, POINT_SUBTRACT_00439EF0)[0].clone();
+        assert_eq!(offset[0], player_node + 0x30);
+        assert_eq!(offset[2], 0x9a7e + 0x30);
+        let placed = calls(&log, MATRIX_TIMES_POINT_004B4500)[0].clone();
+        assert_eq!(placed[2], offset[1]);
+        assert_eq!(
+            calls(&log, SET_TRANSLATE_00440460),
+            vec![vec![0x9a9e, placed[1]]]
+        );
+        assert_eq!(calls(&log, SET_TRANSLATE_00A59C60).len(), 1);
+        assert_eq!(calls(&log, HIT_EFFECT_0081BC70), vec![vec![this.addr(), 0]]);
+        // The player's active effect: nothing placed.
+        e.mem.set_u32(target + 0x6a4, this.addr());
+        e.register(QUERY_00456610, |_, _| ret(0));
+        let (_, log) = run(&mut e, 0x0082_17e0, &args![this]);
+        assert!(calls(&log, SET_TRANSLATE_00440460).is_empty());
+        assert_eq!(calls(&log, HIT_EFFECT_0081BC70), vec![vec![this.addr(), 0]]);
+    }
+
+    #[test]
+    fn clear_target_stops_everything() {
+        let mut e = Engine::new();
+        rig(&mut e);
+        let node = e.mem.alloc(4);
+        let target = object(&mut e, TARGET, &[(0x1d0, node)]);
+        let this = effect(&mut e, &[]);
+        let base = this.addr();
+        e.set(this, MagicShaderHitEffect::pTarget, target);
+        e.set(this, MagicShaderHitEffect::pEffectData, 0x5aed);
+        e.set(this, MagicShaderHitEffect::spTexEffectData, 0x7e7e);
+        e.set(this, MagicShaderHitEffect::spParticleNode, 0x9a9e);
+        let property = e.mem.alloc(4);
+        word_array(&mut e, base, PARTICLE_PROPERTY_ARRAY, &[property]);
+        e.register(FORM_ID_0084E3A0, |_, _| ret(FIRE_SHADER_84A51));
+        e.register(BS_AUDIO_INSTANCE, |_, _| ret(0xa0d1));
+        zero(
+            &mut e,
+            &[
+                BS_AUDIO_STOP_MOVING_SOUNDS,
+                STOP_TEXTURE_SHADER,
+                STOP_PARTICLE_SHADER,
+                ARRAY_DESTRUCT_ITEMS_00822820,
+                ARRAY_FREE_BUFFER_006A8500,
+                ATTACH_PARENT_00A59D00,
+            ],
+        );
+        let (_, log) = run(&mut e, 0x0082_1bd0, &args![this]);
+        assert_eq!(
+            calls(&log, BS_AUDIO_STOP_MOVING_SOUNDS),
+            vec![vec![0xa0d1, node, 1.0f32.to_bits(), 0]]
+        );
+        assert_eq!(
+            calls(&log, STOP_TEXTURE_SHADER),
+            vec![vec![0x5aed, node, 0x7e7e]]
+        );
+        assert_eq!(
+            calls(&log, STOP_PARTICLE_SHADER),
+            vec![vec![0x5aed, 0x9a9e, property]]
+        );
+        assert_eq!(calls(&log, ATTACH_PARENT_00A59D00), vec![vec![0x9a9e, 0]]);
+        assert_eq!(calls(&log, ARRAY_FREE_BUFFER_006A8500).len(), 1);
+        assert_eq!(e.get(this, MagicShaderHitEffect::spParticleNode), 0);
+        assert_eq!(e.get(this, MagicShaderHitEffect::spTexEffectData), 0);
+        assert_eq!(e.get(this, MagicShaderHitEffect::pTarget), 0);
+        // The player's effect stops on both views; another shader is silent.
+        e.set(this, MagicShaderHitEffect::pTarget, target);
+        e.set(this, MagicShaderHitEffect::spTexEffectData, 0x7e7e);
+        e.mem.set_u32(PLAYER, target);
+        e.register(PLAYER_NODE_00950BB0, |_, a| ret(0x100 + a[1]));
+        e.register(FORM_ID_0084E3A0, |_, _| ret(1));
+        let (_, log) = run(&mut e, 0x0082_1bd0, &args![this]);
+        assert!(calls(&log, BS_AUDIO_STOP_MOVING_SOUNDS).is_empty());
+        assert_eq!(
+            calls(&log, STOP_TEXTURE_SHADER),
+            vec![vec![0x5aed, 0x101, 0x7e7e], vec![0x5aed, 0x100, 0x7e7e]]
+        );
+    }
+
+    #[test]
+    fn save_size_save_and_load() {
+        let mut e = Engine::new();
+        rig(&mut e);
+        e.register(HIT_EFFECT_GET_SAVE_SIZE, |_, _| ret(0x10));
+        e.register(SAVE_VERSION, |_, _| ret(0x36));
+        assert_eq!(
+            e.call(0x0082_1dd0, &args![0u32, 1u32, 2u32]).u32() & 0xffff,
+            0x14
+        );
+        e.register(SAVE_VERSION, |_, _| ret(0x37));
+        assert_eq!(
+            e.call(0x0082_1dd0, &args![0u32, 1u32, 2u32]).u32() & 0xffff,
+            0x19
+        );
+        let this = e.new_object::<MagicShaderHitEffect>();
+        let base = this.addr();
+        zero(
+            &mut e,
+            &[
+                HIT_EFFECT_SAVE_GAME,
+                SAVE_WRITE,
+                HIT_EFFECT_LOAD_GAME,
+                LOAD_READ,
+            ],
+        );
+        e.register(SAVE_NUMERIC_ID, |e, a| ret(e.mem.u32(a[1])));
+        e.register(FORM_ID_0084E3A0, |_, _| ret(0x00ab_cdef));
+        e.set(this, MagicShaderHitEffect::pWornObject, 0x3030);
+        let (_, log) = run(&mut e, 0x0082_1e40, &args![this, 1u32, 2u32]);
+        assert_eq!(calls(&log, HIT_EFFECT_SAVE_GAME), vec![vec![base, 1, 2]]);
+        assert_eq!(
+            calls(&log, SAVE_WRITE),
+            vec![vec![0x5a1d, base + 0x34, 4], vec![0x5a1d, base + 0x28, 1]]
+        );
+        let saved: Vec<u32> = log
+            .iter()
+            .filter(|(a, _)| *a == SAVE_NUMERIC_ID)
+            .map(|(_, w)| w[2])
+            .collect();
+        assert_eq!(saved, vec![4]);
+        e.register(SAVE_VERSION, |_, _| ret(0x36));
+        let (_, log) = run(&mut e, 0x0082_1e40, &args![this, 1u32, 2u32]);
+        assert_eq!(calls(&log, SAVE_WRITE).len(), 1);
+        // Load with a worn object id.
+        e.register(SAVE_VERSION, |_, _| ret(0x37));
+        e.register(LOAD_NUMERIC_ID, |e, a| {
+            e.mem.set_u32(a[1], 0x77);
+            Ret::default()
+        });
+        e.register(LOOKUP_FORM_004839C0, |_, a| ret(a[0] + 1));
+        e.register(RT_DYNAMIC_CAST, |_, a| ret(a[0] + 1));
+        let (_, log) = run(&mut e, 0x0082_1ed0, &args![this, 1u32, 2u32]);
+        assert_eq!(calls(&log, LOAD_READ)[1], vec![0x5a1d, base + 0x28, 1]);
+        assert_eq!(
+            calls(&log, RT_DYNAMIC_CAST),
+            vec![vec![0x78, 0, TYPE_TES_FORM, RTTI_01183108, 0]]
+        );
+        assert_eq!(e.get(this, MagicShaderHitEffect::pWornObject), 0x79);
+        e.register(LOAD_NUMERIC_ID, |e, a| {
+            e.mem.set_u32(a[1], 0);
+            Ret::default()
+        });
+        e.set(this, MagicShaderHitEffect::pWornObject, 5);
+        e.call(0x0082_1ed0, &args![this, 1u32, 2u32]);
+        assert_eq!(e.get(this, MagicShaderHitEffect::pWornObject), 5);
+    }
+
+    #[test]
+    fn finish_init_load_game_and_finish_load_game() {
+        let mut e = Engine::new();
+        rig(&mut e);
+        let this = effect(&mut e, &[(0xc4, 0), (0x94, 0)]);
+        let base = this.addr();
+        e.register(EFFECT + 0xc4, |e, a| {
+            e.mem.set_u32(a[0] + 0x20, 0);
+            e.mem.set_u8(a[0] + 0x24, 0);
+            Ret::default()
+        });
+        e.set(this, MagicShaderHitEffect::fAge, 1.5f32.to_bits());
+        e.set(this, MagicShaderHitEffect::bFinished, 1);
+        zero(
+            &mut e,
+            &[
+                HIT_EFFECT_FINISH_INIT_LOAD_GAME,
+                HIT_EFFECT_FINISH_LOAD_GAME,
+            ],
+        );
+        let (_, log) = run(&mut e, 0x0082_1f70, &args![this, 0u32, 2u32, 0x5aedu32]);
+        assert_eq!(
+            calls(&log, HIT_EFFECT_FINISH_INIT_LOAD_GAME),
+            vec![vec![base, 0, 2, 0]]
+        );
+        assert_eq!(e.get(this, MagicShaderHitEffect::pEffectData), 0x5aed);
+        assert_eq!(e.get(this, MagicShaderHitEffect::fAge), 1.5f32.to_bits());
+        assert_eq!(e.get(this, MagicShaderHitEffect::bFinished), 1);
+        assert_eq!(calls(&log, EFFECT + 0x94), vec![vec![base, 0]]);
+        e.register(WORD_AT_8_0044DDC0, |_, a| ret(a[0] + 8));
+        e.register(MAGIC_ITEM_GET_AV_EFFECT, |_, a| ret(a[0] + 1));
+        e.register(WORD_AT_78_00407820, |_, a| ret(a[0] + 0x78));
+        e.call(0x0082_1f70, &args![this, 0x1000u32, 2u32, 0x5aedu32]);
+        assert_eq!(e.get(this, MagicShaderHitEffect::pEffectData), 0x1081);
+        let (_, log) = run(&mut e, 0x0082_23d0, &args![this, 0xb0u32]);
+        assert_eq!(
+            calls(&log, HIT_EFFECT_FINISH_LOAD_GAME),
+            vec![vec![base, 0xb0]]
+        );
+        assert_eq!(e.get(this, MagicShaderHitEffect::fAge), 1.5f32.to_bits());
+        assert_eq!(calls(&log, EFFECT + 0x94), vec![vec![base, 0]]);
+    }
+
+    #[test]
+    fn check_should_save() {
+        let mut e = Engine::new();
+        e.register(SKIPPED_SHADER_0080D0D0, |_, _| ret(0x5aed));
+        let this = e.new_object::<MagicShaderHitEffect>();
+        assert_eq!(e.call(0x0082_2010, &args![this]).u32(), 0);
+        e.set(this, MagicShaderHitEffect::pTarget, 1);
+        e.set(this, MagicShaderHitEffect::pEffectData, 2);
+        assert_eq!(e.call(0x0082_2010, &args![this]).u32(), 1);
+        e.set(this, MagicShaderHitEffect::pEffectData, 0x5aed);
+        assert_eq!(e.call(0x0082_2010, &args![this]).u32(), 0);
+        e.set(this, MagicShaderHitEffect::pEffectData, 2);
+        e.set(this, MagicShaderHitEffect::bWeaponEnchantment, 1);
+        assert_eq!(e.call(0x0082_2010, &args![this]).u32(), 0);
+        e.set(this, MagicShaderHitEffect::bWeaponEnchantment, 0);
+        e.mem.set_u32(this.addr() + 0x18, 3);
+        assert_eq!(e.call(0x0082_2010, &args![this]).u32(), 0);
+    }
+
+    #[test]
+    fn second_save_size_save_and_load() {
+        let mut e = Engine::new();
+        rig(&mut e);
+        let this = effect(
+            &mut e,
+            &[(0xd0, 0x10), (0xd4, 0), (0xd8, 0), (0xdc, 0), (0xe0, 0)],
+        );
+        let base = this.addr();
+        e.set(this, MagicShaderHitEffect::pTarget, 0x7a7a);
+        e.set(this, MagicShaderHitEffect::pEffectData, 0x5aed);
+        let (r, log) = run(&mut e, 0x0082_2060, &args![this]);
+        assert_eq!(r.u32() & 0xffff, 0x18);
+        assert_eq!(calls(&log, EFFECT + 0xd0), vec![vec![base, 0, 0x7a7a]]);
+        e.register(FORM_ID_0084E3A0, |_, a| ret(a[0] + 1));
+        e.register(SAVE_NUMERIC_ID, |e, a| ret(e.mem.u32(a[1])));
+        let (_, log) = run(&mut e, 0x0082_20c0, &args![this]);
+        let ids: Vec<u32> = log
+            .iter()
+            .filter(|(a, _)| *a == SAVE_NUMERIC_ID)
+            .map(|(_, w)| w[2])
+            .collect();
+        assert_eq!(ids, vec![4, 4]);
+        assert_eq!(calls(&log, EFFECT + 0xd4), vec![vec![base, 0, 0x7a7a]]);
+        // Load: a target in a cell that passes, a shader.
+        let mut next = 0x100;
+        e.register_double(LOAD_NUMERIC_ID, move |e, a| {
+            next += 0x100;
+            e.mem.set_u32(a[1], next);
+            Ret::default()
+        });
+        e.register(LOOKUP_FORM_004839C0, |_, a| ret(a[0] + 1));
+        e.register(RT_DYNAMIC_CAST, |_, a| ret(a[0] + 1));
+        e.register(REFERENCE_CELL_008D6F30, |_, _| ret(0xce11));
+        e.register(CELL_TEST_00450FF0, |_, _| ret(1));
+        let (r, log) = run(&mut e, 0x0082_2130, &args![this]);
+        assert_eq!(r.u32(), 1);
+        assert_eq!(e.get(this, MagicShaderHitEffect::pTarget), 0x202);
+        assert_eq!(
+            calls(&log, RT_DYNAMIC_CAST)[1],
+            vec![0x301, 0, TYPE_TES_FORM, TYPE_TES_EFFECT_SHADER, 0]
+        );
+        assert_eq!(
+            calls(&log, EFFECT + 0xe0),
+            vec![vec![base, 0, 0x202, 0x302]]
+        );
+        e.register(RT_DYNAMIC_CAST, |_, a| {
+            ret(if a[3] == TYPE_TES_EFFECT_SHADER {
+                0
+            } else {
+                a[0]
+            })
+        });
+        let (r, log) = run(&mut e, 0x0082_2130, &args![this]);
+        assert_eq!(r.u32(), 0);
+        assert_eq!(calls(&log, EFFECT + 0xd8).len(), 1);
+        assert!(calls(&log, EFFECT + 0xdc).is_empty());
+    }
+
+    #[test]
+    fn third_save_and_load() {
+        let mut e = Engine::new();
+        rig(&mut e);
+        let this = e.new_object::<MagicShaderHitEffect>();
+        let base = this.addr();
+        e.set(this, MagicShaderHitEffect::pWornObject, 0x3030);
+        e.set(this, MagicShaderHitEffect::pEffectData, 0x5aed);
+        zero(
+            &mut e,
+            &[
+                HIT_EFFECT_SAVE_GAME_OV2,
+                BUFFER_WRITE_00865E50,
+                BUFFER_SAVE_FORM_ID,
+            ],
+        );
+        let (_, log) = run(&mut e, 0x0082_2250, &args![this, 0xb0u32]);
+        assert_eq!(
+            calls(&log, BUFFER_WRITE_00865E50),
+            vec![
+                vec![0xb0, base + 0x28, 1, 0],
+                vec![0xb0, base + 0x34, 4, 0],
+                vec![0xb0, base + 0x60, 4, 0],
+                vec![0xb0, base + 0x64, 4, 0],
+                vec![0xb0, base + 0x4c, 1, 0]
+            ]
+        );
+        assert_eq!(
+            calls(&log, BUFFER_SAVE_FORM_ID),
+            vec![vec![0xb0, 0x3030, 0], vec![0xb0, 0x5aed, 0]]
+        );
+        let buffer = object(&mut e, BUFFER, &[(0, 7)]);
+        zero(&mut e, &[HIT_EFFECT_LOAD_GAME_OV2, BUFFER_READ_00864980]);
+        e.register(BUFFER_LOAD_FORM_ID, |_, _| ret(0x40));
+        e.register(LOOKUP_FORM_004839C0, |_, a| ret(a[0] + 1));
+        e.register(RT_DYNAMIC_CAST, |_, a| ret(a[0] + a[3] - 0x0118_0000));
+        let (_, log) = run(&mut e, 0x0082_22f0, &args![this, buffer]);
+        assert_eq!(calls(&log, BUFFER_READ_00864980).len(), 3);
+        assert_eq!(
+            e.get(this, MagicShaderHitEffect::pWornObject),
+            0x41 + RTTI_01183108 - 0x0118_0000
+        );
+        assert_eq!(
+            e.get(this, MagicShaderHitEffect::pEffectData),
+            0x41 + TYPE_TES_EFFECT_SHADER - 0x0118_0000
+        );
+        e.register(BUFFER, |_, _| ret(8));
+        let (_, log) = run(&mut e, 0x0082_22f0, &args![this, buffer]);
+        assert_eq!(
+            calls(&log, BUFFER_READ_00864980)[2],
+            vec![buffer, base + 0x60, 4]
+        );
+        assert_eq!(calls(&log, BUFFER_READ_00864980).len(), 5);
+    }
+
+    #[test]
+    fn weighted_random() {
+        let mut e = Engine::new();
+        rig(&mut e);
+        zero(
+            &mut e,
+            &[
+                ARRAY_CONSTRUCTOR,
+                WEIGHTS_CONSTRUCT_00438660,
+                WEIGHTS_DESTRUCT_00438690,
+                STRING_ARRAY_CLEAR_008454F0,
+            ],
+        );
+        let this = e.mem.alloc(0x24);
+        e.mem.set_u32(this + 0x20, 9);
+        let (r, log) = run(&mut e, 0x0082_2440, &args![this]);
+        assert_eq!(r.u32(), this);
+        assert_eq!(e.mem.u32(this), VTABLE);
+        assert_eq!(
+            calls(&log, WEIGHTS_CONSTRUCT_00438660),
+            vec![vec![this + 0x10]]
+        );
+        assert_eq!(e.mem.u32(this + 0x20), 0);
+        // Weights 3, 4, 5 for names 0xa, 0xb, 0xc; a roll of 5 picks 0xb.
+        word_array(&mut e, this, 0, &[0xa, 0xb, 0xc]);
+        word_array(&mut e, this, 0x10, &[3, 4, 5]);
+        e.register(ROLL_005A00A0, |_, _| ret(5));
+        assert_eq!(e.call(0x0082_2650, &args![this]).u32(), 0xb);
+        e.register(ROLL_005A00A0, |_, _| ret(12));
+        assert_eq!(e.call(0x0082_2650, &args![this]).u32(), 0);
+        let (_, log) = run(&mut e, 0x0082_24b0, &args![this]);
+        assert_eq!(
+            calls(&log, WEIGHTS_DESTRUCT_00438690),
+            vec![vec![this + 0x10]]
+        );
+        assert_eq!(
+            calls(&log, STRING_ARRAY_CLEAR_008454F0),
+            vec![vec![this, 1]]
+        );
+        assert_eq!(e.mem.u32(this), STRING_ARRAY_VTABLE);
+    }
+
+    #[test]
+    fn array_scalar_deleting_destructors() {
+        let mut e = Engine::new();
+        zero(&mut e, &[FREE_00401030, STRING_ARRAY_CLEAR_008454F0]);
+        for (address, vtable) in [
+            (0x0082_26f0u32, PARTICLE_ARRAY_VTABLE),
+            (0x0082_2720, OBJECT_ARRAY_VTABLE),
+            (0x0082_2750, STRING_ARRAY_VTABLE),
+        ] {
+            let this = e.mem.alloc(0x10);
+            let (r, log) = run(&mut e, address, &args![this, 1u32]);
+            assert_eq!(r.u32(), this);
+            assert_eq!(e.mem.u32(this), vtable);
+            assert_eq!(calls(&log, FREE_00401030), vec![vec![this]]);
+            let (_, log) = run(&mut e, address, &args![this, 2u32]);
+            assert!(calls(&log, FREE_00401030).is_empty());
+        }
     }
 }

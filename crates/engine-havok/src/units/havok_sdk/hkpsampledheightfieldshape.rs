@@ -72,12 +72,19 @@ pub fn hk_aabb_util_calc_aabb_ov3(
             lane(e, transform.addr() + 0x20, i),
         );
         let translation = lane(e, transform.addr() + 0x30, i);
-        let extent = (abs(e, half_x * a0, i) + abs(e, half_y * a1, i))
-            + (abs(e, half_z * a2, i) + tolerance);
-        let middle = (centre_x * a0 + centre_y * a1) + (centre_z * a2 + translation);
+        // `MULPS`/`ADDPS` with the SSE NaN rules, the destination operand first.
+        use crate::sse::{add, mul};
+        let extent = add(
+            add(abs(e, mul(half_x, a0), i), abs(e, mul(half_y, a1), i)),
+            add(abs(e, mul(half_z, a2), i), tolerance),
+        );
+        let middle = add(
+            add(mul(centre_x, a0), mul(centre_y, a1)),
+            add(mul(centre_z, a2), translation),
+        );
         let negated = f32::from_bits(extent.to_bits() ^ e.mem.u32(SIGN_MASK_010C44D0 + 4 * i));
-        minimum[i as usize] = negated + middle;
-        maximum[i as usize] = middle + extent;
+        minimum[i as usize] = add(negated, middle);
+        maximum[i as usize] = add(middle, extent);
     }
     for (i, value) in maximum.iter().enumerate() {
         e.mem.set_f32(out.addr() + 0x10 + 4 * i as u32, *value);

@@ -123,6 +123,48 @@ pub fn fn_0048cce0(e: &mut Engine, this: Ptr<TESScriptableForm>, other: Ptr) {
     e.call(SET_WORD_4, &args![this, script]);
 }
 
+/// `00485910` (cdecl(chunk, word)): adds a one-word chunk; the chunk tag
+/// `SCRI`.
+const ADD_CHUNK_WORD: u32 = 0x0048_5910;
+const CHUNK_SCRI: u32 = u32::from_le_bytes(*b"SCRI");
+
+// Translated from 0048cca0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TESScriptableForm::Save` (engine map; no stack words): with a script,
+/// its form id (`0084e3a0`) as chunk `SCRI`.
+pub fn tes_scriptable_form_save(e: &mut Engine, this: Ptr<TESScriptableForm>) {
+    let script = e.get(this, TESScriptableForm::pFormScript);
+    if script != 0 {
+        let id = e.call(OWNER_FORM_ID, &args![script]).u32();
+        e.call(ADD_CHUNK_WORD, &args![CHUNK_SCRI, id]);
+    }
+}
+
+// Translated from 0048cd30 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The scriptable form's component compare (engine map: no name; `RET 4`):
+/// true when `other` is no `TESScriptableForm` (`__RTDynamicCast` from
+/// `BaseFormComponent`) or when the scripts (the word `00726070` reads at
+/// +4, this one's first) differ.
+pub fn fn_0048cd30(e: &mut Engine, this: Ptr<TESScriptableForm>, other: u32) -> bool {
+    let source = e
+        .call(
+            RT_DYNAMIC_CAST,
+            &args![
+                other,
+                0u32,
+                TYPE_BASE_FORM_COMPONENT,
+                TYPE_TES_SCRIPTABLE_FORM,
+                0u32
+            ],
+        )
+        .u32();
+    if source == 0 {
+        return true;
+    }
+    let mine = e.call(GET_WORD_4, &args![this]).u32();
+    let theirs = e.call(GET_WORD_4, &args![source]).u32();
+    mine != theirs
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -131,6 +173,14 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
             tes_scriptable_form_init_item(Ptr<TESScriptableForm>, Ptr)
         ),
         entry!(0x0048_cce0, fn_0048cce0(Ptr<TESScriptableForm>, Ptr)),
+        entry!(
+            0x0048_cca0,
+            tes_scriptable_form_save(Ptr<TESScriptableForm>)
+        ),
+        entry!(
+            0x0048_cd30,
+            fn_0048cd30(Ptr<TESScriptableForm>, u32) -> bool
+        ),
     ]
 }
 
@@ -279,5 +329,47 @@ mod copy_tests {
         e.call_log = Some(vec![]);
         e.call(0x0048_cce0, &args![0x100u32, 0x200u32]);
         assert_eq!(e.call_log.take().unwrap().len(), 2);
+    }
+}
+
+#[cfg(test)]
+mod save_compare_tests {
+    use super::*;
+
+    #[test]
+    fn save_writes_the_script_id_when_set() {
+        let mut e = Engine::new();
+        e.register(OWNER_FORM_ID, |e, a| e.mem.u32(a[0] + 0xc).into_ret());
+        e.register(ADD_CHUNK_WORD, |_, _| Ret::default());
+        let this = e.new_object::<TESScriptableForm>();
+        e.call_log = Some(vec![]);
+        e.call(0x0048_cca0, &args![this]);
+        assert_eq!(e.call_log.take().unwrap().len(), 1);
+        let script = e.mem.alloc(0x18);
+        e.mem.set_u32(script + 0xc, 0x0012_3456);
+        e.set(this, TESScriptableForm::pFormScript, script);
+        e.call_log = Some(vec![]);
+        e.call(0x0048_cca0, &args![this]);
+        let log = e.call_log.take().unwrap();
+        let added: Vec<_> = log.iter().filter(|c| c.0 == ADD_CHUNK_WORD).collect();
+        assert_eq!(added.len(), 1);
+        assert_eq!(added[0].1, vec![CHUNK_SCRI, 0x0012_3456]);
+    }
+
+    #[test]
+    fn compare_reports_other_scripts_and_non_scriptable_forms() {
+        let mut e = Engine::new();
+        e.register(RT_DYNAMIC_CAST, |_, a| a[0].into_ret());
+        e.register(GET_WORD_4, |e, a| e.mem.u32(a[0] + 4).into_ret());
+        let this = e.new_object::<TESScriptableForm>();
+        let same = e.new_object::<TESScriptableForm>();
+        let other = e.new_object::<TESScriptableForm>();
+        e.set(this, TESScriptableForm::pFormScript, 0x700);
+        e.set(same, TESScriptableForm::pFormScript, 0x700);
+        e.set(other, TESScriptableForm::pFormScript, 0x701);
+        assert!(!e.call(0x0048_cd30, &args![this, same]).bool());
+        assert!(e.call(0x0048_cd30, &args![this, other]).bool());
+        e.register(RT_DYNAMIC_CAST, |_, _| 0u32.into_ret());
+        assert!(e.call(0x0048_cd30, &args![this, same]).bool());
     }
 }

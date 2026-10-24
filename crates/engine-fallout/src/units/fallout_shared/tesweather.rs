@@ -599,6 +599,409 @@ pub fn tes_weather_load(e: &mut Engine, this: Ptr<TESWeather>, file: Ptr) -> boo
     true
 }
 
+/// `TESForm::StartForm` (engine map, `004855a0`, `ECX` = form).
+const START_FORM: u32 = 0x0048_55a0;
+/// `TESForm::CloseForm` (engine map, `00485680`, `ECX` = form).
+const CLOSE_FORM: u32 = 0x0048_5680;
+/// `TESTexture::Save` (Xbox PDB, `0048e370`, `ECX` = texture, one stack word: the chunk).
+const TEXTURE_SAVE: u32 = 0x0048_e370;
+/// `TESModel::Save` (engine map, `004891d0`, `ECX` = model, two stack words: the model and
+/// texture chunks).
+const MODEL_SAVE: u32 = 0x0048_91d0;
+/// `00485910` (`cdecl`: chunk, word; `tesform.cpp` in the engine map): adds a one-word chunk.
+const ADD_WORD_CHUNK: u32 = 0x0048_5910;
+/// `TESForm::AddChunkArray` (engine map, `004856f0`, `cdecl`: chunk, data, size).
+const ADD_CHUNK_ARRAY: u32 = 0x0048_56f0;
+/// `TESForm::AddChunkArray_ov2` (engine map, `00485710`, `cdecl`: chunk, data, count).
+const ADD_CHUNK_ARRAY_OV2: u32 = 0x0048_5710;
+/// `TESForm::__AddChunkData` (engine map, `00485990`, `cdecl`: chunk, data, size).
+const ADD_CHUNK_DATA: u32 = 0x0048_5990;
+/// `00401500` (`cdecl`, no words): the byte at `011c54ba`, whether saved data has its byte
+/// order swapped.
+const SWAPS_BYTE_ORDER: u32 = 0x0040_1500;
+/// `TESForm::CopyAllComponents` (engine map, `004851b0`, `ECX` = form, one stack word).
+const COPY_ALL_COMPONENTS: u32 = 0x0048_51b0;
+/// `TESForm::CompareAllComponents` (engine map, `00485270`, `ECX` = form, one stack word).
+const COMPARE_ALL_COMPONENTS: u32 = 0x0048_5270;
+/// The game's `memcpy` wrapper (`00401460`, `cdecl`: destination, source, size).
+const MEMCPY: u32 = 0x0040_1460;
+/// `_memcmp` (engine map, `00ec4835`, `cdecl`).
+const MEMCMP: u32 = 0x00ec_4835;
+/// `004b0680` (`ECX` = new record, `RET 8`: two words; `bsanimnotereceiver.cpp` in the engine
+/// map): builds a weather sound record from the source record's two words.
+const SOUND_RECORD_CTOR: u32 = 0x004b_0680;
+/// `VATS::GetCount` in the engine map (`005ae380`, `ECX` = list; a folded body): the list's
+/// item count.
+const LIST_COUNT: u32 = 0x005a_e380;
+/// RTTI type descriptor `.?AVTESWeather@@`.
+const TYPE_TES_WEATHER: u32 = 0x0118_629c;
+/// RTTI type descriptors `.?AVBaseFormComponent@@` and
+/// `.?AV?$TESImageSpaceModifiableCountForm@$05@@`.
+const TYPE_BASE_FORM_COMPONENT: u32 = 0x0118_3040;
+const TYPE_MODIFIABLE_COUNT_FORM: u32 = 0x0118_6ab0;
+/// `005822a0` (`ECX`, `RET 4`: an index): modifier `index` of a
+/// `TESImageSpaceModifiableCountForm<6>` (`+4 + index * 4`).
+const GET_MODIFIER: u32 = 0x0058_22a0;
+
+// Translated from 005813d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TESWeather::Save` (Xbox PDB; `ECX`, plain `RET`): writes the weather record: the image
+/// space modifiers (`00582040` on `+0x18`); the cloud textures (`TESTexture::Save` on `+0x34 +
+/// i * 0xc` with `DNAM`, `CNAM`, `ANAM`, `BNAM`, `ENAM`, `GNAM`, `JNAM`, `KNAM` from a stack
+/// table, for each of `iNumCloudLayers`); the precipitation model (`MODL`/`MODT`); `LNAM`
+/// (the layer count), `ONAM` (cloud speeds, 4 bytes), `PNAM` (cloud colours), `NAM0`
+/// (colours), `FNAM` (fog); `INAM` (the two image space parameter blocks, byte-swapped before
+/// and after when `00401500` says so); `DATA` (15 bytes); an `SNAM` (8 bytes) per sound until
+/// an empty item, each swapped (`00462230`) before and after under the same test.
+/// A layer count above 8 reads past the stack table, as the exe does.
+pub fn tes_weather_save(e: &mut Engine, this: Ptr<TESWeather>) {
+    let base = this.addr();
+    e.call(START_FORM, &args![this]);
+    tes_image_space_modifiable_count_form_save(e, Ptr::new(base.wrapping_add(0x18)));
+    let tags = [
+        CHUNK_DNAM,
+        CHUNK_CNAM,
+        CHUNK_ANAM,
+        CHUNK_BNAM,
+        CHUNK_ENAM,
+        0x4d41_4e47,
+        0x4d41_4e4a,
+        0x4d41_4e4b,
+    ];
+    e.with_stack(0x20, |e, table| {
+        for (i, tag) in tags.iter().enumerate() {
+            e.mem.set_u32(table.addr() + 4 * i as u32, *tag);
+        }
+        let mut layer = 0i32;
+        while layer < e.mem.i32(base.wrapping_add(0x368)) {
+            let tag = e
+                .mem
+                .u32(table.addr().wrapping_add((layer as u32).wrapping_mul(4)));
+            let texture = base
+                .wrapping_add((layer as u32).wrapping_mul(0xc))
+                .wrapping_add(0x34);
+            e.call(TEXTURE_SAVE, &args![texture, tag]);
+            layer += 1;
+        }
+    });
+    e.call(
+        MODEL_SAVE,
+        &args![base.wrapping_add(0xc8), CHUNK_MODL, 0x5444_4f4du32],
+    );
+    let layers = e.mem.u32(base.wrapping_add(0x368));
+    e.call(ADD_WORD_CHUNK, &args![CHUNK_LNAM, layers]);
+    e.call(
+        ADD_CHUNK_ARRAY,
+        &args![CHUNK_ONAM, base.wrapping_add(0x64), 4u32],
+    );
+    e.call(
+        ADD_CHUNK_ARRAY_OV2,
+        &args![CHUNK_PNAM, base.wrapping_add(0x68), 0x18u32],
+    );
+    e.call(
+        ADD_CHUNK_ARRAY_OV2,
+        &args![CHUNK_NAM0, base.wrapping_add(0x108), 0x3cu32],
+    );
+    e.call(
+        ADD_CHUNK_ARRAY_OV2,
+        &args![CHUNK_FNAM, base.wrapping_add(0xf0), 6u32],
+    );
+    swap_parameter_blocks(e, base);
+    e.call(
+        ADD_CHUNK_DATA,
+        &args![CHUNK_INAM, base.wrapping_add(0x238), 0x130u32],
+    );
+    swap_parameter_blocks(e, base);
+    e.call(
+        ADD_CHUNK_ARRAY,
+        &args![CHUNK_DATA, base.wrapping_add(0xe0), 0xfu32],
+    );
+    let mut node = base.wrapping_add(0x1f8);
+    while node != 0 {
+        let item = e.call(LIST_ITEM_006815C0, &args![node]).u32();
+        if e.mem.u32(item) == 0 {
+            break;
+        }
+        swap_sound(e, node);
+        let item = e.call(LIST_ITEM_006815C0, &args![node]).u32();
+        let sound = e.mem.u32(item);
+        e.call(ADD_CHUNK_DATA, &args![CHUNK_SNAM, sound, 8u32]);
+        swap_sound(e, node);
+        node = e.call(NODE_FOLLOWING_00726070, &args![node]).u32();
+    }
+    e.call(CLOSE_FORM, &args![this]);
+}
+
+/// When saved data is byte-swapped (`00401500`): `ImageSpaceParameterData::Endian` on both
+/// parameter blocks (`+0x238`, 0x98 bytes each).
+fn swap_parameter_blocks(e: &mut Engine, base: u32) {
+    if !e.call(SWAPS_BYTE_ORDER, &[]).bool() {
+        return;
+    }
+    let mut index = 0u32;
+    while index < 2 {
+        let block = base
+            .wrapping_add(index.wrapping_mul(0x98))
+            .wrapping_add(0x238);
+        e.call(IMAGE_SPACE_PARAMETERS_ENDIAN, &args![block]);
+        index += 1;
+    }
+}
+
+/// When saved data is byte-swapped (`00401500`): `00462230` on the node's sound record.
+fn swap_sound(e: &mut Engine, node: u32) {
+    if e.call(SWAPS_BYTE_ORDER, &[]).bool() {
+        let item = e.call(LIST_ITEM_006815C0, &args![node]).u32();
+        let sound = e.mem.u32(item);
+        e.call(SWAP_SOUND_00462230, &args![sound]);
+    }
+}
+
+// Translated from 00581630 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 00581630 - the FS:[0] exception frame (unwinding the sound record allocation) is not translated.
+/// Unnamed in the map (`RET 4`: a form; the weather's copy by its body): when the form is a
+/// `TESWeather` (`__RTDynamicCast` from `TESForm`), copies it: all components
+/// (`TESForm::CopyAllComponents`), the layer count, each cloud texture and the precipitation
+/// model through their vtable slot +8, the cloud speeds, cloud colours, weather data, colours,
+/// fog and image space parameter blocks (`00401460`), then rebuilds the sound list: emptied
+/// (`00470470`), each source sound (until an empty item) copied into a new 8-byte record
+/// (`00401000`, `004b0680` with its two words; null when the allocation fails) and added
+/// (`00905820`). The exception frame around the record's construction is not translated.
+pub fn fn_00581630(e: &mut Engine, this: Ptr<TESWeather>, form: u32) {
+    let base = this.addr();
+    let source = e
+        .call(
+            DYNAMIC_CAST,
+            &args![form, 0u32, TYPE_TES_FORM, TYPE_TES_WEATHER, 0u32],
+        )
+        .u32();
+    if source == 0 {
+        return;
+    }
+    e.call(COPY_ALL_COMPONENTS, &args![this, source]);
+    let layers = e.mem.u32(source.wrapping_add(0x368));
+    e.mem.set_u32(base.wrapping_add(0x368), layers);
+    let mut layer = 0i32;
+    while layer < e.mem.i32(base.wrapping_add(0x368)) {
+        let offset = (layer as u32).wrapping_mul(0xc).wrapping_add(0x34);
+        e.vcall(
+            base.wrapping_add(offset),
+            8,
+            &args![source.wrapping_add(offset)],
+        );
+        layer += 1;
+    }
+    e.vcall(
+        base.wrapping_add(0xc8),
+        8,
+        &args![source.wrapping_add(0xc8)],
+    );
+    for (offset, size) in [
+        (0x64u32, 4u32),
+        (0x68, 0x60),
+        (0xe0, 0xf),
+        (0x108, 0xf0),
+        (0xf0, 0x18),
+        (0x238, 0x130),
+    ] {
+        e.call(
+            MEMCPY,
+            &args![base.wrapping_add(offset), source.wrapping_add(offset), size],
+        );
+    }
+    e.call(LIST_REMOVE_ALL_00470470, &args![base.wrapping_add(0x1f8)]);
+    let mut node = source.wrapping_add(0x1f8);
+    while node != 0 {
+        let item = e.call(LIST_ITEM_006815C0, &args![node]).u32();
+        if e.mem.u32(item) == 0 {
+            break;
+        }
+        let memory = e.call(ALLOCATE, &args![8u32]).u32();
+        let record = if memory != 0 {
+            let item = e.call(LIST_ITEM_006815C0, &args![node]).u32();
+            let second = e.mem.u32(e.mem.u32(item).wrapping_add(4));
+            let item = e.call(LIST_ITEM_006815C0, &args![node]).u32();
+            let first = e.mem.u32(e.mem.u32(item));
+            e.call(SOUND_RECORD_CTOR, &args![memory, first, second])
+                .u32()
+        } else {
+            0
+        };
+        e.with_stack(4, |e, slot| {
+            e.mem.set_u32(slot.addr(), record);
+            e.call(LIST_ADD_00905820, &args![base.wrapping_add(0x1f8), slot]);
+        });
+        node = e.call(NODE_FOLLOWING_00726070, &args![node]).u32();
+    }
+}
+
+// Translated from 00581880 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the map (`RET 4`: a form; the weather's comparison by its body): true
+/// ("different") unless the form is a `TESWeather` with as many sounds (`005ae380`), the same
+/// 8 sound bytes pairwise (`_memcmp`, until either list ends or holds an empty item), the
+/// same layer count, cloud textures and precipitation model the same (vtable slot +0xc false),
+/// `TESForm::CompareAllComponents` false, and equal weather data (0xf bytes), colours (0xf0),
+/// fog (0x18), cloud speeds (4), cloud colours (0x60) and image space parameters (0x130).
+pub fn fn_00581880(e: &mut Engine, this: Ptr<TESWeather>, form: u32) -> bool {
+    let base = this.addr();
+    let source = e
+        .call(
+            DYNAMIC_CAST,
+            &args![form, 0u32, TYPE_TES_FORM, TYPE_TES_WEATHER, 0u32],
+        )
+        .u32();
+    if source == 0 {
+        return true;
+    }
+    let mut theirs = source.wrapping_add(0x1f8);
+    let mut mine = base.wrapping_add(0x1f8);
+    let their_count = e.call(LIST_COUNT, &args![theirs]).u32();
+    if their_count != e.call(LIST_COUNT, &args![mine]).u32() {
+        return true;
+    }
+    while theirs != 0 && mine != 0 {
+        let item = e.call(LIST_ITEM_006815C0, &args![theirs]).u32();
+        if e.mem.u32(item) == 0 {
+            break;
+        }
+        let item = e.call(LIST_ITEM_006815C0, &args![mine]).u32();
+        if e.mem.u32(item) == 0 {
+            break;
+        }
+        let item = e.call(LIST_ITEM_006815C0, &args![mine]).u32();
+        let my_sound = e.mem.u32(item);
+        let item = e.call(LIST_ITEM_006815C0, &args![theirs]).u32();
+        let their_sound = e.mem.u32(item);
+        if e.call(MEMCMP, &args![their_sound, my_sound, 8u32]).u32() != 0 {
+            return true;
+        }
+        theirs = e.call(NODE_FOLLOWING_00726070, &args![theirs]).u32();
+        mine = e.call(NODE_FOLLOWING_00726070, &args![mine]).u32();
+    }
+    if e.mem.u32(base.wrapping_add(0x368)) != e.mem.u32(source.wrapping_add(0x368)) {
+        return true;
+    }
+    let mut layer = 0i32;
+    while layer < e.mem.i32(base.wrapping_add(0x368)) {
+        let offset = (layer as u32).wrapping_mul(0xc).wrapping_add(0x34);
+        if e.vcall(
+            base.wrapping_add(offset),
+            0xc,
+            &args![source.wrapping_add(offset)],
+        )
+        .bool()
+        {
+            return true;
+        }
+        layer += 1;
+    }
+    if e.call(COMPARE_ALL_COMPONENTS, &args![this, source]).bool() {
+        return true;
+    }
+    if e.vcall(
+        base.wrapping_add(0xc8),
+        0xc,
+        &args![source.wrapping_add(0xc8)],
+    )
+    .bool()
+    {
+        return true;
+    }
+    for (offset, size) in [
+        (0xe0u32, 0xfu32),
+        (0x108, 0xf0),
+        (0xf0, 0x18),
+        (0x64, 4),
+        (0x68, 0x60),
+        (0x238, 0x130),
+    ] {
+        let differs = e
+            .call(
+                MEMCMP,
+                &args![base.wrapping_add(offset), source.wrapping_add(offset), size],
+            )
+            .u32();
+        if differs != 0 {
+            return true;
+        }
+    }
+    false
+}
+
+// Translated from 00582040 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TESImageSpaceModifiableCountForm<6>::Save` (engine map; `ECX`, plain `RET`): for each of
+/// the six modifiers that is set, adds a chunk `"\0IAD"` + index holding its form id
+/// (`0084e3a0`, `00485910`).
+pub fn tes_image_space_modifiable_count_form_save(e: &mut Engine, this: Ptr) {
+    let mut index = 0u32;
+    while index < 6 {
+        let modifier = e.mem.u32(
+            this.addr()
+                .wrapping_add(index.wrapping_mul(4))
+                .wrapping_add(4),
+        );
+        if modifier != 0 {
+            let id = e.call(FORM_ID_0084E3A0, &args![modifier]).u32();
+            e.call(ADD_WORD_CHUNK, &args![index.wrapping_add(CHUNK_IAD_0), id]);
+        }
+        index += 1;
+    }
+}
+
+/// The other component cast to `TESImageSpaceModifiableCountForm<6>` (from
+/// `BaseFormComponent`), or 0.
+fn as_modifiable_count_form(e: &mut Engine, other: u32) -> u32 {
+    e.call(
+        DYNAMIC_CAST,
+        &args![
+            other,
+            0u32,
+            TYPE_BASE_FORM_COMPONENT,
+            TYPE_MODIFIABLE_COUNT_FORM,
+            0u32
+        ],
+    )
+    .u32()
+}
+
+// Translated from 005821b0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TESImageSpaceModifiableCountForm<6>::CopyComponent` (engine map, `RET 4`: the other
+/// component): when it is one, copies its six modifiers (`005822a0`, then `00581fb0`).
+pub fn tes_image_space_modifiable_count_form_copy_component(e: &mut Engine, this: Ptr, other: u32) {
+    let source = as_modifiable_count_form(e, other);
+    if source == 0 {
+        return;
+    }
+    let mut index = 0u32;
+    while index < 6 {
+        let modifier = e.call(GET_MODIFIER, &args![source, index]).u32();
+        fn_00581fb0(e, this, index, modifier);
+        index += 1;
+    }
+}
+
+// Translated from 00582220 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TESImageSpaceModifiableCountForm<6>::CompareComponent` (engine map, `RET 4`: the other
+/// component): true ("different") unless it is one with the same six modifiers (`005822a0`
+/// on each, this first).
+pub fn tes_image_space_modifiable_count_form_compare_component(
+    e: &mut Engine,
+    this: Ptr,
+    other: u32,
+) -> bool {
+    let source = as_modifiable_count_form(e, other);
+    if source == 0 {
+        return true;
+    }
+    let mut index = 0u32;
+    while index < 6 {
+        let mine = e.call(GET_MODIFIER, &args![this, index]).u32();
+        if mine != e.call(GET_MODIFIER, &args![source, index]).u32() {
+            return true;
+        }
+        index += 1;
+    }
+    false
+}
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -616,6 +1019,18 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x0058_1b00, tes_weather_init_item(Ptr<TESWeather>)),
         entry!(0x0058_1c00, tes_weather_make_default(Ptr<TESWeather>)),
         entry!(0x0058_0990, tes_weather_load(Ptr<TESWeather>, Ptr) -> bool),
+        entry!(0x0058_13d0, tes_weather_save(Ptr<TESWeather>)),
+        entry!(0x0058_1630, fn_00581630(Ptr<TESWeather>, u32)),
+        entry!(0x0058_1880, fn_00581880(Ptr<TESWeather>, u32) -> bool),
+        entry!(0x0058_2040, tes_image_space_modifiable_count_form_save(Ptr)),
+        entry!(
+            0x0058_21b0,
+            tes_image_space_modifiable_count_form_copy_component(Ptr, u32)
+        ),
+        entry!(
+            0x0058_2220,
+            tes_image_space_modifiable_count_form_compare_component(Ptr, u32) -> bool
+        ),
     ]
 }
 
@@ -1074,5 +1489,245 @@ mod tests {
         assert_eq!(calls(&e, SWAP_SOUND_00462230), vec![vec![0]]);
         assert_eq!(calls(&e, ADD_COMPILE_INDEX), vec![vec![0, FILE]]);
         assert!(calls(&e, MEMSET).is_empty());
+    }
+}
+
+#[cfg(test)]
+mod n045_tests {
+    use super::*;
+
+    type Log = Vec<(u32, Vec<u32>)>;
+
+    fn only(log: &Log, addr: u32) -> Vec<Vec<u32>> {
+        log.iter()
+            .filter(|(a, _)| *a == addr)
+            .map(|(_, w)| w.clone())
+            .collect()
+    }
+
+    fn ok(_: &mut Engine, _: &[u32]) -> Ret {
+        Ret::default()
+    }
+
+    /// List doubles (a node is item, next) and quiet doubles for the rest.
+    fn engine() -> Engine {
+        let mut e = Engine::new();
+        e.register(LIST_ITEM_006815C0, |_, a| a[0].into_ret());
+        e.register(NODE_FOLLOWING_00726070, |e, a| {
+            e.mem.u32(a[0] + 4).into_ret()
+        });
+        e.register(LIST_COUNT, |e, a| {
+            let mut node = a[0];
+            let mut n = 0u32;
+            while node != 0 {
+                if e.mem.u32(node) != 0 {
+                    n += 1;
+                }
+                node = e.mem.u32(node + 4);
+            }
+            n.into_ret()
+        });
+        for addr in [
+            START_FORM,
+            CLOSE_FORM,
+            TEXTURE_SAVE,
+            MODEL_SAVE,
+            ADD_WORD_CHUNK,
+            ADD_CHUNK_ARRAY,
+            ADD_CHUNK_ARRAY_OV2,
+            ADD_CHUNK_DATA,
+            IMAGE_SPACE_PARAMETERS_ENDIAN,
+            SWAP_SOUND_00462230,
+            COPY_ALL_COMPONENTS,
+            MEMCPY,
+            LIST_REMOVE_ALL_00470470,
+            LIST_ADD_00905820,
+        ] {
+            e.register(addr, ok);
+        }
+        e.register(FORM_ID_0084E3A0, |e, a| e.mem.u32(a[0] + 0xc).into_ret());
+        e.register(DYNAMIC_CAST, |_, a| a[0].into_ret());
+        e.register(MEMCMP, |e, a| {
+            u32::from(e.mem.bytes(a[0], a[2]) != e.mem.bytes(a[1], a[2])).into_ret()
+        });
+        e
+    }
+
+    #[test]
+    fn save_writes_the_weather_chunks_in_order() {
+        let mut e = engine();
+        let swap = std::rc::Rc::new(std::cell::Cell::new(false));
+        let s = swap.clone();
+        e.register_double(SWAPS_BYTE_ORDER, move |_, _| u32::from(s.get()).into_ret());
+        let this = e.mem.alloc(0x374);
+        e.mem.set_u32(this + 0x368, 2);
+        let modifier = e.mem.alloc(0x10);
+        e.mem.set_u32(modifier + 0xc, 0x77);
+        e.mem.set_u32(this + 0x18 + 4 + 2 * 4, modifier);
+        let sound = e.mem.alloc(8);
+        e.mem.set_u32(this + 0x1f8, sound);
+        e.call_log = Some(vec![]);
+        e.call(0x0058_13d0, &[this]);
+        let log = e.call_log.take().unwrap();
+        assert_eq!(only(&log, START_FORM), vec![vec![this]]);
+        assert_eq!(
+            only(&log, TEXTURE_SAVE),
+            vec![vec![this + 0x34, CHUNK_DNAM], vec![this + 0x40, CHUNK_CNAM]]
+        );
+        assert_eq!(
+            only(&log, MODEL_SAVE),
+            vec![vec![this + 0xc8, CHUNK_MODL, 0x5444_4f4d]]
+        );
+        assert_eq!(
+            only(&log, ADD_WORD_CHUNK),
+            vec![vec![CHUNK_IAD_0 + 2, 0x77], vec![CHUNK_LNAM, 2]]
+        );
+        assert_eq!(
+            only(&log, ADD_CHUNK_ARRAY),
+            vec![
+                vec![CHUNK_ONAM, this + 0x64, 4],
+                vec![CHUNK_DATA, this + 0xe0, 0xf]
+            ]
+        );
+        assert_eq!(
+            only(&log, ADD_CHUNK_ARRAY_OV2),
+            vec![
+                vec![CHUNK_PNAM, this + 0x68, 0x18],
+                vec![CHUNK_NAM0, this + 0x108, 0x3c],
+                vec![CHUNK_FNAM, this + 0xf0, 6]
+            ]
+        );
+        assert_eq!(
+            only(&log, ADD_CHUNK_DATA),
+            vec![
+                vec![CHUNK_INAM, this + 0x238, 0x130],
+                vec![CHUNK_SNAM, sound, 8]
+            ]
+        );
+        assert!(only(&log, IMAGE_SPACE_PARAMETERS_ENDIAN).is_empty());
+        assert_eq!(only(&log, CLOSE_FORM), vec![vec![this]]);
+        swap.set(true);
+        e.call_log = Some(vec![]);
+        e.call(0x0058_13d0, &[this]);
+        let log = e.call_log.take().unwrap();
+        assert_eq!(
+            only(&log, IMAGE_SPACE_PARAMETERS_ENDIAN),
+            vec![
+                vec![this + 0x238],
+                vec![this + 0x2d0],
+                vec![this + 0x238],
+                vec![this + 0x2d0]
+            ]
+        );
+        assert_eq!(
+            only(&log, SWAP_SOUND_00462230),
+            vec![vec![sound], vec![sound]]
+        );
+    }
+
+    #[test]
+    fn copy_takes_the_layers_blocks_and_rebuilds_the_sounds() {
+        let mut e = engine();
+        let this = e.mem.alloc(0x374);
+        let source = e.mem.alloc(0x374);
+        e.mem.set_u32(source + 0x368, 1);
+        let vt = e.mem.alloc(0x10);
+        e.mem.set_u32(vt + 8, 0x0050_0000);
+        e.register(0x0050_0000, ok);
+        e.mem.set_u32(this + 0x34, vt);
+        e.mem.set_u32(this + 0xc8, vt);
+        let record = e.mem.alloc(8);
+        e.mem.set_u32(record, 0x11);
+        e.mem.set_u32(record + 4, 0x22);
+        e.mem.set_u32(source + 0x1f8, record);
+        e.register(ALLOCATE, |_, _| 0x9000u32.into_ret());
+        e.register(SOUND_RECORD_CTOR, |_, a| a[0].into_ret());
+        let added = std::rc::Rc::new(std::cell::Cell::new(0));
+        let a2 = added.clone();
+        e.register_double(LIST_ADD_00905820, move |e, a| {
+            a2.set(e.mem.u32(a[1]));
+            Ret::default()
+        });
+        e.call(0x0058_1630, &[this, 0]);
+        assert_eq!(e.mem.u32(this + 0x368), 0);
+        e.call_log = Some(vec![]);
+        e.call(0x0058_1630, &[this, source]);
+        let log = e.call_log.take().unwrap();
+        assert_eq!(e.mem.u32(this + 0x368), 1);
+        assert_eq!(
+            only(&log, 0x0050_0000),
+            vec![
+                vec![this + 0x34, source + 0x34],
+                vec![this + 0xc8, source + 0xc8]
+            ]
+        );
+        assert_eq!(only(&log, MEMCPY).len(), 6);
+        assert_eq!(
+            only(&log, MEMCPY)[5],
+            vec![this + 0x238, source + 0x238, 0x130]
+        );
+        assert_eq!(
+            only(&log, SOUND_RECORD_CTOR),
+            vec![vec![0x9000, 0x11, 0x22]]
+        );
+        assert_eq!(added.get(), 0x9000);
+        e.register(ALLOCATE, |_, _| Ret::default());
+        e.call_log = Some(vec![]);
+        e.call(0x0058_1630, &[this, source]);
+        let log = e.call_log.take().unwrap();
+        assert!(only(&log, SOUND_RECORD_CTOR).is_empty());
+        assert_eq!(added.get(), 0);
+    }
+
+    #[test]
+    fn compare_checks_sounds_layers_and_blocks() {
+        let mut e = engine();
+        let this = e.mem.alloc(0x374);
+        let source = e.mem.alloc(0x374);
+        let vt = e.mem.alloc(0x10);
+        e.mem.set_u32(vt + 0xc, 0x0050_0000);
+        e.register(0x0050_0000, |_, _| Ret::default());
+        e.mem.set_u32(this + 0xc8, vt);
+        e.register(COMPARE_ALL_COMPONENTS, |_, _| Ret::default());
+        let s1 = e.mem.alloc(8);
+        let s2 = e.mem.alloc(8);
+        e.mem.set_u32(this + 0x1f8, s1);
+        e.mem.set_u32(source + 0x1f8, s2);
+        assert!(e.call(0x0058_1880, &[this, 0]).bool());
+        assert!(!e.call(0x0058_1880, &[this, source]).bool());
+        e.mem.set_u8(s2 + 7, 1);
+        assert!(e.call(0x0058_1880, &[this, source]).bool());
+        e.mem.set_u8(s2 + 7, 0);
+        e.mem.set_u32(source + 0x1f8, 0);
+        assert!(e.call(0x0058_1880, &[this, source]).bool());
+        e.mem.set_u32(source + 0x1f8, s2);
+        e.mem.set_u8(source + 0x238 + 0x12f, 3);
+        assert!(e.call(0x0058_1880, &[this, source]).bool());
+        e.mem.set_u8(source + 0x238 + 0x12f, 0);
+        e.mem.set_u32(source + 0x368, 1);
+        assert!(e.call(0x0058_1880, &[this, source]).bool());
+        e.register(COMPARE_ALL_COMPONENTS, |_, _| 1u32.into_ret());
+        e.mem.set_u32(source + 0x368, 0);
+        assert!(e.call(0x0058_1880, &[this, source]).bool());
+    }
+
+    #[test]
+    fn modifiable_count_form_copy_and_compare() {
+        let mut e = engine();
+        e.register(GET_MODIFIER, |e, a| {
+            e.mem.u32(a[0] + 4 + a[1] * 4).into_ret()
+        });
+        let this = e.mem.alloc(0x1c);
+        let other = e.mem.alloc(0x1c);
+        for i in 0..6 {
+            e.mem.set_u32(other + 4 + i * 4, 0x100 + i);
+        }
+        assert!(e.call(0x0058_2220, &[this, other]).bool());
+        assert!(e.call(0x0058_2220, &[this, 0]).bool());
+        e.call(0x0058_21b0, &[this, 0]);
+        assert_eq!(e.mem.u32(this + 4), 0);
+        e.call(0x0058_21b0, &[this, other]);
+        assert_eq!(e.mem.u32(this + 0x18), 0x105);
+        assert!(!e.call(0x0058_2220, &[this, other]).bool());
     }
 }

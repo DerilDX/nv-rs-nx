@@ -134,6 +134,21 @@ pub fn fn_00803ed0(e: &mut Engine, this: Ptr<ActiveEffect>) {
     e.call(SOUND_HANDLE_DESTRUCT, &args![sound]);
 }
 
+/// The free `00401030` (`cdecl`, one word).
+const FREE: u32 = 0x0040_1030;
+
+// Translated from 00803ea0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ActiveEffect`'s scalar deleting destructor (`thiscall`, `RET 4`: the
+/// flags): runs the destructor body (`00803ed0`) and frees `this`
+/// (`00401030`) when bit 0 of the flags is set. Returns `this`.
+pub fn fn_00803ea0(e: &mut Engine, this: Ptr<ActiveEffect>, flags: u32) -> Ptr<ActiveEffect> {
+    fn_00803ed0(e, this);
+    if flags & 1 != 0 {
+        e.call(FREE, &args![this]);
+    }
+    this
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -143,6 +158,10 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         ),
         entry!(0x0080_3e80, fn_00803e80(Ptr<ActiveEffect>, u32)),
         entry!(0x0080_3ed0, fn_00803ed0(Ptr<ActiveEffect>)),
+        entry!(
+            0x0080_3ea0,
+            fn_00803ea0(Ptr<ActiveEffect>, u32) -> Ptr<ActiveEffect>
+        ),
     ]
 }
 
@@ -263,5 +282,44 @@ mod tests {
         assert!(calls_to(&e, LIST_REMOVE_ALL).is_empty());
         assert!(calls_to(&e, SOUND_HANDLE_STOP).is_empty());
         assert_eq!(calls_to(&e, SOUND_HANDLE_DESTRUCT).len(), 1);
+    }
+}
+
+#[cfg(test)]
+mod tests_n048 {
+    use super::*;
+
+    #[test]
+    fn scalar_deleting_destructor_frees_with_bit_0() {
+        let mut e = Engine::new();
+        for addr in [
+            SOUND_HANDLE_IS_VALID,
+            SOUND_HANDLE_DESTRUCT,
+            LIST_REMOVE_ALL,
+            LIST_DELETE,
+            FREE,
+        ] {
+            e.register(addr, |_, _| Ret::default());
+        }
+        let effect = e.new_object::<ActiveEffect>();
+        for flags in [1u32, 2] {
+            e.call_log = Some(vec![]);
+            let r = e.call(0x0080_3ea0, &args![effect, flags]);
+            assert_eq!(r.u32(), effect.addr());
+            let log = e.call_log.take().unwrap();
+            let frees: Vec<_> = log.iter().filter(|(a, _)| *a == FREE).collect();
+            let destructs = log
+                .iter()
+                .filter(|(a, _)| *a == SOUND_HANDLE_DESTRUCT)
+                .count();
+            assert_eq!(destructs, 1);
+            if flags & 1 != 0 {
+                assert_eq!(frees.len(), 1);
+                assert_eq!(frees[0].1, vec![effect.addr()]);
+            } else {
+                assert!(frees.is_empty());
+            }
+            assert_eq!(e.mem.u32(effect.addr()), ACTIVE_EFFECT_VTABLE);
+        }
     }
 }
