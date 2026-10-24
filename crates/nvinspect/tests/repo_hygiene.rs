@@ -2433,7 +2433,9 @@ mod fixtures {
 
     /// A name that is not valid UTF-8 cannot be matched against the rules, so it
     /// is reported instead of being skipped, by the walk and by the git listing.
-    #[cfg(unix)]
+    // APFS rejects invalid UTF-8 path components before the checker can see
+    // them; other Unix filesystems permit this fixture.
+    #[cfg(all(unix, not(target_os = "macos")))]
     #[test]
     fn names_that_are_not_utf8_are_reported() {
         use std::ffi::OsStr;

@@ -7,7 +7,7 @@
 [![Rust](https://img.shields.io/badge/Rust-2021_edition-orange.svg)](https://www.rust-lang.org/)
 [![Engine](https://img.shields.io/badge/Engine-Bevy_0.16-blue.svg)](https://bevyengine.org/)
 [![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](LICENSE)
-[![Platform](https://img.shields.io/badge/Platform-Windows-purple.svg)](docs/PLAYTESTING.md)
+[![Platform](https://img.shields.io/badge/Platform-Windows%20%7C%20macOS-purple.svg)](docs/PLAYTESTING.md)
 [![Status](https://img.shields.io/badge/Status-experimental-lightgrey.svg)](docs/MILESTONES.md)
 
 **Fallout: New Vegas, rebuilt in Rust, aiming to play exactly like the
@@ -71,7 +71,7 @@ Experimental, but already playable in places:
 </table>
 
 Not yet: a full playthrough, loading original saves, script-extender (NVSE)
-plugins, Linux and macOS, and VR.
+plugins, Linux and VR.
 
 ## Progress
 
@@ -119,6 +119,20 @@ cargo build --release && cargo test --workspace
 cd viewer
 cargo run --release -- "<path to Fallout New Vegas\Data>" GSDocMitchellHouse
 ```
+
+### Build and run on macOS
+
+The source viewer supports native macOS and selects Metal. Install stable
+Rust and the Xcode Command Line Tools, then pass the Data folder from your
+own PC installation:
+
+```sh
+cd viewer
+cargo run --release -- "/path/to/Fallout New Vegas/Data" GSDocMitchellHouse
+```
+
+Apple Silicon builds a native arm64 viewer by default. The game executable
+and Windows release packages remain Windows-specific.
 
 ---
 

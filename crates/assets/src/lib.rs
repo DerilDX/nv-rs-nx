@@ -221,8 +221,7 @@ pub fn default_settings_files(data_dir: &Path) -> Vec<PathBuf> {
     if let Some(game_dir) = data_dir.parent() {
         files.push(game_dir.join("Fallout_default.ini"));
     }
-    if let Some(home) = std::env::var_os("USERPROFILE") {
-        let home = PathBuf::from(home);
+    if let Some(home) = user_home() {
         for documents in [
             home.join("Documents"),
             home.join("OneDrive").join("Documents"),
@@ -261,8 +260,7 @@ pub fn archive_list_from(candidates: &[PathBuf]) -> ArchiveList {
 /// that contains `Data`.
 pub fn default_ini_candidates(data_dir: &Path) -> Vec<PathBuf> {
     let mut candidates = Vec::new();
-    if let Some(home) = std::env::var_os("USERPROFILE") {
-        let home = PathBuf::from(home);
+    if let Some(home) = user_home() {
         for documents in [
             home.join("Documents"),
             home.join("OneDrive").join("Documents"),
@@ -431,6 +429,19 @@ pub fn archive_priority(names: &[&str]) -> Vec<usize> {
         list.insert(before.unwrap_or(0), i);
     }
     list
+}
+
+/// Windows game installs use `USERPROFILE`; native Unix builds use `HOME`.
+/// Prefer the Windows variable when running in a compatibility environment.
+fn user_home() -> Option<PathBuf> {
+    user_home_from(std::env::var_os("USERPROFILE"), std::env::var_os("HOME"))
+}
+
+fn user_home_from(
+    userprofile: Option<std::ffi::OsString>,
+    home: Option<std::ffi::OsString>,
+) -> Option<PathBuf> {
+    userprofile.or(home).map(PathBuf::from)
 }
 
 /// Every file the game can see, with overrides resolved.
@@ -869,5 +880,17 @@ mod tests {
             "meshes\\weapons\\1handpistol\\10mm.nif"
         );
         assert_eq!(mesh_path("meshes\\a.nif"), "meshes\\a.nif");
+    }
+
+    #[test]
+    fn home_discovery_falls_back_to_macos_home() {
+        assert_eq!(
+            user_home_from(None, Some("player-home".into())),
+            Some(PathBuf::from("player-home"))
+        );
+        assert_eq!(
+            user_home_from(Some("windows-home".into()), Some("mac-home".into())),
+            Some(PathBuf::from("windows-home"))
+        );
     }
 }

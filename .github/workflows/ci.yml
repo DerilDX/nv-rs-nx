@@ -49,3 +49,14 @@ jobs:
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
           cargo clippy --locked --workspace --all-targets -- -D warnings
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
+  check-macos-viewer:
+    name: check viewer (macOS)
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Install stable Rust
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustup default stable
+      - name: Check the macOS viewer
+        run: cargo check --locked --manifest-path viewer/Cargo.toml

@@ -10,9 +10,12 @@
 use std::collections::HashSet;
 
 use bevy::asset::{load_internal_asset, weak_handle, RenderAssetUsages};
+#[cfg(not(target_os = "macos"))]
 use bevy::pbr::{
     ExtendedMaterial, MaterialExtension, MaterialExtensionKey, MaterialExtensionPipeline,
 };
+#[cfg(target_os = "macos")]
+use bevy::pbr::{Material, MaterialPipeline, MaterialPipelineKey};
 use bevy::prelude::*;
 use bevy::render::mesh::{
     Indices, MeshVertexAttribute, MeshVertexBufferLayoutRef, PrimitiveTopology,
@@ -43,6 +46,9 @@ pub const GAME_FAR_CLIP: f32 = 352_000.0;
 pub const ATTRIBUTE_MORPH_HEIGHT: MeshVertexAttribute =
     MeshVertexAttribute::new("LodMorphHeight", 990_412_771, VertexFormat::Float32);
 
+#[cfg(target_os = "macos")]
+pub type LodLandMaterial = LodLand;
+#[cfg(not(target_os = "macos"))]
 pub type LodLandMaterial = ExtendedMaterial<StandardMaterial, LodLand>;
 
 #[derive(Clone, Copy, Debug, PartialEq, ShaderType, Reflect)]
@@ -93,6 +99,27 @@ pub struct LodLand {
     pub shared: Handle<bevy::render::storage::ShaderStorageBuffer>,
 }
 
+#[cfg(target_os = "macos")]
+impl Material for LodLand {
+    fn vertex_shader() -> ShaderRef {
+        SHADER.into()
+    }
+
+    fn fragment_shader() -> ShaderRef {
+        SHADER.into()
+    }
+
+    fn specialize(
+        _pipeline: &MaterialPipeline<Self>,
+        descriptor: &mut RenderPipelineDescriptor,
+        layout: &MeshVertexBufferLayoutRef,
+        _key: MaterialPipelineKey<Self>,
+    ) -> Result<(), SpecializedMeshPipelineError> {
+        specialize_lod_pipeline(descriptor, layout)
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
 impl MaterialExtension for LodLand {
     fn vertex_shader() -> ShaderRef {
         SHADER.into()
@@ -108,16 +135,75 @@ impl MaterialExtension for LodLand {
         layout: &MeshVertexBufferLayoutRef,
         _key: MaterialExtensionKey<Self>,
     ) -> Result<(), SpecializedMeshPipelineError> {
-        if descriptor.vertex.shader != SHADER {
-            return Ok(());
-        }
-        descriptor.vertex.buffers = vec![layout.0.get_layout(&[
-            Mesh::ATTRIBUTE_POSITION.at_shader_location(0),
-            Mesh::ATTRIBUTE_UV_0.at_shader_location(2),
-            ATTRIBUTE_MORPH_HEIGHT.at_shader_location(3),
-        ])?];
-        Ok(())
+        specialize_lod_pipeline(descriptor, layout)
     }
+}
+
+fn specialize_lod_pipeline(
+    descriptor: &mut RenderPipelineDescriptor,
+    layout: &MeshVertexBufferLayoutRef,
+) -> Result<(), SpecializedMeshPipelineError> {
+    if descriptor.vertex.shader != SHADER {
+        return Ok(());
+    }
+    descriptor.vertex.buffers = vec![layout.0.get_layout(&[
+        Mesh::ATTRIBUTE_POSITION.at_shader_location(0),
+        Mesh::ATTRIBUTE_UV_0.at_shader_location(2),
+        ATTRIBUTE_MORPH_HEIGHT.at_shader_location(3),
+    ])?];
+    Ok(())
+}
+
+fn lod_land(material: &LodLandMaterial) -> &LodLand {
+    #[cfg(target_os = "macos")]
+    {
+        material
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        &material.extension
+    }
+}
+
+fn lod_land_mut(material: &mut LodLandMaterial) -> &mut LodLand {
+    #[cfg(target_os = "macos")]
+    {
+        material
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        &mut material.extension
+    }
+}
+
+pub fn set_high_detail(material: &mut LodLandMaterial, detail: Vec4) {
+    lod_land_mut(material).params.high_detail = detail;
+}
+
+pub fn set_parent_textures(
+    material: &mut LodLandMaterial,
+    offset: [f32; 2],
+    base: Option<Handle<Image>>,
+    normals: Option<Handle<Image>>,
+) {
+    let land = lod_land_mut(material);
+    land.chunk = Vec4::new(land.chunk.x, offset[0], offset[1], 0.0);
+    land.parent_base = base;
+    land.parent_normals = normals;
+}
+
+pub fn chunk_values(material: &LodLandMaterial) -> Vec4 {
+    lod_land(material).chunk
+}
+
+pub fn set_chunk_values(material: &mut LodLandMaterial, chunk: Vec4) {
+    lod_land_mut(material).chunk = chunk;
+}
+
+pub fn clear_parent_textures(material: &mut LodLandMaterial) {
+    let land = lod_land_mut(material);
+    land.parent_base = None;
+    land.parent_normals = None;
 }
 
 /// A chunk as a Bevy mesh (positions in Bevy's space).
@@ -198,19 +284,23 @@ impl Spawner<'_, '_> {
     ) -> SpawnedChunk {
         let base = chunk.diffuse.as_ref().and_then(|t| self.upload(t));
         let normals = chunk.normals.as_ref().and_then(|t| self.upload(t));
-        let material = self.lod_materials.add(LodLandMaterial {
+        let land = LodLand {
+            params,
+            base: base.clone(),
+            normals: normals.clone(),
+            noise,
+            chunk: Vec4::new(1.0, 0.0, 0.0, 1.0),
+            parent_base: None,
+            parent_normals: None,
+            clip: Vec4::new(GAME_FAR_CLIP * space::METERS_PER_UNIT, 0.0, 0.0, 0.0),
+            shared: crate::shared_light::BUFFER,
+        };
+        #[cfg(target_os = "macos")]
+        let material = self.lod_materials.add(land);
+        #[cfg(not(target_os = "macos"))]
+        let material = self.lod_materials.add(ExtendedMaterial {
             base: StandardMaterial::default(),
-            extension: LodLand {
-                shared: crate::shared_light::BUFFER,
-                params,
-                base: base.clone(),
-                normals: normals.clone(),
-                noise,
-                chunk: Vec4::new(1.0, 0.0, 0.0, 1.0),
-                parent_base: None,
-                parent_normals: None,
-                clip: Vec4::new(GAME_FAR_CLIP * space::METERS_PER_UNIT, 0.0, 0.0, 0.0),
-            },
+            extension: land,
         });
         let mesh = self.meshes.add(chunk_mesh(chunk));
         let entity = self
@@ -353,6 +443,13 @@ pub struct LodPlugin;
 impl Plugin for LodPlugin {
     fn build(&self, app: &mut App) {
         load_internal_asset!(app, SHADER, "lod_land.wgsl", Shader::from_wgsl);
+        #[cfg(target_os = "macos")]
+        app.add_plugins(MaterialPlugin::<LodLandMaterial> {
+            prepass_enabled: false,
+            shadows_enabled: false,
+            ..default()
+        });
+        #[cfg(not(target_os = "macos"))]
         app.add_plugins(MaterialPlugin::<LodLandMaterial>::default());
     }
 }

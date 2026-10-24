@@ -14,7 +14,7 @@ use world::lod::{LodNode, LodSettings, TerrainSettings};
 use world::{square_of, WorldGrid};
 
 use crate::grade::ImageSpaceGrade;
-use crate::lod::{choose_shown, high_detail, ChunkState, LodLandParams, SpawnedChunk};
+use crate::lod::{self, choose_shown, high_detail, ChunkState, LodLandParams, SpawnedChunk};
 use crate::walk::{game_point, CellCollision, Doors, Player};
 use crate::{FlyCamera, GameFiles, Grading, SceneEntity, Spawner};
 
@@ -662,7 +662,7 @@ pub fn stream_distant_land(
         for chunk in exterior.chunks.values() {
             if let Chunk::Loaded { spawned, .. } = chunk {
                 if let Some(m) = spawner.lod_materials.get_mut(&spawned.material) {
-                    m.extension.params.high_detail = detail;
+                    lod::set_high_detail(m, detail);
                 }
             }
         }
@@ -707,9 +707,7 @@ pub fn stream_distant_land(
         };
         if let Some(m) = spawner.lod_materials.get_mut(&spawned.material) {
             let [u, v] = node.offset_in_parent(parent);
-            m.extension.chunk = Vec4::new(m.extension.chunk.x, u, v, 0.0);
-            m.extension.parent_base = base.clone();
-            m.extension.parent_normals = normals.clone();
+            lod::set_parent_textures(m, [u, v], base.clone(), normals.clone());
             *fading_since = Some(now);
         }
     }
@@ -743,7 +741,7 @@ pub fn stream_distant_land(
         let Some(m) = spawner.lod_materials.get(&spawned.material) else {
             continue;
         };
-        let mut chunk_values = m.extension.chunk;
+        let mut chunk_values = lod::chunk_values(m);
         chunk_values.x = morph;
         let mut done = false;
         match fade {
@@ -754,12 +752,11 @@ pub fn stream_distant_land(
             }
             None => {}
         }
-        if chunk_values != m.extension.chunk || done {
+        if chunk_values != lod::chunk_values(m) || done {
             if let Some(m) = spawner.lod_materials.get_mut(&spawned.material) {
-                m.extension.chunk = chunk_values;
+                lod::set_chunk_values(m, chunk_values);
                 if done {
-                    m.extension.parent_base = None;
-                    m.extension.parent_normals = None;
+                    lod::clear_parent_textures(m);
                 }
             }
         }
