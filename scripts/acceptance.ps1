@@ -5,8 +5,8 @@ pass/fail for each. Every pull request that touches the game must pass
 them (CONTRIBUTING.md).
 
 .DESCRIPTION
-Routes (commands and success lines documented in docs/GOODSPRINGS_ROUTE.md
-and docs/PATHING.md):
+Routes (commands and success lines documented in docs/GOODSPRINGS_ROUTE.md,
+docs/PATHING.md and docs/VANCE_GUN_ROUTE.md):
   doc    Doc Mitchell walks the west rooms to his chair spot and talks
          (GSDocMitchellHouse, VCG01 stage 110).
   vcg02  Back in the Saddle: Sunny's walks, wells, reward (the quest's own
@@ -14,6 +14,8 @@ and docs/PATHING.md):
          player's following are console lines).
   vms16  Ghost Town Gunfight with Trudy's help: the gangers come in and
          die, stage 100.
+  vance  Vance's Gun: investigate the missing museum gun and get the Wins'
+         safe unlocked through the quest's own activation/dialogue scripts.
 A route passes when every one of its success lines appears in the
 viewer's output and no panic does.
 Every route runs with the viewer's --answer-boxes test aid, which answers
@@ -40,7 +42,7 @@ powershell -File scripts\acceptance.ps1 -Background
 param(
     # The game's Data folder (or set NV_DATA).
     [string]$Data = $env:NV_DATA,
-    # Which routes to run, comma-separated (doc, vcg02, vms16).
+    # Which routes to run, comma-separated (doc, vcg02, vms16, vance).
     [string]$Routes = 'doc,vcg02,vms16',
     # Where logs and screenshots go (default: %USERPROFILE%\nv-re\acceptance\<time>).
     [string]$Out,
@@ -112,11 +114,44 @@ $routeArgs = @{
             @('--wait', '330', '--walk', '--weapon', 'WeapNV9mmPistol')
         Success = @('XP +50')
     }
+    vance = @{
+        Args    = @('VikkiAndVance', '--at', '2074,3626,7232,180', '--use', '000E288A') +
+            (Run-Line @('player.SetAV Science 50', 'player.SetAV Speech 55')) +
+            (Run-At 70 'player.MoveTo PrimmSlimREF') +
+            (Run-At 70 'PrimmSlimREF.StartConversation player') +
+            @('--say', "Did you know that Vance's gun is missing?",
+              # This is the visible Science 50 choice; the DIAL topic's
+              # internal name is "What happened to Vance's Gun?".
+              '--say', 'Scan your data registry',
+              '--say', 'Goodbye.') +
+            # FalloutNV.esm has no link that adds this non-top-level topic:
+            # INFO 000BACC4 does not AddTopic it, and no parsed script does.
+            # Add it explicitly so the following real quest INFOs can run.
+            (Run-At 155 'player.AddTopic 000E32E7') +
+            (Run-At 160 'player.MoveTo PaulineWinsREF') +
+            # Let the cross-cell move spawn Wins Residence and its talkers
+            # before asking Pauline to start the conversation.
+            (Run-At 165 'PaulineWinsREF.StartConversation player') +
+            @('--say', "I know the two of you stole Vance's gun down in Primm.",
+              '--say', "What's your plan?",
+              '--say', "That's the greatest plan I've ever heard in my entire life.",
+              '--say', 'go') +
+            # The success INFO changes SammyPauline but does not add Sammy's
+            # non-top-level conversation topic either.
+            (Run-At 255 'player.AddTopic 000E32E5') +
+            (Run-At 260 'player.MoveTo SammyWinsREF') +
+            (Run-At 260 'SammyWinsREF.StartConversation player') +
+            @('--say', 'Pauline says you should give me the gun.',
+              '--say', 'go', '--wait', '320')
+        Success = @('XP +50', 'XP +55',
+            "The gun's in the safe. The combination's 05-23-34.",
+            'result script: SammySafeREF.setownership / SammySafeREF.unlock / set nVPrimmVanceGun.VanceGunCase to 3 / set nVPrimmVanceGun.SammyPauline to 2')
+    }
 }
 
 $chosen = @($Routes.Split(',') | ForEach-Object { $_.Trim() } | Where-Object { $_ })
 foreach ($r in $chosen) {
-    if (-not $routeArgs.ContainsKey($r)) { throw "Unknown route '$r' (doc, vcg02, vms16)." }
+    if (-not $routeArgs.ContainsKey($r)) { throw "Unknown route '$r' (doc, vcg02, vms16, vance)." }
 }
 
 $results = @()
