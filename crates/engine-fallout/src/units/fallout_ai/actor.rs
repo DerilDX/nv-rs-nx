@@ -1723,9 +1723,12 @@ pub fn actor_clear_disposition_modifiers(e: &mut Engine, this: Ptr<Actor>) {
 /// acquire object, or `00608d80` is true) and the second both read the
 /// values of `other`'s actor-value owner and combine them with
 /// `00642a60`; the result goes through `BGSEntryPoint::HandleEntryPoint`
-/// (`005e58f0`, entry point `0xe`) and is clamped. The extra argument words
-/// the code pushes for the owner's virtual `+8` call are never read by it
-/// (the callee pops one word), so only `0x17` is passed.
+/// (`005e58f0`, entry point `0xe`) and is clamped. `00642a60` is `cdecl`
+/// with eleven words (`ADD ESP,0x2c`): the flags word, `0066ef20(owner, 8)`,
+/// the skill word, the owner's virtual `+8` of `0x17`, the `0048bf50` value,
+/// the `008b7fe0` result, its first out word, the word built from
+/// `008a16d0`, a local that stays 0, the truncated virtual `+0x464` value and the
+/// actor's virtual `+0x21c` byte.
 pub fn fn_0087fd90(e: &mut Engine, this: Ptr<Actor>, other: Ptr<Actor>, cached: Ptr) -> i32 {
     let mut result: i32 = 0;
     if other.is_null() {
@@ -1834,8 +1837,11 @@ pub fn fn_0087fd90(e: &mut Engine, this: Ptr<Actor>, other: Ptr<Actor>, cached: 
                 let value = e.vcall(actor_in_high, 0x464, &args![other]).f64();
                 other_value = float_to_int(e, value);
             }
-            e.vcall(this.addr(), 0x21c, &args![]);
-            let _ = (cached_value, outcome, out_first, hostile, other_value);
+            // [EBP-0x3c]: set to 0 at 008800e1 and never written again.
+            let zero_word = 0u32;
+            let flag_21c = e.vcall(this.addr(), 0x21c, &args![]).u8();
+            // 0088015e..008801aa: the owner's virtual +8 takes only 0x17; the
+            // words pushed before it are 00642a60's arguments 5..11.
             let owner_value = e
                 .vcall(other.addr() + ACTOR_VALUE_OWNER, 8, &args![0x17u32])
                 .u32();
@@ -1845,7 +1851,19 @@ pub fn fn_0087fd90(e: &mut Engine, this: Ptr<Actor>, other: Ptr<Actor>, cached: 
             result = e
                 .call(
                     0x0064_2a60,
-                    &args![flags_word, clamped, skill_word, owner_value],
+                    &args![
+                        flags_word,
+                        clamped,
+                        skill_word,
+                        owner_value,
+                        cached_value,
+                        outcome,
+                        out_first,
+                        hostile,
+                        zero_word,
+                        other_value,
+                        flag_21c as u32
+                    ],
                 )
                 .i32();
         }
@@ -1882,8 +1900,12 @@ pub fn fn_0087fd90(e: &mut Engine, this: Ptr<Actor>, other: Ptr<Actor>, cached: 
             let weapon_drawn = e.call(0x008a_16d0, &args![other]).u8();
             let value = e.vcall(this.addr(), 0x464, &args![other]).f64();
             let other_value = float_to_int(e, value);
-            e.vcall(this.addr(), 0x21c, &args![]);
-            let _ = (cached_value, outcome, out_first, weapon_drawn, other_value);
+            // [EBP-0x6c]: set to 0 at 00880281 and never written again.
+            let zero_word = 0u32;
+            let flag_21c = e.vcall(this.addr(), 0x21c, &args![]).u8();
+            // 008802c3..0088030f: as on the first path, the words pushed before
+            // the owner's virtual +8 (which takes only 0x17) are 00642a60's
+            // arguments 5..11.
             let owner_value = e
                 .vcall(other.addr() + ACTOR_VALUE_OWNER, 8, &args![0x17u32])
                 .u32();
@@ -1893,7 +1915,19 @@ pub fn fn_0087fd90(e: &mut Engine, this: Ptr<Actor>, other: Ptr<Actor>, cached: 
             result = e
                 .call(
                     0x0064_2a60,
-                    &args![flags_word, clamped, skill_word, owner_value],
+                    &args![
+                        flags_word,
+                        clamped,
+                        skill_word,
+                        owner_value,
+                        cached_value,
+                        outcome,
+                        out_first,
+                        weapon_drawn as u32,
+                        zero_word,
+                        other_value,
+                        flag_21c as u32
+                    ],
                 )
                 .i32();
         }
@@ -1954,11 +1988,12 @@ pub fn fn_008803a0(e: &mut Engine, this: Ptr, index: u32) -> f32 {
     if flag && e.call(ACTOR_VALUE_IS_STAT, &args![index]).bool() {
         base_value = modifier;
     }
+    // 00880509..00880523: the owner handed on is `this` itself (the `ActorValueOwner` part),
+    // or 0 when the actor it belongs to is null.
+    let owner = if actor.addr() == 0 { 0 } else { this.addr() };
     let (accepted, result) = e.with_stack(4, |e, cell| {
         e.mem.set_f32(cell.addr(), 0.0);
-        let accepted = e
-            .call(0x0066_ed60, &args![actor.addr(), index, cell])
-            .bool();
+        let accepted = e.call(0x0066_ed60, &args![owner, index, cell]).bool();
         (accepted, e.mem.f32(cell.addr()))
     });
     if !accepted {
@@ -6438,8 +6473,14 @@ mod tests_block2 {
             Ret::default()
         });
         assert_eq!(e.call(0x0087_fd90, &args![this, other, cached]).i32(), 100);
-        // 00642a60(flags word, clamped value of 8, skill word, owner value).
-        assert_eq!(combine.borrow()[0], vec![0x66, 0, 0x77, 0x55]);
+        // 00642a60's eleven words: flags word, 0066ef20 value, skill word,
+        // owner value, then 0048bf50 value, 008b7fe0 result, its first out
+        // word (-1 as set), the 008a16d0 word, a zero local, the +0x464 value
+        // and the +0x21c byte.
+        assert_eq!(
+            combine.borrow()[0],
+            vec![0x66, 0, 0x77, 0x55, 0, 0, 0xffff_ffff, 0, 0, 0, 0]
+        );
         assert_eq!(*seen.borrow(), 150.0);
         // A negative score is raised to 0.
         e.register(0x0064_2a60, |_, _| ret((-20i32) as u32));
@@ -6458,6 +6499,64 @@ mod tests_block2 {
         e.mem.set_u32(cached + 0xc, 0);
         e.register(0x0064_2a60, |_, _| ret(61));
         assert_eq!(e.call(0x0087_fd90, &args![this, other, cached]).i32(), 61);
+    }
+
+    #[test]
+    fn score_passes_eleven_words_to_00642a60_in_exe_order() {
+        let mut e = new_engine();
+        let (this, other) = score_fixture(&mut e);
+        let cached = e.mem.alloc(0x18);
+        e.mem.set_u32(cached, 0x9000); // cached +0x37c value
+        e.mem.set_u32(cached + 4, 0x3300); // base of this
+        e.mem.set_u32(cached + 8, 0x4400); // target form
+        e.mem.set_u32(cached + 0xc, 0x5500); // owner reference
+        e.mem.set_u32(cached + 0x10, 0x66);
+        e.mem.set_u32(cached + 0x14, 0x77);
+        e.register(slot(VTABLE, 0x37c), |_, _| ret(0x88));
+        let cache_lookup = record(&mut e, 0x0048_bf50, ret(0x11));
+        let this_addr = this.addr();
+        e.register_double(0x008b_7fe0, move |e, a| {
+            assert_eq!(a[0], this_addr);
+            e.mem.set_u32(a[2], 0x33);
+            ret(0x22)
+        });
+        e.register(0x0066_ef20, |_, _| ret(0x44));
+        // Other's virtual +0x218 true: the first path reads 0048bf50.
+        e.register(slot(0x0203_0000, 0x218), |_, _| ret(1));
+        e.register(0x008a_16d0, |_, _| ret(0x0301));
+        e.register(0x0049_3bb0, |_, _| ret(0));
+        // 00970a20 finds `this`, whose virtual +0x464 gives 12.75.
+        e.register_double(0x0097_0a20, move |_, _| ret(this_addr));
+        e.register(slot(VTABLE, 0x464), |_, _| Ret {
+            st0: 12.75,
+            ..Ret::default()
+        });
+        e.register(slot(VTABLE, 0x21c), |_, _| ret(0x0201));
+        let combine = record(&mut e, 0x0064_2a60, ret(50));
+        assert_eq!(e.call(0x0087_fd90, &args![this, other, cached]).i32(), 50);
+        // Second path: this creature-like (virtual +0x218 true), no owner
+        // reference; the +0x21c byte is now 0 (AL of 0x100).
+        e.register(slot(VTABLE, 0x218), |_, _| ret(1));
+        e.register(slot(VTABLE, 0x21c), |_, _| ret(0x0100));
+        e.mem.set_u32(cached + 0xc, 0);
+        assert_eq!(e.call(0x0087_fd90, &args![this, other, cached]).i32(), 50);
+        assert_eq!(
+            *cache_lookup.borrow(),
+            vec![vec![0x9040, 0x88], vec![0x9040, 0x88]]
+        );
+        assert_eq!(
+            *combine.borrow(),
+            vec![
+                // 008801aa: [EBP-0x24], 0066ef20, [EBP-0x20], owner +8,
+                // [EBP-0x48], [EBP-0x38], [EBP-0x50], [EBP-0x4c], [EBP-0x3c],
+                // [EBP-0x54], +0x21c byte.
+                vec![0x66, 0x44, 0x77, 0x55, 0x11, 0x22, 0x33, 1, 0, 12, 1],
+                // 0088030f: [EBP-0x24], 0066ef20, [EBP-0x20], owner +8,
+                // [EBP-0x74], [EBP-0x68], [EBP-0x7c], [EBP-0x78], [EBP-0x6c],
+                // [EBP-0x80], +0x21c byte.
+                vec![0x66, 0x44, 0x77, 0x55, 0x11, 0x22, 0x33, 1, 0, 12, 0],
+            ]
+        );
     }
 
     // ---- 00880370 ----
@@ -6514,6 +6613,14 @@ mod tests_block2 {
         // becomes the modifier 4.5 and the result is the sum.
         e.register(ACTOR_VALUE_HAS_FLAG, |_, a| ret((a[1] == 0x800) as u32));
         e.register(0x0066_ed60, |e, a| {
+            e.mem.set_f32(a[2], 2.0);
+            ret(1)
+        });
+        assert_eq!(e.call(0x0088_03a0, &args![owner, 3u32]).f32(), 6.5);
+        // The `ActorValueOwner` part (`this`) goes on to 0066ed60, not the actor.
+        let expected = owner;
+        e.register_double(0x0066_ed60, move |e, a| {
+            assert_eq!(a[0], expected, "the owner, not the actor");
             e.mem.set_f32(a[2], 2.0);
             ret(1)
         });

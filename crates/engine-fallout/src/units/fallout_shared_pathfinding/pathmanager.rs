@@ -503,8 +503,10 @@ pub fn path_manager_impl_destruct(e: &mut Engine, this: Ptr) {
 /// Creates the task group and resets the manager's state after both manager
 /// and group creation succeed.
 pub fn path_manager_impl_initialize(e: &mut Engine, this: Ptr) -> bool {
-    let manager = e.call(0x00b0_0a00, &args![this]).u32();
-    if !e.call(0x00b0_0a80, &args![manager]).bool() {
+    // 006eabea pushes `this` before `00b00a00`, which takes no stack word (plain `RET`): it
+    // stays on the stack as `CreateTaskGroup`'s word.
+    let manager = e.call(0x00b0_0a00, &args![]).u32();
+    if !e.call(0x00b0_0a80, &args![manager, this]).bool() {
         return false;
     }
     if !e.call(0x006c_08e0, &args![this]).bool() {

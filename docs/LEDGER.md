@@ -1666,18 +1666,18 @@ have explicit incomplete markers and remain `partial` in the task queue.
 | `006e9fc0` | `crates/engine-fallout/src/units/fallout_shared_pathfinding/pathmanager.rs:139` |
 | `006ea510` | `crates/engine-fallout/src/units/fallout_shared_pathfinding/pathmanager.rs:288` |
 | `006ea780` | `crates/engine-fallout/src/units/fallout_shared_pathfinding/pathmanager.rs:370` |
-| `006eac70` | `crates/engine-fallout/src/units/fallout_shared_pathfinding/pathmanager.rs:530` |
-| `006eae40` | `crates/engine-fallout/src/units/fallout_shared_pathfinding/pathmanager.rs:581` |
-| `006eb440` | `crates/engine-fallout/src/units/fallout_shared_pathfinding/pathmanager.rs:822` |
-| `006eb6b0` | `crates/engine-fallout/src/units/fallout_shared_pathfinding/pathmanager.rs:896` |
-| `006eb8c0` | `crates/engine-fallout/src/units/fallout_shared_pathfinding/pathmanager.rs:982` |
-| `006eb9d0` | `crates/engine-fallout/src/units/fallout_shared_pathfinding/pathmanager.rs:1016` |
-| `006ebd30` | `crates/engine-fallout/src/units/fallout_shared_pathfinding/pathmanager.rs:1154` |
-| `006ec000` | `crates/engine-fallout/src/units/fallout_shared_pathfinding/pathmanager.rs:1262` |
-| `006ec130` | `crates/engine-fallout/src/units/fallout_shared_pathfinding/pathmanager.rs:1294` |
-| `006ec4b0` | `crates/engine-fallout/src/units/fallout_shared_pathfinding/pathmanager.rs:1377` |
-| `006ec660` | `crates/engine-fallout/src/units/fallout_shared_pathfinding/pathmanager.rs:1422` |
-| `006ec870` | `crates/engine-fallout/src/units/fallout_shared_pathfinding/pathmanager.rs:1494` |
+| `006eac70` | `crates/engine-fallout/src/units/fallout_shared_pathfinding/pathmanager.rs:532` |
+| `006eae40` | `crates/engine-fallout/src/units/fallout_shared_pathfinding/pathmanager.rs:583` |
+| `006eb440` | `crates/engine-fallout/src/units/fallout_shared_pathfinding/pathmanager.rs:824` |
+| `006eb6b0` | `crates/engine-fallout/src/units/fallout_shared_pathfinding/pathmanager.rs:898` |
+| `006eb8c0` | `crates/engine-fallout/src/units/fallout_shared_pathfinding/pathmanager.rs:984` |
+| `006eb9d0` | `crates/engine-fallout/src/units/fallout_shared_pathfinding/pathmanager.rs:1018` |
+| `006ebd30` | `crates/engine-fallout/src/units/fallout_shared_pathfinding/pathmanager.rs:1156` |
+| `006ec000` | `crates/engine-fallout/src/units/fallout_shared_pathfinding/pathmanager.rs:1264` |
+| `006ec130` | `crates/engine-fallout/src/units/fallout_shared_pathfinding/pathmanager.rs:1296` |
+| `006ec4b0` | `crates/engine-fallout/src/units/fallout_shared_pathfinding/pathmanager.rs:1379` |
+| `006ec660` | `crates/engine-fallout/src/units/fallout_shared_pathfinding/pathmanager.rs:1424` |
+| `006ec870` | `crates/engine-fallout/src/units/fallout_shared_pathfinding/pathmanager.rs:1496` |
 | `006ece00` | `crates/engine-fallout/src/units/unplaced/run_006ecd60.rs:121` |
 | `006ece90` | `crates/engine-fallout/src/units/unplaced/run_006ecd60.rs:21` |
 | `006ecfa0` | `crates/engine-fallout/src/units/unplaced/run_006ecd60.rs:145` |
@@ -5789,7 +5789,7 @@ have explicit incomplete markers and remain `partial` in the task queue.
 
 Game code (functions whose subsystem or unit is neither platform nor library): **45629** functions, of which 45622 (100.0%) are translated, run from the static-initializer table, or traced.
 
-Rust cites 94178 distinct `.text` addresses; 878 of them lie outside every function in the map (mid-instruction data, or code no function covers).
+Rust cites 94187 distinct `.text` addresses; 878 of them lie outside every function in the map (mid-instruction data, or code no function covers).
 
 Names by tier (see the engine-map README for each tier's evidence):
 
