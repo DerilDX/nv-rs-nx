@@ -246,8 +246,10 @@ pub fn fn_00a27e40(e: &mut Engine, time: f32, key: Ptr, _unused_3: u32, out: Ptr
 /// keys from each key and the next: with `d = next.value - value`,
 /// `a = 3d - (next.in + 2 * out)` (+0x28) and `b = (next.in + out) - 2d`
 /// (+0x34), in-tangent +0x10, out-tangent +0x1C. Every x87 operation and
-/// float temporary as the exe does them.
-pub fn fn_00a27ee0(e: &mut Engine, keys: Ptr, count: u32) {
+/// float temporary as the exe does them. `cdecl` with three words (the
+/// key-fill table at `011f3780` holds it; the callers push the key size,
+/// 0x40 from `00a282a0`, as the third), the third never read.
+pub fn fn_00a27ee0(e: &mut Engine, keys: Ptr, count: u32, _unused_2: u32) {
     let mut remaining = count.wrapping_sub(1);
     if remaining == 0 {
         return;
@@ -808,7 +810,7 @@ fn finish_position_insert(e: &mut Engine, keys: Ptr, count: Ptr, old: u32, new: 
     }
     e.mem.set_u32(keys.addr(), new);
     let n = e.mem.u32(count.addr());
-    fn_00a27ee0(e, Ptr::new(new), n);
+    fn_00a27ee0(e, Ptr::new(new), n, 0x40);
     true
 }
 
@@ -850,7 +852,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00a2_7c80, fn_00a27c80(f32, Ptr, u32, Ptr)),
         entry!(0x00a2_7d60, fn_00a27d60(f32, Ptr, u32, Ptr)),
         entry!(0x00a2_7e40, fn_00a27e40(f32, Ptr, u32, Ptr)),
-        entry!(0x00a2_7ee0, fn_00a27ee0(Ptr, u32)),
+        entry!(0x00a2_7ee0, fn_00a27ee0(Ptr, u32, u32)),
         entry!(0x00a2_8060, fn_00a28060(Ptr, u32) -> f32),
         entry!(0x00a2_76a0, fn_00a276a0(Ptr, f32, Ptr, u32, u32, u32) -> Ptr),
         entry!(0x00a2_7760, fn_00a27760(Ptr, Ptr) -> bool),
@@ -985,9 +987,9 @@ mod tests {
         key_at(&mut e, keys, 1.0, 0.0, 2.0, 0.0, 0.0);
         key_at(&mut e, keys + 0x40, 5.0, 3.0, 0.0, 9.0, 9.0);
         key_at(&mut e, keys + 0x80, 0.0, 0.0, 0.0, 7.0, 7.0);
-        e.call(0x00a2_7ee0, &args![keys, 1u32]);
+        e.call(0x00a2_7ee0, &args![keys, 1u32, 0x40u32]);
         assert_eq!(lanes(&e, keys + 0x28), [0.0; 3], "one key: nothing");
-        e.call(0x00a2_7ee0, &args![keys, 2u32]);
+        e.call(0x00a2_7ee0, &args![keys, 2u32, 0x40u32]);
         // d = 4: a = 12 - (3 + 4) = 5, b = (3 + 2) - 8 = -3.
         assert_eq!(lanes(&e, keys + 0x28), [5.0, 10.0, 15.0]);
         assert_eq!(lanes(&e, keys + 0x34), [-3.0, -6.0, -9.0]);

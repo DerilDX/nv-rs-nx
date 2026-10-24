@@ -128,7 +128,12 @@ pub fn guard_actor_package_data_load_game(
 /// `GuardActorPackageData::InitLoadGame` (Xbox PDB): after loading, converts
 /// the warned-actor slot to the object a dynamic cast gives (null stays null)
 /// and marks a non-null actor as targeted.
-pub fn guard_actor_package_data_init_load_game(e: &mut Engine, this: Ptr<GuardActorPackageData>) {
+/// The stack word (`RET 4`) is not read.
+pub fn guard_actor_package_data_init_load_game(
+    e: &mut Engine,
+    this: Ptr<GuardActorPackageData>,
+    _unused_1: u32,
+) {
     let warned = e.get(this, GuardActorPackageData::pGuardWarnedActor);
     let converted = if warned.is_null() {
         0
@@ -180,7 +185,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         ),
         entry!(
             0x009f2900,
-            guard_actor_package_data_init_load_game(Ptr<GuardActorPackageData>)
+            guard_actor_package_data_init_load_game(Ptr<GuardActorPackageData>, u32)
         ),
     ]
 }
@@ -303,7 +308,7 @@ mod tests {
         let mut e = Engine::new();
         let g = guard(&mut e);
         e.call_log = Some(vec![]);
-        e.call(0x009f2900, &args![g]);
+        e.call(0x009f2900, &args![g, 0u32]);
         assert_eq!(e.call_log.take().unwrap().len(), 1, "no other call");
         assert_eq!(e.get(g, GuardActorPackageData::pGuardWarnedActor).addr(), 0);
     }
@@ -321,7 +326,7 @@ mod tests {
             Ptr::<()>::new(0x1000),
         );
         e.call_log = Some(vec![]);
-        e.call(0x009f2900, &args![g]);
+        e.call(0x009f2900, &args![g, 0u32]);
         let log = e.call_log.take().unwrap();
         assert_eq!(
             log[1..],
@@ -349,7 +354,7 @@ mod tests {
             Ptr::<()>::new(0x1000),
         );
         e.call_log = Some(vec![]);
-        e.call(0x009f2900, &args![g]);
+        e.call(0x009f2900, &args![g, 0u32]);
         let log = e.call_log.take().unwrap();
         assert!(log.iter().all(|(a, _)| *a != SET_TARGETED));
         assert_eq!(e.get(g, GuardActorPackageData::pGuardWarnedActor).addr(), 0);

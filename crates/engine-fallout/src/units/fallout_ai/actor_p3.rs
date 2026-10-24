@@ -10802,7 +10802,8 @@ pub fn fn_008a3c30(e: &mut Engine) -> f32 {
 /// of the face animation data) according to the global flag `0119b4e0`,
 /// fleeing, combat and the process' sound state.
 /// C++ exception unwinding (the sound handle's cleanup) is not translated.
-pub fn fn_008a3c50(e: &mut Engine, this: Ptr<Actor>) {
+/// The stack word (`RET 4`) is not read.
+pub fn fn_008a3c50(e: &mut Engine, this: Ptr<Actor>, _unused_1: u32) {
     if e.call(MOBILE_OBJECT_GET_CURRENT_PROCESS_TYPE, &args![this])
         .u32()
         != 0
@@ -14180,7 +14181,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x008a3bf0, fn_008a3bf0(Ptr, u8)),
         entry!(0x008a3c10, fn_008a3c10() -> f32),
         entry!(0x008a3c30, fn_008a3c30() -> f32),
-        entry!(0x008a3c50, fn_008a3c50(Ptr<Actor>)),
+        entry!(0x008a3c50, fn_008a3c50(Ptr<Actor>, u32)),
         entry!(0x008a3ed0, fn_008a3ed0(Ptr<Actor>) -> u32),
         entry!(0x008a40e0, fn_008a40e0(Ptr<Actor>, u32) -> u8),
         entry!(0x008a46a0, fn_008a46a0(Ptr) -> u8),
@@ -21255,7 +21256,7 @@ mod tests {
         let (actor, face) = face_update_setup(&mut e);
         // The global flag is off: the neutral animation (slot 0xb4).
         stub(&mut e, GLOBAL_FLAG_5B7470, 0);
-        fn_008a3c50(&mut e, actor);
+        fn_008a3c50(&mut e, actor, 0);
         assert_eq!(
             calls_to(&e, slot_target(&e, face, FACE_ANIMATION_SLOT_B4)),
             vec![vec![face.addr(), 0, 1, 0, 0, 0, 0]]
@@ -21263,7 +21264,7 @@ mod tests {
         // Fleeing: animation 1 at full strength.
         stub(&mut e, GLOBAL_FLAG_5B7470, 1);
         stub(&mut e, ACTOR_IS_FLEEING, 1);
-        fn_008a3c50(&mut e, actor);
+        fn_008a3c50(&mut e, actor, 0);
         assert_eq!(
             calls_to(&e, slot_target(&e, face, FACE_ANIMATION_SLOT_114)),
             vec![vec![face.addr(), 1, FLOAT_ONE_BITS]]
@@ -21272,7 +21273,7 @@ mod tests {
         stub(&mut e, ACTOR_IS_FLEEING, 0);
         stub(&mut e, ACTOR_IN_COMBAT, 1);
         e.call_log = Some(vec![]);
-        fn_008a3c50(&mut e, actor);
+        fn_008a3c50(&mut e, actor, 0);
         assert_eq!(
             calls_to(&e, slot_target(&e, face, FACE_ANIMATION_SLOT_114)),
             vec![vec![face.addr(), 0xe, FLOAT_ONE_BITS]]
@@ -21280,7 +21281,7 @@ mod tests {
         // Otherwise without a process: the value of the owner's slot 8.
         stub(&mut e, ACTOR_IN_COMBAT, 0);
         e.call_log = Some(vec![]);
-        fn_008a3c50(&mut e, actor);
+        fn_008a3c50(&mut e, actor, 0);
         assert_eq!(
             calls_to(&e, slot_target(&e, face, FACE_ANIMATION_SLOT_11C)),
             vec![vec![face.addr(), 55]]
@@ -21300,7 +21301,7 @@ mod tests {
         e.set(actor, Actor::pCurrentProcess, process);
         // No valid sound handle and the process slot 0x2e8 is 0: set.
         stub(&mut e, SOUND_HANDLE_IS_VALID_FN, 0);
-        fn_008a3c50(&mut e, actor);
+        fn_008a3c50(&mut e, actor, 0);
         assert_eq!(
             call_count(&e, slot_target(&e, face, FACE_ANIMATION_SLOT_11C)),
             1
@@ -21309,7 +21310,7 @@ mod tests {
         // A valid handle: left alone.
         e.call_log = Some(vec![]);
         stub(&mut e, SOUND_HANDLE_IS_VALID_FN, 1);
-        fn_008a3c50(&mut e, actor);
+        fn_008a3c50(&mut e, actor, 0);
         assert_eq!(
             call_count(&e, slot_target(&e, face, FACE_ANIMATION_SLOT_11C)),
             0
@@ -21317,7 +21318,7 @@ mod tests {
         // Not in process level 0: nothing at all.
         e.call_log = Some(vec![]);
         stub(&mut e, MOBILE_OBJECT_GET_CURRENT_PROCESS_TYPE, 1);
-        fn_008a3c50(&mut e, actor);
+        fn_008a3c50(&mut e, actor, 0);
         assert_eq!(call_count(&e, ACTOR_GET_FACE_ANIMATION_DATA), 0);
     }
 

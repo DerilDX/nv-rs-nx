@@ -368,7 +368,13 @@ const VTABLE_REFERENCED: u32 = 0x0102_e388;
 /// (`+0x34`) as `"Mesh"` and the code (`+0x14`) as `"Mopp"` through slot `0xC` of the
 /// collector, each with a 0, then runs `hkReferencedObject::calcContentStatistics(collector,
 /// 01269c8c)`.
-pub fn hkp_mopp_bv_tree_shape_calc_content_statistics(e: &mut Engine, this: Ptr, collector: Ptr) {
+/// The second stack word (`RET 8`; callers pass the class record) is not read.
+pub fn hkp_mopp_bv_tree_shape_calc_content_statistics(
+    e: &mut Engine,
+    this: Ptr,
+    collector: Ptr,
+    _unused_2: u32,
+) {
     let me = this.addr();
     let child = e.mem.u32(me + 0x34);
     e.vcall(collector.addr(), 0xc, &args![STATISTICS_MESH, child, 0u32]);
@@ -403,7 +409,13 @@ pub fn fn_00d543e0(e: &mut Engine, this: Ptr) {
 /// `hkpMoppBvTreeShape::calcSizeForSpu` (Xbox PDB), `RET 8` with one word: when the byte at
 /// `code + 0x2c` is 0, asks the child shape's slot `0x18` for `(word, 0x100)`; a result from 0
 /// to 0x100 is stored at `+0x38` and 0x40 is returned. Every other case returns -1.
-pub fn hkp_mopp_bv_tree_shape_calc_size_for_spu(e: &mut Engine, this: Ptr, word: u32) -> u32 {
+/// The second stack word is not read.
+pub fn hkp_mopp_bv_tree_shape_calc_size_for_spu(
+    e: &mut Engine,
+    this: Ptr,
+    word: u32,
+    _unused_2: u32,
+) -> u32 {
     let me = this.addr();
     let code = e.mem.u32(me + 0x14);
     if e.mem.u8(code + 0x2c) != 0 {
@@ -515,12 +527,12 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00d5_4930, deleting_destructor_00d54930(Ptr, u8) -> Ptr),
         entry!(
             0x00d5_4300,
-            hkp_mopp_bv_tree_shape_calc_content_statistics(Ptr, Ptr)
+            hkp_mopp_bv_tree_shape_calc_content_statistics(Ptr, Ptr, u32)
         ),
         entry!(0x00d5_43e0, fn_00d543e0(Ptr)),
         entry!(
             0x00d5_4440,
-            hkp_mopp_bv_tree_shape_calc_size_for_spu(Ptr, u32) -> u32
+            hkp_mopp_bv_tree_shape_calc_size_for_spu(Ptr, u32, u32) -> u32
         ),
         entry!(0x00d5_4490, fn_00d54490(Ptr, u32, Ptr) -> Ptr),
         entry!(0x00d5_44f0, fn_00d544f0(Ptr, Ptr, Ptr) -> Ptr),
@@ -927,7 +939,7 @@ mod a06_tests {
         let this = e.mem.alloc(0x40);
         e.mem.set_u32(this + 0x14, 0xc0de);
         e.mem.set_u32(this + 0x34, 0xc41d);
-        e.call(0x00d54300, &args![this, collector]);
+        e.call(0x00d54300, &args![this, collector, 0u32]);
         assert_eq!(
             *log.borrow(),
             vec![
@@ -975,13 +987,13 @@ mod a06_tests {
         let this = e.mem.alloc(0x40);
         e.mem.set_u32(this + 0x14, code);
         e.mem.set_u32(this + 0x34, child);
-        assert_eq!(e.call(0x00d54440, &args![this, 0x77u32]).u32(), 0x40);
+        assert_eq!(e.call(0x00d54440, &args![this, 0x77u32, 0u32]).u32(), 0x40);
         assert_eq!(e.mem.u32(this + 0x38), 0x80);
         assert_eq!(*log.borrow(), vec![vec![child, 0x77, 0x100]]);
         for (value, stored) in [(0, true), (0x100, true), (0x101, false), (-1, false)] {
             e.mem.set_u32(this + 0x38, 0x1234);
             *size.borrow_mut() = value;
-            let got = e.call(0x00d54440, &args![this, 0u32]).u32();
+            let got = e.call(0x00d54440, &args![this, 0u32, 0u32]).u32();
             if stored {
                 assert_eq!((got, e.mem.u32(this + 0x38)), (0x40, value as u32));
             } else {
@@ -992,7 +1004,10 @@ mod a06_tests {
         for kind in [1u8, 2] {
             e.mem.set_u8(code + 0x2c, kind);
             log.borrow_mut().clear();
-            assert_eq!(e.call(0x00d54440, &args![this, 0u32]).u32(), 0xffff_ffff);
+            assert_eq!(
+                e.call(0x00d54440, &args![this, 0u32, 0u32]).u32(),
+                0xffff_ffff
+            );
             assert!(log.borrow().is_empty());
         }
     }

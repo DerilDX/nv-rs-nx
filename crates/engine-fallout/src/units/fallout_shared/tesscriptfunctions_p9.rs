@@ -55,9 +55,11 @@ const UNLOADED_FORM_BUFFER_CONSTRUCTOR: u32 = 0x0053_7e90;
 /// Returns the pool object the block allocator hangs on (`cdecl`, no
 /// arguments).
 const BLOCK_POOL: u32 = 0x00c8_5750;
-/// Pool allocation (`thiscall`, aligned byte size and a flag word).
+/// Identity `thiscall` (plain `RET`, returns `ECX`): the size and flag
+/// words pushed before it stay on the stack for `005e0ad0`.
 const POOL_ALLOCATE: u32 = 0x0068_15c0;
-/// Follow-up `thiscall` (no arguments) on the pool's result.
+/// Follow-up `thiscall` on the pool (`RET 8`: the size and flag words
+/// left by `006815c0`).
 const POOL_FINISH: u32 = 0x005e_0ad0;
 /// `005e0600`'s callee (`cdecl`, one word).
 const RELEASE_BLOCK: u32 = 0x005e_0b60;
@@ -456,13 +458,14 @@ pub fn fn_005e09c0(
 // Translated from 005e0aa0 (decompiled, FalloutNV.exe 1.4.0.525)
 /// Allocates a pool block of `block_count` 0x200-byte units (rounded up to
 /// 128 bytes): gets the pool (`00c85750`), allocates from it (`006815c0`,
-/// passing `flag` on) and runs the follow-up `005e0ad0` on the result,
-/// whose value it returns.
+/// an identity call whose two pushed words, the size and `flag`, stay on
+/// the stack) and runs the follow-up `005e0ad0` on the result with those
+/// two words (`RET 8`), returning its value.
 pub fn fn_005e0aa0(e: &mut Engine, block_count: u32, flag: u32) -> u32 {
     let pool = e.call(BLOCK_POOL, &args![]).u32();
     let size = (block_count << 9).wrapping_add(0x7f) & 0xffff_ff80;
-    let block = e.call(POOL_ALLOCATE, &args![pool, size, flag]).u32();
-    e.call(POOL_FINISH, &args![block]).u32()
+    let block = e.call(POOL_ALLOCATE, &args![pool]).u32();
+    e.call(POOL_FINISH, &args![block, size, flag]).u32()
 }
 
 /// This part's translated functions, by exe address.
@@ -805,8 +808,8 @@ mod tests {
             vec![
                 (BLOCK_OBJECT_INIT, vec![0x40]),
                 (BLOCK_POOL, vec![]),
-                (POOL_ALLOCATE, vec![0x7000, 0x400, 0]),
-                (POOL_FINISH, vec![0x8000]),
+                (POOL_ALLOCATE, vec![0x7000]),
+                (POOL_FINISH, vec![0x8000, 0x400, 0]),
                 (UNLOADED_FORM_BUFFER_CONSTRUCTOR, vec![0x40, 0x9000]),
             ]
         );
@@ -920,8 +923,8 @@ mod tests {
             log(&e),
             vec![
                 (BLOCK_POOL, vec![]),
-                (POOL_ALLOCATE, vec![0x7000, 0x600, 5]),
-                (POOL_FINISH, vec![0x8000]),
+                (POOL_ALLOCATE, vec![0x7000]),
+                (POOL_FINISH, vec![0x8000, 0x600, 5]),
             ]
         );
     }

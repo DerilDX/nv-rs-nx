@@ -16,7 +16,8 @@ pub fn fn_00599c40(e: &mut Engine, this: Ptr) -> Ptr {
     e.call(0x0040_2d00, &args![base + 0x18]);
     e.mem.set_u32(base, 0x0103_449c);
     e.mem.set_u32(base + 0x18, 0x0103_4484);
-    e.call(0x0040_3d30, &args![this, base + 0x24, 0x0u32, 0xcu32]);
+    // memset wrapper (cdecl, three words): the 0xC bytes at +0x24 cleared.
+    e.call(0x0040_3d30, &args![base + 0x24, 0x0u32, 0xcu32]);
     e.call(0x004f_15a0, &args![this, 0x72u32]);
     this
 }
@@ -531,7 +532,7 @@ mod tests {
             calls: &[
                 (0x0048_3370, &[A::T(0x0)]),
                 (0x0040_2d00, &[A::T(0x18)]),
-                (0x0040_3d30, &[A::T(0x0), A::T(0x24), A::V(0x0), A::V(0xc)]),
+                (0x0040_3d30, &[A::T(0x24), A::V(0x0), A::V(0xc)]),
                 (0x004f_15a0, &[A::T(0x0), A::V(0x72)]),
             ],
             stores: &[(0x0, 4, 0x0103_449c), (0x18, 4, 0x0103_4484)],

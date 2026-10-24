@@ -257,7 +257,13 @@ pub fn hk_buffered_stream_writer_tell(e: &mut Engine, this: Ptr) -> i32 {
 /// `hkBufferedStreamWriter::calcContentStatistics` (Xbox PDB): reports to the visitor,
 /// through its slot `0x14`, the buffer as `(1, 0x01080668, buffer (+0xc), limit (+0x14), 0)`
 /// and through its slot `0xc` the inner stream as `(0x010ce43c, stream (+8), 0)`.
-pub fn hk_buffered_stream_writer_calc_content_statistics(e: &mut Engine, this: Ptr, visitor: u32) {
+/// The second stack word (`RET 8`; callers pass the class record) is not read.
+pub fn hk_buffered_stream_writer_calc_content_statistics(
+    e: &mut Engine,
+    this: Ptr,
+    visitor: u32,
+    _unused_2: u32,
+) {
     let t = this.addr();
     let buffer = e.mem.u32(t + 0xc);
     let limit = e.mem.u32(t + 0x14);
@@ -336,7 +342,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00d2_73f0, hk_buffered_stream_writer_tell(Ptr) -> i32),
         entry!(
             0x00d2_7420,
-            hk_buffered_stream_writer_calc_content_statistics(Ptr, u32)
+            hk_buffered_stream_writer_calc_content_statistics(Ptr, u32, u32)
         ),
         entry!(0x00d2_7460, hk_buffered_stream_writer_hk_buffered_stream_writer(Ptr, u32, u32) -> Ptr),
         entry!(0x00d2_7520, hk_buffered_stream_writer_destructor(Ptr)),
@@ -745,7 +751,7 @@ mod translated_tests {
         e.mem.set_u32(visitor, vtable);
         answer(&mut e, 0x0900_0101, 0);
         answer(&mut e, 0x0900_0102, 0);
-        e.call(0x00d2_7420, &args![this, visitor]);
+        e.call(0x00d2_7420, &args![this, visitor, 0u32]);
         assert_eq!(
             calls_to(&e, 0x0900_0102),
             vec![vec![visitor, 1, 0x0108_0668, buffer, 16, 0]]

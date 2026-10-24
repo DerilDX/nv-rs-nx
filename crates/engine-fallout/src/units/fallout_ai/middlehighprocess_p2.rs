@@ -4456,7 +4456,12 @@ pub fn middle_high_process_set_lighting_shader_property(
 /// a current package (slot +0x27C); otherwise true when the package has a
 /// procedure type (`009611e0`, not -1) whose procedure table entry for the
 /// current procedure index (slot +0x280) is 0x36.
-pub fn middle_high_process_is_package_done(e: &mut Engine, this: Ptr<MiddleHighProcess>) -> bool {
+/// The stack word (`RET 4`; the callers push the actor) is not read.
+pub fn middle_high_process_is_package_done(
+    e: &mut Engine,
+    this: Ptr<MiddleHighProcess>,
+    _unused_1: u32,
+) -> bool {
     let p = this.addr();
     let package = e.vcall(p, 0x27c, &[]).u32();
     if package == 0 {
@@ -5025,7 +5030,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
             0x0092bf60,
             middle_high_process_set_lighting_shader_property(Process, u32)
         ),
-        entry!(0x0092bf80, middle_high_process_is_package_done(Process) -> bool),
+        entry!(0x0092bf80, middle_high_process_is_package_done(Process, u32) -> bool),
         entry!(
             0x0092bff0,
             middle_high_process_defer_hide_dismembered_limb(Process, u32, u32, u32, u8)
@@ -8033,19 +8038,19 @@ mod tests {
         let mut e = engine();
         let p = process(&mut e);
         // No package: done.
-        assert!(middle_high_process_is_package_done(&mut e, p));
+        assert!(middle_high_process_is_package_done(&mut e, p, 0));
         let package = thing(&mut e);
         slot_returns(&mut e, PROCESS_SLOTS, 0x27c, package);
         slot_returns(&mut e, PROCESS_SLOTS, 0x280, 2);
         // Type -1: not done.
         e.register(PACKAGE_WORD_18, |_, _| ret(u32::MAX));
-        assert!(!middle_high_process_is_package_done(&mut e, p));
+        assert!(!middle_high_process_is_package_done(&mut e, p, 0));
         // The table entry 0x36 means done, another one not.
         e.register(PACKAGE_WORD_18, |_, _| ret(0));
         procedure_table(&mut e, 0, 2, 0x36);
-        assert!(middle_high_process_is_package_done(&mut e, p));
+        assert!(middle_high_process_is_package_done(&mut e, p, 0));
         procedure_table(&mut e, 0, 2, 0x35);
-        assert!(!middle_high_process_is_package_done(&mut e, p));
+        assert!(!middle_high_process_is_package_done(&mut e, p, 0));
     }
 
     #[test]

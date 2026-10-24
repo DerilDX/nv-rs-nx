@@ -1604,9 +1604,11 @@ pub fn fn_00604ba0(e: &mut Engine, this: Ptr, template: Ptr) {
         }
         if uses(e, 0) {
             let value = e.call(0x0044_1110, &args![base_data]).u32();
-            e.call(0x0050_f9a0, &args![npc, value]);
+            // 00604f00 and 00604f1d: `ECX` is the component itself (no `SUB ECX,0x30`): its
+            // +0x1C and +0x20 (on the NPC these would be the object list's links).
+            e.call(0x0050_f9a0, &args![this, value]);
             let voice = e.vcall(base_data, 0x68, &args![]).u32();
-            e.call(0x0050_f9c0, &args![npc, voice]);
+            e.call(0x0050_f9c0, &args![this, voice]);
             let flag = e.call(TEST_ACTOR_FLAGS, &args![base_data, 1u32]).u8();
             e.call(0x0047_dd50, &args![this, 1u32, flag as u32, 1u32]);
             let race = e.call(GET_WORD_AT_4, &args![source + COMPONENT_RACE]).u32();
@@ -8287,8 +8289,8 @@ mod tests {
         assert_eq!(at(&mut e, 0x0050_eaa0), vec![vec![npc.addr(), t]]);
         assert_eq!(at(&mut e, 0x0047_86e0), vec![vec![c + 0xd4, t + 0x104]]);
         // Voice, race, height, weight, class, combat style.
-        assert_eq!(at(&mut e, 0x0050_f9a0), vec![vec![npc.addr(), 0x5eed]]);
-        assert_eq!(at(&mut e, 0x0050_f9c0), vec![vec![npc.addr(), 0]]);
+        assert_eq!(at(&mut e, 0x0050_f9a0), vec![vec![c, 0x5eed]]);
+        assert_eq!(at(&mut e, 0x0050_f9c0), vec![vec![c, 0]]);
         assert_eq!(at(&mut e, 0x0047_dd50), vec![vec![c, 1, 1, 1]]);
         assert_eq!(e.get(npc, TESNPC::pFormRace), Ptr::new(0x6ace));
         assert_eq!(

@@ -315,7 +315,8 @@ fn float_square_root(e: &mut Engine, value: f64) -> f64 {
 /// `sqrt((m00 + 1) / 2)`, `sqrt((m11 + 1) / 2)`, `sqrt((m22 + 1) / 2)`, whose z is negated
 /// when the matrix does not map the axis onto itself (squared error of `M v - v` at least
 /// 1e-6), and then y as well when the error stays that large. After negating y the code
-/// computes the error once more into its locals without using it (no effect, left out).
+/// computes the three rows of `M v - v` once more into its stack locals (each stored as a
+/// float, then as a double into one slot) and never reads them; translated, with no effect.
 ///
 /// The errors only decide comparisons, so the NaN a product picks there does not matter:
 /// they are computed with every matrix entry as a memory operand.
@@ -374,6 +375,28 @@ pub fn fn_00a58550(e: &mut Engine, this: Ptr, angle: Ptr, x: Ptr, y: Ptr, z: Ptr
         if !(epsilon > axis_error(e, m, ld(e, x), ld(e, y), negated)) {
             let negated = through_float(-ld(e, y));
             st(e, y, negated);
+            // The unused rows (`00a58803`..`00a5884c`), in the exe's operand order.
+            let x_row = x87_add(
+                x87_add(x87_mul(ld(e, x), op(e, m)), x87_mul(negated, op(e, m + 4))),
+                x87_mul(ld(e, m + 8), op(e, z)),
+            );
+            let _x_error = through_float(x87_sub(x_row, op(e, x)));
+            let y_row = x87_add(
+                x87_add(
+                    x87_mul(negated, op(e, m + 0x10)),
+                    x87_mul(ld(e, m + 0xc), op(e, x)),
+                ),
+                x87_mul(ld(e, z), op(e, m + 0x14)),
+            );
+            let _y_error = through_float(x87_sub(y_row, negated));
+            let z_row = x87_add(
+                x87_add(
+                    x87_mul(negated, op(e, m + 0x1c)),
+                    x87_mul(ld(e, m + 0x18), op(e, x)),
+                ),
+                x87_mul(ld(e, z), op(e, m + 0x20)),
+            );
+            let _z_error = through_float(x87_sub(z_row, op(e, z)));
         }
     }
 }

@@ -1,4 +1,4 @@
-# Handoff: engine port push (updated 2026-10-23)
+# Handoff: engine port push (updated 2026-10-24)
 
 For the next Claude session leading the nv-rs engine port. Read AGENTS.md,
 docs/MILESTONES.md, docs/ENGINE_PORT_PLAN.md, docs/FRAME_SKELETON.md and
@@ -7,7 +7,23 @@ machinery runs.
 
 ## Resume here
 
-### Claude lead, 2026-10-22/23 (current; read this first, then 2026-10-20 evening below)
+### Claude lead, 2026-10-23/24 (current; read this first, then 2026-10-22/23 below)
+
+**Merged:** #240, #241, #242 and #243 (the last written batches; 46,435 translated, 98.1 % covered once #243 lands), contributor PRs #231 (oracle: recursion, hidden inputs), #108 (native macOS and Metal) and #50 (Vance's Gun route). Issues #233-#238 (the oracle's store tier, 148 functions) are fixed and closed.
+
+**Translation:** every written batch n001-n089 is done. By system, every function of physics, graphics, animation and faces, and audio is translated; gameplay 99.7 %. "Translated" includes partial functions, nearly all of which lack only the C++ exception frame (FS:[0]) or the /GS cookie check. What is left on the lead: the C runtime, compiler start-up/exit and BS* platform code (the play branch's), and the open items below.
+
+**Bug classes found by the play build and scanned for on the whole lead:** functions in vtables translated without `this` (a08, 35 fixed); dropped return values of a final call (a05 earlier; a09 second scan, 11 fixed; 1,118 vtable-only candidates left undecided because slot-offset matching can't tell classes apart: needs the receiver's class at each call site); a vtable's address read as memory (two fixed, scan found no more); an extra `this` passed to the CRT's stdcall array iterators (3 fixed); functions that leave out trailing unread stack words (15 fixed). The review list (private `phase0/lists/fix/suspects.txt`) is worked through; each line fixed or explained.
+
+**Play build (branch `claude/build43-movement`, private `wt-build43`, local, not pushed):** start-up now runs through the renderer, face generation, the movie player (the intro is skipped exactly as the real game skips it: `sIntroSequence` is empty in the player's INI), the game data files and into the player's creation and TESDataHandler's form lists. New platform layers on the branch, each matched against the player's DLL or Windows behaviour: Bink (all nine imports; the intro decodes 8,692/8,692 frames bit-identical to binkw32.dll; movie audio decode matches about two thirds of frames, the rest one step off, cause not found: docs/MOVIES.md), WinMM mmio, DirectSound (device answers captured into a git-ignored sound table, `scripts/dsound-capture`; no audible output yet: the mixer, Vorbis, DirectShow MP3 and Bink sound wait for the maintainer, survey in the private `agents/scratch/a11/audio-survey.md`), FindFirstFileA through the real file system on Windows (read only; short-name matching can't be modelled), one game clock (`Engine::clock_now_us/ms`) for every time import, and a large CRT batch (printf's own output path, setlocale, atexit, memcpy family with both paths, strtod/__fltin2, locale and multibyte code pages). The handover with the exact last stop is the top of the private `phase0/build43-status.md`.
+
+**Machinery changes (private `phase0/bin`):** the gate builds incrementally, builds the oracle at opt-level 1, runs clippy with `--keep-going`, and leaves 00ba5060 out of the oracle (an 11-entry stack table with an unchecked index); `oracle-only.sh` reruns just the oracle step. The compile queue has a lane for hygiene-only runs, starts a big job after 5 idle minutes, starts nothing beside a play build, and runs play builds with one compile job (two overlapping crates ran the machine out of memory). The C: drive filled up once (2026-10-24 07:57 UTC): clean slot and stand-in targets after collecting.
+
+**Contributor PRs:** #232 (oracle store tier) approved, waiting on the contributor's rebase; #29, #87, #91 changes requested; #62 asked to rebase after #108.
+
+**Open:** the 1,118 vtable-only dropped-return candidates; the x87 status flags behind _statfp/_clrfp; the partial functions' exception frames (needs a design decision on modelling SEH); audible sound (the maintainer's call: after the renderer, or now).
+
+### Claude lead, 2026-10-22/23 (read this after 2026-10-23/24, then 2026-10-20 evening below)
 
 **Merged:** PR #229 (005e0830's slot result), PR #230 (recorded batches b054-b075, n001-n003, the last nixenonrenderer functions: 37,226 translated, 84.9% covered) and PR #239 (the animation, renderer, scene graph and AI batches n004-n029; 40,291 translated, 89.3% covered).
 

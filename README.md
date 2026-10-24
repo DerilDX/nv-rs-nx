@@ -76,7 +76,7 @@ plugins, Linux and VR.
 ## Progress
 
 <p align="center">
-  <img src="docs/media/progress.svg" alt="Engine port progress: 98.1% of the original program's functions covered" width="100%">
+  <img src="docs/media/progress.svg" alt="Engine port progress: 98.2% of the original program's functions covered" width="100%">
 </p>
 
 The original game's systems switch over one at a time, each in its own
@@ -89,7 +89,7 @@ playable build:
 | 🔨 | **Animation and faces** | In progress: every function translated (some still lack their C++ exception frames), not yet switched on |
 | ⬜ | **Audio:** sounds, music and the radio | Every function translated, not yet switched on; sound output on our own DirectSound layer is being built |
 | 🔨 | **Graphics:** lighting, weather and effects matching the original | In progress: trees (SpeedTree) translated; the game's own renderer is translated to run on our own Direct3D 9 layer ([ADR-0007](docs/adr/0007-renderer-translated-on-own-d3d9-layer.md)); every function translated, being brought up in the play build |
-| ⬜ | **Gameplay:** combat, AI, quests, dialogue, menus, V.A.T.S., perks, crafting and minigames | Over 99% translated, not yet switched on |
+| ⬜ | **Gameplay:** combat, AI, quests, dialogue, menus, V.A.T.S., perks, crafting and minigames | Every function translated (some still lack their C++ exception frames), not yet switched on |
 | ⬜ | **Saves and the open world:** original saves, world streaming | Planned |
 
 After that come optional bug fixes, script-extender compatibility and more

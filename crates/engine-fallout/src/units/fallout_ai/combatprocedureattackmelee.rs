@@ -464,10 +464,10 @@ const TEN_FLOAT: u32 = 0x0101_7b78;
 const THIRTY_TWO_FLOAT: u32 = 0x0101_e340;
 const SIXTY_FOUR_FLOAT: u32 = 0x0101_e6ec;
 /// `double` constants of the exe: 0.5, 1, 1.25, 2, 2.25, 5, 10, 25, 100,
-/// and the factor at `01090d68` (0.66, read from the exe). The compares
-/// with the `double` 0 at `01012060` (read-only data) are written with the
-/// literal 0.
+/// and the factor at `01090d68` (0.66, read from the exe), and the `double`
+/// 0 at `01012060` the compares with 0 read.
 const HALF_DOUBLE: u32 = 0x0101_1588;
+const ZERO_DOUBLE: u32 = 0x0101_2060;
 const ONE_DOUBLE: u32 = 0x0101_2070;
 const ONE_AND_A_QUARTER_DOUBLE: u32 = 0x0102_1798;
 const TWO_DOUBLE: u32 = 0x0101_1590;
@@ -785,7 +785,7 @@ pub fn fn_009cc510(e: &mut Engine, this: Ptr<CombatProcedureAttackMelee>) {
     });
     let hundred = double_at(e, HUNDRED_DOUBLE);
     // FCOMP 5.0; TEST AH,0x41; JNZ: only when the time is greater.
-    if since > double_at(e, FIVE_DOUBLE) && x87_load32(attack_score) != 0.0 {
+    if since > double_at(e, FIVE_DOUBLE) && x87_load32(attack_score) != double_at(e, ZERO_DOUBLE) {
         attack_score = x87_store32(x87_add(x87_load32(attack_score), hundred));
     }
     if !target_byte_104 && target != e.global::<u32>(PLAYER) {
@@ -807,7 +807,7 @@ pub fn fn_009cc510(e: &mut Engine, this: Ptr<CombatProcedureAttackMelee>) {
     if zero_block {
         block_score = 0;
     }
-    let can_attack = if attacking && x87_load32(attack_score) > 0.0 {
+    let can_attack = if attacking && x87_load32(attack_score) > double_at(e, ZERO_DOUBLE) {
         true
     } else {
         let attacker = e.call(GET_ATTACKER, &args![t]).u32();
@@ -897,7 +897,7 @@ pub fn fn_009cc510(e: &mut Engine, this: Ptr<CombatProcedureAttackMelee>) {
             let power_flag = u32::from(e.mem.u8(power));
             start_attack(e, this, attack, power_flag);
         });
-    } else if x87_load32(block_score) > 0.0
+    } else if x87_load32(block_score) > double_at(e, ZERO_DOUBLE)
         && x87_load32(roll) < x87_add(x87_load32(attack_score), x87_m32(block_score))
     {
         e.call(SET_BLOCK, &args![attacker, 1u32]);
@@ -1130,7 +1130,7 @@ pub fn fn_009ccfb0(e: &mut Engine, this: Ptr<CombatProcedureAttackMelee>) {
     let busy = attacker_sequence_busy(e, this);
     let health = x87_store32(e.call(GET_ITEM_HEALTH, &args![item, 0u32]).f64());
     // FCOMP 0.0; TEST AH,0x41; JP: a health below or equal to 0.
-    if x87_load32(health) <= 0.0 && !busy {
+    if x87_load32(health) <= double_at(e, ZERO_DOUBLE) && !busy {
         e.call(SET_BLOCK, &args![attacker, 0u32]);
         fn_009cf6d0(e, this, 3);
         return;
@@ -1331,7 +1331,7 @@ pub fn maneuver_decision(e: &mut Engine, this: Ptr<CombatProcedureAttackMelee>) 
         .f64(),
     );
     // FCOMP 0.0; TEST AH,5; JP: below 0 becomes 0.
-    if x87_load32(chance) < 0.0 {
+    if x87_load32(chance) < double_at(e, ZERO_DOUBLE) {
         chance = 0;
     }
     if e.get(this, CombatProcedureAttackMelee::bRangedAllyWantsToShoot) {
@@ -1880,7 +1880,7 @@ pub fn get_current_attack_reach(e: &mut Engine, this: Ptr<CombatProcedureAttackM
     let t = this.addr();
     let attacker = e.call(GET_ATTACKER, &args![t]).u32();
     // FCOMP 0.0; TEST AH,5; JP: computed only when below 0.
-    if x87_load32(e.mem.u32(t + 0x58)) < 0.0 {
+    if x87_load32(e.mem.u32(t + 0x58)) < double_at(e, ZERO_DOUBLE) {
         let controller = controller_of(e, this);
         let weapon = e.call(CONTROLLER_WEAPON, &args![controller]).u32();
         let reach = e.call(GET_WEAPON_REACH, &args![attacker, weapon]).f64();
@@ -2051,14 +2051,16 @@ pub fn select_power_attack(
         let animation = e.vcall(attacker, SLOT_ANIMATION, &args![]).u32();
         let mut speed = x87_store32(e.call(ANIM_SPEED, &args![animation]).f64());
         // FCOMP 0.0; TEST AH,0x41; JP: at most 0 becomes 1.
-        if x87_load32(speed) <= 0.0 {
+        if x87_load32(speed) <= double_at(e, ZERO_DOUBLE) {
             speed = 1.0f32.to_bits();
         }
         let velocity = x87_store32(get_moving_target_velocity(e, this));
         let scaled_reach = x87_store32(x87_mul(x87_load32(reach.to_bits()), x87_m32(scale)));
         let owner = attacker + ACTOR_VALUE_OWNER;
-        let both_values = e.vcall(owner, SLOT_GET_ACTOR_VALUE, &args![0x1du32]).f64() > 0.0
-            && e.vcall(owner, SLOT_GET_ACTOR_VALUE, &args![0x1eu32]).f64() > 0.0;
+        let both_values = e.vcall(owner, SLOT_GET_ACTOR_VALUE, &args![0x1du32]).f64()
+            > double_at(e, ZERO_DOUBLE)
+            && e.vcall(owner, SLOT_GET_ACTOR_VALUE, &args![0x1eu32]).f64()
+                > double_at(e, ZERO_DOUBLE);
         let one = double_at(e, ONE_DOUBLE);
         for i in 0..5u32 {
             let controller = controller_of(e, this);
@@ -2071,7 +2073,7 @@ pub fn select_power_attack(
             let controller = controller_of(e, this);
             let weight = fn_009cef90(e, controller, i).to_bits();
             // FCOMP 0.0; TEST AH,5; JP: a weight below 0 is skipped.
-            if x87_load32(weight) < 0.0 {
+            if x87_load32(weight) < double_at(e, ZERO_DOUBLE) {
                 continue;
             }
             let group = i + 0x5c;
@@ -2451,7 +2453,7 @@ pub fn fn_009cf420(e: &mut Engine, this: Ptr<CombatProcedureAttackMelee>, attack
     let mut allowed = false;
     let style = style_of(e, this);
     let score = e.call(STYLE_SCORE_5524B0, &args![style]).u8() as i8;
-    if f64::from(score) > 0.0 {
+    if f64::from(score) > double_at(e, ZERO_DOUBLE) {
         allowed = true;
         let style = style_of(e, this);
         if e.call(STYLE_FLAG_TEST, &args![style, 1u32]).bool() {
@@ -2762,7 +2764,7 @@ pub fn check_movement_restrictions_distance(e: &mut Engine, this: Ptr<CombatProc
 pub fn get_facing_target_distance(e: &mut Engine, this: Ptr<CombatProcedureAttackMelee>) -> f32 {
     let t = this.addr();
     // FCOMP 0.0; TEST AH,5; JP: computed only when below 0.
-    if x87_load32(e.mem.u32(t + 0x5c)) < 0.0 {
+    if x87_load32(e.mem.u32(t + 0x5c)) < double_at(e, ZERO_DOUBLE) {
         let target = e.call(GET_TARGET, &args![t]).u32();
         let attacker = e.call(GET_ATTACKER, &args![t]).u32();
         let distance = e
@@ -2956,11 +2958,11 @@ pub fn fn_009cff90(
         e.call(MATRIX_FROM_HEADING, &args![matrix, x87_store32(heading)]);
         let mut width = x87_store32(e.call(ACTOR_WIDTH, &args![actor]).f64());
         // FCOMP 0.0; TEST AH,0x44; JP: 0 becomes 32.
-        if x87_load32(width) == 0.0 {
+        if x87_load32(width) == double_at(e, ZERO_DOUBLE) {
             width = x87_quiet_bits(e.global::<u32>(THIRTY_TWO_FLOAT));
         }
         let mut length = x87_store32(e.call(ACTOR_LENGTH, &args![actor]).f64());
-        if x87_load32(length) == 0.0 {
+        if x87_load32(length) == double_at(e, ZERO_DOUBLE) {
             length = width;
         }
         let ratio = x87_store32(x87_div(x87_load32(width), x87_m32(length)));

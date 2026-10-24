@@ -32,7 +32,8 @@ const ALLOCATOR: u32 = 8;
 /// the iterator's owner test `005ca4f0` and owner `0060b980` (`thiscall`),
 /// `_invalid_parameter_noinfo` (`00ec7c56`), the iterator base constructor `0044dee0`
 /// (`thiscall`), the pointer category tag `0065e750` (`cdecl`, the addresses of one or two
-/// iterators; answers a byte), the iterator category `0065fd70` (`cdecl`, three words: a
+/// iterators; answers the top byte of the caller's `ECX`, so it is registered with `ECX`
+/// first and two stack words), the iterator category `0065fd70` (`cdecl`, three words: a
 /// result byte's address and two iterators' addresses; answers the result's address), the
 /// unchecked pointer `0065fe40` (`cdecl`, an iterator's address), the element destructor
 /// `0065e9a0` (`thiscall` on the allocator, one word), `operator new` (`00401000`) and
@@ -362,8 +363,12 @@ pub fn fn_0064e380(e: &mut Engine, first: u32, last: u32, dest: u32) -> u32 {
         e.mem.set_u32(last_slot, last);
         e.mem.set_u32(dest_slot, dest);
         e.mem.set_u8(checked, 0);
+        // `ECX` is the address of the `dest` word; the pushes are those of `first` and `dest`.
         let pointer_tag = e
-            .call(POINTER_CATEGORY_0065E750, &args![first_slot, dest_slot])
+            .call(
+                POINTER_CATEGORY_0065E750,
+                &args![dest_slot, first_slot, dest_slot],
+            )
             .u32() as u8;
         e.mem.set_u8(tag, pointer_tag);
         let at = e
@@ -397,8 +402,9 @@ pub fn fn_0064e3f0(e: &mut Engine, first: u32, last: u32, allocator: u32) {
         let frame = frame.addr();
         e.mem.set_u32(frame, first);
         e.mem.set_u32(frame + 4, last);
+        // `ECX` is the address of the `first` word; the pushes are those of `first` and `last`.
         let tag = e
-            .call(POINTER_CATEGORY_0065E750, &args![frame, frame + 4])
+            .call(POINTER_CATEGORY_0065E750, &args![frame, frame, frame + 4])
             .u32() as u8;
         let (first, last) = (e.mem.u32(frame), e.mem.u32(frame + 4));
         fn_0064e600(e, first, last, allocator, u32::from(tag));
@@ -435,7 +441,10 @@ pub fn fn_0064e480(e: &mut Engine, this: Ptr, first: u32, last: u32, dest: u32) 
 pub fn fn_0064e550(e: &mut Engine, first: u32, count: u32, value: u32, allocator: u32) {
     e.with_stack(4, |e, slot| {
         e.mem.set_u32(slot.addr(), first);
-        let tag = e.call(POINTER_CATEGORY_0065E750, &args![slot, slot]).u32() as u8;
+        // `ECX` and both pushes are the address of the `first` word.
+        let tag = e
+            .call(POINTER_CATEGORY_0065E750, &args![slot, slot, slot])
+            .u32() as u8;
         let first = e.mem.u32(slot.addr());
         fn_0064e710(e, first, count, value, allocator, u32::from(tag), 0);
     });
@@ -488,13 +497,25 @@ pub fn fn_0064e600(e: &mut Engine, first: u32, last: u32, allocator: u32, _unuse
 /// four words): the pointer category tag of `dest` (`0065e750`), the unchecked pointers of
 /// `last` and `first` (`0065fe40`), then [`fn_0064e840`]; answers its result.
 pub fn fn_0064e630(e: &mut Engine, first: u32, last: u32, dest: u32, allocator: u32) -> u32 {
-    e.with_stack(0xc, |e, frame| {
-        let frame = frame.addr();
-        let (first_slot, last_slot, dest_slot) = (frame, frame + 4, frame + 8);
+    e.with_stack(0x10, |e, frame| {
+        // The local word at EBP-4 (its byte EBP-1 cleared, EBP-2 the tag); the argument
+        // words follow it.
+        let local = frame.addr();
+        let (first_slot, last_slot, dest_slot) = (local + 4, local + 8, local + 0xc);
         e.mem.set_u32(first_slot, first);
         e.mem.set_u32(last_slot, last);
         e.mem.set_u32(dest_slot, dest);
-        let tag = e.call(POINTER_CATEGORY_0065E750, &args![dest_slot]).u32() as u8;
+        e.mem.set_u8(local + 3, 0);
+        // `ECX` and the one push are the address of the `dest` word; the next stack word,
+        // which the tag function does not read either, is the local word.
+        let word = e.mem.u32(local);
+        let tag = e
+            .call(
+                POINTER_CATEGORY_0065E750,
+                &args![dest_slot, dest_slot, word],
+            )
+            .u32() as u8;
+        e.mem.set_u8(local + 2, tag);
         let dest = e.mem.u32(dest_slot);
         let last = e.call(UNCHECKED_0065FE40, &args![last_slot]).u32();
         let first = e.call(UNCHECKED_0065FE40, &args![first_slot]).u32();
@@ -595,8 +616,12 @@ pub fn fn_0064e920(e: &mut Engine, first: u32, last: u32, dest: u32, allocator: 
         e.mem.set_u32(first_slot, first);
         e.mem.set_u32(last_slot, last);
         e.mem.set_u32(dest_slot, dest);
+        // `ECX` is the address of the `dest` word; the pushes are those of `first` and `dest`.
         let tag = e
-            .call(POINTER_CATEGORY_0065E750, &args![first_slot, dest_slot])
+            .call(
+                POINTER_CATEGORY_0065E750,
+                &args![dest_slot, first_slot, dest_slot],
+            )
             .u32() as u8;
         let dest = e.mem.u32(dest_slot);
         let last = e.call(UNCHECKED_0065FE40, &args![last_slot]).u32();
@@ -1306,5 +1331,73 @@ mod n063_tests {
             .call(0x0064_e980, &args![range, range, other, 0u32, 0u32, 0u32])
             .u32();
         assert_eq!(answer, other);
+    }
+}
+
+#[cfg(test)]
+mod pointer_tag_tests {
+    use super::*;
+
+    /// The tag's words per call: the tags answer 0x100, the category writes 7, the unchecked
+    /// pointer reads its slot.
+    fn tag_calls(run: impl FnOnce(&mut Engine)) -> (Engine, Vec<Vec<u32>>) {
+        let mut e = Engine::new();
+        e.register(POINTER_CATEGORY_0065E750, |_, _| 0x100u32.into_ret());
+        e.register(ITERATOR_CATEGORY_0065FD70, |e, a| {
+            e.mem.set_u8(a[0], 7);
+            a[0].into_ret()
+        });
+        e.register(UNCHECKED_0065FE40, |e, a| e.mem.u32(a[0]).into_ret());
+        e.call_log = Some(vec![]);
+        run(&mut e);
+        let tags = e
+            .call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|(a, _)| *a == POINTER_CATEGORY_0065E750)
+            .map(|(_, w)| w.clone())
+            .collect();
+        (e, tags)
+    }
+
+    #[test]
+    fn the_tag_gets_ecx_and_the_pushed_words() {
+        // copy (0064e380): ECX the dest word's address, pushes first and dest.
+        let (e, tags) = tag_calls(|e| {
+            e.call(0x0064_e380, &args![0x4000u32, 0x4000u32, 0x5000u32]);
+        });
+        assert_eq!(tags.len(), 1);
+        assert_eq!(e.mem.u32(tags[0][0]), 0x5000);
+        assert_eq!(e.mem.u32(tags[0][1]), 0x4000);
+        assert_eq!(tags[0][2], tags[0][0]);
+        // destroy (0064e3f0): ECX the first word's address, pushes first and last.
+        let (e, tags) = tag_calls(|e| {
+            e.call(0x0064_e3f0, &args![0x4000u32, 0x4000u32, 0x5008u32]);
+        });
+        assert_eq!(tags[0][0], tags[0][1]);
+        assert_eq!(e.mem.u32(tags[0][1]), 0x4000);
+        assert_eq!(tags[0][2], tags[0][1] + 4);
+        // uninitialized copy (0064e630): ECX and the one push the dest word's address, then
+        // the local word (its byte EBP-1 cleared).
+        let (e, tags) = tag_calls(|e| {
+            e.call(
+                0x0064_e630,
+                &args![0x4000u32, 0x4000u32, 0x5000u32, 0x6000u32],
+            );
+        });
+        assert_eq!(tags[0][0], tags[0][1]);
+        assert_eq!(e.mem.u32(tags[0][0]), 0x5000);
+        assert_eq!(tags[0][2] >> 24, 0);
+        // checked uninitialized copy (0064e920): as copy.
+        let (e, tags) = tag_calls(|e| {
+            e.call(
+                0x0064_e920,
+                &args![0x4000u32, 0x4000u32, 0x5000u32, 0x6000u32],
+            );
+        });
+        assert_eq!(e.mem.u32(tags[0][0]), 0x5000);
+        assert_eq!(e.mem.u32(tags[0][1]), 0x4000);
+        assert_eq!(tags[0][2], tags[0][0]);
     }
 }

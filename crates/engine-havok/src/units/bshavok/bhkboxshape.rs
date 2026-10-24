@@ -323,7 +323,8 @@ pub fn bhk_box_shape_init(e: &mut Engine, this: Ptr, info: Ptr) {
 /// handle at `0126826c` (guard bit 0 of `01268270`; `_atexit` registers `00fde1b0`), stores
 /// the handle in the geometry (`00a5b950`) and runs virtual slot 0xDC of `node` with `(geometry,
 /// 1)`.
-pub fn bhk_box_shape_build_display_geometry(e: &mut Engine, this: Ptr, node: Ptr) {
+/// The second stack word (`RET 8`) is not read.
+pub fn bhk_box_shape_build_display_geometry(e: &mut Engine, this: Ptr, node: Ptr, _unused_2: u32) {
     let (word, saved) = enter_scope(e);
     let source = half_extents(e, this.addr());
     let geometry = e.with_stack(0x20, |e, buffer| {
@@ -396,7 +397,10 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00c9ffd0, bhk_box_shape_create_clone(Ptr, u32) -> u32),
         entry!(0x00ca0090, bhk_box_shape_create_cinfo(Ptr, Ptr) -> u32),
         entry!(0x00ca0190, bhk_box_shape_init(Ptr, Ptr)),
-        entry!(0x00ca02b0, bhk_box_shape_build_display_geometry(Ptr, Ptr)),
+        entry!(
+            0x00ca02b0,
+            bhk_box_shape_build_display_geometry(Ptr, Ptr, u32)
+        ),
         entry!(0x00ca0410, bhk_box_shape_get_viewer_strings(Ptr, Ptr)),
     ]
 }
@@ -772,7 +776,7 @@ mod tests {
         e.mem.set_u32(this + 8, shape);
         let node = object(&mut e, &[(0xdc, 0x0900_00dc)]);
         e.call_log = Some(vec![]);
-        e.call(0x00ca02b0, &args![this, node]);
+        e.call(0x00ca02b0, &args![this, node, 0u32]);
         assert_eq!(given.get(), [3.0, 5.0, -6.0]);
         assert_eq!(
             calls(&e, VECTOR_TO_FLOATS)[0][1] - calls(&e, VECTOR_TO_FLOATS)[0][0],
@@ -786,7 +790,7 @@ mod tests {
         assert_eq!(calls(&e, 0x0900_00dc), [[node, 0x6600, 1]]);
         assert_eq!(e.mem.u32(word), 0x77);
         // The second time the name is already interned.
-        e.call(0x00ca02b0, &args![this, node]);
+        e.call(0x00ca02b0, &args![this, node, 0u32]);
         assert_eq!(calls(&e, INTERN_STRING).len(), 1);
         assert_eq!(calls(&e, AT_EXIT).len(), 1);
         assert_eq!(calls(&e, SET_NAME).len(), 2);
@@ -802,7 +806,7 @@ mod tests {
         let node = object(&mut e, &[(0xdc, 0x0900_00dc)]);
         e.call_log = Some(vec![]);
         // The Havok shape is missing: the vector at 01267e30 is converted.
-        e.call(0x00ca02b0, &args![this, node]);
+        e.call(0x00ca02b0, &args![this, node, 0u32]);
         assert_eq!(
             calls(&e, VECTOR_TO_FLOATS)[0][1] - calls(&e, VECTOR_TO_FLOATS)[0][0],
             0x10
@@ -833,7 +837,7 @@ mod tests {
         });
         let this = e.mem.alloc(0x14);
         let node = object(&mut e, &[]);
-        e.call(0x00ca02b0, &args![this, node]);
+        e.call(0x00ca02b0, &args![this, node, 0u32]);
         assert_eq!(seen.get(), 0x43);
     }
 

@@ -192,13 +192,14 @@ const SETTING_EXPLOSIVE_PROJECTILE_BLOCKED_WAIT_TIME: u32 = 0x011c_f8ec;
 
 /// Constants of the exe: the `float`s 2, 15, 2 pi (`0101ff50`) and the
 /// largest `float` (`01090e90`); the `double`s 0.5, pi / 180 (`01023128`)
-/// and 180 / pi (`0102f248`). The compares with the `double` 0 at
-/// `01012060` (read-only data) are written with the literal 0.
+/// and 180 / pi (`0102f248`), and the `double` 0 at `01012060` the compares
+/// with 0 read.
 const TWO_FLOAT: u32 = 0x0101_62c0;
 const FIFTEEN_FLOAT: u32 = 0x0101_e580;
 const TWO_PI_FLOAT: u32 = 0x0101_ff50;
 const LARGEST_FLOAT: u32 = 0x0109_0e90;
 const HALF_DOUBLE: u32 = 0x0101_1588;
+const ZERO_DOUBLE: u32 = 0x0101_2060;
 const RADIANS_PER_DEGREE_DOUBLE: u32 = 0x0102_3128;
 const DEGREES_PER_RADIAN_DOUBLE: u32 = 0x0102_f248;
 /// The default (zero) `NiPoint3` at `011f426c`.
@@ -336,7 +337,7 @@ pub fn update(e: &mut Engine, this: Ptr<CombatProcedureAttackRanged>) {
         let controller = controller_of(e, this);
         let style = e.call(CONTROLLER_STYLE, &args![controller]).u32();
         let field_of_view = x87_store32(e.call(STYLE_FLOAT_48, &args![style]).f64());
-        if x87_load32(field_of_view) > 0.0 && target != 0 {
+        if x87_load32(field_of_view) > e.global::<f64>(ZERO_DOUBLE) && target != 0 {
             let two_pi = x87_quiet_bits(e.global::<u32>(TWO_PI_FLOAT));
             let radians = x87_store32(x87_mul(
                 x87_load32(field_of_view),
@@ -553,7 +554,7 @@ pub fn update(e: &mut Engine, this: Ptr<CombatProcedureAttackRanged>) {
         }
         let controller = controller_of(e, this);
         fn_009d09f0(e, controller, u8::from(iron_sights));
-        if f64::from(fn_009d1b10(e, weapon)) > 0.0 {
+        if f64::from(fn_009d1b10(e, weapon)) > e.global::<f64>(ZERO_DOUBLE) {
             let mut arc = x87_store32(x87_mul(
                 f64::from(fn_009d1b10(e, weapon)),
                 e.global::<f64>(RADIANS_PER_DEGREE_DOUBLE),
@@ -1138,7 +1139,7 @@ pub fn display_debug_text(
         .call(POINT_NOT_EQUAL, &args![t + TARGETED_POINT, DEFAULT_POINT])
         .bool()
         || weapon == 0
-        || !(f64::from(fn_009d1b10(e, weapon)) > 0.0)
+        || !(f64::from(fn_009d1b10(e, weapon)) > e.global::<f64>(ZERO_DOUBLE))
     {
         return;
     }

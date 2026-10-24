@@ -2422,9 +2422,272 @@ pub fn dialog_menu_set_pause(e: &mut Engine, this: Ptr<DialogMenu>, pause: u8) {
     }
 }
 
+// Translated from 007628c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `DialogMenu::DoGamepad` (engine map; `RET 8`: the button and a word it does not read;
+/// the answer in `AL`). While the dialogue menu is the top menu, button 9 clicks (vtable
+/// +0xC): with the menu's tile showing text (the trait at `011d9500` true) as `(0, 0)`,
+/// otherwise as `(-1, the list box's vtable +4 answer)`; it answers true. Everything else
+/// answers false.
+pub fn dialog_menu_do_gamepad(
+    e: &mut Engine,
+    this: Ptr<DialogMenu>,
+    button: i32,
+    _unused_2: u32,
+) -> bool {
+    if !e
+        .call(INTERFACE_IS_TOP_MENU_ID, &args![DIALOG_MENU_CLASS])
+        .bool()
+    {
+        return false;
+    }
+    if button != 9 {
+        return false;
+    }
+    let showing: u32 = e.global(SHOWING_TEXT_TRAIT_011D9500);
+    let tile = menu_tile(e, this.addr());
+    if e.call(TILE_IS_TRUE, &args![tile, showing]).bool() {
+        e.vcall(this.addr(), 0xc, &args![0u32, 0u32]);
+    } else {
+        let list_box = this.addr() + 0x40;
+        let tile = e.vcall(list_box, 4, &args![]).u32();
+        e.vcall(this.addr(), 0xc, &args![0xffff_ffffu32, tile]);
+    }
+    true
+}
+
+// Translated from 00763ff0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `DialogMenu::ServiceStart` (engine map; no arguments). With a dialogue menu open whose
+/// goodbye state is 0: `bInServiceMenu` and `bDoServiceLoad` are set; when the topic manager
+/// has a current topic, the speaker's slot +0x264 says its current response (`0.0`, the
+/// response, 0) and the speaker's byte +0x7c is set; the menu starts fading out.
+pub fn dialog_menu_service_start(e: &mut Engine) {
+    let menu = open_menu(e);
+    if menu == 0 || e.mem.u32(menu + 0x2c) != 0 {
+        return;
+    }
+    e.mem.set_u8(open_menu(e) + 0x138, 1);
+    e.mem.set_u8(open_menu(e) + 0x13a, 1);
+    let topics = e.mem.u32(open_menu(e) + 0x70);
+    if e.call(TOPICS_GET_CURRENT_TOPIC, &args![topics]).u32() != 0 {
+        let topics = e.mem.u32(open_menu(e) + 0x70);
+        let topic = e.call(TOPICS_GET_CURRENT_TOPIC, &args![topics]).u32();
+        let response = e.call(TOPIC_GET_CURRENT_RESPONSE, &args![topic]).u32();
+        let speaker = e.mem.u32(open_menu(e) + 0x80);
+        e.vcall(speaker, 0x264, &args![0.0f32.to_bits(), response, 0u32]);
+        let speaker = e.mem.u32(open_menu(e) + 0x80);
+        e.mem.set_u8(speaker + 0x7c, 1);
+    }
+    let menu = open_menu(e);
+    e.call(MENU_START_FADE_OUT, &args![menu]);
+}
+
+// Translated from 00764290 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `DialogMenu::DebugResetSaidOnceFlags` (engine map; no arguments): with a dialogue menu
+/// open, every topic of its topic manager (`FirstTopic(1)`, then `NextTopic` while
+/// `GetCurrentTopic` answers one) gets its byte +0x25 set.
+pub fn dialog_menu_debug_reset_said_once_flags(e: &mut Engine) {
+    let menu = open_menu(e);
+    if menu == 0 {
+        return;
+    }
+    let topics = e.mem.u32(menu + 0x70);
+    e.call(TOPICS_FIRST_TOPIC, &args![topics, 1u32]);
+    loop {
+        let topic = e.call(TOPICS_GET_CURRENT_TOPIC, &args![topics]).u32();
+        if topic == 0 {
+            return;
+        }
+        e.mem.set_u8(topic + 0x25, 1);
+        e.call(TOPICS_NEXT_TOPIC, &args![topics]);
+    }
+}
+
+/// The embedded list's sort (`0083fd60`, `thiscall`, one word).
+const LIST_SORT_0083FD60: u32 = 0x0083_fd60;
+/// `004bd510` (`cdecl`, two `float`s, `ST0`): the scroll step's rounding.
+const SCROLL_ROUND_004BD510: u32 = 0x004b_d510;
+
+// Translated from 00764900 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ListBox<int>::Sort` (engine map; `RET 4`): the embedded list (+4) sorted with
+/// `compare` (`0083fd60`), then the list box synchronized.
+pub fn list_box_int_sort(e: &mut Engine, this: Ptr<ListBox>, compare: u32) {
+    e.call(LIST_SORT_0083FD60, &args![this.addr() + 4, compare]);
+    list_box_int_synchronize(e, this);
+}
+
+/// [`list_box_int_get_highlight_target`]'s page step: 0 without a container; otherwise its
+/// trait `0xfb0` (negated for an upward page, `FCHS`) over its `"_scroll_delta"`, stored as
+/// a `float`, through `004bd510` with 1.0 and truncated (`_ftol2`).
+fn page_step(e: &mut Engine, this: Ptr<ListBox>, negate: bool) -> i32 {
+    let container = e.get(this, ListBox::pContainerRect);
+    if container.is_null() {
+        return 0;
+    }
+    let height = e.call(TILE_GET_FLOAT, &args![container, 0xfb0u32]).f64();
+    let height = if negate { -height } else { height };
+    let delta_trait = e.call(TEXT_TO_TRAIT, &args![SCROLL_DELTA_TEXT]).u32();
+    let container = e.get(this, ListBox::pContainerRect);
+    let delta = e.call(TILE_GET_FLOAT, &args![container, delta_trait]).f64();
+    let quotient = x87_store32(x87_div(height, delta));
+    let steps = e
+        .call(
+            SCROLL_ROUND_004BD510,
+            &args![x87_quiet_bits(quotient), 1.0f32.to_bits()],
+        )
+        .f64();
+    e.call(FTOL2, &args![steps]).i32()
+}
+
+/// Whether `tile` is enabled (its `"_enabled"` trait, looked up with `Tile::AddUserTrait`
+/// each time).
+fn enabled_tile(e: &mut Engine, tile: u32) -> bool {
+    let enabled = e
+        .call(ADD_USER_TRAIT, &args![ENABLED_TEXT, 0xffff_ffffu32])
+        .u32();
+    e.call(TILE_IS_TRUE, &args![tile, enabled]).bool()
+}
+
+// Translated from 00764a70 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ListBox<int>::GetHighlightTarget` (engine map; `RET 4`: the direction): the tile a move
+/// highlights. The step is -1 for 1, +1 for 2, a page for 15 (up) and 16 (down), 0
+/// otherwise (the code's byte map and jump table). With an enabled list, a step and items,
+/// the index starts from the highlighted tile's (`0xfac`, `_ftol2`, plus the step, kept
+/// within the list) or the first (step down) or last item; the item tile whose `0xfac`
+/// equals the index is searched; a disabled one moves on in the step's direction: past the
+/// end backwards from the item before the last, past the start forwards from item 1 (vtable
+/// +0x14 with the index and 0, until an enabled tile or the list's end). Answers the tile
+/// found, or 0 when it is the highlighted one.
+pub fn list_box_int_get_highlight_target(
+    e: &mut Engine,
+    this: Ptr<ListBox>,
+    direction: u32,
+) -> u32 {
+    let step = match direction {
+        1 => -1,
+        2 => 1,
+        15 => page_step(e, this, true),
+        16 => page_step(e, this, false),
+        _ => 0,
+    };
+    let mut found = 0u32;
+    if list_box_int_is_enabled(e, this) && step != 0 && e.get(this, ListBox::usNextIndex) != 0 {
+        found = highlight_search(e, this, step);
+    }
+    let highlighted = e.get(this, ListBox::pHighlightedItem).addr();
+    if found != highlighted {
+        found
+    } else {
+        0
+    }
+}
+
+/// The search loop of [`list_box_int_get_highlight_target`].
+fn highlight_search(e: &mut Engine, this: Ptr<ListBox>, step: i32) -> u32 {
+    let last = i32::from(e.get(this, ListBox::usNextIndex)) - 1;
+    let highlighted = e.get(this, ListBox::pHighlightedItem);
+    let mut index = if !highlighted.is_null() {
+        let value = e.call(TILE_GET_FLOAT, &args![highlighted, 0xfacu32]).f64();
+        let current = e.call(FTOL2, &args![value]).i32();
+        let index = current.wrapping_add(step);
+        if index < 0 {
+            0
+        } else if index > last {
+            last
+        } else {
+            index
+        }
+    } else if step > 0 {
+        0
+    } else {
+        last
+    };
+    let mut found = 0u32;
+    loop {
+        let mut node = first_node(this);
+        while found == 0 && node != 0 && node_item(e, node) != 0 {
+            let item = node_item(e, node);
+            let tile = e.mem.u32(item);
+            let value = e.call(TILE_GET_FLOAT, &args![tile, 0xfacu32]).f64();
+            // FILD index; FUCOMPP; TEST AH,0x44; JP: ordered equal.
+            if f64::from(index) == value {
+                let item = node_item(e, node);
+                found = e.mem.u32(item);
+            }
+            node = node_next(e, node);
+        }
+        if found == 0 || enabled_tile(e, found) {
+            return found;
+        }
+        found = 0;
+        if step > 0 {
+            index = index.wrapping_add(1);
+            if index > last {
+                index = last - 1;
+                loop {
+                    if found != 0 && enabled_tile(e, found) {
+                        return found;
+                    }
+                    if index < 0 {
+                        return found;
+                    }
+                    found = e.vcall(this.addr(), 0x14, &args![index as u32, 0u32]).u32();
+                    index = index.wrapping_sub(1);
+                }
+            }
+        }
+        if step < 0 {
+            index = index.wrapping_sub(1);
+            if index < 0 {
+                index = 1;
+                loop {
+                    if found != 0 && enabled_tile(e, found) {
+                        return found;
+                    }
+                    if index > last {
+                        return found;
+                    }
+                    found = e.vcall(this.addr(), 0x14, &args![index as u32, 0u32]).u32();
+                    index = index.wrapping_add(1);
+                }
+            }
+        }
+    }
+}
+
+// Translated from 00764e10 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ListBox<int>` scalar deleting destructor (engine map; `RET 4`): the destructor body
+/// ([`fn_007643c0`]), then the memory freed (`00401030`) when bit 0 of `flags` is set.
+/// Returns `this`.
+pub fn list_box_int_scalar_deleting_destructor(
+    e: &mut Engine,
+    this: Ptr<ListBox>,
+    flags: u32,
+) -> Ptr<ListBox> {
+    fn_007643c0(e, this);
+    if flags & 1 != 0 {
+        e.call(FREE, &args![this]);
+    }
+    this
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(
+            0x0076_28c0,
+            dialog_menu_do_gamepad(Ptr<DialogMenu>, i32, u32) -> bool
+        ),
+        entry!(0x0076_3ff0, dialog_menu_service_start()),
+        entry!(0x0076_4290, dialog_menu_debug_reset_said_once_flags()),
+        entry!(0x0076_4900, list_box_int_sort(Ptr<ListBox>, u32)),
+        entry!(
+            0x0076_4a70,
+            list_box_int_get_highlight_target(Ptr<ListBox>, u32) -> u32
+        ),
+        entry!(
+            0x0076_4e10,
+            list_box_int_scalar_deleting_destructor(Ptr<ListBox>, u32) -> Ptr<ListBox>
+        ),
         entry!(0x0076_40a0, dialog_menu_service_end(u32)),
         entry!(0x0076_4200, dialog_menu_set_pause(Ptr<DialogMenu>, u8)),
         entry!(0x0076_18f0, dialog_menu_get_class(Ptr<DialogMenu>) -> u32),
@@ -3976,5 +4239,251 @@ mod la1_tests {
         let speech = menu.addr() + 0x74;
         assert_eq!(calls(&log, SOUND_HANDLE_PAUSE), vec![vec![speech]]);
         assert_eq!(calls(&log, SOUND_HANDLE_PLAY), vec![vec![speech, 0]]);
+    }
+}
+
+#[cfg(test)]
+mod n087_tests {
+    use super::*;
+
+    const VTABLE: u32 = 0x0e00_0000;
+    const SLOT: u32 = 0x0e10_0000;
+    const EXTERNAL: &[u32] = &[
+        INTERFACE_IS_TOP_MENU_ID,
+        WORD_AT_4_00726070,
+        TILE_IS_TRUE,
+        TOPICS_GET_CURRENT_TOPIC,
+        TOPIC_GET_CURRENT_RESPONSE,
+        TOPICS_FIRST_TOPIC,
+        TOPICS_NEXT_TOPIC,
+        MENU_START_FADE_OUT,
+        LIST_SORT_0083FD60,
+        TILE_GET_FLOAT,
+        TEXT_TO_TRAIT,
+        SCROLL_ROUND_004BD510,
+        FTOL2,
+        ADD_USER_TRAIT,
+        NODE_SELF,
+        FREE,
+        LIST_DESTRUCT,
+        LIST_BOX_UNREGISTER,
+        LIST_BOX_REGISTER,
+        LIST_BOX_HAS_FLAG,
+        LIST_BOX_BELONGS_TO,
+        TILE_SET_FLOAT,
+        TILE_GET_VALUE,
+        TILE_SET_INT,
+        TILE_FIND_BY_NAME,
+        TILE_GET_CHILD_BY_NAME,
+        TILE_ADD_NEEDS_UPDATE,
+        TILE_FLAG_GETTER_0071AA80,
+        TILE_FLAG_SETTER_0071AA60,
+        NODE_SET_NEXT,
+        NODE_DELETE,
+        ITEM_DATA_DELETE,
+        VALUE_CLEAR_ACTIONS,
+        VALUE_ADD_ACTION_TILE,
+        VALUE_ADD_ACTION_FLOAT,
+        VALUE_CALCULATE,
+        ROUND_FLOAT,
+        LIST_BOX_COUNT_00726C40,
+        INT_PAIR_00647B70,
+        INIT_TILE_POSITION,
+    ];
+
+    fn rig() -> Engine {
+        let mut e = Engine::new();
+        e.map(0x0101_0000, 0x8_0000);
+        e.map(0x011d_0000, 0x2_0000);
+        for &callee in EXTERNAL {
+            e.register(callee, |_, _| Ret::default());
+        }
+        e.register(FTOL2, |_, a| {
+            let value = f64::from_bits(u64::from(a[0]) | u64::from(a[1]) << 32);
+            (value as i32).into_ret()
+        });
+        let slots: Vec<u32> = (0..0x100).map(|i| SLOT + 4 * i).collect();
+        e.put_vtable(VTABLE, &slots);
+        for slot in slots {
+            e.register(slot, |_, _| Ret::default());
+        }
+        e.call_log = Some(vec![]);
+        e
+    }
+
+    fn answer(e: &mut Engine, address: u32, value: u32) {
+        e.register_double(address, move |_, _| value.into_ret());
+    }
+
+    fn calls(e: &Engine, address: u32) -> Vec<Vec<u32>> {
+        e.call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|(a, _)| *a == address)
+            .map(|(_, w)| w.clone())
+            .collect()
+    }
+
+    fn object(e: &mut Engine, size: u32) -> u32 {
+        let object = e.mem.alloc(size);
+        e.mem.set_u32(object, VTABLE);
+        object
+    }
+
+    #[test]
+    fn do_gamepad_clicks_on_button_9() {
+        let mut e = rig();
+        let menu = object(&mut e, 0x13c);
+        e.mem.set_u32(menu + 0x40, VTABLE);
+        assert!(!e.call(0x0076_28c0, &args![menu, 9u32, 0u32]).bool());
+        answer(&mut e, INTERFACE_IS_TOP_MENU_ID, 1);
+        assert!(!e.call(0x0076_28c0, &args![menu, 8u32, 0u32]).bool());
+        answer(&mut e, SLOT + 4, 0x0d00_0001);
+        assert!(e.call(0x0076_28c0, &args![menu, 9u32, 0u32]).bool());
+        assert_eq!(
+            calls(&e, SLOT + 0xc),
+            vec![vec![menu, 0xffff_ffff, 0x0d00_0001]]
+        );
+        assert_eq!(calls(&e, SLOT + 4), vec![vec![menu + 0x40]]);
+        answer(&mut e, TILE_IS_TRUE, 1);
+        assert!(e.call(0x0076_28c0, &args![menu, 9u32, 0u32]).bool());
+        assert_eq!(calls(&e, SLOT + 0xc)[1], vec![menu, 0, 0]);
+    }
+
+    #[test]
+    fn service_start_says_the_current_response() {
+        let mut e = rig();
+        let menu = e.mem.alloc(0x13c);
+        let speaker = object(&mut e, 0x100);
+        e.mem.set_u32(menu + 0x70, 0x0c00_0000);
+        e.mem.set_u32(menu + 0x80, speaker);
+        e.set_global(OPEN_MENU_011D9510, menu);
+        answer(&mut e, TOPICS_GET_CURRENT_TOPIC, 0x0c10_0000);
+        answer(&mut e, TOPIC_GET_CURRENT_RESPONSE, 0x0c20_0000);
+        e.call(0x0076_3ff0, &args![]);
+        assert_eq!(e.mem.u8(menu + 0x138), 1);
+        assert_eq!(e.mem.u8(menu + 0x13a), 1);
+        assert_eq!(
+            calls(&e, SLOT + 0x264),
+            vec![vec![speaker, 0.0f32.to_bits(), 0x0c20_0000, 0]]
+        );
+        assert_eq!(e.mem.u8(speaker + 0x7c), 1);
+        assert_eq!(calls(&e, MENU_START_FADE_OUT), vec![vec![menu]]);
+        // A goodbye state keeps the menu.
+        e.mem.set_u32(menu + 0x2c, 1);
+        e.call(0x0076_3ff0, &args![]);
+        assert_eq!(calls(&e, MENU_START_FADE_OUT).len(), 1);
+    }
+
+    #[test]
+    fn debug_reset_marks_every_topic() {
+        let mut e = rig();
+        let menu = e.mem.alloc(0x13c);
+        e.mem.set_u32(menu + 0x70, 0x0c00_0000);
+        e.set_global(OPEN_MENU_011D9510, menu);
+        let first = e.mem.alloc(0x30);
+        let second = e.mem.alloc(0x30);
+        let mut topics = vec![first, second, 0];
+        e.register_double(TOPICS_GET_CURRENT_TOPIC, move |_, _| {
+            topics.remove(0).into_ret()
+        });
+        e.call(0x0076_4290, &args![]);
+        assert_eq!(e.mem.u8(first + 0x25), 1);
+        assert_eq!(e.mem.u8(second + 0x25), 1);
+        assert_eq!(calls(&e, TOPICS_FIRST_TOPIC), vec![vec![0x0c00_0000, 1]]);
+        assert_eq!(calls(&e, TOPICS_NEXT_TOPIC).len(), 2);
+    }
+
+    #[test]
+    fn sort_sorts_the_list_and_synchronizes() {
+        let mut e = rig();
+        let list = list_with(&mut e, 0, &[]);
+        e.call(0x0076_4900, &args![list, 0x0c30_0000u32]);
+        assert_eq!(
+            calls(&e, LIST_SORT_0083FD60),
+            vec![vec![list + 4, 0x0c30_0000]]
+        );
+    }
+
+    /// A list box with `count` items whose tiles have `0xfac` = their index; `disabled`
+    /// tiles answer false to `"_enabled"`.
+    fn list_with(e: &mut Engine, count: u32, disabled: &'static [u32]) -> u32 {
+        let list = object(e, 0x30);
+        e.mem.set_u16(list + 0x1c, count as u16);
+        e.mem.set_u32(list + 0xc, 0x0d00_0100);
+        let mut node = list + 4;
+        for index in 0..count {
+            let item = e.mem.alloc(8);
+            e.mem.set_u32(item, 0x0d00_0000 + index);
+            e.mem.set_u32(node, item);
+            let next = if index + 1 < count { e.mem.alloc(8) } else { 0 };
+            e.mem.set_u32(node + 4, next);
+            node = next;
+        }
+        e.register(NODE_SELF, |_, a| a[0].into_ret());
+        e.register(WORD_AT_4_00726070, |e, a| e.mem.u32(a[0] + 4).into_ret());
+        e.register(TILE_GET_FLOAT, |_, a| f64::from(a[0] & 0xff).into_ret());
+        e.register(ADD_USER_TRAIT, |_, _| 0x55u32.into_ret());
+        e.register_double(TILE_IS_TRUE, move |_, a| {
+            if a[1] == 0x55 {
+                u32::from(!disabled.contains(&(a[0] & 0xff))).into_ret()
+            } else {
+                1u32.into_ret()
+            }
+        });
+        e.register(SLOT + 0x14, |_, a| (0x0d00_0000 + a[1]).into_ret());
+        list
+    }
+
+    #[test]
+    fn highlight_target_steps_and_skips_disabled_items() {
+        let mut e = rig();
+        let list = list_with(&mut e, 4, &[2]);
+        e.mem.set_u32(list + 0x10, 0x0d00_0001);
+        // Down from item 1 past the disabled item 2.
+        assert_eq!(e.call(0x0076_4a70, &args![list, 2u32]).u32(), 0x0d00_0003);
+        // Up from item 1.
+        assert_eq!(e.call(0x0076_4a70, &args![list, 1u32]).u32(), 0x0d00_0000);
+        // Another direction does not move.
+        assert_eq!(e.call(0x0076_4a70, &args![list, 3u32]).u32(), 0);
+        // From the last item down: the index stays at the last, which is highlighted.
+        e.mem.set_u32(list + 0x10, 0x0d00_0003);
+        assert_eq!(e.call(0x0076_4a70, &args![list, 2u32]).u32(), 0);
+    }
+
+    #[test]
+    fn highlight_target_pages_by_the_scroll_delta() {
+        let mut e = rig();
+        let list = list_with(&mut e, 6, &[]);
+        e.mem.set_u32(list + 0xc, 0x0d00_0100);
+        e.register(SCROLL_ROUND_004BD510, |_, a| {
+            f64::from(f32::from_bits(a[0])).into_ret()
+        });
+        e.register(TILE_GET_FLOAT, |_, a| {
+            let value = match a[1] {
+                0xfb0 => 30.0,
+                0xfac => f64::from(a[0] & 0xff),
+                _ => 10.0,
+            };
+            value.into_ret()
+        });
+        e.mem.set_u32(list + 0x10, 0x0d00_0001);
+        // Page down: 30 / 10 = 3 items.
+        assert_eq!(e.call(0x0076_4a70, &args![list, 16u32]).u32(), 0x0d00_0004);
+        let rounded = calls(&e, SCROLL_ROUND_004BD510);
+        assert_eq!(rounded[0], vec![3.0f32.to_bits(), 1.0f32.to_bits()]);
+        // Page up: kept at the first item.
+        assert_eq!(e.call(0x0076_4a70, &args![list, 15u32]).u32(), 0x0d00_0000);
+    }
+
+    #[test]
+    fn scalar_deleting_destructor_frees_with_bit_0() {
+        let mut e = rig();
+        let list = list_with(&mut e, 0, &[]);
+        assert_eq!(e.call(0x0076_4e10, &args![list, 1u32]).u32(), list);
+        assert_eq!(calls(&e, FREE), vec![vec![list]]);
+        e.call(0x0076_4e10, &args![list, 0u32]);
+        assert_eq!(calls(&e, FREE).len(), 1);
     }
 }

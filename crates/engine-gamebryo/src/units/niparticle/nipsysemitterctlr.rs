@@ -143,9 +143,10 @@ const SET_REALLOCATE: u32 = 0x00c1_beb0;
 /// and the cast (`00653290`, thiscall on the object: `NiRTTI`).
 const IS_KIND_OF: u32 = 0x0043_b300;
 const DYNAMIC_CAST: u32 = 0x0065_3290;
-/// `NiBlendInterpolator::ms_RTTI` (`011f407c`), and the `NiRTTI` the
+/// `NiBlendBoolInterpolator::ms_RTTI` (`011f407c`: its static initializer
+/// `00fb5480` names it `NiBlendBoolInterpolator`, base `011f36fc`), and the `NiRTTI` the
 /// birth-rate interpolator is tested against (`011f3e58`).
-const BLEND_INTERPOLATOR_RTTI: u32 = 0x011f_407c;
+const BLEND_BOOL_INTERPOLATOR_RTTI: u32 = 0x011f_407c;
 const BIRTH_RATE_BLEND_RTTI: u32 = 0x011f_3e58;
 /// `NiBlendInterpolator::ComputeNormalizedWeights` (`00a37260`) and
 /// `GetHighestWeightedIndex` (`00a368f0`) (Xbox PDB names).
@@ -437,7 +438,7 @@ pub fn ni_p_sys_emitter_ctlr_load_binary(
 // Translated from 00c1bf90 (decompiled, FalloutNV.exe 1.4.0.525)
 /// `NiPSysEmitterCtlr::GetEmitterActiveInterpolator` (Xbox PDB): the
 /// emitter-active interpolator's slot `+0xD8` answer when it is not null;
-/// otherwise, for an `NiBlendInterpolator`, the interpolator of its
+/// otherwise, for an `NiBlendBoolInterpolator`, the interpolator of its
 /// highest-weighted item (the single interpolator +0x18 when that is the
 /// single item, else the item's +0); null when there is none.
 pub fn ni_p_sys_emitter_ctlr_get_emitter_active_interpolator(
@@ -454,7 +455,7 @@ pub fn ni_p_sys_emitter_ctlr_get_emitter_active_interpolator(
         return Ptr::NULL;
     }
     let blend = e
-        .call(DYNAMIC_CAST, &args![active, BLEND_INTERPOLATOR_RTTI])
+        .call(DYNAMIC_CAST, &args![active, BLEND_BOOL_INTERPOLATOR_RTTI])
         .u32();
     if blend == 0 {
         return Ptr::NULL;
@@ -839,7 +840,7 @@ pub fn ni_p_sys_emitter_ctlr_update(e: &mut Engine, this: Ptr<NiPSysEmitterCtlr>
     if active_slot == 0 || e.get(this, NiPSysEmitterCtlr::m_spInterpolator) == 0 {
         return;
     }
-    let active_time = blend_time(e, BLEND_INTERPOLATOR_RTTI, active_slot);
+    let active_time = blend_time(e, BLEND_BOOL_INTERPOLATOR_RTTI, active_slot);
     let active = ni_p_sys_emitter_ctlr_get_emitter_active_interpolator(e, this).addr();
     let active_known = !(x87_load32(active_time) == no_time_double);
     let birth_slot = e.get(this, NiPSysEmitterCtlr::m_spInterpolator);

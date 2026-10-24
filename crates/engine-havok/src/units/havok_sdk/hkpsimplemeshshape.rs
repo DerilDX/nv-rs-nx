@@ -24,7 +24,13 @@ const MATERIAL_IDS_NAME: u32 = 0x010e_ba18;
 /// element size)` and calls the collector's slot `0x14` with `(3, name, data, size *
 /// element size (the raw word for the ids), allocated)`. Ends with
 /// `hkpShapeCollection::calcContentStatistics(this, collector, 0x01269198)`.
-pub fn hkp_simple_mesh_shape_calc_content_statistics(e: &mut Engine, this: Ptr, collector: Ptr) {
+/// The second stack word (`RET 8`; callers pass the class record) is not read.
+pub fn hkp_simple_mesh_shape_calc_content_statistics(
+    e: &mut Engine,
+    this: Ptr,
+    collector: Ptr,
+    _unused_2: u32,
+) {
     let base = this.addr();
     let verbose = e.mem.u8(collector.addr() + 0x10) != 0;
     // (offset of the array, name, element shift); the size and capacity word follow the data.
@@ -63,7 +69,7 @@ pub fn hkp_simple_mesh_shape_calc_content_statistics(e: &mut Engine, this: Ptr, 
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![entry!(
         0x00e3_c4e0,
-        hkp_simple_mesh_shape_calc_content_statistics(Ptr, Ptr)
+        hkp_simple_mesh_shape_calc_content_statistics(Ptr, Ptr, u32)
     )]
 }
 
@@ -122,7 +128,7 @@ mod tests {
     fn every_array_is_reported_and_then_the_base_collection() {
         let mut e = Engine::new();
         let (mesh, collector, log) = setup(&mut e);
-        e.call(0x00e3_c4e0, &args![mesh, collector]);
+        e.call(0x00e3_c4e0, &args![mesh, collector, 0u32]);
         assert_eq!(
             *log.borrow(),
             vec![
@@ -162,11 +168,11 @@ mod tests {
         for data_at in [0x18u32, 0x24, 0x30] {
             e.mem.set_u32(mesh + data_at + 8, 0x8000_0003);
         }
-        e.call(0x00e3_c4e0, &args![mesh, collector]);
+        e.call(0x00e3_c4e0, &args![mesh, collector, 0u32]);
         assert_eq!(log.borrow().len(), 1);
         log.borrow_mut().clear();
         e.mem.set_u8(collector + 0x10, 1);
-        e.call(0x00e3_c4e0, &args![mesh, collector]);
+        e.call(0x00e3_c4e0, &args![mesh, collector, 0u32]);
         let log = log.borrow();
         assert_eq!(log.len(), 4);
         // The size asked for uses the capacity masked with 0x3fffffff: 0x8000_0003 -> 3 * 16.

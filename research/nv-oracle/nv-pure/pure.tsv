@@ -1509,6 +1509,8 @@ address	cc	params	ret	unit	callees	consts	buffers	computed_reads
 00752df0	thiscall	ptr,i32	i32	crates/engine-fallout/src/units/fallout_interface/caravanmenu.rs		i21,i-1,i26,i1	0:32:0:	0
 00753340	thiscall	ptr	u32	crates/engine-fallout/src/units/fallout_interface/chargenmenu.rs		i1048	0:32:0:	0
 00753760	cdecl		u32	crates/engine-fallout/src/units/fallout_interface/chargenmenu.rs		i1048		0
+00754bf0	thiscall	ptr	u32	crates/engine-fallout/src/units/fallout_interface/companionwheelmenu.rs		i1075	0:32:0:	0
+00755260	cdecl		u32	crates/engine-fallout/src/units/fallout_interface/companionwheelmenu.rs		i1075		0
 00757a10	thiscall	ptr	u32	crates/engine-fallout/src/units/fallout_interface/computersmenu.rs		i1057	0:32:0:	0
 00757e20	cdecl		u32	crates/engine-fallout/src/units/fallout_interface/computersmenu.rs		i1057		0
 00757e80	thiscall	ptr	bool	crates/engine-fallout/src/units/fallout_interface/computersmenu.rs		i4	0:192:0:165.1	0
@@ -1585,8 +1587,10 @@ address	cc	params	ret	unit	callees	consts	buffers	computed_reads
 007b8f10	thiscall	ptr	u32	crates/engine-fallout/src/units/fallout_interface/run_007b8d30.rs			0:1616:0:1584.4	0
 007b8f30	thiscall	ptr	u32	crates/engine-fallout/src/units/fallout_interface/roulettemenu.rs		i1082	0:32:0:	0
 007bc820	cdecl		u32	crates/engine-fallout/src/units/fallout_interface/roulettemenu.rs		i1082		0
+007bfbc0	thiscall	ptr	u32	crates/engine-fallout/src/units/fallout_interface/sleepwaitmenu.rs		i1012	0:32:0:	0
 007c0800	thiscall	ptr	u32	crates/engine-fallout/src/units/fallout_interface/slotmachinemenu.rs		i1080	0:32:0:	0
 007c1440	cdecl		u32	crates/engine-fallout/src/units/fallout_interface/slotmachinemenu.rs		i1080		0
+007c6110	cdecl		u32	crates/engine-fallout/src/units/fallout_interface/specialbookmenu.rs		i1060		0
 007cb4d0	thiscall	ptr	u32	crates/engine-fallout/src/units/fallout_interface/startmenu.rs		i1013	0:32:0:	0
 007cc5d0	thiscall	ptr,u32	bool	crates/engine-fallout/src/units/fallout_interface/startmenu.rs			0:32:0:12.4	0
 007cc5f0	cdecl	u32	bool	crates/engine-fallout/src/units/fallout_interface/startmenu.rs		i1008,i76,i1		0

@@ -524,9 +524,10 @@ pub fn fn_00a291d0(e: &mut Engine, _unused_0: u32, _unused_1: u32, _unused_2: u3
 }
 
 // Translated from 00a291e0 (PC disassembly, FalloutNV.exe 1.4.0.525)
-/// A function Ghidra did not create (`cdecl`, the shape of the curvature functions this
-/// unit's registration stores next to `00a28060`: (keys, count); answers in `ST0`): answers
-/// 0 (`FLDZ`); the words are not read.
+/// A function Ghidra did not create (`cdecl`, two words (keys, count); answers in `ST0`):
+/// answers 0 (`FLDZ`); the words are not read. It is a curvature function of the tables at
+/// `011f3d20` (next to `00a28060`); the two words are confirmed by the caller through that
+/// table, `NiPathInterpolator`'s `00a3ee80` (`PUSH count; PUSH keys; CALL [..]; ADD ESP,8`).
 pub fn fn_00a291e0(_e: &mut Engine, _unused_0: u32, _unused_1: u32) -> f32 {
     0.0
 }

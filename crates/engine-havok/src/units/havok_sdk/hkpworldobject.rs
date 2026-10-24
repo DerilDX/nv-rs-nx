@@ -108,7 +108,13 @@ pub fn hkp_world_object_remove_property(e: &mut Engine, this: Ptr, out: Ptr, key
 /// count times 16, +0x80 capacity, `"Properties"`). With child shape boxes at +0x54 (count
 /// 16-bit at +0x52) two chunks are added with `addNormalChunk` (`00d06fb0`) under
 /// `"ChildShapeAabbs"`: the boxes at 32 bytes each and the array at +0x58 at 4 bytes each.
-pub fn hkp_world_object_calc_content_statistics(e: &mut Engine, this: Ptr, collector: Ptr) {
+/// The second stack word (`RET 8`; callers pass the class record) is not read.
+pub fn hkp_world_object_calc_content_statistics(
+    e: &mut Engine,
+    this: Ptr,
+    collector: Ptr,
+    _unused_2: u32,
+) {
     let me = this.addr();
     let sink = collector.addr();
     let shape = e.mem.u32(me + 0x10);
@@ -281,7 +287,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00cd_2a50, hkp_world_object_remove_property(Ptr, Ptr, u32)),
         entry!(
             0x00cd_2b00,
-            hkp_world_object_calc_content_statistics(Ptr, Ptr)
+            hkp_world_object_calc_content_statistics(Ptr, Ptr, u32)
         ),
         entry!(
             0x00cd_2be0,
@@ -473,7 +479,7 @@ mod tests {
         // Negative capacities and the collector's byte clear: only the shape is reported.
         e.mem.set_u32(this + 0x68, 0x8000_0000);
         e.mem.set_u32(this + 0x80, 0x8000_0000);
-        e.call(0x00cd_2b00, &args![this, collector]);
+        e.call(0x00cd_2b00, &args![this, collector, 0u32]);
         assert_eq!(
             calls(&log, name_hook),
             vec![vec![collector, SHAPE_TEXT, 0x5000, 0]]
@@ -489,7 +495,7 @@ mod tests {
         e.mem.set_u32(this + 0x64, 3);
         e.mem.set_u32(this + 0x78, 0x7000);
         e.mem.set_u32(this + 0x7c, 5);
-        e.call(0x00cd_2b00, &args![this, collector]);
+        e.call(0x00cd_2b00, &args![this, collector, 0u32]);
         assert_eq!(
             calls(&log, size_hook),
             vec![
@@ -509,7 +515,7 @@ mod tests {
         e.mem.set_u32(this + 0x54, 0x8000);
         e.mem.set_u16(this + 0x52, 2);
         e.mem.set_u32(this + 0x58, 0x9000);
-        e.call(0x00cd_2b00, &args![this, collector]);
+        e.call(0x00cd_2b00, &args![this, collector, 0u32]);
         assert_eq!(
             calls(&log, GET_ALLOCATED_SIZE),
             vec![vec![0x6000, 48], vec![0x7000, 144]]

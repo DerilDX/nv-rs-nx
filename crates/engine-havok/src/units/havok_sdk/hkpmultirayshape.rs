@@ -95,7 +95,13 @@ pub fn hkp_multi_ray_shape_cast_ray_impl(
 /// +0x14 `(3, "name", data, size * 32, allocated size)` with the allocated size from
 /// `hkStatisticsCollector::getAllocatedSize` of `(data, capacity * 32)`; then the base
 /// `hkReferencedObject::calcContentStatistics` (`00c90360`) gets `(collector, 01268910)`.
-pub fn hkp_multi_ray_shape_calc_content_statistics(e: &mut Engine, this: Ptr, collector: Ptr) {
+/// The second stack word (`RET 8`; callers pass the class record) is not read.
+pub fn hkp_multi_ray_shape_calc_content_statistics(
+    e: &mut Engine,
+    this: Ptr,
+    collector: Ptr,
+    _unused_2: u32,
+) {
     let t = this.addr();
     let capacity_word = e.mem.u32(t + 0x18);
     if (capacity_word as i32) >= 0 || e.mem.u8(collector.addr() + 0x10) != 0 {
@@ -286,7 +292,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         ),
         entry!(
             0x00e3_c620,
-            hkp_multi_ray_shape_calc_content_statistics(Ptr, Ptr)
+            hkp_multi_ray_shape_calc_content_statistics(Ptr, Ptr, u32)
         ),
         entry!(0x00e3_c680, fn_00e3c680(Ptr, Ptr, i32, f32) -> Ptr),
         entry!(
@@ -437,7 +443,7 @@ mod tests {
     fn statistics_report_an_array_that_owns_its_storage() {
         let (mut r, log, this, collector) = statistics_rig();
         r.e.mem.set_u32(this + 0x18, 8);
-        r.e.call(0x00e3_c620, &args![this, collector]);
+        r.e.call(0x00e3_c620, &args![this, collector, 0u32]);
         assert_eq!(
             *log.borrow(),
             [
@@ -458,7 +464,7 @@ mod tests {
     fn statistics_skip_borrowed_storage_unless_the_collector_wants_it() {
         let (mut r, log, this, collector) = statistics_rig();
         r.e.mem.set_u32(this + 0x18, 0x8000_0008);
-        r.e.call(0x00e3_c620, &args![this, collector]);
+        r.e.call(0x00e3_c620, &args![this, collector, 0u32]);
         assert_eq!(
             *log.borrow(),
             [(
@@ -468,7 +474,7 @@ mod tests {
         );
         log.borrow_mut().clear();
         r.e.mem.set_u8(collector + 0x10, 1);
-        r.e.call(0x00e3_c620, &args![this, collector]);
+        r.e.call(0x00e3_c620, &args![this, collector, 0u32]);
         let log = log.borrow();
         assert_eq!(log.len(), 3);
         assert_eq!(log[0], (GET_ALLOCATED_SIZE, vec![0x5000, 8 << 5]));

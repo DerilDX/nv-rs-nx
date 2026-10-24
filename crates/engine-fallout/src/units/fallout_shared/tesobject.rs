@@ -1100,7 +1100,8 @@ pub fn tes_bound_tree_object_destruct(e: &mut Engine, this: Ptr<TESBoundObject>)
 /// answers non-zero and `argument` is non-null, passes that answer's
 /// `008d6f30` to `00569350` on `argument`. Returns the built result, or 0
 /// for another form type.
-pub fn fn_0050f810(e: &mut Engine, this: Ptr, argument: Ptr) -> Ptr {
+/// The second stack word (`RET 8`) is not read.
+pub fn fn_0050f810(e: &mut Engine, this: Ptr, argument: Ptr, _unused_2: u32) -> Ptr {
     let mut result = Ptr::NULL;
     if e.call(FORM_TYPE, &args![this]).u32() != 0x25 {
         return result;
@@ -1472,7 +1473,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
             0x0050f7f0,
             tes_bound_tree_object_destruct(Ptr<TESBoundObject>)
         ),
-        entry!(0x0050f810, fn_0050f810(Ptr, Ptr) -> Ptr),
+        entry!(0x0050f810, fn_0050f810(Ptr, Ptr, u32) -> Ptr),
         entry!(
             0x0050f8c0,
             tes_object_construct(Ptr<TESObject>) -> Ptr<TESObject>
@@ -2749,13 +2750,13 @@ mod tests {
         e.register_double(0x0066_4f50, move |_, _| ret(result));
         e.set_global(SCRATCH_TYPE, 0x24u32);
         start_log(&mut e);
-        assert_eq!(e.call(0x0050f810, &[object, 0x5000]).u32(), 0);
+        assert_eq!(e.call(0x0050f810, &[object, 0x5000, 0]).u32(), 0);
         assert_eq!(calls(&mut e).len(), 1);
 
         e.set_global(SCRATCH_TYPE, 0x25u32);
         e.set_global(SCRATCH_COUNT, 0x7001u32);
         start_log(&mut e);
-        assert_eq!(e.call(0x0050f810, &[object, 0x5000]).u32(), result);
+        assert_eq!(e.call(0x0050f810, &[object, 0x5000, 0]).u32(), result);
         let log = calls(&mut e);
         assert_eq!(log[3], (0x0066_4f50, vec![0x7001, 0x5000, object]));
         assert_eq!(log[4], (0x7000_0180, vec![object, result]));
@@ -2765,7 +2766,7 @@ mod tests {
         // No manager: the virtual hears about a null result and that is all.
         e.set_global(SCRATCH_COUNT, 0u32);
         start_log(&mut e);
-        assert_eq!(e.call(0x0050f810, &[object, 0x5000]).u32(), 0);
+        assert_eq!(e.call(0x0050f810, &[object, 0x5000, 0]).u32(), 0);
         assert_eq!(
             addresses(&calls(&mut e)),
             vec![FORM_TYPE, 0x0066_4840, 0x7000_0180]

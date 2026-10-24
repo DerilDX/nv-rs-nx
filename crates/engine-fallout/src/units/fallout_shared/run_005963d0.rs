@@ -84,7 +84,7 @@ const STRING_SET: u32 = 0x0040_37f0;
 /// The audio media helpers on channel 2: whether media is playing
 /// (`FalloutAudioMedia::MediaIsPlaying` in the engine map, `00830750`,
 /// cdecl), its length (`00830970`), its position (`00830a20`), the fade
-/// out (`00830680`, cdecl: channel, milliseconds), the start (`008300c0`,
+/// out (`00830680`, cdecl: milliseconds, then the media type 2), the start (`008300c0`,
 /// cdecl, seven words) and the update after it (`008304c0`).
 const MEDIA_IS_PLAYING: u32 = 0x0083_0750;
 const MEDIA_LENGTH: u32 = 0x0083_0970;
@@ -409,7 +409,7 @@ pub fn fn_00597a60(e: &mut Engine, this: Ptr, time: u32, flag: u8, location: u32
         if left < f64::from(time) {
             let fade = fade_millis(e);
             let millis = e.call(FTOL, &args![fade]).u32();
-            e.call(MEDIA_FADE_OUT, &args![2u32, millis]);
+            e.call(MEDIA_FADE_OUT, &args![millis, 2u32]);
             e.mem.set_u32(base + 0x2c, time);
             if fn_00598000(e, Ptr::new(location)) != 0 {
                 return false;
@@ -453,7 +453,7 @@ pub fn fn_00597a60(e: &mut Engine, this: Ptr, time: u32, flag: u8, location: u32
         if playing != 0 {
             let fade = fade_millis(e);
             let millis = e.call(FTOL, &args![fade]).u32();
-            e.call(MEDIA_FADE_OUT, &args![2u32, millis]);
+            e.call(MEDIA_FADE_OUT, &args![millis, 2u32]);
         }
         result = false;
     } else {
@@ -1477,7 +1477,7 @@ mod media_tests {
         assert!(!e
             .call(0x0059_7a60, &args![this, 5000u32, 0u32, object])
             .bool());
-        assert_eq!(calls(&e, MEDIA_FADE_OUT), vec![vec![2, 2000]]);
+        assert_eq!(calls(&e, MEDIA_FADE_OUT), vec![vec![2000, 2]]);
         assert!(calls(&e, MEDIA_START).is_empty());
         assert_eq!(e.mem.u8(this + 0x34), 0);
     }
@@ -1525,7 +1525,7 @@ mod media_tests {
         assert!(e
             .call(0x0059_7a60, &args![this, 2500u32, 0u32, object])
             .bool());
-        assert_eq!(calls(&e, MEDIA_FADE_OUT), vec![vec![2, 2000]]);
+        assert_eq!(calls(&e, MEDIA_FADE_OUT), vec![vec![2000, 2]]);
         // Restarted: no offset into the playing media.
         let started = calls(&e, MEDIA_START);
         assert_eq!(started.len(), 1);

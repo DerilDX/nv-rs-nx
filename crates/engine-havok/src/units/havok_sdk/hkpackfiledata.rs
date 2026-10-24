@@ -142,7 +142,13 @@ fn add_array(
 /// `hkPackfileData::calcContentStatistics` (named in the engine map): adds the four arrays to
 /// `collector` (see [`add_array`]): "memory" (`+0x34`, 4-byte elements), "chunks" (`+0x40`, 12),
 /// "exports" (`+0x4c`, 8) and "imports" (`+0x58`, 8).
-pub fn hkp_packfile_data_calc_content_statistics(e: &mut Engine, this: Ptr, collector: u32) {
+/// The second stack word (`RET 8`; callers pass the class record) is not read.
+pub fn hkp_packfile_data_calc_content_statistics(
+    e: &mut Engine,
+    this: Ptr,
+    collector: u32,
+    _unused_2: u32,
+) {
     let base = this.addr();
     add_array(e, collector, base, (0x34, 0x38, 0x3c), 4, NAME_MEMORY);
     add_array(e, collector, base, (0x40, 0x44, 0x48), 12, NAME_CHUNKS);
@@ -532,7 +538,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00e0_5240, fn_00e05240(Ptr) -> bool),
         entry!(
             0x00e0_5250,
-            hkp_packfile_data_calc_content_statistics(Ptr, u32)
+            hkp_packfile_data_calc_content_statistics(Ptr, u32, u32)
         ),
         entry!(0x00e0_5370, hkp_packfile_data_call_destructors(Ptr)),
         entry!(
@@ -701,7 +707,7 @@ mod tests {
     fn calc_content_statistics_adds_the_four_owned_arrays() {
         let mut e = engine();
         let (data, collector) = statistics_fixture(&mut e);
-        e.call(0x00e0_5250, &args![data, collector]);
+        e.call(0x00e0_5250, &args![data, collector, 0u32]);
         assert_eq!(
             calls(&e, GET_ALLOCATED_SIZE),
             vec![
@@ -728,12 +734,12 @@ mod tests {
         let (data, collector) = statistics_fixture(&mut e);
         e.mem.set_u32(data + 0x3c, 0x8000_0008);
         e.mem.set_u32(data + 0x60, 0x8000_0007);
-        e.call(0x00e0_5250, &args![data, collector]);
+        e.call(0x00e0_5250, &args![data, collector, 0u32]);
         let names: Vec<u32> = calls(&e, ARRAY_DOUBLE).iter().map(|w| w[2]).collect();
         assert_eq!(names, vec![NAME_CHUNKS, NAME_EXPORTS]);
         e.call_log = Some(Vec::new());
         e.mem.set_u8(collector + 0x10, 1);
-        e.call(0x00e0_5250, &args![data, collector]);
+        e.call(0x00e0_5250, &args![data, collector, 0u32]);
         let names: Vec<u32> = calls(&e, ARRAY_DOUBLE).iter().map(|w| w[2]).collect();
         assert_eq!(
             names,

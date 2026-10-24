@@ -878,10 +878,12 @@ pub fn bs_shader_property_check_create_depth_map_render_pass_array(
 /// allocation fails), the array grows by `m_usGrowBy` when it is full, and the pass is
 /// stored at index `m_usSize` (`00ba3aa0`). `iSize` goes up by one.
 ///
-/// The light words are the four argument words; a light count above 4 makes the exe read
-/// further up its caller's stack, which this translation does not have (it stops loudly).
-/// The exception frame (`FS:[0]`) is not translated.
-// Translation incomplete: 00ba9ee0 - the FS:[0] exception frame (unwinding on a throw) is not translated
+/// The light words are the four argument words; a light count above 4 makes the callee
+/// (`cdecl`, variable arguments) read the words above the four copies the exe pushes: this
+/// function's own frame (the cookie word, the saved `EDI`/`ESI`, a local, the exception
+/// record, its return address, then its arguments again). The translation has no such frame and stops
+/// loudly instead. The exception frame (`FS:[0]`) is not translated.
+// Translation incomplete: 00ba9ee0 - the FS:[0] exception frame (unwinding on a throw) is not translated; a light count above 4 reads the exe's own stack frame past the four light words (stops loudly here)
 #[allow(clippy::too_many_arguments)]
 pub fn bs_shader_property_render_pass_array_add(
     e: &mut Engine,

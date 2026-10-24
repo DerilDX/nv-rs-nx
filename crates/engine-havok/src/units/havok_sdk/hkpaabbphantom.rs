@@ -400,7 +400,13 @@ pub fn hkp_aabb_phantom_remove_overlapping_collidable(e: &mut Engine, this: Ptr,
 /// `0x14`: `(3, "OvrlpCollPtr", data, size * 4, allocated size)`, the allocated size from
 /// `hkStatisticsCollector::getAllocatedSize` of `(data, capacity * 4)`); then the base
 /// `hkpPhantom::calcContentStatistics` (`00d07cf0`) gets `(collector, 0126902c)`.
-pub fn hkp_aabb_phantom_calc_content_statistics(e: &mut Engine, this: Ptr, collector: Ptr) {
+/// The second stack word (`RET 8`; callers pass the class record) is not read.
+pub fn hkp_aabb_phantom_calc_content_statistics(
+    e: &mut Engine,
+    this: Ptr,
+    collector: Ptr,
+    _unused_2: u32,
+) {
     let capacity_word = e.mem.u32(this.addr() + 0xd8);
     if (capacity_word as i32) >= 0 || e.mem.u8(collector.addr() + 0x10) != 0 {
         let data = e.mem.u32(this.addr() + 0xd0);
@@ -645,7 +651,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         ),
         entry!(
             0x00cf_2ae0,
-            hkp_aabb_phantom_calc_content_statistics(Ptr, Ptr)
+            hkp_aabb_phantom_calc_content_statistics(Ptr, Ptr, u32)
         ),
         entry!(
             0x00cf_2b50,
@@ -1204,7 +1210,7 @@ mod tests {
         let (phantom, _, _) = phantom_with(&mut e, &[1, 2, 3]);
         e.mem.set_u32(phantom + 0xd8, 0x4000_0008);
         let data = e.mem.u32(phantom + 0xd0);
-        e.call(0x00cf_2ae0, &args![phantom, collector]);
+        e.call(0x00cf_2ae0, &args![phantom, collector, 0u32]);
         assert_eq!(calls(&e, GET_ALLOCATED_SIZE), vec![vec![data, 0x20]]);
         assert_eq!(
             calls(&e, STATISTICS_DOUBLE),
@@ -1216,12 +1222,12 @@ mod tests {
         );
         // Unowned storage and no collector flag: only the base class reports.
         e.mem.set_u32(phantom + 0xd8, 0x8000_0003);
-        e.call(0x00cf_2ae0, &args![phantom, collector]);
+        e.call(0x00cf_2ae0, &args![phantom, collector, 0u32]);
         assert_eq!(calls(&e, STATISTICS_DOUBLE).len(), 1);
         assert_eq!(calls(&e, BASE_CALC_CONTENT_STATISTICS).len(), 2);
         // With the collector's flag byte set the array is reported anyway.
         e.mem.set_u8(collector + 0x10, 1);
-        e.call(0x00cf_2ae0, &args![phantom, collector]);
+        e.call(0x00cf_2ae0, &args![phantom, collector, 0u32]);
         assert_eq!(calls(&e, STATISTICS_DOUBLE).len(), 2);
         assert_eq!(calls(&e, GET_ALLOCATED_SIZE)[1], vec![data, 12]);
     }

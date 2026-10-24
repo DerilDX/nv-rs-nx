@@ -33,7 +33,7 @@ functions (ledger of 2026-10-24). Regenerate the numbers before relying on them.
 | (unplaced: no unit in the map) | 2,430 | 2,425 | 100 | Spread across every system; assign by caller | all |
 | fallout shared (forms, references, world data) | 10,479 | 10,479 | 100 | Forms, records, references, cells, extra data | C |
 | fallout/ai | 4,849 | 4,849 | 100 | AI, processes, movement, combat AI | A (movement), C |
-| fallout/interface | 2,645 | 2,571 | 97 | Menus, HUD, interface manager | C |
+| fallout/interface | 2,645 | 2,645 | 100 | Menus, HUD, interface manager | C |
 | Havok SDK | 7,377 | 7,377 | 100 | Physics engine (739 functions keep a marked part, mostly C++ exception frames) | A |
 | BSHavok | 1,634 | 1,634 | 100 | Bethesda's Havok layer: character controller, ragdolls, constraints | A |
 | NiCollision | 236 | 236 | 100 | Gamebryo collision | A |
@@ -52,7 +52,7 @@ functions (ledger of 2026-10-24). Regenerate the numbers before relying on them.
 | fallout shared/distant terrain system | 204 | 204 | 100 | Distant land, LOD | B |
 | fallout shared/tempeffects | 149 | 149 | 100 | Temporary effects: decals, blood, shaders on actors | B |
 | fallout shared/region system | 159 | 159 | 100 | Regions: weather, sounds, objects | B/C |
-| fallout/magic + fallout shared/magic | 1,001 | 998 | 100 | Magic, effects, chems, radiation, addictions | C |
+| fallout/magic + fallout shared/magic | 1,001 | 1,001 | 100 | Magic, effects, chems, radiation, addictions | C |
 | fallout/dialogue | 74 | 74 | 100 | Dialogue | C |
 | fallout/misc (save/load and more) | 1,045 | 1,045 | 100 | Saves, misc game systems | D |
 | BSMenu | 361 | 361 | 100 | Menu framework: tiles, fonts | C |

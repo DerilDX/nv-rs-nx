@@ -473,9 +473,11 @@ fn camera_direction(e: &Engine, camera: u32) -> [f64; 3] {
 }
 
 // Translated from 00b984d0 (decompiled, FalloutNV.exe 1.4.0.525)
-/// Unnamed in the engine map (cdecl, one word): calls `00e879b0(value, 0)`
-/// on the renderer's render-state object (renderer +0x8B8).
-pub fn fn_00b984d0(e: &mut Engine, value: u32) {
+/// Unnamed in the engine map (cdecl, two words: every caller pushes two and
+/// cleans up two; the second, 0 or 1, is never read): calls
+/// `00e879b0(value, 0)` on the renderer's render-state object (renderer
+/// +0x8B8).
+pub fn fn_00b984d0(e: &mut Engine, value: u32, _unused_1: u32) {
     let renderer = e.mem.u32(RENDERER);
     let object = e.mem.u32(renderer.wrapping_add(0x8b8));
     e.call(0x00e8_79b0, &[object, value, 0]);
@@ -1702,21 +1704,21 @@ pub fn fn_00b9a120(
     let head = e.mem.u32(list + 4);
     let first_flag = e.mem.u8(e.mem.u32(head + 8) + 7);
     let mut blend = 0u8;
-    // `00b984d0` reads one word; the exe pushes a second (0 or 1) it never
-    // reads.
+    // `00b984d0`'s second word (never read) is the element index here (0,
+    // the tested `EAX`), else 1, as the exe pushes it.
     if e.mem.u32(index_ptr) == 0 {
-        fn_00b984d0(e, 1);
+        fn_00b984d0(e, 1, 0);
         e.call(SET_ALPHA_TEST_ENABLE, &[0, 1]);
         e.call(SET_ALPHA_TO_COVERAGE, &[0, 1]);
     }
     if e.mem.u32(index_ptr) == 1 {
-        fn_00b984d0(e, 3);
+        fn_00b984d0(e, 3, 1);
         e.call(SET_ALPHA_TEST_ENABLE, &[0, 1]);
         e.call(SET_ALPHA_TO_COVERAGE, &[0, 1]);
     }
     for (element, mode, coverage) in [(2, 3, 1), (3, 1, 1), (4, 1, 0)] {
         if e.mem.u32(index_ptr) == element {
-            fn_00b984d0(e, mode);
+            fn_00b984d0(e, mode, 1);
             e.call(SET_ALPHA_TEST_ENABLE, &[1, 1]);
             blend = 1;
             if e.mem.u8(COVERAGE_AVAILABLE) != 0 {
@@ -2540,23 +2542,23 @@ pub fn bs_batch_renderer_render_batches(
                     let mut flag = 0u8;
                     let coverage = match index {
                         0 => {
-                            fn_00b984d0(e, 1);
+                            fn_00b984d0(e, 1, 0);
                             e.call(SET_ALPHA_TEST_ENABLE, &[0, 0]);
                             Some(0)
                         }
                         1 => {
-                            fn_00b984d0(e, 3);
+                            fn_00b984d0(e, 3, 1);
                             e.call(SET_ALPHA_TEST_ENABLE, &[0, 0]);
                             Some(0)
                         }
                         2 | 3 => {
-                            fn_00b984d0(e, if index == 2 { 3 } else { 1 });
+                            fn_00b984d0(e, if index == 2 { 3 } else { 1 }, 1);
                             e.call(SET_ALPHA_TEST_ENABLE, &[1, 1]);
                             flag = 1;
                             Some(1)
                         }
                         _ => {
-                            fn_00b984d0(e, 1);
+                            fn_00b984d0(e, 1, 1);
                             e.call(SET_ALPHA_TEST_ENABLE, &[1, 1]);
                             flag = 1;
                             Some(0)
@@ -2604,7 +2606,7 @@ pub fn bs_batch_renderer_render_batches(
             node = e.mem.u32(node + 4);
         }
     }
-    fn_00b984d0(e, 1);
+    fn_00b984d0(e, 1, 0);
     e.call(SET_ALPHA_TEST_ENABLE, &[0, 0]);
     bs_batch_renderer_end_pass(e);
 }
@@ -2689,7 +2691,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         ),
         entry!(0x00b9_a4d0, fn_00b9a4d0(Ptr, u32)),
         entry!(0x00b9_aa70, bs_batch_renderer_get_rtti(Ptr) -> u32),
-        entry!(0x00b9_84d0, fn_00b984d0(u32)),
+        entry!(0x00b9_84d0, fn_00b984d0(u32, u32)),
         entry!(0x00b9_88e0, bs_batch_renderer_end_pass()),
         entry!(
             0x00b9_8970,
@@ -3240,7 +3242,7 @@ mod b061_tests {
         e.mem.set_u32(renderer + 0x8b8, 0x4444);
         e.mem.set_u32(RENDERER, renderer);
         quiet(&mut e, 0x00e8_79b0);
-        e.call(0x00b9_84d0, &[3]);
+        e.call(0x00b9_84d0, &[3, 1]);
         assert_eq!(calls_to(&e, 0x00e8_79b0), vec![vec![0x4444, 3, 0]]);
     }
 

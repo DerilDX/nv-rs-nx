@@ -1180,7 +1180,8 @@ pub fn fn_00484c20(e: &mut Engine, this: Ptr<TESForm>, flags: u32) {
 /// bytes with `LoadGameDataOLD` and merges them into the form's flags: a form
 /// that casts to `TESObjectREFR` takes the bits `0x912860`, any other form
 /// the bits `0x40000c20`.
-pub fn tes_form_load_game(e: &mut Engine, this: Ptr<TESForm>, flags: u32) {
+/// The second stack word (`RET 8`) is not read.
+pub fn tes_form_load_game(e: &mut Engine, this: Ptr<TESForm>, flags: u32, _unused_2: u32) {
     if flags & 1 == 0 {
         return;
     }
@@ -2443,7 +2444,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00484bc0, fn_00484bc0(Ptr<TESForm>, u32)),
         entry!(0x00484bf0, fn_00484bf0(Ptr<TESForm>, u32) -> u16),
         entry!(0x00484c20, fn_00484c20(Ptr<TESForm>, u32)),
-        entry!(0x00484c50, tes_form_load_game(Ptr<TESForm>, u32)),
+        entry!(0x00484c50, tes_form_load_game(Ptr<TESForm>, u32, u32)),
         entry!(
             0x00484ce0,
             tes_form_save_game_data_old(Ptr<TESForm>, Ptr, u32)
@@ -3916,7 +3917,7 @@ mod tests {
         e.register(RT_DYNAMIC_CAST, |_, a| ret(a[0]));
         let f = wide_form(&mut e, 0x8, 0x20);
         e.call_log = Some(vec![]);
-        e.call(0x0048_4c50, &args![f, 1u32]);
+        e.call(0x0048_4c50, &args![f, 1u32, 0u32]);
         let log = e.call_log.take().unwrap();
         assert_eq!(
             calls_to(&log, RT_DYNAMIC_CAST),
@@ -3933,7 +3934,7 @@ mod tests {
         let mut e = load_game_engine(0x1234_5678);
         e.register(RT_DYNAMIC_CAST, |_, _| ret(0));
         let g = wide_form(&mut e, 0x8, 0x20);
-        e.call(0x0048_4c50, &args![g, 1u32]);
+        e.call(0x0048_4c50, &args![g, 1u32, 0u32]);
         assert_eq!(
             e.get(g, TESForm::iFormFlags),
             8 | (0x1234_5678 & 0x4000_0c20)
@@ -3941,7 +3942,7 @@ mod tests {
         // Without bit 0 nothing is read.
         let h = wide_form(&mut e, 0x8, 0x20);
         e.call_log = Some(vec![]);
-        e.call(0x0048_4c50, &args![h, 2u32]);
+        e.call(0x0048_4c50, &args![h, 2u32, 0u32]);
         assert_eq!(e.call_log.take().unwrap().len(), 1);
         assert_eq!(e.get(h, TESForm::iFormFlags), 8);
     }
