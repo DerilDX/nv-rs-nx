@@ -987,9 +987,14 @@ pub fn high_process_finish_setup_special_idle(e: &mut Engine, this: Ptr<HighProc
     }
     let idle = e.get(this, HighProcess::pIdleToPlay);
     let play_type = e.get(this, HighProcess::eSpecialIdleType);
-    let section = e.call(0x005f_f160, &args![idle, play_type]).u32();
+    // 008dae65: the pushed play type is the last word of `00497f20` (RET 0x10);
+    // `005ff160` takes no stack word.
+    let section = e.call(0x005f_f160, &args![idle]).u32();
     let idle = e.get(this, HighProcess::pIdleToPlay);
-    e.call(0x0049_7f20, &args![animation, idle, actor, section]);
+    e.call(
+        0x0049_7f20,
+        &args![animation, idle, actor, section, play_type],
+    );
     // MiddleHighProcess::bDoneOnce (Xbox PDB) +0xe0
     e.mem.set_u8(process + 0xe0, 0);
     e.set(this, HighProcess::pIdleToPlay, Ptr::NULL);
@@ -18245,10 +18250,10 @@ mod tests {
         e.mem.set_u8(a + 0xe0, 1);
         e.call_log = Some(vec![]);
         e.call(0x008dae00, &args![p, actor]);
-        assert_eq!(calls_to(&e, 0x005f_f160), vec![vec![0x5000, 3]]);
+        assert_eq!(calls_to(&e, 0x005f_f160), vec![vec![0x5000]]);
         assert_eq!(
             calls_to(&e, 0x0049_7f20),
-            vec![vec![animation, 0x5000, actor, 0x66]]
+            vec![vec![animation, 0x5000, actor, 0x66, 3]]
         );
         assert_eq!(e.mem.u8(a + 0xe0), 0);
         assert_eq!(e.mem.u32(a + 0x350), 0);

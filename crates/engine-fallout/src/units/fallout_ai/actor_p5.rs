@@ -663,13 +663,15 @@ pub fn actor_do_death_stuff(e: &mut Engine, this: Ptr<Actor>) {
     let killer = e.get(this, Actor::pMyKiller);
     if killer.addr() == player {
         let process = e.call(ACTOR_GET_PROCESS, &args![killer]).u32();
-        let position = e.vcall(this.addr(), 0x1f4, &args![0u32, 4u32, 0u32]).u32();
+        // 008b03a8: the words 0, 4, 0 pushed before slot 0x1f4 (no stack words) are the
+        // last three of the process call through +0xfc (RET 0x1c).
+        let position = e.vcall(this.addr(), 0x1f4, &args![]).u32();
         let (x, y, z) = (
             e.mem.u32(position),
             e.mem.u32(position + 4),
             e.mem.u32(position + 8),
         );
-        e.vcall(process, 0xfc, &args![killer, x, y, z]);
+        e.vcall(process, 0xfc, &args![killer, x, y, z, 0u32, 4u32, 0u32]);
     }
     let killer = e.get(this, Actor::pMyKiller);
     if killer.addr() == player && e.get(this, Actor::bMurderAlarm) != 0 {
@@ -3874,15 +3876,19 @@ pub fn actor_create_dismembered_limbs(e: &mut Engine, this: Ptr<Actor>) {
                 let mut same = false;
                 if !compared {
                     e.call(0x0042_f570, &args![equipment]);
-                    let worn = e.vcall(creature, 0x1e8, &args![equipment]).u32();
-                    e.call(0x0060_5fc0, &args![creature_form, this, worn]);
+                    // 008b6cdb: slot 0x1e8 takes no stack word; the pushed
+                    // equipment is the last word of `00605fc0` (RET 0xc).
+                    let worn = e.vcall(creature, 0x1e8, &args![]).u32();
+                    e.call(0x0060_5fc0, &args![creature_form, this, worn, equipment]);
                     same = e.call(0x0043_87b0, &args![equipment, entry + 4]).bool();
                     compared = true;
                     e.call(0x0042_ff80, &args![equipment]);
                 }
                 if !same {
-                    let worn = e.vcall(creature, 0x1e8, &args![entry + 4]).u32();
-                    e.call(0x0060_5e70, &args![creature_form, this, worn]);
+                    // 008b6d2c: the pushed entry + 4 is the last word of
+                    // `00605e70` (RET 0xc).
+                    let worn = e.vcall(creature, 0x1e8, &args![]).u32();
+                    e.call(0x0060_5e70, &args![creature_form, this, worn, entry + 4]);
                     applied = true;
                 }
             }
@@ -6085,6 +6091,7 @@ mod tests {
         let received = Rc::new(Cell::new((0, 0, 0, 0)));
         let seen = received.clone();
         e.register_double(0x0f00_0080, move |_, a| {
+            assert_eq!(a[5..], [0, 4, 0]);
             seen.set((a[1], a[2], a[3], a[4]));
             Ret::default()
         });
@@ -10071,8 +10078,14 @@ mod tests {
         let compared = args_of(&log, 0x0043_87b0);
         assert_eq!(compared.len(), 1);
         assert_eq!(compared[0][1], entry + 4);
-        assert_eq!(args_of(&log, 0x0060_5fc0), vec![vec![form, a, 0x77]]);
-        assert_eq!(args_of(&log, 0x0060_5e70), vec![vec![form, a, 0x77]]);
+        assert_eq!(
+            args_of(&log, 0x0060_5fc0),
+            vec![vec![form, a, 0x77, compared[0][0]]]
+        );
+        assert_eq!(
+            args_of(&log, 0x0060_5e70),
+            vec![vec![form, a, 0x77, entry + 4]]
+        );
         // The piece is made (hide only: the entry's second byte), the removal is asked.
         assert_eq!(
             args_of(&log, 0x0057_3050),

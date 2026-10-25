@@ -654,11 +654,13 @@ fn start_interrupt_package(
     if e.vcall(process, 0x22c, &args![]).u32() != 0 {
         let process = process_of(e, this);
         let a = e.vcall(process, 0x5a4, &args![]).u32() & 0xff;
-        let b = e.vcall(process, 0x4e8, &args![a]).u32() & 0xff;
-        let c = e.vcall(process, 0x11c, &args![b]).u32() & 0xff;
-        let d = e.vcall(process, 0x128, &args![c]).u32();
-        let f = e.vcall(process, 0x23c, &args![d]).u32();
-        let g = e.vcall(process, 0x22c, &args![f]).u32();
+        // Slots 0x5a4/0x4e8/0x11c/0x128/0x23c/0x22c take no stack words: each
+        // pushed result is a word of `SetPackageExtra` below (008d2cf4..008d2d78).
+        let b = e.vcall(process, 0x4e8, &args![]).u32() & 0xff;
+        let c = e.vcall(process, 0x11c, &args![]).u32() & 0xff;
+        let d = e.vcall(process, 0x128, &args![]).u32();
+        let f = e.vcall(process, 0x23c, &args![]).u32();
+        let g = e.vcall(process, 0x22c, &args![]).u32();
         let list = e.call(EXTRA_DATA_LIST, &args![this]).u32();
         // `ExtraDataList::SetPackageExtra` (Xbox PDB name, `0041c930`).
         e.call(0x0041_c930, &args![list, g, f, d, c, b, a]);
@@ -1934,11 +1936,11 @@ mod tests {
                 (v(0x28), vec![process]),
                 (v(0x22c), vec![process]),
                 (v(0x5a4), vec![process]),
-                (v(0x4e8), vec![process, 0]),
-                (v(0x11c), vec![process, 0]),
-                (v(0x128), vec![process, 0]),
-                (v(0x23c), vec![process, 0]),
-                (v(0x22c), vec![process, 0]),
+                (v(0x4e8), vec![process]),
+                (v(0x11c), vec![process]),
+                (v(0x128), vec![process]),
+                (v(0x23c), vec![process]),
+                (v(0x22c), vec![process]),
                 (EXTRA_DATA_LIST, vec![t]),
                 (0x0041_c930, vec![t + 0x44, 0x44, 0, 0, 0, 0, 0]),
                 (v(0x2f4), vec![t, 0x5000, 0, 1]),

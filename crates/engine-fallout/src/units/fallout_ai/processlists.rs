@@ -453,9 +453,11 @@ pub fn processlists_update_animation_scenegraph(e: &mut Engine, this: Ptr<Proces
 /// (`ShadowSceneNode::UpdateObjectLighting`, Xbox PDB), then the actor is told
 /// (`00496960`).
 fn update_object_lighting(e: &mut Engine, actor: u32) {
-    let node = e.vcall(actor, SLOT_GET_NODE, &args![0u32]).u32();
+    // 0096c90c: slot 0x1d0 takes no stack word; the pushed 0 is the last word
+    // of `00b5d9f0`.
+    let node = e.vcall(actor, SLOT_GET_NODE, &args![]).u32();
     let shadow_scene = e.call(0x0045_0b80, &args![0u32]).u32();
-    e.call(0x00b5_d9f0, &args![shadow_scene, node]);
+    e.call(0x00b5_d9f0, &args![shadow_scene, node, 0u32]);
     e.call(0x0049_6960, &args![actor, 0u32]);
 }
 
@@ -3652,13 +3654,15 @@ pub fn fn_00972bb0(e: &mut Engine, this: Ptr<ProcessLists>) {
                 if e.vcall(embedded, 0x60, &[]).u16() != 0 {
                     let process = actor_process(e, actor);
                     if process != 0 {
-                        let vector = e.vcall(actor, 0x1f4, &args![0.0f32]).u32();
+                        // 00972ce3: slot 0x1f4 takes no stack word; the pushed
+                        // 0.0 is the last word of slot 0x418.
+                        let vector = e.vcall(actor, 0x1f4, &args![]).u32();
                         let (x, y, z) = (
                             e.mem.u32(vector),
                             e.mem.u32(vector + 4),
                             e.mem.u32(vector + 8),
                         );
-                        e.vcall(process, 0x418, &args![actor, x, y, z]);
+                        e.vcall(process, 0x418, &args![actor, x, y, z, 0.0f32]);
                     }
                 }
             }
@@ -7376,8 +7380,8 @@ mod tests {
         e.call_log = Some(vec![]);
         e.call(0x0096_c860, &args![lists]);
         assert_eq!(calls(&e, 0x0049_3930), vec![vec![0x4000]]);
-        assert_eq!(calls(&e, slot(SLOT_GET_NODE)), vec![vec![a1, 0]]);
-        assert_eq!(calls(&e, 0x00b5_d9f0), vec![vec![0x888, 0x777]]);
+        assert_eq!(calls(&e, slot(SLOT_GET_NODE)), vec![vec![a1]]);
+        assert_eq!(calls(&e, 0x00b5_d9f0), vec![vec![0x888, 0x777, 0]]);
         assert_eq!(calls(&e, 0x0049_6960), vec![vec![a1, 0]]);
     }
 
@@ -10739,7 +10743,10 @@ mod tests {
         e.call_log = Some(vec![]);
         e.call(0x0097_2bb0, &args![lists]);
         assert_eq!(calls(&e, slot(0x4d8)), vec![vec![process, alive]]);
-        assert_eq!(calls(&e, slot(0x418)), vec![vec![process, tired, 1, 2, 3]]);
+        assert_eq!(
+            calls(&e, slot(0x418)),
+            vec![vec![process, tired, 1, 2, 3, 0]]
+        );
         // A tired actor whose base data answers 0 to slot 0x60 is left alone.
         on_slot(&mut e, 0x60, |_| 0);
         e.call_log = Some(vec![]);

@@ -3216,10 +3216,12 @@ pub fn fn_00881d30(e: &mut Engine, this: Ptr<Actor>) -> bool {
             flag_12 = true;
         }
     } else {
-        let note = e
-            .call(NOTE_LOOKUP, &args![this, NOTE_OBJECT_011F426C])
-            .u32();
-        if e.call(NOTE_TEST, &args![note + 0x10]).bool() {
+        let note = e.call(NOTE_LOOKUP, &args![this]).u32();
+        // 00882116: `00891170` takes no stack word; the pushed note object is
+        // the word of `004390c0` (RET 4).
+        if e.call(NOTE_TEST, &args![note + 0x10, NOTE_OBJECT_011F426C])
+            .bool()
+        {
             wants_move = true;
         }
     }
@@ -3391,9 +3393,10 @@ fn wake_from_death_pose(e: &mut Engine, this: Ptr<Actor>, node: u32) {
                 e.call(ANIMATION_UPDATE_MOVEMENT, &args![animation, this]);
             } else {
                 let group = e
-                    .call(ANIMATION_ZERO_GLOBAL_TRANSFORM, &args![current, 1u32])
+                    .call(ANIMATION_ZERO_GLOBAL_TRANSFORM, &args![current])
                     .u32();
-                let time = e.call(ANIM_GROUP_GET_TIME, &args![group]).f32();
+                // 008826d3: the pushed 1 is the word of `005f3780` (RET 4).
+                let time = e.call(ANIM_GROUP_GET_TIME, &args![group, 1u32]).f32();
                 e.call(ANIMATION_UPDATE, &args![animation, this, 0.0f32, time]);
                 e.call(ANIMATION_UPDATE_MOVEMENT, &args![animation, this]);
                 knock_down(e, this, node, true);

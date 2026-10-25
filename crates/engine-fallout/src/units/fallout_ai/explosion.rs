@@ -1870,10 +1870,12 @@ pub fn fn_009afcc0(e: &mut Engine, this: Ptr) {
                         if damage as f64 > e.global::<f64>(0x0101_2060) {
                             let position = e.vcall(this.addr(), 0x1f4, &args![]).u32();
                             let distance = e.with_stack(12, |e, point| {
+                                let coordinate = e.call(0x0045_bb80, &args![av_object]).u32();
+                                // 009afe84: the two pushed words belong to
+                                // `00439ef0` (RET 8).
                                 let coordinate = e
-                                    .call(0x0045_bb80, &args![av_object, point, position])
+                                    .call(0x0043_9ef0, &args![coordinate, point, position])
                                     .u32();
-                                let coordinate = e.call(0x0043_9ef0, &args![coordinate]).u32();
                                 e.call(0x0045_7990, &args![coordinate]).f32()
                             });
                             fn_009b1510(e, this, record, Ptr::new(av_object), distance);
@@ -1894,8 +1896,9 @@ pub fn fn_009afcc0(e: &mut Engine, this: Ptr) {
 pub fn fn_009afef0(e: &mut Engine, this: Ptr) {
     let phantom = e.call(0x0055_9450, &args![this.addr() + 0xa0]).u32();
     if phantom != 0 {
-        let form_data = e.call(0x0041_81e0, &args![this, 0x20u32]).u32();
-        let always_process = e.call(0x0047_7950, &args![form_data]).bool();
+        // 009aff0f: the pushed 0x20 is the word of `00477950` (RET 4).
+        let form_data = e.call(0x0041_81e0, &args![this]).u32();
+        let always_process = e.call(0x0047_7950, &args![form_data, 0x20u32]).bool();
         let mut index = 0u32;
         loop {
             let phantom = e.call(0x0055_9450, &args![this.addr() + 0xa0]).u32();
@@ -7284,11 +7287,11 @@ mod tests {
             0x2000u32.into_ret()
         });
         e.register(0x0041_81e0, |_, a| {
-            assert_eq!(a, &[0x1000, 0x20]);
+            assert_eq!(a, &[0x1000]);
             0x7000u32.into_ret()
         });
         e.register(0x0047_7950, |_, a| {
-            assert_eq!(a, &[0x7000]);
+            assert_eq!(a, &[0x7000, 0x20]);
             false.into_ret()
         });
         e.register(0x004a_e750, |_, a| {

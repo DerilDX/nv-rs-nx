@@ -1045,8 +1045,10 @@ pub fn tes_object_refr_load_3d(e: &mut Engine, this: Ptr<TESObjectREFR>, flag: u
                 if form_type(e, base) == 0x2a {
                     let package = e.vcall(me, 0x1b8, &args![0u32]).u32();
                     if package != 0 {
-                        let flag = e.vcall(me, 0x22c, &args![0u32, 1u32]).u8();
-                        e.vcall(package, 0xd8, &args![flag]);
+                        // 0056bbc2: slot 0x22c takes one word (0); the pushed 1
+                        // is the second word of the call through +0xd8.
+                        let flag = e.vcall(me, 0x22c, &args![0u32]).u8();
+                        e.vcall(package, 0xd8, &args![flag, 1u32]);
                     }
                     let base = base_object_field(e, this);
                     e.call(0x0060_56f0, &args![base, me]);

@@ -3157,8 +3157,10 @@ fn announce_equip(e: &mut Engine, form: u32, count: i32, actor: u32, worn_list: 
                 let list = e.mem.u32(kept);
                 list_call_with_item(e, LIST_ADD, list, worn_list);
                 let acquire = e.call(ACTOR_PROCESS, &args![actor]).u32();
-                let hand = e.vcall(actor, 0x1d0, &args![0u32]).u32();
-                if !e.vcall(acquire, 0x160, &args![kept, hand]).bool() {
+                // 004c082e: slot 0x1d0 takes no stack word; the pushed 0 is the
+                // third word of slot 0x160.
+                let hand = e.vcall(actor, 0x1d0, &args![]).u32();
+                if !e.vcall(acquire, 0x160, &args![kept, hand, 0u32]).bool() {
                     delete_item_change(e, kept);
                     kept = 0;
                 } else {

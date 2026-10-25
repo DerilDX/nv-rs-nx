@@ -7302,14 +7302,14 @@ pub fn actor_combat_hit(
             {
                 has_effect = 1;
             }
-            let weapon_object = e
-                .call(
-                    SOURCE_WEAPON_LOOKUP,
-                    &args![source_ref, has_effect, 0u32, this],
-                )
-                .u32();
+            // 0089a0f6: `00476c90` takes no stack word; the three pushed words
+            // belong to `00525b20` (RET 0xc).
+            let weapon_object = e.call(SOURCE_WEAPON_LOOKUP, &args![source_ref]).u32();
             let projectiles = e
-                .call(WEAPON_GET_NUM_PROJECTILES, &args![weapon_object])
+                .call(
+                    WEAPON_GET_NUM_PROJECTILES,
+                    &args![weapon_object, has_effect, 0u32, this],
+                )
                 .u8() as u32;
             if projectiles as i32 > 1 {
                 for offset in [
@@ -12712,8 +12712,9 @@ fn hit_me_critical_effect(e: &mut Engine, s: &mut HitMe) {
         if critical != 0 && form != 0 {
             e.with_stack(4, |e, holder| {
                 e.mem.set_u32(holder.addr(), critical);
-                let list = e.call(FORM_LIST_FIRST_500940, &args![form, holder]).u32();
-                if e.call(LIST_TEST_5F65D0, &args![list]).bool() {
+                // 0089b333: the pushed holder is the word of `005f65d0` (RET 4).
+                let list = e.call(FORM_LIST_FIRST_500940, &args![form]).u32();
+                if e.call(LIST_TEST_5F65D0, &args![list, holder]).bool() {
                     effect_found = true;
                 }
             });
@@ -18725,7 +18726,7 @@ mod tests {
         actor_combat_hit(&mut e, attacker, target, 0, Ptr::new(source), 0);
         // The source reference is recorded and the count passed on.
         let lookup = calls_to(&e, SOURCE_WEAPON_LOOKUP);
-        assert_eq!(lookup, vec![vec![source, 1, 0, attacker.addr()]]);
+        assert_eq!(lookup, vec![vec![source]]);
         let hit_me = calls_to(&e, ACTOR_HIT_ME);
         let hit_data = hit_me[0][1];
         assert_eq!(e.mem.u32(hit_data + HIT_SOURCE_REF), source);

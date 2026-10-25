@@ -1075,9 +1075,13 @@ pub fn fn_008a6840(e: &mut Engine, this: Ptr<Actor>, drawn: u8) {
     if e.call(0x0049_4710, &args![animation, group as u32]).bool() {
         return;
     }
-    let model = e.call(0x0057_15d0, &args![this, 1u32, 0u32, 1u32]).u32();
+    // 008a6933: `005715d0` takes no stack word; the pushed 1, 0, 1 are the
+    // last three words of `00447330` (RET 0x10).
+    let model = e.call(0x0057_15d0, &args![this]).u32();
     let loader: u32 = e.global(MODEL_LOADER);
-    let list = e.call(0x0044_7330, &args![loader, model]).u32();
+    let list = e
+        .call(0x0044_7330, &args![loader, model, 1u32, 0u32, 1u32])
+        .u32();
     e.call(0x0049_0400, &args![animation, list]);
 }
 
@@ -7318,8 +7322,8 @@ mod tests {
         );
         assert_eq!(called(&log, 0x005f_2370), vec![vec![0, 1, 0x18, 0]]);
         assert_eq!(called(&log, 0x0049_4710), vec![vec![0x500, 0x66]]);
-        assert_eq!(called(&log, 0x0057_15d0), vec![vec![actor.addr(), 1, 0, 1]]);
-        assert_eq!(called(&log, 0x0044_7330), vec![vec![0x88, 0x77]]);
+        assert_eq!(called(&log, 0x0057_15d0), vec![vec![actor.addr()]]);
+        assert_eq!(called(&log, 0x0044_7330), vec![vec![0x88, 0x77, 1, 0, 1]]);
         assert_eq!(called(&log, 0x0049_0400), vec![vec![0x500, 0x99]]);
         // Already loaded.
         e.set_global(KNOB + 4, 1u32);

@@ -2547,17 +2547,15 @@ pub fn fn_005dac80(e: &mut Engine, a: ScriptArgs) -> bool {
     {
         let process = e.call(GET_PROCESS, &args![reference]).u32();
         let point = e
-            .vcall(
-                a.this_obj.addr(),
-                REFERENCE_SLOT_1F4,
-                &args![first, second, a.this_obj],
-            )
+            .vcall(a.this_obj.addr(), REFERENCE_SLOT_1F4, &args![])
             .u32();
         let words = [e.mem.u32(point), e.mem.u32(point + 4), e.mem.u32(point + 8)];
         e.vcall(
             process,
             PROCESS_SLOT_FC,
-            &args![reference, words[0], words[1], words[2]],
+            // 005dad1d: the three words pushed before slot 0x1f4 (no stack words)
+            // are the last three of slot 0xfc (RET 0x1c).
+            &args![reference, words[0], words[1], words[2], first, second, a.this_obj],
         );
     }
     true
@@ -6147,10 +6145,10 @@ mod tests {
         start_log(&mut e);
         assert!(run(&mut e, 0x005d_ac80, a));
         assert_parsed(&e, this_obj);
-        assert_eq!(calls(&e, V_POINT), vec![vec![this_obj, 7, 9, this_obj]]);
+        assert_eq!(calls(&e, V_POINT), vec![vec![this_obj]]);
         assert_eq!(
             calls(&e, V_RECORD),
-            vec![vec![process, target, 0x11, 0x22, 0x33]]
+            vec![vec![process, target, 0x11, 0x22, 0x33, 7, 9, this_obj]]
         );
         assert_eq!(calls(&e, GET_PROCESS).len(), 2);
     }

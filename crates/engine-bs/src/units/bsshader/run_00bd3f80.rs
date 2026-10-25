@@ -395,16 +395,12 @@ pub fn fn_00bd4890(e: &mut Engine, this: Ptr, source: Ptr) {
             let value = e.mem.u32(holder);
             e.mem.set_u32(block + 8, value);
             let block = constant_block(e, state, 4);
-            let texture = e
-                .call(TEXTURE_FOR_00C03230, &args![this, object, 0u32])
-                .u32();
+            let texture = e.call(TEXTURE_FOR_00C03230, &args![object, 0u32]).u32();
             e.mem.set_u32(block + 8, texture);
         }
         1 => {
             let block = constant_block(e, state, 0);
-            let texture = e
-                .call(TEXTURE_FOR_00C03230, &args![this, object, 0u32])
-                .u32();
+            let texture = e.call(TEXTURE_FOR_00C03230, &args![object, 0u32]).u32();
             e.mem.set_u32(block + 8, texture);
         }
         2 => {

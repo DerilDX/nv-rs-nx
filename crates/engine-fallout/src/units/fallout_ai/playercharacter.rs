@@ -7551,8 +7551,9 @@ pub fn fn_009481d0(e: &mut Engine, this: Ptr<PlayerCharacter>) {
     for animation in [first, second] {
         let object = e.call(0x0049_1040, &args![animation, 4u32]).u32();
         if object != 0 {
-            let holder = e.call(0x0048_f7f0, &args![object, 1u32]).u32();
-            let time = e.call(0x005f_3780, &args![holder]).f64();
+            // 00948296: the pushed 1 is the word of `005f3780` (RET 4).
+            let holder = e.call(0x0048_f7f0, &args![object]).u32();
+            let time = e.call(0x005f_3780, &args![holder, 1u32]).f64();
             let base = e.call(0x0063_9aa0, &args![object]).f64();
             let delta = (time - base) as f32;
             e.call(0x0096_6a00, &args![animation, delta]);
@@ -8638,8 +8639,10 @@ fn aim_and_block_input(e: &mut Engine, this: Ptr<PlayerCharacter>, input: u32, w
 /// byte while the aim button is down and nothing is selected in the menu),
 /// runs `0095f6a0` and, when both hold, `00944400` again.
 fn attack_input(e: &mut Engine, this: Ptr<PlayerCharacter>, input: u32, flags: u32) {
-    let group = e.vcall(this.addr(), 0x1e4, &args![4u32]).u32();
-    let action = e.call(0x0043_01b0, &args![group]).u16();
+    // 00947321: slot 0x1e4 takes no stack word; the pushed 4 is the word of
+    // `004301b0` (RET 4).
+    let group = e.vcall(this.addr(), 0x1e4, &args![]).u32();
+    let action = e.call(0x0043_01b0, &args![group, 4u32]).u16();
     if e.call(0x005f_2670, &args![action as u32]).u8() != 0 {
         return;
     }

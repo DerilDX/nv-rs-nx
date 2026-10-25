@@ -1185,8 +1185,10 @@ pub fn high_process_update_3d_model(e: &mut Engine, this: Ptr, actor: Ptr) {
             }
             let face_data = e.call(0x008a_dcb0, &args![actor]).u32();
             if face_data != 0 {
-                let value = e.vcall(actor.addr(), 0x22c, &args![0u32, 1u32]).u8();
-                e.vcall(face_data, 0xd8, &args![value as u32]);
+                // 008f6d02: slot 0x22c takes one word (0); the pushed 1 is the
+                // second word of the call through +0xd8.
+                let value = e.vcall(actor.addr(), 0x22c, &args![0u32]).u8();
+                e.vcall(face_data, 0xd8, &args![value as u32, 1u32]);
             }
             if save_form != 0 {
                 e.call(0x0060_56f0, &args![save_form, actor]);

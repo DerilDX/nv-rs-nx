@@ -3053,14 +3053,16 @@ pub fn actor_update_animation_movement(
                 ];
                 let scale = e.call(GET_SCALE, &args![this]).f32();
                 if scale != 1.0 {
-                    let flag = e.call(REFERENCE_FLAG_0X50D4A0, &args![this, 0u32]).u8();
+                    // 008888b6: `0050d4a0` takes no stack word; the pushed 0 is
+                    // the last word of `00494390` (RET 0x10).
+                    let flag = e.call(REFERENCE_FLAG_0X50D4A0, &args![this]).u8();
                     e.with_stack(12, |e, slot| {
                         for (i, word) in vector.iter().enumerate() {
                             e.mem.set_u32(slot.addr() + 4 * i as u32, *word);
                         }
                         e.call(
                             ANIMATION_SCALE_VECTOR,
-                            &args![animation, slot, this, flag as u32],
+                            &args![animation, slot, this, flag as u32, 0u32],
                         );
                         for (i, word) in vector.iter_mut().enumerate() {
                             *word = e.mem.u32(slot.addr() + 4 * i as u32);
@@ -7079,13 +7081,13 @@ fn update_condition_nodes(e: &mut Engine, root: u32, condition: u32) {
 /// Shows a damage message: `CREATE_MESSAGE` with (2, 0, text, duration, 0).
 fn show_damage_message(e: &mut Engine, setting: u32) {
     let duration: f32 = e.global(DAMAGE_MESSAGE_DURATION);
-    let message = e
-        .call(
-            CREATE_MESSAGE,
-            &args![setting, 2u32, 0u32, DAMAGE_MESSAGE_TEXT, duration, 0u32],
-        )
-        .u32();
-    e.call(SHOW_MESSAGE, &args![message]);
+    // 0089167d: `00403df0` takes only the setting (ECX); the five pushed words
+    // are the rest of the cdecl `007052f0` (ADD ESP,0x18).
+    let message = e.call(CREATE_MESSAGE, &args![setting]).u32();
+    e.call(
+        SHOW_MESSAGE,
+        &args![message, 2u32, 0u32, DAMAGE_MESSAGE_TEXT, duration, 0u32],
+    );
 }
 
 // Translated from 00891360 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -14264,17 +14266,12 @@ mod tests {
         let (actor, _, entry, _) = damage_world(&mut e, 0x18, 30.0);
         slot(&mut e, ACTOR_TABLE, VSLOT_ACTOR_FLAG_0X360, eax(1));
         let created = record(&mut e, CREATE_MESSAGE, eax(0x5151));
+        let shown = record(&mut e, SHOW_MESSAGE, Ret::default());
         damage(&mut e, actor, entry, 10.0);
+        assert_eq!(*created.borrow(), vec![vec![ARMOR_DAMAGED_MESSAGE]]);
         assert_eq!(
-            *created.borrow(),
-            vec![vec![
-                ARMOR_DAMAGED_MESSAGE,
-                2,
-                0,
-                DAMAGE_MESSAGE_TEXT,
-                3.0f32.to_bits(),
-                0
-            ]]
+            *shown.borrow(),
+            vec![vec![0x5151, 2, 0, DAMAGE_MESSAGE_TEXT, 3.0f32.to_bits(), 0]]
         );
         // Starting under the limit: no second message.
         damage(&mut e, actor, entry, 1.0);
@@ -14377,20 +14374,15 @@ mod tests {
         make_player(&mut e, actor);
         slot(&mut e, ACTOR_TABLE, VSLOT_ACTOR_FLAG_0X360, eax(1));
         let created = record(&mut e, CREATE_MESSAGE, eax(0x5151));
+        let shown = record(&mut e, SHOW_MESSAGE, Ret::default());
         let stopped = record(&mut e, AUDIO_STOP_MOVING_SOUNDS, Ret::default());
         let removed = record(&mut e, INVENTORY_REMOVE, eax(1));
         e.register(PLAYER_ROOT_OBJECT, |_, a| eax(0x8000 + a[1]));
         assert_eq!(damage(&mut e, actor, entry, 10.0), 1);
+        assert_eq!(*created.borrow(), vec![vec![WEAPON_DESTROYED_MESSAGE]]);
         assert_eq!(
-            *created.borrow(),
-            vec![vec![
-                WEAPON_DESTROYED_MESSAGE,
-                2,
-                0,
-                DAMAGE_MESSAGE_TEXT,
-                3.0f32.to_bits(),
-                0
-            ]]
+            *shown.borrow(),
+            vec![vec![0x5151, 2, 0, DAMAGE_MESSAGE_TEXT, 3.0f32.to_bits(), 0]]
         );
         assert_eq!(stopped.borrow().len(), 2);
         assert_eq!(stopped.borrow()[0][1..], [0x8001, 0, 0]);

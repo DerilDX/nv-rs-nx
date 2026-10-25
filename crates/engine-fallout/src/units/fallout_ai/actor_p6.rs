@@ -963,13 +963,13 @@ pub fn fn_008ba2f0(e: &mut Engine, owner: Ptr, _unused_1: u32, threshold: f32) {
     };
     if answered && !below {
         let time = e.global::<f32>(MESSAGE_TIME);
-        let message = e
-            .call(
-                MESSAGE_QUEUE_ADD,
-                &args![MESSAGE_QUEUE, 0u32, ICON_SURPRISED, 0u32, time, 0u32],
-            )
-            .u32();
-        e.call(MESSAGE_QUEUE_SHOW, &args![message]);
+        // 008ba3ac: `004c69f0` takes only ECX; the five pushed words are the
+        // rest of the cdecl `007052f0` (ADD ESP,0x18).
+        let message = e.call(MESSAGE_QUEUE_ADD, &args![MESSAGE_QUEUE]).u32();
+        e.call(
+            MESSAGE_QUEUE_SHOW,
+            &args![message, 0u32, ICON_SURPRISED, 0u32, time, 0u32],
+        );
     }
 }
 
@@ -1283,10 +1283,13 @@ pub fn fn_008ba600(e: &mut Engine, this: Ptr<Actor>) {
     if flags & 0x80 != 0 {
         let idle = process_vcall(e, actor, 0x718, &args![]).u32();
         if idle != 0 {
-            let section = e
-                .call(GET_IDLE_ANIM_GROUP_SECTION, &args![idle, 3u32])
-                .u32();
-            e.call(PLAY_IDLE_SECTION, &args![animation, idle, actor, section]);
+            let section = e.call(GET_IDLE_ANIM_GROUP_SECTION, &args![idle]).u32();
+            // 008bb1d5: the pushed 3 is the last word of `00497f20` (RET 0x10);
+            // `005ff160` takes no stack word.
+            e.call(
+                PLAY_IDLE_SECTION,
+                &args![animation, idle, actor, section, 3u32],
+            );
         }
     }
     if flags & 0x10 != 0 {
@@ -5237,18 +5240,11 @@ mod tests {
         let (mut e, actor) = surprise_setup(true, true, false, 10.0);
         e.call_log = Some(vec![]);
         fn_008ba2f0(&mut e, owner(actor), 0, 5.0);
+        assert_eq!(calls_to(&e, MESSAGE_QUEUE_ADD), [vec![MESSAGE_QUEUE]]);
         assert_eq!(
-            calls_to(&e, MESSAGE_QUEUE_ADD),
-            [vec![
-                MESSAGE_QUEUE,
-                0,
-                ICON_SURPRISED,
-                0,
-                2.0f32.to_bits(),
-                0
-            ]]
+            calls_to(&e, MESSAGE_QUEUE_SHOW),
+            [vec![0x5a5a, 0, ICON_SURPRISED, 0, 2.0f32.to_bits(), 0]]
         );
-        assert_eq!(calls_to(&e, MESSAGE_QUEUE_SHOW), [vec![0x5a5a]]);
         // The value is below the threshold: no message.
         let (mut e, actor) = surprise_setup(true, true, false, 3.0);
         e.call_log = Some(vec![]);
@@ -5594,10 +5590,10 @@ mod tests {
         double(&mut e, PLAY_IDLE_SECTION, Ret::default());
         e.call_log = Some(vec![]);
         fn_008ba600(&mut e, actor);
-        assert_eq!(calls_to(&e, GET_IDLE_ANIM_GROUP_SECTION), [vec![0x6100, 3]]);
+        assert_eq!(calls_to(&e, GET_IDLE_ANIM_GROUP_SECTION), [vec![0x6100]]);
         assert_eq!(
             calls_to(&e, PLAY_IDLE_SECTION),
-            [vec![ANIMATION_OBJECT, 0x6100, actor.addr(), 0x6200]]
+            [vec![ANIMATION_OBJECT, 0x6100, actor.addr(), 0x6200, 3]]
         );
     }
 

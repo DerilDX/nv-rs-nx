@@ -3121,11 +3121,16 @@ pub fn loading_menu_thread_thread_proc(e: &mut Engine, this: Ptr<LoadingMenuThre
 
 // Translated from 0078d570 (decompiled, FalloutNV.exe 1.4.0.525)
 /// Wakes the thread when it is suspended (`bFlagSuspended`): clears
-/// `bFlagSuspend` and releases its semaphore (`+0x3c`).
+/// `bFlagSuspend` and releases the semaphore the thread waits on
+/// (`BackgroundThreadSema`, `+0x30`).
 pub fn fn_0078d570(e: &mut Engine, this: Ptr<LoadingMenuThread>) {
     if e.get(this, LoadingMenuThread::bFlagSuspended) != 0 {
         e.set(this, LoadingMenuThread::bFlagSuspend, 0u8);
-        e.call(SEMAPHORE_RELEASE, &args![this.addr() + MAIN_SEMAPHORE]);
+        // 0078d589..0078d58f: `ADD ECX,0x30`, the background semaphore.
+        e.call(
+            SEMAPHORE_RELEASE,
+            &args![this.addr() + BACKGROUND_SEMAPHORE],
+        );
     }
 }
 
@@ -7176,7 +7181,7 @@ mod tests {
         assert_eq!(r.e.get(thread, LoadingMenuThread::bFlagSuspend), 0);
         assert_eq!(
             r.calls_to(SEMAPHORE_RELEASE),
-            vec![vec![thread.addr() + 0x3c]]
+            vec![vec![thread.addr() + 0x30]]
         );
         // Without a menu, nothing.
         r.clear_calls();

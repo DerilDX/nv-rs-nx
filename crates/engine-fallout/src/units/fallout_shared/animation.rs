@@ -7873,21 +7873,33 @@ pub fn fn_0049b050(e: &mut Engine, this: Ptr<Animation>, buffer: Ptr) {
     if actor == player {
         if e.call(PLAYER_GET_ANIMATION, &args![player, 1u32]).u32() == a {
             let process = e.call(ACTOR_PROCESS, &args![actor]).u32();
-            let biped = e
-                .call(PLAYER_BIPED, &args![player, 1u32, this, player])
-                .u32();
-            e.vcall(process, SLOT_PROCESS_SET_BIPED, &args![byte, biped]);
+            let biped = e.call(PLAYER_BIPED, &args![player, 1u32]).u32();
+            // 0049b1e4: `this` and the player pushed before `00950b00` (RET 4) are
+            // the last two words of slot 0x1cc (RET 0x10).
+            e.vcall(
+                process,
+                SLOT_PROCESS_SET_BIPED,
+                &args![byte, biped, this, player],
+            );
         } else {
             let process = e.call(ACTOR_PROCESS, &args![player]).u32();
-            let biped = e
-                .call(PLAYER_BIPED, &args![player, 0u32, this, player])
-                .u32();
-            e.vcall(process, SLOT_PROCESS_SET_BIPED, &args![byte, biped]);
+            let biped = e.call(PLAYER_BIPED, &args![player, 0u32]).u32();
+            e.vcall(
+                process,
+                SLOT_PROCESS_SET_BIPED,
+                &args![byte, biped, this, player],
+            );
         }
     } else {
         let process = e.call(ACTOR_PROCESS, &args![actor]).u32();
-        let biped = e.vcall(actor, SLOT_ACTOR_BIPED, &args![this, actor]).u32();
-        e.vcall(process, SLOT_PROCESS_SET_BIPED, &args![byte, biped]);
+        // 0049b271: slot 0x1e8 takes no stack words; `this` and the actor are
+        // the last two words of slot 0x1cc.
+        let biped = e.vcall(actor, SLOT_ACTOR_BIPED, &args![]).u32();
+        e.vcall(
+            process,
+            SLOT_PROCESS_SET_BIPED,
+            &args![byte, biped, this, actor],
+        );
     }
     let process = e.call(ACTOR_PROCESS, &args![actor]).u32();
     e.vcall(process, SLOT_PROCESS_NOTIFY, &args![actor]);
@@ -16956,7 +16968,10 @@ mod tests {
         let player: u32 = e.global(PLAYER_SINGLETON);
         let _ = player;
         assert_eq!(arguments_of(&log, 0x00f5_04dc), [[process, actor, a]]);
-        assert_eq!(arguments_of(&log, 0x00f5_01cc), [[process, 0x5a, 0xb1b1]]);
+        assert_eq!(
+            arguments_of(&log, 0x00f5_01cc),
+            [[process, 0x5a, 0xb1b1, a, actor]]
+        );
         assert_eq!(arguments_of(&log, 0x00f5_01d8), [[process, actor]]);
         assert_eq!(arguments_of(&log, 0x00f5_061c), [[process]]);
         // The held sequence is the sequence of slot 1 with the phase -2.

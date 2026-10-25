@@ -39,7 +39,7 @@ const ONE: u32 = 0x0101_2070;
 const ENTRY_00E7EB00: u32 = 0x00e7_eb00;
 /// `00e7de90`: `thiscall` on a constant entry, one word.
 const ENTRY_00E7DE90: u32 = 0x00e7_de90;
-/// `00c03230`: `thiscall` on the shader, two words (geometry, 0).
+/// `00c03230`: `stdcall` (RET 8), two words (geometry, 0); the caller's ECX is not one.
 const SHADER_00C03230: u32 = 0x00c0_3230;
 /// `00c4c2d0`: `cdecl`, three words (matrix, 0, 64-byte output).
 const MATRIX_00C4C2D0: u32 = 0x00c4_c2d0;
@@ -97,7 +97,7 @@ fn final_slot_78(e: &mut Engine, this: u32, big: u32, small: u32) {
 /// The geometry part shared by the four render-pass functions: constant
 /// entry 0 gets the word at `[geometry+0xac]`, entry 1 `00c03230(geometry,
 /// 0)`, each followed by `00e7de90(entry, geometry slot 0xe0)`.
-fn geometry_entries(e: &mut Engine, this: u32, geometry: u32) {
+fn geometry_entries(e: &mut Engine, geometry: u32) {
     let source = e.mem.u32(geometry + 0xac);
     let entry0 = constant_entry(e, 0);
     let value = e.mem.u32(source);
@@ -105,7 +105,8 @@ fn geometry_entries(e: &mut Engine, this: u32, geometry: u32) {
     let word = e.vcall(geometry, 0xe0, &args![]).u32();
     e.call(ENTRY_00E7DE90, &args![entry0, word]);
     let entry1 = constant_entry(e, 1);
-    let value = e.call(SHADER_00C03230, &args![this, geometry, 0u32]).u32();
+    // 00b7de2a: `00c03230` is stdcall (RET 8): the geometry and 0; ECX is not a word.
+    let value = e.call(SHADER_00C03230, &args![geometry, 0u32]).u32();
     e.mem.set_u32(entry1 + 8, value);
     let word = e.vcall(geometry, 0xe0, &args![]).u32();
     e.call(ENTRY_00E7DE90, &args![entry1, word]);
@@ -160,7 +161,7 @@ pub fn fn_00b7dd50(e: &mut Engine, this: Ptr) {
 pub fn fn_00b7dde0(e: &mut Engine, this: Ptr, pass: Ptr) {
     let this = this.addr();
     let geometry = e.mem.u32(pass.addr() + 0xc);
-    geometry_entries(e, this, geometry);
+    geometry_entries(e, geometry);
     clear_entries_0_1(e);
     e.with_stack(0x40, |e, frame| {
         let local = frame.addr();
@@ -187,7 +188,7 @@ pub fn fn_00b7deb0(e: &mut Engine, this: Ptr) {
 pub fn fn_00b7ded0(e: &mut Engine, this: Ptr, pass: Ptr) {
     let this = this.addr();
     let geometry = e.mem.u32(pass.addr() + 0xc);
-    geometry_entries(e, this, geometry);
+    geometry_entries(e, geometry);
     clear_entries_0_1(e);
     e.with_stack(0x84, |e, frame| {
         let frame = frame.addr();
@@ -209,7 +210,7 @@ pub fn fn_00b7ded0(e: &mut Engine, this: Ptr, pass: Ptr) {
 pub fn fn_00b7dfe0(e: &mut Engine, this: Ptr, pass: Ptr) {
     let this = this.addr();
     let geometry = e.mem.u32(pass.addr() + 0xc);
-    geometry_entries(e, this, geometry);
+    geometry_entries(e, geometry);
     clear_entries_0_1(e);
     e.with_stack(0x88, |e, frame| {
         let frame = frame.addr();
@@ -246,7 +247,7 @@ pub fn fn_00b7dfe0(e: &mut Engine, this: Ptr, pass: Ptr) {
 pub fn fn_00b7e150(e: &mut Engine, this: Ptr, pass: Ptr) {
     let this = this.addr();
     let geometry = e.mem.u32(pass.addr() + 0xc);
-    geometry_entries(e, this, geometry);
+    geometry_entries(e, geometry);
     let entry3 = constant_entry(e, 3);
     let value = if e.vcall(geometry, 0xf4, &args![3u32, 0u32]).u32() != 0 {
         e.vcall(geometry, 0xf4, &args![3u32, 0u32]).u32()
@@ -443,10 +444,7 @@ mod tests {
             calls_to(e, ENTRY_00E7DE90),
             vec![vec![w.entries[0], 0x55], vec![w.entries[1], 0x55]]
         );
-        assert_eq!(
-            calls_to(e, SHADER_00C03230),
-            vec![vec![w.this, w.geometry, 0]]
-        );
+        assert_eq!(calls_to(e, SHADER_00C03230), vec![vec![w.geometry, 0]]);
         let matrix = w.object + 0x68;
         assert_eq!(
             calls_to(e, SHADER_00B7C750),

@@ -1485,8 +1485,10 @@ pub fn middle_high_process_load_game_ov2(
         let changes = e.call(GET_CONTAINER_CHANGES, &args![list]).u32();
         if changes != 0 {
             let worn = e.call(GET_WORN_ITEM, &args![changes, 5u32, 0u32]).u32();
-            let model = e.vcall(actor, 0x1d0, &args![0u32]).u32();
-            e.vcall(p, 0x160, &args![worn, model]);
+            // 0092752b: slot 0x1d0 takes no stack word; the pushed 0 is the
+            // third word of slot 0x160.
+            let model = e.vcall(actor, 0x1d0, &args![]).u32();
+            e.vcall(p, 0x160, &args![worn, model, 0u32]);
             let item = e.mem.u32(p + 0x114);
             let form = if item != 0 {
                 e.call(ITEM_CHANGE_FORM, &args![item]).u32()
@@ -6053,7 +6055,7 @@ mod tests {
         // The worn item is restored and equipped, the count limited to 3.
         assert_eq!(
             calls(&e, PROCESS_SLOTS + 0x160),
-            vec![vec![a, 0x600, model]]
+            vec![vec![a, 0x600, model, 0]]
         );
         assert_eq!(calls(&e, ACTOR_EQUIP_WORN), vec![vec![reference, form]]);
         assert_eq!(

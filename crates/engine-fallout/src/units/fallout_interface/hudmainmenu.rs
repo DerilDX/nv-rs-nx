@@ -4283,14 +4283,22 @@ pub fn hud_main_menu_set_info_for_ref(
             e.mem.set_u32(marker.addr(), 0);
             e.call(0x0050_9890, &args![marker.addr() + 4, 0xff_u32]);
             let player = current_player(e);
-            let location = e
-                .vcall(
-                    player,
-                    0x1f4,
-                    &args![1_u32, 1_u32, marker.addr() + 4, marker, 1_u32],
-                )
-                .u32();
-            e.call(0x0056_86b0, &args![reference, location]).bool()
+            // 00776044: slot 0x1f4 takes no stack words; the five pushed words
+            // are the rest of `005686b0` (RET 0x18).
+            let location = e.vcall(player, 0x1f4, &args![]).u32();
+            e.call(
+                0x0056_86b0,
+                &args![
+                    reference,
+                    location,
+                    1_u32,
+                    1_u32,
+                    marker.addr() + 4,
+                    marker,
+                    1_u32
+                ],
+            )
+            .bool()
         });
         if !marker_found {
             return false;
@@ -8660,11 +8668,8 @@ mod tests {
             eax: 1,
             ..Ret::default()
         });
-        e.register_double(0x0300_2200, |e, words| {
-            assert_eq!(words[3], words[4] + 4);
-            assert_eq!(words[3], e.mem.u32(0x011d_9d00));
-            assert_eq!(e.mem.u32(words[4]), 0);
-            assert_eq!(e.mem.u32(words[3]), 0xface);
+        e.register_double(0x0300_2200, |_, words| {
+            assert_eq!(words.len(), 1);
             Ret {
                 eax: 0xa000,
                 ..Ret::default()
@@ -8690,7 +8695,14 @@ mod tests {
             e.mem.set_u32(words[0], 0xface);
             Ret::default()
         });
-        e.register_double(0x0056_86b0, |_, _| Ret::default());
+        e.register_double(0x0056_86b0, |e, words| {
+            assert_eq!(words[4], words[5] + 4);
+            assert_eq!(words[4], e.mem.u32(0x011d_9d00));
+            assert_eq!(e.mem.u32(words[5]), 0);
+            assert_eq!(e.mem.u32(words[4]), 0xface);
+            assert_eq!([words[2], words[3], words[6]], [1, 1, 1]);
+            Ret::default()
+        });
         e.call_log = Some(vec![]);
         assert!(!hud_main_menu_set_info_for_ref(
             &mut e,
@@ -8713,10 +8725,10 @@ mod tests {
                 .count(),
             2
         );
-        assert_eq!(
-            calls.last().unwrap(),
-            &(0x0056_86b0, args![reference, 0xa000_u32])
-        );
+        let last = calls.last().unwrap();
+        assert_eq!(last.0, 0x0056_86b0);
+        assert_eq!(last.1[..2], [reference, 0xa000_u32]);
+        assert_eq!(last.1.len(), 7);
     }
 
     #[test]
