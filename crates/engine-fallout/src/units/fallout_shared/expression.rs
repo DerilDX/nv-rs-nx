@@ -885,6 +885,32 @@ mod tests {
     /// The operator table the code reads at 0118cad0 (number, signed
     /// precedence, text), and doubles for the error report.
     fn table_fixture(e: &mut Engine) {
+        // The number literals go through the CRT's `strtol` (00ec8d08) and `_atof_l`
+        // (00eca4c8), which read the initial locale's tables from the image; the bare
+        // engine has no image, so both are doubled with decimal parsers.
+        e.register(0x00ec_8d08, |e, a| {
+            let text = String::from_utf8_lossy(&e.mem.cstr(a[0])).to_string();
+            let text = text.trim_start();
+            let end = text
+                .char_indices()
+                .find(|&(i, c)| !(c.is_ascii_digit() || (i == 0 && (c == '-' || c == '+'))))
+                .map_or(text.len(), |(i, _)| i);
+            text[..end].parse::<i32>().unwrap_or(0).into_ret()
+        });
+        e.register(0x00ec_a4c8, |e, a| {
+            let text = String::from_utf8_lossy(&e.mem.cstr(a[0])).to_string();
+            let text = text.trim_start();
+            let end = text
+                .char_indices()
+                .find(|&(i, c)| {
+                    !(c.is_ascii_digit() || c == '.' || (i == 0 && (c == '-' || c == '+')))
+                })
+                .map_or(text.len(), |(i, _)| i);
+            Ret {
+                st0: text[..end].parse::<f64>().unwrap_or(0.0),
+                ..Ret::default()
+            }
+        });
         let operators: [(u8, &[u8]); 16] = [
             (0, b"("),
             (0, b")"),

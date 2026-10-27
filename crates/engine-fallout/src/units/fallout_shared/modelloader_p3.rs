@@ -2773,12 +2773,14 @@ pub fn fn_004497c0(e: &mut Engine, this: Ptr, first: u32, second: u32, third: u3
 }
 
 // Translated from 004497f0 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 004497f0 - the /GS stack cookie check (00ec408c) is not translated
 /// Lower-cases the text into a 1000-byte buffer and runs [`fn_004495d0`]
-/// with it.
-pub fn fn_004497f0(e: &mut Engine, this: Ptr, text: u32) {
-    lowercase_into_buffer(e, text, |e, buffer| {
-        fn_004495d0(e, this, buffer);
-    });
+/// with it, answering its byte: the exe ends on that call and keeps its `AL`
+/// through the cookie check and the epilogue. It is slot `+0x14` of the
+/// `LockFreeCaseInsensitiveStringMap` vtables, whose `LockFreeMap` base
+/// implementation (`004495d0`) answers that byte too.
+pub fn fn_004497f0(e: &mut Engine, this: Ptr, text: u32) -> u8 {
+    lowercase_into_buffer(e, text, |e, buffer| fn_004495d0(e, this, buffer))
 }
 
 // Translated from 00449880 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -3106,7 +3108,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00449700, fn_00449700(Ptr, u32, u32) -> u8),
         entry!(0x00449750, fn_00449750(Ptr, u32) -> u32),
         entry!(0x004497c0, fn_004497c0(Ptr, u32, u32, u32) -> Ptr),
-        entry!(0x004497f0, fn_004497f0(Ptr, u32)),
+        entry!(0x004497f0, fn_004497f0(Ptr, u32) -> u8),
         entry!(0x00449880, fn_00449880(Ptr, u32, u32) -> bool),
         entry!(0x004498b0, fn_004498b0(Ptr, u32, u32) -> u8),
         entry!(0x004498e0, fn_004498e0(Ptr) -> Ptr),
@@ -6124,6 +6126,15 @@ mod tests {
         });
         e.call(0x0044_97f0, &args![this, source]);
         assert_eq!(*seen.borrow(), vec!["qq"]);
+    }
+
+    #[test]
+    fn fn_004497f0_answers_the_lookup_byte() {
+        let mut e = engine();
+        lowering(&mut e);
+        let this = locked_wrapper(&mut e, 0x0066_5f20, 0x0000_0101);
+        let source = text(&mut e, "QQ");
+        assert_eq!(e.call(0x0044_97f0, &args![this, source]).u32(), 1);
     }
 
     #[test]

@@ -802,7 +802,7 @@ mod tests {
             e.call_log.unwrap(),
             vec![
                 (MANAGER_INSTANCE, vec![]),
-                (0x00ad_cc10, args![MANAGER, 0x4000_0000u32, 1u32])
+                (0x00ad_cc10, args![MANAGER, 0x4000_0000u32, 1u32].to_vec())
             ]
         );
     }
@@ -836,9 +836,9 @@ mod tests {
         assert_eq!(e.get(audio, BSAudio::bInitialized), 1);
         assert_eq!(e.mem.u32(context), 7);
         let log = e.call_log.unwrap();
-        assert_eq!(log[0], (0x00ae_a150, args![audio.addr() + 0x14]));
+        assert_eq!(log[0], (0x00ae_a150, args![audio.addr() + 0x14].to_vec()));
         assert_eq!(log[1], (MANAGER_INSTANCE, vec![]));
-        assert_eq!(log[2], (0x00ad_9f30, args![MANAGER]));
+        assert_eq!(log[2], (0x00ad_9f30, args![MANAGER].to_vec()));
     }
 
     #[test]
@@ -861,9 +861,9 @@ mod tests {
             e.call_log.unwrap(),
             vec![
                 (MANAGER_INSTANCE, vec![]),
-                (0x00ad_a0f0, args![MANAGER]),
+                (0x00ad_a0f0, args![MANAGER].to_vec()),
                 (MANAGER_INSTANCE, vec![]),
-                (0x00ad_9870, args![MANAGER]),
+                (0x00ad_9870, args![MANAGER].to_vec()),
             ]
         );
     }
@@ -895,9 +895,9 @@ mod tests {
             e.call_log.unwrap(),
             vec![
                 (MANAGER_INSTANCE, vec![]),
-                (0x00ad_9f30, args![MANAGER]),
+                (0x00ad_9f30, args![MANAGER].to_vec()),
                 (MANAGER_INSTANCE, vec![]),
-                (0x00ad_a020, args![MANAGER]),
+                (0x00ad_a020, args![MANAGER].to_vec()),
             ]
         );
     }
@@ -914,7 +914,7 @@ mod tests {
             e.call_log.unwrap(),
             vec![
                 (MANAGER_INSTANCE, vec![]),
-                (0x00ae_5870, args![MANAGER, result, 17u32, 23u32]),
+                (0x00ae_5870, args![MANAGER, result, 17u32, 23u32].to_vec()),
             ]
         );
     }
@@ -933,7 +933,10 @@ mod tests {
             e.call_log.unwrap(),
             vec![
                 (MANAGER_INSTANCE, vec![]),
-                (0x00ae_5a50, args![MANAGER, result, 0x1234u32, 5u32, 6u32]),
+                (
+                    0x00ae_5a50,
+                    args![MANAGER, result, 0x1234u32, 5u32, 6u32].to_vec()
+                ),
             ]
         );
     }
@@ -952,7 +955,10 @@ mod tests {
             e.call_log.unwrap(),
             vec![
                 (MANAGER_INSTANCE, vec![]),
-                (0x00ae_5680, args![MANAGER, result, 0x2468u32, 7u32]),
+                (
+                    0x00ae_5680,
+                    args![MANAGER, result, 0x2468u32, 7u32].to_vec()
+                ),
             ]
         );
     }
@@ -1013,7 +1019,7 @@ mod tests {
             e.call_log.unwrap(),
             vec![
                 (MANAGER_INSTANCE, vec![]),
-                (0x00ad_a1d0, args![MANAGER, 0x92u32]),
+                (0x00ad_a1d0, args![MANAGER, 0x92u32].to_vec()),
             ]
         );
     }
@@ -1028,7 +1034,7 @@ mod tests {
             e.call_log.unwrap(),
             vec![
                 (MANAGER_INSTANCE, vec![]),
-                (0x00ad_a300, args![MANAGER, -0.25f32, 0x1234u32]),
+                (0x00ad_a300, args![MANAGER, -0.25f32, 0x1234u32].to_vec()),
             ]
         );
     }
@@ -1043,7 +1049,10 @@ mod tests {
             e.call_log.unwrap(),
             vec![
                 (MANAGER_INSTANCE, vec![]),
-                (0x00ad_ef80, args![MANAGER, -1.0f32, 2.5f32, 7.0f32]),
+                (
+                    0x00ad_ef80,
+                    args![MANAGER, -1.0f32, 2.5f32, 7.0f32].to_vec()
+                ),
             ]
         );
     }
@@ -1118,7 +1127,7 @@ mod tests {
             e.call_log.unwrap(),
             vec![
                 (MANAGER_INSTANCE, vec![]),
-                (0x00ad_eff0, args![MANAGER, 0x80u32]),
+                (0x00ad_eff0, args![MANAGER, 0x80u32].to_vec()),
             ]
         );
     }
@@ -1137,7 +1146,7 @@ mod tests {
         bs_audio_set_environment(&mut e, audio, 13);
         assert_eq!(
             e.call_log.unwrap(),
-            vec![(VIRTUAL_RETURN, args![LISTENER, 13u32])]
+            vec![(VIRTUAL_RETURN, args![LISTENER, 13u32].to_vec())]
         );
     }
 
@@ -1151,7 +1160,10 @@ mod tests {
                 assert_eq!(e.call($address, &args![audio]).f32(), -1.25);
                 assert_eq!(
                     e.call_log.unwrap(),
-                    vec![($address, args![audio]), (MANAGER_INSTANCE, vec![]),]
+                    vec![
+                        ($address, args![audio].to_vec()),
+                        (MANAGER_INSTANCE, vec![]),
+                    ]
                 );
             }
         };
@@ -1172,9 +1184,9 @@ mod tests {
                 assert_eq!(
                     e.call_log.unwrap(),
                     vec![
-                        ($address, args![audio, -1.25f32]),
+                        ($address, args![audio, -1.25f32].to_vec()),
                         (MANAGER_INSTANCE, vec![]),
-                        (MANAGER_VOLUME_CHANGED, args![MANAGER]),
+                        (MANAGER_VOLUME_CHANGED, args![MANAGER].to_vec()),
                     ]
                 );
             }
@@ -1204,7 +1216,7 @@ mod tests {
             e.call_log.unwrap(),
             vec![
                 (MANAGER_INSTANCE, vec![]),
-                (MANAGER_VOLUME_CHANGED, args![MANAGER]),
+                (MANAGER_VOLUME_CHANGED, args![MANAGER].to_vec()),
             ]
         );
     }

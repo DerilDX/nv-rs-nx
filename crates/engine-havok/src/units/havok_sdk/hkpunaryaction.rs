@@ -23,9 +23,9 @@ layout! {
 
 /// `hkpWorld::removeActionImmediately` (Xbox PDB, `this` = the world, then the action).
 const REMOVE_ACTION_IMMEDIATELY: u32 = 0x00c9_7510;
-/// Two `hkpworld.cpp` functions the map gives no name: `00c976a0` (`this` = the world, then the
-/// action and the entity it is being detached from) and `00c92bd0` (`this` = the world, then
-/// the action and its new entity).
+/// Two `hkpworld.cpp` functions the map gives no name: `00c976a0` (`stdcall`: the action and
+/// the entity it is being detached from; the world the caller puts in ECX is not read) and
+/// `00c92bd0` (`this` = the world, then the action and its new entity).
 const WORLD_DETACH_ENTITY: u32 = 0x00c9_76a0;
 const WORLD_ATTACH_ENTITY: u32 = 0x00c9_2bd0;
 /// `hkReferencedObject` reference counting: add (`00c90510`) and remove (`00c905b0`), `this` =
@@ -68,7 +68,8 @@ pub fn fn_00d2b210(e: &mut Engine, this: Ptr<HkpUnaryAction>, entity: Ptr) {
     if old.addr() != 0 {
         let world = e.get(this, HkpUnaryAction::m_world);
         if world.addr() != 0 {
-            e.call(WORLD_DETACH_ENTITY, &args![world, this, old]);
+            // 00d2b223: `00c976a0` is stdcall (RET 8) and does not read ECX.
+            e.call(WORLD_DETACH_ENTITY, &args![this, old]);
         }
         let old = e.get(this, HkpUnaryAction::m_entity);
         e.call(REMOVE_REFERENCE, &args![old]);
@@ -212,10 +213,7 @@ mod tests {
         let this = action(&mut e, 0x5000, 0x6000);
         e.call(0x00d2_b210, &args![this, 0x7000u32]);
         assert_eq!(e.mem.u32(this + 0x18), 0x7000);
-        assert_eq!(
-            calls(&log, WORLD_DETACH_ENTITY),
-            vec![vec![0x5000, this, 0x6000]]
-        );
+        assert_eq!(calls(&log, WORLD_DETACH_ENTITY), vec![vec![this, 0x6000]]);
         assert_eq!(calls(&log, REMOVE_REFERENCE), vec![vec![0x6000]]);
         assert_eq!(calls(&log, ADD_REFERENCE), vec![vec![0x7000]]);
         assert_eq!(

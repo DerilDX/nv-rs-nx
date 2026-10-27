@@ -475,9 +475,11 @@ pub fn tes_creature_get_attack_damage(e: &mut Engine, this: Ptr) -> u16 {
     if e.call(0x0084_3150, &args![map]).bool() {
         let tes = e.global::<u32>(TES);
         if !e.call(0x0045_16b0, &args![tes]).bool() && e.mem.u8(base + 0x50) as i8 == -1 {
-            let model = e.vcall(base.wrapping_sub(0x30), 0x14, &args![1u32]).u32();
+            // 005f8dc0: the model's +0x14 (`00408da0`, plain RET) takes no stack word; the
+            // pushed 1 is the last word of `00600700` (RET 8).
+            let model = e.vcall(base.wrapping_sub(0x30), 0x14, &args![]).u32();
             let map = e.global::<u32>(0x011c_b6a0);
-            let list = e.call(0x0060_0700, &args![map, model]).u32();
+            let list = e.call(0x0060_0700, &args![map, model, 1u32]).u32();
             let empty = list == 0 || {
                 let item = e.call(0x0068_15c0, &args![list]).u32();
                 e.mem.u32(item) == 0
@@ -2809,8 +2811,8 @@ mod b024_tests {
         e.mem.set_u8(this + 0x50, 0xff);
         let (r, log) = logged(&mut e, 0x005f_8d70, &[this]);
         assert_eq!(e.mem.u8(this + 0x50), 1);
-        assert_eq!(only(&log, 0x00a0_0014), vec![vec![this - 0x30, 1]]);
-        assert_eq!(only(&log, 0x0060_0700), vec![vec![0x0066_0000, 0x6000]]);
+        assert_eq!(only(&log, 0x00a0_0014), vec![vec![this - 0x30]]);
+        assert_eq!(only(&log, 0x0060_0700), vec![vec![0x0066_0000, 0x6000, 1]]);
         // 0x20 + trunc(2 * 2.5).
         assert_eq!(r.u32() as u16, 0x25);
         // An empty list: 0, and the damage is 0.

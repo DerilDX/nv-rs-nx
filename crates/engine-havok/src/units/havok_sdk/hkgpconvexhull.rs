@@ -9201,14 +9201,14 @@ mod tests {
         // (function, arguments built from the hull, address of its INT3)
         type Case = (u32, fn(u32, u32) -> Vec<u32>, u32);
         let cases: [Case; 8] = [
-            (0x00d7_4f10, |h, _| args![h], 0x00d7_4f88),
-            (0x00d7_4fb0, |h, _| args![h, 1i32], 0x00d7_5028),
-            (0x00d7_52e0, |h, _| args![h], 0x00d7_5358),
-            (0x00d7_5390, |h, _| args![h], 0x00d7_5408),
-            (0x00d7_5490, |h, s| args![h, s, s], 0x00d7_550e),
-            (0x00d7_5560, |h, _| args![h], 0x00d7_55d8),
-            (0x00d7_5600, |h, _| args![h], 0x00d7_5678),
-            (0x00d7_56a0, |h, s| args![h, s], 0x00d7_571e),
+            (0x00d7_4f10, |h, _| args![h].to_vec(), 0x00d7_4f88),
+            (0x00d7_4fb0, |h, _| args![h, 1i32].to_vec(), 0x00d7_5028),
+            (0x00d7_52e0, |h, _| args![h].to_vec(), 0x00d7_5358),
+            (0x00d7_5390, |h, _| args![h].to_vec(), 0x00d7_5408),
+            (0x00d7_5490, |h, s| args![h, s, s].to_vec(), 0x00d7_550e),
+            (0x00d7_5560, |h, _| args![h].to_vec(), 0x00d7_55d8),
+            (0x00d7_5600, |h, _| args![h].to_vec(), 0x00d7_5678),
+            (0x00d7_56a0, |h, s| args![h, s].to_vec(), 0x00d7_571e),
         ];
         for (function, build, address) in cases {
             let mut e = engine();

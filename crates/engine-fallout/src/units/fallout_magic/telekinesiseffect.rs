@@ -68,8 +68,8 @@ const PLAYER: u32 = 0x011d_ea3c;
 /// The save/load singleton (pointer global).
 const SAVE_LOAD_GAME: u32 = 0x011d_e45c;
 /// A global object whose controls `Update` reads (pointer global,
-/// `011dea0c`), its `00877720` (thiscall: control, word) and the test
-/// `00a24660` on what that returns.
+/// `011dea0c`), its `00877720` (thiscall, no stack word) and the test
+/// `00a24660(control, word)` on what that returns.
 const CONTROLS_011DEA0C: u32 = 0x011d_ea0c;
 const CONTROL_00877720: u32 = 0x0087_7720;
 const CONTROL_DOWN_00A24660: u32 = 0x00a2_4660;
@@ -442,14 +442,16 @@ fn player_word_008d6f30(e: &mut Engine) -> u32 {
     e.call(0x008d_6f30, &args![word]).u32()
 }
 
-/// Whether control `control` is down (`00877720(control, 0)` on the object
-/// at `011dea0c`, then `00a24660`).
+/// Whether control `control` is down (`00877720` on the object at `011dea0c`,
+/// then `00a24660(control, 0)` on what it returns).
 fn control_down(e: &mut Engine, control: u32) -> bool {
     let controls = e.global::<u32>(CONTROLS_011DEA0C);
-    let state = e
-        .call(CONTROL_00877720, &args![controls, control, 0u32])
-        .u32();
-    e.call(CONTROL_DOWN_00A24660, &args![state]).u32() != 0
+    // 0082ac06 and the other sites: `00877720` takes no stack word (plain RET); the
+    // pushed control and 0 are the two words of `00a24660` (RET 8).
+    let state = e.call(CONTROL_00877720, &args![controls]).u32();
+    e.call(CONTROL_DOWN_00A24660, &args![state, control, 0u32])
+        .u32()
+        != 0
 }
 
 // Translated from 0082aad0 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -1284,9 +1286,13 @@ mod telekinesis_tests {
         e.register(0x0089_f4e0, |_, _| 0x6000u32.into_ret());
         e.register(0x008d_6f30, |_, a| (a[0] + 1).into_ret());
         e.register(0x0045_43c0, |_, a| (a[0] & 0xf).into_ret());
-        e.register(CONTROL_00877720, |_, a| a[1].into_ret());
+        e.register(CONTROL_00877720, |_, a| {
+            assert_eq!(a.len(), 1);
+            0x6300u32.into_ret()
+        });
         e.register(CONTROL_DOWN_00A24660, |e, a| {
-            u32::from(e.mem.u32(0x011d_e900) & (1 << a[0]) != 0).into_ret()
+            assert_eq!((a[0], a[2]), (0x6300, 0));
+            u32::from(e.mem.u32(0x011d_e900) & (1 << a[1]) != 0).into_ret()
         });
         e.set_global(0x011d_e900u32, 0u32);
         e.set_global(CONTROLS_011DEA0C, 0x6200u32);

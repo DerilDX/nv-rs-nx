@@ -2030,9 +2030,12 @@ pub fn fn_009bbef0(
                 if e.call(0x0044_ddc0, &args![item]).u32() != 0 {
                     let scale = e.call(SETTING_VALUE, &args![SETTING_ROCKIT_DAMAGE]).u32();
                     let player: u32 = e.global(PLAYER);
-                    e.call(0x004d_1360, &args![player]);
+                    // 009bc318 / 009bc32a: the byte `004d1360` answers is pushed first; it
+                    // is the second word of the cdecl `0048ebc0` (ADD ESP,4 pops one, the
+                    // slot is reused for the next call's argument).
+                    let flag = e.call(0x004d_1360, &args![player]).u8();
                     let form = e.call(0x0044_ddc0, &args![item]).u32();
-                    let weight = e.call(0x0048_ebc0, &args![form]).f64() as f32;
+                    let weight = e.call(0x0048_ebc0, &args![form, u32::from(flag)]).f64() as f32;
                     let limit = setting_float(e, SETTING_ROCKIT_WEIGHT);
                     let clamped = e.call(0x0040_4010, &args![limit, weight]).f64();
                     let bonus = (clamped * e.mem.f32(scale) as f64) as f32;

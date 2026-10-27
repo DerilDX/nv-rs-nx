@@ -430,7 +430,9 @@ pub fn hk_ragdoll_constraint_cinfo_save_binary(e: &mut Engine, this: Ptr, writer
         stream_transfer(e, writer.addr(), 0x250, 0xc, data + offset, size);
     }
     let motor = e.mem.u32(data + 0xe0);
-    e.call(CINFO_SAVE_MOTOR, &args![this, motor, writer]);
+    // `00c8a4b0` is stdcall (RET 8, `(motor, stream)`) and does not read the ECX (this)
+    // the caller sets.
+    e.call(CINFO_SAVE_MOTOR, &args![motor, writer]);
     if e.mem.u32(data + 0xe0) != 0 {
         stream_transfer(e, writer.addr(), 0x250, 0xc, data + 0xa2, 1);
     }
@@ -1051,16 +1053,13 @@ mod tests {
         assert_eq!(written.borrow()[8].1, vec![0x5a]);
         assert_eq!(e.mem.u32(stream + 4), 0x80 + 24 + 1);
         assert_eq!(calls_to(&log, CINFO_SAVE_BINARY), vec![vec![this, writer]]);
-        assert_eq!(
-            calls_to(&log, CINFO_SAVE_MOTOR),
-            vec![vec![this, 0x7000, writer]]
-        );
+        assert_eq!(calls_to(&log, CINFO_SAVE_MOTOR), vec![vec![0x7000, writer]]);
         // Without a motor the flag byte is not written.
         written.borrow_mut().clear();
         e.mem.set_u32(data + 0xe0, 0);
         e.call(0x00cc6ef0, &args![this, writer]);
         assert_eq!(written.borrow().len(), 8);
-        assert_eq!(calls_to(&log, CINFO_SAVE_MOTOR)[1], vec![this, 0, writer]);
+        assert_eq!(calls_to(&log, CINFO_SAVE_MOTOR)[1], vec![0, writer]);
     }
 
     /// A viewer-string array object with room for `capacity` entries, and doubles for the grow

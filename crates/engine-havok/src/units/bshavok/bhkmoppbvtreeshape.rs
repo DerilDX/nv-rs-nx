@@ -284,7 +284,7 @@ pub fn bhk_mopp_bv_tree_shape_copy_members(
 }
 
 // Translated from 00cc9f60 (decompiled, FalloutNV.exe 1.4.0.525)
-// Translation incomplete: 00cc9f60 - the FS:[0] exception-unwinding frame and the /GS stack-cookie check (00ec408c) are not modeled; the flag word given to hkOstream carries unset upper bytes in the exe (modeled as 1).
+// Translation incomplete: 00cc9f60 - the FS:[0] exception-unwinding frame and the /GS stack-cookie check (00ec408c) are not modeled.
 /// `bhkMoppBvTreeShape::LoadCInfo` (Xbox PDB), vtable slot `0xAC`, with the stream: asks
 /// the cinfo size (slot `0xA8`) and takes `pInfo` (slot `0xB4`). For a stream version
 /// (`+4`) below 6 the cinfo size minus 4 bytes are read raw into `pInfo` through the
@@ -312,6 +312,10 @@ pub fn fn_00cc9f60(e: &mut Engine, this: Ptr, stream: u32) -> u32 {
         e.with_stack(0x20c, |e, block| {
             let object = block.addr();
             let text = object + 0xc;
+            // The flag word: the exe pushes ECX (00cc9ffb, what the reader's slot 8 left there)
+            // and writes only its low byte (`MOV byte ptr [EAX],0x1`, 00cca010). `00cc0500`
+            // passes the word on unread to `00d274c0`, which reads only that byte (`MOV DL,byte
+            // ptr [ESP + 0xc]`); the upper bytes are never read, so only the low byte (1) counts.
             e.call(OSTREAM_CONSTRUCT, &args![object, text, 0x200u32, 1u32]);
             let mut chain = object;
             for part in [TEXT_FILE, name, TEXT_OLD_SHAPE, file, TEXT_RE_EXPORT] {
@@ -445,21 +449,26 @@ pub fn bhk_mopp_bv_tree_shape_create_cinfo(e: &mut Engine, this: Ptr, created: u
 /// word is 0x10 meanwhile.
 pub fn fn_00cca360(e: &mut Engine, this: Ptr, shape: u32) {
     let (word, saved) = enter_scope(e);
-    let child = e.mem.u32(shape + 8);
-    let info = e.mem.alloc(0x10);
-    e.mem.set_u32(info + 4, child);
-    e.mem.set_u32(info + 0xc, 1.0f32.to_bits());
-    let config = e.mem.alloc(0x30);
-    e.call(MOPP_CONFIG_INIT, &args![config]);
-    if e.mem.u32(child + 0xc) == 0xe {
-        e.mem.set_u8(config + 0x1e, 1);
-    }
-    let data = if child != 0 { child + 0x10 } else { 0 };
-    let code = e.call(MOPP_BUILD_CODE, &args![data, config, 0u32]).u32();
-    e.mem.set_u32(info + 8, code);
-    e.vcall(this.addr(), 0xb0, &args![info]);
-    e.mem.free(config);
-    e.mem.free(info);
+    // The exe's frame (`AND ESP,0xfffffff0`, exception record, `SUB ESP,0x58`, four pushes):
+    // 0x74 bytes up to the 16-byte boundary. The cinfo at +0x14 (00cca418), the build settings
+    // at +0x24 (00cca3d6).
+    e.with_stack(0x74 + 0x10, |e, raw| {
+        let frame = ((raw.addr() + 4 + 0xf) & !0xf) - 4;
+        let child = e.mem.u32(shape + 8);
+        let info = frame + 0x14;
+        e.mem.set_u32(info, 0);
+        e.mem.set_u32(info + 4, child);
+        e.mem.set_u32(info + 0xc, 1.0f32.to_bits());
+        let config = frame + 0x24;
+        e.call(MOPP_CONFIG_INIT, &args![config]);
+        if e.mem.u32(child + 0xc) == 0xe {
+            e.mem.set_u8(config + 0x1e, 1);
+        }
+        let data = if child != 0 { child + 0x10 } else { 0 };
+        let code = e.call(MOPP_BUILD_CODE, &args![data, config, 0u32]).u32();
+        e.mem.set_u32(info + 8, code);
+        e.vcall(this.addr(), 0xb0, &args![info]);
+    });
     e.mem.set_u32(word, saved);
 }
 
@@ -548,15 +557,20 @@ pub fn bhk_mopp_bv_tree_shape_init(e: &mut Engine, this: Ptr, info: u32) {
     let (word, saved) = enter_scope(e);
     let mut built = 0;
     if e.mem.u32(info + 8) == 0 {
-        let config = e.mem.alloc(0x30);
-        e.call(MOPP_CONFIG_INIT, &args![config]);
-        let child = e.mem.u32(info + 4);
-        if e.mem.u32(child + 0xc) == 0xe {
-            e.mem.set_u8(config + 0x1e, 1);
-        }
-        let data = if child != 0 { child + 0x10 } else { 0 };
-        built = e.call(MOPP_BUILD_CODE, &args![data, config, 0u32]).u32();
-        e.mem.free(config);
+        // The exe's frame (`AND ESP,0xfffffff0`, exception record, `SUB ESP,0x68`, four
+        // pushes): 0x84 bytes up to the 16-byte boundary, the build settings at +0x34
+        // (00cca767).
+        built = e.with_stack(0x84 + 0x10, |e, raw| {
+            let frame = ((raw.addr() + 4 + 0xf) & !0xf) - 4;
+            let config = frame + 0x34;
+            e.call(MOPP_CONFIG_INIT, &args![config]);
+            let child = e.mem.u32(info + 4);
+            if e.mem.u32(child + 0xc) == 0xe {
+                e.mem.set_u8(config + 0x1e, 1);
+            }
+            let data = if child != 0 { child + 0x10 } else { 0 };
+            e.call(MOPP_BUILD_CODE, &args![data, config, 0u32]).u32()
+        });
     }
     let mut code = e.mem.u32(info + 8);
     if code == 0 {
@@ -952,7 +966,9 @@ mod shape_tests {
         );
         let constructed = calls_to(&log, OSTREAM_CONSTRUCT);
         assert_eq!(constructed.len(), 1);
-        assert_eq!(constructed[0][2..], [0x200, 1]);
+        assert_eq!(constructed[0][2], 0x200);
+        // Only the flag word's low byte is written (and read) in the exe.
+        assert_eq!(constructed[0][3] & 0xff, 1);
         assert_eq!(constructed[0][1], constructed[0][0] + 0xc);
         let sent = calls_to(&log, 0x0900_004c);
         assert_eq!(sent.len(), 1);
@@ -1113,6 +1129,51 @@ mod shape_tests {
         assert_eq!((builds[0][0], builds[0][2]), (shape + 0x10, 0));
         // The settings block has its byte at +0x1E set for the type 0xE.
         assert_eq!(e.mem.u32(word), 0x77);
+    }
+
+    #[test]
+    fn fn_00cca360_keeps_the_cinfo_and_the_settings_at_the_exe_frame_offsets() {
+        let (mut e, _, _) = engine_with_allocator();
+        let log: Calls = Rc::default();
+        record(&mut e, MOPP_CONFIG_INIT, 0, &log);
+        record(&mut e, MOPP_BUILD_CODE, 0x7000, &log);
+        record(&mut e, 0x0900_0058, 0, &log);
+        let this = vobject(&mut e, 0x14, &[(0xb0, 0x0900_0058)]);
+        let (wrapper_object, shape) = wrapper(&mut e, &[]);
+        e.mem.set_u32(shape + 0xc, 0xe);
+        e.call(0x00cc_a360, &args![this, wrapper_object]);
+        // The frame's top (+0x74) is on a 16-byte boundary: the cinfo at +0x14 sits on one,
+        // the settings at +0x24 0x10 above it, with the byte +0x1e set.
+        let info = calls_to(&log, 0x0900_0058)[0][1];
+        assert_eq!(info & 0xf, 0);
+        assert_eq!(calls_to(&log, MOPP_CONFIG_INIT), [[info + 0x10]]);
+        assert_eq!(calls_to(&log, MOPP_BUILD_CODE)[0][1], info + 0x10);
+        assert_eq!(e.mem.u8(info + 0x10 + 0x1e), 1);
+    }
+
+    #[test]
+    fn init_keeps_the_settings_at_the_exe_frame_offset() {
+        let (mut e, _, _) = engine_with_allocator();
+        let log: Calls = Rc::default();
+        record(&mut e, MOPP_CONFIG_INIT, 0, &log);
+        let code = e.mem.alloc(0x30);
+        record(&mut e, MOPP_BUILD_CODE, code, &log);
+        record(&mut e, 0x00cc_9d00, 0x8800, &log);
+        record(&mut e, REMOVE_REFERENCE, 0, &log);
+        record(&mut e, 0x0900_0060, 0, &log);
+        record(&mut e, 0x0900_0064, 0, &log);
+        let this = vobject(&mut e, 0x14, &[(0x8c, 0x0900_0060), (0xbc, 0x0900_0064)]);
+        let child = e.mem.alloc(0x40);
+        let info = e.mem.alloc(0x10);
+        e.mem.set_u32(info + 4, child);
+        e.mem.set_f32(info + 0xc, 1.0);
+        let raw = e.mem.alloc(0x94);
+        e.mem.free(raw);
+        e.call(0x00cc_a6f0, &args![this, info]);
+        // Frame +0x34, with the frame's top (+0x84) on a 16-byte boundary.
+        let frame = ((raw + 4 + 0xf) & !0xf) - 4;
+        assert_eq!(calls_to(&log, MOPP_CONFIG_INIT), [[frame + 0x34]]);
+        assert_eq!((frame + 0x84) & 0xf, 0);
     }
 
     #[test]

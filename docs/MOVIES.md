@@ -202,6 +202,44 @@ about +0.2 brighter on average. The difference comes from filtering: the
 viewer interpolates between texels in linear light (sRGB textures), the
 game in stored bytes, which differs most across sharp edges.
 
+## The engine's platform layer
+
+The translated engine reaches `binkw32.dll` through its imports, which
+`crates/engine-core/src/units/platform/bink.rs` answers with `crates/bink`
+(a platform layer like D3DX: written from the documented meaning of each
+call and matched against the player's DLL, whose code is not read). The
+game imports nine: `BinkOpen`, `BinkClose`, `BinkDoFrame`, `BinkNextFrame`,
+`BinkWait`, `BinkPause`, `BinkCopyToBufferRect`, `BinkSetSoundSystem` and
+`BinkOpenDirectSound` (only its address is passed on). It reads `Width`,
+`Height` and `Frames` (+0, +4, +8) of the handle.
+
+Measured on 2026-10-23 with `nv-bink --game`, `--wait` and `--sound-system`
+(the 1.4.0.525 install's DLL, sound off):
+
+- The handle starts `Width`, `Height`, `Frames`, `FrameNum` (1 after
+  `BinkOpen`, back to 1 after `BinkNextFrame` on the last frame),
+  `LastFrameNum` (`0xffffffff`, then the frame decoded last), `FrameRate`,
+  `FrameRateDiv`, 0, the open flags, 0 and the file's size field.
+- `BinkDoFrame` and every `BinkCopyToBufferRect` answered 0, also with the
+  frame late. A tile below the movie's bottom gets only the movie's rows
+  (the intro's last tile row: 208 of 256). Copying with or without
+  `BINKCOPYALL` into tiles that keep the previous frame gave the same tiles
+  for all 8,692 frames.
+- **All 8,692 frames, all 15 tiles each, are identical** between the layer
+  and the DLL when copied as the game copies them.
+- `BinkWait` answers 0 for the first frame; the first `BinkDoFrame` starts
+  the schedule (frame `n` due `floor(n * 1000 * FrameRateDiv / FrameRate)`
+  ms later: 33, 66, 99, 133 ...); a frame more than two frames late starts it
+  again; a pause moves it on by the paused time.
+- `BinkSetSoundSystem(BinkOpenDirectSound, 0)` answered 0 in a process
+  without a window. The platform has no sound output, so the layer answers
+  0 and movies play silent, timed as above.
+
+The intro's audio decoded frame by frame with `bink::AudioDecoder` has the
+DLL's length for every frame; 5,908 of 8,692 frames are identical to the
+DLL at 53-bit x87 precision (5,660 at 24-bit), every other sample within one
+step (the totals of the audio table above).
+
 ## Not done yet
 
 - Filtering in stored bytes (a custom sprite material) would remove the
@@ -213,3 +251,6 @@ game in stored bytes, which differs most across sharp edges.
   not) is not traced.
 - Which x87 precision the game's thread decodes audio at is not
   established (see the audio table).
+- Movie sound in the engine: the platform has no sound output yet, so its
+  Bink layer opens no sound system. With sound the DLL times the picture by
+  the sound it plays, which is not measured.

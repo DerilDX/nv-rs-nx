@@ -105,13 +105,13 @@ const INTERNAL_MERGE_TWO_ISLANDS: u32 = 0x00cb_4c60;
 /// `hkpEntity::sortConstraintsSlavesDeterministically` and `setCachedShapeData` (Xbox PDB).
 const ENTITY_SORT_CONSTRAINTS_SLAVES: u32 = 0x00c9_c860;
 const ENTITY_SET_CACHED_SHAPE_DATA: u32 = 0x00c9_c040;
-/// `hkpMotion` (Xbox PDB): `getMass` (`this` = the copy, five stack words), `hkMotionState::
+/// `hkpMotion` (Xbox PDB): `getMass` (`this` = the copy, no stack word), `hkMotionState::
 /// operator=`, and `getMotionStateAndVelocitiesAndDeactivationType` (`this` = source, the
 /// destination motion).
 const MOTION_GET_MASS: u32 = 0x00c8_6430;
 const MOTION_STATE_ASSIGN: u32 = 0x00c8_6660;
 const MOTION_COPY_STATE_AND_VELOCITIES: u32 = 0x00c8_6610;
-/// `hkpRigidBody::createDynamicRigidMotion` (Xbox PDB), cdecl.
+/// `hkpRigidBody::createDynamicRigidMotion` (Xbox PDB), cdecl (nine words, ADD ESP,0x24).
 const RIGID_BODY_CREATE_DYNAMIC_MOTION: u32 = 0x00ca_8240;
 /// `hkSweptTransformUtil::freezeMotionState` (Xbox PDB), cdecl: `(time, motion state)`.
 const FREEZE_MOTION_STATE: u32 = 0x00cf_1d50;
@@ -2395,22 +2395,23 @@ pub fn hkp_world_operation_util_replace_motion_object(
             let first = e.mem.u8(copy + 0xbc) as u32;
             let second_value = x87_quiet_bits(e.mem.u32(MOTION_FLOAT_TABLE + second * 4));
             let first_value = x87_quiet_bits(e.mem.u32(MOTION_FLOAT_TABLE + first * 4));
-            let mass = e
-                .call(
-                    MOTION_GET_MASS,
-                    &args![
-                        copy,
-                        copy + 0x120,
-                        copy + 0x90,
-                        first_value,
-                        second_value,
-                        motion
-                    ],
-                )
-                .f32();
+            // 00cb43a5: `getMass` takes no stack word (plain RET); the motion, the two
+            // floats and the two addresses pushed before it are the last five words of
+            // the cdecl `00ca8240` (ADD ESP,0x24).
+            let mass = e.call(MOTION_GET_MASS, &args![copy]).f32();
             e.call(
                 RIGID_BODY_CREATE_DYNAMIC_MOTION,
-                &args![new_type, copy + 0x40, copy + 0x80, mass.to_bits()],
+                &args![
+                    new_type,
+                    copy + 0x40,
+                    copy + 0x80,
+                    mass.to_bits(),
+                    copy + 0x120,
+                    copy + 0x90,
+                    first_value,
+                    second_value,
+                    motion
+                ],
             );
             e.call(MOTION_COPY_STATE_AND_VELOCITIES, &args![copy, motion]);
             let first_bits = x87_quiet_bits(e.mem.u32(copy + 0xb4));
@@ -3697,13 +3698,17 @@ mod tests {
         e.call(0x00cb_4230, &args![entity, 3u32, 1u32, 1u32, 0u32]);
         let mass = calls(&e, MOTION_GET_MASS);
         assert_eq!(mass.len(), 1);
-        assert_eq!(mass[0][3], 2.5f32.to_bits());
-        assert_eq!(mass[0][4], 1.5f32.to_bits());
-        assert_eq!(mass[0][5], entity + 0xe0);
+        assert_eq!(mass[0].len(), 1);
         let create = calls(&e, RIGID_BODY_CREATE_DYNAMIC_MOTION);
         assert_eq!(create.len(), 1);
+        assert_eq!(create[0].len(), 9);
         assert_eq!(create[0][0], 3);
         assert_eq!(create[0][3], 3.0f32.to_bits());
+        assert_eq!(create[0][4], mass[0][0] + 0x120);
+        assert_eq!(create[0][5], mass[0][0] + 0x90);
+        assert_eq!(create[0][6], 2.5f32.to_bits());
+        assert_eq!(create[0][7], 1.5f32.to_bits());
+        assert_eq!(create[0][8], entity + 0xe0);
         assert_eq!(calls(&e, OBJECT_SLOT_14).len(), 1);
         assert_eq!(e.mem.f32(entity + 0x194), 0.25);
         assert_eq!(e.mem.f32(entity + 0x198), 0.5);

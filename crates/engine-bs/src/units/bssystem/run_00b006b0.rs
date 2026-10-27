@@ -182,11 +182,73 @@ pub fn fn_00b00970(e: &mut Engine, value: u32) -> u32 {
     value
 }
 
+/// `FindClose` (KERNEL32 import slot).
+const FIND_CLOSE: u32 = 0x00fd_f064;
+
+// Translated from 00b007d0 (disassembled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`thiscall`, no stack words): closes the search handle at +0
+/// (`FindClose`) unless it is `INVALID_HANDLE_VALUE` (the word stays as it is) and answers the
+/// status word at +0x248.
+pub fn fn_00b007d0(e: &mut Engine, this: Ptr) -> u32 {
+    let handle = e.mem.u32(this.addr());
+    if handle != 0xffff_ffff {
+        e.call(FIND_CLOSE, &args![handle]);
+    }
+    e.mem.u32(this.addr() + STATUS)
+}
+
+// Translated from 00b00860 (disassembled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`thiscall`, no stack words): [`fn_00b007d0`] on `this`, its
+/// answer left in `EAX`.
+pub fn fn_00b00860(e: &mut Engine, this: Ptr) -> u32 {
+    fn_00b007d0(e, this)
+}
+
+/// The lock around the callback at `011f8250`: a critical section (`011f8254`), the
+/// function-local static's guard word (`011f826c`, bit 0 = initialized) and its `atexit` stub
+/// (`00fdc3f0`); the import slots of KERNEL32 `InitializeCriticalSection`,
+/// `EnterCriticalSection` and `LeaveCriticalSection`, and the C runtime's `_atexit`.
+const CALLBACK_LOCK: u32 = 0x011f_8254;
+const CALLBACK_LOCK_GUARD: u32 = 0x011f_826c;
+const CALLBACK_LOCK_ATEXIT: u32 = 0x00fd_c3f0;
+const INITIALIZE_CRITICAL_SECTION: u32 = 0x00fd_f054;
+const ENTER_CRITICAL_SECTION: u32 = 0x00fd_f05c;
+const LEAVE_CRITICAL_SECTION: u32 = 0x00fd_f100;
+const ATEXIT: u32 = 0x00ec_658f;
+
+// Translated from 00b00980 (disassembled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`cdecl`, three words passed on): the first call sets bit 0 of
+/// the guard word `011f826c`, initializes the critical section at `011f8254` and registers its
+/// stub `00fdc3f0` with `_atexit`. Inside the critical section the callback stored at
+/// `011f8250` (cdecl, three words) is called with the three words and its `AL` answered; with
+/// no callback 1 is answered.
+pub fn fn_00b00980(e: &mut Engine, a: u32, b: u32, c: u32) -> u8 {
+    let guard = e.global::<u32>(CALLBACK_LOCK_GUARD);
+    if guard & 1 == 0 {
+        e.set_global::<u32>(CALLBACK_LOCK_GUARD, guard | 1);
+        e.call(INITIALIZE_CRITICAL_SECTION, &args![CALLBACK_LOCK]);
+        e.call(ATEXIT, &args![CALLBACK_LOCK_ATEXIT]);
+    }
+    e.call(ENTER_CRITICAL_SECTION, &args![CALLBACK_LOCK]);
+    let callback = e.global::<u32>(STORED_VALUE_011F8250);
+    let answer = if callback == 0 {
+        1
+    } else {
+        let callback = e.global::<u32>(STORED_VALUE_011F8250);
+        e.call(callback, &args![a, b, c]).u8()
+    };
+    e.call(LEAVE_CRITICAL_SECTION, &args![CALLBACK_LOCK]);
+    answer
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x00b0_0980, fn_00b00980(u32, u32, u32) -> u8),
         entry!(0x00b0_06b0, fn_00b006b0(Ptr, u32) -> u32),
         entry!(0x00b0_0800, fn_00b00800(u32) -> u32),
+        entry!(0x00b0_07d0, fn_00b007d0(Ptr) -> u32),
+        entry!(0x00b0_0860, fn_00b00860(Ptr) -> u32),
         entry!(0x00b0_0880, fn_00b00880(Ptr) -> Ptr),
         entry!(0x00b0_08a0, fn_00b008a0(Ptr)),
         entry!(0x00b0_08b0, fn_00b008b0(Ptr, u32) -> Ptr),
@@ -383,5 +445,74 @@ mod n083_tests {
         e.map(STORED_VALUE_011F8250, 4);
         assert_eq!(e.call(0x00b0_0970, &args![0x1234u32]).u32(), 0x1234);
         assert_eq!(e.global::<u32>(STORED_VALUE_011F8250), 0x1234);
+    }
+}
+
+#[cfg(test)]
+mod close_tests {
+    use super::*;
+
+    #[test]
+    fn the_search_closes_unless_invalid_and_answers_the_status() {
+        let mut e = Engine::new();
+        let this = e.mem.alloc(0x250);
+        e.mem.set_u32(this, 0x44);
+        e.mem.set_u32(this + STATUS, 7);
+        e.register(FIND_CLOSE, |_, _| 1u32.into_ret());
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x00b0_0860, &args![this]).u32(), 7);
+        assert_eq!(e.mem.u32(this), 0x44, "the handle word stays");
+        e.mem.set_u32(this, 0xffff_ffff);
+        assert_eq!(e.call(0x00b0_07d0, &args![this]).u32(), 7);
+        let closes = e
+            .call_log
+            .take()
+            .unwrap()
+            .into_iter()
+            .filter(|c| c.0 == FIND_CLOSE)
+            .count();
+        assert_eq!(closes, 1);
+    }
+}
+
+#[cfg(test)]
+mod callback_tests {
+    use super::*;
+
+    fn count(e: &Engine, addr: u32) -> usize {
+        e.call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|c| c.0 == addr)
+            .count()
+    }
+
+    #[test]
+    fn the_callback_runs_inside_the_lock_once_set_up() {
+        let mut e = Engine::new();
+        e.map(STORED_VALUE_011F8250, 0x20);
+        for slot in [
+            ATEXIT,
+            INITIALIZE_CRITICAL_SECTION,
+            ENTER_CRITICAL_SECTION,
+            LEAVE_CRITICAL_SECTION,
+        ] {
+            e.register(slot, |_, _| Ret::default());
+        }
+        e.call_log = Some(vec![]);
+        // No callback: 1.
+        assert_eq!(e.call(0x00b0_0980, &args![1u32, 2u32, 3u32]).u8(), 1);
+        e.register(0x0a00_0000, |_, a| (0x100 + a[0] + a[1] + a[2]).into_ret());
+        e.set_global::<u32>(STORED_VALUE_011F8250, 0x0a00_0000);
+        assert_eq!(fn_00b00980(&mut e, 1, 2, 0x10), 0x13);
+        assert_eq!(count(&e, INITIALIZE_CRITICAL_SECTION), 1);
+        assert_eq!(count(&e, ATEXIT), 1);
+        assert_eq!(count(&e, ENTER_CRITICAL_SECTION), 2);
+        assert_eq!(count(&e, LEAVE_CRITICAL_SECTION), 2);
+        assert_eq!(e.global::<u32>(CALLBACK_LOCK_GUARD), 1);
+        let log = e.call_log.as_ref().unwrap();
+        let calls: Vec<_> = log.iter().filter(|c| c.0 == 0x0a00_0000).collect();
+        assert_eq!(calls[0].1, vec![1, 2, 0x10]);
     }
 }

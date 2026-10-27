@@ -1092,8 +1092,8 @@ const ACTOR_KILLER_OFFSET: u32 = 0xc0;
 const EXTRA_LIST_GET_DISMEMBERMENT_EXTRA: u32 = 0x0042_e8c0;
 const DISMEMBERMENT_GET_LIST_NODE: u32 = 0x0082_5c00;
 /// `FormList`-like `GetList` (`00500940`, main file's `FORM_LIST_GET_LIST`):
-/// `this` the form, one pointer to a node pointer; the result is the node
-/// whose test `0x005f65d0` is called on.
+/// `this` the form, no stack word; the result is the list whose test
+/// `0x005f65d0` (RET 4) is called with the pointer to the node pointer.
 const NODE_TEST_5F65D0: u32 = 0x005f_65d0;
 /// The flags word of an actor (`actor.cpp`, `this` the actor).
 const ACTOR_GET_FLAGS: u32 = 0x0088_46e0;
@@ -1364,8 +1364,10 @@ pub fn script_get_killer_object_condition_function(
             if node != 0 {
                 let found = e.with_stack(4, |e, slot| {
                     e.mem.set_u32(slot.addr(), node);
-                    let list_node = e.call(FORM_LIST_GET_LIST, &args![param1, slot]).u32();
-                    e.call(NODE_TEST_5F65D0, &args![list_node]).bool()
+                    // 005a4031: `00500940` takes no stack word (plain RET); the pushed
+                    // node address is the word of `005f65d0` (RET 4).
+                    let list_node = e.call(FORM_LIST_GET_LIST, &args![param1]).u32();
+                    e.call(NODE_TEST_5F65D0, &args![list_node, slot]).bool()
                 });
                 if found {
                     set_result(e, result, 1.0);
@@ -4086,13 +4088,13 @@ mod tests {
             assert_eq!(a, [0x6800]);
             0x6900u32.into_ret()
         });
-        e.register_double(FORM_LIST_GET_LIST, |e, a| {
-            assert_eq!(a[0], 0x5000);
-            assert_eq!(e.mem.u32(a[1]), 0x6900);
+        e.register_double(FORM_LIST_GET_LIST, |_, a| {
+            assert_eq!(a, [0x5000]);
             0x6a00u32.into_ret()
         });
-        e.register_double(NODE_TEST_5F65D0, |_, a| {
-            assert_eq!(a, [0x6a00]);
+        e.register_double(NODE_TEST_5F65D0, |e, a| {
+            assert_eq!(a[0], 0x6a00);
+            assert_eq!(e.mem.u32(a[1]), 0x6900);
             true.into_ret()
         });
         assert_eq!(run(&mut e, 0x005a_3fa0, a, 0x5000, 0), (true, 1.0));

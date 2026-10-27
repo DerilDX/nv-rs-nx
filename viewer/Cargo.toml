@@ -41,3 +41,65 @@ opt-level = 1
 
 [profile.dev.package."*"]
 opt-level = 3
+
+# The play-build loop's viewers (`cargo build --profile play`, exe in target/play/): the engine
+# crates and host at opt-level 1 (their time is almost all code generation: engine-fallout 370
+# of 448 s, engine-havok 290 of 321 s at opt-level 3, 2026-10-23), dependencies as in release.
+# Packaging the play copy stays on `--release`.
+[profile.play]
+inherits = "release"
+incremental = true
+debug = 0
+
+[profile.play.package.engine-core]
+opt-level = 1
+
+[profile.play.package.engine-gamebryo]
+opt-level = 1
+
+[profile.play.package.engine-bs]
+opt-level = 1
+
+[profile.play.package.engine-havok]
+opt-level = 1
+
+[profile.play.package.engine-speedtree]
+opt-level = 1
+
+[profile.play.package.engine-fallout]
+opt-level = 1
+
+[profile.play.package.engine]
+opt-level = 1
+
+[profile.play.package.host]
+opt-level = 1
+
+# Long play-build runs (a full data load): `--profile play-fast`, exe in target/play-fast/; the
+# engine crates and host at opt-level 3. Quick stop-fix loops stay on `--profile play`.
+[profile.play-fast]
+inherits = "play"
+
+[profile.play-fast.package.engine-core]
+opt-level = 3
+
+[profile.play-fast.package.engine-gamebryo]
+opt-level = 3
+
+[profile.play-fast.package.engine-bs]
+opt-level = 3
+
+[profile.play-fast.package.engine-havok]
+opt-level = 3
+
+[profile.play-fast.package.engine-speedtree]
+opt-level = 3
+
+[profile.play-fast.package.engine-fallout]
+opt-level = 3
+
+[profile.play-fast.package.engine]
+opt-level = 3
+
+[profile.play-fast.package.host]
+opt-level = 3

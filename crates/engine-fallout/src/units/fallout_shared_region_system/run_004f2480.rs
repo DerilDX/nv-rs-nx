@@ -36,9 +36,9 @@ const SET_NODE_FLAGS: u32 = 0x0043_b370;
 const HIDDEN_MASK: u32 = 0x1000_0000;
 /// The player pointer (`011dea3c`).
 const PLAYER: u32 = 0x011d_ea3c;
-/// `TESObjectREFR::GetWorldLocation` (`00575650`, `thiscall`, `RET 8`: out
-/// location, flag), `BGSWorldLocation::GetCell` (`00527900`) and
-/// `TESObjectCELL::GetRegionList` (`00547110`).
+/// `TESObjectREFR::GetWorldLocation` (`00575650`, `thiscall`, `RET 4`: out
+/// location), `BGSWorldLocation::GetCell` (`00527900`) and
+/// `TESObjectCELL::GetRegionList` (`00547110`, `RET 4`: a flag).
 const GET_WORLD_LOCATION: u32 = 0x0057_5650;
 const LOCATION_CELL: u32 = 0x0052_7900;
 const CELL_REGION_LIST: u32 = 0x0054_7110;
@@ -137,11 +137,11 @@ pub fn fn_004f2640(e: &mut Engine, form: u32) -> bool {
     if empty {
         let player = e.global::<u32>(PLAYER);
         let regions = e.with_stack(0x10, |e, location| {
-            let location = e
-                .call(GET_WORLD_LOCATION, &args![player, location, 1u32])
-                .u32();
+            // 004f2691: `00575650` takes one word (RET 4); the pushed 1 is the word of
+            // `00547110` (RET 4).
+            let location = e.call(GET_WORLD_LOCATION, &args![player, location]).u32();
             let cell = e.call(LOCATION_CELL, &args![location]).u32();
-            e.call(CELL_REGION_LIST, &args![cell]).u32()
+            e.call(CELL_REGION_LIST, &args![cell, 1u32]).u32()
         });
         node = if regions == 0 {
             0
@@ -384,7 +384,7 @@ mod n072_tests {
         e.call_log = Some(vec![]);
         assert!(e.call(0x004f_2640, &args![0x99u32]).bool());
         assert_eq!(calls_to(&e, GET_WORLD_LOCATION)[0][0], player);
-        assert_eq!(calls_to(&e, GET_WORLD_LOCATION)[0][2], 1);
-        assert_eq!(calls_to(&e, CELL_REGION_LIST), vec![vec![0x4444]]);
+        assert_eq!(calls_to(&e, GET_WORLD_LOCATION)[0].len(), 2);
+        assert_eq!(calls_to(&e, CELL_REGION_LIST), vec![vec![0x4444, 1]]);
     }
 }

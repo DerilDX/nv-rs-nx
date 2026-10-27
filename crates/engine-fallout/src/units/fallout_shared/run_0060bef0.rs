@@ -322,7 +322,11 @@ pub fn fn_0060c2e0(e: &mut Engine, destination: u32, count: u32, value: u32) {
     let (tag, destination) = e.with_stack(8, |e, frame| {
         let slot = frame.addr();
         e.mem.set_u32(slot, destination);
-        let at = e.call(ITERATOR_TAG_0065FD70, &args![slot + 4, slot]).u32();
+        // Three words go to 0065fd70: the tag byte's address, the destination's, and the
+        // zero byte pushed first (0060c2ed; it stays on the stack for 0060c380 as its fifth).
+        let at = e
+            .call(ITERATOR_TAG_0065FD70, &args![slot + 4, slot, 0u32])
+            .u32();
         (e.mem.u8(at), e.mem.u32(slot))
     });
     fn_0060c380(e, destination, count, value, u32::from(tag), 0);

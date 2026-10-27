@@ -332,7 +332,9 @@ pub fn fn_00dd7510(
 /// size), a block of that size is asked from the allocator at `+0x30` (slot 4, one word), its
 /// allocated size (slot `0x10`) is kept at `+4`, its first aligned element at `+8` and its
 /// element count at `+0xc`, and the counters at `+0x2c` and `+0x28` grow; no block, no change.
-pub fn hk_free_list_add_space(e: &mut Engine, this: Ptr) {
+/// Answers the element handed out (`EAX` = the run's cursor before it moves), or 0 when the
+/// allocator gave no block.
+pub fn hk_free_list_add_space(e: &mut Engine, this: Ptr) -> u32 {
     let base = this.addr();
     let spare = e.mem.u32(base + 0x10);
     if spare != 0 {
@@ -355,7 +357,7 @@ pub fn hk_free_list_add_space(e: &mut Engine, this: Ptr) {
         let cursor = e.mem.u32(base + 0x20);
         e.mem
             .set_u32(base + 0x20, element_size.wrapping_add(cursor));
-        return;
+        return cursor;
     }
     let block_size = e.mem.u32(base + 0x14);
     let element_size = e.mem.u32(base + 4);
@@ -376,7 +378,7 @@ pub fn hk_free_list_add_space(e: &mut Engine, this: Ptr) {
     let size = e.mem.u32(base + 0x14);
     let block = e.vcall(allocator, 4, &args![size]).u32();
     if block == 0 {
-        return;
+        return 0;
     }
     let allocator = e.mem.u32(base + 0x30);
     let size = e.mem.u32(base + 0x14);
@@ -408,6 +410,7 @@ pub fn hk_free_list_add_space(e: &mut Engine, this: Ptr) {
     e.mem.set_u32(base + 0x28, used);
     e.mem
         .set_u32(base + 0x20, element_size.wrapping_add(cursor));
+    cursor
 }
 
 /// Collects the addresses of every free element into a new array from the allocator (slot
@@ -701,7 +704,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00dd7480, hk_free_list_get_blocks(Ptr, Ptr, u32)),
         entry!(0x00dd74b0, fn_00dd74b0(Ptr, u32, u32, u32, u32) -> u32),
         entry!(0x00dd7510, fn_00dd7510(Ptr, u32, u32, u32, u32) -> u32),
-        entry!(0x00dd7540, hk_free_list_add_space(Ptr)),
+        entry!(0x00dd7540, hk_free_list_add_space(Ptr) -> u32),
         entry!(0x00dd7650, fn_00dd7650(Ptr, u32, u32, u32, u32) -> Ptr),
         entry!(0x00dd7680, hk_free_list_find_garbage(Ptr) -> u32),
         entry!(0x00dd78f0, hk_free_list_walk_memory(Ptr, u32, u32, u32)),
@@ -1129,7 +1132,9 @@ mod tests {
         let next_spare = block_of(&mut e, 0, 0, 0);
         let spare = block_of(&mut e, next_spare, 0x9000, 4);
         e.mem.set_u32(list + 0x10, spare);
-        e.call(0x00dd_7540, &args![list]);
+        let handed_out = e.call(0x00dd_7540, &args![list]).u32();
+        // The first element of the run is handed out (`EAX`).
+        assert_eq!(handed_out, 0x9000);
         assert_eq!(e.mem.u32(list + 0x10), next_spare);
         assert_eq!(e.mem.u32(list + 0x20), 0x9020);
         assert_eq!(e.mem.u32(list + 0x24), 0x9000 + 4 * 0x20);

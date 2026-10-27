@@ -159,11 +159,11 @@ const FORM_ID: u32 = 0x0084_e3a0;
 const FORM_GET_FILE: u32 = 0x0048_4e60;
 /// `TESForm::AddCompileIndex` (Xbox PDB), `cdecl(form id*, file)`.
 const ADD_COMPILE_INDEX: u32 = 0x0048_5d50;
-/// `cdecl(form id)`: the obstacle manager's entry for the form.
+/// The obstacle manager (`006c0720`, no word: plain RET, no stack read).
 const OBSTACLE_ENTRY: u32 = 0x006c_0720;
-/// `thiscall` on the entry (`navmeshobstaclemanager.cpp`).
+/// `thiscall` on the manager, RET 4: the form id (`navmeshobstaclemanager.cpp`).
 const OBSTACLE_ENTRY_ACTION_A: u32 = 0x006c_1150;
-/// `thiscall` on the entry (`navmeshobstaclemanager.cpp`).
+/// `thiscall` on the manager, RET 4: the form id (`navmeshobstaclemanager.cpp`).
 const OBSTACLE_ENTRY_ACTION_B: u32 = 0x006c_1130;
 
 // Condition functions the script bodies forward to (`cdecl(object, value,
@@ -384,7 +384,8 @@ fn parse(e: &mut Engine, a: ScriptArgs, outs: &[u32]) -> bool {
         a.containing_obj,
         a.script_obj,
         a.event_list
-    ];
+    ]
+    .to_vec();
     words.extend_from_slice(outs);
     e.call(PARSE_PARAMETERS, &words).bool()
 }
@@ -818,8 +819,10 @@ pub fn fn_005bd240(e: &mut Engine, a: ScriptArgs) -> bool {
         return false;
     };
     if form_id != 0 {
-        let entry = e.call(OBSTACLE_ENTRY, &args![form_id]).u32();
-        e.call(OBSTACLE_ENTRY_ACTION_A, &args![entry]);
+        // 005bd2dd: `006c0720` takes no word (plain RET, no stack read); the pushed id is
+        // the word of `006c1150` (RET 4).
+        let entry = e.call(OBSTACLE_ENTRY, &args![]).u32();
+        e.call(OBSTACLE_ENTRY_ACTION_A, &args![entry, form_id]);
     }
     true
 }
@@ -832,8 +835,9 @@ pub fn fn_005bd300(e: &mut Engine, a: ScriptArgs) -> bool {
         return false;
     };
     if form_id != 0 {
-        let entry = e.call(OBSTACLE_ENTRY, &args![form_id]).u32();
-        e.call(OBSTACLE_ENTRY_ACTION_B, &args![entry]);
+        // As above: the id is the word of `006c1130` (RET 4).
+        let entry = e.call(OBSTACLE_ENTRY, &args![]).u32();
+        e.call(OBSTACLE_ENTRY_ACTION_B, &args![entry, form_id]);
     }
     true
 }
@@ -6222,14 +6226,21 @@ mod tests {
         e
     }
 
-    /// Records the form ids the obstacle manager is asked about.
+    /// Records the form ids the obstacle manager's two actions are given (the manager
+    /// getter takes no word).
     fn record_obstacle_lookups(e: &mut Engine) -> Rc<RefCell<Vec<u32>>> {
         let seen = Rc::new(RefCell::new(vec![]));
-        let log = seen.clone();
         e.register_double(OBSTACLE_ENTRY, move |_, a| {
-            log.borrow_mut().push(a[0]);
+            assert!(a.is_empty());
             0x4444u32.into_ret()
         });
+        for action in [OBSTACLE_ENTRY_ACTION_A, OBSTACLE_ENTRY_ACTION_B] {
+            let log = seen.clone();
+            e.register_double(action, move |_, a| {
+                log.borrow_mut().push(a[1]);
+                Ret::default()
+            });
+        }
         seen
     }
 
@@ -6240,7 +6251,10 @@ mod tests {
         start_log(&mut e);
         assert!(run(&mut e, 0x005b_d240, script(0)));
         assert_eq!(*seen.borrow(), vec![0x0100_1a2b]);
-        assert_eq!(calls(&e, OBSTACLE_ENTRY_ACTION_A), vec![vec![0x4444]]);
+        assert_eq!(
+            calls(&e, OBSTACLE_ENTRY_ACTION_A),
+            vec![vec![0x4444, 0x0100_1a2b]]
+        );
         assert!(calls(&e, OBSTACLE_ENTRY_ACTION_B).is_empty());
         // Without a script object the id is used as typed.
         let a = ScriptArgs {
@@ -6268,7 +6282,10 @@ mod tests {
         start_log(&mut e);
         assert!(run(&mut e, 0x005b_d300, script(0)));
         assert_eq!(*seen.borrow(), vec![0x1a2b]);
-        assert_eq!(calls(&e, OBSTACLE_ENTRY_ACTION_B), vec![vec![0x4444]]);
+        assert_eq!(
+            calls(&e, OBSTACLE_ENTRY_ACTION_B),
+            vec![vec![0x4444, 0x1a2b]]
+        );
         assert!(calls(&e, OBSTACLE_ENTRY_ACTION_A).is_empty());
         parse_gives(&mut e, false, &[]);
         assert!(!run(&mut e, 0x005b_d300, script(0)));
@@ -6755,16 +6772,16 @@ mod tests {
         assert_eq!(
             printed(&e),
             vec![
-                args![MSG_ACTOR_VALUE_INFO, 0x0a00_0003u32, 0x6666u32],
-                args![MSG_CURRENT_VALUE, 13.5f64, 11.5f64],
-                args![MSG_BASE_VALUE_COMPONENTS],
-                args![MSG_REFERENCE_BASE_VALUE, 9.5f64, TEXT_CREATURE],
+                args![MSG_ACTOR_VALUE_INFO, 0x0a00_0003u32, 0x6666u32].to_vec(),
+                args![MSG_CURRENT_VALUE, 13.5f64, 11.5f64].to_vec(),
+                args![MSG_BASE_VALUE_COMPONENTS].to_vec(),
+                args![MSG_REFERENCE_BASE_VALUE, 9.5f64, TEXT_CREATURE].to_vec(),
                 // The player is not ignored through the 0x80 route, but the
                 // creature flag still applies.
-                args![MSG_DERIVED_VALUE, 6.25f64, TEXT_IGNORED],
-                args![MSG_SET_AV_OVERRIDE, 4.5f64],
-                args![MSG_MODIFIERS, 3.5f64, 2.5f64, 1.5f64],
-                args![MSG_LEVEL_UP_VALUE, 7.5f64],
+                args![MSG_DERIVED_VALUE, 6.25f64, TEXT_IGNORED].to_vec(),
+                args![MSG_SET_AV_OVERRIDE, 4.5f64].to_vec(),
+                args![MSG_MODIFIERS, 3.5f64, 2.5f64, 1.5f64].to_vec(),
+                args![MSG_LEVEL_UP_VALUE, 7.5f64].to_vec(),
             ]
         );
         // The override slot gets the actor value and the flag cell.
@@ -6786,9 +6803,12 @@ mod tests {
         let prints = printed(&e);
         assert_eq!(
             prints[3],
-            args![MSG_REFERENCE_BASE_VALUE, 9.5f64, TEXT_AUTO_CALCULATED]
+            args![MSG_REFERENCE_BASE_VALUE, 9.5f64, TEXT_AUTO_CALCULATED].to_vec()
         );
-        assert_eq!(prints[4], args![MSG_DERIVED_VALUE, 6.25f64, TEXT_EMPTY]);
+        assert_eq!(
+            prints[4],
+            args![MSG_DERIVED_VALUE, 6.25f64, TEXT_EMPTY].to_vec()
+        );
         // Not auto, not a player, flag 0x80: "(Ignored)"; no level-up line.
         info.auto.set(false);
         start_log(&mut e);
@@ -6796,9 +6816,12 @@ mod tests {
         let prints = printed(&e);
         assert_eq!(
             prints[3],
-            args![MSG_REFERENCE_BASE_VALUE, 9.5f64, TEXT_EMPTY]
+            args![MSG_REFERENCE_BASE_VALUE, 9.5f64, TEXT_EMPTY].to_vec()
         );
-        assert_eq!(prints[4], args![MSG_DERIVED_VALUE, 6.25f64, TEXT_IGNORED]);
+        assert_eq!(
+            prints[4],
+            args![MSG_DERIVED_VALUE, 6.25f64, TEXT_IGNORED].to_vec()
+        );
         assert_eq!(prints.len(), 7);
         // Without a derived value the line is left out.
         let mut e = engine();
@@ -7365,32 +7388,31 @@ mod tests {
         let prints = case(&mut e, b"iName");
         assert_eq!(
             prints,
-            vec![args![MSG_GAME_INT, int_setting + 0x40, (-7i32) as u32]]
+            vec![args![MSG_GAME_INT, int_setting + 0x40, (-7i32) as u32].to_vec()]
         );
         assert_eq!(e.mem.f64(result), -7.0);
         let prints = case(&mut e, b"fName");
         assert_eq!(
             prints,
-            vec![args![MSG_GAME_FLOAT, float_setting + 0x40, 2.5f64]]
+            vec![args![MSG_GAME_FLOAT, float_setting + 0x40, 2.5f64].to_vec()]
         );
         assert_eq!(e.mem.f64(result), 2.5);
         let prints = case(&mut e, b"sName");
         assert_eq!(
             prints,
-            vec![args![
-                MSG_GAME_STRING,
-                string_setting + 0x40,
-                0x0900_1234u32
-            ]]
+            vec![args![MSG_GAME_STRING, string_setting + 0x40, 0x0900_1234u32].to_vec()]
         );
         assert_eq!(e.mem.f64(result), 0.0);
         let prints = case(&mut e, b"oName");
-        assert_eq!(prints, vec![args![MSG_GAME_UNKNOWN, other_setting + 0x40]]);
+        assert_eq!(
+            prints,
+            vec![args![MSG_GAME_UNKNOWN, other_setting + 0x40].to_vec()]
+        );
         // A missing setting: the not-found message with the null setting's
         // string value as the unused extra argument.
         let prints = case(&mut e, b"zName");
         let name = calls(&e, GAME_SETTING_FIND)[0][1];
-        assert_eq!(prints, vec![args![MSG_GAME_NOT_FOUND, name, 0u32]]);
+        assert_eq!(prints, vec![args![MSG_GAME_NOT_FOUND, name, 0u32].to_vec()]);
         // Without echo only the result is set.
         set_echo(&mut e, false);
         let prints = case(&mut e, b"iName");
@@ -7433,7 +7455,10 @@ mod tests {
         };
         let prints = case(&mut e, b"i1", b"12");
         assert_eq!(calls(&e, SETTING_SET_INT), vec![vec![int_setting, 12]]);
-        assert_eq!(prints, vec![args![MSG_GAME_INT, int_setting + 0x40, 12u32]]);
+        assert_eq!(
+            prints,
+            vec![args![MSG_GAME_INT, int_setting + 0x40, 12u32].to_vec()]
+        );
         let prints = case(&mut e, b"f1", b"1.5");
         assert_eq!(
             calls(&e, SETTING_SET_FLOAT),
@@ -7441,24 +7466,24 @@ mod tests {
         );
         assert_eq!(
             prints,
-            vec![args![MSG_GAME_FLOAT, float_setting + 0x40, 1.5f64]]
+            vec![args![MSG_GAME_FLOAT, float_setting + 0x40, 1.5f64].to_vec()]
         );
         let prints = case(&mut e, b"s1", b"text");
         let value_text = calls(&e, SETTING_SET_STRING)[0][1];
         assert_eq!(text_of(&e, value_text), "text");
         assert_eq!(
             prints,
-            vec![args![MSG_GAME_STRING, string_setting + 0x40, value_text]]
+            vec![args![MSG_GAME_STRING, string_setting + 0x40, value_text].to_vec()]
         );
         // Unknown type and missing setting are reported with the typed name
         // buffer, also without echo.
         set_echo(&mut e, false);
         let prints = case(&mut e, b"o1", b"1");
         let name = calls(&e, GAME_SETTING_FIND)[0][1];
-        assert_eq!(prints, vec![args![MSG_GAME_UNKNOWN, name]]);
+        assert_eq!(prints, vec![args![MSG_GAME_UNKNOWN, name].to_vec()]);
         let prints = case(&mut e, b"z1", b"1");
         let name = calls(&e, GAME_SETTING_FIND)[0][1];
-        assert_eq!(prints, vec![args![MSG_GAME_NOT_FOUND, name]]);
+        assert_eq!(prints, vec![args![MSG_GAME_NOT_FOUND, name].to_vec()]);
         // Without echo a successful change prints nothing.
         let prints = case(&mut e, b"i1", b"5");
         assert!(prints.is_empty());
@@ -7506,23 +7531,26 @@ mod tests {
         // Prints even though commands do not echo.
         set_echo(&mut e, false);
         let (prints, name) = case(&mut e, b"a0");
-        assert_eq!(prints, vec![args![MSG_INI_INT, name, 1u32]]);
+        assert_eq!(prints, vec![args![MSG_INI_INT, name, 1u32].to_vec()]);
         assert_eq!(calls(&e, INI_SETTINGS_FALLBACK).len(), 0);
         let (prints, name) = case(&mut e, b"a1");
-        assert_eq!(prints, vec![args![MSG_INI_INT, name, 9u32]]);
+        assert_eq!(prints, vec![args![MSG_INI_INT, name, 9u32].to_vec()]);
         let (prints, name) = case(&mut e, b"a2");
-        assert_eq!(prints, vec![args![MSG_INI_FLOAT, name, 0.25f64]]);
+        assert_eq!(prints, vec![args![MSG_INI_FLOAT, name, 0.25f64].to_vec()]);
         let (prints, name) = case(&mut e, b"a3");
-        assert_eq!(prints, vec![args![MSG_INI_STRING, name, 0x0900_4321u32]]);
+        assert_eq!(
+            prints,
+            vec![args![MSG_INI_STRING, name, 0x0900_4321u32].to_vec()]
+        );
         let (prints, name) = case(&mut e, b"a4");
-        assert_eq!(prints, vec![args![MSG_INI_UNKNOWN, name]]);
+        assert_eq!(prints, vec![args![MSG_INI_UNKNOWN, name].to_vec()]);
         // The second collection is asked when the first has none.
         let (prints, name) = case(&mut e, b"b1");
         assert_eq!(calls(&e, INI_SETTING_FIND).len(), 2);
         assert_eq!(calls(&e, INI_SETTING_FIND)[1][0], 0x0a00_0020);
-        assert_eq!(prints, vec![args![MSG_INI_INT, name, 9u32]]);
+        assert_eq!(prints, vec![args![MSG_INI_INT, name, 9u32].to_vec()]);
         let (prints, name) = case(&mut e, b"c1");
-        assert_eq!(prints, vec![args![MSG_INI_NOT_FOUND, name]]);
+        assert_eq!(prints, vec![args![MSG_INI_NOT_FOUND, name].to_vec()]);
         parse_with(&mut e, false, |_, _| {});
         assert!(!run(&mut e, 0x005b_ecf0, script));
     }
@@ -7569,28 +7597,31 @@ mod tests {
         // byte at its value as 0 or 1.
         let (prints, name) = case(&mut e, b"a0", b"1");
         assert_eq!(calls(&e, SETTING_SET_INT), vec![vec![bool_setting, 1]]);
-        assert_eq!(prints, vec![args![MSG_INI_INT, name, 1u32]]);
+        assert_eq!(prints, vec![args![MSG_INI_INT, name, 1u32].to_vec()]);
         let (prints, name) = case(&mut e, b"a1", b"42");
         assert_eq!(calls(&e, SETTING_SET_INT), vec![vec![int_setting, 42]]);
-        assert_eq!(prints, vec![args![MSG_INI_INT, name, 42u32]]);
+        assert_eq!(prints, vec![args![MSG_INI_INT, name, 42u32].to_vec()]);
         let (prints, name) = case(&mut e, b"a2", b"0.5");
         assert_eq!(
             calls(&e, SETTING_SET_FLOAT),
             vec![vec![float_setting, 0.5f32.to_bits()]]
         );
-        assert_eq!(prints, vec![args![MSG_INI_FLOAT, name, 0.5f64]]);
+        assert_eq!(prints, vec![args![MSG_INI_FLOAT, name, 0.5f64].to_vec()]);
         let (prints, name) = case(&mut e, b"b3", b"words");
         let value_text = calls(&e, SETTING_SET_STRING)[0][1];
         assert_eq!(text_of(&e, value_text), "words");
         assert_eq!(calls(&e, INI_SETTING_FIND).len(), 2);
-        assert_eq!(prints, vec![args![MSG_INI_STRING, name, value_text]]);
+        assert_eq!(
+            prints,
+            vec![args![MSG_INI_STRING, name, value_text].to_vec()]
+        );
         // Unknown type and missing setting are always reported; no echo of
         // successful changes.
         set_echo(&mut e, false);
         let (prints, name) = case(&mut e, b"a4", b"1");
-        assert_eq!(prints, vec![args![MSG_INI_UNKNOWN, name]]);
+        assert_eq!(prints, vec![args![MSG_INI_UNKNOWN, name].to_vec()]);
         let (prints, name) = case(&mut e, b"c1", b"1");
-        assert_eq!(prints, vec![args![MSG_INI_NOT_FOUND, name]]);
+        assert_eq!(prints, vec![args![MSG_INI_NOT_FOUND, name].to_vec()]);
         let (prints, _) = case(&mut e, b"a1", b"7");
         assert!(prints.is_empty());
         assert_eq!(calls(&e, SETTING_SET_INT), vec![vec![int_setting, 7]]);
@@ -8112,8 +8143,8 @@ mod tests {
         assert_eq!(
             calls(&e, BS_STRING_FORMAT),
             vec![
-                args![string, MSG_OLD_VALUES, 1.5f64, 2.5f64],
-                args![string, MSG_NEW_VALUES, 0.5f64, 4.0f64],
+                args![string, MSG_OLD_VALUES, 1.5f64, 2.5f64].to_vec(),
+                args![string, MSG_NEW_VALUES, 0.5f64, 4.0f64].to_vec(),
             ]
         );
         assert_eq!(calls(&e, PRINT_LINE).len(), 2);
@@ -8631,13 +8662,7 @@ mod tests {
         ));
         assert_eq!(
             calls(&e, QUEUE_TASK),
-            vec![args![
-                0x0a00_0300u32,
-                0x1007u32,
-                reference,
-                b'Z' as u32,
-                1.5f64
-            ]]
+            vec![args![0x0a00_0300u32, 0x1007u32, reference, b'Z' as u32, 1.5f64].to_vec()]
         );
         // The same for the angle command with the task 0x1009.
         start_log(&mut e);
@@ -9500,7 +9525,10 @@ mod tests {
         set_echo(&mut e, true);
         start_log(&mut e);
         assert!(run(&mut e, 0x005c_14a0, a));
-        assert_eq!(printed(&e), vec![args![MSG_IS_ANIM_PLAYING, 0.0f64]]);
+        assert_eq!(
+            printed(&e),
+            vec![args![MSG_IS_ANIM_PLAYING, 0.0f64].to_vec()]
+        );
         // Failed parse: false, result untouched.
         parse_gives(&mut e, false, &[]);
         assert!(!run(&mut e, 0x005c_14a0, a));
@@ -9656,7 +9684,8 @@ mod tests {
                 0u32,
                 1u32,
                 0u32
-            ]]
+            ]
+            .to_vec()]
         );
         assert!(calls(&e, world.recorder_alarm).is_empty());
         assert_eq!(e.mem.u8(world.player + 0x7c4), 0);
@@ -9872,7 +9901,7 @@ mod tests {
         assert!(run(&mut e, 0x005c_1b80, script(0x0a00_0010)));
         assert_eq!(
             calls(&e, QUEUE_TASK),
-            vec![args![0x0a00_0300u32, 0x113cu32, 0x0a00_0010u32, 2.5f64]]
+            vec![args![0x0a00_0300u32, 0x113cu32, 0x0a00_0010u32, 2.5f64].to_vec()]
         );
         assert!(calls(&e, REFERENCE_SET_SCALE).is_empty());
         e.set_global(SETTING_011C3EA4 + 4, 1u32);
@@ -10462,7 +10491,7 @@ mod tests {
         vec![
             vec![MSG_VARIABLE_FLOAT, script + 1, items[0] + 0x18 + 0x1000]
                 .into_iter()
-                .chain(args![1.5f64])
+                .chain(args![1.5f64].to_vec())
                 .collect(),
             vec![
                 MSG_VARIABLE_INTEGER,
@@ -10601,10 +10630,10 @@ mod tests {
             printed(&e),
             vec![
                 vec![HEADER_GLOBAL_VARIABLES],
-                args![MSG_GLOBAL_FLOAT, objects[0] + 1, 2.5f64],
+                args![MSG_GLOBAL_FLOAT, objects[0] + 1, 2.5f64].to_vec(),
                 vec![MSG_GLOBAL_INTEGER, objects[1] + 1, 7],
                 vec![MSG_GLOBAL_INTEGER, objects[2] + 1, (-2i32) as u32],
-                args![MSG_GLOBAL_FLOAT, objects[4] + 1, 4.0f64],
+                args![MSG_GLOBAL_FLOAT, objects[4] + 1, 4.0f64].to_vec(),
             ]
         );
         // Without a reference the globals show too; an empty list prints
@@ -10723,7 +10752,7 @@ mod tests {
         parse_gives(&mut e, true, &[1.25f32.to_bits()]);
         start_log(&mut e);
         assert!(run(&mut e, 0x005c_3c90, script(0)));
-        assert_eq!(printed(&e), vec![args![MSG_SHOW_VALUE, 1.25f64]]);
+        assert_eq!(printed(&e), vec![args![MSG_SHOW_VALUE, 1.25f64].to_vec()]);
         parse_gives(&mut e, false, &[]);
         start_log(&mut e);
         assert!(!run(&mut e, 0x005c_3c90, script(0)));
@@ -11171,10 +11200,10 @@ mod tests {
             printed(&e),
             vec![
                 vec![MSG_INTERIOR_CELL, name(world.cells[0]), 0x0100_0c01],
-                args![MSG_TRAVEL, 5.0f64],
+                args![MSG_TRAVEL, 5.0f64].to_vec(),
                 vec![MSG_ACTIVATE_DOOR, name(world.doors[0]), 0x0100_0d01, 0],
                 vec![MSG_WORLDSPACE, name(world.cells[1]), 0x0100_0c02],
-                args![MSG_TRAVEL, 12.0f64],
+                args![MSG_TRAVEL, 12.0f64].to_vec(),
                 vec![
                     MSG_ACTIVATE_DOOR,
                     name(world.doors[1]),
@@ -11182,9 +11211,9 @@ mod tests {
                     TEXT_MINIMAL_USE
                 ],
                 vec![MSG_INTERIOR_CELL, name(world.cells[2]), 0x0100_0c03],
-                args![MSG_TRAVEL, 12.0f64],
-                args![MSG_TOTAL_DISTANCE, 7200.0f64],
-                args![MSG_TRAVEL_TIME, 3.0f64],
+                args![MSG_TRAVEL, 12.0f64].to_vec(),
+                args![MSG_TOTAL_DISTANCE, 7200.0f64].to_vec(),
+                args![MSG_TRAVEL_TIME, 3.0f64].to_vec(),
             ]
         );
         // The locks and flags were added in the order locked, disabled,
@@ -11334,9 +11363,9 @@ mod tests {
             printed(&e),
             vec![
                 vec![MSG_INTERIOR_CELL, world.cells[2] + 1, 0x0100_0c03],
-                args![MSG_TRAVEL, 601.0f32.sqrt() as f64],
-                args![MSG_TOTAL_DISTANCE, 7200.0f64],
-                args![MSG_TRAVEL_TIME, 3.0f64],
+                args![MSG_TRAVEL, 601.0f32.sqrt() as f64].to_vec(),
+                args![MSG_TOTAL_DISTANCE, 7200.0f64].to_vec(),
+                args![MSG_TRAVEL_TIME, 3.0f64].to_vec(),
             ]
         );
         // The debug line goes to the reference itself: its position is

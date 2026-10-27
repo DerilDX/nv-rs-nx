@@ -162,6 +162,25 @@ OPTIONS:
     --box-answers I[,I...]  with --answer-boxes: the buttons (0 the first,
                             by the box's own order) to answer the boxes with
                             more than one button, one per box in turn
+    --movement MODE         how the player moves: engine (the default: the
+                            game's own translated code, crates/engine, with
+                            crates/physics for a frame it can't run yet),
+                            old (crates/physics only), or compare
+                            (crates/physics moves you, the game's code runs
+                            beside it; see --movement-log)
+    --movement-probe        for testing: the game's movement code goes on
+                            past functions not translated yet (with zero
+                            results) to list more of them; it never moves
+                            you then
+    --movement-log FILE     write each frame's position and velocity from
+                            both paths (tab-separated) to FILE
+    --movement-missing FILE write the untranslated functions the game's
+                            movement code reached, with counts, to FILE
+                            (every 5 s and at exit)
+    --physics MODE          how loose objects move: old (the default:
+                            crates/physics) or engine (the game's own Havok
+                            world, crates/engine, stepped by the game's frame
+                            code; crates/physics for a frame it can't run)
 
 CONTROLS:
     mouse                          look around (walking; flying: hold
@@ -298,6 +317,41 @@ pub struct Args {
     pub answer_boxes: bool,
     /// `--box-answers`: the buttons for boxes with several, in turn.
     pub box_answers: Vec<usize>,
+    /// `--movement`: how the player moves.
+    pub movement: MovementMode,
+    /// `--movement-probe`.
+    pub movement_probe: bool,
+    /// `--movement-log`.
+    pub movement_log: Option<PathBuf>,
+    /// `--movement-missing`.
+    pub movement_missing: Option<PathBuf>,
+    /// `--physics`: how loose objects move.
+    pub physics: PhysicsMode,
+}
+
+/// How the player moves (`--movement`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum MovementMode {
+    /// The game's own code (`host::player_move`), `crates/physics` for a
+    /// frame it can't run.
+    #[default]
+    Engine,
+    /// `crates/physics` only.
+    Old,
+    /// `crates/physics` moves the player; the game's code runs beside it.
+    Compare,
+}
+
+/// How loose objects move (`--physics`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum PhysicsMode {
+    /// `crates/physics`.
+    #[default]
+    Old,
+    /// The game's own Havok world, stepped on its AI thread 2
+    /// (`host::player_move::PlayerMovement::run_ai_threads`),
+    /// `crates/physics` for a frame it can't run.
+    Engine,
 }
 
 /// Where to stand, in the game's terms: feet position in game units, and
@@ -359,6 +413,11 @@ pub fn parse(args: &[String]) -> Result<Option<Args>, String> {
     let mut vats = None;
     let mut cloud_time = None;
     let mut freeze_ai = false;
+    let mut movement = MovementMode::default();
+    let mut movement_probe = false;
+    let mut movement_log = None;
+    let mut movement_missing = None;
+    let mut physics = PhysicsMode::default();
     let mut answer_boxes = false;
     let mut box_answers = Vec::new();
     let mut background = false;
@@ -455,6 +514,30 @@ pub fn parse(args: &[String]) -> Result<Option<Args>, String> {
             "--movies" => movies = Some(true),
             "--no-movies" => movies = Some(false),
             "--freeze-ai" => freeze_ai = true,
+            "--movement" => {
+                movement = match value("--movement")?.as_str() {
+                    "engine" => MovementMode::Engine,
+                    "old" => MovementMode::Old,
+                    "compare" => MovementMode::Compare,
+                    other => {
+                        return Err(format!(
+                            "--movement expects engine, old or compare, got '{other}'"
+                        ))
+                    }
+                }
+            }
+            "--physics" => {
+                physics = match value("--physics")?.as_str() {
+                    "engine" => PhysicsMode::Engine,
+                    "old" => PhysicsMode::Old,
+                    other => return Err(format!("--physics expects engine or old, got '{other}'")),
+                }
+            }
+            "--movement-probe" => movement_probe = true,
+            "--movement-log" => movement_log = Some(PathBuf::from(value("--movement-log")?)),
+            "--movement-missing" => {
+                movement_missing = Some(PathBuf::from(value("--movement-missing")?))
+            }
             "--answer-boxes" => answer_boxes = true,
             "--box-answers" => {
                 let v = value("--box-answers")?;
@@ -600,6 +683,11 @@ pub fn parse(args: &[String]) -> Result<Option<Args>, String> {
             cloud_time,
             freeze_ai,
             background,
+            movement,
+            movement_probe,
+            movement_log,
+            movement_missing,
+            physics,
             pipboy,
             pipboy_keys,
             pad,
@@ -812,6 +900,31 @@ mod tests {
             .unwrap();
         assert_eq!(args.cloud_time, Some(58.022));
         assert!(parse(&strings(&["Data", "Cell", "--cloud-time", "-1"])).is_err());
+    }
+
+    #[test]
+    fn parses_how_the_player_moves() {
+        let bare = parse(&strings(&["Data", "Cell"])).unwrap().unwrap();
+        assert_eq!(bare.movement, MovementMode::Engine);
+        assert!(!bare.movement_probe && bare.movement_log.is_none());
+        let args = parse(&strings(&[
+            "Data",
+            "Cell",
+            "--movement",
+            "compare",
+            "--movement-probe",
+            "--movement-log",
+            "m.tsv",
+            "--movement-missing",
+            "x.tsv",
+        ]))
+        .unwrap()
+        .unwrap();
+        assert_eq!(args.movement, MovementMode::Compare);
+        assert!(args.movement_probe);
+        assert_eq!(args.movement_log, Some(PathBuf::from("m.tsv")));
+        assert_eq!(args.movement_missing, Some(PathBuf::from("x.tsv")));
+        assert!(parse(&strings(&["Data", "Cell", "--movement", "fast"])).is_err());
     }
 
     #[test]

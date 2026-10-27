@@ -71,8 +71,8 @@ const COPY_COLLISION_INPUT: u32 = 0x00cf_a7d0;
 /// `hkAgentNnMachine_ProcessAgent` (Xbox PDB name per the engine map, `00cfedd0`, cdecl `(agent
 /// entry, input, output cell, agent)`).
 const PROCESS_AGENT: u32 = 0x00cf_edd0;
-/// `hkpMultiThreadedSimulation::addToiEventWithCriticalSectionLock` (`00d02e70`, three stack
-/// words: the output cell, the agent entry, the address `world + 0x100`).
+/// `hkpMultiThreadedSimulation::addToiEventWithCriticalSectionLock` (`00d02e70`, `this` = the
+/// world, three stack words: the output cell, the agent entry, the address `world + 0x100`).
 const ADD_TOI_EVENT: u32 = 0x00d0_2e70;
 /// `hkpWorld::lockIslandForConstraintUpdate` and `hkpWorld::unlockIslandForConstraintUpdate`
 /// (`00c911d0`, `00c91210`: `ECX` = the object, one stack word).
@@ -388,9 +388,10 @@ fn process_entry(e: &mut Engine, owner: u32, input: u32, entry: u32, early: bool
     }
     let min_toi = f64::from(x87_quiet(e.mem.f32(input + INPUT_MIN_TOI)));
     if min_toi != e.global::<f64>(DOUBLE_MAX) {
+        // 00d935be: `00d02e70` (RET 0xc) reads ECX, the world (set at 00d935aa).
         e.call(
             ADD_TOI_EVENT,
-            &args![input + INPUT_OUTPUT_CURSOR, entry, world + 0x100],
+            &args![world, input + INPUT_OUTPUT_CURSOR, entry, world + 0x100],
         );
     }
     let deferred = at(input, OWNER_AT);
@@ -820,7 +821,7 @@ mod tests {
         );
         assert_eq!(
             calls(&rig.log, ADD_TOI_EVENT),
-            vec![vec![cursor, chunk, rig.world_toi + 0x100]]
+            vec![vec![rig.world_toi, cursor, chunk, rig.world_toi + 0x100]]
         );
         // The counters and the two commands (add, then remove) are in the result block.
         let counters: Vec<u32> = (0..4).map(|word| e.mem.u32(result + 4 * word)).collect();
@@ -941,7 +942,7 @@ mod tests {
         assert_eq!(seen[1][4..], [0xbb, rig.dispatcher + 0x1c60, 0x31]);
         assert_eq!(
             calls(&rig.log, ADD_TOI_EVENT),
-            vec![vec![cursor, entries, rig.world_toi + 0x100]]
+            vec![vec![rig.world_toi, cursor, entries, rig.world_toi + 0x100]]
         );
         assert_eq!(e.mem.u32(result), 5);
         assert_eq!(e.mem.u32(result + 0x14), 0x10);

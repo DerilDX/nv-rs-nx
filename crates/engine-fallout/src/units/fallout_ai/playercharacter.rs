@@ -718,9 +718,11 @@ pub fn fn_009397b0(e: &mut Engine, this: Ptr<PlayerCharacter>, companion: u8) ->
 }
 
 // Translated from 009397e0 (decompiled, FalloutNV.exe 1.4.0.525)
-/// `PlayerCharacter` virtual `+0x4B4`: calls `005a03f0` on the player with 1.
-pub fn fn_009397e0(e: &mut Engine, this: Ptr) {
-    e.call(0x005a_03f0, &args![this, 1u32]);
+/// `PlayerCharacter` virtual `+0x4B4`: calls `005a03f0` on the player with 1 and answers its
+/// `AL` (the exe ends on that call). The `Actor` slot is `Actor::IsImmobile` (`bool`; Xbox PDB
+/// slot `+0x4B0`, aligned by the named slots around it).
+pub fn fn_009397e0(e: &mut Engine, this: Ptr) -> bool {
+    e.call(0x005a_03f0, &args![this, 1u32]).bool()
 }
 
 // Translated from 00939800 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -11192,7 +11194,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00939770, fn_00939770(Ptr<PlayerCharacter>, u32)),
         entry!(0x00939790, fn_00939790(Ptr<PlayerCharacter>) -> u32),
         entry!(0x009397b0, fn_009397b0(Ptr<PlayerCharacter>, u8) -> Ptr),
-        entry!(0x009397e0, fn_009397e0(Ptr)),
+        entry!(0x009397e0, fn_009397e0(Ptr) -> bool),
         entry!(0x00939800, fn_00939800(Ptr<MagicCasterBase>, u32)),
         entry!(0x00939820, fn_00939820(Ptr<MagicCasterBase>) -> u32),
         entry!(0x00939840, fn_00939840(Ptr<MagicCasterBase>, u32)),
@@ -11746,6 +11748,15 @@ mod tests {
         stub(&mut e, &[0x005a_03f0]);
         e.call(0x0093_97e0, &args![0x5000u32]);
         assert_eq!(called(&e, 0x005a_03f0), vec![vec![0x5000, 1]]);
+    }
+
+    #[test]
+    fn fn_009397e0_answers_the_005a03f0_al() {
+        let mut e = engine();
+        e.register(0x005a_03f0, |_, _| 0x0000_0101u32.into_ret());
+        assert!(e.call(0x0093_97e0, &args![0x5000u32]).bool());
+        e.register(0x005a_03f0, |_, _| 0x0000_0100u32.into_ret());
+        assert!(!e.call(0x0093_97e0, &args![0x5000u32]).bool());
     }
 
     #[test]

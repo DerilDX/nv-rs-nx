@@ -783,8 +783,9 @@ pub fn hk_constraint_cinfo_save_binary(e: &mut Engine, this: Ptr<HkConstraintCin
 /// reader (`+0x24C`), then builds the motor of that type: type 1 a 0x24-byte object
 /// (constructor `00cf4190`, loaded by `00cf41c0`), type 2 a 0x20-byte one (`00cf43b0`,
 /// `00cf4400`), type 3 a 0x1C-byte one (`00cf45d0`, `00cf4600`). Any other byte answers 0.
-/// The stream is the only stack word; `ECX` is not used.
-pub fn fn_00c8a330(e: &mut Engine, stream: u32) -> u32 {
+/// `thiscall` with `RET 4` (`ECX`, the constraint info, is not read): the stream is its one
+/// stack word, as its callers (00cc6e91, the limited hinge's) push it.
+pub fn fn_00c8a330(e: &mut Engine, _this: u32, stream: u32) -> u32 {
     let old = enter_scope(e);
     let reader = e.mem.u32(stream + 0x24c);
     let kind = e.with_stack(4, |e, local| {
@@ -941,7 +942,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
             0x00c8a280,
             hk_constraint_cinfo_save_binary(Ptr<HkConstraintCinfo>, u32)
         ),
-        entry!(0x00c8a330, fn_00c8a330(u32) -> u32),
+        entry!(0x00c8a330, fn_00c8a330(u32, u32) -> u32),
         entry!(0x00c8a4b0, hk_constraint_cinfo_save_motor(Ptr, u32)),
         entry!(
             0x00c8a560,
@@ -1888,14 +1889,14 @@ mod tests {
         ] {
             e.mem.set_u32(reader + 0x10, kind);
             e.call_log = Some(vec![]);
-            let motor = e.call(0x00c8a330, &args![stream]).u32();
+            let motor = e.call(0x00c8a330, &args![0u32, stream]).u32();
             assert_eq!(e.mem.block_size(motor), Some(size.div_ceil(8) * 8));
             assert_eq!(e.mem.u16(motor + 4), size as u16);
             assert_eq!(calls_to(&e, construct), vec![vec![motor]]);
             assert_eq!(calls_to(&e, load), vec![vec![motor, stream]]);
         }
         e.mem.set_u32(reader + 0x10, 4);
-        assert_eq!(e.call(0x00c8a330, &args![stream]).u32(), 0);
+        assert_eq!(e.call(0x00c8a330, &args![0u32, stream]).u32(), 0);
         assert_eq!(scope(&mut e), 0x77);
     }
 

@@ -2789,23 +2789,26 @@ pub fn fn_00adddd0(e: &mut Engine, this: Ptr<BSAudioManager>) {
     if e.get(this, BSAudioManager::bIgnoreGlobalTimeMultiplier) {
         speed = 1.0;
     }
-    // The moving-reference object slot `00ae7e60` fills (a smart pointer).
-    let object_slot = e.mem.alloc(4);
-    let sounds = this.at(BSAudioManager::SoundList);
-    let mut position = map_first_item(e, sounds);
-    while position != 0 {
-        let (_key, sound) = map_next(e, sounds, &mut position);
-        update_sound(e, this, sound, speed, object_slot);
-    }
-    e.set(this, BSAudioManager::bListenerMoved, false);
-    fn_00adea90(e, this);
-    let listener = e.mem.u32(audio + AUDIO_LISTENER);
-    e.vcall(listener, LISTENER_SLOT_AFTER_UPDATE, &[]);
-    let ticks = e.call(IMPORT_GET_TICK_COUNT, &[]).u32();
-    e.set(this, BSAudioManager::iDelayTimerDelta, ticks);
-    let held = e.mem.u32(object_slot);
-    drop_reference(e, held);
-    e.mem.free(object_slot);
+    // The moving-reference object slot `00ae7e60` fills (a smart pointer), in the exe's frame
+    // (`EBP` frame, exception record, `SUB ESP,0x174`, the cookie: 0x184 bytes) at +0x160
+    // (`EBP-0x24`, 00ade56b).
+    e.with_stack(0x184, |e, frame| {
+        let object_slot = frame.addr() + 0x160;
+        let sounds = this.at(BSAudioManager::SoundList);
+        let mut position = map_first_item(e, sounds);
+        while position != 0 {
+            let (_key, sound) = map_next(e, sounds, &mut position);
+            update_sound(e, this, sound, speed, object_slot);
+        }
+        e.set(this, BSAudioManager::bListenerMoved, false);
+        fn_00adea90(e, this);
+        let listener = e.mem.u32(audio + AUDIO_LISTENER);
+        e.vcall(listener, LISTENER_SLOT_AFTER_UPDATE, &[]);
+        let ticks = e.call(IMPORT_GET_TICK_COUNT, &[]).u32();
+        e.set(this, BSAudioManager::iDelayTimerDelta, ticks);
+        let held = e.mem.u32(object_slot);
+        drop_reference(e, held);
+    });
 }
 
 /// One sound of `00adddd0`.
@@ -3005,51 +3008,54 @@ pub fn fn_00adea90(e: &mut Engine, this: Ptr<BSAudioManager>) {
     e.vcall(listener, LISTENER_SLOT_GET_POSITION, &[]);
     let moving = this.at(BSAudioManager::MovingRefrList);
     let sounds = this.at(BSAudioManager::SoundList);
-    // The followed-object smart pointer the loop keeps in one slot.
-    let object_slot = e.mem.alloc(4);
-    let mut position = map_first_item(e, moving);
-    while position != 0 {
-        let key = e.with_stack(8, |e, words| {
-            e.mem.set_u32(words.addr(), position);
-            fn_00ae7ee0(e, moving, words.addr(), words.addr() + 4, object_slot);
-            position = e.mem.u32(words.addr());
-            e.mem.u32(words.addr() + 4)
-        });
-        let (_, sound) = map_get(e, sounds, key, 0);
-        let object = e.mem.u32(object_slot);
-        let references = if object != 0 {
-            e.mem.u32(object + 4)
-        } else {
-            0
-        };
-        if sound != 0
-            && (e.vcall(sound, SOUND_SLOT_IS_PLAYING, &[]).bool()
-                || e.mem.u32(sound + SOUND_STATE_FLAGS) & 0x2_0000 != 0)
-            && object != 0
-            && references > 2
-        {
-            // NiAVObject world translation (+0x8c).
-            let x = e.mem.f32(object + 0x8c);
-            let y = e.mem.f32(object + 0x90);
-            let mut z = e.mem.f32(object + 0x94);
-            if e.mem.u32(sound + SOUND_TYPE_FLAGS) & 4 != 0 {
-                z = (z as f64 + e.mem.f64(EMITTER_HEIGHT_OFFSET)) as f32;
+    // The exe's frame (`EBP` frame, exception record, `SUB ESP,0xf4`, the cookie): 0x104 bytes.
+    // The followed-object smart pointer the loop keeps in one slot at +0xc0 (`EBP-0x44`), the
+    // map position at +0xf0 (`EBP-0x14`) and the key at +0xdc (`EBP-0x28`) (00adebf6).
+    e.with_stack(0x104, |e, frame| {
+        let frame = frame.addr();
+        let object_slot = frame + 0xc0;
+        let (position_slot, key_slot) = (frame + 0xf0, frame + 0xdc);
+        let mut position = map_first_item(e, moving);
+        while position != 0 {
+            e.mem.set_u32(position_slot, position);
+            fn_00ae7ee0(e, moving, position_slot, key_slot, object_slot);
+            position = e.mem.u32(position_slot);
+            let key = e.mem.u32(key_slot);
+            let (_, sound) = map_get(e, sounds, key, 0);
+            let object = e.mem.u32(object_slot);
+            let references = if object != 0 {
+                e.mem.u32(object + 4)
+            } else {
+                0
+            };
+            if sound != 0
+                && (e.vcall(sound, SOUND_SLOT_IS_PLAYING, &[]).bool()
+                    || e.mem.u32(sound + SOUND_STATE_FLAGS) & 0x2_0000 != 0)
+                && object != 0
+                && references > 2
+            {
+                // NiAVObject world translation (+0x8c).
+                let x = e.mem.f32(object + 0x8c);
+                let y = e.mem.f32(object + 0x90);
+                let mut z = e.mem.f32(object + 0x94);
+                if e.mem.u32(sound + SOUND_TYPE_FLAGS) & 4 != 0 {
+                    z = (z as f64 + e.mem.f64(EMITTER_HEIGHT_OFFSET)) as f32;
+                }
+                e.vcall(sound, SOUND_SLOT_SET_EMITTER_POSITION, &args![x, y, z]);
+            } else if sound == 0 {
+                e.call(MAP_REMOVE, &[moving.addr(), key]);
+                release_followed_object(e, object_slot, object);
+            } else if object == 0 {
+                let id = e.mem.u32(sound + SOUND_ID);
+                let fade_x = x87_quiet(e.global::<f32>(FADE_MESSAGE_X));
+                fn_00adb1a0(e, this, 9, id, 0, 0x3e8, 0, fade_x, 0.0, 0.0);
+                e.call(MAP_REMOVE, &[moving.addr(), key]);
+                release_followed_object(e, object_slot, object);
             }
-            e.vcall(sound, SOUND_SLOT_SET_EMITTER_POSITION, &args![x, y, z]);
-        } else if sound == 0 {
-            e.call(MAP_REMOVE, &[moving.addr(), key]);
-            release_followed_object(e, object_slot, object);
-        } else if object == 0 {
-            let id = e.mem.u32(sound + SOUND_ID);
-            let fade_x = x87_quiet(e.global::<f32>(FADE_MESSAGE_X));
-            fn_00adb1a0(e, this, 9, id, 0, 0x3e8, 0, fade_x, 0.0, 0.0);
-            e.call(MAP_REMOVE, &[moving.addr(), key]);
-            release_followed_object(e, object_slot, object);
         }
-    }
-    let held = e.mem.u32(object_slot);
-    drop_reference(e, held);
-    e.mem.free(object_slot);
+        let held = e.mem.u32(object_slot);
+        drop_reference(e, held);
+    });
 }
 
 /// Releases a followed object the way `00adea90` does: with a temporary
@@ -3281,75 +3287,76 @@ pub fn bs_audio_manager_get_sound_handle_by_filename(
         let environment = e.vcall(listener, LISTENER_SLOT_GET_ENVIRONMENT, &[]).u32();
         e.vcall(sound, SOUND_SLOT_SET_ENVIRONMENT_TYPE, &[environment]);
     }
-    // The handle the caller gets: the id, no assumed success, state 0.
-    let handle = e.mem.alloc(12);
-    e.mem.set_u32(handle, id);
-    let section = this.addr() + 0xc4;
-    enter_section(e, section);
-    let raw = e.call(ALLOCATE, &[MEMORY_MANAGER, 0x254]).u32();
-    let record = if raw != 0 {
-        e.call(DEBUG_SOUND_INFO_CONSTRUCTOR, &[raw + 0x18]);
-        e.mem.set_u32(raw, id);
-        e.mem.set_u32(raw + 0xc, 0);
-        e.mem.set_u32(raw + 0x10, 0);
-        e.mem.set_u8(raw + 0x14, 0);
-        raw
-    } else {
-        0
-    };
-    e.call(MAP_SET_VALUE, &[this.addr() + 0x64, id, record]);
-    leave_section(e, section);
-    let settings_callback = e.mem.u32(audio + AUDIO_SETTINGS_CALLBACK);
-    let mut settings_flags = 0;
-    let mut settings_word = 0;
-    if extra != 0 && settings_callback != 0 {
-        e.with_stack(4, |e, word| {
-            settings_flags = e
-                .call(settings_callback, &[handle, extra, word.addr()])
-                .u32();
-            settings_word = e.mem.u32(word.addr());
-        });
-    }
-    e.mem.set_u32(sound + SOUND_MODIFIER_FLAGS, settings_word);
-    if settings_flags != 0 {
-        if settings_flags & 0x800_0000 != 0 {
-            flags = (flags & !2) | 1 | 0x800_0000;
+    // The exe's frame (`EBP` frame, exception record, `SUB ESP,0xb4`, the cookie): 0xc4 bytes.
+    // The handle the caller gets (the id, no assumed success, state 0) at +0x94 (`EBP-0x30`),
+    // the settings word at +0xac (`EBP-0x18`), the loop points at +0xa0 and +0xb0
+    // (`EBP-0x24`, `EBP-0x14`).
+    e.with_stack(0xc4, |e, frame| {
+        let frame = frame.addr();
+        let handle = frame + 0x94;
+        e.mem.set_u32(handle, id);
+        e.mem.set_u8(handle + 4, 0);
+        e.mem.set_u32(handle + 8, 0);
+        let section = this.addr() + 0xc4;
+        enter_section(e, section);
+        let raw = e.call(ALLOCATE, &[MEMORY_MANAGER, 0x254]).u32();
+        let record = if raw != 0 {
+            e.call(DEBUG_SOUND_INFO_CONSTRUCTOR, &[raw + 0x18]);
+            e.mem.set_u32(raw, id);
+            e.mem.set_u32(raw + 0xc, 0);
+            e.mem.set_u32(raw + 0x10, 0);
+            e.mem.set_u8(raw + 0x14, 0);
+            raw
+        } else {
+            0
+        };
+        e.call(MAP_SET_VALUE, &[this.addr() + 0x64, id, record]);
+        leave_section(e, section);
+        let settings_callback = e.mem.u32(audio + AUDIO_SETTINGS_CALLBACK);
+        let mut settings_flags = 0;
+        let word = frame + 0xac;
+        e.mem.set_u32(word, 0);
+        if extra != 0 && settings_callback != 0 {
+            settings_flags = e.call(settings_callback, &[handle, extra, word]).u32();
         }
-        if settings_flags & 0x10 != 0
-            || settings_flags & 0x200_0000 != 0
-            || settings_flags & 0x400_0000 != 0
-        {
-            flags = (settings_flags & 0x600_0010) | (flags & 0xf9ff_ffef);
-        }
-        e.mem.set_u32(sound + SOUND_TYPE_FLAGS, flags);
-    }
-    queue_plain(e, this, 0x25, id, 0, sound);
-    if extra != 0 && settings_callback != 0 {
-        e.call(settings_callback, &[handle, extra, 0]);
-    }
-    let loop_callback = e
-        .vcall(audio, AUDIO_SLOT_GET_LOOP_POINT_CALLBACK, &[])
-        .u32();
-    if loop_callback != 0 {
-        e.with_stack(8, |e, points| {
-            if e.call(loop_callback, &[extra, points.addr(), points.addr() + 4])
-                .bool()
-            {
-                let start = e.mem.u32(points.addr());
-                let end = e.mem.u32(points.addr() + 4);
-                e.mem.set_u32(sound + SOUND_LOOP_START, start);
-                e.mem.set_u32(sound + SOUND_LOOP_END, end);
+        let settings_word = e.mem.u32(word);
+        e.mem.set_u32(sound + SOUND_MODIFIER_FLAGS, settings_word);
+        if settings_flags != 0 {
+            if settings_flags & 0x800_0000 != 0 {
+                flags = (flags & !2) | 1 | 0x800_0000;
             }
-        });
-    }
-    // The caller gets the handle record as the callbacks left it.
-    let handle_id = e.mem.u32(handle);
-    let assumed = e.mem.u8(handle + 4) != 0;
-    let state = e.mem.u32(handle + 8);
-    e.set(result, BSSoundHandle::iSoundID, handle_id);
-    e.set(result, BSSoundHandle::bAssumeSuccess, assumed);
-    e.set(result, BSSoundHandle::eState, state);
-    e.mem.free(handle);
+            if settings_flags & 0x10 != 0
+                || settings_flags & 0x200_0000 != 0
+                || settings_flags & 0x400_0000 != 0
+            {
+                flags = (settings_flags & 0x600_0010) | (flags & 0xf9ff_ffef);
+            }
+            e.mem.set_u32(sound + SOUND_TYPE_FLAGS, flags);
+        }
+        queue_plain(e, this, 0x25, id, 0, sound);
+        if extra != 0 && settings_callback != 0 {
+            e.call(settings_callback, &[handle, extra, 0]);
+        }
+        let loop_callback = e
+            .vcall(audio, AUDIO_SLOT_GET_LOOP_POINT_CALLBACK, &[])
+            .u32();
+        let (start_slot, end_slot) = (frame + 0xa0, frame + 0xb0);
+        e.mem.set_u32(start_slot, 0);
+        e.mem.set_u32(end_slot, 0);
+        if loop_callback != 0 && e.call(loop_callback, &[extra, start_slot, end_slot]).bool() {
+            let start = e.mem.u32(start_slot);
+            let end = e.mem.u32(end_slot);
+            e.mem.set_u32(sound + SOUND_LOOP_START, start);
+            e.mem.set_u32(sound + SOUND_LOOP_END, end);
+        }
+        // The caller gets the handle record as the callbacks left it.
+        let handle_id = e.mem.u32(handle);
+        let assumed = e.mem.u8(handle + 4) != 0;
+        let state = e.mem.u32(handle + 8);
+        e.set(result, BSSoundHandle::iSoundID, handle_id);
+        e.set(result, BSSoundHandle::bAssumeSuccess, assumed);
+        e.set(result, BSSoundHandle::eState, state);
+    });
     result
 }
 
@@ -9566,6 +9573,53 @@ mod tests {
     }
 
     #[test]
+    fn the_followed_object_loop_keeps_its_slots_at_the_exe_frame_offsets() {
+        let (mut f, _audio) = audio_fixture();
+        common_message_doubles(&mut f);
+        install_listener(&mut f);
+        let sounds = fake_vtable(&mut f.e, 0x7210_0000);
+        let map = moving_map_model(&mut f);
+        let sound = fake_sound(&mut f.e, &sounds, 6);
+        list_sound(&mut f, 6, sound);
+        let object = fake_object(&mut f.e, 5, [0.0; 3]);
+        f.e.call(0x00ae7cc0, &args![map, 6u32, object]);
+        let frame = f.e.mem.alloc(0x104);
+        f.e.mem.free(frame);
+        f.call(0x00adea90, &[]);
+        // The position (+0xf0, ended at 0), the key (+0xdc) and the object slot (+0xc0)
+        // the walk filled.
+        assert_eq!(f.e.mem.u32(frame + 0xf0), 0);
+        assert_eq!(f.e.mem.u32(frame + 0xdc), 6);
+        assert_eq!(f.e.mem.u32(frame + 0xc0), object);
+    }
+
+    #[test]
+    fn the_sound_update_keeps_the_object_slot_at_frame_offset_0x160() {
+        let (mut f, _audio) = audio_fixture();
+        update_doubles(&mut f);
+        install_listener(&mut f);
+        let sounds = fake_vtable(&mut f.e, 0x7210_0000);
+        let map = moving_map_model(&mut f);
+        let sound = fake_sound(&mut f.e, &sounds, 9);
+        f.e.mem.set_u32(sound + SOUND_STATE_FLAGS, 0x10);
+        list_sound(&mut f, 9, sound);
+        let object = fake_object(&mut f.e, 5, [0.0; 3]);
+        f.e.call(0x00ae7cc0, &args![map, 9u32, object]);
+        let cleared = Rc::new(RefCell::new(Vec::new()));
+        let log = cleared.clone();
+        f.e.register_double(SMART_POINTER_SET, move |e, a| {
+            log.borrow_mut().push(a.to_vec());
+            e.mem.set_u32(a[0], a[1]);
+            ret(a[0])
+        });
+        let frame = f.e.mem.alloc(0x184);
+        f.e.mem.free(frame);
+        f.call(0x00adddd0, &[]);
+        // The finished sound's followed object is fetched into the slot and cleared there.
+        assert_eq!(cleared.borrow()[0], vec![frame + 0x160, 0]);
+    }
+
+    #[test]
     fn the_listener_position_and_underwater_flag_are_queued() {
         let (mut f, _audio) = audio_fixture();
         f.call(
@@ -10535,6 +10589,35 @@ mod tests {
         // The callback ran twice: with an output word and then without.
         assert_eq!(calls.borrow().len(), 2);
         assert_eq!(calls.borrow()[1][1..], [5, 0]);
+    }
+
+    #[test]
+    fn get_sound_handle_by_filename_keeps_its_locals_at_the_exe_frame_offsets() {
+        let (mut f, audio, _sound, result) = handle_world();
+        let object = f.e.global::<u32>(AUDIO_GLOBAL);
+        f.e.mem
+            .set_u32(object + AUDIO_SETTINGS_CALLBACK, 0x7400_0020);
+        let calls = Rc::new(RefCell::new(Vec::new()));
+        let log = calls.clone();
+        f.e.register_double(0x7400_0020, move |_, a| {
+            log.borrow_mut().push(a.to_vec());
+            ret(0)
+        });
+        audio.answer(AUDIO_SLOT_GET_LOOP_POINT_CALLBACK, ret(0x7400_0030));
+        let points = Rc::new(RefCell::new(Vec::new()));
+        let log = points.clone();
+        f.e.register_double(0x7400_0030, move |_, a| {
+            log.borrow_mut().push(a.to_vec());
+            ret(0)
+        });
+        let name = text(&mut f.e, b"z.wav");
+        let frame = f.e.mem.alloc(0xc4);
+        f.e.mem.free(frame);
+        f.call(0x00ae5a50, &[result, name, 2, 5]);
+        // The handle at +0x94, the settings word at +0xac, the loop points at +0xa0 / +0xb0.
+        assert_eq!(calls.borrow()[0], vec![frame + 0x94, 5, frame + 0xac]);
+        assert_eq!(calls.borrow()[1], vec![frame + 0x94, 5, 0]);
+        assert_eq!(*points.borrow(), vec![vec![5, frame + 0xa0, frame + 0xb0]]);
     }
 
     #[test]

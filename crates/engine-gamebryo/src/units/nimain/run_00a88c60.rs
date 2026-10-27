@@ -366,7 +366,7 @@ mod b004_tests {
             .filter(|(a, _)| *a == FTOL)
             .collect();
         let angle = x87_mul(x87_div(512.0, x87_load32(0x40c9_0fdb)), 1.0);
-        assert_eq!(ftol, vec![(FTOL, args![angle])]);
+        assert_eq!(ftol, vec![(FTOL, args![angle].to_vec())]);
     }
 
     #[test]

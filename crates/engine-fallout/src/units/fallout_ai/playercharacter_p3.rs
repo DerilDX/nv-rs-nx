@@ -1695,12 +1695,13 @@ pub fn player_character_create_mouse_spring(
     grab_type: u32,
     distance: f32,
 ) {
-    let block = e.mem.alloc(CREATE_MOUSE_SPRING_FRAME);
-    let frame = Frame {
-        ebp: block + CREATE_MOUSE_SPRING_EBP,
-    };
-    create_mouse_spring_in_frame(e, frame, this, object, grab_type, distance);
-    e.mem.free(block);
+    // `EBP` is on a 16-byte boundary in the exe (`AND ESP,0xfffffff0` before `MOV EBP,ESP`).
+    e.with_stack(CREATE_MOUSE_SPRING_FRAME + 0x10, |e, raw| {
+        let frame = Frame {
+            ebp: (raw.addr() + CREATE_MOUSE_SPRING_EBP + 0xf) & !0xf,
+        };
+        create_mouse_spring_in_frame(e, frame, this, object, grab_type, distance)
+    });
 }
 
 fn create_mouse_spring_in_frame(
@@ -2698,8 +2699,11 @@ pub fn player_character_play_impact_based_hit_shader(
         return;
     }
     let node = e.vcall(reference.addr(), 0x1d0, &args![]).u32();
+    // 00962331 / 00962337: the cdecl `005d2860` reads the two pushed words without popping
+    // them; they are the last two words of the cdecl `005299a0` (`(form, strength,
+    // target)`, one ADD ESP,0xc after both).
     let modifier = e.call(FUNCTION_005D2860, &args![distance, node]).u32();
-    e.call(FUNCTION_005299A0, &args![modifier]);
+    e.call(FUNCTION_005299A0, &args![modifier, distance, node]);
 }
 
 // Translated from 00962350 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -3840,12 +3844,13 @@ fn release_and_destroy_collector(e: &mut Engine, this: Ptr<PlayerCharacter>, col
 /// 0x6cc-byte frame is emulated so that the locals the callees receive by
 /// address keep the layout the game gives them.
 pub fn fn_00960520(e: &mut Engine, this: Ptr<PlayerCharacter>, _unused_1: f32) {
-    let block = e.mem.alloc(UPDATE_SPRING_FRAME);
-    let frame = Frame {
-        ebp: block + UPDATE_SPRING_EBP,
-    };
-    update_spring_in_frame(e, frame, this);
-    e.mem.free(block);
+    // `EBP` is on a 16-byte boundary in the exe (`AND ESP,0xfffffff0` before `MOV EBP,ESP`).
+    e.with_stack(UPDATE_SPRING_FRAME + 0x10, |e, raw| {
+        let frame = Frame {
+            ebp: (raw.addr() + UPDATE_SPRING_EBP + 0xf) & !0xf,
+        };
+        update_spring_in_frame(e, frame, this)
+    });
 }
 
 fn update_spring_in_frame(e: &mut Engine, f: Frame, this: Ptr<PlayerCharacter>) {
@@ -4205,13 +4210,13 @@ pub fn fn_009614b0(
     search: u8,
     rotate: u8,
 ) -> bool {
-    let block = e.mem.alloc(DROP_POSITION_FRAME);
-    let frame = Frame {
-        ebp: block + DROP_POSITION_EBP,
-    };
-    let found = drop_position_in_frame(e, frame, this, object, out, search, rotate);
-    e.mem.free(block);
-    found
+    // `EBP` is on a 16-byte boundary in the exe (`AND ESP,0xfffffff0` before `MOV EBP,ESP`).
+    e.with_stack(DROP_POSITION_FRAME + 0x10, |e, raw| {
+        let frame = Frame {
+            ebp: (raw.addr() + DROP_POSITION_EBP + 0xf) & !0xf,
+        };
+        drop_position_in_frame(e, frame, this, object, out, search, rotate)
+    })
 }
 
 fn drop_position_in_frame(
@@ -6548,12 +6553,13 @@ fn auto_aim_candidate(
 /// frame is emulated so that the locals the callees receive by address keep
 /// the layout the game gives them.
 pub fn player_character_update_auto_aim_actor(e: &mut Engine, this: Ptr<PlayerCharacter>) {
-    let block = e.mem.alloc(AUTO_AIM_FRAME);
-    let frame = Frame {
-        ebp: block + AUTO_AIM_EBP,
-    };
-    update_auto_aim_actor_in_frame(e, frame, this);
-    e.mem.free(block);
+    // `EBP` is on a 16-byte boundary in the exe (`AND ESP,0xfffffff0` before `MOV EBP,ESP`).
+    e.with_stack(AUTO_AIM_FRAME + 0x10, |e, raw| {
+        let frame = Frame {
+            ebp: (raw.addr() + AUTO_AIM_EBP + 0xf) & !0xf,
+        };
+        update_auto_aim_actor_in_frame(e, frame, this)
+    });
 }
 
 fn update_auto_aim_actor_in_frame(e: &mut Engine, f: Frame, this: Ptr<PlayerCharacter>) {
@@ -6990,23 +6996,23 @@ pub fn fn_00965620(
     default_heading: f32,
     default_pitch: f32,
 ) {
-    let block = e.mem.alloc(AIM_OFFSETS_FRAME);
-    let frame = Frame {
-        ebp: block + AIM_OFFSETS_EBP,
-    };
-    aim_offsets_in_frame(
-        e,
-        frame,
-        this,
-        actor,
-        aim_node,
-        heading.addr(),
-        pitch.addr(),
-        origin_override,
-        default_heading,
-        default_pitch,
-    );
-    e.mem.free(block);
+    e.with_stack(AIM_OFFSETS_FRAME, |e, block| {
+        let frame = Frame {
+            ebp: block.addr() + AIM_OFFSETS_EBP,
+        };
+        aim_offsets_in_frame(
+            e,
+            frame,
+            this,
+            actor,
+            aim_node,
+            heading.addr(),
+            pitch.addr(),
+            origin_override,
+            default_heading,
+            default_pitch,
+        );
+    });
 }
 
 /// The weapon's current weapon form of the player (`Actor::GetCurrentWeapon`).
@@ -11294,7 +11300,10 @@ mod tests {
             calls_to(&log, FUNCTION_005D2860),
             [[2.0f32.to_bits(), 0x6300_0000]]
         );
-        assert_eq!(calls_to(&log, FUNCTION_005299A0), [[0x6400_0000]]);
+        assert_eq!(
+            calls_to(&log, FUNCTION_005299A0),
+            [[0x6400_0000, 2.0f32.to_bits(), 0x6300_0000]]
+        );
     }
 
     #[test]
@@ -14837,5 +14846,105 @@ mod tests {
         // found = 5 / 4, scaled by the actor's +0xd0 float (8) = 10.
         assert_eq!(e.mem.f32(actor + 0xd0), 10.0);
         let _ = action;
+    }
+
+    // ---- the exe's stack frames ----
+
+    /// The block the next `with_stack(size)` takes (the last freed block of that size).
+    fn next_frame(e: &mut Engine, size: u32) -> u32 {
+        let frame = e.mem.alloc(size);
+        e.mem.free(frame);
+        frame
+    }
+
+    /// Where `EBP` lands in a frame block whose exe frame aligns `EBP` to 16 bytes.
+    fn aligned_ebp(raw: u32, ebp: u32) -> u32 {
+        (raw + ebp + 0xf) & !0xf
+    }
+
+    #[test]
+    fn the_mouse_spring_parameters_sit_below_an_aligned_ebp() {
+        let mut e = engine(CALLEES_0095F930);
+        let (player, object, _, _) = spring_creation_world(&mut e);
+        answer_float(&mut e, FUNCTION_00457990, 6.0);
+        float_settings(
+            &mut e,
+            &[
+                (SETTING_011D1A08, 1.0),
+                (SETTING_011D1C7C, 2.0),
+                (SETTING_011D1B44, 3.0),
+                (SETTING_011D177C, 4.0),
+            ],
+        );
+        let raw = next_frame(&mut e, CREATE_MOUSE_SPRING_FRAME + 0x10);
+        let log = logged(&mut e, |e| {
+            e.call(
+                0x0095_f930,
+                &args![player, Ptr::<()>::new(object), 3u32, 7.5f32],
+            );
+        });
+        let ebp = aligned_ebp(raw, CREATE_MOUSE_SPRING_EBP);
+        assert_eq!(calls_to(&log, MOUSE_SPRING_ACTION_NEW)[0][1], ebp - 0x70);
+    }
+
+    #[test]
+    fn the_spring_update_eye_vectors_sit_below_an_aligned_ebp() {
+        let mut e = engine(CALLEES_00960520);
+        let (player, _, _, _) = update_world(&mut e);
+        let raw = next_frame(&mut e, UPDATE_SPRING_FRAME + 0x10);
+        let log = logged(&mut e, |e| {
+            e.call(0x0096_0520, &args![player, 0.016f32]);
+        });
+        let ebp = aligned_ebp(raw, UPDATE_SPRING_EBP);
+        assert_eq!(
+            calls_to(&log, ACTOR_GET_EYE_VECTOR)[0][1..3],
+            [ebp - 0x30, ebp - 0x3c]
+        );
+    }
+
+    #[test]
+    fn the_drop_position_eye_vectors_sit_below_an_aligned_ebp() {
+        let mut e = engine(CALLEES_009614B0);
+        let (player, _, out) = drop_world(&mut e);
+        let object = Ptr::<()>::new(0x8800_0000);
+        let raw = next_frame(&mut e, DROP_POSITION_FRAME + 0x10);
+        let log = logged(&mut e, |e| {
+            e.call(0x0096_14b0, &args![player, object, out, 0u8, 0u8]);
+        });
+        let ebp = aligned_ebp(raw, DROP_POSITION_EBP);
+        assert_eq!(
+            calls_to(&log, ACTOR_GET_EYE_VECTOR)[0][1..3],
+            [ebp - 0x38, ebp - 0x44]
+        );
+    }
+
+    #[test]
+    fn the_auto_aim_box_sits_below_an_aligned_ebp() {
+        let mut world = auto_aim_world(1, 100.0);
+        let player = world.player;
+        let raw = next_frame(&mut world.e, AUTO_AIM_FRAME + 0x10);
+        let log = logged(&mut world.e, |e| {
+            e.call(0x0096_4260, &args![player]);
+        });
+        let ebp = aligned_ebp(raw, AUTO_AIM_EBP);
+        assert_eq!(calls_to(&log, NI_POINT2_NEW)[0][0], ebp - 0x34);
+    }
+
+    #[test]
+    fn the_aim_offsets_source_sits_at_its_ebp_offset() {
+        let (mut e, player) = aim_offsets_world();
+        root_bound(&mut e, (0.0, 0.0, 0.0));
+        let source = e.mem.alloc(12);
+        e.mem.set_f32(source, 1.5);
+        e.mem.set_f32(source + 4, 2.5);
+        e.mem.set_f32(source + 8, 3.5);
+        let block = next_frame(&mut e, AIM_OFFSETS_FRAME);
+        run_aim_offsets(&mut e, player, 0, 0, source, (0.0, 0.0), (0.25, -0.5));
+        // `EBP-0x18` holds the copied source.
+        let at = block + AIM_OFFSETS_EBP - 0x18;
+        assert_eq!(
+            [e.mem.f32(at), e.mem.f32(at + 4), e.mem.f32(at + 8)],
+            [1.5, 2.5, 3.5]
+        );
     }
 }

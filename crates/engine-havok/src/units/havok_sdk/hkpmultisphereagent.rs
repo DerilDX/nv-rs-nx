@@ -1181,11 +1181,11 @@ mod tests {
         let log: Log = w.e.call_log.take().unwrap();
         let cleanups: Vec<_> = log.iter().filter(|c| c.0 == FAKE_CLEANUP).collect();
         assert_eq!(cleanups.len(), 2);
-        assert_eq!(cleanups[0].1, args![w.agent_x, 0x1234u32]);
-        assert_eq!(cleanups[1].1, args![w.agent_y, 0x1234u32]);
+        assert_eq!(cleanups[0].1, args![w.agent_x, 0x1234u32].to_vec());
+        assert_eq!(cleanups[1].1, args![w.agent_y, 0x1234u32].to_vec());
         assert_eq!(
             log.last().unwrap(),
-            &(FAKE_DESTRUCTOR, args![w.agent, 1u32])
+            &(FAKE_DESTRUCTOR, args![w.agent, 1u32].to_vec())
         );
     }
 
@@ -1383,7 +1383,10 @@ mod tests {
         let (me, log) = construct(&mut w, input, 0);
         let reserves: Vec<_> = log.iter().filter(|c| c.0 == ARRAY_RESERVE).collect();
         assert_eq!(reserves.len(), 1);
-        assert_eq!(reserves[0].1, args![ALLOCATOR, me + AGENTS, 8u32, 8u32]);
+        assert_eq!(
+            reserves[0].1,
+            args![ALLOCATOR, me + AGENTS, 8u32, 8u32].to_vec()
+        );
         assert_eq!(w.e.mem.u32(me + AGENTS + 4), 6);
         assert_eq!(w.e.mem.u32(FAKE_RESERVE_DONE + 5 * 8), 5);
         assert_eq!(w.e.mem.u32(FAKE_RESERVE_DONE + 5 * 8 + 4), 0x7100_0006);
@@ -1735,9 +1738,12 @@ mod tests {
         let log: Log = w.e.call_log.take().unwrap();
         assert_eq!(result.u32(), me);
         let frees: Vec<_> = log.iter().filter(|c| c.0 == FAKE_FREE).collect();
-        assert_eq!(frees[0].1, args![ALLOCATOR, 0x00c0_0000u32, 6u32 * 8]);
+        assert_eq!(
+            frees[0].1,
+            args![ALLOCATOR, 0x00c0_0000u32, 6u32 * 8].to_vec()
+        );
         let deletes: Vec<_> = log.iter().filter(|c| c.0 == FAKE_DELETE).collect();
-        assert_eq!(deletes[0].1, args![ALLOCATOR, me, 0x40u32]);
+        assert_eq!(deletes[0].1, args![ALLOCATOR, me, 0x40u32].to_vec());
         assert_eq!(w.e.mem.u32(me), BASE_VTABLE);
         assert_eq!(w.e.mem.u32(me + AGENTS), 0);
         assert_eq!(w.e.mem.u32(me + AGENTS + 4), 0);

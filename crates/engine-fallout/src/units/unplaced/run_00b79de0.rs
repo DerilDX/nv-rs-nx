@@ -337,8 +337,9 @@ pub fn fn_00b7a2c0(
     0
 }
 
-/// `00be0870` (no arguments), the shader release `00e80190` (`thiscall`) and
-/// CRT `memset` (`00ec61c0`, `cdecl`).
+/// `00be0870` (`thiscall`: the shader set-up that calls the base initialization `00e80570`
+/// and three virtual slots), the shader release `00e80190` (`thiscall`) and CRT `memset`
+/// (`00ec61c0`, `cdecl`).
 const SHADERS_RELEASE_00BE0870: u32 = 0x00be_0870;
 const SHADER_DELETE_00E80190: u32 = 0x00e8_0190;
 const MEMSET: u32 = 0x00ec_61c0;
@@ -394,11 +395,12 @@ fn release_static_tables(e: &mut Engine) {
 }
 
 // Translated from 00b7a170 (decompiled, FalloutNV.exe 1.4.0.525)
-/// No function in the engine map (no arguments): `00be0870`, then empties
-/// the static pointer tables and shader slots, and zeroes the four 0xbdc-byte
-/// tables at `011fcc80`, `011fc0a0`, `011fb4c0` and `011fa8e0`. Answers true.
-pub fn fn_00b7a170(e: &mut Engine) -> bool {
-    e.call(SHADERS_RELEASE_00BE0870, &args![]);
+/// No function in the engine map; a shader's virtual method (`thiscall`, no stack words):
+/// `00be0870` on the same `this` (the exe leaves `ECX` as it came, 00b7a173; its answer is not
+/// read), then empties the static pointer tables and shader slots, and zeroes the four
+/// 0xbdc-byte tables at `011fcc80`, `011fc0a0`, `011fb4c0` and `011fa8e0`. Answers true.
+pub fn fn_00b7a170(e: &mut Engine, this: Ptr) -> bool {
+    e.call(SHADERS_RELEASE_00BE0870, &args![this]);
     release_static_tables(e);
     for table in [0x011f_cc80u32, 0x011f_c0a0, 0x011f_b4c0, 0x011f_a8e0] {
         e.call(MEMSET, &args![table, 0u32, 0xbdcu32]);
@@ -581,7 +583,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00b7_a730, fn_00b7a730(Ptr) -> bool),
         entry!(0x00b7_ac20, fn_00b7ac20(Ptr, u32)),
         entry!(0x00b7_a2c0, fn_00b7a2c0(Ptr, u32, u32, u32, u32, u32, u32, u32, u32) -> u32),
-        entry!(0x00b7_a170, fn_00b7a170() -> bool),
+        entry!(0x00b7_a170, fn_00b7a170(Ptr) -> bool),
         entry!(0x00b7_9de0, fn_00b79de0(Ptr)),
         entry!(0x00b7_a870, fn_00b7a870(u32)),
         entry!(0x00b7_9db0, fn_00b79db0(Ptr, u32, u8)),
@@ -868,8 +870,12 @@ mod b008_tests {
         e.mem.set_u32(0x011f_da48, 0x6660);
         e.mem.set_u32(0x011f_ec84, 0x6670);
         e.call_log = Some(vec![]);
-        assert!(e.call(0x00b7_a170, &args![]).bool());
+        assert!(e.call(0x00b7_a170, &args![0x5550u32]).bool());
         let log = calls(&mut e);
+        assert!(
+            log.contains(&(SHADERS_RELEASE_00BE0870, vec![0x5550])),
+            "the same this"
+        );
         assert!(log.contains(&(SHADER_DELETE_00E80190, vec![shader])));
         assert!(log.contains(&(INTERLOCKED_DECREMENT, vec![0x6664])));
         assert!(log.contains(&(INTERLOCKED_DECREMENT, vec![0x6674])));

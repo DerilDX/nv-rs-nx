@@ -2954,8 +2954,9 @@ pub fn fn_005574d0(e: &mut Engine, this: Ptr<TESObjectCELL>) {
 /// Virtual slot `+0x15c` of a reference: true when the reference has a
 /// navmesh obstacle (`fn_005575d0` and `fn_005576c0` ask it).
 const REFERENCE_OBSTACLE_SLOT: u32 = 0x15c;
-/// `NavMeshObstacleManager::AddObstacleForReference` (engine map), thiscall
-/// on the value `OBSTACLE_MANAGER_GET(reference)` returns, no stack argument.
+/// `NavMeshObstacleManager::AddObstacleForReference` (engine map), thiscall on the
+/// manager `OBSTACLE_MANAGER_GET` returns (it takes no word), RET 4: the reference (pushed
+/// before the getter, 00557627 and the other sites).
 const OBSTACLE_ADD: u32 = 0x006c_0c30;
 /// `NavMeshObstacleManager::RemoveObstacleForReference` (engine map), same
 /// calling form.
@@ -3179,8 +3180,8 @@ pub fn fn_005575d0(e: &mut Engine, this: Ptr<TESObjectCELL>) {
         if e.vcall(reference.addr(), REFERENCE_OBSTACLE_SLOT, &[])
             .bool()
         {
-            let obstacle = e.call(OBSTACLE_MANAGER_GET, &args![reference]).u32();
-            e.call(OBSTACLE_ADD, &args![obstacle]);
+            let obstacle = e.call(OBSTACLE_MANAGER_GET, &args![]).u32();
+            e.call(OBSTACLE_ADD, &args![obstacle, reference]);
         }
         let base = e.call(REFERENCE_BASE_OBJECT, &args![reference]).u32();
         if e.call(FORM_TYPE, &args![base]).u32() != DOOR_FORM_TYPE {
@@ -3189,12 +3190,12 @@ pub fn fn_005575d0(e: &mut Engine, this: Ptr<TESObjectCELL>) {
         if e.call(GET_OPEN_STATE, &args![reference]).i32() == 1 {
             let base = e.call(REFERENCE_BASE_OBJECT, &args![reference]).u32();
             if !e.call(IS_SLIDING_DOOR, &args![base]).bool() {
-                let obstacle = e.call(OBSTACLE_MANAGER_GET, &args![reference]).u32();
-                e.call(OBSTACLE_ADD, &args![obstacle]);
+                let obstacle = e.call(OBSTACLE_MANAGER_GET, &args![]).u32();
+                e.call(OBSTACLE_ADD, &args![obstacle, reference]);
             }
         } else {
-            let obstacle = e.call(OBSTACLE_MANAGER_GET, &args![reference]).u32();
-            e.call(OBSTACLE_DOOR_CLOSED, &args![obstacle]);
+            let obstacle = e.call(OBSTACLE_MANAGER_GET, &args![]).u32();
+            e.call(OBSTACLE_DOOR_CLOSED, &args![obstacle, reference]);
         }
     });
 }
@@ -3213,13 +3214,13 @@ pub fn fn_005576c0(e: &mut Engine, this: Ptr<TESObjectCELL>) {
         if e.vcall(reference.addr(), REFERENCE_OBSTACLE_SLOT, &[])
             .bool()
         {
-            let obstacle = e.call(OBSTACLE_MANAGER_GET, &args![reference]).u32();
-            e.call(OBSTACLE_REMOVE, &args![obstacle]);
+            let obstacle = e.call(OBSTACLE_MANAGER_GET, &args![]).u32();
+            e.call(OBSTACLE_REMOVE, &args![obstacle, reference]);
         }
         let base = e.call(REFERENCE_BASE_OBJECT, &args![reference]).u32();
         if e.call(FORM_TYPE, &args![base]).u32() == DOOR_FORM_TYPE {
-            let obstacle = e.call(OBSTACLE_MANAGER_GET, &args![reference]).u32();
-            e.call(OBSTACLE_DOOR_REMOVE, &args![obstacle]);
+            let obstacle = e.call(OBSTACLE_MANAGER_GET, &args![]).u32();
+            e.call(OBSTACLE_DOOR_REMOVE, &args![obstacle, reference]);
         }
     });
 }
@@ -8344,7 +8345,10 @@ mod tests {
         e.register(FORM_TYPE, |e, a| u32::from(e.mem.u8(a[0] + 4)).into_ret());
         e.register(GET_OPEN_STATE, |e, a| e.mem.u32(a[0] + 0x38).into_ret());
         e.register(IS_SLIDING_DOOR, |e, a| e.mem.u8(a[0] + 8).into_ret());
-        e.register(OBSTACLE_MANAGER_GET, |_, a| (a[0] + 1).into_ret());
+        e.register(OBSTACLE_MANAGER_GET, |_, a| {
+            assert!(a.is_empty());
+            0x0b5au32.into_ret()
+        });
         quiet(
             e,
             &[
@@ -8406,12 +8410,15 @@ mod tests {
         assert_eq!(
             calls_to(&log, OBSTACLE_ADD),
             vec![
-                vec![flagged + 1],
-                vec![door_flagged + 1],
-                vec![open_door + 1]
+                vec![0x0b5a, flagged],
+                vec![0x0b5a, door_flagged],
+                vec![0x0b5a, open_door]
             ]
         );
-        assert_eq!(calls_to(&log, OBSTACLE_DOOR_CLOSED), vec![vec![closed + 1]]);
+        assert_eq!(
+            calls_to(&log, OBSTACLE_DOOR_CLOSED),
+            vec![vec![0x0b5a, closed]]
+        );
         // The sliding open doors are asked, not added.
         assert_eq!(calls_to(&log, IS_SLIDING_DOOR).len(), 3);
         assert!(calls_to(&log, OBSTACLE_REMOVE).is_empty());
@@ -8427,15 +8434,15 @@ mod tests {
         let log = calls(&e);
         assert_eq!(
             calls_to(&log, OBSTACLE_REMOVE),
-            vec![vec![flagged + 1], vec![door_flagged + 1]]
+            vec![vec![0x0b5a, flagged], vec![0x0b5a, door_flagged]]
         );
         assert_eq!(
             calls_to(&log, OBSTACLE_DOOR_REMOVE),
             vec![
-                vec![door_flagged + 1],
-                vec![open_door + 1],
-                vec![open_sliding + 1],
-                vec![closed + 1]
+                vec![0x0b5a, door_flagged],
+                vec![0x0b5a, open_door],
+                vec![0x0b5a, open_sliding],
+                vec![0x0b5a, closed]
             ]
         );
         assert!(calls_to(&log, OBSTACLE_ADD).is_empty());

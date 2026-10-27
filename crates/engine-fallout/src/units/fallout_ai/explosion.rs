@@ -412,8 +412,10 @@ pub fn fn_009ac9c0(
         if !e.call(0x008c_7aa0, &args![]).bool() {
             e.vcall(explosion.addr(), 0x304, &args![]);
         } else {
-            let process = e.call(0x0045_37b0, &args![explosion]).u32();
-            e.call(0x0087_ae60, &args![process]);
+            // 009accb2: `004537b0` takes no stack word (plain RET); the pushed explosion
+            // is the word of `0087ae60` (RET 4).
+            let process = e.call(0x0045_37b0, &args![]).u32();
+            e.call(0x0087_ae60, &args![process, explosion]);
         }
     }
     explosion
@@ -1466,13 +1468,20 @@ pub fn fn_009b0d70(e: &mut Engine, this: Ptr, target: Ptr, magnitude: f32) {
     let setting = e.call(0x0040_3e20, &args![0x011d_1188u32]).u32();
     if e.mem.f32(setting) < magnitude {
         let process = e.call(0x008d_8520, &args![target]).u32();
-        let position = e.vcall(this.addr(), 0x1f4, &args![0.0f32]).u32();
+        // 009b0dc2: the explosion's +0x1f4 takes no stack word (plain RET in every
+        // reference class); the 0.0 pushed before it is the last word of the process'
+        // +0x418 (RET 0x14).
+        let position = e.vcall(this.addr(), 0x1f4, &args![]).u32();
         let words = [
             e.mem.u32(position),
             e.mem.u32(position + 4),
             e.mem.u32(position + 8),
         ];
-        e.vcall(process, 0x418, &args![target, words[0], words[1], words[2]]);
+        e.vcall(
+            process,
+            0x418,
+            &args![target, words[0], words[1], words[2], 0.0f32],
+        );
     }
 }
 
@@ -2265,14 +2274,16 @@ pub fn fn_009b22c0(e: &mut Engine, this: Ptr, buffer: Ptr) {
     for offset in [0xc8, 0xcc] {
         e.call(0x0086_48e0, &args![buffer, this.addr() + offset]);
     }
-    let form = e
+    // 009b244f: `008648a0` takes no stack word (plain RET); the three words pushed
+    // before it are the last three of the cdecl `__RTDynamicCast` (`00ec43fb`).
+    let form = e.call(0x0086_48a0, &args![buffer]).u32();
+    let form = e.call(0x0048_39c0, &args![form]).u32();
+    let weapon = e
         .call(
-            0x0086_48a0,
-            &args![buffer, 0x0118_3028u32, 0x0118_3998u32, 0u32],
+            0x00ec_43fb,
+            &args![form, 0u32, 0x0118_3028u32, 0x0118_3998u32, 0u32],
         )
         .u32();
-    let form = e.call(0x0048_39c0, &args![form]).u32();
-    let weapon = e.call(0x00ec_43fb, &args![form, 0u32]).u32();
     e.mem.set_u32(this.addr() + 0xe0, weapon);
 
     e.with_stack(4, |e, actor_cause_id| {
@@ -2329,13 +2340,15 @@ pub fn fn_009b25b0(e: &mut Engine, this: Ptr, buffer: Ptr) {
         let resolved = if unresolved == 0 {
             0
         } else {
-            let form = e
-                .call(
-                    0x0048_39c0,
-                    &args![unresolved, 0x0118_3028u32, 0x0118_41ccu32, 0u32],
-                )
-                .u32();
-            e.call(0x00ec_43fb, &args![form, 0u32]).u32()
+            // 009b25e7 / 009b2634: the cdecl `004839c0` takes one word (ADD ESP,4);
+            // the three words pushed before it are the last three of
+            // `__RTDynamicCast` (`00ec43fb`, ADD ESP,0x14).
+            let form = e.call(0x0048_39c0, &args![unresolved]).u32();
+            e.call(
+                0x00ec_43fb,
+                &args![form, 0u32, 0x0118_3028u32, 0x0118_41ccu32, 0u32],
+            )
+            .u32()
         };
         e.mem.set_u32(this.addr() + offset, resolved);
     }
@@ -2362,13 +2375,14 @@ pub fn fn_009b25b0(e: &mut Engine, this: Ptr, buffer: Ptr) {
         let form = if form == 0 {
             0
         } else {
-            let form = e
-                .call(
-                    0x0048_39c0,
-                    &args![form, 0x0118_3028u32, 0x0118_41ccu32, 0u32],
-                )
-                .u32();
-            e.call(0x00ec_43fb, &args![form, 0u32]).u32()
+            // 009b2715: as above, the three words pushed before `004839c0` belong to
+            // `__RTDynamicCast` (`00ec43fb`).
+            let form = e.call(0x0048_39c0, &args![form]).u32();
+            e.call(
+                0x00ec_43fb,
+                &args![form, 0u32, 0x0118_3028u32, 0x0118_41ccu32, 0u32],
+            )
+            .u32()
         };
         e.mem.set_u32(actor_cause + 0x20, form);
     }
@@ -6670,7 +6684,7 @@ mod tests {
                 0x6000u32.into_ret()
             });
             e.register(0x6000_01f4, |_, a| {
-                assert_eq!(a, &[0x1000, 0]);
+                assert_eq!(a, &[0x1000]);
                 0x7000u32.into_ret()
             });
             fn_009b0d70(&mut e, Ptr::new(0x1000), Ptr::new(target), magnitude);
@@ -6680,7 +6694,7 @@ mod tests {
                 forwarded
             );
             if forwarded {
-                assert_eq!(log.last().unwrap().1, vec![0x3000, 0x2000, 7, 8, 9]);
+                assert_eq!(log.last().unwrap().1, vec![0x3000, 0x2000, 7, 8, 9, 0]);
             }
         }
     }
@@ -7578,7 +7592,7 @@ mod tests {
                 Ret::default()
             });
             e.register(0x0086_48a0, |_, a| {
-                assert_eq!(a, &[0x2000, 0x0118_3028, 0x0118_3998, 0]);
+                assert_eq!(a, &[0x2000]);
                 0x100u32.into_ret()
             });
             e.register(0x0048_39c0, |_, a| {
@@ -7586,7 +7600,7 @@ mod tests {
                 0x200u32.into_ret()
             });
             e.register(0x00ec_43fb, |_, a| {
-                assert_eq!(a, &[0x200, 0]);
+                assert_eq!(a, &[0x200, 0, 0x0118_3028, 0x0118_3998, 0]);
                 0x300u32.into_ret()
             });
             e.register(0x0066_e330, |_, a| {
@@ -7645,12 +7659,11 @@ mod tests {
             Ret::default()
         });
         e.register(0x0048_39c0, |_, a| {
-            assert_eq!(a.len(), 4);
-            assert_eq!(&a[1..], &[0x0118_3028, 0x0118_41cc, 0]);
+            assert_eq!(a.len(), 1);
             (a[0] + 0x100).into_ret()
         });
         e.register(0x00ec_43fb, |_, a| {
-            assert_eq!(a[1], 0);
+            assert_eq!(&a[1..], &[0, 0x0118_3028, 0x0118_41cc, 0]);
             (a[0] + 0x1000).into_ret()
         });
         e.register(0x0040_a250, |_, a| {

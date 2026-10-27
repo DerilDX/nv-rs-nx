@@ -4,6 +4,11 @@
 # function belongs to an existing unit's class (an RTTI vtable slot of that class).
 # Holds addresses, units, subsystems and evidence only (ADR-0002).
 address	unit	subsystem	replaces	evidence
+00fb56c0	(unplaced)/run_00fb56c0	(unplaced)	compiler: dynamic initializers	a Ghidra gap entry of the _initterm table (rdata 0100f820): MOV ECX,011f4414; JMP 00a8a5f0 (the NiMainSDM constructor); in its own run unit with 00fc72d0, the two tail-jump library entries NiInit needs
+00fc72d0	(unplaced)/run_00fb56c0	(unplaced)	compiler: dynamic initializers	a Ghidra gap entry of the _initterm table (rdata 0101130c): MOV ECX,0126f104; JMP 00e91e30 (the renderer library registrar constructor); in run_00fb56c0 with 00fb56c0
+00fb5860	(unplaced)/run_00fb56c0	(unplaced)	compiler: dynamic initializers	a Ghidra gap entry of the _initterm table (rdata 0100f858): MOV ECX,011f4600; JMP 00a7cca0 (NiPixelFormat::NiPixelFormat); in run_00fb56c0 with the other tail-jump entries
+00fb97d0	(unplaced)/run_00fb56c0	(unplaced)	compiler: dynamic initializers	a Ghidra gap entry of the _initterm table (rdata 010100c4): MOV ECX,011f9604; JMP 00a69940 (NiPlane::NiPlane); in run_00fb56c0 with the other tail-jump entries
+0059bb30	(unplaced)/run_0059bb30	(unplaced)	d3d9/texture.cpp	the map files it under d3d9/texture.cpp by a folded Xbox name (D3DTexture_LockRect); the PC body is a getter (MOV EAX,[ECX+0x24]) that identical-code folding shares among unrelated callers (LowProcess 00907510, actor_p3, the cell loading), so it gets its own unplaced run unit
 00aa1b30	NiSystem/nifile.cpp	NiSystem		slot 4 of RTTI vtable NiFile; the named NiFile methods are in this unit
 00af2f40	BSSystemUtilities/bssavedatasystemutility.cpp	BSSystemUtilities		slot of RTTI vtable BSSaveDataSystemUtility; its named methods are in this unit
 00af2f60	BSSystemUtilities/bssavedatasystemutility.cpp	BSSystemUtilities		slot of RTTI vtable BSSaveDataSystemUtility; its named methods are in this unit

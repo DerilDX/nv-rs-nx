@@ -19,8 +19,9 @@ const INTERLOCKED_EXCHANGE_ADD: u32 = 0x00fd_f1ec;
 /// Unnamed (cdecl, two words: the world and the entity of the job).
 const PREPARE_ENTITY: u32 = 0x00cb_5480;
 /// `hkpContinuousSimulation::collideEntitiesBroadPhaseContinuousFindPairs` (Ghidra name;
-/// `ECX` = the word at `+0x110` of the job owner, five stack words: two words of the entity, the
-/// world and the two arrays that receive the pairs).
+/// `stdcall`, five stack words: two words of the entity, the world and the two arrays that
+/// receive the pairs; the word at `+0x110` of the job owner the caller puts in `ECX` is not
+/// read).
 const FIND_PAIRS: u32 = 0x00d0_c030;
 /// `hkpWorldCallbackUtil::fireContactImpulseLimitBreached` (Ghidra name; cdecl: world, the
 /// records, their count).
@@ -289,9 +290,11 @@ pub fn hk_cpu_broad_phase_job(e: &mut Engine, owner: Ptr, second: u32, job: Ptr)
         let search_this = e.mem.u32(owner + 0x110);
         let (first, second_word) = (e.mem.u32(entity + 0x48), e.mem.u32(entity + 0x4c));
         let world = e.mem.u32(owner);
+        // 00d93cbd: `00d0c030` is stdcall (RET 0x14) and does not read ECX.
+        let _ = search_this;
         e.call(
             FIND_PAIRS,
-            &args![search_this, first, second_word, world, added, removed],
+            &args![first, second_word, world, added, removed],
         );
         let threads = e.mem.i32(group + 0x10);
         let expected = 1i32.wrapping_sub(threads);
@@ -447,10 +450,10 @@ mod tests {
         let sink = rig.log.clone();
         e.register_double(FIND_PAIRS, move |e, a| {
             let mut words = a.to_vec();
-            words.extend([e.mem.u32(a[4]), e.mem.u32(a[5]), e.mem.u32(a[4] + 8)]);
+            words.extend([e.mem.u32(a[3]), e.mem.u32(a[4]), e.mem.u32(a[3] + 8)]);
             sink.borrow_mut().push((FIND_PAIRS, words));
-            e.mem.set_u32(a[4] + 4, found.0);
-            e.mem.set_u32(a[5] + 4, found.1);
+            e.mem.set_u32(a[3] + 4, found.0);
+            e.mem.set_u32(a[4] + 4, found.1);
             Ret::default()
         });
         let sink = rig.log.clone();
@@ -575,12 +578,12 @@ mod tests {
         let searched = calls(log, FIND_PAIRS);
         assert_eq!(searched.len(), 1);
         let hub = s.e.mem.u32(s.entity + 0x48);
-        assert_eq!(searched[0][..4], [0x1100, hub, 0x4c4c, s.world]);
+        assert_eq!(searched[0][..3], [hub, 0x4c4c, s.world]);
         // The array to add to is 0x10 bytes above the other; the data of each starts
         // at the stack allocator's top, then 0x80 bytes up, and the capacity word is the count
         // with bit 31 set.
-        assert_eq!(searched[0][4], searched[0][5] + 0x10);
-        assert_eq!(searched[0][6..], [s.top, s.top + 0x80, 0x8000_0004]);
+        assert_eq!(searched[0][3], searched[0][4] + 0x10);
+        assert_eq!(searched[0][5..], [s.top, s.top + 0x80, 0x8000_0004]);
         // The counter went down without the import and the old value was the thread count.
         assert!(calls(log, INTERLOCKED_EXCHANGE_ADD).is_empty());
         assert_eq!(s.e.mem.u32(s.group + 0xc), 0);

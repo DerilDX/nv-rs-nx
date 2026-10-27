@@ -155,6 +155,35 @@ mod tests {
     use super::*;
 
     #[test]
+    fn the_pixel_format_gets_its_default_fields() {
+        let mut e = Engine::new();
+        e.map(0x0000_1000, 0x100);
+        for i in 0..0x50u32 {
+            e.mem.set_u8(0x1000 + i, 0xaa);
+        }
+        assert_eq!(e.call(0x00a7_cca0, &args![0x1000u32]).u32(), 0x1000);
+        let word = |e: &Engine, o: u32| e.mem.u32(0x1000 + o);
+        assert_eq!(e.mem.u8(0x1000), 1);
+        assert_eq!(e.mem.u8(0x1001), 8);
+        assert_eq!(e.mem.u8(0x1002), 0xaa, "untouched");
+        assert_eq!(
+            [word(&e, 4), word(&e, 8), word(&e, 0xc), word(&e, 0x10)],
+            [2, 0, 0xffff_ffff, 0]
+        );
+        assert_eq!([word(&e, 0x14), word(&e, 0x18)], [0x10, 3]);
+        assert_eq!([e.mem.u8(0x101c), e.mem.u8(0x101d)], [8, 1]);
+        assert_eq!(e.mem.u8(0x101e), 0xaa, "untouched");
+        for entry in [0x20u32, 0x2c, 0x38] {
+            assert_eq!([word(&e, entry), word(&e, entry + 4)], [0x13, 5]);
+            assert_eq!(
+                [e.mem.u8(0x1000 + entry + 8), e.mem.u8(0x1000 + entry + 9)],
+                [0, 1]
+            );
+        }
+        assert_eq!(e.mem.u8(0x1042), 0xaa, "untouched");
+    }
+
+    #[test]
     fn constructor_writes_the_default_format() {
         let mut e = Engine::new();
         let this = e.mem.alloc(0x44);

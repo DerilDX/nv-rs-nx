@@ -1056,9 +1056,221 @@ pub fn ni_t_string_template_map_scalar_deleting_destructor(
     this
 }
 
+/// `CreateThread`, `ResumeThread`, `SetThreadPriority`, `WaitForSingleObject` and
+/// `InterlockedDecrement` (KERNEL32 import slots).
+const CREATE_THREAD: u32 = 0x00fd_f124;
+const RESUME_THREAD: u32 = 0x00fd_f158;
+const SET_THREAD_PRIORITY: u32 = 0x00fd_f11c;
+const WAIT_FOR_SINGLE_OBJECT: u32 = 0x00fd_f1c8;
+const INTERLOCKED_DECREMENT: u32 = 0x00fd_f1c4;
+/// `NiThread`'s name setter (`00aa2740`, `cdecl`: thread id, name) and the name it gets
+/// (`010f1c88`).
+const SET_THREAD_NAME: u32 = 0x00aa_2740;
+const SEQUENCE_THREAD_NAME: u32 = 0x010f_1c88;
+/// The thread procedure `StartSequence` starts (`00ec16b0`) and what it runs: `00ec2760` on the
+/// movie settings object `0126fac4`.
+const SEQUENCE_THREAD_PROC: u32 = 0x00ec_16b0;
+const SEQUENCE_RUN: u32 = 0x00ec_2760;
+/// The default priority setting's word (`0126fae4`, inside the object at `0126fae0`), and the
+/// fallback word `01202800` the exe uses when that object's address is null (it never is).
+const DEFAULT_PRIORITY_HOLDER: u32 = 0x0126_fae0;
+const DEFAULT_PRIORITY: u32 = 0x0126_fae4;
+const NULL_PRIORITY: u32 = 0x0120_2800;
+
+// Translated from 00ec16b0 (disassembled, FalloutNV.exe 1.4.0.525)
+/// The sequence thread's procedure (`stdcall`, its parameter): `00ec2760` on the movie settings
+/// object (`0126fac4`) with the parameter; answers 0.
+pub fn fn_00ec16b0(e: &mut Engine, parameter: u32) -> u32 {
+    let settings = e.mem.u32(MOVIE_SETTINGS);
+    e.call(SEQUENCE_RUN, &args![settings, parameter]);
+    0
+}
+
+// Translated from 00ec16d0 (disassembled, FalloutNV.exe 1.4.0.525)
+/// `MoviePlayer::StartSequence` (engine map; `thiscall`, `RET 0x18`): creates the sequence
+/// thread suspended (`CreateThread(0, 0, 00ec16b0, parameter, CREATE_SUSPENDED, &id)`, the
+/// handle to +8), names it (`00aa2740(id, 010f1c88)`), stores the bytes +0x22, +0x23, +0x24 and
+/// the float +0x28 (`FLD`/`FSTP`: a signalling NaN is stored quiet), sets the thread's priority
+/// (`00ec18a0`) to `priority` or, for -1, the word at `0126fae4` (the exe tests the constant
+/// address `0126fae0` for null first; when it is, which it never is, it clears `01202800` and
+/// reads that), resumes the thread, then waits without a time limit on the semaphore (+0x34)
+/// and decrements the count at +0x30 (`InterlockedDecrement`), whose answer stays in `EAX`.
+#[allow(clippy::too_many_arguments)]
+pub fn movie_player_start_sequence(
+    e: &mut Engine,
+    this: Ptr,
+    parameter: u32,
+    byte_22: u8,
+    priority: u32,
+    byte_23: u8,
+    byte_24: u8,
+    value_28: f32,
+) -> u32 {
+    let at = this.addr();
+    e.with_stack(4, |e, id| {
+        let handle = e
+            .call(
+                CREATE_THREAD,
+                &args![0u32, 0u32, SEQUENCE_THREAD_PROC, parameter, 4u32, id],
+            )
+            .u32();
+        e.mem.set_u32(at + 8, handle);
+        let thread_id = e.mem.u32(id.addr());
+        e.call(SET_THREAD_NAME, &args![thread_id, SEQUENCE_THREAD_NAME]);
+        e.mem.set_u8(at + 0x22, byte_22);
+        e.mem.set_u8(at + 0x23, byte_23);
+        e.mem.set_u8(at + 0x24, byte_24);
+        e.mem.set_u32(at + 0x28, x87_quiet_bits(value_28.to_bits()));
+        let priority = if priority == 0xffff_ffff {
+            #[allow(clippy::if_same_then_else)]
+            let word = if DEFAULT_PRIORITY_HOLDER != 0 {
+                DEFAULT_PRIORITY
+            } else {
+                // Never taken: the exe tests a constant address.
+                e.mem.set_u32(NULL_PRIORITY, 0);
+                NULL_PRIORITY
+            };
+            e.mem.u32(word)
+        } else {
+            priority
+        };
+        fn_00ec18a0(e, this, priority);
+        let handle = e.mem.u32(at + 8);
+        e.call(RESUME_THREAD, &args![handle]);
+        e.mem.set_u32(id.addr(), 0);
+        let semaphore = e.mem.u32(at + 0x34);
+        e.call(WAIT_FOR_SINGLE_OBJECT, &args![semaphore, 0xffff_ffffu32]);
+        e.call(INTERLOCKED_DECREMENT, &args![at + 0x30]).u32()
+    })
+}
+
+// Translated from 00ec18a0 (disassembled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`movieplayer_xenon.obj`; `thiscall`, `RET 4`): the sequence
+/// thread's priority. The setting (0 to 5; the exe's jump table) becomes
+/// `THREAD_PRIORITY_LOWEST` (-2), `BELOW_NORMAL` (-1), `NORMAL` (0), `ABOVE_NORMAL` (1),
+/// `HIGHEST` (2) or `TIME_CRITICAL` (15), anything else `NORMAL`; the setting goes to +0x2c and
+/// `SetThreadPriority(+8, priority)` answers.
+pub fn fn_00ec18a0(e: &mut Engine, this: Ptr, setting: u32) -> u32 {
+    let priority: u32 = match setting {
+        0 => 0xffff_fffe,
+        1 => 0xffff_ffff,
+        2 => 0,
+        3 => 1,
+        4 => 2,
+        5 => 0xf,
+        _ => 0,
+    };
+    let at = this.addr();
+    e.mem.set_u32(at + 0x2c, setting);
+    let handle = e.mem.u32(at + 8);
+    e.call(SET_THREAD_PRIORITY, &args![handle, priority]).u32()
+}
+
+/// The movie thread's procedure (`00ec2ca0`) and the name it gets (`010f1c94`).
+const MOVIE_THREAD_PROC: u32 = 0x00ec_2ca0;
+const MOVIE_THREAD_NAME: u32 = 0x010f_1c94;
+
+// Translated from 00ec1940 (disassembled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`movieplayer_xenon.obj`; `thiscall`, two words: the thread's
+/// parameter and a callback, `RET 8`): the callback goes to +0x1c; the movie thread is created
+/// suspended (`CreateThread(0, 0, 00ec2ca0, parameter, CREATE_SUSPENDED, &id)`, the handle to
+/// +4), named (`00aa2740(id, 010f1c94)`) and resumed (`ResumeThread`), whose answer stays in
+/// `EAX`; the id local is cleared.
+pub fn fn_00ec1940(e: &mut Engine, this: Ptr, parameter: u32, callback: u32) -> u32 {
+    let at = this.addr();
+    e.mem.set_u32(at + 0x1c, callback);
+    e.with_stack(4, |e, id| {
+        let handle = e
+            .call(
+                CREATE_THREAD,
+                &args![0u32, 0u32, MOVIE_THREAD_PROC, parameter, 4u32, id],
+            )
+            .u32();
+        e.mem.set_u32(at + 4, handle);
+        let thread_id = e.mem.u32(id.addr());
+        e.call(SET_THREAD_NAME, &args![thread_id, MOVIE_THREAD_NAME]);
+        let handle = e.mem.u32(at + 4);
+        let resumed = e.call(RESUME_THREAD, &args![handle]).u32();
+        e.mem.set_u32(id.addr(), 0);
+        resumed
+    })
+}
+
+// Translated from 00ec19a0 (disassembled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`movieplayer_xenon.obj`; `thiscall`, plain `RET`): with a thread
+/// handle at +4, waits on it without a time limit (`WaitForSingleObject`).
+pub fn fn_00ec19a0(e: &mut Engine, this: Ptr) {
+    let at = this.addr();
+    if e.mem.u32(at + 4) != 0 {
+        let handle = e.mem.u32(at + 4);
+        e.call(WAIT_FOR_SINGLE_OBJECT, &args![handle, 0xffff_ffffu32]);
+    }
+}
+
+// Translated from 00ec19d0 (disassembled, FalloutNV.exe 1.4.0.525)
+/// `MoviePlayer`'s scalar deleting destructor (engine map; `thiscall`, one word: the flags,
+/// `RET 4`): [`fn_00ec15e0`], then with bit 0 of the flags the block is freed (`00aa4060`).
+/// Answers `this`.
+pub fn movie_player_scalar_deleting_destructor(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    fn_00ec15e0(e, this);
+    if flags & 1 != 0 {
+        e.call(MEMORY_DEALLOCATE, &args![MEMORY_MANAGER, this]);
+    }
+    this
+}
+
+// Translated from 00ec1b80 (disassembled, FalloutNV.exe 1.4.0.525)
+/// A map's destructor body (unnamed in the engine map; `thiscall`, plain `RET`): the vtable
+/// `010f1ca4`, `00438af0` on `this`, then the bucket array at +8 freed (`00aa10f0`, cdecl).
+pub fn fn_00ec1b80(e: &mut Engine, this: Ptr) {
+    let at = this.addr();
+    e.mem.set_u32(at, MAP_ROOT_VTABLE);
+    e.call(MAP_BASE_DESTRUCT, &args![at]);
+    let buckets = e.mem.u32(at + 8);
+    e.call(NI_FREE, &args![buckets]);
+}
+
+// Translated from 00ec1bb0 (disassembled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 00ec1bb0 - the SEH frame (FS:[0] handler 00f34b18, state 0 around the first base destructor) is not translated.
+/// The derived map's destructor body (unnamed in the engine map; `thiscall`, plain `RET`): the
+/// vtable `010f1cc4` and `00438af0`, then the vtable `010f1ca4`, `00438af0` again and the
+/// bucket array at +8 freed (`00aa10f0`).
+pub fn fn_00ec1bb0(e: &mut Engine, this: Ptr) {
+    let at = this.addr();
+    e.mem.set_u32(at, MAP_BASE_VTABLE);
+    e.call(MAP_BASE_DESTRUCT, &args![at]);
+    e.mem.set_u32(at, MAP_ROOT_VTABLE);
+    e.call(MAP_BASE_DESTRUCT, &args![at]);
+    let buckets = e.mem.u32(at + 8);
+    e.call(NI_FREE, &args![buckets]);
+}
+
+// Translated from 00ec1d30 (disassembled, FalloutNV.exe 1.4.0.525)
+/// The name map's destructor body (unnamed in the engine map; `thiscall`, plain `RET`): the
+/// vtable `010f1c20`, then `00ec1a90` ([`ni_t_string_template_map_destruct`]).
+pub fn fn_00ec1d30(e: &mut Engine, this: Ptr) {
+    e.mem.set_u32(this.addr(), NAME_MAP_VTABLE);
+    fn_00ec1a90(e, this);
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x00ec_1940, fn_00ec1940(Ptr, u32, u32) -> u32),
+        entry!(0x00ec_19a0, fn_00ec19a0(Ptr)),
+        entry!(
+            0x00ec_19d0,
+            movie_player_scalar_deleting_destructor(Ptr, u32) -> Ptr
+        ),
+        entry!(0x00ec_1b80, fn_00ec1b80(Ptr)),
+        entry!(0x00ec_1bb0, fn_00ec1bb0(Ptr)),
+        entry!(0x00ec_1d30, fn_00ec1d30(Ptr)),
+        entry!(0x00ec_16b0, fn_00ec16b0(u32) -> u32),
+        entry!(
+            0x00ec_16d0,
+            movie_player_start_sequence(Ptr, u32, u8, u32, u8, u8, f32) -> u32
+        ),
+        entry!(0x00ec_18a0, fn_00ec18a0(Ptr, u32) -> u32),
         entry!(0x00eb_fd20, fn_00ebfd20(Ptr)),
         entry!(
             0x00eb_fda0,
@@ -1932,5 +2144,199 @@ mod n083_tests {
                 assert_eq!(freed.len(), (flags & 1) as usize);
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod sequence_tests {
+    use super::*;
+
+    fn calls(e: &Engine, address: u32) -> Vec<Vec<u32>> {
+        e.call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|(a, _)| *a == address)
+            .map(|(_, w)| w.clone())
+            .collect()
+    }
+
+    #[test]
+    fn start_sequence_starts_the_thread_and_waits_for_it() {
+        let mut e = Engine::new();
+        e.map(0x0126_f000, 0x1000);
+        e.mem.set_u32(DEFAULT_PRIORITY, 3);
+        for slot in [RESUME_THREAD, WAIT_FOR_SINGLE_OBJECT, SET_THREAD_NAME] {
+            e.register(slot, |_, _| Ret::default());
+        }
+        e.register(CREATE_THREAD, |e, a| {
+            e.mem.set_u32(a[5], 0x44);
+            0x77u32.into_ret()
+        });
+        e.register(SET_THREAD_PRIORITY, |_, _| 1u32.into_ret());
+        e.register(INTERLOCKED_DECREMENT, |_, _| 5u32.into_ret());
+        let this = e.mem.alloc(0x58);
+        e.mem.set_u32(this + 0x34, 0x99);
+        e.call_log = Some(vec![]);
+        let words = args![
+            this,
+            0x1234u32,
+            1u32,
+            0xffff_ffffu32,
+            0u32,
+            1u32,
+            0x7f80_0001u32
+        ];
+        assert_eq!(e.call(0x00ec_16d0, &words).u32(), 5, "the decrement's EAX");
+        let created = calls(&e, CREATE_THREAD);
+        assert_eq!(created.len(), 1);
+        assert_eq!(created[0][..5], [0, 0, SEQUENCE_THREAD_PROC, 0x1234, 4]);
+        assert_eq!(
+            calls(&e, SET_THREAD_NAME),
+            vec![vec![0x44, SEQUENCE_THREAD_NAME]]
+        );
+        assert_eq!(e.mem.u32(this + 8), 0x77);
+        let bytes = [0x22, 0x23, 0x24].map(|o| e.mem.u8(this + o));
+        assert_eq!(bytes, [1, 0, 1]);
+        assert_eq!(e.mem.u32(this + 0x28), 0x7fc0_0001, "stored quiet");
+        // -1: the default setting 3, ABOVE_NORMAL.
+        assert_eq!(calls(&e, SET_THREAD_PRIORITY), vec![vec![0x77, 1]]);
+        assert_eq!(e.mem.u32(this + 0x2c), 3);
+        assert_eq!(calls(&e, RESUME_THREAD), vec![vec![0x77]]);
+        assert_eq!(
+            calls(&e, WAIT_FOR_SINGLE_OBJECT),
+            vec![vec![0x99, 0xffff_ffff]]
+        );
+        assert_eq!(calls(&e, INTERLOCKED_DECREMENT), vec![vec![this + 0x30]]);
+    }
+
+    #[test]
+    fn sequence_priorities_follow_the_jump_table() {
+        let mut e = Engine::new();
+        e.register(SET_THREAD_PRIORITY, |_, a| a[1].into_ret());
+        let this = e.mem.alloc(0x58);
+        for (setting, priority) in [
+            (0u32, 0xffff_fffeu32),
+            (1, 0xffff_ffff),
+            (2, 0),
+            (3, 1),
+            (4, 2),
+            (5, 0xf),
+            (6, 0),
+        ] {
+            assert_eq!(fn_00ec18a0(&mut e, Ptr::new(this), setting), priority);
+            assert_eq!(e.mem.u32(this + 0x2c), setting);
+        }
+    }
+
+    #[test]
+    fn the_sequence_thread_runs_the_settings_object() {
+        let mut e = Engine::new();
+        e.map(0x0126_f000, 0x1000);
+        e.mem.set_u32(MOVIE_SETTINGS, 0x5000);
+        e.register(SEQUENCE_RUN, |_, _| 9u32.into_ret());
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x00ec_16b0, &args![0x1234u32]).u32(), 0);
+        assert_eq!(calls(&e, SEQUENCE_RUN), vec![vec![0x5000, 0x1234]]);
+    }
+}
+
+#[cfg(test)]
+mod finish_tests {
+    use super::*;
+
+    fn calls(e: &Engine, addr: u32) -> Vec<Vec<u32>> {
+        e.call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|c| c.0 == addr)
+            .map(|c| c.1.clone())
+            .collect()
+    }
+
+    #[test]
+    fn the_movie_thread_starts_named_and_is_waited_for() {
+        let mut e = Engine::new();
+        e.call_log = Some(vec![]);
+        e.register(CREATE_THREAD, |e, a| {
+            e.mem.set_u32(a[5], 0x77);
+            0x55u32.into_ret()
+        });
+        for slot in [SET_THREAD_NAME, WAIT_FOR_SINGLE_OBJECT] {
+            e.register(slot, |_, _| Ret::default());
+        }
+        e.register(RESUME_THREAD, |_, _| 1u32.into_ret());
+        let this = e.mem.alloc(0x30);
+        let p = Ptr::new(this);
+        e.call(0x00ec_19a0, &args![this]);
+        assert!(calls(&e, WAIT_FOR_SINGLE_OBJECT).is_empty());
+        assert_eq!(e.call(0x00ec_1940, &args![this, 9u32, 0x1234u32]).u32(), 1);
+        assert_eq!(e.mem.u32(this + 0x1c), 0x1234);
+        assert_eq!(e.mem.u32(this + 4), 0x55);
+        let created = calls(&e, CREATE_THREAD);
+        assert_eq!(created[0][..5], [0, 0, MOVIE_THREAD_PROC, 9, 4]);
+        assert_eq!(
+            calls(&e, SET_THREAD_NAME),
+            vec![vec![0x77, MOVIE_THREAD_NAME]]
+        );
+        assert_eq!(calls(&e, RESUME_THREAD), vec![vec![0x55]]);
+        fn_00ec19a0(&mut e, p);
+        assert_eq!(
+            calls(&e, WAIT_FOR_SINGLE_OBJECT),
+            vec![vec![0x55, 0xffff_ffff]]
+        );
+    }
+
+    #[test]
+    fn the_map_destructors_restore_their_vtables() {
+        let mut e = Engine::new();
+        e.call_log = Some(vec![]);
+        let vtables = std::rc::Rc::new(std::cell::RefCell::new(vec![]));
+        let seen = vtables.clone();
+        e.register_double(MAP_BASE_DESTRUCT, move |e, a| {
+            seen.borrow_mut().push(e.mem.u32(a[0]));
+            Ret::default()
+        });
+        e.register(NI_FREE, |_, _| Ret::default());
+        let this = e.mem.alloc(0x14);
+        e.mem.set_u32(this + 8, 0x99);
+        e.call(0x00ec_1b80, &args![this]);
+        assert_eq!(*vtables.borrow(), vec![MAP_ROOT_VTABLE]);
+        e.call(0x00ec_1bb0, &args![this]);
+        assert_eq!(
+            *vtables.borrow(),
+            vec![MAP_ROOT_VTABLE, MAP_BASE_VTABLE, MAP_ROOT_VTABLE]
+        );
+        assert_eq!(calls(&e, NI_FREE), vec![vec![0x99], vec![0x99]]);
+        // The name map: its vtable, then the string map's destructor (keys not owned).
+        fn_00ec1d30(&mut e, Ptr::new(this));
+        assert_eq!(vtables.borrow().len(), 5);
+        assert_eq!(e.mem.u32(this), MAP_ROOT_VTABLE);
+    }
+
+    #[test]
+    fn the_player_deleting_destructor_frees_with_bit_0() {
+        let mut e = Engine::new();
+        e.call_log = Some(vec![]);
+        // The real destructor body (00ec15e0) runs; its callees are doubled.
+        for slot in [
+            MEMORY_DEALLOCATE,
+            PLAYER_CLEAN_UP,
+            MAP_BASE_DESTRUCT,
+            NI_FREE,
+            CLOSE_HANDLE,
+        ] {
+            e.register(slot, |_, _| Ret::default());
+        }
+        let this = e.mem.alloc(0x60);
+        assert_eq!(e.call(0x00ec_19d0, &args![this, 0u32]).u32(), this);
+        assert_eq!(e.mem.u32(this), PLAYER_VTABLE);
+        assert!(calls(&e, MEMORY_DEALLOCATE).is_empty());
+        assert_eq!(e.call(0x00ec_19d0, &args![this, 1u32]).u32(), this);
+        assert_eq!(
+            calls(&e, MEMORY_DEALLOCATE),
+            vec![vec![MEMORY_MANAGER, this]]
+        );
     }
 }

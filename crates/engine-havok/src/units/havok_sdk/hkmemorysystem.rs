@@ -410,15 +410,15 @@ mod tests {
         assert_eq!(truncated, 457);
         let percent = f64::from((100.0f64 / 457.0) as f32);
         let expected: Vec<Vec<u32>> = vec![
-            args![0x55u32, FORMAT_NAME, 0x6000u32],
-            args![0x55u32, FORMAT_TOTAL_SIZE, 1000u32],
-            args![0x55u32, FORMAT_RESERVED, 200u32, 20000.0f64 / 457.0],
-            args![0x55u32, FORMAT_SOFT_LIMIT, 800u32],
-            args![0x55u32, FORMAT_OVERHEAD, 300u32, 30000.0f64 / 800.0],
-            args![0x55u32, FORMAT_AVAILABLE, 457u32],
-            args![0x55u32, FORMAT_USED, 600u32, 600.0f64 * percent],
-            args![0x55u32, FORMAT_FREE, 100u32, 100.0f64 * percent],
-            args![0x55u32, FORMAT_PEAK, 700u32, 700.0f64 * percent],
+            args![0x55u32, FORMAT_NAME, 0x6000u32].to_vec(),
+            args![0x55u32, FORMAT_TOTAL_SIZE, 1000u32].to_vec(),
+            args![0x55u32, FORMAT_RESERVED, 200u32, 20000.0f64 / 457.0].to_vec(),
+            args![0x55u32, FORMAT_SOFT_LIMIT, 800u32].to_vec(),
+            args![0x55u32, FORMAT_OVERHEAD, 300u32, 30000.0f64 / 800.0].to_vec(),
+            args![0x55u32, FORMAT_AVAILABLE, 457u32].to_vec(),
+            args![0x55u32, FORMAT_USED, 600u32, 600.0f64 * percent].to_vec(),
+            args![0x55u32, FORMAT_FREE, 100u32, 100.0f64 * percent].to_vec(),
+            args![0x55u32, FORMAT_PEAK, 700u32, 700.0f64 * percent].to_vec(),
         ];
         assert_eq!(calls_to(&e, PRINTF), expected);
     }
@@ -450,7 +450,7 @@ mod tests {
         e.call_log = Some(vec![]);
         e.call(0x00cb_c000, &args![record, 0u32, 0x55u32, 0x6000u32]);
         let lines = calls_to(&e, PRINTF);
-        assert_eq!(lines[1], args![0x55u32, FORMAT_TOTAL_SIZE, 900u32]);
+        assert_eq!(lines[1], args![0x55u32, FORMAT_TOTAL_SIZE, 900u32].to_vec());
         // free = 900 - 900 - 50 wraps to a negative word: printed as the word
         assert_eq!(lines[2][2], 0u32.wrapping_sub(50));
     }
@@ -527,14 +527,14 @@ mod tests {
         assert_eq!(
             with_format(FORMAT_NAME),
             vec![
-                args![SYSTEM_STREAM, FORMAT_NAME, NAME_HEAP],
-                args![SYSTEM_STREAM, FORMAT_NAME, NAME_SOLVER],
+                args![SYSTEM_STREAM, FORMAT_NAME, NAME_HEAP].to_vec(),
+                args![SYSTEM_STREAM, FORMAT_NAME, NAME_SOLVER].to_vec(),
             ]
         );
         // the thread with a zero cached size is not listed; the total is 5
         assert_eq!(
             with_format(FORMAT_THREAD_SIZE),
-            vec![args![SYSTEM_STREAM, FORMAT_THREAD_SIZE, 1i32, 5u32]]
+            vec![args![SYSTEM_STREAM, FORMAT_THREAD_SIZE, 1i32, 5u32].to_vec()]
         );
         // the stack memory: size 0x100, used (0x500 - 0x200) + 0x100 = 0x400, 400.0 percent
         assert_eq!(
@@ -546,30 +546,34 @@ mod tests {
                 0x100u32,
                 0x400u32,
                 400.0f64
-            ]]
+            ]
+            .to_vec()]
         );
         assert_eq!(
             with_format(FORMAT_TOTAL),
             vec![
-                args![SYSTEM_STREAM, FORMAT_TOTAL, 5u32],
-                args![SYSTEM_STREAM, FORMAT_TOTAL, 0x100u32],
+                args![SYSTEM_STREAM, FORMAT_TOTAL, 5u32].to_vec(),
+                args![SYSTEM_STREAM, FORMAT_TOTAL, 0x100u32].to_vec(),
             ]
         );
         // the solver: total size 2000, peak 500 = 25.0 percent; the heap's own peak line is first
         let peaks = with_format(FORMAT_PEAK);
         assert_eq!(peaks.len(), 2);
-        assert_eq!(peaks[1], args![SYSTEM_STREAM, FORMAT_PEAK, 500u32, 25.0f64]);
+        assert_eq!(
+            peaks[1],
+            args![SYSTEM_STREAM, FORMAT_PEAK, 500u32, 25.0f64].to_vec()
+        );
         assert_eq!(
             with_format(FORMAT_TOTAL_SIZE),
             vec![
-                args![SYSTEM_STREAM, FORMAT_TOTAL_SIZE, 1000u32],
-                args![SYSTEM_STREAM, FORMAT_TOTAL_SIZE, 2000u32],
+                args![SYSTEM_STREAM, FORMAT_TOTAL_SIZE, 1000u32].to_vec(),
+                args![SYSTEM_STREAM, FORMAT_TOTAL_SIZE, 2000u32].to_vec(),
             ]
         );
         // the debug memory's word 1 equals the heap's: unused
         assert_eq!(
             with_format(FORMAT_DEBUG_NOT_USED),
-            vec![args![SYSTEM_STREAM, FORMAT_DEBUG_NOT_USED]]
+            vec![args![SYSTEM_STREAM, FORMAT_DEBUG_NOT_USED].to_vec()]
         );
         assert_eq!(with_format(FORMAT_THREAD_MEMORY).len(), 1);
         assert_eq!(with_format(FORMAT_STACK_MEMORY).len(), 1);

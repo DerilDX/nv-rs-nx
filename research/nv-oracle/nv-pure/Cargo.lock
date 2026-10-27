@@ -3,6 +3,10 @@
 version = 4
 
 [[package]]
+name = "bink"
+version = "0.1.0"
+
+[[package]]
 name = "engine"
 version = "0.1.0"
 dependencies = [
@@ -25,6 +29,11 @@ dependencies = [
 [[package]]
 name = "engine-core"
 version = "0.1.0"
+dependencies = [
+ "bink",
+ "mp3",
+ "vorbis",
+]
 
 [[package]]
 name = "engine-fallout"
@@ -60,8 +69,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "mp3"
+version = "0.1.0"
+
+[[package]]
 name = "nv-pure"
 version = "0.1.0"
 dependencies = [
  "engine",
 ]
+
+[[package]]
+name = "vorbis"
+version = "0.1.0"

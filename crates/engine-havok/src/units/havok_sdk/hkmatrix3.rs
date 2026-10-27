@@ -1228,6 +1228,10 @@ mod tests {
     #[test]
     fn jacobi_rotation_of_a_zero_element_is_the_identity() {
         let mut e = Engine::new();
+        // The exe's sqrt/acos error path (a NaN or negative argument) sets errno, a word of
+        // the thread's data, which the bare engine does not have: doubled.
+        let errno = e.mem.alloc(4);
+        e.register_double(0x00ec_85e3, move |_, _| errno.into_ret());
         setup_constants(&mut e);
         let m = matrix(&mut e, [[3.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]]);
         let out = e.mem.alloc(16);
@@ -1246,6 +1250,10 @@ mod tests {
     #[test]
     fn frobenius_norm() {
         let mut e = Engine::new();
+        // The exe's sqrt/acos error path (a NaN or negative argument) sets errno, a word of
+        // the thread's data, which the bare engine does not have: doubled.
+        let errno = e.mem.alloc(4);
+        e.register_double(0x00ec_85e3, move |_, _| errno.into_ret());
         let m = matrix(&mut e, [[1.0, 2.0, 2.0], [0.0, 0.0, 0.0], [0.0, 0.0, 0.0]]);
         assert_eq!(e.call(0x00cd_5340, &args![m]).f64(), 3.0);
         // a NaN element gives a NaN

@@ -2949,10 +2949,12 @@ pub fn fn_00453550(e: &mut Engine, this: Ptr<TES>, delta: f32) {
         let wind_speed = fn_004536e0(e, sky);
         let sky = e.get(this, TES::pSky);
         let wind_angle = fn_00453700(e, sky);
-        e.call(0x00c4_68c0, &args![wind_speed]);
+        // 004535bd / 00453576: the cdecl `00c468c0` reads two words (speed, angle) and
+        // pops one (ADD ESP,4); the angle's slot is then reused for `00c74550`.
+        e.call(0x00c4_68c0, &args![wind_speed, wind_angle]);
         e.call(0x00c7_4550, &args![wind_speed, wind_angle]);
     } else {
-        e.call(0x00c4_68c0, &args![0.0f32]);
+        e.call(0x00c4_68c0, &args![0.0f32, 0.0f32]);
         e.call(0x00c7_4550, &args![0.0f32, 0.0f32]);
     }
     let time = (e.global::<f32>(TIME_ACCUMULATOR) as f64 + delta as f64) as f32;
@@ -9486,7 +9488,10 @@ mod tests {
             e.call(0x0045_3550, &args![tes, 0.5f32]);
         });
         assert_eq!(e.global::<f32>(TIME_ACCUMULATOR), 10.5);
-        assert_eq!(calls_to(&log, 0x00c4_68c0), vec![vec![3.5f32.to_bits()]]);
+        assert_eq!(
+            calls_to(&log, 0x00c4_68c0),
+            vec![vec![3.5f32.to_bits(), (-0.75f32).to_bits()]]
+        );
         assert_eq!(
             calls_to(&log, 0x00c7_4550),
             vec![vec![3.5f32.to_bits(), (-0.75f32).to_bits()]]
@@ -9519,7 +9524,7 @@ mod tests {
         let log = run_logged(&mut e, |e| {
             e.call(0x0045_3550, &args![tes, 1.0f32]);
         });
-        assert_eq!(calls_to(&log, 0x00c4_68c0), vec![vec![0]]);
+        assert_eq!(calls_to(&log, 0x00c4_68c0), vec![vec![0, 0]]);
         assert_eq!(calls_to(&log, 0x00c7_4550), vec![vec![0, 0]]);
         assert_eq!(
             calls_to(&log, 0x0055_1890),

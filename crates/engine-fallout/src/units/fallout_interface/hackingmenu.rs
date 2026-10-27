@@ -267,8 +267,8 @@ const RT_DYNAMIC_CAST: u32 = 0x00ec_43fb;
 /// The two type descriptors of the cast in `HackingMenu::Close`.
 const CAST_SOURCE_TYPE: u32 = 0x0119_f43c;
 const CAST_TARGET_TYPE: u32 = 0x0119_f418;
-/// `SystemColorManager::GetInstance` (cdecl: index, colour) and
-/// `SystemColorManager::SetColor` (Xbox PDB).
+/// `SystemColorManager::GetInstance` (no word, plain RET, no stack read) and
+/// `SystemColorManager::SetColor` (Xbox PDB; `thiscall`, RET 8: index, colour).
 const SYSTEM_COLOR_GET_INSTANCE: u32 = 0x0071_8b60;
 const SYSTEM_COLOR_SET_COLOR: u32 = 0x0071_90e0;
 /// `HackingMenu::SaveColor` (Xbox PDB static, `NiColorA`).
@@ -505,10 +505,10 @@ pub fn hacking_menu_destructor(e: &mut Engine, this: Ptr<HackingMenu>) {
             fn_00765b50(e, Ptr::new(line), 1);
         }
     }
-    let colors = e
-        .call(SYSTEM_COLOR_GET_INSTANCE, &args![3u32, SAVE_COLOR])
-        .u32();
-    e.call(SYSTEM_COLOR_SET_COLOR, &args![colors]);
+    let colors = e.call(SYSTEM_COLOR_GET_INSTANCE, &args![]).u32();
+    // 00765aa0: `00718b60` takes no word; the pushed 3 and colour are the two words of
+    // `007190e0` (RET 8).
+    e.call(SYSTEM_COLOR_SET_COLOR, &args![colors, 3u32, SAVE_COLOR]);
     e.call(POINTER_LIST_DESTRUCTOR, &args![base + USED_BONUSES]);
     fn_00765810(e, Ptr::new(base + WORD_LIST));
     e.call(POINTER_LIST_DESTRUCTOR, &args![base + GUESS_TILES]);
@@ -1291,8 +1291,8 @@ const POINTER_LIST_ADD_TAIL: u32 = 0x004e_d8c0;
 const STRING_CONSTRUCTOR: u32 = 0x0040_37b0;
 const STRING_DESTRUCTOR: u32 = 0x0040_37d0;
 const STRING_SPRINTF: u32 = 0x0040_6f60;
-/// A tile call with one word that answers the word the guess block's label
-/// is formatted with (`thiscall`).
+/// A tile call that answers the word the guess block's label is formatted with
+/// (`thiscall`, no stack word: the pointer at +0x20).
 const TILE_VALUE_00700300: u32 = 0x0070_0300;
 /// Sets a tile's text (`thiscall`: text).
 const TILE_SET_TEXT: u32 = 0x0070_7e10;
@@ -1421,8 +1421,14 @@ pub fn hacking_menu_make_guess_block(e: &mut Engine, this: Ptr<HackingMenu>) {
     e.with_stack(8, |e, text| {
         e.call(STRING_CONSTRUCTOR, &args![text]);
         let count = e.call(POINTER_LIST_COUNT, &args![base + GUESS_TILES]).u32();
-        let value = e.call(TILE_VALUE_00700300, &args![tile, count]).u32();
-        e.call(STRING_SPRINTF, &args![text, GUESS_BLOCK_FORMAT, value]);
+        // 0076ade6: `00700300` takes no stack word (plain RET); the pushed count is
+        // the last word of the cdecl sprintf (ADD ESP,0x10; the format at 01072b88
+        // is "%s_%d").
+        let value = e.call(TILE_VALUE_00700300, &args![tile]).u32();
+        e.call(
+            STRING_SPRINTF,
+            &args![text, GUESS_BLOCK_FORMAT, value, count],
+        );
         let characters = e.call(WORD_AT_ZERO, &args![text]).u32();
         e.call(TILE_SET_TEXT, &args![tile, characters]);
         e.call(STRING_DESTRUCTOR, &args![text]);
@@ -3236,7 +3242,7 @@ pub fn hacking_menu_do_click(e: &mut Engine, this: Ptr<HackingMenu>, id: i32, ti
 const TILE_GET_MENU_BY_CLASS: u32 = 0x00a0_9030;
 /// `Tile::GetMaximumDepth` (Xbox PDB, no arguments; ST0).
 const TILE_GET_MAXIMUM_DEPTH: u32 = 0x00a0_1530;
-/// `SystemColorManager::GetColor` (Xbox PDB).
+/// `SystemColorManager::GetColor` (Xbox PDB; `thiscall`, RET 8: index, colour).
 const SYSTEM_COLOR_GET_COLOR: u32 = 0x0071_9060;
 /// `BGSSaveFormBuffer::GetForm` (Xbox PDB name of the shared body;
 /// `thiscall` on the terminal reference).
@@ -3335,10 +3341,10 @@ pub fn hacking_menu_create(e: &mut Engine, reference: u32) -> u32 {
     e.set_global(INTERFACE_MANAGER, manager);
     let depth = e.call(TILE_GET_MAXIMUM_DEPTH, &args![]).f64();
     let depth = x87_store32(depth);
-    let colors = e
-        .call(SYSTEM_COLOR_GET_INSTANCE, &args![3u32, SAVE_COLOR])
-        .u32();
-    e.call(SYSTEM_COLOR_GET_COLOR, &args![colors]);
+    let colors = e.call(SYSTEM_COLOR_GET_INSTANCE, &args![]).u32();
+    // 00765c0b: `00718b60` takes no word; the pushed 3 and colour are the two words of
+    // `00719060` (RET 8).
+    e.call(SYSTEM_COLOR_GET_COLOR, &args![colors, 3u32, SAVE_COLOR]);
     let form = e.call(REFERENCE_FORM, &args![reference]).u32();
     if e.call(FORM_WANTS_WHITE, &args![form]).bool() {
         e.with_stack(0x10, |e, color| {
@@ -3346,8 +3352,9 @@ pub fn hacking_menu_create(e: &mut Engine, reference: u32) -> u32 {
             let color = e
                 .call(COLOR_SET, &args![color, one, one, one, 0.0f32.to_bits()])
                 .u32();
-            let colors = e.call(SYSTEM_COLOR_GET_INSTANCE, &args![3u32, color]).u32();
-            e.call(SYSTEM_COLOR_SET_COLOR, &args![colors]);
+            // 00765c54: as above, the 3 and the colour are `007190e0`'s words.
+            let colors = e.call(SYSTEM_COLOR_GET_INSTANCE, &args![]).u32();
+            e.call(SYSTEM_COLOR_SET_COLOR, &args![colors, 3u32, color]);
         });
     }
     let value = e.call(SETTING_VALUE, &args![COPIED_SETTING_ONE]).u32();
@@ -3925,7 +3932,11 @@ mod n054_tests {
         assert_eq!(deletes.last().unwrap(), &vec![this.addr()]);
         assert_eq!(
             calls_to(&e, SYSTEM_COLOR_GET_INSTANCE),
-            vec![vec![3, SAVE_COLOR]]
+            vec![Vec::<u32>::new()]
+        );
+        assert_eq!(
+            calls_to(&e, SYSTEM_COLOR_SET_COLOR)[0][1..],
+            [3, SAVE_COLOR]
         );
         e.call_log = Some(vec![]);
         e.call(0x0076_58e0, &args![this]);
@@ -4665,8 +4676,9 @@ mod n054_tests {
         );
         assert_eq!(
             calls_to(&e, STRING_SPRINTF)[0][1..],
-            [GUESS_BLOCK_FORMAT, 0x31]
+            [GUESS_BLOCK_FORMAT, 0x31, 2]
         );
+        assert_eq!(calls_to(&e, TILE_VALUE_00700300), vec![vec![0x9000]]);
         assert_eq!(calls_to(&e, TILE_SET_TEXT), vec![vec![0x9000, 0x5500]]);
     }
 

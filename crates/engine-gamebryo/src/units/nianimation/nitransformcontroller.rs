@@ -979,7 +979,9 @@ mod n006_tests {
         let this = e.new_object::<NiTransformInterpolator>();
         e.set(this, NiTransformInterpolator::m_spData, 0x7000);
         let unset = f32::MIN.to_bits();
-        let words = |t: f32, r: f32, s: u32| args![t, 2.0f32, 3.0f32, 4.0f32, r, 6.0f32, 7.0f32, s];
+        let words = |t: f32, r: f32, s: u32| {
+            args![t, 2.0f32, 3.0f32, 4.0f32, r, 6.0f32, 7.0f32, s].to_vec()
+        };
         e.call_log = Some(vec![]);
         let mut call = words(1.0, 5.0, 0x7f80_0001);
         call.insert(0, this.addr());

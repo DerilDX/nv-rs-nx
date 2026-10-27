@@ -32,7 +32,10 @@ const BASE_0050FBF0: u32 = 0x0050_fbf0;
 /// true, the reference is not null and `0056afc0` on it answers false, the reference goes to
 /// `0047ce10` on `this + 0x30` and the object `007af430` answers for it gets its virtual
 /// slot +0x178 with the reference. Otherwise `TESBoundObject::Clone3D(reference, 0)`.
-pub fn fn_005f8bf0(e: &mut Engine, this: Ptr, reference: Ptr) {
+/// Answers the `EAX` of whichever call ran last: the exe ends on it. The function is slot
+/// `+0x178` of `TESCreature`'s vtable, the `TESBoundObject` slot that the Xbox PDB names
+/// `Clone3D` (`NiAVObject*`; the engine map gives `TESObjectLIGH::Clone3D` for a sibling).
+pub fn fn_005f8bf0(e: &mut Engine, this: Ptr, reference: Ptr) -> u32 {
     let member = this.addr().wrapping_add(0x30);
     if e.call(MEMBER_TEST_0047CDB0, &args![member]).bool()
         && !reference.is_null()
@@ -40,10 +43,10 @@ pub fn fn_005f8bf0(e: &mut Engine, this: Ptr, reference: Ptr) {
     {
         e.call(MEMBER_ADD_0047CE10, &args![member, reference]);
         let object = e.call(REFERENCE_GET_007AF430, &args![reference]).u32();
-        e.vcall(object, 0x178, &args![reference]);
-        return;
+        return e.vcall(object, 0x178, &args![reference]).u32();
     }
-    e.call(BOUND_OBJECT_CLONE_3D, &args![this, reference, 0u32]);
+    e.call(BOUND_OBJECT_CLONE_3D, &args![this, reference, 0u32])
+        .u32()
 }
 
 // Translated from 005f8c70 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -89,7 +92,7 @@ pub fn fn_005f8c70(e: &mut Engine, this: Ptr, argument: u32) {
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
-        entry!(0x005f8bf0, fn_005f8bf0(Ptr, Ptr)),
+        entry!(0x005f8bf0, fn_005f8bf0(Ptr, Ptr) -> u32),
         entry!(0x005f8c70, fn_005f8c70(Ptr, u32)),
     ]
 }
@@ -198,5 +201,36 @@ mod tests {
         assert_eq!(copies[0][1], 0x104);
         assert_eq!(copies[1], vec![buffer + 9, 0x104 - 8 - 1, 0x9080]);
         assert_eq!(calls_at(&e, BASE_0050FBF0), vec![vec![this, 0x77]]);
+    }
+}
+
+#[cfg(test)]
+mod dropret_tests {
+    use super::*;
+
+    #[test]
+    fn fn_005f8bf0_answers_the_clone_or_the_slot_0x178_object() {
+        let mut e = Engine::new();
+        e.register(MEMBER_TEST_0047CDB0, |_, _| 1u32.into_ret());
+        e.register(REFERENCE_TEST_0056AFC0, |_, a| {
+            u32::from(a[0] == 0x7000).into_ret()
+        });
+        e.register(MEMBER_ADD_0047CE10, |_, _| Ret::default());
+        e.register(REFERENCE_GET_007AF430, |_, _| 0x8000u32.into_ret());
+        e.register(BOUND_OBJECT_CLONE_3D, |_, _| 0x00aa_0000u32.into_ret());
+        e.register(0x0090_0178, |_, _| 0x00bb_0000u32.into_ret());
+        let mut slots = vec![0u32; 0x5f];
+        slots[0x5e] = 0x0090_0178;
+        e.put_vtable(0x0090_1000, &slots);
+        e.map(0x8000, 4);
+        e.mem.set_u32(0x8000, 0x0090_1000);
+        assert_eq!(
+            e.call(0x005f8bf0, &args![0x5000u32, 0x6000u32]).u32(),
+            0x00bb_0000
+        );
+        assert_eq!(
+            e.call(0x005f8bf0, &args![0x5000u32, 0x7000u32]).u32(),
+            0x00aa_0000
+        );
     }
 }

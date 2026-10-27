@@ -2810,7 +2810,9 @@ pub fn fn_00658bd0(e: &mut Engine, first: u32, last: u32, allocator: u32) {
         let words = words.addr();
         e.mem.set_u32(words, first);
         e.mem.set_u32(words + 4, last);
-        let category = e.call(0x0065_e750, &args![words, words + 4]).u8();
+        // ECX is the first argument word's address (00658bd8, LEA ECX,[EBP+8]): 0065e750's
+        // answer is its top byte, before the two pushed words.
+        let category = e.call(0x0065_e750, &args![words, words, words + 4]).u8();
         let first = e.mem.u32(words);
         let last = e.mem.u32(words + 4);
         fn_00659260(e, first, last, allocator, u32::from(category));

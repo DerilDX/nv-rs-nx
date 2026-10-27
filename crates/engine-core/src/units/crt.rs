@@ -14,41 +14,47 @@
 #[allow(unused_imports)]
 use crate::prelude::*;
 
+pub mod cvt;
+pub mod files;
+pub mod fpinit;
+pub mod glue;
+pub mod io2;
+pub mod lcmap;
+pub mod locale2;
+pub mod locale3;
+pub mod lowio;
+pub mod math;
+pub mod mbs;
+pub mod mbstowcs;
+pub mod mem;
+pub mod misc2;
+pub mod misc3;
+pub mod misc4;
+pub mod misc5;
+pub mod misc6;
+pub mod misc7;
+pub mod misc8;
+pub mod misc9;
+pub mod num2;
+pub mod printf;
+pub mod qualified;
+pub mod rtti;
+pub mod runtime;
+pub mod scanf;
+pub mod search;
+pub mod sort;
+#[cfg(any(test, feature = "test-support"))]
+pub mod start_up_test;
+pub mod startup;
+pub mod stat;
+pub mod stdio;
+pub mod str2;
+pub mod string;
+pub mod time;
+pub mod trig;
+pub mod wide;
+
 // ---- Memory ---------------------------------------------------------------
-
-// Platform: replaces 00ec44d0 (_memcpy, LIBCMT)
-pub fn memcpy(e: &mut Engine, dst: Ptr, src: Ptr, n: u32) -> Ptr {
-    let b = e.mem.bytes(src.addr(), n);
-    e.mem.write(dst.addr(), &b);
-    dst
-}
-
-// Platform: replaces 00ec7230 (memmove, LIBCMT)
-pub fn memmove(e: &mut Engine, dst: Ptr, src: Ptr, n: u32) -> Ptr {
-    memcpy(e, dst, src, n)
-}
-
-// Platform: replaces 00ec61c0 (_memset, LIBCMT)
-pub fn memset(e: &mut Engine, dst: Ptr, c: i32, n: u32) -> Ptr {
-    e.mem.write(dst.addr(), &vec![c as u8; n as usize]);
-    dst
-}
-
-// Platform: replaces 00ec4835 (_memcmp, LIBCMT)
-pub fn memcmp(e: &mut Engine, a: Ptr, b: Ptr, n: u32) -> i32 {
-    let (x, y) = (e.mem.bytes(a.addr(), n), e.mem.bytes(b.addr(), n));
-    sign(x.cmp(&y))
-}
-
-fn sign(o: std::cmp::Ordering) -> i32 {
-    o as i32
-}
-
-// Platform: replaces 00ec3bad (_byteswap_ulong, LIBCMT)
-/// Reverses the byte order of a 32-bit value (cdecl, one word).
-pub fn byteswap_ulong(_e: &mut Engine, value: u32) -> u32 {
-    value.swap_bytes()
-}
 
 // Platform: replaces 00ec3bf0 (_byteswap_uint64, LIBCMT)
 /// Reverses the byte order of a 64-bit value (cdecl, two words, low word
@@ -76,187 +82,139 @@ pub fn memset_wrapper(e: &mut Engine, dst: Ptr, c: i32, n: u32) -> Ptr {
     e.call_as(0x00ec_61c0, &args![dst, c, n])
 }
 
+/// A block from the platform allocator for the CRT's heap, its asked-for size kept for `_msize`
+/// (`HeapSize` answers the size `HeapAlloc` was asked for; 0 is asked as 1, as the exe's
+/// `malloc` body does on the system heap).
+pub(crate) fn crt_alloc(e: &mut Engine, n: u32) -> u32 {
+    let block = e.mem.alloc(n);
+    e.kernel.crt_block_sizes.insert(block, n.max(1));
+    block
+}
+
 // Platform: replaces 00ed0cdf (malloc, LIBCMT)
 pub fn malloc(e: &mut Engine, n: u32) -> Ptr {
-    Ptr::new(e.mem.alloc(n))
+    Ptr::new(crt_alloc(e, n))
 }
 
 // Platform: replaces 00ecd291 (free, LIBCMT)
 pub fn free(e: &mut Engine, p: Ptr) {
+    e.kernel.crt_block_sizes.remove(&p.addr());
     e.mem.free(p.addr())
 }
 
 // Platform: replaces 00ed0d24 (__calloc_crt, LIBCMT)
 pub fn calloc_crt(e: &mut Engine, count: u32, size: u32) -> Ptr {
-    Ptr::new(e.mem.alloc(count.saturating_mul(size)))
+    Ptr::new(crt_alloc(e, count.saturating_mul(size)))
+}
+
+/// `_callnewh` (`00ede20b`, the call at 00ecd137 in the exe's `realloc`).
+const CALLNEWH: u32 = CALL_NEW_HANDLER;
+
+// Platform: replaces 00eccf5d (realloc, LIBCMT)
+/// `realloc(block, size)` on the platform allocator, with the exe's observable edges (read from
+/// 00eccf5d): a null block is `malloc(size)`; size 0 frees the block and answers null; a size
+/// above 0xFFFFFFE0 calls the new handler (`__callnewh(size)`), sets `errno` `ENOMEM` (0xc) and
+/// answers null, the block kept. Otherwise a block of the new size holds the old one's bytes up
+/// to the smaller size and replaces it (the system heap's `HeapReAlloc`, the path the exe takes
+/// with `__active_heap` 1; the allocator never fails, so the exe's retry through `_newmode` and
+/// `__callnewh` and its `errno` from `GetLastError` are not reached). A block the CRT's heap did
+/// not hand out is not provided.
+pub fn realloc(e: &mut Engine, block: Ptr, size: u32) -> Ptr {
+    if block.is_null() {
+        return malloc(e, size);
+    }
+    if size == 0 {
+        free(e, block);
+        return Ptr::new(0);
+    }
+    if size > 0xffff_ffe0 {
+        e.call(CALLNEWH, &[size]);
+        let slot = errno(e);
+        e.mem.set_u32(slot.addr(), 0xc);
+        return Ptr::new(0);
+    }
+    let Some(old) = e.kernel.crt_block_sizes.get(&block.addr()).copied() else {
+        panic!(
+            "realloc of {:08x}, which the CRT's heap did not hand out: not provided",
+            block.addr()
+        );
+    };
+    let new = crt_alloc(e, size);
+    let bytes = e.mem.bytes(block.addr(), old.min(size));
+    e.mem.write(new, &bytes);
+    free(e, block);
+    Ptr::new(new)
+}
+
+// Platform: replaces 00ecd31f (_msize, LIBCMT)
+/// `_msize(block)` on the platform allocator, with the exe's edges (read from 00ecd31f): a null
+/// block sets `errno` `EINVAL` (0x16), calls the invalid-parameter handler (five zeros) and
+/// answers -1; otherwise the block's size as `HeapSize` gives it on the system heap (the path
+/// the exe takes with `__active_heap` 1): the size it was asked for. A block the CRT's heap did
+/// not hand out is not provided.
+pub fn msize(e: &mut Engine, block: Ptr) -> u32 {
+    if block.is_null() {
+        let slot = errno(e);
+        e.mem.set_u32(slot.addr(), 0x16);
+        e.call(0x00ec_7c30, &[0, 0, 0, 0, 0]);
+        return 0xffff_ffff;
+    }
+    match e.kernel.crt_block_sizes.get(&block.addr()) {
+        Some(size) => *size,
+        None => panic!(
+            "_msize of {:08x}, which the CRT's heap did not hand out: not provided",
+            block.addr()
+        ),
+    }
 }
 
 // ---- Strings --------------------------------------------------------------
 
-// Platform: replaces 00ec6130 (_strlen, LIBCMT)
-pub fn strlen(e: &mut Engine, s: Ptr) -> u32 {
-    e.mem.cstr(s.addr()).len() as u32
-}
+/// `__gcvt_s` (`00ecdbf6`, cdecl: buffer, size, the double's two words, digits).
+const GCVT_S: u32 = 0x00ec_dbf6;
 
-// Platform: replaces 00ec6370 (strcpy, LIBCMT)
-pub fn strcpy(e: &mut Engine, dst: Ptr, src: Ptr) -> Ptr {
-    let s = e.mem.cstr(src.addr());
-    e.mem.set_cstr(dst.addr(), &s);
-    dst
-}
-
-/// The `_s` functions' failure: MSVC calls the invalid-parameter handler,
-/// which in a release build ends the program.
-fn invalid_parameter(what: &str) -> ! {
-    panic!("CRT invalid parameter: {what}")
-}
-
-// Platform: replaces 00ec65a6 (_strcpy_s, LIBCMT)
-pub fn strcpy_s(e: &mut Engine, dst: Ptr, size: u32, src: Ptr) -> i32 {
-    let s = e.mem.cstr(src.addr());
-    if dst.is_null() || s.len() as u32 >= size {
-        invalid_parameter("strcpy_s");
+// Translated from 00ecdd16 (disassembled, FalloutNV.exe 1.4.0.525)
+/// `_gcvt` (LIBCMT/gcvt.c, Ghidra library match), cdecl: (value, digits, buffer):
+/// `__gcvt_s(buffer, -1 (no size limit), value, digits)`; the buffer when it answers 0, else
+/// null. The value goes through `FLD`/`FSTP double` (a signalling NaN comes out quiet).
+pub fn gcvt(e: &mut Engine, value: f64, digits: i32, buffer: Ptr) -> Ptr {
+    let value = crate::prelude::x87_load64(value.to_bits());
+    let failed = e
+        .call(GCVT_S, &args![buffer, 0xffff_ffffu32, value, digits])
+        .u32();
+    if failed == 0 {
+        buffer
+    } else {
+        Ptr::new(0)
     }
-    e.mem.set_cstr(dst.addr(), &s);
-    0
 }
 
-// Platform: replaces 00ec6bd2 (_strcat_s, LIBCMT)
-pub fn strcat_s(e: &mut Engine, dst: Ptr, size: u32, src: Ptr) -> i32 {
-    let mut d = e.mem.cstr(dst.addr());
-    d.extend(e.mem.cstr(src.addr()));
-    if d.len() as u32 >= size {
-        invalid_parameter("strcat_s");
+// Translated from 00ec5fce (disassembled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 00ec5fce - the SEH frame (__SEH_prolog4/__SEH_epilog4) and its __finally block 00ec6019 (which calls __ArrayUnwind 00ec5f70 only when a destructor raised an exception, which the engine does not model) are not translated.
+/// `eh vector destructor iterator` (MSVC runtime, Ghidra library match), stdcall: (array, the
+/// element size, the count, the destructor): runs the destructor (`thiscall`, no stack words)
+/// on each element, last first.
+pub fn eh_vector_destructor_iterator(
+    e: &mut Engine,
+    array: Ptr,
+    size: u32,
+    count: i32,
+    destructor: u32,
+) {
+    let mut at = array.addr().wrapping_add(size.wrapping_mul(count as u32));
+    let mut left = count;
+    loop {
+        left = left.wrapping_sub(1);
+        if left < 0 {
+            break;
+        }
+        at = at.wrapping_sub(size);
+        e.call(destructor, &args![at]);
     }
-    e.mem.set_cstr(dst.addr(), &d);
-    0
 }
 
 /// `_TRUNCATE` for the `count` of `strncpy_s`.
 pub const TRUNCATE: u32 = 0xffff_ffff;
-
-// Platform: replaces 00ec8d5f (_strncpy_s, LIBCMT)
-pub fn strncpy_s(e: &mut Engine, dst: Ptr, size: u32, src: Ptr, count: u32) -> i32 {
-    let mut s = e.mem.cstr(src.addr());
-    if count != TRUNCATE {
-        s.truncate(count as usize);
-    }
-    if s.len() as u32 >= size {
-        if count == TRUNCATE && size > 0 {
-            s.truncate(size as usize - 1);
-            e.mem.set_cstr(dst.addr(), &s);
-            return 80; // STRUNCATE
-        }
-        invalid_parameter("strncpy_s");
-    }
-    e.mem.set_cstr(dst.addr(), &s);
-    0
-}
-
-fn cmp_bytes(a: &[u8], b: &[u8]) -> i32 {
-    sign(a.cmp(b))
-}
-
-// Platform: replaces 00ec8a19 (strncmp, LIBCMT)
-pub fn strncmp(e: &mut Engine, a: Ptr, b: Ptr, n: u32) -> i32 {
-    let mut x = e.mem.cstr(a.addr());
-    let mut y = e.mem.cstr(b.addr());
-    x.truncate(n as usize);
-    y.truncate(n as usize);
-    cmp_bytes(&x, &y)
-}
-
-// Platform: replaces 00ec68e4 (__stricmp, LIBCMT; C locale)
-pub fn stricmp(e: &mut Engine, a: Ptr, b: Ptr) -> i32 {
-    let x: Vec<u8> = e
-        .mem
-        .cstr(a.addr())
-        .iter()
-        .map(u8::to_ascii_lowercase)
-        .collect();
-    let y: Vec<u8> = e
-        .mem
-        .cstr(b.addr())
-        .iter()
-        .map(u8::to_ascii_lowercase)
-        .collect();
-    cmp_bytes(&x, &y)
-}
-
-// Platform: replaces 00ec7ec0 (__strnicmp, LIBCMT; C locale)
-pub fn strnicmp(e: &mut Engine, a: Ptr, b: Ptr, n: u32) -> i32 {
-    let low = |s: Vec<u8>| -> Vec<u8> {
-        s.iter()
-            .take(n as usize)
-            .map(u8::to_ascii_lowercase)
-            .collect()
-    };
-    let x = low(e.mem.cstr(a.addr()));
-    let y = low(e.mem.cstr(b.addr()));
-    cmp_bytes(&x, &y)
-}
-
-// Platform: replaces 00ec7690 (strchr, LIBCMT)
-pub fn strchr(e: &mut Engine, s: Ptr, c: i32) -> Ptr {
-    let bytes = e.mem.cstr(s.addr());
-    let c = c as u8;
-    if c == 0 {
-        return Ptr::new(s.addr() + bytes.len() as u32);
-    }
-    match bytes.iter().position(|&b| b == c) {
-        Some(i) => Ptr::new(s.addr() + i as u32),
-        None => Ptr::NULL,
-    }
-}
-
-// Platform: replaces 00ec67aa (tolower, LIBCMT; C locale)
-pub fn tolower(_e: &mut Engine, c: i32) -> i32 {
-    if (b'A' as i32..=b'Z' as i32).contains(&c) {
-        c + 32
-    } else {
-        c
-    }
-}
-
-// Platform: replaces 00eca7f4 (toupper, LIBCMT; C locale)
-pub fn toupper(_e: &mut Engine, c: i32) -> i32 {
-    if (b'a' as i32..=b'z' as i32).contains(&c) {
-        c - 32
-    } else {
-        c
-    }
-}
-
-/// C `atol`/`strtol` base 10: optional space, sign, digits; wraps like
-/// MSVC's `atol` on overflow is not relied on by the game.
-fn parse_long(s: &[u8]) -> i32 {
-    let mut i = 0;
-    while i < s.len() && (s[i] == b' ' || (9..=13).contains(&s[i])) {
-        i += 1;
-    }
-    let mut neg = false;
-    if i < s.len() && (s[i] == b'-' || s[i] == b'+') {
-        neg = s[i] == b'-';
-        i += 1;
-    }
-    let mut v: i64 = 0;
-    while i < s.len() && s[i].is_ascii_digit() {
-        v = (v * 10 + (s[i] - b'0') as i64).min(i64::from(i32::MAX) + 1);
-        i += 1;
-    }
-    let v = if neg { -v } else { v };
-    v.clamp(i32::MIN as i64, i32::MAX as i64) as i32
-}
-
-// Platform: replaces 00eca6d3 (atol, LIBCMT)
-pub fn atol(e: &mut Engine, s: Ptr) -> i32 {
-    parse_long(&e.mem.cstr(s.addr()))
-}
-
-// Platform: replaces 00eca6bd (_atol's body, strtol(s, NULL, 10), LIBCMT; 00eca6d3 jumps here)
-pub fn atol_body(e: &mut Engine, s: Ptr) -> i32 {
-    parse_long(&e.mem.cstr(s.addr()))
-}
 
 /// `_LocaleUpdate::_LocaleUpdate` (`00ec660e`, thiscall, one word: the
 /// locale or null): fills the 0x10-byte object (locale info, multibyte
@@ -1463,7 +1421,7 @@ fn string_type_wide(
     count: u32,
     result_slot: u32,
 ) -> u32 {
-    memset(e, Ptr::new(buffer), 0, count.wrapping_mul(2));
+    mem::memset(e, buffer, 0, count.wrapping_mul(2));
     let converted = e
         .call(
             IMPORT_MULTI_BYTE_TO_WIDE_CHAR,
@@ -1880,7 +1838,7 @@ pub fn ansicp(e: &mut Engine, lcid: u32) -> u32 {
         {
             u32::MAX
         } else {
-            atol_body(e, Ptr::new(buffer)) as u32
+            str2::atol_body(e, buffer) as u32
         }
     })
 }
@@ -1994,7 +1952,7 @@ struct ConvertArgs {
 /// out to the target code page; releases the wide buffer.
 fn convert_wide(e: &mut Engine, wide: u32, a: ConvertArgs) -> u32 {
     let mut result = 0;
-    memset(e, Ptr::new(wide), 0, a.count.wrapping_mul(2));
+    mem::memset(e, wide, 0, a.count.wrapping_mul(2));
     let converted = e
         .call(
             IMPORT_MULTI_BYTE_TO_WIDE_CHAR,
@@ -2167,52 +2125,7 @@ pub fn freefls(e: &mut Engine, block: u32) {
     free(e, Ptr::new(block));
 }
 
-/// C `atof`: the longest prefix that is a decimal floating-point number.
-fn parse_double(s: &[u8]) -> f64 {
-    let t: Vec<u8> = s
-        .iter()
-        .copied()
-        .skip_while(|c| *c == b' ' || (9..=13).contains(c))
-        .collect();
-    let mut end = 0;
-    let mut best = 0.0;
-    for i in 1..=t.len() {
-        if let Ok(v) = std::str::from_utf8(&t[..i]).unwrap_or("x").parse::<f64>() {
-            best = v;
-            end = i;
-        }
-    }
-    let _ = end;
-    best
-}
-
-// Platform: replaces 00eca573 (atof, LIBCMT)
-pub fn atof(e: &mut Engine, s: Ptr) -> f64 {
-    parse_double(&e.mem.cstr(s.addr()))
-}
-
 // ---- Numbers --------------------------------------------------------------
-
-// Platform: replaces 00ec62c0 (_ftol2, LIBCMT)
-/// Float to 64-bit integer, truncating toward zero. The value comes in
-/// x87 `ST0`, so in the uniform form it is a leading `f64`.
-pub fn ftol2(_e: &mut Engine, v: f64) -> u64 {
-    if v.is_nan() || v >= 9_223_372_036_854_775_808.0 || v < -9_223_372_036_854_775_808.0 {
-        0x8000_0000_0000_0000 // the x87 "integer indefinite"
-    } else {
-        v.trunc() as i64 as u64
-    }
-}
-
-// Platform: replaces 00ec6040 (_CIsqrt, LIBCMT): argument in ST0.
-pub fn ci_sqrt(_e: &mut Engine, v: f64) -> f64 {
-    v.sqrt()
-}
-
-// Platform: replaces 00ec6054 (sqrt, LIBCMT): argument on the stack.
-pub fn sqrt(_e: &mut Engine, v: f64) -> f64 {
-    v.sqrt()
-}
 
 // Platform: replaces 00ec782f (`eh vector constructor iterator', MSVC runtime;
 // stdcall: array, element size, count, constructor, destructor): runs the
@@ -2231,65 +2144,6 @@ pub fn eh_vector_constructor_iterator(
         e.call(constructor, &[element]);
         element = element.wrapping_add(size);
     }
-}
-
-// Platform: replaces 00ec9f70 (_CIcos, LIBCMT): argument in ST0.
-pub fn ci_cos(_e: &mut Engine, v: f64) -> f64 {
-    v.cos()
-}
-
-// Platform: replaces 00eca0a0 (_CIsin, LIBCMT): argument in ST0.
-pub fn ci_sin(_e: &mut Engine, v: f64) -> f64 {
-    v.sin()
-}
-
-// Platform: replaces 00ec9f30 (cos, LIBCMT): argument on the stack.
-pub fn cos(_e: &mut Engine, v: f64) -> f64 {
-    v.cos()
-}
-
-// Platform: replaces 00eca060 (sin, LIBCMT): argument on the stack.
-pub fn sin(_e: &mut Engine, v: f64) -> f64 {
-    v.sin()
-}
-
-// Platform: replaces 00ec9b00 (pow, LIBCMT)
-pub fn pow(_e: &mut Engine, x: f64, y: f64) -> f64 {
-    x.powf(y)
-}
-
-// Platform: replaces 00eca1d0 (acos, LIBCMT)
-pub fn acos(_e: &mut Engine, x: f64) -> f64 {
-    x.acos()
-}
-
-/// `_CIpow` (`00ec9b00`, base in `ST1`, exponent in `ST0`) and `_CIacos` (`00eca1d0`,
-/// argument in `ST0`): the register-argument entries that stand in for the shared bodies.
-const CI_POW: u32 = 0x00ec_9b00;
-const CI_ACOS: u32 = 0x00ec_a1d0;
-
-// Translated from 00ec9ac0 (decompiled, FalloutNV.exe 1.4.0.525)
-/// `pow` (LIBCMT, `cdecl`, the base then the exponent as doubles on the stack, the result in
-/// `ST0`). It makes the same choice as `_CIpow` (`00ec9b00`): with `__use_sse2_mathfcns`
-/// (`01270a64`) set and every MXCSR and x87 exception masked it jumps to the SSE2 body
-/// (`00ed87a9`, the stack form of `_CIpow`'s `00ed8790`), otherwise it loads the exponent from
-/// the stack (`00ed27c5`) and runs the x87 body `00ec9b5d`, the one `_CIpow` calls after storing
-/// its two registers to the same stack slots. Only where the arguments come from differs, so
-/// the bodies are reached through `_CIpow`, which stands in for them (`Platform`).
-pub fn pow_cdecl(e: &mut Engine, x: f64, y: f64) -> f64 {
-    e.call(CI_POW, &args![x, y]).f64()
-}
-
-// Translated from 00eca190 (decompiled, FalloutNV.exe 1.4.0.525)
-/// `acos` (LIBCMT, `cdecl`, one double on the stack, the result in `ST0`). It makes the same
-/// choice as `_CIacos` (`00eca1d0`): with `__use_sse2_mathfcns` (`01270a64`) set and every
-/// MXCSR and x87 exception masked it jumps to the SSE2 body (`00ed9b18`, which loads the stack
-/// argument and falls into `_CIacos`'s `00ed9b1e`), otherwise it loads the argument from the
-/// stack (`00ed27c5`) and falls into the x87 body `00eca228` that `_CIacos` calls. Only where the
-/// argument comes from differs, so the bodies are reached through `_CIacos`, which stands in
-/// for them (`Platform`).
-pub fn acos_cdecl(e: &mut Engine, x: f64) -> f64 {
-    e.call(CI_ACOS, &args![x]).f64()
 }
 
 /// Where the engine keeps the running thread's x87 control word (`FSTCW`/`FLDCW`): a word of
@@ -2315,8 +2169,12 @@ pub fn x87_control_word(e: &mut Engine) -> u16 {
 
 /// `FLDCW`: loads the running thread's x87 control word, its word in the thread block and the
 /// FPU register the x87 arithmetic helpers read (`crate::x87::set_control_word`), so precision
-/// control (bits 8-9) applies to them from here on.
+/// control (bits 8-9) applies to them from here on. The word is kept as the FPU keeps it:
+/// reserved bit 6 always reads 1 and bits 7 and 13-15 always read 0, so `FSTCW` gives
+/// `(word & 0x1F3F) | 0x40` (measured on the player's machine, 2026-10-21: `FLDCW 0x023F` then
+/// `FSTCW` gives `0x027F`, `0x0000` gives `0x0040`, `0xFFFF` gives `0x1F7F`).
 pub fn set_x87_control_word(e: &mut Engine, word: u16) {
+    let word = (word & 0x1f3f) | 0x40;
     let at = e.tls() + X87_CONTROL_WORD;
     e.mem.set_u32(at, 0x1_0000 | u32::from(word));
     crate::x87::set_control_word(word);
@@ -2333,24 +2191,7 @@ pub fn ctrlfp(e: &mut Engine, newctrl: u32, mask: u32) -> i32 {
     i32::from(old as i16)
 }
 
-// Platform: replaces 00ec9050 (x87 arctangent, LIBCMT; the name is unconfirmed): argument
-// in ST0. Dispatches on the SSE2 flag (`01270a64`) and the masked exception state to the
-// SSE2 routine `00ed5d80`, otherwise computes `FPATAN` of the argument and 1 through
-// `00ec90a8`; the error handling for NaN and infinite arguments is not modelled.
-pub fn ci_atan(_e: &mut Engine, v: f64) -> f64 {
-    v.atan()
-}
-
-// Platform: replaces 00ec9760 (atan2, LIBCMT): `cdecl`, `y` then `x` as doubles on the stack, the
-// result in ST0. The function is `MOV EDX,0x11c26a0; JMP 0x00ed60eb`: the shared dispatcher that
-// picks the SSE2 body (`__use_sse2_mathfcns`, `01270a64`) or the x87 body `00ed7cbc`, which
-// computes `FPATAN` of the two stack operands; the descriptor handlers for NaN, infinite and zero
-// operands and the error report (`_matherr`, `atan2`) are not modelled.
-pub fn atan2(_e: &mut Engine, y: f64, x: f64) -> f64 {
-    y.atan2(x)
-}
-
-// Platform: replaces 00ec8660 (__alloca_probe, LIBCMT)
+// Translated from 00ec8660 (disassembled, FalloutNV.exe 1.4.0.525)
 /// The stack probe the compiler calls before a large frame. It takes its inputs in
 /// registers, so they come first: `size` is `EAX` (the bytes wanted) and `esp` the value
 /// of `ESP` at entry (it points at the return address). It touches each page between the
@@ -2378,7 +2219,7 @@ pub fn alloca_probe(e: &mut Engine, size: u32, esp: u32) -> u32 {
 const GET_SYSTEM_TIME_AS_FILE_TIME_SLOT: u32 = 0x00fd_f184;
 const AULLDIV: u32 = 0x00ec_c590;
 
-// Platform: replaces 00ecadda (__time64, LIBCMT)
+// Translated from 00ecadda (disassembled, FalloutNV.exe 1.4.0.525)
 /// `__time64(__time64_t *)` (cdecl): the seconds since 1970-01-01. The `FILETIME` from
 /// `GetSystemTimeAsFileTime` (100 ns units since 1601) has 116444736000000000 added (as the
 /// exe does, `0xfe624e212ac18000` modulo 2^64) and is divided by 10000000 through
@@ -2412,669 +2253,84 @@ pub fn time64(e: &mut Engine, out: Ptr) -> u64 {
     result
 }
 
-/// The state of `rand`, per engine (MSVC keeps it per thread; one thread
-/// here). Starts at 1 like MSVC's `holdrand`.
-const RAND_STATE: u32 = 0x0e00;
-
-// Platform: replaces 00ecadb8 (_rand, LIBCMT)
-/// MSVC's linear congruential generator: `holdrand * 214013 + 2531011`,
-/// bits 16 to 30 returned.
-pub fn rand(e: &mut Engine) -> i32 {
-    let at = e.tls() + RAND_STATE;
-    let mut s = e.mem.u32(at);
-    if s == 0 {
-        s = 1;
-    }
-    s = s.wrapping_mul(214_013).wrapping_add(2_531_011);
-    e.mem.set_u32(at, s);
-    ((s >> 16) & 0x7fff) as i32
-}
-
-// ---- Formatted output ------------------------------------------------------
-
-/// Reads the arguments of a `va_list` (a pointer to the pushed words: an
-/// `int` is one word, a `double` or `__int64` two, low word first).
-struct VaArgs {
-    at: u32,
-}
-
-impl VaArgs {
-    fn word(&mut self, e: &Engine) -> u32 {
-        let v = e.mem.u32(self.at);
-        self.at = self.at.wrapping_add(4);
-        v
-    }
-    fn dword(&mut self, e: &Engine) -> u64 {
-        let v = e.mem.u64(self.at);
-        self.at = self.at.wrapping_add(8);
-        v
-    }
-}
-
-/// The flags of one conversion specification.
-#[derive(Default, Clone, Copy)]
-struct Spec {
-    left: bool,
-    plus: bool,
-    space: bool,
-    alt: bool,
-    zero: bool,
-}
-
-/// Pads `body` (sign or prefix already split off as `head`) to `width`.
-fn pad(out: &mut Vec<u8>, head: &[u8], body: &[u8], width: usize, spec: Spec, zero_ok: bool) {
-    let len = head.len() + body.len();
-    let fill = width.saturating_sub(len);
-    if spec.left {
-        out.extend_from_slice(head);
-        out.extend_from_slice(body);
-        out.resize(out.len() + fill, b' ');
-    } else if spec.zero && zero_ok {
-        out.extend_from_slice(head);
-        out.resize(out.len() + fill, b'0');
-        out.extend_from_slice(body);
-    } else {
-        out.resize(out.len() + fill, b' ');
-        out.extend_from_slice(head);
-        out.extend_from_slice(body);
-    }
-}
-
-/// An integer conversion (`d i u o x X p`).
-fn format_integer(
-    out: &mut Vec<u8>,
-    conv: u8,
-    value: u64,
-    negative: bool,
-    spec: Spec,
-    width: usize,
-    precision: Option<usize>,
-) {
-    let mut digits = match conv {
-        b'o' => format!("{value:o}"),
-        b'x' => format!("{value:x}"),
-        b'X' | b'p' => format!("{value:X}"),
-        _ => format!("{value}"),
-    }
-    .into_bytes();
-    let zero_ok = precision.is_none();
-    let precision = precision.unwrap_or(1);
-    if value == 0 && precision == 0 {
-        digits.clear();
-    }
-    while digits.len() < precision {
-        digits.insert(0, b'0');
-    }
-    if conv == b'o' && spec.alt && digits.first() != Some(&b'0') {
-        digits.insert(0, b'0');
-    }
-    let mut head: Vec<u8> = Vec::new();
-    match conv {
-        b'd' | b'i' => {
-            if negative {
-                head.push(b'-');
-            } else if spec.plus {
-                head.push(b'+');
-            } else if spec.space {
-                head.push(b' ');
-            }
-        }
-        b'x' if spec.alt && value != 0 => head.extend_from_slice(b"0x"),
-        b'X' if spec.alt && value != 0 => head.extend_from_slice(b"0X"),
-        _ => {}
-    }
-    pad(out, &head, &digits, width, spec, zero_ok);
-}
-
-/// The decimal digits of a double the way MSVC's runtime of 2008 produces
-/// them: 17 significant digits (`$I10_OUTPUT`), which later conversions
-/// round with `_fptostr` (round half up on the digit string). Returns the
-/// digit string and the decimal point position (`decpt`: the number of
-/// digits before the point). Infinities and NaNs yield MSVC's `1#INF`,
-/// `1#QNAN`, `1#SNAN` and `1#IND` digit strings.
-fn double_digits(v: f64) -> (Vec<u8>, i32) {
-    let bits = v.to_bits();
-    if v.is_infinite() {
-        return (b"1#INF".to_vec(), 1);
-    }
-    if v.is_nan() {
-        let text: &[u8] = if bits == 0xfff8_0000_0000_0000 {
-            b"1#IND"
-        } else if bits & (1 << 51) != 0 {
-            b"1#QNAN"
-        } else {
-            b"1#SNAN"
-        };
-        return (text.to_vec(), 1);
-    }
-    if v == 0.0 {
-        return (b"0".to_vec(), 1);
-    }
-    let s = format!("{:.16e}", v.abs());
-    let (mantissa, exp) = s.split_once('e').unwrap_or((&s, "0"));
-    let digits: Vec<u8> = mantissa.bytes().filter(u8::is_ascii_digit).collect();
-    (digits, exp.parse::<i32>().unwrap_or(0) + 1)
-}
-
-/// `_fptostr`: the first `count` digits of `digits`, zero padded, rounded up
-/// when the next digit is `'5'` or above (a carry out of the first digit
-/// moves the decimal point). A negative `count` gives no digits and no
-/// rounding. Returns the digits and the new `decpt`.
-fn round_digits(digits: &[u8], decpt: i32, count: i32) -> (Vec<u8>, i32) {
-    if count < 0 {
-        return (Vec::new(), decpt);
-    }
-    let count = count as usize;
-    // Slot 0 receives a carry.
-    let mut buf: Vec<u8> = vec![b'0'];
-    for i in 0..count {
-        buf.push(*digits.get(i).unwrap_or(&b'0'));
-    }
-    if *digits.get(count).unwrap_or(&b'0') >= b'5' {
-        let mut i = buf.len();
-        loop {
-            i -= 1;
-            if buf[i] == b'9' {
-                buf[i] = b'0';
-            } else {
-                buf[i] += 1;
-                break;
-            }
-        }
-    }
-    if buf[0] == b'1' {
-        (buf, decpt + 1)
-    } else {
-        (buf[1..].to_vec(), decpt)
-    }
-}
-
-fn exponent_text(out: &mut Vec<u8>, upper: bool, exp: i32) {
-    out.push(if upper { b'E' } else { b'e' });
-    out.push(if exp < 0 { b'-' } else { b'+' });
-    out.extend_from_slice(format!("{:03}", exp.abs()).as_bytes());
-}
-
-/// `%f` body (no sign): `digits`/`decpt` already rounded to the precision.
-/// Digit `i` has the place value `10^(decpt - 1 - i)`.
-fn fixed_body(digits: &[u8], decpt: i32, precision: usize, alt: bool) -> Vec<u8> {
-    let mut body = Vec::new();
-    if decpt <= 0 {
-        body.push(b'0');
-    } else {
-        for i in 0..decpt {
-            body.push(*digits.get(i as usize).unwrap_or(&b'0'));
-        }
-    }
-    if precision > 0 || alt {
-        body.push(b'.');
-    }
-    for k in 1..=precision as i32 {
-        let i = decpt + k - 1;
-        body.push(if i < 0 {
-            b'0'
-        } else {
-            *digits.get(i as usize).unwrap_or(&b'0')
-        });
-    }
-    body
-}
-
-/// `%e`/`%E` body from rounded digits.
-fn exp_body(digits: &[u8], exp: i32, precision: usize, alt: bool, upper: bool) -> Vec<u8> {
-    let mut body = vec![digits[0]];
-    if precision > 0 || alt {
-        body.push(b'.');
-    }
-    for k in 1..=precision {
-        body.push(*digits.get(k).unwrap_or(&b'0'));
-    }
-    exponent_text(&mut body, upper, exp);
-    body
-}
-
-/// A floating-point conversion (`e E f g G`).
-fn format_float(
-    out: &mut Vec<u8>,
-    conv: u8,
-    value: f64,
-    spec: Spec,
-    width: usize,
-    precision: Option<usize>,
-) {
-    let head: &[u8] = if value.is_sign_negative() {
-        b"-"
-    } else if spec.plus {
-        b"+"
-    } else if spec.space {
-        b" "
-    } else {
-        b""
-    };
-    let (digits, decpt) = double_digits(value);
-    let precision = precision.unwrap_or(6);
-    let body = match conv {
-        b'f' => {
-            let (d, dp) = round_digits(&digits, decpt, decpt + precision as i32);
-            fixed_body(&d, dp, precision, spec.alt)
-        }
-        b'e' | b'E' => {
-            let (mut d, dp) = round_digits(&digits, decpt, precision as i32 + 1);
-            d.truncate(precision + 1);
-            exp_body(&d, dp - 1, precision, spec.alt, conv == b'E')
-        }
-        _ => {
-            let p = precision.max(1);
-            let (mut d, dp) = round_digits(&digits, decpt, p as i32);
-            d.truncate(p);
-            let x = dp - 1;
-            if !spec.alt {
-                while d.len() > 1 && d.last() == Some(&b'0') {
-                    d.pop();
-                }
-            }
-            if x < -4 || x >= p as i32 {
-                let frac = if spec.alt { p - 1 } else { d.len() - 1 };
-                exp_body(&d, x, frac, spec.alt, conv == b'G')
-            } else {
-                let frac = if spec.alt {
-                    (p as i32 - 1 - x) as usize
-                } else {
-                    (d.len() as i32 - dp).max(0) as usize
-                };
-                fixed_body(&d, dp, frac, spec.alt)
-            }
-        }
-    };
-    pad(out, head, &body, width, spec, true);
-}
-
-/// The size prefix of a conversion.
-#[derive(Clone, Copy, PartialEq)]
-enum Size {
-    Default,
-    Short,
-    /// `l`, `w`: wide for `c` and `s`.
-    Long,
-    /// `ll`, `I64`.
-    Quad,
-}
-
-/// MSVC `printf` formatting (`_output_l` of LIBCMT, C locale): `%d %i %u %o
-/// %x %X %p %c %C %s %S %f %e %E %g %G %n %%`, flags `- + space # 0`, width
-/// and precision (also `*`), size prefixes `h l ll L w I I32 I64` (`F` and
-/// `N` ignored). Differences of the 2008 runtime from the C standard are
-/// kept: three-digit exponents (`1.000000e+000`), floating-point digits
-/// beyond the 17th are zeros, `1.#INF`/`1.#QNAN`/`1.#IND` for infinities
-/// and NaNs, `%p` as 8 upper-case hex digits, `%05s` padded with zeros, and
-/// `(null)` for a null string. A wide character or string is narrowed to
-/// the low byte; a character above 0xff is dropped (the C locale's
-/// `wctomb` fails). A conversion character that is none of these is written
-/// as itself (the runtime's default state; unconfirmed in the disassembly).
-/// Returns the formatted bytes.
-pub fn format_va(e: &mut Engine, format: &[u8], va_list: u32) -> Vec<u8> {
-    let mut va = VaArgs { at: va_list };
-    let mut out: Vec<u8> = Vec::new();
-    let mut i = 0;
-    while i < format.len() {
-        let c = format[i];
-        i += 1;
-        if c != b'%' {
-            out.push(c);
-            continue;
-        }
-        let mut spec = Spec::default();
-        while let Some(&f) = format.get(i) {
-            match f {
-                b'-' => spec.left = true,
-                b'+' => spec.plus = true,
-                b' ' => spec.space = true,
-                b'#' => spec.alt = true,
-                b'0' => spec.zero = true,
-                _ => break,
-            }
-            i += 1;
-        }
-        let mut width = 0usize;
-        if format.get(i) == Some(&b'*') {
-            i += 1;
-            let w = va.word(e) as i32;
-            if w < 0 {
-                spec.left = true;
-            }
-            width = w.unsigned_abs() as usize;
-        } else {
-            while let Some(d) = format.get(i).filter(|d| d.is_ascii_digit()) {
-                width = width.saturating_mul(10).saturating_add((d - b'0') as usize);
-                i += 1;
-            }
-        }
-        let mut precision: Option<usize> = None;
-        if format.get(i) == Some(&b'.') {
-            i += 1;
-            if format.get(i) == Some(&b'*') {
-                i += 1;
-                let p = va.word(e) as i32;
-                precision = (p >= 0).then_some(p as usize); // negative: ignored
-            } else {
-                let mut p = 0usize;
-                while let Some(d) = format.get(i).filter(|d| d.is_ascii_digit()) {
-                    p = p.saturating_mul(10).saturating_add((d - b'0') as usize);
-                    i += 1;
-                }
-                precision = Some(p);
-            }
-        }
-        let mut size = Size::Default;
-        loop {
-            match format.get(i) {
-                Some(b'h') => size = Size::Short,
-                Some(b'l') => {
-                    size = if format.get(i + 1) == Some(&b'l') {
-                        i += 1;
-                        Size::Quad
-                    } else {
-                        Size::Long
-                    }
-                }
-                Some(b'w') => size = Size::Long,
-                Some(b'L') | Some(b'F') | Some(b'N') => {}
-                Some(b'I') => {
-                    if format[i + 1..].starts_with(b"64") {
-                        i += 2;
-                        size = Size::Quad;
-                    } else if format[i + 1..].starts_with(b"32") {
-                        i += 2;
-                    }
-                }
-                _ => break,
-            }
-            i += 1;
-        }
-        let Some(&conv) = format.get(i) else { break };
-        i += 1;
-        match conv {
-            b'd' | b'i' => {
-                let (v, neg) = match size {
-                    Size::Quad => {
-                        let v = va.dword(e) as i64;
-                        (v.unsigned_abs(), v < 0)
-                    }
-                    Size::Short => {
-                        let v = va.word(e) as u16 as i16 as i64;
-                        (v.unsigned_abs(), v < 0)
-                    }
-                    _ => {
-                        let v = va.word(e) as i32 as i64;
-                        (v.unsigned_abs(), v < 0)
-                    }
-                };
-                format_integer(&mut out, conv, v, neg, spec, width, precision);
-            }
-            b'u' | b'o' | b'x' | b'X' => {
-                let v = match size {
-                    Size::Quad => va.dword(e),
-                    Size::Short => va.word(e) as u16 as u64,
-                    _ => va.word(e) as u64,
-                };
-                format_integer(&mut out, conv, v, false, spec, width, precision);
-            }
-            b'p' => {
-                let v = va.word(e) as u64;
-                // MSVC: precision becomes 2 * sizeof(void *), upper-case hex.
-                format_integer(&mut out, conv, v, false, spec, width, Some(8));
-            }
-            b'c' | b'C' => {
-                let wide = conv == b'C' || size == Size::Long;
-                let v = va.word(e);
-                let byte = if wide {
-                    ((v & 0xffff) <= 0xff).then_some(v as u8)
-                } else {
-                    Some(v as u8)
-                };
-                let body: Vec<u8> = byte.into_iter().collect();
-                pad(&mut out, b"", &body, width, spec, true);
-            }
-            b's' | b'S' => {
-                let wide = conv == b'S' || size == Size::Long;
-                let p = va.word(e);
-                let limit = precision.unwrap_or(usize::MAX);
-                let body: Vec<u8> = if p == 0 {
-                    b"(null)".iter().copied().take(limit).collect()
-                } else if wide {
-                    let mut text = Vec::new();
-                    let mut at = p;
-                    while text.len() < limit {
-                        let ch = e.mem.u16(at);
-                        if ch == 0 {
-                            break;
-                        }
-                        at += 2;
-                        text.push(ch);
-                    }
-                    text.iter()
-                        .filter(|c| **c <= 0xff)
-                        .map(|c| *c as u8)
-                        .collect()
-                } else {
-                    let mut text = e.mem.cstr(p);
-                    text.truncate(limit);
-                    text
-                };
-                pad(&mut out, b"", &body, width, spec, true);
-            }
-            b'f' | b'e' | b'E' | b'g' | b'G' => {
-                let v = f64::from_bits(va.dword(e));
-                format_float(&mut out, conv, v, spec, width, precision);
-            }
-            b'n' => {
-                let target = va.word(e);
-                if size == Size::Short {
-                    e.mem.set_u16(target, out.len() as u16);
-                } else {
-                    e.mem.set_u32(target, out.len() as u32);
-                }
-            }
-            other => out.push(other),
-        }
-    }
-    out
-}
-
-// Platform: replaces 00ec6cc4 (_vsprintf, LIBCMT)
-/// `vsprintf(dest, format, va_list)`: formats into `dest` (no bound, as the
-/// C function) and returns the number of characters written, without the
-/// terminating zero. The game's callers: `ScriptError`, `AddNoteVarArgs`,
-/// `IdvFormatString` (via `00407000`).
-pub fn vsprintf(e: &mut Engine, dest: Ptr, format: Ptr, va_list: u32) -> i32 {
-    if dest.is_null() || format.is_null() {
-        invalid_parameter("vsprintf");
-    }
-    let text = e.mem.cstr(format.addr());
-    let out = format_va(e, &text, va_list);
-    e.mem.set_cstr(dest.addr(), &out);
-    out.len() as i32
-}
-
-/// Copies variable-argument words to game memory and formats them there as
-/// the `va_list` ([`format_va`]).
-fn format_words(e: &mut Engine, format: &[u8], args: &[u32]) -> Vec<u8> {
-    let size = 4 * (args.len() as u32).max(1);
-    e.with_stack(size, |e, list| {
-        for (i, word) in args.iter().enumerate() {
-            e.mem.set_u32(list.addr() + 4 * i as u32, *word);
-        }
-        format_va(e, format, list.addr())
-    })
-}
-
-// Platform: replaces 00ec623a (sprintf, LIBCMT)
-/// `sprintf(buffer, format, ...)` (cdecl, variable arguments): the 2008
-/// runtime's string stream with room `0x7fffffff`, so the formatted text is
-/// written with its terminating zero and its length returned. A null
-/// `buffer` or `format` is an invalid parameter (MSVC sets `errno` to
-/// `EINVAL` and calls the handler, which in a release build ends the
-/// program). The formatting is [`format_va`]'s.
-pub fn sprintf(e: &mut Engine, buffer: Ptr, format: Ptr, args: &[u32]) -> i32 {
-    if format.is_null() || buffer.is_null() {
-        invalid_parameter("sprintf");
-    }
-    let text = e.mem.cstr(format.addr());
-    let out = format_words(e, &text, args);
-    e.mem.set_cstr(buffer.addr(), &out);
-    out.len() as i32
-}
-
-/// The registry entry of [`sprintf`]: buffer, format, then the variable
-/// arguments.
-fn sprintf_entry(e: &mut Engine, words: &[u32]) -> Ret {
-    sprintf(e, Ptr::new(words[0]), Ptr::new(words[1]), &words[2..]).into_ret()
-}
-
-/// `_snprintf`'s room: `count`, at most `INT_MAX` (`0x7fffffff`).
-const SNPRINTF_MAX_COUNT: u32 = 0x7fff_ffff;
-
-// Platform: replaces 00eca38d (_snprintf, LIBCMT)
-/// `_snprintf(buffer, count, format, ...)` (cdecl, variable arguments) as
-/// the 2008 runtime's string stream (`_IOWRT | _IOSTRG`, room `count` capped
-/// at `0x7fffffff`) does it:
-/// - the formatted text fits with room to spare: written with its
-///   terminating zero, returns its length;
-/// - it fills the room exactly: written without a terminating zero,
-///   returns its length;
-/// - it is longer: the first `count` characters are written, no
-///   terminating zero, returns -1;
-/// - a null `buffer` with `count` 0 only counts (`write_char` and
-///   `write_string`, `00ed2ec8`/`00ed4638`, skip the store for a string
-///   stream without a base): returns the length.
-///
-/// A null `format`, or a null `buffer` with a nonzero `count`, is an invalid
-/// parameter (MSVC sets `errno` to `EINVAL` and calls the handler, which in a
-/// release build ends the program). `errno` (`ERANGE` from `_flsbuf` on
-/// overflow) is not modeled. The formatting is [`format_va`]'s, on the
-/// argument words copied to game memory as the `va_list`.
-pub fn snprintf(e: &mut Engine, buffer: Ptr, count: u32, format: Ptr, args: &[u32]) -> i32 {
-    if format.is_null() || (count != 0 && buffer.is_null()) {
-        invalid_parameter("_snprintf");
-    }
-    let text = e.mem.cstr(format.addr());
-    let out = format_words(e, &text, args);
-    if buffer.is_null() {
-        return out.len() as i32;
-    }
-    let room = count.min(SNPRINTF_MAX_COUNT) as usize;
-    if out.len() > room {
-        e.mem.write(buffer.addr(), &out[..room]);
-        return -1;
-    }
-    e.mem.write(buffer.addr(), &out);
-    if out.len() < room {
-        e.mem.set_u8(buffer.addr() + out.len() as u32, 0);
-    }
-    out.len() as i32
-}
-
-/// The registry entry of [`snprintf`]: buffer, count, format, then the
-/// variable arguments.
-fn snprintf_entry(e: &mut Engine, words: &[u32]) -> Ret {
-    snprintf(
-        e,
-        Ptr::new(words[0]),
-        words[1],
-        Ptr::new(words[2]),
-        &words[3..],
-    )
-    .into_ret()
-}
-
 // ---- Program ---------------------------------------------------------------
 
-// Platform: replaces 00ec658f (_atexit, LIBCMT) with its callees 00ec6553 (__onexit) and 00ec6468 (__onexit_nolock)
-/// Registers a function to run at exit: appends it to the CRT's table of
-/// exit functions (`ONEXIT_BEGIN`, `ONEXIT_END`), which [`doexit`] runs.
-/// Answers 0, or -1 when the table could not take it (`(f != 0) - 1` of
-/// `__onexit`'s answer, which is `f` when it was stored and 0 when not).
-///
-/// What the exe does and what differs here:
-/// - `__onexit_nolock` keeps the pointers in a heap block of words
-///   (`__encode_pointer`'d: the OS obfuscates pointers kept in writable
-///   memory; `EncodePointer` is the identity here, so the words are plain
-///   addresses and a null entry is 0). It grows the block by
-///   `min(size, 0x800)` bytes when full, or by 0x10 if that fails.
-/// - The table itself is made by the first C initializer, `00ec6522`
-///   (32 zeroed words from `__calloc_crt`, begin = end = the block); it has
-///   no Ghidra function, so the engine's start-up leaves it open and the
-///   first `atexit` makes the table the same way instead.
-/// - `_lock(8)` / `_unlock(8)` around it are no-ops: one thread.
+/// `__onexit` (`00ec6553`), `__encode_pointer` (`00ed0f17`), `_msize` (`00ecd31f`) and
+/// `__realloc_crt` (`00ed0d70`), all cdecl.
+const ONEXIT: u32 = 0x00ec_6553;
+const ENCODE_POINTER: u32 = 0x00ed_0f17;
+const MSIZE: u32 = 0x00ec_d31f;
+const REALLOC_CRT: u32 = 0x00ed_0d70;
+
+// Translated from 00ec658f (disassembled, FalloutNV.exe 1.4.0.525)
+/// `_atexit` (Ghidra's function ID), cdecl, a function: `__onexit(function)`, and 0 when
+/// that answers it (nonzero), -1 when it answers 0.
 pub fn atexit(e: &mut Engine, f: Ptr) -> i32 {
-    let stored = onexit(e, f.addr()).unwrap_or(0);
-    (stored != 0) as i32 - 1
+    let stored = e.call(ONEXIT, &args![f.addr()]).u32();
+    if stored != 0 {
+        0
+    } else {
+        -1
+    }
 }
 
 /// The words at `01271a8c` and `01271a88`: the start and the end (one past the last
-/// word) of the table of exit functions. The names (`__onexitbegin`,
-/// `__onexitend` in the CRT's source) are not confirmed in Ghidra.
+/// word) of the table of exit functions, both kept encoded (`__encode_pointer`). The names
+/// (`__onexitbegin`, `__onexitend` in the CRT's source) are not confirmed in Ghidra.
 const ONEXIT_BEGIN: u32 = 0x0127_1a8c;
 const ONEXIT_END: u32 = 0x0127_1a88;
 
-/// `__onexit_nolock`'s work for `f`: its address when stored, `None` when
-/// not (the exe answers 0).
-fn onexit(e: &mut Engine, f: u32) -> Option<u32> {
-    e.mem.map(ONEXIT_END, 8);
-    if e.mem.u32(ONEXIT_BEGIN) == 0 {
-        // 00ec6522: `__calloc_crt(32, 4)`; begin = end = the block; `AND
-        // [block],0`. (The exe answers 24, _RT_SPACEINIT, when the heap
-        // gives nothing; `Mem`'s heap stops with a panic instead.)
-        let table = calloc_crt(e, 32, 4).addr();
-        e.mem.set_u32(ONEXIT_BEGIN, table);
-        e.mem.set_u32(ONEXIT_END, table);
-        e.mem.set_u32(table, 0);
-    }
-    let begin = e.mem.u32(ONEXIT_BEGIN);
-    let end = e.mem.u32(ONEXIT_END);
-    // `JC`: the end below the start; then the byte count plus one word
-    // wrapping around.
+// Translated from 00ec6468 (disassembled, FalloutNV.exe 1.4.0.525)
+/// `__onexit_nolock` (Ghidra's function ID), cdecl, a function. The table's start and end
+/// are decoded; an end below the start, or a byte count whose next word wraps, answers 0.
+/// When the block (`_msize`) has no room for one more word it grows by its size, at most
+/// 0x800 bytes (`__realloc_crt`; the sum wrapping or the call failing tries 0x10 more,
+/// which failing or wrapping answers 0), the new start is stored encoded and the slot is
+/// the old byte count (as words, `SAR`) into it. The function is stored encoded, the end
+/// moved one word on (encoded) and the function answered.
+pub fn onexit_nolock(e: &mut Engine, function: u32) -> u32 {
+    let encoded = e.mem.u32(ONEXIT_BEGIN);
+    let begin = e.call(DECODE_POINTER, &args![encoded]).u32();
+    let encoded = e.mem.u32(ONEXIT_END);
+    let end = e.call(DECODE_POINTER, &args![encoded]).u32();
     if end < begin {
-        return None;
+        return 0;
     }
-    let used = end - begin;
+    let used = end.wrapping_sub(begin);
     if used.wrapping_add(4) < 4 {
-        return None;
+        return 0;
     }
-    let size = e
-        .mem
-        .block_size(begin)
-        .unwrap_or_else(|| panic!("the exit function table {begin:08x} is not a heap block"));
-    let mut at = end;
+    let size = e.call(MSIZE, &args![begin]).u32();
+    let mut slot = end;
     if size < used.wrapping_add(4) {
         let grow = size.min(0x800);
-        let block = match size
-            .checked_add(grow)
-            .and_then(|n| onexit_realloc(e, begin, n))
-        {
-            Some(b) => b,
-            None => size
-                .checked_add(0x10)
-                .and_then(|n| onexit_realloc(e, begin, n))?,
-        };
-        // `used >> 2` words (SAR) from the new start.
-        at = block.wrapping_add((((used as i32) >> 2) as u32).wrapping_mul(4));
-        e.mem.set_u32(ONEXIT_BEGIN, block);
+        let wanted = grow.wrapping_add(size);
+        let mut block = 0;
+        if wanted >= size {
+            block = e.call(REALLOC_CRT, &args![begin, wanted]).u32();
+        }
+        if block == 0 {
+            let wanted = size.wrapping_add(0x10);
+            if wanted < size {
+                return 0;
+            }
+            block = e.call(REALLOC_CRT, &args![begin, wanted]).u32();
+            if block == 0 {
+                return 0;
+            }
+        }
+        slot = ((used as i32) >> 2)
+            .wrapping_mul(4)
+            .wrapping_add(block as i32) as u32;
+        let encoded = e.call(ENCODE_POINTER, &args![block]).u32();
+        e.mem.set_u32(ONEXIT_BEGIN, encoded);
     }
-    e.mem.set_u32(at, f);
-    e.mem.set_u32(ONEXIT_END, at.wrapping_add(4));
-    Some(f)
-}
-
-/// `__realloc_crt` (`00ed0d70`) for the table: `Mem`'s heap, which does not
-/// fail; the old block is freed and its bytes are copied.
-fn onexit_realloc(e: &mut Engine, block: u32, size: u32) -> Option<u32> {
-    let old = e.mem.block_size(block)?;
-    let new = e.mem.alloc(size);
-    let kept = e.mem.bytes(block, old.min(size));
-    e.mem.write(new, &kept);
-    e.mem.free(block);
-    Some(new)
+    let encoded = e.call(ENCODE_POINTER, &args![function]).u32();
+    e.mem.set_u32(slot, encoded);
+    let next = slot.wrapping_add(4);
+    let encoded = e.call(ENCODE_POINTER, &args![next]).u32();
+    e.mem.set_u32(ONEXIT_END, encoded);
+    function
 }
 
 /// The `_initterm` ranges `doexit` runs, as the exe passes them (`PUSH end;
@@ -3137,37 +2393,49 @@ fn run_exit_table(e: &mut Engine, (start, end): (u32, u32), report: &mut ExitRep
     }
 }
 
-/// The part of `doexit` that runs the exit functions: from the last
-/// registered to the first, each cleared before it runs, and the walk
-/// restarted from the new end if a handler changed the table.
+/// `__encoded_null` (`00ed0f89`, no arguments).
+const ENCODED_NULL: u32 = 0x00ed_0f89;
+
+/// The part of `doexit` that runs the exit functions (`00eccdd8`..`00ecce63`): the table's
+/// start decoded (null: nothing to run) and its end; from the last word to the first,
+/// each word that is not the encoded null is decoded, replaced by the encoded null and
+/// called, and the walk restarts from the new end when the decoded start or end changed.
 fn run_onexit(e: &mut Engine, report: &mut ExitReport) {
     e.mem.map(ONEXIT_END, 8);
-    let mut begin = e.mem.u32(ONEXIT_BEGIN);
-    if begin == 0 {
+    let encoded = e.mem.u32(ONEXIT_BEGIN);
+    let mut low = e.call(DECODE_POINTER, &args![encoded]).u32();
+    if low == 0 {
         return;
     }
-    // The table as the walk last saw it; its start is the walk's lower bound.
-    let mut end = e.mem.u32(ONEXIT_END);
+    let encoded = e.mem.u32(ONEXIT_END);
+    let end = e.call(DECODE_POINTER, &args![encoded]).u32();
+    // The table as the walk last saw it (EBP-0x1c, EBP-0x20).
+    let (mut seen_begin, mut seen_end) = (low, end);
     let mut at = end;
     loop {
         at = at.wrapping_sub(4);
-        if at < begin {
+        if at < low {
             break;
         }
-        if e.mem.u32(at) == 0 {
+        let null = e.call(ENCODED_NULL, &args![]).u32();
+        if e.mem.u32(at) == null {
             continue;
         }
-        // The exe compares `at` with the start a second time here (`JC`);
-        // it cannot differ from the test above.
-        if at < begin {
+        // The exe compares `at` with the start a second time here (`JC`).
+        if at < low {
             break;
         }
-        let f = e.mem.u32(at);
-        e.mem.set_u32(at, 0);
+        let word = e.mem.u32(at);
+        let f = e.call(DECODE_POINTER, &args![word]).u32();
+        let null = e.call(ENCODED_NULL, &args![]).u32();
+        e.mem.set_u32(at, null);
         exit_handler(e, f, report);
-        let (b, n) = (e.mem.u32(ONEXIT_BEGIN), e.mem.u32(ONEXIT_END));
-        if begin != b || end != n {
-            (begin, end, at) = (b, n, n);
+        let encoded = e.mem.u32(ONEXIT_BEGIN);
+        let begin = e.call(DECODE_POINTER, &args![encoded]).u32();
+        let encoded = e.mem.u32(ONEXIT_END);
+        let end = e.call(DECODE_POINTER, &args![encoded]).u32();
+        if seen_begin != begin || seen_end != end {
+            (seen_begin, low, seen_end, at) = (begin, begin, end, end);
         }
     }
 }
@@ -3217,73 +2485,6 @@ pub fn doexit(e: &mut Engine, code: i32, quick: i32, retcaller: i32) -> ExitRepo
 fn doexit_entry(e: &mut Engine, words: &[u32]) -> Ret {
     doexit(e, words[0] as i32, words[1] as i32, words[2] as i32);
     Ret::default()
-}
-
-// Platform: replaces 00ec7c56 (the invalid-parameter path, LIBCMT)
-pub fn invalid_parameter_noinfo(_e: &mut Engine) {
-    invalid_parameter("noinfo")
-}
-
-// ---- RTTI ------------------------------------------------------------------
-
-/// Whether two `TypeDescriptor`s are the same type: the same address or
-/// the same decorated name (MSVC compares names after the address).
-fn same_type(e: &Engine, a: u32, b: u32) -> bool {
-    a == b || (a != 0 && b != 0 && e.mem.cstr(a + 8) == e.mem.cstr(b + 8))
-}
-
-// Platform: replaces 00ec43fb (__RTDynamicCast, LIBCMT)
-/// `dynamic_cast` through the game's own RTTI in mapped memory: from the
-/// object's vtable to its complete object locator, then the class
-/// hierarchy's base class array. A target that is a base (or the complete
-/// type) gives the address of that subobject; otherwise null, or a panic
-/// for a reference cast (`std::bad_cast`). For a class with multiple
-/// inheritance MSVC also checks that the source and target subobjects are
-/// unambiguous and public; here the first visible match is taken, which is
-/// the same result for every cast that MSVC allows.
-pub fn rt_dynamic_cast(
-    e: &mut Engine,
-    inptr: Ptr,
-    _vf_delta: i32,
-    _src_type: Ptr,
-    target_type: Ptr,
-    is_reference: i32,
-) -> Ptr {
-    if inptr.is_null() {
-        return Ptr::NULL;
-    }
-    let vft = e.mem.u32(inptr.addr());
-    let col = e.mem.u32(vft.wrapping_sub(4));
-    let offset = e.mem.u32(col + 4);
-    let cd_offset = e.mem.u32(col + 8);
-    let mut complete = inptr.addr().wrapping_sub(offset);
-    if cd_offset != 0 {
-        complete = complete.wrapping_sub(e.mem.u32(inptr.addr().wrapping_sub(cd_offset)));
-    }
-    let chd = e.mem.u32(col + 16);
-    let count = e.mem.u32(chd + 8);
-    let bases = e.mem.u32(chd + 12);
-    for i in 0..count {
-        let bcd = e.mem.u32(bases + 4 * i);
-        let td = e.mem.u32(bcd);
-        let attributes = e.mem.u32(bcd + 20);
-        if attributes & 1 != 0 || !same_type(e, td, target_type.addr()) {
-            continue; // BCD_NOTVISIBLE, or another type
-        }
-        let mdisp = e.mem.i32(bcd + 8);
-        let pdisp = e.mem.i32(bcd + 12);
-        let vdisp = e.mem.i32(bcd + 16);
-        let mut off = mdisp;
-        if pdisp >= 0 {
-            let vbtable = e.mem.u32(complete.wrapping_add(pdisp as u32));
-            off += pdisp + e.mem.i32(vbtable.wrapping_add(vdisp as u32));
-        }
-        return Ptr::new(complete.wrapping_add(off as u32));
-    }
-    if is_reference != 0 {
-        panic!("std::bad_cast from {:08x}", inptr.addr());
-    }
-    Ptr::NULL
 }
 
 // ---- The physics step's remaining runtime functions ----------------------------------------
@@ -3519,12 +2720,15 @@ const ASIN_X87: u32 = 0x00ec_96a8;
 /// `FPATAN` of `x / sqrt((1 + x)(1 - x))` and the error string `"asin"` at `011c1930`; called by
 /// the Euler-angle conversions): `ST0` in, `ST0` out. With the SSE2 routines available
 /// (`sse2_math_available`) it jumps to the SSE2 body `00ed7720`. Otherwise it stores the double
-/// on the stack, runs `00ed2808` (which leaves `ZF` set when the exponent is all ones), and runs
-/// the x87 body `00ec96a8` on it, returning its `ST0`.
+/// on the stack (`FST`), runs `00ed2808` (which leaves `ZF` set when the exponent is all ones),
+/// and runs the x87 body `00ec96a8` on it, returning its `ST0`. The register holds the argument
+/// as `FLD qword` leaves a double, and `FST` stores it so: a signalling NaN is quiet in both,
+/// so its error type is 7 (a quiet NaN), as the exe reports it.
 pub fn ci_asin(e: &mut Engine, st0: f64) -> f64 {
     if sse2_math_available(e) {
         return e.call(ASIN_SSE2, &args![st0]).f64();
     }
+    let st0 = x87_load64(st0.to_bits());
     let bits = st0.to_bits();
     let (low, high) = (bits as u32, (bits >> 32) as u32);
     let eax = e.call(LOAD_FLAGS_HELPER, &args![low, high]).u32();
@@ -5246,7 +4450,7 @@ pub fn fwrite_nolock(e: &mut Engine, buffer: Ptr, size: u32, count: u32, stream:
             }
             let chunk = if left < room { left } else { room };
             let target = e.mem.u32(stream);
-            memcpy(e, Ptr::new(target), Ptr::new(data), chunk);
+            mem::memcpy(e, target, data, chunk);
             e.mem.set_u32(stream + 4, room.wrapping_sub(chunk));
             e.mem.set_u32(stream, target.wrapping_add(chunk));
             left = left.wrapping_sub(chunk);
@@ -6762,33 +5966,100 @@ pub fn flsbuf(e: &mut Engine, character: u32, stream: Ptr) -> i32 {
     (character & 0xff) as i32
 }
 
+/// `GetFileAttributesA` (KERNEL32 import slot `00fdf160`).
+const API_GET_FILE_ATTRIBUTES: u32 = 0x00fd_f160;
+/// `GetLastError` (KERNEL32 import slot `00fdf094`).
+const API_GET_LAST_ERROR_SLOT: u32 = 0x00fd_f094;
+
+// Translated from 00ecbe7c (disassembled, FalloutNV.exe 1.4.0.525)
+/// `_access_s` (LIBCMT/access.c, engine map), cdecl: (path, mode). A null path or a mode with
+/// bits other than 2 and 4 sets `_doserrno` 0 and `errno` `EINVAL` (0x16), calls the
+/// invalid-parameter handler (`00ec7c30` with five zeros) and answers 0x16. Otherwise the
+/// path's attributes (`GetFileAttributesA`): none maps the Windows error (`_dosmaperr` of
+/// `GetLastError`) and answers `errno`; a read-only file (attribute 1, not a directory 0x10)
+/// asked for writing (mode bit 2) sets `_doserrno` 5 and `errno` `EACCES` (0xd) and answers
+/// it; anything else answers 0.
+pub fn access_s(e: &mut Engine, path: Ptr, mode: u32) -> u32 {
+    if path.addr() == 0 || mode & 0xffff_fff9 != 0 {
+        let dos = e.call(0x00ec_85f6, &args![]).u32();
+        e.mem.set_u32(dos, 0);
+        let error = e.call(0x00ec_85e3, &args![]).u32();
+        e.mem.set_u32(error, 0x16);
+        e.call(0x00ec_7c30, &args![0u32, 0u32, 0u32, 0u32, 0u32]);
+        return 0x16;
+    }
+    let attributes = e.call(API_GET_FILE_ATTRIBUTES, &args![path]).u32();
+    if attributes == 0xffff_ffff {
+        let code = e.call(API_GET_LAST_ERROR_SLOT, &args![]).u32();
+        e.call(0x00ec_8609, &args![code]);
+        let error = e.call(0x00ec_85e3, &args![]).u32();
+        return e.mem.u32(error);
+    }
+    if attributes & 0x10 == 0 && attributes & 1 != 0 && mode & 2 != 0 {
+        let dos = e.call(0x00ec_85f6, &args![]).u32();
+        e.mem.set_u32(dos, 5);
+        let error = e.call(0x00ec_85e3, &args![]).u32();
+        e.mem.set_u32(error, 0xd);
+        let error = e.call(0x00ec_85e3, &args![]).u32();
+        return e.mem.u32(error);
+    }
+    0
+}
+
+// Translated from 00ecbf05 (disassembled, FalloutNV.exe 1.4.0.525)
+/// `_access` (LIBCMT/access.c, engine map), cdecl: (path, mode): 0 when `_access_s` answers 0,
+/// else -1 (`NEG`/`SBB`).
+pub fn access(e: &mut Engine, path: Ptr, mode: u32) -> i32 {
+    let r = e.call(0x00ec_be7c, &args![path, mode]).u32();
+    if r == 0 {
+        0
+    } else {
+        -1
+    }
+}
+
+// Translated from 00ec6380 (disassembled, FalloutNV.exe 1.4.0.525)
+/// `strcat` (LIBCMT, the word-at-a-time assembly version; the engine map gives no name), cdecl:
+/// (destination, source): appends the source's bytes up to and with its terminating zero at
+/// the destination's terminating zero and answers the destination. The assembly reads both
+/// strings a word at a time (aligned reads that stop at the word holding the zero, never past
+/// it into another page); the bytes it writes are the same.
+pub fn strcat(e: &mut Engine, destination: Ptr, source: Ptr) -> Ptr {
+    let mut at = destination.addr();
+    while e.mem.u8(at) != 0 {
+        at = at.wrapping_add(1);
+    }
+    let mut from = source.addr();
+    loop {
+        let b = e.mem.u8(from);
+        e.mem.set_u8(at, b);
+        if b == 0 {
+            return destination;
+        }
+        at = at.wrapping_add(1);
+        from = from.wrapping_add(1);
+    }
+}
+
 pub fn funcs() -> Vec<(u32, AbiFn)> {
-    vec![
+    let mut table = vec![
+        entry!(0x00ec_dd16, gcvt(f64, i32, Ptr) -> Ptr),
+        entry!(
+            0x00ec_5fce,
+            eh_vector_destructor_iterator(Ptr, u32, i32, u32)
+        ),
+        entry!(0x00ec_be7c, access_s(Ptr, u32) -> u32),
+        entry!(0x00ec_bf05, access(Ptr, u32) -> i32),
+        entry!(0x00ec_6380, strcat(Ptr, Ptr) -> Ptr),
         entry!(0x00401000, operator_new(u32) -> Ptr),
         entry!(0x00401460, memcpy_wrapper(Ptr, Ptr, u32) -> Ptr),
         entry!(0x00403d30, memset_wrapper(Ptr, i32, u32) -> Ptr),
-        entry!(0x00ec44d0, memcpy(Ptr, Ptr, u32) -> Ptr),
-        entry!(0x00ec7230, memmove(Ptr, Ptr, u32) -> Ptr),
-        entry!(0x00ec61c0, memset(Ptr, i32, u32) -> Ptr),
-        entry!(0x00ec4835, memcmp(Ptr, Ptr, u32) -> i32),
-        entry!(0x00ec3bad, byteswap_ulong(u32) -> u32),
         entry!(0x00ec3bf0, byteswap_uint64(u64) -> u64),
         entry!(0x00ed0cdf, malloc(u32) -> Ptr),
         entry!(0x00ecd291, free(Ptr)),
+        entry!(0x00ec_cf5d, realloc(Ptr, u32) -> Ptr),
+        entry!(0x00ec_d31f, msize(Ptr) -> u32),
         entry!(0x00ed0d24, calloc_crt(u32, u32) -> Ptr),
-        entry!(0x00ec6130, strlen(Ptr) -> u32),
-        entry!(0x00ec6370, strcpy(Ptr, Ptr) -> Ptr),
-        entry!(0x00ec65a6, strcpy_s(Ptr, u32, Ptr) -> i32),
-        entry!(0x00ec6bd2, strcat_s(Ptr, u32, Ptr) -> i32),
-        entry!(0x00ec8d5f, strncpy_s(Ptr, u32, Ptr, u32) -> i32),
-        entry!(0x00ec8a19, strncmp(Ptr, Ptr, u32) -> i32),
-        entry!(0x00ec68e4, stricmp(Ptr, Ptr) -> i32),
-        entry!(0x00ec7ec0, strnicmp(Ptr, Ptr, u32) -> i32),
-        entry!(0x00ec7690, strchr(Ptr, i32) -> Ptr),
-        entry!(0x00ec67aa, tolower(i32) -> i32),
-        entry!(0x00eca7f4, toupper(i32) -> i32),
-        entry!(0x00eca6d3, atol(Ptr) -> i32),
-        entry!(0x00eca6bd, atol_body(Ptr) -> i32),
         entry!(0x00ec8d08, strtol(u32, u32, i32) -> i32),
         entry!(0x00ec8ad9, strtoxl(u32, u32, u32, i32, u32) -> u32),
         entry!(0x00ed1165, getptd_noexit() -> u32),
@@ -6839,35 +6110,16 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00ecd1c7, malloc_body(u32) -> u32),
         entry!(0x00ec8e14, freea(u32)),
         entry!(0x00ed11f8, freefls(u32)),
-        entry!(0x00eca573, atof(Ptr) -> f64),
-        entry!(0x00ec62c0, ftol2(f64) -> u64),
-        entry!(0x00ec6040, ci_sqrt(f64) -> f64),
-        entry!(0x00ec6054, sqrt(f64) -> f64),
         entry!(
             0x00ec782f,
             eh_vector_constructor_iterator(u32, u32, i32, u32, u32)
         ),
-        entry!(0x00ec9f70, ci_cos(f64) -> f64),
-        entry!(0x00eca0a0, ci_sin(f64) -> f64),
-        entry!(0x00ec9f30, cos(f64) -> f64),
-        entry!(0x00eca060, sin(f64) -> f64),
-        entry!(0x00ec9b00, pow(f64, f64) -> f64),
-        entry!(0x00eca1d0, acos(f64) -> f64),
-        entry!(0x00ec9ac0, pow_cdecl(f64, f64) -> f64),
-        entry!(0x00eca190, acos_cdecl(f64) -> f64),
         entry!(0x00ed5abb, ctrlfp(u32, u32) -> i32),
-        entry!(0x00ec9050, ci_atan(f64) -> f64),
-        entry!(0x00ec9760, atan2(f64, f64) -> f64),
         entry!(0x00ec8660, alloca_probe(u32, u32) -> u32),
         entry!(0x00ecadda, time64(Ptr) -> u64),
-        entry!(0x00ecadb8, rand() -> i32),
         entry!(0x00ec658f, atexit(Ptr) -> i32),
+        entry!(0x00ec_6468, onexit_nolock(u32) -> u32),
         (0x00eccd99, doexit_entry as AbiFn),
-        entry!(0x00ec6cc4, vsprintf(Ptr, Ptr, u32) -> i32),
-        (0x00ec623a, sprintf_entry as AbiFn),
-        (0x00eca38d, snprintf_entry as AbiFn),
-        entry!(0x00ec7c56, invalid_parameter_noinfo()),
-        entry!(0x00ec43fb, rt_dynamic_cast(Ptr, i32, Ptr, Ptr, i32) -> Ptr),
         entry!(0x00ec9e10, ceil(f64) -> f64),
         entry!(0x00ec605d, fn_00ec605d(bool, f64, u32, u32) -> f64),
         entry!(0x00ec85e3, errno() -> Ptr),
@@ -6926,7 +6178,45 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00ee_2315, wctomb_s(Ptr, Ptr, u32, u32) -> i32),
         entry!(0x00ec_9df9, get_printf_count_output() -> u32),
         (0x00ed_2f21, output_l_entry as AbiFn),
-    ]
+    ];
+    table.extend(cvt::funcs());
+    table.extend(files::funcs());
+    table.extend(fpinit::funcs());
+    table.extend(glue::funcs());
+    table.extend(lcmap::funcs());
+    table.extend(locale2::funcs());
+    table.extend(lowio::funcs());
+    table.extend(math::funcs());
+    table.extend(mbs::funcs());
+    table.extend(mem::funcs());
+    table.extend(misc2::funcs());
+    table.extend(misc3::funcs());
+    table.extend(misc4::funcs());
+    table.extend(misc5::funcs());
+    table.extend(misc6::funcs());
+    table.extend(misc7::funcs());
+    table.extend(misc8::funcs());
+    table.extend(misc9::funcs());
+    table.extend(locale3::funcs());
+    table.extend(mbstowcs::funcs());
+    table.extend(io2::funcs());
+    table.extend(num2::funcs());
+    table.extend(printf::funcs());
+    table.extend(qualified::funcs());
+    table.extend(rtti::funcs());
+    table.extend(runtime::funcs());
+    table.extend(scanf::funcs());
+    table.extend(search::funcs());
+    table.extend(sort::funcs());
+    table.extend(stdio::funcs());
+    table.extend(str2::funcs());
+    table.extend(string::funcs());
+    table.extend(startup::funcs());
+    table.extend(stat::funcs());
+    table.extend(time::funcs());
+    table.extend(trig::funcs());
+    table.extend(wide::funcs());
+    table
 }
 
 /// Test support for the constructors of the forms (`CreateFormOfType`'s
@@ -7092,24 +6382,30 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "strcpy_s")]
-    fn strcpy_s_overflow_ends_the_program() {
-        let mut e = Engine::new();
-        let a = cstr(&mut e, b"Primm");
-        let buf: Ptr = Ptr::new(e.mem.alloc(4));
-        e.call(0x00ec_65a6, &args![buf, 4u32, a]);
-    }
-
-    #[test]
     fn numbers() {
         let mut e = Engine::new();
         assert_eq!(e.call(0x00ec_62c0, &args![-2.75f64]).u64() as i64, -2);
         assert_eq!(e.call(0x00ec_62c0, &args![f64::NAN]).u64(), 1 << 63);
+        // `atol` and `atof` hand their text to `strtol(text, NULL, 10)` (`00ec8d08`) and
+        // `_atof_l(text, NULL)` (`00eca4c8`), which read the locale data of the exe image:
+        // doubled here to answer -42 and 150.
+        e.register(0x00ec_8d08, |_, a| {
+            assert_eq!(&a[1..], &[0, 10]);
+            (-42i32).into_ret()
+        });
+        e.register(0x00ec_a4c8, |_, a| {
+            assert_eq!(a[1], 0);
+            150.0f64.into_ret()
+        });
         let s = cstr(&mut e, b"  -42xyz");
         assert_eq!(e.call(0x00ec_a6d3, &args![s]).i32(), -42);
         let f = cstr(&mut e, b"1.5e2 rest");
         assert_eq!(e.call(0x00ec_a573, &args![f]).f64(), 150.0);
-        // MSVC rand from the default seed: 41, 18467, 6334.
+        // MSVC rand from the default seed: 41, 18467, 6334. The thread data is a block with
+        // the seed `_initptd` stores (+0x14 = 1), answered by `_getptd` (`00ed11de`).
+        let thread = e.mem.alloc(0x400);
+        e.mem.set_u32(thread + 0x14, 1);
+        e.register_double(0x00ed_11de, move |_, _| thread.into_ret());
         let r: Vec<i32> = (0..3).map(|_| e.call(0x00ec_adb8, &[]).i32()).collect();
         assert_eq!(r, vec![41, 18467, 6334]);
     }
@@ -7123,280 +6419,6 @@ mod tests {
         let q: Ptr = e.call_as(0x0040_1000, &args![12u32]);
         e.call(0x0040_1460, &args![q, p, 12u32]);
         assert_eq!(e.call(0x00ec_4835, &args![p, q, 12u32]).i32(), 0);
-    }
-
-    /// A class `D : B` with RTTI laid out as MSVC does (COL, CHD, base
-    /// class array with D then B), and a `D` object.
-    #[test]
-    fn dynamic_cast_to_a_base_and_back() {
-        let mut e = Engine::new();
-        let r = e.mem.alloc(0x200);
-        let (td_d, td_b, td_x) = (r, r + 0x20, r + 0x40);
-        e.mem.set_cstr(td_d + 8, b".?AVD@@");
-        e.mem.set_cstr(td_b + 8, b".?AVB@@");
-        e.mem.set_cstr(td_x + 8, b".?AVX@@");
-        let (bcd_d, bcd_b) = (r + 0x60, r + 0x80);
-        for (bcd, td) in [(bcd_d, td_d), (bcd_b, td_b)] {
-            e.mem.set_u32(bcd, td);
-            e.mem.set_i32(bcd + 12, -1); // pdisp: not a virtual base
-        }
-        let array = r + 0xa0;
-        e.mem.set_u32(array, bcd_d);
-        e.mem.set_u32(array + 4, bcd_b);
-        let chd = r + 0xb0;
-        e.mem.set_u32(chd + 8, 2);
-        e.mem.set_u32(chd + 12, array);
-        let col = r + 0xc0;
-        e.mem.set_u32(col + 12, td_d);
-        e.mem.set_u32(col + 16, chd);
-        let vft = r + 0xe0;
-        e.mem.set_u32(vft - 4, col);
-        let obj = e.mem.alloc(8);
-        e.mem.set_u32(obj, vft);
-        let cast = |e: &mut Engine, to: u32| -> u32 {
-            e.call(
-                0x00ec_43fb,
-                &args![
-                    Ptr::<()>::new(obj),
-                    0i32,
-                    Ptr::<()>::new(td_b),
-                    Ptr::<()>::new(to),
-                    0i32
-                ],
-            )
-            .u32()
-        };
-        assert_eq!(cast(&mut e, td_d), obj);
-        assert_eq!(cast(&mut e, td_b), obj);
-        assert_eq!(cast(&mut e, td_x), 0);
-    }
-
-    /// `vsprintf(format, words)` through the registered entry.
-    fn vsp(e: &mut Engine, format: &[u8], words: &[u32]) -> String {
-        let f = cstr(e, format);
-        let list = e.mem.alloc(4 * words.len().max(1) as u32);
-        for (i, w) in words.iter().enumerate() {
-            e.mem.set_u32(list + 4 * i as u32, *w);
-        }
-        let dest: Ptr = Ptr::new(e.mem.alloc(512));
-        let n = e.call(0x00ec_6cc4, &args![dest, f, list]).i32();
-        let s = e.mem.cstr(dest.addr());
-        assert_eq!(n as usize, s.len());
-        String::from_utf8(s).unwrap()
-    }
-
-    fn dbl(v: f64) -> [u32; 2] {
-        let b = v.to_bits();
-        [b as u32, (b >> 32) as u32]
-    }
-
-    #[test]
-    fn vsprintf_integers_and_strings() {
-        let mut e = Engine::new();
-        let s = cstr(&mut e, b"Doc Mitchell");
-        assert_eq!(
-            vsp(&mut e, b"%d|%i|%u", &[(-5i32) as u32, 42, (-1i32) as u32]),
-            "-5|42|4294967295"
-        );
-        assert_eq!(
-            vsp(
-                &mut e,
-                b"%08X|%x|%X|%o|%#x|%#o",
-                &[0xbeef, 255, 255, 8, 255, 8]
-            ),
-            "0000BEEF|ff|FF|10|0xff|010"
-        );
-        assert_eq!(
-            vsp(&mut e, b"%03i|%10i|%-6d|%+d|% d", &[7, 7, 7, 7, 7]),
-            "007|         7|7     |+7| 7"
-        );
-        assert_eq!(
-            vsp(&mut e, b"%.3d|%5.3d|%-5.3d|%.0d", &[5, 5, 5, 0]),
-            "005|  005|005  |"
-        );
-        assert_eq!(
-            vsp(
-                &mut e,
-                b"%s|%.4s|%10s|%-10s|%s",
-                &[s.addr(), s.addr(), s.addr(), s.addr(), 0]
-            ),
-            "Doc Mitchell|Doc |Doc Mitchell|Doc Mitchell|(null)"
-        );
-        assert_eq!(
-            vsp(
-                &mut e,
-                b"%c%c|100%%|%p|%hd|%lu",
-                &[b'N' as u32, b'V' as u32, 0x1234, 0x1_0005, 9]
-            ),
-            "NV|100%|00001234|5|9"
-        );
-        assert_eq!(
-            vsp(&mut e, b"%*d|%-*d|%.*s", &[4, 9, 3, 9, 2, s.addr()]),
-            "   9|9  |Do"
-        );
-        assert_eq!(
-            vsp(&mut e, b"%I64d|%llx", &[0xffff_ffff, 1, 0, 3]),
-            "8589934591|300000000"
-        );
-        assert_eq!(vsp(&mut e, b"%5%|%q|%H", &[]), "%|q|H");
-        assert_eq!(vsp(&mut e, b"%d%", &[1]), "1");
-    }
-
-    #[test]
-    fn vsprintf_wide_text_and_count() {
-        let mut e = Engine::new();
-        let w = e.mem.alloc(16);
-        for (i, c) in "Vault".encode_utf16().enumerate() {
-            e.mem.set_u16(w + 2 * i as u32, c);
-        }
-        assert_eq!(
-            vsp(&mut e, b"%S|%ls|%C|%lc", &[w, w, b'a' as u32, 0x100]),
-            "Vault|Vault|a|"
-        );
-        let n = e.mem.alloc(4);
-        assert_eq!(vsp(&mut e, b"abc%n", &[n]), "abc");
-        assert_eq!(e.mem.u32(n), 3);
-    }
-
-    #[test]
-    fn vsprintf_floats_as_the_2008_runtime() {
-        let mut e = Engine::new();
-        let f = |e: &mut Engine, fmt: &[u8], v: f64| vsp(e, fmt, &dbl(v));
-        assert_eq!(f(&mut e, b"%f", 1.5), "1.500000");
-        assert_eq!(f(&mut e, b"%0.2f", 3.45678), "3.46");
-        assert_eq!(f(&mut e, b"%.2f", 2.675), "2.67"); // the 17th digits are 2.6749999999999998
-        assert_eq!(f(&mut e, b"%.0f", 0.5), "1");
-        assert_eq!(f(&mut e, b"%.0f", 2.5), "3");
-        assert_eq!(f(&mut e, b"%5.3f|", -0.0004), "-0.000|");
-        assert_eq!(f(&mut e, b"%.2f", 0.006), "0.01");
-        assert_eq!(f(&mut e, b"%.2f", 9.999), "10.00");
-        assert_eq!(f(&mut e, b"%f", 0.0), "0.000000");
-        assert_eq!(f(&mut e, b"%08.2f", -1.5), "-0001.50");
-        assert_eq!(f(&mut e, b"%+.1f", 1.25), "+1.3");
-        assert_eq!(f(&mut e, b"%.20f", 0.1), "0.10000000000000001000");
-        assert_eq!(f(&mut e, b"%e", 1.0), "1.000000e+000");
-        assert_eq!(f(&mut e, b"%E", 12345.678), "1.234568E+004");
-        assert_eq!(f(&mut e, b"%.2e", 0.000123), "1.23e-004");
-        assert_eq!(f(&mut e, b"%e", 0.0), "0.000000e+000");
-        assert_eq!(f(&mut e, b"%g", 100000.0), "100000");
-        assert_eq!(f(&mut e, b"%g", 1000000.0), "1e+006");
-        assert_eq!(f(&mut e, b"%g", 0.0001), "0.0001");
-        assert_eq!(f(&mut e, b"%g", 0.00001), "1e-005");
-        assert_eq!(f(&mut e, b"%g", 1.5), "1.5");
-        assert_eq!(f(&mut e, b"%g", 0.0), "0");
-        assert_eq!(f(&mut e, b"%G", 1.5e20), "1.5E+020");
-        assert_eq!(f(&mut e, b"%#g", 1.5), "1.50000");
-        assert_eq!(f(&mut e, b"%.3g", 1234.5), "1.23e+003");
-        assert_eq!(f(&mut e, b"%LG", 0.25), "0.25");
-        assert_eq!(f(&mut e, b"%10.1f|", 2.25), "       2.3|");
-        assert_eq!(f(&mut e, b"%-10.1f|", 2.25), "2.3       |");
-    }
-
-    #[test]
-    fn vsprintf_infinities_and_nans() {
-        let mut e = Engine::new();
-        let f = |e: &mut Engine, fmt: &[u8], v: f64| vsp(e, fmt, &dbl(v));
-        assert_eq!(f(&mut e, b"%f", f64::INFINITY), "1.#INF00");
-        assert_eq!(f(&mut e, b"%f", f64::NEG_INFINITY), "-1.#INF00");
-        assert_eq!(f(&mut e, b"%.2f", f64::INFINITY), "1.#J");
-        assert_eq!(
-            f(&mut e, b"%f", f64::from_bits(0xfff8_0000_0000_0000)),
-            "-1.#IND00"
-        );
-        assert_eq!(
-            f(&mut e, b"%f", f64::from_bits(0x7ff8_0000_0000_0001)),
-            "1.#QNAN0"
-        );
-        assert_eq!(f(&mut e, b"%g", f64::INFINITY), "1.#INF");
-    }
-
-    #[test]
-    fn vsprintf_game_messages() {
-        // A script error line: "%s at line %d, offset %d" style text and a hex id.
-        let mut e = Engine::new();
-        let name = cstr(&mut e, b"MQ101Script");
-        assert_eq!(
-            vsp(
-                &mut e,
-                b"Script '%s' line %i: form %08X, %.2f",
-                &[name.addr(), 12, 0x0001_f2c0, 0, 0x4000_0000]
-            ),
-            "Script 'MQ101Script' line 12: form 0001F2C0, 2.00"
-        );
-    }
-
-    #[test]
-    fn snprintf_fits_fills_overflows_and_counts() {
-        let mut e = Engine::new();
-        let f = cstr(&mut e, b"Topic %s (%08x)");
-        let s = cstr(&mut e, b"GREETING");
-        let buffer = e.mem.alloc(32);
-        let fill = |e: &mut Engine| e.mem.write(buffer, &[0xaa; 32]);
-        // Room to spare: written with its zero.
-        fill(&mut e);
-        let n = e.call(0x00eca38d, &args![buffer, 32u32, f, s, 0x0001_2345u32]);
-        assert_eq!(n.i32(), 25);
-        assert_eq!(e.mem.cstr(buffer), b"Topic GREETING (00012345)".to_vec());
-        assert_eq!(e.mem.u8(buffer + 25), 0);
-        // Exactly full: no zero, the length.
-        let short = cstr(&mut e, b"abc%d");
-        fill(&mut e);
-        let n = e.call(0x00eca38d, &args![buffer, 4u32, short, 7u32]);
-        assert_eq!(n.i32(), 4);
-        assert_eq!(e.mem.bytes(buffer, 5), b"abc7\xaa".to_vec());
-        // Too long: the first `count` characters, no zero, -1.
-        fill(&mut e);
-        let n = e.call(0x00eca38d, &args![buffer, 3u32, short, 7u32]);
-        assert_eq!(n.i32(), -1);
-        assert_eq!(e.mem.bytes(buffer, 4), b"abc\xaa".to_vec());
-        // A count of 0 writes nothing.
-        fill(&mut e);
-        let n = e.call(0x00eca38d, &args![buffer, 0u32, short, 7u32]);
-        assert_eq!(n.i32(), -1);
-        assert_eq!(e.mem.u8(buffer), 0xaa);
-        // A null buffer with a zero count only counts.
-        let n = e.call(0x00eca38d, &args![0u32, 0u32, short, 12u32]);
-        assert_eq!(n.i32(), 5);
-    }
-
-    #[test]
-    fn sprintf_writes_the_text_and_its_zero() {
-        let mut e = Engine::new();
-        let f = cstr(&mut e, b"Form %s %s (%08X)");
-        let a = cstr(&mut e, b"QUST");
-        let b = cstr(&mut e, b"VMS49");
-        let buffer = e.mem.alloc(32);
-        e.mem.write(buffer, &[0xaa; 32]);
-        let n = e.call(0x00ec623a, &args![buffer, f, a, b, 0x0010_abcdu32]);
-        assert_eq!(n.i32(), 26);
-        assert_eq!(
-            e.mem.bytes(buffer, 28),
-            b"Form QUST VMS49 (0010ABCD)\0\xaa".to_vec()
-        );
-    }
-
-    #[test]
-    #[should_panic(expected = "CRT invalid parameter: sprintf")]
-    fn sprintf_null_buffer_is_invalid() {
-        let mut e = Engine::new();
-        let f = cstr(&mut e, b"x");
-        e.call(0x00ec623a, &args![0u32, f]);
-    }
-
-    #[test]
-    #[should_panic(expected = "CRT invalid parameter: _snprintf")]
-    fn snprintf_null_buffer_with_room_is_invalid() {
-        let mut e = Engine::new();
-        let f = cstr(&mut e, b"x");
-        e.call(0x00eca38d, &args![0u32, 4u32, f]);
-    }
-
-    #[test]
-    fn the_arctangent_takes_its_argument_in_st0() {
-        let mut e = Engine::new();
-        let r = e.call(0x00ec9050, &args![1.0f64]).f64();
-        assert!((r - std::f64::consts::FRAC_PI_4).abs() < 1e-15);
-        assert!(e.call(0x00ec9050, &args![f64::NAN]).f64().is_nan());
     }
 
     #[test]
@@ -7499,46 +6521,68 @@ mod exit_tests {
         order
     }
 
-    fn table_words(e: &Engine) -> Vec<u32> {
-        let (begin, end) = (e.mem.u32(ONEXIT_BEGIN), e.mem.u32(ONEXIT_END));
-        (begin..end).step_by(4).map(|a| e.mem.u32(a)).collect()
+    /// The exit table's functions, decoded as `doexit` decodes them.
+    fn table_words(e: &mut Engine) -> Vec<u32> {
+        let begin = table_begin(e);
+        let encoded = e.mem.u32(ONEXIT_END);
+        let end = e.call(DECODE_POINTER, &args![encoded]).u32();
+        (begin..end)
+            .step_by(4)
+            .map(|a| {
+                let word = e.mem.u32(a);
+                e.call(DECODE_POINTER, &args![word]).u32()
+            })
+            .collect()
+    }
+
+    /// The exit table's block (its start, decoded).
+    fn table_begin(e: &mut Engine) -> u32 {
+        let encoded = e.mem.u32(ONEXIT_BEGIN);
+        e.call(DECODE_POINTER, &args![encoded]).u32()
+    }
+
+    /// An engine after the start-up's exit-table set-up.
+    fn exit_engine() -> Engine {
+        let mut e = Engine::new();
+        start_up_test::exit_table(&mut e);
+        e
     }
 
     #[test]
     fn atexit_records_the_function_in_registration_order() {
-        let mut e = Engine::new();
+        let mut e = exit_engine();
         assert_eq!(e.call(0x00ec658f, &[0x0090_0010]).i32(), 0);
         assert_eq!(e.call(0x00ec658f, &[0x0090_0020]).i32(), 0);
-        assert_eq!(table_words(&e), [0x0090_0010, 0x0090_0020]);
+        assert_eq!(table_words(&mut e), [0x0090_0010, 0x0090_0020]);
         // The exe's first table: 32 words of zeros, filled from the start.
-        let begin = e.mem.u32(ONEXIT_BEGIN);
+        let begin = table_begin(&mut e);
         assert_eq!(e.mem.block_size(begin), Some(128));
         assert_eq!(e.mem.u32(begin + 8), 0);
     }
 
     #[test]
     fn atexit_of_a_null_function_stores_it_and_answers_minus_one() {
-        let mut e = Engine::new();
+        let mut e = exit_engine();
         assert_eq!(e.call(0x00ec658f, &[0]).i32(), -1);
-        assert_eq!(table_words(&e), [0]);
+        assert_eq!(table_words(&mut e), [0]);
     }
 
     #[test]
     fn the_table_grows_by_its_size_and_keeps_its_entries() {
-        let mut e = Engine::new();
+        let mut e = exit_engine();
         for i in 0..100u32 {
             assert_eq!(atexit(&mut e, Ptr::new(0x0090_0000 + i)), 0);
         }
         let expect: Vec<u32> = (0..100).map(|i| 0x0090_0000 + i).collect();
-        assert_eq!(table_words(&e), expect);
+        assert_eq!(table_words(&mut e), expect);
         // 128 bytes, then 256 (full at 64 words), then 512 (128 words).
-        let begin = e.mem.u32(ONEXIT_BEGIN);
+        let begin = table_begin(&mut e);
         assert_eq!(e.mem.block_size(begin), Some(512));
     }
 
     #[test]
     fn doexit_runs_the_exit_functions_last_first_then_the_two_tables() {
-        let mut e = Engine::new();
+        let mut e = exit_engine();
         let order = recorders(
             &mut e,
             &[
@@ -7577,7 +6621,7 @@ mod exit_tests {
         assert!(report.open.is_empty() && report.stopped.is_empty());
         assert_eq!(report.exit_process, Some(5));
         // Each exit function was cleared before it ran.
-        assert_eq!(table_words(&e), [0, 0, 0]);
+        assert_eq!(table_words(&mut e), [0, 0, 0]);
         assert_eq!(e.mem.u32(EXIT_STARTED), 1);
         assert_eq!(e.mem.u32(EXIT_DONE), 1);
         assert_eq!(e.mem.u8(EXIT_RETURNS), 0);
@@ -7585,7 +6629,7 @@ mod exit_tests {
 
     #[test]
     fn a_quick_exit_runs_only_the_terminators() {
-        let mut e = Engine::new();
+        let mut e = exit_engine();
         let order = recorders(&mut e, &[0x0090_0010, 0x0090_1000, 0x0090_2000]);
         atexit(&mut e, Ptr::new(0x0090_0010));
         e.mem.map(PRE_TERMINATORS.0, 0x20);
@@ -7595,12 +6639,12 @@ mod exit_tests {
         assert_eq!(*order.borrow(), [0x0090_2000]);
         assert_eq!(report.exit_process, Some(1));
         // The exit function is still registered.
-        assert_eq!(table_words(&e), [0x0090_0010]);
+        assert_eq!(table_words(&mut e), [0x0090_0010]);
     }
 
     #[test]
     fn a_second_exit_after_the_process_exit_began_runs_nothing() {
-        let mut e = Engine::new();
+        let mut e = exit_engine();
         let order = recorders(&mut e, &[0x0090_2000]);
         e.mem.map(PRE_TERMINATORS.0, 0x20);
         e.mem.set_u32(0x0101_1404, 0x0090_2000);
@@ -7613,7 +6657,7 @@ mod exit_tests {
 
     #[test]
     fn a_returning_exit_keeps_going_and_records_the_caller_flag() {
-        let mut e = Engine::new();
+        let mut e = exit_engine();
         let order = recorders(&mut e, &[0x0090_2000]);
         e.mem.map(PRE_TERMINATORS.0, 0x20);
         e.mem.set_u32(0x0101_1404, 0x0090_2000);
@@ -7627,7 +6671,7 @@ mod exit_tests {
 
     #[test]
     fn a_handler_that_registers_another_restarts_the_walk_at_the_new_end() {
-        let mut e = Engine::new();
+        let mut e = exit_engine();
         let order = recorders(&mut e, &[0x0090_0020, 0x0090_0040]);
         let o = order.clone();
         e.register_double(0x0090_0030, move |e, _| {
@@ -7644,7 +6688,7 @@ mod exit_tests {
 
     #[test]
     fn handlers_nobody_translated_are_skipped_and_counted() {
-        let mut e = Engine::new();
+        let mut e = exit_engine();
         let order = recorders(&mut e, &[0x0090_0010]);
         // 00f00f00 is not translated; the handler at 00900030 stops in it.
         e.register(0x0090_0030, |e, _| e.call(0x00f0_0f00, &[]));
@@ -7663,7 +6707,7 @@ mod exit_tests {
     #[test]
     fn destructor_rows_run_through_the_exit_functions() {
         // 00fc7a70: call 00404a00 on 011c3264 (data/atexit_destructors.tsv).
-        let mut e = Engine::new();
+        let mut e = exit_engine();
         let seen: Order = Rc::default();
         let s = seen.clone();
         e.register_double(0x0040_4a00, move |_, a| {
@@ -7678,7 +6722,7 @@ mod exit_tests {
 
     #[test]
     fn doexit_is_callable_at_its_address() {
-        let mut e = Engine::new();
+        let mut e = exit_engine();
         let order = recorders(&mut e, &[0x0090_0010]);
         atexit(&mut e, Ptr::new(0x0090_0010));
         e.call(0x00eccd99, &args![0u32, 0u32, 1u32]);
@@ -7686,72 +6730,23 @@ mod exit_tests {
     }
 
     #[test]
-    fn the_stack_forms_of_pow_and_acos_reach_the_register_forms_bodies() {
-        let mut e = Engine::new();
-        e.call_log = Some(vec![]);
-        assert_eq!(e.call(0x00ec9ac0, &args![2.0f64, 10.0f64]).f64(), 1024.0);
-        assert_eq!(e.call(0x00eca190, &args![0.5f64]).f64(), 0.5f64.acos());
-        let log = e.call_log.take().unwrap();
-        let words = |addr: u32| -> Vec<Vec<u32>> {
-            log.iter()
-                .filter(|(a, _)| *a == addr)
-                .map(|(_, w)| w.clone())
-                .collect()
-        };
-        let two = 2.0f64.to_bits();
-        let ten = 10.0f64.to_bits();
-        let half = 0.5f64.to_bits();
-        assert_eq!(
-            words(CI_POW),
-            [vec![
-                two as u32,
-                (two >> 32) as u32,
-                ten as u32,
-                (ten >> 32) as u32
-            ]]
-        );
-        assert_eq!(words(CI_ACOS), [vec![half as u32, (half >> 32) as u32]]);
-    }
-
-    #[test]
-    fn atan2_takes_y_first_and_keeps_the_quadrant() {
-        let mut e = Engine::new();
-        let quarter_turn = std::f64::consts::FRAC_PI_2;
-        assert_eq!(
-            e.call(0x00ec9760, &args![1.0f64, 1.0f64]).f64(),
-            1.0f64.atan2(1.0)
-        );
-        assert_eq!(
-            e.call(0x00ec9760, &args![1.0f64, 0.0f64]).f64(),
-            quarter_turn
-        );
-        assert_eq!(
-            e.call(0x00ec9760, &args![0.0f64, -1.0f64]).f64(),
-            std::f64::consts::PI
-        );
-        assert_eq!(
-            e.call(0x00ec9760, &args![-1.0f64, -1.0f64]).f64(),
-            (-1.0f64).atan2(-1.0)
-        );
-        assert!(e.call(0x00ec9760, &args![-1.0f64, -1.0f64]).f64() < -quarter_turn);
-    }
-
-    #[test]
     fn ctrlfp_merges_the_masked_bits_and_returns_the_old_control_word() {
         let mut e = Engine::new();
         // The game's control word until something loads another.
+        // The FPU keeps bit 6 set (measured): 0x133f reads back as 0x137f.
         assert_eq!(ctrlfp(&mut e, 0x133f, 0xffff), 0x027f);
-        assert_eq!(x87_control_word(&mut e), 0x133f);
+        assert_eq!(x87_control_word(&mut e), 0x137f);
         // Only the masked bits change.
-        assert_eq!(ctrlfp(&mut e, 0x0c00, 0x0c00), 0x133f);
-        assert_eq!(x87_control_word(&mut e), 0x1f3f);
-        // FLDCW takes the low 16 bits; the old word comes back sign-extended.
+        assert_eq!(ctrlfp(&mut e, 0x0c00, 0x0c00), 0x137f);
+        assert_eq!(x87_control_word(&mut e), 0x1f7f);
+        // FLDCW takes the low 16 bits (bit 15 reads 0 afterwards: 0x8000 is kept as 0x0040);
+        // the old word comes back sign-extended.
         assert_eq!(
             e.call(0x00ed5abb, &args![0x0001_8000u32, 0xffff_ffffu32])
                 .i32(),
-            0x1f3f
+            0x1f7f
         );
-        assert_eq!(ctrlfp(&mut e, 0x027f, 0xffff), -0x8000);
+        assert_eq!(ctrlfp(&mut e, 0x027f, 0xffff), 0x0040);
         assert_eq!(x87_control_word(&mut e), 0x027f);
     }
 }
@@ -8385,7 +7380,11 @@ mod physics_step_tests {
         let seen = log.clone();
         e.register_double(FRND, move |e, a| {
             seen.borrow_mut().push((FRND, a.to_vec()));
-            assert_eq!(x87_control_word(e), 0x1b3f, "round up while it runs");
+            assert_eq!(
+                x87_control_word(e),
+                0x1b7f,
+                "round up while it runs (bit 6 reads 1)"
+            );
             st0(f64::from_bits(u64::from(a[0]) | (u64::from(a[1]) << 32)).ceil())
         });
         let got = ceil_via_registry(&mut e, 2.25);
@@ -8538,6 +7537,37 @@ mod physics_step_tests {
         e.call(0x00ec_9650, &args![0.1f64]);
         assert_eq!(calls_to(&log, ASIN_X87).len(), 1);
         assert!(calls_to(&log, ASIN_SSE2).is_empty());
+    }
+
+    #[test]
+    fn ci_asin_stores_a_signalling_nan_quiet_so_its_error_type_is_7() {
+        let mut e = Engine::new();
+        e.map(USE_SSE2_MATHFCNS, 4);
+        let log = Log::default();
+        recorder(&mut e, &log, LOAD_FLAGS_HELPER, eax(0x7ff8_0000));
+        recorder(&mut e, &log, ASIN_X87, st0(1.0));
+        e.call(0x00ec_9650, &args![0x7ff0_0000_0000_0001u64]);
+        let quiet = words(f64::from_bits(0x7ff8_0000_0000_0001));
+        assert_eq!(calls_to(&log, LOAD_FLAGS_HELPER), vec![quiet.to_vec()]);
+        assert_eq!(
+            calls_to(&log, ASIN_X87),
+            vec![vec![1, 0x7ff8_0000, quiet[0], quiet[1], quiet[0], quiet[1]]],
+            "the register and the stored double quiet"
+        );
+        // Through the real 00ed2808, 00ec96a8 and 00ed27ac: __87except sees type 7 for the
+        // operation 0xe, as the exe reports it, and the NaN comes back quiet.
+        let mut e = Engine::new();
+        e.map(USE_SSE2_MATHFCNS, 4);
+        e.map(MATH_ERROR_SWITCH, 4);
+        let seen = Log::default();
+        let record = seen.clone();
+        e.register_double(0x00ee_1b04, move |e, a| {
+            record.borrow_mut().push((a[0], vec![e.mem.u32(a[1])]));
+            Ret::default()
+        });
+        let r = e.call(0x00ec_9650, &args![0x7ff0_0000_0000_0001u64]).f64();
+        assert_eq!(r.to_bits(), 0x7ff8_0000_0000_0001);
+        assert_eq!(*seen.borrow(), vec![(0xe, vec![7])]);
     }
 
     // ---- the shared square-root body -------------------------------------------------------
@@ -9781,6 +8811,13 @@ mod runtime_support_tests {
     #[test]
     fn ansicp_reads_the_locales_code_page() {
         let mut e = engine();
+        // `atol`'s body hands the text to `strtol(text, NULL, 10)` (`00ec8d08`), which reads
+        // the exe image's locale data: doubled to parse the decimal digits.
+        e.register(0x00ec_8d08, |e, a| {
+            let text = e.mem.cstr(a[0]);
+            let digits: String = text.iter().map(|&c| c as char).collect();
+            digits.parse::<u32>().unwrap_or(0).into_ret()
+        });
         e.register(IMPORT_GET_LOCALE_INFO_A, |e, a| {
             assert_eq!((a[0], a[1], a[3]), (0x409, 0x1004, 6));
             e.mem.write(a[2], b"1252\0");
@@ -11092,5 +10129,130 @@ mod b000t_output_tests {
         e.call(0x00ed_2efb, &args![0x2bu32, 0u32, stream, count]);
         assert_eq!(e.mem.bytes(buffer, 4), b"***\0".to_vec());
         assert_eq!(e.mem.u32(count), 3);
+    }
+}
+
+#[cfg(test)]
+mod control_word_tests {
+    use super::*;
+
+    /// `FLDCW` then `FSTCW` as measured on the player's machine (2026-10-21).
+    #[test]
+    fn the_control_word_reads_back_as_the_fpu_keeps_it() {
+        let mut e = Engine::new();
+        for (loaded, read) in [
+            (0x023fu16, 0x027fu16),
+            (0x027f, 0x027f),
+            (0x003f, 0x007f),
+            (0x0000, 0x0040),
+            (0xffff, 0x1f7f),
+            (0x1f3f, 0x1f7f),
+            (0x0e7f, 0x0e7f),
+        ] {
+            set_x87_control_word(&mut e, loaded);
+            assert_eq!(x87_control_word(&mut e), read, "{loaded:#06x}");
+        }
+        set_x87_control_word(&mut e, crate::x87::DEFAULT_CONTROL_WORD);
+    }
+}
+
+#[cfg(test)]
+mod tests_gcvt_and_iterator {
+    use super::*;
+
+    #[test]
+    fn gcvt_hands_the_value_on_and_answers_the_buffer_or_null() {
+        let mut e = Engine::new();
+        let seen = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let record = seen.clone();
+        e.register_double(GCVT_S, move |_, a| {
+            record.borrow_mut().push(a.to_vec());
+            u32::from(a[4] == 99).into_ret()
+        });
+        let buffer: Ptr = Ptr::new(0x1000);
+        assert_eq!(
+            e.call(0x00ec_dd16, &args![1.5f64, 6i32, buffer]).u32(),
+            0x1000
+        );
+        assert_eq!(e.call(0x00ec_dd16, &args![1.5f64, 99i32, buffer]).u32(), 0);
+        let bits = 1.5f64.to_bits();
+        assert_eq!(
+            seen.borrow()[0],
+            vec![0x1000, 0xffff_ffff, bits as u32, (bits >> 32) as u32, 6]
+        );
+        // A signalling NaN arrives quiet.
+        e.call(
+            0x00ec_dd16,
+            &args![f64::from_bits(0x7ff0_0000_0000_0001), 6i32, buffer],
+        );
+        assert_eq!(seen.borrow()[2][3], 0x7ff8_0000);
+    }
+
+    #[test]
+    fn the_vector_destructor_iterator_runs_last_first() {
+        let mut e = Engine::new();
+        let order = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let record = order.clone();
+        e.register_double(0x7f00_0300, move |_, a| {
+            record.borrow_mut().push(a[0]);
+            Ret::default()
+        });
+        e.call(
+            0x00ec_5fce,
+            &args![0x2000u32, 0x10u32, 3i32, 0x7f00_0300u32],
+        );
+        assert_eq!(*order.borrow(), vec![0x2020, 0x2010, 0x2000]);
+        order.borrow_mut().clear();
+        e.call(
+            0x00ec_5fce,
+            &args![0x2000u32, 0x10u32, 0i32, 0x7f00_0300u32],
+        );
+        assert!(order.borrow().is_empty());
+    }
+}
+
+#[cfg(test)]
+mod tests_realloc_msize {
+    use super::*;
+
+    #[test]
+    fn realloc_keeps_the_bytes_and_follows_the_exe_s_edges() {
+        let mut e = Engine::new();
+        let thread_data = e.mem.alloc(0x80);
+        e.register_double(GETPTD_NOEXIT, move |_, _| thread_data.into_ret());
+        let a = e.call(0x00ed0cdf, &args![6u32]).u32();
+        e.mem.write(a, b"abcdef");
+        assert_eq!(e.call(0x00ec_d31f, &args![a]).u32(), 6);
+        let b = e.call(0x00ec_cf5d, &args![a, 3u32]).u32();
+        assert_eq!(e.mem.bytes(b, 3), b"abc");
+        assert_eq!(e.call(0x00ec_d31f, &args![b]).u32(), 3);
+        let c = e.call(0x00ec_cf5d, &args![b, 0x40u32]).u32();
+        assert_eq!(e.mem.bytes(c, 4), b"abc\0");
+        // A null block is malloc; size 0 frees and answers null.
+        let d = e.call(0x00ec_cf5d, &args![0u32, 8u32]).u32();
+        assert_ne!(d, 0);
+        assert_eq!(e.call(0x00ec_cf5d, &args![d, 0u32]).u32(), 0);
+        assert!(!e.kernel.crt_block_sizes.contains_key(&d));
+        // Too big: the new handler, ENOMEM, null, the block kept.
+        let called = std::rc::Rc::new(std::cell::Cell::new(0u32));
+        let seen = called.clone();
+        e.register_double(CALL_NEW_HANDLER, move |_, a| {
+            seen.set(a[0]);
+            Ret::default()
+        });
+        assert_eq!(e.call(0x00ec_cf5d, &args![c, 0xffff_fff0u32]).u32(), 0);
+        assert_eq!(called.get(), 0xffff_fff0);
+        assert_eq!(errno_value(&mut e), 0xc);
+        assert_eq!(e.call(0x00ec_d31f, &args![c]).u32(), 0x40);
+    }
+
+    #[test]
+    fn msize_of_null_is_einval_and_minus_one() {
+        let mut e = Engine::new();
+        let thread_data = e.mem.alloc(0x80);
+        e.register_double(GETPTD_NOEXIT, move |_, _| thread_data.into_ret());
+        e.register(0x00ec_7c30, |_, _| Ret::default());
+        assert_eq!(e.call(0x00ec_d31f, &args![0u32]).u32(), 0xffff_ffff);
+        assert_eq!(errno_value(&mut e), 0x16);
     }
 }

@@ -168,6 +168,10 @@ fn own_modules(units: &Path) -> Result<(BTreeMap<String, Vec<String>>, Vec<Strin
             }
         }
     }
+    // A folder named like a top-level file (`crt.rs` with `crt/`) holds that file's own
+    // submodules (declared in the file), not a subsystem: it gets no `mod.rs` and no
+    // `pub mod` or re-export of its own.
+    subs.retain(|name, _| !top.contains(name));
     top.sort();
     Ok((subs, top))
 }
@@ -457,5 +461,22 @@ mod tests {
             ["engine-core", "engine-gamebryo", "engine-havok"]
         );
         assert_eq!(below(&all, "engine-core"), Vec::<String>::new());
+    }
+
+    #[test]
+    fn a_folder_beside_a_same_named_file_is_that_files_submodules() {
+        let units = std::env::temp_dir().join(format!("ledger_units_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&units);
+        for dir in ["crt", "bsaudio"] {
+            fs::create_dir_all(units.join(dir)).unwrap();
+        }
+        for file in ["crt.rs", "platform.rs", "crt/math.rs", "bsaudio/bsaudio.rs", "bsaudio/mod.rs"] {
+            fs::write(units.join(file), "").unwrap();
+        }
+        let (subs, top) = own_modules(&units).unwrap();
+        fs::remove_dir_all(&units).unwrap();
+        assert_eq!(top, ["crt", "platform"]);
+        assert_eq!(subs.keys().collect::<Vec<_>>(), ["bsaudio"]);
+        assert_eq!(subs["bsaudio"], ["bsaudio"]);
     }
 }

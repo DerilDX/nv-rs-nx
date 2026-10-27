@@ -286,4 +286,46 @@ mod a09_tests {
         e.call(0x00db_78a0, &args![this, array, list]);
         assert!(slot_calls(&e).is_empty());
     }
+
+    /// A memory router at `0x7000` whose `+0x10` allocator hands out `block` for `size`.
+    fn creator_engine(block: u32, size: u32) -> Engine {
+        let mut e = Engine::new();
+        e.map(0x0000_7000, 0x1000);
+        e.mem.set_u32(0x7010, 0x7100);
+        e.mem.set_u32(0x7100, 0x7200);
+        e.mem.set_u32(0x7204, 0x00ab_0004);
+        e.register(0x00c8_5750, |_, _| 0x7000u32.into_ret());
+        e.register_double(0x00ab_0004, move |_, a| {
+            assert_eq!(a, [0x7100, size]);
+            block.into_ret()
+        });
+        e
+    }
+
+    #[test]
+    fn the_class_registries_are_built_with_their_tables_and_maps() {
+        let mut e = creator_engine(0x7800, 0x14);
+        e.register(0x00cb_1fe0, |_, _| Ret::default());
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x00db_7960, &args![]).u32(), 0x7800);
+        let log = e.call_log.take().unwrap();
+        assert_eq!(e.mem.u32(0x7800), 0x010c_f844);
+        assert_eq!(e.mem.u16(0x7804), 0x14);
+        assert_eq!(e.mem.u32(0x7810), 0xffff_ffff);
+        let reserve: Vec<_> = log.iter().filter(|(a, _)| *a == 0x00cb_1fe0).collect();
+        assert_eq!(reserve[0].1, [0x7808, 0x7100, 0]);
+
+        let mut e = creator_engine(0x7800, 0x20);
+        e.register(0x00d8_7790, |_, a| a[0].into_ret());
+        assert_eq!(e.call(0x00db_79c0, &args![]).u32(), 0x7800);
+        assert_eq!(e.mem.u32(0x7800), 0x010c_f804, "the final table");
+        assert_eq!(e.mem.u32(0x7808), 0x010c_f830);
+        assert_eq!(e.mem.u16(0x7804), 0x20);
+
+        let mut e = creator_engine(0x7800, 0x1c);
+        e.register(0x00d8_7790, |_, a| a[0].into_ret());
+        assert_eq!(e.call(0x00db_7a20, &args![]).u32(), 0x7800);
+        assert_eq!(e.mem.u32(0x7800), 0x010c_f7b0);
+        assert_eq!(e.mem.u32(0x7818), 1);
+    }
 }

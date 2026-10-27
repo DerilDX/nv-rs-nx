@@ -5238,6 +5238,7 @@ mod tests {
                 8u32 * 16,
                 (capacity & CAPACITY_MASK) << 4
             ]
+            .to_vec()
         );
         assert_eq!(reports[1].1[2], AXIS_NAME);
         let chunks: Vec<_> = log
@@ -5579,7 +5580,7 @@ mod tests {
             log.iter()
                 .filter(|c| c.0 == BASE_CONSTRUCTOR)
                 .collect::<Vec<_>>(),
-            vec![&(BASE_CONSTRUCTOR, args![this.addr()])]
+            vec![&(BASE_CONSTRUCTOR, args![this.addr()].to_vec())]
         );
         let me = this.addr();
         assert_eq!(e.mem.u32(me), VTABLE);
@@ -5717,8 +5718,8 @@ mod tests {
         assert_eq!(
             calls,
             vec![
-                (FAKE_COLLECT, args![collector, w.handles[0], 0u32]),
-                (FAKE_COLLECT, args![collector, w.handles[1], 0u32])
+                (FAKE_COLLECT, args![collector, w.handles[0], 0u32].to_vec()),
+                (FAKE_COLLECT, args![collector, w.handles[1], 0u32].to_vec())
             ]
         );
     }
@@ -5843,9 +5844,9 @@ mod tests {
         assert_eq!(e.mem.u32(me), VTABLE);
         let freed: Vec<_> = log.iter().filter(|c| c.0 == EASY_FREE).collect();
         assert_eq!(freed.len(), 1);
-        assert_eq!(freed[0].1, args![HEAP_ALLOCATOR, markers]);
+        assert_eq!(freed[0].1, args![HEAP_ALLOCATOR, markers].to_vec());
         assert_eq!(log.iter().filter(|c| c.0 == BASE_DESTRUCTOR).count(), 1);
-        assert_eq!(log.last().unwrap(), &(BASE_DESTRUCTOR, args![me]));
+        assert_eq!(log.last().unwrap(), &(BASE_DESTRUCTOR, args![me].to_vec()));
         for array in [0xa0u32, 0xac, 0xb8, 0xc4] {
             assert_eq!(e.mem.u32(me + array), 0);
             assert_eq!(e.mem.u32(me + array + 4), 0);
@@ -5872,7 +5873,7 @@ mod tests {
         let frees: Vec<_> = log.iter().filter(|c| c.0 == FAKE_HEAP_NOOP).collect();
         assert_eq!(
             frees.last().unwrap().1,
-            args![HEAP_ALLOCATOR, this.addr(), 0xe0u32]
+            args![HEAP_ALLOCATOR, this.addr(), 0xe0u32].to_vec()
         );
     }
 
@@ -6178,8 +6179,8 @@ mod tests {
         assert_eq!(
             calls,
             vec![
-                (FAKE_COLLECT, args![collector, w.handles[0], 0u32]),
-                (FAKE_COLLECT, args![collector, w.handles[1], 0u32])
+                (FAKE_COLLECT, args![collector, w.handles[0], 0u32].to_vec()),
+                (FAKE_COLLECT, args![collector, w.handles[1], 0u32].to_vec())
             ]
         );
         assert_eq!(e.mem.u32(ROUTER), BUMP_REGION);
@@ -6202,8 +6203,8 @@ mod tests {
         assert_eq!(
             calls,
             vec![
-                (FAKE_COLLECT, args![collector, w.handles[0], 0u32]),
-                (FAKE_COLLECT, args![collector, w.handles[1], 0u32])
+                (FAKE_COLLECT, args![collector, w.handles[0], 0u32].to_vec()),
+                (FAKE_COLLECT, args![collector, w.handles[1], 0u32].to_vec())
             ]
         );
     }

@@ -66,12 +66,13 @@ pub mod ptr;
 pub mod sse;
 pub mod static_exit;
 pub mod static_init;
+pub mod thread_host;
 pub mod types;
 pub mod units;
 pub mod x87;
 
 pub use abi::{AbiFn, Ret};
-pub use engine::Engine;
+pub use engine::{Engine, OpenHandler};
 pub use mem::Mem;
 pub use ptr::{Field, Inline, Layout, Ptr, Scalar};
 

@@ -192,50 +192,53 @@ pub fn bhk_multithreaded_system_init_mt_system(
 
     // The pool's creation info: 0x20 bytes, first word the setting's value;
     // its `hkArray` of words is at +0x10 (data), +0x14 (size), +0x18 (capacity word).
-    let pool_info = e.mem.alloc(0x20);
-    e.call(JOB_POOL_INFO_CONSTRUCTOR, &args![pool_info]);
-    let num_threads = e.get(this, BhkMultithreadedSystem::iNumThreadsValue);
-    e.mem.set_u32(pool_info, num_threads);
+    // The exe's frame (exception record, `SUB ESP,0x40`, three pushes and the cookie): 0x5c
+    // bytes, the pool info at +0x30 (00cbf5a0) and the queue info at +0x14 (00cbf5ea).
+    e.with_stack(0x5c, |e, frame| {
+        let frame = frame.addr();
+        let pool_info = frame + 0x30;
+        e.call(JOB_POOL_INFO_CONSTRUCTOR, &args![pool_info]);
+        let num_threads = e.get(this, BhkMultithreadedSystem::iNumThreadsValue);
+        e.mem.set_u32(pool_info, num_threads);
 
-    let allocator = havok_allocator(e);
-    let pool = e
-        .vcall(allocator, ALLOCATOR_ALLOCATE, &args![0x148u32])
-        .u32();
-    e.mem.set_u16(pool + 4, 0x148);
-    let pool = e
-        .call(JOB_THREAD_POOL_CONSTRUCTOR, &args![pool, pool_info])
-        .u32();
-    e.set(this, BhkMultithreadedSystem::pJobThreadPool, Ptr::new(pool));
+        let allocator = havok_allocator(e);
+        let pool = e
+            .vcall(allocator, ALLOCATOR_ALLOCATE, &args![0x148u32])
+            .u32();
+        e.mem.set_u16(pool + 4, 0x148);
+        let pool = e
+            .call(JOB_THREAD_POOL_CONSTRUCTOR, &args![pool, pool_info])
+            .u32();
+        e.set(this, BhkMultithreadedSystem::pJobThreadPool, Ptr::new(pool));
 
-    // The queue's creation info: 0x1c bytes, capacity field (+0x18) 10; its
-    // `hkArray` of 12-byte elements is at +0xc.
-    let queue_info = e.mem.alloc(0x1c);
-    e.call(JOB_QUEUE_INFO_CONSTRUCTOR, &args![queue_info]);
-    e.mem.set_u32(queue_info + 0x18, 0xa);
+        // The queue's creation info: 0x1c bytes, capacity field (+0x18) 10; its
+        // `hkArray` of 12-byte elements is at +0xc.
+        let queue_info = frame + 0x14;
+        e.call(JOB_QUEUE_INFO_CONSTRUCTOR, &args![queue_info]);
+        e.mem.set_u32(queue_info + 0x18, 0xa);
 
-    let allocator = havok_allocator(e);
-    let queue = e
-        .vcall(allocator, ALLOCATOR_ALLOCATE, &args![0x1c0u32])
-        .u32();
-    let queue = if queue != 0 {
-        e.call(JOB_QUEUE_CONSTRUCTOR, &args![queue, queue_info])
-            .u32()
-    } else {
-        0
-    };
-    e.set(this, BhkMultithreadedSystem::pJobQueue, Ptr::new(queue));
-    e.call(JOB_QUEUE_INSTALL, &args![queue]);
+        let allocator = havok_allocator(e);
+        let queue = e
+            .vcall(allocator, ALLOCATOR_ALLOCATE, &args![0x1c0u32])
+            .u32();
+        let queue = if queue != 0 {
+            e.call(JOB_QUEUE_CONSTRUCTOR, &args![queue, queue_info])
+                .u32()
+        } else {
+            0
+        };
+        e.set(this, BhkMultithreadedSystem::pJobQueue, Ptr::new(queue));
+        e.call(JOB_QUEUE_INSTALL, &args![queue]);
 
-    fn_00cbf490(e, Ptr::new(queue_info));
-    e.mem.free(queue_info);
+        fn_00cbf490(e, Ptr::new(queue_info));
 
-    // The pool info's word array is released without being reset.
-    let allocator = havok_allocator(e);
-    let storage = e.mem.u32(pool_info + 0x10);
-    let capacity = e.mem.i32(pool_info + 0x18);
-    e.mem.set_u32(pool_info + 0x14, 0);
-    free_word_array(e, allocator, storage, capacity);
-    e.mem.free(pool_info);
+        // The pool info's word array is released without being reset.
+        let allocator = havok_allocator(e);
+        let storage = e.mem.u32(pool_info + 0x10);
+        let capacity = e.mem.i32(pool_info + 0x18);
+        e.mem.set_u32(pool_info + 0x14, 0);
+        free_word_array(e, allocator, storage, capacity);
+    });
     e.mem.set_u32(context, previous);
 }
 
@@ -565,6 +568,42 @@ mod tests {
         assert!(calls_to(&e, JOB_QUEUE_CONSTRUCTOR).is_empty());
         assert!(e.get(this, BhkMultithreadedSystem::pJobQueue).is_null());
         assert_eq!(calls_to(&e, JOB_QUEUE_INSTALL), vec![vec![0]]);
+    }
+
+    #[test]
+    fn init_keeps_both_infos_at_the_exe_frame_offsets() {
+        let mut e = allocator_fixture();
+        e.register(JOB_POOL_INFO_CONSTRUCTOR, |e, a| {
+            e.mem.set_u32(a[0] + 0x18, 0x8000_0000);
+            Ret::default()
+        });
+        e.register(JOB_THREAD_POOL_CONSTRUCTOR, |_, a| Ret {
+            eax: a[0],
+            ..Ret::default()
+        });
+        e.register(JOB_QUEUE_INFO_CONSTRUCTOR, |e, a| {
+            e.mem.set_u32(a[0] + 0x14, 0x8000_0000);
+            Ret::default()
+        });
+        e.register(JOB_QUEUE_CONSTRUCTOR, |_, a| Ret {
+            eax: a[0],
+            ..Ret::default()
+        });
+        e.register(JOB_QUEUE_INSTALL, |_, _| Ret::default());
+        let this = e.new_object::<BhkMultithreadedSystem>();
+        let thread_id = e.mem.alloc(4);
+        let frame = e.mem.alloc(0x5c);
+        e.mem.free(frame);
+        e.call(0x00cbf540, &args![this, thread_id, 0u32]);
+        // The pool info at +0x30, the queue info at +0x14.
+        assert_eq!(
+            calls_to(&e, JOB_POOL_INFO_CONSTRUCTOR),
+            vec![vec![frame + 0x30]]
+        );
+        assert_eq!(
+            calls_to(&e, JOB_QUEUE_INFO_CONSTRUCTOR),
+            vec![vec![frame + 0x14]]
+        );
     }
 
     #[test]

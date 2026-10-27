@@ -183,7 +183,7 @@ mod tests {
         let r = e.call(0x004b_5590, &args![-2.0f32, 0.5f32]).f32();
         assert_eq!(r, ((-2.0f64).atan2(0.5)) as f32);
         let log = e.call_log.take().unwrap();
-        assert!(log.contains(&(ATAN2, args![-2.0f64, 0.5f64])));
+        assert!(log.contains(&(ATAN2, args![-2.0f64, 0.5f64].to_vec())));
     }
 
     #[test]

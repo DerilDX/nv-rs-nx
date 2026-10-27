@@ -1154,10 +1154,17 @@ pub fn display_debug_text(
         let angle = e.mem.u32(angle_at);
         let clamped = x87_store32(e.call(CLAMP_ANGLE, &args![angle]).f64());
         e.mem.set_u32(angle_at, clamped);
-        // A local the function sets to 0 (its address is pushed and then
-        // overwritten by the next call's argument).
+        // 009d2224: the local at angles + 0xc is set to 0.0; 009d223b: the cdecl
+        // `004b15e0` takes three words (it writes the direction through the third, that
+        // local's address pushed at 009d222c); ADD ESP,8 pops two and the third slot is
+        // reused for the next call's argument.
         e.mem.set_u32(angles.addr() + 0xc, 0.0f32.to_bits());
-        let difference = e.call(ANGLE_DIFFERENCE, &args![heading, clamped]).f64();
+        let difference = e
+            .call(
+                ANGLE_DIFFERENCE,
+                &args![heading, clamped, angles.addr() + 0xc],
+            )
+            .f64();
         let off = x87_store32(e.call(FLOAT_ABS, &args![x87_store32(difference)]).f64());
         let mut arc = fn_009d1b10(e, weapon).to_bits();
         let format = if e.call(IS_PATHING, &args![attacker]).bool() {

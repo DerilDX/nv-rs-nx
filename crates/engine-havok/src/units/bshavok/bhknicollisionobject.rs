@@ -90,7 +90,8 @@ const TRANSFORM_MULTIPLY: u32 = 0x0062_c250;
 const ROW_NEARLY_EQUAL: u32 = 0x0049_e2f0;
 /// `00c85d20(world_object, flag)`: a `bhkWorldObject` method.
 const WORLD_OBJECT_SET_FLAG: u32 = 0x00c8_5d20;
-/// `00653290(address)` (stdcall): an accessor that returns an object for the static at `address`.
+/// `00653290(address)` (`thiscall` on the world object, RET 4): an accessor that returns an
+/// object for the static at `address`.
 const STATIC_ACCESSOR: u32 = 0x0065_3290;
 /// The static `SetRigidBodyName` hands to the accessor.
 const RIGID_BODY_NAME_STATIC: u32 = 0x0126_81c0;
@@ -823,8 +824,14 @@ pub fn bhk_ni_collision_object_set_rigid_body_name(e: &mut Engine, node: Ptr) {
     if collision != 0 {
         let as_collision = e.vcall(collision, 0x38, &args![]).u32();
         if as_collision != 0 && e.mem.u32(as_collision + 0x10) != 0 {
+            // 00c6c237: `00653290` (RET 4) is a thiscall on the world object at +0x10
+            // (ECX from 00c6c22b).
+            let world_object = e.mem.u32(as_collision + 0x10);
             let accessor = e
-                .call(STATIC_ACCESSOR, &args![RIGID_BODY_NAME_STATIC])
+                .call(
+                    STATIC_ACCESSOR,
+                    &args![world_object, RIGID_BODY_NAME_STATIC],
+                )
                 .u32();
             if accessor != 0 {
                 let name = e.mem.u32(node.addr() + 8);
@@ -2009,7 +2016,7 @@ mod tests {
 
         assert_eq!(
             calls_to(&e, STATIC_ACCESSOR),
-            vec![vec![RIGID_BODY_NAME_STATIC]]
+            vec![vec![0x4444, RIGID_BODY_NAME_STATIC]]
         );
         assert_eq!(
             calls_to(&e, STRING_PTR_ASSIGN),

@@ -1705,7 +1705,7 @@ fn greet_set_sound_callback(e: &mut Engine, g: &Greet, callback: u32) {
 }
 
 /// The calls the first and the continued greeting make to say the response:
-/// the actor's virtual `+0x284` with twelve words; returns the delay it gives
+/// the actor's virtual `+0x284` with thirteen words; returns the delay it gives
 /// (an `f32`).
 fn greet_speak(e: &mut Engine, g: &Greet, response: u32) -> f32 {
     let idle = e.call(0x0044_1110, &args![response]).u32();
@@ -1714,15 +1714,17 @@ fn greet_speak(e: &mut Engine, g: &Greet, response: u32) -> f32 {
     let magic = e.call(0x0040_48e0, &args![node]).u32();
     let name = e.call(0x0084_e3a0, &args![response]).u32();
     let count = e.call(0x0044_ddc0, &args![response]).u32();
-    let holder = e
-        .call(0x0046_0140, &args![response, g.process + 0x314])
-        .u32();
+    // 008dc409 / 008dca7e / 008dd3d0: `00460140` takes no stack word (plain RET);
+    // the pushed process + 0x314 is the second word of the actor's +0x284
+    // (`008a20d0`, RET 0x34).
+    let holder = e.call(0x0046_0140, &args![response]).u32();
     let held = e.call(NI_POINTER_GET, &args![holder]).u32();
     e.vcall(
         g.actor,
         ACTOR_SLOT_SAY,
         &args![
             held,
+            g.process + 0x314,
             count,
             name,
             magic,
@@ -2089,11 +2091,13 @@ fn greet_idle(e: &mut Engine, g: &Greet, done: &mut bool) {
                     .any(|&kind| e.call(PACKAGE_TYPE, &args![package]).u32() == kind)));
     if rotate && e.call(0x008a_40e0, &args![a, 0u32]).bool() {
         e.vcall(t, SLOT_SET_EXTRA_HEAD_TRACK, &args![g.dialog]);
-        let position = e.vcall(g.dialog, ACTOR_SLOT_POSITION, &args![0u32]).u32();
+        // 008dcf79: the actor's +0x1f4 (`008ae4c0`, plain RET) takes no stack word; the
+        // pushed 0 is the last word of `008bb520` (RET 0x10), after the position.
+        let position = e.vcall(g.dialog, ACTOR_SLOT_POSITION, &args![]).u32();
         let x = e.mem.u32(position);
         let y = e.mem.u32(position + 4);
         let z = e.mem.u32(position + 8);
-        e.call(0x008b_b520, &args![g.actor, x, y, z]);
+        e.call(0x008b_b520, &args![g.actor, x, y, z, 0u32]);
     }
 }
 
@@ -5324,8 +5328,10 @@ fn flee_idle_chatter(e: &mut Engine, this: Ptr<HighProcess>, actor: Ptr, player:
         return;
     }
     if !e.call(PLAYER_GREET_TEST, &args![player]).bool() && fn_008defe0(e, Ptr::new(player)) == 0 {
-        let roll = e.call(ROLL_ZERO_TO, &args![0u32, 100u32]).u32();
-        let chance = e.call(ROLL_TO_CHANCE, &args![roll]).i32();
+        // 008de2e3: `00476c00` takes no word (plain RET, no stack read); the pushed 0
+        // and 100 are the two words of `00944480` (RET 8) on what it returns.
+        let roll = e.call(ROLL_ZERO_TO, &args![]).u32();
+        let chance = e.call(ROLL_TO_CHANCE, &args![roll, 0u32, 100u32]).i32();
         let setting = e
             .call(SETTING_VALUE_ADDRESS, &args![FLEE_GREET_CHANCE_SETTING])
             .u32();
@@ -19541,12 +19547,12 @@ mod tests {
         );
         assert_eq!(
             calls_to(&e, slot_target(GREET_TARGET_TABLE, 0x1f4)),
-            vec![vec![target, 0]]
+            vec![vec![target]]
         );
         assert_eq!(
             calls_to(&e, 0x008b_b520),
-            vec![vec![w.actor, 0x11, 0x22, 0x33]],
-            "the target's position by value"
+            vec![vec![w.actor, 0x11, 0x22, 0x33, 0]],
+            "the target's position by value, then the 0"
         );
         assert_eq!(
             calls_to(&e, 0x008a_40e0),
@@ -19805,11 +19811,24 @@ mod tests {
         assert_eq!(
             calls_to(&e, slot_target(ACTOR_TABLE, 0x284)),
             vec![vec![
-                w.actor, 0xabcd, 3, 0x1234, 0x4048, 9, 0x31, target, 1, 0, 1, 1, 1
+                w.actor,
+                0xabcd,
+                a + 0x314,
+                3,
+                0x1234,
+                0x4048,
+                9,
+                0x31,
+                target,
+                1,
+                0,
+                1,
+                1,
+                1
             ]],
-            "held pointer, count, name, 004048e0, type, idle, dialog target, 1, 0, 1, 1, can-greet"
+            "held pointer, process + 0x314, count, name, 004048e0, type, idle, dialog target, 1, 0, 1, 1, can-greet"
         );
-        assert_eq!(calls_to(&e, 0x0046_0140), vec![vec![response, a + 0x314]]);
+        assert_eq!(calls_to(&e, 0x0046_0140), vec![vec![response]]);
         assert_eq!(e.mem.f32(a + 0x310), 1.5, "the delay the say call returns");
         assert_eq!(e.mem.u8(a + 0x32c), 1);
         assert!(
@@ -19823,7 +19842,7 @@ mod tests {
         e.call_log = Some(vec![]);
         greet(&mut e, &w, 0x7000, [0, 0, 0]);
         let say = calls_to(&e, slot_target(ACTOR_TABLE, 0x284));
-        assert_eq!(say[0][12], 0);
+        assert_eq!(say[0][13], 0);
     }
 
     #[test]

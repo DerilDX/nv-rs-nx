@@ -621,8 +621,9 @@ pub fn fn_00701e80(e: &mut Engine, this: Ptr<HotKeysWheel>) {
 // Translated from 00702140 (decompiled, FalloutNV.exe 1.4.0.525)
 /// `HotKeysWheel::IsDPadPressed` (Xbox PDB): with the gamepad in use
 /// (`00709d40`), whether any of the buttons 2, 1, 4 and 3 answers other
-/// than -1 (tested in that order, stopping at the first).
-pub fn hotkeys_wheel_is_d_pad_pressed(e: &mut Engine, _this: Ptr<HotKeysWheel>) -> bool {
+/// than -1 (tested in that order, stopping at the first). Static: no word and ECX not read
+/// (its caller 00782200 pushes nothing).
+pub fn hotkeys_wheel_is_d_pad_pressed(e: &mut Engine) -> bool {
     if !e.call(GAMEPAD_IN_USE_WRAPPER, &args![]).bool() {
         return false;
     }
@@ -657,10 +658,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
             hotkeys_wheel_highlight_hotkey(Ptr<HotKeysWheel>, i32)
         ),
         entry!(0x00701e80, fn_00701e80(Ptr<HotKeysWheel>)),
-        entry!(
-            0x00702140,
-            hotkeys_wheel_is_d_pad_pressed(Ptr<HotKeysWheel>) -> bool
-        ),
+        entry!(0x00702140, hotkeys_wheel_is_d_pad_pressed() -> bool),
     ]
 }
 
@@ -1650,20 +1648,20 @@ mod tests {
     #[test]
     fn the_d_pad_test_needs_the_gamepad() {
         let mut w = world();
-        let this = wheel(&mut w.e);
+        let _this = wheel(&mut w.e);
         press(&mut w.e, true, true, true, true);
         w.e.call_log = Some(vec![]);
-        assert!(!w.e.call(0x0070_2140, &args![this]).bool());
+        assert!(!w.e.call(0x0070_2140, &args![]).bool());
         assert!(calls(&w.e, CHECK_MENU_BUTTON).is_empty());
     }
 
     #[test]
     fn the_d_pad_test_stops_at_the_first_pressed_button() {
         let mut w = world();
-        let this = wheel(&mut w.e);
+        let _this = wheel(&mut w.e);
         w.e.mem.set_u32(CFG_GAMEPAD, 1);
         w.e.call_log = Some(vec![]);
-        assert!(!w.e.call(0x0070_2140, &args![this]).bool());
+        assert!(!w.e.call(0x0070_2140, &args![]).bool());
         let order: Vec<u32> = calls(&w.e, CHECK_MENU_BUTTON)
             .iter()
             .map(|c| c[0])
@@ -1672,7 +1670,7 @@ mod tests {
         // Button 4 pressed: 3 is not asked.
         w.e.mem.set_i32(CFG_BUTTONS + 4 * 4, 0);
         w.e.call_log = Some(vec![]);
-        assert!(w.e.call(0x0070_2140, &args![this]).bool());
+        assert!(w.e.call(0x0070_2140, &args![]).bool());
         let order: Vec<u32> = calls(&w.e, CHECK_MENU_BUTTON)
             .iter()
             .map(|c| c[0])

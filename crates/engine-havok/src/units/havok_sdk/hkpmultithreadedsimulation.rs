@@ -2176,12 +2176,21 @@ mod tests {
             let (log, [first, second]) = run_pair_listener(address, (2, 2));
             assert_eq!(
                 calls_to(&log, fake),
-                vec![args![first.1, second.0], args![second.1, first.0]]
+                vec![
+                    args![first.1, second.0].to_vec(),
+                    args![second.1, first.0].to_vec()
+                ]
             );
             let (log, [first, second]) = run_pair_listener(address, (2, 1));
-            assert_eq!(calls_to(&log, fake), vec![args![first.1, second.0]]);
+            assert_eq!(
+                calls_to(&log, fake),
+                vec![args![first.1, second.0].to_vec()]
+            );
             let (log, [first, second]) = run_pair_listener(address, (1, 2));
-            assert_eq!(calls_to(&log, fake), vec![args![second.1, first.0]]);
+            assert_eq!(
+                calls_to(&log, fake),
+                vec![args![second.1, first.0].to_vec()]
+            );
             let (log, _) = run_pair_listener(address, (1, 3));
             assert!(calls_to(&log, fake).is_empty());
         }
@@ -2196,9 +2205,15 @@ mod tests {
             let (log, _) = run_pair_listener(address, (3, 3));
             assert!(calls_to(&log, fake).is_empty());
             let (log, [first, second]) = run_pair_listener(address, (3, 2));
-            assert_eq!(calls_to(&log, fake), vec![args![first.1, second.0]]);
+            assert_eq!(
+                calls_to(&log, fake),
+                vec![args![first.1, second.0].to_vec()]
+            );
             let (log, [first, second]) = run_pair_listener(address, (2, 3));
-            assert_eq!(calls_to(&log, fake), vec![args![second.1, first.0]]);
+            assert_eq!(
+                calls_to(&log, fake),
+                vec![args![second.1, first.0].to_vec()]
+            );
             let (log, _) = run_pair_listener(address, (2, 2));
             assert!(calls_to(&log, fake).is_empty());
         }
@@ -2288,7 +2303,7 @@ mod tests {
         let log: Log = e.call_log.take().unwrap();
         assert_eq!(
             calls_to(&log, 0x00d0_4200),
-            vec![args![data, 0i32, 1i32, 0x00d0_2160u32]]
+            vec![args![data, 0i32, 1i32, 0x00d0_2160u32].to_vec()]
         );
     }
 
@@ -2363,7 +2378,7 @@ mod tests {
         let log: Log = w.e.call_log.take().unwrap();
         assert_eq!(
             calls_to(&log, ADD_AGENT),
-            vec![args![w.owners.0, w.owners.1, w.holder]]
+            vec![args![w.owners.0, w.owners.1, w.holder].to_vec()]
         );
         assert_eq!(w.e.mem.u32(w.holder + 0x14), 0xfeed);
     }
@@ -2404,7 +2419,7 @@ mod tests {
         let log: Log = w.e.call_log.take().unwrap();
         assert_eq!(
             calls_to(&log, ARRAY_GROW),
-            vec![args![ALLOCATOR, list, 8u32]]
+            vec![args![ALLOCATOR, list, 8u32].to_vec()]
         );
         assert_eq!(w.e.mem.u32(list + 4), 1);
         let data = w.e.mem.u32(list);
@@ -2467,9 +2482,12 @@ mod tests {
         let log: Log = w.e.call_log.take().unwrap();
         assert_eq!(
             calls_to(&log, FIND_AGENT),
-            vec![args![w.owners.0, w.owners.1]]
+            vec![args![w.owners.0, w.owners.1].to_vec()]
         );
-        assert_eq!(calls_to(&log, REMOVE_AGENT), vec![args![0x5150u32]]);
+        assert_eq!(
+            calls_to(&log, REMOVE_AGENT),
+            vec![args![0x5150u32].to_vec()]
+        );
         w.e.register(FIND_AGENT, |_, _| Ret::default());
         w.e.call_log = Some(vec![]);
         w.e.call(0x00d0_27c0, &args![w.listener, w.pair]);
@@ -2503,7 +2521,10 @@ mod tests {
         e.call_log = Some(vec![]);
         assert_eq!(e.call(0x00d0_4300, &args![listener, 1u32]).u32(), listener);
         let log: Log = e.call_log.take().unwrap();
-        assert_eq!(calls_to(&log, OPERATOR_DELETE), vec![args![listener]]);
+        assert_eq!(
+            calls_to(&log, OPERATOR_DELETE),
+            vec![args![listener].to_vec()]
+        );
     }
 
     #[test]
@@ -2535,13 +2556,25 @@ mod tests {
         assert_eq!(
             order,
             vec![
-                (CONTINUOUS_CONSTRUCT, args![sim, world]),
-                (CRITICAL_SECTION_CONSTRUCT, args![sim + 0x78, 4000u32]),
-                (CRITICAL_SECTION_CONSTRUCT, args![sim + 0x9c, 4000u32]),
-                (MULTITHREAD_CONFIG_CONSTRUCT, args![sim + 0xb4]),
-                (CRITICAL_SECTION_CONSTRUCT, args![sim + 0x100, 4000u32]),
-                (CRITICAL_SECTION_CONSTRUCT, args![sim + 0x140, 4000u32]),
-                (ENABLE_MULTITHREADING, args![broad_phase, 10000u32]),
+                (CONTINUOUS_CONSTRUCT, args![sim, world].to_vec()),
+                (
+                    CRITICAL_SECTION_CONSTRUCT,
+                    args![sim + 0x78, 4000u32].to_vec()
+                ),
+                (
+                    CRITICAL_SECTION_CONSTRUCT,
+                    args![sim + 0x9c, 4000u32].to_vec()
+                ),
+                (MULTITHREAD_CONFIG_CONSTRUCT, args![sim + 0xb4].to_vec()),
+                (
+                    CRITICAL_SECTION_CONSTRUCT,
+                    args![sim + 0x100, 4000u32].to_vec()
+                ),
+                (
+                    CRITICAL_SECTION_CONSTRUCT,
+                    args![sim + 0x140, 4000u32].to_vec()
+                ),
+                (ENABLE_MULTITHREADING, args![broad_phase, 10000u32].to_vec()),
             ]
         );
         assert_eq!(e.mem.u32(sim), SIMULATION_VTABLE);
@@ -2592,12 +2625,12 @@ mod tests {
         assert_eq!(
             order,
             vec![
-                (DELETE_CRITICAL_SECTION, args![sim + 0x140]),
-                (DELETE_CRITICAL_SECTION, args![sim + 0x100]),
-                (DELETE_CRITICAL_SECTION, args![sim + 0x9c]),
-                (FAKE_FREE, args![ALLOCATOR, 0x1111u32, 4u32 * 8]),
-                (DELETE_CRITICAL_SECTION, args![sim + 0x78]),
-                (CONTINUOUS_DESTRUCT, args![sim]),
+                (DELETE_CRITICAL_SECTION, args![sim + 0x140].to_vec()),
+                (DELETE_CRITICAL_SECTION, args![sim + 0x100].to_vec()),
+                (DELETE_CRITICAL_SECTION, args![sim + 0x9c].to_vec()),
+                (FAKE_FREE, args![ALLOCATOR, 0x1111u32, 4u32 * 8].to_vec()),
+                (DELETE_CRITICAL_SECTION, args![sim + 0x78].to_vec()),
+                (CONTINUOUS_DESTRUCT, args![sim].to_vec()),
             ]
         );
         for list in [SIM_REMOVE_PAIRS, SIM_ADD_PAIRS] {
@@ -2681,8 +2714,14 @@ mod tests {
             &args![w.simulation, w.result, w.entry, section],
         );
         let log: Log = w.e.call_log.take().unwrap();
-        assert_eq!(calls_to(&log, ENTER_CRITICAL_SECTION), vec![args![section]]);
-        assert_eq!(calls_to(&log, LEAVE_CRITICAL_SECTION), vec![args![section]]);
+        assert_eq!(
+            calls_to(&log, ENTER_CRITICAL_SECTION),
+            vec![args![section].to_vec()]
+        );
+        assert_eq!(
+            calls_to(&log, LEAVE_CRITICAL_SECTION),
+            vec![args![section].to_vec()]
+        );
         assert_eq!(w.e.mem.u32(w.simulation + SIM_TOI_COUNT), 2);
         let event = w.events + 0x70;
         // The signalling NaN time comes out quiet; the fraction is copied.
@@ -2747,7 +2786,7 @@ mod tests {
         assert_eq!(construct[0][2], 0x200);
         assert_eq!(
             calls_to(&log, TEXT_BUFFER_WRITE),
-            vec![args![object, 0x010c_cc70u32]]
+            vec![args![object, 0x010c_cc70u32].to_vec()]
         );
         assert_eq!(
             calls_to(&log, 0x7000_0030),
@@ -2758,9 +2797,13 @@ mod tests {
                 buffer,
                 0x010c_cc30u32,
                 0x3f7u32
-            ]]
+            ]
+            .to_vec()]
         );
-        assert_eq!(calls_to(&log, TEXT_BUFFER_DESTRUCT), vec![args![object]]);
+        assert_eq!(
+            calls_to(&log, TEXT_BUFFER_DESTRUCT),
+            vec![args![object].to_vec()]
+        );
         assert!(calls_to(&log, ENTER_CRITICAL_SECTION).is_empty());
         assert_eq!(w.e.mem.u32(w.simulation + SIM_TOI_COUNT), 2);
     }
@@ -3062,7 +3105,8 @@ mod step_tests {
                 world + 0x1e0,
                 world + 0x1d0,
                 e.mem.u32(world + 0x1b8)
-            ]]
+            ]
+            .to_vec()]
         );
         // The memory the integration needs is what the guard was asked about.
         assert_eq!(calls_to(&log, MEMORY_GUARD).len(), 1);
@@ -3070,10 +3114,13 @@ mod step_tests {
         // The actions step runs with the word at +0x98 taken down.
         assert_eq!(s.actions_seen.get(), 4);
         assert_eq!(e.mem.u32(world + 0x98), 5);
-        assert_eq!(calls_to(&log, 0x00cf_8b00), vec![args![sim]]);
+        assert_eq!(calls_to(&log, 0x00cf_8b00), vec![args![sim].to_vec()]);
         assert_eq!(
             calls_to(&log, JOB_QUEUE_PREPARE),
-            vec![args![queue, 0u32, 3u32], args![queue, 1u32, 3u32]]
+            vec![
+                args![queue, 0u32, 3u32].to_vec(),
+                args![queue, 1u32, 3u32].to_vec()
+            ]
         );
         let job = &s.jobs.borrow()[0];
         assert_eq!(job[..3], [0, 0, 2]);
@@ -3224,8 +3271,8 @@ mod step_tests {
             order(&log, &[0x00c9_1120, 0x00c9_1140, 0x00d0_1bc0, 0x00d8_92d0]),
             vec![0x00c9_1120, 0x00c9_1140, 0x00d0_1bc0, 0x00d8_92d0]
         );
-        assert_eq!(calls_to(&log, 0x00d0_1bc0), vec![args![world]]);
-        assert_eq!(calls_to(&log, 0x00c9_1120), vec![args![world]]);
+        assert_eq!(calls_to(&log, 0x00d0_1bc0), vec![args![world].to_vec()]);
+        assert_eq!(calls_to(&log, 0x00c9_1120), vec![args![world].to_vec()]);
         assert_eq!(s.r.e.mem.u32(world + 0x94), 1);
         // Another watcher keeps the scope: nothing runs when the word does not reach 0.
         s.r.e.mem.set_u32(world + 0x94, 4);
@@ -3322,11 +3369,14 @@ mod step_tests {
         let log: Log = j.r.e.call_log.take().unwrap();
         assert_eq!(
             calls_to(&log, SECTOR_HEADER_ALLOCATE),
-            vec![args![3u32, 8u32]]
+            vec![args![3u32, 8u32].to_vec()]
         );
         assert_eq!(calls_to(&log, JOB_QUEUE_ADD_JOB)[0][0], queue);
         assert_eq!(calls_to(&log, JOB_QUEUE_ADD_JOB)[0][2], 1);
-        assert_eq!(calls_to(&log, JOB_QUEUE_PROCESS_ALL), vec![args![queue]]);
+        assert_eq!(
+            calls_to(&log, JOB_QUEUE_PROCESS_ALL),
+            vec![args![queue].to_vec()]
+        );
         let job = &j.jobs.borrow()[0];
         assert_eq!(job[..3], [0xf, 1, 2]);
         assert_eq!(
@@ -3387,7 +3437,7 @@ mod step_tests {
         // The block the post collide job left behind is given back.
         assert_eq!(
             calls_to(&log, FREE_BLOCK),
-            vec![args![j.r.allocator, 0xbbbb_0000u32, 0x200u32]]
+            vec![args![j.r.allocator, 0xbbbb_0000u32, 0x200u32].to_vec()]
         );
         assert_eq!(
             order(
@@ -3427,7 +3477,7 @@ mod step_tests {
         let log: Log = j.r.e.call_log.take().unwrap();
         assert_eq!(
             calls_to(&log, CONTINUOUS_PROCESS_ENTRIES),
-            vec![args![sim, 0x1000_0000u32, 4u32, input, owner, 0x1ffu32]]
+            vec![args![sim, 0x1000_0000u32, 4u32, input, owner, 0x1ffu32].to_vec()]
         );
         assert!(calls_to(&log, JOB_QUEUE_ADD_JOB).is_empty());
         // A negative count is below the limit too (signed compare).
@@ -3494,11 +3544,11 @@ mod step_tests {
         // The first record: (3 - 1) / 2 + 1 sectors of 2.
         assert_eq!(
             calls_to(&log, SECTOR_HEADER_ALLOCATE),
-            vec![args![2u32, 2u32]]
+            vec![args![2u32, 2u32].to_vec()]
         );
         assert_eq!(
             calls_to(&log, JOB_QUEUE_ADD_JOB),
-            vec![args![queue, top, 1u32]]
+            vec![args![queue, top, 1u32].to_vec()]
         );
         assert_eq!(e.mem.u32(records + 0x10), top);
         assert_eq!(e.mem.u32(records + 0x18 + 0x10), 0);
@@ -3562,7 +3612,7 @@ mod step_tests {
         // The world's own island runs directly, with the low byte of the last word clear.
         assert_eq!(
             calls_to(&log, CONTINUOUS_PROCESS_ENTRIES),
-            vec![args![sim, base + 12, 4u32, input, 0x22u32, 0u32]]
+            vec![args![sim, base + 12, 4u32, input, 0x22u32, 0u32].to_vec()]
         );
         assert_eq!(
             order(
@@ -3600,9 +3650,9 @@ mod step_tests {
         assert_eq!(
             calls_to(&log, CONTINUOUS_PROCESS_ENTRIES),
             vec![
-                args![sim, base, 3u32, input, first, 0x77u32],
-                args![sim, base + 12, 4u32, input, 0x22u32, 0x77u32],
-                args![sim, base + 28, 0u32, input, third, 0x77u32],
+                args![sim, base, 3u32, input, first, 0x77u32].to_vec(),
+                args![sim, base + 12, 4u32, input, 0x22u32, 0x77u32].to_vec(),
+                args![sim, base + 28, 0u32, input, third, 0x77u32].to_vec(),
             ]
         );
         assert!(calls_to(&log, JOB_QUEUE_ADD_JOB).is_empty());
@@ -3624,7 +3674,7 @@ mod step_tests {
         let log: Log = e.call_log.take().unwrap();
         assert_eq!(
             calls_to(&log, 0x00d0_db40),
-            vec![args![sim, 0x1111u32, 3u32, 0x2222u32, sim + 0x3c]]
+            vec![args![sim, 0x1111u32, 3u32, 0x2222u32, sim + 0x3c].to_vec()]
         );
     }
 
@@ -3707,7 +3757,10 @@ mod step_tests {
         );
         let log: Log = e.call_log.take().unwrap();
         // The flag block (16 bytes, rounded to 128) comes first, the list of entries after it.
-        assert_eq!(calls_to(&log, MEM_SET), vec![args![top, 0u32, 0x10u32]]);
+        assert_eq!(
+            calls_to(&log, MEM_SET),
+            vec![args![top, 0u32, 0x10u32].to_vec()]
+        );
         assert_eq!(e.mem.u8(top + 1), 1);
         assert_eq!(e.mem.u8(top + 2), 1);
         assert_eq!(e.mem.u8(top + 3), 0);
@@ -3717,26 +3770,26 @@ mod step_tests {
         assert_eq!(
             calls_to(&log, MAP_GET_WITH_DEFAULT),
             vec![
-                args![references, 0x41u32, 0u32],
-                args![references, 0x42u32, 0u32]
+                args![references, 0x41u32, 0u32].to_vec(),
+                args![references, 0x42u32, 0u32].to_vec()
             ]
         );
-        assert_eq!(calls_to(&log, ADD_REFERENCE), vec![args![first]]);
+        assert_eq!(calls_to(&log, ADD_REFERENCE), vec![args![first].to_vec()]);
         assert_eq!(
             calls_to(&log, MAP_INSERT),
-            vec![args![references, allocator, 0x41u32, first]]
+            vec![args![references, allocator, 0x41u32, first].to_vec()]
         );
         let list = top + 0x80;
         assert_eq!(e.mem.u32(list), a1);
         assert_eq!(
             calls_to(&log, CONTINUOUS_PROCESS_ENTRIES),
-            vec![args![sim, list, 1u32, 0x7777_0000u32, island, 0u32]]
+            vec![args![sim, list, 1u32, 0x7777_0000u32, island, 0u32].to_vec()]
         );
         // The array the last scan left is given back (2 pairs of words); the list and the flags
         // are on the temporary stack.
         assert_eq!(
             calls_to(&log, FREE_ARRAY),
-            vec![args![allocator, blocks[1], 16u32]]
+            vec![args![allocator, blocks[1], 16u32].to_vec()]
         );
         assert_eq!(e.mem.u32(r.router), top);
     }
@@ -3882,22 +3935,22 @@ mod step_tests {
         assert_eq!(
             calls_to(&log, MAP_INSERT),
             [p1, p2, p5]
-                .map(|entry| args![map, allocator, entry, 1u32])
+                .map(|entry| args![map, allocator, entry, 1u32].to_vec())
                 .to_vec()
         );
         assert_eq!(
             calls_to(&log, RELEASE_REFERENCE),
-            vec![args![first], args![second]]
+            vec![args![first].to_vec(), args![second].to_vec()]
         );
         assert_eq!(
             calls_to(&log, MAP_CLEAR_UNCONFIRMED),
-            vec![args![p.entities]]
+            vec![args![p.entities].to_vec()]
         );
         assert_eq!(
             calls_to(&log, MAP_CLEAR_AND_DEALLOCATE),
-            vec![args![map, allocator]]
+            vec![args![map, allocator].to_vec()]
         );
-        assert_eq!(calls_to(&log, 0x00a2_9680), vec![args![map]]);
+        assert_eq!(calls_to(&log, 0x00a2_9680), vec![args![map].to_vec()]);
         // The block holds the entries by island: 0x100 (two) and the one found through the
         // exclusive or for the type 5 entity (0x200).
         assert_eq!(
@@ -3908,25 +3961,25 @@ mod step_tests {
         assert_eq!(
             calls_to(&log, CONTINUOUS_PROCESS_ENTRIES),
             vec![
-                args![sim, top, 2u32, integrator, 0x100u32, 0u32],
-                args![sim, top + 8, 1u32, integrator, 0x200u32, 0u32]
+                args![sim, top, 2u32, integrator, 0x100u32, 0u32].to_vec(),
+                args![sim, top + 8, 1u32, integrator, 0x200u32, 0u32].to_vec()
             ]
         );
         assert_eq!(e.mem.u32(p.r.router), top);
         // The world's counter is back at 0 and its two callees ran.
         assert_eq!(e.mem.u32(world + 0x94), 0);
-        assert_eq!(calls_to(&log, 0x00c9_1120), vec![args![world]]);
-        assert_eq!(calls_to(&log, 0x00c9_1140), vec![args![world]]);
+        assert_eq!(calls_to(&log, 0x00c9_1120), vec![args![world].to_vec()]);
+        assert_eq!(calls_to(&log, 0x00c9_1140), vec![args![world].to_vec()]);
         // Both arrays grew once (pairs of words first) and every array is given back.
         let grown = p.grown.borrow();
         assert_eq!(grown.len(), 2);
         assert_eq!(
             calls_to(&log, FREE_ARRAY),
             vec![
-                args![allocator, p.blocks[0], 32u32],
-                args![allocator, p.blocks[1], 8u32],
-                args![allocator, grown[1], 0x60u32],
-                args![allocator, grown[0], 32u32],
+                args![allocator, p.blocks[0], 32u32].to_vec(),
+                args![allocator, p.blocks[1], 8u32].to_vec(),
+                args![allocator, grown[1], 0x60u32].to_vec(),
+                args![allocator, grown[0], 32u32].to_vec(),
             ]
         );
         assert_eq!(labels(&p.r, &[12, 12]), vec![0x010c_cd50, PROFILE_END]);
@@ -4037,7 +4090,7 @@ mod step_tests {
         let array = e.mem.u32(world + 0x28);
         assert_eq!(
             calls_to(&log, 0x00dd_7d00),
-            vec![args![array + 4, 0u32, 1u32, 0x00d0_2220u32]]
+            vec![args![array + 4, 0u32, 1u32, 0x00d0_2220u32].to_vec()]
         );
         assert_eq!(
             f.islands.map(|island| e.mem.u16(island + 0x20)),
@@ -4047,9 +4100,9 @@ mod step_tests {
         assert_eq!(e.mem.f32(sim + 0x18), 2.0);
         assert_eq!(e.mem.u32(sim + 0x28), 0);
         assert_eq!(e.mem.u32(world + 0x94), 0);
-        assert_eq!(calls_to(&log, 0x00c9_1180), vec![args![world]]);
-        assert_eq!(calls_to(&log, 0x00c9_1190), vec![args![world]]);
-        assert_eq!(calls_to(&log, SIMULATION_SLOT), vec![args![sim]]);
+        assert_eq!(calls_to(&log, 0x00c9_1180), vec![args![world].to_vec()]);
+        assert_eq!(calls_to(&log, 0x00c9_1190), vec![args![world].to_vec()]);
+        assert_eq!(calls_to(&log, SIMULATION_SLOT), vec![args![sim].to_vec()]);
         assert_eq!(f.slot_queue.get(), 0);
         assert_eq!(
             order(
@@ -4099,7 +4152,10 @@ mod step_tests {
         let (_, log) = finish(&mut f, 0);
         assert_eq!(
             calls_to(&log, 0x00d0_0aa0),
-            vec![args![world, 0xa1u32], args![world, 0xa2u32]]
+            vec![
+                args![world, 0xa1u32].to_vec(),
+                args![world, 0xa2u32].to_vec()
+            ]
         );
         f.r.e.mem.set_u32(violations, 0x90);
         for index in 0..0x90 {
@@ -4110,8 +4166,8 @@ mod step_tests {
         let (_, log) = finish(&mut f, 0);
         let reported = calls_to(&log, 0x00d0_0aa0);
         assert_eq!(reported.len(), 0x80);
-        assert_eq!(reported[0], args![world, 0x1000u32]);
-        assert_eq!(reported[0x7f], args![world, 0x107fu32]);
+        assert_eq!(reported[0], args![world, 0x1000u32].to_vec());
+        assert_eq!(reported[0x7f], args![world, 0x107fu32].to_vec());
         // Exactly 0x80 is reported in full, and a negative count not at all.
         f.r.e.mem.set_u32(violations, 0x80);
         assert_eq!(calls_to(&finish(&mut f, 0).1, 0x00d0_0aa0).len(), 0x80);
@@ -4131,9 +4187,9 @@ mod step_tests {
         assert_eq!(e.mem.u32(sim + 0x28), 2);
         assert_eq!(e.mem.f32(sim + 0x18), 1.5);
         assert_eq!(f.slot_queue.get(), 0xdead);
-        assert_eq!(calls_to(&log, 0x00c9_1190), vec![args![world]]);
+        assert_eq!(calls_to(&log, 0x00c9_1190), vec![args![world].to_vec()]);
         assert_eq!(calls_to(&log, 0x00c9_10b0).len(), 1);
-        assert_eq!(calls_to(&log, 0x00d0_1df0), vec![args![world]]);
+        assert_eq!(calls_to(&log, 0x00d0_1df0), vec![args![world].to_vec()]);
         assert_eq!(labels(&f.r, &[12, 12]), vec![0x010c_c568, PROFILE_END]);
     }
 
@@ -4185,17 +4241,17 @@ mod step_tests {
         );
         assert_eq!(
             calls_to(&log, 0x00d0_49d0),
-            vec![args![queue, 1u32], args![queue, 0u32]]
+            vec![args![queue, 1u32].to_vec(), args![queue, 0u32].to_vec()]
         );
         assert_eq!(
             calls_to(&log, 0x00d0_4450),
-            vec![args![queue, 2u32], args![queue, 0x77u32]]
+            vec![args![queue, 2u32].to_vec(), args![queue, 0x77u32].to_vec()]
         );
         assert_eq!(
             calls_to(&log, POOL_SLOT_C),
-            vec![args![pool, queue, 0xbu32]]
+            vec![args![pool, queue, 0xbu32].to_vec()]
         );
-        assert_eq!(calls_to(&log, POOL_SLOT_10), vec![args![pool]]);
+        assert_eq!(calls_to(&log, POOL_SLOT_10), vec![args![pool].to_vec()]);
         assert_eq!(
             labels(&f.r, &[12; 6]),
             vec![
@@ -4219,8 +4275,11 @@ mod step_tests {
         let log: Log = f.r.e.call_log.take().unwrap();
         assert_eq!(got, 0);
         assert!(order(&log, &[0x00d0_4440, POOL_SLOT_C]).is_empty());
-        assert_eq!(calls_to(&log, 0x00d0_4450), vec![args![0u32, 0u32]]);
-        assert_eq!(calls_to(&log, POOL_SLOT_10), vec![args![pool]]);
+        assert_eq!(
+            calls_to(&log, 0x00d0_4450),
+            vec![args![0u32, 0u32].to_vec()]
+        );
+        assert_eq!(calls_to(&log, POOL_SLOT_10), vec![args![pool].to_vec()]);
     }
 
     #[test]
@@ -4242,7 +4301,7 @@ mod step_tests {
         f.r.e.mem.set_u32(world + 0x94, 1);
         let (got, log) = finish(&mut f, 0);
         assert_eq!(got, 3);
-        assert_eq!(calls_to(&log, 0x00d0_1df0), vec![args![world]]);
+        assert_eq!(calls_to(&log, 0x00d0_1df0), vec![args![world].to_vec()]);
     }
 
     #[test]
@@ -4253,8 +4312,8 @@ mod step_tests {
         f.r.e.mem.set_u32(world + 0xa4, 1);
         f.r.e.mem.set_u32(world + 0x90, 1);
         let (_, log) = finish(&mut f, 0);
-        assert_eq!(calls_to(&log, 0x00c9_1120), vec![args![world]]);
-        assert_eq!(calls_to(&log, 0x00c9_1140), vec![args![world]]);
+        assert_eq!(calls_to(&log, 0x00c9_1120), vec![args![world].to_vec()]);
+        assert_eq!(calls_to(&log, 0x00c9_1140), vec![args![world].to_vec()]);
         // A scope that is still held by someone else runs nothing.
         f.r.e.mem.set_u32(world + 0x94, 2);
         let (_, log) = finish(&mut f, 0);
@@ -4397,17 +4456,17 @@ mod step_tests {
         // The duplicates between the lists, then the sort put the handles in order.
         assert_eq!(
             calls_to(&log, 0x00cf_7130),
-            vec![args![sim + SIM_ADD_PAIRS, sim + SIM_REMOVE_PAIRS]]
+            vec![args![sim + SIM_ADD_PAIRS, sim + SIM_REMOVE_PAIRS].to_vec()]
         );
         // The islands differ: they are merged, and the merged island is the owner.
         assert_eq!(
             calls_to(&log, 0x00cb_4c60),
-            vec![args![world, 0x100u32, 0x200u32]]
+            vec![args![world, 0x100u32, 0x200u32].to_vec()]
         );
         // The agent is added with the collidables in order, the creation word first.
         assert_eq!(
             calls_to(&log, ADD_AGENT),
-            vec![args![p.a.1, p.b.1, p.holder]]
+            vec![args![p.a.1, p.b.1, p.holder].to_vec()]
         );
         assert_eq!(*p.holder_words.borrow(), vec![0xc0de]);
         assert_eq!(e.mem.u32(p.holder + 0x60), p.dispatcher + 0x1c60);
@@ -4473,7 +4532,7 @@ mod step_tests {
         let out = calls_to(&log, 0x00cf_edd0)[0][2];
         assert_eq!(
             calls_to(&log, MANAGER_SLOT),
-            vec![args![p.manager, p.a.1, p.b.1, p.holder, out]]
+            vec![args![p.manager, p.a.1, p.b.1, p.holder, out].to_vec()]
         );
         assert_eq!(
             order(
@@ -4494,7 +4553,7 @@ mod step_tests {
         );
         assert_eq!(
             calls_to(&log, ENTER_CRITICAL_SECTION),
-            vec![args![sim + 0x100]]
+            vec![args![sim + 0x100].to_vec()]
         );
         assert_eq!(e.mem.u32(sim + SIM_TOI_COUNT), 1);
         assert_eq!(e.mem.u32(p.events), toi);
@@ -4558,7 +4617,7 @@ mod step_tests {
         let log: Log = r.e.call_log.take().unwrap();
         assert_eq!(
             calls_to(&log, FREE_ARRAY),
-            vec![args![allocator, entries, 80u32]]
+            vec![args![allocator, entries, 80u32].to_vec()]
         );
         r.e.call_log = Some(vec![]);
         release_block(&mut r.e, entries, 20 | DONT_DEALLOCATE_FLAG, 4);
@@ -4577,7 +4636,7 @@ mod step_tests {
         let log: Log = r.e.call_log.take().unwrap();
         assert_eq!(
             calls_to(&log, FREE_ARRAY),
-            vec![args![allocator, flags, 0x10u32]]
+            vec![args![allocator, flags, 0x10u32].to_vec()]
         );
         r.e.call_log = Some(vec![]);
         release_block(&mut r.e, flags, 0x10 | DONT_DEALLOCATE_FLAG, 1);

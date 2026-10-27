@@ -446,10 +446,13 @@ pub fn ni_dynamic_geometry_group_create_chip(
                     &args![base.wrapping_add(0x2c), cursor, record_slot],
                 );
             }
+            // 00e9561c: `00e987c0` is a thiscall (RET 0x14) on the record (ECX from
+            // the record slot), then the five pushed words.
+            let record = e.mem.u32(record_slot);
             let locked = e
                 .call(
                     LOCK_00E987C0,
-                    &args![size, offset_slot, second_slot, 1u32, flag_word],
+                    &args![record, size, offset_slot, second_slot, 1u32, flag_word],
                 )
                 .u32();
             let cursor = e.mem.u32(base.wrapping_add(0x4c));
@@ -501,10 +504,12 @@ pub fn ni_dynamic_geometry_group_create_chip(
                 &args![base.wrapping_add(0xc), key, made],
             );
         }
+        // 00e956f9: as above, `00e987c0` is a thiscall on the record in the slot.
+        let record = e.mem.u32(record_slot);
         let locked = e
             .call(
                 LOCK_00E987C0,
-                &args![size, offset_slot, second_slot, 0u32, flag_word],
+                &args![record, size, offset_slot, second_slot, 0u32, flag_word],
             )
             .u32();
         e.call(
@@ -1256,8 +1261,8 @@ mod b052_tests {
         e.register(MAP_GET_AT_00A53C30, |_, _| 0u32.into_ret());
         e.register(MAP_SET_AT_00B57EA0, |_, _| Ret::default());
         e.register(LOCK_00E987C0, |e, a| {
-            e.mem.set_u32(a[1], 0x30);
-            e.mem.set_u32(a[2], 0x77);
+            e.mem.set_u32(a[2], 0x30);
+            e.mem.set_u32(a[3], 0x77);
             0xb000u32.into_ret()
         });
         e.register(NEW_CHIP_00537D60, |e, _| e.mem.alloc(0x18).into_ret());
@@ -1278,7 +1283,10 @@ mod b052_tests {
         assert_eq!(sets[1], vec![this + 0x1c, key, chip]);
         assert_eq!(e.mem.u32(record + 0xc), device);
         let lock = &calls(&e, LOCK_00E987C0)[0];
-        assert_eq!((lock[0], lock[3], lock[4]), (0x30, 0, 0x5a));
+        assert_eq!(
+            (lock[0], lock[1], lock[4], lock[5]),
+            (record, 0x30, 0, 0x5a)
+        );
         assert_eq!(
             calls(&e, NEW_CHIP_00537D60),
             vec![vec![0, 0xb000, 0x30, 0x30, 0]]
@@ -1300,8 +1308,8 @@ mod b052_tests {
             Ret::default()
         });
         e.register(LOCK_00E987C0, |e, a| {
-            e.mem.set_u32(a[1], 0x40);
-            e.mem.set_u32(a[2], 0x99);
+            e.mem.set_u32(a[2], 0x40);
+            e.mem.set_u32(a[3], 0x99);
             0xc000u32.into_ret()
         });
         let existing = e.mem.alloc(0x18);
@@ -1334,7 +1342,8 @@ mod b052_tests {
         assert_eq!(e.mem.u32(chip + 0x10), 0x99);
         assert_eq!(e.mem.u32(data + 0x38), 0);
         assert_eq!(e.mem.u32(this + 0x4c), 2);
-        assert_eq!(calls(&e, LOCK_00E987C0)[0][3], 1);
+        assert_eq!(calls(&e, LOCK_00E987C0)[0][0], record);
+        assert_eq!(calls(&e, LOCK_00E987C0)[0][4], 1);
     }
 
     #[test]

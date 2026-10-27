@@ -3160,10 +3160,13 @@ pub fn fn_00888ac0(e: &mut Engine, this: Ptr<Actor>, value: f32) {
 }
 
 // Translated from 00888af0 (decompiled, FalloutNV.exe 1.4.0.525)
-/// Process virtual `+0x2f4`.
-pub fn fn_00888af0(e: &mut Engine, this: Ptr<Actor>) {
+/// Process virtual `+0x2f4`, whose `ST0` it answers unchanged (the exe ends on that call). The
+/// function is slot `+0x2b4` of `Actor`'s vtable, the `MobileObject` slot the Xbox PDB names
+/// `GetDetectionTimer` (`float`; Xbox slot `+0x2b0`, the `-4` the bounded `Actor` slots show),
+/// and `MobileObject`'s own implementation (`0087d880`) answers `FLDZ`.
+pub fn fn_00888af0(e: &mut Engine, this: Ptr<Actor>) -> f64 {
     let process = e.get(this, Actor::pCurrentProcess);
-    e.vcall(process.addr(), PROCESS_VSLOT_0X2F4, &args![]);
+    e.vcall(process.addr(), PROCESS_VSLOT_0X2F4, &args![]).f64()
 }
 
 // Translated from 00888b20 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -9242,7 +9245,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00888a70, fn_00888a70(Ptr, Ptr, Ptr)),
         entry!(0x00888aa0, fn_00888aa0(Ptr)),
         entry!(0x00888ac0, fn_00888ac0(Ptr<Actor>, f32)),
-        entry!(0x00888af0, fn_00888af0(Ptr<Actor>)),
+        entry!(0x00888af0, fn_00888af0(Ptr<Actor>) -> f64),
         entry!(0x00888b20, fn_00888b20(Ptr<Actor>)),
         entry!(0x00888b50, actor_update(Ptr<Actor>, f32)),
         entry!(0x0088b020, fn_0088b020(u8)),
@@ -11133,6 +11136,19 @@ mod tests {
         assert_eq!(log[0].1, vec![process, actor.addr(), 1.5f32.to_bits()]);
         assert_eq!(log[1].1, vec![process]);
         assert_eq!(log[2].1, vec![process]);
+    }
+
+    #[test]
+    fn fn_00888af0_answers_the_process_st0() {
+        let mut e = engine2();
+        let actor = actor2(&mut e);
+        with_process(&mut e, actor);
+        let timer = Ret {
+            st0: 2.25,
+            ..Ret::default()
+        };
+        slot(&mut e, PROCESS_TABLE, PROCESS_VSLOT_0X2F4, timer);
+        assert_eq!(fn_00888af0(&mut e, actor), 2.25);
     }
 
     #[test]

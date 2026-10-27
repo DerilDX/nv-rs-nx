@@ -900,7 +900,7 @@ fn print_line(e: &mut Engine, printer: u32, x: u32, y: u32, format: u32, values:
 fn timer_values(e: &mut Engine, timer: u32) -> Vec<u32> {
     let second = e.call(TIMER_VALUE_A, &args![timer]).f64();
     let first = e.call(TIMER_VALUE_B, &args![timer]).f64();
-    args![first, second]
+    args![first, second].into()
 }
 
 // Translated from 009d8520 (decompiled, FalloutNV.exe 1.4.0.525)

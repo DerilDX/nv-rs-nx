@@ -1294,7 +1294,7 @@ mod tests {
         let mut e = engine();
         set_00642a60(&mut e);
         let words = |skip: u32| {
-            args![100i32, 5i32, 1i32, 2i32, 3i32, 4i32, 6i32, 2i32, 5i32, 1000i32, skip]
+            args![100i32, 5i32, 1i32, 2i32, 3i32, 4i32, 6i32, 2i32, 5i32, 1000i32, skip].to_vec()
         };
         // 100 + 5 + 16 + 6 + 8 + 6 + 20 + 1000.
         assert_eq!(e.call(0x0064_2a60, &words(0)).i32(), 1161);
@@ -1384,6 +1384,7 @@ mod tests {
             3i32,
             4i32
         ]
+        .to_vec()
     }
 
     #[test]
@@ -1401,7 +1402,7 @@ mod tests {
         assert_eq!(calls(&e, INT_PAIR_00647B70), vec![vec![4, 0]]);
         assert_eq!(
             calls(&e, POW),
-            vec![args![0.5f64, 2.0f64]],
+            vec![args![0.5f64, 2.0f64].to_vec()],
             "the clamped ratio to the setting's power"
         );
 
@@ -1734,7 +1735,8 @@ mod n075_tests {
             (0x011c_db84, 1.0),
             (0x011c_d08c, 0.5),
         ]);
-        let words = args![0u32, 1u32, 5.0f32, 0u32, 1u32, 0u32, 0u32, 0u32, 3u32, held, 0u32];
+        let words =
+            args![0u32, 1u32, 5.0f32, 0u32, 1u32, 0u32, 0u32, 0u32, 3u32, held, 0u32].to_vec();
         let result = e.call(0x0064_2bc0, &words).i32();
         (result, ftol_calls(&mut e))
     }

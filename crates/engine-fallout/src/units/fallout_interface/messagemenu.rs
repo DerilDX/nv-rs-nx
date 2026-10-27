@@ -1877,7 +1877,9 @@ pub fn fn_007ab0a0(e: &mut Engine, this: u32, pos: u32, count: u32, text: u32, l
         let base = data_of(e, this);
         let destination = base.wrapping_add(pos).wrapping_add(length);
         let size = capacity.wrapping_sub(pos).wrapping_sub(length);
-        e.call(MEMORY_MOVE, &args![destination, size, source, tail]);
+        // 007ab172: `0044d580` reads the ECX it is entered with (its first parameter);
+        // `0044a970`, called last at 007ab166, leaves ECX = this.
+        e.call(MEMORY_MOVE, &args![this, destination, size, source, tail]);
     }
     if length > 0 || count > 0 {
         let new_size = e
@@ -1893,7 +1895,8 @@ pub fn fn_007ab0a0(e: &mut Engine, this: u32, pos: u32, count: u32, text: u32, l
                 let size = capacity.wrapping_sub(pos).wrapping_sub(length);
                 let base = data_of(e, this);
                 let destination = base.wrapping_add(pos).wrapping_add(length);
-                e.call(MEMORY_MOVE, &args![destination, size, source, tail]);
+                // 007ab1e5: as above, ECX = this (0044a970 at 007ab1d9).
+                e.call(MEMORY_MOVE, &args![this, destination, size, source, tail]);
             }
             let capacity = e.mem.u32(this + 0x18);
             let base = data_of(e, this);
@@ -1941,10 +1944,19 @@ fn transfer_chars(
     let source = source_base.wrapping_add(from);
     let base = data_of(e, this);
     let destination = base.wrapping_add(to);
-    e.call(
-        function,
-        &args![destination, capacity.wrapping_sub(to), source, count],
-    );
+    if function == MEMORY_MOVE {
+        // 007ab335 and the other move sites: `0044d580` reads the ECX it is entered with;
+        // `0044a970`, called last before each, leaves ECX = this.
+        e.call(
+            function,
+            &args![this, destination, capacity.wrapping_sub(to), source, count],
+        );
+    } else {
+        e.call(
+            function,
+            &args![destination, capacity.wrapping_sub(to), source, count],
+        );
+    }
 }
 
 // Translated from 007ab250 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -2567,13 +2579,17 @@ mod tests {
             e.mem.set_u8(base + a[1], 0);
             Ret::default()
         });
-        for address in [MEMORY_MOVE, MEMORY_COPY] {
-            e.register(address, |e, a| {
-                let bytes = e.mem.bytes(a[2], a[3]);
-                e.mem.write(a[0], &bytes);
-                Ret::default()
-            });
-        }
+        e.register(MEMORY_COPY, |e, a| {
+            let bytes = e.mem.bytes(a[2], a[3]);
+            e.mem.write(a[0], &bytes);
+            Ret::default()
+        });
+        // `0044d580` takes the ECX it is entered with first.
+        e.register(MEMORY_MOVE, |e, a| {
+            let bytes = e.mem.bytes(a[3], a[4]);
+            e.mem.write(a[1], &bytes);
+            Ret::default()
+        });
         appends
     }
 

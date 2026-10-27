@@ -4369,7 +4369,8 @@ pub fn fn_00877720(e: &mut Engine, _this: Ptr) -> Ptr {
 /// zero position (`00a59c60`), updates the sun node's properties and
 /// prepares both objects (`BSShaderManager::PrepareObject`, `00b57e30`).
 /// (The exception frame is left out.)
-pub fn main_init_sky(e: &mut Engine, _this: Ptr) {
+/// No arguments (`main` calls it after `0046dd00` with nothing pushed; `ECX` is not read).
+pub fn main_init_sky(e: &mut Engine) {
     with_profile_scope(e, 0x21, 0x26bd, |e| {
         e.call(ERROR_LOG, &args![0x0108_2ec0u32]);
         let node_a = pointer_get(e, 0x011d_eb00);
@@ -4805,7 +4806,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x008776e0, fn_008776e0(Ptr)),
         entry!(0x00877700, fn_00877700(Ptr)),
         entry!(0x00877720, fn_00877720(Ptr) -> Ptr),
-        entry!(0x00877730, main_init_sky(Ptr)),
+        entry!(0x00877730, main_init_sky()),
         entry!(0x00877950, fn_00877950() -> u32),
         entry!(0x00877960, fn_00877960()),
         entry!(0x008779f0, fn_008779f0(Ptr) -> Ptr),

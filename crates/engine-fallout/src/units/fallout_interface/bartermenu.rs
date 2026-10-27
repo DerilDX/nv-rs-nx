@@ -687,8 +687,8 @@ const IS_GOLD: u32 = 0x0048_1f10;
 const CAST_TEST_0048CEE0: u32 = 0x0048_cee0;
 const TYPE_28_TEST_0047BCF0: u32 = 0x0047_bcf0;
 const TYPE_29_TEST_004C94D0: u32 = 0x004c_94d0;
-/// `004181e0` (`thiscall`, `RET 4`: a flag) on the vendor, then `0047efe0` on the
-/// result + 0x90 (a `bool`).
+/// `004181e0` (`thiscall`, plain `RET`, no stack word) on the vendor, then `0047efe0`
+/// on the result + 0x90 (`RET 4`: the flag, a `bool`).
 const VENDOR_SERVICES_004181E0: u32 = 0x0041_81e0;
 const SERVICE_FLAG_0047EFE0: u32 = 0x0047_efe0;
 /// `TESValueForm::GetFormValue` (`0048e8a0`, cdecl) and `BGSEquipType::GetEquipType`
@@ -1727,12 +1727,17 @@ pub fn barter_menu_player_first_pass_filter_func(e: &mut Engine, item: u32) -> b
     e.call(FORM_TYPE, &args![object]).u32() == 0x2e
 }
 
-/// Whether the vendor does not take items of a service flag: `!0047efe0(004181e0(vendor,
-/// flag) + 0x90)`.
+/// Whether the vendor does not take items of a service flag: `!0047efe0(004181e0(vendor)
+/// + 0x90, flag)`.
 fn vendor_refuses(e: &mut Engine, vendor: u32, flag: u32) -> bool {
-    let services = e.call(VENDOR_SERVICES_004181E0, &args![vendor, flag]).u32();
-    !e.call(SERVICE_FLAG_0047EFE0, &args![services.wrapping_add(0x90)])
-        .bool()
+    // 0072e783 and the other cases: `004181e0` takes no stack word (plain RET); the
+    // pushed flag is the word of `0047efe0` (RET 4).
+    let services = e.call(VENDOR_SERVICES_004181E0, &args![vendor]).u32();
+    !e.call(
+        SERVICE_FLAG_0047EFE0,
+        &args![services.wrapping_add(0x90), flag],
+    )
+    .bool()
 }
 
 // Translated from 0072e6c0 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -4070,21 +4075,16 @@ mod n051_tests {
         answer(&mut e, VENDOR_SERVICES_004181E0, 0x100);
         e.call_log = Some(vec![]);
         assert!(e.call(0x0072_e6c0, &args![it]).bool());
-        assert_eq!(
-            calls_to(&e, VENDOR_SERVICES_004181E0),
-            vec![vec![vendor, 2]]
-        );
-        assert_eq!(calls_to(&e, SERVICE_FLAG_0047EFE0), vec![vec![0x190]]);
+        assert_eq!(calls_to(&e, VENDOR_SERVICES_004181E0), vec![vec![vendor]]);
+        assert_eq!(calls_to(&e, SERVICE_FLAG_0047EFE0), vec![vec![0x190, 2]]);
         answer(&mut e, SERVICE_FLAG_0047EFE0, 1);
         assert!(!e.call(0x0072_e6c0, &args![it]).bool());
         answer(&mut e, FORM_TYPE, 0x2f);
         answer(&mut e, GET_EQUIP_TYPE, 11);
         e.call_log = Some(vec![]);
         assert!(!e.call(0x0072_e6c0, &args![it]).bool());
-        assert_eq!(
-            calls_to(&e, VENDOR_SERVICES_004181E0),
-            vec![vec![vendor, 0x40]]
-        );
+        assert_eq!(calls_to(&e, VENDOR_SERVICES_004181E0), vec![vec![vendor]]);
+        assert_eq!(calls_to(&e, SERVICE_FLAG_0047EFE0), vec![vec![0x190, 0x40]]);
         answer(&mut e, FORM_TYPE, 0x2e);
         assert!(e.call(0x0072_e6c0, &args![it]).bool());
     }

@@ -407,7 +407,7 @@ mod tests {
         let log: Log = e.call_log.take().unwrap();
         assert_eq!(
             calls_to(&log, MAP_INSERT),
-            vec![args![filter + MAP, ALLOCATOR, 2u32, 1u32, 1u32, 0u32]]
+            vec![args![filter + MAP, ALLOCATOR, 2u32, 1u32, 1u32, 0u32].to_vec()]
         );
     }
 
@@ -429,7 +429,7 @@ mod tests {
             assert_eq!(e.mem.u8(out), expected, "index {index:#x}");
             assert_eq!(
                 calls_to(&log, MAP_FIND_KEY),
-                vec![args![filter + MAP, 20u32, 10u32]]
+                vec![args![filter + MAP, 20u32, 10u32].to_vec()]
             );
         }
     }
@@ -527,7 +527,7 @@ mod tests {
         let (low, high) = halves(pair_key(first - 0x20, second - 0x20));
         assert_eq!(
             calls_to(&log, MAP_FIND_KEY),
-            vec![args![base + MAP, low, high]]
+            vec![args![base + MAP, low, high].to_vec()]
         );
     }
 
@@ -579,10 +579,10 @@ mod tests {
         assert_eq!(
             order,
             vec![
-                (BASE_CONSTRUCT, args![filter]),
-                (MEMORY_ROUTER, args![]),
-                (MAP_RESERVE, args![filter + MAP, ALLOCATOR, 0u32]),
-                (ADD_REFERENCE, args![0x5150u32]),
+                (BASE_CONSTRUCT, args![filter].to_vec()),
+                (MEMORY_ROUTER, args![].to_vec()),
+                (MAP_RESERVE, args![filter + MAP, ALLOCATOR, 0u32].to_vec()),
+                (ADD_REFERENCE, args![0x5150u32].to_vec()),
             ]
         );
         for (offset, vtable) in VTABLES {
@@ -600,10 +600,13 @@ mod tests {
         assert_eq!(
             order,
             vec![
-                (RELEASE_REFERENCE, args![0x5150u32]),
-                (MEMORY_ROUTER, args![]),
-                (MAP_CLEAR_AND_DEALLOCATE, args![filter + MAP, ALLOCATOR]),
-                (EMPTY_CALL, args![filter + MAP]),
+                (RELEASE_REFERENCE, args![0x5150u32].to_vec()),
+                (MEMORY_ROUTER, args![].to_vec()),
+                (
+                    MAP_CLEAR_AND_DEALLOCATE,
+                    args![filter + MAP, ALLOCATOR].to_vec()
+                ),
+                (EMPTY_CALL, args![filter + MAP].to_vec()),
             ]
         );
         for (offset, vtable) in FINAL_VTABLES {

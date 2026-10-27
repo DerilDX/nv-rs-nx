@@ -1839,12 +1839,11 @@ const CAN_BE_MOVED: u32 = 0x0057_2c80;
 const DATA_HANDLER_HAS_FORM_ID: u32 = 0x0046_9860;
 /// The data handler singleton pointer.
 const DATA_HANDLER: u32 = 0x011c_3f2c;
-/// `cdecl` (unnamed, `tes.cpp`; `opcode, reference, target, x, y, z` with
-/// three `double`s): builds the message the networked build sends for a
-/// move.
-const BUILD_MOVE_MESSAGE: u32 = 0x0045_37b0;
-/// `cdecl` (unnamed, `actor`-side; `message`): sends it.
-const SEND_MESSAGE: u32 = 0x0087_a8b0;
+/// The task queue (`004537b0`, no arguments: the word at `011df1a8`) and its queueing of a
+/// command (`0087a8b0`, `cdecl`: queue, opcode, reference, target and the three offsets as
+/// `double`s).
+const TASK_QUEUE_INTERFACE: u32 = 0x0045_37b0;
+const QUEUE_COMMAND: u32 = 0x0087_a8b0;
 /// `thiscall` (unnamed, `modelloader.cpp`; `ECX`): `ECX + 4`, or the address
 /// of a static zeroed dword when `ECX` is 0.
 const GET_FIELD_4_ADDRESS: u32 = 0x0043_d4d0;
@@ -2114,13 +2113,13 @@ fn move_is_messaged(e: &mut Engine) -> bool {
 /// [`move_is_messaged`]): `opcode` is `0x109e` or `0x124f`.
 fn send_move_message(e: &mut Engine, opcode: u32, a: ScriptArgs, target: u32, offsets: [u32; 3]) {
     let [x, y, z] = offsets.map(|word| f32::from_bits(word) as f64);
-    let message = e
-        .call(
-            BUILD_MOVE_MESSAGE,
-            &args![opcode, a.this_obj, target, x, y, z],
-        )
-        .u32();
-    e.call(SEND_MESSAGE, &args![message]);
+    // 005cd09c..005cd0a7 (and 005cd233..005cd23e): the words are pushed before the getter
+    // 004537b0, which takes none; they and its answer go to 0087a8b0.
+    let queue = e.call(TASK_QUEUE_INTERFACE, &args![]).u32();
+    e.call(
+        QUEUE_COMMAND,
+        &args![queue, opcode, a.this_obj, target, x, y, z],
+    );
 }
 
 // ---- Translated functions, third batch ------------------------------------------------
@@ -6629,7 +6628,7 @@ mod tests {
         let mut e = move_engine();
         accept(
             &mut e,
-            &[BUILD_MOVE_MESSAGE, SEND_MESSAGE, FADE_OUT_AND_MOVE],
+            &[TASK_QUEUE_INTERFACE, QUEUE_COMMAND, FADE_OUT_AND_MOVE],
         );
         e.register(CAN_BE_MOVED, |e, a| (e.mem.u8(a[0] + 0xfa) == 0).into_ret());
         e.register(GET_DWORD_0C, |e, a| e.mem.u32(a[0] + 0xc).into_ret());
@@ -6638,7 +6637,7 @@ mod tests {
             assert_eq!(a, [OBJECT_011C3EA4]);
             (OBJECT_011C3EA4 + 4).into_ret()
         });
-        e.register(BUILD_MOVE_MESSAGE, |_, _| 0x3333.into_ret());
+        e.register(TASK_QUEUE_INTERFACE, |_, _| 0x3333.into_ret());
         e.register(GET_CURRENT_PROCESS_TYPE, |e, a| {
             e.mem.u32(a[0] + 0xe8).into_ret()
         });
@@ -6683,7 +6682,7 @@ mod tests {
         for i in 0..3 {
             assert_eq!(e.mem.u32(reference + 0xb0 + 4 * i), expected[i as usize]);
         }
-        assert!(calls(&e, BUILD_MOVE_MESSAGE).is_empty());
+        assert!(calls(&e, TASK_QUEUE_INTERFACE).is_empty());
     }
 
     #[test]
@@ -6695,20 +6694,20 @@ mod tests {
         start_log(&mut e);
         assert!(run(&mut e, 0x005c_cf50, a));
         // Opcode, thisObj, target and the offsets as three doubles.
-        let message = calls(&e, BUILD_MOVE_MESSAGE);
-        let mut expected = vec![0x109e, reference, target];
+        // The queue getter takes no words; they all go with its answer to 0087a8b0.
+        assert_eq!(calls(&e, TASK_QUEUE_INTERFACE), vec![Vec::<u32>::new()]);
+        let mut expected = vec![0x3333, 0x109e, reference, target];
         for value in [1.0f64, 2.0, 3.0] {
             expected.push(value.to_bits() as u32);
             expected.push((value.to_bits() >> 32) as u32);
         }
-        assert_eq!(message, vec![expected]);
-        assert_eq!(calls(&e, SEND_MESSAGE), vec![vec![0x3333]]);
+        assert_eq!(calls(&e, QUEUE_COMMAND), vec![expected]);
         assert!(calls(&e, CHECK_FOR_QUEST_TARGET_UPDATE).is_empty());
         // A counter of 1 is not above 1.
         e.mem.set_u32(OBJECT_011C3EA4 + 4, 1);
         start_log(&mut e);
         assert!(run(&mut e, 0x005c_cf50, a));
-        assert!(calls(&e, BUILD_MOVE_MESSAGE).is_empty());
+        assert!(calls(&e, TASK_QUEUE_INTERFACE).is_empty());
     }
 
     #[test]
@@ -6832,8 +6831,7 @@ mod tests {
         let a = move_args(&mut e, reference, script_form, target);
         start_log(&mut e);
         assert!(run(&mut e, 0x005c_d0e0, a));
-        assert_eq!(calls(&e, BUILD_MOVE_MESSAGE)[0][0], 0x124f);
-        assert_eq!(calls(&e, SEND_MESSAGE), vec![vec![0x3333]]);
+        assert_eq!(calls(&e, QUEUE_COMMAND)[0][..2], [0x3333, 0x124f]);
         // An unmovable reference: reported, not moved.
         e.mem.set_u32(OBJECT_011C3EA4 + 4, 0);
         e.mem.set_u8(reference + 0xfa, 1);

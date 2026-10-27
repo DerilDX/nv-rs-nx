@@ -76,6 +76,15 @@ terms, whose notice must be kept:
 > OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 > THE SOFTWARE.
 
+## Third-party code
+
+- `crates/vorbis` follows the public source of libvorbis 1.2.0, libvorbisfile
+  1.2.0 and libogg 1.1.3 (Xiph.Org Foundation, BSD licence) in its order of
+  operations and keeps their window and floor tables, so that it decodes
+  exactly as the library the game ships with. Their copyright and licence
+  notice is in [crates/vorbis/LICENSE-libvorbis](crates/vorbis/LICENSE-libvorbis),
+  and each file that follows them says so in its first lines.
+
 ## Requests from rights holders
 
 Rights holders who have a concern can open an issue or contact the

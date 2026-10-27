@@ -2185,9 +2185,9 @@ pub fn caravan_menu_prepare_shared_3d_elements(e: &mut Engine, this: Ptr<Caravan
 const MISC_STAT_INCREMENT: u32 = 0x004d_5c60;
 /// `BSAudio::QInstance` (no arguments).
 const AUDIO_INSTANCE: u32 = 0x0045_3a70;
-/// `BSAudio::GetSoundHandleByName` (`this`, out handle, name, flags, 0).
+/// `BSAudio::GetSoundHandleByName` (`this`, out handle, name, flags; RET 0xc).
 const SOUND_HANDLE_BY_NAME: u32 = 0x00ad_7550;
-/// `BSSoundHandle::Play` (`this` only).
+/// `BSSoundHandle::Play` (`this`, one word; RET 4).
 const SOUND_PLAY: u32 = 0x00ad_8830;
 /// The sound handle's release (does nothing; `00483710`).
 const SOUND_HANDLE_RELEASE: u32 = 0x0048_3710;
@@ -2312,13 +2312,12 @@ const TUTORIAL_INDEX: u32 = 0xe7c;
 fn play_sound(e: &mut Engine, name: u32) {
     e.with_stack(0xc, |e, handle| {
         let audio = e.call(AUDIO_INSTANCE, &args![]).u32();
+        // 00740a6b: `00ad7550` takes three words (RET 0xc); the pushed 0 is the word of
+        // `00ad8830` (RET 4).
         let sound = e
-            .call(
-                SOUND_HANDLE_BY_NAME,
-                &args![audio, handle, name, 0x121u32, 0u32],
-            )
+            .call(SOUND_HANDLE_BY_NAME, &args![audio, handle, name, 0x121u32])
             .u32();
-        e.call(SOUND_PLAY, &args![sound]);
+        e.call(SOUND_PLAY, &args![sound, 0u32]);
         e.call(SOUND_HANDLE_RELEASE, &args![handle]);
     });
 }

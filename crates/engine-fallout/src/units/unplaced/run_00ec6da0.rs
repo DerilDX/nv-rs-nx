@@ -8,77 +8,6 @@
 #[allow(unused_imports)]
 use crate::prelude::*;
 
-/// `strcmp`'s answer after a mismatching `CMP AL, [ECX]`: `SBB EAX,EAX;
-/// SHL EAX,1; ADD EAX,1`, so -1 when the first string's byte is below
-/// (unsigned) and 1 otherwise.
-fn mismatch(left: u8, right: u8) -> i32 {
-    if left < right {
-        -1
-    } else {
-        1
-    }
-}
-
-// Translated from 00ec6da0 (decompiled, FalloutNV.exe 1.4.0.525)
-/// `strcmp(left, right)` (LIBCMT, `cdecl`): 0 when equal, else -1 or 1 by
-/// the first differing byte (unsigned). As the assembly does, it first
-/// brings `left` to a 4-byte boundary (one byte, then one word, as needed)
-/// and then reads `left` a whole aligned word at a time (bytes after the
-/// terminator inside that word are read, not used); `right` is read byte
-/// by byte.
-pub fn strcmp(e: &mut Engine, left: Ptr, right: Ptr) -> i32 {
-    let mut left = left.addr();
-    let mut right = right.addr();
-    if left & 3 != 0 {
-        let mut word_step = true;
-        if left & 1 != 0 {
-            let byte = e.mem.u8(left);
-            left = left.wrapping_add(1);
-            let other = e.mem.u8(right);
-            if byte != other {
-                return mismatch(byte, other);
-            }
-            right = right.wrapping_add(1);
-            if byte == 0 {
-                return 0;
-            }
-            word_step = left & 2 != 0;
-        }
-        if word_step {
-            let word = e.mem.u16(left);
-            left = left.wrapping_add(2);
-            for i in 0..2u32 {
-                let byte = (word >> (8 * i)) as u8;
-                let other = e.mem.u8(right.wrapping_add(i));
-                if byte != other {
-                    return mismatch(byte, other);
-                }
-                if byte == 0 {
-                    return 0;
-                }
-            }
-            right = right.wrapping_add(2);
-        }
-    }
-    loop {
-        let word = e.mem.u32(left);
-        for i in 0..4u32 {
-            let byte = (word >> (8 * i)) as u8;
-            let other = e.mem.u8(right.wrapping_add(i));
-            if byte != other {
-                return mismatch(byte, other);
-            }
-            // The last byte's terminator test comes after the pointers move
-            // on; the answer is the same.
-            if byte == 0 {
-                return 0;
-            }
-        }
-        right = right.wrapping_add(4);
-        left = left.wrapping_add(4);
-    }
-}
-
 // Translated from 00ec6e30 (decompiled, FalloutNV.exe 1.4.0.525)
 /// `strrchr(string, character)` (LIBCMT, `cdecl`): the last occurrence of
 /// the character's low byte in the string, its terminator included (so
@@ -111,10 +40,7 @@ pub fn strrchr(e: &mut Engine, string: Ptr, character: u32) -> Ptr {
 
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
-    vec![
-        entry!(0x00ec6da0, strcmp(Ptr, Ptr) -> i32),
-        entry!(0x00ec6e30, strrchr(Ptr, u32) -> Ptr),
-    ]
+    vec![entry!(0x00ec6e30, strrchr(Ptr, u32) -> Ptr)]
 }
 
 #[cfg(test)]

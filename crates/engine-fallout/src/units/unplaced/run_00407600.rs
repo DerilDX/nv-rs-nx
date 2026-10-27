@@ -28,7 +28,7 @@ const TYPE_EFFECT_SETTING: u32 = 0x0118_37c4;
 const COPY_ALL_COMPONENTS: u32 = 0x0048_51b0;
 /// `0084e3a0` (`ECX`): a word of the form, tested for zero.
 const RECORD_ID_0084E3A0: u32 = 0x0084_e3a0;
-/// `TESDataHandler::GetNextID` (Xbox PDB, `00469800`, `ECX` = the data handler, one stack
+/// `TESDataHandler::GetNextID` (Xbox PDB, `00469800`, `ECX` = the data handler, no stack
 /// word).
 const GET_NEXT_ID: u32 = 0x0046_9800;
 /// The `TESDataHandler` singleton pointer.
@@ -84,8 +84,8 @@ fn copy_float(e: &mut Engine, this: Ptr, source: u32, getter: u32, setter: u32) 
 /// `00407840`→`004febd0`, `004fb070`→`008ac890`, `004fd3c0`→`004fb090`,
 /// `004fd3e0`→`00857230`, `008ce390`→`008cc6d0` and [`fn_004077e0`]→`00408600`. Last,
 /// when flag 0x4000 of `this` ([`fn_004077c0`]) is clear and `0084e3a0` answers 0 for
-/// `this`, gives `this` a new id: `TESDataHandler::GetNextID(1)` on the data handler, handed
-/// to `this`'s vtable slot +0x128.
+/// `this`, gives `this` a new id: `TESDataHandler::GetNextID` on the data handler, handed
+/// to `this`'s vtable slot +0x128 with 1.
 pub fn fn_00407600(e: &mut Engine, this: Ptr, source: Ptr) {
     let setting = e
         .call(
@@ -115,8 +115,10 @@ pub fn fn_00407600(e: &mut Engine, this: Ptr, source: Ptr) {
         return;
     }
     let handler: u32 = e.global(DATA_HANDLER);
-    let id = e.call(GET_NEXT_ID, &args![handler, 1u32]).u32();
-    e.vcall(this.addr(), 0x128, &args![id]);
+    // 0040779e: `00469800` takes no stack word (plain RET); the pushed 1 is the
+    // second word of the form's +0x128 (`00485c10`, RET 8).
+    let id = e.call(GET_NEXT_ID, &args![handler]).u32();
+    e.vcall(this.addr(), 0x128, &args![id, 1u32]);
 }
 
 /// This unit's translated functions, by exe address.
@@ -233,8 +235,8 @@ mod copy_tests {
         }
         assert_eq!(setters, expected);
         assert!(log.contains(&(COPY_ALL_COMPONENTS, vec![this.addr(), source])));
-        assert!(log.contains(&(GET_NEXT_ID, vec![0x0090_0000, 1])));
-        assert!(log.contains(&(0x0060_0128, vec![this.addr(), 0x0012_3456])));
+        assert!(log.contains(&(GET_NEXT_ID, vec![0x0090_0000])));
+        assert!(log.contains(&(0x0060_0128, vec![this.addr(), 0x0012_3456, 1])));
     }
 
     #[test]

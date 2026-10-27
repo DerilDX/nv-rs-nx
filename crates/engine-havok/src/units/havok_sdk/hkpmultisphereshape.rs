@@ -914,7 +914,7 @@ mod tests {
             log[1],
             (
                 REFERENCED_OBJECT_CALC_CONTENT_STATISTICS,
-                args![0x1000u32, 0x2000u32, 0x0126_8910u32]
+                args![0x1000u32, 0x2000u32, 0x0126_8910u32].to_vec()
             )
         );
     }

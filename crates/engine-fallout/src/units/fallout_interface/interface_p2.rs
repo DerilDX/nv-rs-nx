@@ -812,9 +812,11 @@ pub fn fn_00706ae0(e: &mut Engine) {
     e.call(0x0070_53b0, &[]);
     e.call(0x0077_3050, &[]);
     if e.call(0x0070_50d0, &[]).bool() {
-        let value = e.call(0x0070_5190, &args![0.0f32, 1u32]).u32();
+        // 00706b08: `00705190` takes no word (plain RET, no stack read); the pushed 0.0
+        // and 1 are the last two words of `00953060` (RET 0xc).
+        let value = e.call(0x0070_5190, &args![]).u32();
         let object = e.mem.u32(FINISH_OBJECT);
-        e.call(0x0095_3060, &args![object, value]);
+        e.call(0x0095_3060, &args![object, value, 0.0f32, 1u32]);
         e.call(0x0083_e510, &[]);
     }
     e.call(0x0070_5780, &[]);
@@ -4074,8 +4076,8 @@ mod tests {
                 ENTER_RENDERED_MENU,
             ]
         );
-        assert_eq!(logged(&e, 0x0070_5190), vec![vec![0, 1]]);
-        assert_eq!(logged(&e, 0x0095_3060), vec![vec![0x1234, 0x99]]);
+        assert_eq!(logged(&e, 0x0070_5190), vec![Vec::<u32>::new()]);
+        assert_eq!(logged(&e, 0x0095_3060), vec![vec![0x1234, 0x99, 0, 1]]);
         assert_eq!(logged(&e, 0x0070_6fd0), vec![vec![1, 1]]);
         assert_eq!(logged(&e, ENTER_RENDERED_MENU), vec![vec![manager, 0]]);
         assert_eq!(e.mem.u8(FINISH_FLAG), 1);

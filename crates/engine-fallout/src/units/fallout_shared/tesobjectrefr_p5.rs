@@ -3481,7 +3481,13 @@ fn say_topic_as_actor(e: &mut Engine, actor: u32, topic: u32, flag: u8) {
         let [x, y, z] = position_words(e, position);
         fn_0057bd10(e, Ptr::new(record), 0);
         let [r0, r1, r2] = position_words(e, record);
-        e.call(0x0070_5210, &args![buffer, r0, r1, r2, x, y, z]);
+        // 0057ba50 / 0057ba57: the 0 and the player pushed before the position's +0x1f4
+        // (no stack word) are the last two words of the cdecl `00705210` (ADD ESP,0x24).
+        let player = e.global::<u32>(GLOBAL_PLAYER);
+        e.call(
+            0x0070_5210,
+            &args![buffer, r0, r1, r2, x, y, z, player, 0u32],
+        );
         e.mem.free(buffer);
     } else {
         let position = e.vcall(actor, SLOT_POSITION_PTR, &args![]).u32();
@@ -3490,7 +3496,9 @@ fn say_topic_as_actor(e: &mut Engine, actor: u32, topic: u32, flag: u8) {
         let [r0, r1, r2] = position_words(e, record);
         let holder = e.call(0x0068_15c0, &args![current]).u32();
         let text = first_dword(e, holder);
-        e.call(0x0070_5210, &args![text, r0, r1, r2, x, y, z]);
+        // 0057baac / 0057bab4: as above, the player and 0 are the last two words.
+        let player = e.global::<u32>(GLOBAL_PLAYER);
+        e.call(0x0070_5210, &args![text, r0, r1, r2, x, y, z, player, 0u32]);
     }
     e.mem.free(record);
     let process = process_of(e, actor);
@@ -8647,6 +8655,7 @@ mod tests {
             calls_to(&log, 0x005a_c750),
             vec![vec![0x77, this + 0x44, 0x40000]]
         );
+        let player_word = e.global::<u32>(GLOBAL_PLAYER);
         assert_eq!(
             calls_to(&log, 0x0070_5210),
             vec![vec![
@@ -8656,7 +8665,9 @@ mod tests {
                 0,
                 1.0f32.to_bits(),
                 2.0f32.to_bits(),
-                3.0f32.to_bits()
+                3.0f32.to_bits(),
+                player_word,
+                0
             ]]
         );
         assert_eq!(calls_to(&log, SAY_SLOT_AFTER), vec![vec![process, 0]]);

@@ -3437,8 +3437,10 @@ pub fn fn_0086fc60(e: &mut Engine, this: Ptr) {
     e.with_stack(12, |e, buffer| {
         e.call(0x0043_d410, &args![buffer, scaled, 1u32, 0u32]);
         // The game tests the processor count again here, but both arms run the same two calls.
-        let holder = e.call(0x0045_a190, &args![buffer]).u32();
-        e.call(0x00c5_0610, &args![holder]);
+        // 0086fd43: `0045a190` takes no word (plain RET, no stack read); the pushed buffer
+        // is the word of `00c50610` (RET 4).
+        let holder = e.call(0x0045_a190, &args![]).u32();
+        e.call(0x00c5_0610, &args![holder, buffer]);
     });
 }
 
@@ -8545,7 +8547,10 @@ mod tests {
             e.set_global(TES_OBJECT, 0x6100u32);
             e.set_global(0x011d_ea30, 0.5f32);
             e.register(TIMER_GET_SECONDS, |_, _| ret_f32(2.0));
-            e.register(0x0045_a190, |_, a| (a[0] + 4).into_ret());
+            e.register(0x0045_a190, |_, a| {
+                assert!(a.is_empty());
+                0x7704u32.into_ret()
+            });
             let built = recorder(&mut e, 0x0043_d410, 0);
             e.call_log = Some(vec![]);
             e.call(0x0086_fc60, &args![main]);
@@ -8561,8 +8566,10 @@ mod tests {
             let built = built.borrow();
             assert_eq!(built.len(), 1);
             assert_eq!(built[0][1..], [0.5f32.to_bits(), 1, 0]);
-            let holder = calls_to(&log, 0x0045_a190)[0][0] + 4;
-            assert_eq!(calls_to(&log, 0x00c5_0610), vec![vec![holder]]);
+            let held = calls_to(&log, 0x00c5_0610);
+            assert_eq!(held.len(), 1);
+            assert_eq!(held[0][0], 0x7704);
+            assert_eq!(held[0][1], built[0][0]);
         }
 
         #[test]
@@ -9238,5 +9245,14 @@ mod tests {
             assert_eq!(calls_to(&log, 0x0066_29f0), vec![vec![scene]]);
             assert_eq!(calls_to(&log, 0x0045_b070)[0][1], scene + 1);
         }
+    }
+}
+
+#[cfg(test)]
+mod renderer_text_tests {
+    #[test]
+    fn fn_0086d580_answers_the_error_text_buffer() {
+        let mut e = crate::Engine::new();
+        assert_eq!(e.call(0x0086_d580, &[]).u32(), 0x011c_6fc8);
     }
 }

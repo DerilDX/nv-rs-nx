@@ -191,27 +191,32 @@ pub fn cbillboard_leaf_adjust_static_lighting(
     vector_b: Ptr,
     weight: f32,
 ) {
-    let work = e.mem.alloc(0x30);
-    let (first, second, color, scaled) = (work, work + 0xc, work + 0x18, work + 0x24);
-    e.call(VEC3_SUBTRACT, &args![this.byte_add(4), first, vector_a]);
-    e.call(VEC3_NORMALIZE, &args![first]);
-    e.call(VEC3_SUBTRACT, &args![vector_b, second, vector_a]);
-    e.call(VEC3_NORMALIZE, &args![second]);
-    let angle = e.call(VEC3_ANGLE_BETWEEN, &args![first, second]).f32();
-    let cosine = e.call(COS, &args![angle as f64]).f64() as f32;
-    let one: f64 = e.global(ONE);
-    let half: f64 = e.global(HALF);
-    let shaped = ((cosine as f64 + one) * half) as f32;
-    let factor = (shaped as f64 * (1.0 - weight as f64) + weight as f64) as f32;
-    let color_ptr = cbillboard_leaf_get_color(e, this, Ptr::new(color));
-    let scaled_ptr = e
-        .call(
-            VEC3_SCALE_COPY,
-            &args![color_ptr, scaled, x87_quiet(factor)],
-        )
-        .ptr::<()>();
-    cbillboard_leaf_set_color(e, this, scaled_ptr, 1);
-    e.mem.free(work);
+    // The exe's frame (`SUB ESP,0x80` under `EBP`): 0x80 bytes, the two directions at +0x68
+    // and +0x74 (`EBP-0x18`, `EBP-0xc`), the colour at +0x54 and its scaled copy at +0x48
+    // (`EBP-0x2c`, `EBP-0x38`).
+    e.with_stack(0x80, |e, frame| {
+        let frame = frame.addr();
+        let (first, second, color, scaled) =
+            (frame + 0x68, frame + 0x74, frame + 0x54, frame + 0x48);
+        e.call(VEC3_SUBTRACT, &args![this.byte_add(4), first, vector_a]);
+        e.call(VEC3_NORMALIZE, &args![first]);
+        e.call(VEC3_SUBTRACT, &args![vector_b, second, vector_a]);
+        e.call(VEC3_NORMALIZE, &args![second]);
+        let angle = e.call(VEC3_ANGLE_BETWEEN, &args![first, second]).f32();
+        let cosine = e.call(COS, &args![angle as f64]).f64() as f32;
+        let one: f64 = e.global(ONE);
+        let half: f64 = e.global(HALF);
+        let shaped = ((cosine as f64 + one) * half) as f32;
+        let factor = (shaped as f64 * (1.0 - weight as f64) + weight as f64) as f32;
+        let color_ptr = cbillboard_leaf_get_color(e, this, Ptr::new(color));
+        let scaled_ptr = e
+            .call(
+                VEC3_SCALE_COPY,
+                &args![color_ptr, scaled, x87_quiet(factor)],
+            )
+            .ptr::<()>();
+        cbillboard_leaf_set_color(e, this, scaled_ptr, 1);
+    });
 }
 
 // Translated from 00b402d0 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -294,7 +299,21 @@ pub fn cbillboard_leaf_set_color(
     color: Ptr,
     scaled: u8,
 ) {
-    let local = e.mem.alloc(12);
+    // The exe's frame (`SUB ESP,0x1c` under `EBP`, one push): 0x20 bytes, the colour copy at
+    // +0x14 (`EBP-0xc`).
+    e.with_stack(0x20, |e, frame| {
+        set_color_in_frame(e, this, color, scaled, frame.addr() + 0x14)
+    });
+}
+
+/// [`cbillboard_leaf_set_color`] with its colour copy at `local`.
+fn set_color_in_frame(
+    e: &mut Engine,
+    this: Ptr<CBillboardLeaf>,
+    color: Ptr,
+    scaled: u8,
+    local: u32,
+) {
     copy_vec3(e, color.addr(), local);
     let range: f64 = e.global(BYTE_RANGE);
     if scaled != 0 {
@@ -326,7 +345,6 @@ pub fn cbillboard_leaf_set_color(
         .wrapping_add(blue << 16)
         .wrapping_add(0xff00_0000u32 as i32);
     e.set(this, CBillboardLeaf::m_lColor, packed as u32);
-    e.mem.free(local);
 }
 
 // Translated from 00b405c0 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -344,6 +362,15 @@ pub fn cbillboard_leaf_set_color(
 ///
 /// Returns the leaf.
 pub fn cbillboard_leaf_parse(e: &mut Engine, file: Ptr<CTreeFileAccess>) -> Ptr<CBillboardLeaf> {
+    // The exe's frame (`EBP` frame, exception record, `SUB ESP,0x198`, the cookie): 0x1a8
+    // bytes. The parsed vectors at +0x180 (tag 0x1b62, `EBP-0x28`) and +0x174 (tag 0x1b67,
+    // `EBP-0x34`); the message string at +0x130 (`EBP-0x78`) and the exception at +0x14c
+    // (`EBP-0x5c`).
+    e.with_stack(0x1a8, |e, frame| parse_in_frame(e, file, frame.addr()))
+}
+
+/// [`cbillboard_leaf_parse`] in the exe's frame (`frame` is its lowest address).
+fn parse_in_frame(e: &mut Engine, file: Ptr<CTreeFileAccess>, frame: u32) -> Ptr<CBillboardLeaf> {
     let memory = e
         .call(OPERATOR_NEW, &args![0x4cu32])
         .ptr::<CBillboardLeaf>();
@@ -370,11 +397,14 @@ pub fn cbillboard_leaf_parse(e: &mut Engine, file: Ptr<CTreeFileAccess>) -> Ptr<
                 e.set(leaf, CBillboardLeaf::m_ucColorScale, scale);
             }
             4 | 9 => {
-                let vector = e.mem.alloc(12);
+                let vector = if tag == 0x1b62 {
+                    frame + 0x180
+                } else {
+                    frame + 0x174
+                };
                 let parsed = e.call(PARSE_VECTOR3, &args![file, vector]).u32();
                 let target = if tag == 0x1b62 { 0x1c } else { 4 };
                 copy_vec3(e, parsed, leaf.addr().wrapping_add(target));
-                e.mem.free(vector);
             }
             5 => {
                 let texture = fn_00b40800(e, file);
@@ -398,13 +428,10 @@ pub fn cbillboard_leaf_parse(e: &mut Engine, file: Ptr<CTreeFileAccess>) -> Ptr<
                 e.call(PARSE_FLOAT, &args![file]);
             }
             _ => {
-                e.with_stack(0x1c, |e, text| {
-                    e.call(STRING_FROM_C_STRING, &args![text, MESSAGE_MALFORMED]);
-                    e.with_stack(0x28, |e, exception| {
-                        e.call(PARSE_ERROR_FROM_STRING, &args![exception, text, 0u32]);
-                        e.call(CXX_THROW_EXCEPTION, &args![exception, MALFORMED_THROW_INFO]);
-                    });
-                });
+                let (text, exception) = (frame + 0x130, frame + 0x14c);
+                e.call(STRING_FROM_C_STRING, &args![text, MESSAGE_MALFORMED]);
+                e.call(PARSE_ERROR_FROM_STRING, &args![exception, text, 0u32]);
+                e.call(CXX_THROW_EXCEPTION, &args![exception, MALFORMED_THROW_INFO]);
                 unreachable!("__CxxThrowException does not return (00ec7894)")
             }
         }
@@ -895,5 +922,85 @@ mod tests {
             assert_eq!(error.1[1], string.1[0]);
             assert_eq!(error.1[2], 0);
         }
+    }
+
+    #[test]
+    fn parse_keeps_its_locals_at_the_exe_frame_offsets() {
+        let (mut e, calls) = parse_engine(vec![0x1b62, 0x1b67, 0x1b5d]);
+        let seen: Calls = Rc::new(RefCell::new(Vec::new()));
+        let record = seen.clone();
+        e.register_double(PARSE_VECTOR3, move |_, a| {
+            record.borrow_mut().push((PARSE_VECTOR3, a.to_vec()));
+            Ret {
+                eax: a[1],
+                ..Ret::default()
+            }
+        });
+        let file = tree_file(&mut e, &[], 0);
+        let frame = e.mem.alloc(0x1a8);
+        e.mem.free(frame);
+        e.call(0x00b4_05c0, &args![file]);
+        // Tag 0x1b62 parses into +0x180, tag 0x1b67 into +0x174.
+        let vectors: Vec<u32> = seen.borrow().iter().map(|c| c.1[1]).collect();
+        assert_eq!(vectors, vec![frame + 0x180, frame + 0x174]);
+        // The throw path: the message at +0x130, the exception at +0x14c.
+        let (mut e, calls_throw) = parse_engine(vec![0]);
+        e.register(CXX_THROW_EXCEPTION, |_, _| panic!("thrown"));
+        let file = tree_file(&mut e, &[], 0);
+        let frame = e.mem.alloc(0x1a8);
+        e.mem.free(frame);
+        let thrown = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            e.call(0x00b4_05c0, &args![file]);
+        }));
+        assert!(thrown.is_err());
+        let log = calls_throw.borrow();
+        let string = log.iter().find(|c| c.0 == STRING_FROM_C_STRING).unwrap();
+        assert_eq!(string.1[0], frame + 0x130);
+        let error = log.iter().find(|c| c.0 == PARSE_ERROR_FROM_STRING).unwrap();
+        assert_eq!(error.1[0], frame + 0x14c);
+        drop(calls);
+    }
+
+    #[test]
+    fn set_color_and_adjust_static_lighting_use_the_exe_frame_offsets() {
+        let mut e = leaf_engine();
+        let calls = recorded(
+            &mut e,
+            &[VEC3_SUBTRACT, VEC3_NORMALIZE, VEC3_SCALE_IN_PLACE],
+        );
+        e.register(VEC3_ANGLE_BETWEEN, |_, _| Ret::default());
+        e.register(COS, |_, _| Ret {
+            st0: 1.0,
+            ..Ret::default()
+        });
+        let scaled: Calls = Rc::new(RefCell::new(Vec::new()));
+        let record = scaled.clone();
+        e.register_double(VEC3_SCALE_COPY, move |_, a| {
+            record.borrow_mut().push((VEC3_SCALE_COPY, a.to_vec()));
+            Ret {
+                eax: a[1],
+                ..Ret::default()
+            }
+        });
+        let this = leaf(&mut e);
+        let a = vec3(&mut e, 1.0, 2.0, 3.0);
+        let b = vec3(&mut e, 4.0, 5.0, 6.0);
+        let frame = e.mem.alloc(0x80);
+        e.mem.free(frame);
+        e.call(0x00b4_0210, &args![this, a, b, 0.0f32]);
+        let log = calls.borrow();
+        // The two directions at +0x68 and +0x74; the colour at +0x54, scaled into +0x48.
+        assert_eq!(log[0].1[1], frame + 0x68);
+        assert_eq!(log[2].1[1], frame + 0x74);
+        assert_eq!(scaled.borrow()[0].1[..2], [frame + 0x54, frame + 0x48]);
+        drop(log);
+        // SetColor alone: its colour copy at +0x14 of its 0x20-byte frame.
+        let color = vec3(&mut e, 0.5, 0.5, 0.5);
+        let frame = e.mem.alloc(0x20);
+        e.mem.free(frame);
+        e.call(0x00b4_04c0, &args![this, color, 1u32]);
+        let log = calls.borrow();
+        let last = log.last().unwrap();
+        assert_eq!((last.0, last.1[0]), (VEC3_SCALE_IN_PLACE, frame + 0x14));
     }
 }

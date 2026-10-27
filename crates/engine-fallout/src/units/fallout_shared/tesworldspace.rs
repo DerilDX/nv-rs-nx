@@ -7290,6 +7290,8 @@ mod tests {
     /// the data handler and an output string.
     fn location_engine() -> (Engine, Ptr<TESWorldSpace>, u32, u32) {
         let mut e = engine();
+        // The location cache registers its destructor with `_atexit`: the start-up's exit table.
+        engine_core::units::crt::start_up_test::exit_table(&mut e);
         let handler = e.mem.alloc(0x700);
         set_word(&mut e, DATA_HANDLER_POINTER, handler);
         set_word(&mut e, LOCATION_CACHE_WORLD, 0);

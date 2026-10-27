@@ -134,10 +134,11 @@ pub fn hk_seekable_stream_reader_set_mark(e: &mut Engine, this: Ptr, _unused_1: 
 
 // Translated from 00d2bdf0 (decompiled, FalloutNV.exe 1.4.0.525)
 /// `hkSeekableStreamReader::rewindToMark` (Xbox PDB), `ECX` = `this`, no stack words: seeks the
-/// stream (slot `0x28`) to the mark at `+8` with origin 0.
-pub fn hk_seekable_stream_reader_rewind_to_mark(e: &mut Engine, this: Ptr) {
+/// stream (slot `0x28`) to the mark at `+8` with origin 0 and answers the seek's `EAX` (the exe
+/// ends on that call; `rewindToMark` answers an `hkResult` in the Xbox PDB).
+pub fn hk_seekable_stream_reader_rewind_to_mark(e: &mut Engine, this: Ptr) -> u32 {
     let mark = e.mem.u32(this.addr() + 8);
-    e.vcall(this.addr(), 0x28, &args![mark, 0u32]);
+    e.vcall(this.addr(), 0x28, &args![mark, 0u32]).u32()
 }
 
 /// This unit's translated functions, by exe address.
@@ -153,7 +154,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00d2bd60, fn_00d2bd60(Ptr, u32) -> Ptr),
         entry!(0x00d2bda0, fn_00d2bda0(Ptr)),
         entry!(0x00d2bdd0, hk_seekable_stream_reader_set_mark(Ptr, u32) -> bool),
-        entry!(0x00d2bdf0, hk_seekable_stream_reader_rewind_to_mark(Ptr)),
+        entry!(0x00d2bdf0, hk_seekable_stream_reader_rewind_to_mark(Ptr) -> u32),
     ]
 }
 
@@ -374,5 +375,14 @@ mod stdio_reader_tests {
         e.mem.set_u32(object + 8, 0x55);
         e.call(0x00d2_bdf0, &args![object]);
         assert_eq!(*calls.borrow(), vec![(0x28, vec![0x55, 0])]);
+    }
+
+    #[test]
+    fn rewind_to_mark_answers_the_seek_result() {
+        let calls: Calls = Rc::new(RefCell::new(Vec::new()));
+        let mut e = Engine::new();
+        let object = seekable(&mut e, 0, &calls);
+        e.register(0x0c50_0028, |_, _| 1u32.into_ret());
+        assert_eq!(e.call(0x00d2_bdf0, &args![object]).u32(), 1);
     }
 }

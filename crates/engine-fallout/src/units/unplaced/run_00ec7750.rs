@@ -16,12 +16,6 @@ use crate::prelude::*;
 /// `strchr(string, character)` (LIBCMT, `cdecl`); `strstr` jumps into its
 /// body for a one-character pattern.
 const STRCHR: u32 = 0x00ec_7690;
-/// `strlen(string)` (LIBCMT, `cdecl`).
-const STRLEN: u32 = 0x00ec_6130;
-/// `malloc(size)` (LIBCMT, `cdecl`; `_malloc` in the engine map).
-const MALLOC: u32 = 0x00ec_d1c7;
-/// `strcpy_s(destination, size, source)` (LIBCMT, `cdecl`).
-const STRCPY_S: u32 = 0x00ec_65a6;
 /// The import slot of `RaiseException(code, flags, count, arguments)`
 /// (KERNEL32, `stdcall`).
 const RAISE_EXCEPTION: u32 = 0x00fd_f154;
@@ -176,64 +170,6 @@ pub fn fn_00ec78e0(e: &mut Engine, this: Ptr<StdException>) -> Ptr<StdException>
     this
 }
 
-/// A heap copy of the string at `message` (`strlen`, `malloc`, `strcpy_s`)
-/// stored as `this`'s message: null when `malloc` fails. `source` is read
-/// again for the copy, as the code reads the source's word again.
-fn copy_message(e: &mut Engine, this: Ptr<StdException>, message: u32, source: u32) {
-    let size = e.call(STRLEN, &args![message]).u32().wrapping_add(1);
-    let copy = e.call(MALLOC, &args![size]).u32();
-    e.set(this, StdException::_Mywhat, Ptr::new(copy));
-    if copy != 0 {
-        let message = e.mem.u32(source);
-        e.call(STRCPY_S, &args![copy, size, message]);
-    }
-}
-
-// Translated from 00ec78f1 (decompiled, FalloutNV.exe 1.4.0.525)
-/// `std::exception::exception(char const * const &)` (MSVC runtime,
-/// `thiscall`): keeps a heap copy of the message (none when it is null, or
-/// when `malloc` fails) and always marks it as owned. Returns `this`.
-pub fn exception_from_message(
-    e: &mut Engine,
-    this: Ptr<StdException>,
-    message: Ptr,
-) -> Ptr<StdException> {
-    e.mem.set_u32(this.addr(), EXCEPTION_VTABLE);
-    let text = e.mem.u32(message.addr());
-    if text == 0 {
-        e.set(this, StdException::_Mywhat, Ptr::new(0));
-    } else {
-        copy_message(e, this, text, message.addr());
-    }
-    e.set(this, StdException::_Mydofree, 1);
-    this
-}
-
-// Translated from 00ec7944 (decompiled, FalloutNV.exe 1.4.0.525)
-/// `std::exception::exception(class std::exception const &)` (MSVC runtime,
-/// `thiscall`): takes the other's ownership flag; a message the other does
-/// not own is shared, an owned one is copied to the heap (null when it is
-/// null or `malloc` fails). Returns `this`.
-pub fn exception_copy(
-    e: &mut Engine,
-    this: Ptr<StdException>,
-    other: Ptr<StdException>,
-) -> Ptr<StdException> {
-    e.mem.set_u32(this.addr(), EXCEPTION_VTABLE);
-    let owned = e.get(other, StdException::_Mydofree);
-    e.set(this, StdException::_Mydofree, owned);
-    let text = e.get(other, StdException::_Mywhat);
-    if owned == 0 {
-        e.set(this, StdException::_Mywhat, text);
-    } else if text.is_null() {
-        e.set(this, StdException::_Mywhat, Ptr::new(0));
-    } else {
-        let source = other.addr().wrapping_add(StdException::_Mywhat.off);
-        copy_message(e, this, text.addr(), source);
-    }
-    this
-}
-
 /// `__ArrayUnwind` (`00ec5f70`, four words: array, element size, count, destructor).
 const ARRAY_UNWIND: u32 = 0x00ec_5f70;
 
@@ -265,14 +201,6 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(
             0x00ec78e0,
             fn_00ec78e0(Ptr<StdException>) -> Ptr<StdException>
-        ),
-        entry!(
-            0x00ec78f1,
-            exception_from_message(Ptr<StdException>, Ptr) -> Ptr<StdException>
-        ),
-        entry!(
-            0x00ec7944,
-            exception_copy(Ptr<StdException>, Ptr<StdException>) -> Ptr<StdException>
         ),
     ]
 }
@@ -386,80 +314,6 @@ mod tests {
         assert_eq!(e.mem.u32(this.addr()), EXCEPTION_VTABLE);
         assert_eq!(e.mem.u32(this.addr() + 4), 0);
         assert_eq!(e.mem.u32(this.addr() + 8), 0);
-    }
-
-    fn crt_doubles(e: &mut Engine, malloc_result: u32) {
-        e.register(STRLEN, |_, _| Ret {
-            eax: 4,
-            ..Ret::default()
-        });
-        e.register_double(MALLOC, move |_, a| {
-            assert_eq!(a, &[5]);
-            Ret {
-                eax: malloc_result,
-                ..Ret::default()
-            }
-        });
-        e.register(STRCPY_S, |_, _| Ret::default());
-    }
-
-    #[test]
-    fn message_constructor_copies_or_clears_and_always_owns() {
-        for (text, malloc_result, copied) in [
-            (0x5000u32, 0x6000u32, true),
-            (0x5000, 0, false),
-            (0, 0x6000, false),
-        ] {
-            let mut e = Engine::new();
-            crt_doubles(&mut e, malloc_result);
-            let this = e.new_object::<StdException>();
-            let message = e.mem.alloc(4);
-            e.mem.set_u32(message, text);
-            e.call_log = Some(vec![]);
-            let r = e.call(0x00ec_78f1, &args![this, message]).u32();
-            assert_eq!(r, this.addr());
-            assert_eq!(e.mem.u32(this.addr()), EXCEPTION_VTABLE);
-            let expected = if text == 0 { 0 } else { malloc_result };
-            assert_eq!(e.mem.u32(this.addr() + 4), expected);
-            assert_eq!(e.mem.u32(this.addr() + 8), 1);
-            let log = e.call_log.take().unwrap();
-            let copies: Vec<_> = log.iter().filter(|c| c.0 == STRCPY_S).collect();
-            if copied {
-                assert_eq!(copies[0].1, vec![0x6000, 5, 0x5000]);
-            } else {
-                assert!(copies.is_empty());
-            }
-            let lengths = log.iter().filter(|c| c.0 == STRLEN).count();
-            assert_eq!(lengths, usize::from(text != 0));
-        }
-    }
-
-    #[test]
-    fn copy_constructor_shares_unowned_and_copies_owned_messages() {
-        for (owned, text, expected, copied) in [
-            (0u32, 0x5000u32, 0x5000u32, false),
-            (1, 0, 0, false),
-            (1, 0x5000, 0x6000, true),
-        ] {
-            let mut e = Engine::new();
-            crt_doubles(&mut e, 0x6000);
-            let this = e.new_object::<StdException>();
-            let other = e.new_object::<StdException>();
-            e.mem.set_u32(other.addr() + 4, text);
-            e.mem.set_u32(other.addr() + 8, owned);
-            e.call_log = Some(vec![]);
-            let r = e.call(0x00ec_7944, &args![this, other]).u32();
-            assert_eq!(r, this.addr());
-            assert_eq!(e.mem.u32(this.addr()), EXCEPTION_VTABLE);
-            assert_eq!(e.mem.u32(this.addr() + 4), expected);
-            assert_eq!(e.mem.u32(this.addr() + 8), owned);
-            let log = e.call_log.take().unwrap();
-            let copies: Vec<_> = log.iter().filter(|c| c.0 == STRCPY_S).collect();
-            assert_eq!(copies.len(), usize::from(copied));
-            if copied {
-                assert_eq!(copies[0].1, vec![0x6000, 5, 0x5000]);
-            }
-        }
     }
 }
 

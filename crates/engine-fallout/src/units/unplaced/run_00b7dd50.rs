@@ -43,7 +43,9 @@ const ENTRY_00E7DE90: u32 = 0x00e7_de90;
 const SHADER_00C03230: u32 = 0x00c0_3230;
 /// `00c4c2d0`: `cdecl`, three words (matrix, 0, 64-byte output).
 const MATRIX_00C4C2D0: u32 = 0x00c4_c2d0;
-/// `00b7c750`, `00b7c7b0`, `00b7c850`, `00b7cb00`: `thiscall` on the shader.
+/// `00b7c750`: `thiscall` on the shader. `00b7c7b0`, `00b7c850`, `00b7cb00`: `stdcall`
+/// (RET 4 / 8 / 0xc, ECX not read); the caller's ECX (the shader) is not one of their
+/// words.
 const SHADER_00B7C750: u32 = 0x00b7_c750;
 const SHADER_00B7C7B0: u32 = 0x00b7_c7b0;
 const SHADER_00B7C850: u32 = 0x00b7_c850;
@@ -166,7 +168,8 @@ pub fn fn_00b7dde0(e: &mut Engine, this: Ptr, pass: Ptr) {
     e.with_stack(0x40, |e, frame| {
         let local = frame.addr();
         matrix_part(e, this, local);
-        e.call(SHADER_00B7C7B0, &args![this, local]);
+        // 00b7de95: `00b7c7b0` is stdcall (RET 4) and does not read ECX.
+        e.call(SHADER_00B7C7B0, &args![local]);
     });
 }
 
@@ -195,7 +198,8 @@ pub fn fn_00b7ded0(e: &mut Engine, this: Ptr, pass: Ptr) {
         let local = frame + 0x10;
         let object = matrix_part(e, this, local);
         let value = x87_quiet_bits(e.mem.u32(object + 0x68 + 0x30));
-        e.call(SHADER_00B7C850, &args![this, local, value]);
+        // 00b7df8f: `00b7c850` is stdcall (RET 8) and does not read ECX.
+        e.call(SHADER_00B7C850, &args![local, value]);
         final_slot_78(e, this, frame + 0x50, frame);
     });
 }
@@ -219,7 +223,8 @@ pub fn fn_00b7dfe0(e: &mut Engine, this: Ptr, pass: Ptr) {
         let object = matrix_part(e, this, local);
         let value = x87_quiet_bits(e.mem.u32(object + 0x68 + 0x30));
         let pass_word = e.mem.u32(pass.addr() + 8);
-        e.call(SHADER_00B7CB00, &args![this, local, value, pass_word]);
+        // 00b7e0ae: `00b7cb00` is stdcall (RET 0xc) and does not read ECX.
+        e.call(SHADER_00B7CB00, &args![local, value, pass_word]);
         let byte = e.mem.u8(holder + 9);
         let one: f64 = e.global(ONE);
         let w = x87_store32(x87_sub(f64::from(byte), one));
@@ -262,7 +267,8 @@ pub fn fn_00b7e150(e: &mut Engine, this: Ptr, pass: Ptr) {
         let frame = frame.addr();
         let local = frame + 0x10;
         let object = matrix_part(e, this, local);
-        e.call(SHADER_00B7C7B0, &args![this, local]);
+        // 00b7e255: `00b7c7b0` is stdcall (RET 4) and does not read ECX.
+        e.call(SHADER_00B7C7B0, &args![local]);
         // The float is kept in the dead argument slot over the call.
         let w = x87_quiet_bits(e.mem.u32(object + 0x68 + 0x30));
         e.call(
@@ -465,10 +471,7 @@ mod tests {
         );
         let matrix = calls_to(&e, MATRIX_00C4C2D0);
         assert_eq!(matrix[0][..2], [w.object + 0x68, 0]);
-        assert_eq!(
-            calls_to(&e, SHADER_00B7C7B0),
-            vec![vec![w.this, matrix[0][2]]]
-        );
+        assert_eq!(calls_to(&e, SHADER_00B7C7B0), vec![vec![matrix[0][2]]]);
     }
 
     #[test]
@@ -480,10 +483,7 @@ mod tests {
         e.call(0x00b7_ded0, &args![w.this, w.pass]);
         check_geometry_part(&e, &w);
         let out = calls_to(&e, MATRIX_00C4C2D0)[0][2];
-        assert_eq!(
-            calls_to(&e, SHADER_00B7C850),
-            vec![vec![w.this, out, 0x7fc0_0001]]
-        );
+        assert_eq!(calls_to(&e, SHADER_00B7C850), vec![vec![out, 0x7fc0_0001]]);
         let last = calls_to(&e, 0x7100_0078);
         assert_eq!(last[0][9], out - 0x10);
         assert_eq!(last[0][8], out + 0x40);
@@ -499,7 +499,7 @@ mod tests {
         let out = calls_to(&e, MATRIX_00C4C2D0)[0][2];
         assert_eq!(
             calls_to(&e, SHADER_00B7CB00),
-            vec![vec![w.this, out, 2.5f32.to_bits(), 0x0808]]
+            vec![vec![out, 2.5f32.to_bits(), 0x0808]]
         );
         let transform = calls_to(&e, D3DX_VEC3_TRANSFORM_COORD);
         let vector = transform[0][0];
@@ -535,7 +535,7 @@ mod tests {
             ]
         );
         let out = calls_to(&e, MATRIX_00C4C2D0)[0][2];
-        assert_eq!(calls_to(&e, SHADER_00B7C7B0), vec![vec![w.this, out]]);
+        assert_eq!(calls_to(&e, SHADER_00B7C7B0), vec![vec![out]]);
         let transform = calls_to(&e, D3DX_VEC3_TRANSFORM_COORD);
         let vector = transform[0][0];
         assert_eq!(vector, out - 0x10);

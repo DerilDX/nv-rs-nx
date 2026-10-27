@@ -508,8 +508,8 @@ const FORM_LOAD_DATA_OLD: u32 = 0x0048_4d00;
 const FORM_LOAD_GAME: u32 = 0x0048_4c50;
 const FORM_CLEAR_FLAGS: u32 = 0x0045_34f0;
 /// Save buffer methods: `00865e50(ptr, size, 0)` writes, `00864980(ptr,
-/// size)` reads. The two flag tests `00428110(tmp, mask)` / `0042ce30(tmp,
-/// mask)` return an object whose `004280f0()` is the answer.
+/// size)` reads. The two flag reads `00428110(tmp)` / `0042ce30(tmp)` (RET 4) return
+/// an object whose `004280f0(mask)` (RET 4) is the answer.
 const BUFFER_SAVE_DATA: u32 = 0x0086_5e50;
 const BUFFER_LOAD_DATA: u32 = 0x0086_4980;
 const BUFFER_FLAG_OBJECT_A: u32 = 0x0042_8110;
@@ -4260,10 +4260,10 @@ pub fn tes_package_load_game_ov2(e: &mut Engine, this: Ptr<TESPackage>, buffer: 
             (FORM_FLAG_NEXT, PACK_FLAG_FOR_NEXT),
         ] {
             let set = e.with_stack(4, |e, slot| {
-                let object = e
-                    .call(BUFFER_FLAG_OBJECT_A, &args![buffer, slot, mask])
-                    .u32();
-                e.call(BUFFER_FLAG_TEST, &args![object]).bool()
+                // 0067990f: `00428110` takes one word (RET 4); the pushed mask is the
+                // word of `004280f0` (RET 4).
+                let object = e.call(BUFFER_FLAG_OBJECT_A, &args![buffer, slot]).u32();
+                e.call(BUFFER_FLAG_TEST, &args![object, mask]).bool()
             });
             if set {
                 let pack = e.get(this, TESPackage::iPackFlags);
@@ -4331,10 +4331,10 @@ pub fn fn_00679b10(e: &mut Engine, this: Ptr<TESPackage>, buffer: u32) {
         (FORM_FLAG_NEXT, PACK_FLAG_FOR_NEXT),
     ] {
         let set = e.with_stack(4, |e, slot| {
-            let object = e
-                .call(BUFFER_FLAG_OBJECT_B, &args![buffer, slot, mask])
-                .u32();
-            e.call(BUFFER_FLAG_TEST, &args![object]).bool()
+            // 00679b40: `0042ce30` takes one word (RET 4); the pushed mask is the word
+            // of `004280f0` (RET 4).
+            let object = e.call(BUFFER_FLAG_OBJECT_B, &args![buffer, slot]).u32();
+            e.call(BUFFER_FLAG_TEST, &args![object, mask]).bool()
         });
         if set {
             let pack = e.get(this, TESPackage::iPackFlags);
@@ -8913,29 +8913,23 @@ mod third_batch_tests {
     fn load_from_the_buffer_of_a_static_form_tests_the_flags() {
         let mut e = save_engine();
         // The flag tests answer true for the masks in the scratch word.
-        e.register(BUFFER_FLAG_OBJECT_A, |_, a| a[2].into_ret());
-        e.register(BUFFER_FLAG_OBJECT_B, |_, a| a[2].into_ret());
+        e.register(BUFFER_FLAG_OBJECT_A, |_, a| a[1].into_ret());
+        e.register(BUFFER_FLAG_OBJECT_B, |_, a| a[1].into_ret());
         e.register(BUFFER_FLAG_TEST, |e, a| {
-            (e.mem.u32(SCRATCH + 8) & a[0] != 0).into_ret()
+            (e.mem.u32(SCRATCH + 8) & a[1] != 0).into_ret()
         });
         let p = package(&mut e, 0);
         log_on(&mut e);
         e.call(0x006798c0, &args![p, FAKE_BUFFER]);
         assert_eq!(e.get(p, TESPackage::iPackFlags), 0);
+        let objects = calls_to(&e, BUFFER_FLAG_OBJECT_A);
         assert_eq!(
-            calls_to(&e, BUFFER_FLAG_OBJECT_A),
-            [
-                [
-                    FAKE_BUFFER,
-                    calls_to(&e, BUFFER_FLAG_OBJECT_A)[0][1],
-                    0x8000_0000
-                ],
-                [
-                    FAKE_BUFFER,
-                    calls_to(&e, BUFFER_FLAG_OBJECT_A)[1][1],
-                    0x4000_0000
-                ]
-            ]
+            objects,
+            [[FAKE_BUFFER, objects[0][1]], [FAKE_BUFFER, objects[1][1]]]
+        );
+        assert_eq!(
+            calls_to(&e, BUFFER_FLAG_TEST),
+            [[objects[0][1], 0x8000_0000], [objects[1][1], 0x4000_0000]]
         );
         assert!(calls_to(&e, BUFFER_LOAD_DATA).is_empty());
         e.mem.set_u32(SCRATCH + 8, 0x8000_0000);

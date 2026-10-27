@@ -521,10 +521,10 @@ pub fn fn_007ffdb0(e: &mut Engine, this: Ptr<FORenderedTerminal>) {
 // Translation incomplete: 007ffe40 - the C++ exception-unwinding frame (FS:[0] around the sound handle) is not translated.
 /// `FORenderedTerminal::PlayShutdownSound` (Xbox PDB, no arguments): a sound handle by
 /// name (`BSAudioManager::GetSoundHandleByName(QInstance(), handle,
-/// "OBJComputerTerminalShutdown...", 0x121, 0)`), played and destroyed.
-/// `BSSoundHandle::Play` takes one word (`RET 4`) but none is pushed: it reads the word
-/// at the caller's stack top, the frame's saved security cookie (`011c16bc ^ EBP`, at
-/// `EBP - 0x24`).
+/// "OBJComputerTerminalShutdown...", 0x121)`), played and destroyed. Four words are pushed
+/// for `GetSoundHandleByName`, which takes three (`RET 0xc`): the last, 0, is the word of
+/// `BSSoundHandle::Play` (`RET 4`). The frame keeps the saved security cookie
+/// (`011c16bc ^ EBP`, at `EBP - 0x24`).
 pub fn fo_rendered_terminal_play_shutdown_sound(e: &mut Engine) {
     // The frame below `EBP`: the handle at `EBP - 0x18`, the saved cookie at `EBP - 0x24`.
     e.with_stack(0x24, |e, frame| {
@@ -533,14 +533,15 @@ pub fn fo_rendered_terminal_play_shutdown_sound(e: &mut Engine) {
         e.mem.set_u32(ebp - 0x24, cookie);
         let handle = ebp - 0x18;
         let manager = e.call(AUDIO_MANAGER_INSTANCE, &args![]).u32();
+        // 007ffe7c: `00ae5680` takes three words (RET 0xc); the pushed 0 is the word of
+        // `00ad8830` (RET 4).
         let sound = e
             .call(
                 AUDIO_MANAGER_SOUND_BY_NAME,
-                &args![manager, handle, SHUTDOWN_SOUND, 0x121u32, 0u32],
+                &args![manager, handle, SHUTDOWN_SOUND, 0x121u32],
             )
             .u32();
-        let stack_word = e.mem.u32(ebp - 0x24);
-        e.call(SOUND_HANDLE_PLAY, &args![sound, stack_word]);
+        e.call(SOUND_HANDLE_PLAY, &args![sound, 0u32]);
         e.call(SOUND_HANDLE_DESTRUCT, &args![handle]);
     });
 }
@@ -1328,12 +1329,9 @@ mod n051_tests {
         e.call_log = Some(vec![]);
         e.call(0x007f_fd50, &args![this]);
         let sound = calls_to(&e, AUDIO_MANAGER_SOUND_BY_NAME);
-        assert_eq!(sound[0][2..], [SHUTDOWN_SOUND, 0x121, 0]);
+        assert_eq!(sound[0][2..], [SHUTDOWN_SOUND, 0x121]);
         let played = calls_to(&e, SOUND_HANDLE_PLAY);
-        assert_eq!(played.len(), 1);
-        assert_eq!(played[0][0], 0x7700);
-        // The word read is the saved cookie: the cookie xor the frame's `EBP`.
-        assert_eq!(played[0][1] ^ 0x1234_5678, sound[0][1] + 0x18);
+        assert_eq!(played, vec![vec![0x7700, 0]]);
         assert_eq!(calls_to(&e, slot(0)), vec![vec![object, 1]]);
         assert_eq!(calls_to(&e, ENTER_RENDERED_MENU)[0][1], 0);
         e.call_log = Some(vec![]);

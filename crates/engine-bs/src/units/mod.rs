@@ -3,11 +3,13 @@
 
 pub mod bsaudio;
 pub mod bscore;
+pub mod bsdevices;
 pub mod bsmain;
 pub mod bsmenu;
 pub mod bsmovie;
 pub mod bsshader;
 pub mod bssystem;
+pub mod bssystemutilities;
 
 // The units of the crates below this one, so `crate::units::<subsystem>` reaches them.
 pub use engine_core::units::crt;
@@ -23,11 +25,13 @@ pub use engine_gamebryo::units::nixenonrenderer;
 pub fn funcs(out: &mut Vec<(u32, crate::AbiFn)>) {
     bsaudio::funcs(out);
     bscore::funcs(out);
+    bsdevices::funcs(out);
     bsmain::funcs(out);
     bsmenu::funcs(out);
     bsmovie::funcs(out);
     bsshader::funcs(out);
     bssystem::funcs(out);
+    bssystemutilities::funcs(out);
 }
 
 // This crate's unit tests: `Engine::new()` registers the core's functions,

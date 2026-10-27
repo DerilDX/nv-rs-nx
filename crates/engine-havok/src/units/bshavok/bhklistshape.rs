@@ -19,8 +19,8 @@
 use crate::prelude::*;
 
 use super::bhklimitedhingeconstraint::{
-    allocate_sized, allocator, enter_scope, increment, push_viewer_string, stream_transfer,
-    ALLOCATE, MEMORY_ROUTER, POOL_ALLOCATE, POOL_OBJECT, REMOVE_REFERENCE,
+    allocate_sized, allocator, enter_scope, increment, push_viewer_string, ALLOCATE, MEMORY_ROUTER,
+    POOL_ALLOCATE, POOL_OBJECT, REMOVE_REFERENCE,
 };
 
 /// The vtables of `bhkShape`, `bhkShapeCollection` and `bhkListShape`, with the instance
@@ -647,8 +647,18 @@ pub fn bhk_list_shape_create_cinfo(e: &mut Engine, this: Ptr, created: u32) -> u
 /// (`00c84d50`) and the local word array (`00cf0e90`) are written. Both local arrays are
 /// released through the allocator, the word array first.
 pub fn bhk_list_shape_save_binary(e: &mut Engine, this: Ptr, stream: u32) {
+    // The exe's frame (exception record, `SUB ESP,0x30`, four pushes and the cookie): 0x50
+    // bytes. The created byte at +0x17 (00c8bad2), the count word at +0x1c and its size word
+    // at +0x24 (00c8bb90, 00c8bba1), the local word array at +0x2c (00c8bc12).
+    e.with_stack(0x50, |e, frame| {
+        save_binary_in_frame(e, this, stream, frame.addr())
+    });
+}
+
+/// [`bhk_list_shape_save_binary`] in the exe's frame (`frame` is its lowest address).
+fn save_binary_in_frame(e: &mut Engine, this: Ptr, stream: u32, frame: u32) {
     let me = this.addr();
-    let info = e.with_stack(4, |e, created| e.vcall(me, 0xb4, &args![created]).u32());
+    let info = e.vcall(me, 0xb4, &args![frame + 0x17]).u32();
     let shapes = info + 4;
     let words = info + 0x10;
     let shapes_data = e.mem.u32(info + 4);
@@ -657,7 +667,7 @@ pub fn bhk_list_shape_save_binary(e: &mut Engine, this: Ptr, stream: u32) {
     e.mem.set_u32(info + 8, 0);
     let shapes_capacity = e.mem.u32(info + 0xc);
     e.mem.set_u32(info + 0xc, EMPTY_CAPACITY);
-    let local = e.mem.alloc(12);
+    let local = frame + 0x2c;
     let words_data = e.mem.u32(info + 0x10);
     e.mem.set_u32(info + 0x10, 0);
     let words_size = e.mem.u32(info + 0x14);
@@ -673,10 +683,17 @@ pub fn bhk_list_shape_save_binary(e: &mut Engine, this: Ptr, stream: u32) {
         e.call(SWAP_HK_ARRAY, &args![info, size, shapes]);
     }
     let io = e.mem.u32(stream + 0x250);
-    let count = e.mem.alloc(4);
+    let count = frame + 0x1c;
     e.mem.set_u32(count, shapes_size);
-    stream_transfer(e, io, 0xc, count, 4, true);
-    e.mem.free(count);
+    e.mem.set_u32(frame + 0x18, io);
+    let size_slot = frame + 0x24;
+    e.mem.set_u32(size_slot, 4);
+    let writer = e.mem.u32(io + 0xc);
+    let done = e
+        .call(writer, &args![io, count, 4u32, size_slot, 1u32])
+        .u32();
+    let position = e.mem.u32(io + 4);
+    e.mem.set_u32(io + 4, position.wrapping_add(done));
     for index in 0..shapes_size {
         let entry = e.mem.u32(shapes_data + index * 4);
         let shape = if entry != 0 { e.mem.u32(entry + 8) } else { 0 };
@@ -702,7 +719,6 @@ pub fn bhk_list_shape_save_binary(e: &mut Engine, this: Ptr, stream: u32) {
             &args![shapes_data, (shapes_capacity & CAPACITY_MASK) * 4],
         );
     }
-    e.mem.free(local);
 }
 
 // Translated from 00c8bcd0 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -1441,6 +1457,32 @@ mod tests {
         e.mem.set_u32(info + 0xc, 0x8000_0000);
         e.call(0x00c8_baa0, &args![this, stream]);
         assert_eq!(calls_to(&log, SWAP_HK_ARRAY).len(), 4);
+    }
+
+    #[test]
+    fn save_binary_keeps_its_locals_at_the_exe_frame_offsets() {
+        let (mut e, _, _) = engine_with_allocator();
+        let log: Calls = Rc::default();
+        let stream = stream_fixture(&mut e, &log);
+        let io = e.mem.u32(stream + 0x250);
+        record(&mut e, SHAPE_SAVE_BINARY, 0, &log);
+        record(&mut e, STREAM_SAVE_ARRAY, 0, &log);
+        let info = e.mem.alloc(0x20);
+        e.mem.set_u32(info + 0xc, 0x8000_0000);
+        e.mem.set_u32(info + 0x18, 0x8000_0000);
+        record(&mut e, 0x0900_03a4, info, &log);
+        let this = vobject(&mut e, 0x14, &[(0xb4, 0x0900_03a4)]);
+        let frame = e.mem.alloc(0x50);
+        e.mem.free(frame);
+        e.call(0x00c8_baa0, &args![this, stream]);
+        // The created byte at +0x17, the count at +0x1c with its size word at +0x24, the
+        // local word array at +0x2c.
+        assert_eq!(calls_to(&log, 0x0900_03a4), [[this, frame + 0x17]]);
+        assert_eq!(
+            calls_to(&log, 0x0900_000c),
+            [[io, frame + 0x1c, 4, frame + 0x24, 1]]
+        );
+        assert_eq!(calls_to(&log, STREAM_SAVE_ARRAY), [[stream, frame + 0x2c]]);
     }
 
     #[test]

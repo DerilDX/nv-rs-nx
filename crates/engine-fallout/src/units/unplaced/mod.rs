@@ -2,6 +2,8 @@
 #![allow(clippy::module_inception)]
 
 pub mod atexit_irregular;
+pub mod atexit_irregular_b;
+pub mod atexit_irregular_c;
 pub mod run_00401000;
 pub mod run_004012a0;
 pub mod run_004019b0;
@@ -105,6 +107,7 @@ pub mod run_005594e0;
 pub mod run_0056e690;
 pub mod run_00574900;
 pub mod run_0059b270;
+pub mod run_0059bb30;
 pub mod run_005a8080;
 pub mod run_005ae270;
 pub mod run_005ae3d0;
@@ -468,12 +471,23 @@ pub mod run_00ee6e46;
 pub mod run_00eea520;
 pub mod run_00eea550;
 pub mod run_00eea650;
+pub mod run_00fb56c0;
 pub mod run_00fd9bf0;
 pub mod static_init_irregular;
 pub mod static_init_irregular_b;
+pub mod static_init_irregular_c;
+pub mod static_init_irregular_d;
+pub mod static_init_irregular_e;
+pub mod static_init_irregular_f;
+pub mod static_init_irregular_g;
+pub mod static_init_irregular_h;
+pub mod static_init_irregular_i;
+pub mod static_init_irregular_j;
 
 pub fn funcs(out: &mut Vec<(u32, crate::AbiFn)>) {
     out.extend(atexit_irregular::funcs());
+    out.extend(atexit_irregular_b::funcs());
+    out.extend(atexit_irregular_c::funcs());
     out.extend(run_00401000::funcs());
     out.extend(run_004012a0::funcs());
     out.extend(run_004019b0::funcs());
@@ -577,6 +591,7 @@ pub fn funcs(out: &mut Vec<(u32, crate::AbiFn)>) {
     out.extend(run_0056e690::funcs());
     out.extend(run_00574900::funcs());
     out.extend(run_0059b270::funcs());
+    out.extend(run_0059bb30::funcs());
     out.extend(run_005a8080::funcs());
     out.extend(run_005ae270::funcs());
     out.extend(run_005ae3d0::funcs());
@@ -940,7 +955,16 @@ pub fn funcs(out: &mut Vec<(u32, crate::AbiFn)>) {
     out.extend(run_00eea520::funcs());
     out.extend(run_00eea550::funcs());
     out.extend(run_00eea650::funcs());
+    out.extend(run_00fb56c0::funcs());
     out.extend(run_00fd9bf0::funcs());
     out.extend(static_init_irregular::funcs());
     out.extend(static_init_irregular_b::funcs());
+    out.extend(static_init_irregular_c::funcs());
+    out.extend(static_init_irregular_d::funcs());
+    out.extend(static_init_irregular_e::funcs());
+    out.extend(static_init_irregular_f::funcs());
+    out.extend(static_init_irregular_g::funcs());
+    out.extend(static_init_irregular_h::funcs());
+    out.extend(static_init_irregular_i::funcs());
+    out.extend(static_init_irregular_j::funcs());
 }

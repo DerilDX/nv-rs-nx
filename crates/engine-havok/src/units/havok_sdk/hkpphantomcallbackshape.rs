@@ -115,7 +115,7 @@ mod tests {
             log[1],
             (
                 REFERENCED_OBJECT_CALC_CONTENT_STATISTICS,
-                args![0x1000u32, 0x2000u32, PHANTOM_CALLBACK_SHAPE_CLASS]
+                args![0x1000u32, 0x2000u32, PHANTOM_CALLBACK_SHAPE_CLASS].to_vec()
             )
         );
     }

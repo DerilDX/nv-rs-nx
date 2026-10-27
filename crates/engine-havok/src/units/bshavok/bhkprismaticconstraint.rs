@@ -39,7 +39,7 @@ const MEMORY_MANAGER_ALLOCATE: u32 = 0x00aa_3e40;
 /// Havok object (`00c89c80`), and the shared constraint-info helpers: `GetViewerStrings`
 /// (`00c8a560`), the data cloning tail (`00c8a1b0`, `(this, data, process)`), the stream
 /// readers and writers (`00c8a230` / `00c8a280`, `(this, stream)`), the motor reader
-/// (`00c8a330`, `(this, stream)`) and writer (`00c8a4b0`, `(this, motor, stream)`).
+/// (`00c8a330`, `(this, stream)`) and writer (`00c8a4b0`, `stdcall` `(motor, stream)`).
 const REF_OBJECT_CONSTRUCTOR: u32 = 0x00c8_7c30;
 const SERIALIZABLE_KILL: u32 = 0x00c8_76a0;
 const BASE_DESTRUCTOR_BODY: u32 = 0x00c8_9640;
@@ -416,7 +416,9 @@ pub fn bhk_prismatic_constraint_save_binary(
     transfer(e, stream_addr, false, data + 0xcc, 4, false);
     transfer(e, stream_addr, false, data + 0xb4, 4, false);
     let motor = e.mem.u32(data + 0xac);
-    e.call(CINFO_WRITE_MOTOR, &args![this, motor, stream]);
+    // 00cc7ca0: `00c8a4b0` is stdcall (RET 8) and does not read the ECX (this) the
+    // caller sets.
+    e.call(CINFO_WRITE_MOTOR, &args![motor, stream]);
     if e.mem.u32(data + 0xac) != 0 {
         transfer(e, stream_addr, false, data + 0xa2, 1, false);
     }
@@ -1079,10 +1081,7 @@ mod tests {
                 calls_to(&e, CINFO_SAVE_BINARY),
                 vec![vec![this.addr(), stream]]
             );
-            assert_eq!(
-                calls_to(&e, CINFO_WRITE_MOTOR),
-                vec![vec![this.addr(), motor, stream]]
-            );
+            assert_eq!(calls_to(&e, CINFO_WRITE_MOTOR), vec![vec![motor, stream]]);
             assert!(calls_to(&e, 0x7000_0008).is_empty());
         }
     }

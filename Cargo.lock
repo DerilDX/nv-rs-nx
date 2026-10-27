@@ -68,6 +68,11 @@ dependencies = [
 [[package]]
 name = "engine-core"
 version = "0.1.0"
+dependencies = [
+ "bink",
+ "mp3",
+ "vorbis",
+]
 
 [[package]]
 name = "engine-fallout"
@@ -211,6 +216,10 @@ dependencies = [
  "testdata",
  "world",
 ]
+
+[[package]]
+name = "vorbis"
+version = "0.1.0"
 
 [[package]]
 name = "world"

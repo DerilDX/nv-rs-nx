@@ -8,6 +8,10 @@ controller facts (shape, step, slope, gravity, fall damage) are in
 `ENGINE_REFERENCE.md` and the private
 `findings/physics.md`; they are not repeated here.
 
+The game's own translated movement path (`crates/engine`, Build 43) is wired
+in beside this one: ENGINE_CRATE.md, "The player's movement"; the viewer's
+`--movement old|engine|compare` chooses.
+
 Status words: **implemented** (code exists), **tested** (regression test),
 **compared** (checked against the running original game). Nothing in this
 batch has been compared.

@@ -496,10 +496,12 @@ pub fn interface_click(e: &mut Engine, x: u32, y: u32) {
         }
     }
     if !handled {
-        let system = e.call(0x004e_a970, &args![0u32, 0x17u32]).u32();
-        e.call(0x00ba_30f0, &args![system]);
-        let system = e.call(0x004e_a970, &args![1u32, 0x17u32]).u32();
-        e.call(0x00ba_3130, &args![system]);
+        // 0070290a / 0070291a: `004ea970` takes no word (plain RET, a global); the pushed
+        // stage and 0x17 are the two words of `00ba30f0` / `00ba3130` (RET 8).
+        let system = e.call(0x004e_a970, &args![]).u32();
+        e.call(0x00ba_30f0, &args![system, 0u32, 0x17u32]);
+        let system = e.call(0x004e_a970, &args![]).u32();
+        e.call(0x00ba_3130, &args![system, 1u32, 0x17u32]);
     }
     let manager = e.call(GET_MANAGER, &[]).u32();
     fn_00702940(e, manager, 0);
@@ -752,8 +754,10 @@ pub fn fn_007031e0(e: &mut Engine, reference: u32) {
             e.call(0x0040_6f60, &args![text, 0x0103_a1c8u32, name, form_id]);
             let setting = e.call(0x0043_d4d0, &args![0x011f_33c8u32]).u32();
             let value = e.mem.u32(setting).wrapping_sub(1);
-            let a = e.call(0x005b_d5b0, &args![value]).u32();
-            let b = e.call(0x005b_d5c0, &args![a]).u32();
+            // 00703275: `005bd5b0` takes no word (plain RET, a global); the pushed value
+            // is the word of `005bd5c0` (RET 4).
+            let a = e.call(0x005b_d5b0, &args![]).u32();
+            let b = e.call(0x005b_d5c0, &args![a, value]).u32();
             let height = e.call(0x005b_d580, &args![b]).f32();
             let _unused_line = e
                 .call(0x00ec_62c0, &args![height as f64])
@@ -3086,9 +3090,9 @@ mod tests {
         e.call_log = Some(vec![]);
         e.call(0x0070_28b0, &args![10u32, 20u32]);
         assert!(logged(&e, 0x0071_3fb0).is_empty());
-        assert_eq!(logged(&e, 0x004e_a970), vec![vec![0, 0x17], vec![1, 0x17]]);
-        assert_eq!(logged(&e, 0x00ba_30f0), vec![vec![0x500]]);
-        assert_eq!(logged(&e, 0x00ba_3130), vec![vec![0x500]]);
+        assert_eq!(logged(&e, 0x004e_a970), vec![Vec::<u32>::new(); 2]);
+        assert_eq!(logged(&e, 0x00ba_30f0), vec![vec![0x500, 0, 0x17]]);
+        assert_eq!(logged(&e, 0x00ba_3130), vec![vec![0x500, 1, 0x17]]);
         assert_eq!(e.mem.u8(manager + 0x148), 0);
     }
 
@@ -3472,7 +3476,8 @@ mod tests {
         e.call(0x0070_31e0, &args![0x9000u32]);
         let format = &logged(&e, 0x0040_6f60)[0];
         assert_eq!(&format[1..], &[0x0103_a1c8, 0x7000, 0xf00d]);
-        assert_eq!(logged(&e, 0x005b_d5b0), vec![vec![99]]);
+        assert_eq!(logged(&e, 0x005b_d5b0), vec![Vec::<u32>::new()]);
+        assert_eq!(logged(&e, 0x005b_d5c0)[0][1], 99);
         assert_eq!(
             logged(&e, 0x00a0_f8b0),
             vec![vec![

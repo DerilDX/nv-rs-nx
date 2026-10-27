@@ -4,11 +4,13 @@
 
 pub use engine_bs::units::bsaudio;
 pub use engine_bs::units::bscore;
+pub use engine_bs::units::bsdevices;
 pub use engine_bs::units::bsmain;
 pub use engine_bs::units::bsmenu;
 pub use engine_bs::units::bsmovie;
 pub use engine_bs::units::bsshader;
 pub use engine_bs::units::bssystem;
+pub use engine_bs::units::bssystemutilities;
 pub use engine_core::units::crt;
 pub use engine_core::units::platform;
 pub use engine_fallout::units::d3dx9;
@@ -33,6 +35,7 @@ pub use engine_fallout::units::fallout_shared_speedtree;
 pub use engine_fallout::units::fallout_shared_tempeffects;
 pub use engine_fallout::units::remotelog;
 pub use engine_fallout::units::unplaced;
+pub use engine_fallout::units::xapilib;
 pub use engine_gamebryo::units::nianimation;
 pub use engine_gamebryo::units::nicollision;
 pub use engine_gamebryo::units::nimain;

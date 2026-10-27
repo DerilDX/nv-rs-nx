@@ -40,3 +40,5 @@ __pycache__/
 .claude/worktrees/
 # Output of scripts/dlc-data-pass.ps1 (game data: never commit)
 dlc-data-pass.txt
+# The Direct3D 9 adapter capture (scripts/d3d9-capture): this machine's hardware, never commit
+d3d9_adapter.tsv

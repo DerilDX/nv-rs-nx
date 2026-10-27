@@ -260,6 +260,13 @@ const CREATE_SUCCEEDED_010ED52C: u32 = 0x010e_d52c;
 /// The SDK version both creation functions are given.
 const D3D_SDK_VERSION: u32 = 0x20;
 
+/// The format's record id (`00e7acb0`, cdecl: a D3D format) and the nearest refresh rate of a
+/// mode record (`00e7af60`, `thiscall` on the record: the wanted rate), by address.
+#[cfg(test)]
+const RECORD_ID_00E7ACB0: u32 = 0x00e7_acb0;
+#[cfg(test)]
+const NEAREST_RATE_00E7AF60: u32 = 0x00e7_af60;
+
 // Translated from 00e69460 (decompiled, FalloutNV.exe 1.4.0.525)
 /// `NiXenonRenderer::CreateDirect3D9` (engine map), `cdecl`, one word (its low byte: try the
 /// `Ex` interface). Answers 0, or -1 on failure; with the object already made (`0126f0d8`) it
@@ -6620,6 +6627,69 @@ mod b048_partial_draw_tests {
                 vec![t + 0x68c, 0, 0x40],
                 vec![CLEARED_BLOCK_0126EFD8, 0, 0x76]
             ]
+        );
+    }
+}
+
+#[cfg(test)]
+mod tests_mode_lookups {
+    use super::*;
+
+    #[test]
+    fn the_format_lookup_checks_the_flag_byte_and_the_id() {
+        let mut e = Engine::new();
+        e.register(RECORD_ID_00E7ACB0, |_, a| (a[0] as i32 * 2).into_ret());
+        let this = e.mem.alloc(0x140);
+        let (node1, node2) = (e.mem.alloc(0xc), e.mem.alloc(0xc));
+        let (r1, r2) = (e.mem.alloc(8), e.mem.alloc(8));
+        e.mem.set_u32(this + 0x134, node1);
+        e.mem.set_u32(node1, node2);
+        e.mem.set_u32(node1 + 8, r1);
+        e.mem.set_u32(node2 + 8, r2);
+        e.mem.set_u32(r1, 21);
+        e.mem.set_u8(r1 + 4, 1);
+        e.mem.set_u32(r2, 22);
+        e.mem.set_u8(r2 + 5, 1);
+        assert_eq!(
+            e.call(0x00e7_aed0, &args![this, 1u32, 42u32]).u32(),
+            fn_00e69d00(&mut e, 21)
+        );
+        assert_eq!(e.call(0x00e7_aed0, &args![this, 1u32, 44u32]).u32(), 0);
+        assert_eq!(
+            e.call(0x00e7_aed0, &args![this, 0u32, 44u32]).u32(),
+            fn_00e69d00(&mut e, 22)
+        );
+    }
+
+    #[test]
+    fn the_mode_lookup_keeps_the_last_match_and_its_rate() {
+        let mut e = Engine::new();
+        e.register(NEAREST_RATE_00E7AF60, |_, a| (a[1] + 1).into_ret());
+        let this = e.mem.alloc(0x460);
+        let table = e.mem.alloc(0xc);
+        let (m1, m2) = (e.mem.alloc(0x10), e.mem.alloc(0x10));
+        e.mem.set_u32(this + 0x454, table);
+        e.mem.set_u16(this + 0x45a, 3);
+        e.mem.set_u32(table, m1);
+        e.mem.set_u32(table + 4, 0);
+        e.mem.set_u32(table + 8, m2);
+        for m in [m1, m2] {
+            e.mem.set_u32(m, 800);
+            e.mem.set_u32(m + 4, 600);
+            e.mem.set_u32(m + 0xc, 22);
+        }
+        let rate = e.mem.alloc(4);
+        e.mem.set_u32(rate, 60);
+        assert_eq!(
+            e.call(0x00e7_b190, &args![this, 22u32, 800u32, 600u32, rate])
+                .u32(),
+            m2
+        );
+        assert_eq!(e.mem.u32(rate), 62);
+        assert_eq!(
+            e.call(0x00e7_b190, &args![this, 23u32, 800u32, 600u32, rate])
+                .u32(),
+            0
         );
     }
 }

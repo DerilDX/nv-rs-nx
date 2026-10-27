@@ -4959,7 +4959,8 @@ fn move_controller(e: &mut Engine, this: Ptr<Ctl>, p: u32, f: u32) -> u32 {
     e.set(this, Ctl::fBumpedForce, 0.0);
     release_ref_slot(e, me + Ctl::spBumpedCharProxy.off);
     let divisor: f32 = e.global(SPEED_DIVISOR);
-    let speed = (e.mem.f32(p + 0x20) as f64 / divisor as f64) as f32;
+    // `FDIV dword` (`00c7333c`).
+    let speed = x87_div(x87_load32(e.mem.u32(p + 0x20)), x87_m32(divisor.to_bits())) as f32;
     e.set(this, Ctl::fSpeedPct, speed);
     let step = x87_quiet(e.mem.f32(p));
     e.mem.set_f32(f + 0x38, step);
@@ -5019,7 +5020,8 @@ fn move_controller(e: &mut Engine, this: Ptr<Ctl>, p: u32, f: u32) -> u32 {
         &args![f + 0x60, me + Ctl::UpVec.off, (-turned).to_bits()],
     );
     e.set(this, Ctl::StepDeltaTime, x87_quiet(e.mem.f32(p)));
-    let inverse = (1.0 / e.mem.f32(p) as f64) as f32;
+    // `FLD1`, `FDIVRP` (`00c734e2`).
+    let inverse = x87_div(1.0, x87_load32(e.mem.u32(p))) as f32;
     e.set(this, Ctl::StepInvDeltaTime, inverse);
     e.mem.set_u32(f + 0x48, p + 0x10);
     copy_words(e, f + 0x50, p + 0x10, 3);
@@ -5028,10 +5030,14 @@ fn move_controller(e: &mut Engine, this: Ptr<Ctl>, p: u32, f: u32) -> u32 {
     }
     let inverse = x87_quiet(e.get(this, Ctl::StepInvDeltaTime));
     e.mem.set_f32(f + 0x20, inverse);
-    let [vx, vy, vz] = [0, 4, 8].map(|o| e.mem.f32(f + 0x50 + o) as f64);
-    e.mem.set_f32(f + 0x50, (vx * inverse as f64) as f32);
-    e.mem.set_f32(f + 0x54, (inverse as f64 * vy) as f32);
-    e.mem.set_f32(f + 0x58, (inverse as f64 * vz) as f32);
+    // `FMULP ST2`, `FMUL dword` twice (`00c7353d`..`00c7354f`).
+    let inverse = f64::from(inverse);
+    let vx = x87_load32(e.mem.u32(f + 0x50));
+    e.mem.set_f32(f + 0x50, x87_mul(vx, inverse) as f32);
+    let vy = x87_m32(e.mem.u32(f + 0x54));
+    e.mem.set_f32(f + 0x54, x87_mul(inverse, vy) as f32);
+    let vz = x87_m32(e.mem.u32(f + 0x58));
+    e.mem.set_f32(f + 0x58, x87_mul(inverse, vz) as f32);
     e.call(POINT_TO_VECTOR, &args![me + Ctl::Direction.off, f + 0x50]);
     if fn_00c6d120(e, this) && e.mem.f32(p + 4) != 0.0 {
         let zero = e.global::<u32>(FLOAT_ZERO);
@@ -5098,7 +5104,8 @@ fn move_controller(e: &mut Engine, this: Ptr<Ctl>, p: u32, f: u32) -> u32 {
     let step = e.mem.f32(f + 0x38);
     let time = e.get(this, Ctl::fVelocityTime);
     if is_positive(time) {
-        let left = (time as f64 - step as f64) as f32;
+        // `FSUB dword` (`00c73e62`).
+        let left = x87_sub(x87_load32(time.to_bits()), x87_m32(step.to_bits())) as f32;
         e.set(this, Ctl::fVelocityTime, left);
         let over = left <= 0.0;
         if over {
@@ -5108,7 +5115,8 @@ fn move_controller(e: &mut Engine, this: Ptr<Ctl>, p: u32, f: u32) -> u32 {
     }
     let timer = e.get(this, Ctl::fCalculatePitchTimer);
     if is_positive(timer) {
-        let left = (timer as f64 - step as f64) as f32;
+        // `FSUB dword` (`00c73ea0`).
+        let left = x87_sub(x87_load32(timer.to_bits()), x87_m32(step.to_bits())) as f32;
         e.set(this, Ctl::fCalculatePitchTimer, left);
     }
     let flags = e.get(this, Ctl::iFlags);
@@ -5123,30 +5131,46 @@ fn move_in_state_four(e: &mut Engine, this: Ptr<Ctl>, p: u32, f: u32) {
     bhk_character_controller_get_position_ov2(e, this, Ptr::new(f + 0x70));
     e.call(COPY_POINT, &args![f + 0x50, f + 0x70]);
     for o in [0, 4, 8] {
-        let moved = (e.mem.f32(p + 0x10 + o) as f64 + e.mem.f32(f + 0x50 + o) as f64) as f32;
+        // `FADD dword` (`00c731f9`, `00c7320e`, `00c73219`).
+        let moved = x87_add(
+            x87_load32(e.mem.u32(p + 0x10 + o)),
+            x87_m32(e.mem.u32(f + 0x50 + o)),
+        ) as f32;
         e.mem.set_f32(f + 0x50 + o, moved);
     }
     e.call(SET_POSITION, &args![me, f + 0x50]);
     update_character_state(e, this);
     let time = e.mem.f32(p);
     let source = if is_positive(time) {
-        let inverse = (1.0 / time as f64) as f32;
+        // `FLD1`, `FDIVRP` (`00c73255`), then `FMUL dword`, `FMUL ST1`, `FMUL dword`
+        // (`00c73261`..`00c73271`).
+        let inverse = x87_div(1.0, x87_load32(time.to_bits())) as f32;
         e.mem.set_f32(f + 0x44, inverse);
-        let inverse = inverse as f64;
-        let [vx, vy, vz] = [0x10, 0x14, 0x18].map(|o| e.mem.f32(p + o) as f64);
-        e.mem.set_f32(f + 0x50, (inverse * vx) as f32);
-        e.mem.set_f32(f + 0x54, (vy * inverse) as f32);
-        e.mem.set_f32(f + 0x58, (inverse * vz) as f32);
+        let inverse = f64::from(inverse);
+        let vx = x87_m32(e.mem.u32(p + 0x10));
+        e.mem.set_f32(f + 0x50, x87_mul(inverse, vx) as f32);
+        let vy = x87_load32(e.mem.u32(p + 0x14));
+        e.mem.set_f32(f + 0x54, x87_mul(vy, inverse) as f32);
+        let vz = x87_m32(e.mem.u32(p + 0x18));
+        e.mem.set_f32(f + 0x58, x87_mul(inverse, vz) as f32);
         f + 0x50
     } else {
         POINT_DEFAULT
     };
-    let k = e.global::<f32>(INVERSE_SCALE) as f64;
-    let [x, y, z] = [0, 4, 8].map(|o| e.mem.f32(source + o) as f64);
+    // `FMULP ST2`, `FMUL ST1`, `FMUL dword` (`00c73289`..`00c7329e`).
+    let k = x87_load32(e.global::<u32>(INVERSE_SCALE));
+    let x = x87_load32(e.mem.u32(source));
+    let y = x87_load32(e.mem.u32(source + 4));
+    let z = x87_m32(e.mem.u32(source + 8));
     store4(
         e,
         me + Ctl::OutVelocity.off,
-        [(x * k) as f32, (y * k) as f32, (k * z) as f32, 0.0],
+        [
+            x87_mul(x, k) as f32,
+            x87_mul(y, k) as f32,
+            x87_mul(k, z) as f32,
+            0.0,
+        ],
     );
     profile_record(e, PROFILE_END);
 }
@@ -5216,15 +5240,28 @@ fn move_on_ground(
         let position = e.call(HKP_GET_POSITION, &args![hk_proxy]).u32();
         copy_words(e, f + 0x70, position, 4);
         let body: u32 = e.global(BEST_SUPPORT_BODY);
-        let lift = (e.mem.f32(body + 0x1b8) as f64 * e.get(this, Ctl::StepDeltaTime) as f64) as f32;
+        // `FMUL dword` (`00c73ca6`).
+        let lift = x87_mul(
+            x87_load32(e.mem.u32(body + 0x1b8)),
+            x87_m32(e.get(this, Ctl::StepDeltaTime).to_bits()),
+        ) as f32;
         e.mem.set_f32(f + 0x1c, lift);
         let best: f32 = e.global(BEST_SUPPORT_HEIGHT);
         let center_z = e.mem.f32(me + Ctl::RotCenter.off + 8);
-        let z = ((center_z as f64 + best as f64) + lift as f64) as f32;
+        // `FADD dword` twice (`00c73cbd`, `00c73cc3`): one chain, each sum rounded to the
+        // main thread's precision.
+        let z = x87_add(
+            x87_add(x87_load32(center_z.to_bits()), x87_m32(best.to_bits())),
+            x87_m32(lift.to_bits()),
+        ) as f32;
         e.mem.set_f32(f + 0x78, z);
         e.call(HKP_SET_POSITION, &args![hk_proxy, f + 0x70]);
         let best: f32 = e.global(BEST_SUPPORT_HEIGHT);
-        e.mem.set_f32(f + 0x78, (lift as f64 + best as f64) as f32);
+        // `FADD dword` (`00c73cd6`).
+        e.mem.set_f32(
+            f + 0x78,
+            x87_add(x87_load32(lift.to_bits()), x87_m32(best.to_bits())) as f32,
+        );
         e.call(UN_MARK_WRITE, &args![me]);
     }
     e.set(this, Ctl::eWantState, 0xb);
@@ -5366,7 +5403,8 @@ fn check_support(e: &mut Engine, this: Ptr<Ctl>, f: u32) {
             let velocity = load4(e, me + Ctl::OutVelocity.off);
             let length = sum_of_squares3(velocity).sqrt();
             if is_positive(length) {
-                let inverse = (1.0 / length as f64) as f32;
+                // `FLD1`, `FDIVRP` (`00c73999`).
+                let inverse = x87_div(1.0, x87_load32(length.to_bits())) as f32;
                 let normal_z = e.mem.f32(me + Ctl::hkSupportNorm.off + 8);
                 let max_slope = e.get(this, Ctl::fMaxSlope);
                 if supported && (flags >> 9) & 1 != 0 && max_slope <= normal_z {

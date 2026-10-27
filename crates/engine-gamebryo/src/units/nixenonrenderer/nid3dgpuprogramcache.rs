@@ -125,8 +125,9 @@ const NI_ALLOCATE_00AA13E0: u32 = 0x00aa_13e0;
 const NI_FREE_00AA10F0: u32 = 0x00aa_10f0;
 /// `NiGPUProgramCache`'s base destructor (`00ee9a60`), base constructor (`00ee9bf0`, `RET
 /// 0xc`), `SetWorkingDirectory` (`00ee8af0`, `RET 4`), `Load` (`00ee9350`), `LoadString`
-/// (`00ee92d0`, `RET 0xc`: file, buffer, size), the program-name save (`00ee9230`, `RET 8`)
-/// and the debug-file switch (`00ee8d20`).
+/// (`00ee92d0`, `RET 0xc`: file, buffer, size), the program-name save (`00ee9230`, `RET 8`:
+/// file, name; both `stdcall`, the ECX the callers set is not read) and the debug-file
+/// switch (`00ee8d20`).
 const BASE_DESTRUCT_00EE9A60: u32 = 0x00ee_9a60;
 const BASE_CONSTRUCT_00EE9BF0: u32 = 0x00ee_9bf0;
 const SET_WORKING_DIRECTORY: u32 = 0x00ee_8af0;
@@ -373,7 +374,10 @@ pub fn ni_d3d_gpu_program_cache_save_gpu_program(
     }
     let name_slot = e.vcall(program, 8, &args![]).u32();
     let name = e.mem.u32(name_slot);
-    e.call(SAVE_NAME_00EE9230, &args![this, file, name]);
+    // 00e8df97: `00ee9230` is stdcall (RET 8) and does not read the ECX (the cache) the
+    // caller sets.
+    let _ = this;
+    e.call(SAVE_NAME_00EE9230, &args![file, name]);
     let size = e.vcall(program, 0x60, &args![]).u32();
     let code = e.vcall(program, 0x64, &args![]).u32();
     e.with_stack(8, |e, slots| {
@@ -416,7 +420,9 @@ pub fn ni_d3d_gpu_program_cache_load_gpu_program(
         let element = size_slot + 8;
         let kind = size_slot + 0x10;
         e.mem.set_u32(size_slot, 0);
-        e.call(LOAD_STRING, &args![this, file, kind, 0x100u32]);
+        // 00e8e049: `00ee92d0` is stdcall (RET 0xc) and does not read the ECX (the cache)
+        // the caller sets.
+        e.call(LOAD_STRING, &args![file, kind, 0x100u32]);
         let vertex_name = e.global::<u32>(VERTEX_TYPE_NAME);
         let vertex = if e.call(NI_STRICMP, &args![kind, vertex_name]).u32() == 0 {
             true
@@ -1390,10 +1396,7 @@ mod n072_tests {
         let file = e.mem.alloc(0x10);
         e.mem.set_u32(file + 0xc, 0x0e52_0000);
         assert!(e.call(0x00e8_df70, &args![0x10u32, file, program]).bool());
-        assert_eq!(
-            calls(&e, SAVE_NAME_00EE9230),
-            vec![vec![0x10, file, 0x7777]]
-        );
+        assert_eq!(calls(&e, SAVE_NAME_00EE9230), vec![vec![file, 0x7777]]);
         let writes = writes.borrow();
         assert_eq!(writes[0][1..], [4, 4, 1]);
         assert_eq!(writes[1], vec![0x9900, 0x30, 1, 1]);
@@ -1427,7 +1430,8 @@ mod n072_tests {
         e.set_global::<u32>(VERTEX_TYPE_NAME, vertex);
         e.set_global::<u32>(PIXEL_TYPE_NAME, pixel);
         e.register_double(LOAD_STRING, move |e, a| {
-            e.mem.set_cstr(a[2], kind);
+            assert_eq!((a.len(), a[2]), (3, 0x100));
+            e.mem.set_cstr(a[1], kind);
             Ret::default()
         });
         e.register(NI_STRICMP, |e, a| {

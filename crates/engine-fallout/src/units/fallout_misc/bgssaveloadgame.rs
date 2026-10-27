@@ -2822,10 +2822,10 @@ pub fn bgssaveloadgame_clear_form(e: &mut Engine, this: Ptr<BGSSaveLoadGame>, fo
 /// Gives `form` the next form id of the data handler (form slot `0x128`).
 fn renumber_form(e: &mut Engine, form: Ptr) {
     let data_handler = e.global::<u32>(DATA_HANDLER);
-    let new_id = e
-        .call(DATA_HANDLER_GET_NEXT_ID, &args![data_handler, 1u32])
-        .u32();
-    e.vcall(form.addr(), FORM_SLOT_SET_NEW_ID, &args![new_id]);
+    let new_id = e.call(DATA_HANDLER_GET_NEXT_ID, &args![data_handler]).u32();
+    // 0084a8db / 0084a923: `00469800` takes no stack word (plain RET); the pushed 1
+    // is the second word of the form's +0x128 (`00485c10`, RET 8).
+    e.vcall(form.addr(), FORM_SLOT_SET_NEW_ID, &args![new_id, 1u32]);
 }
 
 // Translated from 0084a9c0 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -7005,8 +7005,11 @@ mod tests {
             bgssaveloadgame_clear_form(&mut e, this, Ptr::new(form));
         }
         assert_eq!(calls(&e, FAKE_TARGET + 0x128).len(), 8);
-        assert_eq!(calls(&e, FAKE_TARGET + 0x128)[0], vec![form, 0x01_000099]);
-        assert_eq!(calls(&e, DATA_HANDLER_GET_NEXT_ID)[0], vec![0x4000_0300, 1]);
+        assert_eq!(
+            calls(&e, FAKE_TARGET + 0x128)[0],
+            vec![form, 0x01_000099, 1]
+        );
+        assert_eq!(calls(&e, DATA_HANDLER_GET_NEXT_ID)[0], vec![0x4000_0300]);
         assert!(calls(&e, SAVE_GAME_WARNING).is_empty());
         // Deletion.
         for form_type in [0x3a, 0x3b, 0x3c, 0x3d, 0x3e, 0x3f, 0x40, 0x49, 0x69] {

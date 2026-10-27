@@ -9,10 +9,13 @@ const CALLEE_0040E210: u32 = 0x0040_e210;
 
 // Translated from 0040e650 (decompiled, FalloutNV.exe 1.4.0.525)
 /// A base-adjusting forwarder (unnamed in the engine map): calls
-/// `0040e210(this - 0x18, 0x20)`, the object 0x18 bytes before `this`.
-pub fn fn_0040e650(e: &mut Engine, this: Ptr) {
+/// `0040e210(this - 0x18, 0x20)`, the object 0x18 bytes before `this`, and answers its `AL`
+/// (the exe ends on that call). It is slot `+0x1c` of `SpellItem`'s `MagicItem` vtable
+/// (`01013f44`, RTTI), a `bool` virtual: `MagicItem`'s other implementation (`0047c850`)
+/// answers `XOR AL,AL`.
+pub fn fn_0040e650(e: &mut Engine, this: Ptr) -> bool {
     let object = this.addr().wrapping_sub(0x18);
-    e.call(CALLEE_0040E210, &args![object, 0x20u32]);
+    e.call(CALLEE_0040E210, &args![object, 0x20u32]).bool()
 }
 
 /// `00639b40` (`precipitation.cpp` in the engine map; thiscall, no stack words).
@@ -47,7 +50,7 @@ pub fn fn_0040e670(e: &mut Engine, this: Ptr) -> u32 {
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
-        entry!(0x0040_e650, fn_0040e650(Ptr)),
+        entry!(0x0040_e650, fn_0040e650(Ptr) -> bool),
         entry!(0x0040_e600, fn_0040e600(Ptr)),
         entry!(0x0040_e670, fn_0040e670(Ptr) -> u32),
     ]
@@ -132,5 +135,20 @@ mod n075_tests {
         );
         let log = e.call_log.take().unwrap();
         assert_eq!(log[1], (CALLEE_0040E210, vec![0x0500_0000, 0x40]));
+    }
+}
+
+#[cfg(test)]
+mod dropret_tests {
+    use super::*;
+
+    #[test]
+    fn fn_0040e650_answers_the_callee_al() {
+        for answer in [0x0000_0101u32, 0x0000_0100] {
+            let mut e = Engine::new();
+            e.register_double(CALLEE_0040E210, move |_, _| answer.into_ret());
+            let result = e.call(0x0040_e650, &args![0x0500_0018u32]).bool();
+            assert_eq!(result, answer & 0xff != 0);
+        }
     }
 }

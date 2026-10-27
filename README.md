@@ -76,7 +76,7 @@ plugins, Linux and VR.
 ## Progress
 
 <p align="center">
-  <img src="docs/media/progress.svg" alt="Engine port progress: 98.2% of the original program's functions covered" width="100%">
+  <img src="docs/media/progress.svg" alt="Engine port progress: 99.8% of the original program's functions covered" width="100%">
 </p>
 
 The original game's systems switch over one at a time, each in its own
@@ -85,11 +85,11 @@ playable build:
 | | System | Status |
 | :---: | --- | --- |
 | ✅ | **Foundations:** the map of the original program, the frame order, the engine running in play | Done (Build 42) |
-| 🔨 | **Movement and physics:** how walking, jumping and collisions feel | In progress: all 9,011 Havok functions translated (739 of them still have a marked untranslated part, mostly C++ exception frames), every physics function translated; wiring the game's own physics into play is under way: on the play-build branch the game's own start-up now runs from `main` through the archives, Main::Main and the scene graph through the renderer's start-up (its Direct3D 9 device, shaders and textures on our own layer) the whole scene-graph start-up, face generation, the movie player and the game data, into the player's creation, the IO and music threads and the full plugin load |
+| 🔨 | **Movement and physics:** how walking, jumping and collisions feel | In progress: every physics function translated (all 9,011 Havok functions; 739 still have a marked untranslated part, mostly C++ exception frames). In the play build the game's own code now runs its whole start-up, its main loop and main menu at about 60 frames a second, starts a new game and plays the intro; next: Doc Mitchell's house and the movement checks |
 | 🔨 | **Animation and faces** | In progress: every function translated (some still lack their C++ exception frames), not yet switched on |
-| ⬜ | **Audio:** sounds, music and the radio | Every function translated, not yet switched on; sound output on our own DirectSound layer is being built |
+| 🔨 | **Audio:** sounds, music and the radio | Every function translated; DirectSound, the music graph (DirectShow and MP3), Vorbis and the 2D mixer run on our own layer, sound output through Windows audio is being switched on in the play build |
 | 🔨 | **Graphics:** lighting, weather and effects matching the original | In progress: trees (SpeedTree) translated; the game's own renderer is translated to run on our own Direct3D 9 layer ([ADR-0007](docs/adr/0007-renderer-translated-on-own-d3d9-layer.md)); every function translated, being brought up in the play build |
-| ⬜ | **Gameplay:** combat, AI, quests, dialogue, menus, V.A.T.S., perks, crafting and minigames | Every function translated (some still lack their C++ exception frames), not yet switched on |
+| ⬜ | **Gameplay:** combat, AI, quests, dialogue, menus, V.A.T.S., perks, crafting and minigames | Every function translated, not yet switched on |
 | ⬜ | **Saves and the open world:** original saves, world streaming | Planned |
 
 After that come optional bug fixes, script-extender compatibility and more

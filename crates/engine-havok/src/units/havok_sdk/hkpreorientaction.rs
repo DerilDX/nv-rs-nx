@@ -527,6 +527,10 @@ mod tests {
     #[test]
     fn a_nan_target_takes_the_acos_path_and_gives_nan_00e445b0() {
         let mut e = engine();
+        // The exe's sqrt/acos error path (a NaN or negative argument) sets errno, a word of
+        // the thread's data, which the bare engine does not have: doubled.
+        let errno = e.mem.alloc(4);
+        e.register_double(0x00ec_85e3, move |_, _| errno.into_ret());
         set_constants(&mut e);
         let (entity, applied, _) = entity(&mut e, QUARTER_TURN_X, [0.0; 4]);
         let this = action(

@@ -114,7 +114,9 @@ pub fn fn_00e7c560(e: &mut Engine, this: Ptr) -> bool {
 // Translated from 00e7c580 (decompiled, FalloutNV.exe 1.4.0.525)
 /// Unnamed in the engine map (`thiscall`, seven words, `RET 0x1c`): sets the render state
 /// 0x89 to the value kept at +0x4c (the render state object +0x1c, vtable +0x68, (0x89,
-/// value, 0, 0)), then the base shader's `00e805f0` with the seven words.
+/// value, 0, 0)), then the base shader's `00e805f0` with the seven words, whose `EAX` it
+/// answers (the exe ends on that call). The slot is `NiShader`'s `+0x74`, which the Xbox PDB
+/// names `PostProcessPipeline` (`unsigned int`, seven words).
 #[allow(clippy::too_many_arguments)]
 pub fn fn_00e7c580(
     e: &mut Engine,
@@ -126,12 +128,12 @@ pub fn fn_00e7c580(
     f: u32,
     g: u32,
     h: u32,
-) {
+) -> u32 {
     let t = this.addr();
     let states = e.mem.u32(t + 0x1c);
     let value = e.mem.u32(t + 0x4c);
     e.vcall(states, 0x68, &args![RENDER_STATE_0X89, value, 0u32, 0u32]);
-    e.call(BASE_SET_UP, &args![this, a, b, c, d, f, g, h]);
+    e.call(BASE_SET_UP, &args![this, a, b, c, d, f, g, h]).u32()
 }
 
 // Translated from 00e7c5d0 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -369,7 +371,9 @@ pub fn ni_d3d_default_shader_add_texture_stage(
 
 // Translated from 00e7cc10 (decompiled, FalloutNV.exe 1.4.0.525)
 /// Unnamed in the engine map (`thiscall`, seven words, `RET 0x1c`): the shader's vtable
-/// +0xec, then `00e7cac0` with the seven words.
+/// +0xec, then `00e7cac0` with the seven words, whose `EAX` it answers (the exe ends on that
+/// call). The slot is `NiShader`'s `+0x58`, which the Xbox PDB names `UpdatePipeline`
+/// (`unsigned int`, seven words).
 #[allow(clippy::too_many_arguments)]
 pub fn fn_00e7cc10(
     e: &mut Engine,
@@ -381,9 +385,10 @@ pub fn fn_00e7cc10(
     f: u32,
     g: u32,
     h: u32,
-) {
+) -> u32 {
     e.vcall(this.addr(), 0xec, &[]);
-    e.call(SHADER_STEP_00E7CAC0, &args![this, a, b, c, d, f, g, h]);
+    e.call(SHADER_STEP_00E7CAC0, &args![this, a, b, c, d, f, g, h])
+        .u32()
 }
 
 /// This unit's translated functions, by exe address.
@@ -393,7 +398,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00e7_c560, fn_00e7c560(Ptr) -> bool),
         entry!(
             0x00e7_c580,
-            fn_00e7c580(Ptr, u32, u32, u32, u32, u32, u32, u32)
+            fn_00e7c580(Ptr, u32, u32, u32, u32, u32, u32, u32) -> u32
         ),
         entry!(0x00e7_c5d0, fn_00e7c5d0(Ptr, u32) -> Ptr),
         entry!(0x00e7_c610, fn_00e7c610(Ptr, Ptr)),
@@ -405,7 +410,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         ),
         entry!(
             0x00e7_cc10,
-            fn_00e7cc10(Ptr, u32, u32, u32, u32, u32, u32, u32)
+            fn_00e7cc10(Ptr, u32, u32, u32, u32, u32, u32, u32) -> u32
         ),
     ]
 }
@@ -558,6 +563,27 @@ mod n007_tests {
         e.call(0x00e7_cc10, &with_this);
         assert_eq!(calls(&e, 0x034d_00ec), vec![vec![this]]);
         assert_eq!(calls(&e, SHADER_STEP_00E7CAC0), vec![with_this]);
+    }
+
+    #[test]
+    fn pipeline_steps_answer_the_base_eax() {
+        let mut e = engine();
+        let states = e.mem.alloc(4);
+        let vtable = e.mem.alloc(0x70);
+        e.mem.set_u32(states, vtable);
+        e.mem.set_u32(vtable + 0x68, 0x034d_0068);
+        e.register(0x034d_0068, |_, _| Ret::default());
+        e.register(BASE_SET_UP, |_, _| 3u32.into_ret());
+        e.register(SHADER_STEP_00E7CAC0, |_, _| 4u32.into_ret());
+        let own = e.mem.alloc(0x100);
+        e.mem.set_u32(own + 0xec, 0x034d_00ec);
+        e.register(0x034d_00ec, |_, _| 9u32.into_ret());
+        let this = e.mem.alloc(0x5c);
+        e.mem.set_u32(this, own);
+        e.mem.set_u32(this + 0x1c, states);
+        let with_this = vec![this, 1, 2, 3, 4, 5, 6, 7];
+        assert_eq!(e.call(0x00e7_c580, &with_this).u32(), 3);
+        assert_eq!(e.call(0x00e7_cc10, &with_this).u32(), 4);
     }
 
     #[test]

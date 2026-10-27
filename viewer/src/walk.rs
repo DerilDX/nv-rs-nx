@@ -10,8 +10,111 @@ use cellview::{space, DoorData, EYE_HEIGHT};
 use physics::{Character, CharacterShape, Collider};
 use world::locomotion::{self, SpeedSettings};
 
+use crate::args::MovementMode;
 use crate::exterior::{door_start, PendingExterior};
 use crate::{FlyCamera, GameFiles, PendingScene};
+
+/// How the player moves (`--movement`), and the comparison and
+/// missing-function outputs (`--movement-log`, `--movement-missing`).
+#[derive(Resource, Default)]
+pub struct Movement {
+    pub mode: MovementMode,
+    /// `--movement-log`: one line a frame.
+    pub log: Option<std::io::LineWriter<std::fs::File>>,
+    /// `--movement-missing`: rewritten every 5 s.
+    pub missing: Option<std::path::PathBuf>,
+    frames: u64,
+    last_written: f32,
+}
+
+impl Movement {
+    pub fn new(
+        mode: MovementMode,
+        log: Option<&std::path::Path>,
+        missing: Option<std::path::PathBuf>,
+    ) -> std::io::Result<Self> {
+        let log = match log {
+            Some(path) => {
+                let mut file = std::io::LineWriter::new(std::fs::File::create(path)?);
+                use std::io::Write;
+                writeln!(
+                    file,
+                    "frame\ttime\tdt\told_x\told_y\told_z\told_vx\told_vy\told_vz\tengine\t\
+                     engine_x\tengine_y\tengine_z\tengine_vx\tengine_vy\tengine_vz"
+                )?;
+                Some(file)
+            }
+            None => None,
+        };
+        Ok(Movement {
+            mode,
+            log,
+            missing,
+            frames: 0,
+            last_written: -5.0,
+        })
+    }
+
+    /// The frame's line: where the viewer's step has the player (`old`: in
+    /// `compare` and `old` mode, and on a fallback frame, `crates/physics`;
+    /// with the game's code moving the player, the same as `engine`) and
+    /// the game's code's result; the velocity is the move over the frame.
+    /// Every 5 s, the missing-function list and the status line.
+    fn record(
+        &mut self,
+        now: f32,
+        dt: f32,
+        before: [f32; 3],
+        character: &physics::Character,
+        engine: Option<host::player_move::MoveOutput>,
+        host: Option<&host::Host>,
+    ) {
+        self.frames += 1;
+        if let Some(log) = &mut self.log {
+            use std::io::Write;
+            let after = character.feet;
+            let v = |a: f32, b: f32| if dt > 0.0 { (a - b) / dt } else { 0.0 };
+            let mut line = format!(
+                "{}\t{now:.4}\t{dt:.5}\t{:.3}\t{:.3}\t{:.3}\t{:.2}\t{:.2}\t{:.2}",
+                self.frames,
+                after[0],
+                after[1],
+                after[2],
+                v(after[0], before[0]),
+                v(after[1], before[1]),
+                v(after[2], before[2])
+            );
+            match engine {
+                Some(out) => {
+                    line += &format!(
+                        "\t1\t{:.3}\t{:.3}\t{:.3}\t{:.2}\t{:.2}\t{:.2}",
+                        out.feet[0],
+                        out.feet[1],
+                        out.feet[2],
+                        v(out.feet[0], before[0]),
+                        v(out.feet[1], before[1]),
+                        v(out.feet[2], before[2])
+                    );
+                }
+                None => line += "\t0\t\t\t\t\t\t",
+            }
+            let _ = writeln!(log, "{line}");
+        }
+        if now - self.last_written >= 5.0 && self.mode != MovementMode::Old {
+            self.last_written = now;
+            if let Some(host) = host {
+                println!("{}", host.movement.summary());
+                if let Some(path) = &self.missing {
+                    let _ = std::fs::write(path, host.movement.missing_tsv(&|_| None));
+                    let _ =
+                        std::fs::write(path.with_extension("stops.tsv"), host.movement.stops_tsv());
+                    let _ =
+                        std::fs::write(path.with_extension("static.tsv"), host.static_skips_tsv());
+                }
+            }
+        }
+    }
+}
 
 /// The current cell's solid surfaces.
 #[derive(Resource)]
@@ -221,6 +324,20 @@ type SneakParts<'w, 's> = (
     Option<Res<'w, crate::ai::CellNav>>,
 );
 
+/// What walking needs for the player's movement through the game's code
+/// (Build 43): the mouse and controls (the move keys), the movement log and
+/// the host that runs it.
+type MoveParts<'w> = (
+    Res<'w, ButtonInput<MouseButton>>,
+    Option<Res<'w, crate::controls::Controls>>,
+    ResMut<'w, Movement>,
+    Option<NonSendMut<'w, host::Host>>,
+    (
+        Res<'w, bevy::input::mouse::AccumulatedMouseMotion>,
+        Res<'w, bevy::input::mouse::AccumulatedMouseScroll>,
+    ),
+);
+
 /// Walking: the keys set the wanted speed, the character moves through the
 /// cell's collision and around the people in it, and the camera sits at eye
 /// height (lower while sneaking, [`eye_offset`]). Not while scripts have
@@ -238,10 +355,7 @@ pub fn walk(
     walkers: Query<&crate::ai::Walker>,
     mut settings: Local<Option<SpeedSettings>>,
     (mut attack, mut sounds, anim, mut heights, nav): SneakParts,
-    (mouse, controls): (
-        Res<ButtonInput<MouseButton>>,
-        Option<Res<crate::controls::Controls>>,
-    ),
+    (mouse, controls, mut movement, mut host, (motion, scroll)): MoveParts,
 ) {
     if !player.walking || !player.ready {
         return;
@@ -341,7 +455,7 @@ pub fn walk(
     state.0.player_sneaking = sneak;
     // The same as the game's movement flags, for `IsMoving`, `IsRunning`
     // and `IsSneaking` (`world::more_functions::movement`).
-    {
+    let move_flags = {
         use world::more_functions::movement as m;
         let mut flags = 0;
         for (key, flag) in [
@@ -378,7 +492,8 @@ pub fn walk(
                 ..Default::default()
             },
         );
-    }
+        flags
+    };
     let shape = CharacterShape::PLAYER;
     // Jump: not over-encumbered; `fJumpHeightMin` × the player's scale (1).
     let jump =
@@ -393,16 +508,71 @@ pub fn walk(
         ));
         player.reference_speed_set = true;
     }
-    // One controller move a frame (`bhkCharacterController::Move`): on the
-    // ground at the wanted velocity, in the air steered 0.3 of the way to
-    // it; a jump asked for here leaves the ground the next frame.
-    player.character.update_controlled(
-        &collision.0,
-        &shape,
-        velocity,
-        jump,
-        locomotion::air_gain(locomotion::AIR_CONTROL),
+    // The game's own movement code first (`host::player_move`: `PlayerMover::
+    // Update` → `Actor::Move` → `MobileObject::Move` →
+    // `bhkCharacterController::Move`), unless `--movement old`.
+    let before = player.character.feet;
+    let engine_move = match (movement.mode, host.as_deref_mut()) {
+        (MovementMode::Old, _) | (_, None) => None,
+        (_, Some(host)) => {
+            // The mover's bits as the control handler sets them (`0093e860`):
+            // each direction also walks (0x100) unless running (0x200).
+            let mut bits = u32::from(move_flags);
+            if bits & 0xf != 0 && bits & 0x200 == 0 {
+                bits |= host::player_move::move_bits::WALKING;
+            }
+            let input = host::player_move::MoveInput {
+                feet: player.character.feet,
+                // The game's z angle: clockwise from north (forward is
+                // (sin, cos) of it), the camera's yaw the other way.
+                heading: -camera.yaw,
+                move_bits: bits,
+                seconds: dt,
+                jump: jump.is_some(),
+            };
+            // The keys down for the game's own DirectInput keyboard (`Controls::Poll`).
+            let down: Vec<u8> = keys.get_pressed().filter_map(|k| dinput_code(*k)).collect();
+            host.set_keys_down(&down);
+            // The mouse for the game's DirectInput mouse: the frame's motion and wheel
+            // (120 a notch, `WHEEL_DELTA`) and the buttons in DirectInput's order.
+            host.mouse(mouse_motion(&motion, &scroll), mouse_buttons(&mouse));
+            // A frame of the game's own main loop, when its `main` runs (it reads the keys
+            // and the mouse fed above).
+            host.main_frame();
+            host.move_player(order, state.0.player_cell, &input)
+        }
+    };
+    match (movement.mode, engine_move) {
+        (MovementMode::Engine, Some(out)) => {
+            // Moved by the game's code: the viewer's character follows it
+            // (its other state, `on_ground` and the surface contacts, isn't
+            // read back from the game's controller yet).
+            player.character.feet = out.feet;
+            player.character.horizontal = [out.velocity[0], out.velocity[1]];
+            player.character.vertical_speed = out.velocity[2];
+        }
+        _ => {
+            // One controller move a frame (`bhkCharacterController::Move`):
+            // on the ground at the wanted velocity, in the air steered 0.3 of
+            // the way to it; a jump asked for here leaves the ground the next
+            // frame.
+            player.character.update_controlled(
+                &collision.0,
+                &shape,
+                velocity,
+                jump,
+                locomotion::air_gain(locomotion::AIR_CONTROL),
+                dt,
+            );
+        }
+    }
+    movement.record(
+        time.elapsed_secs(),
         dt,
+        before,
+        &player.character,
+        engine_move,
+        host.as_deref(),
     );
     player.surface_serial = player.surface_serial.wrapping_add(1);
     // Outdoors, feet more than 30 under the land are put on it, the player's
@@ -622,6 +792,130 @@ pub fn doors(
         }
         Err(e) => println!("Couldn't load {}: {e}", door.cell_label),
     }
+}
+
+/// The DirectInput key code (the keyboard scan code, `DIK_*`) of a physical key, for the game's
+/// DirectInput keyboard (`host::Host::set_keys_down`).
+fn dinput_code(key: KeyCode) -> Option<u8> {
+    use KeyCode::*;
+    Some(match key {
+        Escape => 0x01,
+        Digit1 => 0x02,
+        Digit2 => 0x03,
+        Digit3 => 0x04,
+        Digit4 => 0x05,
+        Digit5 => 0x06,
+        Digit6 => 0x07,
+        Digit7 => 0x08,
+        Digit8 => 0x09,
+        Digit9 => 0x0a,
+        Digit0 => 0x0b,
+        Minus => 0x0c,
+        Equal => 0x0d,
+        Backspace => 0x0e,
+        Tab => 0x0f,
+        KeyQ => 0x10,
+        KeyW => 0x11,
+        KeyE => 0x12,
+        KeyR => 0x13,
+        KeyT => 0x14,
+        KeyY => 0x15,
+        KeyU => 0x16,
+        KeyI => 0x17,
+        KeyO => 0x18,
+        KeyP => 0x19,
+        BracketLeft => 0x1a,
+        BracketRight => 0x1b,
+        Enter => 0x1c,
+        ControlLeft => 0x1d,
+        KeyA => 0x1e,
+        KeyS => 0x1f,
+        KeyD => 0x20,
+        KeyF => 0x21,
+        KeyG => 0x22,
+        KeyH => 0x23,
+        KeyJ => 0x24,
+        KeyK => 0x25,
+        KeyL => 0x26,
+        Semicolon => 0x27,
+        Quote => 0x28,
+        Backquote => 0x29,
+        ShiftLeft => 0x2a,
+        Backslash => 0x2b,
+        KeyZ => 0x2c,
+        KeyX => 0x2d,
+        KeyC => 0x2e,
+        KeyV => 0x2f,
+        KeyB => 0x30,
+        KeyN => 0x31,
+        KeyM => 0x32,
+        Comma => 0x33,
+        Period => 0x34,
+        Slash => 0x35,
+        ShiftRight => 0x36,
+        AltLeft => 0x38,
+        Space => 0x39,
+        CapsLock => 0x3a,
+        F1 => 0x3b,
+        F2 => 0x3c,
+        F3 => 0x3d,
+        F4 => 0x3e,
+        F5 => 0x3f,
+        F6 => 0x40,
+        F7 => 0x41,
+        F8 => 0x42,
+        F9 => 0x43,
+        F10 => 0x44,
+        F11 => 0x57,
+        F12 => 0x58,
+        ControlRight => 0x9d,
+        AltRight => 0xb8,
+        Home => 0xc7,
+        ArrowUp => 0xc8,
+        PageUp => 0xc9,
+        ArrowLeft => 0xcb,
+        ArrowRight => 0xcd,
+        End => 0xcf,
+        ArrowDown => 0xd0,
+        PageDown => 0xd1,
+        Insert => 0xd2,
+        Delete => 0xd3,
+        _ => return None,
+    })
+}
+
+/// The frame's mouse motion for the game's DirectInput mouse: x and y as the raw motion
+/// (mickeys), the wheel in `WHEEL_DELTA` units (120 a notch, a line here; 40 pixels a line
+/// as the viewer's other scroll readers count them).
+fn mouse_motion(
+    motion: &bevy::input::mouse::AccumulatedMouseMotion,
+    scroll: &bevy::input::mouse::AccumulatedMouseScroll,
+) -> [i32; 3] {
+    use bevy::input::mouse::MouseScrollUnit;
+    let lines = match scroll.unit {
+        MouseScrollUnit::Line => scroll.delta.y,
+        MouseScrollUnit::Pixel => scroll.delta.y / 40.0,
+    };
+    [
+        motion.delta.x.round() as i32,
+        motion.delta.y.round() as i32,
+        (lines * 120.0).round() as i32,
+    ]
+}
+
+/// The buttons down, in DirectInput's mouse order (`DIMOFS_BUTTON0` left, 1 right,
+/// 2 middle, 3 and 4 the side buttons).
+fn mouse_buttons(mouse: &ButtonInput<MouseButton>) -> [bool; 8] {
+    [
+        mouse.pressed(MouseButton::Left),
+        mouse.pressed(MouseButton::Right),
+        mouse.pressed(MouseButton::Middle),
+        mouse.pressed(MouseButton::Back),
+        mouse.pressed(MouseButton::Forward),
+        false,
+        false,
+        false,
+    ]
 }
 
 #[cfg(test)]

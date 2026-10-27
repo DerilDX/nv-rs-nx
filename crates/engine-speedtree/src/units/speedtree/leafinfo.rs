@@ -219,60 +219,63 @@ pub fn sidv_leaf_info_init_tables(e: &mut Engine, this: Ptr<SIdvLeafInfo>, count
     let time_offsets = e.call(OPERATOR_NEW, &args![size]).u32();
     e.set(this, SIdvLeafInfo::m_pTimeOffsets, Ptr::new(time_offsets));
 
-    let random = e.mem.alloc(4);
-    e.call(RANDOM_CONSTRUCTOR, &args![random]);
-    let mut i: i32 = 0;
-    while i < e.get(this, SIdvLeafInfo::m_nNumRockingGroups) {
-        let end = x87_quiet(e.global::<f32>(TIME_OFFSET_RANGE));
-        let drawn = e
-            .call(RANDOM_GET_UNIFORM, &args![random, 0.0f32, end])
-            .f32();
-        let table = e.get(this, SIdvLeafInfo::m_pTimeOffsets).addr();
-        e.mem
-            .set_f32(table.wrapping_add((i as u32).wrapping_mul(4)), drawn);
-        i = i.wrapping_add(1);
-    }
-
-    let size = array_size((count as u32) << 4, 4);
-    let tex_coords = e.call(OPERATOR_NEW, &args![size]).u32();
-    e.set(this, SIdvLeafInfo::m_pLeafTexCoords, Ptr::new(tex_coords));
-    let mut cursor = tex_coords;
-    let mut i: i32 = 0;
-    while i < count.wrapping_shl(1) {
-        for value in [0.0f32, 1.0, 1.0, 1.0, 1.0, 0.0, 0.0, 0.0] {
-            e.mem.set_f32(cursor, value);
-            cursor = cursor.wrapping_add(4);
-        }
-        i = i.wrapping_add(1);
-    }
-
-    let lod_levels = e.get(this, SIdvLeafInfo::m_nNumLeafLodLevels);
-    let size = array_size(lod_levels as u32, 4);
-    let vertexes = e.call(OPERATOR_NEW, &args![size]).u32();
-    e.set(this, SIdvLeafInfo::m_pLeafVertexes, Ptr::new(vertexes));
-    let rocking_groups = e.get(this, SIdvLeafInfo::m_nNumRockingGroups);
-    let floats = (count.wrapping_shl(1).wrapping_mul(rocking_groups)).wrapping_shl(4);
-    let mut level: i32 = 0;
-    while level < e.get(this, SIdvLeafInfo::m_nNumLeafLodLevels) {
-        let size = array_size(floats as u32, 4);
-        let table = e.call(OPERATOR_NEW, &args![size]).u32();
-        let tables = e.get(this, SIdvLeafInfo::m_pLeafVertexes).addr();
-        e.mem
-            .set_u32(tables.wrapping_add((level as u32).wrapping_mul(4)), table);
-        let mut j: i32 = 0;
-        while j < floats {
-            let tables = e.get(this, SIdvLeafInfo::m_pLeafVertexes).addr();
-            let table = e
-                .mem
-                .u32(tables.wrapping_add((level as u32).wrapping_mul(4)));
+    // The exe's frame (`EBP` frame, exception record, `SUB ESP,0x30`, the cookie): 0x40 bytes,
+    // the random generator (one byte) at +0x2b (`EBP-0x15`).
+    e.with_stack(0x40, |e, frame| {
+        let random = frame.addr() + 0x2b;
+        e.call(RANDOM_CONSTRUCTOR, &args![random]);
+        let mut i: i32 = 0;
+        while i < e.get(this, SIdvLeafInfo::m_nNumRockingGroups) {
+            let end = x87_quiet(e.global::<f32>(TIME_OFFSET_RANGE));
+            let drawn = e
+                .call(RANDOM_GET_UNIFORM, &args![random, 0.0f32, end])
+                .f32();
+            let table = e.get(this, SIdvLeafInfo::m_pTimeOffsets).addr();
             e.mem
-                .set_f32(table.wrapping_add((j as u32).wrapping_mul(4)), 0.0);
-            j = j.wrapping_add(1);
+                .set_f32(table.wrapping_add((i as u32).wrapping_mul(4)), drawn);
+            i = i.wrapping_add(1);
         }
-        level = level.wrapping_add(1);
-    }
-    e.call(RANDOM_DESTRUCTOR, &args![random]);
-    e.mem.free(random);
+
+        let size = array_size((count as u32) << 4, 4);
+        let tex_coords = e.call(OPERATOR_NEW, &args![size]).u32();
+        e.set(this, SIdvLeafInfo::m_pLeafTexCoords, Ptr::new(tex_coords));
+        let mut cursor = tex_coords;
+        let mut i: i32 = 0;
+        while i < count.wrapping_shl(1) {
+            for value in [0.0f32, 1.0, 1.0, 1.0, 1.0, 0.0, 0.0, 0.0] {
+                e.mem.set_f32(cursor, value);
+                cursor = cursor.wrapping_add(4);
+            }
+            i = i.wrapping_add(1);
+        }
+
+        let lod_levels = e.get(this, SIdvLeafInfo::m_nNumLeafLodLevels);
+        let size = array_size(lod_levels as u32, 4);
+        let vertexes = e.call(OPERATOR_NEW, &args![size]).u32();
+        e.set(this, SIdvLeafInfo::m_pLeafVertexes, Ptr::new(vertexes));
+        let rocking_groups = e.get(this, SIdvLeafInfo::m_nNumRockingGroups);
+        let floats = (count.wrapping_shl(1).wrapping_mul(rocking_groups)).wrapping_shl(4);
+        let mut level: i32 = 0;
+        while level < e.get(this, SIdvLeafInfo::m_nNumLeafLodLevels) {
+            let size = array_size(floats as u32, 4);
+            let table = e.call(OPERATOR_NEW, &args![size]).u32();
+            let tables = e.get(this, SIdvLeafInfo::m_pLeafVertexes).addr();
+            e.mem
+                .set_u32(tables.wrapping_add((level as u32).wrapping_mul(4)), table);
+            let mut j: i32 = 0;
+            while j < floats {
+                let tables = e.get(this, SIdvLeafInfo::m_pLeafVertexes).addr();
+                let table = e
+                    .mem
+                    .u32(tables.wrapping_add((level as u32).wrapping_mul(4)));
+                e.mem
+                    .set_f32(table.wrapping_add((j as u32).wrapping_mul(4)), 0.0);
+                j = j.wrapping_add(1);
+            }
+            level = level.wrapping_add(1);
+        }
+        e.call(RANDOM_DESTRUCTOR, &args![random]);
+    });
 }
 
 // Translated from 00b3d720 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -333,21 +336,32 @@ fn texture_vector_size(e: &mut Engine, vector: u32) -> u32 {
 /// on. The sizes are compared as unsigned numbers, so a vector whose last
 /// pointer is before its first one takes the erase path.
 pub fn texture_vector_resize(e: &mut Engine, this: Ptr, new_size: u32, value: LeafTextureArg) {
+    // The exe's frame (`EBP` frame, exception record, `SUB ESP,0xc8`, the cookie): 0xd8 bytes
+    // below `EBP`, then the saved `EBP`, the return address, `new_size` (+0xe0) and the texture
+    // passed by value (+0xe4, `EBP+0xc`), which is the copy inserted. The advanced iterator at
+    // +0x74 (`EBP-0x64`) and the erase result at +0x88 (`EBP-0x50`).
+    e.with_stack(0x138, |e, frame| {
+        resize_in_frame(e, this, new_size, value, frame.addr())
+    });
+}
+
+/// [`texture_vector_resize`] in the exe's frame (`frame` is its lowest address).
+fn resize_in_frame(e: &mut Engine, this: Ptr, new_size: u32, value: LeafTextureArg, frame: u32) {
     let vector = this.addr();
+    e.mem.set_u32(frame + 0xe0, new_size);
+    for (i, word) in value.0.iter().enumerate() {
+        e.mem.set_u32(frame + 0xe4 + 4 * i as u32, *word);
+    }
     if texture_vector_size(e, vector) < new_size {
         let last = e.mem.u32(vector.wrapping_add(0x10));
         check_iterator(e, vector, last);
         let proxy = e.mem.u32(vector);
         let missing = new_size.wrapping_sub(texture_vector_size(e, vector));
-        let copy = e.mem.alloc(0x54);
-        for (i, word) in value.0.iter().enumerate() {
-            e.mem.set_u32(copy + 4 * i as u32, *word);
-        }
+        let copy = frame + 0xe4;
         e.call(
             TEXTURE_VECTOR_INSERT,
             &args![this, proxy, last, missing, copy],
         );
-        e.mem.free(copy);
     } else if new_size < texture_vector_size(e, vector) {
         let last = e.mem.u32(vector.wrapping_add(0x10));
         check_iterator(e, vector, last);
@@ -355,41 +369,58 @@ pub fn texture_vector_resize(e: &mut Engine, this: Ptr, new_size: u32, value: Le
         let first = e.mem.u32(vector.wrapping_add(0x0c));
         check_iterator(e, vector, first);
         let first_proxy = e.mem.u32(vector);
-        let iterator = e.mem.alloc(8);
+        let iterator = frame + 0x74;
         e.mem.set_u32(iterator, first_proxy);
         e.mem.set_u32(iterator + 4, first);
         e.call(TEXTURE_ITERATOR_ADVANCE, &args![iterator, new_size]);
         let erase_proxy = e.mem.u32(iterator);
         let erase_position = e.mem.u32(iterator + 4);
-        let result = e.mem.alloc(8);
+        let result = frame + 0x88;
         e.call(
             TEXTURE_VECTOR_ERASE,
             &args![this, result, erase_proxy, erase_position, last_proxy, last],
         );
-        e.mem.free(result);
-        e.mem.free(iterator);
     }
 }
 
 /// Throws the parse-error exception with `message` (`"malformed ..."`):
 /// the message string, the exception built from it, `_CxxThrowException`.
-fn throw_malformed(e: &mut Engine, message: u32) -> ! {
-    e.with_stack(0x1c, |e, text| {
-        e.call(STRING_FROM_C_STRING, &args![text, message]);
-        e.with_stack(0x28, |e, exception| {
-            e.call(PARSE_ERROR_FROM_STRING, &args![exception, text, 0u32]);
-            e.call(CXX_THROW_EXCEPTION, &args![exception, PARSE_THROW_INFO]);
-        });
-    });
+/// `text` and `exception` are the two locals of the throw site in `00b3d1b0`'s frame.
+fn throw_malformed(e: &mut Engine, message: u32, text: u32, exception: u32) -> ! {
+    e.call(STRING_FROM_C_STRING, &args![text, message]);
+    e.call(PARSE_ERROR_FROM_STRING, &args![exception, text, 0u32]);
+    e.call(CXX_THROW_EXCEPTION, &args![exception, PARSE_THROW_INFO]);
     unreachable!("__CxxThrowException does not return (00ec7894)")
 }
 
-/// Reads a `CVec3` from the file into the three words at `to`.
-fn parse_vector3_into(e: &mut Engine, file: Ptr, to: u32) {
-    let buffer = e.mem.alloc(0xc);
+/// Reads a `CVec3` from the file into the three words at `to`, through the local `buffer`.
+fn parse_vector3_into(e: &mut Engine, file: Ptr, to: u32, buffer: u32) {
     let parsed = e.call(PARSE_VECTOR3, &args![file, buffer]).u32();
     copy_words(e, parsed, to, 3);
-    e.mem.free(buffer);
+}
+
+/// The offsets in `00b3d1b0`'s frame, which starts at `EBP-0x384` (see
+/// [`sidv_leaf_info_parse`]).
+mod parse_frame {
+    /// The texture being parsed (`EBP-0x74`).
+    pub const TEXTURE: u32 = 0x310;
+    /// The vector buffers of the colour, origin, size and used size (`EBP-0x80`, `-0xc8`,
+    /// `-0xd4`, `-0xe0`).
+    pub const COLOR: u32 = 0x304;
+    pub const ORIGIN: u32 = 0x2bc;
+    pub const SIZE: u32 = 0x2b0;
+    pub const USED_SIZE: u32 = 0x2a4;
+    /// The parsed filename, its copy and the name without the path (`EBP-0x1e0`, `-0x9c`,
+    /// `-0xbc`).
+    pub const PARSED: u32 = 0x1a4;
+    pub const COPY: u32 = 0x2e8;
+    pub const NAME: u32 = 0x2c8;
+    /// The texture throw's message and exception (`EBP-0x124`, `-0x108`).
+    pub const TEXTURE_TEXT: u32 = 0x260;
+    pub const TEXTURE_EXCEPTION: u32 = 0x27c;
+    /// The general throw's message and exception (`EBP-0x168`, `-0x14c`).
+    pub const GENERAL_TEXT: u32 = 0x21c;
+    pub const GENERAL_EXCEPTION: u32 = 0x238;
 }
 
 /// One leaf texture's tag/value pairs, read from the file into the texture
@@ -399,7 +430,8 @@ fn parse_vector3_into(e: &mut Engine, file: Ptr, to: u32) {
 /// (the filename, reduced to its name without the path), 0xfa4 (origin),
 /// 0xfa5 (size) and 0xfa6 (used size) fill the fields; 0xfa7 reads a float
 /// and drops it. Any other tag throws `"malformed single leaf information"`.
-fn parse_texture(e: &mut Engine, file: Ptr, texture: Ptr<SIdvLeafTexture>) {
+/// `frame` is `00b3d1b0`'s frame ([`parse_frame`]).
+fn parse_texture(e: &mut Engine, file: Ptr, texture: Ptr<SIdvLeafTexture>, frame: u32) {
     let _discarded = e.call(PARSE_INT, &args![file]).u32();
     let mut tag = e.call(PARSE_INT, &args![file]).u32();
     loop {
@@ -408,7 +440,7 @@ fn parse_texture(e: &mut Engine, file: Ptr, texture: Ptr<SIdvLeafTexture>) {
                 let blossom = e.call(PARSE_BOOL, &args![file]).u8();
                 e.set(texture, SIdvLeafTexture::m_bBlossom, blossom);
             }
-            1 => parse_vector3_into(e, file, texture.addr() + 0x04),
+            1 => parse_vector3_into(e, file, texture.addr() + 0x04, frame + parse_frame::COLOR),
             2 => {
                 let variance = e.call(PARSE_FLOAT, &args![file]).f32();
                 e.set(texture, SIdvLeafTexture::m_fColorVariance, variance);
@@ -416,28 +448,35 @@ fn parse_texture(e: &mut Engine, file: Ptr, texture: Ptr<SIdvLeafTexture>) {
             3 => {
                 let npos = e.mem.u32(STRING_NPOS);
                 let filename = texture.addr() + 0x14;
-                let parsed = e.mem.alloc(0x1c);
+                let parsed = frame + parse_frame::PARSED;
                 e.call(PARSE_STRING, &args![file, parsed]);
-                let copy = e.mem.alloc(0x1c);
+                let copy = frame + parse_frame::COPY;
                 e.call(STRING_COPY, &args![copy, parsed]);
                 e.call(STRING_TIDY, &args![parsed, true, 0u32]);
                 e.call(STRING_ASSIGN, &args![filename, copy, 0u32, npos]);
                 e.call(STRING_TIDY, &args![copy, true, 0u32]);
-                let name = e.mem.alloc(0x1c);
+                let name = frame + parse_frame::NAME;
                 let reduced = e.call(FILENAME_NO_PATH, &args![filename, name]).u32();
                 e.call(STRING_ASSIGN, &args![filename, reduced, 0u32, npos]);
                 e.call(STRING_TIDY, &args![name, true, 0u32]);
-                e.mem.free(name);
-                e.mem.free(copy);
-                e.mem.free(parsed);
             }
-            4 => parse_vector3_into(e, file, texture.addr() + 0x30),
-            5 => parse_vector3_into(e, file, texture.addr() + 0x3c),
-            6 => parse_vector3_into(e, file, texture.addr() + 0x48),
+            4 => parse_vector3_into(e, file, texture.addr() + 0x30, frame + parse_frame::ORIGIN),
+            5 => parse_vector3_into(e, file, texture.addr() + 0x3c, frame + parse_frame::SIZE),
+            6 => parse_vector3_into(
+                e,
+                file,
+                texture.addr() + 0x48,
+                frame + parse_frame::USED_SIZE,
+            ),
             7 => {
                 e.call(PARSE_FLOAT, &args![file]);
             }
-            _ => throw_malformed(e, MESSAGE_MALFORMED_SINGLE),
+            _ => throw_malformed(
+                e,
+                MESSAGE_MALFORMED_SINGLE,
+                frame + parse_frame::TEXTURE_TEXT,
+                frame + parse_frame::TEXTURE_EXCEPTION,
+            ),
         }
         tag = e.call(PARSE_INT, &args![file]).u32();
         if tag == 0x3f0 {
@@ -450,25 +489,27 @@ fn parse_texture(e: &mut Engine, file: Ptr, texture: Ptr<SIdvLeafTexture>) {
 /// the vector cleared and resized to the count with default textures, then
 /// each texture parsed into a default local and copied into place; one more
 /// value (the block's end tag) is read and dropped.
-fn parse_textures(e: &mut Engine, this: Ptr<SIdvLeafInfo>, file: Ptr) {
+/// `frame` is `00b3d1b0`'s frame ([`parse_frame`]); the default texture is built in the
+/// outgoing argument area 0x54 bytes below it (`SUB ESP,0x54`, 00b3d34d), under the pushed
+/// count.
+fn parse_textures(e: &mut Engine, this: Ptr<SIdvLeafInfo>, file: Ptr, frame: u32) {
     let _discarded = e.call(PARSE_INT, &args![file]).u32();
     let count = e.call(PARSE_INT, &args![file]).i32();
     let vector = this.at(SIdvLeafInfo::m_vLeafTextures);
     e.call(TEXTURE_VECTOR_CLEAR, &args![vector]);
-    let default = e.mem.alloc(0x54);
+    let default = frame.wrapping_sub(0x54);
     fn_00b3d720(e, Ptr::new(default));
     let mut value = [0u32; 21];
     for (i, word) in value.iter_mut().enumerate() {
         *word = e.mem.u32(default + 4 * i as u32);
     }
-    e.mem.free(default);
     texture_vector_resize(e, vector.cast(), count as u32, LeafTextureArg(value));
 
     let mut i: i32 = 0;
     while i < count {
-        let local = Ptr::<SIdvLeafTexture>::new(e.mem.alloc(0x54));
+        let local = Ptr::<SIdvLeafTexture>::new(frame + parse_frame::TEXTURE);
         fn_00b3d720(e, local);
-        parse_texture(e, file, local);
+        parse_texture(e, file, local, frame);
         let textures = vector.addr();
         let size = texture_vector_size(e, textures);
         if (i as u32) >= size {
@@ -479,7 +520,6 @@ fn parse_textures(e: &mut Engine, this: Ptr<SIdvLeafInfo>, file: Ptr) {
             .wrapping_add(e.mem.u32(textures.wrapping_add(0x0c)));
         e.call(TEXTURE_COPY, &args![destination, local]);
         e.call(STRING_TIDY, &args![local.byte_add(0x14), true, 0u32]);
-        e.mem.free(local.addr());
         i = i.wrapping_add(1);
     }
     let _end = e.call(PARSE_INT, &args![file]).u32();
@@ -501,6 +541,15 @@ fn parse_textures(e: &mut Engine, this: Ptr<SIdvLeafInfo>, file: Ptr) {
 /// * 0x3f1 is the texture block ([`parse_textures`]);
 /// * any other tag throws `"malformed general leaf information"`.
 pub fn sidv_leaf_info_parse(e: &mut Engine, this: Ptr<SIdvLeafInfo>, file: Ptr) {
+    // The exe's frame (`EBP` frame, exception record, `SUB ESP,0x374`, the cookie): 0x384 bytes,
+    // with 0x58 bytes of outgoing arguments below it for the texture resize.
+    e.with_stack(0x58 + 0x384, |e, raw| {
+        parse_in_frame(e, this, file, raw.addr() + 0x58)
+    });
+}
+
+/// [`sidv_leaf_info_parse`] in the exe's frame (`frame` is its lowest address).
+fn parse_in_frame(e: &mut Engine, this: Ptr<SIdvLeafInfo>, file: Ptr, frame: u32) {
     let mut tag = e.call(PARSE_INT, &args![file]).u32();
     loop {
         match tag {
@@ -508,7 +557,7 @@ pub fn sidv_leaf_info_parse(e: &mut Engine, this: Ptr<SIdvLeafInfo>, file: Ptr) 
                 let value = e.call(PARSE_FLOAT, &args![file]).f32();
                 e.set(this, SIdvLeafInfo::m_fBlossomDistance, value);
             }
-            0x3f1 => parse_textures(e, this, file),
+            0x3f1 => parse_textures(e, this, file, frame),
             0xbb9 => {
                 let value = e.call(PARSE_INT, &args![file]).i32();
                 e.set(this, SIdvLeafInfo::m_nBlossomLevel, value);
@@ -539,7 +588,12 @@ pub fn sidv_leaf_info_parse(e: &mut Engine, this: Ptr<SIdvLeafInfo>, file: Ptr) 
                 let value = e.call(PARSE_FLOAT, &args![file]).f32();
                 e.set(this, SIdvLeafInfo::m_fDimmingScalar, value);
             }
-            _ => throw_malformed(e, MESSAGE_MALFORMED_GENERAL),
+            _ => throw_malformed(
+                e,
+                MESSAGE_MALFORMED_GENERAL,
+                frame + parse_frame::GENERAL_TEXT,
+                frame + parse_frame::GENERAL_EXCEPTION,
+            ),
         }
         tag = e.call(PARSE_INT, &args![file]).u32();
         if tag == 0x3ed {
@@ -1105,5 +1159,156 @@ mod tests {
         assert!(calls.borrow().iter().any(|c| c.0 == INVALID_PARAMETER));
         // The handler returns in the harness, so the copy still goes ahead.
         assert_eq!(copies.borrow().len(), 1);
+    }
+
+    // ---- the exe's stack frames ----
+
+    /// The calls made to `address` while the call log was on.
+    fn logged(e: &Engine, address: u32) -> Vec<Vec<u32>> {
+        e.call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|c| c.0 == address)
+            .map(|c| c.1.clone())
+            .collect()
+    }
+
+    /// The block the next `with_stack(size)` takes (the last freed block of that size), with
+    /// the call log switched on.
+    fn next_frame(e: &mut Engine, size: u32) -> u32 {
+        let frame = e.mem.alloc(size);
+        e.mem.free(frame);
+        e.call_log = Some(vec![]);
+        frame
+    }
+
+    #[test]
+    fn init_tables_keeps_the_random_generator_at_frame_offset_0x2b() {
+        let (mut e, _, _) = tables_engine();
+        let info = e.new_object::<SIdvLeafInfo>();
+        e.set(info, SIdvLeafInfo::m_nNumRockingGroups, 1);
+        let frame = next_frame(&mut e, 0x40);
+        e.call(0x00b3_cf40, &args![info, 1u32]);
+        assert_eq!(logged(&e, RANDOM_CONSTRUCTOR), vec![vec![frame + 0x2b]]);
+        assert_eq!(logged(&e, RANDOM_GET_UNIFORM)[0][0], frame + 0x2b);
+        assert_eq!(logged(&e, RANDOM_DESTRUCTOR), vec![vec![frame + 0x2b]]);
+    }
+
+    #[test]
+    fn resize_uses_its_argument_slot_and_the_exe_frame_offsets() {
+        let mut e = leaf_engine();
+        let (vector, _) = texture_vector(&mut e, 1);
+        recorded(
+            &mut e,
+            &[
+                TEXTURE_VECTOR_INSERT,
+                TEXTURE_VECTOR_ERASE,
+                TEXTURE_ITERATOR_ADVANCE,
+            ],
+        );
+        let frame = next_frame(&mut e, 0x138);
+        e.call(0x00b3_d910, &args![vector, 4u32, marker_value()]);
+        // The copy inserted is the by-value argument at +0xe4.
+        assert_eq!(logged(&e, TEXTURE_VECTOR_INSERT)[0][4], frame + 0xe4);
+        assert_eq!(e.mem.u32(frame + 0xe4), 0x100);
+        let (vector, _) = texture_vector(&mut e, 3);
+        let frame = next_frame(&mut e, 0x138);
+        e.call(0x00b3_d910, &args![vector, 1u32, marker_value()]);
+        assert_eq!(logged(&e, TEXTURE_ITERATOR_ADVANCE)[0][0], frame + 0x74);
+        assert_eq!(logged(&e, TEXTURE_VECTOR_ERASE)[0][1], frame + 0x88);
+    }
+
+    #[test]
+    fn parse_keeps_every_local_at_the_exe_frame_offsets() {
+        let ints = vec![
+            0x3f1, 99, 1, // the block: a dropped value, one texture
+            5, 0xfa1, 0xfa3, 0xfa4, 0xfa5, 0xfa6, 0x3f0, // the texture
+            0x3f2, 0x3ed, // the dropped end tag, the end
+        ];
+        let vectors = vec![[1.0, 2.0, 3.0]; 4];
+        let (mut e, _) = parse_engine(ints, vec![], vec![], vectors);
+        let elements = e.mem.alloc(0x54);
+        let info = e.new_object::<SIdvLeafInfo>();
+        let vector = info.addr() + 0x10;
+        e.mem.set_u32(vector + 0x0c, elements);
+        e.mem.set_u32(vector + 0x10, elements);
+        e.register_double(TEXTURE_VECTOR_INSERT, |e, a| {
+            let last = e.mem.u32(a[0] + 0x10);
+            e.mem.set_u32(a[0] + 0x10, last + a[3] * 0x54);
+            Ret::default()
+        });
+        recorded(&mut e, &[TEXTURE_COPY]);
+        let file = Ptr::<()>::new(e.mem.alloc(0x20));
+        let raw = next_frame(&mut e, 0x58 + 0x384);
+        let frame = raw + 0x58;
+        e.call(0x00b3_d1b0, &args![info, file]);
+        // The default texture in the outgoing argument area (its filename at +0x14).
+        assert_eq!(logged(&e, STRING_TIDY)[0], vec![frame - 0x54 + 0x14, 0, 0]);
+        let buffers: Vec<u32> = logged(&e, PARSE_VECTOR3).iter().map(|c| c[1]).collect();
+        assert_eq!(
+            buffers,
+            vec![
+                frame + parse_frame::COLOR,
+                frame + parse_frame::ORIGIN,
+                frame + parse_frame::SIZE,
+                frame + parse_frame::USED_SIZE
+            ]
+        );
+        assert_eq!(logged(&e, PARSE_STRING)[0][1], frame + parse_frame::PARSED);
+        assert_eq!(
+            logged(&e, STRING_COPY)[0][..2],
+            [frame + parse_frame::COPY, frame + parse_frame::PARSED]
+        );
+        assert_eq!(
+            logged(&e, FILENAME_NO_PATH)[0][1],
+            frame + parse_frame::NAME
+        );
+        assert_eq!(logged(&e, TEXTURE_COPY)[0][1], frame + parse_frame::TEXTURE);
+    }
+
+    #[test]
+    fn the_two_throws_use_their_own_frame_locals() {
+        let (mut e, _) = parse_engine(vec![0], vec![], vec![], vec![]);
+        e.register(CXX_THROW_EXCEPTION, |_, _| panic!("thrown"));
+        let info = e.new_object::<SIdvLeafInfo>();
+        let file = Ptr::<()>::new(e.mem.alloc(0x20));
+        let frame = next_frame(&mut e, 0x58 + 0x384) + 0x58;
+        let thrown = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            e.call(0x00b3_d1b0, &args![info, file]);
+        }));
+        assert!(thrown.is_err());
+        assert_eq!(
+            logged(&e, STRING_FROM_C_STRING)[0][0],
+            frame + parse_frame::GENERAL_TEXT
+        );
+        assert_eq!(
+            logged(&e, PARSE_ERROR_FROM_STRING)[0][..2],
+            [
+                frame + parse_frame::GENERAL_EXCEPTION,
+                frame + parse_frame::GENERAL_TEXT
+            ]
+        );
+        let (mut e, _) = parse_engine(vec![0x3f1, 0, 1, 0, 0xfa8], vec![], vec![], vec![]);
+        e.register(CXX_THROW_EXCEPTION, |_, _| panic!("thrown"));
+        let elements = e.mem.alloc(0x54);
+        let info = e.new_object::<SIdvLeafInfo>();
+        e.mem.set_u32(info.addr() + 0x1c, elements);
+        e.mem.set_u32(info.addr() + 0x20, elements);
+        e.register_double(TEXTURE_VECTOR_INSERT, |_, _| Ret::default());
+        let file = Ptr::<()>::new(e.mem.alloc(0x20));
+        let frame = next_frame(&mut e, 0x58 + 0x384) + 0x58;
+        let thrown = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            e.call(0x00b3_d1b0, &args![info, file]);
+        }));
+        assert!(thrown.is_err());
+        assert_eq!(
+            logged(&e, STRING_FROM_C_STRING)[0][0],
+            frame + parse_frame::TEXTURE_TEXT
+        );
+        assert_eq!(
+            logged(&e, PARSE_ERROR_FROM_STRING)[0][0],
+            frame + parse_frame::TEXTURE_EXCEPTION
+        );
     }
 }

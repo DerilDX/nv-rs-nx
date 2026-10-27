@@ -567,8 +567,10 @@ pub fn fn_0056f700(e: &mut Engine, this: Ptr<TESObjectREFR>) {
             }
             let cell = parent_cell(e, me);
             let tes = e.global::<u32>(GLOBAL_TES);
-            let priority = e.call(0x0045_8be0, &args![tes, cell, 0u32, 1u32]).u32();
-            e.call(0x0044_4850, &args![model_loader(e), me, priority]);
+            // 0056f7fb: `00458be0` takes two words (RET 8); the pushed 1 is the last word
+            // of `00444850` (RET 0xc).
+            let priority = e.call(0x0045_8be0, &args![tes, cell, 0u32]).u32();
+            e.call(0x0044_4850, &args![model_loader(e), me, priority, 1u32]);
         } else {
             let loading = e.global::<u32>(GLOBAL_LOADING_OBJECT);
             if !e.call(0x0042_ce10, &args![loading]).bool() {
@@ -2774,14 +2776,17 @@ fn player(e: &Engine) -> u32 {
     e.global::<u32>(GLOBAL_PLAYER)
 }
 
-/// The message `00403df0` builds on the message object `holder` and `007052f0`
-/// shows: `(0, text, 0, <float at 010162c0>, 0)`.
+/// The text `00403df0` reads from the setting `holder`, shown by the cdecl `007052f0`
+/// with `(0, text, 0, <float at 010162c0>, 0)`.
 fn show_message(e: &mut Engine, holder: u32, text: u32) {
     let seconds = e.global::<f32>(0x0101_62c0);
-    let message = e
-        .call(0x0040_3df0, &args![holder, 0u32, text, 0u32, seconds, 0u32])
-        .u32();
-    e.call(0x0070_52f0, &args![message]);
+    // 005732f6 / 00573460: `00403df0` takes only the setting (ECX); the five pushed
+    // words are the rest of the cdecl `007052f0` (ADD ESP,0x18).
+    let message = e.call(0x0040_3df0, &args![holder]).u32();
+    e.call(
+        0x0070_52f0,
+        &args![message, 0u32, text, 0u32, seconds, 0u32],
+    );
 }
 
 // Translated from 00573170 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -3184,8 +3189,10 @@ pub fn tes_object_refr_move_ref_to_new_space(
         }
         if moved {
             if e.call(0x008c_7aa0, &args![]).bool() {
-                let handle = e.call(0x0045_37b0, &args![me]).u32();
-                e.call(0x0087_b2b0, &args![handle]);
+                // 00573d30: `004537b0` takes no word (plain RET, a global); the pushed
+                // reference is the word of `0087b2b0` (RET 4).
+                let handle = e.call(0x0045_37b0, &args![]).u32();
+                e.call(0x0087_b2b0, &args![handle, me]);
             } else {
                 e.vcall(me, 0x1c0, &args![]);
             }
@@ -3207,8 +3214,9 @@ pub fn tes_object_refr_move_ref_to_new_space(
             }
             if resume {
                 if e.call(0x008c_7aa0, &args![]).bool() {
-                    let handle = e.call(0x0045_37b0, &args![me]).u32();
-                    e.call(0x0087_b230, &args![handle]);
+                    // 00573df8: as above, the reference is the word of `0087b230`.
+                    let handle = e.call(0x0045_37b0, &args![]).u32();
+                    e.call(0x0087_b230, &args![handle, me]);
                 } else {
                     e.vcall(me, 0x1c4, &args![]);
                 }
@@ -3232,8 +3240,9 @@ pub fn tes_object_refr_move_ref_to_new_space(
 /// `0087b270(004537b0(refr))`, else the virtual at `+0x1fc` with 0.
 fn update_in_place(e: &mut Engine, me: u32) {
     if e.call(0x008c_7aa0, &args![]).bool() {
-        let handle = e.call(0x0045_37b0, &args![me]).u32();
-        e.call(0x0087_b270, &args![handle]);
+        // 005739dc / 00573bf4: as above, the reference is the word of `0087b270`.
+        let handle = e.call(0x0045_37b0, &args![]).u32();
+        e.call(0x0087_b270, &args![handle, me]);
     } else {
         e.vcall(me, 0x1fc, &args![0u32]);
     }
@@ -5195,8 +5204,11 @@ mod tests {
         });
         let cell = e.mem.u32(refr + 0x40);
         let tes = e.global::<u32>(GLOBAL_TES);
-        assert_eq!(calls_to(&log, 0x0045_8be0), vec![vec![tes, cell, 0, 1]]);
-        assert_eq!(calls_to(&log, 0x0044_4850), vec![vec![loader, refr, 0x77]]);
+        assert_eq!(calls_to(&log, 0x0045_8be0), vec![vec![tes, cell, 0]]);
+        assert_eq!(
+            calls_to(&log, 0x0044_4850),
+            vec![vec![loader, refr, 0x77, 1]]
+        );
         assert!(calls_to(&log, 0x0096_f400).is_empty());
         // no 3D: no node work
         assert!(calls_to(&log, NODE_UPDATE).is_empty());
@@ -8315,11 +8327,10 @@ mod tests {
                 .call(0x0057_3170, &args![refr, player, 0u8, 0u32, 0u32])
                 .bool());
         });
-        assert_eq!(
-            calls_to(&log, 0x0040_3df0),
-            vec![vec![0x011d_4f84, 0, 0, 0, float_bits(2.0), 0]]
-        );
-        assert_eq!(calls_to(&log, 0x0070_52f0).len(), 1);
+        assert_eq!(calls_to(&log, 0x0040_3df0), vec![vec![0x011d_4f84]]);
+        let shown = calls_to(&log, 0x0070_52f0);
+        assert_eq!(shown.len(), 1);
+        assert_eq!(shown[0][1..], [0, 0, 0, float_bits(2.0), 0]);
         assert!(calls_to(&log, 0x0056_a290).is_empty());
         // 008859e0 holds: the activation goes on
         returns(&mut s.e, 0x0088_59e0, 1);
@@ -8422,11 +8433,10 @@ mod tests {
                 .call(0x0057_3170, &args![refr, player, 0u8, 0u32, 0u32])
                 .bool());
         });
-        assert_eq!(
-            calls_to(&log, 0x0040_3df0),
-            vec![vec![0x011d_2bf8, 0, 0x0103_0e78, 0, float_bits(2.0), 0]]
-        );
-        assert_eq!(calls_to(&log, 0x0070_52f0).len(), 1);
+        assert_eq!(calls_to(&log, 0x0040_3df0), vec![vec![0x011d_2bf8]]);
+        let shown = calls_to(&log, 0x0070_52f0);
+        assert_eq!(shown.len(), 1);
+        assert_eq!(shown[0][1..], [0, 0x0103_0e78, 0, float_bits(2.0), 0]);
         // a lock that opens does not stop the activation
         returns(&mut s.e, 0x0041_e7b0, 1);
         let log = logged(&mut s.e, |e| {
@@ -8804,8 +8814,8 @@ mod tests {
         returns(&mut s.e, 0x008c_7aa0, 1);
         returns(&mut s.e, 0x0045_37b0, 0x1234);
         let log = move_ref(&mut s, old_cell, 0);
-        assert_eq!(calls_to(&log, 0x0087_b270), vec![vec![0x1234]]);
-        assert_eq!(calls_to(&log, 0x0045_37b0), vec![vec![refr]]);
+        assert_eq!(calls_to(&log, 0x0087_b270), vec![vec![0x1234, refr]]);
+        assert_eq!(calls_to(&log, 0x0045_37b0), vec![Vec::<u32>::new()]);
         assert!(calls_to(&log, slot(&s.e, refr, 0x1fc)).is_empty());
     }
 
@@ -8845,8 +8855,8 @@ mod tests {
         s.e.mem.set_u32(refr + 0x40, old_cell);
         let log = move_ref(&mut s, cell, 0);
         // the reference moved (1c0 replacement) and was loaded (update)
-        assert_eq!(calls_to(&log, 0x0087_b2b0), vec![vec![0x1234]]);
-        assert_eq!(calls_to(&log, 0x0087_b270), vec![vec![0x1234]]);
+        assert_eq!(calls_to(&log, 0x0087_b2b0), vec![vec![0x1234, refr]]);
+        assert_eq!(calls_to(&log, 0x0087_b270), vec![vec![0x1234, refr]]);
     }
 
     #[test]

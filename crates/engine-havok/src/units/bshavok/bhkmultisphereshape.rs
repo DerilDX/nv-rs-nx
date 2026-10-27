@@ -337,13 +337,20 @@ pub fn bhk_multi_sphere_shape_get_viewer_strings(e: &mut Engine, this: Ptr, stri
 /// The local array is then released through the allocator (16 bytes per element) unless
 /// its capacity word flags it as not owning its data.
 pub fn bhk_multi_sphere_shape_save_binary(e: &mut Engine, this: Ptr, stream: u32) {
-    let me = this.addr();
-    let (info, created) = e.with_stack(4, |e, created| {
-        let info = e.vcall(me, 0xb4, &args![created]).u32();
-        (info, e.mem.u8(created.addr()))
+    // The exe's frame (exception record, `SUB ESP,0x10`, four pushes and the cookie): 0x30
+    // bytes, the created byte at +0x14 (00cb8041) and the local array at +0x18 (00cb80b6).
+    e.with_stack(0x30, |e, frame| {
+        save_binary_in_frame(e, this, stream, frame.addr())
     });
+}
+
+/// [`bhk_multi_sphere_shape_save_binary`] in the exe's frame (`frame` is its lowest address).
+fn save_binary_in_frame(e: &mut Engine, this: Ptr, stream: u32, frame: u32) {
+    let me = this.addr();
+    let info = e.vcall(me, 0xb4, &args![frame + 0x14]).u32();
+    let created = e.mem.u8(frame + 0x14);
     let array = info + 4;
-    let local = e.mem.alloc(12);
+    let local = frame + 0x18;
     let data = e.mem.u32(info + 4);
     e.mem.set_u32(local, data);
     let size = e.mem.u32(info + 8);
@@ -371,7 +378,6 @@ pub fn bhk_multi_sphere_shape_save_binary(e: &mut Engine, this: Ptr, stream: u32
         let data = e.mem.u32(local);
         e.vcall(heap, 0x10, &args![data, (capacity & CAPACITY_MASK) << 4]);
     }
-    e.mem.free(local);
 }
 
 // Translated from 00cb8150 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -931,6 +937,27 @@ mod tests {
         e.call(0x00cb_8010, &args![this, stream]);
         assert_eq!(calls_to(&log, SWAP_HK_ARRAY).len(), 3);
         assert_eq!(e.mem.u32(word), 0x77);
+    }
+
+    #[test]
+    fn save_binary_keeps_its_locals_at_the_exe_frame_offsets() {
+        let (mut e, _, _) = engine_with_allocator();
+        let log: Calls = Rc::default();
+        record(&mut e, SHAPE_SAVE_BINARY, 0, &log);
+        record(&mut e, STREAM_SAVE_ARRAY, 0, &log);
+        record(&mut e, 0x0900_0050, 0, &log);
+        let info = e.mem.alloc(0x10);
+        e.mem.set_u32(info + 0xc, EMPTY_CAPACITY);
+        record(&mut e, 0x0900_0048, info, &log);
+        let this = vobject(&mut e, 0x14, &[(0xb4, 0x0900_0048), (0xa4, 0x0900_0050)]);
+        let stream = e.mem.alloc(0x300);
+        e.mem.set_u8(stream + 0x1e4, 1);
+        let frame = e.mem.alloc(0x30);
+        e.mem.free(frame);
+        e.call(0x00cb_8010, &args![this, stream]);
+        // The created byte at +0x14, the local array at +0x18.
+        assert_eq!(calls_to(&log, 0x0900_0048), [[this, frame + 0x14]]);
+        assert_eq!(calls_to(&log, STREAM_SAVE_ARRAY), [[stream, frame + 0x18]]);
     }
 
     #[test]

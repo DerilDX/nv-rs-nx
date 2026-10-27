@@ -605,9 +605,159 @@ pub fn fn_00b00120(e: &mut Engine, this: Ptr<BSStringT>, text: u32) -> Ptr<BSStr
     this
 }
 
+/// `NiFile`'s base constructor (`00aa14b0`, `thiscall`), `strlen` (`00ec6130`), `strcpy_s`
+/// (`00ec65a6`), `BSFile::Open` (`00aff300`, `thiscall`, two words) and `BSFile::Exist`
+/// (`00affc60`, `thiscall`, answers `AL`).
+const NI_FILE_CONSTRUCT: u32 = 0x00aa_14b0;
+const STRCPY_S: u32 = 0x00ec_65a6;
+const BS_FILE_OPEN: u32 = 0x00af_f300;
+const BS_FILE_EXIST: u32 = 0x00af_fc60;
+
+// Translated from 00b00260 (disassembled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 00b00260 - the SEH frame (FS:[0] handler 00f23868, state 0 after the base constructor) is not translated.
+/// `BSFile::BSFile` (engine map; unit `BSSystem/bsfile_xenon.cpp`; `thiscall`, four words,
+/// `RET 0x10`: path, mode, buffer size, a byte for `Open`): `NiFile`'s constructor, the vtable
+/// `010a4764`, no byte swapping (`00aff990(0)`), the mode at +0x28 and the buffer size at +0x10;
+/// +0x14, +0x18, +0x20, +0x24, +0x150, +0x14c, +0x148, +0x154, +0x34, +0x3c and +0x40 cleared,
+/// the byte +0x30 cleared and +0x38 set to -1. A path of 0x104 characters or more leaves the name
+/// at +0x44 empty; a shorter one is copied there (`strcpy_s` into 0x104 bytes) and, for mode 1,
+/// the file is opened (`BSFile::Open(0, byte)`). For mode 0 the byte +0x2c is set to whether
+/// the file exists (`BSFile::Exist`). Answers `this`.
+pub fn bs_file_bs_file(
+    e: &mut Engine,
+    this: Ptr<BSFile>,
+    path: Ptr,
+    mode: u32,
+    buffer_size: u32,
+    open_byte: u8,
+) -> Ptr<BSFile> {
+    let t = this.addr();
+    e.call(NI_FILE_CONSTRUCT, &args![t]);
+    e.mem.set_u32(t, BSFILE_VTABLE);
+    e.call(0x00af_f990, &args![t, 0u32]);
+    e.mem.set_u32(t + 0x28, mode);
+    e.mem.set_u32(t + 0x10, buffer_size);
+    for offset in [0x14u32, 0x18, 0x20, 0x24, 0x150, 0x14c, 0x148, 0x154] {
+        e.mem.set_u32(t + offset, 0);
+    }
+    e.mem.set_u8(t + 0x30, 0);
+    e.mem.set_u32(t + 0x34, 0);
+    e.mem.set_u32(t + 0x38, 0xffff_ffff);
+    e.mem.set_u32(t + 0x3c, 0);
+    e.mem.set_u32(t + 0x40, 0);
+    let length = e.call(STRLEN, &args![path]).u32();
+    if length >= 0x104 {
+        e.mem.set_u8(t + 0x44, 0);
+    } else {
+        e.call(STRCPY_S, &args![t + 0x44, 0x104u32, path]);
+        if mode == 1 {
+            e.call(BS_FILE_OPEN, &args![t, 0u32, u32::from(open_byte)]);
+        }
+    }
+    if mode == 0 {
+        let exists = e.call(BS_FILE_EXIST, &args![t]).u8();
+        e.mem.set_u8(t + 0x2c, exists);
+    }
+    this
+}
+
+/// The `NiFile` read (`00aa1750`, thiscall: buffer, count) and seek (`00aa16d0`, thiscall:
+/// offset, origin).
+const NI_FILE_READ: u32 = 0x00aa_1750;
+const NI_FILE_SEEK: u32 = 0x00aa_16d0;
+/// `ftell` (`00ecb562`, cdecl: stream) and `fseek` (`00ecb65a`, cdecl: stream, offset, origin).
+const FTELL: u32 = 0x00ec_b562;
+const FSEEK: u32 = 0x00ec_b65a;
+/// The three seek origins as `NiFile` keeps them (`010a2480`, `010a2484`, `010a2488`: the
+/// set, current and end words `00b00590` compares with).
+const SEEK_SET_WORD: u32 = 0x010a_2480;
+const SEEK_CUR_WORD: u32 = 0x010a_2484;
+const SEEK_END_WORD: u32 = 0x010a_2488;
+
+// Translated from 00b00650 (disassembled, FalloutNV.exe 1.4.0.525)
+/// `BSFile::ReadF` (Xbox PDB; `BSFile` vtable +0x44, `thiscall`, two words, `RET 8`): opens the
+/// file first when it has no `FILE` (`m_pFile` +0x24; vtable +0x20 with `(0, 0)`), reads through
+/// the `NiFile` buffer (`00aa1750(buffer, size)`) and moves `iTrueFilePos` (+0x150) on by what
+/// that answered, which it answers.
+pub fn bs_file_read_f(e: &mut Engine, this: Ptr<BSFile>, buffer: Ptr, size: u32) -> u32 {
+    if e.get(ni_file(this), NiFile::m_pFile) == 0 {
+        e.vcall(this.addr(), OPEN_SLOT, &args![0u32, 0u32]);
+    }
+    let read = e.call(NI_FILE_READ, &args![this, buffer, size]).u32();
+    let position = e.get(this, BSFile::iTrueFilePos).wrapping_add(read);
+    e.set(this, BSFile::iTrueFilePos, position);
+    read
+}
+
+// Translated from 00b00590 (disassembled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map; `BSFile` vtable +0x14 (`thiscall`, two words, `RET 8`: offset,
+/// origin): the seek. The target is the offset for the set origin (`010a2480`; a file in mode
+/// 0, read, seeks by the distance from `iTrueFilePos` with the current origin `010a2484`),
+/// `iTrueFilePos` plus the offset for the current origin, the size (vtable +0x28) less the
+/// offset for the end origin (`010a2488`), else `iTrueFilePos`. When the target differs from
+/// `iTrueFilePos` the `NiFile` seek runs (`00aa16d0(offset, origin)`, both as adjusted) and
+/// `iTrueFilePos` becomes the target.
+pub fn fn_00b00590(e: &mut Engine, this: Ptr<BSFile>, offset: u32, origin: u32) {
+    let mut offset = offset;
+    let mut origin = origin;
+    let target = if origin == e.global::<u32>(SEEK_SET_WORD) {
+        let target = offset;
+        if e.get(ni_file(this), NiFile::m_eMode) == 0 {
+            origin = e.global::<u32>(SEEK_CUR_WORD);
+            offset = offset.wrapping_sub(e.get(this, BSFile::iTrueFilePos));
+        }
+        target
+    } else if origin == e.global::<u32>(SEEK_CUR_WORD) {
+        e.get(this, BSFile::iTrueFilePos).wrapping_add(offset)
+    } else if origin == e.global::<u32>(SEEK_END_WORD) {
+        e.vcall(this.addr(), GET_SIZE_SLOT, &args![])
+            .u32()
+            .wrapping_sub(offset)
+    } else {
+        e.get(this, BSFile::iTrueFilePos)
+    };
+    if target != e.get(this, BSFile::iTrueFilePos) {
+        e.call(NI_FILE_SEEK, &args![this, offset, origin]);
+        e.set(this, BSFile::iTrueFilePos, target);
+    }
+}
+
+// Translated from 00b004e0 (disassembled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map; `BSFile` vtable +0x28 (`GetSize` by the PDB's slot order;
+/// `thiscall`, no stack words, plain `RET`): clears `iFileSize` (+0x154), flushes the `NiFile`
+/// buffer of a file in mode 1 (`00aa15a0`), opens the file (vtable +0x20 with `(0, 0)`), and
+/// with a `FILE` measures it: `ftell`, `fseek(0, SEEK_END)`, `ftell` into `iFileSize`, and
+/// `fseek` back to the first position. Answers `iFileSize`.
+pub fn fn_00b004e0(e: &mut Engine, this: Ptr<BSFile>) -> u32 {
+    e.set(this, BSFile::iFileSize, 0);
+    if e.get(ni_file(this), NiFile::m_eMode) == 1 {
+        e.call(NI_FILE_FLUSH, &args![this]);
+    }
+    e.vcall(this.addr(), OPEN_SLOT, &args![0u32, 0u32]);
+    if e.get(ni_file(this), NiFile::m_pFile) != 0 {
+        let file = e.get(ni_file(this), NiFile::m_pFile);
+        let here = e.call(FTELL, &args![file]).u32();
+        let file = e.get(ni_file(this), NiFile::m_pFile);
+        e.call(FSEEK, &args![file, 0u32, 2u32]);
+        let file = e.get(ni_file(this), NiFile::m_pFile);
+        let size = e.call(FTELL, &args![file]).u32();
+        e.set(this, BSFile::iFileSize, size);
+        let file = e.get(ni_file(this), NiFile::m_pFile);
+        e.call(FSEEK, &args![file, here, 0u32]);
+    }
+    e.get(this, BSFile::iFileSize)
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x00b0_0650, bs_file_read_f(Ptr<BSFile>, Ptr, u32) -> u32),
+        entry!(0x00b0_0590, fn_00b00590(Ptr<BSFile>, u32, u32)),
+        entry!(0x00b0_04e0, fn_00b004e0(Ptr<BSFile>) -> u32),
+        entry!(
+            0x00b0_0260,
+            bs_file_bs_file(Ptr<BSFile>, Ptr, u32, u32, u8) -> Ptr<BSFile>
+        ),
         entry!(0x00af_f2a0, fn_00aff2a0(Ptr<BSFile>, u32) -> bool),
         entry!(0x00af_f640, fn_00aff640(Ptr<BSFile>, u32, u32) -> u32),
         entry!(0x00af_f7c0, bs_file_read(Ptr<BSFile>, u32, u32) -> u32),
@@ -1252,5 +1402,157 @@ mod n083_tests {
         e.set(string, BSStringT::sMaxLen, 0xffff);
         e.call(0x00b0_0120, &args![string, 0x9020u32]);
         assert_eq!(e.get(string, BSStringT::sLen), 0xffff);
+    }
+}
+
+#[cfg(test)]
+mod constructor_tests {
+    use super::*;
+
+    fn engine() -> (Engine, u32, u32) {
+        let mut e = Engine::new();
+        for f in [NI_FILE_CONSTRUCT, 0x00af_f990, BS_FILE_OPEN] {
+            e.register(f, |_, _| Ret::default());
+        }
+        e.register(STRLEN, |e, a| (e.mem.cstr(a[0]).len() as u32).into_ret());
+        e.register(STRCPY_S, |e, a| {
+            let text = e.mem.cstr(a[2]);
+            e.mem.set_cstr(a[0], &text);
+            Ret::default()
+        });
+        e.register(BS_FILE_EXIST, |_, _| 1u32.into_ret());
+        let file = e.mem.alloc(0x158);
+        let path = e.mem.alloc(0x200);
+        e.mem.set_cstr(path, b"Data.txt");
+        (e, file, path)
+    }
+
+    #[test]
+    fn mode_0_copies_the_name_and_asks_whether_it_exists() {
+        let (mut e, file, path) = engine();
+        e.call_log = Some(vec![]);
+        let made = e
+            .call(0x00b0_0260, &args![file, path, 0u32, 0x4000u32, 1u32])
+            .u32();
+        assert_eq!(made, file);
+        assert_eq!(e.mem.u32(file), BSFILE_VTABLE);
+        assert_eq!(e.mem.u32(file + 0x10), 0x4000);
+        assert_eq!(e.mem.u32(file + 0x38), 0xffff_ffff);
+        assert_eq!(e.mem.cstr(file + 0x44), b"Data.txt".to_vec());
+        assert_eq!(e.mem.u8(file + 0x2c), 1);
+        let log = e.call_log.take().unwrap();
+        assert!(log.iter().all(|c| c.0 != BS_FILE_OPEN));
+    }
+
+    #[test]
+    fn mode_1_opens_and_a_long_name_stays_empty() {
+        let (mut e, file, path) = engine();
+        e.call_log = Some(vec![]);
+        e.call(0x00b0_0260, &args![file, path, 1u32, 0u32, 1u32]);
+        let log = e.call_log.take().unwrap();
+        let opens: Vec<_> = log.iter().filter(|c| c.0 == BS_FILE_OPEN).collect();
+        assert_eq!(opens[0].1, vec![file, 0, 1]);
+        let long = vec![b'a'; 0x104];
+        e.mem.set_cstr(path, &long);
+        e.call(0x00b0_0260, &args![file, path, 1u32, 0u32, 1u32]);
+        assert_eq!(e.mem.u8(file + 0x44), 0);
+    }
+}
+
+#[cfg(test)]
+mod tests_read_seek_size {
+    use super::*;
+
+    const VTABLE: u32 = 0x0300_0000;
+    const OPEN_DOUBLE: u32 = 0x0e10_0000;
+    const SIZE_DOUBLE: u32 = 0x0e10_0010;
+
+    fn calls_to(e: &Engine, callee: u32) -> Vec<Vec<u32>> {
+        e.call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|(address, _)| *address == callee)
+            .map(|(_, words)| words.clone())
+            .collect()
+    }
+
+    /// A `BSFile` whose vtable's `Open` and `GetSize` are doubles (size 0x100), with the seek
+    /// origin words 0, 1, 2 and the `NiFile` read answering its count.
+    fn engine() -> (Engine, Ptr<BSFile>) {
+        let mut e = Engine::new();
+        e.map(0x010a_2000, 0x1000);
+        e.set_global(SEEK_SET_WORD, 0u32);
+        e.set_global(SEEK_CUR_WORD, 1u32);
+        e.set_global(SEEK_END_WORD, 2u32);
+        let mut slots = vec![0u32; 0x14];
+        slots[(OPEN_SLOT / 4) as usize] = OPEN_DOUBLE;
+        slots[(GET_SIZE_SLOT / 4) as usize] = SIZE_DOUBLE;
+        e.put_vtable(VTABLE, &slots);
+        e.register(OPEN_DOUBLE, |_, _| 1u32.into_ret());
+        e.register(SIZE_DOUBLE, |_, _| 0x100u32.into_ret());
+        e.register(NI_FILE_READ, |_, a| a[2].into_ret());
+        e.register(NI_FILE_SEEK, |_, _| Ret::default());
+        e.register(NI_FILE_FLUSH, |_, _| 1u32.into_ret());
+        let this = e.mem.alloc(0x158);
+        e.mem.set_u32(this, VTABLE);
+        e.call_log = Some(vec![]);
+        (e, Ptr::new(this))
+    }
+
+    #[test]
+    fn read_f_opens_a_closed_file_and_counts_the_position() {
+        let (mut e, this) = engine();
+        let buffer = e.mem.alloc(0x10);
+        assert_eq!(e.call(0x00b0_0650, &args![this, buffer, 8u32]).u32(), 8);
+        assert_eq!(calls_to(&e, OPEN_DOUBLE), [vec![this.addr(), 0, 0]]);
+        e.set(ni_file(this), NiFile::m_pFile, 0x7700);
+        assert_eq!(e.call(0x00b0_0650, &args![this, buffer, 4u32]).u32(), 4);
+        assert_eq!(calls_to(&e, OPEN_DOUBLE).len(), 1);
+        assert_eq!(e.get(this, BSFile::iTrueFilePos), 12);
+    }
+
+    #[test]
+    fn the_seek_moves_only_when_the_target_differs() {
+        let (mut e, this) = engine();
+        e.set(this, BSFile::iTrueFilePos, 0x10);
+        // Set, read mode: by the distance with the current origin.
+        e.call(0x00b0_0590, &args![this, 0x30u32, 0u32]);
+        assert_eq!(calls_to(&e, NI_FILE_SEEK), [vec![this.addr(), 0x20, 1]]);
+        assert_eq!(e.get(this, BSFile::iTrueFilePos), 0x30);
+        // The same place: nothing.
+        e.call(0x00b0_0590, &args![this, 0x30u32, 0u32]);
+        e.call(0x00b0_0590, &args![this, 0u32, 1u32]);
+        e.call(0x00b0_0590, &args![this, 0u32, 7u32]);
+        assert_eq!(calls_to(&e, NI_FILE_SEEK).len(), 1);
+        // From the end of 0x100 bytes; a write-mode set keeps its origin.
+        e.call(0x00b0_0590, &args![this, 0x10u32, 2u32]);
+        assert_eq!(calls_to(&e, NI_FILE_SEEK)[1], vec![this.addr(), 0x10, 2]);
+        assert_eq!(e.get(this, BSFile::iTrueFilePos), 0xf0);
+        e.set(ni_file(this), NiFile::m_eMode, 1);
+        e.call(0x00b0_0590, &args![this, 0x40u32, 0u32]);
+        assert_eq!(calls_to(&e, NI_FILE_SEEK)[2], vec![this.addr(), 0x40, 0]);
+    }
+
+    #[test]
+    fn get_size_measures_the_file_and_goes_back() {
+        let (mut e, this) = engine();
+        // No FILE: 0, after trying to open.
+        assert_eq!(e.call(0x00b0_04e0, &args![this]).u32(), 0);
+        assert_eq!(calls_to(&e, OPEN_DOUBLE).len(), 1);
+        e.set(ni_file(this), NiFile::m_pFile, 0x7700);
+        e.set(ni_file(this), NiFile::m_eMode, 1);
+        let mut tells = 0;
+        e.register_double(FTELL, move |_, _| {
+            tells += 1;
+            (if tells == 1 { 0x24u32 } else { 0x5000 }).into_ret()
+        });
+        e.register(FSEEK, |_, _| 0u32.into_ret());
+        assert_eq!(e.call(0x00b0_04e0, &args![this]).u32(), 0x5000);
+        assert_eq!(calls_to(&e, NI_FILE_FLUSH), [vec![this.addr()]]);
+        assert_eq!(
+            calls_to(&e, FSEEK),
+            [vec![0x7700, 0, 2], vec![0x7700, 0x24, 0]]
+        );
     }
 }

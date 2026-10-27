@@ -58,7 +58,7 @@ const CONSTRUCT: u32 = 0x00cb_c550;
 const HK_LIQUID_ACTION_CONSTRUCT: u32 = 0x00d2_c910;
 /// `bhkWorldObject::GetProperty` (`00c85ef0`, cdecl `(out, object, property)`, answers a
 /// pointer to the value) with the property id used here, and the lookup of the player
-/// reference `00653290` (one word) with its argument.
+/// reference `00653290` (`thiscall` on the property's value, one word) with its argument.
 const GET_PROPERTY: u32 = 0x00c8_5ef0;
 const PROPERTY_ID: u32 = 0x0126_7b70;
 const FIND_BY_KEY: u32 = 0x0065_3290;
@@ -520,6 +520,22 @@ pub fn bhk_liquid_action_update(e: &mut Engine, this: Ptr<BhkLiquidAction>, step
 /// The part of [`bhk_liquid_action_update`] that runs with a holder. `frame` mirrors the
 /// part of the game's stack frame that is passed to callees by address.
 fn update_holder(e: &mut Engine, this: Ptr<BhkLiquidAction>, holder: u32, step: f32) {
+    // The exe's frame (`AND ESP,0xfffffff0`, `SUB ESP,0xb4`, three pushes): 0xc0 bytes from a
+    // 16-byte boundary.
+    e.with_stack(0xc0 + 0x10, |e, raw| {
+        let frame = (raw.addr() + 0xf) & !0xf;
+        update_holder_in_frame(e, this, holder, step, frame);
+    });
+}
+
+/// [`update_holder`] in the exe's frame (`frame` is its lowest address).
+fn update_holder_in_frame(
+    e: &mut Engine,
+    this: Ptr<BhkLiquidAction>,
+    holder: u32,
+    step: f32,
+    frame: u32,
+) {
     let me = this.addr();
     let mut force = [
         f32::from_bits(e.mem.u32(ZERO_VECTOR)),
@@ -528,14 +544,15 @@ fn update_holder(e: &mut Engine, this: Ptr<BhkLiquidAction>, holder: u32, step: 
     ];
     if e.get(this, BhkLiquidAction::pTargetObject) == 0 {
         let hk_object = e.mem.u32(holder + 8);
-        let value = e.with_stack(4, |e, out| {
-            let found = e
-                .call(GET_PROPERTY, &args![out, hk_object, PROPERTY_ID])
-                .u32();
-            e.mem.u32(found)
-        });
+        // The property holder lands at frame +0x30 (00cbcd28).
+        let out = frame + 0x30;
+        let found = e
+            .call(GET_PROPERTY, &args![out, hk_object, PROPERTY_ID])
+            .u32();
+        let value = e.mem.u32(found);
         if value != 0 {
-            let reference = e.call(FIND_BY_KEY, &args![FIND_KEY]).u32();
+            // 00cbcd40: `00653290` (RET 4) is a thiscall on the value (ECX from 00cbcd32).
+            let reference = e.call(FIND_BY_KEY, &args![value, FIND_KEY]).u32();
             if reference != 0 {
                 let node = e.mem.u32(reference + 8);
                 if node != 0 {
@@ -547,7 +564,6 @@ fn update_holder(e: &mut Engine, this: Ptr<BhkLiquidAction>, holder: u32, step: 
             }
         }
     }
-    let frame = e.mem.alloc(0xc0);
     let position = frame + 0x54;
     let velocity = frame + 0x80;
     let first_point = frame + 0x90;
@@ -713,7 +729,6 @@ fn update_holder(e: &mut Engine, this: Ptr<BhkLiquidAction>, holder: u32, step: 
             e.call(BRACKET, &args![holder]);
         }
     }
-    e.mem.free(frame);
 }
 
 /// The neighbour loop of [`bhk_liquid_action_update`]: every other action in `list` that
@@ -886,7 +901,8 @@ pub fn bhk_liquid_action_init(e: &mut Engine, this: Ptr<BhkLiquidAction>, info: 
         e.mem.u32(found)
     });
     if value != 0 {
-        let reference = e.call(FIND_BY_KEY, &args![FIND_KEY]).u32();
+        // 00cbd5fc: `00653290` (RET 4) is a thiscall on the value (ECX from 00cbd5ee).
+        let reference = e.call(FIND_BY_KEY, &args![value, FIND_KEY]).u32();
         if reference != 0 {
             let node = e.mem.u32(reference + 8);
             if node != 0 {
@@ -1436,7 +1452,7 @@ mod tests {
         record(&mut e, MAP_SET_AT, 0, &log);
         record(&mut e, POOL_ALLOCATE, 0, &log);
         e.call(0x00cb_d520, &args![this, info]);
-        assert_eq!(calls_to(&log, FIND_BY_KEY), [[FIND_KEY]]);
+        assert_eq!(calls_to(&log, FIND_BY_KEY), [[1, FIND_KEY]]);
         assert_eq!(e.mem.u32(this + 0x10), 0x3333);
         assert_eq!(e.mem.u32(word), 0x77);
     }
@@ -1745,7 +1761,20 @@ mod tests {
         s.e.mem.set_u32(node + 0x18, target);
         s.e.call(0x00cb_ccb0, &args![s.this, 0.5f32]);
         assert_eq!(s.e.mem.u32(s.this + 0x10), target);
-        assert_eq!(calls_to(&s.log, FIND_BY_KEY), [[FIND_KEY]]);
+        assert_eq!(calls_to(&s.log, FIND_BY_KEY), [[1, FIND_KEY]]);
         assert_eq!(calls_to(&s.log, GET_PROPERTY)[0][2], PROPERTY_ID);
+    }
+
+    #[test]
+    fn update_keeps_the_property_holder_in_the_aligned_exe_frame() {
+        let mut s = scene([0.0; 3]);
+        let property = s.e.mem.alloc(4);
+        record(&mut s.e, GET_PROPERTY, property, &s.log);
+        // The next 0xd0-byte block is the frame (0xc0 bytes from a 16-byte boundary).
+        let raw = s.e.mem.alloc(0xd0);
+        s.e.mem.free(raw);
+        s.e.call(0x00cb_ccb0, &args![s.this, 0.5f32]);
+        let frame = (raw + 0xf) & !0xf;
+        assert_eq!(calls_to(&s.log, GET_PROPERTY)[0][0], frame + 0x30);
     }
 }

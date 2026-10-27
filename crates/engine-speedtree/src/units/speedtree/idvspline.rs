@@ -496,34 +496,37 @@ pub fn cidv_bezier_spline_destructor(e: &mut Engine, this: Ptr<CIdvBezierSpline>
 /// no name): every cached spline is destroyed and freed, its slot cleared,
 /// then the map is cleared.
 pub fn fn_00b37a00(e: &mut Engine) {
-    let iterator = e.mem.alloc(8);
-    e.call(MAP_BEGIN, &args![SPLINE_CACHE, iterator]);
-    let end = e.mem.alloc(8);
-    loop {
-        // The end iterator: the cache's proxy and its head node. (The null
-        // check of the cache's address is always satisfied.)
-        let head = e.mem.u32(SPLINE_CACHE_HEAD);
-        let proxy = e.mem.u32(SPLINE_CACHE);
-        e.mem.set_u32(end, proxy);
-        e.mem.set_u32(end + 4, head);
-        if !e.call(ITERATOR_NOT_EQUAL, &args![iterator, end]).bool() {
-            break;
+    // The exe's frame (`SUB ESP,0x3c` under `EBP`): 0x3c bytes, the iterator at +0x34
+    // (`EBP-8`) and the end iterator at +0x2c (`EBP-0x10`).
+    e.with_stack(0x3c, |e, frame| {
+        let frame = frame.addr();
+        let iterator = frame + 0x34;
+        e.call(MAP_BEGIN, &args![SPLINE_CACHE, iterator]);
+        let end = frame + 0x2c;
+        loop {
+            // The end iterator: the cache's proxy and its head node. (The null
+            // check of the cache's address is always satisfied.)
+            let head = e.mem.u32(SPLINE_CACHE_HEAD);
+            let proxy = e.mem.u32(SPLINE_CACHE);
+            e.mem.set_u32(end, proxy);
+            e.mem.set_u32(end + 4, head);
+            if !e.call(ITERATOR_NOT_EQUAL, &args![iterator, end]).bool() {
+                break;
+            }
+            let pair = e.call(MAP_ITERATOR_VALUE, &args![iterator]).u32();
+            let spline = e.mem.u32(pair.wrapping_add(0x1c));
+            if spline != 0 {
+                e.call(SPLINE_DESTRUCTOR, &args![spline]);
+                // The scalar-deleting-destructor flag is the constant 1 here, so
+                // the delete always runs.
+                e.call(OPERATOR_DELETE, &args![spline]);
+            }
+            let pair = e.call(MAP_ITERATOR_VALUE, &args![iterator]).u32();
+            e.mem.set_u32(pair.wrapping_add(0x1c), 0);
+            e.call(MAP_ITERATOR_INCREMENT, &args![iterator]);
         }
-        let pair = e.call(MAP_ITERATOR_VALUE, &args![iterator]).u32();
-        let spline = e.mem.u32(pair.wrapping_add(0x1c));
-        if spline != 0 {
-            e.call(SPLINE_DESTRUCTOR, &args![spline]);
-            // The scalar-deleting-destructor flag is the constant 1 here, so
-            // the delete always runs.
-            e.call(OPERATOR_DELETE, &args![spline]);
-        }
-        let pair = e.call(MAP_ITERATOR_VALUE, &args![iterator]).u32();
-        e.mem.set_u32(pair.wrapping_add(0x1c), 0);
-        e.call(MAP_ITERATOR_INCREMENT, &args![iterator]);
-    }
-    e.call(MAP_CLEAR, &args![SPLINE_CACHE]);
-    e.mem.free(end);
-    e.mem.free(iterator);
+        e.call(MAP_CLEAR, &args![SPLINE_CACHE]);
+    });
 }
 
 // Translated from 00b37ad0 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -582,46 +585,49 @@ pub fn cidv_bezier_spline_evaluate(e: &mut Engine, this: Ptr<CIdvBezierSpline>, 
 /// floats) and the tangent length, which go to `AddPoint`. Anything else
 /// leaves the spline as it was.
 pub fn cidv_bezier_spline_parse(e: &mut Engine, this: Ptr<CIdvBezierSpline>, text: Ptr) {
-    let token = e.mem.alloc(0x100);
-    let numbers = e.mem.alloc(0x20);
-    let mut position = string_data(e, text.addr());
-    position = next_token(e, position, token);
-    if e.call(STRCMP, &args![token, BEZIER_SPLINE_TAG]).i32() == 0 {
-        for field in [
-            CIdvBezierSpline::m_fMin,
-            CIdvBezierSpline::m_fMax,
-            CIdvBezierSpline::m_fVariance,
-        ] {
-            position = next_token(e, position, token);
-            let value = e.call(ATOF, &args![token]).f64() as f32;
-            e.set(this, field, value);
-        }
+    // The exe's frame (`SUB ESP,0x12c` under `EBP`): 0x12c bytes, the token buffer at +0x24
+    // (`EBP-0x108`) and the numbers at +8 (point `EBP-0x124`, tangent `EBP-0x118`).
+    e.with_stack(0x12c, |e, frame| {
+        let frame = frame.addr();
+        let token = frame + 0x24;
+        let numbers = frame + 8;
+        let mut position = string_data(e, text.addr());
         position = next_token(e, position, token);
-        if e.mem.u8(token) as i8 as i32 == 0x7b {
+        if e.call(STRCMP, &args![token, BEZIER_SPLINE_TAG]).i32() == 0 {
+            for field in [
+                CIdvBezierSpline::m_fMin,
+                CIdvBezierSpline::m_fMax,
+                CIdvBezierSpline::m_fVariance,
+            ] {
+                position = next_token(e, position, token);
+                let value = e.call(ATOF, &args![token]).f64() as f32;
+                e.set(this, field, value);
+            }
             position = next_token(e, position, token);
-            let count = e.call(ATOL, &args![token]).i32();
-            let mut i = 0i32;
-            while i < count {
-                // Five numbers: the point (two floats), the tangent (two
-                // floats) and the tangent length. The buffer holds them as
-                // the exe does: point at +0 and +4, length at +8, tangent
-                // at +0xc and +0x10.
-                for offset in [0u32, 4, 0xc, 0x10, 8] {
-                    position = next_token(e, position, token);
-                    let value = e.call(ATOF, &args![token]).f64() as f32;
-                    e.mem.set_f32(numbers + offset, value);
+            if e.mem.u8(token) as i8 as i32 == 0x7b {
+                position = next_token(e, position, token);
+                let count = e.call(ATOL, &args![token]).i32();
+                let mut i = 0i32;
+                while i < count {
+                    // Five numbers: the point (two floats), the tangent (two
+                    // floats) and the tangent length. The buffer holds them as
+                    // the exe does: point at +0 and +4, length at +8, tangent
+                    // at +0xc and +0x10.
+                    for offset in [0u32, 4, 0xc, 0x10, 8] {
+                        position = next_token(e, position, token);
+                        let value = e.call(ATOF, &args![token]).f64() as f32;
+                        e.mem.set_f32(numbers + offset, value);
+                    }
+                    let length = x87_quiet_bits(e.mem.u32(numbers + 8));
+                    e.call(
+                        SPLINE_ADD_POINT,
+                        &args![this, numbers, numbers + 0xc, length],
+                    );
+                    i = i.wrapping_add(1);
                 }
-                let length = x87_quiet_bits(e.mem.u32(numbers + 8));
-                e.call(
-                    SPLINE_ADD_POINT,
-                    &args![this, numbers, numbers + 0xc, length],
-                );
-                i = i.wrapping_add(1);
             }
         }
-    }
-    e.mem.free(numbers);
-    e.mem.free(token);
+    });
 }
 
 // Translated from 00b37f50 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -719,11 +725,35 @@ pub fn fn_00b380e0(
     tangent: Ptr,
     length: f32,
 ) {
-    let new_point = e.mem.alloc(0x18);
+    // The exe's frame (`EBP` frame, exception record, `SUB ESP,0x274`, the cookie): 0x284 bytes
+    // below `EBP`, then the saved `EBP`, the return address and the three argument slots; the
+    // float pushed for the lengths is `length`'s own slot (`EBP+0x10`, +0x294). The new point
+    // at +0x260 (`EBP-0x24`), the new tangent at +0x248 (`EBP-0x3c`), the first scaled tangent
+    // and handle at +0x22c and +0x214 (`EBP-0x58`, `EBP-0x70`), the second at +0x1fc and +0x1e4
+    // (`EBP-0x88`, `EBP-0xa0`).
+    e.with_stack(0x298, |e, frame| {
+        let frame = frame.addr();
+        e.mem.set_u32(frame + 0x28c, point.addr());
+        e.mem.set_u32(frame + 0x290, tangent.addr());
+        e.mem.set_u32(frame + 0x294, length.to_bits());
+        add_point_in_frame(e, this, point, tangent, length, frame);
+    });
+}
+
+/// [`fn_00b380e0`] in the exe's frame (`frame` is its lowest address).
+fn add_point_in_frame(
+    e: &mut Engine,
+    this: Ptr<CIdvBezierSpline>,
+    point: Ptr,
+    tangent: Ptr,
+    length: f32,
+    frame: u32,
+) {
+    let new_point = frame + 0x260;
     let x = x87_quiet(e.mem.f32(point.addr()));
     let y = x87_quiet(e.mem.f32(point.addr() + 4));
     e.call(CVEC_FROM_TWO, &args![new_point, x, y]);
-    let new_tangent = e.mem.alloc(0x18);
+    let new_tangent = frame + 0x248;
     let x = x87_quiet(e.mem.f32(tangent.addr()));
     let y = x87_quiet(e.mem.f32(tangent.addr() + 4));
     e.call(CVEC_FROM_TWO, &args![new_tangent, x, y]);
@@ -744,48 +774,40 @@ pub fn fn_00b380e0(
         let previous_length = e.mem.u32(lengths + 0x0c).wrapping_add(last.wrapping_mul(4));
         check_index(e, last, element_count(e, tangents, 0x18));
         let previous_tangent = cvec_element(e, tangents, last);
-        let scaled = e.mem.alloc(0x18);
+        let scaled = frame + 0x22c;
         let factor = x87_quiet(e.mem.f32(previous_length));
         let scaled = e
             .call(CVEC_SCALE, &args![previous_tangent, scaled, factor])
             .u32();
         check_index(e, last, element_count(e, controls, 0x18));
         let previous_point = cvec_element(e, controls, last);
-        let handle = e.mem.alloc(0x18);
+        let handle = frame + 0x214;
         let handle = e
             .call(CVEC_ADD, &args![previous_point, handle, scaled])
             .u32();
         e.call(VECTOR_CVEC_PUSH_BACK, &args![spline_points, handle]);
         e.call(TRIVIAL_DESTRUCTOR, &args![handle]);
         e.call(TRIVIAL_DESTRUCTOR, &args![scaled]);
-        e.mem.free(handle);
-        e.mem.free(scaled);
 
-        let scaled = e.mem.alloc(0x18);
+        let scaled = frame + 0x1fc;
         let scaled = e
             .call(CVEC_SCALE, &args![new_tangent, scaled, x87_quiet(length)])
             .u32();
-        let handle = e.mem.alloc(0x18);
+        let handle = frame + 0x1e4;
         let handle = e
             .call(CVEC_SUBTRACT, &args![new_point, handle, scaled])
             .u32();
         e.call(VECTOR_CVEC_PUSH_BACK, &args![spline_points, handle]);
         e.call(TRIVIAL_DESTRUCTOR, &args![handle]);
         e.call(TRIVIAL_DESTRUCTOR, &args![scaled]);
-        e.mem.free(handle);
-        e.mem.free(scaled);
     }
     e.call(VECTOR_CVEC_PUSH_BACK, &args![controls, new_point]);
     e.call(VECTOR_CVEC_PUSH_BACK, &args![spline_points, new_point]);
     e.call(VECTOR_CVEC_PUSH_BACK, &args![tangents, new_tangent]);
-    let length_slot = e.mem.alloc(4);
-    e.mem.set_u32(length_slot, length.to_bits());
+    let length_slot = frame + 0x294;
     e.call(VECTOR_FLOAT_PUSH_BACK, &args![lengths, length_slot]);
-    e.mem.free(length_slot);
     e.call(TRIVIAL_DESTRUCTOR, &args![new_tangent]);
     e.call(TRIVIAL_DESTRUCTOR, &args![new_point]);
-    e.mem.free(new_tangent);
-    e.mem.free(new_point);
 }
 
 // Translated from 00b38430 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -798,9 +820,20 @@ pub fn fn_00b380e0(
 /// interpolation of the segment's second components. The first sample is the
 /// first control point, the last one the last control point.
 pub fn fn_00b38430(e: &mut Engine, this: Ptr<CIdvBezierSpline>, count: u32) {
-    let local = e.mem.alloc(0x18);
+    // The exe's frame (`EBP` frame, exception record, `SUB ESP,0x184`, the cookie): 0x194
+    // bytes. The local vector at +0x170 (`EBP-0x24`), the first blank vector at +0x10c
+    // (`EBP-0x88`) and the second at +0xc4 (`EBP-0xd0`), the point result at +0x12c
+    // (`EBP-0x68`) and the sample at +0x14c (`EBP-0x48`).
+    e.with_stack(0x194, |e, frame| {
+        resample_in_frame(e, this, count, frame.addr())
+    });
+}
+
+/// [`fn_00b38430`] in the exe's frame (`frame` is its lowest address).
+fn resample_in_frame(e: &mut Engine, this: Ptr<CIdvBezierSpline>, count: u32, frame: u32) {
+    let local = frame + 0x170;
     e.call(VECTOR_CVEC_CONSTRUCT, &args![local]);
-    let blank = e.mem.alloc(0x18);
+    let blank = frame + 0x10c;
     e.call(CVEC_DEFAULT, &args![blank]);
     let blank_value = cvec_words(e, blank);
     e.call(VECTOR_CVEC_RESIZE, &args![local, count, blank_value]);
@@ -809,22 +842,22 @@ pub fn fn_00b38430(e: &mut Engine, this: Ptr<CIdvBezierSpline>, count: u32) {
     let mut i = 0u32;
     while i < count {
         let u = ((i as u64 as i64 as f64) / (count as u64 as i64 as f64)) as f32;
-        let result = e.mem.alloc(0x18);
+        let result = frame + 0x12c;
         let point = e.call(SPLINE_POINT_AT, &args![this, result, u]).u32();
         check_index(e, i, element_count(e, local, 0x18));
         let destination = cvec_element(e, local, i);
         copy_cvec(e, point, destination);
         e.call(TRIVIAL_DESTRUCTOR, &args![result]);
-        e.mem.free(result);
         i = i.wrapping_add(1);
     }
 
     let samples = this.addr() + 0x54;
     e.call(VECTOR_CVEC_CLEAR, &args![samples]);
-    e.call(CVEC_DEFAULT, &args![blank]);
-    let blank_value = cvec_words(e, blank);
+    let second_blank = frame + 0xc4;
+    e.call(CVEC_DEFAULT, &args![second_blank]);
+    let blank_value = cvec_words(e, second_blank);
     e.call(VECTOR_CVEC_RESIZE, &args![samples, count, blank_value]);
-    e.call(TRIVIAL_DESTRUCTOR, &args![blank]);
+    e.call(TRIVIAL_DESTRUCTOR, &args![second_blank]);
 
     let mut start = 0u32;
     let controls = this.addr() + 0x0c;
@@ -861,7 +894,7 @@ pub fn fn_00b38430(e: &mut Engine, this: Ptr<CIdvBezierSpline>, count: u32) {
             }
             j = j.wrapping_add(1);
         }
-        let sample = e.mem.alloc(0x18);
+        let sample = frame + 0x14c;
         e.call(
             CVEC_FROM_FIVE,
             &args![sample, x87_quiet(t), 0.0f32, 0.0f32, 0.0f32, 0.0f32],
@@ -885,7 +918,6 @@ pub fn fn_00b38430(e: &mut Engine, this: Ptr<CIdvBezierSpline>, count: u32) {
         let destination = cvec_element(e, samples, k);
         copy_cvec(e, sample, destination);
         e.call(TRIVIAL_DESTRUCTOR, &args![sample]);
-        e.mem.free(sample);
         k = k.wrapping_add(1);
     }
 
@@ -901,8 +933,6 @@ pub fn fn_00b38430(e: &mut Engine, this: Ptr<CIdvBezierSpline>, count: u32) {
     e.call(VECTOR_CVEC_TIDY, &args![local]);
     let proxy = e.mem.u32(local);
     e.call(OPERATOR_DELETE, &args![proxy]);
-    e.mem.free(blank);
-    e.mem.free(local);
 }
 
 // Translated from 00b38b50 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -915,7 +945,22 @@ pub fn fn_00b38430(e: &mut Engine, this: Ptr<CIdvBezierSpline>, count: u32) {
 /// With fewer than two control points the result is the zero point of size 2.
 /// Returns `out`.
 pub fn fn_00b38b50(e: &mut Engine, this: Ptr<CIdvBezierSpline>, out: Ptr, t: f32) -> Ptr {
-    let result = e.mem.alloc(0x18);
+    // The exe's frame (`EBP` frame, exception record, `SUB ESP,0xa8`, the cookie): 0xb8 bytes,
+    // the result at +0x90 (`EBP-0x28`) and the segment point at +0x64 (`EBP-0x54`).
+    e.with_stack(0xb8, |e, frame| {
+        point_at_in_frame(e, this, out, t, frame.addr())
+    })
+}
+
+/// [`fn_00b38b50`] in the exe's frame (`frame` is its lowest address).
+fn point_at_in_frame(
+    e: &mut Engine,
+    this: Ptr<CIdvBezierSpline>,
+    out: Ptr,
+    t: f32,
+    frame: u32,
+) -> Ptr {
+    let result = frame + 0x90;
     e.call(CVEC_SIZED, &args![result, 2u32]);
     let controls = this.addr() + 0x0c;
     let count = element_count(e, controls, 0x18);
@@ -947,7 +992,7 @@ pub fn fn_00b38b50(e: &mut Engine, this: Ptr<CIdvBezierSpline>, out: Ptr, t: f32
                     check_index(e, index, element_count(e, spline_points, 0x18));
                     addresses[slot] = cvec_element(e, spline_points, index);
                 }
-                let temporary = e.mem.alloc(0x18);
+                let temporary = frame + 0x64;
                 let point = e
                     .call(
                         0x00b3_8f40,
@@ -964,7 +1009,6 @@ pub fn fn_00b38b50(e: &mut Engine, this: Ptr<CIdvBezierSpline>, out: Ptr, t: f32
                     .u32();
                 copy_cvec(e, point, result);
                 e.call(TRIVIAL_DESTRUCTOR, &args![temporary]);
-                e.mem.free(temporary);
                 found = true;
             }
             i = i.wrapping_add(1);
@@ -972,7 +1016,6 @@ pub fn fn_00b38b50(e: &mut Engine, this: Ptr<CIdvBezierSpline>, out: Ptr, t: f32
     }
     copy_cvec(e, result, out.addr());
     e.call(TRIVIAL_DESTRUCTOR, &args![result]);
-    e.mem.free(result);
     out
 }
 
@@ -1074,14 +1117,37 @@ pub fn cvec_normalize(e: &mut Engine, this: Ptr<CVec>) {
 /// components `0..this.size` and the six words copied to `out`. A size above
 /// 6 would write past the local into the caller's frame; every `CVec`
 /// constructor limits the size to 5, so that case is unreachable.
+/// The local sits at `local_offset` of the operator's `frame_size`-byte frame (the exception
+/// record, `SUB ESP` and the cookie under `EBP`).
 fn cvec_combine(
     e: &mut Engine,
     this: Ptr<CVec>,
     out: Ptr<CVec>,
     local_size: i32,
+    (frame_size, local_offset): (u32, u32),
+    component: impl FnMut(&Engine, i32) -> f32,
+) -> Ptr<CVec> {
+    e.with_stack(frame_size, |e, frame| {
+        combine_into(
+            e,
+            this,
+            out,
+            local_size,
+            frame.addr() + local_offset,
+            component,
+        )
+    })
+}
+
+/// [`cvec_combine`] with its local `CVec` at `local`.
+fn combine_into(
+    e: &mut Engine,
+    this: Ptr<CVec>,
+    out: Ptr<CVec>,
+    local_size: i32,
+    local: u32,
     mut component: impl FnMut(&Engine, i32) -> f32,
 ) -> Ptr<CVec> {
-    let local = e.mem.alloc(0x18);
     e.call(CVEC_SIZED, &args![local, local_size]);
     let mut i = 0i32;
     while i < e.get(this, CVec::m_nSize) {
@@ -1093,7 +1159,6 @@ fn cvec_combine(
     }
     copy_cvec(e, local, out.addr());
     e.call(TRIVIAL_DESTRUCTOR, &args![local]);
-    e.mem.free(local);
     out
 }
 
@@ -1106,7 +1171,8 @@ pub fn cvec_add(e: &mut Engine, this: Ptr<CVec>, out: Ptr<CVec>, other: Ptr<CVec
     let size = e.get(this, CVec::m_nSize);
     let other_size = e.get(other, CVec::m_nSize);
     let local_size = if size < other_size { size } else { other_size };
-    cvec_combine(e, this, out, local_size, |e, i| {
+    // The frame: 0x38 bytes, the local at +0x14 (`EBP-0x24`).
+    cvec_combine(e, this, out, local_size, (0x38, 0x14), |e, i| {
         let offset = (i as u32).wrapping_mul(4);
         let a = e.mem.f32(this.addr().wrapping_add(offset));
         let b = e.mem.f32(other.addr().wrapping_add(offset));
@@ -1128,7 +1194,8 @@ pub fn cvec_subtract(
     let size = e.get(this, CVec::m_nSize);
     let other_size = e.get(other, CVec::m_nSize);
     let local_size = if size < other_size { size } else { other_size };
-    cvec_combine(e, this, out, local_size, |e, i| {
+    // The frame: 0x38 bytes, the local at +0x14 (`EBP-0x24`).
+    cvec_combine(e, this, out, local_size, (0x38, 0x14), |e, i| {
         let offset = (i as u32).wrapping_mul(4);
         let a = e.mem.f32(this.addr().wrapping_add(offset));
         let b = e.mem.f32(other.addr().wrapping_add(offset));
@@ -1143,7 +1210,8 @@ pub fn cvec_subtract(
 /// `f32`. Returns `out`.
 pub fn cvec_scale(e: &mut Engine, this: Ptr<CVec>, out: Ptr<CVec>, factor: f32) -> Ptr<CVec> {
     let size = e.get(this, CVec::m_nSize);
-    cvec_combine(e, this, out, size, |e, i| {
+    // The frame: 0x34 bytes, the local at +0x10 (`EBP-0x24`).
+    cvec_combine(e, this, out, size, (0x34, 0x10), |e, i| {
         let offset = (i as u32).wrapping_mul(4);
         let a = e.mem.f32(this.addr().wrapping_add(offset));
         (a as f64 * factor as f64) as f32
@@ -1189,9 +1257,12 @@ pub fn cvec_vector_push_back(e: &mut Engine, this: Ptr<StdVector>, value: Ptr) {
         let end = e.mem.u32(vector + 0x10);
         check_position(e, vector, end);
         let proxy = e.mem.u32(vector);
-        let out = e.mem.alloc(8);
-        e.call(VECTOR_CVEC_INSERT_ONE, &args![this, out, proxy, end, value]);
-        e.mem.free(out);
+        // The exe's frame (`SUB ESP,0x60` under `EBP`): the returned iterator at +0x48
+        // (`EBP-0x18`).
+        e.with_stack(0x60, |e, frame| {
+            let out = frame.addr() + 0x48;
+            e.call(VECTOR_CVEC_INSERT_ONE, &args![this, out, proxy, end, value]);
+        });
     }
 }
 
@@ -1270,15 +1341,17 @@ pub fn cvec_vector_insert_one(
     );
     let first = e.mem.u32(vector + 0x0c);
     check_position(e, vector, first);
-    let iterator = e.mem.alloc(8);
-    e.mem.set_u32(iterator, e.mem.u32(vector));
-    e.mem.set_u32(iterator + 4, first);
-    e.call(ITERATOR_ADVANCE, &args![iterator, offset]);
-    let proxy = e.mem.u32(iterator);
-    let position = e.mem.u32(iterator + 4);
-    e.mem.set_u32(out.addr(), proxy);
-    e.mem.set_u32(out.addr() + 4, position);
-    e.mem.free(iterator);
+    // The exe's frame (`SUB ESP,0x34` under `EBP`): the iterator at +0x10 (`EBP-0x24`).
+    e.with_stack(0x34, |e, frame| {
+        let iterator = frame.addr() + 0x10;
+        e.mem.set_u32(iterator, e.mem.u32(vector));
+        e.mem.set_u32(iterator + 4, first);
+        e.call(ITERATOR_ADVANCE, &args![iterator, offset]);
+        let proxy = e.mem.u32(iterator);
+        let position = e.mem.u32(iterator + 4);
+        e.mem.set_u32(out.addr(), proxy);
+        e.mem.set_u32(out.addr() + 4, position);
+    });
     out
 }
 
@@ -1315,8 +1388,26 @@ pub fn cvec_vector_tidy(e: &mut Engine, this: Ptr<StdVector>) {
 /// `value` (insert at the end) or erases the elements from `new_size` on. The
 /// sizes are compared as unsigned numbers.
 pub fn cvec_vector_resize(e: &mut Engine, this: Ptr<StdVector>, new_size: u32, value: CVecArg) {
+    // The exe's frame (`EBP` frame, exception record, `SUB ESP,0xb8`, the cookie): 0xc8 bytes
+    // below `EBP`, then the saved `EBP`, the return address, `new_size` (+0xd0) and the `CVec`
+    // passed by value (+0xd4, `EBP+0xc`), which is the copy inserted. The advanced iterator at
+    // +0x68 (`EBP-0x60`) and the erase result at +0x7c (`EBP-0x4c`).
+    e.with_stack(0xec, |e, frame| {
+        resize_in_frame(e, this, new_size, value, frame.addr())
+    });
+}
+
+/// [`cvec_vector_resize`] in the exe's frame (`frame` is its lowest address).
+fn resize_in_frame(
+    e: &mut Engine,
+    this: Ptr<StdVector>,
+    new_size: u32,
+    value: CVecArg,
+    frame: u32,
+) {
     let vector = this.addr();
-    let copy = e.mem.alloc(0x18);
+    e.mem.set_u32(frame + 0xd0, new_size);
+    let copy = frame + 0xd4;
     for (i, word) in value.0.iter().enumerate() {
         e.mem.set_u32(copy + 4 * i as u32, *word);
     }
@@ -1336,22 +1427,19 @@ pub fn cvec_vector_resize(e: &mut Engine, this: Ptr<StdVector>, new_size: u32, v
         let first = e.mem.u32(vector + 0x0c);
         check_position(e, vector, first);
         let first_proxy = e.mem.u32(vector);
-        let iterator = e.mem.alloc(8);
+        let iterator = frame + 0x68;
         e.mem.set_u32(iterator, first_proxy);
         e.mem.set_u32(iterator + 4, first);
         e.call(ITERATOR_ADVANCE, &args![iterator, new_size]);
         let erase_proxy = e.mem.u32(iterator);
         let erase_position = e.mem.u32(iterator + 4);
-        let result = e.mem.alloc(8);
+        let result = frame + 0x7c;
         e.call(
             VECTOR_CVEC_ERASE,
             &args![this, result, erase_proxy, erase_position, last_proxy, last],
         );
-        e.mem.free(result);
-        e.mem.free(iterator);
     }
     e.call(TRIVIAL_DESTRUCTOR, &args![copy]);
-    e.mem.free(copy);
 }
 
 // Translated from 00b3a0d0 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -1449,49 +1537,53 @@ pub fn cvec_vector_insert_n(
     }
     let last = e.mem.u32(vector + 0x10);
     let tail = (last.wrapping_sub(position) as i32 / 0x18) as u32;
-    let local = e.mem.alloc(0x18);
-    copy_cvec(e, value.addr(), local);
-    let span = count.wrapping_mul(0x18);
-    if tail < count {
-        e.call(
-            CVEC_RANGE_COPY_ALIAS,
-            &args![position, last, position.wrapping_add(span), vector + 8],
-        );
-        let tail = (e.mem.u32(vector + 0x10).wrapping_sub(position) as i32 / 0x18) as u32;
-        let missing = count.wrapping_sub(tail);
-        let old_last = e.mem.u32(vector + 0x10);
-        e.call(
-            VECTOR_CVEC_FILL,
-            &args![old_last, missing, local, vector + 8, 0u32, 0u32],
-        );
-        let grown = span.wrapping_add(e.mem.u32(vector + 0x10));
-        e.mem.set_u32(vector + 0x10, grown);
-        let end = e.mem.u32(vector + 0x10).wrapping_sub(span);
-        let mut element = position;
-        while element != end {
-            copy_cvec(e, local, element);
-            element = element.wrapping_add(0x18);
-        }
-    } else {
-        let moved_from = last.wrapping_sub(span);
-        let current_last = e.mem.u32(vector + 0x10);
-        let new_last = e
-            .call(
+    // The exe's frame (`EBP` frame, exception record, `SUB ESP,0x248`, the cookie): 0x258
+    // bytes. The copy of `value` is at +0x224 (`EBP-0x34`) when the tail is shorter than
+    // `count`, else at +0x208 (`EBP-0x50`).
+    e.with_stack(0x258, |e, frame| {
+        let local = frame.addr() + if tail < count { 0x224 } else { 0x208 };
+        copy_cvec(e, value.addr(), local);
+        let span = count.wrapping_mul(0x18);
+        if tail < count {
+            e.call(
                 CVEC_RANGE_COPY_ALIAS,
-                &args![moved_from, last, current_last, vector + 8],
-            )
-            .u32();
-        e.mem.set_u32(vector + 0x10, new_last);
-        e.call(COPY_BACKWARD, &args![position, moved_from, last]);
-        let end = span.wrapping_add(position);
-        let mut element = position;
-        while element != end {
-            copy_cvec(e, local, element);
-            element = element.wrapping_add(0x18);
+                &args![position, last, position.wrapping_add(span), vector + 8],
+            );
+            let tail = (e.mem.u32(vector + 0x10).wrapping_sub(position) as i32 / 0x18) as u32;
+            let missing = count.wrapping_sub(tail);
+            let old_last = e.mem.u32(vector + 0x10);
+            e.call(
+                VECTOR_CVEC_FILL,
+                &args![old_last, missing, local, vector + 8, 0u32, 0u32],
+            );
+            let grown = span.wrapping_add(e.mem.u32(vector + 0x10));
+            e.mem.set_u32(vector + 0x10, grown);
+            let end = e.mem.u32(vector + 0x10).wrapping_sub(span);
+            let mut element = position;
+            while element != end {
+                copy_cvec(e, local, element);
+                element = element.wrapping_add(0x18);
+            }
+        } else {
+            let moved_from = last.wrapping_sub(span);
+            let current_last = e.mem.u32(vector + 0x10);
+            let new_last = e
+                .call(
+                    CVEC_RANGE_COPY_ALIAS,
+                    &args![moved_from, last, current_last, vector + 8],
+                )
+                .u32();
+            e.mem.set_u32(vector + 0x10, new_last);
+            e.call(COPY_BACKWARD, &args![position, moved_from, last]);
+            let end = span.wrapping_add(position);
+            let mut element = position;
+            while element != end {
+                copy_cvec(e, local, element);
+                element = element.wrapping_add(0x18);
+            }
         }
-    }
-    e.call(TRIVIAL_DESTRUCTOR, &args![local]);
-    e.mem.free(local);
+        e.call(TRIVIAL_DESTRUCTOR, &args![local]);
+    });
 }
 
 // Translated from 00b3b5a0 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -1950,10 +2042,14 @@ pub fn fn_00b3b9f0(e: &mut Engine, this: Ptr, _comparator: u32, _allocator: u32)
 /// tree. The second argument is not read. Returns `this`.
 pub fn fn_00b3b770(e: &mut Engine, this: Ptr, comparator: Ptr, _allocator: u32) -> Ptr {
     let byte = e.mem.u8(comparator.addr()) as u32;
-    let allocator = e.mem.alloc(4);
-    e.call(TREE_PROXY_NEW, &args![this, byte, allocator]);
-    e.call(TREE_INIT, &args![this]);
-    e.mem.free(allocator);
+    // The exe's frame (`EBP` frame, exception record, `SUB ESP,0x3c`, the cookie): 0x4c bytes.
+    // The allocator goes by value in a slot made by `PUSH ECX` while `ECX` holds the address
+    // of the byte at +0x1e (`EBP-0x2e`, 00b3b79e), so that address is the word pushed.
+    e.with_stack(0x4c, |e, frame| {
+        let allocator = frame.addr() + 0x1e;
+        e.call(TREE_PROXY_NEW, &args![this, byte, allocator]);
+        e.call(TREE_INIT, &args![this]);
+    });
     this
 }
 
@@ -1973,12 +2069,14 @@ pub fn fn_00b3ba90(e: &mut Engine, this: Ptr) {
         e.call(INVALID_PARAMETER, &args![]);
     }
     let begin_proxy = e.mem.u32(map);
-    let out = e.mem.alloc(8);
-    e.call(
-        TREE_ERASE_RANGE,
-        &args![this, out, begin_proxy, begin, end_proxy, head],
-    );
-    e.mem.free(out);
+    // The exe's frame (`SUB ESP,0x8c` under `EBP`): the erase result at +0x64 (`EBP-0x28`).
+    e.with_stack(0x8c, |e, frame| {
+        let out = frame.addr() + 0x64;
+        e.call(
+            TREE_ERASE_RANGE,
+            &args![this, out, begin_proxy, begin, end_proxy, head],
+        );
+    });
     let head = map_head(e, map);
     e.call(OPERATOR_DELETE, &args![head]);
     e.mem.set_u32(map + 0x18, 0);
@@ -2112,7 +2210,25 @@ pub fn fn_00b3ac00(
 /// equal-keys block, so `equal_keys` is always false there: a `map` never
 /// holds equal keys, and the block is the `multimap` form of the template,
 /// kept by the compiler's branch folding as unreachable code.
+///
+/// The exe's frame (`SUB ESP,0xb8` under `EBP`): 0xb8 bytes, the iterator `j` at +0xa4
+/// (`EBP-0x14`), the begin iterator at +0x90 (`EBP-0x28`), and the `_Insert` results of the
+/// three calls at +0x98, +0x84 and +0x78 (`EBP-0x20`, `EBP-0x34`, `EBP-0x40`).
 fn insert_unique(e: &mut Engine, this: Ptr, out: Ptr, pair: Ptr, equal_keys: bool) -> Ptr {
+    e.with_stack(0xb8, |e, frame| {
+        insert_unique_in_frame(e, this, out, pair, equal_keys, frame.addr())
+    })
+}
+
+/// [`insert_unique`] in the exe's frame (`frame` is its lowest address).
+fn insert_unique_in_frame(
+    e: &mut Engine,
+    this: Ptr,
+    out: Ptr,
+    pair: Ptr,
+    equal_keys: bool,
+    frame: u32,
+) -> Ptr {
     let map = this.addr();
     let head = map_head(e, map);
     let mut x = node_parent(e, head);
@@ -2127,49 +2243,44 @@ fn insert_unique(e: &mut Engine, this: Ptr, out: Ptr, pair: Ptr, equal_keys: boo
             node_right(e, x)
         };
     }
-    let scratch = e.mem.alloc(0x28);
-    let result = scratch + 0x10;
     if equal_keys {
         // Unreachable (see above): always insert, with `true` as the flag.
-        let inserted = insert_node(e, map, result, left as u32, y, pair.addr());
+        let inserted = insert_node(e, map, frame + 0x98, left as u32, y, pair.addr());
         let proxy = e.mem.u32(inserted);
         let node = e.mem.u32(inserted + 4);
         e.mem.set_u32(out.addr(), proxy);
         e.mem.set_u32(out.addr() + 4, node);
         e.mem.set_u8(out.addr() + 8, 1);
-        e.mem.free(scratch);
         return out;
     }
-    let j = scratch;
+    let j = frame + 0xa4;
     e.call(MAP_ITERATOR_NEW, &args![j, y, this]);
     if left {
-        let begin = scratch + 8;
+        let begin = frame + 0x90;
         let first = node_left(e, map_head(e, map));
         e.call(MAP_ITERATOR_NEW, &args![begin, first, this]);
         let j_proxy = e.mem.u32(j);
         let begin_proxy = e.mem.u32(begin);
         check_proxy(e, j_proxy, begin_proxy);
         if e.mem.u32(j + 4) == e.mem.u32(begin + 4) {
-            let inserted = insert_node(e, map, result, 1, y, pair.addr());
+            let inserted = insert_node(e, map, frame + 0x84, 1, y, pair.addr());
             let proxy = e.mem.u32(inserted);
             let node = e.mem.u32(inserted + 4);
             e.mem.set_u32(out.addr(), proxy);
             e.mem.set_u32(out.addr() + 4, node);
             e.mem.set_u8(out.addr() + 8, 1);
-            e.mem.free(scratch);
             return out;
         }
         e.call(MAP_ITERATOR_DECREMENT, &args![j]);
     }
     let previous = e.mem.u32(j + 4);
     if key_less(e, previous.wrapping_add(0xc), pair.addr()) {
-        let inserted = insert_node(e, map, result, left as u32, y, pair.addr());
+        let inserted = insert_node(e, map, frame + 0x78, left as u32, y, pair.addr());
         let proxy = e.mem.u32(inserted);
         let node = e.mem.u32(inserted + 4);
         e.mem.set_u32(out.addr(), proxy);
         e.mem.set_u32(out.addr() + 4, node);
         e.mem.set_u8(out.addr() + 8, 1);
-        e.mem.free(scratch);
         return out;
     }
     let proxy = e.mem.u32(j);
@@ -2177,7 +2288,6 @@ fn insert_unique(e: &mut Engine, this: Ptr, out: Ptr, pair: Ptr, equal_keys: boo
     e.mem.set_u32(out.addr(), proxy);
     e.mem.set_u32(out.addr() + 4, node);
     e.mem.set_u8(out.addr() + 8, 0);
-    e.mem.free(scratch);
     out
 }
 
@@ -2193,10 +2303,22 @@ pub fn fn_00b3a9b0(e: &mut Engine, this: Ptr, out: Ptr, pair: Ptr) -> Ptr {
     insert_unique(e, this, out, pair, false)
 }
 
+/// The iterator locals of the hint insert in `00b398c0`'s frame: the hint (the argument
+/// itself), the begin and end iterators, the iterator stepped back or forward, and the end
+/// iterator compared with the step forward.
+#[derive(Clone, Copy)]
+struct HintSlots {
+    hint: u32,
+    begin: u32,
+    end: u32,
+    step: u32,
+    last: u32,
+}
+
 /// The hint insert's body for equal keys (`multimap`): the block that the
 /// exe's code skips with a constant-false test, translated as written. Returns
 /// whether it inserted (the result is in `out`); false falls to the plain
-/// insert. `scratch` holds the iterators.
+/// insert. `slots` are its iterator locals.
 fn hint_insert_equal_keys(
     e: &mut Engine,
     this: u32,
@@ -2204,11 +2326,11 @@ fn hint_insert_equal_keys(
     hint_proxy: u32,
     hint_node: u32,
     pair: u32,
-    scratch: u32,
+    slots: HintSlots,
 ) -> bool {
     let head = map_head(e, this);
     let first = node_left(e, head);
-    let begin = scratch + 8;
+    let begin = slots.begin;
     e.call(MAP_ITERATOR_NEW, &args![begin, first, this]);
     let begin_proxy = e.mem.u32(begin);
     check_proxy(e, hint_proxy, begin_proxy);
@@ -2219,7 +2341,7 @@ fn hint_insert_equal_keys(
         insert_node(e, this, out, 1, hint_node, pair);
         return true;
     }
-    let end = scratch + 0x10;
+    let end = slots.end;
     let head = map_head(e, this);
     e.call(MAP_ITERATOR_NEW, &args![end, head, this]);
     let end_proxy = e.mem.u32(end);
@@ -2234,7 +2356,7 @@ fn hint_insert_equal_keys(
         return true;
     }
     if !key_less(e, hint_node.wrapping_add(0xc), pair) {
-        let previous = scratch + 0x18;
+        let previous = slots.step;
         e.mem.set_u32(previous, hint_proxy);
         e.mem.set_u32(previous + 4, hint_node);
         e.call(MAP_ITERATOR_DECREMENT, &args![previous]);
@@ -2251,10 +2373,10 @@ fn hint_insert_equal_keys(
     if key_less(e, pair, hint_node.wrapping_add(0xc)) {
         return false;
     }
-    let next = scratch + 0x18;
+    let next = slots.step;
     e.mem.set_u32(next, hint_proxy);
     e.mem.set_u32(next + 4, hint_node);
-    let end = scratch + 0x20;
+    let end = slots.last;
     let head = map_head(e, this);
     e.call(MAP_ITERATOR_NEW, &args![end, head, this]);
     e.call(MAP_ITERATOR_INCREMENT, &args![next]);
@@ -2284,12 +2406,12 @@ fn hint_insert_unique(
     hint_proxy: u32,
     hint_node: u32,
     pair: u32,
-    scratch: u32,
+    slots: HintSlots,
 ) -> bool {
-    let hint = scratch;
+    let hint = slots.hint;
     e.mem.set_u32(hint, hint_proxy);
     e.mem.set_u32(hint + 4, hint_node);
-    let begin = scratch + 8;
+    let begin = slots.begin;
     let first = node_left(e, map_head(e, this));
     e.call(MAP_ITERATOR_NEW, &args![begin, first, this]);
     if e.call(ITERATOR_EQUAL, &args![hint, begin]).bool() {
@@ -2299,7 +2421,7 @@ fn hint_insert_unique(
         }
         return false;
     }
-    let end = scratch + 0x10;
+    let end = slots.end;
     let head = map_head(e, this);
     e.call(MAP_ITERATOR_NEW, &args![end, head, this]);
     if e.call(ITERATOR_EQUAL, &args![hint, end]).bool() {
@@ -2312,7 +2434,7 @@ fn hint_insert_unique(
         return false;
     }
     if key_less(e, pair, hint_node.wrapping_add(0xc)) {
-        let previous = scratch + 0x18;
+        let previous = slots.step;
         e.mem.set_u32(previous, hint_proxy);
         e.mem.set_u32(previous + 4, hint_node);
         e.call(MAP_ITERATOR_DECREMENT, &args![previous]);
@@ -2327,10 +2449,10 @@ fn hint_insert_unique(
         }
     }
     if key_less(e, hint_node.wrapping_add(0xc), pair) {
-        let next = scratch + 0x18;
+        let next = slots.step;
         e.mem.set_u32(next, hint_proxy);
         e.mem.set_u32(next + 4, hint_node);
-        let end = scratch + 0x20;
+        let end = slots.last;
         let head = map_head(e, this);
         e.call(MAP_ITERATOR_NEW, &args![end, head, this]);
         e.call(MAP_ITERATOR_INCREMENT, &args![next]);
@@ -2367,37 +2489,58 @@ fn insert_with_hint(
         insert_node(e, map, out.addr(), 1, head, pair.addr());
         return out;
     }
-    let scratch = e.mem.alloc(0x40);
-    let inserted = if equal_keys {
-        hint_insert_equal_keys(
-            e,
-            map,
-            out.addr(),
-            hint_proxy,
-            hint_node,
-            pair.addr(),
-            scratch,
-        )
-    } else {
-        hint_insert_unique(
-            e,
-            map,
-            out.addr(),
-            hint_proxy,
-            hint_node,
-            pair.addr(),
-            scratch,
-        )
-    };
-    if !inserted {
-        let plain = scratch + 0x30;
-        let result = e.call(TREE_INSERT_UNIQUE, &args![this, plain, pair]).u32();
-        let proxy = e.mem.u32(result);
-        let node = e.mem.u32(result + 4);
-        e.mem.set_u32(out.addr(), proxy);
-        e.mem.set_u32(out.addr() + 4, node);
-    }
-    e.mem.free(scratch);
+    // The exe's frame (`SUB ESP,0x1c0` under `EBP`): 0x1c0 bytes, then the saved `EBP`, the
+    // return address and the arguments (`out` +0x1c8, the hint +0x1cc, `pair` +0x1d4). The
+    // unique path's iterators: begin +0x198 (`EBP-0x28`), end +0x190 (`EBP-0x30`), the step
+    // +0x1b8 (`EBP-8`), the end compared with it +0x188 (`EBP-0x38`); the equal-keys block's:
+    // +0x1b0, +0x1a8, +0x1b8, +0x1a0 (`EBP-0x10`, `-0x18`, `-8`, `-0x20`). The plain insert's
+    // result at +0x17c (`EBP-0x44`).
+    e.with_stack(0x1d8, |e, frame| {
+        let frame = frame.addr();
+        let inserted = if equal_keys {
+            let slots = HintSlots {
+                hint: frame + 0x1cc,
+                begin: frame + 0x1b0,
+                end: frame + 0x1a8,
+                step: frame + 0x1b8,
+                last: frame + 0x1a0,
+            };
+            hint_insert_equal_keys(
+                e,
+                map,
+                out.addr(),
+                hint_proxy,
+                hint_node,
+                pair.addr(),
+                slots,
+            )
+        } else {
+            let slots = HintSlots {
+                hint: frame + 0x1cc,
+                begin: frame + 0x198,
+                end: frame + 0x190,
+                step: frame + 0x1b8,
+                last: frame + 0x188,
+            };
+            hint_insert_unique(
+                e,
+                map,
+                out.addr(),
+                hint_proxy,
+                hint_node,
+                pair.addr(),
+                slots,
+            )
+        };
+        if !inserted {
+            let plain = frame + 0x17c;
+            let result = e.call(TREE_INSERT_UNIQUE, &args![this, plain, pair]).u32();
+            let proxy = e.mem.u32(result);
+            let node = e.mem.u32(result + 4);
+            e.mem.set_u32(out.addr(), proxy);
+            e.mem.set_u32(out.addr() + 4, node);
+        }
+    });
     out
 }
 
@@ -2472,28 +2615,33 @@ pub fn fn_00b3bb90(
             return out;
         }
     }
-    let cursor = e.mem.alloc(0x10);
-    e.mem.set_u32(cursor, first_proxy);
-    e.mem.set_u32(cursor + 4, first_node);
-    if first_proxy == 0 || first_proxy != last_proxy {
-        e.call(INVALID_PARAMETER, &args![]);
-    }
-    while e.mem.u32(cursor + 4) != last_node {
-        let saved_proxy = e.mem.u32(cursor);
-        let saved_node = e.mem.u32(cursor + 4);
-        e.call(MAP_ITERATOR_INCREMENT, &args![cursor]);
-        let erased = e.mem.alloc(8);
-        e.call(
-            TREE_ERASE_ONE,
-            &args![this, erased, saved_proxy, saved_node],
-        );
-        e.mem.free(erased);
-        if e.mem.u32(cursor) == 0 || e.mem.u32(cursor) != last_proxy {
+    // The exe's frame (`SUB ESP,0x5c` under `EBP`): 0x5c bytes, then the saved `EBP`, the
+    // return address and the arguments (`out` +0x64, `first` +0x68, `last` +0x70). The cursor
+    // is the `first` argument itself (`EBP+0xc`, 00b3bd05); the erase result is at +0x3c
+    // (`EBP-0x20`).
+    let node = e.with_stack(0x78, |e, frame| {
+        let frame = frame.addr();
+        let cursor = frame + 0x68;
+        e.mem.set_u32(cursor, first_proxy);
+        e.mem.set_u32(cursor + 4, first_node);
+        if first_proxy == 0 || first_proxy != last_proxy {
             e.call(INVALID_PARAMETER, &args![]);
         }
-    }
-    let node = e.mem.u32(cursor + 4);
-    e.mem.free(cursor);
+        while e.mem.u32(cursor + 4) != last_node {
+            let saved_proxy = e.mem.u32(cursor);
+            let saved_node = e.mem.u32(cursor + 4);
+            e.call(MAP_ITERATOR_INCREMENT, &args![cursor]);
+            let erased = frame + 0x3c;
+            e.call(
+                TREE_ERASE_ONE,
+                &args![this, erased, saved_proxy, saved_node],
+            );
+            if e.mem.u32(cursor) == 0 || e.mem.u32(cursor) != last_proxy {
+                e.call(INVALID_PARAMETER, &args![]);
+            }
+        }
+        e.mem.u32(cursor + 4)
+    });
     e.mem.set_u32(out.addr(), 0);
     e.mem.set_u32(out.addr() + 4, node);
     if map == 0 {
@@ -2525,12 +2673,16 @@ pub fn fn_00b3bd80(e: &mut Engine, this: Ptr, out: Ptr, iterator_proxy: u32, nod
         );
     }
     let erased = node;
-    let cursor = e.mem.alloc(8);
-    e.mem.set_u32(cursor, iterator_proxy);
-    e.mem.set_u32(cursor + 4, node);
-    e.call(MAP_ITERATOR_INCREMENT, &args![cursor]);
-    let successor = e.mem.u32(cursor + 4);
-    e.mem.free(cursor);
+    // The exe's frame (`EBP` frame, exception record, `SUB ESP,0xfc`, the cookie): 0x10c bytes,
+    // then the saved `EBP`, the return address and the arguments; the iterator stepped is the
+    // argument itself (`EBP+0xc`, +0x118, 00b3be0d).
+    let successor = e.with_stack(0x120, |e, frame| {
+        let cursor = frame.addr() + 0x118;
+        e.mem.set_u32(cursor, iterator_proxy);
+        e.mem.set_u32(cursor + 4, node);
+        e.call(MAP_ITERATOR_INCREMENT, &args![cursor]);
+        e.mem.u32(cursor + 4)
+    });
     let (y, x) = if node_is_nil(e, node_left(e, erased)) {
         (erased, node_right(e, erased))
     } else if node_is_nil(e, node_right(e, erased)) {
@@ -2722,44 +2874,47 @@ pub fn fn_00b3bd80(e: &mut Engine, this: Ptr, out: Ptr, iterator_proxy: u32, nod
 pub fn fn_00b39210(e: &mut Engine, this: Ptr, key: Ptr) -> u32 {
     let map = this.addr();
     let node = e.call(MAP_LOWER_BOUND, &args![this, key]).u32();
-    let iterator = e.mem.alloc(8);
-    e.mem.set_u32(iterator, 0);
-    e.mem.set_u32(iterator + 4, node);
-    let head = map_head(e, map);
-    if map == 0 {
-        e.call(INVALID_PARAMETER, &args![]);
-    }
-    let proxy = e.mem.u32(map);
-    e.mem.set_u32(iterator, proxy);
-    if map == 0 {
-        e.call(INVALID_PARAMETER, &args![]);
-    }
-    let end_proxy = e.mem.u32(map);
-    check_proxy(e, proxy, end_proxy);
-    if node == head || key_less(e, key.addr(), node.wrapping_add(0xc)) {
-        let pair = e.mem.alloc(0x20);
-        e.mem.set_u32(pair + 0x1c, 0);
-        e.call(STRING_TIDY, &args![pair, 0u32, 0u32]);
-        let npos = e.global::<u32>(STRING_NPOS);
-        e.call(STRING_ASSIGN, &args![pair, key, 0u32, npos]);
-        e.mem.set_u32(pair + 0x1c, 0);
-        let hint_proxy = e.mem.u32(iterator);
-        let hint_node = e.mem.u32(iterator + 4);
-        let out = e.mem.alloc(8);
-        let result = e
-            .call(MAP_INSERT, &args![this, out, hint_proxy, hint_node, pair])
-            .u32();
-        let new_proxy = e.mem.u32(result);
-        let new_node = e.mem.u32(result + 4);
-        e.mem.set_u32(iterator, new_proxy);
-        e.mem.set_u32(iterator + 4, new_node);
-        e.call(STRING_TIDY, &args![pair, 1u32, 0u32]);
-        e.mem.free(out);
-        e.mem.free(pair);
-    }
-    let value = e.call(MAP_ITERATOR_VALUE, &args![iterator]).u32();
-    e.mem.free(iterator);
-    value.wrapping_add(0x1c)
+    // The exe's frame (`EBP` frame, exception record, `SUB ESP,0x7c`, the cookie): 0x8c bytes,
+    // the iterator at +0x78 (`EBP-0x14`), the key pair at +0x50 (`EBP-0x3c`) and the insert
+    // result at +0x3c (`EBP-0x50`).
+    e.with_stack(0x8c, |e, frame| {
+        let frame = frame.addr();
+        let iterator = frame + 0x78;
+        e.mem.set_u32(iterator, 0);
+        e.mem.set_u32(iterator + 4, node);
+        let head = map_head(e, map);
+        if map == 0 {
+            e.call(INVALID_PARAMETER, &args![]);
+        }
+        let proxy = e.mem.u32(map);
+        e.mem.set_u32(iterator, proxy);
+        if map == 0 {
+            e.call(INVALID_PARAMETER, &args![]);
+        }
+        let end_proxy = e.mem.u32(map);
+        check_proxy(e, proxy, end_proxy);
+        if node == head || key_less(e, key.addr(), node.wrapping_add(0xc)) {
+            let pair = frame + 0x50;
+            e.mem.set_u32(pair + 0x1c, 0);
+            e.call(STRING_TIDY, &args![pair, 0u32, 0u32]);
+            let npos = e.global::<u32>(STRING_NPOS);
+            e.call(STRING_ASSIGN, &args![pair, key, 0u32, npos]);
+            e.mem.set_u32(pair + 0x1c, 0);
+            let hint_proxy = e.mem.u32(iterator);
+            let hint_node = e.mem.u32(iterator + 4);
+            let out = frame + 0x3c;
+            let result = e
+                .call(MAP_INSERT, &args![this, out, hint_proxy, hint_node, pair])
+                .u32();
+            let new_proxy = e.mem.u32(result);
+            let new_node = e.mem.u32(result + 4);
+            e.mem.set_u32(iterator, new_proxy);
+            e.mem.set_u32(iterator + 4, new_node);
+            e.call(STRING_TIDY, &args![pair, 1u32, 0u32]);
+        }
+        let value = e.call(MAP_ITERATOR_VALUE, &args![iterator]).u32();
+        value.wrapping_add(0x1c)
+    })
 }
 
 /// This unit's translated functions, by exe address.
@@ -4773,5 +4928,244 @@ mod tests {
                 (OPERATOR_DELETE, 0x100),
             ]
         );
+    }
+
+    // ---- the exe's stack frames ----
+
+    /// The calls made to `address` while the call log was on.
+    fn logged(e: &Engine, address: u32) -> Vec<Vec<u32>> {
+        e.call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|c| c.0 == address)
+            .map(|c| c.1.clone())
+            .collect()
+    }
+
+    /// The block the next `with_stack(size)` takes (the last freed block of that size), with
+    /// the call log switched on.
+    fn next_frame(e: &mut Engine, size: u32) -> u32 {
+        let frame = e.mem.alloc(size);
+        e.mem.free(frame);
+        e.call_log = Some(vec![]);
+        frame
+    }
+
+    #[test]
+    fn the_cvec_operators_keep_their_local_at_the_exe_frame_offset() {
+        let (mut e, _) = world();
+        let a = cvec(&mut e, &[1.0, 2.0]);
+        let b = cvec(&mut e, &[3.0, 4.0]);
+        let out = e.mem.alloc(0x18);
+        for address in [0x00b3_c660u32, 0x00b3_c750] {
+            let frame = next_frame(&mut e, 0x38);
+            e.call(address, &args![a, out, b]);
+            assert_eq!(logged(&e, CVEC_SIZED)[0][0], frame + 0x14);
+        }
+        let frame = next_frame(&mut e, 0x34);
+        e.call(0x00b3_c840, &args![a, out, 2.0f32]);
+        assert_eq!(logged(&e, CVEC_SIZED)[0][0], frame + 0x10);
+    }
+
+    #[test]
+    fn add_point_keeps_its_locals_and_the_length_argument_slot() {
+        let (mut e, _) = world();
+        let spline = new_spline(&mut e);
+        let point = cvec(&mut e, &[0.0, 0.0]);
+        let tangent = cvec(&mut e, &[1.0, 0.0]);
+        e.call(0x00b3_80e0, &args![spline, point, tangent, 0.25f32]);
+        let point = cvec(&mut e, &[1.0, 1.0]);
+        let tangent = cvec(&mut e, &[0.0, 1.0]);
+        let frame = next_frame(&mut e, 0x298);
+        e.call(0x00b3_80e0, &args![spline, point, tangent, 0.5f32]);
+        let made: Vec<u32> = logged(&e, CVEC_FROM_TWO).iter().map(|c| c[0]).collect();
+        assert_eq!(made, vec![frame + 0x260, frame + 0x248]);
+        let scaled: Vec<u32> = logged(&e, CVEC_SCALE).iter().map(|c| c[1]).collect();
+        assert_eq!(scaled, vec![frame + 0x22c, frame + 0x1fc]);
+        assert_eq!(logged(&e, CVEC_ADD)[0][1], frame + 0x214);
+        assert_eq!(logged(&e, CVEC_SUBTRACT)[0][1], frame + 0x1e4);
+        assert_eq!(
+            logged(&e, VECTOR_FLOAT_PUSH_BACK),
+            vec![vec![spline + 0x3c, frame + 0x294]]
+        );
+        assert_eq!(e.mem.f32(frame + 0x294), 0.5);
+    }
+
+    #[test]
+    fn parse_keeps_the_token_and_the_numbers_at_the_exe_frame_offsets() {
+        let (mut e, _) = world();
+        let spline = new_spline(&mut e);
+        let text = put_string(&mut e, SPLINE_TEXT);
+        let frame = next_frame(&mut e, 0x12c);
+        e.call(0x00b3_7cc0, &args![spline, text]);
+        assert_eq!(logged(&e, STRCMP)[0][0], frame + 0x24);
+        let added = logged(&e, SPLINE_ADD_POINT);
+        assert_eq!(added.len(), 2);
+        assert_eq!(added[0][1..3], [frame + 8, frame + 0x14]);
+    }
+
+    #[test]
+    fn the_point_at_t_and_the_sample_table_use_the_exe_frame_offsets() {
+        let (mut e, _) = world();
+        let spline = two_point_spline(&mut e);
+        let out = e.mem.alloc(0x18);
+        let frame = next_frame(&mut e, 0xb8);
+        e.call(0x00b3_8b50, &args![spline, out, 0.5f32]);
+        assert_eq!(logged(&e, CVEC_SIZED)[0][0], frame + 0x90);
+        assert_eq!(logged(&e, 0x00b3_8f40)[0][1], frame + 0x64);
+        let frame = next_frame(&mut e, 0x194);
+        e.call(0x00b3_8430, &args![spline, 4u32]);
+        assert_eq!(logged(&e, VECTOR_CVEC_CONSTRUCT)[0][0], frame + 0x170);
+        let blanks: Vec<u32> = logged(&e, CVEC_DEFAULT).iter().map(|c| c[0]).collect();
+        assert_eq!(blanks, vec![frame + 0x10c, frame + 0xc4]);
+        let points_at = logged(&e, SPLINE_POINT_AT);
+        assert_eq!(points_at.len(), 4);
+        assert!(points_at.iter().all(|c| c[1] == frame + 0x12c));
+        let samples = logged(&e, CVEC_FROM_FIVE);
+        assert_eq!(samples.len(), 2);
+        assert!(samples.iter().all(|c| c[0] == frame + 0x14c));
+    }
+
+    #[test]
+    fn the_vector_helpers_use_the_exe_frame_offsets() {
+        let (mut e, _) = world();
+        // push_back without spare room: the insert's result at +0x48 of 0x60 bytes, the
+        // insert's advanced iterator at +0x10 of its 0x34 bytes.
+        let full = cvec_vector(&mut e, &[1.0], 1);
+        let value = cvec(&mut e, &[2.0]);
+        let insert_frame = next_frame(&mut e, 0x34);
+        let frame = next_frame(&mut e, 0x60);
+        e.call(0x00b3_9100, &args![full, value]);
+        assert_eq!(logged(&e, VECTOR_CVEC_INSERT_ONE)[0][1], frame + 0x48);
+        assert_eq!(logged(&e, ITERATOR_ADVANCE)[0][0], insert_frame + 0x10);
+        // resize: the value in its argument slot (+0xd4), the iterator at +0x68 and the
+        // erase result at +0x7c.
+        let vector = cvec_vector(&mut e, &[1.0, 2.0], 8);
+        let fill = CVecArg([7.0f32.to_bits(), 0, 0, 0, 0, 2]);
+        let frame = next_frame(&mut e, 0xec);
+        e.call(0x00b3_9490, &args![vector, 3u32, fill]);
+        assert_eq!(logged(&e, VECTOR_CVEC_INSERT_N)[0][4], frame + 0xd4);
+        let frame = next_frame(&mut e, 0xec);
+        e.call(0x00b3_9490, &args![vector, 1u32, fill]);
+        assert_eq!(logged(&e, ITERATOR_ADVANCE)[0][0], frame + 0x68);
+        assert_eq!(logged(&e, VECTOR_CVEC_ERASE)[0][1], frame + 0x7c);
+        // insert_n with a tail shorter than the count: the copy at +0x224.
+        let vector = cvec_vector(&mut e, &[1.0, 2.0], 8);
+        let proxy = e.mem.u32(vector);
+        let last = e.mem.u32(vector + 0x10);
+        let frame = next_frame(&mut e, 0x258);
+        e.call(0x00b3_a0d0, &args![vector, proxy, last, 2u32, value]);
+        assert_eq!(logged(&e, VECTOR_CVEC_FILL)[0][2], frame + 0x224);
+    }
+
+    #[test]
+    fn the_map_helpers_use_the_exe_frame_offsets() {
+        let (mut e, _) = world();
+        // The constructor pushes the address of its byte at +0x1e as the allocator word.
+        let map = e.mem.alloc(0x20);
+        let comparator = e.mem.alloc(4);
+        let frame = next_frame(&mut e, 0x4c);
+        e.call(0x00b3_b770, &args![map, comparator, 0u32]);
+        assert_eq!(logged(&e, TREE_PROXY_NEW)[0][2], frame + 0x1e);
+        // operator[] of a new key: the iterator at +0x78, the pair at +0x50, the insert
+        // result at +0x3c.
+        let text = put_string(&mut e, "a");
+        let frame = next_frame(&mut e, 0x8c);
+        e.call(0x00b3_9210, &args![map, text]);
+        let inserted = logged(&e, MAP_INSERT);
+        assert_eq!(
+            (inserted[0][1], inserted[0][4]),
+            (frame + 0x3c, frame + 0x50)
+        );
+        assert_eq!(logged(&e, MAP_ITERATOR_VALUE)[0][0], frame + 0x78);
+        // The unique insert: `j` at +0xa4 of its 0xb8 bytes.
+        let pair = put_pair(&mut e, "b", 1);
+        let out = e.mem.alloc(0xc);
+        let frame = next_frame(&mut e, 0xb8);
+        e.call(0x00b3_a9b0, &args![map, out, pair]);
+        assert_eq!(logged(&e, MAP_ITERATOR_NEW)[0][0], frame + 0xa4);
+        // Erasing one node steps the iterator argument in place (+0x118).
+        let head = map_head_of(&e, map);
+        let first = e.mem.u32(head);
+        let proxy = e.mem.u32(map);
+        let frame = next_frame(&mut e, 0x120);
+        e.call(0x00b3_bd80, &args![map, out, proxy, first]);
+        assert_eq!(logged(&e, MAP_ITERATOR_INCREMENT)[0][0], frame + 0x118);
+        // Erasing a range that is not the whole tree: the cursor is the `first` argument
+        // (+0x68), each erase result at +0x3c.
+        for name in ["c", "d"] {
+            let pair = put_pair(&mut e, name, 1);
+            e.call(0x00b3_a9b0, &args![map, out, pair]);
+        }
+        let head = map_head_of(&e, map);
+        let begin = e.mem.u32(head);
+        let frame = next_frame(&mut e, 0x78);
+        e.call(
+            0x00b3_bb90,
+            &args![map, out, proxy, begin, proxy, e.mem.u32(head + 8)],
+        );
+        let erased = logged(&e, TREE_ERASE_ONE);
+        assert!(!erased.is_empty());
+        assert!(erased.iter().all(|c| c[1] == frame + 0x3c));
+        assert_eq!(logged(&e, MAP_ITERATOR_INCREMENT)[0][0], frame + 0x68);
+        // Clearing everything: the erase result at +0x64 of 0x8c bytes.
+        let frame = next_frame(&mut e, 0x8c);
+        e.call(0x00b3_ba90, &args![map]);
+        assert_eq!(logged(&e, TREE_ERASE_RANGE)[0][1], frame + 0x64);
+    }
+
+    #[test]
+    fn clearing_the_cache_keeps_both_iterators_at_the_exe_frame_offsets() {
+        let (mut e, _) = cache_world();
+        cached(&mut e, SPLINE_TEXT);
+        let frame = next_frame(&mut e, 0x3c);
+        e.call(0x00b3_7a00, &args![]);
+        assert_eq!(logged(&e, MAP_BEGIN)[0][1], frame + 0x34);
+        let compares = logged(&e, ITERATOR_NOT_EQUAL);
+        assert!(!compares.is_empty());
+        assert!(compares
+            .iter()
+            .all(|c| c[..2] == [frame + 0x34, frame + 0x2c]));
+    }
+
+    #[test]
+    fn the_hint_insert_keeps_its_iterators_at_the_exe_frame_offsets() {
+        let (mut e, _) = world();
+        let map = new_map(&mut e);
+        for k in [20, 40] {
+            index(&mut e, map, &key(k));
+        }
+        let head = map_head_of(&e, map);
+        let proxy = e.mem.u32(map);
+        // A key below the last one with the end as the hint: the cheap cases fail and the
+        // plain insert runs.
+        let pair = put_pair(&mut e, &key(30), 1);
+        let out = e.mem.alloc(8);
+        let frame = next_frame(&mut e, 0x1d8);
+        e.call(0x00b3_98c0, &args![map, out, proxy, head, pair]);
+        let made: Vec<u32> = logged(&e, MAP_ITERATOR_NEW)
+            .iter()
+            .take(2)
+            .map(|c| c[0])
+            .collect();
+        assert_eq!(made, vec![frame + 0x198, frame + 0x190]);
+        let compared: Vec<Vec<u32>> = logged(&e, ITERATOR_EQUAL)
+            .iter()
+            .take(2)
+            .map(|c| c[..2].to_vec())
+            .collect();
+        assert_eq!(
+            compared,
+            vec![
+                vec![frame + 0x1cc, frame + 0x198],
+                vec![frame + 0x1cc, frame + 0x190]
+            ]
+        );
+        assert_eq!(
+            logged(&e, TREE_INSERT_UNIQUE)[0][..3],
+            [map, frame + 0x17c, pair]
+        );
+        assert_eq!(e.mem.u32(frame + 0x1d0), head);
     }
 }

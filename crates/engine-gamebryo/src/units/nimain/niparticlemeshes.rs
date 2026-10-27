@@ -126,23 +126,26 @@ fn mesh_data(e: &Engine, this: Ptr) -> u32 {
 // Translated from 00a98e30 (decompiled, FalloutNV.exe 1.4.0.525)
 /// `NiParticleMeshes::UpdateDownwardPass` (Xbox PDB; the update data): the data's time
 /// (through the x87 stack) and its byte +4 copied to +0xc4 and +0xc8, then a jump to
-/// `NiAVObject::UpdateDownwardPass` with the same data.
-pub fn ni_particle_meshes_update_downward_pass(e: &mut Engine, this: Ptr, data: Ptr) {
+/// `NiAVObject::UpdateDownwardPass` with the same data. The jump passes on both stack
+/// words (the callee's `RET 8`), the second as it came.
+pub fn ni_particle_meshes_update_downward_pass(e: &mut Engine, this: Ptr, data: Ptr, word: u32) {
     let time = x87_quiet_bits(e.mem.u32(data.addr()));
     e.mem.set_u32(this.addr() + UPDATE_TIME, time);
     let flag = e.mem.u8(data.addr() + 4);
     e.mem.set_u8(this.addr() + UPDATE_FLAG, flag);
-    e.call(AV_UPDATE_DOWNWARD_PASS, &args![this, data]);
+    // 00a98e49: a JMP, so `00a59f90` (RET 8) gets this function's two stack words.
+    e.call(AV_UPDATE_DOWNWARD_PASS, &args![this, data, word]);
 }
 
 // Translated from 00a98e50 (decompiled, FalloutNV.exe 1.4.0.525)
 /// Unnamed in the engine map (unit `niparticlemeshes.cpp`; the update data): the data's
 /// time (through the x87 stack) copied to +0xc4, then a jump to `00a59fd0` with the same
-/// data.
-pub fn fn_00a98e50(e: &mut Engine, this: Ptr, data: Ptr) {
+/// data; the jump passes on both stack words (the callee's `RET 8`).
+pub fn fn_00a98e50(e: &mut Engine, this: Ptr, data: Ptr, word: u32) {
     let time = x87_quiet_bits(e.mem.u32(data.addr()));
     e.mem.set_u32(this.addr() + UPDATE_TIME, time);
-    e.call(AV_00A59FD0, &args![this, data]);
+    // 00a98e60: a JMP, so `00a59fd0` (RET 8) gets this function's two stack words.
+    e.call(AV_00A59FD0, &args![this, data, word]);
 }
 
 // Translated from 00a98e70 (PC disassembly, FalloutNV.exe 1.4.0.525)
@@ -310,9 +313,9 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
         entry!(
             0x00a9_8e30,
-            ni_particle_meshes_update_downward_pass(Ptr, Ptr)
+            ni_particle_meshes_update_downward_pass(Ptr, Ptr, u32)
         ),
-        entry!(0x00a9_8e50, fn_00a98e50(Ptr, Ptr)),
+        entry!(0x00a9_8e50, fn_00a98e50(Ptr, Ptr, u32)),
         entry!(0x00a9_8e70, fn_00a98e70() -> Ptr),
         entry!(
             0x00a9_8ed0,
@@ -495,10 +498,13 @@ mod a06_tests {
         let data = e.mem.alloc(0xc);
         e.mem.set_u32(data, 0x7f80_0001);
         e.mem.set_u8(data + 4, 1);
-        e.call(0x00a9_8e30, &args![meshes, data]);
+        e.call(0x00a9_8e30, &args![meshes, data, 7u32]);
         assert_eq!(e.mem.u32(meshes + UPDATE_TIME), 0x7fc0_0001);
         assert_eq!(e.mem.u8(meshes + UPDATE_FLAG), 1);
-        assert_eq!(calls(&e, AV_UPDATE_DOWNWARD_PASS), vec![vec![meshes, data]]);
+        assert_eq!(
+            calls(&e, AV_UPDATE_DOWNWARD_PASS),
+            vec![vec![meshes, data, 7]]
+        );
     }
 
     #[test]
@@ -508,10 +514,10 @@ mod a06_tests {
         let data = e.mem.alloc(0xc);
         e.mem.set_f32(data, 2.5);
         e.mem.set_u8(data + 4, 1);
-        e.call(0x00a9_8e50, &args![meshes, data]);
+        e.call(0x00a9_8e50, &args![meshes, data, 7u32]);
         assert_eq!(e.mem.f32(meshes + UPDATE_TIME), 2.5);
         assert_eq!(e.mem.u8(meshes + UPDATE_FLAG), 0);
-        assert_eq!(calls(&e, AV_00A59FD0), vec![vec![meshes, data]]);
+        assert_eq!(calls(&e, AV_00A59FD0), vec![vec![meshes, data, 7]]);
     }
 
     #[test]

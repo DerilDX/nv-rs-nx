@@ -204,6 +204,23 @@ fn press(e: &mut Engine, address: u32) {
     e.mem.set_u8(address, value | 0x80);
 }
 
+// Translated from 00a237b0 (disassembled, FalloutNV.exe 1.4.0.525)
+/// `Controls::ClearKeystrokes` (engine map; `thiscall`, no stack words): with a keyboard device
+/// (+0x2c), flushes its buffer: `GetDeviceData` (slot `0x28`) with the record size 0x14, no
+/// records, a count of 0xFFFFFFFF (`INFINITE`) and no flags. Answers what is left in `EAX`:
+/// that call's answer, or `this` without a keyboard.
+pub fn controls_clear_keystrokes(e: &mut Engine, this: Ptr<Controls>) -> u32 {
+    let keyboard = e.get(this, Controls::keyboard_device).addr();
+    if keyboard == 0 {
+        return this.addr();
+    }
+    e.with_stack(4, |e, count| {
+        e.mem.set_u32(count.addr(), 0xffff_ffff);
+        e.vcall(keyboard, 0x28, &args![0x14u32, 0u32, count, 0u32])
+            .u32()
+    })
+}
+
 // Translated from 00a237f0 (decompiled, FalloutNV.exe 1.4.0.525)
 /// Reads one event from the keyboard device (`fn_00a23820`); true when it
 /// was a key going down. `out` receives the event's key code whatever the
@@ -976,6 +993,7 @@ pub fn fn_00a252d0(e: &mut Engine, this: Ptr<Controls>, enable: u8) {
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x00a237b0, controls_clear_keystrokes(Ptr<Controls>) -> u32),
         entry!(0x00a237f0, fn_00a237f0(Ptr<Controls>, Ptr) -> bool),
         entry!(0x00a23820, fn_00a23820(Ptr<Controls>, Ptr) -> u32),
         entry!(0x00a238a0, fn_00a238a0(u32, i32, i32) -> u32),
@@ -1098,6 +1116,33 @@ mod tests {
         let keyboard = device(e, KEYBOARD_VTABLE, &[(0x28, KEYBOARD_READ)]);
         e.set(this, Controls::keyboard_device, Ptr::new(keyboard));
         calls
+    }
+
+    #[test]
+    fn clear_keystrokes_flushes_the_keyboard_buffer() {
+        let mut e = engine();
+        let this = controls(&mut e);
+        assert_eq!(
+            controls_clear_keystrokes(&mut e, this),
+            this.addr(),
+            "no keyboard"
+        );
+        let calls: Calls = Rc::new(RefCell::new(Vec::new()));
+        let seen = calls.clone();
+        e.register_double(KEYBOARD_READ, move |e, a| {
+            let mut words = a.to_vec();
+            words.push(e.mem.u32(a[3]));
+            seen.borrow_mut().push(words);
+            ret(7)
+        });
+        let keyboard = device(&mut e, KEYBOARD_VTABLE, &[(0x28, KEYBOARD_READ)]);
+        e.set(this, Controls::keyboard_device, Ptr::new(keyboard));
+        assert_eq!(controls_clear_keystrokes(&mut e, this), 7);
+        let call = calls.borrow()[0].clone();
+        assert_eq!(
+            (call[0], call[1], call[2], call[4], call[5]),
+            (keyboard, 0x14, 0, 0, 0xffff_ffff)
+        );
     }
 
     #[test]

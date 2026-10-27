@@ -483,9 +483,12 @@ pub fn fn_00618960(e: &mut Engine, this: Ptr) {
 }
 
 // Translated from 006189a0 (decompiled, FalloutNV.exe 1.4.0.525)
-/// Forwards one word to the form's virtual slot 0x28 (`RET 4`).
-pub fn fn_006189a0(e: &mut Engine, this: Ptr, value: u32) {
-    e.vcall(this.addr(), 0x28, &args![value]);
+/// Forwards one word to the form's virtual slot 0x28 (`RET 4`) and answers its `AL`: the exe
+/// ends on that call. The function is slot `+0x34` of `TESTopic`'s vtable, the `TESForm`
+/// slot the engine map and the Xbox PDB call `SaveEdit` (`bool`; `TESForm`'s own
+/// `00483fc0` answers `XOR AL,AL` / `MOV AL,1`).
+pub fn fn_006189a0(e: &mut Engine, this: Ptr, value: u32) -> bool {
+    e.vcall(this.addr(), 0x28, &args![value]).bool()
 }
 
 // Translated from 006189c0 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -544,7 +547,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x0061_8390, fn_00618390(Ptr, Ptr)),
         entry!(0x0061_8430, fn_00618430(Ptr, Ptr) -> bool),
         entry!(0x0061_8960, fn_00618960(Ptr)),
-        entry!(0x0061_89a0, fn_006189a0(Ptr, u32)),
+        entry!(0x0061_89a0, fn_006189a0(Ptr, u32) -> bool),
         entry!(0x0061_89c0, fn_006189c0(Ptr, Ptr) -> bool),
     ]
 }
@@ -1038,6 +1041,19 @@ mod tests_n042 {
         e.mem.set_u32(this, 0x0f00_0000);
         let (_, log) = run(&mut e, 0x0061_89a0, &[this, 9]);
         assert_eq!(log, vec![(0x0f00_1028, vec![this, 9])]);
+    }
+
+    #[test]
+    fn forward_to_slot_0x28_answers_its_al() {
+        let mut e = Engine::new();
+        e.register(0x0f00_1028, |_, _| 0x0000_0201u32.into_ret());
+        let mut slots = vec![0u32; 11];
+        slots[10] = 0x0f00_1028;
+        e.put_vtable(0x0f00_0000, &slots);
+        let this = e.mem.alloc(4);
+        e.mem.set_u32(this, 0x0f00_0000);
+        let (result, _) = run(&mut e, 0x0061_89a0, &[this, 9]);
+        assert_eq!(result.u32(), 1);
     }
 
     #[test]

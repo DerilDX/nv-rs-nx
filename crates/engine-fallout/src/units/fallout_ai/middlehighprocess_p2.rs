@@ -4180,8 +4180,8 @@ const ITEM_CHANGE_GET_ITEM_HEALTH: u32 = 0x004b_cdb0;
 /// `(form)`: whether bit 0x20 of the form's byte at +0x100 is set
 /// (`0046e8c0`, the engine map has no name).
 const WEAPON_FORM_FLAG: u32 = 0x0046_e8c0;
-/// `(weapon, 0)`: a weapon attribute for the repair (`00522c30`, the engine
-/// map has no name).
+/// `(weapon)`: a weapon attribute for the repair (`00522c30`, no stack word,
+/// the engine map has no name).
 const WEAPON_ATTRIBUTE: u32 = 0x0052_2c30;
 /// The double 0.1 (exe double at `0x0101ffa0`, the float 0.1 widened) the health is scaled by.
 const CONDITION_SCALE: u32 = 0x0101_ffa0;
@@ -4212,9 +4212,11 @@ pub fn middle_high_process_get_weapon_condition(
         .call(ITEM_CHANGE_GET_ITEM_HEALTH, &args![item, 1u32])
         .f64() as f32;
     if form != 0 && e.call(WEAPON_FORM_FLAG, &args![form]).bool() {
-        let attribute = e.call(WEAPON_ATTRIBUTE, &args![form, object]).u32();
+        // 0092ba3c: `00522c30` takes no stack word (plain RET); the pushed object
+        // is the last word of the process' +0x39c (RET 0xc).
+        let attribute = e.call(WEAPON_ATTRIBUTE, &args![form]).u32();
         let base = e.call(ACTOR_EXTRA_OBJECT, &args![object]).u32();
-        health = e.vcall(p, 0x39c, &args![base, attribute]).f64() as f32;
+        health = e.vcall(p, 0x39c, &args![base, attribute, object]).f64() as f32;
     }
     let scale = e.global::<f64>(CONDITION_SCALE);
     let scaled = (f64::from(health) * scale) as f32;
@@ -4331,11 +4333,11 @@ pub fn middle_high_process_update_armor_worn(
 
 /// `(weapon form, actor)`: the projectile entry of the form (`00525a90`, the
 /// engine map has no name) and `BGSProjectile::GetPreCloneCount` (Xbox
-/// PDB), `(entry, actor, weapon form)`.
+/// PDB), `(entry, weapon form)` (RET 4).
 const FORM_PROJECTILE: u32 = 0x0052_5a90;
 const PROJECTILE_GET_PRE_CLONE_COUNT: u32 = 0x004f_e080;
-/// `ModelLoader::FindModel` (Xbox PDB), `(model loader, handle object)`; the
-/// model loader is the word at `0x011c3b3c`.
+/// `ModelLoader::FindModel` (Xbox PDB), `(model loader, the model's +0x14 answer,
+/// handle address)` (RET 8); the model loader is the word at `0x011c3b3c`.
 const MODEL_LOADER_FIND_MODEL: u32 = 0x0044_72a0;
 /// `(node name holder, count)`: constructs a 12 byte object (`004b0da0`) and
 /// `(list, object)` takes it (`0092c8b0`); the engine map has no names.
@@ -4389,11 +4391,10 @@ pub fn middle_high_process_try_reserve_projectile_clones(
         return;
     }
     let entry = e.call(FORM_PROJECTILE, &args![item_form, actor]).u32();
+    // 0092be32: `00525a90` takes one word (RET 4, the actor); the item form pushed
+    // before it is the word of `004fe080` (RET 4).
     let count = e
-        .call(
-            PROJECTILE_GET_PRE_CLONE_COUNT,
-            &args![entry, actor, item_form],
-        )
+        .call(PROJECTILE_GET_PRE_CLONE_COUNT, &args![entry, item_form])
         .u32() as i32;
     if count <= 0 {
         return;
@@ -4403,9 +4404,11 @@ pub fn middle_high_process_try_reserve_projectile_clones(
         e.call(POINTER_INIT, &args![handle, 0u32]);
         let entry = e.call(FORM_PROJECTILE, &args![item_form, actor]).u32();
         let object = entry + 0x3c;
-        let answer = e.vcall(object, 0x14, &args![handle]).u32();
+        // 0092be76: the model's +0x14 (`00408da0`, plain RET) takes no stack word; the
+        // pushed handle address is the last word of `004472a0` (RET 8).
+        let answer = e.vcall(object, 0x14, &args![]).u32();
         let target = e.global::<u32>(MODEL_LOADER);
-        e.call(MODEL_LOADER_FIND_MODEL, &args![target, answer]);
+        e.call(MODEL_LOADER_FIND_MODEL, &args![target, answer, handle]);
         let handle_object = e.call(FIRST_WORD, &args![handle]).u32();
         if handle_object != 0 && e.call(BODY_PART_NODE_NAME, &args![handle_object]).u32() != 0 {
             let memory = e.call(ALLOCATE, &args![0xcu32]).u32();
@@ -7887,8 +7890,11 @@ mod tests {
         e.register(ACTOR_EXTRA_OBJECT, |_, _| ret(0x44));
         e.register_double(PROCESS_SLOTS + 0x39c, |_, _| ret_f(80.0));
         assert_eq!(middle_high_process_get_weapon_condition(&mut e, p, 0x70), 7);
-        assert_eq!(calls(&e, WEAPON_ATTRIBUTE), vec![vec![0x99, 0x70]]);
-        assert_eq!(calls(&e, PROCESS_SLOTS + 0x39c), vec![vec![a, 0x44, 0x33]]);
+        assert_eq!(calls(&e, WEAPON_ATTRIBUTE), vec![vec![0x99]]);
+        assert_eq!(
+            calls(&e, PROCESS_SLOTS + 0x39c),
+            vec![vec![a, 0x44, 0x33, 0x70]]
+        );
     }
 
     #[test]
@@ -7981,9 +7987,14 @@ mod tests {
                 .collect::<Vec<u32>>(),
         );
         e.mem.set_u32(entry + 0x3c, 0x0503_0000);
-        e.register(OBJECT_SLOTS + 0x14, |e, a| {
-            e.mem.set_u32(a[1], 0x6000);
+        e.register(OBJECT_SLOTS + 0x14, |_, a| {
+            assert_eq!(a.len(), 1);
             ret(0x7777)
+        });
+        // The model loader stores 0x6000 into the handle (its last word).
+        e.register(MODEL_LOADER_FIND_MODEL, |e, a| {
+            e.mem.set_u32(a[2], 0x6000);
+            Ret::default()
         });
         e.register(POINTER_INIT, |e, a| {
             e.mem.set_u32(a[0], a[1]);
@@ -7992,9 +8003,11 @@ mod tests {
         middle_high_process_try_reserve_projectile_clones(&mut e, p, target);
         assert_eq!(
             calls(&e, PROJECTILE_GET_PRE_CLONE_COUNT),
-            vec![vec![entry, target, 0x4000]]
+            vec![vec![entry, 0x4000]]
         );
-        assert_eq!(calls(&e, MODEL_LOADER_FIND_MODEL), vec![vec![0, 0x7777]]);
+        let found = calls(&e, MODEL_LOADER_FIND_MODEL);
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0][..2], [0, 0x7777]);
         let made = calls(&e, PROJECTILE_CLONE_CONSTRUCT);
         assert_eq!(made.len(), 1);
         assert_eq!(made[0][1..], [0x6001, 3]);

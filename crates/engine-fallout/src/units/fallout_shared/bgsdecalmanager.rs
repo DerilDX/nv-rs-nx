@@ -1721,8 +1721,10 @@ pub fn fn_004a1a50(e: &mut Engine, object: u32) {
     }
     e.with_stack(4, |e, slot| {
         e.mem.set_u32(slot.addr(), object);
-        let singleton = e.call(SINGLETON_GETTER, &args![slot]).u32();
-        e.call(SINGLETON_RELEASE, &args![singleton + 0x14]);
+        // 004a1a5d: `0049fef0` takes no stack word (plain RET, no stack read); the pushed
+        // slot address is the word of `004ed8c0` (RET 4).
+        let singleton = e.call(SINGLETON_GETTER, &args![]).u32();
+        e.call(SINGLETON_RELEASE, &args![singleton + 0x14, slot]);
     });
 }
 
@@ -3769,13 +3771,17 @@ mod tests {
         let mut e = rig();
         let seen: Rc<RefCell<Vec<u32>>> = Rc::default();
         let log = seen.clone();
-        e.register_double(SINGLETON_GETTER, move |e, a| {
-            log.borrow_mut().push(e.mem.u32(a[0]));
+        e.register_double(SINGLETON_GETTER, |_, a| {
+            assert!(a.is_empty());
             ret(0x5000)
+        });
+        e.register_double(SINGLETON_RELEASE, move |e, a| {
+            log.borrow_mut().push(e.mem.u32(a[1]));
+            Ret::default()
         });
         e.call(0x004a1a50, &args![0x1234u32]);
         assert_eq!(*seen.borrow(), vec![0x1234]);
-        assert_eq!(calls(&e, SINGLETON_RELEASE), vec![vec![0x5014]]);
+        assert_eq!(calls(&e, SINGLETON_RELEASE)[0][0], 0x5014);
 
         let mut e = rig();
         e.call(0x004a1a50, &args![0u32]);

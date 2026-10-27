@@ -4185,4 +4185,43 @@ mod patch_tests {
         assert_eq!(got, 1);
         assert_eq!(rig.calls_tagged("map_release").len(), 2);
     }
+
+    #[test]
+    fn the_patch_manager_creator_and_constructor_build_the_maps() {
+        let mut e = Engine::new();
+        e.map(0x0000_7000, 0x1000);
+        e.mem.set_u32(0x7010, 0x7100);
+        e.mem.set_u32(0x7100, 0x7200);
+        e.mem.set_u32(0x7204, 0x00ab_0004);
+        e.register(0x00c8_5750, |_, _| 0x7000u32.into_ret());
+        // The first block is the manager (0x24 bytes), the second its 0x2C-byte part.
+        e.register_double(0x00ab_0004, |_, a| {
+            if a[1] == 0x24 {
+                0x7800u32.into_ret()
+            } else {
+                assert_eq!(a[1], 0x2c);
+                0x7900u32.into_ret()
+            }
+        });
+        e.register(0x00cb_2030, |_, _| Ret::default());
+        e.register(0x00d8_7790, |_, a| a[0].into_ret());
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x00db_a1e0, &args![]).u32(), 0x7800);
+        let log = e.call_log.take().unwrap();
+        assert_eq!(e.mem.u16(0x7804), 0x24);
+        assert_eq!(e.mem.u16(0x7806), 1);
+        assert_eq!(e.mem.u32(0x7800), 0x010d_6138);
+        assert_eq!(e.mem.u32(0x7814), 0x8000_0000);
+        assert_eq!(e.mem.u32(0x7820), 0xffff_ffff);
+        assert_eq!(e.mem.u32(0x7808), 0x7900);
+        assert_eq!(e.mem.u32(0x7918), 0x8000_0000);
+        let reserve: Vec<_> = log.iter().filter(|(a, _)| *a == 0x00cb_2030).collect();
+        assert_eq!(reserve[0].1, [0x7818, 0x7100, 0]);
+        let maps: Vec<u32> = log
+            .iter()
+            .filter(|(a, _)| *a == 0x00d8_7790)
+            .map(|(_, w)| w[0])
+            .collect();
+        assert_eq!(maps, [0x7900, 0x791c]);
+    }
 }

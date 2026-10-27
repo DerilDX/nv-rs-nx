@@ -1483,18 +1483,22 @@ const DISTANCE_TO_LISTENER: u32 = 0x150;
 /// or more runs `00af1430`. Type bit 0x80000 adds an effect (`SetFX`, `GetObjectInPath`) whose
 /// parameters are the `float` at `011f7158`, 0, and the `float`s at `01030020`, `010a3dc4`,
 /// `01030020`. `BSGameSound::Prepare` (`00ae9de0`) runs last.
-pub fn fn_00aec530(e: &mut Engine, this: Ptr) {
+///
+/// Answers `AL` of the call it ends on (`Prepare` is `bool` in the Xbox PDB): `00ae9c50(0)`'s
+/// on each failure, `BSGameSound::Prepare`'s otherwise.
+pub fn fn_00aec530(e: &mut Engine, this: Ptr) -> bool {
     if field(e, this, DIRECT_SOUND) == 0 {
-        set_opened(e, this, 0);
-        return;
+        return set_opened(e, this, 0) as u8 != 0;
     }
     let format = field(e, this, WAVE_FORMAT);
     let bytes_per_sample = (i32::from(e.mem.u16(format + 0xe)) / 8) as u32;
     if e.call(IS_3D, &args![this]).bool() || e.call(IS_3D_OTHER, &args![this]).bool() {
         e.mem.set_u16(this.addr() + DISTANCE_ATTENUATION, 10000);
     }
-    if field(e, this, SAMPLE_DATA) != 0 && !prepare_buffer(e, this, bytes_per_sample) {
-        return;
+    if field(e, this, SAMPLE_DATA) != 0 {
+        if let Err(answer) = prepare_buffer(e, this, bytes_per_sample) {
+            return answer;
+        }
     }
     if field(e, this, DURATION) as i32 >= 0x96 {
         fn_00af1430(e, this);
@@ -1502,11 +1506,12 @@ pub fn fn_00aec530(e: &mut Engine, this: Ptr) {
     if flags8(e, this) & 0x8_0000 != 0 {
         prepare_effect(e, this);
     }
-    e.call(0x00ae_9de0, &args![this]);
+    e.call(0x00ae_9de0, &args![this]).bool()
 }
 
-/// The buffer part of `Prepare` (`00aec530`); false when the prepare failed.
-fn prepare_buffer(e: &mut Engine, this: Ptr, bytes_per_sample: u32) -> bool {
+/// The buffer part of `Prepare` (`00aec530`); when the prepare failed, the `AL` of the
+/// `00ae9c50(0)` it ends on.
+fn prepare_buffer(e: &mut Engine, this: Ptr, bytes_per_sample: u32) -> Result<(), bool> {
     if is_streaming(e, this) {
         prepare_stream(e, this, bytes_per_sample);
     }
@@ -1540,8 +1545,7 @@ fn prepare_buffer(e: &mut Engine, this: Ptr, bytes_per_sample: u32) -> bool {
             e.call(FREE, &args![MEMORY_MANAGER, data]);
             set_field(e, this, SAMPLE_DATA, 0);
         }
-        set_opened(e, this, 0);
-        return false;
+        return Err(set_opened(e, this, 0) as u8 != 0);
     }
     com(e, this, CREATED_BUFFER, 0, &[0x0110_0f94, base + BUFFER]);
     if field(e, this, BUFFER) != 0 && flags8(e, this) & 2 != 0 {
@@ -1600,8 +1604,7 @@ fn prepare_buffer(e: &mut Engine, this: Ptr, bytes_per_sample: u32) -> bool {
         true
     });
     if !locked {
-        set_opened(e, this, 0);
-        return false;
+        return Err(set_opened(e, this, 0) as u8 != 0);
     }
     if field(e, this, SAMPLE_DATA) != 0 {
         let data = field(e, this, SAMPLE_DATA);
@@ -1610,7 +1613,7 @@ fn prepare_buffer(e: &mut Engine, this: Ptr, bytes_per_sample: u32) -> bool {
     }
     let volume = x87_quiet_bits(field(e, this, CURRENT_VOLUME));
     e.vcall(base, 0x3c, &args![volume]);
-    true
+    Ok(())
 }
 
 /// The streaming split of `Prepare` (`00aec530`).
@@ -2766,7 +2769,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00af_2180, fn_00af2180(u32, u32, u32, u32) -> u32),
         entry!(0x00af_2200, fn_00af2200(u32, u32, u32, u32) -> u32),
         entry!(0x00af_2290, fn_00af2290(u32) -> u32),
-        entry!(0x00ae_c530, fn_00aec530(Ptr)),
+        entry!(0x00ae_c530, fn_00aec530(Ptr) -> bool),
         entry!(0x00af_1430, fn_00af1430(Ptr) -> u8),
         entry!(0x00ae_f090, fn_00aef090(Ptr, f32, f32, f32)),
         entry!(0x00ae_d990, fn_00aed990(Ptr)),
@@ -3648,6 +3651,26 @@ mod b035_tests {
         let log = e.call_log.take().unwrap();
         assert_eq!(calls(&log, SET_OPENED), vec![vec![base, 0]]);
         assert!(calls(&log, 0x00ae_9de0).is_empty());
+    }
+
+    #[test]
+    fn fn_00aec530_answers_the_call_it_ends_on() {
+        let (mut e, _) = engine();
+        e.register(0x00ae_9de0, |_, _| 0x0000_0301u32.into_ret());
+        let (this, _) = sound(&mut e, false);
+        let base = this.addr();
+        let format = e.mem.alloc(0x12);
+        e.mem.set_u16(format + 0xe, 16);
+        e.mem.set_u32(base + WAVE_FORMAT, format);
+        e.mem.set_u32(base + DURATION, 10);
+        // No sample data: straight to `BSGameSound::Prepare`, whose `AL` is the answer.
+        assert!(e.call(0x00ae_c530, &args![this]).bool());
+        // Without a device: `00ae9c50(0)`'s `AL`.
+        e.register(SET_OPENED, |_, _| 0x0000_0201u32.into_ret());
+        e.mem.set_u32(base + DIRECT_SOUND, 0);
+        assert!(e.call(0x00ae_c530, &args![this]).bool());
+        e.register(SET_OPENED, |_, a| a[1].into_ret());
+        assert!(!e.call(0x00ae_c530, &args![this]).bool());
     }
 
     #[test]

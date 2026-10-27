@@ -282,6 +282,30 @@ mod la1_tests {
 }
 
 #[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_plane_takes_the_default_normal_and_a_zero_constant() {
+        let mut e = Engine::new();
+        e.map(DEFAULT_NORMAL & !0xfff, 0x1000);
+        e.map(0x0000_1000, 0x100);
+        for (i, bits) in [0x3f80_0000u32, 0xffc0_0001, 0x8000_0000]
+            .into_iter()
+            .enumerate()
+        {
+            e.mem.set_u32(DEFAULT_NORMAL + 4 * i as u32, bits);
+        }
+        e.mem.set_u32(0x100c, 0xdead_beef);
+        assert_eq!(e.call(0x00a6_9940, &args![0x1000u32]).u32(), 0x1000);
+        assert_eq!(e.mem.u32(0x1000), 0x3f80_0000);
+        assert_eq!(e.mem.u32(0x1004), 0xffc0_0001, "copied unchanged");
+        assert_eq!(e.mem.u32(0x1008), 0x8000_0000);
+        assert_eq!(e.mem.u32(0x100c), 0);
+    }
+}
+
+#[cfg(test)]
 mod lookahead2_tests {
     use super::*;
 

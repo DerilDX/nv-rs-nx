@@ -556,10 +556,14 @@ pub fn fn_00e7a200(
             e.mem.set_u32(slots + 4, count);
             e.mem.set_u32(slots + 8, flag);
             e.mem.set_u32(slots + 0xc, geometry);
+            // 00e7a4e5: `00a72720` is a thiscall (RET 0x1c) on the geometry data's +0x30
+            // (ECX loaded at 00e7a284), then the seven pushed words.
+            let additional = e.mem.u32(geometry.wrapping_add(0x30));
             let found = e
                 .call(
                     ADDITIONAL_DATA_00A72720,
                     &args![
+                        additional,
                         usage & 0x7fff_ffff,
                         slots,
                         slots + 4,
@@ -1601,13 +1605,14 @@ mod b052_tests {
         // A negative usage asks the additional data, which answers the source, format, size
         // and stride through its slots.
         e.register(ADDITIONAL_DATA_00A72720, |e, a| {
-            assert_eq!(a[0], 5);
-            assert_eq!(e.mem.u32(a[1]), 0x9000);
-            assert_eq!(e.mem.u32(a[2]), 7);
-            e.mem.set_u32(a[1], 0x6000);
-            e.mem.set_u32(a[2], 1);
-            e.mem.set_u32(a[5], 4);
-            e.mem.set_u32(a[6], 0x14);
+            assert_eq!(a.len(), 8);
+            assert_eq!(a[1], 5);
+            assert_eq!(e.mem.u32(a[2]), 0x9000);
+            assert_eq!(e.mem.u32(a[3]), 7);
+            e.mem.set_u32(a[2], 0x6000);
+            e.mem.set_u32(a[3], 1);
+            e.mem.set_u32(a[6], 4);
+            e.mem.set_u32(a[7], 0x14);
             1u32.into_ret()
         });
         let entry = declaration(&mut e, 0x8000_0005, 2);

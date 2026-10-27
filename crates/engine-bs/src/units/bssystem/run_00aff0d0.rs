@@ -56,10 +56,45 @@ pub fn fn_00aff180(e: &mut Engine, this: Ptr) -> Ptr {
     this
 }
 
+/// `DeleteFileA` (KERNEL32 import slot).
+const IMPORT_DELETE_FILE_A: u32 = 0x00fd_f0d4;
+
+// Translated from 00aff0b0 (disassembled, FalloutNV.exe 1.4.0.525)
+/// `BSSystemFile::DeleteFileA` (engine map; `cdecl`, one word): `DeleteFileA(path)`; 0 when it
+/// succeeded, 4 when it failed (`NEG`, `SBB`, `AND 0xfffffffc`, `ADD 4`).
+pub fn bs_system_file_delete_file_a(e: &mut Engine, path: Ptr) -> u32 {
+    if e.call(IMPORT_DELETE_FILE_A, &args![path]).u32() != 0 {
+        0
+    } else {
+        4
+    }
+}
+
+/// `CopyFileA` (KERNEL32 import slot).
+const IMPORT_COPY_FILE_A: u32 = 0x00fd_f1b8;
+
+// Translated from 00aff0d0 (disassembled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`cdecl`, three words: the source path, the destination path and
+/// a flag whose low byte is passed zero-extended): `CopyFileA(source, destination, flag)`; 0
+/// when it succeeded, 4 when it failed (`NEG`, `SBB`, `AND 0xfffffffc`, `ADD 4`).
+pub fn fn_00aff0d0(e: &mut Engine, source: u32, destination: u32, fail_if_exists: u32) -> u32 {
+    let flag = u32::from(fail_if_exists as u8);
+    if e.call(IMPORT_COPY_FILE_A, &args![source, destination, flag])
+        .u32()
+        != 0
+    {
+        0
+    } else {
+        4
+    }
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x00af_f0d0, fn_00aff0d0(u32, u32, u32) -> u32),
         entry!(0x00af_f100, fn_00aff100() -> u32),
+        entry!(0x00af_f0b0, bs_system_file_delete_file_a(Ptr) -> u32),
         entry!(0x00af_f180, fn_00aff180(Ptr) -> Ptr),
     ]
 }
@@ -100,5 +135,44 @@ mod tests {
         assert_eq!(e.mem.u8(file + 0x44), 0);
         assert_eq!(e.mem.u8(file + 0x45), 0x55);
         assert_eq!(e.mem.u32(file + 0x1c), 0x5555_5555);
+    }
+}
+
+#[cfg(test)]
+mod delete_tests {
+    use super::*;
+
+    #[test]
+    fn delete_answers_0_on_success_and_4_on_failure() {
+        let mut e = Engine::new();
+        e.register(IMPORT_DELETE_FILE_A, |_, a| {
+            u32::from(a[0] == 0x10).into_ret()
+        });
+        assert_eq!(e.call(0x00af_f0b0, &args![0x10u32]).u32(), 0);
+        assert_eq!(e.call(0x00af_f0b0, &args![0x20u32]).u32(), 4);
+    }
+}
+
+#[cfg(test)]
+mod copy_tests {
+    use super::*;
+
+    #[test]
+    fn copy_passes_the_flag_byte_and_answers_0_or_4() {
+        let mut e = Engine::new();
+        e.call_log = Some(vec![]);
+        e.register(IMPORT_COPY_FILE_A, |_, a| {
+            u32::from(a[0] == 0x10).into_ret()
+        });
+        assert_eq!(
+            e.call(0x00af_f0d0, &args![0x10u32, 0x20u32, 0x301u32])
+                .u32(),
+            0
+        );
+        assert_eq!(fn_00aff0d0(&mut e, 0x11, 0x20, 0), 4);
+        let log = e.call_log.take().unwrap();
+        let copies: Vec<_> = log.iter().filter(|c| c.0 == IMPORT_COPY_FILE_A).collect();
+        assert_eq!(copies[0].1, vec![0x10, 0x20, 1]);
+        assert_eq!(copies[1].1, vec![0x11, 0x20, 0]);
     }
 }

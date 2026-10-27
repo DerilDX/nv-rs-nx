@@ -70,7 +70,8 @@ const PHYSICS_OBJECT_RTTI: u32 = 0x0120_43f8;
 const NODE_RTTI: u32 = 0x011f_4428;
 /// `bhkBlendCollisionObject::SynchronizeMotionType` (Xbox PDB).
 const SYNCHRONIZE_MOTION_TYPE: u32 = 0x00c8_1a50;
-/// Called with the motion type flags of the world object (`00626cb0`, one stack argument).
+/// Called with the motion type flags of the world object (`00626cb0`, `thiscall` on the
+/// world object, one stack argument).
 const SET_MOTION_FLAGS: u32 = 0x0062_6cb0;
 /// Reads the flags word of a physics object into the stack argument and answers its address
 /// (`0043b4f0`, thiscall, one stack argument).
@@ -226,8 +227,21 @@ pub fn blend_key_array_remove_all(e: &mut Engine, this: Ptr<NiTLargeArray>) {
 /// goes up when the key is not the empty key; inside it, the used count follows the slot
 /// changing between empty and not empty (the two key comparisons `00c9a660` / `00c9a620`).
 pub fn blend_key_array_set_at(e: &mut Engine, this: Ptr<NiTLargeArray>, index: u32, value: Ptr) {
+    // The exe's frame (`SUB ESP,0x10`, three pushes): 0x1c bytes, the empty key at +0x10.
+    e.with_stack(0x1c, |e, frame| {
+        set_at_in_frame(e, this, index, value, frame.addr() + 0x10)
+    });
+}
+
+/// [`blend_key_array_set_at`] in its frame: `temporary` is the empty key local.
+fn set_at_in_frame(
+    e: &mut Engine,
+    this: Ptr<NiTLargeArray>,
+    index: u32,
+    value: Ptr,
+    temporary: u32,
+) {
     let empty = empty_key_bits(e);
-    let temporary = e.mem.alloc(KEY_SIZE);
     write_key(e, temporary, empty);
     if index >= e.get(this, NiTLargeArray::m_uiSize) {
         e.set(this, NiTLargeArray::m_uiSize, index.wrapping_add(1));
@@ -248,7 +262,6 @@ pub fn blend_key_array_set_at(e: &mut Engine, this: Ptr<NiTLargeArray>, index: u
             e.set(this, NiTLargeArray::m_uiESize, used.wrapping_add(1));
         }
     }
-    e.mem.free(temporary);
     let base = e.get(this, NiTLargeArray::m_pBase);
     let slot = base.wrapping_add(index.wrapping_mul(KEY_SIZE));
     copy_key(e, slot, value.addr());
@@ -634,46 +647,51 @@ pub fn bhk_blend_controller_save_binary(
 ) {
     e.call(TIME_CONTROLLER_SAVE_BINARY, &args![this, stream]);
     let count = e.mem.u32(this.addr() + 0x48);
-    // The exe's frame: the count (in the argument slot), the size word, one key.
-    let frame = e.mem.alloc(0x20);
-    let count_slot = frame;
-    let size_slot = frame + 4;
-    let key = frame + 8;
-    e.mem.set_u32(count_slot, count);
-    let output = e.mem.u32(stream.addr() + 0x250);
-    e.mem.set_u32(size_slot, 4);
-    let writer = e.mem.u32(output + 0xc);
-    let written = e
-        .call(writer, &args![output, count_slot, 4u32, size_slot, 1u32])
-        .u32();
-    let position = e.mem.u32(output + 4);
-    e.mem.set_u32(output + 4, position.wrapping_add(written));
-    let mut index = 0u32;
-    if count != 0 {
-        loop {
-            let source = e.mem.u32(this.addr() + 0x3c) + index * KEY_SIZE;
-            copy_key(e, key, source);
-            if e.mem.u8(stream.addr() + 0x1e4) != 1 {
-                for lane in 0..3 {
-                    let word = e.mem.u32(key + 4 * lane);
-                    e.mem.set_u32(key + 4 * lane, word.swap_bytes());
+    // The exe's frame (`SUB ESP,0x14`, three pushes): 0x20 bytes, `this` kept at +0x10 (00c9af4d),
+    // the size word at +0xc (00c9af61) and one key at +0x14 (00c9afe7). The count goes into the
+    // `stream` argument's own slot (00c9af6d), +0x24 past the return address at +0x20.
+    e.with_stack(0x28, |e, frame| {
+        let frame = frame.addr();
+        let count_slot = frame + 0x24;
+        let size_slot = frame + 0xc;
+        let key = frame + 0x14;
+        e.mem.set_u32(frame + 0x24, stream.addr());
+        e.mem.set_u32(frame + 0x10, this.addr());
+        e.mem.set_u32(count_slot, count);
+        let output = e.mem.u32(stream.addr() + 0x250);
+        e.mem.set_u32(size_slot, 4);
+        let writer = e.mem.u32(output + 0xc);
+        let written = e
+            .call(writer, &args![output, count_slot, 4u32, size_slot, 1u32])
+            .u32();
+        let position = e.mem.u32(output + 4);
+        e.mem.set_u32(output + 4, position.wrapping_add(written));
+        let mut index = 0u32;
+        if count != 0 {
+            loop {
+                let source = e.mem.u32(this.addr() + 0x3c) + index * KEY_SIZE;
+                copy_key(e, key, source);
+                if e.mem.u8(stream.addr() + 0x1e4) != 1 {
+                    for lane in 0..3 {
+                        let word = e.mem.u32(key + 4 * lane);
+                        e.mem.set_u32(key + 4 * lane, word.swap_bytes());
+                    }
+                }
+                let output = e.mem.u32(stream.addr() + 0x250);
+                let writer = e.mem.u32(output + 0xc);
+                e.mem.set_u32(size_slot, 0xc);
+                let written = e
+                    .call(writer, &args![output, key, 0xcu32, size_slot, 1u32])
+                    .u32();
+                let position = e.mem.u32(output + 4);
+                e.mem.set_u32(output + 4, position.wrapping_add(written));
+                index += 1;
+                if index >= count {
+                    break;
                 }
             }
-            let output = e.mem.u32(stream.addr() + 0x250);
-            let writer = e.mem.u32(output + 0xc);
-            e.mem.set_u32(size_slot, 0xc);
-            let written = e
-                .call(writer, &args![output, key, 0xcu32, size_slot, 1u32])
-                .u32();
-            let position = e.mem.u32(output + 4);
-            e.mem.set_u32(output + 4, position.wrapping_add(written));
-            index += 1;
-            if index >= count {
-                break;
-            }
         }
-    }
-    e.mem.free(frame);
+    });
 }
 
 // Translated from 00c9b020 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -944,7 +962,9 @@ pub fn fn_00c9b470(e: &mut Engine, object: Ptr, key_time: f32) {
                 }
             }
             flags = (flags & 0xffff_ff88) | 8;
-            e.call(SET_MOTION_FLAGS, &args![flags]);
+            // 00c9b4c3: `00626cb0` (RET 4) is a thiscall on the world object (ECX from
+            // 00c9b4a0).
+            e.call(SET_MOTION_FLAGS, &args![world_object, flags]);
         }
         let class = (flags >> 8) & 0x1f;
         let gain = load_float(e, GET_UP_GAINS + class * 4);
@@ -1210,44 +1230,49 @@ pub fn bhk_blend_controller_load_binary(
 ) {
     let scope = enter_scope(e);
     e.call(TIME_CONTROLLER_LOAD_BINARY, &args![this, stream]);
-    let frame = e.mem.alloc(0x20);
-    let count_slot = frame;
-    let size_slot = frame + 4;
-    let key = frame + 8;
-    let input = e.mem.u32(stream.addr() + 0x24c);
-    e.mem.set_u32(size_slot, 4);
-    let reader = e.mem.u32(input + 8);
-    let read = e
-        .call(reader, &args![input, count_slot, 4u32, size_slot, 1u32])
-        .u32();
-    let position = e.mem.u32(input + 4);
-    e.mem.set_u32(input + 4, position.wrapping_add(read));
-    let count = e.mem.u32(count_slot);
-    blend_key_array_set_size(e, this.at(BhkBlendController::pBlendKeyA), count);
-    if count != 0 {
-        let empty = empty_key_bits(e);
-        let mut index = 0u32;
-        loop {
-            let input = e.mem.u32(stream.addr() + 0x24c);
-            write_key(e, key, empty);
-            let reader = e.mem.u32(input + 8);
-            let read = e.call(reader, &args![input, key, 0xcu32, 0u32, 0u32]).u32();
-            let position = e.mem.u32(input + 4);
-            e.mem.set_u32(input + 4, position.wrapping_add(read));
-            if e.mem.u8(stream.addr() + 0x1e5) != 1 {
-                for lane in 0..3 {
-                    let word = e.mem.u32(key + 4 * lane);
-                    e.mem.set_u32(key + 4 * lane, word.swap_bytes());
+    // The exe's frame (exception record, `SUB ESP,0x18`, four pushes and the cookie): 0x38
+    // bytes, the size word at +0x18 (00c9baab) and the key at +0x20 (00c9bb1a). The count is
+    // read into the `stream` argument's own slot (00c9bab2), +0x3c past the return address.
+    e.with_stack(0x40, |e, frame| {
+        let frame = frame.addr();
+        e.mem.set_u32(frame + 0x3c, stream.addr());
+        let count_slot = frame + 0x3c;
+        let size_slot = frame + 0x18;
+        let key = frame + 0x20;
+        let input = e.mem.u32(stream.addr() + 0x24c);
+        e.mem.set_u32(size_slot, 4);
+        let reader = e.mem.u32(input + 8);
+        let read = e
+            .call(reader, &args![input, count_slot, 4u32, size_slot, 1u32])
+            .u32();
+        let position = e.mem.u32(input + 4);
+        e.mem.set_u32(input + 4, position.wrapping_add(read));
+        let count = e.mem.u32(count_slot);
+        blend_key_array_set_size(e, this.at(BhkBlendController::pBlendKeyA), count);
+        if count != 0 {
+            let empty = empty_key_bits(e);
+            let mut index = 0u32;
+            loop {
+                let input = e.mem.u32(stream.addr() + 0x24c);
+                write_key(e, key, empty);
+                let reader = e.mem.u32(input + 8);
+                let read = e.call(reader, &args![input, key, 0xcu32, 0u32, 0u32]).u32();
+                let position = e.mem.u32(input + 4);
+                e.mem.set_u32(input + 4, position.wrapping_add(read));
+                if e.mem.u8(stream.addr() + 0x1e5) != 1 {
+                    for lane in 0..3 {
+                        let word = e.mem.u32(key + 4 * lane);
+                        e.mem.set_u32(key + 4 * lane, word.swap_bytes());
+                    }
+                }
+                fn_00c9b1a0(e, this, Ptr::new(key));
+                index += 1;
+                if index >= count {
+                    break;
                 }
             }
-            fn_00c9b1a0(e, this, Ptr::new(key));
-            index += 1;
-            if index >= count {
-                break;
-            }
         }
-    }
-    e.mem.free(frame);
+    });
     leave_scope(e, scope);
 }
 
@@ -1305,42 +1330,46 @@ pub fn bhk_blend_controller_get_viewer_strings(
 ) {
     let scope = enter_scope(e);
     e.call(TIME_CONTROLLER_GET_VIEWER_STRINGS, &args![this, strings]);
-    let name = e.mem.u32(BLEND_CONTROLLER_RTTI);
-    let slot = e.mem.alloc(4);
-    let text = e.call(GET_VIEWER_STRING, &args![name]).u32();
-    e.mem.set_u32(slot, text);
-    store_text(e, strings.addr(), slot);
-    let count = e.mem.u32(this.addr() + 0x48);
-    let text = e
-        .call(GET_VIEWER_STRING_INT, &args![KEYS_LABEL, count])
-        .u32();
-    e.mem.set_u32(slot, text);
-    store_text(e, strings.addr(), slot);
-    e.mem.free(slot);
-    if count != 0 {
-        let buffer = e.mem.alloc(0x40);
-        let mut index = 0u32;
-        loop {
-            let key = e.mem.u32(this.addr() + 0x3c) + index * KEY_SIZE;
-            let a = f64::from(load_float(e, key));
-            let b = f64::from(load_float(e, key + 4));
-            let c = f64::from(load_float(e, key + 8));
-            e.call(SPRINTF, &args![buffer, 0x40u32, KEY_FORMAT, index, a, b, c]);
-            let mut length = 0u32;
-            while e.mem.u8(buffer + length) != 0 {
-                length += 1;
-            }
-            let size = length + 1;
-            let copy = e.call(MEMORY_ALLOCATE, &args![MEMORY_MANAGER, size]).u32();
-            e.call(STRCPY_S, &args![copy, size, buffer]);
-            append_text(e, strings.addr(), copy);
-            index += 1;
-            if index >= e.mem.u32(this.addr() + 0x48) {
-                break;
+    // The exe's frame (`AND ESP,0xffffffc0`, exception record, `SUB ESP,0xa8`, four pushes):
+    // 0xc4 bytes below the 64-byte boundary, the string slot at +0x28 (00c9bc5c) and the
+    // 64-byte print buffer at +0x3c (00c9bcd7), which sits on that boundary.
+    e.with_stack(0xc4 + 0x40, |e, raw| {
+        let frame = ((raw.addr() + 0x3c + 0x3f) & !0x3f) - 0x3c;
+        let slot = frame + 0x28;
+        let buffer = frame + 0x3c;
+        let name = e.mem.u32(BLEND_CONTROLLER_RTTI);
+        let text = e.call(GET_VIEWER_STRING, &args![name]).u32();
+        e.mem.set_u32(slot, text);
+        store_text(e, strings.addr(), slot);
+        let count = e.mem.u32(this.addr() + 0x48);
+        let text = e
+            .call(GET_VIEWER_STRING_INT, &args![KEYS_LABEL, count])
+            .u32();
+        e.mem.set_u32(slot, text);
+        store_text(e, strings.addr(), slot);
+        if count != 0 {
+            let mut index = 0u32;
+            loop {
+                let key = e.mem.u32(this.addr() + 0x3c) + index * KEY_SIZE;
+                let a = f64::from(load_float(e, key));
+                let b = f64::from(load_float(e, key + 4));
+                let c = f64::from(load_float(e, key + 8));
+                e.call(SPRINTF, &args![buffer, 0x40u32, KEY_FORMAT, index, a, b, c]);
+                let mut length = 0u32;
+                while e.mem.u8(buffer + length) != 0 {
+                    length += 1;
+                }
+                let size = length + 1;
+                let copy = e.call(MEMORY_ALLOCATE, &args![MEMORY_MANAGER, size]).u32();
+                e.call(STRCPY_S, &args![copy, size, buffer]);
+                append_text(e, strings.addr(), copy);
+                index += 1;
+                if index >= e.mem.u32(this.addr() + 0x48) {
+                    break;
+                }
             }
         }
-        e.mem.free(buffer);
-    }
+    });
     leave_scope(e, scope);
 }
 
@@ -1703,6 +1732,19 @@ mod tests {
     }
 
     #[test]
+    fn set_at_keeps_the_empty_key_at_frame_offset_0x10() {
+        let mut e = engine();
+        let array = make_array(&mut e, &[[1.0, 1.0, 1.0]], 4);
+        let value = e.mem.alloc(12);
+        put_key(&mut e, value, [2.0, 2.0, 2.0]);
+        // The next 0x1c-byte block is the one the frame takes.
+        let frame = e.mem.alloc(0x1c);
+        e.mem.free(frame);
+        e.call(0x00c9a730, &args![array, 2u32, value]);
+        assert_eq!(calls_to(&e, KEY_NOT_EQUAL), vec![vec![value, frame + 0x10]]);
+    }
+
+    #[test]
     fn clear_keys_empties_the_array_and_resets_the_gains_and_priority() {
         let mut e = engine();
         let controller = make_controller(&mut e, &[[1.0, 2.0, 3.0]], 2);
@@ -2060,6 +2102,47 @@ mod tests {
     }
 
     #[test]
+    fn load_binary_uses_the_exe_frame_and_the_argument_slot() {
+        let mut e = engine();
+        e.register(TIME_CONTROLLER_LOAD_BINARY, |_, _| Ret::default());
+        let mut words = vec![1];
+        words.extend(bits(&[1.0, 2.0, 3.0]));
+        let controller = make_controller(&mut e, &[], 0);
+        let (stream, input) = reader_stream(&mut e, &words, true);
+        let frame = e.mem.alloc(0x40);
+        e.mem.free(frame);
+        e.call(0x00c9ba40, &args![controller, stream]);
+        // The count into the argument slot (+0x3c), the size word at +0x18, the key at +0x20.
+        assert_eq!(
+            calls_to(&e, READER),
+            vec![
+                vec![input, frame + 0x3c, 4, frame + 0x18, 1],
+                vec![input, frame + 0x20, 0xc, 0, 0]
+            ]
+        );
+        assert_eq!(controller_keys(&e, controller), vec![[1.0, 2.0, 3.0]]);
+    }
+
+    #[test]
+    fn save_binary_uses_the_exe_frame_and_the_argument_slot() {
+        let mut e = engine();
+        e.register(TIME_CONTROLLER_SAVE_BINARY, |_, _| Ret::default());
+        let controller = make_controller(&mut e, &[[1.0, 2.0, 3.0]], 1);
+        let (stream, output) = writer_stream(&mut e, true);
+        let frame = e.mem.alloc(0x28);
+        e.mem.free(frame);
+        e.call(0x00c9af40, &args![controller, stream]);
+        // The count from the argument slot (+0x24), the key from +0x14, the size word at +0xc.
+        assert_eq!(
+            calls_to(&e, WRITER),
+            vec![
+                vec![output, frame + 0x24, 4, frame + 0xc, 1],
+                vec![output, frame + 0x14, 0xc, frame + 0xc, 1]
+            ]
+        );
+    }
+
+    #[test]
     fn load_binary_reads_the_count_and_appends_each_key() {
         let mut e = engine();
         e.register(TIME_CONTROLLER_LOAD_BINARY, |_, _| Ret::default());
@@ -2345,7 +2428,9 @@ mod tests {
         e.mem.set_u16(scene.controller.addr() + 8, 0xffff);
         e.call(0x00c9b470, &args![scene.object, 2.0f32]);
         let controller = scene.controller;
-        assert_eq!(calls_to(&e, SET_MOTION_FLAGS), vec![vec![0x308]]);
+        let flags = calls_to(&e, SET_MOTION_FLAGS);
+        assert_eq!(flags.len(), 1);
+        assert_eq!(flags[0][1..], [0x308]);
         assert_eq!(
             controller_keys(&e, controller),
             vec![[0.0, 0.0, 0.0], [0.75, 0.2, 0.4]]
@@ -2593,6 +2678,16 @@ mod tests {
         assert_eq!(e.mem.u32(base + 4), 0x2222);
         assert_eq!(e.mem.cstr(e.mem.u32(base + 8)), b"Key");
         assert_eq!(e.mem.cstr(e.mem.u32(base + 12)), b"Key");
+        // The exe's frame: the print buffer on a 64-byte boundary at +0x3c, the string slot
+        // at +0x28 (0x14 below it), the same buffer for every key.
+        let buffer = formats[0][0];
+        assert_eq!(buffer & 0x3f, 0);
+        assert_eq!(formats[1][0], buffer);
+        let slots: Vec<u32> = calls_to(&e, STRING_ARRAY_SET_AT)
+            .iter()
+            .map(|call| call[2])
+            .collect();
+        assert_eq!(slots, vec![buffer - 0x14; 2]);
     }
 
     #[test]

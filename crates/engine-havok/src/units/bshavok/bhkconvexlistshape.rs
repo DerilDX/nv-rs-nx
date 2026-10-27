@@ -304,8 +304,9 @@ pub fn bhk_convex_list_shape_copy_members(e: &mut Engine, this: Ptr, source: u32
 // Translated from 00ccf990 (decompiled, FalloutNV.exe 1.4.0.525)
 /// `bhkConvexListShape::RegisterStreamables` (Xbox PDB): registers each child's Havok
 /// object through its virtual slot `0x54` with the stream (children counted unsigned), then
-/// `NiObject::RegisterStreamables` (through `00aa0ad0`).
-pub fn bhk_convex_list_shape_register_streamables(e: &mut Engine, this: Ptr, stream: u32) {
+/// `NiObject::RegisterStreamables` (through `00aa0ad0`), whose `AL` it answers: the exe ends on
+/// that call, and `RegisterStreamables` is `bool` in the Xbox PDB.
+pub fn bhk_convex_list_shape_register_streamables(e: &mut Engine, this: Ptr, stream: u32) -> bool {
     let count = child_count(e, this);
     let mut index = 0;
     while index < count {
@@ -315,7 +316,7 @@ pub fn bhk_convex_list_shape_register_streamables(e: &mut Engine, this: Ptr, str
         }
         index += 1;
     }
-    e.call(REGISTER_STREAMABLES, &args![this, stream]);
+    e.call(REGISTER_STREAMABLES, &args![this, stream]).bool()
 }
 
 // Translated from 00ccfa00 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -802,7 +803,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         ),
         entry!(
             0x00ccf990,
-            bhk_convex_list_shape_register_streamables(Ptr, u32)
+            bhk_convex_list_shape_register_streamables(Ptr, u32) -> bool
         ),
         entry!(0x00ccfa00, fn_00ccfa00(Ptr)),
         entry!(0x00ccfa50, bhk_convex_list_shape_can_share(Ptr, u32) -> bool),
@@ -1150,6 +1151,16 @@ mod tests {
             vec![vec![children[0], 0x6000], vec![children[1], 0x6000]]
         );
         assert_eq!(calls_to(&e, REGISTER_STREAMABLES), vec![vec![this, 0x6000]]);
+    }
+
+    #[test]
+    fn register_streamables_answers_the_base_al() {
+        let mut e = Engine::new();
+        let (this, _, _) = shape(&mut e, 2);
+        e.register(REGISTER_STREAMABLES, |_, _| 0x0000_0101u32.into_ret());
+        assert!(e.call(0x00ccf990, &args![this, 0x6000u32]).bool());
+        e.register(REGISTER_STREAMABLES, |_, _| 0x0000_0100u32.into_ret());
+        assert!(!e.call(0x00ccf990, &args![this, 0x6000u32]).bool());
     }
 
     #[test]

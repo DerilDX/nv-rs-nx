@@ -75,6 +75,11 @@ pub enum Kind {
     /// nv-call's process ended on this vector (an exception outside the
     /// harness's reach). Inconclusive.
     ExeCrash,
+    /// The exe called a Windows import (nv-call runs none: its fault kind `import`), as the C
+    /// runtime's error path does on some inputs (errno through `__getptd`, `GetLastError`).
+    /// The engine provides those imports, so the two sides cannot be compared past that
+    /// call. Inconclusive.
+    ExeImport,
     /// The exe hit an access violation, ran past `--exe-timeout` or ended
     /// nv-call's process, in a function listed as reading only its buffers at
     /// known offsets, which by construction neither faults nor loops on: the
@@ -112,6 +117,7 @@ impl Kind {
         !matches!(
             self,
             Kind::Match
+                | Kind::ExeImport
                 | Kind::BothFailed
                 | Kind::OutOfImageRead
                 | Kind::ExeTimeout
@@ -195,6 +201,10 @@ fn compare(
             name,
             read_at,
         } => {
+            // The exe needed Windows here: nothing past that call is comparable.
+            if text.contains("\"kind\":\"import\"") {
+                return (format!("fault {text}"), rust_text, Kind::ExeImport);
+            }
             let k = match rust {
                 Ok(_) => Kind::ExeFaultOnly,
                 Err(m) => match (read_at, unmapped_read(m)) {
@@ -999,6 +1009,15 @@ mod tests {
             compare(Ty::U32, &fault(0x0400_0000), &ok(1, 0.0), 0).2,
             Kind::ExeFaultOnly
         );
+        // The exe called an import (the CRT's errno path): inconclusive, whatever the engine did.
+        let import = Outcome::Fault {
+            text: r#"{"kind":"import","name":"KERNEL32.dll!GetLastError","index":26}"#.into(),
+            name: "KERNEL32.dll!GetLastError".into(),
+            read_at: None,
+        };
+        for rust in [Err("open function 00000000".into()), ok(1, 0.0)] {
+            assert_eq!(compare(Ty::U32, &import, &rust, 0).2, Kind::ExeImport);
+        }
         let div = Outcome::Fault {
             text: "{}".into(),
             name: "integer_divide_by_zero".into(),

@@ -623,6 +623,121 @@ pub fn x87_fistp64_chop(x: X87Ext) -> i64 {
     imp::fistp64(x, control_word() | ROUNDING_CONTROL)
 }
 
+// ---- Arithmetic on register values -----------------------------------------
+//
+// `FADD`, `FSUB`, `FMUL`, `FDIV` and `FSQRT` on the extended values the
+// registers hold (the `ST(i)` forms, and a memory operand once it is loaded:
+// `X87Ext::load64` of a double is exact). The result is rounded once, as the
+// FPU rounds it, to the precision control and rounding mode of the running
+// game thread's control word ([`control_word`]), with the extended exponent
+// range; the NaN choice is the x87's. On x86_64 the instruction runs on the
+// host's FPU like the transcendental helpers above (encoded as bytes, so the
+// operand order is the one written here); elsewhere the portable fallback
+// computes in `f64` (not bit-exact).
+
+/// `FADD`: `a + b`.
+pub fn x87_fadd(a: X87Ext, b: X87Ext) -> X87Ext {
+    imp::fadd(a, b)
+}
+
+/// `FSUB` with ST0 = `a`: `a - b` (the reversed forms are `x87_fsub(b, a)`).
+pub fn x87_fsub(a: X87Ext, b: X87Ext) -> X87Ext {
+    imp::fsub(a, b)
+}
+
+/// `FMUL`: `a * b`.
+pub fn x87_fmul(a: X87Ext, b: X87Ext) -> X87Ext {
+    imp::fmul(a, b)
+}
+
+/// `FDIV` with ST0 = `a`: `a / b` (the reversed forms are `x87_fdiv(b, a)`).
+pub fn x87_fdiv(a: X87Ext, b: X87Ext) -> X87Ext {
+    imp::fdiv(a, b)
+}
+
+/// `FSQRT` of ST0.
+pub fn x87_fsqrt(a: X87Ext) -> X87Ext {
+    imp::fsqrt(a)
+}
+
+/// Status word bits C0 and C3, which `FCOM`/`FTST`/`FXAM` set (C2 is
+/// [`X87_STATUS_C2`]); `FNSTSW AX` puts them in `AH` as 0x01 (C0), 0x04 (C2)
+/// and 0x40 (C3).
+pub const X87_STATUS_C0: u16 = 0x0100;
+pub const X87_STATUS_C3: u16 = 0x4000;
+
+/// `FCOM` of ST0 = `a` with `b` (and `FCOMP`/`FCOMPP`/`FUCOM`, which set the
+/// same condition codes): the status word's C3, C2 and C0 (`a > b`: none;
+/// `a < b`: C0; equal: C3; unordered: all three).
+pub fn x87_fcom(a: X87Ext, b: X87Ext) -> u16 {
+    imp::fcom(a, b) & (X87_STATUS_C0 | X87_STATUS_C2 | X87_STATUS_C3)
+}
+
+/// `FXAM` of a (non-empty) register: the status word's C3, C2, C1 and C0 (C1 the sign; C3 C2
+/// C0 the class: 000 unsupported, 001 NaN, 010 normal, 011 infinity, 100 zero, 110 denormal).
+/// The class is the register's encoding: an exponent of 0x7fff with the integer bit set is an
+/// infinity (fraction zero) or a NaN, without it unsupported; a zero exponent is a zero
+/// (significand zero) or a denormal; any other exponent is normal with the integer bit set and
+/// unsupported (an unnormal) without it.
+pub fn x87_fxam(x: X87Ext) -> u16 {
+    const C1: u16 = 0x0200;
+    let sign = if x.sign_exponent() & 0x8000 != 0 {
+        C1
+    } else {
+        0
+    };
+    let exponent = x.sign_exponent() & 0x7fff;
+    let significand = x.significand();
+    let integer = significand & (1 << 63) != 0;
+    let class = match exponent {
+        0x7fff if !integer => 0,
+        0x7fff if significand << 1 == 0 => X87_STATUS_C2 | X87_STATUS_C0,
+        0x7fff => X87_STATUS_C0,
+        0 if significand == 0 => X87_STATUS_C3,
+        0 => X87_STATUS_C3 | X87_STATUS_C2,
+        _ if integer => X87_STATUS_C2,
+        _ => 0,
+    };
+    sign | class
+}
+
+/// `FCHS`: the sign bit flipped (NaNs included).
+pub fn x87_fchs(a: X87Ext) -> X87Ext {
+    let mut bytes = a.0;
+    bytes[9] ^= 0x80;
+    X87Ext(bytes)
+}
+
+/// `FABS`: the sign bit cleared (NaNs included).
+pub fn x87_fabs(a: X87Ext) -> X87Ext {
+    let mut bytes = a.0;
+    bytes[9] &= 0x7f;
+    X87Ext(bytes)
+}
+
+/// The constants the x87 loads by instruction (`FLDL2E`, `FLDL2T`, `FLDLG2`,
+/// `FLDLN2`, `FLDPI`): rounded to 64 bits with the control word's rounding
+/// mode.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum X87Constant {
+    /// `FLDL2E`: log2(e).
+    Log2E,
+    /// `FLDL2T`: log2(10).
+    Log2Ten,
+    /// `FLDLG2`: log10(2).
+    Log10Two,
+    /// `FLDLN2`: ln(2).
+    LnTwo,
+    /// `FLDPI`: pi.
+    Pi,
+}
+
+/// `FLDL2E` and the like: the constant as the running thread's control word
+/// rounds it.
+pub fn x87_fld_constant(constant: X87Constant) -> X87Ext {
+    imp::fld_constant(constant)
+}
+
 #[cfg(target_arch = "x86_64")]
 use hw as imp;
 #[cfg(not(target_arch = "x86_64"))]
@@ -885,6 +1000,95 @@ mod hw {
         run!(f, "fld tbyte ptr [{f}]", "fistp qword ptr [{f} + 20]");
         i64::from_le_bytes(word8(&f.r0))
     }
+
+    // The arithmetic helpers load `b` first, so ST0 = `a` and ST1 = `b`, and
+    // run the `ST(0), ST(1)` form, written as its bytes: D8 C1 `FADD`, D8 E1
+    // `FSUB` (ST0 - ST1), D8 C9 `FMUL`, D8 F1 `FDIV` (ST0 / ST1), D8 D1
+    // `FCOM ST(1)`.
+
+    pub fn fadd(a: X87Ext, b: X87Ext) -> X87Ext {
+        let mut f = frame(a.0, b.0);
+        run!(
+            f,
+            "fld tbyte ptr [{f} + 10]",
+            "fld tbyte ptr [{f}]",
+            ".byte 0xd8, 0xc1",
+            "fstp tbyte ptr [{f} + 20]",
+        );
+        X87Ext(f.r0)
+    }
+
+    pub fn fsub(a: X87Ext, b: X87Ext) -> X87Ext {
+        let mut f = frame(a.0, b.0);
+        run!(
+            f,
+            "fld tbyte ptr [{f} + 10]",
+            "fld tbyte ptr [{f}]",
+            ".byte 0xd8, 0xe1",
+            "fstp tbyte ptr [{f} + 20]",
+        );
+        X87Ext(f.r0)
+    }
+
+    pub fn fmul(a: X87Ext, b: X87Ext) -> X87Ext {
+        let mut f = frame(a.0, b.0);
+        run!(
+            f,
+            "fld tbyte ptr [{f} + 10]",
+            "fld tbyte ptr [{f}]",
+            ".byte 0xd8, 0xc9",
+            "fstp tbyte ptr [{f} + 20]",
+        );
+        X87Ext(f.r0)
+    }
+
+    pub fn fdiv(a: X87Ext, b: X87Ext) -> X87Ext {
+        let mut f = frame(a.0, b.0);
+        run!(
+            f,
+            "fld tbyte ptr [{f} + 10]",
+            "fld tbyte ptr [{f}]",
+            ".byte 0xd8, 0xf1",
+            "fstp tbyte ptr [{f} + 20]",
+        );
+        X87Ext(f.r0)
+    }
+
+    pub fn fsqrt(a: X87Ext) -> X87Ext {
+        let mut f = frame(a.0, [0; 10]);
+        run!(
+            f,
+            "fld tbyte ptr [{f}]",
+            "fsqrt",
+            "fstp tbyte ptr [{f} + 20]"
+        );
+        X87Ext(f.r0)
+    }
+
+    pub fn fcom(a: X87Ext, b: X87Ext) -> u16 {
+        let mut f = frame(a.0, b.0);
+        run!(
+            f,
+            "fld tbyte ptr [{f} + 10]",
+            "fld tbyte ptr [{f}]",
+            ".byte 0xd8, 0xd1",
+            "fnstsw word ptr [{f} + 44]",
+        );
+        f.status
+    }
+
+    pub fn fld_constant(constant: super::X87Constant) -> X87Ext {
+        use super::X87Constant::*;
+        let mut f = frame([0; 10], [0; 10]);
+        match constant {
+            Log2E => run!(f, "fldl2e", "fstp tbyte ptr [{f} + 20]"),
+            Log2Ten => run!(f, "fldl2t", "fstp tbyte ptr [{f} + 20]"),
+            Log10Two => run!(f, "fldlg2", "fstp tbyte ptr [{f} + 20]"),
+            LnTwo => run!(f, "fldln2", "fstp tbyte ptr [{f} + 20]"),
+            Pi => run!(f, "fldpi", "fstp tbyte ptr [{f} + 20]"),
+        }
+        X87Ext(f.r0)
+    }
 }
 
 /// Portable fallback (not x86_64): the extended format converted in software
@@ -996,6 +1200,47 @@ mod soft {
 
     pub fn fyl2xp1(y: X87Ext, x: X87Ext) -> X87Ext {
         load64(store64(y) * (store64(x).ln_1p() / std::f64::consts::LN_2))
+    }
+
+    pub fn fadd(a: X87Ext, b: X87Ext) -> X87Ext {
+        load64(store64(a) + store64(b))
+    }
+
+    pub fn fsub(a: X87Ext, b: X87Ext) -> X87Ext {
+        load64(store64(a) - store64(b))
+    }
+
+    pub fn fmul(a: X87Ext, b: X87Ext) -> X87Ext {
+        load64(store64(a) * store64(b))
+    }
+
+    pub fn fdiv(a: X87Ext, b: X87Ext) -> X87Ext {
+        load64(store64(a) / store64(b))
+    }
+
+    pub fn fsqrt(a: X87Ext) -> X87Ext {
+        unary(a, f64::sqrt)
+    }
+
+    pub fn fcom(a: X87Ext, b: X87Ext) -> u16 {
+        let (a, b) = (store64(a), store64(b));
+        match a.partial_cmp(&b) {
+            Some(std::cmp::Ordering::Greater) => 0,
+            Some(std::cmp::Ordering::Less) => super::X87_STATUS_C0,
+            Some(std::cmp::Ordering::Equal) => super::X87_STATUS_C3,
+            None => super::X87_STATUS_C0 | super::X87_STATUS_C2 | super::X87_STATUS_C3,
+        }
+    }
+
+    pub fn fld_constant(constant: super::X87Constant) -> X87Ext {
+        use super::X87Constant::*;
+        load64(match constant {
+            Log2E => std::f64::consts::LOG2_E,
+            Log2Ten => std::f64::consts::LOG2_10,
+            Log10Two => std::f64::consts::LOG10_2,
+            LnTwo => std::f64::consts::LN_2,
+            Pi => std::f64::consts::PI,
+        })
     }
 
     pub fn fscale(x: X87Ext, scale: X87Ext) -> X87Ext {
@@ -1695,5 +1940,117 @@ mod tests {
 
     fn hw_fistp64(x: X87Ext, word: u16) -> i64 {
         with_word(word, || x87_fistp64(x))
+    }
+
+    #[test]
+    fn register_arithmetic_rounds_once_to_the_control_words_precision() {
+        // 53-bit precision: the double result, kept in a register.
+        let third = with_word(0x027f, || x87_fdiv(ext(1.0), ext(3.0)));
+        assert_eq!(third.store64(), 1.0 / 3.0);
+        // 64-bit precision keeps the whole extended significand, 24-bit rounds it to 24 bits.
+        let third = with_word(0x037f, || x87_fdiv(ext(1.0), ext(3.0)));
+        assert_eq!(
+            (third.sign_exponent(), third.significand()),
+            (0x3ffd, 0xaaaa_aaaa_aaaa_aaab)
+        );
+        let third = with_word(0x007f, || x87_fdiv(ext(1.0), ext(3.0)));
+        assert_eq!(
+            (third.sign_exponent(), third.significand()),
+            (0x3ffd, 0xaaaa_ab00_0000_0000)
+        );
+        // Round toward zero at 24 bits.
+        let third = with_word(0x0c7f, || x87_fdiv(ext(1.0), ext(3.0)));
+        assert_eq!(third.significand(), 0xaaaa_aa00_0000_0000);
+        // The operand order: ST0 first.
+        let on = |f: fn(X87Ext, X87Ext) -> X87Ext, a: f64, b: f64| {
+            with_word(0x027f, || f(ext(a), ext(b))).store64()
+        };
+        assert_eq!(on(x87_fsub, 5.0, 2.0), 3.0);
+        assert_eq!(on(x87_fdiv, 6.0, 2.0), 3.0);
+        assert_eq!(on(x87_fadd, 5.0, 2.0), 7.0);
+        assert_eq!(on(x87_fmul, 5.0, 2.0), 10.0);
+        assert_eq!(with_word(0x027f, || x87_fsqrt(ext(9.0))).store64(), 3.0);
+        // The extended exponent range: no overflow in between.
+        let back = with_word(0x027f, || {
+            x87_fdiv(x87_fmul(ext(1e300), ext(1e300)), ext(1e300))
+        });
+        assert_eq!(back.store64(), 1e300);
+        // The x87 NaN choice: the larger significand of two quiet NaNs.
+        let nan = with_word(0x027f, || {
+            x87_fadd(
+                ext(f64::from_bits(0x7ff8_0000_0000_0001)),
+                ext(f64::from_bits(0xfff8_0000_0000_0002)),
+            )
+        });
+        assert_eq!(nan.store64().to_bits(), 0xfff8_0000_0000_0002);
+        // The fallback agrees on exact cases.
+        assert_eq!(soft::fsub(ext(5.0), ext(2.0)).store64(), 3.0);
+        assert_eq!(soft::fdiv(ext(6.0), ext(2.0)).store64(), 3.0);
+    }
+
+    #[test]
+    fn fcom_sets_c0_c2_and_c3() {
+        let c = |a: f64, b: f64| x87_fcom(ext(a), ext(b));
+        assert_eq!(c(2.0, 1.0), 0);
+        assert_eq!(c(1.0, 2.0), X87_STATUS_C0);
+        assert_eq!(c(-0.0, 0.0), X87_STATUS_C3);
+        assert_eq!(
+            c(f64::NAN, 1.0),
+            X87_STATUS_C0 | X87_STATUS_C2 | X87_STATUS_C3
+        );
+        assert_eq!(soft::fcom(ext(1.0), ext(2.0)), X87_STATUS_C0);
+    }
+
+    #[test]
+    fn fxam_classifies_the_register() {
+        let c = |bits: u64| x87_fxam(ext(f64::from_bits(bits)));
+        let (c0, c1, c2, c3) = (X87_STATUS_C0, 0x0200, X87_STATUS_C2, X87_STATUS_C3);
+        assert_eq!(c(1.5f64.to_bits()), c2);
+        assert_eq!(c((-1.5f64).to_bits()), c1 | c2);
+        assert_eq!(c(0), c3);
+        assert_eq!(c(0x8000_0000_0000_0000), c1 | c3);
+        assert_eq!(c(f64::INFINITY.to_bits()), c2 | c0);
+        assert_eq!(c(0xfff8_0000_0000_0000), c1 | c0);
+        // A double denormal is a normal extended value.
+        assert_eq!(c(1), c2);
+        assert_eq!(x87_fxam(X87Ext::from_parts(0, 5)), c3 | c2);
+        assert_eq!(x87_fxam(X87Ext::from_parts(0x3fff, 5)), 0);
+        assert_eq!(x87_fxam(X87Ext::from_parts(0x7fff, 0)), 0);
+    }
+
+    #[test]
+    fn fchs_fabs_and_the_loaded_constants() {
+        assert_eq!(x87_fchs(ext(1.5)).store64(), -1.5);
+        assert_eq!(x87_fabs(ext(-2.0)).store64(), 2.0);
+        let nan = x87_fchs(ext(f64::from_bits(0x7ff8_0000_0000_0005)));
+        assert_eq!(nan.store64().to_bits(), 0xfff8_0000_0000_0005);
+        let parts = |word: u16, c: X87Constant| {
+            let v = with_word(word, || x87_fld_constant(c));
+            (v.sign_exponent(), v.significand())
+        };
+        assert_eq!(
+            parts(0x027f, X87Constant::Pi),
+            (0x4000, 0xc90f_daa2_2168_c235)
+        );
+        assert_eq!(
+            parts(0x0e7f, X87Constant::Pi),
+            (0x4000, 0xc90f_daa2_2168_c234)
+        );
+        assert_eq!(
+            parts(0x027f, X87Constant::Log2E),
+            (0x3fff, 0xb8aa_3b29_5c17_f0bc)
+        );
+        assert_eq!(
+            parts(0x027f, X87Constant::Log2Ten),
+            (0x4000, 0xd49a_784b_cd1b_8afe)
+        );
+        assert_eq!(
+            parts(0x027f, X87Constant::Log10Two),
+            (0x3ffd, 0x9a20_9a84_fbcf_f799)
+        );
+        assert_eq!(
+            parts(0x027f, X87Constant::LnTwo),
+            (0x3ffe, 0xb172_17f7_d1cf_79ac)
+        );
     }
 }

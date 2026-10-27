@@ -37,8 +37,8 @@ const TYPE_RAY_SHAPE: u32 = 0x0126_832c;
 const TYPE_SCALED_HOLDER: u32 = 0x0126_7e64;
 const TYPE_TRANSFORMED: u32 = 0x0126_83c8;
 const TYPE_ENTITY_HOLDER: u32 = 0x0126_81c0;
-/// The element copy of the array (`00c7f900`, `ECX` = the array, `(destination, source,
-/// count)`, 8-byte elements, copied from the last to the first).
+/// The element copy of the array (`00c7f900`, `stdcall` `(destination, source, count)`; the
+/// array the callers put in `ECX` is not read; 8-byte elements).
 const COPY_ELEMENTS: u32 = 0x00c7_f900;
 /// The stiff spring constraint: base constructor (`00c87c30`), `bhkConstraint::Init`
 /// (`00c89dd0`), destructor (`00cc58c0`), sized free (`00aa1460`).
@@ -220,7 +220,8 @@ pub fn fn_00c7f970(e: &mut Engine, this: Ptr, new_capacity: u32, count: u32) {
         return;
     }
     let block = e.vcall(me, 4, &args![new_capacity]).u32();
-    e.call(COPY_ELEMENTS, &args![me, block, data, count]);
+    // 00c7f9ae: `00c7f900` is stdcall (RET 0xc) and does not read ECX.
+    e.call(COPY_ELEMENTS, &args![block, data, count]);
     let old = e.mem.u32(me + 4);
     e.vcall(me, 8, &args![old]);
     e.mem.set_u32(me + 4, block);
@@ -1331,13 +1332,14 @@ pub fn fn_00c80b20(e: &mut Engine, this: Ptr, index: u32, element: Ptr) {
         };
         let block = e.vcall(me, 4, &args![bigger]).u32();
         let data = e.mem.u32(me + 4);
-        e.call(COPY_ELEMENTS, &args![me, block, data, index]);
+        // 00c80b88 / 00c80ba7 / 00c80bdc: `00c7f900` is stdcall (RET 0xc) and does not
+        // read ECX.
+        e.call(COPY_ELEMENTS, &args![block, data, index]);
         let count = e.mem.u32(me + 8);
         let data = e.mem.u32(me + 4);
         e.call(
             COPY_ELEMENTS,
             &args![
-                me,
                 offset.wrapping_add(block).wrapping_add(8),
                 data.wrapping_add(offset),
                 count.wrapping_sub(index)
@@ -1351,7 +1353,7 @@ pub fn fn_00c80b20(e: &mut Engine, this: Ptr, index: u32, element: Ptr) {
         let data = e.mem.u32(me + 4).wrapping_add(offset);
         e.call(
             COPY_ELEMENTS,
-            &args![me, data.wrapping_add(8), data, count.wrapping_sub(index)],
+            &args![data.wrapping_add(8), data, count.wrapping_sub(index)],
         );
     }
     let used = e.mem.u32(me + 8);
@@ -2026,10 +2028,7 @@ mod movement_tests {
         e.call(0x00c7_f970, &args![this, 16u32, 3u32]);
         let fresh = e.mem.u32(this + 4);
         assert_ne!(fresh, first);
-        assert_eq!(
-            calls_to(&e, COPY_ELEMENTS),
-            vec![vec![this, fresh, first, 3]]
-        );
+        assert_eq!(calls_to(&e, COPY_ELEMENTS), vec![vec![fresh, first, 3]]);
         assert_eq!(calls_to(&e, FREE_D), vec![vec![this, first]]);
         assert_eq!(e.mem.u32(this + 0xc), 8);
     }
@@ -3261,9 +3260,9 @@ mod movement_tests {
     /// The element copy of the array (`00c7f900`) as a memory move of 8-byte elements.
     fn moving_copy(e: &mut Engine) {
         e.register(COPY_ELEMENTS, |e, a| {
-            if a[3] != 0 {
-                let moved = e.mem.bytes(a[2], a[3] * 8);
-                e.mem.write(a[1], &moved);
+            if a[2] != 0 {
+                let moved = e.mem.bytes(a[1], a[2] * 8);
+                e.mem.write(a[0], &moved);
             }
             Ret::default()
         });
@@ -3303,7 +3302,7 @@ mod movement_tests {
         );
         assert_eq!(
             calls_to(&e, COPY_ELEMENTS).last().unwrap(),
-            &vec![this, data + 8, data, 5]
+            &vec![data + 8, data, 5]
         );
     }
 

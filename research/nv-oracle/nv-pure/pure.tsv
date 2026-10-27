@@ -822,6 +822,7 @@ address	cc	params	ret	unit	callees	consts	buffers	computed_reads
 00598020	thiscall	ptr	u8	crates/engine-fallout/src/units/fallout_shared/run_005963d0.rs			0:80:0:55.1	0
 00598040	thiscall	ptr	f32	crates/engine-fallout/src/units/fallout_shared/run_005963d0.rs			0:80:0:60.4	0
 0059b270	thiscall	ptr,u32	ptr	crates/engine-fallout/src/units/unplaced/run_0059b270.rs		i5	0:32:0:	0
+0059bb30	thiscall	ptr	u32	crates/engine-fallout/src/units/unplaced/run_0059bb30.rs			0:64:0:36.4	0
 0059e300	thiscall	ptr	u32	crates/engine-fallout/src/units/fallout_shared/tesconditionfunctions.rs			0:112:0:92.4	0
 0059e7d0	thiscall	ptr	bool	crates/engine-fallout/src/units/fallout_shared/tesconditionfunctions.rs		i1	0:256:0:235.1	0
 0059e8c0	thiscall	ptr	bool	crates/engine-fallout/src/units/fallout_shared/tesconditionfunctions.rs		i2	0:256:0:235.1	0
@@ -958,6 +959,7 @@ address	cc	params	ret	unit	callees	consts	buffers	computed_reads
 005f2750	cdecl	u32	bool	crates/engine-fallout/src/units/fallout_shared/tesanimgroup.rs		i20,i129,i1		0
 005f36f0	thiscall	ptr	u32	crates/engine-fallout/src/units/fallout_ai/actormover.rs			0:80:0:52.4	0
 005f3710	thiscall	ptr,u32	u32	crates/engine-fallout/src/units/unplaced/run_005f3710.rs		i4	0:80:0:52.4;56.4	0
+005f4cc0	cdecl	u16	bool	crates/engine-fallout/src/units/fallout_shared/tesanimgroup.rs	005f2440	i0,i1,i170,i255		0
 005f4d60	thiscall	ptr	bool	crates/engine-fallout/src/units/fallout_shared/run_005f4d60.rs	005f2440	i228,i235,i239,i1,i255	0:48:0:16.2	0
 005f4db0	thiscall	ptr	bool	crates/engine-fallout/src/units/fallout_shared/run_005f4d60.rs	005f2440	i229,i240,i244,i1,i255	0:48:0:16.2	0
 005f5760	thiscall	ptr	ptr	crates/engine-fallout/src/units/fallout_shared/run_005f5630.rs		i84	0:32:0:	0
@@ -2393,6 +2395,11 @@ address	cc	params	ret	unit	callees	consts	buffers	computed_reads
 00aeaaf0	thiscall	ptr	ptr	crates/engine-bs/src/units/bsaudio/bsxenonaudiolistener.rs		i16	0:32:0:	0
 00aeab10	thiscall	ptr	ptr	crates/engine-bs/src/units/bsaudio/bsxenonaudiolistener.rs		i28	0:32:0:	0
 00aeab70	thiscall	ptr	u32	crates/engine-bs/src/units/bsaudio/bsxenonaudiolistener.rs			0:96:0:68.4	0
+00af2470	thiscall	u32	u8	crates/engine-bs/src/units/bssystemutilities/bsawardssystemutility_xenon.rs				0
+00af2c40	thiscall	u32	u8	crates/engine-bs/src/units/bssystemutilities/bsdlcsystemutility_xenon.rs		i1		0
+00af2c50	thiscall	u32,u32,u32	u8	crates/engine-bs/src/units/bssystemutilities/bsdlcsystemutility_xenon.rs				0
+00af2d20	cdecl		u8	crates/engine-bs/src/units/bssystemutilities/run_00af2d20.rs		i1		0
+00af2ff0	thiscall	u32,u32,u32	u8	crates/engine-bs/src/units/bssystemutilities/bssavedatasystemutility.rs				0
 00af4390	cdecl		bool	crates/engine-bs/src/units/bssystem/archive.rs				0
 00afb170	thiscall	ptr,u8,u32	u8	crates/engine-bs/src/units/bssystem/archive.rs		i1,i0	0:32:0:	0
 00afb2a0	thiscall	ptr,ptr,bool	bool	crates/engine-bs/src/units/bssystem/archive.rs		i8,i1	0:464:0:436.1|1:32:0:12.4	0
@@ -2408,6 +2415,7 @@ address	cc	params	ret	unit	callees	consts	buffers	computed_reads
 00afce90	thiscall	ptr,ptr	i32	crates/engine-bs/src/units/bssystem/archive.rs		i-1,i1	0:32:0:0.4;4.4|1:32:0:0.4;4.4	0
 00afcfe0	thiscall	ptr	u32	crates/engine-bs/src/units/bssystem/run_00afcfe0.rs		i128,i5,i6,i7	0:32:0:0.1;1.1;3.1	0
 00afd020	thiscall	ptr	bool	crates/engine-bs/src/units/bssystem/archive.rs	00afb170	i128,i8,i16,i32,i1,i0	0:416:0:364.4;384.2	0
+00b004c0	thiscall	u32,u32,u32	u8	crates/engine-bs/src/units/bssystem/bsfile_xenon.rs		i1		0
 00b008d0	thiscall	ptr	u32	crates/engine-bs/src/units/bssystem/run_00b006b0.rs			0:32:0:0.4	0
 00b008e0	thiscall	ptr	u32	crates/engine-bs/src/units/bssystem/run_00b006b0.rs			0:32:0:	0
 00b008f0	thiscall	ptr	u32	crates/engine-bs/src/units/bssystem/run_00b006b0.rs			0:32:0:	0
@@ -2416,6 +2424,10 @@ address	cc	params	ret	unit	callees	consts	buffers	computed_reads
 00b013e0	thiscall	ptr,u32	bool	crates/engine-bs/src/units/bssystem/bssearchpath.rs		i1	0:32:0:	0
 00b01bc0	thiscall	ptr,u32,u32	u32	crates/engine-bs/src/units/bssystem/run_00b01510.rs		i2,i1	0:32:0:	0
 00b01be0	thiscall	ptr,u32,u32	u32	crates/engine-bs/src/units/bssystem/run_00b01510.rs		i4,i1	0:32:0:	0
+00b01c70	thiscall	ptr,u32,u32	u32	crates/engine-bs/src/units/bssystem/run_00b01510.rs			0:32:0:	0
+00b01c90	thiscall	ptr,u32	u32	crates/engine-bs/src/units/bssystem/run_00b01510.rs			0:32:0:	0
+00b01cb0	thiscall	ptr,u32	bool	crates/engine-bs/src/units/bssystem/run_00b01510.rs			0:32:0:	0
+00b01d10	thiscall	ptr,u32	bool	crates/engine-bs/src/units/bssystem/run_00b01510.rs			0:32:0:	0
 00b04d40	thiscall	ptr,ptr	f32	crates/engine-speedtree/src/units/speedtree/speedtreert.rs		i1	0:32:0:0.4;4.4;8.4|1:32:0:0.4;4.4;8.4	0
 00b08730	thiscall	ptr	u16	crates/engine-speedtree/src/units/speedtree/speedtreert.rs			0:128:0:100.2	0
 00b0d5d0	thiscall	ptr	u32	crates/engine-speedtree/src/units/speedtree/run_00b0d5d0.rs			0:128:0:104.4	0
@@ -3231,7 +3243,16 @@ address	cc	params	ret	unit	callees	consts	buffers	computed_reads
 00ebfc80	cdecl	u32	u32	crates/engine-fallout/src/units/unplaced/run_00ebf7d0.rs		i16,i64,i128,i256,i512,i1024,i32,i4,i8,i2		0
 00ec34d4	cdecl		u32	crates/engine-fallout/src/units/unplaced/run_00ec3020.rs				0
 00ec9df9	cdecl		u32	crates/engine-core/src/units/crt.rs		i1		0
+00ecc300	stdcall	u64,u64	u64	crates/engine-core/src/units/crt/scanf.rs				0
 00ecc590	stdcall	u32,u32,u32,u32	u64	crates/engine-core/src/units/crt.rs		i1		0
+00ed2808	cdecl	u32,u32	u32	crates/engine-core/src/units/crt/trig.rs				0
+00edf2a2	cdecl		u32	crates/engine-core/src/units/crt/misc2.rs				0
+00edf2a8	cdecl		u32	crates/engine-core/src/units/crt/misc2.rs				0
+00ee0a3a	cdecl	ptr	u32	crates/engine-core/src/units/crt/math.rs			0:32:0:	0
+00ee2d26	cdecl		u32	crates/engine-core/src/units/crt/time.rs				0
+00ee2d2c	cdecl		u32	crates/engine-core/src/units/crt/time.rs				0
+00ee2d32	cdecl		u32	crates/engine-core/src/units/crt/time.rs				0
+00ee2d38	cdecl		u32	crates/engine-core/src/units/crt/time.rs				0
 00ee8540	thiscall	ptr	u8	crates/engine-gamebryo/src/units/nimain/nirendertargetgroup.rs			0:32:0:8.1	0
 00ee8990	cdecl	ptr	bool	crates/engine-gamebryo/src/units/nimain/run_00ee8910.rs			0:32:0:	0
 00ee8a70	thiscall	ptr	ptr	crates/engine-gamebryo/src/units/nimain/nigpuprogramcache.rs			0:32:0:	0

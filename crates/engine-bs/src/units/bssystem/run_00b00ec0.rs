@@ -171,9 +171,71 @@ pub fn fn_00b012a0(e: &mut Engine, this: Ptr) {
     }
 }
 
+/// The object's byte at +0x47 (set while [`fn_00b01080`] waits; the two waits below sleep
+/// until it is set) and its word at +0x60.
+const WAITING: u32 = 0x47;
+const WORD_60: u32 = 0x60;
+
+/// Whether the state word (+0x5c) is 2 or 3.
+fn state_is_2_or_3(e: &Engine, this: u32) -> bool {
+    let state = e.mem.u32(this.wrapping_add(STATE_OFFSET));
+    state == 2 || state == 3
+}
+
+// Translated from 00b01080 (disassembled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`thiscall`, plain `RET`): while the state word (+0x5c) is 2 or 3
+/// the byte at +0x47 is set and the thread sleeps 50 ms (`Sleep(0x32)`), the state read again
+/// each time; then the byte at +0x47 is cleared.
+pub fn fn_00b01080(e: &mut Engine, this: u32) {
+    while state_is_2_or_3(e, this) {
+        e.mem.set_u8(this.wrapping_add(WAITING), 1);
+        e.call(SLEEP, &args![0x32u32]);
+    }
+    e.mem.set_u8(this.wrapping_add(WAITING), 0);
+}
+
+// Translated from 00b010d0 (disassembled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`thiscall`, plain `RET`): a state of 1 becomes 2; then when the
+/// state is 2 or 3 the thread sleeps 10 ms at a time (`Sleep(0xa)`) until the byte at +0x47
+/// is set (only the byte is read again in the loop).
+pub fn fn_00b010d0(e: &mut Engine, this: u32) {
+    let state = this.wrapping_add(STATE_OFFSET);
+    if e.mem.u32(state) == 1 {
+        e.mem.set_u32(state, 2);
+    }
+    if state_is_2_or_3(e, this) {
+        while e.mem.u8(this.wrapping_add(WAITING)) == 0 {
+            e.call(SLEEP, &args![0xau32]);
+        }
+    }
+}
+
+// Translated from 00b01130 (disassembled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`thiscall`, plain `RET`): nothing when the word at +0x60 is 0.
+/// Otherwise a state of 1 or 2 becomes 3, and when the state is 2 or 3 the thread sleeps
+/// 10 ms at a time (`Sleep(0xa)`) until the byte at +0x47 is set (only the byte is read again
+/// in the loop).
+pub fn fn_00b01130(e: &mut Engine, this: u32) {
+    if e.mem.u32(this.wrapping_add(WORD_60)) == 0 {
+        return;
+    }
+    let state = this.wrapping_add(STATE_OFFSET);
+    if e.mem.u32(state) == 1 || e.mem.u32(state) == 2 {
+        e.mem.set_u32(state, 3);
+    }
+    if state_is_2_or_3(e, this) {
+        while e.mem.u8(this.wrapping_add(WAITING)) == 0 {
+            e.call(SLEEP, &args![0xau32]);
+        }
+    }
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x00b0_1080, fn_00b01080(u32)),
+        entry!(0x00b0_10d0, fn_00b010d0(u32)),
+        entry!(0x00b0_1130, fn_00b01130(u32)),
         entry!(0x00b0_1040, fn_00b01040(Ptr) -> u32),
         entry!(0x00b0_1070, fn_00b01070(Ptr)),
         entry!(0x00b0_1220, fn_00b01220(Ptr, u32) -> Ptr),
@@ -316,5 +378,92 @@ mod n083_tests {
         e.mem.set_u8(guard, 0);
         e.call(0x00b0_12a0, &args![guard]);
         assert_eq!(e.mem.u32(state), 4);
+    }
+}
+
+#[cfg(test)]
+mod wait_tests {
+    use super::*;
+
+    /// The arguments of the logged `Sleep` calls.
+    fn sleeps(e: &Engine) -> Vec<u32> {
+        e.call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|c| c.0 == SLEEP)
+            .map(|c| c.1[0])
+            .collect()
+    }
+
+    #[test]
+    fn the_first_wait_sleeps_50_ms_while_the_state_is_2_or_3() {
+        let mut e = Engine::new();
+        e.call_log = Some(vec![]);
+        let this = e.mem.alloc(0x64);
+        e.mem.set_u32(this + 0x5c, 3);
+        let mut n = 0;
+        e.register_double(SLEEP, move |e, _| {
+            n += 1;
+            assert_eq!(e.mem.u8(this + 0x47), 1);
+            if n == 2 {
+                e.mem.set_u32(this + 0x5c, 1);
+            }
+            Ret::default()
+        });
+        e.call(0x00b0_1080, &args![this]);
+        assert_eq!(sleeps(&e), vec![0x32, 0x32]);
+        assert_eq!(e.mem.u8(this + 0x47), 0);
+    }
+
+    #[test]
+    fn the_second_wait_raises_1_to_2_and_sleeps_until_the_byte() {
+        let mut e = Engine::new();
+        e.call_log = Some(vec![]);
+        let this = e.mem.alloc(0x64);
+        e.mem.set_u32(this + 0x5c, 1);
+        let mut n = 0;
+        e.register_double(SLEEP, move |e, _| {
+            n += 1;
+            // The state is not read again in the loop.
+            e.mem.set_u32(this + 0x5c, 0);
+            if n == 3 {
+                e.mem.set_u8(this + 0x47, 1);
+            }
+            Ret::default()
+        });
+        e.call(0x00b0_10d0, &args![this]);
+        assert_eq!(sleeps(&e), vec![0xa, 0xa, 0xa]);
+        // A state of 4: no change, no wait.
+        e.mem.set_u32(this + 0x5c, 4);
+        e.mem.set_u8(this + 0x47, 0);
+        e.call_log = Some(vec![]);
+        fn_00b010d0(&mut e, this);
+        assert!(sleeps(&e).is_empty());
+        assert_eq!(e.mem.u32(this + 0x5c), 4);
+    }
+
+    #[test]
+    fn the_third_wait_needs_the_word_at_0x60() {
+        let mut e = Engine::new();
+        e.call_log = Some(vec![]);
+        let this = e.mem.alloc(0x64);
+        e.mem.set_u32(this + 0x5c, 2);
+        e.call(0x00b0_1130, &args![this]);
+        assert_eq!(e.mem.u32(this + 0x5c), 2);
+        e.mem.set_u32(this + 0x60, 1);
+        e.register_double(SLEEP, move |e, _| {
+            e.mem.set_u8(this + 0x47, 1);
+            Ret::default()
+        });
+        fn_00b01130(&mut e, this);
+        assert_eq!(e.mem.u32(this + 0x5c), 3);
+        assert_eq!(sleeps(&e), vec![0xa]);
+        // Already waiting: no sleep; a state of 1 also becomes 3.
+        e.mem.set_u32(this + 0x5c, 1);
+        e.call_log = Some(vec![]);
+        fn_00b01130(&mut e, this);
+        assert_eq!(e.mem.u32(this + 0x5c), 3);
+        assert!(sleeps(&e).is_empty());
     }
 }

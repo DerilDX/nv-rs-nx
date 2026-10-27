@@ -164,3 +164,48 @@ fn settings_across_the_collections_hold_their_initializers_values() {
     println!("settings checked: {checked}");
     assert!(checked >= 45, "{checked}");
 }
+
+/// The table entries a start-up would skip, listed without running anything
+/// (`engine::static_init::skips` on the mapped executable, the host's stand-ins
+/// counted as run): one line each with the entry, why, the global its row
+/// builds (when it has a row) and its engine-map name
+/// (`research/engine-map/engine_map.tsv`), e.g. the `Setting` it would make.
+/// A coverage check for initializer work: no world, no `main`.
+///
+/// ```text
+/// NV_EXE="C:\...\Fallout New Vegas\FalloutNV.exe" cargo test -p host --release \
+///     --test static_initializers -- --ignored --nocapture the_skipped_entries
+/// ```
+#[test]
+#[ignore = "needs the player's FalloutNV.exe (set NV_EXE)"]
+fn the_skipped_entries_without_a_run() {
+    let exe = PathBuf::from(std::env::var("NV_EXE").expect("NV_EXE: the installed FalloutNV.exe"));
+    let engine = engine::Engine::with_exe(&exe).unwrap_or_else(|e| panic!("{e}"));
+    let rows = static_init::table();
+    let map = std::fs::read_to_string(
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../research/engine-map/engine_map.tsv"),
+    )
+    .unwrap_or_default();
+    let names: std::collections::HashMap<u32, &str> = map
+        .lines()
+        .filter_map(|l| {
+            let mut f = l.split('\t');
+            let addr = u32::from_str_radix(f.next()?, 16).ok()?;
+            Some((addr, f.nth(1)?))
+        })
+        .collect();
+    let skips = static_init::skips(&engine, &rows, &host::STAND_INS);
+    for skip in &skips {
+        let (entry, why) = match *skip {
+            static_init::Skip::Open(entry) => (entry, "open".to_string()),
+            static_init::Skip::Callee(entry, c) => (entry, format!("callee {c:08x}")),
+        };
+        let global = rows
+            .get(&entry)
+            .and_then(static_init::row_global)
+            .map_or(String::new(), |g| format!("{g:08x}"));
+        let name = names.get(&entry).copied().unwrap_or("");
+        println!("{entry:08x}\t{why}\t{global}\t{name}");
+    }
+    println!("skipped without a run: {}", skips.len());
+}

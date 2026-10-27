@@ -1207,6 +1207,33 @@ mod translated_tests {
         e.call(0x00d4_7eb0, &args![this, other]);
         assert_eq!(calls_to(&e, DOUBLE_A).len(), 3);
     }
+
+    #[test]
+    fn the_builtin_type_registry_waits_for_the_three_registries() {
+        let mut e = Engine::new();
+        e.map(0x0126_9000, 0x1000);
+        e.register(0x00c8_5750, |_, _| {
+            panic!("no allocation while a registry is missing")
+        });
+        assert_eq!(e.call(0x00d4_7820, &args![]).u32(), 0);
+        e.mem.set_u32(0x0126_9b10, 1);
+        e.mem.set_u32(0x0126_9b14, 1);
+        assert_eq!(e.call(0x00d4_7820, &args![]).u32(), 0);
+        // All three there: 8 bytes, the size halfword, the constructor's answer.
+        e.mem.set_u32(0x0126_9b18, 1);
+        e.map(0x0000_7000, 0x1000);
+        e.mem.set_u32(0x7010, 0x7100);
+        e.mem.set_u32(0x7100, 0x7200);
+        e.mem.set_u32(0x7204, 0x00ab_0004);
+        e.register(0x00c8_5750, |_, _| 0x7000u32.into_ret());
+        e.register(0x00ab_0004, |_, a| {
+            assert_eq!(a, [0x7100, 8]);
+            0x7800u32.into_ret()
+        });
+        e.register(0x00d4_78c0, |_, a| a[0].wrapping_add(1).into_ret());
+        assert_eq!(e.call(0x00d4_7820, &args![]).u32(), 0x7801);
+        assert_eq!(e.mem.u16(0x7804), 8);
+    }
 }
 
 #[cfg(test)]

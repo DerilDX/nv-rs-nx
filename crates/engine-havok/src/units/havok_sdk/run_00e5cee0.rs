@@ -8945,8 +8945,11 @@ pub fn fn_00e60680(e: &mut Engine, this: Ptr, index: i32) -> i32 {
 /// Virtual call through the owner (thiscall, `RET 8`): the owner is the word at `this + 0xc`, its
 /// array of words is at `this + 0x10`; calls the owner's object's method at `+0x14` of its table (the
 /// word at `owner + 0x10`, then `+0x14`) with `owner + 0x10` as `this`, the array entry `index` and
-/// `second` as stack arguments.
-pub fn fn_00e60690(e: &mut Engine, this: Ptr, index: u32, second: u32) {
+/// `second` as stack arguments, and answers that call's `EAX` (the exe ends on it). The
+/// function is slot `+0x14` of an `hkpShapeContainer` vtable (in `hkpConvexPieceShape`), whose
+/// other implementations the engine map names `getChildShape` (a `const hkpShape*` in the Xbox
+/// PDB; they answer it).
+pub fn fn_00e60690(e: &mut Engine, this: Ptr, index: u32, second: u32) -> u32 {
     e.with_stack(0x200, |e, frame| {
         let mut esp = frame.addr() + 0x100;
         e.mem.set_u32(esp.wrapping_add(4), index);
@@ -8988,7 +8991,7 @@ pub fn fn_00e60690(e: &mut Engine, this: Ptr, index: u32, second: u32) {
                     esp = esp.wrapping_add(8); // 00e606af
                     esi = e.mem.u32(esp);
                     esp = esp.wrapping_add(4); // 00e606b1
-                    return; // 00e606b2
+                    return eax; // 00e606b2
                 }
                 _ => unreachable!("no block at {pc:08x}"),
             }
@@ -10317,7 +10320,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00e60660, fn_00e60660(Ptr) -> Ptr),
         entry!(0x00e60670, fn_00e60670() -> u32),
         entry!(0x00e60680, fn_00e60680(Ptr, i32) -> i32),
-        entry!(0x00e60690, fn_00e60690(Ptr, u32, u32)),
+        entry!(0x00e60690, fn_00e60690(Ptr, u32, u32) -> u32),
         entry!(0x00e606c0, fn_00e606c0(Ptr, Ptr)),
         entry!(0x00e606e0, fn_00e606e0(Ptr, Ptr)),
         entry!(0x00e60730, fn_00e60730(Ptr, Ptr, i32, Ptr)),
@@ -10670,6 +10673,20 @@ mod tests {
         let seen = calls(&e);
         assert_eq!(seen.len(), 1);
         assert_eq!(seen[0].1, vec![owner + 0x10, 102, 55]);
+    }
+
+    #[test]
+    fn call_through_the_owners_table_answers_its_eax() {
+        let mut e = Engine::new();
+        e.register(0x7500_1000, |_, _| 0x0abc_0000u32.into_ret());
+        let (owner, table) = (e.mem.alloc(0x40), e.mem.alloc(0x40));
+        e.mem.set_u32(owner + 0x10, table);
+        e.mem.set_u32(table + 0x14, 0x7500_1000);
+        let array = e.mem.alloc(16);
+        let this = Ptr::new(e.mem.alloc(0x40));
+        e.mem.set_u32(this.addr() + 0xc, owner);
+        e.mem.set_u32(this.addr() + 0x10, array);
+        assert_eq!(fn_00e60690(&mut e, this, 2, 55), 0x0abc_0000);
     }
 
     #[test]

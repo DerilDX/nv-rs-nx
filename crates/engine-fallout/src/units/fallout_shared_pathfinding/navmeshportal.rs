@@ -16,10 +16,10 @@ const SWAP_HALF: u32 = 0x0040_7a90;
 const ADD_COMPILE_INDEX: u32 = 0x0048_5d50;
 /// The `TES` singleton pointer (`011dea10`).
 const TES_SINGLETON: u32 = 0x011d_ea10;
-/// `TES::GetNavMeshInfoMap` (`0045af00`, thiscall on `TES`, the form id).
+/// `TES::GetNavMeshInfoMap` (`0045af00`, thiscall on `TES`, no stack word).
 const TES_GET_NAVMESH_INFO_MAP: u32 = 0x0045_af00;
 /// `00693d70` (`navmesh_loadsave.cpp`, thiscall on the map
-/// `TES::GetNavMeshInfoMap` returns, no stack words).
+/// `TES::GetNavMeshInfoMap` returns, `RET 4`: the form id).
 const NAVMESH_FROM_INFO_MAP: u32 = 0x0069_3d70;
 /// `NavMeshTriangleEdgePortal` (Xbox PDB), as the PC code writes it: the
 /// navmesh pointer at +0, the triangle index (`u16`) at +4.
@@ -55,8 +55,10 @@ pub fn nav_mesh_triangle_edge_portal_load(
         e.mem.set_u32(base + NAVMESH, 0);
     } else {
         let tes = e.global::<u32>(TES_SINGLETON);
-        let map = e.call(TES_GET_NAVMESH_INFO_MAP, &args![tes, navmesh]).u32();
-        let pointer = e.call(NAVMESH_FROM_INFO_MAP, &args![map]).u32();
+        // 0069e026: `0045af00` takes no stack word (plain RET); the pushed form id
+        // is the word of `00693d70` (RET 4).
+        let map = e.call(TES_GET_NAVMESH_INFO_MAP, &args![tes]).u32();
+        let pointer = e.call(NAVMESH_FROM_INFO_MAP, &args![map, navmesh]).u32();
         e.mem.set_u32(base + NAVMESH, pointer);
     }
     let triangle = e.mem.u16(data.addr().wrapping_add(4));
@@ -119,12 +121,12 @@ mod tests {
         });
         e.map(TES_SINGLETON, 4);
         e.mem.set_u32(TES_SINGLETON, 0x0777_0000);
-        e.register(TES_GET_NAVMESH_INFO_MAP, |_, a| Ret {
-            eax: a[1] ^ 0x5000_0000,
+        e.register(TES_GET_NAVMESH_INFO_MAP, |_, _| Ret {
+            eax: 0x5000_0000,
             ..Ret::default()
         });
         e.register(NAVMESH_FROM_INFO_MAP, |_, a| Ret {
-            eax: a[0] + 1,
+            eax: (a[0] ^ a[1]) + 1,
             ..Ret::default()
         });
     }
@@ -144,7 +146,11 @@ mod tests {
         assert_eq!(e.mem.u32(this + 4), 0xdddd_0102);
         assert_eq!(
             calls_to(&e, TES_GET_NAVMESH_INFO_MAP),
-            vec![vec![0x0777_0000, 0x0100_1234]]
+            vec![vec![0x0777_0000]]
+        );
+        assert_eq!(
+            calls_to(&e, NAVMESH_FROM_INFO_MAP),
+            vec![vec![0x5000_0000, 0x0100_1234]]
         );
         assert!(calls_to(&e, SWAP_WORD).is_empty());
         assert!(calls_to(&e, SWAP_HALF).is_empty());

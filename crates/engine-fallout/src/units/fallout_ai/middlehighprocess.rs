@@ -6535,7 +6535,8 @@ pub(crate) const LENGTH_OF_TWO: u32 = 0x00404010;
 pub(crate) const LIGHT_AMOUNT: u32 = 0x00b9bc50;
 /// First light of a property `(&state)` (name unconfirmed).
 pub(crate) const LIGHT_GET_FIRST: u32 = 0x00b70490;
-/// Next light of a property `(&state)` (name unconfirmed).
+/// Next light of an iterator `(&state)` (name unconfirmed; `stdcall`, RET 4, ECX not
+/// read).
 pub(crate) const LIGHT_GET_NEXT: u32 = 0x00e93000;
 /// Text "##LightOn".
 pub(crate) const LIGHT_ON_NAME: u32 = 0x01030e48;
@@ -10235,8 +10236,10 @@ fn light_sum(e: &mut Engine, p: u32, actor: u32, include_extra: bool) -> f32 {
                         .call(LIGHT_AMOUNT, &args![light, x, y, z_bits, extra])
                         .f64();
                     total = (amount + f64::from(total)) as f32;
-                    let property = e.call(FIRST_WORD, &args![p + 0x220]).u32();
-                    light = e.call(LIGHT_GET_NEXT, &args![property, state]).u32();
+                    // 00922de0: `00e93000` is stdcall (RET 4) and does not read the
+                    // property the caller puts in ECX; its one word is the iterator.
+                    let _property = e.call(FIRST_WORD, &args![p + 0x220]).u32();
+                    light = e.call(LIGHT_GET_NEXT, &args![state]).u32();
                     let seen = e.mem.u32(counter);
                     e.mem.set_u32(counter, seen.wrapping_add(1));
                 }

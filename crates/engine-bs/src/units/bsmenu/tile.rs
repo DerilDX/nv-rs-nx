@@ -7987,6 +7987,32 @@ mod tests {
         ] {
             e.register(addr, |_, a| a[0].into_ret());
         }
+        // `atol` and `atof` reach the CRT's `strtol` (00ec8d08) and `_atof_l` (00eca4c8),
+        // which read the initial locale's tables from the image; the bare engine has no
+        // image, so both are doubled with decimal parsers (leading blanks, a sign, digits).
+        e.register(0x00ec_8d08, |e, a| {
+            let text = String::from_utf8_lossy(&e.mem.cstr(a[0])).to_string();
+            let text = text.trim_start();
+            let end = text
+                .char_indices()
+                .find(|&(i, c)| !(c.is_ascii_digit() || (i == 0 && (c == '-' || c == '+'))))
+                .map_or(text.len(), |(i, _)| i);
+            text[..end].parse::<i32>().unwrap_or(0).into_ret()
+        });
+        e.register(0x00ec_a4c8, |e, a| {
+            let text = String::from_utf8_lossy(&e.mem.cstr(a[0])).to_string();
+            let text = text.trim_start();
+            let end = text
+                .char_indices()
+                .find(|&(i, c)| {
+                    !(c.is_ascii_digit() || c == '.' || (i == 0 && (c == '-' || c == '+')))
+                })
+                .map_or(text.len(), |(i, _)| i);
+            Ret {
+                st0: text[..end].parse::<f64>().unwrap_or(0.0),
+                ..Ret::default()
+            }
+        });
         e.register(INTERLOCKED_INCREMENT, |e, a| {
             let count = e.mem.i32(a[0]).wrapping_add(1);
             e.mem.set_i32(a[0], count);

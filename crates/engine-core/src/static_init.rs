@@ -499,6 +499,79 @@ impl Report {
     pub fn skipped(&self) -> usize {
         self.open.len() + self.callee_open.len() + self.stopped.len()
     }
+
+    /// One line per skipped entry, in the report's order: the entry, why
+    /// (`open`: neither a row nor a translation; `callee X`: its row's callee
+    /// isn't translated; `stopped: ...`: stopped part-way) and, when its row
+    /// tells, the global it builds ([`row_global`]). Entries without a row
+    /// build what only their code says (an engine-map name helps:
+    /// `crates/host/tests/static_initializers.rs`).
+    pub fn skip_lines(&self, rows: &HashMap<u32, Row>) -> Vec<String> {
+        let global = |entry: u32| match rows.get(&entry).and_then(row_global) {
+            Some(g) => format!(" (builds {g:08x})"),
+            None => String::new(),
+        };
+        let mut out = Vec::with_capacity(self.skipped());
+        for &entry in &self.open {
+            out.push(format!("{entry:08x} open{}", global(entry)));
+        }
+        for &(entry, callee) in &self.callee_open {
+            out.push(format!("{entry:08x} callee {callee:08x}{}", global(entry)));
+        }
+        for (entry, stop) in &self.stopped {
+            out.push(format!("{entry:08x} stopped: {stop}{}", global(*entry)));
+        }
+        out
+    }
+}
+
+/// The global a row builds: an object row's `this`, a `reg` row's global, a
+/// `const` row's first store.
+pub fn row_global(row: &Row) -> Option<u32> {
+    match row {
+        Row::Reg { global, .. } => Some(*global),
+        Row::Object { this, .. } => Some(*this),
+        Row::Const(ops) => ops.iter().find_map(|op| match *op {
+            Op::StoreF32(g)
+            | Op::StoreF64(g)
+            | Op::StoreEax(g)
+            | Op::StoreWord(g, _)
+            | Op::StoreByte(g, _)
+            | Op::Copy(_, g) => Some(g),
+            _ => None,
+        }),
+    }
+}
+
+/// An entry a run would skip, found without running anything.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Skip {
+    /// Neither a row nor a translation.
+    Open(u32),
+    /// A row whose callee (the second word) isn't translated.
+    Callee(u32, u32),
+}
+
+/// The entries of both tables (C, then C++, in order) that [`run`] would
+/// skip, read without running any: those [`run`] counts in
+/// [`Report::open`] and [`Report::callee_open`]. A stand-in's entry is
+/// never one. (Entries that stop part-way, and the C table's end at a
+/// non-zero answer, need a run.)
+pub fn skips(e: &Engine, rows: &HashMap<u32, Row>, stand_ins: &[StandIn]) -> Vec<Skip> {
+    let mut out = Vec::new();
+    for entry in entries(e, C_TABLE).into_iter().chain(entries(e, CPP_TABLE)) {
+        if stand_ins.iter().any(|(a, _)| *a == entry) {
+            continue;
+        }
+        if let Some(row) = rows.get(&entry) {
+            if let Some(c) = callees(row).into_iter().find(|&c| !e.is_translated(c)) {
+                out.push(Skip::Callee(entry, c));
+            }
+        } else if !e.is_translated(entry) {
+            out.push(Skip::Open(entry));
+        }
+    }
+    out
 }
 
 /// The non-null entries of one table range, in order.
@@ -763,6 +836,30 @@ mod tests {
     }
 
     #[test]
+    fn an_object_runs_while_its_destructor_is_untranslated() {
+        // The destructor is only registered with `_atexit` (by address, as
+        // the exe does) and never runs during a session, so it doesn't hold
+        // the constructor back (Build 43: the process lists, 00fa9890).
+        let mut e = Engine::new();
+        e.map(0x0101_0000, 0x20);
+        e.register(0x00f0_0f00, |e, a| {
+            e.mem.set_u32(a[0], 7);
+            a[0].into_ret()
+        });
+        e.register(ATEXIT, |_, _| crate::Ret::default());
+        assert!(!e.is_translated(0x00f0_0fd0));
+        let rows = parse("00f00010\tobject\t00f00f00 01010010 00f00fd0\n").unwrap();
+        let mut report = Report::default();
+        assert_eq!(
+            run_entry(&mut e, &rows, &[], 0x00f0_0010, &mut report),
+            Some(0)
+        );
+        assert_eq!(e.mem.u32(0x0101_0010), 7);
+        assert!(report.callee_open.is_empty());
+        assert_eq!(report.rows, 1);
+    }
+
+    #[test]
     fn untranslated_entries_and_callees_are_skipped_and_counted() {
         let mut e = Engine::new();
         e.map(0x0101_0000, 0x20);
@@ -785,5 +882,47 @@ mod tests {
         );
         assert_eq!(e.mem.u32(0x0101_0010), 5);
         assert_eq!(report.rows, 1);
+    }
+
+    #[test]
+    fn skips_are_listed_without_a_run_and_named_in_lines() {
+        let mut e = Engine::new();
+        e.map(C_TABLE.0, C_TABLE.1 - C_TABLE.0);
+        e.map(CPP_TABLE.0, CPP_TABLE.1 - CPP_TABLE.0);
+        // C: one translated entry; C++: a row with an untranslated callee,
+        // an open entry, a stand-in's entry, and a row whose callee is
+        // translated.
+        e.mem.set_u32(C_TABLE.0, 0x00f0_0100);
+        e.mem.set_u32(CPP_TABLE.0, 0x00f0_0010);
+        e.mem.set_u32(CPP_TABLE.0 + 8, 0x00f0_0020);
+        e.mem.set_u32(CPP_TABLE.0 + 12, 0x00f0_0030);
+        e.mem.set_u32(CPP_TABLE.0 + 16, 0x00f0_0040);
+        e.register(0x00f0_0100, |_, _| 0u32.into_ret());
+        e.register(0x00f0_0f10, |_, _| 0u32.into_ret());
+        let rows =
+            parse("00f00010\treg\t00f00f00 01010010\n00f00040\treg\t00f00f10 01010020\n").unwrap();
+        fn stand_in(_: &mut Engine) {}
+        let stand_ins: [StandIn; 1] = [(0x00f0_0030, stand_in)];
+        assert_eq!(
+            skips(&e, &rows, &stand_ins),
+            [
+                Skip::Callee(0x00f0_0010, 0x00f0_0f00),
+                Skip::Open(0x00f0_0020)
+            ]
+        );
+        let report = Report {
+            open: vec![0x00f0_0020],
+            callee_open: vec![(0x00f0_0010, 0x00f0_0f00)],
+            stopped: vec![(0x00f0_0040, "read of 00000000".to_string())],
+            ..Report::default()
+        };
+        assert_eq!(
+            report.skip_lines(&rows),
+            [
+                "00f00020 open",
+                "00f00010 callee 00f00f00 (builds 01010010)",
+                "00f00040 stopped: read of 00000000 (builds 01010020)",
+            ]
+        );
     }
 }

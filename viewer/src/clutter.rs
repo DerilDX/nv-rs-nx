@@ -242,6 +242,70 @@ fn setting(game: &cellview::Game, section: &str, name: &str) -> Option<f32> {
         .or_else(|| world::scripting::game_setting(&game.order, name))
 }
 
+/// `--physics engine`: the loose objects moved by the game's own Havok world
+/// (`host::Host::run_ai_threads`: the frame's AI linear task threads, AI
+/// thread 2 stepping the world in `TES::UpdateCellAnimations`), the viewer
+/// only drawing where the game's nodes are. A frame the game's code can't
+/// run, the viewer's own bodies step as before.
+#[derive(Resource, Default)]
+pub struct EngineWorld {
+    mode: crate::args::PhysicsMode,
+    /// This frame's step ran on the game's code.
+    ran: bool,
+    /// Each reference's root node pose when first seen, and now.
+    start: HashMap<u32, Pose>,
+    now: HashMap<u32, Pose>,
+}
+
+impl EngineWorld {
+    pub fn new(mode: crate::args::PhysicsMode) -> Self {
+        EngineWorld {
+            mode,
+            ..Default::default()
+        }
+    }
+
+    /// The move of `reference`'s node since it was first seen: rotation
+    /// `R = R1 R0ᵀ`, translation `t1 − R t0`.
+    fn delta(&self, reference: u32) -> Option<Pose> {
+        let (r0, t0) = self.start.get(&reference)?;
+        let (r1, t1) = self.now.get(&reference)?;
+        let mut r = [[0.0f32; 3]; 3];
+        for (i, row) in r.iter_mut().enumerate() {
+            for (j, v) in row.iter_mut().enumerate() {
+                *v = (0..3).map(|k| r1[i][k] * r0[j][k]).sum();
+            }
+        }
+        let t = [0, 1, 2].map(|i| t1[i] - (0..3).map(|k| r[i][k] * t0[k]).sum::<f32>());
+        Some((r, t))
+    }
+}
+
+/// The game's world step for this frame (`--physics engine`), before the
+/// viewer's own (`simulate` skips its step on a frame this ran).
+fn step_engine_world(
+    havok: Res<HavokFrame>,
+    mut engine: ResMut<EngineWorld>,
+    host: Option<NonSendMut<host::Host>>,
+) {
+    engine.ran = false;
+    if engine.mode != crate::args::PhysicsMode::Engine || havok.dt <= 0.0 {
+        return;
+    }
+    let Some(mut host) = host else {
+        return;
+    };
+    let Some(poses) = host.run_ai_threads(havok.dt) else {
+        return;
+    };
+    engine.ran = true;
+    for p in poses {
+        let pose = (p.rotation, p.translation);
+        engine.start.entry(p.reference.0).or_insert(pose);
+        engine.now.insert(p.reference.0, pose);
+    }
+}
+
 /// A drawn piece of a simulated object: its transform where the object
 /// was put.
 #[derive(Component)]
@@ -255,6 +319,7 @@ pub struct ClutterPlugin;
 impl Plugin for ClutterPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<Clutter>()
+            .init_resource::<EngineWorld>()
             .init_resource::<HavokFrame>()
             // The frame timer: part of `Main::OnIdle_UpdateTimer` (step 32,
             // `crate::frame_order`).
@@ -289,7 +354,7 @@ impl Plugin for ClutterPlugin {
                         .before(crate::frame_order::AiSet::Call(
                             crate::frame_order::UPDATE_CELL_ANIMATIONS,
                         )),
-                    (simulate, play_contact_sounds)
+                    (step_engine_world, simulate, play_contact_sounds)
                         .chain()
                         .in_set(crate::frame_order::AiSet::Call(
                             crate::frame_order::UPDATE_CELL_ANIMATIONS,
@@ -330,11 +395,17 @@ fn simulate(
     mut clutter: ResMut<Clutter>,
     cameras: Query<&Transform, With<FlyCamera>>,
     drawn: Query<&Simulated>,
-    (exterior, mut weathers): (
+    (exterior, mut weathers, engine): (
         Option<Res<crate::exterior::Exterior>>,
         ResMut<crate::weather::Weathers>,
+        Res<EngineWorld>,
     ),
 ) {
+    // The game's own world stepped this frame (`--physics engine`): the
+    // viewer's bodies wait (new arrivals stay queued for a frame it can't).
+    if engine.ran {
+        return;
+    }
     let order = &game.0.order;
     // The sky's wind for the wind listener (`physics::wind`): outdoors the
     // weathers' mix, indoors none (`00453550`).
@@ -1067,17 +1138,17 @@ type NewPiece = (Entity, Ref<'static, PlacedRef>, &'static Transform);
 fn draw(
     mut commands: Commands,
     mut clutter: ResMut<Clutter>,
+    engine: Res<EngineWorld>,
     new: Query<NewPiece, Without<Simulated>>,
     mut pieces: Query<(&Simulated, &mut Transform)>,
 ) {
     // Pieces of bodies registered this frame (some after waiting for
     // their ground, their drawing spawned frames before).
     let fresh = std::mem::take(&mut clutter.fresh);
-    for (entity, placed, transform) in new
-        .iter()
-        .filter(|(_, p, _)| p.is_added() || fresh.contains(&p.0))
-    {
-        if clutter.world.find(placed.0).is_some() {
+    for (entity, placed, transform) in new.iter().filter(|(_, p, _)| {
+        p.is_added() || fresh.contains(&p.0) || (engine.ran && engine.now.contains_key(&p.0))
+    }) {
+        if clutter.world.find(placed.0).is_some() || engine.now.contains_key(&placed.0) {
             commands.entity(entity).insert(Simulated {
                 reference: placed.0,
                 rest: transform.compute_matrix(),
@@ -1085,10 +1156,20 @@ fn draw(
         }
     }
     for (piece, mut transform) in &mut pieces {
-        let Some(i) = clutter.world.find(piece.reference) else {
+        // Where the game's nodes are on a frame its world stepped, else
+        // where the viewer's bodies are.
+        let delta = if engine.ran {
+            engine.delta(piece.reference)
+        } else {
+            clutter
+                .world
+                .find(piece.reference)
+                .map(|i| clutter.world.delta(i))
+        };
+        let Some(delta) = delta else {
             continue;
         };
-        let wanted = Transform::from_matrix(bevy_delta(clutter.world.delta(i)) * piece.rest);
+        let wanted = Transform::from_matrix(bevy_delta(delta) * piece.rest);
         if *transform != wanted {
             *transform = wanted;
         }

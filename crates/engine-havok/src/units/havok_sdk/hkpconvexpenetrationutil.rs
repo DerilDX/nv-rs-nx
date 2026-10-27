@@ -46,7 +46,7 @@ const FILL_VERTEX: u32 = 0x00df_9b50;
 const ADD_VERTEX: u32 = 0x00df_9c90;
 /// `(simplex header, direction, shapes)`: the final computation after a decided search.
 const FINISH: u32 = 0x00df_9d90;
-/// Returns a `float` in ST0 (no arguments).
+/// Returns a `float` in ST0 from a seed in `EAX` (no stack word).
 const RANDOM_VALUE: u32 = 0x00df_9ae0;
 /// `(arg1, arg2, transform, arg5, arg6, arg9)`, cdecl: the exact answer for outcome 3.
 const EXACT_DEPTH: u32 = 0x00e2_db70;
@@ -237,7 +237,9 @@ pub fn fn_00dfa940(e: &mut Engine, this: Ptr<PenetrationState>, shapes: u32) -> 
                 return 3;
             }
             e.set(this, PenetrationState::m_firstAttempt, 0);
-            let random = e.call(RANDOM_VALUE, &args![]).f64();
+            // 00dfaa55: `00df9ae0` takes its seed in EAX, here the attempt count (loaded at
+            // 00dfaa3a).
+            let random = e.call(RANDOM_VALUE, &args![attempts]).f64();
             let offset = e.global::<f64>(PERTURBATION_OFFSET);
             let scale = e.global::<f64>(PERTURBATION_SCALE);
             let step = ((random - offset) * scale) as f32;

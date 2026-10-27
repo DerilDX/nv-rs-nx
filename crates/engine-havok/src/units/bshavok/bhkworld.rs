@@ -392,110 +392,186 @@ pub fn bhk_world_shutdown(e: &mut Engine) {
     e.call(0x00cb_bfb0, &args![0u32]);
 }
 
-// Translated from 00c66760 (decompiled, FalloutNV.exe 1.4.0.525)
-/// Advances the Havok step accumulator. The mode switch, thresholds, count
-/// limits and smoothing are taken from the PC code; x87 stores are rounded
-/// back to `f32` after each intermediate store.
-pub fn bhk_world_accumulate_step(e: &mut Engine, delta: f32, single_step: u8, forced: u8) {
-    const DELTA: u32 = 0x011a_fe64;
-    const LAST_DELTA: u32 = 0x0126_77b0;
-    const STEP_COUNT: u32 = 0x0126_77b4;
-    const STEP_SIZE: u32 = 0x0126_77ac;
-    const MODE: u32 = 0x0126_77b8;
-    const FORCE: u32 = 0x0126_7b4c;
-    const MAX_DELTA: u32 = 0x010c_3c28;
-    const DEFAULT_SKIP_THRESHOLD: u32 = 0x010c_3c24;
-    const FREQUENCY: u32 = 0x0126_7b38;
-    const SCALE: u32 = 0x011a_c3a0;
-    const SMOOTH_VALUE: u32 = 0x011a_fe6c;
-    const SMOOTH_RATE: u32 = 0x011a_fe70;
+/// The step accumulator's globals: the frame delta as given (`011afe68`), the delta this step
+/// uses (`011afe64`), what is carried to the next frame (`012677b0`), the step count
+/// (`012677b4`), the step size (`012677ac`), the update mode (`012677b8`), the forced-step
+/// flag (`01267b4c`), the largest delta (`010c3c28`), the skip threshold (`010c3c24`), the
+/// fixed step (`01267b38`) and its scale (`011ac3a0`), the smoothed step and its rate
+/// (`011afe6c`, `011afe70`), the constants 0.5 (`01011588`, a double) and 2^32 (`01099378`, the
+/// unsigned-conversion fix-up), the setting the carried delta is scaled by (`01267b34`, its
+/// value through `00403e20`, `thiscall`) and the scaling (`0040ebd0`, `cdecl`: two floats,
+/// the answer in ST0).
+const STEP_FRAME_DELTA: u32 = 0x011a_fe68;
+const STEP_DELTA: u32 = 0x011a_fe64;
+const STEP_CARRY: u32 = 0x0126_77b0;
+const STEP_COUNT: u32 = 0x0126_77b4;
+const STEP_SIZE: u32 = 0x0126_77ac;
+const STEP_MODE: u32 = 0x0126_77b8;
+const STEP_FORCE: u32 = 0x0126_7b4c;
+const STEP_MAX_DELTA: u32 = 0x010c_3c28;
+const STEP_SKIP_THRESHOLD: u32 = 0x010c_3c24;
+const STEP_FIXED: u32 = 0x0126_7b38;
+const STEP_FIXED_SCALE: u32 = 0x011a_c3a0;
+const STEP_SMOOTHED: u32 = 0x011a_fe6c;
+const STEP_SMOOTH_RATE: u32 = 0x011a_fe70;
+const STEP_HALF: u32 = 0x0101_1588;
+const STEP_TWO_TO_32: u32 = 0x0109_9378;
+const STEP_CARRY_SETTING: u32 = 0x0126_7b34;
+const SETTING_VALUE: u32 = 0x0040_3e20;
+const STEP_CARRY_SCALE: u32 = 0x0040_ebd0;
 
-    let previous_delta = e.global::<f32>(LAST_DELTA);
-    let accumulated = (previous_delta as f64 + delta as f64) as f32;
-    e.set_global(0x011a_fe68, delta);
-    let force_step = forced != 0 || e.global::<u8>(FORCE) != 0;
-    let max_delta = e.global::<f32>(MAX_DELTA);
-    let accumulated = if accumulated <= max_delta {
-        if accumulated < 0.0 {
+/// `FCOM`/`FCOMP` then `FNSTSW AX; TEST AH,0x41`: whether C0 or C3 is set, that is `st0` below
+/// or equal to `src` or the two unordered (a NaN).
+fn fcom_below_or_equal(st0: f64, src: f64) -> bool {
+    !(st0 > src)
+}
+
+/// `FILD dword` of an unsigned count, then (when its sign bit is set, `JGE` on the earlier
+/// `TEST EAX,EAX`) `FADD dword [01099378]` (2^32).
+fn fild_unsigned(e: &Engine, count: u32) -> f64 {
+    let value = f64::from(count as i32);
+    if (count as i32) < 0 {
+        x87_add(value, x87_m32(e.global::<u32>(STEP_TWO_TO_32)))
+    } else {
+        value
+    }
+}
+
+/// The compiler's truncating `FISTP qword` (`FNSTCW`, `OR 0xC00`, `FLDCW`, `FISTP`, `FLDCW`):
+/// the low word of the 64-bit result (the integer indefinite's low word is 0).
+fn fistp_chop_low(value: f64) -> u32 {
+    x87_fistp64_chop(X87Ext::from(value)) as u32
+}
+
+// Translated from 00c66760 (disassembled, FalloutNV.exe 1.4.0.525)
+/// The Havok step accumulator (no label; `cdecl`: the frame delta (a float), a single-step
+/// byte and a forced byte), x87 instruction by instruction: each operation through
+/// `crate::x87` at the running thread's precision (the main thread runs at 24-bit precision
+/// here, once Direct3D has made the device), every float store rounded and every compare's
+/// flags tested as the exe tests them (a NaN is unordered: `TEST AH,0x41` then sees C0 and C3).
+///
+/// The delta is stored to `011afe68`; the carried delta plus the delta is stored to `011afe64`
+/// and read back. Above the largest delta (`010c3c28`), the largest delta is stored there and
+/// read back; otherwise a value equal to or below 0 sets the count and step size to 0 and ends
+/// (a NaN goes on). At most 3 steps (1 with the single-step byte); the mode (`012677b8`) picks:
+/// - 0 (fixed steps): the step size is fixed step * scale (stored, read back); the count is
+///   delta / step size truncated (its 64-bit `FISTP`'s low word), capped. A count: the carry
+///   becomes delta - size * count (stored), the step's delta delta - the stored carry, then
+///   the carry is scaled (`0040ebd0` with the carry and the value of setting `01267b34`). No
+///   step: unless forced, a delta below half the size (0.5 * size compared with it) is carried
+///   whole and the step's delta and size set to 0; otherwise one step of the whole delta.
+/// - 2: one step of the frame delta as given.
+/// - 10 (smoothed): the smoothed step moves toward the delta by its rate ((delta - smoothed)
+///   * rate + smoothed, stored, read back) and is the one step's size; the carry 0.
+/// - any other: unless forced, a delta below the skip threshold (`010c3c24`) is carried whole
+///   (count, step delta and size 0); otherwise the carry is 0 and the count delta / fixed step
+///   truncated, capped; no count gives one step of the whole delta, a count steps of delta /
+///   count.
+pub fn bhk_world_accumulate_step(e: &mut Engine, delta: u32, single_step: u8, forced: u8) {
+    let d = x87_load32(delta);
+    e.set_global(STEP_FRAME_DELTA, x87_store32(d));
+    let force_step = forced != 0 || e.global::<u8>(STEP_FORCE) != 0;
+    let carry = x87_load32(e.global::<u32>(STEP_CARRY));
+    e.set_global(STEP_DELTA, x87_store32(x87_add(carry, d)));
+    let max_delta = x87_load32(e.global::<u32>(STEP_MAX_DELTA));
+    let summed = x87_load32(e.global::<u32>(STEP_DELTA));
+    let accumulated = if fcom_below_or_equal(summed, max_delta) {
+        // 00c667e3: FCOM with 0, `JP` taken for "above" (no flag) and "unordered" (both).
+        if summed > 0.0 || summed.is_nan() {
+            summed
+        } else {
             e.set_global(STEP_COUNT, 0u32);
-            e.set_global(STEP_SIZE, 0.0f32);
+            e.set_global(STEP_SIZE, x87_store32(0.0));
             return;
         }
-        accumulated
     } else {
-        max_delta
+        e.set_global(STEP_DELTA, x87_store32(max_delta));
+        x87_load32(e.global::<u32>(STEP_DELTA))
     };
-    e.set_global(DELTA, accumulated);
-    let max_steps = if single_step == 0 { 3 } else { 1 };
-
-    match e.global::<u32>(MODE) {
+    let max_steps: u32 = if single_step == 0 { 3 } else { 1 };
+    // The jump table (00c669d8, by the byte map at 00c669ec): 0, 2 and 10 have their own
+    // cases; 1, 3..=9 and anything above 10 share the last one.
+    match e.global::<u32>(STEP_MODE) {
         0 => {
-            let step_size =
-                (e.global::<f32>(FREQUENCY) as f64 * e.global::<f32>(SCALE) as f64) as f32;
-            e.set_global(STEP_SIZE, step_size);
-            let mut steps = (accumulated as f64 / step_size as f64) as u32;
-            e.set_global(STEP_COUNT, steps);
-            if steps > max_steps {
-                steps = max_steps;
-                e.set_global(STEP_COUNT, steps);
+            let fixed = x87_load32(e.global::<u32>(STEP_FIXED));
+            let size = x87_mul(fixed, x87_m32(e.global::<u32>(STEP_FIXED_SCALE)));
+            e.set_global(STEP_SIZE, x87_store32(size));
+            let size = x87_load32(e.global::<u32>(STEP_SIZE));
+            let quotient = x87_div(accumulated, size);
+            let mut count = fistp_chop_low(quotient);
+            e.set_global(STEP_COUNT, count);
+            if count > max_steps {
+                count = max_steps;
+                e.set_global(STEP_COUNT, count);
             }
-            if steps != 0 {
-                let remaining = (accumulated as f64 - steps as f64 * step_size as f64) as f32;
-                e.set_global(LAST_DELTA, remaining);
-                let used = (accumulated as f64 - remaining as f64) as f32;
-                e.set_global(DELTA, used);
-                let clock = e.call(0x0040_3e20, &[]).u32();
-                let clock_value = e.mem.f32(clock);
-                let scaled = e.call(0x0040_ebd0, &args![remaining, clock_value]).f32();
-                e.set_global(LAST_DELTA, scaled);
+            if count != 0 {
+                let product = x87_mul(size, fild_unsigned(e, count));
+                let carried = x87_sub(accumulated, product);
+                e.set_global(STEP_CARRY, x87_store32(carried));
+                let used = x87_sub(accumulated, x87_m32(e.global::<u32>(STEP_CARRY)));
+                e.set_global(STEP_DELTA, x87_store32(used));
+                let setting = e.call(SETTING_VALUE, &args![STEP_CARRY_SETTING]).u32();
+                let value = x87_store32(x87_load32(e.mem.u32(setting)));
+                let carried = x87_store32(x87_load32(e.global::<u32>(STEP_CARRY)));
+                let scaled = e.call(STEP_CARRY_SCALE, &args![carried, value]).f64();
+                e.set_global(STEP_CARRY, x87_store32(scaled));
                 return;
             }
-            let half = e.global::<f64>(0x0101_1588);
-            if !force_step && (accumulated as f64) < step_size as f64 * half {
-                e.set_global(LAST_DELTA, accumulated);
-                e.set_global(DELTA, 0.0f32);
-                e.set_global(STEP_SIZE, 0.0f32);
-                return;
+            if !force_step {
+                let half = x87_mul(size, e.global::<f64>(STEP_HALF));
+                if !fcom_below_or_equal(half, accumulated) {
+                    e.set_global(STEP_CARRY, x87_store32(accumulated));
+                    e.set_global(STEP_DELTA, x87_store32(0.0));
+                    e.set_global(STEP_SIZE, x87_store32(0.0));
+                    return;
+                }
             }
-            e.set_global(STEP_SIZE, accumulated);
+            // 00c6691d, then 00c66828.
+            e.set_global(STEP_SIZE, x87_store32(accumulated));
             e.set_global(STEP_COUNT, 1u32);
+            e.set_global(STEP_CARRY, x87_store32(0.0));
         }
         2 => {
             e.set_global(STEP_COUNT, 1u32);
-            e.set_global(STEP_SIZE, delta);
+            e.set_global(STEP_SIZE, x87_store32(d));
         }
         10 => {
-            let smooth = e.global::<f32>(SMOOTH_VALUE);
-            let rate = e.global::<f32>(SMOOTH_RATE);
-            let next = (smooth as f64 + rate as f64 * (accumulated as f64 - smooth as f64)) as f32;
-            e.set_global(SMOOTH_VALUE, next);
-            e.set_global(STEP_SIZE, next);
+            let smoothed = x87_load32(e.global::<u32>(STEP_SMOOTHED));
+            let difference = x87_sub(accumulated, smoothed);
+            let rate = x87_load32(e.global::<u32>(STEP_SMOOTH_RATE));
+            let moved = x87_add(x87_mul(difference, rate), smoothed);
+            e.set_global(STEP_SMOOTHED, x87_store32(moved));
+            let moved = x87_load32(e.global::<u32>(STEP_SMOOTHED));
+            e.set_global(STEP_SIZE, x87_store32(moved));
             e.set_global(STEP_COUNT, 1u32);
-            e.set_global(LAST_DELTA, 0.0f32);
+            e.set_global(STEP_CARRY, x87_store32(0.0));
         }
         _ => {
-            let cutoff = e.global::<f32>(DEFAULT_SKIP_THRESHOLD);
-            if !force_step && accumulated < cutoff {
-                e.set_global(STEP_COUNT, 0u32);
-                e.set_global(LAST_DELTA, accumulated);
-                e.set_global(DELTA, 0.0f32);
-                e.set_global(STEP_SIZE, 0.0f32);
-                return;
+            if !force_step {
+                let threshold = x87_load32(e.global::<u32>(STEP_SKIP_THRESHOLD));
+                if !fcom_below_or_equal(threshold, accumulated) {
+                    e.set_global(STEP_COUNT, 0u32);
+                    e.set_global(STEP_CARRY, x87_store32(accumulated));
+                    e.set_global(STEP_DELTA, x87_store32(0.0));
+                    e.set_global(STEP_SIZE, x87_store32(0.0));
+                    return;
+                }
             }
-            e.set_global(LAST_DELTA, 0.0f32);
-            let frequency = e.global::<f32>(FREQUENCY);
-            let mut steps = (accumulated as f64 / frequency as f64) as u32;
-            if steps > max_steps {
-                steps = max_steps;
+            e.set_global(STEP_CARRY, x87_store32(0.0));
+            let quotient = x87_div(accumulated, x87_m32(e.global::<u32>(STEP_FIXED)));
+            let mut count = fistp_chop_low(quotient);
+            e.set_global(STEP_COUNT, count);
+            if count > max_steps {
+                count = max_steps;
+                e.set_global(STEP_COUNT, count);
             }
-            if steps == 0 {
-                e.set_global(STEP_SIZE, accumulated);
-                e.set_global(LAST_DELTA, 0.0f32);
+            if count == 0 {
                 e.set_global(STEP_COUNT, 1u32);
+                e.set_global(STEP_SIZE, x87_store32(accumulated));
                 return;
             }
-            e.set_global(STEP_SIZE, (accumulated as f64 / steps as f64) as f32);
-            e.set_global(STEP_COUNT, steps);
+            let size = x87_div(accumulated, fild_unsigned(e, count));
+            e.set_global(STEP_SIZE, x87_store32(size));
         }
     }
 }
@@ -696,8 +772,10 @@ pub fn bhk_world_assign_collision_group(e: &mut Engine, collidable: Ptr, filter:
     };
     let encoded_group = filter_info >> 16;
     let existing = e.mem.u32(filter.addr() + 0x10);
+    // 00c66f82 / 00c66f72: `00c85ce0` (RET 4) is a thiscall on the collidable (ECX is
+    // the first argument, loaded at 00c66f10 and not changed).
     if existing != 0 {
-        e.call(0x00c8_5ce0, &args![existing]);
+        e.call(0x00c8_5ce0, &args![collidable, existing]);
         return true;
     }
     let group = if encoded_group != 0 {
@@ -716,7 +794,7 @@ pub fn bhk_world_assign_collision_group(e: &mut Engine, collidable: Ptr, filter:
     };
     e.mem.set_u32(filter.addr() + 0x10, group);
     if encoded_group == 0 {
-        e.call(0x00c8_5ce0, &args![group]);
+        e.call(0x00c8_5ce0, &args![collidable, group]);
     }
     true
 }
@@ -958,7 +1036,14 @@ pub fn fn_00c67430(e: &mut Engine, this: Ptr, name: u32) -> bool {
         let world = hk_world(e, this);
         e.with_stack(4, |e, result| {
             e.mem.set_u32(result.addr(), name);
-            e.call(0x00cc_0d60, &args![result, world, stream_field]);
+            // 00c67493: the cdecl `hkpHavokSnapshot::save` takes six words (ADD ESP,0x18):
+            // the three pushed last and, pushed first, 0, 0 and a word whose low byte is set
+            // to 0 (its upper bytes are the leftover ECX; the save reads only the low byte,
+            // `fn_00cc0b50(.., flag as u8, ..)`).
+            e.call(
+                0x00cc_0d60,
+                &args![result, world, stream_field, 0u32, 0u32, 0u32],
+            );
             let saved = e.mem.u8(result.addr()) != 0;
             e.call(0x00cc_00e0, &args![stream]);
             saved
@@ -1434,7 +1519,13 @@ pub fn bhk_tasklet_manager_callback_bhk_thread_state_create_thread_memory(
             .wrapping_add((used as u32).wrapping_mul(0x2c))
             .wrapping_add(0x18);
         let memory_system = e.call(0x00cb_bfc0, &[]).u32();
-        e.vcall(memory_system, 0xc, &args![element + 4, 0x010c_3c2cu32]);
+        // 00c680cb: the third word is a by-value flags struct (PUSH ECX; MOV [ESP],1), pushed
+        // first: threadInit's flags = 1.
+        e.vcall(
+            memory_system,
+            0xc,
+            &args![element + 4, 0x010c_3c2cu32, 1u32],
+        );
         e.call(0x00cb_b930, &args![element + 4]);
         let allocator = e.mem.u32(element + 0x14);
         let block = e.vcall(allocator, 4, &args![0x5000u32]).u32();
@@ -4038,7 +4129,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00c6_6650, bhk_on_startup_callback_delete_adjustor_16(Ptr, u8) -> Ptr),
         entry!(0x00c6_6660, bhk_on_startup_callback_delete_adjustor_20(Ptr, u8) -> Ptr),
         entry!(0x00c6_6670, bhk_world_shutdown()),
-        entry!(0x00c6_6760, bhk_world_accumulate_step(f32, u8, u8)),
+        entry!(0x00c6_6760, bhk_world_accumulate_step(u32, u8, u8)),
         entry!(0x00c6_6a00, bhk_world_scale_solver_info(Ptr)),
         entry!(0x00c6_6be0, bhk_world_scale_origin(Ptr<BhkWorld>, Ptr)),
         entry!(0x00c6_6c00, bhk_world_shift_broad_phase(Ptr<BhkWorld>, Ptr)),
@@ -4592,6 +4683,187 @@ mod tests {
         assert_eq!(e.global::<u32>(0x0126_77d4), 0);
     }
 
+    /// An engine at the point the game steps Havok: the main thread at 24-bit precision (the
+    /// renderer's device made), the largest delta 166.66667 and the skip threshold 1/120.
+    fn stepping() -> Engine {
+        let mut e = engine();
+        engine_core::units::platform::direct3d_device_created(&mut e, 0);
+        e.set_global(STEP_MAX_DELTA, 0x4326_aaabu32);
+        e.set_global(STEP_SKIP_THRESHOLD, 0x3c08_8889u32);
+        e.set_global(STEP_FIXED, 0x3c88_8889u32); // 1/60
+        e.set_global(STEP_FIXED_SCALE, 1.0f32);
+        e.set_global(STEP_HALF, 0.5f64);
+        e.set_global(STEP_TWO_TO_32, 0x4f80_0000u32);
+        e.set_global(STEP_CARRY, 0u32);
+        e
+    }
+
+    fn step(e: &mut Engine, delta: u32, single: u32, forced: u32) {
+        e.call(0x00c6_6760, &args![delta, single, forced]);
+    }
+
+    /// Mode 0, 0.05 s with 1/60 steps, worked out from the instructions at 24-bit precision:
+    /// 0.05 / (1/60) is 3 - 1.1e-7, which rounds to 3.0 at 24 bits (53-bit precision would keep
+    /// 2.9999999 and give two steps); 3 * (1/60) is 26843547 * 2^-29, rounded (a tie, to even)
+    /// to 13421774 * 2^-28, one unit above 0.05 (13421773 * 2^-28), so the carry is -2^-28
+    /// (`b1800000`) and the step delta 0.05 + 2^-28 (`3d4cccce`); then the carry is scaled
+    /// through `0040ebd0` with the setting's value.
+    #[test]
+    fn fixed_steps_carry_the_rest_and_scale_it() {
+        let mut e = stepping();
+        let setting = e.mem.alloc(4);
+        e.mem.set_u32(setting, 0x4000_0000);
+        e.register_double(SETTING_VALUE, move |_, a| {
+            assert_eq!(a, [STEP_CARRY_SETTING]);
+            ret(setting)
+        });
+        e.register_double(STEP_CARRY_SCALE, |_, a| {
+            assert_eq!(a, [0xb180_0000, 0x4000_0000]);
+            Ret {
+                st0: 0.25,
+                ..Ret::default()
+            }
+        });
+        step(&mut e, 0x3d4c_cccd, 0, 0);
+        assert_eq!(e.global::<u32>(STEP_FRAME_DELTA), 0x3d4c_cccd);
+        assert_eq!(e.global::<u32>(STEP_COUNT), 3);
+        assert_eq!(e.global::<u32>(STEP_SIZE), 0x3c88_8889);
+        assert_eq!(e.global::<u32>(STEP_DELTA), 0x3d4c_ccce);
+        assert_eq!(e.global::<f32>(STEP_CARRY), 0.25);
+        // Single-stepping caps the count at 1: the carry 0.05 - 1/60 (25 bits exactly, so rounded
+        // to a float as the 24-bit subtraction rounds it) and the step delta 0.05 less that.
+        let mut e = stepping();
+        let setting = e.mem.alloc(4);
+        e.mem.set_u32(setting, 0x4000_0000);
+        e.register_double(SETTING_VALUE, move |_, _| ret(setting));
+        e.register_double(STEP_CARRY_SCALE, |_, a| Ret {
+            st0: f64::from(f32::from_bits(a[0])),
+            ..Ret::default()
+        });
+        step(&mut e, 0x3d4c_cccd, 1, 0);
+        assert_eq!(e.global::<u32>(STEP_COUNT), 1);
+        let carried = 0.05f32 - f32::from_bits(0x3c88_8889);
+        assert_eq!(e.global::<f32>(STEP_CARRY), carried);
+        assert_eq!(
+            e.global::<f32>(STEP_DELTA),
+            0.05f32 - f32::from_bits(carried.to_bits())
+        );
+        // Before the device (53-bit precision) the quotient stays below 3: two steps.
+        let mut e = stepping();
+        engine_core::units::crt::set_x87_control_word(&mut e, 0x027f);
+        let setting = e.mem.alloc(4);
+        e.register_double(SETTING_VALUE, move |_, _| ret(setting));
+        e.register_double(STEP_CARRY_SCALE, |_, _| Ret::default());
+        step(&mut e, 0x3d4c_cccd, 0, 0);
+        assert_eq!(e.global::<u32>(STEP_COUNT), 2);
+    }
+
+    /// Below one step: carried whole unless half a step is reached or the step is forced.
+    #[test]
+    fn a_short_delta_is_carried_unless_half_a_step_or_forced() {
+        let mut e = stepping();
+        step(&mut e, 0x3c00_0000, 0, 0); // 1/128 < 1/120
+        assert_eq!(e.global::<u32>(STEP_COUNT), 0);
+        assert_eq!(e.global::<u32>(STEP_CARRY), 0x3c00_0000);
+        assert_eq!(e.global::<u32>(STEP_DELTA), 0);
+        assert_eq!(e.global::<u32>(STEP_SIZE), 0);
+        // Carry 1/128 + 1/256 = 3/256 >= 1/120: one step of it, nothing carried.
+        step(&mut e, 0x3b80_0000, 0, 0);
+        assert_eq!(e.global::<u32>(STEP_COUNT), 1);
+        assert_eq!(e.global::<f32>(STEP_SIZE), 3.0 / 256.0);
+        assert_eq!(e.global::<u32>(STEP_CARRY), 0);
+        // Forced: one step at once.
+        let mut e = stepping();
+        step(&mut e, 0x3c00_0000, 0, 1);
+        assert_eq!(e.global::<u32>(STEP_COUNT), 1);
+        assert_eq!(e.global::<u32>(STEP_SIZE), 0x3c00_0000);
+    }
+
+    /// Zero (and -0) end with no step; a NaN is unordered everywhere: it goes on, its count
+    /// is the 64-bit integer indefinite's low word 0, half a step does not exceed it, so one
+    /// step of the NaN; above the largest delta the largest is used.
+    #[test]
+    fn zero_nan_and_the_largest_delta() {
+        let mut e = stepping();
+        e.set_global(STEP_COUNT, 7u32);
+        step(&mut e, 0x8000_0000, 0, 0);
+        assert_eq!(e.global::<u32>(STEP_COUNT), 0);
+        assert_eq!(e.global::<u32>(STEP_SIZE), 0);
+        assert_eq!(e.global::<u32>(STEP_DELTA), 0);
+        step(&mut e, 0x7fc1_2345, 0, 0);
+        assert_eq!(e.global::<u32>(STEP_COUNT), 1);
+        assert_eq!(e.global::<u32>(STEP_SIZE), 0x7fc1_2345);
+        assert_eq!(e.global::<u32>(STEP_CARRY), 0);
+        // A signalling NaN delta is stored quieted.
+        let mut e = stepping();
+        e.set_global(STEP_MODE, 2u32);
+        step(&mut e, 0x7f80_0001, 0, 0);
+        assert_eq!(e.global::<u32>(STEP_FRAME_DELTA), 0x7fc0_0001);
+        assert_eq!(e.global::<u32>(STEP_SIZE), 0x7fc0_0001);
+        // 200 s: the largest delta, 166.66667 / (1/60) steps capped at 3, each 1/60.
+        let mut e = stepping();
+        e.register_double(SETTING_VALUE, |e, _| ret(e.mem.alloc(4)));
+        e.register_double(STEP_CARRY_SCALE, |_, _| Ret::default());
+        step(&mut e, 200.0f32.to_bits(), 0, 0);
+        assert_eq!(e.global::<u32>(STEP_COUNT), 3);
+        let size = f32::from_bits(0x3c88_8889);
+        let carried = f32::from_bits(0x4326_aaab) - size * 3.0;
+        assert_eq!(
+            e.global::<f32>(STEP_DELTA),
+            f32::from_bits(0x4326_aaab) - carried
+        );
+    }
+
+    /// Mode 10 at 24-bit precision: each operation rounds to a float, (delta - smoothed) *
+    /// rate + smoothed done as three float operations, which here differs from rounding the
+    /// 53-bit result once.
+    #[test]
+    fn smoothing_rounds_each_operation_to_24_bits() {
+        let (delta, smoothed, rate) = (0.09f32, 0.02f32, 0.15f32);
+        let three_floats = (delta - smoothed) * rate + smoothed;
+        let once = ((f64::from(delta) - f64::from(smoothed)) * f64::from(rate)
+            + f64::from(smoothed)) as f32;
+        let mut e = stepping();
+        e.set_global(STEP_MODE, 10u32);
+        e.set_global(STEP_SMOOTHED, smoothed);
+        e.set_global(STEP_SMOOTH_RATE, rate);
+        step(&mut e, delta.to_bits(), 0, 0);
+        assert_eq!(e.global::<f32>(STEP_SMOOTHED), three_floats);
+        assert_eq!(e.global::<f32>(STEP_SIZE), three_floats);
+        assert_eq!(e.global::<u32>(STEP_COUNT), 1);
+        assert_eq!(e.global::<u32>(STEP_CARRY), 0);
+        // At 53-bit precision (before the device) the same instructions give the other value.
+        let mut e = stepping();
+        engine_core::units::crt::set_x87_control_word(&mut e, 0x027f);
+        e.set_global(STEP_MODE, 10u32);
+        e.set_global(STEP_SMOOTHED, smoothed);
+        e.set_global(STEP_SMOOTH_RATE, rate);
+        step(&mut e, delta.to_bits(), 0, 0);
+        assert_eq!(e.global::<f32>(STEP_SMOOTHED), once);
+        assert_ne!(three_floats, once, "pick values where the precision shows");
+    }
+
+    /// The other modes: skip below the threshold, else steps of delta / count.
+    #[test]
+    fn other_modes_split_the_delta_evenly() {
+        let mut e = stepping();
+        e.set_global(STEP_MODE, 5u32);
+        step(&mut e, 0x3c00_0000, 0, 0); // 1/128 < 1/120: skipped and carried
+        assert_eq!(e.global::<u32>(STEP_COUNT), 0);
+        assert_eq!(e.global::<u32>(STEP_CARRY), 0x3c00_0000);
+        let mut e = stepping();
+        e.set_global(STEP_MODE, 1u32);
+        step(&mut e, 0x3d4c_cccd, 0, 0); // 0.05: 3.0 at 24 bits, three steps of 0.05 / 3
+        assert_eq!(e.global::<u32>(STEP_COUNT), 3);
+        assert_eq!(e.global::<f32>(STEP_SIZE), 0.05f32 / 3.0);
+        assert_eq!(e.global::<u32>(STEP_CARRY), 0);
+        let mut e = stepping();
+        e.set_global(STEP_MODE, 11u32);
+        step(&mut e, 0x3c10_0000, 0, 0); // 0.0087890625 >= 1/120, below 1/60: one step
+        assert_eq!(e.global::<u32>(STEP_COUNT), 1);
+        assert_eq!(e.global::<u32>(STEP_SIZE), 0x3c10_0000);
+    }
+
     #[test]
     fn step_accumulator_handles_negative_and_manual_modes() {
         let mut e = engine();
@@ -4824,7 +5096,7 @@ mod tests {
         e.mem.set_u32(world + 0x2c, 0x1234_0000);
         e.mem.set_u32(filter + 0x10, 77);
         e.register_double(0x00c8_5ce0, move |_, a| {
-            assert!(a == [77] || a == [0x1234]);
+            assert!(a == [collidable, 77] || a == [collidable, 0x1234]);
             Ret::default()
         });
         e.call_log = Some(vec![]);
@@ -4841,7 +5113,7 @@ mod tests {
             .filter(|(address, _)| *address == 0x00c8_5ce0)
             .map(|(_, args)| args.clone())
             .collect();
-        assert_eq!(groups, [vec![77]]);
+        assert_eq!(groups, [vec![collidable, 77]]);
     }
 
     #[test]
@@ -5189,7 +5461,7 @@ mod tests {
             Ret::default()
         });
         e.register_double(0x00cc_0d60, |e, a| {
-            assert_eq!(a[1..], [0x0500_0000, 0x77]);
+            assert_eq!(a[1..], [0x0500_0000, 0x77, 0, 0, 0]);
             e.mem.set_u8(a[0], 1);
             Ret::default()
         });
@@ -5663,7 +5935,7 @@ mod tests {
             ret(block)
         });
         e.register_double(0x0400_3300, move |_, a| {
-            assert_eq!(a[1..], [element + 4, 0x010c_3c2c]);
+            assert_eq!(a[1..], [element + 4, 0x010c_3c2c, 1]);
             Ret::default()
         });
         e.register_double(0x00cb_bfc0, move |_, _| ret(manager));

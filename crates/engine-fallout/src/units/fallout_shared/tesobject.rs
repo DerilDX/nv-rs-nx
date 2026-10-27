@@ -361,7 +361,12 @@ pub fn std_string_erase(
             .call(STRING_DATA, &args![this])
             .u32()
             .wrapping_add(position);
-        e.call(MOVE_CHARS, &args![destination, capacity, source, tail]);
+        // 0044a6fb: `0044d580` reads the ECX it is entered with (its first parameter);
+        // `0044a970` (called last, at 0044a6f2) leaves ECX = this on both of its paths.
+        e.call(
+            MOVE_CHARS,
+            &args![this, destination, capacity, source, tail],
+        );
         let new_size = e.get(this, DebugString::size).wrapping_sub(count);
         e.call(STRING_SET_LENGTH, &args![this, new_size]);
     }
@@ -1623,13 +1628,17 @@ mod tests {
             let size = e.mem.u32(a[0] + 0x14);
             ret(u32::from(a[1] >= data && a[1] < data + size))
         });
-        for copy in [COPY_CHARS, MOVE_CHARS] {
-            e.register(copy, |e, a| {
-                let bytes = e.mem.bytes(a[2], a[3]);
-                e.mem.write(a[0], &bytes);
-                ret(0)
-            });
-        }
+        e.register(COPY_CHARS, |e, a| {
+            let bytes = e.mem.bytes(a[2], a[3]);
+            e.mem.write(a[0], &bytes);
+            ret(0)
+        });
+        // `0044d580` takes the ECX it is entered with first.
+        e.register(MOVE_CHARS, |e, a| {
+            let bytes = e.mem.bytes(a[3], a[4]);
+            e.mem.write(a[1], &bytes);
+            ret(0)
+        });
         e.register(STRING_OUT_OF_RANGE, |_, _| ret(0));
         e.register(STRING_FREE, |_, _| ret(0));
         e.register(STRLEN, |e, a| ret(e.mem.cstr(a[0]).len() as u32));
@@ -1777,7 +1786,7 @@ mod tests {
         assert_eq!(string_text(&e, string), b"adef");
         let log = calls(&mut e);
         // (destination, capacity left, source, tail length)
-        assert!(log.contains(&(MOVE_CHARS, vec![string + 5, 14, string + 7, 3])));
+        assert!(log.contains(&(MOVE_CHARS, vec![string, string + 5, 14, string + 7, 3])));
 
         // A count of 0 changes nothing; npos erases to the end.
         e.call(0x0044a690, &[string, 1, 0]);

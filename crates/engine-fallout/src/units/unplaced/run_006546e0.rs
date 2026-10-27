@@ -1057,7 +1057,9 @@ fn update_head(e: &mut Engine, frame: &Frame, node: u32, data: u32, kind: &mut u
     let image = frame.at(0x160);
     let tint = frame.at(0x16c);
     let normal = frame.at(0x150);
-    let value = e.call(DETAIL_VALUE, &args![data, 0u32]).f64();
+    // 0065619f: the cdecl `00652440` takes three words (data, 0, 0); ADD ESP,8 pops two
+    // and the third slot is reused for the next call's argument.
+    let value = e.call(DETAIL_VALUE, &args![data, 0u32, 0u32]).f64();
     let rounded = e.call(DETAIL_ROUND, &args![x87_store32(value)]).f64();
     let level = e.call(FTOL, &args![rounded]).u32() as u8;
     e.call(

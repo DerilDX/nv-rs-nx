@@ -793,6 +793,16 @@ pub fn fn_0065e750(_e: &mut Engine, ecx: u32, _unused_1: u32, _unused_2: u32) ->
     (ecx >> 24) as u8
 }
 
+/// The registered form of [`fn_0065e750`]: the exe reads none of the words its callers push
+/// (none, one or two of them, by caller) and only the `ECX` they leave, which the engine does
+/// not model as a register. A caller that knows its `ECX` passes it as the first word; the
+/// answer is that word's top byte, or 0 when no word comes (every caller hands the byte to a tag
+/// parameter nothing reads).
+fn registered_0065e750(e: &mut Engine, words: &[u32]) -> Ret {
+    let ecx = words.first().copied().unwrap_or(0);
+    u32::from(fn_0065e750(e, ecx, 0, 0)).into_ret()
+}
+
 /// `std::_Copy_opt` through unwrapped pointers for one element size (cdecl, six words: first,
 /// last, destination and three tag bytes, of which it reads none). The frame's tag bytes are 0
 /// at `EBP-5` and `EBP-6` and the uninitialised byte at `EBP-7` (whatever the frame holds; 0
@@ -1594,7 +1604,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x0065_e670, fn_0065e670(u32, u32) -> u32),
         entry!(0x0065_e6c0, fn_0065e6c0(u32, u32, u32)),
         entry!(0x0065_e700, fn_0065e700(u32, u32) -> u32),
-        entry!(0x0065_e750, fn_0065e750(u32, u32, u32) -> u8),
+        (0x0065_e750, registered_0065e750 as AbiFn),
         entry!(0x0065_e760, fn_0065e760(u32, u32, u32, u32, u32, u32) -> u32),
         entry!(0x0065_e7c0, fn_0065e7c0(u32, u32, u32, u32, u32, u32) -> u32),
         entry!(0x0065_e820, fn_0065e820(u32, u32, u32, u32)),

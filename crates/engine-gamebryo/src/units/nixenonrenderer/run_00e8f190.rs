@@ -2226,7 +2226,10 @@ const RENDER_PASS_00E807D0: u32 = 0x00e8_07d0;
 /// third are not read). The transform (13 words) is copied; each of its translation's three
 /// floats (+0x24, +0x28, +0x2c) moves by `(2 * rand() / 32767.0 - 1.0)` (rounded to a
 /// `float`) times a tenth of the bound's radius (+0xc, rounded to a `float`). Then `00e807d0`
-/// with the first word, 0, 0, the fourth to sixth, the copy and the bound.
+/// with the first word, 0, 0, the fourth to sixth, the copy and the bound, whose `EAX` it
+/// answers (the exe ends on that call).
+/// The slot is `NiShader`'s `+0x60`, which the Xbox PDB names `SetupTransformations`
+/// (`unsigned int`, eight words).
 pub fn fn_00e90760(
     e: &mut Engine,
     this: Ptr,
@@ -2238,7 +2241,7 @@ pub fn fn_00e90760(
     sixth: u32,
     transform: u32,
     bound: u32,
-) {
+) -> u32 {
     e.with_stack(0x34, |e, copy| {
         let copy = copy.addr();
         for word in 0..0xdu32 {
@@ -2261,8 +2264,9 @@ pub fn fn_00e90760(
         e.call(
             RENDER_PASS_00E807D0,
             &args![this, first, 0u32, 0u32, fourth, fifth, sixth, copy, bound],
-        );
-    });
+        )
+        .u32()
+    })
 }
 
 // Translated from 00e90d20 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -2502,7 +2506,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         ),
         entry!(
             0x00e9_0760,
-            fn_00e90760(Ptr, u32, u32, u32, u32, u32, u32, u32, u32)
+            fn_00e90760(Ptr, u32, u32, u32, u32, u32, u32, u32, u32) -> u32
         ),
         entry!(0x00e9_0d20, fn_00e90d20(Ptr, u32) -> u32),
         entry!(0x00e9_0db0, fn_00e90db0(Ptr)),
@@ -4365,6 +4369,28 @@ mod n011_tests {
         assert_eq!(*seen.borrow(), expected);
         // The caller's transform is not changed.
         assert_eq!(f32::from_bits(e.mem.u32(transform + 0x24)), 10.0);
+    }
+
+    #[test]
+    fn fn_00e90760_answers_the_render_pass_eax() {
+        let mut e = Engine::new();
+        constants(&mut e);
+        e.register(RAND, |_, _| word(0));
+        e.register(RENDER_PASS_00E807D0, |_, _| word(6));
+        let transform = e.mem.alloc(0x34);
+        let bound = e.mem.alloc(0x10);
+        let words = args![
+            0x0e00_0001u32,
+            1u32,
+            2u32,
+            3u32,
+            4u32,
+            5u32,
+            6u32,
+            transform,
+            bound
+        ];
+        assert_eq!(e.call(0x00e9_0760, &words).u32(), 6);
     }
 
     #[test]

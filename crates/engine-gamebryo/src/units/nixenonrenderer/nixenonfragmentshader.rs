@@ -677,7 +677,9 @@ pub fn fn_00e8dbe0(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
 /// Unnamed in the engine map (slot +0x58, `UpdatePipeline`'s in the Xbox PDB; seven stack
 /// words): with a current pass, each non-null stage of its array (`m_kStages`, +0x24, up to
 /// `m_uiStageCount`, +0x18, re-read each time) gets `00e8d890` with the word at `a4` +0x14
-/// and `a5`; then the base `00a8f3e0` runs with the same seven words.
+/// and `a5`; then the base `00a8f3e0` runs with the same seven words, and its `EAX`
+/// is the answer (the exe ends on that call; `UpdatePipeline` is `unsigned int` in the Xbox
+/// PDB).
 #[allow(clippy::too_many_arguments)]
 pub fn fn_00e8dc30(
     e: &mut Engine,
@@ -689,7 +691,7 @@ pub fn fn_00e8dc30(
     a5: u32,
     a6: u32,
     a7: u32,
-) {
+) -> u32 {
     let pass = Ptr::<NiD3DPass>::new(e.mem.u32(CURRENT_PASS));
     if !pass.is_null() {
         let mut index = 0u32;
@@ -706,7 +708,8 @@ pub fn fn_00e8dc30(
     e.call(
         BASE_UPDATE_PIPELINE_00A8F3E0,
         &args![this, a1, a2, a3, a4, a5, a6, a7],
-    );
+    )
+    .u32()
 }
 
 // Translated from 00e8dca0 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -809,7 +812,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00e8_dbe0, fn_00e8dbe0(Ptr, u32) -> Ptr),
         entry!(
             0x00e8_dc30,
-            fn_00e8dc30(Ptr, u32, u32, u32, u32, u32, u32, u32)
+            fn_00e8dc30(Ptr, u32, u32, u32, u32, u32, u32, u32) -> u32
         ),
         entry!(0x00e8_dca0, fn_00e8dca0(Ptr, u32, u32) -> u32),
     ]
@@ -1392,6 +1395,15 @@ mod tests {
         e.call(0x00e8_dc30, &words);
         assert!(calls_to(&e, STAGE_UPDATE_00E8D890).is_empty());
         assert_eq!(calls_to(&e, BASE_UPDATE_PIPELINE_00A8F3E0).len(), 1);
+    }
+
+    #[test]
+    fn fn_00e8dc30_answers_the_base_eax() {
+        let mut e = engine(&[STAGE_UPDATE_00E8D890]);
+        e.register(BASE_UPDATE_PIPELINE_00A8F3E0, |_, _| 2u32.into_ret());
+        e.mem.set_u32(CURRENT_PASS, 0);
+        let words = args![0x0e60_0000u32, 1u32, 2u32, 3u32, 4u32, 5u32, 6u32, 7u32];
+        assert_eq!(e.call(0x00e8_dc30, &words).u32(), 2);
     }
 
     #[test]

@@ -64,8 +64,8 @@ const COMBAT_MANAGER_POINTER: u32 = 0x011f_1958;
 const SET_TARGETED: u32 = 0x0056_4db0;
 /// `NiPointer` getter (`00559450`): the first word of `this`.
 const NI_POINTER_GET: u32 = 0x0055_9450;
-/// Script run (`005ac1e0`): `this` = the script, arguments the reference and
-/// its script locals.
+/// Script run (`005ac1e0`, RET 0x10): `this` = the script, arguments the
+/// reference, its script locals, 0 and 1.
 const SCRIPT_RUN: u32 = 0x005a_c1e0;
 /// The address of a reference's extra data list (`005d43c0`, `this + 0x44`).
 const EXTRA_DATA_LIST_OF: u32 = 0x005d_43c0;
@@ -227,9 +227,11 @@ fn subtract_frame_time(e: &mut Engine, address: u32) {
 /// Runs `script` for `actor` with the script locals of the actor's extra
 /// data list, as the package handlers do.
 fn run_package_script(e: &mut Engine, script: u32, actor: Ptr) {
-    let list = e.call(EXTRA_DATA_LIST_OF, &args![actor, 0u32, 1u32]).u32();
+    // 00903aab / 00903c33 / 00903d3b: `005d43c0` takes no stack word (plain RET);
+    // the pushed 0, 1 are the last two words of `005ac1e0` (RET 0x10).
+    let list = e.call(EXTRA_DATA_LIST_OF, &args![actor]).u32();
     let locals = e.call(SCRIPT_LOCALS, &args![list]).u32();
-    e.call(SCRIPT_RUN, &args![script, actor, locals]);
+    e.call(SCRIPT_RUN, &args![script, actor, locals, 0u32, 1u32]);
 }
 
 // Translated from 00903160 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -1413,11 +1415,15 @@ pub fn high_process_process_sandman(e: &mut Engine, this: Ptr<HighProcess>, acto
     if !near {
         if actor.addr() != player(e) {
             let weight = e.mem.f32(SANDMAN_PACKAGE_FLOAT);
-            let first = e
-                .call(0x0067_5a50, &args![package, actor, weight, 0u32])
-                .u32();
-            let second = e.call(0x0067_5c20, &args![package, actor, first]).u32();
-            e.call(0x008b_3690, &args![actor, process + 0x148, second]);
+            // 0090501b / 00905028: `00675a50` and `00675c20` take one word each (RET 4,
+            // the actor); the weight, the 0 and the first result are the last three
+            // words of `008b3690` (RET 0x14).
+            let first = e.call(0x0067_5a50, &args![package, actor]).u32();
+            let second = e.call(0x0067_5c20, &args![package, actor]).u32();
+            e.call(
+                0x008b_3690,
+                &args![actor, process + 0x148, second, first, weight, 0u32],
+            );
         } else {
             e.vcall(actor.addr(), 0x2a8, &args![process + 0x148]);
             let height = e.call(0x0056_8650, &args![process + 0x148]).f32();
@@ -2966,7 +2972,10 @@ mod tests {
         let log: Vec<u32> = s.e.call_log.as_ref().unwrap().iter().map(|c| c.0).collect();
         let position = |address: u32| log.iter().position(|a| *a == address).unwrap();
         // Script, then the idle, then the begin-idles flag, then the topic.
-        assert_eq!(calls(&s.e, SCRIPT_RUN), vec![vec![0x12, actor, 0x9999]]);
+        assert_eq!(
+            calls(&s.e, SCRIPT_RUN),
+            vec![vec![0x12, actor, 0x9999, 0, 1]]
+        );
         assert_eq!(
             slot_calls(&s.e, PROCESS_VT, 0x44),
             vec![vec![process, actor, 0x11, 2, 1, 0, 1]]
@@ -3101,7 +3110,10 @@ mod tests {
             let package = test_package(&mut s.e);
             s.e.register(address, |_, _| word(1));
             s.e.call(0x0090_3bf0, &args![process, actor, package]);
-            assert_eq!(calls(&s.e, SCRIPT_RUN), vec![vec![0x22, actor, 0x9999]]);
+            assert_eq!(
+                calls(&s.e, SCRIPT_RUN),
+                vec![vec![0x22, actor, 0x9999, 0, 1]]
+            );
         }
     }
 
@@ -3122,7 +3134,10 @@ mod tests {
         let package = test_package(&mut s.e);
         s.e.register(0x0067_efd0, |_, _| word(1));
         s.e.call(0x0090_3d10, &args![process, actor, package]);
-        assert_eq!(calls(&s.e, SCRIPT_RUN), vec![vec![0x32, actor, 0x9999]]);
+        assert_eq!(
+            calls(&s.e, SCRIPT_RUN),
+            vec![vec![0x32, actor, 0x9999, 0, 1]]
+        );
         assert_eq!(
             slot_calls(&s.e, PROCESS_VT, 0x44),
             vec![vec![process, actor, 0x31, 2, 1, 0, 1]]
@@ -4090,14 +4105,18 @@ mod tests {
         s.e.register(0x0067_5a50, |_, _| word(0xa1));
         s.e.register(0x0067_5c20, |_, _| word(0xb2));
         s.e.call(0x0090_4f50, &args![process, actor]);
-        assert_eq!(
-            calls(&s.e, 0x0067_5a50),
-            vec![vec![0x7700, actor, 40.0f32.to_bits(), 0]]
-        );
-        assert_eq!(calls(&s.e, 0x0067_5c20), vec![vec![0x7700, actor, 0xa1]]);
+        assert_eq!(calls(&s.e, 0x0067_5a50), vec![vec![0x7700, actor]]);
+        assert_eq!(calls(&s.e, 0x0067_5c20), vec![vec![0x7700, actor]]);
         assert_eq!(
             calls(&s.e, 0x008b_3690),
-            vec![vec![actor, process + 0x148, 0xb2]]
+            vec![vec![
+                actor,
+                process + 0x148,
+                0xb2,
+                0xa1,
+                40.0f32.to_bits(),
+                0
+            ]]
         );
         assert!(slot_calls(&s.e, PROCESS_VT, 0x288).is_empty());
 

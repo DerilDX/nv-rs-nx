@@ -6127,7 +6127,17 @@ pub fn fn_00c755e0(e: &mut Engine, this: Ptr, index: u32, target: Ptr) -> f32 {
     if (0..3).all(|lane| absolute[lane] <= tolerance) {
         return 0.0;
     }
-    let turn = e.mem.alloc(0x10);
+    // The exe's frame (`AND ESP,0xfffffff0`, `SUB ESP,0x44`, three pushes): 0x50 bytes from a
+    // 16-byte boundary; the turn at +0x30 (00c75650) and the axis / result at +0x20 (00c7569c).
+    e.with_stack(0x60, |e, raw| {
+        let frame = (raw.addr() + 0xf) & !0xf;
+        turn_bone_body(e, this, entry, target, frame + 0x30, frame + 0x20)
+    })
+}
+
+/// [`fn_00c755e0`] past its early exit, in its frame: `turn` and `axis` are its two locals.
+fn turn_bone_body(e: &mut Engine, this: u32, entry: u32, target: Ptr, turn: u32, axis: u32) -> f32 {
+    let current_at = entry.wrapping_add(0x120);
     fn_00c74ac0(e, Ptr::new(turn), target, Ptr::new(current_at));
     let mut angle = x87_store32(f64::from(fn_00c74c20(e, Ptr::new(turn))));
     let limit_at = if e.mem.u8(this + 0xb2) == 0 {
@@ -6138,7 +6148,6 @@ pub fn fn_00c755e0(e: &mut Engine, this: Ptr, index: u32, target: Ptr) -> f32 {
     let limit_degrees = x87_store32(x87_load32(e.mem.u32(limit_at)));
     let radians: f64 = e.global(DEGREES_TO_RADIANS);
     let limit = x87_mul(x87_load32(limit_degrees), radians);
-    let axis = e.mem.alloc(0x10);
     if x87_load32(angle) > limit {
         angle = x87_store32(limit);
         fn_00c74c90(e, Ptr::new(turn), Ptr::new(axis));
@@ -6154,8 +6163,6 @@ pub fn fn_00c755e0(e: &mut Engine, this: Ptr, index: u32, target: Ptr) -> f32 {
     let result = load4(e, axis);
     store4(e, transform + 0x10, result);
     store4(e, current_at, result);
-    e.mem.free(turn);
-    e.mem.free(axis);
     f32::from_bits(angle)
 }
 
@@ -6215,9 +6222,25 @@ fn target_bone_offset(e: &mut Engine, base: u32) -> Lanes {
 /// distance along the unit direction to the target.
 pub fn bhk_ragdoll_controller_adjust_current_target(e: &mut Engine, this: Ptr) {
     let base = this.addr();
+    // The exe's frame (`AND ESP,0xfffffff0`, `SUB ESP,0x74`, three pushes): 0x80 bytes from a
+    // 16-byte boundary; the first inverse point at +0x60 (00c78184), the second at +0x50
+    // (00c78430) and the offset carried through the transforms at +0x40 (00c78407).
+    e.with_stack(0x90, |e, raw| {
+        let frame = (raw.addr() + 0xf) & !0xf;
+        adjust_current_target_body(e, base, frame + 0x60, frame + 0x50, frame + 0x40);
+    });
+}
+
+/// [`bhk_ragdoll_controller_adjust_current_target`] in its frame: `point` and `second_point`
+/// are the outputs of the two inverse transforms, `offset_at` the forward transforms' vector.
+fn adjust_current_target_body(
+    e: &mut Engine,
+    base: u32,
+    point: u32,
+    second_point: u32,
+    offset_at: u32,
+) {
     let (transform, target) = (base + 0x10, base + 0xd0);
-    let point = e.mem.alloc(0x10);
-    let offset_at = e.mem.alloc(0x10);
     e.call(TRANSFORM_POINT_INVERSE, &args![point, transform, target]);
     let normalised = refined_normal(e, load4(e, point));
     store4(e, point, normalised);
@@ -6244,11 +6267,14 @@ pub fn bhk_ragdoll_controller_adjust_current_target(e: &mut Engine, this: Ptr) {
         let moved = addps(load4(e, offset_at), scaled);
         store4(e, target, moved);
     } else if below {
-        e.call(TRANSFORM_POINT_INVERSE, &args![point, transform, target]);
+        e.call(
+            TRANSFORM_POINT_INVERSE,
+            &args![second_point, transform, target],
+        );
         let positive = e.mem.u32(TARGET_OFFSET_POSITIVE);
         let negative = e.mem.u32(TARGET_OFFSET_NEGATIVE);
         // `FLDZ` / `FCOMP`: only an ordered "below zero" first coordinate takes the second float.
-        let adjustment = if 0.0 > x87_m32(e.mem.u32(point)) {
+        let adjustment = if 0.0 > x87_m32(e.mem.u32(second_point)) {
             x87_quiet_bits(negative)
         } else {
             x87_quiet_bits(positive)
@@ -6288,8 +6314,6 @@ pub fn bhk_ragdoll_controller_adjust_current_target(e: &mut Engine, this: Ptr) {
         let clamp = e.mem.f32(TARGET_CLAMP_DISTANCE);
         store4(e, target, addps(mulps(unit, [clamp; 4]), anchor));
     }
-    e.mem.free(point);
-    e.mem.free(offset_at);
 }
 
 /// The model-space transform of `bone` in `pose` (array at `+0x10`, stride 0x30; flags at
@@ -13369,6 +13393,28 @@ mod quaternion_limit_tests {
         assert!((angle - 0.5).abs() < 1e-5);
         assert!(calls(&seen, SET_AXIS_ANGLE).is_empty());
     }
+
+    #[test]
+    fn the_turn_and_the_axis_sit_in_one_aligned_frame_at_the_exe_offsets() {
+        let (mut e, seen, this, _) = turning(0);
+        let half = 0.25f32;
+        let target = vec4(&mut e, [0.0, 0.0, half.sin(), half.cos()]);
+        e.call(0x00c7_55e0, &args![this, 0u32, target]);
+        // The turn at frame +0x30 (16-byte aligned), the axis / product at +0x20.
+        let rebuilt = &calls(&seen, SET_AXIS_ANGLE)[0];
+        let (turn, axis) = (rebuilt[0], rebuilt[1]);
+        assert_eq!(turn & 0xf, 0);
+        assert_eq!(axis, turn - 0x10);
+        assert_eq!(
+            calls(&seen, QUATERNION_SET_MUL),
+            vec![vec![axis, turn, this + 0x120]]
+        );
+        assert_eq!(calls(&seen, NORMALISE_VECTOR)[0][0], axis);
+        // The frame is given back: the next run uses the same addresses.
+        store4(&mut e, this + 0x120, [0.0, 0.0, 0.0, 1.0]);
+        e.call(0x00c7_55e0, &args![this, 0u32, target]);
+        assert_eq!(calls(&seen, SET_AXIS_ANGLE)[1][0], turn);
+    }
 }
 
 #[cfg(test)]
@@ -13536,6 +13582,28 @@ mod adjust_target_tests {
         assert_eq!(calls(&s.seen, TRANSFORM_POINT)[0][1], calculated);
         // The target (0, 4, 0) is at the anchor (0, 4, 0): unchanged.
         assert_eq!(load4(&s.e, s.this + 0xd0), [0.0, 4.0, 0.0, 0.0]);
+    }
+
+    #[test]
+    fn the_locals_sit_in_one_aligned_frame_at_the_exe_offsets() {
+        let mut s = scene([-1.0, -1.0, 0.0, 0.0]);
+        store4(&mut s.e, s.this + 0xd0, [9.0, 9.0, 9.0, 0.0]);
+        s.e.call(0x00c7_8160, &args![s.this]);
+        let inverse = calls(&s.seen, TRANSFORM_POINT_INVERSE);
+        let forward = calls(&s.seen, TRANSFORM_POINT);
+        let first = inverse[0][0];
+        // Frame +0x60 (16-byte aligned), the second inverse point at +0x50, the forward
+        // transforms' vector at +0x40 (output and input of each).
+        assert_eq!(first & 0xf, 0);
+        assert_eq!(inverse[1][0], first - 0x10);
+        for call in &forward {
+            assert_eq!(call[0], first - 0x20);
+            assert_eq!(call[2], first - 0x20);
+        }
+        // The frame is given back: the next run uses the same addresses.
+        s.seen.borrow_mut().clear();
+        s.e.call(0x00c7_8160, &args![s.this]);
+        assert_eq!(calls(&s.seen, TRANSFORM_POINT_INVERSE)[0][0], first);
     }
 }
 

@@ -447,7 +447,28 @@ session. Both processes must be 32-bit.
 ```
 nv-bink <binkw32.dll> <movie.bik> <out-dir> [--surface N] [--first N] [--count N] [--dump A,B,...]
         [--audio T] [--precision 24|53|64]
+nv-bink <binkw32.dll> <movie.bik> <out-dir> --game [--flags X] [--open-flags X] [--count N] [--dump A,B,...]
+nv-bink <binkw32.dll> <movie.bik> <out-dir> --wait N [--start-delay MS] [--late F:MS,...]
+nv-bink <binkw32.dll> <movie.bik> <out-dir> --sound-system [--window]
+nv-bink <binkw32.dll> <movie.bik> <out-dir> --wait N --sound [--window] [--hook-dsound]
 ```
+
+`--game` drives the library as FalloutNV.exe 1.4.0.525 does (its frame copy
+`00ec14d0` into 256x256 texture tiles, see `src/game.rs`) and writes
+`game.tsv` (each copy's answer and each tile's SHA-256 per frame) and
+`words.tsv` (the first 64 words of the `HBINK` around the first and last
+frames). `--wait` plays the first N frames polling `BinkWait` and records
+when it said go (`wait.tsv`), with optional sleeps before or after each call
+and `BinkPause` (`--late`). `--sound-system` only calls
+`BinkSetSoundSystem(BinkOpenDirectSound, 0)` and prints the answer (`--window`
+makes a window first); `--sound` with `--wait` sets that sound system before
+`BinkOpen` and leaves the sound on (it plays on the default device), so the
+timing recorded is the one with sound. `--hook-dsound` patches `DirectSoundCreate` in
+the tool's own process and records every DirectSound call the library makes
+(device, buffers, locks, cursor polls, with times) and each frame's go to
+`dsound.tsv` (`src/dshook.rs`). These
+are the measurements behind the engine's platform Bink layer
+(`crates/engine-core/src/units/platform/bink.rs`).
 
 Loads the given `binkw32.dll` (the one in the game folder; it is only read),
 switches sound off with `BinkSetSoundTrack(0, NULL)`, opens the movie with

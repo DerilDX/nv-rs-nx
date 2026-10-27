@@ -18,7 +18,11 @@
 //! x87: comparisons follow the flag tests of the disassembly (`TEST AH,0x41`
 //! after `FCOMP` is a strict `>`, a NaN fails it; `TEST AH,0x44` / `JNP` is
 //! `!=`, a NaN passes it); `float` stores round once, the rest is formed in
-//! `f64`. A float copied through `FLD`/`FSTP` goes through [`x87_quiet`];
+//! `f64`. The arithmetic (`FADD`/`FSUB`/`FMUL`/`FDIV`) goes through the x87 helpers
+//! (`x87_add` and the others), which round to the running thread's precision: the
+//! game runs `Update` on the main thread at 24-bit precision (control word `0x007F`
+//! after `CreateDevice`, measured; `units::platform::direct3d_device_created`).
+//! A float copied through `FLD`/`FSTP` goes through [`x87_quiet`];
 //! one copied through an integer register is copied unchanged. Floats pushed
 //! as arguments are passed as their bit pattern.
 
@@ -214,18 +218,29 @@ pub fn player_mover_update(e: &mut Engine, this: Ptr<PlayerMover>, seconds: f32)
                     && e.get(this, PlayerMover::MoveMode) & 0x40 == 0
                 {
                     let side_x = e.get(side, NiPoint3::x);
-                    let unit_x = (side_x as f64 / side_length as f64) as f32;
+                    // `FLD`, `FDIV dword`, `FSTP dword` (`009ea035`..`009ea04d`).
+                    let unit_x =
+                        x87_div(x87_load32(side_x.to_bits()), x87_m32(side_length.to_bits()))
+                            as f32;
                     let side_y = e.get(side, NiPoint3::y);
-                    let unit_y = (side_y as f64 / side_length as f64) as f32;
+                    let unit_y =
+                        x87_div(x87_load32(side_y.to_bits()), x87_m32(side_length.to_bits()))
+                            as f32;
                     e.set(
                         vector,
                         NiPoint3::x,
-                        (unit_x as f64 * vector_length as f64) as f32,
+                        x87_mul(
+                            x87_load32(unit_x.to_bits()),
+                            x87_m32(vector_length.to_bits()),
+                        ) as f32,
                     );
                     e.set(
                         vector,
                         NiPoint3::y,
-                        (unit_y as f64 * vector_length as f64) as f32,
+                        x87_mul(
+                            x87_load32(unit_y.to_bits()),
+                            x87_m32(vector_length.to_bits()),
+                        ) as f32,
                     );
                 }
             }
@@ -238,26 +253,48 @@ pub fn player_mover_update(e: &mut Engine, this: Ptr<PlayerMover>, seconds: f32)
                 let forward = e.get(vector, NiPoint3::y);
                 if !(13..=14).contains(&kind) && forward as f64 != zero {
                     let side_x = e.get(this.at(PlayerMover::SideVec), NiPoint3::x);
-                    let distance = side_x as f64 * seconds as f64;
+                    // `FMUL dword` (`009ea0f5`), kept as a double (`FSTP qword`).
+                    let distance =
+                        x87_mul(x87_load32(side_x.to_bits()), x87_m32(seconds.to_bits()));
                     // `TESObjectREFR::GetScale` (Xbox PDB).
                     let scale = e.call(0x0056_7400, &args![player]).f64();
-                    let scaled = (scale * distance) as f32;
+                    // `FMUL qword` (`009ea106`) on the scale `GetScale` left in ST0.
+                    let scaled = x87_mul(scale, distance) as f32;
                     let quarter_pi: f64 = e.global(QUARTER_PI);
-                    let angle = ((scaled as f64 / forward as f64) * quarter_pi) as f32;
+                    // `FDIV dword`, `FMUL qword` (`009ea10f`, `009ea112`): one chain.
+                    let angle = x87_mul(
+                        x87_div(x87_load32(scaled.to_bits()), x87_m32(forward.to_bits())),
+                        quarter_pi,
+                    ) as f32;
                     let half_pi: f64 = e.global(HALF_PI);
                     let mode = e.get(this, PlayerMover::MoveMode);
                     if mode & 4 != 0 {
                         let sideways = sideways_part(e, half_pi, angle, forward);
                         let x = e.get(vector, NiPoint3::x);
-                        e.set(vector, NiPoint3::x, (-sideways + x as f64) as f32);
+                        // `FCHS`, `FADD dword` (`009ea159`).
+                        e.set(
+                            vector,
+                            NiPoint3::x,
+                            x87_add(-sideways, x87_m32(x.to_bits())) as f32,
+                        );
                     } else if mode & 8 != 0 {
                         let sideways = sideways_part(e, half_pi, angle, forward);
                         let x = e.get(vector, NiPoint3::x);
-                        e.set(vector, NiPoint3::x, (sideways + x as f64) as f32);
+                        // `FADD dword` (`009ea1a1`).
+                        e.set(
+                            vector,
+                            NiPoint3::x,
+                            x87_add(sideways, x87_m32(x.to_bits())) as f32,
+                        );
                     }
                     let cosine = e.call(0x004e_4470, &args![angle.to_bits()]).f64();
                     let forward = e.get(vector, NiPoint3::y);
-                    e.set(vector, NiPoint3::y, (cosine * forward as f64) as f32);
+                    // `FMUL dword` (`009ea1b6`).
+                    e.set(
+                        vector,
+                        NiPoint3::y,
+                        x87_mul(cosine, x87_m32(forward.to_bits())) as f32,
+                    );
                 }
             }
         }
@@ -287,9 +324,14 @@ pub fn player_mover_update(e: &mut Engine, this: Ptr<PlayerMover>, seconds: f32)
                     let height = e.mem.f32(land_height);
                     let z = e.mem.f32(position + 8);
                     let thirty_two: f64 = e.global(THIRTY_TWO);
-                    if height as f64 - z as f64 > thirty_two {
+                    // `FSUB dword`, `FCOMP qword` (`009ea2ac`).
+                    if x87_sub(x87_load32(height.to_bits()), x87_m32(z.to_bits())) > thirty_two {
                         e.mem
-                            .set_f32(position + 8, (height as f64 + thirty_two) as f32);
+                            // `FADD qword` (`009ea2bf`).
+                            .set_f32(
+                                position + 8,
+                                x87_add(x87_load32(height.to_bits()), thirty_two) as f32,
+                            );
                         e.vcall(player, 0x2a8, &args![position]);
                     }
                 }
@@ -301,9 +343,10 @@ pub fn player_mover_update(e: &mut Engine, this: Ptr<PlayerMover>, seconds: f32)
 /// `Update`'s sideways term: `00408840(004e4470(pi/2 - angle) * forward)`,
 /// each `float` argument stored before it is pushed.
 fn sideways_part(e: &mut Engine, half_pi: f64, angle: f32, forward: f32) -> f64 {
-    let complement = (half_pi - angle as f64) as f32;
+    // `FSUBR qword` (`009ea12c`/`009ea174`), `FMUL dword` (`009ea144`/`009ea18c`).
+    let complement = x87_sub(half_pi, x87_load32(angle.to_bits())) as f32;
     let sine = e.call(0x004e_4470, &args![complement.to_bits()]).f64();
-    let product = (sine * forward as f64) as f32;
+    let product = x87_mul(sine, x87_m32(forward.to_bits())) as f32;
     e.call(0x0040_8840, &args![product.to_bits()]).f64()
 }
 
@@ -321,7 +364,8 @@ pub fn player_mover_update_turn_timer(e: &mut Engine, this: Ptr<PlayerMover>, se
     e.set(
         this,
         PlayerMover::fMinTurnTime,
-        (time as f64 - seconds as f64) as f32,
+        // `FSUB dword` (`009ea316`).
+        x87_sub(x87_load32(time.to_bits()), x87_m32(seconds.to_bits())) as f32,
     );
     let actor = e.get(this, PlayerMover::pActor);
     if e.vcall(actor.addr(), 0x214, &[]).u32() == 0 {
@@ -725,6 +769,59 @@ mod tests {
         let y = ((angle as f64 * 2.0) * y as f64) as f32;
         assert_eq!(*moved.borrow(), vec![[x, y, 0.0]]);
         assert_eq!(*placed.borrow(), vec![[1.0, 2.0, 32.0]]);
+    }
+
+    /// At the main thread's 24-bit precision (0x007F, as the game runs `Update`
+    /// once the renderer's device exists) every `FADD`/`FSUB`/`FMUL`/`FDIV`
+    /// result is rounded to 24 bits, also inside a chain: the turn angle's
+    /// quotient (`009ea10f`) before its `FMUL` by pi/4 (`009ea112`), and the
+    /// distance kept as a double (`009ea0fe`).
+    #[test]
+    fn update_rounds_each_operation_at_24_bit_precision() {
+        let (mut e, mover) = engine();
+        crate::units::crt::set_x87_control_word(&mut e, 0x007f);
+        let side = mover.at(PlayerMover::SideVec);
+        e.set(side, NiPoint3::x, 0.3);
+        e.set(side, NiPoint3::y, 4.0);
+        e.set(mover, PlayerMover::MoveMode, 0x5);
+        e.register(GET_ANIMATION, |_, a| (0xa0 + a[1]).into_ret());
+        e.register(ANIMATION_GROUP_AT, |_, a| (a[0] as u16).into_ret());
+        let side_addr = side.addr();
+        e.register_double(0x0045_7990, move |_, a| {
+            (if a[0] == side_addr { 5.0f32 } else { 7.0f32 }).into_ret()
+        });
+        e.register(0x008d_8520, |_, _| PROCESS.into_ret());
+        e.put_vtable(PROCESS_TABLE, &[0x0700_1000; 0x100]);
+        e.mem.set_u32(PROCESS, PROCESS_TABLE);
+        e.register(0x0700_1000, |_, _| 3u32.into_ret());
+        e.register(0x0056_7400, |_, _| 1.1f64.into_ret());
+        e.register(0x004e_4470, |_, a| (f32::from_bits(a[0]) as f64).into_ret());
+        e.register(0x0040_8840, |_, a| (f32::from_bits(a[0]) as f64).into_ret());
+        e.register(0x0088_46e0, |_, _| 0u32.into_ret());
+        e.register(0x008d_6f30, |_, _| 0u32.into_ret());
+        let moved: Points = Rc::default();
+        let m = moved.clone();
+        e.register_double(SLOT_BASE + 0x250, move |e, a| {
+            m.borrow_mut().push(point(e, a[2]));
+            Ret::default()
+        });
+        e.call(0x009e_9e50, &args![mover, 0.0166f32]);
+        // Float operands: the f64 result rounded to a float is the 24-bit
+        // result. A double operand (the scale, pi/2, pi/4) goes through the
+        // instruction's helper, still at 24 bits.
+        let single = |v: f64| v as f32 as f64;
+        let x = single(single(0.3f32 as f64 / 5.0) * 7.0) as f32;
+        let y = single(single(4.0 / 5.0) * 7.0) as f32;
+        let distance = single(0.3f32 as f64 * 0.0166f32 as f64);
+        let scaled = crate::x87::x87_mul(1.1, distance) as f32;
+        let quotient = single(scaled as f64 / y as f64);
+        let angle = crate::x87::x87_mul(quotient, std::f64::consts::FRAC_PI_4) as f32;
+        let complement = crate::x87::x87_sub(std::f64::consts::FRAC_PI_2, angle as f64) as f32;
+        let product = single(complement as f64 * y as f64) as f32;
+        let x = single(-(product as f64) + x as f64) as f32;
+        let y = single(angle as f64 * y as f64) as f32;
+        assert_eq!(*moved.borrow(), vec![[x, y, 0.0]]);
+        crate::units::crt::set_x87_control_word(&mut e, 0x027f);
     }
 
     #[test]

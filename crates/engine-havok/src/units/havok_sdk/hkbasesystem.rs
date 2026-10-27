@@ -1105,6 +1105,31 @@ mod tests {
         );
         assert_eq!(calls(&log, REMOVE_REFERENCE), vec![vec![writer]]);
     }
+
+    /// A memory router at `0x7000` whose `+0x10` allocator (`0x7100`) hands out the block at
+    /// `block` through its slot `+4` (the double `0x00ab_0004`), checking the size asked.
+    fn creator_engine(block: u32, size: u32) -> Engine {
+        let mut e = Engine::new();
+        e.map(0x0000_7000, 0x1000);
+        e.mem.set_u32(0x7010, 0x7100);
+        e.mem.set_u32(0x7100, 0x7200);
+        e.mem.set_u32(0x7204, 0x00ab_0004);
+        e.register(0x00c8_5750, |_, _| 0x7000u32.into_ret());
+        e.register_double(0x00ab_0004, move |_, a| {
+            assert_eq!(a, [0x7100, size]);
+            block.into_ret()
+        });
+        e
+    }
+
+    #[test]
+    fn the_dummy_singleton_is_an_eight_byte_object_with_its_table() {
+        let mut e = creator_engine(0x7800, 8);
+        assert_eq!(e.call(0x00cb_b9c0, &args![]).u32(), 0x7800);
+        assert_eq!(e.mem.u16(0x7804), 8);
+        assert_eq!(e.mem.u16(0x7806), 1);
+        assert_eq!(e.mem.u32(0x7800), 0x010c_8ed4);
+    }
 }
 
 #[cfg(test)]

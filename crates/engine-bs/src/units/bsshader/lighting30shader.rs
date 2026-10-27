@@ -390,9 +390,9 @@ pub fn fn_00bbc5c0(e: &mut Engine, this: Ptr, record: Ptr) -> u32 {
     e.call(SHADER_CALL_00BE1FF0, &args![this, record]).u32()
 }
 
-/// The render state maker `00c0abd0` (unnamed; `stdcall`, one word: the pass; answers the
-/// state object stored in `0126f74c`) and the map selection `00c663d0` (unnamed; `thiscall` on
-/// a constant map `NiPointer`, one word).
+/// The render state maker `00c0abd0` (unnamed; `thiscall` on the shader, RET 4, one word: the
+/// pass; answers the state object stored in `0126f74c`) and the map selection `00c663d0`
+/// (unnamed; `thiscall` on a constant map `NiPointer`, one word).
 const RENDER_STATE_0126F74C: u32 = 0x0126_f74c;
 const MAKE_RENDER_STATE_00C0ABD0: u32 = 0x00c0_abd0;
 const SELECT_MAP_00C663D0: u32 = 0x00c6_63d0;
@@ -405,7 +405,8 @@ const SELECT_MAP_00C663D0: u32 = 0x00c6_63d0;
 /// runs `00c663d0` on +0x30 with +0x74 and on +0x34 with +0x78.
 pub fn fn_00bbe020(e: &mut Engine, this: Ptr, pass: u32) {
     let base = this.addr();
-    let state = e.call(MAKE_RENDER_STATE_00C0ABD0, &args![pass]).u32();
+    // 00bbe029: `00c0abd0` reads ECX (this shader, not changed before the call).
+    let state = e.call(MAKE_RENDER_STATE_00C0ABD0, &args![this, pass]).u32();
     e.set_global::<u32>(RENDER_STATE_0126F74C, state);
     fn_00bbb840(e);
     if pass == 0x1e0 || pass == 0x1e1 {
@@ -3829,7 +3830,7 @@ mod b056_tests {
         assert_eq!(flag(&e, AMBIENT_ENABLE_012010C4), 1);
         assert_eq!(e.global::<u8>(AMBIENT_FOG_01200BF5), 1);
         e.register(MAKE_RENDER_STATE_00C0ABD0, |_, a| {
-            (a[0] + 0x1000).into_ret()
+            (a[1] + 0x1000).into_ret()
         });
         let this = e.mem.alloc(0xa4);
         let first = object(&mut e, 1);

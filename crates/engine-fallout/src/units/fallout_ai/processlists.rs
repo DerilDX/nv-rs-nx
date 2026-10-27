@@ -1005,9 +1005,12 @@ fn update_process_lists_body(e: &mut Engine, this: Ptr<ProcessLists>) {
     e.set_global(GAME_DAY, day);
     e.call(0x008d_5bc0, &[]);
     let player = player(e);
-    let first = e.call(0x0096_40b0, &args![player, 0u32]).u32();
-    let second = e.call(0x0096_4060, &args![player, first]).u32();
-    e.call(0x0097_7cb0, &args![this, second]);
+    // 0096d903 / 0096d90f: `009640b0` and `00964060` take no stack word (plain
+    // RET); the pushed 0 and the first result are the last two words of
+    // `00977cb0` (RET 0xc).
+    let first = e.call(0x0096_40b0, &args![player]).u32();
+    let second = e.call(0x0096_4060, &args![player]).u32();
+    e.call(0x0097_7cb0, &args![this, second, first, 0u32]);
     e.call(0x008d_1560, &[]);
     let setting = e.call(SETTING_INT_VALUE, &args![0x011c_3ea4u32]).u32();
     if e.mem.u32(setting) == 1 {
@@ -8111,9 +8114,12 @@ mod tests {
             e.global::<f32>(SYSTEM_TIME_CLOCK),
             (10.0f32 as f64 + dt as f64) as f32
         );
-        assert_eq!(calls(&e, 0x0096_40b0), vec![vec![0x7000, 0]]);
-        assert_eq!(calls(&e, 0x0096_4060), vec![vec![0x7000, 0x111]]);
-        assert_eq!(calls(&e, 0x0097_7cb0), vec![vec![lists.addr(), 0x222]]);
+        assert_eq!(calls(&e, 0x0096_40b0), vec![vec![0x7000]]);
+        assert_eq!(calls(&e, 0x0096_4060), vec![vec![0x7000]]);
+        assert_eq!(
+            calls(&e, 0x0097_7cb0),
+            vec![vec![lists.addr(), 0x222, 0x111, 0]]
+        );
         assert_eq!(calls(&e, 0x0047_72f0).len(), 1);
         let pass = vec![lists.addr(), 0, 0];
         assert_eq!(calls(&e, 0x0096_b050), vec![pass.clone()]);

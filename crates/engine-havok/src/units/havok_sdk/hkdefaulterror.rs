@@ -29,7 +29,8 @@ const ARRAY_RESERVE_MORE: u32 = 0x00c9_0940;
 const STACK_TRACER_CREATE: u32 = 0x00da_2bc0;
 /// `hkReferencedObject::removeReferenceLockUnchecked` (`00c903b0`, `this` = the object).
 const REMOVE_REFERENCE: u32 = 0x00c9_03b0;
-/// `hkStackTracer::getStackTrace` (`00da2b20`, `(frames, capacity)`, answers the frame count).
+/// `hkStackTracer::getStackTrace` (`00da2b20`, `this` = the tracer, `(frames, capacity)`,
+/// answers the frame count).
 const GET_STACK_TRACE: u32 = 0x00da_2b20;
 /// The stack trace printer (`00da2990`, `this` = the tracer, `(frames, count, callback,
 /// user)`; the map names it `hkLeakDetectAllocator::quit`).
@@ -128,7 +129,12 @@ pub fn hk_default_error_show_message(
         e.set_global(STACK_TRACER, created);
     }
     e.with_stack(0x50, |e, frames| {
-        let count = e.call(GET_STACK_TRACE, &args![frames, 0x14u32]).u32() as i32;
+        // 00d2b4a1: `00da2b20` (RET 8) is called with ECX = the tracer (01269a84, loaded at
+        // 00d2b471 or set at 00d2b492).
+        let tracer = e.global::<u32>(STACK_TRACER);
+        let count = e
+            .call(GET_STACK_TRACE, &args![tracer, frames, 0x14u32])
+            .u32() as i32;
         if count > 2 {
             let callback = e.mem.u32(handler + 0x20);
             let user = e.mem.u32(handler + 0x24);
@@ -681,8 +687,9 @@ mod tests {
         assert!(logged(&e, REMOVE_REFERENCE).is_empty());
         let trace = logged(&e, GET_STACK_TRACE);
         assert_eq!(trace.len(), 1);
-        let frames = trace[0][0];
-        assert_eq!(trace[0][1], 0x14);
+        assert_eq!(trace[0][0], 0x6000);
+        let frames = trace[0][1];
+        assert_eq!(trace[0][2], 0x14);
         assert_eq!(
             logged(&e, PRINT_STACK_TRACE),
             vec![vec![0x6000, frames + 8, 3, CALLBACK_DOUBLE, 0x7777]]

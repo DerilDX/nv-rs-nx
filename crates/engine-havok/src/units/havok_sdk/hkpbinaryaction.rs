@@ -21,8 +21,9 @@ const ADD_REFERENCE: u32 = 0x00c9_0510;
 const REMOVE_REFERENCE: u32 = 0x00c9_05b0;
 /// `hkpWorld::removeActionImmediately` (`00c97510`, `this` the world, one word: the action).
 const REMOVE_ACTION_IMMEDIATELY: u32 = 0x00c9_7510;
-/// World calls on an action and one of its entities (`this` the world, two words: the action
-/// and the entity): detaching it (`00c976a0`) and attaching it (`00c92bd0`).
+/// World calls on an action and one of its entities (two words: the action and the entity):
+/// detaching it (`00c976a0`, `stdcall`, the world the caller puts in ECX is not read) and
+/// attaching it (`00c92bd0`, `this` the world).
 const DETACH_ENTITY: u32 = 0x00c9_76a0;
 const ATTACH_ENTITY: u32 = 0x00c9_2bd0;
 /// `hkStringPtr` constructor (`00cb0a60`) and destructor (`00cb0c00`).
@@ -76,7 +77,8 @@ pub fn hkp_binary_action_set_entity_b(e: &mut Engine, this: Ptr, entity: u32) {
     if old != 0 {
         let world = e.mem.u32(action + WORLD);
         if world != 0 {
-            e.call(DETACH_ENTITY, &args![world, action, old]);
+            // 00cf4d4f: `00c976a0` is stdcall (RET 8) and does not read ECX.
+            e.call(DETACH_ENTITY, &args![action, old]);
         }
         let old = e.mem.u32(action + ENTITY_B);
         e.call(REMOVE_REFERENCE, &args![old]);
@@ -278,7 +280,7 @@ mod movement_tests {
             calls(&log),
             vec![
                 (ADD_REFERENCE, vec![0x3000]),
-                (DETACH_ENTITY, vec![0x7000, action, 0x2000]),
+                (DETACH_ENTITY, vec![action, 0x2000]),
                 (REMOVE_REFERENCE, vec![0x2000]),
                 (ATTACH_ENTITY, vec![0x7000, action, 0x3000]),
             ]

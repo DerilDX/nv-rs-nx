@@ -3567,7 +3567,9 @@ pub fn fn_007b1ae0(e: &mut Engine, _this: Ptr<RaceSexMenu>) {
     let player: u32 = e.global(PLAYER);
     let object = e.call(PLAYER_NODE_GETTER, &args![player, 0u32]).u32();
     let scene = e.call(SCENE_NODE_GETTER, &args![3u32]).u32();
-    e.call(UPDATE_OBJECT_LIGHTING, &args![scene, object]);
+    // 007b1b05: of the two 0s pushed first, `00950bb0` (RET 4) takes one; the other is
+    // the last word of `00b5d9f0` (RET 8).
+    e.call(UPDATE_OBJECT_LIGHTING, &args![scene, object, 0u32]);
     let point = e.mem.alloc(0xc);
     e.call(POINT_CONSTRUCT, &args![point, 0.0f32, 0u32, 0u32]);
     let scene = e.call(SCENE_NODE_GETTER, &args![3u32]).u32();
@@ -7877,7 +7879,7 @@ mod tests {
         e.register(PLAYER_NODE_GETTER, |_, _| word(0xbb));
         e.register(SCENE_NODE_GETTER, |_, _| word(0xaa));
         e.call(0x007b_1ae0, &args![menu]);
-        assert_eq!(calls(&e, UPDATE_OBJECT_LIGHTING), vec![vec![0xaa, 0xbb]]);
+        assert_eq!(calls(&e, UPDATE_OBJECT_LIGHTING), vec![vec![0xaa, 0xbb, 0]]);
         let point = calls(&e, POINT_CONSTRUCT)[0][0];
         assert_eq!(calls(&e, SET_TRANSLATE_POINT), vec![vec![0xaa, point]]);
         assert!(calls(&e, RENDERED_MENU_SET_SCALE).is_empty());

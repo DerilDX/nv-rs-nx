@@ -2410,7 +2410,8 @@ pub fn fn_0069a940(e: &mut Engine, this: Ptr<NavMesh>, triangle: u16, edge_list:
 pub fn fn_0069a9d0(e: &mut Engine, this: Ptr, key: u16, value: Ptr) -> bool {
     let map = this.byte_add(0x88);
     if e.call(0x0069_b080, &args![map]).bool() {
-        e.call(0x0069_9b60, &args![]);
+        // 0069a9ef: `00699b60` is a thiscall on `this` (ECX loaded at 0069a9ec).
+        e.call(0x0069_9b60, &args![this]);
     }
     e.call(0x0069_b0a0, &args![map, key, value]).bool()
 }
@@ -2599,10 +2600,16 @@ pub fn fn_0069add0(e: &mut Engine, this: Ptr, index: u32, count: u32) {
         .u32();
     let buffer = e.mem.u32(this.addr() + 4);
     let destination = buffer + index * 2;
-    e.call(0x0072_ba80, &args![Ptr::<()>::new(destination), count]);
+    // 0069ae09 / 0069ae39: `0072ba80` (RET 8) and `005efdd0` (RET 0xc) are thiscalls on
+    // the array (ECX = `this`, from [EBP-8]).
+    e.call(
+        0x0072_ba80,
+        &args![this, Ptr::<()>::new(destination), count],
+    );
     e.call(
         0x005e_fdd0,
         &args![
+            this,
             Ptr::<()>::new(destination),
             Ptr::<()>::new(buffer + size * 2 - moved * 2),
             moved,
@@ -2901,10 +2908,17 @@ pub fn fn_0069b120(e: &mut Engine, this: Ptr, index: u32, count: u32) {
     let tail = size.wrapping_sub(index).wrapping_sub(count);
     let moved = e.call(0x0042_f5a0, &args![tail, count]).u32();
     let buffer = e.mem.u32(this.addr() + 4);
-    e.call(0x0082_2820, &args![buffer + index * 4, count]);
+    // 0069b159 / 0069b18a: `00822820` (RET 8) and `0042fb60` (RET 0xc) are thiscalls on
+    // the array (ECX = `this`, from [EBP-8]).
+    e.call(0x0082_2820, &args![this, buffer + index * 4, count]);
     e.call(
         0x0042_fb60,
-        &args![buffer + index * 4, buffer + size * 4 - moved * 4, moved],
+        &args![
+            this,
+            buffer + index * 4,
+            buffer + size * 4 - moved * 4,
+            moved
+        ],
     );
     e.mem.set_u32(this.addr() + 8, size.wrapping_sub(count));
 }
@@ -4850,8 +4864,8 @@ mod tests {
         let moved = recorder(&mut e, 0x005e_fdd0, 0);
         fn_0069add0(&mut e, this, 2, 1);
         assert_eq!(&*move_count.borrow(), &[vec![3, 1]]);
-        assert_eq!(&*clear.borrow(), &[vec![0x4404, 1]]);
-        assert_eq!(&*moved.borrow(), &[vec![0x4404, 0x4404, 4]]);
+        assert_eq!(&*clear.borrow(), &[vec![this.addr(), 0x4404, 1]]);
+        assert_eq!(&*moved.borrow(), &[vec![this.addr(), 0x4404, 0x4404, 4]]);
         assert_eq!(e.mem.u32(this.addr() + 8), 5);
     }
 
@@ -4864,7 +4878,7 @@ mod tests {
         let insert = recorder(&mut e, 0x0069_b0a0, 0);
         fn_0069a9d0(&mut e, this, 0x1234, Ptr::new(0x4400));
         assert_eq!(&*end.borrow(), &[vec![this.addr() + 0x88]]);
-        assert_eq!(&*reset.borrow(), &[vec![]]);
+        assert_eq!(&*reset.borrow(), &[vec![this.addr()]]);
         assert_eq!(
             &*insert.borrow(),
             &[vec![this.addr() + 0x88, 0x1234, 0x4400]]
@@ -7645,8 +7659,8 @@ mod tests {
         let shift = recorder(&mut e, 0x0042_fb60, 0);
         fn_0069b120(&mut e, array, 2, 2);
         assert_eq!(&*move_count.borrow(), &[vec![4, 2]]);
-        assert_eq!(&*destroy.borrow(), &[vec![0x4008, 2]]);
-        assert_eq!(&*shift.borrow(), &[vec![0x4008, 0x4014, 3]]);
+        assert_eq!(&*destroy.borrow(), &[vec![array.addr(), 0x4008, 2]]);
+        assert_eq!(&*shift.borrow(), &[vec![array.addr(), 0x4008, 0x4014, 3]]);
         assert_eq!(e.mem.u32(array.addr() + 8), 6);
     }
 

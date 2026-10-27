@@ -1676,8 +1676,10 @@ pub fn actor_destroy_actor_mover(e: &mut Engine, this: Ptr<Actor>) {
     if e.call(0x005d_43c0, &args![this]).u32() != 0 {
         let extra = e.call(0x005d_43c0, &args![this]).u32();
         let changes = e.call(0x0041_8520, &args![extra]).u32();
-        let manager = e.call(0x0047_d0b0, &args![changes]).u32();
-        e.call(0x006e_bd10, &args![manager]);
+        // 008b31a5: `0047d0b0` takes no stack word (plain RET); the pushed changes are
+        // the word of `006ebd10` (RET 4).
+        let manager = e.call(0x0047_d0b0, &args![]).u32();
+        e.call(0x006e_bd10, &args![manager, changes]);
     }
     let mover = e.get(this, Actor::pActorMover);
     if !mover.is_null() {
@@ -2416,11 +2418,16 @@ pub fn fn_008b3fe0(
         return clone;
     }
     let path_owner = e.call(0x005d_8a70, &args![part]).u32();
-    let path = e
-        .vcall(path_owner, 0x14, &args![0u32, 1u32, 0u32, 0u32, 0u32])
-        .u32();
+    // 008b41b6: the model's +0x14 (`00408da0`, plain RET) takes no stack word; the five
+    // words pushed before it are the last five of `00447080` (RET 0x18).
+    let path = e.vcall(path_owner, 0x14, &args![]).u32();
     let loader = e.global::<u32>(MODEL_LOADER);
-    let model = e.call(0x0044_7080, &args![loader, path]).u32();
+    let model = e
+        .call(
+            0x0044_7080,
+            &args![loader, path, 0u32, 1u32, 0u32, 0u32, 0u32],
+        )
+        .u32();
     if model != 0 {
         clone = e.with_stack(0x100, |e, block| {
             let first_transform = block.addr();
@@ -3057,11 +3064,11 @@ pub fn actor_script_dismember(
     }
     if part != 0 {
         value = i32::from(e.call(0x005e_5190, &args![part]).u8() as i8);
-        let current = e
-            .vcall(this.addr() + 0xa4, 0xc, &args![value as u32, third])
-            .f64();
+        // 008b5244: the actor-value owner's +0xc takes one word (RET 4); the third
+        // argument pushed first is the last word of the actor's +0x3ac (RET 0xc).
+        let current = e.vcall(this.addr() + 0xa4, 0xc, &args![value as u32]).f64();
         let doubled = (current + current) as f32;
-        e.vcall(this.addr(), 0x3ac, &args![value as u32, doubled]);
+        e.vcall(this.addr(), 0x3ac, &args![value as u32, doubled, third]);
     }
     actor_dismember(
         e,
@@ -4415,15 +4422,17 @@ fn collect_factions_and_changes(e: &mut Engine, actor: Ptr<Actor>, buffer: u32) 
 /// `Actor::AddFactionMinorCrime` (Xbox PDB): calls `005fda00(faction, a, b)`
 /// on every faction of the actor that [`fn_008b7d00`] accepts.
 pub fn actor_add_faction_minor_crime(e: &mut Engine, this: Ptr<Actor>, first: u32, second: u8) {
-    let buffer = e.mem.alloc(0x200);
-    let count = collect_factions(e, this, buffer);
-    for index in 0..count {
-        let faction = e.mem.u32(buffer + 4 * index);
-        if faction != 0 && fn_008b7d00(e, Ptr::new(faction)) {
-            e.call(0x005f_da00, &args![faction, first, u32::from(second)]);
+    // The faction list buffer sits at +0xc of the exe's 0x21c-byte frame (`SUB ESP,0x21c`).
+    e.with_stack(0x21c, |e, frame| {
+        let buffer = frame.addr() + 0xc;
+        let count = collect_factions(e, this, buffer);
+        for index in 0..count {
+            let faction = e.mem.u32(buffer + 4 * index);
+            if faction != 0 && fn_008b7d00(e, Ptr::new(faction)) {
+                e.call(0x005f_da00, &args![faction, first, u32::from(second)]);
+            }
         }
-    }
-    e.mem.free(buffer);
+    });
 }
 
 // Translated from 008b7d00 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -4436,47 +4445,53 @@ pub fn fn_008b7d00(e: &mut Engine, this: Ptr) -> bool {
 /// `Actor::AddFactionMajorCrime` (Xbox PDB): calls `005fda50(faction, a, b)`
 /// on every faction of the actor that [`fn_008b7d00`] accepts.
 pub fn actor_add_faction_major_crime(e: &mut Engine, this: Ptr<Actor>, first: u32, second: u8) {
-    let buffer = e.mem.alloc(0x200);
-    let count = collect_factions(e, this, buffer);
-    for index in 0..count {
-        let faction = e.mem.u32(buffer + 4 * index);
-        if faction != 0 && fn_008b7d00(e, Ptr::new(faction)) {
-            e.call(0x005f_da50, &args![faction, first, u32::from(second)]);
+    // The faction list buffer sits at +0xc of the exe's 0x21c-byte frame (`SUB ESP,0x21c`).
+    e.with_stack(0x21c, |e, frame| {
+        let buffer = frame.addr() + 0xc;
+        let count = collect_factions(e, this, buffer);
+        for index in 0..count {
+            let faction = e.mem.u32(buffer + 4 * index);
+            if faction != 0 && fn_008b7d00(e, Ptr::new(faction)) {
+                e.call(0x005f_da50, &args![faction, first, u32::from(second)]);
+            }
         }
-    }
-    e.mem.free(buffer);
+    });
 }
 
 // Translated from 008b7e20 (decompiled, FalloutNV.exe 1.4.0.525)
 /// The sum of `006733e0` over the actor's factions.
 pub fn fn_008b7e20(e: &mut Engine, this: Ptr<Actor>) -> i32 {
-    let buffer = e.mem.alloc(0x200);
-    let count = collect_factions(e, this, buffer);
-    let mut sum: i32 = 0;
-    for index in 0..count {
-        let faction = e.mem.u32(buffer + 4 * index);
-        if faction != 0 {
-            sum = sum.wrapping_add(e.call(0x0067_33e0, &args![faction]).i32());
+    // The faction list buffer sits at +0xc of the exe's 0x21c-byte frame (`SUB ESP,0x21c`).
+    e.with_stack(0x21c, |e, frame| {
+        let buffer = frame.addr() + 0xc;
+        let count = collect_factions(e, this, buffer);
+        let mut sum: i32 = 0;
+        for index in 0..count {
+            let faction = e.mem.u32(buffer + 4 * index);
+            if faction != 0 {
+                sum = sum.wrapping_add(e.call(0x0067_33e0, &args![faction]).i32());
+            }
         }
-    }
-    e.mem.free(buffer);
-    sum
+        sum
+    })
 }
 
 // Translated from 008b7f00 (decompiled, FalloutNV.exe 1.4.0.525)
 /// The sum of `008041a0` over the actor's factions.
 pub fn fn_008b7f00(e: &mut Engine, this: Ptr<Actor>) -> i32 {
-    let buffer = e.mem.alloc(0x200);
-    let count = collect_factions(e, this, buffer);
-    let mut sum: i32 = 0;
-    for index in 0..count {
-        let faction = e.mem.u32(buffer + 4 * index);
-        if faction != 0 {
-            sum = sum.wrapping_add(e.call(0x0080_41a0, &args![faction]).i32());
+    // The faction list buffer sits at +0xc of the exe's 0x21c-byte frame (`SUB ESP,0x21c`).
+    e.with_stack(0x21c, |e, frame| {
+        let buffer = frame.addr() + 0xc;
+        let count = collect_factions(e, this, buffer);
+        let mut sum: i32 = 0;
+        for index in 0..count {
+            let faction = e.mem.u32(buffer + 4 * index);
+            if faction != 0 {
+                sum = sum.wrapping_add(e.call(0x0080_41a0, &args![faction]).i32());
+            }
         }
-    }
-    e.mem.free(buffer);
-    sum
+        sum
+    })
 }
 
 // Translated from 008b7fe0 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -4502,57 +4517,59 @@ pub fn fn_008b7fe0(
     let head_b = faction_list_head(e, other.addr());
     let changes_a = faction_changes(e, this.addr());
     let changes_b = faction_changes(e, other.addr());
-    let buffer_a = e.mem.alloc(0x200);
-    let buffer_b = e.mem.alloc(0x200);
-    let extra_a = if changes_a == 0 {
-        0
-    } else {
-        e.mem.u32(changes_a + 0xc)
-    };
-    let count_a = actor_integrate_faction_lists(e, this, buffer_a, 0x80, head_a, extra_a);
-    let extra_b = if changes_b == 0 {
-        0
-    } else {
-        e.mem.u32(changes_b + 0xc)
-    };
-    let count_b = actor_integrate_faction_lists(e, this, buffer_b, 0x80, head_b, extra_b);
-    for i in 0..count_a {
-        let faction_a = e.mem.u32(buffer_a + 4 * i);
-        if faction_a == 0 {
-            continue;
-        }
-        for j in 0..count_b {
-            let faction_b = e.mem.u32(buffer_b + 4 * j);
-            if faction_b == 0 {
+    // The two faction list buffers sit at +0x1c and +0x22c (`EBP-0x428`, `EBP-0x218`) of the
+    // exe's 0x444-byte frame.
+    e.with_stack(0x444, |e, frame| {
+        let buffer_a = frame.addr() + 0x1c;
+        let buffer_b = frame.addr() + 0x22c;
+        let extra_a = if changes_a == 0 {
+            0
+        } else {
+            e.mem.u32(changes_a + 0xc)
+        };
+        let count_a = actor_integrate_faction_lists(e, this, buffer_a, 0x80, head_a, extra_a);
+        let extra_b = if changes_b == 0 {
+            0
+        } else {
+            e.mem.u32(changes_b + 0xc)
+        };
+        let count_b = actor_integrate_faction_lists(e, this, buffer_b, 0x80, head_b, extra_b);
+        for i in 0..count_a {
+            let faction_a = e.mem.u32(buffer_a + 4 * i);
+            if faction_a == 0 {
                 continue;
             }
-            if faction_a == faction_b {
-                let value = e
-                    .call(0x0048_bf50, &args![faction_a + 0x24, faction_a])
-                    .i32();
-                if value > best {
-                    best = value;
-                    e.mem.set_u32(found.addr(), 1);
-                    e.mem.set_u32(first.addr(), faction_a);
-                    e.mem.set_u32(second.addr(), faction_a);
-                    result = value;
+            for j in 0..count_b {
+                let faction_b = e.mem.u32(buffer_b + 4 * j);
+                if faction_b == 0 {
+                    continue;
                 }
-            } else if best == -100_000 {
-                let value = e
-                    .call(0x0048_bf50, &args![faction_a + 0x24, faction_b])
-                    .i32();
-                if value < lowest {
-                    lowest = value;
-                    e.mem.set_u32(found.addr(), 1);
-                    e.mem.set_u32(first.addr(), faction_a);
-                    e.mem.set_u32(second.addr(), faction_b);
-                    result = value;
+                if faction_a == faction_b {
+                    let value = e
+                        .call(0x0048_bf50, &args![faction_a + 0x24, faction_a])
+                        .i32();
+                    if value > best {
+                        best = value;
+                        e.mem.set_u32(found.addr(), 1);
+                        e.mem.set_u32(first.addr(), faction_a);
+                        e.mem.set_u32(second.addr(), faction_a);
+                        result = value;
+                    }
+                } else if best == -100_000 {
+                    let value = e
+                        .call(0x0048_bf50, &args![faction_a + 0x24, faction_b])
+                        .i32();
+                    if value < lowest {
+                        lowest = value;
+                        e.mem.set_u32(found.addr(), 1);
+                        e.mem.set_u32(first.addr(), faction_a);
+                        e.mem.set_u32(second.addr(), faction_b);
+                        result = value;
+                    }
                 }
             }
         }
-    }
-    e.mem.free(buffer_a);
-    e.mem.free(buffer_b);
+    });
     result
 }
 
@@ -4565,16 +4582,18 @@ pub fn actor_get_faction_rank(
     faction: u32,
     _unused_2: u32,
 ) -> i32 {
-    let buffer = e.mem.alloc(0x200);
-    let count = collect_factions(e, this, buffer);
-    let mut rank: i32 = -1;
-    for index in 0..count {
-        if e.mem.u32(buffer + 4 * index) == faction {
-            rank = 1;
+    // The faction list buffer sits at +0xc of the exe's 0x21c-byte frame (`SUB ESP,0x21c`).
+    e.with_stack(0x21c, |e, frame| {
+        let buffer = frame.addr() + 0xc;
+        let count = collect_factions(e, this, buffer);
+        let mut rank: i32 = -1;
+        for index in 0..count {
+            if e.mem.u32(buffer + 4 * index) == faction {
+                rank = 1;
+            }
         }
-    }
-    e.mem.free(buffer);
-    rank
+        rank
+    })
 }
 
 // Translated from 008b8360 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -4588,40 +4607,44 @@ pub fn actor_set_factions_that_care_about_crime(
     other: Ptr,
     third: Ptr,
 ) -> u8 {
-    let buffer = e.mem.alloc(0x200);
-    let count = collect_factions(e, this, buffer);
-    let mut any: u8 = 0;
-    for index in 0..count {
-        let faction = e.mem.u32(buffer + 4 * index);
-        if faction != 0
-            && fn_008b7d00(e, Ptr::new(faction))
-            && e.call(0x008b_8e90, &args![other, faction]).bool()
-        {
-            e.call(0x0047_eb90, &args![faction, 1u32]);
-            e.call(0x009e_bae0, &args![third, faction]);
-            any = 1;
+    // The faction list buffer sits at +0x14 of the exe's 0x224-byte frame (`SUB ESP,0x224`).
+    e.with_stack(0x224, |e, frame| {
+        let buffer = frame.addr() + 0x14;
+        let count = collect_factions(e, this, buffer);
+        let mut any: u8 = 0;
+        for index in 0..count {
+            let faction = e.mem.u32(buffer + 4 * index);
+            if faction != 0
+                && fn_008b7d00(e, Ptr::new(faction))
+                && e.call(0x008b_8e90, &args![other, faction]).bool()
+            {
+                e.call(0x0047_eb90, &args![faction, 1u32]);
+                e.call(0x009e_bae0, &args![third, faction]);
+                any = 1;
+            }
         }
-    }
-    e.mem.free(buffer);
-    any
+        any
+    })
 }
 
 // Translated from 008b8490 (decompiled, FalloutNV.exe 1.4.0.525)
 /// `Actor::HasFactionThatCaresAboutCrime` (Xbox PDB): whether any faction of
 /// the actor is accepted by [`fn_008b7d00`].
 pub fn actor_has_faction_that_cares_about_crime(e: &mut Engine, this: Ptr<Actor>) -> u8 {
-    let buffer = e.mem.alloc(0x200);
-    let count = collect_factions(e, this, buffer);
-    let mut any: u8 = 0;
-    for index in 0..count {
-        let faction = e.mem.u32(buffer + 4 * index);
-        if faction != 0 && fn_008b7d00(e, Ptr::new(faction)) {
-            any = 1;
-            break;
+    // The faction list buffer sits at +0x14 of the exe's 0x224-byte frame (`SUB ESP,0x224`).
+    e.with_stack(0x224, |e, frame| {
+        let buffer = frame.addr() + 0x14;
+        let count = collect_factions(e, this, buffer);
+        let mut any: u8 = 0;
+        for index in 0..count {
+            let faction = e.mem.u32(buffer + 4 * index);
+            if faction != 0 && fn_008b7d00(e, Ptr::new(faction)) {
+                any = 1;
+                break;
+            }
         }
-    }
-    e.mem.free(buffer);
-    any
+        any
+    })
 }
 
 // Translated from 008b8580 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -4635,30 +4658,32 @@ pub fn fn_008b8580(e: &mut Engine, this: Ptr<Actor>, faction: u32, rank: u8) {
         return;
     }
     e.vcall(this.addr(), 0x48, &args![0x8000_0000u32]);
-    let buffer = e.mem.alloc(0x200);
-    let (count, mut changes) = collect_factions_and_changes(e, this, buffer);
-    if changes == 0 {
-        let list = e.call(0x005d_43c0, &args![this]).u32();
-        e.call(0x0042_e760, &args![list]);
-        changes = faction_changes(e, this.addr());
-    }
-    let signed_rank = rank as i8 as i32 as u32;
-    let mut known = false;
-    for index in 0..count {
-        if e.mem.u32(buffer + 4 * index) == faction {
-            if rank as i8 == -1 {
-                e.call(0x0043_6e10, &args![changes, faction]);
-            } else {
-                e.call(0x0043_6f20, &args![changes, faction, signed_rank]);
-            }
-            known = true;
-            break;
+    // The faction list buffer sits at +0x14 of the exe's 0x224-byte frame (`SUB ESP,0x224`).
+    e.with_stack(0x224, |e, frame| {
+        let buffer = frame.addr() + 0x14;
+        let (count, mut changes) = collect_factions_and_changes(e, this, buffer);
+        if changes == 0 {
+            let list = e.call(0x005d_43c0, &args![this]).u32();
+            e.call(0x0042_e760, &args![list]);
+            changes = faction_changes(e, this.addr());
         }
-    }
-    if !known {
-        e.call(0x0043_6f80, &args![changes, faction, signed_rank]);
-    }
-    e.mem.free(buffer);
+        let signed_rank = rank as i8 as i32 as u32;
+        let mut known = false;
+        for index in 0..count {
+            if e.mem.u32(buffer + 4 * index) == faction {
+                if rank as i8 == -1 {
+                    e.call(0x0043_6e10, &args![changes, faction]);
+                } else {
+                    e.call(0x0043_6f20, &args![changes, faction, signed_rank]);
+                }
+                known = true;
+                break;
+            }
+        }
+        if !known {
+            e.call(0x0043_6f80, &args![changes, faction, signed_rank]);
+        }
+    });
 }
 
 // Translated from 008b86e0 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -4757,98 +4782,107 @@ pub fn actor_get_faction_fight_reaction(
             node_a = e.call(0x0072_6070, &args![node_a]).u32();
         }
     } else if changes_a != 0 && changes_b == 0 {
-        let buffer = e.mem.alloc(0x200);
-        let extra = e.mem.u32(changes_a + 0xc);
-        let count = actor_integrate_faction_lists(e, this, buffer, 0x80, head_a, extra);
-        let mut done = None;
-        'outer: for i in 0..count {
-            let faction_a = e.mem.u32(buffer + 4 * i);
-            if faction_a == 0 {
-                continue;
-            }
-            if other.addr() == player && e.call(0x005a_2270, &args![faction_a]).bool() {
-                result = 1;
-                e.mem.set_u8(flag, 1);
-                continue;
-            }
-            let mut node_b = head_b;
-            while node_b != 0 {
-                if let Some(entry_b) = faction_of(e, node_b) {
-                    let fb = e.mem.u32(entry_b);
-                    result = fn_008b8740(e, result, Ptr::new(faction_a), fb);
-                    if result == 2 {
-                        done = Some(2);
-                        break 'outer;
-                    }
+        // The buffer at +0x644 (`EBP-0x228`) of the exe's 0x86c-byte frame.
+        let done = e.with_stack(0x86c, |e, frame| {
+            let buffer = frame.addr() + 0x644;
+            let extra = e.mem.u32(changes_a + 0xc);
+            let count = actor_integrate_faction_lists(e, this, buffer, 0x80, head_a, extra);
+            let mut done = None;
+            'outer: for i in 0..count {
+                let faction_a = e.mem.u32(buffer + 4 * i);
+                if faction_a == 0 {
+                    continue;
                 }
-                node_b = e.call(0x0072_6070, &args![node_b]).u32();
+                if other.addr() == player && e.call(0x005a_2270, &args![faction_a]).bool() {
+                    result = 1;
+                    e.mem.set_u8(flag, 1);
+                    continue;
+                }
+                let mut node_b = head_b;
+                while node_b != 0 {
+                    if let Some(entry_b) = faction_of(e, node_b) {
+                        let fb = e.mem.u32(entry_b);
+                        result = fn_008b8740(e, result, Ptr::new(faction_a), fb);
+                        if result == 2 {
+                            done = Some(2);
+                            break 'outer;
+                        }
+                    }
+                    node_b = e.call(0x0072_6070, &args![node_b]).u32();
+                }
             }
-        }
-        e.mem.free(buffer);
+            done
+        });
         if let Some(value) = done {
             return value;
         }
     } else if changes_a == 0 && changes_b != 0 {
-        let buffer = e.mem.alloc(0x200);
-        let extra = e.mem.u32(changes_b + 0xc);
-        let count = actor_integrate_faction_lists(e, this, buffer, 0x80, head_b, extra);
-        let mut done = None;
-        let mut node_a = head_a;
-        'outer_b: while node_a != 0 {
-            if let Some(entry_a) = faction_of(e, node_a) {
-                let faction_a = e.mem.u32(entry_a);
-                if other.addr() == player && e.call(0x005a_2270, &args![faction_a]).bool() {
-                    result = 1;
-                    e.mem.set_u8(flag, 1);
-                } else {
-                    for j in 0..count {
-                        let faction_b = e.mem.u32(buffer + 4 * j);
-                        if faction_b != 0 {
-                            result = fn_008b8740(e, result, Ptr::new(faction_a), faction_b);
-                            if result == 2 {
-                                done = Some(2);
-                                break 'outer_b;
+        // The buffer at +0x42c (`EBP-0x440`) of the exe's 0x86c-byte frame.
+        let done = e.with_stack(0x86c, |e, frame| {
+            let buffer = frame.addr() + 0x42c;
+            let extra = e.mem.u32(changes_b + 0xc);
+            let count = actor_integrate_faction_lists(e, this, buffer, 0x80, head_b, extra);
+            let mut done = None;
+            let mut node_a = head_a;
+            'outer_b: while node_a != 0 {
+                if let Some(entry_a) = faction_of(e, node_a) {
+                    let faction_a = e.mem.u32(entry_a);
+                    if other.addr() == player && e.call(0x005a_2270, &args![faction_a]).bool() {
+                        result = 1;
+                        e.mem.set_u8(flag, 1);
+                    } else {
+                        for j in 0..count {
+                            let faction_b = e.mem.u32(buffer + 4 * j);
+                            if faction_b != 0 {
+                                result = fn_008b8740(e, result, Ptr::new(faction_a), faction_b);
+                                if result == 2 {
+                                    done = Some(2);
+                                    break 'outer_b;
+                                }
                             }
                         }
                     }
                 }
+                node_a = e.call(0x0072_6070, &args![node_a]).u32();
             }
-            node_a = e.call(0x0072_6070, &args![node_a]).u32();
-        }
-        e.mem.free(buffer);
+            done
+        });
         if let Some(value) = done {
             return value;
         }
     } else {
-        let buffer_a = e.mem.alloc(0x200);
-        let buffer_b = e.mem.alloc(0x200);
-        let extra_a = e.mem.u32(changes_a + 0xc);
-        let count_a = actor_integrate_faction_lists(e, this, buffer_a, 0x80, head_a, extra_a);
-        let extra_b = e.mem.u32(changes_b + 0xc);
-        let count_b = actor_integrate_faction_lists(e, this, buffer_b, 0x80, head_b, extra_b);
-        let mut done = None;
-        'outer_c: for i in 0..count_a {
-            let faction_a = e.mem.u32(buffer_a + 4 * i);
-            if faction_a == 0 {
-                continue;
-            }
-            if other.addr() == player && e.call(0x005a_2270, &args![faction_a]).bool() {
-                result = 1;
-                continue;
-            }
-            for j in 0..count_b {
-                let faction_b = e.mem.u32(buffer_b + 4 * j);
-                if faction_b != 0 {
-                    result = fn_008b8740(e, result, Ptr::new(faction_a), faction_b);
-                    if result == 2 {
-                        done = Some(2);
-                        break 'outer_c;
+        // The buffers at +0x14 and +0x21c (`EBP-0x858`, `EBP-0x650`) of the exe's 0x86c-byte
+        // frame.
+        let done = e.with_stack(0x86c, |e, frame| {
+            let buffer_a = frame.addr() + 0x14;
+            let buffer_b = frame.addr() + 0x21c;
+            let extra_a = e.mem.u32(changes_a + 0xc);
+            let count_a = actor_integrate_faction_lists(e, this, buffer_a, 0x80, head_a, extra_a);
+            let extra_b = e.mem.u32(changes_b + 0xc);
+            let count_b = actor_integrate_faction_lists(e, this, buffer_b, 0x80, head_b, extra_b);
+            let mut done = None;
+            'outer_c: for i in 0..count_a {
+                let faction_a = e.mem.u32(buffer_a + 4 * i);
+                if faction_a == 0 {
+                    continue;
+                }
+                if other.addr() == player && e.call(0x005a_2270, &args![faction_a]).bool() {
+                    result = 1;
+                    continue;
+                }
+                for j in 0..count_b {
+                    let faction_b = e.mem.u32(buffer_b + 4 * j);
+                    if faction_b != 0 {
+                        result = fn_008b8740(e, result, Ptr::new(faction_a), faction_b);
+                        if result == 2 {
+                            done = Some(2);
+                            break 'outer_c;
+                        }
                     }
                 }
             }
-        }
-        e.mem.free(buffer_a);
-        e.mem.free(buffer_b);
+            done
+        });
         if let Some(value) = done {
             return value;
         }
@@ -7534,15 +7568,19 @@ mod tests {
         });
         w.e.register(0x005d_43c0, |_, a| int(a[0] + 0x44));
         w.e.register(0x0041_8520, |_, a| int(a[0] + 1));
-        w.e.register(0x0047_d0b0, |_, a| int(a[0] + 2));
+        w.e.register(0x0047_d0b0, |_, a| {
+            assert!(a.is_empty());
+            int(0x0e10_0000)
+        });
         let cleared = Rc::new(Cell::new(0));
         let seen = cleared.clone();
         w.e.register_double(0x006e_bd10, move |_, a| {
-            seen.set(a[0]);
+            assert_eq!(a[0], 0x0e10_0000);
+            seen.set(a[1]);
             Ret::default()
         });
         w.e.call(0x008b_3180, &args![this]);
-        assert_eq!(cleared.get(), this.addr() + 0x44 + 1 + 2);
+        assert_eq!(cleared.get(), this.addr() + 0x44 + 1);
         assert_eq!(destroyed.get(), mover.addr());
         assert!(w.e.get(this, Actor::pActorMover).is_null());
         // Without a mover nothing is destroyed.
@@ -9373,11 +9411,11 @@ mod tests {
             e.call(0x008b_51b0, &args![actor, 0x77u32, 3u32, 0x66u32]);
         });
         // The slot gets twice the answer.
-        assert_eq!(seen.borrow()[0], vec![a + 0xa4, 0x1c, 0x66]);
+        assert_eq!(seen.borrow()[0], vec![a + 0xa4, 0x1c]);
         assert!(w
             .s
             .slot_calls()
-            .contains(&(a, 0x3ac, vec![0x1c, 5.0f32.to_bits()])));
+            .contains(&(a, 0x3ac, vec![0x1c, 5.0f32.to_bits(), 0x66])));
         // Dismember: no hit, the value, the part 3, chance 0 and limit 1000.
         assert_eq!(args_of(&log, 0x0057_3090), vec![vec![a, 3]]);
         assert_eq!(
@@ -11401,5 +11439,94 @@ mod tests {
             .bool());
         w.e.register(0x009d_ba30, |_, _| int(0));
         assert!(!w.e.call(0x008b_3630, &args![this, 0x66u32]).bool());
+    }
+
+    // ---- the exe's stack frames ----
+
+    /// The block the next `with_stack(size)` takes (the last freed block of that size).
+    fn next_frame(e: &mut Engine, size: u32) -> u32 {
+        let frame = e.mem.alloc(size);
+        e.mem.free(frame);
+        frame
+    }
+
+    #[test]
+    fn the_faction_list_buffers_sit_at_the_exe_frame_offsets() {
+        // (function, its arguments after the actor, frame size, buffer offset)
+        let cases: [(u32, Vec<u32>, u32, u32); 8] = [
+            (0x008b_7c00, vec![0x55, 9], 0x21c, 0xc),
+            (0x008b_7d20, vec![0x55, 9], 0x21c, 0xc),
+            (0x008b_7e20, vec![], 0x21c, 0xc),
+            (0x008b_7f00, vec![], 0x21c, 0xc),
+            (0x008b_8290, vec![0x99, 0], 0x21c, 0xc),
+            (0x008b_8360, vec![0, 0], 0x224, 0x14),
+            (0x008b_8490, vec![], 0x224, 0x14),
+            (0x008b_8580, vec![0x77, 1], 0x224, 0x14),
+        ];
+        for (function, rest, size, offset) in cases {
+            let mut s = faction_stage();
+            let actor = s.actor();
+            let (first, second) = (faction_with(&mut s.e, 0), faction_with(&mut s.e, 0));
+            give_factions(&mut s, actor, &[(first, 0), (second, 0)], None);
+            zeros(
+                &mut s.e,
+                &[
+                    0x005f_da00,
+                    0x005f_da50,
+                    0x0067_33e0,
+                    0x0080_41a0,
+                    0x008b_8e90,
+                    0x0043_6f80,
+                    0x0043_6f20,
+                    0x0043_6e10,
+                    0x0042_e760,
+                ],
+            );
+            let mut args = vec![actor.addr()];
+            args.extend(rest);
+            let frame = next_frame(&mut s.e, size);
+            s.e.call(function, &args);
+            assert_eq!(
+                [s.e.mem.u32(frame + offset), s.e.mem.u32(frame + offset + 4)],
+                [first, second],
+                "{function:08x}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_relation_buffers_sit_at_the_exe_frame_offsets() {
+        let (mut s, a, b) = relation_scene(&[(0x100, 0)], &[(0x200, 0)], &[((0x100, 0x200), 7)]);
+        let out = s.e.mem.alloc(0x10);
+        let frame = next_frame(&mut s.e, 0x444);
+        s.e.call(0x008b_7fe0, &args![a, b, out, out + 4, out + 8]);
+        assert_eq!(s.e.mem.u32(frame + 0x1c), 0x100);
+        assert_eq!(s.e.mem.u32(frame + 0x22c), 0x200);
+    }
+
+    #[test]
+    fn the_fight_reaction_buffers_sit_at_the_exe_frame_offsets() {
+        // Changes on the first actor only: +0x644.
+        let (mut s, a, b, flag) = reaction_scene(&[], 0);
+        give_factions(&mut s, a, &[(0x10, 0)], Some(&[(0x11, 0)]));
+        give_factions(&mut s, b, &[(0x30, 0)], None);
+        let frame = next_frame(&mut s.e, 0x86c);
+        s.e.call(0x008b_87a0, &args![a, b, flag]);
+        assert_eq!(s.e.mem.u32(frame + 0x644), 0x10);
+        // Changes on the second actor only: +0x42c.
+        let (mut s, a, b, flag) = reaction_scene(&[], 0);
+        give_factions(&mut s, a, &[(0x10, 0)], None);
+        give_factions(&mut s, b, &[(0x30, 0)], Some(&[(0x31, 0)]));
+        let frame = next_frame(&mut s.e, 0x86c);
+        s.e.call(0x008b_87a0, &args![a, b, flag]);
+        assert_eq!(s.e.mem.u32(frame + 0x42c), 0x30);
+        // Changes on both: +0x14 and +0x21c.
+        let (mut s, a, b, flag) = reaction_scene(&[], 0);
+        give_factions(&mut s, a, &[(0x10, 0)], Some(&[(0x11, 0)]));
+        give_factions(&mut s, b, &[(0x30, 0)], Some(&[(0x31, 0)]));
+        let frame = next_frame(&mut s.e, 0x86c);
+        s.e.call(0x008b_87a0, &args![a, b, flag]);
+        assert_eq!(s.e.mem.u32(frame + 0x14), 0x10);
+        assert_eq!(s.e.mem.u32(frame + 0x21c), 0x30);
     }
 }

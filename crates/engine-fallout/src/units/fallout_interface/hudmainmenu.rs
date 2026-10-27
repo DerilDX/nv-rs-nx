@@ -863,8 +863,9 @@ pub fn hud_main_menu_create(e: &mut Engine) -> Ptr {
     let maximum_depth = e.call(0x00a0_1530, &args![]).f64() as f32;
     let critical = e.call(0x0071_3d70, &args![]).u32();
     e.call(0x0045_38a0, &args![critical, 0_u32]);
-    let path = e.call(0x0058_6150, &args![resource, 0x0107_343c_u32]).u32();
-    let xml = e.call(0x00a0_1b00, &args![path]).u32();
+    // 0076c092: the pushed path is Tile::ReadFile's word; 00586150 (RET, no word) gives its `this`.
+    let tiles = e.call(0x0058_6150, &args![resource]).u32();
+    let xml = e.call(0x00a0_1b00, &args![tiles, 0x0107_343c_u32]).u32();
     let menu = e.call(0x00a0_3c90, &args![xml]).u32();
     let valid_menu = if menu == 0 {
         false
@@ -1214,13 +1215,15 @@ fn set_info_inventory_action(
 
         let controls = e.call(0x004b_71d0, &args![]).bool();
         let input = e.mem.u32(0x011d_ea0c);
-        let binding = e
+        // 00777a05 / 00777ad0: `00877720` takes no stack word (plain RET); the pushed
+        // 5 and 3 (or 0) are the two words of `00703be0` (RET 8).
+        let binding = e.call(0x0087_7720, &args![input]).u32();
+        let key = e
             .call(
-                0x0087_7720,
-                &args![input, 5_u32, if controls { 3_u32 } else { 0_u32 }],
+                0x0070_3be0,
+                &args![binding, 5_u32, if controls { 3_u32 } else { 0_u32 }],
             )
-            .u32();
-        let key = e.call(0x0070_3be0, &args![binding]).u32() as u8;
+            .u32() as u8;
         if controls {
             let glyph = match key {
                 8 => Some(0x11),
@@ -1986,7 +1989,7 @@ fn do_idle_target(e: &mut Engine, this: Ptr<HUDMainMenu>) {
             if e.vcall(actor, 0x22c, &args![0_u32]).u8() == 0 {
                 show_enemy = true;
                 let actor = e.mem.u32(0x011f_21cc);
-                hud_main_menu_set_enemy_actor(e, this, Ptr::new(actor));
+                hud_main_menu_set_enemy_actor(e, Ptr::new(actor));
             }
         }
     } else {
@@ -2684,8 +2687,10 @@ pub fn fn_00773050(e: &mut Engine) {
 
 // Translated from 00773190 (decompiled, FalloutNV.exe 1.4.0.525)
 /// `HUDMainMenu::SetEnemyActor` (Xbox PDB): chooses the enemy shown by the
-/// HUD, updates its name, and starts the health timer.
-pub fn hud_main_menu_set_enemy_actor(e: &mut Engine, _this: Ptr<HUDMainMenu>, enemy: Ptr) {
+/// HUD, updates its name, and starts the health timer. A static `cdecl` of one word
+/// (its callers 00770ded, 00772ec2 and 007038b7 push only the enemy and pop one word; it
+/// does not read ECX).
+pub fn hud_main_menu_set_enemy_actor(e: &mut Engine, enemy: Ptr) {
     let blocked = e.call(0x0040_8d60, &args![0x011e_0988_u32]).u32();
     if e.mem.u8(blocked) != 0
         || (!enemy.is_null() && e.vcall(enemy.addr(), 0x22c, &args![0_u32]).bool())
@@ -3856,8 +3861,7 @@ pub fn hud_main_menu_set_target_type(e: &mut Engine, target: Ptr, enabled: bool)
             }
         }
         if show {
-            let menu = e.mem.u32(0x011d_96c0);
-            hud_main_menu_set_enemy_actor(e, Ptr::new(menu), Ptr::new(actor));
+            hud_main_menu_set_enemy_actor(e, Ptr::new(actor));
             for id in [0x15_u32, 0x16, 0x17, 0x17] {
                 let item = hud_tile(e, id);
                 hud_trait(e, item, 0xfa3, 1);
@@ -4943,9 +4947,11 @@ pub fn blink_tile(e: &mut Engine, tile: Ptr, mut period: f32, amplitude: f32) {
         };
         e.call(0x00a0_12d0, &args![tile, 0xfa9_u32, 0.0_f32, 1_u32]);
         hud_trait(e, tile.addr(), alpha_down, 0);
-        let now = e.call(0x0082_5c00, &args![0x011f_6394_u32, 1_u32]).u32();
+        // 00778fd4: `00825c00` takes no stack word (plain RET); the pushed 1 is the
+        // last word of `00a012d0` (RET 0xc).
+        let now = e.call(0x0082_5c00, &args![0x011f_6394_u32]).u32();
         let next = (f64::from(now) + f64::from(delay)) as f32;
-        e.call(0x00a0_12d0, &args![tile, 0x100e_u32, next]);
+        e.call(0x00a0_12d0, &args![tile, 0x100e_u32, next, 1_u32]);
     } else {
         let next = e.call(0x00a0_11b0, &args![tile, 0x100e_u32]).f64();
         let now = e.call(0x0082_5c00, &args![0x011f_6394_u32]).u32();
@@ -6897,8 +6903,10 @@ fn hotkey_timeout_elapsed(e: &mut Engine, setting_address: u32) -> bool {
 
 fn hotkey_pressed(e: &mut Engine, index: i32, mode: u32) -> bool {
     let input = e.mem.u32(0x011d_ea0c);
-    let key = e.call(0x0087_7720, &args![input, index + 0x11, mode]).u32();
-    e.call(0x00a2_4660, &args![key]).bool()
+    // 0077def9 / 0077e15e: `00877720` takes no stack word (plain RET); the pushed
+    // control and mode are the two words of `00a24660` (RET 8).
+    let key = e.call(0x0087_7720, &args![input]).u32();
+    e.call(0x00a2_4660, &args![key, index + 0x11, mode]).bool()
 }
 
 fn hotkey_show_icon(e: &mut Engine, this: Ptr<HUDMainMenu>, icon: u32) {
@@ -7165,14 +7173,16 @@ pub fn fn_0077e4f0(e: &mut Engine, this: Ptr<HUDMainMenu>) {
         e.with_stack(12, |e, vector| {
             e.call(0x0043_d410, &args![vector, 0.0_f32, 1_u32, 0_u32]);
             let controller = e.mem.u32(this.addr() + 0x200);
-            let from = e.call(0x0050_8100, &args![controller, 0_u32]).f64();
+            // 0077e6d4: `00508100` takes no stack word (plain RET); the pushed 0 is
+            // the last word of `00a328b0` (RET 8) below.
+            let from = e.call(0x0050_8100, &args![controller]).f64();
             let controller = e.mem.u32(this.addr() + 0x200);
             let destination = e.call(0x0075_9450, &args![controller]).f64();
             let controller = e.mem.u32(this.addr() + 0x200);
             let current = e.call(0x0050_8100, &args![controller]).f64();
             let phase = ((destination - current) * f64::from(phase_scale) + from) as f32;
             let controller = e.mem.u32(this.addr() + 0x200);
-            e.call(0x00a3_28b0, &args![controller, phase]);
+            e.call(0x00a3_28b0, &args![controller, phase, 0_u32]);
             let tile = e.mem.u32(this.addr() + 0x148);
             let sequence_list = e.call(0x0056_c7f0, &args![tile]).u32();
             let sequence = e.call(0x0043_b4a0, &args![sequence_list, 0_u32]).u32();
@@ -7466,8 +7476,10 @@ pub fn fn_0077f0d0(e: &mut Engine) {
         let camera = e.call(0x0055_9450, &args![0x011d_9770_u32]).u32();
         e.vcall(renderer, 0xdc, &args![camera, 1_u32]);
     }
-    let scene = e.call(0x0043_c4b0, &args![0_u32, 4_u32]).u32();
-    e.call(0x0071_48c0, &args![scene]);
+    // 0077f164: `0043c4b0` takes no word (plain RET, a global); the pushed 0 and 4 are
+    // the two words of `007148c0` (RET 8).
+    let scene = e.call(0x0043_c4b0, &args![]).u32();
+    e.call(0x0071_48c0, &args![scene, 0_u32, 4_u32]);
     let face = e.call(0x0045_c670, &args![]).u32();
     let dialogue = e.call(0x008d_80e0, &args![face]).u32();
     e.call(0x00c4_f270, &args![dialogue, 1_u32]);
@@ -7837,10 +7849,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x0077_2c30, hud_main_menu_set_worldspace_text(Ptr)),
         entry!(0x0077_2d10, hud_main_menu_set_target_type(Ptr, bool)),
         entry!(0x0077_3050, fn_00773050()),
-        entry!(
-            0x0077_3190,
-            hud_main_menu_set_enemy_actor(Ptr<HUDMainMenu>, Ptr)
-        ),
+        entry!(0x0077_3190, hud_main_menu_set_enemy_actor(Ptr)),
         entry!(0x0077_32b0, fn_007732b0() -> Ptr),
         entry!(0x0077_32d0, hud_main_menu_update_sneak(Ptr<HUDMainMenu>)),
         entry!(0x0077_35b0, fn_007735b0(Ptr) -> u8),
@@ -8077,12 +8086,15 @@ mod tests {
             ..Ret::default()
         });
         e.register_double(0x0087_7720, |_, words| {
-            assert_eq!(words[1..], [5, 3]);
+            assert_eq!(words.len(), 1);
             Ret::default()
         });
-        e.register_double(0x0070_3be0, |_, _| Ret {
-            eax: 9,
-            ..Ret::default()
+        e.register_double(0x0070_3be0, |_, words| {
+            assert_eq!(words[1..], [5, 3]);
+            Ret {
+                eax: 9,
+                ..Ret::default()
+            }
         });
         e.register_double(0x0070_0320, |_, words| {
             assert_eq!(words, [0x5000, 0xfa9, 0x12]);
@@ -8324,7 +8336,10 @@ mod tests {
             .iter()
             .find(|(address, _)| *address == 0x004b_c5f0)
             .unwrap();
-        assert_eq!(first_destructor.1.as_slice(), args![temporary].as_slice());
+        assert_eq!(
+            first_destructor.1.as_slice(),
+            args![temporary].to_vec().as_slice()
+        );
 
         // FCOMP followed by TEST AH,0x41 selects the zero-format for NaN as
         // well as for nonpositive values; both item value and weight do this.
@@ -8412,13 +8427,25 @@ mod tests {
         e.call_log = Some(vec![]);
         assert!(!hud_main_menu_set_info_for_ref(&mut e, Ptr::new(0), 0, 0,));
         let calls = e.call_log.take().unwrap();
-        assert_eq!(calls[0], (0x00a0_11f0, args![0x5000_u32, 0x1004_u32]));
+        assert_eq!(
+            calls[0],
+            (0x00a0_11f0, args![0x5000_u32, 0x1004_u32].to_vec())
+        );
         assert_eq!(
             calls[1],
-            (0x00a0_1350, args![0x5000_u32, 0xfcc_u32, 0x7788_u32, 1_u32])
+            (
+                0x00a0_1350,
+                args![0x5000_u32, 0xfcc_u32, 0x7788_u32, 1_u32].to_vec()
+            )
         );
-        assert_eq!(calls[2], (0x0070_0320, args![0x5000_u32, 0xff4_u32, 1_u32]));
-        assert_eq!(calls[4], (0x0070_0320, args![0x5001_u32, 0xfa3_u32, 1_u32]));
+        assert_eq!(
+            calls[2],
+            (0x0070_0320, args![0x5000_u32, 0xff4_u32, 1_u32].to_vec())
+        );
+        assert_eq!(
+            calls[4],
+            (0x0070_0320, args![0x5001_u32, 0xfa3_u32, 1_u32].to_vec())
+        );
 
         e.mem.set_u32(menu.addr() + 0x1b8, 0x1234);
         e.mem.set_u8(0x011d_96bb, 1);
@@ -8427,23 +8454,35 @@ mod tests {
         assert_eq!(e.mem.u32(menu.addr() + 0x1b8), 0);
         assert_eq!(e.mem.u8(0x011d_96bb), 0);
         let calls = e.call_log.take().unwrap();
-        assert_eq!(calls[0], (0x0096_3e00, args![player, 0xc_u32, 0_u32]));
-        assert_eq!(calls[1], (0x0096_3e00, args![player, 0xb_u32, 0_u32]));
+        assert_eq!(
+            calls[0],
+            (0x0096_3e00, args![player, 0xc_u32, 0_u32].to_vec())
+        );
+        assert_eq!(
+            calls[1],
+            (0x0096_3e00, args![player, 0xb_u32, 0_u32].to_vec())
+        );
         for (index, (_, words)) in calls[2..11].iter().enumerate() {
             assert_eq!(words, &args![0x5100_u32 + index as u32, 0xfa3_u32, 0_u32]);
         }
         assert_eq!(
             calls[11],
-            (0x0070_0320, args![0x5000_u32, 0xff4_u32, 1_u32])
+            (0x0070_0320, args![0x5000_u32, 0xff4_u32, 1_u32].to_vec())
         );
-        assert_eq!(calls[12], (0x00a0_11f0, args![0x5000_u32, 0x1004_u32]));
+        assert_eq!(
+            calls[12],
+            (0x00a0_11f0, args![0x5000_u32, 0x1004_u32].to_vec())
+        );
         assert_eq!(
             calls[13],
-            (0x00a0_1350, args![0x5000_u32, 0xfcc_u32, 0x7788_u32, 1_u32])
+            (
+                0x00a0_1350,
+                args![0x5000_u32, 0xfcc_u32, 0x7788_u32, 1_u32].to_vec()
+            )
         );
         assert_eq!(
             calls[15],
-            (0x0070_0320, args![0x5001_u32, 0xfa3_u32, 1_u32])
+            (0x0070_0320, args![0x5001_u32, 0xfa3_u32, 1_u32].to_vec())
         );
     }
 
@@ -8508,8 +8547,14 @@ mod tests {
             .position(|(address, _)| *address == 0x0070_0320)
             .unwrap();
         assert!(action < clear);
-        assert_eq!(calls[action].1, args![0x9000_u32, 0xb_u32, 10.0_f32, 0_u32]);
-        assert_eq!(calls[action + 1], (0x0097_81a0, args![0x011e_0e80_u32]));
+        assert_eq!(
+            calls[action].1,
+            args![0x9000_u32, 0xb_u32, 10.0_f32, 0_u32].to_vec()
+        );
+        assert_eq!(
+            calls[action + 1],
+            (0x0097_81a0, args![0x011e_0e80_u32].to_vec())
+        );
 
         e.mem.set_u32(menu.addr() + 0x1b8, 0);
         e.mem.set_u32(0x011d_9d00, 0);
@@ -8598,7 +8643,7 @@ mod tests {
             }
         });
         e.register_double(0x00a0_12d0, |_, words| {
-            assert_eq!(words, args![0x6000_u32, 0xfa9_u32, 1.0_f32, 1_u32]);
+            assert_eq!(words, args![0x6000_u32, 0xfa9_u32, 1.0_f32, 1_u32].to_vec());
             Ret::default()
         });
         e.call_log = Some(vec![]);
@@ -8634,6 +8679,7 @@ mod tests {
                     0xbbbb_u32,
                     0xaaaa_u32
                 ]
+                .to_vec()
             );
             Ret::default()
         });
@@ -8875,7 +8921,10 @@ mod tests {
             0,
         ));
         let calls = e.call_log.take().unwrap();
-        assert_eq!(calls.last().unwrap(), &(0x0046_f070, args![0xb000_u32]));
+        assert_eq!(
+            calls.last().unwrap(),
+            &(0x0046_f070, args![0xb000_u32].to_vec())
+        );
         assert!(calls
             .iter()
             .all(|(address, words)| *address != 0x0070_0320 || words[1] != 0xfa3));
@@ -8933,7 +8982,7 @@ mod tests {
             }
         });
         e.register_double(0x00a0_12d0, |_, words| {
-            assert_eq!(words, args![0x5106_u32, 0xfa9_u32, 1.0_f32, 1_u32]);
+            assert_eq!(words, args![0x5106_u32, 0xfa9_u32, 1.0_f32, 1_u32].to_vec());
             Ret::default()
         });
         e.call_log = Some(vec![]);
@@ -8997,7 +9046,10 @@ mod tests {
                 .iter()
                 .find(|(address, _)| *address == 0x0040_6d30)
                 .unwrap(),
-            &(0x0040_6d30, args![0x011d_9c48_u32, 0x104_u32, 0xd000_u32])
+            &(
+                0x0040_6d30,
+                args![0x011d_9c48_u32, 0x104_u32, 0xd000_u32].to_vec()
+            )
         );
         assert!(calls.iter().any(|(address, words)| {
             *address == 0x00a0_1350
@@ -9135,7 +9187,10 @@ mod tests {
                 .iter()
                 .find(|(address, _)| *address == 0x0040_6d30)
                 .unwrap(),
-            &(0x0040_6d30, args![0x011d_9c48_u32, 0x104_u32, 0xd000_u32])
+            &(
+                0x0040_6d30,
+                args![0x011d_9c48_u32, 0x104_u32, 0xd000_u32].to_vec()
+            )
         );
         assert!(calls.iter().any(|(address, words)| {
             *address == 0x00a0_1350
@@ -9350,8 +9405,8 @@ mod tests {
         assert_eq!(
             writes,
             vec![
-                args![0x4000_u32, 0xff5_u32, 0x2c_u32],
-                args![0x4000_u32, 0xff5_u32, 100_u32]
+                args![0x4000_u32, 0xff5_u32, 0x2c_u32].to_vec(),
+                args![0x4000_u32, 0xff5_u32, 100_u32].to_vec()
             ]
         );
     }
@@ -9453,7 +9508,7 @@ mod tests {
             }
         });
         e.call_log = Some(vec![]);
-        hud_main_menu_set_enemy_actor(&mut e, Ptr::NULL, Ptr::new(0xdead));
+        hud_main_menu_set_enemy_actor(&mut e, Ptr::new(0xdead));
         assert_eq!(e.call_log.as_ref().unwrap().len(), 1);
     }
 
@@ -9962,8 +10017,8 @@ mod tests {
         assert_eq!(
             changes,
             vec![
-                args![target, 0xfb1_u32, 0_u32],
-                args![target, 0xfa1_u32, 30_u32]
+                args![target, 0xfb1_u32, 0_u32].to_vec(),
+                args![target, 0xfa1_u32, 30_u32].to_vec()
             ]
         );
         let conversions: Vec<_> = e
@@ -10002,7 +10057,7 @@ mod tests {
             .filter(|(address, _)| *address == 0x0070_0320)
             .map(|(_, words)| words.clone())
             .collect();
-        assert_eq!(changes[0], args![target, 0xfb1_u32, 0_u32]);
+        assert_eq!(changes[0], args![target, 0xfb1_u32, 0_u32].to_vec());
     }
 
     fn meter_pair_engine() -> (Engine, Ptr, Ptr, u32) {
@@ -10094,7 +10149,10 @@ mod tests {
                 fades,
                 targets
                     .into_iter()
-                    .map(|target| args![target, 0xfa9_u32, 0.0_f32, 255.0_f32, 1.0_f32, 1_u32])
+                    .map(
+                        |target| args![target, 0xfa9_u32, 0.0_f32, 255.0_f32, 1.0_f32, 1_u32]
+                            .to_vec()
+                    )
                     .collect::<Vec<_>>()
             );
         }
@@ -10120,10 +10178,10 @@ mod tests {
         assert_eq!(
             initializers,
             vec![
-                args![0x0107_3424_u32, u32::MAX],
-                args![0x0107_3418_u32, u32::MAX],
-                args![0x0107_3430_u32, u32::MAX],
-                args![0x0107_34b8_u32, u32::MAX],
+                args![0x0107_3424_u32, u32::MAX].to_vec(),
+                args![0x0107_3418_u32, u32::MAX].to_vec(),
+                args![0x0107_3430_u32, u32::MAX].to_vec(),
+                args![0x0107_34b8_u32, u32::MAX].to_vec(),
             ]
         );
         assert_eq!(e.mem.u32(0x011d_9c2c), 15);
@@ -10141,7 +10199,7 @@ mod tests {
             .filter(|(address, _)| *address == 0x0070_0320)
             .map(|(_, words)| words.clone())
             .collect();
-        assert_eq!(writes[2], args![second, 0xfb1_u32, 8_u32]);
+        assert_eq!(writes[2], args![second, 0xfb1_u32, 8_u32].to_vec());
     }
 
     #[test]
@@ -10546,7 +10604,7 @@ mod tests {
         assert_eq!(fades.len(), 3);
         assert_eq!(
             fades[0],
-            args![0x10_u32, 0xfa9_u32, 200.0_f32, 0.0_f32, 0.35_f32, 0_u32]
+            args![0x10_u32, 0xfa9_u32, 200.0_f32, 0.0_f32, 0.35_f32, 0_u32].to_vec()
         );
     }
 
@@ -10753,14 +10811,14 @@ mod tests {
             Ret::default()
         });
         e.register_double(0x0058_6150, |_, words| {
-            assert_eq!(words, &[0x1010, 0x0107_343c]);
+            assert_eq!(words, &[0x1010]);
             Ret {
                 eax: 0x3030,
                 ..Ret::default()
             }
         });
         e.register_double(0x00a0_1b00, |_, words| {
-            assert_eq!(words, &[0x3030]);
+            assert_eq!(words, &[0x3030, 0x0107_343c]);
             Ret {
                 eax: 0x4040,
                 ..Ret::default()
@@ -11244,6 +11302,7 @@ mod tests {
         });
         e.register_double(0x00a0_12d0, move |e, words| {
             assert_eq!(words[0], tile);
+            assert_eq!(words.len(), 4);
             match words[1] {
                 0xfa9 => e.mem.set_f32(tile + 0x10, f32::from_bits(words[2])),
                 0x100e => e.mem.set_f32(tile + 0x18, f32::from_bits(words[2])),
@@ -13104,14 +13163,14 @@ mod tests {
             }
         });
         e.register_double(0x0087_7720, |_, words| {
-            assert_eq!(words, &[0x6000, 0x11, 1]);
+            assert_eq!(words, &[0x6000]);
             Ret {
                 eax: 0x7111,
                 ..Ret::default()
             }
         });
         e.register_double(0x00a2_4660, |_, words| {
-            assert_eq!(words, &[0x7111]);
+            assert_eq!(words, &[0x7111, 0x11, 1]);
             Ret {
                 eax: 1,
                 ..Ret::default()
@@ -13783,14 +13842,14 @@ mod tests {
             }
         });
         e.register_double(0x0043_c4b0, |_, words| {
-            assert_eq!(words, &[0, 4]);
+            assert!(words.is_empty());
             Ret {
                 eax: 0x8100,
                 ..Ret::default()
             }
         });
         e.register_double(0x0071_48c0, |_, words| {
-            assert_eq!(words, &[0x8100]);
+            assert_eq!(words, &[0x8100, 0, 4]);
             Ret::default()
         });
         e.register_double(0x0045_c670, |_, words| {

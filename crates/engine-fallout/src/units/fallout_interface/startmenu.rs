@@ -1306,13 +1306,13 @@ const USER_OPTION_ROWS: [(u32, u32, [u32; 4], &[u32]); 34] = [
         0x011d_2940,
         0x007d_1840,
         [16, 0, 4, 55],
-        &[0x011d_2124, 0x011d_5074],
+        &[0x011d_2124, 0x011d_5074, STRING_A, STRING_B],
     ),
     (
         0x011d_23c4,
         0x007d_1900,
         [16, 0, 4, 55],
-        &[0x011d_2124, 0x011d_5074],
+        &[0x011d_2124, 0x011d_5074, STRING_A, STRING_B],
     ),
     (
         0x011d_21f0,
@@ -1459,9 +1459,18 @@ pub fn start_menu_create_menu_elements(e: &mut Engine) {
         let option = if block == 0 {
             0
         } else {
+            // In push order: settings' strings (00403df0), and for the two 4-value rows
+            // (007cd7cf, 007cd884) the texts of STRING_A and STRING_B (00559450) last.
             let values: Vec<u32> = strings
                 .iter()
-                .map(|setting| e.call(SETTING_STRING, &args![*setting]).u32())
+                .map(|&s| {
+                    let getter = if s == STRING_A || s == STRING_B {
+                        FIRST_WORD
+                    } else {
+                        SETTING_STRING
+                    };
+                    e.call(getter, &args![s]).u32()
+                })
                 .collect();
             let text = e.call(OPTION_TEXT, &args![text_setting]).u32();
             let mut call = args![block, text, choose, words[0], words[1], words[2], words[3]];

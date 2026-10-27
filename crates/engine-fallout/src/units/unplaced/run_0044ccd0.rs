@@ -22,7 +22,10 @@ pub fn traits_helper_copy_s(
     source: u32,
     count: u32,
 ) -> u32 {
-    let tag = e.call(CHAR_TRAITS_CATEGORY, &[]).u8();
+    // 0065e750 answers the top byte of ECX, which this cdecl function never sets: the
+    // caller's leftover ECX, not modelled (0 here; the tag goes to 0044e420's fifth word,
+    // which nothing reads). No words are pushed; the two the translation takes are 0.
+    let tag = e.call(CHAR_TRAITS_CATEGORY, &[0, 0, 0]).u8();
     e.call(
         COPY_WITH_TAG,
         &args![destination, destination_size, source, count, tag as u32],

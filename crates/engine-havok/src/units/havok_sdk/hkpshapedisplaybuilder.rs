@@ -270,11 +270,20 @@ fn build_cylinder(e: &mut Engine, b: Build) {
         &args![s + 0xa0, b.transform, b.shape + 0x20],
     );
     let object = allocate_object(e, 0x90);
-    let radius = e.call(CYLINDER_RADIUS, &args![b.shape, 9u32, 1u32]).st0;
+    // 00de0051: `00d571a0` takes no stack word (plain RET); the 9 and 1 pushed before it
+    // are the last two words of the cylinder constructor (`00d58510`, RET 0x14).
+    let radius = e.call(CYLINDER_RADIUS, &args![b.shape]).st0;
     let made = e
         .call(
             CYLINDER_CONSTRUCTOR,
-            &args![object, s + 0xc0, s + 0xa0, (radius as f32).to_bits()],
+            &args![
+                object,
+                s + 0xc0,
+                s + 0xa0,
+                (radius as f32).to_bits(),
+                9u32,
+                1u32
+            ],
         )
         .u32();
     finish_object(e, b, made);
@@ -1339,12 +1348,19 @@ mod tests {
         assert_eq!(moves[0][1..], [rig.transform, shape + 0x30]);
         assert_eq!(moves[1][1..], [rig.transform, shape + 0x20]);
         assert_eq!(moves[0][0], moves[1][0] + 0x20);
-        assert_eq!(calls(&rig.log, CYLINDER_RADIUS), vec![vec![shape, 9, 1]]);
+        assert_eq!(calls(&rig.log, CYLINDER_RADIUS), vec![vec![shape]]);
         let made = calls(&rig.log, CYLINDER_CONSTRUCTOR);
         let object = made[0][0];
         assert_eq!(
             made,
-            vec![vec![object, moves[0][0], moves[1][0], 0.5f32.to_bits()]]
+            vec![vec![
+                object,
+                moves[0][0],
+                moves[1][0],
+                0.5f32.to_bits(),
+                9,
+                1
+            ]]
         );
         assert_eq!(e.mem.u16(object + 4), 0x90);
         assert_eq!(items(&e, rig.array), vec![object]);

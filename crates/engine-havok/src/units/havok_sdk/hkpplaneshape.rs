@@ -97,7 +97,9 @@ pub fn plane_shape_cast_ray_with_collector_impl(
         });
         if hit != 0 {
             let motion = e.mem.u32(body + 8);
-            e.call(VECTOR_SET_MUL3, &args![motion, output]);
+            // 00d54fe0: `hkVector4::setMul3` (RET 8) on the output's normal (ECX, the same
+            // address as the pushed vector): rotated in place by the body's motion.
+            e.call(VECTOR_SET_MUL3, &args![output, motion, output]);
             e.vcall(collector, 0, &args![body, output]);
         }
     });
@@ -424,7 +426,7 @@ mod a05_plane_shape_tests {
                 assert!(delivered.is_empty());
             } else {
                 let output = e.mem.u32(outputs);
-                assert_eq!(setters, vec![vec![0x7000, output]]);
+                assert_eq!(setters, vec![vec![output, 0x7000, output]]);
                 assert_eq!(delivered, vec![vec![collector, body, output]]);
                 assert_eq!(e.mem.f32(seen + 0x10), 0.75);
                 assert_eq!(e.mem.u32(seen + 0x14), u32::MAX);

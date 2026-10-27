@@ -105,8 +105,15 @@ const PLATFORM_FUNCS: &[u32] = &[0x00ee_6e2e];
 /// movie player object (including the two slots the map named into
 /// `BSDiag`, placed through `unit_overrides.tsv`), and a 7-byte
 /// return-the-argument stub in Havok vtables that the map named into
-/// `RemoteLog`. Only their OS calls go to the platform layer.
+/// `RemoteLog`; and the tasklet manager (2026-10-20: `BSTaskletManager::QInstance`,
+/// `CreateTaskGroup`, the manager's constructor `00b01d50` and base `00b02720`, its worker and
+/// starter threads and their loop, list and hook helpers), whose threads the thread host runs.
+/// `Controls::Poll` (`00a23010`) and its empty end `00a232c0` in `BSDevices` read the devices
+/// through the DirectInput layer each frame.
+/// Only their OS calls go to the platform layer.
 const GAME_FUNCS: &[u32] = &[
+    0x00a2_3010,
+    0x00a2_32c0,
     0x00af_cfe0,
     0x00af_d390,
     0x00af_d4e0,
@@ -123,6 +130,10 @@ const GAME_FUNCS: &[u32] = &[
     0x00b0_08e0,
     0x00b0_08f0,
     0x00b0_0970,
+    0x00b0_0a00,
+    0x00b0_0a80,
+    0x00b0_0c90,
+    0x00b0_0cf0,
     0x00b0_0f20,
     0x00b0_1020,
     0x00b0_1040,
@@ -138,6 +149,14 @@ const GAME_FUNCS: &[u32] = &[
     0x00b0_1be0,
     0x00b0_1c00,
     0x00b0_1c20,
+    0x00b0_1d50,
+    0x00b0_2130,
+    0x00b0_23b0,
+    0x00b0_23f0,
+    0x00b0_2420,
+    0x00b0_2460,
+    0x00b0_2670,
+    0x00b0_2720,
     0x00b0_29a0,
     0x00dc_1660,
     0x00ec_1a40,
@@ -1253,7 +1272,11 @@ mod tests {
         // same crate: `partial` is a task-queue state, the ledger counts
         // engine markers, not complete behavior. (The marker above is in
         // `crates/engine`; one only in `crates/world` would be `traced`.)
-        assert_eq!(f.status(), "translated", "totals still count engine markers");
+        assert_eq!(
+            f.status(),
+            "translated",
+            "totals still count engine markers"
+        );
         let report = render(&[f], &[], 0, 1);
         assert!(report.contains("**1** engine functions"));
         assert!(report.contains("| `008c94e0` |"));

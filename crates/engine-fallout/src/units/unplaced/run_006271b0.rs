@@ -539,8 +539,8 @@ pub fn fn_006281a0(e: &mut Engine, this: Ptr, source: Ptr) -> Ptr {
 /// enclosing everything in the cell `cell`: starting from an empty box
 /// (`+FLT_MAX` / `-FLT_MAX`), for an interior cell every reference of the
 /// cell's list (`00624700`) with a loaded object contributes its bounds
-/// (`007d6bb0`, stored by the virtual at slot `0x3c` of `006286d0`'s
-/// object); for an exterior cell (when `grid` is given) every loaded
+/// (`007d6bb0`, the object + 0x14, handed with the box to the virtual at slot
+/// `0x3c` of `006286d0`'s object); for an exterior cell (when `grid` is given) every loaded
 /// object of every grid cell contributes, through the virtual
 /// `0x94`-selected path (its own bounds, or its shape's box widened by the
 /// `0.1` tolerance, `006286a0`). Returns false when the box stayed empty.
@@ -595,8 +595,10 @@ pub fn fn_006281d0(
                 let object = e.call(0x0046_0140, &args![handle]).u32();
                 if e.call(NI_POINTER_GET, &args![object]).u32() != 0 {
                     let sink = e.call(0x0062_86d0, &args![root]).u32();
-                    let bounds = e.call(0x007d_6bb0, &args![object, aabb]).u32();
-                    e.vcall(sink, 0x3c, &args![bounds]);
+                    // 006282e1: `007d6bb0` takes no stack word (plain RET); the pushed
+                    // box address is the second word of the sink's virtual +0x3c.
+                    let bounds = e.call(0x007d_6bb0, &args![object]).u32();
+                    e.vcall(sink, 0x3c, &args![bounds, aabb]);
                     widen(e);
                 }
                 index += 1;
@@ -623,8 +625,10 @@ pub fn fn_006281d0(
                             let node = e.call(NI_POINTER_GET, &args![element]).u32();
                             if e.vcall(node, 0x94, &args![]).u32() != 0 {
                                 let sink = e.call(0x0062_86d0, &args![root]).u32();
-                                let bounds = e.call(0x007d_6bb0, &args![object, aabb]).u32();
-                                e.vcall(sink, 0x3c, &args![bounds]);
+                                // 00628471: as above, the box address is the second
+                                // word of the sink's +0x3c.
+                                let bounds = e.call(0x007d_6bb0, &args![object]).u32();
+                                e.vcall(sink, 0x3c, &args![bounds, aabb]);
                             } else {
                                 e.call(0x0056_ded0, &args![transform]);
                                 let element =
@@ -873,11 +877,14 @@ mod tests {
         e.register(ARRAY_ELEMENT, |e, a| ret(e.mem.u32(a[0]) + 4 * a[1]));
         e.register(0x0046_0140, |_, a| ret(a[0]));
         e.register(0x007a_f430, |_, a| ret(a[0]));
-        // The sink's virtual 0x3c: records its argument.
+        // The sink's virtual 0x3c: records the bounds it is given and, as a model,
+        // copies them into the box (its second word).
         let seen = Rc::new(RefCell::new(Vec::new()));
         let log = seen.clone();
-        e.register_double(0x0060_c300, move |_, a| {
+        e.register_double(0x0060_c300, move |e, a| {
             log.borrow_mut().push(a[1]);
+            let bounds = e.mem.bytes(a[1], 32);
+            e.mem.write(a[2], &bounds);
             Ret::default()
         });
         let mut slots = vec![0u32; 0x40];
@@ -914,10 +921,12 @@ mod tests {
         e.register_double(0x0062_4700, move |_, _| ret(references));
         // Each loaded object reports a box (unit offsets by the object).
         e.register_double(0x007d_6bb0, move |e, a| {
+            assert_eq!(a.len(), 1);
             let base = if a[0] == first_object { 0.0 } else { 100.0 };
-            store_vector(e, a[1], [base - 1.0, base - 2.0, base - 3.0, 0.0]);
-            store_vector(e, a[1] + 16, [base + 1.0, base + 2.0, base + 3.0, 0.0]);
-            ret(a[1])
+            let bounds = e.mem.alloc(32);
+            store_vector(e, bounds, [base - 1.0, base - 2.0, base - 3.0, 0.0]);
+            store_vector(e, bounds + 16, [base + 1.0, base + 2.0, base + 3.0, 0.0]);
+            ret(bounds)
         });
         // NI_POINTER_GET on the references' handles gives the object.
         e.register(0x0046_0140, |_, a| ret(a[0]));
@@ -1005,9 +1014,11 @@ mod tests {
         e.mem.set_u32(object, 0x0a00_2000);
         e.mem.set_u32(object_slot, object);
         e.register(0x007d_6bb0, |e, a| {
-            store_vector(e, a[1], [-4.0, -5.0, -6.0, 0.0]);
-            store_vector(e, a[1] + 16, [4.0, 5.0, 6.0, 0.0]);
-            ret(a[1])
+            assert_eq!(a.len(), 1);
+            let bounds = e.mem.alloc(32);
+            store_vector(e, bounds, [-4.0, -5.0, -6.0, 0.0]);
+            store_vector(e, bounds + 16, [4.0, 5.0, 6.0, 0.0]);
+            ret(bounds)
         });
         let this = e.new_object::<LoadedAreaBound>();
         let out = e.mem.alloc(32);
@@ -1476,16 +1487,23 @@ mod tests {
         e.mem.set_u32(references + 4, 1);
         e.register_double(0x0062_4700, move |_, _| ret(references));
         e.register(0x0062_86d0, |_, _| ret(0x6000));
-        e.register(0x0060_c300, |_, _| Ret::default());
+        // The sink's +0x3c (a model): copies the bounds into the box, its second word.
+        e.register(0x0060_c300, |e, a| {
+            let bounds = e.mem.bytes(a[1], 32);
+            e.mem.write(a[2], &bounds);
+            Ret::default()
+        });
         let mut slots = vec![0u32; 0x40];
         slots[0x3c / 4] = 0x0060_c300;
         e.put_vtable(0x0a00_1000, &slots);
         e.mem.map(0x6000, 8);
         e.mem.set_u32(0x6000, 0x0a00_1000);
         e.register(0x007d_6bb0, |e, a| {
-            store_vector(e, a[1], [-1.0, -2.0, -3.0, 0.0]);
-            store_vector(e, a[1] + 16, [1.0, 2.0, 3.0, 0.0]);
-            ret(a[1])
+            assert_eq!(a.len(), 1);
+            let bounds = e.mem.alloc(32);
+            store_vector(e, bounds, [-1.0, -2.0, -3.0, 0.0]);
+            store_vector(e, bounds + 16, [1.0, 2.0, 3.0, 0.0]);
+            ret(bounds)
         });
         for (addr, value) in [(MAX_START, -3.4028235e38f32), (MIN_START, 3.4028235e38f32)] {
             e.map(addr, 8);

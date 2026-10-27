@@ -753,20 +753,17 @@ pub fn actor_set_havok_weapon_ov2(e: &mut Engine, this: Ptr<Actor>, mode: u8) ->
         0
     };
     let mut weapon_object = found;
+    // 008a608d / 008a60d3: `WeaponObject::UpdateConstraints` (`00c89050`, RET 0x10)
+    // does not read the ECX (the weapon object) the caller sets; its four words are
+    // the pushed ones.
     if weapon_object != 0 {
-        e.call(
-            0x00c8_9050,
-            &args![weapon_object, mode, link_value, root, keep],
-        );
+        e.call(0x00c8_9050, &args![mode, link_value, root, keep]);
     } else {
         weapon_object = e
             .call(0x00c8_9540, &args![link_value, root, node, keep])
             .u32();
         if weapon_object != 0 && mode == 0 {
-            e.call(
-                0x00c8_9050,
-                &args![weapon_object, mode, link_value, root, keep],
-            );
+            e.call(0x00c8_9050, &args![mode, link_value, root, keep]);
         }
     }
     e.mem.free(link);
@@ -868,13 +865,15 @@ pub fn actor_move(e: &mut Engine, this: Ptr<Actor>, delta: f32, arg_b: u32, flag
         return moved;
     }
     let threshold = setting_float(e, SETTING_FALL_THRESHOLD);
-    let excess = (fall as f64 - threshold as f64) as f32;
+    // `FSUB dword` (`008a6392`), at the main thread's precision.
+    let excess = x87_sub(x87_load32(fall.to_bits()), x87_m32(threshold.to_bits())) as f32;
     let multiplier_at = e
         .call(SETTING_VALUE_POINTER, &args![SETTING_FALL_MULT])
         .u32();
     let exponent = setting_float(e, SETTING_FALL_EXPONENT);
     let scaled = e.call(0x004d_d130, &args![excess, exponent]).f64();
-    let mut damage = (scaled * e.mem.f32(multiplier_at) as f64) as f32;
+    // `FMUL dword` (`008a63c2`) on the power `004dd130` left in ST0.
+    let mut damage = x87_mul(scaled, x87_m32(e.mem.u32(multiplier_at))) as f32;
     let form = e.call(0x0041_81e0, &args![this]).u32();
     if form != 0 && e.call(0x005f_0c40, &args![form]).bool() {
         damage = 0.0;
@@ -920,7 +919,11 @@ pub fn actor_move(e: &mut Engine, this: Ptr<Actor>, delta: f32, arg_b: u32, flag
         e.call(0x00ad_8830, &args![sound, 0u32]);
         fn_008a6630(e, moved);
         let limb_damage =
-            (damage as f64 * setting_float(e, SETTING_LIMB_DAMAGE_MULT) as f64) as f32;
+            // `FMUL dword` (`008a6576`).
+            x87_mul(
+                x87_load32(damage.to_bits()),
+                x87_m32(setting_float(e, SETTING_LIMB_DAMAGE_MULT).to_bits()),
+            ) as f32;
         for value in [0x1du32, 0x1e] {
             let roll = e.call(0x0048_7f50, &args![]).u32() % 100;
             if roll < setting_int(e, SETTING_LIMB_DAMAGE_CHANCE) {
@@ -6769,10 +6772,7 @@ mod tests {
             called(&log, 0x00c8_9540),
             vec![vec![0x4444, 0x1111, node, 1]]
         );
-        assert_eq!(
-            called(&log, 0x00c8_9050),
-            vec![vec![0x6666, 0, 0x4444, 0x1111, 1]]
-        );
+        assert_eq!(called(&log, 0x00c8_9050), vec![vec![0, 0x4444, 0x1111, 1]]);
     }
 
     #[test]
@@ -6803,10 +6803,7 @@ mod tests {
         e.call(0x008a_5f20, &args![actor, 1u8]);
         let log = calls(&mut e);
         assert!(called(&log, 0x00c8_9540).is_empty());
-        assert_eq!(
-            called(&log, 0x00c8_9050),
-            vec![vec![0x5556, 1, 0x4444, 0x1111, 1]]
-        );
+        assert_eq!(called(&log, 0x00c8_9050), vec![vec![1, 0x4444, 0x1111, 1]]);
         assert_eq!(called(&log, 0x00c8_91c0), vec![vec![0x5556]]);
     }
 

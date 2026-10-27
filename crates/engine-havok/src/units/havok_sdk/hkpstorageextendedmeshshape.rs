@@ -411,7 +411,9 @@ pub fn hkp_storage_extended_mesh_shape_add_shapes_subpart(
         copy_vertex_data(e, src, dest, storage + 0x14);
     }
     e.call(RECALC_AABB_EXTENTS, &args![this]);
-    let children = e.call(SHAPES_CHILD_COUNT, &args![this, dest]).u32();
+    // 00d4a149: `00d55520` is stdcall (RET 4) and does not read the ECX (this) the caller
+    // sets.
+    let children = e.call(SHAPES_CHILD_COUNT, &args![dest]).u32();
     let total = e.mem.u32(object + 0xe0).wrapping_add(children);
     e.mem.set_u32(object + 0xe0, total);
     e.mem.u32(object + 0xc4).wrapping_sub(1)
@@ -1466,7 +1468,7 @@ mod storage_tests {
         assert_eq!(e.mem.u16(dest + 0xa), 2);
         // The extents are recalculated, the child count of the new subpart added.
         assert_eq!(calls_to(&log, RECALC_AABB_EXTENTS), vec![vec![object]]);
-        assert_eq!(calls_to(&log, SHAPES_CHILD_COUNT), vec![vec![object, dest]]);
+        assert_eq!(calls_to(&log, SHAPES_CHILD_COUNT), vec![vec![dest]]);
         assert_eq!(e.mem.u32(object + 0xe0), 16);
     }
 

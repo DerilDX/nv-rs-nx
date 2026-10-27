@@ -14,6 +14,27 @@
 //!   --precision P   x87 precision control while decoding: 24, 53 or 64
 //!                   bits (default: leave the process's setting, which is
 //!                   53 bits for a 32-bit MSVC program)
+//!   --game          copy each frame as FalloutNV.exe 1.4.0.525 does (see
+//!                   `game.rs`) instead of with BinkCopyToBuffer
+//!   --flags X       the copy flags in --game mode, hex (default 3: surface
+//!                   type 3 without BINKCOPYALL, as the game passes them)
+//!   --wait N        timing: play the first N frames as the game's loop
+//!                   does, polling BinkWait, and record when it said go
+//!   --start-delay MS  with --wait: sleep this long after BinkOpen first
+//!   --open-flags X  BinkOpen flags, hex (default 0)
+//!   --sound-system  only call BinkSetSoundSystem(BinkOpenDirectSound, 0)
+//!                   and print its answer
+//!   --hook-dsound   record every DirectSound call the library makes to
+//!                   dsound.tsv (see `dshook.rs`)
+//!   --window        make a window first (with --sound-system or --sound)
+//!   --sound         with --wait: BinkSetSoundSystem(BinkOpenDirectSound, 0)
+//!                   before BinkOpen and the sound left on (it plays on the
+//!                   default device), so the timing is the one with sound
+//!   --late F:MS,..  with --wait: sleep MS before waiting for frame F (F
+//!                   followed by w, d or n: after BinkWait said go, after
+//!                   BinkDoFrame, after BinkNextFrame instead; p: after
+//!                   BinkNextFrame, BinkPause(1), poll BinkWait for MS,
+//!                   BinkPause(0))
 //! ```
 //!
 //! The library's audio code is x87 floating point, so its exact output
@@ -67,6 +88,16 @@ mod run {
         dump: Vec<u32>,
         audio: Option<u32>,
         precision: Option<u32>,
+        game: bool,
+        sound_system: bool,
+        sound: bool,
+        window: bool,
+        hook_dsound: bool,
+        flags: u32,
+        wait: Option<u32>,
+        start_delay: u32,
+        open_flags: u32,
+        late: Vec<(u32, char, u32)>,
     }
 
     fn parse() -> Result<Options, String> {
@@ -84,9 +115,33 @@ mod run {
             dump: Vec::new(),
             audio: None,
             precision: None,
+            game: false,
+            sound_system: false,
+            sound: false,
+            window: false,
+            hook_dsound: false,
+            flags: 3,
+            wait: None,
+            start_delay: 0,
+            open_flags: 0,
+            late: Vec::new(),
         };
         let mut i = 3;
         while i < args.len() {
+            if ["--game", "--sound-system", "--sound", "--window", "--hook-dsound"].contains(&args[i].as_str()) {
+                match args[i].as_str() {
+                    "--game" => o.game = true,
+                    "--sound-system" => o.sound_system = true,
+                    "--window" => o.window = true,
+                    "--hook-dsound" => o.hook_dsound = true,
+                    _ => {
+                        o.sound = true;
+                        o.sound_system = true;
+                    }
+                }
+                i += 1;
+                continue;
+            }
             let v = args
                 .get(i + 1)
                 .ok_or(format!("{} needs a value", args[i]))?;
@@ -97,6 +152,26 @@ mod run {
                 "--count" => o.count = Some(num(v)?),
                 "--audio" => o.audio = Some(num(v)?),
                 "--precision" => o.precision = Some(num(v)?),
+                "--wait" => o.wait = Some(num(v)?),
+                "--start-delay" => o.start_delay = num(v)?,
+                "--open-flags" => {
+                    o.open_flags = u32::from_str_radix(v.trim_start_matches("0x"), 16)
+                        .map_err(|e| format!("{v}: {e}"))?
+                }
+                "--flags" => {
+                    let t = v.trim_start_matches("0x");
+                    o.flags = u32::from_str_radix(t, 16).map_err(|e| format!("{v}: {e}"))?;
+                }
+                "--late" => {
+                    for p in v.split(',') {
+                        let (f, ms) = p.split_once(':').ok_or(format!("--late {p}: F:MS"))?;
+                        let (f, stage) = match f.strip_suffix(|c: char| "wdnp".contains(c)) {
+                            Some(n) => (n, f.chars().last().unwrap_or('b')),
+                            None => (f, 'b'),
+                        };
+                        o.late.push((num(f)?, stage, num(ms)?));
+                    }
+                }
                 "--dump" => {
                     for p in v.split(',') {
                         o.dump.push(num(p)?);
@@ -174,6 +249,9 @@ mod run {
         }
         std::fs::create_dir_all(&o.out).map_err(|e| format!("{}: {e}", o.out.display()))?;
         unsafe {
+            if o.hook_dsound {
+                crate::dshook::install(&o.out);
+            }
             let dll = format!("{}\0", o.dll);
             let module = nv_win::LoadLibraryA(dll.as_ptr());
             if module.is_null() {
@@ -194,9 +272,27 @@ mod run {
             let track_data: BinkGetTrackData = proc(module, "_BinkGetTrackData@8")?;
             let close_track: BinkCloseTrack = proc(module, "_BinkCloseTrack@4")?;
 
-            set_tracks(0, std::ptr::null());
+            if o.sound_system {
+                type BinkSetSoundSystem = unsafe extern "system" fn(*mut c_void, u32) -> i32;
+                let set_system: BinkSetSoundSystem = proc(module, "_BinkSetSoundSystem@8")?;
+                let open_ds = nv_win::GetProcAddress(module, b"_BinkOpenDirectSound@4\0".as_ptr());
+                if o.window {
+                    crate::make_window();
+                }
+                let r = set_system(open_ds, 0);
+                println!("BinkSetSoundSystem(BinkOpenDirectSound, 0) = {r} (window: {})", o.window);
+                if !o.sound {
+                    return Ok(());
+                }
+            } else {
+                set_tracks(0, std::ptr::null());
+            }
             let movie = format!("{}\0", o.movie);
-            let bink = open(movie.as_ptr(), 0);
+            let bink = open(movie.as_ptr(), o.open_flags);
+            let opened = crate::game::counter();
+            if o.start_delay != 0 {
+                nv_win::Sleep(o.start_delay);
+            }
             if bink.is_null() {
                 let e = get_error();
                 let msg = if e.is_null() {
@@ -227,6 +323,23 @@ mod run {
                 fpu_control_word()
             )
             .map_err(|e| e.to_string())?;
+
+            if o.game || o.wait.is_some() {
+                let api = crate::game::Api {
+                    do_frame: proc(module, "_BinkDoFrame@4")?,
+                    next: proc(module, "_BinkNextFrame@4")?,
+                    wait: proc(module, "_BinkWait@4")?,
+                    pause: proc(module, "_BinkPause@8")?,
+                    copy_rect: proc(module, "_BinkCopyToBufferRect@44")?,
+                };
+                match o.wait {
+                    Some(n) => crate::game::wait(&api, bink, &o.out, n, opened, &o.late)?,
+                    None => crate::game::game(&api, bink, &o.out, o.flags, &o.dump, o.count)?,
+                }
+                close(bink);
+                println!("{w}x{h}, {frames} frames; recorded to {}", o.out.display());
+                return Ok(());
+            }
 
             // HBINKTRACK starts Frequency, Bits, Channels, MaxSize.
             let track = match o.audio {
@@ -338,6 +451,11 @@ mod run {
 }
 
 #[cfg(all(windows, target_arch = "x86"))]
+mod game;
+#[cfg(all(windows, target_arch = "x86"))]
+mod dshook;
+
+#[cfg(all(windows, target_arch = "x86"))]
 fn main() {
     if let Err(e) = run::main() {
         eprintln!("nv-bink: {e}");
@@ -349,4 +467,46 @@ fn main() {
 fn main() {
     eprintln!("nv-bink runs only as a 32-bit Windows program (the game's binkw32.dll is 32-bit)");
     std::process::exit(1);
+}
+
+#[cfg(all(windows, target_arch = "x86"))]
+#[link(name = "user32")]
+extern "system" {
+    fn CreateWindowExA(
+        ex: u32,
+        class: *const u8,
+        name: *const u8,
+        style: u32,
+        x: i32,
+        y: i32,
+        w: i32,
+        h: i32,
+        parent: *mut std::ffi::c_void,
+        menu: *mut std::ffi::c_void,
+        instance: *mut std::ffi::c_void,
+        param: *mut std::ffi::c_void,
+    ) -> *mut std::ffi::c_void;
+    fn ShowWindow(window: *mut std::ffi::c_void, cmd: i32) -> i32;
+}
+
+/// A plain top-level window, shown (DirectSound's cooperative level wants one).
+#[cfg(all(windows, target_arch = "x86"))]
+fn make_window() {
+    unsafe {
+        let w = CreateWindowExA(
+            0,
+            b"STATIC\0".as_ptr(),
+            b"nv-bink\0".as_ptr(),
+            0x10cf_0000,
+            0,
+            0,
+            320,
+            240,
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+        );
+        ShowWindow(w, 5);
+    }
 }

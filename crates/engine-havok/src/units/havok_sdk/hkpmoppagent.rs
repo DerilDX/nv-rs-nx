@@ -221,16 +221,18 @@ pub fn hkp_symmetric_agent_linear_cast_mopp_agent_update_shape_collection_filter
 /// A penetration query through a small collector (the engine map has no name), `RET 0x10`
 /// with four words: builds a collector on the stack (vtable `010ce81c`, flag byte 0, the
 /// fourth word at `+8`) and calls `00d315f0(second, first, third, collector)`.
-/// Virtual method: the first word is `this` (`ECX` in the exe), which the body never reads.
-pub fn fn_00d2f3f0(e: &mut Engine, _this: u32, first: u32, second: u32, third: u32, fourth: u32) {
+/// Virtual method: the first word is `this` (`ECX` in the exe); the body leaves `ECX` as it
+/// came, so it is the `this` of `00d315f0`.
+pub fn fn_00d2f3f0(e: &mut Engine, this: u32, first: u32, second: u32, third: u32, fourth: u32) {
     e.with_stack(0xc, |e, collector| {
         let at = collector.addr();
         e.mem.set_u32(at + 8, fourth);
         e.mem.set_u8(at + 4, 0);
         e.mem.set_u32(at, VTABLE_COLLECTOR);
+        // 00d2f41b: `00d315f0` (RET 0x10) is a method; ECX is this function's `this`.
         e.call(
             BV_TREE_GET_PENETRATIONS,
-            &args![second, first, third, collector],
+            &args![this, second, first, third, collector],
         );
     });
 }
@@ -246,10 +248,11 @@ pub fn fn_00d2f3f0(e: &mut Engine, _this: u32, first: u32, second: u32, third: u
 /// `+0x3049` are exchanged, the 16-bit entry at `+0x3040` is exchanged with the entry
 /// `a + b - 1` of that array (`a`, `b` the bytes before the exchange), and when the two bytes
 /// `AND` to 2 the entries at `+0x3042` and `+0x3044` are exchanged.
-/// Virtual method: the first word is `this` (`ECX` in the exe), which the body never reads.
+/// Virtual method: the first word is `this` (`ECX` in the exe); the body leaves `ECX` as it
+/// came, so it is the `this` of `hkpBvTreeAgent::processCollision`.
 pub fn hkp_symmetric_agent_linear_cast_mopp_agent_process_collision(
     e: &mut Engine,
-    _this: u32,
+    this: u32,
     body_a: u32,
     body_b: u32,
     input: u32,
@@ -258,9 +261,10 @@ pub fn hkp_symmetric_agent_linear_cast_mopp_agent_process_collision(
     let out = output.addr();
     let saved = x87_quiet(e.mem.f32(out + 0x3030));
     let mut point = e.mem.u32(out);
+    // 00d31637: `00d302d0` (RET 0x10) reads ECX, this function's `this`.
     e.call(
         BV_TREE_PROCESS_COLLISION,
-        &args![body_b, body_a, input, output],
+        &args![this, body_b, body_a, input, output],
     );
     while point < e.mem.u32(out) {
         let position = load_lanes(e, point);
@@ -643,16 +647,17 @@ mod a06_tests {
                 a[0],
                 a[1],
                 a[2],
-                e.mem.u32(a[3]),
-                u32::from(e.mem.u8(a[3] + 4)),
-                e.mem.u32(a[3] + 8),
+                a[3],
+                e.mem.u32(a[4]),
+                u32::from(e.mem.u8(a[4] + 4)),
+                e.mem.u32(a[4] + 8),
             ]);
             Ret::default()
         });
         e.call(0x00d2f3f0, &args![VCALL_THIS, 1u32, 2u32, 3u32, 0x44u32]);
         assert_eq!(
             *log.borrow(),
-            vec![vec![2, 1, 3, VTABLE_COLLECTOR, 0, 0x44]]
+            vec![vec![VCALL_THIS, 2, 1, 3, VTABLE_COLLECTOR, 0, 0x44]]
         );
     }
 
@@ -677,7 +682,7 @@ mod a06_tests {
         let sink = Rc::clone(&log);
         e.register_double(BV_TREE_PROCESS_COLLISION, move |e, a| {
             sink.borrow_mut().push(a.to_vec());
-            let cursor = e.mem.u32(a[3]);
+            let cursor = e.mem.u32(a[4]);
             for (lane, v) in [1.0f32, 2.0, 3.0, 4.0].into_iter().enumerate() {
                 e.mem.set_f32(cursor + 4 * lane as u32, v);
             }
@@ -690,8 +695,8 @@ mod a06_tests {
             for (lane, v) in [0.0f32, 1.0, 0.0, -1.0].into_iter().enumerate() {
                 e.mem.set_f32(cursor + 0x40 + 4 * lane as u32, v);
             }
-            e.mem.set_u32(a[3], cursor + 0x60);
-            e.mem.set_f32(a[3] + 0x3030, after);
+            e.mem.set_u32(a[4], cursor + 0x60);
+            e.mem.set_f32(a[4] + 0x3030, after);
             Ret::default()
         });
         (e, output, points, log)
@@ -709,7 +714,10 @@ mod a06_tests {
             &args![VCALL_THIS, 0xaau32, 0xbbu32, 0xccu32, output],
         );
         // The base runs with the bodies swapped.
-        assert_eq!(*log.borrow(), vec![vec![0xbb, 0xaa, 0xcc, output]]);
+        assert_eq!(
+            *log.borrow(),
+            vec![vec![VCALL_THIS, 0xbb, 0xaa, 0xcc, output]]
+        );
         assert_eq!(e.mem.u32(output), points + 0x60);
         // Point + distance * normal, and the negated normal.
         assert_eq!(lanes(&e, points), [2.0, 2.0, 3.0, 8.0]);

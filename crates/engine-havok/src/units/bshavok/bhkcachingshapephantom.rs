@@ -360,84 +360,88 @@ pub fn hkp_caching_shape_phantom_ray_cast_ray(
     const SHAPE_INPUT: u32 = 0x10;
     const SHAPE_OUTPUT: u32 = 0x40;
     const HIT_FRACTION: u32 = 0x50;
-    let frame = e.mem.alloc(0x90);
-    e.mem.set_u32(frame + HIT_FRACTION, 1.0f32.to_bits());
-    e.mem.set_u32(frame + 0x54, 0xffff_ffff);
-    e.mem.set_u32(frame + 0x60, 0xffff_ffff);
-    e.mem.set_u32(frame + 0x80, 0);
-    e.mem.set_u32(frame + 0x34, 0);
-    let filter_info = e.get(input, HkpWorldRayCastInput::m_filterInfo);
-    e.mem.set_u32(frame + 0x30, filter_info);
-    if e.get(input, HkpWorldRayCastInput::m_enableShapeCollectionFilter) != 0 {
-        let world = e.get(this, HkpCachingShapePhantom::m_world);
-        let filter = e
-            .get(world.cast::<HkpWorld>(), HkpWorld::m_collisionFilter)
-            .addr();
-        let collection_filter = if filter != 0 { filter + 0x10 } else { 0 };
-        e.mem.set_u32(frame + 0x34, collection_filter);
-    } else {
+    // The exe's frame (`AND ESP,0xfffffff0`, `SUB ESP,0xa4`, three pushes) is 0xb0 bytes from a
+    // 16-byte boundary; `frame` here is its +0x10 (the result byte at +0x17, 00cc289d; the shape
+    // input at +0x20, 00cc2878; its output at +0x50, 00cc2862).
+    e.with_stack(0xb0 + 0x10, |e, raw| {
+        let frame = ((raw.addr() + 0xf) & !0xf) + 0x10;
+        e.mem.set_u32(frame + HIT_FRACTION, 1.0f32.to_bits());
+        e.mem.set_u32(frame + 0x54, 0xffff_ffff);
+        e.mem.set_u32(frame + 0x60, 0xffff_ffff);
+        e.mem.set_u32(frame + 0x80, 0);
         e.mem.set_u32(frame + 0x34, 0);
-    }
-    let mut index = e
-        .get(this, HkpCachingShapePhantom::collisionDetailsSize)
-        .wrapping_sub(1);
-    let mut have_hit = false;
-    while index >= 0 {
-        let details = e
-            .get(this, HkpCachingShapePhantom::collisionDetailsData)
-            .addr();
-        let collidable = e.mem.u32(
-            details
-                .wrapping_add((index as u32).wrapping_mul(8))
-                .wrapping_add(4),
-        );
-        let shape = e.mem.u32(collidable);
-        let collidable = Ptr::<HkpCollidable>::new(collidable);
-        let ray_filter = e.mem.u32(input.addr() + 0x24);
-        let collidable_filter = e.get(collidable, HkpCollidable::m_collisionFilterInfo);
-        if shape != 0
-            && e.call(IS_COLLISION_ENABLED, &args![ray_filter, collidable_filter])
-                .bool()
-        {
-            let transform = e.get(collidable, HkpCollidable::m_motion).addr();
-            let from = into_local_space(e, input.addr(), transform);
-            store_vector(e, frame + SHAPE_INPUT, from);
-            let to = into_local_space(e, input.addr() + 0x10, transform);
-            store_vector(e, frame + SHAPE_INPUT + 0x10, to);
-            e.mem.set_u32(frame + HIT_FRACTION, 1.0f32.to_bits());
-            e.mem.set_u32(frame + 0x5c, 0xffff_ffff);
-            e.mem.set_u32(frame + 0x88, 0);
-            e.mem.set_u32(frame + 0x68, 0xffff_ffff);
-            e.vcall(
-                shape,
-                0x20,
-                &args![frame + RESULT, frame + SHAPE_INPUT, frame + SHAPE_OUTPUT],
+        let filter_info = e.get(input, HkpWorldRayCastInput::m_filterInfo);
+        e.mem.set_u32(frame + 0x30, filter_info);
+        if e.get(input, HkpWorldRayCastInput::m_enableShapeCollectionFilter) != 0 {
+            let world = e.get(this, HkpCachingShapePhantom::m_world);
+            let filter = e
+                .get(world.cast::<HkpWorld>(), HkpWorld::m_collisionFilter)
+                .addr();
+            let collection_filter = if filter != 0 { filter + 0x10 } else { 0 };
+            e.mem.set_u32(frame + 0x34, collection_filter);
+        } else {
+            e.mem.set_u32(frame + 0x34, 0);
+        }
+        let mut index = e
+            .get(this, HkpCachingShapePhantom::collisionDetailsSize)
+            .wrapping_sub(1);
+        let mut have_hit = false;
+        while index >= 0 {
+            let details = e
+                .get(this, HkpCachingShapePhantom::collisionDetailsData)
+                .addr();
+            let collidable = e.mem.u32(
+                details
+                    .wrapping_add((index as u32).wrapping_mul(8))
+                    .wrapping_add(4),
             );
-            if e.mem.u8(frame + RESULT) != 0 {
-                let new_fraction = load_f32(e, frame + HIT_FRACTION);
-                let best = load_f32(e, output.addr() + 0x10);
-                let better = best > new_fraction;
-                if !have_hit || better {
-                    let normal: Vec<u32> = (0..4)
-                        .map(|lane| e.mem.u32(frame + SHAPE_OUTPUT + 4 * lane))
-                        .collect();
-                    e.mem
-                        .set_u32(output.addr() + 0x10, x87_quiet_bits(new_fraction.to_bits()));
-                    have_hit = true;
-                    for (lane, word) in normal.into_iter().enumerate() {
-                        e.mem.set_u32(output.addr() + 4 * lane as u32, word);
+            let shape = e.mem.u32(collidable);
+            let collidable = Ptr::<HkpCollidable>::new(collidable);
+            let ray_filter = e.mem.u32(input.addr() + 0x24);
+            let collidable_filter = e.get(collidable, HkpCollidable::m_collisionFilterInfo);
+            if shape != 0
+                && e.call(IS_COLLISION_ENABLED, &args![ray_filter, collidable_filter])
+                    .bool()
+            {
+                let transform = e.get(collidable, HkpCollidable::m_motion).addr();
+                let from = into_local_space(e, input.addr(), transform);
+                store_vector(e, frame + SHAPE_INPUT, from);
+                let to = into_local_space(e, input.addr() + 0x10, transform);
+                store_vector(e, frame + SHAPE_INPUT + 0x10, to);
+                e.mem.set_u32(frame + HIT_FRACTION, 1.0f32.to_bits());
+                e.mem.set_u32(frame + 0x5c, 0xffff_ffff);
+                e.mem.set_u32(frame + 0x88, 0);
+                e.mem.set_u32(frame + 0x68, 0xffff_ffff);
+                e.vcall(
+                    shape,
+                    0x20,
+                    &args![frame + RESULT, frame + SHAPE_INPUT, frame + SHAPE_OUTPUT],
+                );
+                if e.mem.u8(frame + RESULT) != 0 {
+                    let new_fraction = load_f32(e, frame + HIT_FRACTION);
+                    let best = load_f32(e, output.addr() + 0x10);
+                    let better = best > new_fraction;
+                    if !have_hit || better {
+                        let normal: Vec<u32> = (0..4)
+                            .map(|lane| e.mem.u32(frame + SHAPE_OUTPUT + 4 * lane))
+                            .collect();
+                        e.mem
+                            .set_u32(output.addr() + 0x10, x87_quiet_bits(new_fraction.to_bits()));
+                        have_hit = true;
+                        for (lane, word) in normal.into_iter().enumerate() {
+                            e.mem.set_u32(output.addr() + 4 * lane as u32, word);
+                        }
+                        e.set(
+                            output,
+                            HkpWorldRayCastOutput::m_rootCollidable,
+                            collidable.cast(),
+                        );
                     }
-                    e.set(
-                        output,
-                        HkpWorldRayCastOutput::m_rootCollidable,
-                        collidable.cast(),
-                    );
                 }
             }
+            index = index.wrapping_sub(1);
         }
-        index = index.wrapping_sub(1);
-    }
-    e.mem.free(frame);
+    });
     let root = e.get(output, HkpWorldRayCastOutput::m_rootCollidable);
     if root.addr() != 0 {
         let transform = e.get(root.cast::<HkpCollidable>(), HkpCollidable::m_motion);
@@ -812,6 +816,22 @@ mod tests {
         assert_eq!(e.mem.u32(PROFILE_STREAM + 4), PROFILE_STREAM + 0x20 + 24);
         assert_eq!(e.mem.u32(PROFILE_STREAM + 0x20), RAY_BEGIN_LABEL);
         assert_eq!(e.mem.u32(PROFILE_STREAM + 0x2c), RAY_END_LABEL);
+    }
+
+    #[test]
+    fn hkp_caching_shape_phantom_ray_cast_ray_keeps_its_locals_in_the_aligned_exe_frame() {
+        let mut e = logged_engine();
+        let scene = scene(&mut e, 2);
+        e.call(0x00cc_26c0, &args![scene.this, scene.input, scene.output]);
+        let casts = calls_to(&e, SHAPE_SLOT);
+        assert_eq!(casts.len(), 2);
+        for cast in &casts {
+            // Frame +0x17 (from a 16-byte boundary), +0x20 and +0x50.
+            assert_eq!(cast[1] & 0xf, 7);
+            assert_eq!(cast[2], cast[1] + 9);
+            assert_eq!(cast[3], cast[1] + 0x39);
+            assert_eq!(cast[1], casts[0][1]);
+        }
     }
 
     #[test]

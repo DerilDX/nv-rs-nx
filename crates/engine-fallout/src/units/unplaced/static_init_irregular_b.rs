@@ -1,5 +1,5 @@
 //! `(unplaced)/static_init_irregular_b` (no source unit: the compiler's dynamic initializers),
-//! subsystem `compiler: static init/exit`: 252 dynamic initializers of FalloutNV.exe 1.4.0.525
+//! subsystem `compiler: static init/exit`: 256 dynamic initializers of FalloutNV.exe 1.4.0.525
 //! (the entries `00f9b040` to `00fc7810` of the `_initterm` table `00fdf4a4..010113c0`, the
 //! engine map's "compiler: dynamic initializers") that `research/initgen` refused because their
 //! bodies match none of the table's shapes (docs/ENGINE_CRATE.md, `research/initgen/README.md`),
@@ -21,6 +21,8 @@
 //!   singleton getter `0044f570`, the singleton's virtual function at vtable slot +4 with the
 //!   object, and the object's destructor given to `_atexit`.
 //! - 12 write bit-fields into two adjacent global words (read-modify-write with masks).
+//! - 4 store a `TlsAlloc` index in a global and give its `TlsFree` destructor to `_atexit`
+//!   (Havok's thread-local indexes).
 //! - 46 are straight-line code of constructor calls on globals (with stack arguments, an
 //!   answer kept, or locals' addresses), stores of vtables, flags and words, and `_atexit`.
 //! - single cases: the 16-byte vector table `00fbe090`, the products with a double table
@@ -2175,6 +2177,49 @@ pub fn fn_00fc7810(e: &mut Engine) {
     register_with_singleton(e, 0x0126_fae0, 0x00fd_e4d0);
 }
 
+/// Import slot of KERNEL32 `TlsAlloc` (stdcall, no arguments, the new index in `EAX`).
+const TLS_ALLOC: u32 = 0x00fd_f048;
+
+/// The shape of Havok's four thread-local index initializers: `CALL [TlsAlloc]`, `PUSH
+/// destructor`, `MOV [global],EAX`, `CALL _atexit`, `POP ECX`, `RET`. The destructor (the
+/// `atexit_irregular` unit) passes the global to `TlsFree`.
+fn tls_index(e: &mut Engine, global: u32, destructor: u32) {
+    let index = e.call(TLS_ALLOC, &args![]).u32();
+    e.set_global::<u32>(global, index);
+    e.call(ATEXIT, &args![destructor]);
+}
+
+// Translated from 00fbd610 (disassembled, FalloutNV.exe 1.4.0.525)
+/// The thread-local index of Havok's memory router (`hkMemoryRouter::getInstance`, `00c85750`,
+/// reads it): `TlsAlloc` into `01268108`, its `TlsFree` destructor `00fde150` registered with
+/// `_atexit`.
+pub fn fn_00fbd610(e: &mut Engine) {
+    tls_index(e, 0x0126_8108, 0x00fd_e150);
+}
+
+// Translated from 00fbd8c0 (disassembled, FalloutNV.exe 1.4.0.525)
+/// A Havok thread-local index: `TlsAlloc` into `012681d8`, its `TlsFree` destructor `00fde190`
+/// registered with `_atexit`.
+pub fn fn_00fbd8c0(e: &mut Engine) {
+    tls_index(e, 0x0126_81d8, 0x00fd_e190);
+}
+
+// Translated from 00fbdd80 (disassembled, FalloutNV.exe 1.4.0.525)
+/// The thread-local index of Havok's monitor stream (`hkMonitorStream::init`, `00cb0db0`, sets
+/// it): `TlsAlloc` into `0126835c`, its `TlsFree` destructor `00fde250` registered with
+/// `_atexit`.
+pub fn fn_00fbdd80(e: &mut Engine) {
+    tls_index(e, 0x0126_835c, 0x00fd_e250);
+}
+
+// Translated from 00fbe810 (disassembled, FalloutNV.exe 1.4.0.525)
+/// The thread-local index Havok's job queue and worker threads use (`hkWorkerThreadFunc`,
+/// `00d2cfb0`, sets it): `TlsAlloc` into `012687c8`, its `TlsFree` destructor `00fde270`
+/// registered with `_atexit`.
+pub fn fn_00fbe810(e: &mut Engine) {
+    tls_index(e, 0x0126_87c8, 0x00fd_e270);
+}
+
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
         entry!(0x00f9_b040, fn_00f9b040()),
@@ -2425,7 +2470,11 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00fb_c400, fn_00fbc400()),
         entry!(0x00fb_c4a0, fn_00fbc4a0()),
         entry!(0x00fb_c7c0, fn_00fbc7c0()),
+        entry!(0x00fb_d610, fn_00fbd610()),
+        entry!(0x00fb_d8c0, fn_00fbd8c0()),
+        entry!(0x00fb_dd80, fn_00fbdd80()),
         entry!(0x00fb_e090, fn_00fbe090()),
+        entry!(0x00fb_e810, fn_00fbe810()),
         entry!(0x00fc_76d0, fn_00fc76d0()),
         entry!(0x00fc_7770, fn_00fc7770()),
         entry!(0x00fc_7810, fn_00fc7810()),
@@ -2631,15 +2680,40 @@ mod tests {
     #[test]
     fn every_function_is_registered_once() {
         let funcs = funcs();
-        assert_eq!(funcs.len(), 252);
+        assert_eq!(funcs.len(), 256);
         let mut addrs: Vec<u32> = funcs.iter().map(|(a, _)| *a).collect();
         let sorted = addrs.windows(2).all(|w| w[0] < w[1]);
         assert!(sorted, "ascending and unique");
         addrs.dedup();
-        assert_eq!(addrs.len(), 252);
+        assert_eq!(addrs.len(), 256);
         let e = Engine::new();
         for a in addrs {
             assert!(e.is_translated(a), "{a:08x}");
+        }
+    }
+
+    #[test]
+    fn tls_index_initializers_store_the_index_and_register_tls_free() {
+        for (f, global, destructor) in [
+            (0x00fb_d610, 0x0126_8108, 0x00fd_e150),
+            (0x00fb_d8c0, 0x0126_81d8, 0x00fd_e190),
+            (0x00fb_dd80, 0x0126_835c, 0x00fd_e250),
+            (0x00fb_e810, 0x0126_87c8, 0x00fd_e270),
+        ] {
+            let mut e = Engine::new();
+            e.map(global, 4);
+            e.register(TLS_ALLOC, |_, _| Ret {
+                eax: 7,
+                ..Ret::default()
+            });
+            e.register(ATEXIT, |_, _| Ret::default());
+            let calls = run(&mut e, f);
+            assert_eq!(
+                calls,
+                vec![(TLS_ALLOC, vec![]), (ATEXIT, vec![destructor])],
+                "{f:08x}"
+            );
+            assert_eq!(e.mem.u32(global), 7, "{f:08x}");
         }
     }
 

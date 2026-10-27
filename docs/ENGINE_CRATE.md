@@ -33,7 +33,19 @@ each function belongs to.
 - **Classes**: `layout!` declares a class marker with its PC size and the
   fields used so far (`e.get(p, Class::field)`, `e.set(...)`).
 - **Platform**: the allocator (`MemoryManager::Allocate`/`Deallocate`) is
-  `Mem`'s heap; threads are one thread (`e.tls()` is the TLS block).
+  `Mem`'s heap. The game's threads run under the thread host
+  (`engine_core::thread_host`): each `CreateThread` gets an OS thread used
+  strictly as a coroutine (it holds the engine, a baton, only while it runs;
+  exactly one thread runs at a time), with its own TLS block and call stack
+  in `GameThread` (the per-thread x87 control word goes there too). Switch
+  points are fixed: a wait on an unsignalled event or semaphore, and
+  `Sleep`; the main thread's wait runs the runnable threads in creation
+  order until its object is signalled, a game thread's wait hands back to
+  the main thread, `SetEvent`/`ReleaseSemaphore` wake waiters, and a wait no
+  thread can satisfy stops the run naming the object. So runs are
+  deterministic (for one processor count, which `iNumHWThreads` follows).
+  This avoids unsafe stack switching; it costs an OS thread per game thread
+  and a channel round trip per switch.
   Functions replaced this way are marked
   `// Platform: replaces <addr> (...)`; the ledger counts them as
   `platform`.
@@ -154,8 +166,9 @@ $L scaffold "fallout/ai/processlists.cpp" # create its file (lead)
    - Imported Windows functions (`call dword ptr [0x00fdf0e4]`) are called
      by the address of their import slot: `e.call(0x00fdf0e4, ..)`.
      `units/platform.rs` provides the ones with a Rust stand-in
-     (interlocked operations, critical sections, clocks); report others
-     you need.
+     (interlocked operations, critical sections, clocks, kernel objects,
+     virtual memory, thread-local storage, `GetSystemInfo`,
+     `GetCurrentProcess`); report others you need.
    - A value the code passes in x87 `ST0` (compiler helpers such as
      `_ftol2`, `00ec62c0`) is a leading `f64` argument (two words).
    - A local the game keeps on its stack and passes by address (a scope
@@ -258,9 +271,15 @@ The `host` crate starts the engine for the running game. The viewer calls
 `FalloutNV.exe` next to `Data` (read-only), refuses every build but
 1.4.0.525 with the file and the reason, maps the data sections and runs the
 allocator start-up the probes run (`00401000`, `00aa2230`, `00aa21d0`,
-holder at `011f6118`, `00aa2020`); the rest of `WinMain`'s start-up is not
-reproduced. The startup line reads `Game code: <exe> (1.4.0.525), <n>
-translated functions, allocator started.` The `Host` is a Bevy non-send
+holder at `011f6118`, `00aa2020`: the body of `00866690`, which the memory
+manager's constructor runs in the game); after the static initializers it
+runs `NiInit` (`00aa20b0`, as `main` does at `0086a9f8`, `host::start_ni`)
+once that is translated, through the movement's miss recorder (stage
+`niinit`), so a stop is recorded and start-up goes on. `NiInit` keeps the
+holder already made, and `00aa2020` runs twice in the game too (`00866690`
+and `NiInit`'s `00aa3050`), so nothing is done twice that the game does once.
+The rest of `WinMain`'s start-up is not reproduced. The startup line ends
+with `NiInit: ran` or `NiInit: not run (why)`. The `Host` is a Bevy non-send
 resource (main thread only; the engine is not `Send`).
 
 Nothing runs through it yet (script track step S4): the game's scripts
@@ -308,7 +327,10 @@ vtable, ready, position 0) over an in-memory copy of the parts of the file
 the host supplies, at their real offsets (the record and the 0x18 bytes
 after it, from `esm`); `BSFile::ReadF` (`00b00650`) and its seek (vtable
 +0x14, `00b00590`) are stand-ins that read and move in it, and a read of
-anything not supplied stops loudly. Bridged: `TESFile::OpenTES`
+anything not supplied stops loudly. Both are also translated
+(`bssystem::bsfile`, for the files the game opens itself through the CRT,
+the archives); `host::game_file` routes the two addresses to the stand-ins
+for its in-memory files only (`platform::is_memory_file`). Bridged: `TESFile::OpenTES`
 (`00470c70`, which finds the file, constructs the `BSFile` and reads the
 file's `TES4` header and masters); `host::game_file::GameFile::open`
 constructs the `TESFile` with the game's constructor (no name: it opens
@@ -376,6 +398,83 @@ Not yet: commands (the handlers aren't connected to the world, so
 scripts that call one stay on `crates/script`), stages (`SetStage`/
 `GetStage` need the stage list), and the frame's call site (`00455490` at
 PostSwapProcess).
+
+### The player's movement (Build 43)
+
+The viewer offers each frame's player move to the game's code first
+(`host::player_move`, `Host::move_player`; the viewer's `walk::walk`):
+`PlayerMover::Update` (`009e9e50`, the mover's vtable +0x14) →
+`Actor::Move` (`008a62b0`) → `MobileObject::Move` (`0092f260`) →
+`bhkCharacterController::Move` (`00c73170`) → the proxy, casts, agents and
+shapes. The state it needs is made by the game's own code, in the game's
+order, each stage once (the cell's once per cell): `InitHavokSystem`
+(`00624bf0`); the player as `Main::InitTES` makes it (`operator new`
+0xE50, `PlayerCharacter::PlayerCharacter` `00938180`, `011dea3c`, form id
+0x14; its base `NPC_` 7, `SetObjectReference`, position, angle,
+`InitItem`); the player's cell (`CreateFormOfType`,
+`TESDataHandler::LoadForm`, `InitItem`; its references' base forms first;
+`TESObjectCELL::LoadTempDataFromFile` `00550500`, `Load3D` `00545cf0`, which
+makes the cell's `bhkWorld` in `00552dc0`, and each reference's `Load3D`
+`0056b2d0` and `InitHavok` (vtable +0x1C4, `005768b0`: its collision into the
+cell's world through `bhkWorld::AddObjects`)); then `SetParentCell`, `PlayerCharacter::Load3D` (`0094e1d0`)
+and `MobileObject::InitHavok` (`00930c70`, the controller). Each frame the
+mover's bits are set with `PlayerMover::ForceMoveMode` (`009ea3e0`) and its
+`Update` runs; the player's position (vtable +0x1F4) and the controller's
+`OutVelocity` come back.
+
+Bridged, and said so in the module: the file reading (as for quests); the
+keys (the control handler `0093e860` reads DirectInput; the viewer gives the
+same move bits); a resync of the position after a frame the viewer moved
+itself; each form's `InitItem` right after its load (the game runs them all
+after loading); each reference's `InitHavok` right after its `Load3D` (the
+game calls it when the reference's queued 3D task is unpacked,
+`TaskUnpackFunc` `0087b990`); `InitTES`'s `CastPermanentMagic` left out;
+jumping not connected (a jump frame goes to `crates/physics`).
+
+The loose objects can move by the game's whole Havok world too
+(`--physics engine`; the default `old` keeps `crates/physics`), stepped
+where the game steps it, on AI linear task thread 2. The stage `threads`
+(after `havok` and `player`) sets `iNumHWThreads` from the processor count
+(1 made 2) and runs `AILinearTaskThreadManager::CreateThreads` (`008c7290`)
+as `main` does. Each frame `Host::run_ai_threads`, in the AI stage where the
+viewer stepped its own bodies, stands in for the frame timer (the viewer's
+seconds to `bhkWorld::SetDeltaTime` `00c66760` and to `011dea30`) and runs
+`008c80e0(1)`, `StartThreads` (`008c78c0`) and `WaitForThreads` (`008c7990`)
+as `Main::OnIdle` does: the wait runs threads 1 (`008c7da0`) and 2
+(`008c7f50`) through their stage events, and thread 2 runs
+`TES::UpdateCellAnimations` (`00453550`): the cell's `UpdateManagedNodes`
+(`00551890`, `bhkWorld::Update`, `hkpWorld::stepDeltaTime`) and the
+scene-graph update that copies each moving body's transform to its node.
+The viewer then draws each placed object where its root node has moved; a
+frame that stops (recorded under the stage `world`) goes back to
+`crates/physics`, and a stopped step isn't tried again in that cell.
+
+When a run reaches an untranslated address, `Engine::on_open` records it
+with the nearest caller entered by address (`Engine::call_stack`), the run
+stops, and the viewer moves the player with `crates/physics` for that frame.
+`--movement old` keeps the old path only, `--movement compare` runs both
+(the old one moves you) and `--movement-log FILE` writes both per frame;
+`--movement-missing FILE` writes the addresses reached with counts, stage
+and callers (and the other stops beside it, `FILE.stops.tsv`). Every 5 s the
+viewer prints `Game's movement: ...` with each stage's state.
+`--movement-probe` goes on past each miss with a zero result to list more
+of them (indicative only; it never moves the player). Opt-in headless run:
+
+```sh
+NV_DATA="<...>/Fallout New Vegas/Data" cargo test -p host --release --test live_player_move -- --ignored --nocapture
+```
+
+`NV_MOVE_TRACE=FILE` appends, for each stage that stops, the last 4000 calls
+it returned from (address, argument words, `EAX`; `Engine::trace`): the
+quickest way to see which callee answered wrong before a fault.
+
+State on 2026-10-18: no frame runs on the game's code yet. Havok's base
+system starts (`hkBaseSystem` through `00cbbb10`, its 15 singletons); the
+havok stage stops at `bhkCollisionFilter::InitFlags` (`00c828f0`), and after
+it `NiStream::RegisterLoader` needs the loader map that `NiInit` (`00aa20b0`,
+which `main` calls and the host does not yet) makes through
+`NiStream::_SDMInit`. The player stage stops in the constructor's process
+swap (`00907510`, `00906fb0`).
 
 ### Static initializers
 

@@ -4663,7 +4663,7 @@ fn drop_referenced_item(
 /// the one `rotation` points to, else the actor's (`00430830`), else the
 /// default at `0x011f426c`. The object is made by the game data manager
 /// (the global at `0x011c3f2c`, `004698a0(form, &position, &rotation,
-/// parent cell, 575d70(reference, 0, 0))`); a count above 1 is stored in its
+/// parent cell, 575d70(actor), reference, 0, 0)`); a count above 1 is stored in its
 /// extra data (16 bits) and the reference is told (virtual 0x48 with
 /// 0x400).
 pub fn inventory_changes_drop_item_into_world(
@@ -4727,15 +4727,25 @@ pub fn inventory_changes_drop_item_into_world(
             let word = e.mem.u32(rotation_source + 4 * i);
             e.mem.set_u32(rotation_copy + 4 * i, word);
         }
-        let placed_in = e
-            .call(REFERENCE_WORLD_SPACE, &args![actor, reference, 0u32, 0u32])
-            .u32();
+        // 004c6ef9: `00575d70` takes no stack word (plain RET); the pushed
+        // reference, 0, 0 are the last three words of `004698a0` (RET 0x20).
+        let placed_in = e.call(REFERENCE_WORLD_SPACE, &args![actor]).u32();
         let cell = e.call(REFERENCE_PARENT_CELL, &args![actor]).u32();
         let manager = e.global::<u32>(GAME_DATA_MANAGER_GLOBAL);
         let placed = e
             .call(
                 PLACE_OBJECT,
-                &args![manager, form, pos, rotation_copy, cell, placed_in],
+                &args![
+                    manager,
+                    form,
+                    pos,
+                    rotation_copy,
+                    cell,
+                    placed_in,
+                    reference,
+                    0u32,
+                    0u32
+                ],
             )
             .u32();
         if count > 1 {
@@ -15131,18 +15141,19 @@ mod tests {
         let result = e
             .call(
                 0x004c6dd0,
-                &args![this, actor, item_form, 2i32, 0u32, position, rotation],
+                &args![this, actor, item_form, 2i32, 0x55u32, position, rotation],
             )
             .u32();
         assert_eq!(result, placed);
         assert_eq!(e.mem.f32(scratch), 1.0);
         assert_eq!(e.mem.f32(scratch + 8), 3.0);
         assert_eq!(e.mem.f32(scratch + 0x14), 0.2);
-        let seen: Vec<u32> = (0..7).map(|i| e.mem.u32(scratch + 0x100 + 4 * i)).collect();
+        let seen: Vec<u32> = (0..9).map(|i| e.mem.u32(scratch + 0x100 + 4 * i)).collect();
         assert_eq!(seen[0], 0x7000);
         assert_eq!(seen[1], item_form);
         assert_eq!(seen[4], 0x444);
         assert_eq!(seen[5], 0x333);
+        assert_eq!(seen[6..], [0x55, 0, 0]);
         // The count 2 is stored on the reference's own list and it is told.
         assert_eq!(e.mem.u32(placed + 0x40 + X_COUNT), 2);
         assert_eq!(calls(&e, vcall_address(0x48)), vec![vec![placed, 0x400]]);

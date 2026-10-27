@@ -150,12 +150,12 @@ pub fn effect_item_get_cost(e: &mut Engine, this: Ptr<EffectItem>, actor: Ptr) -
     let mut cost = effect_item_get_raw_cost(e, this);
     if !actor.is_null() {
         let owner = actor.byte_add(0xa4);
-        // The first result is pushed, but 00649180 reads only cost and the
-        // second result; ADD ESP,0xc discards this older pending word.
-        e.call(0x0066_ef20, &args![owner, 11u32]);
+        // 00403faa: the first result is pushed; it is the third word of the cdecl
+        // `00649180` (ADD ESP,0xc), which does not read it.
+        let first = e.call(0x0066_ef20, &args![owner, 11u32]).u32();
         let skill = effect_item_get_associated_skill(e, this);
         let skill_value = e.call(0x0066_ef20, &args![owner, skill]).u32();
-        cost = e.call(0x0064_9180, &args![cost, skill_value]).f32();
+        cost = e.call(0x0064_9180, &args![cost, skill_value, first]).f32();
     }
     let floored = fn_00404040(e, cost);
     fn_00404010(e, floored, 1.0)
@@ -1249,7 +1249,7 @@ mod tests {
         e.register(0x0066_ef20, |_, a| word(if a[1] == 11 { 40 } else { 30 }));
         e.register(0x0070_ec90, |_, _| word(24));
         e.register(0x0064_9180, |_, a| {
-            assert_eq!(a, [2.7f32.to_bits(), 30]);
+            assert_eq!(a, [2.7f32.to_bits(), 30, 40]);
             float(0.8)
         });
         assert_eq!(effect_item_get_cost(&mut e, item, actor), 1.0);

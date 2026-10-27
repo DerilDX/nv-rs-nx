@@ -336,13 +336,18 @@ pub fn bhk_convex_transform_shape_link_object(e: &mut Engine, this: Ptr, stream:
 // Translated from 00cced20 (decompiled, FalloutNV.exe 1.4.0.525)
 /// `bhkConvexTransformShape::RegisterStreamables` (Ghidra name): registers the child's Havok
 /// object through its virtual slot `0x54` with the stream, when there is one; then
-/// `NiObject::RegisterStreamables` (through `00aa0ad0`).
-pub fn bhk_convex_transform_shape_register_streamables(e: &mut Engine, this: Ptr, stream: u32) {
+/// `NiObject::RegisterStreamables` (through `00aa0ad0`), whose `AL` it answers: the exe ends on
+/// that call, and `RegisterStreamables` is `bool` in the Xbox PDB.
+pub fn bhk_convex_transform_shape_register_streamables(
+    e: &mut Engine,
+    this: Ptr,
+    stream: u32,
+) -> bool {
     let child = child_object(e, this);
     if child != 0 {
         e.vcall(child, 0x54, &args![stream]);
     }
-    e.call(REGISTER_STREAMABLES, &args![this, stream]);
+    e.call(REGISTER_STREAMABLES, &args![this, stream]).bool()
 }
 
 // Translated from 00cced60 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -614,7 +619,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00ccecc0, bhk_convex_transform_shape_link_object(Ptr, u32)),
         entry!(
             0x00cced20,
-            bhk_convex_transform_shape_register_streamables(Ptr, u32)
+            bhk_convex_transform_shape_register_streamables(Ptr, u32) -> bool
         ),
         entry!(0x00cced60, bhk_convex_transform_shape_can_share(Ptr, u32) -> bool),
         entry!(0x00cceda0, bhk_convex_transform_shape_create_clone(Ptr, u32) -> Ptr),
@@ -1052,6 +1057,18 @@ mod tests {
         e.call_log = Some(vec![]);
         e.call(0x00cced20, &args![this, 0x6000u32]);
         assert_eq!(order(&e), vec![0x00cced20, REGISTER_STREAMABLES]);
+    }
+
+    #[test]
+    fn register_streamables_answers_the_base_al() {
+        let mut e = Engine::new();
+        quiet(&mut e, &[0x0900_0160]);
+        e.register(REGISTER_STREAMABLES, |_, _| 0x0000_0101u32.into_ret());
+        let child = object(&mut e, &[(0x54, 0x0900_0160)]);
+        let (this, _, _) = shape(&mut e, child);
+        assert!(e.call(0x00cced20, &args![this, 0x6000u32]).bool());
+        e.register(REGISTER_STREAMABLES, |_, _| 0x0000_0100u32.into_ret());
+        assert!(!e.call(0x00cced20, &args![this, 0x6000u32]).bool());
     }
 
     #[test]

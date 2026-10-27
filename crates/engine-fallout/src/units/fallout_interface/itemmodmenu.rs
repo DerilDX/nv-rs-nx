@@ -1014,7 +1014,10 @@ pub fn item_mod_menu_init_item_mod_menu(e: &mut Engine, item: u32, flag: u8) {
         let object = e.call(ITEM_OBJECT, &args![mod_item(e)]).u32();
         let armor = e.call(ARMOR_VALUE, &args![object]).f64();
         let armor = ftol(e, armor);
-        let rating = e.call(CALC_ARMOR_RATING, &args![armor]).f64();
+        // 007848f1: the cdecl `00646360` takes (armour, ratio); its second word is the
+        // ratio pushed at 007848d2 (ADD ESP,4 pops only the first, the slot is reused
+        // for `00476b20`).
+        let rating = e.call(CALC_ARMOR_RATING, &args![armor, ratio]).f64();
         let rounded = e.call(HEALTH_ROUND, &args![x87_store32(rating)]).f64();
         let rating = ftol(e, rounded);
         let trait_id = e.global::<u32>(value_trait);
@@ -1035,11 +1038,11 @@ pub fn item_mod_menu_init_item_mod_menu(e: &mut Engine, item: u32, flag: u8) {
     );
     e.vcall(me(e) + MOD_LIST, 0x20, &args![0x0078_3810u32]);
     if item != 0 && e.call(GAMEPAD_IN_USE, &args![]).bool() {
-        let first = e
-            .vcall(me(e) + MOD_LIST, 0x14, &args![1u32, 0u32, 0xfc3u32, 1u32])
-            .u32();
+        // 007849ca: the list's +0x14 (`007a30a0`, RET 8) takes the 1 and 0 pushed last;
+        // the 0xfc3 and 1 pushed first are the last two words of `00715860` (RET 0xc).
+        let first = e.vcall(me(e) + MOD_LIST, 0x14, &args![1u32, 0u32]).u32();
         let manager = e.call(INTERFACE_SINGLETON, &args![]).u32();
-        e.call(SET_FOCUS_TARGET, &args![manager, first]);
+        e.call(SET_FOCUS_TARGET, &args![manager, first, 0xfc3u32, 1u32]);
     }
     let highlighted = e.vcall(me(e) + MOD_LIST, 4, &args![]).u32();
     e.vcall(me(e), 0x10, &args![0xfu32, highlighted]);
@@ -1694,7 +1697,10 @@ mod n054_tests {
             calls_to(&e, SET_FLOAT_TRAIT),
             vec![vec![0x110, 0x1004, 0.5f32.to_bits(), 1]]
         );
-        assert_eq!(calls_to(&e, CALC_ARMOR_RATING), vec![vec![12]]);
+        assert_eq!(
+            calls_to(&e, CALC_ARMOR_RATING),
+            vec![vec![12, 0.5f32.to_bits()]]
+        );
         let value = e.global::<u32>(TRAIT_FROM_NAME_0106ED18);
         assert_eq!(
             calls_to(&e, SET_TRAIT_FROM_INT),

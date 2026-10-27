@@ -2362,6 +2362,9 @@ mod tests {
     #[should_panic(expected = "CRT invalid parameter")]
     fn the_short_iterator_advance_checks_the_end() {
         let mut e = engine();
+        // `_invalid_parameter_noinfo` reports through 00ec7c30, which ends the process in
+        // the exe (Watson); the double stops the test there.
+        e.register(0x00ec_7c30, |_, _| panic!("CRT invalid parameter"));
         let v = vector(&mut e, &[1, 2, 3, 4], 2, 0);
         let (proxy, first) = (e.mem.u32(v), first_of(&e, v));
         let iterator = e.mem.alloc(8);

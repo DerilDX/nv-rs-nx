@@ -478,7 +478,9 @@ pub fn hk_free_list_memory_system_print_statistics(e: &mut Engine, this: Ptr, st
                 e.mem.set_u32(array + 4, size.wrapping_add(1));
             }
         }
-        e.call(MEMORY_SYSTEM_PRINT, &args![this, stream, input]);
+        // 00cd0c37: `00cbc220` is stdcall (RET 8) and does not read the ECX (this) the
+        // caller sets.
+        e.call(MEMORY_SYSTEM_PRINT, &args![stream, input]);
         hk_memory_system_print_statistics_input_destructor(e, input);
     });
 }
@@ -1143,21 +1145,23 @@ mod tests {
             e.mem.set_u32(a[1] + 8, 4);
             Ret::default()
         });
-        e.register(MEMORY_SYSTEM_PRINT, |e, a| {
-            // The input as printed: the word at +0xb08, 2 and 2 elements, the soft limit.
-            assert_eq!(e.mem.u32(a[2]), 0x5555);
-            assert_eq!(e.mem.u32(a[2] + 8), 2);
-            assert_eq!(e.mem.u32(a[2] + 0x14), 2);
-            assert_eq!(e.mem.u32(a[2] + 0x20), 0x3333);
-            let first = e.mem.u32(a[2] + 4);
-            assert_eq!(e.mem.u32(first), a[0] + 0xc6c);
-            assert_eq!(e.mem.u32(first + 4), a[0] + 0xc6c + 3 * 0x138);
-            let second = e.mem.u32(a[2] + 0x10);
+        let system = zeroed_system(&mut e);
+        e.register_double(MEMORY_SYSTEM_PRINT, move |e, a| {
+            // `(stream, input)`: the input as printed: the word at +0xb08, 2 and 2 elements,
+            // the soft limit.
+            assert_eq!((a.len(), a[0]), (2, 0x7000));
+            assert_eq!(e.mem.u32(a[1]), 0x5555);
+            assert_eq!(e.mem.u32(a[1] + 8), 2);
+            assert_eq!(e.mem.u32(a[1] + 0x14), 2);
+            assert_eq!(e.mem.u32(a[1] + 0x20), 0x3333);
+            let first = e.mem.u32(a[1] + 4);
+            assert_eq!(e.mem.u32(first), system + 0xc6c);
+            assert_eq!(e.mem.u32(first + 4), system + 0xc6c + 3 * 0x138);
+            let second = e.mem.u32(a[1] + 0x10);
             assert_eq!(e.mem.u32(second), 0xaaaa);
             assert_eq!(e.mem.u32(second + 4), 0xbbbb);
             Ret::default()
         });
-        let system = zeroed_system(&mut e);
         e.mem.set_u32(system + 0xb08, 0x5555);
         e.mem.set_u32(system + 0x1c, LIST_VTABLE);
         vtable_with(&mut e, LIST_VTABLE, &[(0x50, TARGET_B)]);

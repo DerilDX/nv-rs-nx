@@ -188,7 +188,7 @@ fn main() {
     // FalloutNV.exe, read from the same installation as Data: any build but
     // 1.4.0.525 is refused here, with the reason (the maintainer's decision,
     // 2026-10-13). Started now, it doesn't run anything yet.
-    let game_code = match host::Host::start(&data) {
+    let mut game_code = match host::Host::start(&data) {
         Ok(host) => host,
         Err(e) => {
             eprintln!("error: {e}");
@@ -196,6 +196,20 @@ fn main() {
         }
     };
     println!("{}", game_code.describe());
+    // `--movement-probe`: the movement code goes on past untranslated
+    // functions to list more of them (`host::player_move`).
+    game_code.movement.probe = args.movement_probe;
+    let movement = match walk::Movement::new(
+        args.movement,
+        args.movement_log.as_deref(),
+        args.movement_missing.clone(),
+    ) {
+        Ok(m) => m,
+        Err(e) => {
+            eprintln!("error: --movement-log: {e}");
+            std::process::exit(1);
+        }
+    };
     println!("Loading {} from {} ...", args.cell, data.display());
     let started = std::time::Instant::now();
     let game = match Game::open(&data, &args.options) {
@@ -442,6 +456,8 @@ fn main() {
         })
         .insert_resource(hud::ShowHud(args.hud))
         .insert_resource(ai::FrozenAi(args.freeze_ai))
+        .insert_resource(movement)
+        .insert_resource(clutter::EngineWorld::new(args.physics))
         .insert_resource(Background(args.background))
         .insert_resource(background::UserWindow(if args.background {
             user_window

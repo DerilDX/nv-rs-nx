@@ -816,9 +816,52 @@ mod n068_tests {
         (found, e.mem.u32(this + VALUE))
     }
 
+    /// The C runtime's "C" locale as the image holds it, for the real `atol`: the initial
+    /// locale object (`011c2400`) points at a locale information block with `mb_cur_max` 1
+    /// (+0xAC) and the C character class table (+0xC8); `__locale_changed` (`0126fdf4`) is 0.
+    fn c_locale(e: &mut Engine) {
+        e.map(0x011c_2000, 0x1000);
+        e.map(0x0126_f000, 0x1000);
+        e.mem.set_u32(0x0126_fdf4, 0);
+        let table = e.mem.alloc(0x200);
+        for c in 0..=255u8 {
+            let mut bits = 0u16;
+            if c.is_ascii_uppercase() {
+                bits |= 0x101;
+            }
+            if c.is_ascii_lowercase() {
+                bits |= 0x102;
+            }
+            if c.is_ascii_digit() {
+                bits |= 4;
+            }
+            if c == b' ' || (9..=13).contains(&c) {
+                bits |= 8;
+            }
+            if c.is_ascii_punctuation() {
+                bits |= 0x10;
+            }
+            if c < 0x20 || c == 0x7f {
+                bits |= 0x20;
+            }
+            if c == b' ' {
+                bits |= 0x40;
+            }
+            if c.is_ascii_hexdigit() {
+                bits |= 0x80;
+            }
+            e.mem.set_u16(table + u32::from(c) * 2, bits);
+        }
+        let info = e.mem.alloc(0xd8);
+        e.mem.set_u32(info + 0xac, 1);
+        e.mem.set_u32(info + 0xc8, table);
+        e.mem.set_u32(0x011c_2400, info);
+    }
+
     #[test]
     fn parse_name_for_value_reads_the_trailing_number() {
         let mut e = Engine::new();
+        c_locale(&mut e);
         assert_eq!(parse(&mut e, b"Node42"), (true, 42));
         assert_eq!(parse(&mut e, b"Node#7"), (true, 0));
         assert_eq!(parse(&mut e, b"A@12"), (true, 0));

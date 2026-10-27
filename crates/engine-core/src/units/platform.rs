@@ -4,6 +4,27 @@
 #[allow(unused_imports)]
 use crate::prelude::*;
 
+pub mod bink;
+pub mod d3d9;
+pub mod d3d9device;
+pub mod d3d9resource;
+pub mod d3dx;
+pub mod dinput;
+pub mod dshow;
+pub mod dsound;
+pub mod files;
+pub mod loader;
+pub mod mixer;
+pub mod mmio;
+pub mod nls;
+pub mod nvapi;
+pub mod process;
+pub mod sound_out;
+pub mod time;
+pub mod vorbisfile;
+pub mod window;
+pub mod zone;
+
 /// The `MemoryManager` singleton (`011f6238`); [`get_memory_manager`]
 /// returns its address.
 pub const MEMORY_MANAGER: u32 = 0x011f_6238;
@@ -23,14 +44,20 @@ pub fn operator_delete(e: &mut Engine, block: Ptr) {
 
 // Platform: replaces 00aa3e40 (MemoryManager::Allocate (Xbox PDB), FalloutNV.exe 1.4.0.525)
 /// Allocates from [`crate::Mem`]'s heap instead of the game's pools.
-/// Blocks are 8-byte aligned and zero-filled.
+/// Blocks are 8-byte aligned and zero-filled. With no pools, every block is one the game's
+/// manager would hand out from the CRT heap (its `00aa4290` is `_malloc`), so it is a CRT
+/// block for `_msize` and `realloc` (`MemoryManager`'s reallocation `00aa4150` sends a block
+/// no pool knows to `realloc`).
 pub fn memory_manager_allocate(e: &mut Engine, _this: Ptr, size: u32) -> Ptr {
-    Ptr::new(e.mem.alloc(size))
+    let block = e.mem.alloc(size);
+    e.kernel.crt_block_sizes.insert(block, size.max(1));
+    Ptr::new(block)
 }
 
 // Platform: replaces 00aa4060 (MemoryManager::Deallocate (Xbox PDB), FalloutNV.exe 1.4.0.525)
 /// Frees a block from [`memory_manager_allocate`]; null does nothing.
 pub fn memory_manager_deallocate(e: &mut Engine, _this: Ptr, block: Ptr) {
+    e.kernel.crt_block_sizes.remove(&block.addr());
     e.mem.free(block.addr());
 }
 
@@ -141,6 +168,90 @@ pub fn fn_00af2f20(e: &mut Engine, this: Ptr) {
     e.mem.set_u32(this.addr(), SAVE_DATA_UTILITY_VTABLE);
 }
 
+/// `BSNetworkSystemUtility` (`BSSystemUtilities`): the instance pointer (`011f7270`, null until
+/// the first [`bs_network_system_utility_q_instance`]).
+const NETWORK_UTILITY_INSTANCE: u32 = 0x011f_7270;
+
+// Translated from 00af2c90 (disassembled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 00af2c90 - the SEH frame (FS:[0] handler 00f2300b, state -1/0 around the constructor call) is not translated.
+/// `BSNetworkSystemUtility::QInstance` (engine map): when the pointer at `011f7270` is null, an
+/// 8-byte block from the memory manager (`00aa3e40` on `011f6238`) constructed by
+/// [`fn_00af2d40`] (null when the allocation fails) is stored there; answers the pointer.
+pub fn bs_network_system_utility_q_instance(e: &mut Engine) -> Ptr {
+    if e.mem.u32(NETWORK_UTILITY_INSTANCE) == 0 {
+        let block = e.call(0x00aa_3e40, &args![MEMORY_MANAGER, 8u32]).u32();
+        let made = if block != 0 {
+            fn_00af2d40(e, Ptr::new(block)).addr()
+        } else {
+            0
+        };
+        e.mem.set_u32(NETWORK_UTILITY_INSTANCE, made);
+    }
+    Ptr::new(e.mem.u32(NETWORK_UTILITY_INSTANCE))
+}
+
+// Translated from 00af2d40 (disassembled, FalloutNV.exe 1.4.0.525)
+/// The `BSNetworkSystemUtility` constructor (`thiscall`, plain `RET`; the map gives no name):
+/// the byte at +0 and the word at +4 cleared; answers `this`.
+pub fn fn_00af2d40(e: &mut Engine, this: Ptr) -> Ptr {
+    e.mem.set_u8(this.addr(), 0);
+    e.mem.set_u32(this.addr() + 4, 0);
+    this
+}
+
+// Translated from 00af2d70 (disassembled, FalloutNV.exe 1.4.0.525)
+/// Sets the `BSNetworkSystemUtility`'s callback (`thiscall`, `RET 4`; the map gives no name):
+/// stores it at +4 and, when it is not null, calls it at once (cdecl) with 0 and whether the
+/// byte at +0 is nonzero.
+pub fn fn_00af2d70(e: &mut Engine, this: Ptr, callback: u32) {
+    e.mem.set_u32(this.addr() + 4, callback);
+    if callback != 0 {
+        let on = u32::from(e.mem.u8(this.addr()) != 0);
+        e.call(callback, &args![0u32, on]);
+    }
+}
+
+/// `BSMsgDialogSystemUtility` singleton (`BSSystemUtilities`): its storage in `.data`
+/// (`011f72ec`, 8 bytes), the function-local static's guard word (`011f72f4`, bit 0 =
+/// constructed), its vtable (`010a42cc`) and its `atexit` destructor stub (`00fdc310`).
+const MSG_DIALOG_UTILITY: u32 = 0x011f_72ec;
+const MSG_DIALOG_UTILITY_GUARD: u32 = 0x011f_72f4;
+const MSG_DIALOG_UTILITY_VTABLE: u32 = 0x010a_42cc;
+const MSG_DIALOG_UTILITY_ATEXIT: u32 = 0x00fd_c310;
+
+// Translated from 00af3020 (disassembled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 00af3020 - the SEH frame (FS:[0] handler 00f2306e, state -1/0 around the constructor call) is not translated.
+/// The `BSMsgDialogSystemUtility` singleton getter (the map gives no name; the same
+/// `_Immortalize` shape as [`bs_system_utility_q_instance`]): the first call sets bit 0 of the
+/// guard word `011f72f4`, constructs the object at `011f72ec` with [`fn_00af33f0`] and
+/// registers its destructor stub `00fdc310` with `_atexit`; every call returns `011f72ec`.
+pub fn fn_00af3020(e: &mut Engine) -> Ptr {
+    let guard = e.mem.u32(MSG_DIALOG_UTILITY_GUARD);
+    if guard & 1 == 0 {
+        e.mem.set_u32(MSG_DIALOG_UTILITY_GUARD, guard | 1);
+        fn_00af33f0(e, Ptr::new(MSG_DIALOG_UTILITY));
+        e.call(ATEXIT, &args![Ptr::<()>::new(MSG_DIALOG_UTILITY_ATEXIT)]);
+    }
+    Ptr::new(MSG_DIALOG_UTILITY)
+}
+
+// Translated from 00af33f0 (disassembled, FalloutNV.exe 1.4.0.525)
+/// The `BSMsgDialogSystemUtility` constructor (`thiscall`, plain `RET`; the map gives no name):
+/// the vtable `010a42cc` at +0, the word at +4 cleared; answers `this`.
+pub fn fn_00af33f0(e: &mut Engine, this: Ptr) -> Ptr {
+    e.mem.set_u32(this.addr(), MSG_DIALOG_UTILITY_VTABLE);
+    e.mem.set_u32(this.addr() + 4, 0);
+    this
+}
+
+// Translated from 008526c0 (disassembled, FalloutNV.exe 1.4.0.525)
+/// `BSMsgDialogSystemUtility::QInstance` (engine map; `BSSystemUtilities/
+/// bsmsgdialogsystemutility_xenon.cpp`, `thiscall` with `ECX` unused, plain `RET`): answers
+/// [`fn_00af3020`]'s singleton.
+pub fn bs_msg_dialog_system_utility_q_instance(e: &mut Engine, _this: Ptr) -> Ptr {
+    e.call_as(0x00af_3020, &args![])
+}
+
 // ---- Files ----------------------------------------------------------------------
 
 /// `BSFile` (Xbox PDB, `BSSystem/bsfile_xenon.cpp`, platform): the game's
@@ -191,7 +302,22 @@ impl MemoryFile {
 /// after a buffered read: an object with the game's `BSFile` vtable, ready
 /// (+0x2C), at position 0. Its reads and seeks go through [`bsfile_read_f`]
 /// and [`bsfile_seek`]; supply its bytes with [`supply_file_bytes`].
+///
+/// `BSFile::ReadF` (`00b00650`) and the seek (`00b00590`) are translated in `engine-bs`
+/// (`bssystem::bsfile`) for the game's real files. An engine without them (this crate's own
+/// tests) gets [`bsfile_read_f`] and [`bsfile_seek`] registered there here; with them, the
+/// program that makes memory files routes those two addresses to the stand-ins for the files
+/// [`is_memory_file`] names (the host's `game_file` does).
 pub fn open_memory_file(e: &mut Engine, name: &str, size: u32) -> u32 {
+    if !e.is_translated(0x00b0_0650) {
+        e.register(
+            0x00b0_0650,
+            entry!(0, bsfile_read_f(Ptr, Ptr, u32) -> u32).1,
+        );
+    }
+    if !e.is_translated(0x00b0_0590) {
+        e.register(0x00b0_0590, entry!(0, bsfile_seek(Ptr, i32, i32)).1);
+    }
     let file = e.mem.alloc(BSFILE_SIZE);
     e.mem.set_u32(file, BSFILE_VTABLE);
     e.mem.set_u8(file + BSFILE_READY, 1);
@@ -206,6 +332,11 @@ pub fn open_memory_file(e: &mut Engine, name: &str, size: u32) -> u32 {
         },
     );
     file
+}
+
+/// Whether `file` is a `BSFile` [`open_memory_file`] made.
+pub fn is_memory_file(e: &Engine, file: u32) -> bool {
+    e.kernel.files.contains_key(&file)
 }
 
 /// Supplies `bytes` of the in-memory file behind `file`, at `offset`.
@@ -274,17 +405,56 @@ pub fn bsfile_seek(e: &mut Engine, this: Ptr, offset: i32, whence: i32) {
     }
 }
 
+/// The import slots of `WaitForSingleObject` and `ReleaseSemaphore` (KERNEL32), and the
+/// game's counter helpers `004019a0` (`InterlockedDecrement` of its word) and `0040b460`
+/// (`InterlockedIncrement` of its word), cdecl.
+const SLOT_WAIT_FOR_SINGLE_OBJECT: u32 = 0x00fd_f1c8;
+const SLOT_RELEASE_SEMAPHORE: u32 = 0x00fd_f1b4;
+const COUNT_DOWN: u32 = 0x0040_19a0;
+const COUNT_UP: u32 = 0x0040_b460;
+
+// Platform: replaces 004424e0 (WaitForSingleObject (engine map, XAPILIB/waitforsingleobject.c), FalloutNV.exe 1.4.0.525)
+/// The game's counted semaphore's wait (`thiscall`, no stack words; the record: its count
+/// word at +0, the semaphore handle at +4): `WaitForSingleObject(handle, INFINITE)`, then
+/// `004019a0(this)` counts it down. As the exe's code, from its disassembly.
+pub fn counted_semaphore_wait(e: &mut Engine, this: Ptr) -> u32 {
+    let handle = e.mem.u32(this.addr() + 4);
+    e.call(SLOT_WAIT_FOR_SINGLE_OBJECT, &args![handle, 0xffff_ffffu32]);
+    // The exe ends on this call: its `EAX` is the answer (00442510 passes it on).
+    e.call(COUNT_DOWN, &args![this]).u32()
+}
+
+// Platform: replaces 00442550 (ReleaseSemaphore (engine map, XAPILIB/synch.c), FalloutNV.exe 1.4.0.525)
+/// The game's counted semaphore's release (`thiscall`, no stack words; the record as for
+/// [`counted_semaphore_wait`]): `ReleaseSemaphore(handle, 1, NULL)`, then `0040b460(this)`
+/// counts it up. As the exe's code, from its disassembly.
+pub fn counted_semaphore_release(e: &mut Engine, this: Ptr) -> u32 {
+    let handle = e.mem.u32(this.addr() + 4);
+    e.call(SLOT_RELEASE_SEMAPHORE, &args![handle, 1u32, 0u32]);
+    // The exe ends on this call: its `EAX` is the answer.
+    e.call(COUNT_UP, &args![this]).u32()
+}
+
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
-        entry!(0x00b00650, bsfile_read_f(Ptr, Ptr, u32) -> u32),
-        entry!(0x00b00590, bsfile_seek(Ptr, i32, i32)),
+        entry!(0x00ed_193c, d3d9::cpu_id_flag_test() -> u32),
+        entry!(0x00ed_1951, d3d9::cpuid(u32, Ptr)),
+        entry!(0x00ed_1964, d3d9::cpuid(u32, Ptr)),
+        entry!(0x0044_24e0, counted_semaphore_wait(Ptr) -> u32),
+        entry!(0x0044_2550, counted_semaphore_release(Ptr) -> u32),
         entry!(0x00401020, get_memory_manager() -> Ptr),
         entry!(0x00401030, operator_delete(Ptr)),
         entry!(0x00af2640, bs_system_utility_q_instance() -> Ptr),
+        entry!(0x00af2c90, bs_network_system_utility_q_instance() -> Ptr),
+        entry!(0x00af2d40, fn_00af2d40(Ptr) -> Ptr),
+        entry!(0x00af2d70, fn_00af2d70(Ptr, u32)),
         entry!(0x00af30a0, fn_00af30a0(Ptr) -> Ptr),
         entry!(0x00af2e50, bs_save_data_system_utility_instance() -> Ptr),
         entry!(0x00af2ed0, fn_00af2ed0(Ptr) -> Ptr),
         entry!(0x00af2f20, fn_00af2f20(Ptr)),
+        entry!(0x00af_3020, fn_00af3020() -> Ptr),
+        entry!(0x00af_33f0, fn_00af33f0(Ptr) -> Ptr),
+        entry!(0x0085_26c0, bs_msg_dialog_system_utility_q_instance(Ptr) -> Ptr),
         entry!(0x00aa3e40, memory_manager_allocate(Ptr, u32) -> Ptr),
         entry!(0x00aa4060, memory_manager_deallocate(Ptr, Ptr)),
     ]
@@ -333,29 +503,462 @@ fn interlocked_compare_exchange(e: &mut Engine, target: Ptr, exchange: i32, comp
     old
 }
 
-// Platform: replaces KERNEL32.DLL critical sections (imports): one thread.
-fn critical_section_nop(_e: &mut Engine, _section: Ptr) {}
+// Platform: replaces KERNEL32.DLL critical sections (imports)
+// A critical section belongs to one thread at a time, as Windows has it: each is a mutex
+// kernel object of this table (by the section's address; `RTL_CRITICAL_SECTION` itself is left
+// as the game made it). Entering one another thread holds is a switch point (the thread waits
+// as on an unsignalled object until the owner leaves); the owner may enter again (counted).
+// Why it matters here: the IO thread holds an archive's lock across a seek and a read while
+// the main thread reads the same archive; without the lock the reads interleaved (p112).
+
+/// The mutex standing for the critical section at `section` (made on first use).
+fn critical_section_mutex(e: &mut Engine, section: Ptr) -> u32 {
+    if let Some(&handle) = e.kernel.critical_sections.get(&section.addr()) {
+        return handle;
+    }
+    let handle = e.kernel.insert(KernelObject::Mutex {
+        name: Vec::new(),
+        owner: 0,
+        count: 0,
+    });
+    e.kernel.critical_sections.insert(section.addr(), handle);
+    handle
+}
+
+// Platform: replaces KERNEL32.DLL InitializeCriticalSection and DeleteCriticalSection (imports)
+/// Makes the section new (unowned) / forgets it.
+fn critical_section_reset(e: &mut Engine, section: Ptr) {
+    if let Some(handle) = e.kernel.critical_sections.remove(&section.addr()) {
+        e.kernel.objects.remove(&handle);
+    }
+}
+
+// Platform: replaces KERNEL32.DLL EnterCriticalSection (import)
+/// Takes the section for the running thread, waiting (a switch point) while another holds it.
+fn enter_critical_section(e: &mut Engine, section: Ptr) {
+    let handle = critical_section_mutex(e, section);
+    wait_for_single_object(e, handle, INFINITE);
+}
+
+// Platform: replaces KERNEL32.DLL LeaveCriticalSection (import)
+/// Counts the owner's hold down; at 0 the section is free and its waiters may go on.
+fn leave_critical_section(e: &mut Engine, section: Ptr) {
+    let Some(&handle) = e.kernel.critical_sections.get(&section.addr()) else {
+        return;
+    };
+    let freed = match e.kernel.objects.get_mut(&handle) {
+        Some(KernelObject::Mutex { owner, count, .. }) if *count > 0 => {
+            *count -= 1;
+            if *count == 0 {
+                *owner = 0;
+                true
+            } else {
+                false
+            }
+        }
+        _ => false,
+    };
+    if freed {
+        crate::thread_host::signal(e);
+    }
+}
 
 // Platform: replaces KERNEL32.DLL TryEnterCriticalSection (import)
-fn try_enter_critical_section(_e: &mut Engine, _section: Ptr) -> i32 {
+/// Takes the section when it is free or the running thread's (1), else 0 without waiting.
+fn try_enter_critical_section(e: &mut Engine, section: Ptr) -> i32 {
+    let handle = critical_section_mutex(e, section);
+    if signalled(e, handle) {
+        take(e, handle);
+        1
+    } else {
+        0
+    }
+}
+
+// Platform: replaces OLE32.DLL CoInitializeEx (import)
+/// `CoInitializeEx(reserved, mode)` (the documented answers): COM on the running thread in that
+/// concurrency mode, `S_OK` the first time on a thread, `S_FALSE` again in the same mode,
+/// `RPC_E_CHANGED_MODE` in another; a reserved word other than null is `E_INVALIDARG`. COM
+/// itself is not provided beyond this (`CoCreateInstance` stops).
+fn co_initialize_ex(e: &mut Engine, reserved: u32, mode: u32) -> u32 {
+    if reserved != 0 {
+        return 0x8007_0057;
+    }
+    let thread = crate::thread_host::current_id(e);
+    match e.kernel.com_threads.get(&thread) {
+        None => {
+            e.kernel.com_threads.insert(thread, mode);
+            0
+        }
+        Some(&m) if m == mode => 1,
+        Some(_) => 0x8001_0106,
+    }
+}
+
+// Platform: replaces OLE32.DLL CoUninitialize (import)
+/// Ends the running thread's COM (what `CoInitializeEx` began).
+fn co_uninitialize(e: &mut Engine) {
+    let thread = crate::thread_host::current_id(e);
+    e.kernel.com_threads.remove(&thread);
+}
+
+// Platform: replaces OLE32.DLL CoTaskMemAlloc (import)
+/// A block of `size` bytes from the platform's heap (COM's task allocator); 0 when it cannot
+/// be had. A size of 0 still gives a block, as the task allocator does.
+fn co_task_mem_alloc(e: &mut Engine, size: u32) -> u32 {
+    e.mem.alloc(size.max(1))
+}
+
+// Platform: replaces OLE32.DLL CoTaskMemFree (import)
+/// Frees a block from [`co_task_mem_alloc`]; null is allowed.
+fn co_task_mem_free(e: &mut Engine, block: Ptr) {
+    e.mem.free(block.addr());
+}
+
+// Platform: replaces OLE32.DLL CoFreeUnusedLibraries (import)
+/// No COM servers are loaded from DLLs here, so there is nothing to unload.
+fn co_free_unused_libraries(_e: &mut Engine) {}
+
+// Platform: replaces KERNEL32.DLL InitializeCriticalSectionAndSpinCount (import)
+fn initialize_critical_section_and_spin_count(e: &mut Engine, section: Ptr, _spin: u32) -> i32 {
+    critical_section_reset(e, section);
     1
 }
 
 // Platform: replaces KERNEL32.DLL InitializeCriticalSectionAndSpinCount
 // (import, slot 00fdf130): one thread, nothing to set up; nonzero is success.
-fn initialize_critical_section_and_spin_count(_e: &mut Engine, _section: Ptr, _spin: u32) -> i32 {
-    1
-}
-
-// Platform: replaces KERNEL32.DLL GetCurrentThreadId (import): the main
-// thread's id. Code that compares thread ids sees the main thread.
-pub const MAIN_THREAD_ID: u32 = 1;
-fn get_current_thread_id(_e: &mut Engine) -> u32 {
-    MAIN_THREAD_ID
+// Platform: replaces KERNEL32.DLL GetCurrentThreadId (import): the running
+// game thread's id (`crate::thread_host`; the main thread's is 1).
+pub const MAIN_THREAD_ID: u32 = crate::thread_host::MAIN_THREAD_ID;
+fn get_current_thread_id(e: &mut Engine) -> u32 {
+    crate::thread_host::current_id(e)
 }
 
 // Platform: replaces KERNEL32.DLL Sleep (import)
-fn sleep(_e: &mut Engine, _ms: u32) {}
+/// A switch point: the running thread gives the others a turn, and the clock
+/// (`Engine::clock_now_ms`) moves on by the time asked for (nothing is really waited).
+fn sleep(e: &mut Engine, ms: u32) {
+    e.clock_now_us();
+    e.advance_clock_us(u64::from(ms) * 1000);
+    crate::thread_host::host().sleep(e, signalled);
+}
+
+/// The exception code of the debugger thread-naming convention (`SetThreadName`, `00aa2740`).
+pub const MS_VC_EXCEPTION: u32 = 0x406d_1388;
+
+// Platform: replaces KERNEL32.DLL RaiseException (import)
+/// `RaiseException(code, flags, argument count, arguments)` with no debugger attached. The game
+/// raises only [`MS_VC_EXCEPTION`] (`SetThreadName` `00aa2740`, inside its own `__try`, whose
+/// handler takes it and goes on): that one comes back at once, as the handler would make it.
+/// Any other code stops the engine (structured exceptions are not provided).
+fn raise_exception(_e: &mut Engine, code: u32, flags: u32, count: u32, _arguments: Ptr) {
+    if code != MS_VC_EXCEPTION {
+        panic!(
+            "RaiseException(code {code:#x}, flags {flags:#x}, {count} arguments): \
+             structured exceptions are not provided"
+        );
+    }
+}
+
+// The user-interface and registry calls the game's input start-up makes (`00a22660`): the
+// Windows defaults of a machine with nothing changed, read-only. The window is the viewer's.
+
+/// `HKEY_CURRENT_USER`, the Win32 error codes these return, and `REG_SZ`.
+const HKEY_CURRENT_USER: u32 = 0x8000_0001;
+const ERROR_SUCCESS: u32 = 0;
+const ERROR_FILE_NOT_FOUND: u32 = 2;
+const ERROR_INVALID_HANDLE: u32 = 6;
+const ERROR_MORE_DATA: u32 = 234;
+const REG_SZ: u32 = 1;
+/// The double-click time Windows starts with (milliseconds).
+pub const DEFAULT_DOUBLE_CLICK_TIME: u32 = 500;
+/// `HKCU\Control Panel\Mouse` values Windows starts with, the ones a key here answers.
+const MOUSE_VALUES: [(&[u8], &[u8]); 1] = [(b"MouseSensitivity", b"10")];
+
+/// `ERROR_DEVICE_NOT_CONNECTED`.
+const ERROR_DEVICE_NOT_CONNECTED: u32 = 0x48f;
+
+// Platform: replaces XINPUT1_3.DLL XInputGetState (import by ordinal 2; `Controls::Poll`
+// `00a23010` calls it through the thunk `009f996e`)
+/// No controller is connected (the platform offers no XInput pad): `ERROR_DEVICE_NOT_CONNECTED`
+/// for every user index, the state left as it is.
+fn xinput_get_state(_e: &mut Engine, _user: u32, _state: Ptr) -> u32 {
+    ERROR_DEVICE_NOT_CONNECTED
+}
+
+// Platform: replaces USER32.DLL GetActiveWindow (import)
+/// The game's main window ([`create_window`]), 0 before there is one.
+fn get_active_window(e: &mut Engine) -> u32 {
+    e.kernel.main_window
+}
+
+// Platform: replaces USER32.DLL SwapMouseButton (import)
+/// Sets whether the buttons are swapped and answers whether they were (not at first).
+fn swap_mouse_button(e: &mut Engine, swap: u32) -> u32 {
+    let was = e.kernel.mouse_buttons_swapped;
+    e.kernel.mouse_buttons_swapped = swap != 0;
+    u32::from(was)
+}
+
+// Platform: replaces USER32.DLL GetDoubleClickTime (import)
+fn get_double_click_time(_e: &mut Engine) -> u32 {
+    DEFAULT_DOUBLE_CLICK_TIME
+}
+
+// Platform: replaces ADVAPI32.DLL RegOpenKeyExA (import)
+/// Opens `HKCU\Control Panel\Mouse` (the only key provided, read-only, with the Windows
+/// defaults); any other key is `ERROR_FILE_NOT_FOUND`.
+fn reg_open_key_ex_a(
+    e: &mut Engine,
+    root: u32,
+    name: Ptr,
+    _options: u32,
+    _access: u32,
+    out: Ptr,
+) -> u32 {
+    let name = e.mem.cstr(name.addr());
+    if root != HKEY_CURRENT_USER || !name.eq_ignore_ascii_case(br"Control Panel\Mouse") {
+        return ERROR_FILE_NOT_FOUND;
+    }
+    let key = e.kernel.insert(KernelObject::RegistryKey);
+    e.mem.set_u32(out.addr(), key);
+    ERROR_SUCCESS
+}
+
+// Platform: replaces ADVAPI32.DLL RegQueryValueExA (import)
+/// A string value of the mouse key ([`MOUSE_VALUES`], `REG_SZ`, with its terminating zero):
+/// the type through `kind`, the bytes into `data` when `*size` holds them (else
+/// `ERROR_MORE_DATA`), the size needed in `*size` either way; no data buffer asks the size only.
+fn reg_query_value_ex_a(
+    e: &mut Engine,
+    key: u32,
+    name: Ptr,
+    _reserved: u32,
+    kind: Ptr,
+    data: Ptr,
+    size: Ptr,
+) -> u32 {
+    if !matches!(e.kernel.objects.get(&key), Some(KernelObject::RegistryKey)) {
+        return ERROR_INVALID_HANDLE;
+    }
+    let name = e.mem.cstr(name.addr());
+    let Some((_, value)) = MOUSE_VALUES
+        .iter()
+        .find(|(n, _)| n.eq_ignore_ascii_case(&name))
+    else {
+        return ERROR_FILE_NOT_FOUND;
+    };
+    let needed = value.len() as u32 + 1;
+    if !kind.is_null() {
+        e.mem.set_u32(kind.addr(), REG_SZ);
+    }
+    if data.is_null() {
+        if !size.is_null() {
+            e.mem.set_u32(size.addr(), needed);
+        }
+        return ERROR_SUCCESS;
+    }
+    let room = e.mem.u32(size.addr());
+    e.mem.set_u32(size.addr(), needed);
+    if room < needed {
+        return ERROR_MORE_DATA;
+    }
+    e.mem.set_cstr(data.addr(), value);
+    ERROR_SUCCESS
+}
+
+// Platform: replaces ADVAPI32.DLL RegCloseKey (import)
+fn reg_close_key(e: &mut Engine, key: u32) -> u32 {
+    match e.kernel.objects.get(&key) {
+        Some(KernelObject::RegistryKey) => {
+            e.kernel.objects.remove(&key);
+            ERROR_SUCCESS
+        }
+        _ => ERROR_INVALID_HANDLE,
+    }
+}
+
+/// ASCII white space taken off both ends (`<[u8]>::trim_ascii` is newer than the MSRV).
+trait TrimSpaces {
+    fn trim_spaces(&self) -> &Self;
+}
+
+impl TrimSpaces for [u8] {
+    fn trim_spaces(&self) -> &[u8] {
+        let start = self
+            .iter()
+            .position(|b| !b.is_ascii_whitespace())
+            .unwrap_or(self.len());
+        let end = self
+            .iter()
+            .rposition(|b| !b.is_ascii_whitespace())
+            .map_or(start, |i| i + 1);
+        &self[start..end.max(start)]
+    }
+}
+
+/// The value of `key` in section `section` of the INI text `text` (names compared without case,
+/// spaces around names and values trimmed, one pair of surrounding quotes taken off), as
+/// `GetPrivateProfileStringA` finds it.
+fn ini_value(text: &[u8], section: &[u8], key: &[u8]) -> Option<Vec<u8>> {
+    let mut inside = false;
+    for line in text.split(|&b| b == b'\n') {
+        let line = line.trim_spaces();
+        if let Some(rest) = line.strip_prefix(b"[") {
+            let name = rest.split(|&b| b == b']').next().unwrap_or(rest);
+            inside = name.trim_spaces().eq_ignore_ascii_case(section);
+            continue;
+        }
+        if !inside {
+            continue;
+        }
+        let Some(at) = line.iter().position(|&b| b == b'=') else {
+            continue;
+        };
+        if line[..at].trim_spaces().eq_ignore_ascii_case(key) {
+            let value = line[at + 1..].trim_spaces();
+            let value = match value {
+                [b'"', middle @ .., b'"'] => middle,
+                _ => value,
+            };
+            return Some(value.to_vec());
+        }
+    }
+    None
+}
+
+/// The text of the profile file `file` names: a name without a full path is in the Windows
+/// directory, as the profile functions look for it (`d3d9::windows_directory`, from the
+/// player's table); the file as the game made it in this run when it did (`files`), else the
+/// player's file, read only. `None` when there is none.
+fn profile_text(e: &mut Engine, file: Ptr) -> Option<Vec<u8>> {
+    let name = e.mem.cstr(file.addr());
+    let path = if files::is_full_path(&name) {
+        name
+    } else {
+        let mut path = d3d9::windows_directory(e);
+        path.push(b'\\');
+        path.extend_from_slice(&name);
+        path
+    };
+    files::read_whole(e, &path)
+}
+
+// Platform: replaces KERNEL32.DLL GetPrivateProfileIntA (import)
+/// `GetPrivateProfileIntA(section, key, default, file)`: the key's value as an integer, or
+/// `default` when the file, the section or the key isn't there ([`profile_text`]). The value is
+/// read as [`profile_int`] does, which follows Windows' answers measured on the player's machine
+/// (2026-10-21, 38 values).
+fn get_private_profile_int_a(
+    e: &mut Engine,
+    section: Ptr,
+    key: Ptr,
+    default: u32,
+    file: Ptr,
+) -> u32 {
+    let section = e.mem.cstr(section.addr());
+    let key = e.mem.cstr(key.addr());
+    let Some(value) = profile_text(e, file).and_then(|text| ini_value(&text, &section, &key))
+    else {
+        return default;
+    };
+    profile_int(&value)
+}
+
+/// A profile value as Windows' `GetPrivateProfileIntA` reads it (measured): leading spaces and
+/// tabs, then one optional `+` or `-`, then an optional lower-case base prefix `0x` (16), `0o`
+/// (8) or `0b` (2), else base 10; digits of that base up to the first other character, kept
+/// modulo 2^32; a `-` negates the result modulo 2^32. No digits (`-`, `0x`, `0b2`, `x5`) give 0;
+/// upper-case prefixes are not prefixes (`0X1F` is 0).
+fn profile_int(value: &[u8]) -> u32 {
+    let mut rest = value;
+    while let [b' ' | b'\t', tail @ ..] = rest {
+        rest = tail;
+    }
+    let negative = match rest {
+        [b'-', tail @ ..] => {
+            rest = tail;
+            true
+        }
+        [b'+', tail @ ..] => {
+            rest = tail;
+            false
+        }
+        _ => false,
+    };
+    let base = match rest {
+        [b'0', b'x', tail @ ..] => {
+            rest = tail;
+            16
+        }
+        [b'0', b'o', tail @ ..] => {
+            rest = tail;
+            8
+        }
+        [b'0', b'b', tail @ ..] => {
+            rest = tail;
+            2
+        }
+        _ => 10,
+    };
+    let mut n = 0u32;
+    for &c in rest {
+        let Some(digit) = char::from(c).to_digit(base) else {
+            break;
+        };
+        n = n.wrapping_mul(base).wrapping_add(digit);
+    }
+    if negative {
+        n.wrapping_neg()
+    } else {
+        n
+    }
+}
+
+// Platform: replaces KERNEL32.DLL GetPrivateProfileStringA (import)
+/// The value of `key` in `section` of the INI file `file` ([`profile_text`]), or
+/// `default` (none: empty) when the file, the section or the key isn't there: copied into
+/// `buffer`, cut to `size - 1` bytes and zero-terminated; answers the bytes copied. Listing a
+/// file's sections or keys (a null section or key) is not provided.
+fn get_private_profile_string_a(
+    e: &mut Engine,
+    section: Ptr,
+    key: Ptr,
+    default: Ptr,
+    buffer: Ptr,
+    size: u32,
+    file: Ptr,
+) -> u32 {
+    if section.is_null() || key.is_null() {
+        panic!("GetPrivateProfileStringA with a null section or key is not provided");
+    }
+    let section = e.mem.cstr(section.addr());
+    let key = e.mem.cstr(key.addr());
+    let found = profile_text(e, file).and_then(|text| ini_value(&text, &section, &key));
+    let value = match found {
+        Some(value) => value,
+        None if default.is_null() => Vec::new(),
+        None => e.mem.cstr(default.addr()),
+    };
+    if size == 0 {
+        return 0;
+    }
+    let copied = value.len().min(size as usize - 1);
+    e.mem.set_cstr(buffer.addr(), &value[..copied]);
+    copied as u32
+}
+
+// Platform: replaces KERNEL32.DLL WritePrivateProfileStringA (import)
+/// Answers success without writing: the platform never changes the player's files.
+fn write_private_profile_string_a(
+    _e: &mut Engine,
+    _section: Ptr,
+    _key: Ptr,
+    _value: Ptr,
+    _file: Ptr,
+) -> u32 {
+    1
+}
 
 // Platform: replaces KERNEL32.DLL GetLastError (import): the thread's
 // last-error code, which only SetLastError changes here (one thread).
@@ -368,9 +971,53 @@ fn set_last_error(e: &mut Engine, code: u32) {
     e.kernel.last_error = code;
 }
 
+// Platform: replaces USER32.DLL GetSystemMetrics (import)
+/// `GetSystemMetrics(index)`: the screen metrics the Direct3D 9 layer's capture recorded for a
+/// program without a DPI-awareness manifest (`d3d9::system_metric`: `SM_CXSCREEN`,
+/// `SM_CYSCREEN`, `SM_CMONITORS`). Other metrics are not provided.
+fn get_system_metrics(e: &mut Engine, index: u32) -> u32 {
+    match d3d9::system_metric(e, index) {
+        Some(value) => value,
+        None => panic!("GetSystemMetrics({index:#x}) is not provided"),
+    }
+}
+
+// Platform: replaces D3D9.DLL D3DPERF_SetOptions (import)
+/// `D3DPERF_SetOptions(options)`: bit 0 asks PIX not to profile the program; there is no
+/// profiler here, so nothing changes.
+fn d3dperf_set_options(_e: &mut Engine, _options: u32) {}
+
+// Platform: replaces KERNEL32.DLL lstrcpyA (import)
+/// `lstrcpyA(destination, source)`: the source string with its terminating zero copied to the
+/// destination; answers the destination. A null pointer (Windows catches the fault and answers
+/// null) is not provided.
+fn lstrcpy_a(e: &mut Engine, destination: Ptr, source: Ptr) -> u32 {
+    assert!(
+        !destination.is_null() && !source.is_null(),
+        "lstrcpyA with a null pointer is not provided"
+    );
+    let text = e.mem.cstr(source.addr());
+    e.mem.set_cstr(destination.addr(), &text);
+    destination.addr()
+}
+
+// Platform: replaces KERNEL32.DLL lstrcatA (import)
+/// `lstrcatA(destination, source)`: the source string with its terminating zero copied after the
+/// destination's; answers the destination. A null pointer is not provided.
+fn lstrcat_a(e: &mut Engine, destination: Ptr, source: Ptr) -> u32 {
+    assert!(
+        !destination.is_null() && !source.is_null(),
+        "lstrcatA with a null pointer is not provided"
+    );
+    let end = destination.addr() + e.mem.cstr(destination.addr()).len() as u32;
+    let text = e.mem.cstr(source.addr());
+    e.mem.set_cstr(end, &text);
+    destination.addr()
+}
+
 // Platform: replaces KERNEL32.DLL GetTickCount and WINMM.DLL timeGetTime (imports)
 fn tick_count(e: &mut Engine) -> u32 {
-    e.clock_ms
+    e.clock_now_ms()
 }
 
 // Platform: replaces KERNEL32.DLL QueryPerformanceFrequency (import): 1 MHz.
@@ -380,19 +1027,20 @@ fn query_performance_frequency(e: &mut Engine, out: Ptr) -> i32 {
 }
 
 // Platform: replaces KERNEL32.DLL QueryPerformanceCounter (import): the
-// engine clock in microseconds.
+// engine clock in microseconds (`Engine::clock_now_us`).
 fn query_performance_counter(e: &mut Engine, out: Ptr) -> i32 {
-    e.mem.set_u64(out.addr(), e.clock_ms as u64 * 1000);
+    let now = e.clock_now_us();
+    e.mem.set_u64(out.addr(), now);
     1
 }
 
 // Kernel objects and virtual memory. Handles are small integers (4, 8, ...,
 // never reused) into the table `Engine::kernel`; events and semaphores keep
-// their state as Windows does. One thread runs the game, so a wait that
-// would block forever (nothing else can signal the object) and a thread
-// that would start running stop the engine with a message naming the
-// import and handle, as a call to an untranslated function does: how game
-// threads run is the lead's decision (docs/ENGINE_PORT_PLAN.md).
+// their state as Windows does. Game threads run cooperatively, one at a time,
+// on the main thread's turn (`crate::thread_host`): a wait on an object that
+// is not signalled is a switch point, and a wait that nothing can satisfy
+// (no thread can go on) stops the engine with a message naming the import and
+// handle, as a call to an untranslated function does.
 
 /// `WaitForSingleObject` timeout and results.
 const INFINITE: u32 = 0xffff_ffff;
@@ -428,8 +1076,8 @@ pub enum KernelObject {
         count: i32,
         maximum: i32,
     },
-    /// A thread made by `CreateThread`. It never runs (see above); it
-    /// exists so its handle can be resumed, prioritized and closed.
+    /// A thread made by `CreateThread`; it runs through the thread host
+    /// (`crate::thread_host`), which keeps its run state.
     Thread {
         start: u32,
         parameter: u32,
@@ -441,6 +1089,26 @@ pub enum KernelObject {
         /// [`run_as_thread`] swaps it in.
         x87_control_word: u16,
     },
+    /// The game's main window ([`create_window`]): only a handle; the window itself is the
+    /// viewer's (platform).
+    Window,
+    /// An open registry key ([`reg_open_key_ex_a`]): `HKCUControl PanelMouse`.
+    RegistryKey,
+    /// A mutex ([`window::create_mutex_a`]): its name, the owning thread's id (0: none) and how
+    /// many times the owner took it.
+    Mutex {
+        name: Vec<u8>,
+        owner: u32,
+        count: u32,
+    },
+    /// A USER32 or GDI32 object this layer only hands out a handle for (an icon, a stock brush).
+    UserObject(&'static str),
+    /// An open file ([`files::create_file_a`]): its path and position.
+    File(files::OpenFile),
+    /// A file search ([`files::find_first_file_a`]): the entries it has left to answer.
+    FindFile(files::Search),
+    /// A heap from [`heap_create`]: only its handle.
+    Heap,
 }
 
 /// A `VirtualAlloc` reservation: its size and which pages are committed.
@@ -458,13 +1126,47 @@ pub struct Region {
 pub struct Kernel {
     objects: std::collections::BTreeMap<u32, KernelObject>,
     last_handle: u32,
-    threads_created: u32,
+    /// The game threads and their scheduling (`crate::thread_host`).
+    pub threads: crate::thread_host::Threads,
     /// The reservations by base address (public for the scrap heap's tests in
     /// `engine-bs`).
     pub regions: std::collections::BTreeMap<u32, Region>,
     /// The in-memory files behind `BSFile`s ([`open_memory_file`]), by the
     /// `BSFile`'s address.
     files: std::collections::BTreeMap<u32, MemoryFile>,
+    /// Which thread-local storage indexes `TlsAlloc` handed out.
+    tls_allocated: Vec<bool>,
+    /// The values `TlsSetValue` stored, by (thread id, index).
+    tls_values: std::collections::BTreeMap<(u32, u32), u32>,
+    /// The process's current directory (`GetCurrentDirectoryA`), in the
+    /// game's ANSI form; `Engine::with_exe` sets it to the executable's
+    /// folder, where Steam starts the game.
+    pub current_directory: Vec<u8>,
+    /// The game's main window ([`create_window`]), which `GetActiveWindow` answers.
+    pub main_window: u32,
+    /// Whether `SwapMouseButton` swapped the buttons.
+    mouse_buttons_swapped: bool,
+    /// The DirectInput 8 objects and the keyboard and mouse state behind them ([`dinput`]).
+    pub input: dinput::Input,
+    /// Fiber-local storage ([`loader`]).
+    pub fls: loader::Fls,
+    /// The DirectSound 8 objects ([`dsound`]).
+    pub sound: dsound::Sound,
+    /// The Direct3D 9 objects ([`d3d9`]).
+    pub graphics: d3d9::Graphics,
+    /// The sizes the CRT's heap blocks were asked for (`malloc`, `realloc`, `__calloc_crt` on
+    /// the platform allocator), as `HeapSize` answers them for `_msize` (`crate::units::crt`).
+    pub crt_block_sizes: std::collections::HashMap<u32, u32>,
+    /// Window classes, windows, the message queue and the command line ([`window`]).
+    pub windows: window::Windows,
+    /// The files the game made in this run ([`files`]).
+    pub disk: files::Disk,
+    /// The threads that called `CoInitializeEx`, with their concurrency mode.
+    pub com_threads: std::collections::BTreeMap<u32, u32>,
+    /// The critical sections by address: the mutex object standing for each.
+    pub critical_sections: std::collections::BTreeMap<u32, u32>,
+    /// The process side: the ANSI command line and the environment blocks ([`process`]).
+    pub process: process::Process,
     /// The thread's last-error code (`GetLastError`/`SetLastError`).
     last_error: u32,
 }
@@ -667,13 +1369,105 @@ fn unnamed(call: &str, name: Ptr) {
     }
 }
 
-/// Stops the engine: a wait or a thread start the single game thread
-/// cannot carry out.
-fn stop_one_thread(what: String) -> ! {
+/// Stops the engine: a wait nothing can satisfy.
+fn stop_blocked(what: String) -> ! {
     panic!(
-        "{what}: one thread runs the game, nothing else can run or signal it \
-         (KERNEL32.DLL import, platform; docs/ENGINE_PORT_PLAN.md)"
+        "{what}: no game thread can go on to signal it \
+         (KERNEL32.DLL import, platform; thread host)"
     )
+}
+
+/// Whether an object would let a waiter go on now, without taking it: a
+/// signalled event, a semaphore with a count, an ended thread.
+pub fn signalled(e: &Engine, handle: u32) -> bool {
+    match e.kernel.objects.get(&handle) {
+        Some(KernelObject::Event { signalled, .. }) => *signalled,
+        Some(KernelObject::Semaphore { count, .. }) => *count > 0,
+        Some(KernelObject::Thread { .. }) => {
+            crate::thread_host::thread_ended(e, handle).unwrap_or(false)
+        }
+        Some(KernelObject::Mutex { owner, .. }) => {
+            *owner == 0 || *owner == crate::thread_host::current_id(e)
+        }
+        _ => false,
+    }
+}
+
+/// Takes an object a waiter goes on with: resets an auto-reset event, counts a
+/// semaphore down; an ended thread stays signalled. `None` for a handle that
+/// is not open.
+fn take(e: &mut Engine, handle: u32) -> Option<bool> {
+    let me = crate::thread_host::current_id(e);
+    let taken = match e.kernel.objects.get_mut(&handle) {
+        Some(KernelObject::Event {
+            manual_reset,
+            signalled,
+        }) => {
+            let was = *signalled;
+            if was && !*manual_reset {
+                *signalled = false;
+            }
+            was
+        }
+        Some(KernelObject::Semaphore { count, .. }) => {
+            let was = *count > 0;
+            if was {
+                *count -= 1;
+            }
+            was
+        }
+        Some(KernelObject::Thread { .. }) => {
+            crate::thread_host::thread_ended(e, handle).unwrap_or(false)
+        }
+        Some(KernelObject::Window) => false,
+        Some(KernelObject::RegistryKey) => false,
+        Some(KernelObject::UserObject(_)) => false,
+        // A mutex is taken by its owner again (recursively) or by anyone when unowned.
+        Some(KernelObject::Mutex { owner, count, .. }) => {
+            if *owner == 0 || *owner == me {
+                *owner = me;
+                *count += 1;
+                true
+            } else {
+                false
+            }
+        }
+        // A file handle is signalled while no I/O is pending (all of it is synchronous here).
+        Some(KernelObject::File(_)) => true,
+        // Waiting on a file search handle is not provided (not measured).
+        Some(KernelObject::FindFile(_)) => {
+            panic!("waiting on file search {handle:#x} is not provided")
+        }
+        Some(KernelObject::Heap) => panic!("waiting on heap {handle:#x} is not provided"),
+        None if handle == CURRENT_THREAD => false,
+        None => return None,
+    };
+    if taken {
+        crate::thread_host::signal(e);
+    }
+    Some(taken)
+}
+
+/// What a waiter waits on, for a stop's message.
+fn describe(e: &Engine, handle: u32) -> String {
+    match e.kernel.objects.get(&handle) {
+        Some(KernelObject::Event { manual_reset, .. }) => format!(
+            "{} event not signalled",
+            if *manual_reset {
+                "manual-reset"
+            } else {
+                "auto-reset"
+            }
+        ),
+        Some(KernelObject::Semaphore { maximum, .. }) => {
+            format!("semaphore count 0 (maximum {maximum})")
+        }
+        Some(KernelObject::Thread { start, .. }) => {
+            format!("thread (start {start:08x}) still running")
+        }
+        _ if handle == CURRENT_THREAD => "the current thread".to_string(),
+        _ => "closed handle".to_string(),
+    }
 }
 
 // Platform: replaces KERNEL32.DLL CreateEventA (import)
@@ -698,6 +1492,9 @@ fn set_event_state(e: &mut Engine, handle: u32, state: bool) -> i32 {
     match e.kernel.objects.get_mut(&handle) {
         Some(KernelObject::Event { signalled, .. }) => {
             *signalled = state;
+            if state {
+                crate::thread_host::signal(e);
+            }
             1
         }
         _ => 0,
@@ -752,6 +1549,7 @@ fn release_semaphore(e: &mut Engine, handle: u32, release: i32, previous: Ptr) -
         }
         _ => return 0,
     };
+    crate::thread_host::signal(e);
     if !previous.is_null() {
         e.mem.set_i32(previous.addr(), old);
     }
@@ -761,51 +1559,88 @@ fn release_semaphore(e: &mut Engine, handle: u32, release: i32, previous: Ptr) -
 // Platform: replaces KERNEL32.DLL WaitForSingleObject (import)
 /// `WaitForSingleObject(handle, timeout)`: a signalled object is taken at
 /// once (`WAIT_OBJECT_0`), resetting an auto-reset event or counting a
-/// semaphore down. An object that is not signalled stays so (no other
-/// thread runs): with a finite timeout the wait times out at once
-/// (`WAIT_TIMEOUT`; the clock is not advanced), with `INFINITE` it would
-/// block forever and stops the engine. Threads never run, so a thread
-/// handle is never signalled. An unknown handle gives `WAIT_FAILED`.
+/// semaphore down; an ended thread's handle is signalled. Otherwise the wait
+/// is a switch point (`crate::thread_host`): the other game threads run until
+/// the object is signalled, none can go on, or (on the main thread) the clock
+/// passes the timeout (after one pass, so a timeout of 0 gives each one
+/// turn). Still not signalled, a finite wait times out (`WAIT_TIMEOUT`; the
+/// clock is not advanced) and an `INFINITE` one would block forever and
+/// stops the engine. An unknown handle gives `WAIT_FAILED`.
 fn wait_for_single_object(e: &mut Engine, handle: u32, timeout: u32) -> u32 {
-    let blocked = match e.kernel.objects.get_mut(&handle) {
-        Some(KernelObject::Event {
-            manual_reset,
-            signalled,
-        }) => {
-            if *signalled {
-                if !*manual_reset {
-                    *signalled = false;
-                }
-                return WAIT_OBJECT_0;
-            }
-            format!(
-                "{} event not signalled",
-                if *manual_reset {
-                    "manual-reset"
-                } else {
-                    "auto-reset"
-                }
-            )
+    let finite = timeout != INFINITE;
+    let deadline = finite.then(|| e.clock_now_us() + u64::from(timeout) * 1000);
+    loop {
+        match take(e, handle) {
+            None => return WAIT_FAILED,
+            Some(true) => return WAIT_OBJECT_0,
+            Some(false) => {}
         }
-        Some(KernelObject::Semaphore { count, maximum }) => {
-            if *count > 0 {
-                *count -= 1;
-                return WAIT_OBJECT_0;
-            }
-            format!("semaphore count 0 (maximum {maximum})")
+        if crate::thread_host::host().block(e, &[handle], false, deadline, signalled) {
+            continue;
         }
-        Some(KernelObject::Thread { start, .. }) => {
-            format!("thread (start {start:08x}) that never runs")
+        if finite {
+            return WAIT_TIMEOUT;
         }
-        None if handle == CURRENT_THREAD => "the current thread".to_string(),
-        None => return WAIT_FAILED,
-    };
-    if timeout != INFINITE {
-        return WAIT_TIMEOUT;
+        let what = describe(e, handle);
+        stop_blocked(format!(
+            "WaitForSingleObject(handle {handle:#x}, INFINITE) would block forever on a {what}"
+        ));
     }
-    stop_one_thread(format!(
-        "WaitForSingleObject(handle {handle:#x}, INFINITE) would block forever on a {blocked}"
-    ))
+}
+
+// Platform: replaces KERNEL32.DLL WaitForMultipleObjects (import)
+/// `WaitForMultipleObjects(count, handles, wait all, timeout)`: with `wait
+/// all`, when every object is signalled they are all taken and
+/// `WAIT_OBJECT_0` returned; otherwise the first signalled one (by index) is
+/// taken and `WAIT_OBJECT_0 + index` returned. Not ready, it is a switch
+/// point as in `WaitForSingleObject`, then times out or stops. A count of 0
+/// or above 64, or a closed handle, gives `WAIT_FAILED`.
+fn wait_for_multiple_objects(
+    e: &mut Engine,
+    count: u32,
+    handles: Ptr,
+    all: i32,
+    timeout: u32,
+) -> u32 {
+    if count == 0 || count > 64 {
+        return WAIT_FAILED;
+    }
+    let list: Vec<u32> = (0..count)
+        .map(|i| e.mem.u32(handles.addr() + 4 * i))
+        .collect();
+    if list
+        .iter()
+        .any(|&h| !e.kernel.objects.contains_key(&h) && h != CURRENT_THREAD)
+    {
+        return WAIT_FAILED;
+    }
+    let all = all != 0;
+    let finite = timeout != INFINITE;
+    let deadline = finite.then(|| e.clock_now_us() + u64::from(timeout) * 1000);
+    loop {
+        if all {
+            if list.iter().all(|&h| signalled(e, h)) {
+                for &h in &list {
+                    take(e, h);
+                }
+                return WAIT_OBJECT_0;
+            }
+        } else if let Some(i) = list.iter().position(|&h| signalled(e, h)) {
+            take(e, list[i]);
+            return WAIT_OBJECT_0 + i as u32;
+        }
+        if crate::thread_host::host().block(e, &list, all, deadline, signalled) {
+            continue;
+        }
+        if finite {
+            return WAIT_TIMEOUT;
+        }
+        let what: Vec<String> = list.iter().map(|&h| describe(e, h)).collect();
+        stop_blocked(format!(
+            "WaitForMultipleObjects({count}, all {all}, INFINITE) would block forever on {}",
+            what.join(", ")
+        ));
+    }
 }
 
 // Platform: replaces KERNEL32.DLL CloseHandle (import)
@@ -821,9 +1656,10 @@ fn get_current_thread(_e: &mut Engine) -> u32 {
 
 // Platform: replaces KERNEL32.DLL CreateThread (import)
 /// `CreateThread(security, stack size, start, parameter, flags, id out)`:
-/// a suspended thread is recorded (handle returned, a new thread id stored
-/// through the last argument if not null). A thread that would start
-/// running at once (no `CREATE_SUSPENDED`) stops the engine.
+/// the thread is recorded with the thread host (`crate::thread_host`; handle
+/// returned, its id stored through the last argument if not null). It runs
+/// `start(parameter)` at the next switch point once its suspend count is 0
+/// (at once runnable without `CREATE_SUSPENDED`).
 fn create_thread(
     e: &mut Engine,
     _security: u32,
@@ -833,21 +1669,18 @@ fn create_thread(
     flags: u32,
     id_out: Ptr,
 ) -> u32 {
-    if flags & CREATE_SUSPENDED == 0 {
-        stop_one_thread(format!(
-            "CreateThread(start {start:08x}, parameter {parameter:08x}, flags {flags:#x}) \
-             would start the thread running"
-        ));
-    }
-    e.kernel.threads_created += 1;
-    let id = MAIN_THREAD_ID + e.kernel.threads_created;
+    let suspended = flags & CREATE_SUSPENDED != 0;
     let handle = e.kernel.insert(KernelObject::Thread {
         start,
         parameter,
-        id,
-        suspend_count: 1,
+        id: 0,
+        suspend_count: u32::from(suspended),
         x87_control_word: crate::x87::DEFAULT_CONTROL_WORD,
     });
+    let id = crate::thread_host::create(e, handle, start, parameter, suspended);
+    if let Some(KernelObject::Thread { id: slot, .. }) = e.kernel.objects.get_mut(&handle) {
+        *slot = id;
+    }
     if !id_out.is_null() {
         e.mem.set_u32(id_out.addr(), id);
     }
@@ -930,33 +1763,278 @@ pub fn direct3d_device_created(e: &mut Engine, behavior_flags: u32) {
     }
 }
 
-// Platform: replaces KERNEL32.DLL ResumeThread (import)
-/// Lowers a thread's suspend count and returns the previous one. Bringing
-/// it to 0 would start the thread running, which stops the engine. The
-/// current thread runs (previous count 0); an unknown handle gives -1.
-fn resume_thread(e: &mut Engine, handle: u32) -> u32 {
+// Platform: replaces the window `main` makes with `CreateWindowExA` (USER32 import, slot
+// `00fdf2b8`, called at `0086af42`)
+/// A handle for the game's main window, which `main` passes to `Main::Main` (`0086c160`, at
+/// `0086af75`). The host makes it where `main` would create the window; the window itself (its
+/// size from `AdjustWindowRect`, `00fdf310`, its messages) is the viewer's.
+pub fn create_window(e: &mut Engine) -> u32 {
+    let window = e.kernel.insert(KernelObject::Window);
+    e.kernel.main_window = window;
+    window
+}
+
+/// Changes a thread's suspend count by `delta` (both the handle's record and
+/// the thread host's); the previous count, or -1 for a handle that is not a
+/// thread. The current thread's pseudo handle reports 0.
+fn change_suspend_count(e: &mut Engine, handle: u32, delta: i32) -> u32 {
     if handle == CURRENT_THREAD {
         return 0;
     }
-    match e.kernel.objects.get_mut(&handle) {
-        Some(KernelObject::Thread {
-            start,
-            parameter,
-            suspend_count,
-            ..
-        }) => {
+    let previous = match e.kernel.objects.get_mut(&handle) {
+        Some(KernelObject::Thread { suspend_count, .. }) => {
             let previous = *suspend_count;
-            if previous == 1 {
-                stop_one_thread(format!(
-                    "ResumeThread(handle {handle:#x}) would start the thread running \
-                     (start {start:08x}, parameter {parameter:08x})"
-                ));
-            }
-            *suspend_count = previous.saturating_sub(1);
+            *suspend_count = previous.saturating_add_signed(delta);
             previous
         }
-        _ => 0xffff_ffff,
+        _ => return 0xffff_ffff,
+    };
+    if let Some(t) = crate::thread_host::by_handle(e, handle) {
+        t.suspend_count = previous.saturating_add_signed(delta);
     }
+    previous
+}
+
+// Platform: replaces KERNEL32.DLL ResumeThread (import)
+/// Lowers a thread's suspend count (not below 0) and returns the previous
+/// one; at 0 the thread runs at the next switch point.
+fn resume_thread(e: &mut Engine, handle: u32) -> u32 {
+    change_suspend_count(e, handle, -1)
+}
+
+// Platform: replaces KERNEL32.DLL SuspendThread (import)
+/// Raises a thread's suspend count and returns the previous one. (A thread
+/// suspends another only between switch points here, so it never stops one
+/// in the middle of its work.)
+fn suspend_thread(e: &mut Engine, handle: u32) -> u32 {
+    change_suspend_count(e, handle, 1)
+}
+
+/// `STILL_ACTIVE`: what `GetExitCodeThread` answers for a thread that has not ended.
+const STILL_ACTIVE: u32 = 0x103;
+
+// Platform: replaces KERNEL32.DLL GetExitCodeThread (import)
+/// `GetExitCodeThread(handle, code out)`: a thread that ended (its start function returned or
+/// it called `ExitThread`) gives its code, any other thread (not started, running, waiting, or
+/// stopped by the run) `STILL_ACTIVE`, the current thread's pseudo handle too; TRUE. A handle
+/// that is no thread: FALSE with `ERROR_INVALID_HANDLE`.
+fn get_exit_code_thread(e: &mut Engine, handle: u32, code: Ptr) -> u32 {
+    let value = if handle == CURRENT_THREAD {
+        STILL_ACTIVE
+    } else if matches!(
+        e.kernel.objects.get(&handle),
+        Some(KernelObject::Thread { .. })
+    ) {
+        match crate::thread_host::by_handle(e, handle).map(|t| t.state.clone()) {
+            Some(crate::thread_host::RunState::Finished { code }) => code,
+            _ => STILL_ACTIVE,
+        }
+    } else {
+        e.kernel.last_error = ERROR_INVALID_HANDLE;
+        return 0;
+    };
+    e.mem.set_u32(code.addr(), value);
+    1
+}
+
+// Platform: replaces KERNEL32.DLL ExitThread (import)
+/// Ends the running game thread with `code` (its handle becomes signalled).
+fn exit_thread(e: &mut Engine, code: u32) {
+    crate::thread_host::host().exit(e, code);
+}
+
+/// Thread-local storage indexes Windows provides (`TLS_MINIMUM_AVAILABLE`
+/// 64 plus the 1024 expansion slots), and `TlsAlloc`'s failure value.
+const TLS_INDEXES: usize = 1088;
+const TLS_OUT_OF_INDEXES: u32 = 0xffff_ffff;
+
+// Platform: replaces KERNEL32.DLL TlsAlloc (import)
+/// The lowest free thread-local storage index (its value reads 0 on every
+/// thread until set), or `TLS_OUT_OF_INDEXES` when all are taken.
+fn tls_alloc(e: &mut Engine) -> u32 {
+    let used = &mut e.kernel.tls_allocated;
+    if used.is_empty() {
+        used.resize(TLS_INDEXES, false);
+    }
+    match used.iter().position(|u| !u) {
+        Some(i) => {
+            used[i] = true;
+            i as u32
+        }
+        None => TLS_OUT_OF_INDEXES,
+    }
+}
+
+fn tls_in_use(e: &Engine, index: u32) -> bool {
+    e.kernel
+        .tls_allocated
+        .get(index as usize)
+        .copied()
+        .unwrap_or(false)
+}
+
+// Platform: replaces KERNEL32.DLL TlsFree (import)
+/// Frees an index and forgets its value on every thread; 0 for an index
+/// that isn't allocated.
+fn tls_free(e: &mut Engine, index: u32) -> i32 {
+    if !tls_in_use(e, index) {
+        return 0;
+    }
+    e.kernel.tls_allocated[index as usize] = false;
+    e.kernel.tls_values.retain(|&(_, i), _| i != index);
+    1
+}
+
+// Platform: replaces KERNEL32.DLL TlsGetValue (import)
+/// The calling thread's value at `index` (0 if never set). The calling
+/// thread is `GetCurrentThreadId`'s.
+fn tls_get_value(e: &mut Engine, index: u32) -> u32 {
+    let thread = get_current_thread_id(e);
+    e.kernel
+        .tls_values
+        .get(&(thread, index))
+        .copied()
+        .unwrap_or(0)
+}
+
+// Platform: replaces KERNEL32.DLL TlsSetValue (import)
+/// Stores the calling thread's value at `index`; 0 for an index past the
+/// last one Windows provides. As on Windows, the index isn't checked against
+/// the ones `TlsAlloc` handed out.
+fn tls_set_value(e: &mut Engine, index: u32, value: u32) -> i32 {
+    if index as usize >= TLS_INDEXES {
+        return 0;
+    }
+    let thread = get_current_thread_id(e);
+    e.kernel.tls_values.insert((thread, index), value);
+    1
+}
+
+// Platform: replaces KERNEL32.DLL GetStartupInfoA (import)
+/// `GetStartupInfoA(info)`: the `STARTUPINFOA` (0x44 bytes) of a GUI process started without
+/// inherited handles: `cb` 0x44, `dwFlags` `STARTF_USESHOWWINDOW` (1) with `wShowWindow`
+/// `SW_SHOWNORMAL` (1), no `cbReserved2`/`lpReserved2` (no CRT handles passed), the three
+/// standard handles -1, everything else 0. Measured on this machine (2026-10-21): a
+/// GUI-subsystem program started with PowerShell's `Start-Process` got exactly these, and
+/// pointers in `lpReserved`, `lpDesktop` and `lpTitle`, which are not provided here (left
+/// null; the CRT's `_ioinit` reads only `cbReserved2` and `lpReserved2`).
+fn get_startup_info_a(e: &mut Engine, info: Ptr) {
+    let at = info.addr();
+    e.mem.write(at, &[0; 0x44]);
+    e.mem.set_u32(at, 0x44);
+    e.mem.set_u32(at + 0x2c, 1);
+    e.mem.set_u16(at + 0x30, 1);
+    for offset in [0x38u32, 0x3c, 0x40] {
+        e.mem.set_u32(at + offset, 0xffff_ffff);
+    }
+}
+
+// Platform: replaces KERNEL32.DLL GetStdHandle (import)
+/// `GetStdHandle(which)`: 0 (no handle) for `STD_INPUT_HANDLE`, `STD_OUTPUT_HANDLE` and
+/// `STD_ERROR_HANDLE` (-10, -11, -12), the last error left as it was: a GUI process has none.
+/// Measured on this machine (2026-10-21) in a GUI-subsystem program started with
+/// `Start-Process`. Any other value is not provided (stops the run).
+fn get_std_handle(_e: &mut Engine, which: u32) -> u32 {
+    assert!(
+        matches!(which, 0xffff_fff4..=0xffff_fff6),
+        "GetStdHandle({which:#x}) is not provided"
+    );
+    0
+}
+
+// Platform: replaces KERNEL32.DLL SetHandleCount (import)
+/// `SetHandleCount(count)`: answers `count` (it has no effect on Win32; measured on this
+/// machine, 2026-10-21: 32 gave 32).
+fn set_handle_count(_e: &mut Engine, count: u32) -> u32 {
+    count
+}
+
+// Platform: replaces KERNEL32.DLL HeapCreate (import)
+/// `HeapCreate(options, initial, maximum)` for a growable heap (`maximum` 0, options 0 or
+/// `HEAP_NO_SERIALIZE` 1), as the CRT's `_heap_init` makes `_crtheap`: a handle (Windows
+/// answers a nonzero heap handle for these arguments). Only the handle: the CRT's allocations
+/// are the engine's heap (`malloc`, `free`, `__calloc_crt` are platform; [`heap_alloc`] hands
+/// out the same blocks); the other heap calls on it are not provided (they stop the run). Other options or a fixed
+/// size are not provided.
+fn heap_create(e: &mut Engine, options: u32, _initial: u32, maximum: u32) -> u32 {
+    assert!(
+        options <= 1 && maximum == 0,
+        "HeapCreate({options:#x}, maximum {maximum:#x}) is not provided"
+    );
+    e.kernel.insert(KernelObject::Heap)
+}
+
+// Platform: replaces KERNEL32.DLL HeapAlloc (import)
+/// `HeapAlloc(heap, flags, size)` on the CRT's heap (`_crtheap`, from [`heap_create`]), as the
+/// exe's `malloc` body (`00ecd1c7`) asks it with `__active_heap` 1: a block of the platform
+/// allocator, the same one `malloc` and `free` use, so `free` and `_msize` take it
+/// (`crate::units::crt`). `HEAP_ZERO_MEMORY` (8) clears it. Another heap or other flags are not
+/// provided.
+fn heap_alloc(e: &mut Engine, heap: u32, flags: u32, size: u32) -> u32 {
+    assert!(
+        matches!(e.kernel.object(heap), Some(KernelObject::Heap)) && flags & !8 == 0,
+        "HeapAlloc(heap {heap:#x}, flags {flags:#x}) is not provided"
+    );
+    let block = crate::units::crt::crt_alloc(e, size);
+    if flags & 8 != 0 {
+        e.mem.write(block, &vec![0u8; size as usize]);
+    }
+    block
+}
+
+// Platform: replaces KERNEL32.DLL GetCurrentDirectoryA (import)
+/// `GetCurrentDirectoryA(size, buffer)`: with room for the directory and its
+/// zero, copies them and returns the length without the zero; otherwise
+/// leaves the buffer and returns the size needed, zero included (as Windows
+/// does).
+fn get_current_directory_a(e: &mut Engine, size: u32, buffer: Ptr) -> u32 {
+    let directory = e.kernel.current_directory.clone();
+    let needed = directory.len() as u32 + 1;
+    if size < needed || buffer.is_null() {
+        return needed;
+    }
+    e.mem.set_cstr(buffer.addr(), &directory);
+    directory.len() as u32
+}
+
+/// `GetCurrentProcess`'s pseudo handle.
+pub const CURRENT_PROCESS: u32 = 0xffff_ffff;
+
+// Platform: replaces KERNEL32.DLL GetCurrentProcess (import)
+fn get_current_process(_e: &mut Engine) -> u32 {
+    CURRENT_PROCESS
+}
+
+// Platform: replaces KERNEL32.DLL GetSystemInfo (import)
+/// Fills the 0x24-byte `SYSTEM_INFO` as 32-bit Windows does for this
+/// process: x86 (architecture 0), 4 KiB pages, application addresses
+/// 0x10000-0x7ffeffff, one mask bit per processor, the machine's number of
+/// processors (as Windows reports the real machine; the game's Havok caps it,
+/// `hkBaseSystem` at 4, the job thread pool at 5), processor type 586
+/// (`PROCESSOR_INTEL_PENTIUM`), 64 KiB allocation granularity, level 6.
+fn get_system_info(e: &mut Engine, out: Ptr) {
+    let processors = std::thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(1)
+        .min(32) as u32;
+    let p = out.addr();
+    e.mem.set_u32(p, 0); // wProcessorArchitecture, wReserved
+    e.mem.set_u32(p + 0x04, PAGE_BYTES);
+    e.mem.set_u32(p + 0x08, 0x0001_0000);
+    e.mem.set_u32(p + 0x0c, 0x7ffe_ffff);
+    e.mem.set_u32(
+        p + 0x10,
+        if processors == 32 {
+            u32::MAX
+        } else {
+            (1 << processors) - 1
+        },
+    );
+    e.mem.set_u32(p + 0x14, processors);
+    e.mem.set_u32(p + 0x18, 586);
+    e.mem.set_u32(p + 0x1c, ALLOCATION_GRANULARITY);
+    e.mem.set_u16(p + 0x20, 6);
+    e.mem.set_u16(p + 0x22, 0);
 }
 
 // Platform: replaces KERNEL32.DLL SetThreadPriority (import)
@@ -1002,22 +2080,22 @@ pub fn imports() -> Vec<(&'static str, &'static str, AbiFn)> {
         (
             k,
             "EnterCriticalSection",
-            entry!(0, critical_section_nop(Ptr)).1,
+            entry!(0, enter_critical_section(Ptr)).1,
         ),
         (
             k,
             "LeaveCriticalSection",
-            entry!(0, critical_section_nop(Ptr)).1,
+            entry!(0, leave_critical_section(Ptr)).1,
         ),
         (
             k,
             "InitializeCriticalSection",
-            entry!(0, critical_section_nop(Ptr)).1,
+            entry!(0, critical_section_reset(Ptr)).1,
         ),
         (
             k,
             "DeleteCriticalSection",
-            entry!(0, critical_section_nop(Ptr)).1,
+            entry!(0, critical_section_reset(Ptr)).1,
         ),
         (
             k,
@@ -1038,6 +2116,422 @@ pub fn imports() -> Vec<(&'static str, &'static str, AbiFn)> {
         (k, "GetLastError", entry!(0, get_last_error() -> u32).1),
         (k, "SetLastError", entry!(0, set_last_error(u32)).1),
         (k, "GetTickCount", entry!(0, tick_count() -> u32).1),
+        (
+            k,
+            "GetPrivateProfileStringA",
+            entry!(0, get_private_profile_string_a(Ptr, Ptr, Ptr, Ptr, u32, Ptr) -> u32).1,
+        ),
+        (
+            k,
+            "WritePrivateProfileStringA",
+            entry!(0, write_private_profile_string_a(Ptr, Ptr, Ptr, Ptr) -> u32).1,
+        ),
+        (
+            "USER32.dll",
+            "GetActiveWindow",
+            entry!(0, get_active_window() -> u32).1,
+        ),
+        (
+            "USER32.dll",
+            "SwapMouseButton",
+            entry!(0, swap_mouse_button(u32) -> u32).1,
+        ),
+        (
+            "USER32.dll",
+            "GetDoubleClickTime",
+            entry!(0, get_double_click_time() -> u32).1,
+        ),
+        (
+            "USER32.dll",
+            "GetSystemMetrics",
+            entry!(0, get_system_metrics(u32) -> u32).1,
+        ),
+        (
+            "USER32.dll",
+            "EnumDisplayDevicesA",
+            entry!(0, d3d9::enum_display_devices_a(Ptr, u32, Ptr, u32) -> u32).1,
+        ),
+        (
+            k,
+            "LoadLibraryA",
+            entry!(0, loader::load_library_a(Ptr) -> u32).1,
+        ),
+        (
+            "d3dx9_38.dll",
+            "D3DXMatrixMultiply",
+            entry!(0, d3dx::matrix_multiply(Ptr, Ptr, Ptr) -> u32).1,
+        ),
+        (
+            "d3dx9_38.dll",
+            "D3DXMatrixMultiplyTranspose",
+            entry!(0, d3dx::matrix_multiply_transpose(Ptr, Ptr, Ptr) -> u32).1,
+        ),
+        (
+            "d3dx9_38.dll",
+            "D3DXMatrixRotationYawPitchRoll",
+            entry!(0, d3dx::matrix_rotation_yaw_pitch_roll(Ptr, u32, u32, u32) -> u32).1,
+        ),
+        (
+            "d3dx9_38.dll",
+            "D3DXMatrixTranspose",
+            entry!(0, d3dx::matrix_transpose(Ptr, Ptr) -> u32).1,
+        ),
+        (
+            "d3dx9_38.dll",
+            "D3DXVec3TransformNormal",
+            entry!(0, d3dx::vec3_transform_normal(Ptr, Ptr, Ptr) -> u32).1,
+        ),
+        (
+            "d3dx9_38.dll",
+            "D3DXVec4Transform",
+            entry!(0, d3dx::vec4_transform_import(Ptr, Ptr, Ptr) -> u32).1,
+        ),
+        (
+            "d3dx9_38.dll",
+            "D3DXGetImageInfoFromFileInMemory",
+            entry!(0, d3dx::get_image_info_from_file_in_memory(Ptr, u32, Ptr) -> u32).1,
+        ),
+        (
+            "d3dx9_38.dll",
+            "D3DXCreateTextureFromFileInMemory",
+            entry!(0, d3dx::create_texture_from_file_in_memory(Ptr, Ptr, u32, Ptr) -> u32).1,
+        ),
+        (
+            "d3dx9_38.dll",
+            "D3DXCreateCubeTextureFromFileInMemory",
+            entry!(0, d3dx::create_cube_texture_from_file_in_memory(Ptr, Ptr, u32, Ptr) -> u32).1,
+        ),
+        (
+            "d3d9.dll",
+            "D3DPERF_SetOptions",
+            entry!(0, d3dperf_set_options(u32)).1,
+        ),
+        (
+            k,
+            "CreateMutexA",
+            entry!(0, window::create_mutex_a(u32, u32, Ptr) -> u32).1,
+        ),
+        (
+            "USER32.dll",
+            "MessageBoxA",
+            entry!(0, window::message_box_a(u32, Ptr, Ptr, u32) -> u32).1,
+        ),
+        (k, "ExitProcess", entry!(0, window::exit_process(u32)).1),
+        (
+            "SHELL32.dll",
+            "ShellExecuteA",
+            entry!(0, window::shell_execute_a(u32, u32, Ptr, u32, u32, u32) -> u32).1,
+        ),
+        (
+            k,
+            "IsDebuggerPresent",
+            entry!(0, window::is_debugger_present() -> u32).1,
+        ),
+        (
+            "USER32.dll",
+            "FindWindowA",
+            entry!(0, window::find_window_a(u32, Ptr) -> u32).1,
+        ),
+        (
+            "USER32.dll",
+            "SetForegroundWindow",
+            entry!(0, window::set_foreground_window(u32) -> u32).1,
+        ),
+        (
+            k,
+            "GetCommandLineW",
+            entry!(0, window::get_command_line_w() -> u32).1,
+        ),
+        (
+            "SHELL32.dll",
+            "CommandLineToArgvW",
+            entry!(0, window::command_line_to_argv_w(Ptr, Ptr) -> u32).1,
+        ),
+        (k, "LocalFree", entry!(0, window::local_free(u32) -> u32).1),
+        (
+            "USER32.dll",
+            "LoadIconA",
+            entry!(0, window::load_icon_a(u32, u32) -> u32).1,
+        ),
+        (
+            "GDI32.dll",
+            "GetStockObject",
+            entry!(0, window::get_stock_object(u32) -> u32).1,
+        ),
+        (
+            "USER32.dll",
+            "RegisterClassA",
+            entry!(0, window::register_class_a(Ptr) -> u32).1,
+        ),
+        (
+            "USER32.dll",
+            "AdjustWindowRect",
+            entry!(0, window::adjust_window_rect(Ptr, u32, u32) -> u32).1,
+        ),
+        (
+            "USER32.dll",
+            "AdjustWindowRectEx",
+            entry!(0, window::adjust_window_rect_ex(Ptr, u32, u32, u32) -> u32).1,
+        ),
+        (
+            "USER32.dll",
+            "CreateWindowExA",
+            entry!(0, window::create_window_ex_a(u32, u32, Ptr, u32, i32, i32, i32, i32, u32, u32, u32, u32) -> u32).1,
+        ),
+        (
+            "USER32.dll",
+            "GetWindowLongA",
+            entry!(0, window::get_window_long_a(u32, i32) -> u32).1,
+        ),
+        (
+            "USER32.dll",
+            "GetClassLongA",
+            entry!(0, window::get_class_long_a(u32, i32) -> u32).1,
+        ),
+        (
+            "USER32.dll",
+            "SetWindowPos",
+            entry!(0, window::set_window_pos(u32, u32, i32, i32, i32, i32, u32) -> u32).1,
+        ),
+        (
+            "USER32.dll",
+            "PeekMessageA",
+            entry!(0, window::peek_message_a(Ptr, u32, u32, u32, u32) -> u32).1,
+        ),
+        (
+            "USER32.dll",
+            "TranslateMessage",
+            entry!(0, window::translate_message(Ptr) -> u32).1,
+        ),
+        (
+            "USER32.dll",
+            "DispatchMessageA",
+            entry!(0, window::dispatch_message_a(Ptr) -> u32).1,
+        ),
+        (
+            k,
+            "GetPrivateProfileIntA",
+            entry!(0, get_private_profile_int_a(Ptr, Ptr, u32, Ptr) -> u32).1,
+        ),
+        (
+            k,
+            "GetFileAttributesA",
+            entry!(0, files::get_file_attributes_a(Ptr) -> u32).1,
+        ),
+        (
+            k,
+            "CreateDirectoryA",
+            entry!(0, files::create_directory_a(Ptr, u32) -> u32).1,
+        ),
+        (k, "DeleteFileA", entry!(0, files::delete_file_a(Ptr) -> u32).1),
+        (
+            k,
+            "CopyFileA",
+            entry!(0, files::copy_file_a(Ptr, Ptr, u32) -> u32).1,
+        ),
+        (
+            k,
+            "MoveFileA",
+            entry!(0, files::move_file_a(Ptr, Ptr) -> u32).1,
+        ),
+        (
+            "SHELL32.dll",
+            "SHGetFolderPathA",
+            entry!(0, files::sh_get_folder_path_a(u32, u32, u32, u32, Ptr) -> u32).1,
+        ),
+        (
+            "ADVAPI32.dll",
+            "GetUserNameA",
+            entry!(0, window::get_user_name_a(Ptr, Ptr) -> u32).1,
+        ),
+        (
+            "steam_api.dll",
+            "SteamAPI_Init",
+            entry!(0, window::steam_api_init() -> u32).1,
+        ),
+        (
+            "steam_api.dll",
+            "SteamAPI_RegisterCallback",
+            entry!(0, window::steam_api_register_callback(Ptr, u32)).1,
+        ),
+        (
+            "steam_api.dll",
+            "SteamAPI_UnregisterCallback",
+            entry!(0, window::steam_api_unregister_callback(Ptr)).1,
+        ),
+        // The platform5 imports (slot a04): begin.
+        (
+            "steam_api.dll",
+            "SteamAPI_IsSteamRunning",
+            entry!(0, window::steam_api_is_steam_running() -> u32).1,
+        ),
+        (
+            "steam_api.dll",
+            "SteamUserStats",
+            entry!(0, window::steam_user_stats() -> u32).1,
+        ),
+        (
+            "steam_api.dll",
+            "SteamFriends",
+            entry!(0, window::steam_friends() -> u32).1,
+        ),
+        (
+            "steam_api.dll",
+            "SteamUtils",
+            entry!(0, window::steam_utils() -> u32).1,
+        ),
+        (
+            "steam_api.dll",
+            "SteamUser",
+            entry!(0, window::steam_user() -> u32).1,
+        ),
+        (
+            "steam_api.dll",
+            "SteamAPI_RunCallbacks",
+            entry!(0, window::steam_api_run_callbacks()).1,
+        ),
+        (
+            "steam_api.dll",
+            "SteamApps",
+            entry!(0, window::steam_apps() -> u32).1,
+        ),
+        (
+            k,
+            "GetModuleFileNameA",
+            entry!(0, process::get_module_file_name_a(u32, Ptr, u32) -> u32).1,
+        ),
+        (
+            k,
+            "GetCommandLineA",
+            entry!(0, process::get_command_line_a() -> u32).1,
+        ),
+        (
+            k,
+            "GetEnvironmentStringsW",
+            entry!(0, process::get_environment_strings_w() -> u32).1,
+        ),
+        (
+            k,
+            "FreeEnvironmentStringsW",
+            entry!(0, process::free_environment_strings_w(u32) -> u32).1,
+        ),
+        (
+            k,
+            "GetCurrentProcessId",
+            entry!(0, process::get_current_process_id() -> u32).1,
+        ),
+        (
+            k,
+            "HeapFree",
+            entry!(0, process::heap_free(u32, u32, u32) -> u32).1,
+        ),
+        (
+            k,
+            "HeapReAlloc",
+            entry!(0, process::heap_re_alloc(u32, u32, u32, u32) -> u32).1,
+        ),
+        (
+            k,
+            "CreateFileW",
+            entry!(0, files::create_file_w(Ptr, u32, u32, u32, u32, u32, u32) -> u32).1,
+        ),
+        (
+            k,
+            "GetFileSizeEx",
+            entry!(0, files::get_file_size_ex(u32, Ptr) -> u32).1,
+        ),
+        (
+            k,
+            "SystemTimeToTzSpecificLocalTime",
+            entry!(0, time::system_time_to_tz_specific_local_time(Ptr, Ptr, Ptr) -> u32).1,
+        ),
+        (
+            k,
+            "SetUnhandledExceptionFilter",
+            entry!(0, process::set_unhandled_exception_filter(u32) -> u32).1,
+        ),
+        (
+            k,
+            "GetStringTypeW",
+            entry!(0, nls::get_string_type_w(u32, Ptr, i32, Ptr) -> u32).1,
+        ),
+        // The platform5 imports: end.
+        (
+            "ADVAPI32.dll",
+            "RegOpenKeyExA",
+            entry!(0, reg_open_key_ex_a(u32, Ptr, u32, u32, Ptr) -> u32).1,
+        ),
+        (
+            "ADVAPI32.dll",
+            "RegQueryValueExA",
+            entry!(0, reg_query_value_ex_a(u32, Ptr, u32, Ptr, Ptr, Ptr) -> u32).1,
+        ),
+        (
+            "ADVAPI32.dll",
+            "RegCloseKey",
+            entry!(0, reg_close_key(u32) -> u32).1,
+        ),
+        (
+            k,
+            "GetModuleHandleW",
+            entry!(0, loader::get_module_handle_w(Ptr) -> u32).1,
+        ),
+        (
+            k,
+            "GetModuleHandleA",
+            entry!(0, loader::get_module_handle_a(Ptr) -> u32).1,
+        ),
+        (
+            k,
+            "GetProcAddress",
+            entry!(0, loader::get_proc_address(u32, u32) -> u32).1,
+        ),
+        (
+            "DSOUND.dll",
+            "#11",
+            entry!(0, dsound::direct_sound_create8(u32, Ptr, u32) -> u32).1,
+        ),
+        (
+            "ole32.dll",
+            "CoInitializeEx",
+            entry!(0, co_initialize_ex(u32, u32) -> u32).1,
+        ),
+        ("ole32.dll", "CoUninitialize", entry!(0, co_uninitialize()).1),
+        (
+            "ole32.dll",
+            "CoTaskMemAlloc",
+            entry!(0, co_task_mem_alloc(u32) -> u32).1,
+        ),
+        (
+            "ole32.dll",
+            "CoTaskMemFree",
+            entry!(0, co_task_mem_free(Ptr)).1,
+        ),
+        (
+            "ole32.dll",
+            "CoFreeUnusedLibraries",
+            entry!(0, co_free_unused_libraries()).1,
+        ),
+        (
+            "ole32.dll",
+            "CoInitialize",
+            entry!(0, dsound::co_initialize(u32) -> u32).1,
+        ),
+        (
+            "DINPUT8.dll",
+            "DirectInput8Create",
+            entry!(0, dinput::direct_input8_create(u32, u32, Ptr, Ptr, u32) -> u32).1,
+        ),
+        (
+            "XINPUT1_3.dll",
+            "#2",
+            entry!(0, xinput_get_state(u32, Ptr) -> u32).1,
+        ),
+        (
+            k,
+            "RaiseException",
+            entry!(0, raise_exception(u32, u32, u32, Ptr)).1,
+        ),
         ("WINMM.dll", "timeGetTime", entry!(0, tick_count() -> u32).1),
         (
             k,
@@ -1084,6 +2578,43 @@ pub fn imports() -> Vec<(&'static str, &'static str, AbiFn)> {
         (k, "CloseHandle", entry!(0, close_handle(u32) -> i32).1),
         (
             k,
+            "CreateFileA",
+            entry!(0, files::create_file_a(Ptr, u32, u32, u32, u32, u32, u32) -> u32).1,
+        ),
+        (k, "GetFileType", entry!(0, files::get_file_type(u32) -> u32).1),
+        (
+            k,
+            "SetFilePointer",
+            entry!(0, files::set_file_pointer(u32, u32, Ptr, u32) -> u32).1,
+        ),
+        (
+            k,
+            "WriteFile",
+            entry!(0, files::write_file(u32, Ptr, u32, Ptr, u32) -> i32).1,
+        ),
+        (
+            k,
+            "ReadFile",
+            entry!(0, files::read_file(u32, Ptr, u32, Ptr, u32) -> i32).1,
+        ),
+        (
+            k,
+            "FindFirstFileA",
+            entry!(0, files::find_first_file_a(Ptr, Ptr) -> u32).1,
+        ),
+        (
+            k,
+            "FindNextFileA",
+            entry!(0, files::find_next_file_a(u32, Ptr) -> u32).1,
+        ),
+        (
+            k,
+            "CompareFileTime",
+            entry!(0, files::compare_file_time(Ptr, Ptr) -> i32).1,
+        ),
+        (k, "FindClose", entry!(0, files::find_close(u32) -> u32).1),
+        (
+            k,
             "GetCurrentThread",
             entry!(0, get_current_thread() -> u32).1,
         ),
@@ -1093,11 +2624,203 @@ pub fn imports() -> Vec<(&'static str, &'static str, AbiFn)> {
             entry!(0, create_thread(u32, u32, u32, u32, u32, Ptr) -> u32).1,
         ),
         (k, "ResumeThread", entry!(0, resume_thread(u32) -> u32).1),
+        (k, "lstrcpyA", entry!(0, lstrcpy_a(Ptr, Ptr) -> u32).1),
+        (k, "lstrcatA", entry!(0, lstrcat_a(Ptr, Ptr) -> u32).1),
+        (k, "SuspendThread", entry!(0, suspend_thread(u32) -> u32).1),
+        (k, "ExitThread", entry!(0, exit_thread(u32)).1),
+        (
+            k,
+            "GetExitCodeThread",
+            entry!(0, get_exit_code_thread(u32, Ptr) -> u32).1,
+        ),
+        (
+            k,
+            "WaitForMultipleObjects",
+            entry!(0, wait_for_multiple_objects(u32, Ptr, i32, u32) -> u32).1,
+        ),
         (
             k,
             "SetThreadPriority",
             entry!(0, set_thread_priority(u32, i32) -> i32).1,
         ),
+        (k, "TlsAlloc", entry!(0, tls_alloc() -> u32).1),
+        (k, "TlsFree", entry!(0, tls_free(u32) -> i32).1),
+        (k, "TlsGetValue", entry!(0, tls_get_value(u32) -> u32).1),
+        (
+            k,
+            "TlsSetValue",
+            entry!(0, tls_set_value(u32, u32) -> i32).1,
+        ),
+        (
+            k,
+            "GetCurrentProcess",
+            entry!(0, get_current_process() -> u32).1,
+        ),
+        (k, "GetSystemInfo", entry!(0, get_system_info(Ptr)).1),
+        (
+            k,
+            "GetCurrentDirectoryA",
+            entry!(0, get_current_directory_a(u32, Ptr) -> u32).1,
+        ),
+        (k, "GetStartupInfoA", entry!(0, get_startup_info_a(Ptr)).1),
+        (k, "GetStdHandle", entry!(0, get_std_handle(u32) -> u32).1),
+        (k, "SetHandleCount", entry!(0, set_handle_count(u32) -> u32).1),
+        (k, "HeapCreate", entry!(0, heap_create(u32, u32, u32) -> u32).1),
+        (k, "HeapAlloc", entry!(0, heap_alloc(u32, u32, u32) -> u32).1),
+        (
+            k,
+            "GetSystemTimeAsFileTime",
+            entry!(0, time::get_system_time_as_file_time(Ptr)).1,
+        ),
+        (
+            k,
+            "GetTimeZoneInformation",
+            entry!(0, time::get_time_zone_information(Ptr) -> u32).1,
+        ),
+        (k, "GetACP", entry!(0, d3d9::get_acp() -> u32).1),
+        (k, "GetOEMCP", entry!(0, d3d9::get_oemcp() -> u32).1),
+        (
+            k,
+            "IsValidCodePage",
+            entry!(0, d3d9::is_valid_code_page(u32) -> u32).1,
+        ),
+        (k, "GetCPInfo", entry!(0, d3d9::get_cp_info(u32, Ptr) -> u32).1),
+        (
+            k,
+            "FileTimeToLocalFileTime",
+            entry!(0, time::file_time_to_local_file_time(Ptr, Ptr) -> u32).1,
+        ),
+        (
+            k,
+            "FileTimeToSystemTime",
+            entry!(0, time::file_time_to_system_time(Ptr, Ptr) -> u32).1,
+        ),
+        (
+            k,
+            "WideCharToMultiByte",
+            entry!(0, time::wide_char_to_multi_byte(u32, u32, Ptr, i32, Ptr, i32, Ptr, Ptr) -> u32).1,
+        ),
+        // The Bink imports (`bink`, slot a11): begin.
+        (
+            "binkw32.dll",
+            "_BinkSetSoundSystem@8",
+            entry!(0, bink::set_sound_system(u32, u32) -> i32).1,
+        ),
+        (
+            "binkw32.dll",
+            "_BinkOpenDirectSound@4",
+            entry!(0, bink::open_direct_sound(u32) -> u32).1,
+        ),
+        (
+            "binkw32.dll",
+            "_BinkOpen@8",
+            entry!(0, bink::open(Ptr, u32) -> u32).1,
+        ),
+        (
+            "binkw32.dll",
+            "_BinkClose@4",
+            entry!(0, bink::close(u32)).1,
+        ),
+        (
+            "binkw32.dll",
+            "_BinkDoFrame@4",
+            entry!(0, bink::do_frame(u32) -> i32).1,
+        ),
+        (
+            "binkw32.dll",
+            "_BinkNextFrame@4",
+            entry!(0, bink::next_frame(u32)).1,
+        ),
+        (
+            "binkw32.dll",
+            "_BinkWait@4",
+            entry!(0, bink::wait(u32) -> i32).1,
+        ),
+        (
+            "binkw32.dll",
+            "_BinkPause@8",
+            entry!(0, bink::pause(u32, i32) -> i32).1,
+        ),
+        (
+            "binkw32.dll",
+            "_BinkCopyToBufferRect@44",
+            entry!(0, bink::copy_to_buffer_rect(u32, Ptr, i32, u32, u32, u32, u32, u32, u32, u32, u32) -> i32).1,
+        ),
+        // The Bink imports: end.
+        // The Ogg Vorbis imports (`vorbisfile`, slot a11): begin.
+        (
+            "libvorbisfile.dll",
+            "ov_open_callbacks",
+            entry!(0, vorbisfile::ov_open_callbacks(u32, Ptr, u32, i32, u32, u32, u32, u32) -> i32).1,
+        ),
+        (
+            "libvorbisfile.dll",
+            "ov_info",
+            entry!(0, vorbisfile::ov_info(Ptr, i32) -> u32).1,
+        ),
+        (
+            "libvorbisfile.dll",
+            "ov_seekable",
+            entry!(0, vorbisfile::ov_seekable(Ptr) -> i32).1,
+        ),
+        (
+            "libvorbisfile.dll",
+            "ov_pcm_total",
+            entry!(0, vorbisfile::ov_pcm_total(Ptr, i32) -> u64).1,
+        ),
+        (
+            "libvorbisfile.dll",
+            "ov_read",
+            entry!(0, vorbisfile::ov_read(Ptr, u32, i32, i32, i32, i32, Ptr) -> i32).1,
+        ),
+        (
+            "libvorbisfile.dll",
+            "ov_clear",
+            entry!(0, vorbisfile::ov_clear(Ptr) -> i32).1,
+        ),
+        // The Ogg Vorbis imports: end.
+        // The sound imports (`mmio`, `dsound`, slot a11): begin.
+        (
+            "WINMM.dll",
+            "mmioOpenA",
+            entry!(0, mmio::mmio_open_a(Ptr, Ptr, u32) -> u32).1,
+        ),
+        (
+            "WINMM.dll",
+            "mmioClose",
+            entry!(0, mmio::mmio_close(u32, u32) -> u32).1,
+        ),
+        (
+            "WINMM.dll",
+            "mmioRead",
+            entry!(0, mmio::mmio_read(u32, Ptr, i32) -> i32).1,
+        ),
+        (
+            "WINMM.dll",
+            "mmioDescend",
+            entry!(0, mmio::mmio_descend(u32, Ptr, Ptr, u32) -> u32).1,
+        ),
+        (
+            "WINMM.dll",
+            "mmioAscend",
+            entry!(0, mmio::mmio_ascend(u32, Ptr, u32) -> u32).1,
+        ),
+        (
+            "WINMM.dll",
+            "mmioGetInfo",
+            entry!(0, mmio::mmio_get_info(u32, Ptr, u32) -> u32).1,
+        ),
+        (
+            "WINMM.dll",
+            "mmioAdvance",
+            entry!(0, mmio::mmio_advance(u32, Ptr, u32) -> u32).1,
+        ),
+        (
+            "ole32.dll",
+            "CoCreateInstance",
+            entry!(0, dsound::co_create_instance(Ptr, u32, u32, Ptr, Ptr) -> u32).1,
+        ),
+        // The sound imports: end.
     ]
 }
 
@@ -1245,8 +2968,12 @@ mod tests {
     const GET_CURRENT_THREAD: u32 = 0x00fd_f120;
     const CREATE_THREAD: u32 = 0x00fd_f124;
     const RESUME_THREAD: u32 = 0x00fd_f158;
+    // Stand-in slots for the tests (any free address works: registration is by name).
+    const SLEEP: u32 = 0x00ab_f000;
+    const WAIT_FOR_MULTIPLE_OBJECTS: u32 = 0x00ab_f004;
     const RELEASE_SEMAPHORE: u32 = 0x00fd_f1b4;
     const WAIT_FOR_SINGLE_OBJECT: u32 = 0x00fd_f1c8;
+    const GET_EXIT_CODE_THREAD: u32 = 0x00fd_f168;
     const RESET_EVENT: u32 = 0x00fd_f1cc;
 
     /// An engine with the kernel-object and virtual-memory stand-ins
@@ -1267,6 +2994,9 @@ mod tests {
             (RELEASE_SEMAPHORE, "ReleaseSemaphore"),
             (WAIT_FOR_SINGLE_OBJECT, "WaitForSingleObject"),
             (RESET_EVENT, "ResetEvent"),
+            (SLEEP, "Sleep"),
+            (WAIT_FOR_MULTIPLE_OBJECTS, "WaitForMultipleObjects"),
+            (GET_EXIT_CODE_THREAD, "GetExitCodeThread"),
         ];
         let imports: Vec<crate::exe::Import> = slots
             .iter()
@@ -1282,6 +3012,51 @@ mod tests {
 
     fn call(e: &mut Engine, slot: u32, a: &[u32]) -> u32 {
         e.call(slot, a).u32()
+    }
+
+    #[test]
+    fn thread_local_storage_allocates_stores_and_frees() {
+        let mut e = Engine::new();
+        let a = tls_alloc(&mut e);
+        let b = tls_alloc(&mut e);
+        assert_eq!((a, b), (0, 1));
+        assert_eq!(tls_get_value(&mut e, b), 0, "unset reads 0");
+        assert_eq!(tls_set_value(&mut e, b, 0x1234), 1);
+        assert_eq!(tls_get_value(&mut e, b), 0x1234);
+        assert_eq!(tls_set_value(&mut e, 2000, 1), 0, "past the last index");
+        assert_eq!(tls_free(&mut e, a), 1);
+        assert_eq!(tls_free(&mut e, a), 0, "already free");
+        // The freed index is handed out again, its value gone.
+        assert_eq!(tls_alloc(&mut e), 0);
+        assert_eq!(tls_get_value(&mut e, 0), 0);
+        assert_eq!(tls_get_value(&mut e, b), 0x1234);
+    }
+
+    #[test]
+    fn the_current_directory_is_copied_when_it_fits() {
+        let mut e = Engine::new();
+        e.kernel.current_directory = b"C:\\Games\\FNV".to_vec();
+        let buffer = e.mem.alloc(0x20);
+        e.mem.set_u8(buffer, 0x55);
+        // Too small: the size needed, the buffer untouched.
+        assert_eq!(get_current_directory_a(&mut e, 5, Ptr::new(buffer)), 13);
+        assert_eq!(e.mem.u8(buffer), 0x55);
+        assert_eq!(get_current_directory_a(&mut e, 0x20, Ptr::new(buffer)), 12);
+        assert_eq!(e.mem.cstr(buffer), b"C:\\Games\\FNV");
+    }
+
+    #[test]
+    fn system_info_reports_x86_pages_and_processors() {
+        let mut e = Engine::new();
+        e.mem.map(0x1000, 0x1000);
+        get_system_info(&mut e, Ptr::new(0x1000));
+        assert_eq!(e.mem.u32(0x1004), 0x1000);
+        let n = e.mem.u32(0x1014);
+        assert!(n >= 1);
+        assert_eq!(e.mem.u32(0x1010).count_ones(), n);
+        assert_eq!(e.mem.u32(0x1018), 586);
+        assert_eq!(e.mem.u32(0x101c), 0x1_0000);
+        assert_eq!(get_current_process(&mut e), 0xffff_ffff);
     }
 
     #[test]
@@ -1394,6 +3169,21 @@ mod tests {
         call(&mut e, CREATE_EVENT_A, &[0, 0, 0, 0x0100_0000]);
     }
 
+    /// The main window's handle is an open object that nothing waits on.
+    #[test]
+    fn the_main_window_is_a_handle() {
+        let mut e = kernel_engine();
+        let window = create_window(&mut e);
+        assert_ne!(window, 0);
+        assert_eq!(e.kernel.object(window), Some(&KernelObject::Window));
+        assert!(!signalled(&e, window));
+        assert_eq!(
+            call(&mut e, WAIT_FOR_SINGLE_OBJECT, &[window, 0]),
+            WAIT_TIMEOUT
+        );
+        assert_eq!(call(&mut e, CLOSE_HANDLE, &[window]), 1);
+    }
+
     #[test]
     fn suspended_thread_is_recorded_prioritized_and_closed() {
         let mut e = kernel_engine();
@@ -1421,7 +3211,7 @@ mod tests {
         assert_eq!(call(&mut e, SET_THREAD_PRIORITY, &[0x99, 0]), 0);
         assert_eq!(call(&mut e, RESUME_THREAD, &[CURRENT_THREAD]), 0);
         assert_eq!(call(&mut e, RESUME_THREAD, &[0x99]), 0xffff_ffff);
-        // A thread never runs, so it is never signalled.
+        // A suspended thread does not run, so it is not signalled.
         assert_eq!(call(&mut e, WAIT_FOR_SINGLE_OBJECT, &[t, 10]), WAIT_TIMEOUT);
         assert_eq!(call(&mut e, CLOSE_HANDLE, &[t]), 1);
     }
@@ -1479,27 +3269,375 @@ mod tests {
         ));
     }
 
-    #[test]
-    #[should_panic(expected = "ResumeThread(handle 0x4) would start the thread running \
-                               (start 00aa64d0, parameter 00004444)")]
-    fn resuming_a_thread_to_run_stops() {
+    /// A game thread's start function, standing in for a `ThreadProc`: logs
+    /// `parameter` and its thread id to the word log at 0x2000, then waits on
+    /// the event in `0x2f00` and logs again (`parameter + 1`).
+    fn waiting_thread(e: &mut Engine, a: &[u32]) -> Ret {
+        log(e, a[0]);
+        let ev = e.mem.u32(0x2f00);
+        assert_eq!(wait_for_single_object(e, ev, INFINITE), WAIT_OBJECT_0);
+        log(e, a[0] + 1);
+        Ret {
+            eax: 0x77,
+            ..Ret::default()
+        }
+    }
+
+    fn log(e: &mut Engine, word: u32) {
+        let n = e.mem.u32(0x2ff0);
+        e.mem.set_u32(0x2000 + 4 * n, word);
+        let id = get_current_thread_id(e);
+        e.mem.set_u32(0x2000 + 4 * n + 0x800, id);
+        e.mem.set_u32(0x2ff0, n + 1);
+    }
+
+    fn logged(e: &Engine) -> Vec<(u32, u32)> {
+        let n = e.mem.u32(0x2ff0);
+        (0..n)
+            .map(|i| (e.mem.u32(0x2000 + 4 * i), e.mem.u32(0x2800 + 4 * i)))
+            .collect()
+    }
+
+    fn thread_engine() -> Engine {
         let mut e = kernel_engine();
-        let t = call(
-            &mut e,
-            CREATE_THREAD,
-            &[0, 0, 0x00aa_64d0, 0x4444, CREATE_SUSPENDED, 0],
-        );
-        call(&mut e, RESUME_THREAD, &[t]);
+        e.mem.map(0x2000, 0x1000);
+        e.register(0x00ab_0000, waiting_thread);
+        e
+    }
+
+    /// A thread that takes the critical section at 0x2e00, gives up its turn while it holds
+    /// it, then leaves it.
+    fn locking_thread(e: &mut Engine, a: &[u32]) -> Ret {
+        enter_critical_section(e, Ptr::new(0x2e00));
+        log(e, a[0]);
+        sleep(e, 0);
+        log(e, a[0] + 1);
+        leave_critical_section(e, Ptr::new(0x2e00));
+        Ret::default()
     }
 
     #[test]
-    #[should_panic(
-        expected = "CreateThread(start 00aa64d0, parameter 00004444, flags 0x0) \
-                               would start the thread running"
-    )]
-    fn creating_a_running_thread_stops() {
-        let mut e = kernel_engine();
-        call(&mut e, CREATE_THREAD, &[0, 0, 0x00aa_64d0, 0x4444, 0, 0]);
+    fn the_task_allocator_gives_and_takes_blocks() {
+        let mut e = thread_engine();
+        let block = co_task_mem_alloc(&mut e, 0x48);
+        assert_ne!(block, 0);
+        e.mem.set_u32(block + 0x44, 1);
+        co_task_mem_free(&mut e, Ptr::new(block));
+        co_task_mem_free(&mut e, Ptr::new(0));
+        assert_ne!(co_task_mem_alloc(&mut e, 0), 0);
+        assert_eq!(co_initialize_ex(&mut e, 0, 0), 0);
+        co_uninitialize(&mut e);
+        assert_eq!(
+            co_initialize_ex(&mut e, 0, 2),
+            0,
+            "a new start after CoUninitialize"
+        );
+    }
+
+    #[test]
+    fn co_initialize_ex_answers_per_thread_and_mode() {
+        let mut e = thread_engine();
+        assert_eq!(co_initialize_ex(&mut e, 0, 0), 0);
+        assert_eq!(co_initialize_ex(&mut e, 0, 0), 1, "S_FALSE");
+        assert_eq!(
+            co_initialize_ex(&mut e, 0, 2),
+            0x8001_0106,
+            "RPC_E_CHANGED_MODE"
+        );
+        assert_eq!(co_initialize_ex(&mut e, 4, 0), 0x8007_0057, "E_INVALIDARG");
+    }
+
+    #[test]
+    fn the_network_utility_is_made_once_and_its_callback_hears_the_state() {
+        let mut e = thread_engine();
+        e.mem.map(NETWORK_UTILITY_INSTANCE, 4);
+        let block = e.mem.alloc(8);
+        e.mem.set_u32(block, 0xffff_ffff);
+        e.register_double(0x00aa_3e40, move |_, words| {
+            assert_eq!(words, &[MEMORY_MANAGER, 8]);
+            Ret {
+                eax: block,
+                ..Ret::default()
+            }
+        });
+        let made = bs_network_system_utility_q_instance(&mut e).addr();
+        assert_eq!(made, block);
+        assert_eq!((e.mem.u8(block), e.mem.u32(block + 4)), (0, 0));
+        assert_eq!(bs_network_system_utility_q_instance(&mut e).addr(), block);
+        let heard = e.mem.alloc(8);
+        e.register_double(0x0012_3450, move |e, words| {
+            e.mem.set_u32(heard, words[0] + 0x10);
+            e.mem.set_u32(heard + 4, words[1]);
+            Ret::default()
+        });
+        e.mem.set_u8(block, 1);
+        fn_00af2d70(&mut e, Ptr::new(block), 0x0012_3450);
+        assert_eq!(e.mem.u32(block + 4), 0x0012_3450);
+        assert_eq!((e.mem.u32(heard), e.mem.u32(heard + 4)), (0x10, 1));
+    }
+
+    #[test]
+    fn heap_alloc_on_the_crt_heap_hands_out_platform_blocks() {
+        let mut e = thread_engine();
+        let heap = heap_create(&mut e, 0, 0x1000, 0);
+        let block = heap_alloc(&mut e, heap, 0, 0x20);
+        assert_ne!(block, 0);
+        assert_eq!(e.kernel.crt_block_sizes.get(&block), Some(&0x20));
+        e.mem.set_u32(block, 0xdead_beef);
+        crate::units::crt::free(&mut e, Ptr::new(block));
+        let zeroed = heap_alloc(&mut e, heap, 8, 0x10);
+        assert_eq!(e.mem.u32(zeroed), 0);
+    }
+
+    #[test]
+    fn a_critical_section_held_by_another_thread_makes_the_main_thread_wait() {
+        let mut e = thread_engine();
+        e.register(0x00ab_0600, locking_thread);
+        let t = call(&mut e, CREATE_THREAD, &[0, 0, 0x00ab_0600, 20, 0, 0]);
+        // A switch point lets the thread take the section and give up its turn.
+        sleep(&mut e, 0);
+        assert_eq!(logged(&e), [(20, 2)]);
+        // The main thread waits for it to leave before it gets the section.
+        enter_critical_section(&mut e, Ptr::new(0x2e00));
+        log(&mut e, 30);
+        assert_eq!(logged(&e), [(20, 2), (21, 2), (30, MAIN_THREAD_ID)]);
+        // The owner may enter again; it leaves as many times.
+        enter_critical_section(&mut e, Ptr::new(0x2e00));
+        assert_eq!(try_enter_critical_section(&mut e, Ptr::new(0x2e00)), 1);
+        for _ in 0..3 {
+            leave_critical_section(&mut e, Ptr::new(0x2e00));
+        }
+        assert_eq!(
+            call(&mut e, WAIT_FOR_SINGLE_OBJECT, &[t, INFINITE]),
+            WAIT_OBJECT_0
+        );
+    }
+
+    #[test]
+    fn a_created_thread_runs_at_the_next_switch_point_and_waits_its_turn() {
+        let mut e = thread_engine();
+        let ev = call(&mut e, CREATE_EVENT_A, &[0, 0, 0, 0]);
+        e.mem.set_u32(0x2f00, ev);
+        let done = call(&mut e, CREATE_EVENT_A, &[0, 1, 0, 0]);
+        let t = call(&mut e, CREATE_THREAD, &[0, 0, 0x00ab_0000, 10, 0, 0]);
+        // Created running, but it runs only at a switch point.
+        assert!(logged(&e).is_empty());
+        // The main thread's wait with a timeout is a switch point: the thread
+        // runs up to its own wait, and the main thread's wait times out.
+        assert_eq!(
+            call(&mut e, WAIT_FOR_SINGLE_OBJECT, &[done, 0]),
+            WAIT_TIMEOUT
+        );
+        assert_eq!(logged(&e), [(10, 2)]);
+        // SetEvent wakes it at the next switch point: waiting on its handle.
+        assert_eq!(call(&mut e, SET_EVENT, &[ev]), 1);
+        assert_eq!(logged(&e).len(), 1);
+        assert_eq!(
+            call(&mut e, WAIT_FOR_SINGLE_OBJECT, &[t, INFINITE]),
+            WAIT_OBJECT_0
+        );
+        assert_eq!(logged(&e), [(10, 2), (11, 2)]);
+        // The main thread is itself again.
+        assert_eq!(get_current_thread_id(&mut e), MAIN_THREAD_ID);
+        assert!(matches!(
+            crate::thread_host::by_handle(&mut e, t).unwrap().state,
+            crate::thread_host::RunState::Finished { code: 0x77 }
+        ));
+    }
+
+    /// A game thread's start function that records its control word (0x2100)
+    /// and its 1/3 (0x2108, `x87_div`), sets round down on itself, waits on
+    /// the event in `0x2f00`, then records its word again (0x2104).
+    fn precision_thread(e: &mut Engine, _: &[u32]) -> Ret {
+        let word = crate::units::crt::x87_control_word(e);
+        e.mem.set_u32(0x2100, u32::from(word));
+        let third = crate::x87::x87_div(1.0, 3.0);
+        e.mem.set_u64(0x2108, third.to_bits());
+        crate::units::crt::ctrlfp(e, 0x0400, 0x0c00);
+        let ev = e.mem.u32(0x2f00);
+        assert_eq!(wait_for_single_object(e, ev, INFINITE), WAIT_OBJECT_0);
+        e.mem.set_u32(0x2104, u32::from(crate::x87::control_word()));
+        Ret::default()
+    }
+
+    /// The thread host's game threads keep their own x87 precision: the AI
+    /// linear task threads at 0x027F (53-bit) while the main thread is at
+    /// 0x007F once the device exists, each word loaded again when it runs.
+    #[test]
+    fn a_stepped_game_thread_keeps_its_own_precision() {
+        let mut e = thread_engine();
+        e.register(0x00ab_0100, precision_thread);
+        direct3d_device_created(&mut e, 0);
+        let ev = call(&mut e, CREATE_EVENT_A, &[0, 0, 0, 0]);
+        e.mem.set_u32(0x2f00, ev);
+        let t = call(&mut e, CREATE_THREAD, &[0, 0, 0x00ab_0100, 0, 0, 0]);
+        let done = call(&mut e, CREATE_EVENT_A, &[0, 1, 0, 0]);
+        assert_eq!(
+            call(&mut e, WAIT_FOR_SINGLE_OBJECT, &[done, 0]),
+            WAIT_TIMEOUT
+        );
+        assert_eq!(e.mem.u32(0x2100), 0x027f);
+        assert_eq!(f64::from_bits(e.mem.u64(0x2108)), 1.0 / 3.0);
+        // Back on the main thread: 24-bit.
+        assert_eq!(crate::x87::control_word(), 0x007f);
+        assert_eq!(crate::x87::x87_div(1.0, 3.0), f64::from(1.0f32 / 3.0));
+        call(&mut e, SET_EVENT, &[ev]);
+        assert_eq!(
+            call(&mut e, WAIT_FOR_SINGLE_OBJECT, &[t, INFINITE]),
+            WAIT_OBJECT_0
+        );
+        // The thread's own change (round down) came back with it.
+        assert_eq!(e.mem.u32(0x2104), 0x067f);
+        assert_eq!(crate::units::crt::x87_control_word(&mut e), 0x007f);
+    }
+
+    #[test]
+    fn two_threads_take_turns_in_creation_order() {
+        let mut e = thread_engine();
+        let ev = call(&mut e, CREATE_EVENT_A, &[0, 1, 0, 0]);
+        e.mem.set_u32(0x2f00, ev);
+        let a = call(&mut e, CREATE_THREAD, &[0, 0, 0x00ab_0000, 10, 0, 0]);
+        let b = call(
+            &mut e,
+            CREATE_THREAD,
+            &[0, 0, 0x00ab_0000, 20, CREATE_SUSPENDED, 0],
+        );
+        assert_eq!(call(&mut e, RESUME_THREAD, &[b]), 1);
+        call(&mut e, SLEEP, &[0]);
+        assert_eq!(logged(&e), [(10, 2), (20, 3)]);
+        // A manual-reset event lets both go on, in creation order.
+        call(&mut e, SET_EVENT, &[ev]);
+        e.mem.set_u32(0x2e00, a);
+        e.mem.set_u32(0x2e04, b);
+        assert_eq!(
+            call(&mut e, WAIT_FOR_MULTIPLE_OBJECTS, &[2, 0x2e00, 1, INFINITE]),
+            WAIT_OBJECT_0
+        );
+        assert_eq!(logged(&e), [(10, 2), (20, 3), (11, 2), (21, 3)]);
+    }
+
+    #[test]
+    fn each_thread_has_its_own_tls_block_and_slot_values() {
+        let mut e = thread_engine();
+        let index = tls_alloc(&mut e);
+        tls_set_value(&mut e, index, 0x1111);
+        let main_block = e.tls();
+        e.register(0x00ab_0100, |e, _| {
+            let block = e.tls();
+            Ret {
+                eax: block,
+                edx: tls_get_value(e, 0),
+                ..Ret::default()
+            }
+        });
+        let t = call(&mut e, CREATE_THREAD, &[0, 0, 0x00ab_0100, 0, 0, 0]);
+        call(&mut e, WAIT_FOR_SINGLE_OBJECT, &[t, INFINITE]);
+        let crate::thread_host::RunState::Finished { code } =
+            crate::thread_host::by_handle(&mut e, t).unwrap().state
+        else {
+            panic!("not finished")
+        };
+        assert_ne!(code, main_block, "its own block");
+        assert_eq!(e.tls(), main_block);
+        assert_eq!(tls_get_value(&mut e, index), 0x1111);
+    }
+
+    #[test]
+    fn a_stopped_thread_stops_the_run_that_switched_to_it() {
+        let mut e = thread_engine();
+        e.register(0x00ab_0200, |e, _| e.call(0x00ab_cdef, &[]));
+        let t = call(&mut e, CREATE_THREAD, &[0, 0, 0x00ab_0200, 0, 0, 0]);
+        let stop = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            call(&mut e, WAIT_FOR_SINGLE_OBJECT, &[t, INFINITE]);
+        }))
+        .unwrap_err();
+        let text = stop.downcast_ref::<String>().cloned().unwrap_or_default();
+        assert!(text.starts_with("open function 00abcdef"), "{text}");
+        assert!(text.contains("in game thread 2, start 00ab0200"), "{text}");
+        // Its handle is signalled now (it ended).
+        assert_eq!(call(&mut e, WAIT_FOR_SINGLE_OBJECT, &[t, 0]), WAIT_OBJECT_0);
+        assert!(e.call_stack.is_empty() || e.call_stack.iter().all(|&a| a != 0x00ab_0200));
+    }
+
+    #[test]
+    fn lstrcpy_and_lstrcat_copy_with_the_zero_and_answer_the_destination() {
+        let mut e = Engine::new();
+        let d = e.mem.alloc(32);
+        let s = e.mem.alloc(8);
+        e.mem.set_cstr(s, b"abc");
+        e.mem.set_cstr(d, b"zzzzzzzz");
+        assert_eq!(lstrcpy_a(&mut e, Ptr::new(d), Ptr::new(s)), d);
+        assert_eq!(e.mem.cstr(d), b"abc".to_vec());
+        assert_eq!(e.mem.u8(d + 4), b'z', "only the string and its zero");
+        assert_eq!(lstrcat_a(&mut e, Ptr::new(d), Ptr::new(s)), d);
+        assert_eq!(e.mem.cstr(d), b"abcabc".to_vec());
+    }
+
+    #[test]
+    fn one_clock_sleep_moves_it_and_the_real_clock_adds_passed_time() {
+        let mut e = thread_engine();
+        e.clock_ms = 1000;
+        assert_eq!(tick_count(&mut e), 1000);
+        call(&mut e, SLEEP, &[25]);
+        assert_eq!(
+            tick_count(&mut e),
+            1025,
+            "Sleep moves the clock by its time"
+        );
+        let out = e.mem.alloc(8);
+        query_performance_counter(&mut e, Ptr::new(out));
+        assert_eq!(
+            e.mem.u64(out),
+            1_025_000,
+            "the counter reads the same clock"
+        );
+        e.start_real_clock();
+        std::thread::sleep(std::time::Duration::from_millis(5));
+        let later = tick_count(&mut e);
+        assert!(later >= 1030, "real time passed: {later}");
+        query_performance_counter(&mut e, Ptr::new(out));
+        assert!(e.mem.u64(out) >= u64::from(later) * 1000);
+    }
+
+    #[test]
+    fn get_exit_code_thread_is_still_active_until_the_thread_ends() {
+        let mut e = thread_engine();
+        e.register(0x00ab_0400, |_, _| 9u32.into_ret());
+        let t = call(
+            &mut e,
+            CREATE_THREAD,
+            &[0, 0, 0x00ab_0400, 0, CREATE_SUSPENDED, 0],
+        );
+        let out = e.mem.alloc(4);
+        assert_eq!(call(&mut e, GET_EXIT_CODE_THREAD, &[t, out]), 1);
+        assert_eq!(e.mem.u32(out), STILL_ACTIVE);
+        call(&mut e, RESUME_THREAD, &[t]);
+        assert_eq!(
+            call(&mut e, WAIT_FOR_SINGLE_OBJECT, &[t, INFINITE]),
+            WAIT_OBJECT_0
+        );
+        assert_eq!(call(&mut e, GET_EXIT_CODE_THREAD, &[t, out]), 1);
+        assert_eq!(e.mem.u32(out), 9);
+        assert_eq!(call(&mut e, GET_EXIT_CODE_THREAD, &[0x1234, out]), 0);
+        assert_eq!(e.kernel.last_error, ERROR_INVALID_HANDLE);
+    }
+
+    #[test]
+    fn exit_thread_ends_the_thread_with_its_code() {
+        let mut e = thread_engine();
+        e.register(0x00ab_0300, |e, _| {
+            exit_thread(e, 5);
+            unreachable!("ExitThread returned")
+        });
+        let t = call(&mut e, CREATE_THREAD, &[0, 0, 0x00ab_0300, 0, 0, 0]);
+        assert_eq!(
+            call(&mut e, WAIT_FOR_SINGLE_OBJECT, &[t, INFINITE]),
+            WAIT_OBJECT_0
+        );
+        assert!(matches!(
+            crate::thread_host::by_handle(&mut e, t).unwrap().state,
+            crate::thread_host::RunState::Finished { code: 5 }
+        ));
     }
 
     #[test]
@@ -1622,6 +3760,239 @@ mod tests {
             &mut e,
             VIRTUAL_ALLOC,
             &[0, 0x1000, MEM_COMMIT | 0x10_0000, PAGE_READWRITE],
+        );
+    }
+}
+
+#[cfg(test)]
+mod os_defaults_tests {
+    use super::*;
+
+    fn engine() -> Engine {
+        let mut e = Engine::new();
+        e.mem.map(0x1000, 0x1000);
+        e
+    }
+
+    #[test]
+    fn the_active_window_is_the_main_window() {
+        let mut e = engine();
+        assert_eq!(get_active_window(&mut e), 0);
+        let window = create_window(&mut e);
+        assert_eq!(get_active_window(&mut e), window);
+        assert_eq!(swap_mouse_button(&mut e, 0), 0);
+        assert_eq!(swap_mouse_button(&mut e, 1), 0);
+        assert_eq!(swap_mouse_button(&mut e, 0), 1);
+        assert_eq!(get_double_click_time(&mut e), 500);
+    }
+
+    /// `HKCU\Control Panel\Mouse` opens and answers `MouseSensitivity` = "10" (`REG_SZ`, three
+    /// bytes with the zero); a short buffer gets `ERROR_MORE_DATA`; other keys and values aren't
+    /// there.
+    #[test]
+    fn the_mouse_key_has_the_windows_defaults() {
+        let mut e = engine();
+        e.mem.set_cstr(0x1000, br"control panel\mouse");
+        e.mem.set_cstr(0x1040, b"MouseSensitivity");
+        e.mem.set_cstr(0x1060, br"Software\Other");
+        assert_eq!(
+            reg_open_key_ex_a(
+                &mut e,
+                HKEY_CURRENT_USER,
+                Ptr::new(0x1060),
+                0,
+                0,
+                Ptr::new(0x1100)
+            ),
+            ERROR_FILE_NOT_FOUND
+        );
+        assert_eq!(
+            reg_open_key_ex_a(
+                &mut e,
+                0x8000_0002,
+                Ptr::new(0x1000),
+                0,
+                0,
+                Ptr::new(0x1100)
+            ),
+            ERROR_FILE_NOT_FOUND
+        );
+        assert_eq!(
+            reg_open_key_ex_a(
+                &mut e,
+                HKEY_CURRENT_USER,
+                Ptr::new(0x1000),
+                0,
+                0,
+                Ptr::new(0x1100)
+            ),
+            ERROR_SUCCESS
+        );
+        let key = e.mem.u32(0x1100);
+        let (kind, data, size) = (Ptr::new(0x1104), Ptr::new(0x1200), Ptr::new(0x1108));
+        e.mem.set_u32(size.addr(), 2);
+        assert_eq!(
+            reg_query_value_ex_a(&mut e, key, Ptr::new(0x1040), 0, kind, data, size),
+            ERROR_MORE_DATA
+        );
+        assert_eq!(e.mem.u32(size.addr()), 3);
+        e.mem.set_u32(size.addr(), 10);
+        assert_eq!(
+            reg_query_value_ex_a(&mut e, key, Ptr::new(0x1040), 0, kind, data, size),
+            ERROR_SUCCESS
+        );
+        assert_eq!(e.mem.cstr(data.addr()), b"10");
+        assert_eq!(
+            (e.mem.u32(kind.addr()), e.mem.u32(size.addr())),
+            (REG_SZ, 3)
+        );
+        assert_eq!(
+            reg_query_value_ex_a(&mut e, key, Ptr::new(0x1060), 0, kind, data, size),
+            ERROR_FILE_NOT_FOUND
+        );
+        assert_eq!(reg_close_key(&mut e, key), ERROR_SUCCESS);
+        assert_eq!(reg_close_key(&mut e, key), ERROR_INVALID_HANDLE);
+    }
+
+    #[test]
+    fn ini_values_are_found_by_section_and_key() {
+        let text = b"; comment\r\n[General]\r\n sLanguage = ENGLISH \r\n[Controls]\r\nForward=\"0011FF00\"\r\nBack=1F\r\n";
+        assert_eq!(
+            ini_value(text, b"controls", b"forward").unwrap(),
+            b"0011FF00"
+        );
+        assert_eq!(ini_value(text, b"Controls", b"Back").unwrap(), b"1F");
+        assert_eq!(
+            ini_value(text, b"General", b"sLanguage").unwrap(),
+            b"ENGLISH"
+        );
+        assert_eq!(ini_value(text, b"General", b"Back"), None);
+    }
+
+    /// Windows' `GetPrivateProfileIntA` answers, measured on the player's machine (2026-10-21).
+    #[test]
+    fn profile_ints_read_as_windows_does() {
+        let measured: &[(&[u8], u32)] = &[
+            (b"-5", 0xffff_fffb),
+            (b"-0", 0),
+            (b"0x10", 16),
+            (b"0X1F", 0),
+            (b"-0x10", 0xffff_fff0),
+            (b"12abc", 12),
+            (b"  7", 7),
+            (b"+3", 3),
+            (b"4294967295", 0xffff_ffff),
+            (b"4294967296", 0),
+            (b"99999999999", 1_215_752_191),
+            (b"1e3", 1),
+            (b"0", 0),
+            (b"08", 8),
+            (b"010", 10),
+            (b"-", 0),
+            (b"x5", 0),
+            (b"0b101", 5),
+            (b"0o17", 15),
+            (b"0x", 0),
+            (b"0xg", 0),
+            (b"-  5", 0),
+            (b" -5", 0xffff_fffb),
+            (b"0b2", 0),
+            (b"0x10abc", 0x10abc),
+            (b"0xFFFFFFFF1", 0xffff_fff1),
+            (b"0B11", 0),
+            (b"0O7", 0),
+            (b"\t9", 9),
+            (b"--5", 0),
+            (b"+-5", 0),
+            (b"- 5", 0),
+            (b"00x10", 0),
+            (b"0x-5", 0),
+            (b"0b", 0),
+            (b"0o8", 0),
+            (b"5 6", 5),
+        ];
+        for &(value, want) in measured {
+            assert_eq!(profile_int(value), want, "{:?}", std::str::from_utf8(value));
+        }
+    }
+
+    /// A missing file gives the default, cut to the buffer; writing changes nothing and answers 1.
+    #[test]
+    fn profile_strings_fall_back_to_the_default() {
+        let mut e = engine();
+        e.mem.set_cstr(0x1000, b"Controls");
+        e.mem.set_cstr(0x1020, b"Forward");
+        e.mem.set_cstr(0x1040, b"default");
+        e.mem.set_cstr(0x1060, br"Z:\no\such\file.ini");
+        let n = get_private_profile_string_a(
+            &mut e,
+            Ptr::new(0x1000),
+            Ptr::new(0x1020),
+            Ptr::new(0x1040),
+            Ptr::new(0x1100),
+            4,
+            Ptr::new(0x1060),
+        );
+        assert_eq!(n, 3);
+        assert_eq!(e.mem.cstr(0x1100), b"def");
+        let n = get_private_profile_string_a(
+            &mut e,
+            Ptr::new(0x1000),
+            Ptr::new(0x1020),
+            Ptr::NULL,
+            Ptr::new(0x1100),
+            0x40,
+            Ptr::new(0x1060),
+        );
+        assert_eq!((n, e.mem.u8(0x1100)), (0, 0));
+        assert_eq!(
+            write_private_profile_string_a(
+                &mut e,
+                Ptr::new(0x1000),
+                Ptr::new(0x1020),
+                Ptr::new(0x1040),
+                Ptr::new(0x1060)
+            ),
+            1
+        );
+    }
+}
+
+#[cfg(test)]
+mod tests_counted_semaphore {
+    use super::*;
+
+    #[test]
+    fn wait_and_release_go_through_the_handle_and_the_count() {
+        let mut e = Engine::new();
+        for f in [
+            SLOT_WAIT_FOR_SINGLE_OBJECT,
+            SLOT_RELEASE_SEMAPHORE,
+            COUNT_DOWN,
+            COUNT_UP,
+        ] {
+            e.register(f, |_, _| Ret::default());
+        }
+        let record = e.mem.alloc(0xc);
+        e.mem.set_u32(record + 4, 0x44);
+        e.call_log = Some(vec![]);
+        e.call(0x0044_24e0, &args![record]);
+        e.call(0x0044_2550, &args![record]);
+        let log: Vec<_> = e
+            .call_log
+            .take()
+            .unwrap()
+            .into_iter()
+            .filter(|(a, _)| *a != 0x0044_24e0 && *a != 0x0044_2550)
+            .collect();
+        assert_eq!(
+            log,
+            [
+                (SLOT_WAIT_FOR_SINGLE_OBJECT, vec![0x44, 0xffff_ffff]),
+                (COUNT_DOWN, vec![record]),
+                (SLOT_RELEASE_SEMAPHORE, vec![0x44, 1, 0]),
+                (COUNT_UP, vec![record]),
+            ]
         );
     }
 }

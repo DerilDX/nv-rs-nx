@@ -1707,8 +1707,11 @@ pub fn player_character_set_hardcore(
         e.call(CLEAR_BYTE_AT_0XE38, &args![this]);
         if !e.call(GLOBAL_FLAG_7D6E60, &args![]).bool() {
             for value in [0x49u32, 0x4b, 0x4a] {
-                let current = e.vcall(this.addr() + 0xa4, 0xc, &args![value, 0u32]).f32();
-                e.vcall(this.addr(), 0x3a4, &args![value, -current]);
+                // 00969f00 and the next two: the actor-value owner's +0xc takes one word
+                // (RET 4); the 0 pushed first is the last word of the player's +0x3a4
+                // (RET 0xc).
+                let current = e.vcall(this.addr() + 0xa4, 0xc, &args![value]).f32();
+                e.vcall(this.addr(), 0x3a4, &args![value, -current, 0u32]);
             }
         }
     }
@@ -1933,10 +1936,10 @@ pub fn fn_0096a510(e: &mut Engine, this: Ptr) {
 }
 
 // Translated from 0096a540 (decompiled, FalloutNV.exe 1.4.0.525)
-/// Clears the byte at +8 and passes `item` to `006b8310` on the sub-object at
-/// +0xc (it frees `item` through `00401030`).
+/// Clears the item's byte at +8 (`0096a547`: `MOV EAX,[EBP+8]`; `MOV byte ptr [EAX+8],0`) and
+/// passes `item` to `006b8310` on the sub-object at +0xc (it frees `item` through `00401030`).
 pub fn fn_0096a540(e: &mut Engine, this: Ptr, item: u32) {
-    e.mem.set_u8(this.addr() + 8, 0);
+    e.mem.set_u8(item.wrapping_add(8), 0);
     e.call(SUB_OBJECT_RELEASE, &args![this.addr() + 0xc, item]);
 }
 
@@ -3760,18 +3763,18 @@ mod tests {
         assert_eq!(
             calls(&e, current),
             vec![
-                vec![sub_object, 0x49, 0],
-                vec![sub_object, 0x4b, 0],
-                vec![sub_object, 0x4a, 0]
+                vec![sub_object, 0x49],
+                vec![sub_object, 0x4b],
+                vec![sub_object, 0x4a]
             ]
         );
         let minus_five = (-5.0f32).to_bits();
         assert_eq!(
             calls(&e, modify),
             vec![
-                vec![player.addr(), 0x49, minus_five],
-                vec![player.addr(), 0x4b, minus_five],
-                vec![player.addr(), 0x4a, minus_five]
+                vec![player.addr(), 0x49, minus_five, 0],
+                vec![player.addr(), 0x4b, minus_five, 0],
+                vec![player.addr(), 0x4a, minus_five, 0]
             ]
         );
         assert_eq!(e.get(player, PlayerCharacter::eHardcoreSetting), 0);
@@ -4058,17 +4061,21 @@ mod tests {
     }
 
     #[test]
-    fn the_sub_object_release_clears_the_byte_and_passes_the_item() {
+    fn the_sub_object_release_clears_the_item_byte_and_passes_the_item() {
         let mut e = engine();
         let block = e.mem.alloc(0x20);
-        e.mem.set_u8(block + 8, 1);
+        let item = e.mem.alloc(0xc);
+        e.mem.set_u32(block + 8, 0x30b9_dad0);
+        e.mem.set_u8(item + 8, 1);
         e.call_log = Some(vec![]);
-        e.call(0x0096a540, &args![block, 0x1234u32]);
-        assert_eq!(e.mem.u8(block + 8), 0);
+        e.call(0x0096a540, &args![block, item]);
+        assert_eq!(e.mem.u8(item + 8), 0);
         assert_eq!(
-            calls(&e, SUB_OBJECT_RELEASE),
-            vec![vec![block + 0xc, 0x1234]]
+            e.mem.u32(block + 8),
+            0x30b9_dad0,
+            "the map's own word is left"
         );
+        assert_eq!(calls(&e, SUB_OBJECT_RELEASE), vec![vec![block + 0xc, item]]);
     }
 
     #[test]
